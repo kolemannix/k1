@@ -250,7 +250,7 @@ fn on_client_read(client: *mut uv/stream, nread: size, buf: *mut uv/buf) {
           // then close so the client retries on a fresh connection
           tprintln("client pipelined $leftover unparsed bytes; closing after response")
           if connection.parsed-header is :some h {
-            connection.parsed-header = :some h.with(.{ keep-alive = false })
+            connection.parsed-header = :some (h | .{ keep-alive = false })
           }
         }
       },

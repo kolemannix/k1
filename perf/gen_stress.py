@@ -157,7 +157,7 @@ def unit(i: int) -> str:
       :delivered(at) -> :delivered(at),
       :canceled(why) -> :canceled(why)
     }}
-    o.with(.{{ status = next }})
+    o | .{{ status = next }}
   }}
 
   fn apply-event(a: account, e: event): account {{
@@ -165,19 +165,19 @@ def unit(i: int) -> str:
       return a
     }}
     let next = if e is {{
-      :credit(n) -> a.with(.{{ balance = a.balance + n }}),
+      :credit(n) -> a | .{{ balance = a.balance + n }},
       :debit(n) -> {{
         if n > a.balance {{
-          a.with(.{{ closed = true }})
+          a | .{{ closed = true }}
         }} else {{
-          a.with(.{{ balance = a.balance - n }})
+          a | .{{ balance = a.balance - n }}
         }}
       }},
-      :hold(h) -> a.with(.{{ held = a.held + h.first + h.second }}),
-      :release -> a.with(.{{ balance = a.balance + a.held, held = 0 }}),
+      :hold(h) -> a | .{{ held = a.held + h.first + h.second }},
+      :release -> a | .{{ balance = a.balance + a.held, held = 0 }},
       :note(_) -> a
     }}
-    next.with(.{{ last-event = :some(e) }})
+    next | .{{ last-event = :some(e) }}
   }}
 
   fn settle(seed: u64): u64 {{

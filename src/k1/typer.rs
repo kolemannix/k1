@@ -66,9 +66,8 @@ use crate::parse::{
     ParsedId, ParsedIfExpr, ParsedListLiteral, ParsedLiteral, ParsedLoopExpr, ParsedNamespaceId,
     ParsedPattern, ParsedPatternId, ParsedProgram, ParsedStaticBlockKind, ParsedStaticExpr,
     ParsedStmt, ParsedStmtId, ParsedTypeConstraint, ParsedTypeConstraintExpr, ParsedTypeDefnId,
-    ParsedTypeExpr, ParsedTypeExprId, ParsedTypeParam, ParsedUseId,
-    ParsedVariable, ParsedVariant, ParsedWhileExpr, QIdent, StringId, StructValueField,
-    StructValueFieldKind,
+    ParsedTypeExpr, ParsedTypeExprId, ParsedTypeParam, ParsedUseId, ParsedVariable, ParsedVariant,
+    ParsedWhileExpr, QIdent, StringId, StructValueFieldKind,
 };
 use crate::vpool::VPool;
 use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size};
@@ -6791,7 +6790,7 @@ impl TypedProgram {
             ParsedExpr::Struct(_ast_struct) => {
                 if let Some(expected_type) = ctx.expected_type_id {
                     if let Type::Struct(_s) = self.types.get(expected_type) {
-                        self.eval_struct_expected(expr_id, ctx)
+                        self.eval_struct_expected(expr_id, None, ctx)
                     } else {
                         self.eval_struct_anonymous(expr_id, ctx)
                     }
@@ -7408,6 +7407,7 @@ impl TypedProgram {
     fn eval_struct_expected(
         &mut self,
         expr_id: ParsedExprId,
+        patch_base: Option<TypedExprId>,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let ParsedExpr::Struct(parsed_struct) = *self.ast.exprs.get(expr_id) else {
@@ -7457,7 +7457,7 @@ impl TypedProgram {
                 .iter()
                 .find(|f| f.name == expected_field.name)
             else {
-                if is_union {
+                if is_union || patch_base.is_some() {
                     passed_fields_aligned.push((None, expected_field.span));
                 } else {
                     missing_fields.push(expected_field.name);
@@ -7493,13 +7493,16 @@ impl TypedProgram {
 
         let mut field_values: List<StructLiteralField, _> = self.mem.new_list(field_count);
         let mut field_types: List<StructTypeField, _> = self.mem.new_list(field_count);
-        for ((passed_field, passed_span), expected_field) in
-            passed_fields_aligned.iter().zip(self.mem.getn(expected_struct.fields).iter())
+        for (field_index, ((passed_field, passed_span), expected_field)) in passed_fields_aligned
+            .iter()
+            .zip(self.mem.getn(expected_struct.fields).iter())
+            .enumerate()
         {
             let field_ctx = ctx.with_expected_type(Some(expected_field.type_id));
-            let passed_expr = match passed_field {
-                None => None,
-                Some(passed_field) => self.eval_struct_field_value(passed_field, field_ctx)?,
+            let passed_expr = match (passed_field, patch_base) {
+                (None, None) => None,
+                (None, Some(base)) => Some(self.synth_field_access(base, field_index, struct_span)),
+                (Some(passed_field), _) => self.eval_struct_field_value(passed_field, field_ctx)?,
             };
             match passed_expr {
                 None => {
@@ -9448,6 +9451,9 @@ impl TypedProgram {
         use BinaryOpKind as K;
         match binary_op.op_kind {
             K::Pipe => self.eval_pipe_expr(binary_op.lhs, binary_op.rhs, ctx, binary_op.span),
+            K::BitOr if matches!(self.ast.exprs.get(binary_op.rhs), ParsedExpr::Struct(_)) => {
+                self.eval_struct_patch(binary_op, ctx)
+            }
             K::OptionalElse => {
                 self.eval_optional_else(binary_op.lhs, binary_op.rhs, ctx, binary_op.span)
             }
@@ -9552,6 +9558,32 @@ impl TypedProgram {
             AbilityImplFunction::FunctionId(function_id) => Some(*function_id),
             AbilityImplFunction::Abstract(_) | AbilityImplFunction::Unavailable => None,
         }
+    }
+
+    fn eval_struct_patch(
+        &mut self,
+        binary_op: parse::BinaryOp,
+        ctx: EvalExprContext,
+    ) -> K1Result<TypedExprId> {
+        let span = binary_op.span;
+        let base = self.eval_expr(binary_op.lhs, ctx.with_is_method_receiver(false))?;
+        let base_type_id = self.exprs.get_type(base);
+        match self.types.get(base_type_id) {
+            Type::Struct(s) if s.record_kind != RecordKind::Union => {}
+            _ => kbail!(self, span, "patch base must be a struct"),
+        }
+        let mut block = self.new_block_builder(ctx.scope_id, ScopeType::LexicalBlock, span, 2);
+        let base_var =
+            self.synth_variable_defn_simple(self.ast.idents.b.base_struct, base, block.scope_id);
+        self.push_block_stmt_id(&mut block, base_var.defn_stmt);
+        let patched = self.eval_struct_expected(
+            binary_op.rhs,
+            Some(base_var.variable_expr),
+            ctx.with_expected_type(Some(base_type_id)),
+        )?;
+        self.push_block_expr_id(&mut block, patched);
+        let patched_type = self.exprs.get_type(patched);
+        Ok(self.exprs.add_block(block, patched_type))
     }
 
     fn eval_operator_call(
@@ -10128,13 +10160,6 @@ impl TypedProgram {
             return Ok(None);
         }
         let n = fn_call.name.name;
-
-        // Method or f(x) syntax
-        if n == self.ast.idents.b.with && fn_call.args.len() == 2 {
-            let base = MaybeTypedExpr::Parsed(self.ast.mem.get_nth(fn_call.args, 0).value);
-            let res = self.compile_patch_struct(base, fn_call, ctx)?;
-            return Ok(Some(res));
-        }
 
         // "template".fmt(values): the receiver must be a literal string template,
         // recognized here before evaluation so its parts are still available.
@@ -10990,146 +11015,6 @@ impl TypedProgram {
 
         let defn_info = self.get_defn_info(function_type_id);
         self.add_type(Type::Function(new_function_type), defn_info, None)
-    }
-
-    /// Compiles 'patching' structs using the 'with' construct.
-    /// myStructFoo.with({ a: 1, b: false })
-    fn compile_patch_struct(
-        &mut self,
-        base_expr: MaybeTypedExpr,
-        call: &ParsedCall,
-        ctx: EvalExprContext,
-    ) -> K1Result<TypedExprId> {
-        let span = call.span;
-        let base_struct_expr = match base_expr {
-            MaybeTypedExpr::Parsed(parsed) => {
-                // We use the expected type
-                self.eval_expr(parsed, ctx)?
-            }
-            MaybeTypedExpr::Typed(typed_expr_id) => typed_expr_id,
-        };
-        let base_struct_type_id = self.exprs.get_type(base_struct_expr);
-        let Type::Struct(base_struct_type) = self.types.get(base_struct_type_id) else {
-            kbail!(self, span, "'with' receiver must be a struct");
-        };
-        let base_struct_fields = base_struct_type.fields;
-        let mut block = self.new_block_builder(ctx.scope_id, ScopeType::LexicalBlock, span, 2);
-        let base_struct_name = self.ast.idents.b.base_struct;
-        let base_struct_var =
-            self.synth_variable_defn_simple(base_struct_name, base_struct_expr, block.scope_id);
-        self.push_block_stmt_id(&mut block, base_struct_var.defn_stmt);
-        let patch_arg = *self.ast.mem.get_nth(call.args, 1);
-        enum ProvidedPatchStruct {
-            ParsedFields(AstSlice<StructValueField>),
-            TypedExpr(TypedExprId),
-        }
-        let mut patch_hits = 0;
-        let mut patched_count = 0;
-        let patch_struct = match self.ast.exprs.get(patch_arg.value) {
-            ParsedExpr::Struct(parsed_struct) => {
-                ProvidedPatchStruct::ParsedFields(parsed_struct.fields)
-            }
-            _other => ProvidedPatchStruct::TypedExpr(
-                self.eval_expr(patch_arg.value, ctx.with_no_expected_type())?,
-            ),
-        };
-
-        let mut final_fields = self.mem.new_list(base_struct_fields.len());
-        for (base_field_index, base_field) in self.mem.getn(base_struct_fields).iter().enumerate() {
-            let name = base_field.name;
-            let expr_value_for_field: TypedExprId = match patch_struct {
-                ProvidedPatchStruct::ParsedFields(parsed) => {
-                    patched_count = parsed.len();
-                    let patch_parsed_field =
-                        self.ast.mem.getn(parsed).iter().find(|f| f.name == name);
-                    match patch_parsed_field {
-                        None => self.synth_field_access(
-                            base_struct_var.variable_expr,
-                            base_field_index,
-                            span,
-                        ),
-                        Some(parsed_field) => {
-                            let field_ctx = ctx.with_expected_type(Some(base_field.type_id));
-                            let Some(typed_expr) =
-                                self.eval_struct_field_value(parsed_field, field_ctx)?
-                            else {
-                                kbail!(self, parsed_field.span, "uninit is not permitted here");
-                            };
-                            patch_hits += 1;
-                            typed_expr
-                        }
-                    }
-                }
-                ProvidedPatchStruct::TypedExpr(patch_struct_expr) => {
-                    let patch_struct_type_id = self.exprs.get_type(patch_struct_expr);
-                    let Type::Struct(patch_struct) = self.types.get(patch_struct_type_id) else {
-                        kbail!(self, span, "'with' argument struct must be a struct");
-                    };
-                    patched_count = patch_struct.fields.len();
-                    if let Some((matching_patch_field_index, matching_patch_field)) =
-                        self.get_struct_field_by_name(patch_struct_type_id, base_field.name)
-                    {
-                        if base_field.type_id != matching_patch_field.type_id {
-                            kbail!(self, span, "Mismatching types for field {}", base_field.name);
-                        }
-                        let patch_field_access_expr_id = self.synth_field_access(
-                            patch_struct_expr,
-                            matching_patch_field_index,
-                            span,
-                        );
-                        patch_hits += 1;
-                        patch_field_access_expr_id
-                    } else {
-                        let base_field_access_expr_id = self.synth_field_access(
-                            base_struct_var.variable_expr,
-                            base_field_index,
-                            span,
-                        );
-                        base_field_access_expr_id
-                    }
-                }
-            };
-            final_fields.push(StructLiteralField {
-                name: base_field.name,
-                expr: Some(expr_value_for_field),
-            })
-        }
-        if patch_hits < patched_count {
-            let base_has_field =
-                |name: StringId| self.mem.getn(base_struct_fields).iter().any(|f| f.name == name);
-            let mut unmatched: SV4<StringId> = smallvec![];
-            match patch_struct {
-                ProvidedPatchStruct::ParsedFields(parsed) => {
-                    for f in self.ast.mem.getn(parsed) {
-                        if !base_has_field(f.name) {
-                            unmatched.push(f.name);
-                        }
-                    }
-                }
-                ProvidedPatchStruct::TypedExpr(patch_struct_expr) => {
-                    let patch_struct_type_id = self.exprs.get_type(patch_struct_expr);
-                    let Type::Struct(patch_struct) = self.types.get(patch_struct_type_id) else {
-                        unreachable!()
-                    };
-                    for f in self.mem.getn(patch_struct.fields) {
-                        if !base_has_field(f.name) {
-                            unmatched.push(f.name);
-                        }
-                    }
-                }
-            }
-            let names = unmatched.iter().map(|n| self.ident_str(*n)).collect::<Vec<_>>().join(", ");
-            kbail!(self, span, "Fields not present in the base struct: {}", names);
-        }
-        let final_fields_handle = final_fields.to_slice();
-        let new_struct = self.exprs.add(
-            TypedExpr::Struct(StructLiteral { fields: final_fields_handle }),
-            base_struct_type_id,
-            span,
-        );
-        self.push_block_expr_id(&mut block, new_struct);
-        let block_id = self.exprs.add_block(block, base_struct_type_id);
-        Ok(block_id)
     }
 
     /// After resolving to a particular root AbilityId + function index using just names,

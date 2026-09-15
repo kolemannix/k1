@@ -60,6 +60,11 @@ fn test-bitcast() {
 }
 
 fn test-zero() {
+  let filled: { a: int, b: bool, c: string } = zeroed() | .{ b = true }
+  assert-equals(filled.a, 0)
+  assert-equals(filled.b, true)
+  assert(filled.c == "")
+
   let v8: u8 = zeroed()
   assert-equals(v8, 0)
   let vi64: i64 = zeroed()

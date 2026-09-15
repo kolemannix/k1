@@ -1,5 +1,7 @@
 ns struct_test
 
+type patch-pair[t] = { first: t, second: t }
+
 type point = { x: int, y: int, z: int, is-good: bool }
 fn basic-struct(): int {
   let zero: point = .{
@@ -66,11 +68,11 @@ fn struct-nested() {
   assert(area2 == 2500)
 }
 
-fn with-fields() {
+fn patch() {
   let breaker = false
 
   let make-struct = fn[breaker.&]. { if breaker.* crash(""); breaker.* = true; .{ a = 1, b = true, c = "hello", d = .{ inside = 0 } } }
-  let s: { a: int, b: bool, c: string, d: { inside: int } } = make-struct().with(.{ a = 4, b = false, d = .{ inside = 1 }})
+  let s: { a: int, b: bool, c: string, d: { inside: int } } = make-struct() | .{ a = 4, b = false, d = .{ inside = 1 } }
 
   assert-equals(s.a, 4)
   assert-equals(s.b, false)
@@ -78,9 +80,29 @@ fn with-fields() {
   assert-equals(s.d.inside, 1)
 
   let base: { a: int, b: bool } = .{ a = 1, b = true }
+  let chained = base | .{ a = 2 } | .{ b = false }
+  assert-equals(chained.a, 2)
+  assert-equals(chained.b, false)
+  assert-equals(base.a, 1)
+
+  let pair: patch-pair[int] = .{ first = 1, second = 2 }
+  let swapped = pair | .{ first = pair.second }
+  assert-equals(swapped.first, 2)
+  assert-equals(swapped.second, 2)
+
+  let wrapped: ?patch-pair[int] = :some (pair | .{ second = 9 })
+  assert-equals(wrapped.!.second, 9)
+
+  let partial: { a: int, b: int } = .{ a = 7, b = 8 } | .{ b = uninit }
+  assert-equals(partial.a, 7)
+
   assert-equals[?string](
-    test-compile(base.with(.{ a = 2, nope = 3, extra = 4 })),
-    :some "Fields not present in the base struct: nope, extra"
+    test-compile(base | .{ a = 2, nope = 3, extra = 4 }),
+    :some "Struct has an unexpected field 'nope'"
+  )
+  assert-equals[?string](
+    test-compile(1 | .{ a = 2 }),
+    :some "patch base must be a struct"
   )
 }
 
@@ -101,6 +123,6 @@ fn test() {
   struct-arg-mut()
   eq-anon()
   struct-nested()
-  with-fields()
+  patch()
   auto-equals()
 }
