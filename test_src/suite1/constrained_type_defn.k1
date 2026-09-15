@@ -1,0 +1,21 @@
+ns constrained_type_defn
+
+ability tagged {
+  fn tag(self): int
+}
+
+type foo = { x: int }
+impl tagged for foo {
+  fn tag(self: foo): int { self.x }
+}
+
+type box[t: tagged] = { t: t }
+
+type bar = {
+  xs: box[foo]
+}
+
+fn test() {
+  let b: bar = .{ xs = .{ t = .{ x = 7 } } }
+  assert-equals(b.xs.t.tag(), 7)
+}

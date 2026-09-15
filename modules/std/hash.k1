@@ -92,7 +92,7 @@ ns for map {
     }
   }
 
-  fn _free[k, v, a: allocator](self: map[k, v], alloc: a) {
+  fn _free[k, v, a: allocator](self: *map[k, v], alloc: a) {
     if self.entries.non-empty() {
       alloc.free(self.ctrl.data-ptr(), self.ctrl.size-bytes(), 1)
       alloc.free(self.entries.data-ptr(), self.entries.size-bytes(), core/types/align[{ key: k, value: v }]())
@@ -107,13 +107,13 @@ ns for map {
     with-capacity-in[k, v, _](mem/current-arena(), min-capacity)
   }
 
-  fn len[k, v](self: map[k, v]): size { self.count }
+  fn len[k, v](self: *map[k, v]): size { self.count }
 
-  fn is-empty[k, v](self: map[k, v]): bool { self.count == 0 }
+  fn is-empty[k, v](self: *map[k, v]): bool { self.count == 0 }
 
-  fn capacity[k, v](self: map[k, v]): size { self.entries.len }
+  fn capacity[k, v](self: *map[k, v]): size { self.entries.len }
 
-  fn(inline) _group[k, v](self: map[k, v], pos: size): vector[u8, 16] {
+  fn(inline) _group[k, v](self: *map[k, v], pos: size): vector[u8, 16] {
     vector/load-unchecked[u8, 16](self.ctrl.data-ptr().ref-at[u8](pos).as[ptr])
   }
 
@@ -127,7 +127,7 @@ ns for map {
     self.ctrl.index-unchecked(mirror).* = c
   }
 
-  fn _find[k, v](self: map[k, v], key: k, h: u64): ?size where k: equals {
+  fn _find[k, v](self: *map[k, v], key: k, h: u64): ?size where k: equals {
     if self.count == 0 return :none
     let mask = self.entries.len - 1
     let h2 = _h2(h)
@@ -147,7 +147,7 @@ ns for map {
     }
   }
 
-  fn _find-insert-slot[k, v](self: map[k, v], h: u64): size {
+  fn _find-insert-slot[k, v](self: *map[k, v], h: u64): size {
     let mask = self.entries.len - 1
     let pos = h.signed() & mask
     let stride: size = 0
@@ -219,17 +219,30 @@ ns for map {
     self.count = self.count + 1
   }
 
-  fn _prepare-insert[k, v, a: allocator](self: *mut map[k, v], alloc: a, h: u64): size where k: hash {
-    if self.entries.len == 0 { self.* = _allocate[k, v, _](alloc, GROUP) }
-    let idx = self._find-insert-slot(h)
-    if self.ctrl.index-unchecked(idx).* == EMPTY and self.growth-left == 0 {
+  fn _make-room[k, v, a: allocator](self: *mut map[k, v], alloc: a, h: u64): size where k: hash {
+    if self.entries.len == 0 {
+      self.* = _allocate[k, v, _](alloc, GROUP)
+    } else {
       let capacity = _capacity-of(self.entries.len)
       if self.count + 1 <= capacity / 2 {
         self._rehash-in-place(capacity)
       } else {
         self._resize(alloc, self.entries.len * 2)
       }
-      idx = self._find-insert-slot(h)
+    }
+    self._find-insert-slot(h)
+  }
+
+  fn(inline) _prepare-insert[k, v, a: allocator](self: *mut map[k, v], alloc: a, h: u64): size where k: hash {
+    let idx = if self.entries.len == 0 {
+      self._make-room(alloc, h)
+    } else {
+      let idx = self._find-insert-slot(h)
+      if self.ctrl.index-unchecked(idx).* == EMPTY and self.growth-left == 0 {
+        self._make-room(alloc, h)
+      } else {
+        idx
+      }
     }
     self._claim(idx, h)
     idx
@@ -282,7 +295,7 @@ ns for map {
     self.entries.index-unchecked(idx).value.&
   }
 
-  fn get[k, v](self: map[k, v], key: k): ?v where k: hash, k: equals {
+  fn get[k, v](self: *map[k, v], key: k): ?v where k: hash, k: equals {
     if self._find(key, key.hash()) is {
       :some idx -> :some self.entries.index-unchecked(idx).value,
       :none -> :none
@@ -296,7 +309,7 @@ ns for map {
     }
   }
 
-  fn contains[k, v](self: map[k, v], key: k): bool where k: hash, k: equals {
+  fn contains[k, v](self: *map[k, v], key: k): bool where k: hash, k: equals {
     self._find(key, key.hash()).is-some()
   }
 
@@ -333,7 +346,7 @@ ns for map {
     self.growth-left = _capacity-of(self.entries.len)
   }
 
-  fn dump[k, v](self: map[k, v]) where k: print, v: print {
+  fn dump[k, v](self: *map[k, v]) where k: print, v: print {
     let count = self.count
     let growth-left = self.growth-left
     let buckets = self.entries.len
@@ -401,13 +414,13 @@ impl[k, v] iterator[item = { key: k, value: v }] for map-iterator[k, v] {
   }
 }
 
-impl[k, v] iterable[item = { key: k, value: v }, i = map-iterator[k, v]] for map[k, v] {
+impl[k, v] iterable[item = { key: k, value: v }, i = map-iterator[k, v]] for *map[k, v] {
   fn iterator(self): i {
     .{ ctrl = self.ctrl, entries = self.entries, pos = 0, remaining = self.count }
   }
 }
 
-impl[k: hash and equals, v] index[key = k, t = v] for map[k, v] {
+impl[k: hash and equals, v] index[key = k, t = v] for *map[k, v] {
   fn index-ref(self, key: k): *v {
     if self._find(key, key.hash()) is {
       :some idx -> self.entries.index-unchecked(idx).value.&,
@@ -418,9 +431,10 @@ impl[k: hash and equals, v] index[key = k, t = v] for map[k, v] {
 
 impl[k: print, v: print] print for map[k, v] {
   fn print-to[w: writer](self, w): empty {
+    let m = self
     w.write-char('{')
     let first = true
-    for kv in self {
+    for kv in m {
       if not first { w.write-string(", ") }
       first = false
       kv.key.print-to(w)
@@ -459,11 +473,11 @@ ns for set {
     from-span-in[t, _](mem/current-arena(), values)
   }
 
-  fn len[t](self: set[t]): size { self.inner.len() }
+  fn len[t](self: *set[t]): size { self.inner.len() }
 
-  fn is-empty[t](self: set[t]): bool { self.inner.is-empty() }
+  fn is-empty[t](self: *set[t]): bool { self.inner.is-empty() }
 
-  fn non-empty[t](self: set[t]): bool { not self.inner.is-empty() }
+  fn non-empty[t](self: *set[t]): bool { not self.inner.is-empty() }
 
   // true if the value was newly added
   fn add-in[t, a: allocator](self: *mut set[t], alloc: a, value: t): bool where t: hash, t: equals {
@@ -476,7 +490,7 @@ ns for set {
     self.add-in(mem/current-arena(), value)
   }
 
-  fn contains[t](self: set[t], value: t): bool where t: hash, t: equals {
+  fn contains[t](self: *set[t], value: t): bool where t: hash, t: equals {
     self.inner.contains(value)
   }
 
@@ -507,7 +521,7 @@ impl[t] iterator[item = t] for set-iterator[t] {
   }
 }
 
-impl[t] iterable[item = t, i = set-iterator[t]] for set[t] {
+impl[t] iterable[item = t, i = set-iterator[t]] for *set[t] {
   fn iterator(self): i {
     .{ inner = self.inner.iterator() }
   }
@@ -515,9 +529,10 @@ impl[t] iterable[item = t, i = set-iterator[t]] for set[t] {
 
 impl[t: print] print for set[t] {
   fn print-to[w: writer](self, w): empty {
+    let s = self
     w.write-char('{')
     let first = true
-    for v in self {
+    for v in s {
       if not first { w.write-string(", ") }
       first = false
       v.print-to(w)
@@ -574,12 +589,16 @@ ns for fixmap {
     self.growth-left = t.growth-left.trunc[u32]
   }
 
-  fn _claim-slot[k, v](t: *mut map[k, v], capacity: size, h: u64): ?size where k: hash {
+  fn _make-room[k, v](t: *mut map[k, v], capacity: size, h: u64): size where k: hash {
+    t._rehash-in-place(capacity)
+    t._find-insert-slot(h)
+  }
+
+  fn(inline) _claim-slot[k, v](t: *mut map[k, v], capacity: size, h: u64): ?size where k: hash {
     let idx = t._find-insert-slot(h)
     if t.ctrl.index-unchecked(idx).* == map/EMPTY and t.growth-left == 0 {
       if t.count == capacity return :none
-      t._rehash-in-place(capacity)
-      idx = t._find-insert-slot(h)
+      idx = _make-room(t, capacity, h)
     }
     t._claim(idx, h)
     :some idx
@@ -635,7 +654,8 @@ ns for fixmap {
   }
 
   fn get[k, v, n](self: *fixmap[k, v, n], key: k): ?v where k: hash, k: equals {
-    self._table().get(key)
+    let t = self._table()
+    t.get(key)
   }
 
   fn get-ref[k, v, n](self: *mut fixmap[k, v, n], key: k): ?(*mut v) where k: hash, k: equals {
@@ -644,7 +664,8 @@ ns for fixmap {
   }
 
   fn contains[k, v, n](self: *fixmap[k, v, n], key: k): bool where k: hash, k: equals {
-    self._table().contains(key)
+    let t = self._table()
+    t.contains(key)
   }
 
   fn remove[k, v, n](self: *mut fixmap[k, v, n], key: k): ?v where k: hash, k: equals {
@@ -658,13 +679,15 @@ ns for fixmap {
 
 impl[k, v, n: static size] iterable[item = { key: k, value: v }, i = map-iterator[k, v]] for *fixmap[k, v, n] {
   fn iterator(self): i {
-    self._table().iterator()
+    let t = self._table()
+    t.iterator()
   }
 }
 
 impl[k: hash and equals, v, n: static size] index[key = k, t = v] for *mut fixmap[k, v, n] {
   fn index-ref(self, key: k): *v {
-    self._table().index-ref(key)
+    let t = self._table()
+    t.index-ref(key)
   }
 }
 

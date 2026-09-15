@@ -390,7 +390,8 @@ ns for name-config {
     name
   }
   fn transformed-name(self: name-config, name: string): string {
-    if self.renames.get(name) is :some(to) return to
+    let renames = self.renames
+    if renames.get(name) is :some(to) return to
 
     let name = self.strip-prefix(name)
     let name = self.strip-suffix(name)

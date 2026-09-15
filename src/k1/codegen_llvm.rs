@@ -106,6 +106,7 @@ enum AbiParamMapping {
     BigStructByPtrToCopy {
         byval_attr: bool,
     },
+    BigStructByPtr,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -2244,12 +2245,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn make_cg_function_type(
         &mut self,
         phys_fn_type: &PhysicalFunctionType,
+        abi: AbiMode,
     ) -> CgResult<CgFunctionType<'ctx>> {
         let param_types = phys_fn_type.params;
         let return_type = phys_fn_type.return_type;
         let _diverges = phys_fn_type.diverges;
         let return_logical_cg_type = self.codegen_type(phys_fn_type.return_type);
-        let return_type_abi_mapping = self.get_abi_mapping_for_type(return_type, true);
+        let return_type_abi_mapping = self.get_abi_mapping_for_type(return_type, true, abi);
 
         // If a function returns a big (typically > 2 words) struct, its actually
         // 'returned' in the first parameter, which is a pointer
@@ -2263,6 +2265,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             AbiParamMapping::StructByHfa { .. } => false,
             AbiParamMapping::StructByIntPairArray => false,
             AbiParamMapping::BigStructByPtrToCopy { .. } => true,
+            AbiParamMapping::BigStructByPtr => false,
         };
 
         let physical_return_mapped_type = if is_sret {
@@ -2291,7 +2294,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         for param in self.k1.ir.mem.getn(param_types) {
             let param_cg_type = self.codegen_type(param.pt);
-            let abi_mapping = self.get_abi_mapping_for_type(param.pt, false);
+            let abi_mapping = self.get_abi_mapping_for_type(param.pt, false, abi);
             param_abi_mappings.push(abi_mapping);
             param_llvm_types.push(param_cg_type);
             let mapped_type = self.mapped_abi_type_param(param.pt, abi_mapping);
@@ -2407,7 +2410,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let array_type = self.ctx.i64_type().array_type(2).as_basic_type_enum();
                 array_type
             }
-            AbiParamMapping::BigStructByPtrToCopy { .. } => {
+            AbiParamMapping::BigStructByPtrToCopy { .. } | AbiParamMapping::BigStructByPtr => {
                 let ptr_type = self.builtin_types.ptr.as_basic_type_enum();
                 ptr_type
             }
@@ -2478,7 +2481,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.store_at_k1_align(dst_ptr, abi_value, cg_ty);
                 dst_ptr.as_basic_value_enum()
             }
-            AbiParamMapping::BigStructByPtrToCopy { .. } => {
+            AbiParamMapping::BigStructByPtrToCopy { .. } | AbiParamMapping::BigStructByPtr => {
                 // Our canonical representation of all aggregates is an llvm ptr
                 // And this abi route represents them as a ptr, so nothing to do
                 abi_value
@@ -2634,6 +2637,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     }
                 }
             }
+            AbiParamMapping::BigStructByPtr => k1_value,
         }
     }
 
@@ -2939,7 +2943,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             IrCallee::Indirect(fn_type, value) => {
                 let callee_value = self.resolve_value(inst_mappings, value)?.into_pointer_value();
-                let cg_fn_type = self.make_cg_function_type(&fn_type)?;
+                let cg_fn_type = self.make_cg_function_type(&fn_type, AbiMode::Native)?;
                 (CallKind::Indirect(callee_value), cg_fn_type)
             }
         };
@@ -4447,7 +4451,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
 
         let abi_mode = self.k1.function_abi(function_id);
-        let llvm_function_type = self.make_cg_function_type(&ir_fn.fn_type)?;
+        let llvm_function_type = self.make_cg_function_type(&ir_fn.fn_type, abi_mode)?;
         debug!(
             "-> res (is_sret={}) {}",
             llvm_function_type.is_sret, llvm_function_type.llvm_function_type
@@ -4516,6 +4520,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             function_value
                 .add_attribute(AttributeLoc::Function, self.make_enum_attribute("noreturn", 0));
         }
+        if ir_fn.fn_type.diverges || self.k1.get_function(function_id).is_cold() {
+            function_value.add_attribute(AttributeLoc::Function, self.make_enum_attribute("cold", 0));
+        }
 
         if self.k1.config.target.arch() == compiler::Arch::Wasm {
             if let TyperLinkage::External { lib_name: Some(lib_name), .. } = typed_function_linkage
@@ -4557,13 +4564,19 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 // Without the byval attribute, X86 (System V) big struct calls don't work
                 let abi_mapping =
                     self.mem.get_nth_lt(llvm_function_type.param_abi_mappings, i - offset);
-                if matches!(abi_mapping, AbiParamMapping::BigStructByPtrToCopy { byval_attr: true })
-                {
-                    let k1_type =
-                        *self.mem.get_nth_lt(llvm_function_type.param_k1_types, i - offset);
-                    for attr in self.make_byval_attributes(&k1_type) {
-                        function_value.add_attribute(AttributeLoc::Param(i as u32), attr);
+                let k1_type = *self.mem.get_nth_lt(llvm_function_type.param_k1_types, i - offset);
+                match abi_mapping {
+                    AbiParamMapping::BigStructByPtrToCopy { byval_attr: true } => {
+                        for attr in self.make_byval_attributes(&k1_type) {
+                            function_value.add_attribute(AttributeLoc::Param(i as u32), attr);
+                        }
                     }
+                    AbiParamMapping::BigStructByPtr => {
+                        for attr in self.make_borrowed_ptr_attributes(&k1_type) {
+                            function_value.add_attribute(AttributeLoc::Param(i as u32), attr);
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -4590,7 +4603,22 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         Ok(function_value)
     }
 
-    fn get_abi_mapping_for_type(&self, pt: PhysicalType, is_return: bool) -> AbiParamMapping {
+    fn get_abi_mapping_for_type(
+        &self,
+        pt: PhysicalType,
+        is_return: bool,
+        abi: AbiMode,
+    ) -> AbiParamMapping {
+        let native = self.get_native_abi_mapping_for_type(pt, is_return);
+        match native {
+            AbiParamMapping::BigStructByPtrToCopy { .. } if abi == AbiMode::Internal && !is_return => {
+                AbiParamMapping::BigStructByPtr
+            }
+            other => other,
+        }
+    }
+
+    fn get_native_abi_mapping_for_type(&self, pt: PhysicalType, is_return: bool) -> AbiParamMapping {
         enum CallConv {
             AMD64,
             ARM64,
@@ -5733,6 +5761,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             self.make_enum_attribute("align", layout.align as u64),
             self.make_enum_attribute("noalias", 0),
             self.make_enum_attribute("dereferenceable", layout.size as u64),
+        ]
+    }
+
+    fn make_borrowed_ptr_attributes(&self, param_type: &CgType<'ctx>) -> [Attribute; 4] {
+        let layout = param_type.rich_repr_layout();
+        [
+            self.make_enum_attribute("readonly", 0),
+            self.make_enum_attribute("nonnull", 0),
+            self.make_enum_attribute("dereferenceable", layout.size as u64),
+            self.make_enum_attribute("align", layout.align as u64),
         ]
     }
 

@@ -918,7 +918,6 @@ impl TypedProgram {
         &mut self,
         parsed_match: parse::ParsedMatch,
         ctx: EvalExprContext,
-        check_exhaustive: bool,
         allow_bindings: bool,
         fallback_expr: Option<TypedExprId>,
     ) -> K1Result<TypedExprId> {
@@ -1135,33 +1134,19 @@ impl TypedProgram {
             return Err(err);
         }
 
-        // Exhaustiveness Checking
-        if check_exhaustive {
-            self.check_pattern_exhaustiveness(
+        match fallback_expr {
+            None => self.check_pattern_exhaustiveness(
                 subject_type,
                 all_unguarded_patterns.as_slice_mut(),
                 subject_expr_span,
                 false,
-            )?
-        }
-        let fallback_value = match fallback_expr {
-            Some(e) => e,
-            None => self.synth_crash_call(
-                if check_exhaustive {
-                    self.ast.idents.b.crash_msg_no_cases_exhaustive
-                } else {
-                    self.ast.idents.b.crash_msg_no_cases
-                },
-                match_expr_span,
-                ctx.with_no_expected_type(),
             )?,
-        };
-        let fallback_arm = TypedMatchArm {
-            case: None,
-            condition: MatchingCondition { instrs: MSlice::empty() },
-            consequent_expr: fallback_value,
-        };
-        typed_arms.push(fallback_arm);
+            Some(fallback_value) => typed_arms.push(TypedMatchArm {
+                case: None,
+                condition: MatchingCondition { instrs: MSlice::empty() },
+                consequent_expr: fallback_value,
+            }),
+        }
         let scrutinee = if typed_arms.iter().any(|arm| arm.case.is_some()) {
             Some(synth_match_scrutinee(
                 self,

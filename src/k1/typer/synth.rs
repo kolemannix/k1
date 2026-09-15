@@ -540,22 +540,6 @@ impl TypedProgram {
         self.add_static_constant_expr(value, span)
     }
 
-    pub(super) fn synth_crash_call(
-        &mut self,
-        message: StringId,
-        span: SpanId,
-        ctx: EvalExprContext,
-    ) -> K1Result<TypedExprId> {
-        let message_expr = self.synth_string_literal(message, span);
-        self.synth_typed_call_typed_args(
-            self.ast.idents.f.core_crash.with_span(span),
-            &[],
-            &[message_expr],
-            ctx,
-            false,
-        )
-    }
-
     pub(super) fn synth_discard_call(
         &mut self,
         value: TypedExprId,

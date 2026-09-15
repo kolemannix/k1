@@ -1,0 +1,49 @@
+ns self_assign
+
+type big = { a: i32, b: i32, pad: array[u64, 4] }
+type small = { a: i32, b: i32 }
+type holder = { inner: big, arr: array[big, 2] }
+
+fn swap-big(t: big): big { .{ a = t.b, b = t.a, pad = t.pad } }
+fn swap-small(t: small): small { .{ a = t.b, b = t.a } }
+fn twice(t: big): big { swap-big(swap-big(t)) }
+
+fn test() {
+  let p: big = .{ a = 1, b = 2, pad = zeroed() }
+  p = swap-big(p)
+  assert-equals(p.a, 2)
+  assert-equals(p.b, 1)
+
+  let s: small = .{ a = 1, b = 2 }
+  s = swap-small(s)
+  assert-equals(s.a, 2)
+  assert-equals(s.b, 1)
+
+  let l: small = .{ a = 1, b = 2 }
+  l = .{ a = l.b, b = l.a }
+  assert-equals(l.a, 2)
+  assert-equals(l.b, 1)
+
+  let h: holder = .{ inner = .{ a = 3, b = 4, pad = zeroed() }, arr = zeroed() }
+  h.inner = swap-big(h.inner)
+  assert-equals(h.inner.a, 4)
+  assert-equals(h.inner.b, 3)
+  h.arr.[0] = .{ a = 5, b = 6, pad = zeroed() }
+  h.arr.[0] = swap-big(h.arr.[0])
+  assert-equals(h.arr.[0].a, 6)
+  assert-equals(h.arr.[0].b, 5)
+
+  let q: big = .{ a = 7, b = 8, pad = zeroed() }
+  q = twice(q)
+  assert-equals(q.a, 7)
+  assert-equals(q.b, 8)
+
+  let r = p.&
+  r.* = swap-big(r.*)
+  assert-equals(p.a, 1)
+  assert-equals(p.b, 2)
+
+  let q = swap-big(q)
+  assert-equals(q.a, 8)
+  assert-equals(q.b, 7)
+}

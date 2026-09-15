@@ -3,6 +3,7 @@ fn low() {
   bool_test/test()
   char_test/test()
   assign/test()
+  self_assign/test()
   pointer/test()
   volatile-test/test()
   float_test/test()
@@ -96,6 +97,7 @@ fn moderate() {
   any_test/test()
   format-test/test()
   type-predicate-test/test()
+  constrained_type_defn/test()
 }
 
 fn core-lib() {

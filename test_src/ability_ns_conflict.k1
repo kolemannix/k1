@@ -7,4 +7,4 @@ ability counter[impl t] {
 }
 
 fn main(): i32 { 0 }
-//errmsg: Ability function name next is taken by a namespace member
+//errmsg: Function name next is taken

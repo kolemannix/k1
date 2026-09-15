@@ -964,7 +964,7 @@ pub struct TypedFunctionParam {
 bitflags! {
     #[repr(transparent)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    struct TypedFunctionFlags: u8 {
+    struct TypedFunctionFlags: u16 {
         const CompilerDebug = 1;
         const Concrete = 1 << 1;
         const Macro = 1 << 2;
@@ -973,6 +973,7 @@ bitflags! {
         const AbiNative = 1 << 5;
         const AddressTaken = 1 << 6;
         const Inline = 1 << 7;
+        const Cold = 1 << 8;
     }
 }
 
@@ -1037,6 +1038,9 @@ impl TypedFunction {
     }
     pub fn is_inline(&self) -> bool {
         self.flags.contains(TypedFunctionFlags::Inline)
+    }
+    pub fn is_cold(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::Cold)
     }
 
     pub fn abi_native(&self) -> bool {
@@ -6951,28 +6955,18 @@ impl TypedProgram {
                     span: is_expr.span,
                     is_static: false,
                 };
-                let check_exhaustive = false;
                 // For standalone 'is', we don't allow binding to patterns since they won't work
                 let allow_bindings = false;
-                // add_fallback: false since we have an explicit false case.
-                // Alternatively we could accept a fallback _value_ in eval_match_expr
                 let false_expr = self.synth_bool(false, is_expr.span);
-                self.eval_match_expr(
-                    as_match_expr,
-                    ctx,
-                    check_exhaustive,
-                    allow_bindings,
-                    Some(false_expr),
-                )
+                self.eval_match_expr(as_match_expr, ctx, allow_bindings, Some(false_expr))
             }
             ParsedExpr::Match(match_expr) => {
                 let match_expr = *match_expr;
                 if match_expr.is_static {
                     self.eval_static_match_expr(expr_id, ctx)
                 } else {
-                    let check_exhaustive = true;
                     let allow_bindings = true;
-                    self.eval_match_expr(match_expr, ctx, check_exhaustive, allow_bindings, None)
+                    self.eval_match_expr(match_expr, ctx, allow_bindings, None)
                 }
             }
             ParsedExpr::Lambda(_lambda) => self.eval_lambda(expr_id, ctx),
@@ -13198,7 +13192,8 @@ impl TypedProgram {
                 | TypedFunctionFlags::Macro
                 | TypedFunctionFlags::ModuleManifest
                 | TypedFunctionFlags::AbiNative
-                | TypedFunctionFlags::Inline);
+                | TypedFunctionFlags::Inline
+                | TypedFunctionFlags::Cold);
         let specialized_function = TypedFunction {
             name: parent_function.name,
             scope: spec_fn_scope,
@@ -14446,7 +14441,11 @@ impl TypedProgram {
             let Some(function_id) =
                 self.find_function_namespaced(tp.scope_id, predicate_constraint_fn_qident)?
             else {
-                kbail!(self, predicate_constraint_fn_qident.name_span, "Function not found");
+                kbail!(
+                    self,
+                    predicate_constraint_fn_qident.name_span,
+                    "Predicate function not found; try declaring it in the pre namespace or in a dependency module"
+                );
             };
             let predicate_result: bool =
                 self.execute_type_predicate_function(function_id, passed_type, span)?;
@@ -15582,6 +15581,7 @@ impl TypedProgram {
         flags.set(TypedFunctionFlags::Reloadable, is_reloadable);
         flags.set(TypedFunctionFlags::AbiNative, ast_fn.is_native);
         flags.set(TypedFunctionFlags::Inline, ast_fn.is_inline);
+        flags.set(TypedFunctionFlags::Cold, ast_fn.is_cold);
         let actual_function_id = self_.add_function(TypedFunction {
             name: ast_fn.name,
             scope: fn_scope_id,
@@ -17286,6 +17286,41 @@ impl TypedProgram {
         Ok(())
     }
 
+    fn declare_namespace_abilities(
+        &mut self,
+        parsed_namespace_id: ParsedNamespaceId,
+        skip_defns: &[ParsedId],
+    ) {
+        let Some(&namespace_id) = self.namespace_ast_mappings.get(&parsed_namespace_id) else {
+            return;
+        };
+        let namespace_scope_id = self.namespaces.get(namespace_id).scope_id;
+        let parsed_namespace = self.ast.namespaces.get(parsed_namespace_id);
+        for defn in parsed_namespace.definitions.as_slice(&self.ast.mem) {
+            if skip_defns.contains(defn) {
+                continue;
+            }
+            let tmp_mark = self.tmp.mark();
+            match *defn {
+                ParsedId::Namespace(ns) => self.declare_namespace_abilities(ns, skip_defns),
+                ParsedId::Ability(parsed_ability_id) => {
+                    if let Err(e) =
+                        self.compile_ability_definition(parsed_ability_id, namespace_scope_id)
+                    {
+                        self.report(e)
+                    };
+                }
+                ParsedId::AbilityImpl(ability_impl) => {
+                    if let Err(e) = self.declare_ability_impl(ability_impl, namespace_scope_id) {
+                        self.report(e)
+                    }
+                }
+                _ => {}
+            }
+            self.tmp.reset_to(tmp_mark);
+        }
+    }
+
     fn declare_namespace_definitions(
         &mut self,
         parsed_namespace_id: ParsedNamespaceId,
@@ -17339,18 +17374,7 @@ impl TypedProgram {
                 ParsedId::TypeDefn(_type_defn_id) => {
                     // Handled by prior phase
                 }
-                ParsedId::Ability(parsed_ability_id) => {
-                    if let Err(e) =
-                        self.compile_ability_definition(parsed_ability_id, namespace_scope_id)
-                    {
-                        self.report(e)
-                    };
-                }
-                ParsedId::AbilityImpl(ability_impl) => {
-                    if let Err(e) = self.declare_ability_impl(ability_impl, namespace_scope_id) {
-                        self.report(e)
-                    }
-                }
+                ParsedId::Ability(_) | ParsedId::AbilityImpl(_) => {}
                 ParsedId::StaticDefn(_) => {
                     // StaticDefns are handled in either the namespace declaration phase (for
                     // metaprograms) or the body phase (for value programs)
@@ -17830,35 +17854,30 @@ impl TypedProgram {
         // The namespace itself was declared at load, so that `ns build` had a parent
         let module_root_namespace_scope_id = self.modules.get(module_id).namespace_scope_id;
 
-        // Meta phase: Find pre namespace, if exists, and fully compile it
-        let mut pre_ns_id: Option<ParsedId> = None;
-        let parsed_ns = self.ast.namespaces.get(module_root_parsed_namespace);
+        // Meta phase: fully compile every root-level pre namespace block
+        let mut skip_defns: SV4<ParsedId> = smallvec![];
+        if let Some(build_ns_defn) = build_ns_defn {
+            skip_defns.push(build_ns_defn);
+        }
         if !is_core {
-            let mut pre_ns_parsed_id = None;
+            let mut pre_ns_parsed_ids: SV4<ParsedNamespaceId> = smallvec![];
+            let parsed_ns = self.ast.namespaces.get(module_root_parsed_namespace);
             for defn in parsed_ns.definitions.as_slice(&self.ast.mem) {
                 let Some(ns_id) = defn.as_namespace_id() else { continue };
                 if self.ast.namespaces.get(ns_id).name == self.ast.idents.b.pre {
-                    pre_ns_parsed_id = Some(ns_id);
-                    break;
+                    pre_ns_parsed_ids.push(ns_id);
                 }
             }
-            if let Some(pre_ns_parsed_id) = pre_ns_parsed_id {
+            for pre_ns_parsed_id in pre_ns_parsed_ids {
                 debug!(">> Phase 0.5 compile pre namespace");
                 self.declare_namespace(pre_ns_parsed_id, module_root_namespace_scope_id)
                     .map_err(|e| self.message_to_anyhow(e))?;
                 self.run_all_phases_on_ns(pre_ns_parsed_id, module_id, &[])?;
-                pre_ns_id = Some(ParsedId::Namespace(pre_ns_parsed_id));
+                skip_defns.push(ParsedId::Namespace(pre_ns_parsed_id));
             }
         }
 
-        let skip_defns = match (pre_ns_id, build_ns_defn) {
-            (None, None) => &[][..],
-            (None, Some(id)) => &[id],
-            (Some(id), None) => &[id],
-            (Some(id1), Some(id2)) => &[id1, id2],
-        };
-
-        self.run_all_phases_on_ns(module_root_parsed_namespace, module_id, skip_defns)?;
+        self.run_all_phases_on_ns(module_root_parsed_namespace, module_id, &skip_defns)?;
 
         if is_core {
             // Some of these will be redundant, but this lets us use the core prelude from
@@ -17923,7 +17942,7 @@ impl TypedProgram {
         check_for_errors!("namespace declaration");
 
         // Pending Type declaration phase
-        debug!(">> Pass 2 declare types");
+        debug!(">> Pass 2 declare types, abilities and impls");
         let pass = self.trace_push(TraceKind::TyperPass, 2, 0);
         self.discover_uses_in_namespace(module_root_parsed_namespace, skip_defns, true, true);
 
@@ -17931,25 +17950,11 @@ impl TypedProgram {
         if !is_core {
             self.resolve_pending_uses();
         }
-        // check_for_errors!("type declaration");
-        while let Some(tpd) = self.types_pending_definition.front() {
-            debug!(
-                "types_pending_definition {}\n{}",
-                self.types_pending_definition.len(),
-                self.types_pending_definition
-                    .iter()
-                    .map(|tpd| self.ident_str(self.ast.type_defns.get(tpd.parsed_id).name))
-                    .join(", ")
-            );
-            let tmp_mark = self.tmp.mark();
-            let result = self.eval_type_defn(tpd.parsed_id, tpd.scope_id);
-            self.tmp.reset_to(tmp_mark);
-            if let Err(err) = result {
-                self.type_defn_context.reset();
-                self.types_pending_definition.pop_front();
-                self.report(err);
-            }
+        if is_core {
+            self.drain_pending_type_defns();
         }
+        self.declare_namespace_abilities(module_root_parsed_namespace, skip_defns);
+        self.drain_pending_type_defns();
         self.trace_pop(pass);
 
         check_for_errors!("types");
@@ -18031,6 +18036,27 @@ impl TypedProgram {
         check_for_errors!("typechecking");
 
         Ok(())
+    }
+
+    fn drain_pending_type_defns(&mut self) {
+        while let Some(tpd) = self.types_pending_definition.front() {
+            debug!(
+                "types_pending_definition {}\n{}",
+                self.types_pending_definition.len(),
+                self.types_pending_definition
+                    .iter()
+                    .map(|tpd| self.ident_str(self.ast.type_defns.get(tpd.parsed_id).name))
+                    .join(", ")
+            );
+            let tmp_mark = self.tmp.mark();
+            let result = self.eval_type_defn(tpd.parsed_id, tpd.scope_id);
+            self.tmp.reset_to(tmp_mark);
+            if let Err(err) = result {
+                self.type_defn_context.reset();
+                self.types_pending_definition.pop_front();
+                self.report(err);
+            }
+        }
     }
 
     pub fn error_count(&self, kinds: &[MessageLevel]) -> usize {

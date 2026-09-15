@@ -209,8 +209,6 @@ pub(crate) struct BuiltinIdents {
     pub base_struct: StringId,
     pub newline: StringId,
     // messages for synthesized crash calls
-    pub crash_msg_no_cases: StringId,
-    pub crash_msg_no_cases_exhaustive: StringId,
     pub crash_msg_array_oob: StringId,
 }
 
@@ -226,7 +224,6 @@ pub(crate) struct BuiltinFunctions {
     pub try__get_value: QIdent,
     pub try__get_error: QIdent,
     pub neg__negated: QIdent,
-    pub core_crash: QIdent,
     pub core_crash_bounds: QIdent,
     pub core_discard: QIdent,
     pub core_print_print_to: QIdent,
@@ -557,11 +554,6 @@ impl IdentPool {
             function_pointer: intern!("function-pointer"),
             base_struct: intern!("base_struct"),
             newline: intern!("\n"),
-            crash_msg_no_cases: intern!("No cases matched"),
-            crash_msg_no_cases_exhaustive: intern!(
-                "No cases matched but match was meant to be exhaustive. \
-                Either the match subject is corrupt, or there is a compiler bug."
-            ),
             crash_msg_array_oob: intern!("Array index out of bounds"),
         };
 
@@ -581,7 +573,6 @@ impl IdentPool {
         let Iterable_iterator = make_fn!(path_core_iterable, intern!("iterator"));
 
         let path_core = intern_path!(b.core);
-        let core_crash = make_fn!(path_core, intern!("crash"));
         let core_crashBounds = make_fn!(path_core, intern!("crash-bounds"));
         let core_discard = make_fn!(path_core, intern!("discard"));
 
@@ -648,7 +639,6 @@ impl IdentPool {
             try__get_value,
             try__get_error,
             neg__negated,
-            core_crash,
             core_crash_bounds: core_crashBounds,
             core_discard,
             core_print_print_to,

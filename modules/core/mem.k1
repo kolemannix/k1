@@ -64,37 +64,45 @@ ns mem {
   // reference-typed slots in global initializers do not serialize yet.
   let(mutable, tls) arena-stack: fixlist[ptr, ALLOC_STACK_MAX] =
     zeroed[fixlist[ptr, ALLOC_STACK_MAX]]
+  let(mutable, tls) arena-current: *arena = ptr/null.ref[arena]
 
   fn push-arena(a: *arena) {
     arena-stack.push(a.as[ptr])
+    arena-current = a
   }
   fn pop-arena(): *arena {
-    arena-stack.pop().!.ref[arena]
+    let popped = arena-stack.pop().!.ref[arena]
+    arena-current = if arena-stack.last() is {
+      :some a -> a.ref[arena],
+      :none -> arena-tmp
+    }
+    popped
   }
   fn arena-stack-len(): size { arena-stack.len() }
   fn current-arena(): *arena {
-    if arena-stack.last() is {
-      :some a -> a.ref[arena],
-      :none -> tmp()
-    }
+    if arena-current is null { arena-current = tmp() }
+    arena-current
   }
 
   fn set-tmp-arena(arena: *arena) {
     arena-tmp = arena
+    if arena-stack.len() == 0 { arena-current = arena }
   }
 
   fn tmp(): *arena {
-    if arena-tmp is null {
-      #if k1/platform is {
-        :posix-macos or :posix-linux or :wasi -> {
-          arena-tmp = arena/init-fixed(1073741824)
-        },
-        :bare -> {
-          arena-tmp = arena/init(1024 * 8)
-        }
+    if arena-tmp is null { init-tmp() }
+    arena-tmp
+  }
+
+  fn(cold) init-tmp() {
+    #if k1/platform is {
+      :posix-macos or :posix-linux or :wasi -> {
+        arena-tmp = arena/init-fixed(1073741824)
+      },
+      :bare -> {
+        arena-tmp = arena/init(1024 * 8)
       }
     }
-    arena-tmp
   }
 
 }

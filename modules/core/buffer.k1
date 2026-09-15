@@ -425,9 +425,7 @@ ns for raw-buffer {
   }
 
   fn slice(self: raw-buffer, stride: size, start: size, end: size): raw-buffer {
-    if start < 0 or start > self.len {
-      crash("slice start index out of bounds: $start. length is: ${self.len}")
-    }
+    if start.unsigned() > self.len.unsigned() crash-bounds(self.len, start, "slice start out of bounds")
     let end-clamp = end.min(self.len)
     if end-clamp <= start or self.len == 0 {
       return .{ data = ptr/null, len = 0 }
