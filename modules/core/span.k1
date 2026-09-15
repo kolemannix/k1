@@ -25,6 +25,10 @@ ns for span {
     .{ buffer = buffer/wrap-raw(ptr, len) }
   }
 
+  fn(inline) wrap-ref[t](base: *t, len: size): span[t] {
+    .{ buffer = buffer/wrap-ref(base, len) }
+  }
+
   fn(inline) inner-buffer[t](self: span[t]): buffer[t] {
     self.buffer
   }
