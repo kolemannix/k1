@@ -679,6 +679,9 @@ Collection API naming follows a doctrine:
   `*arena` or `heap` (e.g. `cloned`/`cloned-in`, `push`/`push-in`,
   `reserve`/`reserve-in`). Long-lived data takes an explicit allocator;
   transient data uses the ambient arena.
+- Every allocation is zeroed (zero is initialized). Arena `reset`,
+  `pop-to-mark`, and `free` are O(1): the arena tracks a clean watermark and
+  zeroes reused bytes lazily when they are next allocated.
 - Mutators take `*mut self` and reuse the verb (`sort`, `reverse`); functional
   variants get `-ed` (`sorted`, `reversed`).
 - Shared collection ops are ability defaults: reads and views on `as-span`

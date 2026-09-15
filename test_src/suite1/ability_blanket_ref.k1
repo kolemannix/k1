@@ -30,7 +30,15 @@ impl[t: speak] greet for t {
   fn greet(self): string { "hi ${self.speak()}" }
 }
 
+type wrapped = { x: i32 }
+impl print for *wrapped {
+  fn print-to[w: writer](self, w): empty { w.write-string("wrapped${self.x}") }
+}
+
 fn test() {
+  let wr: wrapped = .{ x = 7 }
+  assert-equals("$wr", "wrapped7")
+  assert-equals("${wr.&}", "wrapped7")
   let th: thing = .{ x = 1 }
   // By-value calls first: an earlier th.& call would instantiate and cache
   // the blanket impl for *thing, letting the ref-self retry find it and

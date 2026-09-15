@@ -5092,6 +5092,44 @@ impl TypedProgram {
             }
         };
 
+        // The two lanes are exclusive by shape: a reference self can only be
+        // dereferenced, a value self can only have its address taken. Both are
+        // opt-in, because both are only sound where the caller has a receiver
+        // expression to adjust. Satisfying a bare type-param constraint this way
+        // is not: `*u64` would answer for `u64`'s equals/add/zero, and then
+        // `sum` specializes to `list[*u64]` and cannot produce a `*u64`
+        let adjusted_self = if !allow_self_adjust {
+            None
+        } else {
+            match self.types.get(self_type_id).as_reference() {
+                Some(reference) => Some((reference.inner_type, SelfAdjust::Deref)),
+                None => Some((self.add_reference_type(self_type_id), SelfAdjust::AddrOf)),
+            }
+        };
+        if let Some((adjusted_self_type_id, adjust)) = adjusted_self {
+            if let Some(impl_handle) = self.find_unique_valid_ability_impl(
+                adjusted_self_type_id,
+                target_base_ability_id,
+                parameter_constraints,
+                scope_id,
+            )? {
+                return Ok((impl_handle, adjust));
+            }
+            if let Some(blanket_impls_for_base) = self.blanket_impls.get(&target_base_ability_id) {
+                for blanket_impl_id in blanket_impls_for_base.as_slice(&self.mem).iter().copied() {
+                    if let Some(impl_handle) = self.try_apply_blanket_implementation(
+                        blanket_impl_id,
+                        adjusted_self_type_id,
+                        target_base_ability_id,
+                        parameter_constraints,
+                        span,
+                    ) {
+                        return Ok((impl_handle, adjust));
+                    }
+                }
+            }
+        }
+
         let mut err_msg: Option<MStr<MemTmp>> = None;
         /////////////////// Special type-kind abilities
         if target_base_ability_id == ABILITY_ID_ENUM {
@@ -5182,44 +5220,6 @@ impl TypedProgram {
                         }
                     }
                     _ => {}
-                }
-            }
-        }
-
-        // The two lanes are exclusive by shape: a reference self can only be
-        // dereferenced, a value self can only have its address taken. Both are
-        // opt-in, because both are only sound where the caller has a receiver
-        // expression to adjust. Satisfying a bare type-param constraint this way
-        // is not: `*u64` would answer for `u64`'s equals/add/zero, and then
-        // `sum` specializes to `list[*u64]` and cannot produce a `*u64`
-        let adjusted_self = if !allow_self_adjust {
-            None
-        } else {
-            match self.types.get(self_type_id).as_reference() {
-                Some(reference) => Some((reference.inner_type, SelfAdjust::Deref)),
-                None => Some((self.add_reference_type(self_type_id), SelfAdjust::AddrOf)),
-            }
-        };
-        if let Some((adjusted_self_type_id, adjust)) = adjusted_self {
-            if let Some(impl_handle) = self.find_unique_valid_ability_impl(
-                adjusted_self_type_id,
-                target_base_ability_id,
-                parameter_constraints,
-                scope_id,
-            )? {
-                return Ok((impl_handle, adjust));
-            }
-            if let Some(blanket_impls_for_base) = self.blanket_impls.get(&target_base_ability_id) {
-                for blanket_impl_id in blanket_impls_for_base.as_slice(&self.mem).iter().copied() {
-                    if let Some(impl_handle) = self.try_apply_blanket_implementation(
-                        blanket_impl_id,
-                        adjusted_self_type_id,
-                        target_base_ability_id,
-                        parameter_constraints,
-                        span,
-                    ) {
-                        return Ok((impl_handle, adjust));
-                    }
                 }
             }
         }
