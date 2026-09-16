@@ -55,10 +55,6 @@ ns for string {
     self.span.inner-buffer().position(c)
   }
 
-  fn contains(self: string, c: char): bool {
-    self.span.inner-buffer().position(c).is-some()
-  }
-
   fn join[c: as-span[t = string]](items: c, separator: string): string {
     let b = string-builder/new()
     for s in items.as-span() {

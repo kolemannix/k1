@@ -13995,7 +13995,7 @@ impl TypedProgram {
                     "copy" => Some(Builtin::Backend(BackendBuiltin::MemCopy)),
                     "move" => Some(Builtin::Backend(BackendBuiltin::MemMove)),
                     "set" => Some(Builtin::Backend(BackendBuiltin::MemSet)),
-                    "equals" => Some(Builtin::Backend(BackendBuiltin::MemEquals)),
+                    "equals-memcmp" => Some(Builtin::Backend(BackendBuiltin::MemEquals)),
                     "bitcast" => Some(Builtin::Ir(BuiltinIr::Bitcast)),
                     "load-volatile" => Some(Builtin::Ir(BuiltinIr::VolatileLoad)),
                     "store-volatile" => Some(Builtin::Ir(BuiltinIr::VolatileStore)),

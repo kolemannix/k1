@@ -179,7 +179,8 @@ pub mod k1_types {
     #[derive(Clone, Copy)]
     pub struct K1SourceLocation {
         pub filename: K1BufferLike,
-        pub line: u64,
+        pub line: u32,
+        pub span: u32,
     }
 
     #[repr(C)]
@@ -273,8 +274,7 @@ pub struct VmFfiHandle {
 pub struct CompilerMessage {
     level: MessageLevel,
     message: StringId,
-    filename: String,
-    line: u32,
+    span: SpanId,
 }
 
 /// A repl command issued by cell code during execution (`k1/repl/*`
@@ -1521,27 +1521,44 @@ pub(crate) fn builtin_compiler_message(
     let message = value_to_string_id(k1, message_arg).map_err(|msg| {
         kerr!(k1, vm.eval_span, "Bad message string passed to EmitCompilerMessage: {msg}")
     })?;
-    let filename = unsafe { location.filename.to_str() }.map_err(|msg| {
-        kerr!(k1, vm.eval_span, "Bad filename string passed to EmitCompilerMessage: {msg}")
-    })?;
+    let span = SpanId::from_u32(location.span)
+        .filter(|id| k1.ast.spans.span_pool.get_opt(*id).is_some());
+    let Some(span) = span else {
+        kbail!(
+            k1,
+            vm.eval_span,
+            "Bad source-location span {} passed to EmitCompilerMessage",
+            location.span
+        )
+    };
 
-    if !vm.quiet_messages {
-        eprintln!(
-            "[{}:{} {}] {}",
-            filename,
-            location.line,
-            level.name_str().color(level.color()),
-            k1.get_string(message)
-        );
+    if !vm.quiet_messages && level != MessageLevel::Error {
+        let mut line = String::new();
+        write_compiler_message(k1, &mut line, &CompilerMessage { level, message, span });
+        eprint!("{line}");
     }
 
-    vm.compiler_messages.push(CompilerMessage {
-        level,
-        message,
-        filename: filename.to_string(),
-        line: location.line as u32,
-    });
+    vm.compiler_messages.push(CompilerMessage { level, message, span });
     Ok(())
+}
+
+fn write_compiler_message(k1: &TypedProgram, w: &mut String, message: &CompilerMessage) {
+    use std::fmt::Write;
+    let msg_str = k1.get_string(message.message);
+    if msg_str == "\n" {
+        writeln!(w).unwrap();
+        return;
+    }
+    let (source, line) = k1.get_span_location(message.span);
+    writeln!(
+        w,
+        "[{}:{} {}] {}",
+        source.filename_str(&k1.ast.idents),
+        line.line_number(),
+        message.level.name_str().color(message.level.color()),
+        msg_str
+    )
+    .unwrap();
 }
 
 /// The ReplCheckbox builtin body, shared with the bc VM:
@@ -1619,45 +1636,35 @@ pub fn peek_global_as_static(
 
 pub(crate) fn report_execution_messages(
     k1: &mut TypedProgram,
-    vm: &Vm,
+    vm: &mut Vm,
     span: SpanId,
-    _exit_code: i32,
-) {
-    if vm.compiler_messages.is_empty() {
-        return;
-    }
-
+) -> Option<K1Message> {
     let mut formatted_messages = String::new();
-    let mut max_level = MessageLevel::Hint;
-    for message in &vm.compiler_messages {
-        use std::fmt::Write;
-        let msg_str = k1.get_string(message.message);
-        let color = match message.level {
-            MessageLevel::Info => colored::Color::BrightWhite,
-            MessageLevel::Warn => colored::Color::Yellow,
-            MessageLevel::Error => colored::Color::Red,
-            MessageLevel::Hint => colored::Color::BrightBlue,
-        };
-        if message.level > max_level {
-            max_level = message.level
-        };
-        if msg_str == "\n" {
-            writeln!(&mut formatted_messages).unwrap()
+    let mut error_message = String::new();
+    let mut error_span = SpanId::NONE;
+    for message in vm.compiler_messages.drain(..) {
+        if message.level == MessageLevel::Error {
+            if error_message.is_empty() {
+                error_span = message.span;
+                error_message.push_str(k1.get_string(message.message));
+            } else {
+                error_message.push('\n');
+                write_compiler_message(k1, &mut error_message, &message);
+            }
         } else {
-            writeln!(
-                &mut formatted_messages,
-                "[{}:{} {}] {}",
-                message.filename,
-                message.line,
-                message.level.name_str().color(color),
-                msg_str
-            )
-            .unwrap()
-        };
+            write_compiler_message(k1, &mut formatted_messages, &message);
+        }
     }
-    let level = MessageLevel::Info;
-    let message = k1.ast.idents.intern(&formatted_messages);
-    k1.report_ext(K1Message { message, span, level, error_kind: ErrorKind::None }, true);
+    if !formatted_messages.is_empty() {
+        let message = k1.ast.idents.intern(&formatted_messages);
+        let level = MessageLevel::Info;
+        k1.report_ext(K1Message { message, span, level, error_kind: ErrorKind::None }, true);
+    }
+    if error_message.is_empty() {
+        None
+    } else {
+        Some(k1.make_error(&error_message, error_span))
+    }
 }
 
 #[track_caller]

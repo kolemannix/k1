@@ -16,7 +16,9 @@ use crate::ir::{self, BackendBuiltin, IrUnitId};
 use crate::lex::SpanId;
 use crate::typer::trace::TraceKind;
 use crate::typer::types::{PhysicalType, RecordKind, TypeId};
-use crate::typer::{FunctionId, K1Result, StaticValueId, TypedExprId, TypedGlobalId, TypedProgram};
+use crate::typer::{
+    FunctionId, K1Message, K1Result, StaticValueId, TypedExprId, TypedGlobalId, TypedProgram,
+};
 use crate::vm::{
     self, Value, Vm, casted_float_op, casted_iop, casted_uop, load_value, store_value,
 };
@@ -156,26 +158,19 @@ pub fn execute_compiled_unit_raw(
 
     let exit_code = match exec_result {
         Ok(exit_code) => exit_code,
-        Err(mut e) => {
-            if let Some((fault_fp, fault_pc)) = vm.bc_fault {
-                let trace = make_stack_trace(k1, fault_fp as *const u8, fault_pc);
-                e.message = k1.ast.idents.intern(format!(
-                    "{}\nbc Execution Trace\n{}",
-                    k1.ident_str(e.message),
-                    trace
-                ));
-            }
-            return Err(e);
-        }
+        Err(e) => return Err(with_bc_trace(k1, vm, e)),
     };
 
     if report_messages {
-        vm::report_execution_messages(k1, vm, span, exit_code);
+        if let Some(e) = vm::report_execution_messages(k1, vm, span) {
+            return Err(with_bc_trace(k1, vm, e));
+        }
     }
 
     vm.overall_return_addr = core::ptr::null_mut();
     if exit_code != 0 {
-        Err(kerr!(k1, span, "Static execution exited with code: {}", exit_code))
+        let e = kerr!(k1, span, "Static execution exited with code: {}", exit_code);
+        Err(with_bc_trace(k1, vm, e))
     } else {
         Ok(RawUnitResult {
             ret_addr,
@@ -184,6 +179,18 @@ pub fn execute_compiled_unit_raw(
             returns_value: !(info.diverges || ret_pt.is_empty()),
         })
     }
+}
+
+fn with_bc_trace(k1: &mut TypedProgram, vm: &Vm, mut e: K1Message) -> K1Message {
+    if let Some((fault_fp, fault_pc)) = vm.bc_fault {
+        let trace = make_stack_trace(k1, fault_fp as *const u8, fault_pc);
+        e.message = k1.ast.idents.intern(format!(
+            "{}\nbc Execution Trace\n{}",
+            k1.ident_str(e.message),
+            trace
+        ));
+    }
+    e
 }
 
 /// Walk the caller_fp chain, naming each frame's unit via the pc range table.
@@ -605,7 +612,10 @@ fn exec_loop(
                 };
                 let outcome = vmtry!(exec_builtin(k1, vm, builtin, args));
                 match outcome {
-                    BuiltinOutcome::Exit(code) => return Ok(code),
+                    BuiltinOutcome::Exit(code) => {
+                        vm.bc_fault = Some((fp as u64, pc_u32!()));
+                        return Ok(code);
+                    }
                     BuiltinOutcome::Value(v) => {
                         if ret_pt.is_agg() {
                             let sret = unsafe { *(new_fp as *const u64).add(2) } as *mut u8;

@@ -19,29 +19,29 @@ fn(inline) inc(i: *mut size) { i.* = i.* + 1 }
 
 fn(inline) identity[t](value: t): t { value }
 
-fn print[t: print](t) {
+fn print[t: print](context locn: k1/source-location)(t) {
   // TODO: Instead of this hack, make write(Sink, span[byte]) the intrinsic.
   if k1/is-static and k1/capture-prints {
     let s = t.show()
-    k1/emit-compiler-message(k1/location(), :info, s)
+    k1/emit-compiler-message(locn, :info, s)
   } else {
     t.print-to(io/stdout)
   }
 }
-fn println[t: print](t) {
+fn println[t: print](context locn: k1/source-location)(t) {
   print[t](t)
   print[string]("\n")
 }
 
-fn eprint[t: print](t) {
+fn eprint[t: print](context locn: k1/source-location)(t) {
   if k1/is-static and k1/capture-prints {
     let s = t.show()
-    k1/emit-compiler-message(k1/location(), :warn, s)
+    k1/emit-compiler-message(locn, :warn, s)
   } else {
     t.print-to(io/stderr)
   }
 }
-fn eprintln(s: string) {
+fn eprintln(context locn: k1/source-location)(s: string) {
   eprint(s)
   eprint("\n")
 }

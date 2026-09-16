@@ -92,10 +92,6 @@ ns for list {
     self.as-buffer().position(needle)
   }
 
-  fn contains[t: equals](self: list[t], needle: t): bool {
-    self.as-buffer().position(needle).is-some()
-  }
-
   fn reversed[t](self: list[t]): list[t] {
     let clone = self.cloned()
     clone.reverse()

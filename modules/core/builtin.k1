@@ -731,7 +731,7 @@ ns mem {
     value: u8,
     count: size
   )
-  fn(intern) equals(p1: ptr, p2: ptr, size: int): bool
+  fn(intern) equals-memcmp(p1: ptr, p2: ptr, size: int): bool
 
   fn(intern) bitcast[t, u](t: t): u
 
@@ -744,7 +744,7 @@ ns mem {
 // Compiler builtins
 ns k1 {
 
-  type source-location = { filename: string, line: u64 }
+  type source-location = { filename: string, line: u32, span: u32 }
 
   // Need some way to mark this and is-static as comptime only
   let capture-prints: bool = true
@@ -1090,7 +1090,7 @@ fn crash(context locn: k1/source-location)(msg: string): never {
     eprint(" at ")
     eprint(locn.filename)
     eprint(":")
-    core/format-uint(context core/io/stderr)(locn.line, 10)
+    core/format-uint(context core/io/stderr)(locn.line.widen[u64], 10)
     eprint("\n")
 
     platform/process/abort()

@@ -166,6 +166,10 @@ fn test() {
     test-compile( #static sys/exit(111) ).map(fn(s) s.take(38)),
     some("Static execution exited with code: 111")
   )
+  assert-equals[?string](
+    test-compile( #static crash("boom") ).map(fn(s) s.take(4)),
+    some("boom")
+  )
 
   // Call order
   #static bar(2)

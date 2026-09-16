@@ -91,10 +91,6 @@ ns for span {
     self.buffer.position(needle)
   }
 
-  fn contains[t: equals](self: span[t], needle: t): bool {
-    self.buffer.position(needle).is-some()
-  }
-
   fn concat[t](self: span[t], other: span[t]): span[t] {
     let concated-buffer = self.inner-buffer().concat(other.inner-buffer())
     wrap-buffer(concated-buffer)
