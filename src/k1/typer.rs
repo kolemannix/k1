@@ -349,7 +349,7 @@ bitflags! {
         /// The completion cursor is a direct argument of the enclosing call,
         /// which records the CallArg site itself
         const CompletionCursorOwnedByCall = 1 << 7;
-        const TestCompile = 1 << 8;
+        const Speculative = 1 << 8;
     }
 }
 
@@ -435,10 +435,14 @@ impl EvalExprContext {
     }
 
     #[inline(always)]
-    fn with_inference(&self, is_inference: bool) -> EvalExprContext {
-        let mut flags = self.flags;
-        flags.set(EvalExprFlags::Inference, is_inference);
+    fn with_inference(&self) -> EvalExprContext {
+        let flags = self.flags | EvalExprFlags::Inference | EvalExprFlags::Speculative;
         EvalExprContext { flags, ..*self }
+    }
+
+    #[inline(always)]
+    fn without_inference(&self) -> EvalExprContext {
+        EvalExprContext { flags: self.flags - EvalExprFlags::Inference, ..*self }
     }
 
     #[inline(always)]
@@ -447,13 +451,13 @@ impl EvalExprContext {
     }
 
     #[inline(always)]
-    fn with_test_compile(&self) -> EvalExprContext {
-        EvalExprContext { flags: self.flags | EvalExprFlags::TestCompile, ..*self }
+    fn with_speculative(&self) -> EvalExprContext {
+        EvalExprContext { flags: self.flags | EvalExprFlags::Speculative, ..*self }
     }
 
     #[inline(always)]
-    fn is_test_compile(&self) -> bool {
-        self.flags.contains(EvalExprFlags::TestCompile)
+    fn is_speculative(&self) -> bool {
+        self.flags.contains(EvalExprFlags::Speculative)
     }
 
     #[inline(always)]
@@ -10213,7 +10217,7 @@ impl TypedProgram {
                 }
                 self.compile_all_pending_ir(call_span)?;
                 let result =
-                    self.eval_expr(arg.value, ctx.with_no_expected_type().with_test_compile());
+                    self.eval_expr(arg.value, ctx.with_no_expected_type().with_speculative());
                 let expr = match result {
                     Err(typer_error) => {
                         let string_expr = self.synth_string_literal(typer_error.message, call_span);
@@ -13593,7 +13597,7 @@ impl TypedProgram {
                 Ok(Some(stmt_id)) => stmt_id,
                 Ok(None) => continue,
                 Err(err) => {
-                    if ctx.is_inference() || ctx.is_test_compile() {
+                    if ctx.is_speculative() {
                         return Err(err);
                     }
                     last_error = Some(err);

@@ -208,7 +208,7 @@ impl TypedProgram {
                         }
                     } else {
                         let inference_context = EvalExprContext::make(scope_id)
-                            .with_inference(true)
+                            .with_inference()
                             .with_expected_type(Some(expected_type_so_far));
                         self.eval_expr_with_coercion(*parsed_expr, inference_context, false)
                     };

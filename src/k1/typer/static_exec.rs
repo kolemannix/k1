@@ -190,7 +190,7 @@ impl TypedProgram {
             self.scopes.mask_variable(static_block_scope, *name);
         }
 
-        let static_eval_ctx = ctx.with_scope(static_block_scope);
+        let static_eval_ctx = ctx.with_scope(static_block_scope).without_inference();
         let expr = self.eval_block(&parsed_expr_as_block, static_eval_ctx, true)?;
         let is_debug = self.ast.exprs.is_debug(parsed_expr);
         if is_debug {

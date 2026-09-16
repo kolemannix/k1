@@ -609,7 +609,7 @@ impl TypedProgram {
 
 impl EvalExprContext {
     pub fn trace_flags(&self) -> u8 {
-        if self.is_inference() || self.is_test_compile() { FRAME_FLAG_SPECULATIVE } else { 0 }
+        if self.is_speculative() { FRAME_FLAG_SPECULATIVE } else { 0 }
     }
 }
 

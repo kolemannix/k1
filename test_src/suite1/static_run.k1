@@ -59,6 +59,7 @@ fn test() {
 
   // Non-trivial statics as generic args: compiled and executed during inference
   assert-equals((#static { let m = 21; m * 2 }).from-static(), 42)
+  assert-equals(core/identity(#static { core/identity(21) * 2 }).from-static(), 42)
 
   // Variable assign
   let goodbye: "Goodbye, World!" = #static {
