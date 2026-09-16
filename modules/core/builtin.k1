@@ -733,8 +733,6 @@ ns mem {
   )
   fn(intern) equals(p1: ptr, p2: ptr, size: int): bool
 
-  fn(intern) zeroed[t](): t
-
   fn(intern) bitcast[t, u](t: t): u
 
   fn(intern) load-volatile[t](src: *t): t
@@ -997,7 +995,7 @@ ns array {
   }
 
   fn zeroed[t, n: static size](): array[t, n] {
-    mem/zeroed[array[t, n]]
+    .0
   }
 
   fn allocate[t, n: static size, a: allocator](alloc: a): *mut array[t, n] {

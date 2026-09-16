@@ -768,6 +768,7 @@ pub enum ParsedExpr {
     /// ```
     Lambda(ParsedLambda),
     Builtin(SpanId),
+    Zero(SpanId),
     Static(ParsedStaticExpr),
     Code(ParsedCode),
     QualifiedAbilityCall(ParsedQAbilityCall),
@@ -853,6 +854,7 @@ impl ParsedExpr {
             Self::Match(match_expr) => match_expr.span,
             Self::Lambda(lambda) => lambda.span,
             Self::Builtin(span) => *span,
+            Self::Zero(span) => *span,
             Self::Static(s) => s.span,
             Self::Code(c) => c.span,
             Self::QualifiedAbilityCall(c) => c.span,
@@ -886,6 +888,7 @@ impl ParsedExpr {
             Self::Match(match_expr) => match_expr.span = span,
             Self::Lambda(lambda) => lambda.span = span,
             Self::Builtin(s) => *s = span,
+            Self::Zero(s) => *s = span,
             Self::Static(s) => s.span = span,
             Self::Code(c) => c.span = span,
             Self::QualifiedAbilityCall(c) => c.span = span,
@@ -1109,14 +1112,6 @@ pub struct ParsedReference {
     pub kind: ReferenceKind,
 }
 
-#[derive(Debug, Clone)]
-pub struct ParsedArrayType {
-    pub size_expr: ParsedTypeExprId,
-    pub element_type: ParsedTypeExprId,
-    pub span: SpanId,
-}
-impl_copy_if_small!(12, ParsedArrayType);
-
 #[derive(Clone, Copy)]
 pub struct ParsedSumTypeVariant {
     pub tag_name: StringId,
@@ -1220,7 +1215,6 @@ pub enum ParsedTypeExpr {
     TypeApplication(TypeApplication),
     Optional(ParsedOptional),
     Reference(ParsedReference),
-    Array(ParsedArrayType),
     Sum(ParsedSumType),
     MemberAccess(ParsedMemberAccess),
     Function(ParsedFunctionType),
@@ -1243,7 +1237,6 @@ impl ParsedTypeExpr {
             ParsedTypeExpr::TypeApplication(app) => app.span,
             ParsedTypeExpr::Optional(opt) => opt.span,
             ParsedTypeExpr::Reference(r) => r.span,
-            ParsedTypeExpr::Array(arr) => arr.span,
             ParsedTypeExpr::Sum(e) => e.span,
             ParsedTypeExpr::MemberAccess(a) => a.span,
             ParsedTypeExpr::Function(f) => f.span,
@@ -2745,6 +2738,49 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         &self.source_text[span.start as usize..(span.start + span.len) as usize]
     }
 
+    fn is_zero_literal_nonspaced(&self, tok: Token) -> bool {
+        tok.is_kind_nonspaced(K::Numeric) && self.token_chars(tok) == "0"
+    }
+
+    fn is_zero_or_struct_literal(&self, tok: Token) -> bool {
+        tok.is_kind_nonspaced(K::OpenBrace) || self.is_zero_literal_nonspaced(tok)
+    }
+
+    fn is_nominated_literal_start(&self, dot: Token, tail: Token) -> bool {
+        dot.is_kind_nonspaced(K::Dot) && self.is_zero_or_struct_literal(tail)
+    }
+
+    fn add_zero_literal(&mut self, span: SpanId) -> ParsedExprId {
+        self.add_expression(ParsedExpr::Zero(span))
+    }
+
+    fn parse_nominated_literal(
+        &mut self,
+        first: Token,
+        name: QIdent,
+        type_args: AstSlice<NamedTypeArg>,
+    ) -> ParseResult<ParsedExprId> {
+        let type_span = self.extend_tok_to_here(first);
+        let ty = self.ast.type_exprs.add(ParsedTypeExpr::TypeApplication(TypeApplication {
+            name,
+            args: type_args,
+            span: type_span,
+        }));
+        self.emit_semantic_token_span(name.name_span, SemanticTokenKind::Type);
+        let dot = self.tokens.next();
+        let next = self.peek();
+        let inner = if self.is_zero_literal_nonspaced(next) {
+            self.advance();
+            let span = self.extend_token_span(dot, next);
+            self.add_zero_literal(span)
+        } else {
+            let struct_value = self.expect_struct_value(dot)?;
+            self.add_expression(ParsedExpr::Struct(struct_value))
+        };
+        let span = self.extend_tok_to_here(first);
+        Ok(self.add_expression(ParsedExpr::TypeHint(ParsedTypeHint { inner, ty, span })))
+    }
+
     fn maybe_consume(&mut self, target_kind: TokenKind) -> Option<Token> {
         let tok = self.peek();
         if tok.kind == target_kind {
@@ -3233,32 +3269,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             } else {
                 let base_name = self.qident_from(first, ident)?;
                 self.emit_semantic_token_span(base_name.name_span, SemanticTokenKind::Type);
-
-                // Note: This no longer needs to be special syntax since its not an X anymore.
-                if base_name.path.is_empty() {
-                    if base_name.name == self.ast.idents.b.array {
-                        self.expect_kind(K::OpenBracket)?;
-
-                        let element_type = self.expect_type_expression()?;
-
-                        self.expect_kind(K::Comma)?;
-
-                        let size_expr = self.expect_type_expression()?;
-                        let end_bracket = self.expect_kind(K::CloseBracket)?;
-                        let span = self.extend_token_span(first, end_bracket);
-
-                        let array_type = ParsedArrayType { size_expr, element_type, span };
-
-                        return Ok(Some(
-                            self.ast.type_exprs.add(ParsedTypeExpr::Array(array_type)),
-                        ));
-                    }
-                }
-
-                // parameterized, namespaced type. Examples:
-                // core/int,
-                // box[point],
-                // std/map[int, int]
                 let type_params = self.parse_bracketed_type_args()?;
                 let span = if base_name.path.is_empty() && type_params.is_empty() {
                     base_name.name_span
@@ -3549,12 +3559,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 Some(self.expect_index_postfix(result)?)
             } else if next.kind == K::Dot
                 && (!next.is_whitespace_preceded()
-                    || (next.is_newline_preceded() && self.tokens.peek_n(1).kind != K::OpenBrace))
+                    || (next.is_newline_preceded()
+                        && !self.is_zero_or_struct_literal(self.tokens.peek_n(1))))
             {
-                // Field access syntax; a.b with optional bracketed type args [].
-                // A leading dot continues the chain across a line break
-                // (`expr\n  .method()`), except `.{`, which always starts a
-                // fresh struct-literal statement
                 self.advance();
                 let target = match self.peek().kind {
                     K::Ident => self.tokens.next(),
@@ -3794,7 +3801,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         match one.kind {
             K::Ident | K::Numeric | K::Char | K::OpenBracket => true,
             K::Dot => {
-                two.is_kind_nonspaced(K::OpenBrace) && self.tokens.peek_n(2).kind != K::CloseBrace
+                (two.is_kind_nonspaced(K::OpenBrace) && self.tokens.peek_n(2).kind != K::CloseBrace)
+                    || self.is_zero_literal_nonspaced(two)
             }
             // A nested variant like `:ok :some`; a spaced ident is a type hint: `:foo: t`
             K::Colon => two.is_kind_nonspaced(K::Ident),
@@ -3992,10 +4000,16 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 Ok(Some(self.add_expression(ParsedExpr::Block(block))))
             }
             K::Dot => {
-                // .{ ... } struct literal
                 self.advance();
-                let struct_value = self.expect_struct_value(first)?;
-                Ok(Some(self.add_expression(ParsedExpr::Struct(struct_value))))
+                let next = self.peek();
+                if self.is_zero_literal_nonspaced(next) {
+                    self.advance();
+                    let span = self.extend_token_span(first, next);
+                    Ok(Some(self.add_zero_literal(span)))
+                } else {
+                    let struct_value = self.expect_struct_value(first)?;
+                    Ok(Some(self.add_expression(ParsedExpr::Struct(struct_value))))
+                }
             }
             K::KeywordIf => {
                 let expect_res = self.parse_if_expr(false);
@@ -4069,6 +4083,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     }
                     let namespaced_ident = self.qident_from(first, ident)?;
                     let (second, third) = self.tokens.peek_two();
+                    if self.is_nominated_literal_start(second, third) {
+                        return self
+                            .parse_nominated_literal(first, namespaced_ident, MSlice::empty())
+                            .map(Some);
+                    }
                     if second.is_kind_nonspaced(K::Colon) && !third.is_whitespace_preceded() {
                         self.advance();
                         let (variant_name_token, variant_name) = self.expect_ident()?;
@@ -4100,9 +4119,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             _ => unreachable!(),
                         };
                         let next_after_tparams = self.peek();
+                        if self
+                            .is_nominated_literal_start(next_after_tparams, self.tokens.peek_n(1))
+                        {
+                            return self
+                                .parse_nominated_literal(first, namespaced_ident, first_type_args)
+                                .map(Some);
+                        }
                         match next_after_tparams.kind {
                             K::OpenParen => {
-                                // Call with type params above
                                 let args = self.expect_fn_call_args()?;
                                 let span = self.extend_tok_to_here(first);
                                 self.emit_semantic_token_span(
@@ -5656,6 +5681,7 @@ impl ParsedProgram {
     pub fn display_expr_id(&self, w: &mut impl Write, expr: ParsedExprId) -> std::fmt::Result {
         match self.exprs.get(expr) {
             ParsedExpr::Builtin(_span) => w.write_str("builtin"),
+            ParsedExpr::Zero(_span) => w.write_str(".0"),
             ParsedExpr::BinaryOp(op) => {
                 w.write_str("(")?;
                 self.display_expr_id(w, op.lhs)?;
@@ -6140,13 +6166,6 @@ impl ParsedProgram {
                 w.write_str("static ")?;
                 self.display_type_expr_id(s.family_type_expr, w)?;
                 Ok(())
-            }
-            ParsedTypeExpr::Array(array_type) => {
-                w.write_str("array[")?;
-                self.display_type_expr_id(array_type.element_type, w)?;
-                w.write_str(", ")?;
-                self.display_type_expr_id(array_type.size_expr, w)?;
-                w.write_str("]")
             }
             ParsedTypeExpr::StaticLiteral(parsed_literal) => {
                 self.display_literal(w, parsed_literal)?;

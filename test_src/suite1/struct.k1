@@ -1,6 +1,12 @@
 ns struct_test
 
 type patch-pair[t] = { first: t, second: t }
+type nom-point = { x: int, y: int }
+type nom-wrap[t] = { inner: t }
+ns for nom-point {
+  fn sum(self: nom-point): int { self.x + self.y }
+}
+fn identity[t](v: t): t { v }
 
 type point = { x: int, y: int, z: int, is-good: bool }
 fn basic-struct(): int {
@@ -106,6 +112,24 @@ fn patch() {
   )
 }
 
+fn nominated() {
+  let p = nom-point.{ x = 1, y = 2 }
+  assert-equals(p.sum(), 3)
+  let w = nom-wrap[int].{ inner = 4 }
+  assert-equals(w.inner, 4)
+  assert-equals(nom-point.{ x = 3, y = 4 }.sum(), 7)
+  let some-p: ?nom-point = :some nom-point.{ x = 5, y = 6 }
+  assert-equals(some-p.!.y, 6)
+  assert-equals(identity(nom-point.{ x = 7, y = 8 }).x, 7)
+  let multi = nom-point.{
+    x = 9,
+    y = 10,
+  }
+  assert-equals(multi.y, 10)
+  assert(test-compile(nom-point.{ x = 1 }).is-some())
+  assert(test-compile(int.{ x = 1 }).is-some())
+}
+
 fn auto-equals() {
   let a: { x: int, y: f32 } = .{ x = 10, y = 10.0 }
   let b: { x: int, y: f32 } = .{ x = 20, y = 20.0 }
@@ -124,5 +148,6 @@ fn test() {
   eq-anon()
   struct-nested()
   patch()
+  nominated()
   auto-equals()
 }

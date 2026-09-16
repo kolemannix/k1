@@ -816,6 +816,11 @@ impl Value {
     const fn imm32(t: ScalarType, u32: u32) -> Value {
         Value::Data32 { t, data: u32 }
     }
+
+    pub const fn zero(t: ScalarType) -> Value {
+        // The all-zeroes bit pattern is zero for every scalar, floats included
+        Value::imm32(t, 0)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -3012,6 +3017,11 @@ fn compile_expr(
             Ok(stored)
         }
         TypedExpr::StaticValue(stat) => {
+            if !stat.is_typed_as_static {
+                if let StaticValue::Zero(type_id) = *b.k1.static_values.get(stat.value_id) {
+                    return compile_zero(b, type_id, dst);
+                }
+            }
             let t = b.get_physical_type(expr_type)?;
             let value = compile_static_value(b, stat.value_id, t);
             let stored = store_rich_if_dst(b, dst, t, value, IrComment::StoreStaticValueToDst);
@@ -3091,6 +3101,42 @@ fn compile_expr_place(b: &mut Builder, expr: TypedExprId) -> K1Result<(Value, bo
             let e = compile_expr(b, None, expr)?;
             debug_assert!(b.get_value_kind(e).is_storage() || b.get_value_kind(e).is_empty());
             Ok((e, true))
+        }
+    }
+}
+
+fn compile_zero(b: &mut Builder, type_id: TypeId, dst: Option<Value>) -> K1Result<Value> {
+    let pt = b.get_physical_type(type_id)?;
+    match pt.as_enum() {
+        PhysicalTypeEnum::Empty => Ok(Value::Empty),
+        PhysicalTypeEnum::Agg(agg_id) => {
+            let pt_layout = b.k1.agg_types.get(agg_id).layout;
+            let dst = match dst {
+                None => b.push_alloca(pt, IrComment::ZeroedNoDst).as_value(),
+                Some(dst) => dst,
+            };
+            let zero_u8 = Value::byte(0);
+            let count =
+                b.make_int_value(&TypedIntValue::I64(pt_layout.size as i64), IrComment::MemsetSize);
+            let memset_args = b.k1.ir.mem.pushn(&[dst, zero_u8, count]);
+            let Some(memset_function_id) =
+                b.k1.scopes.find_function(b.k1.scopes.mem_scope_id, b.k1.ast.idents.b.set)
+            else {
+                b_ice!(b, "Missing memset function");
+            };
+            let memset_call = IrCall {
+                ret_type: PhysicalType::EMPTY,
+                callee: IrCallee::BackendBuiltin(memset_function_id, BackendBuiltin::MemSet),
+                args: memset_args,
+                dst: None,
+            };
+            let call_id = add_call(b.k1, memset_call);
+            b.push_inst(Inst::Call { call_id }, IrComment::ZeroedMemset);
+            Ok(dst)
+        }
+        PhysicalTypeEnum::Scalar(st) => {
+            let stored = store_scalar_if_dst(b, dst, Value::zero(st));
+            Ok(stored)
         }
     }
 }
@@ -3280,49 +3326,6 @@ fn compile_ir_builtin(
             );
             Ok(stored)
         }
-        BuiltinIr::Zeroed => {
-            let type_id = call.type_args.as_slice(&b.k1.mem)[0];
-            let pt = b.get_physical_type(type_id)?;
-            match pt.as_enum() {
-                PhysicalTypeEnum::Empty => Ok(Value::Empty),
-                PhysicalTypeEnum::Agg(agg_id) => {
-                    let pt_layout = b.k1.agg_types.get(agg_id).layout;
-                    let dst = match dst {
-                        None => b.push_alloca(pt, IrComment::ZeroedNoDst).as_value(),
-                        Some(dst) => dst,
-                    };
-                    let zero_u8 = Value::byte(0);
-                    // fn(intern) set(dst: ptr, value: u8, count: size): unit
-                    let count = b.make_int_value(
-                        &TypedIntValue::I64(pt_layout.size as i64),
-                        IrComment::MemsetSize,
-                    );
-                    let memset_args = b.k1.ir.mem.pushn(&[dst, zero_u8, count]);
-                    let Some(memset_function_id) =
-                        b.k1.scopes.find_function(b.k1.scopes.mem_scope_id, b.k1.ast.idents.b.set)
-                    else {
-                        b_ice!(b, "Missing memset function");
-                    };
-                    let memset_call = IrCall {
-                        ret_type: PhysicalType::EMPTY,
-                        callee: IrCallee::BackendBuiltin(
-                            memset_function_id,
-                            BackendBuiltin::MemSet,
-                        ),
-                        args: memset_args,
-                        dst: None,
-                    };
-                    let call_id = add_call(b.k1, memset_call);
-                    b.push_inst(Inst::Call { call_id }, IrComment::ZeroedMemset);
-                    Ok(dst)
-                }
-                PhysicalTypeEnum::Scalar(st) => {
-                    let zero_value = zero(st);
-                    let stored = store_scalar_if_dst(b, dst, zero_value);
-                    Ok(stored)
-                }
-            }
-        }
         BuiltinIr::Negate => {
             let arg0 = *b.k1.mem.get_nth(call.args, 0);
             let base = compile_expr(b, None, arg0)?;
@@ -3334,7 +3337,7 @@ fn compile_ir_builtin(
                 ScalarType::F32 | ScalarType::F64 => {
                     b.push_inst_anon(Inst::FloatNeg { v: base, width })
                 }
-                _ => b.push_inst_anon(Inst::IntSub { lhs: zero(st), rhs: base, width }),
+                _ => b.push_inst_anon(Inst::IntSub { lhs: Value::zero(st), rhs: base, width }),
             };
             let stored = store_scalar_if_dst(b, dst, neg.as_value());
             Ok(stored)
@@ -4173,11 +4176,6 @@ fn compile_matching_condition(
         }
     }
     Ok(())
-}
-
-pub fn zero(t: ScalarType) -> Value {
-    // The all-zeroes bit pattern is zero for every scalar, floats included
-    Value::Data32 { t, data: 0 }
 }
 
 pub fn count_insts(ir: &ProgramIr, blocks: IrList<Block>) -> u32 {

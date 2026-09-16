@@ -1027,14 +1027,10 @@ impl TypedProgram {
                 }
             }
             StaticValue::Zero(type_id) => {
-                if pretty {
-                    w.write_str("zeroed")
-                } else {
-                    write!(w, "zeroed[")?;
+                if !pretty {
                     self.display_type_id_ext(w, *type_id, TypeDisplayMode::Name, visiting)?;
-                    write!(w, "]")?;
-                    Ok(())
                 }
+                w.write_str(".0")
             }
             StaticValue::Struct(static_struct) => {
                 w.write_str(".{ ")?;

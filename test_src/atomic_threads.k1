@@ -48,7 +48,7 @@ fn main(): i32 {
   std/thread/join(t4, out)
   assert-equals(counter.load(:seq-cst), N_THREADS * N_ITERS)
 
-  let h = mem/new(.{ data = 0, flag = cell/new(0u64) }: handoff)
+  let h = mem/new(handoff.{ data = 0, flag = cell/new(0u64) })
   let t: std/thread/thread = ptr/null.ref[empty]()
   std/thread/start(t.&, producer, h)
   while h.flag.&.load(:acquire) == 0 {}

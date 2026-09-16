@@ -426,30 +426,6 @@ impl TypedProgram {
                     Ok(type_id)
                 }
             }
-            ParsedTypeExpr::Array(arr) => {
-                let arr = *arr;
-                let element_type =
-                    self.eval_type_expr_ext(arr.element_type, scope_id, context.descended())?;
-
-                let size_type_id =
-                    self.eval_type_expr_ext(arr.size_expr, scope_id, context.descended())?;
-
-                let Some(static_type) = self.get_static_type_of_type(size_type_id) else {
-                    kbail!(self, arr.span, "array size must be a static type");
-                };
-                if static_type.family_type_id != I64_TYPE_ID {
-                    kbail!(
-                        self,
-                        arr.span,
-                        "array size must be an int; got {}",
-                        static_type.family_type_id
-                    );
-                }
-
-                let array_type = Type::Array(ArrayType { element_type, size_type: size_type_id });
-                let type_id = self.add_type_anon(array_type);
-                Ok(type_id)
-            }
             ParsedTypeExpr::Sum(sum) => {
                 let sum = *sum;
                 let variant_count = sum.variants.len();
@@ -1165,6 +1141,10 @@ impl TypedProgram {
                             self.handle_vector_tyapp(&ty_app, scope_id, context)?
                         {
                             Ok(vector_type_id)
+                        } else if let Some(array_type_id) =
+                            self.handle_array_tyapp(&ty_app, scope_id, context)?
+                        {
+                            Ok(array_type_id)
                         } else {
                             Err(kerr!(
                                 self,
@@ -1595,20 +1575,19 @@ impl TypedProgram {
         Ok(Some(opaque_type))
     }
 
-    pub(super) fn handle_vector_tyapp(
+    fn eval_sized_tyapp(
         &mut self,
         ty_app: &parse::TypeApplication,
+        what: &str,
         scope_id: ScopeId,
         context: EvalTypeExprContext,
-    ) -> K1Result<Option<TypeId>> {
-        if ty_app.name.name != self.ast.idents.b.vector {
-            return Ok(None);
-        }
+    ) -> K1Result<(TypeId, TypeId)> {
         if !ty_app.name.path.is_empty() {
             kbail!(
                 self,
                 ty_app.span,
-                "Expected 'vector' with no namespace, got '{}'",
+                "Expected '{}' with no namespace, got '{}'",
+                self.ident_str(ty_app.name.name),
                 &ty_app.name
             );
         }
@@ -1616,7 +1595,8 @@ impl TypedProgram {
             kbail!(
                 self,
                 ty_app.span,
-                "Expected 2 type parameters for vector, got {}",
+                "Expected 2 type parameters for {}, got {}",
+                self.ident_str(ty_app.name.name),
                 ty_app.args.len()
             );
         }
@@ -1627,25 +1607,49 @@ impl TypedProgram {
             kbail!(self, ty_app.span, "Wildcard _ type not accepted here");
         };
         let element_type = self.eval_type_expr_ext(element_expr, scope_id, context.descended())?;
-
         let size_type_id = self.eval_type_expr_ext(size_expr, scope_id, context.descended())?;
-
         let Some(static_type) = self.get_static_type_of_type(size_type_id) else {
-            kbail!(self, ty_app.span, "Vector lane count must be a static type");
+            kbail!(self, ty_app.span, "{} must be a static type", what);
         };
         if static_type.family_type_id != I64_TYPE_ID {
             kbail!(
                 self,
                 ty_app.span,
-                "Vector lane count must be an int; got {}",
+                "{} must be an int; got {}",
+                what,
                 static_type.family_type_id
             );
         }
+        Ok((element_type, size_type_id))
+    }
 
-        self.validate_vector_parts(element_type, size_type_id, ty_app.span)?;
+    pub(super) fn handle_array_tyapp(
+        &mut self,
+        ty_app: &parse::TypeApplication,
+        scope_id: ScopeId,
+        context: EvalTypeExprContext,
+    ) -> K1Result<Option<TypeId>> {
+        if ty_app.name.name != self.ast.idents.b.array {
+            return Ok(None);
+        }
+        let (element_type, size_type) =
+            self.eval_sized_tyapp(ty_app, "array size", scope_id, context)?;
+        Ok(Some(self.add_type_anon(Type::Array(ArrayType { element_type, size_type }))))
+    }
 
-        let vector_type = Type::Vector(VectorType { element_type, size_type: size_type_id });
-        Ok(Some(self.add_type_anon(vector_type)))
+    pub(super) fn handle_vector_tyapp(
+        &mut self,
+        ty_app: &parse::TypeApplication,
+        scope_id: ScopeId,
+        context: EvalTypeExprContext,
+    ) -> K1Result<Option<TypeId>> {
+        if ty_app.name.name != self.ast.idents.b.vector {
+            return Ok(None);
+        }
+        let (element_type, size_type) =
+            self.eval_sized_tyapp(ty_app, "Vector lane count", scope_id, context)?;
+        self.validate_vector_parts(element_type, size_type, ty_app.span)?;
+        Ok(Some(self.add_type_anon(Type::Vector(VectorType { element_type, size_type }))))
     }
 
     /// Checks whatever is concrete; abstract element/lane-count parts are checked

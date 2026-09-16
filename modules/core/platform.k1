@@ -874,7 +874,7 @@ ns platform {
           precision = 0,
           flags = 0,
         }
-        let event = mem/zeroed[poll-event]()
+        let event = poll-event.0
         let nevents: u32 = 0
         let _ = poll-oneoff(a32(sub.&.as[ptr]), a32(event.&.as[ptr]), 1, a32(nevents.&.as[ptr]))
       }

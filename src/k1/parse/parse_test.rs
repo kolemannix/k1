@@ -123,6 +123,41 @@ fn struct_shorthand() -> Result<(), ParseError> {
 }
 
 #[test]
+fn zero_literal() -> Result<(), ParseError> {
+    let (_ast, result) = test_single_expr(".0")?;
+    assert!(matches!(result, ParsedExpr::Zero(_)));
+    let (_ast, result) = test_single_expr(":some .0")?;
+    assert!(matches!(result, ParsedExpr::Variant(ParsedVariant { payload: Some(_), .. })));
+    let (ast, result) = test_single_expr(".0: point")?;
+    let ParsedExpr::TypeHint(th) = result else { panic!("Expected a type hint") };
+    assert!(matches!(ast.exprs.get(th.inner), ParsedExpr::Zero(_)));
+    for src in [".1", ". 0"] {
+        assert!(test_single_expr(src).is_err(), "{src} should not parse");
+    }
+    Ok(())
+}
+
+#[test]
+fn nominated_literal() -> Result<(), ParseError> {
+    let (ast, result) = test_single_expr("point.{ x = 1 }")?;
+    let ParsedExpr::TypeHint(th) = result else { panic!("Expected a type hint") };
+    assert!(matches!(ast.exprs.get(th.inner), ParsedExpr::Struct(_)));
+    assert!(matches!(ast.type_exprs.get(th.ty), ParsedTypeExpr::TypeApplication(_)));
+
+    let (ast, result) = test_single_expr("wrap[int].0")?;
+    let ParsedExpr::TypeHint(th) = result else { panic!("Expected a type hint") };
+    assert!(matches!(ast.exprs.get(th.inner), ParsedExpr::Zero(_)));
+    let ParsedTypeExpr::TypeApplication(app) = ast.type_exprs.get(th.ty) else {
+        panic!("Expected a type application")
+    };
+    assert_eq!(app.args.len(), 1);
+
+    let (_ast, result) = test_single_expr("foo.{ a = true }.try")?;
+    assert!(!matches!(result, ParsedExpr::TypeHint(_)));
+    Ok(())
+}
+
+#[test]
 fn bare_brace_is_block() -> Result<(), ParseError> {
     let (_ast, result) = test_single_expr("{ f(); g() }")?;
     assert!(matches!(result, ParsedExpr::Block(_)));

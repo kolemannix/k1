@@ -21,7 +21,7 @@ ns vector {
   fn(intern) to-mask[t, n: static size](v: vector[t, n]): u64
 
   fn zeroed[t, n: static size](): vector[t, n] {
-    mem/zeroed[vector[t, n]]
+    .0
   }
 
   fn lane-count[t, n: static size](_v: vector[t, n]): size {

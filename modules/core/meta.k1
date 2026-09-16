@@ -77,7 +77,7 @@ ns meta {
 
     // begin fn row
     code.writeln(`  fn row(self: $name, index: size): $tt {`)
-    code.writeln(`    let(returned) ret: $tt = mem/zeroed();`)
+    code.writeln(`    let(returned) ret: $tt = .0;`)
     for f in fields {
       code.writeln(`    ret.${f.name} = self.ARR_${f.name}.[index];`)
     }

@@ -172,7 +172,7 @@ ns reload {
     // zeroed memory is a valid pending-load: state 0, :no-descriptor with an
     // empty ns-path
     let cell = heap.alloc-t[pending-load]()
-    thread/start-detached(load-ns-worker, heap.new(.{ ns-path = ns-path, cell = cell }: async-load))
+    thread/start-detached(load-ns-worker, heap.new(async-load.{ ns-path = ns-path, cell = cell }))
     cell
   }
 
@@ -242,7 +242,7 @@ ns reload {
     if ns-version(ns-path) == 0 {
       load-ns(ns-path).try
     }
-    thread/start-detached(watch-ns-worker, heap.new(.{ ns-path = ns-path }: watch-input))
+    thread/start-detached(watch-ns-worker, heap.new(watch-input.{ ns-path = ns-path }))
     :ok
   }
 }

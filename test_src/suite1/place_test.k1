@@ -81,7 +81,7 @@ fn test() {
   let g-ref = global-place-val.&
   assert-equals(g-ref.*, 77)
 
-  let arr: array[int, 3] = zeroed()
+  let arr: array[int, 3] = .0
   arr.[0] = 10
   arr.[1] = 20
   let elem-ref = arr.[1].&
@@ -97,7 +97,7 @@ fn test() {
 
   // Mixed aggregates: store to a struct member inside an array element
   // (place chain: field -> block -> array element -> variable)
-  let points: array[inner, 2] = zeroed()
+  let points: array[inner, 2] = .0
   points.[0].a = 100
   points.[1].b = 200
   assert-equals(points.[0].a, 100)

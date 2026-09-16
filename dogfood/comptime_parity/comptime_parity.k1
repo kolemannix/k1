@@ -132,7 +132,7 @@ ns work {
     b.as-f32 = -2.5
     w.write("${b.as-u32};")
 
-    let p: wire = zeroed()
+    let p: wire = .0
     p.tag = 1
     p.value = 0xDEADBEEFCAFE
     p.crc = 500

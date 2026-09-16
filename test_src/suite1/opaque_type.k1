@@ -4,7 +4,7 @@ type named-opaque = opaque[16, 4]
 
 fn test() {
   let _x: opaque[8, 4] = uninit
-  let x2: opaque[8, 4] = zeroed()
+  let x2: opaque[8, 4] = .0
 
   assert(types/id[named-opaque] != types/id[opaque[16, 4]])
 

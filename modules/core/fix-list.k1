@@ -11,7 +11,7 @@ ns for fixlist {
   fn(inline) cap[t, n](_self: *fixlist[t, n]): size { core/meta/static-type-to-value[_, n]() }
   fn(inline) len[t, n](self: *fixlist[t, n]): size { self.used.widen[size] }
 
-  fn zeroed[t, n](): fixlist[t, n] { mem/zeroed() }
+  fn zeroed[t, n](): fixlist[t, n] { .0 }
 
   fn uninit[t, n](): core/fixlist[t, n] {
     .{ used = 0, data = uninit }

@@ -21,13 +21,11 @@ type deps = {
 
 // only once per thread
 fn make-deps(framework: *mut framework-deps): *deps {
-  heap.new(
-    .{
-      config = .{ jwt-secret = "asdf" },
-      db-conn = .{},
-      bus = framework.bus,
-    }: app/deps
-  )
+  heap.new(app/deps.{
+    config = .{ jwt-secret = "asdf" },
+    db-conn = .{},
+    bus = framework.bus,
+  })
 }
 
 $http/pre/routing/define(route, {

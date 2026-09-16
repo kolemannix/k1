@@ -1999,7 +1999,6 @@ impl BuiltinTyperFunction {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum BuiltinIr {
     BakeStaticValue,
-    Zeroed,
     Negate,
     BitNot,
     Bitcast,
@@ -2077,7 +2076,6 @@ impl BuiltinIr {
     pub fn kind_name(&self) -> &'static str {
         match self {
             BuiltinIr::BakeStaticValue => "bake_static_value",
-            BuiltinIr::Zeroed => "zeroed",
             BuiltinIr::Negate => "negate",
             BuiltinIr::BitNot => "bit_not",
             BuiltinIr::Bitcast => "bitcast",
@@ -6986,6 +6984,18 @@ impl TypedProgram {
                     "builtin can currently only be used as the initializer of a global"
                 ))
             }
+            ParsedExpr::Zero(span) => {
+                let span = *span;
+                let Some(type_id) = ctx.expected_type_id else {
+                    kbail!(self, span, "Cannot infer the type of `.0`; annotate it or write `t.0`")
+                };
+                if self.get_type_variable_counts(type_id).inference_hole_count > 0 {
+                    kbail!(self, span, "Cannot infer the type of `.0`; annotate it or write `t.0`")
+                }
+                self.warn_if_not_zerosafe(type_id, span);
+                let value_id = self.static_values.add(StaticValue::Zero(type_id));
+                Ok(self.exprs.add_static(value_id, type_id, false, span))
+            }
             ParsedExpr::Static(stat) => {
                 let stat = *stat;
                 match self.compile_static_or_meta(expr_id, stat, false, ctx)? {
@@ -7282,14 +7292,10 @@ impl TypedProgram {
                 list_lit_ctx,
                 false,
             )?,
-            // Unlike the others, the array literal allocates on the stack!
-            ContainerKind::Array(array_type_id) => self.synth_typed_call_typed_args(
-                self.ast.idents.f.mem_zeroed.with_span(span),
-                &[array_type_id],
-                &[],
-                list_lit_ctx,
-                false,
-            )?,
+            ContainerKind::Array(array_type_id) => {
+                let value_id = self.static_values.add(StaticValue::Zero(array_type_id));
+                self.exprs.add_static(value_id, array_type_id, false, span)
+            }
         };
         let needs_address_of = matches!(list_kind, ContainerKind::List);
         let dest_coll_variable = self.synth_variable_defn(
@@ -12643,11 +12649,6 @@ impl TypedProgram {
                 }
                 Ok(())
             }
-            Builtin::Ir(BuiltinIr::Zeroed) => {
-                let type_id = call.type_args.as_slice(&self.mem)[0];
-                self.warn_if_not_zerosafe(type_id, call.span);
-                Ok(())
-            }
             Builtin::Ir(
                 b @ (BuiltinIr::AtomicLoad
                 | BuiltinIr::AtomicStore
@@ -14004,7 +14005,6 @@ impl TypedProgram {
                     "move" => Some(Builtin::Backend(BackendBuiltin::MemMove)),
                     "set" => Some(Builtin::Backend(BackendBuiltin::MemSet)),
                     "equals" => Some(Builtin::Backend(BackendBuiltin::MemEquals)),
-                    "zeroed" => Some(Builtin::Ir(BuiltinIr::Zeroed)),
                     "bitcast" => Some(Builtin::Ir(BuiltinIr::Bitcast)),
                     "load-volatile" => Some(Builtin::Ir(BuiltinIr::VolatileLoad)),
                     "store-volatile" => Some(Builtin::Ir(BuiltinIr::VolatileStore)),
@@ -18157,7 +18157,6 @@ impl TypedProgram {
             core!("optref"),
             QIdent { path: core_scalarcmp, name: get_ident!(self, "min"), name_span: span },
             QIdent { path: core_scalarcmp, name: get_ident!(self, "max"), name_span: span },
-            QIdent { path: core_mem, name: get_ident!(self, "zeroed"), name_span: span },
             QIdent { path: core_mem, name: get_ident!(self, "bitcast"), name_span: span },
             QIdent { path: core_types, name: self.ast.idents.b.enum_, name_span: span },
             QIdent { path: core_types, name: get_ident!(self, "sum"), name_span: span },

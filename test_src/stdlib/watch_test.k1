@@ -23,7 +23,7 @@ fn test() {
   w.add(dir).!
   w.add(file).!
 
-  thread/start-detached(writer-thread, heap.new(.{ path = file }: writer-input))
+  thread/start-detached(writer-thread, heap.new(writer-input.{ path = file }))
 
   // Blocks until the writer thread touches the file; both the file watch and
   // the directory watch may fire, possibly across separate wakeups

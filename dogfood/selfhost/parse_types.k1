@@ -303,7 +303,7 @@ ns for parser {
       return true
     }
     if one.kind is :dot {
-      return two.is-kind-nonspaced(:open-brace) and not self.peek-at(2).kind.eq(:close-brace)
+      return (two.is-kind-nonspaced(:open-brace) and not self.peek-at(2).kind.eq(:close-brace)) or self.is-zero-literal-tail(two)
     }
     if one.kind is :colon {
       return two.is-kind-nonspaced(:ident)
@@ -452,15 +452,6 @@ ns for parser {
         return :ok(:some(self.program.add-type-expr(:some-quant(.{ inner, span }))))
       }
       let base-name = self.expect-namespaced-ident().try
-      if base-name.path.is-empty() and self.program.ident(base-name.name) == "array" {
-        let _ = self.expect-kind(:open-bracket).try
-        let element-type = self.expect-type-expression().try
-        let _ = self.expect-kind(:comma).try
-        let size-expr = self.expect-type-expression().try
-        let end-bracket = self.expect-kind(:close-bracket).try
-        let span = first.span().thru(end-bracket.span())
-        return :ok(:some(self.program.add-type-expr(:array-type(.{ element-type, size-expr, span }))))
-      }
       let bracketed = self.parse-bracketed-type-args().try
       let span = first.span().thru(bracketed.span)
       return :ok(:some(self.program.add-type-expr(:type-application(.{ name = base-name, args = bracketed.args, span }))))

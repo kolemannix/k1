@@ -5,7 +5,7 @@ type spill-list[t, n: static size] = either {
 ns for spill-list {
 
   fn new[t, n](): spill-list[t, n] {
-    :inline mem/zeroed[fixlist[t, n]]()
+    :inline fixlist[t, n].0
   }
 
   // Retains allocated memory, if we've already spilled, intended for re-use

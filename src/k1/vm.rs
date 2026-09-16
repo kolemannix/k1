@@ -1437,7 +1437,7 @@ fn static_zero_value(k1: &mut TypedProgram, type_id: TypeId, span: SpanId) -> Va
             ice_span!(
                 k1,
                 span,
-                "not a value type; zeroed() for type {} is undefined",
+                "not a value type; .0 for type {} is undefined",
                 k1.types.get(type_id).kind_name()
             )
         }

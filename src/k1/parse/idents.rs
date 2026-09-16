@@ -229,7 +229,6 @@ pub(crate) struct BuiltinFunctions {
     pub buffer_allocate: QIdent,
     pub buffer_index_unchecked: QIdent,
     pub buffer_from_span: QIdent,
-    pub mem_zeroed: QIdent,
     pub mem_new: QIdent,
     pub span_wrapBuffer: QIdent,
     pub span_to_array: QIdent,
@@ -588,7 +587,6 @@ impl IdentPool {
         let buffer_from_span: QIdent = make_fn!(path_core_buffer, intern!("from-span"));
 
         let path_mem = intern_path!(b.mem);
-        let mem_zeroed: QIdent = make_fn!(path_mem, intern!("zeroed"));
         let mem_new: QIdent = make_fn!(path_mem, intern!("new"));
 
         let path_core_span = intern_path!(b.core, b.span);
@@ -643,7 +641,6 @@ impl IdentPool {
             buffer_allocate,
             buffer_index_unchecked,
             buffer_from_span,
-            mem_zeroed,
             mem_new,
             span_wrapBuffer,
             span_to_array,

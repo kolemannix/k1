@@ -53,7 +53,7 @@ ns io {
 
   type stdout-buffering = either(u8) { unknown, line, block }
   type(alias) STDOUT_BUF_CAP = 8192
-  let(mutable, tls) stdout-buf: fixlist[u8, STDOUT_BUF_CAP] = mem/zeroed[fixlist[u8, STDOUT_BUF_CAP]]()
+  let(mutable, tls) stdout-buf: fixlist[u8, STDOUT_BUF_CAP] = .0
   let(mutable, tls) stdout-mode: stdout-buffering = :unknown
 
   fn stdout-buffering-mode(): stdout-buffering {
@@ -689,7 +689,7 @@ impl comparable for f64 {
   }
 }
 
-impl zero for char { fn zero(): char { mem/zeroed() } }
+impl zero for char { fn zero(): char { .0 } }
 impl zero for f32 { fn zero(): f32 { 0.0 } }
 impl zero for f64 { fn zero(): f64 { 0.0 } }
 impl zero for u8  { fn zero(): u8  { 0   } }

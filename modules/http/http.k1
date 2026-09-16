@@ -47,7 +47,7 @@ type parse-state = {
 }
 ns for parse-state {
   fn empty[t](arena: *mut arena, user-data: *mut t, on-header-complete: *fn(ptr, header) -> header-action, on-body-complete: *fn(ptr, span[span[byte]]) -> {}): parse-state {
-    zeroed[parse-state] | .{
+    .0 | .{
       user-data = user-data.as[ptr],
       arena,
       on-header-complete,
@@ -189,7 +189,7 @@ fn parser-init[user-data](
   on-header-complete: *fn(*mut user-data, header) -> header-action,
   on-body-complete: *fn(*mut user-data, span[span[u8]]) -> {}
 ): parser {
-  let settings: llhttp/settings = zeroed()
+  let settings: llhttp/settings = .0
   llhttp/settings_init(settings.&)
   let settings = connection-arena.push(settings | .{
     on_method            = fn(_p, _, _) 0,

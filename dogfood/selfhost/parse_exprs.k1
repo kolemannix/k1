@@ -78,7 +78,7 @@ ns for parser {
       } else if next.kind is :dot and ((not next.is-ws-preceded()) or next.is-newline-preceded()) and self.peek-at(1).kind.eq(:open-bracket) {
         self.advance()
         result-id = self.expect-index-postfix(result-id).try
-      } else if next.kind is :dot and ((not next.is-ws-preceded()) or (next.is-newline-preceded() and not self.peek-at(1).kind.eq(:open-brace))) {
+      } else if next.kind is :dot and ((not next.is-ws-preceded()) or (next.is-newline-preceded() and not self.is-dot-literal-tail(self.peek-at(1)))) {
         self.advance()
         let tk = self.peek().kind
         let target-ok = tk is :ident or tk is :asterisk or tk is :bang or tk is :amp
@@ -506,8 +506,14 @@ ns for parser {
       :some(self.add-expr(:block(block)))
     } else if first.kind is :dot {
       self.advance()
-      let sv = self.expect-struct-value(first).try
-      :some(self.add-expr(:struct-value(sv)))
+      let next = self.peek()
+      if self.is-zero-literal-tail(next) {
+        self.advance()
+        :some(self.add-zero-literal(first.span().thru(next.span())))
+      } else {
+        let sv = self.expect-struct-value(first).try
+        :some(self.add-expr(:struct-value(sv)))
+      }
     } else if first.kind is :kw-if {
       :some(self.expect-if-expr(false).try)
     } else if first.kind is :open-bracket {
@@ -564,10 +570,45 @@ ns for parser {
     :ok(final-opt)
   }
 
+  fn is-zero-literal-tail(self: *parser, t: token): bool {
+    t.is-kind-nonspaced(:numeric) and self.tok-chars(t) == "0"
+  }
+
+  fn is-dot-literal-tail(self: *parser, t: token): bool {
+    t.kind is :open-brace or self.is-zero-literal-tail(t)
+  }
+
+  fn is-nominated-literal-start(self: *parser, dot: token, tail: token): bool {
+    dot.is-kind-nonspaced(:dot) and self.is-dot-literal-tail(tail)
+  }
+
+  fn add-zero-literal(self: *mut parser, span: ast/src-span): ast/expr-id {
+    self.add-expr(:zero-literal(span))
+  }
+
+  fn parse-nominated-literal(self: *mut parser, first: token, name: ast/qident, type-args: list[ast/type-arg]): result[ast/expr-id, perror] {
+    let type-span = self.extend-tok-to-here(first)
+    let ty = self.program.add-type-expr(:type-application(.{ name, args = type-args, span = type-span }))
+    let dot = self.next-tok()
+    let next = self.peek()
+    let inner = if self.is-zero-literal-tail(next) {
+      self.advance()
+      self.add-zero-literal(dot.span().thru(next.span()))
+    } else {
+      let sv = self.expect-struct-value(dot).try
+      self.add-expr(:struct-value(sv))
+    }
+    let span = self.extend-tok-to-here(first)
+    :ok(self.add-expr(:type-hint(.{ inner, ty, span })))
+  }
+
   fn parse-ident-base-expression(self: *mut parser, first: token): result[ast/expr-id, perror] {
     let namespaced = self.expect-namespaced-ident().try
     let second = self.peek()
     let third = self.peek-at(1)
+    if self.is-nominated-literal-start(second, third) {
+      return self.parse-nominated-literal(first, namespaced, list/empty())
+    }
     if second.is-kind-nonspaced(:colon) and not third.is-ws-preceded() {
       self.advance()
       let vit = self.expect-ident().try
@@ -584,6 +625,9 @@ ns for parser {
         list/empty()
       }
       let after-tparams = self.peek()
+      if self.is-nominated-literal-start(after-tparams, self.peek-at(1)) {
+        return self.parse-nominated-literal(first, namespaced, first-type-args)
+      }
       if after-tparams.kind is :open-paren {
         let call-args = self.expect-fn-call-args().try
         let span = first.span().thru(call-args.span)

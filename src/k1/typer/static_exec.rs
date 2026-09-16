@@ -26,20 +26,6 @@ impl TypedProgram {
                 }
                 self.globals.get(global_id).initial_value.as_value()
             }
-            TypedExpr::Call { call_id, .. } => {
-                // desugar calls to zeroed() to the optimized zero repr for that type
-                let call = self.calls.get(*call_id);
-                let function_id = call.callee.maybe_function_id()?;
-                let function = self.functions.get(function_id);
-                if let Some(Builtin::Ir(BuiltinIr::Zeroed)) = function.builtin_type {
-                    let return_type_id = self.exprs.get_type(expr_id);
-                    let expr_span = self.exprs.get_span(expr_id);
-                    self.warn_if_not_zerosafe(return_type_id, expr_span);
-                    Some(self.static_values.add(StaticValue::Zero(return_type_id)))
-                } else {
-                    None
-                }
-            }
             _ => None,
         }
     }
