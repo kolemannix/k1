@@ -9,7 +9,6 @@ type arena = {
   base-ptr: ptr,
   cur-addr: ptr,
   end-addr: ptr,
-  clean-addr: ptr,
   first-base: ptr,
   first-end: ptr,
   extra-chunks: ptr,
@@ -46,7 +45,6 @@ ns for arena {
       base-ptr = memory-start,
       cur-addr = memory-start,
       end-addr = region-end,
-      clean-addr = memory-start,
       first-base = memory-start,
       first-end = region-end,
       extra-chunks = ptr/null,
@@ -87,23 +85,12 @@ ns for arena {
   }
 
   fn reset(self: *arena) {
-    if not self.extra-chunks.is-null() {
-      self._release-extra-chunks()
-      self.clean-addr = self.first-end
-    }
+    let dirty-end = if self.extra-chunks.is-null() self.cur-addr else self.first-end
+    self._release-extra-chunks()
+    mem/set(dst = self.first-base, value = 0, count = dirty-end.diff(self.first-base))
     self.base-ptr = self.first-base
     self.cur-addr = self.first-base
     self.end-addr = self.first-end
-  }
-
-  fn _claim(self: *arena, new-cur: ptr) {
-    let cursor = self.cur-addr
-    if cursor < self.clean-addr {
-      let dirty-end = if new-cur < self.clean-addr new-cur else self.clean-addr
-      mem/set(dst = cursor, value = 0, count = dirty-end.diff(cursor))
-    }
-    if new-cur > self.clean-addr { self.clean-addr = new-cur }
-    self.cur-addr = new-cur
   }
 
   let MIN_ALIGN: size = types/size[ptr]
@@ -123,7 +110,7 @@ ns for arena {
       let offset-to-min-align = ptr/get-align-offset(raw-bump, MIN_ALIGN)
       let total-bump = raw-bump + offset-to-min-align
       let alloc-ptr = cursor.add-bytes(prefix-padding)
-      self._claim(cursor.add-bytes(total-bump))
+      self.cur-addr = cursor.add-bytes(total-bump)
       alloc-ptr
     } else {
       self._grow(size, align)
@@ -148,7 +135,6 @@ ns for arena {
     self.base-ptr = data-start
     self.cur-addr = data-start
     self.end-addr = region.base.add-bytes(region.len)
-    self.clean-addr = data-start
   }
 
   fn push[t](self: *arena, t: t): *t {
@@ -186,7 +172,7 @@ ns for arena {
     let old-end-aligned = old-ptr.add-bytes(old-size).aligned(MIN_ALIGN)
     let new-end-aligned = old-ptr.add-bytes(new-size).aligned(MIN_ALIGN)
     if old-end-aligned == self.cur-addr and new-end-aligned <= self.end-addr {
-      self._claim(new-end-aligned)
+      self.cur-addr = new-end-aligned
       old-ptr
     } else {
       let new-allocation = self.alloc-layout(new-size, align)
@@ -203,6 +189,7 @@ ns for arena {
     assert(arena-mark.start >= self.base-ptr)
     assert(arena-mark.start < self.end-addr)
     assert(arena-mark.start <= self.cur-addr)
+    mem/set(dst = arena-mark.start, value = 0, count = self.cur-addr.diff(arena-mark.start))
     self.cur-addr = arena-mark.start
   }
 

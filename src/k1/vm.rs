@@ -126,7 +126,6 @@ pub mod k1_types {
         pub basePtr: *const u8,
         pub curAddr: u64,
         pub endAddr: u64,
-        pub cleanAddr: u64,
         pub firstBase: *const u8,
         pub firstEnd: u64,
         pub extraChunks: *const u8,

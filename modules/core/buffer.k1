@@ -202,7 +202,7 @@ ns for buffer {
   fn position[t: equals](self: buffer[t], needle: t): ?size {
     if needle is {
       type[u8](byte) -> position-byte(self.data-ptr(), self.len, byte),
-      type[i8](byte) -> position-byte(self.data-ptr(), self.len, byte),
+      type[i8](byte) -> position-byte(self.data-ptr(), self.len, byte.unsigned()),
       type[char](c) -> position-byte(self.data-ptr(), self.len, c.as-u8()),
       _ -> {
         let i = 0: size
