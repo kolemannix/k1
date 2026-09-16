@@ -312,14 +312,6 @@ ns for parser {
     :ok(.{ args, span })
   }
 
-  fn parse-variant-type-args(self: *mut parser): result[list[ast/type-arg], perror] {
-    if self.peek().is-kind-nonspaced(:open-bracket) {
-      :ok(self.parse-bracketed-type-args().try.args)
-    } else {
-      :ok(list/empty())
-    }
-  }
-
   fn parse-variant-payload(self: *mut parser): result[?ast/expr-id, perror] {
     if self.peek().is-newline-preceded() { return :ok(:none) }
     if self.maybe-consume(:open-paren) is :some _ {
@@ -492,12 +484,7 @@ ns for parser {
       :some(self.add-expr(:not-expr(.{ expr, span })))
     } else if first.kind is :colon {
       self.advance()
-      let it = self.expect-ident().try
-      let name-span = first.span().thru(it.tok.span())
-      let type-args = self.parse-variant-type-args().try
-      let payload = self.parse-variant-payload().try
-      let span = self.extend-tok-to-here(first)
-      :some(self.add-expr(:variant(.{ type-name = :none, variant-name = it.name, name-span, type-args, payload, span })))
+      :some(self.parse-variant(first, first, :none).try)
     } else if first.kind is :kw-builtin {
       self.advance()
       :some(self.add-expr(:builtin-expr(first.span())))
@@ -578,8 +565,8 @@ ns for parser {
     t.kind is :open-brace or self.is-zero-literal-tail(t)
   }
 
-  fn is-nominated-literal-start(self: *parser, dot: token, tail: token): bool {
-    dot.is-kind-nonspaced(:dot) and self.is-dot-literal-tail(tail)
+  fn is-nominated-literal-start(self: *parser, sigil: token, tail: token): bool {
+    (sigil.is-kind-nonspaced(:dot) and self.is-dot-literal-tail(tail)) or (sigil.is-kind-nonspaced(:colon) and not tail.is-ws-preceded())
   }
 
   fn add-zero-literal(self: *mut parser, span: ast/src-span): ast/expr-id {
@@ -589,17 +576,26 @@ ns for parser {
   fn parse-nominated-literal(self: *mut parser, first: token, name: ast/qident, type-args: list[ast/type-arg]): result[ast/expr-id, perror] {
     let type-span = self.extend-tok-to-here(first)
     let ty = self.program.add-type-expr(:type-application(.{ name, args = type-args, span = type-span }))
-    let dot = self.next-tok()
+    let sigil = self.next-tok()
+    if sigil.kind is :colon { return self.parse-variant(first, sigil, :some(ty)) }
     let next = self.peek()
     let inner = if self.is-zero-literal-tail(next) {
       self.advance()
-      self.add-zero-literal(dot.span().thru(next.span()))
+      self.add-zero-literal(sigil.span().thru(next.span()))
     } else {
-      let sv = self.expect-struct-value(dot).try
+      let sv = self.expect-struct-value(sigil).try
       self.add-expr(:struct-value(sv))
     }
     let span = self.extend-tok-to-here(first)
     :ok(self.add-expr(:type-hint(.{ inner, ty, span })))
+  }
+
+  fn parse-variant(self: *mut parser, first: token, colon: token, ty: ?ast/type-expr-id): result[ast/expr-id, perror] {
+    let it = self.expect-ident().try
+    let name-span = colon.span().thru(it.tok.span())
+    let payload = self.parse-variant-payload().try
+    let span = self.extend-tok-to-here(first)
+    :ok(self.add-expr(:variant(.{ ty, variant-name = it.name, name-span, payload, span })))
   }
 
   fn parse-ident-base-expression(self: *mut parser, first: token): result[ast/expr-id, perror] {
@@ -608,15 +604,6 @@ ns for parser {
     let third = self.peek-at(1)
     if self.is-nominated-literal-start(second, third) {
       return self.parse-nominated-literal(first, namespaced, list/empty())
-    }
-    if second.is-kind-nonspaced(:colon) and not third.is-ws-preceded() {
-      self.advance()
-      let vit = self.expect-ident().try
-      let vname-span = second.span().thru(vit.tok.span())
-      let type-args = self.parse-variant-type-args().try
-      let payload = self.parse-variant-payload().try
-      let span = self.extend-tok-to-here(first)
-      return :ok(self.add-expr(:variant(.{ type-name = :some(namespaced), variant-name = vit.name, name-span = vname-span, type-args, payload, span })))
     }
     if second.kind is :at or ((not second.is-newline-preceded()) and (second.kind is :open-bracket or second.kind is :open-paren)) {
       let first-type-args: list[ast/type-arg] = if second.kind is :open-bracket {

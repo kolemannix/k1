@@ -11339,17 +11339,8 @@ impl TypedProgram {
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let span = parsed_variant.span;
-        let provided_type = match &parsed_variant.type_name {
-            Some(qident) => {
-                let Some((type_id, _)) = self.find_type_namespaced(ctx.scope_id, qident)? else {
-                    kbail!(self, qident.name_span, "No type {} is in scope", qident);
-                };
-                self.emit_ls_entity(
-                    qident.name_span,
-                    LsEntityKind::Type { type_id, applied_type_id: None },
-                );
-                type_id
-            }
+        let provided_type = match parsed_variant.ty {
+            Some(ty) => self.eval_type_expr(ty, ctx.scope_id)?,
             None => match ctx.expected_type_id {
                 None => {
                     kbail!(
@@ -11450,85 +11441,70 @@ impl TypedProgram {
                     }
                 };
 
-                let solved_or_passed_type_params: TypeSliceId = if parsed_variant
-                    .type_args
-                    .is_empty()
-                {
-                    match payload_if_needed {
-                        None => {
-                            match ctx.expected_type_id.map(|t| (t, self.get_instance_info(t))) {
-                                Some((expected_type, Some(spec_info))) => {
-                                    // We're expecting a specific instance of a generic sum
-                                    if spec_info.generic_parent == provided_type {
-                                        // Solved params
-                                        spec_info.type_args
-                                    } else {
-                                        kbail!(
-                                            self,
-                                            span,
-                                            "Cannot infer a type for {}; expected mismatching generic type {}",
-                                            self.name_of_type(provided_type),
-                                            expected_type
-                                        );
-                                    }
-                                }
-                                _ => {
+                let solved_type_params: TypeSliceId = match payload_if_needed {
+                    None => {
+                        match ctx.expected_type_id.map(|t| (t, self.get_instance_info(t))) {
+                            Some((expected_type, Some(spec_info))) => {
+                                // We're expecting a specific instance of a generic sum
+                                if spec_info.generic_parent == provided_type {
+                                    // Solved params
+                                    spec_info.type_args
+                                } else {
                                     kbail!(
                                         self,
                                         span,
-                                        "Cannot infer a type for {}",
-                                        self.name_of_type(provided_type)
+                                        "Cannot infer a type for {}; expected mismatching generic type {}",
+                                        self.name_of_type(provided_type),
+                                        expected_type
                                     );
                                 }
                             }
-                        }
-                        Some((generic_variant_payload, payload)) => {
-                            let mut args_and_params: SV4<InferenceInputPair> = smallvec![];
-
-                            // There are only ever up to 2 'cases' to power inference
-                            // - The expected return type together with the type of the sum itself
-                            // - The passed payload together with the type of the payload itself
-                            if let Some(expected) = ctx.expected_type_id {
-                                args_and_params.push(InferenceInputPair {
-                                    arg: TypeOrParsedExpr::Type(expected),
-                                    param_type: g.inner,
-                                    allow_mismatch: true,
-                                })
-                            };
-                            args_and_params.push(InferenceInputPair {
-                                arg: TypeOrParsedExpr::Parsed(payload),
-                                param_type: generic_variant_payload,
-                                allow_mismatch: false,
-                            });
-                            let g_params_slice = self.mem.getn(g_params);
-                            let (solutions, _all_solutions) = self
-                                .infer_types(
-                                    g_params_slice,
-                                    g_params,
-                                    &args_and_params,
+                            _ => {
+                                kbail!(
+                                    self,
                                     span,
-                                    ctx.scope_id,
-                                    None,
-                                )
-                                .map_err(|f| self.render_inference_failure(f))?;
-                            self.intern_type_args(solutions)
+                                    "Cannot infer a type for {}",
+                                    self.name_of_type(provided_type)
+                                );
+                            }
                         }
                     }
-                } else {
-                    let mut passed_params: List<TypeId, MemTmp> = self.tmp.new_list(g_params.len());
-                    for passed_type_arg in self.ast.mem.getn(parsed_variant.type_args) {
-                        let Some(passed_type_expr) = passed_type_arg.type_expr else {
-                            kbail!(self, span, "Wildcard type _ is not yet supported here");
+                    Some((generic_variant_payload, payload)) => {
+                        let mut args_and_params: SV4<InferenceInputPair> = smallvec![];
+
+                        // There are only ever up to 2 'cases' to power inference
+                        // - The expected return type together with the type of the sum itself
+                        // - The passed payload together with the type of the payload itself
+                        if let Some(expected) = ctx.expected_type_id {
+                            args_and_params.push(InferenceInputPair {
+                                arg: TypeOrParsedExpr::Type(expected),
+                                param_type: g.inner,
+                                allow_mismatch: true,
+                            })
                         };
-                        let type_id = self.eval_type_expr(passed_type_expr, ctx.scope_id)?;
-                        passed_params.push(type_id);
+                        args_and_params.push(InferenceInputPair {
+                            arg: TypeOrParsedExpr::Parsed(payload),
+                            param_type: generic_variant_payload,
+                            allow_mismatch: false,
+                        });
+                        let g_params_slice = self.mem.getn(g_params);
+                        let (solutions, _all_solutions) = self
+                            .infer_types(
+                                g_params_slice,
+                                g_params,
+                                &args_and_params,
+                                span,
+                                ctx.scope_id,
+                                None,
+                            )
+                            .map_err(|f| self.render_inference_failure(f))?;
+                        self.intern_type_args(solutions)
                     }
-                    self.intern_type_slice(passed_params.as_slice())
                 };
 
                 let concrete_type = self.instantiate_generic_type(
                     provided_type,
-                    self.get_type_slice(solved_or_passed_type_params),
+                    self.get_type_slice(solved_type_params),
                 );
                 let sum_constr = self.eval_sum_constructor(
                     concrete_type,

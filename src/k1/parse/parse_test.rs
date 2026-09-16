@@ -443,23 +443,22 @@ fn variants_quiet_payload() -> ParseResult<()> {
     assert_eq!(ast.idents.get_string(inner.variant_name), "some");
     assert_eq!(&ast.expr_id_to_string(inner.payload.unwrap()), "bar.baz");
 
-    let (ast, expr, _) = test_single_expr_with_id("opt:some[int] [1, 2]")?;
+    let (ast, expr, _) = test_single_expr_with_id("opt[int]:some [1, 2]")?;
     let ParsedExpr::Variant(v) = expr else { panic!() };
-    assert_eq!(v.type_args.len(), 1);
+    assert_eq!(ast.type_expr_to_string(v.ty.unwrap()), "opt[int]");
     let ParsedExpr::ListLiteral(_) = ast.exprs.get(v.payload.unwrap()) else { panic!() };
     Ok(())
 }
 
 #[test]
 fn variants_payload() -> ParseResult<()> {
-    let input = "veni/vidi/vici:foo[t, u](bar.bar)";
+    let input = "veni/vidi/vici[t, u]:foo(bar.bar)";
     let (ast, expr, expr_id) = test_single_expr_with_id(input)?;
     let ParsedExpr::Variant(v) = expr else { panic!() };
     assert!(v.payload.is_some());
-    assert!(v.type_name.is_some());
+    assert_eq!(ast.type_expr_to_string(v.ty.unwrap()), "veni/vidi/vici[t, u]");
     assert_eq!(ast.idents.get_string(v.variant_name), "foo");
-    assert_eq!(v.type_args.len(), 2);
-    assert_eq!(&ast.expr_id_to_string(expr_id), "veni/vidi/vici:foo[t, u](bar.bar)");
+    assert_eq!(&ast.expr_id_to_string(expr_id), input);
     Ok(())
 }
 

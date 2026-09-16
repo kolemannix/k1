@@ -556,11 +556,10 @@ impl_copy_if_small!(16, ParsedStruct);
 
 #[derive(Clone, Copy)]
 pub struct ParsedVariant {
-    pub type_name: Option<QIdent>,
+    pub ty: Option<ParsedTypeExprId>,
     pub variant_name: StringId,
     /// The `:name` component alone, for LSP entities and name-level errors
     pub name_span: SpanId,
-    pub type_args: AstSlice<NamedTypeArg>,
     pub payload: Option<ParsedExprId>,
     pub span: SpanId,
 }
@@ -2746,8 +2745,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         tok.is_kind_nonspaced(K::OpenBrace) || self.is_zero_literal_nonspaced(tok)
     }
 
-    fn is_nominated_literal_start(&self, dot: Token, tail: Token) -> bool {
-        dot.is_kind_nonspaced(K::Dot) && self.is_zero_or_struct_literal(tail)
+    fn is_nominated_literal_start(&self, sigil: Token, tail: Token) -> bool {
+        (sigil.is_kind_nonspaced(K::Dot) && self.is_zero_or_struct_literal(tail))
+            || (sigil.is_kind_nonspaced(K::Colon) && !tail.is_whitespace_preceded())
     }
 
     fn add_zero_literal(&mut self, span: SpanId) -> ParsedExprId {
@@ -2767,18 +2767,40 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             span: type_span,
         }));
         self.emit_semantic_token_span(name.name_span, SemanticTokenKind::Type);
-        let dot = self.tokens.next();
+        let sigil = self.tokens.next();
+        if sigil.kind == K::Colon {
+            return self.parse_variant(first, sigil, Some(ty));
+        }
         let next = self.peek();
         let inner = if self.is_zero_literal_nonspaced(next) {
             self.advance();
-            let span = self.extend_token_span(dot, next);
+            let span = self.extend_token_span(sigil, next);
             self.add_zero_literal(span)
         } else {
-            let struct_value = self.expect_struct_value(dot)?;
+            let struct_value = self.expect_struct_value(sigil)?;
             self.add_expression(ParsedExpr::Struct(struct_value))
         };
         let span = self.extend_tok_to_here(first);
         Ok(self.add_expression(ParsedExpr::TypeHint(ParsedTypeHint { inner, ty, span })))
+    }
+
+    fn parse_variant(
+        &mut self,
+        first: Token,
+        colon: Token,
+        ty: Option<ParsedTypeExprId>,
+    ) -> ParseResult<ParsedExprId> {
+        let (name_token, variant_name) = self.expect_ident()?;
+        let name_span = self.extend_token_span(colon, name_token);
+        let payload = self.parse_variant_payload()?;
+        let span = self.extend_tok_to_here(first);
+        Ok(self.add_expression(ParsedExpr::Variant(ParsedVariant {
+            ty,
+            variant_name,
+            name_span,
+            payload,
+            span,
+        })))
     }
 
     fn maybe_consume(&mut self, target_kind: TokenKind) -> Option<Token> {
@@ -3780,16 +3802,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(type_args.to_slice_trim(&mut self.ast.mem))
     }
 
-    /// Variant type args bind only when the bracket touches the variant name
-    /// (`:some[int]`); a spaced `[` is a quiet list-literal payload.
-    fn parse_variant_type_args(&mut self) -> ParseResult<AstSlice<NamedTypeArg>> {
-        if self.peek().is_kind_nonspaced(K::OpenBracket) {
-            self.parse_bracketed_type_args()
-        } else {
-            Ok(MSlice::empty())
-        }
-    }
-
     /// Decides whether the token can begin a 'quiet' (paren-free) variant
     /// payload: `:some 42`, `:err "oops"`, `:point .{ x = 1 }`. Blocks (`{`)
     /// never start a payload, so a trailing variant can't eat a following
@@ -3971,24 +3983,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
             K::Colon => {
                 self.advance();
-                let (name_token, variant_name) = self.expect_ident()?;
-                // :none
-                // ^^^^^
-                // :some(42)   :some 42
-                // ^^^^^       ^^^^^
-                let name_span = self.extend_token_span(first, name_token);
-
-                let type_args = self.parse_variant_type_args()?;
-                let payload = self.parse_variant_payload()?;
-                let span = self.extend_tok_to_here(first);
-                Ok(Some(self.add_expression(ParsedExpr::Variant(ParsedVariant {
-                    type_name: None,
-                    variant_name,
-                    name_span,
-                    type_args,
-                    payload,
-                    span,
-                }))))
+                Ok(Some(self.parse_variant(first, first, None)?))
             }
             K::KeywordBuiltin => {
                 self.advance();
@@ -4088,25 +4083,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             .parse_nominated_literal(first, namespaced_ident, MSlice::empty())
                             .map(Some);
                     }
-                    if second.is_kind_nonspaced(K::Colon) && !third.is_whitespace_preceded() {
-                        self.advance();
-                        let (variant_name_token, variant_name) = self.expect_ident()?;
-                        let name_span = self.extend_token_span(second, variant_name_token);
-                        let type_args = self.parse_variant_type_args()?;
-                        let payload = self.parse_variant_payload()?;
-
-                        let span = self.extend_tok_to_here(first);
-                        let variant_expr =
-                            self.add_expression(ParsedExpr::Variant(ParsedVariant {
-                                type_name: Some(namespaced_ident),
-                                variant_name,
-                                name_span,
-                                type_args,
-                                payload,
-                                span,
-                            }));
-                        Ok(Some(variant_expr))
-                    } else if second.kind == K::At
+                    if second.kind == K::At
                         || (!second.is_newline_preceded()
                             && (second.kind == K::OpenBracket || second.kind == K::OpenParen))
                     {
@@ -5716,16 +5693,7 @@ impl ParsedProgram {
             }
             ParsedExpr::Call(call) => {
                 self.display_qident(w, &call.name)?;
-                if !call.type_args.is_empty() {
-                    w.write_str("[")?;
-                    for (index, ta) in self.mem.getn(call.type_args).iter().enumerate() {
-                        if index > 0 {
-                            w.write_str(", ")?;
-                        }
-                        self.display_type_arg(w, *ta)?;
-                    }
-                    w.write_str("]")?;
-                }
+                self.display_type_args(w, call.type_args)?;
                 w.write_str("(")?;
                 for (index, arg) in self.mem.getn(call.args).iter().enumerate() {
                     if arg.is_explicit_context {
@@ -5823,21 +5791,11 @@ impl ParsedProgram {
             ParsedExpr::ListLiteral(list_expr) => w.write_fmt(format_args!("{:?}", list_expr)),
             ParsedExpr::For(for_expr) => w.write_fmt(format_args!("{:?}", for_expr)),
             ParsedExpr::Variant(v) => {
-                if let Some(type_name) = &v.type_name {
-                    self.display_qident(w, type_name)?;
+                if let Some(ty) = v.ty {
+                    self.display_type_expr_id(ty, w)?;
                 }
                 w.write_char(':')?;
                 self.display_ident(w, v.variant_name)?;
-                if !v.type_args.is_empty() {
-                    w.write_str("[")?;
-                    for (index, ta) in self.mem.getn(v.type_args).iter().enumerate() {
-                        if index > 0 {
-                            w.write_str(", ")?;
-                        }
-                        self.display_type_arg(w, *ta)?;
-                    }
-                    w.write_str("]")?;
-                }
                 if let Some(payload) = v.payload.as_ref() {
                     w.write_str("(")?;
                     self.display_expr_id(w, *payload)?;
@@ -5964,6 +5922,24 @@ impl ParsedProgram {
         }
     }
 
+    fn display_type_args(
+        &self,
+        w: &mut impl Write,
+        type_args: AstSlice<NamedTypeArg>,
+    ) -> std::fmt::Result {
+        if type_args.is_empty() {
+            return Ok(());
+        }
+        w.write_str("[")?;
+        for (index, ta) in self.mem.getn(type_args).iter().enumerate() {
+            if index > 0 {
+                w.write_str(", ")?;
+            }
+            self.display_type_arg(w, *ta)?;
+        }
+        w.write_str("]")
+    }
+
     fn display_type_arg(&self, w: &mut impl Write, type_arg: NamedTypeArg) -> std::fmt::Result {
         if let Some(name) = type_arg.name {
             self.display_ident(w, name)?;
@@ -5993,17 +5969,7 @@ impl ParsedProgram {
     ) -> std::fmt::Result {
         let e = self.mem.get(ability_expr_id);
         self.display_qident(w, &e.name)?;
-        if !e.arguments.is_empty() {
-            w.write_str("[")?;
-            for (idx, arg) in self.mem.getn(e.arguments).iter().enumerate() {
-                self.display_maybe_type_expr_id(arg.type_expr, w)?;
-                if idx < e.arguments.len() as usize - 1 {
-                    w.write_str(", ")?;
-                }
-            }
-            w.write_str("]")?;
-        }
-        Ok(())
+        self.display_type_args(w, e.arguments)
     }
 
     pub fn display_pattern_expression_id(
@@ -6060,17 +6026,6 @@ impl ParsedProgram {
         buffer
     }
 
-    pub fn display_maybe_type_expr_id(
-        &self,
-        ty_expr_id: Option<ParsedTypeExprId>,
-        w: &mut impl Write,
-    ) -> std::fmt::Result {
-        match ty_expr_id {
-            None => w.write_char('_'),
-            Some(t) => self.display_type_expr_id(t, w),
-        }
-    }
-
     pub fn display_type_expr_id(
         &self,
         ty_expr_id: ParsedTypeExprId,
@@ -6094,15 +6049,7 @@ impl ParsedProgram {
             }
             ParsedTypeExpr::TypeApplication(tapp) => {
                 self.display_qident(w, &tapp.name)?;
-                if !tapp.args.is_empty() {
-                    w.write_str("[")?;
-                    for tparam in self.mem.getn(tapp.args) {
-                        self.display_maybe_type_expr_id(tparam.type_expr, w)?;
-                        w.write_str(", ")?;
-                    }
-                    w.write_str("]")?;
-                }
-                Ok(())
+                self.display_type_args(w, tapp.args)
             }
             ParsedTypeExpr::Optional(opt) => {
                 w.write_str("?")?;

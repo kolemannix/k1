@@ -163,10 +163,9 @@ type struct-value = { fields: list[struct-field], span: src-span }
 type list-literal = { elements: list[expr-id], span: src-span }
 
 type variant-value = {
-  type-name: ?qident,
+  ty: ?type-expr-id,
   variant-name: string-id,
   name-span: src-span,
-  type-args: list[type-arg],
   payload: ?expr-id,
   span: src-span,
 }

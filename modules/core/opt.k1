@@ -39,8 +39,8 @@ ns for opt {
 }
 
 // Convenience constructors in the global scope for opt instances
-fn(inline) none[t](): opt[t] { opt:none[t] }
-fn(inline) some[t](value: t): opt[t] { opt:some[t] value }
+fn(inline) none[t](): opt[t] { opt[t]:none }
+fn(inline) some[t](value: t): opt[t] { opt[t]:some value }
 
 
 impl[t: equals] equals for opt[t] {
