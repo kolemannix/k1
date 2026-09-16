@@ -525,6 +525,12 @@ pub struct FunctionPointerType {
 }
 
 #[derive(Clone, Copy)]
+pub struct FunctionReferenceType {
+    pub function_id: FunctionId,
+    pub function_type: TypeId,
+}
+
+#[derive(Clone, Copy)]
 pub struct OpaqueType {
     pub size: u32,
     pub align: u32,
@@ -562,6 +568,7 @@ pub enum Type {
     /// Otherwise, function pointers become a special case of references almost
     /// everywhere, since they can't be de-referenced and don't point to a physical k1 type
     FunctionPointer(FunctionPointerType),
+    FunctionReference(FunctionReferenceType),
     Lambda(LambdaTypeId),
     LambdaObject(LambdaObjectType),
     AbilityObject(AbilityObjectType),
@@ -688,6 +695,9 @@ impl TypedProgram {
             (Type::FunctionPointer(fp1), Type::FunctionPointer(fp2)) => {
                 fp1.function_type_id == fp2.function_type_id
             }
+            (Type::FunctionReference(fr1), Type::FunctionReference(fr2)) => {
+                fr1.function_id == fr2.function_id && fr1.function_type == fr2.function_type
+            }
             (Type::Lambda(lt1_id), Type::Lambda(lt2_id)) => {
                 if *lt1_id == *lt2_id {
                     true
@@ -795,6 +805,10 @@ impl TypedProgram {
                 }
             }
             Type::FunctionPointer(fp) => fp.function_type_id.hash(state),
+            Type::FunctionReference(fr) => {
+                fr.function_id.hash(state);
+                fr.function_type.hash(state);
+            }
             Type::Lambda(lt_id) => {
                 let lt = self.lambda_types.get(*lt_id);
                 lt.parsed_id.hash(state);
@@ -853,6 +867,7 @@ impl Type {
             Type::Generic(_) => "generic",
             Type::Function(_) => "function",
             Type::FunctionPointer(_) => "function_ptr",
+            Type::FunctionReference(_) => "function_ref",
             Type::Lambda(_) => "lambda",
             Type::LambdaObject(_) => "lambdaobj",
             Type::AbilityObject(_) => "abilityobj",
@@ -880,6 +895,13 @@ impl Type {
     pub fn as_function_pointer(&self) -> Option<FunctionPointerType> {
         match self {
             Type::FunctionPointer(fp) => Some(*fp),
+            _ => None,
+        }
+    }
+
+    pub fn as_function_reference(&self) -> Option<FunctionReferenceType> {
+        match self {
+            Type::FunctionReference(fr) => Some(*fr),
             _ => None,
         }
     }
@@ -1665,6 +1687,17 @@ impl TypedProgram {
         self.add_type_anon(Type::FunctionPointer(FunctionPointerType { function_type_id }))
     }
 
+    pub fn add_function_reference_type(
+        &mut self,
+        function_id: FunctionId,
+        function_type: TypeId,
+    ) -> TypeId {
+        self.add_type_anon(Type::FunctionReference(FunctionReferenceType {
+            function_id,
+            function_type,
+        }))
+    }
+
     pub fn get_pt_natural_align(&self, pt: PhysicalType) -> u32 {
         match pt.as_enum() {
             PhysicalTypeEnum::Empty => 1,
@@ -2012,6 +2045,11 @@ impl TypedProgram {
                 result.is_zero_safe = true;
                 result
             }
+            Type::FunctionReference(fr) => {
+                let mut result = *self.type_variable_counts.get(fr.function_type);
+                result.is_zero_safe = true;
+                result
+            }
             Type::Lambda(lambda_id) => {
                 let lambda = self.lambda_types.get(*lambda_id);
                 self.type_variable_counts
@@ -2330,7 +2368,9 @@ impl TypedProgram {
             Type::AbilityObject(ao) => {
                 self.add_physical_duplicate(type_id, ao.struct_representation)
             }
-            Type::StaticValue(_vt) => PhysicalTypeResult::Yes(PhysicalType::EMPTY),
+            Type::StaticValue(_) | Type::FunctionReference(_) => {
+                PhysicalTypeResult::Yes(PhysicalType::EMPTY)
+            }
             Type::Never => PhysicalTypeResult::Never,
             Type::Function(_)
             | Type::Generic(_)

@@ -154,7 +154,7 @@ ns work {
     w.build()
   }
 
-  fn adder(n: int): dyn[fn(int) -> int] { fn[n](x: int) x * n + 1 }
+  fn adder(n: int): dyn[fn(int) -> int] { (fn[n](x: int) x * n + 1).to-dyn() }
 
   fn control-ops(): string {
     let w = string-builder/new()

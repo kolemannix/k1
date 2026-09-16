@@ -1377,6 +1377,11 @@ pub struct FunctionPointerExpr {
     pub function_id: FunctionId,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct FunctionReferenceExpr {
+    pub function_id: FunctionId,
+}
+
 #[derive(Clone, Copy)]
 pub struct MatchingCondition {
     pub instrs: PermSlice<MatchingConditionInstr>,
@@ -1472,11 +1477,10 @@ pub enum TypedExpr {
     /// Creating a lambda results in a Lambda expr.
     /// - A function is created
     /// - An environment capture expr is created
-    /// - An expression is returned that is really just a pointer to the unique Closure it points
-    ///   to; this can either be called directly or turned into a dynamic function object if needed
+    /// - An expression is returned that is a struct value of its environment
     Lambda(LambdaExpr),
-    /// Calling .toRef() on a function by name
     FunctionPointer(FunctionPointerExpr),
+    FunctionReference(FunctionReferenceExpr),
 }
 
 impl From<VariableExpr> for TypedExpr {
@@ -1510,6 +1514,7 @@ impl TypedExpr {
             TypedExpr::Continue { .. } => "continue",
             TypedExpr::Lambda(_) => "lambda",
             TypedExpr::FunctionPointer(_) => "function_pointer",
+            TypedExpr::FunctionReference(_) => "function_reference",
             TypedExpr::StaticValue(_) => "static_value",
         }
     }
@@ -4160,43 +4165,6 @@ impl TypedProgram {
             _ => {}
         };
 
-        // If we expect a lambda object and you pass a lambda
-        if let Type::LambdaObject(_lam_obj_type) = self.types.get(expected) {
-            if let Type::Lambda(lambda_type_id) = self.get_expr_type(expr) {
-                let lambda_type_id = *lambda_type_id;
-                let lambda_type = self.lambda_types.get(lambda_type_id);
-                let lambda_object_type =
-                    self.add_lambda_object(lambda_type.function_type, lambda_type.parsed_id);
-                match self.check_types(expected, lambda_object_type, scope_id) {
-                    Ok(_) => {
-                        return match self.lambda_to_lambda_object(expr, lambda_type_id, scope_id) {
-                            Ok(lambda_object) => {
-                                CheckExprTypeResult::Coerce(lambda_object, "lam->lamobj")
-                            }
-                            Err(e) => CheckExprTypeResult::Err(
-                                self.ast.idents.get_string(e.message).into(),
-                            ),
-                        };
-                    }
-                    Err(msg) => {
-                        debug!("coerce: detected lam obj case failed: {msg}");
-                    }
-                }
-            }
-        }
-
-        // If we expect a lambda object and you pass a function reference... (optimized lambda)
-        if let Type::LambdaObject(_lam_obj_type) = self.types.get(expected) {
-            if let TypedExpr::FunctionPointer(fun_ref) = self.exprs.get(expr) {
-                let expr_span = self.exprs.get_span(expr);
-                let lambda_object = self.function_to_lambda_object(fun_ref.function_id, expr_span);
-                let lambda_object_type = self.exprs.get_type(lambda_object);
-                if self.check_types(expected, lambda_object_type, scope_id).is_ok() {
-                    return CheckExprTypeResult::Coerce(lambda_object, "funref->lamobj");
-                }
-            }
-        }
-
         if let Type::Reference(_exp_ref) = self.types.get(expected) {
             if let Type::Reference(_actual_ref) = self.types.get(actual_type_id) {
             } else {
@@ -4548,14 +4516,6 @@ impl TypedProgram {
           )
                 }
             }
-            (Type::LambdaObject(_lambda_object), Type::Lambda(_lambda_type)) => {
-                Err(k1_format_user!(
-                    self,
-                    "expected lambda object but got lambda; need to call toDyn() for now. {} vs {}",
-                    expected,
-                    actual,
-                ))
-            }
             (Type::LambdaObject(exp_lambda_object), Type::LambdaObject(act_lambda_object)) => self
                 .check_types(
                     exp_lambda_object.function_type,
@@ -4651,6 +4611,26 @@ impl TypedProgram {
                     expected,
                     actual,
                     generic
+                ))
+            }
+            (Type::FunctionPointer(_), Type::FunctionReference(_)) => Err(k1_format_user!(
+                self,
+                "Expected {} but got {}: use .& to take the function's address",
+                expected,
+                actual,
+            )),
+            (Type::FunctionPointer(_), Type::Lambda(_)) => Err(k1_format_user!(
+                self,
+                "Expected {} but got {}: a closure has an environment and cannot be a function pointer",
+                expected,
+                actual,
+            )),
+            (Type::LambdaObject(_), Type::FunctionReference(_) | Type::Lambda(_)) => {
+                Err(k1_format_user!(
+                    self,
+                    "Expected {} but got {}: use .to-dyn() to make a dynamic function object",
+                    expected,
+                    actual,
                 ))
             }
             (_exp, _act) => Err(k1_format_user!(self, "Expected {} but got {}", expected, actual,)),
@@ -6439,7 +6419,8 @@ impl TypedProgram {
             if self.find_variable_namespaced(ctx.scope_id, &call.name)?.is_none()
                 && let Some(fn_id) = self.find_function_namespaced(ctx.scope_id, &call.name)?
             {
-                return self.compile_specialized_function_reference(fn_id, &call, ctx);
+                let reference = self.compile_specialized_function_reference(fn_id, &call, ctx)?;
+                return Ok(self.reference_to_pointer(reference, span));
             }
         }
         let expected_type = match ctx.expected_type_id {
@@ -6447,8 +6428,8 @@ impl TypedProgram {
             Some(t) => Some(self.get_type_id_dereferenced(t)),
         };
         let input = self.eval_expr(base_expr, ctx.with_expected_type(expected_type))?;
-        if let TypedExpr::FunctionPointer(_) = self.exprs.get(input) {
-            return Ok(input);
+        if self.types.get(self.exprs.get_type(input)).as_function_reference().is_some() {
+            return Ok(self.reference_to_pointer(input, span));
         }
         self.warn_packed_field_address_of(input, span);
         self.synth_address_of(input, span, false)
@@ -8036,19 +8017,15 @@ impl TypedProgram {
                 parsed_id: expr_id.into(),
                 type_id: function_type,
                 kind: TypedFunctionKind::Lambda,
-                flags: TypedFunctionFlags::AddressTaken,
+                flags: TypedFunctionFlags::empty(),
                 dyn_fn_id: None,
                 returned_variable: None,
                 body_failure: None,
             });
-
-            let function_pointer_type = self.add_function_pointer_type(function_type);
-            let expr_id = self.exprs.add(
-                TypedExpr::FunctionPointer(FunctionPointerExpr { function_id: body_function_id }),
-                function_pointer_type,
-                span,
-            );
-            return Ok(expr_id);
+            if let Some(Type::FunctionPointer(_)) = ctx.expected_type_id.map(|t| self.types.get(t)) {
+                return Ok(self.function_to_pointer(body_function_id, span));
+            }
+            return Ok(self.function_to_reference(body_function_id, span));
         }
 
         let ClosureSetup {
@@ -9903,6 +9880,9 @@ impl TypedProgram {
                                     fn_call.name.name_span,
                                 ))))
                             }
+                            Type::FunctionReference(fr) => {
+                                Ok(CallResolution::Call(Callee::StaticFunction(fr.function_id)))
+                            }
                             Type::FunctionTypeParameter(ftp) => {
                                 let callee = Callee::DynamicAbstract {
                                     function_sig: FunctionSignature::make_no_generics(
@@ -10371,16 +10351,16 @@ impl TypedProgram {
         // Special cases of this syntax that aren't really method calls
         if let Some(base_arg) = first_arg {
             if fn_name == self.ast.idents.b.to_dyn {
-                if let ParsedExpr::Variable(v) = self.ast.exprs.get(base_arg.value) {
-                    let function_name = &v.name;
-                    let function_id = self.find_function_namespaced(ctx.scope_id, function_name)?;
-                    if let Some(function_id) = function_id {
-                        let function = self.get_function(function_id);
+                let base = self.eval_expr(base_arg.value, ctx.with_no_expected_type())?;
+                let base_type = self.exprs.get_type(base);
+                match *self.types.get(base_type) {
+                    Type::FunctionReference(fr) => {
+                        let function = self.get_function(fr.function_id);
                         if !function.is_concrete() {
                             kbail!(
                                 self,
                                 call_span,
-                                "Cannot call toDyn with a generic function (compiler todo: accept the type args and specialize it)"
+                                "Cannot call to-dyn with a generic function; apply its type arguments first"
                             );
                         }
                         if function.builtin_type.is_some() {
@@ -10391,9 +10371,17 @@ impl TypedProgram {
                             );
                         }
                         return Ok(CallResolution::OtherExpr(
-                            self.function_to_lambda_object(function_id, call_span),
+                            self.function_to_lambda_object(fr.function_id, call_span),
                         ));
                     }
+                    Type::Lambda(lambda_type_id) => {
+                        return Ok(CallResolution::OtherExpr(self.lambda_to_lambda_object(
+                            base,
+                            lambda_type_id,
+                            ctx.scope_id,
+                        )?));
+                    }
+                    _ => {}
                 }
                 // Dyn ability erasure: `x.to-dyn[source[t = u8]]()`, or with the
                 // target coming from the expected type
@@ -10437,8 +10425,6 @@ impl TypedProgram {
                         .filter(|et| self.types.get(*et).as_ability_object().is_some()),
                 };
                 if let Some(target_dyn_type) = target_dyn_type {
-                    let base = self.eval_expr(base_arg.value, ctx.with_no_expected_type())?;
-                    let base_type = self.exprs.get_type(base);
                     let base_ref = if self.types.get(base_type).as_reference().is_some() {
                         base
                     } else {
@@ -10841,16 +10827,17 @@ impl TypedProgram {
         if self.get_type_variable_counts(specialized_function_type).is_abstract()
             || ctx.is_inference()
         {
-            let function_pointer_type = self.add_function_pointer_type(specialized_function_type);
+            let reference_type =
+                self.add_function_reference_type(generic_function_id, specialized_function_type);
             self.emit_ls_entity(
                 call.name.name_span,
                 LsEntityKind::Function { function_id: generic_function_id, is_defn: false },
             );
             return Ok(self.exprs.add(
-                TypedExpr::FunctionPointer(FunctionPointerExpr {
+                TypedExpr::FunctionReference(FunctionReferenceExpr {
                     function_id: generic_function_id,
                 }),
-                function_pointer_type,
+                reference_type,
                 span,
             ));
         }
@@ -10870,10 +10857,34 @@ impl TypedProgram {
         function_id: FunctionId,
         span: SpanId,
     ) -> TypedExprId {
-        let function = self.get_function(function_id);
-        let function_pointer_type = self.add_function_pointer_type(function.type_id);
-        self.get_function_mut(function_id).flags.insert(TypedFunctionFlags::AddressTaken);
+        let function_type = self.get_function(function_id).type_id;
+        let reference_type = self.add_function_reference_type(function_id, function_type);
         self.emit_ls_entity(span, LsEntityKind::Function { function_id, is_defn: false });
+        self.exprs.add(
+            TypedExpr::FunctionReference(FunctionReferenceExpr { function_id }),
+            reference_type,
+            span,
+        )
+    }
+
+    pub fn function_to_pointer(&mut self, function_id: FunctionId, span: SpanId) -> TypedExprId {
+        let function_type = self.get_function(function_id).type_id;
+        self.make_function_pointer(function_id, function_type, span)
+    }
+
+    fn reference_to_pointer(&mut self, reference: TypedExprId, span: SpanId) -> TypedExprId {
+        let fr = self.types.get(self.exprs.get_type(reference)).as_function_reference().unwrap();
+        self.make_function_pointer(fr.function_id, fr.function_type, span)
+    }
+
+    fn make_function_pointer(
+        &mut self,
+        function_id: FunctionId,
+        function_type: TypeId,
+        span: SpanId,
+    ) -> TypedExprId {
+        let function_pointer_type = self.add_function_pointer_type(function_type);
+        self.get_function_mut(function_id).flags.insert(TypedFunctionFlags::AddressTaken);
         self.exprs.add(
             TypedExpr::FunctionPointer(FunctionPointerExpr { function_id }),
             function_pointer_type,
@@ -10957,7 +10968,7 @@ impl TypedProgram {
         );
         let fn_ptr_field = StructLiteralField {
             name: self.ast.idents.b.fn_ptr,
-            expr: Some(self.function_to_reference(dyn_function_id, call_span)),
+            expr: Some(self.function_to_pointer(dyn_function_id, call_span)),
         };
         let env_ptr_field =
             StructLiteralField { name: self.ast.idents.b.env_ptr, expr: Some(null_ptr_expr) };
@@ -10994,7 +11005,7 @@ impl TypedProgram {
 
         let fn_ptr_field = StructLiteralField {
             name: self.ast.idents.b.fn_ptr,
-            expr: Some(self.function_to_reference(function_id, span)),
+            expr: Some(self.function_to_pointer(function_id, span)),
         };
         let env_ptr_field =
             StructLiteralField { name: self.ast.idents.b.env_ptr, expr: Some(env_ptr) };
@@ -12793,6 +12804,7 @@ impl TypedProgram {
         // A function-type-parameter, written 'some \A -> B'
         match typ {
             Type::FunctionPointer(fp) => Some(fp.function_type_id),
+            Type::FunctionReference(fr) => Some(fr.function_type),
             Type::Lambda(lam_id) => Some(self.lambda_types.get(*lam_id).function_type),
             Type::LambdaObject(lambda_object) => Some(lambda_object.function_type),
             Type::FunctionTypeParameter(ftp) => Some(ftp.function_type),
@@ -15029,14 +15041,7 @@ impl TypedProgram {
                 .function_at_index(&self.mem, fn_index);
             match impl_function {
                 AbilityImplFunction::FunctionId(impl_fn_id) => {
-                    self.get_function_mut(impl_fn_id)
-                        .flags
-                        .insert(TypedFunctionFlags::AddressTaken);
-                    let fn_ptr_expr = self.exprs.add(
-                        TypedExpr::FunctionPointer(FunctionPointerExpr { function_id: impl_fn_id }),
-                        field.type_id,
-                        span,
-                    );
+                    let fn_ptr_expr = self.function_to_pointer(impl_fn_id, span);
                     literal_fields
                         .push(StructLiteralField { name: field.name, expr: Some(fn_ptr_expr) });
                 }

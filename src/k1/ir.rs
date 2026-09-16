@@ -3008,6 +3008,12 @@ fn compile_expr(
             b.k1.ir.units_pending_compile.push(function_id, requester);
             compile_expr(b, dst, env_struct)
         }
+        TypedExpr::FunctionReference(_) => {
+            // nothing really stored but this is drier and clearer than reimplementing Empty handling
+            let stored =
+                store_rich_if_dst(b, dst, PhysicalType::EMPTY, Value::Empty, IrComment::None);
+            Ok(stored)
+        }
         TypedExpr::FunctionPointer(fpe) => {
             let fp = Value::FunctionAddr(fpe.function_id);
             let ptr_pt = PhysicalType::PTR;

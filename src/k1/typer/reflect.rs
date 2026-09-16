@@ -674,7 +674,8 @@ impl TypedProgram {
                 );
                 make_variant(self, self.ast.idents.b.function_pointer, Some(payload))
             }
-            Type::Lambda(_)
+            Type::FunctionReference(_)
+            | Type::Lambda(_)
             | Type::LambdaObject(_)
             | Type::AbilityObject(_)
             | Type::TypeParameter(_)

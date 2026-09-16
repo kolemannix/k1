@@ -32,7 +32,7 @@ ns for db-conn {
   fn run-query-task(_self: db-conn, uv-loop: *mut uv-loop, query: string): task[result[int, string]] {
     task/spawn(
       uv-loop,
-      fake-database-query,
+      fake-database-query.&,
       .{ query },
     )
   }
@@ -203,7 +203,7 @@ fn queue-http-handler(connection: *mut connection, request: http/request) {
   })
   let work-req = heap.alloc-t[uv/work]
   work-req.set-data(work)
-  let queue-rc = uv/queue_work(uv-loop, work-req, do-work, after-do-work)
+  let queue-rc = uv/queue_work(uv-loop, work-req, do-work.&, after-do-work.&)
   if queue-rc != 0 {
     tprintln("uv_queue_work for request handler failed: $queue-rc")
     close-connection(connection)
@@ -322,8 +322,8 @@ ns for connection {
           connection-arena = connection-arena,
           request-arena = request-arena,
           user-data = conn,
-          on-header-complete = on-complete-http-header,
-          on-body-complete = on-complete-http-body,
+          on-header-complete = on-complete-http-header.&,
+          on-body-complete = on-complete-http-body.&,
         ),
 
         framework,
@@ -362,7 +362,7 @@ ns for connection {
       self.current-work = :none
       self.request-arena.reset()
       self.request-parser.reset()
-      let read-rc = uv/read_start(self.client().as-stream(), alloc-read-buffer, on_client_read)
+      let read-rc = uv/read_start(self.client().as-stream(), alloc-read-buffer.&, on_client_read.&)
       if read-rc != 0 {
         tprintln("read restart error: $read-rc")
         close-connection(self)
@@ -430,7 +430,7 @@ fn on-new-connection(server: *mut uv/stream, status: i32) {
   if accept-rc == 0 {
     uv/tcp_keepalive_ex(client, 1, idle = 60, intvl = 10, cnt = 3)
     tprintln("accepted connection; scheduling read")
-    let read-rc = uv/read_start(client.as-stream(), alloc-read-buffer, on_client_read)
+    let read-rc = uv/read_start(client.as-stream(), alloc-read-buffer.&, on_client_read.&)
     if read-rc != 0 {
       tprintln("read start error: $read-rc")
       close-connection(connection)
@@ -458,11 +458,11 @@ fn framework-init(uv-loop: *mut uv-loop): *mut framework-deps {
   // Fail a subscriber once 1MB of payload is queued and undelivered: a
   // client that isn't draining its socket would otherwise grow it forever
   let bus = pubsub/create[span[u8]](
-    on-event = .{ state = async-handle.as[ptr], notify-fn = notify-pubsub-async },
+    on-event = .{ state = async-handle.as[ptr], notify-fn = notify-pubsub-async.& },
     subscriber-cap-weight = 1048576,
     weight-fn = fn(payload: rc-bytes) payload.bytes().len(),
   )
-  if uv/async_init(uv-loop, async-handle, dispatch-pubsub) != 0 crash("uv_async_init for pubsub failed")
+  if uv/async_init(uv-loop, async-handle, dispatch-pubsub.&) != 0 crash("uv_async_init for pubsub failed")
   async-handle.set-data(bus)
   heap.new(.{ uv-loop, bus })
 }
@@ -512,7 +512,7 @@ fn start-app[deps](context arena: *mut arena)(framework: *mut framework-deps, ma
   if bind-rc != 0 {
     eprintln("bind failed: ${string/wrap-c(uv/strerror(bind-rc).as[ptr])}")
   }
-  let r: i32 = uv/listen(server.as-stream(), backlog = 128, on-new-connection)
+  let r: i32 = uv/listen(server.as-stream(), backlog = 128, on-new-connection.&)
   if (r != 0) {
       let listen-error = string/wrap-c(uv/strerror(r).as[ptr])
       return :err "Listen error $listen-error"
@@ -534,7 +534,7 @@ fn main(): i32 {
   let framework = framework-init(uv/default_loop())
   app/start-mock-publisher(framework.bus)
 
-  start-app[app/deps](framework, app/make-deps, app/handle)
+  start-app[app/deps](framework, app/make-deps.&, app/handle.&)
 
   0
 }

@@ -187,6 +187,7 @@ impl TypedProgram {
                 recurse!(function.body_block.expect("lambdas have bodies"));
             }
             TypedExpr::FunctionPointer(_) => {}
+            TypedExpr::FunctionReference(_) => {}
             TypedExpr::StaticValue(_) => {}
         };
         None

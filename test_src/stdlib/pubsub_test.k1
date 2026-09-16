@@ -16,7 +16,7 @@ fn count-notify(_p: ptr) { notify-count = notify-count + 1 }
 
 fn test() {
   let bus = pubsub/create[span[u8]](
-    on-event = .{ state = ptr/null, notify-fn = count-notify },
+    on-event = .{ state = ptr/null, notify-fn = count-notify.& },
     subscriber-cap-weight = 1024,
     weight-fn = fn(payload: rc-bytes) payload.bytes().len(),
   )

@@ -439,6 +439,12 @@ impl TypedProgram {
                 self.display_type_id_ext(w, fp.function_type_id, mode, visiting)?;
                 Ok(())
             }
+            Type::FunctionReference(fr) => {
+                write!(w, "fnref(")?;
+                self.write_ident(w, self.get_function(fr.function_id).name)?;
+                w.write_str(")")?;
+                Ok(())
+            }
             Type::Lambda(lam_id) => {
                 write!(w, "fnlam(")?;
                 let lam = self.lambda_types.get(*lam_id);
@@ -914,10 +920,14 @@ impl TypedProgram {
                 self.display_expr_id(*lambda_body, w, indentation)?;
                 Ok(())
             }
-            TypedExpr::FunctionPointer(fr) => {
-                let fun = self.get_function(fr.function_id);
+            TypedExpr::FunctionPointer(fp) => {
+                let fun = self.get_function(fp.function_id);
                 self.write_ident(w, fun.name)?;
-                w.write_str(".toRef()")
+                w.write_str(".&")
+            }
+            TypedExpr::FunctionReference(fr) => {
+                let fun = self.get_function(fr.function_id);
+                self.write_ident(w, fun.name)
             }
             TypedExpr::StaticValue(s) => {
                 if s.is_typed_as_static {

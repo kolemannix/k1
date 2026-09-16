@@ -43,7 +43,7 @@ ns response-writer {
     })
     driver.write-req.set-data(driver)
     connection.active-stream = :some body
-    body.start(.{ state = driver.as[ptr], wake-fn = on-wake })
+    body.start(.{ state = driver.as[ptr], wake-fn = on-wake.& })
 
     // The first write carries the headers, coalescing the first body group
     // when it's already available — a strict response is one vectored write
@@ -73,7 +73,7 @@ ns response-writer {
       connection.client().as-stream(),
       driver.bufs.data-ref(),
       driver.bufs.len().trunc[u32],
-      on-write-complete)
+      on-write-complete.&)
     if rc != 0 {
       tprintln("response uv_write failed: $rc")
       close-connection(connection)

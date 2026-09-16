@@ -217,15 +217,15 @@ fn test-fn-ptr() {
   //        since the function pointer doesn't exist; we'd have to JIT the function.
   //        We should prevent this, somehow
 
-  let sum = foo/takes-fn(sum-fn)
+  let sum = foo/takes-fn(sum-fn.&)
   assert-equals(sum, 1+2+3+4)
 
-  let sum2 = foo/takes-fn-struct(sum-fn-struct)
+  let sum2 = foo/takes-fn-struct(sum-fn-struct.&)
   assert-equals(sum2, 1+2+3+4)
 
   // c passes a by-value 3-byte struct to k1 and gets one back: the k1 side
   // must marshal its param and return through the i24 coercion correctly
-  let rt3 = foo/takes-rgb3-fn(bump-rgb3)
+  let rt3 = foo/takes-rgb3-fn(bump-rgb3.&)
   assert-equals(rt3.r, 2)
   assert-equals(rt3.g, 3)
   assert-equals(rt3.b, 4)

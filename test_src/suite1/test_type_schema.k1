@@ -71,7 +71,7 @@ ns type_schema {
 
     assert-equals(print-struct-shape[point3[u8]], "Struct point3[u8] {\n  x: u8\n  y: u8\n  z: u8\n}")
 
-    let is-zero-ptr: *fn(int) -> bool = is-zero
+    let is-zero-ptr: *fn(int) -> bool = is-zero.&
     require schema[type-of(is-zero-ptr)]
       is :function-pointer .{ function-type-id } else crash("")
 

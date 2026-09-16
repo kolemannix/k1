@@ -72,7 +72,7 @@ let(mutable) drop-count: int = 0
 fn count-drop(_v: *mut int) { drop-count = drop-count + 1 }
 
 fn test-rc() {
-  let r = rc/new-with-drop(7, count-drop)
+  let r = rc/new-with-drop(7, count-drop.&)
   let r2 = r.retain()
   assert-equals(r.get().*, 7)
   r.release()
@@ -105,7 +105,7 @@ let(mutable) notify-count: int = 0
 fn count-notify(_p: ptr) { notify-count = notify-count + 1 }
 
 fn test-mpsc() {
-  let q = mpsc/make[int](.{ state = ptr/null, notify-fn = count-notify })
+  let q = mpsc/make[int](.{ state = ptr/null, notify-fn = count-notify.& })
   q.send(1)
   q.send(2)
   q.send(3)

@@ -1936,6 +1936,21 @@ impl TypedProgram {
                 }
             }
             Type::TypeParameter(_type_param) => type_id,
+            Type::FunctionReference(fr) => {
+                let fr = *fr;
+                let new_fn_type = self.substitute_in_type_ext_inner(
+                    fr.function_type,
+                    substitution_pairs,
+                    from_kinds,
+                    None,
+                    None,
+                );
+                if new_fn_type != fr.function_type {
+                    self.add_function_reference_type(fr.function_id, new_fn_type)
+                } else {
+                    type_id
+                }
+            }
             Type::FunctionTypeParameter(ftp) => {
                 let function_type_id = ftp.function_type;
                 let new_fn_type = self.substitute_in_type_ext_inner(

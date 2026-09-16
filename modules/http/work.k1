@@ -12,7 +12,7 @@ ns work {
       crash("uv_mutex_init for work queue failed: $mutex-rc")
     }
   
-    let async-rc = uv/async_init(uv-loop, queue.async-handle, drain-work-queue)
+    let async-rc = uv/async_init(uv-loop, queue.async-handle, drain-work-queue.&)
     if async-rc != 0 {
       uv/mutex_destroy(queue.mutex)
       heap.free-t(queue.async-handle)

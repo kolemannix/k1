@@ -1392,6 +1392,7 @@ pub fn vm_value_to_static_value(
         | Type::Function(_)
         | Type::Never
         | Type::StaticValue(_)
+        | Type::FunctionReference(_)
         | Type::Generic(_)
         | Type::TypeParameter(_)
         | Type::FunctionTypeParameter(_)

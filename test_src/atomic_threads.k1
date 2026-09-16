@@ -37,10 +37,10 @@ fn main(): i32 {
   let t2: std/thread/thread = ptr/null.ref[empty]()
   let t3: std/thread/thread = ptr/null.ref[empty]()
   let t4: std/thread/thread = ptr/null.ref[empty]()
-  std/thread/start(t1.&, counter-worker, counter)
-  std/thread/start(t2.&, counter-worker, counter)
-  std/thread/start(t3.&, counter-worker, counter)
-  std/thread/start(t4.&, counter-worker, counter)
+  std/thread/start(t1.&, counter-worker.&, counter)
+  std/thread/start(t2.&, counter-worker.&, counter)
+  std/thread/start(t3.&, counter-worker.&, counter)
+  std/thread/start(t4.&, counter-worker.&, counter)
   let out = arena.alloc-t[ptr]()
   std/thread/join(t1, out)
   std/thread/join(t2, out)
@@ -50,7 +50,7 @@ fn main(): i32 {
 
   let h = mem/new(handoff.{ data = 0, flag = cell/new(0u64) })
   let t: std/thread/thread = ptr/null.ref[empty]()
-  std/thread/start(t.&, producer, h)
+  std/thread/start(t.&, producer.&, h)
   while h.flag.&.load(:acquire) == 0 {}
   assert-equals(h.data, 123)
   std/thread/join(t, out)
