@@ -323,7 +323,10 @@ impl Vm {
             unsafe {
                 debug_assert!((*arena_ptr).fixed);
                 debug_assert!((*arena_ptr).extraChunks.is_null());
-                (*arena_ptr).curAddr = (*arena_ptr).basePtr.addr() as u64;
+                let base = (*arena_ptr).basePtr.cast_mut();
+                let used = (*arena_ptr).curAddr as usize - base.addr();
+                std::ptr::write_bytes(base, 0, used);
+                (*arena_ptr).curAddr = base.addr() as u64;
             }
             let cell = self.static_stack.push_t(arena_ptr);
             self.globals.insert(arena_global_id.unwrap(), Value::ptr(cell));
