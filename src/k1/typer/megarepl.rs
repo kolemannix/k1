@@ -695,8 +695,7 @@ impl TypedProgram {
 
         ir::compile_top_level_expr(self, cell_expr, &[], false)?;
         ir::validate_unit(self, IrUnitId::Expr(cell_expr))?;
-        self.compile_all_pending_ir(span)?;
-        ir::optimize_unit(self, IrUnitId::Expr(cell_expr));
+        ir::optimize_unit(self, IrUnitId::Expr(cell_expr))?;
         Ok((cell_expr, output_globals))
     }
 

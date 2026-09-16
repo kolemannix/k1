@@ -202,6 +202,7 @@ ns for buffer {
   fn position[t: equals](self: buffer[t], needle: t): ?size {
     if needle is {
       type[u8](byte) -> position-byte(self.data-ptr(), self.len, byte),
+      type[i8](byte) -> position-byte(self.data-ptr(), self.len, byte),
       type[char](c) -> position-byte(self.data-ptr(), self.len, c.as-u8()),
       _ -> {
         let i = 0: size
@@ -215,26 +216,24 @@ ns for buffer {
   }
 
   fn index-of-buffer[t: equals](self: buffer[t], needle: buffer[t]): ?size {
-    if mem/zeroed[t]() is {
-      type[u8](_byte) -> index-of-bytes(self.data-ptr(), self.len, needle.data-ptr(), needle.len),
-      type[char](_c) -> index-of-bytes(self.data-ptr(), self.len, needle.data-ptr(), needle.len),
-      _ -> {
-        let k = needle.len
-        if k == 0 return :some 0
-        if k > self.len return :none
-        let i = 0: size
-        while i + k <= self.len {
-          let j = 0: size
-          let matched = true
-          while j < k and matched {
-            if self.[i + j] != needle.[j] { matched = false }
-            j = j + 1
-          }
-          if matched return :some i
-          i = i + 1
+    #if types/type-eq[t, u8]() or types/type-eq[t, i8]() or types/type-eq[t, char]() {
+      index-of-bytes(self.data-ptr(), self.len, needle.data-ptr(), needle.len)
+    } else {
+      let k = needle.len
+      if k == 0 return :some 0
+      if k > self.len return :none
+      let i = 0: size
+      while i + k <= self.len {
+        let j = 0: size
+        let matched = true
+        while j < k and matched {
+          if self.[i + j] != needle.[j] { matched = false }
+          j = j + 1
         }
-        :none
+        if matched return :some i
+        i = i + 1
       }
+      :none
     }
   }
 

@@ -73,7 +73,7 @@ impl TypedProgram {
         }
     }
 
-    fn compile_function_for_exec(
+    pub fn compile_function_for_exec(
         &mut self,
         function_id: FunctionId,
         requester_frame: Option<FrameId>,
@@ -156,7 +156,6 @@ impl TypedProgram {
 
         let parsed_expr_as_block =
             self.ensure_parsed_expr_to_block(parsed_expr, ParsedBlockKind::FunctionBody);
-        let expr_span = parsed_expr_as_block.span;
         let static_block_scope =
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, ScopeOwnerId::None);
         let mut cur_scope = ctx.scope_id;
@@ -198,8 +197,7 @@ impl TypedProgram {
         }
 
         ir::compile_top_level_expr(self, expr, input_parameters, is_debug)?;
-        self.compile_all_pending_ir(expr_span)?;
-        ir::optimize_unit(self, IrUnitId::Expr(expr));
+        ir::optimize_unit(self, IrUnitId::Expr(expr))?;
         if is_debug {
             eprintln!(
                 "executing optimized unit.\n{}",
@@ -275,9 +273,7 @@ impl TypedProgram {
     ) -> K1Result<()> {
         let requester = k1.trace.top();
         k1.compile_function_for_exec(function_id, requester, span)?;
-        k1.compile_all_pending_ir(span)?;
-        ir::optimize_unit(k1, IrUnitId::Function(function_id));
-        Ok(())
+        ir::optimize_unit(k1, IrUnitId::Function(function_id))
     }
 
     /// Compile, optimize, and run; no VM reset, so callers control when the

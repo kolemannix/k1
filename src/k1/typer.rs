@@ -10215,7 +10215,6 @@ impl TypedProgram {
                         "Cannot use test-compile when types are being inferred"
                     );
                 }
-                self.compile_all_pending_ir(call_span)?;
                 let result =
                     self.eval_expr(arg.value, ctx.with_no_expected_type().with_speculative());
                 let expr = match result {

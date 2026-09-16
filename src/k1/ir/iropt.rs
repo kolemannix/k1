@@ -5,19 +5,20 @@ pub enum OptVisit {
     Leave(IrUnitId),
 }
 
-pub fn optimize_unit(k1: &mut TypedProgram, root: IrUnitId) {
+pub fn optimize_unit(k1: &mut TypedProgram, root: IrUnitId) -> K1Result<()> {
     let Some(unit) = get_compiled_unit(&k1.ir, root) else {
-        return;
+        return Ok(());
     };
     if unit.is_optimized {
-        return;
+        return Ok(());
     }
     let frame = k1.trace_push_unit(TraceKind::IrOptimize, root, None);
-    optimize_unit_body(k1, root, unit);
+    let result = optimize_unit_body(k1, root, unit);
     k1.trace_pop(frame);
+    result
 }
 
-fn optimize_unit_body(k1: &mut TypedProgram, root: IrUnitId, unit: IrUnit) {
+fn optimize_unit_body(k1: &mut TypedProgram, root: IrUnitId, unit: IrUnit) -> K1Result<()> {
     let insts_before = k1.ir.instrs.len();
     if unit.is_debug {
         eprintln!("optimizing {}", unit_to_string(k1, root, true));
@@ -29,24 +30,38 @@ fn optimize_unit_body(k1: &mut TypedProgram, root: IrUnitId, unit: IrUnit) {
     let mut visited = std::mem::take(&mut k1.ir.opt_buf_visited);
     let mut callees = std::mem::take(&mut k1.ir.opt_buf_callees);
     visit_stack.push(OptVisit::Enter(root));
-    while let Some(visit) = visit_stack.pop() {
+    let mut result = Ok(());
+    'walk: while let Some(visit) = visit_stack.pop() {
         match visit {
             OptVisit::Enter(unit_id) => {
                 if !visited.insert(unit_id) {
                     continue;
                 }
-                debug_assert!(!get_compiled_unit(&k1.ir, unit_id).unwrap().is_optimized);
+                if get_compiled_unit(&k1.ir, unit_id).unwrap().is_optimized {
+                    continue;
+                }
                 visit_stack.push(OptVisit::Leave(unit_id));
                 callees.clear();
                 collect_direct_callees(k1, &mut callees, unit_id);
+                let span = get_unit_span(k1, unit_id);
                 for callee_id in &callees {
                     let callee = IrUnitId::Function(*callee_id);
+                    if !k1.ir.functions.contains_key(callee_id) {
+                        let requester = k1.trace.top();
+                        if let Err(e) = k1.compile_function_for_exec(*callee_id, requester, span) {
+                            result = Err(e);
+                            break 'walk;
+                        }
+                    }
                     if !get_compiled_unit(&k1.ir, callee).unwrap().is_optimized {
                         visit_stack.push(OptVisit::Enter(callee));
                     }
                 }
             }
             OptVisit::Leave(unit_id) => {
+                if get_compiled_unit(&k1.ir, unit_id).unwrap().is_optimized {
+                    continue;
+                }
                 let inline_frame = k1.trace_push_unit(TraceKind::IrInline, unit_id, None);
                 if skip_inline {
                     finish_unit_no_inline(k1, unit_id);
@@ -63,12 +78,14 @@ fn optimize_unit_body(k1: &mut TypedProgram, root: IrUnitId, unit: IrUnit) {
             }
         }
     }
+    visit_stack.clear();
     visited.clear();
     callees.clear();
     k1.ir.opt_buf_visit_stack = visit_stack;
     k1.ir.opt_buf_visited = visited;
     k1.ir.opt_buf_callees = callees;
     k1.trace.set_top_count((k1.ir.instrs.len() - insts_before) as u64);
+    result
 }
 
 fn collect_direct_callees(k1: &TypedProgram, callees: &mut Vec<FunctionId>, unit_id: IrUnitId) {

@@ -1008,7 +1008,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         k1.compile_all_pending_ir(SpanId::NONE)?;
         if k1.config.optimize {
             for root in roots {
-                ir::optimize_unit(k1, IrUnitId::Function(*root));
+                ir::optimize_unit(k1, IrUnitId::Function(*root))?;
             }
         }
         let reachable = Cg::walk_functions(k1, roots);

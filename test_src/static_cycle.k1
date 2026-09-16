@@ -1,0 +1,4 @@
+fn f(): int { #if g() == 1 { 1 } else { 2 } }
+fn g(): int { f() }
+fn main(): i32 { if f() == 1 0 else 1 }
+//errmsg: needs its own compiled ir while it is being compiled

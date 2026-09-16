@@ -575,14 +575,28 @@ pub(crate) fn resolve_global(
 
     // Case 3: First use in this VM. If not mutable, put in share global constants. If mutable,
     // generate and store the shared original, but store a copy in our local vm to allow mutation
+    if k1.globals.get(global_id).initial_value.is_pending() {
+        let ast_id = k1.globals.get(global_id).ast_id;
+        if let Err(e) = k1.eval_global_body(ast_id) {
+            k1.report(e)
+        }
+    }
     let global = k1.globals.get(global_id);
     let is_constant = global.is_constant;
     let initial_value_id = match global.initial_value {
-        GlobalInitialValue::Pending | GlobalInitialValue::Failed(_) => {
+        GlobalInitialValue::Pending => {
             kbail!(
                 k1,
                 vm.eval_span,
-                "VM encountered un-evaluated or failed global '{}'; all globals referenced by compiled code should have been evaluated before execution. This is a compiler bug",
+                "VM encountered un-evaluated global '{}'. This is a compiler bug",
+                k1.variables.get(global.variable_id).name
+            );
+        }
+        GlobalInitialValue::Failed(_) => {
+            kbail!(
+                k1,
+                vm.eval_span,
+                "Global '{}' failed to compile",
                 k1.variables.get(global.variable_id).name
             );
         }

@@ -56,15 +56,11 @@ pub fn get_or_lower_function(
         !k1.trace.on_stack(TraceKind::Bcgen, function_id.as_u32()),
         "get_or_lower_function called on in-progress function; caller must check"
     );
-    let Some(unit) = k1.ir.functions.get(&function_id).copied() else {
-        kbail!(
-            k1,
-            span,
-            "Call to uncompiled function: {}. ({} are pending)",
-            k1.function_id_to_string(function_id, false),
-            k1.ir.units_pending_compile.len()
-        );
-    };
+    if !k1.ir.functions.contains_key(&function_id) {
+        let requester = k1.trace.top();
+        k1.compile_function_for_exec(function_id, requester, span)?;
+    }
+    let unit = *k1.ir.functions.get(&function_id).unwrap();
     // Builtins and externs have no body to lower; record a sentinel so
     // indirect-call resolution can produce a good error.
     let sentinel_kind = if unit.function_builtin_kind.is_some() {
@@ -86,6 +82,8 @@ pub fn get_or_lower_function(
         k1.bc.functions.insert(function_id, info);
         return Ok(info);
     }
+    ir::optimize_unit(k1, IrUnitId::Function(function_id))?;
+    let unit = *k1.ir.functions.get(&function_id).unwrap();
     lower_unit(k1, unit)
 }
 
@@ -1205,6 +1203,7 @@ fn emit_call(
         // Extern/builtin handlers read args from the callee param slots, so
         // those are staged with Movs as before
         IrCallee::Extern { library_name, function_name, function_id } => {
+            get_or_lower_function(k1, function_id, ctx.cur_span)?;
             emit_arg_movs(k1, ctx, args);
             if is_agg {
                 let sret_lowered = resolve_sret(k1, ctx);
