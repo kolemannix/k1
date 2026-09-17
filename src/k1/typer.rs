@@ -9096,26 +9096,17 @@ impl TypedProgram {
         if_expr: &ParsedIfExpr,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
-        if ctx.is_generic_pass() {
-            let filler_expr =
-                self.synth_phony(ctx.expected_type_id.unwrap_or(EMPTY_TYPE_ID), if_expr.span);
-            return Ok(filler_expr);
+        if let Some(phony) = self.synth_phony_if_generic_pass(ctx, if_expr.span) {
+            return Ok(phony);
         }
-        let condition_bool = match ctx.is_generic_pass() {
-            false => self.execute_static_bool(if_expr.cond, ctx)?,
-            // We just proceed as if it yielded 'true' in the generic case
-            true => true,
-        };
-
-        let expr = if condition_bool {
-            let cons_expr = self.eval_expr(if_expr.cons, ctx)?;
-            cons_expr
+        if self.execute_static_bool(if_expr.cond, ctx)? {
+            self.eval_expr(if_expr.cons, ctx)
         } else {
-            let alt_expr =
-                if let Some(alt) = if_expr.alt { Some(self.eval_expr(alt, ctx)?) } else { None };
-            if let Some(alt) = alt_expr { alt } else { self.synth_empty_value(if_expr.span) }
-        };
-        Ok(expr)
+            match if_expr.alt {
+                Some(alt) => self.eval_expr(alt, ctx),
+                None => Ok(self.synth_empty_value(if_expr.span)),
+            }
+        }
     }
 
     // "if" in k1 can do pattern matching, on multiple targets, chained with arbitrary boolean

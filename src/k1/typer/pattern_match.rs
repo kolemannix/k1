@@ -1146,80 +1146,172 @@ impl TypedProgram {
         match_expr_id: ParsedExprId,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
-        // Our job is to evaluate the conditions statically. That means either compiling the condition
-        // chains into static exprs and running them, or just allowing only trivial patterns
-
         let ParsedExpr::Match(parsed_match) = self.ast.exprs.get(match_expr_id) else { panic!() };
         let parsed_match = *parsed_match;
-        let match_target =
+        if let Some(phony) = self.synth_phony_if_generic_pass(ctx, parsed_match.span) {
+            return Ok(phony);
+        }
+        let subject =
             self.execute_static_expr(parsed_match.match_subject, ctx.with_no_expected_type(), &[])?;
         let subject_span = self.ast.exprs.get_span(parsed_match.match_subject);
-        let StaticValue::Enum(target_type_id, enum_value) = *self.static_values.get(match_target)
-        else {
-            kbail!(self, subject_span, "Only enums are supported in static match for now");
-        };
-        let enum_members = self.types.get(target_type_id).expect_enum().member_values;
-        let Some(target_member) =
-            self.mem.getn(enum_members).iter().find(|m| m.int_value == enum_value)
-        else {
-            self.ice_span(subject_span, "Tag didn't match any variants")
-        };
-        let target_member_name = target_member.name;
+        let subject_type = self.get_static_value_type(subject);
 
-        let mut given_cases = self.tmp.new_list(enum_members.len());
-        let mut uncovered_members = self.tmp.new_list(enum_members.len());
-        uncovered_members.extend_iter(self.mem.getn(enum_members).iter().map(|m| m.name));
-        for case in self.ast.mem.getn(parsed_match.cases) {
+        let cases = self.ast.mem.getn(parsed_match.cases);
+        let mut arms = self.tmp.new_list(cases.len() as u32);
+        let mut patterns = self.tmp.new_list(cases.len() as u32);
+        for case in cases {
             if let Some(guard_expr) = case.guard_condition_expr {
                 kbail!(
                     self,
                     self.ast.exprs.get_span(guard_expr),
-                    "Guard conditions are not supported in static match for now"
+                    "Guard conditions are not supported in static match"
                 );
             }
             for pattern_id in case.patterns.as_slice(&self.ast.mem) {
-                let compiled_pattern_id =
-                    self.compile_pattern_to_type(*pattern_id, target_type_id, ctx.scope_id, false)?;
-                let pattern = self.patterns.get(compiled_pattern_id);
-                let TypedPattern::Enum(enum_pattern) = pattern else {
-                    kbail!(
-                        self,
-                        self.ast.get_pattern_span(*pattern_id),
-                        "Only enum patterns are supported in static match for now"
-                    );
-                };
-                uncovered_members.swap_remove_elem(&enum_pattern.member_name);
-                given_cases.push_grow(&mut self.tmp, (*enum_pattern, case.expression));
+                let compiled =
+                    self.compile_pattern_to_type(*pattern_id, subject_type, ctx.scope_id, true)?;
+                patterns.push_grow(&mut self.tmp, compiled);
+                arms.push_grow(&mut self.tmp, (compiled, case.expression));
             }
         }
+        self.check_pattern_exhaustiveness(subject_type, patterns.as_slice(), subject_span, false)?;
 
-        if !uncovered_members.is_empty() {
-            let mut uncovered_member_names = String::new();
-            for (idx, name) in uncovered_members.iter().enumerate() {
-                if idx > 0 {
-                    uncovered_member_names.push_str(", ");
-                }
-                uncovered_member_names.push_str(self.ident_str(*name));
+        let mut bindings = self.tmp.new_list(4);
+        let mut winner = None;
+        for (pattern_id, expression) in arms.iter() {
+            bindings.clear();
+            if self.check_static_pattern_matches(*pattern_id, subject, &mut bindings)? {
+                winner = Some(*expression);
+                break;
             }
-            kbail!(
+        }
+        let Some(winner) = winner else {
+            self.ice_span(parsed_match.span, "Exhaustive static match matched no arm")
+        };
+        if bindings.is_empty() {
+            return self.eval_expr(winner, ctx);
+        }
+        let mut block = self.new_block_builder(
+            ctx.scope_id,
+            ScopeType::MatchArm,
+            parsed_match.span,
+            bindings.len() as u32 + 1,
+        );
+        for (name, span, value_id) in bindings.iter() {
+            let initializer = self.add_static_constant_expr(*value_id, *span);
+            let defn = self.synth_variable_defn_visible(*name, initializer, block.scope_id, *span);
+            self.push_block_stmt_id(&mut block, defn.defn_stmt);
+        }
+        let body = self.eval_expr(winner, ctx.with_scope(block.scope_id))?;
+        let body_type = self.exprs.get_type(body);
+        self.push_block_expr_id(&mut block, body);
+        Ok(self.exprs.add_block(block, body_type))
+    }
+
+    fn check_static_pattern_matches(
+        &mut self,
+        pattern_id: TypedPatternId,
+        value_id: StaticValueId,
+        bindings: &mut List<(StringId, SpanId, StaticValueId), MemTmp>,
+    ) -> K1Result<bool> {
+        let pattern = *self.patterns.get(pattern_id);
+        let value = *self.static_values.get(value_id);
+        let matched = match (pattern, value) {
+            (TypedPattern::Wildcard(_), _) => true,
+            (TypedPattern::Variable(vp), _) => {
+                bindings.push_grow(&mut self.tmp, (vp.name, vp.span, value_id));
+                true
+            }
+            (TypedPattern::Type(tp), _) => {
+                self.get_static_value_type(value_id) == tp.type_id
+                    && self.check_static_pattern_matches(tp.inner_pattern, value_id, bindings)?
+            }
+            (TypedPattern::Reference(_) | TypedPattern::RefNull(_, _), _) => kbail!(
                 self,
-                parsed_match.span,
-                "Non-exhaustive static match: the following variants were not covered: {}",
-                uncovered_member_names
-            );
-        }
-
-        let mut matched = None;
-        for (pattern, expr) in given_cases.iter() {
-            if pattern.member_name == target_member_name {
-                matched = Some(*expr);
+                pattern.span_id(),
+                "A {} pattern cannot be matched statically: a reference has no compile-time identity",
+                pattern.kind_name()
+            ),
+            (TypedPattern::LiteralBool(b, _), StaticValue::Bool(v)) => b == v,
+            (TypedPattern::LiteralBool(b, _), StaticValue::Zero(_)) => !b,
+            (TypedPattern::LiteralChar(c, _), StaticValue::Char(v)) => c == v,
+            (TypedPattern::LiteralChar(c, _), StaticValue::Zero(_)) => c == 0,
+            (TypedPattern::LiteralInteger(lit, _), StaticValue::Int(v)) => {
+                matches!(*self.static_values.get(lit), StaticValue::Int(l) if l == v)
             }
-        }
-
-        match matched {
-            None => Err(kerr!(self, parsed_match.span, "No cases matched")),
-            Some(expr) => self.eval_expr(expr, ctx),
-        }
+            (TypedPattern::LiteralInteger(lit, _), StaticValue::Zero(_)) => {
+                matches!(*self.static_values.get(lit), StaticValue::Int(l) if l.is_zero())
+            }
+            (TypedPattern::LiteralFloat(lit, _), StaticValue::Float(v)) => {
+                matches!(*self.static_values.get(lit), StaticValue::Float(l) if l == v)
+            }
+            (TypedPattern::LiteralFloat(lit, _), StaticValue::Zero(_)) => {
+                matches!(*self.static_values.get(lit), StaticValue::Float(l) if l.as_f64() == 0.0)
+            }
+            (TypedPattern::LiteralString(s, _), StaticValue::String(v)) => s == v,
+            (TypedPattern::LiteralString(s, _), StaticValue::Zero(_)) => {
+                self.ident_str(s).is_empty()
+            }
+            (TypedPattern::Enum(ep), StaticValue::Enum(_, v)) => ep.int_value == v,
+            (TypedPattern::Enum(ep), StaticValue::Zero(_)) => ep.int_value.is_zero(),
+            (TypedPattern::Sum(sp), StaticValue::Sum(_) | StaticValue::Zero(_)) => {
+                let (variant_index, payload) = match value {
+                    StaticValue::Sum(sv) => (sv.variant_index, sv.payload),
+                    _ => {
+                        let Type::Sum(sum_type) = self.types.get(sp.sum_type_id) else {
+                            self.ice_span(sp.span, "Sum pattern over a non-sum type")
+                        };
+                        let Some(zero_variant) =
+                            self.mem.getn(sum_type.variants).iter().find(|v| v.tag_value.is_zero())
+                        else {
+                            self.ice_span(sp.span, "Zero value of a sum type with no zero tag")
+                        };
+                        let zero_variant = *zero_variant;
+                        let payload = zero_variant
+                            .payload
+                            .map(|p| self.static_values.add(StaticValue::Zero(p)));
+                        (zero_variant.index, payload)
+                    }
+                };
+                sp.variant_index == variant_index
+                    && match (sp.payload, payload) {
+                        (Some(payload_pattern), Some(payload)) => {
+                            self.check_static_pattern_matches(payload_pattern, payload, bindings)?
+                        }
+                        (Some(_), None) => {
+                            self.ice_span(sp.span, "Payload pattern against a payload-less value")
+                        }
+                        (None, _) => true,
+                    }
+            }
+            (TypedPattern::Struct(stp), StaticValue::Struct(_) | StaticValue::Zero(_)) => {
+                let mut all_match = true;
+                for field in self.patterns.get_slice(stp.fields) {
+                    let field_value = match value {
+                        StaticValue::Struct(sv) => {
+                            *self.static_values.mem.get_nth(sv.fields, field.field_index as usize)
+                        }
+                        _ => self.static_values.add(StaticValue::Zero(field.field_type_id)),
+                    };
+                    if !self.check_static_pattern_matches(field.pattern, field_value, bindings)? {
+                        all_match = false;
+                        break;
+                    }
+                }
+                all_match
+            }
+            (TypedPattern::PointerNull(_), StaticValue::Zero(_)) => true,
+            (TypedPattern::PointerNull(_), StaticValue::Int(v)) => v.is_zero(),
+            (pattern, value) => self.ice_span(
+                pattern.span_id(),
+                format!(
+                    "Static match: {} pattern against {} value",
+                    pattern.kind_name(),
+                    value.kind_name()
+                ),
+            ),
+        };
+        Ok(matched)
     }
 
     /// A pattern over an uninhabited variant (e.g. `:err e` on result[t, never])

@@ -40,13 +40,10 @@ ns for buffer {
   fn(inline) cloned[t](self: buffer[t]): buffer[t] { self._enlarged-clone(new-count = self.len) }
 
   fn fill[t](self: buffer[t], value: t): empty {
-    if value is {
-      type[u8](byte) -> {
-        self.memset(byte)
-      },
-      type[i8](byte) -> {
-        self.memset(byte.unsigned())
-      },
+    #if types/schema[t] is {
+      :int :u8 -> self.memset(value),
+      :int :i8 -> self.memset(value.unsigned()),
+      :char -> self.memset(value.as-u8()),
       _ -> {
         let i = 0
         while i < self.len {
@@ -200,10 +197,10 @@ ns for buffer {
   }
 
   fn position[t: equals](self: buffer[t], needle: t): ?size {
-    if needle is {
-      type[u8](byte) -> position-byte(self.data-ptr(), self.len, byte),
-      type[i8](byte) -> position-byte(self.data-ptr(), self.len, byte.unsigned()),
-      type[char](c) -> position-byte(self.data-ptr(), self.len, c.as-u8()),
+    #if types/schema[t] is {
+      :int :u8 -> position-byte(self.data-ptr(), self.len, needle),
+      :int :i8 -> position-byte(self.data-ptr(), self.len, needle.unsigned()),
+      :char -> position-byte(self.data-ptr(), self.len, needle.as-u8()),
       _ -> {
         let i = 0: size
         while i < self.len {
@@ -216,24 +213,26 @@ ns for buffer {
   }
 
   fn index-of-buffer[t: equals](self: buffer[t], needle: buffer[t]): ?size {
-    #if types/type-eq[t, u8]() or types/type-eq[t, i8]() or types/type-eq[t, char]() {
-      index-of-bytes(self.data-ptr(), self.len, needle.data-ptr(), needle.len)
-    } else {
-      let k = needle.len
-      if k == 0 return :some 0
-      if k > self.len return :none
-      let i = 0: size
-      while i + k <= self.len {
-        let j = 0: size
-        let matched = true
-        while j < k and matched {
-          if self.[i + j] != needle.[j] { matched = false }
-          j = j + 1
+    #if types/schema[t] is {
+      :int :u8 or :int :i8 or :char ->
+        index-of-bytes(self.data-ptr(), self.len, needle.data-ptr(), needle.len),
+      _ -> {
+        let k = needle.len
+        if k == 0 return :some 0
+        if k > self.len return :none
+        let i = 0: size
+        while i + k <= self.len {
+          let j = 0: size
+          let matched = true
+          while j < k and matched {
+            if self.[i + j] != needle.[j] { matched = false }
+            j = j + 1
+          }
+          if matched return :some i
+          i = i + 1
         }
-        if matched return :some i
-        i = i + 1
+        :none
       }
-      :none
     }
   }
 

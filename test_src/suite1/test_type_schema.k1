@@ -20,7 +20,53 @@ ns type_schema {
     sb.build()
   }
 
+  fn kind[t](): string {
+    #if schema[t] is {
+      :int _ or :float _ -> "scalar",
+      :struct _ -> "struct",
+      :string -> "string",
+      _ -> "other"
+    }
+  }
+
+  fn is-byte[t](): bool {
+    #if schema[t] is { :int :u8 -> true, _ -> false }
+  }
+
+  fn field-count[t](): int {
+    #if schema[t] is { :struct .{ fields } -> fields.len(), _ -> 0 }
+  }
+
+  fn copy-into[t](dst: buffer[t], src: span[t]): string {
+    #if schema[t] is {
+      :int _ or :float _ or :bool or :char -> {
+        mem/copy(dst = dst.data.as[ptr], src = src.buffer.data.as[ptr], count = src.len() * types/stride[t])
+        "memcpy"
+      },
+      _ -> {
+        for src { dst.[it-index] = it }
+        "loop"
+      }
+    }
+  }
+
   fn test() {
+    assert-equals(kind[u8](), "scalar")
+    assert-equals(kind[f64](), "scalar")
+    assert-equals(kind[point3[u8]](), "struct")
+    assert-equals(kind[string](), "string")
+    assert-equals(kind[*i32](), "other")
+    assert(is-byte[u8]())
+    assert(not is-byte[u16]())
+    assert(not is-byte[string]())
+    assert-equals(field-count[point3[u8]](), 3)
+    assert-equals(field-count[u8](), 0)
+    let bytes: buffer[u8] = buffer/filled(4, 0)
+    assert-equals(copy-into(bytes, [1u8, 2, 3, 4]), "memcpy")
+    assert-equals(bytes.as-span(), [1u8, 2, 3, 4])
+    let names: buffer[string] = buffer/filled(2, "")
+    assert-equals(copy-into(names, ["ada", "grace"]), "loop")
+    assert-equals(names.as-span(), ["ada", "grace"])
 
     assert(schema[u8]   is :int :u8)
     assert(schema[u16]  is :int :u16)

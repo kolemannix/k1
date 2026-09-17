@@ -60,17 +60,33 @@ impl TypedProgram {
         if let Err(e) = self.eval_function_body(function_id) {
             self.report(e)
         }
-        match self.get_function(function_id).body_failure {
-            None => Ok(()),
+        let function = self.get_function(function_id);
+        let needs_body = matches!(function.linkage, Linkage::Standard | Linkage::Exported { .. });
+        match function.body_failure {
             Some(_) => {
+                kbail!(self, span, "Function '{}' failed to compile", function.name)
+            }
+            None if needs_body && function.body_block.is_none() => {
                 kbail!(
                     self,
                     span,
-                    "Function '{}' failed to compile",
-                    self.get_function(function_id).name
+                    "Function '{}' has no body",
+                    self.function_id_to_string(function_id, false)
                 )
             }
+            None => Ok(()),
         }
+    }
+
+    pub(super) fn synth_phony_if_generic_pass(
+        &mut self,
+        ctx: EvalExprContext,
+        span: SpanId,
+    ) -> Option<TypedExprId> {
+        if !ctx.is_generic_pass() {
+            return None;
+        }
+        Some(self.synth_phony_expected_type(ctx.expected_type_id, span))
     }
 
     pub fn compile_function_for_exec(
@@ -1011,17 +1027,8 @@ impl TypedProgram {
             );
         }
 
-        // We don't execute statics during the generic pass, since there's no point
-        // 1. we don't know the real types of generics, thus values of things like schemas, etc
-        // 2. There's not really a use-case for it, metaprograms always want to generate
-        //    real code
-        //
-        // So we just return the expected type, or a unit
-        debug!("eval_static_expr ctx.is_generic_pass={}", ctx.is_generic_pass());
-        if ctx.is_generic_pass() {
-            let phony_type = ctx.expected_type_id.unwrap_or(EMPTY_TYPE_ID);
-            let phony_expr = self.synth_phony(phony_type, span);
-            return Ok(StaticExecutionResult::TypedExpr(phony_expr));
+        if let Some(phony) = self.synth_phony_if_generic_pass(ctx, span) {
+            return Ok(StaticExecutionResult::TypedExpr(phony));
         }
 
         let kind = stat.kind;

@@ -1599,10 +1599,9 @@ fn compile_function_body(k1: &mut TypedProgram, function_id: FunctionId) -> K1Re
     } else {
         match f.linkage {
             Linkage::Standard | Linkage::Exported { .. } => {
-                panic!("ir: function should have a body I think")
+                b.k1.ice_span(b.k1.get_function_span(function_id), "ir: function has no body")
             }
-            Linkage::External { .. } => {}
-            Linkage::Intrinsic | Linkage::LlvmIntrinsic(_) => {}
+            Linkage::External { .. } | Linkage::Intrinsic | Linkage::LlvmIntrinsic(_) => {}
         }
     };
 
