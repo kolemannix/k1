@@ -37,7 +37,6 @@ pub(crate) fn inputs_hash_from_settings(
     let flags = [*no_std, *debug, *sanitize, *filc, *optimize, *optimize_ir, cfg!(feature = "lsp")]
         .map(|b| b as u8);
     crate::snap::InputsHash(0).add(&[
-        crate::BUILD_ID.as_bytes(),
         idents.get_string(*src_path).as_bytes(),
         idents.get_string(*home_dir).as_bytes(),
         idents.get_string(*k1_home).as_bytes(),
@@ -51,7 +50,7 @@ pub(crate) fn inputs_hash_from_settings(
 
 impl TypedProgram {
     pub fn snap(&self) -> crate::snap::SnapBytes {
-        let mut w = SnapWriter::new();
+        let mut w = SnapWriter::new(self.inputs_hash);
         self.snap_into(&mut w);
         w.finish()
     }
@@ -217,6 +216,7 @@ impl TypedProgram {
 
     pub fn restore(
         bytes: &[u8],
+        inputs_hash: crate::snap::InputsHash,
         // `config` and `lsp` come from the restoring session
         // lets us preserve settings like chatty, cache, overrides, completion
         config: CompilerConfig,
@@ -226,11 +226,12 @@ impl TypedProgram {
         use crate::typer::trace::{TraceKind, restore_section};
         let clock = crate::clock::Clock::new();
         let ast_start = clock.raw();
-        let mut reader = SnapReader::new(bytes)?;
+        let mut reader = SnapReader::new(bytes, inputs_hash)?;
         let r = &mut reader;
         let ast = ParsedProgram::restore(r);
         let ast_end = clock.raw();
         let mut k1 = TypedProgram::new(ast, config, lsp);
+        k1.inputs_hash = inputs_hash;
         let root = k1.trace_push(TraceKind::SnapRestore, 0, 0);
         if let Some(root) = root {
             k1.trace.frames.get_mut(root).clock_start = load.0;
@@ -352,14 +353,18 @@ impl TypedProgram {
         let frame = self.trace_push(crate::typer::trace::TraceKind::SnapRoundtrip, 0, 0);
         let first = self.snap();
         let now = self.trace.clock.raw();
-        let mut restored =
-            match TypedProgram::restore(&first, self.config, self.lsp.clone(), (now, now)) {
-                Ok(restored) => restored,
-                Err(e) => panic!("snapshot restore failed: {e}"),
-            };
+        let mut restored = match TypedProgram::restore(
+            &first,
+            self.inputs_hash,
+            self.config,
+            self.lsp.clone(),
+            (now, now),
+        ) {
+            Ok(restored) => restored,
+            Err(e) => panic!("snapshot restore failed: {e}"),
+        };
         let second = restored.snap();
         crate::snap::assert_identical(&first, &second, "TypedProgram snapshot roundtrip");
-        restored.inputs_hash = self.inputs_hash;
         restored.restored_module_count = self.restored_module_count;
         std::mem::swap(&mut restored.trace, &mut self.trace);
         std::mem::swap(self, &mut restored);

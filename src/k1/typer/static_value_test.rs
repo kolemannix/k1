@@ -240,12 +240,12 @@ fn test_raw_container() {
 fn test_raw_container_snapshot() {
     let mut system = StaticValuePool::make();
     let a = raw_u16_span(&mut system, TYPE1, &[7, 8, 9]);
-    let mut w = crate::snap::SnapWriter::new();
+    let mut w = crate::snap::SnapWriter::new(crate::snap::InputsHash(0));
     system.snap(&mut w);
     let bytes = w.finish();
 
     let mut restored = StaticValuePool::make();
-    let mut r = crate::snap::SnapReader::new(&bytes).unwrap();
+    let mut r = crate::snap::SnapReader::new(&bytes, crate::snap::InputsHash(0)).unwrap();
     restored.restore(&mut r);
     assert_eq!(restored.get(a).as_raw_container().unwrap().len(), 3);
     let again = raw_u16_span(&mut restored, TYPE1, &[7, 8, 9]);

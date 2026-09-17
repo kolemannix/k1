@@ -3166,21 +3166,21 @@ impl TypedProgram {
                 };
                 self.inputs_hash = module_hash;
                 if self.config.cache
+                    && !(primary_module && module_id == added_module_id)
                     && self.lsp.source_overrides.is_empty()
                     && !self.lsp.completion
                     && self.megarepl.is_none()
-                    && !crate::snap::cache_exists_entry(self.cache_dir(), module_hash)
                 {
-                    let cache_dir = self.cache_dir().to_path_buf();
+                    let settings =
+                        snapshot::inputs_hash_from_settings(&self.ast.idents, &self.config);
+                    let slot = self.completed_module_count as usize - 1;
+                    let path = crate::snap::cache_entry_path(self.cache_dir(), slot, settings);
                     let frame = self.trace_push(TraceKind::SnapStore, module_id.as_u32(), 0);
-                    let stored = match crate::snap::cache_store_begin(&cache_dir, module_hash) {
-                        Ok(mut w) => {
+                    let stored =
+                        crate::snap::cache_store_begin(&path, module_hash).and_then(|mut w| {
                             self.snap_into(&mut w);
-                            crate::snap::cache_store_finish(&cache_dir, module_hash, w)
-                        }
-                        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-                        Err(e) => Err(e),
-                    };
+                            crate::snap::cache_store_finish(&path, w)
+                        });
                     self.trace_pop(frame);
                     if let Err(e) = stored {
                         let warning = self.make_warning(

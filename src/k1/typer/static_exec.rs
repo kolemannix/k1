@@ -991,6 +991,12 @@ impl TypedProgram {
                     &call.name
                 );
             }
+
+            self.emit_ls_entity(
+                call.name.name_span,
+                LsEntityKind::Function { function_id, is_defn: false },
+            );
+
             let mut macro_args: SV8<_> = smallvec![];
             for parsed_arg in self.ast.mem.getn(call.args) {
                 macro_args.push(*parsed_arg)

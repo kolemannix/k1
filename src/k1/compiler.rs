@@ -1386,16 +1386,22 @@ pub fn compile_program_ext(
             }
 
             // The snapshot with the most modules in it is at the end
+            let settings = typer::snapshot::inputs_hash_from_settings(&ast.idents, &config);
             let clock = crate::clock::Clock::new();
             for (i, hash) in input_hashes_by_module.iter().enumerate().rev() {
-                // If we have a hit, the file exists by this name, and we restore
                 let load_start = clock.raw();
-                let Some(bytes) = crate::snap::cache_load(cache_dir, *hash) else { continue };
+                let path = crate::snap::cache_entry_path(cache_dir, i, settings);
+                let Some(bytes) = crate::snap::cache_load(&path) else { continue };
                 let load_end = clock.raw();
                 let module_count = i as u32 + 1;
-                match TypedProgram::restore(&bytes, config, lsp.clone(), (load_start, load_end)) {
+                match TypedProgram::restore(
+                    &bytes,
+                    *hash,
+                    config,
+                    lsp.clone(),
+                    (load_start, load_end),
+                ) {
                     Ok(mut restored) => {
-                        restored.inputs_hash = *hash;
                         restored.restored_module_count = module_count;
                         let msg = format!(
                             "restored {module_count} modules from cache ({:.1}mb)",
@@ -2309,11 +2315,22 @@ mod compiler_test {
         assert_eq!(fixed.restored_module_count, 2, "the fixed app restores core, lib");
 
         let warm = compile_program(&args).ok().expect("warm compile must succeed");
-        assert_eq!(warm.restored_module_count, 3, "unchanged input restores core, lib, app");
+        assert_eq!(
+            warm.restored_module_count, 2,
+            "unchanged input restores core, lib; the app is never snapshotted"
+        );
 
-        fs::write(&main, "fn main(): i32 { lib/one() + 1 }\n").unwrap();
-        let edited = compile_program(&args).ok().expect("edited compile must succeed");
-        assert_eq!(edited.restored_module_count, 2, "an edited app restores core, lib");
+        for body in ["lib/one() + 1", "lib/one() + 2"] {
+            fs::write(&main, format!("fn main(): i32 {{ {body} }}\n")).unwrap();
+            let edited = compile_program(&args).ok().expect("edited compile must succeed");
+            assert_eq!(edited.restored_module_count, 2, "an edited app restores core, lib");
+            assert_eq!(snapshot_count(&cache_dir), stored, "editing the app stores nothing");
+        }
+
+        fs::write(lib.join("lib.k1"), "fn one(): i32 { 2 }\n").unwrap();
+        let dep_edited = compile_program(&args).ok().expect("dep-edited compile must succeed");
+        assert_eq!(dep_edited.restored_module_count, 1, "an edited dep restores only core");
+        assert_eq!(snapshot_count(&cache_dir), stored, "the dep's entry is replaced, not added");
 
         let _ = fs::remove_dir_all(&dir);
     }
@@ -2332,7 +2349,7 @@ mod compiler_test {
         assert_eq!(cold.restored_module_count, 0, "first compile has nothing to restore");
 
         let warm = compile_program(&args).ok().expect("warm compile must succeed");
-        assert_eq!(warm.restored_module_count, 2, "unchanged input restores core, app");
+        assert_eq!(warm.restored_module_count, 1, "unchanged input restores only core");
 
         fs::write(&app, "fn main(): i32 {\n  println(\"v2\")\n  0\n}\n").unwrap();
         let edited = compile_program(&args).ok().expect("edited compile must succeed");
