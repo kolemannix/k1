@@ -2036,6 +2036,15 @@ fn record_unit_timings(k1: &mut TypedProgram, root: Option<FrameId>, timings: &[
             t.index as u32,
             Some(unit),
             t.clock_generated,
+            t.clock_passed,
+            0,
+            0,
+        );
+        k1.trace.record(
+            TraceKind::LlvmEmit,
+            t.index as u32,
+            Some(unit),
+            t.clock_passed,
             t.clock_end,
             0,
             0,
@@ -2105,7 +2114,10 @@ fn write_unit_artifacts(
                 .map_err(|e| anyhow::anyhow!("Failed to write {ll_path}: {e}"))?;
         }
         let path = format!("{out_dir}/{module_name}.o");
-        codegen_llvm::emit_object(&merged, &machine, &path).map_err(|e| report_cg(k1, e))?;
+        let emit_frame = k1.trace_push(TraceKind::LlvmEmit, 0, 0);
+        let emitted = codegen_llvm::emit_object(&merged, &machine, &path);
+        k1.trace_pop(emit_frame);
+        emitted.map_err(|e| report_cg(k1, e))?;
         return Ok(vec![path]);
     }
 

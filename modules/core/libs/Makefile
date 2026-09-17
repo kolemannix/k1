@@ -3,7 +3,7 @@ DYLIB_EXT := $(if $(filter Darwin, $(OS)),dylib,so)
 # Keep in sync with MAC_SDK_VERSION in src/k1/compiler.rs
 MINVER := $(if $(filter Darwin, $(OS)),-mmacosx-version-min=15.0.0,)
 
-HEADERS := stb_sprintf.h ffc.h
+HEADERS := ffc.h $(wildcard ryu/*)
 
 BT_DIR := vendor/libbacktrace
 BT_SRCS := atomic.c backtrace.c dwarf.c elf.c fileline.c mmap.c mmapio.c posix.c print.c simple.c sort.c state.c

@@ -571,22 +571,27 @@ ns(lib("k1rt")) k1rt {
   fn(extern("_k1_parse_f64")) parse-f64()
 }
 
+ns float-impl {
+  fn write-output[w: writer](w, buf: span[u8], written-len: i32, places: i32) {
+    if written-len <= 0 crash("snprintf float returned $written-len")
+    let len = written-len.widen[size]
+    if len >= buf.len() crash("float format: $places places needs $len bytes, cap is ${buf.len()}")
+    w.write-bytes(buf.slice(0, len))
+  }
+}
+
 ns for f64 {
-  let NAN: f64 = builtin
-  let INFINITY: f64 = builtin
-  let NEG_INFINITY: f64 = builtin
+  let nan: f64 = builtin
+  let inf: f64 = builtin
+  let neg-inf: f64 = builtin
 
   fn abs(self: f64): f64 {
     mem/bitcast[u64, f64](mem/bitcast[f64, u64](self).bit-and(0x7FFFFFFFFFFFFFFF))
   }
 
   fn format[w: writer](f: f64, w, places: i32) {
-    let stack-buf = array/zeroed[u8, 512]()
-    let cap = stack-buf.as-span().len()
-    let written-len: size = k1rt/snprintf_f64(stack-buf.data-ptr(), cap.unsigned(), f, places).widen[size]
-    if written-len <= 0 crash("snprintf_f64 returned $written-len")
-    if written-len >= cap crash("f64/format: $places places needs $written-len bytes, cap is $cap")
-    w.write-bytes(stack-buf.as-span().slice(0, written-len))
+    let buf = array/zeroed[u8, 512]
+    float-impl/write-output(w, buf.as-span(), k1rt/snprintf_f64(buf.data-ptr(), 512, f, places), places)
   }
 
   fn from-string(s: string): result[f64, string] {
@@ -616,9 +621,14 @@ ns for f64 {
 }
 
 ns for f32 {
-  let NAN: f32 = builtin
-  let INFINITY: f32 = builtin
-  let NEG_INFINITY: f32 = builtin
+  let nan: f32 = builtin
+  let inf: f32 = builtin
+  let neg-inf: f32 = builtin
+
+  fn format[w: writer](f: f32, w, places: i32) {
+    let buf = array/zeroed[u8, 512]
+    float-impl/write-output(w, buf.as-span(), k1rt/snprintf_f32(buf.data-ptr(), 512, f, places), places)
+  }
 
   // See f64/total-order-key
   fn total-order-key(self: f32): i32 {
@@ -714,7 +724,7 @@ impl one for i64 { fn one(): i64 { 1   } }
 
 impl print for f32 {
   fn print-to[w: writer](self: f32, w) {
-    f64/format(self.widen[f64], w, places = -1)
+    f32/format(self, w, places = -1)
   }
 }
 

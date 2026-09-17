@@ -12,7 +12,7 @@ fn test() {
   w.write("hello $world ${}", 42)
   assert-equals(w.build-tmp(), "hello Budapest -- hello Budapest 42")
   assert-equals("true", "${}".fmt(true))
-  assert-equals("-3.140000", "${}".fmt(-3.14))
+  assert-equals("-3.14", "${}".fmt(-3.14))
   assert-equals("-3", "${}".fmt(-3i8))
 
   assert(test-compile("${}".fmt(1, 1)).is-some())
@@ -25,7 +25,7 @@ fn test() {
   assert-equals(s, "hello Budapest 2021-10-3")
 
   bases()
-  wide-floats()
+  floats()
 }
 
 fn to-base(value: u64, base: u64): string {
@@ -44,13 +44,52 @@ fn bases() {
   assert-equals(to-base(u64/max-value, 10), "18446744073709551615")
 }
 
-fn wide-floats() {
-  let big: f64 = 1.0e300
-  let text = "$big"
-  assert-equals(text.len(), 308)
-  assert(text.starts-with("1"))
-  assert(text.ends-with(".000000"))
+fn floats() {
+  assert-equals("${0.0: f64}", "0.0")
+  assert-equals("${-0.0: f64}", "-0.0")
+  assert-equals("${1.0: f64}", "1.0")
+  assert-equals("${100.0: f64}", "100.0")
+  assert-equals("${0.1: f64}", "0.1")
+  assert-equals("${123456.789: f64}", "123456.789")
+  assert-equals("${1.0 / 3.0}", "0.3333333333333333")
+  assert-equals("${0.0001: f64}", "0.0001")
+  assert-equals("${0.00001: f64}", "1.0e-5")
+  assert-equals("${1.0e15}", "1000000000000000.0")
+  assert-equals("${1.0e16}", "1.0e16")
+  assert-equals("${1.0e300}", "1.0e300")
+  assert-equals("${-2.5e-10}", "-2.5e-10")
+  assert-equals("${5.0e-324}", "5.0e-324")
+  assert-equals("${1.7976931348623157e308}", "1.7976931348623157e308")
+  assert-equals("${f64/nan}", "nan")
+  assert-equals("${f64/inf}", "inf")
+  assert-equals("${f64/neg-inf}", "-inf")
 
-  let wide: f32 = 3.0e38
-  assert-equals("$wide".len(), 46)
+  assert-equals("${0.1: f32}", "0.1")
+  assert-equals("${(0.1: f32).widen[f64]}", "0.10000000149011612")
+  assert-equals("${3.14: f32}", "3.14")
+  assert-equals("${(1.0: f32) / 3.0}", "0.33333334")
+  assert-equals("${3.0e38: f32}", "3.0e38")
+  assert-equals("${1.0e-45: f32}", "1.0e-45")
+  assert-equals("${f32/nan}", "nan")
+  assert-equals("${f32/neg-inf}", "-inf")
+
+  assert-equals(places(2.675, 2), "2.67")
+  assert-equals(places(2.5, 0), "2")
+  assert-equals(places(1.0e300, 1).len(), 303)
+  assert-equals(places(-0.0, 3), "-0.000")
+  assert-equals(places(f64/inf, 1), "inf")
+  assert-equals(places32(3.14159, 3), "3.142")
+  assert-equals(places32(0.1, 20), "0.10000000149011611938")
+}
+
+fn places(f: f64, places: i32): string {
+  let w = string-builder/new()
+  f64/format(f, w.&, places)
+  w.build()
+}
+
+fn places32(f: f32, places: i32): string {
+  let w = string-builder/new()
+  f32/format(f, w.&, places)
+  w.build()
 }

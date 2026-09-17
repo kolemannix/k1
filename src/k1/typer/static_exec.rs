@@ -543,12 +543,12 @@ impl TypedProgram {
     ) -> K1Result<StaticValueId> {
         let name = self.ident_str(defn_name);
         let float = match (name, expected_type_id) {
-            ("NAN", F32_TYPE_ID) => Some(TypedFloatValue::F32(f32::NAN)),
-            ("INFINITY", F32_TYPE_ID) => Some(TypedFloatValue::F32(f32::INFINITY)),
-            ("NEG_INFINITY", F32_TYPE_ID) => Some(TypedFloatValue::F32(f32::NEG_INFINITY)),
-            ("NAN", F64_TYPE_ID) => Some(TypedFloatValue::F64(f64::NAN)),
-            ("INFINITY", F64_TYPE_ID) => Some(TypedFloatValue::F64(f64::INFINITY)),
-            ("NEG_INFINITY", F64_TYPE_ID) => Some(TypedFloatValue::F64(f64::NEG_INFINITY)),
+            ("nan", F32_TYPE_ID) => Some(TypedFloatValue::F32(f32::NAN)),
+            ("inf", F32_TYPE_ID) => Some(TypedFloatValue::F32(f32::INFINITY)),
+            ("neg-inf", F32_TYPE_ID) => Some(TypedFloatValue::F32(f32::NEG_INFINITY)),
+            ("nan", F64_TYPE_ID) => Some(TypedFloatValue::F64(f64::NAN)),
+            ("inf", F64_TYPE_ID) => Some(TypedFloatValue::F64(f64::INFINITY)),
+            ("neg-inf", F64_TYPE_ID) => Some(TypedFloatValue::F64(f64::NEG_INFINITY)),
             _ => None,
         };
         if let Some(float) = float {

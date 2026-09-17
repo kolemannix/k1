@@ -423,7 +423,7 @@ impl TypedProgram {
                     format!("unit {key}")
                 }
             }
-            TraceKind::LlvmPasses => match frame.parent_frame {
+            TraceKind::LlvmPasses | TraceKind::LlvmEmit => match frame.parent_frame {
                 Some(parent) if self.trace.frames.get(parent).kind == TraceKind::Codegen => {
                     format!("unit {key}")
                 }

@@ -38,8 +38,8 @@ pointer-free predicate - pod/serializable?
 ## [x] Ability objects; dyn[<ability expr>]
 
 ## grab bag list mid2026
-- [ ] zeroing after alloc should not be necessary; either buffer/zeroed or ensure all k1 allocations always zero, even arena push (does arena.reset() always clear, or is there a special path for 'alloc-no-ensure-zeroed?')
-- [ ] 
+- [x] zeroing after alloc should not be necessary; either buffer/zeroed or ensure all k1 allocations always zero, even arena push (does arena.reset() always clear, or is there a special path for 'alloc-no-ensure-zeroed?')
+- [x] 
     let app = userData.ref[app-state]
     //                     ^ go definition here goes to the 'ref' call
 - [ ] `self` sugar: `*self` as well as bare `self` inside an `ns for t`

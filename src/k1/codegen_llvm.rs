@@ -333,6 +333,7 @@ pub struct UnitTiming {
     pub fn_count: usize,
     pub clock_start: u64,
     pub clock_generated: u64,
+    pub clock_passed: u64,
     pub clock_end: u64,
 }
 
@@ -498,7 +499,7 @@ pub fn run_passes(module: &LlvmModule, machine: &TargetMachine, pipeline: Pipeli
         Pipeline::ThinLtoPreLink => "thinlto-pre-link<O3>",
         // Default builds, not optimized but not debug
         Pipeline::Dev => {
-            "function(mem2reg,instcombine<no-verify-fixpoint;max-iterations=1>,simplifycfg),globaldce,mergefunc"
+            "function(mem2reg,instcombine<no-verify-fixpoint;max-iterations=1>,simplifycfg),mergefunc"
         }
     };
     module.run_passes(text, machine, options).unwrap();
@@ -1199,16 +1200,21 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             cg.codegen_program(roots)?;
                             let clock_generated = clock.raw();
                             cg.finalize_debug_info();
-                            cg.verify()?;
+                            if cfg!(debug_assertions) {
+                                cg.verify()?;
+                            }
+                            let clock_passed;
                             let artifact = match output {
                                 UnitOutput::Object(pipeline) => {
                                     cg.run_passes(*pipeline);
+                                    clock_passed = clock.raw();
                                     let path = object_path(index);
                                     cg.emit_object_file(&path)?;
                                     UnitArtifact::Object(path)
                                 }
                                 UnitOutput::Bitcode(pipeline) => {
                                     cg.run_passes(*pipeline);
+                                    clock_passed = clock.raw();
                                     let bytes = if *pipeline == Pipeline::ThinLtoPreLink {
                                         cg.thinlto_bitcode()
                                     } else {
@@ -1226,6 +1232,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 fn_count: cg.owned.len(),
                                 clock_start,
                                 clock_generated,
+                                clock_passed,
                                 clock_end: clock.raw(),
                             });
                             artifacts.lock().unwrap()[index] = Some(artifact);

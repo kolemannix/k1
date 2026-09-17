@@ -1073,6 +1073,7 @@ pub struct TypeInfo {
     pub type_parameter_count: u32,
     pub unresolved_static_count: u32,
     pub is_zero_safe: bool,
+    pub is_inhabited: bool,
 }
 
 impl TypeInfo {
@@ -1081,6 +1082,7 @@ impl TypeInfo {
         type_parameter_count: 0,
         unresolved_static_count: 0,
         is_zero_safe: true,
+        is_inhabited: true,
     };
 
     pub fn type_param() -> TypeInfo {
@@ -1089,6 +1091,7 @@ impl TypeInfo {
             type_parameter_count: 1,
             unresolved_static_count: 0,
             is_zero_safe: true,
+            is_inhabited: true,
         }
     }
 
@@ -1098,6 +1101,7 @@ impl TypeInfo {
             type_parameter_count: 0,
             unresolved_static_count: 0,
             is_zero_safe: true,
+            is_inhabited: true,
         }
     }
 
@@ -1113,6 +1117,7 @@ impl TypeInfo {
             type_parameter_count: self.type_parameter_count + other.type_parameter_count,
             unresolved_static_count: self.unresolved_static_count + other.unresolved_static_count,
             is_zero_safe: self.is_zero_safe && other.is_zero_safe,
+            is_inhabited: self.is_inhabited && other.is_inhabited,
         }
     }
 }
@@ -1304,7 +1309,6 @@ impl ScalarType {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PhysicalTypeResult {
     No,
-    Never,
     Infinite,
     Yes(PhysicalType),
 }
@@ -1313,7 +1317,6 @@ impl PhysicalTypeResult {
     pub fn unwrap(self) -> PhysicalType {
         match self {
             PhysicalTypeResult::No => panic!("Called unwrap on PhysicalTypeResult::No"),
-            PhysicalTypeResult::Never => panic!("Called unwrap on PhysicalTypeResult::Never"),
             PhysicalTypeResult::Infinite => panic!("Called unwrap on PhysicalTypeResult::Infinite"),
             PhysicalTypeResult::Yes(pt) => pt,
         }
@@ -1986,13 +1989,14 @@ impl TypedProgram {
             }
             Type::Reference(refer) => {
                 let mut counts = *self.type_variable_counts.get(refer.inner_type);
-                // References are nullable
                 counts.is_zero_safe = true;
+                counts.is_inhabited = true;
                 counts
             }
             Type::Sum(e) => {
                 let mut result = EMPTY;
                 let mut has_zero_variant = false;
+                let mut has_inhabited_variant = false;
                 for v in self.mem.getn(e.variants) {
                     let valid_zero_variant = if v.tag_value.is_zero() {
                         if let Some(payload) = v.payload {
@@ -2008,11 +2012,17 @@ impl TypedProgram {
                         has_zero_variant = true;
                     }
 
-                    if let Some(payload) = v.payload {
-                        result = result.add(self.type_variable_counts.get(payload));
+                    match v.payload {
+                        None => has_inhabited_variant = true,
+                        Some(payload) => {
+                            let payload_info = self.type_variable_counts.get(payload);
+                            has_inhabited_variant |= payload_info.is_inhabited;
+                            result = result.add(payload_info);
+                        }
                     }
                 }
                 result.is_zero_safe = has_zero_variant;
+                result.is_inhabited = has_inhabited_variant;
                 result
             }
             Type::Opaque(_) => EMPTY,
@@ -2027,7 +2037,7 @@ impl TypedProgram {
                 result.is_zero_safe = has_zero_member;
                 result
             }
-            Type::Never => EMPTY,
+            Type::Never => TypeInfo { is_inhabited: false, ..EMPTY },
             // The real answer here would be, all the type variables on the RHS that aren't one of
             // the params. In other words, all FREE type variables
             Type::Generic(_gen) => EMPTY,
@@ -2038,28 +2048,35 @@ impl TypedProgram {
                 }
                 result = result.add(self.type_variable_counts.get(fun.return_type));
                 result.is_zero_safe = true;
+                result.is_inhabited = true;
                 result
             }
             Type::FunctionPointer(fp) => {
                 let mut result = *self.type_variable_counts.get(fp.function_type_id);
                 result.is_zero_safe = true;
+                result.is_inhabited = true;
                 result
             }
             Type::FunctionReference(fr) => {
                 let mut result = *self.type_variable_counts.get(fr.function_type);
                 result.is_zero_safe = true;
+                result.is_inhabited = true;
                 result
             }
             Type::Lambda(lambda_id) => {
                 let lambda = self.lambda_types.get(*lambda_id);
-                self.type_variable_counts
+                let mut result = self
+                    .type_variable_counts
                     .get(lambda.function_type)
-                    .add(self.type_variable_counts.get(lambda.env_type))
+                    .add(self.type_variable_counts.get(lambda.env_type));
+                result.is_inhabited = true;
+                result
             }
             // But a lambda object is generic if its function is generic
             Type::LambdaObject(co) => {
                 let mut result = *self.type_variable_counts.get(co.function_type);
                 result.is_zero_safe = false;
+                result.is_inhabited = true;
                 result
             }
             // An ability object is generic if any of its impl arguments are:
@@ -2069,6 +2086,7 @@ impl TypedProgram {
                     result = result.add(self.type_variable_counts.get(*arg));
                 }
                 result.is_zero_safe = false;
+                result.is_inhabited = true;
                 result
             }
             Type::StaticValue(svt) => {
@@ -2078,12 +2096,15 @@ impl TypedProgram {
                         type_parameter_count: 0,
                         unresolved_static_count: 1,
                         is_zero_safe: true,
+                        is_inhabited: true,
                     }
                 } else {
                     EMPTY
                 };
                 let inner = self.type_variable_counts.get(svt.family_type_id);
-                this.add(inner)
+                let mut result = this.add(inner);
+                result.is_inhabited = true;
+                result
             }
             Type::Array(arr) => {
                 // Arrays contain 2 types, the element type and the size type,
@@ -2093,6 +2114,8 @@ impl TypedProgram {
                     .get(arr.element_type)
                     .add(self.type_variable_counts.get(arr.size_type));
                 result.is_zero_safe = true;
+                result.is_inhabited = self.type_variable_counts.get(arr.element_type).is_inhabited
+                    || self.get_type_as_i64(arr.size_type) == Some(0);
                 result
             }
             Type::Vector(vec) => self
@@ -2129,6 +2152,9 @@ impl TypedProgram {
     }
 
     pub fn compute_physical_type(&mut self, type_id: TypeId) -> PhysicalTypeResult {
+        if !self.type_variable_counts.get(type_id).is_inhabited {
+            return PhysicalTypeResult::No;
+        }
         match self.types.get(type_id) {
             Type::Char => PhysicalTypeResult::Yes(PhysicalType::scalar(ScalarType::Char)),
             Type::Bool => PhysicalTypeResult::Yes(PhysicalType::scalar(ScalarType::Bool)),
@@ -2157,7 +2183,6 @@ impl TypedProgram {
                     Some(0) => PhysicalTypeResult::Yes(PhysicalType::EMPTY),
                     Some(len) => match self.get_physical_type(array.element_type) {
                         PhysicalTypeResult::No => PhysicalTypeResult::No,
-                        PhysicalTypeResult::Never => PhysicalTypeResult::Never,
                         PhysicalTypeResult::Infinite => PhysicalTypeResult::No,
                         PhysicalTypeResult::Yes(element_pt) => {
                             let elem_layout = self.get_pt_layout(element_pt);
@@ -2213,7 +2238,6 @@ impl TypedProgram {
                     for field in self.mem.getn(s_fields) {
                         match self.get_physical_type(field.type_id) {
                             PhysicalTypeResult::No => return PhysicalTypeResult::No,
-                            PhysicalTypeResult::Never => return PhysicalTypeResult::Never,
                             PhysicalTypeResult::Infinite => return PhysicalTypeResult::Infinite,
                             PhysicalTypeResult::Yes(field_pt) => {
                                 let field_layout = self.get_pt_layout(field_pt);
@@ -2254,7 +2278,6 @@ impl TypedProgram {
                     for field in self.mem.getn(u_fields) {
                         match self.get_physical_type(field.type_id) {
                             PhysicalTypeResult::No => return PhysicalTypeResult::No,
-                            PhysicalTypeResult::Never => return PhysicalTypeResult::Never,
                             PhysicalTypeResult::Infinite => return PhysicalTypeResult::Infinite,
                             PhysicalTypeResult::Yes(field_pt) => {
                                 members.push(UnionMember { name: field.name, ty: field_pt });
@@ -2280,12 +2303,11 @@ impl TypedProgram {
 
                 for v in self.mem.getn(e.variants) {
                     if let Some(payload) = &v.payload {
+                        if !self.type_variable_counts.get(*payload).is_inhabited {
+                            continue;
+                        }
                         match self.get_physical_type(*payload) {
                             PhysicalTypeResult::No => return PhysicalTypeResult::No,
-                            PhysicalTypeResult::Never => {
-                                // We simply skip this variant!
-                                debug!("I am skipping this sum variant")
-                            }
                             PhysicalTypeResult::Infinite => {
                                 // We can never figure out a size large enough to hold all variants,
                                 // since one variant is infinitely sized
@@ -2371,8 +2393,8 @@ impl TypedProgram {
             Type::StaticValue(_) | Type::FunctionReference(_) => {
                 PhysicalTypeResult::Yes(PhysicalType::EMPTY)
             }
-            Type::Never => PhysicalTypeResult::Never,
-            Type::Function(_)
+            Type::Never
+            | Type::Function(_)
             | Type::Generic(_)
             | Type::TypeParameter(_)
             | Type::FunctionTypeParameter(_)
@@ -2387,7 +2409,6 @@ impl TypedProgram {
     ) -> PhysicalTypeResult {
         match self.get_physical_type(other) {
             PhysicalTypeResult::No => PhysicalTypeResult::No,
-            PhysicalTypeResult::Never => PhysicalTypeResult::Never,
             PhysicalTypeResult::Infinite => PhysicalTypeResult::Infinite,
             orig @ PhysicalTypeResult::Yes(other_pt) => match other_pt.as_enum() {
                 PhysicalTypeEnum::Empty => orig,
@@ -2493,7 +2514,6 @@ impl TypedProgram {
     pub fn get_layout_computed(&self, type_id: TypeId) -> Option<Layout> {
         match self.get_physical_type_computed(type_id) {
             PhysicalTypeResult::No => None,
-            PhysicalTypeResult::Never => None,
             PhysicalTypeResult::Infinite => None,
             PhysicalTypeResult::Yes(pt) => Some(self.get_pt_layout(pt)),
         }
@@ -2513,7 +2533,6 @@ impl TypedProgram {
         match self.phys_types.get(&type_id) {
             Some(maybe_pt) => match maybe_pt {
                 PhysicalTypeResult::No => None,
-                PhysicalTypeResult::Never => None,
                 PhysicalTypeResult::Infinite => None,
                 PhysicalTypeResult::Yes(pt) => Some(self.get_pt_layout(*pt)),
             },
@@ -2524,7 +2543,6 @@ impl TypedProgram {
     pub fn get_layout(&mut self, type_id: TypeId) -> Option<Layout> {
         match self.get_physical_type(type_id) {
             PhysicalTypeResult::No => None,
-            PhysicalTypeResult::Never => None,
             PhysicalTypeResult::Infinite => None,
             PhysicalTypeResult::Yes(pt) => Some(self.get_pt_layout(pt)),
         }

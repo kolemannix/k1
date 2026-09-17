@@ -3,26 +3,114 @@
  * All rights reserved.
  */
 
-#define STB_SPRINTF_IMPLEMENTATION
-#include "stb_sprintf.h"
+#define NDEBUG
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
-int _k1_snprintf_f64(char *buf, size_t size, double arg, int32_t places) {
-  if (places == -1)
-    return stbsp_snprintf(buf, size, "%f", arg);
-  else
-    return stbsp_snprintf(buf, size, "%.*f", places, arg);
-}
-int _k1_snprintf_f32(char *buf, size_t size, float arg, int32_t places) {
-  if (places == -1)
-    return stbsp_snprintf(buf, size, "%f", arg);
-  else
-    return stbsp_snprintf(buf, size, "%.*f", places, arg);
-}
-
 #define FFC_IMPL
 #include "ffc.h"
+
+#define RYU_OPTIMIZE_SIZE
+#ifdef __wasm__
+#define RYU_ONLY_64_BIT_OPS
+#endif
+#include "ryu/d2s.c"
+#include "ryu/f2s.c"
+
+static int put_str(char *out, const char *s) {
+  int n = 0;
+  while ((out[n] = s[n]))
+    n++;
+  return n;
+}
+
+static int put_uint(char *out, uint64_t v) {
+  int n = 0;
+  for (uint64_t t = v; t != 0; t /= 10)
+    n++;
+  for (int i = n; i-- > 0; v /= 10)
+    out[i] = (char)('0' + v % 10);
+  return n;
+}
+
+static int put_digits(char *out, const char *digits, int n, int point) {
+  int o = 0;
+  if (point <= 0) {
+    out[o++] = '0';
+    out[o++] = '.';
+    for (int i = point; i < 0; i++)
+      out[o++] = '0';
+    for (int i = 0; i < n; i++)
+      out[o++] = digits[i];
+    return o;
+  }
+  for (int i = 0; i < point; i++)
+    out[o++] = i < n ? digits[i] : '0';
+  out[o++] = '.';
+  if (point >= n)
+    out[o++] = '0';
+  for (int i = point; i < n; i++)
+    out[o++] = digits[i];
+  return o;
+}
+
+static int put_shortest(char *out, bool neg, uint64_t mantissa, int32_t exp10) {
+  char digits[20];
+  int n = put_uint(digits, mantissa);
+  int o = 0;
+  if (neg)
+    out[o++] = '-';
+  int32_t x = exp10 + n - 1;
+  if (x >= -4 && x < 16)
+    return o + put_digits(out + o, digits, n, x + 1);
+  o += put_digits(out + o, digits, n, 1);
+  out[o++] = 'e';
+  if (x < 0) {
+    out[o++] = '-';
+    x = -x;
+  }
+  return o + put_uint(out + o, (uint64_t)x);
+}
+
+static int shortest_f64(char *out, double d) {
+  uint64_t bits = double_to_bits(d);
+  bool neg = bits >> 63;
+  uint64_t m = bits & ((1ull << 52) - 1);
+  uint32_t e = (bits >> 52) & 0x7FF;
+  if (e == 0x7FF)
+    return put_str(out, m ? "nan" : neg ? "-inf" : "inf");
+  if (e == 0 && m == 0)
+    return put_str(out, neg ? "-0.0" : "0.0");
+  floating_decimal_64 v;
+  if (!d2d_small_int(m, e, &v))
+    v = d2d(m, e);
+  return put_shortest(out, neg, v.mantissa, v.exponent);
+}
+
+static int shortest_f32(char *out, float f) {
+  uint32_t bits = float_to_bits(f);
+  bool neg = bits >> 31;
+  uint32_t m = bits & ((1u << 23) - 1);
+  uint32_t e = (bits >> 23) & 0xFF;
+  if (e == 0xFF)
+    return put_str(out, m ? "nan" : neg ? "-inf" : "inf");
+  if (e == 0 && m == 0)
+    return put_str(out, neg ? "-0.0" : "0.0");
+  floating_decimal_32 v = f2d(m, e);
+  return put_shortest(out, neg, v.mantissa, v.exponent);
+}
+
+int _k1_snprintf_f64(char *buf, size_t size, double arg, int32_t places) {
+  if (places != -1)
+    return (int)ffc_format_double_fixed(buf, size, arg, places);
+  return size < 32 ? -1 : shortest_f64(buf, arg);
+}
+int _k1_snprintf_f32(char *buf, size_t size, float arg, int32_t places) {
+  if (places != -1)
+    return (int)ffc_format_double_fixed(buf, size, arg, places);
+  return size < 32 ? -1 : shortest_f32(buf, arg);
+}
 
 /* wasm and no-crt link no libc; ffreestanding keeps clang from converting
  * these loops back into themselves! */

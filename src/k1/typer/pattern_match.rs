@@ -133,7 +133,7 @@ impl TypedProgram {
         let query_cells = self.tmp.getn(query);
         if matrix.rows == 0 && query_cells.iter().all(|cell| matches!(cell, MatchCell::Any)) {
             let column_types = self.tmp.getn(columns);
-            if column_types.iter().all(|type_id| self.match_type_is_inhabited(*type_id)) {
+            if column_types.iter().all(|type_id| self.get_type_variable_counts(*type_id).is_inhabited) {
                 let mut witnesses = self.tmp.new_list(column_types.len() as u32);
                 for type_id in column_types {
                     witnesses.push(self.add_match_witness(
@@ -194,8 +194,12 @@ impl TypedProgram {
                 }
                 _ => self.match_useful_ctor(matrix, query, columns, MatchCtor::Struct),
             },
-            Type::Reference(_) => {
-                self.match_useful_ctor(matrix, query, columns, MatchCtor::Reference)
+            Type::Reference(refer) => {
+                if self.get_type_variable_counts(refer.inner_type).is_inhabited {
+                    self.match_useful_ctor(matrix, query, columns, MatchCtor::Reference)
+                } else {
+                    self.match_useful_open(matrix, query, columns, type_id)
+                }
             }
             Type::Never | Type::Function(_) => None,
             _ => self.match_useful_open(matrix, query, columns, type_id),
@@ -449,46 +453,6 @@ impl TypedProgram {
         children: TmpSlice<MatchWitnessId>,
     ) -> MatchWitnessId {
         self.tmp.push_h(MatchWitness { type_id, kind, children })
-    }
-
-    fn match_type_is_inhabited(&mut self, type_id: TypeId) -> bool {
-        let mut ancestors = self.tmp.new_list(16);
-        self.match_type_is_inhabited_rec(type_id, &mut ancestors)
-    }
-
-    fn match_type_is_inhabited_rec(
-        &mut self,
-        type_id: TypeId,
-        ancestors: &mut List<TypeId, MemTmp>,
-    ) -> bool {
-        if type_id == self.builtin_types.string() || ancestors.contains(&type_id) {
-            return true;
-        }
-        ancestors.push_grow(&mut self.tmp, type_id);
-        let inhabited = match *self.types.get(type_id) {
-            Type::Never | Type::Function(_) => false,
-            Type::Struct(struc) => self
-                .mem
-                .getn(struc.fields)
-                .iter()
-                .all(|field| self.match_type_is_inhabited_rec(field.type_id, ancestors)),
-            Type::Sum(sum) => self.mem.getn(sum.variants).iter().any(|variant| {
-                variant
-                    .payload
-                    .is_none_or(|payload| self.match_type_is_inhabited_rec(payload, ancestors))
-            }),
-            Type::Reference(reference) => {
-                self.match_type_is_inhabited_rec(reference.inner_type, ancestors)
-            }
-            Type::Generic(generic) => self.match_type_is_inhabited_rec(generic.inner, ancestors),
-            Type::Array(array) => {
-                self.get_concrete_count_of_array(array.size_type) == Some(0)
-                    || self.match_type_is_inhabited_rec(array.element_type, ancestors)
-            }
-            _ => true,
-        };
-        ancestors.pop();
-        inhabited
     }
 
     fn match_witness_to_string(&self, witness: MatchWitnessId) -> String {
@@ -1263,16 +1227,16 @@ impl TypedProgram {
     pub(super) fn pattern_matches_uninhabited(&self, pattern_id: TypedPatternId) -> bool {
         match self.patterns.get(pattern_id) {
             TypedPattern::Sum(sp) => {
-                let payload_is_never = match self.types.get(sp.sum_type_id) {
+                let payload_uninhabited = match self.types.get(sp.sum_type_id) {
                     Type::Sum(sum_type) => self
                         .mem
                         .getn(sum_type.variants)
                         .get(sp.variant_index as usize)
                         .and_then(|v| v.payload)
-                        .is_some_and(|p| p == NEVER_TYPE_ID),
+                        .is_some_and(|p| !self.get_type_variable_counts(p).is_inhabited),
                     _ => false,
                 };
-                payload_is_never || sp.payload.is_some_and(|p| self.pattern_matches_uninhabited(p))
+                payload_uninhabited || sp.payload.is_some_and(|p| self.pattern_matches_uninhabited(p))
             }
             TypedPattern::Struct(stp) => self
                 .patterns

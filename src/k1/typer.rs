@@ -2007,6 +2007,7 @@ impl BuiltinTyperFunction {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum BuiltinIr {
+    Unreachable,
     BakeStaticValue,
     Negate,
     BitNot,
@@ -2084,6 +2085,7 @@ pub enum AtomicRmwOp {
 impl BuiltinIr {
     pub fn kind_name(&self) -> &'static str {
         match self {
+            BuiltinIr::Unreachable => "unreachable",
             BuiltinIr::BakeStaticValue => "bake_static_value",
             BuiltinIr::Negate => "negate",
             BuiltinIr::BitNot => "bit_not",
@@ -5116,6 +5118,40 @@ impl TypedProgram {
         }
 
         let mut err_msg: Option<MStr<MemTmp>> = None;
+        if !self.get_type_variable_counts(self_type_id).is_inhabited {
+            let ability = self.abilities.get(target_base_ability_id);
+            let ability_self = ability.self_type_id;
+            let fns = ability.functions;
+            let has_impl_params =
+                self.mem.getn(ability.parameters).iter().any(|p| p.is_impl_param);
+            let mut fn_ids: SV8<FunctionId> = smallvec![];
+            for f in self.mem.getn(fns) {
+                fn_ids.push(f.function_id);
+            }
+            let mut all_consume_self = true;
+            for fn_id in fn_ids {
+                let fn_type_id = self.get_function(fn_id).type_id;
+                let params = self.types.get(fn_type_id).as_function().unwrap().logical_params();
+                let mut consumes = false;
+                for p in self.mem.getn(params) {
+                    if p.type_id == ability_self {
+                        consumes = true;
+                    }
+                }
+                if !consumes {
+                    all_consume_self = false;
+                }
+            }
+            if !has_impl_params && all_consume_self {
+                let impl_handle = self.generate_builtin_ability_impl(
+                    self_type_id,
+                    target_base_ability_id,
+                    MSlice::empty(),
+                    span,
+                );
+                return Ok((impl_handle, SelfAdjust::None));
+            }
+        }
         /////////////////// Special type-kind abilities
         if target_base_ability_id == ABILITY_ID_ENUM {
             if let Type::Enum(e) = self.types.get(self_type_id) {
@@ -6559,6 +6595,25 @@ impl TypedProgram {
         span: SpanId,
     ) -> K1Result<TypedExprId> {
         let scope_id = ctx.scope_id;
+        let try_value_original_expr = self.eval_expr(operand, ctx.with_no_expected_type())?;
+        let try_value_type = self.exprs.get_type(try_value_original_expr);
+        let (value_try_impl, value_self_adjust) =
+            self.expect_ability_impl(try_value_type, ABILITY_ID_TRY, true, scope_id, span)?;
+        let value_impl_args = self.ability_impls.get(value_try_impl.full_impl_id).impl_arguments;
+        let error_type =
+            self.impl_arg_named(ABILITY_ID_TRY, value_impl_args, self.ast.idents.b.e).unwrap();
+        if !self.get_type_variable_counts(error_type).is_inhabited {
+            let try_value =
+                self.apply_self_adjust(try_value_original_expr, value_self_adjust, span)?;
+            return self.synth_ability_call(
+                value_try_impl,
+                self.ast.idents.f.try__get_value,
+                &[],
+                &[try_value],
+                ctx,
+                span,
+            );
+        }
         let block_return_type = self.get_return_type_for_scope(scope_id, span)?;
         let (block_try_impl, _) = self.expect_ability_impl(
                     block_return_type,
@@ -6573,16 +6628,9 @@ impl TypedProgram {
                         ));
                         e
                     })?;
-        let try_value_original_expr = self.eval_expr(operand, ctx.with_no_expected_type())?;
-        let try_value_type = self.exprs.get_type(try_value_original_expr);
-        let (value_try_impl, value_self_adjust) =
-            self.expect_ability_impl(try_value_type, ABILITY_ID_TRY, true, scope_id, span)?;
         let block_impl_args = self.ability_impls.get(block_try_impl.full_impl_id).impl_arguments;
-        let value_impl_args = self.ability_impls.get(value_try_impl.full_impl_id).impl_arguments;
         let block_error_type =
             self.impl_arg_named(ABILITY_ID_TRY, block_impl_args, self.ast.idents.b.e).unwrap();
-        let error_type =
-            self.impl_arg_named(ABILITY_ID_TRY, value_impl_args, self.ast.idents.b.e).unwrap();
         if let Err(msg) = self.check_types(block_error_type, error_type, scope_id) {
             kbail!(
                 self,
@@ -6625,16 +6673,14 @@ impl TypedProgram {
             result_block_ctx,
             span,
         )?;
-        let block_make_error_fn =
-            self.ability_impls.get(block_try_impl.full_impl_id).function_at_index(&self.mem, 0);
-        let call_id = self.calls.add(Call {
-            callee: Callee::from_ability_impl_fn(block_make_error_fn),
-            args: self.mem.pushn(&[get_error_call]),
-            type_args: TypeArgs::empty(),
-            return_type: block_return_type,
+        let make_error_call = self.synth_ability_call(
+            block_try_impl,
+            self.ast.idents.f.try__error,
+            &[],
+            &[get_error_call],
+            result_block_ctx,
             span,
-        });
-        let make_error_call = self.exprs.add(TypedExpr::Call { call_id }, block_return_type, span);
+        )?;
         let defers = self.gather_defers(result_block.scope_id, span, DeferExtent::FunctionTop);
         let return_error_expr = self.synth_defers_then_exit(
             defers,
@@ -12572,6 +12618,13 @@ impl TypedProgram {
             | BuiltinTyperInline::TypeStride
             | BuiltinTyperInline::TypeAlign => {
                 let type_id = call.type_args.as_slice(&self.mem)[0];
+                if !self.get_type_variable_counts(type_id).is_inhabited {
+                    let v = match intrinsic {
+                        BuiltinTyperInline::TypeAlign => 1,
+                        _ => 0,
+                    };
+                    return Ok(self.synth_i64(v, span));
+                }
                 match self.get_physical_type(type_id) {
                     PhysicalTypeResult::No => {
                         if self.get_type_variable_counts(type_id).is_abstract() {
@@ -12580,7 +12633,6 @@ impl TypedProgram {
                             kbail!(self, span, "type {} has no size", type_id)
                         }
                     }
-                    PhysicalTypeResult::Never => Ok(self.synth_phony(SIZE_TYPE_ID, span)),
                     PhysicalTypeResult::Infinite => Ok(self.synth_phony(SIZE_TYPE_ID, span)),
                     PhysicalTypeResult::Yes(_) => {
                         let layout = self.get_layout(type_id).unwrap();
@@ -13787,6 +13839,9 @@ impl TypedProgram {
         let third =
             self.tmp.dlist_nth_data_opt(namespace_chain, 3).map(|node| self.ident_str(*node));
         let result = if let Some(ability_id) = ability_id {
+            if ability_impl_self_type.is_some_and(|t| !self.get_type_variable_counts(t).is_inhabited) {
+                return Ok(Builtin::Ir(BuiltinIr::Unreachable));
+            }
             let base_ability_id = self.abilities.get(ability_id).base_ability_id;
             use ArithOpKind as OpKind;
             use ArithOpOp as Op;
@@ -15946,6 +16001,9 @@ impl TypedProgram {
                 let mut arms: List<TypedMatchArm, _> =
                     self.mem.new_list(sum_type.variants.len() + 1);
                 for variant in self.mem.getn(sum_type.variants) {
+                    if variant.payload.is_some_and(|p| !self.get_type_variable_counts(p).is_inhabited) {
+                        continue;
+                    }
                     let case = self.static_values.add_int(variant.tag_value);
                     let mut conditions = self.mem.new_list(1 + variant.payload.is_some() as u32);
                     conditions.push(MatchingConditionInstr::IntEquals {
@@ -16123,6 +16181,9 @@ impl TypedProgram {
 
                 let mut arms: List<TypedMatchArm, _> = self.mem.new_list(variants.len());
                 for variant in self.mem.getn(variants) {
+                    if variant.payload.is_some_and(|p| !self.get_type_variable_counts(p).is_inhabited) {
+                        continue;
+                    }
                     let case = self.static_values.add_int(variant.tag_value);
 
                     let mut block =
@@ -17644,7 +17705,7 @@ impl TypedProgram {
                     }
 
                     // Metaprogram top-level evaluation
-                    // We simply run the program, getting a string,
+                    // We simply run the program, getting a `code` (basically a string),
                     // parse it as definitions, then we load those definitions
                     // injecting them into the AST, as if they appeared right here.
                     // If it is a namespace, we ensure we handle it right now, as this is the phase that

@@ -47,6 +47,7 @@ pub enum TraceKind {
     CodegenPrepare,
     Codegen,
     LlvmPasses,
+    LlvmEmit,
     Thinlto,
     Link,
     Archive,
@@ -54,7 +55,7 @@ pub enum TraceKind {
 }
 
 impl TraceKind {
-    pub const ALL: [TraceKind; 34] = [
+    pub const ALL: [TraceKind; 35] = [
         TraceKind::ModuleDiscover,
         TraceKind::ModuleRead,
         TraceKind::Parse,
@@ -85,6 +86,7 @@ impl TraceKind {
         TraceKind::CodegenPrepare,
         TraceKind::Codegen,
         TraceKind::LlvmPasses,
+        TraceKind::LlvmEmit,
         TraceKind::Thinlto,
         TraceKind::Link,
         TraceKind::Archive,
@@ -123,6 +125,7 @@ impl TraceKind {
             TraceKind::CodegenPrepare => "prepare",
             TraceKind::Codegen => "codegen",
             TraceKind::LlvmPasses => "passes",
+            TraceKind::LlvmEmit => "emit",
             TraceKind::Thinlto => "thinlto",
             TraceKind::Link => "link",
             TraceKind::Archive => "archive",
@@ -165,6 +168,7 @@ impl TraceKind {
             | TraceKind::CodegenPrepare
             | TraceKind::Codegen
             | TraceKind::LlvmPasses
+            | TraceKind::LlvmEmit
             | TraceKind::Thinlto
             | TraceKind::Link
             | TraceKind::Archive
@@ -189,6 +193,7 @@ impl TraceKind {
                 | TraceKind::CodegenPrepare
                 | TraceKind::Codegen
                 | TraceKind::LlvmPasses
+                | TraceKind::LlvmEmit
                 | TraceKind::Thinlto
                 | TraceKind::Link
                 | TraceKind::Archive
@@ -223,6 +228,7 @@ impl TraceKind {
                 | TraceKind::CodegenPrepare
                 | TraceKind::Codegen
                 | TraceKind::LlvmPasses
+                | TraceKind::LlvmEmit
                 | TraceKind::Thinlto
                 | TraceKind::Link
                 | TraceKind::Archive

@@ -425,7 +425,6 @@ ability comparable {
 }
 
 ability try[impl t, impl e] {
-  // DO NOT REORDER `try` expects error to be first
   fn error(e: e): self
   fn value(t: t): self
 

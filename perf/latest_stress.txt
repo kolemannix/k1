@@ -1,0 +1,71 @@
+# Wed Sep 16 21:43:12 EDT 2026
+# K1_HOME=. target/profiling/k1 --cache false --chatty=true check perf/stress100/stress100.k1                                                                                                                   09:40:29 PM
+using k1 home: /Users/knix/dev/k1
+module stress100 › typer pass bodies › typecheck test stress100.k1:992045 › specialize measureWrote 1 emitted sources in 2.00µs
+        sources: 43 files 31477kb + 1 emitted 0kb (1 unique, 0kb); line tables 4055kb, trivia 8kb, tokens 0kb
+program stress100 took 1114ms (931719.92 line/s, 1038157 lines)
+        4941291 expressions
+        987294 statements
+        442951 functions
+        719841 types
+        6055 idents
+        5138 instructions, 6955 code words
+        tmp usage: 0/1048576kb (0.00%), hwm: 5kb
+        perm usage: 76002/1048576kb (7.25%), hwm: 76002kb
+        mem ir usage: 233/1048576kb (0.02%), hwm: 233kb
+        kind                  count    excl ms speculative %
+        discover                  3      78.17     0%
+        read                      3       0.76     0%
+        parse                    47     162.22     0%
+        module                    3       0.07     0%
+        typer pass               20     197.57     0%
+        typecheck            106189     371.03     0%
+        global                  130       0.01     0%
+        specialize           318716      79.26     0%
+        instantiate          184568      36.69     0%
+        infer                417573     183.81     0%
+        static exec             187       0.06     0%
+        macro                     1       0.01     0%
+        ferry                    31       0.01     0%
+        lower                   425       0.50     0%
+        optimize                187       0.04     0%  4895 insts created
+        inline                  284       0.10     0%  101 inlines
+        simplify                284       0.04     0%  336 passes
+        cfg                      52       0.01     0%
+        bcgen                    63       0.22     0%
+        run                      16       0.07     0%  842 instrs (0.08us/instr)
+        untracked                         3.60
+        top frames:
+            160.40ms (   160ms incl) parse stress100.k1
+            135.94ms (   140ms incl) typer pass types
+             78.09ms (   238ms incl) discover stress100
+             30.71ms (    34ms incl) typer pass declarations
+             23.52ms (   683ms incl) typer pass bodies
+              6.07ms (     6ms incl) typer pass namespaces
+              3.24ms (     3ms incl) infer stress100.k1:421193
+              2.17ms (     2ms incl) typecheck main stress100.k1:1026003
+              1.86ms (     2ms incl) infer stress100.k1:651764
+              1.84ms (     2ms incl) instantiate bx[t]
+        top generics by specialization + body time:
+              5.91ms  7212 instances find for list['t]
+              3.53ms  7212 instances forall for list['t]
+              3.05ms  7212 instances exists for list['t]
+              2.95ms  7234 instances next for buffer-iterator['t]
+              2.82ms  7212 instances iterator for list['t]
+              2.64ms  7204 instances position for list['t]
+              2.61ms  7234 instances nth for buffer-iterator['t]
+              2.59ms  7234 instances advance-by for buffer-iterator['t]
+              2.54ms  7234 instances size-hint for buffer-iterator['t]
+              2.43ms  7204 instances contains for list['t]
+        top requesters of specializations (declaration + body time):
+              1.77ms    43 declared by typecheck test stress100.k1:736685
+              0.97ms     1 declared by infer stress100.k1:365340
+              0.50ms    43 declared by typecheck test stress100.k1:179510
+              0.30ms    11 declared by typecheck order-total stress100.k1:86718
+              0.14ms     0 declared by optimize module
+              0.10ms    43 declared by typecheck test stress100.k1:243350
+              0.10ms     3 declared by typecheck settle stress100.k1:40307
+              0.09ms    12 declared by typecheck summarize stress100.k1:581860
+              0.09ms    11 declared by typecheck order-total stress100.k1:886428
+              0.08ms    11 declared by typecheck order-total stress100.k1:597723
+          ops: copy 21% (175), load 20% (169), store 9% (75), jump_if_icmp 7% (56), enter 6% (52), ptr_add_imm 5% (39), call 4% (36), mov 4% (36), load_global 4% (36), ret 4% (34), ret_agg 2% (18), halt 2% (16), imul 2% (14), jump 2% (13), jump_if 1% (11), isub 1% (10), ptr_index 1% (9), iadd 1% (9), other 4% (34)

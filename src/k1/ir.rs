@@ -2049,12 +2049,6 @@ impl<'k1> Builder<'k1> {
 
     fn get_physical_type(&mut self, type_id: TypeId) -> K1Result<PhysicalType> {
         match self.get_physical_type_result(type_id) {
-            PhysicalTypeResult::Never => Err(kerr!(
-                self.k1,
-                self.cur_span,
-                "cannot lower 'never' type to a physical type: {}",
-                self.k1.type_id_to_string_ext(type_id, dump::TypeDisplayMode::Expand)
-            )),
             PhysicalTypeResult::No => Err(kerr!(
                 self.k1,
                 self.cur_span,
@@ -3313,6 +3307,7 @@ fn compile_ir_builtin(
     dst: Option<Value>,
 ) -> K1Result<Value> {
     match builtin {
+        BuiltinIr::Unreachable => Ok(b.push_inst_anon(Inst::Unreachable).as_value()),
         BuiltinIr::BakeStaticValue => {
             // fn(intern) bakeStaticValue[T](value: T): u64
             let type_id = call.type_args.as_slice(&b.k1.mem)[0];

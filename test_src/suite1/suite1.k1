@@ -58,6 +58,7 @@ fn moderate() {
   zst_test/test()
   structural/test()
   never_everywhere/test()
+  never_type/test()
   ns_extend/test()
   optionals/test()
   type_info/test()
