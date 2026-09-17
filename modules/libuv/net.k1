@@ -49,9 +49,9 @@ type addrinfo = {
   ai_socktype: i32,
   ai_protocol: i32,
   ai_addrlen: socklen_t,
-  ai_canonname: *mut u8,
-  ai_addr: *mut sockaddr,
-  ai_next: *mut addrinfo,
+  ai_canonname: optref[u8],
+  ai_addr: optref[sockaddr],
+  ai_next: optref[addrinfo],
 }
 #static assert-layout[addrinfo](48, 8, [0, 4, 8, 12, 16, 24, 32, 40, ])
 type FILE = opaque[152, 8]

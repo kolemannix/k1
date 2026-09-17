@@ -15,7 +15,7 @@ type parser = {
 }
 ns for parser {
   fn peek(self: parser): ?char { self.input.index-opt(self.cursor) }
-  fn next(self: *mut parser): ?char {
+  fn next(self: *parser): ?char {
     if self.peek() is {
       :none -> :none,
       :some c -> {
@@ -24,9 +24,9 @@ ns for parser {
       }
     }
   }
-  fn advance(self: *mut parser) { self.cursor = self.cursor + 1 }
-  fn advance-n(self: *mut parser, n: size) { self.cursor = self.cursor + n }
-  fn expect(self: *mut parser, c: char): bool {
+  fn advance(self: *parser) { self.cursor = self.cursor + 1 }
+  fn advance-n(self: *parser, n: size) { self.cursor = self.cursor + n }
+  fn expect(self: *parser, c: char): bool {
     if self.peek() is {
       :some p -> {
         let ok = p == c
@@ -36,7 +36,7 @@ ns for parser {
       :none -> false
     }
   }
-  fn eat-whitespace(self: *mut parser) {
+  fn eat-whitespace(self: *parser) {
     loop {
       if self.peek() is {
         :none -> break,
@@ -61,14 +61,14 @@ ns for parser {
 
 }
 
-fn next-or(context p: *mut parser)(msg: string): result[char, string] {
+fn next-or(context p: *parser)(msg: string): result[char, string] {
   if p.next() is {
     :none -> :err msg,
     :some c -> :ok c
   }
 }
 
-fn _parse-string(context p: *mut parser)(): result[json, string] {
+fn _parse-string(context p: *parser)(): result[json, string] {
   if not p.expect('"') { return :err "expected string" }
   let sb = string-builder/new()
   loop {
@@ -95,7 +95,7 @@ fn _parse-string(context p: *mut parser)(): result[json, string] {
   }
 }
 
-fn _expect-array(context p: *mut parser)(): result[json, string] {
+fn _expect-array(context p: *parser)(): result[json, string] {
   // eprintln("_expect-array {p.remaining-input().take(10)}");
   if not p.expect('[') return :err "internal error at _expect-array"
   p.eat-whitespace()
@@ -127,7 +127,7 @@ fn _expect-array(context p: *mut parser)(): result[json, string] {
   }
 }
 
-fn _expect-object(context p: *mut parser)(): result[json, string] {
+fn _expect-object(context p: *parser)(): result[json, string] {
   // eprintln("_expect-object {p.remaining-input().take(10)}");
   if not p.expect('{') { return :err "internal error at _expect-object" }
   p.eat-whitespace()
@@ -166,19 +166,19 @@ fn _expect-object(context p: *mut parser)(): result[json, string] {
   }
 }
 
-fn _expect-literal(context p: *mut parser)(text: string, value: json): result[json, string] {
+fn _expect-literal(context p: *parser)(text: string, value: json): result[json, string] {
   if not p.remaining-input().starts-with(text) { return :err "Expected $text" }
   p.advance-n(text.len())
   :ok value
 }
 
-fn _parse-number(context p: *mut parser)(): result[json, string] {
+fn _parse-number(context p: *parser)(): result[json, string] {
   let result = f64/parse-string(s = p.remaining-input(), require-total = false).try
   p.advance-n(result.len)
   :ok :number result.value
 }
 
-fn _parse-next-value(context p: *mut parser)(): result[json, string] {
+fn _parse-next-value(context p: *parser)(): result[json, string] {
   // eprintln("pnv {p.remaining-input().take(10)}");
   p.eat-whitespace()
   if p.peek() is :some c {

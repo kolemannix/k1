@@ -1225,7 +1225,6 @@ impl TypedProgram {
                 self.display_pattern(type_pattern.inner_pattern, w)?;
                 Ok(())
             }
-            TypedPattern::RefNull(_, _) => w.write_str("null"),
             TypedPattern::PointerNull(_) => w.write_str("null"),
         }
     }

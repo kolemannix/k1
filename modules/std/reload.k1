@@ -23,11 +23,11 @@ ns reload {
   type descriptor = {
     dylib-file-name: ptr,
     api-hash: u64,
-    version: *mut u64,
+    version: *u64,
     entry-count: u64,
     entries: ptr,
   }
-  type entry = { symbol: ptr, slot: *mut ptr }
+  type entry = { symbol: ptr, slot: *ptr }
 
   // A sloppy helper since we lack this in std
   fn dir-of(path: string): string {
@@ -149,9 +149,9 @@ ns reload {
     }
   }
 
-  type async-load = { ns-path: string, cell: *mut pending-load }
+  type async-load = { ns-path: string, cell: *pending-load }
 
-  fn load-ns-worker(input: *mut async-load): ptr {
+  fn load-ns-worker(input: *async-load): ptr {
     let cell = input.cell
     if load-ns(input.ns-path) is {
       :ok -> {
@@ -185,7 +185,7 @@ ns reload {
 
   type watch-input = { ns-path: string }
 
-  fn watch-ns-worker(input: *mut watch-input): ptr {
+  fn watch-ns-worker(input: *watch-input): ptr {
     let ns-path = input.ns-path
     heap.free-t(input)
     let descriptor = if find-descriptor(ns-path) is {

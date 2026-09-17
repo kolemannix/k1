@@ -211,7 +211,6 @@ pub enum TokenKind {
 
     KeywordFn,
     KeywordLet,
-    KeywordMut,
     KeywordAnd,
     KeywordOr,
     KeywordIf,
@@ -334,7 +333,6 @@ impl TokenKind {
         match self {
             K::KeywordFn => "fn",
             K::KeywordLet => "let",
-            K::KeywordMut => "mut",
             K::KeywordAnd => "and",
             K::KeywordOr => "or",
             K::KeywordIf => "if",
@@ -415,7 +413,6 @@ impl TokenKind {
         match bytes {
             b"fn" => Some(K::KeywordFn),
             b"let" => Some(K::KeywordLet),
-            b"mut" => Some(K::KeywordMut),
             b"and" => Some(K::KeywordAnd),
             b"or" => Some(K::KeywordOr),
             b"if" => Some(K::KeywordIf),
@@ -1561,10 +1558,10 @@ mod test {
 
     #[test]
     fn keyword_substring_is_correct() -> anyhow::Result<()> {
-        let input = "mutt";
+        let input = "lett";
         expect_token_kinds(input, vec![K::Ident])?;
-        let input2 = "mut";
-        expect_token_kinds(input2, vec![K::KeywordMut])?;
+        let input2 = "let";
+        expect_token_kinds(input2, vec![K::KeywordLet])?;
         Ok(())
     }
 

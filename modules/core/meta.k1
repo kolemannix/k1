@@ -92,7 +92,7 @@ ns meta {
     code.writeln(`  } }`) // end fn empty
 
     // begin fn push
-    code.writeln(`  fn push(self: *mut $name, value: $tt) {`)
+    code.writeln(`  fn push(self: *$name, value: $tt) {`)
     for f in fields {
       code.writeln(`    self.ARR_${f.name}.push(value.${f.name});`)
     }

@@ -1701,6 +1701,9 @@ impl TypedProgram {
     }
 
     pub fn add_reference_type(&mut self, inner_type: TypeId) -> TypeId {
+        if let Type::Function(_) = self.types.get(inner_type) {
+            return self.add_function_pointer_type(inner_type);
+        }
         self.add_type_anon(Type::Reference(ReferenceType { inner_type }))
     }
 
@@ -2020,7 +2023,7 @@ impl TypedProgram {
             }
             Type::Reference(refer) => {
                 let mut counts = *self.type_variable_counts.get(refer.inner_type);
-                counts.is_zero_safe = true;
+                counts.is_zero_safe = false;
                 counts.is_inhabited = true;
                 counts
             }
@@ -2084,13 +2087,13 @@ impl TypedProgram {
             }
             Type::FunctionPointer(fp) => {
                 let mut result = *self.type_variable_counts.get(fp.function_type_id);
-                result.is_zero_safe = true;
+                result.is_zero_safe = false;
                 result.is_inhabited = true;
                 result
             }
             Type::FunctionReference(fr) => {
                 let mut result = *self.type_variable_counts.get(fr.function_type);
-                result.is_zero_safe = true;
+                result.is_zero_safe = false;
                 result.is_inhabited = true;
                 result
             }

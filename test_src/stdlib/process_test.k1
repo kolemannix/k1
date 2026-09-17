@@ -3,7 +3,7 @@ ns process_test
 use std/fd
 use std/process
 
-fn write-line(child: *mut process/child, line: string) {
+fn write-line(child: *process/child, line: string) {
   fd/write-all(child.stdin-fd, "${line}\n".span-bytes()).!
 }
 

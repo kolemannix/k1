@@ -13,7 +13,7 @@ fn complex-references() {
   let struct-ref = struct-ref.&
 
   let x-value: int = struct-ref.x
-  let x-ref: *mut int = struct-ref.x.&
+  let x-ref: *int = struct-ref.x.&
 
   assert(x-ref.* == x-value)
   assert(struct-ref.*.x == struct-ref.x)

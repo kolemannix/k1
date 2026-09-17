@@ -91,7 +91,7 @@ ns build {
     }
 
     fn emit-int-table(
-      w: *mut string-builder, src: string, c-name: string,
+      w: *string-builder, src: string, c-name: string,
       k1-name: string, elem-type: string, limit: size, per-line: size,
     ) {
       let parsed = parse-c-array(src, c-name)
@@ -119,7 +119,7 @@ ns build {
     // The C table is double but its literals carry an 'f' suffix, so every value
     // is float-rounded; reproduce that exactly and print with full precision.
     fn emit-float-table(
-      w: *mut string-builder, src: string, c-name: string,
+      w: *string-builder, src: string, c-name: string,
       k1-name: string, per-line: size,
     ) {
       let parsed = parse-c-array(src, c-name)

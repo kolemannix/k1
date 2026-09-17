@@ -3,7 +3,7 @@
 
 ns sys
 
-fn parse-next(i: *mut size, args: span[string]): ?string {
+fn parse-next(i: *size, args: span[string]): ?string {
   let r = args.index-opt(i + 1)
   i.* = i.* + 2
   r
@@ -31,7 +31,7 @@ fn gen-help-text[t](summary: string): string {
 }
 
 // For each field in the target type, a local variable to house its parsed data
-fn emit-arg-locals(cb: *mut code-builder, s: types/type-schema:struct, args-type-id: type-id) {
+fn emit-arg-locals(cb: *code-builder, s: types/type-schema:struct, args-type-id: type-id) {
   for s.fields {
     if get-arg-kind(it.type-id) is {
       :string      -> cb.line("let ${it.name}-val: ?${args-type-id.spell()}.${it.name} = :none"),
@@ -42,7 +42,7 @@ fn emit-arg-locals(cb: *mut code-builder, s: types/type-schema:struct, args-type
 }
 
 // A case or two per arg field; the match arms update the locals
-fn emit-arg-match(cb: *mut code-builder, s: types/type-schema:struct) {
+fn emit-arg-match(cb: *code-builder, s: types/type-schema:struct) {
   cb.block("if cur is", fn[cb, s]. {
     for s.fields {
       if get-arg-kind(it.type-id) is {
@@ -59,7 +59,7 @@ fn emit-arg-match(cb: *mut code-builder, s: types/type-schema:struct) {
   })
 }
 
-fn emit-arg-loop(cb: *mut code-builder, s: types/type-schema:struct) {
+fn emit-arg-loop(cb: *code-builder, s: types/type-schema:struct) {
   cb.line("let i = 1")
   cb.block("while i < args.len()", fn[cb, s]. {
     cb.line("let cur = args.[i]")
@@ -67,7 +67,7 @@ fn emit-arg-loop(cb: *mut code-builder, s: types/type-schema:struct) {
   })
 }
 
-fn emit-arg-validate(cb: *mut code-builder, s: types/type-schema:struct) {
+fn emit-arg-validate(cb: *code-builder, s: types/type-schema:struct) {
   for s.fields {
     if get-arg-kind(it.type-id) is {
       :string                     -> cb.line(`require ${it.name}-val is :some ${it.name}-out else return :err "${it.name} is missing"`),
@@ -76,7 +76,7 @@ fn emit-arg-validate(cb: *mut code-builder, s: types/type-schema:struct) {
   }
 }
 
-fn emit-arg-construct(cb: *mut code-builder, s: types/type-schema:struct) {
+fn emit-arg-construct(cb: *code-builder, s: types/type-schema:struct) {
   cb.line(":ok(.{")
   cb.indent()
   for s.fields {

@@ -80,7 +80,7 @@ fn chaining-test() {
   a.release()
 }
 
-fn generic-new[a: allocator](alloc: a, value: int): *mut int {
+fn generic-new[a: allocator](alloc: a, value: int): *int {
   alloc.new(value)
 }
 

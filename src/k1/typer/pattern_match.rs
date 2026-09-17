@@ -607,14 +607,11 @@ impl TypedProgram {
             ParsedPattern::Variable(ident_id, span) => {
                 if *ident_id == self.ast.idents.b.null {
                     match self.types.get(target_type_id) {
-                        Type::Reference(reference_type) => Ok(self
-                            .patterns
-                            .add(TypedPattern::RefNull(reference_type.inner_type, *span))),
                         Type::Pointer => Ok(self.patterns.add(TypedPattern::PointerNull(*span))),
                         _ => Err(kerr!(
                             self,
                             self.ast.get_pattern_span(pat_expr),
-                            "'null' is a pattern that applies to reference (*t) types and ptr"
+                            "'null' is a pattern that applies to ptr; a reference (*t) is never null"
                         )),
                     }
                 } else {
@@ -1226,7 +1223,7 @@ impl TypedProgram {
                 self.get_static_value_type(value_id) == tp.type_id
                     && self.check_static_pattern_matches(tp.inner_pattern, value_id, bindings)?
             }
-            (TypedPattern::Reference(_) | TypedPattern::RefNull(_, _), _) => kbail!(
+            (TypedPattern::Reference(_), _) => kbail!(
                 self,
                 pattern.span_id(),
                 "A {} pattern cannot be matched statically: a reference has no compile-time identity",
@@ -1488,21 +1485,6 @@ impl TypedProgram {
                     hoist_case,
                     ctx,
                 )
-            }
-            TypedPattern::RefNull(_inner_type, span) => {
-                let span = *span;
-                let target_expr_as_ptr = self.synth_cast(
-                    target_expr,
-                    POINTER_TYPE_ID,
-                    CastType::ReferenceToPointer,
-                    Some(span),
-                );
-                let ptr_null_expr =
-                    self.add_static_constant_expr(self.static_values.nullptr_id(), span);
-                let is_null_expr =
-                    self.synth_equals_call_simple(target_expr_as_ptr, ptr_null_expr, span);
-                instrs.push_grow(&mut self.mem, MatchingConditionInstr::cond(is_null_expr));
-                Ok(None)
             }
             TypedPattern::PointerNull(span) => {
                 let span = *span;

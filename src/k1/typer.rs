@@ -800,7 +800,6 @@ impl TypedPatternPool {
             TypedPattern::Reference(refer) => {
                 self.get_pattern_bindings_rec(refer.inner_pattern, bindings)
             }
-            TypedPattern::RefNull(_, _) => (),
             TypedPattern::PointerNull(_) => (),
             TypedPattern::Type(t) => self.get_pattern_bindings_rec(t.inner_pattern, bindings),
         }
@@ -824,7 +823,6 @@ impl TypedPatternPool {
                 .any(|field_pattern| self.pattern_never_useless(field_pattern.pattern)),
             TypedPattern::Wildcard(_span_id) => false,
             TypedPattern::Reference(refer) => self.pattern_never_useless(refer.inner_pattern),
-            TypedPattern::RefNull(_, _) => true,
             TypedPattern::PointerNull(_) => true,
             TypedPattern::Type(_) => true,
         }
@@ -845,7 +843,6 @@ pub enum TypedPattern {
     Struct(TypedStructPattern),
     Wildcard(SpanId),
     Reference(TypedReferencePattern),
-    RefNull(TypeId, SpanId),
     PointerNull(SpanId),
     Type(TypePattern),
 }
@@ -864,7 +861,6 @@ impl TypedPattern {
             TypedPattern::Struct(_) => "struct",
             TypedPattern::Wildcard(_) => "_",
             TypedPattern::Reference(_) => "reference",
-            TypedPattern::RefNull(_, _) => "null reference",
             TypedPattern::PointerNull(_) => "null ptr",
             TypedPattern::Type(_) => "type pattern",
         }
@@ -882,7 +878,6 @@ impl TypedPattern {
             TypedPattern::Struct(struct_pattern) => struct_pattern.span,
             TypedPattern::Wildcard(span) => *span,
             TypedPattern::Reference(refer) => refer.span,
-            TypedPattern::RefNull(_, span) => *span,
             TypedPattern::PointerNull(span) => *span,
             TypedPattern::Type(t) => t.span,
         }
@@ -14283,13 +14278,14 @@ impl TypedProgram {
         );
         // We just can't allow ref self here since we don't have a good way to tell the function
         // call that it will work only if we coerce this argument, we only have types at this point.
-        if let Ok((impl_handle, _)) = self.find_or_generate_specialized_ability_impl_for_type(
+        let lookup = self.find_or_generate_specialized_ability_impl_for_type(
             target_type,
             signature.specialized_ability_id,
             false,
             scope_id,
             span,
-        ) {
+        );
+        if let Ok((impl_handle, _)) = lookup {
             let found_impl = self.ability_impls.get(impl_handle.full_impl_id);
             debug_assert!(signature.impl_arguments.len() == found_impl.impl_arguments.len());
             for (index, (constraint_arg, passed_arg)) in self
@@ -14326,13 +14322,15 @@ impl TypedProgram {
             }
             Ok(())
         } else {
+            let reason = lookup.err().unwrap();
             Err(kerr!(
                 self,
                 span,
-                "Provided type for {} is {} which does not implement required ability {}",
+                "Provided type for {} is {} which does not implement required ability {}: {}",
                 name,
                 target_type,
-                self.abilities.get(signature.specialized_ability_id).name
+                self.abilities.get(signature.specialized_ability_id).name,
+                reason
             ))
         }
     }
@@ -14890,7 +14888,7 @@ impl TypedProgram {
 
     /// Computes the slot function type an ability function gets inside a dyn object,
     /// or the reason it is excluded from dynamic dispatch. Two shapes are accepted:
-    /// a `self: *mut self` receiver, whose slot replaces self with an opaque state
+    /// a `self: *self` receiver, whose slot replaces self with an opaque state
     /// pointer in lambda-env position; or a function mentioning self nowhere, whose
     /// slot is just the substituted signature (the object acts as a type witness and
     /// no state is passed). Both are physically identical to the impl function, so
@@ -14934,7 +14932,7 @@ impl TypedProgram {
             &params[1..]
         } else {
             if params.first().is_some_and(|p| p.type_id == ability_self_type) {
-                return Err("it must take self by reference: `self: *mut self`".to_string());
+                return Err("it must take self by reference: `self: *self`".to_string());
             }
             params
         };

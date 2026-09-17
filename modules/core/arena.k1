@@ -128,7 +128,7 @@ ns for arena {
     let first-len = self.first-end.diff(self.first-base)
     let chunk-len = needed.max(first-len)
     let region = platform/memory/acquire(chunk-len)
-    let record: *mut arena-chunk = region.base.ref[arena-chunk]
+    let record: *arena-chunk = region.base.ref[arena-chunk]
     record.* = .{ region, next = self.extra-chunks }
     self.extra-chunks = region.base
     let data-start = region.base.add-bytes(types/stride[arena-chunk]).aligned(MIN_ALIGN)

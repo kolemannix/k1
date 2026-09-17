@@ -45,7 +45,7 @@ fn simple-increment(): i32 {
 use core/writer
 use types/type-schema
 
-fn _write-json-from-schema(code: *mut string-builder, name: string, type-id: types/type-id) {
+fn _write-json-from-schema(code: *string-builder, name: string, type-id: types/type-id) {
   if type-id.is-instance-of(types/id[list]) {
     let elem = type-id.instance-info().!.args.[0]
     code.writeln("w.write-char('[');")

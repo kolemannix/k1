@@ -192,7 +192,7 @@ fn convert-bit-depths-to-symbols(depth: buffer[u8], len: size, bits: buffer[u16]
 
 fn write-huffman-tree-repetitions(
   previous-value: u8, value: u8, repetitions: size,
-  tree-size: *mut size, tree: buffer[u8], extra-bits-data: buffer[u8],
+  tree-size: *size, tree: buffer[u8], extra-bits-data: buffer[u8],
 ) {
   let reps = repetitions
   if previous-value != value {
@@ -233,7 +233,7 @@ fn write-huffman-tree-repetitions(
 
 fn write-huffman-tree-repetitions-zeros(
   repetitions: size,
-  tree-size: *mut size, tree: buffer[u8], extra-bits-data: buffer[u8],
+  tree-size: *size, tree: buffer[u8], extra-bits-data: buffer[u8],
 ) {
   let reps = repetitions
   if reps == 11 {
@@ -310,7 +310,7 @@ fn decide-over-rle-use(depth: buffer[u8], length: size): { use-rle-for-non-zero:
 
 fn write-huffman-tree(
   depth: buffer[u8], length: size,
-  tree-size: *mut size, tree: buffer[u8], extra-bits-data: buffer[u8],
+  tree-size: *size, tree: buffer[u8], extra-bits-data: buffer[u8],
 ) {
   let previous-value = INITIAL_REPEATED_CODE_LENGTH
   let use-rle-for-non-zero = false

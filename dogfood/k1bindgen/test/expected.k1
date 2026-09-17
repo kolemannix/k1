@@ -34,7 +34,7 @@ type foo = {
   _unsigned_char: u8,
   _sizet: usize,
   _int: i32,
-  _int_p: *mut i32,
+  _int_p: optref[i32],
   _bool: bool,
   _float: f32,
   _longlong: i64,
@@ -56,7 +56,7 @@ type foo = {
 }
 #static assert-layout[foo](104, 8, [0, 1, 8, 16, 24, 32, 36, 40, 48, 56, 64, 72, 80, 88, 96, 100, ])
 fn(extern("myFunction")) myFunction(
-  incompleteArray: *mut u8,
+  incompleteArray: *u8,
 ): {}
 fn(extern("cinput_sum")) sum(
   lhs: i32,

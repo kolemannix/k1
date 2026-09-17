@@ -119,7 +119,7 @@ fn mbps(nanos: u64, bytes: size): f64 {
   bytes.as[f64] / nanos.as[f64] * 1000.0
 }
 
-fn write-mbps(sb: *mut string-builder, label: string, nanos: *mut list[u64], bytes: size) {
+fn write-mbps(sb: *string-builder, label: string, nanos: *list[u64], bytes: size) {
   nanos.sort()
   sb.write("$label ")
   mbps(nanos.[nanos.len() / 2], bytes).format(sb, 1)

@@ -13,9 +13,9 @@ fn assert-not-equals[t: print and equals](context locn: k1/source-location)(a: t
   }
 }
 
-fn(inline) inc(i: *mut size) { i.* = i.* + 1 }
+fn(inline) inc(i: *size) { i.* = i.* + 1 }
 // TODO: Would be cool to have this
-// fn incNew[t: Add and KnowledgeOfOne](i: *mut t): t { i.* = i.* + KnowledgeOfOne@(t)/one() }
+// fn incNew[t: Add and KnowledgeOfOne](i: *t): t { i.* = i.* + KnowledgeOfOne@(t)/one() }
 
 fn(inline) identity[t](value: t): t { value }
 
@@ -745,17 +745,16 @@ impl print for ptr {
 // where you can pay a small cost (option construction)
 // to check it, but can still store it 'raw'
 // As opposed to storing the sum, which carries waste
-type optref[t] = { inner: *t }
+type optref[t] = { inner: ptr }
 ns for optref {
-  fn make[t](inner: *t): optref[t] { .{ inner } }
-  fn null[t]()         : optref[t] { ptr/null.ref-opt[t]() }
+  fn(inline) make[t](inner: *t): optref[t] { .{ inner = inner.as[ptr] } }
+  fn(inline) null[t](): optref[t] { .{ inner = ptr/null } }
+  fn(inline) get[t](self: optref[t]): *t { self.inner.ref[t] }
   fn deref[t](self: optref[t]): ?t {
-    if (self.inner is null) :none else :some(self.inner.*)
+    if (self.inner is null) :none else :some(self.inner.ref[t].*)
   }
   fn as-opt[t](self: optref[t]): ?*t {
-    if (self.inner is null) :none else :some(self.inner)
+    if (self.inner is null) :none else :some(self.inner.ref[t])
   }
-  fn is-null[t](self: optref[t]): bool {
-    self.inner is null
-  }
+  fn(inline) is-null[t](self: optref[t]): bool { self.inner is null }
 }

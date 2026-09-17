@@ -89,9 +89,6 @@ fn test-zero() {
   let vf64: f64 = .0
   assert(vf64 == 0.0)
 
-  let i32-null: *i32 = .0
-  assert(i32-null.as[ptr] == ptr/null)
-
   let point: zpoint = .0
   assert-equals(point.x, 0)
   assert-equals(point.y, 0)

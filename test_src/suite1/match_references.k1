@@ -39,11 +39,6 @@ fn test() {
      false*** -> .{}
   }
 
-  if b is {
-    null -> crash("b was null"),
-    _ -> .{}
-  }
-
   if b.as[ptr] is {
     null -> crash("b was null as ptr"),
     _ -> .{},

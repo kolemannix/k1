@@ -256,7 +256,7 @@ type game = {
   out: list[token],
 }
 
-fn cur-level(context g: *mut game)(): level {
+fn cur-level(context g: *game)(): level {
   LEVELS.[g.level]
 }
 
@@ -267,23 +267,23 @@ fn level-index(name: string): size {
   crash("no level named $name")
 }
 
-fn row-of(context g: *mut game)(i: u8): *mut list[token] {
+fn row-of(context g: *game)(i: u8): *list[token] {
   assert(i <= 2)
   if i == 0 g.def-a.& else if i == 1 g.def-b.& else g.out.&
 }
 
-fn row-enabled(context g: *mut game)(i: size): bool {
+fn row-enabled(context g: *game)(i: size): bool {
   i == 2 or i < cur-level().ndefs.widen[size]
 }
 
-fn row-editable(context g: *mut game)(i: size): bool {
+fn row-editable(context g: *game)(i: size): bool {
   let lv = cur-level()
   if i == 0 { return row-enabled(i) and lv.given-a.len() == 0 }
   if i == 1 { return row-enabled(i) and lv.given-b.len() == 0 }
   lv.given.len() == 0
 }
 
-fn load-level(context g: *mut game)(i: size) {
+fn load-level(context g: *game)(i: size) {
   g.level = i
   let lv = LEVELS.[i]
   g.preview-growth = if not level-recursive(lv) { lv.growth } else if lv.world is :plant { 2 } else { 1 }
@@ -420,7 +420,7 @@ type expand-ctx = {
   arg-srcs: fixlist[u16, MAX-STACK],
 }
 
-fn close-scope(ctx: *mut expand-ctx, e: *mut expansion, d0: size, ndepth: size) {
+fn close-scope(ctx: *expand-ctx, e: *expansion, d0: size, ndepth: size) {
   while ctx.bdepth > d0 {
     ctx.bdepth = ctx.bdepth - 1
     if e.syms.len() < MAX-EXPAND {
@@ -431,7 +431,7 @@ fn close-scope(ctx: *mut expand-ctx, e: *mut expansion, d0: size, ndepth: size) 
   }
 }
 
-fn expand-toks(ctx: *mut expand-ctx, toks: span[token], self: span[token], self-d: u8, e: *mut expansion, depth: size, ndepth: size, floor: size, row: u8, base: size) {
+fn expand-toks(ctx: *expand-ctx, toks: span[token], self: span[token], self-d: u8, e: *expansion, depth: size, ndepth: size, floor: size, row: u8, base: size) {
   if depth > MAX-DEPTH { return }
   let i: size = 0
   while i < toks.len() {
@@ -603,11 +603,11 @@ fn expand[ca: as-span[t = token], cb: as-span[t = token], cs: as-span[t = token]
   e
 }
 
-fn expand-player(context g: *mut game)(growth: size): expansion {
+fn expand-player(context g: *game)(growth: size): expansion {
   expand-row(2, growth)
 }
 
-fn expand-row(context g: *mut game)(row: u8, growth: size): expansion {
+fn expand-row(context g: *game)(row: u8, growth: size): expansion {
   expand(cur-level().world, g.def-a, g.def-b, row-of(row), row, growth)
 }
 
@@ -620,7 +620,7 @@ fn expand-target(lv: level, growth: size): expansion {
 
 type gview = { cur: size, kf: size, unfurl: f32 }
 
-fn growth-view(context g: *mut game)(): gview {
+fn growth-view(context g: *game)(): gview {
   let full = cur-level().growth.widen[size]
   let cur = g.grow-t.as[i32].widen[size]
   if cur >= full { return .{ cur = full, kf = full, unfurl = 1.0 } }
@@ -645,7 +645,7 @@ fn same-at-gen(a: *expansion, b: *expansion, k: u8): bool {
   ia >= na and ib >= nb
 }
 
-fn row-balance(row: *mut list[token]): size {
+fn row-balance(row: *list[token]): size {
   let bal: size = 0
   for t in row {
     if is-opener(t) { bal = bal + 1 }
@@ -654,7 +654,7 @@ fn row-balance(row: *mut list[token]): size {
   bal
 }
 
-fn genes-of(context g: *mut game)(row: *mut list[token]): size {
+fn genes-of(context g: *game)(row: *list[token]): size {
   let plant = cur-level().world is :plant
   let n: size = 0
   for t in row {
@@ -668,7 +668,7 @@ fn genes-of(context g: *mut game)(row: *mut list[token]): size {
   n
 }
 
-fn score-of(context g: *mut game)(): size {
+fn score-of(context g: *game)(): size {
   let s = genes-of(g.out.&)
   if g.def-a.len() > 0 { s = s + 1 + genes-of(g.def-a.&) }
   if g.def-b.len() > 0 { s = s + 1 + genes-of(g.def-b.&) }
@@ -763,7 +763,7 @@ fn turtle-walk(e: *expansion, angle-deg: f32, frontier: u8, unfurl: f32): turtle
   .{ segs, buds = bud-pts, blooms, end = .{ x, y, ang, w = wid, stride }, marks = stack }
 }
 
-fn grow-bounds(b: *mut bounds, segs: *fixlist[seg, MAX-EXPAND]) {
+fn grow-bounds(b: *bounds, segs: *fixlist[seg, MAX-EXPAND]) {
   for s in segs {
     if s.ax < b.minx { b.minx = s.ax }
     if s.ax > b.maxx { b.maxx = s.ax }
@@ -779,7 +779,7 @@ fn grow-bounds(b: *mut bounds, segs: *fixlist[seg, MAX-EXPAND]) {
 type chip-act = either { tok(token), scale(u8), fold, extract, del, clr }
 type chip = { x: i32, y: i32, act: chip-act }
 
-fn build-palette(context g: *mut game)(): list[chip] {
+fn build-palette(context g: *game)(): list[chip] {
   let lv = cur-level()
   let alpha = world-alphabet(lv.world)
   let chips: list[chip] = list/with-capacity(24)
@@ -831,7 +831,7 @@ fn build-palette(context g: *mut game)(): list[chip] {
   chips
 }
 
-fn seal-call(context g: *mut game)(row: *mut list[token], d: u8): bool {
+fn seal-call(context g: *game)(row: *list[token], d: u8): bool {
   let depth: size = 0
   let i = row.len()
   while i > 0 {
@@ -853,7 +853,7 @@ fn seal-call(context g: *mut game)(row: *mut list[token], d: u8): bool {
   false
 }
 
-fn wrap-sel(context g: *mut game)(row: *mut list[token], opener: token): bool {
+fn wrap-sel(context g: *game)(row: *list[token], opener: token): bool {
   require sel-closed(row) is :some(s) else return false
   if row.len() + 2 > MAX-ROW-TOKENS { return false }
   let keep: fixlist[token, MAX-ROW-TOKENS] = fixlist/uninit()
@@ -874,7 +874,7 @@ fn wrap-sel(context g: *mut game)(row: *mut list[token], opener: token): bool {
   true
 }
 
-fn try-add(context g: *mut game)(t: token) {
+fn try-add(context g: *game)(t: token) {
   if t is :again and g.active == 2 { return }
   let row = row-of(g.active)
   if row.len() >= MAX-ROW-TOKENS { return }
@@ -896,7 +896,7 @@ fn try-add(context g: *mut game)(t: token) {
   g.play = PLAY-IDLE
 }
 
-fn scale-row(context g: *mut game)(n: u8) {
+fn scale-row(context g: *game)(n: u8) {
   let row = row-of(g.active)
   if row.len() == 0 { return }
   let before: fixlist[token, MAX-ROW-TOKENS] = fixlist/uninit()
@@ -909,7 +909,7 @@ fn scale-row(context g: *mut game)(n: u8) {
   }
 }
 
-fn scale-row-apply(context g: *mut game)(row: *mut list[token], n: u8) {
+fn scale-row-apply(context g: *game)(row: *list[token], n: u8) {
   if sel-closed(row).is-some() {
     let _ = wrap-sel(row, :rep(n))
     return
@@ -961,21 +961,21 @@ fn scale-row-apply(context g: *mut game)(row: *mut list[token], n: u8) {
   row.push-in(g.perm, :close)
 }
 
-fn strip-marks(row: *mut list[token], keep: *mut fixlist[token, MAX-ROW-TOKENS]) {
+fn strip-marks(row: *list[token], keep: *fixlist[token, MAX-ROW-TOKENS]) {
   for t in row {
     if t is :mark { continue }
     keep.push(t)
   }
 }
 
-fn clear-mark(context g: *mut game)(row: *mut list[token]) {
+fn clear-mark(context g: *game)(row: *list[token]) {
   let keep: fixlist[token, MAX-ROW-TOKENS] = fixlist/uninit()
   strip-marks(row, keep.&)
   row.clear()
   for t in keep.& { row.push-in(g.perm, t) }
 }
 
-fn mark-at(row: *mut list[token]): ?size {
+fn mark-at(row: *list[token]): ?size {
   let found: ?size = :none
   for t in row {
     if t is :mark { found = :some(it-index) }
@@ -985,7 +985,7 @@ fn mark-at(row: *mut list[token]): ?size {
 
 type sel = { a: size, b: size }
 
-fn sel-of(context g: *mut game)(row: *mut list[token]): ?sel {
+fn sel-of(context g: *game)(row: *list[token]): ?sel {
   if g.sel-a >= 0 and g.sel-b > g.sel-a and g.sel-b <= row.len() {
     return :some(.{ a = g.sel-a, b = g.sel-b })
   }
@@ -995,20 +995,20 @@ fn sel-of(context g: *mut game)(row: *mut list[token]): ?sel {
   :none
 }
 
-fn sel-closed(context g: *mut game)(row: *mut list[token]): ?sel {
+fn sel-closed(context g: *game)(row: *list[token]): ?sel {
   if g.sel-a >= 0 and g.sel-b > g.sel-a and g.sel-b <= row.len() {
     return :some(.{ a = g.sel-a, b = g.sel-b })
   }
   :none
 }
 
-fn drop-sel(context g: *mut game)() {
+fn drop-sel(context g: *game)() {
   g.sel-a = SEL-NONE
   g.sel-b = SEL-NONE
   g.sel-live = false
 }
 
-fn tap-chip(context g: *mut game)(row: *mut list[token], j: size) {
+fn tap-chip(context g: *game)(row: *list[token], j: size) {
   if g.sel-a == j and g.sel-b == j + 1 {
     drop-sel()
     return
@@ -1026,7 +1026,7 @@ fn tap-chip(context g: *mut game)(row: *mut list[token], j: size) {
   g.sel-live = true
 }
 
-fn chunk-eq(row: *mut list[token], a: size, b: size, len: size): bool {
+fn chunk-eq(row: *list[token], a: size, b: size, len: size): bool {
   for i in 0.until(len) {
     if row.[a + i] != row.[b + i] { return false }
   }
@@ -1040,7 +1040,7 @@ fn fix-chunk-eq(row: *fixlist[token, MAX-ROW-TOKENS], a: size, b: size, len: siz
   true
 }
 
-fn start-collapse(context g: *mut game)(shot: *fixlist[token, MAX-ROW-TOKENS], hits: *fixlist[size, MAX-ROW-TOKENS], len: size, repl: ?token) {
+fn start-collapse(context g: *game)(shot: *fixlist[token, MAX-ROW-TOKENS], hits: *fixlist[size, MAX-ROW-TOKENS], len: size, repl: ?token) {
   g.anim-before.clear()
   for t in shot { g.anim-before.push(t) }
   g.anim-hits.clear()
@@ -1051,7 +1051,7 @@ fn start-collapse(context g: *mut game)(shot: *fixlist[token, MAX-ROW-TOKENS], h
   g.anim-t = 0.0
 }
 
-fn fold-row(context g: *mut game)() {
+fn fold-row(context g: *game)() {
   let row = row-of(g.active)
   let n = row.len()
   require sel-closed(row) is :some(s) else return
@@ -1092,7 +1092,7 @@ fn fold-row(context g: *mut game)() {
   g.play = PLAY-IDLE
 }
 
-fn empty-def-row(context g: *mut game)(): u8 {
+fn empty-def-row(context g: *game)(): u8 {
   for i in 0.until(cur-level().ndefs) {
     if i.trunc[u8] != g.active and row-editable(i) and row-of(i.trunc[u8]).len() == 0 {
       return i.trunc[u8]
@@ -1101,7 +1101,7 @@ fn empty-def-row(context g: *mut game)(): u8 {
   255
 }
 
-fn extract-def(context g: *mut game)() {
+fn extract-def(context g: *game)() {
   let row = row-of(g.active)
   require sel-closed(row) is :some(s) else return
   let d = empty-def-row()
@@ -1151,7 +1151,7 @@ fn extract-def(context g: *mut game)() {
   g.play = PLAY-IDLE
 }
 
-fn delete-tokens(context g: *mut game)() {
+fn delete-tokens(context g: *game)() {
   let row = row-of(g.active)
   if sel-closed(row) is :some(s) {
     let keep: fixlist[token, MAX-ROW-TOKENS] = fixlist/uninit()
@@ -1175,7 +1175,7 @@ fn in-rect(mx: i32, my: i32, x: i32, y: i32, w: i32, h: i32): bool {
   mx >= x and mx < x + w and my >= y and my < y + h
 }
 
-fn handle-input(context g: *mut game)() {
+fn handle-input(context g: *game)() {
   let lv = cur-level()
   if rl/is-key-pressed(KEY-N) {
     let next = g.level + 1
@@ -1220,7 +1220,7 @@ fn handle-input(context g: *mut game)() {
   }
 }
 
-fn tick(context g: *mut game)() {
+fn tick(context g: *game)() {
   let dt = rl/get-frame-time()
   if dt > 0.05 { dt = 0.05 }
   let goal = g.preview-growth.as[f32]
@@ -1233,7 +1233,7 @@ fn tick(context g: *mut game)() {
   if g.anim-t < 1.0 { g.anim-t = g.anim-t + dt * ANIM-RATE }
 }
 
-fn tap(context g: *mut game)(mx: i32, my: i32) {
+fn tap(context g: *game)(mx: i32, my: i32) {
   if view/growth-pos() is :some(p) {
     for i in 0.until(cur-level().growth) {
       if in-rect(mx, my, view/growth-pip-x(p.x, i) - 7, p.y - 9, 15, 18) {
@@ -1329,7 +1329,7 @@ ns(reload) view {
     draw-token-glyph(world, t, xi + cw / 2, y + ROW-H / 2, w * 11.0, (w * 22.0).as[i32])
   }
 
-  fn draw-row-collapse(context g: *mut game)(y: i32) {
+  fn draw-row-collapse(context g: *game)(y: i32) {
     let world = cur-level().world
     let phase: f32 = if g.anim-t < ANIM-LIT { 0.0 } else { (g.anim-t - ANIM-LIT) / ANIM-SPAN }
     let lit = g.anim-t < ANIM-LIT
@@ -1360,7 +1360,7 @@ ns(reload) view {
     }
   }
 
-  fn draw-rows(context g: *mut game)() {
+  fn draw-rows(context g: *game)() {
     let lv = cur-level()
     let sel = sel-of(row-of(g.active))
     for i in 0.until(3) {
@@ -1394,7 +1394,7 @@ ns(reload) view {
     }
   }
 
-  fn draw-palette(context g: *mut game)() {
+  fn draw-palette(context g: *game)() {
     let lv = cur-level()
     let armed = sel-closed(row-of(g.active)).is-some()
     for c in build-palette() {
@@ -1424,7 +1424,7 @@ ns(reload) view {
     t
   }
 
-  fn draw-strip(context g: *mut game)(e: *expansion, top: i32, cell: i32, x0: i32, maxn: size, gv: gview, show-buds: bool, show-shifts: bool, show-sel: bool) {
+  fn draw-strip(context g: *game)(e: *expansion, top: i32, cell: i32, x0: i32, maxn: size, gv: gview, show-buds: bool, show-shifts: bool, show-sel: bool) {
     let cf = cell.as[f32]
     let x = x0.as[f32]
     let bi: size = 0
@@ -1476,7 +1476,7 @@ ns(reload) view {
     }
   }
 
-  fn draw-playhead(context g: *mut game)(e: *expansion, top: i32, cell: i32, x0: i32, gv: gview) {
+  fn draw-playhead(context g: *game)(e: *expansion, top: i32, cell: i32, x0: i32, gv: gview) {
     if g.play < 0.0 { return }
     let total = strip-cells(e, gv, e.syms.len())
     if total < 0.01 { return }
@@ -1498,7 +1498,7 @@ ns(reload) view {
     rl/draw-rectangle(px.as[i32], top - 6, 2, cell + 12, C_TEXT-MAIN)
   }
 
-  fn draw-seq-world(context g: *mut game)() {
+  fn draw-seq-world(context g: *game)() {
     let lv = cur-level()
     let gv = growth-view()
     let target = expand-target(lv, gv.kf)
@@ -1628,7 +1628,7 @@ ns(reload) view {
     n
   }
 
-  fn growth-pos(context g: *mut game)(): ?xy {
+  fn growth-pos(context g: *game)(): ?xy {
     let lv = cur-level()
     if not level-recursive(lv) { return :none }
     if lv.world is :seq {
@@ -1672,7 +1672,7 @@ ns(reload) view {
     }
   }
 
-  fn draw-canvas-growth(context g: *mut game)(state: ?bool, at: size, tx: i32, ty: i32) {
+  fn draw-canvas-growth(context g: *game)(state: ?bool, at: size, tx: i32, ty: i32) {
     if growth-pos() is :some(p) {
       draw-growth(p.x, p.y, g.preview-growth, cur-level().growth)
       if state is :some(m) {
@@ -1690,7 +1690,7 @@ ns(reload) view {
     .{ x = PLANT-X + i.trunc[i32] * (w + PANE-GAP), y = PLANT-Y, w, h = PLANT-H }
   }
 
-  fn draw-plant-world(context g: *mut game)() {
+  fn draw-plant-world(context g: *game)() {
     let lv = cur-level()
     let gv = growth-view()
     let full = lv.growth.as[f32]
@@ -1788,7 +1788,7 @@ ns(reload) view {
     }
   }
 
-  fn draw-grid-world(context g: *mut game)() {
+  fn draw-grid-world(context g: *game)() {
     let lv = cur-level()
     let growth = g.preview-growth.widen[size]
     let target = expand-target(lv, growth)
@@ -1834,7 +1834,7 @@ ns(reload) view {
     }
   }
 
-  fn draw-frame(context g: *mut game)() {
+  fn draw-frame(context g: *game)() {
     rl/clear-background(C_INK)
     g.play-src = SRC-NONE
     let lv = cur-level()
@@ -1880,7 +1880,7 @@ ns(reload) view {
   }
 }
 
-fn assert-solved(context g: *mut game)(want-score: size) {
+fn assert-solved(context g: *game)(want-score: size) {
   let lv = cur-level()
   let full = lv.growth.widen[size]
   let te = expand-target(lv, full)
@@ -1890,7 +1890,7 @@ fn assert-solved(context g: *mut game)(want-score: size) {
   if level-recursive(lv) { assert(pe.capped) }
 }
 
-fn self-test(context g: *mut game)() {
+fn self-test(context g: *game)() {
   for li in 0.until(LEVELS.len()) {
     load-level(li)
     let lv = cur-level()
@@ -2100,7 +2100,7 @@ fn self-test(context g: *mut game)() {
   load-level(0)
 }
 
-fn solve-wrapper(context g: *mut game)() {
+fn solve-wrapper(context g: *game)() {
   load-level(level-index("wrapper"))
   g.active = 0
   for s in [0u8, 0] { try-add(:sym(s)) }
@@ -2114,7 +2114,7 @@ fn solve-wrapper(context g: *mut game)() {
   }
 }
 
-fn solve-wrapper-sel(context g: *mut game)() {
+fn solve-wrapper-sel(context g: *game)() {
   load-level(level-index("wrapper"))
   g.active = 0
   for s in [0u8, 0] { try-add(:sym(s)) }
@@ -2130,7 +2130,7 @@ fn solve-wrapper-sel(context g: *mut game)() {
   }
 }
 
-fn solve-onion(context g: *mut game)() {
+fn solve-onion(context g: *game)() {
   load-level(level-index("onion"))
   g.active = 0
   for s in [0u8, 2] { try-add(:sym(s)) }
@@ -2146,7 +2146,7 @@ fn solve-onion(context g: *mut game)() {
   try-add(:name(0))
 }
 
-fn solve-pack(context g: *mut game)() {
+fn solve-pack(context g: *game)() {
   load-level(level-index("pack"))
   g.out.clear()
   try-add(:sym(0))
@@ -2154,21 +2154,21 @@ fn solve-pack(context g: *mut game)() {
   scale-row(6)
 }
 
-fn solve-pack-fold(context g: *mut game)() {
+fn solve-pack-fold(context g: *game)() {
   load-level(level-index("pack"))
   tap-chip(g.out.&, 0)
   tap-chip(g.out.&, 1)
   fold-row()
 }
 
-fn solve-topiary-fold(context g: *mut game)() {
+fn solve-topiary-fold(context g: *game)() {
   load-level(level-index("topiary"))
   tap-chip(g.out.&, 0)
   tap-chip(g.out.&, 5)
   fold-row()
 }
 
-fn solve-pack-marked-fold(context g: *mut game)() {
+fn solve-pack-marked-fold(context g: *game)() {
   load-level(level-index("pack"))
   tap-chip(g.out.&, 2)
   assert(g.out.len() == 12)
@@ -2177,7 +2177,7 @@ fn solve-pack-marked-fold(context g: *mut game)() {
   fold-row()
 }
 
-fn solve-prune-extract(context g: *mut game)() {
+fn solve-prune-extract(context g: *game)() {
   load-level(level-index("prune"))
   tap-chip(g.out.&, 0)
   tap-chip(g.out.&, 5)
@@ -2186,7 +2186,7 @@ fn solve-prune-extract(context g: *mut game)() {
   assert(g.out.len() == 5)
 }
 
-fn solve-prune(context g: *mut game)() {
+fn solve-prune(context g: *game)() {
   load-level(level-index("prune"))
   g.out.clear()
   g.active = 0
@@ -2199,14 +2199,14 @@ fn solve-prune(context g: *mut game)() {
   try-add(:name(0))
 }
 
-fn solve-topiary(context g: *mut game)() {
+fn solve-topiary(context g: *game)() {
   load-level(level-index("topiary"))
   g.out.clear()
   for s in [0u8, 3, 1, 0, 0, 4] { try-add(:sym(s)) }
   scale-row(4)
 }
 
-fn solve-stripes(context g: *mut game)() {
+fn solve-stripes(context g: *game)() {
   load-level(level-index("stripes"))
   try-add(:mark)
   try-add(:mark)
@@ -2216,7 +2216,7 @@ fn solve-stripes(context g: *mut game)() {
   scale-row(2)
 }
 
-fn solve-sunset(context g: *mut game)() {
+fn solve-sunset(context g: *game)() {
   load-level(level-index("sunset"))
   try-add(:mark)
   try-add(:mark)
@@ -2226,14 +2226,14 @@ fn solve-sunset(context g: *mut game)() {
   scale-row(4)
 }
 
-fn solve-reflection(context g: *mut game)() {
+fn solve-reflection(context g: *game)() {
   load-level(level-index("reflection"))
   g.active = 2
   try-add(:mir)
   for s in [0u8, 2, 2, 3] { try-add(:sym(s)) }
 }
 
-fn solve-canon(context g: *mut game)() {
+fn solve-canon(context g: *game)() {
   load-level(level-index("canon"))
   assert(g.active == 0)
   try-add(:hole)
@@ -2241,7 +2241,7 @@ fn solve-canon(context g: *mut game)() {
   try-add(:hole)
 }
 
-fn solve-reflection-sel(context g: *mut game)() {
+fn solve-reflection-sel(context g: *game)() {
   load-level(level-index("reflection"))
   g.active = 2
   for s in [0u8, 2, 2, 3] { try-add(:sym(s)) }
@@ -2250,7 +2250,7 @@ fn solve-reflection-sel(context g: *mut game)() {
   try-add(:mir)
 }
 
-fn solve-rainbow(context g: *mut game)() {
+fn solve-rainbow(context g: *game)() {
   load-level(level-index("rainbow"))
   g.active = 2
   try-add(:mir)
@@ -2259,14 +2259,14 @@ fn solve-rainbow(context g: *mut game)() {
   try-add(:shift)
 }
 
-fn solve-steps(context g: *mut game)() {
+fn solve-steps(context g: *game)() {
   load-level(level-index("steps"))
   try-add(:name(1))
   try-add(:sym(3))
   try-add(:again)
 }
 
-fn solve-staircase(context g: *mut game)() {
+fn solve-staircase(context g: *game)() {
   load-level(level-index("staircase"))
   g.active = 0
   try-add(:name(1))
@@ -2279,7 +2279,7 @@ fn solve-staircase(context g: *mut game)() {
   try-add(:name(0))
 }
 
-fn solve-nesting(context g: *mut game)() {
+fn solve-nesting(context g: *game)() {
   load-level(level-index("nesting"))
   g.active = 0
   try-add(:sym(0))
@@ -2289,7 +2289,7 @@ fn solve-nesting(context g: *mut game)() {
   try-add(:name(0))
 }
 
-fn solve-fork(context g: *mut game)() {
+fn solve-fork(context g: *game)() {
   load-level(level-index("fork"))
   g.active = 0
   for s in [0u8, 3, 1] { try-add(:sym(s)) }
@@ -2299,7 +2299,7 @@ fn solve-fork(context g: *mut game)() {
   try-add(:sym(4))
 }
 
-fn solve-thicket(context g: *mut game)() {
+fn solve-thicket(context g: *game)() {
   load-level(level-index("thicket"))
   g.active = 0
   for s in [0u8, 3, 1] { try-add(:sym(s)) }
@@ -2310,14 +2310,14 @@ fn solve-thicket(context g: *mut game)() {
   try-add(:name(0))
 }
 
-fn solve-reed(context g: *mut game)() {
+fn solve-reed(context g: *game)() {
   load-level(level-index("reed"))
   try-add(:sym(0))
   try-add(:sym(5))
   scale-row(6)
 }
 
-fn solve-coastline(context g: *mut game)() {
+fn solve-coastline(context g: *game)() {
   load-level(level-index("coastline"))
   g.active = 0
   try-add(:again)
@@ -2335,7 +2335,7 @@ fn solve-coastline(context g: *mut game)() {
   scale-row(3)
 }
 
-fn solve-blossom(context g: *mut game)() {
+fn solve-blossom(context g: *game)() {
   load-level(level-index("blossom"))
   g.active = 0
   for s in [0u8, 3, 1] { try-add(:sym(s)) }
@@ -2347,7 +2347,7 @@ fn solve-blossom(context g: *mut game)() {
   try-add(:name(0))
 }
 
-fn solve-bonsai(context g: *mut game)() {
+fn solve-bonsai(context g: *game)() {
   load-level(level-index("bonsai"))
   g.active = 0
   for s in [0u8, 5, 3, 1] { try-add(:sym(s)) }
@@ -2359,7 +2359,7 @@ fn solve-bonsai(context g: *mut game)() {
   try-add(:name(0))
 }
 
-fn solve-dragon(context g: *mut game)() {
+fn solve-dragon(context g: *game)() {
   load-level(level-index("dragon"))
   g.active = 0
   try-add(:again)
@@ -2376,7 +2376,7 @@ fn solve-dragon(context g: *mut game)() {
   try-add(:name(0))
 }
 
-fn solve-bracken(context g: *mut game)() {
+fn solve-bracken(context g: *game)() {
   load-level(level-index("bracken"))
   g.active = 0
   for s in [0u8, 3, 1] { try-add(:sym(s)) }
@@ -2388,7 +2388,7 @@ fn solve-bracken(context g: *mut game)() {
   try-add(:name(0))
 }
 
-fn solve-tendril(context g: *mut game)() {
+fn solve-tendril(context g: *game)() {
   load-level(level-index("tendril"))
   g.active = 0
   for s in [0u8, 7, 1] { try-add(:sym(s)) }
@@ -2397,7 +2397,7 @@ fn solve-tendril(context g: *mut game)() {
   try-add(:name(0))
 }
 
-fn solve-arch(context g: *mut game)() {
+fn solve-arch(context g: *game)() {
   load-level(level-index("arch"))
   g.active = 0
   try-add(:sym(1))
@@ -2411,7 +2411,7 @@ fn solve-arch(context g: *mut game)() {
   try-add(:name(0))
 }
 
-fn solve-island(context g: *mut game)() {
+fn solve-island(context g: *game)() {
   load-level(level-index("island"))
   g.active = 0
   try-add(:again)
@@ -2436,7 +2436,7 @@ fn solve-island(context g: *mut game)() {
   scale-row(4)
 }
 
-fn solve-maze(context g: *mut game)() {
+fn solve-maze(context g: *game)() {
   load-level(level-index("maze"))
   g.active = 0
   try-add(:sym(2))
@@ -2462,7 +2462,7 @@ fn solve-maze(context g: *mut game)() {
   try-add(:name(0))
 }
 
-fn solve-fern(context g: *mut game)() {
+fn solve-fern(context g: *game)() {
   load-level(level-index("fern"))
   g.active = 0
   try-add(:sym(0))
@@ -2486,7 +2486,7 @@ fn solve-fern(context g: *mut game)() {
   try-add(:name(0))
 }
 
-fn solve-by-name(context g: *mut game)(name: string): bool {
+fn solve-by-name(context g: *game)(name: string): bool {
   if name == "pack" { solve-pack() }
   else if name == "prune" { solve-prune() }
   else if name == "wrapper" { solve-wrapper() }

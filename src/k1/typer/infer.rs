@@ -968,6 +968,9 @@ impl TypedProgram {
                     ),
                 }
             }
+            (Type::FunctionPointer(fp), Type::Reference(slot_reference)) => {
+                self.unify_and_find_substitutions_rec(fp.function_type_id, slot_reference.inner_type)
+            }
             (passed, Type::Reference(slot_reference)) if passed.as_reference().is_none() => {
                 // We expect a reference and provide a non-reference
                 // Unify as if the address_of rule is applied, but only if the inner type would match

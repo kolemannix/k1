@@ -2,7 +2,7 @@ ns defer_test
 
 use core/inc
 
-fn loop-test(sensor: *mut int) {
+fn loop-test(sensor: *int) {
   let i = 0
   // Every iteration, we increment i, then check that the sensor is right behind it,
   // then increment the sensor
@@ -16,7 +16,7 @@ fn loop-test(sensor: *mut int) {
 // An early return causes 'unwinding' of all defers in scope,
 // and if it appears at the end of a block, does NOT cause
 // duplicate insertion of that block's defers
-fn return-test(sensor: *mut int) {
+fn return-test(sensor: *int) {
   defer { assert-equals(sensor.*, 2); inc(sensor) }
   if true {
     defer { assert-equals(sensor.*, 1); inc(sensor) }
@@ -34,7 +34,7 @@ type action = either { accept, reject }
 
 // A block that yields a value runs its defers after the value is computed,
 // and still yields the value
-fn value-block-test(sensor: *mut int): action {
+fn value-block-test(sensor: *int): action {
   let r: action = if 0 is {
     0 -> {
       defer { assert-equals(sensor.*, 1); inc(sensor) }
@@ -48,20 +48,20 @@ fn value-block-test(sensor: *mut int): action {
 }
 
 // A function body's final value is computed before its defers run
-fn value-return-test(sensor: *mut int): int {
+fn value-return-test(sensor: *int): int {
   defer { assert-equals(sensor.*, 1); inc(sensor) }
   inc(sensor)
   sensor.* + 41
 }
 
 // A final statement that diverges through returns runs defers exactly once
-fn branchy-test(sensor: *mut int): int {
+fn branchy-test(sensor: *int): int {
   defer inc(sensor)
   if sensor.* == 0 { return 1 } else { return 2 }
 }
 
 // break computes its value, then runs the defers of every scope it exits
-fn break-test(sensor: *mut int): int {
+fn break-test(sensor: *int): int {
   loop {
     defer inc(sensor)
     if sensor.* == 3 {
@@ -71,7 +71,7 @@ fn break-test(sensor: *mut int): int {
 }
 
 // The .try error path runs pending defers on its way out
-fn try-defers(sensor: *mut int): result[int, string] {
+fn try-defers(sensor: *int): result[int, string] {
   defer inc(sensor)
   let v: result[int, string] = :err "boom"
   let i = v.try
@@ -79,13 +79,13 @@ fn try-defers(sensor: *mut int): result[int, string] {
 }
 
 // Defers in one scope run last-declared-first, both at block end...
-fn lifo-block-test(sensor: *mut int) {
+fn lifo-block-test(sensor: *int) {
   defer { assert-equals(sensor.*, 1); inc(sensor) }
   defer { assert-equals(sensor.*, 0); inc(sensor) }
 }
 
 // ...and at an early return
-fn lifo-return-test(sensor: *mut int) {
+fn lifo-return-test(sensor: *int) {
   defer { assert-equals(sensor.*, 1); inc(sensor) }
   defer { assert-equals(sensor.*, 0); inc(sensor) }
   if sensor.* == 0 { return }

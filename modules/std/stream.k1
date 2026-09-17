@@ -16,15 +16,15 @@ type pull[t] = either { chunk(span[span[t]]), pending, done, fail(string) }
 // `stop` (which must release everything the source owns).
 // Erase to a storable handle with `.to-dyn()`.
 ability source[impl t] {
-  fn start(self: *mut self, _waker: waker) {}
-  fn next(self: *mut self): pull[t]
-  fn stop(self: *mut self) {}
+  fn start(self: *self, _waker: waker) {}
+  fn next(self: *self): pull[t]
+  fn stop(self: *self) {}
 }
 
 // Consumes a stream chunk by chunk, then yields a single result value.
 ability sink[impl t, impl out] {
-  fn receive(self: *mut self, chunk: span[t])
-  fn finish(self: *mut self): out
+  fn receive(self: *self, chunk: span[t])
+  fn finish(self: *self): out
 }
 
 // Constructors: `source/` is the place to look for ways to make a stream
@@ -32,7 +32,7 @@ ns source {
   // A source over an in-memory span, yielding fixed-size chunks. Allocates its
   // cursor state in the ambient mode
   fn from-span[t](items: span[t], chunk-size: size): dyn[source[t = t]] {
-    let state: *mut buffer-source[t] = mem/new(.{
+    let state: *buffer-source[t] = mem/new(.{
       items,
       cursor = 0,
       chunk-size,
@@ -44,7 +44,7 @@ ns source {
   // One printed item per pull, rendered into a reused buffer: each element
   // becomes its own chunk (and so, downstream, its own SSE event or message)
   fn from-items[t: print](items: span[t]): dyn[source[t = u8]] {
-    let state: *mut item-source[t] = mem/new(.{
+    let state: *item-source[t] = mem/new(.{
       items,
       cursor = 0,
       buf = list/empty[u8](),
@@ -54,7 +54,7 @@ ns source {
   }
 
   // Drain a synchronous source through a sink, returning the sink's value.
-  fn run-to[t, out, k](src: dyn[source[t = t]], into: *mut k): out where k: sink[t = t, out = out] {
+  fn run-to[t, out, k](src: dyn[source[t = t]], into: *k): out where k: sink[t = t, out = out] {
     src.start(waker/noop())
     loop {
       if src.next() is {
@@ -78,7 +78,7 @@ type buffer-source[t] = {
 }
 
 impl[t] source[t = t] for buffer-source[t] {
-  fn next(self: *mut buffer-source[t]): pull[t] {
+  fn next(self: *buffer-source[t]): pull[t] {
     let remaining = self.items.len() - self.cursor
     if remaining == 0 { return :done }
     let n = remaining.min(self.chunk-size)
@@ -97,7 +97,7 @@ type item-source[t] = {
 }
 
 impl[t: print] source[t = u8] for item-source[t] {
-  fn next(self: *mut item-source[t]): pull[u8] {
+  fn next(self: *item-source[t]): pull[u8] {
     if self.cursor == self.items.len() { return :done }
     self.buf.clear()
     self.items.[self.cursor].print-to(self.buf.&)
@@ -111,8 +111,8 @@ impl[t: print] source[t = u8] for item-source[t] {
 type sum-sink[t] = { total: t }
 
 impl[t: add] sink[t = t, out = t] for sum-sink[t] {
-  fn receive(self: *mut sum-sink[t], chunk: span[t]) {
+  fn receive(self: *sum-sink[t], chunk: span[t]) {
     for x in chunk { self.total = self.total + x }
   }
-  fn finish(self: *mut sum-sink[t]): t { self.total }
+  fn finish(self: *sum-sink[t]): t { self.total }
 }

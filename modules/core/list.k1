@@ -35,12 +35,12 @@ ns for list {
     .{ len = 0, buffer = buffer/allocate-in[t, _](alloc, cap) }
   }
 
-  fn(inline) reserve-in[t, a: allocator](self: *mut list[t], alloc: a, count: size) {
+  fn(inline) reserve-in[t, a: allocator](self: *list[t], alloc: a, count: size) {
     if self.cap() >= count return
     self.buffer._grow-to[t, _](alloc, count)
   }
 
-  fn(inline) reserve[t](self: *mut list[t], count: size) {
+  fn(inline) reserve[t](self: *list[t], count: size) {
     self.reserve-in[t, _](mem/current-arena(), count)
   }
 
@@ -49,7 +49,7 @@ ns for list {
   fn(inline) from-span[t](span: span[t]): list[t] { .{ len = span.len(), buffer = span.buffer.cloned() } }
   fn(inline) to-buffer[t](self: list[t]): buffer[t] { self.as-buffer().cloned() }
 
-  fn to-array[t, n: static size](self: list[t], count: n): *mut array[t, n] {
+  fn to-array[t, n: static size](self: list[t], count: n): *array[t, n] {
     let count-val = count.from-static()
     assert-equals(self.len, count-val)
     let base: ptr = self.as-buffer().cloned().data-ptr()
@@ -59,8 +59,8 @@ ns for list {
   // The possibly-uninitialized backing buffer of this list
   fn(inline) inner-buffer[t](self: list[t]): buffer[t] { self.buffer }
 
-  fn(inline) _grow[t, a: allocator](self: *mut list[t], alloc: a) {
-    self.buffer.&.as-raw-ref().grow-in(alloc, types/stride[t], types/align[t](), raw-buffer/grown-cap(self.cap(), types/size[t]))
+  fn(inline) _grow[t, a: allocator](self: *list[t], alloc: a) {
+    self.buffer.&._grow-to(alloc, buffer/grown-cap(self.cap(), types/size[t]))
   }
 
   fn(inline) cloned-in[t, a: allocator](self: list[t], alloc: a): list[t] {
@@ -71,7 +71,7 @@ ns for list {
     self.cloned-in[t, _](mem/current-arena())
   }
 
-  fn(inline) push-in[t, a: allocator](self: *mut list[t], alloc: a, elem: t) {
+  fn(inline) push-in[t, a: allocator](self: *list[t], alloc: a, elem: t) {
     let start-length = self.len
     if start-length == self.*.cap() {
       self._grow(alloc)
@@ -80,11 +80,11 @@ ns for list {
     self.[start-length] = elem
   }
 
-  fn(inline) push[t](self: *mut list[t], elem: t) {
+  fn(inline) push[t](self: *list[t], elem: t) {
     self.push-in[t, _](mem/current-arena(), elem)
   }
 
-  fn(inline) clear[t](self: *mut list[t]) {
+  fn(inline) clear[t](self: *list[t]) {
     self.len = 0
   }
 
@@ -105,32 +105,31 @@ ns for list {
     dst
   }
 
-  fn(inline) append-list[t](self: *mut list[t], other: list[t]) {
+  fn(inline) append-list[t](self: *list[t], other: list[t]) {
     self.append-buffer(other.as-buffer())
   }
 
-  fn(inline) append-buffer[t](self: *mut list[t], other: buffer[t]) {
+  fn(inline) append-buffer[t](self: *list[t], other: buffer[t]) {
     self.append-buffer-in[t, _](mem/current-arena(), other)
   }
-  fn append-buffer-in[t, a: allocator](self: *mut list[t], alloc: a, other: buffer[t]) {
+  fn append-buffer-in[t, a: allocator](self: *list[t], alloc: a, other: buffer[t]) {
     let needed = self.len + other.len
     if needed > self.cap() {
       let doubled = self.cap() * 2
       self.reserve-in(alloc, if doubled > needed doubled else needed)
     }
-    let dst = self.buffer.as-raw().slice(types/stride[t], self.len, needed)
-    raw-buffer/copy(src = other.as-raw(), dst = dst, stride = types/stride[t])
+    buffer/copy(src = other, dst = self.buffer.slice(self.len, needed))
     self.len = needed
   }
 
-  fn(inline) append-span[t](self: *mut list[t], other: span[t]) {
+  fn(inline) append-span[t](self: *list[t], other: span[t]) {
     self.append-buffer(other.inner-buffer())
   }
-  fn(inline) append-span-in[t, a: allocator](self: *mut list[t], alloc: a, other: span[t]) {
+  fn(inline) append-span-in[t, a: allocator](self: *list[t], alloc: a, other: span[t]) {
     self.append-buffer-in(alloc, other.inner-buffer())
   }
 
-  fn sort[t](input: *mut list[t]) where t: comparable {
+  fn sort[t](input: *list[t]) where t: comparable {
     input.as-buffer().sort()
   }
 
@@ -174,13 +173,13 @@ ns for list {
     keep
   }
 
-  fn remove[t](self: *mut list[t], index: size) {
-    raw-buffer/check-bounds(self.len, index)
+  fn remove[t](self: *list[t], index: size) {
+    buffer/check-index(self.len, index)
     self.buffer.remove(index)
     self.len = self.len - 1
   }
 
-  fn filter-in-place[t](self: *mut list[t], f: some fn t -> bool) {
+  fn filter-in-place[t](self: *list[t], f: some fn t -> bool) {
     let kept: size = 0
     for i in 0.until(self.len) {
       let elem = self.[i]
@@ -194,12 +193,12 @@ ns for list {
 
 }
 
-impl writer for *mut list[char] {
+impl writer for *list[char] {
   fn(inline) write-byte(self, value: u8) { self.push(value.as-char()) }
   fn(inline) write-bytes(self, bytes: span[byte]) { self.append-span(bytes.as-char-span()) }
 }
 
-impl writer for *mut list[u8] {
+impl writer for *list[u8] {
   fn(inline) write-byte(self, value: u8) { self.push(value) }
   fn(inline) write-bytes(self, bytes: span[byte]) {
     self.append-span(bytes)
@@ -240,7 +239,7 @@ impl[t] as-buffer[t = t] for list[t] {
   }
 }
 
-impl[t] as-buffer[t = t] for *mut list[t] {
+impl[t] as-buffer[t = t] for *list[t] {
   fn(inline) as-buffer(self): buffer[t] {
     self.*.as-buffer()
   }
@@ -254,7 +253,7 @@ impl[t] as-span[t = t] for *list[t] {
 
 impl[t] index[key = size, t = t] for list[t] {
   fn(inline) index-ref(self, key: size): *t {
-    raw-buffer/check-bounds(self.len, key)
+    buffer/check-index(self.len, key)
     self.buffer.index-unchecked(key)
   }
 }

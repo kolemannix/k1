@@ -122,7 +122,7 @@ ordinary duplicates; the names are not reserved):
 Per reloadable ns, host codegen emits an exported descriptor global
 `__k1_reload_ns_<module/ns>`:
 
-    { dylib_file_name, api_hash, version: *mut u64,
+    { dylib_file_name, api_hash, version: *u64,
       entry_count, entries: [(symbol_name, slot_ptr)] }
 
 Entries cover fns and globals alike — a slot is a slot, and dlsym resolves

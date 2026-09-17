@@ -105,7 +105,7 @@ fn get_test_expectation(test_file: &Path) -> TestExpectation {
     }
 }
 
-fn test_file<P: AsRef<Path>>(ctx: &Context, path: P) -> Result<()> {
+fn test_file<P: AsRef<Path>>(ctx: &Context, k1_home: &str, path: P) -> Result<()> {
     let filename = path.as_ref().file_name().unwrap().to_str().unwrap();
     let args = k1::compiler::Args {
         optimize: false,
@@ -122,7 +122,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P) -> Result<()> {
         chatty: false,
         optimize_ir: true,
         cache: false,
-        k1_home_override: None,
+        k1_home_override: Some(k1_home.to_string()),
         command: Command::Build { file: Some(path.as_ref().to_owned()) },
     };
     let compile_result = compiler::compile_program(&args);
@@ -290,6 +290,7 @@ pub fn main() -> Result<()> {
     let test_suite_args = TestSuiteClapArgs::parse();
     eprintln!("{:#?}", test_suite_args);
     let test_dir = test_suite_args.tests_dir.unwrap_or("test_src".to_string());
+    let k1_home = std::env::current_dir()?.to_str().unwrap().to_string();
     let mut all_tests = Vec::new();
     for dir_entry in std::fs::read_dir(test_dir)? {
         let dir_entry = dir_entry?;
@@ -345,7 +346,7 @@ pub fn main() -> Result<()> {
                         let ctx = Context::create();
                         let filename = filename.to_string();
                         eprintln!("{filename:040}...");
-                        let result = test_file(&ctx, test.as_path());
+                        let result = test_file(&ctx, &k1_home, test.as_path());
                         match result {
                             Ok(_) => {
                                 eprintln!("{filename:040} {}", "PASS".green());
@@ -373,7 +374,7 @@ pub fn main() -> Result<()> {
             let ctx = Context::create();
             let filename = test.as_path().file_name().unwrap().to_str().unwrap();
             eprintln!("{filename:040}...");
-            let result = test_file(&ctx, test.as_path());
+            let result = test_file(&ctx, &k1_home, test.as_path());
             match result {
                 Ok(_) => {
                     eprintln!("{filename:040} {}", "PASS".green());

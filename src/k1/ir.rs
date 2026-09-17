@@ -3564,7 +3564,7 @@ fn compile_ir_builtin(
             Ok(store_scalar_if_dst(b, dst, inst.as_value()))
         }
         BuiltinIr::AtomicStore => {
-            // fn(intern) store[t](dst: *mut t, value: t, ord: ordering)
+            // fn(intern) store[t](dst: *t, value: t, ord: ordering)
             let type_id = call.type_args.as_slice(&b.k1.mem)[0];
             let t = check_atomic_scalar_type(b, type_id, true)?;
             let ord = b.k1.atomic_ordering_arg(&call, 2)?;
@@ -3574,7 +3574,7 @@ fn compile_ir_builtin(
             Ok(store_rich_if_dst(b, dst, PhysicalType::EMPTY, Value::Empty, IrComment::None))
         }
         BuiltinIr::AtomicRmw(op) => {
-            // fn(intern) <op>[t](dst: *mut t, value: t, ord: ordering): t
+            // fn(intern) <op>[t](dst: *t, value: t, ord: ordering): t
             use crate::typer::AtomicRmwOp as Op;
             let allow_pointer = op == Op::Xchg;
             let type_id = call.type_args.as_slice(&b.k1.mem)[0];
@@ -3600,7 +3600,7 @@ fn compile_ir_builtin(
             Ok(store_scalar_if_dst(b, dst, inst.as_value()))
         }
         BuiltinIr::AtomicCmpxchg { weak } => {
-            // fn(intern) cmpxchg[t](dst: *mut t, expected: t, desired: t,
+            // fn(intern) cmpxchg[t](dst: *t, expected: t, desired: t,
             //                      success: ordering, failure: ordering): cmpxchg-result[t]
             let type_id = call.type_args.as_slice(&b.k1.mem)[0];
             let t = check_atomic_scalar_type(b, type_id, true)?;

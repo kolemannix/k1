@@ -32,7 +32,7 @@ type f32 = builtin
 type f64 = builtin
 
 
-type buffer[t] = { data: *mut t, len: size }
+type buffer[t] = { data: ptr, len: size }
 
 type span[t] = { buffer: buffer[t] }
 
@@ -438,18 +438,18 @@ ability try[impl t, impl e] {
 }
 
 ability iterator[impl item] {
-  fn next(self: *mut self): ?item
+  fn next(self: *self): ?item
   fn size-hint(self: *self): { at-least: size, at-most: ?size } {
     .{ at-least = 0, at-most = :none }
   }
-  fn advance-by(self: *mut self, n: size) {
+  fn advance-by(self: *self, n: size) {
     let i: size = 0
     while i < n {
       if self.next() is :none { break }
       i = i + 1
     }
   }
-  fn nth(self: *mut self, n: size): ?item {
+  fn nth(self: *self, n: size): ?item {
     self.advance-by(n)
     self.next()
   }
@@ -825,23 +825,23 @@ ns k1 {
       }
     }
 
-    fn executable(self: *mut module) {
+    fn executable(self: *module) {
       if self.kind.is-some() { crash("module kind set twice") }
       self.kind = :some(:executable)
     }
 
-    fn library(self: *mut module) {
+    fn library(self: *module) {
       if self.kind.is-some() { crash("module kind set twice") }
       self.kind = :some(:library)
     }
 
-    fn dep(self: *mut module, name: string) {
+    fn dep(self: *module, name: string) {
       self.add-dep-impl(name, 0)
     }
 
     // The compiler rewrites `m.dep(name, .{ ... })` to target this fn, passing the
     // captured params expression id; not meant to be called directly
-    fn add-dep-impl(self: *mut module, name: string, params-expr-id: u64) {
+    fn add-dep-impl(self: *module, name: string, params-expr-id: u64) {
       if name.is-empty() { crash("empty dep name") }
       if not name.[0].is-ascii-lower() {
         crash("invalid dep name '$name': dep names start with a lowercase ascii letter")
@@ -856,15 +856,15 @@ ns k1 {
       self.deps.push(.{ name, params-expr-id })
     }
 
-    fn lib(self: *mut module, name: string, link-type: link-kind) {
+    fn lib(self: *module, name: string, link-type: link-kind) {
       self.libs.push(.{ name, link-type })
     }
 
-    fn link-args(self: *mut module, args: span[string]) {
+    fn link-args(self: *module, args: span[string]) {
       for args { self.link-args.push(it) }
     }
 
-    fn setup(self: *mut module, outputs: span[string], inputs: span[string]) {
+    fn setup(self: *module, outputs: span[string], inputs: span[string]) {
       if self.setup.is-some() { crash("module setup declared twice") }
       let o: list[string] = list/with-capacity(outputs.len())
       for outputs { o.push(it) }
@@ -912,11 +912,12 @@ ns for ptr {
 
   fn(inline) is-null(self: ptr): bool { self is null }
 
-  fn(inline) ref[t](self: ptr): *t { mem/bitcast[ptr, *t](self) }
-
-  fn ref-opt[t](self: ptr): optref[t] {
-    .{ inner = self.ref[t] }
+  fn(inline) ref[t](context locn: k1/source-location)(self: ptr): *t {
+    #if k1/debug or k1/is-static { if self is null crash("null ptr to reference") }
+    mem/bitcast[ptr, *t](self)
   }
+
+  fn(inline) ref-opt[t](self: ptr): optref[t] { .{ inner = self } }
 
   fn(inline) to-int(self: ptr): i64 { mem/bitcast[ptr, i64](self) }
   fn(inline) to-uint(self: ptr): u64 { mem/bitcast[ptr, u64](self) }
@@ -925,7 +926,7 @@ ns for ptr {
   // This is an intrinsic so that we can codegen a getelementptr
   // instruction in LLVM rather than a pointer cast.
   // But we _could_ do it in userland using size-of and arithmetic which is neat!
-  fn(intern) ref-at[t](self: ptr, index: size): *mut t
+  fn(intern) ref-at[t](self: ptr, index: size): *t
 
   // ref-at compiles to gep, which preserves provenance
   fn(inline) add-bytes(self: ptr, offset: size): ptr {
@@ -983,7 +984,7 @@ fn discard[t](_t: t): empty {}
 fn phony[t](): t { crash("phony") }
 
 ns array {
-  fn(inline) data-ref[t, n](array: *array[t, n]): *mut t where n: static size {
+  fn(inline) data-ref[t, n](array: *array[t, n]): *t where n: static size {
     array.[0].&
   }
   fn(inline) data-ptr[t, n](array: *array[t, n]): ptr where n: static size {
@@ -997,15 +998,15 @@ ns array {
     .0
   }
 
-  fn allocate[t, n: static size, a: allocator](alloc: a): *mut array[t, n] {
+  fn allocate[t, n: static size, a: allocator](alloc: a): *array[t, n] {
     alloc.alloc-t[array[t, n]]()
   }
 
-  fn memset[t, n](array: *mut array[t, n], value: u8) where n: static size {
+  fn memset[t, n](array: *array[t, n], value: u8) where n: static size {
     mem/set(dst = array.data-ptr(), value = value, count = array.size-bytes())
   }
 
-  fn filled-in[t, n: static size, a: allocator](alloc: a, t: t, n: n): *mut array[t, n] {
+  fn filled-in[t, n: static size, a: allocator](alloc: a, t: t, n: n): *array[t, n] {
     let array-uninit = allocate[t, n, _](alloc)
     let i = 0
     while i < n.from-static() {
@@ -1026,9 +1027,9 @@ ns array {
 
 }
 
-impl[t, n: static size] as-buffer[t = t] for *mut array[t, n] {
+impl[t, n: static size] as-buffer[t = t] for *array[t, n] {
   fn(inline) as-buffer(self): buffer[t] {
-    .{ len = self.len(), data = self.data-ref() }
+    .{ len = self.len(), data = self.data-ptr() }
   }
 }
 

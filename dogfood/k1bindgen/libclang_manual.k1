@@ -209,10 +209,10 @@ type(alias) CXFile = ptr
 
 fn(extern("clang_getFileLocation")) getFileLocation(
   location: CXSourceLocation,
-  file: *mut CXFile,
-  line: *mut u32,
-  column: *mut u32,
-  offset: *mut u32
+  file: *CXFile,
+  line: *u32,
+  column: *u32,
+  offset: *u32
 )
 
 fn(extern("clang_Type_getAlignOf")) Type_getAlignOf(T: CXType): i64
@@ -268,15 +268,15 @@ type CXToken = {
 fn(extern("clang_tokenize")) tokenize(
   TU: CXTranslationUnit,
   Range: CXSourceRange,
-  out_Tokens: *mut *mut CXToken,
-  out_NumTokens: *mut c-unsigned
+  out_Tokens: **CXToken,
+  out_NumTokens: *c-unsigned
 )
 
 fn(extern("clang_getTokenKind")) getTokenKind(Token: CXToken): CXTokenKind
 
 fn(extern("clang_getTokenSpelling")) getTokenSpelling(TU: CXTranslationUnit, Token: CXToken): CXString
 
-fn(extern("clang_disposeTokens")) disposeTokens(TU: CXTranslationUnit, Tokens: *mut CXToken, NumTokens: c-unsigned)
+fn(extern("clang_disposeTokens")) disposeTokens(TU: CXTranslationUnit, Tokens: *CXToken, NumTokens: c-unsigned)
 
 type CXCursorKind = either(c-unsigned) {
   // Declarations

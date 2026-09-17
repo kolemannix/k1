@@ -21,7 +21,7 @@ ns fd {
     let sb = string-builder/new()
     let chunk = buffer/allocate[u8](4096)
     loop {
-      let n = if core/platform/io/read(.{ raw = fd }, chunk.data.as[ptr], chunk.len).result() is {
+      let n = if core/platform/io/read(.{ raw = fd }, chunk.data, chunk.len).result() is {
         :ok(n) -> n,
         :err(e) -> return :err core/platform/error-string(e)
       }
@@ -41,7 +41,7 @@ ns fd {
 
     // Blocking; :none only at EOF with nothing buffered. The last line before
     // EOF may arrive without its newline.
-    fn read-line(self: *mut reader): ?string {
+    fn read-line(self: *reader): ?string {
       loop {
         let i = self.consumed
         while i < self.pending.len() {
@@ -57,7 +57,7 @@ ns fd {
           i = i + 1
         }
         let chunk = buffer/allocate-in[u8, _](mem/tmp(), 4096)
-        let n = if core/platform/io/read(.{ raw = self.fd }, chunk.data.as[ptr], chunk.len).result() is {
+        let n = if core/platform/io/read(.{ raw = self.fd }, chunk.data, chunk.len).result() is {
           :ok(n) -> n,
           :err(_) -> return :none
         }
@@ -75,7 +75,7 @@ ns fd {
       }
     }
 
-    fn take-line(self: *mut reader, end: size): string {
+    fn take-line(self: *reader, end: size): string {
       let sb = string-builder/new()
       sb.write-bytes(self.pending.slice(self.consumed, end))
       sb.build()

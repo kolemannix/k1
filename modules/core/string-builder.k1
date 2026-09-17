@@ -6,7 +6,7 @@ ns for string-builder {
     .{ list = list/empty() }
   }
 
-  fn reset(self: *mut string-builder) {
+  fn reset(self: *string-builder) {
     self.list.clear()
   }
 

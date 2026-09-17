@@ -34,7 +34,7 @@ fn(inline) mix-word(h: u64, w: u64): u64 {
 impl hash for string {
   fn hash(self): u64 {
     let bytes = self.span-bytes()
-    let p = bytes.data-ref().as[ptr]
+    let p = bytes.data-ptr()
     let len = bytes.len()
     let h: u64 = 0xcbf29ce484222325 ^ len.unsigned()
     if len >= 8 {
@@ -154,7 +154,7 @@ ns for map {
   fn(inline) _lead(m: u64): u64 { (m << (64 - MASK-BITS)).leading-zeros() >> LANE-SHIFT }
   fn(inline) _trail(m: u64): u64 { m.trailing-zeros() >> LANE-SHIFT }
 
-  fn _set-ctrl[k, v](self: *mut map[k, v], idx: size, c: u8) {
+  fn _set-ctrl[k, v](self: *map[k, v], idx: size, c: u8) {
     let mirror = ((idx - MIRROR) & (self.entries.len - 1)) + MIRROR
     self.ctrl.index-unchecked(idx).* = c
     self.ctrl.index-unchecked(mirror).* = c
@@ -192,7 +192,7 @@ ns for map {
     }
   }
 
-  fn _resize[k, v, a: allocator](self: *mut map[k, v], alloc: a, buckets: size) where k: hash {
+  fn _resize[k, v, a: allocator](self: *map[k, v], alloc: a, buckets: size) where k: hash {
     let old = self.*
     let fresh = _allocate[k, v, _](alloc, buckets)
     for i in 0.until(old.entries.len) {
@@ -210,7 +210,7 @@ ns for map {
     old._free(alloc)
   }
 
-  fn _rehash-in-place[k, v](self: *mut map[k, v], capacity: size) where k: hash {
+  fn _rehash-in-place[k, v](self: *map[k, v], capacity: size) where k: hash {
     let buckets = self.entries.len
     let mask = buckets - 1
     for i in 0.until(buckets) {
@@ -246,13 +246,13 @@ ns for map {
     self.growth-left = capacity - self.count
   }
 
-  fn(inline) _claim[k, v](self: *mut map[k, v], idx: size, h: u64) {
+  fn(inline) _claim[k, v](self: *map[k, v], idx: size, h: u64) {
     if self.ctrl.index-unchecked(idx).* == EMPTY { self.growth-left = self.growth-left - 1 }
     self._set-ctrl(idx, _h2(h))
     self.count = self.count + 1
   }
 
-  fn _make-room[k, v, a: allocator](self: *mut map[k, v], alloc: a, h: u64): size where k: hash {
+  fn _make-room[k, v, a: allocator](self: *map[k, v], alloc: a, h: u64): size where k: hash {
     if self.entries.len == 0 {
       self.* = _allocate[k, v, _](alloc, MIRROR)
     } else {
@@ -266,7 +266,7 @@ ns for map {
     self._find-insert-slot(h)
   }
 
-  fn(inline) _prepare-insert[k, v, a: allocator](self: *mut map[k, v], alloc: a, h: u64): size where k: hash {
+  fn(inline) _prepare-insert[k, v, a: allocator](self: *map[k, v], alloc: a, h: u64): size where k: hash {
     let idx = if self.entries.len == 0 {
       self._make-room(alloc, h)
     } else {
@@ -281,7 +281,7 @@ ns for map {
     idx
   }
 
-  fn insert-in[k, v, a: allocator](self: *mut map[k, v], alloc: a, key: k, value: v)
+  fn insert-in[k, v, a: allocator](self: *map[k, v], alloc: a, key: k, value: v)
     where k: hash, k: equals {
     let h = key.hash()
     if self._find(key, h) is {
@@ -293,12 +293,12 @@ ns for map {
     }
   }
 
-  fn insert[k, v](self: *mut map[k, v], key: k, value: v) where k: hash, k: equals {
+  fn insert[k, v](self: *map[k, v], key: k, value: v) where k: hash, k: equals {
     self.insert-in(mem/current-arena(), key, value)
   }
 
   // The reference is valid until the next insert or remove
-  fn get-or-insert-in[k, v, a: allocator](self: *mut map[k, v], alloc: a, key: k, make: some fn() -> v): *mut v
+  fn get-or-insert-in[k, v, a: allocator](self: *map[k, v], alloc: a, key: k, make: some fn() -> v): *v
     where k: hash, k: equals {
     let h = key.hash()
     let idx = if self._find(key, h) is {
@@ -314,7 +314,7 @@ ns for map {
 
   // Body duplicated from get-or-insert-in: a some-fn param can neither be
   // passed to another some-fn param nor captured by a wrapping lambda today
-  fn get-or-insert[k, v](self: *mut map[k, v], key: k, make: some fn() -> v): *mut v
+  fn get-or-insert[k, v](self: *map[k, v], key: k, make: some fn() -> v): *v
     where k: hash, k: equals {
     let h = key.hash()
     let idx = if self._find(key, h) is {
@@ -335,7 +335,7 @@ ns for map {
     }
   }
 
-  fn get-ref[k, v](self: *mut map[k, v], key: k): ?(*mut v) where k: hash, k: equals {
+  fn get-ref[k, v](self: *map[k, v], key: k): ?(*v) where k: hash, k: equals {
     if self._find(key, key.hash()) is {
       :some idx -> :some self.entries.index-unchecked(idx).value.&,
       :none -> :none
@@ -346,7 +346,7 @@ ns for map {
     self._find(key, key.hash()).is-some()
   }
 
-  fn _erase[k, v](self: *mut map[k, v], idx: size) {
+  fn _erase[k, v](self: *map[k, v], idx: size) {
     let mask = self.entries.len - 1
     let before = (idx - GROUP) & mask
     let empty-before = _match-empty(self._group(before))
@@ -362,7 +362,7 @@ ns for map {
     self.count = self.count - 1
   }
 
-  fn remove[k, v](self: *mut map[k, v], key: k): ?v where k: hash, k: equals {
+  fn remove[k, v](self: *map[k, v], key: k): ?v where k: hash, k: equals {
     if self._find(key, key.hash()) is {
       :none -> :none,
       :some idx -> {
@@ -373,7 +373,7 @@ ns for map {
     }
   }
 
-  fn clear[k, v](self: *mut map[k, v]) {
+  fn clear[k, v](self: *map[k, v]) {
     self.ctrl.memset(0)
     self.count = 0
     self.growth-left = _capacity-of(self.entries.len)
@@ -417,7 +417,7 @@ ns for map-iterator {
 }
 
 impl[k, v] iterator[item = { key: k, value: v }] for map-iterator[k, v] {
-  fn next(self: *mut self): ?item {
+  fn next(self: *self): ?item {
     let i = self._next-live(self.pos)
     if i < self.entries.len {
       self.pos = i + 1
@@ -431,7 +431,7 @@ impl[k, v] iterator[item = { key: k, value: v }] for map-iterator[k, v] {
   fn size-hint(self: *self): { at-least: size, at-most: ?size } {
     .{ at-least = self.remaining, at-most = :some self.remaining }
   }
-  fn advance-by(self: *mut self, n: size): empty {
+  fn advance-by(self: *self, n: size): empty {
     let advanced = 0
     while advanced < n {
       let i = self._next-live(self.pos)
@@ -513,13 +513,13 @@ ns for set {
   fn non-empty[t](self: *set[t]): bool { not self.inner.is-empty() }
 
   // true if the value was newly added
-  fn add-in[t, a: allocator](self: *mut set[t], alloc: a, value: t): bool where t: hash, t: equals {
+  fn add-in[t, a: allocator](self: *set[t], alloc: a, value: t): bool where t: hash, t: equals {
     let before = self.inner.len()
     self.inner.insert-in(alloc, value, .{})
     self.inner.len() != before
   }
 
-  fn add[t](self: *mut set[t], value: t): bool where t: hash, t: equals {
+  fn add[t](self: *set[t], value: t): bool where t: hash, t: equals {
     self.add-in(mem/current-arena(), value)
   }
 
@@ -527,11 +527,11 @@ ns for set {
     self.inner.contains(value)
   }
 
-  fn remove[t](self: *mut set[t], value: t): bool where t: hash, t: equals {
+  fn remove[t](self: *set[t], value: t): bool where t: hash, t: equals {
     self.inner.remove(value).is-some()
   }
 
-  fn clear[t](self: *mut set[t]) {
+  fn clear[t](self: *set[t]) {
     self.inner.clear()
   }
 
@@ -540,7 +540,7 @@ ns for set {
 type set-iterator[t] = { inner: map-iterator[t, empty] }
 
 impl[t] iterator[item = t] for set-iterator[t] {
-  fn next(self: *mut self): ?item {
+  fn next(self: *self): ?item {
     if self.inner.next() is {
       :some kv -> :some kv.key,
       :none -> :none
@@ -549,7 +549,7 @@ impl[t] iterator[item = t] for set-iterator[t] {
   fn size-hint(self: *self): { at-least: size, at-most: ?size } {
     self.inner.size-hint()
   }
-  fn advance-by(self: *mut self, n: size): empty {
+  fn advance-by(self: *self, n: size): empty {
     self.inner.advance-by(n)
   }
 }
@@ -601,7 +601,7 @@ ns for fixmap {
   fn(inline) is-empty[k, v, n](self: *fixmap[k, v, n]): bool { self.count == 0 }
   fn(inline) is-full[k, v, n](self: *fixmap[k, v, n]): bool { self.len() == self.cap() }
 
-  fn clear[k, v, n](self: *mut fixmap[k, v, n]) {
+  fn clear[k, v, n](self: *fixmap[k, v, n]) {
     self.ctrl.memset(0)
     self.mirror.memset(0)
     self.count = 0
@@ -612,24 +612,24 @@ ns for fixmap {
     .{
       count = self.count.widen[size],
       growth-left = self.growth-left.widen[size],
-      ctrl = .{ data = self.ctrl.data-ref(), len = self._slots() + map/MIRROR },
+      ctrl = .{ data = self.ctrl.data-ptr(), len = self._slots() + map/MIRROR },
       entries = self.slots.as-buffer(),
     }
   }
 
-  fn(inline) _store[k, v, n](self: *mut fixmap[k, v, n], t: map[k, v]) {
+  fn(inline) _store[k, v, n](self: *fixmap[k, v, n], t: map[k, v]) {
     self.count = t.count.trunc[u32]
     self.growth-left = t.growth-left.trunc[u32]
   }
 
-  fn _make-room[k, v, n](self: *mut fixmap[k, v, n], h: u64): size where k: hash {
+  fn _make-room[k, v, n](self: *fixmap[k, v, n], h: u64): size where k: hash {
     let t = self._table()
     t._rehash-in-place(self.cap())
     self._store(t)
     t._find-insert-slot(h)
   }
 
-  fn(inline) _claim-slot[k, v, n](self: *mut fixmap[k, v, n], t: *mut map[k, v], h: u64): ?size where k: hash {
+  fn(inline) _claim-slot[k, v, n](self: *fixmap[k, v, n], t: *map[k, v], h: u64): ?size where k: hash {
     let idx = t._find-insert-slot(h)
     if t.ctrl.index-unchecked(idx).* == map/EMPTY and t.growth-left == 0 {
       if t.count == self.cap() return :none
@@ -640,7 +640,7 @@ ns for fixmap {
     :some idx
   }
 
-  fn try-insert[k, v, n](self: *mut fixmap[k, v, n], key: k, value: v): result[empty, empty]
+  fn try-insert[k, v, n](self: *fixmap[k, v, n], key: k, value: v): result[empty, empty]
     where k: hash, k: equals {
     let t = self._table()
     let h = key.hash()
@@ -662,14 +662,14 @@ ns for fixmap {
     }
   }
 
-  fn insert[k, v, n](self: *mut fixmap[k, v, n], key: k, value: v) where k: hash, k: equals {
+  fn insert[k, v, n](self: *fixmap[k, v, n], key: k, value: v) where k: hash, k: equals {
     if self.try-insert(key, value) is :err {
       let typename = types/name[type-of(self).value]
       crash("$typename cannot fulfill insert: full at ${self.cap()}")
     }
   }
 
-  fn get-or-insert[k, v, n](self: *mut fixmap[k, v, n], key: k, make: some fn() -> v): ?(*mut v)
+  fn get-or-insert[k, v, n](self: *fixmap[k, v, n], key: k, make: some fn() -> v): ?(*v)
     where k: hash, k: equals {
     let t = self._table()
     let h = key.hash()
@@ -694,7 +694,7 @@ ns for fixmap {
     t.get(key)
   }
 
-  fn get-ref[k, v, n](self: *mut fixmap[k, v, n], key: k): ?(*mut v) where k: hash, k: equals {
+  fn get-ref[k, v, n](self: *fixmap[k, v, n], key: k): ?(*v) where k: hash, k: equals {
     let t = self._table()
     t.get-ref(key)
   }
@@ -704,7 +704,7 @@ ns for fixmap {
     t.contains(key)
   }
 
-  fn remove[k, v, n](self: *mut fixmap[k, v, n], key: k): ?v where k: hash, k: equals {
+  fn remove[k, v, n](self: *fixmap[k, v, n], key: k): ?v where k: hash, k: equals {
     let t = self._table()
     let evicted = t.remove(key)
     self._store(t)
@@ -720,7 +720,7 @@ impl[k, v, n: static size] iterable[item = { key: k, value: v }, i = map-iterato
   }
 }
 
-impl[k: hash and equals, v, n: static size] index[key = k, t = v] for *mut fixmap[k, v, n] {
+impl[k: hash and equals, v, n: static size] index[key = k, t = v] for *fixmap[k, v, n] {
   fn index-ref(self, key: k): *v {
     let t = self._table()
     t.index-ref(key)
@@ -745,15 +745,15 @@ ns for fixset {
   fn(inline) is-empty[t, n](self: *fixset[t, n]): bool { self.inner.is-empty() }
   fn(inline) is-full[t, n](self: *fixset[t, n]): bool { self.inner.is-full() }
 
-  fn clear[t, n](self: *mut fixset[t, n]) { self.inner.clear() }
+  fn clear[t, n](self: *fixset[t, n]) { self.inner.clear() }
 
-  fn try-add[t, n](self: *mut fixset[t, n], value: t): result[bool, empty] where t: hash, t: equals {
+  fn try-add[t, n](self: *fixset[t, n], value: t): result[bool, empty] where t: hash, t: equals {
     let before = self.inner.len()
     if self.inner.try-insert(value, .{}) is :err { return :err }
     :ok (self.inner.len() != before)
   }
 
-  fn add[t, n](self: *mut fixset[t, n], value: t): bool where t: hash, t: equals {
+  fn add[t, n](self: *fixset[t, n], value: t): bool where t: hash, t: equals {
     if self.try-add(value) is {
       :ok added -> added,
       :err -> {
@@ -767,7 +767,7 @@ ns for fixset {
     self.inner.contains(value)
   }
 
-  fn remove[t, n](self: *mut fixset[t, n], value: t): bool where t: hash, t: equals {
+  fn remove[t, n](self: *fixset[t, n], value: t): bool where t: hash, t: equals {
     self.inner.remove(value).is-some()
   }
 

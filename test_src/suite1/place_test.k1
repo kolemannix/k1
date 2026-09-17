@@ -11,7 +11,7 @@ fn make-inner(): inner {
 }
 
 ns for inner {
-  fn me(self: *mut inner): *mut inner { self }
+  fn me(self: *inner): *inner { self }
 }
 
 // Receiver auto-address-of must resolve to the real field place, not a copy.

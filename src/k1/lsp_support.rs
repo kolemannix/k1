@@ -682,11 +682,11 @@ impl describe for point {
 }
 
 ability bump {
-  fn bump(self: *mut self): int
+  fn bump(self: *self): int
 }
 
 impl bump for point {
-  fn bump(self: *mut point): int {
+  fn bump(self: *point): int {
     self.x = self.x + 1
     self.x
   }
@@ -708,7 +708,7 @@ fn use-it(): int {
         assert!(labels.contains(&"y".to_string()));
         assert!(labels.contains(&"magnitude".to_string()));
         assert!(labels.contains(&"describe".to_string()));
-        // Impl self param is *mut point; the deref'd base still finds it
+        // Impl self param is *point; the deref'd base still finds it
         assert!(labels.contains(&"bump".to_string()));
     }
 

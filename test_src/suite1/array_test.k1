@@ -30,7 +30,7 @@ fn test-filled() {
 fn test-array() {
   let ls: list[u8] = list/filled-in(mem/tmp(), size = 10, value = 3)
 
-  let a: *mut array[u8, 10] = list/to-array(ls, 10)
+  let a: *array[u8, 10] = list/to-array(ls, 10)
   for 0.until(a.len()) {
     if it % 2 == 0 { a.[it] = 1 }
   }

@@ -181,7 +181,7 @@ fn escape-test() {
   assert-equals(add5(2), 7)
 }
 
-fn make-thunks(counter: *mut int): list[dyn[fn() -> empty]] {
+fn make-thunks(counter: *int): list[dyn[fn() -> empty]] {
   [
     (fn[counter]. { counter.* = counter.* + 1 }).to-dyn(),
     (fn[counter]. { counter.* = counter.* + 10 }).to-dyn(),

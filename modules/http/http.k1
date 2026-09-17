@@ -35,7 +35,7 @@ type header-action = either { proceed, reject }
 
 type parse-state = {
   user-data: ptr,
-  arena: *mut arena,
+  arena: *arena,
   on-header-complete: *fn(ptr, header) -> header-action,
   on-body-complete: *fn(ptr, span[span[byte]]) -> {},
   url: list[char],
@@ -46,16 +46,22 @@ type parse-state = {
   body-chunks: list[span[u8]],
 }
 ns for parse-state {
-  fn empty[t](arena: *mut arena, user-data: *mut t, on-header-complete: *fn(ptr, header) -> header-action, on-body-complete: *fn(ptr, span[span[byte]]) -> {}): parse-state {
-    .0 | .{
+  fn empty[t](arena: *arena, user-data: *t, on-header-complete: *fn(ptr, header) -> header-action, on-body-complete: *fn(ptr, span[span[byte]]) -> {}): parse-state {
+    .{
       user-data = user-data.as[ptr],
       arena,
       on-header-complete,
       on-body-complete,
+      url = list/empty(),
+      current-header-field = list/empty(),
+      current-header-value = list/empty(),
+      headers = list/empty(),
+      content-length = :none,
+      body-chunks = list/empty(),
     }
   }
 
-  fn reset(self: *mut parse-state) {
+  fn reset(self: *parse-state) {
     let user-data = self.user-data
     let arena = self.arena
     let on-header-complete = self.on-header-complete
@@ -72,10 +78,10 @@ type parser = { parser: llhttp/t }
 #static { assert-equals(types/size[parser], types/size[llhttp/t]); assert-equals(types/align[parser], types/align[llhttp/t]) }
 
 ns for parser {
-  fn data(self: *mut parser): *mut parse-state { self.parser.data.ref[parse-state] }
-  fn set-data(self: *mut parser, data: *mut parse-state) { self.parser.data = data.as[ptr] }
+  fn data(self: *parser): *parse-state { self.parser.data.ref[parse-state] }
+  fn set-data(self: *parser, data: *parse-state) { self.parser.data = data.as[ptr] }
 
-  fn reset(self: *mut parser) {
+  fn reset(self: *parser) {
     self.data().reset()
 
     // Reset an already initialized parser back to the start state, preserving the existing parser type, callback settings, user data, and lenient flags.
@@ -90,7 +96,7 @@ type request = {
   body: span[span[u8]],
 }
 
-fn on-url-part(parser: *mut parser, data: *mut u8, count: usize): i32 {
+fn on-url-part(parser: *parser, data: *u8, count: usize): i32 {
   let state = parser.data()
   let bytes: span[char] = span/wrap-raw(data.as[ptr], count.signed())
   let a = state.arena
@@ -101,11 +107,11 @@ fn on-url-part(parser: *mut parser, data: *mut u8, count: usize): i32 {
   }
   0
 }
-fn on-url-complete(_parser: *mut parser): i32 {
+fn on-url-complete(_parser: *parser): i32 {
   0
 }
 
-fn on-header-field(parser: *mut parser, data: *mut u8, count: usize): i32 {
+fn on-header-field(parser: *parser, data: *u8, count: usize): i32 {
   let state = parser.data()
   let a = state.arena
   let bytes: span[char] = span/wrap-raw(data.as[ptr], count.signed())
@@ -114,11 +120,11 @@ fn on-header-field(parser: *mut parser, data: *mut u8, count: usize): i32 {
   state.current-header-field.append-span-in(a, bytes)
   0
 }
-fn on-header-field-complete(parser: *mut parser): i32 {
+fn on-header-field-complete(parser: *parser): i32 {
   let _state = parser.data()
   0
 }
-fn on-header-value(parser: *mut parser, data: *mut u8, count: usize): i32 {
+fn on-header-value(parser: *parser, data: *u8, count: usize): i32 {
   let state = parser.data()
   let a = state.arena
   let bytes: span[char] = span/wrap-raw(data.as[ptr], count.signed())
@@ -127,7 +133,7 @@ fn on-header-value(parser: *mut parser, data: *mut u8, count: usize): i32 {
   state.current-header-value.append-span-in(a, bytes)
   0
 }
-fn on-header-value-complete(parser: *mut parser): i32 {
+fn on-header-value-complete(parser: *parser): i32 {
   let state = parser.data()
   let a = state.arena
   let field-string = string/wrap-span(state.current-header-field.as-span().cloned-in(a))
@@ -145,7 +151,7 @@ fn on-header-value-complete(parser: *mut parser): i32 {
   0
 }
 
-fn on-headers-complete(parser: *mut parser): i32 {
+fn on-headers-complete(parser: *parser): i32 {
   let state = parser.data()
   let url = string/wrap-span(state.url.as-span())
 
@@ -165,7 +171,7 @@ fn on-headers-complete(parser: *mut parser): i32 {
   }
 }
 
-fn impl-on-body(parser: *mut parser, data: *mut u8, count: usize): i32 {
+fn impl-on-body(parser: *parser, data: *u8, count: usize): i32 {
   let state = parser.data()
   let a = state.arena
   let bytes: span[byte] = span/wrap-raw(data.as[ptr], count.signed())
@@ -174,7 +180,7 @@ fn impl-on-body(parser: *mut parser, data: *mut u8, count: usize): i32 {
   state.body-chunks.push-in(a, bytes)
   0
 }
-fn impl-on-body-complete(parser: *mut parser): i32 {
+fn impl-on-body-complete(parser: *parser): i32 {
   let state = parser.data()
   (state.on-body-complete)(state.user-data, state.body-chunks.as-span())
   // Pause at every message boundary: one request in flight per connection.
@@ -183,11 +189,11 @@ fn impl-on-body-complete(parser: *mut parser): i32 {
 }
 
 fn parser-init[user-data](
-  connection-arena: *mut arena,
-  request-arena: *mut arena,
-  user-data: *mut user-data,
-  on-header-complete: *fn(*mut user-data, header) -> header-action,
-  on-body-complete: *fn(*mut user-data, span[span[u8]]) -> {}
+  connection-arena: *arena,
+  request-arena: *arena,
+  user-data: *user-data,
+  on-header-complete: *fn(*user-data, header) -> header-action,
+  on-body-complete: *fn(*user-data, span[span[u8]]) -> {}
 ): parser {
   let settings: llhttp/settings = .0
   llhttp/settings_init(settings.&)
@@ -206,7 +212,7 @@ fn parser-init[user-data](
 
   let parser: parser = uninit
   llhttp/init(parser.&.as(), :BOTH, settings)
-  let parse-state: *mut parse-state = connection-arena.push(
+  let parse-state: *parse-state = connection-arena.push(
     parse-state/empty(request-arena, user-data, on-header-complete.narrow(), on-body-complete.narrow())
   )
   parser.set-data(parse-state)
@@ -219,19 +225,19 @@ type tick-result = either { ok, paused(size), fail(llhttp/errno) }
 // boundary (or on a rejected header); its payload counts the bytes left
 // unparsed — nonzero only when a client pipelines requests
 fn tick(
-  parser: *mut parser,
+  parser: *parser,
   bytes: span[u8],
 ): tick-result {
   let result = llhttp/execute(
     parser = parser.parser.&,
-    data   = bytes.buffer.data,
+    data   = mem/bitcast[ptr, *u8](bytes.data-ptr()),
     len    = bytes.len().unsigned()
   )
   if result is {
     :HPE_OK -> :ok,
     :HPE_PAUSED -> {
       let end = bytes.data-ptr().add-bytes(bytes.len())
-      :paused end.diff(llhttp/get_error_pos(parser.parser.&).as[ptr])
+      :paused end.diff(llhttp/get_error_pos(parser.parser.&).inner)
     },
     _ -> :fail result
   }

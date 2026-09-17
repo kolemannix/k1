@@ -418,13 +418,7 @@ impl TypedProgram {
             }
             ParsedTypeExpr::Reference(r) => {
                 let inner_ty = self.eval_type_expr_ext(r.base, scope_id, context.descended())?;
-                if let Type::Function(_) = self.types.get(inner_ty) {
-                    let function_pointer_type = self.add_function_pointer_type(inner_ty);
-                    Ok(function_pointer_type)
-                } else {
-                    let type_id = self.add_reference_type(inner_ty);
-                    Ok(type_id)
-                }
+                Ok(self.add_reference_type(inner_ty))
             }
             ParsedTypeExpr::Sum(sum) => {
                 let sum = *sum;

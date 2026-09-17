@@ -150,7 +150,7 @@ fn params(e: entry): list[param] {
   ps
 }
 
-fn emit-leaf-body(cb: *mut code-builder, en: entry, d: size) {
+fn emit-leaf-body(cb: *code-builder, en: entry, d: size) {
   let pat = render-pattern(en.path)
   let payload = list/empty[string]()
   for c in params(en) {
@@ -175,7 +175,7 @@ fn emit-leaf-body(cb: *mut code-builder, en: entry, d: size) {
 
 // Leaf dispatch for routes terminating at depth `d`: method checks, capture
 // parses, and the 405 fallback
-fn emit-leafs(cb: *mut code-builder, entries: span[entry], idxs: list[size], d: size) {
+fn emit-leafs(cb: *code-builder, entries: span[entry], idxs: list[size], d: size) {
   let head-present = {
     let found = false
     for gi in idxs { if entries.[gi].method is :head { found = true } }
@@ -197,7 +197,7 @@ fn emit-leafs(cb: *mut code-builder, entries: span[entry], idxs: list[size], d: 
 
 // The has-a-segment-at-`d` branch: decode it, then literal edges (committing
 // is safe under the cover rule), then the capture edge
-fn emit-seg-edges(cb: *mut code-builder, entries: span[entry], group: list[size], d: size, lit-texts: list[string], caps: list[size]) {
+fn emit-seg-edges(cb: *code-builder, entries: span[entry], group: list[size], d: size, lit-texts: list[string], caps: list[size]) {
   cb.line(`require routing/decode-seg(segs.[$d]) is :some sd$d else { return :err :bad-encoding .{ segment = segs.[$d] } }`)
   for t in lit-texts {
     let sub = list/empty[size]()
@@ -212,7 +212,7 @@ fn emit-seg-edges(cb: *mut code-builder, entries: span[entry], group: list[size]
   }
 }
 
-fn emit-node(cb: *mut code-builder, entries: span[entry], group: list[size], d: size) {
+fn emit-node(cb: *code-builder, entries: span[entry], group: list[size], d: size) {
   let exact = list/empty[size]()
   let rests = list/empty[size]()
   let caps = list/empty[size]()
@@ -262,7 +262,7 @@ fn emit-node(cb: *mut code-builder, entries: span[entry], group: list[size], d: 
   }
 }
 
-fn emit-parse-fn(cb: *mut code-builder, base: string, entries: span[entry]) {
+fn emit-parse-fn(cb: *code-builder, base: string, entries: span[entry]) {
   // Captures in the parsed route are views into the url's memory (the request
   // arena): a route value must not outlive its request
   cb.block("fn parse(header: http/header): result[$base, routing/route-error]", fn[cb, entries]. {
@@ -277,7 +277,7 @@ fn emit-parse-fn(cb: *mut code-builder, base: string, entries: span[entry]) {
   })
 }
 
-fn emit-url-arm(cb: *mut code-builder, en: entry) {
+fn emit-url-arm(cb: *code-builder, en: entry) {
   if en.path.len() == 0 {
     cb.line(`w.write("/")`)
     return
@@ -311,7 +311,7 @@ fn emit-url-arm(cb: *mut code-builder, en: entry) {
   }
 }
 
-fn emit-url-arms(cb: *mut code-builder, entries: span[entry]) {
+fn emit-url-arms(cb: *code-builder, entries: span[entry]) {
   for en in entries {
     if params(en).len() == 0 {
       cb.block-close(":${en.name} ->", "},", fn[cb, en]. emit-url-arm(cb, en))
@@ -321,15 +321,15 @@ fn emit-url-arms(cb: *mut code-builder, entries: span[entry]) {
   }
 }
 
-fn emit-url-match(cb: *mut code-builder, entries: span[entry]) {
+fn emit-url-match(cb: *code-builder, entries: span[entry]) {
   cb.block("if self is", fn[cb, entries]. emit-url-arms(cb, entries))
 }
 
-fn emit-url-fn(cb: *mut code-builder, base: string, entries: span[entry]) {
+fn emit-url-fn(cb: *code-builder, base: string, entries: span[entry]) {
   cb.block("fn url[w: writer](self: $base, w)", fn[cb, entries]. emit-url-match(cb, entries))
 }
 
-fn emit-url-string-fn(cb: *mut code-builder, base: string) {
+fn emit-url-string-fn(cb: *code-builder, base: string) {
   cb.block("fn url-string(self: $base): string", fn[cb]. {
     cb.line(`let b = string-builder/new()`)
     cb.line(`self.url(b.&)`)
@@ -381,7 +381,7 @@ type route-error = either {
 // Splits a query-stripped path ("/a/b") into segment views, dropping one
 // trailing empty segment. more=true means segments beyond 16 exist (only a
 // rest route can match such a path)
-fn split-path(path: string, out: *mut array[string, 16]): { count: size, more: bool } {
+fn split-path(path: string, out: *array[string, 16]): { count: size, more: bool } {
   let count: size = 0
   let start: size = 1
   let i: size = 1

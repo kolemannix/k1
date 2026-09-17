@@ -47,7 +47,7 @@ fn(extern("BrotliEncoderCompress"), lib("brotli")) encoder-compress(
   mode: mode,
   input-size: size,
   input: ptr,
-  encoded-size: *mut size,
+  encoded-size: *size,
   encoded: ptr,
 ): c-int
 
@@ -56,7 +56,7 @@ fn(extern("BrotliEncoderMaxCompressedSize"), lib("brotli")) encoder-max-compress
 fn(extern("BrotliDecoderDecompress"), lib("brotli")) decoder-decompress(
   encoded-size: size,
   encoded: ptr,
-  decoded-size: *mut size,
+  decoded-size: *size,
   decoded: ptr,
 ): decoder-result
 
@@ -73,11 +73,11 @@ fn(extern("BrotliEncoderSetParameter"), lib("brotli")) encoder-set-parameter(
 fn(extern("BrotliEncoderCompressStream"), lib("brotli")) encoder-compress-stream(
   state: ptr,
   op: encoder-op,
-  available-in: *mut size,
-  next-in: *mut ptr,
-  available-out: *mut size,
-  next-out: *mut ptr,
-  total-out: *mut size,
+  available-in: *size,
+  next-in: *ptr,
+  available-out: *size,
+  next-out: *ptr,
+  total-out: *size,
 ): c-int
 
 // One-shot compress at the given quality into a fresh ambient-arena buffer.

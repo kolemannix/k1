@@ -21,12 +21,12 @@ type cmd-sink = {
 }
 
 ns for cmd-sink {
-  fn(inline) push-cmd(self: *mut cmd-sink, v: u32) {
+  fn(inline) push-cmd(self: *cmd-sink, v: u32) {
     self.commands.index-unchecked(self.num-commands).* = v
     self.num-commands = self.num-commands + 1
   }
 
-  fn(inline) push-literals(self: *mut cmd-sink, src: ptr, len: size) {
+  fn(inline) push-literals(self: *cmd-sink, src: ptr, len: size) {
     mem/copy(
       dst = self.literals.data-ptr().add-bytes(self.num-literals),
       src = src,
@@ -53,7 +53,7 @@ fn(inline) is-match-2p(p1: ptr, p2: ptr, min-match: size): bool {
   } else false
 }
 
-fn(inline) emit-insert-len-2p(insertlen: size, sink: *mut cmd-sink) {
+fn(inline) emit-insert-len-2p(insertlen: size, sink: *cmd-sink) {
   if insertlen < 6 {
     sink.push-cmd(insertlen.trunc[u32])
   } else if insertlen < 130 {
@@ -81,7 +81,7 @@ fn(inline) emit-insert-len-2p(insertlen: size, sink: *mut cmd-sink) {
   }
 }
 
-fn(inline) emit-copy-len-2p(copylen: size, sink: *mut cmd-sink) {
+fn(inline) emit-copy-len-2p(copylen: size, sink: *cmd-sink) {
   if copylen < 10 {
     sink.push-cmd((copylen + 38).trunc[u32])
   } else if copylen < 134 {
@@ -103,7 +103,7 @@ fn(inline) emit-copy-len-2p(copylen: size, sink: *mut cmd-sink) {
   }
 }
 
-fn(inline) emit-copy-len-last-distance-2p(copylen: size, sink: *mut cmd-sink) {
+fn(inline) emit-copy-len-last-distance-2p(copylen: size, sink: *cmd-sink) {
   if copylen < 12 {
     sink.push-cmd((copylen + 20).trunc[u32])
   } else if copylen < 72 {
@@ -133,7 +133,7 @@ fn(inline) emit-copy-len-last-distance-2p(copylen: size, sink: *mut cmd-sink) {
   }
 }
 
-fn(inline) emit-distance-2p(distance: size, sink: *mut cmd-sink) {
+fn(inline) emit-distance-2p(distance: size, sink: *cmd-sink) {
   let d = distance + 3
   let nbits = log2-floor-nonzero(d.unsigned()) - 1
   let prefix = (d >> nbits.trunc[u32]) & 1
@@ -173,7 +173,7 @@ fn(inline) update-table-after-copy(
 
 fn(inline) create-commands[mm: static size](
   input: ptr, block-size: size, input-size: size, base-ip: ptr,
-  table: buffer[i32], table-bits: size, sink: *mut cmd-sink,
+  table: buffer[i32], table-bits: size, sink: *cmd-sink,
 ) {
   let min-match: size = core/meta/static-type-to-value[_, mm]()
   let ip = input
@@ -266,7 +266,7 @@ fn(inline) create-commands[mm: static size](
   }
 }
 
-fn build-and-store-command-prefix-code-2p(s: *mut two-pass-arena, bw: bit-writer): bit-writer {
+fn build-and-store-command-prefix-code-2p(s: *two-pass-arena, bw: bit-writer): bit-writer {
   let histogram = s.cmd-histo.&.as-buffer()
   let depth = s.cmd-depth.&.as-buffer()
   let bits = s.cmd-bits.&.as-buffer()
@@ -314,7 +314,7 @@ fn build-and-store-command-prefix-code-2p(s: *mut two-pass-arena, bw: bit-writer
   store-huffman-tree(depth.drop(64), 64, tree, bw)
 }
 
-fn store-commands(s: *mut two-pass-arena, sink: *cmd-sink, bw: bit-writer): bit-writer {
+fn store-commands(s: *two-pass-arena, sink: *cmd-sink, bw: bit-writer): bit-writer {
   let lit-histo = s.lit-histo.&.as-buffer()
   let cmd-histo = s.cmd-histo.&.as-buffer()
   let lit-depth = s.lit-depth.&.as-buffer()
@@ -391,7 +391,7 @@ fn bits-entropy(population: buffer[u32], count: size): f64 {
   retval
 }
 
-fn should-compress-2p(s: *mut two-pass-arena, input: ptr, input-size: size, num-literals: size): bool {
+fn should-compress-2p(s: *two-pass-arena, input: ptr, input-size: size, num-literals: size): bool {
   let MIN-RATIO-2P = 0.98
   let SAMPLE-RATE: size = 43
   let corpus-size = input-size.as[f64]
@@ -412,7 +412,7 @@ fn should-compress-2p(s: *mut two-pass-arena, input: ptr, input-size: size, num-
 }
 
 fn compress-fragment-two-pass(
-  s: *mut two-pass-arena, input-start: ptr, fragment-size: size, is-last: bool,
+  s: *two-pass-arena, input-start: ptr, fragment-size: size, is-last: bool,
   command-buf: buffer[u32], literal-buf: buffer[u8],
   table: buffer[i32], table-size: size, bw: bit-writer,
 ): bit-writer {

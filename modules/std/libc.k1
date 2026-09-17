@@ -26,10 +26,10 @@ ns libc {
     loc.ref[c-int].*
   }
   let EINTR: c-int = 4
-  fn(extern("strerror")) strerror(errno: c-int): *char
+  fn(extern("strerror")) strerror(errno: c-int): optref[char]
   fn(extern("perror")) perror(msg: ptr)
   fn strerror-string(code: c-int): string {
-    string/wrap-c(strerror(code).as[ptr])
+    string/wrap-c(strerror(code).inner)
   }
   fn errno-k1-string(): string {
     strerror-string(errno())
@@ -46,8 +46,8 @@ ns libc {
     fn(extern("fwrite")) fwrite(data-ptr: ptr, item-size: size, item-count: size, file-desc: ptr): usize
   }
 
-  fn(extern("strtod")) strtod(nptr: ptr, endptr: *mut ptr): f64
-  fn(extern("strtof")) strtof(nptr: ptr, endptr: *mut ptr): f32
+  fn(extern("strtod")) strtod(nptr: ptr, endptr: *ptr): f64
+  fn(extern("strtof")) strtof(nptr: ptr, endptr: *ptr): f32
 
   ns math {
     fn(extern("expf")) exp_f32(f32): f32

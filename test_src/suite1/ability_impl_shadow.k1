@@ -6,24 +6,24 @@ ns ability_impl_shadow
 // binds are FE convenience; the id-keyed substitutions carry the bindings.
 
 ability shadow-src[impl t] {
-  fn next(self: *mut self): ?t
+  fn next(self: *self): ?t
 }
 
 type rc[t] = { data: t }
 type wrap[t] = { inner: t }
 
 impl[t] shadow-src[t = rc[t]] for wrap[t] {
-  fn next(self: *mut wrap[t]): ?rc[t] {
+  fn next(self: *wrap[t]): ?rc[t] {
     :some .{ data = self.inner }
   }
 }
 
-fn read[t, s](inst: *mut s): ?rc[t] where s: shadow-src[t = rc[t]] {
+fn read[t, s](inst: *s): ?rc[t] where s: shadow-src[t = rc[t]] {
   inst.next()
 }
 
 fn test() {
-  let w: *mut wrap[int] = mem/new(.{ inner = 7 })
+  let w: *wrap[int] = mem/new(.{ inner = 7 })
   assert-equals(shadow-src@(wrap[int])/next(w), :some .{ data = 7 })
   assert-equals(read(w), :some .{ data = 7 })
 }

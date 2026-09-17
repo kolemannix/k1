@@ -60,7 +60,7 @@ ns ability_generic {
   // Expected return type must flow into an ability method's own type params,
   // so sum-typed fields in a literal argument can resolve
   type infer-box[t] = { value: ?t, tag: u64 }
-  fn make-box[t](tag: u64): *mut infer-box[t] {
+  fn make-box[t](tag: u64): *infer-box[t] {
     heap.new(.{ value = :none, tag })
   }
 

@@ -1089,26 +1089,10 @@ pub struct ParsedOptional {
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReferenceKind {
-    Read,
-    Mut,
-}
-
-impl ReferenceKind {
-    pub fn is_mutable(&self) -> bool {
-        match self {
-            Self::Read => false,
-            Self::Mut => true,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct ParsedReference {
     pub base: ParsedTypeExprId,
     pub span: SpanId,
-    pub kind: ReferenceKind,
 }
 
 #[derive(Clone, Copy)]
@@ -3308,19 +3292,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.expect_kind(K::CloseParen)?;
             Ok(Some(expr))
         } else if first.kind == K::Asterisk {
-            // Reference/Pointer notation: *(mut)<ty>
             self.advance();
-            let reference_kind = if self.maybe_consume(K::KeywordMut).is_some() {
-                ReferenceKind::Mut
-            } else {
-                ReferenceKind::Read
-            };
             let type_expr = self.expect_type_expression()?;
             let span = self.extend_tok_to_here(first);
             Ok(Some(self.ast.type_exprs.add(ParsedTypeExpr::Reference(ParsedReference {
                 base: type_expr,
                 span,
-                kind: reference_kind,
             }))))
         } else if first.kind == K::OpenBrace {
             self.expect_record_type(first, ParsedRecordKind::Struct)
@@ -6058,9 +6035,6 @@ impl ParsedProgram {
             }
             ParsedTypeExpr::Reference(refer) => {
                 w.write_str("*")?;
-                if refer.kind.is_mutable() {
-                    w.write_str("mut ")?;
-                }
                 self.display_type_expr_id(refer.base, w)?;
                 Ok(())
             }

@@ -69,7 +69,7 @@ fn test-channel() {
 }
 
 let(mutable) drop-count: int = 0
-fn count-drop(_v: *mut int) { drop-count = drop-count + 1 }
+fn count-drop(_v: *int) { drop-count = drop-count + 1 }
 
 fn test-rc() {
   let r = rc/new-with-drop(7, count-drop.&)

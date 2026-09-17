@@ -5,7 +5,7 @@ use lex/token-kind
 use ast/parse-error as perror
 
 type parser = {
-  program: *mut ast/program,
+  program: *ast/program,
   tokens: list[token],
   cursor: size,
 }
@@ -70,17 +70,17 @@ ns for parser {
 
   fn peek-back(self: *parser): token { self.peek-at(-1) }
 
-  fn next-tok(self: *mut parser): token {
+  fn next-tok(self: *parser): token {
     let t = self.peek()
     self.cursor = self.cursor + 1
     t
   }
 
-  fn advance(self: *mut parser) {
+  fn advance(self: *parser) {
     self.cursor = self.cursor + 1
   }
 
-  fn advance-n(self: *mut parser, n: size) {
+  fn advance-n(self: *parser, n: size) {
     self.cursor = self.cursor + n
   }
 
@@ -88,15 +88,15 @@ ns for parser {
     self.program.source.slice(t.start.widen[size], t.end().widen[size])
   }
 
-  fn make-ident(self: *mut parser, t: token): ast/string-id {
+  fn make-ident(self: *parser, t: token): ast/string-id {
     self.program.intern-string(self.tok-chars(t))
   }
 
-  fn make-ident-spanned(self: *mut parser, t: token): ast/ident-spanned {
+  fn make-ident-spanned(self: *parser, t: token): ast/ident-spanned {
     .{ name = self.make-ident(t), span = t.span() }
   }
 
-  fn add-expr(self: *mut parser, e: ast/expr): ast/expr-id {
+  fn add-expr(self: *parser, e: ast/expr): ast/expr-id {
     self.program.add-expr(e)
   }
 
@@ -104,27 +104,27 @@ ns for parser {
     self.program.get-expr-span(id)
   }
 
-  fn error-here(self: *mut parser, message: string): perror {
+  fn error-here(self: *parser, message: string): perror {
     let p = self.peek()
     let t = if p.kind is :eof { self.peek-back() } else p
     make-error(message, t)
   }
 
-  fn report-error(self: *mut parser, e: perror) {
+  fn report-error(self: *parser, e: perror) {
     self.program.report-error(e)
   }
 
-  fn extend-tok-to-here(self: *mut parser, t: token): ast/src-span {
+  fn extend-tok-to-here(self: *parser, t: token): ast/src-span {
     let here = self.peek-back()
     if here.kind is :eof { t.span() } else { t.span().thru(here.span()) }
   }
 
-  fn extend-to-here(self: *mut parser, sp: ast/src-span): ast/src-span {
+  fn extend-to-here(self: *parser, sp: ast/src-span): ast/src-span {
     let here = self.peek-back()
     if here.kind is :eof { sp } else { sp.thru(here.span()) }
   }
 
-  fn maybe-consume(self: *mut parser, k: token-kind): ?token {
+  fn maybe-consume(self: *parser, k: token-kind): ?token {
     let t = self.peek()
     if t.kind.eq(k) {
       self.advance()
@@ -132,7 +132,7 @@ ns for parser {
     } else :none
   }
 
-  fn maybe-consume-no-ws(self: *mut parser, k: token-kind): ?token {
+  fn maybe-consume-no-ws(self: *parser, k: token-kind): ?token {
     let t = self.peek()
     if t.is-kind-nonspaced(k) {
       self.advance()
@@ -140,7 +140,7 @@ ns for parser {
     } else :none
   }
 
-  fn expect-kind(self: *mut parser, k: token-kind): result[token, perror] {
+  fn expect-kind(self: *parser, k: token-kind): result[token, perror] {
     let t = self.peek()
     if t.kind.eq(k) {
       self.advance()
@@ -150,12 +150,12 @@ ns for parser {
     }
   }
 
-  fn expect-ident(self: *mut parser): result[ident-tok, perror] {
+  fn expect-ident(self: *parser): result[ident-tok, perror] {
     let t = self.expect-kind(:ident).try
     :ok(.{ tok = t, name = self.make-ident(t) })
   }
 
-  fn expect-ident-lower(self: *mut parser): result[ident-tok, perror] {
+  fn expect-ident-lower(self: *parser): result[ident-tok, perror] {
     let t = self.expect-kind(:ident).try
     let text = self.tok-chars(t)
     if text.len() > 0 and text.[0].is-ascii-upper() {
@@ -164,7 +164,7 @@ ns for parser {
     :ok(.{ tok = t, name = self.program.intern-string(text) })
   }
 
-  fn maybe-consume-ident-chars(self: *mut parser, chars: string): ?ident-tok {
+  fn maybe-consume-ident-chars(self: *parser, chars: string): ?ident-tok {
     let next = self.peek()
     if next.kind is :ident and self.tok-chars(next) == chars {
       self.advance()
@@ -172,14 +172,14 @@ ns for parser {
     } else :none
   }
 
-  fn expect-ident-chars(self: *mut parser, chars: string): result[ident-tok, perror] {
+  fn expect-ident-chars(self: *parser, chars: string): result[ident-tok, perror] {
     if self.maybe-consume-ident-chars(chars) is {
       :some it -> :ok(it),
       :none -> :err(make-error("Expected '$chars'", self.peek())),
     }
   }
 
-  fn expect-dq-ident(self: *mut parser): result[ast/string-id, perror] {
+  fn expect-dq-ident(self: *parser): result[ast/string-id, perror] {
     let t = self.expect-kind(:string-done-dq).try
     let text = self.tok-chars(t)
     if text.len() < 2 {
@@ -188,7 +188,7 @@ ns for parser {
     :ok(self.program.intern-string(text.slice(1, text.len() - 1)))
   }
 
-  fn scan-to-two(self: *mut parser, k1: token-kind, k2: token-kind): result[token, perror] {
+  fn scan-to-two(self: *parser, k1: token-kind, k2: token-kind): result[token, perror] {
     loop {
       let n = self.next-tok()
       if n.kind is :eof {
@@ -201,12 +201,12 @@ ns for parser {
   }
 
   fn eat-delimited[t](
-    self: *mut parser,
+    self: *parser,
     name: string,
-    dest: *mut list[t],
+    dest: *list[t],
     delim: token-kind,
     term: token-kind,
-    parse-one: some fn(*mut parser) -> result[t, perror]
+    parse-one: some fn(*parser) -> result[t, perror]
   ): result[empty, perror] {
     loop {
       if self.peek().kind.eq(term) {

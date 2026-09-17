@@ -30,36 +30,36 @@ ns for code-builder {
     .{ chunks = list/with-capacity(8), pending = list/empty(), indent-level = 0 }
   }
 
-  fn seal(self: *mut code-builder) {
+  fn seal(self: *code-builder) {
     if self.pending.is-empty() return
     self.chunks.push(.{ text = string/wrap-bytes(self.pending.as-span()).cloned(), source = 0 })
     self.pending.clear()
   }
 
-  fn code(self: *mut code-builder, c: code) {
+  fn code(self: *code-builder, c: code) {
     self.seal()
     self.chunks.append-list(c.chunks)
   }
 
-  fn build(self: *mut code-builder): code {
+  fn build(self: *code-builder): code {
     self.seal()
     .{ chunks = self.chunks }
   }
 
-  fn indent(self: *mut code-builder) { self.indent-level = self.indent-level + 1 }
-  fn dedent(self: *mut code-builder) {
+  fn indent(self: *code-builder) { self.indent-level = self.indent-level + 1 }
+  fn dedent(self: *code-builder) {
     if self.indent-level == 0 crash("code-builder/dedent below zero")
     self.indent-level = self.indent-level - 1
   }
-  fn pad(self: *mut code-builder) { self.repeat("  ", self.indent-level) }
+  fn pad(self: *code-builder) { self.repeat("  ", self.indent-level) }
 
-  fn line(self: *mut code-builder, c: code) {
+  fn line(self: *code-builder, c: code) {
     self.pad()
     self.code(c)
     self.write-char('\n')
   }
 
-  fn block(self: *mut code-builder, header: code, body: some fn() -> {}) {
+  fn block(self: *code-builder, header: code, body: some fn() -> {}) {
     self.pad()
     self.code(header)
     self.write(" {\n")
@@ -70,7 +70,7 @@ ns for code-builder {
     self.write("}\n")
   }
 
-  fn block-close(self: *mut code-builder, header: code, close: string, body: some fn() -> {}) {
+  fn block-close(self: *code-builder, header: code, close: string, body: some fn() -> {}) {
     self.pad()
     self.code(header)
     self.write(" {\n")
@@ -82,7 +82,7 @@ ns for code-builder {
     self.write-char('\n')
   }
 
-  fn sep[t, iter, i](self: *mut code-builder, items: i, separator: string, each: some fn t -> {})
+  fn sep[t, iter, i](self: *code-builder, items: i, separator: string, each: some fn t -> {})
     where iter: iterator[item = t], i: iterable[item = t, i = iter] {
     for x in items {
       if it-index > 0 { self.write(separator) }

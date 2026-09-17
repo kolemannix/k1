@@ -6,14 +6,14 @@
 ns response-writer {
 
   type driver = {
-    connection: *mut connection,
+    connection: *connection,
     stream: dyn[source[t = u8]],
-    write-req: *mut uv/write,
+    write-req: *uv/write,
     bufs: list[uv/buf],
     parked: bool,
   }
 
-  fn begin(connection: *mut connection, resp: http-response) {
+  fn begin(connection: *connection, resp: http-response) {
     mem/push-arena(connection.request-arena)
     defer { mem/pop-arena() }
     let out = string-builder/new()
@@ -24,7 +24,7 @@ ns response-writer {
         let total: size = 0
         for seg in segments { total = total + seg.len() }
         out.write("Content-Length: $total\r\n\r\n")
-        let group: *mut group-source = mem/new(.{ group = segments, done = false })
+        let group: *group-source = mem/new(.{ group = segments, done = false })
         group.to-dyn[source[t = u8]]()
       },
       :stream source -> {
@@ -34,7 +34,7 @@ ns response-writer {
     }
     let headers = out.build()
 
-    let driver: *mut driver = connection.request-arena.push(.{
+    let driver: *driver = connection.request-arena.push(.{
       connection,
       stream = body,
       write-req = connection.request-arena.alloc-t[uv/write](),
@@ -64,7 +64,7 @@ ns response-writer {
     .{}
   }
 
-  fn write-group(driver: *mut driver, group: span[span[u8]]) {
+  fn write-group(driver: *driver, group: span[span[u8]]) {
     let connection = driver.connection
     driver.bufs.clear()
     for seg in group { driver.bufs.push(uv/buf/wrap-span(seg)) }
@@ -80,8 +80,8 @@ ns response-writer {
     }
   }
 
-  fn on-write-complete(req: *mut uv/write, status: i32) {
-    let driver: *mut driver = req.get-data()
+  fn on-write-complete(req: *uv/write, status: i32) {
+    let driver: *driver = req.get-data()
     let connection = driver.connection
     // Main thread; direct close-state access is fine
     if connection.close-state.is-closing { return }
@@ -97,7 +97,7 @@ ns response-writer {
 
   // The waker target: a parked source has data again (loop thread only)
   fn on-wake(state: ptr) {
-    let driver: *mut driver = state.ref[driver]()
+    let driver: *driver = state.ref[driver]()
     if driver.connection.close-state.is-closing { return }
     // A write is in flight; its completion will pump
     if not driver.parked { return }
@@ -105,7 +105,7 @@ ns response-writer {
     pump(driver)
   }
 
-  fn pump(driver: *mut driver) {
+  fn pump(driver: *driver) {
     let connection = driver.connection
     mem/push-arena(connection.request-arena)
     defer { mem/pop-arena() }

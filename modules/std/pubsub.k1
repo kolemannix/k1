@@ -25,11 +25,11 @@ ns pubsub {
   }
 
   type bus[t] = {
-    ingress: *mut mpsc[event[t]],
+    ingress: *mpsc[event[t]],
     // consumer thread: reused drain buffer
     scratch: list[event[t]],
     // consumer thread only
-    subscribers: list[*mut subscription[t]],
+    subscribers: list[*subscription[t]],
     subscriber-cap-weight: size,
     weight-fn: *fn(rc[t]) -> size,
   }
@@ -38,11 +38,11 @@ ns pubsub {
     on-event: notify,
     subscriber-cap-weight: size,
     weight-fn: *fn(rc[t]) -> size,
-  ): *mut bus[t] {
+  ): *bus[t] {
     heap.new(.{
       ingress = mpsc/make[event[t]](on-event),
       scratch = list/empty[event[t]](),
-      subscribers = list/empty[*mut subscription[t]](),
+      subscribers = list/empty[*subscription[t]](),
       subscriber-cap-weight,
       weight-fn,
     })
@@ -50,7 +50,7 @@ ns pubsub {
 
   ns for bus {
     // Any thread. Takes ownership of one reference to `value`.
-    fn publish[t](self: *mut bus[t], topic: string, value: rc[t]) {
+    fn publish[t](self: *bus[t], topic: string, value: rc[t]) {
       self.ingress.send(.{
         topic = heap-string/cloned(topic).to-rc(),
         data = value,
@@ -59,13 +59,13 @@ ns pubsub {
 
     // Any thread: only allocates; the bus learns about the subscription when
     // the consumer start()s the stream on its own thread.
-    fn subscribe[t](self: *mut bus[t], topic: string): dyn[source[t = rc[t]]] {
+    fn subscribe[t](self: *bus[t], topic: string): dyn[source[t = rc[t]]] {
       let chan = channel/make[rc[t]](
         cap-weight = self.subscriber-cap-weight,
         weight-fn = self.weight-fn,
         drop-fn = fn(value: rc[t]) value.release(),
       )
-      let sub: *mut subscription[t] = heap.new(.{
+      let sub: *subscription[t] = heap.new(.{
         bus = self,
         topic = heap-string/cloned(topic).to-rc(),
         chan,
@@ -75,7 +75,7 @@ ns pubsub {
 
     // Consumer thread only: route every queued event to its subscribers,
     // then wake the ones that got something.
-    fn dispatch[t](self: *mut bus[t]) {
+    fn dispatch[t](self: *bus[t]) {
       self.scratch.clear()
       self.ingress.take(self.scratch.&)
       for event in self.scratch {
@@ -105,22 +105,22 @@ ns pubsub {
   // The channel receiver wearing a topic: registers with the bus in start(),
   // detaches and frees everything it owns in stop().
   type subscription[t] = {
-    bus: *mut bus[t],
+    bus: *bus[t],
     topic: rc[string],
-    chan: *mut channel[rc[t]],
+    chan: *channel[rc[t]],
   }
 
   impl[t] source[t = rc[t]] for subscription[t] {
-    fn next(self: *mut subscription[t]): pull[rc[t]] {
+    fn next(self: *subscription[t]): pull[rc[t]] {
       source@(channel[rc[t]])/next(self.chan)
     }
 
-    fn start(self: *mut subscription[t], waker: waker) {
+    fn start(self: *subscription[t], waker: waker) {
       source@(channel[rc[t]])/start(self.chan, waker)
       self.bus.subscribers.push-in(heap, self)
     }
 
-    fn stop(self: *mut subscription[t]) {
+    fn stop(self: *subscription[t]) {
       let bus = self.bus
       let sub-ptr = self.as[ptr]
       let i: size = 0

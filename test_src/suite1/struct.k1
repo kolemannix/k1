@@ -23,7 +23,7 @@ fn basic-struct(): int {
 type foo = { x: int, y: bool }
 ns for foo {
   fn get-value(self: foo): int { self.x }
-  fn set-value(self: *mut foo, x: int) { self.x = x; }
+  fn set-value(self: *foo, x: int) { self.x = x; }
   fn new(x: int): foo { .{ x = x, y = false } }
 }
 

@@ -182,7 +182,7 @@ fn should-use-uncompressed-mode(metablock-start: ptr, next-emit: ptr, insertlen:
   }
 }
 
-fn should-merge-block(s: *mut one-pass-arena, data: ptr, len: size, depths: buffer[u8]): bool {
+fn should-merge-block(s: *one-pass-arena, data: ptr, len: size, depths: buffer[u8]): bool {
   let histo = s.histogram.&.as-buffer()
   let SAMPLE-RATE: size = 43
   histo.memset(0)
@@ -204,7 +204,7 @@ fn should-merge-block(s: *mut one-pass-arena, data: ptr, len: size, depths: buff
 }
 
 fn build-and-store-literal-prefix-code(
-  s: *mut one-pass-arena, input: ptr, input-size: size,
+  s: *one-pass-arena, input: ptr, input-size: size,
   depths: buffer[u8], bits: buffer[u16], bw: bit-writer,
 ): { bw: bit-writer, literal-ratio: size } {
   let histogram = s.histogram.&.as-buffer()
@@ -258,7 +258,7 @@ fn build-and-store-literal-prefix-code(
   .{ bw, literal-ratio = (literal-ratio * 125) / histogram-total }
 }
 
-fn build-and-store-command-prefix-code(s: *mut one-pass-arena, bw: bit-writer): bit-writer {
+fn build-and-store-command-prefix-code(s: *one-pass-arena, bw: bit-writer): bit-writer {
   let histogram = s.cmd-histo.&.as-buffer()
   let depth = s.cmd-depth.&.as-buffer()
   let bits = s.cmd-bits.&.as-buffer()
@@ -333,7 +333,7 @@ fn(inline) update-table-after-copy-1p(ip: ptr, base-ip: ptr, table: buffer[i32],
 }
 
 fn compress-fragment-impl(
-  s: *mut one-pass-arena, input-start: ptr, fragment-size: size, is-last: bool,
+  s: *one-pass-arena, input-start: ptr, fragment-size: size, is-last: bool,
   table: buffer[i32], table-bits: size, bw: bit-writer,
 ): bit-writer {
   let bw = bw
@@ -514,7 +514,7 @@ fn compress-fragment-impl(
 }
 
 fn compress-fragment-fast(
-  s: *mut one-pass-arena, input: ptr, input-size: size, is-last: bool,
+  s: *one-pass-arena, input: ptr, input-size: size, is-last: bool,
   table: buffer[i32], table-size: size, bw: bit-writer,
 ): bit-writer {
   let initial-pos = bw.pos
@@ -537,7 +537,7 @@ fn compress-fragment-fast(
   bw
 }
 
-fn init-command-prefix-codes(s: *mut one-pass-arena) {
+fn init-command-prefix-codes(s: *one-pass-arena) {
   let i: size = 0
   while i < 128 {
     s.cmd-depth.[i] = k-default-command-depths.[i]
@@ -555,7 +555,7 @@ fn init-command-prefix-codes(s: *mut one-pass-arena) {
 type encoder = {
   quality: size,
   arena: one-pass-arena,
-  arena2: *mut two-pass-arena,
+  arena2: *two-pass-arena,
   cmd-buf: buffer[u32],
   lit-buf: buffer[u8],
   table: buffer[i32],
@@ -566,8 +566,8 @@ type encoder = {
 }
 
 ns for encoder {
-  fn new-with-quality-in[a: allocator](alloc: a, quality: size): *mut encoder {
-    let e: *mut encoder = alloc.alloc-t[encoder]()
+  fn new-with-quality-in[a: allocator](alloc: a, quality: size): *encoder {
+    let e: *encoder = alloc.alloc-t[encoder]()
     e.quality = quality
     if quality == 0 {
       e.table = buffer/allocate-in[i32, _](alloc, MAX-TABLE-SIZE)
@@ -584,11 +584,11 @@ ns for encoder {
     e
   }
 
-  fn new-in[a: allocator](alloc: a): *mut encoder { new-with-quality-in(alloc, 0) }
-  fn new(): *mut encoder { new-in(mem/current-arena()) }
-  fn new-q1(): *mut encoder { new-with-quality-in(mem/current-arena(), 1) }
+  fn new-in[a: allocator](alloc: a): *encoder { new-with-quality-in(alloc, 0) }
+  fn new(): *encoder { new-in(mem/current-arena()) }
+  fn new-q1(): *encoder { new-with-quality-in(mem/current-arena(), 1) }
 
-  fn reset(self: *mut encoder) {
+  fn reset(self: *encoder) {
     self.last-bytes = 3
     self.last-bytes-bits = 4
     self.finished = false
@@ -609,7 +609,7 @@ ns for encoder {
     htsize
   }
 
-  fn compress-block(self: *mut encoder, input: ptr, len: size, is-last: bool, out: *mut list[u8]) {
+  fn compress-block(self: *encoder, input: ptr, len: size, is-last: bool, out: *list[u8]) {
     let table-size = hash-table-size(len, self.quality)
     mem/set(dst = self.table.data-ptr(), value = 0, count = table-size * 4)
 
@@ -635,7 +635,7 @@ ns for encoder {
     self.last-bytes-bits = (bw.pos & 7).trunc[u8]
   }
 
-  fn process(self: *mut encoder, input: span[u8], out: *mut list[u8]) {
+  fn process(self: *encoder, input: span[u8], out: *list[u8]) {
     if self.finished crash("brotli encoder: process after finish")
     let pos: size = 0
     while pos < input.len() {
@@ -645,7 +645,7 @@ ns for encoder {
     }
   }
 
-  fn flush(self: *mut encoder, out: *mut list[u8]) {
+  fn flush(self: *encoder, out: *list[u8]) {
     if self.finished crash("brotli encoder: flush after finish")
     if self.last-bytes-bits == 0 return
     let seal = self.last-bytes.widen[u32] | (0x6u32 << self.last-bytes-bits.widen[u32])
@@ -660,13 +660,13 @@ ns for encoder {
     }
   }
 
-  fn finish(self: *mut encoder, out: *mut list[u8]) {
+  fn finish(self: *encoder, out: *list[u8]) {
     if self.finished crash("brotli encoder: finish after finish")
     self.compress-block(ptr/null, 0, true, out)
     self.finished = true
   }
 
-  fn compress(self: *mut encoder, input: span[u8], out: *mut list[u8]) {
+  fn compress(self: *encoder, input: span[u8], out: *list[u8]) {
     if self.finished crash("brotli encoder: compress after finish")
     let pos: size = 0
     loop {

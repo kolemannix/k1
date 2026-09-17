@@ -14,7 +14,7 @@ type token-kind = either(u8) {
   string-open-bt,
   char,
 
-  kw-fn, kw-let, kw-mut, kw-and, kw-or, kw-if, kw-else, kw-while, kw-loop,
+  kw-fn, kw-let, kw-and, kw-or, kw-if, kw-else, kw-while, kw-loop,
   kw-ns, kw-intern, kw-for, kw-in, kw-ability, kw-impl, kw-is, kw-not,
   kw-builtin, kw-where, kw-context, kw-use, kw-require, kw-defer,
 
@@ -76,7 +76,7 @@ ns for token-kind {
       :string-open-dq -> "<\"string...>",
       :string-open-bt -> "<`string...>",
       :char -> "<char>",
-      :kw-fn -> "fn", :kw-let -> "let", :kw-mut -> "mut", :kw-and -> "and",
+      :kw-fn -> "fn", :kw-let -> "let", :kw-and -> "and",
       :kw-or -> "or", :kw-if -> "if", :kw-else -> "else", :kw-while -> "while",
       :kw-loop -> "loop", :kw-ns -> "ns", :kw-intern -> "intern", :kw-for -> "for",
       :kw-in -> "in", :kw-ability -> "ability", :kw-impl -> "impl", :kw-is -> "is",
@@ -116,7 +116,6 @@ fn string-kind(is-dq: bool, done: bool): token-kind {
 fn keyword-kind(text: string): ?token-kind {
   if text == "fn" :some(:kw-fn)
   else if text == "let" :some(:kw-let)
-  else if text == "mut" :some(:kw-mut)
   else if text == "and" :some(:kw-and)
   else if text == "or" :some(:kw-or)
   else if text == "if" :some(:kw-if)
@@ -256,13 +255,13 @@ ns for lexer {
     if p >= self.content.len() EOF_CHAR else self.content.[p]
   }
 
-  fn next-char(self: *mut lexer): char {
+  fn next-char(self: *lexer): char {
     let c = self.peek()
     self.pos = self.pos + 1
     c
   }
 
-  fn advance(self: *mut lexer) {
+  fn advance(self: *lexer) {
     self.pos = self.pos + 1
   }
 
@@ -284,7 +283,7 @@ ns for lexer {
     .{ kind, flags, start, len }
   }
 
-  fn emit(self: *mut lexer, tokens: *mut list[token], kind: token-kind, n: u32, len: u32): bool {
+  fn emit(self: *lexer, tokens: *list[token], kind: token-kind, n: u32, len: u32): bool {
     self.pos = self.pos + len.widen[size]
     tokens.push(self.make-token(kind, n, len))
     true
@@ -306,11 +305,11 @@ ns for lexer {
     self.mode-stack.[self.mode-stack.len() - 1]
   }
 
-  fn set-top-mode(self: *mut lexer, m: lex-mode) {
+  fn set-top-mode(self: *lexer, m: lex-mode) {
     self.mode-stack.[self.mode-stack.len() - 1] = m
   }
 
-  fn eat-token(self: *mut lexer, tokens: *mut list[token]): result[bool, lex-error] {
+  fn eat-token(self: *lexer, tokens: *list[token]): result[bool, lex-error] {
     let tok-len: u32 = 0
     let is-number = false
     loop {
@@ -539,7 +538,7 @@ ns for lexer {
     }
   }
 
-  fn run(self: *mut lexer, tokens: *mut list[token]): ?lex-error {
+  fn run(self: *lexer, tokens: *list[token]): ?lex-error {
     let err: ?lex-error = :none
     loop {
       if self.eat-token(tokens) is {

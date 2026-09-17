@@ -1,7 +1,7 @@
 ns parse
 
 ns for parser {
-  fn parse-literal-atom(self: *mut parser): result[?ast/expr-id, perror] {
+  fn parse-literal-atom(self: *parser): result[?ast/expr-id, perror] {
     let first = self.peek()
     let second = self.peek-at(1)
     if first.kind is :char {
@@ -41,7 +41,7 @@ ns for parser {
     }
   }
 
-  fn expect-string(self: *mut parser): result[ast/expr-id, perror] {
+  fn expect-string(self: *parser): result[ast/expr-id, perror] {
     let first = self.peek()
     let pending = list/empty[pending-part]()
     let first-segment = true
@@ -203,7 +203,7 @@ ns for parser {
     }
   }
 
-  fn expect-parse-pattern(self: *mut parser): result[ast/pattern-id, perror] {
+  fn expect-parse-pattern(self: *parser): result[ast/pattern-id, perror] {
     let pattern-id = self.expect-pattern-base().try
     loop {
       if self.maybe-consume(:asterisk) is :some asterisk {
@@ -217,7 +217,7 @@ ns for parser {
     :ok(pattern-id)
   }
 
-  fn expect-pattern-base(self: *mut parser): result[ast/pattern-id, perror] {
+  fn expect-pattern-base(self: *parser): result[ast/pattern-id, perror] {
     let first = self.peek()
     let second = self.peek-at(1)
     if self.parse-literal-atom().try is :some literal-id {
@@ -314,7 +314,7 @@ ns for parser {
     one.kind.is-string()
   }
 
-  fn expect-namespaced-ident(self: *mut parser): result[ast/qident, perror] {
+  fn expect-namespaced-ident(self: *parser): result[ast/qident, perror] {
     let first = self.peek()
     let second = self.peek-at(1)
     let path = list/empty[ast/ident-spanned]()
@@ -336,14 +336,14 @@ ns for parser {
     :ok(.{ path, name = self.make-ident(name-token), name-span = name-token.span() })
   }
 
-  fn expect-struct-type-field(self: *mut parser): result[ast/struct-type-field, perror] {
+  fn expect-struct-type-field(self: *parser): result[ast/struct-type-field, perror] {
     let it = self.expect-ident().try
     let _ = self.expect-kind(:colon).try
     let type-expr = self.expect-type-expression().try
     :ok(.{ name = it.name, name-span = it.tok.span(), type-expr })
   }
 
-  fn expect-type-expression(self: *mut parser): result[ast/type-expr-id, perror] {
+  fn expect-type-expression(self: *parser): result[ast/type-expr-id, perror] {
     let tok = self.peek()
     if self.parse-type-expression().try is {
       :some id -> :ok(id),
@@ -351,7 +351,7 @@ ns for parser {
     }
   }
 
-  fn parse-type-expression(self: *mut parser): result[?ast/type-expr-id, perror] {
+  fn parse-type-expression(self: *parser): result[?ast/type-expr-id, perror] {
     let base = self.parse-base-type-expression().try
     if base is :none { return :ok(:none) }
     let result-id = base.!
@@ -371,7 +371,7 @@ ns for parser {
     :ok(:some(result-id))
   }
 
-  fn parse-base-type-expression(self: *mut parser): result[?ast/type-expr-id, perror] {
+  fn parse-base-type-expression(self: *parser): result[?ast/type-expr-id, perror] {
     let first = self.peek()
     if first.kind is :open-paren {
       self.advance()
@@ -381,10 +381,9 @@ ns for parser {
     }
     if first.kind is :asterisk {
       self.advance()
-      let kind: ast/reference-kind = if self.maybe-consume(:kw-mut) is :some _ { :mut-ref } else :read
       let base = self.expect-type-expression().try
       let span = self.extend-tok-to-here(first)
-      return :ok(:some(self.program.add-type-expr(:reference(.{ base, kind, span }))))
+      return :ok(:some(self.program.add-type-expr(:reference(.{ base, span }))))
     }
     let first-chars = if first.kind is :ident { self.tok-chars(first) } else ""
     if first.kind is :open-brace or first-chars == "union" or first-chars == "packed" {
@@ -396,7 +395,7 @@ ns for parser {
         let _ = self.expect-kind(:open-brace).try
       }
       let fields = list/empty[ast/struct-type-field]()
-      self.eat-delimited("Struct fields", fields.&, :comma, :close-brace, fn(p: *mut parser) p.expect-struct-type-field()).try
+      self.eat-delimited("Struct fields", fields.&, :comma, :close-brace, fn(p: *parser) p.expect-struct-type-field()).try
       let span = self.extend-tok-to-here(first)
       return :ok(:some(self.program.add-type-expr(:struct-type(.{ fields, span, record-kind = kind }))))
     }
@@ -459,18 +458,18 @@ ns for parser {
     :ok(:none)
   }
 
-  fn parse-bracketed-type-args(self: *mut parser): result[{ args: list[ast/type-arg], span: ast/src-span }, perror] {
+  fn parse-bracketed-type-args(self: *parser): result[{ args: list[ast/type-arg], span: ast/src-span }, perror] {
     require self.maybe-consume(:open-bracket) is :some open-bracket else {
       let back = self.peek-back()
       return :ok(.{ args = list/empty(), span = back.span() })
     }
     let args = list/empty[ast/type-arg]()
-    self.eat-delimited("Type Arguments", args.&, :comma, :close-bracket, fn(p: *mut parser) p.expect-type-arg()).try
+    self.eat-delimited("Type Arguments", args.&, :comma, :close-bracket, fn(p: *parser) p.expect-type-arg()).try
     let span = self.extend-tok-to-here(open-bracket)
     :ok(.{ args, span })
   }
 
-  fn expect-type-arg(self: *mut parser): result[ast/type-arg, perror] {
+  fn expect-type-arg(self: *parser): result[ast/type-arg, perror] {
     let one = self.peek()
     let two = self.peek-at(1)
     let name: ?ast/string-id = if one.kind is :ident and two.kind is :equals {
@@ -489,7 +488,7 @@ ns for parser {
     :ok(.{ name, type-expr, span })
   }
 
-  fn expect-function-type(self: *mut parser): result[ast/type-expr-id, perror] {
+  fn expect-function-type(self: *parser): result[ast/type-expr-id, perror] {
     let start = self.expect-kind(:kw-fn).try
     let params = list/empty[ast/type-expr-id]()
     let has-open-paren = self.maybe-consume(:open-paren) is :some _
@@ -522,7 +521,7 @@ ns for parser {
     :ok(self.program.add-type-expr(:function-type(.{ params, return-type, span })))
   }
 
-  fn expect-sum-type-expression(self: *mut parser): result[ast/sum-type, perror] {
+  fn expect-sum-type-expression(self: *parser): result[ast/sum-type, perror] {
     let keyword = self.expect-ident-chars("either").try
     let tag-type: ?ast/type-expr-id = if self.maybe-consume-no-ws(:open-paren) is :some _ {
       let t = self.expect-type-expression().try
@@ -531,12 +530,12 @@ ns for parser {
     } else :none
     let _ = self.expect-kind(:open-brace).try
     let variants = list/empty[ast/sum-variant]()
-    self.eat-delimited("either members", variants.&, :comma, :close-brace, fn(p: *mut parser) p.expect-sum-variant()).try
+    self.eat-delimited("either members", variants.&, :comma, :close-brace, fn(p: *parser) p.expect-sum-variant()).try
     let span = self.extend-tok-to-here(keyword.tok)
     :ok(.{ variants, tag-type, span })
   }
 
-  fn expect-sum-variant(self: *mut parser): result[ast/sum-variant, perror] {
+  fn expect-sum-variant(self: *parser): result[ast/sum-variant, perror] {
     let it = self.expect-ident().try
     let payload: ?ast/type-expr-id = if self.maybe-consume(:open-paren) is :some _ {
       let p = self.expect-type-expression().try
