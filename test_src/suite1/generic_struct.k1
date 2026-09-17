@@ -27,6 +27,25 @@ fn test-constraints() {
   .{}
 }
 
+type handle[t] = { raw: ptr, len: size }
+ns for handle {
+  fn elem-size[t](self: handle[t]): size { types/stride[t] }
+}
+fn make-handle[t](len: size): handle[t] { .{ raw = ptr/null, len } }
+fn takes-h64(_h: handle[u64]) {}
+
+fn test-unused-param() {
+  assert-equals(types/size[handle[u8]], types/size[handle[u64]])
+  let h8: handle[u8] = make-handle[u8](3)
+  let h64: handle[u64] = .0
+  assert-equals(h8.elem-size(), 1)
+  assert-equals(h64.elem-size(), 8)
+  assert-equals(h8.len, 3)
+  takes-h64(make-handle(1))
+  assert(test-compile(takes-h64(make-handle[u8](3))) is :some _)
+  .{}
+}
+
 fn test() {
   let b: box[int] = .{ value = 0 }
   b.value
@@ -67,6 +86,7 @@ fn test() {
   )
 
   test-constraints()
+  test-unused-param()
 
   .{}
 }

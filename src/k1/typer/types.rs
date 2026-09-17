@@ -108,7 +108,7 @@ pub struct StructTypeField {
 }
 impl_copy_if_small!(12, StructTypeField);
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GenericInstanceInfo {
     pub generic_parent: TypeId,
     pub type_args: TypeSliceId,
@@ -590,7 +590,12 @@ impl TypedProgram {
         t2: &Type,
         defn1: Option<&TypeDefnInfo>,
         defn2: Option<&TypeDefnInfo>,
+        inst1: Option<&GenericInstanceInfo>,
+        inst2: Option<&GenericInstanceInfo>,
     ) -> bool {
+        if inst1 != inst2 {
+            return false;
+        }
         match (t1, t2) {
             (Type::Char, Type::Char) => true,
             (Type::Integer(int1), Type::Integer(int2)) => int1 == int2,
@@ -734,7 +739,12 @@ impl TypedProgram {
         }
     }
 
-    fn hash_type(&self, typ: &Type, defn: Option<TypeDefnInfo>) -> u64 {
+    fn hash_type(
+        &self,
+        typ: &Type,
+        defn: Option<TypeDefnInfo>,
+        instance: Option<GenericInstanceInfo>,
+    ) -> u64 {
         use std::hash::Hash;
         use std::hash::Hasher;
         use std::mem::discriminant;
@@ -743,6 +753,7 @@ impl TypedProgram {
         let state = &mut hasher;
 
         discriminant(typ).hash(state);
+        instance.hash(state);
         match typ {
             Type::Char => {}
             Type::Integer(int) => discriminant(int).hash(state),
@@ -1580,27 +1591,30 @@ impl TypedProgram {
         defn_info: Option<TypeDefnInfo>,
         instance_info: Option<GenericInstanceInfo>,
     ) -> TypeId {
-        let hash = self.hash_type(&typ, defn_info);
+        let hash = self.hash_type(&typ, defn_info, instance_info);
         if let Entry::Occupied(entry) = self.type_hashes.entry(hash) {
             let existing_id = *entry.get();
             let existing = self.types.get(existing_id);
             let existing_defn_info = self.type_defn_info.get(&existing_id);
-            if self.type_eq(&typ, existing, defn_info.as_ref(), existing_defn_info) {
+            let existing_instance_info = self.type_instance_info.get(existing_id).as_ref();
+            if self.type_eq(
+                &typ,
+                existing,
+                defn_info.as_ref(),
+                existing_defn_info,
+                instance_info.as_ref(),
+                existing_instance_info,
+            ) {
                 return existing_id;
             }
         }
 
         let type_id = self.types.add(typ);
         self.type_hashes.insert(hash, type_id);
-
-        // 2 AoS fields to handle
-        // pub type_variable_counts
-        // pub instance_info
+        self.type_instance_info.add_expected_id(instance_info, type_id);
 
         let variable_counts = self.compute_type_info(type_id);
         self.type_variable_counts.add_expected_id(variable_counts, type_id);
-
-        self.type_instance_info.add_expected_id(instance_info, type_id);
 
         if let Some(defn_info) = defn_info {
             self.type_defn_info.insert(type_id, defn_info);
@@ -1619,17 +1633,17 @@ impl TypedProgram {
         instance_info: Option<GenericInstanceInfo>,
         defn_info: Option<TypeDefnInfo>,
     ) {
-        let hash = self.hash_type(&type_value, defn_info);
+        let hash = self.hash_type(&type_value, defn_info, instance_info);
         *self.types.get_mut(id) = type_value;
         self.type_hashes.insert(hash, id);
 
+        *self.type_instance_info.get_mut(id) = instance_info;
         let variable_counts = self.compute_type_info(id);
         *self.type_variable_counts.get_mut(id) = variable_counts;
 
         if let Some(defn_info) = defn_info {
             self.type_defn_info.insert(id, defn_info);
         }
-        *self.type_instance_info.get_mut(id) = instance_info;
     }
 
     pub fn next_type_id(&self) -> TypeId {
@@ -1640,7 +1654,11 @@ impl TypedProgram {
         if self.types.next_id() != id + 1u32 {
             return false;
         }
-        let hash = self.hash_type(self.types.get(id), self.type_defn_info.get(&id).copied());
+        let hash = self.hash_type(
+            self.types.get(id),
+            self.type_defn_info.get(&id).copied(),
+            *self.type_instance_info.get(id),
+        );
         if self.type_hashes.get(&hash) == Some(&id) {
             self.type_hashes.remove(&hash);
         }
@@ -1964,6 +1982,19 @@ impl TypedProgram {
     /// Computes 'supplementary' type info like type hole counts, zero-safeness, other flags
     /// Prefer to add stuff here rather than creating a new traversal
     pub fn compute_type_info(&self, type_id: TypeId) -> TypeInfo {
+        let mut info = self.compute_type_info_structural(type_id);
+        if let Some(instance) = self.type_instance_info.get(type_id) {
+            for arg in self.get_type_slice(instance.type_args) {
+                let arg_info = self.type_variable_counts.get(*arg);
+                info.inference_hole_count += arg_info.inference_hole_count;
+                info.type_parameter_count += arg_info.type_parameter_count;
+                info.unresolved_static_count += arg_info.unresolved_static_count;
+            }
+        }
+        info
+    }
+
+    fn compute_type_info_structural(&self, type_id: TypeId) -> TypeInfo {
         const EMPTY: TypeInfo = TypeInfo::EMPTY;
         debug!("count_type_variables of {} {}", type_id, self.types.get(type_id).kind_name());
 

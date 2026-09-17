@@ -68,7 +68,7 @@ ns for parse-state {
 
 // Wraps a pointer to an llhttp_t with some stronger-ish typing
 // over our particular user-data, 'parse-state'
-type parser = { parser: llhttp/t, phantom: array[parse-state, 0] }
+type parser = { parser: llhttp/t }
 #static { assert-equals(types/size[parser], types/size[llhttp/t]); assert-equals(types/align[parser], types/align[llhttp/t]) }
 
 ns for parser {

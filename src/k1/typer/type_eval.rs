@@ -1842,7 +1842,7 @@ impl TypedProgram {
                     new_field.type_id = new_field_type_id;
                     new_fields.push(new_field);
                 }
-                if any_change {
+                if any_change || generic_parent_to_attach.is_some() {
                     let generic_instance_info = match generic_parent_to_attach {
                         Some(parent) => {
                             let mut args: List<TypeId, MemTmp> =
@@ -1894,7 +1894,7 @@ impl TypedProgram {
                     }
                     new_variants.push(new_variant);
                 }
-                if any_changed {
+                if any_changed || generic_parent_to_attach.is_some() {
                     let generic_instance_info = match generic_parent_to_attach {
                         Some(parent) => {
                             let mut args: List<TypeId, MemTmp> =
