@@ -607,6 +607,7 @@ mod completion_tests {
             emit_llvm: false,
             optimize: false,
             dump_module: false,
+            dump_ir: false,
             debug: false,
             sanitize: false,
             profile: false,

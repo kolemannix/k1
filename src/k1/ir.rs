@@ -782,9 +782,7 @@ pub fn low_mask_from_u8(width: u8) -> u64 {
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Value {
     Inst(InstId),
-    /// `Global` is always a storage location, regardless
-    /// of the `k1` global declaration kind (referencing or not!)
-    /// This greatly simplifies downstream code
+    /// Stable storage address of a non-reloadable global; does not read its contents.
     GlobalAddr {
         storage_pt: PhysicalType,
         id: TypedGlobalId,
@@ -846,6 +844,11 @@ pub struct IrCall {
 #[derive(Clone, Copy)]
 pub enum Inst {
     Data(DataInst),
+    /// Captures the current reload version's storage at this instruction.
+    ReloadGlobalAddr {
+        storage_pt: PhysicalType,
+        id: TypedGlobalId,
+    },
 
     // Memory manipulation
     Alloca {
@@ -1139,6 +1142,7 @@ impl Inst {
 pub fn visit_inst_values(ir: &ProgramIr, inst: &Inst, f: &mut impl FnMut(Value)) {
     match *inst {
         Inst::Data(_)
+        | Inst::ReloadGlobalAddr { .. }
         | Inst::Alloca { .. }
         | Inst::Fence { .. }
         | Inst::Jump(_)
@@ -1370,7 +1374,7 @@ pub fn get_inst_kind(ir: &ProgramIr, inst_id: InstId) -> InstKind {
             DataInst::Float(TypedFloatValue::F32(_)) => InstKind::scalar(ScalarType::F32),
             DataInst::Float(TypedFloatValue::F64(_)) => InstKind::scalar(ScalarType::F64),
         },
-        Inst::Alloca { .. } => InstKind::PTR,
+        Inst::Alloca { .. } | Inst::ReloadGlobalAddr { .. } => InstKind::PTR,
         Inst::Store { .. } => InstKind::Void,
         Inst::Load { t, dst, .. } => {
             if dst != Value::Empty {
@@ -3246,7 +3250,12 @@ fn compile_variable_to_address(
             }
 
             {
-                let addr = Value::GlobalAddr { storage_pt: value_pt, id: global_id };
+                let addr = if global.reload_ns.is_some() {
+                    b.push_inst_anon(Inst::ReloadGlobalAddr { storage_pt: value_pt, id: global_id })
+                        .as_value()
+                } else {
+                    Value::GlobalAddr { storage_pt: value_pt, id: global_id }
+                };
                 let is_direct = value_pt.is_agg();
                 Ok(CompileVariableResult::Address {
                     addr,
@@ -4237,7 +4246,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
             }
 
             match *inst {
-                Inst::Data(_imm) => (),
+                Inst::Data(_) | Inst::ReloadGlobalAddr { .. } => (),
                 Inst::Alloca { .. } => (),
                 Inst::Store { dst, .. } => {
                     let dst_type = get_value_kind(ir, dst);
@@ -4707,6 +4716,10 @@ pub fn display_inst(w: &mut impl Write, k1: &TypedProgram, inst_id: InstId) -> s
         Inst::Data(imm) => {
             write!(w, "imm ")?;
             display_imm(w, imm)?;
+        }
+        Inst::ReloadGlobalAddr { storage_pt, id } => {
+            write!(w, "reload_global_addr g{} ", id.as_u32())?;
+            k1.display_pt(w, storage_pt)?;
         }
         Inst::Alloca { t, vm_layout, returned } => {
             write!(w, "alloca ")?;

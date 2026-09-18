@@ -913,7 +913,7 @@ ns for ptr {
   fn(inline) is-null(self: ptr): bool { self is null }
 
   fn(inline) ref[t](context locn: k1/source-location)(self: ptr): *t {
-    #if k1/debug or k1/is-static { if self is null crash("null ptr to reference") }
+    if k1/debug or k1/is-static { if self is null crash("null ptr to reference") }
     mem/bitcast[ptr, *t](self)
   }
 

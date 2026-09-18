@@ -698,7 +698,7 @@ fn rewrite_instr(ir: &mut ProgramIr, mappings: &mut RewriteMappings, inst: &mut 
             rewrite_value(mappings, lhs);
             rewrite_value(mappings, rhs);
         }
-        Inst::Data(_) => {}
+        Inst::Data(_) | Inst::ReloadGlobalAddr { .. } => {}
         Inst::IntTrunc { v, .. } => {
             rewrite_value(mappings, v);
         }

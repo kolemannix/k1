@@ -115,6 +115,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, k1_home: &str, path: P) -> Result<()
         no_std: false,
         emit_llvm: true,
         dump_module: false,
+        dump_ir: false,
         dump_idents: false,
         dump_trace: false,
         profile: false,

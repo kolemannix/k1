@@ -59,6 +59,21 @@ fn llvm_size_info(td: &TargetData, typ: &dyn AnyType) -> Layout {
     Layout { size: td.get_abi_size(typ) as u32, align: td.get_abi_alignment(typ) }
 }
 
+fn llvm_float_constant<'ctx>(ctx: &'ctx Context, value: TypedFloatValue) -> FloatValue<'ctx> {
+    let (bits, float_type) = match value {
+        TypedFloatValue::F32(v) => {
+            (ctx.i32_type().const_int(v.to_bits() as u64, false), ctx.f32_type())
+        }
+        TypedFloatValue::F64(v) => (ctx.i64_type().const_int(v.to_bits(), false), ctx.f64_type()),
+    };
+    unsafe {
+        FloatValue::new(llvm_sys::core::LLVMConstBitCast(
+            bits.as_value_ref(),
+            float_type.as_type_ref(),
+        ))
+    }
+}
+
 /// llvm::CallingConv::Fast
 const LLVM_CALL_CONV_FAST: u32 = 8;
 
@@ -3466,15 +3481,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 )),
             },
             ir::Value::GlobalAddr { id, .. } => {
-                let reload_ns = self.k1.globals.get(id).reload_ns;
-                if let Some(reload_ns) = reload_ns
-                    && self.kind != CgKind::ReloadDylib(reload_ns)
-                {
-                    // Not our storage: the current version's copy, via the patched slot
-                    return self.codegen_reload_global_addr(id);
-                }
-                let global_value = self.codegen_global(id)?;
-                Ok(global_value.as_pointer_value().as_basic_value_enum())
+                debug_assert!(self.k1.globals.get(id).reload_ns.is_none());
+                Ok(self.codegen_global(id)?.as_pointer_value().as_basic_value_enum())
             }
             ir::Value::StaticValue { id, .. } => self.codegen_static_value_canonical(id),
             ir::Value::FunctionAddr(function_id) => {
@@ -3512,11 +3520,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         self.ctx.i64_type().const_int(data as i32 as i64 as u64, true).into()
                     }
                     ScalarType::F32 => {
-                        self.ctx.f32_type().const_float(f32::from_bits(data) as f64).into()
+                        llvm_float_constant(self.ctx, TypedFloatValue::F32(f32::from_bits(data)))
+                            .into()
                     }
-                    ScalarType::F64 => {
-                        self.ctx.f64_type().const_float(f32::from_bits(data) as f64).into()
-                    }
+                    ScalarType::F64 => llvm_float_constant(
+                        self.ctx,
+                        TypedFloatValue::F64(f32::from_bits(data) as f64),
+                    )
+                    .into(),
                     ScalarType::Pointer => {
                         if data == 0 {
                             self.builtin_types.ptr.const_zero().into()
@@ -3737,14 +3748,21 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let value: BasicValueEnum<'ctx> = match data_inst {
                     ir::DataInst::U64(u) => self.ctx.i64_type().const_int(u, false).into(),
                     ir::DataInst::I64(i) => self.ctx.i64_type().const_int(i as u64, true).into(),
-                    ir::DataInst::Float(f) => match f {
-                        TypedFloatValue::F32(f32) => {
-                            self.ctx.f32_type().const_float(f32 as f64).into()
-                        }
-                        TypedFloatValue::F64(f64) => self.ctx.f64_type().const_float(f64).into(),
-                    },
+                    ir::DataInst::Float(f) => llvm_float_constant(self.ctx, f).into(),
                 };
                 inst_mappings.insert(inst_id, value.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::ReloadGlobalAddr { id, .. } => {
+                let reload_ns = self.k1.globals.get(id).reload_ns;
+                let value = if let Some(reload_ns) = reload_ns
+                    && self.kind != CgKind::ReloadDylib(reload_ns)
+                {
+                    self.codegen_reload_global_addr(id)?
+                } else {
+                    self.codegen_global(id)?.as_pointer_value().as_basic_value_enum()
+                };
+                inst_mappings.insert(inst_id, value);
                 Ok(())
             }
             Inst::Alloca { t, returned, .. } => {
@@ -5199,13 +5217,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         llvm_value.as_basic_value_enum()
     }
 
-    fn codegen_float_value(&mut self, float: TypedFloatValue) -> CgResult<BasicValueEnum<'ctx>> {
-        let cg_ty = self.codegen_type(PhysicalType::scalar(float.get_scalar_type()));
-        let llvm_float_ty = cg_ty.rich_type().into_float_type();
-        let llvm_value = llvm_float_ty.const_float(float.as_f64());
-        Ok(llvm_value.as_basic_value_enum())
-    }
-
     fn codegen_static_value_as_const(
         &mut self,
         static_value_id: StaticValueId,
@@ -5231,7 +5242,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             StaticValue::Int(int_value) => self.codegen_int_value(*int_value),
             StaticValue::Enum(_, int_value) => self.codegen_int_value(*int_value),
-            StaticValue::Float(float_value) => self.codegen_float_value(*float_value).unwrap(),
+            StaticValue::Float(float_value) => llvm_float_constant(self.ctx, *float_value).into(),
             StaticValue::String(string_id) => {
                 let string_global = self.codegen_string_id_to_global(*string_id).unwrap();
                 string_global.get_initializer().unwrap()
@@ -5852,5 +5863,65 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             ),
             self.make_enum_attribute("align", param_type.rich_repr_layout().align as u64),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_float_bits(ctx: &Context, value: TypedFloatValue, expected: u64) {
+        let int_type = match value {
+            TypedFloatValue::F32(_) => ctx.i32_type(),
+            TypedFloatValue::F64(_) => ctx.i64_type(),
+        };
+        let constant = llvm_float_constant(ctx, value);
+        let bits = unsafe {
+            IntValue::new(llvm_sys::core::LLVMConstBitCast(
+                constant.as_value_ref(),
+                int_type.as_type_ref(),
+            ))
+        };
+        assert_eq!(bits.get_zero_extended_constant(), Some(expected), "{expected:#018x}");
+    }
+
+    #[test]
+    fn llvm_f32_constants_preserve_bits() {
+        let ctx = Context::create();
+        for bits in [
+            0,
+            0x8000_0000,
+            1,
+            0x8000_0001,
+            0x7f7f_ffff,
+            0x7f80_0000,
+            0xff80_0000,
+            0x7fc0_1234,
+            0xffc0_1234,
+            0x7f80_1234,
+            0xff80_1234,
+        ] {
+            assert_float_bits(&ctx, TypedFloatValue::F32(f32::from_bits(bits)), bits as u64);
+        }
+    }
+
+    #[test]
+    fn llvm_f64_constants_preserve_bits() {
+        let ctx = Context::create();
+        for bits in [
+            0,
+            0x8000_0000_0000_0000,
+            1,
+            0x8000_0000_0000_0001,
+            0x7fef_ffff_ffff_ffff,
+            0x7ff0_0000_0000_0000,
+            0xfff0_0000_0000_0000,
+            0x7ff8_0000_0000_1234,
+            0xfff8_0000_0000_1234,
+            0x7ff0_0000_0000_1234,
+            0xfff0_0000_0000_1234,
+        ] {
+            assert_float_bits(&ctx, TypedFloatValue::F64(f64::from_bits(bits)), bits);
+        }
     }
 }

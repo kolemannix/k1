@@ -463,7 +463,9 @@ fn exec_loop(
                 let target = operand!(0);
                 let fp_delta = operand!(1) as usize;
                 let nargs = header_b(h) as usize;
-                debug_assert_ne!(target, super::PENDING_PC, "unpatched recursive call target");
+                if target == super::PENDING_PC {
+                    vmerr!("Function needs its own compiled ir while it is being compiled");
+                }
                 let new_fp = unsafe { fp.add(fp_delta) };
                 let words = new_fp as *mut u64;
                 for k in 0..nargs {

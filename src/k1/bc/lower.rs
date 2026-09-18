@@ -301,7 +301,7 @@ fn wbits(t: ScalarType) -> u8 {
 fn const_of_data32(t: ScalarType, data: u32) -> u64 {
     match t {
         ScalarType::F32 => data as u64,
-        ScalarType::F64 => (data as f32 as f64).to_bits(),
+        ScalarType::F64 => (f32::from_bits(data) as f64).to_bits(),
         ScalarType::Pointer => data as u64,
         ScalarType::I8 | ScalarType::I16 | ScalarType::I32 => data as u64,
         ScalarType::I64 => data as i32 as i64 as u64,
@@ -699,6 +699,12 @@ fn emit_inst(
         // resolution; phis are handled as edge copies; alloca addresses are
         // baked into consumers as fp-relative operands.
         Inst::Data(_) => {}
+        Inst::ReloadGlobalAddr { storage_pt, id } => {
+            ctx.emit(Opcode::LoadGlobal, 0, 0);
+            ctx.push(ctx.bc_value_of(inst_id));
+            ctx.push(id.as_u32());
+            ctx.push(storage_pt.to_u32());
+        }
         Inst::BitCast { .. }
         | Inst::IntExtU { .. }
         | Inst::PtrToWord { .. }
@@ -1318,6 +1324,20 @@ fn emit_phi_copies(k1: &mut TypedProgram, ctx: &mut LowerCtx, from: BlockId, tar
         ctx.emit(Opcode::Mov, 0, 0);
         ctx.push(dst);
         ctx.push(src);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::const_of_data32;
+    use crate::typer::types::ScalarType;
+
+    #[test]
+    fn float_immediates_are_bit_patterns() {
+        for value in [0.0f32, -0.0, 0.1, -1.5, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(const_of_data32(ScalarType::F32, value.to_bits()), value.to_bits() as u64);
+            assert_eq!(const_of_data32(ScalarType::F64, value.to_bits()), (value as f64).to_bits());
+        }
     }
 }
 

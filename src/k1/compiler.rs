@@ -329,6 +329,10 @@ pub struct Args {
     #[arg(long, default_value_t = false)]
     pub dump_module: bool,
 
+    /// Write the IR consumed by codegen to out_dir/{program_name}_ir.txt
+    #[arg(long)]
+    pub dump_ir: bool,
+
     /// Write out every string in the identifier intern pool, with stats
     #[arg(long, default_value_t = false)]
     pub dump_idents: bool,
@@ -1943,6 +1947,19 @@ pub fn codegen_module(args: &Args, ctx: &Context, k1: &mut TypedProgram) -> Resu
             }
         },
     };
+    if args.dump_ir {
+        let out_dir = k1.ast.idents.get_string(k1.config.out_dir);
+        std::fs::create_dir_all(out_dir)?;
+        let mut dump = String::new();
+        for &function in &roots.reachable {
+            if let Some(unit) =
+                crate::ir::get_compiled_unit(&k1.ir, crate::ir::IrUnitId::Function(function))
+            {
+                crate::ir::display_unit(&mut dump, k1, &unit, false)?;
+            }
+        }
+        std::fs::write(format!("{out_dir}/{module_name}_ir.txt"), dump)?;
+    }
     let is_host_native = detect_host_target() == Some(k1.config.target);
     let object_is_artifact = !k1.program_settings.executable && !is_host_native
         || k1.config.target.platform() == Platform::Bare;
@@ -2256,6 +2273,7 @@ mod compiler_test {
             emit_llvm: false,
             optimize: false,
             dump_module: false,
+            dump_ir: false,
             dump_idents: false,
             dump_trace: false,
             debug: false,

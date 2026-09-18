@@ -26,6 +26,8 @@ K1_HOME=$(pwd) target/$target_dir/k1 --emit-llvm --cache false run test_src/suit
 
 target/$target_dir/k1 --cache false build dogfood/refchess
 target/$target_dir/k1 --cache false build dogfood/profiling
+target/$target_dir/k1 --cache false build dogfood/k1bindgen
+export PATH="$(pwd)/dogfood/k1bindgen/.k1-out:$PATH"
 target/$target_dir/k1 --cache false test  dogfood/k1bindgen
 rm -rf dogfood/httpapp/.k1-out/cache
 K1_HOME=$(pwd) target/$target_dir/k1 --cache false build dogfood/httpapp

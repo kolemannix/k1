@@ -41,6 +41,6 @@ ns for sleep-poll-mutex {
 
 }
 
-fn join[t](thread: thread, retval: *t) {
-  retval.as[ptr].ref[ptr].* = core/platform/thread/join(.{ raw = thread })
+fn join(thread: thread, retval: *ptr) {
+  retval.* = core/platform/thread/join(.{ raw = thread })
 }

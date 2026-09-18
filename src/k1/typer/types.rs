@@ -691,7 +691,9 @@ impl TypedProgram {
                         .iter()
                         .zip(self.mem.getn(f2.physical_params))
                         .all(|(p1, p2)| {
-                            p1.type_id == p2.type_id && p1.is_macro_code == p2.is_macro_code
+                            p1.type_id == p2.type_id
+                                && p1.is_macro_code == p2.is_macro_code
+                                && p1.is_context == p2.is_context
                         })
                 } else {
                     false
