@@ -66,6 +66,7 @@ pub struct ProgramIr {
     pub cmpxchgs: VPool<AtomicCmpxchgData, AtomicCmpxchgId>,
     pub vec_ops: VPool<VecOpData, VecOpId>,
     pub phys_fn_type_cache: FxHashMap<TypeId, PhysicalFunctionType>,
+    cfg_free_edges: IrHandle<DlNode<BlockId, ProgramIr>>,
 
     // Builder data
     b_variables: FxHashMap<VariableId, BuilderVariable>,
@@ -101,6 +102,7 @@ impl ProgramIr {
             cmpxchgs,
             vec_ops,
             phys_fn_type_cache: _,
+            cfg_free_edges,
             b_variables: _,
             b_loops: _,
             units_pending_compile,
@@ -116,6 +118,7 @@ impl ProgramIr {
         } = self;
         w.write_section("ir");
         mem.snap(w);
+        w.write_t(cfg_free_edges);
         instrs.snap(w);
         sources.snap(w);
         comments.snap(w);
@@ -132,6 +135,7 @@ impl ProgramIr {
     pub fn restore(&mut self, r: &mut crate::snap::SnapReader) {
         r.section("ir");
         self.mem.restore(r);
+        self.cfg_free_edges = r.read_t();
         self.instrs.restore(r);
         self.sources.restore(r);
         self.comments.restore(r);
@@ -352,6 +356,7 @@ impl ProgramIr {
             cmpxchgs: VPool::make("ir_cmpxchgs"),
             vec_ops: VPool::make("ir_vec_ops"),
             phys_fn_type_cache: FxHashMap::new(),
+            cfg_free_edges: Handle::nil(),
             exprs: FxHashMap::new(),
             module_config: IrModuleConfig {},
             b_variables: FxHashMap::new(),
@@ -474,7 +479,7 @@ pub struct IrUnit {
 pub enum DataInst {
     U64(u64),
     I64(i64),
-    Float(TypedFloatValue),
+    F64(f64),
 }
 
 nz_u32_id!(InstId);
@@ -946,6 +951,7 @@ pub enum Inst {
     // goto considered harmful, but came-from is friend (phi node)
     Phi {
         t: PhysicalType,
+        /// Owned by this instruction; inlining duplicates the payload before rewriting it.
         incomings: MSlice<PhiCase, ProgramIr>,
     },
     Ret {
@@ -1371,8 +1377,7 @@ pub fn get_inst_kind(ir: &ProgramIr, inst_id: InstId) -> InstKind {
         Inst::Data(imm) => match imm {
             DataInst::I64(_) => InstKind::scalar(ScalarType::I64),
             DataInst::U64(_) => InstKind::scalar(ScalarType::U64),
-            DataInst::Float(TypedFloatValue::F32(_)) => InstKind::scalar(ScalarType::F32),
-            DataInst::Float(TypedFloatValue::F64(_)) => InstKind::scalar(ScalarType::F64),
+            DataInst::F64(_) => InstKind::scalar(ScalarType::F64),
         },
         Inst::Alloca { .. } | Inst::ReloadGlobalAddr { .. } => InstKind::PTR,
         Inst::Store { .. } => InstKind::Void,
@@ -3161,11 +3166,17 @@ fn compile_static_value(b: &mut Builder, value_id: StaticValueId, pt: PhysicalTy
             let int_value = b.make_int_value(&int, IrComment::StaticEnum);
             int_value
         }
-        StaticValue::Float(float) => {
+        StaticValue::Float(TypedFloatValue::F32(float)) => {
+            Value::imm32(ScalarType::F32, float.to_bits())
+        }
+        StaticValue::Float(TypedFloatValue::F64(float)) => {
             let float = *float;
-            //task(ir): Pack small floats
-            let imm = b.push_inst(Inst::Data(DataInst::Float(float)), IrComment::StaticFloat);
-            imm.as_value()
+            let small = float as f32;
+            if !float.is_nan() && (small as f64).to_bits() == float.to_bits() {
+                Value::imm32(ScalarType::F64, small.to_bits())
+            } else {
+                b.push_inst(Inst::Data(DataInst::F64(float)), IrComment::StaticFloat).as_value()
+            }
         }
         StaticValue::String(_)
         | StaticValue::Zero(_)
@@ -5107,7 +5118,7 @@ pub fn display_imm(w: &mut impl Write, imm: DataInst) -> std::fmt::Result {
     match imm {
         DataInst::U64(u64) => write!(w, "u64 {}", u64),
         DataInst::I64(i64) => write!(w, "i64 {}", i64),
-        DataInst::Float(float) => write!(w, "float {}", float),
+        DataInst::F64(float) => write!(w, "f64 {}", float),
     }
 }
 

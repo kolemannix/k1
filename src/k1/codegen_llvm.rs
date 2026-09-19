@@ -3748,7 +3748,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let value: BasicValueEnum<'ctx> = match data_inst {
                     ir::DataInst::U64(u) => self.ctx.i64_type().const_int(u, false).into(),
                     ir::DataInst::I64(i) => self.ctx.i64_type().const_int(i as u64, true).into(),
-                    ir::DataInst::Float(f) => llvm_float_constant(self.ctx, f).into(),
+                    ir::DataInst::F64(f) => {
+                        llvm_float_constant(self.ctx, TypedFloatValue::F64(f)).into()
+                    }
                 };
                 inst_mappings.insert(inst_id, value.as_basic_value_enum());
                 Ok(())

@@ -1,6 +1,8 @@
 ns float_test
 
 fn test() {
+  constant-bits()
+  #static constant-bits()
   let pi: f64 = 3.14159
   assert-equals(pi, 3.14159)
   assert(3.0 > 2.0)
@@ -79,12 +81,8 @@ fn test() {
   assert(not (static-nan == static-nan))
   assert(static-infinity > 3.4028235e38)
 
-  assert-equals(mem/bitcast[f64, u64](-0.0), 0x8000000000000000)
-  assert-equals(mem/bitcast[f32, u32](-0.0: f32), 0x80000000)
   assert(-0.0 == 0.0)
   assert((-0.0: f32) == 0.0)
-  assert-equals(mem/bitcast[f64, u64](5.0e-324), 1)
-  assert-equals(mem/bitcast[f32, u32](1.0e-45), 1)
   assert(1.0e-400 == 0.0)
   assert((1.0e-50: f32) == 0.0)
   assert(1.0e400 == f64/inf)
@@ -125,4 +123,20 @@ fn test() {
   }
 
   .{}
+}
+
+fn constant-bits() {
+  assert-equals(mem/bitcast[f64, u64](1.5), 0x3ff8000000000000)
+  assert-equals(mem/bitcast[f64, u64](0.1), 0x3fb999999999999a)
+  assert-equals(mem/bitcast[f32, u32](0.1: f32), 0x3dcccccd)
+  assert-equals(mem/bitcast[f64, u64](-0.0), 0x8000000000000000)
+  assert-equals(mem/bitcast[f32, u32](-0.0: f32), 0x80000000)
+  assert-equals(mem/bitcast[f64, u64](5.0e-324), 1)
+  assert-equals(mem/bitcast[f32, u32](1.0e-45), 1)
+  let small: f64 = #static mem/bitcast[u64, f64](0x36a0000000000000)
+  assert-equals(mem/bitcast[f64, u64](small), 0x36a0000000000000)
+  let nan32: f32 = #static mem/bitcast[u32, f32](0xff812345)
+  let nan64: f64 = #static mem/bitcast[u64, f64](0xfff0123456789abc)
+  assert-equals(mem/bitcast[f32, u32](nan32), 0xff812345)
+  assert-equals(mem/bitcast[f64, u64](nan64), 0xfff0123456789abc)
 }

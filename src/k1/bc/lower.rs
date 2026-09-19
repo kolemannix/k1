@@ -25,7 +25,7 @@ use crate::kbail;
 use crate::lex::SpanId;
 use crate::typer::trace::TraceKind;
 use crate::typer::types::{Layout, PhysicalType, PhysicalTypeEnum, ScalarType};
-use crate::typer::{FunctionId, K1Result, TypedExprId, TypedFloatValue, TypedProgram};
+use crate::typer::{FunctionId, K1Result, TypedExprId, TypedProgram};
 use crate::vm;
 
 use super::{
@@ -318,8 +318,7 @@ fn const_of_data(imm: DataInst) -> u64 {
     match imm {
         DataInst::U64(v) => v,
         DataInst::I64(v) => v as u64,
-        DataInst::Float(TypedFloatValue::F32(f)) => f.to_bits() as u64,
-        DataInst::Float(TypedFloatValue::F64(f)) => f.to_bits(),
+        DataInst::F64(f) => f.to_bits(),
     }
 }
 

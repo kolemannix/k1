@@ -673,6 +673,22 @@ impl<Tag> Mem<Tag> {
         self.pushn(slice)
     }
 
+    pub fn slice_retain<T: Copy + 'static>(
+        &mut self,
+        h: &mut MSlice<T, Tag>,
+        mut keep: impl FnMut(&T) -> bool,
+    ) {
+        let slice = self.getn_mut(*h);
+        let mut count = 0;
+        for index in 0..slice.len() {
+            if keep(&slice[index]) {
+                slice[count] = slice[index];
+                count += 1;
+            }
+        }
+        h.count = count as u32;
+    }
+
     pub fn slice_extend<T: Copy + 'static>(
         &mut self,
         s: MSlice<T, Tag>,

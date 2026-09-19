@@ -1,5 +1,8 @@
 use super::*;
 
+#[cfg(test)]
+mod tests;
+
 pub enum OptVisit {
     Enter(IrUnitId),
     Leave(IrUnitId),
@@ -316,6 +319,16 @@ struct InlinedBody {
     last_block: BlockId,
 }
 
+fn clone_inline_inst(ir: &mut ProgramIr, id: InstId) -> Inst {
+    let mut inst = *ir.instrs.get(id);
+    match &mut inst {
+        Inst::Phi { incomings, .. } => *incomings = ir.mem.dupn(*incomings),
+        Inst::Switch { cases, .. } => *cases = ir.mem.dupn(*cases),
+        _ => {}
+    }
+    inst
+}
+
 fn inline_body(
     b: &mut Builder,
     callee_unit: IrUnit,
@@ -385,7 +398,7 @@ fn inline_body(
         }
         b.cur_block = inlined_block;
         for callee_inst in b.k1.ir.mem.dlist_iter(callee_block.data.instrs) {
-            let mut inst = *b.k1.ir.instrs.get(*callee_inst);
+            let mut inst = clone_inline_inst(&mut b.k1.ir, *callee_inst);
             let mut include = true;
             // We delay rewriting most instructions until we know about all the blocks; just
             // makes it easier to have on rewrite routine for everything, and not to worry about
@@ -480,7 +493,6 @@ pub struct RewriteMappings {
     fn_params: Option<&'static [Value]>,
     block_enters: FxHashMap<BlockId, BlockId>,
     block_exits: FxHashMap<BlockId, BlockId>,
-    block_deletes: FxHashSet<BlockId>,
 }
 
 impl RewriteMappings {
@@ -489,7 +501,6 @@ impl RewriteMappings {
         self.fn_params = None;
         self.block_enters.clear();
         self.block_exits.clear();
-        self.block_deletes.clear();
     }
 
     #[allow(unused)]
@@ -649,37 +660,23 @@ fn rewrite_instr(ir: &mut ProgramIr, mappings: &mut RewriteMappings, inst: &mut 
         }
         Inst::Switch { value, cases, default, .. } => {
             rewrite_value(mappings, value);
-            let mut new_cases = ir.mem.new_list(cases.len());
-            for case in ir.mem.getn(*cases) {
-                let mut new_case = *case;
-                if let Some(new) = mappings.block_enters.get(&new_case.target) {
-                    new_case.target = *new;
+            for case in ir.mem.getn_mut(*cases) {
+                if let Some(new) = mappings.block_enters.get(&case.target) {
+                    case.target = *new;
                 }
-                new_cases.push(new_case);
             }
-            *cases = new_cases.to_slice();
             if let Some(new) = mappings.block_enters.get(default) {
                 *default = *new;
             }
         }
         Inst::Unreachable => {}
         Inst::Phi { incomings, .. } => {
-            let mut new_incomings = ir.mem.new_list(incomings.len());
-            for phi_case in ir.mem.getn(*incomings) {
-                let mut new_case = *phi_case;
-                rewrite_value(mappings, &mut new_case.value);
-                if let Some(new) = mappings.block_exits.get(&new_case.from) {
-                    new_case.from = *new;
-                }
-
-                if mappings.block_deletes.contains(&new_case.from) {
-                    // eprintln!("deleting phi inc {}", phi_case.from.raw_index());
-                } else {
-                    new_incomings.push(new_case);
+            for phi_case in ir.mem.getn_mut(*incomings) {
+                rewrite_value(mappings, &mut phi_case.value);
+                if let Some(new) = mappings.block_exits.get(&phi_case.from) {
+                    phi_case.from = *new;
                 }
             }
-
-            *incomings = new_incomings.to_slice();
         }
         Inst::Ret { v, .. } => {
             // Store to dst_alloca, and jmp to after block
@@ -852,15 +849,37 @@ pub fn cfg_compute_unit(ir: &mut ProgramIr, unit_id: IrUnitId) {
     unit.cfg_valid = true;
 }
 
+fn cfg_recycle_edges(ir: &mut ProgramIr, edges: &mut IrList<BlockId>) {
+    if !edges.is_empty() {
+        ir.mem.get_mut(edges.last).next = ir.cfg_free_edges;
+        ir.cfg_free_edges = edges.first;
+        *edges = Dlist::empty();
+    }
+}
+
+fn cfg_push_edge(ir: &mut ProgramIr, edges: &mut IrList<BlockId>, target: BlockId) {
+    let node = ir.cfg_free_edges;
+    if node.is_nil() {
+        ir.mem.dlist_push(edges, target);
+    } else {
+        ir.cfg_free_edges = ir.mem.get(node).next;
+        *ir.mem.get_mut(node) = DlNode { data: target, prev: edges.last, next: Handle::nil() };
+        if edges.last.is_nil() {
+            edges.first = node;
+        } else {
+            ir.mem.get_mut(edges.last).next = node;
+        }
+        edges.last = node;
+    }
+}
+
 pub fn cfg_compute(ir: &mut ProgramIr, blocks: IrList<Block>) {
     if blocks.is_empty() {
         return;
     }
     for (_, mut node) in ir.mem.dlist_iter_handles(blocks) {
-        let preds = &mut node.data.preds;
-        *preds = Dlist::empty();
-        let succs = &mut node.data.succs;
-        *succs = Dlist::empty();
+        cfg_recycle_edges(ir, &mut node.data.preds);
+        cfg_recycle_edges(ir, &mut node.data.succs);
     }
     let mut work_stack = std::mem::take(&mut ir.opt_buf_cfg_compute_work_stack);
     work_stack.push(blocks.first);
@@ -876,36 +895,36 @@ pub fn cfg_compute(ir: &mut ProgramIr, blocks: IrList<Block>) {
         }
         let succs = &mut block_node.data.succs;
         let terminator_inst_id = ir.mem.get(instrs.last).data;
-        match ir.instrs.get(terminator_inst_id) {
+        match *ir.instrs.get(terminator_inst_id) {
             Inst::Jump(block) => {
-                ir.mem.dlist_push(succs, *block);
-                let mut dst_block = ir.mem.get_raw_ref(*block);
-                ir.mem.dlist_push(&mut dst_block.data.preds, block_id);
-                work_stack.push(*block);
+                cfg_push_edge(ir, succs, block);
+                let mut dst_block = ir.mem.get_raw_ref(block);
+                cfg_push_edge(ir, &mut dst_block.data.preds, block_id);
+                work_stack.push(block);
             }
             Inst::JumpIf { cons, alt, .. } => {
-                ir.mem.dlist_push(succs, *cons);
-                let mut cons_block = ir.mem.get_raw_ref(*cons);
-                ir.mem.dlist_push(&mut cons_block.data.preds, block_id);
+                cfg_push_edge(ir, succs, cons);
+                let mut cons_block = ir.mem.get_raw_ref(cons);
+                cfg_push_edge(ir, &mut cons_block.data.preds, block_id);
 
-                ir.mem.dlist_push(succs, *alt);
-                let mut alt_block = ir.mem.get_raw_ref(*alt);
-                ir.mem.dlist_push(&mut alt_block.data.preds, block_id);
+                cfg_push_edge(ir, succs, alt);
+                let mut alt_block = ir.mem.get_raw_ref(alt);
+                cfg_push_edge(ir, &mut alt_block.data.preds, block_id);
 
-                work_stack.push(*cons);
-                work_stack.push(*alt);
+                work_stack.push(cons);
+                work_stack.push(alt);
             }
             Inst::Switch { cases, default, .. } => {
-                for case in ir.mem.getn(*cases) {
-                    ir.mem.dlist_push(succs, case.target);
+                for case in ir.mem.getn(cases) {
+                    cfg_push_edge(ir, succs, case.target);
                     let mut target_block = ir.mem.get_raw_ref(case.target);
-                    ir.mem.dlist_push(&mut target_block.data.preds, block_id);
+                    cfg_push_edge(ir, &mut target_block.data.preds, block_id);
                     work_stack.push(case.target);
                 }
-                ir.mem.dlist_push(succs, *default);
-                let mut default_block = ir.mem.get_raw_ref(*default);
-                ir.mem.dlist_push(&mut default_block.data.preds, block_id);
-                work_stack.push(*default);
+                cfg_push_edge(ir, succs, default);
+                let mut default_block = ir.mem.get_raw_ref(default);
+                cfg_push_edge(ir, &mut default_block.data.preds, block_id);
+                work_stack.push(default);
             }
             _ => {}
         }
@@ -949,6 +968,9 @@ fn cfg_simplify_blocks(k1: &mut TypedProgram, blocks: &mut IrList<Block>) -> u64
 
     for block_id in remove.as_slice() {
         debug!("removing b{}", block_id.raw_index());
+        let mut block = ir.mem.get_raw_ref(*block_id);
+        cfg_recycle_edges(ir, &mut block.data.preds);
+        cfg_recycle_edges(ir, &mut block.data.succs);
         ir.mem.dlist_remove(blocks, *block_id);
     }
 
@@ -1047,6 +1069,9 @@ fn cfg_simplify_blocks(k1: &mut TypedProgram, blocks: &mut IrList<Block>) -> u64
                                 // Patch the cfg: pred -> block_id -> succ becomes pred -> succ
                                 cfg_replace_edge(ir, ir.mem.get(pred).data.succs, block_id, succ);
                                 cfg_replace_edge(ir, ir.mem.get(succ).data.preds, block_id, pred);
+                                let mut block = ir.mem.get_raw_ref(block_id);
+                                cfg_recycle_edges(ir, &mut block.data.preds);
+                                cfg_recycle_edges(ir, &mut block.data.succs);
                                 ir.mem.dlist_remove(blocks, block_id);
                                 noop = false;
                                 cur = node.next; // saved before the removal
@@ -1061,7 +1086,7 @@ fn cfg_simplify_blocks(k1: &mut TypedProgram, blocks: &mut IrList<Block>) -> u64
             if node.data.succs.is_singleton() {
                 let succ_node_cfg = ir.mem.get_raw_ref(node.data.succs.first);
                 let succ_block_id: BlockId = succ_node_cfg.data;
-                let succ_node = ir.mem.get_raw_ref(succ_block_id);
+                let mut succ_node = ir.mem.get_raw_ref(succ_block_id);
 
                 if succ_node.data.preds.is_singleton() {
                     let pred_node_cfg = ir.mem.get(succ_node.data.preds.first);
@@ -1129,7 +1154,10 @@ fn cfg_simplify_blocks(k1: &mut TypedProgram, blocks: &mut IrList<Block>) -> u64
                                 block_id,
                             );
                         }
-                        block_node.data.succs = succ_node.data.succs;
+                        cfg_recycle_edges(ir, &mut block_node.data.succs);
+                        cfg_recycle_edges(ir, &mut succ_node.data.preds);
+                        block_node.data.succs =
+                            std::mem::replace(&mut succ_node.data.succs, Dlist::empty());
                         ir.mem.dlist_remove(blocks, succ_block_id);
 
                         noop = false;
@@ -1161,38 +1189,20 @@ fn cfg_replace_edge(ir: &mut ProgramIr, edges: IrList<BlockId>, old: BlockId, ne
 
 fn rewrite_phi_incoming(ir: &mut ProgramIr, phi_block_id: BlockId, from: BlockId, to: BlockId) {
     let instrs = ir.mem.get(phi_block_id).data.instrs;
-    let first_instr = ir.mem.get(instrs.first);
-    let Inst::Phi { incomings, .. } = ir.instrs.get_mut(first_instr.data) else {
-        return;
-    };
-    if let Some(_incoming) = ir.mem.getn(*incomings).iter().find(|i| i.from == from) {
-        let mut new_incomings = ir.mem.new_list(incomings.len());
-        for phi_case in ir.mem.getn(*incomings) {
+    for inst_id in ir.mem.dlist_iter(instrs) {
+        let Inst::Phi { incomings, .. } = ir.instrs.get(*inst_id) else { break };
+        for phi_case in ir.mem.getn_mut(*incomings) {
             if phi_case.from == from {
-                new_incomings.push(PhiCase { from: to, value: phi_case.value })
-            } else {
-                new_incomings.push(*phi_case)
+                phi_case.from = to;
             }
         }
-        *incomings = new_incomings.to_slice();
     }
 }
 
 fn remove_phi_incomings(ir: &mut ProgramIr, phi_block_id: BlockId, dead_block_ids: &[BlockId]) {
     let instrs = ir.mem.get(phi_block_id).data.instrs;
-    let first_instr = ir.mem.get(instrs.first);
-    let Inst::Phi { incomings, .. } = ir.instrs.get_mut(first_instr.data) else {
-        return;
-    };
-    if let Some(_incoming) =
-        ir.mem.getn(*incomings).iter().find(|i| dead_block_ids.contains(&i.from))
-    {
-        let mut new_incomings = ir.mem.new_list(incomings.len());
-        for phi_case in ir.mem.getn(*incomings) {
-            if !dead_block_ids.contains(&phi_case.from) {
-                new_incomings.push(*phi_case)
-            }
-        }
-        *incomings = new_incomings.to_slice();
+    for inst_id in ir.mem.dlist_iter(instrs) {
+        let Inst::Phi { incomings, .. } = ir.instrs.get_mut(*inst_id) else { break };
+        ir.mem.slice_retain(incomings, |case| !dead_block_ids.contains(&case.from));
     }
 }
