@@ -488,7 +488,7 @@ impl Scopes {
         exposed(self.find_namespace_entry(scope_id, ident))
     }
 
-    fn find_namespace_entry(
+    pub fn find_namespace_entry(
         &self,
         scope_id: ScopeId,
         ident: StringId,

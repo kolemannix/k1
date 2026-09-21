@@ -32,21 +32,39 @@ pub struct LongToken {
     pub len: u32,
 }
 
+#[derive(Default)]
 pub struct Lexed {
     pub tokens: Vec<Token>,
+    pub kinds: Vec<TokenKind>,
     pub trivia: TokenTriviaTable,
     /// In token order, one per TOKEN_FLAG_SPAN_ID token
     pub long_tokens: Vec<LongToken>,
     pub error: Option<LexError>,
 }
 
-/// No pool, file id, or span in hand, so it runs on any thread; `tokens` is
+impl Lexed {
+    fn clear(&mut self) {
+        self.tokens.clear();
+        self.kinds.clear();
+        self.trivia.entries.clear();
+        self.long_tokens.clear();
+        self.error = None;
+    }
+
+    #[inline]
+    fn push(&mut self, token: Token) {
+        self.tokens.push(token);
+        self.kinds.push(token.kind);
+    }
+}
+
+/// No pool, file id, or span in hand, so it runs on any thread; `out` is
 /// the buffer to fill and comes back in the result
-pub fn lex(content: &str, mut tokens: Vec<Token>) -> Lexed {
-    tokens.clear();
+pub fn lex(content: &str, mut out: Lexed) -> Lexed {
+    out.clear();
     let mut lexer = Lexer::make(content);
-    let error = lexer.run(&mut tokens).err();
-    Lexed { tokens, trivia: lexer.trivia, long_tokens: lexer.long_tokens, error }
+    out.error = lexer.run(&mut out).err();
+    out
 }
 
 nz_u32_id!(SpanId);
@@ -108,16 +126,20 @@ pub struct TokenIter<'toks> {
     cursor: usize,
     end: usize,
     tokens: &'toks [Token],
+    kinds: &'toks [TokenKind],
 }
 
 impl<'toks> TokenIter<'toks> {
-    pub fn make(data: &'toks [Token]) -> TokenIter<'toks> {
-        let end = data.len() - (TOKEN_LOOKAHEAD + 1);
+    pub fn make(lexed: &'toks Lexed) -> TokenIter<'toks> {
+        let tokens = &lexed.tokens;
+        let kinds = &lexed.kinds;
+        assert_eq!(tokens.len(), kinds.len());
+        let end = tokens.len() - (TOKEN_LOOKAHEAD + 1);
         assert!(
-            data[end..].iter().all(|t| t.kind == TokenKind::Eof),
+            kinds[end..].iter().all(|k| *k == TokenKind::Eof),
             "TokenIter requires an EOF-padded token stream"
         );
-        TokenIter { cursor: 0, end, tokens: data }
+        TokenIter { cursor: 0, end, tokens, kinds }
     }
 
     #[inline]
@@ -151,6 +173,17 @@ impl<'toks> TokenIter<'toks> {
     #[inline]
     pub fn peek(&self) -> Token {
         self.peek_n(0)
+    }
+
+    #[inline]
+    pub fn peek_kind_n(&self, n: usize) -> TokenKind {
+        debug_assert!(n <= TOKEN_LOOKAHEAD);
+        unsafe { *self.kinds.get_unchecked(self.cursor + n) }
+    }
+
+    #[inline]
+    pub fn peek_kind(&self) -> TokenKind {
+        self.peek_kind_n(0)
     }
 
     #[inline]
@@ -599,7 +632,9 @@ impl Token {
         self.kind == K::Minus
     }
 
-    pub fn is_newline_starter(&self) -> bool { self.is_newline_preceded() && self.can_start_expression() }
+    pub fn is_newline_starter(&self) -> bool {
+        self.is_newline_preceded() && self.can_start_expression()
+    }
 
     pub fn is_kind_nonspaced(&self, kind: TokenKind) -> bool {
         self.kind == kind && !self.is_whitespace_preceded()
@@ -725,8 +760,6 @@ struct Lexer<'a> {
     // Known valid utf8; see `make`
     content: &'a [u8],
     pos: u32,
-    trivia: TokenTriviaTable,
-    long_tokens: Vec<LongToken>,
     next_token_flags: u8,
 }
 
@@ -735,8 +768,6 @@ impl<'content> Lexer<'content> {
         Lexer {
             content: input.as_bytes(),
             pos: 0,
-            trivia: TokenTriviaTable::default(),
-            long_tokens: Vec::new(),
             next_token_flags: TOKEN_FLAG_IS_NEWLINE_PRECEDED,
         }
     }
@@ -745,52 +776,61 @@ impl<'content> Lexer<'content> {
         LexError { message, start, len }
     }
 
-    fn run(&mut self, tokens: &mut Vec<Token>) -> LexResult<()> {
+    fn run(&mut self, out: &mut Lexed) -> LexResult<()> {
         let mut state = LexState { mode: LexMode::Tokens, mode_stack: Vec::new() };
-        tokens.reserve(self.content.len() / 3 + 1);
+        let estimate = self.content.len() / 3 + 1;
+        out.tokens.reserve(estimate);
+        out.kinds.reserve(estimate);
         let result = loop {
-            match self.eat_token(tokens, &mut state) {
+            match self.eat_token(out, &mut state) {
                 Ok(Some(())) => {}
                 Ok(None) => break Ok(()),
                 Err(e) => break Err(e),
             }
         };
         for _ in 0..=TOKEN_LOOKAHEAD {
-            tokens.push(EOF_TOKEN);
+            out.push(EOF_TOKEN);
         }
         result
     }
 
-    fn eat_token(
-        &mut self,
-        tokens: &mut Vec<Token>,
-        state: &mut LexState,
-    ) -> LexResult<Option<()>> {
+    fn eat_token(&mut self, out: &mut Lexed, state: &mut LexState) -> LexResult<Option<()>> {
         let mut tok_len = 0;
 
         #[inline]
-        fn make_token(lex: &mut Lexer, kind: TokenKind, start: u32, len: u32) -> Token {
+        fn push_token(lex: &mut Lexer, out: &mut Lexed, kind: TokenKind, start: u32, len: u32) {
             let flags = lex.next_token_flags;
             lex.next_token_flags = 0;
-            Token::new(kind, start, len, flags, &mut lex.long_tokens)
+            let token = Token::new(kind, start, len, flags, &mut out.long_tokens);
+            out.push(token)
         }
 
         #[inline]
-        fn make_buffered_token(lex: &mut Lexer, kind: TokenKind, end: u32, tok_len: u32) -> Token {
-            make_token(lex, kind, end - tok_len, tok_len)
+        fn push_buffered_token(
+            lex: &mut Lexer,
+            out: &mut Lexed,
+            kind: TokenKind,
+            end: u32,
+            tok_len: u32,
+        ) {
+            push_token(lex, out, kind, end - tok_len, tok_len)
         }
 
         #[inline]
-        fn make_keyword_or_ident(lex: &mut Lexer, start: u32, len: u32, is_number: bool) -> Token {
-            if is_number {
-                make_token(lex, K::Numeric, start, len)
-            } else if let Some(kind) =
-                TokenKind::token_from_bytes(&lex.content[start as usize..(start + len) as usize])
-            {
-                make_token(lex, kind, start, len)
+        fn push_keyword_or_ident(
+            lex: &mut Lexer,
+            out: &mut Lexed,
+            start: u32,
+            len: u32,
+            is_number: bool,
+        ) {
+            let kind = if is_number {
+                K::Numeric
             } else {
-                make_token(lex, K::Ident, start, len)
-            }
+                TokenKind::token_from_bytes(&lex.content[start as usize..(start + len) as usize])
+                    .unwrap_or(K::Ident)
+            };
+            push_token(lex, out, kind, start, len)
         }
         loop {
             let (c, n) = self.peek_with_pos();
@@ -835,25 +875,27 @@ impl<'content> Lexer<'content> {
                             let string_delim_kind = lex_mode.string_delim_kind().unwrap();
                             // Track brace depth and done when == 0
                             state.push_mode(LexMode::Interp { brace_depth: 1 });
-                            tokens.push(make_buffered_token(
+                            push_buffered_token(
                                 self,
+                                out,
                                 K::string(string_delim_kind, false),
                                 n,
                                 tok_len,
-                            ));
+                            );
                             self.advance();
                             self.advance();
-                            tokens.push(make_token(self, K::OpenBrace, n, 2));
+                            push_token(self, out, K::OpenBrace, n, 2);
                             return Ok(Some(()));
                         }
                         '$' if is_ident_start(self.peek_n(1)) => {
                             let string_delim_kind = lex_mode.string_delim_kind().unwrap();
-                            tokens.push(make_buffered_token(
+                            push_buffered_token(
                                 self,
+                                out,
                                 K::string(string_delim_kind, false),
                                 n,
                                 tok_len,
-                            ));
+                            );
                             // Eat the $, then the ident run; we stay in string mode.
                             // A hyphen continues the ident only when followed by another
                             // ident char, so "$n-th" is `n-th` but "$a-$b" is `a`, "-", `b`
@@ -866,7 +908,7 @@ impl<'content> Lexer<'content> {
                                 ident_len += 1;
                                 self.advance();
                             }
-                            tokens.push(make_token(self, K::Ident, n + 1, ident_len));
+                            push_token(self, out, K::Ident, n + 1, ident_len);
                             return Ok(Some(()));
                         }
                         '"' if lex_mode.is_dq_string() => {
@@ -875,12 +917,13 @@ impl<'content> Lexer<'content> {
                             self.advance();
                             let string_delim_kind = lex_mode.string_delim_kind().unwrap();
                             state.pop_mode();
-                            tokens.push(make_buffered_token(
+                            push_buffered_token(
                                 self,
+                                out,
                                 K::string(string_delim_kind, true),
                                 n + 1,
                                 tok_len,
-                            ));
+                            );
                             return Ok(Some(()));
                         }
                         '`' if lex_mode.is_bt_string() => {
@@ -889,12 +932,13 @@ impl<'content> Lexer<'content> {
                             self.advance();
                             let string_delim_kind = lex_mode.string_delim_kind().unwrap();
                             state.pop_mode();
-                            tokens.push(make_buffered_token(
+                            push_buffered_token(
                                 self,
+                                out,
                                 K::string(string_delim_kind, true),
                                 n + 1,
                                 tok_len,
-                            ));
+                            );
                             return Ok(Some(()));
                         }
                         '\n' if !lex_mode.is_bt_string() => {
@@ -916,7 +960,7 @@ impl<'content> Lexer<'content> {
                     macro_rules! return_single {
                         ($kind: expr) => {{
                             self.advance();
-                            tokens.push(make_token(self, $kind, n, 1));
+                            push_token(self, out, $kind, n, 1);
                             return Ok(Some(()));
                         }};
                     }
@@ -924,7 +968,7 @@ impl<'content> Lexer<'content> {
                         ($kind: expr) => {{
                             self.advance();
                             self.advance();
-                            tokens.push(make_token(self, $kind, n, 2));
+                            push_token(self, out, $kind, n, 2);
                             return Ok(Some(()));
                         }};
                     }
@@ -1006,7 +1050,7 @@ impl<'content> Lexer<'content> {
                                         "Expected closing ' for char literal at {q}"
                                     ));
                                 }
-                                tokens.push(make_token(self, TokenKind::Char, n, 4));
+                                push_token(self, out, TokenKind::Char, n, 4);
                                 return Ok(Some(()));
                             } else {
                                 let q = self.next();
@@ -1017,7 +1061,7 @@ impl<'content> Lexer<'content> {
                                         "Expected closing ' for char literal at {q}"
                                     ));
                                 }
-                                tokens.push(make_token(self, TokenKind::Char, n, 3));
+                                push_token(self, out, TokenKind::Char, n, 3);
                                 return Ok(Some(()));
                             }
                         }
@@ -1044,8 +1088,8 @@ impl<'content> Lexer<'content> {
                                     }
                                     None => self.content.len() as u32 + 1,
                                 };
-                                self.trivia.push(TriviaEntry {
-                                    token_idx: tokens.len() as u32,
+                                out.trivia.push(TriviaEntry {
+                                    token_idx: out.tokens.len() as u32,
                                     trivia: TokenTrivia {
                                         start: n,
                                         len: self.pos - n,
@@ -1104,7 +1148,7 @@ impl<'content> Lexer<'content> {
                                 }
                                 break;
                             }
-                            tokens.push(make_keyword_or_ident(self, n, self.pos - n, is_number));
+                            push_keyword_or_ident(self, out, n, self.pos - n, is_number);
                             return Ok(Some(()));
                         }
                         _ => {
@@ -1214,7 +1258,7 @@ fn is_numeric_char(c: char) -> bool {
 
 #[cfg(test)]
 mod test {
-    use crate::lex::{Lexed, Spans, TOKEN_LOOKAHEAD, Token, TokenKind as K, TokenTriviaKind, lex};
+    use crate::lex::{lex, Lexed, Spans, Token, TokenKind as K, TokenTriviaKind, TOKEN_LOOKAHEAD};
 
     #[test]
     fn byte_class_matches_char_methods() {
@@ -1229,7 +1273,7 @@ mod test {
     }
 
     fn lex_ok(input: &str) -> anyhow::Result<Lexed> {
-        let mut lexed = lex(input, vec![]);
+        let mut lexed = lex(input, Lexed::default());
         if let Some(e) = lexed.error {
             anyhow::bail!("{}", e.message);
         }

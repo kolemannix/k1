@@ -29,7 +29,6 @@ pub use static_value::{
     StaticContainer, StaticContainerKind, StaticRawContainer, StaticStruct, StaticSum, StaticValue,
     StaticValueId, StaticValuePool,
 };
-use std::assert_matches;
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::cmp::Ordering;
@@ -1804,19 +1803,6 @@ impl Namespaces {
         self.namespaces.iter()
     }
 
-    pub fn find_child_by_name(
-        &self,
-        parent_id: NamespaceId,
-        name: StringId,
-    ) -> Option<NamespaceId> {
-        for (id, ns) in self.namespaces.iter_with_ids() {
-            if ns.parent_id == Some(parent_id) && ns.name == name {
-                return Some(id);
-            }
-        }
-        None
-    }
-
     pub fn get_scope(&self, namespace_id: NamespaceId) -> ScopeId {
         self.get(namespace_id).scope_id
     }
@@ -2420,7 +2406,7 @@ pub enum SelfAdjust {
 /// Allocations that we re-use
 pub struct TypedModuleBuffers {
     name_builder: String,
-    lexer_tokens: Vec<lex::Token>,
+    lexed: lex::Lexed,
     int_parse: String,
 }
 
@@ -3055,7 +3041,7 @@ impl TypedProgram {
             type_defn_context: TypeDefnContext::default(),
             buffers: TypedModuleBuffers {
                 name_builder: String::new(),
-                lexer_tokens: Vec::new(),
+                lexed: lex::Lexed::default(),
                 int_parse: String::with_capacity(128),
             },
             patterns: TypedPatternPool::make(),
@@ -3691,7 +3677,7 @@ impl TypedProgram {
             module_name,
             parsed_namespace_id,
             &mut self.ast,
-            &file.lexed.tokens,
+            &file.lexed,
             file_id,
         );
         parser.parse_file_into_module();
@@ -15464,7 +15450,7 @@ impl TypedProgram {
         if !skip_ast_mapping {
             #[cfg(debug_assertions)]
             {
-                assert_matches!(
+                std::assert_matches!(
                     self.ast.functions.get(parsed_function_id).typer_state,
                     ParsedFunctionDeclareOutcome::Parsed
                 );
@@ -16190,6 +16176,19 @@ impl TypedProgram {
         }
     }
 
+    pub fn find_ns_child_by_name(
+        &self,
+        parent_id: NamespaceId,
+        name: StringId,
+    ) -> Option<NamespaceId> {
+        let ns_scope_id = self.namespaces.get_scope(parent_id);
+        // not just any scope hit will do; has to be Defined in the parent
+        match self.scopes.find_namespace_entry(ns_scope_id, name) {
+            Some((id, Provenance::Defined)) => Some(id),
+            _ => None,
+        }
+    }
+
     fn compile_ability_definition(
         &mut self,
         parsed_ability_id: ParsedAbilityId,
@@ -16211,9 +16210,9 @@ impl TypedProgram {
         // with a single search, but we also keep the generic stuff tucked away.
         //
         // In this case, the mechanism is just to 'adopt' the existing scope/ns and start putting our stuff inside it
+
         let (namespace_id, ns_scope_id) = match self
-            .namespaces
-            .find_child_by_name(parent_namespace_id, parsed_ability.name)
+            .find_ns_child_by_name(parent_namespace_id, parsed_ability.name)
         {
             Some(existing_ns_id) => {
                 let existing = self.namespaces.get(existing_ns_id);
@@ -17502,7 +17501,7 @@ impl TypedProgram {
         // scope map also holds use-aliases (e.g. the core prelude), which a local
         // declaration shadows via create_namespace instead
         let namespace_id = if let Some(existing) =
-            self.namespaces.find_child_by_name(parent_ns, ast_namespace.name)
+            self.find_ns_child_by_name(parent_ns, ast_namespace.name)
         {
             // Map this separate namespace AST node to the same semantic namespace
             self.namespace_ast_mappings.insert(parsed_namespace_id, existing);

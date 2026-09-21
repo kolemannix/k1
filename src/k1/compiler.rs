@@ -536,7 +536,7 @@ fn read_and_lex_source_file(
             .map_err(|e| format!("Failed to read source file {path}: {e}"))?,
     };
     let content_hash = content_hash64(content.as_bytes());
-    let lexed = crate::lex::lex(&content, Vec::new());
+    let lexed = crate::lex::lex(&content, crate::lex::Lexed::default());
     Ok(SourceFile { path, content, content_hash, lexed })
 }
 

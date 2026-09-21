@@ -16,18 +16,13 @@ fn set_up<'ast>(input: &str, ast: &'ast mut ParsedProgram) -> Parser<'static, 'a
     let module_id = ModuleId::ONE;
     let module_name = ast.idents.intern("unit_test");
     let file_id = ast.sources.add_file(source);
-    let mut lexed = lex(input, vec![]);
+    let mut lexed = lex(input, Lexed::default());
     ast.materialize_lexed_file(file_id, &mut lexed).unwrap();
-    let token_vec = lexed.tokens.leak();
-    println!("{:#?}", token_vec);
-    let mut kinds = vec![];
-    for t in token_vec.iter() {
-        kinds.push(t.kind);
-    }
-    println!("{:#?}", kinds);
+    println!("{:#?}", lexed.tokens);
+    println!("{:#?}", lexed.kinds);
+    let lexed: &'static Lexed = Box::leak(Box::new(lexed));
     let ns_id = init_module(module_name, ast);
-    let parser = Parser::make_for_file(module_id, module_name, ns_id, ast, token_vec, file_id);
-    parser
+    Parser::make_for_file(module_id, module_name, ns_id, ast, lexed, file_id)
 }
 
 fn test_single_expr(input: &str) -> Result<(ParsedProgram, ParsedExpr), ParseError> {
@@ -610,13 +605,13 @@ fn lex_error_does_not_poison_reused_token_buffer() {
 
     let bad_id = ast.sources.add_file(bad);
     let bad_content = ast.sources.get(bad_id).content(&ast.mem);
-    let mut lexed = lex(bad_content, vec![]);
+    let mut lexed = lex(bad_content, Lexed::default());
     assert!(ast.materialize_lexed_file(bad_id, &mut lexed).is_err());
     assert!(!lexed.tokens.is_empty());
 
     let good_id = ast.sources.add_file(good);
     let good_content = ast.sources.get(good_id).content(&ast.mem);
-    let mut lexed = lex(good_content, lexed.tokens);
+    let mut lexed = lex(good_content, lexed);
     ast.materialize_lexed_file(good_id, &mut lexed).unwrap();
     for t in &lexed.tokens {
         if t.kind != TokenKind::Eof {
@@ -633,7 +628,7 @@ fn long_token_materializes_to_a_span() {
     let content = format!("let s = \"{literal}\"\nlet t = 1");
     let source = SourceFile::make(&mut ast.mem, path, &content);
     let file_id = ast.sources.add_file(source);
-    let mut lexed = lex(&content, vec![]);
+    let mut lexed = lex(&content, Lexed::default());
     assert_eq!(lexed.long_tokens.len(), 1);
     ast.materialize_lexed_file(file_id, &mut lexed).unwrap();
     let string_token = lexed.tokens[3];
