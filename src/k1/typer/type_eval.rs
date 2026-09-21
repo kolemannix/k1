@@ -10,6 +10,31 @@ impl TypedProgram {
         parsed_type_defn_id: ParsedTypeDefnId,
         namespace_scope_id: ScopeId,
     ) -> K1Result<TypeId> {
+        let parse::ParsedTypeDefn { span, name, typer_state, .. } =
+            *self.ast.get_type_defn(parsed_type_defn_id);
+        match typer_state {
+            ParsedTypeDefnDeclareOutcome::Defined(type_id) => return Ok(type_id),
+            ParsedTypeDefnDeclareOutcome::Failed => {
+                return Err(kerr!(self, span, "Type {} has an invalid definition", name));
+            }
+            ParsedTypeDefnDeclareOutcome::IfDefedOut => {
+                self.ice_span(span, "eval ifdefed-out type defn")
+            }
+            ParsedTypeDefnDeclareOutcome::Parsed => {}
+        }
+        let result = self.eval_type_defn_inner(parsed_type_defn_id, namespace_scope_id);
+        self.ast.type_defns.get_mut(parsed_type_defn_id).typer_state = match result {
+            Ok(type_id) => ParsedTypeDefnDeclareOutcome::Defined(type_id),
+            Err(_) => ParsedTypeDefnDeclareOutcome::Failed,
+        };
+        result
+    }
+
+    fn eval_type_defn_inner(
+        &mut self,
+        parsed_type_defn_id: ParsedTypeDefnId,
+        namespace_scope_id: ScopeId,
+    ) -> K1Result<TypeId> {
         let parsed_type_defn = *self.ast.get_type_defn(parsed_type_defn_id);
         let is_generic_defn = !parsed_type_defn.type_params.is_empty();
         let is_alias = parsed_type_defn.flags.is_alias();
@@ -325,19 +350,6 @@ impl TypedProgram {
         if self.type_defn_context.stack.is_empty() {
             self.finish_type_defn_cluster()
         }
-
-        // nocommit we're killing this
-        // if let Some(idx) = self
-        //     .types_pending_definition
-        //     .iter()
-        //     .position(|tpd| tpd.parsed_id == parsed_type_defn_id)
-        // {
-        //     // eprintln!("removing pending defn {idx} {}", self.ident_str(name));
-        //     self.types_pending_definition.remove(idx);
-        // } else {
-        //     self.ice_span(parsed_type_defn.span, "the type we defined was not pending")
-        // }
-
         Ok(type_id)
     }
 

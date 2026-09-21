@@ -2764,6 +2764,14 @@ pub enum ParsedFunctionDeclareOutcome {
     Declared(FunctionId),
 }
 
+#[derive(Clone, Copy)]
+pub enum ParsedTypeDefnDeclareOutcome {
+    Parsed,
+    IfDefedOut,
+    Failed,
+    Defined(TypeId),
+}
+
 pub struct TypedProgram {
     pub modules: VPool<Module, ModuleId>,
     /// Fully typechecked modules, in completion order (deps before dependents)
@@ -2838,8 +2846,7 @@ pub struct TypedProgram {
     pub ability_impl_ast_mappings: FxHashMap<ParsedAbilityImplId, AbilityImplId>,
 
     pub uses_pending_resolution: VecDeque<UsePendingResolution>,
-    // nocommit scanning this is #1 time in stress100 currently
-    pub types_pending_definition: VecDeque<TypePendingDefinition>,
+    pub types_pending_definition: Vec<TypePendingDefinition>,
 
     exported_symbols: FxHashMap<StringId, SpanId>,
 
@@ -3035,7 +3042,7 @@ impl TypedProgram {
             macro_ast_mappings: FxHashMap::default(),
             ability_impl_ast_mappings: FxHashMap::new(),
             uses_pending_resolution: VecDeque::new(),
-            types_pending_definition: VecDeque::new(),
+            types_pending_definition: Vec::new(),
             ast,
             module_in_progress: None,
             ls_entities: RefCell::new(ls_entities),
@@ -17096,6 +17103,8 @@ impl TypedProgram {
                     parsed_type_defn.compile_condition,
                     namespace_scope_id,
                 ) {
+                    self.ast.type_defns.get_mut(type_defn_id).typer_state =
+                        ParsedTypeDefnDeclareOutcome::IfDefedOut;
                     return;
                 }
                 let pending_defn =
@@ -17113,7 +17122,7 @@ impl TypedProgram {
                         parsed_type_defn.name
                     ));
                 }
-                self.types_pending_definition.push_back(pending_defn);
+                self.types_pending_definition.push(pending_defn);
             }
             ParsedId::Ability(parsed_ability_id) => {
                 let parsed_ability_defn = self.ast.get_ability(parsed_ability_id);
@@ -17899,24 +17908,25 @@ impl TypedProgram {
     }
 
     fn drain_pending_type_defns(&mut self) {
-        while let Some(tpd) = self.types_pending_definition.front() {
-            debug!(
-                "types_pending_definition {}\n{}",
-                self.types_pending_definition.len(),
-                self.types_pending_definition
-                    .iter()
-                    .map(|tpd| self.ident_str(self.ast.type_defns.get(tpd.parsed_id).name))
-                    .join(", ")
-            );
+        let mut i = 0;
+        while i < self.types_pending_definition.len() {
+            let tpd = self.types_pending_definition[i];
+            i += 1;
+            if !matches!(
+                self.ast.type_defns.get(tpd.parsed_id).typer_state,
+                ParsedTypeDefnDeclareOutcome::Parsed
+            ) {
+                continue;
+            }
             let tmp_mark = self.tmp.mark();
             let result = self.eval_type_defn(tpd.parsed_id, tpd.scope_id);
             self.tmp.reset_to(tmp_mark);
             if let Err(err) = result {
                 self.type_defn_context.reset();
-                self.types_pending_definition.pop_front();
                 self.report(err);
             }
         }
+        self.types_pending_definition.clear();
     }
 
     pub fn error_count(&self, kinds: &[MessageLevel]) -> usize {

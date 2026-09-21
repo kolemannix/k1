@@ -1400,6 +1400,8 @@ pub struct ParsedTypeDefn {
     pub id: ParsedTypeDefnId,
     pub flags: ParsedTypeDefnFlags,
     pub compile_condition: Option<ParsedExprId>,
+
+    pub typer_state: typer::ParsedTypeDefnDeclareOutcome,
 }
 
 #[derive(Clone, Copy)]
@@ -5401,6 +5403,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             id: ParsedTypeDefnId::PENDING, // The id is set by add_typedefn
             flags,
             compile_condition: condition,
+            typer_state: typer::ParsedTypeDefnDeclareOutcome::Parsed,
         });
         Ok(type_defn_id)
     }
