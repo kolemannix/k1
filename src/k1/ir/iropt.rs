@@ -285,7 +285,7 @@ pub(super) fn compile_inline_call(
     callee_id: FunctionId,
     call: IrCall,
 ) -> K1Result<Value> {
-    if b.k1.trace.on_stack(TraceKind::IrLower, callee_id.as_u32()) {
+    if b.k1.trace.stack_contains_key(TraceKind::IrLower, callee_id.as_u32()) {
         kbail!(
             b.k1,
             b.cur_span,

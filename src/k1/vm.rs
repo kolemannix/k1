@@ -578,8 +578,7 @@ pub(crate) fn resolve_global(
     // Case 3: First use in this VM. If not mutable, put in share global constants. If mutable,
     // generate and store the shared original, but store a copy in our local vm to allow mutation
     if k1.globals.get(global_id).initial_value.is_pending() {
-        let ast_id = k1.globals.get(global_id).ast_id;
-        if let Err(e) = k1.eval_global_body(ast_id) {
+        if let Err(e) = k1.eval_global_body(global_id) {
             k1.report(e)
         }
     }
@@ -1521,8 +1520,8 @@ pub(crate) fn builtin_compiler_message(
     let message = value_to_string_id(k1, message_arg).map_err(|msg| {
         kerr!(k1, vm.eval_span, "Bad message string passed to EmitCompilerMessage: {msg}")
     })?;
-    let span = SpanId::from_u32(location.span)
-        .filter(|id| k1.ast.spans.span_pool.get_opt(*id).is_some());
+    let span =
+        SpanId::from_u32(location.span).filter(|id| k1.ast.spans.span_pool.get_opt(*id).is_some());
     let Some(span) = span else {
         kbail!(
             k1,
@@ -1663,7 +1662,8 @@ pub(crate) fn report_execution_messages(
     if error_message.is_empty() {
         None
     } else {
-        Some(k1.make_error(&error_message, error_span))
+        let error_message_id = k1.ast.idents.intern(&error_message);
+        Some(k1.make_error(error_message_id, error_span))
     }
 }
 

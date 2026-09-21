@@ -576,8 +576,9 @@ pub fn spawn_module_load<MemTag>(
     };
     let override_content = source_overrides.get(idents.get_string(root_source_file_path)).cloned();
     let read_path_for_thread = idents.get_string(root_source_file_path).to_owned();
-    let reader =
-        std::thread::spawn(move || read_and_lex_source_file(read_path_for_thread, override_content));
+    let reader = std::thread::spawn(move || {
+        read_and_lex_source_file(read_path_for_thread, override_content)
+    });
     let remaining =
         spawn_sources_read(idents, home_dir, root_source_file_path, is_dir, source_overrides);
     Ok(ModuleLoadHandle {
@@ -705,7 +706,6 @@ fn hash_file_content64(path: &str, buf: &mut [u8]) -> std::io::Result<u64> {
 const FILE_HASH_BUF_LEN: usize = 64 * 1024;
 
 pub struct SetupRequest<'a> {
-    pub idents: &'a IdentPool,
     pub module_dir: StringId,
     pub module_name: StringId,
     pub root_filename: StringId,
@@ -727,41 +727,43 @@ pub struct StartedSetup {
 /// `None` when the declared outputs are already fresh. Otherwise the stamp is
 /// cleared and the declared outputs removed, so a failed run reads as stale
 pub fn start_setup<Tag>(
-    req: &SetupRequest,
+    idents: &IdentPool,
+    req: &SetupRequest<'_>,
     scratch: &mut Mem<Tag>,
-) -> Result<Option<StartedSetup>> {
-    let module_name = req.idents.get_string(req.module_name);
-    let module_dir = req.idents.get_string(req.module_dir);
-    let root_path = kpath::join_tmp(scratch, req.idents, req.module_dir, req.root_filename);
+) -> anyhow::Result<Option<StartedSetup>> {
+    let module_name = idents.get_string(req.module_name);
+    let module_dir = idents.get_string(req.module_dir);
+    let root_path = kpath::join_tmp(scratch, idents, req.module_dir, req.root_filename);
     let root_src = fs::read_to_string(Path::new(root_path.as_str())).map_err(|e| {
-        anyhow::anyhow!(
-            "module '{module_name}' declares setup but {root_path} could not be read: {e}"
-        )
+        anyhow::anyhow!("module '{module_name}' root file {root_path} could not be read: {e}")
     })?;
 
-    let setup_out_dir = kpath::join_tmp(scratch, req.idents, req.module_dir, (".k1-out", "setup"));
-    let stamp_path = kpath::join_tmp(scratch, req.idents, setup_out_dir.as_str(), "stamp");
+    let setup_out_dir = kpath::join_tmp(scratch, idents, req.module_dir, (".k1-out", "setup"));
+    let stamp_path = kpath::join_tmp(scratch, idents, setup_out_dir.as_str(), "stamp");
     let existing = SetupStamp::read(stamp_path.as_str());
-    let (header, inputs) = compute_setup_fingerprint(req, scratch, &root_src, existing.as_ref())?;
+    let (header, inputs) =
+        compute_setup_fingerprint(idents, req, scratch, &root_src, existing.as_ref())?;
 
-    if !req.force && setup_is_fresh(req, scratch, stamp_path.as_str(), existing, &header, &inputs)
+    if !req.force
+        && setup_is_fresh(idents, req, scratch, stamp_path.as_str(), existing, &header, &inputs)
     {
         return Ok(None);
     }
 
     fs::create_dir_all(Path::new(setup_out_dir.as_str()))?;
-    let lock_path = kpath::join_tmp(scratch, req.idents, setup_out_dir.as_str(), "lock");
+    let lock_path = kpath::join_tmp(scratch, idents, setup_out_dir.as_str(), "lock");
     let lock = SetupLock::acquire(lock_path.as_str())?;
     // Another process may have completed this setup while we waited on the lock
     let existing = SetupStamp::read(stamp_path.as_str());
-    if !req.force && setup_is_fresh(req, scratch, stamp_path.as_str(), existing, &header, &inputs)
+    if !req.force
+        && setup_is_fresh(idents, req, scratch, stamp_path.as_str(), existing, &header, &inputs)
     {
         return Ok(None);
     }
 
     let _ = fs::remove_file(Path::new(stamp_path.as_str()));
     for output in req.outputs {
-        let output_path = kpath::join_tmp(scratch, req.idents, req.module_dir, *output);
+        let output_path = kpath::join_tmp(scratch, idents, req.module_dir, *output);
         let p = Path::new(output_path.as_str());
         if p.is_dir() {
             fs::remove_dir_all(p)?;
@@ -773,21 +775,23 @@ pub fn start_setup<Tag>(
 }
 
 pub fn finish_setup<Tag>(
+    idents: &IdentPool,
     req: &SetupRequest,
     started: StartedSetup,
     scratch: &mut Mem<Tag>,
 ) -> Result<()> {
-    let module_name = req.idents.get_string(req.module_name);
-    let outputs = setup_output_files(req, scratch, None)
+    let module_name = idents.get_string(req.module_name);
+    let outputs = collect_output_files_for_setup(idents, req, scratch, None)
         .map_err(|e| anyhow::anyhow!("fn setup for module '{module_name}' completed but {e}"))?;
     let stamp_path =
-        kpath::join_tmp(scratch, req.idents, req.module_dir, (".k1-out", ("setup", "stamp")));
-    fs::write(Path::new(stamp_path.as_str()), stamp_text(&started.header, &started.inputs, &outputs))?;
+        kpath::join_tmp(scratch, idents, req.module_dir, (".k1-out", ("setup", "stamp")));
+    let stamp_content = generate_stamp_text(&started.header, &started.inputs, &outputs);
+    fs::write(Path::new(stamp_path.as_str()), stamp_content)?;
     Ok(())
 }
 
-/// Same files, same content hashes; a stamp whose files only moved in stat is rewritten
 fn setup_is_fresh<Tag>(
+    idents: &IdentPool,
     req: &SetupRequest,
     scratch: &mut Mem<Tag>,
     stamp_path: &str,
@@ -798,20 +802,18 @@ fn setup_is_fresh<Tag>(
     let Some(existing) = existing else {
         return false;
     };
-    let Ok(outputs) = setup_output_files(req, scratch, Some(&existing)) else {
+    let Ok(outputs) = collect_output_files_for_setup(idents, req, scratch, Some(&existing)) else {
         return false;
     };
     if existing.header != header
         || existing.files.len() != inputs.len() + outputs.len()
-        || !existing
-            .files
-            .iter()
-            .zip(inputs.iter().chain(outputs.iter()))
-            .all(|(a, b)| a.label == b.label && a.rel == b.rel && a.hash == b.hash)
+        || !existing.files.iter().zip(inputs.iter().chain(outputs.iter())).all(|(a, b)| {
+            a.label == b.label && a.relative_path == b.relative_path && a.hash == b.hash
+        })
     {
         return false;
     }
-    let current = stamp_text(header, inputs, &outputs);
+    let current = generate_stamp_text(header, inputs, &outputs);
     if existing.text != current {
         let _ = fs::write(Path::new(stamp_path), current);
     }
@@ -820,7 +822,7 @@ fn setup_is_fresh<Tag>(
 
 struct StampFile {
     label: &'static str,
-    rel: String,
+    relative_path: String,
     size: u64,
     mtime_ns: u128,
     hash: u64,
@@ -855,7 +857,7 @@ impl SetupStamp {
             let mtime_ns: u128 = fields.next()?.parse().ok()?;
             let size: u64 = fields.next()?.parse().ok()?;
             let rel = fields.next()?.to_string();
-            files.push(StampFile { label, rel, size, mtime_ns, hash });
+            files.push(StampFile { label, relative_path: rel, size, mtime_ns, hash });
         }
         Some(SetupStamp { text, header, files })
     }
@@ -863,17 +865,22 @@ impl SetupStamp {
     fn known_hashes(&self) -> fxhash::FxHashMap<&str, &StampFile> {
         let mut known = fxhash::FxHashMap::default();
         for f in &self.files {
-            known.insert(f.rel.as_str(), f);
+            known.insert(f.relative_path.as_str(), f);
         }
         known
     }
 }
 
-fn stamp_text(header: &str, inputs: &[StampFile], outputs: &[StampFile]) -> String {
+fn generate_stamp_text(header: &str, inputs: &[StampFile], outputs: &[StampFile]) -> String {
     use std::fmt::Write;
     let mut s = header.to_string();
     for f in inputs.iter().chain(outputs.iter()) {
-        writeln!(s, "{}-file: {} {} {} {:016x}", f.label, f.rel, f.size, f.mtime_ns, f.hash).unwrap();
+        writeln!(
+            s,
+            "{}-file: {} {} {} {:016x}",
+            f.label, f.relative_path, f.size, f.mtime_ns, f.hash
+        )
+        .unwrap();
     }
     s
 }
@@ -886,7 +893,8 @@ fn stamp_file(
     known: &fxhash::FxHashMap<&str, &StampFile>,
     buf: &mut [u8],
 ) -> Result<StampFile> {
-    let rel = file.strip_prefix(module_dir).unwrap_or(file).trim_start_matches('/').to_string();
+    let relative_path =
+        file.strip_prefix(module_dir).unwrap_or(file).trim_start_matches('/').to_string();
     let meta = fs::metadata(Path::new(file))
         .map_err(|e| anyhow::anyhow!("failed to stat setup {label} {file}: {e}"))?;
     let size = meta.len();
@@ -896,29 +904,31 @@ fn stamp_file(
         .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let hash = match known.get(rel.as_str()) {
+    let hash = match known.get(relative_path.as_str()) {
         Some(k) if k.size == size && k.mtime_ns == mtime_ns => k.hash,
         _ => hash_file_content64(file, buf)
             .map_err(|e| anyhow::anyhow!("failed to read setup {label} {file}: {e}"))?,
     };
-    Ok(StampFile { label, rel, size, mtime_ns, hash })
+    Ok(StampFile { label, relative_path, size, mtime_ns, hash })
 }
 
-/// The output half of the stamp: every file under every declared output
-fn setup_output_files<Tag>(
+/// every file under every declared output
+// nocommit claude can we put the Vec<StampFile> and its String in scratch?
+fn collect_output_files_for_setup<Tag>(
+    idents: &IdentPool,
     req: &SetupRequest,
     scratch: &mut Mem<Tag>,
     existing: Option<&SetupStamp>,
 ) -> Result<Vec<StampFile>> {
-    let module_dir = req.idents.get_string(req.module_dir);
+    let module_dir = idents.get_string(req.module_dir);
     let known = existing.map(SetupStamp::known_hashes).unwrap_or_default();
     let buf = scratch.push_slice_uninit::<u8>(FILE_HASH_BUF_LEN);
     let mut files: Vec<StampFile> = vec![];
     let mut collected_filenames: Vec<String> = vec![];
     for output in req.outputs {
-        let output_path = kpath::join_tmp(scratch, req.idents, req.module_dir, *output);
+        let output_path = kpath::join_tmp(scratch, idents, req.module_dir, *output);
         if !Path::new(output_path.as_str()).exists() {
-            bail!("did not produce declared output '{}'", req.idents.get_string(*output));
+            bail!("did not produce declared output '{}'", idents.get_string(*output));
         }
         collected_filenames.clear();
         collect_files_within_dir(output_path.as_str(), &mut collected_filenames)?;
@@ -931,20 +941,21 @@ fn setup_output_files<Tag>(
 }
 
 fn compute_setup_fingerprint<Tag>(
+    idents: &IdentPool,
     req: &SetupRequest,
     scratch: &mut Mem<Tag>,
     root_src: &str,
     existing: Option<&SetupStamp>,
 ) -> Result<(String, Vec<StampFile>)> {
     use std::fmt::Write;
-    let module_dir = req.idents.get_string(req.module_dir);
+    let module_dir = idents.get_string(req.module_dir);
     let mut s = String::new();
     writeln!(s, "k1-setup-stamp v5").unwrap();
     writeln!(s, "target: {}", req.target.to_str()).unwrap();
     writeln!(
         s,
         "root: {} {:016x}",
-        req.idents.get_string(req.root_filename),
+        idents.get_string(req.root_filename),
         content_hash64(root_src.as_bytes())
     )
     .unwrap();
@@ -954,13 +965,13 @@ fn compute_setup_fingerprint<Tag>(
             if i > 0 {
                 s.push('|');
             }
-            s.push_str(req.idents.get_string(*id));
+            s.push_str(idents.get_string(*id));
         }
         s.push('\n');
     }
     let mut output_paths: kmem::List<MStr<Tag>, Tag> = scratch.new_list(req.outputs.len() as u32);
     for o in req.outputs {
-        let path = kpath::join_tmp(scratch, req.idents, req.module_dir, *o);
+        let path = kpath::join_tmp(scratch, idents, req.module_dir, *o);
         output_paths.push(path);
     }
     let known = existing.map(SetupStamp::known_hashes).unwrap_or_default();
@@ -968,7 +979,7 @@ fn compute_setup_fingerprint<Tag>(
     let mut files: Vec<StampFile> = vec![];
     let mut files_named_by_path: Vec<String> = vec![];
     for input in req.inputs {
-        let input_path = kpath::join_tmp(scratch, req.idents, req.module_dir, *input);
+        let input_path = kpath::join_tmp(scratch, idents, req.module_dir, *input);
         files_named_by_path.clear();
         collect_files_within_dir(input_path.as_str(), &mut files_named_by_path)?;
         files_named_by_path.sort();
@@ -1188,7 +1199,6 @@ fn listed_setup_is_fresh<Tag>(
     let module_dir_str = kpath::parent(root_source_path);
     let module_dir = idents.intern(module_dir_str);
     let req = SetupRequest {
-        idents,
         module_dir,
         module_name: idents.intern(kpath::file_name(module_dir_str)),
         root_filename: idents.intern(kpath::file_name(root_source_path)),
@@ -1199,10 +1209,12 @@ fn listed_setup_is_fresh<Tag>(
     };
     let stamp_path = kpath::join_tmp(scratch, idents, module_dir, (".k1-out", ("setup", "stamp")));
     let existing = SetupStamp::read(stamp_path.as_str());
-    let Ok((header, inputs)) = compute_setup_fingerprint(&req, scratch, &root_src, existing.as_ref()) else {
+    let Ok((header, inputs)) =
+        compute_setup_fingerprint(idents, &req, scratch, &root_src, existing.as_ref())
+    else {
         return false;
     };
-    setup_is_fresh(&req, scratch, stamp_path.as_str(), existing, &header, &inputs)
+    setup_is_fresh(idents, &req, scratch, stamp_path.as_str(), existing, &header, &inputs)
 }
 
 fn write_program_dump(p: &TypedProgram) {
@@ -1333,10 +1345,17 @@ pub fn compile_program_ext(
 
     let core_plan =
         spawn_module_load(&ast.idents, &mut ast.tmp, corelib_dir, true, &lsp.source_overrides);
-    let std_plan = use_std.then(|| {
-        spawn_module_load(&ast.idents, &mut ast.tmp, stdlib_dir, false, &lsp.source_overrides)
-    });
-    let main_plan =
+    let std_plan = match use_std {
+        true => Some(spawn_module_load(
+            &ast.idents,
+            &mut ast.tmp,
+            stdlib_dir,
+            false,
+            &lsp.source_overrides,
+        )),
+        false => None,
+    };
+    let primary_plan =
         spawn_module_load(&ast.idents, &mut ast.tmp, src_path, false, &lsp.source_overrides);
 
     let config = CompilerConfig {
@@ -1447,28 +1466,61 @@ pub fn compile_program_ext(
         }
     }
 
-    let add_result = (|| {
-        k1.add_module(core_plan?, false)?;
-        if let Some(std_plan) = std_plan {
-            k1.add_module(std_plan?, false)?;
+    (|| {
+        let core_load_handle = match core_plan {
+            Err(e) => {
+                k1.report(k1.error_from_anyhow(e, SpanId::NONE));
+                return;
+            }
+            Ok(handle) => handle,
+        };
+        if let Err(e) = k1.add_module(core_load_handle, false) {
+            k1.report(e);
+            return;
         }
-        k1.add_module(main_plan?, true)
+        if let Some(std_plan) = std_plan {
+            let std_load_handle = match std_plan {
+                Err(e) => {
+                    k1.report(k1.error_from_anyhow(e, SpanId::NONE));
+                    return;
+                }
+                Ok(handle) => handle,
+            };
+            if let Err(e) = k1.add_module(std_load_handle, false) {
+                k1.report(e);
+                return;
+            }
+        }
+        let primary_load_handle = match primary_plan {
+            Err(e) => {
+                k1.report(k1.error_from_anyhow(e, SpanId::NONE));
+                return;
+            }
+            Ok(handle) => handle,
+        };
+        if let Err(e) = k1.add_module(primary_load_handle, true) {
+            k1.report(e);
+            #[allow(clippy::needless_return)]
+            return;
+        }
     })();
+
     k1.write_emitted_sources();
     if args.cache {
         write_module_list(&k1);
     }
-    if let Err(e) = add_result {
-        if args.dump_module {
-            write_program_dump(&k1);
-        }
-        eprintln!("{}", e);
-        if k1.error_count(&[MessageLevel::Error]) == 0 {
-            let message = k1.make_error(format!("{e}"), SpanId::NONE);
-            k1.messages.borrow_mut().push(message);
-        }
+    if args.dump_module {
+        write_program_dump(&k1);
+    }
+    if args.dump_idents {
+        write_idents_dump(&k1);
+    }
+
+    let is_ok = k1.error_count(&[MessageLevel::Error]) == 0;
+    if !is_ok {
         return Err(CompileProgramError::TyperFailure(Box::new(k1)));
     };
+
     let warning_count =
         k1.messages.borrow().iter().filter(|e| e.level == MessageLevel::Warn).count();
     if warning_count > 0 {
@@ -1499,13 +1551,6 @@ pub fn compile_program_ext(
             options.direction = pprof::flamegraph::Direction::Straight;
             report.flamegraph_with_options(file_rev, &mut options).unwrap();
         }
-    }
-
-    if args.dump_module {
-        write_program_dump(&k1);
-    }
-    if args.dump_idents {
-        write_idents_dump(&k1);
     }
 
     Ok(k1)
@@ -1895,11 +1940,12 @@ fn report_codegen_error(k1: &TypedProgram, e: K1Message) -> anyhow::Error {
     )
     .unwrap();
     write_program_dump(k1);
-    k1.message_to_anyhow(e)
+    k1.anyhow_from_message(e)
 }
 
 fn cg_error_to_message(k1: &TypedProgram, e: CgError) -> K1Message {
-    k1.make_error(e.message, e.span)
+    let message_string = k1.ast.idents.intern(e.message);
+    k1.make_error(message_string, e.span)
 }
 
 pub fn codegen_module(args: &Args, ctx: &Context, k1: &mut TypedProgram) -> Result<()> {
@@ -2309,7 +2355,8 @@ mod compiler_test {
     #[test]
     fn disk_cache_restores_deps_when_primary_fails() {
         set_home();
-        let dir = std::env::temp_dir().join(format!("k1_disk_cache_deps_test_{}", std::process::id()));
+        let dir =
+            std::env::temp_dir().join(format!("k1_disk_cache_deps_test_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let app = dir.join("app");
         let lib = app.join("deps").join("lib");

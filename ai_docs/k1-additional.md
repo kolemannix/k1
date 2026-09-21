@@ -596,6 +596,11 @@ Binary operator precedence is C's, so ported C expressions parse identically
 (tightest first): `||` (pipe), then `* / %`, `+ -`, `<< >>`, `< <= > >=`,
 `== !=`, `&`, `^`, `|`, `and`, `or`, `?`. Note C's quirk is inherited:
 `a & b == c` is `a & (b == c)` — parenthesize mask tests.
+- Integer semantics are the same natively and in `#static`, optimized or not:
+  `+ - *` wrap (2's complement, no traps, no debug/release split), shift
+  counts are taken modulo the width (`1u64 << 64` is `1`), and `/ %` crash on
+  a zero divisor and on `min-value / -1`. Checked or trapping arithmetic is
+  library code, not a mode.
 - Hex, binary, and underscore numeric literals.
 - Integer suffixes such as `255u8`, `-128i8`, and `3u64`.
 

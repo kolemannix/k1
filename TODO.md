@@ -1,30 +1,12 @@
 "C with generics, live interactive programming, typeclasses, next-gen macros, full compile-time execution, and ADTs"
 
-next up
-- parse_statement: same peek-dispatch conversion parse_definition got (expect_ variants, no conditional parse_* chain)
-
-# Bugs
-- [x] [major] Support (co)recursive Generics
-- [x] [major] Allow pattern matching *into* recursive types (currently we just terminate)
-- [x] Test handling of NaN and Infinity literals, other float edge cases
-- [x] accidentally captured context parameter results in 'Missing variable' in ir
-- [x] Out of order type definitions don't work with aliases
-- [x] same-level recursion is not caught behind option
-- [x] Require that a blanket impl's params appear in the Self type
-
-## [x] vector types
-
-## [x] live reload featureset (design/reload.md)
-- [x] `ns(reload) foo { <functions in here go in a dylib> }`
-- [x] `fn main() { foo/load().! /* or foo/watch().! */; foo/my-fn(1,2,3) }`
-- [x] reloadable globals
-- [ ] Linux verification; `k1 b --watch`; multi-ns-per-dylib
-
-pointer-free predicate - pod/serializable?
 
 ## [ ] asm
 
-## [ ] Constant-folding, SCCP
+## [ ] More IR analysis and opts
+- [ ] Constant-folding, SCCP
+- [ ] Get 'range' metadata into sum tag loads for our IR and LLVM optimizations (a sum's tag could only be 0 or 1; this would attach those 2 possible values to the loaded value)
+- [ ] Tail calls
 
 ## [ ] token stream based macros
 
@@ -33,15 +15,13 @@ pointer-free predicate - pod/serializable?
 
 ## [x] meta-based macros
 
-## [ ] very readable compiler trace, incl specialization args, for debugging
+## [x] very readable compiler trace, incl specialization args, for debugging
 
 ## [x] Ability objects; dyn[<ability expr>]
 
 ## grab bag list mid2026
-- [x] zeroing after alloc should not be necessary; either buffer/zeroed or ensure all k1 allocations always zero, even arena push (does arena.reset() always clear, or is there a special path for 'alloc-no-ensure-zeroed?')
-- [x] 
-    let app = userData.ref[app-state]
-    //                     ^ go definition here goes to the 'ref' call
+- [ ] convert the add_module train off of anyhow::error
+- [ ] fork global syntax: `let(mutable) x` -> `global x`. `let x` -> `constant x`. This differentiates from local lets in a more-useful-than-costly way
 - [ ] `self` sugar: `*self` as well as bare `self` inside an `ns for t`
 - [ ] struct type defn sugar as well; `atlas-cursor: *atlas-cursor` -> `*atlas-cursor`
 - [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
@@ -64,17 +44,29 @@ kind: either(u64, { rounded = false, even = false, faces: u8 }) {
       rhs into lhs type but have no least-upper-bound, so `u32 + i64` errors while `i64 + u32` works;
       (c) expected-type propagation into generic calls pins the type param before argument-driven
       inference, so `write-bits(depth.get-unchecked(i), ...)` fails where the two-line form widens fine
-- [ ] Get 'range' metadata into sum tag loads for our IR and LLVM optimizations (a sum's tag could only be 0 or 1; this would attach those 2 possible values to the loaded value)
-- [ ] Tail calls
 - [ ] Implement precision format specifier
-- [ ] decide if overflow traps or not (in debug and release, if those are even different)
 - [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, empty])
         I think doing 'defaults' is relatively easy. You just hit consult the default on the unprovided path. For partially-applieds,
         you need essentially some notion of an 'ability signature function', just like type aliases would need
 
 - [ ] Failed-definition tracking, two markers for one concept: static_exec.rs:418 and typer.rs:16887. Both silently return Ok(()) when an AST mapping is missing, which masks compiler bugs. A set of failed parsed ids, checked in both places, converts "likely" into "certain".
-- [ ] toDyn on generic functions at typer.rs:10251. Explicit type args are already parsed at that call site; specializing before the dyn lift is the same path foo[int].& takes.
-
+- [x] parse_statement: same peek-dispatch conversion parse_definition got (expect_ variants, no conditional parse_* chain)
+- [x] zeroing after alloc should not be necessary; either buffer/zeroed or ensure all k1 allocations always zero, even arena push (does arena.reset() always clear, or is there a special path for 'alloc-no-ensure-zeroed?')
+- [x] 
+    let app = userData.ref[app-state]
+    //                     ^ go definition here goes to the 'ref' call
+- [x] toDyn on generic functions at typer.rs:10251
+- [x] [major] Support (co)recursive Generics
+- [x] [major] Allow pattern matching *into* recursive types (currently we just terminate)
+- [x] Test handling of NaN and Infinity literals, other float edge cases
+- [x] accidentally captured context parameter results in 'Missing variable' in ir
+- [x] Out of order type definitions don't work with aliases
+- [x] same-level recursion is not caught behind option
+- [x] Require that a blanket impl's params appear in the Self type
+- [x] `ns(reload) foo { <functions in here go in a dylib> }`
+- [x] `fn main() { foo/load().! /* or foo/watch().! */; foo/my-fn(1,2,3) }`
+- [x] reloadable globals
+- [ ] Linux verification; `k1 b --watch`; multi-ns-per-dylib
 - [x] When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack
 - [x] block stmt typer error recovery; get more than 1 typer error per block
 - [x] fix `is {` syntax
@@ -131,6 +123,9 @@ kind: either(u64, { rounded = false, even = false, faces: u8 }) {
       Fixed by the dotted struct literal syntax: { cap } is a block, { .cap } is the struct.
 - [x] Static-execution file reads (`#static` + `files/read-to-string`, global initializers) resolve relative paths against the compiler's cwd, so `k1 c dogfood/aoc/2025` only works from inside that dir. Consider resolving against the module dir (or the source file's dir) during static execution.
 - [x] Iterator ability: why is peek the primitive? With peek(self: *self) immutable, a filtering iterator like mine can't cache what it found — next() = scan (peek) + scan again (advance-by). Also every nth impl in the codebase is the identical advance-by(n); self.next() — could that be a default? Was peek chosen for for-loop desugaring reasons, or would nextced-as-primitive with peek-via-buffering be on the table?
+
+## [x] vector types
+## [x] live reload featureset (design/reload.md)
 
 bindgen dogfood list
 - [x] dogfood(k1): implement 'continue'

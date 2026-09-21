@@ -6,6 +6,7 @@ use std::io::IsTerminal;
 
 use crate::kmem::{self, Handle, List, MSL2, MSS2, MSlice, MSpillList};
 use crate::rawref::RawRef;
+use crate::typer;
 use crate::typer::{Linkage, MessageLevel, ModuleId};
 use crate::vpool::VPool;
 use crate::{SV8, impl_copy_if_small, kpath, lex::*, nz_u32_id, static_assert_size};
@@ -45,8 +46,7 @@ nz_u32_id!(ParsedExprId);
 nz_u32_id!(ParsedStmtId);
 nz_u32_id!(ParsedTypeExprId);
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone, Hash)]
-pub struct ParsedPatternId(u32);
+nz_u32_id!(ParsedPatternId);
 nz_u32_id!(ParsedUseId);
 
 #[derive(Clone, Copy)]
@@ -57,7 +57,7 @@ pub struct ParsedUse {
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct ParsedDefer {
     pub expr: ParsedExprId,
     pub span: SpanId,
@@ -70,7 +70,7 @@ mod parse_test;
 
 mod idents;
 
-#[derive(PartialEq, Eq, Debug, Copy, Clone, Hash)]
+#[derive(PartialEq, Eq, Copy, Clone, Hash)]
 pub enum ParsedId {
     Use(ParsedUseId),
     Function(ParsedFunctionId),
@@ -186,13 +186,13 @@ impl ParsedId {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct ParsedListLiteral {
     pub elements: AstSlice<ParsedExprId>,
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct ParsedNumericLiteral {
     pub span: SpanId,
     /// The digits (and optional sign/suffix) alone; the value is parsed from
@@ -200,7 +200,7 @@ pub struct ParsedNumericLiteral {
     pub text_span: SpanId,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub enum ParsedLiteral {
     Char(u8, SpanId),
     Numeric(ParsedNumericLiteral),
@@ -234,7 +234,7 @@ impl ParsedLiteral {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ParsedCallArg {
     pub name: Option<StringId>,
     pub value: ParsedExprId,
@@ -248,7 +248,7 @@ impl ParsedCallArg {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct NamedTypeArg {
     pub name: Option<StringId>,
     pub type_expr: Option<ParsedTypeExprId>,
@@ -283,7 +283,7 @@ pub struct ParsedExprCall {
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct ParsedLet {
     pub name: StringId,
     pub type_expr: Option<ParsedTypeExprId>,
@@ -313,7 +313,7 @@ impl ParsedLet {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct BinaryOp {
     pub op_kind: BinaryOpKind,
     pub operator_span: SpanId,
@@ -322,7 +322,7 @@ pub struct BinaryOp {
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct ParsedNot {
     pub expr: ParsedExprId,
     pub span: SpanId,
@@ -631,7 +631,7 @@ pub struct ParsedInterpolatedString {
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub enum ParsedStaticBlockKind {
     /// Kind: Value. The statically executed code is intended to produce a value
     /// Its main purpose is the value it produces
@@ -653,7 +653,7 @@ impl ParsedStaticBlockKind {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct ParsedStaticExpr {
     pub base_expr: ParsedExprId,
     pub kind: ParsedStaticBlockKind,
@@ -667,7 +667,7 @@ pub struct ParsedStaticExpr {
 /// any `statement`, since you may want to metaprogram with
 /// statements; the value it contains is independent from the
 /// AST node type used to create it
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct ParsedCode {
     pub parsed_stmt: ParsedStmtId,
     pub span: SpanId,
@@ -787,33 +787,33 @@ pub enum ParsedExpr {
     Continue(ParsedContinue),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct ParsedReturn {
     pub value: Option<ParsedExprId>,
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct ParsedBreak {
     pub label: Option<StringId>,
     pub value: Option<ParsedExprId>,
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct ParsedContinue {
     pub label: Option<StringId>,
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct ParsedTypeHint {
     pub inner: ParsedExprId,
     pub ty: ParsedTypeExprId,
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct ParsedIndex {
     pub base: ParsedExprId,
     pub key: ParsedExprId,
@@ -1019,7 +1019,7 @@ pub struct ParsedRequire {
     pub span: SpanId,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub enum ParsedStmt {
     Use(UseStmt),                 // use core/list/new as foo
     Let(ParsedLet),               // let x = 42
@@ -1297,6 +1297,8 @@ pub struct ParsedFunction {
     pub additional_where_constraints: AstSlice<ParsedTypeConstraint>,
     pub compile_condition: Option<ParsedExprId>,
     pub id: ParsedFunctionId,
+
+    pub typer_state: typer::ParsedFunctionDeclareOutcome,
 }
 
 #[derive(Clone, Copy)]
@@ -1351,7 +1353,7 @@ impl FnArgDefModifiers {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct ParsedGlobal {
     pub name: StringId,
     pub type_expr: ParsedTypeExprId,
@@ -1365,6 +1367,8 @@ pub struct ParsedGlobal {
     pub is_external: bool,
     pub link_name: Option<StringId>,
     pub compile_condition: Option<ParsedExprId>,
+
+    pub typer_state: typer::ParsedGlobalDeclareOutcome,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1468,10 +1472,9 @@ fn id_key(id: ParsedExprId) -> std::num::NonZeroU32 {
     id.into()
 }
 
-/// The debug vec stays sorted because ids are handed out monotonically and
-/// post-hoc sets are rare enough for sorted insertion
 pub struct ParsedExpressionPool {
     expressions: VPool<ParsedExpr, ParsedExprId>,
+    /// sorted for binary search
     debug_exprs: Vec<ParsedExprId>,
 }
 impl ParsedExpressionPool {
@@ -1547,36 +1550,6 @@ impl ParsedTypeExpressionPool {
     }
     pub fn iter(&self) -> impl Iterator<Item = &ParsedTypeExpr> {
         self.type_expressions.iter()
-    }
-}
-
-pub struct ParsedUsePool {
-    uses: VPool<ParsedUse, ParsedUseId>,
-}
-impl ParsedUsePool {
-    pub fn make() -> Self {
-        Self { uses: VPool::make("parsed_uses") }
-    }
-    pub fn add_use(&mut self, r#use: ParsedUse) -> ParsedUseId {
-        self.uses.add(r#use)
-    }
-    pub fn get_use(&self, id: ParsedUseId) -> &ParsedUse {
-        self.uses.get(id)
-    }
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct ParsedPatternPool {
-    patterns: Vec<ParsedPattern>,
-}
-impl ParsedPatternPool {
-    pub fn add_pattern(&mut self, pattern: ParsedPattern) -> ParsedPatternId {
-        let id = self.patterns.len();
-        self.patterns.push(pattern);
-        ParsedPatternId(id as u32)
-    }
-    pub fn get(&self, id: ParsedPatternId) -> &ParsedPattern {
-        &self.patterns[id.0 as usize]
     }
 }
 
@@ -1671,9 +1644,9 @@ pub struct ParsedProgram {
     pub idents: IdentPool,
     pub exprs: ParsedExpressionPool,
     pub type_exprs: ParsedTypeExpressionPool,
-    pub patterns: ParsedPatternPool,
+    pub patterns: VPool<ParsedPattern, ParsedPatternId>,
     pub stmts: VPool<ParsedStmt, ParsedStmtId>,
-    pub uses: ParsedUsePool,
+    pub uses: VPool<ParsedUse, ParsedUseId>,
     pub errors: Vec<ParseError>,
 
     pub semantic_tokens: VPool<SemanticToken, SemanticTokenId>,
@@ -1707,9 +1680,9 @@ impl ParsedProgram {
             idents,
             exprs: ParsedExpressionPool::make(),
             type_exprs: ParsedTypeExpressionPool::new(),
-            patterns: ParsedPatternPool::default(),
+            patterns: VPool::make("parsed_patterns"),
             stmts: VPool::make("parsed_stmts"),
-            uses: ParsedUsePool::make(),
+            uses: VPool::make("parsed_uses"),
             errors: Vec::new(),
 
             semantic_tokens,
@@ -1767,9 +1740,9 @@ impl ParsedProgram {
         exprs.expressions.snap(w);
         w.write_slice(&exprs.debug_exprs);
         type_exprs.type_expressions.snap(w);
-        w.write_slice(&patterns.patterns);
+        patterns.snap(w);
         stmts.snap(w);
-        uses.uses.snap(w);
+        uses.snap(w);
         // Snapshots are only taken of successfully-compiled module boundaries
         assert!(errors.is_empty(), "cannot snapshot a ParsedProgram with parse errors");
         semantic_tokens.snap(w);
@@ -1794,9 +1767,9 @@ impl ParsedProgram {
         ast.exprs.expressions.restore(r);
         ast.exprs.debug_exprs = r.read_vec();
         ast.type_exprs.type_expressions.restore(r);
-        ast.patterns.patterns = r.read_vec();
+        ast.patterns.restore(r);
         ast.stmts.restore(r);
-        ast.uses.uses.restore(r);
+        ast.uses.restore(r);
         ast.errors = Vec::new();
         ast.semantic_tokens.restore(r);
         ast
@@ -1855,7 +1828,7 @@ impl ParsedProgram {
 
     pub fn get_stmt_span(&self, stmt: ParsedStmtId) -> SpanId {
         match self.stmts.get(stmt) {
-            ParsedStmt::Use(u) => self.uses.get_use(u.use_id).span,
+            ParsedStmt::Use(u) => self.uses.get(u.use_id).span,
             ParsedStmt::Let(v) => v.span,
             ParsedStmt::Require(g) => g.span,
             ParsedStmt::Assign(a) => a.span,
@@ -1931,7 +1904,7 @@ impl ParsedProgram {
 
     pub fn get_span_for_id(&self, parsed_id: ParsedId) -> SpanId {
         match parsed_id {
-            ParsedId::Use(id) => self.uses.get_use(id).span,
+            ParsedId::Use(id) => self.uses.get(id).span,
             ParsedId::Function(id) => self.get_function(id).name_span,
             ParsedId::Macro(id) => self.get_macro(id).name_span,
             ParsedId::Namespace(ns) => self.namespaces.get(ns).span,
@@ -2558,9 +2531,11 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             if let Some(asterisk) = self.maybe_consume(K::Asterisk) {
                 let inner_span = self.ast.get_pattern_span(pattern_id);
                 let span = self.extend_span_tok(inner_span, asterisk);
-                pattern_id = self.ast.patterns.add_pattern(ParsedPattern::Reference(
-                    ParsedReferencePattern { inner: pattern_id, span },
-                ))
+                pattern_id =
+                    self.ast.patterns.add(ParsedPattern::Reference(ParsedReferencePattern {
+                        inner: pattern_id,
+                        span,
+                    }))
             } else {
                 break;
             }
@@ -2572,7 +2547,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         let (first, second) = self.peek_two();
         if let Some(literal_id) = self.parse_literal_atom()? {
             let pattern = ParsedPattern::Literal(literal_id);
-            let id = self.ast.patterns.add_pattern(pattern);
+            let id = self.ast.patterns.add(pattern);
             Ok(id)
         } else if first.kind == K::Dot {
             // Struct pattern: .{ x = <pat>, y }
@@ -2587,7 +2562,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                 } else {
                     // Assume variable binding pattern with same name as field
                     let pattern = ParsedPattern::Variable(ident, self.tok_span_id(ident_token));
-                    self.ast.patterns.add_pattern(pattern)
+                    self.ast.patterns.add(pattern)
                 };
                 fields.push_grow(&mut self.ast.mem, (ident, pattern_id));
                 let next = self.peek();
@@ -2601,7 +2576,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             let span = self.extend_token_span(dot_token, end);
             let pattern =
                 ParsedStructPattern { fields: fields.to_slice_trim(&mut self.ast.mem), span };
-            let pattern_id = self.ast.patterns.add_pattern(ParsedPattern::Struct(pattern));
+            let pattern_id = self.ast.patterns.add(ParsedPattern::Struct(pattern));
             Ok(pattern_id)
         } else if first.kind == K::Colon
             || (first.kind == K::Ident && second.kind == K::Colon && self.token_chars(first) != "_")
@@ -2636,7 +2611,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                 } else {
                     (None, self.extend_token_span(first, variant_name_token))
                 };
-            let pattern_id = self.ast.patterns.add_pattern(ParsedPattern::Sum(ParsedSumPattern {
+            let pattern_id = self.ast.patterns.add(ParsedPattern::Sum(ParsedSumPattern {
                 sum_name,
                 variant_name: variant_name_ident,
                 payload_pattern,
@@ -2650,7 +2625,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             match ident_str {
                 "_" => {
                     let sp = self.tok_span_id(ident_token);
-                    let pattern_id = self.ast.patterns.add_pattern(ParsedPattern::Wildcard(sp));
+                    let pattern_id = self.ast.patterns.add(ParsedPattern::Wildcard(sp));
                     Ok(pattern_id)
                 }
                 "type" => {
@@ -2666,13 +2641,12 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                         type_expr,
                         span,
                     });
-                    let pattern_id = self.ast.patterns.add_pattern(pattern);
+                    let pattern_id = self.ast.patterns.add(pattern);
                     Ok(pattern_id)
                 }
                 _ => {
                     let sp = self.tok_span_id(ident_token);
-                    let pattern_id =
-                        self.ast.patterns.add_pattern(ParsedPattern::Variable(ident, sp));
+                    let pattern_id = self.ast.patterns.add(ParsedPattern::Variable(ident, sp));
                     Ok(pattern_id)
                 }
             }
@@ -3295,10 +3269,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.advance();
             let type_expr = self.expect_type_expression()?;
             let span = self.extend_tok_to_here(first);
-            Ok(Some(self.ast.type_exprs.add(ParsedTypeExpr::Reference(ParsedReference {
-                base: type_expr,
-                span,
-            }))))
+            Ok(Some(
+                self.ast
+                    .type_exprs
+                    .add(ParsedTypeExpr::Reference(ParsedReference { base: type_expr, span })),
+            ))
         } else if first.kind == K::OpenBrace {
             self.expect_record_type(first, ParsedRecordKind::Struct)
         } else if first.kind == K::QuestionMark {
@@ -4581,6 +4556,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             is_external,
             link_name,
             compile_condition,
+
+            typer_state: typer::ParsedGlobalDeclareOutcome::Parsed,
         });
         Ok(global_id)
     }
@@ -5112,6 +5089,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             additional_where_constraints,
             compile_condition: condition,
             id: ParsedFunctionId::PENDING,
+
+            typer_state: typer::ParsedFunctionDeclareOutcome::Parsed,
         });
         Ok(function_id)
     }
@@ -5595,7 +5574,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         let span = self.extend_tok_to_here(use_token);
         let parsed_use_id =
-            self.ast.uses.add_use(ParsedUse { target: namespaced_ident, alias, exposed, span });
+            self.ast.uses.add(ParsedUse { target: namespaced_ident, alias, exposed, span });
         Ok(parsed_use_id)
     }
 
@@ -5765,7 +5744,7 @@ impl ParsedProgram {
                 w.write_str(" }")?;
                 Ok(())
             }
-            ParsedExpr::ListLiteral(list_expr) => w.write_fmt(format_args!("{:?}", list_expr)),
+            ParsedExpr::ListLiteral(_list_expr) => w.write_str("<list expr unimplemented>"),
             ParsedExpr::For(for_expr) => w.write_fmt(format_args!("{:?}", for_expr)),
             ParsedExpr::Variant(v) => {
                 if let Some(ty) = v.ty {
@@ -6103,7 +6082,7 @@ impl ParsedProgram {
     pub fn display_stmt_id(&self, w: &mut impl Write, stmt_id: ParsedStmtId) -> std::fmt::Result {
         match self.stmts.get(stmt_id) {
             ParsedStmt::Use(use_stmt) => {
-                let parsed_use = self.uses.get_use(use_stmt.use_id);
+                let parsed_use = self.uses.get(use_stmt.use_id);
                 w.write_str(if parsed_use.exposed { "use(expose) " } else { "use " })?;
                 self.display_qident(w, &parsed_use.target)?;
                 if let Some(alias) = parsed_use.alias {

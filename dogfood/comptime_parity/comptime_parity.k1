@@ -19,7 +19,8 @@ ns work {
     let w = string-builder/new()
     for a in INTS {
       for b in DIVISORS {
-        w.write("${a + b},${a - b},${a * b},${a / b},${a % b},")
+        w.write("${a + b},${a - b},${a * b},")
+        if b == -1 and a == i64/min-value w.write("trap,trap,") else w.write("${a / b},${a % b},")
         w.write("${a & b},${a | b},${a ^ b},${a < b},${a <= b},${a == b},")
       }
       w.write("${a >> 3},${a >> 63},${a.abs()};")

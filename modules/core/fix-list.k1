@@ -2,9 +2,9 @@
 // Storage is inline!
 //  
 // For example, a fixlist[byte, 10] is 14 bytes long, and looks like:
-// +----+----------+
-// |used|10 items  |
-// +----+----------+
+// +--------+------+
+// |10 items|used  |
+// +--------+------+
 // 0    4
 type fixlist[t, n: static size] = { data: array[t, n], used: u32 }
 ns for fixlist {

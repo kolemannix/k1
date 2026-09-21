@@ -100,11 +100,9 @@ impl TypedProgram {
             function_name_to_ability_names,
             namespace_type_params,
             namespace_ast_mappings,
-            function_ast_mappings,
             macro_ast_mappings,
-            global_ast_mappings,
             ability_impl_ast_mappings,
-            debug_level_stack: _,
+            exported_symbols,
             uses_pending_resolution,
             types_pending_definition,
             module_in_progress,
@@ -186,10 +184,9 @@ impl TypedProgram {
         write_map_snap(w, function_name_to_ability_names);
         write_map_snap(w, namespace_type_params);
         write_map_snap(w, namespace_ast_mappings);
-        write_map_snap(w, function_ast_mappings);
         write_map_snap(w, macro_ast_mappings);
-        write_map_snap(w, global_ast_mappings);
         write_map_snap(w, ability_impl_ast_mappings);
+        write_map_snap(w, exported_symbols);
 
         assert!(uses_pending_resolution.is_empty());
         assert!(types_pending_definition.is_empty());
@@ -318,10 +315,9 @@ impl TypedProgram {
         k1.function_name_to_ability_names = restore_map_snap(r);
         k1.namespace_type_params = restore_map_snap(r);
         k1.namespace_ast_mappings = restore_map_snap(r);
-        k1.function_ast_mappings = restore_map_snap(r);
         k1.macro_ast_mappings = restore_map_snap(r);
-        k1.global_ast_mappings = restore_map_snap(r);
         k1.ability_impl_ast_mappings = restore_map_snap(r);
+        k1.exported_symbols = restore_map_snap(r);
         k1.patterns.mem.restore(r);
         k1.emitted_sources = r.read_vec();
         k1.emitted_parse_cache.clear();

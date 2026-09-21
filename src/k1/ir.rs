@@ -1526,7 +1526,7 @@ pub fn compile_function(
     if k1.ir.functions.contains_key(&function_id) {
         return Ok(());
     }
-    if k1.trace.on_stack(TraceKind::IrLower, function_id.as_u32()) {
+    if k1.trace.stack_contains_key(TraceKind::IrLower, function_id.as_u32()) {
         kbail!(
             k1,
             k1.get_function_span(function_id),

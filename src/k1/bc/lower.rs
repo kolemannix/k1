@@ -53,7 +53,7 @@ pub fn get_or_lower_function(
         return Ok(*info);
     }
     debug_assert!(
-        !k1.trace.on_stack(TraceKind::Bcgen, function_id.as_u32()),
+        !k1.trace.stack_contains_key(TraceKind::Bcgen, function_id.as_u32()),
         "get_or_lower_function called on in-progress function; caller must check"
     );
     if !k1.ir.functions.contains_key(&function_id) {
@@ -352,7 +352,7 @@ fn resolve_lowered_value(k1: &mut TypedProgram, ctx: &mut LowerCtx, value: ir::V
         ir::Value::FunctionAddr(function_id) => {
             // Be sure to lower functions whose addresses have been taken
             if !k1.bc.functions.contains_key(&function_id)
-                && !k1.trace.on_stack(TraceKind::Bcgen, function_id.as_u32())
+                && !k1.trace.stack_contains_key(TraceKind::Bcgen, function_id.as_u32())
             {
                 if let Err(e) = get_or_lower_function(k1, function_id, ctx.cur_span) {
                     debug!(
@@ -1166,7 +1166,7 @@ fn emit_call(
 
             match call.callee {
                 IrCallee::Direct(function_id) => {
-                    if k1.trace.on_stack(TraceKind::Bcgen, function_id.as_u32()) {
+                    if k1.trace.stack_contains_key(TraceKind::Bcgen, function_id.as_u32()) {
                         // Recursion cycle: patch when the callee's code_start lands
                         ctx.emit(Opcode::Call, 0, nargs as u16);
                         let at = ctx.bc_out.len() as u32;
@@ -1326,20 +1326,6 @@ fn emit_phi_copies(k1: &mut TypedProgram, ctx: &mut LowerCtx, from: BlockId, tar
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::const_of_data32;
-    use crate::typer::types::ScalarType;
-
-    #[test]
-    fn float_immediates_are_bit_patterns() {
-        for value in [0.0f32, -0.0, 0.1, -1.5, f32::INFINITY, f32::NEG_INFINITY] {
-            assert_eq!(const_of_data32(ScalarType::F32, value.to_bits()), value.to_bits() as u64);
-            assert_eq!(const_of_data32(ScalarType::F64, value.to_bits()), (value as f64).to_bits());
-        }
-    }
-}
-
 /// Debug-only structural checks: phis should sit at the front of their block
 /// and allocas in the entry block. Violations are warnings (the lowering
 /// handles both shapes defensively) — but they indicate latent iropt bugs.
@@ -1381,5 +1367,19 @@ fn validate_unit_shape(k1: &TypedProgram, unit: &IrUnit) {
         }
         is_entry = false;
         block_h = block_node.next;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::const_of_data32;
+    use crate::typer::types::ScalarType;
+
+    #[test]
+    fn float_immediates_are_bit_patterns() {
+        for value in [0.0f32, -0.0, 0.1, -1.5, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(const_of_data32(ScalarType::F32, value.to_bits()), value.to_bits() as u64);
+            assert_eq!(const_of_data32(ScalarType::F64, value.to_bits()), (value as f64).to_bits());
+        }
     }
 }

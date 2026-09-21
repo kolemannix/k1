@@ -3,6 +3,8 @@
 
 use std::fmt::{Display, Formatter, Write};
 
+use crate::typer::pattern_match::MatchWitnessId;
+
 use super::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -1167,7 +1169,7 @@ impl TypedProgram {
         s
     }
 
-    pub fn display_pattern(&self, pattern: TypedPatternId, w: &mut impl Write) -> std::fmt::Result {
+    pub fn display_pattern<W: std::fmt::Write + ?Sized>(&self, pattern: TypedPatternId, w: &mut W) -> std::fmt::Result {
         match self.patterns.get(pattern) {
             TypedPattern::LiteralChar(value, _) => write!(w, "{value}"),
             TypedPattern::LiteralInteger(value_id, _) => {
@@ -1563,6 +1565,12 @@ impl<D, A> DepDisplay<D, A> for String {
     }
 }
 
+impl<D, A> DepDisplay<D, A> for anyhow::Error {
+    fn fmt(&self, f: &mut dyn Write, _dep: &D, _args: &A) -> std::fmt::Result {
+        f.write_str(&self.to_string())
+    }
+}
+
 impl<D, A, T> DepDisplay<D, A> for &T
 where
     T: DepDisplay<D, A> + ?Sized,
@@ -1624,6 +1632,18 @@ impl DepDisplay<TypedProgram, K1DisplayArgs> for TypeId {
     fn fmt(&self, f: &mut dyn Write, k1: &TypedProgram, args: &K1DisplayArgs) -> std::fmt::Result {
         let mode = if args.verbose { TypeDisplayMode::Expand } else { TypeDisplayMode::Name };
         k1.display_type_id(f, *self, mode)
+    }
+}
+
+impl<A> DepDisplay<TypedProgram, A> for MatchWitnessId {
+    fn fmt(&self, f: &mut dyn Write, k1: &TypedProgram, _args: &A) -> std::fmt::Result {
+        k1.display_match_witness(*self, f)
+    }
+}
+
+impl<A> DepDisplay<TypedProgram, A> for TypedPatternId {
+    fn fmt(&self, f: &mut dyn Write, k1: &TypedProgram, _args: &A) -> std::fmt::Result {
+        k1.display_pattern(*self, f)
     }
 }
 

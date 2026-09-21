@@ -1,0 +1,9 @@
+fn main(): i32 {
+  #static {
+    let d = -1
+    let m = i64/min-value
+    m / d
+  }
+  0
+}
+//errmsg: Integer division overflow: min-value / -1

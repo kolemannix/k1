@@ -29,10 +29,10 @@ enum PatternHead {
     Ctor(MatchCtor),
 }
 
-type MatchWitnessId = Handle<MatchWitness, MemTmp>;
+pub(crate) type MatchWitnessId = Handle<MatchWitness, MemTmp>;
 
 #[derive(Clone, Copy)]
-struct MatchWitness {
+pub(crate) struct MatchWitness {
     type_id: TypeId,
     kind: MatchWitnessKind,
     children: TmpSlice<MatchWitnessId>,
@@ -87,21 +87,22 @@ impl TypedProgram {
         let wildcard = self.tmp.pushn(&[MatchCell::Any]);
         let missing = self.match_useful(matrix, wildcard, columns);
         let missing_message = missing.map(|witnesses| {
-            if skip_build_message {
-                "Unhandled patterns".to_string()
+            let mstr = if skip_build_message {
+                "Unhandled patterns".into()
             } else {
                 let witness = self.tmp.getn(witnesses)[0];
-                format!(
-                    "Non-exhaustive match; for example, this pattern is not covered:\n- {}",
-                    self.match_witness_to_string(witness)
+                k1_format_user!(
+                    self,
+                    "Non-exhaustive match. this pattern is not covered:\n- {}",
+                    witness
                 )
-            }
+            };
+            self.ast.idents.intern(mstr)
         });
         let useless_message = first_useless.map(|pattern| {
             let span = self.patterns.get(pattern).span_id();
-            let message =
-                format!("This pattern handled no cases: {}", self.pattern_to_string(pattern));
-            (span, message)
+            let message = k1_format_user!(self, "This pattern handled no cases: {}", pattern);
+            (span, self.ast.idents.intern(message))
         });
         self.tmp.reset_to(mark);
 
@@ -133,7 +134,10 @@ impl TypedProgram {
         let query_cells = self.tmp.getn(query);
         if matrix.rows == 0 && query_cells.iter().all(|cell| matches!(cell, MatchCell::Any)) {
             let column_types = self.tmp.getn(columns);
-            if column_types.iter().all(|type_id| self.get_type_variable_counts(*type_id).is_inhabited) {
+            if column_types
+                .iter()
+                .all(|type_id| self.get_type_variable_counts(*type_id).is_inhabited)
+            {
                 let mut witnesses = self.tmp.new_list(column_types.len() as u32);
                 for type_id in column_types {
                     witnesses.push(self.add_match_witness(
@@ -455,16 +459,17 @@ impl TypedProgram {
         self.tmp.push_h(MatchWitness { type_id, kind, children })
     }
 
+    #[allow(unused)]
     fn match_witness_to_string(&self, witness: MatchWitnessId) -> String {
         let mut result = String::new();
         self.display_match_witness(witness, &mut result).unwrap();
         result
     }
 
-    fn display_match_witness(
+    pub(crate) fn display_match_witness<W: std::fmt::Write + ?Sized>(
         &self,
         witness_id: MatchWitnessId,
-        out: &mut impl std::fmt::Write,
+        out: &mut W,
     ) -> std::fmt::Result {
         let witness = *self.tmp.get(witness_id);
         match witness.kind {
@@ -590,7 +595,8 @@ impl TypedProgram {
                         )),
                     },
                     ParsedLiteral::String(string_id, span) => {
-                        if self.get_type_family_type(target_type_id) == self.builtin_types.string() {
+                        if self.get_type_family_type(target_type_id) == self.builtin_types.string()
+                        {
                             Ok(())
                         } else {
                             Err(kerr!(
@@ -898,12 +904,6 @@ impl TypedProgram {
             }
         }
 
-        if parsed_match.cases.is_empty() {
-            return self.make_fail(
-                "match with no arms; note `x is {}` is an empty match, `x is .{}` matches the empty struct",
-                parsed_match.span,
-            );
-        }
         let subject_expr =
             self.eval_expr(parsed_match.match_subject, ctx.with_no_expected_type())?;
 
@@ -1325,7 +1325,8 @@ impl TypedProgram {
                         .is_some_and(|p| !self.get_type_variable_counts(p).is_inhabited),
                     _ => false,
                 };
-                payload_uninhabited || sp.payload.is_some_and(|p| self.pattern_matches_uninhabited(p))
+                payload_uninhabited
+                    || sp.payload.is_some_and(|p| self.pattern_matches_uninhabited(p))
             }
             TypedPattern::Struct(stp) => self
                 .patterns

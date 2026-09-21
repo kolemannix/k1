@@ -108,16 +108,14 @@ impl TypedProgram {
             let new_errors = p.ast.errors.len() - error_count_start;
             match p_result {
                 Err(e) => Err(make_message(
-                    &p.ast.idents,
-                    format!("{msg_base}{e}"),
+                    p.ast.idents.intern(format!("{msg_base}{e}")),
                     e.span(),
                     MessageLevel::Error,
                 )),
                 Ok(_) if new_errors > 0 => {
                     let e = p.ast.errors.last().unwrap();
                     Err(make_message(
-                        &p.ast.idents,
-                        format!("{msg_base}{e}"),
+                        p.ast.idents.intern(format!("{msg_base}{e}")),
                         e.span(),
                         MessageLevel::Error,
                     ))
@@ -125,8 +123,7 @@ impl TypedProgram {
                 Ok(Some(defn)) => Ok(ParseReplSourceResult::Defn(ParsedId::Function(defn))),
                 Ok(None) => match p.parse_block_statements(TokenKind::Eof) {
                     Err(e) => Err(make_message(
-                        &p.ast.idents,
-                        format!("{msg_base}{e}"),
+                        p.ast.idents.intern(format!("{msg_base}{e}")),
                         e.span(),
                         MessageLevel::Error,
                     )),
@@ -243,7 +240,7 @@ impl TypedProgram {
         let mr = self.megarepl.as_mut().unwrap();
         let cell_id = mr.cells.len() as CellId;
         let source_id = self.megarepl_create_source(cell_id, 0, code);
-        let uninit_warning = self.make_warning("uninit", SpanId::NONE);
+        let uninit_warning = self.make_warning(self.ast.idents.intern("uninit"), SpanId::NONE);
         let mr = self.megarepl.as_mut().unwrap();
         mr.cells.push(MegareplCell {
             id: cell_id,

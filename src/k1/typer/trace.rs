@@ -464,7 +464,7 @@ impl Trace {
         }
     }
 
-    pub fn on_stack(&self, kind: TraceKind, key: u32) -> bool {
+    pub fn stack_contains_key(&self, kind: TraceKind, key: u32) -> bool {
         for id in self.stack.iter().rev() {
             let frame = self.frames.get(*id);
             if frame.kind == kind && frame.key == key {
@@ -664,8 +664,8 @@ mod tests {
         let a = trace.push(TraceKind::StaticExec, 7, FRAME_FLAG_SPECULATIVE);
         let b = trace.push(TraceKind::IrLower, 9, 0);
         assert!(frame(&trace, b.unwrap()).is_speculative());
-        assert!(trace.on_stack(TraceKind::IrLower, 9));
-        assert!(!trace.on_stack(TraceKind::IrLower, 7));
+        assert!(trace.stack_contains_key(TraceKind::IrLower, 9));
+        assert!(!trace.stack_contains_key(TraceKind::IrLower, 7));
         assert_eq!(trace.stack_keys(TraceKind::StaticExec).as_slice(), &[7]);
         trace.set_top_count(5);
         assert_eq!(frame(&trace, b.unwrap()).data_count, 5);
@@ -681,7 +681,7 @@ mod tests {
         let lower = trace.push(TraceKind::IrLower, 9, 0);
         assert_eq!(typecheck, None);
         assert!(lower.is_some());
-        assert!(trace.on_stack(TraceKind::IrLower, 9));
+        assert!(trace.stack_contains_key(TraceKind::IrLower, 9));
         assert_eq!(trace.frames.len(), 1);
         trace.pop(lower);
         trace.pop(typecheck);

@@ -532,7 +532,7 @@ impl TypedProgram {
             source.get_line_for_span_start(&self.ast.mem, the_span).unwrap().line_number();
         let filename_string_id = source.filename(&self.ast.idents);
         let filename_value = self.static_values.add_string(filename_string_id);
-        let line_value = self.static_values.add_int(TypedIntValue::U32(line_number as u32));
+        let line_value = self.static_values.add_int(TypedIntValue::U32(line_number));
         let span_value = self.static_values.add_int(TypedIntValue::U32(span.as_u32()));
         let source_location_type_id = self.builtin_types.source_location.unwrap();
         let value = self.static_values.add_struct_from_slice(

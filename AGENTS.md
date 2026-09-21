@@ -52,8 +52,8 @@ Before nontrivial work, read:
 - `src/k1/typer/infer.rs`: inference support.
 - `src/k1/typer/synth.rs`: synthesized typed expressions.
 - `src/k1/typer/dump.rs`: typed-program display/debug output.
-- `src/k1/ir.rs` and `src/k1/ir/iropt.rs`: typed expression to IR lowering and
-  IR optimization.
+- `src/k1/ir.rs` and `src/k1/ir/`: typed expression lowering, function-local
+  instruction storage, block arguments, required inlining, and SSA validation.
 - `src/k1/vm.rs` and `src/k1/vm/vm_ffi.rs`: VM/static execution and VM FFI.
 - `src/k1/codegen_llvm.rs`: LLVM backend.
 - `src/k1/compiler.rs`: CLI command plumbing, module compilation, output paths,
@@ -144,4 +144,3 @@ rg --glob '!.k1-out/**' --glob '!target/**' ...
 - `design/`: exploratory design notes; useful context, not always current.
 - `resources/c/`: helper scripts moved out of the root.
 - `builds/`: bundle/install/cross-build support.
-

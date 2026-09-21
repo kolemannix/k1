@@ -1102,6 +1102,10 @@ fn crash-bounds(context locn: k1/source-location)(size: size, index: size, msg: 
 }
 
 ns k1 {
+  fn crash-div(divisor-is-zero: bool): never {
+    crash(if divisor-is-zero "Division by zero" else "Integer division overflow: min-value / -1")
+  }
+
   // Called by the codegen-emitted stub of a reloadable fn when its slot is
   // still null; both args are NUL-terminated names baked into the stub
   fn crash-unloaded-ns(ns-name: ptr, fn-name: ptr): never {

@@ -18,8 +18,7 @@ impl TypedProgram {
                     return None;
                 }
                 if self.globals.get(global_id).initial_value.is_pending() {
-                    let ast_id = self.globals.get(global_id).ast_id;
-                    if let Err(e) = self.eval_global_body(ast_id) {
+                    if let Err(e) = self.eval_global_body(global_id) {
                         self.report(e);
                         return None;
                     }
@@ -114,8 +113,7 @@ impl TypedProgram {
                     return Err(e);
                 }
             } else if let Some((global_id, ())) = self.ir.globals_pending_eval.pop() {
-                let ast_id = self.globals.get(global_id).ast_id;
-                if let Err(e) = self.eval_global_body(ast_id) {
+                if let Err(e) = self.eval_global_body(global_id) {
                     self.report(e)
                 }
                 if let GlobalInitialValue::Failed(_) = self.globals.get(global_id).initial_value {
@@ -346,12 +344,16 @@ impl TypedProgram {
         &mut self,
         parsed_global_id: ParsedGlobalId,
         scope_id: ScopeId,
-    ) -> K1Result<Option<VariableId>> {
-        if let Some(global_id) = self.global_ast_mappings.get(&parsed_global_id) {
-            return Ok(Some(self.globals.get(*global_id).variable_id));
+    ) -> K1Result<Option<TypedGlobalId>> {
+        if let ParsedGlobalDeclareOutcome::Declared(global_id) =
+            self.ast.globals.get(parsed_global_id).typer_state
+        {
+            return Ok(Some(global_id));
         }
         let parsed = *self.ast.get_global(parsed_global_id);
         if !self.execute_static_condition(parsed.compile_condition, scope_id) {
+            self.ast.globals.get_mut(parsed_global_id).typer_state =
+                ParsedGlobalDeclareOutcome::IfDefedOut;
             return Ok(None);
         }
         let owner_ns = match self.scopes.get_scope(scope_id).owner_id {
@@ -406,58 +408,65 @@ impl TypedProgram {
         if scope_id == self.scopes.mem_scope_id && parsed.name == self.ast.idents.b.arena_tmp {
             self.global_id_k1_arena = Some(global_id)
         };
-        self.global_ast_mappings.insert(parsed_global_id, global_id);
+        self.ast.globals.get_mut(parsed_global_id).typer_state =
+            ParsedGlobalDeclareOutcome::Declared(global_id);
         self.scopes.add_variable(scope_id, parsed.name, variable_id);
 
         self.emit_ls_entity(parsed.name_span, LsEntityKind::Variable { variable_id });
 
-        Ok(Some(variable_id))
+        Ok(Some(global_id))
     }
 
-    pub fn eval_global_body(&mut self, parsed_global_id: ParsedGlobalId) -> K1Result<()> {
-        let Some(global_id) = self.global_ast_mappings.get(&parsed_global_id).copied() else {
-            // This means we failed to compile the definition; or we have a bug!
-            // TODO: Store failures so we can be certain which is true!
-            debug!("skipping rest of global body");
-            return Ok(());
-        };
-        // Evaluation is one-shot; the pre-execution drain may get here before the body phase
+    pub fn get_global_name(&self, global_id: TypedGlobalId) -> StringId {
+        self.variables.get(self.globals.get(global_id).variable_id).name
+    }
+
+    pub fn eval_global_body(&mut self, global_id: TypedGlobalId) -> K1Result<()> {
+        // the pre-execution drain may get here before the body phase
         if !self.globals.get(global_id).initial_value.is_pending() {
             return Ok(());
         }
-        if self.trace.on_stack(TraceKind::GlobalEval, global_id.as_u32()) {
-            let global_name = |id: TypedGlobalId| {
-                self.ident_str(self.variables.get(self.globals.get(id).variable_id).name)
-            };
+        if self.trace.stack_contains_key(TraceKind::GlobalEval, global_id.as_u32()) {
+            let name = self.get_global_name(global_id);
             let mut cycle = String::new();
             for key in self.trace.stack_keys(TraceKind::GlobalEval) {
-                cycle.push_str(global_name(TypedGlobalId::from_u32(key).unwrap()));
+                let stack_global_id = TypedGlobalId::from_u32(key).unwrap();
+                cycle.push_str(self.ident_str(self.get_global_name(stack_global_id)));
                 cycle.push_str(" -> ");
             }
-            cycle.push_str(global_name(global_id));
-            kbail!(
-                self,
-                self.ast.get_global(parsed_global_id).span,
-                "Global initializer cycle: {}",
-                cycle,
-            );
+            cycle.push_str(self.ident_str(name));
+            let span = self.globals.get(global_id).span;
+            kbail!(self, span, "Global initializer cycle: {}", cycle,);
         }
         let result = self.traced(TraceKind::GlobalEval, global_id.as_u32(), 0, |k1| {
-            k1.with_clean_inference(|k1| k1.eval_global_body_inner(parsed_global_id, global_id))
+            k1.with_clean_inference(|k1| k1.eval_global_body_inner(global_id))
         });
         if let Err(e) = result {
             self.globals.get_mut(global_id).initial_value = GlobalInitialValue::Failed(e);
         }
         result
     }
-
-    pub(super) fn eval_global_body_inner(
+    pub fn eval_global_body_from_parsed(
         &mut self,
         parsed_global_id: ParsedGlobalId,
-        global_id: TypedGlobalId,
     ) -> K1Result<()> {
-        let parsed_global = *self.ast.get_global(parsed_global_id);
+        match self.ast.globals.get(parsed_global_id).typer_state {
+            ParsedGlobalDeclareOutcome::Parsed => {
+                kbail!(
+                    self,
+                    self.ast.globals.get(parsed_global_id).span,
+                    "[internal error] eval undeclared global"
+                )
+            }
+            ParsedGlobalDeclareOutcome::IfDefedOut => Ok(()),
+            ParsedGlobalDeclareOutcome::Failed => Ok(()),
+            ParsedGlobalDeclareOutcome::Declared(global_id) => self.eval_global_body(global_id),
+        }
+    }
+
+    pub(super) fn eval_global_body_inner(&mut self, global_id: TypedGlobalId) -> K1Result<()> {
         let typed_global = self.globals.get(global_id);
+        let global_span = typed_global.span;
         let is_external = typed_global.is_external;
         let parsed_expr = typed_global.parsed_expr;
         let scope_id = typed_global.parent_scope;
@@ -466,29 +475,25 @@ impl TypedProgram {
         let value_expr_id = if is_external {
             match parsed_expr {
                 None => {
-                    // Evaluated, but there is no compile-time value: storage arrives at
-                    // link time. Recording this keeps evaluation one-shot
                     self.globals.get_mut(global_id).initial_value = GlobalInitialValue::Uninit;
                     return Ok(());
                 }
                 Some(_id) => {
-                    kbail!(self, parsed_global.span, "External globals cannot have initializers");
+                    kbail!(self, global_span, "External globals cannot have initializers");
                 }
             }
         } else {
             match parsed_expr {
-                None => kbail!(self, parsed_global.span, "Global has no initializer"),
+                None => kbail!(self, global_span, "non-extern global cannot be uninit"),
                 Some(id) => id,
             }
         };
-
-        let global_name = parsed_global.name;
-        let global_span = parsed_global.span;
 
         let expected_type_for_execution = self.get_type_family_type(declared_type);
 
         let static_value_id = if let ParsedExpr::Builtin(span) = self.ast.exprs.get(value_expr_id) {
             let span = *span;
+            let global_name = self.variables.get(variable_id).name;
             self.eval_builtin_global(global_name, scope_id, expected_type_for_execution, span)?
         } else if let ParsedExpr::Call(call) = self.ast.exprs.get(value_expr_id)
             && call.name.name == self.ast.idents.b.module_params
@@ -518,6 +523,7 @@ impl TypedProgram {
         match self.get_static_type_of_type(declared_type) {
             None => {
                 if let Err(msg) = self.check_types(declared_type, static_value_type_id, scope_id) {
+                    let global_name = self.variables.get(variable_id).name;
                     kbail!(self, global_span, "Type mismatch for global {}: {}", global_name, msg);
                 }
             }
@@ -1560,8 +1566,7 @@ impl TypedProgram {
             match kind {
                 ParseAdHocKind::Expr => match p.expect_expression() {
                     Err(e) => Err(make_message(
-                        &p.ast.idents,
-                        format!("{msg_base}{e}"),
+                        p.ast.idents.intern(format!("{msg_base}{e}")),
                         e.span(),
                         MessageLevel::Error,
                     )),
@@ -1570,8 +1575,7 @@ impl TypedProgram {
                             let e = p.ast.errors.last().unwrap().clone();
                             let src = p.source().content(&p.ast.mem);
                             Err(make_message(
-                                &p.ast.idents,
-                                format!("{msg_base}{e}\n{src}"),
+                                p.ast.idents.intern(format!("{msg_base}{e}\n{src}")),
                                 e.span(),
                                 MessageLevel::Error,
                             ))
@@ -1586,8 +1590,7 @@ impl TypedProgram {
                         let e = p.ast.errors.last().unwrap().clone();
                         let src = p.source().content(&p.ast.mem);
                         Err(make_message(
-                            &p.ast.idents,
-                            format!("{msg_base}{e}\n{src}"),
+                            p.ast.idents.intern(format!("{msg_base}{e}\n{src}")),
                             e.span(),
                             MessageLevel::Error,
                         ))

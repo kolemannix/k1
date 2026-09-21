@@ -125,19 +125,24 @@ impl TypedProgram {
 
     // Errors and logging
 
-    pub fn message_to_anyhow(&self, e: K1Message) -> anyhow::Error {
+    pub fn anyhow_from_message(&self, e: K1Message) -> anyhow::Error {
         anyhow::anyhow!("{}: {}", e.level, self.ident_str(e.message))
     }
 
-    pub fn make_error(&self, message: impl AsRef<str>, span: SpanId) -> K1Message {
-        make_message(&self.ast.idents, message, span, MessageLevel::Error)
+    pub fn error_from_anyhow(&self, e: anyhow::Error, span: SpanId) -> K1Message {
+        let string_id = self.ast.idents.intern(format!("{e}"));
+        self.make_error(string_id, span)
     }
 
-    pub fn make_warning(&self, message: impl AsRef<str>, span: SpanId) -> K1Message {
-        make_message(&self.ast.idents, message, span, MessageLevel::Warn)
+    pub fn make_error(&self, message: StringId, span: SpanId) -> K1Message {
+        make_message(message, span, MessageLevel::Error)
     }
 
-    pub fn make_fail<A>(&self, message: impl AsRef<str>, span: SpanId) -> K1Result<A> {
+    pub fn make_warning(&self, message: StringId, span: SpanId) -> K1Message {
+        make_message(message, span, MessageLevel::Warn)
+    }
+
+    pub fn make_fail<A>(&self, message: StringId, span: SpanId) -> K1Result<A> {
         Err(self.make_error(message, span))
     }
 

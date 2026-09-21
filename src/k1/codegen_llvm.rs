@@ -514,7 +514,7 @@ pub fn run_passes(module: &LlvmModule, machine: &TargetMachine, pipeline: Pipeli
         Pipeline::ThinLtoPreLink => "thinlto-pre-link<O3>",
         // Default builds, not optimized but not debug
         Pipeline::Dev => {
-            "function(mem2reg,instcombine<no-verify-fixpoint;max-iterations=1>,simplifycfg),mergefunc"
+            "always-inline,function(mem2reg,instcombine<no-verify-fixpoint;max-iterations=1>,simplifycfg),mergefunc"
         }
     };
     module.run_passes(text, machine, options).unwrap();
@@ -935,7 +935,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         Ok(())
     }
 
-    fn inst_function_refs(k1: &TypedProgram, inst: &Inst, refs: &mut Vec<FunctionId>) {
+    fn collect_inst_function_refs(k1: &TypedProgram, inst: &Inst, refs: &mut Vec<FunctionId>) {
         if let Inst::Call { call_id } = inst {
             match k1.ir.calls.get(*call_id).callee {
                 IrCallee::Direct(id)
@@ -951,7 +951,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         });
     }
 
-    fn live_successors(ir: &ProgramIr, block_id: BlockId, out: &mut Vec<BlockId>) {
+    fn collect_block_live_successors(ir: &ProgramIr, block_id: BlockId, out: &mut Vec<BlockId>) {
         let block = &ir.mem.get(block_id).data;
         if block.instrs.last.is_nil() {
             return;
@@ -975,7 +975,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
     }
 
-    fn walk_functions(k1: &TypedProgram, roots: &[FunctionId]) -> Vec<FunctionId> {
+    fn collect_reachable_functions(k1: &TypedProgram, roots: &[FunctionId]) -> Vec<FunctionId> {
         let mut reachable: Vec<FunctionId> = Vec::with_capacity(1024);
         let mut seen: FxHashSet<FunctionId> = FxHashSet::with_capacity(1024);
         let mut worklist: Vec<FunctionId> = roots.to_vec();
@@ -998,36 +998,39 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 }
                 let block = &k1.ir.mem.get(block_id).data;
                 for inst_id in k1.ir.mem.dlist_iter(block.instrs) {
-                    Cg::inst_function_refs(k1, k1.ir.instrs.get(*inst_id), &mut worklist);
+                    Cg::collect_inst_function_refs(k1, k1.ir.instrs.get(*inst_id), &mut worklist);
                 }
-                Cg::live_successors(&k1.ir, block_id, &mut block_worklist);
+                Cg::collect_block_live_successors(&k1.ir, block_id, &mut block_worklist);
             }
         }
         reachable
     }
 
-    pub fn prepare_ir(k1: &mut TypedProgram, roots: &[FunctionId]) -> K1Result<Vec<FunctionId>> {
-        let mut roots = roots.to_vec();
+    pub fn prepare_ir(
+        k1: &mut TypedProgram,
+        roots: &mut Vec<FunctionId>,
+    ) -> K1Result<Vec<FunctionId>> {
+        let mut compiler_required_k1_fns = vec!["crash-div"];
         if k1.namespaces.iter().any(|ns| ns.reload) {
-            let crash_ident = k1.ast.idents.intern("crash-unloaded-ns");
-            let Some(crash_id) = k1.scopes.find_function_local(k1.scopes.k1_scope_id, crash_ident)
-            else {
-                kbail!(k1, SpanId::NONE, "core is missing fn k1/crash-unloaded-ns");
-            };
-            roots.push(crash_id);
+            compiler_required_k1_fns.push("crash-unloaded-ns");
         }
-        let roots = &roots;
-        for root in roots {
+        for name in compiler_required_k1_fns {
+            let Some(id) = Cg::find_k1_ns_fn(k1, name) else {
+                kbail!(k1, SpanId::NONE, "core is missing fn k1/{name}");
+            };
+            roots.push(id);
+        }
+        for root in roots.iter() {
             let requester = k1.trace.top();
             k1.ir.units_pending_compile.push(*root, requester);
         }
         k1.compile_all_pending_ir(SpanId::NONE)?;
         if k1.config.optimize {
-            for root in roots {
+            for root in roots.iter() {
                 ir::optimize_unit(k1, IrUnitId::Function(*root))?;
             }
         }
-        let reachable = Cg::walk_functions(k1, roots);
+        let reachable = Cg::collect_reachable_functions(k1, roots);
         k1.compute_all_physical_types();
         Ok(reachable)
     }
@@ -1039,7 +1042,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 roots.push(function_id);
             }
         }
-        let reachable = Cg::prepare_ir(k1, &roots)?;
+        let reachable = Cg::prepare_ir(k1, &mut roots)?;
         Ok(CodegenRoots { main: None, program_exit: None, exports: vec![], reachable })
     }
 
@@ -1087,7 +1090,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         roots.extend(main);
         roots.extend(program_exit);
         roots.extend_from_slice(&exports);
-        let reachable = Cg::prepare_ir(k1, &roots)?;
+        let reachable = Cg::prepare_ir(k1, &mut roots)?;
         Ok(CodegenRoots { main, program_exit, exports, reachable })
     }
 
@@ -1568,15 +1571,109 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         global
     }
 
-    fn crash_unloaded_fn_value(&mut self) -> CgResult<FunctionValue<'ctx>> {
-        let Some(not_loaded_fn_id) =
-            self.k1.ast.idents.lookup("crash-unloaded-ns").and_then(|ident| {
-                self.k1.scopes.find_function_local(self.k1.scopes.k1_scope_id, ident)
-            })
-        else {
-            cgbail!(SpanId::NONE, "core is missing fn k1/crash-unloaded-ns");
+    fn find_k1_ns_fn(k1: &TypedProgram, name: &str) -> Option<FunctionId> {
+        let ident = k1.ast.idents.lookup(name)?;
+        k1.scopes.find_function_local(k1.scopes.k1_scope_id, ident)
+    }
+
+    fn k1_ns_fn_value(&mut self, name: &str) -> CgResult<FunctionValue<'ctx>> {
+        let Some(function_id) = Cg::find_k1_ns_fn(self.k1, name) else {
+            cgbail!(SpanId::NONE, "core is missing fn k1/{name}");
         };
-        self.declare_llvm_function(not_loaded_fn_id)
+        self.declare_llvm_function(function_id)
+    }
+
+    fn int_div_helper(
+        &mut self,
+        int_type: IntType<'ctx>,
+        signed: bool,
+        rem: bool,
+    ) -> CgResult<FunctionValue<'ctx>> {
+        let name = format!(
+            "__k1_{}{}_i{}",
+            if signed { "s" } else { "u" },
+            if rem { "rem" } else { "div" },
+            int_type.get_bit_width()
+        );
+        if let Some(f) = self.llvm_module.get_function(&name) {
+            return Ok(f);
+        }
+        let crash_fn = self.k1_ns_fn_value("crash-div")?;
+        let fn_type = int_type.fn_type(&[int_type.into(), int_type.into()], false);
+        let f = self.llvm_module.add_function(&name, fn_type, Some(LlvmLinkage::Private));
+        f.add_attribute(AttributeLoc::Function, self.make_enum_attribute("alwaysinline", 0));
+        f.add_attribute(AttributeLoc::Function, self.make_enum_attribute("nounwind", 0));
+        let saved_block = self.builder.get_insert_block();
+        let saved_loc = self.builder.get_current_debug_location();
+        self.builder.unset_current_debug_location();
+
+        let entry_block = self.ctx.append_basic_block(f, "entry");
+        self.builder.position_at_end(entry_block);
+        let lhs = f.get_nth_param(0).unwrap().into_int_value();
+        let rhs = f.get_nth_param(1).unwrap().into_int_value();
+        let is_zero = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, rhs, int_type.const_zero(), "div_zero")
+            .unwrap();
+        let bad = if signed {
+            let min = int_type.const_int(1u64 << (int_type.get_bit_width() - 1), false);
+            let is_neg_one = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, rhs, int_type.const_all_ones(), "")
+                .unwrap();
+            let is_min = self.builder.build_int_compare(IntPredicate::EQ, lhs, min, "").unwrap();
+            let overflow = self.builder.build_and(is_neg_one, is_min, "div_overflow").unwrap();
+            self.builder.build_or(is_zero, overflow, "div_bad").unwrap()
+        } else {
+            is_zero
+        };
+        let crash_block = self.ctx.append_basic_block(f, "crash");
+        let ok_block = self.ctx.append_basic_block(f, "ok");
+        self.builder.build_conditional_branch(bad, crash_block, ok_block).unwrap();
+
+        self.builder.position_at_end(crash_block);
+        let is_zero_bool = self.i1_to_bool(is_zero, "");
+        self.builder
+            .build_call(crash_fn, &[is_zero_bool.into()], "")
+            .unwrap()
+            .set_call_convention(crash_fn.get_call_conventions());
+        self.builder.build_unreachable().unwrap();
+
+        self.builder.position_at_end(ok_block);
+        let result = match (signed, rem) {
+            (false, false) => self.builder.build_int_unsigned_div(lhs, rhs, "").unwrap(),
+            (true, false) => self.builder.build_int_signed_div(lhs, rhs, "").unwrap(),
+            (false, true) => self.builder.build_int_unsigned_rem(lhs, rhs, "").unwrap(),
+            (true, true) => self.builder.build_int_signed_rem(lhs, rhs, "").unwrap(),
+        };
+        self.builder.build_return(Some(&result)).unwrap();
+
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        if let Some(loc) = saved_loc {
+            self.builder.set_current_debug_location(loc);
+        }
+        Ok(f)
+    }
+
+    fn build_checked_int_div(
+        &mut self,
+        lhs: IntValue<'ctx>,
+        rhs: IntValue<'ctx>,
+        signed: bool,
+        rem: bool,
+    ) -> CgResult<IntValue<'ctx>> {
+        let helper = self.int_div_helper(lhs.get_type(), signed, rem)?;
+        let call = self.builder.build_call(helper, &[lhs.into(), rhs.into()], "").unwrap();
+        Ok(call.try_as_basic_value().basic().unwrap().into_int_value())
+    }
+
+    fn build_shift_count(&self, count: IntValue<'ctx>, subject: IntValue<'ctx>) -> IntValue<'ctx> {
+        let count = self.cast_int_to_match(count, subject, "shift_magnitude_adjust");
+        let width = subject.get_type().get_bit_width() as u64;
+        let mask = subject.get_type().const_int(width - 1, false);
+        self.builder.build_and(count, mask, "shift_count").unwrap()
     }
 
     /// `ptr __k1_reload_global_load(slot, ns-name, global-name)`: acquire-load
@@ -1587,7 +1684,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         if let Some(f) = self.llvm_module.get_function("__k1_reload_global_load") {
             return Ok(f);
         }
-        let crash_fn = self.crash_unloaded_fn_value()?;
+        let crash_fn = self.k1_ns_fn_value("crash-unloaded-ns")?;
         let ptr_type = self.builtin_types.ptr;
         let fn_type = ptr_type.fn_type(&[ptr_type.into(), ptr_type.into(), ptr_type.into()], false);
         let f = self.llvm_module.add_function(
@@ -1712,7 +1809,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.builder.build_conditional_branch(is_null, unloaded_block, call_block).unwrap();
 
         self.builder.position_at_end(unloaded_block);
-        let not_loaded_fv = self.crash_unloaded_fn_value()?;
+        let not_loaded_fv = self.k1_ns_fn_value("crash-unloaded-ns")?;
         let ns_cstr = self.cstring_constant(&ns_name);
         let fn_cstr = self.cstring_constant(&fn_name);
         self.builder
@@ -3652,6 +3749,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let count = self.resolve_value(inst_mappings, vop.rhs)?.into_int_value();
                 let elem_int_type = l.get_type().get_element_type().into_int_type();
                 let count = self.builder.build_int_cast(count, elem_int_type, "").unwrap();
+                let count_mask =
+                    elem_int_type.const_int(elem_int_type.get_bit_width() as u64 - 1, false);
+                let count = self.builder.build_and(count, count_mask, "shift_count").unwrap();
                 // Splat the uniform count across lanes
                 let i32t = self.ctx.i32_type();
                 let undef = l.get_type().get_undef();
@@ -4248,7 +4348,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Inst::IntAdd { lhs, rhs, .. } => {
                 let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
                 let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                // Should overflow trap? idk self.builder.build_int_nsw_add
                 let sum = self.builder.build_int_add(lhs_value, rhs_value, "").unwrap();
                 inst_mappings.insert(inst_id, sum.as_basic_value_enum());
                 Ok(())
@@ -4270,28 +4369,28 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Inst::IntDivUnsigned { lhs, rhs, .. } => {
                 let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
                 let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let div = self.builder.build_int_unsigned_div(lhs_value, rhs_value, "").unwrap();
+                let div = self.build_checked_int_div(lhs_value, rhs_value, false, false)?;
                 inst_mappings.insert(inst_id, div.as_basic_value_enum());
                 Ok(())
             }
             Inst::IntDivSigned { lhs, rhs, .. } => {
                 let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
                 let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let div = self.builder.build_int_signed_div(lhs_value, rhs_value, "").unwrap();
+                let div = self.build_checked_int_div(lhs_value, rhs_value, true, false)?;
                 inst_mappings.insert(inst_id, div.as_basic_value_enum());
                 Ok(())
             }
             Inst::IntRemUnsigned { lhs, rhs, .. } => {
                 let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
                 let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let rem = self.builder.build_int_unsigned_rem(lhs_value, rhs_value, "").unwrap();
+                let rem = self.build_checked_int_div(lhs_value, rhs_value, false, true)?;
                 inst_mappings.insert(inst_id, rem.as_basic_value_enum());
                 Ok(())
             }
             Inst::IntRemSigned { lhs, rhs, .. } => {
                 let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
                 let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let rem = self.builder.build_int_signed_rem(lhs_value, rhs_value, "").unwrap();
+                let rem = self.build_checked_int_div(lhs_value, rhs_value, true, true)?;
                 inst_mappings.insert(inst_id, rem.as_basic_value_enum());
                 Ok(())
             }
@@ -4382,8 +4481,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Inst::BitShiftLeft { lhs, rhs, .. } => {
                 let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
                 let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let rhs_casted =
-                    self.cast_int_to_match(rhs_value, lhs_value, "shift_magnitude_adjust");
+                let rhs_casted = self.build_shift_count(rhs_value, lhs_value);
 
                 let shl = self.builder.build_left_shift(lhs_value, rhs_casted, "").unwrap();
                 inst_mappings.insert(inst_id, shl.as_basic_value_enum());
@@ -4392,8 +4490,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Inst::BitUnsignedShiftRight { lhs, rhs, .. } => {
                 let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
                 let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let rhs_casted =
-                    self.cast_int_to_match(rhs_value, lhs_value, "shift_magnitude_adjust");
+                let rhs_casted = self.build_shift_count(rhs_value, lhs_value);
                 let lshr =
                     self.builder.build_right_shift(lhs_value, rhs_casted, false, "").unwrap();
                 inst_mappings.insert(inst_id, lshr.as_basic_value_enum());
@@ -4402,8 +4499,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Inst::BitSignedShiftRight { lhs, rhs, .. } => {
                 let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
                 let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let rhs_casted =
-                    self.cast_int_to_match(rhs_value, lhs_value, "shift_magnitude_adjust");
+                let rhs_casted = self.build_shift_count(rhs_value, lhs_value);
                 let ashr = self.builder.build_right_shift(lhs_value, rhs_casted, true, "").unwrap();
                 inst_mappings.insert(inst_id, ashr.as_basic_value_enum());
                 Ok(())
@@ -4609,7 +4705,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 .add_attribute(AttributeLoc::Function, self.make_enum_attribute("noreturn", 0));
         }
         if ir_fn.fn_type.diverges || self.k1.get_function(function_id).is_cold() {
-            function_value.add_attribute(AttributeLoc::Function, self.make_enum_attribute("cold", 0));
+            function_value
+                .add_attribute(AttributeLoc::Function, self.make_enum_attribute("cold", 0));
         }
 
         if self.k1.config.target.arch() == compiler::Arch::Wasm {
@@ -4700,14 +4797,20 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     ) -> AbiParamMapping {
         let native = self.get_native_abi_mapping_for_type(pt, is_return);
         match native {
-            AbiParamMapping::BigStructByPtrToCopy { .. } if abi == AbiMode::Internal && !is_return => {
+            AbiParamMapping::BigStructByPtrToCopy { .. }
+                if abi == AbiMode::Internal && !is_return =>
+            {
                 AbiParamMapping::BigStructByPtr
             }
             other => other,
         }
     }
 
-    fn get_native_abi_mapping_for_type(&self, pt: PhysicalType, is_return: bool) -> AbiParamMapping {
+    fn get_native_abi_mapping_for_type(
+        &self,
+        pt: PhysicalType,
+        is_return: bool,
+    ) -> AbiParamMapping {
         enum CallConv {
             AMD64,
             ARM64,
@@ -5195,7 +5298,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
 
             let mut successors = Vec::with_capacity(4);
-            Cg::live_successors(ir, b, &mut successors);
+            Cg::collect_block_live_successors(ir, b, &mut successors);
             for succ in successors {
                 dfs(ir, succ, seen, result);
             }

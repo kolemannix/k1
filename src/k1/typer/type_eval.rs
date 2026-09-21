@@ -325,16 +325,19 @@ impl TypedProgram {
         if self.type_defn_context.stack.is_empty() {
             self.finish_type_defn_cluster()
         }
-        if let Some(idx) = self
-            .types_pending_definition
-            .iter()
-            .position(|tpd| tpd.parsed_id == parsed_type_defn_id)
-        {
-            // eprintln!("removing pending defn {idx} {}", self.ident_str(name));
-            self.types_pending_definition.remove(idx);
-        } else {
-            self.ice_span(parsed_type_defn.span, "the type we defined was not pending")
-        }
+
+        // nocommit we're killing this
+        // if let Some(idx) = self
+        //     .types_pending_definition
+        //     .iter()
+        //     .position(|tpd| tpd.parsed_id == parsed_type_defn_id)
+        // {
+        //     // eprintln!("removing pending defn {idx} {}", self.ident_str(name));
+        //     self.types_pending_definition.remove(idx);
+        // } else {
+        //     self.ice_span(parsed_type_defn.span, "the type we defined was not pending")
+        // }
+
         Ok(type_id)
     }
 
@@ -1483,17 +1486,16 @@ impl TypedProgram {
             },
             None => match self.find_pending_global_namespaced(scope_id, name)? {
                 Some((parsed_id, defn_scope)) => {
-                    if self.declare_global(parsed_id, defn_scope)?.is_none() {
-                        return Ok(None);
+                    match self.declare_global(parsed_id, defn_scope)? {
+                        None => return Ok(None),
+                        Some(global_id) => global_id,
                     }
-                    *self.global_ast_mappings.get(&parsed_id).unwrap()
                 }
                 None => return Ok(None),
             },
         };
         if self.globals.get(global_id).initial_value.is_pending() {
-            let ast_id = self.globals.get(global_id).ast_id;
-            self.eval_global_body(ast_id)?;
+            self.eval_global_body(global_id)?;
         }
         let g = self.globals.get(global_id);
         if !g.is_constant {

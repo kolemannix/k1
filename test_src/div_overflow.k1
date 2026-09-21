@@ -1,0 +1,5 @@
+fn main(): i32 {
+  let d = -1i8
+  (-128i8 % d).widen[i32]
+}
+//abortmsg: Integer division overflow: min-value / -1

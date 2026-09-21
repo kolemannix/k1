@@ -1376,13 +1376,6 @@ impl<Tag: 'static> Mem<Tag> {
 }
 
 #[macro_export]
-macro_rules! mformat {
-    ($mem:expr, $($arg:tt)*) => {
-        $mem.format_str(format_args!($($arg)*))
-    };
-}
-
-#[macro_export]
 macro_rules! k1_format_user {
     ($k1:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {{
         $crate::k1_format!($k1, &$crate::typer::dump::K1DisplayArgs::user_facing(), $fmt, $($arg),*)
@@ -1390,10 +1383,19 @@ macro_rules! k1_format_user {
 }
 
 #[macro_export]
+macro_rules! k1_format_to_string {
+    ($k1:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {{
+        let mstr = k1_format_user($k1, $fmt, $($arg),*);
+        mstr.as_str().to_string()
+    }};
+}
+
+#[macro_export]
 macro_rules! kerr {
     ($k1:expr, $span:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {{
         let msg = $crate::k1_format_user!($k1, $fmt, $($arg),*);
-        $k1.make_error(&msg, $span)
+        let msg_id = $k1.ast.idents.intern(msg);
+        $k1.make_error(msg_id, $span)
     }}
 }
 
@@ -1401,7 +1403,8 @@ macro_rules! kerr {
 macro_rules! kwarn {
     ($k1:expr, $span:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {{
         let msg = $crate::k1_format_user!($k1, $fmt, $($arg),*);
-        $k1.make_warning(&msg, $span)
+        let msg_id = $k1.ast.idents.intern(msg);
+        $k1.make_warning(msg_id, $span)
     }}
 }
 

@@ -33,7 +33,7 @@ type wrapper = { value: int }
   fn yes(self): int { 999 }
 }
 
-#if MY_VALUE_NEG fn gone(): int { crash("does not compile") }
+#if MY_VALUE_NEG fn gone(): int { crash(undefined-symbol) }
 #if MY_VALUE fn here(): int { 42 }
 
 fn pick[t](): int {

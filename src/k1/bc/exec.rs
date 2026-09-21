@@ -802,7 +802,11 @@ fn exec_loop(
                 if rhs == 0 {
                     vmerr!("Division by zero");
                 }
-                let r = casted_iop!(width, wrapping_div, lhs, rhs);
+                if signed_div_overflows(width, lhs, rhs) {
+                    vmerr!("Integer division overflow: min-value / -1");
+                }
+                use std::ops::Div;
+                let r = casted_iop!(width, div, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r as u64));
                 advance!(Opcode::IntDivS);
             }
@@ -825,7 +829,11 @@ fn exec_loop(
                 if rhs == 0 {
                     vmerr!("Division by zero");
                 }
-                let r = casted_iop!(width, wrapping_rem, lhs, rhs);
+                if signed_div_overflows(width, lhs, rhs) {
+                    vmerr!("Integer division overflow: min-value / -1");
+                }
+                use std::ops::Rem;
+                let r = casted_iop!(width, rem, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r as u64));
                 advance!(Opcode::IntRemS);
             }
@@ -934,7 +942,7 @@ fn exec_loop(
             Opcode::Shl => {
                 let width = header_a(h);
                 let lhs = read_src!(operand!(1)).bits();
-                let rhs = read_src!(operand!(2)).as_u32();
+                let rhs = read_src!(operand!(2)).as_u32() & (width as u32 - 1);
                 use std::ops::Shl;
                 let r = casted_uop!(width, shl, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r));
@@ -943,7 +951,7 @@ fn exec_loop(
             Opcode::ShrU => {
                 let width = header_a(h);
                 let lhs = read_src!(operand!(1)).bits();
-                let rhs = read_src!(operand!(2)).as_u32();
+                let rhs = read_src!(operand!(2)).as_u32() & (width as u32 - 1);
                 use std::ops::Shr;
                 let r = casted_uop!(width, shr, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r));
@@ -952,7 +960,7 @@ fn exec_loop(
             Opcode::ShrS => {
                 let width = header_a(h);
                 let lhs = read_src!(operand!(1)).bits();
-                let rhs = read_src!(operand!(2)).as_u32();
+                let rhs = read_src!(operand!(2)).as_u32() & (width as u32 - 1);
                 use std::ops::Shr;
                 let r = casted_iop!(width, shr, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r as u64));
@@ -1087,6 +1095,12 @@ fn exec_cast(kind: CastKind, from: u32, to: u32, input: Value) -> Value {
             Value::f64(f)
         }
     }
+}
+
+fn signed_div_overflows(width: u8, lhs: u64, rhs: u64) -> bool {
+    let mask = if width == 64 { u64::MAX } else { (1u64 << width) - 1 };
+    let min = 1u64 << (width - 1);
+    (rhs & mask) == mask && (lhs & mask) == min
 }
 
 fn int_cmp(width: u8, pred: ir::IntCmpPred, lhs: u64, rhs: u64) -> bool {
