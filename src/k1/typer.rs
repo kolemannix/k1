@@ -2786,6 +2786,7 @@ pub struct TypedProgram {
     pub functions: VPool<TypedFunction, FunctionId>,
     /// (parent function, type args, fnlike type args) -> specialized function.
     /// Rebuilt from `functions` on snapshot restore
+    // nocommit look into resizing of this map too
     pub function_specializations:
         ahash::HashMap<(FunctionId, TypeSliceId, TypeSliceId), FunctionId>,
 
@@ -17799,20 +17800,20 @@ impl TypedProgram {
         }
 
         debug!(">> Pass 0 discover and resolve uses");
-        let pass = self.trace_push(TraceKind::TyperPass, 0, 0);
+        let pass = self.trace_push(TraceKind::PassUses, module_id.as_u32(), 0);
         self.discover_uses_in_namespace(module_root_parsed_namespace, skip_defns, false, false);
         self.resolve_pending_uses();
         self.trace_pop(pass);
 
         debug!(">> Pass 1 declare namespaces and run global #meta programs");
-        let pass = self.trace_push(TraceKind::TyperPass, 1, 0);
+        let pass = self.trace_push(TraceKind::PassNamespaces, module_id.as_u32(), 0);
         self.declare_namespaces_in_namespace(module_root_parsed_namespace, skip_defns);
         self.trace_pop(pass);
         check_for_errors!("namespace declaration");
 
         // Pending Type declaration phase
         debug!(">> Pass 2 declare types, abilities and impls");
-        let pass = self.trace_push(TraceKind::TyperPass, 2, 0);
+        let pass = self.trace_push(TraceKind::PassTypes, module_id.as_u32(), 0);
         self.discover_uses_in_namespace(module_root_parsed_namespace, skip_defns, true, true);
 
         // If we resolve uses this early in core, we evaluate the builtin types out of the expected order
@@ -17868,7 +17869,7 @@ impl TypedProgram {
 
         // Everything else declaration phase
         debug!(">> Pass 4 declare rest of definitions (functions, globals)");
-        let pass = self.trace_push(TraceKind::TyperPass, 3, 0);
+        let pass = self.trace_push(TraceKind::PassDeclarations, module_id.as_u32(), 0);
         self.declare_namespace_definitions(module_root_parsed_namespace, skip_defns);
         self.trace_pop(pass);
         check_for_errors!("general declaration");
@@ -17898,7 +17899,7 @@ impl TypedProgram {
         );
 
         debug!(">> Pass 5 bodies (functions, globals, abilities, non-metaprogram statics)");
-        let pass = self.trace_push(TraceKind::TyperPass, 4, 0);
+        let pass = self.trace_push(TraceKind::PassBodies, module_id.as_u32(), 0);
         self.compile_ns_body(module_root_parsed_namespace, skip_defns);
         self.trace_pop(pass);
 

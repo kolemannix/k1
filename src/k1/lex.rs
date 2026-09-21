@@ -102,28 +102,29 @@ impl Display for LexError {
 }
 impl std::error::Error for LexError {}
 
+pub const TOKEN_LOOKAHEAD: usize = 2;
+
 pub struct TokenIter<'toks> {
     cursor: usize,
+    end: usize,
     tokens: &'toks [Token],
 }
 
 impl<'toks> TokenIter<'toks> {
     pub fn make(data: &'toks [Token]) -> TokenIter<'toks> {
-        // peek_n clamps every index onto the final token instead of
-        // bounds-checking, so the stream must end with an EOF sentinel
-        // (Lexer::run guarantees this).
+        let end = data.len() - (TOKEN_LOOKAHEAD + 1);
         assert!(
-            data.last().is_some_and(|t| t.kind == TokenKind::Eof),
-            "TokenIter requires an EOF-terminated token stream"
+            data[end..].iter().all(|t| t.kind == TokenKind::Eof),
+            "TokenIter requires an EOF-padded token stream"
         );
-        TokenIter { cursor: 0, tokens: data }
+        TokenIter { cursor: 0, end, tokens: data }
     }
 
     #[inline]
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Token {
         let tok = self.peek_n(0);
-        self.cursor += 1;
+        self.advance();
         tok
     }
 
@@ -133,29 +134,18 @@ impl<'toks> TokenIter<'toks> {
 
     #[inline]
     pub fn advance_n(&mut self, n: usize) {
-        self.cursor += n
+        self.cursor = (self.cursor + n).min(self.end);
     }
 
     #[inline]
     pub fn advance(&mut self) {
-        self.cursor += 1;
+        self.advance_n(1);
     }
 
     #[inline]
-    pub fn retreat(&mut self) {
-        self.cursor -= 1;
-    }
-
-    #[inline]
-    pub fn peek_n(&self, n: i64) -> Token {
-        // Branchless: any out-of-range index, including a negative `pos`,
-        // which wraps to a huge usize, clamps onto the trailing EOF
-        // sentinel. Compiles to cmp/cmov/load with no EOF fallback branch.
-        let pos = self.cursor.wrapping_add(n as usize);
-        let idx = pos.min(self.tokens.len() - 1);
-        // SAFETY: `make` asserts `tokens` is non-empty, so `len - 1` cannot
-        // wrap and `idx` is always in bounds.
-        unsafe { *self.tokens.get_unchecked(idx) }
+    pub fn peek_n(&self, n: usize) -> Token {
+        debug_assert!(n <= TOKEN_LOOKAHEAD);
+        unsafe { *self.tokens.get_unchecked(self.cursor + n) }
     }
 
     #[inline]
@@ -175,7 +165,8 @@ impl<'toks> TokenIter<'toks> {
 
     #[inline]
     pub fn peek_back(&self) -> Token {
-        self.peek_n(-1)
+        let idx = self.cursor.wrapping_sub(1).min(self.end);
+        unsafe { *self.tokens.get_unchecked(idx) }
     }
 }
 
@@ -764,9 +755,9 @@ impl<'content> Lexer<'content> {
                 Err(e) => break Err(e),
             }
         };
-        // Terminate with an EOF sentinel even on error; TokenIter's branchless
-        // peeks clamp onto it instead of bounds-checking every access.
-        tokens.push(EOF_TOKEN);
+        for _ in 0..=TOKEN_LOOKAHEAD {
+            tokens.push(EOF_TOKEN);
+        }
         result
     }
 
@@ -1223,7 +1214,7 @@ fn is_numeric_char(c: char) -> bool {
 
 #[cfg(test)]
 mod test {
-    use crate::lex::{Spans, Token, TokenKind as K, TokenTriviaKind, lex};
+    use crate::lex::{Lexed, Spans, TOKEN_LOOKAHEAD, Token, TokenKind as K, TokenTriviaKind, lex};
 
     #[test]
     fn byte_class_matches_char_methods() {
@@ -1237,12 +1228,17 @@ mod test {
         }
     }
 
-    fn set_up(input: &str) -> anyhow::Result<(Spans, Vec<Token>)> {
-        let lexed = lex(input, vec![]);
+    fn lex_ok(input: &str) -> anyhow::Result<Lexed> {
+        let mut lexed = lex(input, vec![]);
         if let Some(e) = lexed.error {
             anyhow::bail!("{}", e.message);
         }
-        Ok((Spans::new(), lexed.tokens))
+        lexed.tokens.truncate(lexed.tokens.len() - TOKEN_LOOKAHEAD);
+        Ok(lexed)
+    }
+
+    fn set_up(input: &str) -> anyhow::Result<(Spans, Vec<Token>)> {
+        Ok((Spans::new(), lex_ok(input)?.tokens))
     }
 
     fn expect_token_kinds(input: &str, expected: Vec<K>) -> anyhow::Result<()> {
@@ -1355,8 +1351,7 @@ mod test {
         // <test harness> expected output
         //
         "#;
-        let lexed = lex(input, vec![]);
-        assert!(lexed.error.is_none());
+        let lexed = lex_ok(input)?;
         let (tokens, trivia) = (lexed.tokens, lexed.trivia);
 
         let mut kinds: Vec<K> = Vec::with_capacity(tokens.len());

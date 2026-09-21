@@ -23,7 +23,11 @@ pub enum TraceKind {
     SetupStamp,
     SetupFn,
     ModuleCompile,
-    TyperPass,
+    PassUses,
+    PassNamespaces,
+    PassTypes,
+    PassDeclarations,
+    PassBodies,
     SnapRestore,
     SnapRestoreSection,
     SnapRoundtrip,
@@ -55,14 +59,18 @@ pub enum TraceKind {
 }
 
 impl TraceKind {
-    pub const ALL: [TraceKind; 35] = [
+    pub const ALL: [TraceKind; 39] = [
         TraceKind::ModuleDiscover,
         TraceKind::ModuleRead,
         TraceKind::Parse,
         TraceKind::SetupStamp,
         TraceKind::SetupFn,
         TraceKind::ModuleCompile,
-        TraceKind::TyperPass,
+        TraceKind::PassUses,
+        TraceKind::PassNamespaces,
+        TraceKind::PassTypes,
+        TraceKind::PassDeclarations,
+        TraceKind::PassBodies,
         TraceKind::SnapRestore,
         TraceKind::SnapRestoreSection,
         TraceKind::SnapRoundtrip,
@@ -101,7 +109,11 @@ impl TraceKind {
             TraceKind::SetupStamp => "setup stamp",
             TraceKind::SetupFn => "setup",
             TraceKind::ModuleCompile => "module",
-            TraceKind::TyperPass => "typer pass",
+            TraceKind::PassUses => "pass uses",
+            TraceKind::PassNamespaces => "pass namespaces",
+            TraceKind::PassTypes => "pass types",
+            TraceKind::PassDeclarations => "pass declarations",
+            TraceKind::PassBodies => "pass bodies",
             TraceKind::SnapRestore => "restore",
             TraceKind::SnapRestoreSection => "restore section",
             TraceKind::SnapRoundtrip => "snapshot roundtrip",
@@ -147,7 +159,11 @@ impl TraceKind {
             | TraceKind::SetupStamp
             | TraceKind::SetupFn
             | TraceKind::ModuleCompile
-            | TraceKind::TyperPass
+            | TraceKind::PassUses
+            | TraceKind::PassNamespaces
+            | TraceKind::PassTypes
+            | TraceKind::PassDeclarations
+            | TraceKind::PassBodies
             | TraceKind::SnapRestore
             | TraceKind::SnapRestoreSection
             | TraceKind::SnapRoundtrip
@@ -185,7 +201,11 @@ impl TraceKind {
                 | TraceKind::SetupStamp
                 | TraceKind::SetupFn
                 | TraceKind::ModuleCompile
-                | TraceKind::TyperPass
+                | TraceKind::PassUses
+                | TraceKind::PassNamespaces
+                | TraceKind::PassTypes
+                | TraceKind::PassDeclarations
+                | TraceKind::PassBodies
                 | TraceKind::SnapRestore
                 | TraceKind::SnapRestoreSection
                 | TraceKind::SnapRoundtrip
@@ -211,7 +231,11 @@ impl TraceKind {
                 | TraceKind::SetupStamp
                 | TraceKind::SetupFn
                 | TraceKind::ModuleCompile
-                | TraceKind::TyperPass
+                | TraceKind::PassUses
+                | TraceKind::PassNamespaces
+                | TraceKind::PassTypes
+                | TraceKind::PassDeclarations
+                | TraceKind::PassBodies
                 | TraceKind::SnapRestore
                 | TraceKind::SnapRestoreSection
                 | TraceKind::SnapRoundtrip
@@ -235,6 +259,19 @@ impl TraceKind {
                 | TraceKind::ReloadDylib
         )
     }
+
+    /// Position among the typer passes, for the progress fraction
+    pub fn pass_index(self) -> Option<u32> {
+        match self {
+            TraceKind::PassUses => Some(0),
+            TraceKind::PassNamespaces => Some(1),
+            TraceKind::PassTypes => Some(2),
+            TraceKind::PassDeclarations => Some(3),
+            TraceKind::PassBodies => Some(4),
+            _ => None,
+        }
+    }
+    pub const PASS_COUNT: u32 = 5;
 
     /// What `data_count` counts for this kind, if anything
     pub fn data_label(self) -> Option<&'static str> {
@@ -263,8 +300,6 @@ pub const RESTORE_SECTIONS: [&str; 11] = [
     "namespaces",
     "ir",
 ];
-
-pub const PASS_NAMES: [&str; 5] = ["uses", "namespaces", "types", "declarations", "bodies"];
 
 pub fn restore_section(name: &str) -> u32 {
     RESTORE_SECTIONS.iter().position(|s| *s == name).unwrap() as u32
@@ -557,8 +592,8 @@ impl TypedProgram {
         let mut pass_fraction = 0.0;
         for id in self.trace.stack() {
             let frame = self.trace.frames.get(*id);
-            if frame.kind == TraceKind::TyperPass {
-                pass_fraction = frame.key as f64 / PASS_NAMES.len() as f64;
+            if let Some(i) = frame.kind.pass_index() {
+                pass_fraction = i as f64 / TraceKind::PASS_COUNT as f64;
             }
         }
         let done = self.completed_module_count as f64 + pass_fraction;

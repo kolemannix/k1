@@ -2,9 +2,7 @@
 // All rights reserved.
 
 use super::*;
-use crate::typer::trace::{
-    FRAME_FLAG_EXPR_UNIT, FrameId, PASS_NAMES, RESTORE_SECTIONS, TraceFrame, TraceKind,
-};
+use crate::typer::trace::{FRAME_FLAG_EXPR_UNIT, FrameId, RESTORE_SECTIONS, TraceFrame, TraceKind};
 use fxhash::FxHashMap;
 
 impl TypedProgram {
@@ -376,7 +374,14 @@ impl TypedProgram {
             TraceKind::ModuleDiscover | TraceKind::SetupStamp | TraceKind::SetupFn => {
                 self.ident_str(StringId::from_u32(key).unwrap()).to_string()
             }
-            TraceKind::ModuleCompile | TraceKind::ModuleRead | TraceKind::SnapStore => {
+            TraceKind::ModuleCompile
+            | TraceKind::ModuleRead
+            | TraceKind::SnapStore
+            | TraceKind::PassUses
+            | TraceKind::PassNamespaces
+            | TraceKind::PassTypes
+            | TraceKind::PassDeclarations
+            | TraceKind::PassBodies => {
                 self.ident_str(self.modules.get(ModuleId::from_u32(key).unwrap()).name).to_string()
             }
             TraceKind::Parse => {
@@ -389,7 +394,6 @@ impl TypedProgram {
             | TraceKind::VmValueFerry => span_label(),
             TraceKind::SnapRestore => format!("{key} modules"),
             TraceKind::SnapRestoreSection => RESTORE_SECTIONS[key as usize].to_string(),
-            TraceKind::TyperPass => PASS_NAMES[key as usize].to_string(),
             TraceKind::SnapRoundtrip | TraceKind::Link | TraceKind::Archive => String::new(),
             TraceKind::FunctionTypecheck => {
                 let function_id = FunctionId::from_u32(key).unwrap();
