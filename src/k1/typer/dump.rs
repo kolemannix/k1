@@ -1384,7 +1384,7 @@ impl TypedProgram {
     }
 
     pub fn display_qident<W: Write + ?Sized>(&self, w: &mut W, ident: &QIdent) -> std::fmt::Result {
-        for ns in self.ast.mem.getn(ident.path) {
+        for ns in self.ast.mem.getn(ident.path(&self.ast.mem)) {
             self.write_ident(w, ns.name)?;
             write!(w, "/")?;
         }

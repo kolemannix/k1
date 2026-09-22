@@ -1500,7 +1500,7 @@ impl TypedProgram {
     ) -> K1Result<Option<(VariableId, ScopeId)>> {
         // Unqualified mentions are implicitly recursive searches
         // But qualified mentions imply that the targeted symbol lives directly at the given path!
-        if name.path.is_empty() {
+        if !name.has_path() {
             Ok(self.scopes.find_variable(scope, name.name))
         } else {
             let scope_to_search = self.resolve_qident(scope, name)?;
@@ -1519,7 +1519,7 @@ impl TypedProgram {
     ) -> K1Result<Option<FunctionId>> {
         // Unqualified mentions are implicitly recursive searches
         // But qualified mentions imply that the targeted symbol lives directly at the given path!
-        if name.path.is_empty() {
+        if !name.has_path() {
             Ok(self.scopes.find_function(scope, name.name))
         } else {
             let scope_to_search = self.resolve_qident(scope, name)?;
@@ -1534,7 +1534,7 @@ impl TypedProgram {
     ) -> K1Result<Option<(TypeId, ScopeId)>> {
         // Unqualified mentions are implicitly recursive searches
         // But qualified mentions imply that the targeted symbol lives directly at the given path!
-        if type_name.path.is_empty() {
+        if !type_name.has_path() {
             Ok(self.scopes.find_type(scope_id, type_name.name))
         } else {
             let scope_to_search = self.resolve_qident(scope_id, type_name)?;
@@ -1577,7 +1577,7 @@ impl TypedProgram {
     }
 
     pub fn resolve_qident(&self, scope_id: ScopeId, qident: &QIdent) -> K1Result<ScopeId> {
-        let mut ns_iter = self.ast.mem.getn(qident.path).iter();
+        let mut ns_iter = self.ast.mem.getn(qident.path(&self.ast.mem)).iter();
 
         let mut cur_scope_id = scope_id;
         let Some(first) = ns_iter.next() else {
@@ -1624,7 +1624,7 @@ impl TypedProgram {
     ) -> K1Result<Option<AbilityId>> {
         // Unqualified mentions are implicitly recursive searches
         // But qualified mentions imply that the targeted symbol lives directly at the given path!
-        if ability_name.path.is_empty() {
+        if !ability_name.has_path() {
             Ok(self.scopes.find_ability(scope_id, ability_name.name))
         } else {
             let scope_to_search = self.resolve_qident(scope_id, ability_name)?;
@@ -1639,7 +1639,7 @@ impl TypedProgram {
     ) -> K1Result<Option<(ParsedTypeDefnId, ScopeId)>> {
         // Unqualified mentions are implicitly recursive searches
         // But qualified mentions imply that the targeted symbol lives directly at the given path!
-        if type_name.path.is_empty() {
+        if !type_name.has_path() {
             Ok(self.scopes.find_pending_type(scope_id, type_name.name))
         } else {
             let scope_to_search = self.resolve_qident(scope_id, type_name)?;
@@ -1655,7 +1655,7 @@ impl TypedProgram {
         scope_id: ScopeId,
         name: &QIdent,
     ) -> K1Result<Option<(ParsedGlobalId, ScopeId)>> {
-        if name.path.is_empty() {
+        if !name.has_path() {
             Ok(self.scopes.find_pending_global(scope_id, name.name))
         } else {
             let scope_to_search = self.resolve_qident(scope_id, name)?;

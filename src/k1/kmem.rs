@@ -540,6 +540,14 @@ impl<Tag> Mem<Tag> {
         self.pack_handle(t_ptr)
     }
 
+    pub fn push_slice_h<T>(&mut self, slice: MSlice<T, Tag>) -> Handle<MSlice<T, Tag>, Tag> {
+        if slice.is_empty() { Handle::nil() } else { self.push_h(slice) }
+    }
+
+    pub fn get_slice_h<T>(&self, handle: Handle<MSlice<T, Tag>, Tag>) -> MSlice<T, Tag> {
+        if handle.is_nil() { MSlice::empty() } else { *self.get(handle) }
+    }
+
     pub fn align_to_bytes(&mut self, align: usize) {
         unsafe {
             debug_assert!(align != 0);

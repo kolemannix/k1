@@ -2815,7 +2815,7 @@ pub struct TypedProgram {
     /// Key is 'self' type
     pub ability_impl_table: FxHashMap<TypeId, PermList<AbilityImplHandle>>,
     pub ability_impl_table_by_ability: ahash::HashMap<TypeAbilityPair, PermList<AbilityImplHandle>>,
-    pub core_fns_by_name: ahash::HashMap<(AstSlice<IdentSpanned>, StringId), FunctionId>,
+    pub core_fns_by_name: ahash::HashMap<(AstHandle<AstSlice<IdentSpanned>>, StringId), FunctionId>,
     /// Key is base ability id; the order per base is important; we want earlier
     /// blanket impls to be more specific, and to be tried first
     /// Once a blanket impl succeeds, its added to ability_impl_table
@@ -3954,17 +3954,13 @@ impl TypedProgram {
                         kbail!(self, fn_span, "[ice] invalid params expr for dependency {}", name)
                     }
                     Some(parsed_expr) => {
-                        if let ParsedExpr::Struct(s) = parsed_expr {
-                            let dep_entry = DepEntry {
-                                name,
-                                span: s.span,
-                                params_struct_literal: Some(expr_id),
-                            };
-                            dep_entry
+                        let span = self.ast.exprs.get_span(expr_id);
+                        if let ParsedExpr::Struct(_) = parsed_expr {
+                            DepEntry { name, span, params_struct_literal: Some(expr_id) }
                         } else {
                             kbail!(
                                 self,
-                                parsed_expr.get_span(),
+                                span,
                                 "invalid dependency params for {}; must be a struct literal",
                                 name
                             )
@@ -6037,7 +6033,7 @@ impl TypedProgram {
         if !self.string_is_completion_marker(name.name, true) {
             return;
         }
-        let site = if name.path.is_empty() {
+        let site = if !name.has_path() {
             CompletionSite::Scope { scope_id }
         } else {
             match self.resolve_qident(scope_id, name) {
@@ -6081,7 +6077,7 @@ impl TypedProgram {
         match variable_id {
             None => match self.find_function_namespaced(scope_id, &name)? {
                 None => {
-                    let msg = if name.path.is_empty() {
+                    let msg = if !name.has_path() {
                         k1_format_user!(self, "No value '{}' is visible here", name.name)
                     } else {
                         k1_format_user!(self, "value '{}' is not defined", &name)
@@ -6183,11 +6179,10 @@ impl TypedProgram {
 
     fn eval_field_access(
         &mut self,
-        expr_id: ParsedExprId,
         field_access: &parse::FieldAccess,
+        span: SpanId,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
-        let span = field_access.span;
 
         if !field_access.type_args.is_empty() {
             // Treat it like a call; foo.<field_name>[u32]
@@ -6196,19 +6191,14 @@ impl TypedProgram {
                 value: field_access.base,
                 is_explicit_context: false,
             }]);
-            return self.eval_function_call(
-                &ParsedCall {
-                    name: QIdent::naked(field_access.field_name, field_access.field_name_span),
-                    type_args: field_access.type_args,
-                    args,
-                    span,
-                    is_method: true,
-                    id: expr_id,
-                },
-                None,
-                ctx,
-                None,
+            let call = ParsedCall::make(
+                &mut self.ast.mem,
+                QIdent::naked(field_access.field_name, field_access.field_name_span),
+                field_access.type_args,
+                args,
+                true,
             );
+            return self.eval_function_call(&call, span, None, ctx, None);
         }
 
         // Special case: .* dereference operation
@@ -6223,12 +6213,12 @@ impl TypedProgram {
 
         // Special case: .! unwrap operation
         if field_access.field_name == self.ast.idents.b.bang {
-            return self.eval_unwrap_operator(field_access.base, ctx, field_access.span);
+            return self.eval_unwrap_operator(field_access.base, ctx, span);
         }
 
         // Special case: .try unwrap operation
         if field_access.field_name == self.ast.idents.b.try_ {
-            return self.eval_try_operator(field_access.base, ctx, field_access.span);
+            return self.eval_try_operator(field_access.base, ctx, span);
         }
 
         let raw_base_expr = self.eval_expr(field_access.base, ctx.with_no_expected_type())?;
@@ -6251,14 +6241,14 @@ impl TypedProgram {
 
         // Optional fork case: sum.tag
         if field_access.field_name == self.ast.idents.b.tag {
-            if let Some(get_tag) = self.handle_sum_get_tag(base_agg_expr, field_access.span)? {
+            if let Some(get_tag) = self.handle_sum_get_tag(base_agg_expr, span)? {
                 return Ok(get_tag);
             }
         }
 
         // Optional fork case: enum.value
         if field_access.field_name == self.ast.idents.b.value {
-            if let Some(get_value) = self.handle_enum_get_value(base_agg_expr, field_access.span)? {
+            if let Some(get_value) = self.handle_enum_get_value(base_agg_expr, span)? {
                 return Ok(get_value);
             }
         }
@@ -6287,7 +6277,7 @@ impl TypedProgram {
                         )
                     })?;
                 self.emit_ls_entity(
-                    field_access.span,
+                    span,
                     LsEntityKind::StructField {
                         type_id: svt.family_type_id,
                         field_index: field_index as u32,
@@ -6334,7 +6324,7 @@ impl TypedProgram {
                     );
                 };
                 self.emit_ls_entity(
-                    field_access.span,
+                    span,
                     LsEntityKind::StructField {
                         type_id: base_type_id,
                         field_index: field_index as u32,
@@ -6377,15 +6367,17 @@ impl TypedProgram {
         span: SpanId,
     ) -> K1Result<TypedExprId> {
         if let ParsedExpr::Call(call) = self.ast.exprs.get(base_expr)
-            && !call.type_args.is_empty()
+            && !call.type_args(&self.ast.mem).is_empty()
             && call.args.is_empty()
             && !call.is_method
         {
             let call = *call;
+            let call_span = self.ast.exprs.get_span(base_expr);
             if self.find_variable_namespaced(ctx.scope_id, &call.name)?.is_none()
                 && let Some(fn_id) = self.find_function_namespaced(ctx.scope_id, &call.name)?
             {
-                let reference = self.compile_specialized_function_reference(fn_id, &call, ctx)?;
+                let reference =
+                    self.compile_specialized_function_reference(fn_id, &call, call_span, ctx)?;
                 return Ok(self.reference_to_pointer(reference, span));
             }
         }
@@ -6737,6 +6729,7 @@ impl TypedProgram {
             self.type_id_to_string_opt(ctx.expected_type_id),
         );
         let expr = self.ast.exprs.get(expr_id);
+        let span = self.ast.exprs.get_span(expr_id);
         match expr {
             ParsedExpr::ListLiteral(list_expr) => {
                 self.eval_list_literal(expr_id, &list_expr.clone(), ctx)
@@ -6752,18 +6745,18 @@ impl TypedProgram {
                     self.eval_struct_anonymous(expr_id, ctx)
                 }
             }
-            ParsedExpr::If(if_expr) => self.eval_if_expr(&if_expr.clone(), ctx),
-            ParsedExpr::While(while_expr) => self.eval_while_loop(&while_expr.clone(), ctx),
-            ParsedExpr::Loop(loop_expr) => self.eval_loop_expr(&loop_expr.clone(), ctx),
+            ParsedExpr::If(if_expr) => self.eval_if_expr(&if_expr.clone(), span, ctx),
+            ParsedExpr::While(while_expr) => self.eval_while_loop(&while_expr.clone(), span, ctx),
+            ParsedExpr::Loop(loop_expr) => self.eval_loop_expr(&loop_expr.clone(), span, ctx),
             ParsedExpr::Return(r) => {
                 let r = *r;
                 if ctx.flags.contains(EvalExprFlags::Defer) {
-                    kbail!(self, r.span, "return cannot be used inside `defer` blocks");
+                    kbail!(self, span, "return cannot be used inside `defer` blocks");
                 }
-                self.eval_return(r.value, ctx, r.span)
+                self.eval_return(r.value, ctx, span)
             }
-            ParsedExpr::Break(b) => self.eval_break(*b, ctx),
-            ParsedExpr::Continue(c) => self.eval_continue(*c, ctx),
+            ParsedExpr::Break(b) => self.eval_break(*b, span, ctx),
+            ParsedExpr::Continue(c) => self.eval_continue(*c, span, ctx),
             ParsedExpr::BinaryOp(_binary_op) => self.eval_binary_op(expr_id, ctx),
             ParsedExpr::Not(n) => {
                 let n = *n;
@@ -6775,24 +6768,22 @@ impl TypedProgram {
                 if self.exprs.get_type(base) == NEVER_TYPE_ID {
                     Ok(base)
                 } else {
-                    self.synth_negated(base, ctx, n.span)
+                    self.synth_negated(base, ctx, span)
                 }
             }
-            ParsedExpr::Literal(ParsedLiteral::Char(byte, span)) => {
+            ParsedExpr::Literal(ParsedLiteral::Char(byte)) => {
                 let value_id = self.static_values.add(StaticValue::Char(*byte));
-                let expr_id = self.add_static_constant_expr(value_id, *span);
-                Ok(expr_id)
-            }
-            ParsedExpr::Literal(ParsedLiteral::Numeric(int)) => {
-                let span = int.span;
-                let value_id = self.eval_numeric_value(int.text_span, ctx)?;
                 let expr_id = self.add_static_constant_expr(value_id, span);
                 Ok(expr_id)
             }
-            ParsedExpr::Literal(ParsedLiteral::Bool(b, span)) => Ok(self.synth_bool(*b, *span)),
-            ParsedExpr::Literal(ParsedLiteral::String(string_id, span)) => {
+            ParsedExpr::Literal(ParsedLiteral::Numeric { text_span }) => {
+                let value_id = self.eval_numeric_value(*text_span, ctx)?;
+                let expr_id = self.add_static_constant_expr(value_id, span);
+                Ok(expr_id)
+            }
+            ParsedExpr::Literal(ParsedLiteral::Bool(b)) => Ok(self.synth_bool(*b, span)),
+            ParsedExpr::Literal(ParsedLiteral::String(string_id)) => {
                 let string_id = *string_id;
-                let span = *span;
                 if self.expected_type_is_code(ctx.expected_type_id) {
                     let value_id = self.make_static_code_value(&[(string_id, span)]);
                     return Ok(self.add_static_constant_expr(value_id, span));
@@ -6825,7 +6816,7 @@ impl TypedProgram {
             }
             ParsedExpr::FieldAccess(field_access) => {
                 let field_access = *field_access;
-                self.eval_field_access(expr_id, &field_access, ctx)
+                self.eval_field_access(&field_access, span, ctx)
             }
             ParsedExpr::Block(block) => {
                 let block = *block;
@@ -6862,10 +6853,10 @@ impl TypedProgram {
                 let block = self.eval_block(&block, block_ctx, needs_terminator)?;
                 Ok(block)
             }
-            ParsedExpr::Call(call) => self.eval_function_call(&call.clone(), None, ctx, None),
+            ParsedExpr::Call(call) => self.eval_function_call(&call.clone(), span, None, ctx, None),
             ParsedExpr::CallOnExpr(call) => {
                 let call = *call;
-                let called_expr_span = self.ast.get_expr_span(call.called_expr);
+                let called_expr_span = self.ast.exprs.get_span(call.called_expr);
                 let called_expr = self.eval_expr(call.called_expr, ctx.with_no_expected_type())?;
                 let called_expr_type = self.exprs.get_type(called_expr);
                 let Type::FunctionPointer(_) = self.types.get(called_expr_type) else {
@@ -6877,26 +6868,27 @@ impl TypedProgram {
                     );
                 };
                 let callee = Callee::DynamicFunction { function_pointer_expr: called_expr };
-                let call = ParsedCall {
-                    name: QIdent::naked(self.ast.idents.b.invoke, called_expr_span),
-                    type_args: MSlice::empty(),
-                    args: call.args,
-                    span: call.span,
-                    is_method: false,
-                    id: expr_id,
-                };
-                self.eval_function_call(&call, None, ctx, Some(callee))
+                let call = ParsedCall::without_type_args(
+                    QIdent::naked(self.ast.idents.b.invoke, called_expr_span),
+                    call.args,
+                    false,
+                );
+                self.eval_function_call(&call, span, None, ctx, Some(callee))
             }
-            ParsedExpr::For(for_expr) => self.eval_for_expr(&for_expr.clone(), ctx),
-            ParsedExpr::Variant(parsed_variant) => self.eval_variant(*parsed_variant, ctx),
+            ParsedExpr::For(for_expr) => {
+                let for_expr = *self.ast.mem.get(for_expr.inner);
+                self.eval_for_expr(&for_expr, span, ctx)
+            }
+            ParsedExpr::Variant(parsed_variant) => self.eval_variant(*parsed_variant, span, ctx),
             ParsedExpr::Is(is_expr) => {
                 let is_expr = *is_expr;
                 // If the 'is' is attached to an if/else, that is handled by if/else
                 // This is just the case of the detached 'is' where we want to return a boolean
                 // indicating whether or not the pattern matched only
-                let true_expression = self.ast.exprs.add(parse::ParsedExpr::Literal(
-                    parse::ParsedLiteral::Bool(true, is_expr.span),
-                ));
+                let true_expression = self
+                    .ast
+                    .exprs
+                    .add(parse::ParsedExpr::Literal(parse::ParsedLiteral::Bool(true)), span);
                 let true_case = parse::ParsedMatchCase {
                     patterns: MSpillSlice::one(is_expr.pattern),
                     guard_condition_expr: None,
@@ -6905,13 +6897,12 @@ impl TypedProgram {
                 let as_match_expr = parse::ParsedMatch {
                     match_subject: is_expr.target_expression,
                     cases: self.ast.mem.pushn(&[true_case]),
-                    span: is_expr.span,
                     is_static: false,
                 };
                 // For standalone 'is', we don't allow binding to patterns since they won't work
                 let allow_bindings = false;
-                let false_expr = self.synth_bool(false, is_expr.span);
-                self.eval_match_expr(as_match_expr, ctx, allow_bindings, Some(false_expr))
+                let false_expr = self.synth_bool(false, span);
+                self.eval_match_expr(as_match_expr, span, ctx, allow_bindings, Some(false_expr))
             }
             ParsedExpr::Match(match_expr) => {
                 let match_expr = *match_expr;
@@ -6919,29 +6910,28 @@ impl TypedProgram {
                     self.eval_static_match_expr(expr_id, ctx)
                 } else {
                     let allow_bindings = true;
-                    self.eval_match_expr(match_expr, ctx, allow_bindings, None)
+                    self.eval_match_expr(match_expr, span, ctx, allow_bindings, None)
                 }
             }
             ParsedExpr::Lambda(_lambda) => self.eval_lambda(expr_id, ctx),
             ParsedExpr::InterpolatedString(is) => {
                 if self.expected_type_is_code(ctx.expected_type_id) {
                     let is = *is;
-                    self.synth_interpolated_code(is.parts, is.span, ctx, None)
+                    self.synth_interpolated_code(is.parts, span, ctx, None)
                 } else {
                     let res = self.synth_interpolated_string(expr_id, ctx, None)?;
                     Ok(res)
                 }
             }
-            ParsedExpr::Builtin(span) => {
+            ParsedExpr::Builtin => {
                 // Handled in eval_global_body before dispatching here
                 Err(kerr!(
                     self,
-                    *span,
+                    span,
                     "builtin can currently only be used as the initializer of a global"
                 ))
             }
-            ParsedExpr::Zero(span) => {
-                let span = *span;
+            ParsedExpr::Zero => {
                 let Some(type_id) = ctx.expected_type_id else {
                     kbail!(self, span, "Cannot infer the type of `.0`; annotate it or write `t.0`")
                 };
@@ -6957,12 +6947,11 @@ impl TypedProgram {
                 match self.compile_static_or_meta(expr_id, stat, false, ctx)? {
                     StaticExecutionResult::TypedExpr(typed_expr) => Ok(typed_expr),
                     StaticExecutionResult::Definitions(_) => {
-                        self.ice_span(stat.span, "Got static definitions from an expression")
+                        self.ice_span(span, "Got static definitions from an expression")
                     }
                 }
             }
             ParsedExpr::Code(code) => {
-                let code_span = code.span;
                 let parsed_stmt_span = self.ast.get_stmt_span(code.parsed_stmt);
                 let span_content = self
                     .ast
@@ -6970,7 +6959,7 @@ impl TypedProgram {
                     .get_span_content(&self.ast.mem, self.ast.spans.get(parsed_stmt_span));
                 let string_id = self.ast.idents.intern(span_content);
                 let value_id = self.make_static_code_value(&[(string_id, parsed_stmt_span)]);
-                Ok(self.add_static_constant_expr(value_id, code_span))
+                Ok(self.add_static_constant_expr(value_id, span))
             }
             ParsedExpr::QualifiedAbilityCall(qcall) => {
                 let qcall = *qcall;
@@ -6983,12 +6972,13 @@ impl TypedProgram {
                         signature.specialized_ability_id,
                         true,
                         ctx.scope_id,
-                        qcall.span,
+                        span,
                     )
-                    .map_err(|msg| kerr!(self, qcall.span, "{}", msg))?;
+                    .map_err(|msg| kerr!(self, span, "{}", msg))?;
 
                 // Get the function id from it by name I guess
                 let call_ast_expr = *self.ast.exprs.get(qcall.call_expr).expect_call();
+                let call_span = self.ast.exprs.get_span(qcall.call_expr);
                 let call_name = call_ast_expr.name.name;
                 let Some(tafr) = self
                     .abilities
@@ -7007,6 +6997,7 @@ impl TypedProgram {
                 let impl_function = impl_.function_at_index(&self.mem, tafr.index);
                 self.eval_function_call(
                     &call_ast_expr,
+                    call_span,
                     None,
                     ctx,
                     Some(Callee::from_ability_impl_fn(impl_function)),
@@ -7018,7 +7009,7 @@ impl TypedProgram {
                 let inner = self.eval_expr(th.inner, ctx.with_expected_type(Some(type_id)))?;
                 let allow_addr_of = ctx.is_method_receiver();
                 self.check_and_coerce_expr(type_id, inner, ctx.scope_id, allow_addr_of).map_err(
-                    |e| kerr!(self, th.span, "Expression did not conform to hint: {}", e.message),
+                    |e| kerr!(self, span, "Expression did not conform to hint: {}", e.message),
                 )
             }
             ParsedExpr::Index(index) => {
@@ -7026,26 +7017,24 @@ impl TypedProgram {
                 let base = self.eval_expr(index.base, ctx.with_no_expected_type())?;
                 let base_type = self.get_type_id_dereferenced(self.exprs.get_type(base));
                 if self.types.get(base_type).as_array().is_some() {
-                    return self.synth_array_element(base, base_type, index.key, ctx, index.span);
+                    return self.synth_array_element(base, base_type, index.key, ctx, span);
                 }
                 let args = self.ast.mem.pushn(&[
                     ParsedCallArg::unnamed(index.base),
                     ParsedCallArg::unnamed(index.key),
                 ]);
-                let call = ParsedCall {
-                    name: QIdent::naked(self.ast.idents.b.index_ref, index.span),
-                    type_args: MSlice::empty(),
+                let call = ParsedCall::without_type_args(
+                    QIdent::naked(self.ast.idents.b.index_ref, span),
                     args,
-                    span: index.span,
-                    is_method: true,
-                    id: ParsedExprId::PENDING,
-                };
+                    true,
+                );
                 let element_ref_expected = match ctx.expected_type_id {
                     Some(expected) => Some(self.add_reference_type(expected)),
                     None => None,
                 };
                 let element_ref = self.eval_function_call_with_typed_first_arg(
                     &call,
+                    span,
                     (index.base, base),
                     ctx.with_expected_type(element_ref_expected),
                 )?;
@@ -7053,7 +7042,7 @@ impl TypedProgram {
                 if self.types.get(element_ref_type).as_reference().is_none() {
                     kbail!(
                         self,
-                        index.span,
+                        span,
                         "index-ref must return a reference to the element; got {}",
                         element_ref_type
                     );
@@ -7105,7 +7094,7 @@ impl TypedProgram {
 
     fn eval_list_literal(
         &mut self,
-        _expr_id: ParsedExprId,
+        expr_id: ParsedExprId,
         list_expr: &ParsedListLiteral,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
@@ -7121,7 +7110,7 @@ impl TypedProgram {
             }
             None => (None, ContainerKind::List),
         };
-        let span = list_expr.span;
+        let span = self.ast.exprs.get_span(expr_id);
         let element_count = list_expr.elements.len();
 
         if let ContainerKind::Array(array_type_id) = list_kind {
@@ -7337,8 +7326,9 @@ impl TypedProgram {
         expr_id: ParsedExprId,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
+        let struct_span = self.ast.exprs.get_span(expr_id);
         let ParsedExpr::Struct(parsed_struct) = *self.ast.exprs.get(expr_id) else {
-            self.ice_span(self.ast.get_expr_span(expr_id), "expected struct")
+            self.ice_span(struct_span, "expected struct")
         };
         let mut field_values = self.mem.new_list(parsed_struct.fields.len());
         let mut field_defns = self.mem.new_list(parsed_struct.fields.len());
@@ -7363,7 +7353,7 @@ impl TypedProgram {
         let struct_type = StructType::struc(field_defns.to_slice());
         let struct_type_id = self.add_type_anon(Type::Struct(struct_type));
         let typed_struct = StructLiteral { fields: field_values.to_slice() };
-        Ok(self.exprs.add(TypedExpr::Struct(typed_struct), struct_type_id, parsed_struct.span))
+        Ok(self.exprs.add(TypedExpr::Struct(typed_struct), struct_type_id, struct_span))
     }
 
     fn eval_struct_expected(
@@ -7372,12 +7362,13 @@ impl TypedProgram {
         patch_base: Option<TypedExprId>,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
+        let struct_span = self.ast.exprs.get_span(expr_id);
         let ParsedExpr::Struct(parsed_struct) = *self.ast.exprs.get(expr_id) else {
-            self.ice_span(self.ast.get_expr_span(expr_id), "expected struct")
+            self.ice_span(struct_span, "expected struct")
         };
         let expected_struct_id = ctx.expected_type_id.unwrap();
         let Type::Struct(expected_struct) = self.types.get(expected_struct_id) else {
-            self.ice_span(self.ast.get_expr_span(expr_id), "expected an expected struct type")
+            self.ice_span(struct_span, "expected an expected struct type")
         };
         let expected_struct = *expected_struct;
 
@@ -7385,7 +7376,7 @@ impl TypedProgram {
         if is_union && parsed_struct.fields.len() > 1 {
             kbail!(
                 self,
-                self.ast.get_expr_span(expr_id),
+                struct_span,
                 "{} is a union; a union literal sets at most one field",
                 expected_struct_id
             )
@@ -7409,7 +7400,6 @@ impl TypedProgram {
         let mut passed_fields_aligned: SV8<(Option<&parse::StructValueField>, SpanId)> =
             smallvec![];
 
-        let struct_span = parsed_struct.span;
         let mut missing_fields: SV4<StringId> = smallvec![];
         for (index, expected_field) in self.mem.getn(expected_struct.fields).iter().enumerate() {
             let Some(passed_field) = self
@@ -7559,20 +7549,17 @@ impl TypedProgram {
         );
 
         let typed_struct = StructLiteral { fields: field_values.to_slice() };
-        Ok(self.exprs.add(
-            TypedExpr::Struct(typed_struct),
-            output_struct_type_id,
-            parsed_struct.span,
-        ))
+        Ok(self.exprs.add(TypedExpr::Struct(typed_struct), output_struct_type_id, struct_span))
     }
 
     fn eval_while_loop(
         &mut self,
         while_expr: &ParsedWhileExpr,
+        span: SpanId,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let ParsedExpr::Block(parsed_block) = *self.ast.exprs.get(while_expr.body) else {
-            kbail!(self, while_expr.span, "'while' body must be a block");
+            kbail!(self, span, "'while' body must be a block");
         };
 
         let cond_ctx = if self.matching_condition_binds(while_expr.cond) {
@@ -7618,13 +7605,14 @@ impl TypedProgram {
         Ok(self.exprs.add(
             TypedExpr::WhileLoop(WhileLoop { condition, body: body_block }),
             loop_type,
-            while_expr.span,
+            span,
         ))
     }
 
     fn eval_loop_expr(
         &mut self,
         loop_expr: &ParsedLoopExpr,
+        span: SpanId,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let body_scope =
@@ -7653,7 +7641,7 @@ impl TypedProgram {
         } else {
             NEVER_TYPE_ID
         };
-        Ok(self.exprs.add(TypedExpr::LoopExpr(LoopExpr { body_block }), loop_type, loop_expr.span))
+        Ok(self.exprs.add(TypedExpr::LoopExpr(LoopExpr { body_block }), loop_type, span))
     }
 
     fn eval_lambda(
@@ -7674,7 +7662,7 @@ impl TypedProgram {
         let lambda_captures = lambda.captures;
         let lambda_arguments = lambda.arguments;
         let lambda_body = lambda.body;
-        let span = lambda.span;
+        let span = self.ast.exprs.get_span(expr_id);
         let body_span = self.ast.exprs.get_span(lambda.body);
         let is_closure = !lambda_captures.is_empty();
         if let Some(t) = ctx.expected_type_id {
@@ -8090,9 +8078,9 @@ impl TypedProgram {
     ) -> ParsedBlock {
         match self.ast.exprs.get(body) {
             ParsedExpr::Block(b) => *b,
-            other_expr => {
+            _ => {
                 let block = parse::ParsedBlock {
-                    span: other_expr.get_span(),
+                    span: self.ast.exprs.get_span(body),
                     kind,
                     stmts: self
                         .ast
@@ -8675,10 +8663,15 @@ impl TypedProgram {
         }
     }
 
-    fn eval_for_expr(&mut self, for_expr: &ForExpr, ctx: EvalExprContext) -> K1Result<TypedExprId> {
+    fn eval_for_expr(
+        &mut self,
+        for_expr: &ForExpr,
+        span: SpanId,
+        ctx: EvalExprContext,
+    ) -> K1Result<TypedExprId> {
         // Basically no overlap here in what we need to do.
         if for_expr.is_static {
-            return self.eval_static_for_expr(for_expr, ctx);
+            return self.eval_static_for_expr(for_expr, span, ctx);
         };
         let binding_ident = match for_expr.binding {
             None => self.ast.idents.b.it,
@@ -8898,7 +8891,7 @@ impl TypedProgram {
         let loop_expr = self.exprs.add(
             TypedExpr::LoopExpr(LoopExpr { body_block }),
             self.builtin_types.empty,
-            for_expr.span,
+            span,
         );
 
         let mut for_expr_initial_statements = self.mem.new_list(4);
@@ -8927,14 +8920,15 @@ impl TypedProgram {
     fn eval_static_for_expr(
         &mut self,
         for_expr: &ForExpr,
+        span: SpanId,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         if for_expr.label.is_some() {
-            kbail!(self, for_expr.span, "#for unrolls at compile time; it has no loop to label");
+            kbail!(self, span, "#for unrolls at compile time; it has no loop to label");
         }
         let iteree_value_id =
             self.execute_static_expr(for_expr.iterable_expr, ctx.with_no_expected_type(), &[])?;
-        let iteree_span = self.ast.get_expr_span(for_expr.iterable_expr);
+        let iteree_span = self.ast.exprs.get_span(for_expr.iterable_expr);
         let Some(element_count) = self.static_container_len(iteree_value_id) else {
             kbail!(
                 self,
@@ -8947,7 +8941,7 @@ impl TypedProgram {
         let mut block = self.new_block_builder(
             ctx.scope_id,
             ScopeType::LexicalBlock,
-            for_expr.span,
+            span,
             element_count as u32 * 2,
         );
         let binding_name = match for_expr.binding {
@@ -8955,7 +8949,7 @@ impl TypedProgram {
             Some(binding) => self.ast.exprs.get(binding).expect_variable().name.name,
         };
         let binding_span = match for_expr.binding {
-            None => for_expr.span,
+            None => span,
             Some(binding_expr) => self.ast.exprs.get_span(binding_expr),
         };
         let eval_context = ctx.with_scope(block.scope_id).with_no_expected_type();
@@ -9020,9 +9014,10 @@ impl TypedProgram {
     fn eval_static_if_expr(
         &mut self,
         if_expr: &ParsedIfExpr,
+        span: SpanId,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
-        if let Some(phony) = self.synth_phony_if_generic_pass(ctx, if_expr.span) {
+        if let Some(phony) = self.synth_phony_if_generic_pass(ctx, span) {
             return Ok(phony);
         }
         if self.execute_static_bool(if_expr.cond, ctx)? {
@@ -9030,7 +9025,7 @@ impl TypedProgram {
         } else {
             match if_expr.alt {
                 Some(alt) => self.eval_expr(alt, ctx),
-                None => Ok(self.synth_empty_value(if_expr.span)),
+                None => Ok(self.synth_empty_value(span)),
             }
         }
     }
@@ -9041,10 +9036,11 @@ impl TypedProgram {
     fn eval_if_expr(
         &mut self,
         if_expr: &ParsedIfExpr,
+        span: SpanId,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         if if_expr.is_static {
-            return self.eval_static_if_expr(if_expr, ctx);
+            return self.eval_static_if_expr(if_expr, span, ctx);
         }
         let cond_ctx = if self.matching_condition_binds(if_expr.cond) {
             let condition_scope_id = self.scopes.add_child_scope(
@@ -9090,7 +9086,7 @@ impl TypedProgram {
             let type_hint = if cons_never { ctx.expected_type_id } else { Some(consequent_type) };
             self.eval_expr(parsed_alt, ctx.with_expected_type(type_hint))?
         } else {
-            self.synth_empty_value(if_expr.span)
+            self.synth_empty_value(span)
         };
         let alternate_type = self.get_type_family_type(self.exprs.get_type(alternate));
         let alternate_span = self.exprs.get_span(alternate);
@@ -9131,7 +9127,7 @@ impl TypedProgram {
                 arms: self.mem.pushn(&[cons_arm, alt_arm]),
             }),
             overall_type,
-            if_expr.span,
+            span,
         ))
     }
 
@@ -9145,7 +9141,7 @@ impl TypedProgram {
         let mut all_patterns: SV4<(TypedPatternId, TypedExprId)> = smallvec![];
         let mut allow_bindings: bool = true;
         let mut instrs: List<MatchingConditionInstr, _> = self.mem.new_list(2);
-        let condition_span = self.ast.get_expr_span(condition);
+        let condition_span = self.ast.exprs.get_span(condition);
         // If there are no boolean conditions, we can check for infallibility
         let mut is_single_pattern_only = true;
         self.handle_matching_condition_rec(
@@ -9346,7 +9342,7 @@ impl TypedProgram {
                 if is_or_binop {
                     *allow_bindings = false;
                 };
-                let span = other.get_span();
+                let span = self.ast.exprs.get_span(parsed_expr_id);
                 let condition =
                     self.eval_expr(parsed_expr_id, ctx.with_expected_type(Some(BOOL_TYPE_ID)))?;
                 let condition_type = self.exprs.get_type(condition);
@@ -9398,15 +9394,14 @@ impl TypedProgram {
         let ParsedExpr::BinaryOp(binary_op) = *self.ast.exprs.get(binary_op_id) else {
             unreachable!()
         };
+        let span = self.ast.exprs.get_span(binary_op_id);
         use BinaryOpKind as K;
         match binary_op.op_kind {
-            K::Pipe => self.eval_pipe_expr(binary_op.lhs, binary_op.rhs, ctx, binary_op.span),
+            K::Pipe => self.eval_pipe_expr(binary_op.lhs, binary_op.rhs, ctx, span),
             K::BitOr if matches!(self.ast.exprs.get(binary_op.rhs), ParsedExpr::Struct(_)) => {
-                self.eval_struct_patch(binary_op, ctx)
+                self.eval_struct_patch(binary_op, span, ctx)
             }
-            K::OptionalElse => {
-                self.eval_optional_else(binary_op.lhs, binary_op.rhs, ctx, binary_op.span)
-            }
+            K::OptionalElse => self.eval_optional_else(binary_op.lhs, binary_op.rhs, ctx, span),
             K::And => {
                 let lhs_is = match self.ast.exprs.get(binary_op.lhs) {
                     ParsedExpr::Is(_) => true,
@@ -9425,9 +9420,8 @@ impl TypedProgram {
                         ctx.with_expected_type(Some(BOOL_TYPE_ID)),
                         true,
                     )?;
-                    let false_expr = self.synth_bool(false, binary_op.span);
-                    let and =
-                        self.synth_if_else(BOOL_TYPE_ID, lhs, rhs, false_expr, binary_op.span);
+                    let false_expr = self.synth_bool(false, span);
+                    let and = self.synth_if_else(BOOL_TYPE_ID, lhs, rhs, false_expr, span);
                     Ok(and)
                 }
             }
@@ -9442,8 +9436,8 @@ impl TypedProgram {
                     ctx.with_expected_type(Some(BOOL_TYPE_ID)),
                     true,
                 )?;
-                let true_expr = self.synth_bool(true, binary_op.span);
-                let or = self.synth_if_else(BOOL_TYPE_ID, lhs, true_expr, rhs, binary_op.span);
+                let true_expr = self.synth_bool(true, span);
+                let or = self.synth_if_else(BOOL_TYPE_ID, lhs, true_expr, rhs, span);
                 Ok(or)
             }
             K::Equals
@@ -9461,7 +9455,7 @@ impl TypedProgram {
             | K::BitOr
             | K::BitXor
             | K::BitShiftLeft
-            | K::BitShiftRight => self.eval_operator_call(binary_op, ctx),
+            | K::BitShiftRight => self.eval_operator_call(binary_op, span, ctx),
         }
     }
 
@@ -9513,9 +9507,9 @@ impl TypedProgram {
     fn eval_struct_patch(
         &mut self,
         binary_op: parse::BinaryOp,
+        span: SpanId,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
-        let span = binary_op.span;
         let base = self.eval_expr(binary_op.lhs, ctx.with_is_method_receiver(false))?;
         let base_type_id = self.exprs.get_type(base);
         match self.types.get(base_type_id) {
@@ -9539,10 +9533,10 @@ impl TypedProgram {
     fn eval_operator_call(
         &mut self,
         binary_op: parse::BinaryOp,
+        span: SpanId,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         use BinaryOpKind as K;
-        let span = binary_op.span;
         let (fn_name, ability_id) = self.operator_ability_fn(binary_op.op_kind);
         let is_predicate = matches!(
             binary_op.op_kind,
@@ -9606,17 +9600,15 @@ impl TypedProgram {
                     ParsedCallArg::unnamed(binary_op.lhs),
                     ParsedCallArg::unnamed(binary_op.rhs),
                 ]);
-                let call = ParsedCall {
-                    name: fn_name.with_span(span),
-                    type_args: MSlice::empty(),
-                    args,
-                    span,
-                    is_method: false,
-                    id: ParsedExprId::PENDING,
-                };
+                let call = ParsedCall::without_type_args(fn_name.with_span(span), args, false);
                 let call_ctx =
                     if is_predicate { ctx.with_expected_type(Some(BOOL_TYPE_ID)) } else { ctx };
-                self.eval_function_call_with_typed_first_arg(&call, (binary_op.lhs, lhs), call_ctx)?
+                self.eval_function_call_with_typed_first_arg(
+                    &call,
+                    span,
+                    (binary_op.lhs, lhs),
+                    call_ctx,
+                )?
             }
         };
         if binary_op.op_kind != K::NotEquals || self.exprs.get_type(result) == NEVER_TYPE_ID {
@@ -9695,28 +9687,14 @@ impl TypedProgram {
         let new_fn_call = match self.ast.exprs.get(rhs) {
             ParsedExpr::Variable(var) => {
                 let args = self.ast.mem.pushn(&[ParsedCallArg::unnamed(lhs)]);
-                ParsedCall {
-                    name: var.name,
-                    type_args: MSlice::empty(),
-                    args,
-                    span,
-                    is_method: false,
-                    id: ParsedExprId::PENDING,
-                }
+                ParsedCall::without_type_args(var.name, args, false)
             }
             ParsedExpr::Call(fn_call) => {
                 let mut args_with_piped = self.ast.mem.new_list(fn_call.args.len() + 1);
                 args_with_piped.push(ParsedCallArg::unnamed(lhs));
                 args_with_piped.extend(self.ast.mem.getn(fn_call.args));
                 let args_with_piped_h = args_with_piped.to_slice();
-                ParsedCall {
-                    name: fn_call.name,
-                    type_args: fn_call.type_args,
-                    args: args_with_piped_h,
-                    span,
-                    is_method: false,
-                    id: ParsedExprId::PENDING,
-                }
+                fn_call.with_args(args_with_piped_h, false)
             }
             _ => {
                 kbail!(
@@ -9726,7 +9704,7 @@ impl TypedProgram {
                 );
             }
         };
-        self.eval_function_call(&new_fn_call, None, ctx, None)
+        self.eval_function_call(&new_fn_call, span, None, ctx, None)
     }
 
     /// Can 'shortcircuit' with Left if the function call to resolve
@@ -9734,12 +9712,14 @@ impl TypedProgram {
     fn resolve_parsed_call(
         &mut self,
         fn_call: &ParsedCall,
+        call_span: SpanId,
         known_args: Option<&(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
         stashed_args: &mut SV8<(ParsedExprId, TypedExprId)>,
     ) -> K1Result<CallResolution> {
-        let call_span = fn_call.span;
-        if let Some(builtin_result) = self.handle_builtin_function_call_lookalikes(fn_call, ctx)? {
+        if let Some(builtin_result) =
+            self.handle_builtin_function_call_lookalikes(fn_call, call_span, ctx)?
+        {
             return Ok(CallResolution::OtherExpr(builtin_result));
         }
 
@@ -9766,6 +9746,7 @@ impl TypedProgram {
             true => self.resolve_parsed_function_call_method(
                 self_arg_expr.unwrap(),
                 fn_call,
+                call_span,
                 known_args,
                 ctx,
                 stashed_args,
@@ -9785,6 +9766,7 @@ impl TypedProgram {
                         let ability_impl_function = self.solve_ability_call(
                             function_ability_index,
                             fn_call,
+                            call_span,
                             None,
                             known_args,
                             ctx,
@@ -9809,7 +9791,7 @@ impl TypedProgram {
                             ))
                         };
                     }
-                    if !fn_call.name.path.is_empty() {
+                    if fn_call.name.has_path() {
                         return fn_not_found!();
                     }
                     if let Some((variable_id, _scope_id)) =
@@ -9831,7 +9813,7 @@ impl TypedProgram {
                                     lambda_value_expr: self.exprs.add(
                                         TypedExpr::Variable(VariableExpr { variable_id }),
                                         function_variable.type_id,
-                                        fn_call.span,
+                                        call_span,
                                     ),
                                     lambda_type_id: function_variable.type_id,
                                 }))
@@ -9928,8 +9910,12 @@ impl TypedProgram {
         }
     }
 
-    fn eval_break(&mut self, brk: ParsedBreak, ctx: EvalExprContext) -> K1Result<TypedExprId> {
-        let span = brk.span;
+    fn eval_break(
+        &mut self,
+        brk: ParsedBreak,
+        span: SpanId,
+        ctx: EvalExprContext,
+    ) -> K1Result<TypedExprId> {
         let (loop_scope_id, loop_type) = self.find_loop_for_exit("break", brk.label, ctx, span)?;
         let loop_info = *self.scopes.get_loop_info(loop_scope_id).unwrap();
         let break_value = match brk.value {
@@ -9982,9 +9968,9 @@ impl TypedProgram {
     fn eval_continue(
         &mut self,
         cont: ParsedContinue,
+        span: SpanId,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
-        let span = cont.span;
         let (loop_scope_id, _) = self.find_loop_for_exit("continue", cont.label, ctx, span)?;
         let defers = self.gather_defers(ctx.scope_id, span, DeferExtent::LoopScope(loop_scope_id));
         let empty_value = self.synth_empty_value(span);
@@ -10106,10 +10092,10 @@ impl TypedProgram {
     fn handle_builtin_function_call_lookalikes(
         &mut self,
         fn_call: &ParsedCall,
+        call_span: SpanId,
         ctx: EvalExprContext,
     ) -> K1Result<Option<TypedExprId>> {
-        let call_span = fn_call.span;
-        if !fn_call.name.path.is_empty() {
+        if fn_call.name.has_path() {
             return Ok(None);
         }
         let n = fn_call.name.name;
@@ -10262,8 +10248,8 @@ impl TypedProgram {
         receiver: TypedExprId,
         array_type_id: TypeId,
         call: &ParsedCall,
+        span: SpanId,
     ) -> K1Result<Option<CallResolution>> {
-        let span = call.span;
         let array_type = self.types.get(array_type_id).as_array().unwrap();
         let concrete_count = self.get_concrete_count_of_array(array_type.size_type);
         match call.name.name {
@@ -10300,13 +10286,13 @@ impl TypedProgram {
         &mut self,
         base_expr: MaybeTypedExpr,
         call: &ParsedCall,
+        call_span: SpanId,
         known_args: Option<&(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
         stashed_args: &mut SV8<(ParsedExprId, TypedExprId)>,
     ) -> K1Result<CallResolution> {
-        debug_assert!(call.name.path.is_empty());
+        debug_assert!(!call.name.has_path());
         let fn_name = call.name.name;
-        let call_span = call.span;
 
         let args = self.ast.mem.getn(call.args);
         let first_arg = args.first().copied();
@@ -10351,7 +10337,7 @@ impl TypedProgram {
                 let target_dyn_type: Option<TypeId> = match self
                     .ast
                     .mem
-                    .get_nth_opt(call.type_args, 0)
+                    .get_nth_opt(call.type_args(&self.ast.mem), 0)
                 {
                     Some(type_arg) => match type_arg.type_expr {
                         None => None,
@@ -10413,7 +10399,7 @@ impl TypedProgram {
                 || fn_name == self.ast.idents.b.trunc
                 || fn_name == self.ast.idents.b.narrow
             {
-                let dest_type = match self.ast.mem.get_nth_opt(call.type_args, 0) {
+                let dest_type = match self.ast.mem.get_nth_opt(call.type_args(&self.ast.mem), 0) {
                     Some(NamedTypeArg { type_expr: Some(type_expr), .. }) => {
                         self.eval_type_expr(*type_expr, ctx.scope_id)?
                     }
@@ -10480,7 +10466,7 @@ impl TypedProgram {
         };
 
         // Handle the special case of the synthesized sum 'as-variant' methods
-        if let Some(sum_as_result) = self.handle_sum_as_variant_call(base_expr, call)? {
+        if let Some(sum_as_result) = self.handle_sum_as_variant_call(base_expr, call, call_span)? {
             return Ok(CallResolution::OtherExpr(sum_as_result));
         }
 
@@ -10489,7 +10475,7 @@ impl TypedProgram {
 
         if let Type::Array(_array_type) = self.types.get(base_for_method) {
             if let Some(resolution) =
-                self.handle_array_method_call(base_expr, base_for_method, call)?
+                self.handle_array_method_call(base_expr, base_for_method, call, call_span)?
             {
                 return Ok(resolution);
             }
@@ -10631,7 +10617,7 @@ impl TypedProgram {
                     span: template_span,
                 };
                 let parts = match self.ast.exprs.get(template_arg) {
-                    ParsedExpr::Literal(ParsedLiteral::String(string_id, _)) => {
+                    ParsedExpr::Literal(ParsedLiteral::String(string_id)) => {
                         let string_part = InterpolatedStringPart::String {
                             string_id: *string_id,
                             span: template_span,
@@ -10696,6 +10682,7 @@ impl TypedProgram {
             match self.solve_ability_call(
                 ability_function_ref,
                 call,
+                call_span,
                 Some(base_expr),
                 known_args,
                 ctx,
@@ -10730,9 +10717,9 @@ impl TypedProgram {
         &mut self,
         generic_function_id: FunctionId,
         call: &ParsedCall,
+        span: SpanId,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
-        let span = call.span;
         let function = self.get_function(generic_function_id);
         let function_name = function.name;
         let is_macro = function.is_macro();
@@ -10764,18 +10751,19 @@ impl TypedProgram {
                 self.ident_str(function_name)
             );
         }
-        if type_params.len() != call.type_args.len() {
+        let type_args = call.type_args(&self.ast.mem);
+        if type_params.len() != type_args.len() {
             kbail!(
                 self,
                 span,
                 "Takes {} type arguments; got {}",
                 type_params.len(),
-                call.type_args.len()
+                type_args.len()
             );
         }
         let (typed_type_args, _subst_pairs) = self.check_type_args_against_params(
             type_params,
-            self.ast.mem.getn(call.type_args),
+            self.ast.mem.getn(type_args),
             ctx.scope_id,
             EvalTypeExprContext::EMPTY,
         )?;
@@ -11004,12 +10992,12 @@ impl TypedProgram {
         &mut self,
         ability_function_ref: TypedAbilityFunctionRef,
         fn_call: &ParsedCall,
+        call_span: SpanId,
         receiver_if_method: Option<TypedExprId>,
         known_args: Option<&(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
         stashed_args: &mut SV8<(ParsedExprId, TypedExprId)>,
     ) -> K1Result<AbilityImplFunction> {
-        let call_span = fn_call.span;
         let ability_fn_sig = self.get_function(ability_function_ref.function_id).signature();
         let base_ability_id = ability_function_ref.ability_id;
         let ability_fn_type = *self.types.get(ability_fn_sig.function_type).as_function().unwrap();
@@ -11046,6 +11034,7 @@ impl TypedProgram {
 
         let aligned = self.align_call_arguments_with_parameters(
             fn_call,
+            call_span,
             &ability_fn_sig,
             receiver_if_method,
             ability_fn_type.logical_params(),
@@ -11055,8 +11044,9 @@ impl TypedProgram {
             false,
         )?;
         self.splice_stashed_args(aligned.args, stashed_args);
-        let mut args_and_params = self.tmp.new_list(aligned.len() + 1 + fn_call.type_args.len());
-        for (index, type_arg) in self.ast.mem.getn(fn_call.type_args).iter().enumerate() {
+        let type_args = fn_call.type_args(&self.ast.mem);
+        let mut args_and_params = self.tmp.new_list(aligned.len() + 1 + type_args.len());
+        for (index, type_arg) in self.ast.mem.getn(type_args).iter().enumerate() {
             let Some(passed_type_expr) = type_arg.type_expr else { continue };
             let matching_param = match type_arg.name {
                 Some(passed_name) => fn_own_type_params
@@ -11107,7 +11097,7 @@ impl TypedProgram {
                 &all_type_params,
                 self_only_type_params_handle,
                 &args_and_params,
-                fn_call.span,
+                call_span,
                 ctx.scope_id,
                 Some(infer::InferArgStash {
                     ctx,
@@ -11234,10 +11224,12 @@ impl TypedProgram {
         &mut self,
         base_expr: TypedExprId,
         fn_call: &ParsedCall,
+        span: SpanId,
     ) -> K1Result<Option<TypedExprId>> {
         let fn_name = self.ident_str(fn_call.name.name);
-        let preconditions =
-            fn_name.starts_with("as") && fn_call.type_args.is_empty() && fn_call.args.len() == 1;
+        let preconditions = fn_name.starts_with("as")
+            && fn_call.type_args(&self.ast.mem).is_empty()
+            && fn_call.args.len() == 1;
         if !preconditions {
             return Ok(None);
         }
@@ -11252,7 +11244,6 @@ impl TypedProgram {
             Type::Sum(e) => (e, false),
             _ => return Ok(None),
         };
-        let span = fn_call.span;
         let variants = e.variants;
         let mut s = std::mem::take(&mut self.buffers.name_builder);
         let fn_name = self.ident_str(fn_call.name.name);
@@ -11306,9 +11297,9 @@ impl TypedProgram {
     fn eval_variant(
         &mut self,
         parsed_variant: ParsedVariant,
+        span: SpanId,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
-        let span = parsed_variant.span;
         let provided_type = match parsed_variant.ty {
             Some(ty) => self.eval_type_expr(ty, ctx.scope_id)?,
             None => match ctx.expected_type_id {
@@ -11341,7 +11332,7 @@ impl TypedProgram {
                 Some(_s) => Ok(()),
             },
             Type::Enum(_e) => Ok(()),
-            _ => Err(kerr!(self, parsed_variant.span, "Not a sum or enum type: {}", provided_type)),
+            _ => Err(kerr!(self, span, "Not a sum or enum type: {}", provided_type)),
         }?;
 
         let base_sum_or_generic_sum = self.types.get(provided_type);
@@ -11492,6 +11483,7 @@ impl TypedProgram {
     fn align_call_arguments_with_parameters(
         &mut self,
         fn_call: &ParsedCall,
+        span: SpanId,
         signature: &FunctionSignature,
         // If a method call and we've already compiled the first argument
         // this is it, we should use it instead of the fn_call's first arg
@@ -11503,7 +11495,6 @@ impl TypedProgram {
         skip_leading_receiver_arg: bool,
     ) -> K1Result<ArgsAndParams> {
         let fn_name = fn_call.name.name;
-        let span = fn_call.span;
         let args_slice = self.ast.mem.getn(fn_call.args);
         let args_slice = if skip_leading_receiver_arg { &args_slice[1..] } else { args_slice };
         let explicit_context_args = args_slice.iter().any(|a| a.is_explicit_context);
@@ -11518,6 +11509,7 @@ impl TypedProgram {
                     context_param.type_id,
                     calling_scope,
                     fn_call,
+                    span,
                     tolerate_missing_context_args,
                 )?;
                 if let Some(arg) = resolved {
@@ -11570,7 +11562,7 @@ impl TypedProgram {
                     else {
                         kbail!(
                             self,
-                            fn_call.span,
+                            span,
                             "Missing named argument for parameter {}",
                             fn_param.name
                         );
@@ -11620,9 +11612,9 @@ impl TypedProgram {
         constraint_source_type: TypeId,
         calling_scope: ScopeId,
         fn_call: &ParsedCall,
+        span: SpanId,
         tolerate_missing: bool,
     ) -> K1Result<Option<MaybeTypedExpr>> {
-        let span = fn_call.span;
         let ability_match = self.find_context_variable_by_ability_constraints(
             calling_scope,
             constraint_source_type,
@@ -11699,10 +11691,10 @@ impl TypedProgram {
         generic_params: MSlice<FnParamType, TypedProgram>,
         specialized_params: MSlice<FnParamType, TypedProgram>,
         fn_call: &ParsedCall,
+        span: SpanId,
         calling_scope: ScopeId,
         skip_leading_receiver_arg: bool,
     ) -> K1Result<ArgsAndParams> {
-        let span = fn_call.span;
         let args_slice = self.ast.mem.getn(fn_call.args);
         let args_slice = if skip_leading_receiver_arg { &args_slice[1..] } else { args_slice };
         let explicit_context_args = args_slice.iter().any(|a| a.is_explicit_context);
@@ -11743,6 +11735,7 @@ impl TypedProgram {
                             generic_param.type_id,
                             calling_scope,
                             fn_call,
+                            span,
                             false,
                         )?
                         .unwrap(),
@@ -11854,7 +11847,7 @@ impl TypedProgram {
         for arg in self.ast.mem.getn(fn_call.args) {
             let is_marker = match self.ast.exprs.get(arg.value) {
                 ParsedExpr::Variable(v) => {
-                    v.name.path.is_empty() && self.string_is_completion_marker(v.name.name, false)
+                    !v.name.has_path() && self.string_is_completion_marker(v.name.name, false)
                 }
                 _ => false,
             };
@@ -11887,12 +11880,14 @@ impl TypedProgram {
     fn eval_function_call(
         &mut self,
         fn_call: &ParsedCall,
+        span: SpanId,
         known_args: Option<(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
         known_callee: Option<Callee>,
     ) -> K1Result<TypedExprId> {
         let tmp_mark = self.tmp.mark();
-        let result = self.eval_function_call_inner(fn_call, known_args, ctx, known_callee, &[]);
+        let result =
+            self.eval_function_call_inner(fn_call, span, known_args, ctx, known_callee, &[]);
         self.tmp.reset_to(tmp_mark);
         result
     }
@@ -11900,11 +11895,12 @@ impl TypedProgram {
     fn eval_function_call_with_typed_first_arg(
         &mut self,
         fn_call: &ParsedCall,
+        span: SpanId,
         first_arg: (ParsedExprId, TypedExprId),
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let tmp_mark = self.tmp.mark();
-        let result = self.eval_function_call_inner(fn_call, None, ctx, None, &[first_arg]);
+        let result = self.eval_function_call_inner(fn_call, span, None, ctx, None, &[first_arg]);
         self.tmp.reset_to(tmp_mark);
         result
     }
@@ -11912,12 +11908,12 @@ impl TypedProgram {
     fn eval_function_call_inner(
         &mut self,
         fn_call: &ParsedCall,
+        span: SpanId,
         known_args: Option<(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
         known_callee: Option<Callee>,
         pre_typed_args: &[(ParsedExprId, TypedExprId)],
     ) -> K1Result<TypedExprId> {
-        let span = fn_call.span;
         debug!("eval_function_call {}", self.qident_to_string(&fn_call.name));
         assert!(
             fn_call.args.is_empty() || known_args.is_none(),
@@ -11930,7 +11926,13 @@ impl TypedProgram {
         let ctx = if marker_arg_index.is_some() { ctx.with_ccursor_owned_by_call() } else { ctx };
         let call_resolution = match known_callee {
             None => {
-                match self.resolve_parsed_call(fn_call, known_args.as_ref(), ctx, &mut stashed_args)
+                match self.resolve_parsed_call(
+                    fn_call,
+                    span,
+                    known_args.as_ref(),
+                    ctx,
+                    &mut stashed_args,
+                )
                 {
                     Ok(resolution) => resolution,
                     Err(e) => {
@@ -11969,7 +11971,7 @@ impl TypedProgram {
                 if method_receiver.is_some() {
                     kbail!(self, span, "Method-position macros are not yet supported");
                 }
-                let type_args = self.ast.mem.getn(fn_call.type_args);
+                let type_args = self.ast.mem.getn(fn_call.type_args(&self.ast.mem));
                 let mut macro_args: SV8<_> = smallvec![];
                 for arg in self.ast.mem.getn(fn_call.args) {
                     macro_args.push(*arg)
@@ -11977,7 +11979,7 @@ impl TypedProgram {
                 return match self.execute_macro_call(
                     type_args,
                     &macro_args,
-                    fn_call.span,
+                    span,
                     function_id,
                     false,
                     ctx,
@@ -12043,6 +12045,7 @@ impl TypedProgram {
             false => {
                 let args_and_params = self.align_call_arguments_with_parameters(
                     fn_call,
+                    span,
                     &signature,
                     method_receiver,
                     params,
@@ -12108,6 +12111,7 @@ impl TypedProgram {
             true => {
                 let original_args_and_params = self.align_call_arguments_with_parameters(
                     fn_call,
+                    span,
                     &signature,
                     method_receiver,
                     params,
@@ -12134,6 +12138,7 @@ impl TypedProgram {
                     }
                     _ => self.infer_and_constrain_call_type_args(
                         fn_call,
+                        span,
                         signature,
                         ctx,
                         &original_args_and_params,
@@ -12224,6 +12229,7 @@ impl TypedProgram {
                     params,
                     specialized_params,
                     fn_call,
+                    span,
                     ctx.scope_id,
                     skip_leading_receiver_arg,
                 )?;
@@ -16410,7 +16416,7 @@ impl TypedProgram {
         if self.find_ability_namespaced(scope_id, name)?.is_some() {
             return Ok(true);
         }
-        Ok(name.path.is_empty() && self.scopes.find_pending_ability(scope_id, name.name).is_some())
+        Ok(!name.has_path() && self.scopes.find_pending_ability(scope_id, name.name).is_some())
     }
 
     fn find_ability_or_declare(
@@ -17293,7 +17299,7 @@ impl TypedProgram {
             .ast
             .mem
             .pushn(&[IdentSpanned::make_anon(b.std), IdentSpanned::make_anon(b.reload)]);
-        let load_ns_name = QIdent { path, name: callee, name_span: span };
+        let load_ns_name = QIdent::make(&mut self.ast.mem, path, callee, span);
 
         let body = self
             .synth_typed_call_typed_args(
@@ -18055,14 +18061,15 @@ impl TypedProgram {
         let core_scalarcmp = intern_path!(self.ast.idents.b.core, self.ast.idents.b.scalar_cmp);
 
         macro_rules! core {
-            ($name: expr) => {
-                QIdent { path: core_ns, name: get_ident!(self, $name), name_span: span }
-            };
+            ($name: expr) => {{
+                let name = get_ident!(self, $name);
+                QIdent::make(&mut self.ast.mem, core_ns, name, span)
+            }};
         }
 
         let idents_to_use = [
-            QIdent { path: root_ns, name: self.ast.idents.b.core, name_span: span }, // use _root/core;
-            QIdent { path: root_ns, name: self.ast.idents.b.std, name_span: span }, // use _root/std;
+            QIdent::make(&mut self.ast.mem, root_ns, self.ast.idents.b.core, span), // use _root/core;
+            QIdent::make(&mut self.ast.mem, root_ns, self.ast.idents.b.std, span), // use _root/std;
             core!("u8"),
             core!("u16"),
             core!("u32"),
@@ -18140,12 +18147,27 @@ impl TypedProgram {
             core!("code"),
             core!("code-builder"),
             core!("optref"),
-            QIdent { path: core_scalarcmp, name: get_ident!(self, "min"), name_span: span },
-            QIdent { path: core_scalarcmp, name: get_ident!(self, "max"), name_span: span },
-            QIdent { path: core_mem, name: get_ident!(self, "bitcast"), name_span: span },
-            QIdent { path: core_types, name: self.ast.idents.b.enum_, name_span: span },
-            QIdent { path: core_types, name: get_ident!(self, "sum"), name_span: span },
-            QIdent { path: core_types, name: get_ident!(self, "type-id"), name_span: span },
+            {
+                let name = get_ident!(self, "min");
+                QIdent::make(&mut self.ast.mem, core_scalarcmp, name, span)
+            },
+            {
+                let name = get_ident!(self, "max");
+                QIdent::make(&mut self.ast.mem, core_scalarcmp, name, span)
+            },
+            {
+                let name = get_ident!(self, "bitcast");
+                QIdent::make(&mut self.ast.mem, core_mem, name, span)
+            },
+            QIdent::make(&mut self.ast.mem, core_types, self.ast.idents.b.enum_, span),
+            {
+                let name = get_ident!(self, "sum");
+                QIdent::make(&mut self.ast.mem, core_types, name, span)
+            },
+            {
+                let name = get_ident!(self, "type-id");
+                QIdent::make(&mut self.ast.mem, core_types, name, span)
+            },
         ];
         for qid in idents_to_use.into_iter() {
             let use_id = self.ast.uses.add(parse::ParsedUse {

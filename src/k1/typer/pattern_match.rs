@@ -538,9 +538,10 @@ impl TypedProgram {
         match parsed_pattern_expr {
             ParsedPattern::Wildcard(span) => Ok(self.patterns.add(TypedPattern::Wildcard(*span))),
             ParsedPattern::Literal(literal_expr_id) => {
+                let span = self.ast.exprs.get_span(*literal_expr_id);
                 match self.ast.exprs.get(*literal_expr_id).expect_literal() {
-                    ParsedLiteral::Char(c, span) => match self.types.get(target_type_id) {
-                        Type::Char => Ok(self.patterns.add(TypedPattern::LiteralChar(*c, *span))),
+                    ParsedLiteral::Char(c) => match self.types.get(target_type_id) {
+                        Type::Char => Ok(self.patterns.add(TypedPattern::LiteralChar(*c, span))),
                         _ => Err(kerr!(
                             self,
                             self.ast.get_pattern_span(pat_expr),
@@ -548,10 +549,9 @@ impl TypedProgram {
                             target_type_id
                         )),
                     },
-                    ParsedLiteral::Numeric(num_lit) => {
-                        let num_lit = *num_lit;
+                    ParsedLiteral::Numeric { text_span } => {
                         let num_value_id = self.eval_numeric_value(
-                            num_lit.text_span,
+                            *text_span,
                             EvalExprContext::make(scope_id)
                                 .with_expected_type(Some(target_type_id)),
                         )?;
@@ -559,7 +559,7 @@ impl TypedProgram {
                             StaticValue::Int(_) => match self.types.get(target_type_id) {
                                 Type::Integer(_) => Ok(self
                                     .patterns
-                                    .add(TypedPattern::LiteralInteger(num_value_id, num_lit.span))),
+                                    .add(TypedPattern::LiteralInteger(num_value_id, span))),
                                 _ => Err(kerr!(
                                     self,
                                     self.ast.get_pattern_span(pat_expr),
@@ -570,7 +570,7 @@ impl TypedProgram {
                             StaticValue::Float(_) => match self.types.get(target_type_id) {
                                 Type::Float(_) => Ok(self
                                     .patterns
-                                    .add(TypedPattern::LiteralFloat(num_value_id, num_lit.span))),
+                                    .add(TypedPattern::LiteralFloat(num_value_id, span))),
                                 _ => Err(kerr!(
                                     self,
                                     self.ast.get_pattern_span(pat_expr),
@@ -585,8 +585,8 @@ impl TypedProgram {
                             }
                         }
                     }
-                    ParsedLiteral::Bool(b, span) => match self.types.get(target_type_id) {
-                        Type::Bool => Ok(self.patterns.add(TypedPattern::LiteralBool(*b, *span))),
+                    ParsedLiteral::Bool(b) => match self.types.get(target_type_id) {
+                        Type::Bool => Ok(self.patterns.add(TypedPattern::LiteralBool(*b, span))),
                         _ => Err(kerr!(
                             self,
                             self.ast.get_pattern_span(pat_expr),
@@ -594,7 +594,7 @@ impl TypedProgram {
                             target_type_id
                         )),
                     },
-                    ParsedLiteral::String(string_id, span) => {
+                    ParsedLiteral::String(string_id) => {
                         if self.get_type_family_type(target_type_id) == self.builtin_types.string()
                         {
                             Ok(())
@@ -606,7 +606,7 @@ impl TypedProgram {
                                 target_type_id
                             ))
                         }?;
-                        Ok(self.patterns.add(TypedPattern::LiteralString(*string_id, *span)))
+                        Ok(self.patterns.add(TypedPattern::LiteralString(*string_id, span)))
                     }
                 }
             }
@@ -884,6 +884,7 @@ impl TypedProgram {
     pub(super) fn eval_match_expr(
         &mut self,
         parsed_match: parse::ParsedMatch,
+        match_expr_span: SpanId,
         ctx: EvalExprContext,
         allow_bindings: bool,
         fallback_expr: Option<TypedExprId>,
@@ -909,8 +910,6 @@ impl TypedProgram {
 
         let match_subject_variable =
             self.synth_variable_defn_simple(self.ast.idents.b.subject, subject_expr, ctx.scope_id);
-
-        let match_expr_span = parsed_match.span;
 
         let parsed_cases = parsed_match.cases;
         let parsed_pattern_count: u32 = self
@@ -1032,7 +1031,7 @@ impl TypedProgram {
                         ) {
                             kbail!(
                                 self,
-                                self.ast.get_expr_span(guard_condition_expr_id),
+                                self.ast.exprs.get_span(guard_condition_expr_id),
                                 "Expected boolean condition: {msg}"
                             );
                         };
@@ -1145,7 +1144,8 @@ impl TypedProgram {
     ) -> K1Result<TypedExprId> {
         let ParsedExpr::Match(parsed_match) = self.ast.exprs.get(match_expr_id) else { panic!() };
         let parsed_match = *parsed_match;
-        if let Some(phony) = self.synth_phony_if_generic_pass(ctx, parsed_match.span) {
+        let span = self.ast.exprs.get_span(match_expr_id);
+        if let Some(phony) = self.synth_phony_if_generic_pass(ctx, span) {
             return Ok(phony);
         }
         let subject =
@@ -1183,7 +1183,7 @@ impl TypedProgram {
             }
         }
         let Some(winner) = winner else {
-            self.ice_span(parsed_match.span, "Exhaustive static match matched no arm")
+            self.ice_span(span, "Exhaustive static match matched no arm")
         };
         if bindings.is_empty() {
             return self.eval_expr(winner, ctx);
@@ -1191,7 +1191,7 @@ impl TypedProgram {
         let mut block = self.new_block_builder(
             ctx.scope_id,
             ScopeType::MatchArm,
-            parsed_match.span,
+            span,
             bindings.len() as u32 + 1,
         );
         for (name, span, value_id) in bindings.iter() {

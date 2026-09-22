@@ -495,7 +495,7 @@ impl TypedProgram {
                             None => next_tag,
                             Some(explicit_value) => {
                                 let parsed = self.eval_integer_value(
-                                    explicit_value.text_span,
+                                    explicit_value,
                                     Some(tag_type.type_id()),
                                 )?;
                                 parsed
@@ -540,7 +540,7 @@ impl TypedProgram {
                             None => next_tag,
                             Some(explicit_value) => {
                                 let parsed = self.eval_integer_value(
-                                    explicit_value.text_span,
+                                    explicit_value,
                                     Some(tag_type.type_id()),
                                 )?;
                                 parsed
@@ -813,7 +813,7 @@ impl TypedProgram {
                 let static_type_id = self.add_type_anon(Type::StaticValue(value_type));
                 Ok(static_type_id)
             }
-            ParsedTypeExpr::StaticLiteral(parsed_literal) => {
+            ParsedTypeExpr::StaticLiteral(parsed_literal, _) => {
                 let parsed_literal = *parsed_literal;
                 let (static_value_id, inner_type_id) =
                     self.literal_to_static_value_and_type(&parsed_literal, scope_id, None)?;
@@ -873,22 +873,21 @@ impl TypedProgram {
         expected_type_hint: Option<TypeId>,
     ) -> K1Result<(StaticValueId, TypeId)> {
         match parsed_literal {
-            ParsedLiteral::Char(byte, _) => {
+            ParsedLiteral::Char(byte) => {
                 Ok((self.static_values.add(StaticValue::Char(*byte)), CHAR_TYPE_ID))
             }
-            ParsedLiteral::Bool(b, _) => {
+            ParsedLiteral::Bool(b) => {
                 Ok((self.static_values.add(StaticValue::Bool(*b)), BOOL_TYPE_ID))
             }
-            ParsedLiteral::String(s, _) => {
+            ParsedLiteral::String(s) => {
                 Ok((self.static_values.add(StaticValue::String(*s)), self.builtin_types.string()))
             }
-            ParsedLiteral::Numeric(numeric) => {
+            ParsedLiteral::Numeric { text_span } => {
                 // Parse the numeric literal and determine its type and value
                 // Use the expected type hint if provided (e.g., i64 for array sizes)
                 let eval_context =
                     EvalExprContext::make(scope_id).with_expected_type(expected_type_hint);
-                let num_static_value_id =
-                    self.eval_numeric_value(numeric.text_span, eval_context)?;
+                let num_static_value_id = self.eval_numeric_value(*text_span, eval_context)?;
                 Ok((num_static_value_id, self.get_static_value_type(num_static_value_id)))
             }
         }
@@ -904,7 +903,7 @@ impl TypedProgram {
         let ParsedTypeExpr::TypeApplication(ty_app) = self.ast.type_exprs.get(ty_app_id) else {
             panic_at_disco!("Expected TypeApplication")
         };
-        if !ty_app.name.path.is_empty() {
+        if ty_app.name.has_path() {
             return Ok(None);
         }
         let ty_app = *ty_app;
@@ -1527,7 +1526,7 @@ impl TypedProgram {
         if self.ident_str(ty_app.name.name) != "opaque" {
             return Ok(None);
         }
-        if !ty_app.name.path.is_empty() {
+        if ty_app.name.has_path() {
             kbail!(
                 self,
                 ty_app.span,
@@ -1549,31 +1548,31 @@ impl TypedProgram {
         let Some(align_expr) = self.ast.mem.get_nth(ty_app.args, 1).type_expr else {
             kbail!(self, ty_app.span, "Wildcard _ type not accepted here");
         };
-        let ParsedTypeExpr::StaticLiteral(ParsedLiteral::Numeric(size_lit)) =
+        let ParsedTypeExpr::StaticLiteral(ParsedLiteral::Numeric { text_span: size_span }, _) =
             *self.ast.type_exprs.get(size_expr)
         else {
             kbail!(self, ty_app.span, "Expected a static literal for opaque size");
         };
-        let ParsedTypeExpr::StaticLiteral(ParsedLiteral::Numeric(align_lit)) =
+        let ParsedTypeExpr::StaticLiteral(ParsedLiteral::Numeric { text_span: align_span }, _) =
             *self.ast.type_exprs.get(align_expr)
         else {
             kbail!(self, ty_app.span, "Expected a static literal for opaque alignment");
         };
         let TypedIntValue::U32(size) =
-            self.eval_integer_value(size_lit.text_span, Some(IntegerType::U32.type_id()))?
+            self.eval_integer_value(size_span, Some(IntegerType::U32.type_id()))?
         else {
-            kbail!(self, size_lit.span, "Expected a u32 value for opaque size");
+            kbail!(self, size_span, "Expected a u32 value for opaque size");
         };
         let TypedIntValue::U32(align) =
-            self.eval_integer_value(align_lit.text_span, Some(IntegerType::U32.type_id()))?
+            self.eval_integer_value(align_span, Some(IntegerType::U32.type_id()))?
         else {
-            kbail!(self, align_lit.span, "Expected a u32 value for opaque alignment");
+            kbail!(self, align_span, "Expected a u32 value for opaque alignment");
         };
 
         if align == 0 || !align.is_power_of_two() || align > 128 {
             kbail!(
                 self,
-                align_lit.span,
+                align_span,
                 "Alignment must be a non-zero power of two, not exceeding 128, got {}",
                 align
             );
@@ -1590,7 +1589,7 @@ impl TypedProgram {
         scope_id: ScopeId,
         context: EvalTypeExprContext,
     ) -> K1Result<(TypeId, TypeId)> {
-        if !ty_app.name.path.is_empty() {
+        if ty_app.name.has_path() {
             kbail!(
                 self,
                 ty_app.span,

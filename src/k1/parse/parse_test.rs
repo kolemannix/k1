@@ -67,9 +67,9 @@ fn basic_fn() -> Result<(), ParseError> {
 
 #[test]
 fn string_literal() -> ParseResult<()> {
-    let (ast, result) = test_single_expr(r#""Hello, World!""#)?;
-    let ParsedExpr::Literal(ParsedLiteral::String(s, span_id)) = result else { panic!() };
-    let span = ast.spans.get(span_id);
+    let (ast, result, expr_id) = test_single_expr_with_id(r#""Hello, World!""#)?;
+    let ParsedExpr::Literal(ParsedLiteral::String(s)) = result else { panic!() };
+    let span = ast.spans.get(ast.exprs.get_span(expr_id));
     assert_eq!(ast.get_string(s), "Hello, World!");
     assert_eq!(span.start, 0);
     assert_eq!(span.len, 13 + 2);
@@ -120,12 +120,12 @@ fn struct_shorthand() -> Result<(), ParseError> {
 #[test]
 fn zero_literal() -> Result<(), ParseError> {
     let (_ast, result) = test_single_expr(".0")?;
-    assert!(matches!(result, ParsedExpr::Zero(_)));
+    assert!(matches!(result, ParsedExpr::Zero));
     let (_ast, result) = test_single_expr(":some .0")?;
     assert!(matches!(result, ParsedExpr::Variant(ParsedVariant { payload: Some(_), .. })));
     let (ast, result) = test_single_expr(".0: point")?;
     let ParsedExpr::TypeHint(th) = result else { panic!("Expected a type hint") };
-    assert!(matches!(ast.exprs.get(th.inner), ParsedExpr::Zero(_)));
+    assert!(matches!(ast.exprs.get(th.inner), ParsedExpr::Zero));
     for src in [".1", ". 0"] {
         assert!(test_single_expr(src).is_err(), "{src} should not parse");
     }
@@ -141,7 +141,7 @@ fn nominated_literal() -> Result<(), ParseError> {
 
     let (ast, result) = test_single_expr("wrap[int].0")?;
     let ParsedExpr::TypeHint(th) = result else { panic!("Expected a type hint") };
-    assert!(matches!(ast.exprs.get(th.inner), ParsedExpr::Zero(_)));
+    assert!(matches!(ast.exprs.get(th.inner), ParsedExpr::Zero));
     let ParsedTypeExpr::TypeApplication(app) = ast.type_exprs.get(th.ty) else {
         panic!("Expected a type application")
     };
@@ -286,7 +286,7 @@ fn precedence() -> Result<(), ParseError> {
     let ParsedExpr::Literal(rhs) = ast.exprs.get(bin_op.rhs) else { panic!() };
     assert_eq!(bin_op.op_kind, BinaryOpKind::Add);
     assert_eq!(lhs.op_kind, BinaryOpKind::Multiply);
-    assert!(matches!(rhs, ParsedLiteral::Numeric(_)));
+    assert!(matches!(rhs, ParsedLiteral::Numeric { .. }));
     Ok(())
 }
 
@@ -341,7 +341,7 @@ fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
     let ParsedExpr::Call(fn_call) = ast.exprs.get(args[0].value).clone() else { panic!() };
     assert_eq!(fn_call.name.name, ast.idents.intern("getFn"));
     assert_eq!(call.name.name, ast.idents.intern("baz"));
-    let type_args = ast.mem.getn(call.type_args);
+    let type_args = ast.mem.getn(call.type_args(&ast.mem));
     let type_arg = ast.type_exprs.get(type_args[0].type_expr.unwrap());
     assert!(matches!(type_arg, ParsedTypeExpr::TypeApplication(_)));
     assert!(matches!(ast.exprs.get(args[1].value), ParsedExpr::Literal(_)));
@@ -352,7 +352,7 @@ fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
 fn char_value() -> ParseResult<()> {
     let input = "'x'";
     let (_ast, result) = test_single_expr(input)?;
-    assert!(matches!(result, ParsedExpr::Literal(ParsedLiteral::Char(b, _)) if b == b'x'));
+    assert!(matches!(result, ParsedExpr::Literal(ParsedLiteral::Char(b)) if b == b'x'));
     Ok(())
 }
 
@@ -361,14 +361,14 @@ fn namespaced_fncall() -> ParseResult<()> {
     let input = "foo/bar/baz()";
     let (ast, result) = test_single_expr(input)?;
     let ParsedExpr::Call(fn_call) = result else { panic!("not fncall") };
-    assert_eq!(ast.idents.get_string(ast.mem.get_nth(fn_call.name.path, 0).name), "foo");
+    assert_eq!(ast.idents.get_string(ast.mem.get_nth(fn_call.name.path(&ast.mem), 0).name), "foo");
     assert_eq!(
-        ast.spans.get(ast.mem.get_nth(fn_call.name.path, 0).span),
+        ast.spans.get(ast.mem.get_nth(fn_call.name.path(&ast.mem), 0).span),
         Span { file_id: 0, start: 0, len: 3 }
     );
-    assert_eq!(ast.idents.get_string(ast.mem.get_nth(fn_call.name.path, 1).name), "bar");
+    assert_eq!(ast.idents.get_string(ast.mem.get_nth(fn_call.name.path(&ast.mem), 1).name), "bar");
     assert_eq!(
-        ast.spans.get(ast.mem.get_nth(fn_call.name.path, 1).span),
+        ast.spans.get(ast.mem.get_nth(fn_call.name.path(&ast.mem), 1).span),
         Span { file_id: 0, start: 4, len: 3 }
     );
     assert_eq!(fn_call.name.name, ast.idents.intern("baz"));
@@ -380,8 +380,8 @@ fn namespaced_val() -> ParseResult<()> {
     let input = "foo/bar/baz";
     let (ast, result) = test_single_expr(input)?;
     let ParsedExpr::Variable(variable) = result else { panic!("not variable") };
-    assert_eq!(ast.idents.get_string(ast.mem.get_nth(variable.name.path, 0).name), "foo");
-    assert_eq!(ast.idents.get_string(ast.mem.get_nth(variable.name.path, 1).name), "bar");
+    assert_eq!(ast.idents.get_string(ast.mem.get_nth(variable.name.path(&ast.mem), 0).name), "foo");
+    assert_eq!(ast.idents.get_string(ast.mem.get_nth(variable.name.path(&ast.mem), 1).name), "bar");
     assert_eq!(variable.name.name, ast.idents.intern("baz"));
     Ok(())
 }
@@ -545,18 +545,18 @@ fn empty_struct() -> ParseResult<()> {
 fn integer_suffix() -> ParseResult<()> {
     let input_u8 = r#"42u8"#;
     let input_i64 = r#"-42i64"#;
-    let (ast, expr, _expr_id) = test_single_expr_with_id(input_u8)?;
-    let ParsedExpr::Literal(ParsedLiteral::Numeric(_)) = expr else {
+    let (ast, expr, expr_id) = test_single_expr_with_id(input_u8)?;
+    let ParsedExpr::Literal(ParsedLiteral::Numeric { .. }) = expr else {
         panic!("`{input_u8}` did not parse as expected")
     };
-    let text = ast.get_span_content(expr.get_span());
+    let text = ast.get_span_content(ast.exprs.get_span(expr_id));
     assert_eq!(text, "42u8");
 
-    let (ast, expr, _expr_id) = test_single_expr_with_id(input_i64)?;
-    let ParsedExpr::Literal(ParsedLiteral::Numeric(_)) = expr else {
+    let (ast, expr, expr_id) = test_single_expr_with_id(input_i64)?;
+    let ParsedExpr::Literal(ParsedLiteral::Numeric { .. }) = expr else {
         panic!("`{input_i64}` did not parse as expected")
     };
-    let text = ast.get_span_content(expr.get_span());
+    let text = ast.get_span_content(ast.exprs.get_span(expr_id));
     assert_eq!(text, "-42i64");
     Ok(())
 }
@@ -577,9 +577,9 @@ fn tag_no_type_hint() -> ParseResult<()> {
 #[test]
 fn consecutive_strings() -> ParseResult<()> {
     let input = r#""Hello, " "World!""#;
-    let (ast, expr, _expr_id) = test_single_expr_with_id(input)?;
+    let (ast, expr, expr_id) = test_single_expr_with_id(input)?;
     let ParsedExpr::InterpolatedString(is) = expr else { panic!() };
-    let span = ast.spans.get(is.span);
+    let span = ast.spans.get(ast.exprs.get_span(expr_id));
     assert_eq!(is.parts.len(), 2);
     let InterpolatedStringPart::String { string_id: s1, .. } = ast.mem.get_nth(is.parts, 0) else {
         panic!()

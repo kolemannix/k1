@@ -414,20 +414,13 @@ impl TypedProgram {
         ctx: EvalExprContext,
         is_method: bool,
     ) -> K1Result<TypedExprId> {
-        let call = ParsedCall {
-            name,
-            type_args: MSlice::empty(),
-            args: MSlice::empty(),
-            span: name.name_span,
-            is_method,
-            id: ParsedExprId::PENDING,
-        };
+        let call = ParsedCall::without_type_args(name, MSlice::empty(), is_method);
         let known_callee = if is_method { None } else { self.core_fn_callee(&name) };
-        self.eval_function_call(&call, Some((type_args, args)), ctx, known_callee)
+        self.eval_function_call(&call, name.name_span, Some((type_args, args)), ctx, known_callee)
     }
 
     fn core_fn_callee(&mut self, name: &QIdent) -> Option<Callee> {
-        let key = (name.path, name.name);
+        let key = (name.path_handle(), name.name);
         if let Some(function_id) = self.core_fns_by_name.get(&key) {
             return Some(Callee::StaticFunction(*function_id));
         }
@@ -767,7 +760,7 @@ impl TypedProgram {
                     let expr_span = self.ast.exprs.get_span(*expr_id);
                     let naked_variable_name = match parsed_expr {
                         ParsedExpr::Variable(ParsedVariable { name, .. })
-                            if name.path.is_empty() =>
+                            if !name.has_path() =>
                         {
                             Some(name.name)
                         }

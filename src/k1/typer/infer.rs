@@ -530,6 +530,7 @@ impl TypedProgram {
     pub(crate) fn infer_and_constrain_call_type_args(
         &mut self,
         fn_call: &ParsedCall,
+        call_span: SpanId,
         generic_function_sig: FunctionSignature,
         ctx: EvalExprContext,
         args_and_params: &ArgsAndParams,
@@ -537,7 +538,7 @@ impl TypedProgram {
     ) -> K1Result<TypeArgs> {
         debug!("infer_and_constrain_call_type_args");
         debug_assert!(generic_function_sig.has_type_params());
-        let passed_type_args = fn_call.type_args;
+        let passed_type_args = fn_call.type_args(&self.ast.mem);
         let passed_type_args_count = passed_type_args.len();
         let type_params = generic_function_sig.type_params;
         // Fuse these two paths; where for a given type param,
@@ -545,7 +546,7 @@ impl TypedProgram {
         if !passed_type_args.is_empty() && passed_type_args.len() != type_params.len() {
             kbail!(
                 self,
-                fn_call.span,
+                call_span,
                 "Expected {} type arguments but got {}",
                 type_params.len(),
                 passed_type_args_count
@@ -597,7 +598,7 @@ impl TypedProgram {
                             allow_mismatch: false,
                         })
                     } else {
-                        kbail!(self, fn_call.span, "Unable to line up your type arguments");
+                        kbail!(self, call_span, "Unable to line up your type arguments");
                     }
                 }
             }
@@ -645,7 +646,7 @@ impl TypedProgram {
                     self.mem.getn(type_params),
                     type_params,
                     &inference_pairs,
-                    fn_call.span,
+                    call_span,
                     ctx.scope_id,
                     stash,
                 )
@@ -670,7 +671,7 @@ impl TypedProgram {
                 *solution,
                 &params_to_solutions_pairs,
                 ctx.scope_id,
-                fn_call.span,
+                call_span,
             )
             .map_err(|e| {
                 kerr!(

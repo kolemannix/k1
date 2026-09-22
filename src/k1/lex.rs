@@ -12,6 +12,7 @@ use crate::{static_assert_niched, static_assert_size};
 use TokenKind as K;
 
 pub const EOF_CHAR: char = 27 as char; // esc
+
 // EOF acts like a line end: whitespace- and newline-preceded
 pub const EOF_TOKEN: Token = Token { kind: TokenKind::Eof, flags: 0x01 | 0x04, len: 0, start: 0 };
 
@@ -326,6 +327,39 @@ impl AsRef<str> for TokenKind {
     }
 }
 
+const fn keyword_key(bytes: &[u8]) -> u64 {
+    let mut key = 0u64;
+    let mut i = 0;
+    while i < bytes.len() {
+        key |= (bytes[i] as u64) << (8 * i);
+        i += 1;
+    }
+    key
+}
+
+const KW_FN: u64 = keyword_key(b"fn");
+const KW_LET: u64 = keyword_key(b"let");
+const KW_AND: u64 = keyword_key(b"and");
+const KW_OR: u64 = keyword_key(b"or");
+const KW_IF: u64 = keyword_key(b"if");
+const KW_ELSE: u64 = keyword_key(b"else");
+const KW_WHILE: u64 = keyword_key(b"while");
+const KW_LOOP: u64 = keyword_key(b"loop");
+const KW_NS: u64 = keyword_key(b"ns");
+const KW_INTERN: u64 = keyword_key(b"intern");
+const KW_FOR: u64 = keyword_key(b"for");
+const KW_IN: u64 = keyword_key(b"in");
+const KW_ABILITY: u64 = keyword_key(b"ability");
+const KW_IMPL: u64 = keyword_key(b"impl");
+const KW_NOT: u64 = keyword_key(b"not");
+const KW_IS: u64 = keyword_key(b"is");
+const KW_BUILTIN: u64 = keyword_key(b"builtin");
+const KW_WHERE: u64 = keyword_key(b"where");
+const KW_CONTEXT: u64 = keyword_key(b"context");
+const KW_USE: u64 = keyword_key(b"use");
+const KW_REQUIRE: u64 = keyword_key(b"require");
+const KW_DEFER: u64 = keyword_key(b"defer");
+
 impl TokenKind {
     pub const fn string(delim: StringDelimKind, done: bool) -> TokenKind {
         use StringDelimKind as D;
@@ -433,30 +467,30 @@ impl TokenKind {
         }
     }
 
-    pub fn token_from_bytes(bytes: &[u8]) -> Option<TokenKind> {
-        match bytes {
-            b"fn" => Some(K::KeywordFn),
-            b"let" => Some(K::KeywordLet),
-            b"and" => Some(K::KeywordAnd),
-            b"or" => Some(K::KeywordOr),
-            b"if" => Some(K::KeywordIf),
-            b"else" => Some(K::KeywordElse),
-            b"while" => Some(K::KeywordWhile),
-            b"loop" => Some(K::KeywordLoop),
-            b"ns" => Some(K::KeywordNs),
-            b"intern" => Some(K::KeywordIntern),
-            b"for" => Some(K::KeywordFor),
-            b"in" => Some(K::KeywordIn),
-            b"ability" => Some(K::KeywordAbility),
-            b"impl" => Some(K::KeywordImpl),
-            b"not" => Some(K::KeywordNot),
-            b"is" => Some(K::KeywordIs),
-            b"builtin" => Some(K::KeywordBuiltin),
-            b"where" => Some(K::KeywordWhere),
-            b"context" => Some(K::KeywordContext),
-            b"use" => Some(K::KeywordUse),
-            b"require" => Some(K::KeywordRequire),
-            b"defer" => Some(K::KeywordDefer),
+    pub fn from_keyword_key(key: u64) -> Option<TokenKind> {
+        match key {
+            KW_FN => Some(K::KeywordFn),
+            KW_LET => Some(K::KeywordLet),
+            KW_AND => Some(K::KeywordAnd),
+            KW_OR => Some(K::KeywordOr),
+            KW_IF => Some(K::KeywordIf),
+            KW_ELSE => Some(K::KeywordElse),
+            KW_WHILE => Some(K::KeywordWhile),
+            KW_LOOP => Some(K::KeywordLoop),
+            KW_NS => Some(K::KeywordNs),
+            KW_INTERN => Some(K::KeywordIntern),
+            KW_FOR => Some(K::KeywordFor),
+            KW_IN => Some(K::KeywordIn),
+            KW_ABILITY => Some(K::KeywordAbility),
+            KW_IMPL => Some(K::KeywordImpl),
+            KW_NOT => Some(K::KeywordNot),
+            KW_IS => Some(K::KeywordIs),
+            KW_BUILTIN => Some(K::KeywordBuiltin),
+            KW_WHERE => Some(K::KeywordWhere),
+            KW_CONTEXT => Some(K::KeywordContext),
+            KW_USE => Some(K::KeywordUse),
+            KW_REQUIRE => Some(K::KeywordRequire),
+            KW_DEFER => Some(K::KeywordDefer),
             _ => None,
         }
     }
@@ -826,9 +860,17 @@ impl<'content> Lexer<'content> {
         ) {
             let kind = if is_number {
                 K::Numeric
+            } else if len > 7 {
+                K::Ident
             } else {
-                TokenKind::token_from_bytes(&lex.content[start as usize..(start + len) as usize])
-                    .unwrap_or(K::Ident)
+                let start = start as usize;
+                let key = match lex.content.get(start..start + 8) {
+                    Some(w) => {
+                        u64::from_le_bytes(w.try_into().unwrap()) & (u64::MAX >> (64 - 8 * len))
+                    }
+                    None => keyword_key(&lex.content[start..start + len as usize]),
+                };
+                TokenKind::from_keyword_key(key).unwrap_or(K::Ident)
             };
             push_token(lex, out, kind, start, len)
         }
@@ -1136,9 +1178,7 @@ impl<'content> Lexer<'content> {
                             let is_number = is_numeric_char(c);
                             self.advance();
                             loop {
-                                while is_ident_char(self.peek()) {
-                                    self.advance();
-                                }
+                                self.eat_ident_run();
                                 if is_number
                                     && self.peek() == '.'
                                     && is_numeric_char(self.peek_n(1))
@@ -1169,15 +1209,31 @@ impl<'content> Lexer<'content> {
     #[inline]
     fn eat_whitespace_run(&mut self) {
         let mut flags = TOKEN_FLAG_IS_WHITESPACE_PRECEDED;
-        loop {
-            match self.peek() {
-                '\n' | '\r' => flags |= TOKEN_FLAG_IS_NEWLINE_PRECEDED,
-                ' ' | '\x09' | '\x0b' | '\x0c' => {}
-                _ => break,
+        let mut pos = self.pos as usize;
+        while let Some(&b) = self.content.get(pos) {
+            let class = BYTE_CLASS[b as usize];
+            if class & CLASS_SPACE == 0 {
+                break;
             }
-            self.pos += 1;
+            if class & CLASS_NEWLINE != 0 {
+                flags |= TOKEN_FLAG_IS_NEWLINE_PRECEDED;
+            }
+            pos += 1;
         }
+        self.pos = pos as u32;
         self.next_token_flags |= flags;
+    }
+
+    #[inline]
+    fn eat_ident_run(&mut self) {
+        let mut pos = self.pos as usize;
+        while let Some(&b) = self.content.get(pos) {
+            if BYTE_CLASS[b as usize] & CLASS_IDENT == 0 {
+                break;
+            }
+            pos += 1;
+        }
+        self.pos = pos as u32;
     }
 
     #[inline]
@@ -1210,14 +1266,16 @@ impl<'content> Lexer<'content> {
 
 const CLASS_IDENT: u8 = 1;
 const CLASS_NUMERIC: u8 = 2;
+const CLASS_SPACE: u8 = 4;
+const CLASS_NEWLINE: u8 = 8;
 /// Byte-indexed classification for the chars the lexer actually sees
 /// Notably marks hyphen - as an ident char
 #[rustfmt::skip]
 static BYTE_CLASS: [u8; 256] = [
 //  0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0x00 control
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 12,4, 4, 12,0, 0, // 0x00 control; \t \n \v \f \r
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0x10 control
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, // 0x20 sp ! " # $ % & ' ( ) * + , - . /
+    4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, // 0x20 sp ! " # $ % & ' ( ) * + , - . /
     3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0, 0, // 0x30 0 1 2 3 4 5 6 7 8 9 : ; < = > ?
     0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 0x40 @ A B C D E F G H I J K L M N O
     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, // 0x50 P Q R S T U V W X Y Z [ \ ] ^ _

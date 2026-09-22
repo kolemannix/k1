@@ -1,8 +1,8 @@
 use crate::kmem::MSlice;
 use crate::kmem::Mem;
 use crate::nz_u32_id;
-use crate::parse::AstSlice;
 use crate::parse::ParsedProgram;
+use crate::parse::{AstHandle, AstSlice};
 use crate::vpool::VPool;
 use crate::{impl_copy_if_small, lex::SpanId};
 
@@ -46,15 +46,32 @@ impl IdentSpanned {
 pub struct QIdent {
     pub name: StringId,
     pub name_span: SpanId,
-    pub path: AstSlice<IdentSpanned>,
+    path: AstHandle<AstSlice<IdentSpanned>>,
 }
-impl_copy_if_small!(16, QIdent);
+impl_copy_if_small!(12, QIdent);
 impl QIdent {
     pub fn naked(name: StringId, span: SpanId) -> QIdent {
-        QIdent { name, name_span: span, path: MSlice::empty() }
+        QIdent { name, name_span: span, path: AstHandle::nil() }
+    }
+    pub fn make(
+        mem: &mut Mem<ParsedProgram>,
+        path: AstSlice<IdentSpanned>,
+        name: StringId,
+        name_span: SpanId,
+    ) -> QIdent {
+        QIdent { name, name_span, path: mem.push_slice_h(path) }
     }
     pub fn with_span(&self, span: SpanId) -> QIdent {
         QIdent { name_span: span, ..*self }
+    }
+    pub fn has_path(&self) -> bool {
+        !self.path.is_nil()
+    }
+    pub fn path(&self, mem: &Mem<ParsedProgram>) -> AstSlice<IdentSpanned> {
+        mem.get_slice_h(self.path)
+    }
+    pub fn path_handle(&self) -> AstHandle<AstSlice<IdentSpanned>> {
+        self.path
     }
 }
 
@@ -274,10 +291,32 @@ fn content_hash(b: &[u8]) -> u64 {
     h.finish()
 }
 
+const SHORT_LEN: usize = 8;
+
+fn short_key(b: &[u8]) -> u64 {
+    let mut key = 0u64;
+    for (i, &byte) in b.iter().enumerate() {
+        key |= (byte as u64) << (8 * i);
+    }
+    key
+}
+
+fn short_hash(key: u64, len: usize) -> u64 {
+    (key ^ (len as u64) << 60).wrapping_mul(0x517c_c1b7_2722_0a95)
+}
+
+#[derive(Clone, Copy)]
+struct ShortEntry {
+    key: u64,
+    len: u8,
+    id: StringId,
+}
+
 struct Interner {
     bytes: Mem<IdentPool>,
     entries: VPool<MSlice<u8, IdentPool>, StringId>,
-    dedup: hashbrown::HashTable<StringId>,
+    short: hashbrown::HashTable<ShortEntry>,
+    long: hashbrown::HashTable<StringId>,
 }
 
 impl Interner {
@@ -285,7 +324,8 @@ impl Interner {
         Interner {
             bytes: Mem::make(),
             entries: VPool::make_with_hint("idents", 65536),
-            dedup: hashbrown::HashTable::with_capacity(65536),
+            short: hashbrown::HashTable::with_capacity(65536),
+            long: hashbrown::HashTable::with_capacity(4096),
         }
     }
 
@@ -302,21 +342,39 @@ impl Interner {
     }
 
     fn intern(&mut self, s: &str) -> StringId {
-        let hash = content_hash(s.as_bytes());
-        let Interner { bytes, entries, dedup } = self;
-        if let Some(id) = dedup.find(hash, |&id| Self::get_str(bytes, entries, id) == s) {
+        let b = s.as_bytes();
+        if b.len() <= SHORT_LEN {
+            let (key, len) = (short_key(b), b.len());
+            let hash = short_hash(key, len);
+            if let Some(e) = self.short.find(hash, |e| e.key == key && e.len as usize == len) {
+                return e.id;
+            }
+            let id = self.entries.add(self.bytes.pushn(b));
+            let entry = ShortEntry { key, len: len as u8, id };
+            self.short.insert_unique(hash, entry, |e| short_hash(e.key, e.len as usize));
+            return id;
+        }
+        let hash = content_hash(b);
+        let Interner { bytes, entries, long, .. } = self;
+        if let Some(id) = long.find(hash, |&id| Self::get_str(bytes, entries, id) == s) {
             return *id;
         }
-        let id = entries.add(bytes.pushn(s.as_bytes()));
-        dedup.insert_unique(hash, id, |&id| {
+        let id = entries.add(bytes.pushn(b));
+        long.insert_unique(hash, id, |&id| {
             content_hash(Self::get_str(bytes, entries, id).as_bytes())
         });
         id
     }
 
     fn lookup(&self, s: &str) -> Option<StringId> {
-        let hash = content_hash(s.as_bytes());
-        self.dedup.find(hash, |&id| self.get(id) == s).copied()
+        let b = s.as_bytes();
+        if b.len() <= SHORT_LEN {
+            let (key, len) = (short_key(b), b.len());
+            let hash = short_hash(key, len);
+            return self.short.find(hash, |e| e.key == key && e.len as usize == len).map(|e| e.id);
+        }
+        let hash = content_hash(b);
+        self.long.find(hash, |&id| self.get(id) == s).copied()
     }
 
     fn snap(&self, w: &mut crate::snap::SnapWriter) {
@@ -327,13 +385,21 @@ impl Interner {
     fn restore(&mut self, r: &mut crate::snap::SnapReader) {
         self.bytes.restore(r);
         self.entries.restore(r);
-        self.dedup.clear();
-        let Interner { bytes, entries, dedup } = self;
+        self.short.clear();
+        self.long.clear();
+        let Interner { bytes, entries, short, long } = self;
         for (id, slice) in entries.iter_with_ids() {
-            let hash = content_hash(bytes.getn(*slice));
-            dedup.insert_unique(hash, id, |&id| {
-                content_hash(Self::get_str(bytes, entries, id).as_bytes())
-            });
+            let b = bytes.getn(*slice);
+            if b.len() <= SHORT_LEN {
+                let entry = ShortEntry { key: short_key(b), len: b.len() as u8, id };
+                short.insert_unique(short_hash(entry.key, b.len()), entry, |e| {
+                    short_hash(e.key, e.len as usize)
+                });
+            } else {
+                long.insert_unique(content_hash(b), id, |&id| {
+                    content_hash(Self::get_str(bytes, entries, id).as_bytes())
+                });
+            }
         }
     }
 }
@@ -556,7 +622,11 @@ impl IdentPool {
         };
 
         macro_rules! make_fn {
-            ($path: expr, $name: expr) => {{ QIdent { path: $path, name: $name, name_span: SpanId::NONE } }};
+            ($path: expr, $name: expr) => {{
+                let path = $path;
+                let name = $name;
+                QIdent::make(mem, path, name, SpanId::NONE)
+            }};
         }
 
         let path_core_list = intern_path!(b.core, b.list);

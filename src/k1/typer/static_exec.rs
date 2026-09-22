@@ -227,7 +227,7 @@ impl TypedProgram {
         ctx: EvalExprContext,
         input_parameters: &[(VariableId, StaticValueId)],
     ) -> K1Result<StaticValueId> {
-        let span = self.ast.exprs.get(parsed_expr).get_span();
+        let span = self.ast.exprs.get_span(parsed_expr);
         self.do_with_vm(span, ctx.trace_flags(), |k1, vm| {
             k1.execute_parsed_expr_with_vm(vm, parsed_expr, ctx, input_parameters)
         })
@@ -334,7 +334,7 @@ impl TypedProgram {
             &[],
         )?;
         let StaticValue::Bool(condition_bool) = self.static_values.get(vm_cond_result) else {
-            let cond_span = self.ast.get_expr_span(cond);
+            let cond_span = self.ast.exprs.get_span(cond);
             kbail!(self, cond_span, "Condition is not a boolean");
         };
         Ok(*condition_bool)
@@ -491,18 +491,18 @@ impl TypedProgram {
 
         let expected_type_for_execution = self.get_type_family_type(declared_type);
 
-        let static_value_id = if let ParsedExpr::Builtin(span) = self.ast.exprs.get(value_expr_id) {
-            let span = *span;
+        let static_value_id = if let ParsedExpr::Builtin = self.ast.exprs.get(value_expr_id) {
+            let span = self.ast.exprs.get_span(value_expr_id);
             let global_name = self.variables.get(variable_id).name;
             self.eval_builtin_global(global_name, scope_id, expected_type_for_execution, span)?
         } else if let ParsedExpr::Call(call) = self.ast.exprs.get(value_expr_id)
             && call.name.name == self.ast.idents.b.module_params
             && {
-                let path = self.ast.mem.getn(call.name.path);
+                let path = self.ast.mem.getn(call.name.path(&self.ast.mem));
                 path.len() == 1 && path[0].name == self.ast.idents.b.k1
             }
         {
-            let (call_span, call_args) = (call.span, call.args);
+            let (call_span, call_args) = (self.ast.exprs.get_span(value_expr_id), call.args);
             self.handle_module_params_decl_call(
                 global_id,
                 call_span,
@@ -983,12 +983,12 @@ impl TypedProgram {
     /// Compiles `#static <expr>` and `#meta <expr>` constructs
     pub(super) fn compile_static_or_meta(
         &mut self,
-        _expr_id: ParsedExprId,
+        expr_id: ParsedExprId,
         stat: ParsedStaticExpr,
         is_definition: bool,
         ctx: EvalExprContext,
     ) -> K1Result<StaticExecutionResult> {
-        let span = stat.span;
+        let span = self.ast.exprs.get_span(expr_id);
         let base_expr = stat.base_expr;
 
         if matches!(stat.kind, ParsedStaticBlockKind::MacroCall) {
@@ -1024,7 +1024,7 @@ impl TypedProgram {
                 macro_args.push(*parsed_arg)
             }
             return self.execute_macro_call(
-                self.ast.mem.getn(call.type_args),
+                self.ast.mem.getn(call.type_args(&self.ast.mem)),
                 &macro_args,
                 span,
                 function_id,
