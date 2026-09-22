@@ -100,13 +100,10 @@ ns mem {
   }
 
   fn(cold) init-tmp() {
-    #if k1/platform is {
-      :posix-macos or :posix-linux or :wasi -> {
-        arena-tmp = arena/init-fixed(1073741824).as[ptr]
-      },
-      :bare -> {
-        arena-tmp = arena/init(1024 * 8).as[ptr]
-      }
+    arena-tmp = if k1/is-static arena/init-fixed(1073741824).as[ptr]
+    else #if k1/platform is {
+      :posix-macos or :posix-linux or :wasi -> arena/init-fixed(1073741824).as[ptr],
+      :bare -> arena/init(1024 * 8).as[ptr]
     }
   }
 

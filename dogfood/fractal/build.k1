@@ -1,0 +1,10 @@
+fn build(req: k1/build-request): k1/build-config {
+  let b = req.default
+  for req.options {
+    if it.name == "web" {
+      b.target = :wasm64-wasi
+      b.optimize = true
+    }
+  }
+  b
+}

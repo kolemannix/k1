@@ -1,51 +1,64 @@
 // Copyright (c) 2026 knix
 
+use crate::parse::Interner;
 use crate::snap::{SnapReader, SnapWriter, restore_map_snap, write_map_snap};
 
 use super::*;
 
 static_assert_size!(K1Message, 12);
 static_assert_size!(AbilitySpec9nInfo, 12);
-static_assert_size!(SourceFileHash, 16);
 static_assert_size!(NameInNamespace, 8);
 
 pub(crate) fn inputs_hash_from_settings(
     idents: &IdentPool,
     config: &crate::compiler::CompilerConfig,
+    plan: &crate::plan::BuildPlan,
 ) -> crate::snap::InputsHash {
     let crate::compiler::CompilerConfig {
         src_path,
         home_dir,
         k1_home,
         command,
-        no_std,
-        target,
-        simd_bytes,
-        debug,
-        sanitize,
-        filc,
         out_dir,
         out_dir_generated: _,
         cache_dir: _,
-        optimize,
         emit_llvm: _,
         chatty: _,
         record_trace: _,
         optimize_ir,
         cache: _,
     } = config;
-    let flags = [*no_std, *debug, *sanitize, *filc, *optimize, *optimize_ir, cfg!(feature = "lsp")]
-        .map(|b| b as u8);
-    crate::snap::InputsHash(0).add(&[
+    let flags = [*optimize_ir, cfg!(feature = "lsp")].map(|b| b as u8);
+    let hash = crate::snap::InputsHash(0).add(&[
         idents.get_string(*src_path).as_bytes(),
         idents.get_string(*home_dir).as_bytes(),
         idents.get_string(*k1_home).as_bytes(),
         idents.get_string(*out_dir).as_bytes(),
-        target.to_str().as_bytes(),
-        &simd_bytes.to_le_bytes(),
         &flags,
         &[command.inputs_hash_byte()],
-    ])
+    ]);
+    plan.config.add_to_hash(&plan.strings, hash)
+}
+
+pub(crate) fn module_inputs_hash(
+    prev: crate::snap::InputsHash,
+    plan: &crate::plan::BuildPlan,
+    index: usize,
+    files: &[crate::compiler::SourceFile],
+) -> crate::snap::InputsHash {
+    let m = plan.module(index);
+    let mut hash = prev.add(&[plan.get(m.name).as_bytes()]);
+    for dep in plan.mem.getn(m.deps) {
+        hash = hash.add(&[&dep.to_le_bytes()]);
+    }
+    for p in plan.mem.getn(m.providers) {
+        let file_hash = plan.module(p.from as usize).build_file_hash.unwrap();
+        hash = hash.add(&[&file_hash.to_le_bytes(), &p.offset.to_le_bytes(), &p.len.to_le_bytes()]);
+    }
+    for f in files {
+        hash = hash.add(&[f.path.as_bytes(), &f.content_hash.to_le_bytes()]);
+    }
+    hash
 }
 
 impl TypedProgram {
@@ -58,10 +71,9 @@ impl TypedProgram {
     pub fn snap_into(&self, w: &mut SnapWriter) {
         let TypedProgram {
             modules,
-            module_order,
             completed_module_count,
             config: _,
-            program_settings,
+            plan: _,
             emitted_parse_cache: _,
             ast,
             functions,
@@ -128,8 +140,6 @@ impl TypedProgram {
             megarepl,
             inputs_hash: _,
             restored_module_count: _,
-            listed_module_count: _,
-            setups_fresh: _,
         } = self;
         assert!(megarepl.is_none(), "cannot snapshot a megarepl session");
         assert!(inference_context_stack.is_empty(), "cannot snapshot mid-inference");
@@ -138,9 +148,7 @@ impl TypedProgram {
         w.write_section("typed");
         mem.snap(w);
         modules.snap(w);
-        w.write_slice(module_order);
         w.write_t(completed_module_count);
-        w.write_t(program_settings);
         functions.snap(w);
         variables.snap(w);
         types.snap(w);
@@ -204,22 +212,24 @@ impl TypedProgram {
     }
 
     pub fn restore(
-        bytes: &[u8],
+        mut reader: SnapReader,
         inputs_hash: crate::snap::InputsHash,
         // `config` and `lsp` come from the restoring session
         // lets us preserve settings like chatty, cache, overrides, completion
         config: CompilerConfig,
+        config_idents: &IdentPool,
+        plan: crate::plan::BuildPlan,
         lsp: crate::compiler::LspCompileOptions,
         load: (u64, u64),
-    ) -> Result<TypedProgram, String> {
+    ) -> TypedProgram {
         use crate::typer::trace::{TraceKind, restore_section};
         let clock = crate::clock::Clock::new();
         let ast_start = clock.raw();
-        let mut reader = SnapReader::new(bytes, inputs_hash)?;
         let r = &mut reader;
         let ast = ParsedProgram::restore(r);
         let ast_end = clock.raw();
-        let mut k1 = TypedProgram::new(ast, config, lsp);
+        let config = config.reintern(config_idents, &ast.idents);
+        let mut k1 = TypedProgram::new(ast, config, plan, lsp);
         k1.inputs_hash = inputs_hash;
         let root = k1.trace_push(TraceKind::SnapRestore, 0, 0);
         if let Some(root) = root {
@@ -237,9 +247,7 @@ impl TypedProgram {
 
         let section = k1.trace_push(TraceKind::SnapRestoreSection, restore_section("modules"), 0);
         k1.modules.restore(r);
-        k1.module_order = r.read_vec();
         k1.completed_module_count = r.read_t();
-        k1.program_settings = r.read_t();
         k1.trace_pop(section);
 
         let section = k1.trace_push(TraceKind::SnapRestoreSection, restore_section("functions"), 0);
@@ -322,8 +330,8 @@ impl TypedProgram {
             k1.trace.frames.get_mut(root).key = k1.modules.len() as u32;
         }
         r.section("end");
-        assert!(r.is_done(), "snapshot has {} trailing bytes", bytes.len() - r.pos());
-        Ok(k1)
+        assert!(r.is_done(), "snapshot has trailing bytes after {}", r.pos());
+        k1
     }
 
     #[cfg(debug_assertions)]
@@ -338,16 +346,19 @@ impl TypedProgram {
         let frame = self.trace_push(crate::typer::trace::TraceKind::SnapRoundtrip, 0, 0);
         let first = self.snap();
         let now = self.trace.clock.raw();
-        let mut restored = match TypedProgram::restore(
-            &first,
+        let placeholder = crate::plan::BuildPlan::new(Interner::make_small(), self.plan.config);
+        let plan = std::mem::replace(&mut self.plan, placeholder);
+        let reader = SnapReader::new(&first, self.inputs_hash)
+            .unwrap_or_else(|e| panic!("snapshot restore failed: {e}"));
+        let mut restored = TypedProgram::restore(
+            reader,
             self.inputs_hash,
             self.config,
+            &self.ast.idents,
+            plan,
             self.lsp.clone(),
             (now, now),
-        ) {
-            Ok(restored) => restored,
-            Err(e) => panic!("snapshot restore failed: {e}"),
-        };
+        );
         let second = restored.snap();
         crate::snap::assert_identical(&first, &second, "TypedProgram snapshot roundtrip");
         restored.restored_module_count = self.restored_module_count;

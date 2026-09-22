@@ -1,11 +1,3 @@
-ns build {
-  fn module(): k1/module {
-    let m = k1/module/new()
-    m.lib("foo", :static)
-    m
-  }
-}
-
 ns(lib("foo")) foo {
 
   type very-small = { x: u8 }

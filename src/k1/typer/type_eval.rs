@@ -338,6 +338,10 @@ impl TypedProgram {
                 self.builtin_types.k1_module = Some(type_id)
             } else if name == self.ast.idents.b.setup_ctx {
                 self.builtin_types.k1_setup_ctx = Some(type_id)
+            } else if name == self.ast.idents.b.build_config {
+                self.builtin_types.k1_build_config = Some(type_id)
+            } else if name == self.ast.idents.b.build_request {
+                self.builtin_types.k1_build_request = Some(type_id)
             }
         }
 

@@ -8,7 +8,7 @@ import {
   ServerOptions
 } from "vscode-languageclient/node";
 
-const ROOT_MARKERS = ["main.k1", "module.k1"];
+const ROOT_MARKERS = ["main.k1", "module.k1", "build.k1"];
 
 const clients = new Map<string, LanguageClient>();
 let missingServerReported = false;
@@ -135,6 +135,9 @@ function ensureClientForDocument(document: vscode.TextDocument): void {
     options: { cwd: root }
   };
   const clientOptions: LanguageClientOptions = {
+    initializationOptions: {
+      buildArgs: vscode.workspace.getConfiguration("k1").get<string[]>("buildArgs", [])
+    },
     documentSelector: [
       { language: "k1", scheme: "file", pattern: `${root}/**/*.k1` }
     ],
@@ -144,6 +147,7 @@ function ensureClientForDocument(document: vscode.TextDocument): void {
       index: 0
     },
     synchronize: {
+      configurationSection: "k1",
       fileEvents: vscode.workspace.createFileSystemWatcher(
         new vscode.RelativePattern(root, "**/*.k1")
       )

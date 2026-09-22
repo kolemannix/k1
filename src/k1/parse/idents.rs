@@ -127,10 +127,11 @@ pub(crate) struct BuiltinIdents {
     pub value: StringId,
     pub module: StringId,
     pub module_params: StringId,
-    pub dep: StringId,
-    pub add_dep: StringId,
+    pub dep_params: StringId,
     pub setup: StringId,
     pub setup_ctx: StringId,
+    pub build_config: StringId,
+    pub build_request: StringId,
     pub build: StringId,
     pub root_module_name: StringId,
     pub core: StringId,
@@ -312,7 +313,7 @@ struct ShortEntry {
     id: StringId,
 }
 
-struct Interner {
+pub struct Interner {
     bytes: Mem<IdentPool>,
     entries: VPool<MSlice<u8, IdentPool>, StringId>,
     short: hashbrown::HashTable<ShortEntry>,
@@ -329,6 +330,15 @@ impl Interner {
         }
     }
 
+    pub fn make_small() -> Interner {
+        Interner {
+            bytes: Mem::make(),
+            entries: VPool::make_with_hint("plan-strings", 64),
+            short: hashbrown::HashTable::with_capacity(64),
+            long: hashbrown::HashTable::with_capacity(64),
+        }
+    }
+
     fn get_str(
         bytes: &Mem<IdentPool>,
         entries: &VPool<MSlice<u8, IdentPool>, StringId>,
@@ -337,11 +347,11 @@ impl Interner {
         unsafe { std::str::from_utf8_unchecked(bytes.getn(*entries.get(id))) }
     }
 
-    fn get(&self, id: StringId) -> &'static str {
+    pub fn get(&self, id: StringId) -> &'static str {
         Self::get_str(&self.bytes, &self.entries, id)
     }
 
-    fn intern(&mut self, s: &str) -> StringId {
+    pub fn intern(&mut self, s: &str) -> StringId {
         let b = s.as_bytes();
         if b.len() <= SHORT_LEN {
             let (key, len) = (short_key(b), b.len());
@@ -377,12 +387,12 @@ impl Interner {
         self.long.find(hash, |&id| self.get(id) == s).copied()
     }
 
-    fn snap(&self, w: &mut crate::snap::SnapWriter) {
+    pub fn snap(&self, w: &mut crate::snap::SnapWriter) {
         self.bytes.snap(w);
         self.entries.snap(w);
     }
 
-    fn restore(&mut self, r: &mut crate::snap::SnapReader) {
+    pub fn restore(&mut self, r: &mut crate::snap::SnapReader) {
         self.bytes.restore(r);
         self.entries.restore(r);
         self.short.clear();
@@ -523,10 +533,11 @@ impl IdentPool {
             value: intern!("value"),
             module: intern!("module"),
             module_params: intern!("module-params"),
-            dep: intern!("dep"),
-            add_dep: intern!("add-dep-impl"),
+            dep_params: intern!("dep-params"),
             setup: intern!("setup"),
             setup_ctx: intern!("setup-ctx"),
+            build_config: intern!("build-config"),
+            build_request: intern!("build-request"),
             build: intern!("build"),
             root_module_name: intern!("_root"),
             core: intern!("core"),

@@ -7,17 +7,7 @@
 
 use std/math/trig
 
-ns build {
-  fn module(): k1/module {
 
-    let m = k1/module/new()
-    m.lib("raylib", :static)
-    for ["Cocoa", "OpenGL", "IOKit", "CoreAudio", "CoreVideo", "AudioToolbox"] {
-      m.link-args(["-framework", it])
-    }
-    m
-  }
-}
 
 ns(lib("raylib")) raylib {
   type color = { r: u8, g: u8, b: u8, a: u8 }

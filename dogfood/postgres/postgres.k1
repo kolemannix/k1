@@ -1,12 +1,3 @@
-ns build {
-  fn module(): k1/module {
-    let m = k1/module/new()
-    m.lib("pq", :default)
-    m.link-args(["-L/opt/homebrew/opt/libpq/include"])
-    m
-  }
-}
-
 ns(lib("pq")) pg {
   let CONNECTION_OK: core/c-int = 0
   let PGRES_COMMAND_OK: core/c-int = 1

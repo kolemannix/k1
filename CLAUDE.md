@@ -53,7 +53,8 @@ K1 language reference for agents: `ai_docs/k1-syntax-basics.md` and
   (`src/bin/test_suite.rs`), `lsp` (`src/bin/lsp_main.rs`, needs
   `--features lsp`).
 - CLI: `k1 [flags] <check|build|run|test|server|setup|clean> [path]`, aliases
-  `c b r t`. Path is a file or a module dir. Useful flags: `--optimize`,
+  `c b r t`. Path is a file or a module dir. `-D name[=value]` (before the
+  command) reaches the primary's `fn build`. Useful flags: `--optimize`,
   `--debug`, `--no-std`, `--cache false`, `--target <intel64-linux|arm64-macos|
   wasm64-wasi|intel64-bare|arm64-bare|wasm64-bare>`, `--emit-llvm`,
   `--dump-module`, `--dump-trace`, `--chatty true` (timing summary), `--filc`.
@@ -89,11 +90,18 @@ for compile-time execution, codegen_llvm for binaries.
 
 - `lib.rs`: crate root, `nz_u32_id!` id newtypes, `SV2/4/8` smallvec aliases,
   `DepHash/DepEq`.
-- `compiler.rs`: CLI `Args`/`Command`, `CompilerConfig`, `Target` = arch x
-  platform enum, module discovery (`module.k1` or `<dir>/<dir>.k1` root),
-  source reading and lexing on reader threads, setup stamps, disk cache
-  restore, linking through `src/lld_shim.cpp`, running compiled programs,
-  `static_assert_size`/`static_assert_niched`, `compiler_test`.
+- `compiler.rs`: CLI `Args`/`Command`, `CompilerConfig`, `BuildConfig` (target,
+  cpu, features, flags; one resolver), `Target` = arch x platform enum, the
+  compile pipeline (plan, up-front source reads on reader threads, prefix
+  snapshot restore), setup stamps, linking through `src/lld_shim.cpp`,
+  running compiled programs, `static_assert_size`/`static_assert_niched`,
+  `compiler_test`.
+- `plan.rs`: `BuildPlan` (config + modules in dependency order, libs, link
+  args, setups, dep-params providers), dep lookup, the plan cache and its
+  freshness check. Strings are `StringId`s in the plan's own `Interner`.
+- `typer/host.rs`: the host world H that compiles every `build.k1` against
+  host core+std, runs `fn build`/`fn module`/`fn setup` in waves, and produces
+  the plan.
 - `kpath.rs`: paths are canonical UTF-8 strings interned in the ident pool;
   `std::path` only at OS call sites.
 - `lex.rs`: positional lexer, `Token`, `Span`/`SpanId`, trivia side table.
@@ -137,7 +145,9 @@ for compile-time execution, codegen_llvm for binaries.
 - `server.rs` + `server/`: `k1 server`, the megarepl web app (HTTP, SSE bus,
   program browser, `/size` code-size treemap; `megarepl.css`, `size.js`).
 - `lsp_support.rs` + `src/bin/lsp_main.rs`: hover/goto/completion over
-  `ls_entities`, compiles the edited file's module.
+  `ls_entities`, compiles the edited file's module with the client's
+  `k1.buildArgs` CLI flags (e.g. `--target`, `-D`); `build.k1` errors come
+  back from H.
 - Not compiled: `codegen_legacy.rs.old`, `vmtw/binop.rs` (`vmtw` is commented
   out in `lib.rs`).
 
@@ -159,10 +169,13 @@ for compile-time execution, codegen_llvm for binaries.
 
 ## Modules (`modules/`)
 
-A module is a dir with `module.k1` (or `<name>/<name>.k1`). `module.k1`
-holds `ns build { fn module(): k1/module }` declaring `dep`, `lib`, `library()`
-and an optional `setup` fn that runs in the VM (cwd = module dir) when its
-declared inputs are newer than the `.k1-out/setup/stamp`.
+A module is a dir with `build.k1`, `module.k1` or `<name>/<name>.k1`.
+`build.k1` is compiled on the host before the program: optional `fn build(req)`
+(primary only; edits `req.default`, reads `-D` options), `fn module(b)`
+declaring `dep`/`dep-params`, `lib`, `library()`, `setup`, and an optional
+`fn setup(ctx)` that runs (cwd = module dir) when its stamp in
+`.k1-out/setup/stamp` is stale. Deps resolve through `<primary>/deps/y`,
+`<dependent>/deps/y`, then `$K1_HOME/modules/y`.
 
 - `core/`: always loaded. `builtin.k1` (scalar aliases, `buffer`/`span`/
   `list`/`string`/`opt`/`result`, `types`, `meta`, every core ability:

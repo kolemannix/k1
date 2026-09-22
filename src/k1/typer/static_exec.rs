@@ -593,24 +593,24 @@ impl TypedProgram {
         }
         let bool_value = match name {
             "test" => self.config.command.is_test(),
-            "no-std" => self.config.no_std,
-            "debug" => self.config.debug,
+            "no-std" => self.plan.config.no_std,
+            "debug" => self.plan.config.debug,
             // The VM overrides this global's value during static execution
             "is-static" => false,
             "platform" => {
-                let platform_tag = self.config.target.platform() as u8;
+                let platform_tag = self.plan.config.target.platform() as u8;
                 let static_enum =
                     StaticValue::Enum(expected_type_id, TypedIntValue::U8(platform_tag));
                 return Ok(self.static_values.add(static_enum));
             }
             "host-platform" => {
-                let host_platform = self.config.host_platform();
+                let host_platform = self.host_platform();
                 let static_enum =
                     StaticValue::Enum(expected_type_id, TypedIntValue::U8(host_platform as u8));
                 return Ok(self.static_values.add(static_enum));
             }
             "arch" => {
-                let arch_tag = match self.config.target.arch() {
+                let arch_tag = match self.plan.config.target.arch() {
                     crate::compiler::Arch::Intel => 0,
                     crate::compiler::Arch::Arm => 1,
                     crate::compiler::Arch::Wasm => 2,
@@ -619,7 +619,7 @@ impl TypedProgram {
                 return Ok(self.static_values.add(static_enum));
             }
             "simd-bytes" => {
-                let width = self.config.simd_bytes as i64;
+                let width = self.plan.config.simd_bytes(&self.plan.strings) as i64;
                 return Ok(self.static_values.add(StaticValue::Int(TypedIntValue::I64(width))));
             }
             s => kbail!(self, span, "Unknown builtin name: {s}"),
@@ -640,14 +640,9 @@ impl TypedProgram {
         let global_parent_scope = global.parent_scope;
         let file_id = self.ast.spans.get(global_span).file_id;
         let Some(module_id) =
-            self.modules.iter().find(|m| m.root_file_id(&self.mem) == file_id).map(|m| m.id)
+            self.modules.iter().find(|m| m.contains_file(&self.mem, file_id)).map(|m| m.id)
         else {
-            kbail!(
-                self,
-                call_span,
-                "k1/module-params must be declared in the module's root file \
-                 (module.k1 or <module-name>.k1)"
-            );
+            kbail!(self, call_span, "k1/module-params must be declared in a module source file");
         };
         let module = self.modules.get(module_id);
         let module_name = module.name;
@@ -710,22 +705,28 @@ impl TypedProgram {
             ),
         };
 
-        let mut providers: SV4<(StringId, ParsedExprId)> = smallvec![];
-        for m in self.modules.iter() {
-            for entry in self.mem.getn(m.manifest.deps) {
-                if entry.name == module_name
-                    && let Some(params_expr) = entry.params_struct_literal
-                {
-                    providers.push((m.name, params_expr));
-                }
-            }
-        }
+        let providers = self.planned_module(module_id).map_or(MSlice::empty(), |m| m.providers);
 
         let mut bound: SV8<Option<(StaticValueId, StringId)>> =
             smallvec![None; schema_fields.len()];
-        for (provider_name, params_expr) in providers {
+        for provider in self.plan.mem.getn(providers) {
+            let provider_name = self
+                .ast
+                .idents
+                .intern(self.plan.get(self.plan.module(provider.from as usize).name));
+            let params_span = self.provider_span(*provider)?;
+            let Span { file_id, start, len } = self.ast.spans.get(params_span);
+            let build_file = self.ast.sources.get(file_id).content(&self.ast.mem);
+            let literal = &build_file[start as usize..(start + len) as usize];
+            let table = self.mem.pushn(&[CodeChunkPos { start: 0, end: len, source: params_span }]);
+            let emitted = self.add_emitted_source(literal, table, params_span);
+            let ParseMetaprogramResult::Expr(params_expr) =
+                self.parse_metaprogram_source(module_id, emitted, ParseAdHocKind::Expr)?
+            else {
+                self.ice_span(params_span, "dep params parsed as definitions");
+            };
             let ParsedExpr::Struct(s) = self.ast.exprs.get(params_expr) else {
-                self.ice_span(call_span, "captured dep params was not a struct literal");
+                kbail!(self, params_span, "dep params must be a struct literal");
             };
             let literal_fields = self.ast.mem.getn(s.fields);
             for field in literal_fields {
@@ -1255,32 +1256,9 @@ impl TypedProgram {
         // TODO: when specializing, include the specialization context in the
         //       filename and print the types at the top of the file; a
         //       'what are we compiling' stack would provide it
-        let (source, line) = self.get_span_location(span);
-        let line_number = line.line_number();
-        let stem = source.filename_str(&self.ast.idents).strip_suffix(".k1").unwrap();
-        let serial = self.emitted_sources.len() + 1;
-        let generated_filename = k1_format!(self, &(), "meta_{stem}_{line_number}_{serial}.k1");
-        let generated_dir = self.config.out_dir_generated;
-        let generated_path = kpath::join_id(
-            &self.ast.idents,
-            &mut self.tmp,
-            generated_dir,
-            generated_filename.as_str(),
-        );
         debug!("Emitted source:\n---\n{content}\n---");
-        let emitted_file =
-            crate::parse::SourceFile::make(&mut self.ast.mem, generated_path, &content);
-        let source_for_emission = self.ast.sources.add_file(emitted_file);
-        debug_assert!(
-            self.emitted_sources.last().is_none_or(|e| e.file_id < source_for_emission),
-            "emitted_sources must stay sorted by file_id for binary search"
-        );
-        self.emitted_sources.push(EmittedSource {
-            file_id: source_for_emission,
-            call_span: span,
-            entries: table,
-            has_diagnostic: false,
-        });
+        let source_for_emission = self.add_emitted_source(&content, table, span);
+        let generated_path = self.ast.sources.get(source_for_emission).file_path;
 
         let parse_kind =
             if is_definition { ParseAdHocKind::Definitions } else { ParseAdHocKind::Expr };
@@ -1302,6 +1280,39 @@ impl TypedProgram {
                 Ok(StaticExecutionResult::Definitions(defns_slice))
             }
         }
+    }
+
+    pub(super) fn add_emitted_source(
+        &mut self,
+        content: &str,
+        table: PermSlice<CodeChunkPos>,
+        span: SpanId,
+    ) -> FileId {
+        let (source, line) = self.get_span_location(span);
+        let line_number = line.line_number();
+        let stem = source.filename_str(&self.ast.idents).strip_suffix(".k1").unwrap();
+        let serial = self.emitted_sources.len() + 1;
+        let generated_filename = k1_format!(self, &(), "meta_{stem}_{line_number}_{serial}.k1");
+        let generated_path = kpath::join_id(
+            &self.ast.idents,
+            &mut self.tmp,
+            self.config.out_dir_generated,
+            generated_filename.as_str(),
+        );
+        let emitted_file =
+            crate::parse::SourceFile::make(&mut self.ast.mem, generated_path, content);
+        let file_id = self.ast.sources.add_file(emitted_file);
+        debug_assert!(
+            self.emitted_sources.last().is_none_or(|e| e.file_id < file_id),
+            "emitted_sources must stay sorted by file_id for binary search"
+        );
+        self.emitted_sources.push(EmittedSource {
+            file_id,
+            call_span: span,
+            entries: table,
+            has_diagnostic: false,
+        });
+        file_id
     }
 
     /// Emitted sources accumulate in the sources pool during typechecking; this
@@ -1621,7 +1632,7 @@ impl TypedProgram {
         }
 
         let lib_name_str = self.ast.idents.get_string(lib_name_ident);
-        let ext = self.config.host_platform().dylib_ext();
+        let ext = self.host_platform().dylib_ext();
         debug!("cwd is: {}", std::env::current_dir().unwrap().display());
         debug!("src_path is: {}", self.ast.idents.get_string(self.config.src_path));
 

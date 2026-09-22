@@ -367,36 +367,35 @@ type sockaddr_in = {
 
 ## Build steps are K1 running inside the compiler
 
-A module's root file declares its manifest in `ns build`. `fn module()`
-returns the manifest; `fn setup(ctx)` is an optional build step. Both are
-plain K1. `modules/cbrotli` compiles its vendored C sources:
+A module's `build.k1` holds its build description, compiled on the host
+before any of the program: `fn module(b)` returns the manifest for the build
+config `b`, and `fn setup(ctx)` is an optional build step. Both are plain K1.
+`modules/cbrotli` compiles its vendored C sources:
 
-```k1 path=modules/cbrotli/cbrotli.k1
-ns build {
-  use std/process
+```k1 path=modules/cbrotli/build.k1
+use std/process
 
-  fn module(): k1/module {
-    let m = k1/module/new()
-    m.lib("brotli", :static)
-    m.setup(["libs/libbrotli.a"], ["vendor"])
-    m
-  }
+fn module(_b: k1/build-config): k1/module {
+  let m = k1/module/new()
+  m.lib("brotli", :static)
+  m.setup(["libs/libbrotli.a"], ["vendor"])
+  m
+}
 
-  // Compiles the vendored C sources into libs/libbrotli.a. Runs in the
-  // compile-time VM with cwd = the module dir; needs cc on PATH.
-  fn setup(_ctx: k1/setup-ctx) {
-    let minver = if k1/platform-macos "-mmacosx-version-min=15.0.0" else ""
-    let script = `
-      set -e
-      mkdir -p libs .k1-out/cbrotli
-      for f in vendor/common/*.c vendor/dec/*.c vendor/enc/*.c; do
-        o=".k1-out/cbrotli/$(echo "\$f" | sed 's|vendor/||; s|/|_|g; s|\\.c\$|.o|')"
-        cc -O2 ${minver} -Ivendor/include -c "\$f" -o "\$o"
-      done
-      ar rcs libs/libbrotli.a .k1-out/cbrotli/*.o
-      `
-    let _ = process/run-command("/bin/sh", ["-c", script], :inherit).!
-  }
+// Compiles the vendored C sources into libs/libbrotli.a. Runs in the
+// compile-time VM with cwd = the module dir; needs cc on PATH.
+fn setup(ctx: k1/setup-ctx) {
+  let minver = if (ctx.build.target is :arm64-macos) "-mmacosx-version-min=15.0.0" else ""
+  let script = `
+    set -e
+    mkdir -p libs .k1-out/cbrotli
+    for f in vendor/common/*.c vendor/dec/*.c vendor/enc/*.c; do
+      o=".k1-out/cbrotli/$(echo "\$f" | sed 's|vendor/||; s|/|_|g; s|\\.c\$|.o|')"
+      cc -O2 ${minver} -Ivendor/include -c "\$f" -o "\$o"
+    done
+    ar rcs libs/libbrotli.a .k1-out/cbrotli/*.o
+    `
+  let _ = process/run-command("/bin/sh", ["-c", script], :inherit).!
 }
 ```
 
@@ -404,90 +403,90 @@ ns build {
 tables. Its setup step parses them out of the vendored C sources and writes
 `tables.k1`, one of the module's own source files:
 
-```k1 path=dogfood/brotli/module.k1
-ns build {
-  fn module(): k1/module {
-    let m = k1/module/new()
-    m.executable()
-    m.dep("cbrotli")
-    m.setup(["tables.k1"], ["vendor"])
-    m
-  }
+```k1 path=dogfood/brotli/build.k1
+fn module(_b: k1/build-config): k1/module {
+  let m = k1/module/new()
+  m.executable()
+  m.dep("cbrotli")
+  m.setup(["tables.k1"], ["vendor"])
+  m
+}
 
-  // Regenerates tables.k1 from vendor/
-  fn setup(_ctx: k1/setup-ctx) { tablegen/generate() }
+// Regenerates tables.k1 from vendor/
+fn setup(_ctx: k1/setup-ctx) { tablegen/generate() }
 ```
 
-```k1 path=dogfood/brotli/module.k1
-    fn generate() {
-      let ees = files/read-to-string("$VENDOR/entropy_encode_static.h")
-      let enc = files/read-to-string("$VENDOR/encode.c")
-      let cf = files/read-to-string("$VENDOR/compress_fragment.c")
-      let cf2 = files/read-to-string("$VENDOR/compress_fragment_two_pass.c")
-      let fl = files/read-to-string("$VENDOR/fast_log.c")
+```k1 path=dogfood/brotli/build.k1
+  fn generate() {
+    let ees = files/read-to-string("$VENDOR/entropy_encode_static.h")
+    let enc = files/read-to-string("$VENDOR/encode.c")
+    let cf = files/read-to-string("$VENDOR/compress_fragment.c")
+    let cf2 = files/read-to-string("$VENDOR/compress_fragment_two_pass.c")
+    let fl = files/read-to-string("$VENDOR/fast_log.c")
 
-      let w = string-builder/new()
-      w.writeln("// Static tables for the q0/q1 encoders, extracted by fn setup (module.k1)")
-      w.writeln("// from this module's vendored google/brotli enc/ sources (vendor/). The reps")
-      w.writeln("// tables are truncated to 257 entries: the fast literal-tree store only sees")
-      w.writeln("// runs within a 256-symbol alphabet.")
-      w.writeln("")
-      emit-int-table(w.&, ees, "kCodeLengthDepth", "k-code-length-depth", "u8", 0, 18)
-      emit-int-table(w.&, ees, "kCodeLengthBits", "k-code-length-bits", "u32", 0, 18)
-      emit-int-table(w.&, ees, "kZeroRepsDepth", "k-zero-reps-depth", "u32", 257, 16)
-      emit-int-table(w.&, ees, "kZeroRepsBits", "k-zero-reps-bits", "u64", 257, 8)
-      emit-int-table(w.&, ees, "kNonZeroRepsDepth", "k-non-zero-reps-depth", "u32", 257, 16)
-      emit-int-table(w.&, ees, "kNonZeroRepsBits", "k-non-zero-reps-bits", "u64", 257, 8)
-      emit-int-table(w.&, enc, "kDefaultCommandDepths", "k-default-command-depths", "u8", 0, 16)
-      emit-int-table(w.&, enc, "kDefaultCommandBits", "k-default-command-bits", "u16", 0, 16)
-      emit-int-table(w.&, enc, "kDefaultCommandCode", "k-default-command-code", "u8", 0, 12)
-      emit-int-table(w.&, cf, "kCmdHistoSeed", "k-cmd-histo-seed", "u32", 0, 24)
-      emit-int-table(w.&, cf2, "kNumExtraBits", "k-num-extra-bits", "u32", 0, 16)
-      emit-int-table(w.&, cf2, "kInsertOffset", "k-insert-offset", "u32", 0, 12)
-      emit-float-table(w.&, fl, "kBrotliLog2Table", "k-log2-table", 6)
+    let w = string-builder/new()
+    w.writeln("// Static tables for the q0/q1 encoders, extracted by fn setup (build.k1)")
+    w.writeln("// from this module's vendored google/brotli enc/ sources (vendor/). The reps")
+    w.writeln("// tables are truncated to 257 entries: the fast literal-tree store only sees")
+    w.writeln("// runs within a 256-symbol alphabet.")
+    w.writeln("")
+    emit-int-table(w.&, ees, "kCodeLengthDepth", "k-code-length-depth", "u8", 0, 18)
+    emit-int-table(w.&, ees, "kCodeLengthBits", "k-code-length-bits", "u32", 0, 18)
+    emit-int-table(w.&, ees, "kZeroRepsDepth", "k-zero-reps-depth", "u32", 257, 16)
+    emit-int-table(w.&, ees, "kZeroRepsBits", "k-zero-reps-bits", "u64", 257, 8)
+    emit-int-table(w.&, ees, "kNonZeroRepsDepth", "k-non-zero-reps-depth", "u32", 257, 16)
+    emit-int-table(w.&, ees, "kNonZeroRepsBits", "k-non-zero-reps-bits", "u64", 257, 8)
+    emit-int-table(w.&, enc, "kDefaultCommandDepths", "k-default-command-depths", "u8", 0, 16)
+    emit-int-table(w.&, enc, "kDefaultCommandBits", "k-default-command-bits", "u16", 0, 16)
+    emit-int-table(w.&, enc, "kDefaultCommandCode", "k-default-command-code", "u8", 0, 12)
+    emit-int-table(w.&, cf, "kCmdHistoSeed", "k-cmd-histo-seed", "u32", 0, 24)
+    emit-int-table(w.&, cf2, "kNumExtraBits", "k-num-extra-bits", "u32", 0, 16)
+    emit-int-table(w.&, cf2, "kInsertOffset", "k-insert-offset", "u32", 0, 12)
+    emit-float-table(w.&, fl, "kBrotliLog2Table", "k-log2-table", 6)
 
-      files/write-entire-file("tables.k1", w.build())
-    }
+    files/write-entire-file("tables.k1", w.build())
+  }
 ```
 
 `modules/libuv` goes further: its setup builds libuv with cmake and then runs
 `k1bindgen` to regenerate two of its own source files, so the manifest lists
 three outputs:
 
-```k1 path=modules/libuv/libuv.k1
-  fn module(): k1/module {
-    let m = k1/module/new()
-    m.lib("uv", :static)
-    m.setup(
-      ["libs/libuv.a", "uv.k1", "net.k1"],
-      ["net.c", "uv_bindgen_prelude.k1.txt"]
-    )
-    m
-  }
+```k1 path=modules/libuv/build.k1
+fn module(_b: k1/build-config): k1/module {
+  let m = k1/module/new()
+  m.lib("uv", :static)
+  m.setup(
+    ["libs/libuv.a", "uv.k1", "net.k1"],
+    ["net.c", "uv_bindgen_prelude.k1.txt"]
+  )
+  m
+}
 ```
 
-What the compiler does with this (`src/k1/compiler.rs`, `start_setup` and
-`finish_setup`; `src/k1/typer.rs`, `ensure_module_setup`): `ns build` is
-compiled and run before the module's dependencies load and before its other
-source files are read, because setup is what produces them. `m.setup(outputs,
-inputs)` declares the files. The stamp at `.k1-out/setup/stamp` records a
-header (stamp format version, target, a content hash of the root file, the
-declared output and input lists) and then every file under every declared
-input and output with its size, mtime and a content hash. The step is fresh
-when the header matches and every file's hash matches; a file whose size and
-mtime are unchanged keeps its recorded hash rather than being reread. When it
-is stale the compiler deletes the stamp and the declared outputs, takes an
-advisory lock in `.k1-out/setup/lock` so a background LSP compile and a CLI
-build cannot both run it, switches the process cwd to the module directory,
-executes `fn setup` in the compile-time VM, then collects the outputs, and
-fails with `did not produce declared output` if one is missing. A run that
-fails leaves no stamp, so the next compile retries. `k1 setup --force <dir>`
-reruns it by hand. This is `dogfood/brotli`'s stamp:
+What the compiler does with this (`src/k1/typer/host.rs`, `run_setups`;
+`src/k1/compiler.rs`, `start_setup` and `finish_setup`): every `build.k1` is
+compiled and run on the host before any program source is read, and setups
+run in dependency order, because setup is what produces those sources.
+`m.setup(outputs, inputs)` declares the files. The stamp at
+`.k1-out/setup/stamp` records a header (stamp format version, target, a
+content hash of `build.k1`, the declared output and input lists) and then
+every file under every declared input and output with its size, mtime and a
+content hash. The step is fresh when the header matches and every file's hash
+matches; a file whose size and mtime are unchanged keeps its recorded hash
+rather than being reread. When it is stale the compiler deletes the stamp and
+the declared outputs, takes an advisory lock in `.k1-out/setup/lock` so a
+background LSP compile and a CLI build cannot both run it, switches the
+process cwd to the module directory, executes `fn setup` in the compile-time
+VM, then collects the outputs, and fails with `did not produce declared
+output` if one is missing. A run that fails leaves no stamp, so the next
+compile retries. `k1 setup --force <dir>` reruns it by hand. This is
+`dogfood/brotli`'s stamp:
 
 ```text
-k1-setup-stamp v5
+k1-setup-stamp v6
 target: arm64-macos
-root: module.k1 508db2e507dd63f4
+build: 9d178fc3b7048c0f
 outputs: tables.k1
 inputs: vendor
 input-file: vendor/compress_fragment.c 32875 1786845398543775859 b59cd712a8ec002d
@@ -495,16 +494,16 @@ input-file: vendor/compress_fragment_two_pass.c 26806 1786845398544307991 0792bd
 input-file: vendor/encode.c 79374 1786845398544961792 726816900a3b3b04
 input-file: vendor/entropy_encode_static.h 33144 1786845398545601634 73c55b0d24bc6a7e
 input-file: vendor/fast_log.c 6046 1786845398546112724 3b53350a14dff339
-output-file: tables.k1 15111 1789678946679334232 8291a1e1492032ac
+output-file: tables.k1 15110 1790120636986915457 a33416ea8ec917f1
 ```
 
 Forcing the step reruns the table extraction in the VM and rewrites
-`tables.k1` byte-identically, in a tenth of a second:
+`tables.k1` byte-identically, in about 40 milliseconds:
 
 ```text
 $ time k1 setup --force dogfood/brotli
-Setting up module 'brotli' (running fn setup in /Users/knix/dev/k1/dogfood/brotli/module.k1)...
-k1 setup --force dogfood/brotli 2>&1  0.03s user 0.03s system 45% cpu 0.135 total
+Setting up module 'brotli' (running fn setup in /Users/knix/dev/k1/dogfood/brotli/build.k1)...
+k1 setup --force dogfood/brotli 2>&1  0.03s user 0.00s system 0.04 total
 $ diff dogfood/brotli/tables.k1 tables_before.k1 && echo byte-identical
 byte-identical
 ```
@@ -521,15 +520,15 @@ than a list of `rerun-if-changed` hints.
 A library module marks what it exports; everything else, the runtime's C
 helpers included, is hidden:
 
-```k1 path=dogfood/klib/module.k1
-ns build {
-  fn module(): k1/module {
-    let m = k1/module/new()
-    m.library()
-    m
-  }
+```k1 path=dogfood/klib/build.k1
+fn module(_b: k1/build-config): k1/module {
+  let m = k1/module/new()
+  m.library()
+  m
 }
+```
 
+```k1 path=dogfood/klib/module.k1
 type pair = { a: i32, b: i32 }
 
 fn(export) klib_add(a: i32, b: i32): i32 { a + b }
@@ -754,15 +753,31 @@ fractal-wasi:
 
 fractal-web:
   make -C modules/core/libs wasm
-  just run-frag --optimize --target wasm64-wasi build dogfood/fractal
+  just run-frag -D web build dogfood/fractal
   python3 -m http.server -d dogfood/fractal 8088
 ```
 
 ## Bare metal
 
-`--no-std --target intel64-bare` drops `std` and the OS: `dogfood/freestanding_lib`
-is a K1 library whose consumer is a freestanding C bootstrap with its own
-`_start` and raw syscalls.
+`dogfood/freestanding_lib` pins its own build: its `fn build` sets the target
+to `intel64-bare` and drops `std`, so the OS is gone too. It is a K1 library
+whose consumer is a freestanding C bootstrap with its own `_start` and raw
+syscalls.
+
+```k1 path=dogfood/freestanding_lib/build.k1
+fn build(req: k1/build-request): k1/build-config {
+  let b = req.default
+  b.target = :intel64-bare
+  b.no-std = true
+  b
+}
+
+fn module(_b: k1/build-config): k1/module {
+  let m = k1/module/new()
+  m.library()
+  m
+}
+```
 
 ```k1 path=dogfood/freestanding_lib/module.k1
 fn(export) k1_add(a: i64, b: i64): i64 { a + b }
@@ -786,7 +801,7 @@ Cross-built from macOS, the object's undefined symbols are the entire
 platform contract the library asks of its host:
 
 ```text
-$ k1 --no-std --target intel64-bare --cache false build dogfood/freestanding_lib
+$ k1 --cache false build dogfood/freestanding_lib
 $ llvm-nm --undefined-only dogfood/freestanding_lib/.k1-out/freestanding_lib.o
                  U k1_platform_io_is_tty
                  U k1_platform_io_write

@@ -188,8 +188,8 @@ impl TypedProgram {
     pub fn module_of_span(&self, span_id: SpanId) -> ModuleId {
         let span = self.remap_span(self.ast.spans.get(span_id));
         for module in self.modules.iter() {
-            for file in module.source_file_hashes.as_slice(&self.mem) {
-                if file.file_id == span.file_id {
+            for file_id in module.files.as_slice(&self.mem) {
+                if *file_id == span.file_id {
                     return module.id;
                 }
             }
@@ -371,9 +371,11 @@ impl TypedProgram {
             self.span_location(SpanId::from_u32(key).unwrap()).unwrap_or_else(|| "?".to_string())
         };
         let mut label = match frame.kind {
-            TraceKind::ModuleDiscover | TraceKind::SetupStamp | TraceKind::SetupFn => {
+            TraceKind::SetupStamp | TraceKind::SetupFn => {
                 self.ident_str(StringId::from_u32(key).unwrap()).to_string()
             }
+            TraceKind::PlanCheck | TraceKind::HostPlan => self.program_name().to_string(),
+            TraceKind::HostWave => format!("wave {key}"),
             TraceKind::ModuleCompile
             | TraceKind::ModuleRead
             | TraceKind::SnapStore
@@ -499,8 +501,8 @@ impl TypedProgram {
         crate::kmem::print_stranded_counters();
         if self.restored_module_count > 0 {
             let mut names: Vec<&str> = Vec::new();
-            for &module_id in &self.module_order[..self.restored_module_count as usize] {
-                names.push(self.ident_str(self.modules.get(module_id).name));
+            for module in self.modules.iter().take(self.restored_module_count as usize) {
+                names.push(self.ident_str(module.name));
             }
             writeln!(out, "\trestored {} modules: {}", names.len(), names.join(", "))?;
         }

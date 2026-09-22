@@ -616,13 +616,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         ctx: &'ctx Context,
         llvm_module: &LlvmModule<'ctx>,
         module: &TypedProgram,
-        optimize: bool,
-        debug: bool,
     ) -> DebugContext<'ctx> {
+        let build = module.plan.config;
         // We may need to create a DIBuilder per-file.
         // For now let's use main file
         let source = module.ast.sources.get_main();
-        let is_macos = module.config.target.platform() == compiler::Platform::PosixMacos;
+        let is_macos = module.plan.config.target.platform() == compiler::Platform::PosixMacos;
         let sysroot = if is_macos { compiler::MAC_SDK_SYSROOT } else { "" };
         let sdk = if is_macos { "MacOSX.sdk" } else { "" };
         let (debug_builder, compile_unit) = llvm_module.create_debug_info_builder(
@@ -631,11 +630,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             source.filename_str(&module.ast.idents),
             source.directory_str(&module.ast.idents),
             "k1_compiler",
-            optimize,
+            build.optimize,
             "",
             0,
             "",
-            if debug { DWARFEmissionKind::Full } else { DWARFEmissionKind::LineTablesOnly },
+            if build.debug { DWARFEmissionKind::Full } else { DWARFEmissionKind::LineTablesOnly },
             0,
             false,
             false,
@@ -676,7 +675,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         // Only an executable is position-independent *and* known not to be
         // loaded elsewhere
-        if module.program_settings.executable {
+        if module.plan.is_executable() {
             let md4 = ctx.metadata_node(&[
                 ctx.i32_type().const_int(1, false).into(),
                 ctx.metadata_string("PIE Level").into(),
@@ -696,7 +695,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             debug_builder,
             compile_unit,
             debug_stack: Vec::new(),
-            line_tables_only: !debug,
+            line_tables_only: !build.debug,
         };
         debug.push_scope(SpanId::NONE, compile_unit.as_debug_info_scope(), compile_unit.get_file());
         debug
@@ -705,8 +704,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     pub fn create(
         ctx: &'ctx Context,
         k1: &'module TypedProgram,
-        debug: bool,
-        optimize: bool,
         kind: CgKind,
         plan: UnitPlan,
     ) -> Self {
@@ -715,10 +712,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let llvm_module = ctx.create_module(k1.program_name());
         llvm_module.set_source_file_name(k1.ast.sources.get_main().filename_str(&k1.ast.idents));
 
-        let debug_context = Cg::init_debug(ctx, &llvm_module, k1, optimize, debug);
+        let debug_context = Cg::init_debug(ctx, &llvm_module, k1);
 
         Cg::initialize_targets();
-        let machine = Cg::make_target_machine(optimize, k1.config.target);
+        let machine = Cg::make_target_machine(k1);
         let target_data = machine.get_target_data();
         llvm_module.set_data_layout(&target_data.get_data_layout());
         llvm_module.set_triple(&machine.get_triple());
@@ -890,7 +887,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         if let Some((_, function_value)) = main_function {
             self.builder.unset_current_debug_location();
-            let is_wasi = self.k1.config.target.platform() == compiler::Platform::Wasi;
+            let is_wasi = self.k1.plan.config.target.platform() == compiler::Platform::Wasi;
             let (entrypoint_name, entrypoint_fn_type) = if is_wasi {
                 // WASI rejects any entry signature other than void _start()
                 if !function_value.get_type().get_param_types().is_empty() {
@@ -1025,7 +1022,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             k1.ir.units_pending_compile.push(*root, requester);
         }
         k1.compile_all_pending_ir(SpanId::NONE)?;
-        if k1.config.optimize {
+        if k1.plan.config.optimize {
             for root in roots.iter() {
                 ir::optimize_unit(k1, IrUnitId::Function(*root))?;
             }
@@ -1059,7 +1056,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 exports.push(function_id);
             }
         }
-        let main = if k1.program_settings.executable {
+        let main = if k1.plan.is_executable() {
             let Some(main_function_id) = k1.get_main_function_id() else {
                 kbail!(k1, SpanId::NONE, "Program {} has no main function", k1.program_name());
             };
@@ -1176,7 +1173,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         roots: &CodegenRoots,
         plans: Vec<UnitPlan>,
         kind: CgKind,
-        debug: bool,
         output: UnitOutput,
         object_path: impl Fn(usize) -> String + Sync,
     ) -> CgResult<(Vec<UnitArtifact>, Vec<UnitTiming>)> {
@@ -1185,7 +1181,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let shared = &shared;
         let output = &output;
         let object_path = &object_path;
-        let optimize = k1.config.optimize;
         let unit_count = plans.len();
         let timings: std::sync::Mutex<Vec<UnitTiming>> =
             std::sync::Mutex::new(Vec::with_capacity(unit_count));
@@ -1214,7 +1209,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             let clock_start = clock.raw();
                             let index = plan.index;
                             let ctx = Context::create();
-                            let mut cg = Cg::create(&ctx, shared.0, debug, optimize, kind, plan);
+                            let mut cg = Cg::create(&ctx, shared.0, kind, plan);
                             cg.codegen_program(roots)?;
                             let clock_generated = clock.raw();
                             cg.finalize_debug_info();
@@ -1346,8 +1341,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let mut units: Vec<K1ThinLtoUnit> = Vec::with_capacity(artifacts.len());
         let mut preserved: Vec<std::ffi::CString> = vec![];
         let mut cross_referenced: Vec<std::ffi::CString> = vec![];
-        let symbol_prefix =
-            if k1.config.target.platform() == compiler::Platform::PosixMacos { "_" } else { "" };
+        let symbol_prefix = if k1.plan.config.target.platform() == compiler::Platform::PosixMacos {
+            "_"
+        } else {
+            ""
+        };
         for artifact in artifacts {
             let UnitArtifact::Bitcode { bytes, exported, referenced } = artifact else {
                 panic!("thinlto_codegen on an object artifact")
@@ -1370,10 +1368,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         for p in &cross_referenced {
             cross_ptrs.push(p.as_ptr());
         }
-        let (cpu, features) = Cg::target_cpu_features(k1.config.target);
+        let (cpu, features) = Cg::llvm_cpu_features(k1);
         let cpu = std::ffi::CString::new(cpu).unwrap();
         let features = std::ffi::CString::new(features).unwrap();
-        let pic = k1.config.target.arch() != compiler::Arch::Wasm;
+        let pic = k1.plan.config.target.arch() != compiler::Arch::Wasm;
         let cache_dir = if k1.config.cache {
             let dir = format!("{}/thinlto", k1.ast.idents.get_string(k1.config.cache_dir));
             if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -1426,7 +1424,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
 
         let program_name = self.k1.program_name().to_string();
-        let dylib_ext = self.k1.config.target.platform().dylib_ext();
+        let dylib_ext = self.k1.plan.config.target.platform().dylib_ext();
         let ptr_type = self.builtin_types.ptr;
         let entry_type = self.ctx.struct_type(&[ptr_type.into(), ptr_type.into()], false);
         for ns_id in reload_nss {
@@ -1889,7 +1887,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             let g = self.make_external_global(basic_type.rich_type(), &name, global.is_constant);
             if global.is_tls && self.target_supports_tls() {
                 g.set_thread_local(true);
-                let mode = if defined_elsewhere && self.k1.program_settings.executable {
+                let mode = if defined_elsewhere && self.k1.plan.is_executable() {
                     ThreadLocalMode::LocalExecTLSModel
                 } else {
                     ThreadLocalMode::GeneralDynamicTLSModel
@@ -2613,7 +2611,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let abi_align = self.llvm_machine.get_target_data().get_abi_alignment(&abi_ty);
                 let align = abi_align.max(cg_ty.rich_repr_layout().align);
                 dst_ptr.as_instruction().unwrap().set_alignment(align).unwrap();
-                if self.k1.config.filc && self.pt_has_pointer_in_union(cg_ty.pt()) {
+                if self.k1.plan.config.filc && self.pt_has_pointer_in_union(cg_ty.pt()) {
                     self.build_zhas_union_marker(dst_ptr);
                 }
                 self.builder.build_store(dst_ptr, abi_value).unwrap();
@@ -3013,7 +3011,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn build_k1_alloca(&mut self, ty: &CgType<'ctx>, name: &str) -> PointerValue<'ctx> {
         let ptr = self.build_alloca(ty.rich_type(), name);
         ptr.as_instruction().unwrap().set_alignment(ty.rich_repr_layout().align).unwrap();
-        if self.k1.config.filc && self.pt_has_pointer_in_union(ty.pt()) {
+        if self.k1.plan.config.filc && self.pt_has_pointer_in_union(ty.pt()) {
             self.build_zhas_union_marker(ptr);
         }
         ptr
@@ -4732,7 +4730,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 .add_attribute(AttributeLoc::Function, self.make_enum_attribute("cold", 0));
         }
 
-        if self.k1.config.target.arch() == compiler::Arch::Wasm {
+        if self.k1.plan.config.target.arch() == compiler::Arch::Wasm {
             if let TyperLinkage::External { lib_name: Some(lib_name), .. } = typed_function_linkage
             {
                 function_value.add_attribute(
@@ -4838,7 +4836,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             AMD64,
             ARM64,
         }
-        let callconv = match self.k1.config.target.arch() {
+        let callconv = match self.k1.plan.config.target.arch() {
             compiler::Arch::Intel => CallConv::AMD64,
             compiler::Arch::Arm => CallConv::ARM64,
             compiler::Arch::Wasm => CallConv::ARM64,
@@ -5623,8 +5621,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     fn target_supports_tls(&self) -> bool {
-        self.k1.config.target.arch() != compiler::Arch::Wasm
-            && self.k1.config.target.platform() != compiler::Platform::Bare
+        self.k1.plan.config.target.arch() != compiler::Arch::Wasm
+            && self.k1.plan.config.target.platform() != compiler::Platform::Bare
     }
 
     fn make_external_global(
@@ -5660,7 +5658,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         if is_tls && self.target_supports_tls() {
             global.set_thread_local(true);
-            let mode = if self.k1.program_settings.executable {
+            let mode = if self.k1.plan.is_executable() {
                 ThreadLocalMode::LocalExecTLSModel
             } else {
                 ThreadLocalMode::GeneralDynamicTLSModel
@@ -5840,30 +5838,20 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         Target::initialize_webassembly(&InitializationConfig::default());
     }
 
-    fn target_cpu_features(k1_target: compiler::Target) -> (String, String) {
-        let is_native = compiler::detect_host_target() == Some(k1_target);
-        if is_native {
-            (
+    fn llvm_cpu_features(k1: &TypedProgram) -> (String, String) {
+        let build = k1.plan.config;
+        match k1.plan.get(build.cpu) {
+            "native" => (
                 TargetMachine::get_host_cpu_name().to_string(),
                 TargetMachine::get_host_cpu_features().to_string(),
-            )
-        } else {
-            match k1_target.arch() {
-                // SSE2 is the x86-64 baseline
-                compiler::Arch::Intel => ("x86-64".to_string(), "".to_string()),
-                compiler::Arch::Arm => ("generic".to_string(), "+neon".to_string()),
-                compiler::Arch::Wasm => (
-                    "generic".to_string(),
-                    // bulk-memory lets llvm.memcpy/memmove/memset lower to
-                    // memory.copy/memory.fill instead of libc calls
-                    "+simd128,+bulk-memory,+sign-ext,+mutable-globals,+nontrapping-fptoint"
-                        .to_string(),
-                ),
-            }
+            ),
+            cpu => (cpu.to_string(), k1.plan.get(build.features).to_string()),
         }
     }
 
-    pub fn make_target_machine(optimize: bool, k1_target: compiler::Target) -> TargetMachine {
+    pub fn make_target_machine(k1: &TypedProgram) -> TargetMachine {
+        let build = k1.plan.config;
+        let k1_target = build.target;
         // Bare targets ride the ELF triples: their object is consumed by a
         // kernel or embedder toolchain, never by mac userland
         let triple = match k1_target {
@@ -5886,9 +5874,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
 
         let target = Target::from_triple(&triple).unwrap();
-        let (cpu, features) = Cg::target_cpu_features(k1_target);
+        let (cpu, features) = Cg::llvm_cpu_features(k1);
         let opt_level =
-            if !optimize { OptimizationLevel::None } else { OptimizationLevel::Aggressive };
+            if !build.optimize { OptimizationLevel::None } else { OptimizationLevel::Aggressive };
         // PIC wasm is for -shared modules; executables must be non-PIC
         let reloc_mode = if k1_target.arch() == compiler::Arch::Wasm {
             inkwell::targets::RelocMode::Static

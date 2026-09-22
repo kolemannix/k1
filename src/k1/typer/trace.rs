@@ -17,7 +17,9 @@ pub const FRAME_FLAG_EXPR_UNIT: u8 = 2;
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TraceKind {
-    ModuleDiscover,
+    PlanCheck,
+    HostPlan,
+    HostWave,
     ModuleRead,
     Parse,
     SetupStamp,
@@ -59,8 +61,10 @@ pub enum TraceKind {
 }
 
 impl TraceKind {
-    pub const ALL: [TraceKind; 39] = [
-        TraceKind::ModuleDiscover,
+    pub const ALL: [TraceKind; 41] = [
+        TraceKind::PlanCheck,
+        TraceKind::HostPlan,
+        TraceKind::HostWave,
         TraceKind::ModuleRead,
         TraceKind::Parse,
         TraceKind::SetupStamp,
@@ -103,7 +107,9 @@ impl TraceKind {
 
     pub fn name(self) -> &'static str {
         match self {
-            TraceKind::ModuleDiscover => "discover",
+            TraceKind::PlanCheck => "plan check",
+            TraceKind::HostPlan => "host plan",
+            TraceKind::HostWave => "host wave",
             TraceKind::ModuleRead => "read",
             TraceKind::Parse => "parse",
             TraceKind::SetupStamp => "setup stamp",
@@ -150,11 +156,11 @@ impl TraceKind {
     /// the trace and are skipped when not recording
     pub fn is_essential(self) -> bool {
         match self {
-            TraceKind::ModuleDiscover
-            | TraceKind::GlobalEval
-            | TraceKind::IrLower
-            | TraceKind::Bcgen => true,
-            TraceKind::ModuleRead
+            TraceKind::GlobalEval | TraceKind::IrLower | TraceKind::Bcgen => true,
+            TraceKind::PlanCheck
+            | TraceKind::HostPlan
+            | TraceKind::HostWave
+            | TraceKind::ModuleRead
             | TraceKind::Parse
             | TraceKind::SetupStamp
             | TraceKind::SetupFn
@@ -195,7 +201,9 @@ impl TraceKind {
     pub fn is_planned(self) -> bool {
         matches!(
             self,
-            TraceKind::ModuleDiscover
+            TraceKind::PlanCheck
+                | TraceKind::HostPlan
+                | TraceKind::HostWave
                 | TraceKind::ModuleRead
                 | TraceKind::Parse
                 | TraceKind::SetupStamp
@@ -225,7 +233,9 @@ impl TraceKind {
     pub fn is_coarse(self) -> bool {
         matches!(
             self,
-            TraceKind::ModuleDiscover
+            TraceKind::PlanCheck
+                | TraceKind::HostPlan
+                | TraceKind::HostWave
                 | TraceKind::ModuleRead
                 | TraceKind::Parse
                 | TraceKind::SetupStamp
@@ -585,10 +595,7 @@ impl TypedProgram {
     }
 
     fn trace_current_progress_percent(&self) -> Option<u32> {
-        if self.listed_module_count == 0 {
-            return None;
-        }
-        let total = self.module_order.len().max(self.listed_module_count as usize);
+        let total = self.plan.modules().len().max(self.modules.len());
         let mut pass_fraction = 0.0;
         for id in self.trace.stack() {
             let frame = self.trace.frames.get(*id);

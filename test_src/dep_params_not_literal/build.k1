@@ -1,0 +1,6 @@
+fn module(_b: k1/build-config): k1/module {
+  let m = k1/module/new()
+  let p = .{ backlog = 500 }
+  m.dep-params("cfglib", p)
+  m
+}

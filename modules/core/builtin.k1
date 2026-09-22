@@ -796,15 +796,38 @@ ns k1 {
     link-type: link-kind,
   }
 
-  // params-expr-id is a parsed expression id captured by the compiler; 0 = none
-  type dep-entry = { name: string, params-expr-id: u64 }
+  type dep-entry = { name: string, params-span: u32 }
 
   type setup-decl = {
     outputs: list[string],
     inputs: list[string],
   }
 
-  type setup-ctx = { module-dir: string }
+  type target = either(u8) { intel64-linux, arm64-macos, wasm64-wasi, intel64-bare, arm64-bare, wasm64-bare }
+
+  type command = either(u8) { check, build, run, test, server }
+
+  type option = { name: string, value: string }
+
+  type build-config = {
+    target: target,
+    cpu: string,
+    features: string,
+    optimize: bool,
+    debug: bool,
+    no-std: bool,
+    sanitize: bool,
+    filc: bool,
+  }
+
+  type build-request = {
+    default: build-config,
+    command: command,
+    options: list[option],
+    host: opt[target],
+  }
+
+  type setup-ctx = { module-dir: string, build: build-config }
 
   type module = {
     kind: opt[module-kind],
@@ -836,12 +859,6 @@ ns k1 {
     }
 
     fn dep(self: *module, name: string) {
-      self.add-dep-impl(name, 0)
-    }
-
-    // The compiler rewrites `m.dep(name, .{ ... })` to target this fn, passing the
-    // captured params expression id; not meant to be called directly
-    fn add-dep-impl(self: *module, name: string, params-expr-id: u64) {
       if name.is-empty() { crash("empty dep name") }
       if not name.[0].is-ascii-lower() {
         crash("invalid dep name '$name': dep names start with a lowercase ascii letter")
@@ -853,7 +870,12 @@ ns k1 {
         }
       }
       for self.deps { if it.name == name { crash("duplicate dep '$name'") } }
-      self.deps.push(.{ name, params-expr-id })
+      self.deps.push(.{ name, params-span = 0 })
+    }
+
+    fn dep-params(self: *module, name: string, params-span: u32) {
+      self.dep(name)
+      self.deps.[self.deps.len() - 1].params-span = params-span
     }
 
     fn lib(self: *module, name: string, link-type: link-kind) {

@@ -74,7 +74,7 @@ fn backtrace_symbolizer_available() -> bool {
 fn get_test_expectation(test_file: &Path) -> TestExpectation {
     let mut path = test_file.canonicalize().unwrap();
     if path.is_dir() {
-        match k1::compiler::detect_module_root_file(&path.to_string_lossy()) {
+        match k1::compiler::module_root_file(&path.to_string_lossy()) {
             Some(root) => path = root,
             None => return TestExpectation::ExitCode { code: 0, message: None },
         }
@@ -120,6 +120,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, k1_home: &str, path: P) -> Result<()
         dump_trace: false,
         profile: false,
         target: None,
+        define: vec![],
         chatty: false,
         optimize_ir: true,
         cache: false,
@@ -129,6 +130,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, k1_home: &str, path: P) -> Result<()
     let compile_result = compiler::compile_program(&args);
     let expectation = get_test_expectation(path.as_ref());
     match compile_result {
+        Err(CompileProgramError::Build(message)) => bail!("{filename}: {message}"),
         Err(CompileProgramError::TyperFailure(module)) => {
             let messages = module.messages.borrow();
             if let Some(parse_error) = module.ast.errors.first() {

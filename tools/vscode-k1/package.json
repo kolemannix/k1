@@ -37,6 +37,14 @@
           "default": "",
           "description": "Absolute path to the k1lsp binary. If empty, the extension will try $K1_HOME/bin/k1lsp then ~/.k1/bin/k1lsp."
         },
+        "k1.buildArgs": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Build flags the language server checks with, e.g. [\"--target\", \"wasm64-wasi\", \"-D\", \"web\"]."
+        },
         "k1.languageServer.args": {
           "type": "array",
           "default": [],

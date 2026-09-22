@@ -27,7 +27,7 @@ fn optimize_unit_body(k1: &mut TypedProgram, root: IrUnitId, unit: IrUnit) -> K1
         eprintln!("optimizing {}", unit_to_string(k1, root, true));
     }
 
-    let skip_inline = !k1.config.inline_ir();
+    let skip_inline = !k1.inline_ir();
 
     let mut visit_stack = std::mem::take(&mut k1.ir.opt_buf_visit_stack);
     let mut visited = std::mem::take(&mut k1.ir.opt_buf_visited);

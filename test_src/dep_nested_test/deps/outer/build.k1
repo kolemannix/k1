@@ -1,0 +1,5 @@
+fn module(_b: k1/build-config): k1/module {
+  let m = k1/module/new()
+  m.dep("inner")
+  m
+}

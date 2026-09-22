@@ -614,6 +614,7 @@ mod completion_tests {
             chatty: false,
             optimize_ir: true,
             target: None,
+            define: vec![],
             cache: false,
             filc: false,
             k1_home_override: None,
@@ -627,6 +628,7 @@ mod completion_tests {
         ) {
             Ok(program) => Box::new(program),
             Err(CompileProgramError::TyperFailure(program)) => program,
+            Err(CompileProgramError::Build(message)) => panic!("{message}"),
         }
     }
 

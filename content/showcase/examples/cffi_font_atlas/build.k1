@@ -1,0 +1,15 @@
+use std/process
+
+fn module(_b: k1/build-config): k1/module {
+  let m = k1/module/new()
+  m.setup(outputs = ["libs/libatlas.dylib"], inputs = ["atlas.c"])
+  m
+}
+
+fn setup(ctx: k1/setup-ctx) {
+  let _ = process/sh-verbose(`
+    cd "${ctx.module-dir}"
+    mkdir -p libs
+    cc -O2 -shared -I../../../../modules/stb/vendor atlas.c -o libs/libatlas.dylib
+    `).!
+}

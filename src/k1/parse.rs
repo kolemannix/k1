@@ -11,7 +11,7 @@ use crate::typer::{Linkage, MessageLevel, ModuleId};
 use crate::vpool::VPool;
 use crate::{SV8, impl_copy_if_small, kpath, lex::*, nz_u32_id, static_assert_size};
 use TokenKind as K;
-pub use idents::{IdentPool, IdentSlice, IdentSpanned, QIdent, StringId};
+pub use idents::{IdentPool, IdentSlice, IdentSpanned, Interner, QIdent, StringId};
 use smallvec::smallvec;
 
 nz_u32_id!(ParsedTypeDefnId);
@@ -1486,6 +1486,15 @@ impl SourceFiles {
 
     pub fn source_by_span(&self, span: Span) -> &SourceFile {
         self.get(span.file_id)
+    }
+
+    pub fn find_by_path(&self, path: StringId) -> Option<FileId> {
+        for (id, source) in self.iter() {
+            if source.file_path == path {
+                return Some(id);
+            }
+        }
+        None
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (FileId, &SourceFile)> {

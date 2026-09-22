@@ -461,22 +461,6 @@ impl InputsHash {
         }
         InputsHash((halves[0] as u128) << 64 | halves[1] as u128)
     }
-
-    pub fn add_module_header(self, name: &str, root_path: &str, root_hash: u64) -> InputsHash {
-        self.add(&[name.as_bytes(), root_path.as_bytes(), &root_hash.to_le_bytes()])
-    }
-
-    pub fn add_module_sources<S: AsRef<str>>(
-        self,
-        name: &str,
-        sources: impl Iterator<Item = (S, u64)>,
-    ) -> InputsHash {
-        let mut hash = self.add(&[name.as_bytes()]);
-        for (path, content_hash) in sources {
-            hash = hash.add(&[path.as_ref().as_bytes(), &content_hash.to_le_bytes()]);
-        }
-        hash
-    }
 }
 
 pub const CACHE_DIR_NAME: &str = "cache";
@@ -502,23 +486,6 @@ pub fn cache_load(path: &std::path::Path) -> Option<memmap2::Mmap> {
     let _ = mmap.advise(memmap2::Advice::Sequential);
     let _ = mmap.advise(memmap2::Advice::WillNeed);
     Some(mmap)
-}
-
-pub fn cache_load_text(cache_dir: &std::path::Path, filename: &str) -> Option<String> {
-    std::fs::read_to_string(cache_dir.join(filename)).ok()
-}
-
-pub fn cache_store_text(cache_dir: &std::path::Path, filename: &str, text: &str) {
-    if std::fs::create_dir_all(cache_dir).is_err() {
-        return;
-    }
-    let path = cache_dir.join(filename);
-    let tmp = tmp_path(&path);
-    if std::fs::write(&tmp, text).is_err() {
-        let _ = std::fs::remove_file(&tmp);
-        return;
-    }
-    let _ = std::fs::rename(&tmp, path);
 }
 
 pub fn cache_store_begin(

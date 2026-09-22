@@ -1,0 +1,1 @@
+fn from-b(): i32 { y/value() }

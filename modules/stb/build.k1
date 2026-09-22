@@ -1,0 +1,33 @@
+use std/process
+
+fn module(b: k1/build-config): k1/module {
+  let m = k1/module/new()
+  m.lib("stb", :static)
+  m.setup(outputs = ["libs/libstb.a", "c.k1"], inputs = ["stb.c", "vendor"])
+  m
+}
+
+fn setup(ctx: k1/setup-ctx) {
+  let minver = if (ctx.build.target is :arm64-macos) "-mmacosx-version-min=15.0.0" else ""
+  process/sh-verbose(`
+    mkdir -p libs .k1-out/stb
+    cc -O2 ${minver} -c stb.c -o .k1-out/stb/stb.o
+    ar rcs libs/libstb.a .k1-out/stb/stb.o
+    `).!
+
+  let bindgen-args: list[string] = [
+    "-in-path", "vendor/stb_truetype.h",
+    "-out-path", "c.k1",
+    "-lib-name", "stb",
+    "-ns-name", "c",
+    "+strip-prefix", "stbtt_",
+  ]
+  if (ctx.build.target is :arm64-macos) {
+    let sdk = process/sh("printf %s $(xcrun --sdk macosx --show-sdk-path)").!
+    bindgen-args.push("+clangarg")
+    bindgen-args.push("-isysroot")
+    bindgen-args.push("+clangarg")
+    bindgen-args.push(sdk)
+  }
+  let _ = process/run-verbose("k1bindgen", bindgen-args.as-span()).!
+}

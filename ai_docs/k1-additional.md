@@ -63,19 +63,28 @@ and `test_src/suite1/context_ability.k1`.
 
 ## Module Manifests And FFI
 
-A module describes itself in `ns build` in its root file: `fn module(): k1/module`
-is its manifest, `fn setup(ctx: k1/setup-ctx)` its build step, and both may call
-helpers declared alongside them. A directory module's root file is `module.k1` or
-`<module-name>.k1` (required — a directory module without one is an error); a
-single-file module is its own root file. `ns build` anywhere else, or a top-level
-`fn module`, is an error.
+A module is a directory holding `build.k1`, `module.k1` or `<dir>.k1`; a single
+file compiles as a module too. Its build description lives in `<dir>/build.k1`,
+which is compiled on the host before the program and sees only core and std,
+never the module's own files. Every entry point in it is optional:
 
-`ns build` is compiled and run before the module: before its deps load and before
-its remaining sources are read, since `fn setup` is what generates them. Only core
-and std are in scope, and it declares its own `use`s — the root file's file-level
-uses are not resolved yet. The module's own passes skip it, so nothing in it is
-compiled twice. Neither fn is required: no `fn module` means defaults — library, or
-executable for the primary module.
+- `fn build(req: k1/build-request): k1/build-config` runs for the primary only.
+  `req.default` is the config the CLI asked for, `req.options` holds `-D name`
+  and `-D name=value` flags, `req.host` is the host target. Absent, the build uses
+  `req.default`. `cpu` and `features` left `""` mean the target's default.
+- `fn module(b: k1/build-config): k1/module` returns the manifest; absent means a
+  library, or an executable for the primary.
+- `fn setup(ctx: k1/setup-ctx)` is the module's build step (below).
+
+`k1/platform` and friends describe the host inside `build.k1`; read the build's
+target from `b.target` or `ctx.build.target`. Deps are named in the manifest with
+`m.dep("y")`, or `m.dep-params("y", .{ field = value })` to set y's
+`let p: S = k1/module-params(defaults)` fields; the literal is typed later, in y.
+A dep name resolves to the first existing dir of `<primary>/deps/y`,
+`<dependent>/deps/y`, `$K1_HOME/modules/y`; two dependents resolving `y` to
+different dirs is an error settled by adding `<primary>/deps/y`. The whole plan
+is cached under `.k1-out/cache/plan-*` and rebuilt when a `build.k1`, a dep
+lookup, or a setup stamp changes.
 
 Building a library primary (`m.library()`) produces both `.k1-out/lib<name>.{dylib|so}` and a fat `.k1-out/lib<name>.a` (a partial link
 of the K1 object with every static lib in the program, k1rt included); both
@@ -98,28 +107,29 @@ body (not intern/extern) and is rejected in reloadable namespaces; a cycle of
 `fn(inline)` calls is an error, a cycle through a normal fn is fine.
 
 A manifest may declare a setup step — `m.setup(outputs, inputs)` — paired with
-`fn setup(ctx: k1/setup-ctx)` in the same `ns build`. When the declared outputs
-are stale (hashed together with the inputs, the root file, and the target), the
-compiler runs `fn setup` in the compile-time VM with cwd = the module dir, then
-stamps the outputs; a run that fails leaves no stamp, so it is retried on the
-next compile. See `modules/libuv`, `modules/http`, `modules/sdl3`.
+`fn setup(ctx: k1/setup-ctx)` in the same `build.k1`. When the declared outputs
+are stale (hashed together with the inputs, `build.k1`, and the target), the
+compiler runs `fn setup` on the host with cwd = the module dir, then stamps the
+outputs; a run that fails leaves no stamp, so it is retried on the next compile.
+Setups finish before any program source is read. See `modules/libuv`,
+`modules/http`, `modules/sdl3`.
 
 ```rust
-ns build {
-  fn module(): k1/module {
-    let m = k1/module/new()
-    m.lib("foo", :static)
-    m.link-args(["-L/some/path"])
-    m
-  }
+// build.k1
+fn module(b: k1/build-config): k1/module {
+  let m = k1/module/new()
+  m.lib("foo", :static)
+  m.link-args(["-L/some/path"])
+  m
 }
 
+// foo.k1
 ns(lib("foo")) foo {
   fn(extern("very_small")) very-small(x: very-small, y: very-small): very-small
 }
 ```
 
-See `test_src/ffi_abi_test/ffi_abi_test.k1` and `test_src/threads.k1`.
+See `test_src/ffi_abi_test` and `test_src/threads.k1`.
 
 ## Function Pointers
 

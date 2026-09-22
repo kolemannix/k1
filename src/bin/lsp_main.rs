@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
+use clap::Parser;
 use k1::compiler::{CompileProgramError, LspCompileOptions};
 use k1::lex::{self, Span, SpanId};
 use k1::lsp_support::CompletionCandidateKind;
@@ -225,6 +226,7 @@ struct Backend {
     completion_compile_lock: tokio::sync::Mutex<()>,
     /// The client accepts `$/progress` (window.workDoneProgress)
     progress_supported: AtomicBool,
+    build_args: RwLock<Vec<String>>,
 }
 
 const PROGRESS_TICK: std::time::Duration = std::time::Duration::from_millis(100);
@@ -313,7 +315,46 @@ impl Backend {
             completion_generation: AtomicU32::new(0),
             completion_compile_lock: tokio::sync::Mutex::new(()),
             progress_supported: AtomicBool::new(false),
+            build_args: RwLock::new(Vec::new()),
         }
+    }
+
+    fn check_args(&self, file: PathBuf) -> k1::compiler::Args {
+        let mut argv: Vec<std::ffi::OsString> = vec!["k1lsp".into()];
+        for arg in self.build_args.read().unwrap().iter() {
+            argv.push(arg.into());
+        }
+        argv.push("check".into());
+        argv.push(file.clone().into_os_string());
+        let mut args = match k1::compiler::Args::try_parse_from(&argv) {
+            Ok(args) => args,
+            Err(e) => {
+                error!("ignoring k1.buildArgs: {e}");
+                k1::compiler::Args::parse_from([
+                    "k1lsp".into(),
+                    "check".into(),
+                    file.into_os_string(),
+                ])
+            }
+        };
+        args.debug = true;
+        args
+    }
+
+    fn set_build_args(&self, settings: &serde_json::Value) -> bool {
+        let Some(list) = settings.get("buildArgs").and_then(|v| v.as_array()) else {
+            return false;
+        };
+        let mut build_args = Vec::with_capacity(list.len());
+        for item in list {
+            if let Some(arg) = item.as_str() {
+                build_args.push(arg.to_string());
+            }
+        }
+        let mut current = self.build_args.write().unwrap();
+        let changed = *current != build_args;
+        *current = build_args;
+        changed
     }
 
     /// Insert the completion marker at the cursor, replacing whatever token is there, and run a check compile;
@@ -362,25 +403,7 @@ impl Backend {
         source_overrides.insert(canonical_path, spliced);
         let lsp_options =
             LspCompileOptions { source_overrides, completion: true, progress_sink: None };
-        let args = k1::compiler::Args {
-            no_std: false,
-            emit_llvm: false,
-            optimize: false,
-            dump_module: false,
-            dump_ir: false,
-            debug: true,
-            sanitize: false,
-            profile: false,
-            chatty: false,
-            optimize_ir: true,
-            target: None,
-            cache: true,
-            filc: false,
-            k1_home_override: None,
-            command: k1::compiler::Command::Check { file: Some(root_path) },
-            dump_idents: false,
-            dump_trace: false,
-        };
+        let args = self.check_args(root_path);
 
         let my_generation = self.completion_generation.fetch_add(1, Ordering::SeqCst) + 1;
         let _compile_guard = self.completion_compile_lock.lock().await;
@@ -390,13 +413,17 @@ impl Backend {
         let program =
             tokio::task::spawn_blocking(move || {
                 match k1::compiler::compile_program_ext(&args, lsp_options) {
-                    Ok(program) => program,
-                    Err(CompileProgramError::TyperFailure(program)) => *program,
+                    Ok(program) => Some(program),
+                    Err(CompileProgramError::TyperFailure(program)) => Some(*program),
+                    Err(CompileProgramError::Build(message)) => {
+                        error!("{message}");
+                        None
+                    }
                 }
             })
             .await
             .map_err(|_| Error::internal_error())?;
-        Ok(Some(program))
+        Ok(program)
     }
 
     fn with_k1<T>(&self, f: impl Fn(&TypedProgram) -> T) -> Option<T> {
@@ -525,25 +552,7 @@ impl Backend {
         } else {
             None
         };
-        let args = k1::compiler::Args {
-            no_std: false,
-            emit_llvm: false,
-            optimize: false,
-            dump_module: false,
-            dump_ir: false,
-            debug: true,
-            sanitize: false,
-            profile: false,
-            chatty: false,
-            optimize_ir: true,
-            target: None,
-            cache: true,
-            filc: false,
-            k1_home_override: None,
-            command: k1::compiler::Command::Check { file: Some(src_path) },
-            dump_idents: false,
-            dump_trace: false,
-        };
+        let args = self.check_args(src_path);
         let lsp_options = LspCompileOptions { progress_sink, ..LspCompileOptions::default() };
         let compile_result = tokio::task::spawn_blocking(move || {
             k1::compiler::compile_program_ext(&args, lsp_options)
@@ -566,6 +575,10 @@ impl Backend {
                     compile_start.elapsed().as_millis()
                 );
                 module
+            }
+            Err(CompileProgramError::Build(message)) => {
+                self.client.show_message(MessageType::ERROR, message).await;
+                return iteration_number;
             }
         };
         compiled_module.trace.progress_sink = None;
@@ -713,6 +726,9 @@ impl LanguageServer for Backend {
         let progress_supported =
             params.capabilities.window.as_ref().and_then(|w| w.work_done_progress).unwrap_or(false);
         self.progress_supported.store(progress_supported, Ordering::Relaxed);
+        if let Some(options) = &params.initialization_options {
+            self.set_build_args(options);
+        }
         info!("Got initialize params: {params:#?}");
         Ok(res)
     }
@@ -956,6 +972,16 @@ impl LanguageServer for Backend {
                 },
             },
         )))
+    }
+
+    async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
+        let settings = params.settings.get("k1").unwrap_or(&params.settings);
+        if !self.set_build_args(settings) || self.with_k1(|_| ()).is_none() {
+            return;
+        }
+        self.compile().await;
+        self.send_diagnostics().await;
+        self.client.semantic_tokens_refresh().await.unwrap();
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {

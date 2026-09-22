@@ -118,29 +118,27 @@ header:
 #include "stb_truetype.h"
 ```
 
-The module's `ns build` compiles it to `libs/libatlas.dylib`. `fn setup`
-runs in the VM whenever its declared inputs are newer than its outputs (the
-second compile costs a stamp check, not a `cc` invocation). The script `cd`s
-to the module dir the compiler hands it, so it does not care what directory
-the compiler was invoked from:
+The module's `build.k1` compiles it to `libs/libatlas.dylib`. `fn setup`
+runs on the host, before the program compiles, whenever its declared inputs
+are newer than its outputs (the second compile costs a stamp check, not a `cc`
+invocation). The script `cd`s to the module dir the compiler hands it, so it
+does not care what directory the compiler was invoked from:
 
-```k1
-ns build {
-  use std/process
+```k1 path=content/showcase/examples/cffi_font_atlas/build.k1
+use std/process
 
-  fn module(): k1/module {
-    let m = k1/module/new()
-    m.setup(outputs = ["libs/libatlas.dylib"], inputs = ["atlas.c"])
-    m
-  }
+fn module(_b: k1/build-config): k1/module {
+  let m = k1/module/new()
+  m.setup(outputs = ["libs/libatlas.dylib"], inputs = ["atlas.c"])
+  m
+}
 
-  fn setup(ctx: k1/setup-ctx) {
-    let _ = process/sh-verbose(`
-      cd "${ctx.module-dir}"
-      mkdir -p libs
-      cc -O2 -shared -I../../../../modules/stb/vendor atlas.c -o libs/libatlas.dylib
-      `).!
-  }
+fn setup(ctx: k1/setup-ctx) {
+  let _ = process/sh-verbose(`
+    cd "${ctx.module-dir}"
+    mkdir -p libs
+    cc -O2 -shared -I../../../../modules/stb/vendor atlas.c -o libs/libatlas.dylib
+    `).!
 }
 ```
 

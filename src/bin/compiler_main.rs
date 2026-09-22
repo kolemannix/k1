@@ -44,6 +44,10 @@ fn run() -> anyhow::Result<ExitCode> {
             compiler::report_trace(&args, &program);
             return Ok(ExitCode::FAILURE);
         }
+        Err(CompileProgramError::Build(message)) => {
+            eprintln!("{message}");
+            return Ok(ExitCode::FAILURE);
+        }
     };
     if !args.command.kind().codegens() || matches!(args.command, Command::Server { .. }) {
         compiler::report_trace(&args, &program);
@@ -63,7 +67,7 @@ fn run() -> anyhow::Result<ExitCode> {
         return Ok(ExitCode::SUCCESS);
     }
     if matches!(args.command, Command::Run { .. } | Command::Test { .. })
-        && !program.program_settings.executable
+        && !program.plan.is_executable()
     {
         eprintln!(
             "{} is a library module; run/test require an executable module",
@@ -82,7 +86,7 @@ fn run() -> anyhow::Result<ExitCode> {
                 info!("run executable: {}", program.program_name());
                 let exit_code = compiler::run_compiled_program(
                     &program.ast.idents,
-                    program.config.target,
+                    program.plan.config.target,
                     program.config.out_dir,
                     program.config.home_dir,
                     program.program_name(),
@@ -95,7 +99,7 @@ fn run() -> anyhow::Result<ExitCode> {
                 info!("test executable: {}", program.program_name());
                 let exit_code = compiler::run_compiled_program(
                     &program.ast.idents,
-                    program.config.target,
+                    program.plan.config.target,
                     program.config.out_dir,
                     program.config.home_dir,
                     program.program_name(),

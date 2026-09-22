@@ -1,15 +1,3 @@
-ns build {
-  fn module(): k1/module {
-    let llvm-prefix = core/sys/env("LLVM_SYS_211_PREFIX") ?
-      crash("k1bindgen needs LLVM_SYS_211_PREFIX set to an LLVM install prefix")
-    let llvm-path = "$llvm-prefix/lib"
-    let m = k1/module/new()
-    m.lib("clang", :default)
-    m.link-args(["-L$llvm-path", "-Wl,-rpath,$llvm-path"])
-    m
-  }
-}
-
 use clang/CXIndex
 use clang/CXTranslationUnit
 use clang/CXCursor

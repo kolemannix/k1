@@ -652,7 +652,7 @@ let r: ?int = loop @find {
 
 ```rust
 for values {
-  println("{it-index}: {it}")
+  println("$it-index: $it")
 }
 ```
 
@@ -663,7 +663,7 @@ integer types and floats:
 
 ```rust
 for i in 0.until(10) {
-  println("{i}")
+  println("$i")
 }
 ```
 
