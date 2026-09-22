@@ -1,0 +1,16 @@
+fn(extern("gethostname")) c-gethostname(buf: ptr, len: size): i32
+fn(extern("getpid")) c-getpid(): i32
+
+let BUILD-HOST: string = #static {
+  let buf = buffer/allocate[u8](256)
+  let rc = c-gethostname(buf.data-ptr(), 256)
+  if rc != 0 crash("gethostname failed")
+  let n: size = 0
+  while buf.[n] != 0 { n = n + 1 }
+  string/wrap-bytes(span/wrap-buffer(buf.slice(0, n)))
+}
+
+fn main(): i32 {
+  println("built on $BUILD-HOST, running as pid ${c-getpid()}")
+  0
+}

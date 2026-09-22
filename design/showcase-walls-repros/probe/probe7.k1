@@ -1,0 +1,6 @@
+fn main(): i32 {
+  let b = 0
+  if b > 5 { println("big") } else b = b + 1
+  println("$b")
+  0
+}

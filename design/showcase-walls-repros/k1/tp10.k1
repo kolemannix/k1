@@ -1,0 +1,16 @@
+ns pre {
+  fn squares(n: int): span[int] {
+    let out: list[int] = []
+    for i in 1.until(n + 1) { out.push(i * i) }
+    out.as-span()
+  }
+}
+fn main(): i32 {
+  #for pre/squares(4) {
+    println("$it")
+  }
+  #for #static pre/squares(2) {
+    println("static $it")
+  }
+  0
+}

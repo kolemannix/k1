@@ -1,0 +1,9 @@
+fn main(): i32 {
+  let point = #static .{ x = 3 * 4, y = 5 - 3 }
+  (point.x: 12)
+  (point.y: 2)
+  println("a")
+  println("${point.x.from-static()} ${point.y.from-static()}")
+  println("b")
+  0
+}

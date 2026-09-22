@@ -1,0 +1,17 @@
+fn cls(s: string): int {
+  if s.len() is {
+    2 -> if s.[0] is { 'i' -> if s.[1] is { 'f' -> 1, 'n' -> 2, _ -> 0 }, _ -> 0 },
+    _ -> 0
+  }
+}
+
+fn main(): i32 {
+  let tape: array[u8, 64] = .0
+  let p: size = 3
+  tape.[p] = tape.[p] + 7
+  tape.[p] = tape.[p] - 8
+  println("tape ${tape.[p]} cls ${cls("if")} ${cls("in")} ${cls("iz")} ${cls("x")}")
+  let lit: "a\nb" = #static "a\nb"
+  println(lit.from-static())
+  0
+}

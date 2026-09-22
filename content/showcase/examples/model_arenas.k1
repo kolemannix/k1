@@ -1,0 +1,34 @@
+fn render(id: int): string {
+  let parts: list[string] = list/empty()
+  for i in 0.until(3) { parts.push("item-${id}-${i}") }
+  parts.join(",")
+}
+
+fn main(): i32 {
+  let scratch = core/arena/init(64 * core/arena/kb)
+  for id in 0.until(3) {
+    let response = mem/with-arena(scratch, render(id))
+    println("$response  used=${scratch.used-bytes()}")
+    scratch.reset()
+  }
+  println("after reset: used=${scratch.used-bytes()}")
+
+  let dirty = scratch.alloc-buffer[u64](4)
+  dirty.fill(7)
+  println(dirty)
+  scratch.reset()
+  println(scratch.alloc-buffer[u64](4))
+
+  let m = scratch.mark()
+  let tmp = scratch.push(99)
+  println("${tmp.*} at ${scratch.used-bytes()}")
+  scratch.pop-to-mark(m)
+  println("popped: ${scratch.used-bytes()}")
+
+  let durable: list[int] = list/with-capacity-in(heap, 4)
+  durable.push-in(heap, 1)
+  durable.push-in(heap, 2)
+  println(durable)
+  println(heap.alloc-t[u64]().*)
+  0
+}

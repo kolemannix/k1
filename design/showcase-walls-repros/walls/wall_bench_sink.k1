@@ -1,0 +1,28 @@
+use std/time
+
+fn count-a(bytes: span[u8]): u64 {
+  let count: u64 = 0
+  for b in bytes {
+    if b == 'a'.as-u8() { count = count + 1 }
+  }
+  count
+}
+
+fn bench(run: some fn (size) -> u64): u64 {
+  let result: u64 = 0
+  for rep in 0.until(3) {
+    let start = time/read-cpu-counter()
+    result = run(rep)
+    let nanos = time/elapsed-nanos(start)
+    println("rep $rep: $nanos ns")
+  }
+  result
+}
+
+fn main(): i32 {
+  let n: size = 8 * 1024 * 1024
+  let bytes = buffer/filled-in(heap, n, 'a'.as-u8())
+  let result = bench(fn[bytes](rep: size) { count-a(bytes.as-span().drop(rep)) })
+  println("found $result")
+  0
+}

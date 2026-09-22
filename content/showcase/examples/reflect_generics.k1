@@ -1,0 +1,46 @@
+ns pre {
+  fn is-list[t](): bool { types/id[t].is-instance-of(types/id[list]) }
+}
+
+type pair[a, b] = { first: a, second: b }
+
+fn do-it(input: string, count: u32): bool { count > 0 and input.len() > 0 }
+
+fn describe[t](): string {
+  let id = types/id[t]
+  if id.instance-info() is {
+    :some .{ parent, args } -> {
+      let arg-names = list/empty[string]()
+      for a in args { arg-names.push(a.name()) }
+      "${id.name()} = ${parent.name()} applied to [${string/join(arg-names, ", ")}]"
+    },
+    :none -> "${id.name()} is not a generic instance"
+  }
+}
+
+fn element-type[t: pred pre/is-list](): string { types/instance-info[t].!.args.[0].name() }
+
+fn main(): i32 {
+  println(describe[list[int]]())
+  println(describe[pair[string, ?u8]]())
+  println(describe[result[int, string]]())
+  println(describe[int]())
+  println(describe[*pair[int, int]]())
+  println(types/id[list].name())
+  println("${types/id[list[int]].is-instance-of(types/id[list])} ${types/id[list[int]].is-instance-of(types/id[pair])}")
+  println(element-type[list[string]]())
+  let rejected = test-compile(element-type[int]())
+  println(rejected.!)
+
+  println(types/id[do-it.return].name())
+  println(types/id[do-it.input].name())
+  require types/schema[do-it] is :function .{ params, return-type-id } else crash("do-it is a function")
+  for p in params { println("  ${p.name}: ${p.type-id.name()}") }
+  println("  -> ${return-type-id.name()}")
+  #static assert(types/id[do-it.return] == types/id[bool])
+
+  let f: *fn(string, u32) -> bool = do-it.&
+  require types/schema[type-of(f)] is :function-pointer .{ function-type-id } else crash("f is a fn pointer")
+  println(function-type-id.name())
+  0
+}

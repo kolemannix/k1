@@ -1,0 +1,30 @@
+ns pre {
+  let STATUS_TABLE: span[{ name: string, code: u16 }] = [
+    .{ name = "ok", code = 200 },
+    .{ name = "not-found", code = 404 },
+    .{ name = "teapot", code = 418 },
+  ]
+
+  fn status-enum(): types/type-id {
+    let variants: list[{ name: string, payload: ?types/type-id, tag: ?types/int-value }] = []
+    for row in STATUS_TABLE {
+      variants.push(.{ name = row.name, payload = :none, tag = :some(types/int-value:u16(row.code)) })
+    }
+    types/make-either(:some(types/id[u16]), variants.as-span())
+  }
+}
+
+type(alias) status = #type pre/status-enum()
+
+fn classify(s: status): string {
+  if s is {
+    :ok -> "success",
+    :not-found -> "client error",
+  }
+}
+
+fn main(): i32 {
+  println(classify(:teapot))
+  0
+}
+//errmsg: Non-exhaustive match

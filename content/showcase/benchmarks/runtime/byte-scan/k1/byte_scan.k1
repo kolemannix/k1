@@ -1,0 +1,90 @@
+use std/simd
+
+$simd/first-of(delims, [',', ':', '"'])
+
+type rng = { state: u64 }
+
+ns for rng {
+  fn next(self: *rng): u64 {
+    let x = self.state
+    x = x ^ (x << 13)
+    x = x ^ (x >> 7)
+    x = x ^ (x << 17)
+    self.state = x
+    x
+  }
+}
+
+let SIZE: size = 256 * 1024 * 1024
+let REPEAT: size = 8
+let NEWLINE-STRIDE: size = 4093
+let DELIM-STRIDE: size = 1_000_003
+
+fn fill(buf: buffer[u8]) {
+  let words = buffer/wrap-raw[u64](buf.data-ptr(), buf.len / 8)
+  let rng = rng.{ state = 0x2545F4914F6CDD1D }
+  for i in 0.until(words.len) {
+    words.[i] = (rng.next() & 0x1f1f1f1f1f1f1f1f) | 0x4040404040404040
+  }
+  let i = NEWLINE-STRIDE
+  while i < buf.len {
+    buf.[i] = '\n'.as-u8()
+    i = i + NEWLINE-STRIDE
+  }
+  let marks: array[u8, 3] = [','.as-u8(), ':'.as-u8(), '"'.as-u8()]
+  let d = DELIM-STRIDE
+  let which: size = 0
+  while d < buf.len {
+    buf.[d] = marks.[which]
+    which = (which + 1) % 3
+    d = d + DELIM-STRIDE
+  }
+}
+
+fn count-newlines(data: span[u8]): size {
+  let count: size = 0
+  let from: size = 0
+  while data.drop(from).position('\n'.as-u8()) is :some p {
+    count = count + 1
+    from = from + p + 1
+  }
+  count
+}
+
+fn scan-delims(s: string): { found: size, index-sum: i64, which-sum: i64 } {
+  let found: size = 0
+  let index-sum: i64 = 0
+  let which-sum: i64 = 0
+  let from: size = 0
+  loop {
+    let r = delims/scan(s, from)
+    if r.index < 0 break
+    found = found + 1
+    index-sum = index-sum + r.index
+    which-sum = which-sum + r.which
+    from = r.index + 1
+  }
+  .{ found, index-sum, which-sum }
+}
+
+fn main(): i32 {
+  let buf = buffer/allocate[u8](SIZE)
+  fill(buf)
+  let data = span/wrap-buffer(buf)
+  let text = string/wrap-byte-buffer(buf)
+  let absent = 0
+  let newlines: size = 0
+  let delims = 0
+  let index-sum: i64 = 0
+  let which-sum: i64 = 0
+  for 0.until(REPEAT) {
+    if data.contains(0) { absent = absent + 1 }
+    newlines = newlines + count-newlines(data)
+    let r = scan-delims(text)
+    delims = delims + r.found
+    index-sum = index-sum + r.index-sum
+    which-sum = which-sum + r.which-sum
+  }
+  println("absent: $absent newlines: $newlines delims: $delims index-sum: $index-sum which-sum: $which-sum")
+  0
+}

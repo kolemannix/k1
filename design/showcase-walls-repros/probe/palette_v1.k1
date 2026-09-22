@@ -1,0 +1,88 @@
+type srgb8 = { r: u8, g: u8, b: u8 }
+
+let DEG-TO-RAD: f32 = 3.14159265 / 180.0
+let INV-GAMMA: f32 = 1.0 / 2.4
+
+use scalar-cmp/min
+use scalar-cmp/max
+use std/math/trig
+use std/math/pow
+
+fn quantize(v: f32): u8 {
+  let n: f32 = v * 255.0 + 0.5
+  if n < 0.0 return 0
+  if n > 255.0 return 255
+  n.as[u32].trunc[u8]
+}
+
+fn linear-from-srgb-unit(c: f32): f32 {
+  if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).pow(2.4) }
+}
+
+fn srgb-unit-from-linear(v: f32): f32 {
+  let c: f32 = min(max(v, 0.0), 1.0)
+  if c <= 0.0031308 { c * 12.92 } else { c.pow(INV-GAMMA) * 1.055 - 0.055 }
+}
+
+fn linear-from-srgb(v: u8): f32 { linear-from-srgb-unit(v.as[f32] / 255.0) }
+fn srgb-from-linear(v: f32): u8 { quantize(srgb-unit-from-linear(v)) }
+
+fn oklch(l: f32, c: f32, h: f32): srgb8 {
+  let rad: f32 = h * DEG-TO-RAD
+  let a: f32 = c * rad.cos()
+  let b: f32 = c * rad.sin()
+  let lp: f32 = l + 0.3963377774 * a + 0.2158037573 * b
+  let mp: f32 = l - 0.1055613458 * a - 0.0638541728 * b
+  let sp: f32 = l - 0.0894841775 * a - 1.2914855480 * b
+  let ll: f32 = lp * lp * lp
+  let mm: f32 = mp * mp * mp
+  let ss: f32 = sp * sp * sp
+  .{
+    r = srgb-from-linear( 4.0767416621 * ll - 3.3077115913 * mm + 0.2309699292 * ss),
+    g = srgb-from-linear(-1.2684380046 * ll + 2.6097574011 * mm - 0.3413193965 * ss),
+    b = srgb-from-linear(-0.0041960863 * ll - 0.7034186147 * mm + 1.7076147010 * ss),
+  }
+}
+
+let HEX-DIGITS: string = "0123456789abcdef"
+
+fn hex(c: srgb8): string {
+  let sb = string-builder/new()
+  sb.write-char('#')
+  for [c.r, c.g, c.b] {
+    sb.write-char(HEX-DIGITS.[(it >> 4).widen[size]])
+    sb.write-char(HEX-DIGITS.[(it & 15).widen[size]])
+  }
+  sb.build()
+}
+
+let UI-HUE: f32 = 267.0
+
+let BG: srgb8     = oklch(0.209, 0.0104, UI-HUE)
+let PANEL: srgb8  = oklch(0.252, 0.0140, UI-HUE)
+let HILITE: srgb8 = oklch(0.309, 0.0210, UI-HUE)
+let EDGE: srgb8   = oklch(0.375, 0.0253, UI-HUE)
+let GRAY: srgb8   = oklch(0.657, 0.0279, UI-HUE)
+let FG: srgb8     = oklch(0.942, 0.0075, UI-HUE)
+let BLUE: srgb8   = oklch(0.714, 0.1351, 264.5)
+let GREEN: srgb8  = oklch(0.792, 0.1385, 130.3)
+let ORANGE: srgb8 = oklch(0.782, 0.1063, 74.8)
+
+type swatch = { name: string, color: srgb8 }
+
+let SWATCHES: span[swatch] = [
+  .{ name = "bg", color = BG },
+  .{ name = "panel", color = PANEL },
+  .{ name = "hilite", color = HILITE },
+  .{ name = "edge", color = EDGE },
+  .{ name = "gray", color = GRAY },
+  .{ name = "fg", color = FG },
+  .{ name = "blue", color = BLUE },
+  .{ name = "green", color = GREEN },
+  .{ name = "orange", color = ORANGE },
+]
+
+fn main(): i32 {
+  for SWATCHES { println("${it.name}: ${hex(it.color)}") }
+  0
+}

@@ -1,0 +1,23 @@
+fn pow[n: static int](x: int): int {
+  let n: int = core/meta/static-type-to-value[_, n]()
+  let acc = 1
+  for 0.until(n) {
+    acc = acc * x
+  }
+  acc
+}
+
+fn main(): i32 {
+  println("${pow[3](2)} ${pow[10](2)}")
+  let total = 0
+  #for [1, 2, 3, 4] {
+    total = total + it * it
+  }
+  println("$total")
+  #if core/k1/platform-macos {
+    println("macos")
+  } else {
+    println("not macos")
+  }
+  0
+}

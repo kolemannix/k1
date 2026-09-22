@@ -1,0 +1,8 @@
+fn main(): i32 {
+  let max-depth: i64 = 20
+  let depth: i64 = 4
+  let iterations: i64 = 1 << (max-depth - depth + 4)
+  println("$iterations")
+  0
+}
+//errmsg: Expected u32 but got i64

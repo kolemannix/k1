@@ -1,0 +1,252 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="902" viewBox="0 0 1080 902" font-family="system-ui, -apple-system, Helvetica, Arial, sans-serif" font-size="12">
+<style>
+  .bg { fill: #fcfcfb; }
+  .t1 { fill: #0b0b0b; font-weight: 600; font-size: 13px; }
+  .t2 { fill: #52514e; font-size: 11px; }
+  .t3 { fill: #0b0b0b; font-variant-numeric: tabular-nums; }
+  .t4 { fill: #898781; font-style: italic; }
+  .k1 { fill: #2a78d6; }
+  .other { fill: #c3c2b7; }
+  .ref { stroke: #898781; stroke-width: 1; }
+  @media (prefers-color-scheme: dark) {
+    .bg { fill: #1a1a19; }
+    .t1, .t3 { fill: #ffffff; }
+    .t2 { fill: #c3c2b7; }
+    .k1 { fill: #3987e5; }
+    .other { fill: #4a4946; }
+  }
+</style>
+<rect class="bg" width="1080" height="902"/>
+<text class="t1" x="24" y="38">typecheck, 300 generated units</text>
+<text class="t2" x="24" y="54">seconds, lower is better</text>
+<text class="t3" x="132" y="79" text-anchor="end">K1</text>
+<path class="k1" d="M142,68 h0.75 a0.75,0.75 0 0 1 0.75,0.75 v12.50 a0.75,0.75 0 0 1 -0.75,0.75 h-0.75 z"/>
+<text class="t3" x="149.5" y="79">0.087 s</text>
+<text class="t3" x="132" y="101" text-anchor="end">C</text>
+<path class="other" d="M142,90 h2.88 a2.876040246864721,2.876040246864721 0 0 1 2.876040246864721,2.876040246864721 v8.25 a2.876040246864721,2.876040246864721 0 0 1 -2.876040246864721,2.876040246864721 h-2.88 z"/>
+<text class="t3" x="153.8" y="101">0.421 s</text>
+<text class="t3" x="132" y="123" text-anchor="end">Zig</text>
+<path class="other" d="M142,112 h4.67 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-4.67 z"/>
+<text class="t3" x="156.7" y="123">0.635 s</text>
+<text class="t3" x="132" y="145" text-anchor="end">Rust</text>
+<path class="other" d="M142,134 h26.30 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-26.30 z"/>
+<text class="t3" x="178.3" y="145">2.22 s</text>
+<text class="t3" x="132" y="167" text-anchor="end">Java (javac)</text>
+<path class="other" d="M142,156 h41.66 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-41.66 z"/>
+<text class="t3" x="193.7" y="167">3.34 s</text>
+<text class="t3" x="132" y="189" text-anchor="end">Go (go build)</text>
+<path class="other" d="M142,178 h58.93 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-58.93 z"/>
+<text class="t3" x="210.9" y="189">4.61 s</text>
+<text class="t3" x="132" y="211" text-anchor="end">C++</text>
+<path class="other" d="M142,200 h124.00 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-124.00 z"/>
+<text class="t3" x="276.0" y="211">9.37 s</text>
+<text class="t1" x="376" y="38">default/debug build, same program</text>
+<text class="t2" x="376" y="54">seconds, lower is better</text>
+<text class="t3" x="484" y="79" text-anchor="end">K1</text>
+<path class="k1" d="M494,68 h5.48 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-5.48 z"/>
+<text class="t3" x="509.5" y="79">1.21 s</text>
+<text class="t3" x="484" y="101" text-anchor="end">C</text>
+<path class="other" d="M494,90 h14.18 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-14.18 z"/>
+<text class="t3" x="518.2" y="101">2.32 s</text>
+<text class="t3" x="484" y="123" text-anchor="end">Java</text>
+<path class="other" d="M494,112 h22.17 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-22.17 z"/>
+<text class="t3" x="526.2" y="123">3.34 s</text>
+<text class="t3" x="484" y="145" text-anchor="end">Rust</text>
+<path class="other" d="M494,134 h23.09 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-23.09 z"/>
+<text class="t3" x="527.1" y="145">3.46 s</text>
+<text class="t3" x="484" y="167" text-anchor="end">Go</text>
+<path class="other" d="M494,156 h32.06 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-32.06 z"/>
+<text class="t3" x="536.1" y="167">4.61 s</text>
+<text class="t3" x="484" y="189" text-anchor="end">Zig</text>
+<path class="other" d="M494,178 h58.44 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-58.44 z"/>
+<text class="t3" x="562.4" y="189">7.98 s</text>
+<text class="t3" x="484" y="211" text-anchor="end">C++</text>
+<path class="other" d="M494,200 h124.00 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-124.00 z"/>
+<text class="t3" x="628.0" y="211">16.35 s</text>
+<text class="t1" x="728" y="38">optimized build, same program</text>
+<text class="t2" x="728" y="54">seconds, lower is better; C# emits IL</text>
+<text class="t3" x="836" y="79" text-anchor="end">C#</text>
+<path class="other" d="M846,68 h3.78 a3.784759505488413,3.784759505488413 0 0 1 3.784759505488413,3.784759505488413 v6.43 a3.784759505488413,3.784759505488413 0 0 1 -3.784759505488413,3.784759505488413 h-3.78 z"/>
+<text class="t3" x="859.6" y="79">1.66 s</text>
+<text class="t3" x="836" y="101" text-anchor="end">K1</text>
+<path class="k1" d="M846,90 h4.79 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-4.79 z"/>
+<text class="t3" x="860.8" y="101">1.93 s</text>
+<text class="t3" x="836" y="123" text-anchor="end">Rust</text>
+<path class="other" d="M846,112 h13.95 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-13.95 z"/>
+<text class="t3" x="869.9" y="123">3.93 s</text>
+<text class="t3" x="836" y="145" text-anchor="end">Go</text>
+<path class="other" d="M846,134 h17.02 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-17.02 z"/>
+<text class="t3" x="873.0" y="145">4.61 s</text>
+<text class="t3" x="836" y="167" text-anchor="end">C</text>
+<path class="other" d="M846,156 h40.42 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-40.42 z"/>
+<text class="t3" x="896.4" y="167">9.74 s</text>
+<text class="t3" x="836" y="189" text-anchor="end">Zig</text>
+<path class="other" d="M846,178 h94.73 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-94.73 z"/>
+<text class="t3" x="950.7" y="189">21.64 s</text>
+<text class="t3" x="836" y="211" text-anchor="end">C++</text>
+<path class="other" d="M846,200 h124.00 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-124.00 z"/>
+<text class="t3" x="980.0" y="211">28.06 s</text>
+<text class="t1" x="24" y="264">hashmap, 5M inserts + 5M lookups</text>
+<text class="t2" x="24" y="280">seconds, lower is better</text>
+<text class="t3" x="132" y="305" text-anchor="end">K1</text>
+<path class="k1" d="M142,294 h28.20 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-28.20 z"/>
+<text class="t3" x="180.2" y="305">0.231 s</text>
+<text class="t3" x="132" y="327" text-anchor="end">C</text>
+<path class="other" d="M142,316 h38.66 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-38.66 z"/>
+<text class="t3" x="190.7" y="327">0.306 s</text>
+<text class="t3" x="132" y="349" text-anchor="end">Rust</text>
+<path class="other" d="M142,338 h45.13 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-45.13 z"/>
+<text class="t3" x="197.1" y="349">0.352 s</text>
+<text class="t3" x="132" y="371" text-anchor="end">Java (primitive)</text>
+<path class="other" d="M142,360 h47.72 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-47.72 z"/>
+<text class="t3" x="199.7" y="371">0.371 s</text>
+<text class="t3" x="132" y="393" text-anchor="end">Zig</text>
+<path class="other" d="M142,382 h48.32 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-48.32 z"/>
+<text class="t3" x="200.3" y="393">0.375 s</text>
+<text class="t3" x="132" y="415" text-anchor="end">Go</text>
+<path class="other" d="M142,404 h73.73 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-73.73 z"/>
+<text class="t3" x="225.7" y="415">0.557 s</text>
+<text class="t3" x="132" y="437" text-anchor="end">C#</text>
+<path class="other" d="M142,426 h88.23 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-88.23 z"/>
+<text class="t3" x="240.2" y="437">0.661 s</text>
+<text class="t3" x="132" y="459" text-anchor="end">Java</text>
+<path class="other" d="M142,448 h124.00 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-124.00 z"/>
+<text class="t3" x="276.0" y="459">0.918 s</text>
+<text class="t1" x="376" y="264">byte-scan, 256 MiB</text>
+<text class="t2" x="376" y="280">seconds, lower is better</text>
+<text class="t3" x="484" y="305" text-anchor="end">C#</text>
+<path class="other" d="M494,294 h16.73 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-16.73 z"/>
+<text class="t3" x="520.7" y="305">0.297 s</text>
+<text class="t3" x="484" y="327" text-anchor="end">K1</text>
+<path class="k1" d="M494,316 h21.38 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-21.38 z"/>
+<text class="t3" x="525.4" y="327">0.364 s</text>
+<text class="t3" x="484" y="349" text-anchor="end">C</text>
+<path class="other" d="M494,338 h23.09 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-23.09 z"/>
+<text class="t3" x="527.1" y="349">0.388 s</text>
+<text class="t3" x="484" y="371" text-anchor="end">Go</text>
+<path class="other" d="M494,360 h52.06 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-52.06 z"/>
+<text class="t3" x="556.1" y="371">0.804 s</text>
+<text class="t3" x="484" y="393" text-anchor="end">Zig</text>
+<path class="other" d="M494,382 h58.37 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-58.37 z"/>
+<text class="t3" x="562.4" y="393">0.894 s</text>
+<text class="t3" x="484" y="415" text-anchor="end">Rust</text>
+<path class="other" d="M494,404 h101.79 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-101.79 z"/>
+<text class="t3" x="605.8" y="415">1.52 s</text>
+<text class="t3" x="484" y="437" text-anchor="end">Java</text>
+<path class="other" d="M494,426 h124.00 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-124.00 z"/>
+<text class="t3" x="628.0" y="437">1.84 s</text>
+<text class="t1" x="728" y="264">binary-trees, depth 20</text>
+<text class="t2" x="728" y="280">seconds, lower is better</text>
+<text class="t3" x="836" y="305" text-anchor="end">K1</text>
+<path class="k1" d="M846,294 h13.65 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-13.65 z"/>
+<text class="t3" x="869.6" y="305">0.964 s</text>
+<text class="t3" x="836" y="327" text-anchor="end">Java</text>
+<path class="other" d="M846,316 h13.79 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-13.79 z"/>
+<text class="t3" x="869.8" y="327">0.972 s</text>
+<text class="t3" x="836" y="349" text-anchor="end">Zig</text>
+<path class="other" d="M846,338 h17.81 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-17.81 z"/>
+<text class="t3" x="873.8" y="349">1.19 s</text>
+<text class="t3" x="836" y="371" text-anchor="end">Go</text>
+<path class="other" d="M846,360 h49.20 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-49.20 z"/>
+<text class="t3" x="905.2" y="371">2.91 s</text>
+<text class="t3" x="836" y="393" text-anchor="end">C#</text>
+<path class="other" d="M846,382 h82.84 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-82.84 z"/>
+<text class="t3" x="938.8" y="393">4.74 s</text>
+<text class="t3" x="836" y="415" text-anchor="end">C</text>
+<path class="other" d="M846,404 h110.24 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-110.24 z"/>
+<text class="t3" x="966.2" y="415">6.24 s</text>
+<text class="t3" x="836" y="437" text-anchor="end">Rust</text>
+<path class="other" d="M846,426 h124.00 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-124.00 z"/>
+<text class="t3" x="980.0" y="437">6.99 s</text>
+<text class="t1" x="24" y="512">sieve to 1M at compile time</text>
+<text class="t2" x="24" y="528">compile-time cost in seconds</text>
+<text class="t3" x="132" y="553" text-anchor="end">K1</text>
+<path class="k1" d="M142,542 h1.57 a1.5685895870892206,1.5685895870892206 0 0 1 1.5685895870892206,1.5685895870892206 v10.86 a1.5685895870892206,1.5685895870892206 0 0 1 -1.5685895870892206,1.5685895870892206 h-1.57 z"/>
+<text class="t3" x="151.1" y="553">0.145 s</text>
+<text class="t3" x="132" y="575" text-anchor="end">Rust</text>
+<path class="other" d="M142,564 h61.94 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-61.94 z"/>
+<text class="t3" x="213.9" y="575">3.05 s</text>
+<text class="t3" x="132" y="597" text-anchor="end">C++</text>
+<path class="other" d="M142,586 h124.00 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-124.00 z"/>
+<text class="t3" x="276.0" y="597">5.92 s</text>
+<text class="t3" x="132" y="619" text-anchor="end">Zig</text>
+<text class="t4" x="142" y="619">killed (SIGKILL)</text>
+<text class="t1" x="376" y="512">crc32 over 8 MB at compile time</text>
+<text class="t2" x="376" y="528">compile-time cost in seconds</text>
+<text class="t3" x="484" y="553" text-anchor="end">K1</text>
+<path class="k1" d="M494,542 h2.13 a2.127879510876359,2.127879510876359 0 0 1 2.127879510876359,2.127879510876359 v9.74 a2.127879510876359,2.127879510876359 0 0 1 -2.127879510876359,2.127879510876359 h-2.13 z"/>
+<text class="t3" x="504.3" y="553">1.73 s</text>
+<text class="t3" x="484" y="575" text-anchor="end">Rust</text>
+<path class="other" d="M494,564 h119.59 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-119.59 z"/>
+<text class="t3" x="623.6" y="575">50.38 s</text>
+<text class="t3" x="484" y="597" text-anchor="end">C++</text>
+<path class="other" d="M494,586 h124.00 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-124.00 z"/>
+<text class="t3" x="628.0" y="597">52.17 s</text>
+<text class="t3" x="484" y="619" text-anchor="end">Zig</text>
+<text class="t4" x="494" y="619">skipped after timeout</text>
+<text class="t1" x="728" y="512">format 1M numbers at compile time</text>
+<text class="t2" x="728" y="528">compile-time cost in seconds</text>
+<text class="t3" x="836" y="553" text-anchor="end">K1</text>
+<path class="k1" d="M846,542 h0.94 a0.9447477966947102,0.9447477966947102 0 0 1 0.9447477966947102,0.9447477966947102 v12.11 a0.9447477966947102,0.9447477966947102 0 0 1 -0.9447477966947102,0.9447477966947102 h-0.94 z"/>
+<text class="t3" x="853.9" y="553">2.63 s</text>
+<text class="t3" x="836" y="575" text-anchor="end">Rust</text>
+<path class="other" d="M846,564 h26.19 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-26.19 z"/>
+<text class="t3" x="882.2" y="575">42.07 s</text>
+<text class="t3" x="836" y="597" text-anchor="end">C++</text>
+<path class="other" d="M846,586 h124.00 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-124.00 z"/>
+<text class="t3" x="980.0" y="597">178.36 s</text>
+<text class="t3" x="836" y="619" text-anchor="end">Zig</text>
+<text class="t4" x="846" y="619">skipped after timeout</text>
+<text class="t1" x="24" y="672">reflection-generated serializer</text>
+<text class="t2" x="24" y="688">ms per type, 500 types</text>
+<text class="t3" x="132" y="713" text-anchor="end">Rust</text>
+<path class="other" d="M142,702 h1.74 a1.7370939044929223,1.7370939044929223 0 0 1 1.7370939044929223,1.7370939044929223 v10.53 a1.7370939044929223,1.7370939044929223 0 0 1 -1.7370939044929223,1.7370939044929223 h-1.74 z"/>
+<text class="t3" x="151.5" y="713">0.88 ms</text>
+<text class="t3" x="132" y="735" text-anchor="end">K1</text>
+<path class="k1" d="M142,724 h5.60 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-5.60 z"/>
+<text class="t3" x="157.6" y="735">2.42 ms</text>
+<text class="t3" x="132" y="757" text-anchor="end">Zig</text>
+<path class="other" d="M142,746 h8.70 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-8.70 z"/>
+<text class="t3" x="160.7" y="757">3.21 ms</text>
+<text class="t3" x="132" y="779" text-anchor="end">C++26 P2996</text>
+<path class="other" d="M142,768 h14.89 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-14.89 z"/>
+<text class="t3" x="166.9" y="779">4.77 ms</text>
+<text class="t3" x="132" y="801" text-anchor="end">C++</text>
+<path class="other" d="M142,790 h124.00 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-124.00 z"/>
+<text class="t3" x="276.0" y="801">32.33 ms</text>
+<text class="t1" x="376" y="672">brotli encoder, K1 port vs C</text>
+<text class="t2" x="376" y="688">K1 throughput as a fraction of C, per corpus</text>
+<line class="ref" x1="622.0" y1="698" x2="622.0" y2="830"/>
+<text class="t2" x="622.0" y="694" text-anchor="middle">C</text>
+<text class="t3" x="484" y="713" text-anchor="end">typer.rs q0</text>
+<path class="k1" d="M494,702 h122.28 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-122.28 z"/>
+<text class="t3" x="628.0" y="713">0.99x</text>
+<text class="t3" x="484" y="735" text-anchor="end">typer.rs q1</text>
+<path class="k1" d="M494,724 h122.00 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-122.00 z"/>
+<text class="t3" x="628.0" y="735">0.98x</text>
+<text class="t3" x="484" y="757" text-anchor="end">cycle-251 q0</text>
+<path class="k1" d="M494,746 h119.38 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-119.38 z"/>
+<text class="t3" x="628.0" y="757">0.96x</text>
+<text class="t3" x="484" y="779" text-anchor="end">zeros-1mb q0</text>
+<path class="k1" d="M494,768 h116.35 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-116.35 z"/>
+<text class="t3" x="628.0" y="779">0.94x</text>
+<text class="t3" x="484" y="801" text-anchor="end">random-300k q0</text>
+<path class="k1" d="M494,790 h112.71 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-112.71 z"/>
+<text class="t3" x="628.0" y="801">0.91x</text>
+<text class="t3" x="484" y="823" text-anchor="end">random-300k q1</text>
+<path class="k1" d="M494,812 h121.14 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-121.14 z"/>
+<text class="t3" x="628.0" y="823">0.98x</text>
+<text class="t1" x="728" y="672">brotli optimized build</text>
+<text class="t2" x="728" y="688">seconds; C: 4 objects, no link</text>
+<text class="t3" x="836" y="713" text-anchor="end">K1</text>
+<path class="k1" d="M846,702 h34.22 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-34.22 z"/>
+<text class="t3" x="890.2" y="713">0.221 s</text>
+<text class="t3" x="836" y="735" text-anchor="end">C (parallel)</text>
+<path class="other" d="M846,724 h50.42 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-50.42 z"/>
+<text class="t3" x="906.4" y="735">0.314 s</text>
+<text class="t3" x="836" y="757" text-anchor="end">C (serial)</text>
+<path class="other" d="M846,746 h124.00 a4,4 0 0 1 4,4 v6.00 a4,4 0 0 1 -4,4 h-124.00 z"/>
+<text class="t3" x="980.0" y="757">0.739 s</text>
+<text class="t2" x="24" y="862">Apple M3 Max, 10P+4E cores, 36 GB, macOS 26.6.2. K1 ff40f0bf + working tree. Measured 2026-09-18.</text>
+<text class="t2" x="24" y="878">Hyperfine means; Brotli averages the per-run K1/C ratios. Methods and limits: each suite’s results.md.</text>
+</svg>

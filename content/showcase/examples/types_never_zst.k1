@@ -1,0 +1,34 @@
+type empty-marker = {}
+
+fn parse-all[e, t: from-string[e = e]](items: span[string]): result[list[t], e] {
+  let out: list[t] = []
+  for s in items {
+    let parsed: result[t, e] = from-string/from-string(s)
+    if parsed is {
+      :ok v -> out.push(v),
+      :err e -> return :err e
+    }
+  }
+  :ok out
+}
+
+fn unwrap-infallible[t](r: result[t, never]): t {
+  if r is { :ok v -> v }
+}
+
+fn checked-div(a: int, b: int): int {
+  if b == 0 crash("division by zero") else a / b
+}
+
+fn main(): i32 {
+  println("${parse-all[string, u64](["1", "2", "3"])}")
+  println("${parse-all[string, u64](["1", "x", "3"])}")
+  let names = unwrap-infallible(parse-all[never, string](["ada", "grace"]))
+  println("$names ${checked-div(84, 2)}")
+
+  println("result[u32, string] ${types/size[result[u32, string]]}, result[u32, never] ${types/size[result[u32, never]]}, result[u32, {}] ${types/size[result[u32, {}]]}")
+  println("{} ${types/size[{}]}, empty-marker ${types/size[empty-marker]}, array[{}, 1000] ${types/size[array[{}, 1000]]}, ?{} ${types/size[?{}]}, result[{}, {}] ${types/size[result[{}, {}]]}")
+  let markers: array[empty-marker, 4] = [.{}, .{}, .{}, .{}]
+  println("${markers.len()} markers in ${types/size[array[empty-marker, 4]]} bytes")
+  0
+}

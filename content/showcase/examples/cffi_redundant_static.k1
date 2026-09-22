@@ -1,0 +1,8 @@
+fn(extern("getpid")) getpid(): i32
+
+let COMPILER_PID: i32 = #static getpid()
+
+fn main(): i32 {
+  println("compiled by pid $COMPILER_PID")
+  0
+}

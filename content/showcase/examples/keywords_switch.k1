@@ -1,0 +1,217 @@
+$pre/keywords/define(k1-keyword, [
+  "fn", "let", "mut", "and", "or", "if", "else", "while", "loop", "ns", "intern",
+  "for", "in", "ability", "impl", "is", "not", "builtin", "where", "context",
+  "use", "require", "defer",
+])
+
+$pre/keywords/define(cpp-keyword, [
+  "alignas", "alignof", "and", "and_eq", "asm", "auto", "bitand", "bitor", "bool", "break",
+  "case", "catch", "char", "char8_t", "char16_t", "char32_t", "class", "compl", "concept",
+  "const", "consteval", "constexpr", "constinit", "const_cast", "continue", "co_await",
+  "co_return", "co_yield", "decltype", "default", "delete", "do", "double", "dynamic_cast",
+  "else", "enum", "explicit", "export", "extern", "false", "float", "for", "friend", "goto",
+  "if", "inline", "int", "long", "mutable", "namespace", "new", "noexcept", "not", "not_eq",
+  "nullptr", "operator", "or", "or_eq", "private", "protected", "public", "register",
+  "reinterpret_cast", "requires", "return", "short", "signed", "sizeof", "static",
+  "static_assert", "static_cast", "struct", "switch", "template", "this", "thread_local",
+  "throw", "true", "try", "typedef", "typeid", "typename", "union", "unsigned", "using",
+  "virtual", "void", "volatile", "wchar_t", "while", "xor", "xor_eq",
+])
+
+use std/time
+
+fn bench[t](label: string, probes: span[string], lookup: some fn string -> ?t) {
+  let rounds = 100_000
+  let hits = 0
+  let start = time/read-cpu-counter()
+  for 0.until(rounds) {
+    for p in probes {
+      if lookup(p).is-some() { hits = hits + 1 }
+    }
+  }
+  let per = time/elapsed-nanos(start).as[f64] / (rounds * probes.len()).as[f64]
+  let sb = string-builder/new()
+  f64/format(per, sb.&, 2)
+  println("$label: ${sb.build()} ns/lookup ($hits hits)")
+}
+
+fn checked-probes[t: equals](words: span[string], misses: span[string], lookup: some fn string -> ?t, linear: some fn string -> ?t): list[string] {
+  let probes: list[string] = []
+  probes.append-span(words)
+  probes.append-span(misses)
+  for p in probes {
+    assert-equals(lookup(p).is-some(), not misses.contains(p))
+    assert(lookup(p) == linear(p))
+  }
+  probes
+}
+
+fn main(): i32 {
+  print(pre/keywords/generate("tiny", ["if", "in", "is", "fn", "for"]).text())
+  let misses: span[string] = ["", "f", "fnn", "le", "whil", "loops", "ability2", "context ", "self", "count", "clas", "const_", "reinterpret_casts"]
+  for w in k1-keyword/words() {
+    assert-equals(k1-keyword/lookup(w).!.enum-name(), "kw-$w")
+  }
+  let k1-probes = checked-probes(k1-keyword/words(), misses, k1-keyword/lookup, k1-keyword/lookup-linear)
+  let cpp-probes = checked-probes(cpp-keyword/words(), misses, cpp-keyword/lookup, cpp-keyword/lookup-linear)
+  println("${k1-keyword/words().len()} k1 keywords, ${k1-probes.len()} probes")
+  bench("  perfect hash", k1-probes.as-span(), k1-keyword/lookup)
+  bench("  linear scan ", k1-probes.as-span(), k1-keyword/lookup-linear)
+  println("${cpp-keyword/words().len()} c++ keywords, ${cpp-probes.len()} probes")
+  bench("  perfect hash", cpp-probes.as-span(), cpp-keyword/lookup)
+  bench("  linear scan ", cpp-probes.as-span(), cpp-keyword/lookup-linear)
+  0
+}
+
+ns pre { ns keywords {
+
+use core/meta/str-lit
+
+type pos = either { at(size), last }
+
+fn key(w: string, p: pos): size {
+  if p is {
+    :at i -> if i < w.len() w.[i].as-u8().widen[size] else 0,
+    :last -> w.[w.len() - 1].as-u8().widen[size],
+  }
+}
+
+fn key-name(p: pos): string {
+  if p is { :at i -> "k$i", :last -> "kl" }
+}
+
+fn distinguishes(words: span[string], ps: span[pos]): bool {
+  let seen: list[string] = []
+  for w in words {
+    let sb = string-builder/new()
+    sb.write("${w.len()}")
+    for p in ps { sb.write(" ${key(w, p)}") }
+    let sig = sb.build()
+    if seen.contains(sig) return false
+    seen.push(sig)
+  }
+  true
+}
+
+fn choose(words: span[string], cands: span[pos], chosen: list[pos], start: size, want: size): ?list[pos] {
+  if chosen.len() == want {
+    return if distinguishes(words, chosen.as-span()) :some chosen else :none
+  }
+  for i in start.until(cands.len()) {
+    let next = chosen.cloned()
+    next.push(cands.[i])
+    if choose(words, cands, next, i + 1, want) is :some ps return :some ps
+  }
+  :none
+}
+
+fn key-positions(name: string, words: span[string], max-len: size): list[pos] {
+  let cands: list[pos] = [:last]
+  for i in 0.until(max-len) { cands.push(:at i) }
+  for want in 1.until(4) {
+    if choose(words, cands.as-span(), [], 0, want) is :some ps return ps
+  }
+  crash("keywords `$name`: no three byte positions tell every keyword apart")
+}
+
+type hash = { slots: size, mults: list[size] }
+
+fn slot-of(w: string, ps: span[pos], h: hash): size {
+  let acc = w.len() * h.mults.[0]
+  for p in ps { acc = acc + key(w, p) * h.mults.[it-index + 1] }
+  acc & (h.slots - 1)
+}
+
+fn find-hash(name: string, words: span[string], ps: span[pos]): hash {
+  let slots = 1: size
+  while slots < words.len() { slots = slots * 2 }
+  let x = 88172645463325252: size
+  while slots <= 4096 {
+    for 0.until(1000) {
+      let mults: list[size] = []
+      for 0.until(ps.len() + 1) {
+        x = x * 6364136223846793005 + 1442695040888963407
+        mults.push(((x >> 56) & 255) | 1)
+      }
+      let h: hash = .{ slots, mults }
+      let taken: list[size] = []
+      let ok = true
+      for w in words {
+        let s = slot-of(w, ps, h)
+        if taken.contains(s) { ok = false; break }
+        taken.push(s)
+      }
+      if ok return h
+    }
+    slots = slots * 2
+  }
+  crash("keywords `$name`: no collision-free hash up to 4096 slots")
+}
+
+fn generate(name: string, words: span[string]): code {
+  let min-len = words.[0].len()
+  let max-len = words.[0].len()
+  for w in words {
+    if w.is-empty() crash("keywords `$name`: empty keyword")
+    for c in w {
+      if not (c.is-ascii-letter() or c.is-ascii-digit() or c == '-' or c == '_') {
+        crash("keywords `$name`: `$w` is not identifier-like")
+      }
+    }
+    if words.position(w).! != it-index crash("keywords `$name`: `$w` listed twice")
+    if w.len() < min-len { min-len = w.len() }
+    if w.len() > max-len { max-len = w.len() }
+  }
+  let ps = key-positions(name, words, max-len)
+  let h = find-hash(name, words, ps.as-span())
+  let terms = string-builder/new()
+  terms.write("n * ${h.mults.[0]}")
+  for p in ps { terms.write(" + ${key-name(p)} * ${h.mults.[it-index + 1]}") }
+  let variants: list[string] = []
+  for w in words { variants.push("kw-$w") }
+  let lits: list[string] = []
+  for w in words { lits.push(str-lit(w)) }
+
+  let cb-storage = code-builder/new()
+  let cb = cb-storage.&
+  cb.line("type $name = either { ${string/join(variants, ", ")} }")
+  cb.block("ns for $name", fn[cb, name, words, ps, h, terms, min-len, max-len, lits]. {
+    cb.block("fn lookup(s: string): ?$name", fn[cb, words, ps, terms, min-len, max-len, h, lits]. {
+      cb.line("let n = s.len()")
+      cb.line("if n < $min-len or n > $max-len return :none")
+      for p in ps {
+        if p is {
+          :at i if i < min-len -> cb.line("let k$i = s.[$i].as-u8().widen[size]"),
+          :at i -> cb.line("let k$i: size = if n > $i s.[$i].as-u8().widen[size] else 0"),
+          :last -> cb.line("let kl = s.[n - 1].as-u8().widen[size]"),
+        }
+      }
+      cb.line("let h = (${terms.build()}) & ${h.slots - 1}")
+      cb.block-close("if h is", "}", fn[cb, words, ps, h, lits]. {
+        for w in words {
+          cb.line("${slot-of(w, ps.as-span(), h)} -> if s == ${lits.[it-index]} :some :kw-$w else :none,")
+        }
+        cb.line("_ -> :none,")
+      })
+    })
+    cb.block("fn lookup-linear(s: string): ?$name", fn[cb, words, lits]. {
+      cb.block-close("if s is", "}", fn[cb, words, lits]. {
+        for w in words { cb.line("${lits.[it-index]} -> :some :kw-$w,") }
+        cb.line("_ -> :none,")
+      })
+    })
+    cb.block("fn words(): span[string]", fn[cb, lits]. {
+      cb.line("[${string/join(lits, ", ")}]")
+    })
+  })
+  cb.block("#static", fn[cb, name, words, lits]. {
+    for w in words { cb.line("assert($name/lookup(${lits.[it-index]}) is :some :kw-$w)") }
+  })
+  cb.build()
+}
+
+macro define(name, words: span[string]) {
+  generate(name.text(), words)
+}
+
+}}

@@ -1,0 +1,44 @@
+let B: int = 65536
+let COMPTIME: bool = false
+
+fn crc-table(): list[u32] {
+  let table: list[u32] = list/filled(256, 0)
+  for i in 0.until(256) {
+    let c = i.trunc[u32]
+    for 0.until(8) {
+      c = if (c & 1) == 1 (0xEDB88320 ^ (c >> 1)) else c >> 1
+    }
+    table.[i] = c
+  }
+  table
+}
+
+fn random-bytes(n: int): list[u8] {
+  let bytes: list[u8] = list/filled(n, 0)
+  let x: u32 = 2463534242
+  for i in 0.until(n) {
+    x = x ^ (x << 13)
+    x = x ^ (x >> 17)
+    x = x ^ (x << 5)
+    bytes.[i] = x.trunc[u8]
+  }
+  bytes
+}
+
+fn crc32(table: list[u32], bytes: list[u8]): u32 {
+  let c: u32 = 0xFFFFFFFF
+  for b in bytes {
+    c = table.[((c ^ b.widen[u32]) & 0xFF).widen[i64]] ^ (c >> 8)
+  }
+  c ^ 0xFFFFFFFF
+}
+
+fn checksum(): u32 {
+  crc32(crc-table(), random-bytes(B))
+}
+
+fn main(): i32 {
+  let sum: u32 = #if COMPTIME { #static checksum() } else { checksum() }
+  println("$sum")
+  0
+}

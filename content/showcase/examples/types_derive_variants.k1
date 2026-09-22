@@ -1,0 +1,53 @@
+ns pre {
+  let STATUS_TABLE: span[{ name: string, code: u16 }] = [
+    .{ name = "ok", code = 200 },
+    .{ name = "created", code = 201 },
+    .{ name = "not-found", code = 404 },
+    .{ name = "teapot", code = 418 },
+    .{ name = "internal-error", code = 500 },
+  ]
+
+  fn status-enum(): types/type-id {
+    let variants: list[{ name: string, payload: ?types/type-id, tag: ?types/int-value }] = []
+    for row in STATUS_TABLE {
+      variants.push(.{ name = row.name, payload = :none, tag = :some(types/int-value:u16(row.code)) })
+    }
+    types/make-either(:some(types/id[u16]), variants.as-span())
+  }
+}
+
+type(alias) status = #type pre/status-enum()
+
+type(alias) event = #type types/make-either-default([
+  types/variant-data[u16]("connected"),
+  types/variant-data[string]("data"),
+  types/variant-empty("closed"),
+])
+
+fn classify(s: status): string {
+  if s is {
+    :ok or :created -> "success",
+    :not-found -> "client error",
+    :teapot -> "short and stout",
+    :internal-error -> "server error",
+  }
+}
+
+fn main(): i32 {
+  let s: status = :teapot
+  println("${s.enum-name()} = ${s.value} -> ${classify(s)}")
+  println("size ${types/size[status]} tag ${status:internal-error.value}")
+
+  let events: list[event] = [:connected 8080, :data "hello", :data "world", :closed]
+  let counts: array[u32, 3] = .0
+  for e in events {
+    let kind: event.tag-enum = if e is {
+      :connected _ -> :connected,
+      :data _ -> :data,
+      :closed -> :closed,
+    }
+    counts.[kind.value.widen[size]] = counts.[kind.value.widen[size]] + 1
+  }
+  println("counts ${counts}")
+  0
+}

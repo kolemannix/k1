@@ -1,0 +1,10 @@
+fn ratio(): f32 { 3.25 }
+
+#static {
+  let r = ratio()
+  if r < 7.0 crash("contrast fg on bg is $r, need 7")
+}
+
+fn main(): i32 {
+  0
+}

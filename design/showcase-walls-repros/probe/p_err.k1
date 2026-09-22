@@ -1,0 +1,50 @@
+type io-err = either { not-found, denied, timeout }
+
+type status = either(i32) { ok = 0, not-found = 2, denied = 13, timeout = 110 }
+
+type rc = { raw: status }
+impl try[t = empty, e = status] for rc {
+  fn error(e: status): rc { .{ raw = e } }
+  fn value(_t: empty): rc { .{ raw = :ok } }
+  fn is-ok(self): bool { self.raw is :ok }
+  fn get-error(self): status { self.raw }
+  fn get-value(_self: self): empty { .{} }
+}
+
+fn open(path: string): rc {
+  if path == "/secret" .{ raw = :denied } else .{ raw = :ok }
+}
+
+fn parse-port(s: string): result[u64, string] {
+  let n = u64/from-string(s).try
+  :ok n
+}
+
+fn never-fails(): result[int, never] { :ok 7 }
+
+fn pipeline(): result[int, string] {
+  let a = never-fails().try
+  let p = parse-port("8080").try
+  :ok(a + p.signed())
+}
+
+fn touch(path: string): rc {
+  open(path).try
+  .{ raw = :ok }
+}
+
+fn main(): i32 {
+  println(pipeline())
+  println(parse-port("x"))
+  println(touch("/tmp").raw.enum-name())
+  println(touch("/secret").raw.enum-name())
+  let m: ?int = :none
+  println(m ? 42)
+  let s: ?int = :some 3
+  println(s.!)
+  sizes()
+  0
+}
+fn sizes() {
+  println("result[int, never] = ${types/size[result[int, never]]}, int = ${types/size[int]}, result[int, string] = ${types/size[result[int, string]]}")
+}

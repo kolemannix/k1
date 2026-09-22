@@ -1,0 +1,6 @@
+fn main(): i32 {
+  let x: ?int = :some 1
+  require x is :some v else { println("no") }
+  println(v)
+  0
+}

@@ -1,0 +1,73 @@
+$pre/bf/define(broken, "++[>+<-")
+
+fn main(): i32 {
+  print(broken())
+  0
+}
+
+ns pre { ns bf {
+
+fn run-length(program: string, start: size): size {
+  let end = start
+  while end < program.len() and program.[end] == program.[start] { end = end + 1 }
+  end - start
+}
+
+fn emit-body(cb: *code-builder, name: string, program: string, i: *size): bool {
+  while i.* < program.len() {
+    let c = program.[i.*]
+    if c is {
+      '+' or '-' or '>' or '<' -> {
+        let n = run-length(program, i.*)
+        i.* = i.* + n
+        if c is {
+          '+' -> cb.line("tape.[p] = tape.[p] + ${n % 256}"),
+          '-' -> cb.line("tape.[p] = tape.[p] - ${n % 256}"),
+          '>' -> cb.line("p = p + $n"),
+          _ -> cb.line("p = p - $n"),
+        }
+      },
+      '.' -> {
+        cb.line("out.write-char(tape.[p].as-char())")
+        i.* = i.* + 1
+      },
+      ',' -> crash("bf `$name`: input `,` is not supported (byte ${i.*})"),
+      '[' -> {
+        let open = i.*
+        i.* = i.* + 1
+        let closed = false
+        cb.block("while tape.[p] != 0", fn[cb, name, program, i, closed.&]. {
+          closed.* = emit-body(cb, name, program, i)
+        })
+        if not closed crash("bf `$name`: unmatched `[` at byte $open")
+      },
+      ']' -> {
+        i.* = i.* + 1
+        return true
+      },
+      _ -> { i.* = i.* + 1 },
+    }
+  }
+  false
+}
+
+fn transpile(name: string, program: string): code {
+  let cb-storage = code-builder/new()
+  let cb = cb-storage.&
+  cb.block("fn $name(): string", fn[cb, name, program]. {
+    cb.line("let tape: array[u8, 30000] = .0")
+    cb.line("let p: size = 0")
+    cb.line("let out = string-builder/new()")
+    let i = 0: size
+    if emit-body(cb, name, program, i.&) crash("bf `$name`: unmatched `]` at byte ${i - 1}")
+    cb.line("out.build()")
+  })
+  cb.build()
+}
+
+macro define(name, program: string) {
+  transpile(name.text(), program)
+}
+
+}}
+//errmsg: bf `broken`: unmatched `[` at byte 2

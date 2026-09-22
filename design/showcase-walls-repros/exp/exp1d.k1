@@ -1,0 +1,10 @@
+let name: string = {
+  let a = "k"
+  a.concat("1")
+}
+fn main(): i32 {
+  println("a")
+  println(name)
+  println("b")
+  0
+}

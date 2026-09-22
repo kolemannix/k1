@@ -1,0 +1,5 @@
+fn main(): i32 {
+  let a: result[string, never] = from-string/from-string[string]("x")
+  println("${a}")
+  0
+}

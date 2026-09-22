@@ -1,0 +1,79 @@
+$pre/fsm/define(door, {
+  use pre/fsm/on
+  [
+    on("closed", "open",   "opened"),
+    on("opened", "close",  "closed"),
+    on("closed", "lock",   "locked"),
+    on("locked", "unlock", "closed"),
+  ]
+})
+
+fn main(): i32 {
+  let s: door/state = :closed
+  let script: span[door/event] = [:lock, :open, :unlock, :open, :close]
+  for e in script {
+    if s.step(e) is {
+      :some next -> {
+        println("${s.enum-name()} --${e.enum-name()}--> ${next.enum-name()}")
+        s = next
+      },
+      :none -> println("${s.enum-name()} --${e.enum-name()}--> rejected"),
+    }
+  }
+  0
+}
+
+ns pre { ns fsm {
+
+type transition = { from: string, event: string, to: string }
+
+fn on(from: string, event: string, to: string): transition { .{ from, event, to } }
+
+fn names(table: span[transition]): { states: list[string], events: list[string] } {
+  let states = list/empty[string]()
+  let events = list/empty[string]()
+  for tr in table {
+    if not states.contains(tr.from) { states.push(tr.from) }
+    if not states.contains(tr.to) { states.push(tr.to) }
+    if not events.contains(tr.event) { events.push(tr.event) }
+  }
+  .{ states, events }
+}
+
+fn define-impl(name: string, table: span[transition]): code {
+  if table.is-empty() crash("fsm `$name`: no transitions")
+  let n = names(table)
+  for s in n.states {
+    let exits = false
+    for tr in table { if tr.from == s { exits = true } }
+    if not exits crash("fsm `$name`: state `$s` has no outgoing transition")
+  }
+  let cb-storage = code-builder/new()
+  let cb = cb-storage.&
+  cb.block("ns $name", fn[cb, n, table]. {
+    cb.line("type state = either { ${string/join(n.states, ", ")} }")
+    cb.line("type event = either { ${string/join(n.events, ", ")} }")
+    cb.block("ns for state", fn[cb, table]. {
+      cb.block("fn step(self: state, event: event): ?state", fn[cb, table]. {
+        cb.block("if .{ s = self, e = event } is", fn[cb, table]. {
+          for tr in table {
+            cb.line(".{ s = :${tr.from}, e = :${tr.event} } -> :some :${tr.to},")
+          }
+          cb.line("_ -> :none,")
+        })
+      })
+    })
+  })
+  cb.block("#static", fn[cb, name, table]. {
+    for tr in table {
+      cb.line("assert($name/state:${tr.from}.step(:${tr.event}) is :some :${tr.to})")
+    }
+  })
+  cb.build()
+}
+
+macro define(name, table: span[transition]) {
+  define-impl(name.text(), table)
+}
+
+}}

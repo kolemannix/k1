@@ -1,0 +1,90 @@
+fn show[t](v: t): string {
+  let sb = string-builder/new()
+  show-to(sb.&, v, 0)
+  sb.build()
+}
+
+fn show-to[t, w: writer](w: w, v: t, depth: size) {
+  #meta {
+    let id = types/id[t]
+    let cb = code-builder/new()
+    if id.is-instance-of(types/id[opt]) {
+      cb.line(`if v is { :some x -> show-to(w, x, depth), :none -> w.write("none") }`)
+    } else if id.is-instance-of(types/id[list]) or types/schema[t] is :array _ {
+      cb.line(`w.write("[")`)
+      cb.line(`for v { if it-index > 0 { w.write(", ") }; show-to(w, it, depth) }`)
+      cb.line(`w.write("]")`)
+    } else if types/schema[t] is {
+      :bool -> cb.line(`v.print-to(w)`),
+      :int _ -> cb.line(`v.print-to(w)`),
+      :float _ -> cb.line(`v.print-to(w)`),
+      :char -> cb.line(`v.print-to(w)`),
+      :string -> cb.line(`w.write(meta/str-lit(v))`),
+      :reference _ -> cb.line(`w.write("&"); show-to(w, v.*, depth)`),
+      :enum _ -> cb.line(`w.write-char(':'); w.write(v.enum-name())`),
+      :struct .{ fields } -> {
+        cb.line(`w.write(".{\\n")`)
+        for f in fields {
+          cb.line(`w.repeat("  ", depth + 1); w.write("${f.name} = "); show-to(w, v.${f.name}, depth + 1); w.write(",\\n")`)
+        }
+        cb.line(`w.repeat("  ", depth); w.write("}")`)
+      },
+      :either .{ variants } -> {
+        cb.line("if v is {")
+        cb.indent()
+        for x in variants {
+          if x.payload is :some _ {
+            cb.line(`:${x.name} p -> { w.write(":${x.name} "); show-to(w, p, depth) },`)
+          } else {
+            cb.line(`:${x.name} -> w.write(":${x.name}"),`)
+          }
+        }
+        cb.dedent()
+        cb.line("}")
+      },
+      _ -> crash("show: no printer for ${types/name[t]}")
+    }
+    cb.build()
+  }
+}
+
+type role = either { admin, member }
+type address = { city: string, zip: u32 }
+type shape = either { circle(f64), rect({ w: f64, h: f64 }), dot }
+type person = {
+  name: string,
+  age: u32,
+  role: role,
+  home: ?address,
+  friends: list[string],
+  favorite: shape,
+  manager: ?*person,
+}
+
+fn main(): i32 {
+  let grace: person = .{
+    name = "Grace",
+    age = 45,
+    role = :admin,
+    home = :none,
+    friends = [],
+    favorite = :dot,
+    manager = :none,
+  }
+  let ada: person = .{
+    name = "Ada \"Countess\" Lovelace",
+    age = 36,
+    role = :member,
+    home = :some .{ city = "London", zip = 12345 },
+    friends = ["Babbage", "Somerville"],
+    favorite = :rect(.{ w = 2.0, h = 3.5 }),
+    manager = :some grace.&,
+  }
+  println(show(ada))
+  let opts: list[?int] = [:some 1, :none]
+  println(show(opts))
+  let grid: array[char, 3] = ['a', 'b', 'c']
+  println(show(grid))
+  println("${ada.home}")
+  0
+}

@@ -1,0 +1,6 @@
+let N: u64 = 3
+
+fn main(): i32 {
+  for 0.until(N) {}
+  0
+}

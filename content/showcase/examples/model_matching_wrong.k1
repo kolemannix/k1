@@ -1,0 +1,14 @@
+type shape = either { circle(f64), square(f64), tri({ a: f64, b: f64, c: f64 }) }
+
+fn classify(s: shape): string {
+  if s is {
+    :circle r if r > 10.0 -> "big circle",
+    :square _ -> "square",
+  }
+}
+
+fn main(): i32 {
+  println(classify(:circle 1.0))
+  0
+}
+//errmsg: Non-exhaustive match

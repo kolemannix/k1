@@ -1,0 +1,5 @@
+fn main(): i32 {
+  println("${types/schema[never] is :never} ${types/name[never]} ${types/name[result[u32, never]]}")
+  println("size of *never: ${types/size[*never]}")
+  0
+}

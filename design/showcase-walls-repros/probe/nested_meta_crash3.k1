@@ -1,0 +1,22 @@
+type holder = { xs: list[int] }
+
+fn count[t](v: t): int {
+  #meta {
+    let cb = code-builder/new()
+    if types/schema[t] is {
+      :struct .{ fields } -> {
+        cb.line("let n = 1")
+        for f in fields { cb.line(`n = n + count(v.${f.name})`) }
+        cb.line("n")
+      },
+      _ -> crash("unsupported: ${types/name[t]}")
+    }
+    cb.build()
+  }
+}
+
+fn main(): i32 {
+  let h: holder = .{ xs = [1, 2] }
+  println("${count(h)}")
+  0
+}

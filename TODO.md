@@ -20,6 +20,7 @@
 ## [x] Ability objects; dyn[<ability expr>]
 
 ## grab bag list mid2026
+- [ ] add cpu feature string to k1/module
 - [ ] convert the add_module train off of anyhow::error
 - [ ] fork global syntax: `let(mutable) x` -> `global x`. `let x` -> `constant x`. This differentiates from local lets in a more-useful-than-costly way
 - [ ] `self` sugar: `*self` as well as bare `self` inside an `ns for t`

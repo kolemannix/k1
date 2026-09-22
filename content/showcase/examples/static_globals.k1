@@ -1,0 +1,28 @@
+let fifteen: int = { 3 * 5 }
+
+let name: string = {
+  let base = "k"
+  base.concat("1")
+}
+
+#static {
+  assert-equals(types/id[fifteen], types/id[15])
+  assert-equals(types/id[name], types/id["k1"])
+}
+
+fn main(): i32 {
+  let x: fifteen = 15
+  let y: name = "k1"
+  println("${y.from-static()} ${x.from-static()}")
+
+  let wrong-int: ?string = test-compile({ let z: fifteen = 16; z })
+  let wrong-str: ?string = test-compile({ let z: name = "k2"; z })
+  println(wrong-int ? "compiles")
+  println(wrong-str ? "compiles")
+
+  let point = #static .{ x = 3 * 4, y = 5 - 3 }
+  (point.x: 12)
+  (point.y: 2)
+  println("point is ${point.x.from-static()},${point.y.from-static()}")
+  0
+}
