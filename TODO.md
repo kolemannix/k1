@@ -20,6 +20,7 @@
 ## [x] Ability objects; dyn[<ability expr>]
 
 ## grab bag list mid2026
+- [ ] smarter union lowering (see codegen_llvm.rs comment)
 - [ ] add cpu feature string to k1/module
 - [ ] convert the add_module train off of anyhow::error
 - [ ] fork global syntax: `let(mutable) x` -> `global x`. `let x` -> `constant x`. This differentiates from local lets in a more-useful-than-costly way

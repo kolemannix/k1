@@ -8,17 +8,18 @@
 //   0
 // }
 
-ability stuff {}
-
-type foo = { x: int }
-impl stuff for foo {}
-
-type box[t: stuff] = { t: t }
-
-type bar = {
-  xs: box[foo]
+type triple = either {
+  a(i64)
+  b(i64)
+  c(i64)
 }
 
-fn main(): i32 {
+#debug fn main(): i32 {
+ // i5202 = alloca sum { u8, union { i64 } }
+ // i5206 = alloca sum { u8, union { { i64, i64 } } }
+
+  let p = opt:some .{ x = 10.0, y = 20 }
+  let x: ?f32 = :some 42.0
   0
+
 }

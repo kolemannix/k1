@@ -187,7 +187,7 @@ struct CgVectorType<'ctx> {
 #[derive(Copy, Clone)]
 struct CgUnionType<'ctx> {
     pt: PhysicalType,
-    aligned_opaque_repr: StructType<'ctx>,
+    aligned_repr: BasicTypeEnum<'ctx>,
     layout: Layout,
     di_type: DIType<'ctx>,
 }
@@ -268,7 +268,7 @@ impl<'ctx> CgType<'ctx> {
             CgType::StructType(s) => s.struct_type.as_basic_type_enum(),
             CgType::ArrayType(a) => a.array_type.as_basic_type_enum(),
             CgType::Vector(v) => v.vector_type.as_basic_type_enum(),
-            CgType::Union(u) => u.aligned_opaque_repr.as_basic_type_enum(),
+            CgType::Union(u) => u.aligned_repr.as_basic_type_enum(),
         }
     }
 
@@ -316,7 +316,7 @@ pub struct CgFunction<'ctx> {
 }
 
 pub struct CgPerm;
-pub struct CodegenTmp;
+pub struct CgTmp;
 
 #[derive(Debug)]
 pub struct CgError {
@@ -405,7 +405,7 @@ pub struct Cg<'ctx, 'k1> {
     static_values_basics: FxHashMap<StaticValueId, BasicValueEnum<'ctx>>,
     static_values_globals: FxHashMap<StaticValueId, GlobalValue<'ctx>>,
     debug: DebugContext<'ctx>,
-    tmp: kmem::Mem<CodegenTmp>,
+    tmp: kmem::Mem<CgTmp>,
     mem: kmem::Mem<CgPerm>,
 
     current_insert_function: FunctionId,
@@ -2237,13 +2237,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 &type_name,
                             )
                             .as_type();
-                        let aligned_opaque_repr = self.codegen_opaque_repr(agg_layout);
-                        CgType::Union(CgUnionType {
-                            pt,
-                            aligned_opaque_repr,
-                            layout: agg_layout,
-                            di_type,
-                        })
+
+                        let aligned_repr = self.codegen_union_repr(basic_type_members, agg_layout);
+                        CgType::Union(CgUnionType { pt, aligned_repr, layout: agg_layout, di_type })
                     }
                     AggType::Sum(e) => {
                         let struct_repr_cg_type =
@@ -2276,7 +2272,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                         // For now, we'll call this a 'Union', its just our own type anyway,
                         // arguably it shouldn't even be a Sum since they share so much
-                        CgType::Union(CgUnionType { pt, aligned_opaque_repr, layout, di_type })
+                        CgType::Union(CgUnionType {
+                            pt,
+                            aligned_repr: aligned_opaque_repr.as_basic_type_enum(),
+                            layout,
+                            di_type,
+                        })
                     }
                 };
                 self.llvm_types.insert(agg_id, cg_type);
@@ -2313,8 +2314,30 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
     }
 
+    fn codegen_union_repr(
+        &self,
+        members: List<BasicTypeEnum<'ctx>, CgTmp>,
+        layout: Layout,
+    ) -> BasicTypeEnum<'ctx> {
+        // TODO: If we classify the union's members instead, we could produce a more
+        //       solid representation of other unions as well, like
+        //       union { a: i64, b: i64, c: i64 }, or even maybe a(i64), b(f64) if we
+        //       decided it was helpful to classify that as integer
+        //
+        //       And then obviously once you start thinking about aggregates
+        //       in the payloads, you're actually doing some sort of
+        //       'collect_leaf_types' then element-wise classify stuff.
+        //       Maybe this is why clang produces lots of different types for
+        //       different unions. Probably good place to start testing
+        if members.len() == 1 {
+            *members.first().unwrap()
+        } else {
+            self.codegen_opaque_repr(layout).as_basic_type_enum()
+        }
+    }
+
     fn codegen_opaque_repr(&self, expected_layout: Layout) -> StructType<'ctx> {
-        // For union types, we generate a 2-field struct to trick LLVM.
+        // For union types (and actual opaques), we generate a 2-field struct to trick LLVM.
 
         // Field 1 is a synthetic integer wide enough to force the alignment of the
         // struct, and Field 2 is an array of bytes, ensuring NO padding at all,
