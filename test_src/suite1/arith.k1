@@ -125,6 +125,15 @@ fn test() {
   assert-equals(min64 / -2, 0x4000_0000_0000_0000)
   assert-equals(min64 % -2, 0)
 
+  assert-equals[?string](
+    test-compile( #static { 7u32 % 0 } ).map(fn(s) s.take(16)),
+    some("Division by zero")
+  )
+  assert-equals[?string](
+    test-compile( #static { let d = -1; let m = i64/min-value; m / d } ).map(fn(s) s.take(41)),
+    some("Integer division overflow: min-value / -1")
+  )
+
   .{}
 
 }

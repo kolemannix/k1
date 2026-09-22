@@ -913,7 +913,6 @@ fn stamp_file(
 }
 
 /// every file under every declared output
-// nocommit claude can we put the Vec<StampFile> and its String in scratch?
 fn collect_output_files_for_setup<Tag>(
     idents: &IdentPool,
     req: &SetupRequest,
@@ -975,7 +974,7 @@ fn compute_setup_fingerprint<Tag>(
         output_paths.push(path);
     }
     let known = existing.map(SetupStamp::known_hashes).unwrap_or_default();
-    let mut buf = vec![0u8; FILE_HASH_BUF_LEN];
+    let buf = scratch.push_slice_uninit::<u8>(FILE_HASH_BUF_LEN);
     let mut files: Vec<StampFile> = vec![];
     let mut files_named_by_path: Vec<String> = vec![];
     for input in req.inputs {
@@ -987,7 +986,7 @@ fn compute_setup_fingerprint<Tag>(
             if output_paths.iter().any(|o| o.as_str() == file) {
                 continue;
             }
-            files.push(stamp_file("input", module_dir, file, &known, &mut buf)?);
+            files.push(stamp_file("input", module_dir, file, &known, buf)?);
         }
     }
     Ok((s, files))

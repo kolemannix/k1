@@ -1225,6 +1225,7 @@ pub struct ParsedMacro {
     pub compiler_debug: bool,
     pub compile_condition: Option<ParsedExprId>,
     pub id: ParsedMacroId,
+    pub typer_state: typer::ParsedMacroDeclareOutcome,
 }
 
 impl ParsedFunction {}
@@ -1332,6 +1333,7 @@ pub struct ParsedAbility {
     pub params: AstSlice<ParsedAbilityParameter>,
     pub id: ParsedAbilityId,
     pub compile_condition: Option<ParsedExprId>,
+    pub typer_state: typer::ParsedAbilityDeclareOutcome,
 }
 
 #[derive(Clone)]
@@ -1350,6 +1352,7 @@ pub struct ParsedAbilityImplementation {
     pub id: ParsedAbilityImplId,
     pub span: SpanId,
     pub compile_condition: Option<ParsedExprId>,
+    pub typer_state: typer::ParsedAbilityImplDeclareOutcome,
 }
 
 #[derive(Clone, Copy)]
@@ -1364,6 +1367,7 @@ pub struct ParsedNamespace {
     pub lib_name: Option<StringId>,
     pub reload: bool,
     pub compile_condition: Option<ParsedExprId>,
+    pub typer_state: typer::ParsedNamespaceDeclareOutcome,
 }
 
 impl ParsedNamespace {
@@ -1378,6 +1382,7 @@ impl ParsedNamespace {
             lib_name: None,
             reload: false,
             compile_condition: None,
+            typer_state: typer::ParsedNamespaceDeclareOutcome::Parsed,
         }
     }
 }
@@ -5025,6 +5030,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             compiler_debug,
             compile_condition: condition,
             id: ParsedMacroId::PENDING,
+            typer_state: typer::ParsedMacroDeclareOutcome::Parsed,
         });
         Ok(macro_id)
     }
@@ -5154,6 +5160,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             span,
             id: ParsedAbilityId::PENDING,
             compile_condition,
+            typer_state: typer::ParsedAbilityDeclareOutcome::Parsed,
         });
         Ok(ability_id)
     }
@@ -5224,6 +5231,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             id: ParsedAbilityImplId::PENDING,
             span,
             compile_condition,
+            typer_state: typer::ParsedAbilityImplDeclareOutcome::Parsed,
         });
         Ok(ability_impl_id)
     }
@@ -5349,6 +5357,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             lib_name,
             reload,
             compile_condition: condition,
+            typer_state: typer::ParsedNamespaceDeclareOutcome::Parsed,
         });
         Ok(namespace_id)
     }

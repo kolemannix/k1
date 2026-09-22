@@ -1965,21 +1965,6 @@ impl TypedProgram {
         self.types.len()
     }
 
-    pub fn add_ability_mapping(
-        &mut self,
-        parsed_ability_id: ParsedAbilityId,
-        ability_id: AbilityId,
-    ) -> bool {
-        self.ast_ability_mapping.insert(parsed_ability_id, ability_id).is_none()
-    }
-
-    pub fn find_ability_mapping(
-        &mut self,
-        parsed_ability_id: ParsedAbilityId,
-    ) -> Option<AbilityId> {
-        self.ast_ability_mapping.get(&parsed_ability_id).copied()
-    }
-
     pub fn get_type_variable_counts(&self, type_id: TypeId) -> TypeInfo {
         *self.type_variable_counts.get(type_id)
     }
@@ -2702,6 +2687,7 @@ impl TypedProgram {
         let mem = &self.mem;
         let slices = &self.type_slices;
         let hash_one = |&id: &TypeSliceId| Self::type_slice_hash(mem.getn(*slices.get(id)));
+        self.type_slice_dedup.reserve(self.type_slices.len(), hash_one);
         for id in self.type_slices.iter_ids() {
             self.type_slice_dedup.insert_unique(hash_one(&id), id, hash_one);
         }

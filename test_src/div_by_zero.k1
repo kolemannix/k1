@@ -1,4 +1,3 @@
-// nocommit claude these do not deserve their own tests; add cases to suite1 instead.
 fn main(): i32 {
   let d: i32 = 0
   10 / d

@@ -77,7 +77,6 @@ impl TypedProgram {
             type_specializations,
             phys_types,
             hole_type_cache: _,
-            ast_ability_mapping,
             builtin_types,
             agg_types,
             lambda_types,
@@ -99,9 +98,6 @@ impl TypedProgram {
             blanket_impls,
             function_name_to_ability_names,
             namespace_type_params,
-            namespace_ast_mappings,
-            macro_ast_mappings,
-            ability_impl_ast_mappings,
             exported_symbols,
             uses_pending_resolution,
             types_pending_definition,
@@ -155,7 +151,6 @@ impl TypedProgram {
         write_map_snap(w, type_defn_info);
         write_map_snap(w, type_specializations);
         write_map_snap(w, phys_types);
-        write_map_snap(w, ast_ability_mapping);
         w.write_t(builtin_types);
         agg_types.snap(w);
         lambda_types.snap(w);
@@ -183,9 +178,6 @@ impl TypedProgram {
         write_map_snap(w, blanket_impls);
         write_map_snap(w, function_name_to_ability_names);
         write_map_snap(w, namespace_type_params);
-        write_map_snap(w, namespace_ast_mappings);
-        write_map_snap(w, macro_ast_mappings);
-        write_map_snap(w, ability_impl_ast_mappings);
         write_map_snap(w, exported_symbols);
 
         assert!(uses_pending_resolution.is_empty());
@@ -252,6 +244,7 @@ impl TypedProgram {
 
         let section = k1.trace_push(TraceKind::SnapRestoreSection, restore_section("functions"), 0);
         k1.functions.restore(r);
+        k1.function_specializations.reserve(k1.functions.len());
         for (id, function) in k1.functions.iter_with_ids() {
             if let Some(info) = function.specialization_info {
                 k1.function_specializations
@@ -272,7 +265,6 @@ impl TypedProgram {
         k1.type_defn_info = restore_map_snap(r);
         k1.type_specializations = restore_map_snap(r);
         k1.phys_types = restore_map_snap(r);
-        k1.ast_ability_mapping = restore_map_snap(r);
         k1.builtin_types = r.read_t();
         k1.agg_types.restore(r);
         k1.lambda_types.restore(r);
@@ -314,9 +306,6 @@ impl TypedProgram {
         k1.blanket_impls = restore_map_snap(r);
         k1.function_name_to_ability_names = restore_map_snap(r);
         k1.namespace_type_params = restore_map_snap(r);
-        k1.namespace_ast_mappings = restore_map_snap(r);
-        k1.macro_ast_mappings = restore_map_snap(r);
-        k1.ability_impl_ast_mappings = restore_map_snap(r);
         k1.exported_symbols = restore_map_snap(r);
         k1.patterns.mem.restore(r);
         k1.emitted_sources = r.read_vec();

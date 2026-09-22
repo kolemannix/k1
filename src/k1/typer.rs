@@ -2758,6 +2758,38 @@ pub enum ParsedTypeDefnDeclareOutcome {
     Defined(TypeId),
 }
 
+#[derive(Clone, Copy)]
+pub enum ParsedNamespaceDeclareOutcome {
+    Parsed,
+    IfDefedOut,
+    Failed,
+    Declared(NamespaceId),
+}
+
+#[derive(Clone, Copy)]
+pub enum ParsedMacroDeclareOutcome {
+    Parsed,
+    IfDefedOut,
+    Failed,
+    Declared(FunctionId),
+}
+
+#[derive(Clone, Copy)]
+pub enum ParsedAbilityDeclareOutcome {
+    Parsed,
+    IfDefedOut,
+    Failed,
+    Declared(AbilityId),
+}
+
+#[derive(Clone, Copy)]
+pub enum ParsedAbilityImplDeclareOutcome {
+    Parsed,
+    IfDefedOut,
+    Failed,
+    Declared(AbilityImplId),
+}
+
 pub struct TypedProgram {
     pub modules: VPool<Module, ModuleId>,
     /// Fully typechecked modules, in completion order (deps before dependents)
@@ -2772,7 +2804,6 @@ pub struct TypedProgram {
     pub functions: VPool<TypedFunction, FunctionId>,
     /// (parent function, type args, fnlike type args) -> specialized function.
     /// Rebuilt from `functions` on snapshot restore
-    // nocommit look into resizing of this map too
     pub function_specializations:
         ahash::HashMap<(FunctionId, TypeSliceId, TypeSliceId), FunctionId>,
 
@@ -2794,7 +2825,6 @@ pub struct TypedProgram {
     /// `add_type` hash-conses holes to one id per (index, static_type) anyway; this skips
     /// the hash+probe on the common path. PENDING marks not-yet-created indices.
     pub hole_type_cache: Vec<TypeId>,
-    pub ast_ability_mapping: FxHashMap<ParsedAbilityId, AbilityId>,
     pub builtin_types: BuiltinTypes,
     pub agg_types: VPool<AggregateTypeRecord, AggregateTypeId>,
     /// Lambda types are big, they get extended storage
@@ -2825,12 +2855,6 @@ pub struct TypedProgram {
     /// If a namespace is a companion for a generic type, we remember that type's
     /// params here by name so we can re-use them; saves type pool and spec pool bloat
     pub namespace_type_params: FxHashMap<NameInNamespace, TypeId>,
-
-    // nocommit: Sketchy side tables; we should just shove this data on the ast nodes even though its
-    //       typer data because perf, snapshotting, simplicity, etc. Or our own VPool I guess.
-    pub namespace_ast_mappings: FxHashMap<ParsedNamespaceId, NamespaceId>,
-    pub macro_ast_mappings: FxHashMap<parse::ParsedMacroId, FunctionId>,
-    pub ability_impl_ast_mappings: FxHashMap<ParsedAbilityImplId, AbilityImplId>,
 
     pub uses_pending_resolution: VecDeque<UsePendingResolution>,
     pub types_pending_definition: Vec<TypePendingDefinition>,
@@ -2984,7 +3008,6 @@ impl TypedProgram {
         }
 
         let mut k1 = TypedProgram {
-            // nocommit: claude: instrument hashmap resizes and add default hashmap size heuristics
             modules: VPool::make("modules"),
             module_order: vec![],
             completed_module_count: 0,
@@ -3003,7 +3026,6 @@ impl TypedProgram {
             type_specializations: ahash::HashMap::new(),
             phys_types: FxHashMap::new(),
             hole_type_cache: Vec::new(),
-            ast_ability_mapping: FxHashMap::default(),
             builtin_types: BuiltinTypes::default(),
             agg_types,
             lambda_types: VPool::make("lambdas"),
@@ -3025,9 +3047,6 @@ impl TypedProgram {
             blanket_impls: FxHashMap::new(),
             function_name_to_ability_names: FxHashMap::with_capacity(1024),
             namespace_type_params: FxHashMap::new(),
-            namespace_ast_mappings: FxHashMap::with_capacity(512),
-            macro_ast_mappings: FxHashMap::default(),
-            ability_impl_ast_mappings: FxHashMap::new(),
             uses_pending_resolution: VecDeque::new(),
             types_pending_definition: Vec::new(),
             ast,
@@ -3089,7 +3108,7 @@ impl TypedProgram {
         load_handle: compiler::ModuleLoadHandle,
         is_primary_module: bool,
     ) -> K1Result<ModuleId> {
-        let restored = self.modules.iter().any(|m| m.name == load_handle.module_name);
+        let already_discovered = self.module_by_name(load_handle.module_name).is_some();
         let mut modules_to_typecheck: SV8<(ModuleId, compiler::ModuleRemainingSourcesHandle)> =
             smallvec![];
         let added_module_id = self.discover_module_and_deps(
@@ -3106,7 +3125,7 @@ impl TypedProgram {
         }
 
         let mut hash = self.inputs_hash;
-        if !restored {
+        if !already_discovered {
             for (module_id, _) in &modules_to_typecheck {
                 let module = self.modules.get(*module_id);
                 let root = module.source_file_hashes.as_slice(&self.mem)[0];
@@ -3199,27 +3218,6 @@ impl TypedProgram {
             module_result?;
         }
 
-        // nocommit claude we should check for these at the site where we consume them, from the
-        // dependent module
-        let mut spurious_provided_params: Option<(StringId, StringId, ParsedExprId)> = None;
-        'outer: for m in self.modules.iter() {
-            for entry in self.mem.getn(m.manifest.deps) {
-                if let Some(params_expr) = entry.params_struct_literal {
-                    let target = self.modules.iter().find(|t| t.name == entry.name).unwrap();
-                    if target.params.is_none() {
-                        spurious_provided_params = Some((m.name, entry.name, params_expr));
-                        break 'outer;
-                    }
-                }
-            }
-        }
-        if let Some((_provider_name, target_name, params_expr)) = spurious_provided_params {
-            let span = self.ast.exprs.get_span(params_expr);
-            let e = kerr!(self, span, "Module '{}' accepts no parameters", target_name);
-            self.report(e);
-            return Err(e);
-        }
-
         #[cfg(feature = "profile")]
         {
             let mut exprs_by_kind = FxHashMap::new();
@@ -3266,38 +3264,9 @@ impl TypedProgram {
         modules_to_typecheck: &mut SV8<(ModuleId, compiler::ModuleRemainingSourcesHandle)>,
     ) -> K1Result<ModuleId> {
         let module_name = root_load_handle.module_name;
-        if let Some(m) = self.modules.iter().find(|m| m.name == module_name) {
-            fn queue(
-                k1: &mut TypedProgram,
-                module_id: ModuleId,
-                modules_to_typecheck: &mut SV8<(ModuleId, compiler::ModuleRemainingSourcesHandle)>,
-            ) {
-                if k1.module_completed(module_id)
-                    || modules_to_typecheck.iter().any(|(id, _)| *id == module_id)
-                {
-                    return;
-                }
-                let deps = k1.modules.get(module_id).manifest.deps;
-                for module_dep in k1.mem.getn(deps) {
-                    let dep_name = module_dep.name;
-                    let dependent_module = k1
-                        .modules
-                        .iter()
-                        .find(|m| m.name == dep_name)
-                        .expect("restored state is missing a discovered module's dep");
-                    let dep_id = dependent_module.id;
-                    // core and std are discovered by their own add_module calls
-                    if dep_id == MODULE_ID_CORE
-                        || (!k1.config.no_std && dep_name == k1.ast.idents.b.std)
-                    {
-                        continue;
-                    }
-                    queue(k1, dep_id, modules_to_typecheck);
-                }
-                modules_to_typecheck.push((module_id, k1.spawn_remaining_sources(module_id)));
-            }
+        if let Some(m) = self.module_by_name(module_name) {
             let module_id = m.id;
-            queue(self, module_id, modules_to_typecheck);
+            self.queue_discovered_module(module_id, modules_to_typecheck);
             return Ok(module_id);
         }
 
@@ -3331,11 +3300,6 @@ impl TypedProgram {
             let module = self.modules.get_mut(module_id);
             module.namespace_id = typed_namespace_id;
             module.namespace_scope_id = scope_id;
-
-            if !is_core {
-                // takes 14us last I checked
-                self.add_core_uses_to_scope(scope_id, SpanId::NONE)?;
-            }
         }
 
         let (manifest, build_ns) = if is_core {
@@ -3412,8 +3376,9 @@ impl TypedProgram {
                 kbail!(self, dep.span, "Module dependency cycle: {}", cycle.join(" -> "));
             }
 
-            // nocommit claude: annotate this with what case this covers; snapshot restore?
-            if self.modules.iter().any(|m| m.name == dep_name) {
+            if let Some(m) = self.module_by_name(dep_name) {
+                let dep_id = m.id;
+                self.queue_discovered_module(dep_id, modules_to_typecheck);
                 continue;
             }
             let local_module_deps_path = kpath::join_tmp(
@@ -3794,8 +3759,39 @@ impl TypedProgram {
             .unwrap_or_else(|| self.modules.iter().last().unwrap())
     }
 
+    pub fn module_by_name(&self, name: StringId) -> Option<&Module> {
+        self.modules.iter().find(|m| m.name == name)
+    }
+
     pub fn module_completed(&self, id: ModuleId) -> bool {
         self.module_order[..self.completed_module_count as usize].contains(&id)
+    }
+
+    fn queue_discovered_module(
+        &mut self,
+        module_id: ModuleId,
+        modules_to_typecheck: &mut SV8<(ModuleId, compiler::ModuleRemainingSourcesHandle)>,
+    ) {
+        if self.module_completed(module_id)
+            || modules_to_typecheck.iter().any(|(id, _)| *id == module_id)
+        {
+            return;
+        }
+        let deps = self.modules.get(module_id).manifest.deps;
+        for module_dep in self.mem.getn(deps) {
+            let dep_name = module_dep.name;
+            let dep_id = self
+                .module_by_name(dep_name)
+                .expect("restored state is missing a discovered module's dep")
+                .id;
+            if dep_id == MODULE_ID_CORE
+                || (!self.config.no_std && dep_name == self.ast.idents.b.std)
+            {
+                continue;
+            }
+            self.queue_discovered_module(dep_id, modules_to_typecheck);
+        }
+        modules_to_typecheck.push((module_id, self.spawn_remaining_sources(module_id)));
     }
 
     pub fn primary_module_completed(&self) -> bool {
@@ -15620,6 +15616,24 @@ impl TypedProgram {
         parsed_macro_id: parse::ParsedMacroId,
         parent_scope_id: ScopeId,
     ) -> K1Result<Option<FunctionId>> {
+        debug_assert!(matches!(
+            self.ast.get_macro(parsed_macro_id).typer_state,
+            ParsedMacroDeclareOutcome::Parsed
+        ));
+        let result = self.declare_macro_inner(parsed_macro_id, parent_scope_id);
+        self.ast.macros.get_mut(parsed_macro_id).typer_state = match result {
+            Ok(Some(function_id)) => ParsedMacroDeclareOutcome::Declared(function_id),
+            Ok(None) => ParsedMacroDeclareOutcome::IfDefedOut,
+            Err(_) => ParsedMacroDeclareOutcome::Failed,
+        };
+        result
+    }
+
+    fn declare_macro_inner(
+        &mut self,
+        parsed_macro_id: parse::ParsedMacroId,
+        parent_scope_id: ScopeId,
+    ) -> K1Result<Option<FunctionId>> {
         let ast_macro = self.ast.get_macro(parsed_macro_id);
         if let Some(owner_ns) = self.scopes.get_scope_owner(parent_scope_id).as_namespace() {
             self.fail_if_reload_ns(owner_ns, ast_macro.span, "macros")?;
@@ -15737,8 +15751,6 @@ impl TypedProgram {
             );
             self.report(error);
         }
-        let existed = self.macro_ast_mappings.insert(parsed_macro_id, function_id).is_some();
-        debug_assert!(!existed);
         self.scopes.set_scope_owner_id(fn_scope_id, ScopeOwnerId::Function(function_id));
         self.emit_ls_entity(name_span, LsEntityKind::Function { function_id, is_defn: true });
 
@@ -16200,9 +16212,30 @@ impl TypedProgram {
         parsed_ability_id: ParsedAbilityId,
         scope_id: ScopeId,
     ) -> K1Result<Option<AbilityId>> {
-        if let Some(ability_id) = self.find_ability_mapping(parsed_ability_id) {
-            return Ok(Some(ability_id));
+        let parse::ParsedAbility { span, name, typer_state, .. } =
+            *self.ast.get_ability(parsed_ability_id);
+        match typer_state {
+            ParsedAbilityDeclareOutcome::Declared(ability_id) => return Ok(Some(ability_id)),
+            ParsedAbilityDeclareOutcome::IfDefedOut => return Ok(None),
+            ParsedAbilityDeclareOutcome::Failed => {
+                return Err(kerr!(self, span, "Ability {} has an invalid definition", name));
+            }
+            ParsedAbilityDeclareOutcome::Parsed => {}
         }
+        let result = self.compile_ability_definition_inner(parsed_ability_id, scope_id);
+        self.ast.abilities.get_mut(parsed_ability_id).typer_state = match result {
+            Ok(Some(ability_id)) => ParsedAbilityDeclareOutcome::Declared(ability_id),
+            Ok(None) => ParsedAbilityDeclareOutcome::IfDefedOut,
+            Err(_) => ParsedAbilityDeclareOutcome::Failed,
+        };
+        result
+    }
+
+    fn compile_ability_definition_inner(
+        &mut self,
+        parsed_ability_id: ParsedAbilityId,
+        scope_id: ScopeId,
+    ) -> K1Result<Option<AbilityId>> {
         let parsed_ability = self.ast.get_ability(parsed_ability_id).clone();
         if !self.execute_static_condition(parsed_ability.compile_condition, scope_id) {
             return Ok(None);
@@ -16364,7 +16397,8 @@ impl TypedProgram {
                 parsed_ability.name
             );
         }
-        self.add_ability_mapping(parsed_ability_id, ability_id);
+        self.ast.abilities.get_mut(parsed_ability_id).typer_state =
+            ParsedAbilityDeclareOutcome::Declared(ability_id);
         self.scopes.set_scope_owner_id(ability_scope_id, ScopeOwnerId::Ability(ability_id));
 
         let mut typed_functions: List<TypedAbilityFunctionRef, _> =
@@ -16454,6 +16488,24 @@ impl TypedProgram {
     }
 
     fn declare_ability_impl(
+        &mut self,
+        parsed_id: ParsedAbilityImplId,
+        scope_id: ScopeId,
+    ) -> K1Result<Option<AbilityImplId>> {
+        debug_assert!(matches!(
+            self.ast.get_ability_impl(parsed_id).typer_state,
+            ParsedAbilityImplDeclareOutcome::Parsed
+        ));
+        let result = self.declare_ability_impl_inner(parsed_id, scope_id);
+        self.ast.ability_impls.get_mut(parsed_id).typer_state = match result {
+            Ok(Some(impl_id)) => ParsedAbilityImplDeclareOutcome::Declared(impl_id),
+            Ok(None) => ParsedAbilityImplDeclareOutcome::IfDefedOut,
+            Err(_) => ParsedAbilityImplDeclareOutcome::Failed,
+        };
+        result
+    }
+
+    fn declare_ability_impl_inner(
         &mut self,
         parsed_id: ParsedAbilityImplId,
         scope_id: ScopeId,
@@ -16822,7 +16874,6 @@ impl TypedProgram {
                 .push_grow(&mut self.mem, typed_impl_id)
         }
 
-        self.ability_impl_ast_mappings.insert(parsed_id, typed_impl_id);
         Ok(Some(typed_impl_id))
     }
 
@@ -16831,12 +16882,14 @@ impl TypedProgram {
         parsed_ability_impl_id: ParsedAbilityImplId,
         _scope_id: ScopeId,
     ) -> K1Result<()> {
-        let Some(&ability_impl_id) = self.ability_impl_ast_mappings.get(&parsed_ability_impl_id)
-        else {
-            // Missing mapping means, likely, we failed to compile the signature
-            // Just do nothing. TODO: flag when defns have failed compilation so we don't
-            // mask real bugs
-            return Ok(());
+        let ability_impl_id = match self.ast.get_ability_impl(parsed_ability_impl_id).typer_state {
+            ParsedAbilityImplDeclareOutcome::Parsed => {
+                let span = self.ast.get_ability_impl(parsed_ability_impl_id).span;
+                self.ice_span(span, "ability impl is not declared")
+            }
+            ParsedAbilityImplDeclareOutcome::IfDefedOut
+            | ParsedAbilityImplDeclareOutcome::Failed => return Ok(()),
+            ParsedAbilityImplDeclareOutcome::Declared(id) => id,
         };
         let ability_impl = *self.ability_impls.get(ability_impl_id);
 
@@ -16916,13 +16969,22 @@ impl TypedProgram {
                 };
             }
             ParsedId::Macro(parsed_macro_id) => {
-                if let Some(function_declaration_id) =
-                    self.macro_ast_mappings.get(&parsed_macro_id).copied()
-                {
-                    if let Err(e) = self.eval_function_body(function_declaration_id) {
+                let function_id = match self.ast.get_macro(parsed_macro_id).typer_state {
+                    ParsedMacroDeclareOutcome::Parsed => {
+                        let span = self.ast.get_span_for_id(parsed_defn_id);
+                        let e =
+                            kerr!(self, span, "[internal compiler error] macro is not declared");
                         self.report(e);
-                    };
-                }
+                        return;
+                    }
+                    ParsedMacroDeclareOutcome::IfDefedOut | ParsedMacroDeclareOutcome::Failed => {
+                        return;
+                    }
+                    ParsedMacroDeclareOutcome::Declared(function_id) => function_id,
+                };
+                if let Err(e) = self.eval_function_body(function_id) {
+                    self.report(e);
+                };
             }
             ParsedId::TypeDefn(_type_defn_id) => {
                 // Done in prior phase
@@ -17163,7 +17225,9 @@ impl TypedProgram {
         parsed_namespace_id: ParsedNamespaceId,
         skip_defns: &[ParsedId],
     ) {
-        let Some(&namespace_id) = self.namespace_ast_mappings.get(&parsed_namespace_id) else {
+        let ParsedNamespaceDeclareOutcome::Declared(namespace_id) =
+            self.ast.namespaces.get(parsed_namespace_id).typer_state
+        else {
             return;
         };
         let namespace_scope_id = self.namespaces.get(namespace_id).scope_id;
@@ -17198,7 +17262,9 @@ impl TypedProgram {
         parsed_namespace_id: ParsedNamespaceId,
         skip_defns: &[ParsedId],
     ) {
-        let Some(&namespace_id) = self.namespace_ast_mappings.get(&parsed_namespace_id) else {
+        let ParsedNamespaceDeclareOutcome::Declared(namespace_id) =
+            self.ast.namespaces.get(parsed_namespace_id).typer_state
+        else {
             return;
         };
         let namespace = self.namespaces.get(namespace_id);
@@ -17397,7 +17463,8 @@ impl TypedProgram {
     fn compile_ns_body(&mut self, ast_namespace_id: ParsedNamespaceId, skip_defns: &[ParsedId]) {
         let ast_namespace = self.ast.namespaces.get(ast_namespace_id);
         let ast_definitions = &ast_namespace.definitions;
-        let Some(&namespace_id) = self.namespace_ast_mappings.get(&ast_namespace.id) else {
+        let ParsedNamespaceDeclareOutcome::Declared(namespace_id) = ast_namespace.typer_state
+        else {
             return;
         };
         let ns_scope_id = self.namespaces.get(namespace_id).scope_id;
@@ -17485,11 +17552,23 @@ impl TypedProgram {
             self.scopes.replace_namespace(parent_scope_id, name, namespace_id);
         }
 
-        self.namespace_ast_mappings.insert(parsed_namespace_id, namespace_id);
         Ok(namespace_id)
     }
 
     fn declare_namespace(
+        &mut self,
+        parsed_namespace_id: ParsedNamespaceId,
+        parent_scope: ScopeId,
+    ) -> K1Result<NamespaceId> {
+        let result = self.declare_namespace_inner(parsed_namespace_id, parent_scope);
+        self.ast.namespaces.get_mut(parsed_namespace_id).typer_state = match result {
+            Ok(namespace_id) => ParsedNamespaceDeclareOutcome::Declared(namespace_id),
+            Err(_) => ParsedNamespaceDeclareOutcome::Failed,
+        };
+        result
+    }
+
+    fn declare_namespace_inner(
         &mut self,
         parsed_namespace_id: ParsedNamespaceId,
         parent_scope: ScopeId,
@@ -17509,8 +17588,6 @@ impl TypedProgram {
         let namespace_id = if let Some(existing) =
             self.find_ns_child_by_name(parent_ns, ast_namespace.name)
         {
-            // Map this separate namespace AST node to the same semantic namespace
-            self.namespace_ast_mappings.insert(parsed_namespace_id, existing);
             debug!("Inserting re-definition node for ns {}", self.ident_str(ast_namespace.name));
             if ast_namespace.reload && !self.namespaces.get(existing).reload {
                 let existing_scope = self.namespaces.get(existing).scope_id;
@@ -17557,9 +17634,9 @@ impl TypedProgram {
         recurse: bool,
         skip_self: bool,
     ) {
-        let Some(namespace_id) = self.namespace_ast_mappings.get(&parsed_namespace_id).copied()
+        let ParsedNamespaceDeclareOutcome::Declared(namespace_id) =
+            self.ast.namespaces.get(parsed_namespace_id).typer_state
         else {
-            // If we haven't even declared namespaces yet
             return;
         };
         let namespace_scope_id = self.namespaces.get(namespace_id).scope_id;
@@ -17601,7 +17678,10 @@ impl TypedProgram {
         let ast_namespace = self.ast.namespaces.get(parsed_namespace_id);
         let ast_definitions = ast_namespace.definitions.as_slice(&self.ast.mem);
 
-        let namespace_id = *self.namespace_ast_mappings.get(&parsed_namespace_id).unwrap();
+        let ParsedNamespaceDeclareOutcome::Declared(namespace_id) = ast_namespace.typer_state
+        else {
+            self.ice_span(ast_namespace.span, "namespace is not declared")
+        };
         let namespace_scope_id = self.namespaces.get(namespace_id).scope_id;
 
         // new_defns will contain all of the namespace's original parsed definitions
@@ -17705,6 +17785,8 @@ impl TypedProgram {
     ) -> K1Result<Option<NamespaceId>> {
         let condition = self.ast.namespaces.get(parsed_namespace_id).compile_condition;
         if !self.execute_static_condition(condition, parent_scope) {
+            self.ast.namespaces.get_mut(parsed_namespace_id).typer_state =
+                ParsedNamespaceDeclareOutcome::IfDefedOut;
             return Ok(None);
         }
         let ns_id = self.declare_namespace(parsed_namespace_id, parent_scope)?;
@@ -17719,6 +17801,16 @@ impl TypedProgram {
         build_ns_id: Option<ParsedNamespaceId>,
     ) -> K1Result<()> {
         self.module_in_progress = Some(module_id);
+        let deps = self.modules.get(module_id).manifest.deps;
+        for entry in self.mem.getn(deps) {
+            if let Some(params_expr) = entry.params_struct_literal {
+                let target = self.module_by_name(entry.name).unwrap();
+                if target.params.is_none() {
+                    let span = self.ast.exprs.get_span(params_expr);
+                    kbail!(self, span, "Module '{}' accepts no parameters", entry.name);
+                }
+            }
+        }
         let is_core = module_id == MODULE_ID_CORE;
         // The namespace itself was declared at load, so that `ns build` had a parent
         let module_root_namespace_scope_id = self.modules.get(module_id).namespace_scope_id;
@@ -17748,10 +17840,7 @@ impl TypedProgram {
         self.run_all_phases_on_ns(module_root_parsed_namespace, module_id, &skip_defns)?;
 
         if is_core {
-            // Some of these will be redundant, but this lets us use the core prelude from
-            // module manifests, and 'pre' modules
-            // nocommit claude: does that mean we can skip the later call to add_core_uses_to_scope?
-            self.add_core_uses_to_scope(self.scopes.root_scope_id(), SpanId::NONE)?;
+            self.add_core_prelude_to_root()?;
         }
 
         self.module_in_progress = None;
@@ -18047,14 +18136,15 @@ impl TypedProgram {
         }
     }
 
-    fn add_core_uses_to_scope(&mut self, scope: ScopeId, span: SpanId) -> K1Result<()> {
+    fn add_core_prelude_to_root(&mut self) -> K1Result<()> {
+        let scope = self.scopes.root_scope_id();
+        let span = SpanId::NONE;
         macro_rules! intern_path {
             ($($name: expr),*) => {
                 self.ast.mem.pushn(&[$(parse::IdentSpanned { name: $name, span }),*])
             }
         }
 
-        let root_ns = intern_path!(self.ast.idents.b.root_module_name);
         let core_ns = intern_path!(self.ast.idents.b.core);
         let core_mem = intern_path!(self.ast.idents.b.core, self.ast.idents.b.mem);
         let core_types = intern_path!(self.ast.idents.b.core, self.ast.idents.b.types);
@@ -18068,8 +18158,6 @@ impl TypedProgram {
         }
 
         let idents_to_use = [
-            QIdent::make(&mut self.ast.mem, root_ns, self.ast.idents.b.core, span), // use _root/core;
-            QIdent::make(&mut self.ast.mem, root_ns, self.ast.idents.b.std, span), // use _root/std;
             core!("u8"),
             core!("u16"),
             core!("u32"),
@@ -18115,7 +18203,6 @@ impl TypedProgram {
             core!("as-span"),
             core!("index"),
             core!("println"),
-            core!("print"),
             core!("eprint"),
             core!("eprintln"),
             core!("identity"),
@@ -18177,13 +18264,7 @@ impl TypedProgram {
                 span,
             });
             if !self.eval_use_definition(scope, use_id, true) {
-                //We can't quite fail here since we use 'std' from 'core', and it gets
-                //resolved later
-                //kbail!(self,
-                //    qid.span,
-                //    "Failed to resolve a core use: {}",
-                //    self.qident_to_string(&qid)
-                //);
+                kbail!(self, span, "Failed to resolve a core use: {}", self.qident_to_string(&qid));
             }
         }
         Ok(())

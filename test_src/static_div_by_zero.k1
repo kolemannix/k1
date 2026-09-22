@@ -1,5 +1,0 @@
-fn main(): i32 {
-  #static { 7u32 % 0 }
-  0
-}
-//errmsg: Division by zero
