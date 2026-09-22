@@ -327,7 +327,7 @@ impl AsRef<str> for TokenKind {
     }
 }
 
-const fn keyword_key(bytes: &[u8]) -> u64 {
+const fn make_keyword_key(bytes: &[u8]) -> u64 {
     let mut key = 0u64;
     let mut i = 0;
     while i < bytes.len() {
@@ -337,28 +337,28 @@ const fn keyword_key(bytes: &[u8]) -> u64 {
     key
 }
 
-const KW_FN: u64 = keyword_key(b"fn");
-const KW_LET: u64 = keyword_key(b"let");
-const KW_AND: u64 = keyword_key(b"and");
-const KW_OR: u64 = keyword_key(b"or");
-const KW_IF: u64 = keyword_key(b"if");
-const KW_ELSE: u64 = keyword_key(b"else");
-const KW_WHILE: u64 = keyword_key(b"while");
-const KW_LOOP: u64 = keyword_key(b"loop");
-const KW_NS: u64 = keyword_key(b"ns");
-const KW_INTERN: u64 = keyword_key(b"intern");
-const KW_FOR: u64 = keyword_key(b"for");
-const KW_IN: u64 = keyword_key(b"in");
-const KW_ABILITY: u64 = keyword_key(b"ability");
-const KW_IMPL: u64 = keyword_key(b"impl");
-const KW_NOT: u64 = keyword_key(b"not");
-const KW_IS: u64 = keyword_key(b"is");
-const KW_BUILTIN: u64 = keyword_key(b"builtin");
-const KW_WHERE: u64 = keyword_key(b"where");
-const KW_CONTEXT: u64 = keyword_key(b"context");
-const KW_USE: u64 = keyword_key(b"use");
-const KW_REQUIRE: u64 = keyword_key(b"require");
-const KW_DEFER: u64 = keyword_key(b"defer");
+const KW_FN: u64 = make_keyword_key(b"fn");
+const KW_LET: u64 = make_keyword_key(b"let");
+const KW_AND: u64 = make_keyword_key(b"and");
+const KW_OR: u64 = make_keyword_key(b"or");
+const KW_IF: u64 = make_keyword_key(b"if");
+const KW_ELSE: u64 = make_keyword_key(b"else");
+const KW_WHILE: u64 = make_keyword_key(b"while");
+const KW_LOOP: u64 = make_keyword_key(b"loop");
+const KW_NS: u64 = make_keyword_key(b"ns");
+const KW_INTERN: u64 = make_keyword_key(b"intern");
+const KW_FOR: u64 = make_keyword_key(b"for");
+const KW_IN: u64 = make_keyword_key(b"in");
+const KW_ABILITY: u64 = make_keyword_key(b"ability");
+const KW_IMPL: u64 = make_keyword_key(b"impl");
+const KW_NOT: u64 = make_keyword_key(b"not");
+const KW_IS: u64 = make_keyword_key(b"is");
+const KW_BUILTIN: u64 = make_keyword_key(b"builtin");
+const KW_WHERE: u64 = make_keyword_key(b"where");
+const KW_CONTEXT: u64 = make_keyword_key(b"context");
+const KW_USE: u64 = make_keyword_key(b"use");
+const KW_REQUIRE: u64 = make_keyword_key(b"require");
+const KW_DEFER: u64 = make_keyword_key(b"defer");
 
 impl TokenKind {
     pub const fn string(delim: StringDelimKind, done: bool) -> TokenKind {
@@ -868,7 +868,7 @@ impl<'content> Lexer<'content> {
                     Some(w) => {
                         u64::from_le_bytes(w.try_into().unwrap()) & (u64::MAX >> (64 - 8 * len))
                     }
-                    None => keyword_key(&lex.content[start..start + len as usize]),
+                    None => make_keyword_key(&lex.content[start..start + len as usize]),
                 };
                 TokenKind::from_keyword_key(key).unwrap_or(K::Ident)
             };
@@ -1316,7 +1316,7 @@ fn is_numeric_char(c: char) -> bool {
 
 #[cfg(test)]
 mod test {
-    use crate::lex::{lex, Lexed, Spans, Token, TokenKind as K, TokenTriviaKind, TOKEN_LOOKAHEAD};
+    use crate::lex::{Lexed, Spans, TOKEN_LOOKAHEAD, Token, TokenKind as K, TokenTriviaKind, lex};
 
     #[test]
     fn byte_class_matches_char_methods() {

@@ -1,7 +1,7 @@
 using k1 home: /Users/knix/dev/k1
-Wrote 1 emitted sources in 167.00ns
+Wrote 1 emitted sources in 166.00ns
 	sources: 43 files 31474kb + 1 emitted 0kb (1 unique, 0kb); line tables 4055kb, trivia 8kb, tokens 0kb
-program stress100 took 895ms (1159288.37 line/s, 1038111 lines)
+program stress100 took 808ms (1283974.98 line/s, 1038111 lines)
 	4941322 expressions
 	987257 statements
 	442931 functions
@@ -12,62 +12,62 @@ program stress100 took 895ms (1159288.37 line/s, 1038111 lines)
 	perm usage: 76000/1048576kb (7.25%), hwm: 76000kb
 	mem ir usage: 204/1048576kb (0.02%), hwm: 204kb
 	kind                  count    excl ms speculative %
-	discover                  3      73.31     0%
-	read                      3       1.13     0%
-	parse                    47     156.97     0%
+	discover                  3      70.32     0%
+	read                      3       0.94     0%
+	parse                    47     123.83     0%
 	module                    3       0.04     0%
 	pass uses                 4       0.01     0%
-	pass namespaces           4       5.56     0%
-	pass types                4      52.37     0%
-	pass declarations         4      23.67     0%
-	pass bodies               4       7.21     0%
-	typecheck            106167     318.62     0%
-	global                  130       0.01     0%
-	specialize           318700      65.84     0%
-	instantiate          184563      28.84     0%
-	infer                417471     160.02     0%
-	static exec             188       0.07     0%
+	pass namespaces           4       2.67     0%
+	pass types                4      33.27     0%
+	pass declarations         4      22.39     0%
+	pass bodies               4       6.06     0%
+	typecheck            106167     306.65     0%
+	global                  130       0.00     0%
+	specialize           318700      61.34     0%
+	instantiate          184563      26.33     0%
+	infer                417471     152.82     0%
+	static exec             188       0.06     0%
 	macro                     1       0.01     0%
 	ferry                    29       0.01     0%
-	lower                   411       0.46     0%
+	lower                   411       0.43     0%
 	optimize                188       0.03     0%  4966 insts created
 	inline                  290       0.08     0%  100 inlines
 	simplify                290       0.03     0%  342 passes
 	cfg                      52       0.01     0%
-	bcgen                    65       0.23     0%
-	run                      15       0.06     0%  879 instrs (0.07us/instr)
-	untracked                         0.87
+	bcgen                    65       0.20     0%
+	run                      15       0.05     0%  879 instrs (0.06us/instr)
+	untracked                         0.95
 	top frames:
-	    155.39ms (   155ms incl) parse stress100.k1
-	     73.27ms (   229ms incl) discover stress100
-	     51.76ms (    55ms incl) pass types stress100
-	     23.30ms (    26ms incl) pass declarations stress100
-	      7.13ms (   571ms incl) pass bodies stress100
-	      5.53ms (     6ms incl) pass namespaces stress100
-	      3.33ms (     3ms incl) infer stress100.k1:434873
-	      2.11ms (     2ms incl) specialize sz for bx['t]
-	      1.96ms (     2ms incl) typecheck main stress100.k1:1026003
-	      1.76ms (     2ms incl) instantiate bx[t]
+	    122.44ms (   122ms incl) parse stress100.k1
+	     70.28ms (   193ms incl) discover stress100
+	     32.67ms (    36ms incl) pass types stress100
+	     21.99ms (    24ms incl) pass declarations stress100
+	      5.98ms (   544ms incl) pass bodies stress100
+	      2.97ms (     3ms incl) infer stress100.k1:434873
+	      2.64ms (     3ms incl) pass namespaces stress100
+	      1.86ms (     2ms incl) typecheck main stress100.k1:1026003
+	      1.81ms (     2ms incl) specialize sz for bx['t]
+	      1.76ms (     2ms incl) infer stress100.k1:652618
 	top generics by specialization + body time:
-	      4.33ms  7212 instances find for list['t]
-	      2.96ms  7212 instances forall for list['t]
-	      2.74ms  7212 instances exists for list['t]
-	      2.17ms  7234 instances next for buffer-iterator['t]
-	      2.13ms  7204 instances position for list['t]
-	      2.12ms  7234 instances nth for buffer-iterator['t]
-	      2.11ms     3 instances sz for bx['t]
-	      2.10ms  7212 instances iterator for list['t]
-	      2.02ms  7234 instances advance-by for buffer-iterator['t]
-	      1.97ms  7204 instances contains for list['t]
+	      3.84ms  7212 instances find for list['t]
+	      2.76ms  7212 instances forall for list['t]
+	      2.50ms  7212 instances exists for list['t]
+	      1.97ms  7234 instances next for buffer-iterator['t]
+	      1.93ms  7204 instances position for list['t]
+	      1.89ms  7234 instances nth for buffer-iterator['t]
+	      1.86ms  7212 instances iterator for list['t]
+	      1.81ms     3 instances sz for bx['t]
+	      1.80ms  7204 instances contains for list['t]
+	      1.79ms  7234 instances advance-by for buffer-iterator['t]
 	top requesters of specializations (declaration + body time):
-	      2.11ms     1 declared by infer stress100.k1:736717
-	      0.90ms    43 declared by typecheck test stress100.k1:365330
-	      0.32ms    11 declared by typecheck order-total stress100.k1:179628
+	      1.81ms     1 declared by infer stress100.k1:736717
+	      0.86ms    43 declared by typecheck test stress100.k1:365330
+	      0.39ms    11 declared by typecheck order-total stress100.k1:179628
 	      0.22ms    12 declared by typecheck summarize stress100.k1:86815
-	      0.18ms     0 declared by optimize module
-	      0.09ms    43 declared by typecheck test stress100.k1:40430
+	      0.15ms     0 declared by optimize module
+	      0.11ms    43 declared by typecheck test stress100.k1:40430
 	      0.05ms    43 declared by typecheck test stress100.k1:17060
-	      0.04ms    43 declared by typecheck test stress100.k1:430310
 	      0.04ms     0 declared by optimize with-arena
+	      0.04ms    14 declared by typecheck iterator for list['t] list.k1:262
 	      0.03ms    65 declared by typecheck spawn platform.k1:683
 	  ops: load 20% (180), copy 16% (142), store 10% (88), jump_if_icmp 8% (69), enter 6% (56), call 5% (41), ptr_add_imm 4% (39), ret 4% (37), mov 4% (36), load_global 4% (34), jump_if 3% (24), ret_agg 2% (19), ret_get 2% (16), halt 2% (15), imul 2% (14), jump 1% (13), isub 1% (10), ptr_index 1% (9), iadd 1% (9), other 3% (28)
