@@ -354,11 +354,11 @@ impl TypedProgram {
         if !self.execute_static_condition(parsed.compile_condition, scope_id) {
             self.ast.globals.get_mut(parsed_global_id).typer_state =
                 ParsedGlobalDeclareOutcome::IfDefedOut;
-            let whole_span = self.ast.spans.get(parsed.span);
-            self.ast.semantic_tokens.add(parse::SemanticToken {
-                span: whole_span,
-                kind: parse::SemanticTokenKind::Comment,
-            });
+            if cfg!(feature = "lsp") {
+                let span = self.ast.spans.get(parsed.span);
+                let kind = parse::SemanticTokenKind::Comment;
+                parse::add_semantic_token(&mut self.ast, parse::SemanticToken { span, kind });
+            }
             return Ok(None);
         }
         let owner_ns = match self.scopes.get_scope(scope_id).owner_id {

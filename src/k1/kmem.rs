@@ -1770,7 +1770,6 @@ impl<T, Tag> List<T, Tag> {
 }
 
 /// `List` minus the cached pointer: the pod handle for growable arena lists
-#[derive(Debug)]
 pub struct MList<T, Tag = ()> {
     /// Byte offset from the owning arena's base; 0 when empty
     offset: u32,
@@ -1780,6 +1779,12 @@ pub struct MList<T, Tag = ()> {
     _tag: PhantomData<Tag>,
 }
 
+impl<T, Tag> std::fmt::Debug for MList<T, Tag> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ty = std::any::type_name::<T>();
+        write!(f, "MList<{ty}>[{}]", self.len)
+    }
+}
 impl<T, Tag> Copy for MList<T, Tag> {}
 impl<T, Tag> Clone for MList<T, Tag> {
     fn clone(&self) -> Self {

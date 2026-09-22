@@ -8,18 +8,23 @@
 //   0
 // }
 
-type triple = either {
+let fast-mode: bool = true
+
+#if fast-mode type triple = either {
   a(i64)
   b(i64)
   c(i64)
 }
 
-#if false let x: int = 42
-#if true let x: int = 42
+#if fast-mode ns blah {
 
-#if false fn main(): i32 {
-  let p = opt:some .{ x = 10.0, y = 20 }
-  let x: ?f32 = :some 42.0
-  0
-
+  #if fast-mode let x: i32 = 10
+  #if fast-mode let x: i64 = 42
+  
+  #if fast-mode fn main(): i32 {
+    let p = opt:some .{ x = 10.0, y = 20 }
+    let x: ?f32 = :some 42.0
+    0
+  
+  }
 }

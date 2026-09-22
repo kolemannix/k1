@@ -859,36 +859,30 @@ impl LanguageServer for Backend {
             info!("Could not get source for {}", file_url.path());
             return Ok(None);
         };
-        info!(
-            "semantic_tokens {}. tokens={} is_edited={is_edited}",
-            file_url.path(),
-            source.tokens.len()
-        );
+        info!("semantic_tokens {}. is_edited={is_edited}", file_url.path(),);
         self.with_k1(|k1| {
-
             let edited_sources = self.edited_sources.lock().unwrap();
             let ast_for_file: &ParsedProgram = match is_edited {
                 false => &k1.ast,
                 true => edited_sources.get(&file_url).unwrap(),
             };
 
-            let capacity = ast_for_file.semantic_tokens.len() + source.trivia.len();
+            let file_tokens = source.semantic_tokens.as_slice(&ast_for_file.mem);
+            let capacity = file_tokens.len() + source.trivia.len() as usize;
             let mut tokens: Vec<SemanticToken> = Vec::with_capacity(capacity);
             let mut spans_and_kinds = Vec::with_capacity(capacity);
-            for semantic_token in ast_for_file.semantic_tokens.iter() {
-                if semantic_token.span.file_id == source.file_id {
-                    let token_type = match semantic_token.kind {
-                        parse::SemanticTokenKind::Type => TokenTypes::Type,
-                        parse::SemanticTokenKind::Variable => TokenTypes::Variable,
-                        parse::SemanticTokenKind::String => TokenTypes::String,
-                        parse::SemanticTokenKind::Keyword => TokenTypes::Keyword,
-                        parse::SemanticTokenKind::Function => TokenTypes::Function,
-                        parse::SemanticTokenKind::Namespace => TokenTypes::Namespace,
-                        parse::SemanticTokenKind::Operator => TokenTypes::Operator,
-                        parse::SemanticTokenKind::Comment => TokenTypes::Comment,
-                    };
-                    spans_and_kinds.push((semantic_token.span, token_type as u32, 0))
-                }
+            for semantic_token in file_tokens {
+                let token_type = match semantic_token.kind {
+                    parse::SemanticTokenKind::Type => TokenTypes::Type,
+                    parse::SemanticTokenKind::Variable => TokenTypes::Variable,
+                    parse::SemanticTokenKind::String => TokenTypes::String,
+                    parse::SemanticTokenKind::Keyword => TokenTypes::Keyword,
+                    parse::SemanticTokenKind::Function => TokenTypes::Function,
+                    parse::SemanticTokenKind::Namespace => TokenTypes::Namespace,
+                    parse::SemanticTokenKind::Operator => TokenTypes::Operator,
+                    parse::SemanticTokenKind::Comment => TokenTypes::Comment,
+                };
+                spans_and_kinds.push((semantic_token.span, token_type as u32, 0))
             }
             for entry in ast_for_file.mem.getn_lt(source.trivia) {
                 match entry.trivia.kind {
@@ -940,7 +934,7 @@ impl LanguageServer for Backend {
             }
             info!(
                 "semantic_tokens: iterated {} tokens, returning {}",
-                ast_for_file.semantic_tokens.len(),
+                file_tokens.len() + source.trivia.len() as usize,
                 tokens.len()
             );
             Ok(Some(SemanticTokensResult::Tokens(SemanticTokens { result_id: None, data: tokens })))

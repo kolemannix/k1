@@ -1516,11 +1516,15 @@ pub enum SemanticTokenKind {
     Operator,
     Comment,
 }
-nz_u32_id!(SemanticTokenId);
 #[derive(Clone, Copy)]
 pub struct SemanticToken {
     pub span: Span,
     pub kind: SemanticTokenKind,
+}
+
+pub fn add_semantic_token(ast: &mut ParsedProgram, token: SemanticToken) {
+    let file_id = token.span.file_id;
+    ast.sources.get_mut(file_id).semantic_tokens.push_grow(&mut ast.mem, token)
 }
 
 pub struct ParsedTmp;
@@ -1543,8 +1547,6 @@ pub struct ParsedProgram {
     pub uses: VPool<ParsedUse, ParsedUseId>,
     pub errors: Vec<ParseError>,
 
-    pub semantic_tokens: VPool<SemanticToken, SemanticTokenId>,
-
     pub mem: kmem::Mem<ParsedProgram>,
     pub tmp: kmem::Mem<ParsedTmp>,
 }
@@ -1558,7 +1560,6 @@ impl ParsedProgram {
     pub fn make() -> ParsedProgram {
         let mut mem = kmem::Mem::make();
         let idents = IdentPool::make(&mut mem);
-        let semantic_tokens = VPool::make("semantic_tokens");
 
         ParsedProgram {
             name_id: StringId::PENDING,
@@ -1578,8 +1579,6 @@ impl ParsedProgram {
             stmts: VPool::make("parsed_stmts"),
             uses: VPool::make("parsed_uses"),
             errors: Vec::new(),
-
-            semantic_tokens,
 
             mem,
             tmp: kmem::Mem::make(),
@@ -1614,7 +1613,6 @@ impl ParsedProgram {
             stmts,
             uses,
             errors,
-            semantic_tokens,
             mem,
             tmp,
         } = self;
@@ -1640,7 +1638,6 @@ impl ParsedProgram {
         uses.snap(w);
         // Snapshots are only taken of successfully-compiled module boundaries
         assert!(errors.is_empty(), "cannot snapshot a ParsedProgram with parse errors");
-        semantic_tokens.snap(w);
         let _ = tmp;
     }
 
@@ -1667,7 +1664,6 @@ impl ParsedProgram {
         ast.stmts.restore(r);
         ast.uses.restore(r);
         ast.errors = Vec::new();
-        ast.semantic_tokens.restore(r);
         ast
     }
 
@@ -2013,6 +2009,7 @@ pub struct SourceFile {
     /// Retained only for LSP sessions; empty otherwise
     pub tokens: kmem::MSlice<Token, ParsedProgram>,
     pub trivia: kmem::MSlice<TriviaEntry, ParsedProgram>,
+    pub semantic_tokens: kmem::MList<SemanticToken, ParsedProgram>,
 }
 
 impl SourceFile {
@@ -2030,6 +2027,7 @@ impl SourceFile {
             newline_positions,
             tokens: kmem::MSlice::empty(),
             trivia: kmem::MSlice::empty(),
+            semantic_tokens: kmem::MList::empty(),
         }
     }
 
@@ -2739,14 +2737,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn emit_semantic_token(&mut self, token: Token, kind: SemanticTokenKind) {
         if cfg!(feature = "lsp") {
             let span = self.tok_span(token);
-            self.ast.semantic_tokens.add(SemanticToken { span, kind });
+            add_semantic_token(self.ast, SemanticToken { span, kind });
         }
     }
 
     fn emit_semantic_token_span(&mut self, span_id: SpanId, kind: SemanticTokenKind) {
         if cfg!(feature = "lsp") {
             let span = self.ast.spans.get(span_id);
-            self.ast.semantic_tokens.add(SemanticToken { span, kind });
+            add_semantic_token(self.ast, SemanticToken { span, kind });
         }
     }
 

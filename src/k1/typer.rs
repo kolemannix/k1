@@ -15061,11 +15061,7 @@ impl TypedProgram {
         if !should_compile {
             self.ast.functions.get_mut(parsed_function_id).typer_state =
                 ParsedFunctionDeclareOutcome::IfDefedOut;
-            let entire_span = self.ast.spans.get(ast_fn.span);
-            self.ast.semantic_tokens.add(parse::SemanticToken {
-                span: entire_span,
-                kind: parse::SemanticTokenKind::Comment,
-            });
+            self.emit_semantic_token(ast_fn.span, parse::SemanticTokenKind::Comment);
             return Ok(None);
         }
         if is_reloadable && !matches!(ast_fn.linkage, Linkage::Standard) {
@@ -16211,7 +16207,10 @@ impl TypedProgram {
         let result = self.compile_ability_definition_inner(parsed_ability_id, scope_id);
         self.ast.abilities.get_mut(parsed_ability_id).typer_state = match result {
             Ok(Some(ability_id)) => ParsedAbilityDeclareOutcome::Declared(ability_id),
-            Ok(None) => ParsedAbilityDeclareOutcome::IfDefedOut,
+            Ok(None) => {
+                self.emit_semantic_token(span, parse::SemanticTokenKind::Comment);
+                ParsedAbilityDeclareOutcome::IfDefedOut
+            }
             Err(_) => ParsedAbilityDeclareOutcome::Failed,
         };
         result
@@ -16485,7 +16484,11 @@ impl TypedProgram {
         let result = self.declare_ability_impl_inner(parsed_id, scope_id);
         self.ast.ability_impls.get_mut(parsed_id).typer_state = match result {
             Ok(Some(impl_id)) => ParsedAbilityImplDeclareOutcome::Declared(impl_id),
-            Ok(None) => ParsedAbilityImplDeclareOutcome::IfDefedOut,
+            Ok(None) => {
+                let span = self.ast.get_ability_impl(parsed_id).span;
+                self.emit_semantic_token(span, parse::SemanticTokenKind::Comment);
+                ParsedAbilityImplDeclareOutcome::IfDefedOut
+            }
             Err(_) => ParsedAbilityImplDeclareOutcome::Failed,
         };
         result
@@ -17159,6 +17162,11 @@ impl TypedProgram {
                 ) {
                     self.ast.type_defns.get_mut(type_defn_id).typer_state =
                         ParsedTypeDefnDeclareOutcome::IfDefedOut;
+
+                    self.emit_semantic_token(
+                        parsed_type_defn.span,
+                        parse::SemanticTokenKind::Comment,
+                    );
                     return;
                 }
                 let pending_defn =
@@ -17773,11 +17781,23 @@ impl TypedProgram {
         if !self.execute_static_condition(condition, parent_scope) {
             self.ast.namespaces.get_mut(parsed_namespace_id).typer_state =
                 ParsedNamespaceDeclareOutcome::IfDefedOut;
+            let ns_span_id = self.ast.namespaces.get(parsed_namespace_id).span;
+            self.emit_semantic_token(ns_span_id, parse::SemanticTokenKind::Comment);
             return Ok(None);
         }
         let ns_id = self.declare_namespace(parsed_namespace_id, parent_scope)?;
         self.declare_namespaces_in_namespace(parsed_namespace_id, skip_defns);
         Ok(Some(ns_id))
+    }
+
+    fn emit_semantic_token(&mut self, span_id: SpanId, kind: parse::SemanticTokenKind) {
+        if cfg!(feature = "lsp") {
+            let whole_span = self.ast.spans.get(span_id);
+            parse::add_semantic_token(
+                &mut self.ast,
+                parse::SemanticToken { span: whole_span, kind },
+            );
+        }
     }
 
     pub fn typecheck_module(
