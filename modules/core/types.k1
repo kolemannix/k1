@@ -17,7 +17,7 @@ impl print for int-value {
 }
 
 type any = {
-  type-id: type-id,
+  type-id,
   value: ptr
 }
 

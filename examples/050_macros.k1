@@ -7,7 +7,7 @@ fn addgen[a](x: a, y: a): a {
 }
 
 // But we can do better, with some sugar:
-macro addmacro(x, y) {
+macro addmacro(x: code, y: code) {
   "$x + $y"
 }
 
@@ -20,7 +20,7 @@ fn repeat(n: int, expr: code): code {
   for 0.until(n) { cb.write("$expr;") }
   cb.build()
 }
-macro repeatm(n: int, expr) {
+macro repeatm(n: int, expr: code) {
   let cb = code-builder/new()
   for 0.until(n) { cb.write("$expr;") }
   cb.build()

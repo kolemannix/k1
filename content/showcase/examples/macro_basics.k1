@@ -5,11 +5,11 @@ fn next(): int {
   calls
 }
 
-macro twice(e) {
+macro twice(e: code) {
   "$e + $e"
 }
 
-macro repeat(n: int, body) {
+macro repeat(n: int, body: code) {
   let cb = code-builder/new()
   for 0.until(n) {
     cb.line(body)
@@ -17,11 +17,11 @@ macro repeat(n: int, body) {
   cb.build()
 }
 
-macro debug(e) {
+macro debug(e: code) {
   #if false "println($e)" else ""
 }
 
-macro static-for[t](items: span[t], body) {
+macro static-for[t](items: span[t], body: code) {
   let cb = code-builder/new()
   for items {
     cb.write(core/meta/baked-variable("it", it))

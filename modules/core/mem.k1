@@ -38,7 +38,7 @@ ns mem {
     value
   }
 
-  macro new-in-place[t](expr) {
+  macro new-in-place[t](expr: code) {
     let type-id = types/id[t]
     `
     let addr = mem/alloc-t[${type-id.spell()}];
@@ -47,7 +47,7 @@ ns mem {
     `
   }
 
-  macro with-arena(arena, expr) {
+  macro with-arena(arena: code, expr: code) {
     `
     let start-len = mem/arena-stack-len()
     mem/push-arena($arena)

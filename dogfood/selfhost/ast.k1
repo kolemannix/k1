@@ -201,7 +201,7 @@ type code-expr = { stmt: stmt-id, span: src-span }
 type ability-expr = { name: qident, arguments: list[type-arg], span: src-span }
 
 type qability-call = {
-  ability-expr: ability-expr,
+  ability-expr,
   self-type: type-expr-id,
   call-expr: expr-id,
   span: src-span,
@@ -404,7 +404,7 @@ type type-constraint-expr = either {
 type type-param = { name: string-id, constraints: list[type-constraint-expr], span: src-span }
 type type-constraint = { name: string-id, constraint: type-constraint-expr, span: src-span }
 
-type fn-param = { name: string-id, type-expr: ?type-expr-id, span: src-span, is-context: bool }
+type fn-param = { name: string-id, type-expr: type-expr-id, span: src-span, is-context: bool }
 
 type linkage = either {
   standard,
@@ -423,7 +423,7 @@ type function = {
   signature-span: src-span,
   span: src-span,
   name-span: src-span,
-  linkage: linkage,
+  linkage,
   is-native: bool,
   compiler-debug: bool,
   where-constraints: list[type-constraint],
@@ -481,7 +481,7 @@ type ability-defn = {
 }
 
 type ability-impl = {
-  ability-expr: ability-expr,
+  ability-expr,
   generic-impl-params: list[type-param],
   self-type: type-expr-id,
   functions: list[function-id],

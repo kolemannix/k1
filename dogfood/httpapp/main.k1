@@ -44,9 +44,9 @@ ns for db-conn {
 use core/arena
 
 type http-handler-work = {
-  connection: *connection,
+  *connection,
   request: http/request,
-  http-response: ?http-response,
+  ?http-response,
 }
 
 fn do-work(req: *uv/work) {
@@ -141,7 +141,7 @@ fn abandon-response(work: *http-handler-work) {
   }
 }
 
-macro tprintln(arg) {
+macro tprintln(arg: code) {
   if params.tlog `tprintln-log($arg)` else `.{}`
 }
 fn tprintln-log[t: print](t) {
@@ -447,7 +447,7 @@ fn on-new-connection(server: *uv/stream, status: i32) {
 // Framework-provided capabilities, created by the harness and handed to the
 // app's deps constructor
 type framework-deps = {
-  uv-loop: *uv-loop,
+  *uv-loop,
   bus: *pubsub/bus[span[u8]],
 }
 

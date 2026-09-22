@@ -105,7 +105,7 @@ ns pubsub {
   // The channel receiver wearing a topic: registers with the bus in start(),
   // detaches and frees everything it owns in stop().
   type subscription[t] = {
-    bus: *bus[t],
+    *bus[t],
     topic: rc[string],
     chan: *channel[rc[t]],
   }

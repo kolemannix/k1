@@ -15,7 +15,7 @@ use std/pubsub
 
 type deps = {
   config: { jwt-secret: string },
-  db-conn: db-conn,
+  db-conn,
   bus: *pubsub/bus[span[u8]],
 }
 

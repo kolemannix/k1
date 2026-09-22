@@ -19,7 +19,7 @@ ns pre {
   fn make-point(name: string): code {
     "type $name = { x: i32, y: i32 }"
   }
-  macro make-point-macro(name) {
+  macro make-point-macro(name: code) {
     "type $name = { x: i32, y: i32 }"
   }
 }

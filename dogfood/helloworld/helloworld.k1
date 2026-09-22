@@ -20,7 +20,7 @@ ns orders {
     item: string,
     quantity: uint,
     unit-cents: uint,
-    status: status,
+    status,
     country: string,
   }
 

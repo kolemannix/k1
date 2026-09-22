@@ -60,7 +60,7 @@ fn define-impl(name: string, table: span[transition]): code {
   cb.build()
 }
 
-macro define(name, table: span[transition]) {
+macro define(name: code, table: span[transition]) {
   define-impl(name.text(), table)
 }
 

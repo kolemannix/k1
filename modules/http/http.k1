@@ -35,7 +35,7 @@ type header-action = either { proceed, reject }
 
 type parse-state = {
   user-data: ptr,
-  arena: *arena,
+  *arena,
   on-header-complete: *fn(ptr, header) -> header-action,
   on-body-complete: *fn(ptr, span[span[byte]]) -> {},
   url: list[char],
@@ -92,7 +92,7 @@ ns for parser {
 
 // a fully parsed request
 type request = {
-  header: header,
+  header,
   body: span[span[u8]],
 }
 
@@ -191,7 +191,7 @@ fn impl-on-body-complete(parser: *parser): i32 {
 fn parser-init[user-data](
   connection-arena: *arena,
   request-arena: *arena,
-  user-data: *user-data,
+  *user-data,
   on-header-complete: *fn(*user-data, header) -> header-action,
   on-body-complete: *fn(*user-data, span[span[u8]]) -> {}
 ): parser {
@@ -225,7 +225,7 @@ type tick-result = either { ok, paused(size), fail(llhttp/errno) }
 // boundary (or on a rejected header); its payload counts the bytes left
 // unparsed — nonzero only when a client pipelines requests
 fn tick(
-  parser: *parser,
+  *parser,
   bytes: span[u8],
 ): tick-result {
   let result = llhttp/execute(

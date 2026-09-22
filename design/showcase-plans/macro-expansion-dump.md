@@ -232,5 +232,4 @@ test_suite.rs:118, lsp_support.rs:610. No `CompilerConfig` field.
 
 ~1 day. static_exec.rs ~100 lines (mostly moved); typer/report.rs ~30;
 typer.rs/ir.rs ~15, net negative; compiler.rs + 4 bins ~10; docs 2 spots +
-3 showcase paragraphs; tests ~80. No `EmittedSource` field change, no
-`SNAP_MAGIC` bump.
+3 showcase paragraphs; tests ~80. No `EmittedSource` field change.

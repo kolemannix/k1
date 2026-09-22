@@ -187,12 +187,10 @@ ns for parser {
   }
 
   fn expect-fn-param(self: *parser, is-context: bool): result[ast/fn-param, perror] {
-    let it = self.expect-ident().try
-    let type-expr: ?ast/type-expr-id = if self.maybe-consume(:colon) is :some _ {
-      :some(self.expect-type-expression().try)
-    } else :none
-    let span = self.extend-tok-to-here(it.tok)
-    :ok(.{ name = it.name, type-expr, span, is-context })
+    let start = self.peek()
+    let it = self.expect-named-or-punned("parameter").try
+    let span = self.extend-tok-to-here(start)
+    :ok(.{ name = it.name, type-expr = it.type-expr, span, is-context })
   }
 
   fn eat-fn-params(self: *parser): result[{ params: list[ast/fn-param], span: ast/src-span }, perror] {

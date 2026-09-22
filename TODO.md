@@ -22,10 +22,8 @@
 ## grab bag list mid2026
 - [ ] smarter union lowering (see codegen_llvm.rs comment)
 - [ ] add cpu feature string to k1/module
-- [ ] convert the add_module train off of anyhow::error
+- [x] convert the add_module train off of anyhow::error
 - [ ] fork global syntax: `let(mutable) x` -> `global x`. `let x` -> `constant x`. This differentiates from local lets in a more-useful-than-costly way
-- [ ] `self` sugar: `*self` as well as bare `self` inside an `ns for t`
-- [ ] struct type defn sugar as well; `atlas-cursor: *atlas-cursor` -> `*atlas-cursor`
 - [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
 - [ ] compiler cli watch mode: watch the primary module's source dir (or single file). on change, compile from the snapshot right before starting primary module (keep it in memory?)
 - [ ] Generic aliases: `type(alias) pair[t] = { a: t, b: t }` (rejected with an error for now; an alias is transparent, so this is a type-level function)

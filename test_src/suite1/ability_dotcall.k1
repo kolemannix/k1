@@ -1,7 +1,7 @@
 ns ability_dotcall
 
 ability a-source[impl t] {
-  fn next(self: *self): ?t
+  fn next(*self): ?t
 }
 
 type source[t] = {
@@ -31,7 +31,7 @@ impl[t] a-source[t = t] for repeats[t] {
 
 type count-up = { current: int, limit: int }
 impl a-source[t = int] for count-up {
-  fn next(self: *count-up): ?int {
+  fn next(*self): ?int {
     if self.current >= self.limit { return :none }
     self.current = self.current + 1
     :some self.current

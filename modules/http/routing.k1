@@ -34,7 +34,7 @@ fn delete(name: string, path: span[seg]): entry  { .{ method = :delete,  name, p
 fn patch(name: string, path: span[seg]): entry   { .{ method = :patch,   name, path } }
 fn options(name: string, path: span[seg]): entry { .{ method = :options, name, path } }
 
-macro define(base-name, entries: span[entry]) {
+macro define(base-name: code, entries: span[entry]) {
   define-impl(base-name.text(), entries)
 }
 

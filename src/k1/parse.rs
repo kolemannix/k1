@@ -170,7 +170,6 @@ impl ParsedId {
 #[derive(Clone, Copy)]
 pub struct ParsedListLiteral {
     pub elements: AstSlice<ParsedExprId>,
-
 }
 
 #[derive(Clone, Copy)]
@@ -178,7 +177,9 @@ pub enum ParsedLiteral {
     Char(u8),
     /// The digits (and optional sign/suffix) alone; the value is parsed from
     /// this text, while the node's span may widen to cover parens or a type hint
-    Numeric { text_span: SpanId },
+    Numeric {
+        text_span: SpanId,
+    },
     Bool(bool),
     String(StringId),
 }
@@ -261,7 +262,6 @@ impl ParsedCall {
 pub struct ParsedExprCall {
     pub called_expr: ParsedExprId,
     pub args: AstSlice<ParsedCallArg>,
-
 }
 
 #[derive(Clone, Copy)]
@@ -300,13 +300,11 @@ pub struct BinaryOp {
     pub operator_span: SpanId,
     pub lhs: ParsedExprId,
     pub rhs: ParsedExprId,
-
 }
 
 #[derive(Clone, Copy)]
 pub struct ParsedNot {
     pub expr: ParsedExprId,
-
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -502,7 +500,6 @@ pub struct FieldAccess {
     pub field_name: StringId,
     pub type_args: AstSlice<NamedTypeArg>,
     pub field_name_span: SpanId,
-
 }
 
 #[derive(Clone, Copy)]
@@ -528,7 +525,6 @@ pub struct StructValueField {
 /// ^.......................^ fields
 pub struct ParsedStruct {
     pub fields: AstSlice<StructValueField>,
-
 }
 impl_copy_if_small!(16, ParsedStruct);
 
@@ -539,14 +535,12 @@ pub struct ParsedVariant {
     /// The `:name` component alone, for LSP entities and name-level errors
     pub name_span: SpanId,
     pub payload: Option<ParsedExprId>,
-
 }
 
 #[derive(Clone, Copy)]
 pub struct ParsedIsExpr {
     pub target_expression: ParsedExprId,
     pub pattern: ParsedPatternId,
-
 }
 
 #[derive(Copy, Clone)]
@@ -585,7 +579,6 @@ pub struct ParsedLambda {
     pub arguments: AstSlice<LambdaArgDefn>,
     pub return_type: Option<ParsedTypeExprId>,
     pub body: ParsedExprId,
-
 }
 
 #[derive(Clone, Copy, Default)]
@@ -605,7 +598,6 @@ pub enum InterpolatedStringPart {
 #[derive(Clone, Copy)]
 pub struct ParsedInterpolatedString {
     pub parts: AstSlice<InterpolatedStringPart>,
-
 }
 
 #[derive(Clone, Copy)]
@@ -637,7 +629,6 @@ pub struct ParsedStaticExpr {
     pub compile_condition: Option<ParsedExprId>,
     pub parameter_names: AstSlice<IdentSpanned>,
     pub start_span: SpanId,
-
 }
 
 /// While ParsedCode is an expression type, it can hold
@@ -647,7 +638,6 @@ pub struct ParsedStaticExpr {
 #[derive(Clone, Copy)]
 pub struct ParsedCode {
     pub parsed_stmt: ParsedStmtId,
-
 }
 
 /// When you need to refer to a specific ability implementation:
@@ -657,7 +647,6 @@ pub struct ParsedQAbilityCall {
     pub ability_expr: AstHandle<ParsedAbilityExpr>,
     pub self_name: ParsedTypeExprId,
     pub call_expr: ParsedExprId,
-
 }
 
 static_assert_size!(ParsedExpr, 28);
@@ -767,34 +756,29 @@ pub enum ParsedExpr {
 #[derive(Clone, Copy)]
 pub struct ParsedReturn {
     pub value: Option<ParsedExprId>,
-
 }
 
 #[derive(Clone, Copy)]
 pub struct ParsedBreak {
     pub label: Option<StringId>,
     pub value: Option<ParsedExprId>,
-
 }
 
 #[derive(Clone, Copy)]
 pub struct ParsedContinue {
     pub label: Option<StringId>,
-
 }
 
 #[derive(Clone, Copy)]
 pub struct ParsedTypeHint {
     pub inner: ParsedExprId,
     pub ty: ParsedTypeExprId,
-
 }
 
 #[derive(Clone, Copy)]
 pub struct ParsedIndex {
     pub base: ParsedExprId,
     pub key: ParsedExprId,
-
 }
 
 impl ParsedExpr {
@@ -893,20 +877,17 @@ pub struct ParsedWhileExpr {
     pub label: Option<StringId>,
     pub cond: ParsedExprId,
     pub body: ParsedExprId,
-
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct ParsedLoopExpr {
     pub label: Option<StringId>,
     pub body: ParsedBlock,
-
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct ParsedFor {
     pub inner: AstHandle<ForExpr>,
-
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1231,15 +1212,9 @@ pub struct ParsedMacro {
 impl ParsedFunction {}
 
 #[derive(Clone, Copy)]
-pub enum ParsedFnParamType {
-    Shorthand,
-    Expr(ParsedTypeExprId),
-}
-
-#[derive(Clone, Copy)]
 pub struct ParsedFnParam {
     pub name: StringId,
-    pub type_expr: ParsedFnParamType,
+    pub type_expr: ParsedTypeExprId,
     pub span: SpanId,
     pub modifiers: FnArgDefModifiers,
 }
@@ -1539,6 +1514,7 @@ pub enum SemanticTokenKind {
     Function,
     Namespace,
     Operator,
+    Comment,
 }
 nz_u32_id!(SemanticTokenId);
 #[derive(Clone, Copy)]
@@ -2760,25 +2736,17 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     #[inline]
-    fn emit_semantic_token(&mut self, token: Token, kind: SemanticTokenKind) -> SemanticTokenId {
+    fn emit_semantic_token(&mut self, token: Token, kind: SemanticTokenKind) {
         if cfg!(feature = "lsp") {
             let span = self.tok_span(token);
-            self.ast.semantic_tokens.add(SemanticToken { span, kind })
-        } else {
-            SemanticTokenId::PENDING
+            self.ast.semantic_tokens.add(SemanticToken { span, kind });
         }
     }
 
-    fn emit_semantic_token_span(
-        &mut self,
-        span_id: SpanId,
-        kind: SemanticTokenKind,
-    ) -> SemanticTokenId {
+    fn emit_semantic_token_span(&mut self, span_id: SpanId, kind: SemanticTokenKind) {
         if cfg!(feature = "lsp") {
             let span = self.ast.spans.get(span_id);
-            self.ast.semantic_tokens.add(SemanticToken { span, kind })
-        } else {
-            SemanticTokenId::PENDING
+            self.ast.semantic_tokens.add(SemanticToken { span, kind });
         }
     }
 
@@ -2811,7 +2779,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     debug_assert_eq!(bytes.len(), 3);
                     let byte = bytes[1];
                     let sp = self.tok_span_id(first);
-                    Ok(Some(self.add_expression(ParsedExpr::Literal(ParsedLiteral::Char(byte)), sp)))
+                    Ok(Some(
+                        self.add_expression(ParsedExpr::Literal(ParsedLiteral::Char(byte)), sp),
+                    ))
                 }
             }
             k if k.is_string() => Ok(Some(self.expect_string()?)),
@@ -3084,10 +3054,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn expect_struct_type_field(&mut self) -> ParseResult<StructTypeField> {
-        let (name_token, name) = self.expect_ident()?;
-        self.expect_kind(K::Colon)?;
-        let type_expr = self.expect_type_expression()?;
-        Ok(StructTypeField { name, name_span: self.tok_span_id(name_token), type_expr })
+        let (name, name_span, type_expr) = self.expect_named_or_punned("field")?;
+        Ok(StructTypeField { name, name_span, type_expr })
     }
 
     fn expect_type_expression(&mut self) -> ParseResult<ParsedTypeExprId> {
@@ -3467,7 +3435,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 self.advance();
                 let ty = self.expect_type_expression()?;
                 let span = self.extend_to_here(self.get_expression_span(result));
-                Some(self.add_expression(ParsedExpr::TypeHint(ParsedTypeHint { inner: result, ty }), span))
+                Some(self.add_expression(
+                    ParsedExpr::TypeHint(ParsedTypeHint { inner: result, ty }),
+                    span,
+                ))
             } else {
                 None
             };
@@ -3820,7 +3791,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let label = self.parse_loop_label()?;
                 let body = self.expect_block(ParsedBlockKind::LoopBody)?;
                 let span = self.extend_tok_span(first, body.span);
-                Ok(Some(self.add_expression(ParsedExpr::Loop(ParsedLoopExpr { label, body }), span)))
+                Ok(Some(
+                    self.add_expression(ParsedExpr::Loop(ParsedLoopExpr { label, body }), span),
+                ))
             }
             K::KeywordFor => {
                 let for_expr = self.expect_for_expr(false)?;
@@ -3888,7 +3861,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let span = self.extend_tok_to_here(first);
                 let elements = elements.to_slice_trim(&mut self.ast.mem);
                 Ok(Some(
-                    self.add_expression(ParsedExpr::ListLiteral(ParsedListLiteral { elements }), span),
+                    self.add_expression(
+                        ParsedExpr::ListLiteral(ParsedListLiteral { elements }),
+                        span,
+                    ),
                 ))
             }
             K::BackSlash => {
@@ -4139,7 +4115,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             self.advance_n(2);
             let binding_span = self.tok_span_id(second);
             let binding_expr = self.add_expression(
-                ParsedExpr::Variable(ParsedVariable { name: QIdent::naked(binding_ident, binding_span) }),
+                ParsedExpr::Variable(ParsedVariable {
+                    name: QIdent::naked(binding_ident, binding_span),
+                }),
                 binding_span,
             );
             Some(binding_expr)
@@ -4451,16 +4429,42 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn expect_fn_param(&mut self, is_context: bool) -> ParseResult<ParsedFnParam> {
-        let (name_token, name) = self.expect_ident()?;
-        let type_expr = if self.maybe_consume(K::Colon).is_some() {
-            let type_expr = self.expect_type_expression()?;
-            ParsedFnParamType::Expr(type_expr)
-        } else {
-            ParsedFnParamType::Shorthand
-        };
-        let span = self.extend_tok_to_here(name_token);
+        let start = self.peek();
+        let (name, _name_span, type_expr) = self.expect_named_or_punned("parameter")?;
+        let span = self.extend_tok_to_here(start);
         let modifiers = FnArgDefModifiers::new(is_context);
         Ok(ParsedFnParam { name, type_expr, span, modifiers })
+    }
+
+    fn expect_named_or_punned(
+        &mut self,
+        what: &str,
+    ) -> ParseResult<(StringId, SpanId, ParsedTypeExprId)> {
+        let (first, second) = self.peek_two();
+        if first.kind == K::Ident && second.kind == K::Colon {
+            let (name_token, name) = self.expect_ident()?;
+            self.advance();
+            let name_span = self.tok_span_id(name_token);
+            let type_expr = self.expect_type_expression()?;
+            return Ok((name, name_span, type_expr));
+        }
+        let type_expr = self.expect_type_expression()?;
+        match self.find_type_punned_name(type_expr) {
+            Some(named) => Ok((named.0, named.1, type_expr)),
+            None => Err(self.error(
+                format!("This type does not supply a {what} name; write `name: type`"),
+                first,
+            )),
+        }
+    }
+
+    fn find_type_punned_name(&self, type_expr: ParsedTypeExprId) -> Option<(StringId, SpanId)> {
+        match self.ast.type_exprs.get(type_expr) {
+            ParsedTypeExpr::Reference(r) => self.find_type_punned_name(r.base),
+            ParsedTypeExpr::Optional(o) => self.find_type_punned_name(o.base),
+            ParsedTypeExpr::TypeApplication(app) => Some((app.name.name, app.name.name_span)),
+            _ => None,
+        }
     }
 
     fn eat_fn_params(&mut self) -> ParseResult<(AstSlice<ParsedFnParam>, SpanId)> {

@@ -3,12 +3,12 @@ ns ability_object {
 ability counter[impl t] {
   fn label(_self: *self): string { "counter" }
   fn kind(): string { "counter-kind" }
-  fn bump(self: *self): t
+  fn bump(*self): t
 }
 
 type by-ones = { current: int }
 impl counter[t = int] for by-ones {
-  fn bump(self: *by-ones): int {
+  fn bump(*self): int {
     self.current = self.current + 1
     self.current
   }
@@ -18,7 +18,7 @@ type by-tens = { current: int }
 impl counter[t = int] for by-tens {
   fn label(_self: *by-tens): string { "tens" }
   fn kind(): string { "tens-kind" }
-  fn bump(self: *by-tens): int {
+  fn bump(*self): int {
     self.current = self.current + 10
     self.current
   }
@@ -124,13 +124,13 @@ fn optional-of-dyn() {
 // An ability mixing a generic fn with plain fns: the plain fns dispatch
 // through dyn; the generic one is excluded per-function
 ability mixed {
-  fn plain(self: *self): int
+  fn plain(*self): int
   fn fancy[x](_self: *self, x: x): x { x }
 }
 
 type mixed-impl = { n: int }
 impl mixed for mixed-impl {
-  fn plain(self: *mixed-impl): int { self.n }
+  fn plain(*self): int { self.n }
 }
 
 fn per-fn-exclusion() {
@@ -147,12 +147,12 @@ fn per-fn-exclusion() {
 
 // Every fn generic or self-by-value: no dyn-dispatchable functions at all
 ability undynable {
-  fn only[x](self: *self, x: x): x
+  fn only[x](*self, x: x): x
 }
 
 type undyn-impl = { n: int }
 impl undynable for undyn-impl {
-  fn only[x](self: *undyn-impl, x: x): x { x }
+  fn only[x](*self, x: x): x { x }
 }
 
 fn compile-errors() {

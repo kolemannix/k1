@@ -6,7 +6,7 @@ ability tagged {
 
 type foo = { x: int }
 impl tagged for foo {
-  fn tag(self: foo): int { self.x }
+  fn tag(self): int { self.x }
 }
 
 type box[t: tagged] = { t: t }

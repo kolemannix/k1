@@ -14,10 +14,10 @@ type triple = either {
   c(i64)
 }
 
-#debug fn main(): i32 {
- // i5202 = alloca sum { u8, union { i64 } }
- // i5206 = alloca sum { u8, union { { i64, i64 } } }
+#if false let x: int = 42
+#if true let x: int = 42
 
+#if false fn main(): i32 {
   let p = opt:some .{ x = 10.0, y = 20 }
   let x: ?f32 = :some 42.0
   0

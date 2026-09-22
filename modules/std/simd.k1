@@ -63,7 +63,7 @@ fn map-impl(
   code.build()
 }
 
-macro map[t](name, binding, consts: span[{ name: string, value: i64 }], body) {
+macro map[t](name: code, binding: code, consts: span[{ name: string, value: i64 }], body: code) {
   code/from-string(map-impl(
     name.text(),
     types/name[t],
@@ -116,7 +116,7 @@ fn reduce-impl(
   code.build()
 }
 
-macro reduce[t](name, acc-binding, item-binding, body, identity: i64) {
+macro reduce[t](name: code, acc-binding: code, item-binding: code, body: code, identity: i64) {
   code/from-string(reduce-impl(
     name.text(),
     types/name[t],
@@ -177,6 +177,6 @@ fn first-of-impl(name: string, needles: span[char]): string {
   code.build()
 }
 
-macro first-of(name, needles: span[char]) {
+macro first-of(name: code, needles: span[char]) {
   code/from-string(first-of-impl(name.text(), needles))
 }

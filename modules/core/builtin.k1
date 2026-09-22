@@ -164,7 +164,7 @@ ns types {
     int(int-kind),
     float(float-kind),
     enum({
-      int-kind: int-kind,
+      int-kind,
       values: span[{
         name: string,
         value: int-value,
@@ -182,14 +182,14 @@ ns types {
     struct({
       fields: span[{
         name: string,
-        type-id: type-id,
+        type-id,
         offset: size
       }],
     }),
     union({
       fields: span[{
         name: string,
-        type-id: type-id,
+        type-id,
         offset: size
       }],
     }),

@@ -87,6 +87,20 @@ fn log-message(message: string) {
 }
 ```
 
+A parameter written as a bare type expression names itself after the type's
+base identifier, dropping `*`, `?`, type arguments and any namespace path:
+
+```rust
+fn advance(*atlas-cursor, n: int) {
+  atlas-cursor.x = atlas-cursor.x + n
+}
+
+fn emit(core/code) { ... }   // the parameter is named `code`
+```
+
+A name that cannot be derived that way -- an anonymous struct type, a function
+type, `some t` -- must be written `name: type`.
+
 Use `return value` for early returns; the payload is a full expression, and a
 bare `return` returns unit:
 
@@ -166,7 +180,7 @@ assert(result == .{})
 
 K1 code commonly ends test helpers with `.{}` when the intent is "return unit".
 An empty block `{}` is legal and yields `.{}` — fine as a no-op fn body
-(`fn stop(self: *mut self) {}`) or an empty loop body (`while spinning() {}`).
+(`fn stop(*self) {}`) or an empty loop body (`while spinning() {}`).
 
 ## Variables And Mutation
 
@@ -215,7 +229,7 @@ ability. Lists, buffers, spans, strings, fixlists, spill-lists, and maps
 implement it; arrays are intrinsic, so `arr.[i]` is the element itself and
 reads a by-value array as well as storing into one that is a place. A map
 lookup through `.[k]` crashes on a missing key; `map.get` is the optional
-lookup, `index-opt` the optional index. Implement `index` for `*mut t` when the
+lookup, `index-opt` the optional index. Implement `index` for `*t` when the
 elements live inline in `t`, so the returned reference points into real
 storage rather than into a copy. Implementing `as-span` does not imply
 `index`; a viewable type declares its own impl.
@@ -322,6 +336,13 @@ let width = 50
 let rect = .{ width, height = 20 }
 ```
 
+Struct *types* have the mirror-image shorthand: a field written as a bare type
+expression takes its name from the type, exactly as a function parameter does.
+
+```rust
+type glyph = { *atlas-cursor, ?parent, list[int], count: int }
+```
+
 Use `.with(...)` to copy a struct with selected fields changed:
 
 ```rust
@@ -334,11 +355,15 @@ Attach methods to a type with `ns for`:
 type counter = { value: int }
 
 ns for counter {
-  fn inc(self: *mut counter) {
+  fn inc(*self) {
     self.value = self.value + 1
   }
 }
 ```
+
+Inside `ns for t` -- and inside an `impl` block -- `self` is bound as a type
+name, so `self`, `*self` and `self[t]` are the idiomatic way to spell the
+receiver.
 
 See `test_src/suite1/struct.k1` and
 `test_src/suite1/struct_composition.k1`.
@@ -357,7 +382,7 @@ p.x = 2
 
 let p-ref = p.&
 let x-value: int = p-ref.x
-let x-ref: *mut int = p-ref.x.&
+let x-ref: *int = p-ref.x.&
 p-ref.y = 20
 ```
 
@@ -682,7 +707,7 @@ Collection API naming follows a doctrine:
 - Every allocation is zeroed (zero is initialized). Arena `reset`,
   `pop-to-mark`, and `free` are O(1): the arena tracks a clean watermark and
   zeroes reused bytes lazily when they are next allocated.
-- Mutators take `*mut self` and reuse the verb (`sort`, `reverse`); functional
+- Mutators take `*self` and reuse the verb (`sort`, `reverse`); functional
   variants get `-ed` (`sorted`, `reversed`).
 - Shared collection ops are ability defaults: reads and views on `as-span`
   (`len`, `index-opt`, `first`, `last`, `slice`, `take`, `drop`,

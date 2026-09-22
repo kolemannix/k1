@@ -46,7 +46,7 @@ ns work {
   }
   
   type uv-work-queue = {
-    uv-loop: *uv-loop,
+    *uv-loop,
     async-handle: *uv/async,
     mutex: *uv/mutex,
     submissions: list[uv-work-submission],

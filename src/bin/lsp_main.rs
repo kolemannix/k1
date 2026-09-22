@@ -360,7 +360,8 @@ impl Backend {
 
         let mut source_overrides = fxhash::FxHashMap::default();
         source_overrides.insert(canonical_path, spliced);
-        let lsp_options = LspCompileOptions { source_overrides, completion: true, progress_sink: None };
+        let lsp_options =
+            LspCompileOptions { source_overrides, completion: true, progress_sink: None };
         let args = k1::compiler::Args {
             no_std: false,
             emit_llvm: false,
@@ -864,17 +865,16 @@ impl LanguageServer for Backend {
             source.tokens.len()
         );
         self.with_k1(|k1| {
-            let mut tokens: Vec<SemanticToken> = vec![];
-            let mut prev_line = 1;
-            let mut prev_start_col = 0;
 
             let edited_sources = self.edited_sources.lock().unwrap();
             let ast_for_file: &ParsedProgram = match is_edited {
                 false => &k1.ast,
                 true => edited_sources.get(&file_url).unwrap(),
             };
-            // The goal is to use only 'atoms' to avoid overlaps and backwards movement
-            let mut spans_and_kinds = vec![];
+
+            let capacity = ast_for_file.semantic_tokens.len() + source.trivia.len();
+            let mut tokens: Vec<SemanticToken> = Vec::with_capacity(capacity);
+            let mut spans_and_kinds = Vec::with_capacity(capacity);
             for semantic_token in ast_for_file.semantic_tokens.iter() {
                 if semantic_token.span.file_id == source.file_id {
                     let token_type = match semantic_token.kind {
@@ -885,6 +885,7 @@ impl LanguageServer for Backend {
                         parse::SemanticTokenKind::Function => TokenTypes::Function,
                         parse::SemanticTokenKind::Namespace => TokenTypes::Namespace,
                         parse::SemanticTokenKind::Operator => TokenTypes::Operator,
+                        parse::SemanticTokenKind::Comment => TokenTypes::Comment,
                     };
                     spans_and_kinds.push((semantic_token.span, token_type as u32, 0))
                 }
@@ -902,9 +903,19 @@ impl LanguageServer for Backend {
                     _ => {}
                 }
             }
-            spans_and_kinds.sort_by_key(|(span, _, _)| span.start);
+            spans_and_kinds.sort_unstable_by_key(|(span, token_type, _)| {
+                (span.start, *token_type != TokenTypes::Comment as u32)
+            });
+            let mut comment_end = 0;
+            let mut prev_line = 1;
+            let mut prev_start_col = 0;
             for (span, token_type, bitflags) in spans_and_kinds {
-                // info!("spans_and_kinds sorted {} {}", span.start, span.len);
+                if span.start < comment_end {
+                    continue;
+                }
+                if token_type == TokenTypes::Comment as u32 {
+                    comment_end = span.end()
+                }
                 let length = span.len;
                 let Some(line) = source.get_line_for_span_start(&ast_for_file.mem, span) else {
                     continue;

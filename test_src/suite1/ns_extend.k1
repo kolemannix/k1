@@ -3,13 +3,13 @@ ns ns_extend
 ns foo {
   type baz = { b: int }
   ns for baz {
-    fn get(self: baz): int { self.b }
+    fn get(self): int { self.b }
   }
 }
 
 ns foo {
   ns for baz {
-    fn get2(self: baz): int { self.b }
+    fn get2(self): int { self.b }
   }
 }
 

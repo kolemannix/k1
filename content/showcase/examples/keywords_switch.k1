@@ -210,7 +210,7 @@ fn generate(name: string, words: span[string]): code {
   cb.build()
 }
 
-macro define(name, words: span[string]) {
+macro define(name: code, words: span[string]) {
   generate(name.text(), words)
 }
 

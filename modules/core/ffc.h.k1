@@ -6,7 +6,7 @@ let FFC_OUTCOME_INVALID_INPUT: ffc_outcome = 1
 let FFC_OUTCOME_OUT_OF_RANGE : ffc_outcome = 2
 type ffc_result = {
   // Where parsing stopped
-  ptr: ptr,
+  ptr,
   // The outcome of the call
   outcome: ffc_outcome
 }

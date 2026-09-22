@@ -44,7 +44,7 @@ type encoder-param = either(u32) { mode = 0, quality = 1, lgwin = 2 }
 fn(extern("BrotliEncoderCompress"), lib("brotli")) encoder-compress(
   quality: c-int,
   lgwin: c-int,
-  mode: mode,
+  mode,
   input-size: size,
   input: ptr,
   encoded-size: *size,

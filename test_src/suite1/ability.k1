@@ -20,7 +20,7 @@ ability codec {
 
 impl codec for string {
   fn a-const(): u8 { 10 }
-  fn write(self: string): span[u8] {
+  fn write(self): span[u8] {
     self.span().as-byte-span()
   }
   fn read(buffer: span[u8]): string {

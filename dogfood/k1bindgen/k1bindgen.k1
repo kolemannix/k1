@@ -253,7 +253,7 @@ fn write-layout-assertions(context w: *string-builder)(name: string, type: k1-ty
 }
 
 type layout = {
-  size: size,
+  size,
   align: size,
 }
 
@@ -266,7 +266,7 @@ type k1-defn = {
     function({ fn-type: fn-type })
   },
   error: ?string,
-  layout: ?layout,
+  ?layout,
 }
 
 type fn-type = {
@@ -423,7 +423,7 @@ type bindgen-state = {
   include-names: set[string],
   opaque-names: set[string],
 
-  name-config: name-config
+  name-config
 }
 
 ns for bindgen-state {

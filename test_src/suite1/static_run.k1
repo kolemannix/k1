@@ -220,7 +220,7 @@ fn test() {
   .{}
 }
 
-macro static-for[t](items: span[t], expr) {
+macro static-for[t](items: span[t], expr: code) {
   let code = code-builder/new()
   for items {
     code.writeln(core/meta/baked-variable("it", it))

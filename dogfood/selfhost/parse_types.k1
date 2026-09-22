@@ -337,10 +337,33 @@ ns for parser {
   }
 
   fn expect-struct-type-field(self: *parser): result[ast/struct-type-field, perror] {
-    let it = self.expect-ident().try
-    let _ = self.expect-kind(:colon).try
+    let it = self.expect-named-or-punned("field").try
+    :ok(.{ name = it.name, name-span = it.name-span, type-expr = it.type-expr })
+  }
+
+  fn punned-name(self: *parser, type-expr: ast/type-expr-id): ?{ name: ast/string-id, span: ast/src-span } {
+    if self.program.get-type-expr(type-expr).* is {
+      :reference r -> self.punned-name(r.base),
+      :optional-type o -> self.punned-name(o.base),
+      :type-application a -> :some(.{ name = a.name.name, span = a.name.name-span }),
+      _ -> :none,
+    }
+  }
+
+  fn expect-named-or-punned(self: *parser, what: string): result[{ name: ast/string-id, name-span: ast/src-span, type-expr: ast/type-expr-id }, perror] {
+    let first = self.peek()
+    let second = self.peek-at(1)
+    if first.kind is :ident and second.kind is :colon {
+      let it = self.expect-ident().try
+      self.advance()
+      let type-expr = self.expect-type-expression().try
+      return :ok(.{ name = it.name, name-span = it.tok.span(), type-expr })
+    }
     let type-expr = self.expect-type-expression().try
-    :ok(.{ name = it.name, name-span = it.tok.span(), type-expr })
+    if self.punned-name(type-expr) is {
+      :some named -> :ok(.{ name = named.name, name-span = named.span, type-expr }),
+      :none -> :err(make-error("This type does not supply a $what name; write `name: type`", first)),
+    }
   }
 
   fn expect-type-expression(self: *parser): result[ast/type-expr-id, perror] {

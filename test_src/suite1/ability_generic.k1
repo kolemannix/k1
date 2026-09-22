@@ -1,18 +1,18 @@
 ns ability_generic {
 
   impl g-add[rhs = i32, output = i32] for i32 {
-    fn gadd(self: i32, rhs: rhs): i32 { self + rhs }
+    fn gadd(self, rhs: rhs): i32 { self + rhs }
   }
 
   impl g-add[rhs = i64, output = i64] for i32 {
-   fn gadd(self: i32, rhs: i64): i64 { self.widen[i64] + rhs }
+   fn gadd(self, rhs: i64): i64 { self.widen[i64] + rhs }
   }
 
   ns foob {
     type(alias) my-int = int
 
     impl g-add[rhs = my-int, output = my-int] for my-int {
-      fn gadd(self: my-int, rhs: my-int): my-int { self + rhs }
+      fn gadd(self, rhs: my-int): my-int { self + rhs }
     }
   }
 
@@ -34,7 +34,7 @@ ns ability_generic {
   ability to[to] { fn to(self): to }
 
   impl[t: show] to[to = string] for t {
-    fn to(self: t): string { self.show() }
+    fn to(self): string { self.show() }
   }
 
   impl[u, t: to[to = u]] from[f = t] for u {
@@ -48,7 +48,7 @@ ns ability_generic {
     fn to(self): string { show/show[i64](self) }
   }
   impl to[to = char] for byte {
-    fn to(self: byte): char { self.as-char() }
+    fn to(self): char { self.as-char() }
   }
 
   // Blanket param deliberately reuses the ability's impl-param name 'w'

@@ -128,8 +128,9 @@ for compile-time execution, codegen_llvm for binaries.
   runtime structs, libffi calls into native libs and dlsym'd externs.
 - `codegen_llvm.rs`: inkwell LLVM backend, parallel codegen units, ThinLTO
   via `src/thinlto_shim.cpp`.
-- `snap.rs`: memory snapshot format (`SNAP_MAGIC` version) for the disk cache
-  and LSP restores. Bump the magic when pooled layouts change.
+- `snap.rs`: memory snapshot format for the disk cache and LSP restores. The
+  header carries `BUILD_ID`, which already invalidates every snapshot when
+  `src/` changes; `SNAP_MAGIC` needs no bump.
 - `kmem.rs`: the never-freed arena (`Mem`, `List`, `Dlist`, handles) most
   compiler data lives in. `vpool.rs`/`vecpool.rs`: id-indexed pools.
   `fixmap.rs`, `rawref.rs`, `unique_stack.rs`, `clock.rs`: small utilities.

@@ -1,7 +1,7 @@
 ns all_out_of_order
 
 impl say-hello for foo {
-  fn hello(self: foo): my-string { 
+  fn hello(self): my-string { 
     .{ s = self.name  }
   }
 }

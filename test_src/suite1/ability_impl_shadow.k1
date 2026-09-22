@@ -6,7 +6,7 @@ ns ability_impl_shadow
 // binds are FE convenience; the id-keyed substitutions carry the bindings.
 
 ability shadow-src[impl t] {
-  fn next(self: *self): ?t
+  fn next(*self): ?t
 }
 
 type rc[t] = { data: t }

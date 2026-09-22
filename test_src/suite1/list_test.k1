@@ -121,7 +121,7 @@ fn test-sort() {
 
 type sort-rec = { key: int, ord: int }
 impl comparable for sort-rec {
-  fn compare(self: sort-rec, other: sort-rec): ordering { self.key.compare(other.key) }
+  fn compare(self, other: sort-rec): ordering { self.key.compare(other.key) }
 }
 
 fn assert-ascending(values: list[int]) {

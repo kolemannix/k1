@@ -61,8 +61,8 @@ use crate::parse::{
     self, AstHandle, AstSlice, BinaryOpKind, FileId, ForExpr, IdentPool, IdentSpanned,
     InterpolatedStringPart, NamedTypeArg, NumericWidth, ParsedAbilityExpr, ParsedAbilityId,
     ParsedAbilityImplId, ParsedBlock, ParsedBlockKind, ParsedBreak, ParsedCall, ParsedCallArg,
-    ParsedContinue, ParsedExpr, ParsedExprId, ParsedFnParamType, ParsedFunctionId, ParsedGlobalId,
-    ParsedId, ParsedIfExpr, ParsedListLiteral, ParsedLiteral, ParsedLoopExpr, ParsedNamespaceId,
+    ParsedContinue, ParsedExpr, ParsedExprId, ParsedFunctionId, ParsedGlobalId, ParsedId,
+    ParsedIfExpr, ParsedListLiteral, ParsedLiteral, ParsedLoopExpr, ParsedNamespaceId,
     ParsedPattern, ParsedPatternId, ParsedProgram, ParsedStaticBlockKind, ParsedStaticExpr,
     ParsedStmt, ParsedStmtId, ParsedTypeConstraint, ParsedTypeConstraintExpr, ParsedTypeDefnId,
     ParsedTypeExpr, ParsedTypeExprId, ParsedTypeParam, ParsedUseId, ParsedVariable, ParsedVariant,
@@ -6179,7 +6179,6 @@ impl TypedProgram {
         span: SpanId,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
-
         if !field_access.type_args.is_empty() {
             // Treat it like a call; foo.<field_name>[u32]
             let args = self.ast.mem.pushn(&[ParsedCallArg {
@@ -11928,8 +11927,7 @@ impl TypedProgram {
                     known_args.as_ref(),
                     ctx,
                     &mut stashed_args,
-                )
-                {
+                ) {
                     Ok(resolution) => resolution,
                     Err(e) => {
                         self.record_call_arg_site(marker_arg_index, None, ctx.scope_id);
@@ -15063,6 +15061,11 @@ impl TypedProgram {
         if !should_compile {
             self.ast.functions.get_mut(parsed_function_id).typer_state =
                 ParsedFunctionDeclareOutcome::IfDefedOut;
+            let entire_span = self.ast.spans.get(ast_fn.span);
+            self.ast.semantic_tokens.add(parse::SemanticToken {
+                span: entire_span,
+                kind: parse::SemanticTokenKind::Comment,
+            });
             return Ok(None);
         }
         if is_reloadable && !matches!(ast_fn.linkage, Linkage::Standard) {
@@ -15157,19 +15160,8 @@ impl TypedProgram {
                 is_direct_function_parameter: true,
                 ..EvalTypeExprContext::EMPTY
             };
-            let type_id = match fn_param.type_expr {
-                ParsedFnParamType::Shorthand => {
-                    let type_app = parse::TypeApplication {
-                        name: QIdent::naked(fn_param.name, fn_param.span),
-                        args: MSlice::empty(),
-                        span: fn_param.span,
-                    };
-                    self.eval_type_application(type_app, fn_scope_id, param_type_context)?
-                }
-                ParsedFnParamType::Expr(parsed_expr) => {
-                    self.eval_type_expr_ext(parsed_expr, fn_scope_id, param_type_context)?
-                }
-            };
+            let type_id =
+                self.eval_type_expr_ext(fn_param.type_expr, fn_scope_id, param_type_context)?;
 
             // Handle 'existential' type parameters. These are value parameters that
             // introduce a type parameter 'for free' inline.
@@ -15669,14 +15661,8 @@ impl TypedProgram {
         let mut param_types: List<FnParamType, _> = self.mem.new_list(param_count);
         let mut params = self.mem.new_list(param_count);
         for fn_param in self.ast.mem.getn(params_slice).iter() {
-            let (type_id, is_code) = match fn_param.type_expr {
-                ParsedFnParamType::Shorthand => (code_type, true),
-                ParsedFnParamType::Expr(type_expr) => {
-                    let t = self.eval_type_expr(type_expr, fn_scope_id)?;
-                    let is_code = t == code_type;
-                    (t, is_code)
-                }
-            };
+            let type_id = self.eval_type_expr(fn_param.type_expr, fn_scope_id)?;
+            let is_code = type_id == code_type;
             if let Type::FunctionTypeParameter(_ftp) = self.types.get(type_id) {
                 kbail!(
                     self,

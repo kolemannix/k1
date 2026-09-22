@@ -25,7 +25,7 @@ ability to-scalar[out: pred pre/is-scalar] {
 }
 
 impl to-scalar[out = int] for string {
-  fn to-scalar(self: string): int { self.len() }
+  fn to-scalar(self): int { self.len() }
 }
 
 fn foo[t: pred pre/no-password](t: t) {

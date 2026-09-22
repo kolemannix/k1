@@ -39,7 +39,7 @@ ns for task-state {
 
 type task-work[t, params] = {
   state: *task-state[t],
-  params: params,
+  params,
   handler: *fn(params) -> t,
 }
 
@@ -47,7 +47,7 @@ ns for task {
   fn spawn[t, params](
     l: *uv-loop,
     handler: *fn(params) -> t,
-    params: params,
+    params,
   ): task[t] {
     let state: *task-state[t] = heap.new(.{
       req      = heap.alloc-t[uv/work],

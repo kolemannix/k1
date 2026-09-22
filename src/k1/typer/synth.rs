@@ -570,7 +570,11 @@ impl TypedProgram {
         self.exprs.add(TypedExpr::Call { call_id }, type_id, span)
     }
 
-    pub(super) fn synth_phony_expected_type(&mut self, expected_type: Option<TypeId>, span: SpanId) -> TypedExprId {
+    pub(super) fn synth_phony_expected_type(
+        &mut self,
+        expected_type: Option<TypeId>,
+        span: SpanId,
+    ) -> TypedExprId {
         self.synth_phony(expected_type.unwrap_or(self.builtin_types.empty), span)
     }
 
@@ -759,9 +763,7 @@ impl TypedProgram {
                     let parsed_expr = self.ast.exprs.get(*expr_id);
                     let expr_span = self.ast.exprs.get_span(*expr_id);
                     let naked_variable_name = match parsed_expr {
-                        ParsedExpr::Variable(ParsedVariable { name, .. })
-                            if !name.has_path() =>
-                        {
+                        ParsedExpr::Variable(ParsedVariable { name, .. }) if !name.has_path() => {
                             Some(name.name)
                         }
                         _ => None,

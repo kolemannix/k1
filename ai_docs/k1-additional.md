@@ -2,7 +2,7 @@ Disclaimer: this file is written for and maintained by LLMs.
 
 # K1 Additional Feature Map
 
-This is a companion to `docs/k1-syntax-basics.md`. It lists language surfaces
+This is a companion to `ai_docs/k1-syntax-basics.md`. It lists language surfaces
 that are exercised in `test_src` but are not yet fully explained in the basics
 guide. Use it as a scan checklist before editing K1 code or expanding the docs.
 
@@ -11,7 +11,7 @@ guide. Use it as a scan checklist before editing K1 code or expanding the docs.
 K1 supports context parameter lists before ordinary parameters:
 
 ```rust
-fn add-tracked(context hist: *mut list[string])(x: int, y: int): int {
+fn add-tracked(context hist: *list[string])(x: int, y: int): int {
   hist.push("{x} + {y}")
   x + y
 }
@@ -26,7 +26,7 @@ add-tracked(context history)(1, 2)
 or bind them locally for implicit passing:
 
 ```rust
-let(context) history: *mut list[string] = core/mem/new([])
+let(context) history: *list[string] = core/mem/new([])
 add-tracked(1, 2)
 ```
 
@@ -281,20 +281,20 @@ either direction.
 
 ## Macros
 
-A `macro` is a compile-time function whose call sites pass code by source: bare
-params receive the argument as a `code` value (source text plus its span),
-annotated params are statically evaluated (any type annotation on a macro param
-implies compile-time), and the returned `code` is compiled in place of the
-call. The return type is implicit, and is `code`, so a string template in
+A `macro` is a compile-time function whose call sites pass code by source: a
+param of type `code` receives the argument as source text plus its span, a param
+of any other type is statically evaluated, and the returned `code` is compiled
+in place of the call. Every macro param is annotated -- there is no bare-param
+shorthand; a bare param name is read as a type, like everywhere else. The return type is implicit, and is `code`, so a string template in
 return position elaborates as `code` with its spans intact. Callers write
 plain expressions:
 
 ```rust
-macro debug(e) {
+macro debug(e: code) {
   #if build-debug "log/debug($e)" else ""
 }
 
-macro repeat(n: int, body) {
+macro repeat(n: int, body: code) {
   let cb = code-builder/new()
   for 0.until(n) {
     cb.code(body)
@@ -321,7 +321,7 @@ compiled as definitions in place:
 $pre/make-point(my-point)
 
 ns pre {
-  macro make-point(name) {
+  macro make-point(name: code) {
     "type $name = { x: i32, y: i32 }"
   }
 }
@@ -498,11 +498,11 @@ See `test_src/suite1/ability_default_fns.k1`,
 `dyn[ability[args...]]` erases an implementor to a dynamically-dispatched
 object: `{ state: ptr, one fn ptr per dispatchable ability function }`. All
 ability parameters must be bound in the type. Construction is always
-explicit — from `*mut s` it wraps the pointer; from a value it allocates in
+explicit — from `*s` it wraps the pointer; from a value it allocates in
 the ambient mode first:
 
 ```rust
-let d = state.to-dyn[source[t = u8]]()      // from *mut s, no alloc
+let d = state.to-dyn[source[t = u8]]()      // from *s, no alloc
 let d: dyn[source[t = u8]] = state.to-dyn() // target from expected type
 let d = state.as[dyn[source[t = u8]]]()     // as-cast form
 let d = my-value.to-dyn[source[t = u8]]()   // value: mem/new then erase

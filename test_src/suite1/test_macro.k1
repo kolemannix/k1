@@ -12,11 +12,11 @@ fn incr-repeat() {
   repeat-counter = repeat-counter + 1
 }
 
-macro twice(e) {
+macro twice(e: code) {
   "$e + $e"
 }
 
-macro repeat(n: int, body) {
+macro repeat(n: int, body: code) {
   let cb = code-builder/new()
   for 0.until(n) {
     cb.code(body)
@@ -25,7 +25,7 @@ macro repeat(n: int, body) {
   cb.build()
 }
 
-macro debug(e) {
+macro debug(e: code) {
   #if false "println($e)" else ""
 }
 

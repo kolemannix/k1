@@ -6,7 +6,7 @@
 ns response-writer {
 
   type driver = {
-    connection: *connection,
+    *connection,
     stream: dyn[source[t = u8]],
     write-req: *uv/write,
     bufs: list[uv/buf],

@@ -4,7 +4,7 @@ type patch-pair[t] = { first: t, second: t }
 type nom-point = { x: int, y: int }
 type nom-wrap[t] = { inner: t }
 ns for nom-point {
-  fn sum(self: nom-point): int { self.x + self.y }
+  fn sum(self): int { self.x + self.y }
 }
 fn identity[t](v: t): t { v }
 
@@ -22,8 +22,8 @@ fn basic-struct(): int {
 
 type foo = { x: int, y: bool }
 ns for foo {
-  fn get-value(self: foo): int { self.x }
-  fn set-value(self: *foo, x: int) { self.x = x; }
+  fn get-value(self): int { self.x }
+  fn set-value(*self, x: int) { self.x = x; }
   fn new(x: int): foo { .{ x = x, y = false } }
 }
 

@@ -51,7 +51,7 @@ type channel[t] = {
   cap-weight: size,
   weight-fn: *fn(t) -> size,
   drop-fn: *fn(t) -> {},
-  waker: ?waker,
+  ?waker,
   pending-wake: bool,
   failure: ?string,
   closed: bool,

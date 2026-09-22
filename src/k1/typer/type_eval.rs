@@ -275,6 +275,8 @@ impl TypedProgram {
 
         if let Some(companion_namespace_id) = companion_namespace_id {
             self.namespaces.get_mut(companion_namespace_id).companion_type_id = Some(type_id);
+            let companion_scope_id = self.namespaces.get(companion_namespace_id).scope_id;
+            let _ = self.scopes.add_type(companion_scope_id, self.ast.idents.b.self_, type_id);
         }
         let name = parsed_type_defn.name;
         let added = self.scopes.add_type(namespace_scope_id, name, type_id);
@@ -494,10 +496,8 @@ impl TypedProgram {
                         let tag_int = match v.explicit_value {
                             None => next_tag,
                             Some(explicit_value) => {
-                                let parsed = self.eval_integer_value(
-                                    explicit_value,
-                                    Some(tag_type.type_id()),
-                                )?;
+                                let parsed = self
+                                    .eval_integer_value(explicit_value, Some(tag_type.type_id()))?;
                                 parsed
                             }
                         };
@@ -539,10 +539,8 @@ impl TypedProgram {
                         let tag_value = match v.explicit_value {
                             None => next_tag,
                             Some(explicit_value) => {
-                                let parsed = self.eval_integer_value(
-                                    explicit_value,
-                                    Some(tag_type.type_id()),
-                                )?;
+                                let parsed = self
+                                    .eval_integer_value(explicit_value, Some(tag_type.type_id()))?;
                                 parsed
                             }
                         };

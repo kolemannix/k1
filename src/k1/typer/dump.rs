@@ -1169,7 +1169,11 @@ impl TypedProgram {
         s
     }
 
-    pub fn display_pattern<W: std::fmt::Write + ?Sized>(&self, pattern: TypedPatternId, w: &mut W) -> std::fmt::Result {
+    pub fn display_pattern<W: std::fmt::Write + ?Sized>(
+        &self,
+        pattern: TypedPatternId,
+        w: &mut W,
+    ) -> std::fmt::Result {
         match self.patterns.get(pattern) {
             TypedPattern::LiteralChar(value, _) => write!(w, "{value}"),
             TypedPattern::LiteralInteger(value_id, _) => {

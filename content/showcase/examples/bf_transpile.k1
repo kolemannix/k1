@@ -68,7 +68,7 @@ fn transpile(name: string, program: string): code {
   cb.build()
 }
 
-macro define(name, program: string) {
+macro define(name: code, program: string) {
   transpile(name.text(), program)
 }
 

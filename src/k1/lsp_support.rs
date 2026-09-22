@@ -903,7 +903,7 @@ fn use-it(): int {
 ns lsp-macro
 
 fn incr(): int { 1 }
-macro twice(e) {
+macro twice(e: code) {
   "$e + $e"
 }
 fn use-it(): int {
@@ -931,7 +931,7 @@ fn use-it(): int {
     const SAME_LINE_SRC: &str = r#"
 ns lsp-macro-same-line
 
-macro twice(e) {
+macro twice(e: code) {
   "$e + $e"
 }
 fn use-it(): int {
@@ -959,7 +959,7 @@ fn use-it(): int {
 ns lsp-macro-completion
 
 type point = { x: int, y: int }
-macro twice(e) {
+macro twice(e: code) {
   "$e + $e"
 }
 fn use-it(): int {
@@ -975,7 +975,7 @@ fn use-it(): int {
 $pre/make-fn(my-fn)
 
 ns pre {
-  macro make-fn(name) {
+  macro make-fn(name: code) {
     "fn $name(): int { 7 }"
   }
 }

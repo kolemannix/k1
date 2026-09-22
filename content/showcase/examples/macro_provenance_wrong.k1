@@ -1,4 +1,4 @@
-macro swap(a, b) {
+macro swap(a: code, b: code) {
   `
   let tmp = $a
   $a = $b
