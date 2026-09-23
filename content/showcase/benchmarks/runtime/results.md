@@ -29,7 +29,7 @@ For Java and C# that whole-process number also includes JVM/CLR startup and JIT 
 Build flags:
 
 ```text
-k1     k1 --optimize --cache false build <file>.k1   (the default-build row is plain `k1 --cache false build`)
+k1     k1 --optimize --no-cache build <file>.k1   (the default-build row is plain `k1 --no-cache build`)
 c      clang -O2
 rust   rustc --edition 2021 -C opt-level=3
 go     go build
@@ -145,7 +145,7 @@ absent: 0 newlines: 524672 delims: 2144 index-sum: 288368865104 which-sum: 2136
 
 What each language runs:
 
-- k1: (1)(2) `span[u8].contains`/`position`: `buffer/position-byte`, a `k1/simd-bytes`-wide `vector` compare loop, 16 lanes on arm64. (3) `$std/simd/first-of(delims, [',', ':', '"'])`, a macro that generates a namespace with a `scan(s, from)` fn: one 16-lane pass computing three equality masks per chunk.
+- k1: (1)(2) `span[u8].contains`/`position`: `buffer/position-lanes`, a `k1/simd-bytes`-wide `vector` compare loop unrolled 4x (four 16-lane compares, one OR-reduce per 64 bytes on arm64). (3) `$std/simd/first-of(delims, [',', ':', '"'])`, a macro that generates a namespace with a `scan(data, from)` fn: per 16-byte chunk, three lane compares ORed into one `any()` test, with lane masks decoded only on a hit.
 - c: (1)(2) `memchr` from libSystem (hand-written NEON). (3) three `memchr` calls per segment, one per delimiter, taking the nearest hit: with delimiters this sparse each segment is scanned several times over, but still at NEON speed. `strpbrk` over a NUL-terminated copy is the C-string idiom; it is a byte-at-a-time table loop and was an order of magnitude slower in a side test.
 - rust: (1) `<[u8]>::contains`, which std routes to `core::slice::memchr` (a SWAR word-at-a-time loop, no SIMD). (2)(3) `iter().position(..)`, a scalar loop; the `memchr` crate would give SIMD, no crates are used.
 - go: (1)(2) `bytes.IndexByte` (NEON assembly in the runtime). (3) `bytes.IndexAny`, a scalar loop over an ASCII bitset.

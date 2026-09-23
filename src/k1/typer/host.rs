@@ -636,11 +636,7 @@ impl TypedProgram {
                 planner.plan.module_dir(&entry.module),
                 BUILD_FILE_NAME
             );
-            let dir_value = self.static_values.add_string(req.module_dir);
-            let ctx_value = self.encode_struct(
-                setup_ctx_type,
-                &[("module-dir", dir_value), ("build", build_value)],
-            );
+            let ctx_value = self.encode_struct(setup_ctx_type, &[("build", build_value)]);
             let frame = self.trace_push(TraceKind::SetupFn, req.module_name.as_u32(), 0);
             let ran = self.execute_static_function(setup_fn, &[ctx_value], fn_span);
             self.trace_pop(frame);

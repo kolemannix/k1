@@ -1,6 +1,7 @@
 ns newline-stmt
 
 type point = { x: int, y: int }
+type gate = { open: bool }
 
 fn origin(): point {
   .{ x = 0, y = 0 }
@@ -66,6 +67,33 @@ fn dot-brace-statement(): {} {
   .{}
 }
 
+fn spaced-parens(flag: bool): int {
+  if flag (1) else (2)
+}
+
+fn spaced-static-parens(): int {
+  #if true (1) else (2)
+}
+
+fn spaced-member-parens(g: gate): int {
+  if g.open (1) else (2)
+}
+
+fn spaced-brackets(flag: bool): list[int] {
+  if flag [1] else [2, 3]
+}
+
+fn spaced-sign(flag: bool): int {
+  if flag -1 else 1
+}
+
+fn spaced-subtract(x: int): int {
+  let a = x - 1
+  let b = x -
+    1
+  a + b
+}
+
 fn test() {
   assert-equals(guard(50), 50)
   assert-equals(guard(500), 100)
@@ -77,4 +105,12 @@ fn test() {
   assert-equals(same-line-separator(), 3)
   assert-equals(bare-variant-at-eol().!, 5)
   dot-brace-statement()
+  assert-equals(spaced-parens(true), 1)
+  assert-equals(spaced-parens(false), 2)
+  assert-equals(spaced-static-parens(), 1)
+  assert-equals(spaced-member-parens(.{ open = false }), 2)
+  assert-equals(spaced-brackets(false).len(), 2)
+  assert-equals(spaced-sign(true), -1)
+  assert-equals(spaced-sign(false), 1)
+  assert-equals(spaced-subtract(5), 8)
 }

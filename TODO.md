@@ -148,7 +148,7 @@ Most instances come from as-buffer/as-span default methods, eagerly declared per
 - [x] 4. Blanket-derived fns are specializations of the blanket fn (specialize_function with substitution pairs); AbilityImplDerivedBlanket kind, blanket_parent_function and the declare_function re-run are gone; generic derived fns no longer get an out-of-regime body pass (suite1 9763 -> 9413 fns)
 - [x] 5. mergefunc in the dev pipeline: httpapp 781 -> 566 defined fns, binary -7%, no codegen time change. ThinLTOCodeGenerator has no tuning hook, so optimized builds would only get it per unit in pre-link
 - [x] 6. Rejected: typed-tree substitution instead of re-typechecking. Bodies are tiny; the work is call re-resolution and inference, which a copy still has to do since the generic pass skips statics, type patterns and abstract callees
-- [x] 7. Scan the k1 corpus (modules/, dogfood/) for concrete-core opportunities: generic fns whose body only needs ptr/len/stride, rewritten as an erased core (ptr, len, stride) with a generic shell, the way position-byte and index-of-bytes already are
+- [x] 7. Scan the k1 corpus (modules/, dogfood/) for concrete-core opportunities: generic fns whose body only needs ptr/len/stride, rewritten as an erased core (ptr, len, stride) with a generic shell, the way position-lanes and index-of-bytes already are
 
 
 ## [x] Distribute builds that work

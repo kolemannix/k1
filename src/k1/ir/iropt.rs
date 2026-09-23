@@ -120,11 +120,12 @@ fn inline_target(k1: &TypedProgram, u: &UnitView, inst: &Inst) -> Option<IrCall>
     let Inst::Call { call_id } = *inst else { return None };
     let call = *u.call(call_id);
     let IrCallee::Direct(function_id) = call.callee else { return None };
-    if k1.functions.get(function_id).is_reloadable() {
+    let function = k1.functions.get(function_id);
+    if function.is_reloadable() || function.is_noinline() {
         return None;
     }
     let callee = get_compiled_unit(&k1.ir, IrUnitId::Function(function_id)).unwrap();
-    (callee.is_optimized && callee.inst_count() < 20).then_some(call)
+    (callee.is_optimized && !callee.is_cold(k1) && callee.inst_count() < 20).then_some(call)
 }
 
 fn has_inline_target(k1: &TypedProgram, u: &UnitView) -> bool {
@@ -190,14 +191,6 @@ fn inline_call(
 
     let call_next = u.next_inst(call_inst_id);
     u.remove_inst(call_inst_id);
-    let call_next = if callee_unit.fn_type.diverges {
-        let unreachable = call_next.unwrap();
-        let next_next = u.next_inst(unreachable);
-        u.remove_inst(unreachable);
-        next_next
-    } else {
-        call_next
-    };
 
     let call_post_block = call_next.map(|next| u.split_block_at(call_block, next));
 

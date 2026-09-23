@@ -85,8 +85,8 @@ def make_cell(bench, lang, size, comptime):
     cell = {"bench": bench, "lang": lang, "size": size, "comptime": comptime, "dir": d,
             "prepare": None, "env": None, "chatty": None}
     if lang == "k1":
-        cell["build"] = ["k1", "--cache", "false", "build", str(f)]
-        cell["chatty"] = ["k1", "--cache", "false", "--chatty", "true", "build", str(f)]
+        cell["build"] = ["k1", "--no-cache", "build", str(f)]
+        cell["chatty"] = ["k1", "--no-cache", "--chatty", "build", str(f)]
         cell["exe"] = d / ".k1-out" / name
     elif lang == "zig":
         cell["build"] = ["zig", "build-exe", "-O", "Debug", "-target", "aarch64-macos", "--stack", str(STACK_KB * 1024),
@@ -338,7 +338,7 @@ def render(results, expectations, info, load):
   (mean ± standard deviation in seconds). A cell whose first compile took more than {SLOW} s is
   timed with `--runs 2` instead and marked †. A first compile that exceeds {TIMEOUT} s is a timeout;
   larger sizes of that language are then not attempted.
-- Commands: K1 `k1 --cache false build <file>`; Zig `zig build-exe -O Debug -target aarch64-macos`
+- Commands: K1 `k1 --no-cache build <file>`; Zig `zig build-exe -O Debug -target aarch64-macos`
   with the local cache dir deleted before every run (the global cache keeps compiler_rt; the
   explicit target works around Zig 0.14.0 failing to find libSystem on this macOS);
   C++ `clang++ -std=c++23 -O0 -fconstexpr-steps={CONSTEXPR_STEPS}`; Rust `rustc -C opt-level=0`
@@ -351,7 +351,7 @@ def render(results, expectations, info, load):
 - Control: the same source with the work moved to runtime (K1 `#static` dropped, Zig `comptime`
   dropped, C++ `constexpr` dropped so clang cannot fold it, Rust the `const` item removed). The
   compile-time cost is the difference of the two means; throughput divides the benchmark's work
-  by that difference. K1 also reports what the compiler measures itself (`--chatty true`): the
+  by that difference. K1 also reports what the compiler measures itself (`--chatty`): the
   time spent running bytecode in the compile-time VM and the number of VM instructions executed.
 - Every executable is run once (`ulimit -s {STACK_KB}`, and `--stack {STACK_KB * 1024}` for Zig whose
   linked-in main-thread stack size ignores the rlimit, so the runtime controls can hold their
@@ -388,7 +388,7 @@ def render(results, expectations, info, load):
                     if x and x["status"] in ("timeout", "error"):
                         limits.append(x)
         out.append("")
-        out.append("K1 compile-time VM, as reported by `k1 --chatty true` for the comptime variant:\n")
+        out.append("K1 compile-time VM, as reported by `k1 --chatty` for the comptime variant:\n")
         out.append("| N | VM run (ms) | VM instructions | VM instr/s | typecheck (ms) | IR optimization (ms) | whole compile (ms) |")
         out.append("|---|---|---|---|---|---|---|")
         for size in SIZES[bench]:
@@ -424,7 +424,7 @@ def render(results, expectations, info, load):
             if c["status"] in ("timeout", "error"):
                 limits.append(c)
     out.append("")
-    out.append("K1 `--chatty true` rows for the comptime work of reflect-serialize (`meta` is the metaprogram expansion, `run` the VM time behind it):\n")
+    out.append("K1 `--chatty` rows for the comptime work of reflect-serialize (`meta` is the metaprogram expansion, `run` the VM time behind it):\n")
     out.append("| N types | meta (ms) | VM run (ms) | VM instructions | typecheck (ms) | IR optimization (ms) | codegen (ms) | LLVM passes (ms) | link (ms) | whole compile (ms) |")
     out.append("|---|---|---|---|---|---|---|---|---|---|")
     for size in SIZES[bench]:

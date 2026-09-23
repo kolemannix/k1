@@ -70,6 +70,12 @@ ns for parser {
 
   fn peek-back(self: *parser): token { self.peek-at(-1) }
 
+  fn peek-is-sign(self: *parser): bool {
+    let tok = self.peek()
+    tok.kind is :minus
+      and (tok.is-newline-preceded() or (tok.is-ws-preceded() and not self.peek-at(1).is-ws-preceded()))
+  }
+
   fn next-tok(self: *parser): token {
     let t = self.peek()
     self.cursor = self.cursor + 1

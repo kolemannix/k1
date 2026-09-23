@@ -1,5 +1,7 @@
 ns static_literals
 
+let fifteen: int = 15
+
 fn join[i: static int](x: i, c: bool): int {
   let v = if c x else 9
   let m = if c is { true -> x, false -> 9 }
@@ -30,6 +32,13 @@ fn test() {
   assert-equals([three, 4].len, 2)
   assert-equals(join[3](3, true), 8)
   assert-equals(join[3](3, false), 20)
+
+  let fifteen-id = types/id[fifteen]
+  assert-equals(fifteen-id.name(), "static[i64, 15]")
+  assert-equals(types/name[fifteen], "static[i64, 15]")
+  assert(fifteen-id.schema() is :int)
+  assert(fifteen-id != types/id[int])
+  assert-equals(types/instance-info[fixlist[u8, 8]].!.args.[1].name(), "static[i64, 8]")
 
   .{}
 }

@@ -414,6 +414,8 @@ type linkage = either {
   exported({ fn-name: ?string-id }),
 }
 
+type inlining = either { auto, always, never }
+
 type function = {
   name: string-id,
   type-params: list[type-param],
@@ -425,6 +427,8 @@ type function = {
   name-span: src-span,
   linkage,
   is-native: bool,
+  inlining,
+  is-cold: bool,
   compiler-debug: bool,
   where-constraints: list[type-constraint],
   compile-condition: ?expr-id,

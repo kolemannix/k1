@@ -955,6 +955,7 @@ bitflags! {
         const AddressTaken = 1 << 6;
         const Inline = 1 << 7;
         const Cold = 1 << 8;
+        const NoInline = 1 << 9;
     }
 }
 
@@ -1015,6 +1016,9 @@ impl TypedFunction {
     }
     pub fn is_inline(&self) -> bool {
         self.flags.contains(TypedFunctionFlags::Inline)
+    }
+    pub fn is_noinline(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::NoInline)
     }
     pub fn is_cold(&self) -> bool {
         self.flags.contains(TypedFunctionFlags::Cold)
@@ -1916,6 +1920,7 @@ pub enum BuiltinTyperInline {
     TypeStride,
     TypeAlign,
     CompilerSourceLocation,
+    CompilerModuleDir,
     GetStaticValue,
     StaticTypeToValue,
     TypeId,
@@ -1929,6 +1934,7 @@ impl BuiltinTyperInline {
             BuiltinTyperInline::TypeStride => "type_stride",
             BuiltinTyperInline::TypeAlign => "type_align",
             BuiltinTyperInline::CompilerSourceLocation => "compiler_source_location",
+            BuiltinTyperInline::CompilerModuleDir => "compiler_module_dir",
             BuiltinTyperInline::GetStaticValue => "get_static_value",
             BuiltinTyperInline::StaticTypeToValue => "static_type_to_value",
             BuiltinTyperInline::TypeId => "type_id",
@@ -5186,24 +5192,16 @@ impl TypedProgram {
         {
             let specialized_function = match *blanket_impl_function {
                 AbilityImplFunction::FunctionId(blanket_impl_function_id) => {
-                    let blanket_fn = *self.get_function(blanket_impl_function_id);
-                    let parsed_fn = blanket_fn.parsed_id.as_function_id().unwrap();
-                    let decl_fn =
-                        *self.mem.get_nth(self.abilities.get(concrete_ability_id).functions, index);
-                    let is_default =
-                        self.get_function(decl_fn.function_id).parsed_id.as_function_id()
-                            == Some(parsed_fn);
-                    if is_default
-                        && self
-                            .check_ability_fn_where_constraints(
-                                concrete_ability_id,
-                                substituted_impl_arguments_handle,
-                                self_type_id,
-                                index as u32,
-                                new_impl_scope,
-                                blanket_impl.span,
-                            )
-                            .is_err()
+                    if self
+                        .check_ability_fn_where_constraints(
+                            concrete_ability_id,
+                            substituted_impl_arguments_handle,
+                            self_type_id,
+                            index as u32,
+                            new_impl_scope,
+                            blanket_impl.span,
+                        )
+                        .is_err()
                     {
                         AbilityImplFunction::Unavailable
                     } else {
@@ -11915,6 +11913,7 @@ impl TypedProgram {
                 let source_location = self.synth_source_location(span);
                 Ok(source_location)
             }
+            BuiltinTyperInline::CompilerModuleDir => Ok(self.synth_module_dir(span)),
             BuiltinTyperInline::TypeId => {
                 let type_id = call.type_args.as_slice(&self.mem)[0];
                 self.register_type_metainfo(type_id);
@@ -12429,6 +12428,7 @@ impl TypedProgram {
                 | TypedFunctionFlags::Macro
                 | TypedFunctionFlags::AbiNative
                 | TypedFunctionFlags::Inline
+                | TypedFunctionFlags::NoInline
                 | TypedFunctionFlags::Cold);
         let specialized_function = TypedFunction {
             name: parent_function.name,
@@ -13431,6 +13431,9 @@ impl TypedProgram {
                     }
                     "location" => {
                         Some(Builtin::TyperInline(BuiltinTyperInline::CompilerSourceLocation))
+                    }
+                    "module-dir" => {
+                        Some(Builtin::TyperInline(BuiltinTyperInline::CompilerModuleDir))
                     }
                     // k1/repl
                     "checkbox" => Some(Builtin::Backend(BackendBuiltin::ReplCheckbox)),
@@ -14514,8 +14517,19 @@ impl TypedProgram {
         for c in self.ast.mem.getn(ast_fn.additional_where_constraints) {
             let names_own_param =
                 self.ast.mem.getn(ast_fn.type_params).iter().any(|tp| tp.name == c.name);
-            if names_own_param || is_ability_impl {
+            if names_own_param {
                 continue;
+            }
+            if let Some(ii) = impl_info {
+                if ii.is_default || ii.impl_kind.is_builtin_derived() {
+                    continue;
+                }
+                kbail!(
+                    self,
+                    c.span,
+                    "where clause names {}, which is not a type parameter of this function; an ability function's where constraints are declared on the ability",
+                    c.name
+                );
             }
             if !is_ability_decl {
                 kbail!(self, c.span, "where clause names unknown type parameter: {}", c.name);
@@ -14681,21 +14695,21 @@ impl TypedProgram {
                 "'native' only on plain functions; intern, extern, and export govern their own ABI"
             );
         }
-        if ast_fn.is_inline {
-            if !matches!(linkage, Linkage::Standard | Linkage::Exported { .. }) {
-                kbail!(
-                    self,
-                    ast_fn.signature_span,
-                    "'inline' needs a body to inline; intern and extern functions have none"
-                );
-            }
-            if is_reloadable {
-                kbail!(
-                    self,
-                    ast_fn.signature_span,
-                    "'inline' in a reloadable namespace would copy the body across the reload boundary"
-                );
-            }
+        if ast_fn.inlining != parse::Inlining::Auto
+            && !matches!(linkage, Linkage::Standard | Linkage::Exported { .. })
+        {
+            kbail!(
+                self,
+                ast_fn.signature_span,
+                "'inline' and 'noinline' govern a body; intern and extern functions have none"
+            );
+        }
+        if ast_fn.inlining == parse::Inlining::Always && is_reloadable {
+            kbail!(
+                self,
+                ast_fn.signature_span,
+                "'inline' in a reloadable namespace would copy the body across the reload boundary"
+            );
         }
         if let Linkage::Exported { .. } = linkage {
             if !type_params.is_empty() || !fnlike_type_params.is_empty() {
@@ -14796,7 +14810,8 @@ impl TypedProgram {
         flags.set(TypedFunctionFlags::CompilerDebug, is_debug);
         flags.set(TypedFunctionFlags::Reloadable, is_reloadable);
         flags.set(TypedFunctionFlags::AbiNative, ast_fn.is_native);
-        flags.set(TypedFunctionFlags::Inline, ast_fn.is_inline);
+        flags.set(TypedFunctionFlags::Inline, ast_fn.inlining == parse::Inlining::Always);
+        flags.set(TypedFunctionFlags::NoInline, ast_fn.inlining == parse::Inlining::Never);
         flags.set(TypedFunctionFlags::Cold, ast_fn.is_cold);
         let actual_function_id = self.add_function(TypedFunction {
             name: ast_fn.name,
@@ -16146,8 +16161,7 @@ impl TypedProgram {
                 }
             };
 
-            if is_default
-                && matches!(kind, AbilityImplKind::Concrete)
+            if matches!(kind, AbilityImplKind::Concrete)
                 && self
                     .check_ability_fn_where_constraints(
                         ability_id,
@@ -16280,21 +16294,16 @@ impl TypedProgram {
                     self.ice("Expected impl function id, not abstract, in eval_ability_impl", None);
                 }
             };
-            let decl_fn =
-                *self.mem.get_nth(self.abilities.get(ability_impl.ability_id).functions, index);
-            let is_default = self.get_function(impl_fn).parsed_id
-                == self.get_function(decl_fn.function_id).parsed_id;
-            if is_default
-                && self
-                    .check_ability_fn_where_constraints(
-                        ability_impl.ability_id,
-                        ability_impl.impl_arguments,
-                        ability_impl.self_type_id,
-                        index as u32,
-                        ability_impl.scope_id,
-                        ability_impl.span,
-                    )
-                    .is_err()
+            if self
+                .check_ability_fn_where_constraints(
+                    ability_impl.ability_id,
+                    ability_impl.impl_arguments,
+                    ability_impl.self_type_id,
+                    index as u32,
+                    ability_impl.scope_id,
+                    ability_impl.span,
+                )
+                .is_err()
             {
                 continue;
             }

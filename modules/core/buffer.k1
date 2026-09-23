@@ -81,7 +81,7 @@ ns for buffer {
   ////////////////////////
   // Modification
 
-  fn _grow-to[t, a: allocator](self: *buffer[t], alloc: a, new-count: size): empty {
+  fn(noinline) _grow-to[t, a: allocator](self: *buffer[t], alloc: a, new-count: size): empty {
     let data = alloc.realloc(
       old-ptr = self.data,
       old-size = self.size-bytes(),
@@ -170,20 +170,35 @@ ns for buffer {
     self.take-right(other.len()) == other
   }
 
-  fn position-byte(base: ptr, len: size, needle: u8): ?size {
-    let w: size = k1/simd-bytes
+  fn position-lanes[t: equals and bitwise, n: static size](base: ptr, len: size, needle: t): ?size {
+    let w: size = core/meta/static-type-to-value[_, n]()
     let i = 0: size
     if len >= w {
-      let lanes = vector/splat[u8, k1/simd-bytes](needle)
+      let lanes = vector/splat[t, n](needle)
+      while i + 4 * w <= len {
+        let e0 = vector/load-unchecked[t, n](base.ref-at[t](i).as[ptr]).eq-lanes(lanes)
+        let e1 = vector/load-unchecked[t, n](base.ref-at[t](i + w).as[ptr]).eq-lanes(lanes)
+        let e2 = vector/load-unchecked[t, n](base.ref-at[t](i + 2 * w).as[ptr]).eq-lanes(lanes)
+        let e3 = vector/load-unchecked[t, n](base.ref-at[t](i + 3 * w).as[ptr]).eq-lanes(lanes)
+        if e0.bit-or(e1).bit-or(e2).bit-or(e3).any() {
+          let l0 = e0.first-true-lane()
+          if l0 >= 0 return :some (i + l0)
+          let l1 = e1.first-true-lane()
+          if l1 >= 0 return :some (i + w + l1)
+          let l2 = e2.first-true-lane()
+          if l2 >= 0 return :some (i + 2 * w + l2)
+          return :some (i + 3 * w + e3.first-true-lane())
+        }
+        i = i + 4 * w
+      }
       while i + w <= len {
-        let chunk = vector/load-unchecked[u8, k1/simd-bytes](base.ref-at[u8](i).as[ptr])
-        let lane = chunk.eq-lanes(lanes).first-true-lane()
+        let lane = vector/load-unchecked[t, n](base.ref-at[t](i).as[ptr]).eq-lanes(lanes).first-true-lane()
         if lane >= 0 return :some (i + lane)
         i = i + w
       }
     }
     while i < len {
-      if base.ref-at[u8](i).* == needle return :some i
+      if base.ref-at[t](i).* == needle return :some i
       i = i + 1
     }
     :none
@@ -196,7 +211,7 @@ ns for buffer {
     let k = needle-len
     if k == 0 return :some 0
     if k > n return :none
-    if k == 1 return position-byte(base, n, needle-base.ref-at[u8](0).*)
+    if k == 1 return position-lanes[u8, k1/simd-bytes](base, n, needle-base.ref-at[u8](0).*)
 
     let w: size = k1/simd-bytes
     let first = vector/splat[u8, k1/simd-bytes](needle-base.ref-at[u8](0).*)
@@ -219,22 +234,6 @@ ns for buffer {
       i = i + 1
     }
     :none
-  }
-
-  fn position[t: equals](self: buffer[t], needle: t): ?size {
-    #if types/schema[t] is {
-      :int :u8 -> position-byte(self.data-ptr(), self.len, needle),
-      :int :i8 -> position-byte(self.data-ptr(), self.len, needle.unsigned()),
-      :char -> position-byte(self.data-ptr(), self.len, needle.as-u8()),
-      _ -> {
-        let i = 0: size
-        while i < self.len {
-          if self.[i] == needle return :some i
-          i = i + 1
-        }
-        :none
-      }
-    }
   }
 
   fn index-of-buffer[t: equals](self: buffer[t], needle: buffer[t]): ?size {
@@ -461,6 +460,27 @@ impl[t] iterator[item = t] for buffer-iterator[t] {
   }
   fn advance-by(self: *self, n: size): empty {
     self.pos = self.pos + n
+  }
+  fn seek(self: *self, needle: item): ?size {
+    let base = self.buf.data-ptr().ref-at[t](self.pos).as[ptr]
+    let len = self.buf.len - self.pos
+    let found: ?size = #if types/schema[t] is {
+      :int :u8 or :int :i8 -> buffer/position-lanes[t, k1/simd-bytes](base, len, needle),
+      :char or :bool -> buffer/position-lanes[u8, k1/simd-bytes](base, len, mem/bitcast[t, u8](needle)),
+      :int :u16 or :int :i16 -> buffer/position-lanes[t, vector/simd-lanes-16](base, len, needle),
+      :int :u32 or :int :i32 -> buffer/position-lanes[t, vector/simd-lanes-32](base, len, needle),
+      :int :u64 or :int :i64 -> buffer/position-lanes[t, vector/simd-lanes-64](base, len, needle),
+      _ -> {
+        let i = 0: size
+        while i < len {
+          if base.ref-at[t](i).* == needle break
+          i = i + 1
+        }
+        if i < len :some i else :none
+      }
+    }
+    self.pos = if found is :some i self.pos + i + 1 else self.buf.len
+    found
   }
 }
 

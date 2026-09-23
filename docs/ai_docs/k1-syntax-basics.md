@@ -163,8 +163,9 @@ let n = "hello"
 Tokens that can begin a statement end the previous one instead, even where a
 binary reading exists: `-` (negative literal), `(`, `[`, and string literals.
 To continue with one of those, put the operator at the end of the previous
-line (`let x = a -` ... `b`). Call parens, type-arg brackets, and juxtaposed
-string concatenation bind only on the same line.
+line (`let x = a -` ... `b`). Juxtaposed string concatenation binds only on the
+same line. Call parens and type-arg brackets bind only when adjacent: `f(x)`
+and `f[int]` are calls, `if flag (x)` is a condition followed by `(x)`.
 Payloads never cross a line break: `return`, `break`, or a `:variant` at end
 of line is bare.
 
@@ -570,10 +571,12 @@ after the operand is a parse error, not a precedence choice — write
 `negated()` instead: `list.contains(x).negated()`.
 
 There is no unary minus. `-5` is a negative literal (the sign fuses with the
-number when nothing separates them), and value negation is the `neg` ability's
-`negated()`: `x.negated()` is 2's complement wrapping on ints (signed and
-unsigned), a true sign-bit flip on floats, and `not` on bool. `not` itself
-stays bool-only.
+number when nothing separates them). Mid-line, spacing decides: a `-` spaced
+before but not after is a sign and ends the expression, so `if flag -1 else 1`
+yields `-1` and `x -1` is a parse error; `x - 1` subtracts. Value negation is
+the `neg` ability's `negated()`: `x.negated()` is 2's complement wrapping on
+ints (signed and unsigned), a true sign-bit flip on floats, and `not` on bool.
+`not` itself stays bool-only.
 
 Use `is` for pattern checks and bindings:
 
@@ -719,13 +722,13 @@ Collection API naming follows a doctrine:
   shadow them with shape-preserving inherents (string ops return string,
   buffer ops return buffer). Each method name belongs to exactly one ability;
   inherent shadowing is the only sanctioned overlap.
-- Search by element is `position`/`contains` (an `iterable` default, so it
-  works on any iterable); search by subsequence is `index-of-span`/
-  `contains-span`. Both are implemented once in `buffer`, which dispatches on
-  the element type: a byte-sized `t` takes a SIMD lane, everything else a
-  scalar loop. `list`, `span`, and `string` shadow `position`/`contains` with
-  inherents so they reach that lane instead of iterable's element-by-element
-  default.
+- Search by element is `position`/`contains` (`iterable` defaults over the
+  `iterator` hook `seek`, so they work on any iterable); search by
+  subsequence is `index-of-span`/`contains-span`. `buffer-iterator`, the
+  iterator of every contiguous collection, overrides `seek` and dispatches on
+  the element type: every int width, `char`, and `bool` take SIMD lanes,
+  everything else a scalar loop. `index-of-span` has the same split, SIMD
+  for byte-sized `t` only.
 
 See `test_src/suite1/array_test.k1`, `test_src/suite1/list_test.k1`,
 `test_src/suite1/range_test.k1`, and `test_src/suite1/buffer_test.k1`.

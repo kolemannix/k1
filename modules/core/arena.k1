@@ -119,7 +119,7 @@ ns for arena {
     }
   }
 
-  fn _grow(self: *arena, size: size, align: size) {
+  fn(noinline) _grow(self: *arena, size: size, align: size) {
     // Static message: interpolation would allocate, possibly from this same
     // exhausted arena when it is the ambient allocator
     if self.fixed crash("fixed arena exhausted")

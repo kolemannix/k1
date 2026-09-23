@@ -50,7 +50,7 @@ fn scan-all-simd(text: string): u64 {
   let found: u64 = 0
   let from: size = 0
   loop {
-    let hit = delims/scan(text, from)
+    let hit = delims/scan(text.span-bytes(), from)
     if hit.index < 0 break
     found = found + 1
     from = hit.index + 1

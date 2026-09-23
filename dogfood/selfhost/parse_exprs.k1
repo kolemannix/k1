@@ -29,7 +29,7 @@ ns for parser {
     loop {
       let tok = self.peek()
       require binary-op-from-kind(tok.kind) is :some op-kind else { break }
-      if tok.is-newline-starter() { break }
+      if self.peek-is-sign() { break }
       let op-precedence = op-kind.precedence()
       if op-precedence < min-precedence { break }
       self.advance()
@@ -42,7 +42,7 @@ ns for parser {
       loop {
         let next-tok = self.peek()
         require binary-op-from-kind(next-tok.kind) is :some next-op else { break }
-        if next-tok.is-newline-starter() { break }
+        if self.peek-is-sign() { break }
         let next-precedence = next-op.precedence()
         let should-recurse = next-precedence > op-precedence
           or (next-precedence == op-precedence and op-kind.is-right-assoc())
@@ -86,9 +86,12 @@ ns for parser {
           return :err(error-expected("Field name, or postfix *, !, &, or [", self.peek()))
         }
         let target = self.next-tok()
-        let bracketed = self.parse-bracketed-type-args().try
-        let after = self.peek()
-        if after.kind is :open-paren and not after.is-newline-preceded() {
+        let type-args: list[ast/type-arg] = if self.peek().is-kind-nonspaced(:open-bracket) {
+          self.parse-bracketed-type-args().try.args
+        } else {
+          list/empty()
+        }
+        if self.peek().is-kind-nonspaced(:open-paren) {
           let call-args = self.expect-fn-call-args().try
           let name = self.make-ident(target)
           let args = list/empty[ast/call-arg]()
@@ -106,7 +109,7 @@ ns for parser {
           let span = self.extend-to-here(self.expr-span(result-id))
           result-id = self.add-expr(:call(.{
             name = ast/qident/naked(name, target.span()),
-            type-args = bracketed.args,
+            type-args,
             args,
             span,
             is-method = true,
@@ -114,7 +117,7 @@ ns for parser {
         } else {
           let field-name = self.make-ident(target)
           let span = self.extend-to-here(self.expr-span(result-id))
-          result-id = self.add-expr(:field-access(.{ base = result-id, field-name, type-args = bracketed.args, span }))
+          result-id = self.add-expr(:field-access(.{ base = result-id, field-name, type-args, span }))
         }
       } else {
         break
@@ -476,7 +479,7 @@ ns for parser {
       let expr = self.expect-expression-with-postfix-ops().try
       let next = self.peek()
       if binary-op-from-kind(next.kind) is :some op {
-        if not next.is-newline-starter() {
+        if not self.peek-is-sign() {
           return :err(make-error("`not` followed by `${op.repr()}` is ambiguous; use parens to disambiguate", next))
         }
       }
@@ -605,7 +608,7 @@ ns for parser {
     if self.is-nominated-literal-start(second, third) {
       return self.parse-nominated-literal(first, namespaced, list/empty())
     }
-    if second.kind is :at or ((not second.is-newline-preceded()) and (second.kind is :open-bracket or second.kind is :open-paren)) {
+    if second.kind is :at or second.is-kind-nonspaced(:open-bracket) or second.is-kind-nonspaced(:open-paren) {
       let first-type-args: list[ast/type-arg] = if second.kind is :open-bracket {
         self.parse-bracketed-type-args().try.args
       } else {
@@ -615,7 +618,7 @@ ns for parser {
       if self.is-nominated-literal-start(after-tparams, self.peek-at(1)) {
         return self.parse-nominated-literal(first, namespaced, first-type-args)
       }
-      if after-tparams.kind is :open-paren {
+      if after-tparams.is-kind-nonspaced(:open-paren) {
         let call-args = self.expect-fn-call-args().try
         let span = first.span().thru(call-args.span)
         return :ok(self.add-expr(:call(.{ name = namespaced, type-args = first-type-args, args = call-args.args, span, is-method = false })))

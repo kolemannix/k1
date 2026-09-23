@@ -91,7 +91,7 @@ working-tree status, binary hash, and measurement dates.
 - [Compile times](benchmarks/compile-times/results.md): equivalent generated
   application-shaped programs at 10, 100, and 300 units, plus hello world
   and Brotli. K1's main rows rebuild core and std from source with
-  `--cache false`; separate rows measure module caching. The report includes
+  `--no-cache`; separate rows measure module caching. The report includes
   default and optimized builds, per-phase traces, and each toolchain's cache
   policy. Java emits bytecode and C# emits IL, so those builds defer native
   compilation until runtime.

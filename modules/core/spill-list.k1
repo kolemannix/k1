@@ -23,7 +23,7 @@ ns for spill-list {
     }
   }
 
-  fn _spill[t, n](fixlist: *fixlist[t, n]): list[t] {
+  fn(noinline) _spill[t, n](fixlist: *fixlist[t, n]): list[t] {
     let list = list/with-capacity-in[t, _](mem/current-arena(), fixlist.cap() * 2)
 
     let srcbuffer = fixlist.as-buffer()

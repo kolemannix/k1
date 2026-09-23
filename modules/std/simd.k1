@@ -5,7 +5,7 @@ ns simd
 //   $simd/reduce(total, u8, a, b, a + b, 0)
 //     -> fn total(src: span[u8]): u8
 //   $simd/first-of(delims, [',', ':', '"'])
-//     -> ns delims { fn scan(s: string, from: size): { index: i64, which: i64 } }
+//     -> ns delims { fn scan(data: span[u8], from: size): { index: i64, which: i64 } }
 //
 // Generated loops process `natural-bytes` at a time with a scalar tail. Map
 // and reduce bodies are emitted into both worlds, which works because the
@@ -133,11 +133,19 @@ fn first-of-impl(name: string, needles: span[char]): string {
   if needles.len() == 0 crash("first-of needs at least one needle")
   if needles.len() > 8 crash("first-of supports at most 8 needles; got ${needles.len()}")
   let lanes = natural-bytes
+  let last = needles.len() - 1
   let code = string-builder/new()
   code.writeln("ns $name {")
-  code.writeln("  fn scan(s: string, from: size): { index: i64, which: i64 } {")
-  code.writeln("    let len = s.len()")
-  code.writeln("    let base = s.data-ptr()")
+  code.writeln("  fn scan(data: span[u8], from: size): { index: i64, which: i64 } {")
+  if last == 0 {
+    code.writeln("    if data.drop(from).position(${needles.[0].as-u8()}) is :some p .{ index = from + p, which = 0 }")
+    code.writeln("    else .{ index = -1, which = -1 }")
+    code.writeln("  }")
+    code.writeln("}")
+    return code.build()
+  }
+  code.writeln("    let len = data.len()")
+  code.writeln("    let base = data.data-ptr()")
   code.writeln("    let i = from")
   for needles {
     code.writeln("    let needle$it-index = vector/splat[u8, $lanes](${it.as-u8()})")
@@ -145,29 +153,39 @@ fn first-of-impl(name: string, needles: span[char]): string {
   code.writeln("    while i + $lanes <= len {")
   code.writeln("      let chunk = vector/load-unchecked[u8, $lanes](base.ref-at[u8](i).as[ptr])")
   for needles {
-    code.writeln("      let m$it-index = chunk.eq-mask(needle$it-index)")
+    code.writeln("      let e$it-index = chunk.eq-lanes(needle$it-index)")
   }
-  let all-masks = string-builder/new()
+  let any-lanes = string-builder/new()
+  let any-masks = string-builder/new()
   for needles {
-    if it-index > 0 { all-masks.write(".bit-or(m$it-index)") }
-    else { all-masks.write("m0") }
+    if it-index > 0 {
+      any-lanes.write(".bit-or(e$it-index)")
+      any-masks.write(".bit-or(m$it-index)")
+    } else {
+      any-lanes.write("e0")
+      any-masks.write("m0")
+    }
   }
-  code.writeln("      let all = ${all-masks.build()}")
-  code.writeln("      if all != 0 {")
-  code.writeln("        let lane = all.trailing-zeros()")
+  code.writeln("      if ${any-lanes.build()}.any() {")
   for needles {
-    code.writeln("        if m$it-index.shift-right(lane.trunc[u32]).bit-and(1) == 1 {")
-    code.writeln("          return .{ index = i + lane.signed(), which = $it-index }")
-    code.writeln("        }")
+    code.writeln("        let m$it-index = e$it-index.to-mask()")
   }
-  code.writeln("        crash(\"unreachable: mask bit vanished\")")
+  code.writeln("        let lane = ${any-masks.build()}.trailing-zeros()")
+  for needles {
+    if it-index < last {
+      code.writeln("        if m$it-index.shift-right(lane.trunc[u32]).bit-and(1) == 1 {")
+      code.writeln("          return .{ index = i + lane.signed(), which = $it-index }")
+      code.writeln("        }")
+    }
+  }
+  code.writeln("        return .{ index = i + lane.signed(), which = $last }")
   code.writeln("      }")
   code.writeln("      i = i + $lanes")
   code.writeln("    }")
   code.writeln("    while i < len {")
-  code.writeln("      let ch = s.[i]")
+  code.writeln("      let b = data.[i]")
   for needles {
-    code.writeln("      if ch.as-u8() == ${it.as-u8()} return .{ index = i, which = $it-index }")
+    code.writeln("      if b == ${it.as-u8()} return .{ index = i, which = $it-index }")
   }
   code.writeln("      i = i + 1")
   code.writeln("    }")

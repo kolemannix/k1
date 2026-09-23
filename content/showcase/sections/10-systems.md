@@ -14,15 +14,15 @@ One line asks the standard library for a delimiter scanner:
 $std/simd/first-of(delims, [',', ':', '"'])
 ```
 
-It expands into `ns delims { fn scan(s: string, from: size): { index: i64,
-which: i64 } }`, and the program uses it like any other function:
+It expands into `ns delims { fn scan(data: span[u8], from: size): { index:
+i64, which: i64 } }`, and the program uses it like any other function:
 
 ```k1
 fn scan-all-simd(text: string): u64 {
   let found: u64 = 0
   let from: size = 0
   loop {
-    let hit = delims/scan(text, from)
+    let hit = delims/scan(text.span-bytes(), from)
     if hit.index < 0 break
     found = found + 1
     from = hit.index + 1
@@ -34,30 +34,41 @@ fn scan-all-simd(text: string): u64 {
 `first-of` is a macro in `modules/std/simd.k1`. Its body is an ordinary K1
 function that writes K1 source into a string builder: a loop that loads a
 vector of bytes, compares it against one splatted needle per delimiter, ORs
-the lane masks together, and uses `trailing-zeros` on the combined mask to
-find the first hit, followed by a scalar tail for the last partial vector.
-This is the core of the generator:
+the compare vectors together and tests them with one `any()`. Only on a hit
+does it collapse each compare to a lane mask and use `trailing-zeros` on
+their OR to find the first hit; a scalar tail handles the last partial
+vector. This is the core of the generator:
 
 ```k1 path=modules/std/simd.k1
   code.writeln("    while i + $lanes <= len {")
   code.writeln("      let chunk = vector/load-unchecked[u8, $lanes](base.ref-at[u8](i).as[ptr])")
   for needles {
-    code.writeln("      let m$it-index = chunk.eq-mask(needle$it-index)")
+    code.writeln("      let e$it-index = chunk.eq-lanes(needle$it-index)")
   }
-  let all-masks = string-builder/new()
+  let any-lanes = string-builder/new()
+  let any-masks = string-builder/new()
   for needles {
-    if it-index > 0 { all-masks.write(".bit-or(m$it-index)") }
-    else { all-masks.write("m0") }
+    if it-index > 0 {
+      any-lanes.write(".bit-or(e$it-index)")
+      any-masks.write(".bit-or(m$it-index)")
+    } else {
+      any-lanes.write("e0")
+      any-masks.write("m0")
+    }
   }
-  code.writeln("      let all = ${all-masks.build()}")
-  code.writeln("      if all != 0 {")
-  code.writeln("        let lane = all.trailing-zeros()")
+  code.writeln("      if ${any-lanes.build()}.any() {")
   for needles {
-    code.writeln("        if m$it-index.shift-right(lane.trunc[u32]).bit-and(1) == 1 {")
-    code.writeln("          return .{ index = i + lane.signed(), which = $it-index }")
-    code.writeln("        }")
+    code.writeln("        let m$it-index = e$it-index.to-mask()")
   }
-  code.writeln("        crash(\"unreachable: mask bit vanished\")")
+  code.writeln("        let lane = ${any-masks.build()}.trailing-zeros()")
+  for needles {
+    if it-index < last {
+      code.writeln("        if m$it-index.shift-right(lane.trunc[u32]).bit-and(1) == 1 {")
+      code.writeln("          return .{ index = i + lane.signed(), which = $it-index }")
+      code.writeln("        }")
+    }
+  }
+  code.writeln("        return .{ index = i + lane.signed(), which = $last }")
   code.writeln("      }")
   code.writeln("      i = i + $lanes")
   code.writeln("    }")
@@ -168,10 +179,10 @@ timer reads; `std/time` supplies the counter). Unoptimized:
 ```text
 compile-time scan found 4 delimiters
 simd width: 16 bytes; buffer: 8 MB
-scalar scan: 145794 found, 203 MB/s
-first-of scan: 145794 found, 879 MB/s
-scalar count ',': 137380 found, 451 MB/s
-vector count ',': 137380 found, 3857 MB/s
+scalar scan: 145794 found, 208 MB/s
+first-of scan: 145794 found, 1342 MB/s
+scalar count ',': 137380 found, 465 MB/s
+vector count ',': 137380 found, 3902 MB/s
 ```
 
 With `--optimize`:
@@ -179,10 +190,10 @@ With `--optimize`:
 ```text
 compile-time scan found 4 delimiters
 simd width: 16 bytes; buffer: 8 MB
-scalar scan: 145794 found, 2965 MB/s
-first-of scan: 145794 found, 5617 MB/s
-scalar count ',': 137380 found, 6791 MB/s
-vector count ',': 137380 found, 30467 MB/s
+scalar scan: 145794 found, 3016 MB/s
+first-of scan: 145794 found, 6114 MB/s
+scalar count ',': 137380 found, 7484 MB/s
+vector count ',': 137380 found, 33847 MB/s
 ```
 
 The optimized scalar byte count is LLVM's auto-vectorizer at work; the hand
@@ -627,7 +638,7 @@ _klib_sum_to
 Built and run as `test.sh` does:
 
 ```text
-$ k1 --cache false build dogfood/klib
+$ k1 --no-cache build dogfood/klib
 $ make -C dogfood/klib/consumer clean run
 rm -f consumer_static.a consumer_dylib.dylib out_static.txt out_dylib.txt
 clang consumer.c ../.k1-out/libklib.a  -o consumer_static.a
@@ -746,13 +757,13 @@ the installed `~/.k1/modules/core/libs`), and `k1 run` executes it under
 `wasmtime`. The SIMD example above, unchanged:
 
 ```text
-$ k1 --optimize --cache false --target wasm64-wasi run content/showcase/examples/sys_simd.k1
+$ k1 --optimize --no-cache --target wasm64-wasi run content/showcase/examples/sys_simd.k1
 compile-time scan found 4 delimiters
 simd width: 16 bytes; buffer: 8 MB
-scalar scan: 145794 found, 2916 MB/s
-first-of scan: 145794 found, 4958 MB/s
-scalar count ',': 137380 found, 1039 MB/s
-vector count ',': 137380 found, 23657 MB/s
+scalar scan: 145794 found, 2874 MB/s
+first-of scan: 145794 found, 5103 MB/s
+scalar count ',': 137380 found, 1399 MB/s
+vector count ',': 137380 found, 25006 MB/s
 ```
 
 `k1/simd-bytes` is 16 on wasm too, so the same macro expansion runs on
@@ -760,7 +771,7 @@ wasm's 128-bit SIMD. The whole language test suite runs this way as part of
 `test.sh`:
 
 ```text
-$ k1 --optimize --cache false --target wasm64-wasi run test_src/suite1
+$ k1 --optimize --no-cache --target wasm64-wasi run test_src/suite1
 [INFO  k1] run executable: suite1
 [suite1] All tests passed!
 ```
@@ -778,7 +789,7 @@ fn(export("k1_frame")) frame-address(width: i32, height: i32): u32 {
 ```
 
 ```text
-$ k1 --optimize --cache false --target wasm64-wasi run dogfood/fractal
+$ k1 --optimize --no-cache --target wasm64-wasi run dogfood/fractal
 [INFO  k1] run executable: fractal
 k1 escape-time fractals, one binary for terminal and canvas
   mandelbrot at -0.65, 0.0 span 2.4
@@ -848,7 +859,7 @@ Cross-built from macOS, the object's undefined symbols are the entire
 platform contract the library asks of its host:
 
 ```text
-$ k1 --cache false build dogfood/freestanding_lib
+$ k1 --no-cache build dogfood/freestanding_lib
 $ llvm-nm --undefined-only dogfood/freestanding_lib/.k1-out/freestanding_lib.o
                  U k1_platform_io_is_tty
                  U k1_platform_io_write
@@ -894,7 +905,7 @@ the binary in an `alpine` container, expecting `k1 sum: 100` from K1's
 ```text
 ts-freestanding:
   make -C modules/core/libs nocrt
-  just run-frag --no-std --target intel64-bare --cache false build dogfood/freestanding_lib
+  just run-frag --no-cache build dogfood/freestanding_lib
   llvm/install-llvm/bin/llvm-nm --undefined-only dogfood/freestanding_lib/.k1-out/freestanding_lib.o | awk '$2 !~ /^k1_platform_/ && $2 !~ /^(memcpy|memmove|memset|memcmp|bcmp)$/' | awk 'END { exit NR != 0 }'
   llvm/install-llvm/bin/clang --target=x86_64-unknown-linux-gnu -ffreestanding -nostdinc -O2 -fno-stack-protector -c dogfood/freestanding_lib/consumer/consumer.c -o dogfood/freestanding_lib/.k1-out/consumer.o
   llvm/install-llvm/bin/ld.lld -z separate-loadable-segments dogfood/freestanding_lib/.k1-out/consumer.o dogfood/freestanding_lib/.k1-out/freestanding_lib.o modules/core/libs/libk1rt-nocrt.a -o dogfood/freestanding_lib/.k1-out/consumer_bin

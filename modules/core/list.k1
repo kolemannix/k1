@@ -88,10 +88,6 @@ ns for list {
     self.len = 0
   }
 
-  fn position[t: equals](self: list[t], needle: t): ?size {
-    self.as-buffer().position(needle)
-  }
-
   fn reversed[t](self: list[t]): list[t] {
     let clone = self.cloned()
     clone.reverse()

@@ -465,6 +465,14 @@ ability iterator[impl item] {
     self.advance-by(n)
     self.next()
   }
+  fn seek(self: *self, needle: item): ?size where item: equals {
+    let i: size = 0
+    while self.next() is :some x {
+      if x == needle return :some i
+      i = i + 1
+    }
+    :none
+  }
 }
 
 ability iterable[impl item, impl i: iterator[item = item]] {
@@ -478,10 +486,8 @@ ability iterable[impl item, impl i: iterator[item = item]] {
   }
 
   fn position(self, needle: item): ?size where item: equals {
-    for self {
-      if it == needle return :some it-index
-    }
-    :none
+    let iter = self.iterator()
+    iter.&.seek(needle)
   }
 
   fn contains(self, needle: item): bool where item: equals {
@@ -779,6 +785,16 @@ ns k1 {
   let platform-bare: bool = #if platform is { :bare -> true, :posix-linux or :posix-macos or :wasi -> false }
   let platform-posix: bool = #if platform is { :posix-linux or :posix-macos -> true, :wasi or :bare -> false }
 
+  ns for platform {
+    fn dylib-ext(self): string {
+      if self is {
+        :posix-macos -> "dylib",
+        :posix-linux -> "so",
+        :wasi or :bare -> crash("no dylibs on wasi or bare"),
+      }
+    }
+  }
+
   type arch = either { intel64 = 0, arm64 = 1, wasm64 = 2 }
   let arch: arch = builtin
 
@@ -786,6 +802,8 @@ ns k1 {
   let simd-bytes: size = builtin
 
   fn(intern) location(): source-location
+
+  fn(intern) module-dir(): string
 
   fn(intern) exit(code: i32): never
 
@@ -839,7 +857,7 @@ ns k1 {
     host: opt[target],
   }
 
-  type setup-ctx = { module-dir: string, build: build-config }
+  type setup-ctx = { build: build-config }
 
   type module = {
     kind: opt[module-kind],
@@ -1145,5 +1163,9 @@ ns k1 {
   fn crash-unloaded-ns(ns-name: ptr, fn-name: ptr): never {
     let loaded-ns = string/wrap-c(ns-name)
     crash("reloadable ns ${loaded-ns} not loaded; call ${loaded-ns}/load() (called: ${string/wrap-c(fn-name)})")
+  }
+
+  fn crash-missing-type-info(type-id: u64): never {
+    crash("no type info for type id $type-id")
   }
 }

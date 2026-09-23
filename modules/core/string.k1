@@ -51,10 +51,6 @@ ns for string {
     wrap-buffer(copied)
   }
 
-  fn position(self: string, c: char): ?size {
-    self.span.inner-buffer().position(c)
-  }
-
   fn join[c: as-span[t = string]](items: c, separator: string): string {
     let b = string-builder/new()
     for s in items.as-span() {

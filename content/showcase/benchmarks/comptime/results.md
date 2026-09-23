@@ -21,7 +21,7 @@ Generated 2026-09-17 22:19 by `run.sh`. Load average at start 15.8, at end 7.2 (
   (mean ± standard deviation in seconds). A cell whose first compile took more than 60 s is
   timed with `--runs 2` instead and marked †. A first compile that exceeds 300 s is a timeout;
   larger sizes of that language are then not attempted.
-- Commands: K1 `k1 --cache false build <file>`; Zig `zig build-exe -O Debug -target aarch64-macos`
+- Commands: K1 `k1 --no-cache build <file>`; Zig `zig build-exe -O Debug -target aarch64-macos`
   with the local cache dir deleted before every run (the global cache keeps compiler_rt; the
   explicit target works around Zig 0.14.0 failing to find libSystem on this macOS);
   C++ `clang++ -std=c++23 -O0 -fconstexpr-steps=2000000000`; Rust `rustc -C opt-level=0`
@@ -34,7 +34,7 @@ Generated 2026-09-17 22:19 by `run.sh`. Load average at start 15.8, at end 7.2 (
 - Control: the same source with the work moved to runtime (K1 `#static` dropped, Zig `comptime`
   dropped, C++ `constexpr` dropped so clang cannot fold it, Rust the `const` item removed). The
   compile-time cost is the difference of the two means; throughput divides the benchmark's work
-  by that difference. K1 also reports what the compiler measures itself (`--chatty true`): the
+  by that difference. K1 also reports what the compiler measures itself (`--chatty`): the
   time spent running bytecode in the compile-time VM and the number of VM instructions executed.
 - Every executable is run once (`ulimit -s 65520`, and `--stack 67092480` for Zig whose
   linked-in main-thread stack size ignores the rlimit, so the runtime controls can hold their
@@ -59,7 +59,7 @@ Sieve of Eratosthenes below N at compile time, collecting the primes into an arr
 | 1,000,000 | C++ | 6.050 ± 0.056 | 0.132 ± 0.026 | 5.919 | 527.5 k sieve steps/s | `78498 999983` |
 | 1,000,000 | Rust | 3.188 ± 0.042 | 0.139 ± 0.020 | 3.049 | 1.0 M sieve steps/s | `78498 999983` |
 
-K1 compile-time VM, as reported by `k1 --chatty true` for the comptime variant:
+K1 compile-time VM, as reported by `k1 --chatty` for the comptime variant:
 
 | N | VM run (ms) | VM instructions | VM instr/s | typecheck (ms) | IR optimization (ms) | whole compile (ms) |
 |---|---|---|---|---|---|---|
@@ -86,7 +86,7 @@ Generate the CRC-32 table (polynomial 0xEDB88320), generate B pseudo-random byte
 | 8 MB | C++ | 52.301 ± 2.591 | 0.128 ± 0.004 | 52.173 | 160.8 k bytes/s | `1790965047` |
 | 8 MB | Rust | 50.497 ± 0.774 | 0.120 ± 0.005 | 50.376 | 166.5 k bytes/s | `1790965047` |
 
-K1 compile-time VM, as reported by `k1 --chatty true` for the comptime variant:
+K1 compile-time VM, as reported by `k1 --chatty` for the comptime variant:
 
 | N | VM run (ms) | VM instructions | VM instr/s | typecheck (ms) | IR optimization (ms) | whole compile (ms) |
 |---|---|---|---|---|---|---|
@@ -113,7 +113,7 @@ Format the integers 0..N in decimal with `,` separators into one string at compi
 | 1,000,000 | C++ | 178.802 ± 2.997 † | 0.444 ± 0.266 | 178.358 | 5.6 k numbers/s | `6888889 3396009285` |
 | 1,000,000 | Rust | 42.337 ± 0.557 | 0.267 ± 0.127 | 42.071 | 23.8 k numbers/s | `6888889 3396009285` |
 
-K1 compile-time VM, as reported by `k1 --chatty true` for the comptime variant:
+K1 compile-time VM, as reported by `k1 --chatty` for the comptime variant:
 
 | N | VM run (ms) | VM instructions | VM instr/s | typecheck (ms) | IR optimization (ms) | whole compile (ms) |
 |---|---|---|---|---|---|---|
@@ -148,7 +148,7 @@ N generated struct types with 8 fields (a rotating mix of i32, u8, bool, string,
 | 500 | C++26 (P2996) | 2.815 ± 0.018 | 4.77 | `36079` |
 | 500 | Rust | 0.581 ± 0.134 | 0.88 | `36079` |
 
-K1 `--chatty true` rows for the comptime work of reflect-serialize (`meta` is the metaprogram expansion, `run` the VM time behind it):
+K1 `--chatty` rows for the comptime work of reflect-serialize (`meta` is the metaprogram expansion, `run` the VM time behind it):
 
 | N types | meta (ms) | VM run (ms) | VM instructions | typecheck (ms) | IR optimization (ms) | codegen (ms) | LLVM passes (ms) | link (ms) | whole compile (ms) |
 |---|---|---|---|---|---|---|---|---|---|

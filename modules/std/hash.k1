@@ -252,7 +252,7 @@ ns for map {
     self.count = self.count + 1
   }
 
-  fn _make-room[k, v, a: allocator](self: *map[k, v], alloc: a, h: u64): size where k: hash {
+  fn(noinline) _make-room[k, v, a: allocator](self: *map[k, v], alloc: a, h: u64): size where k: hash {
     if self.entries.len == 0 {
       self.* = _allocate[k, v, _](alloc, MIRROR)
     } else {
@@ -622,7 +622,7 @@ ns for fixmap {
     self.growth-left = t.growth-left.trunc[u32]
   }
 
-  fn _make-room[k, v, n](self: *fixmap[k, v, n], h: u64): size where k: hash {
+  fn(noinline) _make-room[k, v, n](self: *fixmap[k, v, n], h: u64): size where k: hash {
     let t = self._table()
     t._rehash-in-place(self.cap())
     self._store(t)

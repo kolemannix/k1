@@ -121,23 +121,25 @@ header:
 The module's `build.k1` compiles it to `libs/libatlas.dylib`. `fn setup`
 runs on the host, before the program compiles, whenever its declared inputs
 are newer than its outputs (the second compile costs a stamp check, not a `cc`
-invocation). The script `cd`s to the module dir the compiler hands it, so it
-does not care what directory the compiler was invoked from:
+invocation). The script `cd`s to `k1/module-dir()`, the home dir of the
+module whose source makes the call, so it does not care what directory the
+compiler was invoked from. The VM is what loads the library, so its extension
+comes from `k1/host-platform`, the platform the compiler runs on:
 
 ```k1 path=content/showcase/examples/cffi_font_atlas/build.k1
 use std/process
 
 fn module(_b: k1/build-config): k1/module {
   let m = k1/module/new()
-  m.setup(outputs = ["libs/libatlas.dylib"], inputs = ["atlas.c"])
+  m.setup(outputs = ["libs/libatlas.${k1/host-platform.dylib-ext()}"], inputs = ["atlas.c"])
   m
 }
 
-fn setup(ctx: k1/setup-ctx) {
+fn setup(_ctx: k1/setup-ctx) {
   let _ = process/sh-verbose(`
-    cd "${ctx.module-dir}"
+    cd "${k1/module-dir()}"
     mkdir -p libs
-    cc -O2 -shared -I../../../../modules/stb/vendor atlas.c -o libs/libatlas.dylib
+    cc -O2 -shared -I../../../../modules/stb/vendor atlas.c -o libs/libatlas.${k1/host-platform.dylib-ext()}
     `).!
 }
 ```
@@ -283,6 +285,5 @@ that compile time is a VM with a C ABI: the generator is the program itself,
 written in the same language, in the same file, with its output typed as an
 ordinary global.
 
-This example is macOS-specific in two incidental ways: the font path and the
-`.dylib` extension in the setup script (the VM looks for `libs/libatlas.so`
-on Linux). The mechanism is the same on both.
+This example is macOS-specific in one incidental way: the font path. The
+mechanism is the same on Linux, where setup builds `libs/libatlas.so`.

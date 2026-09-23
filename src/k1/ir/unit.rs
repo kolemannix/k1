@@ -126,6 +126,11 @@ impl IrUnit {
         }
     }
 
+    pub fn is_cold(&self, k1: &TypedProgram) -> bool {
+        self.fn_type.diverges
+            || matches!(self.unit_id, IrUnitId::Function(id) if k1.get_function(id).is_cold())
+    }
+
     pub fn view(&self, mem: &kmem::Mem<ProgramIr>) -> UnitView<'static> {
         UnitView {
             body: self.body,

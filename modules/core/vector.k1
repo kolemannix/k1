@@ -6,6 +6,10 @@
 // most 64 bytes (512 bits)
 ns vector {
 
+  let simd-lanes-16: size = (k1/simd-bytes) / 2
+  let simd-lanes-32: size = (k1/simd-bytes) / 4
+  let simd-lanes-64: size = (k1/simd-bytes) / 8
+
   fn(intern) splat[t, n: static size](value: t): vector[t, n]
 
   fn(intern) load-unchecked[t, n: static size](src: ptr): vector[t, n]

@@ -217,6 +217,8 @@ ns for parser {
     let lib-name: ?ast/string-id = :none
     let lib-token: ?token = :none
     let is-native = false
+    let inlining: ast/inlining = :auto
+    let is-cold = false
     if self.maybe-consume(:open-paren) is :some _ {
       loop {
         let modifier = self.peek()
@@ -269,8 +271,21 @@ ns for parser {
         } else if modifier.kind is :ident and self.tok-chars(modifier) == "native" {
           self.advance()
           is-native = true
+        } else if modifier.kind is :ident and (self.tok-chars(modifier) == "inline" or self.tok-chars(modifier) == "noinline") {
+          let requested: ast/inlining = if self.tok-chars(modifier) == "inline" :always else :never
+          let conflicts = if inlining is {
+            :auto -> false,
+            :always -> requested is :never,
+            :never -> requested is :always,
+          }
+          if conflicts { return :err(error-expected("one of inline or noinline", modifier)) }
+          self.advance()
+          inlining = requested
+        } else if modifier.kind is :ident and self.tok-chars(modifier) == "cold" {
+          self.advance()
+          is-cold = true
         } else {
-          return :err(error-expected("fn modifier: intern, extern, export, native, or lib", modifier))
+          return :err(error-expected("fn modifier: intern, extern, export, native, inline, noinline, cold, or lib", modifier))
         }
         if self.maybe-consume(:comma) is :none { break }
       }
@@ -327,6 +342,8 @@ ns for parser {
       name-span = fit.tok.span(),
       linkage,
       is-native,
+      inlining,
+      is-cold,
       compiler-debug,
       where-constraints,
       compile-condition = condition,

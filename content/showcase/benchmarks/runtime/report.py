@@ -45,7 +45,7 @@ BENCHES = [
         NATIVE + ["java", "csharp", "python"],
         "A 256 MiB buffer of pseudo-random bytes in the range 0x40..0x5f, with a `\\n` planted every 4093 bytes and one of `,` `:` `\"` every 1,000,003 bytes. Eight repetitions of three scans: (1) `contains` of a byte that never occurs, one full pass; (2) count the newlines by repeated first-position search from the previous hit; (3) find each of the three delimiters in turn by repeated first-of-set search. Prints the counts and position sums. Fill time is included in every language.",
         {
-            "k1": "(1)(2) `span[u8].contains`/`position`: `buffer/position-byte`, a `k1/simd-bytes`-wide `vector` compare loop, 16 lanes on arm64. (3) `$std/simd/first-of(delims, [',', ':', '\"'])`, a macro that generates a namespace with a `scan(s, from)` fn: one 16-lane pass computing three equality masks per chunk.",
+            "k1": "(1)(2) `span[u8].contains`/`position`: `buffer/position-lanes`, a `k1/simd-bytes`-wide `vector` compare loop unrolled 4x (four 16-lane compares, one OR-reduce per 64 bytes on arm64). (3) `$std/simd/first-of(delims, [',', ':', '\"'])`, a macro that generates a namespace with a `scan(data, from)` fn: per 16-byte chunk, three lane compares ORed into one `any()` test, with lane masks decoded only on a hit.",
             "c": "(1)(2) `memchr` from libSystem (hand-written NEON). (3) three `memchr` calls per segment, one per delimiter, taking the nearest hit: with delimiters this sparse each segment is scanned several times over, but still at NEON speed. `strpbrk` over a NUL-terminated copy is the C-string idiom; it is a byte-at-a-time table loop and was an order of magnitude slower in a side test.",
             "rust": "(1) `<[u8]>::contains`, which std routes to `core::slice::memchr` (a SWAR word-at-a-time loop, no SIMD). (2)(3) `iter().position(..)`, a scalar loop; the `memchr` crate would give SIMD, no crates are used.",
             "go": "(1)(2) `bytes.IndexByte` (NEON assembly in the runtime). (3) `bytes.IndexAny`, a scalar loop over an ASCII bitset.",
@@ -125,7 +125,7 @@ out.append(
 )
 out.append("Build flags:\n")
 out.append("```text")
-out.append("k1     k1 --optimize --cache false build <file>.k1   (the default-build row is plain `k1 --cache false build`)")
+out.append("k1     k1 --optimize --no-cache build <file>.k1   (the default-build row is plain `k1 --no-cache build`)")
 out.append("c      clang -O2")
 out.append("rust   rustc --edition 2021 -C opt-level=3")
 out.append("go     go build")

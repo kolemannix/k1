@@ -1172,6 +1172,13 @@ pub struct ParsedTypeConstraint {
     pub span: SpanId,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Inlining {
+    Auto,
+    Always,
+    Never,
+}
+
 #[derive(Clone, Copy)]
 pub struct ParsedFunction {
     pub name: StringId,
@@ -1184,7 +1191,7 @@ pub struct ParsedFunction {
     pub name_span: SpanId,
     pub linkage: Linkage,
     pub is_native: bool,
-    pub is_inline: bool,
+    pub inlining: Inlining,
     pub is_cold: bool,
     pub compiler_debug: bool,
     pub additional_where_constraints: AstSlice<ParsedTypeConstraint>,
@@ -2585,6 +2592,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.tokens.peek_kind_n(n)
     }
 
+    fn peek_is_sign(&self) -> bool {
+        let tok = self.peek();
+        tok.kind == K::Minus
+            && (tok.is_newline_preceded()
+                || (tok.is_whitespace_preceded() && !self.tokens.peek_n(1).is_whitespace_preceded()))
+    }
+
     #[inline]
     fn peek_two(&self) -> (Token, Token) {
         self.tokens.peek_two()
@@ -3474,10 +3488,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 return Err(self.error_expected("Field name, or postfix *, !, &, or [", target));
             }
         }
-        let type_args = self.parse_bracketed_type_args()?;
-        // a.b[int](...); call parens bind only same-line, so a
-        // parenthesized statement can follow on the next line
-        if self.peek_kind() == K::OpenParen && !self.peek().is_newline_preceded() {
+        let type_args = if self.peek().is_kind_nonspaced(K::OpenBracket) {
+            self.parse_bracketed_type_args()?
+        } else {
+            MSlice::empty()
+        };
+        if self.peek().is_kind_nonspaced(K::OpenParen) {
             let mut args = self.expect_fn_call_args()?;
             let self_arg = result;
             let name = self.make_ident(target);
@@ -3549,10 +3565,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     /// This is a Pratt parser that recurses when the next operator binds tighter,
     /// otherwise stays at the current level to build left-associative chains.
     ///
-    /// Newlines end statements, so an operator at the start of a line continues
-    /// the expression only if it could not begin a new statement. `-` (negative
-    /// literal) can, so it terminates: put it at the end of the previous line
-    /// to continue
+    /// A `-` that reads as a sign ends the expression instead of continuing it:
+    /// one at the start of a line, or one spaced before but not after (`a -1`).
+    /// Put the `-` at the end of the previous line, or space it on both sides,
+    /// to subtract
     fn parse_binary_op_rhs(
         &mut self,
         mut lhs: ParsedExprId,
@@ -3562,10 +3578,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let Some(op_kind) = BinaryOpKind::from_tokenkind(self.peek_kind()) else {
                 break;
             };
-            let op_token = self.peek();
-            if op_token.is_newline_starter() {
+            if self.peek_is_sign() {
                 break;
             }
+            let op_token = self.peek();
             let op_precedence = op_kind.precedence();
 
             // If this operator's precedence is too low, return to caller
@@ -3584,7 +3600,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let Some(next_op_kind) = BinaryOpKind::from_tokenkind(self.peek_kind()) else {
                     break;
                 };
-                if self.peek().is_newline_starter() {
+                if self.peek_is_sign() {
                     break;
                 }
                 let next_precedence = next_op_kind.precedence();
@@ -3811,7 +3827,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let expr = self.expect_expression_with_postfix_ops()?;
                 let next = self.peek();
                 if let Some(op) = BinaryOpKind::from_tokenkind(next.kind) {
-                    if !next.is_newline_starter() {
+                    if !self.peek_is_sign() {
                         return Err(self.error(
                             format!(
                                 "`not` followed by `{op}` is ambiguous; use parens to disambiguate"
@@ -3923,12 +3939,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             .parse_nominated_literal(first, namespaced_ident, MSlice::empty())
                             .map(Some);
                     }
-                    // Call parens and type-arg brackets bind only
-                    // same-line: `f\n(x)` and `xs\n[1]` are two statements
-                    let second_kind = self.peek_kind();
+                    let second = self.peek();
+                    let second_kind = second.kind;
                     let is_call = match second_kind {
                         K::At => true,
-                        K::OpenBracket | K::OpenParen => !self.peek().is_newline_preceded(),
+                        K::OpenBracket | K::OpenParen => !second.is_whitespace_preceded(),
                         _ => false,
                     };
                     if is_call {
@@ -3942,8 +3957,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                                 .parse_nominated_literal(first, namespaced_ident, first_type_args)
                                 .map(Some);
                         }
-                        match self.peek_kind() {
-                            K::OpenParen => {
+                        let next = self.peek();
+                        match next.kind {
+                            K::OpenParen if !next.is_whitespace_preceded() => {
                                 let args = self.expect_fn_call_args()?;
                                 let span = self.extend_tok_to_here(first);
                                 self.emit_semantic_token_span(
@@ -4801,13 +4817,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         compiler_debug: bool,
     ) -> ParseResult<ParsedFunctionId> {
         let fn_keyword = self.expect_kind(K::KeywordFn)?;
-        let (linkage, is_native, is_inline, is_cold) = if self.maybe_consume(K::OpenParen).is_some()
+        let (linkage, is_native, inlining, is_cold) = if self.maybe_consume(K::OpenParen).is_some()
         {
             let mut linkage: Option<Linkage> = None;
             let mut lib_name: Option<StringId> = None;
             let mut lib_token: Option<Token> = None;
             let mut is_native = false;
-            let mut is_inline = false;
+            let mut inlining = Inlining::Auto;
             let mut is_cold = false;
             loop {
                 let modifier = self.peek();
@@ -4872,15 +4888,24 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 } else if modifier.kind == K::Ident && self.token_chars(modifier) == "native" {
                     self.advance();
                     is_native = true;
-                } else if modifier.kind == K::Ident && self.token_chars(modifier) == "inline" {
+                } else if modifier.kind == K::Ident
+                    && let Some(requested) = match self.token_chars(modifier) {
+                        "inline" => Some(Inlining::Always),
+                        "noinline" => Some(Inlining::Never),
+                        _ => None,
+                    }
+                {
+                    if inlining != Inlining::Auto && inlining != requested {
+                        return Err(self.error_expected("one of inline or noinline", modifier));
+                    }
                     self.advance();
-                    is_inline = true;
+                    inlining = requested;
                 } else if modifier.kind == K::Ident && self.token_chars(modifier) == "cold" {
                     self.advance();
                     is_cold = true;
                 } else {
                     return Err(self.error_expected(
-                        "fn modifier: intern, extern, export, native, inline, cold, or lib",
+                        "fn modifier: intern, extern, export, native, inline, noinline, cold, or lib",
                         modifier,
                     ));
                 }
@@ -4902,9 +4927,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 (Some(linkage), None) => linkage,
                 (None, None) => Linkage::Standard,
             };
-            (linkage, is_native, is_inline, is_cold)
+            (linkage, is_native, inlining, is_cold)
         } else {
-            (Linkage::Standard, false, false, false)
+            (Linkage::Standard, false, Inlining::Auto, false)
         };
         let (func_name, func_name_id) = self.expect_ident()?;
         self.emit_semantic_token(fn_keyword, SemanticTokenKind::Keyword);
@@ -4973,7 +4998,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             name_span,
             linkage,
             is_native,
-            is_inline,
+            inlining,
             is_cold,
             compiler_debug,
             additional_where_constraints,

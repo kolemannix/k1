@@ -160,10 +160,6 @@ ns for token {
     (self.flags & FLAG_NEWLINE_PRECEDED) != 0
   }
 
-  fn is-newline-starter(self: token): bool {
-    self.is-newline-preceded() and self.kind is :minus
-  }
-
   fn is-kind-nonspaced(self: token, k: token-kind): bool {
     self.kind.eq(k) and not self.is-ws-preceded()
   }

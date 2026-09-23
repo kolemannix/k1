@@ -1,7 +1,0 @@
-fn main(): i32 {
-  let point = #static .{ x = 3 * 4, y = 5 - 3 }
-  println("a")
-  println(types/id[type-of(point)].name())
-  println("b")
-  0
-}

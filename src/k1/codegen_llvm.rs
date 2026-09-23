@@ -24,8 +24,8 @@ use inkwell::types::{
 };
 use inkwell::values::{
     AggregateValue, ArrayValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum,
-    FloatValue, FunctionValue, GlobalValue, InstructionValue, IntValue, PhiValue, PointerValue,
-    StructValue, ValueKind,
+    CallSiteValue, FloatValue, FunctionValue, GlobalValue, InstructionValue, IntValue, PhiValue,
+    PointerValue, StructValue, ValueKind,
 };
 use inkwell::{
     AddressSpace, AtomicOrdering, FloatPredicate, IntPredicate, OptimizationLevel, ThreadLocalMode,
@@ -914,16 +914,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             for p in &entrypoint_params {
                 params.push((*p).into());
             }
-            let main_call = self.builder.build_call(function_value, &params, "").unwrap();
-            main_call.set_call_convention(function_value.get_call_conventions());
+            let main_call = self.build_call(function_value, &params);
             let res = main_call.try_as_basic_value().basic();
             let exit_code: BasicValueEnum<'ctx> = match res {
                 None => self.ctx.i32_type().const_zero().as_basic_value_enum(),
                 Some(v) => v,
             };
             let exit_fv = program_exit_value.unwrap();
-            let exit_call = self.builder.build_call(exit_fv, &[exit_code.into()], "").unwrap();
-            exit_call.set_call_convention(exit_fv.get_call_conventions());
+            self.build_call(exit_fv, &[exit_code.into()]);
             self.builder.build_unreachable().unwrap();
         }
 
@@ -1009,6 +1007,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let mut compiler_required_k1_fns = vec!["crash-div"];
         if k1.namespaces.iter().any(|ns| ns.reload) {
             compiler_required_k1_fns.push("crash-unloaded-ns");
+        }
+        if !k1.type_infos.is_empty() {
+            compiler_required_k1_fns.push("crash-missing-type-info");
         }
         for name in compiler_required_k1_fns {
             let Some(id) = Cg::find_k1_ns_fn(k1, name) else {
@@ -1580,6 +1581,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.declare_llvm_function(function_id)
     }
 
+    fn build_call(
+        &self,
+        callee: FunctionValue<'ctx>,
+        args: &[BasicMetadataValueEnum<'ctx>],
+    ) -> CallSiteValue<'ctx> {
+        let call = self.builder.build_call(callee, args, "").unwrap();
+        call.set_call_convention(callee.get_call_conventions());
+        call
+    }
+
     fn int_div_helper(
         &mut self,
         int_type: IntType<'ctx>,
@@ -1630,10 +1641,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         self.builder.position_at_end(crash_block);
         let is_zero_bool = self.i1_to_bool(is_zero, "");
-        self.builder
-            .build_call(crash_fn, &[is_zero_bool.into()], "")
-            .unwrap()
-            .set_call_convention(crash_fn.get_call_conventions());
+        self.build_call(crash_fn, &[is_zero_bool.into()]);
         self.builder.build_unreachable().unwrap();
 
         self.builder.position_at_end(ok_block);
@@ -1662,7 +1670,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         rem: bool,
     ) -> CgResult<IntValue<'ctx>> {
         let helper = self.int_div_helper(lhs.get_type(), signed, rem)?;
-        let call = self.builder.build_call(helper, &[lhs.into(), rhs.into()], "").unwrap();
+        let call = self.build_call(helper, &[lhs.into(), rhs.into()]);
         Ok(call.try_as_basic_value().basic().unwrap().into_int_value())
     }
 
@@ -1710,10 +1718,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.builder.position_at_end(unloaded_block);
         let ns_name_param = f.get_nth_param(1).unwrap();
         let global_name_param = f.get_nth_param(2).unwrap();
-        self.builder
-            .build_call(crash_fn, &[ns_name_param.into(), global_name_param.into()], "")
-            .unwrap()
-            .set_call_convention(crash_fn.get_call_conventions());
+        self.build_call(crash_fn, &[ns_name_param.into(), global_name_param.into()]);
         self.builder.build_unreachable().unwrap();
 
         self.builder.position_at_end(ok_block);
@@ -1741,14 +1746,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             self.k1.ident_str(self.k1.namespaces.get(global.reload_ns.unwrap()).name).to_string();
         let ns_cstr = self.cstring_constant(&ns_name);
         let name_cstr = self.cstring_constant(&global_name);
-        let call = self
-            .builder
-            .build_call(
-                helper,
-                &[slot.as_pointer_value().into(), ns_cstr.into(), name_cstr.into()],
-                "reload_global",
-            )
-            .unwrap();
+        let call = self.build_call(
+            helper,
+            &[slot.as_pointer_value().into(), ns_cstr.into(), name_cstr.into()],
+        );
         match call.try_as_basic_value() {
             ValueKind::Basic(v) => Ok(v),
             ValueKind::Instruction(_) => unreachable!("__k1_reload_global_load returns ptr"),
@@ -1809,10 +1810,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let not_loaded_fv = self.k1_ns_fn_value("crash-unloaded-ns")?;
         let ns_cstr = self.cstring_constant(&ns_name);
         let fn_cstr = self.cstring_constant(&fn_name);
-        self.builder
-            .build_call(not_loaded_fv, &[ns_cstr.into(), fn_cstr.into()], "")
-            .unwrap()
-            .set_call_convention(not_loaded_fv.get_call_conventions());
+        self.build_call(not_loaded_fv, &[ns_cstr.into(), fn_cstr.into()]);
         self.builder.build_unreachable().unwrap();
 
         self.builder.position_at_end(call_block);
@@ -2893,9 +2891,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.llvm_module.add_function(&name, fn_type, None)
             }
         };
-        self.builder
-            .build_call(function, &[input.into()], "")
-            .unwrap()
+        self.build_call(function, &[input.into()])
             .try_as_basic_value()
             .basic()
             .unwrap()
@@ -2915,7 +2911,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
         };
         let size = self.ctx.i64_type().const_int(size_bytes, false);
-        self.builder.build_call(function, &[size.into(), ptr.into()], "").unwrap();
+        self.build_call(function, &[size.into(), ptr.into()]);
     }
 
     fn memcpy_layout(
@@ -3022,7 +3018,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             let fn_type = self.ctx.void_type().fn_type(&[self.builtin_types.ptr.into()], false);
             self.llvm_module.add_function("zhas_union", fn_type, Some(LlvmLinkage::External))
         });
-        self.builder.build_call(zhas_union, &[alloca.into()], "").unwrap();
+        self.build_call(zhas_union, &[alloca.into()]);
     }
 
     fn pt_has_pointer_in_union(&self, pt: PhysicalType) -> bool {
@@ -3199,9 +3195,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let function_value = self.declare_llvm_function(function_id)?;
                 self.set_debug_location_from_span(span);
 
-                let call = self.builder.build_call(function_value, &args, "").unwrap();
-                call.set_call_convention(function_value.get_call_conventions());
-                call
+                self.build_call(function_value, &args)
             }
             CallKind::Indirect(fn_ptr) => {
                 self.set_debug_location_from_span(span);
@@ -3354,7 +3348,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
 
         self.set_debug_location_from_span(span);
-        let callsite = self.builder.build_call(function_value, &args, "").unwrap();
+        let callsite = self.build_call(function_value, &args);
         match callsite.try_as_basic_value() {
             ValueKind::Basic(returned) => {
                 let canonical = match self.k1.types.get(return_type_id) {
@@ -3472,8 +3466,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         )
                     }
                 };
-                let call =
-                    self.builder.build_call(memcmp_fv, &[p1_arg, p2_arg, size_arg], "").unwrap();
+                let call = self.build_call(memcmp_fv, &[p1_arg, p2_arg, size_arg]);
                 let result =
                     call.try_as_basic_value().expect_basic("memcmp return").into_int_value();
                 let is_zero = self
@@ -3505,15 +3498,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                 let else_block = self.append_basic_block("miss");
                 self.builder.position_at_end(else_block);
-                let trap = match self.llvm_module.get_function("llvm.trap") {
-                    Some(f) => f,
-                    None => self.llvm_module.add_function(
-                        "llvm.trap",
-                        self.ctx.void_type().fn_type(&[], false),
-                        None,
-                    ),
-                };
-                self.builder.build_call(trap, &[], "").unwrap();
+                let crash_fn = self.k1_ns_fn_value("crash-missing-type-info")?;
+                self.build_call(crash_fn, &[type_id_arg.into()]);
                 self.builder.build_unreachable().unwrap();
 
                 let finish_block = self.append_basic_block("finish");
@@ -4713,9 +4699,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             function_value
                 .add_attribute(AttributeLoc::Function, self.make_enum_attribute("noreturn", 0));
         }
-        if ir_fn.fn_type.diverges || self.k1.get_function(function_id).is_cold() {
+        if ir_fn.is_cold(self.k1) {
             function_value
                 .add_attribute(AttributeLoc::Function, self.make_enum_attribute("cold", 0));
+        }
+        if typed_function.is_noinline() {
+            function_value
+                .add_attribute(AttributeLoc::Function, self.make_enum_attribute("noinline", 0));
         }
 
         if self.k1.plan.config.target.arch() == compiler::Arch::Wasm {

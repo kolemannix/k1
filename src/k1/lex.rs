@@ -662,14 +662,6 @@ impl Token {
         self.flags & TOKEN_FLAG_IS_NEWLINE_PRECEDED == TOKEN_FLAG_IS_NEWLINE_PRECEDED
     }
 
-    pub fn can_start_expression(&self) -> bool {
-        self.kind == K::Minus
-    }
-
-    pub fn is_newline_starter(&self) -> bool {
-        self.is_newline_preceded() && self.can_start_expression()
-    }
-
     pub fn is_kind_nonspaced(&self, kind: TokenKind) -> bool {
         self.kind == kind && !self.is_whitespace_preceded()
     }

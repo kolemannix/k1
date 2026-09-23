@@ -44,7 +44,7 @@ build_k1() {
   dir=$GEN/k1/$tag/$bench
   mkdir -p "$dir"
   cp "$src" "$dir/"
-  (cd "$dir" && k1 $flags --cache false build "$name.k1")
+  (cd "$dir" && k1 $flags --no-cache build "$name.k1")
   cp "$dir/.k1-out/$name" "$BIN/$bench-$tag"
 }
 

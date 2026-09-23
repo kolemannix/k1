@@ -239,16 +239,16 @@ impl TypedProgram {
     }
 
     pub(super) fn get_type_info(&mut self, type_id: TypeId) -> StaticValueId {
-        let type_id = self.get_type_family_type(type_id);
         if let Some(existing) = self.type_infos.get(&type_id) {
             return *existing;
         }
         let reserved_id = self.static_values.pool.reserve_id();
         self.type_infos.insert(type_id, reserved_id);
 
+        let family_type_id = self.get_type_family_type(type_id);
         let name_value_id = self.build_type_name(type_id);
-        let schema_value_id = self.build_type_schema(type_id);
-        let instance_value_id = self.build_instance_info(type_id);
+        let schema_value_id = self.build_type_schema(family_type_id);
+        let instance_value_id = self.build_instance_info(family_type_id);
         let fields =
             self.static_values.mem.pushn(&[name_value_id, schema_value_id, instance_value_id]);
         let type_info_type_id = self.builtin_types.type_info();

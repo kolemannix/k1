@@ -51,13 +51,13 @@ fn count-newlines(data: span[u8]): size {
   count
 }
 
-fn scan-delims(s: string): { found: size, index-sum: i64, which-sum: i64 } {
+fn scan-delims(data: span[u8]): { found: size, index-sum: i64, which-sum: i64 } {
   let found: size = 0
   let index-sum: i64 = 0
   let which-sum: i64 = 0
   let from: size = 0
   loop {
-    let r = delims/scan(s, from)
+    let r = delims/scan(data, from)
     if r.index < 0 break
     found = found + 1
     index-sum = index-sum + r.index
@@ -71,7 +71,6 @@ fn main(): i32 {
   let buf = buffer/allocate[u8](SIZE)
   fill(buf)
   let data = span/wrap-buffer(buf)
-  let text = string/wrap-byte-buffer(buf)
   let absent = 0
   let newlines: size = 0
   let delims = 0
@@ -80,7 +79,7 @@ fn main(): i32 {
   for 0.until(REPEAT) {
     if data.contains(0) { absent = absent + 1 }
     newlines = newlines + count-newlines(data)
-    let r = scan-delims(text)
+    let r = scan-delims(data)
     delims = delims + r.found
     index-sum = index-sum + r.index-sum
     which-sum = which-sum + r.which-sum

@@ -77,7 +77,12 @@ never the module's own files. Every entry point in it is optional:
 - `fn setup(ctx: k1/setup-ctx)` is the module's build step (below).
 
 `k1/platform` and friends describe the host inside `build.k1`; read the build's
-target from `b.target` or `ctx.build.target`. Deps are named in the manifest with
+target from `b.target` or `ctx.build.target`. A library the compile-time VM
+loads is named with `k1/host-platform.dylib-ext()` (`dylib` or `so`).
+`k1/module-dir()` is the home dir of the module whose source contains the call
+(the dir itself for a module dir, the file's parent for a single-file program),
+resolved like `k1/location()`: text a macro splices in from its arguments
+counts as the caller's, template text as the macro's. Deps are named in the manifest with
 `m.dep("y")`, or `m.dep-params("y", .{ field = value })` to set y's
 `let p: S = k1/module-params(defaults)` fields; the literal is typed later, in y.
 A dep name resolves to the first existing dir of `<primary>/deps/y`,
@@ -105,6 +110,12 @@ as the caller's IR is emitted, in every build mode and in the compile-time VM,
 so the fn only gets a standalone copy when its address is taken. It needs a
 body (not intern/extern) and is rejected in reloadable namespaces; a cycle of
 `fn(inline)` calls is an error, a cycle through a normal fn is fine.
+`fn(cold)` marks a rarely-run fn; diverging fns are cold already. The IR
+inliner never inlines a cold fn, and LLVM gets the `cold` attribute.
+`fn(noinline)` keeps a fn out of line in both the IR inliner and LLVM. It
+belongs on the out-of-line half of a fast path (`buffer/_grow-to`,
+`arena/_grow`, `map/_make-room`). It needs a body and cannot be combined with
+`inline`.
 
 A manifest may declare a setup step — `m.setup(outputs, inputs)` — paired with
 `fn setup(ctx: k1/setup-ctx)` in the same `build.k1`. When the declared outputs
@@ -492,13 +503,17 @@ The tests cover several ability features beyond the basics:
 
 - Default ability methods.
 - Impl methods overriding defaults.
+- `where` clauses on ability fns (`fn has(self, x: t): bool where t: equals`)
+  gate the fn per impl, default or override alike: an impl whose arguments
+  miss the constraint lacks the fn, and a generic impl's override body is
+  checked per instantiation. Impl methods do not restate the clause.
 - Blanket impls such as `impl[t: increment] incr-four for t`.
 - Ability parameters with named assignments like `as-pair[aa=a, bb=b]`.
 - Compound bounds such as `t: as-pair[aa=x, bb=y] and as-pair[aa=y, bb=x]`.
 - Multiple abilities exposing methods with the same name and different
   signatures.
 
-See `test_src/suite1/ability_default_fns.k1`,
+See `test_src/suite1/ability_default_fns.k1`, `test_src/suite1/ability_where.k1`,
 `test_src/suite1/ability_complex.k1`,
 `test_src/suite1/ability_overload_ish.k1`, and
 `test_src/suite1/ability_generic.k1`.
