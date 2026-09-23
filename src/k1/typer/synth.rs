@@ -535,6 +535,19 @@ impl TypedProgram {
         self.add_static_constant_expr(value, span)
     }
 
+    pub(super) fn synth_discard_then(
+        &mut self,
+        discarded: TypedExprId,
+        result: TypedExprId,
+        scope_id: ScopeId,
+    ) -> TypedExprId {
+        let span = self.exprs.get_span(result);
+        let mut b = BlockBuilder { statements: self.mem.new_list(2), scope_id, span };
+        self.push_block_expr_id(&mut b, discarded);
+        self.push_block_expr_id(&mut b, result);
+        self.exprs.add_block(b, self.exprs.get_type(result))
+    }
+
     pub(super) fn synth_discard_call(
         &mut self,
         value: TypedExprId,

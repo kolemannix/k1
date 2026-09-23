@@ -250,7 +250,7 @@ impl TypedProgram {
         let skip_print = no_print || {
             if e.level != MessageLevel::Error {
                 // Don't print warnings when errors are present
-                let has_errors = self.error_count(&[MessageLevel::Error]) > 0;
+                let has_errors = self.error_count() > 0;
                 has_errors
             } else {
                 false

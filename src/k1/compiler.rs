@@ -1302,7 +1302,7 @@ pub fn compile_program(
         write_idents_dump(&k1);
     }
 
-    let is_ok = k1.error_count(&[MessageLevel::Error]) == 0;
+    let is_ok = k1.error_count() == 0;
     if !is_ok {
         return Err(CompileProgramError::TyperFailure(Box::new(k1)));
     };
@@ -1773,11 +1773,9 @@ pub fn codegen_module(ctx: &Context, k1: &mut TypedProgram) -> Result<()> {
     k1.trace_pop(prepare_frame);
     let roots = match prepared {
         Ok(roots) => roots,
-        Err(e) => match k1.error_count(&[MessageLevel::Error]) {
+        Err(e) => match k1.error_count() {
             0 => anyhow::bail!(report_codegen_error(k1, e)),
-            n => {
-                anyhow::bail!("Module {} failed typechecking with {} errors", k1.program_name(), n)
-            }
+            _ => anyhow::bail!(k1.failure_summary()),
         },
     };
     if k1.config.tools.dump_ir {

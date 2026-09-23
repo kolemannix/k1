@@ -3042,8 +3042,12 @@ fn compile_expr_place(b: &mut Builder, expr: TypedExprId) -> K1Result<(Value, bo
     match b.k1.exprs.get(expr).clone() {
         TypedExpr::StructFieldAccess(field_access) => {
             let struct_type = b.k1.exprs.get_type(field_access.base_struct);
-            let struct_pt_id = b.get_physical_type(struct_type)?.expect_agg();
+            let struct_pt = b.get_physical_type(struct_type)?;
             let (base_ptr, frozen) = compile_expr_place(b, field_access.base_struct)?;
+            if struct_pt.is_empty() {
+                return Ok((Value::Empty, frozen));
+            }
+            let struct_pt_id = struct_pt.expect_agg();
             let field_ptr = b.push_struct_offset(
                 struct_pt_id,
                 base_ptr,

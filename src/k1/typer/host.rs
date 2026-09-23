@@ -66,7 +66,7 @@ pub fn plan_in_host(
         .load_plan_modules(sources, snapshot_count)
         .and_then(|()| h.plan_build(BuildPlan::new(strings, request.default), request));
     match result {
-        Ok(plan) if h.error_count(&[MessageLevel::Error]) == 0 => Ok((plan, Box::new(h))),
+        Ok(plan) if h.error_count() == 0 => Ok((plan, Box::new(h))),
         Ok(_) => Err(CompileProgramError::TyperFailure(Box::new(h))),
         Err(e) => {
             h.report(e);

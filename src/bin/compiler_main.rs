@@ -32,6 +32,7 @@ fn main() -> anyhow::Result<ExitCode> {
         Ok(program) => program,
         Err(CompileProgramError::TyperFailure(program)) => {
             compiler::report_trace(&program);
+            eprintln!("{}", program.failure_summary());
             return Ok(ExitCode::FAILURE);
         }
         Err(CompileProgramError::Build(message)) => {

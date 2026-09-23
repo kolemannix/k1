@@ -13,6 +13,53 @@ fn takes-ptr(f: *fn(int) -> int, x: int): int { f(x) }
 
 type has-fn = { myfn: *fn(not-x: int) -> int }
 
+fn counted-add-one(count: *int): type-of(static-add-one) {
+  count.* = count.* + 1
+  static-add-one
+}
+
+fn apply-through-field(f: some fn(int) -> int): int {
+  let holder = .{ held = f }
+  (holder.held)(10)
+}
+
+fn function-reference-values() {
+  let count = 0
+  assert-equals((counted-add-one(count.&))(1), 2)
+  assert-equals(count, 1)
+  let p = counted-add-one(count.&).&
+  assert-equals(count, 2)
+  assert-equals(p(1), 2)
+  let d = counted-add-one(count.&).to-dyn()
+  assert-equals(count, 3)
+  assert-equals(d(1), 2)
+  let r = counted-add-one(count.&)
+  assert-equals(r(1), 2)
+  assert-equals(count, 4)
+}
+
+fn call-on-expr() {
+  let base = 5
+  let callables = .{
+    lambda = fn[base](x: int) x + base,
+    object = (fn(x: int) x * 2).to-dyn(),
+    pointer = static-add-one.&,
+    reference = static-add-one,
+  }
+  assert-equals((callables.lambda)(1), 6)
+  assert-equals((callables.object)(1), 2)
+  assert-equals((callables.pointer)(1), 2)
+  assert-equals((callables.reference)(1), 2)
+  assert-equals((fn[base]. base * 2)(), 10)
+  assert-equals(apply-through-field(fn x. x + 1), 11)
+  assert-equals(apply-through-field(static-add-one), 11)
+  let zero-sized = .{ f = static-add-one }
+  assert-equals((zero-sized.f)(3), 4)
+  let x = 3
+  assert(test-compile( x(1) ) is :some "Not callable: type is 'i64'")
+  assert(test-compile( (x)(1) ) is :some "Not callable: type is 'i64'")
+}
+
 fn test() {
   assert(static-add-one.&.as[ptr] != static-add-two.&.as[ptr])
   let some-add-fn: *fn(int) -> int = static-add-one.&
@@ -79,5 +126,7 @@ fn test() {
   assert(test-compile( static-add-one[int].& ) is :some _)
   assert(test-compile( types/size[int].& ) is :some _)
 
+  function-reference-values()
+  call-on-expr()
   .{}
 }

@@ -18,7 +18,6 @@ pub mod trace;
 pub(crate) mod type_eval;
 pub(crate) mod typed_int_value;
 pub(crate) mod types;
-pub(crate) mod visit;
 
 use crate::ir::{AtomicOrderingIr, BackendBuiltin, IrUnitId};
 use crate::typer::megarepl::MegareplState;
@@ -1128,7 +1127,7 @@ pub enum Callee {
     },
     /// Used by function type parameters
     DynamicAbstract {
-        variable_id: VariableId,
+        callee_expr: TypedExprId,
         function_sig: FunctionSignature,
     },
 }
@@ -3036,6 +3035,7 @@ impl TypedProgram {
             && self.lsp.source_overrides.is_empty()
             && !self.lsp.completion
             && self.megarepl.is_none()
+            && self.ast.errors.is_empty()
         {
             let settings =
                 snapshot::inputs_hash_from_settings(&self.ast.idents, &self.config, &self.plan);
@@ -5773,7 +5773,7 @@ impl TypedProgram {
             {
                 let reference =
                     self.compile_specialized_function_reference(fn_id, &call, call_span, ctx)?;
-                return Ok(self.reference_to_pointer(reference, span));
+                return Ok(self.reference_to_pointer(reference, span, ctx.scope_id));
             }
         }
         let expected_type = match ctx.expected_type_id {
@@ -5782,7 +5782,7 @@ impl TypedProgram {
         };
         let input = self.eval_expr(base_expr, ctx.with_expected_type(expected_type))?;
         if self.types.get(self.exprs.get_type(input)).as_function_reference().is_some() {
-            return Ok(self.reference_to_pointer(input, span));
+            return Ok(self.reference_to_pointer(input, span, ctx.scope_id));
         }
         self.warn_packed_field_address_of(input, span);
         self.synth_address_of(input, span, false)
@@ -6253,22 +6253,12 @@ impl TypedProgram {
                 let call = *call;
                 let called_expr_span = self.ast.exprs.get_span(call.called_expr);
                 let called_expr = self.eval_expr(call.called_expr, ctx.with_no_expected_type())?;
-                let called_expr_type = self.exprs.get_type(called_expr);
-                let Type::FunctionPointer(_) = self.types.get(called_expr_type) else {
-                    kbail!(
-                        self,
-                        called_expr_span,
-                        "Not a callable expression; type is '{}' rather than a function pointer",
-                        called_expr_type
-                    );
-                };
-                let callee = Callee::DynamicFunction { function_pointer_expr: called_expr };
                 let call = ParsedCall::without_type_args(
                     QIdent::naked(self.ast.idents.b.invoke, called_expr_span),
                     call.args,
                     false,
                 );
-                self.eval_function_call(&call, span, None, ctx, Some(callee))
+                self.eval_call_on_value(called_expr, &call, span, None, ctx, &[])
             }
             ParsedExpr::For(for_expr) => {
                 let for_expr = *self.ast.mem.get(for_expr.inner);
@@ -9189,65 +9179,26 @@ impl TypedProgram {
                     if fn_call.name.has_path() {
                         return fn_not_found!();
                     }
-                    if let Some((variable_id, _scope_id)) =
+                    let Some((variable_id, _scope_id)) =
                         self.scopes.find_variable(ctx.scope_id, fn_call.name.name)
-                    {
-                        self.register_variable_usage(variable_id, fn_call.name.name_span);
-                        let function_variable = self.variables.get(variable_id);
-                        debug!(
-                            "Variable {} has type {}",
-                            self.ident_str(fn_call.name.name),
-                            self.type_id_to_string(function_variable.type_id)
-                        );
-
-                        match self.types.get(function_variable.type_id) {
-                            Type::Lambda(lambda_type_id) => {
-                                let lambda_type = self.lambda_types.get(*lambda_type_id);
-                                Ok(CallResolution::Call(Callee::StaticLambda {
-                                    function_id: lambda_type.function_id,
-                                    lambda_value_expr: self.exprs.add(
-                                        TypedExpr::Variable(VariableExpr { variable_id }),
-                                        function_variable.type_id,
-                                        call_span,
-                                    ),
-                                    lambda_type_id: function_variable.type_id,
-                                }))
-                            }
-                            Type::LambdaObject(_lambda_object) => {
-                                Ok(CallResolution::Call(Callee::DynamicLambda(self.exprs.add(
-                                    TypedExpr::Variable(VariableExpr { variable_id }),
-                                    function_variable.type_id,
-                                    fn_call.name.name_span,
-                                ))))
-                            }
-                            Type::FunctionReference(fr) => {
-                                Ok(CallResolution::Call(Callee::StaticFunction(fr.function_id)))
-                            }
-                            Type::FunctionTypeParameter(ftp) => {
-                                let callee = Callee::DynamicAbstract {
-                                    function_sig: FunctionSignature::make_no_generics(
-                                        Some(ftp.name),
-                                        ftp.function_type,
-                                    ),
-                                    variable_id,
-                                };
-                                Ok(CallResolution::Call(callee))
-                            }
-                            Type::FunctionPointer(_function_pointer) => {
-                                let function_pointer_expr = self.exprs.add(
-                                    TypedExpr::Variable(VariableExpr { variable_id }),
-                                    function_variable.type_id,
-                                    fn_call.name.name_span,
-                                );
-                                Ok(CallResolution::Call(Callee::DynamicFunction {
-                                    function_pointer_expr,
-                                }))
-                            }
-                            _ => fn_not_found!(),
-                        }
-                    } else {
-                        fn_not_found!()
-                    }
+                    else {
+                        return fn_not_found!();
+                    };
+                    self.register_variable_usage(variable_id, fn_call.name.name_span);
+                    let value = self.exprs.add(
+                        TypedExpr::Variable(VariableExpr { variable_id }),
+                        self.variables.get(variable_id).type_id,
+                        fn_call.name.name_span,
+                    );
+                    let call = self.eval_call_on_value(
+                        value,
+                        fn_call,
+                        call_span,
+                        known_args.copied(),
+                        ctx,
+                        stashed_args,
+                    )?;
+                    Ok(CallResolution::OtherExpr(call))
                 }
             }
         }
@@ -9714,9 +9665,12 @@ impl TypedProgram {
                                 "Cannot get a pointer to an intrinsic operation. (If you need one, make a wrapper function)"
                             );
                         }
-                        return Ok(CallResolution::OtherExpr(
-                            self.function_to_lambda_object(fr.function_id, call_span),
-                        ));
+                        let lambda_object = self.function_to_lambda_object(fr.function_id, call_span);
+                        return Ok(CallResolution::OtherExpr(self.synth_discard_then(
+                            base,
+                            lambda_object,
+                            ctx.scope_id,
+                        )));
                     }
                     Type::Lambda(lambda_type_id) => {
                         return Ok(CallResolution::OtherExpr(self.lambda_to_lambda_object(
@@ -10214,9 +10168,15 @@ impl TypedProgram {
         self.make_function_pointer(function_id, function_type, span)
     }
 
-    fn reference_to_pointer(&mut self, reference: TypedExprId, span: SpanId) -> TypedExprId {
+    fn reference_to_pointer(
+        &mut self,
+        reference: TypedExprId,
+        span: SpanId,
+        scope_id: ScopeId,
+    ) -> TypedExprId {
         let fr = self.types.get(self.exprs.get_type(reference)).as_function_reference().unwrap();
-        self.make_function_pointer(fr.function_id, fr.function_type, span)
+        let pointer = self.make_function_pointer(fr.function_id, fr.function_type, span);
+        self.synth_discard_then(reference, pointer, scope_id)
     }
 
     fn make_function_pointer(
@@ -11285,6 +11245,58 @@ impl TypedProgram {
             self.eval_function_call_inner(fn_call, span, known_args, ctx, known_callee, &[]);
         self.tmp.reset_to(tmp_mark);
         result
+    }
+
+    fn eval_call_on_value(
+        &mut self,
+        value: TypedExprId,
+        fn_call: &ParsedCall,
+        span: SpanId,
+        known_args: Option<(&[TypeId], &[TypedExprId])>,
+        ctx: EvalExprContext,
+        pre_typed_args: &[(ParsedExprId, TypedExprId)],
+    ) -> K1Result<TypedExprId> {
+        let value_type = self.exprs.get_type(value);
+        let callee = match *self.types.get(value_type) {
+            Type::Lambda(lambda_type_id) => Callee::StaticLambda {
+                function_id: self.lambda_types.get(lambda_type_id).function_id,
+                lambda_value_expr: value,
+                lambda_type_id: value_type,
+            },
+            Type::LambdaObject(_) => Callee::DynamicLambda(value),
+            Type::FunctionReference(fr) => Callee::StaticFunction(fr.function_id),
+            Type::FunctionTypeParameter(ftp) => Callee::DynamicAbstract {
+                callee_expr: value,
+                function_sig: FunctionSignature::make_no_generics(
+                    Some(ftp.name),
+                    ftp.function_type,
+                ),
+            },
+            Type::FunctionPointer(_) => Callee::DynamicFunction { function_pointer_expr: value },
+            _ => kbail!(
+                self,
+                self.exprs.get_span(value),
+                "Not callable: type is '{}'",
+                value_type
+            ),
+        };
+        let is_function_reference = matches!(callee, Callee::StaticFunction(_));
+        let tmp_mark = self.tmp.mark();
+        let call = self.eval_function_call_inner(
+            fn_call,
+            span,
+            known_args,
+            ctx,
+            Some(callee),
+            pre_typed_args,
+        );
+        self.tmp.reset_to(tmp_mark);
+        let call = call?;
+        if is_function_reference {
+            Ok(self.synth_discard_then(value, call, ctx.scope_id))
+        } else {
+            Ok(call)
+        }
     }
 
     fn eval_function_call_with_typed_first_arg(
@@ -17259,19 +17271,9 @@ impl TypedProgram {
     ) -> K1Result<()> {
         let is_core = module_id == MODULE_ID_CORE;
         macro_rules! check_for_errors {
-            ($msg:expr) => {
-                match self.error_count(&[MessageLevel::Error]) {
-                    n if n > 0 => {
-                        kbail!(
-                            self,
-                            SpanId::NONE,
-                            "Module {} failed {} with {} errors",
-                            self.program_name(),
-                            $msg,
-                            n
-                        )
-                    }
-                    _ => {}
+            () => {
+                if let Some(e) = self.first_typer_error() {
+                    return Err(e);
                 }
             };
         }
@@ -17286,7 +17288,7 @@ impl TypedProgram {
         let pass = self.trace_push(TraceKind::PassNamespaces, module_id.as_u32(), 0);
         self.declare_namespaces_in_namespace(module_root_parsed_namespace, skip_defns);
         self.trace_pop(pass);
-        check_for_errors!("namespace declaration");
+        check_for_errors!();
 
         // Pending Type declaration phase
         debug!(">> Pass 2 declare types, abilities and impls");
@@ -17304,7 +17306,7 @@ impl TypedProgram {
         self.drain_pending_type_defns();
         self.trace_pop(pass);
 
-        check_for_errors!("types");
+        check_for_errors!();
 
         debug_assert_eq!(self.types.len(), self.type_variable_counts.len());
 
@@ -17349,7 +17351,7 @@ impl TypedProgram {
         let pass = self.trace_push(TraceKind::PassDeclarations, module_id.as_u32(), 0);
         self.declare_namespace_definitions(module_root_parsed_namespace, skip_defns);
         self.trace_pop(pass);
-        check_for_errors!("general declaration");
+        check_for_errors!();
         if self.global_id_k1_arena.is_none() {
             panic!("global_id_k1_arena was not set");
         }
@@ -17380,7 +17382,7 @@ impl TypedProgram {
         self.compile_ns_body(module_root_parsed_namespace, skip_defns);
         self.trace_pop(pass);
 
-        check_for_errors!("typechecking");
+        check_for_errors!();
 
         Ok(())
     }
@@ -17407,8 +17409,17 @@ impl TypedProgram {
         self.types_pending_definition.clear();
     }
 
-    pub fn error_count(&self, kinds: &[MessageLevel]) -> usize {
-        self.messages.borrow().iter().filter(|e| kinds.contains(&e.level)).count()
+    fn first_typer_error(&self) -> Option<K1Message> {
+        self.messages.borrow().iter().find(|e| e.level == MessageLevel::Error).copied()
+    }
+
+    pub fn error_count(&self) -> usize {
+        self.ast.errors.len()
+            + self.messages.borrow().iter().filter(|e| e.level == MessageLevel::Error).count()
+    }
+
+    pub fn failure_summary(&self) -> String {
+        format!("Module {} failed compiling with {} errors", self.program_name(), self.error_count())
     }
 
     fn assert_builtin_types_correct(&self) {

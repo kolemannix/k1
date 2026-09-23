@@ -779,9 +779,8 @@ impl TypedProgram {
                         self.display_expr_id(*object_expr, w, indentation)?;
                         write!(w, ".dyn[{}]", field_index)?;
                     }
-                    Callee::DynamicAbstract { variable_id, .. } => {
-                        let variable = self.variables.get(*variable_id);
-                        self.write_ident(w, variable.name)?;
+                    Callee::DynamicAbstract { callee_expr, .. } => {
+                        self.display_expr_id(*callee_expr, w, indentation)?;
                     }
                 };
                 w.write_str("(")?;
