@@ -491,7 +491,7 @@ impl TypedProgram {
         writeln!(
             out,
             "\t{} instructions, {} code words",
-            self.ir.instrs.len(),
+            self.ir.live_inst_count(),
             self.bc.code.len()
         )?;
         self.tmp.print_usage("\ttmp");

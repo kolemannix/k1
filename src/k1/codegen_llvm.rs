@@ -38,8 +38,7 @@ use log::{debug, trace};
 
 use crate::compiler::{self};
 use crate::ir::{
-    BackendBuiltin, BlockId, Inst, InstId, IrCallee, IrUnitId, PhysicalFunctionType, ProgramIr,
-    Value,
+    BackendBuiltin, BlockId, IdMap, Inst, InstId, IrCallee, IrUnitId, PhysicalFunctionType, Value,
 };
 use crate::kmem::{List, MSlice};
 use crate::lex::SpanId;
@@ -304,7 +303,6 @@ impl<'ctx> BuiltinTypes<'ctx> {
 pub struct CgFunction<'ctx> {
     pub function_type: CgFunctionType<'ctx>,
     pub function_value: FunctionValue<'ctx>,
-    pub blocks: FxHashMap<BlockId, BasicBlock<'ctx>>,
     /// These are canonical, not ABI-mapped, and also logical, as in,
     /// sret is excluded, so the first item is the first param the function actually takes
     pub param_values: Vec<BasicValueEnum<'ctx>>,
@@ -409,13 +407,15 @@ pub struct Cg<'ctx, 'k1> {
     mem: kmem::Mem<CgPerm>,
 
     current_insert_function: FunctionId,
+    cur_unit: ir::UnitView<'static>,
+    cur_blocks: IdMap<BlockId, BasicBlock<'ctx>>,
     last_debug_location: std::cell::Cell<Option<(SpanId, DILocation<'ctx>)>>,
 
     buffers: CgBuffers,
 }
 
 struct CgBuffers {
-    cfg_seen: FxHashSet<BlockId>,
+    cfg_seen: IdMap<BlockId, ()>,
     cfg_blocks_rpo: Vec<BlockId>,
 }
 
@@ -772,10 +772,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             mem: kmem::Mem::make(),
 
             current_insert_function: FunctionId::PENDING,
+            cur_unit: ir::UnitView::EMPTY,
+            cur_blocks: IdMap::default(),
             last_debug_location: std::cell::Cell::new(None),
 
             buffers: CgBuffers {
-                cfg_seen: FxHashSet::new(),
+                cfg_seen: IdMap::default(),
                 cfg_blocks_rpo: Vec::with_capacity(16),
             },
         }
@@ -880,7 +882,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             _ => None,
         };
 
-        let mut inst_mappings = FxHashMap::with_capacity(512);
+        let mut inst_mappings = IdMap::default();
         while let Some(fn_id) = self.functions_pending_body_compilation.pop() {
             self.codegen_function_body(&mut inst_mappings, fn_id)?;
         }
@@ -932,41 +934,37 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         Ok(())
     }
 
-    fn collect_inst_function_refs(k1: &TypedProgram, inst: &Inst, refs: &mut Vec<FunctionId>) {
+    fn collect_inst_function_refs(u: &ir::UnitView, inst: &Inst, refs: &mut Vec<FunctionId>) {
         if let Inst::Call { call_id } = inst {
-            match k1.ir.calls.get(*call_id).callee {
+            match u.call(*call_id).callee {
                 IrCallee::Direct(id)
                 | IrCallee::Extern { function_id: id, .. }
                 | IrCallee::BackendBuiltin(id, _) => refs.push(id),
                 IrCallee::LlvmIntrinsic { .. } | IrCallee::Indirect(..) => {}
             }
         }
-        ir::visit_inst_values(&k1.ir, inst, &mut |v| {
+        ir::visit_inst_values(u, inst, &mut |v| {
             if let Value::FunctionAddr(id) = v {
                 refs.push(id)
             }
         });
     }
 
-    fn collect_block_live_successors(ir: &ProgramIr, block_id: BlockId, out: &mut Vec<BlockId>) {
-        let block = &ir.mem.get(block_id).data;
-        if block.instrs.last.is_nil() {
-            return;
-        }
-        let last = ir.mem.get(block.instrs.last).data;
-        match ir.instrs.get(last) {
-            Inst::Jump(target) => out.push(*target),
+    fn collect_block_live_successors(u: &ir::UnitView, block_id: BlockId, out: &mut Vec<BlockId>) {
+        let Some(last) = u.block(block_id).last else { return };
+        match *u.inst(last) {
+            Inst::Jump(target) => out.push(target),
             Inst::JumpIf { cond, cons, alt } => {
-                if *cond != Value::IsStatic {
-                    out.push(*cons);
+                if cond != Value::IsStatic {
+                    out.push(cons);
                 }
-                out.push(*alt);
+                out.push(alt);
             }
             Inst::Switch { cases, default, .. } => {
-                for case in ir.mem.getn(*cases) {
+                for case in u.switch_cases(cases) {
                     out.push(case.target);
                 }
-                out.push(*default);
+                out.push(default);
             }
             _ => {}
         }
@@ -976,7 +974,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let mut reachable: Vec<FunctionId> = Vec::with_capacity(1024);
         let mut seen: FxHashSet<FunctionId> = FxHashSet::with_capacity(1024);
         let mut worklist: Vec<FunctionId> = roots.to_vec();
-        let mut seen_blocks: FxHashSet<BlockId> = FxHashSet::with_capacity(64);
+        let mut seen_blocks: IdMap<BlockId, ()> = IdMap::default();
         let mut block_worklist: Vec<BlockId> = Vec::with_capacity(64);
         while let Some(function_id) = worklist.pop() {
             if !seen.insert(function_id) {
@@ -984,20 +982,21 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             reachable.push(function_id);
             let Some(unit) = k1.ir.functions.get(&function_id) else { continue };
+            let u = unit.view(&k1.ir.mem);
             seen_blocks.clear();
             block_worklist.clear();
-            if !unit.blocks.first.is_nil() {
-                block_worklist.push(unit.blocks.first);
+            if let Some(entry) = u.first_block() {
+                block_worklist.push(entry);
             }
             while let Some(block_id) = block_worklist.pop() {
-                if !seen_blocks.insert(block_id) {
+                if seen_blocks.contains(block_id) {
                     continue;
                 }
-                let block = &k1.ir.mem.get(block_id).data;
-                for inst_id in k1.ir.mem.dlist_iter(block.instrs) {
-                    Cg::collect_inst_function_refs(k1, k1.ir.instrs.get(*inst_id), &mut worklist);
+                seen_blocks.insert(block_id, ());
+                for inst_id in u.block_insts(block_id) {
+                    Cg::collect_inst_function_refs(&u, u.inst(inst_id), &mut worklist);
                 }
-                Cg::collect_block_live_successors(&k1.ir, block_id, &mut block_worklist);
+                Cg::collect_block_live_successors(&u, block_id, &mut block_worklist);
             }
         }
         reachable
@@ -1099,7 +1098,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         const MIN_UNIT_INSTRUCTIONS: u64 = 2 * 1024;
         let size_of = |function_id: &FunctionId| -> u64 {
             match k1.ir.functions.get(function_id) {
-                Some(unit) => unit.inst_count as u64 + 1,
+                Some(unit) => unit.inst_count() as u64 + 1,
                 None => 0,
             }
         };
@@ -2957,13 +2956,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn get_llvm_block(&self, block_id: BlockId) -> CgResult<BasicBlock<'ctx>> {
         // We skip our 'prelude' block which exists only in the llvm ir
-        match self.get_current_function().blocks.get(&block_id) {
-            Some(bb) => Ok(*bb),
-            None => Err(cgerr!(
-                self.debug.current_span(),
-                "Failed to get block: b{}",
-                block_id.raw_index()
-            )),
+        match self.cur_blocks.get(block_id) {
+            Some(bb) => Ok(bb),
+            None => Err(cgerr!(self.debug.current_span(), "Failed to get block: b{}", block_id)),
         }
     }
 
@@ -3108,11 +3103,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn codegen_function_call(
         &mut self,
-        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
         call_id: ir::IrCallId,
         span: SpanId,
     ) -> CgResult<Option<BasicValueEnum<'ctx>>> {
-        let call = self.k1.ir.calls.get(call_id);
+        let call = self.cur_unit.call(call_id);
         let callee = call.callee;
         let call_args = call.args;
         let call_dst = call.dst;
@@ -3171,7 +3166,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         let mut byval_args = self.tmp.new_list(0);
         let mut caller_copies = self.tmp.new_list(0);
-        for (index, arg_ir_value) in self.k1.ir.mem.getn(call_args).iter().enumerate() {
+        for (index, arg_ir_value) in self.cur_unit.args(call_args).iter().enumerate() {
             let arg_value = self.resolve_value(inst_mappings, *arg_ir_value)?;
 
             let param_k1_ty = *self.mem.get_nth_lt(cg_fn_type.param_k1_types, index);
@@ -3269,10 +3264,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     /// Constant bool args fold to constant i1, satisfying immarg parameters
     fn codegen_llvm_intrinsic_call(
         &mut self,
-        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
         name: StringId,
         function_id: FunctionId,
-        call_args: MSlice<ir::Value, ProgramIr>,
+        call_args: ir::IrRange<ir::Value>,
         call_dst: Option<ir::Value>,
         span: SpanId,
     ) -> CgResult<Option<BasicValueEnum<'ctx>>> {
@@ -3330,7 +3325,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
 
         let mut args: SV8<BasicMetadataValueEnum<'ctx>> = smallvec::smallvec![];
-        for (index, arg_ir_value) in self.k1.ir.mem.getn(call_args).iter().enumerate() {
+        for (index, arg_ir_value) in self.cur_unit.args(call_args).iter().enumerate() {
             let arg_value = self.resolve_value(inst_mappings, *arg_ir_value)?;
             let param_type_id = params[index].type_id;
             let marshalled: BasicValueEnum<'ctx> = match self.k1.types.get(param_type_id) {
@@ -3570,32 +3565,31 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn codegen_block(
         &mut self,
-        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
         block_id: BlockId,
     ) -> CgResult<BasicBlock<'ctx>> {
-        let block = self.k1.ir.mem.get(block_id);
         let llvm_block = self.get_llvm_block(block_id)?;
         self.builder.position_at_end(llvm_block);
-        for inst in self.k1.ir.mem.dlist_iter(block.data.instrs) {
-            self.codegen_inst(inst_mappings, *inst)?;
+        for inst_id in self.cur_unit.block_insts(block_id) {
+            self.codegen_inst(inst_mappings, inst_id)?;
         }
         Ok(llvm_block)
     }
 
     fn resolve_value(
         &mut self,
-        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
         value: ir::Value,
     ) -> CgResult<BasicValueEnum<'ctx>> {
         //eprintln!("codegen_value {}", value);
         match value {
-            ir::Value::Inst(inst_id) => match inst_mappings.get(&inst_id) {
-                Some(v) => Ok(*v),
+            ir::Value::Inst(inst_id) => match inst_mappings.get(inst_id) {
+                Some(v) => Ok(v),
                 None => Err(cgerr!(
                     self.debug.current_span(),
                     "codegen llvm has no value for this instruction: i{} {}",
                     inst_id.as_u32(),
-                    ir::inst_to_string(self.k1, inst_id)
+                    ir::inst_to_string(self.k1, &self.cur_unit, inst_id)
                 )),
             },
             ir::Value::GlobalAddr { id, .. } => {
@@ -3674,7 +3668,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn vec_load(
         &mut self,
         vop: &ir::VecOpData,
-        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
         addr: ir::Value,
     ) -> CgResult<inkwell::values::VectorValue<'ctx>> {
         let ptr = self.resolve_value(inst_mappings, addr)?.into_pointer_value();
@@ -3687,7 +3681,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn vec_store(
         &mut self,
         vop: &ir::VecOpData,
-        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
         value: inkwell::values::VectorValue<'ctx>,
     ) -> CgResult<()> {
         let dst_ptr = self.resolve_value(inst_mappings, vop.dst)?.into_pointer_value();
@@ -3703,7 +3697,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     /// Returns the scalar result for value-producing ops (to-mask), None otherwise
     fn codegen_vec_op(
         &mut self,
-        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
         vop: ir::VecOpData,
     ) -> CgResult<Option<BasicValueEnum<'ctx>>> {
         use ir::VecOpIr;
@@ -3856,14 +3850,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn codegen_inst(
         &mut self,
-        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
         inst_id: InstId,
     ) -> CgResult<()> {
-        let ir = &self.k1.ir;
-        let span = *ir.sources.get(inst_id);
+        let span = self.cur_unit.span(inst_id);
         self.set_debug_location_from_span(span);
-        // eprintln!("codegen_inst i{} {}", inst_id.as_u32(), ir::inst_to_string(self.k1, inst_id));
-        let inst = *ir.instrs.get(inst_id);
+        let inst = *self.cur_unit.inst(inst_id);
         match inst {
             Inst::Data(data_inst) => {
                 let value: BasicValueEnum<'ctx> = match data_inst {
@@ -3888,7 +3880,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 inst_mappings.insert(inst_id, value);
                 Ok(())
             }
-            Inst::Alloca { t, returned, .. } => {
+            Inst::Alloca { t, returned, debug, .. } => {
                 // task(debug info): Eventually we could supplement with the type_id from the
                 // VariableDebugInfo here in order to differentiate between byte/char/bool
                 let cg_type = self.codegen_type(t);
@@ -3913,8 +3905,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 };
                 inst_mappings.insert(inst_id, alloca_ptr.as_basic_value_enum());
 
-                let ir_debug_info = self.k1.ir.debug_info.get(inst_id);
-                if let Some(var_info) = ir_debug_info.variable_info
+                if let Some(var_info) = debug
                     && !var_info.user_hidden
                     && !self.debug.line_tables_only
                 {
@@ -4047,7 +4038,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::AtomicCmpxchg { id } => {
-                let cas = *self.k1.ir.cmpxchgs.get(id);
+                let cas = *self.cur_unit.cmpxchg(id);
                 let dst_pointer = self.resolve_value(inst_mappings, cas.dst)?.into_pointer_value();
                 let expected = self.resolve_value(inst_mappings, cas.expected)?;
                 let desired = self.resolve_value(inst_mappings, cas.desired)?;
@@ -4080,7 +4071,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::VecOp { id } => {
-                let vop = *self.k1.ir.vec_ops.get(id);
+                let vop = *self.cur_unit.vec_op(id);
                 if let Some(result) = self.codegen_vec_op(inst_mappings, vop)? {
                     inst_mappings.insert(inst_id, result);
                 }
@@ -4163,7 +4154,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let default_block = self.get_llvm_block(default)?;
                 let mut llvm_cases: Vec<(IntValue<'ctx>, BasicBlock<'ctx>)> =
                     Vec::with_capacity(cases.len() as usize);
-                for case in self.k1.ir.mem.getn(cases) {
+                for case in self.cur_unit.switch_cases(cases) {
                     let case_value = int_type.const_int(case.value, false);
                     llvm_cases.push((case_value, self.get_llvm_block(case.target)?));
                 }
@@ -4180,10 +4171,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let phi_block = self.builder.get_insert_block().unwrap();
                 let debug_locn = self.builder.get_current_debug_location();
 
-                for incoming in self.k1.ir.mem.getn(incomings) {
-                    let Some(block) =
-                        self.get_current_function().blocks.get(&incoming.from).copied()
-                    else {
+                for incoming in self.cur_unit.phi_cases(incomings) {
+                    let Some(block) = self.cur_blocks.get(incoming.from) else {
                         continue;
                     };
                     // Resolve in the edge's source block: anything it emits (e.g. a
@@ -4690,7 +4679,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     ),
                     function_type: llvm_function_type,
                     function_value: existing,
-                    blocks: FxHashMap::new(),
                     last_alloca_instr: None,
                     returned_sret_variable: None,
                     return_block: None,
@@ -4799,7 +4787,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 param_values: Vec::with_capacity(llvm_function_type.param_k1_types.len() as usize),
                 function_type: llvm_function_type,
                 function_value,
-                blocks: FxHashMap::new(),
                 last_alloca_instr: None,
                 returned_sret_variable: None,
                 return_block: None,
@@ -5146,7 +5133,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn codegen_function_body(
         &mut self,
-        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
         function_id: FunctionId,
     ) -> CgResult<()> {
         self.current_insert_function = function_id;
@@ -5241,7 +5228,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn codegen_unit_body(
         &mut self,
-        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
         function_id: FunctionId,
     ) -> CgResult<()> {
         let Some(ir_unit) = self.k1.ir.functions.get(&function_id).copied() else {
@@ -5260,28 +5247,28 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             None => {}
         };
 
-        let ir_unit = self.k1.ir.functions.get(&function_id).copied().unwrap();
-        let blocks = ir_unit.blocks;
+        let u = ir_unit.view(&self.k1.ir.mem);
+        self.cur_unit = u;
+        let entry_block = u.first_block().unwrap();
 
         let mut seen = std::mem::take(&mut self.buffers.cfg_seen);
         let mut blocks_rpo = std::mem::take(&mut self.buffers.cfg_blocks_rpo);
-        self.compute_cfg_order(blocks.first, &mut blocks_rpo, &mut seen);
+        self.compute_cfg_order(entry_block, &mut blocks_rpo, &mut seen);
 
-        let mut block_mapping = FxHashMap::new();
+        self.cur_blocks.clear();
         let llvm_function = self.get_current_function().function_value;
         for block in &blocks_rpo {
-            let kind = self.k1.ir.mem.get(*block).data.kind;
+            let kind = u.block(*block).kind;
             let b = self.ctx.append_basic_block(llvm_function, kind.str());
-            block_mapping.insert(*block, b);
+            self.cur_blocks.insert(*block, b);
         }
-        self.get_current_function_mut().blocks = block_mapping;
 
         {
             // Jump from prelude to entry block
             let debug_locn = self.builder.get_current_debug_location().unwrap();
             self.builder.unset_current_debug_location();
 
-            let entry = self.get_llvm_block(blocks.first)?;
+            let entry = self.get_llvm_block(entry_block)?;
             self.builder.build_unconditional_branch(entry).unwrap();
 
             self.builder.set_current_debug_location(debug_locn);
@@ -5306,28 +5293,29 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         &mut self,
         entry: BlockId,
         result: &mut Vec<BlockId>,
-        seen: &mut FxHashSet<BlockId>,
+        seen: &mut IdMap<BlockId, ()>,
     ) {
         fn dfs(
-            ir: &ProgramIr,
+            u: &ir::UnitView,
             b: BlockId,
-            seen: &mut FxHashSet<BlockId>,
+            seen: &mut IdMap<BlockId, ()>,
             result: &mut Vec<BlockId>,
         ) {
-            if !seen.insert(b) {
+            if seen.contains(b) {
                 return;
             }
+            seen.insert(b, ());
 
             let mut successors = Vec::with_capacity(4);
-            Cg::collect_block_live_successors(ir, b, &mut successors);
+            Cg::collect_block_live_successors(u, b, &mut successors);
             for succ in successors {
-                dfs(ir, succ, seen, result);
+                dfs(u, succ, seen, result);
             }
 
-            result.push(b); // postorder: after successors
+            result.push(b);
         }
 
-        dfs(&self.k1.ir, entry, seen, result);
+        dfs(&self.cur_unit, entry, seen, result);
 
         result.reverse(); // reverse → RPO
     }

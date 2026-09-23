@@ -18,9 +18,10 @@
 //!   that were waiting on this unit's `code_start`.
 
 use crate::debug;
-use fxhash::{FxHashMap, FxHashSet};
 
-use crate::ir::{self, BlockId, DataInst, Inst, InstId, InstKind, IrCallee, IrUnit, IrUnitId};
+use crate::ir::{
+    self, BlockId, DataInst, IdMap, Inst, InstId, InstKind, IrCallee, IrUnit, IrUnitId, UnitView,
+};
 use crate::kbail;
 use crate::lex::SpanId;
 use crate::typer::trace::TraceKind;
@@ -109,6 +110,7 @@ struct PendingTramp {
 }
 
 pub(crate) struct LowerCtx {
+    u: UnitView<'static>,
     ret_pt: PhysicalType,
     /// Total frame size in bytes, 16-aligned; known after pass A
     frame_bytes: u32,
@@ -119,20 +121,20 @@ pub(crate) struct LowerCtx {
     /// What each inst lowered to, one rung below `ir::Value`: a frame word
     /// index, or `VALUE_MASK_FRAME_OFFSET | byte offset` for allocas and agg call temps
     /// (their frame address is baked into consumers; nothing materializes it)
-    inst_to_frame_value: FxHashMap<InstId, u32>,
+    inst_to_frame_value: IdMap<InstId, u32>,
     /// Insts that own no bc value
-    inst_to_parent_value: FxHashMap<InstId, ir::Value>,
+    inst_to_parent_value: IdMap<InstId, ir::Value>,
     /// StructOffsets that emit nothing: every use is a scalar Load address or
     /// Store destination, so the byte offset is baked into those instead
-    folded_struct_offsets: FxHashMap<InstId, (ir::Value, u16)>,
+    folded_struct_offsets: IdMap<InstId, (ir::Value, u16)>,
     /// Uses of each inst within the unit, from `ir::count_uses`
-    use_counts: FxHashMap<InstId, u32>,
+    use_counts: IdMap<InstId, u32>,
     /// Of those uses, the ones in a scalar Load address or Store destination
     /// position; a StructOffset folds when the two counts agree
-    addr_use_counts: FxHashMap<InstId, u32>,
+    addr_use_counts: IdMap<InstId, u32>,
     /// IntCmps that emit nothing: the sole use is the `JumpIf` terminating
     /// their own block, so the compare rides that branch as `JumpIfIntCmp`
-    fused_cmps: FxHashSet<InstId>,
+    fused_cmps: IdMap<InstId, ()>,
     call_arg_values: Vec<u32>,
     /// Flat (block, phi) pairs in block-then-phi order; blocks with phis are
     /// rare, so edge-copy emission just scans this
@@ -142,7 +144,7 @@ pub(crate) struct LowerCtx {
     agg_call_temps: Vec<(InstId, Layout)>,
 
     bc_out: Vec<u32>,
-    block_to_entry_pc: FxHashMap<BlockId, u32>,
+    block_to_entry_pc: IdMap<BlockId, u32>,
     /// Operands holding a local pc that must be shifted by the final append base
     pc_operands_to_rebase: Vec<u32>,
     /// Operands to patch with a block's entry pc
@@ -157,23 +159,24 @@ pub(crate) struct LowerCtx {
 impl LowerCtx {
     pub(crate) fn make() -> LowerCtx {
         LowerCtx {
+            u: UnitView::EMPTY,
             ret_pt: PhysicalType::EMPTY,
             frame_bytes: 0,
             scratch0: 0,
             scratch1: 0,
             scratch_flip: false,
-            inst_to_frame_value: FxHashMap::default(),
-            inst_to_parent_value: FxHashMap::default(),
-            folded_struct_offsets: FxHashMap::default(),
-            use_counts: FxHashMap::default(),
-            addr_use_counts: FxHashMap::default(),
-            fused_cmps: FxHashSet::default(),
+            inst_to_frame_value: IdMap::default(),
+            inst_to_parent_value: IdMap::default(),
+            folded_struct_offsets: IdMap::default(),
+            use_counts: IdMap::default(),
+            addr_use_counts: IdMap::default(),
+            fused_cmps: IdMap::default(),
             call_arg_values: Vec::new(),
             phis: Vec::new(),
             allocas: Vec::new(),
             agg_call_temps: Vec::new(),
             bc_out: Vec::with_capacity(1024),
-            block_to_entry_pc: FxHashMap::default(),
+            block_to_entry_pc: IdMap::default(),
             pc_operands_to_rebase: Vec::new(),
             operand_to_block: Vec::new(),
             operand_to_callee: Vec::new(),
@@ -183,7 +186,8 @@ impl LowerCtx {
         }
     }
 
-    fn reset(&mut self, ret_pt: PhysicalType) {
+    fn reset(&mut self, u: UnitView<'static>, ret_pt: PhysicalType) {
+        self.u = u;
         self.ret_pt = ret_pt;
         self.frame_bytes = 0;
         self.scratch0 = 0;
@@ -253,8 +257,8 @@ impl LowerCtx {
     /// Walk parent links to the value that owns storage
     fn walk_to_frame_value(&self, mut value: ir::Value) -> ir::Value {
         while let ir::Value::Inst(id) = value {
-            match self.inst_to_parent_value.get(&id) {
-                Some(f) => value = *f,
+            match self.inst_to_parent_value.get(id) {
+                Some(f) => value = f,
                 None => break,
             }
         }
@@ -262,9 +266,8 @@ impl LowerCtx {
     }
 
     fn bc_value_of(&self, inst_id: InstId) -> u32 {
-        *self
-            .inst_to_frame_value
-            .get(&inst_id)
+        self.inst_to_frame_value
+            .get(inst_id)
             .unwrap_or_else(|| panic!("bc lowering: no bc value for inst i{}", inst_id.as_u32()))
     }
 
@@ -324,16 +327,16 @@ fn const_of_data(imm: DataInst) -> u64 {
 
 fn fused_cmp_of(ctx: &LowerCtx, cond: ir::Value) -> Option<InstId> {
     let ir::Value::Inst(id) = cond else { return None };
-    if ctx.fused_cmps.contains(&id) { Some(id) } else { None }
+    if ctx.fused_cmps.contains(id) { Some(id) } else { None }
 }
 
 fn resolve_lowered_value(k1: &mut TypedProgram, ctx: &mut LowerCtx, value: ir::Value) -> u32 {
     match ctx.walk_to_frame_value(value) {
         ir::Value::Inst(inst_id) => {
-            if let Some(bc_value) = ctx.inst_to_frame_value.get(&inst_id) {
-                return *bc_value;
+            if let Some(bc_value) = ctx.inst_to_frame_value.get(inst_id) {
+                return bc_value;
             }
-            match *k1.ir.instrs.get(inst_id) {
+            match *ctx.u.inst(inst_id) {
                 Inst::Data(imm) => k1.bc.intern_const(const_of_data(imm)),
                 // Value-kind insts without a bc value are empty-typed; reads are 0
                 // (parity with the old VM's default-0 for never-written insts)
@@ -379,7 +382,7 @@ fn resolve_lowered_value(k1: &mut TypedProgram, ctx: &mut LowerCtx, value: ir::V
 /// byte offset into the returned B value instead of an address computation.
 fn resolve_addr(k1: &mut TypedProgram, ctx: &mut LowerCtx, value: ir::Value) -> (u32, u16) {
     if let ir::Value::Inst(id) = value {
-        if let Some((base, off)) = ctx.folded_struct_offsets.get(&id).copied() {
+        if let Some((base, off)) = ctx.folded_struct_offsets.get(id) {
             return (resolve_lowered_value(k1, ctx, base), off);
         }
     }
@@ -402,30 +405,24 @@ fn lower_unit_with_ctx(
 ) -> K1Result<UnitInfo> {
     let unit_id = unit.unit_id;
 
+    let u = unit.view(&k1.ir.mem);
     #[cfg(debug_assertions)]
-    validate_unit_shape(k1, &unit);
+    validate_unit_shape(u, unit.unit_id);
 
     let param_count = unit.fn_type.params.len();
     let ret_pt = unit.fn_type.return_type;
-    ctx.reset(ret_pt);
+    ctx.reset(u, ret_pt);
 
     // ------------------------- Pass A: analyze -------------------------
-    // The unit is immutable at this point (ir-gen and iropt have run), so we
-    // walk the dlists by cursor, copying each node out — no borrows held.
-    ir::count_uses(&k1.ir, &unit, &mut ctx.use_counts);
+    ir::count_uses(&u, &mut ctx.use_counts);
     let mut next_word: u32 = FRAME_HEADER_WORDS + param_count;
     let mut call_arg_words: usize = 0;
     let mut block_cmps: Vec<InstId> = Vec::new();
 
-    let mut block_h = unit.blocks.first;
-    while !block_h.is_nil() {
-        let block_node = *k1.ir.mem.get(block_h);
-        let mut inst_h = block_node.data.instrs.first;
+    for block_h in u.block_ids() {
         block_cmps.clear();
-        while !inst_h.is_nil() {
-            let inst_node = *k1.ir.mem.get(inst_h);
-            let inst_id = inst_node.data;
-            let inst = *k1.ir.instrs.get(inst_id);
+        for inst_id in u.block_insts(block_h) {
+            let inst = *u.inst(inst_id);
             match inst {
                 Inst::Data(_) => {}
                 Inst::BitCast { v, .. }
@@ -445,7 +442,7 @@ fn lower_unit_with_ctx(
                     }
                 }
                 Inst::Call { call_id } => {
-                    let call = *k1.ir.calls.get(call_id);
+                    let call = *u.call(call_id);
                     call_arg_words += call.args.len() as usize * 4;
                     match call.dst {
                         Some(dst) => {
@@ -482,13 +479,13 @@ fn lower_unit_with_ctx(
                 }
                 Inst::JumpIf { cond, .. } => {
                     if let ir::Value::Inst(id) = cond {
-                        if ctx.use_counts.get(&id) == Some(&1) && block_cmps.contains(&id) {
-                            ctx.fused_cmps.insert(id);
+                        if ctx.use_counts.get(id) == Some(1) && block_cmps.contains(&id) {
+                            ctx.fused_cmps.insert(id, ());
                         }
                     }
                 }
                 _ => {
-                    if let InstKind::Value(pt) = ir::get_inst_kind(&k1.ir, inst_id) {
+                    if let InstKind::Value(pt) = ir::get_inst_kind(&u, inst_id) {
                         if !pt.is_empty() {
                             ctx.inst_to_frame_value.insert(inst_id, next_word);
                             next_word += 1;
@@ -508,11 +505,10 @@ fn lower_unit_with_ctx(
                 _ => None,
             };
             if let Some(ir::Value::Inst(id)) = addr_use {
-                *ctx.addr_use_counts.entry(id).or_insert(0) += 1;
+                let count = ctx.addr_use_counts.get(id).unwrap_or(0);
+                ctx.addr_use_counts.insert(id, count + 1);
             }
-            inst_h = inst_node.next;
         }
-        block_h = block_node.next;
     }
 
     // Any use outside an address position forces the StructOffset to
@@ -559,11 +555,9 @@ fn lower_unit_with_ctx(
     );
 
     // -------------------------- Pass B: emit ---------------------------
-    ctx.bc_out.reserve(unit.inst_count as usize * 4 + call_arg_words);
+    ctx.bc_out.reserve(u.inst_count() * 4 + call_arg_words);
     let mut first = true;
-    let mut block_h = unit.blocks.first;
-    while !block_h.is_nil() {
-        let block_node = *k1.ir.mem.get(block_h);
+    for block_h in u.block_ids() {
         ctx.block_to_entry_pc.insert(block_h, ctx.pc());
         if first {
             ctx.emit(Opcode::Enter, 0, 0);
@@ -571,13 +565,10 @@ fn lower_unit_with_ctx(
             ctx.push(fb);
             first = false;
         }
-        let mut inst_h = block_node.data.instrs.first;
-        while !inst_h.is_nil() {
-            let inst_node = *k1.ir.mem.get(inst_h);
-            emit_inst(k1, ctx, block_h, block_node.next, inst_node.data)?;
-            inst_h = inst_node.next;
+        let next_block = u.block(block_h).next;
+        for inst_id in u.block_insts(block_h) {
+            emit_inst(k1, ctx, block_h, next_block, inst_id)?;
         }
-        block_h = block_node.next;
     }
 
     // Trampolines: phi edge copies for conditional jumps
@@ -595,10 +586,10 @@ fn lower_unit_with_ctx(
     // -------------------------- Finalize -------------------------------
     for i in 0..ctx.operand_to_block.len() {
         let (at, block_id) = ctx.operand_to_block[i];
-        let Some(target_pc) = ctx.block_to_entry_pc.get(&block_id) else {
-            panic!("bc lowering: jump to unemitted block b{}", block_id.raw_index());
+        let Some(target_pc) = ctx.block_to_entry_pc.get(block_id) else {
+            panic!("bc lowering: jump to unemitted block b{}", block_id);
         };
-        ctx.bc_out[at as usize] = *target_pc;
+        ctx.bc_out[at as usize] = target_pc;
     }
 
     let base = k1.bc.code.len() as u32;
@@ -656,11 +647,11 @@ fn emit_inst(
     k1: &mut TypedProgram,
     ctx: &mut LowerCtx,
     block_id: BlockId,
-    next_block: BlockId,
+    next_block: Option<BlockId>,
     inst_id: InstId,
 ) -> K1Result<()> {
-    let inst = *k1.ir.instrs.get(inst_id);
-    let span = *k1.ir.sources.get(inst_id);
+    let inst = *ctx.u.inst(inst_id);
+    let span = ctx.u.span(inst_id);
     ctx.record_span(span);
     ctx.begin_inst();
 
@@ -772,7 +763,7 @@ fn emit_inst(
             ctx.push(operand);
         }
         Inst::AtomicCmpxchg { id } => {
-            let cas = *k1.ir.cmpxchgs.get(id);
+            let cas = *ctx.u.cmpxchg(id);
             let result = resolve_lowered_value(k1, ctx, cas.result);
             let addr = resolve_lowered_value(k1, ctx, cas.dst);
             let expected = resolve_lowered_value(k1, ctx, cas.expected);
@@ -790,7 +781,7 @@ fn emit_inst(
         // Vector ops unroll to scalar opcodes per lane; no vector opcodes exist
         Inst::VecOp { id } => {
             use ir::VecOpIr;
-            let vop = *k1.ir.vec_ops.get(id);
+            let vop = *ctx.u.vec_op(id);
             let elem_bits = wbits(vop.elem);
             let stride = vop.elem.get_layout().stride() as u16;
             let is_float = matches!(vop.elem, ScalarType::F32 | ScalarType::F64);
@@ -957,7 +948,7 @@ fn emit_inst(
             ctx.push(vm_size);
         }
         Inst::StructOffset { base, vm_offset, .. } => {
-            if !ctx.folded_struct_offsets.contains_key(&inst_id) {
+            if !ctx.folded_struct_offsets.contains(inst_id) {
                 let base_lowered = resolve_lowered_value(k1, ctx, base);
                 let dst = ctx.bc_value_of(inst_id);
                 ctx.emit(Opcode::PtrAddImm, 0, 0);
@@ -984,7 +975,7 @@ fn emit_inst(
             emit_phi_copies(k1, ctx, block_id, target);
             // Fall through when the target is emitted next; only one pred of
             // a join can be laid out before it, every other pred still jumps
-            if target != next_block {
+            if Some(target) != next_block {
                 ctx.emit(Opcode::Jump, 0, 0);
                 ctx.push_block_target(target);
             }
@@ -992,7 +983,7 @@ fn emit_inst(
         Inst::JumpIf { cond, cons, alt } => {
             match fused_cmp_of(ctx, cond) {
                 Some(cmp_id) => {
-                    let Inst::IntCmp { lhs, rhs, pred, width } = *k1.ir.instrs.get(cmp_id) else {
+                    let Inst::IntCmp { lhs, rhs, pred, width } = *ctx.u.inst(cmp_id) else {
                         unreachable!("fused cmp is not an IntCmp")
                     };
                     let lhs_lowered = resolve_lowered_value(k1, ctx, lhs);
@@ -1012,7 +1003,7 @@ fn emit_inst(
         }
         Inst::Switch { value, width, cases, default } => {
             let src = resolve_lowered_value(k1, ctx, value);
-            let mut sorted = k1.ir.mem.getn(cases).to_vec();
+            let mut sorted = ctx.u.switch_cases(cases).to_vec();
             sorted.sort_by_key(|case| case.value);
             assert!(sorted.len() <= u16::MAX as usize, "switch case count exceeds the bc header");
             ctx.emit(Opcode::Switch, width, sorted.len() as u16);
@@ -1075,7 +1066,7 @@ fn emit_inst(
         Inst::IntRemUnsigned { lhs, rhs, width } => binop!(Opcode::IntRemU, width, 0, lhs, rhs),
         Inst::IntRemSigned { lhs, rhs, width } => binop!(Opcode::IntRemS, width, 0, lhs, rhs),
         Inst::IntCmp { lhs, rhs, pred, width } => {
-            if !ctx.fused_cmps.contains(&inst_id) {
+            if !ctx.fused_cmps.contains(inst_id) {
                 binop!(Opcode::IntCmp, width, pred as u16, lhs, rhs)
             }
         }
@@ -1114,10 +1105,10 @@ fn emit_call(
     inst_id: InstId,
     call_id: ir::IrCallId,
 ) -> K1Result<()> {
-    let call = *k1.ir.calls.get(call_id);
+    let call = *ctx.u.call(call_id);
     let ret_pt = call.ret_type;
     let is_agg = ret_pt.is_agg();
-    let args: &[ir::Value] = k1.ir.mem.getn(call.args);
+    let args: &[ir::Value] = ctx.u.args(call.args);
     let nargs = args.len() as u32;
     assert!(nargs <= u16::MAX as u32, "call with more than u16::MAX args");
     let frame_bytes = ctx.frame_bytes;
@@ -1297,13 +1288,13 @@ fn emit_phi_copies(k1: &mut TypedProgram, ctx: &mut LowerCtx, from: BlockId, tar
         if phi_block != target {
             continue;
         }
-        let Inst::Phi { incomings, .. } = *k1.ir.instrs.get(phi_id) else {
+        let Inst::Phi { incomings, .. } = *ctx.u.inst(phi_id) else {
             unreachable!("non-phi in block_phis")
         };
-        let Some(dst) = ctx.inst_to_frame_value.get(&phi_id).copied() else {
+        let Some(dst) = ctx.inst_to_frame_value.get(phi_id) else {
             continue; // empty-typed phi
         };
-        let case = k1.ir.mem.getn(incomings).iter().find(|c| c.from == from).copied();
+        let case = ctx.u.phi_cases(incomings).iter().find(|c| c.from == from).copied();
         ctx.begin_inst();
         let src = match case {
             Some(case) => resolve_lowered_value(k1, ctx, case.value),
@@ -1313,8 +1304,8 @@ fn emit_phi_copies(k1: &mut TypedProgram, ctx: &mut LowerCtx, from: BlockId, tar
                     eprintln!(
                         "[bc] warning: phi i{} in b{} has no incoming for edge from b{}; using 0",
                         phi_id.as_u32(),
-                        target.raw_index(),
-                        from.raw_index()
+                        target,
+                        from
                     );
                 }
                 k1.bc.intern_const(0)
@@ -1330,24 +1321,19 @@ fn emit_phi_copies(k1: &mut TypedProgram, ctx: &mut LowerCtx, from: BlockId, tar
 /// and allocas in the entry block. Violations are warnings (the lowering
 /// handles both shapes defensively) — but they indicate latent iropt bugs.
 #[cfg(debug_assertions)]
-fn validate_unit_shape(k1: &TypedProgram, unit: &IrUnit) {
-    let mut block_h = unit.blocks.first;
+fn validate_unit_shape(u: UnitView, unit_id: IrUnitId) {
     let mut is_entry = true;
-    while !block_h.is_nil() {
-        let block_node = *k1.ir.mem.get(block_h);
+    for block_h in u.block_ids() {
         let mut seen_non_phi = false;
-        let mut inst_h = block_node.data.instrs.first;
-        while !inst_h.is_nil() {
-            let inst_node = *k1.ir.mem.get(inst_h);
-            let inst_id = inst_node.data;
-            match k1.ir.instrs.get(inst_id) {
+        for inst_id in u.block_insts(block_h) {
+            match u.inst(inst_id) {
                 Inst::Phi { .. } => {
                     if seen_non_phi {
                         eprintln!(
                             "[bc] validator: mid-block phi i{} in b{} of {:?}",
                             inst_id.as_u32(),
-                            block_h.raw_index(),
-                            unit.unit_id
+                            block_h,
+                            unit_id
                         );
                     }
                 }
@@ -1357,16 +1343,14 @@ fn validate_unit_shape(k1: &TypedProgram, unit: &IrUnit) {
                         eprintln!(
                             "[bc] validator: alloca i{} outside entry block in {:?}",
                             inst_id.as_u32(),
-                            unit.unit_id
+                            unit_id
                         );
                     }
                 }
                 _ => seen_non_phi = true,
             }
-            inst_h = inst_node.next;
         }
         is_entry = false;
-        block_h = block_node.next;
     }
 }
 
