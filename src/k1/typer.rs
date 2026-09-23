@@ -1655,8 +1655,8 @@ bitflags! {
 #[derive(Clone, Copy)]
 pub enum VariableKind {
     FnParam(FunctionId),
-    Stack(TypedStmtId),
-    StackSynthetic(TypedStmtId),
+    Stack,
+    StackSynthetic,
     Global(TypedGlobalId),
 }
 
@@ -5851,7 +5851,7 @@ impl TypedProgram {
                         span,
                         "Cannot take address of a function parameter; re-declare it or use a * type"
                     )),
-                    VariableKind::StackSynthetic(_) => {
+                    VariableKind::StackSynthetic => {
                         if allow_synthetic {
                             Ok(AddressOfKind::StackVariable(v.variable_id))
                         } else {
@@ -5862,7 +5862,7 @@ impl TypedProgram {
                             ))
                         }
                     }
-                    VariableKind::Stack(_) => Ok(AddressOfKind::StackVariable(v.variable_id)),
+                    VariableKind::Stack => Ok(AddressOfKind::StackVariable(v.variable_id)),
                     VariableKind::Global(_) => Ok(AddressOfKind::GlobalVariable(v.variable_id)),
                 }
             }
@@ -7251,25 +7251,21 @@ impl TypedProgram {
                     capture.span,
                 );
                 // The binding behaves exactly like a user-written `let <name> = env.<name>`
-                let defn_stmt = self.stmts.next_id();
                 let variable_id = self.variables.add(Variable {
                     name: capture.name,
                     owner_scope: lambda_scope_id,
                     type_id: field_type,
-                    kind: VariableKind::Stack(defn_stmt),
+                    kind: VariableKind::Stack,
                     flags: VariableFlags::empty(),
                     usage_count: 0,
                     defn_span: capture.span,
                 });
-                self.stmts.add_expected_id(
-                    TypedStmt::Let(LetStmt {
-                        variable_id,
-                        variable_type: field_type,
-                        initializer: Some(field_access),
-                        span: capture.span,
-                    }),
-                    defn_stmt,
-                );
+                let defn_stmt = self.stmts.add(TypedStmt::Let(LetStmt {
+                    variable_id,
+                    variable_type: field_type,
+                    initializer: Some(field_access),
+                    span: capture.span,
+                }));
                 self.scopes.add_variable(lambda_scope_id, capture.name, variable_id);
                 self.emit_ls_entity(capture.span, LsEntityKind::Variable { variable_id });
                 prologue_stmts.push(defn_stmt);
@@ -12585,13 +12581,21 @@ impl TypedProgram {
 
                 let expected_rhs_type = provided_type;
 
+                let mut value_error = None;
                 let value_expr = match parsed_let.value {
                     None => None,
-                    Some(value) => Some(self.eval_expr_with_coercion(
+                    Some(value) => match self.eval_expr_with_coercion(
                         value,
                         ctx.with_expected_type(expected_rhs_type),
                         true,
-                    )?),
+                    ) {
+                        Ok(value_expr) => Some(value_expr),
+                        Err(err) if provided_type.is_some() => {
+                            value_error = Some(err);
+                            None
+                        }
+                        Err(err) => return Err(err),
+                    },
                 };
 
                 let actual_type = match value_expr {
@@ -12618,12 +12622,11 @@ impl TypedProgram {
 
                     flags.set(VariableFlags::Context, parsed_let.is_context());
                     flags.set(VariableFlags::Returned, parsed_let.is_returned());
-                    let stmt_id = self.stmts.next_id();
                     let variable_id = self.variables.add(Variable {
                         name: parsed_let.name,
                         type_id: variable_type,
                         owner_scope: ctx.scope_id,
-                        kind: VariableKind::Stack(stmt_id),
+                        kind: VariableKind::Stack,
                         flags,
                         usage_count: 0,
                         defn_span: parsed_let.span,
@@ -12662,12 +12665,6 @@ impl TypedProgram {
                             *returned_var_ref = Some(variable_id)
                         }
                     }
-                    let val_def_stmt = TypedStmt::Let(LetStmt {
-                        variable_type,
-                        variable_id,
-                        initializer: value_expr,
-                        span: parsed_let.span,
-                    });
                     if parsed_let.is_context() {
                         let added = self.scopes.add_context_variable(
                             ctx.scope_id,
@@ -12695,7 +12692,15 @@ impl TypedProgram {
                         self.scopes.add_variable(ctx.scope_id, parsed_let.name, variable_id);
                     }
                     self.emit_ls_entity(parsed_let.span, LsEntityKind::Variable { variable_id });
-                    self.stmts.add_expected_id(val_def_stmt, stmt_id);
+                    if let Some(err) = value_error {
+                        return Err(err);
+                    }
+                    let stmt_id = self.stmts.add(TypedStmt::Let(LetStmt {
+                        variable_type,
+                        variable_id,
+                        initializer: value_expr,
+                        span: parsed_let.span,
+                    }));
                     Ok(Some(stmt_id))
                 }
             }
@@ -12796,14 +12801,14 @@ impl TypedProgram {
                                 "Cannot re-assign a function parameter; declare a local, or store through a reference with `param.* = ...`"
                             );
                         }
-                        VariableKind::StackSynthetic(_) => {
+                        VariableKind::StackSynthetic => {
                             kbail!(
                                 self,
                                 lhs_span,
                                 "Cannot re-assign a synthetic variable or binding; if this is a pattern-bound reference, store through it with `x.* = ...`"
                             );
                         }
-                        VariableKind::Stack(_) => {
+                        VariableKind::Stack => {
                             self.variables
                                 .get_mut(variable_id)
                                 .flags

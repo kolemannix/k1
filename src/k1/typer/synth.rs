@@ -369,8 +369,6 @@ impl TypedProgram {
         flags.set(VariableFlags::UserHidden, !user_visible);
         // let reassignable = true;
         // flags.set(VariableFlags::Reassigned, reassignable);
-        let defn_stmt = self.stmts.next_id();
-
         // We used to generate a unique name, in case say a nested list literal's synthed var
         // shadowed another's. But we don't resolve these by name; rather we synth the expr by
         // variable id anyway. So there is no need for a unique name, even for hidden, since we
@@ -380,7 +378,7 @@ impl TypedProgram {
             name,
             owner_scope,
             type_id,
-            kind: VariableKind::StackSynthetic(defn_stmt),
+            kind: VariableKind::StackSynthetic,
             flags,
             usage_count: 0,
             defn_span: span,
@@ -391,15 +389,12 @@ impl TypedProgram {
         }
         let variable_expr =
             self.exprs.add(TypedExpr::Variable(VariableExpr { variable_id }), type_id, span);
-        self.stmts.add_expected_id(
-            TypedStmt::Let(LetStmt {
-                variable_id,
-                variable_type: type_id,
-                initializer: Some(initializer_id),
-                span,
-            }),
-            defn_stmt,
-        );
+        let defn_stmt = self.stmts.add(TypedStmt::Let(LetStmt {
+            variable_id,
+            variable_type: type_id,
+            initializer: Some(initializer_id),
+            span,
+        }));
         if user_visible {
             self.scopes.add_variable(owner_scope, name, variable_id);
         }
