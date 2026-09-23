@@ -12,6 +12,16 @@ ns type_synthesis {
 
   type(alias) ints = #type types/make-instance(types/id[list], [types/id[i64]])
 
+  type status = either(i16) { ok = 0, busy = 7, gone = -2 }
+  type status-err = #type {
+    require types/schema[status] is :enum .{ int-kind, values } else crash("status is an enum")
+    let variants: list[types/make-either.variants.t] = []
+    for v in values {
+      if v.name != "ok" { variants.push(.{ name = v.name, payload = :none, tag = :some v.value }) }
+    }
+    types/make-either(:some(int-kind.type-id()), variants.as-span())
+  }
+
   fn test() {
     let p: point = .{ x = 42, y = "hello" }
     assert-equals(p.x, 42)
@@ -80,6 +90,16 @@ ns type_synthesis {
       and values.[1].value is :u32(2)
       and values.[2].value is :u32(3)
       else crash("flags schema mismatch")
+
+    assert-equals(types/int-kind:u32.type-id(), types/id[u32])
+    assert-equals(types/int-kind:i8.type-id(), types/id[i8])
+    assert-equals(types/name[status-err], "status-err")
+    assert-equals(types/size[status-err], 2)
+    let gone: status-err = mem/bitcast(status:gone)
+    require gone is :gone else crash("status-err bitcast")
+    assert-equals(gone.enum-value(), -2)
+    let back: status = mem/bitcast(status-err:busy)
+    require back is :busy else crash("status bitcast")
 
     assert-equals(types/id[shape.tag-enum], types/id[either { circle, square }])
     let k: shape.tag-enum = :square

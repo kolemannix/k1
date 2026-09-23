@@ -29,6 +29,13 @@
         "configuration": "./language-configuration.json"
       }
     ],
+    "grammars": [
+      {
+        "language": "k1",
+        "scopeName": "source.k1",
+        "path": "./syntaxes/k1.tmLanguage.json"
+      }
+    ],
     "configuration": {
       "title": "k1",
       "properties": {
