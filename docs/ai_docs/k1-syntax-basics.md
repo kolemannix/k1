@@ -783,6 +783,11 @@ fn run-later(thunk: dyn[fn() -> {}]) {
 }
 ```
 
+Any expression of a callable type can be called: `(s.handler)(x)`,
+`(make-adder(2))(3)`, `(fn[n]. n * 2)()`. A named function's value has the
+zero-sized type `type-of(f)`; calling or taking `.&`/`.to-dyn()` of such a
+value still evaluates the expression that produced it.
+
 The pipe operator `||` passes a value through functions:
 
 ```rust

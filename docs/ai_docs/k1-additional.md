@@ -697,10 +697,13 @@ See `test_src/suite1/rvo_test.k1`.
 Thread tests combine several runtime features:
 
 - Thread-local mutable globals via `let(mutable, tls)`.
-- `std/thread/start` and `std/thread/join`.
+- `std/thread/start` and `std/thread/join` over raw `*fn(*t) -> ptr` entry
+  points.
+- `std/thread/task[t]`: `task/spawn(fn[x]. work(x))` runs a closure on a new
+  thread and `.join()` returns its `t`.
 - Arena-backed allocation for cross-thread values.
 
-See `test_src/threads.k1`.
+See `test_src/atomic_threads.k1` and `test_src/stdlib/thread_test.k1`.
 
 ## Atomics
 
