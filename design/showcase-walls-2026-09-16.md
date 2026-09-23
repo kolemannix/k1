@@ -33,7 +33,6 @@
 ## model (06)
 - No niches: size[result[int, never]] = 16, size[?*int] = 16, size[?int] = 16.
 - Dyn target not inferred through a generic param: `drain(sum.to-dyn(), [1,2,3])` with dyn[accumulator[t = t]] param -> "summer implements 'accumulator', but with i64, not '1".
-- No integer -> enum conversion (`(2: i32).as[errno]` rejected; bitcast rejected). Repro p_enumcast.k1.
 - Inconsistent core qualification: mem/new bare, but arena/init, type arena, io/stdout need core/.
 - Impl fns with unused `self` warn "Parameter is never used: self" though the ability dictates it.
 - (repeat) k1_test filter ignores dirs; CLI flag order.
@@ -44,7 +43,6 @@
 - `where t: from-string[e = e]` with sibling type param e: "Type 'e' not found" (nz8.k1); inline form works.
 - `type(alias) patch[t] = #type ...`: "Alias types cannot have type parameters (yet)".
 - `#for`'s `it` is not static: `#if it == 4` -> "No value 'it' is visible here"; `matrix[type-of(it)]` -> "Expected static[i64] but got i64" (tp8.k1).
-- types/name of a synthesized either is "anon_enum_u16_7056" (struct prints structurally).
 - Stdlib gap: no string.trim.
 - `ptr.as[*t]` rejected with hint "Use .narrow instead" (undocumented); `.ref()` works.
 - `x is :a or :b` parses as boolean or ("Not a sum or enum type: bool"); or-patterns only in match arms.
@@ -133,3 +131,7 @@
 - Ambient mem/new costs a TLS descriptor call per allocation on macOS arm64 (~6% on binary-trees); hot code should take the arena as a param; a context-param ambient allocator would remove it.
 - buffer/position-byte and $std/simd/first-of process one 16-byte vector per loop iteration; .NET's Span.IndexOf unrolls 4 vectors and packs the IndexOfAny compares, and beats K1 0.27 s vs 0.34 s on byte-scan.
 - The agents' reproducer files are session-scratchpad only (walls/, probe/, k1/, exp/) except benchmarks/runtime/walls/.
+
+## added 2026-09-22
+- A closure's type can't be named as a callable type argument: `*fn() -> t` rejects a capturing closure ("a closure has an environment and cannot be a function pointer"); `st[some fn() -> t, t]` -> "some quantifier is only allowed in function parameters"; `[f: some fn() -> t]` does not parse; a plain `f` is not callable in the generic body. Today a closure-generic helper has to be a lambda inside the `some fn` function, naming the type with `type-of(body)` (std/thread task/spawn).
+- content/showcase/check.sh runs `k1_test` from PATH (~/.k1/bin, the last `just install`), not the tree's build; after a syntax change every example fails to parse until reinstall.

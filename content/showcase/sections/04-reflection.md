@@ -14,7 +14,7 @@ inside `#meta`, and in plain runtime code.
     int(int-kind),
     float(float-kind),
     enum({
-      int-kind: int-kind,
+      int-kind,
       values: span[{
         name: string,
         value: int-value,
@@ -32,14 +32,14 @@ inside `#meta`, and in plain runtime code.
     struct({
       fields: span[{
         name: string,
-        type-id: type-id,
+        type-id,
         offset: size
       }],
     }),
     union({
       fields: span[{
         name: string,
-        type-id: type-id,
+        type-id,
         offset: size
       }],
     }),

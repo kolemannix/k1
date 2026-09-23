@@ -33,15 +33,25 @@ fn first-even(xs: list[int]): ?int {
 }
 
 type rc = either(i32) { ok = 0, noent = 2, acces = 13 }
-type errno = either(i32) { noent = 2, acces = 13 }
+
+ns pre {
+  fn errors-of(t: types/type-id, ok-name: string): types/type-id {
+    require t.schema() is :enum .{ int-kind, values } else crash("errors-of needs an enum")
+    let variants: list[types/make-either.variants.t] = []
+    for v in values {
+      if v.name != ok-name { variants.push(.{ name = v.name, payload = :none, tag = :some v.value }) }
+    }
+    types/make-either(:some(int-kind.type-id()), variants.as-span())
+  }
+}
+
+type errno = #type pre/errors-of(types/id[rc], "ok")
 
 impl try[t = empty, e = errno] for rc {
-  fn error(e: errno): rc { if e is { :noent -> :noent, :acces -> :acces } }
+  fn error(e: errno): rc { mem/bitcast(e) }
   fn value(_t: empty): rc { :ok }
   fn is-ok(self): bool { self is :ok }
-  fn get-error(self): errno {
-    if self is { :noent -> :noent, :acces -> :acces, :ok -> crash("get-error on :ok") }
-  }
+  fn get-error(self): errno { mem/bitcast(self) }
   fn get-value(_self: self): empty { .{} }
 }
 
@@ -68,10 +78,12 @@ fn main(): i32 {
   println(first-even([4]))
 
   for path in ["/tmp/a", "/root/x", "/tmp/b.missing"] {
-    if touch(path) is {
-      :ok -> println("$path ok"),
-      err -> println("$path failed: ${err.enum-name()}"),
+    if touch(path).result() is {
+      :ok _ -> println("$path ok"),
+      :err :noent -> println("$path failed: no such file"),
+      :err :acces -> println("$path failed: permission denied"),
     }
   }
+  println("${types/name[errno]} ${types/size[errno]}")
   0
 }

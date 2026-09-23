@@ -5,6 +5,7 @@
 
 ## [ ] More IR analysis and opts
 - [ ] Constant-folding, SCCP
+- [ ] add lifetimes (start/end for allocas, temps, inlined stuff)
 - [ ] Get 'range' metadata into sum tag loads for our IR and LLVM optimizations (a sum's tag could only be 0 or 1; this would attach those 2 possible values to the loaded value)
 - [ ] Tail calls
 
@@ -21,7 +22,7 @@
 
 ## grab bag list mid2026
 - [ ] smarter union lowering (see codegen_llvm.rs comment)
-- [ ] add cpu feature string to k1/module
+- [x] add cpu feature string to k1/module
 - [x] convert the add_module train off of anyhow::error
 - [ ] fork global syntax: `let(mutable) x` -> `global x`. `let x` -> `constant x`. This differentiates from local lets in a more-useful-than-costly way
 - [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
@@ -49,7 +50,6 @@ kind: either(u64, { rounded = false, even = false, faces: u8 }) {
         I think doing 'defaults' is relatively easy. You just hit consult the default on the unprovided path. For partially-applieds,
         you need essentially some notion of an 'ability signature function', just like type aliases would need
 
-- [ ] Failed-definition tracking, two markers for one concept: static_exec.rs:418 and typer.rs:16887. Both silently return Ok(()) when an AST mapping is missing, which masks compiler bugs. A set of failed parsed ids, checked in both places, converts "likely" into "certain".
 - [x] parse_statement: same peek-dispatch conversion parse_definition got (expect_ variants, no conditional parse_* chain)
 - [x] zeroing after alloc should not be necessary; either buffer/zeroed or ensure all k1 allocations always zero, even arena push (does arena.reset() always clear, or is there a special path for 'alloc-no-ensure-zeroed?')
 - [x] 

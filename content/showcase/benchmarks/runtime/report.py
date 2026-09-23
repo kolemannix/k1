@@ -11,7 +11,7 @@ NATIVE = ["k1", "c", "rust", "go", "zig"]
 BENCHES = [
     (
         "binary-trees",
-        NATIVE + ["java", "csharp"],
+        NATIVE + ["java", "csharp", "python"],
         "Benchmarks-game binary-trees, depth 20, single-threaded: a stretch tree of depth 21, a long-lived tree of depth 20, then for each depth 4..20 step 2 build and check 2^(24-depth) trees. Prints the standard output lines; every language prints identical text.",
         {
             "k1": "An explicit `*arena` parameter and `arena.push` for every node. The long-lived tree uses the ambient arena; short-lived trees use a private arena, reset after each tree. `reset()` zeroes the used region in bulk; allocations bump the cursor. Leaves are `node.0`, null children.",
@@ -21,11 +21,12 @@ BENCHES = [
             "zig": "`std.heap.ArenaAllocator` over `page_allocator`, `reset(.retain_capacity)` after each tree: the arena is Zig's natural fast choice here, as it is K1's.",
             "java": "a plain `static final class Node` with `left`/`right` fields, `new Node()` per node, collected by G1 (the default GC). This is the benchmarks-game shape minus its per-depth thread pool, since every row here is single-threaded.",
             "csharp": "a `sealed class Node` with `Left`/`Right` fields, `new Node()` per node, collected by the default workstation GC.",
+            "python": "nodes are `(left, right)` tuples and leaves are `(None, None)`, the benchmarks-game Python shape; reference counting frees each short-lived tree as soon as `check` returns. A `__slots__` class with an `__init__` is the more common way to write a node and took about five times as long in a side test (114 s).",
         },
     ),
     (
         "hashmap",
-        NATIVE + ["java", "java-prim", "csharp"],
+        NATIVE + ["java", "java-prim", "csharp", "python"],
         "Insert 5,000,000 distinct u64 keys from xorshift64 (value = insertion index), then look up 5,000,000 keys, alternating a key that was inserted with one from a different xorshift stream (a miss), summing the found values. Prints `inserted`, `found` (2,500,000) and the sum. No capacity hints anywhere: every table grows from empty.",
         {
             "k1": "`std/map[u64, u64]` (a swiss table: one control byte per bucket, 8-lane NEON group probes on arm64, murmur3 finalizer on the key). `insert`/`get` allocate in the ambient arena, where `free` is a no-op, so tables abandoned by growth are not reused; peak memory is about twice the final table.",
@@ -36,11 +37,12 @@ BENCHES = [
             "java": "`HashMap<Long, Long>`, which is what people write. Java has no generics over primitives, so every key and every value is boxed into a heap `Long`, every entry is a separate `HashMap.Node` object holding two references and a cached hash, and every probe dereferences a pointer to compare keys. The `java (primitive table)` row separates that cost from the JIT's.",
             "java-prim": "the C row's table, written inline in Java over `long[]` keys and values: same fibonacci hash, same linear probing, same doubling at 1/2 load, same growth-by-reinsert. Nothing is boxed and nothing but the two arrays is allocated, so the gap to the `java` row is what `HashMap<Long, Long>` costs and the gap to the `c` row is HotSpot versus `clang -O2` on the same algorithm. This is not what people write; it is the control.",
             "csharp": "`Dictionary<ulong, ulong>`. The CLR specializes generics over value types, so keys and values sit unboxed in the entry array and no object is allocated per entry: the C# row is the same source shape as the Java row without the boxing.",
+            "python": "a `dict`. Python integers are unbounded, so the xorshift masks each left shift to 64 bits, and keys this large are heap objects: like the Java row, every key and value is boxed, though the dict stores them in a compact array rather than one node per entry. An int's hash is its value mod 2^61 - 1. Misses are `dict.get` returning `None`, since a found value can be 0.",
         },
     ),
     (
         "byte-scan",
-        NATIVE + ["java", "csharp"],
+        NATIVE + ["java", "csharp", "python"],
         "A 256 MiB buffer of pseudo-random bytes in the range 0x40..0x5f, with a `\\n` planted every 4093 bytes and one of `,` `:` `\"` every 1,000,003 bytes. Eight repetitions of three scans: (1) `contains` of a byte that never occurs, one full pass; (2) count the newlines by repeated first-position search from the previous hit; (3) find each of the three delimiters in turn by repeated first-of-set search. Prints the counts and position sums. Fill time is included in every language.",
         {
             "k1": "(1)(2) `span[u8].contains`/`position`: `buffer/position-byte`, a `k1/simd-bytes`-wide `vector` compare loop, 16 lanes on arm64. (3) `$std/simd/first-of(delims, [',', ':', '\"'])`, a macro that generates a namespace with a `scan(s, from)` fn: one 16-lane pass computing three equality masks per chunk.",
@@ -50,6 +52,7 @@ BENCHES = [
             "zig": "(1)(2) `std.mem.indexOfScalar`/`indexOfScalarPos`, a `@Vector` loop. (3) `std.mem.indexOfAnyPos`, a scalar nested loop.",
             "java": "hand-written `byte[]` loops for all three scans. Java's standard library has no memchr for byte arrays: `String.indexOf` is for text, `Arrays` has no search-for-value, and the Vector API is still an incubator module that needs `--add-modules jdk.incubator.vector`, so a plain loop is the honest idiom. HotSpot does not auto-vectorize a loop that exits early, so this is one byte per iteration. The fill writes 64-bit words through a little-endian `LongBuffer` view, matching the other ports.",
             "csharp": "(1)(2) `Span<byte>.IndexOf(byte)` and (3) `Span<byte>.IndexOfAny(byte, byte, byte)`. Both are idiomatic single calls and both are vectorized inside the runtime (128-bit NEON here), which is why this is the one managed row that keeps up with the native SIMD rows. The fill writes through `MemoryMarshal.Cast<byte, ulong>`.",
+            "python": "a `bytearray`, filled through a `memoryview` cast to `Q` (native 64-bit words): 32 million interpreted xorshift steps, more than half of this row's time. (1) `0 in buf` and (2) `bytearray.find` run as C searches (memchr for a single byte), so they cost almost nothing next to the fill. (3) `re.compile(rb'[,:\"]').finditer`, the regex engine's character-set scan, a byte-at-a-time loop in C. Three `find` calls per segment, the C row's approach, was about 20 times faster on this scan in a side test, because the delimiters are sparse; the regex is what people write for a first-of-set search.",
         },
     ),
 ]
@@ -106,17 +109,19 @@ out.append(
     "the argument `steady` executes the identical workload three times inside one process and prints the "
     "third iteration's elapsed milliseconds to stderr, so the code is compiled and the heap is sized by then. "
     "It is a single measurement, not a hyperfine mean. Native rows have no `steady` column because for them "
-    "the two numbers are the same thing. Steady-state is not automatically faster: where the workload "
+    "the two numbers are the same thing, and neither does Python: CPython interprets its bytecode with no JIT, "
+    "so there is no warm-up to separate out. Steady-state is not automatically faster: where the workload "
     "allocates heavily, three iterations in one process leave the heap larger and the collector busier than "
     "a fresh process does, and the third iteration can come out slower than the cold one.\n"
 )
 out.append(
     "`peak RSS` is `maximum resident set size` from `/usr/bin/time -l` on one ordinary run (not the steady "
     "run). `binary` is the linked executable for the native rows (Rust and Go link their runtimes statically; "
-    "K1, C and Zig link only libSystem), the sum of the `.class` files for Java, and the IL assembly "
-    "(`bench.dll`) for C#. For the two managed rows that is the compiled program only: the JVM and the .NET "
-    "shared runtime are installed separately and are not counted, while every native row carries everything "
-    "it needs.\n"
+    "K1, C and Zig link only libSystem), the sum of the `.class` files for Java, the IL assembly "
+    "(`bench.dll`) for C#, and the source file for Python, which CPython compiles to bytecode on every run. For "
+    "the managed and Python rows that is the program only: the JVM, the .NET shared runtime and the Python "
+    "interpreter are installed separately and are not counted, while every native row carries everything it "
+    "needs.\n"
 )
 out.append("Build flags:\n")
 out.append("```text")
@@ -127,16 +132,18 @@ out.append("go     go build")
 out.append("zig    zig build-exe -O ReleaseFast")
 out.append("java   javac -d <dir> Main.java    then  java -cp <dir> Main")
 out.append("c#     dotnet publish -c Release   then  ./bench")
+out.append("python python3 <file>.py   (no build step)")
 out.append("```\n")
 out.append(
     "The managed toolchains are used at their defaults: no `-Xmx` (the machine's ergonomic default heap is "
     "in the header above and was large enough for depth 20), no GC or JIT flags, no `-XX:+UseSerialGC`, and "
     "on the .NET side no ReadyToRun and no Native AOT, so the C# rows are JIT-compiled from IL exactly like "
     "the Java rows. `dotnet publish` produces a framework-dependent apphost, which hyperfine runs directly; "
-    "the `dotnet` muxer is not in the measurement.\n"
+    "the `dotnet` muxer is not in the measurement. Python is stock CPython (the version is in the header) with "
+    "the standard library only: no PyPy, no numpy, no C extensions.\n"
 )
 out.append(
-    "All programs are single-threaded. The Go, Java and .NET garbage collectors and the JVM's JIT compiler "
+    "All programs are single-threaded; Python runs with the GIL. The Go, Java and .NET garbage collectors and the JVM's JIT compiler "
     "threads run on other cores, so their user time can exceed wall time.\n"
 )
 

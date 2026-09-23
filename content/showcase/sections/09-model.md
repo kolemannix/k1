@@ -293,15 +293,25 @@ what you implement for your own types:
 
 ```k1
 type rc = either(i32) { ok = 0, noent = 2, acces = 13 }
-type errno = either(i32) { noent = 2, acces = 13 }
+
+ns pre {
+  fn errors-of(t: types/type-id, ok-name: string): types/type-id {
+    require t.schema() is :enum .{ int-kind, values } else crash("errors-of needs an enum")
+    let variants: list[types/make-either.variants.t] = []
+    for v in values {
+      if v.name != ok-name { variants.push(.{ name = v.name, payload = :none, tag = :some v.value }) }
+    }
+    types/make-either(:some(int-kind.type-id()), variants.as-span())
+  }
+}
+
+type errno = #type pre/errors-of(types/id[rc], "ok")
 
 impl try[t = empty, e = errno] for rc {
-  fn error(e: errno): rc { if e is { :noent -> :noent, :acces -> :acces } }
+  fn error(e: errno): rc { mem/bitcast(e) }
   fn value(_t: empty): rc { :ok }
   fn is-ok(self): bool { self is :ok }
-  fn get-error(self): errno {
-    if self is { :noent -> :noent, :acces -> :acces, :ok -> crash("get-error on :ok") }
-  }
+  fn get-error(self): errno { mem/bitcast(self) }
   fn get-value(_self: self): empty { .{} }
 }
 
@@ -316,12 +326,18 @@ fn touch(path: string): rc {
 }
 ```
 
-`rc` is a C-style status code: an `i32` enum where zero is success. Its
-`try` impl names the error type as `errno`, the same enum minus `ok`, so
-after `c-open(path).try` the failure cases are the only ones a caller can
-match on. The `?` operator is the fallback form and `.!` is the assertion
-form; both are defined in terms of the same ability's `is-ok` and
-`get-value`, not in terms of `result`.
+`rc` is a C-style status code: an `i32` enum where zero is success. `errno` is
+not written out. `pre/errors-of` reads `rc`'s schema at compile time and
+builds a new enum from every variant except `ok`, keeping the tag type and
+each tag value, so `errno` is `rc` minus `ok` and follows `rc` when a code is
+added. Because the tags agree, crossing between the two is `mem/bitcast`, and
+with `--optimize` a forwarding `r.try` followed by `:ok`, `get-error`, and
+`error` each compile to a bare `ret` of their argument: `.try` on a C status
+code costs one compare against zero. The derived type is nominal, named
+`errno` in messages and in `types/name`, and a match on the error side needs
+no `:ok` arm because there is none. The `?` operator is the fallback form and
+`.!` is the assertion form; both are defined in terms of the same ability's
+`is-ok` and `get-value`, not in terms of `result`.
 
 ```k1
 fn main(): i32 {
@@ -337,11 +353,13 @@ fn main(): i32 {
   println(first-even([4]))
 
   for path in ["/tmp/a", "/root/x", "/tmp/b.missing"] {
-    if touch(path) is {
-      :ok -> println("$path ok"),
-      err -> println("$path failed: ${err.enum-name()}"),
+    if touch(path).result() is {
+      :ok _ -> println("$path ok"),
+      :err :noent -> println("$path failed: no such file"),
+      :err :acces -> println("$path failed: permission denied"),
     }
   }
+  println("${types/name[errno]} ${types/size[errno]}")
   0
 }
 ```
@@ -357,8 +375,9 @@ fn main(): i32 {
 :some 4
 touched /tmp/a
 /tmp/a ok
-/root/x failed: acces
-/tmp/b.missing failed: noent
+/root/x failed: permission denied
+/tmp/b.missing failed: no such file
+errno 4
 ```
 
 ## Arenas

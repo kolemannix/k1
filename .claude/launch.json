@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "showcase",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "content/showcase", "run", "dev", "--", "--port", "5173"],
+      "port": 5173
+    }
+  ]
+}

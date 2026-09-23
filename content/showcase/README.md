@@ -64,8 +64,8 @@ the message declared on their last line) and verifies the sections.
    for a C status code, arenas with O(1) reset, and exhaustive matching
    through references.
 10. [Systems programming](sections/10-systems.md). A SIMD scanner generated
-    at compile time and run in the VM, threads and atomics, FFI with no
-    bindings file, build steps that are K1 running inside the compiler, a K1
+    at compile time and run in the VM, typed tasks over threads built from a
+    closure's own type, atomics, FFI with no bindings file, build steps that are K1 running inside the compiler, a K1
     library consumed from C, hot reload, and the same programs on wasm and
     bare metal.
 
@@ -86,7 +86,8 @@ working-tree status, binary hash, and measurement dates.
   state and every language's peak RSS. Allocation and library choices
   matter: K1 and Zig use arenas for binary-trees, Java's standard hashmap
   boxes its keys and values, and C# uses its vectorized byte-search library.
-  The report includes a Java primitive-table comparison.
+  The report includes a Java primitive-table comparison. Python is stock
+  CPython with the standard library only.
 - [Compile times](benchmarks/compile-times/results.md): equivalent generated
   application-shaped programs at 10, 100, and 300 units, plus hello world
   and Brotli. K1's main rows rebuild core and std from source with

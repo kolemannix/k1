@@ -11,7 +11,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 NAMES = {"k1": "K1", "c": "C", "cpp": "C++", "cpp26": "C++26 P2996", "rs": "Rust", "rust": "Rust",
-         "go": "Go", "zig": "Zig", "java": "Java", "java-prim": "Java (primitive)", "csharp": "C#", "cs": "C#"}
+         "go": "Go", "zig": "Zig", "java": "Java", "java-prim": "Java (primitive)", "csharp": "C#", "cs": "C#",
+         "python": "Python"}
 
 
 def hyperfine(path):

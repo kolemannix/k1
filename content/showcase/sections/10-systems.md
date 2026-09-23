@@ -64,7 +64,7 @@ This is the core of the generator:
 ```
 
 ```k1 path=modules/std/simd.k1
-macro first-of(name, needles: span[char]) {
+macro first-of(name: code, needles: span[char]) {
   code/from-string(first-of-impl(name.text(), needles))
 }
 ```
@@ -195,6 +195,7 @@ comes out half again to twice the scalar loop from run to run. Apple M3 Max, mac
 
 ```k1
 use std/thread
+use std/thread/task
 
 let N_THREADS: size = 4
 let N_ITERS: u64 = 100000
@@ -203,7 +204,7 @@ type shared = { atomic-total: u64, lock: u64, locked-total: u64 }
 
 let(mutable, tls) my-bumps: u64 = 0
 
-fn worker(s: *shared): ptr {
+fn worker(s: *shared): u64 {
   for 0u64.until(N_ITERS) {
     let _ = atomic/fetch-add(s.atomic-total.&, 1, :relaxed)
     my-bumps = my-bumps + 1
@@ -211,20 +212,18 @@ fn worker(s: *shared): ptr {
   while not atomic/cmpxchg(s.lock.&, 0: u64, 1, :acquire, :relaxed).ok {}
   s.locked-total = s.locked-total + my-bumps
   atomic/store(s.lock.&, 0: u64, :release)
-  mem/bitcast[u64, ptr](my-bumps)
+  my-bumps
 }
 
 fn main(): i32 {
   let s = mem/new(shared.0)
-  let handles: array[thread/thread, 4] = .0
-  for i in 0.until(N_THREADS) {
-    thread/start(handles.[i].&, worker.&, s)
+  let tasks: list[task[u64]] = []
+  for 0.until(N_THREADS) {
+    tasks.push(task/spawn(fn[s]. worker(s)))
   }
-  for i in 0.until(N_THREADS) {
-    let result: ptr = ptr/null
-    thread/join(handles.[i], result.&)
-    let got = result.to-uint()
-    println("thread $i bumped its thread-local $got times")
+  for tasks {
+    let got = it.join()
+    println("thread $it-index bumped its thread-local $got times")
   }
   println("atomic total: ${s.atomic-total}")
   println("locked total: ${s.locked-total}")
@@ -258,11 +257,54 @@ them at the call site; `test_src/suite1/atomics.k1` asserts the messages:
 ```
 
 `let(mutable, tls)` is the whole thread-local story: a global modifier, one
-instance per thread, main's copy untouched by the workers. `std/thread` is a
-thin layer over the platform: `start` writes the new thread's handle through
-an out-param and takes any `*fn(*t) -> ptr` (`worker.&`, the function's
-address) plus its argument; `join` writes the thread's raw `ptr` result into
-the slot you hand it, here bitcast back to a `u64`.
+instance per thread, main's copy untouched by the workers.
+
+`task/spawn` runs a closure on its own thread, here `fn[s]. worker(s)`
+capturing the shared pointer, and `join` returns what the closure returned:
+a `task[u64]` hands back the `u64` the worker counted. `task` is not built
+in. It is a few lines of `std/thread`, on top of `thread/start`, which only
+knows the C shape of a thread entry point: one `*fn(*t) -> ptr` and one
+argument.
+
+```k1 path=modules/std/thread.k1
+type task-state[f, t] = { body: f, result: *t }
+
+type task[t] = { thread: thread, result: *t }
+
+ns for task {
+
+  fn spawn[t](body: some fn() -> t): task[t] {
+    let result = heap.alloc-t[t]()
+    let state = heap.new(task-state[type-of(body), t].{ body = body, result = result })
+    let thread: thread = ptr/null
+    start(thread.&, fn(s: *task-state[type-of(body), t] -> ptr) {
+      s.result.* = (s.body)()
+      heap.free-t(s)
+      ptr/null
+    }, state)
+    .{ thread = thread, result = result }
+  }
+```
+
+`body: some fn() -> t` specializes `spawn` for each closure it is called
+with (see [closures](09-model.md#closures)), so inside one specialization the
+closure has one concrete type: its captures, its size, the code it runs.
+`type-of(body)` names that type, and from then on it is a type like any
+other. `task-state[type-of(body), t]` is an ordinary generic record that
+holds the closure by value, with no `dyn`, no vtable and no separate
+environment. For `fn[s]. worker(s)` the record is 16 bytes: the captured
+pointer, then the address of the result slot.
+
+The thread's entry point is a lambda literal whose parameter type is
+written in terms of the closure's type. It captures nothing, so it coerces
+to the bare `*fn(*task-state[...]) -> ptr` that `start` hands to the
+platform. Every `spawn` call site gets its own entry function, and inside
+it `body()` is a direct call to known code: in the `sys_threads` IR the
+entry function calls `main`'s lambda by name, and under `--optimize` the
+lambda and `worker` inline into it, so the counting loop runs in the very
+function the new thread starts in. Nothing between the caller and the
+thread is a `void *` to be cast back, and the result travels as a `u64`
+all the way.
 
 ## FFI with no bindings file
 
@@ -326,7 +368,7 @@ does the latter:
 fn(extern("BrotliEncoderCompress"), lib("brotli")) encoder-compress(
   quality: c-int,
   lgwin: c-int,
-  mode: mode,
+  mode,
   input-size: size,
   input: ptr,
   encoded-size: *size,
@@ -621,7 +663,7 @@ The compiler gives every reloadable namespace three functions: `load()`,
 `watch()` and `loaded-version()`. The app calls them like any other:
 
 ```k1 path=dogfood/reload_test/app/app.k1
-    if line == "load" {
+    } else if line == "load" {
       if scene/load() is {
         :ok -> println("load ok"),
         :err e -> println("load err: ${e}"),
@@ -635,6 +677,11 @@ The compiler gives every reloadable namespace three functions: `load()`,
       println("greet: ${scene/greeting()}")
     } else if line == "speed" {
       println("speed: ${scene/speed}")
+    } else if line == "bump" {
+      scene/speed = scene/speed + 1
+      println("bump ok")
+    } else if line == "version" {
+      println("version: ${scene/loaded-version()}")
 ```
 
 Calls into a reloadable namespace go through a per-function address slot.

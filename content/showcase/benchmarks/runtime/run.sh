@@ -22,8 +22,8 @@ done
 
 langs() {
   case $1 in
-    hashmap) echo "k1 c rust go zig java java-prim csharp" ;;
-    *) echo "k1 c rust go zig java csharp" ;;
+    hashmap) echo "k1 c rust go zig java java-prim csharp python" ;;
+    *) echo "k1 c rust go zig java csharp python" ;;
   esac
 }
 
@@ -31,6 +31,7 @@ prog() {
   case $2 in
     java|java-prim) echo "java -cp $GEN/classes/$1-$2 Main" ;;
     csharp) echo "$GEN/csharp/$1/publish/bench" ;;
+    python) echo "python3 $(ls "$ROOT/$1/python/"*.py)" ;;
     *) echo "$BIN/$1-$2" ;;
   esac
 }
@@ -75,6 +76,7 @@ for bench in $BENCHES; do
     case $tag in
       java|java-prim) echo "$tag $(cat "$GEN/classes/$bench-$tag/"*.class | wc -c)" ;;
       csharp) echo "$tag $(wc -c < "$GEN/csharp/$bench/publish/bench.dll")" ;;
+      python) echo "$tag $(cat "$ROOT/$bench/python/"*.py | wc -c)" ;;
       *) echo "$tag $(wc -c < "$BIN/$bench-$tag")" ;;
     esac >> "$GEN/sizes-$bench.txt"
   done
@@ -100,6 +102,7 @@ done
   echo "zig: $(zig version)${ZIG_SYSROOT:+ (--sysroot $ZIG_SYSROOT: the macOS 26 SDK libSystem.tbd lists no arm64-macos target, which zig 0.14 needs)}"
   echo "java: $(java -version 2>&1 | head -1 | tr -d '\r'), $(java -XX:+PrintFlagsFinal -version 2>/dev/null | awk '/ MaxHeapSize/ {printf "default max heap %d MB", $4 / 1024 / 1024}'), default GC $(java -XX:+PrintFlagsFinal -version 2>/dev/null | awk '/ UseG1GC/ {print ($4 == "true" ? "G1" : "not G1")}')"
   echo "dotnet: sdk $(dotnet --version), runtime $(dotnet --list-runtimes | awk '/^Microsoft.NETCore.App/ {print $2; exit}') at $DOTNET_ROOT"
+  echo "python: $(python3 --version) at $(which python3)"
   echo "hyperfine: $(hyperfine --version)"
   echo "date: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 } > "$GEN/env.txt"

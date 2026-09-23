@@ -204,7 +204,7 @@ fn emit(name: string, d: dfa): code {
   cb.build()
 }
 
-macro define(name, pattern: string) {
+macro define(name: code, pattern: string) {
   emit(name.text(), compile(pattern))
 }
 ```

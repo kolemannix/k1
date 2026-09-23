@@ -1,4 +1,5 @@
 use std/thread
+use std/thread/task
 
 let N_THREADS: size = 4
 let N_ITERS: u64 = 100000
@@ -7,7 +8,7 @@ type shared = { atomic-total: u64, lock: u64, locked-total: u64 }
 
 let(mutable, tls) my-bumps: u64 = 0
 
-fn worker(s: *shared): ptr {
+fn worker(s: *shared): u64 {
   for 0u64.until(N_ITERS) {
     let _ = atomic/fetch-add(s.atomic-total.&, 1, :relaxed)
     my-bumps = my-bumps + 1
@@ -15,20 +16,18 @@ fn worker(s: *shared): ptr {
   while not atomic/cmpxchg(s.lock.&, 0: u64, 1, :acquire, :relaxed).ok {}
   s.locked-total = s.locked-total + my-bumps
   atomic/store(s.lock.&, 0: u64, :release)
-  mem/bitcast[u64, ptr](my-bumps)
+  my-bumps
 }
 
 fn main(): i32 {
   let s = mem/new(shared.0)
-  let handles: array[thread/thread, 4] = .0
-  for i in 0.until(N_THREADS) {
-    thread/start(handles.[i].&, worker.&, s)
+  let tasks: list[task[u64]] = []
+  for 0.until(N_THREADS) {
+    tasks.push(task/spawn(fn[s]. worker(s)))
   }
-  for i in 0.until(N_THREADS) {
-    let result: ptr = ptr/null
-    thread/join(handles.[i], result.&)
-    let got = result.to-uint()
-    println("thread $i bumped its thread-local $got times")
+  for tasks {
+    let got = it.join()
+    println("thread $it-index bumped its thread-local $got times")
   }
   println("atomic total: ${s.atomic-total}")
   println("locked total: ${s.locked-total}")

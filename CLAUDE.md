@@ -126,12 +126,17 @@ for compile-time execution, codegen_llvm for binaries.
   - `typer/snapshot.rs`: `TypedProgram` <-> `snap` serialization, inputs hash.
   - `typer/trace.rs` + `report.rs`: the compile work-stack trace, timing
     summaries, diagnostics printing.
-  - `typer/dump.rs`: `--dump-module` text form. `typer/visit.rs`: expr
-    walkers. `typer/typed_int_value.rs`: integer constants.
+  - `typer/dump.rs`: `--dump-module` text form. `typer/typed_int_value.rs`:
+    integer constants.
   - `typer/megarepl.rs`: cells/widgets model behind `k1 server`.
   - `typer/derive.rs`: `unimplemented!` stub.
 - `ir.rs` + `ir/iropt.rs`: typed exprs -> SSA `IrUnit`s per function, IR
   optimization and inlining.
+  - `ir/unit.rs`: unit storage. Inst and block ids are unit-local indices;
+    passes edit a pooled `UnitBuf` (linked layout, preds), `commit_unit`
+    compacts it into layout order and stores it as arena slices on the
+    `Copy` `IrUnit`; every reader takes a `UnitView`. Call, phi, switch,
+    cmpxchg and vec-op payloads are per-unit arrays.
 - `bc.rs` + `bc/{lower,exec,disasm}.rs`: flat bytecode lowered from IR, the VM
   that runs compile-time code, disassembler.
 - `vm.rs` + `vm/vm_ffi.rs`: VM memory model, `k1_types` mirrors of K1

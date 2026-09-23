@@ -1,9 +1,9 @@
 # Macros and metaprogramming
 
-A K1 `macro` is a compile-time function. Its bare parameters receive the
-caller's argument as a `code` value: the source text plus the span it came
-from. Annotated parameters (`n: int`, `table: span[transition]`) are evaluated
-at compile time into ordinary values. The macro returns `code`, and the
+A K1 `macro` is a compile-time function. A parameter of type `code` receives
+the caller's argument unevaluated: the source text plus the span it came
+from. Parameters of any other type (`n: int`, `table: span[transition]`) are
+evaluated at compile time into ordinary values. The macro returns `code`, and the
 compiler compiles that in place of the call. Macro bodies run in the same
 bytecode VM as `#static`, in the same language as the rest of the program:
 lists, string builders, pattern matching, and reflection are all available to
@@ -19,11 +19,11 @@ fn next(): int {
   calls
 }
 
-macro twice(e) {
+macro twice(e: code) {
   "$e + $e"
 }
 
-macro repeat(n: int, body) {
+macro repeat(n: int, body: code) {
   let cb = code-builder/new()
   for 0.until(n) {
     cb.line(body)
@@ -31,11 +31,11 @@ macro repeat(n: int, body) {
   cb.build()
 }
 
-macro debug(e) {
+macro debug(e: code) {
   #if false "println($e)" else ""
 }
 
-macro static-for[t](items: span[t], body) {
+macro static-for[t](items: span[t], body: code) {
   let cb = code-builder/new()
   for items {
     cb.write(core/meta/baked-variable("it", it))
@@ -96,7 +96,7 @@ composition step until the compiler consumes the result.
 `swap` takes two places and emits a three-statement block around them:
 
 ```k1
-macro swap(a, b) {
+macro swap(a: code, b: code) {
   `
   let tmp = $a
   $a = $b
@@ -274,7 +274,7 @@ fn define-impl(name: string, table: span[transition]): code {
   cb.build()
 }
 
-macro define(name, table: span[transition]) {
+macro define(name: code, table: span[transition]) {
   define-impl(name.text(), table)
 }
 
@@ -437,11 +437,11 @@ emitter, using `types/id[int-type]` reflection to learn the base width:
 ```
 
 ```k1 path=modules/std/bitfield.k1
-macro define[int-type](type-name, members: span[{ name: string, bits: size}]) {
+macro define[int-type](type-name: code, members: span[{ name: string, bits: size}]) {
   code/from-string(define-impl(types/id[int-type](), type-name.text(), members))
 }
-macro b1(name) { `.{ name = "$name", bits = 1 }` }
-macro b8(name) { `bn("$name", 8)` }
+macro b1(name: code) { `.{ name = "$name", bits = 1 }` }
+macro b8(name: code) { `bn("$name", 8)` }
 ```
 
 An excerpt of the expansion for `ship` (printed from a `#static` block by
@@ -661,7 +661,7 @@ allocator around an expression, and needs a macro only because the expression
 must be evaluated inside the push/pop pair:
 
 ```k1 path=modules/core/mem.k1
-  macro with-arena(arena, expr) {
+  macro with-arena(arena: code, expr: code) {
     `
     let start-len = mem/arena-stack-len()
     mem/push-arena($arena)
