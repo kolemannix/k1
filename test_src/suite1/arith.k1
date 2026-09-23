@@ -107,6 +107,33 @@ fn test() {
   let static-max: i32 = #static { (4: i32).max(9) }
   assert-equals(static-max, 9)
 
+  // Overflow wraps; shift counts are taken modulo the width
+  assert-equals(255u8 + 1, 0)
+  assert-equals(0u8 - 1, 255)
+  assert-equals(127i8 + 1, -128)
+  assert-equals(-128i8 - 1, 127)
+  let min64 = i64/min-value
+  assert-equals(i64/max-value + 1, min64)
+  assert-equals(0x8000_0000_0000_0000u64 * 2, 0)
+  assert-equals(-1i32 * i32/min-value, i32/min-value)
+  assert-equals(1u64 << 64, 1)
+  assert-equals(1u64 << 65, 2)
+  assert-equals(0xFFu8 << 8, 0xFF)
+  assert-equals(0xFFu8 >> 9, 0x7F)
+  assert-equals(-1i32 >> 32, -1)
+  assert-equals(min64 >> 64, min64)
+  assert-equals(min64 / -2, 0x4000_0000_0000_0000)
+  assert-equals(min64 % -2, 0)
+
+  assert-equals[?string](
+    test-compile( #static { 7u32 % 0 } ).map(fn(s) s.take(16)),
+    some("Division by zero")
+  )
+  assert-equals[?string](
+    test-compile( #static { let d = -1; let m = i64/min-value; m / d } ).map(fn(s) s.take(41)),
+    some("Integer division overflow: min-value / -1")
+  )
+
   .{}
 
 }

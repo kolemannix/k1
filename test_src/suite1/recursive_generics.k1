@@ -39,17 +39,17 @@ ns recursive_generics {
   // wrapper-first order: fwd-node is evaluated on demand mid-cluster, and its
   // instance fwd-node[t-of-wrapper] is self-referential; the cluster finiteness
   // walk used to overflow on it (wart 3a)
-  type fwd-wrapper[t] = { head: *mut fwd-node[t] }
-  type fwd-node[t] = { value: t, next: *mut fwd-node[t] }
+  type fwd-wrapper[t] = { head: *fwd-node[t] }
+  type fwd-node[t] = { value: t, next: *fwd-node[t] }
 
   // a recursive-generic instance (node[int]) reached from inside a mutual
   // pointer cycle between plain structs; same walk overflow (wart 3b)
-  type q[t] = { head: *mut node[t] }
-  type bus = { ingress: *mut q[int], subscribers: list[*mut subscription] }
-  type subscription = { bus: *mut bus }
+  type q[t] = { head: *node[t] }
+  type bus = { ingress: *q[int], subscribers: list[*subscription] }
+  type subscription = { bus: *bus }
 
   // common pattern in c definitions
-  type(alias) lnode = *mut lnode-rec
+  type(alias) lnode = *lnode-rec
   type(alias) lnode-get = *fn(lnode) -> int
   type lnode-rec = { next: lnode, getter: lnode-get, value: int }
 
@@ -57,8 +57,8 @@ ns recursive_generics {
 
   // wide mutual cycle through two pointer aliases: one alias expands while the
   // other alias's defn is still on the stack
-  type(alias) face = *mut face-rec
-  type(alias) slot = *mut slot-rec
+  type(alias) face = *face-rec
+  type(alias) slot = *slot-rec
   type face-rec = { glyph: slot, num: int }
   type slot-rec = { owner: face, idx: int }
 
@@ -90,24 +90,27 @@ ns recursive_generics {
     assert-equals(ci2.link.!.v + ci2.v, 12)
     assert(cb.v)
 
-    let f2: *mut fwd-node[int] = mem/new(.{ value = 2, next = ptr/null.ref[fwd-node[int]] })
-    let f1: *mut fwd-node[int] = mem/new(.{ value = 1, next = f2 })
+    let f2: *fwd-node[int] = mem/alloc-t()
+    f2.* = .{ value = 2, next = f2 }
+    let f1: *fwd-node[int] = mem/new(.{ value = 1, next = f2 })
     let w: fwd-wrapper[int] = .{ head = f1 }
     assert-equals(w.head.value + w.head.next.value, 3)
 
-    let qn: *mut node[int] = mem/new(.{ value = 9, next = :none })
-    let ingress: *mut q[int] = mem/new(.{ head = qn })
-    let bus0: *mut bus = mem/new(.{ ingress = ingress, subscribers = list/empty() })
-    let sub0: *mut subscription = mem/new(.{ bus = bus0 })
+    let qn: *node[int] = mem/new(.{ value = 9, next = :none })
+    let ingress: *q[int] = mem/new(.{ head = qn })
+    let bus0: *bus = mem/new(.{ ingress = ingress, subscribers = list/empty() })
+    let sub0: *subscription = mem/new(.{ bus = bus0 })
     bus0.subscribers.push(sub0)
     assert-equals(sub0.bus.ingress.head.value, 9)
     assert-equals(bus0.subscribers.len(), 1)
 
-    let l2: lnode = mem/new(.{ next = ptr/null.ref[lnode-rec], getter = lnode-value.&, value = 2 })
+    let l2: lnode = mem/alloc-t()
+    l2.* = .{ next = l2, getter = lnode-value.&, value = 2 }
     let l1: lnode = mem/new(.{ next = l2, getter = lnode-value.&, value = 1 })
     assert-equals((l1.getter)(l1) + (l1.next.getter)(l1.next), 3)
 
-    let f: face = mem/new(.{ glyph = ptr/null.ref[slot-rec], num = 7 })
+    let f: face = mem/alloc-t()
+    f.num = 7
     let s: slot = mem/new(.{ owner = f, idx = 3 })
     f.glyph = s
     assert-equals(f.glyph.owner.num + s.owner.glyph.idx, 10)

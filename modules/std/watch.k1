@@ -41,7 +41,7 @@
     :ok .{ fd = fd, entries = list/empty[watch/entry]() }
   }
 
-  fn add(w: *mut watch/watcher, path: string): result[empty, string] {
+  fn add(w: *watch/watcher, path: string): result[empty, string] {
     let file-fd = posix/open(path.to-c-tmp().ptr, O_EVTONLY)
     if file-fd < 0 {
       return :err "watch/add open of $path failed: ${libc/errno-k1-string()}"
@@ -62,12 +62,12 @@
     :ok
   }
 
-  fn wait(w: *mut watch/watcher): result[list[watch/event], string] {
+  fn wait(w: *watch/watcher): result[list[watch/event], string] {
     let events = list/empty[watch/event]()
     let out = buffer/allocate[kevent-t](8)
-    let n = kevent(w.fd, ptr/null, 0, out.data.as[ptr], 8, ptr/null)
+    let n = kevent(w.fd, ptr/null, 0, out.data, 8, ptr/null)
     while n < 0 and libc/errno() == libc/EINTR {
-      n = kevent(w.fd, ptr/null, 0, out.data.as[ptr], 8, ptr/null)
+      n = kevent(w.fd, ptr/null, 0, out.data, 8, ptr/null)
     }
     if n < 0 return :err "watch/wait kevent failed: ${libc/errno-k1-string()}"
     for i in 0.until(n.widen[size]) {
@@ -85,7 +85,7 @@
     :ok events
   }
 
-  fn close(w: *mut watch/watcher) {
+  fn close(w: *watch/watcher) {
     // vnode fds are per-entry on kqueue
     for entry in w.entries.as-span() {
       posix/close(entry.id.trunc[i32])
@@ -121,7 +121,7 @@
     :ok .{ fd = fd, entries = list/empty[watch/entry]() }
   }
 
-  fn add(w: *mut watch/watcher, path: string): result[empty, string] {
+  fn add(w: *watch/watcher, path: string): result[empty, string] {
     let mask = IN_MODIFY | IN_ATTRIB | IN_CLOSE_WRITE
       | IN_MOVED_FROM | IN_MOVED_TO | IN_CREATE
       | IN_DELETE | IN_DELETE_SELF | IN_MOVE_SELF
@@ -133,17 +133,17 @@
     :ok
   }
 
-  fn wait(w: *mut watch/watcher): result[list[watch/event], string] {
+  fn wait(w: *watch/watcher): result[list[watch/event], string] {
     let events = list/empty[watch/event]()
     let buf = buffer/allocate[u8](4096)
-    let n = posix/read(w.fd, buf.data.as[ptr], buf.len.unsigned())
+    let n = posix/read(w.fd, buf.data, buf.len.unsigned())
     while n < 0 and libc/errno() == libc/EINTR {
-      n = posix/read(w.fd, buf.data.as[ptr], buf.len.unsigned())
+      n = posix/read(w.fd, buf.data, buf.len.unsigned())
     }
     if n <= 0 return :err "watch/wait read failed: ${libc/errno-k1-string()}"
     let offset: size = 0
     while offset < n {
-      let ev = buf.data.as[ptr].add-bytes(offset).ref[event-t].*
+      let ev = buf.data.add-bytes(offset).ref[event-t].*
       let kind: watch/event-kind =
         if ev.mask.bit-and(IN_DELETE | IN_DELETE_SELF | IN_MOVED_FROM) != 0 :deleted
         else if ev.mask.bit-and(IN_MOVE_SELF | IN_MOVED_TO) != 0 :renamed
@@ -160,7 +160,7 @@
     :ok events
   }
 
-  fn close(w: *mut watch/watcher) {
+  fn close(w: *watch/watcher) {
     posix/close(w.fd)
     w.entries.clear()
   }
@@ -199,7 +199,7 @@ ns watch {
 
   ns for watcher {
 
-    fn add(self: *mut watcher, path: string): result[empty, string] {
+    fn add(self: *watcher, path: string): result[empty, string] {
       #if k1/platform is {
         :posix-macos -> kq/add(self, path),
         :posix-linux -> inotify/add(self, path),
@@ -209,7 +209,7 @@ ns watch {
 
     // Blocks until at least one watched path changes. Spurious extra events
     // are normal; callers that care should compare content, not counts.
-    fn wait(self: *mut watcher): result[list[event], string] {
+    fn wait(self: *watcher): result[list[event], string] {
       #if k1/platform is {
         :posix-macos -> kq/wait(self),
         :posix-linux -> inotify/wait(self),
@@ -217,7 +217,7 @@ ns watch {
       }
     }
 
-    fn close(self: *mut watcher) {
+    fn close(self: *watcher) {
       #if k1/platform is {
         :posix-macos -> kq/close(self),
         :posix-linux -> inotify/close(self),

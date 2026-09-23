@@ -1,0 +1,41 @@
+ns pre {
+  fn trim(s: string): string {
+    let start = 0
+    let end = s.len()
+    while start < end and s.[start] == ' ' { start = start + 1 }
+    while end > start and s.[end - 1] == ' ' { end = end - 1 }
+    s.slice(start, end)
+  }
+
+  fn column-type(name: string): types/type-id {
+    if name is {
+      "u64" -> types/id[u64],
+      "i32" -> types/id[i32],
+      "f64" -> types/id[f64],
+      "bool" -> types/id[bool],
+      "string" -> types/id[string],
+      _ -> crash("unknown column type: $name")
+    }
+  }
+
+  fn table(schema: string): types/type-id {
+    let fields: list[{ name: string, type: types/type-id }] = []
+    for column in schema.split-by-char(',') {
+      let parts = column.split-by-char(':')
+      fields.push(.{ name = trim(parts.[0]), type = column-type(trim(parts.[1])) })
+    }
+    types/make-struct(:struct, fields.as-span())
+  }
+}
+
+type(alias) user = #type pre/table("id: u64, name: string, score: f64, active: bool")
+
+fn main(): i32 {
+  let u: user = .{ id = 7, name = "ada", score = 99.5, active = true }
+  u.score = u.score + 0.5
+  println("${u.id} ${u.name} ${u.score} ${u.active}")
+  println("size ${types/size[user]} align ${types/align[user]}")
+  println(types/name[user])
+  assert(types/id[user] == types/id[{ id: u64, name: string, score: f64, active: bool }])
+  0
+}

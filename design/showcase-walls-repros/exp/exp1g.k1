@@ -1,0 +1,6 @@
+fn main(): i32 {
+  println("a")
+  println(types/id[int].name())
+  println("b")
+  0
+}

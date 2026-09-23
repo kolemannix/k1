@@ -14,7 +14,7 @@ type sse-encoder = {
 }
 
 fn sse-events(upstream: dyn[source[t = u8]], event-name: string): dyn[source[t = u8]] {
-  let state: *mut sse-encoder = mem/new(.{
+  let state: *sse-encoder = mem/new(.{
     upstream,
     event-name,
     parts = list/empty[span[u8]](),
@@ -23,9 +23,9 @@ fn sse-events(upstream: dyn[source[t = u8]], event-name: string): dyn[source[t =
 }
 
 impl source[t = u8] for sse-encoder {
-  fn start(self: *mut sse-encoder, waker: waker) { self.upstream.start(waker) }
-  fn stop(self: *mut sse-encoder) { self.upstream.stop() }
-  fn next(self: *mut sse-encoder): pull[u8] {
+  fn start(self: *sse-encoder, waker: waker) { self.upstream.start(waker) }
+  fn stop(self: *sse-encoder) { self.upstream.stop() }
+  fn next(self: *sse-encoder): pull[u8] {
     if self.upstream.next() is {
       :chunk group -> {
         self.parts.clear()

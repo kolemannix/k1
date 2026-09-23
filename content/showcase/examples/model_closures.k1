@@ -1,0 +1,45 @@
+fn apply(x: int, f: some fn int -> int): int { f(x) }
+
+fn apply-dyn(x: int, f: dyn[fn(int) -> int]): int { f(x) }
+
+fn double(x: int): int { x * 2 }
+
+fn make-adder(n: int): dyn[fn(int) -> int] {
+  (fn[n](x: int) x + n).to-dyn()
+}
+
+fn main(): i32 {
+  let inc = fn(x: int) x + 1
+  println(inc(1))
+
+  let base = 10
+  let hits = 0
+  let tally = fn[base, hits.&](x: int) {
+    hits.* = hits.* + 1
+    x + base
+  }
+  println(tally(1))
+  println(tally(2))
+  println("hits = $hits")
+
+  println(apply(5, double))
+  println(apply(5, inc))
+  println(apply(5, tally))
+  println(apply-dyn(5, tally.to-dyn()))
+
+  let a = mem/current-arena()
+  let before = a.used-bytes()
+  let local = fn[base](x: int) x * base
+  let mid = a.used-bytes()
+  let add5 = make-adder(5)
+  let after = a.used-bytes()
+  println("${local(2)} ${add5(2)}")
+  println("local closure: ${mid - before} bytes allocated; returned as dyn: ${after - mid} bytes")
+  println("dyn[fn(int) -> int] is ${types/size[dyn[fn(int) -> int]]} bytes")
+
+  let evens = [1, 2, 3, 4, 5, 6]
+    || list/map(fn x. x * x)
+    || list/filter(fn x. x % 2 == 0)
+  println(evens)
+  0
+}

@@ -77,7 +77,7 @@ ns meta {
 
     // begin fn row
     code.writeln(`  fn row(self: $name, index: size): $tt {`)
-    code.writeln(`    let(returned) ret: $tt = mem/zeroed();`)
+    code.writeln(`    let(returned) ret: $tt = .0;`)
     for f in fields {
       code.writeln(`    ret.${f.name} = self.ARR_${f.name}.[index];`)
     }
@@ -92,7 +92,7 @@ ns meta {
     code.writeln(`  } }`) // end fn empty
 
     // begin fn push
-    code.writeln(`  fn push(self: *mut $name, value: $tt) {`)
+    code.writeln(`  fn push(self: *$name, value: $tt) {`)
     for f in fields {
       code.writeln(`    self.ARR_${f.name}.push(value.${f.name});`)
     }

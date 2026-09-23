@@ -27,7 +27,7 @@ fn day2(part: int, input: string) {
     }
     values-processed = values-processed + (end - start)
     total-mem = total-mem + mem/tmp().used-bytes()
-    mem/tmp().reset(false)
+    mem/tmp().reset()
   }
 
   println("Day 1 part $part: $invalid-sum (processed $values-processed values)")
@@ -38,7 +38,7 @@ fn day2(part: int, input: string) {
 let(mutable) buffer: string-builder = string-builder/new()
 fn check-invalid-part1(value: i64): bool {
   buffer.reset()
-  value.print-to(&buffer)
+  value.print-to(buffer.&)
   let value-str = string/wrap-span(buffer.peek())
   if (value-str.len() & 1) == 1 {
     //println("skipping odd len {value-str}");
@@ -54,7 +54,7 @@ fn check-invalid-part1(value: i64): bool {
 }
 fn check-invalid-part2(value: i64): bool {
   buffer.reset()
-  value.print-to(&buffer)
+  value.print-to(buffer.&)
   let value-str = string/wrap-span(buffer.peek())
   //println("check-invalid-part2 {value-str}");
   for 1.until((value-str.len() / 2) + 1) {

@@ -1,0 +1,53 @@
+type shape = either { circle(f64), square(f64), tri({ a: f64, b: f64, c: f64 }) }
+
+fn classify(s: shape): string {
+  if s is {
+    :circle r if r > 10.0 -> "big circle",
+    :circle _ -> "circle",
+    :tri .{ a, b, c } if a == b and b == c -> "equilateral",
+    :square _ or :tri _ -> "polygon",
+  }
+}
+
+fn quadrant(p: { x: int, y: int }): string {
+  if p is {
+    .{ x = 0, y = 0 } -> "origin",
+    .{ x, y } if x > 0 and y > 0 -> "first",
+    .{ x } if x < 0 -> "left half",
+    _ -> "elsewhere",
+  }
+}
+
+fn inspect[t](v: t): string {
+  if v is {
+    type[int](0) -> "zero",
+    type[int](n) -> "int $n",
+    type[string](s) -> "string of ${s.len()}",
+    _ -> "something else",
+  }
+}
+
+fn main(): i32 {
+  println(classify(:circle 12.0))
+  println(classify(:tri .{ a = 1.0, b = 1.0, c = 1.0 }))
+  println(classify(:square 2.0))
+  println(quadrant(.{ x = 0, y = 0 }))
+  println(quadrant(.{ x = 3, y = 4 }))
+  println(quadrant(.{ x = -1, y = 4 }))
+  println(inspect(0))
+  println(inspect(9))
+  println(inspect("hello"))
+  println(inspect(true))
+
+  let r: result[int, string] = :ok 1
+  let rr = r.&
+  if rr is :ok(v)* { v.* = v.* + 41 }
+  println(r)
+
+  let deep: ***bool = mem/new(mem/new(mem/new(true)))
+  println(deep is true***)
+
+  require r is :ok n else { crash("unreachable") }
+  println("n = $n")
+  0
+}

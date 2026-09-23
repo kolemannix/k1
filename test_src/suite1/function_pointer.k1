@@ -9,15 +9,64 @@ fn ref-pick[t](): *fn(a: t, b: t) -> t { pick-first[t].& }
 
 fn(native) native-add-three(x: int): int { x + 3 }
 
+fn takes-ptr(f: *fn(int) -> int, x: int): int { f(x) }
+
 type has-fn = { myfn: *fn(not-x: int) -> int }
 
+fn counted-add-one(count: *int): type-of(static-add-one) {
+  count.* = count.* + 1
+  static-add-one
+}
+
+fn apply-through-field(f: some fn(int) -> int): int {
+  let holder = .{ held = f }
+  (holder.held)(10)
+}
+
+fn function-reference-values() {
+  let count = 0
+  assert-equals((counted-add-one(count.&))(1), 2)
+  assert-equals(count, 1)
+  let p = counted-add-one(count.&).&
+  assert-equals(count, 2)
+  assert-equals(p(1), 2)
+  let d = counted-add-one(count.&).to-dyn()
+  assert-equals(count, 3)
+  assert-equals(d(1), 2)
+  let r = counted-add-one(count.&)
+  assert-equals(r(1), 2)
+  assert-equals(count, 4)
+}
+
+fn call-on-expr() {
+  let base = 5
+  let callables = .{
+    lambda = fn[base](x: int) x + base,
+    object = (fn(x: int) x * 2).to-dyn(),
+    pointer = static-add-one.&,
+    reference = static-add-one,
+  }
+  assert-equals((callables.lambda)(1), 6)
+  assert-equals((callables.object)(1), 2)
+  assert-equals((callables.pointer)(1), 2)
+  assert-equals((callables.reference)(1), 2)
+  assert-equals((fn[base]. base * 2)(), 10)
+  assert-equals(apply-through-field(fn x. x + 1), 11)
+  assert-equals(apply-through-field(static-add-one), 11)
+  let zero-sized = .{ f = static-add-one }
+  assert-equals((zero-sized.f)(3), 4)
+  let x = 3
+  assert(test-compile( x(1) ) is :some "Not callable: type is 'i64'")
+  assert(test-compile( (x)(1) ) is :some "Not callable: type is 'i64'")
+}
+
 fn test() {
-  assert(static-add-one.as[ptr] != static-add-two.as[ptr])
-  let some-add-fn: *fn(int) -> int = static-add-one
-  let _some-add-fn2: *fn(x: int) -> int = static-add-one
+  assert(static-add-one.&.as[ptr] != static-add-two.&.as[ptr])
+  let some-add-fn: *fn(int) -> int = static-add-one.&
+  let _some-add-fn2: *fn(x: int) -> int = static-add-one.&
   let x = some-add-fn(10)
   assert-equals(x, 11)
-  some-add-fn = static-add-two
+  some-add-fn = static-add-two.&
   let y = some-add-fn(20)
   assert-equals(y, 22)
 
@@ -25,9 +74,9 @@ fn test() {
   let null-callback-ptr: ptr = null-callback.as[ptr]
   assert-equals(null-callback-ptr, ptr/null)
 
-  let x = static-add-one
+  let x = static-add-one.&
   let _has-fn: has-fn = .{ myfn = x }
-  let has-fn: has-fn = .{ myfn = static-add-one }
+  let has-fn: has-fn = .{ myfn = static-add-one.& }
 
   assert-equals((has-fn.myfn)(4), 5)
   assert(test-compile( (has-fn.myfn)() ) is :some _)
@@ -35,7 +84,25 @@ fn test() {
 
   let sa = static-add-one.&
   assert-equals(sa(1), 2)
-  assert-equals(sa.as[ptr], static-add-one.as[ptr])
+  assert-equals(sa.as[ptr], static-add-one.&.as[ptr])
+
+  let r = static-add-one
+  let r2: type-of(static-add-one) = static-add-one
+  assert-equals(types/size[type-of(r)], 0)
+  assert-equals(r(1), 2)
+  assert-equals(r2(2), 3)
+  assert-equals(r.&.as[ptr], sa.as[ptr])
+  let lam = fn(x: int) x * 2
+  assert-equals(types/size[type-of(lam)], 0)
+  assert-equals(lam(4), 8)
+  assert-equals((lam.&)(5), 10)
+  let literal-ptr: *fn(int) -> int = fn(x: int) x * 3
+  assert-equals(literal-ptr(3), 9)
+  assert-equals(takes-ptr(fn(x: int) x + 10, 1), 11)
+  assert(test-compile( { let p: *fn(int) -> int = static-add-one; p } ) is :some _)
+  assert(test-compile( { let k = 1; let p: *fn(int) -> int = fn[k](x: int) x + k; p } ) is :some _)
+  assert(test-compile( { let d: dyn[fn(int) -> int] = static-add-one; d } ) is :some _)
+  assert(test-compile( { let d: dyn[fn(int) -> int] = fn(x: int) x; d } ) is :some _)
 
   let pf-int = pick-first[int].&
   assert-equals(pf-int(3, 4), 3)
@@ -59,5 +126,7 @@ fn test() {
   assert(test-compile( static-add-one[int].& ) is :some _)
   assert(test-compile( types/size[int].& ) is :some _)
 
+  function-reference-values()
+  call-on-expr()
   .{}
 }

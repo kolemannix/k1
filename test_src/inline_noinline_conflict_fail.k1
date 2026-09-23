@@ -1,0 +1,7 @@
+fn(inline, noinline) f(n: int): int { n }
+
+fn main(): i32 {
+  println(f(3))
+  0
+}
+//errmsg: Expected one of inline or noinline

@@ -1,0 +1,10 @@
+ns pre {
+  fn is-int[t](): bool { types/schema[t] is :int _ }
+}
+fn kind[t](): string {
+  #if pre/is-int[t]() { "int" } else { "other" }
+}
+fn main(): i32 {
+  println("${kind[u8]()} ${kind[string]()}")
+  0
+}

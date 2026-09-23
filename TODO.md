@@ -1,30 +1,13 @@
 "C with generics, live interactive programming, typeclasses, next-gen macros, full compile-time execution, and ADTs"
 
-next up
-- parse_statement: same peek-dispatch conversion parse_definition got (expect_ variants, no conditional parse_* chain)
-
-# Bugs
-- [x] [major] Support (co)recursive Generics
-- [x] [major] Allow pattern matching *into* recursive types (currently we just terminate)
-- [x] Test handling of NaN and Infinity literals, other float edge cases
-- [x] accidentally captured context parameter results in 'Missing variable' in ir
-- [x] Out of order type definitions don't work with aliases
-- [x] same-level recursion is not caught behind option
-- [x] Require that a blanket impl's params appear in the Self type
-
-## [x] vector types
-
-## [x] live reload featureset (design/reload.md)
-- [x] `ns(reload) foo { <functions in here go in a dylib> }`
-- [x] `fn main() { foo/load().! /* or foo/watch().! */; foo/my-fn(1,2,3) }`
-- [x] reloadable globals
-- [ ] Linux verification; `k1 b --watch`; multi-ns-per-dylib
-
-pointer-free predicate - pod/serializable?
 
 ## [ ] asm
 
-## [ ] Constant-folding, SCCP
+## [ ] More IR analysis and opts
+- [ ] Constant-folding, SCCP
+- [ ] add lifetimes (start/end for allocas, temps, inlined stuff)
+- [ ] Get 'range' metadata into sum tag loads for our IR and LLVM optimizations (a sum's tag could only be 0 or 1; this would attach those 2 possible values to the loaded value)
+- [ ] Tail calls
 
 ## [ ] token stream based macros
 
@@ -33,23 +16,15 @@ pointer-free predicate - pod/serializable?
 
 ## [x] meta-based macros
 
-## [ ] very readable compiler trace, incl specialization args, for debugging
+## [x] very readable compiler trace, incl specialization args, for debugging
 
 ## [x] Ability objects; dyn[<ability expr>]
 
-## Project: less code (specialization count and emitted code; investigation 2026-09-04)
-Measured: stress100 spends 46% of typer time re-checking 640k specialized bodies averaging 14 exprs;
-suite1 types 10k bodies and emits 1.1k; 36% of httpapp's dev-build LLVM functions are exact copies.
-Most instances come from as-buffer/as-span default methods, eagerly declared per impl instantiation.
-- [ ] 1. Lazy bodies for specializations and blanket-derived fns: stop queueing at declaration, let ir lowering and static exec pull via require_function_body. Policy for `check`: primary module eager, library instances lazy
-- [ ] 2. Layout-keyed specialization cache: per-generic "type-sensitive" flag from the generic-pass body (ability calls on t, type patterns, reflection, phony statics); insensitive generics key by structural layout of each type arg (static-value args by value). Needs structural agg interning or a layout hash
-- [x] 3. Never specialize typer-inline intrinsics (size/stride/align/id...): folded at the call site, yet declared per type; suite1 3958 -> 3498 specializations, stress100 801k -> 780k functions
-- [x] 4. Blanket-derived fns are specializations of the blanket fn (specialize_function with substitution pairs); AbilityImplDerivedBlanket kind, blanket_parent_function and the declare_function re-run are gone; generic derived fns no longer get an out-of-regime body pass (suite1 9763 -> 9413 fns)
-- [x] 5. mergefunc in the dev pipeline: httpapp 781 -> 566 defined fns, binary -7%, no codegen time change. ThinLTOCodeGenerator has no tuning hook, so optimized builds would only get it per unit in pre-link
-- [ ] 6. Rejected: typed-tree substitution instead of re-typechecking. Bodies are tiny; the work is call re-resolution and inference, which a copy still has to do since the generic pass skips statics, type patterns and abstract callees
-- [ ] 7. Scan the k1 corpus (modules/, dogfood/) for concrete-core opportunities: generic fns whose body only needs ptr/len/stride, rewritten as an erased core (ptr, len, stride) with a generic shell, the way position-byte and index-of-bytes already are
-
 ## grab bag list mid2026
+- [ ] smarter union lowering (see codegen_llvm.rs comment)
+- [x] add cpu feature string to k1/module
+- [x] convert the add_module train off of anyhow::error
+- [ ] fork global syntax: `let(mutable) x` -> `global x`. `let x` -> `constant x`. This differentiates from local lets in a more-useful-than-costly way
 - [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
 - [ ] compiler cli watch mode: watch the primary module's source dir (or single file). on change, compile from the snapshot right before starting primary module (keep it in memory?)
 - [ ] Generic aliases: `type(alias) pair[t] = { a: t, b: t }` (rejected with an error for now; an alias is transparent, so this is a type-level function)
@@ -64,27 +39,35 @@ kind: either(u64, { rounded = false, even = false, faces: u8 }) {
   - [ ] implement with a macro, for sure
 - [ ] new lib type: :runtime; this is the ideal dependency kind for libclang in k1bindgen
 - [ ] Pull warnings config and other compiler-mode settings from module-manifest. Want to run a particular lint? edit `fn module()`, save, boom, check lsp diagnostics (or `k1 c`)
-- When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack
 - [ ] `#[must_use]` equivalent
 - [ ] literal inference issue (a) `2 * d` vs `d * 2` differ — literal-lhs
       defaults i64 and widens the u32 rhs up, literal-rhs adopts u32 and wraps; (b) binary ops widen
       rhs into lhs type but have no least-upper-bound, so `u32 + i64` errors while `i64 + u32` works;
       (c) expected-type propagation into generic calls pins the type param before argument-driven
       inference, so `write-bits(depth.get-unchecked(i), ...)` fails where the two-line form widens fine
-- [ ] Get 'range' metadata into sum tag loads for our IR and LLVM optimizations (a sum's tag could only be 0 or 1; this would attach those 2 possible values to the loaded value)
-- [ ] Tail calls
 - [ ] Implement precision format specifier
-- [ ] decide if overflow traps or not (in debug and release, if those are even different)
 - [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, empty])
         I think doing 'defaults' is relatively easy. You just hit consult the default on the unprovided path. For partially-applieds,
         you need essentially some notion of an 'ability signature function', just like type aliases would need
 
-- [ ] Failed-definition tracking, two markers for one concept: static_exec.rs:418 and typer.rs:16887. Both silently return Ok(()) when an AST mapping is missing, which masks compiler bugs. A set of failed parsed ids, checked in both places, converts "likely" into "certain".
-- [ ] Divergent loops typed as never at typer.rs:7647. ScopeLoopInfo already exists; recording whether any break was seen is the whole change
-- [ ] Signature help ignores context params at lsp_support.rs:357
-- [ ] toDyn on generic functions at typer.rs:10251. Explicit type args are already parsed at that call site; specializing before the dyn lift is the same path foo[int].& takes.
-- [ ] Unreachable on type-info miss at codegen_llvm.rs:3109. A garbage type-id at runtime hits unreachable, which is UB. Emit a crash call instead.
-
+- [x] parse_statement: same peek-dispatch conversion parse_definition got (expect_ variants, no conditional parse_* chain)
+- [x] zeroing after alloc should not be necessary; either buffer/zeroed or ensure all k1 allocations always zero, even arena push (does arena.reset() always clear, or is there a special path for 'alloc-no-ensure-zeroed?')
+- [x] 
+    let app = userData.ref[app-state]
+    //                     ^ go definition here goes to the 'ref' call
+- [x] toDyn on generic functions at typer.rs:10251
+- [x] [major] Support (co)recursive Generics
+- [x] [major] Allow pattern matching *into* recursive types (currently we just terminate)
+- [x] Test handling of NaN and Infinity literals, other float edge cases
+- [x] accidentally captured context parameter results in 'Missing variable' in ir
+- [x] Out of order type definitions don't work with aliases
+- [x] same-level recursion is not caught behind option
+- [x] Require that a blanket impl's params appear in the Self type
+- [x] `ns(reload) foo { <functions in here go in a dylib> }`
+- [x] `fn main() { foo/load().! /* or foo/watch().! */; foo/my-fn(1,2,3) }`
+- [x] reloadable globals
+- [ ] Linux verification; `k1 b --watch`; multi-ns-per-dylib
+- [x] When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack
 - [x] block stmt typer error recovery; get more than 1 typer error per block
 - [x] fix `is {` syntax
 - [x] parallel llvm codegen
@@ -141,6 +124,9 @@ kind: either(u64, { rounded = false, even = false, faces: u8 }) {
 - [x] Static-execution file reads (`#static` + `files/read-to-string`, global initializers) resolve relative paths against the compiler's cwd, so `k1 c dogfood/aoc/2025` only works from inside that dir. Consider resolving against the module dir (or the source file's dir) during static execution.
 - [x] Iterator ability: why is peek the primitive? With peek(self: *self) immutable, a filtering iterator like mine can't cache what it found — next() = scan (peek) + scan again (advance-by). Also every nth impl in the codebase is the identical advance-by(n); self.next() — could that be a default? Was peek chosen for for-loop desugaring reasons, or would nextced-as-primitive with peek-via-buffering be on the table?
 
+## [x] vector types
+## [x] live reload featureset (design/reload.md)
+
 bindgen dogfood list
 - [x] dogfood(k1): implement 'continue'
 - [x] dogfood(lsp): failed call still ls entity
@@ -151,6 +137,19 @@ bindgen dogfood list
       A program can take arguments; this replaces macro features in C.
       Make it plain k1 data; pass it where you depend on the module.
 - [x] solution for lazily evaluated log arguments
+
+## Project: less code (specialization count and emitted code; investigation 2026-09-04)
+Measured: stress100 spends 46% of typer time re-checking 640k specialized bodies averaging 14 exprs;
+suite1 types 10k bodies and emits 1.1k; 36% of httpapp's dev-build LLVM functions are exact copies.
+Most instances come from as-buffer/as-span default methods, eagerly declared per impl instantiation.
+- [x] 1. Lazy bodies for specializations and blanket-derived fns: stop queueing at declaration, let ir lowering and static exec pull via require_function_body. Policy for `check`: primary module eager, library instances lazy
+- [x] 2. Layout-keyed specialization cache: per-generic "type-sensitive" flag from the generic-pass body (ability calls on t, type patterns, reflection, phony statics); insensitive generics key by structural layout of each type arg (static-value args by value). Needs structural agg interning or a layout hash
+- [x] 3. Never specialize typer-inline intrinsics (size/stride/align/id...): folded at the call site, yet declared per type; suite1 3958 -> 3498 specializations, stress100 801k -> 780k functions
+- [x] 4. Blanket-derived fns are specializations of the blanket fn (specialize_function with substitution pairs); AbilityImplDerivedBlanket kind, blanket_parent_function and the declare_function re-run are gone; generic derived fns no longer get an out-of-regime body pass (suite1 9763 -> 9413 fns)
+- [x] 5. mergefunc in the dev pipeline: httpapp 781 -> 566 defined fns, binary -7%, no codegen time change. ThinLTOCodeGenerator has no tuning hook, so optimized builds would only get it per unit in pre-link
+- [x] 6. Rejected: typed-tree substitution instead of re-typechecking. Bodies are tiny; the work is call re-resolution and inference, which a copy still has to do since the generic pass skips statics, type patterns and abstract callees
+- [x] 7. Scan the k1 corpus (modules/, dogfood/) for concrete-core opportunities: generic fns whose body only needs ptr/len/stride, rewritten as an erased core (ptr, len, stride) with a generic shell, the way position-lanes and index-of-bytes already are
+
 
 ## [x] Distribute builds that work
 - [x] Test on linux
@@ -236,7 +235,7 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 
 ## Project: More LSP features
 - [ ] LSP Workspace symbols
-- [ ] Rest of the completion sites (fill in as I hit them)
+- [x] Rest of the completion sites (fill in as I hit them)
 - [x] Hover first pass
 - [x] Hover much better
 - [x] Hover no more markdown

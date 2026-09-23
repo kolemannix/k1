@@ -245,9 +245,10 @@ impl TypedProgram {
         let reserved_id = self.static_values.pool.reserve_id();
         self.type_infos.insert(type_id, reserved_id);
 
+        let family_type_id = self.get_type_family_type(type_id);
         let name_value_id = self.build_type_name(type_id);
-        let schema_value_id = self.build_type_schema(type_id);
-        let instance_value_id = self.build_instance_info(type_id);
+        let schema_value_id = self.build_type_schema(family_type_id);
+        let instance_value_id = self.build_instance_info(family_type_id);
         let fields =
             self.static_values.mem.pushn(&[name_value_id, schema_value_id, instance_value_id]);
         let type_info_type_id = self.builtin_types.type_info();
@@ -261,8 +262,7 @@ impl TypedProgram {
     fn build_instance_info(&mut self, type_id: TypeId) -> StaticValueId {
         let type_info_type_id = self.builtin_types.type_info();
         let instance_opt_type_id = self.get_struct_field(type_info_type_id, 2).type_id;
-        let chased_type_id = self.get_static_family_id_if_static(type_id);
-        let Some(info) = self.get_instance_info(chased_type_id).copied() else {
+        let Some(info) = self.get_instance_info(type_id).copied() else {
             return synth_static_option(&mut self.static_values, instance_opt_type_id, None);
         };
         let instance_info_type_id = self.get_as_opt_instance(instance_opt_type_id).unwrap();
@@ -305,13 +305,7 @@ impl TypedProgram {
                 StaticSum { sum_type_id: type_schema_type_id, variant_index: v.index, payload }
             };
 
-        // For now, introspection does not support 'static' types, it just sees through them
-
-        // Temporarily, we could provide a separate boolean-returning function to get a type's
-        // static value or something
-        let chased_type_id = self.get_static_family_id_if_static(type_id);
-
-        let typ = self.types.get(chased_type_id);
+        let typ = self.types.get(type_id);
         let schema_static_sum = match typ {
             Type::Char => make_variant(self, self.ast.idents.b.char, None),
             Type::Bool => make_variant(self, self.ast.idents.b.bool, None),
@@ -380,7 +374,7 @@ impl TypedProgram {
                 );
                 make_variant(self, self.ast.idents.b.enum_, Some(payload_value_id))
             }
-            Type::Struct(_struct_type) if chased_type_id == self.builtin_types.string() => {
+            Type::Struct(_struct_type) if type_id == self.builtin_types.string() => {
                 make_variant(self, self.ast.idents.b.string, None)
             }
             Type::Struct(struct_type) => {
@@ -680,7 +674,8 @@ impl TypedProgram {
                 );
                 make_variant(self, self.ast.idents.b.function_pointer, Some(payload))
             }
-            Type::Lambda(_)
+            Type::FunctionReference(_)
+            | Type::Lambda(_)
             | Type::LambdaObject(_)
             | Type::AbilityObject(_)
             | Type::TypeParameter(_)

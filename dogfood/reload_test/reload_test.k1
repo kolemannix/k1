@@ -34,15 +34,40 @@ fn build-app(k1-exe: string, greeting: string, two-arg-helper: bool, speed: i64,
   }
 }
 
-fn send(app: *mut process/child, line: string) {
+fn send(app: *process/child, line: string) {
   fd/write-all(app.stdin-fd, "${line}\n".span-bytes()).!
 }
 
-fn expect(app: *mut process/child, expected: string) {
+fn expect(app: *process/child, expected: string) {
   if app.stdout.read-line() is {
     :some line -> assert-equals(line, expected),
     :none -> crash("app closed stdout; expected: $expected"),
   }
+}
+
+fn test-evaluation-order() {
+  let app = process/spawn("${app-dir}/.k1-out/app", []).!
+  send(app.&, "skip-unloaded")
+  expect(app.&, "optional: 7")
+  send(app.&, "version")
+  expect(app.&, "version: 0")
+  send(app.&, "load")
+  expect(app.&, "load ok")
+  for command in ["capture", "capture-inline"] {
+    send(app.&, "bump")
+    expect(app.&, "bump ok")
+    send(app.&, command)
+    expect(app.&, "capture: 11 current: 10")
+  }
+  send(app.&, "bump")
+  expect(app.&, "bump ok")
+  send(app.&, "assign-reload")
+  expect(app.&, "assign: 77 current: 10")
+  send(app.&, "version")
+  expect(app.&, "version: 4")
+  send(app.&, "quit")
+  let status = app.wait().!
+  assert-equals(status.exit-code, 0)
 }
 
 fn main(argc: c-int, argv: ptr): i32 {
@@ -61,6 +86,7 @@ fn main(argc: c-int, argv: ptr): i32 {
   )
 
   build-app(k1-exe, "one", false, 10, false)
+  test-evaluation-order()
   let app = process/spawn("${app-dir}/.k1-out/app", []).!
 
   send(app.&, "version")

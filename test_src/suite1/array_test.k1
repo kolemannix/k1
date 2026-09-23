@@ -9,7 +9,7 @@ fn test-literals() {
   let array: array[bool, 3] = [false, true, true]
   let buffer: buffer[bool] = [false, true, true]
   let list: list[bool] = [false, true, true]
-  assert-equals((&array).as-buffer(), buffer)
+  assert-equals(array.&.as-buffer(), buffer)
   assert-equals(list.as-buffer(), buffer)
 }
 
@@ -30,7 +30,7 @@ fn test-filled() {
 fn test-array() {
   let ls: list[u8] = list/filled-in(mem/tmp(), size = 10, value = 3)
 
-  let a: *mut array[u8, 10] = list/to-array(ls, 10)
+  let a: *array[u8, 10] = list/to-array(ls, 10)
   for 0.until(a.len()) {
     if it % 2 == 0 { a.[it] = 1 }
   }
@@ -59,7 +59,7 @@ fn test() {
   test-literals()
   test-filled()
 
-  let array: array[f32, 10] = mem/zeroed()
+  let array: array[f32, 10] = .0
   assert(test-compile(array.[11]) is :some _)
   assert(test-compile(takes-three([1, 2])) is :some _)
   assert(test-compile(takes-three([1, 2, 3, 4])) is :some _)

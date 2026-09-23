@@ -1,0 +1,21 @@
+{
+  "head": "ff40f0bf81945c607af05bf07513f0ec3b52645e",
+  "working_tree": true,
+  "compiler_sha256": "e6cf5afd3e5a70e0b3767d4c0e891f5488dd4c7c3b94a2295429a0392309add6",
+  "compiler_build": "release, llvm-sys/prefer-dynamic",
+  "started_utc": "2026-09-18T00:54:57.202993+00:00",
+  "completed_utc": "2026-09-18T02:21:02.555036+00:00",
+  "source_manifest_sha256": "861a03547684432a0b2cb6e708d22a29cc58a0cd81671ff7c25734acb32e8040",
+  "recorded_source_files": 135,
+  "recorded_source_hashes_unchanged": true,
+  "comptime_statuses": {
+    "ok": 87,
+    "error": 1,
+    "timeout": 2,
+    "skipped": 2
+  },
+  "successful_comptime_outputs_match": true,
+  "generated_build_benchmarks_verified": 24,
+  "brotli_runs_verified": 3,
+  "brotli_encoder_sha256": "808920267c207f8ca08328f816bf41934eeae70308b2c2a7c7c363bab27109b4"
+}

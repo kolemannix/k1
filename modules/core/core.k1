@@ -13,35 +13,35 @@ fn assert-not-equals[t: print and equals](context locn: k1/source-location)(a: t
   }
 }
 
-fn inc(i: *mut size) { i.* = i.* + 1 }
+fn(inline) inc(i: *size) { i.* = i.* + 1 }
 // TODO: Would be cool to have this
-// fn incNew[t: Add and KnowledgeOfOne](i: *mut t): t { i.* = i.* + KnowledgeOfOne@(t)/one() }
+// fn incNew[t: Add and KnowledgeOfOne](i: *t): t { i.* = i.* + KnowledgeOfOne@(t)/one() }
 
-fn identity[t](value: t): t { value }
+fn(inline) identity[t](value: t): t { value }
 
-fn print[t: print](t) {
+fn print[t: print](context locn: k1/source-location)(t) {
   // TODO: Instead of this hack, make write(Sink, span[byte]) the intrinsic.
   if k1/is-static and k1/capture-prints {
     let s = t.show()
-    k1/emit-compiler-message(k1/location(), :info, s)
+    k1/emit-compiler-message(locn, :info, s)
   } else {
     t.print-to(io/stdout)
   }
 }
-fn println[t: print](t) {
+fn println[t: print](context locn: k1/source-location)(t) {
   print[t](t)
   print[string]("\n")
 }
 
-fn eprint[t: print](t) {
+fn eprint[t: print](context locn: k1/source-location)(t) {
   if k1/is-static and k1/capture-prints {
     let s = t.show()
-    k1/emit-compiler-message(k1/location(), :warn, s)
+    k1/emit-compiler-message(locn, :warn, s)
   } else {
     t.print-to(io/stderr)
   }
 }
-fn eprintln(s: string) {
+fn eprintln(context locn: k1/source-location)(s: string) {
   eprint(s)
   eprint("\n")
 }
@@ -53,7 +53,7 @@ ns io {
 
   type stdout-buffering = either(u8) { unknown, line, block }
   type(alias) STDOUT_BUF_CAP = 8192
-  let(mutable, tls) stdout-buf: fixlist[u8, STDOUT_BUF_CAP] = mem/zeroed[fixlist[u8, STDOUT_BUF_CAP]]()
+  let(mutable, tls) stdout-buf: fixlist[u8, STDOUT_BUF_CAP] = .0
   let(mutable, tls) stdout-mode: stdout-buffering = :unknown
 
   fn stdout-buffering-mode(): stdout-buffering {
@@ -109,7 +109,7 @@ ns io {
         if value == 10 and (stdout-buffering-mode() is :line) flush-stdout()
       } else {
         let value_spot = value
-        write-all(self.file-no, (&value_spot).as[ptr], 1)
+        write-all(self.file-no, value_spot.&.as[ptr], 1)
       }
       .{}
     }
@@ -213,10 +213,10 @@ ns for char {
     string/wrap-list([self])
   }
 
-  fn as-u8(self: char): u8 { mem/bitcast[char, u8](self) }
-  fn u8(self: char): u8    { mem/bitcast[char, u8](self) }
-  fn as-i8(self: char): i8 { mem/bitcast[char, i8](self) }
-  fn as-byte(self: char): u8 { mem/bitcast[char, u8](self) }
+  fn(inline) as-u8(self: char): u8 { mem/bitcast[char, u8](self) }
+  fn(inline) u8(self: char): u8    { mem/bitcast[char, u8](self) }
+  fn(inline) as-i8(self: char): i8 { mem/bitcast[char, i8](self) }
+  fn(inline) as-byte(self: char): u8 { mem/bitcast[char, u8](self) }
 
   // mask to convert ASCII letters to uppercase
   let ASCII_CASE_MASK: u8 = 0b0010_0000
@@ -264,16 +264,16 @@ ns for char {
 }
 
 impl scalar-cmp for char {
-  fn lt(self, other: self): bool { (self.as-u8()).lt(other.as-u8()) }
-  fn le(self, other: self): bool { (self.as-u8()).le(other.as-u8()) }
-  fn gt(self, other: self): bool { (self.as-u8()).gt(other.as-u8()) }
-  fn ge(self, other: self): bool { (self.as-u8()).ge(other.as-u8()) }
+  fn(inline) lt(self, other: self): bool { (self.as-u8()).lt(other.as-u8()) }
+  fn(inline) le(self, other: self): bool { (self.as-u8()).le(other.as-u8()) }
+  fn(inline) gt(self, other: self): bool { (self.as-u8()).gt(other.as-u8()) }
+  fn(inline) ge(self, other: self): bool { (self.as-u8()).ge(other.as-u8()) }
 }
 
 impl[t: print] show for t {
   fn show(self): string { 
     let sb = string-builder/new()
-    self.print-to(&sb)
+    self.print-to(sb.&)
     sb.build()
   }
 }
@@ -376,10 +376,10 @@ impl print for int {
 }
 
 impl[s, f: print] try[t = s, e = f] for result[s, f] {
-  fn error(e: e): self { :err e }
-  fn value(t: t): self    { :ok t }
+  fn(inline) error(e: e): self { :err e }
+  fn(inline) value(t: t): self    { :ok t }
 
-  fn is-ok(self): bool { self is :ok _ }
+  fn(inline) is-ok(self): bool { self is :ok _ }
   fn get-value(self): t  {
     if self is {
       :ok s -> s,
@@ -395,10 +395,10 @@ impl[s, f: print] try[t = s, e = f] for result[s, f] {
 }
 
 impl[s, f] try[t = s, e = f] for result[s, f] {
-  fn error(e: e): self { :err e }
-  fn value(t: t): self    { :ok t }
+  fn(inline) error(e: e): self { :err e }
+  fn(inline) value(t: t): self    { :ok t }
 
-  fn is-ok(self): bool { self is :ok _ }
+  fn(inline) is-ok(self): bool { self is :ok _ }
   fn get-value(self): t  {
     if self is {
       :ok s -> s,
@@ -415,14 +415,14 @@ impl[s, f] try[t = s, e = f] for result[s, f] {
 
 // Branchless three-way compare: (a > b) - (a < b) is exactly ordering's -1/0/1 tag.
 // LLVM recognizes this shape and lowers it to its scmp/ucmp intrinsics.
-fn compare-scalars[t: scalar-cmp](a: t, b: t): ordering {
+fn(inline) compare-scalars[t: scalar-cmp](a: t, b: t): ordering {
   let gt = a.gt(b).as-u8().signed()
   let lt = a.lt(b).as-u8().signed()
   mem/bitcast[i8, ordering](gt - lt)
 }
 
 impl[t: scalar-cmp] comparable for t {
-  fn compare(self: t, other: t): ordering { compare-scalars(self, other) }
+  fn(inline) compare(self: t, other: t): ordering { compare-scalars(self, other) }
 }
 
 ns for u8 {
@@ -438,44 +438,46 @@ ns for u8 {
     }
   }
 
-  fn as-char(self: u8): char { mem/bitcast[u8, char](self) }
-  fn signed(self: u8): i8 { mem/bitcast[u8, i8](self) }
+  fn(inline) as-char(self: u8): char { mem/bitcast[u8, char](self) }
+  fn(inline) signed(self: u8): i8 { mem/bitcast[u8, i8](self) }
 }
 
 ns for i8 {
-  fn unsigned(self: i8): u8 { mem/bitcast[i8, u8](self) }
+  fn(inline) unsigned(self: i8): u8 { mem/bitcast[i8, u8](self) }
 }
 
 ns for u16 {
-  fn signed(self: u16): i16 { mem/bitcast[u16, i16](self) }
+  fn(inline) signed(self: u16): i16 { mem/bitcast[u16, i16](self) }
 }
 
 ns for i16 {
-  fn unsigned(self: i16): u16 { mem/bitcast[i16, u16](self) }
+  fn(inline) unsigned(self: i16): u16 { mem/bitcast[i16, u16](self) }
 }
 
 ns for u32 {
   let min-value: u32 = 0x00000000
   let max-value: u32 = 0xFFFFFFFF
 
-  fn as-bool(self: u32): bool { self != 0 }
-  fn signed(self: u32): i32 { mem/bitcast(self) }
+  fn(inline) as-bool(self: u32): bool { self != 0 }
+  fn(inline) signed(self: u32): i32 { mem/bitcast(self) }
+
+  fn(inline) as-size(self: u32): size { self.widen[u64].signed() }
 }
 
 ns for i32 {
   let max-value: i32 = 0x7FFFFFFF
   let min-value: i32 = -0x80000000
 
-  fn as-bool(self: i32): bool { self != 0 }
-  fn unsigned(self: i32): u32 { mem/bitcast(self) }
+  fn(inline) as-bool(self: i32): bool { self != 0 }
+  fn(inline) unsigned(self: i32): u32 { mem/bitcast(self) }
 }
 
 ns for i64 {
   let max-value: i64 = 0x7FFFFFFFFFFFFFFF
   let min-value: i64 = -0x8000000000000000
 
-  fn unsigned(self: i64): u64 { mem/bitcast[i64, u64](self) }
-  fn to-ptr(self: i64): ptr { mem/bitcast[i64, ptr](self) }
+  fn(inline) unsigned(self: i64): u64 { mem/bitcast[i64, u64](self) }
+  fn(inline) to-ptr(self: i64): ptr { mem/bitcast[i64, ptr](self) }
 
   fn from-string(s: string): result[i64, string] {
     if s.is-empty() return :err "empty string"
@@ -511,8 +513,8 @@ ns for u64 {
   let min-value: u64 = 0
   let max-value: u64 = 0xFFFFFFFFFFFFFFFF
 
-  fn signed(self: u64): i64 { mem/bitcast(self) }
-  fn to-ptr(self: u64): ptr { mem/bitcast[u64, ptr](self) }
+  fn(inline) signed(self: u64): i64 { mem/bitcast(self) }
+  fn(inline) to-ptr(self: u64): ptr { mem/bitcast[u64, ptr](self) }
 
   fn from-string(s: string): result[u64, string] {
     if s.is-empty() return :err "empty string"
@@ -569,22 +571,27 @@ ns(lib("k1rt")) k1rt {
   fn(extern("_k1_parse_f64")) parse-f64()
 }
 
+ns float-impl {
+  fn write-output[w: writer](w, buf: span[u8], written-len: i32, places: i32) {
+    if written-len <= 0 crash("snprintf float returned $written-len")
+    let len = written-len.widen[size]
+    if len >= buf.len() crash("float format: $places places needs $len bytes, cap is ${buf.len()}")
+    w.write-bytes(buf.slice(0, len))
+  }
+}
+
 ns for f64 {
-  let NAN: f64 = builtin
-  let INFINITY: f64 = builtin
-  let NEG_INFINITY: f64 = builtin
+  let nan: f64 = builtin
+  let inf: f64 = builtin
+  let neg-inf: f64 = builtin
 
   fn abs(self: f64): f64 {
     mem/bitcast[u64, f64](mem/bitcast[f64, u64](self).bit-and(0x7FFFFFFFFFFFFFFF))
   }
 
   fn format[w: writer](f: f64, w, places: i32) {
-    let stack-buf = array/zeroed[u8, 512]()
-    let cap = stack-buf.as-span().len()
-    let written-len: size = k1rt/snprintf_f64(stack-buf.data-ptr(), cap.unsigned(), f, places).widen[size]
-    if written-len <= 0 crash("snprintf_f64 returned $written-len")
-    if written-len >= cap crash("f64/format: $places places needs $written-len bytes, cap is $cap")
-    w.write-bytes(stack-buf.as-span().slice(0, written-len))
+    let buf = array/zeroed[u8, 512]
+    float-impl/write-output(w, buf.as-span(), k1rt/snprintf_f64(buf.data-ptr(), 512, f, places), places)
   }
 
   fn from-string(s: string): result[f64, string] {
@@ -592,7 +599,7 @@ ns for f64 {
   }
   fn parse-string(s: string, require-total: bool): result[{ value: f64, len: size }, string] {
     let out: f64 = uninit
-    let result = ffc/parse_double(s.len(), s.data-ptr(), &out)
+    let result = ffc/parse_double(s.len(), s.data-ptr(), out.&)
     if not ffc/result_is_ok(result) {
       :err "Could not parse '$s' as f64"
     } else {
@@ -614,9 +621,14 @@ ns for f64 {
 }
 
 ns for f32 {
-  let NAN: f32 = builtin
-  let INFINITY: f32 = builtin
-  let NEG_INFINITY: f32 = builtin
+  let nan: f32 = builtin
+  let inf: f32 = builtin
+  let neg-inf: f32 = builtin
+
+  fn format[w: writer](f: f32, w, places: i32) {
+    let buf = array/zeroed[u8, 512]
+    float-impl/write-output(w, buf.as-span(), k1rt/snprintf_f32(buf.data-ptr(), 512, f, places), places)
+  }
 
   // See f64/total-order-key
   fn total-order-key(self: f32): i32 {
@@ -677,17 +689,17 @@ impl scalar-cmp for f64 {
 // even for NaN. Note two divergences from the `==`/`<` operators: -0.0 compares
 // :less than +0.0, and NaN compares :greater than +inf (-NaN :less than -inf).
 impl comparable for f32 {
-  fn compare(self: f32, other: f32): ordering {
+  fn(inline) compare(self: f32, other: f32): ordering {
     compare-scalars(self.total-order-key(), other.total-order-key())
   }
 }
 impl comparable for f64 {
-  fn compare(self: f64, other: f64): ordering {
+  fn(inline) compare(self: f64, other: f64): ordering {
     compare-scalars(self.total-order-key(), other.total-order-key())
   }
 }
 
-impl zero for char { fn zero(): char { mem/zeroed() } }
+impl zero for char { fn zero(): char { .0 } }
 impl zero for f32 { fn zero(): f32 { 0.0 } }
 impl zero for f64 { fn zero(): f64 { 0.0 } }
 impl zero for u8  { fn zero(): u8  { 0   } }
@@ -712,7 +724,7 @@ impl one for i64 { fn one(): i64 { 1   } }
 
 impl print for f32 {
   fn print-to[w: writer](self: f32, w) {
-    f64/format(self.widen[f64], w, places = -1)
+    f32/format(self, w, places = -1)
   }
 }
 
@@ -733,17 +745,16 @@ impl print for ptr {
 // where you can pay a small cost (option construction)
 // to check it, but can still store it 'raw'
 // As opposed to storing the sum, which carries waste
-type optref[t] = { inner: *t }
+type optref[t] = { inner: ptr }
 ns for optref {
-  fn make[t](inner: *t): optref[t] { .{ inner } }
-  fn null[t]()         : optref[t] { ptr/null.ref-opt[t]() }
+  fn(inline) make[t](inner: *t): optref[t] { .{ inner = inner.as[ptr] } }
+  fn(inline) null[t](): optref[t] { .{ inner = ptr/null } }
+  fn(inline) get[t](self: optref[t]): *t { self.inner.ref[t] }
   fn deref[t](self: optref[t]): ?t {
-    if (self.inner is null) :none else :some(self.inner.*)
+    if (self.inner is null) :none else :some(self.inner.ref[t].*)
   }
   fn as-opt[t](self: optref[t]): ?*t {
-    if (self.inner is null) :none else :some(self.inner)
+    if (self.inner is null) :none else :some(self.inner.ref[t])
   }
-  fn is-null[t](self: optref[t]): bool {
-    self.inner is null
-  }
+  fn(inline) is-null[t](self: optref[t]): bool { self.inner is null }
 }

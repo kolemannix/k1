@@ -10,9 +10,9 @@ ability allocator {
   // free may no-op
   fn free(self, ptr: ptr, size: size, align: size)
 
-  fn alloc-t[t](self): *mut t { allocator/alloc(self, types/size[t], types/align[t]).ref[t] }
-  fn free-t[t](self, t: *mut t) { allocator/free(self, t.as(), types/size[t], types/align[t]) }
-  fn new[t](self, t: t): *mut t {
+  fn(inline) alloc-t[t](self): *t { allocator/alloc(self, types/size[t], types/align[t]).ref[t] }
+  fn(inline) free-t[t](self, t: *t) { allocator/free(self, t.as(), types/size[t], types/align[t]) }
+  fn(inline) new[t](self, t: t): *t {
     let ref = self.alloc-t[t]()
     ref.* = t
     ref
@@ -30,9 +30,15 @@ impl allocator for heap {
 
 ns mem {
 
-  fn new[t](t: t): *t { current-arena().new(t) }
+  fn(inline) new[t](t: t): *t { current-arena().new(t) }
 
-  macro new-in-place[t](expr) {
+  fn(inline) read-unaligned[t](src: ptr): t {
+    let value: t = .0
+    copy(value.&.as[ptr], src, types/size[t])
+    value
+  }
+
+  macro new-in-place[t](expr: code) {
     let type-id = types/id[t]
     `
     let addr = mem/alloc-t[${type-id.spell()}];
@@ -41,7 +47,7 @@ ns mem {
     `
   }
 
-  macro with-arena(arena, expr) {
+  macro with-arena(arena: code, expr: code) {
     `
     let start-len = mem/arena-stack-len()
     mem/push-arena($arena)
@@ -53,45 +59,92 @@ ns mem {
     `
   }
 
-  fn alloc-layout(size: size, align: size): ptr { current-arena().alloc(size, align) }
-  fn alloc-t[t](): *t { current-arena().alloc-t() }
+  fn(inline) alloc-layout(size: size, align: size): ptr { current-arena().alloc(size, align) }
+  fn(inline) alloc-t[t](): *t { current-arena().alloc-t() }
 
-  // 0.as[ptr] inlined rather than ptr/null: this global is demanded during
-  // other globals' initializers, and referencing the null global from here
-  // closes an initializer cycle.
-  let(mutable, tls) arena-tmp: *arena = ptr/null.ref[arena]
+  let(mutable, tls) arena-tmp: ptr = ptr/null
 
   type(alias) ALLOC_STACK_MAX = 64
   // Empty stack means "the tmp arena"; tmp is lazily initialized, so it
   // cannot be pushed here eagerly at thread start. Elements are raw ptrs:
   // reference-typed slots in global initializers do not serialize yet.
-  let(mutable, tls) arena-stack: fixlist[ptr, ALLOC_STACK_MAX] =
-    zeroed[fixlist[ptr, ALLOC_STACK_MAX]]
+  let(mutable, tls) arena-stack: fixlist[ptr, ALLOC_STACK_MAX] = .0
+  let(mutable, tls) arena-current: ptr = ptr/null
 
   fn push-arena(a: *arena) {
     arena-stack.push(a.as[ptr])
+    arena-current = a.as[ptr]
   }
   fn pop-arena(): *arena {
-    arena-stack.pop().!.ref[arena]
+    let popped = arena-stack.pop().!.ref[arena]
+    arena-current = if arena-stack.last() is {
+      :some a -> a,
+      :none -> arena-tmp
+    }
+    popped
   }
   fn arena-stack-len(): size { arena-stack.len() }
   fn current-arena(): *arena {
-    if arena-stack.last() is {
-      :some a -> a.ref[arena],
-      :none -> tmp()
-    }
+    if arena-current is null { arena-current = tmp().as[ptr] }
+    arena-current.ref[arena]
   }
 
-  fn init-tmp-arena() {
-    if not (arena-tmp is null) crash("arena-tmp already initialized")
-    arena-tmp = arena/init-fixed(1 * arena/gb)
+  fn set-tmp-arena(arena: *arena) {
+    arena-tmp = arena.as[ptr]
+    if arena-stack.len() == 0 { arena-current = arena-tmp }
   }
 
   fn tmp(): *arena {
-    if arena-tmp is null { init-tmp-arena() }
-    arena-tmp
+    if arena-tmp is null { init-tmp() }
+    arena-tmp.ref[arena]
   }
 
+  fn(cold) init-tmp() {
+    arena-tmp = if k1/is-static arena/init-fixed(1073741824).as[ptr]
+    else #if k1/platform is {
+      :posix-macos or :posix-linux or :wasi -> arena/init-fixed(1073741824).as[ptr],
+      :bare -> arena/init(1024 * 8).as[ptr]
+    }
+  }
+
+
+  fn(inline) eq-blocks-at(buffer1: ptr, buffer2: ptr, offset-a: size, offset-b: size): bool {
+    let lhs-a = vector/load-simd-bytes(buffer1.add-bytes(offset-a))
+    let rhs-a = vector/load-simd-bytes(buffer2.add-bytes(offset-a))
+    let lhs-b = vector/load-simd-bytes(buffer1.add-bytes(offset-b))
+    let rhs-b = vector/load-simd-bytes(buffer2.add-bytes(offset-b))
+    let a-eq = lhs-a.eq-lanes(rhs-a) 
+    let b-eq = lhs-b.eq-lanes(rhs-b)
+    let equal-lanes = a-eq & b-eq
+
+    equal-lanes.to-mask() == u64/bitmask-low(k1/simd-bytes)
+  }
+
+  fn equals(p1: ptr, p2: ptr, len: size): bool {
+    if k1/is-static return equals-memcmp(p1, p2, len)
+    let w: size = k1/simd-bytes
+    if len < 8 {
+      let i = 0: size
+      while i < len {
+        if p1.add-bytes(i).ref[u8].* != p2.add-bytes(i).ref[u8].* return false
+        i = i + 1
+      }
+      return true
+    }
+    if len < w {
+      let t = len - 8
+      let head = vector/load-word(p1) == vector/load-word(p2)
+      let tail = vector/load-word(p1.add-bytes(t)) == vector/load-word(p2.add-bytes(t))
+      return head and tail
+    }
+    if len < 2 * w return eq-blocks-at(p1, p2, 0, len - w)
+    let i = 0: size
+    while i + 2 * w <= len {
+      if not eq-blocks-at(p1, p2, i, i + w) return false
+      i = i + 2 * w
+    }
+    i == len or eq-blocks-at(p1, p2, len - 2 * w, len - w)
+  }
 }
 
 // Positioned after the tls arena globals: global initializers run in decl

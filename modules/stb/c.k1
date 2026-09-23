@@ -7,7 +7,7 @@ let STBTT_MACSTYLE_ITALIC: i64 = 2
 let STBTT_MACSTYLE_UNDERSCORE: i64 = 4
 let STBTT_MACSTYLE_NONE: i64 = 8
 type _buf = {
-  data: *mut u8,
+  data: optref[u8],
   cursor: i32,
   size: i32,
 }
@@ -23,15 +23,15 @@ type bakedchar = {
 }
 #static assert-layout[bakedchar](20, 4, [0, 2, 4, 6, 8, 12, 16, ])
 fn(extern("stbtt_BakeFontBitmap")) BakeFontBitmap(
-  data: *mut u8,
+  data: *u8,
   offset: i32,
   pixel_height: f32,
-  pixels: *mut u8,
+  pixels: *u8,
   pw: i32,
   ph: i32,
   first_char: i32,
   num_chars: i32,
-  chardata: *mut bakedchar,
+  chardata: *bakedchar,
 ): i32
 type aligned_quad = {
   x0: f32,
@@ -45,22 +45,22 @@ type aligned_quad = {
 }
 #static assert-layout[aligned_quad](32, 4, [0, 4, 8, 12, 16, 20, 24, 28, ])
 fn(extern("stbtt_GetBakedQuad")) GetBakedQuad(
-  chardata: *mut bakedchar,
+  chardata: *bakedchar,
   pw: i32,
   ph: i32,
   char_index: i32,
-  xpos: *mut f32,
-  ypos: *mut f32,
-  q: *mut aligned_quad,
+  xpos: *f32,
+  ypos: *f32,
+  q: *aligned_quad,
   opengl_fillrule: i32,
 ): {}
 fn(extern("stbtt_GetScaledFontVMetrics")) GetScaledFontVMetrics(
-  fontdata: *mut u8,
+  fontdata: *u8,
   index: i32,
   size: f32,
-  ascent: *mut f32,
-  descent: *mut f32,
-  lineGap: *mut f32,
+  ascent: *f32,
+  descent: *f32,
+  lineGap: *f32,
 ): {}
 type packedchar = {
   x0: u16,
@@ -76,8 +76,8 @@ type packedchar = {
 #static assert-layout[packedchar](28, 4, [0, 2, 4, 6, 8, 12, 16, 20, 24, ])
 type stbrp_rect = opaque[0, 1]
 fn(extern("stbtt_PackBegin")) PackBegin(
-  spc: *mut pack_context,
-  pixels: *mut u8,
+  spc: *pack_context,
+  pixels: *u8,
   width: i32,
   height: i32,
   stride_in_bytes: i32,
@@ -85,71 +85,71 @@ fn(extern("stbtt_PackBegin")) PackBegin(
   alloc_context: ptr,
 ): i32
 fn(extern("stbtt_PackEnd")) PackEnd(
-  spc: *mut pack_context,
+  spc: *pack_context,
 ): {}
 fn(extern("stbtt_PackFontRange")) PackFontRange(
-  spc: *mut pack_context,
-  fontdata: *mut u8,
+  spc: *pack_context,
+  fontdata: *u8,
   font_index: i32,
   font_size: f32,
   first_unicode_char_in_range: i32,
   num_chars_in_range: i32,
-  chardata_for_range: *mut packedchar,
+  chardata_for_range: *packedchar,
 ): i32
 type pack_range = {
   font_size: f32,
   first_unicode_codepoint_in_range: i32,
-  array_of_unicode_codepoints: *mut i32,
+  array_of_unicode_codepoints: optref[i32],
   num_chars: i32,
-  chardata_for_range: *mut packedchar,
+  chardata_for_range: optref[packedchar],
   h_oversample: u8,
   v_oversample: u8,
 }
 #static assert-layout[pack_range](40, 8, [0, 4, 8, 16, 24, 32, 33, ])
 fn(extern("stbtt_PackFontRanges")) PackFontRanges(
-  spc: *mut pack_context,
-  fontdata: *mut u8,
+  spc: *pack_context,
+  fontdata: *u8,
   font_index: i32,
-  ranges: *mut pack_range,
+  ranges: *pack_range,
   num_ranges: i32,
 ): i32
 fn(extern("stbtt_PackSetOversampling")) PackSetOversampling(
-  spc: *mut pack_context,
+  spc: *pack_context,
   h_oversample: u32,
   v_oversample: u32,
 ): {}
 fn(extern("stbtt_PackSetSkipMissingCodepoints")) PackSetSkipMissingCodepoints(
-  spc: *mut pack_context,
+  spc: *pack_context,
   skip: i32,
 ): {}
 fn(extern("stbtt_GetPackedQuad")) GetPackedQuad(
-  chardata: *mut packedchar,
+  chardata: *packedchar,
   pw: i32,
   ph: i32,
   char_index: i32,
-  xpos: *mut f32,
-  ypos: *mut f32,
-  q: *mut aligned_quad,
+  xpos: *f32,
+  ypos: *f32,
+  q: *aligned_quad,
   align_to_integer: i32,
 ): {}
 fn(extern("stbtt_PackFontRangesGatherRects")) PackFontRangesGatherRects(
-  spc: *mut pack_context,
-  info: *mut fontinfo,
-  ranges: *mut pack_range,
+  spc: *pack_context,
+  info: *fontinfo,
+  ranges: *pack_range,
   num_ranges: i32,
-  rects: *mut stbrp_rect,
+  rects: *stbrp_rect,
 ): i32
 fn(extern("stbtt_PackFontRangesPackRects")) PackFontRangesPackRects(
-  spc: *mut pack_context,
-  rects: *mut stbrp_rect,
+  spc: *pack_context,
+  rects: *stbrp_rect,
   num_rects: i32,
 ): {}
 fn(extern("stbtt_PackFontRangesRenderIntoRects")) PackFontRangesRenderIntoRects(
-  spc: *mut pack_context,
-  info: *mut fontinfo,
-  ranges: *mut pack_range,
+  spc: *pack_context,
+  info: *fontinfo,
+  ranges: *pack_range,
   num_ranges: i32,
-  rects: *mut stbrp_rect,
+  rects: *stbrp_rect,
 ): i32
 type pack_context = {
   user_allocator_context: ptr,
@@ -161,20 +161,20 @@ type pack_context = {
   skip_missing: i32,
   h_oversample: u32,
   v_oversample: u32,
-  pixels: *mut u8,
+  pixels: optref[u8],
   nodes: ptr,
 }
 #static assert-layout[pack_context](64, 8, [0, 8, 16, 20, 24, 28, 32, 36, 40, 48, 56, ])
 fn(extern("stbtt_GetNumberOfFonts")) GetNumberOfFonts(
-  data: *mut u8,
+  data: *u8,
 ): i32
 fn(extern("stbtt_GetFontOffsetForIndex")) GetFontOffsetForIndex(
-  data: *mut u8,
+  data: *u8,
   index: i32,
 ): i32
 type fontinfo = {
   userdata: ptr,
-  data: *mut u8,
+  data: optref[u8],
   fontstart: i32,
   numGlyphs: i32,
   loca: i32,
@@ -196,78 +196,78 @@ type fontinfo = {
 }
 #static assert-layout[fontinfo](160, 8, [0, 8, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64, 80, 96, 112, 128, 144, ])
 fn(extern("stbtt_InitFont")) InitFont(
-  info: *mut fontinfo,
-  data: *mut u8,
+  info: *fontinfo,
+  data: *u8,
   offset: i32,
 ): i32
 fn(extern("stbtt_FindGlyphIndex")) FindGlyphIndex(
-  info: *mut fontinfo,
+  info: *fontinfo,
   unicode_codepoint: i32,
 ): i32
 fn(extern("stbtt_ScaleForPixelHeight")) ScaleForPixelHeight(
-  info: *mut fontinfo,
+  info: *fontinfo,
   pixels: f32,
 ): f32
 fn(extern("stbtt_ScaleForMappingEmToPixels")) ScaleForMappingEmToPixels(
-  info: *mut fontinfo,
+  info: *fontinfo,
   pixels: f32,
 ): f32
 fn(extern("stbtt_GetFontVMetrics")) GetFontVMetrics(
-  info: *mut fontinfo,
-  ascent: *mut i32,
-  descent: *mut i32,
-  lineGap: *mut i32,
+  info: *fontinfo,
+  ascent: *i32,
+  descent: *i32,
+  lineGap: *i32,
 ): {}
 fn(extern("stbtt_GetFontVMetricsOS2")) GetFontVMetricsOS2(
-  info: *mut fontinfo,
-  typoAscent: *mut i32,
-  typoDescent: *mut i32,
-  typoLineGap: *mut i32,
+  info: *fontinfo,
+  typoAscent: *i32,
+  typoDescent: *i32,
+  typoLineGap: *i32,
 ): i32
 fn(extern("stbtt_GetFontBoundingBox")) GetFontBoundingBox(
-  info: *mut fontinfo,
-  x0: *mut i32,
-  y0: *mut i32,
-  x1: *mut i32,
-  y1: *mut i32,
+  info: *fontinfo,
+  x0: *i32,
+  y0: *i32,
+  x1: *i32,
+  y1: *i32,
 ): {}
 fn(extern("stbtt_GetCodepointHMetrics")) GetCodepointHMetrics(
-  info: *mut fontinfo,
+  info: *fontinfo,
   codepoint: i32,
-  advanceWidth: *mut i32,
-  leftSideBearing: *mut i32,
+  advanceWidth: *i32,
+  leftSideBearing: *i32,
 ): {}
 fn(extern("stbtt_GetCodepointKernAdvance")) GetCodepointKernAdvance(
-  info: *mut fontinfo,
+  info: *fontinfo,
   ch1: i32,
   ch2: i32,
 ): i32
 fn(extern("stbtt_GetCodepointBox")) GetCodepointBox(
-  info: *mut fontinfo,
+  info: *fontinfo,
   codepoint: i32,
-  x0: *mut i32,
-  y0: *mut i32,
-  x1: *mut i32,
-  y1: *mut i32,
+  x0: *i32,
+  y0: *i32,
+  x1: *i32,
+  y1: *i32,
 ): i32
 fn(extern("stbtt_GetGlyphHMetrics")) GetGlyphHMetrics(
-  info: *mut fontinfo,
+  info: *fontinfo,
   glyph_index: i32,
-  advanceWidth: *mut i32,
-  leftSideBearing: *mut i32,
+  advanceWidth: *i32,
+  leftSideBearing: *i32,
 ): {}
 fn(extern("stbtt_GetGlyphKernAdvance")) GetGlyphKernAdvance(
-  info: *mut fontinfo,
+  info: *fontinfo,
   glyph1: i32,
   glyph2: i32,
 ): i32
 fn(extern("stbtt_GetGlyphBox")) GetGlyphBox(
-  info: *mut fontinfo,
+  info: *fontinfo,
   glyph_index: i32,
-  x0: *mut i32,
-  y0: *mut i32,
-  x1: *mut i32,
-  y1: *mut i32,
+  x0: *i32,
+  y0: *i32,
+  x1: *i32,
+  y1: *i32,
 ): i32
 type kerningentry = {
   glyph1: i32,
@@ -276,11 +276,11 @@ type kerningentry = {
 }
 #static assert-layout[kerningentry](12, 4, [0, 4, 8, ])
 fn(extern("stbtt_GetKerningTableLength")) GetKerningTableLength(
-  info: *mut fontinfo,
+  info: *fontinfo,
 ): i32
 fn(extern("stbtt_GetKerningTable")) GetKerningTable(
-  info: *mut fontinfo,
-  table: *mut kerningentry,
+  info: *fontinfo,
+  table: *kerningentry,
   table_length: i32,
 ): i32
 type vertex = {
@@ -295,66 +295,66 @@ type vertex = {
 }
 #static assert-layout[vertex](14, 2, [0, 2, 4, 6, 8, 10, 12, 13, ])
 fn(extern("stbtt_IsGlyphEmpty")) IsGlyphEmpty(
-  info: *mut fontinfo,
+  info: *fontinfo,
   glyph_index: i32,
 ): i32
 fn(extern("stbtt_GetCodepointShape")) GetCodepointShape(
-  info: *mut fontinfo,
+  info: *fontinfo,
   unicode_codepoint: i32,
-  vertices: *mut *mut vertex,
+  vertices: *optref[vertex],
 ): i32
 fn(extern("stbtt_GetGlyphShape")) GetGlyphShape(
-  info: *mut fontinfo,
+  info: *fontinfo,
   glyph_index: i32,
-  vertices: *mut *mut vertex,
+  vertices: *optref[vertex],
 ): i32
 fn(extern("stbtt_FreeShape")) FreeShape(
-  info: *mut fontinfo,
-  vertices: *mut vertex,
+  info: *fontinfo,
+  vertices: *vertex,
 ): {}
 fn(extern("stbtt_FindSVGDoc")) FindSVGDoc(
-  info: *mut fontinfo,
+  info: *fontinfo,
   gl: i32,
-): *mut u8
+): optref[u8]
 fn(extern("stbtt_GetCodepointSVG")) GetCodepointSVG(
-  info: *mut fontinfo,
+  info: *fontinfo,
   unicode_codepoint: i32,
-  svg: *mut *mut u8,
+  svg: *optref[u8],
 ): i32
 fn(extern("stbtt_GetGlyphSVG")) GetGlyphSVG(
-  info: *mut fontinfo,
+  info: *fontinfo,
   gl: i32,
-  svg: *mut *mut u8,
+  svg: *optref[u8],
 ): i32
 fn(extern("stbtt_FreeBitmap")) FreeBitmap(
-  bitmap: *mut u8,
+  bitmap: *u8,
   userdata: ptr,
 ): {}
 fn(extern("stbtt_GetCodepointBitmap")) GetCodepointBitmap(
-  info: *mut fontinfo,
+  info: *fontinfo,
   scale_x: f32,
   scale_y: f32,
   codepoint: i32,
-  width: *mut i32,
-  height: *mut i32,
-  xoff: *mut i32,
-  yoff: *mut i32,
-): *mut u8
+  width: *i32,
+  height: *i32,
+  xoff: *i32,
+  yoff: *i32,
+): optref[u8]
 fn(extern("stbtt_GetCodepointBitmapSubpixel")) GetCodepointBitmapSubpixel(
-  info: *mut fontinfo,
+  info: *fontinfo,
   scale_x: f32,
   scale_y: f32,
   shift_x: f32,
   shift_y: f32,
   codepoint: i32,
-  width: *mut i32,
-  height: *mut i32,
-  xoff: *mut i32,
-  yoff: *mut i32,
-): *mut u8
+  width: *i32,
+  height: *i32,
+  xoff: *i32,
+  yoff: *i32,
+): optref[u8]
 fn(extern("stbtt_MakeCodepointBitmap")) MakeCodepointBitmap(
-  info: *mut fontinfo,
-  output: *mut u8,
+  info: *fontinfo,
+  output: *u8,
   out_w: i32,
   out_h: i32,
   out_stride: i32,
@@ -363,8 +363,8 @@ fn(extern("stbtt_MakeCodepointBitmap")) MakeCodepointBitmap(
   codepoint: i32,
 ): {}
 fn(extern("stbtt_MakeCodepointBitmapSubpixel")) MakeCodepointBitmapSubpixel(
-  info: *mut fontinfo,
-  output: *mut u8,
+  info: *fontinfo,
+  output: *u8,
   out_w: i32,
   out_h: i32,
   out_stride: i32,
@@ -375,8 +375,8 @@ fn(extern("stbtt_MakeCodepointBitmapSubpixel")) MakeCodepointBitmapSubpixel(
   codepoint: i32,
 ): {}
 fn(extern("stbtt_MakeCodepointBitmapSubpixelPrefilter")) MakeCodepointBitmapSubpixelPrefilter(
-  info: *mut fontinfo,
-  output: *mut u8,
+  info: *fontinfo,
+  output: *u8,
   out_w: i32,
   out_h: i32,
   out_stride: i32,
@@ -386,57 +386,57 @@ fn(extern("stbtt_MakeCodepointBitmapSubpixelPrefilter")) MakeCodepointBitmapSubp
   shift_y: f32,
   oversample_x: i32,
   oversample_y: i32,
-  sub_x: *mut f32,
-  sub_y: *mut f32,
+  sub_x: *f32,
+  sub_y: *f32,
   codepoint: i32,
 ): {}
 fn(extern("stbtt_GetCodepointBitmapBox")) GetCodepointBitmapBox(
-  font: *mut fontinfo,
+  font: *fontinfo,
   codepoint: i32,
   scale_x: f32,
   scale_y: f32,
-  ix0: *mut i32,
-  iy0: *mut i32,
-  ix1: *mut i32,
-  iy1: *mut i32,
+  ix0: *i32,
+  iy0: *i32,
+  ix1: *i32,
+  iy1: *i32,
 ): {}
 fn(extern("stbtt_GetCodepointBitmapBoxSubpixel")) GetCodepointBitmapBoxSubpixel(
-  font: *mut fontinfo,
+  font: *fontinfo,
   codepoint: i32,
   scale_x: f32,
   scale_y: f32,
   shift_x: f32,
   shift_y: f32,
-  ix0: *mut i32,
-  iy0: *mut i32,
-  ix1: *mut i32,
-  iy1: *mut i32,
+  ix0: *i32,
+  iy0: *i32,
+  ix1: *i32,
+  iy1: *i32,
 ): {}
 fn(extern("stbtt_GetGlyphBitmap")) GetGlyphBitmap(
-  info: *mut fontinfo,
+  info: *fontinfo,
   scale_x: f32,
   scale_y: f32,
   glyph: i32,
-  width: *mut i32,
-  height: *mut i32,
-  xoff: *mut i32,
-  yoff: *mut i32,
-): *mut u8
+  width: *i32,
+  height: *i32,
+  xoff: *i32,
+  yoff: *i32,
+): optref[u8]
 fn(extern("stbtt_GetGlyphBitmapSubpixel")) GetGlyphBitmapSubpixel(
-  info: *mut fontinfo,
+  info: *fontinfo,
   scale_x: f32,
   scale_y: f32,
   shift_x: f32,
   shift_y: f32,
   glyph: i32,
-  width: *mut i32,
-  height: *mut i32,
-  xoff: *mut i32,
-  yoff: *mut i32,
-): *mut u8
+  width: *i32,
+  height: *i32,
+  xoff: *i32,
+  yoff: *i32,
+): optref[u8]
 fn(extern("stbtt_MakeGlyphBitmap")) MakeGlyphBitmap(
-  info: *mut fontinfo,
-  output: *mut u8,
+  info: *fontinfo,
+  output: *u8,
   out_w: i32,
   out_h: i32,
   out_stride: i32,
@@ -445,8 +445,8 @@ fn(extern("stbtt_MakeGlyphBitmap")) MakeGlyphBitmap(
   glyph: i32,
 ): {}
 fn(extern("stbtt_MakeGlyphBitmapSubpixel")) MakeGlyphBitmapSubpixel(
-  info: *mut fontinfo,
-  output: *mut u8,
+  info: *fontinfo,
+  output: *u8,
   out_w: i32,
   out_h: i32,
   out_stride: i32,
@@ -457,8 +457,8 @@ fn(extern("stbtt_MakeGlyphBitmapSubpixel")) MakeGlyphBitmapSubpixel(
   glyph: i32,
 ): {}
 fn(extern("stbtt_MakeGlyphBitmapSubpixelPrefilter")) MakeGlyphBitmapSubpixelPrefilter(
-  info: *mut fontinfo,
-  output: *mut u8,
+  info: *fontinfo,
+  output: *u8,
   out_w: i32,
   out_h: i32,
   out_stride: i32,
@@ -468,43 +468,43 @@ fn(extern("stbtt_MakeGlyphBitmapSubpixelPrefilter")) MakeGlyphBitmapSubpixelPref
   shift_y: f32,
   oversample_x: i32,
   oversample_y: i32,
-  sub_x: *mut f32,
-  sub_y: *mut f32,
+  sub_x: *f32,
+  sub_y: *f32,
   glyph: i32,
 ): {}
 fn(extern("stbtt_GetGlyphBitmapBox")) GetGlyphBitmapBox(
-  font: *mut fontinfo,
+  font: *fontinfo,
   glyph: i32,
   scale_x: f32,
   scale_y: f32,
-  ix0: *mut i32,
-  iy0: *mut i32,
-  ix1: *mut i32,
-  iy1: *mut i32,
+  ix0: *i32,
+  iy0: *i32,
+  ix1: *i32,
+  iy1: *i32,
 ): {}
 fn(extern("stbtt_GetGlyphBitmapBoxSubpixel")) GetGlyphBitmapBoxSubpixel(
-  font: *mut fontinfo,
+  font: *fontinfo,
   glyph: i32,
   scale_x: f32,
   scale_y: f32,
   shift_x: f32,
   shift_y: f32,
-  ix0: *mut i32,
-  iy0: *mut i32,
-  ix1: *mut i32,
-  iy1: *mut i32,
+  ix0: *i32,
+  iy0: *i32,
+  ix1: *i32,
+  iy1: *i32,
 ): {}
 type _bitmap = {
   w: i32,
   h: i32,
   stride: i32,
-  pixels: *mut u8,
+  pixels: optref[u8],
 }
 #static assert-layout[_bitmap](24, 8, [0, 4, 8, 16, ])
 fn(extern("stbtt_Rasterize")) Rasterize(
-  result: *mut _bitmap,
+  result: *_bitmap,
   flatness_in_pixels: f32,
-  vertices: *mut vertex,
+  vertices: *vertex,
   num_verts: i32,
   scale_x: f32,
   scale_y: f32,
@@ -516,49 +516,49 @@ fn(extern("stbtt_Rasterize")) Rasterize(
   userdata: ptr,
 ): {}
 fn(extern("stbtt_FreeSDF")) FreeSDF(
-  bitmap: *mut u8,
+  bitmap: *u8,
   userdata: ptr,
 ): {}
 fn(extern("stbtt_GetGlyphSDF")) GetGlyphSDF(
-  info: *mut fontinfo,
+  info: *fontinfo,
   scale: f32,
   glyph: i32,
   padding: i32,
   onedge_value: u8,
   pixel_dist_scale: f32,
-  width: *mut i32,
-  height: *mut i32,
-  xoff: *mut i32,
-  yoff: *mut i32,
-): *mut u8
+  width: *i32,
+  height: *i32,
+  xoff: *i32,
+  yoff: *i32,
+): optref[u8]
 fn(extern("stbtt_GetCodepointSDF")) GetCodepointSDF(
-  info: *mut fontinfo,
+  info: *fontinfo,
   scale: f32,
   codepoint: i32,
   padding: i32,
   onedge_value: u8,
   pixel_dist_scale: f32,
-  width: *mut i32,
-  height: *mut i32,
-  xoff: *mut i32,
-  yoff: *mut i32,
-): *mut u8
+  width: *i32,
+  height: *i32,
+  xoff: *i32,
+  yoff: *i32,
+): optref[u8]
 fn(extern("stbtt_FindMatchingFont")) FindMatchingFont(
-  fontdata: *mut u8,
-  name: *mut u8,
+  fontdata: *u8,
+  name: *u8,
   flags: i32,
 ): i32
 fn(extern("stbtt_CompareUTF8toUTF16_bigendian")) CompareUTF8toUTF16_bigendian(
-  s1: *mut u8,
+  s1: *u8,
   len1: i32,
-  s2: *mut u8,
+  s2: *u8,
   len2: i32,
 ): i32
 fn(extern("stbtt_GetFontNameString")) GetFontNameString(
-  font: *mut fontinfo,
-  length: *mut i32,
+  font: *fontinfo,
+  length: *i32,
   platformID: i32,
   encodingID: i32,
   languageID: i32,
   nameID: i32,
-): *mut u8
+): optref[u8]

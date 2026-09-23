@@ -70,16 +70,32 @@ fn some-fn-param-gen[t](t: t, f: some fn t -> t, g: some fn t -> ?t): ?t {
   t || f || g
 }
 
+fn takes-string(s: string): int { s.len() }
+
+fn forward-plain(i: int, f: some fn int -> int): int { some-fn-param1(i, f) }
+
+fn forward-generic[t](t: t, f: some fn t -> t): t { some-fn-param-gen(t, f, fn x. some(x)).! }
+
+fn count-where[t](xs: list[t], f: some fn t -> bool): int {
+  let n = 0
+  for x in xs { if f(x) { n = n + 1 } }
+  n
+}
+
+fn forward-twice[t](xs: list[t], f: some fn t -> bool): int {
+  count-where(xs, f) + count-where(xs, f)
+}
+
 fn run-things(thunks: list[dyn[fn() -> empty]]) {
   for thunk in thunks { thunk() }
 }
 
 fn thunks-test() {
-  let counter = { let x = 0; &x }
+  let counter = { let x = 0; x.& }
   let thunks: list[dyn[fn() -> empty]] = [
-    fn[counter]. { counter.* = counter.* + 1 },
-    fn[counter]. { counter.* = counter.* + 1 },
-    fn[counter]. { counter.* = counter.* + 1 },
+    (fn[counter]. { counter.* = counter.* + 1 }).to-dyn(),
+    (fn[counter]. { counter.* = counter.* + 1 }).to-dyn(),
+    (fn[counter]. { counter.* = counter.* + 1 }).to-dyn(),
   ]
 
   run-things(thunks)
@@ -91,6 +107,17 @@ fn test() {
   let static-add-one-var = static-add-one
   let static-result = some-fn-param2(5, static-add-one, static-add-one-var)
   assert-equals(static-result, 6 + 6)
+
+  let static-add-one-ptr = static-add-one.&
+  let ptr-result = some-fn-param2(5, static-add-one-ptr, static-add-two.&)
+  assert-equals(ptr-result, 6 + 7)
+
+  assert-equals(forward-plain(4, static-add-one), 5)
+  assert-equals(forward-plain(4, fn x. x * 2), 8)
+  assert-equals(forward-generic(4, static-add-one), 5)
+  assert-equals(forward-generic(true, fn b. not b), false)
+  assert-equals(forward-twice([1, 2, 3, 4], fn x. x % 2 == 0), 4)
+  assert(test-compile( some-fn-param1(4, takes-string) ) is :some _)
 
   let lam1-result-ptr = some-fn-param1(5, static-add-one)
   assert-equals(lam1-result-ptr, 6)
@@ -113,15 +140,17 @@ fn test() {
     || filter(fn x. x % 2 == 0)
   assert(result == [2, 4, 6, 8])
 
-  let x = { let tmp = 10; &tmp }
+  let x = { let tmp = 10; tmp.& }
   // Coerce lambdas to lambda objects
-  simple-dyn(fn[x]. { let _ = "Thunk! ${x.*}"; x.* = 11 })
+  simple-dyn((fn[x]. { let _ = "Thunk! ${x.*}"; x.* = 11 }).to-dyn())
   assert-equals(x.*, 11)
-  simple-dyn(fn[x]. { let _ = "Thunk!"; x.* = 12 })
+  simple-dyn((fn[x]. { let _ = "Thunk!"; x.* = 12 }).to-dyn())
   assert-equals(x.*, 12)
 
-  let hinted-thunk = (fn() 5): dyn[fn() -> int]
-  assert-equals(hinted-thunk(), 5)
+  let five-thunk = (fn() 5).to-dyn()
+  assert-equals(five-thunk(), 5)
+  let named-thunk: dyn[fn(int) -> int] = static-add-one.to-dyn()
+  assert-equals(named-thunk(1), 2)
 
   thunks-test()
 
@@ -141,7 +170,7 @@ fn test() {
 // Returning as dyn allocates the env in the ambient allocator, so the object
 // survives the frame that created it
 fn make-adder(n: int): dyn[fn(int) -> int] {
-  fn[n](x: int) x + n
+  (fn[n](x: int) x + n).to-dyn()
 }
 
 fn escape-test() {
@@ -152,10 +181,10 @@ fn escape-test() {
   assert-equals(add5(2), 7)
 }
 
-fn make-thunks(counter: *mut int): list[dyn[fn() -> empty]] {
+fn make-thunks(counter: *int): list[dyn[fn() -> empty]] {
   [
-    fn[counter]. { counter.* = counter.* + 1 },
-    fn[counter]. { counter.* = counter.* + 10 },
+    (fn[counter]. { counter.* = counter.* + 1 }).to-dyn(),
+    (fn[counter]. { counter.* = counter.* + 10 }).to-dyn(),
   ]
 }
 

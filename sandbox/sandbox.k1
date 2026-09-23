@@ -1,9 +1,30 @@
-macro arith(tokens: tokens) {
-  let i = 0
-  let o1 = tokens.get(i)
-  tokens.*[i]
+// macro arith(tokens: tokens) {
+//   let i = 0
+//   let o1 = tokens.get(i)
+//   tokens.*[i]
+// }
+// #debug fn main(): i32 {
+//   arith(<< 3 + 3 >>)
+//   0
+// }
+
+let fast-mode: bool = true
+
+#if fast-mode type triple = either {
+  a(i64)
+  b(i64)
+  c(i64)
 }
-#debug fn main(): i32 {
-  arith(<< 3 + 3 >>)
-  0
+
+#if fast-mode ns blah {
+
+  #if fast-mode let x: i32 = 10
+  #if fast-mode let x: i64 = 42
+  
+  #if fast-mode fn main(): i32 {
+    let p = opt:some .{ x = 10.0, y = 20 }
+    let x: ?f32 = :some 42.0
+    0
+  
+  }
 }

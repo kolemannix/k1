@@ -142,7 +142,7 @@ type(alias) Int64 = i64
 #static assert-layout[Int64](8, 8, [])
 type(alias) UInt64 = u64
 #static assert-layout[UInt64](8, 8, [])
-type(alias) Memory = *mut MemoryRec_
+type(alias) Memory = *MemoryRec_
 #static assert-layout[Memory](8, 8, [])
 type(alias) Alloc_Func = *fn(
   Memory,
@@ -168,7 +168,7 @@ type MemoryRec_ = {
   realloc: Realloc_Func,
 }
 #static assert-layout[MemoryRec_](32, 8, [0, 8, 16, 24, ])
-type(alias) Stream = *mut StreamRec_
+type(alias) Stream = *StreamRec_
 #static assert-layout[Stream](8, 8, [])
 type StreamDesc_ = union {
   value: i64,
@@ -180,7 +180,7 @@ type(alias) StreamDesc = StreamDesc_
 type(alias) Stream_IoFunc = *fn(
   Stream,
   u64,
-  *mut u8,
+  *u8,
   u64
 ) -> u64
 #static assert-layout[Stream_IoFunc](8, 8, [])
@@ -189,7 +189,7 @@ type(alias) Stream_CloseFunc = *fn(
 ) -> {}
 #static assert-layout[Stream_CloseFunc](8, 8, [])
 type StreamRec_ = {
-  base: *mut u8,
+  base: optref[u8],
   size: u64,
   pos: u64,
   descriptor: StreamDesc,
@@ -197,8 +197,8 @@ type StreamRec_ = {
   read: Stream_IoFunc,
   close: Stream_CloseFunc,
   memory: Memory,
-  cursor: *mut u8,
-  limit: *mut u8,
+  cursor: optref[u8],
+  limit: optref[u8],
 }
 #static assert-layout[StreamRec_](80, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, ])
 type(alias) StreamRec = StreamRec_
@@ -239,7 +239,7 @@ type Bitmap_ = {
   rows: u32,
   width: u32,
   pitch: i32,
-  buffer: *mut u8,
+  buffer: optref[u8],
   num_grays: u16,
   pixel_mode: u8,
   palette_mode: u8,
@@ -251,34 +251,34 @@ type(alias) Bitmap = Bitmap_
 type Outline_ = {
   n_contours: u16,
   n_points: u16,
-  points: *mut Vector,
-  tags: *mut u8,
-  contours: *mut u16,
+  points: optref[Vector],
+  tags: optref[u8],
+  contours: optref[u16],
   flags: i32,
 }
 #static assert-layout[Outline_](40, 8, [0, 2, 8, 16, 24, 32, ])
 type(alias) Outline = Outline_
 #static assert-layout[Outline](40, 8, [])
 type(alias) Outline_MoveToFunc = *fn(
-  *mut Vector,
+  *Vector,
   ptr
 ) -> i32
 #static assert-layout[Outline_MoveToFunc](8, 8, [])
 type(alias) Outline_LineToFunc = *fn(
-  *mut Vector,
+  *Vector,
   ptr
 ) -> i32
 #static assert-layout[Outline_LineToFunc](8, 8, [])
 type(alias) Outline_ConicToFunc = *fn(
-  *mut Vector,
-  *mut Vector,
+  *Vector,
+  *Vector,
   ptr
 ) -> i32
 #static assert-layout[Outline_ConicToFunc](8, 8, [])
 type(alias) Outline_CubicToFunc = *fn(
-  *mut Vector,
-  *mut Vector,
-  *mut Vector,
+  *Vector,
+  *Vector,
+  *Vector,
   ptr
 ) -> i32
 #static assert-layout[Outline_CubicToFunc](8, 8, [])
@@ -315,7 +315,7 @@ type(alias) Span = Span_
 type(alias) SpanFunc = *fn(
   i32,
   i32,
-  *mut Span,
+  *Span,
   ptr
 ) -> {}
 #static assert-layout[SpanFunc](8, 8, [])
@@ -332,7 +332,7 @@ type(alias) Raster_BitSet_Func = *fn(
 ) -> {}
 #static assert-layout[Raster_BitSet_Func](8, 8, [])
 type Raster_Params_ = {
-  target: *mut Bitmap,
+  target: optref[Bitmap],
   source: ptr,
   flags: i32,
   gray_spans: SpanFunc,
@@ -346,11 +346,11 @@ type Raster_Params_ = {
 type(alias) Raster_Params = Raster_Params_
 #static assert-layout[Raster_Params](96, 8, [])
 type RasterRec_ = opaque[0, 1]
-type(alias) Raster = *mut RasterRec_
+type(alias) Raster = *RasterRec_
 #static assert-layout[Raster](8, 8, [])
 type(alias) Raster_NewFunc = *fn(
   ptr,
-  *mut Raster
+  *Raster
 ) -> i32
 #static assert-layout[Raster_NewFunc](8, 8, [])
 type(alias) Raster_DoneFunc = *fn(
@@ -359,7 +359,7 @@ type(alias) Raster_DoneFunc = *fn(
 #static assert-layout[Raster_DoneFunc](8, 8, [])
 type(alias) Raster_ResetFunc = *fn(
   Raster,
-  *mut u8,
+  *u8,
   u64
 ) -> {}
 #static assert-layout[Raster_ResetFunc](8, 8, [])
@@ -371,7 +371,7 @@ type(alias) Raster_SetModeFunc = *fn(
 #static assert-layout[Raster_SetModeFunc](8, 8, [])
 type(alias) Raster_RenderFunc = *fn(
   Raster,
-  *mut Raster_Params
+  *Raster_Params
 ) -> i32
 #static assert-layout[Raster_RenderFunc](8, 8, [])
 type Raster_Funcs_ = {
@@ -395,7 +395,7 @@ type(alias) Char = i8
 #static assert-layout[Char](1, 1, [])
 type(alias) Byte = u8
 #static assert-layout[Byte](1, 1, [])
-type(alias) Bytes = *mut Byte
+type(alias) Bytes = *Byte
 #static assert-layout[Bytes](8, 8, [])
 type(alias) Tag = UInt32
 #static assert-layout[Tag](4, 4, [])
@@ -444,7 +444,7 @@ type Matrix_ = {
 type(alias) Matrix = Matrix_
 #static assert-layout[Matrix](32, 8, [])
 type Data_ = {
-  pointer: *mut Byte,
+  pointer: optref[Byte],
   length: UInt,
 }
 #static assert-layout[Data_](16, 8, [0, 8, ])
@@ -461,9 +461,9 @@ type Generic_ = {
 #static assert-layout[Generic_](16, 8, [0, 8, ])
 type(alias) Generic = Generic_
 #static assert-layout[Generic](16, 8, [])
-type(alias) ListNode = *mut ListNodeRec_
+type(alias) ListNode = *ListNodeRec_
 #static assert-layout[ListNode](8, 8, [])
-type(alias) List = *mut ListRec_
+type(alias) List = *ListRec_
 #static assert-layout[List](8, 8, [])
 type ListNodeRec_ = {
   prev: ListNode,
@@ -482,7 +482,7 @@ type(alias) ListRec = ListRec_
 #static assert-layout[ListRec](16, 8, [])
 fn(extern("FT_Error_String")) Error_String(
   error_code: Error,
-): *mut u8
+): optref[u8]
 type Glyph_Metrics_ = {
   width: Pos,
   height: Pos,
@@ -507,24 +507,24 @@ type Bitmap_Size_ = {
 type(alias) Bitmap_Size = Bitmap_Size_
 #static assert-layout[Bitmap_Size](32, 8, [])
 type LibraryRec_ = opaque[0, 1]
-type(alias) Library = *mut LibraryRec_
+type(alias) Library = *LibraryRec_
 #static assert-layout[Library](8, 8, [])
 type ModuleRec_ = opaque[0, 1]
-type(alias) Module = *mut ModuleRec_
+type(alias) Module = *ModuleRec_
 #static assert-layout[Module](8, 8, [])
 type DriverRec_ = opaque[0, 1]
-type(alias) Driver = *mut DriverRec_
+type(alias) Driver = *DriverRec_
 #static assert-layout[Driver](8, 8, [])
 type RendererRec_ = opaque[0, 1]
-type(alias) Renderer = *mut RendererRec_
+type(alias) Renderer = *RendererRec_
 #static assert-layout[Renderer](8, 8, [])
-type(alias) Face = *mut FaceRec_
+type(alias) Face = *FaceRec_
 #static assert-layout[Face](8, 8, [])
-type(alias) Size = *mut SizeRec_
+type(alias) Size = *SizeRec_
 #static assert-layout[Size](8, 8, [])
-type(alias) GlyphSlot = *mut GlyphSlotRec_
+type(alias) GlyphSlot = *GlyphSlotRec_
 #static assert-layout[GlyphSlot](8, 8, [])
-type(alias) CharMap = *mut CharMapRec_
+type(alias) CharMap = *CharMapRec_
 #static assert-layout[CharMap](8, 8, [])
 type Encoding_ = either(u32) {
   ENCODING_NONE = 0,
@@ -555,7 +555,7 @@ type CharMapRec_ = {
 type(alias) CharMapRec = CharMapRec_
 #static assert-layout[CharMapRec](16, 8, [])
 type Face_InternalRec_ = opaque[0, 1]
-type(alias) Face_Internal = *mut Face_InternalRec_
+type(alias) Face_Internal = *Face_InternalRec_
 #static assert-layout[Face_Internal](8, 8, [])
 type FaceRec_ = {
   num_faces: Long,
@@ -563,12 +563,12 @@ type FaceRec_ = {
   face_flags: Long,
   style_flags: Long,
   num_glyphs: Long,
-  family_name: *mut String,
-  style_name: *mut String,
+  family_name: optref[String],
+  style_name: optref[String],
   num_fixed_sizes: Int,
-  available_sizes: *mut Bitmap_Size,
+  available_sizes: optref[Bitmap_Size],
   num_charmaps: Int,
-  charmaps: *mut CharMap,
+  charmaps: optref[CharMap],
   generic: Generic,
   bbox: BBox,
   units_per_EM: UShort,
@@ -594,7 +594,7 @@ type FaceRec_ = {
 type(alias) FaceRec = FaceRec_
 #static assert-layout[FaceRec](248, 8, [])
 type Size_InternalRec_ = opaque[0, 1]
-type(alias) Size_Internal = *mut Size_InternalRec_
+type(alias) Size_Internal = *Size_InternalRec_
 #static assert-layout[Size_Internal](8, 8, [])
 type Size_Metrics_ = {
   x_ppem: UShort,
@@ -619,10 +619,10 @@ type SizeRec_ = {
 type(alias) SizeRec = SizeRec_
 #static assert-layout[SizeRec](88, 8, [])
 type SubGlyphRec_ = opaque[0, 1]
-type(alias) SubGlyph = *mut SubGlyphRec_
+type(alias) SubGlyph = *SubGlyphRec_
 #static assert-layout[SubGlyph](8, 8, [])
 type Slot_InternalRec_ = opaque[0, 1]
-type(alias) Slot_Internal = *mut Slot_InternalRec_
+type(alias) Slot_Internal = *Slot_InternalRec_
 #static assert-layout[Slot_Internal](8, 8, [])
 type GlyphSlotRec_ = {
   library: Library,
@@ -652,7 +652,7 @@ type GlyphSlotRec_ = {
 type(alias) GlyphSlotRec = GlyphSlotRec_
 #static assert-layout[GlyphSlotRec](304, 8, [])
 fn(extern("FT_Init_FreeType")) Init_FreeType(
-  alibrary: *mut Library,
+  alibrary: *Library,
 ): Error
 fn(extern("FT_Done_FreeType")) Done_FreeType(
   library: Library,
@@ -666,43 +666,43 @@ type(alias) Parameter = Parameter_
 #static assert-layout[Parameter](16, 8, [])
 type Open_Args_ = {
   flags: UInt,
-  memory_base: *mut Byte,
+  memory_base: optref[Byte],
   memory_size: Long,
-  pathname: *mut String,
+  pathname: optref[String],
   stream: Stream,
   driver: Module,
   num_params: Int,
-  params: *mut Parameter,
+  params: optref[Parameter],
 }
 #static assert-layout[Open_Args_](64, 8, [0, 8, 16, 24, 32, 40, 48, 56, ])
 type(alias) Open_Args = Open_Args_
 #static assert-layout[Open_Args](64, 8, [])
 fn(extern("FT_New_Face")) New_Face(
   library: Library,
-  filepathname: *mut u8,
+  filepathname: *u8,
   face_index: Long,
-  aface: *mut Face,
+  aface: *Face,
 ): Error
 fn(extern("FT_New_Memory_Face")) New_Memory_Face(
   library: Library,
-  file_base: *mut Byte,
+  file_base: *Byte,
   file_size: Long,
   face_index: Long,
-  aface: *mut Face,
+  aface: *Face,
 ): Error
 fn(extern("FT_Open_Face")) Open_Face(
   library: Library,
-  args: *mut Open_Args,
+  args: *Open_Args,
   face_index: Long,
-  aface: *mut Face,
+  aface: *Face,
 ): Error
 fn(extern("FT_Attach_File")) Attach_File(
   face: Face,
-  filepathname: *mut u8,
+  filepathname: *u8,
 ): Error
 fn(extern("FT_Attach_Stream")) Attach_Stream(
   face: Face,
-  parameters: *mut Open_Args,
+  parameters: *Open_Args,
 ): Error
 fn(extern("FT_Reference_Face")) Reference_Face(
   face: Face,
@@ -735,7 +735,7 @@ type Size_RequestRec_ = {
 #static assert-layout[Size_RequestRec_](32, 8, [0, 8, 16, 24, 28, ])
 type(alias) Size_RequestRec = Size_RequestRec_
 #static assert-layout[Size_RequestRec](32, 8, [])
-type(alias) Size_Request = *mut Size_RequestRec_
+type(alias) Size_Request = *Size_RequestRec_
 #static assert-layout[Size_Request](8, 8, [])
 fn(extern("FT_Request_Size")) Request_Size(
   face: Face,
@@ -765,13 +765,13 @@ fn(extern("FT_Load_Char")) Load_Char(
 ): Error
 fn(extern("FT_Set_Transform")) Set_Transform(
   face: Face,
-  matrix: *mut Matrix,
-  delta: *mut Vector,
+  matrix: *Matrix,
+  delta: *Vector,
 ): {}
 fn(extern("FT_Get_Transform")) Get_Transform(
   face: Face,
-  matrix: *mut Matrix,
-  delta: *mut Vector,
+  matrix: *Matrix,
+  delta: *Vector,
 ): {}
 type Render_Mode_ = either(u32) {
   RENDER_MODE_NORMAL = 0,
@@ -802,13 +802,13 @@ fn(extern("FT_Get_Kerning")) Get_Kerning(
   left_glyph: UInt,
   right_glyph: UInt,
   kern_mode: UInt,
-  akerning: *mut Vector,
+  akerning: *Vector,
 ): Error
 fn(extern("FT_Get_Track_Kerning")) Get_Track_Kerning(
   face: Face,
   point_size: Fixed,
   degree: Int,
-  akerning: *mut Fixed,
+  akerning: *Fixed,
 ): Error
 fn(extern("FT_Select_Charmap")) Select_Charmap(
   face: Face,
@@ -827,21 +827,21 @@ fn(extern("FT_Get_Char_Index")) Get_Char_Index(
 ): UInt
 fn(extern("FT_Get_First_Char")) Get_First_Char(
   face: Face,
-  agindex: *mut UInt,
+  agindex: *UInt,
 ): ULong
 fn(extern("FT_Get_Next_Char")) Get_Next_Char(
   face: Face,
   char_code: ULong,
-  agindex: *mut UInt,
+  agindex: *UInt,
 ): ULong
 fn(extern("FT_Face_Properties")) Face_Properties(
   face: Face,
   num_properties: UInt,
-  properties: *mut Parameter,
+  properties: *Parameter,
 ): Error
 fn(extern("FT_Get_Name_Index")) Get_Name_Index(
   face: Face,
-  glyph_name: *mut String,
+  glyph_name: *String,
 ): UInt
 fn(extern("FT_Get_Glyph_Name")) Get_Glyph_Name(
   face: Face,
@@ -851,15 +851,15 @@ fn(extern("FT_Get_Glyph_Name")) Get_Glyph_Name(
 ): Error
 fn(extern("FT_Get_Postscript_Name")) Get_Postscript_Name(
   face: Face,
-): *mut u8
+): optref[u8]
 fn(extern("FT_Get_SubGlyph_Info")) Get_SubGlyph_Info(
   glyph: GlyphSlot,
   sub_index: UInt,
-  p_index: *mut Int,
-  p_flags: *mut UInt,
-  p_arg1: *mut Int,
-  p_arg2: *mut Int,
-  p_transform: *mut Matrix,
+  p_index: *Int,
+  p_flags: *UInt,
+  p_arg1: *Int,
+  p_arg2: *Int,
+  p_transform: *Matrix,
 ): Error
 fn(extern("FT_Get_FSType_Flags")) Get_FSType_Flags(
   face: Face,
@@ -876,15 +876,15 @@ fn(extern("FT_Face_GetCharVariantIsDefault")) Face_GetCharVariantIsDefault(
 ): Int
 fn(extern("FT_Face_GetVariantSelectors")) Face_GetVariantSelectors(
   face: Face,
-): *mut UInt32
+): optref[UInt32]
 fn(extern("FT_Face_GetVariantsOfChar")) Face_GetVariantsOfChar(
   face: Face,
   charcode: ULong,
-): *mut UInt32
+): optref[UInt32]
 fn(extern("FT_Face_GetCharsOfVariant")) Face_GetCharsOfVariant(
   face: Face,
   variantSelector: ULong,
-): *mut UInt32
+): optref[UInt32]
 fn(extern("FT_MulDiv")) MulDiv(
   a: Long,
   b: Long,
@@ -908,14 +908,14 @@ fn(extern("FT_FloorFix")) FloorFix(
   a: Fixed,
 ): Fixed
 fn(extern("FT_Vector_Transform")) Vector_Transform(
-  vector: *mut Vector,
-  matrix: *mut Matrix,
+  vector: *Vector,
+  matrix: *Matrix,
 ): {}
 fn(extern("FT_Library_Version")) Library_Version(
   library: Library,
-  amajor: *mut Int,
-  aminor: *mut Int,
-  apatch: *mut Int,
+  amajor: *Int,
+  aminor: *Int,
+  apatch: *Int,
 ): {}
 fn(extern("FT_Face_CheckTrueTypePatents")) Face_CheckTrueTypePatents(
   face: Face,
@@ -925,61 +925,61 @@ fn(extern("FT_Face_SetUnpatentedHinting")) Face_SetUnpatentedHinting(
   value: Bool,
 ): Bool
 fn(extern("FT_Outline_Decompose")) Outline_Decompose(
-  outline: *mut Outline,
-  func_interface: *mut Outline_Funcs,
+  outline: *Outline,
+  func_interface: *Outline_Funcs,
   user: ptr,
 ): Error
 fn(extern("FT_Outline_New")) Outline_New(
   library: Library,
   numPoints: UInt,
   numContours: Int,
-  anoutline: *mut Outline,
+  anoutline: *Outline,
 ): Error
 fn(extern("FT_Outline_Done")) Outline_Done(
   library: Library,
-  outline: *mut Outline,
+  outline: *Outline,
 ): Error
 fn(extern("FT_Outline_Check")) Outline_Check(
-  outline: *mut Outline,
+  outline: *Outline,
 ): Error
 fn(extern("FT_Outline_Get_CBox")) Outline_Get_CBox(
-  outline: *mut Outline,
-  acbox: *mut BBox,
+  outline: *Outline,
+  acbox: *BBox,
 ): {}
 fn(extern("FT_Outline_Translate")) Outline_Translate(
-  outline: *mut Outline,
+  outline: *Outline,
   xOffset: Pos,
   yOffset: Pos,
 ): {}
 fn(extern("FT_Outline_Copy")) Outline_Copy(
-  source: *mut Outline,
-  target: *mut Outline,
+  source: *Outline,
+  target: *Outline,
 ): Error
 fn(extern("FT_Outline_Transform")) Outline_Transform(
-  outline: *mut Outline,
-  matrix: *mut Matrix,
+  outline: *Outline,
+  matrix: *Matrix,
 ): {}
 fn(extern("FT_Outline_Embolden")) Outline_Embolden(
-  outline: *mut Outline,
+  outline: *Outline,
   strength: Pos,
 ): Error
 fn(extern("FT_Outline_EmboldenXY")) Outline_EmboldenXY(
-  outline: *mut Outline,
+  outline: *Outline,
   xstrength: Pos,
   ystrength: Pos,
 ): Error
 fn(extern("FT_Outline_Reverse")) Outline_Reverse(
-  outline: *mut Outline,
+  outline: *Outline,
 ): {}
 fn(extern("FT_Outline_Get_Bitmap")) Outline_Get_Bitmap(
   library: Library,
-  outline: *mut Outline,
-  abitmap: *mut Bitmap,
+  outline: *Outline,
+  abitmap: *Bitmap,
 ): Error
 fn(extern("FT_Outline_Render")) Outline_Render(
   library: Library,
-  outline: *mut Outline,
-  params: *mut Raster_Params,
+  outline: *Outline,
+  params: *Raster_Params,
 ): Error
 type Orientation_ = either(u32) {
   ORIENTATION_TRUETYPE = 0,
@@ -990,5 +990,5 @@ type Orientation_ = either(u32) {
 type(alias) Orientation = Orientation_
 #static assert-layout[Orientation](4, 4, [])
 fn(extern("FT_Outline_Get_Orientation")) Outline_Get_Orientation(
-  outline: *mut Outline,
+  outline: *Outline,
 ): Orientation

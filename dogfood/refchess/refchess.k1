@@ -66,7 +66,7 @@ fn index-to-bit(index: u64): bitboard {
 
 fn print-bitboard(b: bitboard) {
   let l = list/empty[char]()
-  write-bitboard(&l, b)
+  write-bitboard(l.&, b)
   println(string/wrap-list(l))
 }
 

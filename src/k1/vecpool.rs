@@ -108,13 +108,6 @@ impl<Index: PoolIndex> SliceHandle<Index> {
 
 #[allow(unused)]
 pub struct VecPool<T, Index: Into<NonZeroU32> + From<NonZeroU32>> {
-    // It would be a lot more powerful if each entry could point to its 'next', or if each entry
-    // were an enum allowing redirects. The issue there is we can't really provide a slice, we can
-    // only provide iterators, it's just a lot more to do, and there's overhead per lookup
-    //
-    // So it makes sense to just have this simple one be simple, and then if I need mutation,
-    // such as appending to a list while keeping its Handles valid, that will just be a different
-    // type of pool
     vec: Vec<T>,
     #[allow(unused)]
     name: &'static str,

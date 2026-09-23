@@ -1,9 +1,0 @@
-#!/bin/bash
-# Show output and commands
-set -x
-# Exit on errors
-set -e
-FILENAME=${@: -1}
-filename=$(basename $FILENAME .k1)
-export RUST_BACKTRACE=1
-RUST_LOG=debug cargo run --features=llvm-sys/prefer-dynamic -- --debug --emit-llvm build $@; lldb .k1-out/$filename

@@ -3,7 +3,7 @@ ns inference
 fn combine[t](a: t, _b: t): t { a }
 fn combine3[t](a: t, b: t, c: { one: t, two: t }): t { a }
 fn get-or-else[t](a: opt[t], b: t): t { if a is :some(a) a else b }
-fn some[u](value: u): opt[u] { opt:some[u] value }
+fn some[u](value: u): opt[u] { opt[u]:some value }
 
 fn get[UU](value: opt[UU]): UU { if value is :some(u) u else core/sys/exit(1) }
 fn identity[t](value: t): t { value }
@@ -62,7 +62,7 @@ fn test() {
   let x = opt:some 42
 
   let with-never = test-compile(
-    combine3((&x).*, core/sys/exit(1), .{ one = some(-1), two = some(3), })
+    combine3(x.&.*, core/sys/exit(1), .{ one = some(-1), two = some(3), })
   )
   assert-equals(with-never, :none)
 

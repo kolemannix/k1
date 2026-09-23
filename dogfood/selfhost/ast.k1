@@ -36,7 +36,7 @@ ns for ident-pool {
     .{ strings = list/empty(), table = std/map/new() }
   }
 
-  fn intern-string(self: *mut ident-pool, s: string): string-id {
+  fn intern-string(self: *ident-pool, s: string): string-id {
     if self.table.get(s) is :some id { return id }
     let id = self.strings.len().trunc[u32]
     self.strings.push(s)
@@ -124,10 +124,8 @@ ns for binary-op-kind {
   }
 }
 
-type unary-op-kind = either(u8) { bool-negation, address-of }
-
 type binary-op = { op: binary-op-kind, lhs: expr-id, rhs: expr-id, span: src-span }
-type unary-op = { op: unary-op-kind, expr: expr-id, span: src-span }
+type not-expr = { expr: expr-id, span: src-span }
 
 type fmt-settings = { precision: u8, pretty: bool }
 
@@ -165,10 +163,9 @@ type struct-value = { fields: list[struct-field], span: src-span }
 type list-literal = { elements: list[expr-id], span: src-span }
 
 type variant-value = {
-  type-name: ?qident,
+  ty: ?type-expr-id,
   variant-name: string-id,
   name-span: src-span,
-  type-args: list[type-arg],
   payload: ?expr-id,
   span: src-span,
 }
@@ -204,7 +201,7 @@ type code-expr = { stmt: stmt-id, span: src-span }
 type ability-expr = { name: qident, arguments: list[type-arg], span: src-span }
 
 type qability-call = {
-  ability-expr: ability-expr,
+  ability-expr,
   self-type: type-expr-id,
   call-expr: expr-id,
   span: src-span,
@@ -234,7 +231,7 @@ type for-expr = {
 
 type expr = either {
   bin-op(binary-op),
-  un-op(unary-op),
+  not-expr(not-expr),
   literal(literal),
   interp-string(interp-string),
   call(call),
@@ -256,6 +253,7 @@ type expr = either {
   match-expr(match-expr),
   lambda(lambda),
   builtin-expr(src-span),
+  zero-literal(src-span),
   static-expr(static-expr),
   code-expr(code-expr),
   qability-call(qability-call),
@@ -267,7 +265,7 @@ ns for expr {
   fn get-span(self: *expr): src-span {
     if self.* is {
       :bin-op op -> op.span,
-      :un-op op -> op.span,
+      :not-expr n -> n.span,
       :literal l -> l.get-span(),
       :interp-string i -> i.span,
       :call c -> c.span,
@@ -289,6 +287,7 @@ ns for expr {
       :match-expr m -> m.span,
       :lambda l -> l.span,
       :builtin-expr s -> s,
+      :zero-literal s -> s,
       :static-expr s -> s.span,
       :code-expr c -> c.span,
       :qability-call q -> q.span,
@@ -332,15 +331,13 @@ type sum-variant = {
 type sum-type = { variants: list[sum-variant], tag-type: ?type-expr-id, span: src-span }
 
 type member-access-kind = either(u8) { dot, colon }
-type reference-kind = either(u8) { read, mut-ref }
 
 type type-expr = either {
   builtin-type(src-span),
   struct-type(struct-type),
   type-application(type-application),
   optional-type({ base: type-expr-id, span: src-span }),
-  reference({ base: type-expr-id, kind: reference-kind, span: src-span }),
-  array-type({ element-type: type-expr-id, size-expr: type-expr-id, span: src-span }),
+  reference({ base: type-expr-id, span: src-span }),
   sum-type(sum-type),
   member-access({ base: type-expr-id, kind: member-access-kind, member-name: string-id, span: src-span }),
   function-type({ params: list[type-expr-id], return-type: type-expr-id, span: src-span }),
@@ -359,7 +356,6 @@ ns for type-expr {
       :type-application a -> a.span,
       :optional-type o -> o.span,
       :reference r -> r.span,
-      :array-type a -> a.span,
       :sum-type s -> s.span,
       :member-access m -> m.span,
       :function-type f -> f.span,
@@ -408,7 +404,7 @@ type type-constraint-expr = either {
 type type-param = { name: string-id, constraints: list[type-constraint-expr], span: src-span }
 type type-constraint = { name: string-id, constraint: type-constraint-expr, span: src-span }
 
-type fn-param = { name: string-id, type-expr: ?type-expr-id, span: src-span, is-context: bool }
+type fn-param = { name: string-id, type-expr: type-expr-id, span: src-span, is-context: bool }
 
 type linkage = either {
   standard,
@@ -417,6 +413,8 @@ type linkage = either {
   llvm-intrinsic(string-id),
   exported({ fn-name: ?string-id }),
 }
+
+type inlining = either { auto, always, never }
 
 type function = {
   name: string-id,
@@ -427,8 +425,10 @@ type function = {
   signature-span: src-span,
   span: src-span,
   name-span: src-span,
-  linkage: linkage,
+  linkage,
   is-native: bool,
+  inlining,
+  is-cold: bool,
   compiler-debug: bool,
   where-constraints: list[type-constraint],
   compile-condition: ?expr-id,
@@ -485,7 +485,7 @@ type ability-defn = {
 }
 
 type ability-impl = {
-  ability-expr: ability-expr,
+  ability-expr,
   generic-impl-params: list[type-param],
   self-type: type-expr-id,
   functions: list[function-id],
@@ -569,7 +569,7 @@ ns for program {
     }
   }
 
-  fn intern-string(self: *mut program, s: string): string-id {
+  fn intern-string(self: *program, s: string): string-id {
     self.idents.intern-string(s)
   }
 
@@ -577,62 +577,62 @@ ns for program {
     self.idents.get(id)
   }
 
-  fn add-expr(self: *mut program, e: expr): expr-id {
+  fn add-expr(self: *program, e: expr): expr-id {
     self.exprs.push(e)
     self.exprs.len().trunc[u32] - 1
   }
 
-  fn add-type-expr(self: *mut program, e: type-expr): type-expr-id {
+  fn add-type-expr(self: *program, e: type-expr): type-expr-id {
     self.type-exprs.push(e)
     self.type-exprs.len().trunc[u32] - 1
   }
 
-  fn add-stmt(self: *mut program, s: stmt): stmt-id {
+  fn add-stmt(self: *program, s: stmt): stmt-id {
     self.stmts.push(s)
     self.stmts.len().trunc[u32] - 1
   }
 
-  fn add-pattern(self: *mut program, p: pattern): pattern-id {
+  fn add-pattern(self: *program, p: pattern): pattern-id {
     self.patterns.push(p)
     self.patterns.len().trunc[u32] - 1
   }
 
-  fn add-function(self: *mut program, f: function): function-id {
+  fn add-function(self: *program, f: function): function-id {
     self.functions.push(f)
     self.functions.len().trunc[u32] - 1
   }
 
-  fn add-macro(self: *mut program, m: macro-defn): macro-id {
+  fn add-macro(self: *program, m: macro-defn): macro-id {
     self.macros.push(m)
     self.macros.len().trunc[u32] - 1
   }
 
-  fn add-global(self: *mut program, g: global): global-id {
+  fn add-global(self: *program, g: global): global-id {
     self.globals.push(g)
     self.globals.len().trunc[u32] - 1
   }
 
-  fn add-type-defn(self: *mut program, t: type-defn): type-defn-id {
+  fn add-type-defn(self: *program, t: type-defn): type-defn-id {
     self.type-defns.push(t)
     self.type-defns.len().trunc[u32] - 1
   }
 
-  fn add-namespace(self: *mut program, n: namespace): namespace-id {
+  fn add-namespace(self: *program, n: namespace): namespace-id {
     self.namespaces.push(n)
     self.namespaces.len().trunc[u32] - 1
   }
 
-  fn add-ability(self: *mut program, a: ability-defn): ability-id {
+  fn add-ability(self: *program, a: ability-defn): ability-id {
     self.abilities.push(a)
     self.abilities.len().trunc[u32] - 1
   }
 
-  fn add-ability-impl(self: *mut program, a: ability-impl): ability-impl-id {
+  fn add-ability-impl(self: *program, a: ability-impl): ability-impl-id {
     self.ability-impls.push(a)
     self.ability-impls.len().trunc[u32] - 1
   }
 
-  fn add-use(self: *mut program, u: use-defn): use-id {
+  fn add-use(self: *program, u: use-defn): use-id {
     self.uses.push(u)
     self.uses.len().trunc[u32] - 1
   }
@@ -690,11 +690,11 @@ ns for program {
     }
   }
 
-  fn set-expr-span(self: *mut program, id: expr-id, new-span: src-span) {
+  fn set-expr-span(self: *program, id: expr-id, new-span: src-span) {
     let e = self.exprs.[id.widen[size]].&
     if e is {
       :bin-op(op)* -> { op.span = new-span },
-      :un-op(op)* -> { op.span = new-span },
+      :not-expr(n)* -> { n.span = new-span },
       :literal(l)* -> {
         if l is {
           :char-lit(c)* -> { c.span = new-span },
@@ -723,6 +723,7 @@ ns for program {
       :match-expr(m)* -> { m.span = new-span },
       :lambda(l)* -> { l.span = new-span },
       :builtin-expr(s)* -> { s.* = new-span },
+      :zero-literal(s)* -> { s.* = new-span },
       :static-expr(s)* -> { s.span = new-span },
       :code-expr(c)* -> { c.span = new-span },
       :qability-call(q)* -> { q.span = new-span },
@@ -772,7 +773,7 @@ ns for program {
     }
   }
 
-  fn report-error(self: *mut program, e: parse-error) {
+  fn report-error(self: *program, e: parse-error) {
     self.print-error(e)
     self.errors.push(e)
   }

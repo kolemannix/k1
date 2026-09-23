@@ -1,0 +1,34 @@
+fn greet[w: writer](context out: w)(name: string) {
+  out.writeln("hello, $name")
+}
+
+fn report(context out: *string-builder)(items: list[string]) {
+  for items { out.writeln("${it-index}: $it") }
+}
+
+fn check(context locn: k1/source-location)(ok: bool, what: string) {
+  if not ok { println("$what failed at ${locn.filename}:${locn.line}") }
+}
+
+fn collect-words(n: int): list[string] {
+  let words: list[string] = list/empty()
+  for i in 0.until(n) { words.push("w$i") }
+  words
+}
+
+fn main(): i32 {
+  let sb = string-builder/new()
+  let(context(impl writer)) out: *string-builder = sb.&
+  greet("ada")
+  report(["x", "y"])
+  print(sb.build())
+  greet(context core/io/stdout)("stdout")
+
+  check(1 + 1 == 2, "arithmetic")
+  check(1 + 1 == 3, "wishful thinking")
+
+  let a = core/arena/init(64 * core/arena/kb)
+  let words = mem/with-arena(a, collect-words(3))
+  println("$words live in the scoped arena: ${a.used-bytes()} bytes")
+  0
+}

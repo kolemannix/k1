@@ -1,8 +1,3 @@
-// The q1 (two-pass) brotli encoder, ported from the C's
-// compress_fragment_two_pass.c. Pass one records commands and literals into
-// buffers; pass two builds prefix codes from their real histograms and emits
-// the bit stream.
-
 let TWO-PASS-BLOCK-SIZE: size = 1 << 17
 let Q1-MAX-TABLE-SIZE: size = 1 << 17
 
@@ -18,7 +13,6 @@ type two-pass-arena = {
   tmp-bits: array[u16, 64],
 }
 
-// Pass-one output: command words (code | extra << 8) and raw literal bytes.
 type cmd-sink = {
   commands: buffer[u32],
   num-commands: size,
@@ -27,12 +21,12 @@ type cmd-sink = {
 }
 
 ns for cmd-sink {
-  fn push-cmd(self: *mut cmd-sink, v: u32) {
+  fn(inline) push-cmd(self: *cmd-sink, v: u32) {
     self.commands.index-unchecked(self.num-commands).* = v
     self.num-commands = self.num-commands + 1
   }
 
-  fn push-literals(self: *mut cmd-sink, src: ptr, len: size) {
+  fn(inline) push-literals(self: *cmd-sink, src: ptr, len: size) {
     mem/copy(
       dst = self.literals.data-ptr().add-bytes(self.num-literals),
       src = src,
@@ -41,17 +35,17 @@ ns for cmd-sink {
   }
 }
 
-fn hash-2p(p: ptr, shift: u32, min-match: size): size {
+fn(inline) hash-2p(p: ptr, shift: u32, min-match: size): size {
   let h = (load64-le(p) << ((8 - min-match).trunc[u32] * 8)) * HASH-MUL32
   (h >> shift).signed()
 }
 
-fn hash-2p-at-offset(v: u64, offset: u32, shift: u32, min-match: size): size {
+fn(inline) hash-2p-at-offset(v: u64, offset: u32, shift: u32, min-match: size): size {
   let h = ((v >> (8 * offset)) << ((8 - min-match).trunc[u32] * 8)) * HASH-MUL32
   (h >> shift).signed()
 }
 
-fn is-match-2p(p1: ptr, p2: ptr, min-match: size): bool {
+fn(inline) is-match-2p(p1: ptr, p2: ptr, min-match: size): bool {
   if load32-le(p1) == load32-le(p2) {
     if min-match == 4 true
     else p1.add-bytes(4).ref[u8].* == p2.add-bytes(4).ref[u8].* and
@@ -59,7 +53,7 @@ fn is-match-2p(p1: ptr, p2: ptr, min-match: size): bool {
   } else false
 }
 
-fn emit-insert-len-2p(insertlen: size, sink: *mut cmd-sink) {
+fn(inline) emit-insert-len-2p(insertlen: size, sink: *cmd-sink) {
   if insertlen < 6 {
     sink.push-cmd(insertlen.trunc[u32])
   } else if insertlen < 130 {
@@ -73,8 +67,7 @@ fn emit-insert-len-2p(insertlen: size, sink: *mut cmd-sink) {
     let tail = insertlen - 66
     let nbits = log2-floor-nonzero(tail.unsigned())
     let code = nbits + 10
-    let pow2: size = 1 << nbits.trunc[u32]
-    let extra = tail - pow2
+    let extra = tail - (1 << nbits.trunc[u32])
     sink.push-cmd((code | (extra << 8)).trunc[u32])
   } else if insertlen < 6210 {
     let extra = insertlen - 2114
@@ -88,7 +81,7 @@ fn emit-insert-len-2p(insertlen: size, sink: *mut cmd-sink) {
   }
 }
 
-fn emit-copy-len-2p(copylen: size, sink: *mut cmd-sink) {
+fn(inline) emit-copy-len-2p(copylen: size, sink: *cmd-sink) {
   if copylen < 10 {
     sink.push-cmd((copylen + 38).trunc[u32])
   } else if copylen < 134 {
@@ -102,8 +95,7 @@ fn emit-copy-len-2p(copylen: size, sink: *mut cmd-sink) {
     let tail = copylen - 70
     let nbits = log2-floor-nonzero(tail.unsigned())
     let code = nbits + 52
-    let pow2: size = 1 << nbits.trunc[u32]
-    let extra = tail - pow2
+    let extra = tail - (1 << nbits.trunc[u32])
     sink.push-cmd((code | (extra << 8)).trunc[u32])
   } else {
     let extra = copylen - 2118
@@ -111,7 +103,7 @@ fn emit-copy-len-2p(copylen: size, sink: *mut cmd-sink) {
   }
 }
 
-fn emit-copy-len-last-distance-2p(copylen: size, sink: *mut cmd-sink) {
+fn(inline) emit-copy-len-last-distance-2p(copylen: size, sink: *cmd-sink) {
   if copylen < 12 {
     sink.push-cmd((copylen + 20).trunc[u32])
   } else if copylen < 72 {
@@ -131,8 +123,7 @@ fn emit-copy-len-last-distance-2p(copylen: size, sink: *mut cmd-sink) {
     let tail = copylen - 72
     let nbits = log2-floor-nonzero(tail.unsigned())
     let code = nbits + 52
-    let pow2: size = 1 << nbits.trunc[u32]
-    let extra = tail - pow2
+    let extra = tail - (1 << nbits.trunc[u32])
     sink.push-cmd((code | (extra << 8)).trunc[u32])
     sink.push-cmd(64)
   } else {
@@ -142,7 +133,7 @@ fn emit-copy-len-last-distance-2p(copylen: size, sink: *mut cmd-sink) {
   }
 }
 
-fn emit-distance-2p(distance: size, sink: *mut cmd-sink) {
+fn(inline) emit-distance-2p(distance: size, sink: *cmd-sink) {
   let d = distance + 3
   let nbits = log2-floor-nonzero(d.unsigned()) - 1
   let prefix = (d >> nbits.trunc[u32]) & 1
@@ -152,13 +143,7 @@ fn emit-distance-2p(distance: size, sink: *mut cmd-sink) {
   sink.push-cmd((distcode | (extra << 8)).trunc[u32])
 }
 
-// Updates the hash table for positions inside the copy just emitted and
-// returns the candidate for the position at ip. third-offset is the hash
-// offset for position ip-1 in the min-match == 4 branch: the C's post-literal
-// update hashes offsets [0, 1, 0] (an upstream quirk — the last should
-// presumably be 2) while its greedy-loop update hashes [0, 1, 2]; callers
-// pass 0 or 2 to reproduce each exactly.
-fn update-table-after-copy(
+fn(inline) update-table-after-copy(
   ip: ptr, base-ip: ptr, table: buffer[i32], shift: u32, min-match: size, third-offset: u32,
 ): ptr {
   let pos = ip.diff(base-ip)
@@ -186,10 +171,11 @@ fn update-table-after-copy(
   }
 }
 
-fn create-commands(
+fn(inline) create-commands[mm: static size](
   input: ptr, block-size: size, input-size: size, base-ip: ptr,
-  table: buffer[i32], table-bits: size, min-match: size, sink: *mut cmd-sink,
+  table: buffer[i32], table-bits: size, sink: *cmd-sink,
 ) {
+  let min-match: size = core/meta/static-type-to-value[_, mm]()
   let ip = input
   let shift = (64 - table-bits).trunc[u32]
   let ip-end = input.add-bytes(block-size)
@@ -207,7 +193,6 @@ fn create-commands(
       let next-ip = ip
       let candidate = ptr/null
 
-      // Scan for a match, widening the stride on incompressible stretches.
       loop {
         let h = next-hash
         let bytes-between = (skip >> 5).widen[size]
@@ -231,7 +216,6 @@ fn create-commands(
         }
       }
 
-      // Emit the pending literals and the match, then keep matching greedily.
       {
         let base = ip
         let matched = min-match + find-match-length(
@@ -275,7 +259,6 @@ fn create-commands(
     }
   }
 
-  // Emit the remaining bytes as literals.
   if next-emit < ip-end {
     let insert = ip-end.diff(next-emit)
     emit-insert-len-2p(insert, sink)
@@ -283,9 +266,7 @@ fn create-commands(
   }
 }
 
-// The command+distance prefix codes from the recorded histograms; symbol
-// reorder differs from the one-pass layout.
-fn build-and-store-command-prefix-code-2p(s: *mut two-pass-arena, bw: *mut bit-writer) {
+fn build-and-store-command-prefix-code-2p(s: *two-pass-arena, bw: bit-writer): bit-writer {
   let histogram = s.cmd-histo.&.as-buffer()
   let depth = s.cmd-depth.&.as-buffer()
   let bits = s.cmd-bits.&.as-buffer()
@@ -329,13 +310,11 @@ fn build-and-store-command-prefix-code-2p(s: *mut two-pass-arena, bw: *mut bit-w
     tmp-depth.index-unchecked(448 + 8 * i).* = depth.index-unchecked(16 + i).*
     i = i + 1
   }
-  store-huffman-tree(tmp-depth, NUM_COMMAND_SYMBOLS, tree, bw)
+  let bw = store-huffman-tree(tmp-depth, NUM_COMMAND_SYMBOLS, tree, bw)
   store-huffman-tree(depth.drop(64), 64, tree, bw)
 }
 
-fn store-commands(
-  s: *mut two-pass-arena, sink: *cmd-sink, bw: *mut bit-writer,
-) {
+fn store-commands(s: *two-pass-arena, sink: *cmd-sink, bw: bit-writer): bit-writer {
   let lit-histo = s.lit-histo.&.as-buffer()
   let cmd-histo = s.cmd-histo.&.as-buffer()
   let lit-depth = s.lit-depth.&.as-buffer()
@@ -355,7 +334,7 @@ fn store-commands(
     lit-histo.index-unchecked(lit).* = lit-histo.index-unchecked(lit).* + 1
     i = i + 1
   }
-  build-and-store-huffman-tree-fast(
+  let bw = build-and-store-huffman-tree-fast(
     tree, lit-histo, sink.num-literals, 8, lit-depth, lit-bits, bw)
 
   i = 0
@@ -368,7 +347,7 @@ fn store-commands(
   cmd-histo.index-unchecked(2).* = cmd-histo.index-unchecked(2).* + 1
   cmd-histo.index-unchecked(64).* = cmd-histo.index-unchecked(64).* + 1
   cmd-histo.index-unchecked(84).* = cmd-histo.index-unchecked(84).* + 1
-  build-and-store-command-prefix-code-2p(s, bw)
+  bw = build-and-store-command-prefix-code-2p(s, bw)
 
   let lit-pos: size = 0
   i = 0
@@ -376,20 +355,21 @@ fn store-commands(
     let cmd = sink.commands.index-unchecked(i).*
     let code = (cmd & 0xFF).widen[size]
     let extra = (cmd >> 8).widen[u64]
-    bw.write-bits(cmd-depth.index-unchecked(code).*.widen[size], cmd-bits.index-unchecked(code).*.widen[u64])
-    bw.write-bits(k-num-extra-bits.[code].widen[size], extra)
+    bw = bw.write-bits(cmd-depth.index-unchecked(code).*.widen[size], cmd-bits.index-unchecked(code).*.widen[u64])
+    bw = bw.write-bits(k-num-extra-bits.[code].widen[size], extra)
     if code < 24 {
       let insert = k-insert-offset.[code].widen[size] + extra.signed()
       let j: size = 0
       while j < insert {
         let lit = sink.literals.index-unchecked(lit-pos).*.widen[size]
-        bw.write-bits(lit-depth.index-unchecked(lit).*.widen[size], lit-bits.index-unchecked(lit).*.widen[u64])
+        bw = bw.write-bits(lit-depth.index-unchecked(lit).*.widen[size], lit-bits.index-unchecked(lit).*.widen[u64])
         lit-pos = lit-pos + 1
         j = j + 1
       }
     }
     i = i + 1
   }
+  bw
 }
 
 fn bits-entropy(population: buffer[u32], count: size): f64 {
@@ -405,16 +385,13 @@ fn bits-entropy(population: buffer[u32], count: size): f64 {
   if sum != 0 {
     retval = retval + sum.as[f64] * fast-log2(sum)
   }
-  // At least one bit per literal is needed.
   if retval < sum.as[f64] {
     retval = sum.as[f64]
   }
   retval
 }
 
-// Skip compression when few backward references were found and the literal
-// entropy is close to 8 bits: an uncompressed block is ~3x faster to emit.
-fn should-compress-2p(s: *mut two-pass-arena, input: ptr, input-size: size, num-literals: size): bool {
+fn should-compress-2p(s: *two-pass-arena, input: ptr, input-size: size, num-literals: size): bool {
   let MIN-RATIO-2P = 0.98
   let SAMPLE-RATE: size = 43
   let corpus-size = input-size.as[f64]
@@ -435,13 +412,13 @@ fn should-compress-2p(s: *mut two-pass-arena, input: ptr, input-size: size, num-
 }
 
 fn compress-fragment-two-pass(
-  s: *mut two-pass-arena, input-start: ptr, fragment-size: size, is-last: bool,
+  s: *two-pass-arena, input-start: ptr, fragment-size: size, is-last: bool,
   command-buf: buffer[u32], literal-buf: buffer[u8],
-  table: buffer[i32], table-size: size, bw: *mut bit-writer,
-) {
+  table: buffer[i32], table-size: size, bw: bit-writer,
+): bit-writer {
+  let bw = bw
   let initial-pos = bw.pos
   let table-bits = log2-floor-nonzero(table-size.unsigned())
-  let min-match: size = if table-bits <= 15 4 else 6
   let base-ip = input-start
 
   let input = input-start
@@ -454,27 +431,27 @@ fn compress-fragment-two-pass(
       literals = literal-buf,
       num-literals = 0,
     }
-    create-commands(input, block-size, input-size, base-ip, table, table-bits, min-match, sink.&)
-    if should-compress-2p(s, input, block-size, sink.num-literals) {
-      store-metablock-header(block-size, false, bw)
-      bw.write-bits(13, 0) // no block splits, no contexts
-      store-commands(s, sink.&, bw)
+    if table-bits <= 15 {
+      create-commands[4](input, block-size, input-size, base-ip, table, table-bits, sink.&)
     } else {
-      store-metablock-header(block-size, true, bw)
-      emit-uncompressed-body(input, block-size, bw)
+      create-commands[6](input, block-size, input-size, base-ip, table, table-bits, sink.&)
+    }
+    if should-compress-2p(s, input, block-size, sink.num-literals) {
+      bw = store-metablock-header(block-size, false, bw).write-bits(13, 0)
+      bw = store-commands(s, sink.&, bw)
+    } else {
+      bw = emit-uncompressed-body(input, block-size, store-metablock-header(block-size, true, bw))
     }
     input = input.add-bytes(block-size)
     input-size = input-size - block-size
   }
 
-  // If output is larger than one uncompressed metablock, rewrite it.
   if bw.pos - initial-pos > 31 + (fragment-size << 3) {
-    emit-uncompressed-meta-block(input-start, input-start.add-bytes(fragment-size), initial-pos, bw)
+    bw = emit-uncompressed-meta-block(input-start, input-start.add-bytes(fragment-size), initial-pos, bw)
   }
 
   if is-last {
-    bw.write-bits(1, 1) // islast
-    bw.write-bits(1, 1) // isempty
-    bw.pos = ((bw.pos + 7) >> 3) << 3
+    bw = bw.write-bits(1, 1).write-bits(1, 1).align-to-byte()
   }
+  bw
 }

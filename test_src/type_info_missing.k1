@@ -1,0 +1,6 @@
+fn main(): i32 {
+  println("before")
+  println(types/type-id/make(999999).name())
+  0
+}
+//abortmsg: no type info for type id 999999

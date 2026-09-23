@@ -1,11 +1,3 @@
-ns build {
-  fn module(): k1/module {
-    let m = k1/module/new()
-    m.dep("cyca")
-    m
-  }
-}
-
 fn main(): i32 { 0 }
 
 //errmsg: Module dependency cycle: cyca -> cycb -> cyca

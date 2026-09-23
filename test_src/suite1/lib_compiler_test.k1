@@ -5,4 +5,9 @@ fn test() {
   assert(loc.filename == "lib_compiler_test.k1")
   assert(loc.line == 4)
   assert(test-compile(2 + "asdf") is :some _)
+  assert(k1/module-dir().ends-with("/test_src/suite1"))
+  let static-dir: string = #static k1/module-dir()
+  assert(static-dir == k1/module-dir())
+  let ext = k1/host-platform.dylib-ext()
+  assert(ext == "dylib" or ext == "so")
 }

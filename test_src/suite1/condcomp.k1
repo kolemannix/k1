@@ -33,8 +33,20 @@ type wrapper = { value: int }
   fn yes(self): int { 999 }
 }
 
-#if MY_VALUE_NEG fn gone(): int { crash("does not compile") }
+#if MY_VALUE_NEG fn gone(): int { crash(undefined-symbol) }
 #if MY_VALUE fn here(): int { 42 }
+
+fn pick[t](): int {
+  #if types/type-eq[t, u8]() { 1 } else { 2 }
+}
+
+type color = either { red, green }
+fn pick-color[t](): color { #if types/size[t] == 1 { :red } else { :green } }
+fn choose[t](): string {
+  #if pick-color[t]() is { :red -> "red", _ -> "green" }
+}
+fn call-pick-int(): int { pick[int]() }
+fn both-picks(): int { call-pick-int() + pick[int]() + pick[u8]() }
 
 fn test() {
   use core/k1
@@ -62,6 +74,15 @@ fn test() {
   assert-equals(w.yes(), 7)
 
   assert-equals(here(), 42)
+
+  let macos = #if k1/platform is { :posix-macos -> true, _ -> false }
+  assert-equals(macos, k1/platform-macos)
+  assert-equals(choose[u8](), "red")
+  assert-equals(choose[u64](), "green")
+
+  let picks: int = #static both-picks()
+  assert-equals(picks, 5)
+  assert-equals(both-picks(), 5)
 
   .{}
 }

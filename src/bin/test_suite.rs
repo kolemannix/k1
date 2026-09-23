@@ -10,28 +10,44 @@ use std::{
 };
 
 use anyhow::{Result, bail};
-use clap::Parser;
 use colored::Colorize;
 use inkwell::context::Context;
 use k1::{
-    compiler::{self, Command, CompileProgramError},
+    compiler::{self, Command, CompileProgramError, CompileRequest},
     typer::{ErrorKind, K1Message, MessageLevel},
 };
 use std::os::unix::prelude::ExitStatusExt;
 
-#[derive(Parser, Debug, Clone)]
-#[command(author, version, about, long_about = None)]
-pub struct TestSuiteClapArgs {
-    /// Run in parallel if true
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-    pub parallel: bool,
+const USAGE: &str = "Usage: k1_test [filter] [--serial] [--tests-dir <dir>]
 
-    /// Filters test cases by name substring
-    pub filter: Option<String>,
+  filter        Only run single-file cases whose name contains it
+  --serial      Run cases one at a time, in name order
+  --tests-dir   Test source root (default: test_src)
+";
 
-    /// The root directory of the test sources to run
-    #[arg(long)]
-    pub tests_dir: Option<String>,
+struct TestSuiteArgs {
+    serial: bool,
+    filter: Option<String>,
+    tests_dir: String,
+}
+
+fn parse_args() -> Result<TestSuiteArgs, lexopt::Error> {
+    use lexopt::prelude::*;
+    let mut parser = lexopt::Parser::from_env();
+    let mut args = TestSuiteArgs { serial: false, filter: None, tests_dir: "test_src".to_string() };
+    while let Some(arg) = parser.next()? {
+        match arg {
+            Long("serial") => args.serial = true,
+            Long("tests-dir") => args.tests_dir = parser.value()?.string()?,
+            Short('h') | Long("help") => {
+                print!("{USAGE}");
+                std::process::exit(0);
+            }
+            Value(filter) if args.filter.is_none() => args.filter = Some(filter.string()?),
+            _ => return Err(arg.unexpected()),
+        }
+    }
+    Ok(args)
 }
 
 #[derive(Debug)]
@@ -74,7 +90,7 @@ fn backtrace_symbolizer_available() -> bool {
 fn get_test_expectation(test_file: &Path) -> TestExpectation {
     let mut path = test_file.canonicalize().unwrap();
     if path.is_dir() {
-        match k1::compiler::detect_module_root_file(&path.to_string_lossy()) {
+        match k1::compiler::module_root_file(&path.to_string_lossy()) {
             Some(root) => path = root,
             None => return TestExpectation::ExitCode { code: 0, message: None },
         }
@@ -105,28 +121,19 @@ fn get_test_expectation(test_file: &Path) -> TestExpectation {
     }
 }
 
-fn test_file<P: AsRef<Path>>(ctx: &Context, path: P) -> Result<()> {
+fn test_file<P: AsRef<Path>>(ctx: &Context, k1_home: &str, path: P) -> Result<()> {
     let filename = path.as_ref().file_name().unwrap().to_str().unwrap();
-    let args = k1::compiler::Args {
-        optimize: false,
-        debug: false,
-        sanitize: false,
-        filc: false,
-        no_std: false,
-        emit_llvm: true,
-        dump_module: false,
-        dump_idents: false,
-        profile: false,
-        target: None,
-        chatty: false,
-        optimize_ir: true,
-        cache: false,
-        k1_home_override: None,
-        command: Command::Build { file: Some(path.as_ref().to_owned()) },
+    let mut request = match CompileRequest::new(path.as_ref().to_owned(), Command::Build, None) {
+        Ok(request) => request,
+        Err(message) => bail!("{filename}: {message}"),
     };
-    let compile_result = compiler::compile_program(&args);
+    request.tools.emit_llvm = true;
+    request.tools.cache = false;
+    request.k1_home = Some(k1_home.to_string());
+    let compile_result = compiler::compile_program(request);
     let expectation = get_test_expectation(path.as_ref());
     match compile_result {
+        Err(CompileProgramError::Build(message)) => bail!("{filename}: {message}"),
         Err(CompileProgramError::TyperFailure(module)) => {
             let messages = module.messages.borrow();
             if let Some(parse_error) = module.ast.errors.first() {
@@ -190,7 +197,7 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P) -> Result<()> {
                 TestExpectation::ExitCode { .. } | TestExpectation::AbortErrorMessage { .. }
             );
             if expect_exit {
-                compiler::codegen_module(&args, ctx, &mut typed_program)?;
+                compiler::codegen_module(ctx, &mut typed_program)?;
                 let mut run_cmd = std::process::Command::new(k1::kpath::join_pathbuf(
                     &typed_program.ast.idents,
                     typed_program.config.out_dir,
@@ -263,7 +270,22 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P) -> Result<()> {
                     }
                 }
             } else {
-                bail!("{name} Expected failed compilation but actually succeeded")
+                let TestExpectation::CompileErrorMessage { message } = &expectation else {
+                    unimplemented!("error line test")
+                };
+                if compiler::codegen_module(ctx, &mut typed_program).is_ok() {
+                    bail!("{name} Expected failed compilation but actually succeeded")
+                }
+                let messages = typed_program.messages.borrow();
+                let Some(err) = messages.iter().find(|e| e.level == MessageLevel::Error) else {
+                    bail!("{name}: Failed after typechecking but had no errors")
+                };
+                if !typed_program.ident_str(err.message).contains(message.as_str()) {
+                    bail!(
+                        "{name}: Failed with unexpected message: {}",
+                        typed_program.ident_str(err.message)
+                    )
+                }
             }
         }
     };
@@ -271,9 +293,12 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, path: P) -> Result<()> {
 }
 
 pub fn main() -> Result<()> {
-    let test_suite_args = TestSuiteClapArgs::parse();
-    eprintln!("{:#?}", test_suite_args);
-    let test_dir = test_suite_args.tests_dir.unwrap_or("test_src".to_string());
+    let test_suite_args = match parse_args() {
+        Ok(args) => args,
+        Err(e) => bail!("{e}\n{USAGE}"),
+    };
+    let test_dir = test_suite_args.tests_dir;
+    let k1_home = std::env::current_dir()?.to_str().unwrap().to_string();
     let mut all_tests = Vec::new();
     for dir_entry in std::fs::read_dir(test_dir)? {
         let dir_entry = dir_entry?;
@@ -303,7 +328,7 @@ pub fn main() -> Result<()> {
         }
     }
 
-    let parallel = test_suite_args.parallel;
+    let parallel = !test_suite_args.serial;
 
     if !parallel {
         all_tests.sort_by(|p1, p2| {
@@ -329,7 +354,7 @@ pub fn main() -> Result<()> {
                         let ctx = Context::create();
                         let filename = filename.to_string();
                         eprintln!("{filename:040}...");
-                        let result = test_file(&ctx, test.as_path());
+                        let result = test_file(&ctx, &k1_home, test.as_path());
                         match result {
                             Ok(_) => {
                                 eprintln!("{filename:040} {}", "PASS".green());
@@ -357,7 +382,7 @@ pub fn main() -> Result<()> {
             let ctx = Context::create();
             let filename = test.as_path().file_name().unwrap().to_str().unwrap();
             eprintln!("{filename:040}...");
-            let result = test_file(&ctx, test.as_path());
+            let result = test_file(&ctx, &k1_home, test.as_path());
             match result {
                 Ok(_) => {
                     eprintln!("{filename:040} {}", "PASS".green());

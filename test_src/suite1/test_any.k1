@@ -21,9 +21,9 @@ fn type-variant-name(type-id): string {
 
 fn test() {
   let i: int = 10
-  let int-ptr = make-any(&i)
+  let int-ptr = make-any(i.&)
   let s = .{ x = 1, y = 100 }
-  let struct-ptr = make-any(&s)
+  let struct-ptr = make-any(s.&)
   assert-equals(kind-of-any(int-ptr), "int")
   assert-equals(kind-of-any(struct-ptr), "struct")
 }

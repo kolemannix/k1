@@ -1,0 +1,64 @@
+ns pre {
+  fn squares(n: int): span[int] {
+    let out: list[int] = []
+    for i in 1.until(n + 1) { out.push(i * i) }
+    out.as-span()
+  }
+}
+
+fn add-static[i: static int](x: int): int {
+  core/meta/static-type-to-value[_, i]() + x
+}
+
+type matrix[n: static size] = { rows: array[array[i64, n], n] }
+
+ns for matrix {
+  fn dim[n](_self: *matrix[n]): size { core/meta/static-type-to-value[_, n]() }
+
+  fn identity[n: static size](): matrix[n] {
+    let m: matrix[n] = .0
+    for i in 0.until(m.dim()) { m.rows.[i].[i] = 1 }
+    m
+  }
+
+  fn mul[n](a: *matrix[n], b: *matrix[n]): matrix[n] {
+    let out: matrix[n] = .0
+    let n = a.dim()
+    for i in 0.until(n) {
+      for j in 0.until(n) {
+        let acc = 0
+        for k in 0.until(n) { acc = acc + a.rows.[i].[k] * b.rows.[k].[j] }
+        out.rows.[i].[j] = acc
+      }
+    }
+    out
+  }
+}
+
+fn main(): i32 {
+  println("${add-static[3](4)} ${add-static[40](2)}")
+  let five: static int = 5
+  println("${add-static[type-of(five)](10)}")
+
+  let a: matrix[2] = .{ rows = [[1, 2], [3, 4]] }
+  let sq = a.&.mul(a.&)
+  println("${sq.rows} dim ${sq.dim()} size ${types/size[matrix[2]]}")
+  let i3 = matrix/identity[3]()
+  println("${i3.rows} size ${types/size[matrix[3]]}")
+  let mismatch: ?string = test-compile(a.&.mul(i3.&))
+  println(mismatch.!)
+
+  let total = 0
+  #for pre/squares(4) {
+    total = total + it
+    println("unrolled step $it, total $total")
+  }
+
+  let c: 'c' = 'c'
+  let pi: 3.14 = 3.14
+  let tag: "showcase" = "showcase"
+  println("${c.from-static()} ${pi.from-static()} ${tag.from-static()}")
+  let wrong-literal: ?string = test-compile('d': 'c')
+  println(wrong-literal.!)
+  0
+}

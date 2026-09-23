@@ -1,6 +1,7 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
 
+use super::trace::{FrameId, TraceKind};
 use super::*;
 
 impl TypedProgram {
@@ -16,27 +17,12 @@ impl TypedProgram {
                     return None;
                 }
                 if self.globals.get(global_id).initial_value.is_pending() {
-                    let ast_id = self.globals.get(global_id).ast_id;
-                    if let Err(e) = self.eval_global_body(ast_id) {
+                    if let Err(e) = self.eval_global_body(global_id) {
                         self.report(e);
                         return None;
                     }
                 }
                 self.globals.get(global_id).initial_value.as_value()
-            }
-            TypedExpr::Call { call_id, .. } => {
-                // desugar calls to zeroed() to the optimized zero repr for that type
-                let call = self.calls.get(*call_id);
-                let function_id = call.callee.maybe_function_id()?;
-                let function = self.functions.get(function_id);
-                if let Some(Builtin::Ir(BuiltinIr::Zeroed)) = function.builtin_type {
-                    let return_type_id = self.exprs.get_type(expr_id);
-                    let expr_span = self.exprs.get_span(expr_id);
-                    self.warn_if_not_zerosafe(return_type_id, expr_span);
-                    Some(self.static_values.add(StaticValue::Zero(return_type_id)))
-                } else {
-                    None
-                }
             }
             _ => None,
         }
@@ -72,22 +58,44 @@ impl TypedProgram {
         if let Err(e) = self.eval_function_body(function_id) {
             self.report(e)
         }
-        match self.get_function(function_id).body_failure {
-            None => Ok(()),
+        let function = self.get_function(function_id);
+        let needs_body = matches!(function.linkage, Linkage::Standard | Linkage::Exported { .. });
+        match function.body_failure {
             Some(_) => {
+                kbail!(self, span, "Function '{}' failed to compile", function.name)
+            }
+            None if needs_body && function.body_block.is_none() => {
                 kbail!(
                     self,
                     span,
-                    "Function '{}' failed to compile",
-                    self.get_function(function_id).name
+                    "Function '{}' has no body",
+                    self.function_id_to_string(function_id, false)
                 )
             }
+            None => Ok(()),
         }
     }
 
-    fn compile_function_for_exec(&mut self, function_id: FunctionId, span: SpanId) -> K1Result<()> {
-        self.require_function_body(function_id, span)?;
-        if let Err(e) = ir::compile_function(self, function_id) {
+    pub(super) fn synth_phony_if_generic_pass(
+        &mut self,
+        ctx: EvalExprContext,
+        span: SpanId,
+    ) -> Option<TypedExprId> {
+        if !ctx.is_generic_pass() {
+            return None;
+        }
+        Some(self.synth_phony_expected_type(ctx.expected_type_id, span))
+    }
+
+    pub fn compile_function_for_exec(
+        &mut self,
+        function_id: FunctionId,
+        requester_frame: Option<FrameId>,
+        span: SpanId,
+    ) -> K1Result<()> {
+        if let Err(e) = ir::compile_function(self, function_id, requester_frame)
+            && self.get_function(function_id).body_failure.is_none()
+        {
             self.get_function_mut(function_id).body_failure = Some(e);
             self.report(e);
         }
@@ -96,20 +104,19 @@ impl TypedProgram {
 
     pub fn compile_all_pending_ir(&mut self, on_behalf_of_span: SpanId) -> K1Result<()> {
         loop {
-            if let Some(function_id) = self.ir.units_pending_compile.keys().next().copied() {
-                self.ir.units_pending_compile.remove(&function_id);
-                if let Err(e) = self.compile_function_for_exec(function_id, on_behalf_of_span) {
-                    self.ir.units_pending_compile.insert(function_id, ());
+            if let Some((function_id, requester)) = self.ir.units_pending_compile.pop() {
+                if let Err(e) =
+                    self.compile_function_for_exec(function_id, requester, on_behalf_of_span)
+                {
+                    self.ir.units_pending_compile.push(function_id, requester);
                     return Err(e);
                 }
-            } else if let Some(global_id) = self.ir.globals_pending_eval.keys().next().copied() {
-                self.ir.globals_pending_eval.remove(&global_id);
-                let ast_id = self.globals.get(global_id).ast_id;
-                if let Err(e) = self.eval_global_body(ast_id) {
+            } else if let Some((global_id, ())) = self.ir.globals_pending_eval.pop() {
+                if let Err(e) = self.eval_global_body(global_id) {
                     self.report(e)
                 }
                 if let GlobalInitialValue::Failed(_) = self.globals.get(global_id).initial_value {
-                    self.ir.globals_pending_eval.insert(global_id, ());
+                    self.ir.globals_pending_eval.push(global_id, ());
                     kbail!(
                         self,
                         on_behalf_of_span,
@@ -162,7 +169,6 @@ impl TypedProgram {
 
         let parsed_expr_as_block =
             self.ensure_parsed_expr_to_block(parsed_expr, ParsedBlockKind::FunctionBody);
-        let expr_span = parsed_expr_as_block.span;
         let static_block_scope =
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, ScopeOwnerId::None);
         let mut cur_scope = ctx.scope_id;
@@ -196,7 +202,7 @@ impl TypedProgram {
             self.scopes.mask_variable(static_block_scope, *name);
         }
 
-        let static_eval_ctx = ctx.with_scope(static_block_scope);
+        let static_eval_ctx = ctx.with_scope(static_block_scope).without_inference();
         let expr = self.eval_block(&parsed_expr_as_block, static_eval_ctx, true)?;
         let is_debug = self.ast.exprs.is_debug(parsed_expr);
         if is_debug {
@@ -204,8 +210,7 @@ impl TypedProgram {
         }
 
         ir::compile_top_level_expr(self, expr, input_parameters, is_debug)?;
-        self.compile_all_pending_ir(expr_span)?;
-        ir::optimize_unit(self, IrUnitId::Expr(expr));
+        ir::optimize_unit(self, IrUnitId::Expr(expr))?;
         if is_debug {
             eprintln!(
                 "executing optimized unit.\n{}",
@@ -221,23 +226,19 @@ impl TypedProgram {
         ctx: EvalExprContext,
         input_parameters: &[(VariableId, StaticValueId)],
     ) -> K1Result<StaticValueId> {
-        let span = self.ast.exprs.get(parsed_expr).get_span();
-        let infer_start = if ctx.is_inference() { Some(self.timing.clock.raw()) } else { None };
-        let result = self.do_with_vm(span, |k1, vm| {
+        let span = self.ast.exprs.get_span(parsed_expr);
+        self.do_with_vm(span, ctx.trace_flags(), |k1, vm| {
             k1.execute_parsed_expr_with_vm(vm, parsed_expr, ctx, input_parameters)
-        });
-        if let Some(start) = infer_start {
-            self.timing.total_infer_execs += 1;
-            self.timing.total_infer_exec_nanos += self.timing.clock.elapsed_nanos(start) as i64;
-        }
-        result
+        })
     }
 
     pub(super) fn do_with_vm<T>(
         &mut self,
-        _span: SpanId,
+        span: SpanId,
+        trace_flags: u8,
         mut f: impl FnMut(&mut TypedProgram, &mut vm::Vm) -> T,
     ) -> T {
+        let frame = self.trace_push(TraceKind::StaticExec, span.as_u32(), trace_flags);
         let (mut vm, used_alt) = match *std::mem::take(&mut self.vm) {
             None => {
                 let maybe_alt = self.vm_alts.pop();
@@ -260,7 +261,7 @@ impl TypedProgram {
             debug!("Restoring alt VM to pool");
             self.vm_alts.push(vm);
         }
-
+        self.trace_pop(frame);
         res
     }
 
@@ -270,7 +271,7 @@ impl TypedProgram {
         function_parameters: &[StaticValueId],
         span: SpanId,
     ) -> K1Result<StaticValueId> {
-        self.do_with_vm(span, |k1, vm| {
+        self.do_with_vm(span, 0, |k1, vm| {
             let result =
                 Self::static_exec_function_with_vm(k1, vm, function_id, function_parameters, span);
             vm.reset(k1.global_id_k1_arena);
@@ -283,10 +284,9 @@ impl TypedProgram {
         function_id: FunctionId,
         span: SpanId,
     ) -> K1Result<()> {
-        k1.compile_function_for_exec(function_id, span)?;
-        k1.compile_all_pending_ir(span)?;
-        ir::optimize_unit(k1, IrUnitId::Function(function_id));
-        Ok(())
+        let requester = k1.trace.top();
+        k1.compile_function_for_exec(function_id, requester, span)?;
+        ir::optimize_unit(k1, IrUnitId::Function(function_id))
     }
 
     /// Compile, optimize, and run; no VM reset, so callers control when the
@@ -333,7 +333,7 @@ impl TypedProgram {
             &[],
         )?;
         let StaticValue::Bool(condition_bool) = self.static_values.get(vm_cond_result) else {
-            let cond_span = self.ast.get_expr_span(cond);
+            let cond_span = self.ast.exprs.get_span(cond);
             kbail!(self, cond_span, "Condition is not a boolean");
         };
         Ok(*condition_bool)
@@ -343,12 +343,21 @@ impl TypedProgram {
         &mut self,
         parsed_global_id: ParsedGlobalId,
         scope_id: ScopeId,
-    ) -> K1Result<Option<VariableId>> {
-        if let Some(global_id) = self.global_ast_mappings.get(&parsed_global_id) {
-            return Ok(Some(self.globals.get(*global_id).variable_id));
+    ) -> K1Result<Option<TypedGlobalId>> {
+        if let ParsedGlobalDeclareOutcome::Declared(global_id) =
+            self.ast.globals.get(parsed_global_id).typer_state
+        {
+            return Ok(Some(global_id));
         }
         let parsed = *self.ast.get_global(parsed_global_id);
         if !self.execute_static_condition(parsed.compile_condition, scope_id) {
+            self.ast.globals.get_mut(parsed_global_id).typer_state =
+                ParsedGlobalDeclareOutcome::IfDefedOut;
+            if cfg!(feature = "lsp") {
+                let span = self.ast.spans.get(parsed.span);
+                let kind = parse::SemanticTokenKind::Comment;
+                parse::add_semantic_token(&mut self.ast, parse::SemanticToken { span, kind });
+            }
             return Ok(None);
         }
         let owner_ns = match self.scopes.get_scope(scope_id).owner_id {
@@ -403,60 +412,65 @@ impl TypedProgram {
         if scope_id == self.scopes.mem_scope_id && parsed.name == self.ast.idents.b.arena_tmp {
             self.global_id_k1_arena = Some(global_id)
         };
-        self.global_ast_mappings.insert(parsed_global_id, global_id);
+        self.ast.globals.get_mut(parsed_global_id).typer_state =
+            ParsedGlobalDeclareOutcome::Declared(global_id);
         self.scopes.add_variable(scope_id, parsed.name, variable_id);
 
         self.emit_ls_entity(parsed.name_span, LsEntityKind::Variable { variable_id });
 
-        Ok(Some(variable_id))
+        Ok(Some(global_id))
     }
 
-    pub fn eval_global_body(&mut self, parsed_global_id: ParsedGlobalId) -> K1Result<()> {
-        let Some(global_id) = self.global_ast_mappings.get(&parsed_global_id).copied() else {
-            // This means we failed to compile the definition; or we have a bug!
-            // TODO: Store failures so we can be certain which is true!
-            debug!("skipping rest of global body");
-            return Ok(());
-        };
-        // Evaluation is one-shot; the pre-execution drain may get here before the body phase
+    pub fn get_global_name(&self, global_id: TypedGlobalId) -> StringId {
+        self.variables.get(self.globals.get(global_id).variable_id).name
+    }
+
+    pub fn eval_global_body(&mut self, global_id: TypedGlobalId) -> K1Result<()> {
+        // the pre-execution drain may get here before the body phase
         if !self.globals.get(global_id).initial_value.is_pending() {
             return Ok(());
         }
-        if self.globals_in_progress.contains(&global_id) {
-            let global_name = |id: &TypedGlobalId| {
-                self.ident_str(self.variables.get(self.globals.get(*id).variable_id).name)
-            };
+        if self.trace.stack_contains_key(TraceKind::GlobalEval, global_id.as_u32()) {
+            let name = self.get_global_name(global_id);
             let mut cycle = String::new();
-            for id in self.globals_in_progress.iter() {
-                cycle.push_str(global_name(id));
+            for key in self.trace.stack_keys(TraceKind::GlobalEval) {
+                let stack_global_id = TypedGlobalId::from_u32(key).unwrap();
+                cycle.push_str(self.ident_str(self.get_global_name(stack_global_id)));
                 cycle.push_str(" -> ");
             }
-            cycle.push_str(global_name(&global_id));
-            kbail!(
-                self,
-                self.ast.get_global(parsed_global_id).span,
-                "Global initializer cycle: {}",
-                cycle,
-            );
+            cycle.push_str(self.ident_str(name));
+            let span = self.globals.get(global_id).span;
+            kbail!(self, span, "Global initializer cycle: {}", cycle,);
         }
-        self.globals_in_progress.push(global_id);
-        let result =
-            self.with_clean_inference(|k1| k1.eval_global_body_inner(parsed_global_id, global_id));
-        let popped = self.globals_in_progress.pop();
-        debug_assert_eq!(popped, Some(global_id));
+        let result = self.traced(TraceKind::GlobalEval, global_id.as_u32(), 0, |k1| {
+            k1.with_clean_inference(|k1| k1.eval_global_body_inner(global_id))
+        });
         if let Err(e) = result {
             self.globals.get_mut(global_id).initial_value = GlobalInitialValue::Failed(e);
         }
         result
     }
-
-    pub(super) fn eval_global_body_inner(
+    pub fn eval_global_body_from_parsed(
         &mut self,
         parsed_global_id: ParsedGlobalId,
-        global_id: TypedGlobalId,
     ) -> K1Result<()> {
-        let parsed_global = *self.ast.get_global(parsed_global_id);
+        match self.ast.globals.get(parsed_global_id).typer_state {
+            ParsedGlobalDeclareOutcome::Parsed => {
+                kbail!(
+                    self,
+                    self.ast.globals.get(parsed_global_id).span,
+                    "[internal error] eval undeclared global"
+                )
+            }
+            ParsedGlobalDeclareOutcome::IfDefedOut => Ok(()),
+            ParsedGlobalDeclareOutcome::Failed => Ok(()),
+            ParsedGlobalDeclareOutcome::Declared(global_id) => self.eval_global_body(global_id),
+        }
+    }
+
+    pub(super) fn eval_global_body_inner(&mut self, global_id: TypedGlobalId) -> K1Result<()> {
         let typed_global = self.globals.get(global_id);
+        let global_span = typed_global.span;
         let is_external = typed_global.is_external;
         let parsed_expr = typed_global.parsed_expr;
         let scope_id = typed_global.parent_scope;
@@ -465,41 +479,34 @@ impl TypedProgram {
         let value_expr_id = if is_external {
             match parsed_expr {
                 None => {
-                    // Evaluated, but there is no compile-time value: storage arrives at
-                    // link time. Recording this keeps evaluation one-shot
                     self.globals.get_mut(global_id).initial_value = GlobalInitialValue::Uninit;
                     return Ok(());
                 }
                 Some(_id) => {
-                    kbail!(self, parsed_global.span, "External globals cannot have initializers");
+                    kbail!(self, global_span, "External globals cannot have initializers");
                 }
             }
         } else {
             match parsed_expr {
-                None => kbail!(self, parsed_global.span, "Global has no initializer"),
+                None => kbail!(self, global_span, "non-extern global cannot be uninit"),
                 Some(id) => id,
             }
         };
 
-        let global_name = parsed_global.name;
-        let global_span = parsed_global.span;
+        let expected_type_for_execution = self.get_type_family_type(declared_type);
 
-        let expected_type_for_execution = match self.get_static_type_of_type(declared_type) {
-            Some(s) => s.family_type_id,
-            None => declared_type,
-        };
-
-        let static_value_id = if let ParsedExpr::Builtin(span) = self.ast.exprs.get(value_expr_id) {
-            let span = *span;
+        let static_value_id = if let ParsedExpr::Builtin = self.ast.exprs.get(value_expr_id) {
+            let span = self.ast.exprs.get_span(value_expr_id);
+            let global_name = self.variables.get(variable_id).name;
             self.eval_builtin_global(global_name, scope_id, expected_type_for_execution, span)?
         } else if let ParsedExpr::Call(call) = self.ast.exprs.get(value_expr_id)
             && call.name.name == self.ast.idents.b.module_params
             && {
-                let path = self.ast.mem.getn(call.name.path);
+                let path = self.ast.mem.getn(call.name.path(&self.ast.mem));
                 path.len() == 1 && path[0].name == self.ast.idents.b.k1
             }
         {
-            let (call_span, call_args) = (call.span, call.args);
+            let (call_span, call_args) = (self.ast.exprs.get_span(value_expr_id), call.args);
             self.handle_module_params_decl_call(
                 global_id,
                 call_span,
@@ -520,6 +527,7 @@ impl TypedProgram {
         match self.get_static_type_of_type(declared_type) {
             None => {
                 if let Err(msg) = self.check_types(declared_type, static_value_type_id, scope_id) {
+                    let global_name = self.variables.get(variable_id).name;
                     kbail!(self, global_span, "Type mismatch for global {}: {}", global_name, msg);
                 }
             }
@@ -561,12 +569,12 @@ impl TypedProgram {
     ) -> K1Result<StaticValueId> {
         let name = self.ident_str(defn_name);
         let float = match (name, expected_type_id) {
-            ("NAN", F32_TYPE_ID) => Some(TypedFloatValue::F32(f32::NAN)),
-            ("INFINITY", F32_TYPE_ID) => Some(TypedFloatValue::F32(f32::INFINITY)),
-            ("NEG_INFINITY", F32_TYPE_ID) => Some(TypedFloatValue::F32(f32::NEG_INFINITY)),
-            ("NAN", F64_TYPE_ID) => Some(TypedFloatValue::F64(f64::NAN)),
-            ("INFINITY", F64_TYPE_ID) => Some(TypedFloatValue::F64(f64::INFINITY)),
-            ("NEG_INFINITY", F64_TYPE_ID) => Some(TypedFloatValue::F64(f64::NEG_INFINITY)),
+            ("nan", F32_TYPE_ID) => Some(TypedFloatValue::F32(f32::NAN)),
+            ("inf", F32_TYPE_ID) => Some(TypedFloatValue::F32(f32::INFINITY)),
+            ("neg-inf", F32_TYPE_ID) => Some(TypedFloatValue::F32(f32::NEG_INFINITY)),
+            ("nan", F64_TYPE_ID) => Some(TypedFloatValue::F64(f64::NAN)),
+            ("inf", F64_TYPE_ID) => Some(TypedFloatValue::F64(f64::INFINITY)),
+            ("neg-inf", F64_TYPE_ID) => Some(TypedFloatValue::F64(f64::NEG_INFINITY)),
             _ => None,
         };
         if let Some(float) = float {
@@ -583,25 +591,34 @@ impl TypedProgram {
             kbail!(self, span, "Unknown builtin name: {name}");
         }
         let bool_value = match name {
-            "test" => self.config.is_test_build,
-            "no-std" => self.config.no_std,
-            "debug" => self.config.debug,
+            "test" => self.config.command.is_test(),
+            "no-std" => self.plan.config.no_std,
+            "debug" => self.plan.config.debug,
             // The VM overrides this global's value during static execution
             "is-static" => false,
             "platform" => {
-                let platform_tag = self.config.target.platform() as u8;
+                let platform_tag = self.plan.config.target.platform() as u8;
                 let static_enum =
                     StaticValue::Enum(expected_type_id, TypedIntValue::U8(platform_tag));
                 return Ok(self.static_values.add(static_enum));
             }
             "host-platform" => {
-                let host_platform = self.config.host_platform();
+                let host_platform = self.host_platform();
                 let static_enum =
                     StaticValue::Enum(expected_type_id, TypedIntValue::U8(host_platform as u8));
                 return Ok(self.static_values.add(static_enum));
             }
+            "arch" => {
+                let arch_tag = match self.plan.config.target.arch() {
+                    crate::compiler::Arch::Intel => 0,
+                    crate::compiler::Arch::Arm => 1,
+                    crate::compiler::Arch::Wasm => 2,
+                };
+                let static_enum = StaticValue::Enum(expected_type_id, TypedIntValue::U8(arch_tag));
+                return Ok(self.static_values.add(static_enum));
+            }
             "simd-bytes" => {
-                let width = self.config.simd_bytes as i64;
+                let width = self.plan.config.simd_bytes(&self.plan.strings) as i64;
                 return Ok(self.static_values.add(StaticValue::Int(TypedIntValue::I64(width))));
             }
             s => kbail!(self, span, "Unknown builtin name: {s}"),
@@ -622,14 +639,9 @@ impl TypedProgram {
         let global_parent_scope = global.parent_scope;
         let file_id = self.ast.spans.get(global_span).file_id;
         let Some(module_id) =
-            self.modules.iter().find(|m| m.root_file_id(&self.mem) == file_id).map(|m| m.id)
+            self.modules.iter().find(|m| m.contains_file(&self.mem, file_id)).map(|m| m.id)
         else {
-            kbail!(
-                self,
-                call_span,
-                "k1/module-params must be declared in the module's root file \
-                 (module.k1 or <module-name>.k1)"
-            );
+            kbail!(self, call_span, "k1/module-params must be declared in a module source file");
         };
         let module = self.modules.get(module_id);
         let module_name = module.name;
@@ -692,22 +704,28 @@ impl TypedProgram {
             ),
         };
 
-        let mut providers: SV4<(StringId, ParsedExprId)> = smallvec![];
-        for m in self.modules.iter() {
-            for entry in self.mem.getn(m.manifest.deps) {
-                if entry.name == module_name
-                    && let Some(params_expr) = entry.params_struct_literal
-                {
-                    providers.push((m.name, params_expr));
-                }
-            }
-        }
+        let providers = self.planned_module(module_id).map_or(MSlice::empty(), |m| m.providers);
 
         let mut bound: SV8<Option<(StaticValueId, StringId)>> =
             smallvec![None; schema_fields.len()];
-        for (provider_name, params_expr) in providers {
+        for provider in self.plan.mem.getn(providers) {
+            let provider_name = self
+                .ast
+                .idents
+                .intern(self.plan.get(self.plan.module(provider.from as usize).name));
+            let params_span = self.provider_span(*provider)?;
+            let Span { file_id, start, len } = self.ast.spans.get(params_span);
+            let build_file = self.ast.sources.get(file_id).content(&self.ast.mem);
+            let literal = &build_file[start as usize..(start + len) as usize];
+            let table = self.mem.pushn(&[CodeChunkPos { start: 0, end: len, source: params_span }]);
+            let emitted = self.add_emitted_source(literal, table, params_span);
+            let ParseMetaprogramResult::Expr(params_expr) =
+                self.parse_metaprogram_source(module_id, emitted, ParseAdHocKind::Expr)?
+            else {
+                self.ice_span(params_span, "dep params parsed as definitions");
+            };
             let ParsedExpr::Struct(s) = self.ast.exprs.get(params_expr) else {
-                self.ice_span(call_span, "captured dep params was not a struct literal");
+                kbail!(self, params_span, "dep params must be a struct literal");
             };
             let literal_fields = self.ast.mem.getn(s.fields);
             for field in literal_fields {
@@ -970,12 +988,12 @@ impl TypedProgram {
     /// Compiles `#static <expr>` and `#meta <expr>` constructs
     pub(super) fn compile_static_or_meta(
         &mut self,
-        _expr_id: ParsedExprId,
+        expr_id: ParsedExprId,
         stat: ParsedStaticExpr,
         is_definition: bool,
         ctx: EvalExprContext,
     ) -> K1Result<StaticExecutionResult> {
-        let span = stat.span;
+        let span = self.ast.exprs.get_span(expr_id);
         let base_expr = stat.base_expr;
 
         if matches!(stat.kind, ParsedStaticBlockKind::MacroCall) {
@@ -1000,12 +1018,18 @@ impl TypedProgram {
                     &call.name
                 );
             }
+
+            self.emit_ls_entity(
+                call.name.name_span,
+                LsEntityKind::Function { function_id, is_defn: false },
+            );
+
             let mut macro_args: SV8<_> = smallvec![];
             for parsed_arg in self.ast.mem.getn(call.args) {
                 macro_args.push(*parsed_arg)
             }
             return self.execute_macro_call(
-                self.ast.mem.getn(call.type_args),
+                self.ast.mem.getn(call.type_args(&self.ast.mem)),
                 &macro_args,
                 span,
                 function_id,
@@ -1014,38 +1038,22 @@ impl TypedProgram {
             );
         }
 
-        // We don't execute statics during the generic pass, since there's no point
-        // 1. we don't know the real types of generics, thus values of things like schemas, etc
-        // 2. There's not really a use-case for it, metaprograms always want to generate
-        //    real code
-        //
-        // So we just return the expected type, or a unit
-        debug!("eval_static_expr ctx.is_generic_pass={}", ctx.is_generic_pass());
-        if ctx.is_generic_pass() {
-            let phony_type = ctx.expected_type_id.unwrap_or(EMPTY_TYPE_ID);
-            let phony_expr = self.synth_phony(phony_type, span);
-            return Ok(StaticExecutionResult::TypedExpr(phony_expr));
+        if let Some(phony) = self.synth_phony_if_generic_pass(ctx, span) {
+            return Ok(StaticExecutionResult::TypedExpr(phony));
         }
 
         let kind = stat.kind;
         let expected_type_for_execution = match kind {
-            ParsedStaticBlockKind::Value => match ctx.expected_type_id {
-                None => None,
-                Some(expected_type_id) => match self.get_static_type_of_type(expected_type_id) {
-                    Some(s) => Some(s.family_type_id),
-                    None => Some(expected_type_id),
-                },
-            },
+            ParsedStaticBlockKind::Value => {
+                ctx.expected_type_id.map(|t| self.get_type_family_type(t))
+            }
             ParsedStaticBlockKind::Metaprogram => self.builtin_types.code,
             ParsedStaticBlockKind::MacroCall => unreachable!(),
         };
         let mut static_parameters: SV4<(VariableId, StaticValueId)> = smallvec![];
         for param in self.ast.mem.getn(stat.parameter_names) {
-            let variable_expr = self.ast.exprs.add(ParsedExpr::Variable(ParsedVariable {
-                name: QIdent::naked(param.name, param.span),
-                span: param.span,
-            }));
-            let (variable_id, variable_expr) = self.eval_variable(variable_expr, ctx, false)?;
+            let param_name = QIdent::naked(param.name, param.span);
+            let (variable_id, variable_expr) = self.eval_variable_named(param_name, ctx, false)?;
             let Some(variable_id) = variable_id else {
                 kbail!(self, param.span, "Must be a plain variable");
             };
@@ -1104,20 +1112,22 @@ impl TypedProgram {
                 Ok(StaticExecutionResult::TypedExpr(expr))
             }
             ParsedStaticBlockKind::Metaprogram => {
-                let emitted = self.do_with_vm(span, |k1, vm| {
-                    let result = (|| {
-                        let expr = k1.compile_parsed_expr_for_exec(
-                            base_expr,
-                            exec_ctx,
-                            &static_parameters,
-                        )?;
-                        let raw = bc::exec::execute_compiled_expr_raw(k1, vm, expr, true)?;
-                        Self::read_emitted_code_raw(k1, &raw, span, is_definition)
-                    })();
-                    vm.reset(k1.global_id_k1_arena);
-                    result
-                })?;
-                self.compile_emitted_code(emitted, span, ctx, is_definition)
+                self.traced(TraceKind::Metaprogram, span.as_u32(), ctx.trace_flags(), |k1| {
+                    let emitted = k1.do_with_vm(span, ctx.trace_flags(), |k1, vm| {
+                        let result = (|| {
+                            let expr = k1.compile_parsed_expr_for_exec(
+                                base_expr,
+                                exec_ctx,
+                                &static_parameters,
+                            )?;
+                            let raw = bc::exec::execute_compiled_expr_raw(k1, vm, expr, true)?;
+                            Self::read_emitted_code_raw(k1, &raw, span, is_definition)
+                        })();
+                        vm.reset(k1.global_id_k1_arena);
+                        result
+                    })?;
+                    k1.compile_emitted_code(emitted, span, ctx, is_definition)
+                })
             }
             ParsedStaticBlockKind::MacroCall => unreachable!(),
         }
@@ -1141,7 +1151,7 @@ impl TypedProgram {
         }
         #[cfg(debug_assertions)]
         k1.assert_code_layouts();
-        let ferry_start = k1.timing.clock.raw();
+        let frame = k1.trace_push(TraceKind::VmValueFerry, span.as_u32(), 0);
         let code = unsafe { *(raw.ret_addr as *const K1Code) };
         let chunks = unsafe {
             std::slice::from_raw_parts(
@@ -1150,7 +1160,7 @@ impl TypedProgram {
             )
         };
         let emitted = k1.build_emitted_source(span, is_definition, chunks);
-        k1.timing.total_ferry_nanos += k1.timing.elapsed_nanos(ferry_start) as i64;
+        k1.trace_pop(frame);
         emitted
     }
 
@@ -1245,36 +1255,17 @@ impl TypedProgram {
         // TODO: when specializing, include the specialization context in the
         //       filename and print the types at the top of the file; a
         //       'what are we compiling' stack would provide it
-        let (source, line) = self.get_span_location(span);
-        let line_number = line.line_number();
-        let stem = source.filename_str(&self.ast.idents).strip_suffix(".k1").unwrap();
-        let serial = self.emitted_sources.len() + 1;
-        let generated_filename = k1_format!(self, &(), "meta_{stem}_{line_number}_{serial}.k1");
-        let generated_dir = self.config.out_dir_generated;
-        let generated_path = kpath::join_id(
-            &self.ast.idents,
-            &mut self.tmp,
-            generated_dir,
-            generated_filename.as_str(),
-        );
         debug!("Emitted source:\n---\n{content}\n---");
-        let emitted_file =
-            crate::parse::SourceFile::make(&mut self.ast.mem, generated_path, &content);
-        let source_for_emission = self.ast.sources.add_file(emitted_file);
-        debug_assert!(
-            self.emitted_sources.last().is_none_or(|e| e.file_id < source_for_emission),
-            "emitted_sources must stay sorted by file_id for binary search"
-        );
-        self.emitted_sources.push(EmittedSource {
-            file_id: source_for_emission,
-            call_span: span,
-            entries: table,
-            has_diagnostic: false,
-        });
+        let source_for_emission = self.add_emitted_source(&content, table, span);
+        let generated_path = self.ast.sources.get(source_for_emission).file_path;
 
         let parse_kind =
             if is_definition { ParseAdHocKind::Definitions } else { ParseAdHocKind::Expr };
-        let parsed_metaprogram = self.parse_metaprogram_source(source_for_emission, parse_kind)?;
+        let module_id = self.module_of_span(span);
+        let parsed_metaprogram =
+            self.traced(TraceKind::Parse, generated_path.as_u32(), 0, |k1| {
+                k1.parse_metaprogram_source(module_id, source_for_emission, parse_kind)
+            })?;
         match parsed_metaprogram {
             ParseMetaprogramResult::Expr(parsed_expr_id) => {
                 if let Some(hash) = content_hash {
@@ -1290,6 +1281,39 @@ impl TypedProgram {
         }
     }
 
+    pub(super) fn add_emitted_source(
+        &mut self,
+        content: &str,
+        table: PermSlice<CodeChunkPos>,
+        span: SpanId,
+    ) -> FileId {
+        let (source, line) = self.get_span_location(span);
+        let line_number = line.line_number();
+        let stem = source.filename_str(&self.ast.idents).strip_suffix(".k1").unwrap();
+        let serial = self.emitted_sources.len() + 1;
+        let generated_filename = k1_format!(self, &(), "meta_{stem}_{line_number}_{serial}.k1");
+        let generated_path = kpath::join_id(
+            &self.ast.idents,
+            &mut self.tmp,
+            self.config.out_dir_generated,
+            generated_filename.as_str(),
+        );
+        let emitted_file =
+            crate::parse::SourceFile::make(&mut self.ast.mem, generated_path, content);
+        let file_id = self.ast.sources.add_file(emitted_file);
+        debug_assert!(
+            self.emitted_sources.last().is_none_or(|e| e.file_id < file_id),
+            "emitted_sources must stay sorted by file_id for binary search"
+        );
+        self.emitted_sources.push(EmittedSource {
+            file_id,
+            call_span: span,
+            entries: table,
+            has_diagnostic: false,
+        });
+        file_id
+    }
+
     /// Emitted sources accumulate in the sources pool during typechecking; this
     /// writes them out for inspection in one pass, off the expansion path
     pub fn write_emitted_sources(&self) {
@@ -1303,7 +1327,7 @@ impl TypedProgram {
                 }
             }
         }
-        if self.config.chatty {
+        if self.config.tools.chatty {
             let elapsed = start.elapsed();
             eprintln!("Wrote {} emitted sources in {:.2?}", self.emitted_sources.len(), elapsed);
             let mut real_files = 0usize;
@@ -1350,6 +1374,20 @@ impl TypedProgram {
     }
 
     pub(super) fn execute_macro_call(
+        &mut self,
+        type_args: &[NamedTypeArg],
+        args: &[ParsedCallArg],
+        span: SpanId,
+        function_id: FunctionId,
+        is_definition: bool,
+        ctx: EvalExprContext,
+    ) -> K1Result<StaticExecutionResult> {
+        self.traced(TraceKind::MacroCall, function_id.as_u32(), ctx.trace_flags(), |k1| {
+            k1.execute_macro_call_body(type_args, args, span, function_id, is_definition, ctx)
+        })
+    }
+
+    fn execute_macro_call_body(
         &mut self,
         type_args: &[NamedTypeArg],
         args: &[ParsedCallArg],
@@ -1406,7 +1444,7 @@ impl TypedProgram {
             let type_args = TypeArgs::from_slice_in(self.mem.getn(typed_type_args), &mut self.mem);
             let spec_fn_id =
                 self.specialize_function_declaration(type_args, TypeArgs::empty(), function_id);
-            self.specialize_function_body(spec_fn_id)?;
+            self.require_function_body(spec_fn_id, span)?;
             spec_fn_id
         } else {
             function_id
@@ -1477,7 +1515,7 @@ impl TypedProgram {
         is_definition: bool,
         ctx: EvalExprContext,
     ) -> K1Result<StaticExecutionResult> {
-        let emitted = self.do_with_vm(span, |k1, vm| {
+        let emitted = self.do_with_vm(span, ctx.trace_flags(), |k1, vm| {
             let result =
                 Self::macro_emit_with_vm(k1, vm, function_id, static_args, span, is_definition);
             vm.reset(k1.global_id_k1_arena);
@@ -1501,21 +1539,19 @@ impl TypedProgram {
 
     pub(super) fn with_parser<R>(
         &mut self,
+        module_id: ModuleId,
         file_id: FileId,
         f: impl FnOnce(&mut parse::Parser) -> K1Result<R>,
     ) -> K1Result<R> {
-        let mut tokens = std::mem::take(&mut self.buffers.lexer_tokens);
-        tokens.clear();
+        let buffer = std::mem::take(&mut self.buffers.lexed);
 
-        let module = self.modules.get(self.module_in_progress.unwrap());
+        let module = self.modules.get(module_id);
         let parsed_namespace_id = module.parsed_namespace_id;
         let code_str = self.ast.sources.get(file_id).content(&self.ast.mem);
-        let mut lexer = crate::lex::Lexer::make(code_str, &mut self.ast.spans, file_id);
-        if let Err(e) = lexer.run(&mut tokens) {
-            let e = ParseError::Lex(e);
+        let mut lexed = crate::lex::lex(code_str, buffer);
+        if let Err(e) = self.ast.materialize_lexed_file(file_id, &mut lexed) {
             parse::print_error(&self.ast, &e);
-            tokens.clear();
-            self.buffers.lexer_tokens = tokens;
+            self.buffers.lexed = lexed;
             kbail!(self, e.span(), "Failed to lex code emitted from here");
         };
 
@@ -1524,29 +1560,28 @@ impl TypedProgram {
             module.name,
             parsed_namespace_id,
             &mut self.ast,
-            &tokens,
+            &lexed,
             file_id,
         );
 
         let r = f(&mut p);
-        tokens.clear();
-        self.buffers.lexer_tokens = tokens;
+        self.buffers.lexed = lexed;
         r
     }
 
     pub(super) fn parse_metaprogram_source(
         &mut self,
+        module_id: ModuleId,
         file_id: FileId,
         kind: ParseAdHocKind,
     ) -> K1Result<ParseMetaprogramResult> {
-        self.with_parser(file_id, move |p| {
+        self.with_parser(module_id, file_id, move |p| {
             let msg_base = "Failed to parse the code you returned: ";
             let error_count_start = p.ast.errors.len();
             match kind {
                 ParseAdHocKind::Expr => match p.expect_expression() {
                     Err(e) => Err(make_message(
-                        &p.ast.idents,
-                        format!("{msg_base}{e}"),
+                        p.ast.idents.intern(format!("{msg_base}{e}")),
                         e.span(),
                         MessageLevel::Error,
                     )),
@@ -1555,8 +1590,7 @@ impl TypedProgram {
                             let e = p.ast.errors.last().unwrap().clone();
                             let src = p.source().content(&p.ast.mem);
                             Err(make_message(
-                                &p.ast.idents,
-                                format!("{msg_base}{e}\n{src}"),
+                                p.ast.idents.intern(format!("{msg_base}{e}\n{src}")),
                                 e.span(),
                                 MessageLevel::Error,
                             ))
@@ -1571,8 +1605,7 @@ impl TypedProgram {
                         let e = p.ast.errors.last().unwrap().clone();
                         let src = p.source().content(&p.ast.mem);
                         Err(make_message(
-                            &p.ast.idents,
-                            format!("{msg_base}{e}\n{src}"),
+                            p.ast.idents.intern(format!("{msg_base}{e}\n{src}")),
                             e.span(),
                             MessageLevel::Error,
                         ))
@@ -1595,7 +1628,7 @@ impl TypedProgram {
         }
 
         let lib_name_str = self.ast.idents.get_string(lib_name_ident);
-        let ext = self.config.host_platform().dylib_ext();
+        let ext = self.host_platform().dylib_ext();
         debug!("cwd is: {}", std::env::current_dir().unwrap().display());
         debug!("src_path is: {}", self.ast.idents.get_string(self.config.src_path));
 

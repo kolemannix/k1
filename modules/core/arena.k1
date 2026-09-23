@@ -84,25 +84,13 @@ ns for arena {
     platform/memory/release(self.first-region())
   }
 
-  fn poison(self: *arena, count: size) {
-    let available = self.end-addr.diff(self.cur-addr)
-    let n = count.min(available)
-    mem/set(dst = self.cur-addr, value = 0xCD, count = n)
-  }
-
-  fn reset(self: *arena, clear: bool) {
-    let chained = not self.extra-chunks.is-null()
+  fn reset(self: *arena) {
+    let dirty-end = if self.extra-chunks.is-null() self.cur-addr else self.first-end
     self._release-extra-chunks()
-    // If growth left the first chunk, its exact high-water mark is gone;
-    // clear the whole first window in that case
-    let used-bytes = if chained self.first-end.diff(self.first-base) else self.used-bytes()
+    mem/set(dst = self.first-base, value = 0, count = dirty-end.diff(self.first-base))
     self.base-ptr = self.first-base
     self.cur-addr = self.first-base
     self.end-addr = self.first-end
-
-    if clear {
-      mem/set(dst = self.base-ptr, value = 0, count = used-bytes)
-    }
   }
 
   let MIN_ALIGN: size = types/size[ptr]
@@ -131,7 +119,7 @@ ns for arena {
     }
   }
 
-  fn _grow(self: *arena, size: size, align: size) {
+  fn(noinline) _grow(self: *arena, size: size, align: size) {
     // Static message: interpolation would allocate, possibly from this same
     // exhausted arena when it is the ambient allocator
     if self.fixed crash("fixed arena exhausted")
@@ -140,7 +128,7 @@ ns for arena {
     let first-len = self.first-end.diff(self.first-base)
     let chunk-len = needed.max(first-len)
     let region = platform/memory/acquire(chunk-len)
-    let record: *mut arena-chunk = region.base.ref[arena-chunk]
+    let record: *arena-chunk = region.base.ref[arena-chunk]
     record.* = .{ region, next = self.extra-chunks }
     self.extra-chunks = region.base
     let data-start = region.base.add-bytes(types/stride[arena-chunk]).aligned(MIN_ALIGN)
@@ -184,7 +172,6 @@ ns for arena {
     let old-end-aligned = old-ptr.add-bytes(old-size).aligned(MIN_ALIGN)
     let new-end-aligned = old-ptr.add-bytes(new-size).aligned(MIN_ALIGN)
     if old-end-aligned == self.cur-addr and new-end-aligned <= self.end-addr {
-      // Grow in place
       self.cur-addr = new-end-aligned
       old-ptr
     } else {
@@ -202,6 +189,7 @@ ns for arena {
     assert(arena-mark.start >= self.base-ptr)
     assert(arena-mark.start < self.end-addr)
     assert(arena-mark.start <= self.cur-addr)
+    mem/set(dst = arena-mark.start, value = 0, count = self.cur-addr.diff(arena-mark.start))
     self.cur-addr = arena-mark.start
   }
 

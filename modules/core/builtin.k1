@@ -32,7 +32,7 @@ type f32 = builtin
 type f64 = builtin
 
 
-type buffer[t] = { data: *mut t, len: size }
+type buffer[t] = { data: ptr, len: size }
 
 type span[t] = { buffer: buffer[t] }
 
@@ -104,11 +104,11 @@ ns types {
   fn(intern) id[t](): type-id
 
   fn type-id-of-val[t](_t: t): type-id { id[t] }
-  fn name[t](): string { id[t].name() }
+  fn name[t](): string { id[t].info().name }
 
   fn type-name-of-val[t](_t: t): string { name[t] }
-  fn schema[t](): type-schema { id[t].schema() }
-  fn instance-info[t](): ?instance-info { id[t].instance-info() }
+  fn schema[t](): type-schema { id[t].info().schema }
+  fn instance-info[t](): ?instance-info { id[t].info().instance }
 
   // FIXME: We should encode both width and signedness into the bits instead, 'flags in tags' project
   type int-value = either {
@@ -118,7 +118,7 @@ ns types {
 
   type int-kind = int-value.tag-enum
   ns for int-kind {
-    fn bit-width(self: int-kind): size {
+    fn(inline) bit-width(self: int-kind): size {
       if self is {
         :u8  -> 8,
         :u16 -> 16,
@@ -128,6 +128,18 @@ ns types {
         :i16 -> 16,
         :i32 -> 32,
         :i64 -> 64,
+      }
+    }
+    fn(inline) type-id(self: int-kind): type-id {
+      if self is {
+        :u8  -> id[u8],
+        :u16 -> id[u16],
+        :u32 -> id[u32],
+        :u64 -> id[u64],
+        :i8  -> id[i8],
+        :i16 -> id[i16],
+        :i32 -> id[i32],
+        :i64 -> id[i64],
       }
     }
   }
@@ -164,7 +176,7 @@ ns types {
     int(int-kind),
     float(float-kind),
     enum({
-      int-kind: int-kind,
+      int-kind,
       values: span[{
         name: string,
         value: int-value,
@@ -182,14 +194,14 @@ ns types {
     struct({
       fields: span[{
         name: string,
-        type-id: type-id,
+        type-id,
         offset: size
       }],
     }),
     union({
       fields: span[{
         name: string,
-        type-id: type-id,
+        type-id,
         offset: size
       }],
     }),
@@ -241,10 +253,10 @@ ability writer {
   fn write-byte(self, value: u8)
   fn write-bytes(self, bytes: span[byte])
 
-  fn write-char(self, value: char) { self.write-byte(value.as-u8()) }
-  fn write-string(self, value: string) { self.write-bytes(value.span-bytes()) }
+  fn(inline) write-char(self, value: char) { self.write-byte(value.as-u8()) }
+  fn(inline) write-string(self, value: string) { self.write-bytes(value.span-bytes()) }
 
-  fn write(self, value: string) { self.write-string(value) }
+  fn(inline) write(self, value: string) { self.write-string(value) }
 
   fn writeln(self, value: string) {
     self.write-string(value)
@@ -360,8 +372,8 @@ ability scalar-cmp {
   fn le(self, other: self): bool
   fn gt(self, other: self): bool
   fn ge(self, other: self): bool
-  fn min(self, other: self): self { if self.lt(other) self else other }
-  fn max(self, other: self): self { if self.gt(other) self else other }
+  fn(inline) min(self, other: self): self { if self.lt(other) self else other }
+  fn(inline) max(self, other: self): self { if self.gt(other) self else other }
 }
 
 impl scalar-cmp for u8 {
@@ -414,10 +426,10 @@ impl scalar-cmp for i64 {
 }
 
 impl scalar-cmp for ptr {
-  fn lt(self, other: self): bool { self.to-uint().lt(other.to-uint()) }
-  fn le(self, other: self): bool { self.to-uint().le(other.to-uint()) }
-  fn gt(self, other: self): bool { self.to-uint().gt(other.to-uint()) }
-  fn ge(self, other: self): bool { self.to-uint().ge(other.to-uint()) }
+  fn(inline) lt(self, other: self): bool { self.to-uint().lt(other.to-uint()) }
+  fn(inline) le(self, other: self): bool { self.to-uint().le(other.to-uint()) }
+  fn(inline) gt(self, other: self): bool { self.to-uint().gt(other.to-uint()) }
+  fn(inline) ge(self, other: self): bool { self.to-uint().ge(other.to-uint()) }
 }
 
 ability comparable {
@@ -425,7 +437,6 @@ ability comparable {
 }
 
 ability try[impl t, impl e] {
-  // DO NOT REORDER `try` expects error to be first
   fn error(e: e): self
   fn value(t: t): self
 
@@ -439,20 +450,28 @@ ability try[impl t, impl e] {
 }
 
 ability iterator[impl item] {
-  fn next(self: *mut self): ?item
+  fn next(self: *self): ?item
   fn size-hint(self: *self): { at-least: size, at-most: ?size } {
     .{ at-least = 0, at-most = :none }
   }
-  fn advance-by(self: *mut self, n: size) {
+  fn advance-by(self: *self, n: size) {
     let i: size = 0
     while i < n {
       if self.next() is :none { break }
       i = i + 1
     }
   }
-  fn nth(self: *mut self, n: size): ?item {
+  fn nth(self: *self, n: size): ?item {
     self.advance-by(n)
     self.next()
+  }
+  fn seek(self: *self, needle: item): ?size where item: equals {
+    let i: size = 0
+    while self.next() is :some x {
+      if x == needle return :some i
+      i = i + 1
+    }
+    :none
   }
 }
 
@@ -467,10 +486,8 @@ ability iterable[impl item, impl i: iterator[item = item]] {
   }
 
   fn position(self, needle: item): ?size where item: equals {
-    for self {
-      if it == needle return :some it-index
-    }
-    :none
+    let iter = self.iterator()
+    iter.&.seek(needle)
   }
 
   fn contains(self, needle: item): bool where item: equals {
@@ -541,8 +558,14 @@ ability as-buffer[impl t] {
   fn first-ref(self): ?*t {
     self.as-buffer().first-ref()
   }
+  fn first(self): ?t {
+    self.as-buffer().first()
+  }
   fn last-ref(self): ?*t {
     self.as-buffer().last-ref()
+  }
+  fn last(self): ?t {
+    self.as-buffer().last()
   }
   fn ref-iter(self): buffer-ref-iterator[t] {
     self.as-buffer().ref-iter()
@@ -552,43 +575,43 @@ ability as-buffer[impl t] {
 ability as-span[impl t] {
   fn as-span(self): span[t]
 
-  fn len(self): size {
+  fn(inline) len(self): size {
     self.as-span().inner-buffer().len
   }
-  fn is-empty(self): bool {
+  fn(inline) is-empty(self): bool {
     self.as-span().inner-buffer().len == 0
   }
-  fn non-empty(self): bool {
+  fn(inline) non-empty(self): bool {
     self.as-span().inner-buffer().len != 0
   }
-  fn index-opt(self, index: size): ?t {
+  fn(inline) index-opt(self, index: size): ?t {
     let b = self.as-span().inner-buffer()
     if index >= b.len :none
     else :some b.[index]
   }
-  fn first(self): ?t {
+  fn(inline) first(self): ?t {
     let b = self.as-span().inner-buffer()
     if b.len == 0 :none
     else :some b.[0]
   }
-  fn last(self): ?t {
+  fn(inline) last(self): ?t {
     let b = self.as-span().inner-buffer()
     if b.len == 0 :none
     else :some b.[b.len - 1]
   }
-  fn slice(self, start: size, end: size): span[t] {
+  fn(inline) slice(self, start: size, end: size): span[t] {
     span/wrap-buffer(self.as-span().inner-buffer().slice(start, end))
   }
-  fn take(self, count: size): span[t] {
+  fn(inline) take(self, count: size): span[t] {
     span/wrap-buffer(self.as-span().inner-buffer().take(count))
   }
-  fn drop(self, count: size): span[t] {
+  fn(inline) drop(self, count: size): span[t] {
     span/wrap-buffer(self.as-span().inner-buffer().drop(count))
   }
-  fn take-right(self, count: size): span[t] {
+  fn(inline) take-right(self, count: size): span[t] {
     span/wrap-buffer(self.as-span().inner-buffer().take-right(count))
   }
-  fn drop-right(self, count: size): span[t] {
+  fn(inline) drop-right(self, count: size): span[t] {
     span/wrap-buffer(self.as-span().inner-buffer().drop-right(count))
   }
   fn chunks(self, size: size): span[span[t]] {
@@ -617,7 +640,7 @@ ability as-span[impl t] {
 }
 
 impl[t, c: as-buffer[t = t]] as-span[t = t] for c {
-  fn as-span(self): span[t] { span/wrap-buffer(self.as-buffer()) }
+  fn(inline) as-span(self): span[t] { span/wrap-buffer(self.as-buffer()) }
 }
 
 /////////////////////////////////
@@ -725,9 +748,7 @@ ns mem {
     value: u8,
     count: size
   )
-  fn(intern) equals(p1: ptr, p2: ptr, size: int): bool
-
-  fn(intern) zeroed[t](): t
+  fn(intern) equals-memcmp(p1: ptr, p2: ptr, size: int): bool
 
   fn(intern) bitcast[t, u](t: t): u
 
@@ -740,7 +761,7 @@ ns mem {
 // Compiler builtins
 ns k1 {
 
-  type source-location = { filename: string, line: u64 }
+  type source-location = { filename: string, line: u32, span: u32 }
 
   // Need some way to mark this and is-static as comptime only
   let capture-prints: bool = true
@@ -764,10 +785,25 @@ ns k1 {
   let platform-bare: bool = #if platform is { :bare -> true, :posix-linux or :posix-macos or :wasi -> false }
   let platform-posix: bool = #if platform is { :posix-linux or :posix-macos -> true, :wasi or :bare -> false }
 
+  ns for platform {
+    fn dylib-ext(self): string {
+      if self is {
+        :posix-macos -> "dylib",
+        :posix-linux -> "so",
+        :wasi or :bare -> crash("no dylibs on wasi or bare"),
+      }
+    }
+  }
+
+  type arch = either { intel64 = 0, arm64 = 1, wasm64 = 2 }
+  let arch: arch = builtin
+
   // The widest SIMD register the target supports;
   let simd-bytes: size = builtin
 
   fn(intern) location(): source-location
+
+  fn(intern) module-dir(): string
 
   fn(intern) exit(code: i32): never
 
@@ -790,15 +826,38 @@ ns k1 {
     link-type: link-kind,
   }
 
-  // params-expr-id is a parsed expression id captured by the compiler; 0 = none
-  type dep-entry = { name: string, params-expr-id: u64 }
+  type dep-entry = { name: string, params-span: u32 }
 
   type setup-decl = {
     outputs: list[string],
     inputs: list[string],
   }
 
-  type setup-ctx = { module-dir: string }
+  type target = either(u8) { intel64-linux, arm64-macos, wasm64-wasi, intel64-bare, arm64-bare, wasm64-bare }
+
+  type command = either(u8) { check, build, run, test, server }
+
+  type option = { name: string, value: string }
+
+  type build-config = {
+    target: target,
+    cpu: string,
+    features: string,
+    optimize: bool,
+    debug: bool,
+    no-std: bool,
+    sanitize: bool,
+    filc: bool,
+  }
+
+  type build-request = {
+    default: build-config,
+    command: command,
+    options: list[option],
+    host: opt[target],
+  }
+
+  type setup-ctx = { build: build-config }
 
   type module = {
     kind: opt[module-kind],
@@ -819,23 +878,17 @@ ns k1 {
       }
     }
 
-    fn executable(self: *mut module) {
+    fn executable(self: *module) {
       if self.kind.is-some() { crash("module kind set twice") }
       self.kind = :some(:executable)
     }
 
-    fn library(self: *mut module) {
+    fn library(self: *module) {
       if self.kind.is-some() { crash("module kind set twice") }
       self.kind = :some(:library)
     }
 
-    fn dep(self: *mut module, name: string) {
-      self.add-dep-impl(name, 0)
-    }
-
-    // The compiler rewrites `m.dep(name, .{ ... })` to target this fn, passing the
-    // captured params expression id; not meant to be called directly
-    fn add-dep-impl(self: *mut module, name: string, params-expr-id: u64) {
+    fn dep(self: *module, name: string) {
       if name.is-empty() { crash("empty dep name") }
       if not name.[0].is-ascii-lower() {
         crash("invalid dep name '$name': dep names start with a lowercase ascii letter")
@@ -847,18 +900,23 @@ ns k1 {
         }
       }
       for self.deps { if it.name == name { crash("duplicate dep '$name'") } }
-      self.deps.push(.{ name, params-expr-id })
+      self.deps.push(.{ name, params-span = 0 })
     }
 
-    fn lib(self: *mut module, name: string, link-type: link-kind) {
+    fn dep-params(self: *module, name: string, params-span: u32) {
+      self.dep(name)
+      self.deps.[self.deps.len() - 1].params-span = params-span
+    }
+
+    fn lib(self: *module, name: string, link-type: link-kind) {
       self.libs.push(.{ name, link-type })
     }
 
-    fn link-args(self: *mut module, args: span[string]) {
+    fn link-args(self: *module, args: span[string]) {
       for args { self.link-args.push(it) }
     }
 
-    fn setup(self: *mut module, outputs: span[string], inputs: span[string]) {
+    fn setup(self: *module, outputs: span[string], inputs: span[string]) {
       if self.setup.is-some() { crash("module setup declared twice") }
       let o: list[string] = list/with-capacity(outputs.len())
       for outputs { o.push(it) }
@@ -904,25 +962,26 @@ ns sys {
 ns for ptr {
   let null: ptr = mem/bitcast[u64, ptr](0)
 
-  fn is-null(self: ptr): bool { self is null }
+  fn(inline) is-null(self: ptr): bool { self is null }
 
-  fn ref[t](self: ptr): *t { mem/bitcast[ptr, *t](self) }
-
-  fn ref-opt[t](self: ptr): optref[t] {
-    .{ inner = self.ref[t] }
+  fn(inline) ref[t](context locn: k1/source-location)(self: ptr): *t {
+    if k1/debug or k1/is-static { if self is null crash("null ptr to reference") }
+    mem/bitcast[ptr, *t](self)
   }
 
-  fn to-int(self: ptr): i64 { mem/bitcast[ptr, i64](self) }
-  fn to-uint(self: ptr): u64 { mem/bitcast[ptr, u64](self) }
-  fn to-size(self: ptr): size { mem/bitcast[ptr, size](self) }
+  fn(inline) ref-opt[t](self: ptr): optref[t] { .{ inner = self } }
+
+  fn(inline) to-int(self: ptr): i64 { mem/bitcast[ptr, i64](self) }
+  fn(inline) to-uint(self: ptr): u64 { mem/bitcast[ptr, u64](self) }
+  fn(inline) to-size(self: ptr): size { mem/bitcast[ptr, size](self) }
 
   // This is an intrinsic so that we can codegen a getelementptr
   // instruction in LLVM rather than a pointer cast.
   // But we _could_ do it in userland using size-of and arithmetic which is neat!
-  fn(intern) ref-at[t](self: ptr, index: size): *mut t
+  fn(intern) ref-at[t](self: ptr, index: size): *t
 
   // ref-at compiles to gep, which preserves provenance
-  fn add-bytes(self: ptr, offset: size): ptr {
+  fn(inline) add-bytes(self: ptr, offset: size): ptr {
     self.ref-at[u8](offset).as[ptr]
   }
 
@@ -952,10 +1011,10 @@ impl equals for ptr {
 }
 
 ns for bool {
-  fn as-u8(self: bool): u8 { mem/bitcast[bool, u8](self) }
-  fn as-i8(self: bool): i8 { mem/bitcast[bool, i8](self) }
+  fn(inline) as-u8(self: bool): u8 { mem/bitcast[bool, u8](self) }
+  fn(inline) as-i8(self: bool): i8 { mem/bitcast[bool, i8](self) }
 
-  fn from-u8(value: u8): bool { value != 0u8 }
+  fn(inline) from-u8(value: u8): bool { value != 0u8 }
 }
 
 impl neg for bool { fn(intern) negated(self: bool): bool }
@@ -977,29 +1036,29 @@ fn discard[t](_t: t): empty {}
 fn phony[t](): t { crash("phony") }
 
 ns array {
-  fn data-ref[t, n](array: *mut array[t, n]): *mut t where n: static size {
+  fn(inline) data-ref[t, n](array: *array[t, n]): *t where n: static size {
     array.[0].&
   }
-  fn data-ptr[t, n](array: *mut array[t, n]): ptr where n: static size {
+  fn(inline) data-ptr[t, n](array: *array[t, n]): ptr where n: static size {
     array.as[ptr]
   }
-  fn size-bytes[t, n](_array: array[t, n]): int where n: static size {
+  fn(inline) size-bytes[t, n](_array: *array[t, n]): int where n: static size {
     types/size[array[t, n]]
   }
 
   fn zeroed[t, n: static size](): array[t, n] {
-    mem/zeroed[array[t, n]]
+    .0
   }
 
-  fn allocate[t, n: static size, a: allocator](alloc: a): *mut array[t, n] {
+  fn allocate[t, n: static size, a: allocator](alloc: a): *array[t, n] {
     alloc.alloc-t[array[t, n]]()
   }
 
-  fn memset[t, n](array: *mut array[t, n], value: u8) where n: static size {
+  fn memset[t, n](array: *array[t, n], value: u8) where n: static size {
     mem/set(dst = array.data-ptr(), value = value, count = array.size-bytes())
   }
 
-  fn filled-in[t, n: static size, a: allocator](alloc: a, t: t, n: n): *mut array[t, n] {
+  fn filled-in[t, n: static size, a: allocator](alloc: a, t: t, n: n): *array[t, n] {
     let array-uninit = allocate[t, n, _](alloc)
     let i = 0
     while i < n.from-static() {
@@ -1020,14 +1079,14 @@ ns array {
 
 }
 
-impl[t, n: static size] as-buffer[t = t] for *mut array[t, n] {
-  fn as-buffer(self): buffer[t] {
-    .{ len = self.len(), data = self.data-ref() }
+impl[t, n: static size] as-buffer[t = t] for *array[t, n] {
+  fn(inline) as-buffer(self): buffer[t] {
+    .{ len = self.len(), data = self.data-ptr() }
   }
 }
 
 impl[t, n: static size] as-span[t = t] for *array[t, n] {
-  fn as-span(self): span[t] {
+  fn(inline) as-span(self): span[t] {
     span/wrap-raw(self.data-ptr(), self.len())
   }
 }
@@ -1046,7 +1105,7 @@ impl[t: print, n: static size] print for array[t, n] {
   }
 }
 
-fn assert(context locn: k1/source-location)(value: bool) {
+fn(inline) assert(context locn: k1/source-location)(value: bool) {
   if not value crash("ASSERT FAILED")
 }
 
@@ -1083,7 +1142,7 @@ fn crash(context locn: k1/source-location)(msg: string): never {
     eprint(" at ")
     eprint(locn.filename)
     eprint(":")
-    core/format-uint(context core/io/stderr)(locn.line, 10)
+    core/format-uint(context core/io/stderr)(locn.line.widen[u64], 10)
     eprint("\n")
 
     platform/process/abort()
@@ -1095,10 +1154,18 @@ fn crash-bounds(context locn: k1/source-location)(size: size, index: size, msg: 
 }
 
 ns k1 {
+  fn crash-div(divisor-is-zero: bool): never {
+    crash(if divisor-is-zero "Division by zero" else "Integer division overflow: min-value / -1")
+  }
+
   // Called by the codegen-emitted stub of a reloadable fn when its slot is
   // still null; both args are NUL-terminated names baked into the stub
   fn crash-unloaded-ns(ns-name: ptr, fn-name: ptr): never {
     let loaded-ns = string/wrap-c(ns-name)
     crash("reloadable ns ${loaded-ns} not loaded; call ${loaded-ns}/load() (called: ${string/wrap-c(fn-name)})")
+  }
+
+  fn crash-missing-type-info(type-id: u64): never {
+    crash("no type info for type id $type-id")
   }
 }

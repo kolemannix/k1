@@ -1,11 +1,3 @@
-ns build {
-  fn module(): k1/module {
-    let m = k1/module/new()
-    m.library()
-    m
-  }
-}
-
 type pair = { a: i32, b: i32 }
 
 fn(export) klib_add(a: i32, b: i32): i32 { a + b }

@@ -3,6 +3,8 @@
 
 use std::fmt::{Display, Formatter, Write};
 
+use crate::typer::pattern_match::MatchWitnessId;
+
 use super::*;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -59,6 +61,39 @@ impl Display for TypedProgram {
 
 /// Dumping impl
 impl TypedProgram {
+    pub fn function_label(&self, function_id: FunctionId) -> String {
+        let function = self.get_function(function_id);
+        let name = self.ident_str(function.name);
+        match function.kind {
+            TypedFunctionKind::AbilityImpl(_, self_type_id) => {
+                format!("{name} for {}", self.type_id_to_string(self_type_id))
+            }
+            _ => name.to_string(),
+        }
+    }
+
+    /// The generic's label plus the instance's type arguments
+    pub fn specialization_label(&self, function_id: FunctionId) -> String {
+        let function = self.get_function(function_id);
+        let Some(info) = function.specialization_info.as_ref() else {
+            return self.function_label(function_id);
+        };
+        let mut label = self.function_label(info.parent_function);
+        let mut args: Vec<String> = Vec::new();
+        for type_id in self.get_type_slice(info.type_arguments) {
+            args.push(self.type_id_to_string(*type_id));
+        }
+        for type_id in self.get_type_slice(info.fnlike_type_arguments) {
+            args.push(self.type_id_to_string(*type_id));
+        }
+        if !args.is_empty() {
+            label.push('[');
+            label.push_str(&args.join(", "));
+            label.push(']');
+        }
+        label
+    }
+
     pub fn scope_id_to_string(&self, scope_id: ScopeId) -> String {
         let mut s = String::new();
         self.display_scope(scope_id, &mut s).unwrap();
@@ -406,6 +441,12 @@ impl TypedProgram {
                 self.display_type_id_ext(w, fp.function_type_id, mode, visiting)?;
                 Ok(())
             }
+            Type::FunctionReference(fr) => {
+                write!(w, "fnref(")?;
+                self.write_ident(w, self.get_function(fr.function_id).name)?;
+                w.write_str(")")?;
+                Ok(())
+            }
             Type::Lambda(lam_id) => {
                 write!(w, "fnlam(")?;
                 let lam = self.lambda_types.get(*lam_id);
@@ -620,10 +661,7 @@ impl TypedProgram {
             }
             TypedStmt::Assignment(assignment) => {
                 self.display_expr_id(assignment.destination, w, indentation)?;
-                match assignment.kind {
-                    AssignmentKind::Store => w.write_str(" <store>= ")?,
-                    AssignmentKind::Set => w.write_str(" = ")?,
-                }
+                w.write_str(" = ")?;
                 self.display_expr_id(assignment.value, w, indentation)
             }
             TypedStmt::Require(require_stmt) => {
@@ -741,9 +779,8 @@ impl TypedProgram {
                         self.display_expr_id(*object_expr, w, indentation)?;
                         write!(w, ".dyn[{}]", field_index)?;
                     }
-                    Callee::DynamicAbstract { variable_id, .. } => {
-                        let variable = self.variables.get(*variable_id);
-                        self.write_ident(w, variable.name)?;
+                    Callee::DynamicAbstract { callee_expr, .. } => {
+                        self.display_expr_id(*callee_expr, w, indentation)?;
                     }
                 };
                 w.write_str("(")?;
@@ -807,10 +844,8 @@ impl TypedProgram {
                 w.write_str(".*")
             }
             TypedExpr::AddressOf(addr_of) => {
-                w.write_str("&(")?;
                 self.display_expr_id(addr_of.target_expr, w, indentation)?;
-                w.write_str(")")?;
-                Ok(())
+                w.write_str(".&")
             }
             TypedExpr::SumConstructor(enum_constr) => {
                 w.write_str(".")?;
@@ -886,10 +921,14 @@ impl TypedProgram {
                 self.display_expr_id(*lambda_body, w, indentation)?;
                 Ok(())
             }
-            TypedExpr::FunctionPointer(fr) => {
-                let fun = self.get_function(fr.function_id);
+            TypedExpr::FunctionPointer(fp) => {
+                let fun = self.get_function(fp.function_id);
                 self.write_ident(w, fun.name)?;
-                w.write_str(".toRef()")
+                w.write_str(".&")
+            }
+            TypedExpr::FunctionReference(fr) => {
+                let fun = self.get_function(fr.function_id);
+                self.write_ident(w, fun.name)
             }
             TypedExpr::StaticValue(s) => {
                 if s.is_typed_as_static {
@@ -999,14 +1038,10 @@ impl TypedProgram {
                 }
             }
             StaticValue::Zero(type_id) => {
-                if pretty {
-                    w.write_str("zeroed")
-                } else {
-                    write!(w, "zeroed[")?;
+                if !pretty {
                     self.display_type_id_ext(w, *type_id, TypeDisplayMode::Name, visiting)?;
-                    write!(w, "]")?;
-                    Ok(())
                 }
+                w.write_str(".0")
             }
             StaticValue::Struct(static_struct) => {
                 w.write_str(".{ ")?;
@@ -1133,7 +1168,11 @@ impl TypedProgram {
         s
     }
 
-    pub fn display_pattern(&self, pattern: TypedPatternId, w: &mut impl Write) -> std::fmt::Result {
+    pub fn display_pattern<W: std::fmt::Write + ?Sized>(
+        &self,
+        pattern: TypedPatternId,
+        w: &mut W,
+    ) -> std::fmt::Result {
         match self.patterns.get(pattern) {
             TypedPattern::LiteralChar(value, _) => write!(w, "{value}"),
             TypedPattern::LiteralInteger(value_id, _) => {
@@ -1191,7 +1230,6 @@ impl TypedProgram {
                 self.display_pattern(type_pattern.inner_pattern, w)?;
                 Ok(())
             }
-            TypedPattern::RefNull(_, _) => w.write_str("null"),
             TypedPattern::PointerNull(_) => w.write_str("null"),
         }
     }
@@ -1349,7 +1387,7 @@ impl TypedProgram {
     }
 
     pub fn display_qident<W: Write + ?Sized>(&self, w: &mut W, ident: &QIdent) -> std::fmt::Result {
-        for ns in self.ast.mem.getn(ident.path) {
+        for ns in self.ast.mem.getn(ident.path(&self.ast.mem)) {
             self.write_ident(w, ns.name)?;
             write!(w, "/")?;
         }
@@ -1530,6 +1568,12 @@ impl<D, A> DepDisplay<D, A> for String {
     }
 }
 
+impl<D, A> DepDisplay<D, A> for anyhow::Error {
+    fn fmt(&self, f: &mut dyn Write, _dep: &D, _args: &A) -> std::fmt::Result {
+        f.write_str(&self.to_string())
+    }
+}
+
 impl<D, A, T> DepDisplay<D, A> for &T
 where
     T: DepDisplay<D, A> + ?Sized,
@@ -1591,6 +1635,18 @@ impl DepDisplay<TypedProgram, K1DisplayArgs> for TypeId {
     fn fmt(&self, f: &mut dyn Write, k1: &TypedProgram, args: &K1DisplayArgs) -> std::fmt::Result {
         let mode = if args.verbose { TypeDisplayMode::Expand } else { TypeDisplayMode::Name };
         k1.display_type_id(f, *self, mode)
+    }
+}
+
+impl<A> DepDisplay<TypedProgram, A> for MatchWitnessId {
+    fn fmt(&self, f: &mut dyn Write, k1: &TypedProgram, _args: &A) -> std::fmt::Result {
+        k1.display_match_witness(*self, f)
+    }
+}
+
+impl<A> DepDisplay<TypedProgram, A> for TypedPatternId {
+    fn fmt(&self, f: &mut dyn Write, k1: &TypedProgram, _args: &A) -> std::fmt::Result {
+        k1.display_pattern(*self, f)
     }
 }
 

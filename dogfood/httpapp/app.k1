@@ -15,19 +15,17 @@ use std/pubsub
 
 type deps = {
   config: { jwt-secret: string },
-  db-conn: db-conn,
-  bus: *mut pubsub/bus[span[u8]],
+  db-conn,
+  bus: *pubsub/bus[span[u8]],
 }
 
 // only once per thread
-fn make-deps(framework: *mut framework-deps): *deps {
-  heap.new(
-    .{
-      config = .{ jwt-secret = "asdf" },
-      db-conn = .{},
-      bus = framework.bus,
-    }: app/deps
-  )
+fn make-deps(framework: *framework-deps): *deps {
+  heap.new(app/deps.{
+    config = .{ jwt-secret = "asdf" },
+    db-conn = .{},
+    bus = framework.bus,
+  })
 }
 
 $http/pre/routing/define(route, {
@@ -49,7 +47,7 @@ $http/pre/routing/define(route, {
   ]
 })
 
-fn handle(req: http/request, deps: *mut deps): http-response {
+fn handle(req: http/request, deps: *deps): http-response {
   tprintln("user-code/handle: request ${req.header.method.enum-name()} `${req.header.url}`")
 
   if route/parse(req.header) is {
@@ -70,18 +68,18 @@ fn handle(req: http/request, deps: *mut deps): http-response {
 let global-topic: string = "global"
 fn game-topic(id: u64): string { "game.$id" }
 
-fn global-events(deps: *mut deps): http-response {
+fn global-events(deps: *deps): http-response {
   let source = deps.bus.subscribe(global-topic) || rc-byte-stream
   sse-response(source, event-name = global-topic)
 }
 
-fn game-events(deps: *mut deps, id: u64): http-response {
+fn game-events(deps: *deps, id: u64): http-response {
   let topic = game-topic(id)
   let source = deps.bus.subscribe(topic) || rc-byte-stream
   sse-response(source, event-name = topic)
 }
 
-fn game-poke(deps: *mut deps, id: u64): http-response {
+fn game-poke(deps: *deps, id: u64): http-response {
   publish-text(deps.bus, game-topic(id), "poked\nover http")
   response/text("poked; events at ${route/url-string(:game-events .{ id })}\n")
 }
@@ -94,7 +92,7 @@ fn counter-events(): http-response {
 
 fn big-file(): http-response {
   let out = string-builder/new()
-  render-big-json(&out, rows = 20000)
+  render-big-json(out.&, rows = 20000)
   response/stream("application/json", source/from-span(out.build().span-bytes(), chunk-size = 65536))
 }
 
@@ -147,7 +145,7 @@ fn home-page(): http-response {
   println("route comptime asserts passed")
 }
 
-fn render-big-json(out: *mut string-builder, rows: size) {
+fn render-big-json(out: *string-builder, rows: size) {
   out.write("[")
   let i: size = 0
   while i < rows {
@@ -161,20 +159,20 @@ fn render-big-json(out: *mut string-builder, rows: size) {
 
 // The bus takes rc'd payloads; text publishers copy to the heap once here.
 // A publisher already holding heap-bytes would .to-rc() them directly.
-fn publish-text(bus: *mut pubsub/bus[span[u8]], topic: string, data: string) {
+fn publish-text(bus: *pubsub/bus[span[u8]], topic: string, data: string) {
   bus.publish(topic, heap-bytes/cloned(data.span-bytes()).to-rc())
 }
 
 let(mutable) game-tick: u64 = 0
-fn start-mock-publisher(bus: *mut pubsub/bus[span[u8]]) {
-  let tid: *mut uv/thread = heap.alloc-t()
+fn start-mock-publisher(bus: *pubsub/bus[span[u8]]) {
+  let tid: *uv/thread = heap.alloc-t()
   let rc = uv/thread_create(tid, fn arg. {
     uv/thread_setname("publisher\0".data-ref-byte())
     let bus = arg.ref[pubsub/bus[span[u8]]]()
     loop {
       uv/sleep(1000)
       // this thread's tmp arena holds the interpolated event data
-      mem/tmp().reset(clear = false)
+      mem/tmp().reset()
       game-tick = game-tick + 1
       publish-text(bus, game-topic(42), `{"tick": $game-tick}`)
       if game-tick % 5 == 0 {

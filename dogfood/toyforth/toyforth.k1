@@ -7,7 +7,7 @@ type tf-obj = either(u32) {
   int   ({ common: obj-common, i: i64 }),
   str   ({ common: obj-common, value: string }),
   bool  ({ common: obj-common, b: bool }),
-  list  ({ common: obj-common, elems: list[*mut tf-obj], len: size }),
+  list  ({ common: obj-common, elems: list[*tf-obj], len: size }),
   symbol({ common: obj-common, name: string })
 }
 

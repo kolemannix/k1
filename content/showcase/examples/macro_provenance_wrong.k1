@@ -1,0 +1,15 @@
+macro swap(a: code, b: code) {
+  `
+  let tmp = $a
+  $a = $b
+  $b = tmp
+  `
+}
+
+fn main(): i32 {
+  let count = 1
+  let label = "one"
+  swap(count, label)
+  0
+}
+//errmsg: Invalid type for assignment: Expected i64 but got string

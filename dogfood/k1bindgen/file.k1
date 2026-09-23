@@ -8,7 +8,7 @@ type foo = {
   _unsigned_char: u8,
   _sizet: c-int,
   _int: c-int,
-  _int_p: *mut c-int,
+  _int_p: *c-int,
   _bool: c-int,
   _float: f32,
   _longlong: int,

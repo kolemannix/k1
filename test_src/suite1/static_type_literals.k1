@@ -1,4 +1,14 @@
 ns static_literals
+
+let fifteen: int = 15
+
+fn join[i: static int](x: i, c: bool): int {
+  let v = if c x else 9
+  let m = if c is { true -> x, false -> 9 }
+  let l = [x, 4]
+  v + m + l.len
+}
+
 fn test() {
   assert-equals[?string](test-compile(1: 5), :some "Expression did not conform to hint: Static lift resulted in wrong value: Different static values of same type family: 5 vs 1")
   let _c: 'c' = 'c'
@@ -14,6 +24,21 @@ fn test() {
     bytes.push(33)
     string/wrap-bytes(bytes.as-span())
   }
+
+  let three: static int = 3
+  let e = true
+  assert-equals(if e three else 9, 3)
+  assert-equals(if e is { true -> three, false -> 9 }, 3)
+  assert-equals([three, 4].len, 2)
+  assert-equals(join[3](3, true), 8)
+  assert-equals(join[3](3, false), 20)
+
+  let fifteen-id = types/id[fifteen]
+  assert-equals(fifteen-id.name(), "static[i64, 15]")
+  assert-equals(types/name[fifteen], "static[i64, 15]")
+  assert(fifteen-id.schema() is :int)
+  assert(fifteen-id != types/id[int])
+  assert-equals(types/instance-info[fixlist[u8, 8]].!.args.[1].name(), "static[i64, 8]")
 
   .{}
 }

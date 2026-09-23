@@ -14,8 +14,11 @@ use std::num::NonZeroU32;
 
 use crate::ir::{self, BackendBuiltin, IrUnitId};
 use crate::lex::SpanId;
+use crate::typer::trace::TraceKind;
 use crate::typer::types::{PhysicalType, RecordKind, TypeId};
-use crate::typer::{FunctionId, K1Result, StaticValueId, TypedExprId, TypedGlobalId, TypedProgram};
+use crate::typer::{
+    FunctionId, K1Message, K1Result, StaticValueId, TypedExprId, TypedGlobalId, TypedProgram,
+};
 use crate::vm::{
     self, Value, Vm, casted_float_op, casted_iop, casted_uop, load_value, store_value,
 };
@@ -100,10 +103,10 @@ pub fn execute_compiled_unit(
     if !raw.returns_value {
         return Ok(k1.static_values.add_empty_typed(raw.result_type_id));
     }
-    let ferry_start = k1.timing.clock.raw();
+    let frame = k1.trace_push(TraceKind::VmValueFerry, span.as_u32(), 0);
     let loaded = load_value(raw.ret_pt, raw.ret_addr);
     let result = vm::vm_value_to_static_value(k1, raw.result_type_id, loaded, span);
-    k1.timing.total_ferry_nanos += k1.timing.elapsed_nanos(ferry_start) as i64;
+    k1.trace_pop(frame);
     result
 }
 
@@ -118,13 +121,10 @@ pub fn execute_compiled_unit_raw(
     vm.eval_span = span;
     vm.bc_fault = None;
 
-    let bcgen_start = k1.timing.clock.raw();
     let info = lower::get_or_lower_unit(k1, unit_id, span)?;
-    k1.timing.total_bcgen_nanos += k1.timing.elapsed_nanos(bcgen_start) as i64;
     if info.kind != UnitKind::Body {
         kbail!(k1, span, "Cannot execute a bodyless ({}) unit", info.kind);
     }
-    let start = k1.timing.clock.raw();
     let ir_unit = ir::get_compiled_unit(&k1.ir, unit_id).unwrap();
     let result_type_id = ir_unit.result_type_id;
     let ret_pt = info.ret_pt;
@@ -138,7 +138,7 @@ pub fn execute_compiled_unit_raw(
     let align_mask = super::FRAME_ALIGN as usize - 1;
     let fp0: *mut u8 = vm.stack.mem.cursor().map_addr(|a| (a + align_mask) & !align_mask);
     vm.stack.mem.set_cursor(fp0);
-    let ferry_start = k1.timing.clock.raw();
+    let ferry_frame = k1.trace_push(TraceKind::VmValueFerry, span.as_u32(), 0);
     unsafe {
         let words = fp0 as *mut u64;
         words.write(0); // caller_fp: none
@@ -150,36 +150,27 @@ pub fn execute_compiled_unit_raw(
             words.add(super::FRAME_HEADER_WORDS as usize + i).write(vm_value.bits());
         }
     }
-    let ferry_in_nanos = k1.timing.elapsed_nanos(ferry_start) as i64;
-    k1.timing.total_ferry_nanos += ferry_in_nanos;
+    k1.trace_pop(ferry_frame);
 
+    let run_frame = k1.trace_push_unit(TraceKind::VmRun, unit_id, None);
     let exec_result = exec_loop(k1, vm, info.code_start, fp0, ret_pt);
-
-    let elapsed_nanos = k1.timing.elapsed_nanos(start);
-    k1.timing.total_vm_nanos += elapsed_nanos as i64 - ferry_in_nanos;
+    k1.trace_pop(run_frame);
 
     let exit_code = match exec_result {
         Ok(exit_code) => exit_code,
-        Err(mut e) => {
-            if let Some((fault_fp, fault_pc)) = vm.bc_fault {
-                let trace = make_stack_trace(k1, fault_fp as *const u8, fault_pc);
-                e.message = k1.ast.idents.intern(format!(
-                    "{}\nbc Execution Trace\n{}",
-                    k1.ident_str(e.message),
-                    trace
-                ));
-            }
-            return Err(e);
-        }
+        Err(e) => return Err(with_bc_trace(k1, vm, e)),
     };
 
     if report_messages {
-        vm::report_execution_messages(k1, vm, span, exit_code);
+        if let Some(e) = vm::report_execution_messages(k1, vm, span) {
+            return Err(with_bc_trace(k1, vm, e));
+        }
     }
 
     vm.overall_return_addr = core::ptr::null_mut();
     if exit_code != 0 {
-        Err(kerr!(k1, span, "Static execution exited with code: {}", exit_code))
+        let e = kerr!(k1, span, "Static execution exited with code: {}", exit_code);
+        Err(with_bc_trace(k1, vm, e))
     } else {
         Ok(RawUnitResult {
             ret_addr,
@@ -188,6 +179,18 @@ pub fn execute_compiled_unit_raw(
             returns_value: !(info.diverges || ret_pt.is_empty()),
         })
     }
+}
+
+fn with_bc_trace(k1: &mut TypedProgram, vm: &Vm, mut e: K1Message) -> K1Message {
+    if let Some((fault_fp, fault_pc)) = vm.bc_fault {
+        let trace = make_stack_trace(k1, fault_fp as *const u8, fault_pc);
+        e.message = k1.ast.idents.intern(format!(
+            "{}\nbc Execution Trace\n{}",
+            k1.ident_str(e.message),
+            trace
+        ));
+    }
+    e
 }
 
 /// Walk the caller_fp chain, naming each frame's unit via the pc range table.
@@ -273,7 +276,7 @@ fn exec_loop(
     let mut fp: *mut u8 = top_fp;
     let mut ret_reg: Value = Value::u64(0);
     let mut instrs_run = 0;
-    let count_ops = k1.config.chatty;
+    let count_ops = k1.config.tools.chatty;
     let mut op_counts = [0u64; OPCODE_COUNT as usize];
 
     // Callers wrap uses in `unsafe`; pointer arithmetic + deref together
@@ -384,10 +387,10 @@ fn exec_loop(
                 if !top_ret_pt.is_empty() && !top_ret_pt.is_agg() {
                     store_value(k1, top_ret_pt, vm.overall_return_addr, ret_reg);
                 }
-                k1.timing.total_vm_instrs += instrs_run;
+                k1.trace.set_top_count(instrs_run as u64);
                 if count_ops {
                     for (i, n) in op_counts.iter().enumerate() {
-                        k1.timing.opcode_counts[i] += *n as i64;
+                        k1.trace.opcode_counts[i] += *n as i64;
                     }
                 }
                 return Ok(0);
@@ -460,7 +463,9 @@ fn exec_loop(
                 let target = operand!(0);
                 let fp_delta = operand!(1) as usize;
                 let nargs = header_b(h) as usize;
-                debug_assert_ne!(target, super::PENDING_PC, "unpatched recursive call target");
+                if target == super::PENDING_PC {
+                    vmerr!("Function needs its own compiled ir while it is being compiled");
+                }
                 let new_fp = unsafe { fp.add(fp_delta) };
                 let words = new_fp as *mut u64;
                 for k in 0..nargs {
@@ -492,13 +497,7 @@ fn exec_loop(
                             k1.function_id_to_string(function_id, false)
                         );
                         vm.eval_span = k1.bc.span_for_pc(pc_u32!());
-                        let bcgen_start = k1.timing.clock.raw();
-                        let info =
-                            vmtry!(lower::get_or_lower_function(k1, function_id, vm.eval_span));
-                        let elapsed = k1.timing.elapsed_nanos(bcgen_start) as i64;
-                        k1.timing.total_bcgen_nanos += elapsed;
-                        k1.timing.total_vm_nanos -= elapsed;
-                        info
+                        vmtry!(lower::get_or_lower_function(k1, function_id, vm.eval_span))
                     }
                 };
                 if info.kind != UnitKind::Body {
@@ -615,7 +614,10 @@ fn exec_loop(
                 };
                 let outcome = vmtry!(exec_builtin(k1, vm, builtin, args));
                 match outcome {
-                    BuiltinOutcome::Exit(code) => return Ok(code),
+                    BuiltinOutcome::Exit(code) => {
+                        vm.bc_fault = Some((fp as u64, pc_u32!()));
+                        return Ok(code);
+                    }
                     BuiltinOutcome::Value(v) => {
                         if ret_pt.is_agg() {
                             let sret = unsafe { *(new_fp as *const u64).add(2) } as *mut u8;
@@ -800,7 +802,11 @@ fn exec_loop(
                 if rhs == 0 {
                     vmerr!("Division by zero");
                 }
-                let r = casted_iop!(width, wrapping_div, lhs, rhs);
+                if signed_div_overflows(width, lhs, rhs) {
+                    vmerr!("Integer division overflow: min-value / -1");
+                }
+                use std::ops::Div;
+                let r = casted_iop!(width, div, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r as u64));
                 advance!(Opcode::IntDivS);
             }
@@ -823,7 +829,11 @@ fn exec_loop(
                 if rhs == 0 {
                     vmerr!("Division by zero");
                 }
-                let r = casted_iop!(width, wrapping_rem, lhs, rhs);
+                if signed_div_overflows(width, lhs, rhs) {
+                    vmerr!("Integer division overflow: min-value / -1");
+                }
+                use std::ops::Rem;
+                let r = casted_iop!(width, rem, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r as u64));
                 advance!(Opcode::IntRemS);
             }
@@ -932,7 +942,7 @@ fn exec_loop(
             Opcode::Shl => {
                 let width = header_a(h);
                 let lhs = read_src!(operand!(1)).bits();
-                let rhs = read_src!(operand!(2)).as_u32();
+                let rhs = read_src!(operand!(2)).as_u32() & (width as u32 - 1);
                 use std::ops::Shl;
                 let r = casted_uop!(width, shl, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r));
@@ -941,7 +951,7 @@ fn exec_loop(
             Opcode::ShrU => {
                 let width = header_a(h);
                 let lhs = read_src!(operand!(1)).bits();
-                let rhs = read_src!(operand!(2)).as_u32();
+                let rhs = read_src!(operand!(2)).as_u32() & (width as u32 - 1);
                 use std::ops::Shr;
                 let r = casted_uop!(width, shr, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r));
@@ -950,7 +960,7 @@ fn exec_loop(
             Opcode::ShrS => {
                 let width = header_a(h);
                 let lhs = read_src!(operand!(1)).bits();
-                let rhs = read_src!(operand!(2)).as_u32();
+                let rhs = read_src!(operand!(2)).as_u32() & (width as u32 - 1);
                 use std::ops::Shr;
                 let r = casted_iop!(width, shr, lhs, rhs);
                 write_slot!(operand!(0), Value::u64(r as u64));
@@ -1085,6 +1095,12 @@ fn exec_cast(kind: CastKind, from: u32, to: u32, input: Value) -> Value {
             Value::f64(f)
         }
     }
+}
+
+fn signed_div_overflows(width: u8, lhs: u64, rhs: u64) -> bool {
+    let mask = if width == 64 { u64::MAX } else { (1u64 << width) - 1 };
+    let min = 1u64 << (width - 1);
+    (rhs & mask) == mask && (lhs & mask) == min
 }
 
 fn int_cmp(width: u8, pred: ir::IntCmpPred, lhs: u64, rhs: u64) -> bool {

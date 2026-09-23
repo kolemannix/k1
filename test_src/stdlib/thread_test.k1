@@ -1,0 +1,34 @@
+ns thread_test
+
+use std/thread
+use std/thread/task
+
+type summary = { lo: u64, hi: u64, total: u64 }
+
+fn sum-range(lo: u64, hi: u64): summary {
+  let total: u64 = 0
+  for i in lo.until(hi) { total = total + i }
+  .{ lo = lo, hi = hi, total = total }
+}
+
+fn test() {
+  let base: u64 = 40
+  assert-equals(task/spawn(fn[base]. base + 2).join(), 42)
+
+  let tasks: list[task[summary]] = []
+  for i in 0u64.until(4) {
+    let lo = i * 1000
+    tasks.push(task/spawn(fn[lo]. sum-range(lo, lo + 1000)))
+  }
+  let total: u64 = 0
+  for t in tasks {
+    let s = t.join()
+    assert-equals(s.hi - s.lo, 1000)
+    total = total + s.total
+  }
+  assert-equals(total, 3999 * 4000 / 2)
+
+  let flag = false
+  task/spawn(fn[flag.&]. { flag.* = true }).join()
+  assert(flag)
+}

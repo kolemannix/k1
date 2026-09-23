@@ -17,7 +17,7 @@ type profile-block = {
 }
 
 // Global profiler state
-let(mutable) global_profiler_anchors: array[profile-anchor, 4096] = zeroed()
+let(mutable) global_profiler_anchors: array[profile-anchor, 4096] = .0
 let(mutable) global_profiler_parent: u32 = 0
 let(mutable) global_profile_start_tsc: u64 = 0
 let(mutable) global_profile_end_tsc: u64 = 0
@@ -84,7 +84,7 @@ fn print_time_elapsed(total_tsc_elapsed: u64, anchor: *profile-anchor) {
 
 // Print all anchor profiling data
 fn print_anchor_data(total_cpu_elapsed: u64) {
-    for anchor in (&global_profiler_anchors).as-buffer().ref-iter() {
+    for anchor in global_profiler_anchors.&.as-buffer().ref-iter() {
         if anchor.hit_count != 0 {
             print_time_elapsed(total_cpu_elapsed, anchor)
         }

@@ -1,0 +1,2 @@
+fn main(): i32 { a/from-a() + b/from-b() }
+//errmsg: module 'y' resolves to two dirs

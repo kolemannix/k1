@@ -1,0 +1,27 @@
+fn make-adder(n: int): dyn[fn(int) -> int] {
+  fn[n](x: int) x + n
+}
+
+fn apply(i: int, f: some fn int -> int): int { f(i) }
+
+fn main(): i32 {
+  let a = mem/current-arena()
+  let before = a.used-bytes()
+  let n = 5
+  let local = fn[n](x: int) x + n
+  let mid = a.used-bytes()
+  println(local(1))
+  let add5 = make-adder(5)
+  let after = a.used-bytes()
+  println(add5(1))
+  println("local closure bytes: ${mid - before}, dyn lift bytes: ${after - mid}")
+  println(types/size[dyn[fn(int) -> int]])
+  println(apply(1, fn x. x * 2))
+  let c = 0
+  let bump = fn[c.&]() { c.* = c.* + 1 }
+  bump(); bump()
+  println(c)
+  let r = [1, 2, 3, 4] || list/map(fn x. x * x) || list/filter(fn x. x % 2 == 0)
+  println(r)
+  0
+}

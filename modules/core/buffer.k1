@@ -11,55 +11,44 @@
 // it's fully populated
 ns for buffer {
 
-  fn buffer-size-bytes[t](count: size): size {
-    count * core/types/stride[t]
+  fn(inline) buffer-size-bytes[t](count: size): size { count * types/stride[t] }
+  fn(inline) size-bytes[t](self: buffer[t]): size { self.len * types/stride[t] }
+
+  fn(inline) data-ptr[t](self: buffer[t]): ptr { self.data }
+  fn(inline) data-ref[t](self: buffer[t]): *t { self.data.ref[t] }
+
+  fn(inline) len[t](self: buffer[t]): size { self.len }
+
+  fn(inline) raw-parts[t](self: buffer[t]): { ptr: ptr, len: size } { .{ ptr = self.data, len = self.len } }
+
+  fn(inline) check-index(len: size, index: size) {
+    if index.unsigned() >= len.unsigned() crash-bounds(len, index, "index out of bounds")
   }
 
-  fn size-bytes[t](self: buffer[t]): size { buffer-size-bytes[t](self.len) }
-
-  fn data-ptr[t](self: buffer[t]): ptr { self.data.as[ptr] }
-  fn data-ref[t](self: buffer[t]): *t { self.data }
-
-  fn len[t](self: buffer[t]): size { self.len }
-
-  fn raw-parts[t](self: buffer[t]): { ptr: ptr, len: size } { .{ ptr = self.data.as[ptr], len = self.len } }
+  fn(inline) grown-cap(cap: size, elem-size: size): size {
+    if cap == 0 { if elem-size >= 1024 1 else 8 } else cap * 2
+  }
 
   ////////////////////////
   // Constructor functions
 
-  fn empty[t](): buffer[t] {
-    .{ len = 0, data = ptr/null.ref[t] }
-  }
+  fn(inline) empty[t](): buffer[t] { .{ len = 0, data = ptr/null } }
+  fn(inline) wrap-raw[t](ptr, count: size): buffer[t] { .{ len = count, data = ptr } }
+  fn(inline) wrap-ref[t](data: *t, len: size): buffer[t] { .{ len, data = data.as[ptr] } }
 
-  fn wrap-raw[t](ptr, count: size): buffer[t] {
-    .{ len = count, data = ptr.ref[t] }
-  }
-
-  fn wrap-ref[t](data: *t, len: size): buffer[t] {
-    .{ len, data }
-  }
-
-  fn from-array[t, n: static size](array: *array[t, n]): buffer[t] {
+  fn(inline) from-array[t, n: static size](array: *array[t, n]): buffer[t] {
     array.as-span().inner-buffer().cloned()
   }
 
-  fn from-span[t](span: span[t]): buffer[t] {
-    span.inner-buffer().cloned()
-  }
+  fn(inline) from-span[t](span: span[t]): buffer[t] { span.inner-buffer().cloned() }
 
-  fn cloned[t](self: buffer[t]): buffer[t] {
-    let clone = self._enlarged-clone(new-count = self.len)
-    clone
-  }
+  fn(inline) cloned[t](self: buffer[t]): buffer[t] { self._enlarged-clone(new-count = self.len) }
 
   fn fill[t](self: buffer[t], value: t): empty {
-    if value is {
-      type[u8](byte) -> {
-        self.memset(byte)
-      },
-      type[i8](byte) -> {
-        self.memset(byte.unsigned())
-      },
+    #if types/schema[t] is {
+      :int :u8 -> self.memset(value),
+      :int :i8 -> self.memset(value.unsigned()),
+      :char -> self.memset(value.as-u8()),
       _ -> {
         let i = 0
         while i < self.len {
@@ -70,136 +59,104 @@ ns for buffer {
     }
   }
 
-  fn filled-in[t, a: allocator](alloc: a, size: size, value: t): buffer[t] {
+  fn(inline) filled-in[t, a: allocator](alloc: a, size: size, value: t): buffer[t] {
     let buf: buffer[t] = allocate-in[t, _](alloc, size)
     buf.fill(value)
     buf
   }
 
-  fn filled[t](size: size, value: t): buffer[t] {
+  fn(inline) filled[t](size: size, value: t): buffer[t] {
     buffer/filled-in[t, _](mem/current-arena(), size, value)
   }
 
-  fn allocate-in[t, a: allocator](alloc: a, count: size): buffer[t] {
-    let ptr = if count == 0 {
-      ptr/null
-    } else {
-      let size-bytes = buffer-size-bytes[t](count)
-      alloc.alloc(size-bytes, core/types/align[t]())
-    }
-    let data = ptr.ref[t]
-    .{ len = count, data }
+  fn(inline) allocate-in[t, a: allocator](alloc: a, count: size): buffer[t] {
+    let data = if count == 0 ptr/null else alloc.alloc(count * types/stride[t], types/align[t]())
+    .{ data, len = count }
   }
 
-  fn allocate[t](count: size): buffer[t] {
+  fn(inline) allocate[t](count: size): buffer[t] {
     allocate-in[t, _](mem/current-arena(), count)
   }
 
   ////////////////////////
   // Modification
 
-  fn _grow-to[t, a: allocator](self: *mut buffer[t], alloc: a, new-count: size): empty {
-    let new-size = buffer-size-bytes[t](new-count)
-    let old-size = buffer-size-bytes[t](self.len)
-    let new-ptr = alloc.realloc(
-      old-ptr = self.data-ptr(),
-      old-size = old-size,
-      align = core/types/align[t](),
-      new-size = new-size,
+  fn(noinline) _grow-to[t, a: allocator](self: *buffer[t], alloc: a, new-count: size): empty {
+    let data = alloc.realloc(
+      old-ptr = self.data,
+      old-size = self.size-bytes(),
+      align = types/align[t](),
+      new-size = new-count * types/stride[t],
     )
-    self.* = .{ len = new-count, data = new-ptr.ref[t] }
+    self.* = .{ data, len = new-count }
   }
 
   fn _enlarged-clone-in[t, a: allocator](self: buffer[t], alloc: a, new-count: size): buffer[t] {
-    let new-buffer = allocate-in[t, _](alloc, new-count)
-    copy[t](src = self, dst = new-buffer)
-    new-buffer
+    let new = allocate-in[t, _](alloc, new-count)
+    buffer/copy(src = self, dst = new)
+    new
   }
 
-  fn _enlarged-clone[t](self: buffer[t], new-count: size): buffer[t] {
+  fn(inline) _enlarged-clone[t](self: buffer[t], new-count: size): buffer[t] {
     self._enlarged-clone-in[t, _](mem/current-arena(), new-count)
   }
 
   fn copy[t](src: buffer[t], dst: buffer[t]) {
-    if src.len > dst.len {
-      crash("Buffer copy dst index out of bounds: ${src.len} > ${dst.len}")
-    }
+    if src.len > dst.len crash-bounds(dst.len, src.len, "buffer copy: src longer than dst")
     if src.len == 0 return
-    let num-bytes = buffer-size-bytes[t](src.len)
-    mem/copy(dst = dst.data-ptr(), src = src.data-ptr(), count = num-bytes)
+    mem/copy(dst = dst.data, src = src.data, count = src.size-bytes())
   }
 
   fn move[t](src: buffer[t], dst: buffer[t]) {
-    if src.len > dst.len {
-      crash("Buffer copy dst index out of bounds: ${src.len} > ${dst.len}")
-    }
+    if src.len > dst.len crash-bounds(dst.len, src.len, "buffer move: src longer than dst")
     if src.len == 0 return
-    let num-bytes = buffer-size-bytes[t](src.len)
-    mem/move(dst = dst.data-ptr(), src = src.data-ptr(), count = num-bytes)
+    mem/move(dst = dst.data, src = src.data, count = src.size-bytes())
   }
 
-  fn cloned-in[t, a: allocator](self: buffer[t], alloc: a): buffer[t] {
+  fn(inline) cloned-in[t, a: allocator](self: buffer[t], alloc: a): buffer[t] {
     self._enlarged-clone-in(alloc, new-count = self.len)
   }
 
-  // Performs a shifting remove, but does not shrink buffer.len
   fn remove[t](self: buffer[t], index: size) {
-    check-bounds(self, index)
-  
+    self.check-bounds(index)
     if index + 1 < self.len {
-      let src = self.slice(start = index + 1, end = self.len)
-      let dst = self.slice(start = index,     end = self.len - 1)
-      buffer/move(src = src, dst = dst) // memmove semantics
+      buffer/move(src = self.slice(index + 1, self.len), dst = self.slice(index, self.len - 1))
     }
-  
-    self.[self.len - 1] = mem/zeroed[t]
+    mem/set(dst = self.data.add-bytes((self.len - 1) * types/stride[t]), value = 0, count = types/stride[t])
   }
 
   ///////////////////////////
   // Accessor functions
 
-  fn index-unchecked[t](self: buffer[t], index: size): *mut t {
+  fn(inline) index-unchecked[t](self: buffer[t], index: size): *t {
     self.data-ptr().ref-at[t](index)
   }
 
-  fn check-bounds[t](self: buffer[t], index: size) {
-    if index.unsigned() >= self.len.unsigned() {
-      crash("index out of bounds: $index / ${self.len}")
-    }
+  fn(inline) check-bounds[t](self: buffer[t], index: size) {
+    buffer/check-index(self.len, index)
   }
 
-  fn memset[t](self: buffer[t], value: u8): empty {
-    mem/set(
-      dst = self.data-ptr(),
-      value = value,
-      count = buffer-size-bytes[t](self.len)
-    )
+  fn(inline) memset[t](self: buffer[t], value: u8): empty {
+    mem/set(dst = self.data, value = value, count = self.size-bytes())
   }
 
   fn slice[t](self: buffer[t], start: size, end: size): buffer[t] {
-    if start < 0 or start > self.len {
-      crash("slice start index out of bounds: $start. length is: ${self.len}")
-    }
-    
+    if start.unsigned() > self.len.unsigned() crash-bounds(self.len, start, "slice start out of bounds")
     let end-clamp = end.min(self.len)
-    
     if end-clamp <= start or self.len == 0 {
-      return empty[t]()
+      return .{ data = ptr/null, len = 0 }
     }
-    
-    let new-len = end-clamp - start
-    let new-base = self.[start].&
-    .{ len = new-len, data = new-base }
+    .{ data = self.data.add-bytes(types/stride[t] * start), len = end-clamp - start }
   }
 
-  fn take[t](self: buffer[t], count: size): buffer[t] { self.slice(0, count) }
-  fn drop[t](self: buffer[t], count: size): buffer[t] {
+  fn(inline) take[t](self: buffer[t], count: size): buffer[t] { self.slice(0, count) }
+  fn(inline) drop[t](self: buffer[t], count: size): buffer[t] {
     self.slice(count.min(self.len), self.len)
   }
-  fn take-right[t](self: buffer[t], count: size): buffer[t] {
+  fn(inline) take-right[t](self: buffer[t], count: size): buffer[t] {
     self.slice(if count > self.len 0 else self.len - count, self.len)
   }
-  fn drop-right[t](self: buffer[t], count: size): buffer[t] {
+  fn(inline) drop-right[t](self: buffer[t], count: size): buffer[t] {
     self.slice(0, if count > self.len 0 else self.len - count)
   }
 
@@ -213,20 +170,35 @@ ns for buffer {
     self.take-right(other.len()) == other
   }
 
-  fn position-byte(base: ptr, len: size, needle: u8): ?size {
-    let w: size = k1/simd-bytes
+  fn position-lanes[t: equals and bitwise, n: static size](base: ptr, len: size, needle: t): ?size {
+    let w: size = core/meta/static-type-to-value[_, n]()
     let i = 0: size
     if len >= w {
-      let lanes = vector/splat[u8, k1/simd-bytes](needle)
+      let lanes = vector/splat[t, n](needle)
+      while i + 4 * w <= len {
+        let e0 = vector/load-unchecked[t, n](base.ref-at[t](i).as[ptr]).eq-lanes(lanes)
+        let e1 = vector/load-unchecked[t, n](base.ref-at[t](i + w).as[ptr]).eq-lanes(lanes)
+        let e2 = vector/load-unchecked[t, n](base.ref-at[t](i + 2 * w).as[ptr]).eq-lanes(lanes)
+        let e3 = vector/load-unchecked[t, n](base.ref-at[t](i + 3 * w).as[ptr]).eq-lanes(lanes)
+        if e0.bit-or(e1).bit-or(e2).bit-or(e3).any() {
+          let l0 = e0.first-true-lane()
+          if l0 >= 0 return :some (i + l0)
+          let l1 = e1.first-true-lane()
+          if l1 >= 0 return :some (i + w + l1)
+          let l2 = e2.first-true-lane()
+          if l2 >= 0 return :some (i + 2 * w + l2)
+          return :some (i + 3 * w + e3.first-true-lane())
+        }
+        i = i + 4 * w
+      }
       while i + w <= len {
-        let chunk = vector/load-unchecked[u8, k1/simd-bytes](base.ref-at[u8](i).as[ptr])
-        let lane = chunk.eq-lanes(lanes).first-true-lane()
+        let lane = vector/load-unchecked[t, n](base.ref-at[t](i).as[ptr]).eq-lanes(lanes).first-true-lane()
         if lane >= 0 return :some (i + lane)
         i = i + w
       }
     }
     while i < len {
-      if base.ref-at[u8](i).* == needle return :some i
+      if base.ref-at[t](i).* == needle return :some i
       i = i + 1
     }
     :none
@@ -239,7 +211,7 @@ ns for buffer {
     let k = needle-len
     if k == 0 return :some 0
     if k > n return :none
-    if k == 1 return position-byte(base, n, needle-base.ref-at[u8](0).*)
+    if k == 1 return position-lanes[u8, k1/simd-bytes](base, n, needle-base.ref-at[u8](0).*)
 
     let w: size = k1/simd-bytes
     let first = vector/splat[u8, k1/simd-bytes](needle-base.ref-at[u8](0).*)
@@ -264,25 +236,10 @@ ns for buffer {
     :none
   }
 
-  fn position[t: equals](self: buffer[t], needle: t): ?size {
-    if needle is {
-      type[u8](byte) -> position-byte(self.data-ptr(), self.len, byte),
-      type[char](c) -> position-byte(self.data-ptr(), self.len, c.as-u8()),
-      _ -> {
-        let i = 0: size
-        while i < self.len {
-          if self.[i] == needle return :some i
-          i = i + 1
-        }
-        :none
-      }
-    }
-  }
-
   fn index-of-buffer[t: equals](self: buffer[t], needle: buffer[t]): ?size {
-    if mem/zeroed[t]() is {
-      type[u8](_byte) -> index-of-bytes(self.data-ptr(), self.len, needle.data-ptr(), needle.len),
-      type[char](_c) -> index-of-bytes(self.data-ptr(), self.len, needle.data-ptr(), needle.len),
+    #if types/schema[t] is {
+      :int :u8 or :int :i8 or :char ->
+        index-of-bytes(self.data-ptr(), self.len, needle.data-ptr(), needle.len),
       _ -> {
         let k = needle.len
         if k == 0 return :some 0
@@ -330,15 +287,15 @@ ns for buffer {
     span/wrap-buffer(results.as-buffer())
   }
 
-  fn is-empty[t](self: buffer[t]): bool {
+  fn(inline) is-empty[t](self: buffer[t]): bool {
     self.len == 0
   }
 
-  fn non-empty[t](self: buffer[t]): bool {
+  fn(inline) non-empty[t](self: buffer[t]): bool {
     self.len > 0
   }
 
-  fn first-ref[t](self: buffer[t]): ?(*mut t) {
+  fn first-ref[t](self: buffer[t]): ?(*t) {
     if not self.is-empty() {
       :some self.[0].&
     } else {
@@ -353,7 +310,7 @@ ns for buffer {
     }
   }
 
-  fn last-ref[t](self: buffer[t]): ?(*mut t) {
+  fn last-ref[t](self: buffer[t]): ?(*t) {
     if not self.is-empty() {
       :some self.[self.len - 1].&
     } else {
@@ -369,11 +326,8 @@ ns for buffer {
   }
 
   fn concat[t](self: buffer[t], other: buffer[t]): buffer[t] {
-    let new = self._enlarged-clone[t](self.len + other.len)
-    buffer/copy(
-      src = other, 
-      dst = new.slice(self.len, self.len + other.len), 
-    )
+    let new = self._enlarged-clone-in(mem/current-arena(), self.len + other.len)
+    buffer/copy(src = other, dst = new.slice(self.len, self.len + other.len))
     new
   }
 
@@ -464,21 +418,21 @@ ns for buffer {
     }
   }
 
-  fn as-char-buffer(self: buffer[byte]): buffer[char] {
+  fn(inline) as-char-buffer(self: buffer[byte]): buffer[char] {
     buffer/wrap-raw[char](
       count = self.len,
       ptr = self.data-ptr()
     )
   }
 
-  fn as-byte-buffer(self: buffer[char]): buffer[byte] {
+  fn(inline) as-byte-buffer(self: buffer[char]): buffer[byte] {
     buffer/wrap-raw[byte](
       count = self.len,
       ptr = self.data-ptr()
     )
   }
 
-  fn ref-iter[t](self: buffer[t]): buffer-ref-iterator[t] {
+  fn(inline) ref-iter[t](self: buffer[t]): buffer-ref-iterator[t] {
     buffer-ref-iterator/from-buffer(self)
   }
 
@@ -489,15 +443,13 @@ type buffer-iterator[t] = {
   pos: size
 }
 ns for buffer-iterator {
-  fn from-buffer[t](buf: buffer[t]): buffer-iterator[t] { 
-    .{ buf, pos = 0 }
-  }
+  fn(inline) from-buffer[t](buf: buffer[t]): buffer-iterator[t] { .{ buf, pos = 0 } }
 }
 
 impl[t] iterator[item = t] for buffer-iterator[t] {
-  fn next(self: *mut self): ?item {
+  fn(inline) next(self: *self): ?item {
     if self.pos < self.buf.len {
-      let item = self.buf.[self.pos]
+      let item = self.buf.index-unchecked(self.pos).*
       self.pos = self.pos + 1
       :some item
     } else :none
@@ -506,24 +458,45 @@ impl[t] iterator[item = t] for buffer-iterator[t] {
     let rem = if self.pos < self.buf.len self.buf.len - self.pos else 0
     .{ at-least = rem, at-most = :some rem }
   }
-  fn advance-by(self: *mut self, n: size): empty {
+  fn advance-by(self: *self, n: size): empty {
     self.pos = self.pos + n
+  }
+  fn seek(self: *self, needle: item): ?size {
+    let base = self.buf.data-ptr().ref-at[t](self.pos).as[ptr]
+    let len = self.buf.len - self.pos
+    let found: ?size = #if types/schema[t] is {
+      :int :u8 or :int :i8 -> buffer/position-lanes[t, k1/simd-bytes](base, len, needle),
+      :char or :bool -> buffer/position-lanes[u8, k1/simd-bytes](base, len, mem/bitcast[t, u8](needle)),
+      :int :u16 or :int :i16 -> buffer/position-lanes[t, vector/simd-lanes-16](base, len, needle),
+      :int :u32 or :int :i32 -> buffer/position-lanes[t, vector/simd-lanes-32](base, len, needle),
+      :int :u64 or :int :i64 -> buffer/position-lanes[t, vector/simd-lanes-64](base, len, needle),
+      _ -> {
+        let i = 0: size
+        while i < len {
+          if base.ref-at[t](i).* == needle break
+          i = i + 1
+        }
+        if i < len :some i else :none
+      }
+    }
+    self.pos = if found is :some i self.pos + i + 1 else self.buf.len
+    found
   }
 }
 
 impl[t] as-buffer[t = t] for buffer[t] {
-  fn as-buffer(self): buffer[t] { self }
+  fn(inline) as-buffer(self): buffer[t] { self }
 }
 
 impl[t] index[key = size, t = t] for buffer[t] {
-  fn index-ref(self, key: size): *t {
+  fn(inline) index-ref(self, key: size): *t {
     self.check-bounds(key)
     self.index-unchecked(key)
   }
 }
 
 impl[t] iterable[item = t, i = buffer-iterator[t]] for buffer[t] {
-  fn iterator(self): i {
+  fn(inline) iterator(self): i {
     buffer-iterator/from-buffer(self)
   }
 }
@@ -552,10 +525,10 @@ ns for buffer-ref-iterator {
   }
 }
 
-impl[t] iterator[item = *mut t] for buffer-ref-iterator[t] {
-  fn next(self: *mut self): ?item {
+impl[t] iterator[item = *t] for buffer-ref-iterator[t] {
+  fn(inline) next(self: *self): ?item {
     if self.pos < self.buf.len {
-      let item = self.buf.[self.pos].&
+      let item = self.buf.index-unchecked(self.pos)
       self.pos = self.pos + 1
       :some item
     } else :none
@@ -564,7 +537,7 @@ impl[t] iterator[item = *mut t] for buffer-ref-iterator[t] {
     let rem = if self.pos < self.buf.len self.buf.len - self.pos else 0
     .{ at-least = rem, at-most = some(rem) }
   }
-  fn advance-by(self: *mut self, n: size): empty {
+  fn advance-by(self: *self, n: size): empty {
     self.pos = self.pos + n
   }
 }
@@ -582,15 +555,15 @@ impl[t: equals] equals for buffer[t] {
 }
 
 impl[n: static size, t] iterable[item = t, i = buffer-iterator[t]] for *array[t, n] {
-  fn iterator(self): i {
+  fn(inline) iterator(self): i {
     buffer-iterator/from-buffer(
       self.as-span().inner-buffer()
     )
   }
 }
 
-impl[n: static size, t] iterable[item = *mut t, i = buffer-ref-iterator[t]] for *array[t, n] {
-  fn iterator(self): i {
+impl[n: static size, t] iterable[item = *t, i = buffer-ref-iterator[t]] for *array[t, n] {
+  fn(inline) iterator(self): i {
     buffer-ref-iterator/from-buffer(
       self.as-span().inner-buffer()
     )

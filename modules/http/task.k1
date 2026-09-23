@@ -14,20 +14,20 @@
 // This will be the shape of our solution for ensuring our sqlite writes
 // never deadlock; they must be serialized to something like this
 type task[t] = {
-  state: *mut task-state[t],
+  state: *task-state[t],
 }
 
 type task-state[t] = {
-  req: *mut uv/work,
-  mutex: *mut uv/mutex,
-  cond: *mut uv/cond,
+  req: *uv/work,
+  mutex: *uv/mutex,
+  cond: *uv/cond,
   handler-done: bool,
   libuv-done: bool,
   output: ?t,
 }
 
 ns for task-state {
-  fn release[t](self: *mut task-state[t]) {
+  fn release[t](self: *task-state[t]) {
     uv/cond_destroy(self.cond)
     uv/mutex_destroy(self.mutex)
     heap.free-t(self.req)
@@ -38,18 +38,18 @@ ns for task-state {
 }
 
 type task-work[t, params] = {
-  state: *mut task-state[t],
-  params: params,
+  state: *task-state[t],
+  params,
   handler: *fn(params) -> t,
 }
 
 ns for task {
   fn spawn[t, params](
-    l: *mut uv-loop,
+    l: *uv-loop,
     handler: *fn(params) -> t,
-    params: params,
+    params,
   ): task[t] {
-    let state: *mut task-state[t] = heap.new(.{
+    let state: *task-state[t] = heap.new(.{
       req      = heap.alloc-t[uv/work],
       mutex    = heap.alloc-t[uv/mutex],
       cond     = heap.alloc-t[uv/cond],
@@ -57,7 +57,7 @@ ns for task {
       libuv-done = false,
       output = :none,
     })
-    let work: *mut task-work[t, params] = heap.new(.{
+    let work: *task-work[t, params] = heap.new(.{
       state,
       params,
       handler,
@@ -115,7 +115,7 @@ ns for task {
     output
   }
 
-  fn complete[t](state: *mut task-state[t], output: t) {
+  fn complete[t](state: *task-state[t], output: t) {
     uv/mutex_lock(state.mutex)
     state.output = :some output
     state.handler-done = true

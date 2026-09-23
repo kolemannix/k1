@@ -1,0 +1,12 @@
+fn build(req: k1/build-request): k1/build-config {
+  let b = req.default
+  b.target = :intel64-bare
+  b.no-std = true
+  b
+}
+
+fn module(_b: k1/build-config): k1/module {
+  let m = k1/module/new()
+  m.library()
+  m
+}

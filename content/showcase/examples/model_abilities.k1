@@ -1,0 +1,78 @@
+ability shape {
+  fn area(self: *self): f64
+  fn name(self: *self): string
+  fn sides(): int
+  fn describe(self: *self): string {
+    "${self.name()} area=${self.area()} sides=${shape@(self)/sides()}"
+  }
+}
+
+type circle = { radius: f64 }
+type rect = { w: f64, h: f64 }
+
+impl shape for circle {
+  fn area(self: *circle): f64 { 3.14159 * self.radius * self.radius }
+  fn name(_self: *circle): string { "circle" }
+  fn sides(): int { 0 }
+}
+
+impl shape for rect {
+  fn area(self: *rect): f64 { self.w * self.h }
+  fn name(_self: *rect): string { "rect" }
+  fn sides(): int { 4 }
+  fn describe(self: *rect): string { "${self.w}x${self.h} rect" }
+}
+
+fn bigger[t: shape](a: *t, b: *t): *t {
+  if a.area() > b.area() a else b
+}
+
+ability loud {
+  fn shout(self: *self): string
+}
+
+impl[t: shape] loud for t {
+  fn shout(self: *t): string { "${self.name()}!" }
+}
+
+ability accumulator[impl t] {
+  fn add(self: *self, x: t)
+  fn total(self: *self): t
+}
+
+type summer = { n: int }
+impl accumulator[t = int] for summer {
+  fn add(self: *summer, x: int) { self.n = self.n + x }
+  fn total(self: *summer): int { self.n }
+}
+
+type joiner = { s: string }
+impl accumulator[t = string] for joiner {
+  fn add(self: *joiner, x: string) { self.s = self.s.concat(x) }
+  fn total(self: *joiner): string { self.s }
+}
+
+fn drain[t](acc: dyn[accumulator[t = t]], items: list[t]): t {
+  for x in items { acc.add(x) }
+  acc.total()
+}
+
+fn main(): i32 {
+  let c = circle.{ radius = 1.0 }
+  let r = rect.{ w = 2.0, h = 3.0 }
+  let unit = rect.{ w = 1.0, h = 1.0 }
+  println(c.describe())
+  println(r.describe())
+  println(bigger(r.&, unit.&).describe())
+  println(r.shout())
+
+  let shapes: list[dyn[shape]] = [c.&.to-dyn(), r.&.to-dyn()]
+  for s in shapes { println("${s.describe()} (${s.sides()} sides)") }
+  println("dyn[shape] is ${types/size[dyn[shape]]} bytes")
+
+  let sum: *summer = mem/new(.{ n = 0 })
+  let join: *joiner = mem/new(.{ s = "" })
+  println(drain(sum.to-dyn[accumulator[t = int]](), [1, 2, 3]))
+  println(drain(join.to-dyn[accumulator[t = string]](), ["a", "b", "c"]))
+  0
+}

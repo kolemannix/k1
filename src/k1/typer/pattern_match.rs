@@ -29,10 +29,10 @@ enum PatternHead {
     Ctor(MatchCtor),
 }
 
-type MatchWitnessId = Handle<MatchWitness, MemTmp>;
+pub(crate) type MatchWitnessId = Handle<MatchWitness, MemTmp>;
 
 #[derive(Clone, Copy)]
-struct MatchWitness {
+pub(crate) struct MatchWitness {
     type_id: TypeId,
     kind: MatchWitnessKind,
     children: TmpSlice<MatchWitnessId>,
@@ -87,21 +87,22 @@ impl TypedProgram {
         let wildcard = self.tmp.pushn(&[MatchCell::Any]);
         let missing = self.match_useful(matrix, wildcard, columns);
         let missing_message = missing.map(|witnesses| {
-            if skip_build_message {
-                "Unhandled patterns".to_string()
+            let mstr = if skip_build_message {
+                "Unhandled patterns".into()
             } else {
                 let witness = self.tmp.getn(witnesses)[0];
-                format!(
-                    "Non-exhaustive match; for example, this pattern is not covered:\n- {}",
-                    self.match_witness_to_string(witness)
+                k1_format_user!(
+                    self,
+                    "Non-exhaustive match. this pattern is not covered:\n- {}",
+                    witness
                 )
-            }
+            };
+            self.ast.idents.intern(mstr)
         });
         let useless_message = first_useless.map(|pattern| {
             let span = self.patterns.get(pattern).span_id();
-            let message =
-                format!("This pattern handled no cases: {}", self.pattern_to_string(pattern));
-            (span, message)
+            let message = k1_format_user!(self, "This pattern handled no cases: {}", pattern);
+            (span, self.ast.idents.intern(message))
         });
         self.tmp.reset_to(mark);
 
@@ -133,7 +134,10 @@ impl TypedProgram {
         let query_cells = self.tmp.getn(query);
         if matrix.rows == 0 && query_cells.iter().all(|cell| matches!(cell, MatchCell::Any)) {
             let column_types = self.tmp.getn(columns);
-            if column_types.iter().all(|type_id| self.match_type_is_inhabited(*type_id)) {
+            if column_types
+                .iter()
+                .all(|type_id| self.get_type_variable_counts(*type_id).is_inhabited)
+            {
                 let mut witnesses = self.tmp.new_list(column_types.len() as u32);
                 for type_id in column_types {
                     witnesses.push(self.add_match_witness(
@@ -194,8 +198,12 @@ impl TypedProgram {
                 }
                 _ => self.match_useful_ctor(matrix, query, columns, MatchCtor::Struct),
             },
-            Type::Reference(_) => {
-                self.match_useful_ctor(matrix, query, columns, MatchCtor::Reference)
+            Type::Reference(refer) => {
+                if self.get_type_variable_counts(refer.inner_type).is_inhabited {
+                    self.match_useful_ctor(matrix, query, columns, MatchCtor::Reference)
+                } else {
+                    self.match_useful_open(matrix, query, columns, type_id)
+                }
             }
             Type::Never | Type::Function(_) => None,
             _ => self.match_useful_open(matrix, query, columns, type_id),
@@ -451,56 +459,17 @@ impl TypedProgram {
         self.tmp.push_h(MatchWitness { type_id, kind, children })
     }
 
-    fn match_type_is_inhabited(&mut self, type_id: TypeId) -> bool {
-        let mut ancestors = self.tmp.new_list(16);
-        self.match_type_is_inhabited_rec(type_id, &mut ancestors)
-    }
-
-    fn match_type_is_inhabited_rec(
-        &mut self,
-        type_id: TypeId,
-        ancestors: &mut List<TypeId, MemTmp>,
-    ) -> bool {
-        if type_id == self.builtin_types.string() || ancestors.contains(&type_id) {
-            return true;
-        }
-        ancestors.push_grow(&mut self.tmp, type_id);
-        let inhabited = match *self.types.get(type_id) {
-            Type::Never | Type::Function(_) => false,
-            Type::Struct(struc) => self
-                .mem
-                .getn(struc.fields)
-                .iter()
-                .all(|field| self.match_type_is_inhabited_rec(field.type_id, ancestors)),
-            Type::Sum(sum) => self.mem.getn(sum.variants).iter().any(|variant| {
-                variant
-                    .payload
-                    .is_none_or(|payload| self.match_type_is_inhabited_rec(payload, ancestors))
-            }),
-            Type::Reference(reference) => {
-                self.match_type_is_inhabited_rec(reference.inner_type, ancestors)
-            }
-            Type::Generic(generic) => self.match_type_is_inhabited_rec(generic.inner, ancestors),
-            Type::Array(array) => {
-                self.get_concrete_count_of_array(array.size_type) == Some(0)
-                    || self.match_type_is_inhabited_rec(array.element_type, ancestors)
-            }
-            _ => true,
-        };
-        ancestors.pop();
-        inhabited
-    }
-
+    #[allow(unused)]
     fn match_witness_to_string(&self, witness: MatchWitnessId) -> String {
         let mut result = String::new();
         self.display_match_witness(witness, &mut result).unwrap();
         result
     }
 
-    fn display_match_witness(
+    pub(crate) fn display_match_witness<W: std::fmt::Write + ?Sized>(
         &self,
         witness_id: MatchWitnessId,
-        out: &mut impl std::fmt::Write,
+        out: &mut W,
     ) -> std::fmt::Result {
         let witness = *self.tmp.get(witness_id);
         match witness.kind {
@@ -569,9 +538,10 @@ impl TypedProgram {
         match parsed_pattern_expr {
             ParsedPattern::Wildcard(span) => Ok(self.patterns.add(TypedPattern::Wildcard(*span))),
             ParsedPattern::Literal(literal_expr_id) => {
+                let span = self.ast.exprs.get_span(*literal_expr_id);
                 match self.ast.exprs.get(*literal_expr_id).expect_literal() {
-                    ParsedLiteral::Char(c, span) => match self.types.get(target_type_id) {
-                        Type::Char => Ok(self.patterns.add(TypedPattern::LiteralChar(*c, *span))),
+                    ParsedLiteral::Char(c) => match self.types.get(target_type_id) {
+                        Type::Char => Ok(self.patterns.add(TypedPattern::LiteralChar(*c, span))),
                         _ => Err(kerr!(
                             self,
                             self.ast.get_pattern_span(pat_expr),
@@ -579,10 +549,9 @@ impl TypedProgram {
                             target_type_id
                         )),
                     },
-                    ParsedLiteral::Numeric(num_lit) => {
-                        let num_lit = *num_lit;
+                    ParsedLiteral::Numeric { text_span } => {
                         let num_value_id = self.eval_numeric_value(
-                            num_lit.text_span,
+                            *text_span,
                             EvalExprContext::make(scope_id)
                                 .with_expected_type(Some(target_type_id)),
                         )?;
@@ -590,7 +559,7 @@ impl TypedProgram {
                             StaticValue::Int(_) => match self.types.get(target_type_id) {
                                 Type::Integer(_) => Ok(self
                                     .patterns
-                                    .add(TypedPattern::LiteralInteger(num_value_id, num_lit.span))),
+                                    .add(TypedPattern::LiteralInteger(num_value_id, span))),
                                 _ => Err(kerr!(
                                     self,
                                     self.ast.get_pattern_span(pat_expr),
@@ -601,7 +570,7 @@ impl TypedProgram {
                             StaticValue::Float(_) => match self.types.get(target_type_id) {
                                 Type::Float(_) => Ok(self
                                     .patterns
-                                    .add(TypedPattern::LiteralFloat(num_value_id, num_lit.span))),
+                                    .add(TypedPattern::LiteralFloat(num_value_id, span))),
                                 _ => Err(kerr!(
                                     self,
                                     self.ast.get_pattern_span(pat_expr),
@@ -616,8 +585,8 @@ impl TypedProgram {
                             }
                         }
                     }
-                    ParsedLiteral::Bool(b, span) => match self.types.get(target_type_id) {
-                        Type::Bool => Ok(self.patterns.add(TypedPattern::LiteralBool(*b, *span))),
+                    ParsedLiteral::Bool(b) => match self.types.get(target_type_id) {
+                        Type::Bool => Ok(self.patterns.add(TypedPattern::LiteralBool(*b, span))),
                         _ => Err(kerr!(
                             self,
                             self.ast.get_pattern_span(pat_expr),
@@ -625,36 +594,30 @@ impl TypedProgram {
                             target_type_id
                         )),
                     },
-                    ParsedLiteral::String(string_id, span) => {
-                        match self.types.get(target_type_id) {
-                            Type::StaticValue(svt)
-                                if svt.family_type_id == self.builtin_types.string() =>
-                            {
-                                Ok(())
-                            }
-                            _ if target_type_id == self.builtin_types.string() => Ok(()),
-                            _ => Err(kerr!(
+                    ParsedLiteral::String(string_id) => {
+                        if self.get_type_family_type(target_type_id) == self.builtin_types.string()
+                        {
+                            Ok(())
+                        } else {
+                            Err(kerr!(
                                 self,
                                 self.ast.get_pattern_span(pat_expr),
                                 "string literal pattern will never match {}",
                                 target_type_id
-                            )),
+                            ))
                         }?;
-                        Ok(self.patterns.add(TypedPattern::LiteralString(*string_id, *span)))
+                        Ok(self.patterns.add(TypedPattern::LiteralString(*string_id, span)))
                     }
                 }
             }
             ParsedPattern::Variable(ident_id, span) => {
                 if *ident_id == self.ast.idents.b.null {
                     match self.types.get(target_type_id) {
-                        Type::Reference(reference_type) => Ok(self
-                            .patterns
-                            .add(TypedPattern::RefNull(reference_type.inner_type, *span))),
                         Type::Pointer => Ok(self.patterns.add(TypedPattern::PointerNull(*span))),
                         _ => Err(kerr!(
                             self,
                             self.ast.get_pattern_span(pat_expr),
-                            "'null' is a pattern that applies to reference (*t) types and ptr"
+                            "'null' is a pattern that applies to ptr; a reference (*t) is never null"
                         )),
                     }
                 } else {
@@ -920,9 +883,9 @@ impl TypedProgram {
 
     pub(super) fn eval_match_expr(
         &mut self,
-        match_expr_id: ParsedExprId,
+        parsed_match: parse::ParsedMatch,
+        match_expr_span: SpanId,
         ctx: EvalExprContext,
-        check_exhaustive: bool,
         allow_bindings: bool,
         fallback_expr: Option<TypedExprId>,
     ) -> K1Result<TypedExprId> {
@@ -942,23 +905,11 @@ impl TypedProgram {
             }
         }
 
-        let parsed_match = *self.ast.exprs.get(match_expr_id).as_match().unwrap();
-        if parsed_match.is_static {
-            return self.eval_static_match_expr(match_expr_id, ctx);
-        };
-        if parsed_match.cases.is_empty() {
-            return self.make_fail(
-                "match with no arms; note `x is {}` is an empty match, `x is .{}` matches the empty struct",
-                parsed_match.span,
-            );
-        }
         let subject_expr =
             self.eval_expr(parsed_match.match_subject, ctx.with_no_expected_type())?;
 
         let match_subject_variable =
             self.synth_variable_defn_simple(self.ast.idents.b.subject, subject_expr, ctx.scope_id);
-
-        let match_expr_span = parsed_match.span;
 
         let parsed_cases = parsed_match.cases;
         let parsed_pattern_count: u32 = self
@@ -1080,7 +1031,7 @@ impl TypedProgram {
                         ) {
                             kbail!(
                                 self,
-                                self.ast.get_expr_span(guard_condition_expr_id),
+                                self.ast.exprs.get_span(guard_condition_expr_id),
                                 "Expected boolean condition: {msg}"
                             );
                         };
@@ -1107,14 +1058,20 @@ impl TypedProgram {
                     };
                     let consequent_expr_type = self.exprs.get_type(consequent_expr);
 
-                    if expected_arm_type_id.is_none() && consequent_expr_type != NEVER_TYPE_ID {
-                        // We chase down the type because, if its a static, it doesn't really make
-                        // sense to expect every arm to evaluate to the same static, but rather to
-                        // the static's inner type
-                        let chased_consequent_id =
-                            self.get_static_family_id_if_static(consequent_expr_type);
-                        expected_arm_type_id = Some(chased_consequent_id);
-                    }
+                    let consequent_expr = if consequent_expr_type != NEVER_TYPE_ID {
+                        let arm_type = self.get_type_family_type(consequent_expr_type);
+                        if expected_arm_type_id.is_none() {
+                            expected_arm_type_id = Some(arm_type);
+                        }
+                        self.check_and_coerce_expr(
+                            arm_type,
+                            consequent_expr,
+                            pattern_eval_ctx.scope_id,
+                            false,
+                        )?
+                    } else {
+                        consequent_expr
+                    };
 
                     let match_arm = TypedMatchArm {
                         case,
@@ -1137,33 +1094,19 @@ impl TypedProgram {
             return Err(err);
         }
 
-        // Exhaustiveness Checking
-        if check_exhaustive {
-            self.check_pattern_exhaustiveness(
+        match fallback_expr {
+            None => self.check_pattern_exhaustiveness(
                 subject_type,
                 all_unguarded_patterns.as_slice_mut(),
                 subject_expr_span,
                 false,
-            )?
-        }
-        let fallback_value = match fallback_expr {
-            Some(e) => e,
-            None => self.synth_crash_call(
-                if check_exhaustive {
-                    self.ast.idents.b.crash_msg_no_cases_exhaustive
-                } else {
-                    self.ast.idents.b.crash_msg_no_cases
-                },
-                match_expr_span,
-                ctx.with_no_expected_type(),
             )?,
-        };
-        let fallback_arm = TypedMatchArm {
-            case: None,
-            condition: MatchingCondition { instrs: MSlice::empty() },
-            consequent_expr: fallback_value,
-        };
-        typed_arms.push(fallback_arm);
+            Some(fallback_value) => typed_arms.push(TypedMatchArm {
+                case: None,
+                condition: MatchingCondition { instrs: MSlice::empty() },
+                consequent_expr: fallback_value,
+            }),
+        }
         let scrutinee = if typed_arms.iter().any(|arm| arm.case.is_some()) {
             Some(synth_match_scrutinee(
                 self,
@@ -1199,80 +1142,173 @@ impl TypedProgram {
         match_expr_id: ParsedExprId,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
-        // Our job is to evaluate the conditions statically. That means either compiling the condition
-        // chains into static exprs and running them, or just allowing only trivial patterns
-
         let ParsedExpr::Match(parsed_match) = self.ast.exprs.get(match_expr_id) else { panic!() };
         let parsed_match = *parsed_match;
-        let match_target =
+        let span = self.ast.exprs.get_span(match_expr_id);
+        if let Some(phony) = self.synth_phony_if_generic_pass(ctx, span) {
+            return Ok(phony);
+        }
+        let subject =
             self.execute_static_expr(parsed_match.match_subject, ctx.with_no_expected_type(), &[])?;
         let subject_span = self.ast.exprs.get_span(parsed_match.match_subject);
-        let StaticValue::Enum(target_type_id, enum_value) = *self.static_values.get(match_target)
-        else {
-            kbail!(self, subject_span, "Only enums are supported in static match for now");
-        };
-        let enum_members = self.types.get(target_type_id).expect_enum().member_values;
-        let Some(target_member) =
-            self.mem.getn(enum_members).iter().find(|m| m.int_value == enum_value)
-        else {
-            self.ice_span(subject_span, "Tag didn't match any variants")
-        };
-        let target_member_name = target_member.name;
+        let subject_type = self.get_static_value_type(subject);
 
-        let mut given_cases = self.tmp.new_list(enum_members.len());
-        let mut uncovered_members = self.tmp.new_list(enum_members.len());
-        uncovered_members.extend_iter(self.mem.getn(enum_members).iter().map(|m| m.name));
-        for case in self.ast.mem.getn(parsed_match.cases) {
+        let cases = self.ast.mem.getn(parsed_match.cases);
+        let mut arms = self.tmp.new_list(cases.len() as u32);
+        let mut patterns = self.tmp.new_list(cases.len() as u32);
+        for case in cases {
             if let Some(guard_expr) = case.guard_condition_expr {
                 kbail!(
                     self,
                     self.ast.exprs.get_span(guard_expr),
-                    "Guard conditions are not supported in static match for now"
+                    "Guard conditions are not supported in static match"
                 );
             }
             for pattern_id in case.patterns.as_slice(&self.ast.mem) {
-                let compiled_pattern_id =
-                    self.compile_pattern_to_type(*pattern_id, target_type_id, ctx.scope_id, false)?;
-                let pattern = self.patterns.get(compiled_pattern_id);
-                let TypedPattern::Enum(enum_pattern) = pattern else {
-                    kbail!(
-                        self,
-                        self.ast.get_pattern_span(*pattern_id),
-                        "Only enum patterns are supported in static match for now"
-                    );
-                };
-                uncovered_members.swap_remove_elem(&enum_pattern.member_name);
-                given_cases.push_grow(&mut self.tmp, (*enum_pattern, case.expression));
+                let compiled =
+                    self.compile_pattern_to_type(*pattern_id, subject_type, ctx.scope_id, true)?;
+                patterns.push_grow(&mut self.tmp, compiled);
+                arms.push_grow(&mut self.tmp, (compiled, case.expression));
             }
         }
+        self.check_pattern_exhaustiveness(subject_type, patterns.as_slice(), subject_span, false)?;
 
-        if !uncovered_members.is_empty() {
-            let mut uncovered_member_names = String::new();
-            for (idx, name) in uncovered_members.iter().enumerate() {
-                if idx > 0 {
-                    uncovered_member_names.push_str(", ");
-                }
-                uncovered_member_names.push_str(self.ident_str(*name));
+        let mut bindings = self.tmp.new_list(4);
+        let mut winner = None;
+        for (pattern_id, expression) in arms.iter() {
+            bindings.clear();
+            if self.check_static_pattern_matches(*pattern_id, subject, &mut bindings)? {
+                winner = Some(*expression);
+                break;
             }
-            kbail!(
+        }
+        let Some(winner) = winner else {
+            self.ice_span(span, "Exhaustive static match matched no arm")
+        };
+        if bindings.is_empty() {
+            return self.eval_expr(winner, ctx);
+        }
+        let mut block = self.new_block_builder(
+            ctx.scope_id,
+            ScopeType::MatchArm,
+            span,
+            bindings.len() as u32 + 1,
+        );
+        for (name, span, value_id) in bindings.iter() {
+            let initializer = self.add_static_constant_expr(*value_id, *span);
+            let defn = self.synth_variable_defn_visible(*name, initializer, block.scope_id, *span);
+            self.push_block_stmt_id(&mut block, defn.defn_stmt);
+        }
+        let body = self.eval_expr(winner, ctx.with_scope(block.scope_id))?;
+        let body_type = self.exprs.get_type(body);
+        self.push_block_expr_id(&mut block, body);
+        Ok(self.exprs.add_block(block, body_type))
+    }
+
+    fn check_static_pattern_matches(
+        &mut self,
+        pattern_id: TypedPatternId,
+        value_id: StaticValueId,
+        bindings: &mut List<(StringId, SpanId, StaticValueId), MemTmp>,
+    ) -> K1Result<bool> {
+        let pattern = *self.patterns.get(pattern_id);
+        let value = *self.static_values.get(value_id);
+        let matched = match (pattern, value) {
+            (TypedPattern::Wildcard(_), _) => true,
+            (TypedPattern::Variable(vp), _) => {
+                bindings.push_grow(&mut self.tmp, (vp.name, vp.span, value_id));
+                true
+            }
+            (TypedPattern::Type(tp), _) => {
+                self.get_static_value_type(value_id) == tp.type_id
+                    && self.check_static_pattern_matches(tp.inner_pattern, value_id, bindings)?
+            }
+            (TypedPattern::Reference(_), _) => kbail!(
                 self,
-                parsed_match.span,
-                "Non-exhaustive static match: the following variants were not covered: {}",
-                uncovered_member_names
-            );
-        }
-
-        let mut matched = None;
-        for (pattern, expr) in given_cases.iter() {
-            if pattern.member_name == target_member_name {
-                matched = Some(*expr);
+                pattern.span_id(),
+                "A {} pattern cannot be matched statically: a reference has no compile-time identity",
+                pattern.kind_name()
+            ),
+            (TypedPattern::LiteralBool(b, _), StaticValue::Bool(v)) => b == v,
+            (TypedPattern::LiteralBool(b, _), StaticValue::Zero(_)) => !b,
+            (TypedPattern::LiteralChar(c, _), StaticValue::Char(v)) => c == v,
+            (TypedPattern::LiteralChar(c, _), StaticValue::Zero(_)) => c == 0,
+            (TypedPattern::LiteralInteger(lit, _), StaticValue::Int(v)) => {
+                matches!(*self.static_values.get(lit), StaticValue::Int(l) if l == v)
             }
-        }
-
-        match matched {
-            None => Err(kerr!(self, parsed_match.span, "No cases matched")),
-            Some(expr) => self.eval_expr(expr, ctx),
-        }
+            (TypedPattern::LiteralInteger(lit, _), StaticValue::Zero(_)) => {
+                matches!(*self.static_values.get(lit), StaticValue::Int(l) if l.is_zero())
+            }
+            (TypedPattern::LiteralFloat(lit, _), StaticValue::Float(v)) => {
+                matches!(*self.static_values.get(lit), StaticValue::Float(l) if l == v)
+            }
+            (TypedPattern::LiteralFloat(lit, _), StaticValue::Zero(_)) => {
+                matches!(*self.static_values.get(lit), StaticValue::Float(l) if l.as_f64() == 0.0)
+            }
+            (TypedPattern::LiteralString(s, _), StaticValue::String(v)) => s == v,
+            (TypedPattern::LiteralString(s, _), StaticValue::Zero(_)) => {
+                self.ident_str(s).is_empty()
+            }
+            (TypedPattern::Enum(ep), StaticValue::Enum(_, v)) => ep.int_value == v,
+            (TypedPattern::Enum(ep), StaticValue::Zero(_)) => ep.int_value.is_zero(),
+            (TypedPattern::Sum(sp), StaticValue::Sum(_) | StaticValue::Zero(_)) => {
+                let (variant_index, payload) = match value {
+                    StaticValue::Sum(sv) => (sv.variant_index, sv.payload),
+                    _ => {
+                        let Type::Sum(sum_type) = self.types.get(sp.sum_type_id) else {
+                            self.ice_span(sp.span, "Sum pattern over a non-sum type")
+                        };
+                        let Some(zero_variant) =
+                            self.mem.getn(sum_type.variants).iter().find(|v| v.tag_value.is_zero())
+                        else {
+                            self.ice_span(sp.span, "Zero value of a sum type with no zero tag")
+                        };
+                        let zero_variant = *zero_variant;
+                        let payload = zero_variant
+                            .payload
+                            .map(|p| self.static_values.add(StaticValue::Zero(p)));
+                        (zero_variant.index, payload)
+                    }
+                };
+                sp.variant_index == variant_index
+                    && match (sp.payload, payload) {
+                        (Some(payload_pattern), Some(payload)) => {
+                            self.check_static_pattern_matches(payload_pattern, payload, bindings)?
+                        }
+                        (Some(_), None) => {
+                            self.ice_span(sp.span, "Payload pattern against a payload-less value")
+                        }
+                        (None, _) => true,
+                    }
+            }
+            (TypedPattern::Struct(stp), StaticValue::Struct(_) | StaticValue::Zero(_)) => {
+                let mut all_match = true;
+                for field in self.patterns.get_slice(stp.fields) {
+                    let field_value = match value {
+                        StaticValue::Struct(sv) => {
+                            *self.static_values.mem.get_nth(sv.fields, field.field_index as usize)
+                        }
+                        _ => self.static_values.add(StaticValue::Zero(field.field_type_id)),
+                    };
+                    if !self.check_static_pattern_matches(field.pattern, field_value, bindings)? {
+                        all_match = false;
+                        break;
+                    }
+                }
+                all_match
+            }
+            (TypedPattern::PointerNull(_), StaticValue::Zero(_)) => true,
+            (TypedPattern::PointerNull(_), StaticValue::Int(v)) => v.is_zero(),
+            (pattern, value) => self.ice_span(
+                pattern.span_id(),
+                format!(
+                    "Static match: {} pattern against {} value",
+                    pattern.kind_name(),
+                    value.kind_name()
+                ),
+            ),
+        };
+        Ok(matched)
     }
 
     /// A pattern over an uninhabited variant (e.g. `:err e` on result[t, never])
@@ -1280,16 +1316,17 @@ impl TypedProgram {
     pub(super) fn pattern_matches_uninhabited(&self, pattern_id: TypedPatternId) -> bool {
         match self.patterns.get(pattern_id) {
             TypedPattern::Sum(sp) => {
-                let payload_is_never = match self.types.get(sp.sum_type_id) {
+                let payload_uninhabited = match self.types.get(sp.sum_type_id) {
                     Type::Sum(sum_type) => self
                         .mem
                         .getn(sum_type.variants)
                         .get(sp.variant_index as usize)
                         .and_then(|v| v.payload)
-                        .is_some_and(|p| p == NEVER_TYPE_ID),
+                        .is_some_and(|p| !self.get_type_variable_counts(p).is_inhabited),
                     _ => false,
                 };
-                payload_is_never || sp.payload.is_some_and(|p| self.pattern_matches_uninhabited(p))
+                payload_uninhabited
+                    || sp.payload.is_some_and(|p| self.pattern_matches_uninhabited(p))
             }
             TypedPattern::Struct(stp) => self
                 .patterns
@@ -1449,21 +1486,6 @@ impl TypedProgram {
                     hoist_case,
                     ctx,
                 )
-            }
-            TypedPattern::RefNull(_inner_type, span) => {
-                let span = *span;
-                let target_expr_as_ptr = self.synth_cast(
-                    target_expr,
-                    POINTER_TYPE_ID,
-                    CastType::ReferenceToPointer,
-                    Some(span),
-                );
-                let ptr_null_expr =
-                    self.add_static_constant_expr(self.static_values.nullptr_id(), span);
-                let is_null_expr =
-                    self.synth_equals_call_simple(target_expr_as_ptr, ptr_null_expr, span);
-                instrs.push_grow(&mut self.mem, MatchingConditionInstr::cond(is_null_expr));
-                Ok(None)
             }
             TypedPattern::PointerNull(span) => {
                 let span = *span;

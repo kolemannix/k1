@@ -27,7 +27,7 @@ fn fails(): result[bool, error] {
 fn run(): result[i32, error] {
   let result: int = can-fail-int().try
   assert(result == 42)
-  let result: int = (.{ a = true }: foo).try
+  let result: int = foo.{ a = true }.try
   assert(result == 3)
 
   let c = fn(-> result[bool, error]) {

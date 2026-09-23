@@ -1,0 +1,13 @@
+fn(inline) ping(n: int): int {
+  if n == 0 0 else pong(n - 1)
+}
+
+fn(inline) pong(n: int): int {
+  if n == 0 1 else ping(n - 1)
+}
+
+fn main(): i32 {
+  println(ping(3))
+  0
+}
+//errmsg: Cannot inline ping: it is recursive through fn(inline) calls, so the inlining would never end

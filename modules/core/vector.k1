@@ -6,6 +6,10 @@
 // most 64 bytes (512 bits)
 ns vector {
 
+  let simd-lanes-16: size = (k1/simd-bytes) / 2
+  let simd-lanes-32: size = (k1/simd-bytes) / 4
+  let simd-lanes-64: size = (k1/simd-bytes) / 8
+
   fn(intern) splat[t, n: static size](value: t): vector[t, n]
 
   fn(intern) load-unchecked[t, n: static size](src: ptr): vector[t, n]
@@ -20,15 +24,18 @@ ns vector {
   // collapses lane MSBs into one bit per lane (movemask)
   fn(intern) to-mask[t, n: static size](v: vector[t, n]): u64
 
+  fn(inline) load-simd-bytes(ptr): vector[u8, k1/simd-bytes] { load-unchecked[u8, k1/simd-bytes](ptr) }
+  fn(inline) load-word(ptr): u64 { load-unchecked[u8, 8](ptr).to-u64() }
+
   fn zeroed[t, n: static size](): vector[t, n] {
-    mem/zeroed[vector[t, n]]
+    .0
   }
 
-  fn lane-count[t, n: static size](_v: vector[t, n]): size {
+  fn(inline) lane-count[t, n: static size](_v: vector[t, n]): size {
     core/meta/static-type-to-value[_, n]()
   }
 
-  fn size-bytes[t, n: static size](_v: vector[t, n]): size {
+  fn(inline) size-bytes[t, n: static size](_v: vector[t, n]): size {
     types/size[vector[t, n]]
   }
 
@@ -40,15 +47,22 @@ ns vector {
     load-unchecked[t, n](s.data-ptr().ref-at[t](start).as[ptr])
   }
 
-  fn eq-mask[t, n: static size](a: vector[t, n], b: vector[t, n]): u64 {
+  fn(inline) to-u64[t, n: static size](v: vector[t, n]): u64 {
+    if types/size[vector[t, n]] != 8 { crash("vector/to-u64 needs an 8-byte vector") }
+    let w: u64 = 0
+    store-unchecked(v, w.&.as[ptr])
+    w
+  }
+
+  fn(inline) eq-mask[t, n: static size](a: vector[t, n], b: vector[t, n]): u64 {
     a.eq-lanes(b).to-mask()
   }
 
-  fn any[t, n: static size](v: vector[t, n]): bool {
+  fn(inline) any[t, n: static size](v: vector[t, n]): bool {
     v.to-mask() != 0
   }
 
-  fn all[t, n: static size](v: vector[t, n]): bool {
+  fn(inline) all[t, n: static size](v: vector[t, n]): bool {
     v.to-mask() == u64/bitmask-low(v.lane-count())
   }
 

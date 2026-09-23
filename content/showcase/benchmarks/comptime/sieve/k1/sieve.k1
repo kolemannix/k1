@@ -1,0 +1,31 @@
+let N: int = 10000
+let COMPTIME: bool = true
+
+fn sieve(n: int): list[int] {
+  let composite = list/filled(n, false)
+  let primes: list[int] = []
+  let i = 2
+  while i < n {
+    if not composite.[i] {
+      primes.push(i)
+      let j = i * i
+      while j < n {
+        composite.[j] = true
+        j = j + i
+      }
+    }
+    i = i + 1
+  }
+  primes
+}
+
+fn summarize(): { count: int, last: int } {
+  let primes = sieve(N)
+  .{ count = primes.len(), last = primes.last().! }
+}
+
+fn main(): i32 {
+  let r: { count: int, last: int } = #if COMPTIME { #static summarize() } else { summarize() }
+  println("${r.count} ${r.last}")
+  0
+}

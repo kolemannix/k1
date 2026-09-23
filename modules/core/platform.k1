@@ -487,11 +487,11 @@ ns platform {
         fn(extern("getentropy")) getentropy(buf: ptr, count: c-sizet): c-int
 
         type timespec = { tv_sec: u64, tv_nsec: u64 }
-        fn(extern("clock_gettime")) clock_gettime(clockid: u32, tp: *mut timespec): c-int
-        fn(extern("nanosleep")) nanosleep(req: *timespec, rem: *mut timespec): c-int
+        fn(extern("clock_gettime")) clock_gettime(clockid: u32, tp: *timespec): c-int
+        fn(extern("nanosleep")) nanosleep(req: *timespec, rem: ptr): c-int
         type mach-timebase = { numer: u32, denom: u32 }
         fn(extern("mach_absolute_time")) mach_absolute_time(): u64
-        fn(extern("mach_timebase_info")) mach_timebase_info(timebase: *mut mach-timebase): u64
+        fn(extern("mach_timebase_info")) mach_timebase_info(timebase: *mach-timebase): u64
 
         fn(extern("pthread_create")) pthread_create(thread: ptr, attrs: ptr, start_routine: ptr, input: ptr): i32
         fn(extern("pthread_join")) pthread_join(thread: ptr, retval: ptr): i32
@@ -502,8 +502,8 @@ ns platform {
         fn(extern("pipe")) pipe(fds: ptr): c-int
         let SIGKILL: c-int = 9
         fn(extern("kill")) kill(pid: i32, sig: c-int): c-int
-        fn(extern("waitpid")) waitpid(pid: i32, status: *mut i32, options: i32): i32
-        fn(extern("posix_spawn")) posix_spawn(pid: *mut i32, path: ptr, file-actions: ptr, attrp: ptr, argv: ptr, envp: ptr): c-int
+        fn(extern("waitpid")) waitpid(pid: i32, status: *i32, options: i32): i32
+        fn(extern("posix_spawn")) posix_spawn(pid: *i32, path: ptr, file-actions: ptr, attrp: ptr, argv: ptr, envp: ptr): c-int
         fn(extern("posix_spawn_file_actions_init")) spawn-fa-init(file-actions: ptr): c-int
         fn(extern("posix_spawn_file_actions_destroy")) spawn-fa-destroy(file-actions: ptr): c-int
         fn(extern("posix_spawn_file_actions_adddup2")) spawn-fa-adddup2(file-actions: ptr, fd: c-int, new-fd: c-int): c-int
@@ -671,7 +671,7 @@ ns platform {
       }
       fn sleep-ms(ms: u64) {
         let req: c/timespec = .{ tv_sec = ms / 1000, tv_nsec = (ms % 1000) * 1000000 }
-        let _ = c/nanosleep(req.&, ptr/null.ref[c/timespec]())
+        let _ = c/nanosleep(req.&, ptr/null)
       }
 
       fn pipe(): { read: i32, write: i32 } {
@@ -730,15 +730,15 @@ ns platform {
         }
 
         let pid: i32 = 0
-        let rc = c/posix_spawn(&pid, path.to-c-tmp().ptr, fa, ptr/null, cargv.data-ptr(), environ-ptr())
+        let rc = c/posix_spawn(pid.&, path.to-c-tmp().ptr, fa, ptr/null, cargv.data-ptr(), environ-ptr())
         if rc != 0 :err rc else :ok pid
       }
 
       fn wait(pid: i32): result[process/wait-status, i32] {
         let status: i32 = 0
-        let rc = c/waitpid(pid, &status, 0)
+        let rc = c/waitpid(pid, status.&, 0)
         while rc < 0 and errno-now() == c/EINTR {
-          rc = c/waitpid(pid, &status, 0)
+          rc = c/waitpid(pid, status.&, 0)
         }
         if rc < 0 return :err errno-now()
         if status.bit-and(0x7f) == 0 {
@@ -892,7 +892,7 @@ ns platform {
           precision = 0,
           flags = 0,
         }
-        let event = mem/zeroed[poll-event]()
+        let event = poll-event.0
         let nevents: u32 = 0
         let _ = poll-oneoff(a32(sub.&.as[ptr]), a32(event.&.as[ptr]), 1, a32(nevents.&.as[ptr]))
       }

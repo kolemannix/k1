@@ -1,0 +1,44 @@
+type user = { id: u64, name: string, password: string, email: string }
+type user-view = _struct_remove[user, { password: string }]
+type audited = { created: u64, updated: u64 }
+type user-row = _struct_combine[user, audited]
+
+ns pre {
+  fn patch-of(t: types/type-id): types/type-id {
+    require t.schema() is :struct .{ fields } else crash("patch-of needs a struct")
+    let out: list[{ name: string, type: types/type-id }] = []
+    for f in fields {
+      out.push(.{ name = f.name, type = types/make-instance(types/id[opt], [f.type-id]) })
+    }
+    types/make-struct(:struct, out.as-span())
+  }
+}
+
+type(alias) user-patch = #type pre/patch-of(types/id[user])
+
+fn view(u: user): user-view {
+  .{ id = u.id, name = u.name, email = u.email }
+}
+
+fn apply(u: *user, p: user-patch) {
+  if p.name is :some n { u.name = n }
+  if p.email is :some e { u.email = e }
+  if p.password is :some pw { u.password = pw }
+}
+
+fn main(): i32 {
+  let u: user = .{ id = 1, name = "ada", password = "hunter2", email = "ada@k1.dev" }
+  let v = view(u)
+  println("${v.id} ${v.name} ${v.email}")
+
+  let row: user-row = .{ id = 1, name = "ada", password = "hunter2", email = "ada@k1.dev", created = 100, updated = 200 }
+  println("${row.name} created ${row.created}")
+
+  apply(u.&, .{ id = :none, name = :some "ada lovelace", password = :none, email = :none })
+  println(u.name)
+
+  println("user ${types/size[user]} view ${types/size[user-view]} row ${types/size[user-row]} patch ${types/size[user-patch]}")
+  println(types/name[user-view])
+  println(types/name[user-patch])
+  0
+}

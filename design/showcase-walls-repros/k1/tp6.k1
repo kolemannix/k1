@@ -1,0 +1,10 @@
+fn kind[t](v: t): string {
+  #if v is {
+    type[u8](b) -> "byte $b",
+    _ -> "other"
+  }
+}
+fn main(): i32 {
+  println("${kind(7u8)} ${kind("s")}")
+  0
+}

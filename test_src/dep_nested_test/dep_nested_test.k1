@@ -1,0 +1,4 @@
+fn main(): i32 {
+  assert-equals(outer/twice-inner(), 42)
+  0
+}

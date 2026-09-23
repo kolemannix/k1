@@ -1,0 +1,12 @@
+fn report(label: string, outcome: ?string) {
+  println("$label: ${outcome ? "compiles"}")
+}
+
+fn main(): i32 {
+  report("1: 5", test-compile(1: 5))
+  report("\"a\" + 1", test-compile("a" + 1))
+  report("let s: string = 42", test-compile({ let s: string = 42; s }))
+  report("1 + 1", test-compile(1 + 1))
+  assert(test-compile(1 + 1).is-none())
+  0
+}

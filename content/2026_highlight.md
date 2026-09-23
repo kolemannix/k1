@@ -79,8 +79,9 @@ took it a level lower still (see the bytecode VM below).
 - ★ **Macros (July 20–27)** — `macro` definitions, `code` as the currency with
   full span provenance (errors point into your source, not the expansion),
   macro bodies as bare templates, block-backtick code literals, `.fmt`
-  replacing stringf. And the flex: **`for` loops are now a macro** — the
-  language's own for-each is user-level code (July 23).
+  replacing stringf. A prototype `for-each` macro (July 23) showed the
+  language's own loop could be user-level code; it was retired on Sep 1
+  when labelled loops made `for` a typer built-in again.
 - ★ **Compile-time SIMD metaprograms (July 26)** — `vector[t,n]` up to
   512-bit, `intern("llvm.*")` intrinsic lane, `$simd` metaprograms, **52x
   speedup on string search**. That number is a tweet by itself.
@@ -170,6 +171,6 @@ recursion) → Spring: it got tooling (LSP, bindgen, builds) → Summer: it got
 superpowers (macros, SIMD, allocators, modules, hot reload) → and it ships
 real software (HTTP framework, brotli at C speed).*
 
-Five strongest individual pieces for tweets/videos: hot reload demo, brotli
-byte-identical-at-C-speed, 52x SIMD string search, `for`-is-a-macro, and the
-30ms LSP completions story.
+Four strongest individual pieces for tweets/videos: hot reload demo, brotli
+byte-identical-at-C-speed, 52x SIMD string search, and the 30ms LSP
+completions story.

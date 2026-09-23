@@ -1,0 +1,13 @@
+fn where-am-i(): string {
+  if core/k1/is-static "compile time" else "run time"
+}
+
+fn main(): i32 {
+  let platform = #if core/k1/platform-macos "macos" else "not macos"
+  println("built for $platform")
+
+  let baked: "compile time" = #static where-am-i()
+  println("where-am-i said \"${baked.from-static()}\" then, and \"${where-am-i()}\" now")
+  #static println("hello from inside the compiler")
+  0
+}

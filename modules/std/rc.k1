@@ -1,6 +1,6 @@
 // Disclaimer: This is a temporary, ai-generated utility to test the compiler and push the http project forward
-type rc[t] = { inner: *mut rc-inner[t] }
-type rc-inner[t] = { count: u64, drop-fn: ?*fn(*mut t) -> {}, value: t }
+type rc[t] = { inner: *rc-inner[t] }
+type rc-inner[t] = { count: u64, drop-fn: ?*fn(*t) -> {}, value: t }
 
 // Census of live rc cells; tests assert it returns to zero to catch a dropped
 // release. Not debug-gated: the test suite builds without k1/debug, and two
@@ -8,17 +8,17 @@ type rc-inner[t] = { count: u64, drop-fn: ?*fn(*mut t) -> {}, value: t }
 let(mutable) live-cells: u64 = 0
 
 ns for rc {
-  fn alloc[t](value: t, drop-fn: ?*fn(*mut t) -> {}): rc[t] {
+  fn alloc[t](value: t, drop-fn: ?*fn(*t) -> {}): rc[t] {
     atomic/fetch-add(live-cells.&, 1, :relaxed)
     .{ inner = heap.new(.{ count = 1, drop-fn, value }) }
   }
 
   fn new[t](value: t): rc[t] { alloc(value, :none) }
-  fn new-with-drop[t](value: t, drop: *fn(*mut t) -> {}): rc[t] { alloc(value, :some drop) }
+  fn new-with-drop[t](value: t, drop: *fn(*t) -> {}): rc[t] { alloc(value, :some drop) }
 
   fn live-count(): u64 { atomic/load(live-cells.&, :relaxed) }
 
-  fn get[t](self: rc[t]): *mut t { self.inner.value.& }
+  fn get[t](self: rc[t]): *t { self.inner.value.& }
 
   fn retain[t](self: rc[t]): rc[t] {
     atomic/fetch-add(self.inner.count.&, 1, :relaxed)
@@ -47,7 +47,7 @@ ability owned[impl raw] {
   fn free(self)
 
   fn to-rc(self): rc[raw] {
-    rc/new-with-drop(self.raw(), fn(p: *mut raw) owned@(self)/adopt(p.*).free())
+    rc/new-with-drop(self.raw(), fn(p: *raw) owned@(self)/adopt(p.*).free())
   }
 }
 
@@ -91,7 +91,7 @@ type rc-byte-stream = {
 }
 
 fn rc-byte-stream(upstream: dyn[source[t = rc-bytes]]): dyn[source[t = u8]] {
-  let state: *mut rc-byte-stream = mem/new(.{
+  let state: *rc-byte-stream = mem/new(.{
     upstream,
     inflight = list/empty[rc-bytes](),
     parts = list/empty[span[u8]](),
@@ -100,13 +100,13 @@ fn rc-byte-stream(upstream: dyn[source[t = rc-bytes]]): dyn[source[t = u8]] {
 }
 
 impl source[t = u8] for rc-byte-stream {
-  fn start(self: *mut rc-byte-stream, waker: waker) { self.upstream.start(waker) }
-  fn stop(self: *mut rc-byte-stream) {
+  fn start(self: *rc-byte-stream, waker: waker) { self.upstream.start(waker) }
+  fn stop(self: *rc-byte-stream) {
     for payload in self.inflight { payload.release() }
     self.inflight.clear()
     self.upstream.stop()
   }
-  fn next(self: *mut rc-byte-stream): pull[u8] {
+  fn next(self: *rc-byte-stream): pull[u8] {
     for payload in self.inflight { payload.release() }
     self.inflight.clear()
     if self.upstream.next() is {

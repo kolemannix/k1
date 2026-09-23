@@ -1,0 +1,13 @@
+use std/bitfield/b1
+use std/bitfield/bn
+
+$std/bitfield/define[u16](ship, [b1(shielded), b1(cloaked), b1(damaged), .{ name = "sector", bits = 5 }, bn("hull", 8)])
+
+fn main(): i32 {
+  let s = ship/zero.set-shielded(true).set-sector(17).set-hull(200)
+  println("bits=${s.bits} $s")
+  println("sector mask=${ship/sector-mask} hull mask=${ship/hull-mask}")
+  let t = s.set-shielded(false).set-damaged(true)
+  println("$t")
+  0
+}

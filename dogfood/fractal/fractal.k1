@@ -46,7 +46,7 @@ let TERM_HEIGHT: i32 = 44
 fn main(): i32 {
   println("k1 escape-time fractals, one binary for terminal and canvas")
   show(mandelbrot-set, .{ re = -0.65, im = 0.0 }, 2.4, 300)
-  show(.{ c = .{ re = -0.8, im = 0.156 } }: julia, ORIGIN, 3.0, 300)
+  show(julia.{ c = .{ re = -0.8, im = 0.156 } }, ORIGIN, 3.0, 300)
   show(burning-ship-set, .{ re = -1.755, im = -0.03 }, 0.22, 300)
   0
 }

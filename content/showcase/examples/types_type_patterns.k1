@@ -1,0 +1,55 @@
+type vec3 = { x: f32, y: f32, z: f32 }
+
+fn copy-into[t](dst: buffer[t], src: span[t]): string {
+  #if types/schema[t] is {
+    :int _ or :float _ or :bool or :char -> {
+      mem/copy(dst = dst.data, src = src.buffer.data, count = src.len() * types/stride[t])
+      "memcpy ${src.len() * types/stride[t]} bytes"
+    },
+    _ -> {
+      for src { dst.[it-index] = it }
+      "element loop"
+    }
+  }
+}
+
+fn describe[t](v: t): string {
+  #if types/schema[t] is {
+    :int _ or :float _ -> "scalar ${v + v}",
+    _ -> "${v.len()} elements"
+  }
+}
+
+fn inspect[t](v: t): string {
+  if v is {
+    type[u8](b) -> "byte $b",
+    type[string]("") -> "the empty string",
+    type[string](s) -> "string of ${s.len()}",
+    type[vec3](.{ x, y, z }) -> "vec3 ${x + y + z}",
+    type[?int](:some n) -> "some $n",
+    type[?int](:none) -> "none",
+    _ -> "other: ${types/name[t]}"
+  }
+}
+
+fn main(): i32 {
+  let bytes: buffer[u8] = buffer/filled(4, 0)
+  println("${copy-into(bytes, [1u8, 2, 3, 4])} ${bytes}")
+  let vecs: buffer[vec3] = buffer/filled(2, .0)
+  println("${copy-into(vecs, [.{ x = 1.0, y = 2.0, z = 3.0 }, .{ x = 4.0, y = 5.0, z = 6.0 }])} ${vecs.[1].z}")
+  let names: buffer[string] = buffer/filled(2, "")
+  println("${copy-into(names, ["ada", "grace"])} ${names}")
+
+  println("${describe(21)} / ${describe(1.25)} / ${describe("hello")} / ${describe([1, 2, 3])}")
+
+  println(inspect(7u8))
+  println(inspect(""))
+  println(inspect("hello"))
+  println(inspect(vec3.{ x = 1.0, y = 2.0, z = 3.0 }))
+  let some: ?int = :some 42
+  let none: ?int = :none
+  println(inspect(some))
+  println(inspect(none))
+  println(inspect(3.5))
+  0
+}

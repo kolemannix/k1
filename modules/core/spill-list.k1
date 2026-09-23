@@ -5,11 +5,11 @@ type spill-list[t, n: static size] = either {
 ns for spill-list {
 
   fn new[t, n](): spill-list[t, n] {
-    :inline mem/zeroed[fixlist[t, n]]()
+    :inline fixlist[t, n].0
   }
 
   // Retains allocated memory, if we've already spilled, intended for re-use
-  fn clear[t, n](self: *mut spill-list[t, n]) {
+  fn clear[t, n](self: *spill-list[t, n]) {
     if self is {
       :inline fixlist* -> fixlist.clear(),
       :spilled list* -> list.clear()
@@ -23,7 +23,7 @@ ns for spill-list {
     }
   }
 
-  fn _spill[t, n](fixlist: *mut fixlist[t, n]): list[t] {
+  fn(noinline) _spill[t, n](fixlist: *fixlist[t, n]): list[t] {
     let list = list/with-capacity-in[t, _](mem/current-arena(), fixlist.cap() * 2)
 
     let srcbuffer = fixlist.as-buffer()
@@ -32,7 +32,7 @@ ns for spill-list {
     list
   }
 
-  fn push[t, n](self: *mut spill-list[t, n], t: t) {
+  fn push[t, n](self: *spill-list[t, n], t: t) {
     if self is {
       :spilled list* -> { list.push(t) },
       :inline fixlist* -> {
@@ -48,7 +48,7 @@ ns for spill-list {
     }
   }
 
-  fn push-n[t, n](self: *mut spill-list[t, n], ts: span[t]) {
+  fn push-n[t, n](self: *spill-list[t, n], ts: span[t]) {
     if self is {
       :spilled list* -> { list.append-span(ts) },
       :inline fixlist* -> {
@@ -65,13 +65,13 @@ ns for spill-list {
     }
   }
 
-  fn push-string[n](self: *mut spill-list[u8, n], s: string) {
+  fn push-string[n](self: *spill-list[u8, n], s: string) {
     self.push-n[u8, n](s.span-bytes())
   }
 
 }
 
-impl[t, n: static size] as-buffer[t = t] for *mut spill-list[t, n] {
+impl[t, n: static size] as-buffer[t = t] for *spill-list[t, n] {
   fn as-buffer(self): buffer[t] {
     if self is {
       :spilled list* -> list.as-buffer(),
@@ -80,8 +80,8 @@ impl[t, n: static size] as-buffer[t = t] for *mut spill-list[t, n] {
   }
 }
 
-impl[t, n: static size] index[key = size, t = t] for *mut spill-list[t, n] {
-  fn index-ref(self, key: size): *t { self.as-buffer().index-ref(key) }
+impl[t, n: static size] index[key = size, t = t] for *spill-list[t, n] {
+  fn(inline) index-ref(self, key: size): *t { self.as-buffer().index-ref(key) }
 }
 
 impl[t, n: static size] as-span[t = t] for *spill-list[t, n] {
@@ -108,7 +108,7 @@ impl[t, n: static size] print for spill-list[t, n] {
   }
 }
 
-impl[n: static size] writer for *mut spill-list[u8, n] {
+impl[n: static size] writer for *spill-list[u8, n] {
   fn write-byte(self, b: u8) {
     self.push(b)
   }

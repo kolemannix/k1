@@ -1,0 +1,82 @@
+[core.k1:26 info] fn ident-scan(s: string): ?size {
+  let state = 0
+  let end: ?size = :none
+  for c in s {
+    state = if state is {
+      0 -> if (c >= 'A' and c <= 'Z') or c == '_' or (c >= 'a' and c <= 'z') 1 else break,
+      1 -> if (c >= '0' and c <= '9') or (c >= 'A' and c <= 'Z') or c == '_' or (c >= 'a' and c <= 'z') 1 else break,
+      _ -> break,
+    }
+    if state == 1 { end = :some(it-index + 1) }
+  }
+  end
+}
+fn ident(s: string): bool {
+  ident-scan(s) is :some n and n == s.len()
+}
+fn ident-find(s: string): ?{ start: size, end: size } {
+  for start in 0.until(s.len() + 1) {
+    if ident-scan(s.drop(start)) is :some n { return :some .{ start, end = start + n } }
+  }
+  :none
+}
+
+[core.k1:26 info] 
+
+[core.k1:26 info] fn number-scan(s: string): ?size {
+  let state = 0
+  let end: ?size = :none
+  for c in s {
+    state = if state is {
+      0 -> if (c >= '0' and c <= '9') 1 else break,
+      1 -> if c == '.' 2 else if (c >= '0' and c <= '9') 1 else break,
+      2 -> if (c >= '0' and c <= '9') 3 else break,
+      3 -> if (c >= '0' and c <= '9') 3 else break,
+      _ -> break,
+    }
+    if state == 1 or state == 3 { end = :some(it-index + 1) }
+  }
+  end
+}
+fn number(s: string): bool {
+  number-scan(s) is :some n and n == s.len()
+}
+fn number-find(s: string): ?{ start: size, end: size } {
+  for start in 0.until(s.len() + 1) {
+    if number-scan(s.drop(start)) is :some n { return :some .{ start, end = start + n } }
+  }
+  :none
+}
+
+[core.k1:26 info] 
+
+[core.k1:26 info] fn email-scan(s: string): ?size {
+  let state = 0
+  let end: ?size = :none
+  for c in s {
+    state = if state is {
+      0 -> if c == '+' or (c >= '-' and c <= '.') or (c >= '0' and c <= '9') or c == '_' or (c >= 'a' and c <= 'z') 1 else break,
+      1 -> if c == '+' or (c >= '-' and c <= '.') or (c >= '0' and c <= '9') or c == '_' or (c >= 'a' and c <= 'z') 1 else if c == '@' 2 else break,
+      2 -> if c == '-' or (c >= '0' and c <= '9') or (c >= 'a' and c <= 'z') 3 else break,
+      3 -> if c == '-' or (c >= '0' and c <= '9') or (c >= 'a' and c <= 'z') 3 else if c == '.' 4 else break,
+      4 -> if c == '-' or (c >= '0' and c <= '9') 3 else if (c >= 'a' and c <= 'z') 5 else break,
+      5 -> if c == '-' or (c >= '0' and c <= '9') 3 else if c == '.' 4 else if (c >= 'a' and c <= 'z') 6 else break,
+      6 -> if c == '-' or (c >= '0' and c <= '9') 3 else if c == '.' 4 else if (c >= 'a' and c <= 'z') 6 else break,
+      _ -> break,
+    }
+    if state == 6 { end = :some(it-index + 1) }
+  }
+  end
+}
+fn email(s: string): bool {
+  email-scan(s) is :some n and n == s.len()
+}
+fn email-find(s: string): ?{ start: size, end: size } {
+  for start in 0.until(s.len() + 1) {
+    if email-scan(s.drop(start)) is :some n { return :some .{ start, end = start + n } }
+  }
+  :none
+}
+
+[core.k1:26 info] 
+

@@ -1,7 +1,7 @@
 ns ability_dotcall
 
 ability a-source[impl t] {
-  fn next(self: *mut self): ?t
+  fn next(*self): ?t
 }
 
 type source[t] = {
@@ -14,7 +14,7 @@ ns for source {
     (self.next-fn)(self.state)
   }
 
-  fn erase[t, s](inst: *mut s): source[t] where s: a-source[t = t] {
+  fn erase[t, s](inst: *s): source[t] where s: a-source[t = t] {
     .{
       state = inst.as[ptr],
       next-fn = fn(p: ptr) p.ref[s]().next(),
@@ -24,14 +24,14 @@ ns for source {
 
 type repeats[t] = { data: t }
 impl[t] a-source[t = t] for repeats[t] {
-  fn next(self: *mut repeats[t]): ?t {
+  fn next(self: *repeats[t]): ?t {
     :some self.data
   }
 }
 
 type count-up = { current: int, limit: int }
 impl a-source[t = int] for count-up {
-  fn next(self: *mut count-up): ?int {
+  fn next(*self): ?int {
     if self.current >= self.limit { return :none }
     self.current = self.current + 1
     :some self.current
@@ -39,11 +39,11 @@ impl a-source[t = int] for count-up {
 }
 
 fn test() {
-  let r: *mut repeats[int] = mem/new(.{ data = 42 })
+  let r: *repeats[int] = mem/new(.{ data = 42 })
   let src: source[int] = source/erase(r)
   assert-equals(src.next(), :some 42)
 
-  let c: *mut count-up = mem/new(.{ current = 0, limit = 2 })
+  let c: *count-up = mem/new(.{ current = 0, limit = 2 })
   let src2: source[int] = source/erase(c)
   assert-equals(src2.next(), :some 1)
   assert-equals(src2.next(), :some 2)

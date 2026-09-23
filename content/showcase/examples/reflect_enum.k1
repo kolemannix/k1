@@ -1,0 +1,79 @@
+ns enums {
+  fn names[t](): span[string] {
+    #static {
+      require types/schema[t] is :enum .{ values } else crash("${types/name[t]} is not an enum")
+      let out = list/empty[string]()
+      for v in values { out.push(v.name) }
+      out.as-span()
+    }
+  }
+
+  fn describe[t](): string {
+    #static {
+      require types/schema[t] is :enum .{ int-kind, values } else crash("${types/name[t]} is not an enum")
+      let sb = string-builder/new()
+      sb.write("${types/name[t]} = either(${int-kind.enum-name()}) {")
+      for v in values {
+        if it-index > 0 sb.write(",")
+        sb.write(" ${v.name} = ${v.value}")
+      }
+      sb.write(" }")
+      sb.build()
+    }
+  }
+
+  fn enum-to-string[t](v: t): string {
+    #meta {
+      require types/schema[t] is :enum .{ values } else crash("${types/name[t]} is not an enum")
+      let cb = code-builder/new()
+      cb.line("if v is {")
+      cb.indent()
+      for x in values { cb.line(`:${x.name} -> ${meta/str-lit(x.name)},`) }
+      cb.dedent()
+      cb.line("}")
+      cb.build()
+    }
+  }
+
+  fn enum-from-string[t](s: string): ?t {
+    #meta {
+      require types/schema[t] is :enum .{ values } else crash("${types/name[t]} is not an enum")
+      let cb = code-builder/new()
+      for x in values { cb.line(`if s == ${meta/str-lit(x.name)} return :some :${x.name}`) }
+      cb.line(":none")
+      cb.build()
+    }
+  }
+}
+
+type color = either { red, green, blue }
+type level = either(u8) { debug = 10, info = 20, warn = 30, error = 40 }
+
+impl from-string[e = string] for level {
+  fn from-string(s: string): result[level, string] {
+    if enums/enum-from-string[level](s) is {
+      :some v -> :ok v,
+      :none -> :err("expected one of ${enums/names[level]()}, got '$s'"),
+    }
+  }
+}
+
+fn main(): i32 {
+  let c: color = :green
+  println(c.enum-name())
+  println(enums/enum-to-string(c))
+  println(enums/enum-to-string(level:warn))
+  println("${enums/names[color]()} ${enums/names[level]()}")
+  let count: 3 = #static enums/names[color]().len()
+  let first: "red" = #static enums/names[color]().[0]
+  println("${count.from-static()} ${first.from-static()}")
+  println(enums/describe[color]())
+  println(enums/describe[level]())
+  let parsed: ?color = enums/enum-from-string("blue")
+  println("$parsed")
+  println("${enums/enum-from-string[color]("purple")}")
+  println("${from-string@(level)/from-string("warn")}")
+  let bad: result[level, string] = from-string/from-string("fatal")
+  println("$bad")
+  0
+}

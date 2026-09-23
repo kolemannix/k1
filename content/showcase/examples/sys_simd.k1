@@ -1,0 +1,116 @@
+use std/time
+
+$std/simd/first-of(delims, [',', ':', '"'])
+
+fn lane-sum(v: vector[u8, 16]): u64 {
+  let sum: u64 = 0
+  for lane in 0.until(16) {
+    sum = sum + v.get-lane(lane).widen[u64]
+  }
+  sum
+}
+
+fn count-byte-simd(bytes: span[u8], needle: u8): u64 {
+  let base = bytes.data-ptr()
+  let len = bytes.len()
+  let needles = vector/splat[u8, 16](needle)
+  let ones = vector/splat[u8, 16](1)
+  let acc: vector[u8, 16] = .0
+  let chunks-in-acc = 0
+  let count: u64 = 0
+  let i: size = 0
+  while i + 16 <= len {
+    let chunk = vector/load-unchecked[u8, 16](base.add-bytes(i))
+    acc = acc + chunk.eq-lanes(needles).bit-and(ones)
+    chunks-in-acc = chunks-in-acc + 1
+    if chunks-in-acc == 255 {
+      count = count + lane-sum(acc)
+      acc = .0
+      chunks-in-acc = 0
+    }
+    i = i + 16
+  }
+  count = count + lane-sum(acc)
+  while i < len {
+    if bytes.[i] == needle { count = count + 1 }
+    i = i + 1
+  }
+  count
+}
+
+fn count-byte-scalar(bytes: span[u8], needle: u8): u64 {
+  let count: u64 = 0
+  for b in bytes {
+    if b == needle { count = count + 1 }
+  }
+  count
+}
+
+fn scan-all-simd(text: string): u64 {
+  let found: u64 = 0
+  let from: size = 0
+  loop {
+    let hit = delims/scan(text.span-bytes(), from)
+    if hit.index < 0 break
+    found = found + 1
+    from = hit.index + 1
+  }
+  found
+}
+
+fn scan-all-scalar(text: string): u64 {
+  let found: u64 = 0
+  for c in text {
+    if c == ',' or c == ':' or c == '"' { found = found + 1 }
+  }
+  found
+}
+
+fn bench(label: string, bytes: size, run: some fn (size) -> u64): u64 {
+  let best: u64 = 0
+  let result: u64 = 0
+  for rep in 0.until(3) {
+    let start = time/read-cpu-counter()
+    atomic/fence(:seq-cst)
+    let r = run(rep)
+    atomic/fence(:seq-cst)
+    let nanos = time/elapsed-nanos(start)
+    if rep == 0 { result = r } else { assert-equals(r, result) }
+    if best == 0 or nanos < best { best = nanos }
+  }
+  println("$label: $result found, ${bytes.unsigned() * 1000 / best} MB/s")
+  result
+}
+
+fn main(): i32 {
+  let static-hits: 4u64 = #static scan-all-simd("{\"key\": [1, 2]}")
+  println("compile-time scan found ${static-hits.from-static()} delimiters")
+
+  let n: size = 8 * 1024 * 1024
+  let bytes = buffer/filled-in(heap, n, 'a'.as-u8())
+  let i: size = 61
+  while i < n {
+    bytes.[i] = ','.as-u8()
+    i = i + 61
+  }
+  let j: size = 30
+  while j < n {
+    bytes.[j] = '"'.as-u8()
+    j = j + 997
+  }
+  let text = string/wrap-bytes(bytes.as-span())
+  println("simd width: ${k1/simd-bytes} bytes; buffer: ${n / 1024 / 1024} MB")
+
+  let scalar-scan = bench("scalar scan", n, fn[text](rep: size) { scan-all-scalar(text.drop(rep)) })
+  let simd-scan = bench("first-of scan", n, fn[text](rep: size) { scan-all-simd(text.drop(rep)) })
+  assert-equals(scalar-scan, simd-scan)
+
+  let scalar-count = bench("scalar count ','", n, fn[bytes](rep: size) {
+    count-byte-scalar(bytes.as-span().drop(rep), ','.as-u8())
+  })
+  let simd-count = bench("vector count ','", n, fn[bytes](rep: size) {
+    count-byte-simd(bytes.as-span().drop(rep), ','.as-u8())
+  })
+  assert-equals(scalar-count, simd-count)
+  0
+}

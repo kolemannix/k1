@@ -1,0 +1,23 @@
+fn greet[w: writer](context out: w)(name: string) {
+  out.writeln("hello, $name")
+}
+
+fn report(context out: *string-builder)(items: list[string]) {
+  for items { out.writeln("${it-index}: $it") }
+}
+
+fn where-am-i(context locn: k1/source-location)(label: string) {
+  println("$label called from ${locn.filename}:${locn.line}")
+}
+
+fn main(): i32 {
+  let sb = string-builder/new()
+  let(context(impl writer)) out: *string-builder = sb.&
+  greet("ada")
+  report(["x", "y"])
+  print(sb.build())
+  greet(context core/io/stdout)("stdout")
+  where-am-i("first")
+  where-am-i("second")
+  0
+}

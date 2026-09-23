@@ -1,0 +1,13 @@
+$pre/gen/define(hi, "abc")
+
+fn main(): i32 {
+  println(hi())
+  0
+}
+
+ns pre { ns gen {
+  macro define(name: code, body: string) {
+    if body.len() > 2 crash("gen `${name.text()}`: body too long at byte 2")
+    "fn ${name.text()}(): string { ${core/meta/str-lit(body)} }"
+  }
+}}

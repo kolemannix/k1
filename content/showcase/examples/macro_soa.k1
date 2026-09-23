@@ -1,0 +1,13 @@
+#meta core/meta/define-soa[{ x: f32, y: f32, mass: f32 }]("particles")
+
+fn main(): i32 {
+  let ps = particles/empty()
+  ps.push(.{ x = 1.0, y = 2.0, mass = 0.5 })
+  ps.push(.{ x = 3.0, y = 4.0, mass = 1.5 })
+  ps.push(.{ x = 5.0, y = 6.0, mass = 2.0 })
+  let total = 0.0: f32
+  for m in ps.ARR_mass { total = total + m }
+  let p = ps.row(1)
+  println("row 1 = (${p.x}, ${p.y}) mass ${p.mass}; total mass $total")
+  0
+}

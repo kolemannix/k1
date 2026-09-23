@@ -1,0 +1,39 @@
+fn write-json-of(code: *string-builder, name: string, type-id: types/type-id) {
+  if type-id == types/id[string] {
+    code.writeln(`w.write-char('"'); w.write($name); w.write-char('"');`)
+    return
+  }
+  if type-id.schema() is {
+    :struct s -> {
+      code.writeln("w.write-char('{');")
+      for f in s.fields {
+        if it-index > 0 code.writeln(`w.write(",");`)
+        code.writeln(`w.write("\"${f.name}\":");`)
+        write-json-of(code, `$name.${f.name}`, f.type-id)
+      }
+      code.writeln("w.write-char('}');")
+    },
+    :bool -> code.writeln(`w.write(if $name "true": string else "false");`),
+    :int _ -> code.writeln(`$name.print-to(w);`),
+    _ -> crash("unsupported type ${type-id.name()}")
+  }
+}
+
+fn write-json[t, w: writer](context w)(t: t) {
+  #meta {
+    let code = string-builder/new()
+    write-json-of(code.&, "t", types/id[t]())
+    code/from-string(code.build())
+  }
+}
+
+fn to-json[t](t: t): string {
+  let sb = string-builder/new()
+  write-json(context sb.&)(t)
+  sb.build()
+}
+
+fn main(): i32 {
+  println("${serialize-all()}")
+  0
+}

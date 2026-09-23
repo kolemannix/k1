@@ -15,15 +15,16 @@ pub mod lex;
 #[cfg(feature = "lsp")]
 pub mod lsp_support;
 pub mod parse;
+pub mod plan;
 mod rawref;
 pub mod server;
 pub mod snap;
 pub mod typer;
+mod unique_stack;
+#[cfg(any())]
 mod vecpool;
 pub mod vm;
 mod vpool;
-//pub mod codegen_llvm_old;
-//pub mod vmtw;
 
 pub const BUILD_ID: &str = env!("K1_BUILD_ID");
 

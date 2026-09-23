@@ -1,0 +1,41 @@
+ns pre {
+  fn is-int[t](): bool { types/schema[t] is :int _ }
+
+  fn is-pod-id(t: types/type-id): bool {
+    if t.schema() is {
+      :int _ or :float _ or :bool or :char or :enum _ -> true,
+      :struct .{ fields } or :union .{ fields } -> fields.find(fn f. not is-pod-id(f.type-id)) is :none,
+      :array .{ element-type-id } -> is-pod-id(element-type-id),
+      :either .{ variants } -> variants.find(fn v. v.payload is :some p and not is-pod-id(p.type-id)) is :none,
+      _ -> false
+    }
+  }
+
+  fn is-pod[t](): bool { is-pod-id(types/id[t]) }
+}
+
+type int-wrapper[t: pred pre/is-int] = { value: t }
+
+fn clone-pod[t: pred pre/is-pod](src: *t): *t {
+  let dst: *t = mem/tmp().alloc-layout(types/size[t], types/align[t]).ref()
+  mem/copy(dst = dst.as[ptr], src = src.as[ptr], count = types/size[t])
+  dst
+}
+
+fn same-bytes[t: pred pre/is-pod](a: *t, b: *t): bool {
+  mem/equals(a.as[ptr], b.as[ptr], types/size[t])
+}
+
+type vec3 = { x: f32, y: f32, z: f32 }
+type shape = either { sphere({ center: vec3, radius: f32 }), box({ min: vec3, max: vec3 }) }
+
+fn main(): i32 {
+  let w: int-wrapper[u8] = .{ value = 200 }
+  println("${w.value}")
+
+  let s: shape = :sphere .{ center = .{ x = 1.0, y = 2.0, z = 3.0 }, radius = 0.5 }
+  let copy = clone-pod(s.&)
+  println("${same-bytes(s.&, copy)} ${copy.* is :sphere _}")
+  println("${pre/is-pod[shape]()} ${pre/is-pod[string]()} ${pre/is-pod[array[vec3, 4]]()} ${pre/is-pod[?*vec3]()}")
+  0
+}

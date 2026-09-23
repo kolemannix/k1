@@ -3,6 +3,46 @@ ns as_buffer
 use core/fixlist
 use core/spill-list
 
+fn sweep-position[t: equals](fill: t, needle: t) {
+  let max-len = 8 * (k1/simd-bytes) / types/size[t] + 1
+  let len: size = 0
+  while len <= max-len {
+    let buf = buffer/filled[t](len, fill)
+    assert(buf.position(needle) is :none)
+    let at: size = 0
+    while at < len {
+      buf.[at] = needle
+      buf.[len - 1] = needle
+      assert(buf.position(needle) == :some at)
+      buf.[at] = fill
+      buf.[len - 1] = fill
+      at = at + 1
+    }
+    len = len + 1
+  }
+}
+
+fn check-position[t: equals](fill: t, a: t, b: t) {
+  let buf = buffer/filled[t](37, fill)
+  assert(not buf.contains(a))
+  buf.[20] = a
+  buf.[35] = b
+  assert(buf.position(fill) is :some 0)
+  assert(buf.position(a) is :some 20)
+  assert(buf.position(b) is :some 35)
+  assert(buf.drop(21).position(b) is :some 14)
+  assert(buf.as-span().contains(b))
+
+  let it = buf.iterator()
+  assert(it.&.seek(a) is :some 20)
+  assert(it.&.seek(b) is :some 14)
+  assert(it.&.next() == :some fill)
+  assert(it.&.seek(a) is :none)
+  assert(it.&.next() is :none)
+  it.&.advance-by(5)
+  assert(it.&.seek(fill) is :none)
+}
+
 type color = either { red, green }
 
 fn sum-via-buffer[c: as-buffer[t = i64]](x: c): i64 {
@@ -144,6 +184,41 @@ fn test() {
   wf.push(20)
   assert(wf.&.first-diff(wide.as-span()) is :some 2)
   assert(wf.&.position(20) is :some 1)
+
+  check-position[u8](0, 1, 2)
+  check-position[i8](-1, -2, -3)
+  check-position[u16](0, 1000, 2000)
+  check-position[i16](-1, -1000, -2000)
+  check-position[u32](0, 100000, 200000)
+  check-position[i32](-1, -100000, -200000)
+  check-position[u64](0, 1, u64/max-value)
+  check-position[i64](-1, i64/min-value, i64/max-value)
+  check-position[char]('a', 'b', 'c')
+  check-position[f32](0.0, 1.5, -2.5)
+  check-position[string]("x", "y", "z")
+
+  sweep-position[u8](0, 1)
+  sweep-position[i16](-1, 7)
+  sweep-position[u32](0, 1)
+  sweep-position[i64](0, -1)
+  sweep-position[char]('a', 'b')
+  sweep-position[bool](false, true)
+
+  let flags = buffer/filled[bool](37, false)
+  assert(not flags.contains(true))
+  flags.[35] = true
+  assert(flags.position(true) is :some 35)
+
+  let arr: array[u8, 40] = .0
+  arr.[33] = 7
+  assert(arr.&.position(7) is :some 33)
+  assert(not arr.&.contains(8))
+
+  let fl = fixlist/uninit[u16, 24]()
+  let i: u16 = 0
+  while i < 20 { fl.push(i); i = i + 1 }
+  assert(fl.&.position(17) is :some 17)
+  assert(not fl.&.contains(21))
 
   let s1: span[i64] = [1, 2].as-span()
   let s2: span[i64] = [3].as-span()

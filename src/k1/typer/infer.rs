@@ -1,6 +1,7 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
 
+use super::trace::TraceKind;
 /// Inference in the `typer` phase.
 ///
 /// Obviously the lines are really blurry, and I honestly might just prefer to leave everything in
@@ -83,11 +84,7 @@ impl TypedProgram {
         }
 
         self.ictx_mut().origin_stack.push(span);
-        if self.ictx().origin_stack.len() == 1 && self.config.chatty {
-            let raw = self.timing.clock.raw();
-            self.ictx_mut().start_raw = raw;
-        }
-
+        let frame = self.trace_push(TraceKind::TypeInfer, span.as_u32(), 0);
         let result = self.infer_types_inner(
             all_type_params,
             must_solve_params,
@@ -97,14 +94,10 @@ impl TypedProgram {
             stash,
         );
 
+        self.trace_pop(frame);
         let popped = self.ictx_mut().origin_stack.pop().unwrap();
         debug_assert_eq!(popped, span);
         if self.ictx().origin_stack.is_empty() {
-            if self.config.chatty {
-                let elapsed = self.timing.clock.elapsed_nanos(self.ictx().start_raw);
-                self.timing.total_infer_nanos += elapsed as i64;
-            }
-            self.timing.total_infers += 1;
             debug!("Resetting inference context");
             self.ictx_pop();
         }
@@ -215,7 +208,7 @@ impl TypedProgram {
                         }
                     } else {
                         let inference_context = EvalExprContext::make(scope_id)
-                            .with_inference(true)
+                            .with_inference()
                             .with_expected_type(Some(expected_type_so_far));
                         self.eval_expr_with_coercion(*parsed_expr, inference_context, false)
                     };
@@ -537,6 +530,7 @@ impl TypedProgram {
     pub(crate) fn infer_and_constrain_call_type_args(
         &mut self,
         fn_call: &ParsedCall,
+        call_span: SpanId,
         generic_function_sig: FunctionSignature,
         ctx: EvalExprContext,
         args_and_params: &ArgsAndParams,
@@ -544,7 +538,7 @@ impl TypedProgram {
     ) -> K1Result<TypeArgs> {
         debug!("infer_and_constrain_call_type_args");
         debug_assert!(generic_function_sig.has_type_params());
-        let passed_type_args = fn_call.type_args;
+        let passed_type_args = fn_call.type_args(&self.ast.mem);
         let passed_type_args_count = passed_type_args.len();
         let type_params = generic_function_sig.type_params;
         // Fuse these two paths; where for a given type param,
@@ -552,7 +546,7 @@ impl TypedProgram {
         if !passed_type_args.is_empty() && passed_type_args.len() != type_params.len() {
             kbail!(
                 self,
-                fn_call.span,
+                call_span,
                 "Expected {} type arguments but got {}",
                 type_params.len(),
                 passed_type_args_count
@@ -604,7 +598,7 @@ impl TypedProgram {
                             allow_mismatch: false,
                         })
                     } else {
-                        kbail!(self, fn_call.span, "Unable to line up your type arguments");
+                        kbail!(self, call_span, "Unable to line up your type arguments");
                     }
                 }
             }
@@ -652,7 +646,7 @@ impl TypedProgram {
                     self.mem.getn(type_params),
                     type_params,
                     &inference_pairs,
-                    fn_call.span,
+                    call_span,
                     ctx.scope_id,
                     stash,
                 )
@@ -677,7 +671,7 @@ impl TypedProgram {
                 *solution,
                 &params_to_solutions_pairs,
                 ctx.scope_id,
-                fn_call.span,
+                call_span,
             )
             .map_err(|e| {
                 kerr!(
@@ -700,15 +694,6 @@ impl TypedProgram {
         args_and_params: &ArgsAndParams,
         ctx: EvalExprContext,
     ) -> K1Result<(TypeArgs, SV8<TypedExprId>)> {
-        // Ok here's what we need for function params. We need to know just the _kind_ of function that
-        // was passed: ref, lambda, or lambda obj, and we need to specialize the function shape on
-        // the other type params, as in: some (T -> T) -> some (int -> int), THEN just create
-        // a type using the _kind_ we need:
-        // fn ref: some (int -> int) -> (int -> int)*
-        // lambda: some (int -> int) -> unique(\int -> int) (is this the zero-sized param? Oh, its physically just passing the environment!)
-        // lambda obj: some (int -> int) -> dyn[\int -> int] (passing environment AND fn ptr)
-        //
-        // This method is risk-free in terms of 'leaking' inference types out
         if original_function_sig.fnlike_type_params.is_empty() {
             return Ok((TypeArgs::empty(), smallvec![]));
         }
@@ -727,96 +712,21 @@ impl TypedProgram {
         }
 
         for function_type_param in self.mem.getn(original_function_sig.fnlike_type_params) {
-            let (corresponding_arg, corresponding_value_param) =
+            let (corresponding_arg, _) =
                 args_and_params.get(function_type_param.value_param_index as usize, &self.tmp);
-            debug!(
-                "The param for function_type_param {} {} is {} and passed: {:?}",
-                function_type_param.type_id,
-                self.ident_str(function_type_param.name),
-                self.ident_str(corresponding_value_param.name),
-                corresponding_arg
-            );
-
-            enum PhysicalPassedFunction {
-                Lambda(TypedExprId, TypeId),
-                FunctionPointer(TypedExprId),
-                LambdaObject(TypedExprId, TypeId),
-            }
-            let physical_passed_function = match corresponding_arg {
-                MaybeTypedExpr::Typed(_) => {
-                    unreachable!("Synthesizing calls with function type params is unsupported")
+            let expected = self.substitute_in_type(function_type_param.type_id, &subst_pairs);
+            let value = match corresponding_arg {
+                MaybeTypedExpr::Typed(typed) => {
+                    self.check_and_coerce_expr(expected, typed, ctx.scope_id, false)?
                 }
-                MaybeTypedExpr::Parsed(p) => match self
-                    .ast
-                    .exprs
-                    .get(self.ast.exprs.skip_type_hint(p))
-                {
-                    ParsedExpr::Lambda(_lam) => {
-                        debug!(
-                            "substituting type for an ftp lambda so that it can infer (is_inf={})",
-                            ctx.is_inference()
-                        );
-                        let substituted_param_type =
-                            self.substitute_in_type(function_type_param.type_id, &subst_pairs);
-                        let the_lambda = self
-                            .eval_expr(p, ctx.with_expected_type(Some(substituted_param_type)))?;
-                        let lambda_type = self.exprs.get_type(the_lambda);
-                        debug!("Using a Lambda as an ftp: {}", self.type_id_to_string(lambda_type));
-                        PhysicalPassedFunction::Lambda(the_lambda, lambda_type)
-                    }
-                    _other => {
-                        let expr = self.eval_expr(p, ctx.with_no_expected_type())?;
-                        let type_id = self.exprs.get_type(expr);
-                        match self.types.get(type_id) {
-                            Type::Lambda(_) => PhysicalPassedFunction::Lambda(expr, type_id),
-                            Type::LambdaObject(_) => {
-                                debug!("Using a LambdaObject as an ftp");
-                                PhysicalPassedFunction::LambdaObject(expr, type_id)
-                            }
-                            Type::FunctionPointer(_) => {
-                                debug!("Using a FunctionPointer as an ftp");
-                                PhysicalPassedFunction::FunctionPointer(expr)
-                            }
-                            _ => {
-                                let span = self.exprs.get_span(expr);
-                                kbail!(
-                                    self,
-                                    span,
-                                    "Expected {}, which is an existential function type (lambdas, dynamic lambdas, and function pointers all work), but got: {}",
-                                    function_type_param.type_id,
-                                    type_id
-                                );
-                            }
-                        }
-                    }
-                },
+                MaybeTypedExpr::Parsed(parsed) => self.eval_expr_with_coercion(
+                    parsed,
+                    ctx.with_expected_type(Some(expected)),
+                    true,
+                )?,
             };
-            let (final_type, final_value) = match physical_passed_function {
-                PhysicalPassedFunction::Lambda(value, lambda_type) => {
-                    // Can use as-is since we rebuilt this lambda already
-                    (lambda_type, value)
-                }
-                PhysicalPassedFunction::FunctionPointer(expr) => {
-                    let ftp = self
-                        .types
-                        .get(function_type_param.type_id)
-                        .as_function_type_parameter()
-                        .unwrap();
-                    let original_param_function_type = ftp.function_type;
-                    let substituted_function_type =
-                        self.substitute_in_type(original_param_function_type, &subst_pairs);
-                    let fp_type = self.add_function_pointer_type(substituted_function_type);
-                    (fp_type, expr)
-                }
-                PhysicalPassedFunction::LambdaObject(expr, lambda_object_type) => {
-                    // Replace the function type
-                    let substituted_lambda_object_type =
-                        self.substitute_in_type(lambda_object_type, &subst_pairs);
-                    (substituted_lambda_object_type, expr)
-                }
-            };
-            fnlike_type_arg_values.push(final_value);
-            fnlike_type_args.push(final_type);
+            fnlike_type_arg_values.push(value);
+            fnlike_type_args.push(self.exprs.get_type(value));
         }
         if !fnlike_type_args.is_empty() {
             debug!(
@@ -1059,6 +969,8 @@ impl TypedProgram {
                     ),
                 }
             }
+            (Type::FunctionPointer(fp), Type::Reference(slot_reference)) => self
+                .unify_and_find_substitutions_rec(fp.function_type_id, slot_reference.inner_type),
             (passed, Type::Reference(slot_reference)) if passed.as_reference().is_none() => {
                 // We expect a reference and provide a non-reference
                 // Unify as if the address_of rule is applied, but only if the inner type would match

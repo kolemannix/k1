@@ -1,0 +1,41 @@
+use std/process
+
+fn module(_b: k1/build-config): k1/module {
+  let m = k1/module/new()
+  m.dep("libuv")
+  m.lib("llhttp", :static)
+  m.setup(outputs = ["libs/libllhttp.a", "llhttp.k1"], inputs = ["vendor"])
+  m
+}
+
+// Compiles the vendored llhttp release C (v9.4.1, generated once from the
+// nodejs/llhttp repo) into libs/libllhttp.a and regenerates the llhttp
+// bindings. Runs in the compile-time VM with cwd = the module dir; needs cc
+// and k1bindgen on PATH.
+fn setup(ctx: k1/setup-ctx) {
+  let minver = if (ctx.build.target is :arm64-macos) "-mmacosx-version-min=15.0.0" else ""
+  process/sh-verbose(`
+    mkdir -p libs .k1-out/llhttp
+    cc -O2 ${minver} -Ivendor -c vendor/llhttp.c -o .k1-out/llhttp/llhttp.o
+    cc -O2 ${minver} -Ivendor -c vendor/api.c -o .k1-out/llhttp/api.o
+    cc -O2 ${minver} -Ivendor -c vendor/http.c -o .k1-out/llhttp/http.o
+    ar rcs libs/libllhttp.a .k1-out/llhttp/*.o
+    `).!
+
+  let bindgen-args: list[string] = [
+    "-in-path", "vendor/llhttp.h",
+    "-out-path", "llhttp.k1",
+    "-lib-name", "llhttp",
+    "+strip-prefix", "llhttp_",
+    "+strip-prefix", "HTTP_",
+    "+strip-suffix", "_t",
+  ]
+  if (ctx.build.target is :arm64-macos) {
+    let sdk = process/sh("printf %s $(xcrun --sdk macosx --show-sdk-path)").!
+    bindgen-args.push("+clangarg")
+    bindgen-args.push("-isysroot")
+    bindgen-args.push("+clangarg")
+    bindgen-args.push(sdk)
+  }
+  let _ = process/run-verbose("k1bindgen", bindgen-args.as-span()).!
+}

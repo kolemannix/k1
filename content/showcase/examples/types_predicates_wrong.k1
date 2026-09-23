@@ -1,0 +1,25 @@
+ns pre {
+  fn is-pod-id(t: types/type-id): bool {
+    if t.schema() is {
+      :int _ or :float _ or :bool or :char or :enum _ -> true,
+      :struct .{ fields } -> fields.find(fn f. not is-pod-id(f.type-id)) is :none,
+      _ -> false
+    }
+  }
+  fn is-pod[t](): bool { is-pod-id(types/id[t]) }
+}
+
+fn clone-pod[t: pred pre/is-pod](src: *t): *t {
+  let dst: *t = mem/tmp().alloc-layout(types/size[t], types/align[t]).ref()
+  mem/copy(dst = dst.as[ptr], src = src.as[ptr], count = types/size[t])
+  dst
+}
+
+type user = { id: u64, name: string }
+
+fn main(): i32 {
+  let u: user = .{ id = 1, name = "ada" }
+  let _ = clone-pod(u.&)
+  0
+}
+//errmsg: Predicate 'pre/is-pod' failed on type user

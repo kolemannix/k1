@@ -1,8 +1,8 @@
 use crate::kmem::MSlice;
 use crate::kmem::Mem;
 use crate::nz_u32_id;
-use crate::parse::AstSlice;
 use crate::parse::ParsedProgram;
+use crate::parse::{AstHandle, AstSlice};
 use crate::vpool::VPool;
 use crate::{impl_copy_if_small, lex::SpanId};
 
@@ -46,15 +46,32 @@ impl IdentSpanned {
 pub struct QIdent {
     pub name: StringId,
     pub name_span: SpanId,
-    pub path: AstSlice<IdentSpanned>,
+    path: AstHandle<AstSlice<IdentSpanned>>,
 }
-impl_copy_if_small!(16, QIdent);
+impl_copy_if_small!(12, QIdent);
 impl QIdent {
     pub fn naked(name: StringId, span: SpanId) -> QIdent {
-        QIdent { name, name_span: span, path: MSlice::empty() }
+        QIdent { name, name_span: span, path: AstHandle::nil() }
+    }
+    pub fn make(
+        mem: &mut Mem<ParsedProgram>,
+        path: AstSlice<IdentSpanned>,
+        name: StringId,
+        name_span: SpanId,
+    ) -> QIdent {
+        QIdent { name, name_span, path: mem.push_slice_h(path) }
     }
     pub fn with_span(&self, span: SpanId) -> QIdent {
         QIdent { name_span: span, ..*self }
+    }
+    pub fn has_path(&self) -> bool {
+        !self.path.is_nil()
+    }
+    pub fn path(&self, mem: &Mem<ParsedProgram>) -> AstSlice<IdentSpanned> {
+        mem.get_slice_h(self.path)
+    }
+    pub fn path_handle(&self) -> AstHandle<AstSlice<IdentSpanned>> {
+        self.path
     }
 }
 
@@ -104,18 +121,17 @@ pub(crate) struct BuiltinIdents {
     pub to_dyn: StringId,
     pub to_static: StringId,
     pub from_static: StringId,
-    pub filename: StringId,
-    pub line: StringId,
     pub equals: StringId,
     pub tag: StringId,
     pub tag_enum: StringId,
     pub value: StringId,
     pub module: StringId,
     pub module_params: StringId,
-    pub dep: StringId,
-    pub add_dep: StringId,
+    pub dep_params: StringId,
     pub setup: StringId,
     pub setup_ctx: StringId,
+    pub build_config: StringId,
+    pub build_request: StringId,
     pub build: StringId,
     pub root_module_name: StringId,
     pub core: StringId,
@@ -176,7 +192,6 @@ pub(crate) struct BuiltinIdents {
     pub phony: StringId,
     pub none: StringId,
     pub some: StringId,
-    pub with: StringId,
     pub test_compile: StringId,
     pub write: StringId,
     pub writeln: StringId,
@@ -185,6 +200,14 @@ pub(crate) struct BuiltinIdents {
     pub fmtargs: StringId,
     pub e: StringId,
     pub comparable: StringId,
+    pub true_: StringId,
+    pub false_: StringId,
+    pub return_: StringId,
+    pub break_: StringId,
+    pub continue_: StringId,
+    pub packed: StringId,
+    pub type_of: StringId,
+    pub static_: StringId,
     // type-schema variant names; must match types/type-schema in types.k1
     pub char: StringId,
     pub bool: StringId,
@@ -203,8 +226,6 @@ pub(crate) struct BuiltinIdents {
     pub base_struct: StringId,
     pub newline: StringId,
     // messages for synthesized crash calls
-    pub crash_msg_no_cases: StringId,
-    pub crash_msg_no_cases_exhaustive: StringId,
     pub crash_msg_array_oob: StringId,
 }
 
@@ -219,15 +240,14 @@ pub(crate) struct BuiltinFunctions {
     pub try__is_ok: QIdent,
     pub try__get_value: QIdent,
     pub try__get_error: QIdent,
+    pub try__error: QIdent,
     pub neg__negated: QIdent,
-    pub core_crash: QIdent,
     pub core_crash_bounds: QIdent,
     pub core_discard: QIdent,
     pub core_print_print_to: QIdent,
     pub buffer_allocate: QIdent,
     pub buffer_index_unchecked: QIdent,
     pub buffer_from_span: QIdent,
-    pub mem_zeroed: QIdent,
     pub mem_new: QIdent,
     pub span_wrapBuffer: QIdent,
     pub span_to_array: QIdent,
@@ -272,10 +292,32 @@ fn content_hash(b: &[u8]) -> u64 {
     h.finish()
 }
 
-struct Interner {
+const SHORT_LEN: usize = 8;
+
+fn short_key(b: &[u8]) -> u64 {
+    let mut key = 0u64;
+    for (i, &byte) in b.iter().enumerate() {
+        key |= (byte as u64) << (8 * i);
+    }
+    key
+}
+
+fn short_hash(key: u64, len: usize) -> u64 {
+    (key ^ (len as u64) << 60).wrapping_mul(0x517c_c1b7_2722_0a95)
+}
+
+#[derive(Clone, Copy)]
+struct ShortEntry {
+    key: u64,
+    len: u8,
+    id: StringId,
+}
+
+pub struct Interner {
     bytes: Mem<IdentPool>,
     entries: VPool<MSlice<u8, IdentPool>, StringId>,
-    dedup: hashbrown::HashTable<StringId>,
+    short: hashbrown::HashTable<ShortEntry>,
+    long: hashbrown::HashTable<StringId>,
 }
 
 impl Interner {
@@ -283,7 +325,17 @@ impl Interner {
         Interner {
             bytes: Mem::make(),
             entries: VPool::make_with_hint("idents", 65536),
-            dedup: hashbrown::HashTable::with_capacity(65536),
+            short: hashbrown::HashTable::with_capacity(65536),
+            long: hashbrown::HashTable::with_capacity(4096),
+        }
+    }
+
+    pub fn make_small() -> Interner {
+        Interner {
+            bytes: Mem::make(),
+            entries: VPool::make_with_hint("plan-strings", 64),
+            short: hashbrown::HashTable::with_capacity(64),
+            long: hashbrown::HashTable::with_capacity(64),
         }
     }
 
@@ -295,43 +347,69 @@ impl Interner {
         unsafe { std::str::from_utf8_unchecked(bytes.getn(*entries.get(id))) }
     }
 
-    fn get(&self, id: StringId) -> &'static str {
+    pub fn get(&self, id: StringId) -> &'static str {
         Self::get_str(&self.bytes, &self.entries, id)
     }
 
-    fn intern(&mut self, s: &str) -> StringId {
-        let hash = content_hash(s.as_bytes());
-        let Interner { bytes, entries, dedup } = self;
-        if let Some(id) = dedup.find(hash, |&id| Self::get_str(bytes, entries, id) == s) {
+    pub fn intern(&mut self, s: &str) -> StringId {
+        let b = s.as_bytes();
+        if b.len() <= SHORT_LEN {
+            let (key, len) = (short_key(b), b.len());
+            let hash = short_hash(key, len);
+            if let Some(e) = self.short.find(hash, |e| e.key == key && e.len as usize == len) {
+                return e.id;
+            }
+            let id = self.entries.add(self.bytes.pushn(b));
+            let entry = ShortEntry { key, len: len as u8, id };
+            self.short.insert_unique(hash, entry, |e| short_hash(e.key, e.len as usize));
+            return id;
+        }
+        let hash = content_hash(b);
+        let Interner { bytes, entries, long, .. } = self;
+        if let Some(id) = long.find(hash, |&id| Self::get_str(bytes, entries, id) == s) {
             return *id;
         }
-        let id = entries.add(bytes.pushn(s.as_bytes()));
-        dedup.insert_unique(hash, id, |&id| {
+        let id = entries.add(bytes.pushn(b));
+        long.insert_unique(hash, id, |&id| {
             content_hash(Self::get_str(bytes, entries, id).as_bytes())
         });
         id
     }
 
     fn lookup(&self, s: &str) -> Option<StringId> {
-        let hash = content_hash(s.as_bytes());
-        self.dedup.find(hash, |&id| self.get(id) == s).copied()
+        let b = s.as_bytes();
+        if b.len() <= SHORT_LEN {
+            let (key, len) = (short_key(b), b.len());
+            let hash = short_hash(key, len);
+            return self.short.find(hash, |e| e.key == key && e.len as usize == len).map(|e| e.id);
+        }
+        let hash = content_hash(b);
+        self.long.find(hash, |&id| self.get(id) == s).copied()
     }
 
-    fn snap(&self, w: &mut crate::snap::SnapWriter) {
+    pub fn snap(&self, w: &mut crate::snap::SnapWriter) {
         self.bytes.snap(w);
         self.entries.snap(w);
     }
 
-    fn restore(&mut self, r: &mut crate::snap::SnapReader) {
+    pub fn restore(&mut self, r: &mut crate::snap::SnapReader) {
         self.bytes.restore(r);
         self.entries.restore(r);
-        self.dedup.clear();
-        let Interner { bytes, entries, dedup } = self;
+        self.short.clear();
+        self.long.clear();
+        let Interner { bytes, entries, short, long } = self;
         for (id, slice) in entries.iter_with_ids() {
-            let hash = content_hash(bytes.getn(*slice));
-            dedup.insert_unique(hash, id, |&id| {
-                content_hash(Self::get_str(bytes, entries, id).as_bytes())
-            });
+            let b = bytes.getn(*slice);
+            if b.len() <= SHORT_LEN {
+                let entry = ShortEntry { key: short_key(b), len: b.len() as u8, id };
+                short.insert_unique(short_hash(entry.key, b.len()), entry, |e| {
+                    short_hash(e.key, e.len as usize)
+                });
+            } else {
+                long.insert_unique(content_hash(b), id, |&id| {
+                    content_hash(Self::get_str(bytes, entries, id).as_bytes())
+                });
+            }
         }
     }
 }
@@ -449,18 +527,17 @@ impl IdentPool {
             to_dyn: intern!("to-dyn"),
             to_static: intern!("to-static"),
             from_static: intern!("from-static"),
-            filename: intern!("filename"),
-            line: intern!("line"),
             equals: intern!("equals"),
             tag: intern!("tag"),
             tag_enum: intern!("tag-enum"),
             value: intern!("value"),
             module: intern!("module"),
             module_params: intern!("module-params"),
-            dep: intern!("dep"),
-            add_dep: intern!("add-dep-impl"),
+            dep_params: intern!("dep-params"),
             setup: intern!("setup"),
             setup_ctx: intern!("setup-ctx"),
+            build_config: intern!("build-config"),
+            build_request: intern!("build-request"),
             build: intern!("build"),
             root_module_name: intern!("_root"),
             core: intern!("core"),
@@ -520,7 +597,6 @@ impl IdentPool {
             phony: intern!("phony"),
             none: intern!("none"),
             some: intern!("some"),
-            with: intern!("with"),
             test_compile: intern!("test-compile"),
             write: intern!("write"),
             writeln: intern!("writeln"),
@@ -529,6 +605,14 @@ impl IdentPool {
             fmtargs: intern!("fmtargs"),
             e: intern!("e"),
             comparable: intern!("comparable"),
+            true_: intern!("true"),
+            false_: intern!("false"),
+            return_: intern!("return"),
+            break_: intern!("break"),
+            continue_: intern!("continue"),
+            packed: intern!("packed"),
+            type_of: intern!("type-of"),
+            static_: intern!("static"),
             char: intern!("char"),
             bool: intern!("bool"),
             ptr: intern!("ptr"),
@@ -545,16 +629,15 @@ impl IdentPool {
             function_pointer: intern!("function-pointer"),
             base_struct: intern!("base_struct"),
             newline: intern!("\n"),
-            crash_msg_no_cases: intern!("No cases matched"),
-            crash_msg_no_cases_exhaustive: intern!(
-                "No cases matched but match was meant to be exhaustive. \
-                Either the match subject is corrupt, or there is a compiler bug."
-            ),
             crash_msg_array_oob: intern!("Array index out of bounds"),
         };
 
         macro_rules! make_fn {
-            ($path: expr, $name: expr) => {{ QIdent { path: $path, name: $name, name_span: SpanId::NONE } }};
+            ($path: expr, $name: expr) => {{
+                let path = $path;
+                let name = $name;
+                QIdent::make(mem, path, name, SpanId::NONE)
+            }};
         }
 
         let path_core_list = intern_path!(b.core, b.list);
@@ -569,7 +652,6 @@ impl IdentPool {
         let Iterable_iterator = make_fn!(path_core_iterable, intern!("iterator"));
 
         let path_core = intern_path!(b.core);
-        let core_crash = make_fn!(path_core, intern!("crash"));
         let core_crashBounds = make_fn!(path_core, intern!("crash-bounds"));
         let core_discard = make_fn!(path_core, intern!("discard"));
 
@@ -580,6 +662,7 @@ impl IdentPool {
         let try__is_ok: QIdent = make_fn!(path_try, intern!("is-ok"));
         let try__get_value: QIdent = make_fn!(path_try, intern!("get-value"));
         let try__get_error: QIdent = make_fn!(path_try, intern!("get-error"));
+        let try__error: QIdent = make_fn!(path_try, intern!("error"));
 
         let path_core_buffer = intern_path!(b.core, b.buffer);
         let buffer_allocate: QIdent = make_fn!(path_core_buffer, intern!("allocate"));
@@ -587,7 +670,6 @@ impl IdentPool {
         let buffer_from_span: QIdent = make_fn!(path_core_buffer, intern!("from-span"));
 
         let path_mem = intern_path!(b.mem);
-        let mem_zeroed: QIdent = make_fn!(path_mem, intern!("zeroed"));
         let mem_new: QIdent = make_fn!(path_mem, intern!("new"));
 
         let path_core_span = intern_path!(b.core, b.span);
@@ -635,15 +717,14 @@ impl IdentPool {
             try__is_ok,
             try__get_value,
             try__get_error,
+            try__error,
             neg__negated,
-            core_crash,
             core_crash_bounds: core_crashBounds,
             core_discard,
             core_print_print_to,
             buffer_allocate,
             buffer_index_unchecked,
             buffer_from_span,
-            mem_zeroed,
             mem_new,
             span_wrapBuffer,
             span_to_array,

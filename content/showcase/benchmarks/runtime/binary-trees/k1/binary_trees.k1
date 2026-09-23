@@ -1,0 +1,35 @@
+use core/arena
+
+type node = { left: optref[node], right: optref[node] }
+
+fn make(a: *arena, depth: i64): *node {
+  if depth == 0 a.push(node.0)
+  else a.push(node.{ left = optref/make(make(a, depth - 1)), right = optref/make(make(a, depth - 1)) })
+}
+
+fn check(n: *node): i64 {
+  if n.left.is-null() 1 else 1 + check(n.left.get()) + check(n.right.get())
+}
+
+fn main(): i32 {
+  let max-depth: i64 = 20
+  let short-lived = arena/init(128 * arena/mb)
+  let stretch = max-depth + 1
+  let stretch-check = check(make(short-lived, stretch))
+  short-lived.reset()
+  println("stretch tree of depth $stretch\t check: $stretch-check")
+  let long-lived = make(mem/current-arena(), max-depth)
+  let depth: i64 = 4
+  while depth <= max-depth {
+    let iterations: i64 = 1 << (max-depth - depth + 4).trunc[u32]
+    let total: i64 = 0
+    for 0.until(iterations) {
+      total = total + check(make(short-lived, depth))
+      short-lived.reset()
+    }
+    println("$iterations\t trees of depth $depth\t check: $total")
+    depth = depth + 2
+  }
+  println("long lived tree of depth $max-depth\t check: ${check(long-lived)}")
+  0
+}

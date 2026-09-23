@@ -1,22 +1,49 @@
 ns thread
 
-type(alias) thread = *empty
+type(alias) thread = ptr
 
-fn start[t](handle: *mut thread, function: *fn(*mut t) -> ptr, input: *t) {
+fn start[t](handle: *thread, function: *fn(*t) -> ptr, input: *t) {
   let h = if core/platform/thread/spawn(function.as[ptr], input.as[ptr]) is {
     :some h -> h,
     :none -> crash("thread spawn failed")
   }
-  handle.* = h.raw.ref[empty]()
+  handle.* = h.raw
 }
 
 // Fire-and-forget: no join handle, the thread's resources release on exit.
 // `input` must outlive the thread; the caller can't know when it finishes,
 // so heap-allocate it and free it from the thread fn.
-fn start-detached[t](function: *fn(*mut t) -> ptr, input: *t) {
-  let handle: thread = ptr/null.ref[empty]()
+fn start-detached[t](function: *fn(*t) -> ptr, input: *t) {
+  let handle: thread = ptr/null
   start(handle.&, function, input)
-  core/platform/thread/detach(.{ raw = handle.as[ptr] })
+  core/platform/thread/detach(.{ raw = handle })
+}
+
+type task-state[f, t] = { body: f, result: *t }
+
+type task[t] = { thread: thread, result: *t }
+
+ns for task {
+
+  fn spawn[t](body: some fn() -> t): task[t] {
+    let result = heap.alloc-t[t]()
+    let state = heap.new(task-state[type-of(body), t].{ body = body, result = result })
+    let thread: thread = ptr/null
+    start(thread.&, fn(s: *task-state[type-of(body), t] -> ptr) {
+      s.result.* = (s.body)()
+      heap.free-t(s)
+      ptr/null
+    }, state)
+    .{ thread = thread, result = result }
+  }
+
+  fn join[t](self: task[t]): t {
+    let _ = core/platform/thread/join(.{ raw = self.thread })
+    let value = self.result.*
+    heap.free-t(self.result)
+    value
+  }
+
 }
 
 fn sleep-ms(ms: u64) {
@@ -29,18 +56,18 @@ ns for sleep-poll-mutex {
 
   fn new(): sleep-poll-mutex { .{ state = 0 } }
 
-  fn lock(self: *mut sleep-poll-mutex) {
+  fn lock(self: *sleep-poll-mutex) {
     while atomic/cmpxchg(self.state.&, 0: u64, 1, :acquire, :relaxed).ok == false {
       sleep-ms(1)
     }
   }
 
-  fn unlock(self: *mut sleep-poll-mutex) {
+  fn unlock(self: *sleep-poll-mutex) {
     atomic/store(self.state.&, 0: u64, :release)
   }
 
 }
 
-fn join[t](thread: thread, retval: *mut t) {
-  retval.as[ptr].ref[ptr].* = core/platform/thread/join(.{ raw = thread.as[ptr] })
+fn join(thread: thread, retval: *ptr) {
+  retval.* = core/platform/thread/join(.{ raw = thread })
 }

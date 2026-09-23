@@ -59,6 +59,7 @@ fn test() {
 
   // Non-trivial statics as generic args: compiled and executed during inference
   assert-equals((#static { let m = 21; m * 2 }).from-static(), 42)
+  assert-equals(core/identity(#static { core/identity(21) * 2 }).from-static(), 42)
 
   // Variable assign
   let goodbye: "Goodbye, World!" = #static {
@@ -106,7 +107,7 @@ fn test() {
 
   let field-ptr-test: int = #static {
     let x = 21
-    let s = .{ ptr = &x }
+    let s = .{ ptr = x.& }
     s.ptr.*
   }
   assert-equals(field-ptr-test, 21)
@@ -114,7 +115,7 @@ fn test() {
 
   let ptr-in-structs = #static {
     let b: u8 = 10
-    let f = .{ asdf = &b }
+    let f = .{ asdf = b.& }
     f.asdf.*
   }
   assert-equals[u8](ptr-in-structs, 10)
@@ -164,6 +165,10 @@ fn test() {
   assert-equals[?string](
     test-compile( #static sys/exit(111) ).map(fn(s) s.take(38)),
     some("Static execution exited with code: 111")
+  )
+  assert-equals[?string](
+    test-compile( #static crash("boom") ).map(fn(s) s.take(4)),
+    some("boom")
   )
 
   // Call order
@@ -215,7 +220,7 @@ fn test() {
   .{}
 }
 
-macro static-for[t](items: span[t], expr) {
+macro static-for[t](items: span[t], expr: code) {
   let code = code-builder/new()
   for items {
     code.writeln(core/meta/baked-variable("it", it))

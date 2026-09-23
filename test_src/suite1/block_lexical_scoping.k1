@@ -7,7 +7,7 @@ fn test() {
   })
   assert(
     result is :some msg
-    and msg.starts-with("No value '_foo' is in scope")
+    and msg.starts-with("No value '_foo' is visible here")
   )
 
   let u = {}

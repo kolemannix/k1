@@ -6,7 +6,7 @@ use std/process
 
 type writer-input = { path: string }
 
-fn writer-thread(input: *mut writer-input): ptr {
+fn writer-thread(input: *writer-input): ptr {
   thread/sleep-ms(100)
   files/write-entire-file(input.path, "changed")
   heap.free-t(input)
@@ -23,7 +23,7 @@ fn test() {
   w.add(dir).!
   w.add(file).!
 
-  thread/start-detached(writer-thread, heap.new(.{ path = file }: writer-input))
+  thread/start-detached(writer-thread.&, heap.new(writer-input.{ path = file }))
 
   // Blocks until the writer thread touches the file; both the file watch and
   // the directory watch may fire, possibly across separate wakeups

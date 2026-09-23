@@ -1,0 +1,47 @@
+type color = either { red, green, blue }
+type point = { x: int, y: int }
+
+fn show[t](v: t): string {
+  "generic"
+}
+
+fn from-string-any[t](s: string): ?t {
+  #meta {
+    require types/schema[t] is :enum .{ values } else crash("not an enum")
+    let cb = code-builder/new()
+    for v in values {
+      cb.line(`if s == ${meta/str-lit(v.name)} return :some :${v.name}`)
+    }
+    cb.line(":none")
+    println(cb.build().text())
+    cb.build()
+  }
+}
+
+fn field-sizes[t](): span[{ name: string, size: size, align: int }] {
+  #meta {
+    require types/schema[t] is :struct .{ fields } else crash("not a struct")
+    let cb = code-builder/new()
+    cb.write("[")
+    for f in fields {
+      let ty = f.type-id.spell()
+      cb.write(`.{ name = ${meta/str-lit(f.name)}, size = types/size[$ty], align = types/align[$ty] },`)
+    }
+    cb.write("]")
+    cb.build()
+  }
+}
+
+fn main(): i32 {
+  let c: color = :green
+  println(show(c))
+  println(c.show())
+  let parsed: ?color = from-string-any("blue")
+  println("$parsed")
+  let bad: ?color = from-string-any[color]("purple")
+  println("$bad")
+  for f in field-sizes[point]() {
+    println("${f.name} ${f.size} ${f.align}")
+  }
+  0
+}

@@ -1,0 +1,5 @@
+fn main(): i32 {
+  let k = #if types/schema[u8] is { :int _ -> "int", _ -> "other" }
+  println(k)
+  0
+}

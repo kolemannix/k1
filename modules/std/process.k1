@@ -223,7 +223,7 @@ ns process {
     }
   }
 
-  fn child-close-pipes(child: *mut child) {
+  fn child-close-pipes(child: *child) {
     if child.stdin-fd >= 0 {
       core/platform/io/close(.{ raw = child.stdin-fd })
       child.stdin-fd = -1
@@ -237,12 +237,12 @@ ns process {
   ns for child {
 
     // Closes both pipes (EOF on the child's stdin) and reaps
-    fn wait(self: *mut child): result[run-output, run-error] {
+    fn wait(self: *child): result[run-output, run-error] {
       child-close-pipes(self)
       reap(self.pid, self.program)
     }
 
-    fn kill(self: *mut child) {
+    fn kill(self: *child) {
       core/platform/process/kill(self.pid)
     }
 

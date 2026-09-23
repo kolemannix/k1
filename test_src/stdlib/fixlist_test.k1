@@ -1,6 +1,6 @@
 use core/fixlist
 fn test-fixlist() {
-  let fl: fixlist[int, 4] = zeroed()
+  let fl: fixlist[int, 4] = .0
   assert-equals(fl.len(), 0)
   fl.push(40)
   assert-equals(fl.len(), 1)

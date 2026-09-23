@@ -2,6 +2,8 @@ ns hash_test
 
 use std/map
 use std/set
+use std/fixmap
+use std/fixset
 
 fn test-basic() {
   let my-map = map/new[string, int]()
@@ -185,8 +187,7 @@ fn test-resize(size: int) {
   }
 }
 
-// removing and re-inserting in place must reuse tombstones
-// rather than accumulate load
+// removing and re-inserting in place must not accumulate load
 fn test-churn() {
   let m = map/new[int, int]()
   let round = 0
@@ -197,6 +198,165 @@ fn test-churn() {
   }
   assert-equals(m.len(), 0)
   assert(m.capacity() <= 16)
+}
+
+type fixmap-holder = { pad: u64, m: fixmap[int, int, 16], tail: u64 }
+
+fn test-fixmap-basic() {
+  let m = fixmap/new[string, int, 16]()
+  assert(m.is-empty())
+  assert-equals(m.cap(), 15)
+  m.insert("a", 10)
+  m.insert("b", 11)
+  m.insert("c", 12)
+  assert-equals(m.len(), 3)
+  assert-equals(m.get("a"), :some 10)
+  assert-equals(m.get("b"), :some 11)
+  assert-equals(m.get("c"), :some 12)
+  assert-equals(m.get("d"), :none)
+  assert(m.contains("a"))
+  assert(not m.contains("d"))
+  assert-equals(m.remove("a"), :some 10)
+  assert-equals(m.remove("a"), :none)
+  assert-equals(m.get("a"), :none)
+  assert-equals(m.get("b"), :some 11)
+  assert-equals(m.len(), 2)
+  m.insert("a", 20)
+  assert-equals(m.get("a"), :some 20)
+  m.insert("b", 21)
+  assert-equals(m.get("b"), :some 21)
+  assert-equals(m.len(), 3)
+  assert-equals(m.["c"], 12)
+  let vref = m.get-ref("c").!
+  vref.* = 100
+  assert-equals(m.get("c"), :some 100)
+  assert(m.get-ref("missing") is :none)
+  let made = m.get-or-insert("z", fn. 7).!
+  assert-equals(made.*, 7)
+  assert-equals(m.get-or-insert("z", fn. 8).!.*, 7)
+  m.clear()
+  assert(m.is-empty())
+  assert(m.get("b") is :none)
+}
+
+fn test-fixmap-full() {
+  let h: fixmap-holder = .{ pad = 1, m = fixmap/new(), tail = 2 }
+  for i in 0.until(15) { assert(h.m.try-insert(i, i * 10) is :ok) }
+  assert(h.m.is-full())
+  assert(h.m.try-insert(99, 1) is :err)
+  assert(h.m.get-or-insert(99, fn. 1) is :none)
+  assert(h.m.try-insert(3, 31) is :ok)
+  assert-equals(h.m.get(3), :some 31)
+  assert-equals(h.m.get(14), :some 140)
+  assert-equals(h.m.get(15), :none)
+  assert-equals(h.m.remove(3), :some 31)
+  assert(h.m.try-insert(99, 1) is :ok)
+  assert-equals(h.m.get(99), :some 1)
+  let total = 0
+  let seen = 0
+  for kv in h.m {
+    total = total + kv.value
+    seen = seen + 1
+  }
+  assert-equals(seen, 15)
+  assert-equals(total, 10 * 105 - 30 + 1)
+  assert-equals(h.pad, 1)
+  assert-equals(h.tail, 2)
+}
+
+// every key stays reachable through every order of removal,
+// including shifts across the wrap of the slot array
+fn test-fixmap-shift() {
+  let m = fixmap/new[int, int, 16]()
+  for i in 0.until(15) { m.insert(i * 7919, i) }
+  let removed = fixset/new[int, 16]()
+  for i in 0.until(15) {
+    let victim = (i * 7) % 15
+    assert-equals(m.remove(victim * 7919), :some victim)
+    assert-equals(m.remove(victim * 7919), :none)
+    removed.add(victim)
+    for j in 0.until(15) {
+      let expected: ?int = if removed.contains(j) :none else :some j
+      assert-equals(m.get(j * 7919), expected)
+    }
+    assert-equals(m.len(), 14 - i)
+  }
+  assert(m.is-empty())
+}
+
+fn test-fixmap-churn() {
+  let m = fixmap/new[int, int, 16]()
+  let round = 0
+  while round < 200 {
+    for i in 0.until(15) { m.insert(round * 100 + i, i) }
+    assert(m.is-full())
+    for i in 0.until(15) { assert-equals(m.remove(round * 100 + i), :some i) }
+    assert(m.is-empty())
+    round = round + 1
+  }
+}
+
+fn test-fixset() {
+  let s = fixset/new[string, 16]()
+  assert(s.try-add("a") is :ok true)
+  assert(s.try-add("a") is :ok false)
+  assert(s.add("b"))
+  assert(not s.add("b"))
+  assert(s.contains("a"))
+  assert(not s.contains("c"))
+  assert-equals(s.len(), 2)
+  assert(s.remove("a"))
+  assert(not s.remove("a"))
+  assert-equals(s.len(), 1)
+  for v in ["c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p"] { assert(s.add(v)) }
+  assert(s.is-full())
+  assert(s.try-add("z") is :err)
+  let seen = 0
+  for v in s { assert(s.contains(v)); seen = seen + 1 }
+  assert-equals(seen, 15)
+  assert-equals(s.show().len(), 1 + 15 + 14 * 2 + 1)
+}
+
+fn test-shift() {
+  let m = map/with-capacity[int, int](12)
+  for i in 0.until(12) { m.insert(i * 7919, i) }
+  assert-equals(m.capacity(), 16)
+  let removed = set/new[int]()
+  for i in 0.until(12) {
+    let victim = (i * 7) % 12
+    assert-equals(m.remove(victim * 7919), :some victim)
+    assert-equals(m.remove(victim * 7919), :none)
+    let _ = removed.add(victim)
+    for j in 0.until(12) {
+      let expected: ?int = if removed.contains(j) :none else :some j
+      assert-equals(m.get(j * 7919), expected)
+    }
+    assert-equals(m.len(), 11 - i)
+  }
+  assert(m.is-empty())
+}
+
+// tombstones, in-place purges, and growth under a live set that
+// never drains: every kept key must survive every reorganization
+fn test-tombstones() {
+  let m = map/with-capacity[int, int](14)
+  assert-equals(m.capacity(), 16)
+  let kept: list[int] = []
+  for round in 0.until(200) {
+    for i in 0.until(10) {
+      let key = round * 100 + i
+      m.insert(key, key * 2)
+      if i % 3 == 0 kept.push(key) else { assert-equals(m.remove(key), :some (key * 2)) }
+    }
+    if round % 4 == 3 {
+      for key in kept { assert-equals(m.remove(key), :some (key * 2)) }
+      kept.clear()
+    }
+    assert-equals(m.len(), kept.len)
+    for key in kept { assert-equals(m.get(key), :some (key * 2)) }
+    assert(m.get(round * 100 + 1) is :none)
+  }
+  assert(m.capacity() <= 64)
 }
 
 fn test() {
@@ -212,4 +372,11 @@ fn test() {
   test-set()
   test-resize(100)
   test-churn()
+  test-shift()
+  test-tombstones()
+  test-fixmap-basic()
+  test-fixmap-full()
+  test-fixmap-shift()
+  test-fixmap-churn()
+  test-fixset()
 }

@@ -1,0 +1,11 @@
+fn main(): i32 {
+  let e1 = test-compile(1: 5)
+  println(e1 ? "compiled fine")
+  let e2 = test-compile("a" + 1)
+  println(e2 ? "compiled fine")
+  let e3 = test-compile(1 + 1)
+  println(e3 ? "compiled fine")
+  let e4 = test-compile({ let s: string = 42; s })
+  println(e4 ? "compiled fine")
+  0
+}

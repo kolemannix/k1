@@ -19,31 +19,31 @@ ns atomic {
   }
 
   fn(intern) load[t](src: *t, ord: ordering): t
-  fn(intern) store[t](dst: *mut t, value: t, ord: ordering)
+  fn(intern) store[t](dst: *t, value: t, ord: ordering)
 
   // All rmw operations return the previous value
-  fn(intern) xchg[t](dst: *mut t, value: t, ord: ordering): t
-  fn(intern) fetch-add[t](dst: *mut t, value: t, ord: ordering): t
-  fn(intern) fetch-sub[t](dst: *mut t, value: t, ord: ordering): t
-  fn(intern) fetch-and[t](dst: *mut t, value: t, ord: ordering): t
-  fn(intern) fetch-or[t](dst: *mut t, value: t, ord: ordering): t
-  fn(intern) fetch-xor[t](dst: *mut t, value: t, ord: ordering): t
-  fn(intern) fetch-min[t](dst: *mut t, value: t, ord: ordering): t
-  fn(intern) fetch-max[t](dst: *mut t, value: t, ord: ordering): t
+  fn(intern) xchg[t](dst: *t, value: t, ord: ordering): t
+  fn(intern) fetch-add[t](dst: *t, value: t, ord: ordering): t
+  fn(intern) fetch-sub[t](dst: *t, value: t, ord: ordering): t
+  fn(intern) fetch-and[t](dst: *t, value: t, ord: ordering): t
+  fn(intern) fetch-or[t](dst: *t, value: t, ord: ordering): t
+  fn(intern) fetch-xor[t](dst: *t, value: t, ord: ordering): t
+  fn(intern) fetch-min[t](dst: *t, value: t, ord: ordering): t
+  fn(intern) fetch-max[t](dst: *t, value: t, ord: ordering): t
 
   type cmpxchg-result[t] = { prev: t, ok: bool }
 
   // `ok` distinguishes success from spurious failure for the weak variant;
   // `prev == expected` is not equivalent there
   fn(intern) cmpxchg[t](
-    dst: *mut t,
+    dst: *t,
     expected: t,
     desired: t,
     success: ordering,
     failure: ordering
   ): cmpxchg-result[t]
   fn(intern) cmpxchg-weak[t](
-    dst: *mut t,
+    dst: *t,
     expected: t,
     desired: t,
     success: ordering,
@@ -69,7 +69,7 @@ ns atomic {
       }
     }
 
-    fn store[t](self: *mut cell[t], value: t, ord: ordering) {
+    fn store[t](self: *cell[t], value: t, ord: ordering) {
       let p = self.raw.&
       if ord is {
         :relaxed -> atomic/store(p, value, :relaxed),
@@ -79,7 +79,7 @@ ns atomic {
       }
     }
 
-    fn swap[t](self: *mut cell[t], value: t, ord: ordering): t {
+    fn swap[t](self: *cell[t], value: t, ord: ordering): t {
       let p = self.raw.&
       if ord is {
         :relaxed -> atomic/xchg(p, value, :relaxed),
@@ -90,7 +90,7 @@ ns atomic {
       }
     }
 
-    fn add[t](self: *mut cell[t], value: t, ord: ordering): t {
+    fn add[t](self: *cell[t], value: t, ord: ordering): t {
       let p = self.raw.&
       if ord is {
         :relaxed -> atomic/fetch-add(p, value, :relaxed),
@@ -101,7 +101,7 @@ ns atomic {
       }
     }
 
-    fn sub[t](self: *mut cell[t], value: t, ord: ordering): t {
+    fn sub[t](self: *cell[t], value: t, ord: ordering): t {
       let p = self.raw.&
       if ord is {
         :relaxed -> atomic/fetch-sub(p, value, :relaxed),
@@ -112,11 +112,11 @@ ns atomic {
       }
     }
 
-    fn cas[t](self: *mut cell[t], expected: t, desired: t): cmpxchg-result[t] {
+    fn cas[t](self: *cell[t], expected: t, desired: t): cmpxchg-result[t] {
       atomic/cmpxchg(self.raw.&, expected, desired, :seq-cst, :seq-cst)
     }
 
-    fn cas-weak[t](self: *mut cell[t], expected: t, desired: t): cmpxchg-result[t] {
+    fn cas-weak[t](self: *cell[t], expected: t, desired: t): cmpxchg-result[t] {
       atomic/cmpxchg-weak(self.raw.&, expected, desired, :seq-cst, :seq-cst)
     }
 

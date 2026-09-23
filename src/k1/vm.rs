@@ -15,7 +15,7 @@ mod vm_test;
 use crate::ir;
 use crate::typer::types::{
     ContainerKind, FloatType, IntegerType, Layout, POINTER_TYPE_ID, PhysicalType, PhysicalTypeEnum,
-    PhysicalTypeResult, ScalarType, Type, TypeId,
+    PhysicalTypeResult, RecordKind, ScalarType, Type, TypeId,
 };
 use crate::typer::{
     ErrorKind, FunctionId, GlobalInitialValue, K1Message, K1Result, MessageLevel,
@@ -179,7 +179,8 @@ pub mod k1_types {
     #[derive(Clone, Copy)]
     pub struct K1SourceLocation {
         pub filename: K1BufferLike,
-        pub line: u64,
+        pub line: u32,
+        pub span: u32,
     }
 
     #[repr(C)]
@@ -273,8 +274,7 @@ pub struct VmFfiHandle {
 pub struct CompilerMessage {
     level: MessageLevel,
     message: StringId,
-    filename: String,
-    line: u32,
+    span: SpanId,
 }
 
 /// A repl command issued by cell code during execution (`k1/repl/*`
@@ -319,13 +319,13 @@ impl Vm {
 
         if let Some(arena_ptr) = arena_ptr_to_preserve {
             debug!("Preserving core/mem/arena allocation at {:p}", arena_ptr);
-            // Zero, don't release, the vm's main tmp arena, which is never chained
+            // Rewind, don't release, the vm's main tmp arena, which is never chained
             unsafe {
                 debug_assert!((*arena_ptr).fixed);
                 debug_assert!((*arena_ptr).extraChunks.is_null());
-                let base = (*arena_ptr).basePtr;
-                let used = (*arena_ptr).curAddr - base.addr() as u64;
-                core::ptr::write_bytes(base.cast_mut(), 0, used as usize);
+                let base = (*arena_ptr).basePtr.cast_mut();
+                let used = (*arena_ptr).curAddr as usize - base.addr();
+                std::ptr::write_bytes(base, 0, used);
                 (*arena_ptr).curAddr = base.addr() as u64;
             }
             let cell = self.static_stack.push_t(arena_ptr);
@@ -577,14 +577,27 @@ pub(crate) fn resolve_global(
 
     // Case 3: First use in this VM. If not mutable, put in share global constants. If mutable,
     // generate and store the shared original, but store a copy in our local vm to allow mutation
+    if k1.globals.get(global_id).initial_value.is_pending() {
+        if let Err(e) = k1.eval_global_body(global_id) {
+            k1.report(e)
+        }
+    }
     let global = *k1.globals.get(global_id);
     let is_constant = global.is_constant;
     let initial_value_id = match global.initial_value {
-        GlobalInitialValue::Pending | GlobalInitialValue::Failed(_) => {
+        GlobalInitialValue::Pending => {
             kbail!(
                 k1,
                 vm.eval_span,
-                "VM encountered un-evaluated or failed global '{}'; all globals referenced by compiled code should have been evaluated before execution. This is a compiler bug",
+                "VM encountered un-evaluated global '{}'. This is a compiler bug",
+                k1.variables.get(global.variable_id).name
+            );
+        }
+        GlobalInitialValue::Failed(_) => {
+            kbail!(
+                k1,
+                vm.eval_span,
+                "Global '{}' failed to compile",
                 k1.variables.get(global.variable_id).name
             );
         }
@@ -1306,20 +1319,25 @@ pub fn vm_value_to_static_value(
                 let struct_ptr = vm_value.as_ptr();
                 let struct_type_fields = struct_type.fields;
                 let mut field_value_ids = k1.static_values.mem.new_list(struct_type.fields.len());
-                let struct_shape = k1.get_struct_layout(type_id);
-                for (physical_field, k1_field) in
-                    struct_shape.iter().zip(k1.mem.getn(struct_type_fields))
-                {
-                    let field_ptr = unsafe { struct_ptr.byte_add(physical_field.offset as usize) };
-                    let field_value = load_value(physical_field.field_t, field_ptr);
-                    let field_static_value_id =
-                        vm_value_to_static_value(k1, k1_field.type_id, field_value, span)?;
-                    field_value_ids.push(field_static_value_id)
+                if struct_type.record_kind == RecordKind::Union {
+                    kbail!(k1, span, "Cannot (yet) bake union value to static value")
+                } else {
+                    let struct_shape = k1.get_struct_layout(type_id);
+                    for (physical_field, k1_field) in
+                        struct_shape.iter().zip(k1.mem.getn(struct_type_fields))
+                    {
+                        let field_ptr =
+                            unsafe { struct_ptr.byte_add(physical_field.offset as usize) };
+                        let field_value = load_value(physical_field.field_t, field_ptr);
+                        let field_static_value_id =
+                            vm_value_to_static_value(k1, k1_field.type_id, field_value, span)?;
+                        field_value_ids.push(field_static_value_id)
+                    }
+                    k1.static_values.add(StaticValue::Struct(StaticStruct {
+                        type_id,
+                        fields: field_value_ids.to_slice(),
+                    }))
                 }
-                k1.static_values.add(StaticValue::Struct(StaticStruct {
-                    type_id,
-                    fields: field_value_ids.to_slice(),
-                }))
             }
         }
         Type::Sum(typed_sum) => {
@@ -1383,6 +1401,7 @@ pub fn vm_value_to_static_value(
         | Type::Function(_)
         | Type::Never
         | Type::StaticValue(_)
+        | Type::FunctionReference(_)
         | Type::Generic(_)
         | Type::TypeParameter(_)
         | Type::FunctionTypeParameter(_)
@@ -1437,11 +1456,11 @@ pub fn get_span_element(
 
 fn static_zero_value(k1: &mut TypedProgram, type_id: TypeId, span: SpanId) -> Value {
     match k1.get_physical_type(type_id) {
-        PhysicalTypeResult::No | PhysicalTypeResult::Never | PhysicalTypeResult::Infinite => {
+        PhysicalTypeResult::No | PhysicalTypeResult::Infinite => {
             ice_span!(
                 k1,
                 span,
-                "not a value type; zeroed() for type {} is undefined",
+                "not a value type; .0 for type {} is undefined",
                 k1.types.get(type_id).kind_name()
             )
         }
@@ -1508,27 +1527,44 @@ pub(crate) fn builtin_compiler_message(
     let message = value_to_string_id(k1, message_arg).map_err(|msg| {
         kerr!(k1, vm.eval_span, "Bad message string passed to EmitCompilerMessage: {msg}")
     })?;
-    let filename = unsafe { location.filename.to_str() }.map_err(|msg| {
-        kerr!(k1, vm.eval_span, "Bad filename string passed to EmitCompilerMessage: {msg}")
-    })?;
+    let span =
+        SpanId::from_u32(location.span).filter(|id| k1.ast.spans.span_pool.get_opt(*id).is_some());
+    let Some(span) = span else {
+        kbail!(
+            k1,
+            vm.eval_span,
+            "Bad source-location span {} passed to EmitCompilerMessage",
+            location.span
+        )
+    };
 
-    if !vm.quiet_messages {
-        eprintln!(
-            "[{}:{} {}] {}",
-            filename,
-            location.line,
-            level.name_str().color(level.color()),
-            k1.get_string(message)
-        );
+    if !vm.quiet_messages && level != MessageLevel::Error {
+        let mut line = String::new();
+        write_compiler_message(k1, &mut line, &CompilerMessage { level, message, span });
+        eprint!("{line}");
     }
 
-    vm.compiler_messages.push(CompilerMessage {
-        level,
-        message,
-        filename: filename.to_string(),
-        line: location.line as u32,
-    });
+    vm.compiler_messages.push(CompilerMessage { level, message, span });
     Ok(())
+}
+
+fn write_compiler_message(k1: &TypedProgram, w: &mut String, message: &CompilerMessage) {
+    use std::fmt::Write;
+    let msg_str = k1.get_string(message.message);
+    if msg_str == "\n" {
+        writeln!(w).unwrap();
+        return;
+    }
+    let (source, line) = k1.get_span_location(message.span);
+    writeln!(
+        w,
+        "[{}:{} {}] {}",
+        source.filename_str(&k1.ast.idents),
+        line.line_number(),
+        message.level.name_str().color(message.level.color()),
+        msg_str
+    )
+    .unwrap();
 }
 
 /// The ReplCheckbox builtin body, shared with the bc VM:
@@ -1606,45 +1642,36 @@ pub fn peek_global_as_static(
 
 pub(crate) fn report_execution_messages(
     k1: &mut TypedProgram,
-    vm: &Vm,
+    vm: &mut Vm,
     span: SpanId,
-    _exit_code: i32,
-) {
-    if vm.compiler_messages.is_empty() {
-        return;
-    }
-
+) -> Option<K1Message> {
     let mut formatted_messages = String::new();
-    let mut max_level = MessageLevel::Hint;
-    for message in &vm.compiler_messages {
-        use std::fmt::Write;
-        let msg_str = k1.get_string(message.message);
-        let color = match message.level {
-            MessageLevel::Info => colored::Color::BrightWhite,
-            MessageLevel::Warn => colored::Color::Yellow,
-            MessageLevel::Error => colored::Color::Red,
-            MessageLevel::Hint => colored::Color::BrightBlue,
-        };
-        if message.level > max_level {
-            max_level = message.level
-        };
-        if msg_str == "\n" {
-            writeln!(&mut formatted_messages).unwrap()
+    let mut error_message = String::new();
+    let mut error_span = SpanId::NONE;
+    for message in vm.compiler_messages.drain(..) {
+        if message.level == MessageLevel::Error {
+            if error_message.is_empty() {
+                error_span = message.span;
+                error_message.push_str(k1.get_string(message.message));
+            } else {
+                error_message.push('\n');
+                write_compiler_message(k1, &mut error_message, &message);
+            }
         } else {
-            writeln!(
-                &mut formatted_messages,
-                "[{}:{} {}] {}",
-                message.filename,
-                message.line,
-                message.level.name_str().color(color),
-                msg_str
-            )
-            .unwrap()
-        };
+            write_compiler_message(k1, &mut formatted_messages, &message);
+        }
     }
-    let level = MessageLevel::Info;
-    let message = k1.ast.idents.intern(&formatted_messages);
-    k1.report_ext(K1Message { message, span, level, error_kind: ErrorKind::None }, true);
+    if !formatted_messages.is_empty() {
+        let message = k1.ast.idents.intern(&formatted_messages);
+        let level = MessageLevel::Info;
+        k1.report_ext(K1Message { message, span, level, error_kind: ErrorKind::None }, true);
+    }
+    if error_message.is_empty() {
+        None
+    } else {
+        let error_message_id = k1.ast.idents.intern(&error_message);
+        Some(k1.make_error(error_message_id, error_span))
+    }
 }
 
 #[track_caller]

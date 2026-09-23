@@ -1,0 +1,7 @@
+type header = packed { tag: u8, len: u32 }
+
+fn main(): i32 {
+  #static types/assert-layout[header](8, 4, [0, 4])
+  0
+}
+//errmsg: ASSERT FAILED: 8 != 5

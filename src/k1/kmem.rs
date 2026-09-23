@@ -215,6 +215,18 @@ pub struct MSlice<T, Tag = ()> {
 }
 static_assert_size!(MSlice<u128, ()>, 8);
 impl<T, Tag> Copy for MSlice<T, Tag> {}
+impl<T, Tag> PartialEq for MSlice<T, Tag> {
+    fn eq(&self, other: &Self) -> bool {
+        self.offset == other.offset && self.count == other.count
+    }
+}
+impl<T, Tag> Eq for MSlice<T, Tag> {}
+impl<T, Tag> std::hash::Hash for MSlice<T, Tag> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.offset.hash(state);
+        self.count.hash(state);
+    }
+}
 impl<T, Tag> Clone for MSlice<T, Tag> {
     fn clone(&self) -> Self {
         *self
@@ -528,6 +540,14 @@ impl<Tag> Mem<Tag> {
         self.pack_handle(t_ptr)
     }
 
+    pub fn push_slice_h<T>(&mut self, slice: MSlice<T, Tag>) -> Handle<MSlice<T, Tag>, Tag> {
+        if slice.is_empty() { Handle::nil() } else { self.push_h(slice) }
+    }
+
+    pub fn get_slice_h<T>(&self, handle: Handle<MSlice<T, Tag>, Tag>) -> MSlice<T, Tag> {
+        if handle.is_nil() { MSlice::empty() } else { *self.get(handle) }
+    }
+
     pub fn align_to_bytes(&mut self, align: usize) {
         unsafe {
             debug_assert!(align != 0);
@@ -659,6 +679,22 @@ impl<Tag> Mem<Tag> {
         let (ptr, count) = self.get_slice_raw(h);
         let slice = unsafe { slice::from_raw_parts(ptr, count) };
         self.pushn(slice)
+    }
+
+    pub fn slice_retain<T: Copy + 'static>(
+        &mut self,
+        h: &mut MSlice<T, Tag>,
+        mut keep: impl FnMut(&T) -> bool,
+    ) {
+        let slice = self.getn_mut(*h);
+        let mut count = 0;
+        for index in 0..slice.len() {
+            if keep(&slice[index]) {
+                slice[count] = slice[index];
+                count += 1;
+            }
+        }
+        h.count = count as u32;
     }
 
     pub fn slice_extend<T: Copy + 'static>(
@@ -1348,13 +1384,6 @@ impl<Tag: 'static> Mem<Tag> {
 }
 
 #[macro_export]
-macro_rules! mformat {
-    ($mem:expr, $($arg:tt)*) => {
-        $mem.format_str(format_args!($($arg)*))
-    };
-}
-
-#[macro_export]
 macro_rules! k1_format_user {
     ($k1:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {{
         $crate::k1_format!($k1, &$crate::typer::dump::K1DisplayArgs::user_facing(), $fmt, $($arg),*)
@@ -1362,10 +1391,19 @@ macro_rules! k1_format_user {
 }
 
 #[macro_export]
+macro_rules! k1_format_to_string {
+    ($k1:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {{
+        let mstr = k1_format_user($k1, $fmt, $($arg),*);
+        mstr.as_str().to_string()
+    }};
+}
+
+#[macro_export]
 macro_rules! kerr {
     ($k1:expr, $span:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {{
         let msg = $crate::k1_format_user!($k1, $fmt, $($arg),*);
-        $k1.make_error(&msg, $span)
+        let msg_id = $k1.ast.idents.intern(msg);
+        $k1.make_error(msg_id, $span)
     }}
 }
 
@@ -1373,7 +1411,8 @@ macro_rules! kerr {
 macro_rules! kwarn {
     ($k1:expr, $span:expr, $fmt:literal $(, $arg:expr)* $(,)?) => {{
         let msg = $crate::k1_format_user!($k1, $fmt, $($arg),*);
-        $k1.make_warning(&msg, $span)
+        let msg_id = $k1.ast.idents.intern(msg);
+        $k1.make_warning(msg_id, $span)
     }}
 }
 
@@ -1417,6 +1456,7 @@ fn stranded_count(counter: &std::sync::atomic::AtomicU64, bytes: usize) {
     }
 }
 
+#[cfg(feature = "profile")]
 pub fn print_stranded_counters() {
     let fin = STRANDED_FINALIZE_BYTES.load(std::sync::atomic::Ordering::Relaxed);
     let reloc = STRANDED_RELOC_BYTES.load(std::sync::atomic::Ordering::Relaxed);
@@ -1730,7 +1770,6 @@ impl<T, Tag> List<T, Tag> {
 }
 
 /// `List` minus the cached pointer: the pod handle for growable arena lists
-#[derive(Debug)]
 pub struct MList<T, Tag = ()> {
     /// Byte offset from the owning arena's base; 0 when empty
     offset: u32,
@@ -1740,6 +1779,12 @@ pub struct MList<T, Tag = ()> {
     _tag: PhantomData<Tag>,
 }
 
+impl<T, Tag> std::fmt::Debug for MList<T, Tag> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let ty = std::any::type_name::<T>();
+        write!(f, "MList<{ty}>[{}]", self.len)
+    }
+}
 impl<T, Tag> Copy for MList<T, Tag> {}
 impl<T, Tag> Clone for MList<T, Tag> {
     fn clone(&self) -> Self {

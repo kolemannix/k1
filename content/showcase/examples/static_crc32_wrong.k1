@@ -1,0 +1,38 @@
+fn crc32-table(): array[u32, 256] {
+  let table: array[u32, 256] = .0
+  for n in 0.until(256) {
+    let c = n.trunc[u32]
+    for 0.until(8) {
+      c = if (c & 1) == 1 0x04C11DB7 ^ (c >> 1) else c >> 1
+    }
+    table.[n] = c
+  }
+  table
+}
+
+let CRC_TABLE: array[u32, 256] = crc32-table()
+
+fn crc32(bytes: span[u8]): u32 {
+  let c = 0xFFFFFFFF: u32
+  for b in bytes {
+    c = CRC_TABLE.[((c ^ b.widen[u32]) & 0xFF)] ^ (c >> 8)
+  }
+  c ^ 0xFFFFFFFF
+}
+
+fn hex(v: u32): string {
+  let sb = string-builder/new()
+  core/format-uint(context sb.&)(v.widen[u64], 16)
+  sb.build()
+}
+
+fn main(argc: core/c-int, argv: ptr): i32 {
+  let check: 0xCBF43926u32 = #static crc32("123456789".span-bytes())
+  println("check value 0x${hex(check.from-static())} verified while compiling")
+  let args = std/sys/parse-main-args(argc, argv)
+  for a in args.drop(1) {
+    println("crc32(\"$a\") = 0x${hex(crc32(a.span-bytes()))}")
+  }
+  0
+}
+//errmsg: Different static values of same type family

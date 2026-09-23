@@ -1,0 +1,523 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "k1",
+  "scopeName": "source.k1",
+  "patterns": [
+    {
+      "include": "#code"
+    }
+  ],
+  "repository": {
+    "code": {
+      "patterns": [
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#string-double"
+        },
+        {
+          "include": "#string-backtick"
+        },
+        {
+          "include": "#char"
+        },
+        {
+          "include": "#directive"
+        },
+        {
+          "include": "#fn-declaration"
+        },
+        {
+          "include": "#macro-declaration"
+        },
+        {
+          "include": "#type-declaration"
+        },
+        {
+          "include": "#ability-declaration"
+        },
+        {
+          "include": "#impl-declaration"
+        },
+        {
+          "include": "#ns-declaration"
+        },
+        {
+          "include": "#use"
+        },
+        {
+          "include": "#let-modifiers"
+        },
+        {
+          "include": "#keywords"
+        },
+        {
+          "include": "#variant"
+        },
+        {
+          "include": "#label"
+        },
+        {
+          "include": "#type-annotation"
+        },
+        {
+          "include": "#namespace"
+        },
+        {
+          "include": "#ability-qualifier"
+        },
+        {
+          "include": "#call"
+        },
+        {
+          "include": "#number"
+        },
+        {
+          "include": "#identifier"
+        },
+        {
+          "include": "#operator"
+        }
+      ]
+    },
+    "comment": {
+      "name": "comment.line.double-slash.k1",
+      "begin": "//",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.comment.k1"
+        }
+      },
+      "end": "$"
+    },
+    "string-double": {
+      "name": "string.quoted.double.k1",
+      "begin": "\"",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.k1"
+        }
+      },
+      "end": "(\")|$",
+      "endCaptures": {
+        "1": {
+          "name": "punctuation.definition.string.end.k1"
+        }
+      },
+      "patterns": [
+        {
+          "name": "constant.character.escape.k1",
+          "match": "\\\\[n0tr\\\\$\"]"
+        },
+        {
+          "include": "#interpolation"
+        }
+      ]
+    },
+    "string-backtick": {
+      "name": "string.quoted.other.k1",
+      "begin": "`",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.begin.k1"
+        }
+      },
+      "end": "`",
+      "endCaptures": {
+        "0": {
+          "name": "punctuation.definition.string.end.k1"
+        }
+      },
+      "patterns": [
+        {
+          "name": "constant.character.escape.k1",
+          "match": "\\\\[n0tr\\\\$`]"
+        },
+        {
+          "include": "#interpolation"
+        }
+      ]
+    },
+    "interpolation": {
+      "patterns": [
+        {
+          "name": "meta.embedded.line.k1",
+          "begin": "\\$\\{",
+          "beginCaptures": {
+            "0": {
+              "name": "punctuation.section.embedded.begin.k1"
+            }
+          },
+          "end": "\\}",
+          "endCaptures": {
+            "0": {
+              "name": "punctuation.section.embedded.end.k1"
+            }
+          },
+          "patterns": [
+            {
+              "include": "#interpolation-braces"
+            },
+            {
+              "include": "#code"
+            }
+          ]
+        },
+        {
+          "name": "meta.embedded.line.k1",
+          "match": "(\\$)([\\p{L}_](?:[\\p{L}\\p{N}_]|-(?=[\\p{L}\\p{N}_-]))*)",
+          "captures": {
+            "1": {
+              "name": "punctuation.section.embedded.k1"
+            },
+            "2": {
+              "name": "variable.other.k1"
+            }
+          }
+        }
+      ]
+    },
+    "interpolation-braces": {
+      "begin": "\\{",
+      "end": "\\}",
+      "patterns": [
+        {
+          "include": "#interpolation-braces"
+        },
+        {
+          "include": "#code"
+        }
+      ]
+    },
+    "char": {
+      "name": "constant.character.k1",
+      "match": "'(?:(\\\\.)|[^\\\\])'",
+      "captures": {
+        "1": {
+          "name": "constant.character.escape.k1"
+        }
+      }
+    },
+    "directive": {
+      "name": "keyword.control.directive.k1",
+      "match": "(#)(?:static|meta|if|for|debug|type)(?![\\p{L}\\p{N}_-])",
+      "captures": {
+        "1": {
+          "name": "punctuation.definition.directive.k1"
+        }
+      }
+    },
+    "modifiers": {
+      "patterns": [
+        {
+          "name": "storage.modifier.k1",
+          "match": "(?<![\\p{L}\\p{N}_-])(?:mutable|tls|export|extern|context|returned|alias|lib|reload|intern|native|inline|noinline|cold|expose)(?![\\p{L}\\p{N}_-])"
+        },
+        {
+          "include": "#code"
+        }
+      ]
+    },
+    "type-parameters": {
+      "patterns": [
+        {
+          "begin": "\\[",
+          "end": "\\]",
+          "patterns": [
+            {
+              "include": "#code"
+            }
+          ]
+        },
+        {
+          "match": "(?<=[\\[,])\\s*(?:(impl)\\s+)?([\\p{L}_][\\p{L}\\p{N}_-]*)",
+          "captures": {
+            "1": {
+              "name": "storage.type.k1"
+            },
+            "2": {
+              "name": "entity.name.type.parameter.k1"
+            }
+          }
+        },
+        {
+          "include": "#code"
+        }
+      ]
+    },
+    "fn-declaration": {
+      "match": "(?<![\\p{L}\\p{N}_-])(fn)(?:\\(((?=\\s*(?:intern|extern|export|native|inline|noinline|cold|lib)(?![\\p{L}\\p{N}_-]))[^()]*(?:\\([^()]*\\)[^()]*)*)\\))?\\s+([\\p{L}_][\\p{L}\\p{N}_-]*)(?:\\[((?:[^\\[\\]]|\\[[^\\[\\]]*\\])*)\\])?(?=\\()",
+      "captures": {
+        "1": {
+          "name": "storage.type.function.k1"
+        },
+        "2": {
+          "patterns": [
+            {
+              "include": "#modifiers"
+            }
+          ]
+        },
+        "3": {
+          "name": "entity.name.function.k1"
+        },
+        "4": {
+          "patterns": [
+            {
+              "include": "#type-parameters"
+            }
+          ]
+        }
+      }
+    },
+    "macro-declaration": {
+      "match": "(?<![\\p{L}\\p{N}_-])(macro)\\s+([\\p{L}_][\\p{L}\\p{N}_-]*)(?=\\()",
+      "captures": {
+        "1": {
+          "name": "storage.type.function.k1"
+        },
+        "2": {
+          "name": "entity.name.function.k1"
+        }
+      }
+    },
+    "type-declaration": {
+      "match": "(?<![\\p{L}\\p{N}_-])(type)(?:\\(([^()]*)\\))?\\s+([\\p{L}_][\\p{L}\\p{N}_-]*)(?:\\[((?:[^\\[\\]]|\\[[^\\[\\]]*\\])*)\\])?",
+      "captures": {
+        "1": {
+          "name": "storage.type.k1"
+        },
+        "2": {
+          "patterns": [
+            {
+              "include": "#modifiers"
+            }
+          ]
+        },
+        "3": {
+          "name": "entity.name.type.k1"
+        },
+        "4": {
+          "patterns": [
+            {
+              "include": "#type-parameters"
+            }
+          ]
+        }
+      }
+    },
+    "ability-declaration": {
+      "match": "(?<![\\p{L}\\p{N}_-])(ability)\\s+([\\p{L}_][\\p{L}\\p{N}_-]*)(?:\\[((?:[^\\[\\]]|\\[[^\\[\\]]*\\])*)\\])?",
+      "captures": {
+        "1": {
+          "name": "storage.type.k1"
+        },
+        "2": {
+          "name": "entity.name.type.ability.k1"
+        },
+        "3": {
+          "patterns": [
+            {
+              "include": "#type-parameters"
+            }
+          ]
+        }
+      }
+    },
+    "impl-declaration": {
+      "match": "(?<![\\p{L}\\p{N}_-])(impl)(?:\\[((?:[^\\[\\]]|\\[[^\\[\\]]*\\])*)\\])?\\s+((?:[\\p{L}_][\\p{L}\\p{N}_-]*/(?!/))*)([\\p{L}_][\\p{L}\\p{N}_-]*)",
+      "captures": {
+        "1": {
+          "name": "storage.type.k1"
+        },
+        "2": {
+          "patterns": [
+            {
+              "include": "#type-parameters"
+            }
+          ]
+        },
+        "3": {
+          "patterns": [
+            {
+              "include": "#namespace"
+            }
+          ]
+        },
+        "4": {
+          "name": "entity.name.type.ability.k1"
+        }
+      }
+    },
+    "ns-declaration": {
+      "match": "(?<![\\p{L}\\p{N}_-])(ns)(?:\\(([^()]*(?:\\([^()]*\\)[^()]*)*)\\))?\\s+(?:(for)\\s+([\\p{L}_][\\p{L}\\p{N}_-]*)|([\\p{L}_][\\p{L}\\p{N}_-]*))",
+      "captures": {
+        "1": {
+          "name": "storage.type.k1"
+        },
+        "2": {
+          "patterns": [
+            {
+              "include": "#modifiers"
+            }
+          ]
+        },
+        "3": {
+          "name": "keyword.control.k1"
+        },
+        "4": {
+          "name": "entity.name.type.k1"
+        },
+        "5": {
+          "name": "entity.name.namespace.k1"
+        }
+      }
+    },
+    "use": {
+      "match": "(?<![\\p{L}\\p{N}_-])(use)(?:\\(([^()]*)\\))?\\s+((?:[\\p{L}_][\\p{L}\\p{N}_-]*/(?!/))*)([\\p{L}_][\\p{L}\\p{N}_-]*)(?:\\s+(as)\\s+([\\p{L}_][\\p{L}\\p{N}_-]*))?",
+      "captures": {
+        "1": {
+          "name": "keyword.other.k1"
+        },
+        "2": {
+          "patterns": [
+            {
+              "include": "#modifiers"
+            }
+          ]
+        },
+        "3": {
+          "patterns": [
+            {
+              "include": "#namespace"
+            }
+          ]
+        },
+        "5": {
+          "name": "keyword.other.k1"
+        }
+      }
+    },
+    "let-modifiers": {
+      "match": "(?<![\\p{L}\\p{N}_-])(let)\\(([^()]*(?:\\([^()]*\\)[^()]*)*)\\)",
+      "captures": {
+        "1": {
+          "name": "storage.type.k1"
+        },
+        "2": {
+          "patterns": [
+            {
+              "include": "#modifiers"
+            }
+          ]
+        }
+      }
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "storage.type.function.k1",
+          "match": "(?<![\\p{L}\\p{N}_-])(?:fn)(?![\\p{L}\\p{N}_-])"
+        },
+        {
+          "name": "storage.type.k1",
+          "match": "(?<![\\p{L}\\p{N}_-])(?:let|ns|ability|impl)(?![\\p{L}\\p{N}_-])"
+        },
+        {
+          "name": "keyword.control.k1",
+          "match": "(?<![\\p{L}\\p{N}_-])(?:if|else|while|loop|for|in|return|break|continue|defer|require)(?![\\p{L}\\p{N}_-])"
+        },
+        {
+          "name": "keyword.operator.word.k1",
+          "match": "(?<![\\p{L}\\p{N}_-])(?:and|or|not|is)(?![\\p{L}\\p{N}_-])"
+        },
+        {
+          "name": "storage.modifier.k1",
+          "match": "(?<![\\p{L}\\p{N}_-])(?:context|intern)(?![\\p{L}\\p{N}_-])"
+        },
+        {
+          "name": "keyword.other.k1",
+          "match": "(?<![\\p{L}\\p{N}_-])(?:use|where|builtin)(?![\\p{L}\\p{N}_-])"
+        },
+        {
+          "name": "constant.language.boolean.k1",
+          "match": "(?<![\\p{L}\\p{N}_-])(?:true|false)(?![\\p{L}\\p{N}_-])"
+        },
+        {
+          "name": "storage.type.k1",
+          "match": "(?<![\\p{L}\\p{N}_-])(?:either(?=\\s*[({])|(?:union|packed)(?=\\s*\\{))"
+        },
+        {
+          "name": "storage.modifier.k1",
+          "match": "(?<![\\p{L}\\p{N}_-])(?:static|some|pred)(?=\\s+[\\p{L}_*?])"
+        },
+        {
+          "name": "keyword.other.k1",
+          "match": "(?<![\\p{L}\\p{N}_-])type(?=\\[)"
+        }
+      ]
+    },
+    "variant": {
+      "name": "variable.other.enummember.k1",
+      "match": ":[\\p{L}_][\\p{L}\\p{N}_-]*"
+    },
+    "label": {
+      "name": "entity.name.label.k1",
+      "match": "(@)[\\p{L}_][\\p{L}\\p{N}_-]*",
+      "captures": {
+        "1": {
+          "name": "punctuation.definition.label.k1"
+        }
+      }
+    },
+    "type-annotation": {
+      "match": "(?<=:)\\s+([*?]*)(?!(?:static|some|pred|fn|either|union|packed|builtin|true|false)(?![\\p{L}\\p{N}_-]))((?:[\\p{L}_][\\p{L}\\p{N}_-]*/(?!/))*)([\\p{L}_][\\p{L}\\p{N}_-]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.operator.k1"
+        },
+        "2": {
+          "patterns": [
+            {
+              "include": "#namespace"
+            }
+          ]
+        },
+        "3": {
+          "name": "entity.name.type.k1"
+        }
+      }
+    },
+    "namespace": {
+      "match": "([\\p{L}_][\\p{L}\\p{N}_-]*)(/)(?!/)",
+      "captures": {
+        "1": {
+          "name": "entity.name.namespace.k1"
+        },
+        "2": {
+          "name": "punctuation.separator.namespace.k1"
+        }
+      }
+    },
+    "ability-qualifier": {
+      "name": "entity.name.type.ability.k1",
+      "match": "[\\p{L}_][\\p{L}\\p{N}_-]*(?=@\\()"
+    },
+    "call": {
+      "name": "entity.name.function.call.k1",
+      "match": "[\\p{L}_][\\p{L}\\p{N}_-]*(?=\\()"
+    },
+    "number": {
+      "name": "constant.numeric.k1",
+      "match": "(?<![\\p{L}\\p{N}_])\\p{N}[\\p{L}\\p{N}_-]*(?:\\.\\p{N}[\\p{L}\\p{N}_-]*)*"
+    },
+    "identifier": {
+      "match": "[\\p{L}_][\\p{L}\\p{N}_-]*"
+    },
+    "operator": {
+      "name": "keyword.operator.k1",
+      "match": "->|==|!=|<=|>=|<<|>>|\\|\\||&&|[-+*/%<>=!?|&^\\\\$@]"
+    }
+  }
+}

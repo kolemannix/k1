@@ -1,6 +1,7 @@
 mod browse;
 mod bus;
 mod http;
+mod size;
 pub mod sse;
 
 use http::Response;
@@ -491,6 +492,7 @@ fn render_site_header(active: &str) -> maud::Markup {
             nav .site-nav {
                 a .active[active == "repl"] href="/" { "repl" }
                 a .active[active == "browse"] href="/ns" { "browse" }
+                a .active[active == "size"] href="/size" { "size" }
             }
         }
     }
@@ -673,6 +675,7 @@ fn handle_request(
                 None => Response::NotFound,
             }
         }
+        "size" => Response::Html(size::render_page(k1).0),
         "functions" => {
             let functions: Vec<String> = k1
                 .function_iter()

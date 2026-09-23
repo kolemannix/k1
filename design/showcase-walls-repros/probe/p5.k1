@@ -1,0 +1,15 @@
+fn count[t](v: t): int {
+  #meta {
+    let cb = code-builder/new()
+    if types/schema[t] is {
+      :string -> cb.line("0"),
+      _ -> crash("unsupported: ${types/name[t]}")
+    }
+    cb.build()
+  }
+}
+
+fn main(): i32 {
+  println("${count(42)}")
+  0
+}

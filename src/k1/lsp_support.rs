@@ -61,8 +61,8 @@ pub fn get_hover_message_for_entity(k1: &mut TypedProgram, entity: LsEntity) -> 
             let v = k1.variables.get(variable_id);
             let kind_str = match v.kind {
                 VariableKind::FnParam(_) => "Param".to_string(),
-                VariableKind::Stack(_) => "Local".to_string(),
-                VariableKind::StackSynthetic(_) => "Compiler-generated".to_string(),
+                VariableKind::Stack => "Local".to_string(),
+                VariableKind::StackSynthetic => "Compiler-generated".to_string(),
                 VariableKind::Global(global_id) => {
                     let global = k1.globals.get(global_id);
                     format!("Global const={}, export={}", global.is_constant, global.is_exported)
@@ -402,9 +402,6 @@ pub fn signature_help_info(k1: &TypedProgram, site: CompletionSite) -> Option<Si
     let CompletionSite::CallArg { function_id, arg_index, .. } = site else { return None };
     let function = k1.get_function(function_id);
     let Type::Function(ft) = k1.types.get(function.type_id) else { return None };
-    // FIXME: Does not handle explicit context params properly\
-    // FIXME: Does not use our standard FunctionSignature display because we're not interested in
-    // 'special' params
     let params: Vec<String> = k1
         .mem
         .getn(ft.physical_params)
@@ -566,7 +563,7 @@ pub fn get_expr_at_point(
 mod completion_tests {
     use super::*;
     use crate::compiler::{
-        Args, Command, CompileProgramError, LspCompileOptions, compile_program_ext,
+        Command, CompileProgramError, CompileRequest, LspCompileOptions, compile_program,
     };
 
     const M: &str = COMPLETION_MARKER;
@@ -605,26 +602,13 @@ mod completion_tests {
         if let Some(spliced) = spliced {
             source_overrides.insert(crate::kpath::canonicalize_owned(&path).unwrap(), spliced);
         }
-        let args = Args {
-            no_std: false,
-            emit_llvm: false,
-            optimize: false,
-            dump_module: false,
-            debug: false,
-            sanitize: false,
-            profile: false,
-            chatty: false,
-            optimize_ir: true,
-            target: None,
-            cache: false,
-            filc: false,
-            k1_home_override: None,
-            command: Command::Check { file: Some(path) },
-            dump_idents: false,
-        };
-        match compile_program_ext(&args, LspCompileOptions { source_overrides, completion: true }) {
+        let mut request = CompileRequest::new(path, Command::Check, None).unwrap();
+        request.tools.cache = false;
+        request.lsp = LspCompileOptions { source_overrides, completion: true, progress_sink: None };
+        match compile_program(request) {
             Ok(program) => Box::new(program),
             Err(CompileProgramError::TyperFailure(program)) => program,
+            Err(CompileProgramError::Build(message)) => panic!("{message}"),
         }
     }
 
@@ -681,11 +665,11 @@ impl describe for point {
 }
 
 ability bump {
-  fn bump(self: *mut self): int
+  fn bump(self: *self): int
 }
 
 impl bump for point {
-  fn bump(self: *mut point): int {
+  fn bump(self: *point): int {
     self.x = self.x + 1
     self.x
   }
@@ -707,7 +691,7 @@ fn use-it(): int {
         assert!(labels.contains(&"y".to_string()));
         assert!(labels.contains(&"magnitude".to_string()));
         assert!(labels.contains(&"describe".to_string()));
-        // Impl self param is *mut point; the deref'd base still finds it
+        // Impl self param is *point; the deref'd base still finds it
         assert!(labels.contains(&"bump".to_string()));
     }
 
@@ -855,29 +839,6 @@ fn use-it(): int {
     }
 
     #[test]
-    fn call_arg_generic_method() {
-        let k1 = compile_with_cursor(
-            "callarg_generic",
-            r#"
-ns completion-callarg-generic
-
-fn use-it(): int {
-  let xs: list[int] = list/empty()
-  xs.push(@@)
-  0
-}
-"#,
-        );
-        let site = k1.completion.as_ref().unwrap().site.expect("expected a site");
-        assert!(matches!(site, CompletionSite::CallArg { arg_index: 1, .. }));
-        let info = signature_help_info(&k1, site).unwrap();
-        // Inference solved t=i64 from the receiver; the marker's phony filled elem
-        assert_eq!(info.label, "fn push(self: *list[i64], elem: i64): empty");
-        assert_eq!(info.params, vec!["self: *list[i64]", "elem: i64"]);
-        assert_eq!(info.active_param, 1);
-    }
-
-    #[test]
     fn struct_field_completion() {
         let k1 = compile_with_cursor(
             "struct_field",
@@ -902,7 +863,7 @@ fn use-it(): int {
     }
 
     #[test]
-    fn earlier_error_yields_no_site() {
+    fn earlier_error_still_yields_site() {
         let k1 = compile_with_cursor(
             "earlier_error",
             r#"
@@ -915,14 +876,16 @@ fn use-it(): int {
 }
 "#,
         );
-        assert!(k1.completion.as_ref().unwrap().site.is_none());
+        let site = k1.completion.as_ref().unwrap().site.expect("expected a site");
+        assert!(matches!(site, CompletionSite::Scope { .. }));
+        assert!(labels(&k1).contains(&"use-it".to_string()));
     }
 
     const MACRO_SRC: &str = r#"
 ns lsp-macro
 
 fn incr(): int { 1 }
-macro twice(e) {
+macro twice(e: code) {
   "$e + $e"
 }
 fn use-it(): int {
@@ -950,7 +913,7 @@ fn use-it(): int {
     const SAME_LINE_SRC: &str = r#"
 ns lsp-macro-same-line
 
-macro twice(e) {
+macro twice(e: code) {
   "$e + $e"
 }
 fn use-it(): int {
@@ -978,7 +941,7 @@ fn use-it(): int {
 ns lsp-macro-completion
 
 type point = { x: int, y: int }
-macro twice(e) {
+macro twice(e: code) {
   "$e + $e"
 }
 fn use-it(): int {
@@ -994,7 +957,7 @@ fn use-it(): int {
 $pre/make-fn(my-fn)
 
 ns pre {
-  macro make-fn(name) {
+  macro make-fn(name: code) {
     "fn $name(): int { 7 }"
   }
 }

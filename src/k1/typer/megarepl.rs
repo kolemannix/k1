@@ -96,7 +96,8 @@ pub struct MegareplState {
 
 impl TypedProgram {
     fn parse_repl_source(&mut self, file_id: FileId) -> K1Result<ParseReplSourceResult> {
-        self.with_parser(file_id, move |p| {
+        let module_id = self.primary_module().id;
+        self.with_parser(module_id, file_id, move |p| {
             let msg_base = "Failed to parse the code you returned: ";
             let error_count_start = p.ast.errors.len();
             let p_result = if p.peek().kind == TokenKind::KeywordFn {
@@ -107,16 +108,14 @@ impl TypedProgram {
             let new_errors = p.ast.errors.len() - error_count_start;
             match p_result {
                 Err(e) => Err(make_message(
-                    &p.ast.idents,
-                    format!("{msg_base}{e}"),
+                    p.ast.idents.intern(format!("{msg_base}{e}")),
                     e.span(),
                     MessageLevel::Error,
                 )),
                 Ok(_) if new_errors > 0 => {
                     let e = p.ast.errors.last().unwrap();
                     Err(make_message(
-                        &p.ast.idents,
-                        format!("{msg_base}{e}"),
+                        p.ast.idents.intern(format!("{msg_base}{e}")),
                         e.span(),
                         MessageLevel::Error,
                     ))
@@ -124,8 +123,7 @@ impl TypedProgram {
                 Ok(Some(defn)) => Ok(ParseReplSourceResult::Defn(ParsedId::Function(defn))),
                 Ok(None) => match p.parse_block_statements(TokenKind::Eof) {
                     Err(e) => Err(make_message(
-                        &p.ast.idents,
-                        format!("{msg_base}{e}"),
+                        p.ast.idents.intern(format!("{msg_base}{e}")),
                         e.span(),
                         MessageLevel::Error,
                     )),
@@ -242,7 +240,7 @@ impl TypedProgram {
         let mr = self.megarepl.as_mut().unwrap();
         let cell_id = mr.cells.len() as CellId;
         let source_id = self.megarepl_create_source(cell_id, 0, code);
-        let uninit_warning = self.make_warning("uninit", SpanId::NONE);
+        let uninit_warning = self.make_warning(self.ast.idents.intern("uninit"), SpanId::NONE);
         let mr = self.megarepl.as_mut().unwrap();
         mr.cells.push(MegareplCell {
             id: cell_id,
@@ -605,7 +603,6 @@ impl TypedProgram {
                             destination: variable_expr,
                             value: initializer,
                             span: parsed_let.span,
-                            kind: AssignmentKind::Set,
                         }));
                         self.push_block_stmt_id(&mut cell_block, assign_stmt);
                     }
@@ -651,7 +648,6 @@ impl TypedProgram {
                                     destination: variable_expr,
                                     value: expr_id,
                                     span: expr_span,
-                                    kind: AssignmentKind::Set,
                                 }));
                             self.push_block_stmt_id(&mut cell_block, assign_stmt);
                             output_globals.push((global_id, expr_type));
@@ -696,8 +692,7 @@ impl TypedProgram {
 
         ir::compile_top_level_expr(self, cell_expr, &[], false)?;
         ir::validate_unit(self, IrUnitId::Expr(cell_expr))?;
-        self.compile_all_pending_ir(span)?;
-        ir::optimize_unit(self, IrUnitId::Expr(cell_expr));
+        ir::optimize_unit(self, IrUnitId::Expr(cell_expr))?;
         Ok((cell_expr, output_globals))
     }
 

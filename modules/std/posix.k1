@@ -51,12 +51,12 @@ ns posix {
   type timespec = { tv_sec: u64, tv_nsec: u64 }
   type(alias) clockid_t = c-int
   let CLOCK_MONOTONIC: clockid_t = 1
-  fn(extern("clock_gettime")) clock_gettime(clockid: clockid_t, tp: *mut timespec): c-int
-  fn(extern("nanosleep")) nanosleep(req: *timespec, rem: *mut timespec): c-int
+  fn(extern("clock_gettime")) clock_gettime(clockid: clockid_t, tp: *timespec): c-int
+  fn(extern("nanosleep")) nanosleep(req: *timespec, rem: *timespec): c-int
 
   fn(extern("fork")) fork(): i32
   fn(extern("execve")) execve(path: ptr, argv: ptr, envp: ptr): i32
-  fn(extern("waitpid")) waitpid(pid: i32, status: *mut i32, options: i32): i32
+  fn(extern("waitpid")) waitpid(pid: i32, status: *i32, options: i32): i32
   let SIGTERM: c-int = 15
   let SIGKILL: c-int = 9
   fn(extern("kill")) kill(pid: i32, sig: c-int): c-int
@@ -64,7 +64,7 @@ ns posix {
   fn(extern("pipe")) pipe(fds: ptr): c-int
   fn(extern("close")) close(fd: c-int): c-int
 
-  fn(extern("posix_spawn")) posix_spawn(pid: *mut i32, path: ptr, file-actions: ptr, attrp: ptr, argv: ptr, envp: ptr): c-int
+  fn(extern("posix_spawn")) posix_spawn(pid: *i32, path: ptr, file-actions: ptr, attrp: ptr, argv: ptr, envp: ptr): c-int
   fn(extern("posix_spawn_file_actions_init")) posix_spawn_file_actions_init(file-actions: ptr): c-int
   fn(extern("posix_spawn_file_actions_destroy")) posix_spawn_file_actions_destroy(file-actions: ptr): c-int
   fn(extern("posix_spawn_file_actions_adddup2")) posix_spawn_file_actions_adddup2(file-actions: ptr, fd: c-int, new-fd: c-int): c-int

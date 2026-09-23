@@ -1,0 +1,8 @@
+let fifteen: int = { 3 * 5 }
+fn main(): i32 {
+  println("a")
+  let n = #static types/id[fifteen].spell()
+  println(n.from-static())
+  println("b")
+  0
+}

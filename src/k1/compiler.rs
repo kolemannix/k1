@@ -8,8 +8,7 @@ use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
 
 use crate::kmem::{self, MStr, Mem};
-use crate::lex::SpanId;
-use crate::parse::{IdentPool, StringId, write_source_location};
+use crate::parse::{IdentPool, Interner, StringId, write_source_location};
 use crate::typer::{
     K1Message, LibRefLinkType, Linkage, MemTmp, MessageLevel, NamespaceId, TypedProgram,
 };
@@ -18,11 +17,12 @@ use anyhow::{Result, bail};
 use inkwell::context::Context;
 use log::{error, info};
 
-use crate::codegen_llvm::{self, Cg, CgError, CgKind, CodegenRoots, Pipeline, UnitOutput};
+use crate::codegen_llvm::{
+    self, Cg, CgError, CgKind, CodegenRoots, Pipeline, UnitOutput, UnitTiming,
+};
+use crate::typer::trace::{FrameId, TraceKind};
 
 use std::path::PathBuf;
-
-use clap::{Parser, Subcommand};
 
 pub const MAC_SDK_VERSION: &str = "15.0.0";
 pub const MAC_SDK_SYSROOT: &str = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk";
@@ -81,7 +81,8 @@ pub enum Arch {
     Wasm,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
 /// A target is an (arch, platform) pair; I just do a simple exhaustive enum of
 /// the pairs that are real rather than a 'target triple' type of struct where
 /// very few values of that type are actually valid. Bare targets emit objects
@@ -96,6 +97,19 @@ pub enum Target {
 }
 
 impl Target {
+    pub const ALL: [Target; 6] = [
+        Target::Intel64Linux,
+        Target::Arm64Macos,
+        Target::Wasm64Wasi,
+        Target::Intel64Bare,
+        Target::Arm64Bare,
+        Target::Wasm64Bare,
+    ];
+
+    pub fn parse(name: &str) -> Option<Target> {
+        Target::ALL.into_iter().find(|t| t.to_str() == name)
+    }
+
     pub fn from(arch: Arch, platform: Option<Platform>) -> Option<Self> {
         match (arch, platform) {
             (Arch::Intel, Some(Platform::PosixLinux)) => Some(Target::Intel64Linux),
@@ -134,31 +148,131 @@ impl Target {
     }
 }
 
-pub fn detect_simd_bytes(target: Target) -> u32 {
-    if detect_host_target() != Some(target) {
-        // Cross builds assume the target's baseline
-        return 16;
+#[derive(Debug, Clone, Copy)]
+pub struct BuildConfig {
+    pub target: Target,
+    pub cpu: StringId,
+    pub features: StringId,
+    pub optimize: bool,
+    pub debug: bool,
+    pub no_std: bool,
+    pub sanitize: bool,
+    pub filc: bool,
+}
+
+impl BuildConfig {
+    pub fn new(target: Target, strings: &mut Interner) -> BuildConfig {
+        let empty = strings.intern("");
+        BuildConfig {
+            target,
+            cpu: empty,
+            features: empty,
+            optimize: false,
+            debug: false,
+            no_std: false,
+            sanitize: false,
+            filc: false,
+        }
     }
-    match target.arch() {
-        Arch::Intel => {
-            #[cfg(target_arch = "x86_64")]
-            {
-                if std::arch::is_x86_feature_detected!("avx512f") {
-                    64
-                } else if std::arch::is_x86_feature_detected!("avx2") {
-                    32
-                } else {
-                    16
-                }
+
+    pub fn resolve(self, strings: &mut Interner) -> Result<BuildConfig, &'static str> {
+        let target = self.target;
+        if self.filc && target != Target::Intel64Linux {
+            return Err("filc requires target intel64-linux; Fil-C only supports Linux/x86_64");
+        }
+        if self.filc && self.sanitize {
+            return Err("filc and sanitize are mutually exclusive");
+        }
+        let native = detect_host_target() == Some(target);
+        let (baseline_cpu, baseline_features) = if native {
+            ("native", "")
+        } else {
+            match target.arch() {
+                Arch::Intel => ("x86-64", ""),
+                Arch::Arm => ("generic", "+neon"),
+                Arch::Wasm => (
+                    "generic",
+                    "+simd128,+bulk-memory,+sign-ext,+mutable-globals,+nontrapping-fptoint",
+                ),
             }
-            #[cfg(not(target_arch = "x86_64"))]
-            {
-                16
+        };
+        let cpu = match strings.get(self.cpu) {
+            "" => baseline_cpu,
+            "native" if !native => return Err("cpu \"native\" requires the host target"),
+            cpu => cpu,
+        };
+        let features = match (strings.get(self.cpu), strings.get(self.features)) {
+            ("", "") => baseline_features,
+            (_, features) => features,
+        };
+        Ok(BuildConfig { cpu: strings.intern(cpu), features: strings.intern(features), ..self })
+    }
+
+    pub fn simd_bytes(&self, strings: &Interner) -> u32 {
+        let mut simd_bytes = 16;
+        for feature in strings.get(self.features).split(',') {
+            let width = match feature {
+                "+avx512f" => 64,
+                "+avx2" => 32,
+                _ => 16,
+            };
+            simd_bytes = simd_bytes.max(width);
+        }
+        #[cfg(target_arch = "x86_64")]
+        if strings.get(self.cpu) == "native" {
+            if std::arch::is_x86_feature_detected!("avx512f") {
+                simd_bytes = 64;
+            } else if std::arch::is_x86_feature_detected!("avx2") {
+                simd_bytes = 32;
             }
         }
-        // NEON is baseline; SVE detection can widen this later
-        Arch::Arm => 16,
-        Arch::Wasm => 16,
+        simd_bytes
+    }
+
+    pub fn add_to_hash(
+        &self,
+        strings: &Interner,
+        hash: crate::snap::InputsHash,
+    ) -> crate::snap::InputsHash {
+        let BuildConfig { target, cpu, features, optimize, debug, no_std, sanitize, filc } = *self;
+        hash.add(&[
+            target.to_str().as_bytes(),
+            strings.get(cpu).as_bytes(),
+            strings.get(features).as_bytes(),
+            &self.simd_bytes(strings).to_le_bytes(),
+            &[optimize, debug, no_std, sanitize, filc].map(|b| b as u8),
+        ])
+    }
+}
+
+pub struct BuildRequest {
+    pub default: BuildConfig,
+    pub command: Command,
+    pub options: Vec<String>,
+    pub host: Option<Target>,
+}
+
+impl BuildRequest {
+    pub fn hash(
+        &self,
+        strings: &Interner,
+        idents: &IdentPool,
+        config: &CompilerConfig,
+    ) -> crate::snap::InputsHash {
+        let mut hash = self.default.add_to_hash(
+            strings,
+            crate::snap::InputsHash(0).add(&[
+                b"build-request",
+                idents.get_string(config.src_path).as_bytes(),
+                idents.get_string(config.k1_home).as_bytes(),
+                self.command.request_name().as_bytes(),
+                self.host.map_or("", |t| t.to_str()).as_bytes(),
+            ]),
+        );
+        for option in &self.options {
+            hash = hash.add(&[option.as_bytes()]);
+        }
+        hash
     }
 }
 
@@ -204,162 +318,114 @@ fn logical_name_to_lib_filename(
     }
 }
 
-#[derive(Debug, Clone, Subcommand)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Command {
-    #[clap(alias = "c")]
-    Check {
-        /// File
-        file: Option<PathBuf>,
-    },
-    #[clap(alias = "b")]
-    Build {
-        /// File
-        file: Option<PathBuf>,
-    },
-    #[clap(alias = "r")]
-    Run {
-        /// File
-        file: Option<PathBuf>,
-        /// Arguments passed through to the program
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        program_args: Vec<String>,
-    },
-    #[clap(alias = "t")]
-    Test {
-        /// File
-        file: Option<PathBuf>,
-    },
-    #[clap()]
-    Server {
-        /// File
-        file: Option<PathBuf>,
-    },
-    /// Run a module's setup step if stale
-    #[clap()]
-    Setup {
-        /// Module directory
-        file: Option<PathBuf>,
-        /// Re-run the module's setup even if fresh
-        #[arg(long, default_value_t = false)]
-        force: bool,
-    },
-    #[clap()]
-    Clean { file: Option<PathBuf> },
+    Check,
+    Build,
+    Run,
+    Test,
+    Server,
+    Setup { force: bool },
+    Clean,
 }
 
 impl Command {
-    pub fn file(&self) -> Option<&PathBuf> {
+    pub fn is_test(&self) -> bool {
+        matches!(self, Command::Test)
+    }
+
+    pub fn codegens(&self) -> bool {
+        !matches!(self, Command::Check | Command::Setup { .. })
+    }
+
+    pub fn request_name(&self) -> &'static str {
         match self {
-            Command::Check { file }
-            | Command::Build { file }
-            | Command::Run { file, .. }
-            | Command::Test { file }
-            | Command::Server { file }
-            | Command::Setup { file, .. }
-            | Command::Clean { file } => file.as_ref(),
+            Command::Check | Command::Setup { .. } | Command::Clean => "check",
+            Command::Build => "build",
+            Command::Run => "run",
+            Command::Test => "test",
+            Command::Server => "server",
         }
     }
 
-    pub fn is_check(&self) -> bool {
-        matches!(self, Command::Check { .. })
-    }
-
-    pub fn is_build(&self) -> bool {
-        matches!(self, Command::Build { .. })
-    }
-
-    pub fn is_run(&self) -> bool {
-        matches!(self, Command::Run { .. })
-    }
-
-    pub fn is_test(&self) -> bool {
-        matches!(self, Command::Test { .. })
+    pub fn inputs_hash_byte(&self) -> u8 {
+        match self {
+            Command::Check => 0,
+            Command::Build => 1,
+            Command::Run => 2,
+            Command::Test => 3,
+            Command::Server => 4,
+            Command::Setup { force: false } => 5,
+            Command::Setup { force: true } => 6,
+            Command::Clean => 7,
+        }
     }
 }
 
-#[derive(Parser, Debug, Clone)]
-#[command(author, version, about, long_about = None)]
-pub struct Args {
-    /// core only
-    #[arg(short, long, default_value_t = false)]
-    pub no_std: bool,
-
-    /// Output an LLVM IR file at out_dir/{program_name}.ll
-    #[arg(long, default_value_t = false)]
+#[derive(Debug, Clone, Copy)]
+pub struct ToolFlags {
     pub emit_llvm: bool,
-
-    /// Optimize
-    #[arg(long, default_value_t = false)]
-    pub optimize: bool,
-
-    /// Write out a text representation of the typed program
-    #[arg(long, default_value_t = false)]
     pub dump_module: bool,
-
-    /// Write out every string in the identifier intern pool, with stats
-    #[arg(long, default_value_t = false)]
+    pub dump_ir: bool,
     pub dump_idents: bool,
-
-    /// Generate debug info
-    #[arg(long)]
-    pub debug: bool,
-
-    /// Link AddressSanitizer and UndefinedBehaviorSanitizer
-    #[arg(long)]
-    pub sanitize: bool,
-
-    /// Compile and link through a Fil-C toolchain (memory-safe C runtime).
-    /// Requires target intel64-linux and the K1_FILC env var pointing at a
-    /// Fil-C installation
-    #[arg(long, default_value_t = false)]
-    pub filc: bool,
-
-    #[arg(long)]
+    pub dump_trace: bool,
     pub profile: bool,
-
-    /// Chatty mode, timing summaries, other info; for compiler developers
-    #[arg(short, long, default_value_t = false, action = clap::ArgAction::Set)]
     pub chatty: bool,
-
-    /// Toggles whether k1 optimizes its own ir during emission; for compiler developers
-    #[arg(short, long, default_value_t = true, action = clap::ArgAction::Set)]
     pub optimize_ir: bool,
-
-    /// Disk-cached compiles
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub cache: bool,
-
-    /// Target platform
-    #[arg(long)]
-    pub target: Option<Target>,
-
-    /// Internal: nested compiles inherit the outer compile's k1 home instead of
-    /// re-deriving it from the environment
-    #[arg(skip)]
-    pub k1_home_override: Option<String>,
-
-    #[command(subcommand)]
-    pub command: Command,
 }
 
-impl Args {
-    pub fn file(&self) -> Option<&PathBuf> {
-        self.command.file()
+impl Default for ToolFlags {
+    fn default() -> ToolFlags {
+        ToolFlags {
+            emit_llvm: false,
+            dump_module: false,
+            dump_ir: false,
+            dump_idents: false,
+            dump_trace: false,
+            profile: false,
+            chatty: false,
+            optimize_ir: true,
+            cache: true,
+        }
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SetupMode {
-    /// Run stale setup steps at module load (default)
-    Normal,
-    SetupOnly {
-        force: bool,
-    },
+impl ToolFlags {
+    pub fn record_trace(&self) -> bool {
+        self.chatty || self.dump_trace
+    }
 }
 
-impl SetupMode {
-    pub fn is_setup_only(&self) -> bool {
-        matches!(self, SetupMode::SetupOnly { .. })
+pub struct CompileRequest {
+    pub path: PathBuf,
+    pub strings: Interner,
+    pub build: BuildRequest,
+    pub tools: ToolFlags,
+    pub k1_home: Option<String>,
+    pub lsp: LspCompileOptions,
+}
+
+impl CompileRequest {
+    pub fn new(
+        path: PathBuf,
+        command: Command,
+        target: Option<Target>,
+    ) -> std::result::Result<CompileRequest, &'static str> {
+        let host = detect_host_target();
+        let Some(target) = target.or(host) else {
+            return Err("Unsupported host platform; provide your target explicitly");
+        };
+        let mut strings = Interner::make_small();
+        let default = BuildConfig::new(target, &mut strings);
+        Ok(CompileRequest {
+            path,
+            strings,
+            build: BuildRequest { default, command, options: Vec::new(), host },
+            tools: ToolFlags::default(),
+            k1_home: None,
+            lsp: LspCompileOptions::default(),
+        })
     }
 }
 
@@ -369,30 +435,24 @@ pub struct CompilerConfig {
     pub src_path: StringId,
     pub home_dir: StringId,
     pub k1_home: StringId,
-    pub is_test_build: bool,
-    pub no_std: bool,
-    pub target: Target,
-    /// See detect_simd_bytes
-    pub simd_bytes: u32,
-    pub debug: bool,
-    pub sanitize: bool,
-    pub filc: bool,
+    pub command: Command,
     pub out_dir: StringId,
     pub out_dir_generated: StringId,
     pub cache_dir: StringId,
-    pub optimize: bool,
-    pub emit_llvm: bool,
-    pub chatty: bool,
-    pub optimize_ir: bool,
-    pub cache: bool,
-    pub setup_mode: SetupMode,
+    pub tools: ToolFlags,
 }
 
 impl CompilerConfig {
-    pub fn host_platform(&self) -> Platform {
-        match detect_host_target() {
-            Some(host) => host.platform(),
-            None => self.target.platform(),
+    pub fn reintern(self, from: &IdentPool, to: &IdentPool) -> CompilerConfig {
+        let move_id = |id: StringId| to.intern(from.get_string(id));
+        CompilerConfig {
+            src_path: move_id(self.src_path),
+            home_dir: move_id(self.home_dir),
+            k1_home: move_id(self.k1_home),
+            out_dir: move_id(self.out_dir),
+            out_dir_generated: move_id(self.out_dir_generated),
+            cache_dir: move_id(self.cache_dir),
+            ..self
         }
     }
 }
@@ -404,6 +464,7 @@ pub struct LspCompileOptions {
     /// Arms completion-marker recording and parse-error tolerance; see
     /// TypedProgram::completion
     pub completion: bool,
+    pub progress_sink: Option<crate::typer::trace::LiveProgressSink>,
 }
 
 /// Type size assertion. The first argument is a type and the second argument is its expected size.
@@ -423,6 +484,7 @@ macro_rules! static_assert_niched {
 }
 
 pub enum CompileProgramError {
+    Build(&'static str),
     TyperFailure(Box<TypedProgram>),
 }
 
@@ -460,30 +522,25 @@ pub fn module_home_from_src_path(
     }
 }
 
-// Deliberately dependency-free so the LSP can share the logic for bootstrap
-pub fn detect_module_root_file(home_dir: &str) -> Option<PathBuf> {
-    let mut path_buf = PathBuf::from(home_dir);
+pub fn module_root_file(dir: &str) -> Option<PathBuf> {
+    let mut path_buf = PathBuf::from(dir);
     path_buf.push("module.k1");
     if path_buf.is_file() {
-        Some(path_buf)
-    } else {
-        path_buf.pop();
-        let dir_name = kpath::file_name(home_dir);
-        path_buf.push(dir_name);
-        let module_is_file_stem_path = path_buf.with_extension("k1");
-        if module_is_file_stem_path.is_file() { Some(module_is_file_stem_path) } else { None }
+        return Some(path_buf);
     }
+    path_buf.pop();
+    path_buf.push(kpath::file_name(dir));
+    let stem_path = path_buf.with_extension("k1");
+    if stem_path.is_file() { Some(stem_path) } else { None }
 }
 
-/// Given a .k1 source file, the src_path to compile: its directory when that
-/// directory is a module dir else the file itself
-/// Used by lsp bootstrap where we always start out pointed at a file
+pub fn is_module_dir(dir: &str) -> bool {
+    Path::new(dir).join(crate::plan::BUILD_FILE_NAME).is_file() || module_root_file(dir).is_some()
+}
+
 pub fn find_check_target_for_file(file: &Path) -> PathBuf {
     let dir = file.parent().unwrap();
-    match detect_module_root_file(&dir.to_string_lossy()) {
-        None => file.to_owned(),
-        Some(_root_file) => dir.to_owned(),
-    }
+    if is_module_dir(&dir.to_string_lossy()) { dir.to_owned() } else { file.to_owned() }
 }
 
 pub struct SourceFile {
@@ -491,185 +548,128 @@ pub struct SourceFile {
     pub path: String,
     pub content: String,
     pub content_hash: u64,
+    pub lexed: crate::lex::Lexed,
 }
 
-fn read_source_file(path: String, override_content: Option<String>) -> Result<SourceFile, String> {
-    let content = match override_content {
-        Some(content) => content,
-        None => fs::read_to_string(Path::new(&path))
-            .map_err(|e| format!("Failed to read source file {path}: {e}"))?,
-    };
-    let content_hash = content_hash64(content.as_bytes());
-    Ok(SourceFile { path, content, content_hash })
-}
-
-pub struct ModuleLoadHandle {
-    /// canonicalized module path (dir or single file)
-    pub module_name: StringId,
-    pub src_path: StringId,
-    pub module_dir: StringId,
-    pub root_source_file_path: StringId,
-    is_dir: bool,
-    reader: std::thread::JoinHandle<Result<SourceFile, String>>,
-    remaining: ModuleRemainingSourcesHandle,
-}
-
-pub fn spawn_module_load<MemTag>(
-    idents: &IdentPool,
-    tmp: &mut Mem<MemTag>,
-    // canonical, absolute source path for the module
-    src_path: StringId,
-    is_core: bool,
-    source_overrides: &fxhash::FxHashMap<String, String>,
-) -> anyhow::Result<ModuleLoadHandle> {
-    let (is_dir, home_dir, module_name) = module_home_from_src_path(idents, src_path);
-    let root_source_file_path = if !is_dir {
-        src_path
-    } else if is_core {
-        kpath::join_id(idents, tmp, home_dir, "builtin.k1")
-    } else {
-        match detect_module_root_file(idents.get_string(home_dir)) {
-            None => bail!(
-                "module '{}' has no root file. This can be module.k1 or {}.k1",
-                idents.get_string(module_name),
-                idents.get_string(module_name)
-            ),
-            Some(root_file_path) => idents.intern(root_file_path.to_string_lossy()),
-        }
-    };
-    let override_content = source_overrides.get(idents.get_string(root_source_file_path)).cloned();
-    let read_path_for_thread = idents.get_string(root_source_file_path).to_owned();
-    let reader =
-        std::thread::spawn(move || read_source_file(read_path_for_thread, override_content));
-    let remaining =
-        spawn_sources_read(idents, home_dir, root_source_file_path, is_dir, source_overrides);
-    Ok(ModuleLoadHandle {
-        module_name,
-        src_path,
-        module_dir: home_dir,
-        root_source_file_path,
-        is_dir,
-        reader,
-        remaining,
-    })
-}
-
-impl ModuleLoadHandle {
-    pub fn await_read_remaining(self) -> anyhow::Result<(SourceFile, ModuleRemainingSources)> {
-        let root = self
-            .reader
-            .join()
-            .expect("module root reader thread panicked")
-            .map_err(|e| anyhow::anyhow!(e))?;
-        let remaining = ModuleRemainingSources {
-            module_dir: self.module_dir,
-            root_source_file_path: self.root_source_file_path,
-            is_dir: self.is_dir,
-            speculative_read_handle: self.remaining,
-        };
-        Ok((root, remaining))
+pub fn read_source(
+    path: &str,
+    overrides: &fxhash::FxHashMap<String, String>,
+) -> Result<String, String> {
+    match overrides.get(path) {
+        Some(content) => Ok(content.clone()),
+        None => fs::read_to_string(Path::new(path))
+            .map_err(|e| format!("Failed to read source file {path}: {e}")),
     }
 }
 
-pub fn collect_directory_module_source_paths(
-    module_dir: &str,
-    root_path: &str,
-) -> Result<Vec<String>, String> {
+fn read_and_lex_source_file(
+    path: String,
+    overrides: &fxhash::FxHashMap<String, String>,
+) -> Result<SourceFile, String> {
+    let content = read_source(&path, overrides)?;
+    let content_hash = content_hash64(content.as_bytes());
+    let lexed = crate::lex::lex(&content, crate::lex::Lexed::default());
+    Ok(SourceFile { path, content, content_hash, lexed })
+}
+
+fn collect_module_source_paths(module_dir: &str, is_core: bool) -> Result<Vec<String>, String> {
     let entries = fs::read_dir(Path::new(module_dir))
         .map_err(|e| format!("Failed to list module dir {module_dir}: {e}"))?;
+    let dir_name = kpath::file_name(module_dir);
     let mut files = vec![];
+    let mut root: Option<(u8, usize)> = None;
     for item in entries {
         let Ok(item) = item else {
             continue;
         };
         let path = item.path();
-        if path.extension().is_some_and(|ext| ext == "k1") {
-            let path_string = path.into_os_string().into_string().map_err(|s| {
-                format!("Source file name is not valid UTF-8: {}", s.to_string_lossy())
-            })?;
-
-            // The root is parsed separately
-            if path_string != root_path {
-                files.push(path_string);
-            }
+        if !path.extension().is_some_and(|ext| ext == "k1") {
+            continue;
         }
+        let path_string = path
+            .into_os_string()
+            .into_string()
+            .map_err(|s| format!("Source file name is not valid UTF-8: {}", s.to_string_lossy()))?;
+        let name = kpath::file_name(&path_string);
+        if name == crate::plan::BUILD_FILE_NAME {
+            continue;
+        }
+        let rank = if is_core {
+            (name == "builtin.k1").then_some(0)
+        } else if name == "module.k1" {
+            Some(0)
+        } else if kpath::file_stem(name) == dir_name {
+            Some(1)
+        } else {
+            None
+        };
+        if let Some(rank) = rank
+            && root.is_none_or(|(best, _)| rank < best)
+        {
+            root = Some((rank, files.len()));
+        }
+        files.push(path_string);
     }
+    let root_path = root.map(|(_, index)| files.swap_remove(index));
     files.sort();
+    if let Some(root_path) = root_path {
+        files.insert(0, root_path);
+    }
     Ok(files)
 }
 
-pub struct ModuleRemainingSources {
-    module_dir: StringId,
-    root_source_file_path: StringId,
+pub fn spawn_module_sources_read(
+    path: &str,
     is_dir: bool,
-    speculative_read_handle: ModuleRemainingSourcesHandle,
-}
-
-impl ModuleRemainingSources {
-    pub fn is_dir(&self) -> bool {
-        self.is_dir
-    }
-
-    pub fn into_read_sources_handle(
-        self,
-        idents: &IdentPool,
-        setup_ran: bool,
-        source_overrides: &fxhash::FxHashMap<String, String>,
-    ) -> ModuleRemainingSourcesHandle {
-        if setup_ran {
-            spawn_sources_read(
-                idents,
-                self.module_dir,
-                self.root_source_file_path,
-                self.is_dir,
-                source_overrides,
-            )
-        } else {
-            self.speculative_read_handle
-        }
-    }
-}
-
-pub fn spawn_sources_read(
-    idents: &IdentPool,
-    module_dir: StringId,
-    root_path: StringId,
-    is_dir: bool,
+    is_core: bool,
     source_overrides: &fxhash::FxHashMap<String, String>,
-) -> ModuleRemainingSourcesHandle {
+) -> ModuleSources {
     let overrides = source_overrides.clone();
-    let module_dir_str = idents.get_string(module_dir);
-    let root_path_str = idents.get_string(root_path);
+    let path = path.to_string();
     let reader = std::thread::spawn(move || {
-        if !is_dir {
-            return Ok(vec![]);
-        }
-        let paths = collect_directory_module_source_paths(module_dir_str, root_path_str)?;
+        let paths = if is_dir { collect_module_source_paths(&path, is_core)? } else { vec![path] };
         let mut sources = Vec::with_capacity(paths.len());
         for path in paths {
-            let override_content = overrides.get(&path).cloned();
-            sources.push(read_source_file(path, override_content)?);
+            sources.push(read_and_lex_source_file(path, &overrides)?);
         }
         Ok(sources)
     });
-    ModuleRemainingSourcesHandle { reader }
+    ModuleSources::Reading(reader)
 }
 
-pub struct ModuleRemainingSourcesHandle {
-    reader: std::thread::JoinHandle<Result<Vec<SourceFile>, String>>,
+pub enum ModuleSources {
+    Reading(std::thread::JoinHandle<Result<Vec<SourceFile>, String>>),
+    Read(Result<Vec<SourceFile>, String>),
 }
 
-impl ModuleRemainingSourcesHandle {
-    /// Err is the first failure
-    pub fn join(self) -> anyhow::Result<Vec<SourceFile>> {
-        self.reader
-            .join()
-            .expect("module sources reader thread panicked")
-            .map_err(|e| anyhow::anyhow!(e))
+impl ModuleSources {
+    pub fn wait(&mut self) -> &Result<Vec<SourceFile>, String> {
+        if let ModuleSources::Reading(_) = self {
+            let ModuleSources::Reading(reader) =
+                std::mem::replace(self, ModuleSources::Read(Ok(Vec::new())))
+            else {
+                unreachable!()
+            };
+            *self =
+                ModuleSources::Read(reader.join().expect("module sources reader thread panicked"));
+        }
+        match self {
+            ModuleSources::Read(result) => result,
+            ModuleSources::Reading(_) => unreachable!(),
+        }
+    }
+
+    pub fn join(self) -> Result<Vec<SourceFile>, String> {
+        match self {
+            ModuleSources::Reading(reader) => {
+                reader.join().expect("module sources reader thread panicked")
+            }
+            ModuleSources::Read(result) => result,
+        }
     }
 }
 
-fn content_hash64(bytes: &[u8]) -> u64 {
+pub fn content_hash64(bytes: &[u8]) -> u64 {
     xxhash_rust::xxh3::xxh3_64(bytes)
 }
 
@@ -688,13 +688,12 @@ fn hash_file_content64(path: &str, buf: &mut [u8]) -> std::io::Result<u64> {
 
 const FILE_HASH_BUF_LEN: usize = 64 * 1024;
 
-pub struct SetupRequest<'a> {
-    pub idents: &'a IdentPool,
+pub struct SetupRequest {
     pub module_dir: StringId,
     pub module_name: StringId,
-    pub root_filename: StringId,
-    pub outputs: &'a [StringId],
-    pub inputs: &'a [StringId],
+    pub build_hash: u64,
+    pub outputs: SV8<StringId>,
+    pub inputs: SV8<StringId>,
     pub target: Target,
     pub force: bool,
 }
@@ -702,7 +701,8 @@ pub struct SetupRequest<'a> {
 /// Live for the duration of one setup run: holds the cross-process lock and the
 /// module dir as cwd, which `fn setup` runs in
 pub struct StartedSetup {
-    fingerprint: String,
+    header: String,
+    inputs: Vec<StampFile>,
     _lock: SetupLock,
     _cwd: CwdGuard,
 }
@@ -710,38 +710,27 @@ pub struct StartedSetup {
 /// `None` when the declared outputs are already fresh. Otherwise the stamp is
 /// cleared and the declared outputs removed, so a failed run reads as stale
 pub fn start_setup<Tag>(
+    idents: &IdentPool,
     req: &SetupRequest,
     scratch: &mut Mem<Tag>,
-) -> Result<Option<StartedSetup>> {
-    let module_name = req.idents.get_string(req.module_name);
-    let module_dir = req.idents.get_string(req.module_dir);
-    let root_path = kpath::join_tmp(scratch, req.idents, req.module_dir, req.root_filename);
-    let root_src = fs::read_to_string(Path::new(root_path.as_str())).map_err(|e| {
-        anyhow::anyhow!(
-            "module '{module_name}' declares setup but {root_path} could not be read: {e}"
-        )
-    })?;
-
-    let fingerprint = setup_fingerprint(req, scratch, &root_src)?;
-    let setup_out_dir = kpath::join_tmp(scratch, req.idents, req.module_dir, (".k1-out", "setup"));
-    let stamp_path = kpath::join_tmp(scratch, req.idents, setup_out_dir.as_str(), "stamp");
-
-    if !req.force && setup_is_fresh(req, scratch, stamp_path.as_str(), &fingerprint) {
+) -> anyhow::Result<Option<StartedSetup>> {
+    let module_dir = idents.get_string(req.module_dir);
+    if !req.force && check_setup(idents, req, scratch)?.0 {
         return Ok(None);
     }
-
+    let setup_out_dir = kpath::join_tmp(scratch, idents, req.module_dir, (".k1-out", "setup"));
     fs::create_dir_all(Path::new(setup_out_dir.as_str()))?;
-    let lock_path = kpath::join_tmp(scratch, req.idents, setup_out_dir.as_str(), "lock");
+    let lock_path = kpath::join_tmp(scratch, idents, setup_out_dir.as_str(), "lock");
     let lock = SetupLock::acquire(lock_path.as_str())?;
-    // Another process may have completed this setup while we waited on the lock
-    if !req.force && setup_is_fresh(req, scratch, stamp_path.as_str(), &fingerprint) {
+    let (fresh, header, inputs) = check_setup(idents, req, scratch)?;
+    if !req.force && fresh {
         return Ok(None);
     }
 
-    eprintln!("Setting up module '{module_name}' (running fn setup in {root_path})...");
+    let stamp_path = kpath::join_tmp(scratch, idents, setup_out_dir.as_str(), "stamp");
     let _ = fs::remove_file(Path::new(stamp_path.as_str()));
-    for output in req.outputs {
-        let output_path = kpath::join_tmp(scratch, req.idents, req.module_dir, *output);
+    for output in &req.outputs {
+        let output_path = kpath::join_tmp(scratch, idents, req.module_dir, *output);
         let p = Path::new(output_path.as_str());
         if p.is_dir() {
             fs::remove_dir_all(p)?;
@@ -749,111 +738,207 @@ pub fn start_setup<Tag>(
             fs::remove_file(p)?;
         }
     }
-    Ok(Some(StartedSetup { fingerprint, _lock: lock, _cwd: CwdGuard::enter(module_dir) }))
+    Ok(Some(StartedSetup { header, inputs, _lock: lock, _cwd: CwdGuard::enter(module_dir) }))
 }
 
 pub fn finish_setup<Tag>(
+    idents: &IdentPool,
     req: &SetupRequest,
     started: StartedSetup,
     scratch: &mut Mem<Tag>,
 ) -> Result<()> {
-    let module_name = req.idents.get_string(req.module_name);
-    let outputs = setup_output_manifest(req, scratch)
+    let module_name = idents.get_string(req.module_name);
+    let outputs = collect_output_files_for_setup(idents, req, scratch, None)
         .map_err(|e| anyhow::anyhow!("fn setup for module '{module_name}' completed but {e}"))?;
     let stamp_path =
-        kpath::join_tmp(scratch, req.idents, req.module_dir, (".k1-out", ("setup", "stamp")));
-    fs::write(Path::new(stamp_path.as_str()), format!("{}{outputs}", started.fingerprint))?;
+        kpath::join_tmp(scratch, idents, req.module_dir, (".k1-out", ("setup", "stamp")));
+    let stamp_content = generate_stamp_text(&started.header, &started.inputs, &outputs);
+    fs::write(Path::new(stamp_path.as_str()), stamp_content)?;
     Ok(())
 }
 
 fn setup_is_fresh<Tag>(
+    idents: &IdentPool,
     req: &SetupRequest,
     scratch: &mut Mem<Tag>,
     stamp_path: &str,
-    fingerprint: &str,
+    existing: Option<SetupStamp>,
+    header: &str,
+    inputs: &[StampFile],
 ) -> bool {
-    let Ok(existing) = fs::read_to_string(Path::new(stamp_path)) else {
+    let Some(existing) = existing else {
         return false;
     };
-    let Ok(outputs) = setup_output_manifest(req, scratch) else {
+    let Ok(outputs) = collect_output_files_for_setup(idents, req, scratch, Some(&existing)) else {
         return false;
     };
-    existing.strip_prefix(fingerprint) == Some(outputs.as_str())
+    if existing.header != header
+        || existing.files.len() != inputs.len() + outputs.len()
+        || !existing.files.iter().zip(inputs.iter().chain(outputs.iter())).all(|(a, b)| {
+            a.label == b.label && a.relative_path == b.relative_path && a.hash == b.hash
+        })
+    {
+        return false;
+    }
+    let current = generate_stamp_text(header, inputs, &outputs);
+    if existing.text != current {
+        let _ = fs::write(Path::new(stamp_path), current);
+    }
+    true
 }
 
-/// One stamp line: the file's module-relative path and content hash
-fn writeln_file_hash(
-    s: &mut String,
-    label: &str,
+struct StampFile {
+    label: &'static str,
+    relative_path: String,
+    size: u64,
+    mtime_ns: u128,
+    hash: u64,
+}
+
+struct SetupStamp {
+    text: String,
+    header: String,
+    files: Vec<StampFile>,
+}
+
+impl SetupStamp {
+    fn read(path: &str) -> Option<SetupStamp> {
+        let text = fs::read_to_string(Path::new(path)).ok()?;
+        let mut header = String::new();
+        let mut files: Vec<StampFile> = vec![];
+        for line in text.lines() {
+            let (label, rest) = if let Some(rest) = line.strip_prefix("input-file: ") {
+                ("input", rest)
+            } else if let Some(rest) = line.strip_prefix("output-file: ") {
+                ("output", rest)
+            } else {
+                if !files.is_empty() {
+                    return None;
+                }
+                header.push_str(line);
+                header.push('\n');
+                continue;
+            };
+            let mut fields = rest.rsplitn(4, ' ');
+            let hash = u64::from_str_radix(fields.next()?, 16).ok()?;
+            let mtime_ns: u128 = fields.next()?.parse().ok()?;
+            let size: u64 = fields.next()?.parse().ok()?;
+            let rel = fields.next()?.to_string();
+            files.push(StampFile { label, relative_path: rel, size, mtime_ns, hash });
+        }
+        Some(SetupStamp { text, header, files })
+    }
+
+    fn known_hashes(&self) -> fxhash::FxHashMap<&str, &StampFile> {
+        let mut known = fxhash::FxHashMap::default();
+        for f in &self.files {
+            known.insert(f.relative_path.as_str(), f);
+        }
+        known
+    }
+}
+
+fn generate_stamp_text(header: &str, inputs: &[StampFile], outputs: &[StampFile]) -> String {
+    use std::fmt::Write;
+    let mut s = header.to_string();
+    for f in inputs.iter().chain(outputs.iter()) {
+        writeln!(
+            s,
+            "{}-file: {} {} {} {:016x}",
+            f.label, f.relative_path, f.size, f.mtime_ns, f.hash
+        )
+        .unwrap();
+    }
+    s
+}
+
+/// A file whose size and mtime match its stamp entry keeps that entry's hash
+fn stamp_file(
+    label: &'static str,
     module_dir: &str,
     file: &str,
+    known: &fxhash::FxHashMap<&str, &StampFile>,
     buf: &mut [u8],
-) -> Result<()> {
-    use std::fmt::Write;
-    let hash = hash_file_content64(file, buf)
-        .map_err(|e| anyhow::anyhow!("failed to read setup {label} {file}: {e}"))?;
-    let rel = file.strip_prefix(module_dir).unwrap_or(file).trim_start_matches('/');
-    writeln!(s, "{label}-file: {} {:016x}", rel, hash).unwrap();
-    Ok(())
+) -> Result<StampFile> {
+    let relative_path =
+        file.strip_prefix(module_dir).unwrap_or(file).trim_start_matches('/').to_string();
+    let meta = fs::metadata(Path::new(file))
+        .map_err(|e| anyhow::anyhow!("failed to stat setup {label} {file}: {e}"))?;
+    let size = meta.len();
+    let mtime_ns = meta
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let hash = match known.get(relative_path.as_str()) {
+        Some(k) if k.size == size && k.mtime_ns == mtime_ns => k.hash,
+        _ => hash_file_content64(file, buf)
+            .map_err(|e| anyhow::anyhow!("failed to read setup {label} {file}: {e}"))?,
+    };
+    Ok(StampFile { label, relative_path, size, mtime_ns, hash })
 }
 
-/// The output half of the stamp: every file under every declared output, hashed
-fn setup_output_manifest<Tag>(req: &SetupRequest, scratch: &mut Mem<Tag>) -> Result<String> {
-    let module_dir = req.idents.get_string(req.module_dir);
-    let mut s = String::new();
+/// every file under every declared output
+fn collect_output_files_for_setup<Tag>(
+    idents: &IdentPool,
+    req: &SetupRequest,
+    scratch: &mut Mem<Tag>,
+    existing: Option<&SetupStamp>,
+) -> Result<Vec<StampFile>> {
+    let module_dir = idents.get_string(req.module_dir);
+    let known = existing.map(SetupStamp::known_hashes).unwrap_or_default();
     let buf = scratch.push_slice_uninit::<u8>(FILE_HASH_BUF_LEN);
+    let mut files: Vec<StampFile> = vec![];
     let mut collected_filenames: Vec<String> = vec![];
-    for output in req.outputs {
-        let output_path = kpath::join_tmp(scratch, req.idents, req.module_dir, *output);
+    for output in &req.outputs {
+        let output_path = kpath::join_tmp(scratch, idents, req.module_dir, *output);
         if !Path::new(output_path.as_str()).exists() {
-            bail!("did not produce declared output '{}'", req.idents.get_string(*output));
+            bail!("did not produce declared output '{}'", idents.get_string(*output));
         }
         collected_filenames.clear();
         collect_files_within_dir(output_path.as_str(), &mut collected_filenames)?;
         collected_filenames.sort();
         for file in &collected_filenames {
-            writeln_file_hash(&mut s, "output", module_dir, file, buf)?;
+            files.push(stamp_file("output", module_dir, file, &known, buf)?);
         }
     }
-    Ok(s)
+    Ok(files)
 }
 
-fn setup_fingerprint<Tag>(
+fn compute_setup_fingerprint<Tag>(
+    idents: &IdentPool,
     req: &SetupRequest,
     scratch: &mut Mem<Tag>,
-    root_src: &str,
-) -> Result<String> {
+    existing: Option<&SetupStamp>,
+) -> Result<(String, Vec<StampFile>)> {
     use std::fmt::Write;
-    let module_dir = req.idents.get_string(req.module_dir);
+    let module_dir = idents.get_string(req.module_dir);
     let mut s = String::new();
-    writeln!(s, "k1-setup-stamp v4").unwrap();
+    writeln!(s, "k1-setup-stamp v6").unwrap();
     writeln!(s, "target: {}", req.target.to_str()).unwrap();
-    writeln!(
-        s,
-        "root: {} {:016x}",
-        req.idents.get_string(req.root_filename),
-        content_hash64(root_src.as_bytes())
-    )
-    .unwrap();
-    for (label, ids) in [("outputs", req.outputs), ("inputs", req.inputs)] {
+    writeln!(s, "build: {:016x}", req.build_hash).unwrap();
+    for (label, ids) in [("outputs", &req.outputs), ("inputs", &req.inputs)] {
         write!(s, "{label}: ").unwrap();
         for (i, id) in ids.iter().enumerate() {
             if i > 0 {
                 s.push('|');
             }
-            s.push_str(req.idents.get_string(*id));
+            s.push_str(idents.get_string(*id));
         }
         s.push('\n');
     }
     let mut output_paths: kmem::List<MStr<Tag>, Tag> = scratch.new_list(req.outputs.len() as u32);
-    for o in req.outputs {
-        let path = kpath::join_tmp(scratch, req.idents, req.module_dir, *o);
+    for o in &req.outputs {
+        let path = kpath::join_tmp(scratch, idents, req.module_dir, *o);
         output_paths.push(path);
     }
-    let mut buf = vec![0u8; FILE_HASH_BUF_LEN];
+    let known = existing.map(SetupStamp::known_hashes).unwrap_or_default();
+    let buf = scratch.push_slice_uninit::<u8>(FILE_HASH_BUF_LEN);
+    let mut files: Vec<StampFile> = vec![];
     let mut files_named_by_path: Vec<String> = vec![];
-    for input in req.inputs {
-        let input_path = kpath::join_tmp(scratch, req.idents, req.module_dir, *input);
+    for input in &req.inputs {
+        let input_path = kpath::join_tmp(scratch, idents, req.module_dir, *input);
         files_named_by_path.clear();
         collect_files_within_dir(input_path.as_str(), &mut files_named_by_path)?;
         files_named_by_path.sort();
@@ -861,10 +946,10 @@ fn setup_fingerprint<Tag>(
             if output_paths.iter().any(|o| o.as_str() == file) {
                 continue;
             }
-            writeln_file_hash(&mut s, "input", module_dir, file, &mut buf)?;
+            files.push(stamp_file("input", module_dir, file, &known, buf)?);
         }
     }
-    Ok(s)
+    Ok((s, files))
 }
 
 fn collect_files_within_dir(path: &str, out: &mut Vec<String>) -> Result<()> {
@@ -906,171 +991,26 @@ impl SetupLock {
     }
 }
 
-struct ListedModule {
-    name: StringId,
-    root_source_path: StringId,
-    is_dir: bool,
-    setup: Option<(SV8<StringId>, SV8<StringId>)>,
-}
-
-fn read_module_list(idents: &IdentPool, cache_dir: &Path) -> Option<Vec<ListedModule>> {
-    let text = crate::snap::cache_load_text(cache_dir, "modules")?;
-    let mut lines = text.lines();
-    if lines.next()? != format!("k1-modules v{}", crate::BUILD_ID) {
-        return None;
-    }
-    let mut modules: Vec<ListedModule> = vec![];
-    for line in lines {
-        if let Some(rest) = line.strip_prefix("module\t") {
-            let mut parts = rest.split('\t');
-            let name = idents.intern(parts.next()?);
-            let is_dir = parts.next()? == "1";
-            let root_source_path = idents.intern(parts.next()?);
-            modules.push(ListedModule { name, root_source_path, is_dir, setup: None });
-        } else if let Some(rest) = line.strip_prefix("setup\t") {
-            let mut parts = rest.split('\t');
-            let n_out: usize = parts.next()?.parse().ok()?;
-            let mut outs: SV8<StringId> = SV8::new();
-            let mut ins: SV8<StringId> = SV8::new();
-            for (i, part) in parts.enumerate() {
-                let id = idents.intern(part);
-                if i < n_out { outs.push(id) } else { ins.push(id) }
-            }
-            if outs.len() < n_out {
-                return None;
-            }
-            modules.last_mut()?.setup = Some((outs, ins));
-        } else if !line.is_empty() {
-            return None;
-        }
-    }
-    Some(modules)
-}
-
-/// Record which modules and files made up this compile, in typing order, so
-/// the next compile can compute inputs hashes without loading anything
-fn write_module_list(k1: &TypedProgram) {
-    use std::fmt::Write as _;
-    let mut s = format!("k1-modules v{}\n", crate::BUILD_ID);
-    for &module_id in &k1.modules_completed {
-        let m = k1.modules.get(module_id);
-        writeln!(
-            s,
-            "module\t{}\t{}\t{}",
-            k1.get_string(m.name),
-            m.is_dir as u8,
-            k1.get_string(m.root_file_path),
-        )
-        .unwrap();
-        if let Some(setup) = m.manifest.setup {
-            let outs = k1.mem.getn(setup.outputs);
-            let ins = k1.mem.getn(setup.inputs);
-            write!(s, "setup\t{}", outs.len()).unwrap();
-            for id in outs.iter().chain(ins.iter()) {
-                write!(s, "\t{}", k1.get_string(*id)).unwrap();
-            }
-            writeln!(s).unwrap();
-        }
-    }
-    crate::snap::cache_store_text(k1.cache_dir(), "modules", &s);
-}
-
-fn inputs_hashes_from_module_list<Tag>(
+fn check_setup<Tag>(
     idents: &IdentPool,
-    config: &CompilerConfig,
-    overrides: &fxhash::FxHashMap<String, String>,
-    modules: &[ListedModule],
+    req: &SetupRequest,
     scratch: &mut Mem<Tag>,
-) -> Vec<crate::snap::InputsHash> {
-    let mut buffer = vec![0u8; FILE_HASH_BUF_LEN];
-    let hash_file = |path: &str, buf: &mut [u8]| -> Option<u64> {
-        match overrides.get(path) {
-            Some(content) => Some(content_hash64(content.as_bytes())),
-            None => hash_file_content64(path, buf).ok(),
-        }
-    };
-    let n = modules.len();
-    let mut group_ends: SV8<usize> = SV8::new();
-    group_ends.push(1.min(n));
-    if !config.no_std {
-        group_ends.push(2.min(n));
-    }
-    group_ends.push(n);
-
-    let mut hash = typer::snapshot::inputs_hash_from_settings(idents, config);
-    let mut hashes = Vec::with_capacity(n);
-    let mut start = 0;
-    for end in group_ends {
-        let group = &modules[start..end];
-        start = end;
-        for m in group {
-            let root_path = idents.get_string(m.root_source_path);
-            let Some(root_hash) = hash_file(root_path, &mut buffer) else {
-                // An unreadable root invalidates the whole group and everything after
-                return hashes;
-            };
-            hash = hash.add_module_header(idents.get_string(m.name), root_path, root_hash);
-        }
-        for m in group {
-            if m.setup.as_ref().is_some_and(|(outputs, inputs)| {
-                !listed_setup_is_fresh(scratch, idents, config, m, outputs, inputs)
-            }) {
-                // If we're running setup, give up on getting a cache hit for this module this time
-                // around
-                return hashes;
-            }
-            let mut sources: kmem::List<(String, u64), Tag> = kmem::List::empty();
-            if m.is_dir {
-                let root_path = idents.get_string(m.root_source_path);
-                let home_dir = kpath::parent(root_path);
-                let Ok(files) = collect_directory_module_source_paths(home_dir, root_path) else {
-                    return hashes;
-                };
-                sources = scratch.new_list(files.len() as u32);
-                for path in files {
-                    let Some(h) = hash_file(&path, &mut buffer) else { return hashes };
-                    sources.push((path, h));
-                }
-            }
-            hash = hash.add_module_sources(
-                idents.get_string(m.name),
-                sources.iter().map(|(p, h)| (p.as_str(), *h)),
-            );
-            hashes.push(hash);
-        }
-    }
-    hashes
+) -> Result<(bool, String, Vec<StampFile>)> {
+    let stamp_path =
+        kpath::join_tmp(scratch, idents, req.module_dir, (".k1-out", ("setup", "stamp")));
+    let existing = SetupStamp::read(stamp_path.as_str());
+    let (header, inputs) = compute_setup_fingerprint(idents, req, scratch, existing.as_ref())?;
+    let fresh =
+        setup_is_fresh(idents, req, scratch, stamp_path.as_str(), existing, &header, &inputs);
+    Ok((fresh, header, inputs))
 }
 
-fn listed_setup_is_fresh<Tag>(
-    scratch: &mut Mem<Tag>,
+pub fn setup_is_current<Tag>(
     idents: &IdentPool,
-    config: &CompilerConfig,
-    m: &ListedModule,
-    outputs: &[StringId],
-    inputs: &[StringId],
+    req: &SetupRequest,
+    scratch: &mut Mem<Tag>,
 ) -> bool {
-    let root_source_path = idents.get_string(m.root_source_path);
-    let Ok(root_src) = fs::read_to_string(Path::new(root_source_path)) else {
-        return false;
-    };
-    let module_dir_str = kpath::parent(root_source_path);
-    let module_dir = idents.intern(module_dir_str);
-    let req = SetupRequest {
-        idents,
-        module_dir,
-        module_name: idents.intern(kpath::file_name(module_dir_str)),
-        root_filename: idents.intern(kpath::file_name(root_source_path)),
-        outputs,
-        inputs,
-        target: config.target,
-        force: false,
-    };
-    let Ok(fingerprint) = setup_fingerprint(&req, scratch, &root_src) else {
-        return false;
-    };
-    let stamp_path = kpath::join_tmp(scratch, idents, module_dir, (".k1-out", ("setup", "stamp")));
-    setup_is_fresh(&req, scratch, stamp_path.as_str(), &fingerprint)
+    matches!(check_setup(idents, req, scratch), Ok((true, _, _)))
 }
 
 fn write_program_dump(p: &TypedProgram) {
@@ -1110,23 +1050,162 @@ fn write_idents_dump(p: &TypedProgram) {
     let _ = std::fs::write(path, out);
 }
 
-/// If `args.file` points to a directory,
+enum Planned {
+    Plan(crate::plan::BuildPlan, Option<Box<TypedProgram>>),
+    Setup(Box<TypedProgram>),
+}
+
+fn plan_program(
+    ast: &mut crate::parse::ParsedProgram,
+    config: CompilerConfig,
+    mut strings: Interner,
+    request: &BuildRequest,
+    lsp: &LspCompileOptions,
+    is_dir: bool,
+    module_name: StringId,
+) -> std::result::Result<Planned, CompileProgramError> {
+    use crate::plan::BuildPlan;
+    let idents = &ast.idents;
+    let src_path = idents.get_string(config.src_path);
+    let k1_home = idents.get_string(config.k1_home);
+    let is_setup = matches!(config.command, Command::Setup { .. });
+    let has_build_file = is_dir
+        && crate::plan::build_file_path(idents, &mut ast.tmp, src_path, &lsp.source_overrides)
+            .is_some();
+    if !has_build_file && !is_setup {
+        if is_dir && !is_module_dir(src_path) {
+            return Err(CompileProgramError::Build(
+                "a module dir needs a build.k1, module.k1 or <dir>.k1",
+            ));
+        }
+        let resolved = request.default.resolve(&mut strings).map_err(CompileProgramError::Build)?;
+        let primary = crate::plan::PlannedModule::primary(
+            strings.intern(idents.get_string(module_name)),
+            strings.intern(src_path),
+            is_dir,
+        );
+        let plan =
+            BuildPlan::trivial(strings, resolved, idents, &mut ast.tmp, k1_home, Some(primary));
+        return Ok(Planned::Plan(plan, None));
+    }
+    let request_hash = request.hash(&strings, idents, &config);
+    let plan_path =
+        crate::plan::plan_cache_path(Path::new(idents.get_string(config.cache_dir)), request_hash);
+    if !is_setup
+        && config.tools.cache
+        && let Some(plan) = BuildPlan::load(&plan_path, request_hash)
+        && plan.is_fresh(idents, &mut ast.tmp, k1_home, &lsp.source_overrides)
+    {
+        return Ok(Planned::Plan(plan, None));
+    }
+    let (plan, host) =
+        crate::typer::host::plan_in_host(config, idents, strings, request, lsp, module_name)?;
+    if is_setup {
+        return Ok(Planned::Setup(host));
+    }
+    if config.tools.cache && lsp.source_overrides.is_empty() {
+        let _ = plan.store(&plan_path, request_hash);
+    }
+    Ok(Planned::Plan(plan, Some(host)))
+}
+
+pub(crate) fn open_program(
+    ast: crate::parse::ParsedProgram,
+    config: CompilerConfig,
+    plan: crate::plan::BuildPlan,
+    lsp: LspCompileOptions,
+    snapshot_count: usize,
+) -> (TypedProgram, Vec<ModuleSources>) {
+    let mut sources: Vec<ModuleSources> = Vec::with_capacity(plan.modules().len());
+    for (index, m) in plan.modules().iter().enumerate() {
+        sources.push(spawn_module_sources_read(
+            plan.get(m.path),
+            m.is_dir,
+            index == 0,
+            &lsp.source_overrides,
+        ));
+    }
+    let restored = if config.tools.cache {
+        restore_longest_prefix(&ast, config, plan, &lsp, &mut sources, snapshot_count)
+    } else {
+        Err(plan)
+    };
+    let k1 = match restored {
+        Ok(k1) => k1,
+        Err(plan) => TypedProgram::new(ast, config, plan, lsp),
+    };
+    (k1, sources)
+}
+
+fn restore_longest_prefix(
+    ast: &crate::parse::ParsedProgram,
+    config: CompilerConfig,
+    plan: crate::plan::BuildPlan,
+    lsp: &LspCompileOptions,
+    sources: &mut [ModuleSources],
+    snapshot_count: usize,
+) -> std::result::Result<TypedProgram, crate::plan::BuildPlan> {
+    let settings = typer::snapshot::inputs_hash_from_settings(&ast.idents, &config, &plan);
+    let mut hashes: SV8<crate::snap::InputsHash> = SV8::new();
+    let mut hash = settings;
+    for (index, module_sources) in sources.iter_mut().take(snapshot_count).enumerate() {
+        let Ok(files) = module_sources.wait() else { break };
+        hash = typer::snapshot::module_inputs_hash(hash, &plan, index, files);
+        hashes.push(hash);
+    }
+    let cache_dir = Path::new(ast.idents.get_string(config.cache_dir));
+    let clock = crate::clock::Clock::new();
+    for (index, hash) in hashes.iter().enumerate().rev() {
+        let load_start = clock.raw();
+        let path = crate::snap::cache_entry_path(cache_dir, index, settings);
+        let Some(bytes) = crate::snap::cache_load(&path) else { continue };
+        let load_end = clock.raw();
+        let reader = match crate::snap::SnapReader::new(&bytes, *hash) {
+            Ok(reader) => reader,
+            Err(e) => {
+                if config.tools.chatty {
+                    eprintln!("ignoring cache entry: {e}");
+                }
+                continue;
+            }
+        };
+        let mut restored = TypedProgram::restore(
+            reader,
+            *hash,
+            config,
+            &ast.idents,
+            plan,
+            lsp.clone(),
+            (load_start, load_end),
+        );
+        let module_count = index as u32 + 1;
+        restored.restored_module_count = module_count;
+        let msg = format!(
+            "restored {module_count} modules from cache ({:.1}mb)",
+            bytes.len() as f64 / (1024.0 * 1024.0)
+        );
+        info!("{msg}");
+        if config.tools.chatty {
+            eprintln!("{msg}");
+        }
+        return Ok(restored);
+    }
+    Err(plan)
+}
+
+/// If `path` is a directory,
 /// - compile all files in the directory.
 /// - program name is the name of the directory.
 ///
-/// If `args.file` points to a file,
+/// If `path` is a file,
 /// - compile that file only.
 /// - program name is the name of the file.
-pub fn compile_program(args: &Args) -> std::result::Result<TypedProgram, CompileProgramError> {
-    compile_program_ext(args, LspCompileOptions::default())
-}
-
-pub fn compile_program_ext(
-    args: &Args,
-    lsp: LspCompileOptions,
+pub fn compile_program(
+    request: CompileRequest,
 ) -> std::result::Result<TypedProgram, CompileProgramError> {
+    let CompileRequest { path, strings, build, tools, k1_home, lsp } = request;
     #[cfg(feature = "profile")]
-    let profiler_guard = if args.profile {
+    let profiler_guard = if tools.profile {
         Some(
             pprof::ProfilerGuardBuilder::default()
                 .frequency(9999)
@@ -1137,17 +1216,14 @@ pub fn compile_program_ext(
     } else {
         None
     };
-    let start_time = std::time::Instant::now();
+    let clock_start = crate::clock::Clock::new().raw();
 
     let mut ast = crate::parse::ParsedProgram::make();
     let idents = &ast.idents;
-    let src_path = (match args.file() {
-        None => kpath::canonicalize_string_id(idents, "."),
-        Some(path_buf) => kpath::canonicalize_string_id(idents, path_buf),
-    })
-    .unwrap_or_else(|e| panic!("Failed to load source path: {e}"));
+    let src_path = kpath::canonicalize_string_id(idents, &path)
+        .unwrap_or_else(|e| panic!("Failed to load source path: {e}"));
 
-    let (_is_dir, home_dir, module_name) = module_home_from_src_path(idents, src_path);
+    let (is_dir, home_dir, module_name) = module_home_from_src_path(idents, src_path);
     ast.name_id = module_name;
 
     let out_dir = kpath::join_id(&ast.idents, &mut ast.mem, home_dir, ".k1-out");
@@ -1155,26 +1231,9 @@ pub fn compile_program_ext(
     let cache_dir = kpath::join_id(&ast.idents, &mut ast.mem, out_dir, crate::snap::CACHE_DIR_NAME);
     std::fs::create_dir_all(Path::new(ast.idents.get_string(out_dir_generated))).unwrap();
 
-    let use_std = !args.no_std;
-
-    let target = args
-        .target
-        .or(detect_host_target())
-        .unwrap_or_else(|| panic!("Unsupported host platform; provide your target explicitly"));
-
-    if args.filc {
-        assert!(
-            target == Target::Intel64Linux,
-            "--filc requires target intel64-linux; Fil-C only supports Linux/x86_64"
-        );
-        assert!(!args.sanitize, "--filc and --sanitize are mutually exclusive");
-    }
-
-    // Find the installation. Nested compiles inherit, env var overrides, otherwise
+    // Find the installation. The request's wins, env var overrides, otherwise
     // release mode says co-located with the binary. dev mode says cwd
-    let k1_home_raw = args
-        .k1_home_override
-        .as_ref()
+    let k1_home_raw = k1_home
         .map(PathBuf::from)
         .or_else(|| std::env::var("K1_HOME").map(PathBuf::from).ok())
         .unwrap_or_else(|| {
@@ -1190,132 +1249,69 @@ pub fn compile_program_ext(
         });
     let k1_home = kpath::canonicalize_owned(&k1_home_raw)
         .unwrap_or_else(|e| panic!("K1 home {} is not usable: {e}", k1_home_raw.display()));
-    if args.chatty {
+    if tools.chatty {
         eprintln!("using k1 home: {k1_home}");
     }
     let k1_home_id = ast.idents.intern(&k1_home);
-    let corelib_dir =
-        kpath::join_id(&ast.idents, &mut ast.tmp, k1_home.as_str(), ("modules", "core"));
-    let stdlib_dir =
-        kpath::join_id(&ast.idents, &mut ast.tmp, k1_home.as_str(), ("modules", "std"));
-
-    let core_plan =
-        spawn_module_load(&ast.idents, &mut ast.tmp, corelib_dir, true, &lsp.source_overrides);
-    let std_plan = use_std.then(|| {
-        spawn_module_load(&ast.idents, &mut ast.tmp, stdlib_dir, false, &lsp.source_overrides)
-    });
-    let main_plan =
-        spawn_module_load(&ast.idents, &mut ast.tmp, src_path, false, &lsp.source_overrides);
-
     let config = CompilerConfig {
         src_path,
         home_dir,
         k1_home: k1_home_id,
-        is_test_build: args.command.is_test(),
-        no_std: args.no_std,
-        target,
-        simd_bytes: detect_simd_bytes(target),
-        debug: args.debug,
-        sanitize: args.sanitize,
-        filc: args.filc,
+        command: build.command,
         out_dir,
         out_dir_generated,
         cache_dir,
-        optimize: args.optimize,
-        emit_llvm: args.emit_llvm,
-        chatty: args.chatty,
-        optimize_ir: args.optimize_ir,
-        cache: args.cache,
-        setup_mode: if let Command::Setup { force, .. } = args.command {
-            SetupMode::SetupOnly { force }
-        } else {
-            SetupMode::Normal
-        },
+        tools,
     };
 
-    let _cwd = CwdGuard::enter(idents.get_string(home_dir));
+    let _cwd = CwdGuard::enter(ast.idents.get_string(home_dir));
 
-    let mut k1 = 'program: {
-        let cache_dir = Path::new(ast.idents.get_string(cache_dir));
-        if args.cache
-            && let Some(modules) = read_module_list(&ast.idents, cache_dir)
-        {
-            let tmp_mark = ast.tmp.mark();
-            let input_hashes_by_module = inputs_hashes_from_module_list(
-                &ast.idents,
-                &config,
-                &lsp.source_overrides,
-                &modules,
-                &mut ast.tmp,
-            );
-            ast.tmp.reset_to(tmp_mark);
-            if args.chatty {
-                eprintln!(
-                    "cache: {} of {} listed modules have valid inputs",
-                    input_hashes_by_module.len(),
-                    modules.len()
-                );
-            }
+    let plan_start = crate::clock::Clock::new().raw();
+    let (plan, host) =
+        match plan_program(&mut ast, config, strings, &build, &lsp, is_dir, module_name)? {
+            Planned::Plan(plan, host) => (plan, host),
+            Planned::Setup(host) => return Ok(*host),
+        };
+    let plan_end = crate::clock::Clock::new().raw();
 
-            // The snapshot with the most modules in it is at the end
-            for (i, hash) in input_hashes_by_module.iter().enumerate().rev() {
-                // If we have a hit, the file exists by this name, and we restore
-                let Some(bytes) = crate::snap::cache_load(cache_dir, *hash) else { continue };
-                let module_count = i as u32 + 1;
-                match TypedProgram::restore(&bytes, config, lsp.clone()) {
-                    Ok(mut restored) => {
-                        restored.restored_module_count = module_count;
-                        let msg = format!(
-                            "restored {module_count} modules from cache ({:.1}mb)",
-                            bytes.len() as f64 / (1024.0 * 1024.0)
-                        );
-                        info!("{msg}");
-                        if args.chatty {
-                            eprintln!("{msg}");
-                        }
-                        break 'program restored;
-                    }
-                    Err(e) => {
-                        if args.chatty {
-                            eprintln!("ignoring cache entry: {e}");
-                        }
-                    }
-                }
-            }
-        }
-        TypedProgram::new(ast, config, lsp)
-    };
-
-    let add_result = (|| {
-        k1.add_module(core_plan?, false)?;
-        if let Some(std_plan) = std_plan {
-            k1.add_module(std_plan?, false)?;
-        }
-        k1.add_module(main_plan?, true)
-    })();
-    k1.write_emitted_sources();
-    if args.cache {
-        write_module_list(&k1);
+    let snapshot_count = plan.modules().len() - 1;
+    let (mut k1, sources) = open_program(ast, config, plan, lsp, snapshot_count);
+    k1.trace.clock_start = clock_start;
+    if k1.trace.profiling_mode {
+        let kind = if host.is_some() { TraceKind::HostPlan } else { TraceKind::PlanCheck };
+        k1.trace.record(kind, 0, None, plan_start, plan_end, 0, 0);
     }
-    if let Err(e) = add_result {
-        if args.dump_module {
-            write_program_dump(&k1);
+
+    let loaded = k1.load_plan_modules(sources, snapshot_count);
+    if let Some(host) = host {
+        k1.adopt_messages(&host);
+    }
+    match loaded {
+        Err(e) => k1.report(e),
+        Ok(()) => {
+            #[cfg(debug_assertions)]
+            k1.debug_snapshot_roundtrip();
         }
-        eprintln!("{}", e);
-        if k1.error_count(&[MessageLevel::Error]) == 0 {
-            let message = k1.make_error(format!("{e}"), SpanId::NONE);
-            k1.messages.borrow_mut().push(message);
-        }
+    }
+
+    k1.write_emitted_sources();
+    if tools.dump_module {
+        write_program_dump(&k1);
+    }
+    if tools.dump_idents {
+        write_idents_dump(&k1);
+    }
+
+    let is_ok = k1.error_count() == 0;
+    if !is_ok {
         return Err(CompileProgramError::TyperFailure(Box::new(k1)));
     };
-    let total_elapsed_ns = start_time.elapsed().as_nanos();
+
     let warning_count =
         k1.messages.borrow().iter().filter(|e| e.level == MessageLevel::Warn).count();
     if warning_count > 0 {
+        k1.trace_clear();
         eprintln!("Completed with {} warnings", warning_count);
-    }
-    if args.chatty {
-        k1.print_timing_info(total_elapsed_ns as u64, &mut std::io::stderr()).unwrap();
     }
 
     #[cfg(feature = "profile")]
@@ -1343,13 +1339,6 @@ pub fn compile_program_ext(
         }
     }
 
-    if args.dump_module {
-        write_program_dump(&k1);
-    }
-    if args.dump_idents {
-        write_idents_dump(&k1);
-    }
-
     Ok(k1)
 }
 
@@ -1367,25 +1356,26 @@ struct ModuleLibs {
 
 fn collect_all_module_libs(k1: &TypedProgram) -> Vec<ModuleLibs> {
     let idents = &k1.ast.idents;
-    let filc = k1.config.filc;
+    let plan = &k1.plan;
+    let filc = plan.config.filc;
     let mut out: Vec<ModuleLibs> = vec![];
-    for module in k1.modules.iter() {
+    for module in plan.modules() {
         let module_libs_dir =
-            kpath::join_tmp(k1.get_tmp_unsafe(), idents, module.home_dir, LIBS_DIR_NAME);
+            kpath::join_tmp(k1.get_tmp_unsafe(), idents, plan.module_dir(module), LIBS_DIR_NAME);
         let mut link_args: Vec<String> = vec![];
-        for link_arg_string_id in k1.mem.getn(module.manifest.link_args) {
-            link_args.push(k1.get_string(*link_arg_string_id).to_string());
+        for link_arg in plan.mem.getn(module.link_args) {
+            link_args.push(plan.get(*link_arg).to_string());
         }
         let mut libs: Vec<(LibRefLinkType, String)> = vec![];
-        for lib in k1.mem.getn(module.manifest.libs) {
-            let logical_name_str = k1.get_string(lib.name);
+        for lib in plan.mem.getn(module.libs) {
+            let logical_name_str = plan.get(lib.name);
             let logical_name =
                 if filc { format!("{logical_name_str}-filc") } else { logical_name_str.into() };
             let filename = logical_name_to_lib_filename(
                 idents,
                 k1.get_tmp_unsafe(),
                 module_libs_dir.as_str(),
-                k1.config.target,
+                plan.config.target,
                 lib.link_type,
                 &logical_name,
             );
@@ -1456,14 +1446,13 @@ pub fn write_linked_output(
     extra_options: &[String],
     kind: LinkOutputKind,
 ) -> Result<()> {
-    let target = k1.config.target;
-    let debug = k1.config.debug;
+    let target = k1.plan.config.target;
+    let debug = k1.plan.config.debug;
     let idents = &k1.ast.idents;
     let out_dir = k1.config.out_dir;
-    let optimize = k1.config.optimize;
-    let sanitize = k1.config.sanitize;
-    let filc = k1.config.filc;
-    let clang_time = std::time::Instant::now();
+    let optimize = k1.plan.config.optimize;
+    let sanitize = k1.plan.config.sanitize;
+    let filc = k1.plan.config.filc;
 
     let out_name = match kind {
         LinkOutputKind::Executable => {
@@ -1490,10 +1479,6 @@ pub fn write_linked_output(
         ld_args.push(out_name.as_str().into());
 
         lld_link("wasm-ld", &ld_args).map_err(|e| anyhow::anyhow!("linking {out_name}: {e}"))?;
-        let elapsed = clang_time.elapsed();
-        if k1.config.chatty {
-            eprintln!("link {out_name} took {}ms", elapsed.as_millis());
-        }
         return Ok(());
     }
 
@@ -1585,11 +1570,6 @@ pub fn write_linked_output(
         eprintln!("Build failed!");
         bail!("linking {out_name} with clang failed");
     }
-
-    let elapsed = clang_time.elapsed();
-    if k1.config.chatty {
-        eprintln!("link {out_name} took {}ms", elapsed.as_millis());
-    }
     Ok(())
 }
 
@@ -1628,7 +1608,7 @@ pub fn write_library_export_files(k1: &TypedProgram, module_name: &str) -> Resul
     }
     symbols.sort();
 
-    match k1.config.target.platform() {
+    match k1.plan.config.target.platform() {
         Platform::PosixMacos => {
             let mut list = String::with_capacity(symbols.len() * 24);
             for s in &symbols {
@@ -1659,7 +1639,7 @@ pub fn write_library_export_files(k1: &TypedProgram, module_name: &str) -> Resul
                 .map_err(|e| anyhow::anyhow!("Failed to write {script_path}: {e}"))?;
         }
         Platform::Wasi | Platform::Bare => {
-            bail!("library output is not supported on {}", k1.config.target.to_str())
+            bail!("library output is not supported on {}", k1.plan.config.target.to_str())
         }
     }
     Ok(())
@@ -1670,10 +1650,9 @@ pub fn write_library_archive(
     module_name: &str,
     objects: &[String],
 ) -> Result<()> {
-    let target = k1.config.target;
+    let target = k1.plan.config.target;
     let idents = &k1.ast.idents;
     let out_dir = k1.config.out_dir;
-    let ar_time = std::time::Instant::now();
 
     let combined_name =
         kpath::join_tmp(k1.get_tmp_unsafe(), idents, out_dir, format_args!("lib{module_name}.o"));
@@ -1732,10 +1711,6 @@ pub fn write_library_archive(
     if !command_status(&mut ar_cmd)?.success() {
         bail!("archiving {archive_name} failed");
     }
-
-    if k1.config.chatty {
-        eprintln!("archive {archive_name} took {}ms", ar_time.elapsed().as_millis());
-    }
     Ok(())
 }
 
@@ -1752,16 +1727,15 @@ fn report_codegen_error(k1: &TypedProgram, e: K1Message) -> anyhow::Error {
     )
     .unwrap();
     write_program_dump(k1);
-    k1.message_to_anyhow(e)
+    k1.anyhow_from_message(e)
 }
 
 fn cg_error_to_message(k1: &TypedProgram, e: CgError) -> K1Message {
-    k1.make_error(e.message, e.span)
+    let message_string = k1.ast.idents.intern(e.message);
+    k1.make_error(message_string, e.span)
 }
 
-pub fn codegen_module(args: &Args, ctx: &Context, k1: &mut TypedProgram) -> Result<()> {
-    let codegen_start = std::time::Instant::now();
-
+pub fn codegen_module(ctx: &Context, k1: &mut TypedProgram) -> Result<()> {
     // Ns-driven, not fn-driven: a reload ns holding only globals still gets a dylib
     let mut reload_nss: Vec<NamespaceId> = vec![];
     for ns_id in k1.namespaces.namespaces.iter_ids() {
@@ -1769,83 +1743,159 @@ pub fn codegen_module(args: &Args, ctx: &Context, k1: &mut TypedProgram) -> Resu
             reload_nss.push(ns_id);
         }
     }
-    if !reload_nss.is_empty() && args.filc {
+    if !reload_nss.is_empty() && k1.plan.config.filc {
         bail!("ns(reload) is not supported under --filc");
     }
-    if !k1.program_settings.executable {
+    if !k1.plan.is_executable() {
         if !reload_nss.is_empty() {
             bail!("ns(reload) requires an executable host module");
         }
-        if args.filc {
+        if k1.plan.config.filc {
             bail!("library output is not supported under --filc");
         }
     }
     for ns_id in &reload_nss {
-        write_reload_dylib(args, ctx, k1, *ns_id)?;
+        let frame = k1.trace_push(TraceKind::ReloadDylib, ns_id.as_u32(), 0);
+        let written = write_reload_dylib(ctx, k1, *ns_id);
+        k1.trace_pop(frame);
+        written?;
     }
 
     let mut module_name = k1.program_name().to_string();
-    if args.command.is_test() {
+    if k1.config.command.is_test() {
         module_name.push_str("_test");
     };
-    let roots = match Cg::prepare_host(k1) {
+    let prepare_frame = k1.trace_push(TraceKind::CodegenPrepare, 0, 0);
+    let prepared = Cg::prepare_host(k1);
+    if let Ok(roots) = &prepared {
+        k1.trace.set_top_count(roots.reachable.len() as u64);
+    }
+    k1.trace_pop(prepare_frame);
+    let roots = match prepared {
         Ok(roots) => roots,
-        Err(e) => anyhow::bail!(report_codegen_error(k1, e)),
+        Err(e) => match k1.error_count() {
+            0 => anyhow::bail!(report_codegen_error(k1, e)),
+            _ => anyhow::bail!(k1.failure_summary()),
+        },
     };
-    if args.chatty {
-        eprintln!(
-            "ir prep took {}ms ({} reachable functions)",
-            codegen_start.elapsed().as_millis(),
-            roots.reachable.len()
-        );
+    if k1.config.tools.dump_ir {
+        let out_dir = k1.ast.idents.get_string(k1.config.out_dir);
+        std::fs::create_dir_all(out_dir)?;
+        let mut dump = String::new();
+        for &function in &roots.reachable {
+            if let Some(unit) =
+                crate::ir::get_compiled_unit(&k1.ir, crate::ir::IrUnitId::Function(function))
+            {
+                crate::ir::display_unit(&mut dump, k1, &unit, false)?;
+            }
+        }
+        std::fs::write(format!("{out_dir}/{module_name}_ir.txt"), dump)?;
     }
-    let k1: &TypedProgram = k1;
-    let is_host_native = detect_host_target() == Some(k1.config.target);
-    let object_is_artifact = !k1.program_settings.executable && !is_host_native
-        || k1.config.target.platform() == Platform::Bare;
-    let objects = write_unit_artifacts(
-        args,
-        ctx,
-        k1,
-        &roots,
-        CgKind::Host,
-        &module_name,
-        object_is_artifact,
-    )?;
-    if args.chatty {
-        eprintln!("codegen took {}ms", codegen_start.elapsed().as_millis());
-    }
+    let is_host_native = detect_host_target() == Some(k1.plan.config.target);
+    let object_is_artifact = !k1.plan.is_executable() && !is_host_native
+        || k1.plan.config.target.platform() == Platform::Bare;
+    let objects =
+        write_unit_artifacts(ctx, k1, &roots, CgKind::Host, &module_name, object_is_artifact)?;
 
-    if k1.program_settings.executable {
-        if k1.config.target.platform() == Platform::Bare {
+    if k1.plan.is_executable() {
+        if k1.plan.config.target.platform() == Platform::Bare {
             bail!("bare targets emit objects only; there is no executable lane");
         }
         let mut link_options: Vec<String> = vec![];
         if !reload_nss.is_empty() {
             // Ensure host globals are visible to dlopen'd reload dylibs
-            let export_flag = match k1.config.target.platform() {
+            let export_flag = match k1.plan.config.target.platform() {
                 Platform::PosixMacos => "-Wl,-export_dynamic",
                 Platform::PosixLinux => "-rdynamic",
                 Platform::Wasi | Platform::Bare => {
-                    bail!("ns(reload) is not supported on {}", k1.config.target.to_str())
+                    bail!("ns(reload) is not supported on {}", k1.plan.config.target.to_str())
                 }
             };
             link_options.push(export_flag.to_string());
         }
-        write_linked_output(k1, &module_name, &objects, &link_options, LinkOutputKind::Executable)?;
+        let frame = k1.trace_push(TraceKind::Link, 0, 0);
+        let linked = write_linked_output(
+            k1,
+            &module_name,
+            &objects,
+            &link_options,
+            LinkOutputKind::Executable,
+        );
+        k1.trace_pop(frame);
+        linked?;
     } else if is_host_native {
         write_library_export_files(k1, &module_name)?;
-        write_linked_output(k1, &module_name, &objects, &[], LinkOutputKind::Dylib)?;
-        write_library_archive(k1, &module_name, &objects)?;
+        let frame = k1.trace_push(TraceKind::Link, 0, 0);
+        let linked = write_linked_output(k1, &module_name, &objects, &[], LinkOutputKind::Dylib);
+        k1.trace_pop(frame);
+        linked?;
+        let frame = k1.trace_push(TraceKind::Archive, 0, 0);
+        let archived = write_library_archive(k1, &module_name, &objects);
+        k1.trace_pop(frame);
+        archived?;
     }
 
     Ok(())
 }
 
+pub fn report_trace(k1: &TypedProgram) {
+    k1.trace_clear();
+    if k1.config.tools.chatty {
+        k1.print_trace_summary(&mut std::io::stderr()).unwrap();
+    }
+    if k1.config.tools.dump_trace {
+        let out_dir = k1.ast.idents.get_string(k1.config.out_dir);
+        let path = format!("{out_dir}/{}_trace.folded", k1.program_name());
+        let written = std::fs::File::create(&path).and_then(|file| {
+            let mut out = std::io::BufWriter::new(file);
+            k1.write_trace_folded(&mut out)
+        });
+        match written {
+            Ok(()) => eprintln!("wrote trace to {path}"),
+            Err(e) => eprintln!("failed to write trace to {path}: {e}"),
+        }
+    }
+}
+
+fn report_cg(k1: &TypedProgram, e: CgError) -> anyhow::Error {
+    report_codegen_error(k1, cg_error_to_message(k1, e))
+}
+
+fn record_unit_timings(k1: &mut TypedProgram, root: Option<FrameId>, timings: &[UnitTiming]) {
+    for t in timings {
+        let unit = k1.trace.record(
+            TraceKind::Codegen,
+            t.index as u32,
+            root,
+            t.clock_start,
+            t.clock_end,
+            t.fn_count as u64,
+            0,
+        );
+        k1.trace.record(
+            TraceKind::LlvmPasses,
+            t.index as u32,
+            Some(unit),
+            t.clock_generated,
+            t.clock_passed,
+            0,
+            0,
+        );
+        k1.trace.record(
+            TraceKind::LlvmEmit,
+            t.index as u32,
+            Some(unit),
+            t.clock_passed,
+            t.clock_end,
+            0,
+            0,
+        );
+    }
+}
+
 fn write_unit_artifacts(
-    args: &Args,
     ctx: &Context,
-    k1: &TypedProgram,
+    k1: &mut TypedProgram,
     roots: &CodegenRoots,
     kind: CgKind,
     module_name: &str,
@@ -1856,45 +1906,57 @@ fn write_unit_artifacts(
     let plans = Cg::plan_units(k1, &roots.reachable, MAX_UNITS);
     let unit_count = plans.len();
     // Under --filc, Fil-C's clang runs the whole optimization pipeline
-    let optimize_ir = args.optimize && !k1.config.filc;
+    let optimize_ir = k1.plan.config.optimize && !k1.plan.config.filc;
     let pipeline = if optimize_ir {
         Pipeline::O3
-    } else if args.debug {
+    } else if k1.plan.config.debug {
         Pipeline::None
     } else {
         Pipeline::Dev
     };
-    let single_file = k1.config.filc || args.emit_llvm || object_is_artifact;
+    let single_file = k1.plan.config.filc || k1.config.tools.emit_llvm || object_is_artifact;
     let object_path = |i: usize| format!("{out_dir}/{module_name}.{i}.o");
-    let report = |e: CgError| report_codegen_error(k1, cg_error_to_message(k1, e));
+    let output = if single_file {
+        UnitOutput::Bitcode(Pipeline::None)
+    } else if optimize_ir {
+        UnitOutput::Bitcode(Pipeline::ThinLtoPreLink)
+    } else {
+        UnitOutput::Object(pipeline)
+    };
+
+    let codegen_frame = k1.trace_push(TraceKind::Codegen, unit_count as u32, 0);
+    let generated = {
+        let k1: &TypedProgram = k1;
+        Cg::codegen_units(k1, roots, plans, kind, output, object_path).map_err(|e| report_cg(k1, e))
+    };
+    if let Ok((_, timings)) = &generated {
+        record_unit_timings(k1, codegen_frame, timings);
+    }
+    k1.trace_pop(codegen_frame);
+    let (artifacts, _) = generated?;
 
     if single_file {
-        let artifacts = Cg::codegen_units(
-            k1,
-            roots,
-            plans,
-            kind,
-            args.debug,
-            UnitOutput::Bitcode(Pipeline::None),
-            object_path,
-        )
-        .map_err(report)?;
-        let merged = Cg::merge_units(ctx, module_name, &artifacts).map_err(report)?;
-        let machine = Cg::make_target_machine(args.optimize, k1.config.target);
+        let merged = Cg::merge_units(ctx, module_name, &artifacts).map_err(|e| report_cg(k1, e))?;
+        let machine = Cg::make_target_machine(k1);
+        let passes_frame = k1.trace_push(TraceKind::LlvmPasses, 0, 0);
         codegen_llvm::run_passes(&merged, &machine, pipeline);
-        if k1.config.filc {
+        k1.trace_pop(passes_frame);
+        if k1.plan.config.filc {
             let ll_path = format!("{out_dir}/{module_name}.ll");
             std::fs::write(Path::new(&ll_path), codegen_llvm::llvm_ir_text_filc(&merged))
                 .map_err(|e| anyhow::anyhow!("Failed to write {ll_path}: {e}"))?;
             return Ok(vec![ll_path]);
         }
-        if args.emit_llvm {
+        if k1.config.tools.emit_llvm {
             let ll_path = format!("{out_dir}/{module_name}.ll");
             std::fs::write(Path::new(&ll_path), merged.print_to_string().to_string())
                 .map_err(|e| anyhow::anyhow!("Failed to write {ll_path}: {e}"))?;
         }
         let path = format!("{out_dir}/{module_name}.o");
-        codegen_llvm::emit_object(&merged, &machine, &path).map_err(report)?;
+        let emit_frame = k1.trace_push(TraceKind::LlvmEmit, 0, 0);
+        let emitted = codegen_llvm::emit_object(&merged, &machine, &path);
+        k1.trace_pop(emit_frame);
+        emitted.map_err(|e| report_cg(k1, e))?;
         return Ok(vec![path]);
     }
 
@@ -1903,53 +1965,35 @@ fn write_unit_artifacts(
         paths.push(object_path(i));
     }
     if optimize_ir {
-        let artifacts = Cg::codegen_units(
-            k1,
-            roots,
-            plans,
-            kind,
-            args.debug,
-            UnitOutput::Bitcode(Pipeline::ThinLtoPreLink),
-            object_path,
-        )
-        .map_err(report)?;
-        Cg::thinlto_codegen(k1, &artifacts, &paths).map_err(report)?;
-        return Ok(paths);
+        let frame = k1.trace_push(TraceKind::Thinlto, unit_count as u32, 0);
+        let linked = Cg::thinlto_codegen(k1, &artifacts, &paths);
+        k1.trace_pop(frame);
+        linked.map_err(|e| report_cg(k1, e))?;
     }
-    Cg::codegen_units(
-        k1,
-        roots,
-        plans,
-        kind,
-        args.debug,
-        UnitOutput::Object(pipeline),
-        object_path,
-    )
-    .map_err(report)?;
     Ok(paths)
 }
 
 /// Codegens and links one reloadable ns's dylib:
 /// `.k1-out/<program>.<ns>.<dylib|so>` beside the executable
-fn write_reload_dylib(
-    args: &Args,
-    ctx: &Context,
-    k1: &mut TypedProgram,
-    ns_id: NamespaceId,
-) -> Result<()> {
-    let dylib_start = std::time::Instant::now();
+fn write_reload_dylib(ctx: &Context, k1: &mut TypedProgram, ns_id: NamespaceId) -> Result<()> {
     let ns_name = k1.ident_str(k1.namespaces.get(ns_id).name).to_string();
     let module_name = k1.program_name().to_string();
-    let platform = k1.config.target.platform();
+    let platform = k1.plan.config.target.platform();
     let unit_name = format!("{module_name}.{ns_name}");
 
-    let roots = match Cg::prepare_dylib(k1, ns_id) {
+    let prepare_frame = k1.trace_push(TraceKind::CodegenPrepare, ns_id.as_u32(), 0);
+    let prepared = Cg::prepare_dylib(k1, ns_id);
+    if let Ok(roots) = &prepared {
+        k1.trace.set_top_count(roots.reachable.len() as u64);
+    }
+    k1.trace_pop(prepare_frame);
+    let roots = match prepared {
         Ok(roots) => roots,
         Err(e) => anyhow::bail!(report_codegen_error(k1, e)),
     };
-    let k1: &TypedProgram = k1;
     let objects =
-        write_unit_artifacts(args, ctx, k1, &roots, CgKind::ReloadDylib(ns_id), &unit_name, false)?;
+        write_unit_artifacts(ctx, k1, &roots, CgKind::ReloadDylib(ns_id), &unit_name, false)?;
+    let k1: &TypedProgram = k1;
 
     let out_dir = k1.ast.idents.get_string(k1.config.out_dir);
     let dylib_ext = platform.dylib_ext();
@@ -1978,9 +2022,6 @@ fn write_reload_dylib(
     }
     std::fs::rename(&staged_path, &dylib_path)
         .map_err(|e| anyhow::anyhow!("Failed to publish reload dylib {dylib_path}: {e}"))?;
-    if args.chatty {
-        eprintln!("reload dylib {unit_name} took {}ms", dylib_start.elapsed().as_millis());
-    }
     Ok(())
 }
 
@@ -2036,43 +2077,147 @@ pub fn run_compiled_program(
 mod compiler_test {
     use super::*;
 
-    #[test]
-    fn disk_cache_restores_longest_valid_prefix() {
+    fn set_home() {
         static SET_HOME: std::sync::Once = std::sync::Once::new();
         SET_HOME.call_once(|| unsafe {
             std::env::set_var("K1_HOME", env!("CARGO_MANIFEST_DIR"));
         });
+    }
+
+    fn check(file: &Path) -> CompileRequest {
+        let mut request = CompileRequest::new(file.to_path_buf(), Command::Check, None).unwrap();
+        request.build.default.no_std = true;
+        request
+    }
+
+    fn program_of(result: std::result::Result<TypedProgram, CompileProgramError>) -> TypedProgram {
+        match result {
+            Ok(program) => program,
+            Err(CompileProgramError::TyperFailure(program)) => *program,
+            Err(CompileProgramError::Build(message)) => panic!("{message}"),
+        }
+    }
+
+    fn snapshot_count(cache_dir: &Path) -> usize {
+        let mut n = 0;
+        for entry in fs::read_dir(cache_dir).unwrap() {
+            if entry.unwrap().path().extension().is_some_and(|e| e == "snap") {
+                n += 1;
+            }
+        }
+        n
+    }
+
+    #[test]
+    fn disk_cache_restores_deps_when_primary_fails() {
+        set_home();
+        let dir =
+            std::env::temp_dir().join(format!("k1_disk_cache_deps_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let app = dir.join("app");
+        let lib = app.join("deps").join("lib");
+        fs::create_dir_all(&lib).unwrap();
+        fs::write(
+            app.join("build.k1"),
+            "fn module(_b: k1/build-config): k1/module { let m = k1/module/new(); m.executable(); m.dep(\"lib\"); m }\n",
+        )
+        .unwrap();
+        fs::write(
+            lib.join("build.k1"),
+            "fn module(_b: k1/build-config): k1/module { let m = k1/module/new(); m.library(); m }\n",
+        )
+        .unwrap();
+        fs::write(lib.join("lib.k1"), "fn one(): i32 { 1 }\n").unwrap();
+        let main = app.join("main.k1");
+        fs::write(&main, "fn main(): i32 { \"not an int\" }\n").unwrap();
+
+        let cold = compile_program(check(&app));
+        assert!(cold.is_err(), "the broken app must fail typechecking");
+        let cold = program_of(cold);
+        assert_eq!(cold.restored_module_count, 0, "first compile has nothing to restore");
+        let cache_dir = cold.cache_dir().to_path_buf();
+        let stored = snapshot_count(&cache_dir);
+
+        let warm = program_of(compile_program(check(&app)));
+        assert_eq!(warm.restored_module_count, 2, "a still-broken app restores core, lib");
+        assert_eq!(snapshot_count(&cache_dir), stored, "a restored run stores nothing new");
+
+        fs::write(&main, "fn main(): i32 { lib/one() }\n").unwrap();
+        let fixed = compile_program(check(&app)).ok().expect("fixed app must succeed");
+        assert_eq!(fixed.restored_module_count, 2, "the fixed app restores core, lib");
+
+        let warm = compile_program(check(&app)).ok().expect("warm compile must succeed");
+        assert_eq!(
+            warm.restored_module_count, 2,
+            "unchanged input restores core, lib; the app is never snapshotted"
+        );
+
+        for body in ["lib/one() + 1", "lib/one() + 2"] {
+            fs::write(&main, format!("fn main(): i32 {{ {body} }}\n")).unwrap();
+            let edited = compile_program(check(&app)).ok().expect("edited compile must succeed");
+            assert_eq!(edited.restored_module_count, 2, "an edited app restores core, lib");
+            assert_eq!(snapshot_count(&cache_dir), stored, "editing the app stores nothing");
+        }
+
+        fs::write(lib.join("lib.k1"), "fn one(): i32 { 2 }\n").unwrap();
+        let dep_edited =
+            compile_program(check(&app)).ok().expect("dep-edited compile must succeed");
+        assert_eq!(dep_edited.restored_module_count, 1, "an edited dep restores only core");
+        assert_eq!(snapshot_count(&cache_dir), stored, "the dep's entry is replaced, not added");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn plan_cache_follows_build_file() {
+        set_home();
+        let dir = std::env::temp_dir().join(format!("k1_plan_cache_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let app = dir.join("app");
+        let lib = app.join("deps").join("lib");
+        fs::create_dir_all(&lib).unwrap();
+        fs::write(lib.join("lib.k1"), "fn one(): i32 { 1 }\n").unwrap();
+        fs::write(app.join("main.k1"), "fn main(): i32 { 0 }\n").unwrap();
+        let no_deps = "fn module(_b: k1/build-config): k1/module { k1/module/new() }\n";
+        fs::write(app.join("build.k1"), no_deps).unwrap();
+
+        let cold = compile_program(check(&app)).ok().expect("cold compile must succeed");
+        assert_eq!(cold.plan.modules().len(), 2, "core and app");
+        let warm = compile_program(check(&app)).ok().expect("warm compile must succeed");
+        assert_eq!(warm.plan.modules().len(), 2, "the cached plan is reused");
+
+        fs::write(
+            app.join("build.k1"),
+            "fn module(_b: k1/build-config): k1/module { let m = k1/module/new(); m.dep(\"lib\"); m }\n",
+        )
+        .unwrap();
+        let with_dep = compile_program(check(&app)).ok().expect("edited build.k1 must replan");
+        assert_eq!(with_dep.plan.modules().len(), 3, "core, lib and app");
+
+        fs::remove_dir_all(&lib).unwrap();
+        let missing = compile_program(check(&app));
+        assert!(missing.is_err(), "a removed dep dir invalidates the plan");
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn disk_cache_restores_longest_valid_prefix() {
+        set_home();
         let dir = std::env::temp_dir().join(format!("k1_disk_cache_test_{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         let app = dir.join("app.k1");
         fs::write(&app, "fn main(): i32 { 0 }\n").unwrap();
-        let args = Args {
-            no_std: true,
-            emit_llvm: false,
-            optimize: false,
-            dump_module: false,
-            dump_idents: false,
-            debug: false,
-            sanitize: false,
-            filc: false,
-            profile: false,
-            chatty: false,
-            optimize_ir: true,
-            cache: true,
-            target: None,
-            k1_home_override: None,
-            command: Command::Check { file: Some(app.clone()) },
-        };
 
-        let cold = compile_program(&args).ok().expect("cold compile must succeed");
+        let cold = compile_program(check(&app)).ok().expect("cold compile must succeed");
         assert_eq!(cold.restored_module_count, 0, "first compile has nothing to restore");
 
-        let warm = compile_program(&args).ok().expect("warm compile must succeed");
-        assert_eq!(warm.restored_module_count, 2, "unchanged input restores core, app");
+        let warm = compile_program(check(&app)).ok().expect("warm compile must succeed");
+        assert_eq!(warm.restored_module_count, 1, "unchanged input restores only core");
 
         fs::write(&app, "fn main(): i32 {\n  println(\"v2\")\n  0\n}\n").unwrap();
-        let edited = compile_program(&args).ok().expect("edited compile must succeed");
+        let edited = compile_program(check(&app)).ok().expect("edited compile must succeed");
         assert_eq!(edited.restored_module_count, 1, "an edited app restores only core");
 
         let _ = fs::remove_dir_all(&dir);

@@ -5,12 +5,12 @@ ns scopes {
   ns outer {
     type foo = { x: int }
     ns for foo {
-      fn value(self: foo): int { self.x + 3 }
+      fn value(self): int { self.x + 3 }
     }
   }
   
   ns for foo {
-    fn value(self: foo): int { self.x }
+    fn value(self): int { self.x }
   }
   
   

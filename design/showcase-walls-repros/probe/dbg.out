@@ -1,0 +1,30 @@
+is_function_concrete=true for fn define(name: code, pattern: string): code
+DEBUG
+fn define(name: code, pattern: string): code {
+  return(emit(text(name), compile(pattern)))
+}
+define fn(p0: { { { ptr, i64 }, i64 } }, p1: { { { ptr, i64 } } }): { { { ptr, i64 }, i64 } } (inst count=5, cfg_valid=true)
+b242724 entry  preds: [], succs: []
+ i5194 = alloca returned { { { ptr, i64 }, i64 } }, align 8          ; rvo storage                   | define                        |253:14|
+ i5195 = call { { { ptr, i64 } } } text(p0)                          ;                               | name.text()                   |254:8|
+ i5196 = call { { { ptr, i64 }, i64 }, { { ptr, i64 }, i64 } } compile(p1);                               | compile(pattern)              |254:21|
+ i5197 = call into i5194 { { { ptr, i64 }, i64 } } emit(i5195, i5196);                               | emit(name.text(), compile(pattern))|254:3|
+ i5198 = ret agg ptr i5194                                           ; return aggregate at address   | emit(name.text(), compile(pattern))|254:3|
+END
+
+optimizing define fn(p0: { { { ptr, i64 }, i64 } }, p1: { { { ptr, i64 } } }): { { { ptr, i64 }, i64 } } (inst count=5, cfg_valid=true)
+b242724 entry  preds: [], succs: []
+ i5194 = alloca returned { { { ptr, i64 }, i64 } }, align 8          ; rvo storage                   | define                        |253:14|
+ i5195 = call { { { ptr, i64 } } } text(p0)                          ;                               | name.text()                   |254:8|
+ i5196 = call { { { ptr, i64 }, i64 }, { { ptr, i64 }, i64 } } compile(p1);                               | compile(pattern)              |254:21|
+ i5197 = call into i5194 { { { ptr, i64 }, i64 } } emit(i5195, i5196);                               | emit(name.text(), compile(pattern))|254:3|
+ i5198 = ret agg ptr i5194                                           ; return aggregate at address   | emit(name.text(), compile(pattern))|254:3|
+END
+
+[bc] lowered unit (21 words, frame 192 bytes)
+ 21460 enter frame_bytes=192
+ 21462 call @7154 fp+=192 sret=fp+80 args(f[3])
+ 21467 call @15642 fp+=192 sret=fp+96 args(f[4])
+ 21472 call @20596 fp+=192 sret=fp+56 args(fp+80, fp+96)
+ 21478 ret_agg fp+56 size=24
+

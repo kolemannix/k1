@@ -4,6 +4,7 @@
 //! runtime calibration is needed (that's only required for raw rdtsc,
 //! which we never read directly).
 
+#[derive(Clone, Copy)]
 pub struct Clock {
     /// nanos = ticks * numer / denom
     numer: u64,
@@ -65,12 +66,17 @@ impl Clock {
     }
 
     #[inline]
-    pub fn elapsed_nanos(&self, since: u64) -> u64 {
-        self.ticks_to_nanos(self.raw().saturating_sub(since))
+    pub fn nanos_to_ticks(&self, nanos: u64) -> u64 {
+        if self.numer == self.denom {
+            nanos
+        } else {
+            (nanos as u128 * self.denom as u128 / self.numer as u128) as u64
+        }
     }
 
-    pub fn elapsed_ms(&self, since: u64) -> u64 {
-        self.elapsed_nanos(since) / 1_000_000
+    #[inline]
+    pub fn elapsed_nanos(&self, since: u64) -> u64 {
+        self.ticks_to_nanos(self.raw().saturating_sub(since))
     }
 }
 

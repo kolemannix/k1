@@ -1,0 +1,37 @@
+ability shape {
+  fn area(self: *self): f64
+  fn name(self: *self): string
+  fn sides(): int
+  fn describe(self: *self): string {
+    "${self.name()} area=${self.area()} sides=${shape@(self)/sides()}"
+  }
+}
+
+type circle = { radius: f64 }
+type rect = { w: f64, h: f64 }
+
+impl shape for circle {
+  fn area(self: *circle): f64 { 3.14159 * self.radius * self.radius }
+  fn name(self: *circle): string { "circle" }
+  fn sides(): int { 0 }
+}
+
+impl shape for rect {
+  fn area(self: *rect): f64 { self.w * self.h }
+  fn name(self: *rect): string { "rect" }
+  fn sides(): int { 4 }
+  fn describe(self: *rect): string { "${self.w}x${self.h} rect" }
+}
+
+fn main(): i32 {
+  let c = circle.{ radius = 1.0 }
+  let r = rect.{ w = 2.0, h = 3.0 }
+  println(c.describe())
+  println(r.describe())
+  let d: dyn[shape] = c.&.to-dyn()
+  println(d.describe())
+  println(d.sides())
+  println(types/size[dyn[shape]])
+  println(types/size[dyn[fn(int) -> int]])
+  0
+}

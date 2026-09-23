@@ -1,0 +1,19 @@
+macro swap(a: code, b: code) {
+  `
+  let tmp = $a
+  $a = $b
+  $b = tmp
+  `
+}
+
+fn main(): i32 {
+  let xs: list[int] = [1, 2, 3]
+  swap(xs.[0], xs.[2])
+  println("${xs.[0]} ${xs.[1]} ${xs.[2]}")
+
+  let lo = 10
+  let hi = 20
+  swap(lo, hi)
+  println("lo=$lo hi=$hi")
+  0
+}

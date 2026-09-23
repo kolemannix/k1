@@ -1,0 +1,22 @@
+fn build-response(id: int): string {
+  let parts: list[string] = list/empty()
+  for i in 0.until(3) {
+    parts.push("item-${id}-${i}")
+  }
+  parts.join(",")
+}
+
+fn main(): i32 {
+  let scratch = core/arena/init(64 * core/arena/kb)
+  for id in 0.until(3) {
+    let r = mem/with-arena(scratch, build-response(id))
+    println("${r} used=${scratch.used-bytes()} hwm=${scratch.clean-addr.diff(scratch.first-base)}")
+    scratch.reset()
+  }
+  let keep: list[int] = list/with-capacity-in(heap, 4)
+  keep.push-in(heap, 1)
+  println(keep)
+  let z = scratch.alloc-buffer[u64](4)
+  println(z)
+  0
+}

@@ -1,11 +1,38 @@
 // The reloadable app half of the reload_test
+fn read-after(p: *i64, _later: i64): i64 { p.* }
+fn(inline) read-after-inline(p: *i64, _later: i64): i64 { p.* }
+
+fn reload-value(): i64 {
+  scene/load().!
+  0
+}
+
+fn optional-speed(take: bool): i64 {
+  let fallback: i64 = 7
+  let p = if take scene/speed.& else fallback.&
+  p.*
+}
+
 fn main(): i32 {
   loop {
     let line = if std/sys/read-line(256) is {
       :ok l -> l,
       :err _ -> break,
     }
-    if line == "load" {
+    if line == "skip-unloaded" {
+      let optional = optional-speed(line == "take")
+      println("optional: ${optional}")
+    } else if line == "capture" {
+      let captured = read-after(scene/speed.&, reload-value())
+      println("capture: ${captured} current: ${scene/speed}")
+    } else if line == "capture-inline" {
+      let captured = read-after-inline(scene/speed.&, reload-value())
+      println("capture: ${captured} current: ${scene/speed}")
+    } else if line == "assign-reload" {
+      let previous = scene/speed.&
+      scene/speed = { scene/load().!; 77 }
+      println("assign: ${previous.*} current: ${scene/speed}")
+    } else if line == "load" {
       if scene/load() is {
         :ok -> println("load ok"),
         :err e -> println("load err: ${e}"),

@@ -1,0 +1,38 @@
+fn jump(program: string, pc: size, forward: bool): size {
+  let pc = pc
+  let step = if forward 1 else -1
+  let depth = 1
+  while depth > 0 {
+    pc = if forward pc + 1 else pc - 1
+    if program.[pc] == '[' { depth = depth + step }
+    if program.[pc] == ']' { depth = depth - step }
+  }
+  pc
+}
+
+fn bf(program: string): string {
+  let tape: array[u8, 64] = .0
+  let out = string-builder/new()
+  let ptr: size = 0
+  let pc: size = 0
+  while pc < program.len() {
+    if program.[pc] is {
+      '>' -> { ptr = ptr + 1 },
+      '<' -> { ptr = ptr - 1 },
+      '+' -> { tape.[ptr] = tape.[ptr] + 1 },
+      '-' -> { tape.[ptr] = tape.[ptr] - 1 },
+      '.' -> { out.write-byte(tape.[ptr]) },
+      '[' -> { if tape.[ptr] == 0 { pc = jump(program, pc, true) } },
+      ']' -> { if tape.[ptr] != 0 { pc = jump(program, pc, false) } },
+      _ -> {}
+    }
+    pc = pc + 1
+  }
+  out.build()
+}
+
+fn main(): i32 {
+  let hello: "Hello World!\n" = #static bf("++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++.")
+  print(hello.from-static())
+  0
+}

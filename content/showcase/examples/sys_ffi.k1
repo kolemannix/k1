@@ -1,0 +1,23 @@
+use core/c-int
+
+fn(extern("strlen")) strlen(s: ptr): size
+fn(extern("getpid")) getpid(): c-int
+fn(extern("qsort")) qsort(base: ptr, count: size, width: size, compare: *fn(ptr, ptr) -> c-int)
+
+fn compare-i32(a: ptr, b: ptr): c-int {
+  let x = a.ref[i32].*
+  let y = b.ref[i32].*
+  if x < y { -1 } else if x > y { 1 } else { 0 }
+}
+
+fn main(): i32 {
+  let greeting = "hello from libc".to-c-tmp()
+  println("strlen: ${strlen(greeting.ptr)}")
+
+  let xs: list[i32] = [40, 7, 23, 1, 99, 15]
+  qsort(xs.as-span().data-ptr(), xs.len(), types/size[i32], compare-i32.&)
+  println("qsort: $xs")
+
+  println("getpid > 0: ${getpid() > 0}")
+  0
+}

@@ -23,8 +23,9 @@ use inkwell::types::{
     VectorType as LlvmVectorType,
 };
 use inkwell::values::{
-    ArrayValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FloatValue,
-    FunctionValue, GlobalValue, InstructionValue, IntValue, PointerValue, StructValue, ValueKind,
+    AggregateValue, ArrayValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum,
+    CallSiteValue, FloatValue, FunctionValue, GlobalValue, InstructionValue, IntValue, PhiValue,
+    PointerValue, StructValue, ValueKind,
 };
 use inkwell::{
     AddressSpace, AtomicOrdering, FloatPredicate, IntPredicate, OptimizationLevel, ThreadLocalMode,
@@ -37,10 +38,9 @@ use log::{debug, trace};
 
 use crate::compiler::{self};
 use crate::ir::{
-    BackendBuiltin, BlockId, Inst, InstId, IrCallee, IrUnitId, PhysicalFunctionType, ProgramIr,
-    Value,
+    BackendBuiltin, BlockId, IdMap, Inst, InstId, IrCallee, IrUnitId, PhysicalFunctionType, Value,
 };
-use crate::kmem::{Handle, List, MSlice};
+use crate::kmem::{List, MSlice};
 use crate::lex::SpanId;
 use crate::parse::{FileId, StringId};
 use crate::typer::types::{
@@ -52,11 +52,25 @@ use crate::typer::{
     StaticRawContainer, StaticValue, StaticValueId, TypedFloatValue, TypedGlobalId, TypedIntValue,
     TypedProgram,
 };
-use crate::{SV8, ir, kbail, kmem};
+use crate::{SV4, SV8, ir, kbail, kmem};
 
-#[allow(unused)]
 fn llvm_size_info(td: &TargetData, typ: &dyn AnyType) -> Layout {
     Layout { size: td.get_abi_size(typ) as u32, align: td.get_abi_alignment(typ) }
+}
+
+fn llvm_float_constant<'ctx>(ctx: &'ctx Context, value: TypedFloatValue) -> FloatValue<'ctx> {
+    let (bits, float_type) = match value {
+        TypedFloatValue::F32(v) => {
+            (ctx.i32_type().const_int(v.to_bits() as u64, false), ctx.f32_type())
+        }
+        TypedFloatValue::F64(v) => (ctx.i64_type().const_int(v.to_bits(), false), ctx.f64_type()),
+    };
+    unsafe {
+        FloatValue::new(llvm_sys::core::LLVMConstBitCast(
+            bits.as_value_ref(),
+            float_type.as_type_ref(),
+        ))
+    }
 }
 
 /// llvm::CallingConv::Fast
@@ -107,6 +121,7 @@ enum AbiParamMapping {
     BigStructByPtrToCopy {
         byval_attr: bool,
     },
+    BigStructByPtr,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -137,7 +152,6 @@ impl RegisterClass {
 
 #[derive(Copy, Clone)]
 struct LlvmScalarType<'ctx> {
-    #[allow(unused)]
     pt: PhysicalType,
     basic_type: BasicTypeEnum<'ctx>,
     di_type: DIType<'ctx>,
@@ -156,11 +170,7 @@ struct CgStructType<'ctx> {
 #[derive(Copy, Clone)]
 struct CgArrayType<'ctx> {
     pt: PhysicalType,
-    #[allow(unused)]
-    count: u32,
     array_type: ArrayType<'ctx>,
-    #[allow(unused)]
-    element_type: Handle<CgType<'ctx>, CgPerm>,
     di_type: DIType<'ctx>,
     layout: Layout,
 }
@@ -168,11 +178,7 @@ struct CgArrayType<'ctx> {
 #[derive(Copy, Clone)]
 struct CgVectorType<'ctx> {
     pt: PhysicalType,
-    #[allow(unused)]
-    count: u32,
     vector_type: LlvmVectorType<'ctx>,
-    #[allow(unused)]
-    element_type: Handle<CgType<'ctx>, CgPerm>,
     di_type: DIType<'ctx>,
     layout: Layout,
 }
@@ -180,9 +186,7 @@ struct CgVectorType<'ctx> {
 #[derive(Copy, Clone)]
 struct CgUnionType<'ctx> {
     pt: PhysicalType,
-    aligned_opaque_repr: StructType<'ctx>,
-    #[allow(unused)]
-    members: MSlice<CgType<'ctx>, CgPerm>,
+    aligned_repr: BasicTypeEnum<'ctx>,
     layout: Layout,
     di_type: DIType<'ctx>,
 }
@@ -247,15 +251,6 @@ impl<'ctx> CgType<'ctx> {
         }
     }
 
-    #[track_caller]
-    #[allow(unused)]
-    fn expect_array(self) -> CgArrayType<'ctx> {
-        match self {
-            CgType::ArrayType(array) => array,
-            _ => panic!("expected array on {}", self.kind_name()),
-        }
-    }
-
     fn rich_repr_layout(&self) -> Layout {
         match self {
             CgType::Scalar(value) => value.layout,
@@ -272,7 +267,7 @@ impl<'ctx> CgType<'ctx> {
             CgType::StructType(s) => s.struct_type.as_basic_type_enum(),
             CgType::ArrayType(a) => a.array_type.as_basic_type_enum(),
             CgType::Vector(v) => v.vector_type.as_basic_type_enum(),
-            CgType::Union(u) => u.aligned_opaque_repr.as_basic_type_enum(),
+            CgType::Union(u) => u.aligned_repr.as_basic_type_enum(),
         }
     }
 
@@ -283,14 +278,6 @@ impl<'ctx> CgType<'ctx> {
             CgType::ArrayType(a) => a.di_type,
             CgType::Vector(v) => v.di_type,
             CgType::Union(u) => u.di_type,
-        }
-    }
-
-    #[allow(unused)]
-    fn as_scalar(self) -> Option<LlvmScalarType<'ctx>> {
-        match self {
-            CgType::Scalar(scalar) => Some(scalar),
-            _ => None,
         }
     }
 }
@@ -316,18 +303,18 @@ impl<'ctx> BuiltinTypes<'ctx> {
 pub struct CgFunction<'ctx> {
     pub function_type: CgFunctionType<'ctx>,
     pub function_value: FunctionValue<'ctx>,
-    pub blocks: FxHashMap<BlockId, BasicBlock<'ctx>>,
     /// These are canonical, not ABI-mapped, and also logical, as in,
     /// sret is excluded, so the first item is the first param the function actually takes
     pub param_values: Vec<BasicValueEnum<'ctx>>,
     pub last_alloca_instr: Option<InstructionValue<'ctx>>,
     pub returned_sret_variable: Option<InstId>,
+    pub return_block: Option<(BasicBlock<'ctx>, SV4<PhiValue<'ctx>>)>,
     pub debug_info: DISubprogram<'ctx>,
     pub debug_file: DIFile<'ctx>,
 }
 
 pub struct CgPerm;
-pub struct CodegenTmp;
+pub struct CgTmp;
 
 #[derive(Debug)]
 pub struct CgError {
@@ -351,6 +338,16 @@ pub struct UnitPlan {
     pub index: usize,
     pub count: usize,
     pub functions: Vec<FunctionId>,
+}
+
+/// One codegen unit's clock ticks, recorded on its worker thread
+pub struct UnitTiming {
+    pub index: usize,
+    pub fn_count: usize,
+    pub clock_start: u64,
+    pub clock_generated: u64,
+    pub clock_passed: u64,
+    pub clock_end: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -406,17 +403,19 @@ pub struct Cg<'ctx, 'k1> {
     static_values_basics: FxHashMap<StaticValueId, BasicValueEnum<'ctx>>,
     static_values_globals: FxHashMap<StaticValueId, GlobalValue<'ctx>>,
     debug: DebugContext<'ctx>,
-    tmp: kmem::Mem<CodegenTmp>,
+    tmp: kmem::Mem<CgTmp>,
     mem: kmem::Mem<CgPerm>,
 
     current_insert_function: FunctionId,
+    cur_unit: ir::UnitView<'static>,
+    cur_blocks: IdMap<BlockId, BasicBlock<'ctx>>,
     last_debug_location: std::cell::Cell<Option<(SpanId, DILocation<'ctx>)>>,
 
     buffers: CgBuffers,
 }
 
 struct CgBuffers {
-    cfg_seen: FxHashSet<BlockId>,
+    cfg_seen: IdMap<BlockId, ()>,
     cfg_blocks_rpo: Vec<BlockId>,
 }
 
@@ -515,7 +514,7 @@ pub fn run_passes(module: &LlvmModule, machine: &TargetMachine, pipeline: Pipeli
         Pipeline::ThinLtoPreLink => "thinlto-pre-link<O3>",
         // Default builds, not optimized but not debug
         Pipeline::Dev => {
-            "function(mem2reg,instcombine<no-verify-fixpoint;max-iterations=1>,simplifycfg),globaldce,mergefunc"
+            "always-inline,function(mem2reg,instcombine<no-verify-fixpoint;max-iterations=1>,simplifycfg),mergefunc"
         }
     };
     module.run_passes(text, machine, options).unwrap();
@@ -617,13 +616,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         ctx: &'ctx Context,
         llvm_module: &LlvmModule<'ctx>,
         module: &TypedProgram,
-        optimize: bool,
-        debug: bool,
     ) -> DebugContext<'ctx> {
+        let build = module.plan.config;
         // We may need to create a DIBuilder per-file.
         // For now let's use main file
         let source = module.ast.sources.get_main();
-        let is_macos = module.config.target.platform() == compiler::Platform::PosixMacos;
+        let is_macos = module.plan.config.target.platform() == compiler::Platform::PosixMacos;
         let sysroot = if is_macos { compiler::MAC_SDK_SYSROOT } else { "" };
         let sdk = if is_macos { "MacOSX.sdk" } else { "" };
         let (debug_builder, compile_unit) = llvm_module.create_debug_info_builder(
@@ -632,11 +630,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             source.filename_str(&module.ast.idents),
             source.directory_str(&module.ast.idents),
             "k1_compiler",
-            optimize,
+            build.optimize,
             "",
             0,
             "",
-            if debug { DWARFEmissionKind::Full } else { DWARFEmissionKind::LineTablesOnly },
+            if build.debug { DWARFEmissionKind::Full } else { DWARFEmissionKind::LineTablesOnly },
             0,
             false,
             false,
@@ -677,7 +675,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         // Only an executable is position-independent *and* known not to be
         // loaded elsewhere
-        if module.program_settings.executable {
+        if module.plan.is_executable() {
             let md4 = ctx.metadata_node(&[
                 ctx.i32_type().const_int(1, false).into(),
                 ctx.metadata_string("PIE Level").into(),
@@ -697,7 +695,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             debug_builder,
             compile_unit,
             debug_stack: Vec::new(),
-            line_tables_only: !debug,
+            line_tables_only: !build.debug,
         };
         debug.push_scope(SpanId::NONE, compile_unit.as_debug_info_scope(), compile_unit.get_file());
         debug
@@ -706,8 +704,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     pub fn create(
         ctx: &'ctx Context,
         k1: &'module TypedProgram,
-        debug: bool,
-        optimize: bool,
         kind: CgKind,
         plan: UnitPlan,
     ) -> Self {
@@ -716,15 +712,15 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let llvm_module = ctx.create_module(k1.program_name());
         llvm_module.set_source_file_name(k1.ast.sources.get_main().filename_str(&k1.ast.idents));
 
-        let debug_context = Cg::init_debug(ctx, &llvm_module, k1, optimize, debug);
+        let debug_context = Cg::init_debug(ctx, &llvm_module, k1);
 
         Cg::initialize_targets();
-        let machine = Cg::make_target_machine(optimize, k1.config.target);
+        let machine = Cg::make_target_machine(k1);
         let target_data = machine.get_target_data();
         llvm_module.set_data_layout(&target_data.get_data_layout());
         llvm_module.set_triple(&machine.get_triple());
 
-        if !k1.config.emit_llvm {
+        if !k1.config.tools.emit_llvm {
             unsafe {
                 llvm_sys::core::LLVMContextSetDiscardValueNames(ctx.as_ctx_ref(), 1);
             }
@@ -776,10 +772,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             mem: kmem::Mem::make(),
 
             current_insert_function: FunctionId::PENDING,
+            cur_unit: ir::UnitView::EMPTY,
+            cur_blocks: IdMap::default(),
             last_debug_location: std::cell::Cell::new(None),
 
             buffers: CgBuffers {
-                cfg_seen: FxHashSet::new(),
+                cfg_seen: IdMap::default(),
                 cfg_blocks_rpo: Vec::with_capacity(16),
             },
         }
@@ -884,14 +882,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             _ => None,
         };
 
-        let mut inst_mappings = FxHashMap::with_capacity(512);
+        let mut inst_mappings = IdMap::default();
         while let Some(fn_id) = self.functions_pending_body_compilation.pop() {
             self.codegen_function_body(&mut inst_mappings, fn_id)?;
         }
 
         if let Some((_, function_value)) = main_function {
             self.builder.unset_current_debug_location();
-            let is_wasi = self.k1.config.target.platform() == compiler::Platform::Wasi;
+            let is_wasi = self.k1.plan.config.target.platform() == compiler::Platform::Wasi;
             let (entrypoint_name, entrypoint_fn_type) = if is_wasi {
                 // WASI rejects any entry signature other than void _start()
                 if !function_value.get_type().get_param_types().is_empty() {
@@ -916,16 +914,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             for p in &entrypoint_params {
                 params.push((*p).into());
             }
-            let main_call = self.builder.build_call(function_value, &params, "").unwrap();
-            main_call.set_call_convention(function_value.get_call_conventions());
+            let main_call = self.build_call(function_value, &params);
             let res = main_call.try_as_basic_value().basic();
             let exit_code: BasicValueEnum<'ctx> = match res {
                 None => self.ctx.i32_type().const_zero().as_basic_value_enum(),
                 Some(v) => v,
             };
             let exit_fv = program_exit_value.unwrap();
-            let exit_call = self.builder.build_call(exit_fv, &[exit_code.into()], "").unwrap();
-            exit_call.set_call_convention(exit_fv.get_call_conventions());
+            self.build_call(exit_fv, &[exit_code.into()]);
             self.builder.build_unreachable().unwrap();
         }
 
@@ -936,52 +932,47 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         Ok(())
     }
 
-    fn inst_function_refs(k1: &TypedProgram, inst: &Inst, refs: &mut Vec<FunctionId>) {
+    fn collect_inst_function_refs(u: &ir::UnitView, inst: &Inst, refs: &mut Vec<FunctionId>) {
         if let Inst::Call { call_id } = inst {
-            match k1.ir.calls.get(*call_id).callee {
+            match u.call(*call_id).callee {
                 IrCallee::Direct(id)
                 | IrCallee::Extern { function_id: id, .. }
                 | IrCallee::BackendBuiltin(id, _) => refs.push(id),
                 IrCallee::LlvmIntrinsic { .. } | IrCallee::Indirect(..) => {}
             }
         }
-        ir::visit_inst_values(&k1.ir, inst, &mut |v| {
+        ir::visit_inst_values(u, inst, &mut |v| {
             if let Value::FunctionAddr(id) = v {
                 refs.push(id)
             }
         });
     }
 
-    fn live_successors(ir: &ProgramIr, block_id: BlockId, out: &mut Vec<BlockId>) {
-        let block = &ir.mem.get(block_id).data;
-        let mut last: Option<InstId> = None;
-        for inst_id in ir.mem.dlist_iter(block.instrs) {
-            last = Some(*inst_id);
-        }
-        let Some(last) = last else { return };
-        match ir.instrs.get(last) {
-            Inst::Jump(target) => out.push(*target),
+    fn collect_block_live_successors(u: &ir::UnitView, block_id: BlockId, out: &mut Vec<BlockId>) {
+        let Some(last) = u.block(block_id).last else { return };
+        match *u.inst(last) {
+            Inst::Jump(target) => out.push(target),
             Inst::JumpIf { cond, cons, alt } => {
-                if *cond != Value::IsStatic {
-                    out.push(*cons);
+                if cond != Value::IsStatic {
+                    out.push(cons);
                 }
-                out.push(*alt);
+                out.push(alt);
             }
             Inst::Switch { cases, default, .. } => {
-                for case in ir.mem.getn(*cases) {
+                for case in u.switch_cases(cases) {
                     out.push(case.target);
                 }
-                out.push(*default);
+                out.push(default);
             }
             _ => {}
         }
     }
 
-    fn walk_functions(k1: &TypedProgram, roots: &[FunctionId]) -> Vec<FunctionId> {
+    fn collect_reachable_functions(k1: &TypedProgram, roots: &[FunctionId]) -> Vec<FunctionId> {
         let mut reachable: Vec<FunctionId> = Vec::with_capacity(1024);
         let mut seen: FxHashSet<FunctionId> = FxHashSet::with_capacity(1024);
         let mut worklist: Vec<FunctionId> = roots.to_vec();
-        let mut seen_blocks: FxHashSet<BlockId> = FxHashSet::with_capacity(64);
+        let mut seen_blocks: IdMap<BlockId, ()> = IdMap::default();
         let mut block_worklist: Vec<BlockId> = Vec::with_capacity(64);
         while let Some(function_id) = worklist.pop() {
             if !seen.insert(function_id) {
@@ -989,46 +980,54 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             reachable.push(function_id);
             let Some(unit) = k1.ir.functions.get(&function_id) else { continue };
+            let u = unit.view(&k1.ir.mem);
             seen_blocks.clear();
             block_worklist.clear();
-            if !unit.blocks.first.is_nil() {
-                block_worklist.push(unit.blocks.first);
+            if let Some(entry) = u.first_block() {
+                block_worklist.push(entry);
             }
             while let Some(block_id) = block_worklist.pop() {
-                if !seen_blocks.insert(block_id) {
+                if seen_blocks.contains(block_id) {
                     continue;
                 }
-                let block = &k1.ir.mem.get(block_id).data;
-                for inst_id in k1.ir.mem.dlist_iter(block.instrs) {
-                    Cg::inst_function_refs(k1, k1.ir.instrs.get(*inst_id), &mut worklist);
+                seen_blocks.insert(block_id, ());
+                for inst_id in u.block_insts(block_id) {
+                    Cg::collect_inst_function_refs(&u, u.inst(inst_id), &mut worklist);
                 }
-                Cg::live_successors(&k1.ir, block_id, &mut block_worklist);
+                Cg::collect_block_live_successors(&u, block_id, &mut block_worklist);
             }
         }
         reachable
     }
 
-    pub fn prepare_ir(k1: &mut TypedProgram, roots: &[FunctionId]) -> K1Result<Vec<FunctionId>> {
-        let mut roots = roots.to_vec();
+    pub fn prepare_ir(
+        k1: &mut TypedProgram,
+        roots: &mut Vec<FunctionId>,
+    ) -> K1Result<Vec<FunctionId>> {
+        let mut compiler_required_k1_fns = vec!["crash-div"];
         if k1.namespaces.iter().any(|ns| ns.reload) {
-            let crash_ident = k1.ast.idents.intern("crash-unloaded-ns");
-            let Some(crash_id) = k1.scopes.find_function_local(k1.scopes.k1_scope_id, crash_ident)
-            else {
-                kbail!(k1, SpanId::NONE, "core is missing fn k1/crash-unloaded-ns");
-            };
-            roots.push(crash_id);
+            compiler_required_k1_fns.push("crash-unloaded-ns");
         }
-        let roots = &roots;
-        for root in roots {
-            ir::compile_function(k1, *root)?;
+        if !k1.type_infos.is_empty() {
+            compiler_required_k1_fns.push("crash-missing-type-info");
+        }
+        for name in compiler_required_k1_fns {
+            let Some(id) = Cg::find_k1_ns_fn(k1, name) else {
+                kbail!(k1, SpanId::NONE, "core is missing fn k1/{name}");
+            };
+            roots.push(id);
+        }
+        for root in roots.iter() {
+            let requester = k1.trace.top();
+            k1.ir.units_pending_compile.push(*root, requester);
         }
         k1.compile_all_pending_ir(SpanId::NONE)?;
-        if k1.config.optimize {
-            for root in roots {
-                ir::optimize_unit(k1, IrUnitId::Function(*root));
+        if k1.plan.config.optimize {
+            for root in roots.iter() {
+                ir::optimize_unit(k1, IrUnitId::Function(*root))?;
             }
         }
-        let reachable = Cg::walk_functions(k1, roots);
+        let reachable = Cg::collect_reachable_functions(k1, roots);
         k1.compute_all_physical_types();
         Ok(reachable)
     }
@@ -1040,7 +1039,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 roots.push(function_id);
             }
         }
-        let reachable = Cg::prepare_ir(k1, &roots)?;
+        let reachable = Cg::prepare_ir(k1, &mut roots)?;
         Ok(CodegenRoots { main: None, program_exit: None, exports: vec![], reachable })
     }
 
@@ -1057,7 +1056,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 exports.push(function_id);
             }
         }
-        let main = if k1.program_settings.executable {
+        let main = if k1.plan.is_executable() {
             let Some(main_function_id) = k1.get_main_function_id() else {
                 kbail!(k1, SpanId::NONE, "Program {} has no main function", k1.program_name());
             };
@@ -1088,7 +1087,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         roots.extend(main);
         roots.extend(program_exit);
         roots.extend_from_slice(&exports);
-        let reachable = Cg::prepare_ir(k1, &roots)?;
+        let reachable = Cg::prepare_ir(k1, &mut roots)?;
         Ok(CodegenRoots { main, program_exit, exports, reachable })
     }
 
@@ -1097,38 +1096,37 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         reachable: &[FunctionId],
         max_units: usize,
     ) -> Vec<UnitPlan> {
-        const MIN_UNIT_INSTRUCTIONS: u32 = 8 * 1024;
-        let mut sized: Vec<(u32, FunctionId)> = Vec::with_capacity(reachable.len());
-        let mut total: u32 = 0;
-        for function_id in reachable {
-            let size = match k1.ir.functions.get(function_id) {
-                Some(unit) => unit.inst_count + 1,
+        const MIN_UNIT_INSTRUCTIONS: u64 = 2 * 1024;
+        let size_of = |function_id: &FunctionId| -> u64 {
+            match k1.ir.functions.get(function_id) {
+                Some(unit) => unit.inst_count() as u64 + 1,
                 None => 0,
-            };
-            total += size;
-            sized.push((size, *function_id));
+            }
+        };
+        let mut total: u64 = 0;
+        for function_id in reachable {
+            total += size_of(function_id);
         }
         let count = ((total / MIN_UNIT_INSTRUCTIONS) as usize).clamp(1, max_units.max(1));
-        let mut plans: Vec<UnitPlan> = Vec::with_capacity(count);
-        let mut loads: Vec<u32> = Vec::with_capacity(count);
-        for index in 0..count {
-            plans.push(UnitPlan {
-                index,
-                count,
-                functions: Vec::with_capacity(sized.len() / count + 1),
-            });
-            loads.push(0);
-        }
-        sized.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.as_u32().cmp(&b.1.as_u32())));
-        for (size, function_id) in sized {
-            let mut lightest = 0;
-            for (i, load) in loads.iter().enumerate() {
-                if *load < loads[lightest] {
-                    lightest = i;
-                }
+        let count_u64 = count as u64;
+        let mut by_id: Vec<FunctionId> = reachable.to_vec();
+        by_id.sort_by_key(|f| f.as_u32());
+        let mut chunks: Vec<Vec<FunctionId>> = Vec::with_capacity(count);
+        let mut functions: Vec<FunctionId> = Vec::with_capacity(reachable.len() / count + 1);
+        let mut cumulative: u64 = 0;
+        for function_id in &by_id {
+            functions.push(*function_id);
+            cumulative += size_of(function_id);
+            let boundary = (chunks.len() as u64 + 1) * total;
+            if chunks.len() + 1 < count && cumulative * count_u64 >= boundary {
+                chunks.push(std::mem::take(&mut functions));
             }
-            loads[lightest] += size;
-            plans[lightest].functions.push(function_id);
+        }
+        chunks.push(functions);
+        let count = chunks.len();
+        let mut plans: Vec<UnitPlan> = Vec::with_capacity(count);
+        for (index, functions) in chunks.into_iter().enumerate() {
+            plans.push(UnitPlan { index, count, functions });
         }
         plans
     }
@@ -1175,18 +1173,18 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         roots: &CodegenRoots,
         plans: Vec<UnitPlan>,
         kind: CgKind,
-        debug: bool,
         output: UnitOutput,
         object_path: impl Fn(usize) -> String + Sync,
-    ) -> CgResult<Vec<UnitArtifact>> {
+    ) -> CgResult<(Vec<UnitArtifact>, Vec<UnitTiming>)> {
         Cg::initialize_targets();
         let shared = SharedProgram(k1);
         let shared = &shared;
         let output = &output;
         let object_path = &object_path;
-        let optimize = k1.config.optimize;
-        let chatty = k1.config.chatty;
         let unit_count = plans.len();
+        let timings: std::sync::Mutex<Vec<UnitTiming>> =
+            std::sync::Mutex::new(Vec::with_capacity(unit_count));
+        let timings = &timings;
         let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
         let worker_count = unit_count.min(cores).max(1);
         let queue = std::sync::Mutex::new(plans);
@@ -1207,23 +1205,29 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     .spawn_scoped(scope, move || -> CgResult<()> {
                         loop {
                             let Some(plan) = queue.lock().unwrap().pop() else { return Ok(()) };
-                            let start = std::time::Instant::now();
+                            let clock = shared.0.trace.clock;
+                            let clock_start = clock.raw();
                             let index = plan.index;
                             let ctx = Context::create();
-                            let mut cg = Cg::create(&ctx, shared.0, debug, optimize, kind, plan);
+                            let mut cg = Cg::create(&ctx, shared.0, kind, plan);
                             cg.codegen_program(roots)?;
-                            let generated = start.elapsed();
+                            let clock_generated = clock.raw();
                             cg.finalize_debug_info();
-                            cg.verify()?;
+                            if cfg!(debug_assertions) {
+                                cg.verify()?;
+                            }
+                            let clock_passed;
                             let artifact = match output {
                                 UnitOutput::Object(pipeline) => {
                                     cg.run_passes(*pipeline);
+                                    clock_passed = clock.raw();
                                     let path = object_path(index);
                                     cg.emit_object_file(&path)?;
                                     UnitArtifact::Object(path)
                                 }
                                 UnitOutput::Bitcode(pipeline) => {
                                     cg.run_passes(*pipeline);
+                                    clock_passed = clock.raw();
                                     let bytes = if *pipeline == Pipeline::ThinLtoPreLink {
                                         cg.thinlto_bitcode()
                                     } else {
@@ -1236,14 +1240,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                     }
                                 }
                             };
-                            if chatty {
-                                eprintln!(
-                                    "unit {index}: {} fns; codegen {}ms, passes + output {}ms",
-                                    cg.owned.len(),
-                                    generated.as_millis(),
-                                    (start.elapsed() - generated).as_millis()
-                                );
-                            }
+                            timings.lock().unwrap().push(UnitTiming {
+                                index,
+                                fn_count: cg.owned.len(),
+                                clock_start,
+                                clock_generated,
+                                clock_passed,
+                                clock_end: clock.raw(),
+                            });
                             artifacts.lock().unwrap()[index] = Some(artifact);
                         }
                     })
@@ -1265,7 +1269,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         for artifact in artifacts {
             done.push(artifact.expect("every unit produces an artifact"));
         }
-        Ok(done)
+        let timings = std::mem::take(&mut *timings.lock().unwrap());
+        Ok((done, timings))
     }
 
     fn thinlto_bitcode(&self) -> Box<[u8]> {
@@ -1333,12 +1338,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         artifacts: &[UnitArtifact],
         object_paths: &[String],
     ) -> CgResult<()> {
-        let start = std::time::Instant::now();
         let mut units: Vec<K1ThinLtoUnit> = Vec::with_capacity(artifacts.len());
         let mut preserved: Vec<std::ffi::CString> = vec![];
         let mut cross_referenced: Vec<std::ffi::CString> = vec![];
-        let symbol_prefix =
-            if k1.config.target.platform() == compiler::Platform::PosixMacos { "_" } else { "" };
+        let symbol_prefix = if k1.plan.config.target.platform() == compiler::Platform::PosixMacos {
+            "_"
+        } else {
+            ""
+        };
         for artifact in artifacts {
             let UnitArtifact::Bitcode { bytes, exported, referenced } = artifact else {
                 panic!("thinlto_codegen on an object artifact")
@@ -1361,11 +1368,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         for p in &cross_referenced {
             cross_ptrs.push(p.as_ptr());
         }
-        let (cpu, features) = Cg::target_cpu_features(k1.config.target);
+        let (cpu, features) = Cg::llvm_cpu_features(k1);
         let cpu = std::ffi::CString::new(cpu).unwrap();
         let features = std::ffi::CString::new(features).unwrap();
-        let pic = k1.config.target.arch() != compiler::Arch::Wasm;
-        let cache_dir = if k1.config.cache {
+        let pic = k1.plan.config.target.arch() != compiler::Arch::Wasm;
+        let cache_dir = if k1.config.tools.cache {
             let dir = format!("{}/thinlto", k1.ast.idents.get_string(k1.config.cache_dir));
             if let Err(e) = std::fs::create_dir_all(&dir) {
                 cgbail!(SpanId::NONE, "Failed to create ThinLTO cache dir {dir}: {e}");
@@ -1398,9 +1405,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         if code != 0 {
             cgbail!(SpanId::NONE, "ThinLTO failed with code {code}");
         }
-        if k1.config.chatty {
-            eprintln!("thinlto of {} units took {}ms", units.len(), start.elapsed().as_millis());
-        }
         Ok(())
     }
 
@@ -1420,7 +1424,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
 
         let program_name = self.k1.program_name().to_string();
-        let dylib_ext = self.k1.config.target.platform().dylib_ext();
+        let dylib_ext = self.k1.plan.config.target.platform().dylib_ext();
         let ptr_type = self.builtin_types.ptr;
         let entry_type = self.ctx.struct_type(&[ptr_type.into(), ptr_type.into()], false);
         for ns_id in reload_nss {
@@ -1565,15 +1569,116 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         global
     }
 
-    fn crash_unloaded_fn_value(&mut self) -> CgResult<FunctionValue<'ctx>> {
-        let Some(not_loaded_fn_id) =
-            self.k1.ast.idents.lookup("crash-unloaded-ns").and_then(|ident| {
-                self.k1.scopes.find_function_local(self.k1.scopes.k1_scope_id, ident)
-            })
-        else {
-            cgbail!(SpanId::NONE, "core is missing fn k1/crash-unloaded-ns");
+    fn find_k1_ns_fn(k1: &TypedProgram, name: &str) -> Option<FunctionId> {
+        let ident = k1.ast.idents.lookup(name)?;
+        k1.scopes.find_function_local(k1.scopes.k1_scope_id, ident)
+    }
+
+    fn k1_ns_fn_value(&mut self, name: &str) -> CgResult<FunctionValue<'ctx>> {
+        let Some(function_id) = Cg::find_k1_ns_fn(self.k1, name) else {
+            cgbail!(SpanId::NONE, "core is missing fn k1/{name}");
         };
-        self.declare_llvm_function(not_loaded_fn_id)
+        self.declare_llvm_function(function_id)
+    }
+
+    fn build_call(
+        &self,
+        callee: FunctionValue<'ctx>,
+        args: &[BasicMetadataValueEnum<'ctx>],
+    ) -> CallSiteValue<'ctx> {
+        let call = self.builder.build_call(callee, args, "").unwrap();
+        call.set_call_convention(callee.get_call_conventions());
+        call
+    }
+
+    fn int_div_helper(
+        &mut self,
+        int_type: IntType<'ctx>,
+        signed: bool,
+        rem: bool,
+    ) -> CgResult<FunctionValue<'ctx>> {
+        let name = format!(
+            "__k1_{}{}_i{}",
+            if signed { "s" } else { "u" },
+            if rem { "rem" } else { "div" },
+            int_type.get_bit_width()
+        );
+        if let Some(f) = self.llvm_module.get_function(&name) {
+            return Ok(f);
+        }
+        let crash_fn = self.k1_ns_fn_value("crash-div")?;
+        let fn_type = int_type.fn_type(&[int_type.into(), int_type.into()], false);
+        let f = self.llvm_module.add_function(&name, fn_type, Some(LlvmLinkage::Private));
+        f.add_attribute(AttributeLoc::Function, self.make_enum_attribute("alwaysinline", 0));
+        f.add_attribute(AttributeLoc::Function, self.make_enum_attribute("nounwind", 0));
+        let saved_block = self.builder.get_insert_block();
+        let saved_loc = self.builder.get_current_debug_location();
+        self.builder.unset_current_debug_location();
+
+        let entry_block = self.ctx.append_basic_block(f, "entry");
+        self.builder.position_at_end(entry_block);
+        let lhs = f.get_nth_param(0).unwrap().into_int_value();
+        let rhs = f.get_nth_param(1).unwrap().into_int_value();
+        let is_zero = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, rhs, int_type.const_zero(), "div_zero")
+            .unwrap();
+        let bad = if signed {
+            let min = int_type.const_int(1u64 << (int_type.get_bit_width() - 1), false);
+            let is_neg_one = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, rhs, int_type.const_all_ones(), "")
+                .unwrap();
+            let is_min = self.builder.build_int_compare(IntPredicate::EQ, lhs, min, "").unwrap();
+            let overflow = self.builder.build_and(is_neg_one, is_min, "div_overflow").unwrap();
+            self.builder.build_or(is_zero, overflow, "div_bad").unwrap()
+        } else {
+            is_zero
+        };
+        let crash_block = self.ctx.append_basic_block(f, "crash");
+        let ok_block = self.ctx.append_basic_block(f, "ok");
+        self.builder.build_conditional_branch(bad, crash_block, ok_block).unwrap();
+
+        self.builder.position_at_end(crash_block);
+        let is_zero_bool = self.i1_to_bool(is_zero, "");
+        self.build_call(crash_fn, &[is_zero_bool.into()]);
+        self.builder.build_unreachable().unwrap();
+
+        self.builder.position_at_end(ok_block);
+        let result = match (signed, rem) {
+            (false, false) => self.builder.build_int_unsigned_div(lhs, rhs, "").unwrap(),
+            (true, false) => self.builder.build_int_signed_div(lhs, rhs, "").unwrap(),
+            (false, true) => self.builder.build_int_unsigned_rem(lhs, rhs, "").unwrap(),
+            (true, true) => self.builder.build_int_signed_rem(lhs, rhs, "").unwrap(),
+        };
+        self.builder.build_return(Some(&result)).unwrap();
+
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        if let Some(loc) = saved_loc {
+            self.builder.set_current_debug_location(loc);
+        }
+        Ok(f)
+    }
+
+    fn build_checked_int_div(
+        &mut self,
+        lhs: IntValue<'ctx>,
+        rhs: IntValue<'ctx>,
+        signed: bool,
+        rem: bool,
+    ) -> CgResult<IntValue<'ctx>> {
+        let helper = self.int_div_helper(lhs.get_type(), signed, rem)?;
+        let call = self.build_call(helper, &[lhs.into(), rhs.into()]);
+        Ok(call.try_as_basic_value().basic().unwrap().into_int_value())
+    }
+
+    fn build_shift_count(&self, count: IntValue<'ctx>, subject: IntValue<'ctx>) -> IntValue<'ctx> {
+        let count = self.cast_int_to_match(count, subject, "shift_magnitude_adjust");
+        let width = subject.get_type().get_bit_width() as u64;
+        let mask = subject.get_type().const_int(width - 1, false);
+        self.builder.build_and(count, mask, "shift_count").unwrap()
     }
 
     /// `ptr __k1_reload_global_load(slot, ns-name, global-name)`: acquire-load
@@ -1584,7 +1689,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         if let Some(f) = self.llvm_module.get_function("__k1_reload_global_load") {
             return Ok(f);
         }
-        let crash_fn = self.crash_unloaded_fn_value()?;
+        let crash_fn = self.k1_ns_fn_value("crash-unloaded-ns")?;
         let ptr_type = self.builtin_types.ptr;
         let fn_type = ptr_type.fn_type(&[ptr_type.into(), ptr_type.into(), ptr_type.into()], false);
         let f = self.llvm_module.add_function(
@@ -1613,10 +1718,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.builder.position_at_end(unloaded_block);
         let ns_name_param = f.get_nth_param(1).unwrap();
         let global_name_param = f.get_nth_param(2).unwrap();
-        self.builder
-            .build_call(crash_fn, &[ns_name_param.into(), global_name_param.into()], "")
-            .unwrap()
-            .set_call_convention(crash_fn.get_call_conventions());
+        self.build_call(crash_fn, &[ns_name_param.into(), global_name_param.into()]);
         self.builder.build_unreachable().unwrap();
 
         self.builder.position_at_end(ok_block);
@@ -1644,14 +1746,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             self.k1.ident_str(self.k1.namespaces.get(global.reload_ns.unwrap()).name).to_string();
         let ns_cstr = self.cstring_constant(&ns_name);
         let name_cstr = self.cstring_constant(&global_name);
-        let call = self
-            .builder
-            .build_call(
-                helper,
-                &[slot.as_pointer_value().into(), ns_cstr.into(), name_cstr.into()],
-                "reload_global",
-            )
-            .unwrap();
+        let call = self.build_call(
+            helper,
+            &[slot.as_pointer_value().into(), ns_cstr.into(), name_cstr.into()],
+        );
         match call.try_as_basic_value() {
             ValueKind::Basic(v) => Ok(v),
             ValueKind::Instruction(_) => unreachable!("__k1_reload_global_load returns ptr"),
@@ -1709,13 +1807,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.builder.build_conditional_branch(is_null, unloaded_block, call_block).unwrap();
 
         self.builder.position_at_end(unloaded_block);
-        let not_loaded_fv = self.crash_unloaded_fn_value()?;
+        let not_loaded_fv = self.k1_ns_fn_value("crash-unloaded-ns")?;
         let ns_cstr = self.cstring_constant(&ns_name);
         let fn_cstr = self.cstring_constant(&fn_name);
-        self.builder
-            .build_call(not_loaded_fv, &[ns_cstr.into(), fn_cstr.into()], "")
-            .unwrap()
-            .set_call_convention(not_loaded_fv.get_call_conventions());
+        self.build_call(not_loaded_fv, &[ns_cstr.into(), fn_cstr.into()]);
         self.builder.build_unreachable().unwrap();
 
         self.builder.position_at_end(call_block);
@@ -1756,8 +1851,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
         let global = self.k1.globals.get(global_id).clone();
 
-        let name = self.k1.global_link_symbol(&global);
-
         if let Some(reload_ns) = global.reload_ns {
             if self.kind != CgKind::ReloadDylib(reload_ns) {
                 cgbail!(
@@ -1766,31 +1859,22 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                      accesses must go through the addr slot"
                 );
             }
-            let initial_static_value_id = global.initial_value.as_value().unwrap();
-            let initializer_basic_value =
-                self.codegen_static_value_as_const(initial_static_value_id, 0)?;
-            let layout = self.k1.get_layout_computed(global.type_id).unwrap();
-            let symbol = self.make_reloadable_global_symbol(global_id);
-            let llvm_global = self.make_global_from_value(
-                initializer_basic_value,
-                layout.align,
-                &symbol,
-                global.is_constant,
-                LlvmLinkage::External,
-                false,
-            );
-            self.globals.insert(global_id, llvm_global);
-            return Ok(llvm_global);
         }
+        let owned_here = global.reload_ns.is_some();
+        let name = if owned_here {
+            self.make_reloadable_global_symbol(global_id)
+        } else {
+            self.k1.global_link_symbol(&global)
+        };
 
         let is_dylib = matches!(self.kind, CgKind::ReloadDylib(_));
         let is_private = !global.is_exported && !self.has_reloadable_fns;
         let shared = is_private && global.is_constant;
         let defined_elsewhere = !shared && self.multi_unit() && !self.is_first_unit();
 
-        // If we're a reloadable dylib, all globals get treated like externals usually do
-        // we link to them and expect to find them in the host
-        let llvm_global = if global.is_external || is_dylib || defined_elsewhere {
+        // A reloadable dylib defines only the globals of its own ns; every other
+        // global is a declaration bound to the host's copy at dlopen
+        let llvm_global = if global.is_external || (is_dylib && !owned_here) || defined_elsewhere {
             let PhysicalTypeResult::Yes(global_pt) =
                 self.k1.get_physical_type_computed(global.type_id)
             else {
@@ -1800,7 +1884,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             let g = self.make_external_global(basic_type.rich_type(), &name, global.is_constant);
             if global.is_tls && self.target_supports_tls() {
                 g.set_thread_local(true);
-                let mode = if defined_elsewhere && self.k1.program_settings.executable {
+                let mode = if defined_elsewhere && self.k1.plan.is_executable() {
                     ThreadLocalMode::LocalExecTLSModel
                 } else {
                     ThreadLocalMode::GeneralDynamicTLSModel
@@ -1981,7 +2065,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
         let di_type = debug
             .debug_builder
-            .create_basic_type(name, layout.size_bits() as u64, encoding, 0)
+            .create_basic_type(name, layout.size_bits(), encoding, 0)
             .unwrap()
             .as_type();
         LlvmScalarType { pt: PhysicalType::scalar(st), basic_type, layout, di_type }
@@ -2021,7 +2105,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                     field_name,
                                     self.debug.current_file(),
                                     line_number,
-                                    cg_type.rich_repr_layout().size_bits() as u64,
+                                    cg_type.rich_repr_layout().size_bits(),
                                     cg_type.rich_repr_layout().align_bits(),
                                     phys_field.offset as u64,
                                     0,
@@ -2085,16 +2169,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             .debug_builder
                             .create_array_type(
                                 element_type.debug_type(),
-                                array_layout.size_bits() as u64,
+                                array_layout.size_bits(),
                                 array_layout.align_bits(),
                                 &[],
                             )
                             .as_type();
                         CgType::ArrayType(CgArrayType {
                             pt,
-                            count: len,
                             array_type,
-                            element_type: self.mem.push_h(element_type),
                             di_type,
                             layout: array_layout,
                         })
@@ -2112,28 +2194,24 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             .debug_builder
                             .create_array_type(
                                 element_type.debug_type(),
-                                vector_layout.size_bits() as u64,
+                                vector_layout.size_bits(),
                                 vector_layout.align_bits(),
                                 &[],
                             )
                             .as_type();
                         CgType::Vector(CgVectorType {
                             pt,
-                            count: len,
                             vector_type,
-                            element_type: self.mem.push_h(element_type),
                             di_type,
                             layout: vector_layout,
                         })
                     }
                     AggType::Union { members } => {
-                        let mut cg_members = self.mem.new_list(members.len());
                         let mut di_members = self.tmp.new_list(members.len());
                         let mut basic_type_members = self.tmp.new_list(members.len());
                         for m in self.k1.mem.getn(members) {
                             let cg_member = self.codegen_type(m.ty);
                             basic_type_members.push(cg_member.rich_type());
-                            cg_members.push(cg_member);
                             di_members.push(cg_member.debug_type());
                         }
                         let span = self.debug.current_span();
@@ -2146,7 +2224,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 &type_name,
                                 self.debug.current_file(),
                                 line_number,
-                                agg_layout.size_bits() as u64,
+                                agg_layout.size_bits(),
                                 agg_layout.align_bits(),
                                 0,
                                 &di_members,
@@ -2154,14 +2232,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 &type_name,
                             )
                             .as_type();
-                        let aligned_opaque_repr = self.codegen_opaque_repr(agg_layout);
-                        CgType::Union(CgUnionType {
-                            pt,
-                            aligned_opaque_repr,
-                            members: cg_members.to_slice(),
-                            layout: agg_layout,
-                            di_type,
-                        })
+
+                        let aligned_repr = self.codegen_union_repr(basic_type_members, agg_layout);
+                        CgType::Union(CgUnionType { pt, aligned_repr, layout: agg_layout, di_type })
                     }
                     AggType::Sum(e) => {
                         let struct_repr_cg_type =
@@ -2183,7 +2256,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 &type_name,
                                 self.debug.current_file(),
                                 line_number,
-                                agg_layout.size_bits() as u64,
+                                agg_layout.size_bits(),
                                 agg_layout.align_bits(),
                                 0,
                                 &[],
@@ -2196,8 +2269,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         // arguably it shouldn't even be a Sum since they share so much
                         CgType::Union(CgUnionType {
                             pt,
-                            aligned_opaque_repr,
-                            members: MSlice::empty(),
+                            aligned_repr: aligned_opaque_repr.as_basic_type_enum(),
                             layout,
                             di_type,
                         })
@@ -2237,8 +2309,30 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
     }
 
+    fn codegen_union_repr(
+        &self,
+        members: List<BasicTypeEnum<'ctx>, CgTmp>,
+        layout: Layout,
+    ) -> BasicTypeEnum<'ctx> {
+        // TODO: If we classify the union's members instead, we could produce a more
+        //       solid representation of other unions as well, like
+        //       union { a: i64, b: i64, c: i64 }, or even maybe a(i64), b(f64) if we
+        //       decided it was helpful to classify that as integer
+        //
+        //       And then obviously once you start thinking about aggregates
+        //       in the payloads, you're actually doing some sort of
+        //       'collect_leaf_types' then element-wise classify stuff.
+        //       Maybe this is why clang produces lots of different types for
+        //       different unions. Probably good place to start testing
+        if members.len() == 1 {
+            *members.first().unwrap()
+        } else {
+            self.codegen_opaque_repr(layout).as_basic_type_enum()
+        }
+    }
+
     fn codegen_opaque_repr(&self, expected_layout: Layout) -> StructType<'ctx> {
-        // For union types, we generate a 2-field struct to trick LLVM.
+        // For union types (and actual opaques), we generate a 2-field struct to trick LLVM.
 
         // Field 1 is a synthetic integer wide enough to force the alignment of the
         // struct, and Field 2 is an array of bytes, ensuring NO padding at all,
@@ -2290,12 +2384,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn make_cg_function_type(
         &mut self,
         phys_fn_type: &PhysicalFunctionType,
+        abi: AbiMode,
     ) -> CgResult<CgFunctionType<'ctx>> {
         let param_types = phys_fn_type.params;
         let return_type = phys_fn_type.return_type;
         let _diverges = phys_fn_type.diverges;
         let return_logical_cg_type = self.codegen_type(phys_fn_type.return_type);
-        let return_type_abi_mapping = self.get_abi_mapping_for_type(return_type, true);
+        let return_type_abi_mapping = self.get_abi_mapping_for_type(return_type, true, abi);
 
         // If a function returns a big (typically > 2 words) struct, its actually
         // 'returned' in the first parameter, which is a pointer
@@ -2309,6 +2404,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             AbiParamMapping::StructByHfa { .. } => false,
             AbiParamMapping::StructByIntPairArray => false,
             AbiParamMapping::BigStructByPtrToCopy { .. } => true,
+            AbiParamMapping::BigStructByPtr => false,
         };
 
         let physical_return_mapped_type = if is_sret {
@@ -2337,7 +2433,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         for param in self.k1.ir.mem.getn(param_types) {
             let param_cg_type = self.codegen_type(param.pt);
-            let abi_mapping = self.get_abi_mapping_for_type(param.pt, false);
+            let abi_mapping = self.get_abi_mapping_for_type(param.pt, false, abi);
             param_abi_mappings.push(abi_mapping);
             param_llvm_types.push(param_cg_type);
             let mapped_type = self.mapped_abi_type_param(param.pt, abi_mapping);
@@ -2453,7 +2549,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let array_type = self.ctx.i64_type().array_type(2).as_basic_type_enum();
                 array_type
             }
-            AbiParamMapping::BigStructByPtrToCopy { .. } => {
+            AbiParamMapping::BigStructByPtrToCopy { .. } | AbiParamMapping::BigStructByPtr => {
                 let ptr_type = self.builtin_types.ptr.as_basic_type_enum();
                 ptr_type
             }
@@ -2512,7 +2608,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let abi_align = self.llvm_machine.get_target_data().get_abi_alignment(&abi_ty);
                 let align = abi_align.max(cg_ty.rich_repr_layout().align);
                 dst_ptr.as_instruction().unwrap().set_alignment(align).unwrap();
-                if self.k1.config.filc && self.pt_has_pointer_in_union(cg_ty.pt()) {
+                if self.k1.plan.config.filc && self.pt_has_pointer_in_union(cg_ty.pt()) {
                     self.build_zhas_union_marker(dst_ptr);
                 }
                 self.builder.build_store(dst_ptr, abi_value).unwrap();
@@ -2524,7 +2620,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.store_at_k1_align(dst_ptr, abi_value, cg_ty);
                 dst_ptr.as_basic_value_enum()
             }
-            AbiParamMapping::BigStructByPtrToCopy { .. } => {
+            AbiParamMapping::BigStructByPtrToCopy { .. } | AbiParamMapping::BigStructByPtr => {
                 // Our canonical representation of all aggregates is an llvm ptr
                 // And this abi route represents them as a ptr, so nothing to do
                 abi_value
@@ -2545,6 +2641,62 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Some(value)
             }
         }
+    }
+
+    fn branch_to_return_block(&mut self, abi_value: BasicValueEnum<'ctx>) {
+        let from_block = self.builder.get_insert_block().unwrap();
+        let mut parts: SV4<BasicValueEnum<'ctx>> = smallvec::smallvec![];
+        match abi_value {
+            BasicValueEnum::StructValue(s) => {
+                for i in 0..s.get_type().count_fields() {
+                    parts.push(self.builder.build_extract_value(s, i, "").unwrap());
+                }
+            }
+            BasicValueEnum::ArrayValue(a) => {
+                for i in 0..a.get_type().len() {
+                    parts.push(self.builder.build_extract_value(a, i, "").unwrap());
+                }
+            }
+            other => parts.push(other),
+        }
+        if self.get_current_function().return_block.is_none() {
+            let block =
+                self.ctx.append_basic_block(self.get_current_function().function_value, "ret");
+            self.builder.position_at_end(block);
+            let mut phis: SV4<PhiValue<'ctx>> = smallvec::smallvec![];
+            for part in &parts {
+                debug_assert!(!part.is_struct_value() && !part.is_array_value());
+                phis.push(self.builder.build_phi(part.get_type(), "").unwrap());
+            }
+            self.builder.position_at_end(from_block);
+            self.get_current_function_mut().return_block = Some((block, phis));
+        }
+        let (block, phis) = self.get_current_function().return_block.as_ref().unwrap();
+        for (phi, part) in phis.iter().zip(parts.iter()) {
+            phi.add_incoming(&[(part, from_block)]);
+        }
+        self.builder.build_unconditional_branch(*block).unwrap();
+    }
+
+    fn codegen_return_block(&mut self, function_span: SpanId) {
+        let Some((block, phis)) = self.get_current_function_mut().return_block.take() else {
+            return;
+        };
+        self.builder.position_at_end(block);
+        self.set_debug_location_from_span(function_span);
+        let abi_type = self.get_current_function().function_value.get_type().get_return_type();
+        let mut agg = match abi_type {
+            Some(BasicTypeEnum::StructType(st)) => st.get_poison().as_aggregate_value_enum(),
+            Some(BasicTypeEnum::ArrayType(at)) => at.get_poison().as_aggregate_value_enum(),
+            _ => {
+                self.builder.build_return(Some(&phis[0].as_basic_value())).unwrap();
+                return;
+            }
+        };
+        for (i, phi) in phis.iter().enumerate() {
+            agg = self.builder.build_insert_value(agg, phi.as_basic_value(), i as u32, "").unwrap();
+        }
+        self.builder.build_return(Some(&agg)).unwrap();
     }
 
     /// Takes a canonical k1 value to pass to or return from a function and converts it
@@ -2680,6 +2832,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     }
                 }
             }
+            AbiParamMapping::BigStructByPtr => k1_value,
         }
     }
 
@@ -2738,9 +2891,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.llvm_module.add_function(&name, fn_type, None)
             }
         };
-        self.builder
-            .build_call(function, &[input.into()], "")
-            .unwrap()
+        self.build_call(function, &[input.into()])
             .try_as_basic_value()
             .basic()
             .unwrap()
@@ -2760,7 +2911,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
         };
         let size = self.ctx.i64_type().const_int(size_bytes, false);
-        self.builder.build_call(function, &[size.into(), ptr.into()], "").unwrap();
+        self.build_call(function, &[size.into(), ptr.into()]);
     }
 
     fn memcpy_layout(
@@ -2801,13 +2952,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn get_llvm_block(&self, block_id: BlockId) -> CgResult<BasicBlock<'ctx>> {
         // We skip our 'prelude' block which exists only in the llvm ir
-        match self.get_current_function().blocks.get(&block_id) {
-            Some(bb) => Ok(*bb),
-            None => Err(cgerr!(
-                self.debug.current_span(),
-                "Failed to get block: b{}",
-                block_id.raw_index()
-            )),
+        match self.cur_blocks.get(block_id) {
+            Some(bb) => Ok(bb),
+            None => Err(cgerr!(self.debug.current_span(), "Failed to get block: b{}", block_id)),
         }
     }
 
@@ -2855,7 +3002,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn build_k1_alloca(&mut self, ty: &CgType<'ctx>, name: &str) -> PointerValue<'ctx> {
         let ptr = self.build_alloca(ty.rich_type(), name);
         ptr.as_instruction().unwrap().set_alignment(ty.rich_repr_layout().align).unwrap();
-        if self.k1.config.filc && self.pt_has_pointer_in_union(ty.pt()) {
+        if self.k1.plan.config.filc && self.pt_has_pointer_in_union(ty.pt()) {
             self.build_zhas_union_marker(ptr);
         }
         ptr
@@ -2871,7 +3018,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             let fn_type = self.ctx.void_type().fn_type(&[self.builtin_types.ptr.into()], false);
             self.llvm_module.add_function("zhas_union", fn_type, Some(LlvmLinkage::External))
         });
-        self.builder.build_call(zhas_union, &[alloca.into()], "").unwrap();
+        self.build_call(zhas_union, &[alloca.into()]);
     }
 
     fn pt_has_pointer_in_union(&self, pt: PhysicalType) -> bool {
@@ -2952,11 +3099,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn codegen_function_call(
         &mut self,
-        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
         call_id: ir::IrCallId,
         span: SpanId,
     ) -> CgResult<Option<BasicValueEnum<'ctx>>> {
-        let call = self.k1.ir.calls.get(call_id);
+        let call = self.cur_unit.call(call_id);
         let callee = call.callee;
         let call_args = call.args;
         let call_dst = call.dst;
@@ -2985,7 +3132,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             IrCallee::Indirect(fn_type, value) => {
                 let callee_value = self.resolve_value(inst_mappings, value)?.into_pointer_value();
-                let cg_fn_type = self.make_cg_function_type(&fn_type)?;
+                let cg_fn_type = self.make_cg_function_type(&fn_type, AbiMode::Native)?;
                 (CallKind::Indirect(callee_value), cg_fn_type)
             }
         };
@@ -3015,7 +3162,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         let mut byval_args = self.tmp.new_list(0);
         let mut caller_copies = self.tmp.new_list(0);
-        for (index, arg_ir_value) in self.k1.ir.mem.getn(call_args).iter().enumerate() {
+        for (index, arg_ir_value) in self.cur_unit.args(call_args).iter().enumerate() {
             let arg_value = self.resolve_value(inst_mappings, *arg_ir_value)?;
 
             let param_k1_ty = *self.mem.get_nth_lt(cg_fn_type.param_k1_types, index);
@@ -3048,9 +3195,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let function_value = self.declare_llvm_function(function_id)?;
                 self.set_debug_location_from_span(span);
 
-                let call = self.builder.build_call(function_value, &args, "").unwrap();
-                call.set_call_convention(function_value.get_call_conventions());
-                call
+                self.build_call(function_value, &args)
             }
             CallKind::Indirect(fn_ptr) => {
                 self.set_debug_location_from_span(span);
@@ -3113,10 +3258,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     /// Constant bool args fold to constant i1, satisfying immarg parameters
     fn codegen_llvm_intrinsic_call(
         &mut self,
-        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
         name: StringId,
         function_id: FunctionId,
-        call_args: MSlice<ir::Value, ProgramIr>,
+        call_args: ir::IrRange<ir::Value>,
         call_dst: Option<ir::Value>,
         span: SpanId,
     ) -> CgResult<Option<BasicValueEnum<'ctx>>> {
@@ -3174,7 +3319,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
 
         let mut args: SV8<BasicMetadataValueEnum<'ctx>> = smallvec::smallvec![];
-        for (index, arg_ir_value) in self.k1.ir.mem.getn(call_args).iter().enumerate() {
+        for (index, arg_ir_value) in self.cur_unit.args(call_args).iter().enumerate() {
             let arg_value = self.resolve_value(inst_mappings, *arg_ir_value)?;
             let param_type_id = params[index].type_id;
             let marshalled: BasicValueEnum<'ctx> = match self.k1.types.get(param_type_id) {
@@ -3203,7 +3348,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
 
         self.set_debug_location_from_span(span);
-        let callsite = self.builder.build_call(function_value, &args, "").unwrap();
+        let callsite = self.build_call(function_value, &args);
         match callsite.try_as_basic_value() {
             ValueKind::Basic(returned) => {
                 let canonical = match self.k1.types.get(return_type_id) {
@@ -3321,8 +3466,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         )
                     }
                 };
-                let call =
-                    self.builder.build_call(memcmp_fv, &[p1_arg, p2_arg, size_arg], "").unwrap();
+                let call = self.build_call(memcmp_fv, &[p1_arg, p2_arg, size_arg]);
                 let result =
                     call.try_as_basic_value().expect_basic("memcmp return").into_int_value();
                 let is_zero = self
@@ -3354,7 +3498,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                 let else_block = self.append_basic_block("miss");
                 self.builder.position_at_end(else_block);
-                // TODO: Proper crash
+                let crash_fn = self.k1_ns_fn_value("crash-missing-type-info")?;
+                self.build_call(crash_fn, &[type_id_arg.into()]);
                 self.builder.build_unreachable().unwrap();
 
                 let finish_block = self.append_basic_block("finish");
@@ -3406,44 +3551,36 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn codegen_block(
         &mut self,
-        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
         block_id: BlockId,
     ) -> CgResult<BasicBlock<'ctx>> {
-        let block = self.k1.ir.mem.get(block_id);
         let llvm_block = self.get_llvm_block(block_id)?;
         self.builder.position_at_end(llvm_block);
-        for inst in self.k1.ir.mem.dlist_iter(block.data.instrs) {
-            self.codegen_inst(inst_mappings, *inst)?;
+        for inst_id in self.cur_unit.block_insts(block_id) {
+            self.codegen_inst(inst_mappings, inst_id)?;
         }
         Ok(llvm_block)
     }
 
     fn resolve_value(
         &mut self,
-        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
         value: ir::Value,
     ) -> CgResult<BasicValueEnum<'ctx>> {
         //eprintln!("codegen_value {}", value);
         match value {
-            ir::Value::Inst(inst_id) => match inst_mappings.get(&inst_id) {
-                Some(v) => Ok(*v),
+            ir::Value::Inst(inst_id) => match inst_mappings.get(inst_id) {
+                Some(v) => Ok(v),
                 None => Err(cgerr!(
                     self.debug.current_span(),
                     "codegen llvm has no value for this instruction: i{} {}",
                     inst_id.as_u32(),
-                    ir::inst_to_string(self.k1, inst_id)
+                    ir::inst_to_string(self.k1, &self.cur_unit, inst_id)
                 )),
             },
             ir::Value::GlobalAddr { id, .. } => {
-                let reload_ns = self.k1.globals.get(id).reload_ns;
-                if let Some(reload_ns) = reload_ns
-                    && self.kind != CgKind::ReloadDylib(reload_ns)
-                {
-                    // Not our storage: the current version's copy, via the patched slot
-                    return self.codegen_reload_global_addr(id);
-                }
-                let global_value = self.codegen_global(id)?;
-                Ok(global_value.as_pointer_value().as_basic_value_enum())
+                debug_assert!(self.k1.globals.get(id).reload_ns.is_none());
+                Ok(self.codegen_global(id)?.as_pointer_value().as_basic_value_enum())
             }
             ir::Value::StaticValue { id, .. } => self.codegen_static_value_canonical(id),
             ir::Value::FunctionAddr(function_id) => {
@@ -3481,11 +3618,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         self.ctx.i64_type().const_int(data as i32 as i64 as u64, true).into()
                     }
                     ScalarType::F32 => {
-                        self.ctx.f32_type().const_float(f32::from_bits(data) as f64).into()
+                        llvm_float_constant(self.ctx, TypedFloatValue::F32(f32::from_bits(data)))
+                            .into()
                     }
-                    ScalarType::F64 => {
-                        self.ctx.f64_type().const_float(f32::from_bits(data) as f64).into()
-                    }
+                    ScalarType::F64 => llvm_float_constant(
+                        self.ctx,
+                        TypedFloatValue::F64(f32::from_bits(data) as f64),
+                    )
+                    .into(),
                     ScalarType::Pointer => {
                         if data == 0 {
                             self.builtin_types.ptr.const_zero().into()
@@ -3514,7 +3654,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn vec_load(
         &mut self,
         vop: &ir::VecOpData,
-        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
         addr: ir::Value,
     ) -> CgResult<inkwell::values::VectorValue<'ctx>> {
         let ptr = self.resolve_value(inst_mappings, addr)?.into_pointer_value();
@@ -3527,7 +3667,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn vec_store(
         &mut self,
         vop: &ir::VecOpData,
-        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
         value: inkwell::values::VectorValue<'ctx>,
     ) -> CgResult<()> {
         let dst_ptr = self.resolve_value(inst_mappings, vop.dst)?.into_pointer_value();
@@ -3543,7 +3683,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     /// Returns the scalar result for value-producing ops (to-mask), None otherwise
     fn codegen_vec_op(
         &mut self,
-        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
         vop: ir::VecOpData,
     ) -> CgResult<Option<BasicValueEnum<'ctx>>> {
         use ir::VecOpIr;
@@ -3610,6 +3750,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let count = self.resolve_value(inst_mappings, vop.rhs)?.into_int_value();
                 let elem_int_type = l.get_type().get_element_type().into_int_type();
                 let count = self.builder.build_int_cast(count, elem_int_type, "").unwrap();
+                let count_mask =
+                    elem_int_type.const_int(elem_int_type.get_bit_width() as u64 - 1, false);
+                let count = self.builder.build_and(count, count_mask, "shift_count").unwrap();
                 // Splat the uniform count across lanes
                 let i32t = self.ctx.i32_type();
                 let undef = l.get_type().get_undef();
@@ -3639,7 +3782,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 } else {
                     self.builder.build_int_compare(IntPredicate::EQ, l, r, "").unwrap()
                 };
-                let elem_bits = vop.elem.get_layout().size_bits();
+                let elem_bits = vop.elem.get_layout().size_bits() as u32;
                 let int_lane_vec = self
                     .ctx
                     .custom_width_int_type(std::num::NonZeroU32::new(elem_bits).unwrap())
@@ -3660,7 +3803,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             VecOpIr::ToMask => {
                 let l = self.vec_load(&vop, inst_mappings, vop.lhs)?;
-                let elem_bits = vop.elem.get_layout().size_bits();
+                let elem_bits = vop.elem.get_layout().size_bits() as u32;
                 let int_lane_vec = self
                     .ctx
                     .custom_width_int_type(std::num::NonZeroU32::new(elem_bits).unwrap())
@@ -3693,30 +3836,37 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn codegen_inst(
         &mut self,
-        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
         inst_id: InstId,
     ) -> CgResult<()> {
-        let ir = &self.k1.ir;
-        let span = *ir.sources.get(inst_id);
+        let span = self.cur_unit.span(inst_id);
         self.set_debug_location_from_span(span);
-        // eprintln!("codegen_inst i{} {}", inst_id.as_u32(), ir::inst_to_string(self.k1, inst_id));
-        let inst = *ir.instrs.get(inst_id);
+        let inst = *self.cur_unit.inst(inst_id);
         match inst {
             Inst::Data(data_inst) => {
                 let value: BasicValueEnum<'ctx> = match data_inst {
                     ir::DataInst::U64(u) => self.ctx.i64_type().const_int(u, false).into(),
                     ir::DataInst::I64(i) => self.ctx.i64_type().const_int(i as u64, true).into(),
-                    ir::DataInst::Float(f) => match f {
-                        TypedFloatValue::F32(f32) => {
-                            self.ctx.f32_type().const_float(f32 as f64).into()
-                        }
-                        TypedFloatValue::F64(f64) => self.ctx.f64_type().const_float(f64).into(),
-                    },
+                    ir::DataInst::F64(f) => {
+                        llvm_float_constant(self.ctx, TypedFloatValue::F64(f)).into()
+                    }
                 };
                 inst_mappings.insert(inst_id, value.as_basic_value_enum());
                 Ok(())
             }
-            Inst::Alloca { t, returned, .. } => {
+            Inst::ReloadGlobalAddr { id, .. } => {
+                let reload_ns = self.k1.globals.get(id).reload_ns;
+                let value = if let Some(reload_ns) = reload_ns
+                    && self.kind != CgKind::ReloadDylib(reload_ns)
+                {
+                    self.codegen_reload_global_addr(id)?
+                } else {
+                    self.codegen_global(id)?.as_pointer_value().as_basic_value_enum()
+                };
+                inst_mappings.insert(inst_id, value);
+                Ok(())
+            }
+            Inst::Alloca { t, returned, debug, .. } => {
                 // task(debug info): Eventually we could supplement with the type_id from the
                 // VariableDebugInfo here in order to differentiate between byte/char/bool
                 let cg_type = self.codegen_type(t);
@@ -3741,8 +3891,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 };
                 inst_mappings.insert(inst_id, alloca_ptr.as_basic_value_enum());
 
-                let ir_debug_info = self.k1.ir.debug_info.get(inst_id);
-                if let Some(var_info) = ir_debug_info.variable_info
+                if let Some(var_info) = debug
                     && !var_info.user_hidden
                     && !self.debug.line_tables_only
                 {
@@ -3875,7 +4024,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::AtomicCmpxchg { id } => {
-                let cas = *self.k1.ir.cmpxchgs.get(id);
+                let cas = *self.cur_unit.cmpxchg(id);
                 let dst_pointer = self.resolve_value(inst_mappings, cas.dst)?.into_pointer_value();
                 let expected = self.resolve_value(inst_mappings, cas.expected)?;
                 let desired = self.resolve_value(inst_mappings, cas.desired)?;
@@ -3908,7 +4057,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::VecOp { id } => {
-                let vop = *self.k1.ir.vec_ops.get(id);
+                let vop = *self.cur_unit.vec_op(id);
                 if let Some(result) = self.codegen_vec_op(inst_mappings, vop)? {
                     inst_mappings.insert(inst_id, result);
                 }
@@ -3991,7 +4140,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let default_block = self.get_llvm_block(default)?;
                 let mut llvm_cases: Vec<(IntValue<'ctx>, BasicBlock<'ctx>)> =
                     Vec::with_capacity(cases.len() as usize);
-                for case in self.k1.ir.mem.getn(cases) {
+                for case in self.cur_unit.switch_cases(cases) {
                     let case_value = int_type.const_int(case.value, false);
                     llvm_cases.push((case_value, self.get_llvm_block(case.target)?));
                 }
@@ -4008,10 +4157,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let phi_block = self.builder.get_insert_block().unwrap();
                 let debug_locn = self.builder.get_current_debug_location();
 
-                for incoming in self.k1.ir.mem.getn(incomings) {
-                    let Some(block) =
-                        self.get_current_function().blocks.get(&incoming.from).copied()
-                    else {
+                for incoming in self.cur_unit.phi_cases(incomings) {
+                    let Some(block) = self.cur_blocks.get(incoming.from) else {
                         continue;
                     };
                     // Resolve in the edge's source block: anything it emits (e.g. a
@@ -4061,8 +4208,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         ret_value,
                     );
                     match ret_value_marshalled {
-                        None => self.builder.build_return(None).unwrap(),
-                        Some(v) => self.builder.build_return(Some(&v)).unwrap(),
+                        None => {
+                            self.builder.build_return(None).unwrap();
+                        }
+                        Some(v) => self.branch_to_return_block(v),
                     };
                 }
                 Ok(())
@@ -4195,7 +4344,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Inst::IntAdd { lhs, rhs, .. } => {
                 let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
                 let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                // Should overflow trap? idk self.builder.build_int_nsw_add
                 let sum = self.builder.build_int_add(lhs_value, rhs_value, "").unwrap();
                 inst_mappings.insert(inst_id, sum.as_basic_value_enum());
                 Ok(())
@@ -4217,35 +4365,28 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Inst::IntDivUnsigned { lhs, rhs, .. } => {
                 let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
                 let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let div = self.builder.build_int_unsigned_div(lhs_value, rhs_value, "").unwrap();
+                let div = self.build_checked_int_div(lhs_value, rhs_value, false, false)?;
                 inst_mappings.insert(inst_id, div.as_basic_value_enum());
                 Ok(())
             }
-            // MIN / -1 wraps like the VM; sdiv traps on x86 and wasm, so it never sees -1
             Inst::IntDivSigned { lhs, rhs, .. } => {
                 let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
                 let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let is_neg_one = self.divisor_is_neg_one(rhs_value);
-                let safe_rhs = self.divisor_or_one(is_neg_one, rhs_value);
-                let div = self.builder.build_int_signed_div(lhs_value, safe_rhs, "").unwrap();
-                let neg = self.builder.build_int_neg(lhs_value, "").unwrap();
-                let result = self.builder.build_select(is_neg_one, neg, div, "").unwrap();
-                inst_mappings.insert(inst_id, result.as_basic_value_enum());
+                let div = self.build_checked_int_div(lhs_value, rhs_value, true, false)?;
+                inst_mappings.insert(inst_id, div.as_basic_value_enum());
                 Ok(())
             }
             Inst::IntRemUnsigned { lhs, rhs, .. } => {
                 let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
                 let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let rem = self.builder.build_int_unsigned_rem(lhs_value, rhs_value, "").unwrap();
+                let rem = self.build_checked_int_div(lhs_value, rhs_value, false, true)?;
                 inst_mappings.insert(inst_id, rem.as_basic_value_enum());
                 Ok(())
             }
             Inst::IntRemSigned { lhs, rhs, .. } => {
                 let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
                 let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let is_neg_one = self.divisor_is_neg_one(rhs_value);
-                let safe_rhs = self.divisor_or_one(is_neg_one, rhs_value);
-                let rem = self.builder.build_int_signed_rem(lhs_value, safe_rhs, "").unwrap();
+                let rem = self.build_checked_int_div(lhs_value, rhs_value, true, true)?;
                 inst_mappings.insert(inst_id, rem.as_basic_value_enum());
                 Ok(())
             }
@@ -4336,8 +4477,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Inst::BitShiftLeft { lhs, rhs, .. } => {
                 let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
                 let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let rhs_casted =
-                    self.cast_int_to_match(rhs_value, lhs_value, "shift_magnitude_adjust");
+                let rhs_casted = self.build_shift_count(rhs_value, lhs_value);
 
                 let shl = self.builder.build_left_shift(lhs_value, rhs_casted, "").unwrap();
                 inst_mappings.insert(inst_id, shl.as_basic_value_enum());
@@ -4346,8 +4486,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Inst::BitUnsignedShiftRight { lhs, rhs, .. } => {
                 let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
                 let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let rhs_casted =
-                    self.cast_int_to_match(rhs_value, lhs_value, "shift_magnitude_adjust");
+                let rhs_casted = self.build_shift_count(rhs_value, lhs_value);
                 let lshr =
                     self.builder.build_right_shift(lhs_value, rhs_casted, false, "").unwrap();
                 inst_mappings.insert(inst_id, lshr.as_basic_value_enum());
@@ -4356,8 +4495,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Inst::BitSignedShiftRight { lhs, rhs, .. } => {
                 let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
                 let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let rhs_casted =
-                    self.cast_int_to_match(rhs_value, lhs_value, "shift_magnitude_adjust");
+                let rhs_casted = self.build_shift_count(rhs_value, lhs_value);
                 let ashr = self.builder.build_right_shift(lhs_value, rhs_casted, true, "").unwrap();
                 inst_mappings.insert(inst_id, ashr.as_basic_value_enum());
                 Ok(())
@@ -4492,7 +4630,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
 
         let abi_mode = self.k1.function_abi(function_id);
-        let llvm_function_type = self.make_cg_function_type(&ir_fn.fn_type)?;
+        let llvm_function_type = self.make_cg_function_type(&ir_fn.fn_type, abi_mode)?;
         debug!(
             "-> res (is_sret={}) {}",
             llvm_function_type.is_sret, llvm_function_type.llvm_function_type
@@ -4527,9 +4665,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     ),
                     function_type: llvm_function_type,
                     function_value: existing,
-                    blocks: FxHashMap::new(),
                     last_alloca_instr: None,
                     returned_sret_variable: None,
+                    return_block: None,
                     debug_info: di_subprogram,
                     debug_file: di_file,
                 },
@@ -4561,8 +4699,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             function_value
                 .add_attribute(AttributeLoc::Function, self.make_enum_attribute("noreturn", 0));
         }
+        if ir_fn.is_cold(self.k1) {
+            function_value
+                .add_attribute(AttributeLoc::Function, self.make_enum_attribute("cold", 0));
+        }
+        if typed_function.is_noinline() {
+            function_value
+                .add_attribute(AttributeLoc::Function, self.make_enum_attribute("noinline", 0));
+        }
 
-        if self.k1.config.target.arch() == compiler::Arch::Wasm {
+        if self.k1.plan.config.target.arch() == compiler::Arch::Wasm {
             if let TyperLinkage::External { lib_name: Some(lib_name), .. } = typed_function_linkage
             {
                 function_value.add_attribute(
@@ -4602,13 +4748,19 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 // Without the byval attribute, X86 (System V) big struct calls don't work
                 let abi_mapping =
                     self.mem.get_nth_lt(llvm_function_type.param_abi_mappings, i - offset);
-                if matches!(abi_mapping, AbiParamMapping::BigStructByPtrToCopy { byval_attr: true })
-                {
-                    let k1_type =
-                        *self.mem.get_nth_lt(llvm_function_type.param_k1_types, i - offset);
-                    for attr in self.make_byval_attributes(&k1_type) {
-                        function_value.add_attribute(AttributeLoc::Param(i as u32), attr);
+                let k1_type = *self.mem.get_nth_lt(llvm_function_type.param_k1_types, i - offset);
+                match abi_mapping {
+                    AbiParamMapping::BigStructByPtrToCopy { byval_attr: true } => {
+                        for attr in self.make_byval_attributes(&k1_type) {
+                            function_value.add_attribute(AttributeLoc::Param(i as u32), attr);
+                        }
                     }
+                    AbiParamMapping::BigStructByPtr => {
+                        for attr in self.make_borrowed_ptr_attributes(&k1_type) {
+                            function_value.add_attribute(AttributeLoc::Param(i as u32), attr);
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -4625,9 +4777,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 param_values: Vec::with_capacity(llvm_function_type.param_k1_types.len() as usize),
                 function_type: llvm_function_type,
                 function_value,
-                blocks: FxHashMap::new(),
                 last_alloca_instr: None,
                 returned_sret_variable: None,
+                return_block: None,
                 debug_info: di_subprogram,
                 debug_file: di_file,
             },
@@ -4635,12 +4787,33 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         Ok(function_value)
     }
 
-    fn get_abi_mapping_for_type(&self, pt: PhysicalType, is_return: bool) -> AbiParamMapping {
+    fn get_abi_mapping_for_type(
+        &self,
+        pt: PhysicalType,
+        is_return: bool,
+        abi: AbiMode,
+    ) -> AbiParamMapping {
+        let native = self.get_native_abi_mapping_for_type(pt, is_return);
+        match native {
+            AbiParamMapping::BigStructByPtrToCopy { .. }
+                if abi == AbiMode::Internal && !is_return =>
+            {
+                AbiParamMapping::BigStructByPtr
+            }
+            other => other,
+        }
+    }
+
+    fn get_native_abi_mapping_for_type(
+        &self,
+        pt: PhysicalType,
+        is_return: bool,
+    ) -> AbiParamMapping {
         enum CallConv {
             AMD64,
             ARM64,
         }
-        let callconv = match self.k1.config.target.arch() {
+        let callconv = match self.k1.plan.config.target.arch() {
             compiler::Arch::Intel => CallConv::AMD64,
             compiler::Arch::Arm => CallConv::ARM64,
             compiler::Arch::Wasm => CallConv::ARM64,
@@ -4860,7 +5033,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         classes,
                         active_bits2,
                         offset_bits,
-                        st.get_layout().size_bits(),
+                        st.get_layout().size_bits() as u32,
                         class,
                     )
                 }
@@ -4915,7 +5088,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 classes,
                                 active_bits2,
                                 offset_bits,
-                                agg_record.layout.size_bits(),
+                                agg_record.layout.size_bits() as u32,
                                 RegisterClass::Int,
                             )
                         }
@@ -4950,7 +5123,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn codegen_function_body(
         &mut self,
-        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
         function_id: FunctionId,
     ) -> CgResult<()> {
         self.current_insert_function = function_id;
@@ -5045,7 +5218,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn codegen_unit_body(
         &mut self,
-        inst_mappings: &mut FxHashMap<InstId, BasicValueEnum<'ctx>>,
+        inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
         function_id: FunctionId,
     ) -> CgResult<()> {
         let Some(ir_unit) = self.k1.ir.functions.get(&function_id).copied() else {
@@ -5064,28 +5237,28 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             None => {}
         };
 
-        let ir_unit = self.k1.ir.functions.get(&function_id).copied().unwrap();
-        let blocks = ir_unit.blocks;
+        let u = ir_unit.view(&self.k1.ir.mem);
+        self.cur_unit = u;
+        let entry_block = u.first_block().unwrap();
 
         let mut seen = std::mem::take(&mut self.buffers.cfg_seen);
         let mut blocks_rpo = std::mem::take(&mut self.buffers.cfg_blocks_rpo);
-        self.compute_cfg_order(blocks.first, &mut blocks_rpo, &mut seen);
+        self.compute_cfg_order(entry_block, &mut blocks_rpo, &mut seen);
 
-        let mut block_mapping = FxHashMap::new();
+        self.cur_blocks.clear();
         let llvm_function = self.get_current_function().function_value;
         for block in &blocks_rpo {
-            let kind = self.k1.ir.mem.get(*block).data.kind;
+            let kind = u.block(*block).kind;
             let b = self.ctx.append_basic_block(llvm_function, kind.str());
-            block_mapping.insert(*block, b);
+            self.cur_blocks.insert(*block, b);
         }
-        self.get_current_function_mut().blocks = block_mapping;
 
         {
             // Jump from prelude to entry block
             let debug_locn = self.builder.get_current_debug_location().unwrap();
             self.builder.unset_current_debug_location();
 
-            let entry = self.get_llvm_block(blocks.first)?;
+            let entry = self.get_llvm_block(entry_block)?;
             self.builder.build_unconditional_branch(entry).unwrap();
 
             self.builder.set_current_debug_location(debug_locn);
@@ -5095,6 +5268,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         for block in &blocks_rpo {
             self.codegen_block(inst_mappings, *block)?;
         }
+        self.codegen_return_block(self.k1.get_function_span(function_id));
         {
             blocks_rpo.clear();
             seen.clear();
@@ -5109,28 +5283,29 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         &mut self,
         entry: BlockId,
         result: &mut Vec<BlockId>,
-        seen: &mut FxHashSet<BlockId>,
+        seen: &mut IdMap<BlockId, ()>,
     ) {
         fn dfs(
-            ir: &ProgramIr,
+            u: &ir::UnitView,
             b: BlockId,
-            seen: &mut FxHashSet<BlockId>,
+            seen: &mut IdMap<BlockId, ()>,
             result: &mut Vec<BlockId>,
         ) {
-            if !seen.insert(b) {
+            if seen.contains(b) {
                 return;
             }
+            seen.insert(b, ());
 
             let mut successors = Vec::with_capacity(4);
-            Cg::live_successors(ir, b, &mut successors);
+            Cg::collect_block_live_successors(u, b, &mut successors);
             for succ in successors {
-                dfs(ir, succ, seen, result);
+                dfs(u, succ, seen, result);
             }
 
-            result.push(b); // postorder: after successors
+            result.push(b);
         }
 
-        dfs(&self.k1.ir, entry, seen, result);
+        dfs(&self.cur_unit, entry, seen, result);
 
         result.reverse(); // reverse → RPO
     }
@@ -5144,13 +5319,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             llvm_int_ty.const_int(integer.to_u64_bits(), false)
         };
         llvm_value.as_basic_value_enum()
-    }
-
-    fn codegen_float_value(&mut self, float: TypedFloatValue) -> CgResult<BasicValueEnum<'ctx>> {
-        let cg_ty = self.codegen_type(PhysicalType::scalar(float.get_scalar_type()));
-        let llvm_float_ty = cg_ty.rich_type().into_float_type();
-        let llvm_value = llvm_float_ty.const_float(float.as_f64());
-        Ok(llvm_value.as_basic_value_enum())
     }
 
     fn codegen_static_value_as_const(
@@ -5178,7 +5346,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             StaticValue::Int(int_value) => self.codegen_int_value(*int_value),
             StaticValue::Enum(_, int_value) => self.codegen_int_value(*int_value),
-            StaticValue::Float(float_value) => self.codegen_float_value(*float_value).unwrap(),
+            StaticValue::Float(float_value) => llvm_float_constant(self.ctx, *float_value).into(),
             StaticValue::String(string_id) => {
                 let string_global = self.codegen_string_id_to_global(*string_id).unwrap();
                 string_global.get_initializer().unwrap()
@@ -5431,18 +5599,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     fn target_supports_tls(&self) -> bool {
-        self.k1.config.target.arch() != compiler::Arch::Wasm
-            && self.k1.config.target.platform() != compiler::Platform::Bare
-    }
-
-    fn divisor_is_neg_one(&self, rhs: IntValue<'ctx>) -> IntValue<'ctx> {
-        let neg_one = rhs.get_type().const_all_ones();
-        self.builder.build_int_compare(IntPredicate::EQ, rhs, neg_one, "").unwrap()
-    }
-
-    fn divisor_or_one(&self, is_neg_one: IntValue<'ctx>, rhs: IntValue<'ctx>) -> IntValue<'ctx> {
-        let one = rhs.get_type().const_int(1, false);
-        self.builder.build_select(is_neg_one, one, rhs, "").unwrap().into_int_value()
+        self.k1.plan.config.target.arch() != compiler::Arch::Wasm
+            && self.k1.plan.config.target.platform() != compiler::Platform::Bare
     }
 
     fn make_external_global(
@@ -5478,7 +5636,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         if is_tls && self.target_supports_tls() {
             global.set_thread_local(true);
-            let mode = if self.k1.program_settings.executable {
+            let mode = if self.k1.plan.is_executable() {
                 ThreadLocalMode::LocalExecTLSModel
             } else {
                 ThreadLocalMode::GeneralDynamicTLSModel
@@ -5529,8 +5687,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     fn make_string_llvm_global(&mut self, string_id: StringId) -> CgResult<GlobalValue<'ctx>> {
-        let string_name = &format!("k1.string.{}.bytes", string_id.as_u32());
         let rust_str = self.k1.get_string(string_id);
+        let content_hash = xxhash_rust::xxh3::xxh3_128(rust_str.as_bytes());
+        let string_name = &format!("k1.string.{content_hash:032x}.bytes");
         let str_len = rust_str.len();
         let global_str_data = self.llvm_module.add_global(
             self.builtin_types.char.array_type(str_len as u32),
@@ -5581,7 +5740,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let global_str_struct = self.llvm_module.add_global(
             string_wrapper_struct_type,
             None,
-            &format!("k1.string.{}", string_id.as_u32()),
+            &format!("k1.string.{content_hash:032x}"),
         );
         global_str_struct.set_initializer(&string_wrapper_struct);
         global_str_struct.set_constant(true);
@@ -5657,30 +5816,20 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         Target::initialize_webassembly(&InitializationConfig::default());
     }
 
-    fn target_cpu_features(k1_target: compiler::Target) -> (String, String) {
-        let is_native = compiler::detect_host_target() == Some(k1_target);
-        if is_native {
-            (
+    fn llvm_cpu_features(k1: &TypedProgram) -> (String, String) {
+        let build = k1.plan.config;
+        match k1.plan.get(build.cpu) {
+            "native" => (
                 TargetMachine::get_host_cpu_name().to_string(),
                 TargetMachine::get_host_cpu_features().to_string(),
-            )
-        } else {
-            match k1_target.arch() {
-                // SSE2 is the x86-64 baseline
-                compiler::Arch::Intel => ("x86-64".to_string(), "".to_string()),
-                compiler::Arch::Arm => ("generic".to_string(), "+neon".to_string()),
-                compiler::Arch::Wasm => (
-                    "generic".to_string(),
-                    // bulk-memory lets llvm.memcpy/memmove/memset lower to
-                    // memory.copy/memory.fill instead of libc calls
-                    "+simd128,+bulk-memory,+sign-ext,+mutable-globals,+nontrapping-fptoint"
-                        .to_string(),
-                ),
-            }
+            ),
+            cpu => (cpu.to_string(), k1.plan.get(build.features).to_string()),
         }
     }
 
-    pub fn make_target_machine(optimize: bool, k1_target: compiler::Target) -> TargetMachine {
+    pub fn make_target_machine(k1: &TypedProgram) -> TargetMachine {
+        let build = k1.plan.config;
+        let k1_target = build.target;
         // Bare targets ride the ELF triples: their object is consumed by a
         // kernel or embedder toolchain, never by mac userland
         let triple = match k1_target {
@@ -5703,9 +5852,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
 
         let target = Target::from_triple(&triple).unwrap();
-        let (cpu, features) = Cg::target_cpu_features(k1_target);
+        let (cpu, features) = Cg::llvm_cpu_features(k1);
         let opt_level =
-            if !optimize { OptimizationLevel::None } else { OptimizationLevel::Aggressive };
+            if !build.optimize { OptimizationLevel::None } else { OptimizationLevel::Aggressive };
         // PIC wasm is for -shared modules; executables must be non-PIC
         let reloc_mode = if k1_target.arch() == compiler::Arch::Wasm {
             inkwell::targets::RelocMode::Static
@@ -5790,6 +5939,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         ]
     }
 
+    fn make_borrowed_ptr_attributes(&self, param_type: &CgType<'ctx>) -> [Attribute; 4] {
+        let layout = param_type.rich_repr_layout();
+        [
+            self.make_enum_attribute("readonly", 0),
+            self.make_enum_attribute("nonnull", 0),
+            self.make_enum_attribute("dereferenceable", layout.size as u64),
+            self.make_enum_attribute("align", layout.align as u64),
+        ]
+    }
+
     fn make_byval_attributes(&self, param_type: &CgType<'ctx>) -> [Attribute; 2] {
         [
             self.ctx.create_type_attribute(
@@ -5798,5 +5957,65 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             ),
             self.make_enum_attribute("align", param_type.rich_repr_layout().align as u64),
         ]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_float_bits(ctx: &Context, value: TypedFloatValue, expected: u64) {
+        let int_type = match value {
+            TypedFloatValue::F32(_) => ctx.i32_type(),
+            TypedFloatValue::F64(_) => ctx.i64_type(),
+        };
+        let constant = llvm_float_constant(ctx, value);
+        let bits = unsafe {
+            IntValue::new(llvm_sys::core::LLVMConstBitCast(
+                constant.as_value_ref(),
+                int_type.as_type_ref(),
+            ))
+        };
+        assert_eq!(bits.get_zero_extended_constant(), Some(expected), "{expected:#018x}");
+    }
+
+    #[test]
+    fn llvm_f32_constants_preserve_bits() {
+        let ctx = Context::create();
+        for bits in [
+            0,
+            0x8000_0000,
+            1,
+            0x8000_0001,
+            0x7f7f_ffff,
+            0x7f80_0000,
+            0xff80_0000,
+            0x7fc0_1234,
+            0xffc0_1234,
+            0x7f80_1234,
+            0xff80_1234,
+        ] {
+            assert_float_bits(&ctx, TypedFloatValue::F32(f32::from_bits(bits)), bits as u64);
+        }
+    }
+
+    #[test]
+    fn llvm_f64_constants_preserve_bits() {
+        let ctx = Context::create();
+        for bits in [
+            0,
+            0x8000_0000_0000_0000,
+            1,
+            0x8000_0000_0000_0001,
+            0x7fef_ffff_ffff_ffff,
+            0x7ff0_0000_0000_0000,
+            0xfff0_0000_0000_0000,
+            0x7ff8_0000_0000_1234,
+            0xfff8_0000_0000_1234,
+            0x7ff0_0000_0000_1234,
+            0xfff0_0000_0000_1234,
+        ] {
+            assert_float_bits(&ctx, TypedFloatValue::F64(f64::from_bits(bits)), bits);
+        }
     }
 }

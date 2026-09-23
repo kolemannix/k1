@@ -4,7 +4,7 @@
 
 use std::mem::size_of;
 
-pub const SNAP_MAGIC: [u8; 8] = *b"K1SNAP16";
+pub const SNAP_MAGIC: [u8; 8] = *b"K1SNAP01";
 
 const BLOB_COMPRESS_MIN: usize = 1 << 16;
 const BLOB_CHUNK: usize = 1 << 20;
@@ -39,11 +39,16 @@ impl std::ops::Deref for SnapBytes {
 }
 
 impl SnapWriter {
-    pub fn new() -> SnapWriter {
+    pub fn new(inputs: InputsHash) -> SnapWriter {
         let mut w = SnapWriter::reserve(SNAP_RESERVE_BYTES);
-        w.write_raw(&SNAP_MAGIC);
-        w.write_str(crate::BUILD_ID);
+        w.write_header(inputs);
         w
+    }
+
+    fn write_header(&mut self, inputs: InputsHash) {
+        self.write_raw(&SNAP_MAGIC);
+        self.write_str(crate::BUILD_ID);
+        self.write_t(&inputs);
     }
 
     fn reserve(bytes: usize) -> SnapWriter {
@@ -52,9 +57,13 @@ impl SnapWriter {
     }
 
     /// Serializes straight into the destination mmapped file
-    fn new_file(path: &std::path::Path) -> std::io::Result<SnapWriter> {
-        let file =
-            std::fs::OpenOptions::new().read(true).write(true).create_new(true).open(path)?;
+    fn new_file(path: &std::path::Path, inputs: InputsHash) -> std::io::Result<SnapWriter> {
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)?;
         let mapped = (|| {
             file.set_len(SNAP_RESERVE_BYTES as u64)?;
             unsafe { memmap2::MmapMut::map_mut(&file) }
@@ -67,9 +76,7 @@ impl SnapWriter {
             }
         };
         let mut w = SnapWriter { mmap, len: 0, file: Some(file) };
-        // The magic bytes stay zeroed until `finish_file` to protect from torn writes
-        w.write_raw(&[0u8; SNAP_MAGIC.len()]);
-        w.write_str(crate::BUILD_ID);
+        w.write_header(inputs);
         Ok(w)
     }
 
@@ -77,9 +84,7 @@ impl SnapWriter {
         let SnapWriter { mmap, len, file } = self;
         let file = file.expect("finish_file on an anonymous SnapWriter");
         drop(mmap);
-        file.set_len(len as u64)?;
-        std::os::unix::fs::FileExt::write_at(&file, &SNAP_MAGIC, 0)?;
-        Ok(())
+        file.set_len(len as u64)
     }
 
     pub fn finish(self) -> SnapBytes {
@@ -176,10 +181,9 @@ impl SnapWriter {
                 });
             }
         });
-        for chunk_index in 0..nchunks {
+        for (chunk_index, &compressed_len) in compressed_lens.iter().enumerate() {
             let chunk_start = chunk_index * BLOB_CHUNK;
             let chunk_end = (chunk_start + BLOB_CHUNK).min(bytes.len());
-            let compressed_len = compressed_lens[chunk_index];
             if compressed_len < chunk_end - chunk_start {
                 self.write_len(compressed_len);
                 let src = stride_base + chunk_index * max_out;
@@ -275,7 +279,7 @@ pub struct SnapReader<'a> {
 }
 
 impl<'a> SnapReader<'a> {
-    pub fn new(buf: &'a [u8]) -> Result<SnapReader<'a>, String> {
+    pub fn new(buf: &'a [u8], expected: InputsHash) -> Result<SnapReader<'a>, String> {
         let mut r = SnapReader { buf, pos: 0 };
         let magic = r.take(SNAP_MAGIC.len());
         if magic != SNAP_MAGIC {
@@ -287,6 +291,10 @@ impl<'a> SnapReader<'a> {
                 "snapshot from build {build_id}, this is {}: invalid",
                 crate::BUILD_ID
             ));
+        }
+        let inputs: InputsHash = r.read_t();
+        if inputs != expected {
+            return Err("snapshot inputs hash mismatch".to_string());
         }
         Ok(r)
     }
@@ -453,143 +461,81 @@ impl InputsHash {
         }
         InputsHash((halves[0] as u128) << 64 | halves[1] as u128)
     }
-
-    pub fn add_module_header(self, name: &str, root_path: &str, root_hash: u64) -> InputsHash {
-        self.add(&[name.as_bytes(), root_path.as_bytes(), &root_hash.to_le_bytes()])
-    }
-
-    pub fn add_module_sources<S: AsRef<str>>(
-        self,
-        name: &str,
-        sources: impl Iterator<Item = (S, u64)>,
-    ) -> InputsHash {
-        let mut hash = self.add(&[name.as_bytes()]);
-        for (path, content_hash) in sources {
-            hash = hash.add(&[path.as_ref().as_bytes(), &content_hash.to_le_bytes()]);
-        }
-        hash
-    }
-
-    fn filename(&self) -> String {
-        format!("{:032x}.snap", self.0)
-    }
 }
 
 pub const CACHE_DIR_NAME: &str = "cache";
-const CACHE_MAX_BYTES: u64 = 8 << 30;
 const TMP_ORPHAN_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 
-pub fn cache_load(cache_dir: &std::path::Path, hash: InputsHash) -> Option<memmap2::Mmap> {
-    let path = cache_dir.join(hash.filename());
-    let file = std::fs::File::open(&path).ok()?;
+pub fn cache_entry_path(
+    cache_dir: &std::path::Path,
+    slot: usize,
+    settings: InputsHash,
+) -> std::path::PathBuf {
+    cache_dir.join(format!("{slot}.{:016x}.snap", settings.0 as u64))
+}
+
+fn tmp_path(path: &std::path::Path) -> std::path::PathBuf {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(format!(".tmp.{}", std::process::id()));
+    tmp.into()
+}
+
+pub fn cache_load(path: &std::path::Path) -> Option<memmap2::Mmap> {
+    let file = std::fs::File::open(path).ok()?;
     let mmap = unsafe { memmap2::Mmap::map(&file) }.ok()?;
-    if mmap.len() >= SNAP_RESERVE_BYTES {
-        return None;
-    }
     let _ = mmap.advise(memmap2::Advice::Sequential);
     let _ = mmap.advise(memmap2::Advice::WillNeed);
-    touch(&path);
     Some(mmap)
 }
 
-fn touch(path: &std::path::Path) {
-    if let Ok(f) = std::fs::OpenOptions::new().append(true).open(path) {
-        let _ = f.set_modified(std::time::SystemTime::now());
-    }
-}
-
-pub fn cache_load_text(cache_dir: &std::path::Path, filename: &str) -> Option<String> {
-    let path = cache_dir.join(filename);
-    let text = std::fs::read_to_string(&path).ok()?;
-    touch(&path);
-    Some(text)
-}
-
-pub fn cache_store_text(cache_dir: &std::path::Path, filename: &str, text: &str) {
-    if std::fs::create_dir_all(cache_dir).is_err() {
-        return;
-    }
-    let tmp = cache_dir.join(format!("{filename}.tmp.{}", std::process::id()));
-    if std::fs::write(&tmp, text).is_err() {
-        let _ = std::fs::remove_file(&tmp);
-        return;
-    }
-    let _ = std::fs::rename(&tmp, cache_dir.join(filename));
-}
-
-pub fn cache_exists_entry(cache_dir: &std::path::Path, hash: InputsHash) -> bool {
-    cache_dir.join(hash.filename()).exists()
-}
-
 pub fn cache_store_begin(
-    cache_dir: &std::path::Path,
-    hash: InputsHash,
+    path: &std::path::Path,
+    inputs: InputsHash,
 ) -> std::io::Result<SnapWriter> {
-    std::fs::create_dir_all(cache_dir)?;
-    SnapWriter::new_file(&cache_dir.join(hash.filename()))
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    SnapWriter::new_file(&tmp_path(path), inputs)
 }
 
-pub fn cache_store_finish(
-    cache_dir: &std::path::Path,
-    hash: InputsHash,
-    w: SnapWriter,
-) -> std::io::Result<()> {
-    let result = w.finish_file();
+pub fn cache_store_finish(path: &std::path::Path, w: SnapWriter) -> std::io::Result<()> {
+    let tmp = tmp_path(path);
+    let result = w.finish_file().and_then(|()| std::fs::rename(&tmp, path));
     if result.is_err() {
-        let _ = std::fs::remove_file(cache_dir.join(hash.filename()));
+        let _ = std::fs::remove_file(&tmp);
     }
-    cache_run_eviction(cache_dir, CACHE_MAX_BYTES);
+    if let Some(dir) = path.parent() {
+        sweep_tmp_orphans(dir);
+    }
     result
 }
 
-fn snap_file_has_magic(path: &std::path::Path) -> bool {
-    let Ok(mut f) = std::fs::File::open(path) else { return false };
-    let mut magic = [0u8; SNAP_MAGIC.len()];
-    std::io::Read::read_exact(&mut f, &mut magic).is_ok() && magic == SNAP_MAGIC
-}
-
-/// Newest-first by mtime within a byte budget (the newest entry always
-/// survives); also sweeps `.tmp.<pid>` files and magic-less partial `.snap`
-/// entries orphaned by a crashed writer. Sizes count allocated blocks capped
-/// at the apparent length, so an in-progress or torn sparse entry weighs only
-/// its written bytes
-fn cache_run_eviction(cache_dir: &std::path::Path, max_bytes: u64) {
+fn sweep_tmp_orphans(cache_dir: &std::path::Path) {
     let Ok(entries) = std::fs::read_dir(cache_dir) else { return };
     let now = std::time::SystemTime::now();
-    let mut snaps: Vec<(std::time::SystemTime, u64, std::path::PathBuf)> = vec![];
-    let mut total: u64 = 0;
     for entry in entries {
         let Ok(e) = entry else { continue };
-        let path = e.path();
-        let Ok(metadata) = e.metadata() else { continue };
-        let Ok(mtime) = metadata.modified() else { continue };
-        let is_old = now.duration_since(mtime).is_ok_and(|age| age > TMP_ORPHAN_MAX_AGE);
-        let name = e.file_name();
-        if name.to_string_lossy().contains(".tmp.") && is_old {
-            let _ = std::fs::remove_file(&path);
+        if !e.file_name().to_string_lossy().contains(".tmp.") {
             continue;
         }
-        if path.extension().is_some_and(|x| x == "snap") {
-            if is_old && !snap_file_has_magic(&path) {
-                let _ = std::fs::remove_file(&path);
-                continue;
-            }
-            let size = metadata.len().min(std::os::unix::fs::MetadataExt::blocks(&metadata) * 512);
-            total += size;
-            snaps.push((mtime, size, path));
+        let Ok(mtime) = e.metadata().and_then(|m| m.modified()) else { continue };
+        if now.duration_since(mtime).is_ok_and(|age| age > TMP_ORPHAN_MAX_AGE) {
+            let _ = std::fs::remove_file(e.path());
         }
     }
-    if total <= max_bytes {
+}
+
+pub fn assert_identical(first: &[u8], second: &[u8], what: &str) {
+    if first == second {
         return;
     }
-    snaps.sort_by_key(|(mtime, _, _)| std::cmp::Reverse(*mtime));
-    let mut kept: u64 = 0;
-    for (i, (_, size, path)) in snaps.iter().enumerate() {
-        kept += size;
-        if i > 0 && kept > max_bytes {
-            let _ = std::fs::remove_file(path);
-        }
-    }
+    let n = first.len().min(second.len());
+    let diff_at = (0..n).find(|&i| first[i] != second[i]).unwrap_or(n);
+    panic!(
+        "{what}: snapshot roundtrip mismatch at byte {diff_at} (lens {} vs {})",
+        first.len(),
+        second.len()
+    );
 }
 
 #[cfg(test)]
@@ -615,7 +561,7 @@ mod test {
         let empty: Vec<u8> = vec![];
 
         let blobs = [&compressible, &incompressible, &mixed, &sub_chunk, &small, &empty];
-        let mut w = SnapWriter::new();
+        let mut w = SnapWriter::new(InputsHash(7));
         for blob in blobs {
             w.write_blob(blob);
         }
@@ -623,7 +569,7 @@ mod test {
         let raw_total: usize = blobs.iter().map(|b| b.len()).sum();
         assert!(bytes.len() < raw_total);
 
-        let mut r = SnapReader::new(&bytes).unwrap();
+        let mut r = SnapReader::new(&bytes, InputsHash(7)).unwrap();
         for blob in blobs {
             let header = r.read_blob_header();
             let mut dst = vec![0u8; header.raw_len];
@@ -634,49 +580,35 @@ mod test {
     }
 
     #[test]
-    fn eviction_byte_budget_and_tmp_orphans() {
-        let dir = std::env::temp_dir().join(format!("k1_evict_test_{}", std::process::id()));
+    fn header_rejects_foreign_inputs() {
+        let bytes = SnapWriter::new(InputsHash(1)).finish();
+        assert!(SnapReader::new(&bytes, InputsHash(2)).is_err());
+        assert!(SnapReader::new(&bytes, InputsHash(1)).unwrap().is_done());
+    }
+
+    #[test]
+    fn sweep_removes_old_tmp_orphans() {
+        let dir = std::env::temp_dir().join(format!("k1_sweep_test_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let write = |name: &str, size: usize, age_secs: u64| {
+        let write = |name: &str, age_secs: u64| {
             let path = dir.join(name);
-            std::fs::write(&path, vec![0u8; size]).unwrap();
+            std::fs::write(&path, b"x").unwrap();
             let f = std::fs::OpenOptions::new().append(true).open(&path).unwrap();
             f.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(age_secs))
                 .unwrap();
         };
-        write("newest.snap", 60, 0);
-        write("mid.snap", 30, 10);
-        write("oldest.snap", 30, 20);
-        write("fresh.tmp.123", 10, 0);
-        write("orphan.tmp.456", 10, 2 * 60 * 60);
-        std::fs::write(dir.join("modules"), "x").unwrap();
+        write("0.abc.snap", 3 * 60 * 60);
+        write("fresh.tmp.123", 0);
+        write("orphan.tmp.456", 2 * 60 * 60);
+        write("modules", 3 * 60 * 60);
 
-        cache_run_eviction(&dir, 100);
-        assert!(dir.join("newest.snap").exists());
-        assert!(dir.join("mid.snap").exists());
-        assert!(!dir.join("oldest.snap").exists());
+        sweep_tmp_orphans(&dir);
+        assert!(dir.join("0.abc.snap").exists());
         assert!(dir.join("fresh.tmp.123").exists());
         assert!(!dir.join("orphan.tmp.456").exists());
         assert!(dir.join("modules").exists());
 
-        cache_run_eviction(&dir, 10);
-        assert!(dir.join("newest.snap").exists());
-        assert!(!dir.join("mid.snap").exists());
-
         std::fs::remove_dir_all(&dir).unwrap();
     }
-}
-
-pub fn assert_identical(first: &[u8], second: &[u8], what: &str) {
-    if first == second {
-        return;
-    }
-    let n = first.len().min(second.len());
-    let diff_at = (0..n).find(|&i| first[i] != second[i]).unwrap_or(n);
-    panic!(
-        "{what}: snapshot roundtrip mismatch at byte {diff_at} (lens {} vs {})",
-        first.len(),
-        second.len()
-    );
 }

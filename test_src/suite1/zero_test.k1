@@ -1,6 +1,5 @@
 ns zero_test
 
-use core/mem/zeroed
 
 fn test-bitcast() {
   let x: i32 = -1
@@ -59,35 +58,92 @@ fn test-bitcast() {
   ).is-some())
 }
 
+type zpoint = { x: u8, y: u8, z: i32 }
+type zwrap[t] = { inner: t, tag: u8 }
+
+fn zero-of[t](): t { t.0 }
+
+fn returned-zero(): zpoint {
+  let(returned) v = .0
+  v
+}
+
+fn tail-after-newline(bump: i32): zpoint {
+  let base = bump
+  .0 | .{ z = base }
+}
+
 fn test-zero() {
-  let v8: u8 = zeroed()
+  let filled: { a: int, b: bool, c: string } = .0 | .{ b = true }
+  assert-equals(filled.a, 0)
+  assert-equals(filled.b, true)
+  assert(filled.c == "")
+
+  let v8: u8 = .0
   assert-equals(v8, 0)
-  let vi64: i64 = zeroed()
+  let vi64: i64 = .0
   assert-equals(vi64, 0)
 
-  let vf32: f32 = zeroed()
+  let vf32: f32 = .0
   assert(vf32 == 0.0)
-  let vf64: f64 = zeroed()
+  let vf64: f64 = .0
   assert(vf64 == 0.0)
 
-  let i32-null: *i32 = zeroed()
-  assert(i32-null.as[ptr] == ptr/null)
-
-  let point: { x: u8, y: u8, z: i32 } = zeroed()
+  let point: zpoint = .0
   assert-equals(point.x, 0)
   assert-equals(point.y, 0)
   assert-equals(point.z, 0)
 
-  let o: ?type-of(point) = zeroed()
+  let o: ?zpoint = .0
   assert-equals(o.tag, 0)
 
-  let static-point = #static zeroed[{ x: u8, y: u8, z: i32 }]()
+  let some-point: ?zpoint = :some .0
+  assert-equals(some-point.!.z, 0)
+
+  let p: zpoint = .{ x = 1, y = 2, z = 3 }
+  p = .0
+  assert-equals(p.y, 0)
+  p.z = 9
+  p.z = .0
+  assert-equals(p.z, 0)
+
+  let with-field: zwrap[zpoint] = .{ inner = .0, tag = 7 }
+  assert-equals(with-field.inner.z, 0)
+  assert-equals(with-field.tag, 7)
+
+  let nested: zwrap[zpoint] = .0 | .{ inner = .0 | .{ z = 5 } }
+  assert-equals(nested.tag, 0)
+  assert-equals(nested.inner.z, 5)
+
+  let hinted = .0: zpoint
+  assert-equals(hinted.z, 0)
+
+  let named = zpoint.0
+  assert-equals(named.x, 0)
+  let arr = array[u8, 4].0
+  assert-equals(arr.[3], 0)
+  let w = zwrap[int].0
+  assert-equals(w.inner, 0)
+  assert-equals(zero-of[zpoint]().z, 0)
+  assert-equals(zero-of[i64](), 0)
+
+  let cond = v8 == 0
+  let chosen: zpoint = if cond .0 else .{ x = 1, y = 1, z = 1 }
+  assert-equals(chosen.z, 0)
+
+  assert-equals(returned-zero().z, 0)
+  assert-equals(tail-after-newline(4).z, 4)
+  assert-equals(tail-after-newline(4).x, 0)
+
+  let static-point = #static (.0: { x: u8, y: u8, z: i32 })
   assert-equals(static-point.z.from-static(), 0)
   let runtime-point: { x: u8, y: u8, z: i32 } = static-point
   assert-equals(runtime-point.z, 0)
+  let static-w = #static zwrap[int].0
+  assert-equals(static-w.tag.from-static(), 0)
   assert-equals(ZERO-POINT.y, 0)
 
   .{}
 }
 
-let ZERO-POINT: { x: u8, y: u8, z: i32 } = zeroed()
+let ZERO-POINT: zpoint = .0

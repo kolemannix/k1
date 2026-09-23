@@ -7,35 +7,34 @@ ns for notify {
 // Lock-free multi-producer single-consumer handoff: send from any thread,
 // take on the consumer's thread. Each send allocates one node and fires the
 // notify; take drains everything queued in send order.
-type mpsc-node[t] = { value: t, next: *mut mpsc-node[t] }
-type mpsc[t] = { head: *mut mpsc-node[t], on-send: notify }
+type mpsc-node[t] = { value: t, next: ptr }
+type mpsc[t] = { head: ptr, on-send: notify }
 
 ns for mpsc {
-  fn make[t](on-send: notify): *mut mpsc[t] {
-    heap.new(.{ head = ptr/null.ref[mpsc-node[t]](), on-send })
+  fn make[t](on-send: notify): *mpsc[t] {
+    heap.new(.{ head = ptr/null, on-send })
   }
 
   // Any thread
-  fn send[t](self: *mut mpsc[t], value: t) {
-    let node: *mut mpsc-node[t] = heap.new(.{ value, next = ptr/null.ref[mpsc-node[t]]() })
+  fn send[t](self: *mpsc[t], value: t) {
+    let node: *mpsc-node[t] = heap.new(.{ value, next = ptr/null })
     loop {
       let old = atomic/load(self.head.&, :relaxed)
       node.next = old
-      if atomic/cmpxchg-weak(self.head.&, old, node, :release, :relaxed).ok { break }
+      if atomic/cmpxchg-weak(self.head.&, old, node.as[ptr], :release, :relaxed).ok { break }
     }
     self.on-send.notify()
   }
 
   // Consumer thread only. Appends every queued value to `out` (assumed
   // empty) in send order; out's pushes go to the system heap.
-  fn take[t](self: *mut mpsc[t], out: *mut list[t]) {
-    let node = atomic/xchg(self.head.&, ptr/null.ref[mpsc-node[t]](), :acquire)
-    let n = node
+  fn take[t](self: *mpsc[t], out: *list[t]) {
+    let n = atomic/xchg(self.head.&, ptr/null, :acquire)
     while not (n is null) {
-      out.push-in(heap, n.value)
-      let next = n.next
-      heap.free-t(n)
-      n = next
+      let node = n.ref[mpsc-node[t]]
+      out.push-in(heap, node.value)
+      n = node.next
+      heap.free-t(node)
     }
     out.reverse()
   }
@@ -52,7 +51,7 @@ type channel[t] = {
   cap-weight: size,
   weight-fn: *fn(t) -> size,
   drop-fn: *fn(t) -> {},
-  waker: ?waker,
+  ?waker,
   pending-wake: bool,
   failure: ?string,
   closed: bool,
@@ -62,7 +61,7 @@ type channel[t] = {
 }
 
 ns for channel {
-  fn make[t](cap-weight: size, weight-fn: *fn(t) -> size, drop-fn: *fn(t) -> {}): *mut channel[t] {
+  fn make[t](cap-weight: size, weight-fn: *fn(t) -> size, drop-fn: *fn(t) -> {}): *channel[t] {
     heap.new(.{
       queue = list/empty[t](),
       queued-weight = 0,
@@ -80,7 +79,7 @@ ns for channel {
 
   // False if closed, failed, or over cap; a rejected value stays owned by
   // the caller, who picks the policy (drop it, fail() the channel, ...)
-  fn push[t](self: *mut channel[t], value: t): bool {
+  fn push[t](self: *channel[t], value: t): bool {
     if self.closed or self.failure.is-some() { return false }
     let w = (self.weight-fn)(value)
     if self.queued-weight + w > self.cap-weight { return false }
@@ -91,14 +90,14 @@ ns for channel {
   }
 
   // Poison: the stream fails on its next pull
-  fn fail[t](self: *mut channel[t], message: string) {
+  fn fail[t](self: *channel[t], message: string) {
     self.failure = :some message
     self.pending-wake = true
   }
 
   // Wake the consumer if anything happened since the last wake. Callers that
   // batch pushes (e.g. a dispatch loop) defer this until the batch is done.
-  fn flush[t](self: *mut channel[t]) {
+  fn flush[t](self: *channel[t]) {
     if not self.pending-wake { return }
     self.pending-wake = false
     if self.waker is :some w { w.wake() }
@@ -106,7 +105,7 @@ ns for channel {
 
   // Drop queued items and free the channel; call only when no more pushes
   // can arrive.
-  fn close-and-free[t](self: *mut channel[t]) {
+  fn close-and-free[t](self: *channel[t]) {
     self.closed = true
     for item in self.queue { (self.drop-fn)(item) }
     if self.queue.cap() > 0 {
@@ -117,8 +116,8 @@ ns for channel {
 }
 
 impl[t] source[t = t] for channel[t] {
-  fn start(self: *mut channel[t], waker: waker) { self.waker = :some waker }
-  fn next(self: *mut channel[t]): pull[t] {
+  fn start(self: *channel[t], waker: waker) { self.waker = :some waker }
+  fn next(self: *channel[t]): pull[t] {
     if self.failure is :some message { return :fail message }
     if self.queue.is-empty() { return :pending }
     let item = self.queue.[0]
@@ -128,5 +127,5 @@ impl[t] source[t = t] for channel[t] {
     self.seg = span/wrap-single(self.part.&)
     :chunk span/wrap-single(self.seg.&)
   }
-  fn stop(self: *mut channel[t]) { channel/close-and-free(self) }
+  fn stop(self: *channel[t]) { channel/close-and-free(self) }
 }

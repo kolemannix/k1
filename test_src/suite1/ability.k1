@@ -20,7 +20,7 @@ ability codec {
 
 impl codec for string {
   fn a-const(): u8 { 10 }
-  fn write(self: string): span[u8] {
+  fn write(self): span[u8] {
     self.span().as-byte-span()
   }
   fn read(buffer: span[u8]): string {
@@ -77,7 +77,7 @@ fn test() {
   assert(num/num(3: i32) == 3)
 
   // Method-style call on user-defined type
-  let p = .{ x = 1, y = 2 }: point
+  let p = point.{ x = 1, y = 2 }
   assert(p.num() == 3)
 
   let buf: span[u8] = [104: u8, 101, 108, 108, 111].as-span()

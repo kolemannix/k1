@@ -1,0 +1,32 @@
+type edge = { lo: size, hi: size, next: size }
+type nstate = { eps: list[size], edge: ?edge }
+
+fn main(): i32 {
+  let hit = true
+  let s = "abc"
+  println("x ${if hit "yes" else "no"} \"$s\"")
+  let n: nstate = .{ eps = [], edge = :some .{ lo = 'a'.as-u8(), hi = 'z'.as-u8(), next = 1 } }
+  let count = 0
+  for b in 0.until(256) {
+    if n.edge is :some e and b >= e.lo and b <= e.hi { count = count + 1 }
+  }
+  println("count=$count")
+  let c = 'x'
+  let r = if c is {
+    '(' -> 1,
+    '*' or '+' or '?' -> 2,
+    _ -> 3,
+  }
+  println("r=$r")
+  let row: list[?size] = [:none, :some 1, :some 1, :none]
+  let b: size = 1
+  println("${row.[b] == :some 1} ${row.[0] == :some 1}")
+  let m: ?{ start: size, end: size } = :some .{ start = 2, end = 5 }
+  println("$m")
+  let sb = string-builder/new()
+  sb.write("'$c'")
+  println(sb.build())
+  let lit = 200
+  println("($lit: u8).as-char()")
+  0
+}

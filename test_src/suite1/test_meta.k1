@@ -19,7 +19,7 @@ ns pre {
   fn make-point(name: string): code {
     "type $name = { x: i32, y: i32 }"
   }
-  macro make-point-macro(name) {
+  macro make-point-macro(name: code) {
     "type $name = { x: i32, y: i32 }"
   }
 }
@@ -45,7 +45,7 @@ fn simple-increment(): i32 {
 use core/writer
 use types/type-schema
 
-fn _write-json-from-schema(code: *mut string-builder, name: string, type-id: types/type-id) {
+fn _write-json-from-schema(code: *string-builder, name: string, type-id: types/type-id) {
   if type-id.is-instance-of(types/id[list]) {
     let elem = type-id.instance-info().!.args.[0]
     code.writeln("w.write-char('[');")
@@ -94,14 +94,14 @@ fn write-json[t, w: writer](context w)(t: t) {
   #meta {
     let type-id = types/id[t]()
     let code = string-builder/new()
-    _write-json-from-schema(&code, "t", type-id)
+    _write-json-from-schema(code.&, "t", type-id)
     code/from-string(code.build())
   }
 }
 
 fn to-json[t](t: t): string {
   let w = list/empty[char]()
-  write-json(context &w)(t)
+  write-json(context w.&)(t)
   let s = string/wrap-list(w)
   s
 }

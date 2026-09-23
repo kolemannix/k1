@@ -1,13 +1,13 @@
 ns recurse_basic {
-  type node = { node: *node }
+  type node = { node: optref[node] }
   type tree = either { leaf, node(*tree) }
 
-  fn make(n: size): *node {
-    if n <= 0 ptr/null.ref[node] else mem/new(.{ node = make(n - 1) })
-   }
+  fn make(n: size): optref[node] {
+    if n == 0 optref/null() else optref/make(mem/new(.{ node = make(n - 1) }))
+  }
 
-  fn count(n: *node): size {
-    if n.as[ptr].is-null() 0 else 1 + count(n.node)
+  fn count(n: optref[node]): size {
+    if n.as-opt() is { :none -> 0, :some n -> 1 + count(n.node) }
   }
 
   fn emake(n: size): tree {

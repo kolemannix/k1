@@ -1,0 +1,48 @@
+let(mutable) calls: int = 0
+
+fn next(): int {
+  calls = calls + 1
+  calls
+}
+
+macro twice(e: code) {
+  "$e + $e"
+}
+
+macro repeat(n: int, body: code) {
+  let cb = code-builder/new()
+  for 0.until(n) {
+    cb.line(body)
+  }
+  cb.build()
+}
+
+macro debug(e: code) {
+  #if false "println($e)" else ""
+}
+
+macro static-for[t](items: span[t], body: code) {
+  let cb = code-builder/new()
+  for items {
+    cb.write(core/meta/baked-variable("it", it))
+    cb.line(body)
+  }
+  cb.build()
+}
+
+fn main(): i32 {
+  let x = twice(next())
+  println("twice(next()) = $x after $calls calls")
+
+  repeat(3, println("hello"))
+
+  debug(crash("never compiled"))
+
+  static-for[int]([1, 2, 3], println("unrolled $it"))
+
+  let c = \next() * 2
+  println("chunk: `${c.chunks.[0].text}` sourced=${c.chunks.[0].source != 0}")
+  let wrapped: code = "let y = $c"
+  println("${wrapped.text()} in ${wrapped.chunks.len()} chunks")
+  0
+}

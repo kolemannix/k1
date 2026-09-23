@@ -1,0 +1,10 @@
+macro shout(pattern: string) {
+  if pattern.is-empty() crash("empty pattern")
+  "println(${core/meta/str-lit(pattern)})"
+}
+
+fn main(): i32 {
+  shout("hi")
+  shout("")
+  0
+}

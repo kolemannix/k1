@@ -1,0 +1,7 @@
+fn four(): u64 { 4 }
+
+fn main(): i32 {
+  let x: 4 = #static four()
+  println("${x.from-static()}")
+  0
+}

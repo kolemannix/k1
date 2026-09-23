@@ -5,7 +5,7 @@ pub mod disasm;
 pub mod exec;
 pub mod lower;
 
-use fxhash::{FxHashMap, FxHashSet};
+use fxhash::FxHashMap;
 
 use crate::ir::IrUnitId;
 use crate::lex::SpanId;
@@ -338,7 +338,6 @@ pub struct BcProgram {
     /// Absolute code indices holding `PENDING_PC` call targets, waiting for
     /// the keyed function to finish lowering (recursion cycles).
     pub(crate) pending_call_fixups: FxHashMap<FunctionId, Vec<u32>>,
-    pub(crate) in_progress: FxHashSet<FunctionId>,
 
     /// Sorted by start pc: (start, end, unit). For stack traces / diagnostics.
     pub unit_ranges: VVec<(u32, u32, IrUnitId)>,
@@ -364,7 +363,6 @@ impl BcProgram {
             functions: FxHashMap::default(),
             exprs: FxHashMap::default(),
             pending_call_fixups: FxHashMap::default(),
-            in_progress: FxHashSet::default(),
             unit_ranges: VVec::make("bc_unit_ranges"),
             spans: VVec::make("bc_spans"),
             lower_ctx_pool: Vec::new(),

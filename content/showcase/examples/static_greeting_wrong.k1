@@ -1,0 +1,18 @@
+fn rot13(c: u8): u8 {
+  if c >= 'a'.as-u8() and c <= 'z'.as-u8() {
+    (c - 'a'.as-u8() + 13) % 26 + 'a'.as-u8()
+  } else c
+}
+
+fn main(): i32 {
+  let greeting: "hello world" = #static {
+    let bytes: list[u8] = []
+    for c in "uryyb j0eyq" {
+      bytes.push(rot13(c.as-u8()))
+    }
+    string/wrap-bytes(bytes.as-span())
+  }
+  println(greeting.from-static())
+  0
+}
+//errmsg: Different static values of same type family

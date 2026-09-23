@@ -1,0 +1,2 @@
+fn main(): i32 { plain/one() }
+//errmsg: Module 'plain' accepts no parameters

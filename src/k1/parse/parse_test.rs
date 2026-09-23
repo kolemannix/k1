@@ -15,19 +15,14 @@ fn set_up<'ast>(input: &str, ast: &'ast mut ParsedProgram) -> Parser<'static, 'a
     let source = SourceFile::make(&mut ast.mem, file_path, input);
     let module_id = ModuleId::ONE;
     let module_name = ast.idents.intern("unit_test");
-    let mut token_vec = vec![];
-    let (file_id, lex_result) = lex_file_into_program(ast, source, &mut token_vec);
-    lex_result.unwrap();
-    let token_vec = token_vec.leak();
-    println!("{:#?}", token_vec);
-    let mut kinds = vec![];
-    for t in token_vec.iter() {
-        kinds.push(t.kind);
-    }
-    println!("{:#?}", kinds);
+    let file_id = ast.sources.add_file(source);
+    let mut lexed = lex(input, Lexed::default());
+    ast.materialize_lexed_file(file_id, &mut lexed).unwrap();
+    println!("{:#?}", lexed.tokens);
+    println!("{:#?}", lexed.kinds);
+    let lexed: &'static Lexed = Box::leak(Box::new(lexed));
     let ns_id = init_module(module_name, ast);
-    let parser = Parser::make_for_file(module_id, module_name, ns_id, ast, token_vec, file_id);
-    parser
+    Parser::make_for_file(module_id, module_name, ns_id, ast, lexed, file_id)
 }
 
 fn test_single_expr(input: &str) -> Result<(ParsedProgram, ParsedExpr), ParseError> {
@@ -72,9 +67,9 @@ fn basic_fn() -> Result<(), ParseError> {
 
 #[test]
 fn string_literal() -> ParseResult<()> {
-    let (ast, result) = test_single_expr(r#""Hello, World!""#)?;
-    let ParsedExpr::Literal(ParsedLiteral::String(s, span_id)) = result else { panic!() };
-    let span = ast.spans.get(span_id);
+    let (ast, result, expr_id) = test_single_expr_with_id(r#""Hello, World!""#)?;
+    let ParsedExpr::Literal(ParsedLiteral::String(s)) = result else { panic!() };
+    let span = ast.spans.get(ast.exprs.get_span(expr_id));
     assert_eq!(ast.get_string(s), "Hello, World!");
     assert_eq!(span.start, 0);
     assert_eq!(span.len, 13 + 2);
@@ -86,7 +81,7 @@ fn string_literal() -> ParseResult<()> {
 fn infix() -> Result<(), ParseError> {
     let mut ast = make_test_ast();
     let mut parser = set_up("let x = a + b * doStuff(1, 2)", &mut ast);
-    let result = parser.parse_statement()?.unwrap();
+    let result = parser.expect_statement()?;
     if let ParsedStmt::Let(ParsedLet { value: expr_id, .. }) = ast.stmts.get(result) {
         let ParsedExpr::BinaryOp(op) = ast.exprs.get(expr_id.unwrap()) else { panic!() };
         assert_eq!(op.op_kind, BinaryOpKind::Add);
@@ -119,6 +114,41 @@ fn struct_1() -> Result<(), ParseError> {
 fn struct_shorthand() -> Result<(), ParseError> {
     let (_ast, result) = test_single_expr(".{ x, y = 2 }")?;
     assert!(matches!(result, ParsedExpr::Struct(_)));
+    Ok(())
+}
+
+#[test]
+fn zero_literal() -> Result<(), ParseError> {
+    let (_ast, result) = test_single_expr(".0")?;
+    assert!(matches!(result, ParsedExpr::Zero));
+    let (_ast, result) = test_single_expr(":some .0")?;
+    assert!(matches!(result, ParsedExpr::Variant(ParsedVariant { payload: Some(_), .. })));
+    let (ast, result) = test_single_expr(".0: point")?;
+    let ParsedExpr::TypeHint(th) = result else { panic!("Expected a type hint") };
+    assert!(matches!(ast.exprs.get(th.inner), ParsedExpr::Zero));
+    for src in [".1", ". 0"] {
+        assert!(test_single_expr(src).is_err(), "{src} should not parse");
+    }
+    Ok(())
+}
+
+#[test]
+fn nominated_literal() -> Result<(), ParseError> {
+    let (ast, result) = test_single_expr("point.{ x = 1 }")?;
+    let ParsedExpr::TypeHint(th) = result else { panic!("Expected a type hint") };
+    assert!(matches!(ast.exprs.get(th.inner), ParsedExpr::Struct(_)));
+    assert!(matches!(ast.type_exprs.get(th.ty), ParsedTypeExpr::TypeApplication(_)));
+
+    let (ast, result) = test_single_expr("wrap[int].0")?;
+    let ParsedExpr::TypeHint(th) = result else { panic!("Expected a type hint") };
+    assert!(matches!(ast.exprs.get(th.inner), ParsedExpr::Zero));
+    let ParsedTypeExpr::TypeApplication(app) = ast.type_exprs.get(th.ty) else {
+        panic!("Expected a type application")
+    };
+    assert_eq!(app.args.len(), 1);
+
+    let (_ast, result) = test_single_expr("foo.{ a = true }.try")?;
+    assert!(!matches!(result, ParsedExpr::TypeHint(_)));
     Ok(())
 }
 
@@ -256,7 +286,7 @@ fn precedence() -> Result<(), ParseError> {
     let ParsedExpr::Literal(rhs) = ast.exprs.get(bin_op.rhs) else { panic!() };
     assert_eq!(bin_op.op_kind, BinaryOpKind::Add);
     assert_eq!(lhs.op_kind, BinaryOpKind::Multiply);
-    assert!(matches!(rhs, ParsedLiteral::Numeric(_)));
+    assert!(matches!(rhs, ParsedLiteral::Numeric { .. }));
     Ok(())
 }
 
@@ -311,7 +341,7 @@ fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
     let ParsedExpr::Call(fn_call) = ast.exprs.get(args[0].value).clone() else { panic!() };
     assert_eq!(fn_call.name.name, ast.idents.intern("getFn"));
     assert_eq!(call.name.name, ast.idents.intern("baz"));
-    let type_args = ast.mem.getn(call.type_args);
+    let type_args = ast.mem.getn(call.type_args(&ast.mem));
     let type_arg = ast.type_exprs.get(type_args[0].type_expr.unwrap());
     assert!(matches!(type_arg, ParsedTypeExpr::TypeApplication(_)));
     assert!(matches!(ast.exprs.get(args[1].value), ParsedExpr::Literal(_)));
@@ -322,7 +352,7 @@ fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
 fn char_value() -> ParseResult<()> {
     let input = "'x'";
     let (_ast, result) = test_single_expr(input)?;
-    assert!(matches!(result, ParsedExpr::Literal(ParsedLiteral::Char(b, _)) if b == b'x'));
+    assert!(matches!(result, ParsedExpr::Literal(ParsedLiteral::Char(b)) if b == b'x'));
     Ok(())
 }
 
@@ -331,14 +361,14 @@ fn namespaced_fncall() -> ParseResult<()> {
     let input = "foo/bar/baz()";
     let (ast, result) = test_single_expr(input)?;
     let ParsedExpr::Call(fn_call) = result else { panic!("not fncall") };
-    assert_eq!(ast.idents.get_string(ast.mem.get_nth(fn_call.name.path, 0).name), "foo");
+    assert_eq!(ast.idents.get_string(ast.mem.get_nth(fn_call.name.path(&ast.mem), 0).name), "foo");
     assert_eq!(
-        ast.spans.get(ast.mem.get_nth(fn_call.name.path, 0).span),
+        ast.spans.get(ast.mem.get_nth(fn_call.name.path(&ast.mem), 0).span),
         Span { file_id: 0, start: 0, len: 3 }
     );
-    assert_eq!(ast.idents.get_string(ast.mem.get_nth(fn_call.name.path, 1).name), "bar");
+    assert_eq!(ast.idents.get_string(ast.mem.get_nth(fn_call.name.path(&ast.mem), 1).name), "bar");
     assert_eq!(
-        ast.spans.get(ast.mem.get_nth(fn_call.name.path, 1).span),
+        ast.spans.get(ast.mem.get_nth(fn_call.name.path(&ast.mem), 1).span),
         Span { file_id: 0, start: 4, len: 3 }
     );
     assert_eq!(fn_call.name.name, ast.idents.intern("baz"));
@@ -350,8 +380,8 @@ fn namespaced_val() -> ParseResult<()> {
     let input = "foo/bar/baz";
     let (ast, result) = test_single_expr(input)?;
     let ParsedExpr::Variable(variable) = result else { panic!("not variable") };
-    assert_eq!(ast.idents.get_string(ast.mem.get_nth(variable.name.path, 0).name), "foo");
-    assert_eq!(ast.idents.get_string(ast.mem.get_nth(variable.name.path, 1).name), "bar");
+    assert_eq!(ast.idents.get_string(ast.mem.get_nth(variable.name.path(&ast.mem), 0).name), "foo");
+    assert_eq!(ast.idents.get_string(ast.mem.get_nth(variable.name.path(&ast.mem), 1).name), "bar");
     assert_eq!(variable.name.name, ast.idents.intern("baz"));
     Ok(())
 }
@@ -408,23 +438,22 @@ fn variants_quiet_payload() -> ParseResult<()> {
     assert_eq!(ast.idents.get_string(inner.variant_name), "some");
     assert_eq!(&ast.expr_id_to_string(inner.payload.unwrap()), "bar.baz");
 
-    let (ast, expr, _) = test_single_expr_with_id("opt:some[int] [1, 2]")?;
+    let (ast, expr, _) = test_single_expr_with_id("opt[int]:some [1, 2]")?;
     let ParsedExpr::Variant(v) = expr else { panic!() };
-    assert_eq!(v.type_args.len(), 1);
+    assert_eq!(ast.type_expr_to_string(v.ty.unwrap()), "opt[int]");
     let ParsedExpr::ListLiteral(_) = ast.exprs.get(v.payload.unwrap()) else { panic!() };
     Ok(())
 }
 
 #[test]
 fn variants_payload() -> ParseResult<()> {
-    let input = "veni/vidi/vici:foo[t, u](bar.bar)";
+    let input = "veni/vidi/vici[t, u]:foo(bar.bar)";
     let (ast, expr, expr_id) = test_single_expr_with_id(input)?;
     let ParsedExpr::Variant(v) = expr else { panic!() };
     assert!(v.payload.is_some());
-    assert!(v.type_name.is_some());
+    assert_eq!(ast.type_expr_to_string(v.ty.unwrap()), "veni/vidi/vici[t, u]");
     assert_eq!(ast.idents.get_string(v.variant_name), "foo");
-    assert_eq!(v.type_args.len(), 2);
-    assert_eq!(&ast.expr_id_to_string(expr_id), "veni/vidi/vici:foo[t, u](bar.bar)");
+    assert_eq!(&ast.expr_id_to_string(expr_id), input);
     Ok(())
 }
 
@@ -516,18 +545,18 @@ fn empty_struct() -> ParseResult<()> {
 fn integer_suffix() -> ParseResult<()> {
     let input_u8 = r#"42u8"#;
     let input_i64 = r#"-42i64"#;
-    let (ast, expr, _expr_id) = test_single_expr_with_id(input_u8)?;
-    let ParsedExpr::Literal(ParsedLiteral::Numeric(_)) = expr else {
+    let (ast, expr, expr_id) = test_single_expr_with_id(input_u8)?;
+    let ParsedExpr::Literal(ParsedLiteral::Numeric { .. }) = expr else {
         panic!("`{input_u8}` did not parse as expected")
     };
-    let text = ast.get_span_content(expr.get_span());
+    let text = ast.get_span_content(ast.exprs.get_span(expr_id));
     assert_eq!(text, "42u8");
 
-    let (ast, expr, _expr_id) = test_single_expr_with_id(input_i64)?;
-    let ParsedExpr::Literal(ParsedLiteral::Numeric(_)) = expr else {
+    let (ast, expr, expr_id) = test_single_expr_with_id(input_i64)?;
+    let ParsedExpr::Literal(ParsedLiteral::Numeric { .. }) = expr else {
         panic!("`{input_i64}` did not parse as expected")
     };
-    let text = ast.get_span_content(expr.get_span());
+    let text = ast.get_span_content(ast.exprs.get_span(expr_id));
     assert_eq!(text, "-42i64");
     Ok(())
 }
@@ -548,9 +577,9 @@ fn tag_no_type_hint() -> ParseResult<()> {
 #[test]
 fn consecutive_strings() -> ParseResult<()> {
     let input = r#""Hello, " "World!""#;
-    let (ast, expr, _expr_id) = test_single_expr_with_id(input)?;
+    let (ast, expr, expr_id) = test_single_expr_with_id(input)?;
     let ParsedExpr::InterpolatedString(is) = expr else { panic!() };
-    let span = ast.spans.get(is.span);
+    let span = ast.spans.get(ast.exprs.get_span(expr_id));
     assert_eq!(is.parts.len(), 2);
     let InterpolatedStringPart::String { string_id: s1, .. } = ast.mem.get_nth(is.parts, 0) else {
         panic!()
@@ -574,14 +603,38 @@ fn lex_error_does_not_poison_reused_token_buffer() {
     let good_file_path = ast.idents.intern("unit_test/good.k1");
     let good = SourceFile::make(&mut ast.mem, good_file_path, "fn g(): i32 { 42 }");
 
-    let mut tokens = vec![];
-    assert!(lex_file_into_program(&mut ast, bad, &mut tokens).1.is_err());
-    assert!(!tokens.is_empty());
+    let bad_id = ast.sources.add_file(bad);
+    let bad_content = ast.sources.get(bad_id).content(&ast.mem);
+    let mut lexed = lex(bad_content, Lexed::default());
+    assert!(ast.materialize_lexed_file(bad_id, &mut lexed).is_err());
+    assert!(!lexed.tokens.is_empty());
 
-    lex_file_into_program(&mut ast, good, &mut tokens).1.unwrap();
-    for t in &tokens {
+    let good_id = ast.sources.add_file(good);
+    let good_content = ast.sources.get(good_id).content(&ast.mem);
+    let mut lexed = lex(good_content, lexed);
+    ast.materialize_lexed_file(good_id, &mut lexed).unwrap();
+    for t in &lexed.tokens {
         if t.kind != TokenKind::Eof {
             assert_eq!(t.span(1, &ast.spans).file_id, 1);
         }
     }
+}
+
+#[test]
+fn long_token_materializes_to_a_span() {
+    let mut ast = make_test_ast();
+    let path = ast.idents.intern("unit_test/long.k1");
+    let literal = "x".repeat(70_000);
+    let content = format!("let s = \"{literal}\"\nlet t = 1");
+    let source = SourceFile::make(&mut ast.mem, path, &content);
+    let file_id = ast.sources.add_file(source);
+    let mut lexed = lex(&content, Lexed::default());
+    assert_eq!(lexed.long_tokens.len(), 1);
+    ast.materialize_lexed_file(file_id, &mut lexed).unwrap();
+    let string_token = lexed.tokens[3];
+    assert_eq!(string_token.kind, TokenKind::StringDoneDq);
+    let span = string_token.span(file_id, &ast.spans);
+    assert_eq!((span.file_id, span.start, span.len), (file_id, 8, 70_002));
+    assert_eq!(string_token.materialized_span_id(), string_token.span_id(file_id, &mut ast.spans));
+    assert_eq!(lexed.tokens[4].kind, TokenKind::KeywordLet);
 }

@@ -43,7 +43,7 @@ fn read-write() {
   bits.c = -1
   assert-equals(bits.a, 4294967295)
 
-  let h: holder = zeroed()
+  let h: holder = .0
   h.tag = 7
   h.payload.a = 0x40000000
   h.trailer = 999
@@ -51,7 +51,7 @@ fn read-write() {
   assert-equals(h.tag, 7)
   assert-equals(h.trailer, 999)
 
-  let arr: array[u, 3] = zeroed()
+  let arr: array[u, 3] = .0
   arr.[1].b = 1.5
   assert-equals(arr.[1].a, 1069547520)
   assert-equals(arr.[0].a, 0)
@@ -67,7 +67,7 @@ fn literals() {
   let bits: u = mem/bitcast[u32, u](0x40000000)
   assert-equals(bits.b, 2.0: f32)
 
-  let w: wide = zeroed()
+  let w: wide = .0
   w.big = 0xFFFFFFFFFFFFFFFF
   w = .{ small = 7 }
   assert-equals(w.small, 7)

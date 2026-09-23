@@ -3,7 +3,7 @@ ns matching_if
 type(alias) ABC = either { a, b, c }
 
 impl print for ABC {
-  fn print-to[w: writer](self: ABC, w) {
+  fn print-to[w: writer](self, w) {
     if self is {
       :a -> w.write-char('A'),
       :b -> w.write-char('B'),
@@ -13,7 +13,7 @@ impl print for ABC {
 }
 
 impl equals for ABC {
-  fn equals(self: ABC, other: ABC): bool {
+  fn equals(self, other: ABC): bool {
     if .{ fst = self, snd = other } is {
       .{ fst = :a, snd = :a } -> true,
       .{ fst = :b, snd = :b } -> true,

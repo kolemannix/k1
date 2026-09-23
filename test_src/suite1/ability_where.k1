@@ -41,6 +41,7 @@ impl wsource[t = marked] for marked-box {
 type holder[t] = { v: t }
 impl[t] wsource[t = t] for holder[t] {
   fn the-item(self): t { self.v }
+  fn item-equals(self, x: t): bool { x == self.v }
 }
 
 fn tag-through[x: marky, c: wsource[t = x]](it: c): i64 {

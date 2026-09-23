@@ -139,7 +139,7 @@ ns report {
   }
 
   fn timeline(entries: list[log/entry]): array[int, 4] {
-    let buckets: array[int, 4] = zeroed()
+    let buckets: array[int, 4] = .0
     for e in entries {
       let slot = e.ms / 64
       if slot >= buckets.len() { continue }

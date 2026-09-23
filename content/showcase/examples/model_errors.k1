@@ -1,0 +1,89 @@
+type parse-error = either { empty-input, bad-digit(char), too-big }
+
+impl print for parse-error {
+  fn print-to[w: writer](self, w) {
+    if self is {
+      :empty-input -> w.write("empty input"),
+      :bad-digit c -> w.write("bad digit '$c'"),
+      :too-big -> w.write("too big"),
+    }
+  }
+}
+
+fn parse-digits(s: string): result[u64, parse-error] {
+  require s.len() > 0 else { return :err :empty-input }
+  let n: u64 = 0
+  for c in s {
+    require c.is-ascii-digit() else { return :err :bad-digit c }
+    n = n * 10 + (c.as-u8() - '0'.as-u8()).widen[u64]
+    require n < 100000 else { return :err :too-big }
+  }
+  :ok n
+}
+
+fn add-parsed(a: string, b: string): result[u64, parse-error] {
+  let x = parse-digits(a).try
+  let y = parse-digits(b).try
+  :ok(x + y)
+}
+
+fn first-even(xs: list[int]): ?int {
+  let first = xs.first().try
+  if first % 2 == 0 :some first else :none
+}
+
+type rc = either(i32) { ok = 0, noent = 2, acces = 13 }
+
+ns pre {
+  fn errors-of(t: types/type-id, ok-name: string): types/type-id {
+    require t.schema() is :enum .{ int-kind, values } else crash("errors-of needs an enum")
+    let variants: list[types/make-either.variants.t] = []
+    for v in values {
+      if v.name != ok-name { variants.push(.{ name = v.name, payload = :none, tag = :some v.value }) }
+    }
+    types/make-either(:some(int-kind.type-id()), variants.as-span())
+  }
+}
+
+type errno = #type pre/errors-of(types/id[rc], "ok")
+
+impl try[t = empty, e = errno] for rc {
+  fn error(e: errno): rc { mem/bitcast(e) }
+  fn value(_t: empty): rc { :ok }
+  fn is-ok(self): bool { self is :ok }
+  fn get-error(self): errno { mem/bitcast(self) }
+  fn get-value(_self: self): empty { .{} }
+}
+
+fn c-open(path: string): rc {
+  if path.starts-with("/root") :acces else if path.ends-with(".missing") :noent else :ok
+}
+
+fn touch(path: string): rc {
+  c-open(path).try
+  println("touched $path")
+  :ok
+}
+
+fn main(): i32 {
+  println(add-parsed("12", "30"))
+  println(add-parsed("12", "3x"))
+  println(add-parsed("", "1"))
+  println(add-parsed("999999", "1"))
+  println(parse-digits("7").!)
+  println(parse-digits("seven") ? 0)
+
+  println(first-even([]))
+  println(first-even([3]))
+  println(first-even([4]))
+
+  for path in ["/tmp/a", "/root/x", "/tmp/b.missing"] {
+    if touch(path).result() is {
+      :ok _ -> println("$path ok"),
+      :err :noent -> println("$path failed: no such file"),
+      :err :acces -> println("$path failed: permission denied"),
+    }
+  }
+  println("${types/name[errno]} ${types/size[errno]}")
+  0
+}

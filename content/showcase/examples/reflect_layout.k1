@@ -1,0 +1,71 @@
+ns layout {
+  type member = { name: string, type-name: string, offset: size, size: size, stride: size, align: int }
+
+  fn members[t](): span[member] {
+    #meta {
+      let fields = if types/schema[t] is {
+        :struct s -> s.fields,
+        :union u -> u.fields,
+        _ -> crash("${types/name[t]} has no members"),
+      }
+      let cb = code-builder/new()
+      cb.write("[")
+      for f in fields {
+        let ty = f.type-id.spell()
+        cb.line(`.{ name = ${meta/str-lit(f.name)}, type-name = ${meta/str-lit(f.type-id.name())}, offset = ${f.offset}, size = types/size[$ty], stride = types/stride[$ty], align = types/align[$ty] },`)
+      }
+      cb.write("]")
+      cb.build()
+    }
+  }
+
+  fn padded(s: string, width: size): string {
+    let sb = string-builder/new()
+    sb.write(s)
+    if s.len() < width { sb.repeat(" ", width - s.len()) }
+    sb.build()
+  }
+
+  fn dump[t]() {
+    let is-union = types/schema[t] is :union _
+    let stride = types/stride[t]
+    println("${types/name[t]}: size ${types/size[t]}, stride $stride, align ${types/align[t]}")
+    let end: size = 0
+    let holes: size = 0
+    for m in members[t]() {
+      if m.offset > end {
+        println("        ~~ ${m.offset - end} byte hole")
+        holes = holes + m.offset - end
+      }
+      let cell = padded("${m.name}: ${m.type-name}", 24)
+      println("  ${padded("${m.offset}", 4)}$cell size ${m.size}, stride ${m.stride}, align ${m.align}")
+      if is-union {
+        if m.stride > end { end = m.stride }
+      } else {
+        end = m.offset + m.stride
+      }
+    }
+    if stride > end {
+      println("        ~~ ${stride - end} bytes tail padding")
+      holes = holes + stride - end
+    }
+    println("  $holes of $stride bytes are padding\n")
+  }
+}
+
+type sloppy = { flag: bool, id: u64, kind: u16, count: u32, tail: u8 }
+type tidy = { id: u64, count: u32, kind: u16, flag: bool, tail: u8 }
+type wire = packed { flag: bool, id: u64, kind: u16, count: u32, tail: u8 }
+type scalar = union { i: i64, f: f64, bytes: array[u8, 8], half: u16 }
+type nested = { header: wire, body: sloppy }
+
+fn main(): i32 {
+  layout/dump[sloppy]()
+  layout/dump[tidy]()
+  layout/dump[wire]()
+  layout/dump[scalar]()
+  layout/dump[nested]()
+  #static types/assert-layout[tidy](16, 8, [0, 8, 12, 14, 15])
+  #static types/assert-layout[wire](16, 1, [0, 1, 9, 11, 15])
+  0
+}

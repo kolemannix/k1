@@ -50,7 +50,7 @@ ns response {
 type group-source = { group: span[span[u8]], done: bool }
 
 impl source[t = u8] for group-source {
-  fn next(self: *mut group-source): pull[u8] {
+  fn next(self: *group-source): pull[u8] {
     if self.done { return :done }
     self.done = true
     :chunk self.group
@@ -70,7 +70,7 @@ type chunked-encoder = {
 }
 
 fn chunked(upstream: dyn[source[t = u8]]): dyn[source[t = u8]] {
-  let state: *mut chunked-encoder = mem/new(.{
+  let state: *chunked-encoder = mem/new(.{
     upstream,
     prefix = list/empty[u8](),
     parts = list/empty[span[u8]](),
@@ -80,9 +80,9 @@ fn chunked(upstream: dyn[source[t = u8]]): dyn[source[t = u8]] {
 }
 
 impl source[t = u8] for chunked-encoder {
-  fn start(self: *mut chunked-encoder, waker: waker) { self.upstream.start(waker) }
-  fn stop(self: *mut chunked-encoder) { self.upstream.stop() }
-  fn next(self: *mut chunked-encoder): pull[u8] {
+  fn start(self: *chunked-encoder, waker: waker) { self.upstream.start(waker) }
+  fn stop(self: *chunked-encoder) { self.upstream.stop() }
+  fn next(self: *chunked-encoder): pull[u8] {
     if self.finished { return :done }
     if self.upstream.next() is {
       :chunk group -> {
@@ -110,7 +110,7 @@ impl source[t = u8] for chunked-encoder {
 }
 
 let hex-digits: string = "0123456789abcdef"
-fn push-hex(out: *mut list[u8], value: size) {
+fn push-hex(out: *list[u8], value: size) {
   if value >= 16 { push-hex(out, value / 16) }
   out.push(hex-digits.span-bytes().[value % 16])
 }

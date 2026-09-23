@@ -1047,16 +1047,16 @@ type(alias) free_func = *fn(
 ) -> {}
 #static assert-layout[free_func](8, 8, [])
 fn(extern("SDL_GetOriginalMemoryFunctions")) GetOriginalMemoryFunctions(
-  malloc_func: *mut malloc_func,
-  calloc_func: *mut calloc_func,
-  realloc_func: *mut realloc_func,
-  free_func: *mut free_func,
+  malloc_func: *malloc_func,
+  calloc_func: *calloc_func,
+  realloc_func: *realloc_func,
+  free_func: *free_func,
 ): {}
 fn(extern("SDL_GetMemoryFunctions")) GetMemoryFunctions(
-  malloc_func: *mut malloc_func,
-  calloc_func: *mut calloc_func,
-  realloc_func: *mut realloc_func,
-  free_func: *mut free_func,
+  malloc_func: *malloc_func,
+  calloc_func: *calloc_func,
+  realloc_func: *realloc_func,
+  free_func: *free_func,
 ): {}
 fn(extern("SDL_SetMemoryFunctions")) SetMemoryFunctions(
   malloc_func: malloc_func,
@@ -1073,43 +1073,43 @@ fn(extern("SDL_aligned_free")) aligned_free(
 ): {}
 fn(extern("SDL_GetNumAllocations")) GetNumAllocations(): i32
 type Environment = opaque[0, 1]
-fn(extern("SDL_GetEnvironment")) GetEnvironment(): *mut Environment
+fn(extern("SDL_GetEnvironment")) GetEnvironment(): optref[Environment]
 fn(extern("SDL_CreateEnvironment")) CreateEnvironment(
   populated: bool,
-): *mut Environment
+): optref[Environment]
 fn(extern("SDL_GetEnvironmentVariable")) GetEnvironmentVariable(
-  env: *mut Environment,
-  name: *mut u8,
-): *mut u8
+  env: *Environment,
+  name: *u8,
+): optref[u8]
 fn(extern("SDL_GetEnvironmentVariables")) GetEnvironmentVariables(
-  env: *mut Environment,
-): *mut *mut u8
+  env: *Environment,
+): optref[optref[u8]]
 fn(extern("SDL_SetEnvironmentVariable")) SetEnvironmentVariable(
-  env: *mut Environment,
-  name: *mut u8,
-  value: *mut u8,
+  env: *Environment,
+  name: *u8,
+  value: *u8,
   overwrite: bool,
 ): bool
 fn(extern("SDL_UnsetEnvironmentVariable")) UnsetEnvironmentVariable(
-  env: *mut Environment,
-  name: *mut u8,
+  env: *Environment,
+  name: *u8,
 ): bool
 fn(extern("SDL_DestroyEnvironment")) DestroyEnvironment(
-  env: *mut Environment,
+  env: *Environment,
 ): {}
 fn(extern("SDL_getenv")) getenv(
-  name: *mut u8,
-): *mut u8
+  name: *u8,
+): optref[u8]
 fn(extern("SDL_getenv_unsafe")) getenv_unsafe(
-  name: *mut u8,
-): *mut u8
+  name: *u8,
+): optref[u8]
 fn(extern("SDL_setenv_unsafe")) setenv_unsafe(
-  name: *mut u8,
-  value: *mut u8,
+  name: *u8,
+  value: *u8,
   overwrite: i32,
 ): i32
 fn(extern("SDL_unsetenv_unsafe")) unsetenv_unsafe(
-  name: *mut u8,
+  name: *u8,
 ): i32
 type(alias) CompareCallback = *fn(
   ptr,
@@ -1236,260 +1236,260 @@ fn(extern("SDL_memcmp")) memcmp(
   len: usize,
 ): i32
 fn(extern("SDL_wcslen")) wcslen(
-  wstr: *mut i32,
+  wstr: *i32,
 ): usize
 fn(extern("SDL_wcsnlen")) wcsnlen(
-  wstr: *mut i32,
+  wstr: *i32,
   maxlen: usize,
 ): usize
 fn(extern("SDL_wcslcpy")) wcslcpy(
-  dst: *mut i32,
-  src: *mut i32,
+  dst: *i32,
+  src: *i32,
   maxlen: usize,
 ): usize
 fn(extern("SDL_wcslcat")) wcslcat(
-  dst: *mut i32,
-  src: *mut i32,
+  dst: *i32,
+  src: *i32,
   maxlen: usize,
 ): usize
 fn(extern("SDL_wcsdup")) wcsdup(
-  wstr: *mut i32,
-): *mut i32
+  wstr: *i32,
+): optref[i32]
 fn(extern("SDL_wcsstr")) wcsstr(
-  haystack: *mut i32,
-  needle: *mut i32,
-): *mut i32
+  haystack: *i32,
+  needle: *i32,
+): optref[i32]
 fn(extern("SDL_wcsnstr")) wcsnstr(
-  haystack: *mut i32,
-  needle: *mut i32,
+  haystack: *i32,
+  needle: *i32,
   maxlen: usize,
-): *mut i32
+): optref[i32]
 fn(extern("SDL_wcscmp")) wcscmp(
-  str1: *mut i32,
-  str2: *mut i32,
+  str1: *i32,
+  str2: *i32,
 ): i32
 fn(extern("SDL_wcsncmp")) wcsncmp(
-  str1: *mut i32,
-  str2: *mut i32,
+  str1: *i32,
+  str2: *i32,
   maxlen: usize,
 ): i32
 fn(extern("SDL_wcscasecmp")) wcscasecmp(
-  str1: *mut i32,
-  str2: *mut i32,
+  str1: *i32,
+  str2: *i32,
 ): i32
 fn(extern("SDL_wcsncasecmp")) wcsncasecmp(
-  str1: *mut i32,
-  str2: *mut i32,
+  str1: *i32,
+  str2: *i32,
   maxlen: usize,
 ): i32
 fn(extern("SDL_wcstol")) wcstol(
-  str: *mut i32,
-  endp: *mut *mut i32,
+  str: *i32,
+  endp: *optref[i32],
   base: i32,
 ): i64
 fn(extern("SDL_strlen")) strlen(
-  str: *mut u8,
+  str: *u8,
 ): usize
 fn(extern("SDL_strnlen")) strnlen(
-  str: *mut u8,
+  str: *u8,
   maxlen: usize,
 ): usize
 fn(extern("SDL_strlcpy")) strlcpy(
-  dst: *mut u8,
-  src: *mut u8,
+  dst: *u8,
+  src: *u8,
   maxlen: usize,
 ): usize
 fn(extern("SDL_utf8strlcpy")) utf8strlcpy(
-  dst: *mut u8,
-  src: *mut u8,
+  dst: *u8,
+  src: *u8,
   dst_bytes: usize,
 ): usize
 fn(extern("SDL_strlcat")) strlcat(
-  dst: *mut u8,
-  src: *mut u8,
+  dst: *u8,
+  src: *u8,
   maxlen: usize,
 ): usize
 fn(extern("SDL_strdup")) strdup(
-  str: *mut u8,
-): *mut u8
+  str: *u8,
+): optref[u8]
 fn(extern("SDL_strndup")) strndup(
-  str: *mut u8,
+  str: *u8,
   maxlen: usize,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_strrev")) strrev(
-  str: *mut u8,
-): *mut u8
+  str: *u8,
+): optref[u8]
 fn(extern("SDL_strupr")) strupr(
-  str: *mut u8,
-): *mut u8
+  str: *u8,
+): optref[u8]
 fn(extern("SDL_strlwr")) strlwr(
-  str: *mut u8,
-): *mut u8
+  str: *u8,
+): optref[u8]
 fn(extern("SDL_strchr")) strchr(
-  str: *mut u8,
+  str: *u8,
   c: i32,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_strrchr")) strrchr(
-  str: *mut u8,
+  str: *u8,
   c: i32,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_strstr")) strstr(
-  haystack: *mut u8,
-  needle: *mut u8,
-): *mut u8
+  haystack: *u8,
+  needle: *u8,
+): optref[u8]
 fn(extern("SDL_strnstr")) strnstr(
-  haystack: *mut u8,
-  needle: *mut u8,
+  haystack: *u8,
+  needle: *u8,
   maxlen: usize,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_strcasestr")) strcasestr(
-  haystack: *mut u8,
-  needle: *mut u8,
-): *mut u8
+  haystack: *u8,
+  needle: *u8,
+): optref[u8]
 fn(extern("SDL_strtok_r")) strtok_r(
-  str: *mut u8,
-  delim: *mut u8,
-  saveptr: *mut *mut u8,
-): *mut u8
+  str: *u8,
+  delim: *u8,
+  saveptr: *optref[u8],
+): optref[u8]
 fn(extern("SDL_utf8strlen")) utf8strlen(
-  str: *mut u8,
+  str: *u8,
 ): usize
 fn(extern("SDL_utf8strnlen")) utf8strnlen(
-  str: *mut u8,
+  str: *u8,
   bytes: usize,
 ): usize
 fn(extern("SDL_itoa")) itoa(
   value: i32,
-  str: *mut u8,
+  str: *u8,
   radix: i32,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_uitoa")) uitoa(
   value: u32,
-  str: *mut u8,
+  str: *u8,
   radix: i32,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_ltoa")) ltoa(
   value: i64,
-  str: *mut u8,
+  str: *u8,
   radix: i32,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_ultoa")) ultoa(
   value: u64,
-  str: *mut u8,
+  str: *u8,
   radix: i32,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_lltoa")) lltoa(
   value: i64,
-  str: *mut u8,
+  str: *u8,
   radix: i32,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_ulltoa")) ulltoa(
   value: u64,
-  str: *mut u8,
+  str: *u8,
   radix: i32,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_atoi")) atoi(
-  str: *mut u8,
+  str: *u8,
 ): i32
 fn(extern("SDL_atof")) atof(
-  str: *mut u8,
+  str: *u8,
 ): f64
 fn(extern("SDL_strtol")) strtol(
-  str: *mut u8,
-  endp: *mut *mut u8,
+  str: *u8,
+  endp: *optref[u8],
   base: i32,
 ): i64
 fn(extern("SDL_strtoul")) strtoul(
-  str: *mut u8,
-  endp: *mut *mut u8,
+  str: *u8,
+  endp: *optref[u8],
   base: i32,
 ): u64
 fn(extern("SDL_strtoll")) strtoll(
-  str: *mut u8,
-  endp: *mut *mut u8,
+  str: *u8,
+  endp: *optref[u8],
   base: i32,
 ): i64
 fn(extern("SDL_strtoull")) strtoull(
-  str: *mut u8,
-  endp: *mut *mut u8,
+  str: *u8,
+  endp: *optref[u8],
   base: i32,
 ): u64
 fn(extern("SDL_strtod")) strtod(
-  str: *mut u8,
-  endp: *mut *mut u8,
+  str: *u8,
+  endp: *optref[u8],
 ): f64
 fn(extern("SDL_strcmp")) strcmp(
-  str1: *mut u8,
-  str2: *mut u8,
+  str1: *u8,
+  str2: *u8,
 ): i32
 fn(extern("SDL_strncmp")) strncmp(
-  str1: *mut u8,
-  str2: *mut u8,
+  str1: *u8,
+  str2: *u8,
   maxlen: usize,
 ): i32
 fn(extern("SDL_strcasecmp")) strcasecmp(
-  str1: *mut u8,
-  str2: *mut u8,
+  str1: *u8,
+  str2: *u8,
 ): i32
 fn(extern("SDL_strncasecmp")) strncasecmp(
-  str1: *mut u8,
-  str2: *mut u8,
+  str1: *u8,
+  str2: *u8,
   maxlen: usize,
 ): i32
 fn(extern("SDL_strpbrk")) strpbrk(
-  str: *mut u8,
-  breakset: *mut u8,
-): *mut u8
+  str: *u8,
+  breakset: *u8,
+): optref[u8]
 fn(extern("SDL_StepUTF8")) StepUTF8(
-  pstr: *mut *mut u8,
-  pslen: *mut usize,
+  pstr: *optref[u8],
+  pslen: *usize,
 ): Uint32
 fn(extern("SDL_StepBackUTF8")) StepBackUTF8(
-  start: *mut u8,
-  pstr: *mut *mut u8,
+  start: *u8,
+  pstr: *optref[u8],
 ): Uint32
 fn(extern("SDL_UCS4ToUTF8")) UCS4ToUTF8(
   codepoint: Uint32,
-  dst: *mut u8,
-): *mut u8
+  dst: *u8,
+): optref[u8]
 fn(extern("SDL_sscanf")) sscanf(
-  text: *mut u8,
-  fmt: *mut u8,
+  text: *u8,
+  fmt: *u8,
 ): i32
 fn(extern("SDL_vsscanf")) vsscanf(
-  text: *mut u8,
-  fmt: *mut u8,
+  text: *u8,
+  fmt: *u8,
   ap: ptr,
 ): i32
 fn(extern("SDL_snprintf")) snprintf(
-  text: *mut u8,
+  text: *u8,
   maxlen: usize,
-  fmt: *mut u8,
+  fmt: *u8,
 ): i32
 fn(extern("SDL_swprintf")) swprintf(
-  text: *mut i32,
+  text: *i32,
   maxlen: usize,
-  fmt: *mut i32,
+  fmt: *i32,
 ): i32
 fn(extern("SDL_vsnprintf")) vsnprintf(
-  text: *mut u8,
+  text: *u8,
   maxlen: usize,
-  fmt: *mut u8,
+  fmt: *u8,
   ap: ptr,
 ): i32
 fn(extern("SDL_vswprintf")) vswprintf(
-  text: *mut i32,
+  text: *i32,
   maxlen: usize,
-  fmt: *mut i32,
+  fmt: *i32,
   ap: ptr,
 ): i32
 fn(extern("SDL_asprintf")) asprintf(
-  strp: *mut *mut u8,
-  fmt: *mut u8,
+  strp: *optref[u8],
+  fmt: *u8,
 ): i32
 fn(extern("SDL_vasprintf")) vasprintf(
-  strp: *mut *mut u8,
-  fmt: *mut u8,
+  strp: *optref[u8],
+  fmt: *u8,
   ap: ptr,
 ): i32
 fn(extern("SDL_srand")) srand(
@@ -1501,14 +1501,14 @@ fn(extern("SDL_rand")) rand(
 fn(extern("SDL_randf")) randf(): f32
 fn(extern("SDL_rand_bits")) rand_bits(): Uint32
 fn(extern("SDL_rand_r")) rand_r(
-  state: *mut Uint64,
+  state: *Uint64,
   n: Sint32,
 ): Sint32
 fn(extern("SDL_randf_r")) randf_r(
-  state: *mut Uint64,
+  state: *Uint64,
 ): f32
 fn(extern("SDL_rand_bits_r")) rand_bits_r(
-  state: *mut Uint64,
+  state: *Uint64,
 ): Uint32
 fn(extern("SDL_acos")) acos(
   x: f64,
@@ -1614,11 +1614,11 @@ fn(extern("SDL_log10f")) log10f(
 ): f32
 fn(extern("SDL_modf")) modf(
   x: f64,
-  y: *mut f64,
+  y: *f64,
 ): f64
 fn(extern("SDL_modff")) modff(
   x: f32,
-  y: *mut f32,
+  y: *f32,
 ): f32
 fn(extern("SDL_pow")) pow(
   x: f64,
@@ -1667,47 +1667,47 @@ fn(extern("SDL_tanf")) tanf(
   x: f32,
 ): f32
 type iconv_data_t = opaque[0, 1]
-type(alias) iconv_t = *mut iconv_data_t
+type(alias) iconv_t = *iconv_data_t
 #static assert-layout[iconv_t](8, 8, [])
 fn(extern("SDL_iconv_open")) iconv_open(
-  tocode: *mut u8,
-  fromcode: *mut u8,
+  tocode: *u8,
+  fromcode: *u8,
 ): iconv_t
 fn(extern("SDL_iconv_close")) iconv_close(
   cd: iconv_t,
 ): i32
 fn(extern("SDL_iconv")) iconv(
   cd: iconv_t,
-  inbuf: *mut *mut u8,
-  inbytesleft: *mut usize,
-  outbuf: *mut *mut u8,
-  outbytesleft: *mut usize,
+  inbuf: *optref[u8],
+  inbytesleft: *usize,
+  outbuf: *optref[u8],
+  outbytesleft: *usize,
 ): usize
 fn(extern("SDL_iconv_string")) iconv_string(
-  tocode: *mut u8,
-  fromcode: *mut u8,
-  inbuf: *mut u8,
+  tocode: *u8,
+  fromcode: *u8,
+  inbuf: *u8,
   inbytesleft: usize,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_size_mul_check_overflow")) size_mul_check_overflow(
   a: usize,
   b: usize,
-  ret: *mut usize,
+  ret: *usize,
 ): bool
 fn(extern("SDL_size_mul_check_overflow_builtin")) size_mul_check_overflow_builtin(
   a: usize,
   b: usize,
-  ret: *mut usize,
+  ret: *usize,
 ): bool
 fn(extern("SDL_size_add_check_overflow")) size_add_check_overflow(
   a: usize,
   b: usize,
-  ret: *mut usize,
+  ret: *usize,
 ): bool
 fn(extern("SDL_size_add_check_overflow_builtin")) size_add_check_overflow_builtin(
   a: usize,
   b: usize,
-  ret: *mut usize,
+  ret: *usize,
 ): bool
 type(alias) FunctionPointer = *fn(
 
@@ -1724,21 +1724,21 @@ type AssertState = either(u32) {
 type AssertData = {
   always_ignore: bool,
   trigger_count: u32,
-  condition: *mut u8,
-  filename: *mut u8,
+  condition: optref[u8],
+  filename: optref[u8],
   linenum: i32,
-  function: *mut u8,
-  next: *mut AssertData,
+  function: optref[u8],
+  next: optref[AssertData],
 }
 #static assert-layout[AssertData](48, 8, [0, 4, 8, 16, 24, 32, 40, ])
 fn(extern("SDL_ReportAssertion")) ReportAssertion(
-  data: *mut AssertData,
-  func: *mut u8,
-  file: *mut u8,
+  data: *AssertData,
+  func: *u8,
+  file: *u8,
   line: i32,
 ): AssertState
 type(alias) AssertionHandler = *fn(
-  *mut AssertData,
+  *AssertData,
   ptr
 ) -> AssertState
 #static assert-layout[AssertionHandler](8, 8, [])
@@ -1748,9 +1748,9 @@ fn(extern("SDL_SetAssertionHandler")) SetAssertionHandler(
 ): {}
 fn(extern("SDL_GetDefaultAssertionHandler")) GetDefaultAssertionHandler(): AssertionHandler
 fn(extern("SDL_GetAssertionHandler")) GetAssertionHandler(
-  puserdata: *mut ptr,
+  puserdata: *ptr,
 ): AssertionHandler
-fn(extern("SDL_GetAssertionReport")) GetAssertionReport(): *mut AssertData
+fn(extern("SDL_GetAssertionReport")) GetAssertionReport(): optref[AssertData]
 fn(extern("SDL_ResetAssertionReport")) ResetAssertionReport(): {}
 type AsyncIO = opaque[0, 1]
 type AsyncIOTaskType = either(u32) {
@@ -1766,7 +1766,7 @@ type AsyncIOResult = either(u32) {
 }
 #static assert-layout[AsyncIOResult](4, 4, [])
 type AsyncIOOutcome = {
-  asyncio: *mut AsyncIO,
+  asyncio: optref[AsyncIO],
   type: AsyncIOTaskType,
   result: AsyncIOResult,
   buffer: ptr,
@@ -1778,65 +1778,65 @@ type AsyncIOOutcome = {
 #static assert-layout[AsyncIOOutcome](56, 8, [0, 8, 12, 16, 24, 32, 40, 48, ])
 type AsyncIOQueue = opaque[0, 1]
 fn(extern("SDL_AsyncIOFromFile")) AsyncIOFromFile(
-  file: *mut u8,
-  mode: *mut u8,
-): *mut AsyncIO
+  file: *u8,
+  mode: *u8,
+): optref[AsyncIO]
 fn(extern("SDL_GetAsyncIOSize")) GetAsyncIOSize(
-  asyncio: *mut AsyncIO,
+  asyncio: *AsyncIO,
 ): Sint64
 fn(extern("SDL_ReadAsyncIO")) ReadAsyncIO(
-  asyncio: *mut AsyncIO,
+  asyncio: *AsyncIO,
   ptr: ptr,
   offset: Uint64,
   size: Uint64,
-  queue: *mut AsyncIOQueue,
+  queue: *AsyncIOQueue,
   userdata: ptr,
 ): bool
 fn(extern("SDL_WriteAsyncIO")) WriteAsyncIO(
-  asyncio: *mut AsyncIO,
+  asyncio: *AsyncIO,
   ptr: ptr,
   offset: Uint64,
   size: Uint64,
-  queue: *mut AsyncIOQueue,
+  queue: *AsyncIOQueue,
   userdata: ptr,
 ): bool
 fn(extern("SDL_CloseAsyncIO")) CloseAsyncIO(
-  asyncio: *mut AsyncIO,
+  asyncio: *AsyncIO,
   flush: bool,
-  queue: *mut AsyncIOQueue,
+  queue: *AsyncIOQueue,
   userdata: ptr,
 ): bool
-fn(extern("SDL_CreateAsyncIOQueue")) CreateAsyncIOQueue(): *mut AsyncIOQueue
+fn(extern("SDL_CreateAsyncIOQueue")) CreateAsyncIOQueue(): optref[AsyncIOQueue]
 fn(extern("SDL_DestroyAsyncIOQueue")) DestroyAsyncIOQueue(
-  queue: *mut AsyncIOQueue,
+  queue: *AsyncIOQueue,
 ): {}
 fn(extern("SDL_GetAsyncIOResult")) GetAsyncIOResult(
-  queue: *mut AsyncIOQueue,
-  outcome: *mut AsyncIOOutcome,
+  queue: *AsyncIOQueue,
+  outcome: *AsyncIOOutcome,
 ): bool
 fn(extern("SDL_WaitAsyncIOResult")) WaitAsyncIOResult(
-  queue: *mut AsyncIOQueue,
-  outcome: *mut AsyncIOOutcome,
+  queue: *AsyncIOQueue,
+  outcome: *AsyncIOOutcome,
   timeoutMS: Sint32,
 ): bool
 fn(extern("SDL_SignalAsyncIOQueue")) SignalAsyncIOQueue(
-  queue: *mut AsyncIOQueue,
+  queue: *AsyncIOQueue,
 ): {}
 fn(extern("SDL_LoadFileAsync")) LoadFileAsync(
-  file: *mut u8,
-  queue: *mut AsyncIOQueue,
+  file: *u8,
+  queue: *AsyncIOQueue,
   userdata: ptr,
 ): bool
 type(alias) SpinLock = i32
 #static assert-layout[SpinLock](4, 4, [])
 fn(extern("SDL_TryLockSpinlock")) TryLockSpinlock(
-  lock: *mut SpinLock,
+  lock: *SpinLock,
 ): bool
 fn(extern("SDL_LockSpinlock")) LockSpinlock(
-  lock: *mut SpinLock,
+  lock: *SpinLock,
 ): {}
 fn(extern("SDL_UnlockSpinlock")) UnlockSpinlock(
-  lock: *mut SpinLock,
+  lock: *SpinLock,
 ): {}
 fn(extern("SDL_MemoryBarrierReleaseFunction")) MemoryBarrierReleaseFunction(): {}
 fn(extern("SDL_MemoryBarrierAcquireFunction")) MemoryBarrierAcquireFunction(): {}
@@ -1845,19 +1845,19 @@ type AtomicInt = {
 }
 #static assert-layout[AtomicInt](4, 4, [0, ])
 fn(extern("SDL_CompareAndSwapAtomicInt")) CompareAndSwapAtomicInt(
-  a: *mut AtomicInt,
+  a: *AtomicInt,
   oldval: i32,
   newval: i32,
 ): bool
 fn(extern("SDL_SetAtomicInt")) SetAtomicInt(
-  a: *mut AtomicInt,
+  a: *AtomicInt,
   v: i32,
 ): i32
 fn(extern("SDL_GetAtomicInt")) GetAtomicInt(
-  a: *mut AtomicInt,
+  a: *AtomicInt,
 ): i32
 fn(extern("SDL_AddAtomicInt")) AddAtomicInt(
-  a: *mut AtomicInt,
+  a: *AtomicInt,
   v: i32,
 ): i32
 type AtomicU32 = {
@@ -1865,45 +1865,45 @@ type AtomicU32 = {
 }
 #static assert-layout[AtomicU32](4, 4, [0, ])
 fn(extern("SDL_CompareAndSwapAtomicU32")) CompareAndSwapAtomicU32(
-  a: *mut AtomicU32,
+  a: *AtomicU32,
   oldval: Uint32,
   newval: Uint32,
 ): bool
 fn(extern("SDL_SetAtomicU32")) SetAtomicU32(
-  a: *mut AtomicU32,
+  a: *AtomicU32,
   v: Uint32,
 ): Uint32
 fn(extern("SDL_GetAtomicU32")) GetAtomicU32(
-  a: *mut AtomicU32,
+  a: *AtomicU32,
 ): Uint32
 fn(extern("SDL_AddAtomicU32")) AddAtomicU32(
-  a: *mut AtomicU32,
+  a: *AtomicU32,
   v: i32,
 ): Uint32
 fn(extern("SDL_CompareAndSwapAtomicPointer")) CompareAndSwapAtomicPointer(
-  a: *mut ptr,
+  a: *ptr,
   oldval: ptr,
   newval: ptr,
 ): bool
 fn(extern("SDL_SetAtomicPointer")) SetAtomicPointer(
-  a: *mut ptr,
+  a: *ptr,
   v: ptr,
 ): ptr
 fn(extern("SDL_GetAtomicPointer")) GetAtomicPointer(
-  a: *mut ptr,
+  a: *ptr,
 ): ptr
 fn(extern("SDL_SwapFloat")) SwapFloat(
   x: f32,
 ): f32
 fn(extern("SDL_SetError")) SetError(
-  fmt: *mut u8,
+  fmt: *u8,
 ): bool
 fn(extern("SDL_SetErrorV")) SetErrorV(
-  fmt: *mut u8,
+  fmt: *u8,
   ap: ptr,
 ): bool
 fn(extern("SDL_OutOfMemory")) OutOfMemory(): bool
-fn(extern("SDL_GetError")) GetError(): *mut u8
+fn(extern("SDL_GetError")) GetError(): optref[u8]
 fn(extern("SDL_ClearError")) ClearError(): bool
 type(alias) PropertiesID = Uint32
 #static assert-layout[PropertiesID](4, 4, [])
@@ -1935,77 +1935,77 @@ type(alias) CleanupPropertyCallback = *fn(
 #static assert-layout[CleanupPropertyCallback](8, 8, [])
 fn(extern("SDL_SetPointerPropertyWithCleanup")) SetPointerPropertyWithCleanup(
   props: PropertiesID,
-  name: *mut u8,
+  name: *u8,
   value: ptr,
   cleanup: CleanupPropertyCallback,
   userdata: ptr,
 ): bool
 fn(extern("SDL_SetPointerProperty")) SetPointerProperty(
   props: PropertiesID,
-  name: *mut u8,
+  name: *u8,
   value: ptr,
 ): bool
 fn(extern("SDL_SetStringProperty")) SetStringProperty(
   props: PropertiesID,
-  name: *mut u8,
-  value: *mut u8,
+  name: *u8,
+  value: *u8,
 ): bool
 fn(extern("SDL_SetNumberProperty")) SetNumberProperty(
   props: PropertiesID,
-  name: *mut u8,
+  name: *u8,
   value: Sint64,
 ): bool
 fn(extern("SDL_SetFloatProperty")) SetFloatProperty(
   props: PropertiesID,
-  name: *mut u8,
+  name: *u8,
   value: f32,
 ): bool
 fn(extern("SDL_SetBooleanProperty")) SetBooleanProperty(
   props: PropertiesID,
-  name: *mut u8,
+  name: *u8,
   value: bool,
 ): bool
 fn(extern("SDL_HasProperty")) HasProperty(
   props: PropertiesID,
-  name: *mut u8,
+  name: *u8,
 ): bool
 fn(extern("SDL_GetPropertyType")) GetPropertyType(
   props: PropertiesID,
-  name: *mut u8,
+  name: *u8,
 ): PropertyType
 fn(extern("SDL_GetPointerProperty")) GetPointerProperty(
   props: PropertiesID,
-  name: *mut u8,
+  name: *u8,
   default_value: ptr,
 ): ptr
 fn(extern("SDL_GetStringProperty")) GetStringProperty(
   props: PropertiesID,
-  name: *mut u8,
-  default_value: *mut u8,
-): *mut u8
+  name: *u8,
+  default_value: *u8,
+): optref[u8]
 fn(extern("SDL_GetNumberProperty")) GetNumberProperty(
   props: PropertiesID,
-  name: *mut u8,
+  name: *u8,
   default_value: Sint64,
 ): Sint64
 fn(extern("SDL_GetFloatProperty")) GetFloatProperty(
   props: PropertiesID,
-  name: *mut u8,
+  name: *u8,
   default_value: f32,
 ): f32
 fn(extern("SDL_GetBooleanProperty")) GetBooleanProperty(
   props: PropertiesID,
-  name: *mut u8,
+  name: *u8,
   default_value: bool,
 ): bool
 fn(extern("SDL_ClearProperty")) ClearProperty(
   props: PropertiesID,
-  name: *mut u8,
+  name: *u8,
 ): bool
 type(alias) EnumeratePropertiesCallback = *fn(
   ptr,
   PropertiesID,
-  *mut u8
+  *u8
 ) -> {}
 #static assert-layout[EnumeratePropertiesCallback](8, 8, [])
 fn(extern("SDL_EnumerateProperties")) EnumerateProperties(
@@ -2041,124 +2041,124 @@ type(alias) ThreadFunction = *fn(
 #static assert-layout[ThreadFunction](8, 8, [])
 fn(extern("SDL_CreateThreadRuntime")) CreateThreadRuntime(
   fn_c: ThreadFunction,
-  name: *mut u8,
+  name: *u8,
   data: ptr,
   pfnBeginThread: FunctionPointer,
   pfnEndThread: FunctionPointer,
-): *mut Thread
+): optref[Thread]
 fn(extern("SDL_CreateThreadWithPropertiesRuntime")) CreateThreadWithPropertiesRuntime(
   props: PropertiesID,
   pfnBeginThread: FunctionPointer,
   pfnEndThread: FunctionPointer,
-): *mut Thread
+): optref[Thread]
 fn(extern("SDL_GetThreadName")) GetThreadName(
-  thread: *mut Thread,
-): *mut u8
+  thread: *Thread,
+): optref[u8]
 fn(extern("SDL_GetCurrentThreadID")) GetCurrentThreadID(): ThreadID
 fn(extern("SDL_GetThreadID")) GetThreadID(
-  thread: *mut Thread,
+  thread: *Thread,
 ): ThreadID
 fn(extern("SDL_SetCurrentThreadPriority")) SetCurrentThreadPriority(
   priority: ThreadPriority,
 ): bool
 fn(extern("SDL_WaitThread")) WaitThread(
-  thread: *mut Thread,
-  status: *mut i32,
+  thread: *Thread,
+  status: *i32,
 ): {}
 fn(extern("SDL_GetThreadState")) GetThreadState(
-  thread: *mut Thread,
+  thread: *Thread,
 ): ThreadState
 fn(extern("SDL_DetachThread")) DetachThread(
-  thread: *mut Thread,
+  thread: *Thread,
 ): {}
 fn(extern("SDL_GetTLS")) GetTLS(
-  id: *mut TLSID,
+  id: *TLSID,
 ): ptr
 type(alias) TLSDestructorCallback = *fn(
   ptr
 ) -> {}
 #static assert-layout[TLSDestructorCallback](8, 8, [])
 fn(extern("SDL_SetTLS")) SetTLS(
-  id: *mut TLSID,
+  id: *TLSID,
   value: ptr,
   destructor: TLSDestructorCallback,
 ): bool
 fn(extern("SDL_CleanupTLS")) CleanupTLS(): {}
 type Mutex = opaque[0, 1]
-fn(extern("SDL_CreateMutex")) CreateMutex(): *mut Mutex
+fn(extern("SDL_CreateMutex")) CreateMutex(): optref[Mutex]
 fn(extern("SDL_LockMutex")) LockMutex(
-  mutex: *mut Mutex,
+  mutex: *Mutex,
 ): {}
 fn(extern("SDL_TryLockMutex")) TryLockMutex(
-  mutex: *mut Mutex,
+  mutex: *Mutex,
 ): bool
 fn(extern("SDL_UnlockMutex")) UnlockMutex(
-  mutex: *mut Mutex,
+  mutex: *Mutex,
 ): {}
 fn(extern("SDL_DestroyMutex")) DestroyMutex(
-  mutex: *mut Mutex,
+  mutex: *Mutex,
 ): {}
 type RWLock = opaque[0, 1]
-fn(extern("SDL_CreateRWLock")) CreateRWLock(): *mut RWLock
+fn(extern("SDL_CreateRWLock")) CreateRWLock(): optref[RWLock]
 fn(extern("SDL_LockRWLockForReading")) LockRWLockForReading(
-  rwlock: *mut RWLock,
+  rwlock: *RWLock,
 ): {}
 fn(extern("SDL_LockRWLockForWriting")) LockRWLockForWriting(
-  rwlock: *mut RWLock,
+  rwlock: *RWLock,
 ): {}
 fn(extern("SDL_TryLockRWLockForReading")) TryLockRWLockForReading(
-  rwlock: *mut RWLock,
+  rwlock: *RWLock,
 ): bool
 fn(extern("SDL_TryLockRWLockForWriting")) TryLockRWLockForWriting(
-  rwlock: *mut RWLock,
+  rwlock: *RWLock,
 ): bool
 fn(extern("SDL_UnlockRWLock")) UnlockRWLock(
-  rwlock: *mut RWLock,
+  rwlock: *RWLock,
 ): {}
 fn(extern("SDL_DestroyRWLock")) DestroyRWLock(
-  rwlock: *mut RWLock,
+  rwlock: *RWLock,
 ): {}
 type Semaphore = opaque[0, 1]
 fn(extern("SDL_CreateSemaphore")) CreateSemaphore(
   initial_value: Uint32,
-): *mut Semaphore
+): optref[Semaphore]
 fn(extern("SDL_DestroySemaphore")) DestroySemaphore(
-  sem: *mut Semaphore,
+  sem: *Semaphore,
 ): {}
 fn(extern("SDL_WaitSemaphore")) WaitSemaphore(
-  sem: *mut Semaphore,
+  sem: *Semaphore,
 ): {}
 fn(extern("SDL_TryWaitSemaphore")) TryWaitSemaphore(
-  sem: *mut Semaphore,
+  sem: *Semaphore,
 ): bool
 fn(extern("SDL_WaitSemaphoreTimeout")) WaitSemaphoreTimeout(
-  sem: *mut Semaphore,
+  sem: *Semaphore,
   timeoutMS: Sint32,
 ): bool
 fn(extern("SDL_SignalSemaphore")) SignalSemaphore(
-  sem: *mut Semaphore,
+  sem: *Semaphore,
 ): {}
 fn(extern("SDL_GetSemaphoreValue")) GetSemaphoreValue(
-  sem: *mut Semaphore,
+  sem: *Semaphore,
 ): Uint32
 type Condition = opaque[0, 1]
-fn(extern("SDL_CreateCondition")) CreateCondition(): *mut Condition
+fn(extern("SDL_CreateCondition")) CreateCondition(): optref[Condition]
 fn(extern("SDL_DestroyCondition")) DestroyCondition(
-  cond: *mut Condition,
+  cond: *Condition,
 ): {}
 fn(extern("SDL_SignalCondition")) SignalCondition(
-  cond: *mut Condition,
+  cond: *Condition,
 ): {}
 fn(extern("SDL_BroadcastCondition")) BroadcastCondition(
-  cond: *mut Condition,
+  cond: *Condition,
 ): {}
 fn(extern("SDL_WaitCondition")) WaitCondition(
-  cond: *mut Condition,
-  mutex: *mut Mutex,
+  cond: *Condition,
+  mutex: *Mutex,
 ): {}
 fn(extern("SDL_WaitConditionTimeout")) WaitConditionTimeout(
-  cond: *mut Condition,
-  mutex: *mut Mutex,
+  cond: *Condition,
+  mutex: *Mutex,
   timeoutMS: Sint32,
 ): bool
 type InitStatus = either(u32) {
@@ -2175,13 +2175,13 @@ type InitState = {
 }
 #static assert-layout[InitState](24, 8, [0, 8, 16, ])
 fn(extern("SDL_ShouldInit")) ShouldInit(
-  state: *mut InitState,
+  state: *InitState,
 ): bool
 fn(extern("SDL_ShouldQuit")) ShouldQuit(
-  state: *mut InitState,
+  state: *InitState,
 ): bool
 fn(extern("SDL_SetInitialized")) SetInitialized(
-  state: *mut InitState,
+  state: *InitState,
   initialized: bool,
 ): {}
 type IOStatus = either(u32) {
@@ -2201,225 +2201,225 @@ type IOWhence = either(u32) {
 #static assert-layout[IOWhence](4, 4, [])
 type IOStreamInterface = {
   version: Uint32,
-  size: *fn(
+  size: optref[fn(
     ptr
-  ) -> Sint64,
-  seek: *fn(
+  ) -> Sint64],
+  seek: optref[fn(
     ptr,
     Sint64,
     IOWhence
-  ) -> Sint64,
-  read: *fn(
+  ) -> Sint64],
+  read: optref[fn(
     ptr,
     ptr,
     usize,
-    *mut IOStatus
-  ) -> usize,
-  write: *fn(
+    *IOStatus
+  ) -> usize],
+  write: optref[fn(
     ptr,
     ptr,
     usize,
-    *mut IOStatus
-  ) -> usize,
-  flush: *fn(
+    *IOStatus
+  ) -> usize],
+  flush: optref[fn(
     ptr,
-    *mut IOStatus
-  ) -> bool,
-  close: *fn(
+    *IOStatus
+  ) -> bool],
+  close: optref[fn(
     ptr
-  ) -> bool,
+  ) -> bool],
 }
 #static assert-layout[IOStreamInterface](56, 8, [0, 8, 16, 24, 32, 40, 48, ])
 type IOStream = opaque[0, 1]
 fn(extern("SDL_IOFromFile")) IOFromFile(
-  file: *mut u8,
-  mode: *mut u8,
-): *mut IOStream
+  file: *u8,
+  mode: *u8,
+): optref[IOStream]
 fn(extern("SDL_IOFromMem")) IOFromMem(
   mem: ptr,
   size: usize,
-): *mut IOStream
+): optref[IOStream]
 fn(extern("SDL_IOFromConstMem")) IOFromConstMem(
   mem: ptr,
   size: usize,
-): *mut IOStream
-fn(extern("SDL_IOFromDynamicMem")) IOFromDynamicMem(): *mut IOStream
+): optref[IOStream]
+fn(extern("SDL_IOFromDynamicMem")) IOFromDynamicMem(): optref[IOStream]
 fn(extern("SDL_OpenIO")) OpenIO(
-  iface: *mut IOStreamInterface,
+  iface: *IOStreamInterface,
   userdata: ptr,
-): *mut IOStream
+): optref[IOStream]
 fn(extern("SDL_CloseIO")) CloseIO(
-  context_c: *mut IOStream,
+  context_c: *IOStream,
 ): bool
 fn(extern("SDL_GetIOProperties")) GetIOProperties(
-  context_c: *mut IOStream,
+  context_c: *IOStream,
 ): PropertiesID
 fn(extern("SDL_GetIOStatus")) GetIOStatus(
-  context_c: *mut IOStream,
+  context_c: *IOStream,
 ): IOStatus
 fn(extern("SDL_GetIOSize")) GetIOSize(
-  context_c: *mut IOStream,
+  context_c: *IOStream,
 ): Sint64
 fn(extern("SDL_SeekIO")) SeekIO(
-  context_c: *mut IOStream,
+  context_c: *IOStream,
   offset: Sint64,
   whence: IOWhence,
 ): Sint64
 fn(extern("SDL_TellIO")) TellIO(
-  context_c: *mut IOStream,
+  context_c: *IOStream,
 ): Sint64
 fn(extern("SDL_ReadIO")) ReadIO(
-  context_c: *mut IOStream,
+  context_c: *IOStream,
   ptr: ptr,
   size: usize,
 ): usize
 fn(extern("SDL_WriteIO")) WriteIO(
-  context_c: *mut IOStream,
+  context_c: *IOStream,
   ptr: ptr,
   size: usize,
 ): usize
 fn(extern("SDL_IOprintf")) IOprintf(
-  context_c: *mut IOStream,
-  fmt: *mut u8,
+  context_c: *IOStream,
+  fmt: *u8,
 ): usize
 fn(extern("SDL_IOvprintf")) IOvprintf(
-  context_c: *mut IOStream,
-  fmt: *mut u8,
+  context_c: *IOStream,
+  fmt: *u8,
   ap: ptr,
 ): usize
 fn(extern("SDL_FlushIO")) FlushIO(
-  context_c: *mut IOStream,
+  context_c: *IOStream,
 ): bool
 fn(extern("SDL_LoadFile_IO")) LoadFile_IO(
-  src: *mut IOStream,
-  datasize: *mut usize,
+  src: *IOStream,
+  datasize: *usize,
   closeio: bool,
 ): ptr
 fn(extern("SDL_LoadFile")) LoadFile(
-  file: *mut u8,
-  datasize: *mut usize,
+  file: *u8,
+  datasize: *usize,
 ): ptr
 fn(extern("SDL_SaveFile_IO")) SaveFile_IO(
-  src: *mut IOStream,
+  src: *IOStream,
   data: ptr,
   datasize: usize,
   closeio: bool,
 ): bool
 fn(extern("SDL_SaveFile")) SaveFile(
-  file: *mut u8,
+  file: *u8,
   data: ptr,
   datasize: usize,
 ): bool
 fn(extern("SDL_ReadU8")) ReadU8(
-  src: *mut IOStream,
-  value: *mut Uint8,
+  src: *IOStream,
+  value: *Uint8,
 ): bool
 fn(extern("SDL_ReadS8")) ReadS8(
-  src: *mut IOStream,
-  value: *mut Sint8,
+  src: *IOStream,
+  value: *Sint8,
 ): bool
 fn(extern("SDL_ReadU16LE")) ReadU16LE(
-  src: *mut IOStream,
-  value: *mut Uint16,
+  src: *IOStream,
+  value: *Uint16,
 ): bool
 fn(extern("SDL_ReadS16LE")) ReadS16LE(
-  src: *mut IOStream,
-  value: *mut Sint16,
+  src: *IOStream,
+  value: *Sint16,
 ): bool
 fn(extern("SDL_ReadU16BE")) ReadU16BE(
-  src: *mut IOStream,
-  value: *mut Uint16,
+  src: *IOStream,
+  value: *Uint16,
 ): bool
 fn(extern("SDL_ReadS16BE")) ReadS16BE(
-  src: *mut IOStream,
-  value: *mut Sint16,
+  src: *IOStream,
+  value: *Sint16,
 ): bool
 fn(extern("SDL_ReadU32LE")) ReadU32LE(
-  src: *mut IOStream,
-  value: *mut Uint32,
+  src: *IOStream,
+  value: *Uint32,
 ): bool
 fn(extern("SDL_ReadS32LE")) ReadS32LE(
-  src: *mut IOStream,
-  value: *mut Sint32,
+  src: *IOStream,
+  value: *Sint32,
 ): bool
 fn(extern("SDL_ReadU32BE")) ReadU32BE(
-  src: *mut IOStream,
-  value: *mut Uint32,
+  src: *IOStream,
+  value: *Uint32,
 ): bool
 fn(extern("SDL_ReadS32BE")) ReadS32BE(
-  src: *mut IOStream,
-  value: *mut Sint32,
+  src: *IOStream,
+  value: *Sint32,
 ): bool
 fn(extern("SDL_ReadU64LE")) ReadU64LE(
-  src: *mut IOStream,
-  value: *mut Uint64,
+  src: *IOStream,
+  value: *Uint64,
 ): bool
 fn(extern("SDL_ReadS64LE")) ReadS64LE(
-  src: *mut IOStream,
-  value: *mut Sint64,
+  src: *IOStream,
+  value: *Sint64,
 ): bool
 fn(extern("SDL_ReadU64BE")) ReadU64BE(
-  src: *mut IOStream,
-  value: *mut Uint64,
+  src: *IOStream,
+  value: *Uint64,
 ): bool
 fn(extern("SDL_ReadS64BE")) ReadS64BE(
-  src: *mut IOStream,
-  value: *mut Sint64,
+  src: *IOStream,
+  value: *Sint64,
 ): bool
 fn(extern("SDL_WriteU8")) WriteU8(
-  dst: *mut IOStream,
+  dst: *IOStream,
   value: Uint8,
 ): bool
 fn(extern("SDL_WriteS8")) WriteS8(
-  dst: *mut IOStream,
+  dst: *IOStream,
   value: Sint8,
 ): bool
 fn(extern("SDL_WriteU16LE")) WriteU16LE(
-  dst: *mut IOStream,
+  dst: *IOStream,
   value: Uint16,
 ): bool
 fn(extern("SDL_WriteS16LE")) WriteS16LE(
-  dst: *mut IOStream,
+  dst: *IOStream,
   value: Sint16,
 ): bool
 fn(extern("SDL_WriteU16BE")) WriteU16BE(
-  dst: *mut IOStream,
+  dst: *IOStream,
   value: Uint16,
 ): bool
 fn(extern("SDL_WriteS16BE")) WriteS16BE(
-  dst: *mut IOStream,
+  dst: *IOStream,
   value: Sint16,
 ): bool
 fn(extern("SDL_WriteU32LE")) WriteU32LE(
-  dst: *mut IOStream,
+  dst: *IOStream,
   value: Uint32,
 ): bool
 fn(extern("SDL_WriteS32LE")) WriteS32LE(
-  dst: *mut IOStream,
+  dst: *IOStream,
   value: Sint32,
 ): bool
 fn(extern("SDL_WriteU32BE")) WriteU32BE(
-  dst: *mut IOStream,
+  dst: *IOStream,
   value: Uint32,
 ): bool
 fn(extern("SDL_WriteS32BE")) WriteS32BE(
-  dst: *mut IOStream,
+  dst: *IOStream,
   value: Sint32,
 ): bool
 fn(extern("SDL_WriteU64LE")) WriteU64LE(
-  dst: *mut IOStream,
+  dst: *IOStream,
   value: Uint64,
 ): bool
 fn(extern("SDL_WriteS64LE")) WriteS64LE(
-  dst: *mut IOStream,
+  dst: *IOStream,
   value: Sint64,
 ): bool
 fn(extern("SDL_WriteU64BE")) WriteU64BE(
-  dst: *mut IOStream,
+  dst: *IOStream,
   value: Uint64,
 ): bool
 fn(extern("SDL_WriteS64BE")) WriteS64BE(
-  dst: *mut IOStream,
+  dst: *IOStream,
   value: Sint64,
 ): bool
 type AudioFormat = either(u32) {
@@ -2446,29 +2446,29 @@ type AudioStream = opaque[0, 1]
 fn(extern("SDL_GetNumAudioDrivers")) GetNumAudioDrivers(): i32
 fn(extern("SDL_GetAudioDriver")) GetAudioDriver(
   index: i32,
-): *mut u8
-fn(extern("SDL_GetCurrentAudioDriver")) GetCurrentAudioDriver(): *mut u8
+): optref[u8]
+fn(extern("SDL_GetCurrentAudioDriver")) GetCurrentAudioDriver(): optref[u8]
 fn(extern("SDL_GetAudioPlaybackDevices")) GetAudioPlaybackDevices(
-  count: *mut i32,
-): *mut AudioDeviceID
+  count: *i32,
+): optref[AudioDeviceID]
 fn(extern("SDL_GetAudioRecordingDevices")) GetAudioRecordingDevices(
-  count: *mut i32,
-): *mut AudioDeviceID
+  count: *i32,
+): optref[AudioDeviceID]
 fn(extern("SDL_GetAudioDeviceName")) GetAudioDeviceName(
   devid: AudioDeviceID,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_GetAudioDeviceFormat")) GetAudioDeviceFormat(
   devid: AudioDeviceID,
-  spec: *mut AudioSpec,
-  sample_frames: *mut i32,
+  spec: *AudioSpec,
+  sample_frames: *i32,
 ): bool
 fn(extern("SDL_GetAudioDeviceChannelMap")) GetAudioDeviceChannelMap(
   devid: AudioDeviceID,
-  count: *mut i32,
-): *mut i32
+  count: *i32,
+): optref[i32]
 fn(extern("SDL_OpenAudioDevice")) OpenAudioDevice(
   devid: AudioDeviceID,
-  spec: *mut AudioSpec,
+  spec: *AudioSpec,
 ): AudioDeviceID
 fn(extern("SDL_IsAudioDevicePhysical")) IsAudioDevicePhysical(
   devid: AudioDeviceID,
@@ -2497,74 +2497,74 @@ fn(extern("SDL_CloseAudioDevice")) CloseAudioDevice(
 ): {}
 fn(extern("SDL_BindAudioStreams")) BindAudioStreams(
   devid: AudioDeviceID,
-  streams: *mut *mut AudioStream,
+  streams: *optref[AudioStream],
   num_streams: i32,
 ): bool
 fn(extern("SDL_BindAudioStream")) BindAudioStream(
   devid: AudioDeviceID,
-  stream: *mut AudioStream,
+  stream: *AudioStream,
 ): bool
 fn(extern("SDL_UnbindAudioStreams")) UnbindAudioStreams(
-  streams: *mut *mut AudioStream,
+  streams: *optref[AudioStream],
   num_streams: i32,
 ): {}
 fn(extern("SDL_UnbindAudioStream")) UnbindAudioStream(
-  stream: *mut AudioStream,
+  stream: *AudioStream,
 ): {}
 fn(extern("SDL_GetAudioStreamDevice")) GetAudioStreamDevice(
-  stream: *mut AudioStream,
+  stream: *AudioStream,
 ): AudioDeviceID
 fn(extern("SDL_CreateAudioStream")) CreateAudioStream(
-  src_spec: *mut AudioSpec,
-  dst_spec: *mut AudioSpec,
-): *mut AudioStream
+  src_spec: *AudioSpec,
+  dst_spec: *AudioSpec,
+): optref[AudioStream]
 fn(extern("SDL_GetAudioStreamProperties")) GetAudioStreamProperties(
-  stream: *mut AudioStream,
+  stream: *AudioStream,
 ): PropertiesID
 fn(extern("SDL_GetAudioStreamFormat")) GetAudioStreamFormat(
-  stream: *mut AudioStream,
-  src_spec: *mut AudioSpec,
-  dst_spec: *mut AudioSpec,
+  stream: *AudioStream,
+  src_spec: *AudioSpec,
+  dst_spec: *AudioSpec,
 ): bool
 fn(extern("SDL_SetAudioStreamFormat")) SetAudioStreamFormat(
-  stream: *mut AudioStream,
-  src_spec: *mut AudioSpec,
-  dst_spec: *mut AudioSpec,
+  stream: *AudioStream,
+  src_spec: *AudioSpec,
+  dst_spec: *AudioSpec,
 ): bool
 fn(extern("SDL_GetAudioStreamFrequencyRatio")) GetAudioStreamFrequencyRatio(
-  stream: *mut AudioStream,
+  stream: *AudioStream,
 ): f32
 fn(extern("SDL_SetAudioStreamFrequencyRatio")) SetAudioStreamFrequencyRatio(
-  stream: *mut AudioStream,
+  stream: *AudioStream,
   ratio: f32,
 ): bool
 fn(extern("SDL_GetAudioStreamGain")) GetAudioStreamGain(
-  stream: *mut AudioStream,
+  stream: *AudioStream,
 ): f32
 fn(extern("SDL_SetAudioStreamGain")) SetAudioStreamGain(
-  stream: *mut AudioStream,
+  stream: *AudioStream,
   gain: f32,
 ): bool
 fn(extern("SDL_GetAudioStreamInputChannelMap")) GetAudioStreamInputChannelMap(
-  stream: *mut AudioStream,
-  count: *mut i32,
-): *mut i32
+  stream: *AudioStream,
+  count: *i32,
+): optref[i32]
 fn(extern("SDL_GetAudioStreamOutputChannelMap")) GetAudioStreamOutputChannelMap(
-  stream: *mut AudioStream,
-  count: *mut i32,
-): *mut i32
+  stream: *AudioStream,
+  count: *i32,
+): optref[i32]
 fn(extern("SDL_SetAudioStreamInputChannelMap")) SetAudioStreamInputChannelMap(
-  stream: *mut AudioStream,
-  chmap: *mut i32,
+  stream: *AudioStream,
+  chmap: *i32,
   count: i32,
 ): bool
 fn(extern("SDL_SetAudioStreamOutputChannelMap")) SetAudioStreamOutputChannelMap(
-  stream: *mut AudioStream,
-  chmap: *mut i32,
+  stream: *AudioStream,
+  chmap: *i32,
   count: i32,
 ): bool
 fn(extern("SDL_PutAudioStreamData")) PutAudioStreamData(
-  stream: *mut AudioStream,
+  stream: *AudioStream,
   buf: ptr,
   len: i32,
 ): bool
@@ -2575,80 +2575,80 @@ type(alias) AudioStreamDataCompleteCallback = *fn(
 ) -> {}
 #static assert-layout[AudioStreamDataCompleteCallback](8, 8, [])
 fn(extern("SDL_PutAudioStreamDataNoCopy")) PutAudioStreamDataNoCopy(
-  stream: *mut AudioStream,
+  stream: *AudioStream,
   buf: ptr,
   len: i32,
   callback: AudioStreamDataCompleteCallback,
   userdata: ptr,
 ): bool
 fn(extern("SDL_PutAudioStreamPlanarData")) PutAudioStreamPlanarData(
-  stream: *mut AudioStream,
-  channel_buffers: *mut ptr,
+  stream: *AudioStream,
+  channel_buffers: *ptr,
   num_channels: i32,
   num_samples: i32,
 ): bool
 fn(extern("SDL_GetAudioStreamData")) GetAudioStreamData(
-  stream: *mut AudioStream,
+  stream: *AudioStream,
   buf: ptr,
   len: i32,
 ): i32
 fn(extern("SDL_GetAudioStreamAvailable")) GetAudioStreamAvailable(
-  stream: *mut AudioStream,
+  stream: *AudioStream,
 ): i32
 fn(extern("SDL_GetAudioStreamQueued")) GetAudioStreamQueued(
-  stream: *mut AudioStream,
+  stream: *AudioStream,
 ): i32
 fn(extern("SDL_FlushAudioStream")) FlushAudioStream(
-  stream: *mut AudioStream,
+  stream: *AudioStream,
 ): bool
 fn(extern("SDL_ClearAudioStream")) ClearAudioStream(
-  stream: *mut AudioStream,
+  stream: *AudioStream,
 ): bool
 fn(extern("SDL_PauseAudioStreamDevice")) PauseAudioStreamDevice(
-  stream: *mut AudioStream,
+  stream: *AudioStream,
 ): bool
 fn(extern("SDL_ResumeAudioStreamDevice")) ResumeAudioStreamDevice(
-  stream: *mut AudioStream,
+  stream: *AudioStream,
 ): bool
 fn(extern("SDL_AudioStreamDevicePaused")) AudioStreamDevicePaused(
-  stream: *mut AudioStream,
+  stream: *AudioStream,
 ): bool
 fn(extern("SDL_LockAudioStream")) LockAudioStream(
-  stream: *mut AudioStream,
+  stream: *AudioStream,
 ): bool
 fn(extern("SDL_UnlockAudioStream")) UnlockAudioStream(
-  stream: *mut AudioStream,
+  stream: *AudioStream,
 ): bool
 type(alias) AudioStreamCallback = *fn(
   ptr,
-  *mut AudioStream,
+  *AudioStream,
   i32,
   i32
 ) -> {}
 #static assert-layout[AudioStreamCallback](8, 8, [])
 fn(extern("SDL_SetAudioStreamGetCallback")) SetAudioStreamGetCallback(
-  stream: *mut AudioStream,
+  stream: *AudioStream,
   callback: AudioStreamCallback,
   userdata: ptr,
 ): bool
 fn(extern("SDL_SetAudioStreamPutCallback")) SetAudioStreamPutCallback(
-  stream: *mut AudioStream,
+  stream: *AudioStream,
   callback: AudioStreamCallback,
   userdata: ptr,
 ): bool
 fn(extern("SDL_DestroyAudioStream")) DestroyAudioStream(
-  stream: *mut AudioStream,
+  stream: *AudioStream,
 ): {}
 fn(extern("SDL_OpenAudioDeviceStream")) OpenAudioDeviceStream(
   devid: AudioDeviceID,
-  spec: *mut AudioSpec,
+  spec: *AudioSpec,
   callback: AudioStreamCallback,
   userdata: ptr,
-): *mut AudioStream
+): optref[AudioStream]
 type(alias) AudioPostmixCallback = *fn(
   ptr,
-  *mut AudioSpec,
-  *mut f32,
+  *AudioSpec,
+  *f32,
   i32
 ) -> {}
 #static assert-layout[AudioPostmixCallback](8, 8, [])
@@ -2658,36 +2658,36 @@ fn(extern("SDL_SetAudioPostmixCallback")) SetAudioPostmixCallback(
   userdata: ptr,
 ): bool
 fn(extern("SDL_LoadWAV_IO")) LoadWAV_IO(
-  src: *mut IOStream,
+  src: *IOStream,
   closeio: bool,
-  spec: *mut AudioSpec,
-  audio_buf: *mut *mut Uint8,
-  audio_len: *mut Uint32,
+  spec: *AudioSpec,
+  audio_buf: *optref[Uint8],
+  audio_len: *Uint32,
 ): bool
 fn(extern("SDL_LoadWAV")) LoadWAV(
-  path: *mut u8,
-  spec: *mut AudioSpec,
-  audio_buf: *mut *mut Uint8,
-  audio_len: *mut Uint32,
+  path: *u8,
+  spec: *AudioSpec,
+  audio_buf: *optref[Uint8],
+  audio_len: *Uint32,
 ): bool
 fn(extern("SDL_MixAudio")) MixAudio(
-  dst: *mut Uint8,
-  src: *mut Uint8,
+  dst: *Uint8,
+  src: *Uint8,
   format: AudioFormat,
   len: Uint32,
   volume: f32,
 ): bool
 fn(extern("SDL_ConvertAudioSamples")) ConvertAudioSamples(
-  src_spec: *mut AudioSpec,
-  src_data: *mut Uint8,
+  src_spec: *AudioSpec,
+  src_data: *Uint8,
   src_len: i32,
-  dst_spec: *mut AudioSpec,
-  dst_data: *mut *mut Uint8,
-  dst_len: *mut i32,
+  dst_spec: *AudioSpec,
+  dst_data: *optref[Uint8],
+  dst_len: *i32,
 ): bool
 fn(extern("SDL_GetAudioFormatName")) GetAudioFormatName(
   format: AudioFormat,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_GetSilenceValueForFormat")) GetSilenceValueForFormat(
   format: AudioFormat,
 ): i32
@@ -2958,7 +2958,7 @@ type FColor = {
 #static assert-layout[FColor](16, 4, [0, 4, 8, 12, ])
 type Palette = {
   ncolors: i32,
-  colors: *mut Color,
+  colors: optref[Color],
   version: Uint32,
   refcount: i32,
 }
@@ -2984,14 +2984,14 @@ type PixelFormatDetails = {
 #static assert-layout[PixelFormatDetails](32, 4, [0, 4, 5, 6, 8, 12, 16, 20, 24, 25, 26, 27, 28, 29, 30, 31, ])
 fn(extern("SDL_GetPixelFormatName")) GetPixelFormatName(
   format: PixelFormat,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_GetMasksForPixelFormat")) GetMasksForPixelFormat(
   format: PixelFormat,
-  bpp: *mut i32,
-  Rmask: *mut Uint32,
-  Gmask: *mut Uint32,
-  Bmask: *mut Uint32,
-  Amask: *mut Uint32,
+  bpp: *i32,
+  Rmask: *Uint32,
+  Gmask: *Uint32,
+  Bmask: *Uint32,
+  Amask: *Uint32,
 ): bool
 fn(extern("SDL_GetPixelFormatForMasks")) GetPixelFormatForMasks(
   bpp: i32,
@@ -3002,29 +3002,29 @@ fn(extern("SDL_GetPixelFormatForMasks")) GetPixelFormatForMasks(
 ): PixelFormat
 fn(extern("SDL_GetPixelFormatDetails")) GetPixelFormatDetails(
   format: PixelFormat,
-): *mut PixelFormatDetails
+): optref[PixelFormatDetails]
 fn(extern("SDL_CreatePalette")) CreatePalette(
   ncolors: i32,
-): *mut Palette
+): optref[Palette]
 fn(extern("SDL_SetPaletteColors")) SetPaletteColors(
-  palette: *mut Palette,
-  colors: *mut Color,
+  palette: *Palette,
+  colors: *Color,
   firstcolor: i32,
   ncolors: i32,
 ): bool
 fn(extern("SDL_DestroyPalette")) DestroyPalette(
-  palette: *mut Palette,
+  palette: *Palette,
 ): {}
 fn(extern("SDL_MapRGB")) MapRGB(
-  format: *mut PixelFormatDetails,
-  palette: *mut Palette,
+  format: *PixelFormatDetails,
+  palette: *Palette,
   r: Uint8,
   g: Uint8,
   b: Uint8,
 ): Uint32
 fn(extern("SDL_MapRGBA")) MapRGBA(
-  format: *mut PixelFormatDetails,
-  palette: *mut Palette,
+  format: *PixelFormatDetails,
+  palette: *Palette,
   r: Uint8,
   g: Uint8,
   b: Uint8,
@@ -3032,20 +3032,20 @@ fn(extern("SDL_MapRGBA")) MapRGBA(
 ): Uint32
 fn(extern("SDL_GetRGB")) GetRGB(
   pixelvalue: Uint32,
-  format: *mut PixelFormatDetails,
-  palette: *mut Palette,
-  r: *mut Uint8,
-  g: *mut Uint8,
-  b: *mut Uint8,
+  format: *PixelFormatDetails,
+  palette: *Palette,
+  r: *Uint8,
+  g: *Uint8,
+  b: *Uint8,
 ): {}
 fn(extern("SDL_GetRGBA")) GetRGBA(
   pixelvalue: Uint32,
-  format: *mut PixelFormatDetails,
-  palette: *mut Palette,
-  r: *mut Uint8,
-  g: *mut Uint8,
-  b: *mut Uint8,
-  a: *mut Uint8,
+  format: *PixelFormatDetails,
+  palette: *Palette,
+  r: *Uint8,
+  g: *Uint8,
+  b: *Uint8,
+  a: *Uint8,
 ): {}
 type Point = {
   x: i32,
@@ -3072,89 +3072,89 @@ type FRect = {
 }
 #static assert-layout[FRect](16, 4, [0, 4, 8, 12, ])
 fn(extern("SDL_RectToFRect")) RectToFRect(
-  rect: *mut Rect,
-  frect: *mut FRect,
+  rect: *Rect,
+  frect: *FRect,
 ): {}
 fn(extern("SDL_PointInRect")) PointInRect(
-  p: *mut Point,
-  r: *mut Rect,
+  p: *Point,
+  r: *Rect,
 ): bool
 fn(extern("SDL_RectEmpty")) RectEmpty(
-  r: *mut Rect,
+  r: *Rect,
 ): bool
 fn(extern("SDL_RectsEqual")) RectsEqual(
-  a: *mut Rect,
-  b: *mut Rect,
+  a: *Rect,
+  b: *Rect,
 ): bool
 fn(extern("SDL_HasRectIntersection")) HasRectIntersection(
-  A: *mut Rect,
-  B: *mut Rect,
+  A: *Rect,
+  B: *Rect,
 ): bool
 fn(extern("SDL_GetRectIntersection")) GetRectIntersection(
-  A: *mut Rect,
-  B: *mut Rect,
-  result: *mut Rect,
+  A: *Rect,
+  B: *Rect,
+  result: *Rect,
 ): bool
 fn(extern("SDL_GetRectUnion")) GetRectUnion(
-  A: *mut Rect,
-  B: *mut Rect,
-  result: *mut Rect,
+  A: *Rect,
+  B: *Rect,
+  result: *Rect,
 ): bool
 fn(extern("SDL_GetRectEnclosingPoints")) GetRectEnclosingPoints(
-  points: *mut Point,
+  points: *Point,
   count: i32,
-  clip: *mut Rect,
-  result: *mut Rect,
+  clip: *Rect,
+  result: *Rect,
 ): bool
 fn(extern("SDL_GetRectAndLineIntersection")) GetRectAndLineIntersection(
-  rect: *mut Rect,
-  X1: *mut i32,
-  Y1: *mut i32,
-  X2: *mut i32,
-  Y2: *mut i32,
+  rect: *Rect,
+  X1: *i32,
+  Y1: *i32,
+  X2: *i32,
+  Y2: *i32,
 ): bool
 fn(extern("SDL_PointInRectFloat")) PointInRectFloat(
-  p: *mut FPoint,
-  r: *mut FRect,
+  p: *FPoint,
+  r: *FRect,
 ): bool
 fn(extern("SDL_RectEmptyFloat")) RectEmptyFloat(
-  r: *mut FRect,
+  r: *FRect,
 ): bool
 fn(extern("SDL_RectsEqualEpsilon")) RectsEqualEpsilon(
-  a: *mut FRect,
-  b: *mut FRect,
+  a: *FRect,
+  b: *FRect,
   epsilon: f32,
 ): bool
 fn(extern("SDL_RectsEqualFloat")) RectsEqualFloat(
-  a: *mut FRect,
-  b: *mut FRect,
+  a: *FRect,
+  b: *FRect,
 ): bool
 fn(extern("SDL_HasRectIntersectionFloat")) HasRectIntersectionFloat(
-  A: *mut FRect,
-  B: *mut FRect,
+  A: *FRect,
+  B: *FRect,
 ): bool
 fn(extern("SDL_GetRectIntersectionFloat")) GetRectIntersectionFloat(
-  A: *mut FRect,
-  B: *mut FRect,
-  result: *mut FRect,
+  A: *FRect,
+  B: *FRect,
+  result: *FRect,
 ): bool
 fn(extern("SDL_GetRectUnionFloat")) GetRectUnionFloat(
-  A: *mut FRect,
-  B: *mut FRect,
-  result: *mut FRect,
+  A: *FRect,
+  B: *FRect,
+  result: *FRect,
 ): bool
 fn(extern("SDL_GetRectEnclosingPointsFloat")) GetRectEnclosingPointsFloat(
-  points: *mut FPoint,
+  points: *FPoint,
   count: i32,
-  clip: *mut FRect,
-  result: *mut FRect,
+  clip: *FRect,
+  result: *FRect,
 ): bool
 fn(extern("SDL_GetRectAndLineIntersectionFloat")) GetRectAndLineIntersectionFloat(
-  rect: *mut FRect,
-  X1: *mut f32,
-  Y1: *mut f32,
-  X2: *mut f32,
-  Y2: *mut f32,
+  rect: *FRect,
+  X1: *f32,
+  Y1: *f32,
+  X2: *f32,
+  Y2: *f32,
 ): bool
 type(alias) SurfaceFlags = Uint32
 #static assert-layout[SurfaceFlags](4, 4, [])
@@ -3187,179 +3187,179 @@ fn(extern("SDL_CreateSurface")) CreateSurface(
   width: i32,
   height: i32,
   format: PixelFormat,
-): *mut Surface
+): optref[Surface]
 fn(extern("SDL_CreateSurfaceFrom")) CreateSurfaceFrom(
   width: i32,
   height: i32,
   format: PixelFormat,
   pixels: ptr,
   pitch: i32,
-): *mut Surface
+): optref[Surface]
 fn(extern("SDL_DestroySurface")) DestroySurface(
-  surface: *mut Surface,
+  surface: *Surface,
 ): {}
 fn(extern("SDL_GetSurfaceProperties")) GetSurfaceProperties(
-  surface: *mut Surface,
+  surface: *Surface,
 ): PropertiesID
 fn(extern("SDL_SetSurfaceColorspace")) SetSurfaceColorspace(
-  surface: *mut Surface,
+  surface: *Surface,
   colorspace: Colorspace,
 ): bool
 fn(extern("SDL_GetSurfaceColorspace")) GetSurfaceColorspace(
-  surface: *mut Surface,
+  surface: *Surface,
 ): Colorspace
 fn(extern("SDL_CreateSurfacePalette")) CreateSurfacePalette(
-  surface: *mut Surface,
-): *mut Palette
+  surface: *Surface,
+): optref[Palette]
 fn(extern("SDL_SetSurfacePalette")) SetSurfacePalette(
-  surface: *mut Surface,
-  palette: *mut Palette,
+  surface: *Surface,
+  palette: *Palette,
 ): bool
 fn(extern("SDL_GetSurfacePalette")) GetSurfacePalette(
-  surface: *mut Surface,
-): *mut Palette
+  surface: *Surface,
+): optref[Palette]
 fn(extern("SDL_AddSurfaceAlternateImage")) AddSurfaceAlternateImage(
-  surface: *mut Surface,
-  image: *mut Surface,
+  surface: *Surface,
+  image: *Surface,
 ): bool
 fn(extern("SDL_SurfaceHasAlternateImages")) SurfaceHasAlternateImages(
-  surface: *mut Surface,
+  surface: *Surface,
 ): bool
 fn(extern("SDL_GetSurfaceImages")) GetSurfaceImages(
-  surface: *mut Surface,
-  count: *mut i32,
-): *mut *mut Surface
+  surface: *Surface,
+  count: *i32,
+): optref[optref[Surface]]
 fn(extern("SDL_RemoveSurfaceAlternateImages")) RemoveSurfaceAlternateImages(
-  surface: *mut Surface,
+  surface: *Surface,
 ): {}
 fn(extern("SDL_LockSurface")) LockSurface(
-  surface: *mut Surface,
+  surface: *Surface,
 ): bool
 fn(extern("SDL_UnlockSurface")) UnlockSurface(
-  surface: *mut Surface,
+  surface: *Surface,
 ): {}
 fn(extern("SDL_LoadSurface_IO")) LoadSurface_IO(
-  src: *mut IOStream,
+  src: *IOStream,
   closeio: bool,
-): *mut Surface
+): optref[Surface]
 fn(extern("SDL_LoadSurface")) LoadSurface(
-  file: *mut u8,
-): *mut Surface
+  file: *u8,
+): optref[Surface]
 fn(extern("SDL_LoadBMP_IO")) LoadBMP_IO(
-  src: *mut IOStream,
+  src: *IOStream,
   closeio: bool,
-): *mut Surface
+): optref[Surface]
 fn(extern("SDL_LoadBMP")) LoadBMP(
-  file: *mut u8,
-): *mut Surface
+  file: *u8,
+): optref[Surface]
 fn(extern("SDL_SaveBMP_IO")) SaveBMP_IO(
-  surface: *mut Surface,
-  dst: *mut IOStream,
+  surface: *Surface,
+  dst: *IOStream,
   closeio: bool,
 ): bool
 fn(extern("SDL_SaveBMP")) SaveBMP(
-  surface: *mut Surface,
-  file: *mut u8,
+  surface: *Surface,
+  file: *u8,
 ): bool
 fn(extern("SDL_LoadPNG_IO")) LoadPNG_IO(
-  src: *mut IOStream,
+  src: *IOStream,
   closeio: bool,
-): *mut Surface
+): optref[Surface]
 fn(extern("SDL_LoadPNG")) LoadPNG(
-  file: *mut u8,
-): *mut Surface
+  file: *u8,
+): optref[Surface]
 fn(extern("SDL_SavePNG_IO")) SavePNG_IO(
-  surface: *mut Surface,
-  dst: *mut IOStream,
+  surface: *Surface,
+  dst: *IOStream,
   closeio: bool,
 ): bool
 fn(extern("SDL_SavePNG")) SavePNG(
-  surface: *mut Surface,
-  file: *mut u8,
+  surface: *Surface,
+  file: *u8,
 ): bool
 fn(extern("SDL_SetSurfaceRLE")) SetSurfaceRLE(
-  surface: *mut Surface,
+  surface: *Surface,
   enabled: bool,
 ): bool
 fn(extern("SDL_SurfaceHasRLE")) SurfaceHasRLE(
-  surface: *mut Surface,
+  surface: *Surface,
 ): bool
 fn(extern("SDL_SetSurfaceColorKey")) SetSurfaceColorKey(
-  surface: *mut Surface,
+  surface: *Surface,
   enabled: bool,
   key: Uint32,
 ): bool
 fn(extern("SDL_SurfaceHasColorKey")) SurfaceHasColorKey(
-  surface: *mut Surface,
+  surface: *Surface,
 ): bool
 fn(extern("SDL_GetSurfaceColorKey")) GetSurfaceColorKey(
-  surface: *mut Surface,
-  key: *mut Uint32,
+  surface: *Surface,
+  key: *Uint32,
 ): bool
 fn(extern("SDL_SetSurfaceColorMod")) SetSurfaceColorMod(
-  surface: *mut Surface,
+  surface: *Surface,
   r: Uint8,
   g: Uint8,
   b: Uint8,
 ): bool
 fn(extern("SDL_GetSurfaceColorMod")) GetSurfaceColorMod(
-  surface: *mut Surface,
-  r: *mut Uint8,
-  g: *mut Uint8,
-  b: *mut Uint8,
+  surface: *Surface,
+  r: *Uint8,
+  g: *Uint8,
+  b: *Uint8,
 ): bool
 fn(extern("SDL_SetSurfaceAlphaMod")) SetSurfaceAlphaMod(
-  surface: *mut Surface,
+  surface: *Surface,
   alpha: Uint8,
 ): bool
 fn(extern("SDL_GetSurfaceAlphaMod")) GetSurfaceAlphaMod(
-  surface: *mut Surface,
-  alpha: *mut Uint8,
+  surface: *Surface,
+  alpha: *Uint8,
 ): bool
 fn(extern("SDL_SetSurfaceBlendMode")) SetSurfaceBlendMode(
-  surface: *mut Surface,
+  surface: *Surface,
   blendMode: BlendMode,
 ): bool
 fn(extern("SDL_GetSurfaceBlendMode")) GetSurfaceBlendMode(
-  surface: *mut Surface,
-  blendMode: *mut BlendMode,
+  surface: *Surface,
+  blendMode: *BlendMode,
 ): bool
 fn(extern("SDL_SetSurfaceClipRect")) SetSurfaceClipRect(
-  surface: *mut Surface,
-  rect: *mut Rect,
+  surface: *Surface,
+  rect: *Rect,
 ): bool
 fn(extern("SDL_GetSurfaceClipRect")) GetSurfaceClipRect(
-  surface: *mut Surface,
-  rect: *mut Rect,
+  surface: *Surface,
+  rect: *Rect,
 ): bool
 fn(extern("SDL_FlipSurface")) FlipSurface(
-  surface: *mut Surface,
+  surface: *Surface,
   flip: FlipMode,
 ): bool
 fn(extern("SDL_RotateSurface")) RotateSurface(
-  surface: *mut Surface,
+  surface: *Surface,
   angle: f32,
-): *mut Surface
+): optref[Surface]
 fn(extern("SDL_DuplicateSurface")) DuplicateSurface(
-  surface: *mut Surface,
-): *mut Surface
+  surface: *Surface,
+): optref[Surface]
 fn(extern("SDL_ScaleSurface")) ScaleSurface(
-  surface: *mut Surface,
+  surface: *Surface,
   width: i32,
   height: i32,
   scaleMode: ScaleMode,
-): *mut Surface
+): optref[Surface]
 fn(extern("SDL_ConvertSurface")) ConvertSurface(
-  surface: *mut Surface,
+  surface: *Surface,
   format: PixelFormat,
-): *mut Surface
+): optref[Surface]
 fn(extern("SDL_ConvertSurfaceAndColorspace")) ConvertSurfaceAndColorspace(
-  surface: *mut Surface,
+  surface: *Surface,
   format: PixelFormat,
-  palette: *mut Palette,
+  palette: *Palette,
   colorspace: Colorspace,
   props: PropertiesID,
-): *mut Surface
+): optref[Surface]
 fn(extern("SDL_ConvertPixels")) ConvertPixels(
   width: i32,
   height: i32,
@@ -3396,119 +3396,119 @@ fn(extern("SDL_PremultiplyAlpha")) PremultiplyAlpha(
   linear: bool,
 ): bool
 fn(extern("SDL_PremultiplySurfaceAlpha")) PremultiplySurfaceAlpha(
-  surface: *mut Surface,
+  surface: *Surface,
   linear: bool,
 ): bool
 fn(extern("SDL_ClearSurface")) ClearSurface(
-  surface: *mut Surface,
+  surface: *Surface,
   r: f32,
   g: f32,
   b: f32,
   a: f32,
 ): bool
 fn(extern("SDL_FillSurfaceRect")) FillSurfaceRect(
-  dst: *mut Surface,
-  rect: *mut Rect,
+  dst: *Surface,
+  rect: *Rect,
   color: Uint32,
 ): bool
 fn(extern("SDL_FillSurfaceRects")) FillSurfaceRects(
-  dst: *mut Surface,
-  rects: *mut Rect,
+  dst: *Surface,
+  rects: *Rect,
   count: i32,
   color: Uint32,
 ): bool
 fn(extern("SDL_BlitSurface")) BlitSurface(
-  src: *mut Surface,
-  srcrect: *mut Rect,
-  dst: *mut Surface,
-  dstrect: *mut Rect,
+  src: *Surface,
+  srcrect: *Rect,
+  dst: *Surface,
+  dstrect: *Rect,
 ): bool
 fn(extern("SDL_BlitSurfaceUnchecked")) BlitSurfaceUnchecked(
-  src: *mut Surface,
-  srcrect: *mut Rect,
-  dst: *mut Surface,
-  dstrect: *mut Rect,
+  src: *Surface,
+  srcrect: *Rect,
+  dst: *Surface,
+  dstrect: *Rect,
 ): bool
 fn(extern("SDL_BlitSurfaceScaled")) BlitSurfaceScaled(
-  src: *mut Surface,
-  srcrect: *mut Rect,
-  dst: *mut Surface,
-  dstrect: *mut Rect,
+  src: *Surface,
+  srcrect: *Rect,
+  dst: *Surface,
+  dstrect: *Rect,
   scaleMode: ScaleMode,
 ): bool
 fn(extern("SDL_BlitSurfaceUncheckedScaled")) BlitSurfaceUncheckedScaled(
-  src: *mut Surface,
-  srcrect: *mut Rect,
-  dst: *mut Surface,
-  dstrect: *mut Rect,
+  src: *Surface,
+  srcrect: *Rect,
+  dst: *Surface,
+  dstrect: *Rect,
   scaleMode: ScaleMode,
 ): bool
 fn(extern("SDL_StretchSurface")) StretchSurface(
-  src: *mut Surface,
-  srcrect: *mut Rect,
-  dst: *mut Surface,
-  dstrect: *mut Rect,
+  src: *Surface,
+  srcrect: *Rect,
+  dst: *Surface,
+  dstrect: *Rect,
   scaleMode: ScaleMode,
 ): bool
 fn(extern("SDL_BlitSurfaceTiled")) BlitSurfaceTiled(
-  src: *mut Surface,
-  srcrect: *mut Rect,
-  dst: *mut Surface,
-  dstrect: *mut Rect,
+  src: *Surface,
+  srcrect: *Rect,
+  dst: *Surface,
+  dstrect: *Rect,
 ): bool
 fn(extern("SDL_BlitSurfaceTiledWithScale")) BlitSurfaceTiledWithScale(
-  src: *mut Surface,
-  srcrect: *mut Rect,
+  src: *Surface,
+  srcrect: *Rect,
   scale: f32,
   scaleMode: ScaleMode,
-  dst: *mut Surface,
-  dstrect: *mut Rect,
+  dst: *Surface,
+  dstrect: *Rect,
 ): bool
 fn(extern("SDL_BlitSurface9Grid")) BlitSurface9Grid(
-  src: *mut Surface,
-  srcrect: *mut Rect,
+  src: *Surface,
+  srcrect: *Rect,
   left_width: i32,
   right_width: i32,
   top_height: i32,
   bottom_height: i32,
   scale: f32,
   scaleMode: ScaleMode,
-  dst: *mut Surface,
-  dstrect: *mut Rect,
+  dst: *Surface,
+  dstrect: *Rect,
 ): bool
 fn(extern("SDL_MapSurfaceRGB")) MapSurfaceRGB(
-  surface: *mut Surface,
+  surface: *Surface,
   r: Uint8,
   g: Uint8,
   b: Uint8,
 ): Uint32
 fn(extern("SDL_MapSurfaceRGBA")) MapSurfaceRGBA(
-  surface: *mut Surface,
+  surface: *Surface,
   r: Uint8,
   g: Uint8,
   b: Uint8,
   a: Uint8,
 ): Uint32
 fn(extern("SDL_ReadSurfacePixel")) ReadSurfacePixel(
-  surface: *mut Surface,
+  surface: *Surface,
   x: i32,
   y: i32,
-  r: *mut Uint8,
-  g: *mut Uint8,
-  b: *mut Uint8,
-  a: *mut Uint8,
+  r: *Uint8,
+  g: *Uint8,
+  b: *Uint8,
+  a: *Uint8,
 ): bool
 fn(extern("SDL_ReadSurfacePixelFloat")) ReadSurfacePixelFloat(
-  surface: *mut Surface,
+  surface: *Surface,
   x: i32,
   y: i32,
-  r: *mut f32,
-  g: *mut f32,
-  b: *mut f32,
-  a: *mut f32,
+  r: *f32,
+  g: *f32,
+  b: *f32,
+  a: *f32,
 ): bool
 fn(extern("SDL_WriteSurfacePixel")) WriteSurfacePixel(
-  surface: *mut Surface,
+  surface: *Surface,
   x: i32,
   y: i32,
   r: Uint8,
@@ -3517,7 +3517,7 @@ fn(extern("SDL_WriteSurfacePixel")) WriteSurfacePixel(
   a: Uint8,
 ): bool
 fn(extern("SDL_WriteSurfacePixelFloat")) WriteSurfacePixelFloat(
-  surface: *mut Surface,
+  surface: *Surface,
   x: i32,
   y: i32,
   r: f32,
@@ -3552,63 +3552,63 @@ type CameraPermissionState = either(i32) {
 fn(extern("SDL_GetNumCameraDrivers")) GetNumCameraDrivers(): i32
 fn(extern("SDL_GetCameraDriver")) GetCameraDriver(
   index: i32,
-): *mut u8
-fn(extern("SDL_GetCurrentCameraDriver")) GetCurrentCameraDriver(): *mut u8
+): optref[u8]
+fn(extern("SDL_GetCurrentCameraDriver")) GetCurrentCameraDriver(): optref[u8]
 fn(extern("SDL_GetCameras")) GetCameras(
-  count: *mut i32,
-): *mut CameraID
+  count: *i32,
+): optref[CameraID]
 fn(extern("SDL_GetCameraSupportedFormats")) GetCameraSupportedFormats(
   instance_id: CameraID,
-  count: *mut i32,
-): *mut *mut CameraSpec
+  count: *i32,
+): optref[optref[CameraSpec]]
 fn(extern("SDL_GetCameraName")) GetCameraName(
   instance_id: CameraID,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_GetCameraPosition")) GetCameraPosition(
   instance_id: CameraID,
 ): CameraPosition
 fn(extern("SDL_OpenCamera")) OpenCamera(
   instance_id: CameraID,
-  spec: *mut CameraSpec,
-): *mut Camera
+  spec: *CameraSpec,
+): optref[Camera]
 fn(extern("SDL_GetCameraPermissionState")) GetCameraPermissionState(
-  camera: *mut Camera,
+  camera: *Camera,
 ): CameraPermissionState
 fn(extern("SDL_GetCameraID")) GetCameraID(
-  camera: *mut Camera,
+  camera: *Camera,
 ): CameraID
 fn(extern("SDL_GetCameraProperties")) GetCameraProperties(
-  camera: *mut Camera,
+  camera: *Camera,
 ): PropertiesID
 fn(extern("SDL_GetCameraFormat")) GetCameraFormat(
-  camera: *mut Camera,
-  spec: *mut CameraSpec,
+  camera: *Camera,
+  spec: *CameraSpec,
 ): bool
 fn(extern("SDL_AcquireCameraFrame")) AcquireCameraFrame(
-  camera: *mut Camera,
-  timestampNS: *mut Uint64,
-): *mut Surface
+  camera: *Camera,
+  timestampNS: *Uint64,
+): optref[Surface]
 fn(extern("SDL_ReleaseCameraFrame")) ReleaseCameraFrame(
-  camera: *mut Camera,
-  frame: *mut Surface,
+  camera: *Camera,
+  frame: *Surface,
 ): {}
 fn(extern("SDL_CloseCamera")) CloseCamera(
-  camera: *mut Camera,
+  camera: *Camera,
 ): {}
 fn(extern("SDL_SetClipboardText")) SetClipboardText(
-  text: *mut u8,
+  text: *u8,
 ): bool
-fn(extern("SDL_GetClipboardText")) GetClipboardText(): *mut u8
+fn(extern("SDL_GetClipboardText")) GetClipboardText(): optref[u8]
 fn(extern("SDL_HasClipboardText")) HasClipboardText(): bool
 fn(extern("SDL_SetPrimarySelectionText")) SetPrimarySelectionText(
-  text: *mut u8,
+  text: *u8,
 ): bool
-fn(extern("SDL_GetPrimarySelectionText")) GetPrimarySelectionText(): *mut u8
+fn(extern("SDL_GetPrimarySelectionText")) GetPrimarySelectionText(): optref[u8]
 fn(extern("SDL_HasPrimarySelectionText")) HasPrimarySelectionText(): bool
 type(alias) ClipboardDataCallback = *fn(
   ptr,
-  *mut u8,
-  *mut usize
+  *u8,
+  *usize
 ) -> ptr
 #static assert-layout[ClipboardDataCallback](8, 8, [])
 type(alias) ClipboardCleanupCallback = *fn(
@@ -3619,20 +3619,20 @@ fn(extern("SDL_SetClipboardData")) SetClipboardData(
   callback: ClipboardDataCallback,
   cleanup: ClipboardCleanupCallback,
   userdata: ptr,
-  mime_types: *mut *mut u8,
+  mime_types: *optref[u8],
   num_mime_types: usize,
 ): bool
 fn(extern("SDL_ClearClipboardData")) ClearClipboardData(): bool
 fn(extern("SDL_GetClipboardData")) GetClipboardData(
-  mime_type: *mut u8,
-  size: *mut usize,
+  mime_type: *u8,
+  size: *usize,
 ): ptr
 fn(extern("SDL_HasClipboardData")) HasClipboardData(
-  mime_type: *mut u8,
+  mime_type: *u8,
 ): bool
 fn(extern("SDL_GetClipboardMimeTypes")) GetClipboardMimeTypes(
-  num_mime_types: *mut usize,
-): *mut *mut u8
+  num_mime_types: *usize,
+): optref[optref[u8]]
 fn(extern("SDL_GetNumLogicalCPUCores")) GetNumLogicalCPUCores(): i32
 fn(extern("SDL_GetCPUCacheLineSize")) GetCPUCacheLineSize(): i32
 fn(extern("SDL_HasAltiVec")) HasAltiVec(): bool
@@ -3672,7 +3672,7 @@ type DisplayMode = {
   refresh_rate: f32,
   refresh_rate_numerator: i32,
   refresh_rate_denominator: i32,
-  internal: *mut DisplayModeData,
+  internal: optref[DisplayModeData],
 }
 #static assert-layout[DisplayMode](40, 8, [0, 4, 8, 12, 16, 20, 24, 28, 32, ])
 type DisplayOrientation = either(u32) {
@@ -3702,7 +3702,7 @@ type ProgressState = either(i32) {
 }
 #static assert-layout[ProgressState](4, 4, [])
 type GLContextState = opaque[0, 1]
-type(alias) GLContext = *mut GLContextState
+type(alias) GLContext = *GLContextState
 #static assert-layout[GLContext](8, 8, [])
 type(alias) EGLDisplay = ptr
 #static assert-layout[EGLDisplay](8, 8, [])
@@ -3716,13 +3716,13 @@ type(alias) EGLint = i32
 #static assert-layout[EGLint](4, 4, [])
 type(alias) EGLAttribArrayCallback = *fn(
   ptr
-) -> *mut EGLAttrib
+) -> optref[EGLAttrib]
 #static assert-layout[EGLAttribArrayCallback](8, 8, [])
 type(alias) EGLIntArrayCallback = *fn(
   ptr,
   EGLDisplay,
   EGLConfig
-) -> *mut EGLint
+) -> optref[EGLint]
 #static assert-layout[EGLIntArrayCallback](8, 8, [])
 type GLAttr = either(u32) {
   GL_RED_SIZE = 0,
@@ -3766,26 +3766,26 @@ type(alias) GLContextResetNotification = Uint32
 fn(extern("SDL_GetNumVideoDrivers")) GetNumVideoDrivers(): i32
 fn(extern("SDL_GetVideoDriver")) GetVideoDriver(
   index: i32,
-): *mut u8
-fn(extern("SDL_GetCurrentVideoDriver")) GetCurrentVideoDriver(): *mut u8
+): optref[u8]
+fn(extern("SDL_GetCurrentVideoDriver")) GetCurrentVideoDriver(): optref[u8]
 fn(extern("SDL_GetSystemTheme")) GetSystemTheme(): SystemTheme
 fn(extern("SDL_GetDisplays")) GetDisplays(
-  count: *mut i32,
-): *mut DisplayID
+  count: *i32,
+): optref[DisplayID]
 fn(extern("SDL_GetPrimaryDisplay")) GetPrimaryDisplay(): DisplayID
 fn(extern("SDL_GetDisplayProperties")) GetDisplayProperties(
   displayID: DisplayID,
 ): PropertiesID
 fn(extern("SDL_GetDisplayName")) GetDisplayName(
   displayID: DisplayID,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_GetDisplayBounds")) GetDisplayBounds(
   displayID: DisplayID,
-  rect: *mut Rect,
+  rect: *Rect,
 ): bool
 fn(extern("SDL_GetDisplayUsableBounds")) GetDisplayUsableBounds(
   displayID: DisplayID,
-  rect: *mut Rect,
+  rect: *Rect,
 ): bool
 fn(extern("SDL_GetNaturalDisplayOrientation")) GetNaturalDisplayOrientation(
   displayID: DisplayID,
@@ -3798,272 +3798,272 @@ fn(extern("SDL_GetDisplayContentScale")) GetDisplayContentScale(
 ): f32
 fn(extern("SDL_GetFullscreenDisplayModes")) GetFullscreenDisplayModes(
   displayID: DisplayID,
-  count: *mut i32,
-): *mut *mut DisplayMode
+  count: *i32,
+): optref[optref[DisplayMode]]
 fn(extern("SDL_GetClosestFullscreenDisplayMode")) GetClosestFullscreenDisplayMode(
   displayID: DisplayID,
   w: i32,
   h: i32,
   refresh_rate: f32,
   include_high_density_modes: bool,
-  closest: *mut DisplayMode,
+  closest: *DisplayMode,
 ): bool
 fn(extern("SDL_GetDesktopDisplayMode")) GetDesktopDisplayMode(
   displayID: DisplayID,
-): *mut DisplayMode
+): optref[DisplayMode]
 fn(extern("SDL_GetCurrentDisplayMode")) GetCurrentDisplayMode(
   displayID: DisplayID,
-): *mut DisplayMode
+): optref[DisplayMode]
 fn(extern("SDL_GetDisplayForPoint")) GetDisplayForPoint(
-  point: *mut Point,
+  point: *Point,
 ): DisplayID
 fn(extern("SDL_GetDisplayForRect")) GetDisplayForRect(
-  rect: *mut Rect,
+  rect: *Rect,
 ): DisplayID
 fn(extern("SDL_GetDisplayForWindow")) GetDisplayForWindow(
-  window: *mut Window,
+  window: *Window,
 ): DisplayID
 fn(extern("SDL_GetWindowPixelDensity")) GetWindowPixelDensity(
-  window: *mut Window,
+  window: *Window,
 ): f32
 fn(extern("SDL_GetWindowDisplayScale")) GetWindowDisplayScale(
-  window: *mut Window,
+  window: *Window,
 ): f32
 fn(extern("SDL_SetWindowFullscreenMode")) SetWindowFullscreenMode(
-  window: *mut Window,
-  mode: *mut DisplayMode,
+  window: *Window,
+  mode: *DisplayMode,
 ): bool
 fn(extern("SDL_GetWindowFullscreenMode")) GetWindowFullscreenMode(
-  window: *mut Window,
-): *mut DisplayMode
+  window: *Window,
+): optref[DisplayMode]
 fn(extern("SDL_GetWindowICCProfile")) GetWindowICCProfile(
-  window: *mut Window,
-  size: *mut usize,
+  window: *Window,
+  size: *usize,
 ): ptr
 fn(extern("SDL_GetWindowPixelFormat")) GetWindowPixelFormat(
-  window: *mut Window,
+  window: *Window,
 ): PixelFormat
 fn(extern("SDL_GetWindows")) GetWindows(
-  count: *mut i32,
-): *mut *mut Window
+  count: *i32,
+): optref[optref[Window]]
 fn(extern("SDL_CreateWindow")) CreateWindow(
-  title: *mut u8,
+  title: *u8,
   w: i32,
   h: i32,
   flags: WindowFlags,
-): *mut Window
+): optref[Window]
 fn(extern("SDL_CreatePopupWindow")) CreatePopupWindow(
-  parent: *mut Window,
+  parent: *Window,
   offset_x: i32,
   offset_y: i32,
   w: i32,
   h: i32,
   flags: WindowFlags,
-): *mut Window
+): optref[Window]
 fn(extern("SDL_CreateWindowWithProperties")) CreateWindowWithProperties(
   props: PropertiesID,
-): *mut Window
+): optref[Window]
 fn(extern("SDL_GetWindowID")) GetWindowID(
-  window: *mut Window,
+  window: *Window,
 ): WindowID
 fn(extern("SDL_GetWindowFromID")) GetWindowFromID(
   id: WindowID,
-): *mut Window
+): optref[Window]
 fn(extern("SDL_GetWindowParent")) GetWindowParent(
-  window: *mut Window,
-): *mut Window
+  window: *Window,
+): optref[Window]
 fn(extern("SDL_GetWindowProperties")) GetWindowProperties(
-  window: *mut Window,
+  window: *Window,
 ): PropertiesID
 fn(extern("SDL_GetWindowFlags")) GetWindowFlags(
-  window: *mut Window,
+  window: *Window,
 ): WindowFlags
 fn(extern("SDL_SetWindowTitle")) SetWindowTitle(
-  window: *mut Window,
-  title: *mut u8,
+  window: *Window,
+  title: *u8,
 ): bool
 fn(extern("SDL_GetWindowTitle")) GetWindowTitle(
-  window: *mut Window,
-): *mut u8
+  window: *Window,
+): optref[u8]
 fn(extern("SDL_SetWindowIcon")) SetWindowIcon(
-  window: *mut Window,
-  icon: *mut Surface,
+  window: *Window,
+  icon: *Surface,
 ): bool
 fn(extern("SDL_SetWindowPosition")) SetWindowPosition(
-  window: *mut Window,
+  window: *Window,
   x: i32,
   y: i32,
 ): bool
 fn(extern("SDL_GetWindowPosition")) GetWindowPosition(
-  window: *mut Window,
-  x: *mut i32,
-  y: *mut i32,
+  window: *Window,
+  x: *i32,
+  y: *i32,
 ): bool
 fn(extern("SDL_SetWindowSize")) SetWindowSize(
-  window: *mut Window,
+  window: *Window,
   w: i32,
   h: i32,
 ): bool
 fn(extern("SDL_GetWindowSize")) GetWindowSize(
-  window: *mut Window,
-  w: *mut i32,
-  h: *mut i32,
+  window: *Window,
+  w: *i32,
+  h: *i32,
 ): bool
 fn(extern("SDL_GetWindowSafeArea")) GetWindowSafeArea(
-  window: *mut Window,
-  rect: *mut Rect,
+  window: *Window,
+  rect: *Rect,
 ): bool
 fn(extern("SDL_SetWindowAspectRatio")) SetWindowAspectRatio(
-  window: *mut Window,
+  window: *Window,
   min_aspect: f32,
   max_aspect: f32,
 ): bool
 fn(extern("SDL_GetWindowAspectRatio")) GetWindowAspectRatio(
-  window: *mut Window,
-  min_aspect: *mut f32,
-  max_aspect: *mut f32,
+  window: *Window,
+  min_aspect: *f32,
+  max_aspect: *f32,
 ): bool
 fn(extern("SDL_GetWindowBordersSize")) GetWindowBordersSize(
-  window: *mut Window,
-  top: *mut i32,
-  left: *mut i32,
-  bottom: *mut i32,
-  right: *mut i32,
+  window: *Window,
+  top: *i32,
+  left: *i32,
+  bottom: *i32,
+  right: *i32,
 ): bool
 fn(extern("SDL_GetWindowSizeInPixels")) GetWindowSizeInPixels(
-  window: *mut Window,
-  w: *mut i32,
-  h: *mut i32,
+  window: *Window,
+  w: *i32,
+  h: *i32,
 ): bool
 fn(extern("SDL_SetWindowMinimumSize")) SetWindowMinimumSize(
-  window: *mut Window,
+  window: *Window,
   min_w: i32,
   min_h: i32,
 ): bool
 fn(extern("SDL_GetWindowMinimumSize")) GetWindowMinimumSize(
-  window: *mut Window,
-  w: *mut i32,
-  h: *mut i32,
+  window: *Window,
+  w: *i32,
+  h: *i32,
 ): bool
 fn(extern("SDL_SetWindowMaximumSize")) SetWindowMaximumSize(
-  window: *mut Window,
+  window: *Window,
   max_w: i32,
   max_h: i32,
 ): bool
 fn(extern("SDL_GetWindowMaximumSize")) GetWindowMaximumSize(
-  window: *mut Window,
-  w: *mut i32,
-  h: *mut i32,
+  window: *Window,
+  w: *i32,
+  h: *i32,
 ): bool
 fn(extern("SDL_SetWindowBordered")) SetWindowBordered(
-  window: *mut Window,
+  window: *Window,
   bordered: bool,
 ): bool
 fn(extern("SDL_SetWindowResizable")) SetWindowResizable(
-  window: *mut Window,
+  window: *Window,
   resizable: bool,
 ): bool
 fn(extern("SDL_SetWindowAlwaysOnTop")) SetWindowAlwaysOnTop(
-  window: *mut Window,
+  window: *Window,
   on_top: bool,
 ): bool
 fn(extern("SDL_SetWindowFillDocument")) SetWindowFillDocument(
-  window: *mut Window,
+  window: *Window,
   fill: bool,
 ): bool
 fn(extern("SDL_ShowWindow")) ShowWindow(
-  window: *mut Window,
+  window: *Window,
 ): bool
 fn(extern("SDL_HideWindow")) HideWindow(
-  window: *mut Window,
+  window: *Window,
 ): bool
 fn(extern("SDL_RaiseWindow")) RaiseWindow(
-  window: *mut Window,
+  window: *Window,
 ): bool
 fn(extern("SDL_MaximizeWindow")) MaximizeWindow(
-  window: *mut Window,
+  window: *Window,
 ): bool
 fn(extern("SDL_MinimizeWindow")) MinimizeWindow(
-  window: *mut Window,
+  window: *Window,
 ): bool
 fn(extern("SDL_RestoreWindow")) RestoreWindow(
-  window: *mut Window,
+  window: *Window,
 ): bool
 fn(extern("SDL_SetWindowFullscreen")) SetWindowFullscreen(
-  window: *mut Window,
+  window: *Window,
   fullscreen: bool,
 ): bool
 fn(extern("SDL_SyncWindow")) SyncWindow(
-  window: *mut Window,
+  window: *Window,
 ): bool
 fn(extern("SDL_WindowHasSurface")) WindowHasSurface(
-  window: *mut Window,
+  window: *Window,
 ): bool
 fn(extern("SDL_GetWindowSurface")) GetWindowSurface(
-  window: *mut Window,
-): *mut Surface
+  window: *Window,
+): optref[Surface]
 fn(extern("SDL_SetWindowSurfaceVSync")) SetWindowSurfaceVSync(
-  window: *mut Window,
+  window: *Window,
   vsync: i32,
 ): bool
 fn(extern("SDL_GetWindowSurfaceVSync")) GetWindowSurfaceVSync(
-  window: *mut Window,
-  vsync: *mut i32,
+  window: *Window,
+  vsync: *i32,
 ): bool
 fn(extern("SDL_UpdateWindowSurface")) UpdateWindowSurface(
-  window: *mut Window,
+  window: *Window,
 ): bool
 fn(extern("SDL_UpdateWindowSurfaceRects")) UpdateWindowSurfaceRects(
-  window: *mut Window,
-  rects: *mut Rect,
+  window: *Window,
+  rects: *Rect,
   numrects: i32,
 ): bool
 fn(extern("SDL_DestroyWindowSurface")) DestroyWindowSurface(
-  window: *mut Window,
+  window: *Window,
 ): bool
 fn(extern("SDL_SetWindowKeyboardGrab")) SetWindowKeyboardGrab(
-  window: *mut Window,
+  window: *Window,
   grabbed: bool,
 ): bool
 fn(extern("SDL_SetWindowMouseGrab")) SetWindowMouseGrab(
-  window: *mut Window,
+  window: *Window,
   grabbed: bool,
 ): bool
 fn(extern("SDL_GetWindowKeyboardGrab")) GetWindowKeyboardGrab(
-  window: *mut Window,
+  window: *Window,
 ): bool
 fn(extern("SDL_GetWindowMouseGrab")) GetWindowMouseGrab(
-  window: *mut Window,
+  window: *Window,
 ): bool
-fn(extern("SDL_GetGrabbedWindow")) GetGrabbedWindow(): *mut Window
+fn(extern("SDL_GetGrabbedWindow")) GetGrabbedWindow(): optref[Window]
 fn(extern("SDL_SetWindowMouseRect")) SetWindowMouseRect(
-  window: *mut Window,
-  rect: *mut Rect,
+  window: *Window,
+  rect: *Rect,
 ): bool
 fn(extern("SDL_GetWindowMouseRect")) GetWindowMouseRect(
-  window: *mut Window,
-): *mut Rect
+  window: *Window,
+): optref[Rect]
 fn(extern("SDL_SetWindowOpacity")) SetWindowOpacity(
-  window: *mut Window,
+  window: *Window,
   opacity: f32,
 ): bool
 fn(extern("SDL_GetWindowOpacity")) GetWindowOpacity(
-  window: *mut Window,
+  window: *Window,
 ): f32
 fn(extern("SDL_SetWindowParent")) SetWindowParent(
-  window: *mut Window,
-  parent: *mut Window,
+  window: *Window,
+  parent: *Window,
 ): bool
 fn(extern("SDL_SetWindowModal")) SetWindowModal(
-  window: *mut Window,
+  window: *Window,
   modal: bool,
 ): bool
 fn(extern("SDL_SetWindowFocusable")) SetWindowFocusable(
-  window: *mut Window,
+  window: *Window,
   focusable: bool,
 ): bool
 fn(extern("SDL_ShowWindowSystemMenu")) ShowWindowSystemMenu(
-  window: *mut Window,
+  window: *Window,
   x: i32,
   y: i32,
 ): bool
@@ -4081,56 +4081,56 @@ type HitTestResult = either(u32) {
 }
 #static assert-layout[HitTestResult](4, 4, [])
 type(alias) HitTest = *fn(
-  *mut Window,
-  *mut Point,
+  *Window,
+  *Point,
   ptr
 ) -> HitTestResult
 #static assert-layout[HitTest](8, 8, [])
 fn(extern("SDL_SetWindowHitTest")) SetWindowHitTest(
-  window: *mut Window,
+  window: *Window,
   callback: HitTest,
   callback_data: ptr,
 ): bool
 fn(extern("SDL_SetWindowShape")) SetWindowShape(
-  window: *mut Window,
-  shape: *mut Surface,
+  window: *Window,
+  shape: *Surface,
 ): bool
 fn(extern("SDL_FlashWindow")) FlashWindow(
-  window: *mut Window,
+  window: *Window,
   operation: FlashOperation,
 ): bool
 fn(extern("SDL_SetWindowProgressState")) SetWindowProgressState(
-  window: *mut Window,
+  window: *Window,
   state: ProgressState,
 ): bool
 fn(extern("SDL_GetWindowProgressState")) GetWindowProgressState(
-  window: *mut Window,
+  window: *Window,
 ): ProgressState
 fn(extern("SDL_SetWindowProgressValue")) SetWindowProgressValue(
-  window: *mut Window,
+  window: *Window,
   value: f32,
 ): bool
 fn(extern("SDL_GetWindowProgressValue")) GetWindowProgressValue(
-  window: *mut Window,
+  window: *Window,
 ): f32
 fn(extern("SDL_DestroyWindow")) DestroyWindow(
-  window: *mut Window,
+  window: *Window,
 ): {}
 fn(extern("SDL_ScreenSaverEnabled")) ScreenSaverEnabled(): bool
 fn(extern("SDL_EnableScreenSaver")) EnableScreenSaver(): bool
 fn(extern("SDL_DisableScreenSaver")) DisableScreenSaver(): bool
 fn(extern("SDL_GL_LoadLibrary")) GL_LoadLibrary(
-  path: *mut u8,
+  path: *u8,
 ): bool
 fn(extern("SDL_GL_GetProcAddress")) GL_GetProcAddress(
-  proc: *mut u8,
+  proc: *u8,
 ): FunctionPointer
 fn(extern("SDL_EGL_GetProcAddress")) EGL_GetProcAddress(
-  proc: *mut u8,
+  proc: *u8,
 ): FunctionPointer
 fn(extern("SDL_GL_UnloadLibrary")) GL_UnloadLibrary(): {}
 fn(extern("SDL_GL_ExtensionSupported")) GL_ExtensionSupported(
-  extension: *mut u8,
+  extension: *u8,
 ): bool
 fn(extern("SDL_GL_ResetAttributes")) GL_ResetAttributes(): {}
 fn(extern("SDL_GL_SetAttribute")) GL_SetAttribute(
@@ -4139,21 +4139,21 @@ fn(extern("SDL_GL_SetAttribute")) GL_SetAttribute(
 ): bool
 fn(extern("SDL_GL_GetAttribute")) GL_GetAttribute(
   attr: GLAttr,
-  value: *mut i32,
+  value: *i32,
 ): bool
 fn(extern("SDL_GL_CreateContext")) GL_CreateContext(
-  window: *mut Window,
+  window: *Window,
 ): GLContext
 fn(extern("SDL_GL_MakeCurrent")) GL_MakeCurrent(
-  window: *mut Window,
+  window: *Window,
   context_c: GLContext,
 ): bool
-fn(extern("SDL_GL_GetCurrentWindow")) GL_GetCurrentWindow(): *mut Window
+fn(extern("SDL_GL_GetCurrentWindow")) GL_GetCurrentWindow(): optref[Window]
 fn(extern("SDL_GL_GetCurrentContext")) GL_GetCurrentContext(): GLContext
 fn(extern("SDL_EGL_GetCurrentDisplay")) EGL_GetCurrentDisplay(): EGLDisplay
 fn(extern("SDL_EGL_GetCurrentConfig")) EGL_GetCurrentConfig(): EGLConfig
 fn(extern("SDL_EGL_GetWindowSurface")) EGL_GetWindowSurface(
-  window: *mut Window,
+  window: *Window,
 ): EGLSurface
 fn(extern("SDL_EGL_SetAttributeCallbacks")) EGL_SetAttributeCallbacks(
   platformAttribCallback: EGLAttribArrayCallback,
@@ -4165,47 +4165,47 @@ fn(extern("SDL_GL_SetSwapInterval")) GL_SetSwapInterval(
   interval: i32,
 ): bool
 fn(extern("SDL_GL_GetSwapInterval")) GL_GetSwapInterval(
-  interval: *mut i32,
+  interval: *i32,
 ): bool
 fn(extern("SDL_GL_SwapWindow")) GL_SwapWindow(
-  window: *mut Window,
+  window: *Window,
 ): bool
 fn(extern("SDL_GL_DestroyContext")) GL_DestroyContext(
   context_c: GLContext,
 ): bool
 type DialogFileFilter = {
-  name: *mut u8,
-  pattern: *mut u8,
+  name: optref[u8],
+  pattern: optref[u8],
 }
 #static assert-layout[DialogFileFilter](16, 8, [0, 8, ])
 type(alias) DialogFileCallback = *fn(
   ptr,
-  *mut *mut u8,
+  *optref[u8],
   i32
 ) -> {}
 #static assert-layout[DialogFileCallback](8, 8, [])
 fn(extern("SDL_ShowOpenFileDialog")) ShowOpenFileDialog(
   callback: DialogFileCallback,
   userdata: ptr,
-  window: *mut Window,
-  filters: *mut DialogFileFilter,
+  window: *Window,
+  filters: *DialogFileFilter,
   nfilters: i32,
-  default_location: *mut u8,
+  default_location: *u8,
   allow_many: bool,
 ): {}
 fn(extern("SDL_ShowSaveFileDialog")) ShowSaveFileDialog(
   callback: DialogFileCallback,
   userdata: ptr,
-  window: *mut Window,
-  filters: *mut DialogFileFilter,
+  window: *Window,
+  filters: *DialogFileFilter,
   nfilters: i32,
-  default_location: *mut u8,
+  default_location: *u8,
 ): {}
 fn(extern("SDL_ShowOpenFolderDialog")) ShowOpenFolderDialog(
   callback: DialogFileCallback,
   userdata: ptr,
-  window: *mut Window,
-  default_location: *mut u8,
+  window: *Window,
+  default_location: *u8,
   allow_many: bool,
 ): {}
 type FileDialogType = either(u32) {
@@ -4226,11 +4226,11 @@ type GUID = {
 #static assert-layout[GUID](16, 1, [0, ])
 fn(extern("SDL_GUIDToString")) GUIDToString(
   guid: GUID,
-  pszGUID: *mut u8,
+  pszGUID: *u8,
   cbGUID: i32,
 ): {}
 fn(extern("SDL_StringToGUID")) StringToGUID(
-  pchGUID: *mut u8,
+  pchGUID: *u8,
 ): GUID
 type PowerState = either(i32) {
   POWERSTATE_ERROR = -1,
@@ -4242,8 +4242,8 @@ type PowerState = either(i32) {
 }
 #static assert-layout[PowerState](4, 4, [])
 fn(extern("SDL_GetPowerInfo")) GetPowerInfo(
-  seconds: *mut i32,
-  percent: *mut i32,
+  seconds: *i32,
+  percent: *i32,
 ): PowerState
 type Sensor = opaque[0, 1]
 type(alias) SensorID = Uint32
@@ -4261,11 +4261,11 @@ type SensorType = either(i32) {
 }
 #static assert-layout[SensorType](4, 4, [])
 fn(extern("SDL_GetSensors")) GetSensors(
-  count: *mut i32,
-): *mut SensorID
+  count: *i32,
+): optref[SensorID]
 fn(extern("SDL_GetSensorNameForID")) GetSensorNameForID(
   instance_id: SensorID,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_GetSensorTypeForID")) GetSensorTypeForID(
   instance_id: SensorID,
 ): SensorType
@@ -4274,32 +4274,32 @@ fn(extern("SDL_GetSensorNonPortableTypeForID")) GetSensorNonPortableTypeForID(
 ): i32
 fn(extern("SDL_OpenSensor")) OpenSensor(
   instance_id: SensorID,
-): *mut Sensor
+): optref[Sensor]
 fn(extern("SDL_GetSensorFromID")) GetSensorFromID(
   instance_id: SensorID,
-): *mut Sensor
+): optref[Sensor]
 fn(extern("SDL_GetSensorProperties")) GetSensorProperties(
-  sensor: *mut Sensor,
+  sensor: *Sensor,
 ): PropertiesID
 fn(extern("SDL_GetSensorName")) GetSensorName(
-  sensor: *mut Sensor,
-): *mut u8
+  sensor: *Sensor,
+): optref[u8]
 fn(extern("SDL_GetSensorType")) GetSensorType(
-  sensor: *mut Sensor,
+  sensor: *Sensor,
 ): SensorType
 fn(extern("SDL_GetSensorNonPortableType")) GetSensorNonPortableType(
-  sensor: *mut Sensor,
+  sensor: *Sensor,
 ): i32
 fn(extern("SDL_GetSensorID")) GetSensorID(
-  sensor: *mut Sensor,
+  sensor: *Sensor,
 ): SensorID
 fn(extern("SDL_GetSensorData")) GetSensorData(
-  sensor: *mut Sensor,
-  data: *mut f32,
+  sensor: *Sensor,
+  data: *f32,
   num_values: i32,
 ): bool
 fn(extern("SDL_CloseSensor")) CloseSensor(
-  sensor: *mut Sensor,
+  sensor: *Sensor,
 ): {}
 fn(extern("SDL_UpdateSensors")) UpdateSensors(): {}
 type Joystick = opaque[0, 1]
@@ -4330,14 +4330,14 @@ fn(extern("SDL_LockJoysticks")) LockJoysticks(): {}
 fn(extern("SDL_UnlockJoysticks")) UnlockJoysticks(): {}
 fn(extern("SDL_HasJoystick")) HasJoystick(): bool
 fn(extern("SDL_GetJoysticks")) GetJoysticks(
-  count: *mut i32,
-): *mut JoystickID
+  count: *i32,
+): optref[JoystickID]
 fn(extern("SDL_GetJoystickNameForID")) GetJoystickNameForID(
   instance_id: JoystickID,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_GetJoystickPathForID")) GetJoystickPathForID(
   instance_id: JoystickID,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_GetJoystickPlayerIndexForID")) GetJoystickPlayerIndexForID(
   instance_id: JoystickID,
 ): i32
@@ -4358,13 +4358,13 @@ fn(extern("SDL_GetJoystickTypeForID")) GetJoystickTypeForID(
 ): JoystickType
 fn(extern("SDL_OpenJoystick")) OpenJoystick(
   instance_id: JoystickID,
-): *mut Joystick
+): optref[Joystick]
 fn(extern("SDL_GetJoystickFromID")) GetJoystickFromID(
   instance_id: JoystickID,
-): *mut Joystick
+): optref[Joystick]
 fn(extern("SDL_GetJoystickFromPlayerIndex")) GetJoystickFromPlayerIndex(
   player_index: i32,
-): *mut Joystick
+): optref[Joystick]
 type VirtualJoystickTouchpadDesc = {
   nfingers: Uint16,
   padding: array[Uint16, 3],
@@ -4390,49 +4390,49 @@ type VirtualJoystickDesc = {
   padding2: array[Uint16, 2],
   button_mask: Uint32,
   axis_mask: Uint32,
-  name: *mut u8,
-  touchpads: *mut VirtualJoystickTouchpadDesc,
-  sensors: *mut VirtualJoystickSensorDesc,
+  name: optref[u8],
+  touchpads: optref[VirtualJoystickTouchpadDesc],
+  sensors: optref[VirtualJoystickSensorDesc],
   userdata: ptr,
-  Update: *fn(
+  Update: optref[fn(
     ptr
-  ) -> {},
-  SetPlayerIndex: *fn(
+  ) -> {}],
+  SetPlayerIndex: optref[fn(
     ptr,
     i32
-  ) -> {},
-  Rumble: *fn(
+  ) -> {}],
+  Rumble: optref[fn(
     ptr,
     Uint16,
     Uint16
-  ) -> bool,
-  RumbleTriggers: *fn(
+  ) -> bool],
+  RumbleTriggers: optref[fn(
     ptr,
     Uint16,
     Uint16
-  ) -> bool,
-  SetLED: *fn(
+  ) -> bool],
+  SetLED: optref[fn(
     ptr,
     Uint8,
     Uint8,
     Uint8
-  ) -> bool,
-  SendEffect: *fn(
+  ) -> bool],
+  SendEffect: optref[fn(
     ptr,
     ptr,
     i32
-  ) -> bool,
-  SetSensorsEnabled: *fn(
+  ) -> bool],
+  SetSensorsEnabled: optref[fn(
     ptr,
     bool
-  ) -> bool,
-  Cleanup: *fn(
+  ) -> bool],
+  Cleanup: optref[fn(
     ptr
-  ) -> {},
+  ) -> {}],
 }
 #static assert-layout[VirtualJoystickDesc](136, 8, [0, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 28, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, ])
 fn(extern("SDL_AttachVirtualJoystick")) AttachVirtualJoystick(
-  desc: *mut VirtualJoystickDesc,
+  desc: *VirtualJoystickDesc,
 ): JoystickID
 fn(extern("SDL_DetachVirtualJoystick")) DetachVirtualJoystick(
   instance_id: JoystickID,
@@ -4441,28 +4441,28 @@ fn(extern("SDL_IsJoystickVirtual")) IsJoystickVirtual(
   instance_id: JoystickID,
 ): bool
 fn(extern("SDL_SetJoystickVirtualAxis")) SetJoystickVirtualAxis(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
   axis: i32,
   value: Sint16,
 ): bool
 fn(extern("SDL_SetJoystickVirtualBall")) SetJoystickVirtualBall(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
   ball: i32,
   xrel: Sint16,
   yrel: Sint16,
 ): bool
 fn(extern("SDL_SetJoystickVirtualButton")) SetJoystickVirtualButton(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
   button: i32,
   down: bool,
 ): bool
 fn(extern("SDL_SetJoystickVirtualHat")) SetJoystickVirtualHat(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
   hat: i32,
   value: Uint8,
 ): bool
 fn(extern("SDL_SetJoystickVirtualTouchpad")) SetJoystickVirtualTouchpad(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
   touchpad: i32,
   finger: i32,
   down: bool,
@@ -4471,73 +4471,73 @@ fn(extern("SDL_SetJoystickVirtualTouchpad")) SetJoystickVirtualTouchpad(
   pressure: f32,
 ): bool
 fn(extern("SDL_SendJoystickVirtualSensorData")) SendJoystickVirtualSensorData(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
   type: SensorType,
   sensor_timestamp: Uint64,
-  data: *mut f32,
+  data: *f32,
   num_values: i32,
 ): bool
 fn(extern("SDL_GetJoystickProperties")) GetJoystickProperties(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
 ): PropertiesID
 fn(extern("SDL_GetJoystickName")) GetJoystickName(
-  joystick: *mut Joystick,
-): *mut u8
+  joystick: *Joystick,
+): optref[u8]
 fn(extern("SDL_GetJoystickPath")) GetJoystickPath(
-  joystick: *mut Joystick,
-): *mut u8
+  joystick: *Joystick,
+): optref[u8]
 fn(extern("SDL_GetJoystickPlayerIndex")) GetJoystickPlayerIndex(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
 ): i32
 fn(extern("SDL_SetJoystickPlayerIndex")) SetJoystickPlayerIndex(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
   player_index: i32,
 ): bool
 fn(extern("SDL_GetJoystickGUID")) GetJoystickGUID(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
 ): GUID
 fn(extern("SDL_GetJoystickVendor")) GetJoystickVendor(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
 ): Uint16
 fn(extern("SDL_GetJoystickProduct")) GetJoystickProduct(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
 ): Uint16
 fn(extern("SDL_GetJoystickProductVersion")) GetJoystickProductVersion(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
 ): Uint16
 fn(extern("SDL_GetJoystickFirmwareVersion")) GetJoystickFirmwareVersion(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
 ): Uint16
 fn(extern("SDL_GetJoystickSerial")) GetJoystickSerial(
-  joystick: *mut Joystick,
-): *mut u8
+  joystick: *Joystick,
+): optref[u8]
 fn(extern("SDL_GetJoystickType")) GetJoystickType(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
 ): JoystickType
 fn(extern("SDL_GetJoystickGUIDInfo")) GetJoystickGUIDInfo(
   guid: GUID,
-  vendor: *mut Uint16,
-  product: *mut Uint16,
-  version: *mut Uint16,
-  crc16: *mut Uint16,
+  vendor: *Uint16,
+  product: *Uint16,
+  version: *Uint16,
+  crc16: *Uint16,
 ): {}
 fn(extern("SDL_JoystickConnected")) JoystickConnected(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
 ): bool
 fn(extern("SDL_GetJoystickID")) GetJoystickID(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
 ): JoystickID
 fn(extern("SDL_GetNumJoystickAxes")) GetNumJoystickAxes(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
 ): i32
 fn(extern("SDL_GetNumJoystickBalls")) GetNumJoystickBalls(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
 ): i32
 fn(extern("SDL_GetNumJoystickHats")) GetNumJoystickHats(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
 ): i32
 fn(extern("SDL_GetNumJoystickButtons")) GetNumJoystickButtons(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
 ): i32
 fn(extern("SDL_SetJoystickEventsEnabled")) SetJoystickEventsEnabled(
   enabled: bool,
@@ -4545,60 +4545,60 @@ fn(extern("SDL_SetJoystickEventsEnabled")) SetJoystickEventsEnabled(
 fn(extern("SDL_JoystickEventsEnabled")) JoystickEventsEnabled(): bool
 fn(extern("SDL_UpdateJoysticks")) UpdateJoysticks(): {}
 fn(extern("SDL_GetJoystickAxis")) GetJoystickAxis(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
   axis: i32,
 ): Sint16
 fn(extern("SDL_GetJoystickAxisInitialState")) GetJoystickAxisInitialState(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
   axis: i32,
-  state: *mut Sint16,
+  state: *Sint16,
 ): bool
 fn(extern("SDL_GetJoystickBall")) GetJoystickBall(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
   ball: i32,
-  dx: *mut i32,
-  dy: *mut i32,
+  dx: *i32,
+  dy: *i32,
 ): bool
 fn(extern("SDL_GetJoystickHat")) GetJoystickHat(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
   hat: i32,
 ): Uint8
 fn(extern("SDL_GetJoystickButton")) GetJoystickButton(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
   button: i32,
 ): bool
 fn(extern("SDL_RumbleJoystick")) RumbleJoystick(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
   low_frequency_rumble: Uint16,
   high_frequency_rumble: Uint16,
   duration_ms: Uint32,
 ): bool
 fn(extern("SDL_RumbleJoystickTriggers")) RumbleJoystickTriggers(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
   left_rumble: Uint16,
   right_rumble: Uint16,
   duration_ms: Uint32,
 ): bool
 fn(extern("SDL_SetJoystickLED")) SetJoystickLED(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
   red: Uint8,
   green: Uint8,
   blue: Uint8,
 ): bool
 fn(extern("SDL_SendJoystickEffect")) SendJoystickEffect(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
   data: ptr,
   size: i32,
 ): bool
 fn(extern("SDL_CloseJoystick")) CloseJoystick(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
 ): {}
 fn(extern("SDL_GetJoystickConnectionState")) GetJoystickConnectionState(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
 ): JoystickConnectionState
 fn(extern("SDL_GetJoystickPowerInfo")) GetJoystickPowerInfo(
-  joystick: *mut Joystick,
-  percent: *mut i32,
+  joystick: *Joystick,
+  percent: *i32,
 ): PowerState
 type Gamepad = opaque[0, 1]
 type GamepadType = either(u32) {
@@ -4704,42 +4704,42 @@ type GamepadBinding = {
 }
 #static assert-layout[GamepadBinding](32, 4, [0, 4, 16, 20, ])
 fn(extern("SDL_AddGamepadMapping")) AddGamepadMapping(
-  mapping: *mut u8,
+  mapping: *u8,
 ): i32
 fn(extern("SDL_AddGamepadMappingsFromIO")) AddGamepadMappingsFromIO(
-  src: *mut IOStream,
+  src: *IOStream,
   closeio: bool,
 ): i32
 fn(extern("SDL_AddGamepadMappingsFromFile")) AddGamepadMappingsFromFile(
-  file: *mut u8,
+  file: *u8,
 ): i32
 fn(extern("SDL_ReloadGamepadMappings")) ReloadGamepadMappings(): bool
 fn(extern("SDL_GetGamepadMappings")) GetGamepadMappings(
-  count: *mut i32,
-): *mut *mut u8
+  count: *i32,
+): optref[optref[u8]]
 fn(extern("SDL_GetGamepadMappingForGUID")) GetGamepadMappingForGUID(
   guid: GUID,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_GetGamepadMapping")) GetGamepadMapping(
-  gamepad: *mut Gamepad,
-): *mut u8
+  gamepad: *Gamepad,
+): optref[u8]
 fn(extern("SDL_SetGamepadMapping")) SetGamepadMapping(
   instance_id: JoystickID,
-  mapping: *mut u8,
+  mapping: *u8,
 ): bool
 fn(extern("SDL_HasGamepad")) HasGamepad(): bool
 fn(extern("SDL_GetGamepads")) GetGamepads(
-  count: *mut i32,
-): *mut JoystickID
+  count: *i32,
+): optref[JoystickID]
 fn(extern("SDL_IsGamepad")) IsGamepad(
   instance_id: JoystickID,
 ): bool
 fn(extern("SDL_GetGamepadNameForID")) GetGamepadNameForID(
   instance_id: JoystickID,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_GetGamepadPathForID")) GetGamepadPathForID(
   instance_id: JoystickID,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_GetGamepadPlayerIndexForID")) GetGamepadPlayerIndexForID(
   instance_id: JoystickID,
 ): i32
@@ -4763,113 +4763,113 @@ fn(extern("SDL_GetRealGamepadTypeForID")) GetRealGamepadTypeForID(
 ): GamepadType
 fn(extern("SDL_GetGamepadMappingForID")) GetGamepadMappingForID(
   instance_id: JoystickID,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_OpenGamepad")) OpenGamepad(
   instance_id: JoystickID,
-): *mut Gamepad
+): optref[Gamepad]
 fn(extern("SDL_GetGamepadFromID")) GetGamepadFromID(
   instance_id: JoystickID,
-): *mut Gamepad
+): optref[Gamepad]
 fn(extern("SDL_GetGamepadFromPlayerIndex")) GetGamepadFromPlayerIndex(
   player_index: i32,
-): *mut Gamepad
+): optref[Gamepad]
 fn(extern("SDL_GetGamepadProperties")) GetGamepadProperties(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
 ): PropertiesID
 fn(extern("SDL_GetGamepadID")) GetGamepadID(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
 ): JoystickID
 fn(extern("SDL_GetGamepadName")) GetGamepadName(
-  gamepad: *mut Gamepad,
-): *mut u8
+  gamepad: *Gamepad,
+): optref[u8]
 fn(extern("SDL_GetGamepadPath")) GetGamepadPath(
-  gamepad: *mut Gamepad,
-): *mut u8
+  gamepad: *Gamepad,
+): optref[u8]
 fn(extern("SDL_GetGamepadType")) GetGamepadType(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
 ): GamepadType
 fn(extern("SDL_GetRealGamepadType")) GetRealGamepadType(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
 ): GamepadType
 fn(extern("SDL_GetGamepadPlayerIndex")) GetGamepadPlayerIndex(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
 ): i32
 fn(extern("SDL_SetGamepadPlayerIndex")) SetGamepadPlayerIndex(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
   player_index: i32,
 ): bool
 fn(extern("SDL_GetGamepadVendor")) GetGamepadVendor(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
 ): Uint16
 fn(extern("SDL_GetGamepadProduct")) GetGamepadProduct(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
 ): Uint16
 fn(extern("SDL_GetGamepadProductVersion")) GetGamepadProductVersion(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
 ): Uint16
 fn(extern("SDL_GetGamepadFirmwareVersion")) GetGamepadFirmwareVersion(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
 ): Uint16
 fn(extern("SDL_GetGamepadSerial")) GetGamepadSerial(
-  gamepad: *mut Gamepad,
-): *mut u8
+  gamepad: *Gamepad,
+): optref[u8]
 fn(extern("SDL_GetGamepadSteamHandle")) GetGamepadSteamHandle(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
 ): Uint64
 fn(extern("SDL_GetGamepadConnectionState")) GetGamepadConnectionState(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
 ): JoystickConnectionState
 fn(extern("SDL_GetGamepadPowerInfo")) GetGamepadPowerInfo(
-  gamepad: *mut Gamepad,
-  percent: *mut i32,
+  gamepad: *Gamepad,
+  percent: *i32,
 ): PowerState
 fn(extern("SDL_GamepadConnected")) GamepadConnected(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
 ): bool
 fn(extern("SDL_GetGamepadJoystick")) GetGamepadJoystick(
-  gamepad: *mut Gamepad,
-): *mut Joystick
+  gamepad: *Gamepad,
+): optref[Joystick]
 fn(extern("SDL_SetGamepadEventsEnabled")) SetGamepadEventsEnabled(
   enabled: bool,
 ): {}
 fn(extern("SDL_GamepadEventsEnabled")) GamepadEventsEnabled(): bool
 fn(extern("SDL_GetGamepadBindings")) GetGamepadBindings(
-  gamepad: *mut Gamepad,
-  count: *mut i32,
-): *mut *mut GamepadBinding
+  gamepad: *Gamepad,
+  count: *i32,
+): optref[optref[GamepadBinding]]
 fn(extern("SDL_UpdateGamepads")) UpdateGamepads(): {}
 fn(extern("SDL_GetGamepadTypeFromString")) GetGamepadTypeFromString(
-  str: *mut u8,
+  str: *u8,
 ): GamepadType
 fn(extern("SDL_GetGamepadStringForType")) GetGamepadStringForType(
   type: GamepadType,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_GetGamepadAxisFromString")) GetGamepadAxisFromString(
-  str: *mut u8,
+  str: *u8,
 ): GamepadAxis
 fn(extern("SDL_GetGamepadStringForAxis")) GetGamepadStringForAxis(
   axis: GamepadAxis,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_GamepadHasAxis")) GamepadHasAxis(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
   axis: GamepadAxis,
 ): bool
 fn(extern("SDL_GetGamepadAxis")) GetGamepadAxis(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
   axis: GamepadAxis,
 ): Sint16
 fn(extern("SDL_GetGamepadButtonFromString")) GetGamepadButtonFromString(
-  str: *mut u8,
+  str: *u8,
 ): GamepadButton
 fn(extern("SDL_GetGamepadStringForButton")) GetGamepadStringForButton(
   button: GamepadButton,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_GamepadHasButton")) GamepadHasButton(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
   button: GamepadButton,
 ): bool
 fn(extern("SDL_GetGamepadButton")) GetGamepadButton(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
   button: GamepadButton,
 ): bool
 fn(extern("SDL_GetGamepadButtonLabelForType")) GetGamepadButtonLabelForType(
@@ -4877,82 +4877,82 @@ fn(extern("SDL_GetGamepadButtonLabelForType")) GetGamepadButtonLabelForType(
   button: GamepadButton,
 ): GamepadButtonLabel
 fn(extern("SDL_GetGamepadButtonLabel")) GetGamepadButtonLabel(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
   button: GamepadButton,
 ): GamepadButtonLabel
 fn(extern("SDL_GetNumGamepadTouchpads")) GetNumGamepadTouchpads(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
 ): i32
 fn(extern("SDL_GetNumGamepadTouchpadFingers")) GetNumGamepadTouchpadFingers(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
   touchpad: i32,
 ): i32
 fn(extern("SDL_GetGamepadTouchpadFinger")) GetGamepadTouchpadFinger(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
   touchpad: i32,
   finger: i32,
-  down: *mut bool,
-  x: *mut f32,
-  y: *mut f32,
-  pressure: *mut f32,
+  down: *bool,
+  x: *f32,
+  y: *f32,
+  pressure: *f32,
 ): bool
 fn(extern("SDL_GamepadHasSensor")) GamepadHasSensor(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
   type: SensorType,
 ): bool
 fn(extern("SDL_SetGamepadSensorEnabled")) SetGamepadSensorEnabled(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
   type: SensorType,
   enabled: bool,
 ): bool
 fn(extern("SDL_GamepadSensorEnabled")) GamepadSensorEnabled(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
   type: SensorType,
 ): bool
 fn(extern("SDL_GetGamepadSensorDataRate")) GetGamepadSensorDataRate(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
   type: SensorType,
 ): f32
 fn(extern("SDL_GetGamepadSensorData")) GetGamepadSensorData(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
   type: SensorType,
-  data: *mut f32,
+  data: *f32,
   num_values: i32,
 ): bool
 fn(extern("SDL_RumbleGamepad")) RumbleGamepad(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
   low_frequency_rumble: Uint16,
   high_frequency_rumble: Uint16,
   duration_ms: Uint32,
 ): bool
 fn(extern("SDL_RumbleGamepadTriggers")) RumbleGamepadTriggers(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
   left_rumble: Uint16,
   right_rumble: Uint16,
   duration_ms: Uint32,
 ): bool
 fn(extern("SDL_SetGamepadLED")) SetGamepadLED(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
   red: Uint8,
   green: Uint8,
   blue: Uint8,
 ): bool
 fn(extern("SDL_SendGamepadEffect")) SendGamepadEffect(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
   data: ptr,
   size: i32,
 ): bool
 fn(extern("SDL_CloseGamepad")) CloseGamepad(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
 ): {}
 fn(extern("SDL_GetGamepadAppleSFSymbolsNameForButton")) GetGamepadAppleSFSymbolsNameForButton(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
   button: GamepadButton,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_GetGamepadAppleSFSymbolsNameForAxis")) GetGamepadAppleSFSymbolsNameForAxis(
-  gamepad: *mut Gamepad,
+  gamepad: *Gamepad,
   axis: GamepadAxis,
-): *mut u8
+): optref[u8]
 type Scancode = either(u32) {
   SCANCODE_UNKNOWN = 0,
   SCANCODE_A = 4,
@@ -5213,15 +5213,15 @@ type(alias) KeyboardID = Uint32
 #static assert-layout[KeyboardID](4, 4, [])
 fn(extern("SDL_HasKeyboard")) HasKeyboard(): bool
 fn(extern("SDL_GetKeyboards")) GetKeyboards(
-  count: *mut i32,
-): *mut KeyboardID
+  count: *i32,
+): optref[KeyboardID]
 fn(extern("SDL_GetKeyboardNameForID")) GetKeyboardNameForID(
   instance_id: KeyboardID,
-): *mut u8
-fn(extern("SDL_GetKeyboardFocus")) GetKeyboardFocus(): *mut Window
+): optref[u8]
+fn(extern("SDL_GetKeyboardFocus")) GetKeyboardFocus(): optref[Window]
 fn(extern("SDL_GetKeyboardState")) GetKeyboardState(
-  numkeys: *mut i32,
-): *mut bool
+  numkeys: *i32,
+): optref[bool]
 fn(extern("SDL_ResetKeyboard")) ResetKeyboard(): {}
 fn(extern("SDL_GetModState")) GetModState(): Keymod
 fn(extern("SDL_SetModState")) SetModState(
@@ -5234,26 +5234,26 @@ fn(extern("SDL_GetKeyFromScancode")) GetKeyFromScancode(
 ): Keycode
 fn(extern("SDL_GetScancodeFromKey")) GetScancodeFromKey(
   key: Keycode,
-  modstate: *mut Keymod,
+  modstate: *Keymod,
 ): Scancode
 fn(extern("SDL_SetScancodeName")) SetScancodeName(
   scancode: Scancode,
-  name: *mut u8,
+  name: *u8,
 ): bool
 fn(extern("SDL_GetScancodeName")) GetScancodeName(
   scancode: Scancode,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_GetScancodeFromName")) GetScancodeFromName(
-  name: *mut u8,
+  name: *u8,
 ): Scancode
 fn(extern("SDL_GetKeyName")) GetKeyName(
   key: Keycode,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_GetKeyFromName")) GetKeyFromName(
-  name: *mut u8,
+  name: *u8,
 ): Keycode
 fn(extern("SDL_StartTextInput")) StartTextInput(
-  window: *mut Window,
+  window: *Window,
 ): bool
 type TextInputType = either(u32) {
   TEXTINPUT_TYPE_TEXT = 0,
@@ -5275,31 +5275,31 @@ type Capitalization = either(u32) {
 }
 #static assert-layout[Capitalization](4, 4, [])
 fn(extern("SDL_StartTextInputWithProperties")) StartTextInputWithProperties(
-  window: *mut Window,
+  window: *Window,
   props: PropertiesID,
 ): bool
 fn(extern("SDL_TextInputActive")) TextInputActive(
-  window: *mut Window,
+  window: *Window,
 ): bool
 fn(extern("SDL_StopTextInput")) StopTextInput(
-  window: *mut Window,
+  window: *Window,
 ): bool
 fn(extern("SDL_ClearComposition")) ClearComposition(
-  window: *mut Window,
+  window: *Window,
 ): bool
 fn(extern("SDL_SetTextInputArea")) SetTextInputArea(
-  window: *mut Window,
-  rect: *mut Rect,
+  window: *Window,
+  rect: *Rect,
   cursor: i32,
 ): bool
 fn(extern("SDL_GetTextInputArea")) GetTextInputArea(
-  window: *mut Window,
-  rect: *mut Rect,
-  cursor: *mut i32,
+  window: *Window,
+  rect: *Rect,
+  cursor: *i32,
 ): bool
 fn(extern("SDL_HasScreenKeyboardSupport")) HasScreenKeyboardSupport(): bool
 fn(extern("SDL_ScreenKeyboardShown")) ScreenKeyboardShown(
-  window: *mut Window,
+  window: *Window,
 ): bool
 type(alias) MouseID = Uint32
 #static assert-layout[MouseID](4, 4, [])
@@ -5334,7 +5334,7 @@ type MouseWheelDirection = either(u32) {
 }
 #static assert-layout[MouseWheelDirection](4, 4, [])
 type CursorFrameInfo = {
-  surface: *mut Surface,
+  surface: optref[Surface],
   duration: Uint32,
 }
 #static assert-layout[CursorFrameInfo](16, 8, [0, 8, ])
@@ -5343,34 +5343,34 @@ type(alias) MouseButtonFlags = Uint32
 type(alias) MouseMotionTransformCallback = *fn(
   ptr,
   Uint64,
-  *mut Window,
+  *Window,
   MouseID,
-  *mut f32,
-  *mut f32
+  *f32,
+  *f32
 ) -> {}
 #static assert-layout[MouseMotionTransformCallback](8, 8, [])
 fn(extern("SDL_HasMouse")) HasMouse(): bool
 fn(extern("SDL_GetMice")) GetMice(
-  count: *mut i32,
-): *mut MouseID
+  count: *i32,
+): optref[MouseID]
 fn(extern("SDL_GetMouseNameForID")) GetMouseNameForID(
   instance_id: MouseID,
-): *mut u8
-fn(extern("SDL_GetMouseFocus")) GetMouseFocus(): *mut Window
+): optref[u8]
+fn(extern("SDL_GetMouseFocus")) GetMouseFocus(): optref[Window]
 fn(extern("SDL_GetMouseState")) GetMouseState(
-  x: *mut f32,
-  y: *mut f32,
+  x: *f32,
+  y: *f32,
 ): MouseButtonFlags
 fn(extern("SDL_GetGlobalMouseState")) GetGlobalMouseState(
-  x: *mut f32,
-  y: *mut f32,
+  x: *f32,
+  y: *f32,
 ): MouseButtonFlags
 fn(extern("SDL_GetRelativeMouseState")) GetRelativeMouseState(
-  x: *mut f32,
-  y: *mut f32,
+  x: *f32,
+  y: *f32,
 ): MouseButtonFlags
 fn(extern("SDL_WarpMouseInWindow")) WarpMouseInWindow(
-  window: *mut Window,
+  window: *Window,
   x: f32,
   y: f32,
 ): {}
@@ -5383,44 +5383,44 @@ fn(extern("SDL_SetRelativeMouseTransform")) SetRelativeMouseTransform(
   userdata: ptr,
 ): bool
 fn(extern("SDL_SetWindowRelativeMouseMode")) SetWindowRelativeMouseMode(
-  window: *mut Window,
+  window: *Window,
   enabled: bool,
 ): bool
 fn(extern("SDL_GetWindowRelativeMouseMode")) GetWindowRelativeMouseMode(
-  window: *mut Window,
+  window: *Window,
 ): bool
 fn(extern("SDL_CaptureMouse")) CaptureMouse(
   enabled: bool,
 ): bool
 fn(extern("SDL_CreateCursor")) CreateCursor(
-  data: *mut Uint8,
-  mask: *mut Uint8,
+  data: *Uint8,
+  mask: *Uint8,
   w: i32,
   h: i32,
   hot_x: i32,
   hot_y: i32,
-): *mut Cursor
+): optref[Cursor]
 fn(extern("SDL_CreateColorCursor")) CreateColorCursor(
-  surface: *mut Surface,
+  surface: *Surface,
   hot_x: i32,
   hot_y: i32,
-): *mut Cursor
+): optref[Cursor]
 fn(extern("SDL_CreateAnimatedCursor")) CreateAnimatedCursor(
-  frames: *mut CursorFrameInfo,
+  frames: *CursorFrameInfo,
   frame_count: i32,
   hot_x: i32,
   hot_y: i32,
-): *mut Cursor
+): optref[Cursor]
 fn(extern("SDL_CreateSystemCursor")) CreateSystemCursor(
   id: SystemCursor,
-): *mut Cursor
+): optref[Cursor]
 fn(extern("SDL_SetCursor")) SetCursor(
-  cursor: *mut Cursor,
+  cursor: *Cursor,
 ): bool
-fn(extern("SDL_GetCursor")) GetCursor(): *mut Cursor
-fn(extern("SDL_GetDefaultCursor")) GetDefaultCursor(): *mut Cursor
+fn(extern("SDL_GetCursor")) GetCursor(): optref[Cursor]
+fn(extern("SDL_GetDefaultCursor")) GetDefaultCursor(): optref[Cursor]
 fn(extern("SDL_DestroyCursor")) DestroyCursor(
-  cursor: *mut Cursor,
+  cursor: *Cursor,
 ): {}
 fn(extern("SDL_ShowCursor")) ShowCursor(): bool
 fn(extern("SDL_HideCursor")) HideCursor(): bool
@@ -5444,18 +5444,18 @@ type Finger = {
 }
 #static assert-layout[Finger](24, 8, [0, 8, 12, 16, ])
 fn(extern("SDL_GetTouchDevices")) GetTouchDevices(
-  count: *mut i32,
-): *mut TouchID
+  count: *i32,
+): optref[TouchID]
 fn(extern("SDL_GetTouchDeviceName")) GetTouchDeviceName(
   touchID: TouchID,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_GetTouchDeviceType")) GetTouchDeviceType(
   touchID: TouchID,
 ): TouchDeviceType
 fn(extern("SDL_GetTouchFingers")) GetTouchFingers(
   touchID: TouchID,
-  count: *mut i32,
-): *mut *mut Finger
+  count: *i32,
+): optref[optref[Finger]]
 type(alias) PenID = Uint32
 #static assert-layout[PenID](4, 4, [])
 type(alias) PenInputFlags = Uint32
@@ -5654,7 +5654,7 @@ type TextEditingEvent = {
   reserved: Uint32,
   timestamp: Uint64,
   windowID: WindowID,
-  text: *mut u8,
+  text: optref[u8],
   start: Sint32,
   length: Sint32,
 }
@@ -5664,7 +5664,7 @@ type TextEditingCandidatesEvent = {
   reserved: Uint32,
   timestamp: Uint64,
   windowID: WindowID,
-  candidates: *mut *mut u8,
+  candidates: optref[optref[u8]],
   num_candidates: Sint32,
   selected_candidate: Sint32,
   horizontal: bool,
@@ -5678,7 +5678,7 @@ type TextInputEvent = {
   reserved: Uint32,
   timestamp: Uint64,
   windowID: WindowID,
-  text: *mut u8,
+  text: optref[u8],
 }
 #static assert-layout[TextInputEvent](32, 8, [0, 4, 8, 16, 24, ])
 type MouseDeviceEvent = {
@@ -5959,8 +5959,8 @@ type DropEvent = {
   windowID: WindowID,
   x: f32,
   y: f32,
-  source: *mut u8,
-  data: *mut u8,
+  source: optref[u8],
+  data: optref[u8],
 }
 #static assert-layout[DropEvent](48, 8, [0, 4, 8, 16, 20, 24, 32, 40, ])
 type ClipboardEvent = {
@@ -5969,7 +5969,7 @@ type ClipboardEvent = {
   timestamp: Uint64,
   owner: bool,
   num_mime_types: Sint32,
-  mime_types: *mut *mut u8,
+  mime_types: optref[optref[u8]],
 }
 #static assert-layout[ClipboardEvent](32, 8, [0, 4, 8, 16, 20, 24, ])
 type SensorEvent = {
@@ -6048,7 +6048,7 @@ type EventAction = either(u32) {
 }
 #static assert-layout[EventAction](4, 4, [])
 fn(extern("SDL_PeepEvents")) PeepEvents(
-  events: *mut Event,
+  events: *Event,
   numevents: i32,
   action: EventAction,
   minType: Uint32,
@@ -6069,21 +6069,21 @@ fn(extern("SDL_FlushEvents")) FlushEvents(
   maxType: Uint32,
 ): {}
 fn(extern("SDL_PollEvent")) PollEvent(
-  event: *mut Event,
+  event: *Event,
 ): bool
 fn(extern("SDL_WaitEvent")) WaitEvent(
-  event: *mut Event,
+  event: *Event,
 ): bool
 fn(extern("SDL_WaitEventTimeout")) WaitEventTimeout(
-  event: *mut Event,
+  event: *Event,
   timeoutMS: Sint32,
 ): bool
 fn(extern("SDL_PushEvent")) PushEvent(
-  event: *mut Event,
+  event: *Event,
 ): bool
 type(alias) EventFilter = *fn(
   ptr,
-  *mut Event
+  *Event
 ) -> bool
 #static assert-layout[EventFilter](8, 8, [])
 fn(extern("SDL_SetEventFilter")) SetEventFilter(
@@ -6091,8 +6091,8 @@ fn(extern("SDL_SetEventFilter")) SetEventFilter(
   userdata: ptr,
 ): {}
 fn(extern("SDL_GetEventFilter")) GetEventFilter(
-  filter: *mut EventFilter,
-  userdata: *mut ptr,
+  filter: *EventFilter,
+  userdata: *ptr,
 ): bool
 fn(extern("SDL_AddEventWatch")) AddEventWatch(
   filter: EventFilter,
@@ -6117,18 +6117,18 @@ fn(extern("SDL_RegisterEvents")) RegisterEvents(
   numevents: i32,
 ): Uint32
 fn(extern("SDL_GetWindowFromEvent")) GetWindowFromEvent(
-  event: *mut Event,
-): *mut Window
+  event: *Event,
+): optref[Window]
 fn(extern("SDL_GetEventDescription")) GetEventDescription(
-  event: *mut Event,
-  buf: *mut u8,
+  event: *Event,
+  buf: *u8,
   buflen: i32,
 ): i32
-fn(extern("SDL_GetBasePath")) GetBasePath(): *mut u8
+fn(extern("SDL_GetBasePath")) GetBasePath(): optref[u8]
 fn(extern("SDL_GetPrefPath")) GetPrefPath(
-  org: *mut u8,
-  app: *mut u8,
-): *mut u8
+  org: *u8,
+  app: *u8,
+): optref[u8]
 type Folder = either(u32) {
   FOLDER_HOME = 0,
   FOLDER_DESKTOP = 1,
@@ -6146,7 +6146,7 @@ type Folder = either(u32) {
 #static assert-layout[Folder](4, 4, [])
 fn(extern("SDL_GetUserFolder")) GetUserFolder(
   folder: Folder,
-): *mut u8
+): optref[u8]
 type PathType = either(u32) {
   PATHTYPE_NONE = 0,
   PATHTYPE_FILE = 1,
@@ -6165,7 +6165,7 @@ type PathInfo = {
 type(alias) GlobFlags = Uint32
 #static assert-layout[GlobFlags](4, 4, [])
 fn(extern("SDL_CreateDirectory")) CreateDirectory(
-  path: *mut u8,
+  path: *u8,
 ): bool
 type EnumerationResult = either(u32) {
   ENUM_CONTINUE = 0,
@@ -6175,37 +6175,37 @@ type EnumerationResult = either(u32) {
 #static assert-layout[EnumerationResult](4, 4, [])
 type(alias) EnumerateDirectoryCallback = *fn(
   ptr,
-  *mut u8,
-  *mut u8
+  *u8,
+  *u8
 ) -> EnumerationResult
 #static assert-layout[EnumerateDirectoryCallback](8, 8, [])
 fn(extern("SDL_EnumerateDirectory")) EnumerateDirectory(
-  path: *mut u8,
+  path: *u8,
   callback: EnumerateDirectoryCallback,
   userdata: ptr,
 ): bool
 fn(extern("SDL_RemovePath")) RemovePath(
-  path: *mut u8,
+  path: *u8,
 ): bool
 fn(extern("SDL_RenamePath")) RenamePath(
-  oldpath: *mut u8,
-  newpath: *mut u8,
+  oldpath: *u8,
+  newpath: *u8,
 ): bool
 fn(extern("SDL_CopyFile")) CopyFile(
-  oldpath: *mut u8,
-  newpath: *mut u8,
+  oldpath: *u8,
+  newpath: *u8,
 ): bool
 fn(extern("SDL_GetPathInfo")) GetPathInfo(
-  path: *mut u8,
-  info: *mut PathInfo,
+  path: *u8,
+  info: *PathInfo,
 ): bool
 fn(extern("SDL_GlobDirectory")) GlobDirectory(
-  path: *mut u8,
-  pattern: *mut u8,
+  path: *u8,
+  pattern: *u8,
   flags: GlobFlags,
-  count: *mut i32,
-): *mut *mut u8
-fn(extern("SDL_GetCurrentDirectory")) GetCurrentDirectory(): *mut u8
+  count: *i32,
+): optref[optref[u8]]
+fn(extern("SDL_GetCurrentDirectory")) GetCurrentDirectory(): optref[u8]
 type GPUDevice = opaque[0, 1]
 type GPUBuffer = opaque[0, 1]
 type GPUTransferBuffer = opaque[0, 1]
@@ -6539,19 +6539,19 @@ type GPUViewport = {
 }
 #static assert-layout[GPUViewport](24, 4, [0, 4, 8, 12, 16, 20, ])
 type GPUTextureTransferInfo = {
-  transfer_buffer: *mut GPUTransferBuffer,
+  transfer_buffer: optref[GPUTransferBuffer],
   offset: Uint32,
   pixels_per_row: Uint32,
   rows_per_layer: Uint32,
 }
 #static assert-layout[GPUTextureTransferInfo](24, 8, [0, 8, 12, 16, ])
 type GPUTransferBufferLocation = {
-  transfer_buffer: *mut GPUTransferBuffer,
+  transfer_buffer: optref[GPUTransferBuffer],
   offset: Uint32,
 }
 #static assert-layout[GPUTransferBufferLocation](16, 8, [0, 8, ])
 type GPUTextureLocation = {
-  texture: *mut GPUTexture,
+  texture: optref[GPUTexture],
   mip_level: Uint32,
   layer: Uint32,
   x: Uint32,
@@ -6560,7 +6560,7 @@ type GPUTextureLocation = {
 }
 #static assert-layout[GPUTextureLocation](32, 8, [0, 8, 12, 16, 20, 24, ])
 type GPUTextureRegion = {
-  texture: *mut GPUTexture,
+  texture: optref[GPUTexture],
   mip_level: Uint32,
   layer: Uint32,
   x: Uint32,
@@ -6572,7 +6572,7 @@ type GPUTextureRegion = {
 }
 #static assert-layout[GPUTextureRegion](40, 8, [0, 8, 12, 16, 20, 24, 28, 32, 36, ])
 type GPUBlitRegion = {
-  texture: *mut GPUTexture,
+  texture: optref[GPUTexture],
   mip_level: Uint32,
   layer_or_depth_plane: Uint32,
   x: Uint32,
@@ -6582,12 +6582,12 @@ type GPUBlitRegion = {
 }
 #static assert-layout[GPUBlitRegion](32, 8, [0, 8, 12, 16, 20, 24, 28, ])
 type GPUBufferLocation = {
-  buffer: *mut GPUBuffer,
+  buffer: optref[GPUBuffer],
   offset: Uint32,
 }
 #static assert-layout[GPUBufferLocation](16, 8, [0, 8, ])
 type GPUBufferRegion = {
-  buffer: *mut GPUBuffer,
+  buffer: optref[GPUBuffer],
   offset: Uint32,
   size: Uint32,
 }
@@ -6647,9 +6647,9 @@ type GPUVertexAttribute = {
 }
 #static assert-layout[GPUVertexAttribute](16, 4, [0, 4, 8, 12, ])
 type GPUVertexInputState = {
-  vertex_buffer_descriptions: *mut GPUVertexBufferDescription,
+  vertex_buffer_descriptions: optref[GPUVertexBufferDescription],
   num_vertex_buffers: Uint32,
-  vertex_attributes: *mut GPUVertexAttribute,
+  vertex_attributes: optref[GPUVertexAttribute],
   num_vertex_attributes: Uint32,
 }
 #static assert-layout[GPUVertexInputState](32, 8, [0, 8, 16, 24, ])
@@ -6676,8 +6676,8 @@ type GPUColorTargetBlendState = {
 #static assert-layout[GPUColorTargetBlendState](32, 4, [0, 4, 8, 12, 16, 20, 24, 25, 26, 27, 28, ])
 type GPUShaderCreateInfo = {
   code_size: usize,
-  code: *mut Uint8,
-  entrypoint: *mut u8,
+  code: optref[Uint8],
+  entrypoint: optref[u8],
   format: GPUShaderFormat,
   stage: GPUShaderStage,
   num_samplers: Uint32,
@@ -6753,7 +6753,7 @@ type GPUColorTargetDescription = {
 }
 #static assert-layout[GPUColorTargetDescription](36, 4, [0, 4, ])
 type GPUGraphicsPipelineTargetInfo = {
-  color_target_descriptions: *mut GPUColorTargetDescription,
+  color_target_descriptions: optref[GPUColorTargetDescription],
   num_color_targets: Uint32,
   depth_stencil_format: GPUTextureFormat,
   has_depth_stencil_target: bool,
@@ -6763,8 +6763,8 @@ type GPUGraphicsPipelineTargetInfo = {
 }
 #static assert-layout[GPUGraphicsPipelineTargetInfo](24, 8, [0, 8, 12, 16, 17, 18, 19, ])
 type GPUGraphicsPipelineCreateInfo = {
-  vertex_shader: *mut GPUShader,
-  fragment_shader: *mut GPUShader,
+  vertex_shader: optref[GPUShader],
+  fragment_shader: optref[GPUShader],
   vertex_input_state: GPUVertexInputState,
   primitive_type: GPUPrimitiveType,
   rasterizer_state: GPURasterizerState,
@@ -6776,8 +6776,8 @@ type GPUGraphicsPipelineCreateInfo = {
 #static assert-layout[GPUGraphicsPipelineCreateInfo](168, 8, [0, 8, 16, 48, 52, 80, 92, 136, 160, ])
 type GPUComputePipelineCreateInfo = {
   code_size: usize,
-  code: *mut Uint8,
-  entrypoint: *mut u8,
+  code: optref[Uint8],
+  entrypoint: optref[u8],
   format: GPUShaderFormat,
   num_samplers: Uint32,
   num_readonly_storage_textures: Uint32,
@@ -6792,13 +6792,13 @@ type GPUComputePipelineCreateInfo = {
 }
 #static assert-layout[GPUComputePipelineCreateInfo](72, 8, [0, 8, 16, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64, ])
 type GPUColorTargetInfo = {
-  texture: *mut GPUTexture,
+  texture: optref[GPUTexture],
   mip_level: Uint32,
   layer_or_depth_plane: Uint32,
   clear_color: FColor,
   load_op: GPULoadOp,
   store_op: GPUStoreOp,
-  resolve_texture: *mut GPUTexture,
+  resolve_texture: optref[GPUTexture],
   resolve_mip_level: Uint32,
   resolve_layer: Uint32,
   cycle: bool,
@@ -6808,7 +6808,7 @@ type GPUColorTargetInfo = {
 }
 #static assert-layout[GPUColorTargetInfo](64, 8, [0, 8, 12, 16, 32, 36, 40, 48, 52, 56, 57, 58, 59, ])
 type GPUDepthStencilTargetInfo = {
-  texture: *mut GPUTexture,
+  texture: optref[GPUTexture],
   clear_depth: f32,
   load_op: GPULoadOp,
   store_op: GPUStoreOp,
@@ -6834,17 +6834,17 @@ type GPUBlitInfo = {
 }
 #static assert-layout[GPUBlitInfo](96, 8, [0, 32, 64, 68, 84, 88, 92, 93, 94, 95, ])
 type GPUBufferBinding = {
-  buffer: *mut GPUBuffer,
+  buffer: optref[GPUBuffer],
   offset: Uint32,
 }
 #static assert-layout[GPUBufferBinding](16, 8, [0, 8, ])
 type GPUTextureSamplerBinding = {
-  texture: *mut GPUTexture,
-  sampler: *mut GPUSampler,
+  texture: optref[GPUTexture],
+  sampler: optref[GPUSampler],
 }
 #static assert-layout[GPUTextureSamplerBinding](16, 8, [0, 8, ])
 type GPUStorageBufferReadWriteBinding = {
-  buffer: *mut GPUBuffer,
+  buffer: optref[GPUBuffer],
   cycle: bool,
   padding1: Uint8,
   padding2: Uint8,
@@ -6852,7 +6852,7 @@ type GPUStorageBufferReadWriteBinding = {
 }
 #static assert-layout[GPUStorageBufferReadWriteBinding](16, 8, [0, 8, 9, 10, 11, ])
 type GPUStorageTextureReadWriteBinding = {
-  texture: *mut GPUTexture,
+  texture: optref[GPUTexture],
   mip_level: Uint32,
   layer: Uint32,
   cycle: bool,
@@ -6863,7 +6863,7 @@ type GPUStorageTextureReadWriteBinding = {
 #static assert-layout[GPUStorageTextureReadWriteBinding](24, 8, [0, 8, 12, 16, 17, 18, 19, ])
 fn(extern("SDL_GPUSupportsShaderFormats")) GPUSupportsShaderFormats(
   format_flags: GPUShaderFormat,
-  name: *mut u8,
+  name: *u8,
 ): bool
 fn(extern("SDL_GPUSupportsProperties")) GPUSupportsProperties(
   props: PropertiesID,
@@ -6871,210 +6871,210 @@ fn(extern("SDL_GPUSupportsProperties")) GPUSupportsProperties(
 fn(extern("SDL_CreateGPUDevice")) CreateGPUDevice(
   format_flags: GPUShaderFormat,
   debug_mode: bool,
-  name: *mut u8,
-): *mut GPUDevice
+  name: *u8,
+): optref[GPUDevice]
 fn(extern("SDL_CreateGPUDeviceWithProperties")) CreateGPUDeviceWithProperties(
   props: PropertiesID,
-): *mut GPUDevice
+): optref[GPUDevice]
 type GPUVulkanOptions = {
   vulkan_api_version: Uint32,
   feature_list: ptr,
   vulkan_10_physical_device_features: ptr,
   device_extension_count: Uint32,
-  device_extension_names: *mut *mut u8,
+  device_extension_names: optref[optref[u8]],
   instance_extension_count: Uint32,
-  instance_extension_names: *mut *mut u8,
+  instance_extension_names: optref[optref[u8]],
 }
 #static assert-layout[GPUVulkanOptions](56, 8, [0, 8, 16, 24, 32, 40, 48, ])
 fn(extern("SDL_DestroyGPUDevice")) DestroyGPUDevice(
-  device: *mut GPUDevice,
+  device: *GPUDevice,
 ): {}
 fn(extern("SDL_GetNumGPUDrivers")) GetNumGPUDrivers(): i32
 fn(extern("SDL_GetGPUDriver")) GetGPUDriver(
   index: i32,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_GetGPUDeviceDriver")) GetGPUDeviceDriver(
-  device: *mut GPUDevice,
-): *mut u8
+  device: *GPUDevice,
+): optref[u8]
 fn(extern("SDL_GetGPUShaderFormats")) GetGPUShaderFormats(
-  device: *mut GPUDevice,
+  device: *GPUDevice,
 ): GPUShaderFormat
 fn(extern("SDL_GetGPUDeviceProperties")) GetGPUDeviceProperties(
-  device: *mut GPUDevice,
+  device: *GPUDevice,
 ): PropertiesID
 fn(extern("SDL_CreateGPUComputePipeline")) CreateGPUComputePipeline(
-  device: *mut GPUDevice,
-  createinfo: *mut GPUComputePipelineCreateInfo,
-): *mut GPUComputePipeline
+  device: *GPUDevice,
+  createinfo: *GPUComputePipelineCreateInfo,
+): optref[GPUComputePipeline]
 fn(extern("SDL_CreateGPUGraphicsPipeline")) CreateGPUGraphicsPipeline(
-  device: *mut GPUDevice,
-  createinfo: *mut GPUGraphicsPipelineCreateInfo,
-): *mut GPUGraphicsPipeline
+  device: *GPUDevice,
+  createinfo: *GPUGraphicsPipelineCreateInfo,
+): optref[GPUGraphicsPipeline]
 fn(extern("SDL_CreateGPUSampler")) CreateGPUSampler(
-  device: *mut GPUDevice,
-  createinfo: *mut GPUSamplerCreateInfo,
-): *mut GPUSampler
+  device: *GPUDevice,
+  createinfo: *GPUSamplerCreateInfo,
+): optref[GPUSampler]
 fn(extern("SDL_CreateGPUShader")) CreateGPUShader(
-  device: *mut GPUDevice,
-  createinfo: *mut GPUShaderCreateInfo,
-): *mut GPUShader
+  device: *GPUDevice,
+  createinfo: *GPUShaderCreateInfo,
+): optref[GPUShader]
 fn(extern("SDL_CreateGPUTexture")) CreateGPUTexture(
-  device: *mut GPUDevice,
-  createinfo: *mut GPUTextureCreateInfo,
-): *mut GPUTexture
+  device: *GPUDevice,
+  createinfo: *GPUTextureCreateInfo,
+): optref[GPUTexture]
 fn(extern("SDL_CreateGPUBuffer")) CreateGPUBuffer(
-  device: *mut GPUDevice,
-  createinfo: *mut GPUBufferCreateInfo,
-): *mut GPUBuffer
+  device: *GPUDevice,
+  createinfo: *GPUBufferCreateInfo,
+): optref[GPUBuffer]
 fn(extern("SDL_CreateGPUTransferBuffer")) CreateGPUTransferBuffer(
-  device: *mut GPUDevice,
-  createinfo: *mut GPUTransferBufferCreateInfo,
-): *mut GPUTransferBuffer
+  device: *GPUDevice,
+  createinfo: *GPUTransferBufferCreateInfo,
+): optref[GPUTransferBuffer]
 fn(extern("SDL_SetGPUBufferName")) SetGPUBufferName(
-  device: *mut GPUDevice,
-  buffer: *mut GPUBuffer,
-  text: *mut u8,
+  device: *GPUDevice,
+  buffer: *GPUBuffer,
+  text: *u8,
 ): {}
 fn(extern("SDL_SetGPUTextureName")) SetGPUTextureName(
-  device: *mut GPUDevice,
-  texture: *mut GPUTexture,
-  text: *mut u8,
+  device: *GPUDevice,
+  texture: *GPUTexture,
+  text: *u8,
 ): {}
 fn(extern("SDL_InsertGPUDebugLabel")) InsertGPUDebugLabel(
-  command_buffer: *mut GPUCommandBuffer,
-  text: *mut u8,
+  command_buffer: *GPUCommandBuffer,
+  text: *u8,
 ): {}
 fn(extern("SDL_PushGPUDebugGroup")) PushGPUDebugGroup(
-  command_buffer: *mut GPUCommandBuffer,
-  name: *mut u8,
+  command_buffer: *GPUCommandBuffer,
+  name: *u8,
 ): {}
 fn(extern("SDL_PopGPUDebugGroup")) PopGPUDebugGroup(
-  command_buffer: *mut GPUCommandBuffer,
+  command_buffer: *GPUCommandBuffer,
 ): {}
 fn(extern("SDL_ReleaseGPUTexture")) ReleaseGPUTexture(
-  device: *mut GPUDevice,
-  texture: *mut GPUTexture,
+  device: *GPUDevice,
+  texture: *GPUTexture,
 ): {}
 fn(extern("SDL_ReleaseGPUSampler")) ReleaseGPUSampler(
-  device: *mut GPUDevice,
-  sampler: *mut GPUSampler,
+  device: *GPUDevice,
+  sampler: *GPUSampler,
 ): {}
 fn(extern("SDL_ReleaseGPUBuffer")) ReleaseGPUBuffer(
-  device: *mut GPUDevice,
-  buffer: *mut GPUBuffer,
+  device: *GPUDevice,
+  buffer: *GPUBuffer,
 ): {}
 fn(extern("SDL_ReleaseGPUTransferBuffer")) ReleaseGPUTransferBuffer(
-  device: *mut GPUDevice,
-  transfer_buffer: *mut GPUTransferBuffer,
+  device: *GPUDevice,
+  transfer_buffer: *GPUTransferBuffer,
 ): {}
 fn(extern("SDL_ReleaseGPUComputePipeline")) ReleaseGPUComputePipeline(
-  device: *mut GPUDevice,
-  compute_pipeline: *mut GPUComputePipeline,
+  device: *GPUDevice,
+  compute_pipeline: *GPUComputePipeline,
 ): {}
 fn(extern("SDL_ReleaseGPUShader")) ReleaseGPUShader(
-  device: *mut GPUDevice,
-  shader: *mut GPUShader,
+  device: *GPUDevice,
+  shader: *GPUShader,
 ): {}
 fn(extern("SDL_ReleaseGPUGraphicsPipeline")) ReleaseGPUGraphicsPipeline(
-  device: *mut GPUDevice,
-  graphics_pipeline: *mut GPUGraphicsPipeline,
+  device: *GPUDevice,
+  graphics_pipeline: *GPUGraphicsPipeline,
 ): {}
 fn(extern("SDL_AcquireGPUCommandBuffer")) AcquireGPUCommandBuffer(
-  device: *mut GPUDevice,
-): *mut GPUCommandBuffer
+  device: *GPUDevice,
+): optref[GPUCommandBuffer]
 fn(extern("SDL_PushGPUVertexUniformData")) PushGPUVertexUniformData(
-  command_buffer: *mut GPUCommandBuffer,
+  command_buffer: *GPUCommandBuffer,
   slot_index: Uint32,
   data: ptr,
   length: Uint32,
 ): {}
 fn(extern("SDL_PushGPUFragmentUniformData")) PushGPUFragmentUniformData(
-  command_buffer: *mut GPUCommandBuffer,
+  command_buffer: *GPUCommandBuffer,
   slot_index: Uint32,
   data: ptr,
   length: Uint32,
 ): {}
 fn(extern("SDL_PushGPUComputeUniformData")) PushGPUComputeUniformData(
-  command_buffer: *mut GPUCommandBuffer,
+  command_buffer: *GPUCommandBuffer,
   slot_index: Uint32,
   data: ptr,
   length: Uint32,
 ): {}
 fn(extern("SDL_BeginGPURenderPass")) BeginGPURenderPass(
-  command_buffer: *mut GPUCommandBuffer,
-  color_target_infos: *mut GPUColorTargetInfo,
+  command_buffer: *GPUCommandBuffer,
+  color_target_infos: *GPUColorTargetInfo,
   num_color_targets: Uint32,
-  depth_stencil_target_info: *mut GPUDepthStencilTargetInfo,
-): *mut GPURenderPass
+  depth_stencil_target_info: *GPUDepthStencilTargetInfo,
+): optref[GPURenderPass]
 fn(extern("SDL_BindGPUGraphicsPipeline")) BindGPUGraphicsPipeline(
-  render_pass: *mut GPURenderPass,
-  graphics_pipeline: *mut GPUGraphicsPipeline,
+  render_pass: *GPURenderPass,
+  graphics_pipeline: *GPUGraphicsPipeline,
 ): {}
 fn(extern("SDL_SetGPUViewport")) SetGPUViewport(
-  render_pass: *mut GPURenderPass,
-  viewport: *mut GPUViewport,
+  render_pass: *GPURenderPass,
+  viewport: *GPUViewport,
 ): {}
 fn(extern("SDL_SetGPUScissor")) SetGPUScissor(
-  render_pass: *mut GPURenderPass,
-  scissor: *mut Rect,
+  render_pass: *GPURenderPass,
+  scissor: *Rect,
 ): {}
 fn(extern("SDL_SetGPUBlendConstants")) SetGPUBlendConstants(
-  render_pass: *mut GPURenderPass,
+  render_pass: *GPURenderPass,
   blend_constants: FColor,
 ): {}
 fn(extern("SDL_SetGPUStencilReference")) SetGPUStencilReference(
-  render_pass: *mut GPURenderPass,
+  render_pass: *GPURenderPass,
   reference: Uint8,
 ): {}
 fn(extern("SDL_BindGPUVertexBuffers")) BindGPUVertexBuffers(
-  render_pass: *mut GPURenderPass,
+  render_pass: *GPURenderPass,
   first_slot: Uint32,
-  bindings: *mut GPUBufferBinding,
+  bindings: *GPUBufferBinding,
   num_bindings: Uint32,
 ): {}
 fn(extern("SDL_BindGPUIndexBuffer")) BindGPUIndexBuffer(
-  render_pass: *mut GPURenderPass,
-  binding: *mut GPUBufferBinding,
+  render_pass: *GPURenderPass,
+  binding: *GPUBufferBinding,
   index_element_size: GPUIndexElementSize,
 ): {}
 fn(extern("SDL_BindGPUVertexSamplers")) BindGPUVertexSamplers(
-  render_pass: *mut GPURenderPass,
+  render_pass: *GPURenderPass,
   first_slot: Uint32,
-  texture_sampler_bindings: *mut GPUTextureSamplerBinding,
+  texture_sampler_bindings: *GPUTextureSamplerBinding,
   num_bindings: Uint32,
 ): {}
 fn(extern("SDL_BindGPUVertexStorageTextures")) BindGPUVertexStorageTextures(
-  render_pass: *mut GPURenderPass,
+  render_pass: *GPURenderPass,
   first_slot: Uint32,
-  storage_textures: *mut *mut GPUTexture,
+  storage_textures: *optref[GPUTexture],
   num_bindings: Uint32,
 ): {}
 fn(extern("SDL_BindGPUVertexStorageBuffers")) BindGPUVertexStorageBuffers(
-  render_pass: *mut GPURenderPass,
+  render_pass: *GPURenderPass,
   first_slot: Uint32,
-  storage_buffers: *mut *mut GPUBuffer,
+  storage_buffers: *optref[GPUBuffer],
   num_bindings: Uint32,
 ): {}
 fn(extern("SDL_BindGPUFragmentSamplers")) BindGPUFragmentSamplers(
-  render_pass: *mut GPURenderPass,
+  render_pass: *GPURenderPass,
   first_slot: Uint32,
-  texture_sampler_bindings: *mut GPUTextureSamplerBinding,
+  texture_sampler_bindings: *GPUTextureSamplerBinding,
   num_bindings: Uint32,
 ): {}
 fn(extern("SDL_BindGPUFragmentStorageTextures")) BindGPUFragmentStorageTextures(
-  render_pass: *mut GPURenderPass,
+  render_pass: *GPURenderPass,
   first_slot: Uint32,
-  storage_textures: *mut *mut GPUTexture,
+  storage_textures: *optref[GPUTexture],
   num_bindings: Uint32,
 ): {}
 fn(extern("SDL_BindGPUFragmentStorageBuffers")) BindGPUFragmentStorageBuffers(
-  render_pass: *mut GPURenderPass,
+  render_pass: *GPURenderPass,
   first_slot: Uint32,
-  storage_buffers: *mut *mut GPUBuffer,
+  storage_buffers: *optref[GPUBuffer],
   num_bindings: Uint32,
 ): {}
 fn(extern("SDL_DrawGPUIndexedPrimitives")) DrawGPUIndexedPrimitives(
-  render_pass: *mut GPURenderPass,
+  render_pass: *GPURenderPass,
   num_indices: Uint32,
   num_instances: Uint32,
   first_index: Uint32,
@@ -7082,218 +7082,218 @@ fn(extern("SDL_DrawGPUIndexedPrimitives")) DrawGPUIndexedPrimitives(
   first_instance: Uint32,
 ): {}
 fn(extern("SDL_DrawGPUPrimitives")) DrawGPUPrimitives(
-  render_pass: *mut GPURenderPass,
+  render_pass: *GPURenderPass,
   num_vertices: Uint32,
   num_instances: Uint32,
   first_vertex: Uint32,
   first_instance: Uint32,
 ): {}
 fn(extern("SDL_DrawGPUPrimitivesIndirect")) DrawGPUPrimitivesIndirect(
-  render_pass: *mut GPURenderPass,
-  buffer: *mut GPUBuffer,
+  render_pass: *GPURenderPass,
+  buffer: *GPUBuffer,
   offset: Uint32,
   draw_count: Uint32,
 ): {}
 fn(extern("SDL_DrawGPUIndexedPrimitivesIndirect")) DrawGPUIndexedPrimitivesIndirect(
-  render_pass: *mut GPURenderPass,
-  buffer: *mut GPUBuffer,
+  render_pass: *GPURenderPass,
+  buffer: *GPUBuffer,
   offset: Uint32,
   draw_count: Uint32,
 ): {}
 fn(extern("SDL_EndGPURenderPass")) EndGPURenderPass(
-  render_pass: *mut GPURenderPass,
+  render_pass: *GPURenderPass,
 ): {}
 fn(extern("SDL_BeginGPUComputePass")) BeginGPUComputePass(
-  command_buffer: *mut GPUCommandBuffer,
-  storage_texture_bindings: *mut GPUStorageTextureReadWriteBinding,
+  command_buffer: *GPUCommandBuffer,
+  storage_texture_bindings: *GPUStorageTextureReadWriteBinding,
   num_storage_texture_bindings: Uint32,
-  storage_buffer_bindings: *mut GPUStorageBufferReadWriteBinding,
+  storage_buffer_bindings: *GPUStorageBufferReadWriteBinding,
   num_storage_buffer_bindings: Uint32,
-): *mut GPUComputePass
+): optref[GPUComputePass]
 fn(extern("SDL_BindGPUComputePipeline")) BindGPUComputePipeline(
-  compute_pass: *mut GPUComputePass,
-  compute_pipeline: *mut GPUComputePipeline,
+  compute_pass: *GPUComputePass,
+  compute_pipeline: *GPUComputePipeline,
 ): {}
 fn(extern("SDL_BindGPUComputeSamplers")) BindGPUComputeSamplers(
-  compute_pass: *mut GPUComputePass,
+  compute_pass: *GPUComputePass,
   first_slot: Uint32,
-  texture_sampler_bindings: *mut GPUTextureSamplerBinding,
+  texture_sampler_bindings: *GPUTextureSamplerBinding,
   num_bindings: Uint32,
 ): {}
 fn(extern("SDL_BindGPUComputeStorageTextures")) BindGPUComputeStorageTextures(
-  compute_pass: *mut GPUComputePass,
+  compute_pass: *GPUComputePass,
   first_slot: Uint32,
-  storage_textures: *mut *mut GPUTexture,
+  storage_textures: *optref[GPUTexture],
   num_bindings: Uint32,
 ): {}
 fn(extern("SDL_BindGPUComputeStorageBuffers")) BindGPUComputeStorageBuffers(
-  compute_pass: *mut GPUComputePass,
+  compute_pass: *GPUComputePass,
   first_slot: Uint32,
-  storage_buffers: *mut *mut GPUBuffer,
+  storage_buffers: *optref[GPUBuffer],
   num_bindings: Uint32,
 ): {}
 fn(extern("SDL_DispatchGPUCompute")) DispatchGPUCompute(
-  compute_pass: *mut GPUComputePass,
+  compute_pass: *GPUComputePass,
   groupcount_x: Uint32,
   groupcount_y: Uint32,
   groupcount_z: Uint32,
 ): {}
 fn(extern("SDL_DispatchGPUComputeIndirect")) DispatchGPUComputeIndirect(
-  compute_pass: *mut GPUComputePass,
-  buffer: *mut GPUBuffer,
+  compute_pass: *GPUComputePass,
+  buffer: *GPUBuffer,
   offset: Uint32,
 ): {}
 fn(extern("SDL_EndGPUComputePass")) EndGPUComputePass(
-  compute_pass: *mut GPUComputePass,
+  compute_pass: *GPUComputePass,
 ): {}
 fn(extern("SDL_MapGPUTransferBuffer")) MapGPUTransferBuffer(
-  device: *mut GPUDevice,
-  transfer_buffer: *mut GPUTransferBuffer,
+  device: *GPUDevice,
+  transfer_buffer: *GPUTransferBuffer,
   cycle: bool,
 ): ptr
 fn(extern("SDL_UnmapGPUTransferBuffer")) UnmapGPUTransferBuffer(
-  device: *mut GPUDevice,
-  transfer_buffer: *mut GPUTransferBuffer,
+  device: *GPUDevice,
+  transfer_buffer: *GPUTransferBuffer,
 ): {}
 fn(extern("SDL_BeginGPUCopyPass")) BeginGPUCopyPass(
-  command_buffer: *mut GPUCommandBuffer,
-): *mut GPUCopyPass
+  command_buffer: *GPUCommandBuffer,
+): optref[GPUCopyPass]
 fn(extern("SDL_UploadToGPUTexture")) UploadToGPUTexture(
-  copy_pass: *mut GPUCopyPass,
-  source: *mut GPUTextureTransferInfo,
-  destination: *mut GPUTextureRegion,
+  copy_pass: *GPUCopyPass,
+  source: *GPUTextureTransferInfo,
+  destination: *GPUTextureRegion,
   cycle: bool,
 ): {}
 fn(extern("SDL_UploadToGPUBuffer")) UploadToGPUBuffer(
-  copy_pass: *mut GPUCopyPass,
-  source: *mut GPUTransferBufferLocation,
-  destination: *mut GPUBufferRegion,
+  copy_pass: *GPUCopyPass,
+  source: *GPUTransferBufferLocation,
+  destination: *GPUBufferRegion,
   cycle: bool,
 ): {}
 fn(extern("SDL_CopyGPUTextureToTexture")) CopyGPUTextureToTexture(
-  copy_pass: *mut GPUCopyPass,
-  source: *mut GPUTextureLocation,
-  destination: *mut GPUTextureLocation,
+  copy_pass: *GPUCopyPass,
+  source: *GPUTextureLocation,
+  destination: *GPUTextureLocation,
   w: Uint32,
   h: Uint32,
   d: Uint32,
   cycle: bool,
 ): {}
 fn(extern("SDL_CopyGPUBufferToBuffer")) CopyGPUBufferToBuffer(
-  copy_pass: *mut GPUCopyPass,
-  source: *mut GPUBufferLocation,
-  destination: *mut GPUBufferLocation,
+  copy_pass: *GPUCopyPass,
+  source: *GPUBufferLocation,
+  destination: *GPUBufferLocation,
   size: Uint32,
   cycle: bool,
 ): {}
 fn(extern("SDL_DownloadFromGPUTexture")) DownloadFromGPUTexture(
-  copy_pass: *mut GPUCopyPass,
-  source: *mut GPUTextureRegion,
-  destination: *mut GPUTextureTransferInfo,
+  copy_pass: *GPUCopyPass,
+  source: *GPUTextureRegion,
+  destination: *GPUTextureTransferInfo,
 ): {}
 fn(extern("SDL_DownloadFromGPUBuffer")) DownloadFromGPUBuffer(
-  copy_pass: *mut GPUCopyPass,
-  source: *mut GPUBufferRegion,
-  destination: *mut GPUTransferBufferLocation,
+  copy_pass: *GPUCopyPass,
+  source: *GPUBufferRegion,
+  destination: *GPUTransferBufferLocation,
 ): {}
 fn(extern("SDL_EndGPUCopyPass")) EndGPUCopyPass(
-  copy_pass: *mut GPUCopyPass,
+  copy_pass: *GPUCopyPass,
 ): {}
 fn(extern("SDL_GenerateMipmapsForGPUTexture")) GenerateMipmapsForGPUTexture(
-  command_buffer: *mut GPUCommandBuffer,
-  texture: *mut GPUTexture,
+  command_buffer: *GPUCommandBuffer,
+  texture: *GPUTexture,
 ): {}
 fn(extern("SDL_BlitGPUTexture")) BlitGPUTexture(
-  command_buffer: *mut GPUCommandBuffer,
-  info: *mut GPUBlitInfo,
+  command_buffer: *GPUCommandBuffer,
+  info: *GPUBlitInfo,
 ): {}
 fn(extern("SDL_WindowSupportsGPUSwapchainComposition")) WindowSupportsGPUSwapchainComposition(
-  device: *mut GPUDevice,
-  window: *mut Window,
+  device: *GPUDevice,
+  window: *Window,
   swapchain_composition: GPUSwapchainComposition,
 ): bool
 fn(extern("SDL_WindowSupportsGPUPresentMode")) WindowSupportsGPUPresentMode(
-  device: *mut GPUDevice,
-  window: *mut Window,
+  device: *GPUDevice,
+  window: *Window,
   present_mode: GPUPresentMode,
 ): bool
 fn(extern("SDL_ClaimWindowForGPUDevice")) ClaimWindowForGPUDevice(
-  device: *mut GPUDevice,
-  window: *mut Window,
+  device: *GPUDevice,
+  window: *Window,
 ): bool
 fn(extern("SDL_ReleaseWindowFromGPUDevice")) ReleaseWindowFromGPUDevice(
-  device: *mut GPUDevice,
-  window: *mut Window,
+  device: *GPUDevice,
+  window: *Window,
 ): {}
 fn(extern("SDL_SetGPUSwapchainParameters")) SetGPUSwapchainParameters(
-  device: *mut GPUDevice,
-  window: *mut Window,
+  device: *GPUDevice,
+  window: *Window,
   swapchain_composition: GPUSwapchainComposition,
   present_mode: GPUPresentMode,
 ): bool
 fn(extern("SDL_SetGPUAllowedFramesInFlight")) SetGPUAllowedFramesInFlight(
-  device: *mut GPUDevice,
+  device: *GPUDevice,
   allowed_frames_in_flight: Uint32,
 ): bool
 fn(extern("SDL_GetGPUSwapchainTextureFormat")) GetGPUSwapchainTextureFormat(
-  device: *mut GPUDevice,
-  window: *mut Window,
+  device: *GPUDevice,
+  window: *Window,
 ): GPUTextureFormat
 fn(extern("SDL_AcquireGPUSwapchainTexture")) AcquireGPUSwapchainTexture(
-  command_buffer: *mut GPUCommandBuffer,
-  window: *mut Window,
-  swapchain_texture: *mut *mut GPUTexture,
-  swapchain_texture_width: *mut Uint32,
-  swapchain_texture_height: *mut Uint32,
+  command_buffer: *GPUCommandBuffer,
+  window: *Window,
+  swapchain_texture: *optref[GPUTexture],
+  swapchain_texture_width: *Uint32,
+  swapchain_texture_height: *Uint32,
 ): bool
 fn(extern("SDL_WaitForGPUSwapchain")) WaitForGPUSwapchain(
-  device: *mut GPUDevice,
-  window: *mut Window,
+  device: *GPUDevice,
+  window: *Window,
 ): bool
 fn(extern("SDL_WaitAndAcquireGPUSwapchainTexture")) WaitAndAcquireGPUSwapchainTexture(
-  command_buffer: *mut GPUCommandBuffer,
-  window: *mut Window,
-  swapchain_texture: *mut *mut GPUTexture,
-  swapchain_texture_width: *mut Uint32,
-  swapchain_texture_height: *mut Uint32,
+  command_buffer: *GPUCommandBuffer,
+  window: *Window,
+  swapchain_texture: *optref[GPUTexture],
+  swapchain_texture_width: *Uint32,
+  swapchain_texture_height: *Uint32,
 ): bool
 fn(extern("SDL_SubmitGPUCommandBuffer")) SubmitGPUCommandBuffer(
-  command_buffer: *mut GPUCommandBuffer,
+  command_buffer: *GPUCommandBuffer,
 ): bool
 fn(extern("SDL_SubmitGPUCommandBufferAndAcquireFence")) SubmitGPUCommandBufferAndAcquireFence(
-  command_buffer: *mut GPUCommandBuffer,
-): *mut GPUFence
+  command_buffer: *GPUCommandBuffer,
+): optref[GPUFence]
 fn(extern("SDL_CancelGPUCommandBuffer")) CancelGPUCommandBuffer(
-  command_buffer: *mut GPUCommandBuffer,
+  command_buffer: *GPUCommandBuffer,
 ): bool
 fn(extern("SDL_WaitForGPUIdle")) WaitForGPUIdle(
-  device: *mut GPUDevice,
+  device: *GPUDevice,
 ): bool
 fn(extern("SDL_WaitForGPUFences")) WaitForGPUFences(
-  device: *mut GPUDevice,
+  device: *GPUDevice,
   wait_all: bool,
-  fences: *mut *mut GPUFence,
+  fences: *optref[GPUFence],
   num_fences: Uint32,
 ): bool
 fn(extern("SDL_QueryGPUFence")) QueryGPUFence(
-  device: *mut GPUDevice,
-  fence: *mut GPUFence,
+  device: *GPUDevice,
+  fence: *GPUFence,
 ): bool
 fn(extern("SDL_ReleaseGPUFence")) ReleaseGPUFence(
-  device: *mut GPUDevice,
-  fence: *mut GPUFence,
+  device: *GPUDevice,
+  fence: *GPUFence,
 ): {}
 fn(extern("SDL_GPUTextureFormatTexelBlockSize")) GPUTextureFormatTexelBlockSize(
   format: GPUTextureFormat,
 ): Uint32
 fn(extern("SDL_GPUTextureSupportsFormat")) GPUTextureSupportsFormat(
-  device: *mut GPUDevice,
+  device: *GPUDevice,
   format: GPUTextureFormat,
   type: GPUTextureType,
   usage: GPUTextureUsageFlags,
 ): bool
 fn(extern("SDL_GPUTextureSupportsSampleCount")) GPUTextureSupportsSampleCount(
-  device: *mut GPUDevice,
+  device: *GPUDevice,
   format: GPUTextureFormat,
   sample_count: GPUSampleCount,
 ): bool
@@ -7399,7 +7399,7 @@ type HapticCustom = {
   channels: Uint8,
   period: Uint16,
   samples: Uint16,
-  data: *mut Uint16,
+  data: optref[Uint16],
   attack_length: Uint16,
   attack_level: Uint16,
   fade_length: Uint16,
@@ -7419,106 +7419,106 @@ type HapticEffect = union {
 type(alias) HapticID = Uint32
 #static assert-layout[HapticID](4, 4, [])
 fn(extern("SDL_GetHaptics")) GetHaptics(
-  count: *mut i32,
-): *mut HapticID
+  count: *i32,
+): optref[HapticID]
 fn(extern("SDL_GetHapticNameForID")) GetHapticNameForID(
   instance_id: HapticID,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_OpenHaptic")) OpenHaptic(
   instance_id: HapticID,
-): *mut Haptic
+): optref[Haptic]
 fn(extern("SDL_GetHapticFromID")) GetHapticFromID(
   instance_id: HapticID,
-): *mut Haptic
+): optref[Haptic]
 fn(extern("SDL_GetHapticID")) GetHapticID(
-  haptic: *mut Haptic,
+  haptic: *Haptic,
 ): HapticID
 fn(extern("SDL_GetHapticName")) GetHapticName(
-  haptic: *mut Haptic,
-): *mut u8
+  haptic: *Haptic,
+): optref[u8]
 fn(extern("SDL_IsMouseHaptic")) IsMouseHaptic(): bool
-fn(extern("SDL_OpenHapticFromMouse")) OpenHapticFromMouse(): *mut Haptic
+fn(extern("SDL_OpenHapticFromMouse")) OpenHapticFromMouse(): optref[Haptic]
 fn(extern("SDL_IsJoystickHaptic")) IsJoystickHaptic(
-  joystick: *mut Joystick,
+  joystick: *Joystick,
 ): bool
 fn(extern("SDL_OpenHapticFromJoystick")) OpenHapticFromJoystick(
-  joystick: *mut Joystick,
-): *mut Haptic
+  joystick: *Joystick,
+): optref[Haptic]
 fn(extern("SDL_CloseHaptic")) CloseHaptic(
-  haptic: *mut Haptic,
+  haptic: *Haptic,
 ): {}
 fn(extern("SDL_GetMaxHapticEffects")) GetMaxHapticEffects(
-  haptic: *mut Haptic,
+  haptic: *Haptic,
 ): i32
 fn(extern("SDL_GetMaxHapticEffectsPlaying")) GetMaxHapticEffectsPlaying(
-  haptic: *mut Haptic,
+  haptic: *Haptic,
 ): i32
 fn(extern("SDL_GetHapticFeatures")) GetHapticFeatures(
-  haptic: *mut Haptic,
+  haptic: *Haptic,
 ): Uint32
 fn(extern("SDL_GetNumHapticAxes")) GetNumHapticAxes(
-  haptic: *mut Haptic,
+  haptic: *Haptic,
 ): i32
 fn(extern("SDL_HapticEffectSupported")) HapticEffectSupported(
-  haptic: *mut Haptic,
-  effect: *mut HapticEffect,
+  haptic: *Haptic,
+  effect: *HapticEffect,
 ): bool
 fn(extern("SDL_CreateHapticEffect")) CreateHapticEffect(
-  haptic: *mut Haptic,
-  effect: *mut HapticEffect,
+  haptic: *Haptic,
+  effect: *HapticEffect,
 ): HapticEffectID
 fn(extern("SDL_UpdateHapticEffect")) UpdateHapticEffect(
-  haptic: *mut Haptic,
+  haptic: *Haptic,
   effect: HapticEffectID,
-  data: *mut HapticEffect,
+  data: *HapticEffect,
 ): bool
 fn(extern("SDL_RunHapticEffect")) RunHapticEffect(
-  haptic: *mut Haptic,
+  haptic: *Haptic,
   effect: HapticEffectID,
   iterations: Uint32,
 ): bool
 fn(extern("SDL_StopHapticEffect")) StopHapticEffect(
-  haptic: *mut Haptic,
+  haptic: *Haptic,
   effect: HapticEffectID,
 ): bool
 fn(extern("SDL_DestroyHapticEffect")) DestroyHapticEffect(
-  haptic: *mut Haptic,
+  haptic: *Haptic,
   effect: HapticEffectID,
 ): {}
 fn(extern("SDL_GetHapticEffectStatus")) GetHapticEffectStatus(
-  haptic: *mut Haptic,
+  haptic: *Haptic,
   effect: HapticEffectID,
 ): bool
 fn(extern("SDL_SetHapticGain")) SetHapticGain(
-  haptic: *mut Haptic,
+  haptic: *Haptic,
   gain: i32,
 ): bool
 fn(extern("SDL_SetHapticAutocenter")) SetHapticAutocenter(
-  haptic: *mut Haptic,
+  haptic: *Haptic,
   autocenter: i32,
 ): bool
 fn(extern("SDL_PauseHaptic")) PauseHaptic(
-  haptic: *mut Haptic,
+  haptic: *Haptic,
 ): bool
 fn(extern("SDL_ResumeHaptic")) ResumeHaptic(
-  haptic: *mut Haptic,
+  haptic: *Haptic,
 ): bool
 fn(extern("SDL_StopHapticEffects")) StopHapticEffects(
-  haptic: *mut Haptic,
+  haptic: *Haptic,
 ): bool
 fn(extern("SDL_HapticRumbleSupported")) HapticRumbleSupported(
-  haptic: *mut Haptic,
+  haptic: *Haptic,
 ): bool
 fn(extern("SDL_InitHapticRumble")) InitHapticRumble(
-  haptic: *mut Haptic,
+  haptic: *Haptic,
 ): bool
 fn(extern("SDL_PlayHapticRumble")) PlayHapticRumble(
-  haptic: *mut Haptic,
+  haptic: *Haptic,
   strength: f32,
   length: Uint32,
 ): bool
 fn(extern("SDL_StopHapticRumble")) StopHapticRumble(
-  haptic: *mut Haptic,
+  haptic: *Haptic,
 ): bool
 type hid_device = opaque[0, 1]
 type hid_bus_type = either(u32) {
@@ -7530,13 +7530,13 @@ type hid_bus_type = either(u32) {
 }
 #static assert-layout[hid_bus_type](4, 4, [])
 type hid_device_info = {
-  path: *mut u8,
+  path: optref[u8],
   vendor_id: u16,
   product_id: u16,
-  serial_number: *mut i32,
+  serial_number: optref[i32],
   release_number: u16,
-  manufacturer_string: *mut i32,
-  product_string: *mut i32,
+  manufacturer_string: optref[i32],
+  product_string: optref[i32],
   usage_page: u16,
   usage: u16,
   interface_number: i32,
@@ -7544,7 +7544,7 @@ type hid_device_info = {
   interface_subclass: i32,
   interface_protocol: i32,
   bus_type: hid_bus_type,
-  next: *mut hid_device_info,
+  next: optref[hid_device_info],
 }
 #static assert-layout[hid_device_info](80, 8, [0, 8, 10, 16, 24, 32, 40, 48, 50, 52, 56, 60, 64, 68, 72, ])
 fn(extern("SDL_hid_init")) hid_init(): i32
@@ -7553,86 +7553,86 @@ fn(extern("SDL_hid_device_change_count")) hid_device_change_count(): Uint32
 fn(extern("SDL_hid_enumerate")) hid_enumerate(
   vendor_id: u16,
   product_id: u16,
-): *mut hid_device_info
+): optref[hid_device_info]
 fn(extern("SDL_hid_free_enumeration")) hid_free_enumeration(
-  devs: *mut hid_device_info,
+  devs: *hid_device_info,
 ): {}
 fn(extern("SDL_hid_open")) hid_open(
   vendor_id: u16,
   product_id: u16,
-  serial_number: *mut i32,
-): *mut hid_device
+  serial_number: *i32,
+): optref[hid_device]
 fn(extern("SDL_hid_open_path")) hid_open_path(
-  path: *mut u8,
-): *mut hid_device
+  path: *u8,
+): optref[hid_device]
 fn(extern("SDL_hid_get_properties")) hid_get_properties(
-  dev: *mut hid_device,
+  dev: *hid_device,
 ): PropertiesID
 fn(extern("SDL_hid_write")) hid_write(
-  dev: *mut hid_device,
-  data: *mut u8,
+  dev: *hid_device,
+  data: *u8,
   length: usize,
 ): i32
 fn(extern("SDL_hid_read_timeout")) hid_read_timeout(
-  dev: *mut hid_device,
-  data: *mut u8,
+  dev: *hid_device,
+  data: *u8,
   length: usize,
   milliseconds: i32,
 ): i32
 fn(extern("SDL_hid_read")) hid_read(
-  dev: *mut hid_device,
-  data: *mut u8,
+  dev: *hid_device,
+  data: *u8,
   length: usize,
 ): i32
 fn(extern("SDL_hid_set_nonblocking")) hid_set_nonblocking(
-  dev: *mut hid_device,
+  dev: *hid_device,
   nonblock: i32,
 ): i32
 fn(extern("SDL_hid_send_feature_report")) hid_send_feature_report(
-  dev: *mut hid_device,
-  data: *mut u8,
+  dev: *hid_device,
+  data: *u8,
   length: usize,
 ): i32
 fn(extern("SDL_hid_get_feature_report")) hid_get_feature_report(
-  dev: *mut hid_device,
-  data: *mut u8,
+  dev: *hid_device,
+  data: *u8,
   length: usize,
 ): i32
 fn(extern("SDL_hid_get_input_report")) hid_get_input_report(
-  dev: *mut hid_device,
-  data: *mut u8,
+  dev: *hid_device,
+  data: *u8,
   length: usize,
 ): i32
 fn(extern("SDL_hid_close")) hid_close(
-  dev: *mut hid_device,
+  dev: *hid_device,
 ): i32
 fn(extern("SDL_hid_get_manufacturer_string")) hid_get_manufacturer_string(
-  dev: *mut hid_device,
-  string: *mut i32,
+  dev: *hid_device,
+  string: *i32,
   maxlen: usize,
 ): i32
 fn(extern("SDL_hid_get_product_string")) hid_get_product_string(
-  dev: *mut hid_device,
-  string: *mut i32,
+  dev: *hid_device,
+  string: *i32,
   maxlen: usize,
 ): i32
 fn(extern("SDL_hid_get_serial_number_string")) hid_get_serial_number_string(
-  dev: *mut hid_device,
-  string: *mut i32,
+  dev: *hid_device,
+  string: *i32,
   maxlen: usize,
 ): i32
 fn(extern("SDL_hid_get_indexed_string")) hid_get_indexed_string(
-  dev: *mut hid_device,
+  dev: *hid_device,
   string_index: i32,
-  string: *mut i32,
+  string: *i32,
   maxlen: usize,
 ): i32
 fn(extern("SDL_hid_get_device_info")) hid_get_device_info(
-  dev: *mut hid_device,
-): *mut hid_device_info
+  dev: *hid_device,
+): optref[hid_device_info]
 fn(extern("SDL_hid_get_report_descriptor")) hid_get_report_descriptor(
-  dev: *mut hid_device,
-  buf: *mut u8,
+  dev: *hid_device,
+  buf: *u8,
   buf_size: usize,
 ): i32
 fn(extern("SDL_hid_ble_scan")) hid_ble_scan(
@@ -7645,39 +7645,39 @@ type HintPriority = either(u32) {
 }
 #static assert-layout[HintPriority](4, 4, [])
 fn(extern("SDL_SetHintWithPriority")) SetHintWithPriority(
-  name: *mut u8,
-  value: *mut u8,
+  name: *u8,
+  value: *u8,
   priority: HintPriority,
 ): bool
 fn(extern("SDL_SetHint")) SetHint(
-  name: *mut u8,
-  value: *mut u8,
+  name: *u8,
+  value: *u8,
 ): bool
 fn(extern("SDL_ResetHint")) ResetHint(
-  name: *mut u8,
+  name: *u8,
 ): bool
 fn(extern("SDL_ResetHints")) ResetHints(): {}
 fn(extern("SDL_GetHint")) GetHint(
-  name: *mut u8,
-): *mut u8
+  name: *u8,
+): optref[u8]
 fn(extern("SDL_GetHintBoolean")) GetHintBoolean(
-  name: *mut u8,
+  name: *u8,
   default_value: bool,
 ): bool
 type(alias) HintCallback = *fn(
   ptr,
-  *mut u8,
-  *mut u8,
-  *mut u8
+  *u8,
+  *u8,
+  *u8
 ) -> {}
 #static assert-layout[HintCallback](8, 8, [])
 fn(extern("SDL_AddHintCallback")) AddHintCallback(
-  name: *mut u8,
+  name: *u8,
   callback: HintCallback,
   userdata: ptr,
 ): bool
 fn(extern("SDL_RemoveHintCallback")) RemoveHintCallback(
-  name: *mut u8,
+  name: *u8,
   callback: HintCallback,
   userdata: ptr,
 ): {}
@@ -7690,9 +7690,9 @@ type AppResult = either(u32) {
 }
 #static assert-layout[AppResult](4, 4, [])
 type(alias) AppInit_func = *fn(
-  *mut ptr,
+  *ptr,
   i32,
-  *mut *mut u8
+  *optref[u8]
 ) -> AppResult
 #static assert-layout[AppInit_func](8, 8, [])
 type(alias) AppIterate_func = *fn(
@@ -7701,7 +7701,7 @@ type(alias) AppIterate_func = *fn(
 #static assert-layout[AppIterate_func](8, 8, [])
 type(alias) AppEvent_func = *fn(
   ptr,
-  *mut Event
+  *Event
 ) -> AppResult
 #static assert-layout[AppEvent_func](8, 8, [])
 type(alias) AppQuit_func = *fn(
@@ -7733,36 +7733,36 @@ fn(extern("SDL_RunOnMainThread")) RunOnMainThread(
   wait_complete: bool,
 ): bool
 fn(extern("SDL_SetAppMetadata")) SetAppMetadata(
-  appname: *mut u8,
-  appversion: *mut u8,
-  appidentifier: *mut u8,
+  appname: *u8,
+  appversion: *u8,
+  appidentifier: *u8,
 ): bool
 fn(extern("SDL_SetAppMetadataProperty")) SetAppMetadataProperty(
-  name: *mut u8,
-  value: *mut u8,
+  name: *u8,
+  value: *u8,
 ): bool
 fn(extern("SDL_GetAppMetadataProperty")) GetAppMetadataProperty(
-  name: *mut u8,
-): *mut u8
+  name: *u8,
+): optref[u8]
 type SharedObject = opaque[0, 1]
 fn(extern("SDL_LoadObject")) LoadObject(
-  sofile: *mut u8,
-): *mut SharedObject
+  sofile: *u8,
+): optref[SharedObject]
 fn(extern("SDL_LoadFunction")) LoadFunction(
-  handle: *mut SharedObject,
-  name: *mut u8,
+  handle: *SharedObject,
+  name: *u8,
 ): FunctionPointer
 fn(extern("SDL_UnloadObject")) UnloadObject(
-  handle: *mut SharedObject,
+  handle: *SharedObject,
 ): {}
 type Locale = {
-  language: *mut u8,
-  country: *mut u8,
+  language: optref[u8],
+  country: optref[u8],
 }
 #static assert-layout[Locale](16, 8, [0, 8, ])
 fn(extern("SDL_GetPreferredLocales")) GetPreferredLocales(
-  count: *mut i32,
-): *mut *mut Locale
+  count: *i32,
+): optref[optref[Locale]]
 type LogCategory = either(u32) {
   LOG_CATEGORY_APPLICATION = 0,
   LOG_CATEGORY_ERROR = 1,
@@ -7811,61 +7811,61 @@ fn(extern("SDL_GetLogPriority")) GetLogPriority(
 fn(extern("SDL_ResetLogPriorities")) ResetLogPriorities(): {}
 fn(extern("SDL_SetLogPriorityPrefix")) SetLogPriorityPrefix(
   priority: LogPriority,
-  prefix: *mut u8,
+  prefix: *u8,
 ): bool
 fn(extern("SDL_Log")) Log(
-  fmt: *mut u8,
+  fmt: *u8,
 ): {}
 fn(extern("SDL_LogTrace")) LogTrace(
   category: i32,
-  fmt: *mut u8,
+  fmt: *u8,
 ): {}
 fn(extern("SDL_LogVerbose")) LogVerbose(
   category: i32,
-  fmt: *mut u8,
+  fmt: *u8,
 ): {}
 fn(extern("SDL_LogDebug")) LogDebug(
   category: i32,
-  fmt: *mut u8,
+  fmt: *u8,
 ): {}
 fn(extern("SDL_LogInfo")) LogInfo(
   category: i32,
-  fmt: *mut u8,
+  fmt: *u8,
 ): {}
 fn(extern("SDL_LogWarn")) LogWarn(
   category: i32,
-  fmt: *mut u8,
+  fmt: *u8,
 ): {}
 fn(extern("SDL_LogError")) LogError(
   category: i32,
-  fmt: *mut u8,
+  fmt: *u8,
 ): {}
 fn(extern("SDL_LogCritical")) LogCritical(
   category: i32,
-  fmt: *mut u8,
+  fmt: *u8,
 ): {}
 fn(extern("SDL_LogMessage")) LogMessage(
   category: i32,
   priority: LogPriority,
-  fmt: *mut u8,
+  fmt: *u8,
 ): {}
 fn(extern("SDL_LogMessageV")) LogMessageV(
   category: i32,
   priority: LogPriority,
-  fmt: *mut u8,
+  fmt: *u8,
   ap: ptr,
 ): {}
 type(alias) LogOutputFunction = *fn(
   ptr,
   i32,
   LogPriority,
-  *mut u8
+  *u8
 ) -> {}
 #static assert-layout[LogOutputFunction](8, 8, [])
 fn(extern("SDL_GetDefaultLogOutputFunction")) GetDefaultLogOutputFunction(): LogOutputFunction
 fn(extern("SDL_GetLogOutputFunction")) GetLogOutputFunction(
-  callback: *mut LogOutputFunction,
-  userdata: *mut ptr,
+  callback: *LogOutputFunction,
+  userdata: *ptr,
 ): {}
 fn(extern("SDL_SetLogOutputFunction")) SetLogOutputFunction(
   callback: LogOutputFunction,
@@ -7878,7 +7878,7 @@ type(alias) MessageBoxButtonFlags = Uint32
 type MessageBoxButtonData = {
   flags: MessageBoxButtonFlags,
   buttonID: i32,
-  text: *mut u8,
+  text: optref[u8],
 }
 #static assert-layout[MessageBoxButtonData](16, 8, [0, 4, 8, ])
 type MessageBoxColor = {
@@ -7902,28 +7902,28 @@ type MessageBoxColorScheme = {
 #static assert-layout[MessageBoxColorScheme](15, 1, [0, ])
 type MessageBoxData = {
   flags: MessageBoxFlags,
-  window: *mut Window,
-  title: *mut u8,
-  message: *mut u8,
+  window: optref[Window],
+  title: optref[u8],
+  message: optref[u8],
   numbuttons: i32,
-  buttons: *mut MessageBoxButtonData,
-  colorScheme: *mut MessageBoxColorScheme,
+  buttons: optref[MessageBoxButtonData],
+  colorScheme: optref[MessageBoxColorScheme],
 }
 #static assert-layout[MessageBoxData](56, 8, [0, 8, 16, 24, 32, 40, 48, ])
 fn(extern("SDL_ShowMessageBox")) ShowMessageBox(
-  messageboxdata: *mut MessageBoxData,
-  buttonid: *mut i32,
+  messageboxdata: *MessageBoxData,
+  buttonid: *i32,
 ): bool
 fn(extern("SDL_ShowSimpleMessageBox")) ShowSimpleMessageBox(
   flags: MessageBoxFlags,
-  title: *mut u8,
-  message: *mut u8,
-  window: *mut Window,
+  title: *u8,
+  message: *u8,
+  window: *Window,
 ): bool
 type(alias) MetalView = ptr
 #static assert-layout[MetalView](8, 8, [])
 fn(extern("SDL_Metal_CreateView")) Metal_CreateView(
-  window: *mut Window,
+  window: *Window,
 ): MetalView
 fn(extern("SDL_Metal_DestroyView")) Metal_DestroyView(
   view: MetalView,
@@ -7932,14 +7932,14 @@ fn(extern("SDL_Metal_GetLayer")) Metal_GetLayer(
   view: MetalView,
 ): ptr
 fn(extern("SDL_OpenURL")) OpenURL(
-  url: *mut u8,
+  url: *u8,
 ): bool
-fn(extern("SDL_GetPlatform")) GetPlatform(): *mut u8
+fn(extern("SDL_GetPlatform")) GetPlatform(): optref[u8]
 type Process = opaque[0, 1]
 fn(extern("SDL_CreateProcess")) CreateProcess(
-  args: *mut *mut u8,
+  args: *optref[u8],
   pipe_stdio: bool,
-): *mut Process
+): optref[Process]
 type ProcessIO = either(u32) {
   PROCESS_STDIO_INHERITED = 0,
   PROCESS_STDIO_NULL = 1,
@@ -7949,32 +7949,32 @@ type ProcessIO = either(u32) {
 #static assert-layout[ProcessIO](4, 4, [])
 fn(extern("SDL_CreateProcessWithProperties")) CreateProcessWithProperties(
   props: PropertiesID,
-): *mut Process
+): optref[Process]
 fn(extern("SDL_GetProcessProperties")) GetProcessProperties(
-  process: *mut Process,
+  process: *Process,
 ): PropertiesID
 fn(extern("SDL_ReadProcess")) ReadProcess(
-  process: *mut Process,
-  datasize: *mut usize,
-  exitcode: *mut i32,
+  process: *Process,
+  datasize: *usize,
+  exitcode: *i32,
 ): ptr
 fn(extern("SDL_GetProcessInput")) GetProcessInput(
-  process: *mut Process,
-): *mut IOStream
+  process: *Process,
+): optref[IOStream]
 fn(extern("SDL_GetProcessOutput")) GetProcessOutput(
-  process: *mut Process,
-): *mut IOStream
+  process: *Process,
+): optref[IOStream]
 fn(extern("SDL_KillProcess")) KillProcess(
-  process: *mut Process,
+  process: *Process,
   force: bool,
 ): bool
 fn(extern("SDL_WaitProcess")) WaitProcess(
-  process: *mut Process,
+  process: *Process,
   block: bool,
-  exitcode: *mut i32,
+  exitcode: *i32,
 ): bool
 fn(extern("SDL_DestroyProcess")) DestroyProcess(
-  process: *mut Process,
+  process: *Process,
 ): {}
 type Vertex = {
   position: FPoint,
@@ -8014,414 +8014,414 @@ type Texture = {
 fn(extern("SDL_GetNumRenderDrivers")) GetNumRenderDrivers(): i32
 fn(extern("SDL_GetRenderDriver")) GetRenderDriver(
   index: i32,
-): *mut u8
+): optref[u8]
 fn(extern("SDL_CreateWindowAndRenderer")) CreateWindowAndRenderer(
-  title: *mut u8,
+  title: *u8,
   width: i32,
   height: i32,
   window_flags: WindowFlags,
-  window: *mut *mut Window,
-  renderer: *mut *mut Renderer,
+  window: *optref[Window],
+  renderer: *optref[Renderer],
 ): bool
 fn(extern("SDL_CreateRenderer")) CreateRenderer(
-  window: *mut Window,
-  name: *mut u8,
-): *mut Renderer
+  window: *Window,
+  name: *u8,
+): optref[Renderer]
 fn(extern("SDL_CreateRendererWithProperties")) CreateRendererWithProperties(
   props: PropertiesID,
-): *mut Renderer
+): optref[Renderer]
 fn(extern("SDL_CreateGPURenderer")) CreateGPURenderer(
-  device: *mut GPUDevice,
-  window: *mut Window,
-): *mut Renderer
+  device: *GPUDevice,
+  window: *Window,
+): optref[Renderer]
 fn(extern("SDL_GetGPURendererDevice")) GetGPURendererDevice(
-  renderer: *mut Renderer,
-): *mut GPUDevice
+  renderer: *Renderer,
+): optref[GPUDevice]
 fn(extern("SDL_CreateSoftwareRenderer")) CreateSoftwareRenderer(
-  surface: *mut Surface,
-): *mut Renderer
+  surface: *Surface,
+): optref[Renderer]
 fn(extern("SDL_GetRenderer")) GetRenderer(
-  window: *mut Window,
-): *mut Renderer
+  window: *Window,
+): optref[Renderer]
 fn(extern("SDL_GetRenderWindow")) GetRenderWindow(
-  renderer: *mut Renderer,
-): *mut Window
+  renderer: *Renderer,
+): optref[Window]
 fn(extern("SDL_GetRendererName")) GetRendererName(
-  renderer: *mut Renderer,
-): *mut u8
+  renderer: *Renderer,
+): optref[u8]
 fn(extern("SDL_GetRendererProperties")) GetRendererProperties(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
 ): PropertiesID
 fn(extern("SDL_GetRenderOutputSize")) GetRenderOutputSize(
-  renderer: *mut Renderer,
-  w: *mut i32,
-  h: *mut i32,
+  renderer: *Renderer,
+  w: *i32,
+  h: *i32,
 ): bool
 fn(extern("SDL_GetCurrentRenderOutputSize")) GetCurrentRenderOutputSize(
-  renderer: *mut Renderer,
-  w: *mut i32,
-  h: *mut i32,
+  renderer: *Renderer,
+  w: *i32,
+  h: *i32,
 ): bool
 fn(extern("SDL_CreateTexture")) CreateTexture(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
   format: PixelFormat,
   access: TextureAccess,
   w: i32,
   h: i32,
-): *mut Texture
+): optref[Texture]
 fn(extern("SDL_CreateTextureFromSurface")) CreateTextureFromSurface(
-  renderer: *mut Renderer,
-  surface: *mut Surface,
-): *mut Texture
+  renderer: *Renderer,
+  surface: *Surface,
+): optref[Texture]
 fn(extern("SDL_CreateTextureWithProperties")) CreateTextureWithProperties(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
   props: PropertiesID,
-): *mut Texture
+): optref[Texture]
 fn(extern("SDL_GetTextureProperties")) GetTextureProperties(
-  texture: *mut Texture,
+  texture: *Texture,
 ): PropertiesID
 fn(extern("SDL_GetRendererFromTexture")) GetRendererFromTexture(
-  texture: *mut Texture,
-): *mut Renderer
+  texture: *Texture,
+): optref[Renderer]
 fn(extern("SDL_GetTextureSize")) GetTextureSize(
-  texture: *mut Texture,
-  w: *mut f32,
-  h: *mut f32,
+  texture: *Texture,
+  w: *f32,
+  h: *f32,
 ): bool
 fn(extern("SDL_SetTexturePalette")) SetTexturePalette(
-  texture: *mut Texture,
-  palette: *mut Palette,
+  texture: *Texture,
+  palette: *Palette,
 ): bool
 fn(extern("SDL_GetTexturePalette")) GetTexturePalette(
-  texture: *mut Texture,
-): *mut Palette
+  texture: *Texture,
+): optref[Palette]
 fn(extern("SDL_SetTextureColorMod")) SetTextureColorMod(
-  texture: *mut Texture,
+  texture: *Texture,
   r: Uint8,
   g: Uint8,
   b: Uint8,
 ): bool
 fn(extern("SDL_SetTextureColorModFloat")) SetTextureColorModFloat(
-  texture: *mut Texture,
+  texture: *Texture,
   r: f32,
   g: f32,
   b: f32,
 ): bool
 fn(extern("SDL_GetTextureColorMod")) GetTextureColorMod(
-  texture: *mut Texture,
-  r: *mut Uint8,
-  g: *mut Uint8,
-  b: *mut Uint8,
+  texture: *Texture,
+  r: *Uint8,
+  g: *Uint8,
+  b: *Uint8,
 ): bool
 fn(extern("SDL_GetTextureColorModFloat")) GetTextureColorModFloat(
-  texture: *mut Texture,
-  r: *mut f32,
-  g: *mut f32,
-  b: *mut f32,
+  texture: *Texture,
+  r: *f32,
+  g: *f32,
+  b: *f32,
 ): bool
 fn(extern("SDL_SetTextureAlphaMod")) SetTextureAlphaMod(
-  texture: *mut Texture,
+  texture: *Texture,
   alpha: Uint8,
 ): bool
 fn(extern("SDL_SetTextureAlphaModFloat")) SetTextureAlphaModFloat(
-  texture: *mut Texture,
+  texture: *Texture,
   alpha: f32,
 ): bool
 fn(extern("SDL_GetTextureAlphaMod")) GetTextureAlphaMod(
-  texture: *mut Texture,
-  alpha: *mut Uint8,
+  texture: *Texture,
+  alpha: *Uint8,
 ): bool
 fn(extern("SDL_GetTextureAlphaModFloat")) GetTextureAlphaModFloat(
-  texture: *mut Texture,
-  alpha: *mut f32,
+  texture: *Texture,
+  alpha: *f32,
 ): bool
 fn(extern("SDL_SetTextureBlendMode")) SetTextureBlendMode(
-  texture: *mut Texture,
+  texture: *Texture,
   blendMode: BlendMode,
 ): bool
 fn(extern("SDL_GetTextureBlendMode")) GetTextureBlendMode(
-  texture: *mut Texture,
-  blendMode: *mut BlendMode,
+  texture: *Texture,
+  blendMode: *BlendMode,
 ): bool
 fn(extern("SDL_SetTextureScaleMode")) SetTextureScaleMode(
-  texture: *mut Texture,
+  texture: *Texture,
   scaleMode: ScaleMode,
 ): bool
 fn(extern("SDL_GetTextureScaleMode")) GetTextureScaleMode(
-  texture: *mut Texture,
-  scaleMode: *mut ScaleMode,
+  texture: *Texture,
+  scaleMode: *ScaleMode,
 ): bool
 fn(extern("SDL_UpdateTexture")) UpdateTexture(
-  texture: *mut Texture,
-  rect: *mut Rect,
+  texture: *Texture,
+  rect: *Rect,
   pixels: ptr,
   pitch: i32,
 ): bool
 fn(extern("SDL_UpdateYUVTexture")) UpdateYUVTexture(
-  texture: *mut Texture,
-  rect: *mut Rect,
-  Yplane: *mut Uint8,
+  texture: *Texture,
+  rect: *Rect,
+  Yplane: *Uint8,
   Ypitch: i32,
-  Uplane: *mut Uint8,
+  Uplane: *Uint8,
   Upitch: i32,
-  Vplane: *mut Uint8,
+  Vplane: *Uint8,
   Vpitch: i32,
 ): bool
 fn(extern("SDL_UpdateNVTexture")) UpdateNVTexture(
-  texture: *mut Texture,
-  rect: *mut Rect,
-  Yplane: *mut Uint8,
+  texture: *Texture,
+  rect: *Rect,
+  Yplane: *Uint8,
   Ypitch: i32,
-  UVplane: *mut Uint8,
+  UVplane: *Uint8,
   UVpitch: i32,
 ): bool
 fn(extern("SDL_LockTexture")) LockTexture(
-  texture: *mut Texture,
-  rect: *mut Rect,
-  pixels: *mut ptr,
-  pitch: *mut i32,
+  texture: *Texture,
+  rect: *Rect,
+  pixels: *ptr,
+  pitch: *i32,
 ): bool
 fn(extern("SDL_LockTextureToSurface")) LockTextureToSurface(
-  texture: *mut Texture,
-  rect: *mut Rect,
-  surface: *mut *mut Surface,
+  texture: *Texture,
+  rect: *Rect,
+  surface: *optref[Surface],
 ): bool
 fn(extern("SDL_UnlockTexture")) UnlockTexture(
-  texture: *mut Texture,
+  texture: *Texture,
 ): {}
 fn(extern("SDL_SetRenderTarget")) SetRenderTarget(
-  renderer: *mut Renderer,
-  texture: *mut Texture,
+  renderer: *Renderer,
+  texture: *Texture,
 ): bool
 fn(extern("SDL_GetRenderTarget")) GetRenderTarget(
-  renderer: *mut Renderer,
-): *mut Texture
+  renderer: *Renderer,
+): optref[Texture]
 fn(extern("SDL_SetRenderLogicalPresentation")) SetRenderLogicalPresentation(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
   w: i32,
   h: i32,
   mode: RendererLogicalPresentation,
 ): bool
 fn(extern("SDL_GetRenderLogicalPresentation")) GetRenderLogicalPresentation(
-  renderer: *mut Renderer,
-  w: *mut i32,
-  h: *mut i32,
-  mode: *mut RendererLogicalPresentation,
+  renderer: *Renderer,
+  w: *i32,
+  h: *i32,
+  mode: *RendererLogicalPresentation,
 ): bool
 fn(extern("SDL_GetRenderLogicalPresentationRect")) GetRenderLogicalPresentationRect(
-  renderer: *mut Renderer,
-  rect: *mut FRect,
+  renderer: *Renderer,
+  rect: *FRect,
 ): bool
 fn(extern("SDL_RenderCoordinatesFromWindow")) RenderCoordinatesFromWindow(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
   window_x: f32,
   window_y: f32,
-  x: *mut f32,
-  y: *mut f32,
+  x: *f32,
+  y: *f32,
 ): bool
 fn(extern("SDL_RenderCoordinatesToWindow")) RenderCoordinatesToWindow(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
   x: f32,
   y: f32,
-  window_x: *mut f32,
-  window_y: *mut f32,
+  window_x: *f32,
+  window_y: *f32,
 ): bool
 fn(extern("SDL_ConvertEventToRenderCoordinates")) ConvertEventToRenderCoordinates(
-  renderer: *mut Renderer,
-  event: *mut Event,
+  renderer: *Renderer,
+  event: *Event,
 ): bool
 fn(extern("SDL_SetRenderViewport")) SetRenderViewport(
-  renderer: *mut Renderer,
-  rect: *mut Rect,
+  renderer: *Renderer,
+  rect: *Rect,
 ): bool
 fn(extern("SDL_GetRenderViewport")) GetRenderViewport(
-  renderer: *mut Renderer,
-  rect: *mut Rect,
+  renderer: *Renderer,
+  rect: *Rect,
 ): bool
 fn(extern("SDL_RenderViewportSet")) RenderViewportSet(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
 ): bool
 fn(extern("SDL_GetRenderSafeArea")) GetRenderSafeArea(
-  renderer: *mut Renderer,
-  rect: *mut Rect,
+  renderer: *Renderer,
+  rect: *Rect,
 ): bool
 fn(extern("SDL_SetRenderClipRect")) SetRenderClipRect(
-  renderer: *mut Renderer,
-  rect: *mut Rect,
+  renderer: *Renderer,
+  rect: *Rect,
 ): bool
 fn(extern("SDL_GetRenderClipRect")) GetRenderClipRect(
-  renderer: *mut Renderer,
-  rect: *mut Rect,
+  renderer: *Renderer,
+  rect: *Rect,
 ): bool
 fn(extern("SDL_RenderClipEnabled")) RenderClipEnabled(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
 ): bool
 fn(extern("SDL_SetRenderScale")) SetRenderScale(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
   scaleX: f32,
   scaleY: f32,
 ): bool
 fn(extern("SDL_GetRenderScale")) GetRenderScale(
-  renderer: *mut Renderer,
-  scaleX: *mut f32,
-  scaleY: *mut f32,
+  renderer: *Renderer,
+  scaleX: *f32,
+  scaleY: *f32,
 ): bool
 fn(extern("SDL_SetRenderDrawColor")) SetRenderDrawColor(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
   r: Uint8,
   g: Uint8,
   b: Uint8,
   a: Uint8,
 ): bool
 fn(extern("SDL_SetRenderDrawColorFloat")) SetRenderDrawColorFloat(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
   r: f32,
   g: f32,
   b: f32,
   a: f32,
 ): bool
 fn(extern("SDL_GetRenderDrawColor")) GetRenderDrawColor(
-  renderer: *mut Renderer,
-  r: *mut Uint8,
-  g: *mut Uint8,
-  b: *mut Uint8,
-  a: *mut Uint8,
+  renderer: *Renderer,
+  r: *Uint8,
+  g: *Uint8,
+  b: *Uint8,
+  a: *Uint8,
 ): bool
 fn(extern("SDL_GetRenderDrawColorFloat")) GetRenderDrawColorFloat(
-  renderer: *mut Renderer,
-  r: *mut f32,
-  g: *mut f32,
-  b: *mut f32,
-  a: *mut f32,
+  renderer: *Renderer,
+  r: *f32,
+  g: *f32,
+  b: *f32,
+  a: *f32,
 ): bool
 fn(extern("SDL_SetRenderColorScale")) SetRenderColorScale(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
   scale: f32,
 ): bool
 fn(extern("SDL_GetRenderColorScale")) GetRenderColorScale(
-  renderer: *mut Renderer,
-  scale: *mut f32,
+  renderer: *Renderer,
+  scale: *f32,
 ): bool
 fn(extern("SDL_SetRenderDrawBlendMode")) SetRenderDrawBlendMode(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
   blendMode: BlendMode,
 ): bool
 fn(extern("SDL_GetRenderDrawBlendMode")) GetRenderDrawBlendMode(
-  renderer: *mut Renderer,
-  blendMode: *mut BlendMode,
+  renderer: *Renderer,
+  blendMode: *BlendMode,
 ): bool
 fn(extern("SDL_RenderClear")) RenderClear(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
 ): bool
 fn(extern("SDL_RenderPoint")) RenderPoint(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
   x: f32,
   y: f32,
 ): bool
 fn(extern("SDL_RenderPoints")) RenderPoints(
-  renderer: *mut Renderer,
-  points: *mut FPoint,
+  renderer: *Renderer,
+  points: *FPoint,
   count: i32,
 ): bool
 fn(extern("SDL_RenderLine")) RenderLine(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
   x1: f32,
   y1: f32,
   x2: f32,
   y2: f32,
 ): bool
 fn(extern("SDL_RenderLines")) RenderLines(
-  renderer: *mut Renderer,
-  points: *mut FPoint,
+  renderer: *Renderer,
+  points: *FPoint,
   count: i32,
 ): bool
 fn(extern("SDL_RenderRect")) RenderRect(
-  renderer: *mut Renderer,
-  rect: *mut FRect,
+  renderer: *Renderer,
+  rect: *FRect,
 ): bool
 fn(extern("SDL_RenderRects")) RenderRects(
-  renderer: *mut Renderer,
-  rects: *mut FRect,
+  renderer: *Renderer,
+  rects: *FRect,
   count: i32,
 ): bool
 fn(extern("SDL_RenderFillRect")) RenderFillRect(
-  renderer: *mut Renderer,
-  rect: *mut FRect,
+  renderer: *Renderer,
+  rect: *FRect,
 ): bool
 fn(extern("SDL_RenderFillRects")) RenderFillRects(
-  renderer: *mut Renderer,
-  rects: *mut FRect,
+  renderer: *Renderer,
+  rects: *FRect,
   count: i32,
 ): bool
 fn(extern("SDL_RenderTexture")) RenderTexture(
-  renderer: *mut Renderer,
-  texture: *mut Texture,
-  srcrect: *mut FRect,
-  dstrect: *mut FRect,
+  renderer: *Renderer,
+  texture: *Texture,
+  srcrect: *FRect,
+  dstrect: *FRect,
 ): bool
 fn(extern("SDL_RenderTextureRotated")) RenderTextureRotated(
-  renderer: *mut Renderer,
-  texture: *mut Texture,
-  srcrect: *mut FRect,
-  dstrect: *mut FRect,
+  renderer: *Renderer,
+  texture: *Texture,
+  srcrect: *FRect,
+  dstrect: *FRect,
   angle: f64,
-  center: *mut FPoint,
+  center: *FPoint,
   flip: FlipMode,
 ): bool
 fn(extern("SDL_RenderTextureAffine")) RenderTextureAffine(
-  renderer: *mut Renderer,
-  texture: *mut Texture,
-  srcrect: *mut FRect,
-  origin: *mut FPoint,
-  right: *mut FPoint,
-  down: *mut FPoint,
+  renderer: *Renderer,
+  texture: *Texture,
+  srcrect: *FRect,
+  origin: *FPoint,
+  right: *FPoint,
+  down: *FPoint,
 ): bool
 fn(extern("SDL_RenderTextureTiled")) RenderTextureTiled(
-  renderer: *mut Renderer,
-  texture: *mut Texture,
-  srcrect: *mut FRect,
+  renderer: *Renderer,
+  texture: *Texture,
+  srcrect: *FRect,
   scale: f32,
-  dstrect: *mut FRect,
+  dstrect: *FRect,
 ): bool
 fn(extern("SDL_RenderTexture9Grid")) RenderTexture9Grid(
-  renderer: *mut Renderer,
-  texture: *mut Texture,
-  srcrect: *mut FRect,
+  renderer: *Renderer,
+  texture: *Texture,
+  srcrect: *FRect,
   left_width: f32,
   right_width: f32,
   top_height: f32,
   bottom_height: f32,
   scale: f32,
-  dstrect: *mut FRect,
+  dstrect: *FRect,
 ): bool
 fn(extern("SDL_RenderTexture9GridTiled")) RenderTexture9GridTiled(
-  renderer: *mut Renderer,
-  texture: *mut Texture,
-  srcrect: *mut FRect,
+  renderer: *Renderer,
+  texture: *Texture,
+  srcrect: *FRect,
   left_width: f32,
   right_width: f32,
   top_height: f32,
   bottom_height: f32,
   scale: f32,
-  dstrect: *mut FRect,
+  dstrect: *FRect,
   tileScale: f32,
 ): bool
 fn(extern("SDL_RenderGeometry")) RenderGeometry(
-  renderer: *mut Renderer,
-  texture: *mut Texture,
-  vertices: *mut Vertex,
+  renderer: *Renderer,
+  texture: *Texture,
+  vertices: *Vertex,
   num_vertices: i32,
-  indices: *mut i32,
+  indices: *i32,
   num_indices: i32,
 ): bool
 fn(extern("SDL_RenderGeometryRaw")) RenderGeometryRaw(
-  renderer: *mut Renderer,
-  texture: *mut Texture,
-  xy: *mut f32,
+  renderer: *Renderer,
+  texture: *Texture,
+  xy: *f32,
   xy_stride: i32,
-  color: *mut FColor,
+  color: *FColor,
   color_stride: i32,
-  uv: *mut f32,
+  uv: *f32,
   uv_stride: i32,
   num_vertices: i32,
   indices: ptr,
@@ -8429,238 +8429,238 @@ fn(extern("SDL_RenderGeometryRaw")) RenderGeometryRaw(
   size_indices: i32,
 ): bool
 fn(extern("SDL_SetRenderTextureAddressMode")) SetRenderTextureAddressMode(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
   u_mode: TextureAddressMode,
   v_mode: TextureAddressMode,
 ): bool
 fn(extern("SDL_GetRenderTextureAddressMode")) GetRenderTextureAddressMode(
-  renderer: *mut Renderer,
-  u_mode: *mut TextureAddressMode,
-  v_mode: *mut TextureAddressMode,
+  renderer: *Renderer,
+  u_mode: *TextureAddressMode,
+  v_mode: *TextureAddressMode,
 ): bool
 fn(extern("SDL_RenderReadPixels")) RenderReadPixels(
-  renderer: *mut Renderer,
-  rect: *mut Rect,
-): *mut Surface
+  renderer: *Renderer,
+  rect: *Rect,
+): optref[Surface]
 fn(extern("SDL_RenderPresent")) RenderPresent(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
 ): bool
 fn(extern("SDL_DestroyTexture")) DestroyTexture(
-  texture: *mut Texture,
+  texture: *Texture,
 ): {}
 fn(extern("SDL_DestroyRenderer")) DestroyRenderer(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
 ): {}
 fn(extern("SDL_FlushRenderer")) FlushRenderer(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
 ): bool
 fn(extern("SDL_GetRenderMetalLayer")) GetRenderMetalLayer(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
 ): ptr
 fn(extern("SDL_GetRenderMetalCommandEncoder")) GetRenderMetalCommandEncoder(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
 ): ptr
 fn(extern("SDL_AddVulkanRenderSemaphores")) AddVulkanRenderSemaphores(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
   wait_stage_mask: Uint32,
   wait_semaphore: Sint64,
   signal_semaphore: Sint64,
 ): bool
 fn(extern("SDL_SetRenderVSync")) SetRenderVSync(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
   vsync: i32,
 ): bool
 fn(extern("SDL_GetRenderVSync")) GetRenderVSync(
-  renderer: *mut Renderer,
-  vsync: *mut i32,
+  renderer: *Renderer,
+  vsync: *i32,
 ): bool
 fn(extern("SDL_RenderDebugText")) RenderDebugText(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
   x: f32,
   y: f32,
-  str: *mut u8,
+  str: *u8,
 ): bool
 fn(extern("SDL_RenderDebugTextFormat")) RenderDebugTextFormat(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
   x: f32,
   y: f32,
-  fmt: *mut u8,
+  fmt: *u8,
 ): bool
 fn(extern("SDL_SetDefaultTextureScaleMode")) SetDefaultTextureScaleMode(
-  renderer: *mut Renderer,
+  renderer: *Renderer,
   scale_mode: ScaleMode,
 ): bool
 fn(extern("SDL_GetDefaultTextureScaleMode")) GetDefaultTextureScaleMode(
-  renderer: *mut Renderer,
-  scale_mode: *mut ScaleMode,
+  renderer: *Renderer,
+  scale_mode: *ScaleMode,
 ): bool
 type GPURenderStateCreateInfo = {
-  fragment_shader: *mut GPUShader,
+  fragment_shader: optref[GPUShader],
   num_sampler_bindings: Sint32,
-  sampler_bindings: *mut GPUTextureSamplerBinding,
+  sampler_bindings: optref[GPUTextureSamplerBinding],
   num_storage_textures: Sint32,
-  storage_textures: *mut *mut GPUTexture,
+  storage_textures: optref[optref[GPUTexture]],
   num_storage_buffers: Sint32,
-  storage_buffers: *mut *mut GPUBuffer,
+  storage_buffers: optref[optref[GPUBuffer]],
   props: PropertiesID,
 }
 #static assert-layout[GPURenderStateCreateInfo](64, 8, [0, 8, 16, 24, 32, 40, 48, 56, ])
 type GPURenderState = opaque[0, 1]
 fn(extern("SDL_CreateGPURenderState")) CreateGPURenderState(
-  renderer: *mut Renderer,
-  createinfo: *mut GPURenderStateCreateInfo,
-): *mut GPURenderState
+  renderer: *Renderer,
+  createinfo: *GPURenderStateCreateInfo,
+): optref[GPURenderState]
 fn(extern("SDL_SetGPURenderStateFragmentUniforms")) SetGPURenderStateFragmentUniforms(
-  state: *mut GPURenderState,
+  state: *GPURenderState,
   slot_index: Uint32,
   data: ptr,
   length: Uint32,
 ): bool
 fn(extern("SDL_SetGPURenderState")) SetGPURenderState(
-  renderer: *mut Renderer,
-  state: *mut GPURenderState,
+  renderer: *Renderer,
+  state: *GPURenderState,
 ): bool
 fn(extern("SDL_DestroyGPURenderState")) DestroyGPURenderState(
-  state: *mut GPURenderState,
+  state: *GPURenderState,
 ): {}
 type StorageInterface = {
   version: Uint32,
-  close: *fn(
+  close: optref[fn(
     ptr
-  ) -> bool,
-  ready: *fn(
+  ) -> bool],
+  ready: optref[fn(
     ptr
-  ) -> bool,
-  enumerate: *fn(
+  ) -> bool],
+  enumerate: optref[fn(
     ptr,
-    *mut u8,
+    *u8,
     EnumerateDirectoryCallback,
     ptr
-  ) -> bool,
-  info: *fn(
+  ) -> bool],
+  info: optref[fn(
     ptr,
-    *mut u8,
-    *mut PathInfo
-  ) -> bool,
-  read_file: *fn(
+    *u8,
+    *PathInfo
+  ) -> bool],
+  read_file: optref[fn(
     ptr,
-    *mut u8,
-    ptr,
-    Uint64
-  ) -> bool,
-  write_file: *fn(
-    ptr,
-    *mut u8,
+    *u8,
     ptr,
     Uint64
-  ) -> bool,
-  mkdir: *fn(
+  ) -> bool],
+  write_file: optref[fn(
     ptr,
-    *mut u8
-  ) -> bool,
-  remove: *fn(
+    *u8,
     ptr,
-    *mut u8
-  ) -> bool,
-  rename: *fn(
+    Uint64
+  ) -> bool],
+  mkdir: optref[fn(
     ptr,
-    *mut u8,
-    *mut u8
-  ) -> bool,
-  copy: *fn(
+    *u8
+  ) -> bool],
+  remove: optref[fn(
     ptr,
-    *mut u8,
-    *mut u8
-  ) -> bool,
-  space_remaining: *fn(
+    *u8
+  ) -> bool],
+  rename: optref[fn(
+    ptr,
+    *u8,
+    *u8
+  ) -> bool],
+  copy: optref[fn(
+    ptr,
+    *u8,
+    *u8
+  ) -> bool],
+  space_remaining: optref[fn(
     ptr
-  ) -> Uint64,
+  ) -> Uint64],
 }
 #static assert-layout[StorageInterface](96, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, ])
 type Storage = opaque[0, 1]
 fn(extern("SDL_OpenTitleStorage")) OpenTitleStorage(
-  override: *mut u8,
+  override: *u8,
   props: PropertiesID,
-): *mut Storage
+): optref[Storage]
 fn(extern("SDL_OpenUserStorage")) OpenUserStorage(
-  org: *mut u8,
-  app: *mut u8,
+  org: *u8,
+  app: *u8,
   props: PropertiesID,
-): *mut Storage
+): optref[Storage]
 fn(extern("SDL_OpenFileStorage")) OpenFileStorage(
-  path: *mut u8,
-): *mut Storage
+  path: *u8,
+): optref[Storage]
 fn(extern("SDL_OpenStorage")) OpenStorage(
-  iface: *mut StorageInterface,
+  iface: *StorageInterface,
   userdata: ptr,
-): *mut Storage
+): optref[Storage]
 fn(extern("SDL_CloseStorage")) CloseStorage(
-  storage: *mut Storage,
+  storage: *Storage,
 ): bool
 fn(extern("SDL_StorageReady")) StorageReady(
-  storage: *mut Storage,
+  storage: *Storage,
 ): bool
 fn(extern("SDL_GetStorageFileSize")) GetStorageFileSize(
-  storage: *mut Storage,
-  path: *mut u8,
-  length: *mut Uint64,
+  storage: *Storage,
+  path: *u8,
+  length: *Uint64,
 ): bool
 fn(extern("SDL_ReadStorageFile")) ReadStorageFile(
-  storage: *mut Storage,
-  path: *mut u8,
+  storage: *Storage,
+  path: *u8,
   destination: ptr,
   length: Uint64,
 ): bool
 fn(extern("SDL_WriteStorageFile")) WriteStorageFile(
-  storage: *mut Storage,
-  path: *mut u8,
+  storage: *Storage,
+  path: *u8,
   source: ptr,
   length: Uint64,
 ): bool
 fn(extern("SDL_CreateStorageDirectory")) CreateStorageDirectory(
-  storage: *mut Storage,
-  path: *mut u8,
+  storage: *Storage,
+  path: *u8,
 ): bool
 fn(extern("SDL_EnumerateStorageDirectory")) EnumerateStorageDirectory(
-  storage: *mut Storage,
-  path: *mut u8,
+  storage: *Storage,
+  path: *u8,
   callback: EnumerateDirectoryCallback,
   userdata: ptr,
 ): bool
 fn(extern("SDL_RemoveStoragePath")) RemoveStoragePath(
-  storage: *mut Storage,
-  path: *mut u8,
+  storage: *Storage,
+  path: *u8,
 ): bool
 fn(extern("SDL_RenameStoragePath")) RenameStoragePath(
-  storage: *mut Storage,
-  oldpath: *mut u8,
-  newpath: *mut u8,
+  storage: *Storage,
+  oldpath: *u8,
+  newpath: *u8,
 ): bool
 fn(extern("SDL_CopyStorageFile")) CopyStorageFile(
-  storage: *mut Storage,
-  oldpath: *mut u8,
-  newpath: *mut u8,
+  storage: *Storage,
+  oldpath: *u8,
+  newpath: *u8,
 ): bool
 fn(extern("SDL_GetStoragePathInfo")) GetStoragePathInfo(
-  storage: *mut Storage,
-  path: *mut u8,
-  info: *mut PathInfo,
+  storage: *Storage,
+  path: *u8,
+  info: *PathInfo,
 ): bool
 fn(extern("SDL_GetStorageSpaceRemaining")) GetStorageSpaceRemaining(
-  storage: *mut Storage,
+  storage: *Storage,
 ): Uint64
 fn(extern("SDL_GlobStorageDirectory")) GlobStorageDirectory(
-  storage: *mut Storage,
-  path: *mut u8,
-  pattern: *mut u8,
+  storage: *Storage,
+  path: *u8,
+  pattern: *u8,
   flags: GlobFlags,
-  count: *mut i32,
-): *mut *mut u8
+  count: *i32,
+): optref[optref[u8]]
 type _XEvent = opaque[0, 1]
 type(alias) XEvent = _XEvent
 type(alias) X11EventHook = *fn(
   ptr,
-  *mut XEvent
+  *XEvent
 ) -> bool
 #static assert-layout[X11EventHook](8, 8, [])
 fn(extern("SDL_SetX11EventHook")) SetX11EventHook(
@@ -8708,25 +8708,25 @@ type TimeFormat = either(u32) {
 }
 #static assert-layout[TimeFormat](4, 4, [])
 fn(extern("SDL_GetDateTimeLocalePreferences")) GetDateTimeLocalePreferences(
-  dateFormat: *mut DateFormat,
-  timeFormat: *mut TimeFormat,
+  dateFormat: *DateFormat,
+  timeFormat: *TimeFormat,
 ): bool
 fn(extern("SDL_GetCurrentTime")) GetCurrentTime(
-  ticks: *mut Time,
+  ticks: *Time,
 ): bool
 fn(extern("SDL_TimeToDateTime")) TimeToDateTime(
   ticks: Time,
-  dt: *mut DateTime,
+  dt: *DateTime,
   localTime: bool,
 ): bool
 fn(extern("SDL_DateTimeToTime")) DateTimeToTime(
-  dt: *mut DateTime,
-  ticks: *mut Time,
+  dt: *DateTime,
+  ticks: *Time,
 ): bool
 fn(extern("SDL_TimeToWindows")) TimeToWindows(
   ticks: Time,
-  dwLowDateTime: *mut Uint32,
-  dwHighDateTime: *mut Uint32,
+  dwLowDateTime: *Uint32,
+  dwHighDateTime: *Uint32,
 ): {}
 fn(extern("SDL_TimeFromWindows")) TimeFromWindows(
   dwLowDateTime: Uint32,
@@ -8793,87 +8793,87 @@ type(alias) TrayEntryFlags = Uint32
 #static assert-layout[TrayEntryFlags](4, 4, [])
 type(alias) TrayCallback = *fn(
   ptr,
-  *mut TrayEntry
+  *TrayEntry
 ) -> {}
 #static assert-layout[TrayCallback](8, 8, [])
 fn(extern("SDL_CreateTray")) CreateTray(
-  icon: *mut Surface,
-  tooltip: *mut u8,
-): *mut Tray
+  icon: *Surface,
+  tooltip: *u8,
+): optref[Tray]
 fn(extern("SDL_SetTrayIcon")) SetTrayIcon(
-  tray: *mut Tray,
-  icon: *mut Surface,
+  tray: *Tray,
+  icon: *Surface,
 ): {}
 fn(extern("SDL_SetTrayTooltip")) SetTrayTooltip(
-  tray: *mut Tray,
-  tooltip: *mut u8,
+  tray: *Tray,
+  tooltip: *u8,
 ): {}
 fn(extern("SDL_CreateTrayMenu")) CreateTrayMenu(
-  tray: *mut Tray,
-): *mut TrayMenu
+  tray: *Tray,
+): optref[TrayMenu]
 fn(extern("SDL_CreateTraySubmenu")) CreateTraySubmenu(
-  entry: *mut TrayEntry,
-): *mut TrayMenu
+  entry: *TrayEntry,
+): optref[TrayMenu]
 fn(extern("SDL_GetTrayMenu")) GetTrayMenu(
-  tray: *mut Tray,
-): *mut TrayMenu
+  tray: *Tray,
+): optref[TrayMenu]
 fn(extern("SDL_GetTraySubmenu")) GetTraySubmenu(
-  entry: *mut TrayEntry,
-): *mut TrayMenu
+  entry: *TrayEntry,
+): optref[TrayMenu]
 fn(extern("SDL_GetTrayEntries")) GetTrayEntries(
-  menu: *mut TrayMenu,
-  count: *mut i32,
-): *mut *mut TrayEntry
+  menu: *TrayMenu,
+  count: *i32,
+): optref[optref[TrayEntry]]
 fn(extern("SDL_RemoveTrayEntry")) RemoveTrayEntry(
-  entry: *mut TrayEntry,
+  entry: *TrayEntry,
 ): {}
 fn(extern("SDL_InsertTrayEntryAt")) InsertTrayEntryAt(
-  menu: *mut TrayMenu,
+  menu: *TrayMenu,
   pos: i32,
-  label: *mut u8,
+  label: *u8,
   flags: TrayEntryFlags,
-): *mut TrayEntry
+): optref[TrayEntry]
 fn(extern("SDL_SetTrayEntryLabel")) SetTrayEntryLabel(
-  entry: *mut TrayEntry,
-  label: *mut u8,
+  entry: *TrayEntry,
+  label: *u8,
 ): {}
 fn(extern("SDL_GetTrayEntryLabel")) GetTrayEntryLabel(
-  entry: *mut TrayEntry,
-): *mut u8
+  entry: *TrayEntry,
+): optref[u8]
 fn(extern("SDL_SetTrayEntryChecked")) SetTrayEntryChecked(
-  entry: *mut TrayEntry,
+  entry: *TrayEntry,
   checked: bool,
 ): {}
 fn(extern("SDL_GetTrayEntryChecked")) GetTrayEntryChecked(
-  entry: *mut TrayEntry,
+  entry: *TrayEntry,
 ): bool
 fn(extern("SDL_SetTrayEntryEnabled")) SetTrayEntryEnabled(
-  entry: *mut TrayEntry,
+  entry: *TrayEntry,
   enabled: bool,
 ): {}
 fn(extern("SDL_GetTrayEntryEnabled")) GetTrayEntryEnabled(
-  entry: *mut TrayEntry,
+  entry: *TrayEntry,
 ): bool
 fn(extern("SDL_SetTrayEntryCallback")) SetTrayEntryCallback(
-  entry: *mut TrayEntry,
+  entry: *TrayEntry,
   callback: TrayCallback,
   userdata: ptr,
 ): {}
 fn(extern("SDL_ClickTrayEntry")) ClickTrayEntry(
-  entry: *mut TrayEntry,
+  entry: *TrayEntry,
 ): {}
 fn(extern("SDL_DestroyTray")) DestroyTray(
-  tray: *mut Tray,
+  tray: *Tray,
 ): {}
 fn(extern("SDL_GetTrayEntryParent")) GetTrayEntryParent(
-  entry: *mut TrayEntry,
-): *mut TrayMenu
+  entry: *TrayEntry,
+): optref[TrayMenu]
 fn(extern("SDL_GetTrayMenuParentEntry")) GetTrayMenuParentEntry(
-  menu: *mut TrayMenu,
-): *mut TrayEntry
+  menu: *TrayMenu,
+): optref[TrayEntry]
 fn(extern("SDL_GetTrayMenuParentTray")) GetTrayMenuParentTray(
-  menu: *mut TrayMenu,
-): *mut Tray
+  menu: *TrayMenu,
+): optref[Tray]
 fn(extern("SDL_UpdateTrays")) UpdateTrays(): {}
 fn(extern("SDL_GetVersion")) GetVersion(): i32
-fn(extern("SDL_GetRevision")) GetRevision(): *mut u8
+fn(extern("SDL_GetRevision")) GetRevision(): optref[u8]

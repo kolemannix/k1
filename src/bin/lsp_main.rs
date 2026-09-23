@@ -4,14 +4,17 @@
 use k1::debug;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
-use k1::compiler::{CompileProgramError, LspCompileOptions};
+use k1::compiler::{
+    Command, CompileProgramError, CompileRequest, LspCompileOptions, Target, compile_program,
+};
 use k1::lex::{self, Span, SpanId};
 use k1::lsp_support::CompletionCandidateKind;
 use k1::parse;
 use k1::parse::{ParsedProgram, SourceFile};
+use k1::typer::trace::LiveProgressSink;
 use k1::typer::*;
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::*;
@@ -222,6 +225,78 @@ struct Backend {
     retarget_lock: tokio::sync::Mutex<()>,
     completion_generation: AtomicU32,
     completion_compile_lock: tokio::sync::Mutex<()>,
+    /// The client accepts `$/progress` (window.workDoneProgress)
+    progress_supported: AtomicBool,
+    build_setting: RwLock<serde_json::Value>,
+}
+
+const PROGRESS_TICK: std::time::Duration = std::time::Duration::from_millis(100);
+
+async fn send_progress_task(
+    client: Client,
+    token: NumberOrString,
+    title: String,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<(String, Option<u32>)>,
+) {
+    let started = std::time::Instant::now();
+    let mut tick = tokio::time::interval(PROGRESS_TICK);
+    let mut latest: Option<(String, Option<u32>)> = None;
+    let mut begun = false;
+    let mut shown_percent: Option<u32> = None;
+    loop {
+        tokio::select! {
+            line = rx.recv() => match line {
+                Some(line) => latest = Some(line),
+                None => break,
+            },
+            _ = tick.tick() => {
+                let Some((line, percent)) = latest.take() else { continue };
+                if let Some(percent) = percent {
+                    shown_percent = Some(shown_percent.unwrap_or(0).max(percent));
+                }
+                let value = if begun {
+                    WorkDoneProgress::Report(WorkDoneProgressReport {
+                        cancellable: Some(false),
+                        message: Some(line),
+                        percentage: shown_percent,
+                    })
+                } else {
+                    let created = client
+                        .send_request::<request::WorkDoneProgressCreate>(
+                            WorkDoneProgressCreateParams { token: token.clone() },
+                        )
+                        .await;
+                    if created.is_err() {
+                        return;
+                    }
+                    begun = true;
+                    WorkDoneProgress::Begin(WorkDoneProgressBegin {
+                        title: title.clone(),
+                        cancellable: Some(false),
+                        message: Some(line),
+                        percentage: shown_percent,
+                    })
+                };
+                client
+                    .send_notification::<notification::Progress>(ProgressParams {
+                        token: token.clone(),
+                        value: ProgressParamsValue::WorkDone(value),
+                    })
+                    .await;
+            }
+        }
+    }
+    if begun {
+        let message = format!("done in {}ms", started.elapsed().as_millis());
+        client
+            .send_notification::<notification::Progress>(ProgressParams {
+                token,
+                value: ProgressParamsValue::WorkDone(WorkDoneProgress::End(WorkDoneProgressEnd {
+                    message: Some(message),
+                })),
+            })
+            .await;
+    }
 }
 
 impl Backend {
@@ -240,7 +315,21 @@ impl Backend {
             retarget_lock: tokio::sync::Mutex::new(()),
             completion_generation: AtomicU32::new(0),
             completion_compile_lock: tokio::sync::Mutex::new(()),
+            progress_supported: AtomicBool::new(false),
+            build_setting: RwLock::new(serde_json::Value::Null),
         }
+    }
+
+    fn set_build_setting(&self, settings: &serde_json::Value) -> std::result::Result<bool, String> {
+        let Some(setting) = settings.get("build") else {
+            return Ok(false);
+        };
+        let mut scratch = CompileRequest::new(PathBuf::new(), Command::Check, None)?;
+        apply_build_setting(&mut scratch, setting).map_err(|e| format!("k1.build: {e}"))?;
+        let mut current = self.build_setting.write().unwrap();
+        let changed = *current != *setting;
+        *current = setting.clone();
+        Ok(changed)
     }
 
     /// Insert the completion marker at the cursor, replacing whatever token is there, and run a check compile;
@@ -287,40 +376,28 @@ impl Backend {
 
         let mut source_overrides = fxhash::FxHashMap::default();
         source_overrides.insert(canonical_path, spliced);
-        let lsp_options = LspCompileOptions { source_overrides, completion: true };
-        let args = k1::compiler::Args {
-            no_std: false,
-            emit_llvm: false,
-            optimize: false,
-            dump_module: false,
-            debug: true,
-            sanitize: false,
-            profile: false,
-            chatty: false,
-            optimize_ir: true,
-            target: None,
-            cache: true,
-            filc: false,
-            k1_home_override: None,
-            command: k1::compiler::Command::Check { file: Some(root_path) },
-            dump_idents: false,
-        };
+        let lsp_options =
+            LspCompileOptions { source_overrides, completion: true, progress_sink: None };
+        let setting = self.build_setting.read().unwrap().clone();
 
         let my_generation = self.completion_generation.fetch_add(1, Ordering::SeqCst) + 1;
         let _compile_guard = self.completion_compile_lock.lock().await;
         if self.completion_generation.load(Ordering::SeqCst) != my_generation {
             return Err(Error::request_cancelled());
         }
-        let program =
-            tokio::task::spawn_blocking(move || {
-                match k1::compiler::compile_program_ext(&args, lsp_options) {
-                    Ok(program) => program,
-                    Err(CompileProgramError::TyperFailure(program)) => *program,
+        let program = tokio::task::spawn_blocking(move || {
+            match compile_check(root_path, &setting, lsp_options) {
+                Ok(program) => Some(program),
+                Err(CompileProgramError::TyperFailure(program)) => Some(*program),
+                Err(CompileProgramError::Build(message)) => {
+                    error!("{message}");
+                    None
                 }
-            })
-            .await
-            .map_err(|_| Error::internal_error())?;
-        Ok(Some(program))
+            }
+        })
+        .await
+        .map_err(|_| Error::internal_error())?;
+        Ok(program)
     }
 
     fn with_k1<T>(&self, f: impl Fn(&TypedProgram) -> T) -> Option<T> {
@@ -421,12 +498,12 @@ impl Backend {
         if !(changed || no_program || force_compile) {
             return false;
         }
-        self.compile();
+        self.compile().await;
         self.send_diagnostics().await;
         true
     }
 
-    fn compile(&self) -> u32 {
+    async fn compile(&self) -> u32 {
         let iteration_number = self.compile_iteration.load(Ordering::Relaxed);
         let src_path = self.src_path.read().unwrap().clone();
         let Some(src_path) = src_path else {
@@ -435,41 +512,52 @@ impl Backend {
         };
         info!("compiling version {} target {}", iteration_number, src_path.display());
         let compile_start = std::time::Instant::now();
-        let args = k1::compiler::Args {
-            no_std: false,
-            emit_llvm: false,
-            optimize: false,
-            dump_module: false,
-            debug: true,
-            sanitize: false,
-            profile: false,
-            chatty: false,
-            optimize_ir: true,
-            target: None,
-            cache: true,
-            filc: false,
-            k1_home_override: None,
-            command: k1::compiler::Command::Check { file: Some(src_path) },
-            dump_idents: false,
+        let progress_sink = if self.progress_supported.load(Ordering::Relaxed) {
+            let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+            let title = format!(
+                "k1 check {}",
+                src_path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
+            );
+            let token = NumberOrString::String(format!("k1-check-{iteration_number}"));
+            tokio::spawn(send_progress_task(self.client.clone(), token, title, rx));
+            Some(LiveProgressSink::Fn(Arc::new(move |line: &str, percent| {
+                let _ = tx.send((line.to_string(), percent));
+            })))
+        } else {
+            None
         };
-        let compile_result = k1::compiler::compile_program(&args);
-        let compiled_module = match compile_result {
+        let lsp_options = LspCompileOptions { progress_sink, ..LspCompileOptions::default() };
+        let setting = self.build_setting.read().unwrap().clone();
+        let compile_result =
+            tokio::task::spawn_blocking(move || compile_check(src_path, &setting, lsp_options))
+                .await
+                .expect("check compile panicked");
+        let mut compiled_module = match compile_result {
             Ok(module) => {
                 info!(
                     "compile {} succeeded in {}ms",
                     iteration_number,
                     compile_start.elapsed().as_millis()
                 );
-                Some(Box::new(module))
+                Box::new(module)
             }
             Err(CompileProgramError::TyperFailure(module)) => {
-                info!("compile {} typing failed", iteration_number);
-                Some(module)
+                info!(
+                    "compile {} typing failed in {}ms",
+                    iteration_number,
+                    compile_start.elapsed().as_millis()
+                );
+                module
+            }
+            Err(CompileProgramError::Build(message)) => {
+                self.client.show_message(MessageType::ERROR, message).await;
+                return iteration_number;
             }
         };
+        compiled_module.trace.progress_sink = None;
 
         let mut module_lock = self.module.lock().unwrap();
-        *module_lock = compiled_module;
+        *module_lock = Some(compiled_module);
         let prev_iteration = self.compile_iteration.fetch_add(1, Ordering::Relaxed);
         prev_iteration + 1
     }
@@ -608,6 +696,14 @@ impl LanguageServer for Backend {
         });
         res.server_info =
             Some(ServerInfo { name: "k1lsp".to_string(), version: Some("ALPHA".to_string()) });
+        let progress_supported =
+            params.capabilities.window.as_ref().and_then(|w| w.work_done_progress).unwrap_or(false);
+        self.progress_supported.store(progress_supported, Ordering::Relaxed);
+        if let Some(options) = &params.initialization_options
+            && let Err(e) = self.set_build_setting(options)
+        {
+            self.client.show_message(MessageType::ERROR, e).await;
+        }
         info!("Got initialize params: {params:#?}");
         Ok(res)
     }
@@ -754,49 +850,57 @@ impl LanguageServer for Backend {
             info!("Could not get source for {}", file_url.path());
             return Ok(None);
         };
-        info!(
-            "semantic_tokens {}. tokens={} is_edited={is_edited}",
-            file_url.path(),
-            source.tokens.len()
-        );
+        info!("semantic_tokens {}. is_edited={is_edited}", file_url.path(),);
         self.with_k1(|k1| {
-            let mut tokens: Vec<SemanticToken> = vec![];
-            let mut prev_line = 1;
-            let mut prev_start_col = 0;
-
             let edited_sources = self.edited_sources.lock().unwrap();
             let ast_for_file: &ParsedProgram = match is_edited {
                 false => &k1.ast,
                 true => edited_sources.get(&file_url).unwrap(),
             };
-            // The goal is to use only 'atoms' to avoid overlaps and backwards movement
-            let mut spans_and_kinds = vec![];
-            for semantic_token in ast_for_file.semantic_tokens.iter() {
-                if semantic_token.span.file_id == source.file_id {
-                    let token_type = match semantic_token.kind {
-                        parse::SemanticTokenKind::Type => TokenTypes::Type,
-                        parse::SemanticTokenKind::Variable => TokenTypes::Variable,
-                        parse::SemanticTokenKind::String => TokenTypes::String,
-                        parse::SemanticTokenKind::Keyword => TokenTypes::Keyword,
-                        parse::SemanticTokenKind::Function => TokenTypes::Function,
-                        parse::SemanticTokenKind::Namespace => TokenTypes::Namespace,
-                        parse::SemanticTokenKind::Operator => TokenTypes::Operator,
-                    };
-                    spans_and_kinds.push((semantic_token.span, token_type as u32, 0))
-                }
+
+            let file_tokens = source.semantic_tokens.as_slice(&ast_for_file.mem);
+            let capacity = file_tokens.len() + source.trivia.len() as usize;
+            let mut tokens: Vec<SemanticToken> = Vec::with_capacity(capacity);
+            let mut spans_and_kinds = Vec::with_capacity(capacity);
+            for semantic_token in file_tokens {
+                let token_type = match semantic_token.kind {
+                    parse::SemanticTokenKind::Type => TokenTypes::Type,
+                    parse::SemanticTokenKind::Variable => TokenTypes::Variable,
+                    parse::SemanticTokenKind::String => TokenTypes::String,
+                    parse::SemanticTokenKind::Keyword => TokenTypes::Keyword,
+                    parse::SemanticTokenKind::Function => TokenTypes::Function,
+                    parse::SemanticTokenKind::Namespace => TokenTypes::Namespace,
+                    parse::SemanticTokenKind::Operator => TokenTypes::Operator,
+                    parse::SemanticTokenKind::Comment => TokenTypes::Comment,
+                };
+                spans_and_kinds.push((semantic_token.span, token_type as u32, 0))
             }
             for entry in ast_for_file.mem.getn_lt(source.trivia) {
                 match entry.trivia.kind {
                     lex::TokenTriviaKind::LineComment => {
-                        let span = ast_for_file.spans.get(entry.trivia.span);
+                        let span = lex::Span {
+                            file_id: source.file_id,
+                            start: entry.trivia.start,
+                            len: entry.trivia.len,
+                        };
                         spans_and_kinds.push((span, TokenTypes::Comment as u32, 0));
                     }
                     _ => {}
                 }
             }
-            spans_and_kinds.sort_by_key(|(span, _, _)| span.start);
+            spans_and_kinds.sort_unstable_by_key(|(span, token_type, _)| {
+                (span.start, *token_type != TokenTypes::Comment as u32)
+            });
+            let mut comment_end = 0;
+            let mut prev_line = 1;
+            let mut prev_start_col = 0;
             for (span, token_type, bitflags) in spans_and_kinds {
-                // info!("spans_and_kinds sorted {} {}", span.start, span.len);
+                if span.start < comment_end {
+                    continue;
+                }
+                if token_type == TokenTypes::Comment as u32 {
+                    comment_end = span.end()
+                }
                 let length = span.len;
                 let Some(line) = source.get_line_for_span_start(&ast_for_file.mem, span) else {
                     continue;
@@ -821,7 +925,7 @@ impl LanguageServer for Backend {
             }
             info!(
                 "semantic_tokens: iterated {} tokens, returning {}",
-                ast_for_file.semantic_tokens.len(),
+                file_tokens.len() + source.trivia.len() as usize,
                 tokens.len()
             );
             Ok(Some(SemanticTokensResult::Tokens(SemanticTokens { result_id: None, data: tokens })))
@@ -845,6 +949,21 @@ impl LanguageServer for Backend {
         )))
     }
 
+    async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
+        let settings = params.settings.get("k1").unwrap_or(&params.settings);
+        match self.set_build_setting(settings) {
+            Ok(true) if self.with_k1(|_| ()).is_some() => {}
+            Ok(_) => return,
+            Err(e) => {
+                self.client.show_message(MessageType::ERROR, e).await;
+                return;
+            }
+        }
+        self.compile().await;
+        self.send_diagnostics().await;
+        self.client.semantic_tokens_refresh().await.unwrap();
+    }
+
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let file_url = params.text_document.uri;
         info!("handling did_open for document: {}", file_url.path());
@@ -862,19 +981,11 @@ impl LanguageServer for Backend {
             let mut es = self.edited_sources.lock().unwrap();
             es.remove(&params.text_document.uri);
         }
-        let start = std::time::Instant::now();
         let compiled = self.ensure_target_and_compile(&params.text_document.uri, true).await;
         if !compiled {
             return;
         }
-        let elapsed_ms = start.elapsed().as_millis();
         self.client.semantic_tokens_refresh().await.unwrap();
-        self.client
-            .show_message(
-                MessageType::INFO,
-                format!("recompiled {} in {}ms", params.text_document.uri.path(), elapsed_ms),
-            )
-            .await;
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -1115,4 +1226,57 @@ async fn main() {
 
     let (service, socket) = LspService::new(Backend::new);
     Server::new(stdin, stdout, socket).serve(service).await;
+}
+
+fn compile_check(
+    file: PathBuf,
+    setting: &serde_json::Value,
+    lsp: LspCompileOptions,
+) -> std::result::Result<TypedProgram, CompileProgramError> {
+    let mut request =
+        CompileRequest::new(file, Command::Check, None).map_err(CompileProgramError::Build)?;
+    request.build.default.debug = true;
+    apply_build_setting(&mut request, setting).expect("k1.build is validated when set");
+    request.lsp = lsp;
+    compile_program(request)
+}
+
+fn apply_build_setting(
+    request: &mut CompileRequest,
+    setting: &serde_json::Value,
+) -> std::result::Result<(), String> {
+    use serde_json::Value;
+    let fields = match setting {
+        Value::Null => return Ok(()),
+        Value::Object(fields) => fields,
+        other => return Err(format!("expected an object, got {other}")),
+    };
+    let build = &mut request.build.default;
+    for (key, value) in fields {
+        match (key.as_str(), value) {
+            ("target", Value::String(name)) => match Target::parse(name) {
+                Some(target) => build.target = target,
+                None => return Err(format!("unknown target {name}")),
+            },
+            ("cpu", Value::String(cpu)) => build.cpu = request.strings.intern(cpu),
+            ("features", Value::String(features)) => {
+                build.features = request.strings.intern(features)
+            }
+            ("optimize", Value::Bool(b)) => build.optimize = *b,
+            ("debug", Value::Bool(b)) => build.debug = *b,
+            ("no-std", Value::Bool(b)) => build.no_std = *b,
+            ("sanitize", Value::Bool(b)) => build.sanitize = *b,
+            ("filc", Value::Bool(b)) => build.filc = *b,
+            ("options", Value::Array(items)) => {
+                for item in items {
+                    let Some(option) = item.as_str() else {
+                        return Err(format!("options holds strings, got {item}"));
+                    };
+                    request.build.options.push(option.to_string());
+                }
+            }
+            _ => return Err(format!("unexpected {key}: {value}")),
+        }
+    }
+    Ok(())
 }

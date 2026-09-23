@@ -16,14 +16,14 @@ fn count-notify(_p: ptr) { notify-count = notify-count + 1 }
 
 fn test() {
   let bus = pubsub/create[span[u8]](
-    on-event = .{ state = ptr/null, notify-fn = count-notify },
+    on-event = .{ state = ptr/null, notify-fn = count-notify.& },
     subscriber-cap-weight = 1024,
     weight-fn = fn(payload: rc-bytes) payload.bytes().len(),
   )
 
   let src = bus.subscribe("news") || rc-byte-stream
   let wakes = 0
-  src.start(.{ state = (&wakes).as[ptr], wake-fn = fn(p: ptr) { p.ref[int]().* = p.ref[int]().* + 1 } })
+  src.start(.{ state = wakes.&.as[ptr], wake-fn = fn(p: ptr) { p.ref[int]().* = p.ref[int]().* + 1 } })
 
   bus.publish("news", heap-bytes/cloned("hi".span-bytes()).to-rc())
   bus.publish("sports", heap-bytes/cloned("ignored".span-bytes()).to-rc())

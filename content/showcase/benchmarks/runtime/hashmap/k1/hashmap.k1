@@ -1,0 +1,38 @@
+use std/map
+
+type rng = { state: u64 }
+
+ns for rng {
+  fn next(self: *rng): u64 {
+    let x = self.state
+    x = x ^ (x << 13)
+    x = x ^ (x >> 7)
+    x = x ^ (x << 17)
+    self.state = x
+    x
+  }
+}
+
+fn main(): i32 {
+  let n: size = 5_000_000
+  let m = map/new[u64, u64]()
+  let keys = rng.{ state = 0x9E3779B97F4A7C15 }
+  for i in 0.until(n) {
+    m.insert(keys.next(), i.unsigned())
+  }
+  let hits = rng.{ state = 0x9E3779B97F4A7C15 }
+  let misses = rng.{ state = 0x2545F4914F6CDD1D }
+  let found: size = 0
+  let sum: u64 = 0
+  for i in 0.until(n) {
+    let hit-key = hits.next()
+    let miss-key = misses.next()
+    let key = if i % 2 == 0 hit-key else miss-key
+    if m.get(key) is :some v {
+      found = found + 1
+      sum = sum + v
+    }
+  }
+  println("inserted: ${m.len()} found: $found sum: $sum")
+  0
+}

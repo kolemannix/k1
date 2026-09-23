@@ -1,12 +1,3 @@
-ns build {
-  fn module(): k1/module {
-    let m = k1/module/new()
-    m.dep("liba")
-    m.dep("libb")
-    m
-  }
-}
-
 fn main(): i32 {
   assert(shared/base() == 21)
   assert(liba/value() == 20)

@@ -1,0 +1,17 @@
+fn parse-all[t, e](items: span[string]): result[list[t], e] where t: from-string[e = e] {
+  let out: list[t] = []
+  for s in items {
+    if from-string/from-string[t](s) is {
+      :ok v -> out.push(v),
+      :err e -> return :err e
+    }
+  }
+  :ok out
+}
+fn main(): i32 {
+  println("${parse-all[u64, string](["1", "2", "3"])}")
+  println("${parse-all[u64, string](["1", "x", "3"])}")
+  let names = if parse-all[string, never](["ada", "grace"]) is { :ok v -> v }
+  println("$names")
+  0
+}

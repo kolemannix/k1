@@ -1,0 +1,103 @@
+ns json {
+  fn to-string[t](v: t): string {
+    let sb = string-builder/new()
+    write(sb.&, v)
+    sb.build()
+  }
+
+  fn write-escaped[w: writer](w: w, s: string) {
+    w.write-char('"')
+    for c in s {
+      if c == '"' w.write("\\\"")
+      else if c == '\\' w.write("\\\\")
+      else if c == '\n' w.write("\\n")
+      else if c == '\r' w.write("\\r")
+      else if c == '\t' w.write("\\t")
+      else w.write-char(c)
+    }
+    w.write-char('"')
+  }
+
+  fn write[t, w: writer](w: w, v: t) {
+    #meta {
+      let id = types/id[t]
+      let cb = code-builder/new()
+      if id.is-instance-of(types/id[opt]) {
+        cb.line(`if v is { :some x -> write(w, x), :none -> w.write("null") }`)
+      } else if id.is-instance-of(types/id[list]) or types/schema[t] is :array _ {
+        cb.line(`w.write-char('[')`)
+        cb.line(`for v { if it-index > 0 { w.write-char(',') }; write(w, it) }`)
+        cb.line(`w.write-char(']')`)
+      } else if types/schema[t] is {
+        :bool -> cb.line(`v.print-to(w)`),
+        :int _ -> cb.line(`v.print-to(w)`),
+        :float _ -> cb.line(`v.print-to(w)`),
+        :string -> cb.line(`write-escaped(w, v)`),
+        :char -> cb.line(`write-escaped(w, v.to-string())`),
+        :reference _ -> cb.line(`write(w, v.*)`),
+        :enum _ -> cb.line(`write-escaped(w, v.enum-name())`),
+        :struct .{ fields } -> {
+          cb.line(`w.write-char('{')`)
+          for f in fields {
+            let key = if it-index == 0 `"${f.name}":` else `,"${f.name}":`
+            cb.line(`w.write(${meta/str-lit(key)})`)
+            cb.line(`write(w, v.${f.name})`)
+          }
+          cb.line(`w.write-char('}')`)
+        },
+        :either .{ variants } -> {
+          cb.line("if v is {")
+          cb.indent()
+          for x in variants {
+            if x.payload is :some _ {
+              let key = meta/str-lit(`{"${x.name}":`)
+              cb.line(`:${x.name} p -> { w.write($key); write(w, p); w.write-char('}') },`)
+            } else {
+              cb.line(`:${x.name} -> w.write(${meta/str-lit(`"${x.name}"`)}),`)
+            }
+          }
+          cb.dedent()
+          cb.line("}")
+        },
+        _ -> crash("json: no encoding for ${types/name[t]}")
+      }
+      let generated = cb.build()
+      k1/emit-compiler-message(k1/location(), :info, "json/write[${types/name[t]}]\n${generated.text()}")
+      generated
+    }
+  }
+}
+
+type role = either { admin, member, guest }
+type contact = either { email(string), phone(string), unreachable }
+type person = {
+  name: string,
+  initial: char,
+  age: u32,
+  score: f64,
+  active: bool,
+  role: role,
+  nickname: ?string,
+  contacts: list[contact],
+  scores: array[i32, 3],
+}
+
+fn main(): i32 {
+  let ada: person = .{
+    name = "Ada \"Countess\" Lovelace",
+    initial = 'A',
+    age = 36,
+    score = 99.5,
+    active = true,
+    role = :admin,
+    nickname = :none,
+    contacts = [:email("ada@example.com"), :unreachable],
+    scores = [10, 20, 30],
+  }
+  println(json/to-string(ada))
+  println(json/to-string(ada | .{ nickname = :some "Ada", contacts = [] }))
+  println(json/to-string([1, 2, 3]))
+  println(json/to-string(ada.contacts.&))
+  println(json/to-string(.{ nested = .{ deep = [.{ ok = true }] }, tab = "a\tb\n" }))
+  0
+}

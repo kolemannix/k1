@@ -1,0 +1,7 @@
+type k = either { if, fn, let, while }
+
+fn main(): i32 {
+  let x: k = :if
+  println("${x.enum-name()}")
+  0
+}
