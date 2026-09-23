@@ -1,6 +1,5 @@
 // Copyright (c) 2026 knix
 
-use crate::parse::Interner;
 use crate::snap::{SnapReader, SnapWriter, restore_map_snap, write_map_snap};
 
 use super::*;
@@ -22,11 +21,18 @@ pub(crate) fn inputs_hash_from_settings(
         out_dir,
         out_dir_generated: _,
         cache_dir: _,
-        emit_llvm: _,
-        chatty: _,
-        record_trace: _,
-        optimize_ir,
-        cache: _,
+        tools:
+            crate::compiler::ToolFlags {
+                emit_llvm: _,
+                dump_module: _,
+                dump_ir: _,
+                dump_idents: _,
+                dump_trace: _,
+                profile: _,
+                chatty: _,
+                optimize_ir,
+                cache: _,
+            },
     } = config;
     let flags = [*optimize_ir, cfg!(feature = "lsp")].map(|b| b as u8);
     let hash = crate::snap::InputsHash(0).add(&[
@@ -346,7 +352,8 @@ impl TypedProgram {
         let frame = self.trace_push(crate::typer::trace::TraceKind::SnapRoundtrip, 0, 0);
         let first = self.snap();
         let now = self.trace.clock.raw();
-        let placeholder = crate::plan::BuildPlan::new(Interner::make_small(), self.plan.config);
+        let placeholder =
+            crate::plan::BuildPlan::new(crate::parse::Interner::make_small(), self.plan.config);
         let plan = std::mem::replace(&mut self.plan, placeholder);
         let reader = SnapReader::new(&first, self.inputs_hash)
             .unwrap_or_else(|e| panic!("snapshot restore failed: {e}"));

@@ -78,7 +78,7 @@ disturbed and the best column is the one to read.
 
 "Before" is the encoder at the commit this work started from, "after" is
 `dogfood/brotli` as it is now; both were built with `k1 --optimize
---cache false build` and run through the same harness, alternating the
+--no-cache build` and run through the same harness, alternating the
 two binaries three times. Each MB/s figure is the median of the three
 runs' median rounds; K1/C is the median ratio. C is the same code in both
 binaries, so its column is the median over all six runs.
@@ -297,8 +297,8 @@ and does not link):
 
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
 |:---|---:|---:|---:|---:|
-| `k1 --optimize --cache false build dogfood/brotli` | 288.7 ± 14.4 | 267.9 | 305.7 | 2.43 ± 0.39 |
-| `k1 --cache false build dogfood/brotli` | 118.6 ± 18.3 | 92.3 | 139.7 | 1.00 |
+| `k1 --optimize --no-cache build dogfood/brotli` | 288.7 ± 14.4 | 267.9 | 305.7 | 2.43 ± 0.39 |
+| `k1 --no-cache build dogfood/brotli` | 118.6 ± 18.3 | 92.3 | 139.7 | 1.00 |
 | `cc -O2 -c compress_fragment.c compress_fragment_two_pass.c encode.c` | 1073.0 ± 66.3 | 983.9 | 1144.7 | 9.05 ± 1.50 |
 
 A direct `time` of the optimized build: 0.22 s wall, 0.79 s user (LLVM

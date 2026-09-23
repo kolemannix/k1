@@ -24,8 +24,6 @@ use crate::typer::trace::{FrameId, TraceKind};
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
-
 pub const MAC_SDK_VERSION: &str = "15.0.0";
 pub const MAC_SDK_SYSROOT: &str = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk";
 
@@ -83,7 +81,7 @@ pub enum Arch {
     Wasm,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 /// A target is an (arch, platform) pair; I just do a simple exhaustive enum of
 /// the pairs that are real rather than a 'target triple' type of struct where
@@ -99,6 +97,19 @@ pub enum Target {
 }
 
 impl Target {
+    pub const ALL: [Target; 6] = [
+        Target::Intel64Linux,
+        Target::Arm64Macos,
+        Target::Wasm64Wasi,
+        Target::Intel64Bare,
+        Target::Arm64Bare,
+        Target::Wasm64Bare,
+    ];
+
+    pub fn parse(name: &str) -> Option<Target> {
+        Target::ALL.into_iter().find(|t| t.to_str() == name)
+    }
+
     pub fn from(arch: Arch, platform: Option<Platform>) -> Option<Self> {
         match (arch, platform) {
             (Arch::Intel, Some(Platform::PosixLinux)) => Some(Target::Intel64Linux),
@@ -162,20 +173,6 @@ impl BuildConfig {
             sanitize: false,
             filc: false,
         }
-    }
-
-    pub fn from_args(args: &Args, strings: &mut Interner) -> Result<BuildConfig, &'static str> {
-        let Some(target) = args.target.or(detect_host_target()) else {
-            return Err("Unsupported host platform; provide your target explicitly");
-        };
-        Ok(BuildConfig {
-            optimize: args.optimize,
-            debug: args.debug,
-            no_std: args.no_std,
-            sanitize: args.sanitize,
-            filc: args.filc,
-            ..BuildConfig::new(target, strings)
-        })
     }
 
     pub fn resolve(self, strings: &mut Interner) -> Result<BuildConfig, &'static str> {
@@ -248,14 +245,14 @@ impl BuildConfig {
     }
 }
 
-pub struct BuildRequest<'a> {
+pub struct BuildRequest {
     pub default: BuildConfig,
-    pub command: CommandKind,
-    pub options: &'a [String],
+    pub command: Command,
+    pub options: Vec<String>,
     pub host: Option<Target>,
 }
 
-impl BuildRequest<'_> {
+impl BuildRequest {
     pub fn hash(
         &self,
         strings: &Interner,
@@ -272,7 +269,7 @@ impl BuildRequest<'_> {
                 self.host.map_or("", |t| t.to_str()).as_bytes(),
             ]),
         );
-        for option in self.options {
+        for option in &self.options {
             hash = hash.add(&[option.as_bytes()]);
         }
         hash
@@ -321,77 +318,8 @@ fn logical_name_to_lib_filename(
     }
 }
 
-#[derive(Debug, Clone, Subcommand)]
-pub enum Command {
-    #[clap(alias = "c")]
-    Check {
-        /// File
-        file: Option<PathBuf>,
-    },
-    #[clap(alias = "b")]
-    Build {
-        /// File
-        file: Option<PathBuf>,
-    },
-    #[clap(alias = "r")]
-    Run {
-        /// File
-        file: Option<PathBuf>,
-        /// Arguments passed through to the program
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        program_args: Vec<String>,
-    },
-    #[clap(alias = "t")]
-    Test {
-        /// File
-        file: Option<PathBuf>,
-    },
-    #[clap()]
-    Server {
-        /// File
-        file: Option<PathBuf>,
-    },
-    /// Run a module's setup step if stale
-    #[clap()]
-    Setup {
-        /// Module directory
-        file: Option<PathBuf>,
-        /// Re-run the module's setup even if fresh
-        #[arg(long, default_value_t = false)]
-        force: bool,
-    },
-    #[clap()]
-    Clean { file: Option<PathBuf> },
-}
-
-impl Command {
-    pub fn file(&self) -> Option<&PathBuf> {
-        match self {
-            Command::Check { file }
-            | Command::Build { file }
-            | Command::Run { file, .. }
-            | Command::Test { file }
-            | Command::Server { file }
-            | Command::Setup { file, .. }
-            | Command::Clean { file } => file.as_ref(),
-        }
-    }
-
-    pub fn kind(&self) -> CommandKind {
-        match self {
-            Command::Check { .. } => CommandKind::Check,
-            Command::Build { .. } => CommandKind::Build,
-            Command::Run { .. } => CommandKind::Run,
-            Command::Test { .. } => CommandKind::Test,
-            Command::Server { .. } => CommandKind::Server,
-            Command::Setup { force, .. } => CommandKind::Setup { force: *force },
-            Command::Clean { .. } => CommandKind::Clean,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CommandKind {
+pub enum Command {
     Check,
     Build,
     Run,
@@ -401,122 +329,103 @@ pub enum CommandKind {
     Clean,
 }
 
-impl CommandKind {
+impl Command {
     pub fn is_test(&self) -> bool {
-        matches!(self, CommandKind::Test)
+        matches!(self, Command::Test)
     }
 
     pub fn codegens(&self) -> bool {
-        !matches!(self, CommandKind::Check | CommandKind::Setup { .. })
+        !matches!(self, Command::Check | Command::Setup { .. })
     }
 
     pub fn request_name(&self) -> &'static str {
         match self {
-            CommandKind::Check | CommandKind::Setup { .. } | CommandKind::Clean => "check",
-            CommandKind::Build => "build",
-            CommandKind::Run => "run",
-            CommandKind::Test => "test",
-            CommandKind::Server => "server",
+            Command::Check | Command::Setup { .. } | Command::Clean => "check",
+            Command::Build => "build",
+            Command::Run => "run",
+            Command::Test => "test",
+            Command::Server => "server",
         }
     }
 
     pub fn inputs_hash_byte(&self) -> u8 {
         match self {
-            CommandKind::Check => 0,
-            CommandKind::Build => 1,
-            CommandKind::Run => 2,
-            CommandKind::Test => 3,
-            CommandKind::Server => 4,
-            CommandKind::Setup { force: false } => 5,
-            CommandKind::Setup { force: true } => 6,
-            CommandKind::Clean => 7,
+            Command::Check => 0,
+            Command::Build => 1,
+            Command::Run => 2,
+            Command::Test => 3,
+            Command::Server => 4,
+            Command::Setup { force: false } => 5,
+            Command::Setup { force: true } => 6,
+            Command::Clean => 7,
         }
     }
 }
 
-#[derive(Parser, Debug, Clone)]
-#[command(author, version, about, long_about = None)]
-pub struct Args {
-    /// core only
-    #[arg(short, long, default_value_t = false)]
-    pub no_std: bool,
-
-    /// Output an LLVM IR file at out_dir/{program_name}.ll
-    #[arg(long, default_value_t = false)]
+#[derive(Debug, Clone, Copy)]
+pub struct ToolFlags {
     pub emit_llvm: bool,
-
-    /// Optimize
-    #[arg(long, default_value_t = false)]
-    pub optimize: bool,
-
-    /// Write out a text representation of the typed program
-    #[arg(long, default_value_t = false)]
     pub dump_module: bool,
-
-    /// Write the IR consumed by codegen to out_dir/{program_name}_ir.txt
-    #[arg(long)]
     pub dump_ir: bool,
-
-    /// Write out every string in the identifier intern pool, with stats
-    #[arg(long, default_value_t = false)]
     pub dump_idents: bool,
-
-    /// Write the compile trace as folded stacks to out_dir/{program_name}_trace.folded
-    #[arg(long, default_value_t = false)]
     pub dump_trace: bool,
-
-    /// Generate debug info
-    #[arg(long)]
-    pub debug: bool,
-
-    /// Link AddressSanitizer and UndefinedBehaviorSanitizer
-    #[arg(long)]
-    pub sanitize: bool,
-
-    /// Compile and link through a Fil-C toolchain (memory-safe C runtime).
-    /// Requires target intel64-linux and the K1_FILC env var pointing at a
-    /// Fil-C installation
-    #[arg(long, default_value_t = false)]
-    pub filc: bool,
-
-    #[arg(long)]
     pub profile: bool,
-
-    /// Chatty mode, timing summaries, other info; for compiler developers
-    #[arg(short, long, default_value_t = false, action = clap::ArgAction::Set)]
     pub chatty: bool,
-
-    /// Toggles whether k1 optimizes its own ir during emission; for compiler developers
-    #[arg(short, long, default_value_t = true, action = clap::ArgAction::Set)]
     pub optimize_ir: bool,
-
-    /// Disk-cached compiles
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     pub cache: bool,
-
-    /// Target platform
-    #[arg(long)]
-    pub target: Option<Target>,
-
-    #[arg(
-        short = 'D',
-        value_name = "NAME[=VALUE]",
-        help = "Build option for the primary module's fn build"
-    )]
-    pub define: Vec<String>,
-
-    /// Internal: nested compiles inherit the outer compile's k1 home instead of
-    /// re-deriving it from the environment
-    #[arg(skip)]
-    pub k1_home_override: Option<String>,
-
-    #[command(subcommand)]
-    pub command: Command,
 }
 
-impl Args {
-    pub fn file(&self) -> Option<&PathBuf> {
-        self.command.file()
+impl Default for ToolFlags {
+    fn default() -> ToolFlags {
+        ToolFlags {
+            emit_llvm: false,
+            dump_module: false,
+            dump_ir: false,
+            dump_idents: false,
+            dump_trace: false,
+            profile: false,
+            chatty: false,
+            optimize_ir: true,
+            cache: true,
+        }
+    }
+}
+
+impl ToolFlags {
+    pub fn record_trace(&self) -> bool {
+        self.chatty || self.dump_trace
+    }
+}
+
+pub struct CompileRequest {
+    pub path: PathBuf,
+    pub strings: Interner,
+    pub build: BuildRequest,
+    pub tools: ToolFlags,
+    pub k1_home: Option<String>,
+    pub lsp: LspCompileOptions,
+}
+
+impl CompileRequest {
+    pub fn new(
+        path: PathBuf,
+        command: Command,
+        target: Option<Target>,
+    ) -> std::result::Result<CompileRequest, &'static str> {
+        let host = detect_host_target();
+        let Some(target) = target.or(host) else {
+            return Err("Unsupported host platform; provide your target explicitly");
+        };
+        let mut strings = Interner::make_small();
+        let default = BuildConfig::new(target, &mut strings);
+        Ok(CompileRequest {
+            path,
+            strings,
+            build: BuildRequest { default, command, options: Vec::new(), host },
+            tools: ToolFlags::default(),
+            k1_home: None,
+            lsp: LspCompileOptions::default(),
+        })
     }
 }
 
@@ -526,16 +435,11 @@ pub struct CompilerConfig {
     pub src_path: StringId,
     pub home_dir: StringId,
     pub k1_home: StringId,
-    pub command: CommandKind,
+    pub command: Command,
     pub out_dir: StringId,
     pub out_dir_generated: StringId,
     pub cache_dir: StringId,
-    pub emit_llvm: bool,
-    pub chatty: bool,
-    /// Full frame trace with clocks: chatty or --dump-trace
-    pub record_trace: bool,
-    pub optimize_ir: bool,
-    pub cache: bool,
+    pub tools: ToolFlags,
 }
 
 impl CompilerConfig {
@@ -1164,7 +1068,7 @@ fn plan_program(
     let idents = &ast.idents;
     let src_path = idents.get_string(config.src_path);
     let k1_home = idents.get_string(config.k1_home);
-    let is_setup = matches!(config.command, CommandKind::Setup { .. });
+    let is_setup = matches!(config.command, Command::Setup { .. });
     let has_build_file = is_dir
         && crate::plan::build_file_path(idents, &mut ast.tmp, src_path, &lsp.source_overrides)
             .is_some();
@@ -1188,7 +1092,7 @@ fn plan_program(
     let plan_path =
         crate::plan::plan_cache_path(Path::new(idents.get_string(config.cache_dir)), request_hash);
     if !is_setup
-        && config.cache
+        && config.tools.cache
         && let Some(plan) = BuildPlan::load(&plan_path, request_hash)
         && plan.is_fresh(idents, &mut ast.tmp, k1_home, &lsp.source_overrides)
     {
@@ -1199,7 +1103,7 @@ fn plan_program(
     if is_setup {
         return Ok(Planned::Setup(host));
     }
-    if config.cache && lsp.source_overrides.is_empty() {
+    if config.tools.cache && lsp.source_overrides.is_empty() {
         let _ = plan.store(&plan_path, request_hash);
     }
     Ok(Planned::Plan(plan, Some(host)))
@@ -1221,7 +1125,7 @@ pub(crate) fn open_program(
             &lsp.source_overrides,
         ));
     }
-    let restored = if config.cache {
+    let restored = if config.tools.cache {
         restore_longest_prefix(&ast, config, plan, &lsp, &mut sources, snapshot_count)
     } else {
         Err(plan)
@@ -1259,7 +1163,7 @@ fn restore_longest_prefix(
         let reader = match crate::snap::SnapReader::new(&bytes, *hash) {
             Ok(reader) => reader,
             Err(e) => {
-                if config.chatty {
+                if config.tools.chatty {
                     eprintln!("ignoring cache entry: {e}");
                 }
                 continue;
@@ -1281,7 +1185,7 @@ fn restore_longest_prefix(
             bytes.len() as f64 / (1024.0 * 1024.0)
         );
         info!("{msg}");
-        if config.chatty {
+        if config.tools.chatty {
             eprintln!("{msg}");
         }
         return Ok(restored);
@@ -1289,23 +1193,19 @@ fn restore_longest_prefix(
     Err(plan)
 }
 
-/// If `args.file` points to a directory,
+/// If `path` is a directory,
 /// - compile all files in the directory.
 /// - program name is the name of the directory.
 ///
-/// If `args.file` points to a file,
+/// If `path` is a file,
 /// - compile that file only.
 /// - program name is the name of the file.
-pub fn compile_program(args: &Args) -> std::result::Result<TypedProgram, CompileProgramError> {
-    compile_program_ext(args, LspCompileOptions::default())
-}
-
-pub fn compile_program_ext(
-    args: &Args,
-    lsp: LspCompileOptions,
+pub fn compile_program(
+    request: CompileRequest,
 ) -> std::result::Result<TypedProgram, CompileProgramError> {
+    let CompileRequest { path, strings, build, tools, k1_home, lsp } = request;
     #[cfg(feature = "profile")]
-    let profiler_guard = if args.profile {
+    let profiler_guard = if tools.profile {
         Some(
             pprof::ProfilerGuardBuilder::default()
                 .frequency(9999)
@@ -1320,11 +1220,8 @@ pub fn compile_program_ext(
 
     let mut ast = crate::parse::ParsedProgram::make();
     let idents = &ast.idents;
-    let src_path = (match args.file() {
-        None => kpath::canonicalize_string_id(idents, "."),
-        Some(path_buf) => kpath::canonicalize_string_id(idents, path_buf),
-    })
-    .unwrap_or_else(|e| panic!("Failed to load source path: {e}"));
+    let src_path = kpath::canonicalize_string_id(idents, &path)
+        .unwrap_or_else(|e| panic!("Failed to load source path: {e}"));
 
     let (is_dir, home_dir, module_name) = module_home_from_src_path(idents, src_path);
     ast.name_id = module_name;
@@ -1334,17 +1231,9 @@ pub fn compile_program_ext(
     let cache_dir = kpath::join_id(&ast.idents, &mut ast.mem, out_dir, crate::snap::CACHE_DIR_NAME);
     std::fs::create_dir_all(Path::new(ast.idents.get_string(out_dir_generated))).unwrap();
 
-    let mut strings = Interner::make_small();
-    let request_default = match BuildConfig::from_args(args, &mut strings) {
-        Ok(config) => config,
-        Err(message) => return Err(CompileProgramError::Build(message)),
-    };
-
-    // Find the installation. Nested compiles inherit, env var overrides, otherwise
+    // Find the installation. The request's wins, env var overrides, otherwise
     // release mode says co-located with the binary. dev mode says cwd
-    let k1_home_raw = args
-        .k1_home_override
-        .as_ref()
+    let k1_home_raw = k1_home
         .map(PathBuf::from)
         .or_else(|| std::env::var("K1_HOME").map(PathBuf::from).ok())
         .unwrap_or_else(|| {
@@ -1360,7 +1249,7 @@ pub fn compile_program_ext(
         });
     let k1_home = kpath::canonicalize_owned(&k1_home_raw)
         .unwrap_or_else(|e| panic!("K1 home {} is not usable: {e}", k1_home_raw.display()));
-    if args.chatty {
+    if tools.chatty {
         eprintln!("using k1 home: {k1_home}");
     }
     let k1_home_id = ast.idents.intern(&k1_home);
@@ -1368,28 +1257,18 @@ pub fn compile_program_ext(
         src_path,
         home_dir,
         k1_home: k1_home_id,
-        command: args.command.kind(),
+        command: build.command,
         out_dir,
         out_dir_generated,
         cache_dir,
-        emit_llvm: args.emit_llvm,
-        chatty: args.chatty,
-        record_trace: args.chatty || args.dump_trace,
-        optimize_ir: args.optimize_ir,
-        cache: args.cache,
+        tools,
     };
 
     let _cwd = CwdGuard::enter(ast.idents.get_string(home_dir));
 
-    let request = BuildRequest {
-        default: request_default,
-        command: config.command,
-        options: &args.define,
-        host: detect_host_target(),
-    };
     let plan_start = crate::clock::Clock::new().raw();
     let (plan, host) =
-        match plan_program(&mut ast, config, strings, &request, &lsp, is_dir, module_name)? {
+        match plan_program(&mut ast, config, strings, &build, &lsp, is_dir, module_name)? {
             Planned::Plan(plan, host) => (plan, host),
             Planned::Setup(host) => return Ok(*host),
         };
@@ -1416,10 +1295,10 @@ pub fn compile_program_ext(
     }
 
     k1.write_emitted_sources();
-    if args.dump_module {
+    if tools.dump_module {
         write_program_dump(&k1);
     }
-    if args.dump_idents {
+    if tools.dump_idents {
         write_idents_dump(&k1);
     }
 
@@ -1856,7 +1735,7 @@ fn cg_error_to_message(k1: &TypedProgram, e: CgError) -> K1Message {
     k1.make_error(message_string, e.span)
 }
 
-pub fn codegen_module(args: &Args, ctx: &Context, k1: &mut TypedProgram) -> Result<()> {
+pub fn codegen_module(ctx: &Context, k1: &mut TypedProgram) -> Result<()> {
     // Ns-driven, not fn-driven: a reload ns holding only globals still gets a dylib
     let mut reload_nss: Vec<NamespaceId> = vec![];
     for ns_id in k1.namespaces.namespaces.iter_ids() {
@@ -1877,13 +1756,13 @@ pub fn codegen_module(args: &Args, ctx: &Context, k1: &mut TypedProgram) -> Resu
     }
     for ns_id in &reload_nss {
         let frame = k1.trace_push(TraceKind::ReloadDylib, ns_id.as_u32(), 0);
-        let written = write_reload_dylib(args, ctx, k1, *ns_id);
+        let written = write_reload_dylib(ctx, k1, *ns_id);
         k1.trace_pop(frame);
         written?;
     }
 
     let mut module_name = k1.program_name().to_string();
-    if args.command.kind().is_test() {
+    if k1.config.command.is_test() {
         module_name.push_str("_test");
     };
     let prepare_frame = k1.trace_push(TraceKind::CodegenPrepare, 0, 0);
@@ -1901,7 +1780,7 @@ pub fn codegen_module(args: &Args, ctx: &Context, k1: &mut TypedProgram) -> Resu
             }
         },
     };
-    if args.dump_ir {
+    if k1.config.tools.dump_ir {
         let out_dir = k1.ast.idents.get_string(k1.config.out_dir);
         std::fs::create_dir_all(out_dir)?;
         let mut dump = String::new();
@@ -1917,15 +1796,8 @@ pub fn codegen_module(args: &Args, ctx: &Context, k1: &mut TypedProgram) -> Resu
     let is_host_native = detect_host_target() == Some(k1.plan.config.target);
     let object_is_artifact = !k1.plan.is_executable() && !is_host_native
         || k1.plan.config.target.platform() == Platform::Bare;
-    let objects = write_unit_artifacts(
-        args,
-        ctx,
-        k1,
-        &roots,
-        CgKind::Host,
-        &module_name,
-        object_is_artifact,
-    )?;
+    let objects =
+        write_unit_artifacts(ctx, k1, &roots, CgKind::Host, &module_name, object_is_artifact)?;
 
     if k1.plan.is_executable() {
         if k1.plan.config.target.platform() == Platform::Bare {
@@ -1968,12 +1840,12 @@ pub fn codegen_module(args: &Args, ctx: &Context, k1: &mut TypedProgram) -> Resu
     Ok(())
 }
 
-pub fn report_trace(args: &Args, k1: &TypedProgram) {
+pub fn report_trace(k1: &TypedProgram) {
     k1.trace_clear();
-    if args.chatty {
+    if k1.config.tools.chatty {
         k1.print_trace_summary(&mut std::io::stderr()).unwrap();
     }
-    if args.dump_trace {
+    if k1.config.tools.dump_trace {
         let out_dir = k1.ast.idents.get_string(k1.config.out_dir);
         let path = format!("{out_dir}/{}_trace.folded", k1.program_name());
         let written = std::fs::File::create(&path).and_then(|file| {
@@ -2024,7 +1896,6 @@ fn record_unit_timings(k1: &mut TypedProgram, root: Option<FrameId>, timings: &[
 }
 
 fn write_unit_artifacts(
-    args: &Args,
     ctx: &Context,
     k1: &mut TypedProgram,
     roots: &CodegenRoots,
@@ -2045,7 +1916,7 @@ fn write_unit_artifacts(
     } else {
         Pipeline::Dev
     };
-    let single_file = k1.plan.config.filc || args.emit_llvm || object_is_artifact;
+    let single_file = k1.plan.config.filc || k1.config.tools.emit_llvm || object_is_artifact;
     let object_path = |i: usize| format!("{out_dir}/{module_name}.{i}.o");
     let output = if single_file {
         UnitOutput::Bitcode(Pipeline::None)
@@ -2078,7 +1949,7 @@ fn write_unit_artifacts(
                 .map_err(|e| anyhow::anyhow!("Failed to write {ll_path}: {e}"))?;
             return Ok(vec![ll_path]);
         }
-        if args.emit_llvm {
+        if k1.config.tools.emit_llvm {
             let ll_path = format!("{out_dir}/{module_name}.ll");
             std::fs::write(Path::new(&ll_path), merged.print_to_string().to_string())
                 .map_err(|e| anyhow::anyhow!("Failed to write {ll_path}: {e}"))?;
@@ -2106,12 +1977,7 @@ fn write_unit_artifacts(
 
 /// Codegens and links one reloadable ns's dylib:
 /// `.k1-out/<program>.<ns>.<dylib|so>` beside the executable
-fn write_reload_dylib(
-    args: &Args,
-    ctx: &Context,
-    k1: &mut TypedProgram,
-    ns_id: NamespaceId,
-) -> Result<()> {
+fn write_reload_dylib(ctx: &Context, k1: &mut TypedProgram, ns_id: NamespaceId) -> Result<()> {
     let ns_name = k1.ident_str(k1.namespaces.get(ns_id).name).to_string();
     let module_name = k1.program_name().to_string();
     let platform = k1.plan.config.target.platform();
@@ -2128,7 +1994,7 @@ fn write_reload_dylib(
         Err(e) => anyhow::bail!(report_codegen_error(k1, e)),
     };
     let objects =
-        write_unit_artifacts(args, ctx, k1, &roots, CgKind::ReloadDylib(ns_id), &unit_name, false)?;
+        write_unit_artifacts(ctx, k1, &roots, CgKind::ReloadDylib(ns_id), &unit_name, false)?;
     let k1: &TypedProgram = k1;
 
     let out_dir = k1.ast.idents.get_string(k1.config.out_dir);
@@ -2220,27 +2086,10 @@ mod compiler_test {
         });
     }
 
-    fn check_args(file: PathBuf) -> Args {
-        Args {
-            no_std: true,
-            emit_llvm: false,
-            optimize: false,
-            dump_module: false,
-            dump_ir: false,
-            dump_idents: false,
-            dump_trace: false,
-            debug: false,
-            sanitize: false,
-            filc: false,
-            profile: false,
-            chatty: false,
-            optimize_ir: true,
-            cache: true,
-            target: None,
-            define: vec![],
-            k1_home_override: None,
-            command: Command::Check { file: Some(file) },
-        }
+    fn check(file: &Path) -> CompileRequest {
+        let mut request = CompileRequest::new(file.to_path_buf(), Command::Check, None).unwrap();
+        request.build.default.no_std = true;
+        request
     }
 
     fn program_of(result: std::result::Result<TypedProgram, CompileProgramError>) -> TypedProgram {
@@ -2283,24 +2132,23 @@ mod compiler_test {
         fs::write(lib.join("lib.k1"), "fn one(): i32 { 1 }\n").unwrap();
         let main = app.join("main.k1");
         fs::write(&main, "fn main(): i32 { \"not an int\" }\n").unwrap();
-        let args = check_args(app.clone());
 
-        let cold = compile_program(&args);
+        let cold = compile_program(check(&app));
         assert!(cold.is_err(), "the broken app must fail typechecking");
         let cold = program_of(cold);
         assert_eq!(cold.restored_module_count, 0, "first compile has nothing to restore");
         let cache_dir = cold.cache_dir().to_path_buf();
         let stored = snapshot_count(&cache_dir);
 
-        let warm = program_of(compile_program(&args));
+        let warm = program_of(compile_program(check(&app)));
         assert_eq!(warm.restored_module_count, 2, "a still-broken app restores core, lib");
         assert_eq!(snapshot_count(&cache_dir), stored, "a restored run stores nothing new");
 
         fs::write(&main, "fn main(): i32 { lib/one() }\n").unwrap();
-        let fixed = compile_program(&args).ok().expect("fixed app must succeed");
+        let fixed = compile_program(check(&app)).ok().expect("fixed app must succeed");
         assert_eq!(fixed.restored_module_count, 2, "the fixed app restores core, lib");
 
-        let warm = compile_program(&args).ok().expect("warm compile must succeed");
+        let warm = compile_program(check(&app)).ok().expect("warm compile must succeed");
         assert_eq!(
             warm.restored_module_count, 2,
             "unchanged input restores core, lib; the app is never snapshotted"
@@ -2308,13 +2156,14 @@ mod compiler_test {
 
         for body in ["lib/one() + 1", "lib/one() + 2"] {
             fs::write(&main, format!("fn main(): i32 {{ {body} }}\n")).unwrap();
-            let edited = compile_program(&args).ok().expect("edited compile must succeed");
+            let edited = compile_program(check(&app)).ok().expect("edited compile must succeed");
             assert_eq!(edited.restored_module_count, 2, "an edited app restores core, lib");
             assert_eq!(snapshot_count(&cache_dir), stored, "editing the app stores nothing");
         }
 
         fs::write(lib.join("lib.k1"), "fn one(): i32 { 2 }\n").unwrap();
-        let dep_edited = compile_program(&args).ok().expect("dep-edited compile must succeed");
+        let dep_edited =
+            compile_program(check(&app)).ok().expect("dep-edited compile must succeed");
         assert_eq!(dep_edited.restored_module_count, 1, "an edited dep restores only core");
         assert_eq!(snapshot_count(&cache_dir), stored, "the dep's entry is replaced, not added");
 
@@ -2333,11 +2182,10 @@ mod compiler_test {
         fs::write(app.join("main.k1"), "fn main(): i32 { 0 }\n").unwrap();
         let no_deps = "fn module(_b: k1/build-config): k1/module { k1/module/new() }\n";
         fs::write(app.join("build.k1"), no_deps).unwrap();
-        let args = check_args(app.clone());
 
-        let cold = compile_program(&args).ok().expect("cold compile must succeed");
+        let cold = compile_program(check(&app)).ok().expect("cold compile must succeed");
         assert_eq!(cold.plan.modules().len(), 2, "core and app");
-        let warm = compile_program(&args).ok().expect("warm compile must succeed");
+        let warm = compile_program(check(&app)).ok().expect("warm compile must succeed");
         assert_eq!(warm.plan.modules().len(), 2, "the cached plan is reused");
 
         fs::write(
@@ -2345,11 +2193,11 @@ mod compiler_test {
             "fn module(_b: k1/build-config): k1/module { let m = k1/module/new(); m.dep(\"lib\"); m }\n",
         )
         .unwrap();
-        let with_dep = compile_program(&args).ok().expect("edited build.k1 must replan");
+        let with_dep = compile_program(check(&app)).ok().expect("edited build.k1 must replan");
         assert_eq!(with_dep.plan.modules().len(), 3, "core, lib and app");
 
         fs::remove_dir_all(&lib).unwrap();
-        let missing = compile_program(&args);
+        let missing = compile_program(check(&app));
         assert!(missing.is_err(), "a removed dep dir invalidates the plan");
 
         let _ = fs::remove_dir_all(&dir);
@@ -2363,16 +2211,15 @@ mod compiler_test {
         fs::create_dir_all(&dir).unwrap();
         let app = dir.join("app.k1");
         fs::write(&app, "fn main(): i32 { 0 }\n").unwrap();
-        let args = check_args(app.clone());
 
-        let cold = compile_program(&args).ok().expect("cold compile must succeed");
+        let cold = compile_program(check(&app)).ok().expect("cold compile must succeed");
         assert_eq!(cold.restored_module_count, 0, "first compile has nothing to restore");
 
-        let warm = compile_program(&args).ok().expect("warm compile must succeed");
+        let warm = compile_program(check(&app)).ok().expect("warm compile must succeed");
         assert_eq!(warm.restored_module_count, 1, "unchanged input restores only core");
 
         fs::write(&app, "fn main(): i32 {\n  println(\"v2\")\n  0\n}\n").unwrap();
-        let edited = compile_program(&args).ok().expect("edited compile must succeed");
+        let edited = compile_program(check(&app)).ok().expect("edited compile must succeed");
         assert_eq!(edited.restored_module_count, 1, "an edited app restores only core");
 
         let _ = fs::remove_dir_all(&dir);

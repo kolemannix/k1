@@ -720,7 +720,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         llvm_module.set_data_layout(&target_data.get_data_layout());
         llvm_module.set_triple(&machine.get_triple());
 
-        if !k1.config.emit_llvm {
+        if !k1.config.tools.emit_llvm {
             unsafe {
                 llvm_sys::core::LLVMContextSetDiscardValueNames(ctx.as_ctx_ref(), 1);
             }
@@ -1372,7 +1372,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let cpu = std::ffi::CString::new(cpu).unwrap();
         let features = std::ffi::CString::new(features).unwrap();
         let pic = k1.plan.config.target.arch() != compiler::Arch::Wasm;
-        let cache_dir = if k1.config.cache {
+        let cache_dir = if k1.config.tools.cache {
             let dir = format!("{}/thinlto", k1.ast.idents.get_string(k1.config.cache_dir));
             if let Err(e) = std::fs::create_dir_all(&dir) {
                 cgbail!(SpanId::NONE, "Failed to create ThinLTO cache dir {dir}: {e}");

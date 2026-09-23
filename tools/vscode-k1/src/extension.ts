@@ -136,7 +136,7 @@ function ensureClientForDocument(document: vscode.TextDocument): void {
   };
   const clientOptions: LanguageClientOptions = {
     initializationOptions: {
-      buildArgs: vscode.workspace.getConfiguration("k1").get<string[]>("buildArgs", [])
+      build: vscode.workspace.getConfiguration("k1").get<object>("build", {})
     },
     documentSelector: [
       { language: "k1", scheme: "file", pattern: `${root}/**/*.k1` }

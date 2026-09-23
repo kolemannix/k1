@@ -43,7 +43,7 @@ expanded. Errors are created with `make_error` (report.rs:135) and reported
 only when they reach a `report` call, so annotating an `Err` as it bubbles is
 sound; `with_bc_trace` is the precedent.
 
-Volume, `--chatty true --cache false check`: suite1 16 emitted / 3 kb, httpapp
+Volume, `--chatty --no-cache check`: suite1 16 emitted / 3 kb, httpapp
 43 / 9 kb, stdlib 11 / 6 kb, refchess / brotli / selfhost 1 each.
 
 Four findings that shape the answer:

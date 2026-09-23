@@ -7,8 +7,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
-use clap::Parser;
-use k1::compiler::{CompileProgramError, LspCompileOptions};
+use k1::compiler::{
+    Command, CompileProgramError, CompileRequest, LspCompileOptions, Target, compile_program,
+};
 use k1::lex::{self, Span, SpanId};
 use k1::lsp_support::CompletionCandidateKind;
 use k1::parse;
@@ -226,7 +227,7 @@ struct Backend {
     completion_compile_lock: tokio::sync::Mutex<()>,
     /// The client accepts `$/progress` (window.workDoneProgress)
     progress_supported: AtomicBool,
-    build_args: RwLock<Vec<String>>,
+    build_setting: RwLock<serde_json::Value>,
 }
 
 const PROGRESS_TICK: std::time::Duration = std::time::Duration::from_millis(100);
@@ -315,46 +316,20 @@ impl Backend {
             completion_generation: AtomicU32::new(0),
             completion_compile_lock: tokio::sync::Mutex::new(()),
             progress_supported: AtomicBool::new(false),
-            build_args: RwLock::new(Vec::new()),
+            build_setting: RwLock::new(serde_json::Value::Null),
         }
     }
 
-    fn check_args(&self, file: PathBuf) -> k1::compiler::Args {
-        let mut argv: Vec<std::ffi::OsString> = vec!["k1lsp".into()];
-        for arg in self.build_args.read().unwrap().iter() {
-            argv.push(arg.into());
-        }
-        argv.push("check".into());
-        argv.push(file.clone().into_os_string());
-        let mut args = match k1::compiler::Args::try_parse_from(&argv) {
-            Ok(args) => args,
-            Err(e) => {
-                error!("ignoring k1.buildArgs: {e}");
-                k1::compiler::Args::parse_from([
-                    "k1lsp".into(),
-                    "check".into(),
-                    file.into_os_string(),
-                ])
-            }
+    fn set_build_setting(&self, settings: &serde_json::Value) -> std::result::Result<bool, String> {
+        let Some(setting) = settings.get("build") else {
+            return Ok(false);
         };
-        args.debug = true;
-        args
-    }
-
-    fn set_build_args(&self, settings: &serde_json::Value) -> bool {
-        let Some(list) = settings.get("buildArgs").and_then(|v| v.as_array()) else {
-            return false;
-        };
-        let mut build_args = Vec::with_capacity(list.len());
-        for item in list {
-            if let Some(arg) = item.as_str() {
-                build_args.push(arg.to_string());
-            }
-        }
-        let mut current = self.build_args.write().unwrap();
-        let changed = *current != build_args;
-        *current = build_args;
-        changed
+        let mut scratch = CompileRequest::new(PathBuf::new(), Command::Check, None)?;
+        apply_build_setting(&mut scratch, setting).map_err(|e| format!("k1.build: {e}"))?;
+        let mut current = self.build_setting.write().unwrap();
+        let changed = *current != *setting;
+        *current = setting.clone();
+        Ok(changed)
     }
 
     /// Insert the completion marker at the cursor, replacing whatever token is there, and run a check compile;
@@ -403,26 +378,25 @@ impl Backend {
         source_overrides.insert(canonical_path, spliced);
         let lsp_options =
             LspCompileOptions { source_overrides, completion: true, progress_sink: None };
-        let args = self.check_args(root_path);
+        let setting = self.build_setting.read().unwrap().clone();
 
         let my_generation = self.completion_generation.fetch_add(1, Ordering::SeqCst) + 1;
         let _compile_guard = self.completion_compile_lock.lock().await;
         if self.completion_generation.load(Ordering::SeqCst) != my_generation {
             return Err(Error::request_cancelled());
         }
-        let program =
-            tokio::task::spawn_blocking(move || {
-                match k1::compiler::compile_program_ext(&args, lsp_options) {
-                    Ok(program) => Some(program),
-                    Err(CompileProgramError::TyperFailure(program)) => Some(*program),
-                    Err(CompileProgramError::Build(message)) => {
-                        error!("{message}");
-                        None
-                    }
+        let program = tokio::task::spawn_blocking(move || {
+            match compile_check(root_path, &setting, lsp_options) {
+                Ok(program) => Some(program),
+                Err(CompileProgramError::TyperFailure(program)) => Some(*program),
+                Err(CompileProgramError::Build(message)) => {
+                    error!("{message}");
+                    None
                 }
-            })
-            .await
-            .map_err(|_| Error::internal_error())?;
+            }
+        })
+        .await
+        .map_err(|_| Error::internal_error())?;
         Ok(program)
     }
 
@@ -552,13 +526,12 @@ impl Backend {
         } else {
             None
         };
-        let args = self.check_args(src_path);
         let lsp_options = LspCompileOptions { progress_sink, ..LspCompileOptions::default() };
-        let compile_result = tokio::task::spawn_blocking(move || {
-            k1::compiler::compile_program_ext(&args, lsp_options)
-        })
-        .await
-        .expect("check compile panicked");
+        let setting = self.build_setting.read().unwrap().clone();
+        let compile_result =
+            tokio::task::spawn_blocking(move || compile_check(src_path, &setting, lsp_options))
+                .await
+                .expect("check compile panicked");
         let mut compiled_module = match compile_result {
             Ok(module) => {
                 info!(
@@ -726,8 +699,10 @@ impl LanguageServer for Backend {
         let progress_supported =
             params.capabilities.window.as_ref().and_then(|w| w.work_done_progress).unwrap_or(false);
         self.progress_supported.store(progress_supported, Ordering::Relaxed);
-        if let Some(options) = &params.initialization_options {
-            self.set_build_args(options);
+        if let Some(options) = &params.initialization_options
+            && let Err(e) = self.set_build_setting(options)
+        {
+            self.client.show_message(MessageType::ERROR, e).await;
         }
         info!("Got initialize params: {params:#?}");
         Ok(res)
@@ -976,8 +951,13 @@ impl LanguageServer for Backend {
 
     async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
         let settings = params.settings.get("k1").unwrap_or(&params.settings);
-        if !self.set_build_args(settings) || self.with_k1(|_| ()).is_none() {
-            return;
+        match self.set_build_setting(settings) {
+            Ok(true) if self.with_k1(|_| ()).is_some() => {}
+            Ok(_) => return,
+            Err(e) => {
+                self.client.show_message(MessageType::ERROR, e).await;
+                return;
+            }
         }
         self.compile().await;
         self.send_diagnostics().await;
@@ -1246,4 +1226,57 @@ async fn main() {
 
     let (service, socket) = LspService::new(Backend::new);
     Server::new(stdin, stdout, socket).serve(service).await;
+}
+
+fn compile_check(
+    file: PathBuf,
+    setting: &serde_json::Value,
+    lsp: LspCompileOptions,
+) -> std::result::Result<TypedProgram, CompileProgramError> {
+    let mut request =
+        CompileRequest::new(file, Command::Check, None).map_err(CompileProgramError::Build)?;
+    request.build.default.debug = true;
+    apply_build_setting(&mut request, setting).expect("k1.build is validated when set");
+    request.lsp = lsp;
+    compile_program(request)
+}
+
+fn apply_build_setting(
+    request: &mut CompileRequest,
+    setting: &serde_json::Value,
+) -> std::result::Result<(), String> {
+    use serde_json::Value;
+    let fields = match setting {
+        Value::Null => return Ok(()),
+        Value::Object(fields) => fields,
+        other => return Err(format!("expected an object, got {other}")),
+    };
+    let build = &mut request.build.default;
+    for (key, value) in fields {
+        match (key.as_str(), value) {
+            ("target", Value::String(name)) => match Target::parse(name) {
+                Some(target) => build.target = target,
+                None => return Err(format!("unknown target {name}")),
+            },
+            ("cpu", Value::String(cpu)) => build.cpu = request.strings.intern(cpu),
+            ("features", Value::String(features)) => {
+                build.features = request.strings.intern(features)
+            }
+            ("optimize", Value::Bool(b)) => build.optimize = *b,
+            ("debug", Value::Bool(b)) => build.debug = *b,
+            ("no-std", Value::Bool(b)) => build.no_std = *b,
+            ("sanitize", Value::Bool(b)) => build.sanitize = *b,
+            ("filc", Value::Bool(b)) => build.filc = *b,
+            ("options", Value::Array(items)) => {
+                for item in items {
+                    let Some(option) = item.as_str() else {
+                        return Err(format!("options holds strings, got {item}"));
+                    };
+                    request.build.options.push(option.to_string());
+                }
+            }
+            _ => return Err(format!("unexpected {key}: {value}")),
+        }
+    }
+    Ok(())
 }

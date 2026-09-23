@@ -137,7 +137,7 @@ default settings unless listed. Debug info is off everywhere.
 
 | Language | typecheck only | debug build | optimized build |
 |---|---|---|---|
-| K1 | `k1 --cache false check f.k1` | `k1 --cache false build f.k1` | `k1 --cache false --optimize build f.k1` |
+| K1 | `k1 --no-cache check f.k1` | `k1 --no-cache build f.k1` | `k1 --no-cache --optimize build f.k1` |
 | C | `clang -fsyntax-only f.c` | `clang -O0 -o out f.c` | `clang -O2 -o out f.c` |
 | C++ (both rows) | `clang++ -std=c++20 -fsyntax-only f.cpp` | `clang++ -std=c++20 -O0 -o out f.cpp` | `clang++ -std=c++20 -O2 -o out f.cpp` |
 | Rust | `rustc --edition 2021 --emit=metadata f.rs` | `rustc --edition 2021 -C opt-level=0 f.rs` | `rustc --edition 2021 -C opt-level=3 f.rs` |
@@ -156,8 +156,8 @@ default settings unless listed. Debug info is off everywhere.
   unit, then LLVM's ThinLTO backend, so it is closer to
   `clang -O3 -flto=thin` than to the single-TU `-O2`/`opt-level=3`/
   `ReleaseFast` rows, none of which do LTO.
-- K1 codegens in parallel units and links with its bundled lld. `--cache
-  false` also disables restoring core and std from K1's disk cache, so every
+- K1 codegens in parallel units and links with its bundled lld. `--no-cache`
+  also disables restoring core and std from K1's disk cache, so every
   K1 run re-parses and re-typechecks the whole standard library from source;
   the section "K1 with a warm library cache" shows the cost of that choice.
 - Zig gets `-target aarch64-macos`: 0.14.0's native detection resolves to
@@ -197,7 +197,7 @@ default settings unless listed. Debug info is off everywhere.
 - clang and rustc have no caches; C/C++ system headers are parsed on every
   run (no modules, no PCH).
 - The "fully cold" table below shows the Go and Zig hello-world cost with
-  their caches emptied before every run, next to K1's `--cache false`.
+  their caches emptied before every run, next to K1's `--no-cache`.
 
 
 ### typecheck only
@@ -234,12 +234,12 @@ a restore check for `dotnet build`, on four lines of source.
 
 
 Same hello world with the toolchain's own library cache emptied before every
-run. K1's `--cache false` already is that mode (core and std typechecked from
+run. K1's `--no-cache` already is that mode (core and std typechecked from
 source on every run), so its row repeats the table above.
 
 | Toolchain | check wall s | check cpu s |
 |---|---|---|
-| K1 (`--cache false`, same as above) | 0.018 ± 0.001 (0.017) | 0.02 |
+| K1 (`--no-cache`, same as above) | 0.018 ± 0.001 (0.017) | 0.02 |
 | Go, empty GOCACHE | — | — |
 | Zig, empty global + local cache | 0.169 ± 0.004 (0.163) | 0.62 |
 
@@ -251,7 +251,7 @@ source gets a fresh nonce before every run (a global `NONCE` that `main`
 reads), so the program itself is never restored. This is the direct
 counterpart of the warm GOCACHE and warm Zig global cache above, with two
 K1-specific effects: with the cache on, every run also *stores* a snapshot
-of the whole typed program (`k1 --chatty true` reports it as `snapshot store`),
+of the whole typed program (`k1 --chatty` reports it as `snapshot store`),
 which can outweigh the time saved by restoring modules, and `--optimize` also uses K1's
 ThinLTO backend cache under `.k1-out/cache/thinlto`, so codegen units
 whose bitcode did not change (everything but the unit holding `main`) skip
@@ -261,8 +261,8 @@ the LLVM backend.
 
 | Language | N=100 wall s | N=100 cpu s |
 |---|---|---|
-| K1 `--cache false` (core+std from source) | 0.038 ± 0.001 (0.036) | 0.04 |
-| K1 `--cache true` (core+std restored, program changed) | 0.035 ± 0.002 (0.033) | 0.04 |
+| K1 `--no-cache` (core+std from source) | 0.038 ± 0.001 (0.036) | 0.04 |
+| K1 warm cache (core+std restored, program changed) | 0.035 ± 0.002 (0.033) | 0.04 |
 
 
 `dogfood/brotli` is a K1 port of the brotli quality-0/1 encoders that is
@@ -284,7 +284,7 @@ since K1's build is parallel.
 | C: 4 files, 4 `clang` processes in parallel | 0.079 ± 0.003 (0.075) | 0.20 |
 
 
-From `k1 --cache false --chatty true`. "excl ms" is exclusive time per kind
+From `k1 --no-cache --chatty`. "excl ms" is exclusive time per kind
 of work; codegen and passes run on several threads (their rows report both).
 
 ```text
@@ -382,7 +382,7 @@ program brotli took 11ms (954849.15 line/s, 11041 lines)
   `runtime/` benchmarks in this directory's sibling measure what that
   deferral costs.
 - Go's build cache and Zig's global cache are warm in the main tables; K1's
-  is cold (`--cache false`). The separate K1 warm-cache rows measure the
+  is cold (`--no-cache`). The separate K1 warm-cache rows measure the
   effect of restoring and storing snapshots and reusing LLVM artifacts.
 - `-fsyntax-only` and `--emit=metadata` stop after semantic analysis;
   `k1 check` also runs the compile-time VM for `#static` code and lowers

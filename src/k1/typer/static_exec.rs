@@ -1328,7 +1328,7 @@ impl TypedProgram {
                 }
             }
         }
-        if self.config.chatty {
+        if self.config.tools.chatty {
             let elapsed = start.elapsed();
             eprintln!("Wrote {} emitted sources in {:.2?}", self.emitted_sources.len(), elapsed);
             let mut real_files = 0usize;

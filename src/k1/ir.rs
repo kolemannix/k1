@@ -1777,7 +1777,7 @@ impl<'k1> Builder<'k1> {
     }
 
     pub fn optimize_enabled(&self) -> bool {
-        self.k1.config.optimize_ir
+        self.k1.config.tools.optimize_ir
     }
 
     fn make_inst(&mut self, inst: Inst, comment: IrComment, debug_info: IrDebugInfo) -> InstId {

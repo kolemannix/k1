@@ -44,13 +44,29 @@
           "default": "",
           "description": "Absolute path to the k1lsp binary. If empty, the extension will try $K1_HOME/bin/k1lsp then ~/.k1/bin/k1lsp."
         },
-        "k1.buildArgs": {
-          "type": "array",
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "description": "Build flags the language server checks with, e.g. [\"--target\", \"wasm64-wasi\", \"-D\", \"web\"]."
+        "k1.build": {
+          "type": "object",
+          "default": {},
+          "description": "The build the language server checks: k1/build-config fields plus the -D options the primary's fn build reads.",
+          "additionalProperties": false,
+          "properties": {
+            "target": {
+              "type": "string",
+              "enum": ["intel64-linux", "arm64-macos", "wasm64-wasi", "intel64-bare", "arm64-bare", "wasm64-bare"]
+            },
+            "cpu": { "type": "string" },
+            "features": { "type": "string" },
+            "optimize": { "type": "boolean" },
+            "debug": { "type": "boolean" },
+            "no-std": { "type": "boolean" },
+            "sanitize": { "type": "boolean" },
+            "filc": { "type": "boolean" },
+            "options": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "NAME[=VALUE] options, as -D on the command line."
+            }
+          }
         },
         "k1.languageServer.args": {
           "type": "array",

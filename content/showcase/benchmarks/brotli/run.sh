@@ -7,7 +7,7 @@ cenc="$root/modules/cbrotli/vendor/enc"
 runs=${RUNS:-1}
 mkdir -p gen
 
-k1 --optimize --cache false build "$mod" > gen/build.log 2>&1
+k1 --optimize --no-cache build "$mod" > gen/build.log 2>&1
 cp "$mod/.k1-out/brotli" gen/brotli-opt
 rm -f gen/bench-*.log
 
@@ -44,8 +44,8 @@ rm -f gen/bench-*.log
     echo "### compile time"
     echo
     hyperfine --warmup 1 --runs 5 --export-markdown gen/compile.md \
-      -n "k1 --optimize build dogfood/brotli" "k1 --optimize --cache false build $mod" \
-      -n "k1 build dogfood/brotli" "k1 --cache false build $mod" \
+      -n "k1 --optimize build dogfood/brotli" "k1 --optimize --no-cache build $mod" \
+      -n "k1 build dogfood/brotli" "k1 --no-cache build $mod" \
       -n "cc -O2 -c compress_fragment.c compress_fragment_two_pass.c encode.c" \
         "cd gen && cc -O2 -I$root/modules/cbrotli/vendor/include -c $cenc/compress_fragment.c $cenc/compress_fragment_two_pass.c $cenc/encode.c" \
       > gen/hyperfine.log 2>&1

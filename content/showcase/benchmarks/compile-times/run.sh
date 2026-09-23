@@ -82,7 +82,7 @@ srcof() {
 cmd() {
   local src=$3 out=$4
   case "$1-$2" in
-    k1-*) echo "k1 --cache false $(k1mode "$2") $src" ;;
+    k1-*) echo "k1 --no-cache $(k1mode "$2") $src" ;;
     k1warm-*) echo "k1 $(k1mode "$2") $src" ;;
     c-check) echo "clang -fsyntax-only $src" ;;
     c-debug) echo "clang -O0 -o ${out}_c $src" ;;
@@ -144,11 +144,11 @@ done
 
 big=${SIZES##* }
 for mode in $MODES; do
-  k1 --cache false --chatty true $(k1mode "$mode") "gen/n$big/stress.k1" 2> "$RES/k1-chatty-$mode-$big.txt" > /dev/null
+  k1 --no-cache --chatty $(k1mode "$mode") "gen/n$big/stress.k1" 2> "$RES/k1-chatty-$mode-$big.txt" > /dev/null
 done
 
 for mode in $MODES; do
-  hf "brotli-k1-$mode" --prepare true "k1 --cache false $(k1mode "$mode") $REPO/dogfood/brotli"
+  hf "brotli-k1-$mode" --prepare true "k1 --no-cache $(k1mode "$mode") $REPO/dogfood/brotli"
 done
 (
   cd gen/brotli-c
@@ -158,7 +158,7 @@ done
   done
 )
 last=${MODES##* }
-k1 --cache false --chatty true $(k1mode "$last") "$REPO/dogfood/brotli" 2> "$RES/k1-chatty-brotli-$last.txt" > /dev/null
+k1 --no-cache --chatty $(k1mode "$last") "$REPO/dogfood/brotli" 2> "$RES/k1-chatty-brotli-$last.txt" > /dev/null
 for f in $BRO_SRC; do clang -M $BRO_INC "$f"; done | tr ' \\' '\n\n' | grep -E '\.(h|c)$' | sed "s|^$REPO/||" | grep -v '^/' | sort -u > "$RES/brotli-c-inputs.txt"
 
 echo "load-end: $(uptime | sed 's/.*load averages: //')" >> "$RES/versions.txt"

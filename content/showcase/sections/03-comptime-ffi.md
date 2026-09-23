@@ -268,7 +268,7 @@ $ grep -o '^@k1.static.[0-9]*.elems = internal unnamed_addr constant \[32768 x i
 ```
 
 The whole compile, bake included, is 78 ms wall once `libatlas.dylib`
-exists (`--chatty true`: 21 VM runs totalling 0.9 ms, 50 ms of that wall in
+exists (`--chatty`: 21 VM runs totalling 0.9 ms, 50 ms of that wall in
 the linker). The `glyphs` span survives the boundary too: it is a span of
 20-byte structs mixing `u16` and `f32` fields, laid out exactly as
 `stbtt_bakedchar`, and `print-glyph` indexes it at runtime.

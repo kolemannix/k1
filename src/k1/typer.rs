@@ -2851,7 +2851,7 @@ impl TypedProgram {
         mut lsp: compiler::LspCompileOptions,
     ) -> TypedProgram {
         let progress_sink = lsp.progress_sink.take().or_else(|| {
-            (config.chatty && std::io::stderr().is_terminal())
+            (config.tools.chatty && std::io::stderr().is_terminal())
                 .then_some(trace::LiveProgressSink::Stderr)
         });
         let completion = lsp
@@ -2984,7 +2984,7 @@ impl TypedProgram {
             ir: ir::ProgramIr::make(),
             bc: crate::bc::BcProgram::make(),
 
-            trace: trace::Trace::make(clock, progress_sink, config.record_trace),
+            trace: trace::Trace::make(clock, progress_sink, config.tools.record_trace()),
             global_id_k1_arena: None,
             megarepl: None,
             inputs_hash,
@@ -3032,7 +3032,7 @@ impl TypedProgram {
         debug_assert_eq!(module_id.as_u32() as usize, index + 1);
         self.inputs_hash = module_hash;
         if index < snapshot_count
-            && self.config.cache
+            && self.config.tools.cache
             && self.lsp.source_overrides.is_empty()
             && !self.lsp.completion
             && self.megarepl.is_none()
@@ -16798,7 +16798,7 @@ impl TypedProgram {
                 sum = sum.wrapping_add(
                     crate::snap::InputsHash(0).add(&[name.as_bytes(), signature.as_bytes()]).0,
                 );
-                if self.config.chatty {
+                if self.config.tools.chatty {
                     writeln!(listing, "  {name}: {signature}").unwrap();
                 }
             }
@@ -16819,13 +16819,13 @@ impl TypedProgram {
                         .add(&[b"let", name.as_bytes(), signature.as_bytes()])
                         .0,
                 );
-                if self.config.chatty {
+                if self.config.tools.chatty {
                     writeln!(listing, "  let {name}: {signature}").unwrap();
                 }
             }
         }
         let hash = crate::snap::InputsHash(sum).add(&[crate::BUILD_ID.as_bytes()]).0 as u64;
-        if self.config.chatty {
+        if self.config.tools.chatty {
             let ns_name = self.ident_str(self.namespaces.get(ns_id).name);
             eprint!("reload api of {ns_name} ({hash:016x}):\n{listing}");
         }

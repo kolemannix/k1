@@ -1,11 +1,9 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
 
-use clap::ValueEnum;
-
 use super::*;
 use crate::compiler::{
-    BuildConfig, BuildRequest, CommandKind, CompileProgramError, CompilerConfig, LspCompileOptions,
+    BuildConfig, BuildRequest, Command, CompileProgramError, CompilerConfig, LspCompileOptions,
     ModuleSources, Target,
 };
 use crate::parse::Interner;
@@ -41,10 +39,8 @@ pub fn plan_in_host(
     primary_name: StringId,
 ) -> Result<(BuildPlan, Box<TypedProgram>), CompileProgramError> {
     let mut ast = ParsedProgram::make();
-    let host_config = CompilerConfig {
-        command: CommandKind::Check,
-        ..config.reintern(config_idents, &ast.idents)
-    };
+    let host_config =
+        CompilerConfig { command: Command::Check, ..config.reintern(config_idents, &ast.idents) };
     ast.name_id = ast.idents.intern(config_idents.get_string(primary_name));
     let k1_home = ast.idents.get_string(host_config.k1_home);
     let mut host_strings = Interner::make_small();
@@ -99,7 +95,7 @@ impl TypedProgram {
         }
 
         let order = self.order_modules(&planner)?;
-        let force_primary = matches!(request.command, CommandKind::Setup { force: true });
+        let force_primary = matches!(request.command, Command::Setup { force: true });
         self.run_setups(&planner, &order, build_value.unwrap(), force_primary)?;
         Ok(self.finish_plan(planner, &order))
     }
@@ -515,7 +511,7 @@ impl TypedProgram {
         span: SpanId,
     ) -> K1Result<BuildConfig> {
         let target_name = self.enum_name(self.static_field(value, "target"));
-        let Ok(target) = Target::from_str(target_name, false) else {
+        let Some(target) = Target::parse(target_name) else {
             kbail!(self, span, "fn build returned an unknown target {}", target_name);
         };
         Ok(BuildConfig {
@@ -538,7 +534,7 @@ impl TypedProgram {
         let options_type = self.field_type(type_id, "options");
         let option_type = self.get_linear_container_element(options_type).unwrap();
         let mut options: SV8<StaticValueId> = SV8::new();
-        for option in request.options {
+        for option in &request.options {
             let (name, value) = option.split_once('=').unwrap_or((option, ""));
             let fields = [("name", self.static_str(name)), ("value", self.static_str(value))];
             options.push(self.encode_struct(option_type, &fields));

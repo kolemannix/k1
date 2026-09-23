@@ -52,12 +52,13 @@ K1 language reference for agents: `ai_docs/k1-syntax-basics.md` and
 - Binaries: `k1` (`src/bin/compiler_main.rs`), `k1_test`
   (`src/bin/test_suite.rs`), `lsp` (`src/bin/lsp_main.rs`, needs
   `--features lsp`).
-- CLI: `k1 [flags] <check|build|run|test|server|setup|clean> [path]`, aliases
-  `c b r t`. Path is a file or a module dir. `-D name[=value]` (before the
-  command) reaches the primary's `fn build`. Useful flags: `--optimize`,
-  `--debug`, `--no-std`, `--cache false`, `--target <intel64-linux|arm64-macos|
-  wasm64-wasi|intel64-bare|arm64-bare|wasm64-bare>`, `--emit-llvm`,
-  `--dump-module`, `--dump-trace`, `--chatty true` (timing summary), `--filc`.
+- CLI (`k1 --help`, lexopt): `k1 <check|build|run|test|server|setup|clean>
+  [path] [flags] [-- program args]`, aliases `c b r t`; flags go anywhere.
+  Path is a file or a module dir. `-D name[=value]` reaches the primary's
+  `fn build`. Useful flags: `--optimize`, `--debug`, `--no-std`, `--no-cache`,
+  `--target <intel64-linux|arm64-macos|wasm64-wasi|intel64-bare|arm64-bare|
+  wasm64-bare>`, `--emit-llvm`, `--dump-module`, `--dump-trace`, `--chatty`
+  (timing summary), `--filc`.
 - Output goes to `<module dir>/.k1-out/` (executable, `.ll`, dumps, disk cache
   under `cache/`, setup stamps under `setup/`).
 
@@ -90,7 +91,8 @@ for compile-time execution, codegen_llvm for binaries.
 
 - `lib.rs`: crate root, `nz_u32_id!` id newtypes, `SV2/4/8` smallvec aliases,
   `DepHash/DepEq`.
-- `compiler.rs`: CLI `Args`/`Command`, `CompilerConfig`, `BuildConfig` (target,
+- `compiler.rs`: `CompileRequest` (the compile API; the CLI in `compiler_main.rs`
+  builds one), `Command`, `ToolFlags`, `CompilerConfig`, `BuildConfig` (target,
   cpu, features, flags; one resolver), `Target` = arch x platform enum, the
   compile pipeline (plan, up-front source reads on reader threads, prefix
   snapshot restore), setup stamps, linking through `src/lld_shim.cpp`,
@@ -146,7 +148,7 @@ for compile-time execution, codegen_llvm for binaries.
   program browser, `/size` code-size treemap; `megarepl.css`, `size.js`).
 - `lsp_support.rs` + `src/bin/lsp_main.rs`: hover/goto/completion over
   `ls_entities`, compiles the edited file's module with the client's
-  `k1.buildArgs` CLI flags (e.g. `--target`, `-D`); `build.k1` errors come
+  `k1.build` setting (`k1/build-config` fields plus `options`); `build.k1` errors come
   back from H.
 - Not compiled: `codegen_legacy.rs.old`, `vmtw/binop.rs` (`vmtw` is commented
   out in `lib.rs`).
@@ -157,7 +159,7 @@ for compile-time execution, codegen_llvm for binaries.
   `//errmsg: <substring>`, `//exitcode: <n> [stderr substring]`,
   `//abortmsg: <substring>`, else exit 0.
 - `test_src/<dir>/`: module cases (`suite1`, `stdlib`, `ffi_abi_test`,
-  `dep_*_test`). `k1_test` runs every top-level file and dir in parallel; it
+  `dep_*_test`). `k1_test` runs every top-level file and dir in parallel (`--serial` for one at a time); it
   does not recurse.
 - `test_src/suite1`: ~110 files, each `ns foo` with `fn test()`, registered by
   hand in `suite1.k1` (`low`, `moderate`, `core-lib`, `main`). Nearly every

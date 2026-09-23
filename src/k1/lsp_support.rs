@@ -563,7 +563,7 @@ pub fn get_expr_at_point(
 mod completion_tests {
     use super::*;
     use crate::compiler::{
-        Args, Command, CompileProgramError, LspCompileOptions, compile_program_ext,
+        Command, CompileProgramError, CompileRequest, LspCompileOptions, compile_program,
     };
 
     const M: &str = COMPLETION_MARKER;
@@ -602,30 +602,10 @@ mod completion_tests {
         if let Some(spliced) = spliced {
             source_overrides.insert(crate::kpath::canonicalize_owned(&path).unwrap(), spliced);
         }
-        let args = Args {
-            no_std: false,
-            emit_llvm: false,
-            optimize: false,
-            dump_module: false,
-            dump_ir: false,
-            debug: false,
-            sanitize: false,
-            profile: false,
-            chatty: false,
-            optimize_ir: true,
-            target: None,
-            define: vec![],
-            cache: false,
-            filc: false,
-            k1_home_override: None,
-            command: Command::Check { file: Some(path) },
-            dump_idents: false,
-            dump_trace: false,
-        };
-        match compile_program_ext(
-            &args,
-            LspCompileOptions { source_overrides, completion: true, progress_sink: None },
-        ) {
+        let mut request = CompileRequest::new(path, Command::Check, None).unwrap();
+        request.tools.cache = false;
+        request.lsp = LspCompileOptions { source_overrides, completion: true, progress_sink: None };
+        match compile_program(request) {
             Ok(program) => Box::new(program),
             Err(CompileProgramError::TyperFailure(program)) => program,
             Err(CompileProgramError::Build(message)) => panic!("{message}"),

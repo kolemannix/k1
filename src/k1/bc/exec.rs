@@ -276,7 +276,7 @@ fn exec_loop(
     let mut fp: *mut u8 = top_fp;
     let mut ret_reg: Value = Value::u64(0);
     let mut instrs_run = 0;
-    let count_ops = k1.config.chatty;
+    let count_ops = k1.config.tools.chatty;
     let mut op_counts = [0u64; OPCODE_COUNT as usize];
 
     // Callers wrap uses in `unsafe`; pointer arithmetic + deref together
