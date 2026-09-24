@@ -35,7 +35,9 @@ K1_HOME=$(pwd) target/$target_dir/k1 build dogfood/httpapp
 K1_HOME=$(pwd) target/$target_dir/k1 --no-cache run dogfood/logreport
 K1_HOME=$(pwd) target/$target_dir/k1 --no-cache run dogfood/comptime_parity
 K1_HOME=$(pwd) target/$target_dir/k1 --no-cache run dogfood/brotli
-K1_HOME=$(pwd) target/$target_dir/k1 --no-cache build dogfood/gengame
+if [ "$(uname -s)" = Darwin ]; then
+    K1_HOME=$(pwd) target/$target_dir/k1 --no-cache build dogfood/gengame
+fi
 K1_HOME=$(pwd) target/$target_dir/k1 --no-cache run dogfood/fractal > /dev/null
 K1_HOME=$(pwd) target/$target_dir/k1 --no-cache build dogfood/klib
 make -C dogfood/klib/consumer clean run

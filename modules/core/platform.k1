@@ -613,29 +613,47 @@ ns platform {
         }
       }
 
-      // static execution runs on the host, so host-keyed there, target-keyed otherwise
-      fn on-macos(): bool {
-        if k1/is-static { #if k1/host-platform is { :posix-macos -> true, :posix-linux or :wasi or :bare -> false } }
-        else { #if k1/platform is { :posix-macos -> true, :posix-linux or :wasi or :bare -> false } }
-      }
-
       let(mutable) timebase: c/mach-timebase = .{ numer = 0, denom = 0 }
 
+      fn mach-counter-to-nanos(counter: u64): u64 {
+        if timebase.denom == 0 { let _ = c/mach_timebase_info(timebase.&) }
+        counter * timebase.numer.widen[u64] / timebase.denom.widen[u64]
+      }
+
+      fn monotonic-nanos(): u64 {
+        let monotonic: u32 = 1
+        let ts: c/timespec = .{ tv_sec = 0, tv_nsec = 0 }
+        let _ = c/clock_gettime(monotonic, ts.&)
+        ts.tv_sec * 1_000_000_000 + ts.tv_nsec
+      }
+
+      // static execution runs on the host, so host-keyed there, target-keyed otherwise
       fn counter(): u64 {
-        if on-macos() c/mach_absolute_time()
-        else {
-          let monotonic: u32 = 1
-          let ts: c/timespec = .{ tv_sec = 0, tv_nsec = 0 }
-          let _ = c/clock_gettime(monotonic, ts.&)
-          ts.tv_sec * 1_000_000_000 + ts.tv_nsec
+        if k1/is-static {
+          #if k1/host-platform is {
+            :posix-macos -> c/mach_absolute_time(),
+            :posix-linux or :wasi or :bare -> monotonic-nanos()
+          }
+        } else {
+          #if k1/platform is {
+            :posix-macos -> c/mach_absolute_time(),
+            :posix-linux or :wasi or :bare -> monotonic-nanos()
+          }
         }
       }
 
       fn counter-to-nanos(counter: u64): u64 {
-        if on-macos() {
-          if timebase.denom == 0 { let _ = c/mach_timebase_info(timebase.&) }
-          counter * timebase.numer.widen[u64] / timebase.denom.widen[u64]
-        } else counter
+        if k1/is-static {
+          #if k1/host-platform is {
+            :posix-macos -> mach-counter-to-nanos(counter),
+            :posix-linux or :wasi or :bare -> counter
+          }
+        } else {
+          #if k1/platform is {
+            :posix-macos -> mach-counter-to-nanos(counter),
+            :posix-linux or :wasi or :bare -> counter
+          }
+        }
       }
 
       fn thread-spawn(function: ptr, input: ptr): ptr {
