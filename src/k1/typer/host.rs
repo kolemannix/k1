@@ -148,9 +148,9 @@ impl TypedProgram {
         for (index, read) in pending {
             if let Some(read) = read {
                 let module = planner.entries[index].module;
-                let files = self.read_module_sources(read)?;
-                let hash = files[0].content_hash;
                 let name = self.ast.idents.intern(planner.plan.get(module.name));
+                let files = self.read_module_sources(name, read)?;
+                let hash = files[0].content_hash;
                 let dir = self.ast.idents.intern(planner.plan.get(module.path));
                 planner.entries[index].host = Some(self.compile_module(name, dir, files)?);
                 planner.entries[index].module.build_file_hash = Some(hash);

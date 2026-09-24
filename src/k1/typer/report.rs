@@ -371,14 +371,9 @@ impl TypedProgram {
             self.span_location(SpanId::from_u32(key).unwrap()).unwrap_or_else(|| "?".to_string())
         };
         let mut label = match frame.kind {
-            TraceKind::SetupStamp | TraceKind::SetupFn => {
-                self.ident_str(StringId::from_u32(key).unwrap()).to_string()
-            }
             TraceKind::PlanCheck | TraceKind::HostPlan => self.program_name().to_string(),
             TraceKind::HostWave => format!("wave {key}"),
-            TraceKind::ModuleCompile
-            | TraceKind::ModuleRead
-            | TraceKind::SnapStore
+            TraceKind::SnapStore
             | TraceKind::PassUses
             | TraceKind::PassNamespaces
             | TraceKind::PassTypes
@@ -386,9 +381,12 @@ impl TypedProgram {
             | TraceKind::PassBodies => {
                 self.ident_str(self.modules.get(ModuleId::from_u32(key).unwrap()).name).to_string()
             }
-            TraceKind::Parse => {
-                let filename = self.ident_str(StringId::from_u32(key).unwrap());
-                filename.to_string()
+            TraceKind::SetupStamp
+            | TraceKind::SetupFn
+            | TraceKind::ModuleRead
+            | TraceKind::ModuleCompile
+            | TraceKind::Parse => {
+                self.ident_str(StringId::from_u32(key).unwrap()).to_string()
             }
             TraceKind::TypeInfer
             | TraceKind::StaticExec

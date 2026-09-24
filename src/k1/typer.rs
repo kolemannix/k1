@@ -3012,8 +3012,9 @@ impl TypedProgram {
         let mut index = 0;
         for module_sources in sources {
             if index >= first {
-                let frame = self.trace_push(TraceKind::ModuleCompile, index as u32 + 1, 0);
-                let result = self.load_plan_module(index, module_sources, snapshot_count);
+                let name = self.ast.idents.intern(self.plan.get(self.plan.module(index).name));
+                let frame = self.trace_push(TraceKind::ModuleCompile, name.as_u32(), 0);
+                let result = self.load_plan_module(index, name, module_sources, snapshot_count);
                 self.trace_pop(frame);
                 result?;
             }
@@ -3025,13 +3026,13 @@ impl TypedProgram {
     fn load_plan_module(
         &mut self,
         index: usize,
+        name: StringId,
         sources: compiler::ModuleSources,
         snapshot_count: usize,
     ) -> K1Result<()> {
         let planned = *self.plan.module(index);
-        let files = self.read_module_sources(sources)?;
+        let files = self.read_module_sources(name, sources)?;
         let module_hash = snapshot::module_inputs_hash(self.inputs_hash, &self.plan, index, &files);
-        let name = self.ast.idents.intern(self.plan.get(planned.name));
         let home_dir = self.ast.idents.intern(self.plan.module_dir(&planned));
         let module_id = self.compile_module(name, home_dir, files)?;
         debug_assert_eq!(module_id.as_u32() as usize, index + 1);
@@ -3065,9 +3066,10 @@ impl TypedProgram {
 
     pub(crate) fn read_module_sources(
         &mut self,
+        name: StringId,
         sources: compiler::ModuleSources,
     ) -> K1Result<Vec<compiler::SourceFile>> {
-        let frame = self.trace_push(TraceKind::ModuleRead, self.modules.next_id().as_u32(), 0);
+        let frame = self.trace_push(TraceKind::ModuleRead, name.as_u32(), 0);
         let files = sources.join();
         self.trace_pop(frame);
         files.map_err(|e| self.error_from_anyhow(anyhow::anyhow!(e), SpanId::NONE))
