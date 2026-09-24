@@ -1230,6 +1230,9 @@ impl BuiltinTypes {
     pub fn type_info(&self) -> TypeId {
         self.types_type_info.expect("type-info builtin missing")
     }
+    pub fn types_layout(&self) -> TypeId {
+        self.types_layout.expect("layout builtin missing")
+    }
 }
 
 #[repr(u8)]

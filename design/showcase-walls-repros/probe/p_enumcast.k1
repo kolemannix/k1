@@ -1,8 +1,0 @@
-type errno = either(i32) { noent = 2, acces = 13 }
-fn main(): i32 {
-  let e: errno = mem/bitcast[i32, errno](13)
-  println(e.enum-name())
-  let f = (2: i32).as[errno]
-  println(f.enum-name())
-  0
-}

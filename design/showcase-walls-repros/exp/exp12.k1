@@ -1,6 +1,0 @@
-fn main(): i32 {
-  let here: string = #static core/k1/location().filename
-  println("static filename: $here")
-  println("runtime filename: ${core/k1/location().filename}")
-  0
-}

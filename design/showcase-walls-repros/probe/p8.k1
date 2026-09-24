@@ -1,8 +1,0 @@
-type(alias) maybe-name = ?string
-type person = { nickname: maybe-name, other: ?string }
-
-fn main(): i32 {
-  require types/schema[person] is :struct .{ fields } else crash("")
-  println("${fields.[0].type-id == fields.[1].type-id} ${fields.[0].type-id.name()} ${fields.[0].type-id.is-instance-of(types/id[opt])}")
-  0
-}

@@ -249,14 +249,27 @@ impl TypedProgram {
         let name_value_id = self.build_type_name(type_id);
         let schema_value_id = self.build_type_schema(family_type_id);
         let instance_value_id = self.build_instance_info(family_type_id);
-        let fields =
-            self.static_values.mem.pushn(&[name_value_id, schema_value_id, instance_value_id]);
+        let layout_value_id = self.build_layout(type_id);
+        let fields = self.static_values.mem.pushn(&[
+            name_value_id,
+            schema_value_id,
+            instance_value_id,
+            layout_value_id,
+        ]);
         let type_info_type_id = self.builtin_types.type_info();
         self.static_values.set(
             reserved_id,
             StaticValue::Struct(StaticStruct { type_id: type_info_type_id, fields }),
         );
         reserved_id
+    }
+
+    fn build_layout(&mut self, type_id: TypeId) -> StaticValueId {
+        let layout_type_id = self.builtin_types.types_layout();
+        let layout = self.get_layout(type_id).unwrap_or(Layout::ZERO_SIZED);
+        let size_value_id = self.static_values.add_size(layout.size as i64);
+        let align_value_id = self.static_values.add_size(layout.align as i64);
+        self.static_values.add_struct_from_slice(layout_type_id, &[size_value_id, align_value_id])
     }
 
     fn build_instance_info(&mut self, type_id: TypeId) -> StaticValueId {

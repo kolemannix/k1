@@ -1,0 +1,3 @@
+type person = { name: string, age: int }
+type holder = { p: ?*person, s: string }
+fn main(): i32 { let p: person = .{ name = "a", age = 3 }; let h: holder = .{ p = :some p.&, s = "x" }; println("${h}"); 0 }

@@ -1,0 +1,1 @@
+fn main(): i32 { let s = " hi "; println(s.trim()); let n = i64/from-string("12"); 0 }

@@ -1,6 +1,0 @@
-fn main(): i32 {
-  #for [1, 2, 4] {
-    #if it == 4 println("four") else println("$it")
-  }
-  0
-}

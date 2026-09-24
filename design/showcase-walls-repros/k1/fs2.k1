@@ -1,5 +1,0 @@
-fn main(): i32 {
-  let a = from-string@(string)/from-string("x")
-  println("${a}")
-  0
-}

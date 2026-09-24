@@ -1,0 +1,4 @@
+fn main(): i32 {
+  println("${types/size[result[int, never]]} ${types/size[?*int]} ${types/size[?int]}")
+  0
+}

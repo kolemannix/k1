@@ -1,4 +1,0 @@
-fn main(): i32 {
-  println("runtime sees data.csv: ${files/read-to-string("data.csv").take(4)}")
-  0
-}

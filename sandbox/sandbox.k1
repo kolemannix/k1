@@ -10,6 +10,10 @@
 
 let fast-mode: bool = true
 
+// macro foo(code) {
+//   crash("")
+// }
+
 #if fast-mode type triple = either {
   a(i64)
   b(i64)

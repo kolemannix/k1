@@ -1,0 +1,3 @@
+fn hex(): string { "#16181d" }
+let BG-HEX: "#16181d" = #static hex()
+fn main(): i32 { println(BG-HEX.from-static()); 0 }

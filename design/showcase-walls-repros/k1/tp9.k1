@@ -1,9 +1,0 @@
-let U8_SCHEMA: types/type-schema = types/schema[u8]
-fn kind[t](): string {
-  #if k1/arch is { :arm64 -> "arm", _ -> "other" }
-}
-fn main(): i32 {
-  let k = #if U8_SCHEMA is { :int _ -> "int", _ -> "other" }
-  println("$k ${kind[u8]()}")
-  0
-}

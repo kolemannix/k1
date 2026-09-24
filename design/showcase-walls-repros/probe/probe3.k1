@@ -1,5 +1,0 @@
-fn main(): i32 {
-  let class: list[int] = [1, 2]
-  println("${class.[0]}")
-  0
-}

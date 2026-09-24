@@ -1,0 +1,1 @@
+fn main(): i32 { println("${types/id[int].spell()} ${types/id[list[u8]].spell()}"); 0 }

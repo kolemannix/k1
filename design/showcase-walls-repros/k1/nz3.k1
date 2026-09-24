@@ -1,6 +1,0 @@
-fn main(): i32 {
-  let r: result[string, never] = :ok "fine"
-  let v = if r is { :ok v -> v, :err e -> e }
-  println(v)
-  0
-}

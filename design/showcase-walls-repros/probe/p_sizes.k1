@@ -1,5 +1,0 @@
-fn main(): i32 {
-  println("result[int, never] = ${types/size[result[int, never]]}, int = ${types/size[int]}, result[int, string] = ${types/size[result[int, string]]}")
-  println("?int = ${types/size[?int]}, ?*int = ${types/size[?*int]}, result[empty, string] = ${types/size[result[empty, string]]}")
-  0
-}

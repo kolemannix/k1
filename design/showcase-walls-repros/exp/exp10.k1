@@ -1,7 +1,0 @@
-fn f(): u32 { 0xCBF43926 }
-fn main(): i32 {
-  let a: 0xCBF43926u32 = #static f()
-  let v: u32 = a.from-static()
-  println("$v")
-  0
-}

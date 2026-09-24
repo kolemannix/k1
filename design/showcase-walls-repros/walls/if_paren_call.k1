@@ -1,9 +1,0 @@
-let FLAG: bool = true
-
-fn work(): int { 42 }
-
-fn main(): i32 {
-  let r: int = #if FLAG (#static work()) else work()
-  println("$r")
-  0
-}

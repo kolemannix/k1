@@ -273,7 +273,9 @@ string-typed *value* in `code` position is still a type error, since a literal
 carries its own spans while a value has none. `.fmt(values)` on a template
 works here too: with expected type `code` it yields `code`. When no context
 supplies the type, ascribe it: `` `1 + 2`: code `` or
-`"let w = ${}".fmt(42): code`.
+`"let w = ${}".fmt(42): code`. Escapes resolve before emission: `\n` in a
+template emits a newline into the generated source; write `\\n` to emit an
+escape the generated code will see.
 
 Building imperatively works by writing to a code-builder (`cb.write(...)`,
 `cb.writeln(...)`) — the same hole rules apply; `cb.code(c)` appends another
@@ -288,8 +290,9 @@ close, fn[cb]. ...)` (braces + indentation around the body), `cb.sep(items,
 `cb.writeln("...")` does NOT (writer takes `string`), which makes `line` the
 default for emission. Nested blocks capture the builder at each level
 (`cb.block(h, fn[cb]. { ... cb.block-close(h2, c2, fn[cb]. ...) ... })`).
-One sharp edge: to inspect an expansion put `#debug` on the macro
-*definition* — definition-level `#debug $call(...)` does not parse. Write emitted conditions as raw template
+No flag dumps a macro's expansion: `#debug` on the macro definition prints the
+macro function's own IR and bytecode, and definition-level `#debug $call(...)`
+does not parse. Write emitted conditions as raw template
 text with explicit parens — a binary operator directly after a `not` operand
 is a parse error; emit `(not a) and b`. `meta/str-lit(s)` escapes any string
 into a valid K1 literal, interpolation sigil included, so emitted literals
@@ -389,7 +392,16 @@ type-id.schema()
 types/size[string]
 types/stride[string]
 types/align[string]
+type-id.size()
+type-id.stride()
+type-id.align()
 ```
+
+`types/size[t]`, `types/stride[t]` and `types/align[t]` fold to constants for a
+type named at the call site. The `type-id` methods read the same numbers from
+`type-id.info().layout` for an id held at runtime, such as a schema field's
+`type-id`. Types without a layout (never, zero-sized, abstract) report size 0,
+align 1.
 
 Function parameter and return member types can be addressed through type member
 paths:
@@ -406,8 +418,9 @@ packing shows up in the field offsets.
 A bare generic name is a type expression denoting the generic itself, the way a
 bare function name denotes its function type: `types/id[list]` is the id of
 `list[t]`, has no values, and is what an instance reports as its parent.
-`type-id.info()` carries `name`, `schema`, and `instance: ?instance-info`;
-`.name()`, `.schema()`, and `.instance-info()` read its fields.
+`type-id.info()` carries `name`, `schema`, `instance: ?instance-info`, and
+`layout: { size, align }`; `.name()`, `.schema()`, `.instance-info()`,
+`.size()`, `.stride()`, and `.align()` read its fields.
 
 ```rust
 types/id[list].name()                                        // "list[t]"
@@ -663,7 +676,12 @@ The guide covers field references, but tests also use:
 
 - `x.&` / `array.&` to take addresses.
 - `ptr/null`.
-- `.as[ptr]` and `.as[*t]` casts.
+- `.as[ptr]` and `.as[*t]` for total pointer views (`*t` to `ptr`, `*t` to
+  `*u` when every `t` is a valid `u`); a claiming view (`ptr` to `*t`) is
+  `.ref[t]` or `.narrow`.
+- Addresses and integers convert by name, not `.as`: `ptr.to-int()` (i64),
+  `ptr.to-uint()` (u64), `ptr.to-size()`, and back with `i64.to-ptr()` /
+  `u64.to-ptr()`.
 - `.ref[t]` to assert a raw pointer as `*t` (`.ref-opt[t]` wraps it as
   `optref[t]`, `.ref-at[t](i)` refs element `i`, compiled as gep).
 - `x is null` pattern-matches null on both `ptr` and `*t` — no fn call.

@@ -1,0 +1,3 @@
+type level = either { lo, hi }
+impl from-string[e = string] for level { fn from-string(s: string): result[level, string] { :ok :lo } }
+fn main(): i32 { let l = level/from-string("lo"); let s = string/from-string("x"); 0 }

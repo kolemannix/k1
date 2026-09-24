@@ -1,0 +1,4 @@
+ability named { fn name(self: self): string }
+type k = { x: int }
+impl named for k { fn name(self: self): string { "k" } }
+fn main(): i32 { let v: k = .{ x = 1 }; println(v.name()); 0 }

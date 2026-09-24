@@ -1,0 +1,2 @@
+let X: i64 = #static { let y = 3; #static 4 }
+fn main(): i32 { println("${X}"); 0 }

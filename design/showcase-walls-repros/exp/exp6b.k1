@@ -1,7 +1,0 @@
-let fifteen: int = { 3 * 5 }
-fn main(): i32 {
-  println("a")
-  println(types/id[fifteen].spell())
-  println("b")
-  0
-}

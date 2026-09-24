@@ -16,6 +16,27 @@ fn test-size-of() {
   assert-equals(stride[{ x: u64, c: u8 }], 16)
 }
 
+fn check-layout[t](id: types/type-id) {
+  assert-equals(id.size(), size[t])
+  assert-equals(id.stride(), stride[t])
+  assert-equals(id.align(), align[t])
+}
+
+fn test-type-id-layout() {
+  let ids = [types/id[string], types/id[{ x: u64, c: u8 }], types/id[packed { c: u8, x: u32 }], types/id[{}], types/id[never], types/id[array[u16, 3]]]
+  check-layout[string](ids.[0])
+  check-layout[{ x: u64, c: u8 }](ids.[1])
+  check-layout[packed { c: u8, x: u32 }](ids.[2])
+  check-layout[{}](ids.[3])
+  check-layout[never](ids.[4])
+  check-layout[array[u16, 3]](ids.[5])
+
+  let fields = types/schema[{ a: u8, b: { x: u64, c: u8 } }].as-struct().!.fields
+  assert-equals(fields.[1].type-id.size(), 9)
+  assert-equals(fields.[1].type-id.stride(), 16)
+  assert-equals(fields.[1].type-id.align(), 8)
+}
+
 fn test-fn-type-info() {
   assert-equals(types/id[do-it.return](), types/id[u32]())
   assert-equals(types/id[do-it._foo](),   types/id[bool]())
@@ -24,5 +45,6 @@ fn test-fn-type-info() {
 
 fn test() {
   test-size-of()
+  test-type-id-layout()
   test-fn-type-info()
 }

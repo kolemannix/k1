@@ -1,7 +1,0 @@
-fn kind[t](): string {
-  #if types/size[t] == 1 { "byte-sized" } else { "bigger" }
-}
-fn main(): i32 {
-  println("${kind[u8]()} ${kind[string]()}")
-  0
-}

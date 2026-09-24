@@ -1,6 +1,0 @@
-fn main(): i32 {
-  let b: u8 = 255
-  b = b + 1
-  println("wrapped: ${b}")
-  0
-}

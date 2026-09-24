@@ -437,7 +437,7 @@ impl TypedProgram {
     ) -> K1Result<TypedExprId> {
         let span = self.exprs.get_span(to_print);
         let writer_type_id = self.exprs.get_type(writer);
-        let to_print_type = self.exprs.get_type(to_print);
+        let to_print_type = self.get_type_family_type(self.exprs.get_type(to_print));
         let (print_impl, self_adjust) =
             self.expect_ability_impl(to_print_type, ABILITY_ID_PRINT, true, ctx.scope_id, span)?;
         let to_print = self.apply_self_adjust(to_print, self_adjust, span)?;

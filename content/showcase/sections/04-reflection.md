@@ -64,8 +64,8 @@ inside `#meta`, and in plain runtime code.
 ```
 
 Alongside it: `types/id[t]` (a `type-id` with `.name()`, `.schema()`,
-`.instance-info()`, `.spell()`), `types/size`, `types/stride`, `types/align`,
-and `types/assert-layout`. Everything below is built from those.
+`.instance-info()`, `.size()`, `.stride()`, `.align()`, `.spell()`),
+`types/size`, `types/stride`, `types/align`, and `types/assert-layout`. Everything below is built from those.
 
 ## JSON for any type, generated per type
 
@@ -414,48 +414,34 @@ splice operator because there is nothing to splice: a variant name is a
 
 ## pahole in a screenful
 
-Struct schemas carry field offsets, and `types/size`, `types/stride` and
-`types/align` answer for any type, so a layout dumper is a walk over the fields
-that keeps a cursor:
-
-```k1
-  fn members[t](): span[member] {
-    #meta {
-      let fields = if types/schema[t] is {
-        :struct s -> s.fields,
-        :union u -> u.fields,
-        _ -> crash("${types/name[t]} has no members"),
-      }
-      let cb = code-builder/new()
-      cb.write("[")
-      for f in fields {
-        let ty = f.type-id.spell()
-        cb.line(`.{ name = ${meta/str-lit(f.name)}, type-name = ${meta/str-lit(f.type-id.name())}, offset = ${f.offset}, size = types/size[$ty], stride = types/stride[$ty], align = types/align[$ty] },`)
-      }
-      cb.write("]")
-      cb.build()
-    }
-  }
-```
+Struct schemas carry field offsets, and every `type-id` answers `.size()`,
+`.stride()` and `.align()`, so a layout dumper is a plain loop over the fields
+that keeps a cursor, with no code generation:
 
 ```k1
   fn dump[t]() {
     let is-union = types/schema[t] is :union _
+    let fields = if types/schema[t] is {
+      :struct s -> s.fields,
+      :union u -> u.fields,
+      _ -> crash("${types/name[t]} has no fields"),
+    }
     let stride = types/stride[t]
     println("${types/name[t]}: size ${types/size[t]}, stride $stride, align ${types/align[t]}")
     let end: size = 0
     let holes: size = 0
-    for m in members[t]() {
-      if m.offset > end {
-        println("        ~~ ${m.offset - end} byte hole")
-        holes = holes + m.offset - end
+    for f in fields {
+      if f.offset > end {
+        println("        ~~ ${f.offset - end} byte hole")
+        holes = holes + f.offset - end
       }
-      let cell = padded("${m.name}: ${m.type-name}", 24)
-      println("  ${padded("${m.offset}", 4)}$cell size ${m.size}, stride ${m.stride}, align ${m.align}")
+      let ty = f.type-id
+      let cell = padded("${f.name}: ${ty.name()}", 24)
+      println("  ${padded("${f.offset}", 4)}$cell size ${ty.size()}, stride ${ty.stride()}, align ${ty.align()}")
       if is-union {
-        if m.stride > end { end = m.stride }
+        if ty.stride() > end { end = ty.stride() }
       } else {
-        end = m.offset + m.stride
+        end = f.offset + ty.stride()
       }
     }
     if stride > end {
@@ -466,11 +452,11 @@ that keeps a cursor:
   }
 ```
 
-`members` is the one place a `#meta` is needed: `types/size` takes a type, not
-a `type-id`, so each field's `type-id` is turned back into a type expression
-with `.spell()` and emitted into a struct literal. Run over a badly ordered
-struct, the same fields sorted by alignment, the packed version, a union, and
-a struct nesting two of them:
+`types/size[t]` and its siblings give the same numbers for a type named at the
+call site, folded to integer constants; the `type-id` methods read them from
+the type's `type-info`, which works on a `type-id` held in a variable. Run over
+a badly ordered struct, the same fields sorted by alignment, the packed
+version, a union, and a struct nesting two of them:
 
 ```k1
 type sloppy = { flag: bool, id: u64, kind: u16, count: u32, tail: u8 }

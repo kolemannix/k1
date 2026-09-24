@@ -272,12 +272,15 @@ let byte = 10: u8
 let signed = -3i8
 ```
 
-Type assertions use `:`; casts between kinds (ptr/word, int/float, char, bool)
-use `.as[...]`:
+Type assertions use `:`; `.as[...]` casts int to float, float to int, and
+total pointer views (`*t` to `ptr`). Every other kind change is a named
+function: `ptr.to-size()` / `n.to-ptr()`, `c.as-u8()` on char, `b.as-u8()` on
+bool:
 
 ```rust
 let three = 3: i32
-let raw = ptr-value.as[size]
+let f = three.as[f64]
+let raw = ptr-value.to-size()
 ```
 
 Integer-to-integer (and float-to-float) conversions name their operation

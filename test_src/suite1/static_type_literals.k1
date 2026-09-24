@@ -40,5 +40,8 @@ fn test() {
   assert(fifteen-id != types/id[int])
   assert-equals(types/instance-info[fixlist[u8, 8]].!.args.[1].name(), "static[i64, 8]")
 
+  let x: fifteen = 15
+  assert-equals("${_hello}-$x-${three}", "hello-15-3")
+
   .{}
 }

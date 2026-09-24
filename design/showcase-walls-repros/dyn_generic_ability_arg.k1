@@ -1,0 +1,5 @@
+ability accumulator[t] { fn add(self: *self, x: t) }
+type summer = { total: int }
+impl accumulator[t = int] for summer { fn add(self: *self, x: int) { self.total = self.total + x } }
+fn drain[t](a: dyn[accumulator[t = t]], xs: span[t]) { for x in xs { a.add(x) } }
+fn main(): i32 { let s: summer = .{ total = 0 }; drain(s.&.to-dyn(), [1,2,3]); println("${s.total}"); 0 }

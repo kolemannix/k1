@@ -1,8 +1,0 @@
-fn unwrap-infallible[t](r: result[t, never]): t {
-  if r is { :ok v -> v }
-}
-fn main(): i32 {
-  let r: result[string, never] = :ok "fine"
-  println(unwrap-infallible(r))
-  0
-}

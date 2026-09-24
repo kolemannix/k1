@@ -59,12 +59,19 @@ ns types {
 
   type type-id = { inner: u64 }
   type instance-info = { parent: type-id, args: span[type-id] }
-  type type-info = { name: string, schema: type-schema, instance: ?instance-info }
+  type layout = { size: size, align: size }
+  type type-info = { name: string, schema: type-schema, instance: ?instance-info, layout: layout }
   ns for type-id {
     fn(intern) info(self: type-id): type-info
     fn name(self: type-id): string { self.info().name }
     fn schema(self: type-id): type-schema { self.info().schema }
     fn instance-info(self: type-id): ?instance-info { self.info().instance }
+    fn size(self: type-id): size { self.info().layout.size }
+    fn stride(self: type-id): size {
+      let layout = self.info().layout
+      layout.size + ptr/get-align-offset(layout.size, layout.align)
+    }
+    fn align(self: type-id): size { self.info().layout.align }
     fn is-instance-of(self: type-id, parent: type-id): bool {
       self.instance-info() is :some info and info.parent == parent
     }
@@ -166,8 +173,6 @@ ns types {
   fn(intern) make-array(element: type-id, size: int): type-id
   fn(intern) make-fn(params: span[type-id], return-type: type-id): type-id
   fn(intern) make-instance(parent: type-id, args: span[type-id]): type-id
-
-  type layout = { size: u32, align: u32 }
 
   type type-schema = either {
     char,

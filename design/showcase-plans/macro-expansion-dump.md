@@ -1,7 +1,7 @@
 # Seeing macro expansions
 
 Walls (showcase 04/05/06): `#debug macro` dumps the macro's own IR twice and
-its bc, never an expansion; `ai_docs/k1-additional.md:270` claims otherwise;
+its bc, never an expansion;
 emitted files reach `.k1-out/generated/` only behind `has_diagnostic`; a crash
 inside a macro points at the macro body, never at the call site. Three showcase
 sections work around it by printing `define-impl(...).text()` from a `#static`
@@ -193,9 +193,8 @@ test_suite.rs:118, lsp_support.rs:610. No `CompilerConfig` field.
   for macro calls; replaced by §2).
 - TODO, static_exec.rs:1250-1252 (answered by §2/§3).
 - `write_error`'s emitted-source note block, typer/report.rs:311-315.
-- `ai_docs/k1-additional.md:270-271`: "to inspect an expansion put `#debug` on
-  the macro *definition*" — false today. Rewrite: `#debug` on the macro
-  definition prints every expansion, `#debug` on a call expression prints that
+- `docs/ai_docs/k1-additional.md` "No flag dumps a macro's expansion" sentence.
+  Rewrite: `#debug` on the macro definition prints every expansion, `#debug` on a call expression prints that
   one, `--dump-emitted` writes all of them to `.k1-out/generated/`; keep the
   true half ("definition-level `#debug $call(...)` does not parse").
 - `ai_docs/k1-additional.md:310-314`: accurate about span remapping, silent
@@ -208,7 +207,8 @@ test_suite.rs:118, lsp_support.rs:610. No `CompilerConfig` field.
   06-regex.md:60-62 (`println(c.text())`) — re-capture those expansions with
   `#debug` on the call and quote the hint box instead. 04-reflection.md:133
   (metaprogram logging via the message facility) is a feature demo; keep.
-- `design/showcase-walls-2026-09-16.md:17-18, :81-82, :92` once landed.
+- The macro-diagnostics and `#debug`-expansion entries in
+  `design/showcase-walls-2026-09-16.md` once landed.
 
 ## Tests
 

@@ -1,7 +1,0 @@
-fn main(): i32 {
-  let g: list[size] = [7, 8]
-  let t: ?size = :some 1
-  let a = if t is :some(j) :some(g.[j]) else :none
-  println("$a")
-  0
-}

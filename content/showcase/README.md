@@ -1,45 +1,25 @@
-# K1 showcase
+# K1 by example
 
-K1 is a compiled systems language: LLVM backend, C ABI, arenas by default,
-typeclasses ("abilities"), and a compile-time VM that runs the same language,
-the same standard library and the same functions as the binary. Every program
-below is real: it lives under `examples/`, it is compiled and run by
-`check.sh`, and every code block in `sections/` is checked verbatim against
-its source file. Compiler output quoted in the sections was captured from
-those runs, on an Apple M3 Max, macOS 26.6, K1 0.1.0 built from the
-2026-09-17 tree.
+This site contains various examples and benchmarks result designed to show what k1 is capable of. This is
+not a tutorial or language walkthrough, that lives [here](todo)
 
-```bash
-./content/showcase/check.sh
-```
+The examples are deliberately fun, provocative, and a little ridiculous
 
-runs every example (the `_wrong` and `_fail` files must fail to compile with
-the message declared on their last line) and verifies the sections.
 
-## The reel
+## Topics
 
-1. [`#static`: the compiler runs your program](sections/01-static.md).
-   A string literal is a type, so `let greeting: "hello world" = #static {
-   ... }` is checked against what the compile-time run produced, and one
-   wrong byte is a type error. A global's type is its value. A CRC32 table
-   whose self-test is the declared type of the result. A Brainfuck interpreter
-   run by the compiler. A program that unit-tests its own type errors with
-   `test-compile`.
+1. [`#static` execution](sections/01-static.md).
 2. [A palette authored in OKLCH, shipped as bytes](sections/02-palette.md).
-   The color module from a real UI workbench, unchanged: trig and `pow`
+   The color module from a real UI, unchanged: trig and `pow`
    through libm, evaluated in the compiler, landing in the binary as `u8`
    triples. A WCAG contrast lint the build enforces, and a CSS block generated
    into a string constant.
-3. [The compile-time VM can call C](sections/03-comptime-ffi.md). Global
+3. [Calling C at compile-time](sections/03-comptime-ffi.md). Global
    initializers call libc for a build stamp. A module compiles two lines of C
    around stb_truetype in its build step, the VM `dlopen`s it while compiling,
    and a font atlas rasterized at compile time is a 32 KiB constant in the
    executable that never links stb.
-4. [Reflection: a type is a value you can look at](sections/04-reflection.md).
-   `types/schema[t]` is a sum you pattern match. A JSON serializer generated
-   per type, a `show` that derives itself for any type, P2996's
-   `enum_to_string` both ways, a pahole in a screenful, and `assert-layout`
-   as a compile-time guard.
+4. [Reflection: types/schema[t] gives a plain compile-time value with full reflective power](sections/04-reflection.md).
 5. [Macros and metaprogramming](sections/05-macros.md). Arguments arrive as
    `code` with spans, so an error inside an expansion carets the caller's
    argument, and a `crash` inside an emitter is reported at the `crash` with
@@ -114,3 +94,17 @@ cross-unit importing disabled. Default builds use the lighter LLVM pipeline.
 Compiler time, emitted-program runtime, and compile-time VM execution are
 separate measurements; improvements in one do not imply improvements in the
 others.
+
+## Provenance
+
+`examples/check.sh`, and every code block in `sections/` is checked verbatim against
+its source file. Compiler output quoted in the sections was captured from
+those runs, on an Apple M3 Max, macOS 26.6, K1 0.1.0 built from the
+2026-09-17 tree.
+
+```bash
+./content/showcase/check.sh
+```
+
+runs every example (the `_wrong` and `_fail` files must fail to compile with
+the message declared on their last line) and verifies the sections.

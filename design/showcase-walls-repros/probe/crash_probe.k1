@@ -1,7 +1,0 @@
-fn ratio(): f32 { 3.25 }
-
-#static assert(ratio() >= 7.0)
-
-fn main(): i32 {
-  0
-}

@@ -1,0 +1,1 @@
+fn main(): i32 { let x: i64 = 5; let y = x >> 2; let z = 1u64 << x; println("$y $z"); 0 }

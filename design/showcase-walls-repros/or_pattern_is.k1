@@ -1,0 +1,6 @@
+type level = either { lo, hi }
+fn main(): i32 {
+  let x: level = :lo
+  if x is :lo or :hi println("y")
+  0
+}

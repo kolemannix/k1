@@ -1,6 +1,0 @@
-fn main(): i32 {
-  let x: u64 = 1
-  let p = x.as[ptr]
-  println("${p.is-null()}")
-  0
-}

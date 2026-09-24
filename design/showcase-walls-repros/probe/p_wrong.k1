@@ -1,8 +1,0 @@
-type shape = either { circle(f64), square(f64), tri({ a: f64, b: f64, c: f64 }) }
-fn classify(s: shape): string {
-  if s is {
-    :circle _ -> "circle",
-    :square _ -> "square",
-  }
-}
-fn main(): i32 { println(classify(:circle 1.0)); 0 }
