@@ -3,6 +3,7 @@
 
 use smallvec::SmallVec;
 
+mod arith;
 pub mod bc;
 mod clock;
 pub mod codegen_llvm;

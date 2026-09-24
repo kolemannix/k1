@@ -1,0 +1,100 @@
+ns fold_test
+
+fn(noinline) opaque[t](x: t): t { x }
+
+fn wrapping() {
+  assert-equals(200u8 + 100u8, opaque(200u8) + opaque(100u8))
+  assert-equals(3u8 - 5u8, opaque(3u8) - opaque(5u8))
+  assert-equals(16u8 * 17u8, opaque(16u8) * opaque(17u8))
+  assert-equals(127i8 + 1i8, opaque(127i8) + opaque(1i8))
+  assert-equals(-32768i16 - 1i16, opaque(-32768i16) - opaque(1i16))
+  assert-equals(4294967295u32 + 1u32, opaque(4294967295u32) + opaque(1u32))
+  assert-equals(4294967295u64 + 1u64, opaque(4294967295u64) + opaque(1u64))
+  assert-equals(9223372036854775807 + 1, opaque(9223372036854775807) + opaque(1))
+  assert-equals(-2147483648i32 * -1i32, opaque(-2147483648i32) * opaque(-1i32))
+}
+
+fn division() {
+  assert-equals(255u8 / 7u8, opaque(255u8) / opaque(7u8))
+  assert-equals(255u8 % 7u8, opaque(255u8) % opaque(7u8))
+  assert-equals(-7i8 / 2i8, opaque(-7i8) / opaque(2i8))
+  assert-equals(-7i8 % 2i8, opaque(-7i8) % opaque(2i8))
+  assert-equals(-9223372036854775807 / 3, opaque(-9223372036854775807) / opaque(3))
+  assert-equals(18446744073709551615u64 / 10u64, opaque(18446744073709551615u64) / opaque(10u64))
+}
+
+fn bitwise() {
+  assert-equals(1u8 << 9u8, opaque(1u8) << opaque(9u8))
+  assert-equals(1 << 70, opaque(1) << opaque(70))
+  assert-equals(-128i8 >> 1, opaque(-128i8) >> 1)
+  assert-equals(128u8 >> 1u8, opaque(128u8) >> opaque(1u8))
+  assert-equals(-1i16 >> 20, opaque(-1i16) >> 20)
+  assert-equals(170u8 ^ 255u8, opaque(170u8) ^ opaque(255u8))
+  assert-equals(0u8.bit-not(), opaque(0u8).bit-not())
+  assert-equals(5i32.bit-not(), opaque(5i32).bit-not())
+}
+
+fn compares() {
+  assert-equals(-1i32 < 0i32, opaque(-1i32) < opaque(0i32))
+  assert-equals(255u8 > 0u8, opaque(255u8) > opaque(0u8))
+  assert-equals(-1 >= 1, opaque(-1) >= opaque(1))
+  assert-equals(18446744073709551615u64 > 1u64, opaque(18446744073709551615u64) > opaque(1u64))
+}
+
+fn floats() {
+  assert-equals(0.1 + 0.2, opaque(0.1) + opaque(0.2))
+  assert-equals((0.1: f32) * (3.0: f32), opaque(0.1: f32) * opaque(3.0: f32))
+  assert-equals(7.5 % 2.0, opaque(7.5) % opaque(2.0))
+  assert-equals(1.5.negated(), opaque(1.5).negated())
+  assert-equals(5i8.negated(), opaque(5i8).negated())
+  assert-equals(false.negated(), opaque(false).negated())
+  let nan: f64 = 0.0 / 0.0
+  assert-equals(nan == nan, opaque(nan) == opaque(nan))
+}
+
+fn casts() {
+  let n: u8 = 0u8.bit-not()
+  let wide: u64 = n.widen()
+  assert-equals(wide, 255u64)
+  let on: u8 = opaque(0u8).bit-not()
+  let owide: u64 = on.widen()
+  assert-equals(owide, 255u64)
+
+  let q: i8 = opaque(-1i8) / opaque(1i8)
+  let qu: u8 = q.unsigned()
+  let qw: u64 = qu.widen()
+  assert-equals(qw, 255u64)
+
+  let s: i8 = -3i8
+  let sw: i64 = s.widen()
+  assert-equals(sw, opaque(-3i8).widen())
+  let t: u8 = 300u16.trunc()
+  let ot: u8 = opaque(300u16).trunc()
+  assert-equals(t, ot)
+}
+
+fn identities() {
+  let x = opaque(42)
+  assert-equals(x + 0, 42)
+  assert-equals(0 + x, 42)
+  assert-equals(x * 1, 42)
+  assert-equals(x * 0, 0)
+  assert-equals(x & 0, 0)
+  assert-equals(x | 0, 42)
+  assert-equals(x - x, 0)
+  assert-equals(x ^ x, 0)
+  assert-equals(x << 0, 42)
+  assert(x == x)
+  assert(x <= x)
+  assert(not (x < x))
+}
+
+fn test() {
+  wrapping()
+  division()
+  bitwise()
+  compares()
+  floats()
+  casts()
+  identities()
+}

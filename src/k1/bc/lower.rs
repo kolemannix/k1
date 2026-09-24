@@ -20,7 +20,7 @@
 use crate::debug;
 
 use crate::ir::{
-    self, BlockId, DataInst, IdMap, Inst, InstId, InstKind, IrCallee, IrUnit, IrUnitId, UnitView,
+    self, BlockId, IdMap, Inst, InstId, InstKind, IrCallee, IrUnit, IrUnitId, UnitView,
 };
 use crate::kbail;
 use crate::lex::SpanId;
@@ -297,34 +297,6 @@ const fn align_up(v: u32, align: u32) -> u32 {
     v.next_multiple_of(align)
 }
 
-fn wbits(t: ScalarType) -> u8 {
-    t.width().bits() as u8
-}
-
-fn const_of_data32(t: ScalarType, data: u32) -> u64 {
-    match t {
-        ScalarType::F32 => data as u64,
-        ScalarType::F64 => (f32::from_bits(data) as f64).to_bits(),
-        ScalarType::Pointer => data as u64,
-        ScalarType::I8 | ScalarType::I16 | ScalarType::I32 => data as u64,
-        ScalarType::I64 => data as i32 as i64 as u64,
-        ScalarType::U8
-        | ScalarType::U16
-        | ScalarType::U32
-        | ScalarType::U64
-        | ScalarType::Char
-        | ScalarType::Bool => data as u64,
-    }
-}
-
-fn const_of_data(imm: DataInst) -> u64 {
-    match imm {
-        DataInst::U64(v) => v,
-        DataInst::I64(v) => v as u64,
-        DataInst::F64(f) => f.to_bits(),
-    }
-}
-
 fn fused_cmp_of(ctx: &LowerCtx, cond: ir::Value) -> Option<InstId> {
     let ir::Value::Inst(id) = cond else { return None };
     if ctx.fused_cmps.contains(id) { Some(id) } else { None }
@@ -337,14 +309,14 @@ fn resolve_lowered_value(k1: &mut TypedProgram, ctx: &mut LowerCtx, value: ir::V
                 return bc_value;
             }
             match *ctx.u.inst(inst_id) {
-                Inst::Data(imm) => k1.bc.intern_const(const_of_data(imm)),
+                Inst::Data(imm) => k1.bc.intern_const(imm.bits()),
                 // Value-kind insts without a bc value are empty-typed; reads are 0
                 // (parity with the old VM's default-0 for never-written insts)
                 _ => k1.bc.intern_const(0),
             }
         }
         ir::Value::FnParam { index, .. } => FRAME_HEADER_WORDS + index,
-        ir::Value::Data32 { t, data } => k1.bc.intern_const(const_of_data32(t, data)),
+        ir::Value::Data32 { t, data } => k1.bc.intern_const(ir::data32_bits(t, data)),
         ir::Value::IsStatic => k1.bc.intern_const(1),
         ir::Value::StaticValue { id, .. } => {
             // Memoized; materializes into the shared k1.vm_static_stack, so
@@ -705,7 +677,7 @@ fn emit_inst(
             PhysicalTypeEnum::Scalar(t) => {
                 let (addr, off) = resolve_addr(k1, ctx, dst);
                 let value = resolve_lowered_value(k1, ctx, value);
-                ctx.emit(Opcode::Store, wbits(t), off);
+                ctx.emit(Opcode::Store, t.width_bits(), off);
                 ctx.push(addr);
                 ctx.push(value);
             }
@@ -724,7 +696,7 @@ fn emit_inst(
                 debug_assert!(dst == ir::Value::Empty);
                 let (addr, off) = resolve_addr(k1, ctx, src);
                 let result = ctx.bc_value_of(inst_id);
-                ctx.emit(Opcode::Load, wbits(t), off);
+                ctx.emit(Opcode::Load, t.width_bits(), off);
                 ctx.push(result);
                 ctx.push(addr);
             }
@@ -741,14 +713,14 @@ fn emit_inst(
         Inst::AtomicLoad { t, src, ord } => {
             let addr = resolve_lowered_value(k1, ctx, src);
             let dst = ctx.bc_value_of(inst_id);
-            ctx.emit(Opcode::AtomicLoad, wbits(t), ord.to_tag() as u16);
+            ctx.emit(Opcode::AtomicLoad, t.width_bits(), ord.to_tag() as u16);
             ctx.push(dst);
             ctx.push(addr);
         }
         Inst::AtomicStore { dst, value, t, ord } => {
             let addr = resolve_lowered_value(k1, ctx, dst);
             let val = resolve_lowered_value(k1, ctx, value);
-            ctx.emit(Opcode::AtomicStore, wbits(t), ord.to_tag() as u16);
+            ctx.emit(Opcode::AtomicStore, t.width_bits(), ord.to_tag() as u16);
             ctx.push(addr);
             ctx.push(val);
         }
@@ -757,7 +729,7 @@ fn emit_inst(
             let operand = resolve_lowered_value(k1, ctx, operand);
             let bc_value = ctx.bc_value_of(inst_id);
             let b = ((op.to_tag() as u16) << 8) | ord.to_tag() as u16;
-            ctx.emit(Opcode::AtomicRmw, wbits(t), b);
+            ctx.emit(Opcode::AtomicRmw, t.width_bits(), b);
             ctx.push(bc_value);
             ctx.push(addr);
             ctx.push(operand);
@@ -771,7 +743,7 @@ fn emit_inst(
             let b = cas.success.to_tag() as u16
                 | (cas.failure.to_tag() as u16) << 4
                 | (cas.weak as u16) << 8;
-            ctx.emit(Opcode::AtomicCmpxchg, wbits(cas.t), b);
+            ctx.emit(Opcode::AtomicCmpxchg, cas.t.width_bits(), b);
             ctx.push(result);
             ctx.push(addr);
             ctx.push(expected);
@@ -782,7 +754,7 @@ fn emit_inst(
         Inst::VecOp { id } => {
             use ir::VecOpIr;
             let vop = *ctx.u.vec_op(id);
-            let elem_bits = wbits(vop.elem);
+            let elem_bits = vop.elem.width_bits();
             let stride = vop.elem.get_layout().stride() as u16;
             let is_float = matches!(vop.elem, ScalarType::F32 | ScalarType::F64);
             let is_signed = matches!(
@@ -873,7 +845,7 @@ fn emit_inst(
                         ctx.emit(Opcode::Load, elem_bits, lhs_off + off);
                         ctx.push(s0);
                         ctx.push(lhs_addr);
-                        ctx.emit(Opcode::BitNot, 0, 0);
+                        ctx.emit(Opcode::BitNot, elem_bits, 0);
                         ctx.push(s0);
                         ctx.push(s0);
                         ctx.emit(Opcode::Store, elem_bits, dst_off + off);
@@ -1036,26 +1008,31 @@ fn emit_inst(
         }
 
         Inst::BoolNegate { v } => unop!(Opcode::BoolNegate, 0, 0, v),
-        Inst::BitNot { v } => unop!(Opcode::BitNot, 0, 0, v),
+        Inst::BitNot { v } => {
+            let t = ir::get_value_kind(&ctx.u, v).expect_scalar();
+            unop!(Opcode::BitNot, t.width_bits(), 0, v)
+        }
         Inst::FloatNeg { v, width } => unop!(Opcode::FloatNeg, width, 0, v),
 
-        Inst::IntTrunc { v, to } => cast!(CastKind::IntTrunc, 0, wbits(to), v),
-        Inst::IntExtS { v, from, to } => cast!(CastKind::IntExtS, wbits(from), wbits(to), v),
+        Inst::IntTrunc { v, to } => cast!(CastKind::IntTrunc, 0, to.width_bits(), v),
+        Inst::IntExtS { v, from, to } => {
+            cast!(CastKind::IntExtS, from.width_bits(), to.width_bits(), v)
+        }
         Inst::FloatTrunc { v, .. } => cast!(CastKind::FloatTrunc, 0, 0, v),
         Inst::FloatExt { v, .. } => cast!(CastKind::FloatExt, 0, 0, v),
-        Inst::Float32ToIntUnsigned { v, to } => cast!(CastKind::F32ToUInt, 0, wbits(to), v),
-        Inst::Float32ToIntSigned { v, to } => cast!(CastKind::F32ToSInt, 0, wbits(to), v),
-        Inst::Float64ToIntUnsigned { v, to } => cast!(CastKind::F64ToUInt, 0, wbits(to), v),
-        Inst::Float64ToIntSigned { v, to } => cast!(CastKind::F64ToSInt, 0, wbits(to), v),
+        Inst::Float32ToIntUnsigned { v, to } => cast!(CastKind::F32ToUInt, 0, to.width_bits(), v),
+        Inst::Float32ToIntSigned { v, to } => cast!(CastKind::F32ToSInt, 0, to.width_bits(), v),
+        Inst::Float64ToIntUnsigned { v, to } => cast!(CastKind::F64ToUInt, 0, to.width_bits(), v),
+        Inst::Float64ToIntSigned { v, to } => cast!(CastKind::F64ToSInt, 0, to.width_bits(), v),
         Inst::IntToFloatUnsigned { v, from, to } => {
             let kind =
                 if to == ScalarType::F32 { CastKind::UIntToF32 } else { CastKind::UIntToF64 };
-            cast!(kind, wbits(from), wbits(to), v)
+            cast!(kind, from.width_bits(), to.width_bits(), v)
         }
         Inst::IntToFloatSigned { v, from, to } => {
             let kind =
                 if to == ScalarType::F32 { CastKind::SIntToF32 } else { CastKind::SIntToF64 };
-            cast!(kind, wbits(from), wbits(to), v)
+            cast!(kind, from.width_bits(), to.width_bits(), v)
         }
 
         Inst::IntAdd { lhs, rhs, width } => binop!(Opcode::IntAdd, width, 0, lhs, rhs),
@@ -1256,7 +1233,7 @@ fn emit_call(
                 ctx.begin_inst();
                 let d = resolve_lowered_value(k1, ctx, dst);
                 let t = ret_pt.expect_scalar();
-                ctx.emit(Opcode::RetStore, wbits(t), 0);
+                ctx.emit(Opcode::RetStore, t.width_bits(), 0);
                 ctx.push(d);
             }
             None => {
@@ -1356,14 +1333,14 @@ fn validate_unit_shape(u: UnitView, unit_id: IrUnitId) {
 
 #[cfg(test)]
 mod tests {
-    use super::const_of_data32;
+    use crate::ir::data32_bits;
     use crate::typer::types::ScalarType;
 
     #[test]
     fn float_immediates_are_bit_patterns() {
         for value in [0.0f32, -0.0, 0.1, -1.5, f32::INFINITY, f32::NEG_INFINITY] {
-            assert_eq!(const_of_data32(ScalarType::F32, value.to_bits()), value.to_bits() as u64);
-            assert_eq!(const_of_data32(ScalarType::F64, value.to_bits()), (value as f64).to_bits());
+            assert_eq!(data32_bits(ScalarType::F32, value.to_bits()), value.to_bits() as u64);
+            assert_eq!(data32_bits(ScalarType::F64, value.to_bits()), (value as f64).to_bits());
         }
     }
 }

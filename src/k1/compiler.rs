@@ -1786,7 +1786,7 @@ pub fn codegen_module(ctx: &Context, k1: &mut TypedProgram) -> Result<()> {
             if let Some(unit) =
                 crate::ir::get_compiled_unit(&k1.ir, crate::ir::IrUnitId::Function(function))
             {
-                crate::ir::display_unit(&mut dump, k1, &unit, false)?;
+                crate::ir::display_unit(&mut dump, k1, unit, false)?;
             }
         }
         std::fs::write(format!("{out_dir}/{module_name}_ir.txt"), dump)?;

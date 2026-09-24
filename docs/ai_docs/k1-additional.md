@@ -630,10 +630,10 @@ The basics guide does not yet enumerate operators. Tests cover:
 - Boolean: `not`, `and`, `or`, with short-circuiting.
 - Bitwise: `&`, `|`, `^`, `<<`, `>>`.
 
-Binary operator precedence is C's, so ported C expressions parse identically
-(tightest first): `||` (pipe), then `* / %`, `+ -`, `<< >>`, `< <= > >=`,
-`== !=`, `&`, `^`, `|`, `and`, `or`, `?`. Note C's quirk is inherited:
-`a & b == c` is `a & (b == c)` — parenthesize mask tests.
+Binary operator precedence (tightest first): `||` (pipe), then `* / %`,
+`+ -`, `<< >>`, `&`, `^`, `|`, `< <= > >=`, `== !=`, `and`, `or`, `?`.
+Bitwise binds above comparisons (Rust/Zig, not C): `a & b == c` is
+`(a & b) == c`.
 - Integer semantics are the same natively and in `#static`, optimized or not:
   `+ - *` wrap (2's complement, no traps, no debug/release split), shift
   counts are taken modulo the width (`1u64 << 64` is `1`), and `/ %` crash on

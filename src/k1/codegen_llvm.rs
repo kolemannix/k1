@@ -2883,7 +2883,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     ) -> IntValue<'ctx> {
         let to_int_type = self.scalar_basic_type(to).into_int_type();
         let op = if signed { "fptosi" } else { "fptoui" };
-        let name = format!("llvm.{}.sat.i{}.f{}", op, to.width().bits(), from.width().bits());
+        let name = format!("llvm.{}.sat.i{}.f{}", op, to.width_bits(), from.width_bits());
         let function = match self.llvm_module.get_function(&name) {
             Some(f) => f,
             None => {

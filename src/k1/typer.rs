@@ -3109,8 +3109,7 @@ impl TypedProgram {
     }
 
     pub fn optimize_ir(&self) -> bool {
-        self.config.tools.optimize_ir
-            && !(self.config.command.codegens() && self.plan.config.debug)
+        self.config.tools.optimize_ir && !(self.config.command.codegens() && self.plan.config.debug)
     }
 
     pub fn host_platform(&self) -> compiler::Platform {

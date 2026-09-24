@@ -12,6 +12,7 @@
 
 use std::num::NonZeroU32;
 
+use crate::arith::{self, FloatOp, IntOp};
 use crate::ir::{self, BackendBuiltin, IrUnitId};
 use crate::lex::SpanId;
 use crate::typer::trace::TraceKind;
@@ -19,9 +20,7 @@ use crate::typer::types::{PhysicalType, RecordKind, TypeId};
 use crate::typer::{
     FunctionId, K1Message, K1Result, StaticValueId, TypedExprId, TypedGlobalId, TypedProgram,
 };
-use crate::vm::{
-    self, Value, Vm, casted_float_op, casted_iop, casted_uop, load_value, store_value,
-};
+use crate::vm::{self, Value, Vm, load_value, store_value};
 use crate::{kbail, kerr};
 
 use super::lower;
@@ -356,6 +355,27 @@ fn exec_loop(
             }
         };
     }
+    macro_rules! int_binop {
+        ($h:ident, $op:expr, $opcode:path) => {{
+            let width = header_a($h);
+            let lhs = read_src!(operand!(1)).bits();
+            let rhs = read_src!(operand!(2)).bits();
+            match arith::int_op($op, width, lhs, rhs) {
+                Ok(r) => write_slot!(operand!(0), Value::u64(r)),
+                Err(e) => vmerr!("{}", e.message()),
+            }
+            advance!($opcode);
+        }};
+    }
+    macro_rules! float_binop {
+        ($h:ident, $op:expr, $opcode:path) => {{
+            let width = header_a($h);
+            let lhs = read_src!(operand!(1)).bits();
+            let rhs = read_src!(operand!(2)).bits();
+            write_slot!(operand!(0), Value::u64(arith::float_op($op, width, lhs, rhs)));
+            advance!($opcode);
+        }};
+    }
     macro_rules! pop_frame {
         () => {{
             let words = fp as *const u64;
@@ -440,7 +460,8 @@ fn exec_loop(
                 let pred = ir::IntCmpPred::from_u8(header_b(h) as u8);
                 let lhs = read_src!(operand!(0)).bits();
                 let rhs = read_src!(operand!(1)).bits();
-                let target = if int_cmp(width, pred, lhs, rhs) { operand!(2) } else { operand!(3) };
+                let target =
+                    if arith::int_cmp(width, pred, lhs, rhs) { operand!(2) } else { operand!(3) };
                 set_pc!(target);
             }
             Opcode::Unreachable => {
@@ -759,232 +780,53 @@ fn exec_loop(
                 write_slot!(operand!(0), Value::ptr(result));
                 advance!(Opcode::PtrIndex);
             }
-            Opcode::IntAdd => {
-                let width = header_a(h);
-                let lhs = read_src!(operand!(1)).bits();
-                let rhs = read_src!(operand!(2)).bits();
-                let r = casted_uop!(width, wrapping_add, lhs, rhs);
-                write_slot!(operand!(0), Value::u64(r));
-                advance!(Opcode::IntAdd);
-            }
-            Opcode::IntSub => {
-                let width = header_a(h);
-                let lhs = read_src!(operand!(1)).bits();
-                let rhs = read_src!(operand!(2)).bits();
-                let r = casted_uop!(width, wrapping_sub, lhs, rhs);
-                write_slot!(operand!(0), Value::u64(r));
-                advance!(Opcode::IntSub);
-            }
-            Opcode::IntMul => {
-                let width = header_a(h);
-                let lhs = read_src!(operand!(1)).bits();
-                let rhs = read_src!(operand!(2)).bits();
-                let r = casted_uop!(width, wrapping_mul, lhs, rhs);
-                write_slot!(operand!(0), Value::u64(r));
-                advance!(Opcode::IntMul);
-            }
-            Opcode::IntDivU => {
-                let width = header_a(h);
-                let lhs = read_src!(operand!(1)).bits();
-                let rhs = read_src!(operand!(2)).bits();
-                if rhs == 0 {
-                    vmerr!("Division by zero");
-                }
-                use std::ops::Div;
-                let r = casted_uop!(width, div, lhs, rhs);
-                write_slot!(operand!(0), Value::u64(r));
-                advance!(Opcode::IntDivU);
-            }
-            Opcode::IntDivS => {
-                let width = header_a(h);
-                let lhs = read_src!(operand!(1)).bits();
-                let rhs = read_src!(operand!(2)).bits();
-                if rhs == 0 {
-                    vmerr!("Division by zero");
-                }
-                if signed_div_overflows(width, lhs, rhs) {
-                    vmerr!("Integer division overflow: min-value / -1");
-                }
-                use std::ops::Div;
-                let r = casted_iop!(width, div, lhs, rhs);
-                write_slot!(operand!(0), Value::u64(r as u64));
-                advance!(Opcode::IntDivS);
-            }
-            Opcode::IntRemU => {
-                let width = header_a(h);
-                let lhs = read_src!(operand!(1)).bits();
-                let rhs = read_src!(operand!(2)).bits();
-                if rhs == 0 {
-                    vmerr!("Division by zero");
-                }
-                use std::ops::Rem;
-                let r = casted_uop!(width, rem, lhs, rhs);
-                write_slot!(operand!(0), Value::u64(r));
-                advance!(Opcode::IntRemU);
-            }
-            Opcode::IntRemS => {
-                let width = header_a(h);
-                let lhs = read_src!(operand!(1)).bits();
-                let rhs = read_src!(operand!(2)).bits();
-                if rhs == 0 {
-                    vmerr!("Division by zero");
-                }
-                if signed_div_overflows(width, lhs, rhs) {
-                    vmerr!("Integer division overflow: min-value / -1");
-                }
-                use std::ops::Rem;
-                let r = casted_iop!(width, rem, lhs, rhs);
-                write_slot!(operand!(0), Value::u64(r as u64));
-                advance!(Opcode::IntRemS);
-            }
+            Opcode::IntAdd => int_binop!(h, IntOp::Add, Opcode::IntAdd),
+            Opcode::IntSub => int_binop!(h, IntOp::Sub, Opcode::IntSub),
+            Opcode::IntMul => int_binop!(h, IntOp::Mul, Opcode::IntMul),
+            Opcode::IntDivU => int_binop!(h, IntOp::DivU, Opcode::IntDivU),
+            Opcode::IntDivS => int_binop!(h, IntOp::DivS, Opcode::IntDivS),
+            Opcode::IntRemU => int_binop!(h, IntOp::RemU, Opcode::IntRemU),
+            Opcode::IntRemS => int_binop!(h, IntOp::RemS, Opcode::IntRemS),
             Opcode::IntCmp => {
                 let width = header_a(h);
                 let pred = ir::IntCmpPred::from_u8(header_b(h) as u8);
                 let lhs = read_src!(operand!(1)).bits();
                 let rhs = read_src!(operand!(2)).bits();
-                let b = int_cmp(width, pred, lhs, rhs);
-                write_slot!(operand!(0), Value::bool(b));
+                write_slot!(operand!(0), Value::bool(arith::int_cmp(width, pred, lhs, rhs)));
                 advance!(Opcode::IntCmp);
             }
-            Opcode::FloatAdd => {
-                let width = header_a(h);
-                let lhs = read_src!(operand!(1)).bits();
-                let rhs = read_src!(operand!(2)).bits();
-                use std::ops::Add;
-                let r = casted_float_op!(width, add, lhs, rhs);
-                write_slot!(operand!(0), Value::u64(r));
-                advance!(Opcode::FloatAdd);
-            }
-            Opcode::FloatSub => {
-                let width = header_a(h);
-                let lhs = read_src!(operand!(1)).bits();
-                let rhs = read_src!(operand!(2)).bits();
-                use std::ops::Sub;
-                let r = casted_float_op!(width, sub, lhs, rhs);
-                write_slot!(operand!(0), Value::u64(r));
-                advance!(Opcode::FloatSub);
-            }
-            Opcode::FloatMul => {
-                let width = header_a(h);
-                let lhs = read_src!(operand!(1)).bits();
-                let rhs = read_src!(operand!(2)).bits();
-                use std::ops::Mul;
-                let r = casted_float_op!(width, mul, lhs, rhs);
-                write_slot!(operand!(0), Value::u64(r));
-                advance!(Opcode::FloatMul);
-            }
-            Opcode::FloatDiv => {
-                let width = header_a(h);
-                let lhs = read_src!(operand!(1)).bits();
-                let rhs = read_src!(operand!(2)).bits();
-                use std::ops::Div;
-                let r = casted_float_op!(width, div, lhs, rhs);
-                write_slot!(operand!(0), Value::u64(r));
-                advance!(Opcode::FloatDiv);
-            }
-            Opcode::FloatRem => {
-                let width = header_a(h);
-                let lhs = read_src!(operand!(1)).bits();
-                let rhs = read_src!(operand!(2)).bits();
-                use std::ops::Rem;
-                let r = casted_float_op!(width, rem, lhs, rhs);
-                write_slot!(operand!(0), Value::u64(r));
-                advance!(Opcode::FloatRem);
-            }
+            Opcode::FloatAdd => float_binop!(h, FloatOp::Add, Opcode::FloatAdd),
+            Opcode::FloatSub => float_binop!(h, FloatOp::Sub, Opcode::FloatSub),
+            Opcode::FloatMul => float_binop!(h, FloatOp::Mul, Opcode::FloatMul),
+            Opcode::FloatDiv => float_binop!(h, FloatOp::Div, Opcode::FloatDiv),
+            Opcode::FloatRem => float_binop!(h, FloatOp::Rem, Opcode::FloatRem),
             Opcode::FloatCmp => {
                 let width = header_a(h);
                 let pred = ir::FloatCmpPred::from_u8(header_b(h) as u8);
-                let lhs = read_src!(operand!(1));
-                let rhs = read_src!(operand!(2));
-                let b = match (width, pred) {
-                    (32, ir::FloatCmpPred::Eq) => lhs.as_f32() == rhs.as_f32(),
-                    (32, ir::FloatCmpPred::Lt) => lhs.as_f32() < rhs.as_f32(),
-                    (32, ir::FloatCmpPred::Le) => lhs.as_f32() <= rhs.as_f32(),
-                    (32, ir::FloatCmpPred::Gt) => lhs.as_f32() > rhs.as_f32(),
-                    (32, ir::FloatCmpPred::Ge) => lhs.as_f32() >= rhs.as_f32(),
-                    (64, ir::FloatCmpPred::Eq) => lhs.as_f64() == rhs.as_f64(),
-                    (64, ir::FloatCmpPred::Lt) => lhs.as_f64() < rhs.as_f64(),
-                    (64, ir::FloatCmpPred::Le) => lhs.as_f64() <= rhs.as_f64(),
-                    (64, ir::FloatCmpPred::Gt) => lhs.as_f64() > rhs.as_f64(),
-                    (64, ir::FloatCmpPred::Ge) => lhs.as_f64() >= rhs.as_f64(),
-                    _ => unreachable!(),
-                };
-                write_slot!(operand!(0), Value::bool(b));
+                let lhs = read_src!(operand!(1)).bits();
+                let rhs = read_src!(operand!(2)).bits();
+                write_slot!(operand!(0), Value::bool(arith::float_cmp(width, pred, lhs, rhs)));
                 advance!(Opcode::FloatCmp);
             }
-            Opcode::BitAnd => {
-                let width = header_a(h);
-                let lhs = read_src!(operand!(1)).bits();
-                let rhs = read_src!(operand!(2)).bits();
-                use std::ops::BitAnd;
-                let r = casted_uop!(width, bitand, lhs, rhs);
-                write_slot!(operand!(0), Value::u64(r));
-                advance!(Opcode::BitAnd);
-            }
-            Opcode::BitOr => {
-                let width = header_a(h);
-                let lhs = read_src!(operand!(1)).bits();
-                let rhs = read_src!(operand!(2)).bits();
-                use std::ops::BitOr;
-                let r = casted_uop!(width, bitor, lhs, rhs);
-                write_slot!(operand!(0), Value::u64(r));
-                advance!(Opcode::BitOr);
-            }
-            Opcode::BitXor => {
-                let width = header_a(h);
-                let lhs = read_src!(operand!(1)).bits();
-                let rhs = read_src!(operand!(2)).bits();
-                use std::ops::BitXor;
-                let r = casted_uop!(width, bitxor, lhs, rhs);
-                write_slot!(operand!(0), Value::u64(r));
-                advance!(Opcode::BitXor);
-            }
-            Opcode::Shl => {
-                let width = header_a(h);
-                let lhs = read_src!(operand!(1)).bits();
-                let rhs = read_src!(operand!(2)).as_u32() & (width as u32 - 1);
-                use std::ops::Shl;
-                let r = casted_uop!(width, shl, lhs, rhs);
-                write_slot!(operand!(0), Value::u64(r));
-                advance!(Opcode::Shl);
-            }
-            Opcode::ShrU => {
-                let width = header_a(h);
-                let lhs = read_src!(operand!(1)).bits();
-                let rhs = read_src!(operand!(2)).as_u32() & (width as u32 - 1);
-                use std::ops::Shr;
-                let r = casted_uop!(width, shr, lhs, rhs);
-                write_slot!(operand!(0), Value::u64(r));
-                advance!(Opcode::ShrU);
-            }
-            Opcode::ShrS => {
-                let width = header_a(h);
-                let lhs = read_src!(operand!(1)).bits();
-                let rhs = read_src!(operand!(2)).as_u32() & (width as u32 - 1);
-                use std::ops::Shr;
-                let r = casted_iop!(width, shr, lhs, rhs);
-                write_slot!(operand!(0), Value::u64(r as u64));
-                advance!(Opcode::ShrS);
-            }
+            Opcode::BitAnd => int_binop!(h, IntOp::And, Opcode::BitAnd),
+            Opcode::BitOr => int_binop!(h, IntOp::Or, Opcode::BitOr),
+            Opcode::BitXor => int_binop!(h, IntOp::Xor, Opcode::BitXor),
+            Opcode::Shl => int_binop!(h, IntOp::Shl, Opcode::Shl),
+            Opcode::ShrU => int_binop!(h, IntOp::ShrU, Opcode::ShrU),
+            Opcode::ShrS => int_binop!(h, IntOp::ShrS, Opcode::ShrS),
             Opcode::BoolNegate => {
                 let b = read_src!(operand!(1)).as_bool();
                 write_slot!(operand!(0), Value::bool(!b));
                 advance!(Opcode::BoolNegate);
             }
             Opcode::BitNot => {
-                // Inverts all 64 bits regardless of width; matches the old VM
-                let v = read_src!(operand!(1));
-                write_slot!(operand!(0), Value::u64(!v.bits()));
+                let v = read_src!(operand!(1)).bits();
+                write_slot!(operand!(0), Value::u64(arith::bit_not(header_a(h), v)));
                 advance!(Opcode::BitNot);
             }
             Opcode::FloatNeg => {
                 let v = read_src!(operand!(1)).bits();
-                let r = match header_a(h) {
-                    32 => (-f32::from_bits(v as u32)).to_bits() as u64,
-                    64 => (-f64::from_bits(v)).to_bits(),
-                    _ => unreachable!(),
-                };
-                write_slot!(operand!(0), Value::u64(r));
+                write_slot!(operand!(0), Value::u64(arith::float_neg(header_a(h), v)));
                 advance!(Opcode::FloatNeg);
             }
             Opcode::Cast => {
@@ -1014,8 +856,8 @@ fn exec_loop(
 /// `from`/`to` are widths in bits; signedness is carried by the CastKind.
 fn exec_cast(kind: CastKind, from: u32, to: u32, input: Value) -> Value {
     match kind {
-        CastKind::IntTrunc => input.truncated_raw(to),
-        CastKind::IntExtS => input.sign_extended_raw(from, to),
+        CastKind::IntTrunc => Value::u64(arith::int_trunc(to as u8, input.bits())),
+        CastKind::IntExtS => Value::u64(arith::int_ext_s(from as u8, to as u8, input.bits())),
         CastKind::FloatTrunc => Value::f32(input.as_f64() as f32),
         CastKind::FloatExt => Value::f64(input.as_f32() as f64),
         CastKind::F32ToUInt => {
@@ -1094,31 +936,6 @@ fn exec_cast(kind: CastKind, from: u32, to: u32, input: Value) -> Value {
             };
             Value::f64(f)
         }
-    }
-}
-
-fn signed_div_overflows(width: u8, lhs: u64, rhs: u64) -> bool {
-    let mask = if width == 64 { u64::MAX } else { (1u64 << width) - 1 };
-    let min = 1u64 << (width - 1);
-    (rhs & mask) == mask && (lhs & mask) == min
-}
-
-fn int_cmp(width: u8, pred: ir::IntCmpPred, lhs: u64, rhs: u64) -> bool {
-    use ir::IntCmpPred as P;
-    debug_assert!(width > 0 && width <= 64, "bad int cmp width {width}");
-    let shift = 64 - width as u32;
-    let l = lhs << shift;
-    let r = rhs << shift;
-    match pred {
-        P::Eq => l == r,
-        P::Slt => (l as i64) < (r as i64),
-        P::Sle => (l as i64) <= (r as i64),
-        P::Sgt => (l as i64) > (r as i64),
-        P::Sge => (l as i64) >= (r as i64),
-        P::Ult => l < r,
-        P::Ule => l <= r,
-        P::Ugt => l > r,
-        P::Uge => l >= r,
     }
 }
 

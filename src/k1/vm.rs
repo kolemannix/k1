@@ -38,77 +38,10 @@ macro_rules! vm_ice {
     };
 }
 
-macro_rules! casted_uop {
-    ($width:expr, $op:ident, $lhs:expr, $rhs:expr) => {
-        match $width {
-            8 => {
-                let r = ($lhs as u8).$op($rhs as u8);
-                r as u64
-            }
-            16 => {
-                let r = ($lhs as u16).$op($rhs as u16);
-                r as u64
-            }
-            32 => {
-                let r = ($lhs as u32).$op($rhs as u32);
-                r as u64
-            }
-            64 => {
-                let r = ($lhs as u64).$op($rhs as u64);
-                r
-            }
-            _ => unreachable!(),
-        }
-    };
-}
-
-macro_rules! casted_iop {
-    ($width:expr, $op:ident, $lhs:expr, $rhs:expr) => {
-        match $width {
-            8 => {
-                let r = ($lhs as i8).$op($rhs as i8);
-                r as i64
-            }
-            16 => {
-                let r = ($lhs as i16).$op($rhs as i16);
-                r as i64
-            }
-            32 => {
-                let r = ($lhs as i32).$op($rhs as i32);
-                r as i64
-            }
-            64 => {
-                let r = ($lhs as i64).$op($rhs as i64);
-                r
-            }
-            _ => unreachable!(),
-        }
-    };
-}
-
-macro_rules! casted_float_op {
-    ($width:expr, $op:ident, $lhs:expr, $rhs:expr) => {
-        match $width {
-            32 => {
-                let r = f32::from_bits($lhs as u32).$op(f32::from_bits($rhs as u32));
-                r.to_bits() as u64
-            }
-            64 => {
-                let r = f64::from_bits($lhs).$op(f64::from_bits($rhs));
-                r.to_bits()
-            }
-            _ => unreachable!(),
-        }
-    };
-}
-
 pub fn value_to_type_id(k1: &mut TypedProgram, value: Value, span: SpanId) -> K1Result<TypeId> {
     let raw = unsafe { (value.as_ptr() as *const k1_types::TypeId).read() };
     k1.type_id_from_raw(raw, span)
 }
-
-// Shared with the bc VM (bc/exec.rs) so arithmetic semantics cannot drift
-pub(crate) use {casted_float_op, casted_iop, casted_uop};
 
 /// Bit-for-bit mappings of K1 types
 #[allow(non_snake_case)]
@@ -394,45 +327,6 @@ impl Value {
     #[inline(always)]
     pub(crate) const fn as_usize(&self) -> usize {
         self.0 as usize
-    }
-
-    pub(crate) const fn truncated_raw(&self, to_bits: u32) -> Self {
-        match to_bits {
-            8 => Value(self.0 as u8 as u64),
-            16 => Value(self.0 as u16 as u64),
-            32 => Value(self.0 as u32 as u64),
-            _ => *self,
-        }
-    }
-
-    pub(crate) const fn sign_extended_raw(&self, from_bits: u32, to_bits: u32) -> Self {
-        match (from_bits, to_bits) {
-            (8, 16) => {
-                let v = self.0 as i8 as i16 as u16 as u64;
-                Value(v)
-            }
-            (8, 32) => {
-                let v = self.0 as i8 as i32 as u32 as u64;
-                Value(v)
-            }
-            (8, 64) => {
-                let v = self.0 as i8 as i64 as u64;
-                Value(v)
-            }
-            (16, 32) => {
-                let v = self.0 as i16 as i32 as u32 as u64;
-                Value(v)
-            }
-            (16, 64) => {
-                let v = self.0 as i16 as i64 as u64;
-                Value(v)
-            }
-            (32, 64) => {
-                let v = self.0 as i32 as i64 as u64;
-                Value(v)
-            }
-            _ => *self,
-        }
     }
 
     #[inline(always)]

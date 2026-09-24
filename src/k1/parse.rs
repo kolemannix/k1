@@ -1033,7 +1033,7 @@ pub enum NumericWidth {
 }
 
 impl NumericWidth {
-    pub const fn bits(&self) -> u32 {
+    pub const fn bits(&self) -> u8 {
         match self {
             NumericWidth::B8 => 8,
             NumericWidth::B16 => 16,

@@ -1296,17 +1296,7 @@ impl ScalarType {
     }
 
     pub fn get_layout(&self) -> Layout {
-        match self {
-            ScalarType::U8 | ScalarType::I8 | ScalarType::Char | ScalarType::Bool => {
-                Layout::from_scalar_bits(8)
-            }
-            ScalarType::U16 | ScalarType::I16 => Layout::from_scalar_bits(16),
-            ScalarType::U32 | ScalarType::I32 => Layout::from_scalar_bits(32),
-            ScalarType::U64 | ScalarType::I64 => Layout::from_scalar_bits(64),
-            ScalarType::F32 => Layout::from_scalar_bits(32),
-            ScalarType::F64 => Layout::from_scalar_bits(64),
-            ScalarType::Pointer => Layout::from_scalar_bits(64),
-        }
+        Layout::from_scalar_bits(self.width_bits() as u32)
     }
 
     pub fn width(&self) -> NumericWidth {
@@ -1321,6 +1311,10 @@ impl ScalarType {
             ScalarType::F64 => NumericWidth::B64,
             ScalarType::Pointer => NumericWidth::B64,
         }
+    }
+
+    pub fn width_bits(&self) -> u8 {
+        self.width().bits()
     }
 }
 

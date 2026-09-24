@@ -176,4 +176,6 @@ __int128 __multi3(__int128 a, __int128 b) {
   uint64_t r_hi = (uint64_t)(r >> 64) + a_lo * b_hi + a_hi * b_lo;
   return (__int128)(((unsigned __int128)r_hi << 64) | (uint64_t)r);
 }
+
+#include "musl/fmod.c"
 #endif // end wasm

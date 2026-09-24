@@ -383,6 +383,16 @@ pub enum DataInst {
     F64(f64),
 }
 
+impl DataInst {
+    pub fn bits(self) -> u64 {
+        match self {
+            DataInst::U64(v) => v,
+            DataInst::I64(v) => v as u64,
+            DataInst::F64(f) => f.to_bits(),
+        }
+    }
+}
+
 nz_u32_id!(InstId);
 impl InstId {
     fn as_value(&self) -> Value {
@@ -724,6 +734,35 @@ impl Value {
     pub const fn zero(t: ScalarType) -> Value {
         // The all-zeroes bit pattern is zero for every scalar, floats included
         Value::imm32(t, 0)
+    }
+
+    pub fn const_bits(self, u: &UnitView) -> Option<u64> {
+        match self {
+            Value::Data32 { t, data } => Some(data32_bits(t, data)),
+            Value::Inst(id) => match *u.inst(id) {
+                Inst::Data(data) => Some(data.bits()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+}
+
+pub fn data32_bits(t: ScalarType, data: u32) -> u64 {
+    match t {
+        ScalarType::F64 => (f32::from_bits(data) as f64).to_bits(),
+        ScalarType::I64 => data as i32 as i64 as u64,
+        ScalarType::F32
+        | ScalarType::Pointer
+        | ScalarType::I8
+        | ScalarType::I16
+        | ScalarType::I32
+        | ScalarType::U8
+        | ScalarType::U16
+        | ScalarType::U32
+        | ScalarType::U64
+        | ScalarType::Char
+        | ScalarType::Bool => data as u64,
     }
 }
 
@@ -1380,6 +1419,13 @@ impl InstKind {
         matches!(self, InstKind::Value(pt) if pt.is_empty())
     }
     #[track_caller]
+    pub fn expect_scalar(&self) -> ScalarType {
+        match self {
+            InstKind::Value(t) => t.expect_scalar(),
+            _ => panic!("Expected scalar value, got {}", self.kind_name()),
+        }
+    }
+    #[track_caller]
     pub fn expect_value(&self) -> Result<PhysicalType, String> {
         match self {
             InstKind::Value(t) => Ok(*t),
@@ -1877,30 +1923,37 @@ impl<'k1> Builder<'k1> {
     }
 
     fn make_int_value(&mut self, int_value: &TypedIntValue, comment: IrComment) -> Value {
-        match int_value {
-            TypedIntValue::U8(i) => Value::Data32 { t: ScalarType::U8, data: *i as u32 },
-            TypedIntValue::U16(i) => Value::Data32 { t: ScalarType::U16, data: *i as u32 },
-            TypedIntValue::U32(i) => Value::Data32 { t: ScalarType::U32, data: *i },
-            TypedIntValue::U64(i) => {
-                if *i <= u32::MAX as u64 {
-                    Value::imm32(ScalarType::U64, *i as u32)
-                } else {
-                    let inst = self.push_inst(Inst::Data(DataInst::U64(*i)), comment);
-                    inst.as_value()
-                }
-            }
-            TypedIntValue::I8(i) => Value::Data32 { t: ScalarType::I8, data: *i as u8 as u32 },
-            TypedIntValue::I16(i) => Value::Data32 { t: ScalarType::I16, data: *i as u16 as u32 },
-            TypedIntValue::I32(i) => Value::imm32(ScalarType::I32, *i as u32),
-            TypedIntValue::I64(i) => {
-                if *i >= i32::MIN as i64 && *i <= i32::MAX as i64 {
-                    Value::imm32(ScalarType::I64, *i as i32 as u32)
-                } else {
-                    let inst = self.push_inst(Inst::Data(DataInst::I64(*i)), comment);
-                    inst.as_value()
-                }
+        let t = int_value.get_integer_type().get_scalar_type();
+        let bits = crate::arith::int_trunc(t.width_bits(), int_value.to_u64_bits());
+        self.push_const(t, bits, comment)
+    }
+
+    fn push_const(&mut self, t: ScalarType, bits: u64, comment: IrComment) -> Value {
+        let data32 = match t {
+            ScalarType::F64 => (f64::from_bits(bits) as f32).to_bits(),
+            _ => bits as u32,
+        };
+        if data32_bits(t, data32) == bits {
+            return Value::imm32(t, data32);
+        }
+        let data = match t {
+            ScalarType::U64 => DataInst::U64(bits),
+            ScalarType::I64 => DataInst::I64(bits as i64),
+            ScalarType::F64 => DataInst::F64(f64::from_bits(bits)),
+            _ => panic!("{t:?} constant {bits:#x} has no encoding"),
+        };
+        self.push_inst(Inst::Data(data), comment).as_value()
+    }
+
+    fn push_value(&mut self, inst: Inst, comment: IrComment) -> Value {
+        if self.k1.optimize_ir() {
+            match fold::fold_inst(&self.u.view(), &inst) {
+                Some(fold::Simplified::Const(t, bits)) => return self.push_const(t, bits, comment),
+                Some(fold::Simplified::Value(v)) => return v,
+                None => {}
             }
         }
+        self.push_inst(inst, comment).as_value()
     }
 
     fn push_block(&mut self, kind: BlockSourceKind) -> BlockId {
@@ -2486,14 +2539,9 @@ fn compile_expr(
                 Some(scrutinee_expr) => {
                     let value = compile_expr(b, None, scrutinee_expr)?;
                     let scrutinee_type = b.k1.exprs.get_type(scrutinee_expr);
-                    let width = b
-                        .get_physical_type(scrutinee_type)
-                        .unwrap()
-                        .as_scalar()
-                        .unwrap()
-                        .width()
-                        .bits();
-                    Some((value, width as u8))
+                    let width =
+                        b.get_physical_type(scrutinee_type).unwrap().expect_scalar().width_bits();
+                    Some((value, width))
                 }
             };
 
@@ -3183,22 +3231,21 @@ fn compile_ir_builtin(
             let base = compile_expr(b, None, arg0)?;
             let pt = b.get_physical_type(b.k1.exprs.get_type(arg0))?;
             let st = pt.expect_scalar();
-            let width = b.k1.get_pt_layout(pt).size_bits() as u8;
+            let width = st.width_bits();
             let neg = match st {
-                ScalarType::Bool => b.push_inst_anon(Inst::BoolNegate { v: base }),
-                ScalarType::F32 | ScalarType::F64 => {
-                    b.push_inst_anon(Inst::FloatNeg { v: base, width })
-                }
-                _ => b.push_inst_anon(Inst::IntSub { lhs: Value::zero(st), rhs: base, width }),
+                ScalarType::Bool => Inst::BoolNegate { v: base },
+                ScalarType::F32 | ScalarType::F64 => Inst::FloatNeg { v: base, width },
+                _ => Inst::IntSub { lhs: Value::zero(st), rhs: base, width },
             };
-            let stored = store_scalar_if_dst(b, dst, neg.as_value());
+            let neg = b.push_value(neg, IrComment::None);
+            let stored = store_scalar_if_dst(b, dst, neg);
             Ok(stored)
         }
         BuiltinIr::BitNot => {
             let arg0 = *b.k1.mem.get_nth(call.args, 0);
             let base = compile_expr(b, None, arg0)?;
-            let neg = b.push_inst_anon(Inst::BitNot { v: base });
-            let stored = store_scalar_if_dst(b, dst, neg.as_value());
+            let neg = b.push_value(Inst::BitNot { v: base }, IrComment::None);
+            let stored = store_scalar_if_dst(b, dst, neg);
             Ok(stored)
         }
         BuiltinIr::Bitcast => {
@@ -3328,8 +3375,7 @@ fn compile_ir_builtin(
             let lhs = compile_expr(b, None, arg0)?;
             let arg1 = *b.k1.mem.get_nth(call.args, 1);
             let rhs = compile_expr(b, None, arg1)?;
-            let lhs_pt = b.get_value_kind(lhs).expect_value().unwrap();
-            let width = b.k1.get_pt_layout(lhs_pt).size_bits() as u8;
+            let width = b.get_value_kind(lhs).expect_scalar().width_bits();
             let inst = match op {
                 BitwiseBinopKind::And => Inst::BitAnd { lhs, rhs, width },
                 BitwiseBinopKind::Or => Inst::BitOr { lhs, rhs, width },
@@ -3340,8 +3386,8 @@ fn compile_ir_builtin(
                 }
                 BitwiseBinopKind::SignedShiftRight => Inst::BitSignedShiftRight { lhs, rhs, width },
             };
-            let res = b.push_inst_anon(inst);
-            let stored = store_scalar_if_dst(b, dst, res.as_value());
+            let res = b.push_value(inst, IrComment::None);
+            let stored = store_scalar_if_dst(b, dst, res);
             Ok(stored)
         }
         BuiltinIr::PointerIndex => {
@@ -3758,8 +3804,8 @@ fn compile_cast(
                 }
                 _ => unreachable!(),
             };
-            let inst = b.push_inst_anon(inst);
-            let stored = store_scalar_if_dst(b, dst, inst.as_value());
+            let value = b.push_value(inst, IrComment::None);
+            let stored = store_scalar_if_dst(b, dst, value);
             Ok(stored)
         }
         CastType::FloatExtend
@@ -3808,8 +3854,7 @@ fn compile_arith_binop(
     use ArithOpClass as Class;
     use ArithOpOp as Op;
     let lhs_type = b.k1.exprs.get_type(arg0);
-    let lhs_pt = b.get_physical_type(lhs_type)?;
-    let lhs_width = b.k1.get_pt_layout(lhs_pt).size_bits() as u8;
+    let lhs_width = b.get_physical_type(lhs_type)?.expect_scalar().width_bits();
     let inst = match (op.op, op.class) {
         (Op::Add, Class::SignedInt | Class::UnsignedInt) => {
             Inst::IntAdd { lhs, rhs, width: lhs_width }
@@ -3872,8 +3917,8 @@ fn compile_arith_binop(
             Inst::FloatCmp { lhs, rhs, pred: FloatCmpPred::Ge, width: lhs_width }
         }
     };
-    let res = b.push_inst(inst, IrComment::None);
-    let stored = store_scalar_if_dst(b, dst, res.as_value());
+    let res = b.push_value(inst, IrComment::None);
+    let stored = store_scalar_if_dst(b, dst, res);
     Ok(stored)
 }
 
@@ -3955,13 +4000,12 @@ fn compile_int_equals(
     let subject_value = compile_expr(b, None, subject)?;
     let subject_type = b.k1.exprs.get_type(subject);
     let pt = b.get_physical_type(subject_type)?;
-    let width = b.k1.get_pt_layout(pt).size_bits() as u8;
+    let width = pt.expect_scalar().width_bits();
     let rhs = compile_static_value(b, value, pt);
-    let cmp = b.push_inst(
+    Ok(b.push_value(
         Inst::IntCmp { lhs: subject_value, rhs, pred: IntCmpPred::Eq, width },
         IrComment::MatchingCondCond,
-    );
-    Ok(cmp.as_value())
+    ))
 }
 
 fn get_static_value_int_bits_masked(k1: &TypedProgram, value_id: StaticValueId, width: u8) -> u64 {
@@ -4356,6 +4400,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
     }
 }
 
+mod fold;
 mod iropt;
 pub use iropt::optimize_unit;
 mod unit;

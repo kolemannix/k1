@@ -1673,6 +1673,7 @@ macro_rules! dep_display_via_display {
 }
 
 dep_display_via_display!(
+    u8,
     u32,
     u64,
     usize,

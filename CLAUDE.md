@@ -28,8 +28,8 @@ metaprogramming, C-like layout and ABI. This repo is the Rust compiler, its
 compile-time VM, the LLVM backend, the language server, the K1 module library,
 and the K1 programs that dogfood all of it.
 
-K1 language reference for agents: `ai_docs/k1-syntax-basics.md` and
-`ai_docs/k1-additional.md`. `test_src/suite1` is the executable reference.
+K1 language reference for agents: `docs/ai_docs/k1-syntax-basics.md` and
+`docs/ai_docs/k1-additional.md`. `test_src/suite1` is the executable reference.
 
 ## Rust Style
 
@@ -137,6 +137,10 @@ for compile-time execution, codegen_llvm for binaries.
     compacts it into layout order and stores it as arena slices on the
     `Copy` `IrUnit`; every reader takes a `UnitView`. Call, phi, switch,
     cmpxchg and vec-op payloads are per-unit arrays.
+  - `ir/fold.rs`: the builder's `push_value` folds constant scalar ops and
+    identities as they are emitted.
+- `arith.rs`: integer and float op semantics shared by the bc VM and
+  `ir/fold.rs`; integer results are zero-extended to their width.
 - `bc.rs` + `bc/{lower,exec,disasm}.rs`: flat bytecode lowered from IR, the VM
   that runs compile-time code, disassembler.
 - `vm.rs` + `vm/vm_ffi.rs`: VM memory model, `k1_types` mirrors of K1
@@ -222,7 +226,7 @@ not in the suite.
 
 ## Everything Else
 
-- `ai_docs/`: K1 language notes maintained for agents. `design/`: exploratory
+- `docs/ai_docs/`: K1 language notes maintained for agents. `design/`: exploratory
   notes, not always current. `content/`: writing about K1.
 - `perf/`: stress generators. `sandbox/`: scratch. `examples/`: two demos.
 - `builds/`: bundle/install scripts and Linux cross-build notes. `llvm/`: the

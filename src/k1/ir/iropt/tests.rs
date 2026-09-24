@@ -92,7 +92,7 @@ fn commit_renumbers_into_layout_order_and_drops_unlinked() {
         None,
         false,
     );
-    commit_unit(&mut ir, &mut u, &mut unit);
+    commit_unit(&mut ir, &u, &mut unit);
     let v = unit.view(&ir.mem);
     assert_eq!(v.inst_count(), 5);
     let mut kinds = Vec::new();
