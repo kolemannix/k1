@@ -26,7 +26,7 @@ fn optimize_unit_body(k1: &mut TypedProgram, root: IrUnitId, unit: IrUnit) -> K1
         eprintln!("optimizing {}", unit_to_string(k1, root, true));
     }
 
-    let skip_inline = !k1.inline_ir();
+    let skip_inline = !k1.optimize_ir();
 
     let mut visit_stack = std::mem::take(&mut k1.ir.opt_buf_visit_stack);
     let mut visited = std::mem::take(&mut k1.ir.opt_buf_visited);
@@ -76,17 +76,13 @@ fn optimize_unit_body(k1: &mut TypedProgram, root: IrUnitId, unit: IrUnit) -> K1
                     inline_calls_in_unit(k1, &mut u, unit_id);
                     k1.trace_pop(inline_frame);
 
-                    let cfg_frame = k1.trace_push_unit(TraceKind::IrCfgCompute, unit_id, None);
-                    u.cfg_compute();
-                    k1.trace_pop(cfg_frame);
-
                     let simplify_frame = k1.trace_push_unit(TraceKind::IrSimplify, unit_id, None);
                     let passes = cfg_simplify(k1, &mut u);
                     k1.trace.set_top_count(passes);
                     k1.trace_pop(simplify_frame);
 
                     insts_created += (u.inst_count() - loaded_insts) as u64;
-                    commit_unit(&mut k1.ir, &mut u, &mut unit);
+                    commit_unit(&mut k1.ir, &u, &mut unit);
                     k1.ir.release_unit_buf(u);
                 }
                 *get_compiled_unit_mut(&mut k1.ir, unit_id).unwrap() = unit;
@@ -466,7 +462,7 @@ fn rewrite_value(mappings: &RewriteMappings, value: &mut Value) -> bool {
 }
 
 pub fn cfg_simplify(k1: &mut TypedProgram, u: &mut UnitBuf) -> u64 {
-    debug_assert!(u.cfg_valid, "cfg is not computed");
+    u.compute_preds();
 
     let mut remove = k1.tmp.new_list(0);
     let entry = u.body.first_block;
@@ -592,7 +588,6 @@ pub fn cfg_simplify(k1: &mut TypedProgram, u: &mut UnitBuf) -> u64 {
         !noop
     }
     debug!("cfg_simplify end\n{}", blocks_to_string(k1, &u.view(), false));
-    u.cfg_valid = true;
     passes
 }
 

@@ -45,14 +45,14 @@ fn cfg_preds_follow_terminators_with_duplicate_edges() {
 
     for _ in 0..4 {
         *u.inst_mut(entry_inst) = switch;
-        u.cfg_compute();
+        u.compute_preds();
         assert_eq!(u.preds(loop_block), [entry, entry]);
         assert_eq!(u.preds(entry), [loop_block]);
         assert_eq!(u.preds(exit), [entry, loop_block]);
         assert!(u.preds(dead).is_empty());
 
         *u.inst_mut(entry_inst) = Inst::Ret { v: Value::Empty, agg: false };
-        u.cfg_compute();
+        u.compute_preds();
         for b in [entry, loop_block, exit, dead] {
             assert!(u.preds(b).is_empty());
         }

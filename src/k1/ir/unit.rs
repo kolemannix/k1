@@ -307,7 +307,6 @@ pub struct UnitBuf {
     cmpxchgs: Vec<AtomicCmpxchgData>,
     vec_ops: Vec<VecOpData>,
 
-    pub cfg_valid: bool,
     preds: Vec<BlockId>,
     pred_ranges: Vec<(u32, u32)>,
     cfg_edges: Vec<(BlockId, BlockId)>,
@@ -346,7 +345,6 @@ impl UnitBuf {
         self.switch_cases.clear();
         self.cmpxchgs.clear();
         self.vec_ops.clear();
-        self.cfg_valid = false;
         self.preds.clear();
         self.pred_ranges.clear();
     }
@@ -583,7 +581,7 @@ impl UnitBuf {
         after
     }
 
-    pub fn cfg_compute(&mut self) {
+    pub fn compute_preds(&mut self) {
         let block_count = self.blocks.len();
         self.cfg_edges.clear();
         self.cfg_seen.clear();
@@ -638,7 +636,6 @@ impl UnitBuf {
             self.preds[(range.0 + range.1) as usize] = *pred;
             range.1 += 1;
         }
-        self.cfg_valid = true;
     }
 
     pub fn preds(&self, b: BlockId) -> &[BlockId] {

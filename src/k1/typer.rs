@@ -3108,8 +3108,9 @@ impl TypedProgram {
         self.plan.modules().get(module_id.as_u32() as usize - 1)
     }
 
-    pub fn inline_ir(&self) -> bool {
-        !(self.config.command.codegens() && self.plan.config.debug)
+    pub fn optimize_ir(&self) -> bool {
+        self.config.tools.optimize_ir
+            && !(self.config.command.codegens() && self.plan.config.debug)
     }
 
     pub fn host_platform(&self) -> compiler::Platform {
@@ -3422,6 +3423,21 @@ impl TypedProgram {
             TypedStmt::Require(req) => req.span,
             TypedStmt::Defer(defer) => defer.span,
         }
+    }
+
+    fn add_assignment_stmt(
+        &mut self,
+        destination: TypedExprId,
+        value: TypedExprId,
+        span: SpanId,
+    ) -> TypedStmtId {
+        if let TypedExpr::Variable(variable_expr) = *self.exprs.get(destination) {
+            let variable = self.variables.get_mut(variable_expr.variable_id);
+            if matches!(variable.kind, VariableKind::Stack | VariableKind::StackSynthetic) {
+                variable.flags.insert(VariableFlags::Reassigned);
+            }
+        }
+        self.stmts.add(TypedStmt::Assignment(AssignmentStmt { destination, value, span }))
     }
 
     fn add_expr_stmt(&mut self, expr: TypedExprId) -> TypedStmtId {
@@ -6682,11 +6698,7 @@ impl TypedProgram {
                     span,
                 ),
             };
-            let store_stmt = self.stmts.add(TypedStmt::Assignment(AssignmentStmt {
-                destination: element_place,
-                value: *element_value_expr,
-                span,
-            }));
+            let store_stmt = self.add_assignment_stmt(element_place, *element_value_expr, span);
             self.push_block_stmt_id(&mut list_lit_block, store_stmt);
         }
         let final_expr = match list_kind {
@@ -8238,12 +8250,9 @@ impl TypedProgram {
             ctx.with_no_expected_type(),
             iterable_span,
         )?;
-        let index_increment_statement = TypedStmt::Assignment(AssignmentStmt {
-            destination: index_variable.variable_expr,
-            value: add_operation,
-            span: iterable_span,
-        });
-        self.push_block_stmt(&mut loop_block, index_increment_statement);
+        let index_increment_statement =
+            self.add_assignment_stmt(index_variable.variable_expr, add_operation, iterable_span);
+        self.push_block_stmt_id(&mut loop_block, index_increment_statement);
 
         self.push_block_stmt_id(&mut loop_block, next_variable.defn_stmt); // let next = iter.next();
 
@@ -12810,13 +12819,7 @@ impl TypedProgram {
                                 "Cannot re-assign a synthetic variable or binding; if this is a pattern-bound reference, store through it with `x.* = ...`"
                             );
                         }
-                        VariableKind::Stack => {
-                            self.variables
-                                .get_mut(variable_id)
-                                .flags
-                                .insert(VariableFlags::Reassigned);
-                        }
-                        VariableKind::Global(_) => {}
+                        VariableKind::Stack | VariableKind::Global(_) => {}
                     }
                     (lhs, Some(variable_id))
                 } else {
@@ -12866,12 +12869,7 @@ impl TypedProgram {
                 if self.exprs.get_type(rhs) == NEVER_TYPE_ID {
                     return Ok(Some(self.add_expr_stmt(rhs)));
                 }
-                let stmt_id = self.stmts.add(TypedStmt::Assignment(AssignmentStmt {
-                    destination,
-                    value: rhs,
-                    span: assignment.span,
-                }));
-                Ok(Some(stmt_id))
+                Ok(Some(self.add_assignment_stmt(destination, rhs, assignment.span)))
             }
             ParsedStmt::Defer(defer) => {
                 if ctx.flags.contains(EvalExprFlags::Defer) {

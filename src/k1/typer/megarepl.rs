@@ -599,11 +599,8 @@ impl TypedProgram {
                     // a set
                     if let Some(initializer) = rhs {
                         let variable_expr = self.synth_variable_expr(variable_id, SpanId::NONE);
-                        let assign_stmt = self.stmts.add(TypedStmt::Assignment(AssignmentStmt {
-                            destination: variable_expr,
-                            value: initializer,
-                            span: parsed_let.span,
-                        }));
+                        let assign_stmt =
+                            self.add_assignment_stmt(variable_expr, initializer, parsed_let.span);
                         self.push_block_stmt_id(&mut cell_block, assign_stmt);
                     }
                 }
@@ -644,11 +641,7 @@ impl TypedProgram {
                                 self.megarepl_make_global(name, expr_type, expr_span);
                             let variable_expr = self.synth_variable_expr(variable_id, SpanId::NONE);
                             let assign_stmt =
-                                self.stmts.add(TypedStmt::Assignment(AssignmentStmt {
-                                    destination: variable_expr,
-                                    value: expr_id,
-                                    span: expr_span,
-                                }));
+                                self.add_assignment_stmt(variable_expr, expr_id, expr_span);
                             self.push_block_stmt_id(&mut cell_block, assign_stmt);
                             output_globals.push((global_id, expr_type));
                         }

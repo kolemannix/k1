@@ -1606,7 +1606,6 @@ fn finalize_unit(
     builtin_kind: Option<BackendBuiltin>,
 ) -> K1Result<()> {
     let mut unit = IrUnit::new(result_type_id, unit_id, fn_type, builtin_kind, is_debug);
-    b.u.cfg_compute();
     iropt::cfg_simplify(b.k1, b.u);
     commit_unit(&mut b.k1.ir, b.u, &mut unit);
     match unit_id {
@@ -1668,10 +1667,6 @@ impl<'k1> Builder<'k1> {
             cur_span: SpanId::NONE,
             entry_span: SpanId::NONE,
         }
-    }
-
-    pub fn optimize_enabled(&self) -> bool {
-        self.k1.config.tools.optimize_ir
     }
 
     fn make_inst(&mut self, inst: Inst, comment: IrComment) -> InstId {
@@ -1778,7 +1773,7 @@ impl<'k1> Builder<'k1> {
         comment: IrComment,
     ) -> InstId {
         if let Value::Data32 { t: ScalarType::Bool, data: b32 } = cond
-            && self.optimize_enabled()
+            && self.k1.optimize_ir()
         {
             if b32 == 1 {
                 // JMPIF true ...
@@ -2058,12 +2053,14 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
         TypedStmt::Let(let_stmt) => {
             let let_stmt = *let_stmt;
 
-            let rich_type_id = let_stmt.variable_type;
-            let var_pt = b.get_physical_type(let_stmt.variable_type)?;
-            let rich_pt = b.get_physical_type(rich_type_id)?;
+            let pt = b.get_physical_type(let_stmt.variable_type)?;
 
             let typed_var = b.k1.variables.get(let_stmt.variable_id);
             let returned = typed_var.is_returned();
+            let is_ssa_value = pt.is_scalar()
+                && !typed_var.is_address_taken()
+                && !typed_var.is_reassigned()
+                && b.k1.optimize_ir();
             let debug_info = Some(IrDebugVariableInfo {
                 name: typed_var.name,
                 original_type_id: let_stmt.variable_type,
@@ -2071,24 +2068,28 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
                 source_span: b.cur_span,
             });
 
-            if rich_pt.is_empty() {
-                //let span = b.cur_span;
-                if let Some(init) = let_stmt.initializer {
-                    compile_expr(b, None, init)?;
-                }
+            if pt.is_empty() || is_ssa_value {
+                let value = if pt.is_empty() {
+                    match let_stmt.initializer {
+                        None => Value::Empty,
+                        Some(init) => {
+                            compile_expr(b, None, init)?;
+                            Value::Empty
+                        }
+                    }
+                } else {
+                    match let_stmt.initializer {
+                        None => Value::Empty,
+                        Some(init) => compile_expr(b, None, init)?,
+                    }
+                };
                 b.k1.ir.b_variables.insert(
                     let_stmt.variable_id,
-                    BuilderVariable {
-                        id: let_stmt.variable_id,
-                        value: Value::Empty,
-                        pt: rich_pt,
-                        indirect: false,
-                    },
+                    BuilderVariable { id: let_stmt.variable_id, value, pt, indirect: false },
                 );
-                Ok(Value::Empty)
             } else {
                 let variable_alloca =
-                    b.push_alloca_ext(rich_pt, IrComment::SourceLet, debug_info, returned);
+                    b.push_alloca_ext(pt, IrComment::SourceLet, debug_info, returned);
 
                 if let Some(init) = let_stmt.initializer {
                     compile_expr(b, Some(variable_alloca.as_value()), init)?;
@@ -2100,18 +2101,18 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
                 // Scalars however are represented as values; and the variable is a place,
                 // an address, so we consider it an 'indirect' representation of that scalar value,
                 // for example an i32.
-                let is_direct = rich_pt.is_agg();
+                let is_direct = pt.is_agg();
                 b.k1.ir.b_variables.insert(
                     let_stmt.variable_id,
                     BuilderVariable {
                         id: let_stmt.variable_id,
                         value: variable_alloca.as_value(),
-                        pt: var_pt,
+                        pt,
                         indirect: !is_direct,
                     },
                 );
-                Ok(Value::Empty)
             }
+            Ok(Value::Empty)
         }
         TypedStmt::Assignment(ass) => {
             let ass = *ass;
@@ -2606,7 +2607,7 @@ fn compile_expr(
                     } else {
                         match result_value {
                             MatchDst::Phi(incomings) => {
-                                let value = if incomings.len() == 1 && b.optimize_enabled() {
+                                let value = if incomings.len() == 1 && b.k1.optimize_ir() {
                                     incomings[0].value
                                 } else {
                                     let incomings_handle = b.u.push_phi_cases(incomings.as_slice());
@@ -3062,7 +3063,7 @@ fn compile_variable_to_address(
                 && global.reload_ns.is_none()
                 && value_pt.is_scalar()
                 && !require_address
-                && b.optimize_enabled()
+                && b.k1.optimize_ir()
             {
                 let value = compile_static_value(b, initial_value, value_pt);
                 let folded_value = match value {
@@ -3119,6 +3120,9 @@ fn compile_variable_to_address(
             let var_value = var.value;
             let var_indirect = var.indirect;
             let is_constant = false;
+            if require_address && var.pt.is_scalar() && !var_indirect {
+                b.k1.ice_span(b.cur_span, "Address required for a variable bound to a value")
+            }
             Ok(CompileVariableResult::Address {
                 addr: var_value,
                 pt: var.pt,
@@ -4362,7 +4366,7 @@ pub use unit::*;
 pub fn unit_to_string(k1: &TypedProgram, unit: IrUnitId, show_source: bool) -> String {
     let mut s = String::new();
     let unit = get_compiled_unit(&k1.ir, unit).unwrap();
-    display_unit(&mut s, k1, &unit, show_source).unwrap();
+    display_unit(&mut s, k1, unit, show_source).unwrap();
     s
 }
 
