@@ -164,7 +164,7 @@ impl TypedProgram {
         type_instance_info.snap(w);
         write_map_snap(w, type_defn_info);
         write_map_snap(w, type_specializations);
-        write_map_snap(w, phys_types);
+        phys_types.snap(w);
         w.write_t(builtin_types);
         agg_types.snap(w);
         lambda_types.snap(w);
@@ -278,7 +278,7 @@ impl TypedProgram {
         k1.type_instance_info.restore(r);
         k1.type_defn_info = restore_map_snap(r);
         k1.type_specializations = restore_map_snap(r);
-        k1.phys_types = restore_map_snap(r);
+        k1.phys_types.restore(r);
         k1.builtin_types = r.read_t();
         k1.agg_types.restore(r);
         k1.lambda_types.restore(r);

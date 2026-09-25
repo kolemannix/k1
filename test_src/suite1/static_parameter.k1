@@ -5,7 +5,14 @@ fn add-static[i: static int](x: int): int {
   i + x
 }
 
+fn scaled[i: static int](x: i): int { #static(x) x * 2 + 1 }
+
 fn test() {
+  let three: static int = 3
+  let folded: int = #static(three) three * 7
+  assert-equals(folded, 21)
+  assert-equals(scaled[21](21), 43)
+
   let THREE: static int = 3
   let result = add-static[type-of(THREE)](3)
   let result2 = add-static[3](3)

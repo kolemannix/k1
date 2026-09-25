@@ -100,6 +100,7 @@ pub fn int_cmp(width: u8, pred: IntCmpPred, lhs: u64, rhs: u64) -> bool {
         IntCmpPred::Ule => l <= r,
         IntCmpPred::Ugt => l > r,
         IntCmpPred::Uge => l >= r,
+        IntCmpPred::Ne => l != r,
     }
 }
 
@@ -165,6 +166,7 @@ pub fn float_cmp(width: u8, pred: FloatCmpPred, lhs: u64, rhs: u64) -> bool {
             FloatCmpPred::Le => l <= r,
             FloatCmpPred::Gt => l > r,
             FloatCmpPred::Ge => l >= r,
+            FloatCmpPred::Ne => l != r,
         }
     } else {
         let l = f64::from_bits(lhs);
@@ -175,6 +177,7 @@ pub fn float_cmp(width: u8, pred: FloatCmpPred, lhs: u64, rhs: u64) -> bool {
             FloatCmpPred::Le => l <= r,
             FloatCmpPred::Gt => l > r,
             FloatCmpPred::Ge => l >= r,
+            FloatCmpPred::Ne => l != r,
         }
     }
 }

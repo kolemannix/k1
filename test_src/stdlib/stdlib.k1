@@ -2,6 +2,7 @@ fn test-all() {
   stream_test/test()
   pubsub_test/test()
   hash_test/test()
+  spill_string_test/test()
   test-fixlist()
   test-bitfield()
   test-format()

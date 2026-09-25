@@ -21,10 +21,6 @@ ns for buffer {
 
   fn(inline) raw-parts[t](self: buffer[t]): { ptr: ptr, len: size } { .{ ptr = self.data, len = self.len } }
 
-  fn(inline) check-index(len: size, index: size) {
-    if index.unsigned() >= len.unsigned() crash-bounds(len, index, "index out of bounds")
-  }
-
   fn(inline) grown-cap(cap: size, elem-size: size): size {
     if cap == 0 { if elem-size >= 1024 1 else 8 } else cap * 2
   }
@@ -91,7 +87,7 @@ ns for buffer {
     self.* = .{ data, len = new-count }
   }
 
-  fn _enlarged-clone-in[t, a: allocator](self: buffer[t], alloc: a, new-count: size): buffer[t] {
+  fn(inline) _enlarged-clone-in[t, a: allocator](self: buffer[t], alloc: a, new-count: size): buffer[t] {
     let new = allocate-in[t, _](alloc, new-count)
     buffer/copy(src = self, dst = new)
     new
@@ -101,15 +97,13 @@ ns for buffer {
     self._enlarged-clone-in[t, _](mem/current-arena(), new-count)
   }
 
-  fn copy[t](src: buffer[t], dst: buffer[t]) {
+  fn(inline) copy[t](src: buffer[t], dst: buffer[t]) {
     if src.len > dst.len crash-bounds(dst.len, src.len, "buffer copy: src longer than dst")
-    if src.len == 0 return
     mem/copy(dst = dst.data, src = src.data, count = src.size-bytes())
   }
 
-  fn move[t](src: buffer[t], dst: buffer[t]) {
+  fn(inline) move[t](src: buffer[t], dst: buffer[t]) {
     if src.len > dst.len crash-bounds(dst.len, src.len, "buffer move: src longer than dst")
-    if src.len == 0 return
     mem/move(dst = dst.data, src = src.data, count = src.size-bytes())
   }
 
@@ -118,7 +112,7 @@ ns for buffer {
   }
 
   fn remove[t](self: buffer[t], index: size) {
-    self.check-bounds(index)
+    checked-index(index, self.len)
     if index + 1 < self.len {
       buffer/move(src = self.slice(index + 1, self.len), dst = self.slice(index, self.len - 1))
     }
@@ -130,10 +124,6 @@ ns for buffer {
 
   fn(inline) index-unchecked[t](self: buffer[t], index: size): *t {
     self.data-ptr().ref-at[t](index)
-  }
-
-  fn(inline) check-bounds[t](self: buffer[t], index: size) {
-    buffer/check-index(self.len, index)
   }
 
   fn(inline) memset[t](self: buffer[t], value: u8): empty {
@@ -490,8 +480,7 @@ impl[t] as-buffer[t = t] for buffer[t] {
 
 impl[t] index[key = size, t = t] for buffer[t] {
   fn(inline) index-ref(self, key: size): *t {
-    self.check-bounds(key)
-    self.index-unchecked(key)
+    self.index-unchecked(checked-index(key, self.len))
   }
 }
 

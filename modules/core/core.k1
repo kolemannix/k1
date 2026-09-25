@@ -1,6 +1,8 @@
 // Copyright (c) 2025 knix
 // All rights reserved.
 
+use core/spill-list
+
 fn assert-equals[t: print and equals](context locn: k1/source-location)(a: t, b: t) {
   if a != b {
     crash("ASSERT FAILED: $a != $b")
@@ -271,10 +273,10 @@ impl scalar-cmp for char {
 }
 
 impl[t: print] show for t {
-  fn show(self): string { 
-    let sb = string-builder/new()
-    self.print-to(sb.&)
-    sb.build()
+  fn show(self): string {
+    let bytes = spill-list/new[u8, 64]()
+    self.print-to(bytes.&)
+    string/wrap-bytes(bytes.as-span()).cloned()
   }
 }
 
@@ -291,34 +293,46 @@ impl print for char { fn print-to[w: writer](self: char, w) { w.write-char(self)
 // Direct specialized 'show' impl to avoid going through a buffer
 impl show for char { fn show(self: char): string { self.to-string() } }
 
-fn format-uint[w: writer](context w)(value: u64, base: u64) {
-  if value == 0 { w.write-char('0'); return }
-  else if value < base {
-    let digit = u8/to-ascii-digit(value.trunc[u8])
-    w.write-char(digit)
-  } else if value < (base * 2) {
-    let first = (value / base)
-    let first-digit = u8/to-ascii-digit(first.trunc[u8])
-    let second = value % base
-    let second-digit = u8/to-ascii-digit(second.trunc[u8])
-    w.write-char(first-digit)
-    w.write-char(second-digit)
-  } else {
-    let remaining = value
-    let digits = fixlist/uninit[char, 64]
-    while remaining > 0 {
-      let d = remaining % base
-      let c = u8/to-ascii-digit(d.trunc[u8])
-      digits.push(c)
-      remaining = remaining / base
-    }
-
-    digits.reverse()
-
-    w.write-bytes(digits.as-span().as-byte-span())
-
-    .{}
+let DECIMAL_PAIRS: array[u16, 100] = {
+  let pairs: array[u16, 100] = uninit
+  for i in (0: u8).until(100) {
+    let two: array[u8, 2] = [u8/to-ascii-digit(i / 10).as-u8(), u8/to-ascii-digit(i % 10).as-u8()]
+    pairs.[i.widen[size]] = mem/read-unaligned[u16](two.&.as[ptr])
   }
+  pairs
+}
+
+fn(inline) _write-decimal-pair(digits: *array[u8, 64], at: size, pair: u64) {
+  let dst = checked-index(at, 63)
+  mem/write-unaligned(digits.as[ptr].add-bytes(dst), DECIMAL_PAIRS.[pair.signed()])
+}
+
+fn format-uint[w: writer](context w)(value: u64, base: u64) {
+  let digits: array[u8, 64] = uninit
+  let start: size = 64
+  let remaining = value
+  if base == 10 {
+    while remaining >= 100 {
+      start = start - 2
+      _write-decimal-pair(digits.&, start, remaining % 100)
+      remaining = remaining / 100
+    }
+    if remaining >= 10 {
+      start = start - 2
+      _write-decimal-pair(digits.&, start, remaining)
+    } else {
+      start = start - 1
+      digits.[start] = remaining.trunc[u8] + '0'.as-u8()
+    }
+  } else {
+    loop {
+      start = start - 1
+      digits.[start] = u8/to-ascii-digit((remaining % base).trunc[u8]).as-u8()
+      remaining = remaining / base
+      if remaining == 0 break
+    }
+  }
+  w.write-bytes(digits.&.as-buffer().slice(start, 64).as-span())
 }
 
 impl print for u8 {
@@ -426,16 +440,20 @@ impl[t: scalar-cmp] comparable for t {
 }
 
 ns for u8 {
-  fn to-ascii-digit(v: u8): char {
+  fn(inline) to-ascii-digit(v: u8): char {
     if v < 10 {
-      (v + 48).as-char() // '0' + v
+      (v + '0'.as-u8()).as-char()
     } else if v < 36 {
-      (v + 87).as-char() // 'a' + (v - 10)
+      (v - 10 + 'a'.as-u8()).as-char()
     } else if v < 62 {
-      (v + 29).as-char() // 'a' + (v - 36)
+      (v - 36 + 'A'.as-u8()).as-char()
     } else {
-      crash("u8/to-ascii-digit: value $v is out of range (max 61)")
+      _ascii-digit-out-of-range(v)
     }
+  }
+
+  fn(cold) _ascii-digit-out-of-range(v: u8): never {
+    crash("u8/to-ascii-digit: value $v is out of range (max 61)")
   }
 
   fn(inline) as-char(self: u8): char { mem/bitcast[u8, char](self) }
@@ -641,8 +659,14 @@ ns for f32 {
   }
 }
 
-impl equals for f32 { fn(intern) equals(self: f32, other: f32): bool }
-impl equals for f64 { fn(intern) equals(self: f64, other: f64): bool }
+impl equals for f32 {
+  fn(intern) equals(self: f32, other: f32): bool
+  fn(intern) not-equals(self: f32, other: f32): bool
+}
+impl equals for f64 {
+  fn(intern) equals(self: f64, other: f64): bool
+  fn(intern) not-equals(self: f64, other: f64): bool
+}
 
 impl from-string[e = string] for u64 {
   fn from-string(s: string): result[u64, string] { u64/from-string(s) }

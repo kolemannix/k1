@@ -1,0 +1,49 @@
+ns mem_test
+
+fn mem-copy-sizes() {
+  let src = buffer/filled[u8](96, 0)
+  for i in (0: size).until(96) { src.[i] = (i + 1).trunc[u8] }
+  for n in (0: size).until(81) {
+    let dst = buffer/filled[u8](96, 0)
+    mem/copy(dst = dst.data.add-bytes(3), src = src.data.add-bytes(1), count = n)
+    for i in (0: size).until(96) {
+      let expected: u8 = if i >= 3 and i < 3 + n src.[i - 2] else 0
+      assert-equals(dst.[i], expected)
+    }
+  }
+}
+
+fn mem-move-sizes() {
+  for shift in [1: size, 7, 16, 33] {
+    for n in (0: size).until(81) {
+      for forward in [true, false] {
+        let buf = buffer/filled[u8](160, 0)
+        for i in (0: size).until(160) { buf.[i] = (i + 1).trunc[u8] }
+        let src-at: size = if forward 40 else 40 + shift
+        let dst-at: size = if forward 40 + shift else 40
+        mem/move(dst = buf.data.add-bytes(dst-at), src = buf.data.add-bytes(src-at), count = n)
+        for i in (0: size).until(160) {
+          let expected: u8 = if i >= dst-at and i < dst-at + n (i - dst-at + src-at + 1).trunc[u8] else (i + 1).trunc[u8]
+          assert-equals(buf.[i], expected)
+        }
+      }
+    }
+  }
+}
+
+fn mem-set-sizes() {
+  for n in (0: size).until(81) {
+    let buf = buffer/filled[u8](96, 7)
+    mem/set(dst = buf.data.add-bytes(3), value = 0xAB, count = n)
+    for i in (0: size).until(96) {
+      let expected: u8 = if i >= 3 and i < 3 + n 0xAB else 7
+      assert-equals(buf.[i], expected)
+    }
+  }
+}
+
+fn test() {
+  mem-copy-sizes()
+  mem-move-sizes()
+  mem-set-sizes()
+}

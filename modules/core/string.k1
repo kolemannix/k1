@@ -9,11 +9,11 @@ ns for string {
     self.span().as-byte-span()
   }
 
-  fn cloned(self: string): string {
+  fn(inline) cloned(self: string): string {
     wrap-span(self.span.cloned())
   }
 
-  fn cloned-in[a: allocator](self: string, alloc: a): string {
+  fn(inline) cloned-in[a: allocator](self: string, alloc: a): string {
     wrap-span(self.span.cloned-in(alloc))
   }
 

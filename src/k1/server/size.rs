@@ -53,7 +53,7 @@ fn placement(k1: &TypedProgram, function_id: FunctionId) -> (NamespaceId, Option
 }
 
 fn leaf(k1: &TypedProgram, function_id: FunctionId, name: String, kind: &'static str) -> Node {
-    let insts = k1.ir.functions.get(&function_id).map_or(0, |unit| unit.inst_count());
+    let insts = k1.ir.function_unit(function_id).map_or(0, |unit| unit.inst_count());
     let location = k1.span_location(k1.get_function_span(function_id));
     Node { name, kind, insts, location, children: Vec::new() }
 }

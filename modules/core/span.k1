@@ -59,11 +59,11 @@ ns for span {
     wrap-raw(t.as[ptr], 1)
   }
 
-  fn cloned[t](self: span[t]): span[t] {
+  fn(inline) cloned[t](self: span[t]): span[t] {
     .{ buffer = self.buffer.cloned() }
   }
 
-  fn cloned-in[t, a: allocator](self: span[t], alloc: a): span[t] {
+  fn(inline) cloned-in[t, a: allocator](self: span[t], alloc: a): span[t] {
     .{ buffer = self.buffer.cloned-in(alloc) }
   }
 

@@ -11,31 +11,28 @@ fn while-simple() {
 }
 
 fn while-return(): int {
-  while true {
+  loop {
     return 1
   }
-  0
 }
 
 fn while-nested(): int {
-  while true {
-    while true {
+  loop {
+    loop {
       return 10
     }
   }
-  4
 }
 
 fn while-return-closure(): int {
-  while true {
+  loop {
     let s = fn(-> int) { return 5 }
     return s()
   }
-  4
 }
 
 fn while-break(): int {
-  while true {
+  loop {
     break
   }
   4

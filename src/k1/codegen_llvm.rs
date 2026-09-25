@@ -10,6 +10,7 @@ use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::{AsContextRef, Context};
+use inkwell::intrinsics::Intrinsic;
 use inkwell::debug_info::{
     AsDIScope, DICompileUnit, DIExpression, DIFile, DILocalVariable, DILocation, DIScope,
     DISubprogram, DIType, DWARFEmissionKind, DWARFSourceLanguage, DebugInfoBuilder,
@@ -38,7 +39,7 @@ use log::{debug, trace};
 
 use crate::compiler::{self};
 use crate::ir::{
-    BackendBuiltin, BlockId, IdMap, Inst, InstId, IrCallee, IrUnitId, PhysicalFunctionType, Value,
+    BackendBuiltin, BlockId, IdMap, Inst, InstId, IrCallee, PhysicalFunctionType, Value,
 };
 use crate::kmem::{List, MSlice};
 use crate::lex::SpanId;
@@ -377,7 +378,6 @@ pub enum UnitArtifact {
 pub struct CodegenRoots {
     pub main: Option<FunctionId>,
     pub program_exit: Option<FunctionId>,
-    pub exports: Vec<FunctionId>,
     pub reachable: Vec<FunctionId>,
 }
 
@@ -932,75 +932,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         Ok(())
     }
 
-    fn collect_inst_function_refs(u: &ir::UnitView, inst: &Inst, refs: &mut Vec<FunctionId>) {
-        if let Inst::Call { call_id } = inst {
-            match u.call(*call_id).callee {
-                IrCallee::Direct(id)
-                | IrCallee::Extern { function_id: id, .. }
-                | IrCallee::BackendBuiltin(id, _) => refs.push(id),
-                IrCallee::LlvmIntrinsic { .. } | IrCallee::Indirect(..) => {}
-            }
-        }
-        ir::visit_inst_values(u, inst, &mut |v| {
-            if let Value::FunctionAddr(id) = v {
-                refs.push(id)
-            }
-        });
-    }
-
-    fn collect_block_live_successors(u: &ir::UnitView, block_id: BlockId, out: &mut Vec<BlockId>) {
-        let Some(last) = u.block(block_id).last else { return };
-        match *u.inst(last) {
-            Inst::Jump(target) => out.push(target),
-            Inst::JumpIf { cond, cons, alt } => {
-                if cond != Value::IsStatic {
-                    out.push(cons);
-                }
-                out.push(alt);
-            }
-            Inst::Switch { cases, default, .. } => {
-                for case in u.switch_cases(cases) {
-                    out.push(case.target);
-                }
-                out.push(default);
-            }
-            _ => {}
-        }
-    }
-
-    fn collect_reachable_functions(k1: &TypedProgram, roots: &[FunctionId]) -> Vec<FunctionId> {
-        let mut reachable: Vec<FunctionId> = Vec::with_capacity(1024);
-        let mut seen: FxHashSet<FunctionId> = FxHashSet::with_capacity(1024);
-        let mut worklist: Vec<FunctionId> = roots.to_vec();
-        let mut seen_blocks: IdMap<BlockId, ()> = IdMap::default();
-        let mut block_worklist: Vec<BlockId> = Vec::with_capacity(64);
-        while let Some(function_id) = worklist.pop() {
-            if !seen.insert(function_id) {
-                continue;
-            }
-            reachable.push(function_id);
-            let Some(unit) = k1.ir.functions.get(&function_id) else { continue };
-            let u = unit.view(&k1.ir.mem);
-            seen_blocks.clear();
-            block_worklist.clear();
-            if let Some(entry) = u.first_block() {
-                block_worklist.push(entry);
-            }
-            while let Some(block_id) = block_worklist.pop() {
-                if seen_blocks.contains(block_id) {
-                    continue;
-                }
-                seen_blocks.insert(block_id, ());
-                for inst_id in u.block_insts(block_id) {
-                    Cg::collect_inst_function_refs(&u, u.inst(inst_id), &mut worklist);
-                }
-                Cg::collect_block_live_successors(&u, block_id, &mut block_worklist);
-            }
-        }
-        reachable
-    }
-
-    pub fn prepare_ir(
+    fn prepare_roots(
         k1: &mut TypedProgram,
         roots: &mut Vec<FunctionId>,
     ) -> K1Result<Vec<FunctionId>> {
@@ -1017,17 +949,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             };
             roots.push(id);
         }
-        for root in roots.iter() {
-            let requester = k1.trace.top();
-            k1.ir.units_pending_compile.push(*root, requester);
-        }
-        k1.compile_all_pending_ir(SpanId::NONE)?;
-        if k1.plan.config.optimize {
-            for root in roots.iter() {
-                ir::optimize_unit(k1, IrUnitId::Function(*root))?;
-            }
-        }
-        let reachable = Cg::collect_reachable_functions(k1, roots);
+        let reachable = ir::compile_reachable(k1, roots)?;
         k1.compute_all_physical_types();
         Ok(reachable)
     }
@@ -1039,56 +961,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 roots.push(function_id);
             }
         }
-        let reachable = Cg::prepare_ir(k1, &mut roots)?;
-        Ok(CodegenRoots { main: None, program_exit: None, exports: vec![], reachable })
+        let reachable = Cg::prepare_roots(k1, &mut roots)?;
+        Ok(CodegenRoots { main: None, program_exit: None, reachable })
     }
 
     pub fn prepare_host(k1: &mut TypedProgram) -> K1Result<CodegenRoots> {
-        let mut exports: Vec<FunctionId> = vec![];
-        let mut any_exported_global = false;
-        for global_id in k1.globals.iter_ids() {
-            if k1.globals.get(global_id).is_exported {
-                any_exported_global = true;
-            }
-        }
-        for (function_id, function) in k1.function_iter() {
-            if function.linkage.is_exported() {
-                exports.push(function_id);
-            }
-        }
-        let main = if k1.plan.is_executable() {
-            let Some(main_function_id) = k1.get_main_function_id() else {
-                kbail!(k1, SpanId::NONE, "Program {} has no main function", k1.program_name());
-            };
-            Some(main_function_id)
-        } else {
-            if exports.is_empty() && !any_exported_global {
-                kbail!(
-                    k1,
-                    SpanId::NONE,
-                    "Library {} exports no functions or globals",
-                    k1.program_name()
-                );
-            }
-            None
-        };
-        let program_exit = if main.is_some() {
-            let program_exit_ident = k1.ast.idents.intern("program-exit");
-            let Some(program_exit_id) =
-                k1.scopes.find_function(k1.scopes.k1_scope_id, program_exit_ident)
-            else {
-                kbail!(k1, SpanId::NONE, "Missing k1/program-exit");
-            };
-            Some(program_exit_id)
-        } else {
-            None
-        };
-        let mut roots: Vec<FunctionId> = Vec::with_capacity(exports.len() + 2);
-        roots.extend(main);
-        roots.extend(program_exit);
-        roots.extend_from_slice(&exports);
-        let reachable = Cg::prepare_ir(k1, &mut roots)?;
-        Ok(CodegenRoots { main, program_exit, exports, reachable })
+        let mut roots = ir::get_program_roots(k1)?;
+        let reachable = Cg::prepare_roots(k1, &mut roots.functions)?;
+        Ok(CodegenRoots { main: roots.main, program_exit: roots.program_exit, reachable })
     }
 
     pub fn plan_units(
@@ -1098,7 +978,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     ) -> Vec<UnitPlan> {
         const MIN_UNIT_INSTRUCTIONS: u64 = 2 * 1024;
         let size_of = |function_id: &FunctionId| -> u64 {
-            match k1.ir.functions.get(function_id) {
+            match k1.ir.function_unit(*function_id) {
                 Some(unit) => unit.inst_count() as u64 + 1,
                 None => 0,
             }
@@ -1843,6 +1723,22 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
         self.debug.pop_scope();
         Ok(())
+    }
+
+    fn codegen_global_addr(&mut self, global_id: TypedGlobalId) -> CgResult<BasicValueEnum<'ctx>> {
+        let addr = self.codegen_global(global_id)?.as_pointer_value();
+        if !(self.k1.globals.get(global_id).is_tls && self.target_supports_tls()) {
+            return Ok(addr.as_basic_value_enum());
+        }
+        let threadlocal_address = Intrinsic::find("llvm.threadlocal.address")
+            .unwrap()
+            .get_declaration(&self.llvm_module, &[self.builtin_types.ptr.as_basic_type_enum()])
+            .unwrap();
+        let call = self.builder.build_call(threadlocal_address, &[addr.into()], "").unwrap();
+        match call.try_as_basic_value() {
+            ValueKind::Basic(v) => Ok(v),
+            ValueKind::Instruction(_) => unreachable!("llvm.threadlocal.address returns ptr"),
+        }
     }
 
     fn codegen_global(&mut self, global_id: TypedGlobalId) -> CgResult<GlobalValue<'ctx>> {
@@ -3557,7 +3453,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let llvm_block = self.get_llvm_block(block_id)?;
         self.builder.position_at_end(llvm_block);
         for inst_id in self.cur_unit.block_insts(block_id) {
-            self.codegen_inst(inst_mappings, inst_id)?;
+            self.codegen_inst(inst_mappings, block_id, inst_id)?;
         }
         Ok(llvm_block)
     }
@@ -3580,7 +3476,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             },
             ir::Value::GlobalAddr { id, .. } => {
                 debug_assert!(self.k1.globals.get(id).reload_ns.is_none());
-                Ok(self.codegen_global(id)?.as_pointer_value().as_basic_value_enum())
+                self.codegen_global_addr(id)
             }
             ir::Value::StaticValue { id, .. } => self.codegen_static_value_canonical(id),
             ir::Value::FunctionAddr(function_id) => {
@@ -3837,6 +3733,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn codegen_inst(
         &mut self,
         inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
+        block_id: BlockId,
         inst_id: InstId,
     ) -> CgResult<()> {
         let span = self.cur_unit.span(inst_id);
@@ -3861,7 +3758,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 {
                     self.codegen_reload_global_addr(id)?
                 } else {
-                    self.codegen_global(id)?.as_pointer_value().as_basic_value_enum()
+                    self.codegen_global_addr(id)?
                 };
                 inst_mappings.insert(inst_id, value);
                 Ok(())
@@ -3919,20 +3816,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::Store { t, dst, value, volatile, unaligned } => {
-                let align = self.claimed_align(t, unaligned);
+                let align = self.claimed_align(PhysicalType::scalar(t), unaligned);
                 let dst_ptr = self.resolve_value(inst_mappings, dst)?.into_pointer_value();
-                let value = match t.as_enum() {
-                    PhysicalTypeEnum::Scalar(_) => self.resolve_value(inst_mappings, value)?,
-                    PhysicalTypeEnum::Agg(_) => {
-                        let cg_ty = self.codegen_type(t);
-                        let src_ptr =
-                            self.resolve_value(inst_mappings, value)?.into_pointer_value();
-                        let load = self.builder.build_load(cg_ty.rich_type(), src_ptr, "").unwrap();
-                        load.as_instruction_value().unwrap().set_alignment(align).unwrap();
-                        load
-                    }
-                    PhysicalTypeEnum::Empty => unreachable!(),
-                };
+                let value = self.resolve_value(inst_mappings, value)?;
                 let store = self.builder.build_store(dst_ptr, value).unwrap();
                 store.set_alignment(align).unwrap();
                 if volatile {
@@ -3940,7 +3826,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 }
                 Ok(())
             }
-            Inst::Load { t, src, dst, volatile, unaligned } => {
+            Inst::Load { t, src, volatile, unaligned } => {
+                let t = PhysicalType::scalar(t);
                 let cg_ty = self.codegen_type(t);
                 let src_ptr = self.resolve_value(inst_mappings, src)?.into_pointer_value();
                 let load = self.builder.build_load(cg_ty.rich_type(), src_ptr, "").unwrap();
@@ -3949,13 +3836,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 if volatile {
                     unsafe { llvm_sys::core::LLVMSetVolatile(load_inst.as_value_ref(), 1) };
                 }
-                if dst == ir::Value::Empty {
-                    inst_mappings.insert(inst_id, load);
-                } else {
-                    let dst_align = self.claimed_align(t, unaligned);
-                    let dst = self.resolve_value(inst_mappings, dst)?.into_pointer_value();
-                    self.builder.build_store(dst, load).unwrap().set_alignment(dst_align).unwrap();
-                }
+                inst_mappings.insert(inst_id, load);
                 Ok(())
             }
             Inst::AtomicLoad { t, src, ord } => {
@@ -4067,21 +3948,32 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_fence(Self::llvm_atomic_ordering(ord), false, "").unwrap();
                 Ok(())
             }
-            Inst::Copy { dst, src, t, unaligned, .. } => {
+            Inst::Copy { dst, src, t, volatile, unaligned, .. } => {
                 let dst_value = self.resolve_value(inst_mappings, dst)?;
                 let src_value = self.resolve_value(inst_mappings, src)?;
                 let layout = self.k1.get_pt_layout(t);
                 let align = self.claimed_align(t, unaligned);
                 let bytes = self.builtin_types.ptr_sized_int.const_int(layout.size as u64, false);
-                self.builder
-                    .build_memcpy(
-                        dst_value.into_pointer_value(),
-                        align,
-                        src_value.into_pointer_value(),
-                        align,
-                        bytes,
+                let ptr = self.builtin_types.ptr.as_basic_type_enum();
+                let memcpy = Intrinsic::find("llvm.memcpy")
+                    .unwrap()
+                    .get_declaration(
+                        &self.llvm_module,
+                        &[ptr, ptr, self.builtin_types.ptr_sized_int.as_basic_type_enum()],
                     )
                     .unwrap();
+                let is_volatile = self.builtin_types.i1.const_int(volatile as u64, false);
+                let call = self
+                    .builder
+                    .build_call(
+                        memcpy,
+                        &[dst_value.into(), src_value.into(), bytes.into(), is_volatile.into()],
+                        "",
+                    )
+                    .unwrap();
+                let align_attr = self.make_enum_attribute("align", align as u64);
+                call.add_attribute(AttributeLoc::Param(0), align_attr);
+                call.add_attribute(AttributeLoc::Param(1), align_attr);
                 Ok(())
             }
             Inst::StructOffset { struct_t, base, field_index, .. } => {
@@ -4161,6 +4053,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     let Some(block) = self.cur_blocks.get(incoming.from) else {
                         continue;
                     };
+                    let incoming_is_real_succ = self
+                        .cur_unit
+                        .successors(incoming.from, Some(false))
+                        .any(|succ| succ == block_id);
+                    if !incoming_is_real_succ {
+                        continue;
+                    }
                     // Resolve in the edge's source block: anything it emits (e.g. a
                     // reload-global addr call) must dominate the edge, and the phi
                     // must stay at block top
@@ -4224,7 +4123,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 inst_mappings.insert(inst_id, not_bool.as_basic_value_enum());
                 Ok(())
             }
-            Inst::BitNot { v } => {
+            Inst::BitNot { v, .. } => {
                 let input = self.resolve_value(inst_mappings, v)?.into_int_value();
                 let not_input = self.builder.build_not(input, "").unwrap();
                 inst_mappings.insert(inst_id, not_input.as_basic_value_enum());
@@ -4325,7 +4224,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 inst_mappings.insert(inst_id, float.as_basic_value_enum());
                 Ok(())
             }
-            Inst::PtrToWord { v } => {
+            Inst::PtrToWord { v, .. } => {
                 let input = self.resolve_value(inst_mappings, v)?.into_pointer_value();
                 let word_int = self
                     .builder
@@ -4401,6 +4300,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     ir::IntCmpPred::Ule => IntPredicate::ULE,
                     ir::IntCmpPred::Ugt => IntPredicate::UGT,
                     ir::IntCmpPred::Uge => IntPredicate::UGE,
+                    ir::IntCmpPred::Ne => IntPredicate::NE,
                 };
                 let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
                 let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
@@ -4445,6 +4345,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     ir::FloatCmpPred::Le => FloatPredicate::OLE,
                     ir::FloatCmpPred::Gt => FloatPredicate::OGT,
                     ir::FloatCmpPred::Ge => FloatPredicate::OGE,
+                    ir::FloatCmpPred::Ne => FloatPredicate::UNE,
                 };
                 let lhs = self.resolve_value(inst_mappings, lhs)?.into_float_value();
                 let rhs = self.resolve_value(inst_mappings, rhs)?.into_float_value();
@@ -4616,7 +4517,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
         };
 
-        let Some(ir_fn) = self.k1.ir.functions.get(&function_id).copied() else {
+        let Some(ir_fn) = self.k1.ir.function_unit(function_id).copied() else {
             cgbail!(
                 function_span,
                 "Internal Compiler Error: missing ir for function {}, referenced from {}",
@@ -5221,7 +5122,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
         function_id: FunctionId,
     ) -> CgResult<()> {
-        let Some(ir_unit) = self.k1.ir.functions.get(&function_id).copied() else {
+        let Some(ir_unit) = self.k1.ir.function_unit(function_id).copied() else {
             cgbail!(
                 self.k1.get_function_span(function_id),
                 "Internal Compiler Error: missing ir for function {}",
@@ -5295,13 +5196,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 return;
             }
             seen.insert(b, ());
-
-            let mut successors = Vec::with_capacity(4);
-            Cg::collect_block_live_successors(u, b, &mut successors);
-            for succ in successors {
+            for succ in u.successors(b, Some(false)) {
                 dfs(u, succ, seen, result);
             }
-
             result.push(b);
         }
 

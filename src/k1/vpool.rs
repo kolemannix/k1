@@ -417,6 +417,24 @@ impl<T: Copy, Index: PoolIndex> VPool<T, Index> {
     }
 }
 
+impl<T: Copy + Default, Index: PoolIndex> VPool<T, Index> {
+    pub fn grow_and_set(&mut self, id: Index, t: T) {
+        let index = Self::id_to_actual_index(id);
+        if index >= self.len {
+            let old_len = self.len;
+            self.set_len_checked(index + 1);
+            self.data_mut_inbounds()[old_len..index].fill(T::default());
+        }
+        self.data_mut_inbounds()[index] = t;
+    }
+}
+
+impl<T: Copy, Index: PoolIndex> VPool<Option<T>, Index> {
+    pub fn lookup(&self, id: Index) -> Option<T> {
+        self.get_opt(id).copied().flatten()
+    }
+}
+
 impl<T, Index: PoolIndex> VPool<T, Index> {
     pub fn drain(&mut self) {
         // If T has drop glue, call drop on all elements in the pool
@@ -629,6 +647,24 @@ mod test {
 
         let skip_all = handle.skip(3);
         assert!(skip_all.is_empty());
+    }
+
+    #[test]
+    fn sparse_table() {
+        let mut table: VPool<Option<i32>, MyIndex> = VPool::make("sparse");
+        let id = |n: u32| MyIndex::from(NonZeroU32::new(n).unwrap());
+        assert_eq!(table.lookup(id(1)), None);
+        table.grow_and_set(id(3), Some(30));
+        assert_eq!(table.len(), 3);
+        assert_eq!(table.lookup(id(1)), None);
+        assert_eq!(table.lookup(id(2)), None);
+        assert_eq!(table.lookup(id(3)), Some(30));
+        assert_eq!(table.lookup(id(4)), None);
+        table.grow_and_set(id(1), Some(10));
+        table.grow_and_set(id(3), None);
+        assert_eq!(table.lookup(id(1)), Some(10));
+        assert_eq!(table.lookup(id(3)), None);
+        assert_eq!(table.len(), 3);
     }
 
     #[test]

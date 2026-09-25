@@ -9,10 +9,11 @@ use std::path::Path;
 
 use crate::kmem::{self, MStr, Mem};
 use crate::parse::{IdentPool, Interner, StringId, write_source_location};
+use crate::lex::SpanId;
 use crate::typer::{
-    K1Message, LibRefLinkType, Linkage, MemTmp, MessageLevel, NamespaceId, TypedProgram,
+    K1Message, K1Result, LibRefLinkType, Linkage, MemTmp, MessageLevel, NamespaceId, TypedProgram,
 };
-use crate::{SV8, kpath, typer};
+use crate::{SV8, ir, kbail, kpath, typer};
 use anyhow::{Result, bail};
 use inkwell::context::Context;
 use log::{error, info};
@@ -1013,6 +1014,15 @@ pub fn setup_is_current<Tag>(
     matches!(check_setup(idents, req, scratch), Ok((true, _, _)))
 }
 
+fn dump_checked_ir(k1: &mut TypedProgram) -> K1Result<()> {
+    let roots = ir::get_program_roots(k1)?;
+    let reachable = ir::compile_reachable(k1, &roots.functions)?;
+    if let Err(e) = ir::dump_program_ir(k1, &reachable) {
+        kbail!(k1, SpanId::NONE, "Failed to write the ir dump: {e}");
+    }
+    Ok(())
+}
+
 fn write_program_dump(p: &TypedProgram) {
     let _ = std::fs::write(format!("{}_module_dump.txt", p.program_name()), format!("{}", p));
 }
@@ -1306,6 +1316,12 @@ pub fn compile_program(
     if !is_ok {
         return Err(CompileProgramError::TyperFailure(Box::new(k1)));
     };
+    if tools.dump_ir && !config.command.codegens() {
+        if let Err(e) = dump_checked_ir(&mut k1) {
+            k1.report(e);
+            return Err(CompileProgramError::TyperFailure(Box::new(k1)));
+        }
+    }
 
     let warning_count =
         k1.messages.borrow().iter().filter(|e| e.level == MessageLevel::Warn).count();
@@ -1779,17 +1795,7 @@ pub fn codegen_module(ctx: &Context, k1: &mut TypedProgram) -> Result<()> {
         },
     };
     if k1.config.tools.dump_ir {
-        let out_dir = k1.ast.idents.get_string(k1.config.out_dir);
-        std::fs::create_dir_all(out_dir)?;
-        let mut dump = String::new();
-        for &function in &roots.reachable {
-            if let Some(unit) =
-                crate::ir::get_compiled_unit(&k1.ir, crate::ir::IrUnitId::Function(function))
-            {
-                crate::ir::display_unit(&mut dump, k1, unit, false)?;
-            }
-        }
-        std::fs::write(format!("{out_dir}/{module_name}_ir.txt"), dump)?;
+        ir::dump_program_ir(k1, &roots.reachable)?;
     }
     let is_host_native = detect_host_target() == Some(k1.plan.config.target);
     let object_is_artifact = !k1.plan.is_executable() && !is_host_native
@@ -2074,15 +2080,42 @@ pub fn run_compiled_program(
 }
 
 #[cfg(test)]
-mod compiler_test {
+pub(crate) mod test_support {
     use super::*;
 
-    fn set_home() {
+    pub(crate) fn set_home() {
         static SET_HOME: std::sync::Once = std::sync::Once::new();
         SET_HOME.call_once(|| unsafe {
             std::env::set_var("K1_HOME", env!("CARGO_MANIFEST_DIR"));
         });
     }
+
+    pub(crate) fn compile_source(name: &str, source: &str) -> TypedProgram {
+        set_home();
+        let dir = std::env::temp_dir().join(format!("k1_{name}_{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let app = dir.join("app.k1");
+        fs::write(&app, source).unwrap();
+        let mut request = CompileRequest::new(app, Command::Check, None).unwrap();
+        request.build.default.no_std = true;
+        request.tools.cache = false;
+        compile_program(request).ok().expect("compile must succeed")
+    }
+
+    pub(crate) fn function_named(k1: &TypedProgram, name: &str) -> crate::typer::FunctionId {
+        for (function_id, function) in k1.function_iter() {
+            if k1.ident_str(function.name) == name {
+                return function_id;
+            }
+        }
+        panic!("no function named {name}")
+    }
+}
+
+#[cfg(test)]
+mod compiler_test {
+    use super::test_support::set_home;
+    use super::*;
 
     fn check(file: &Path) -> CompileRequest {
         let mut request = CompileRequest::new(file.to_path_buf(), Command::Check, None).unwrap();

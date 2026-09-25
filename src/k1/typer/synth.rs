@@ -184,12 +184,9 @@ impl TypedProgram {
             condition: MatchingCondition { instrs: MSlice::empty() },
             consequent_expr: alternate,
         };
-        self.exprs.add(
-            TypedExpr::Match(TypedMatchExpr {
-                subject_defn: None,
-                scrutinee: None,
-                arms: self.mem.pushn(&[cons_arm, alt_arm]),
-            }),
+        let arms = self.mem.pushn(&[cons_arm, alt_arm]);
+        self.add_match_expr(
+            TypedMatchExpr { subject_defn: None, scrutinee: None, arms },
             result_type,
             span,
         )

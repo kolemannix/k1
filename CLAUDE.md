@@ -21,6 +21,10 @@ get, within reason.
 Leave no comments in the code. Share them with me instead. Ensure this; make a comment removal pass if you have to.
 
 Prose rots the same way: every AGENTS.md, MEMORY.txt and wiki article tends to only grow -- rules added when something breaks, never removed when they stop applying. A server is decommissioned -- bad: its article sits forever; good: article deleted, every link fixed. MEMORY.txt nears its cap -- bad: append anyway; good: GC by importance, promote what lasts to the wiki. A TODO.md item closes -- bad: the line lingers; good: deleted on sight. Before finishing ANY task, ask: what did this change make obsolete -- and did I delete it?
+
+Unless otherwise noted, post a patch in the chat session after every turn of code changes. If its huge, a patch of the highlights.
+
+
 # K1 Repo Guide
 
 K1 is a programming language: compile-time execution, typeclasses (abilities),
@@ -78,7 +82,10 @@ K1 language reference for agents: `docs/ai_docs/k1-syntax-basics.md` and
   compiler, release LSP, platform tarball under `builds/`, install to `~/.k1`.
 - `just profile-suite1` / `just profile-stress` / `just profile-soa`:
   hyperfine runs of the `profiling` cargo profile. `perf/gen_stress.py`
-  generates `perf/stress100`.
+  generates `perf/stress100`. Time only `just build-profile` binaries
+  (`target/profiling/k1`); debug-build timings are meaningless. Compare
+  stress100 against `perf/latest_stress.txt`, the `--chatty c` output
+  `just profile-stress` writes.
 - `just ts1-wasm`, `just fractal*`, `just ts-freestanding`: wasm64-wasi and
   bare-metal lanes; need `make -C modules/core/libs wasm` / `nocrt`.
 - Native prerequisites for the full suite: `make -C modules/core/libs clean
@@ -205,8 +212,9 @@ declaring `dep`/`dep-params`, `lib`, `library()`, `setup`, and an optional
 - `std/`: `--no-std` drops it. `posix.k1`/`libc.k1` raw bindings,
   `process.k1`, `thread.k1`, `time.k1`, `fd.k1`, `sys.k1`, `cliarg.k1`,
   `hash.k1` (hash ability, `map`, `set`), `json.k1`, `bitfield.k1`,
-  `math.k1`, `simd.k1`, `rc.k1`, `stream.k1`, `channel.k1`, `pubsub.k1`,
-  `reload.k1` (dylib hot reload), `watch.k1` (kqueue/inotify).
+  `math.k1`, `simd.k1`, `rc.k1`, `spill-string.k1` (inline string that spills
+  to the arena), `stream.k1`, `channel.k1`, `pubsub.k1`, `reload.k1` (dylib
+  hot reload), `watch.k1` (kqueue/inotify).
 - C wrapper modules: `libuv/`, `http/` (llhttp, depends on libuv), `sdl3/`,
   `stb/`, `freetype/`, `harfbuzz/`, `cbrotli/`, `sqlite/` (system lib, no
   vendor). Most vendor source under `vendor/`, build `libs/*.a` in `setup`,

@@ -225,8 +225,6 @@ pub(crate) struct BuiltinIdents {
     pub function_pointer: StringId,
     pub base_struct: StringId,
     pub newline: StringId,
-    // messages for synthesized crash calls
-    pub crash_msg_array_oob: StringId,
 }
 
 #[allow(non_snake_case)]
@@ -242,7 +240,7 @@ pub(crate) struct BuiltinFunctions {
     pub try__get_error: QIdent,
     pub try__error: QIdent,
     pub neg__negated: QIdent,
-    pub core_crash_bounds: QIdent,
+    pub core_checked_index: QIdent,
     pub core_discard: QIdent,
     pub core_print_print_to: QIdent,
     pub buffer_allocate: QIdent,
@@ -252,6 +250,7 @@ pub(crate) struct BuiltinFunctions {
     pub span_wrapBuffer: QIdent,
     pub span_to_array: QIdent,
     pub equals__equals: QIdent,
+    pub equals__not_equals: QIdent,
     pub add__add: QIdent,
     pub sub__sub: QIdent,
     pub mul__mul: QIdent,
@@ -629,7 +628,6 @@ impl IdentPool {
             function_pointer: intern!("function-pointer"),
             base_struct: intern!("base_struct"),
             newline: intern!("\n"),
-            crash_msg_array_oob: intern!("Array index out of bounds"),
         };
 
         macro_rules! make_fn {
@@ -652,7 +650,7 @@ impl IdentPool {
         let Iterable_iterator = make_fn!(path_core_iterable, intern!("iterator"));
 
         let path_core = intern_path!(b.core);
-        let core_crashBounds = make_fn!(path_core, intern!("crash-bounds"));
+        let core_checked_index = make_fn!(path_core, intern!("checked-index"));
         let core_discard = make_fn!(path_core, intern!("discard"));
 
         let path_core_print = intern_path!(b.core, intern!("print"));
@@ -678,6 +676,7 @@ impl IdentPool {
 
         let path_core_equals = intern_path!(b.core, b.equals);
         let equals__equals: QIdent = make_fn!(path_core_equals, b.equals);
+        let equals__not_equals: QIdent = make_fn!(path_core_equals, intern!("not-equals"));
 
         let add__add: QIdent = make_fn!(intern_path!(b.add), b.add);
         let neg__negated: QIdent = make_fn!(intern_path!(b.neg), intern!("negated"));
@@ -719,7 +718,7 @@ impl IdentPool {
             try__get_error,
             try__error,
             neg__negated,
-            core_crash_bounds: core_crashBounds,
+            core_checked_index,
             core_discard,
             core_print_print_to,
             buffer_allocate,
@@ -729,6 +728,7 @@ impl IdentPool {
             span_wrapBuffer,
             span_to_array,
             equals__equals,
+            equals__not_equals,
             add__add,
             sub__sub,
             mul__mul,

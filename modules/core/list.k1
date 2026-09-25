@@ -170,8 +170,7 @@ ns for list {
   }
 
   fn remove[t](self: *list[t], index: size) {
-    buffer/check-index(self.len, index)
-    self.buffer.remove(index)
+    self.buffer.remove(checked-index(index, self.len))
     self.len = self.len - 1
   }
 
@@ -249,8 +248,7 @@ impl[t] as-span[t = t] for *list[t] {
 
 impl[t] index[key = size, t = t] for list[t] {
   fn(inline) index-ref(self, key: size): *t {
-    buffer/check-index(self.len, key)
-    self.buffer.index-unchecked(key)
+    self.buffer.index-unchecked(checked-index(key, self.len))
   }
 }
 

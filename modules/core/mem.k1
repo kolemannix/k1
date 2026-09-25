@@ -34,8 +34,101 @@ ns mem {
 
   fn(inline) read-unaligned[t](src: ptr): t {
     let value: t = .0
-    copy(value.&.as[ptr], src, types/size[t])
+    copy-memcpy(value.&.as[ptr], src, types/size[t])
     value
+  }
+
+  fn(inline) write-unaligned[t](dst: ptr, value: t) {
+    let v = value
+    copy-memcpy(dst, v.&.as[ptr], types/size[t])
+  }
+
+  fn(inline) copy(dst: ptr, src: ptr, count: size) {
+    if k1/is-static {
+      copy-memcpy(dst, src, count)
+    } else if count <= 64 {
+      _move-short(dst, src, count)
+    } else {
+      copy-memcpy(dst, src, count)
+    }
+  }
+
+  fn(inline) move(dst: ptr, src: ptr, count: size) {
+    if k1/is-static {
+      move-memmove(dst, src, count)
+    } else if count <= 64 {
+      _move-short(dst, src, count)
+    } else {
+      move-memmove(dst, src, count)
+    }
+  }
+
+  fn(inline) set(dst: ptr, value: u8, count: size) {
+    if k1/is-static {
+      set-memset(dst, value, count)
+    } else if count <= 16 {
+      let word = value.widen[u64] * 0x0101010101010101
+      if count >= 8 {
+        write-unaligned(dst, word)
+        write-unaligned(dst.add-bytes(count - 8), word)
+      } else if count >= 4 {
+        write-unaligned(dst, word.trunc[u32])
+        write-unaligned(dst.add-bytes(count - 4), word.trunc[u32])
+      } else if count > 0 {
+        write-unaligned(dst, value)
+        write-unaligned(dst.add-bytes(count / 2), value)
+        write-unaligned(dst.add-bytes(count - 1), value)
+      }
+    } else if count <= 32 {
+      let v = vector/splat[u8, 16](value)
+      vector/store-unchecked(v, dst)
+      vector/store-unchecked(v, dst.add-bytes(count - 16))
+    } else if count <= 64 {
+      let v = vector/splat[u8, 16](value)
+      vector/store-unchecked(v, dst)
+      vector/store-unchecked(v, dst.add-bytes(16))
+      vector/store-unchecked(v, dst.add-bytes(count - 32))
+      vector/store-unchecked(v, dst.add-bytes(count - 16))
+    } else {
+      set-memset(dst, value, count)
+    }
+  }
+
+  fn(inline) _move-short(dst: ptr, src: ptr, count: size) {
+    if count <= 16 {
+      if count >= 8 {
+        let a = read-unaligned[u64](src)
+        let b = read-unaligned[u64](src.add-bytes(count - 8))
+        write-unaligned(dst, a)
+        write-unaligned(dst.add-bytes(count - 8), b)
+      } else if count >= 4 {
+        let a = read-unaligned[u32](src)
+        let b = read-unaligned[u32](src.add-bytes(count - 4))
+        write-unaligned(dst, a)
+        write-unaligned(dst.add-bytes(count - 4), b)
+      } else if count > 0 {
+        let a = read-unaligned[u8](src)
+        let b = read-unaligned[u8](src.add-bytes(count / 2))
+        let c = read-unaligned[u8](src.add-bytes(count - 1))
+        write-unaligned(dst, a)
+        write-unaligned(dst.add-bytes(count / 2), b)
+        write-unaligned(dst.add-bytes(count - 1), c)
+      }
+    } else if count <= 32 {
+      let a = vector/load-unchecked[u8, 16](src)
+      let b = vector/load-unchecked[u8, 16](src.add-bytes(count - 16))
+      vector/store-unchecked(a, dst)
+      vector/store-unchecked(b, dst.add-bytes(count - 16))
+    } else {
+      let a = vector/load-unchecked[u8, 16](src)
+      let b = vector/load-unchecked[u8, 16](src.add-bytes(16))
+      let c = vector/load-unchecked[u8, 16](src.add-bytes(count - 32))
+      let d = vector/load-unchecked[u8, 16](src.add-bytes(count - 16))
+      vector/store-unchecked(a, dst)
+      vector/store-unchecked(b, dst.add-bytes(16))
+      vector/store-unchecked(c, dst.add-bytes(count - 32))
+      vector/store-unchecked(d, dst.add-bytes(count - 16))
+    }
   }
 
   macro new-in-place[t](expr: code) {

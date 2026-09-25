@@ -27,7 +27,7 @@ fn assert-all-zero(b: buffer[u64]) {
 }
 
 fn zeroing-test() {
-  let a = core/arena/init(4096)
+  let a = core/arena/init(512)
   a.alloc-buffer[u64](16).fill(7)
   a.reset()
   assert-all-zero(a.alloc-buffer[u64](16))
@@ -47,30 +47,30 @@ fn zeroing-test() {
   let tail: buffer[u64] = buffer/wrap-raw(grown.add-bytes(8), 3)
   assert-all-zero(tail)
 
-  for i in 0.until(600) {
+  for i in 0.until(100) {
     a.push(i.unsigned() + 1)
   }
   assert(not a.extra-chunks.is-null())
   a.reset()
-  assert-all-zero(a.alloc-buffer[u64](400))
+  assert-all-zero(a.alloc-buffer[u64](48))
   a.release()
 }
 
 fn chaining-test() {
   // Tiny first chunk so growth chains within a few pushes
-  let a = core/arena/init(4096)
+  let a = core/arena/init(256)
   let first = a.push(1: u64)
-  let ptrs = list/with-capacity-in[*u64, _](mem/tmp(), 128)
-  for i in 0.until(600) {
+  let ptrs = list/with-capacity-in[*u64, _](mem/tmp(), 100)
+  for i in 0.until(100) {
     ptrs.push-in(mem/tmp(), a.push(i.unsigned()))
   }
   // Every allocation survives across chunk boundaries
   assert-equals(first.*, 1)
-  for i in 0.until(600) {
+  for i in 0.until(100) {
     assert-equals(ptrs.[i].*, i.unsigned())
   }
-  // 600 * 8 bytes exceeds one 4096 chunk: growth must have chained
   assert(not a.extra-chunks.is-null())
+  assert(not a.extra-chunks.ref[core/arena-chunk].next.is-null())
 
   a.reset()
   assert(a.extra-chunks.is-null())

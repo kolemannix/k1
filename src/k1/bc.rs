@@ -447,6 +447,7 @@ mod bc_test {
             IntCmpPred::Ule,
             IntCmpPred::Ugt,
             IntCmpPred::Uge,
+            IntCmpPred::Ne,
         ] {
             assert!(IntCmpPred::from_u8(p as u8) == p);
         }
@@ -456,6 +457,7 @@ mod bc_test {
             FloatCmpPred::Le,
             FloatCmpPred::Gt,
             FloatCmpPred::Ge,
+            FloatCmpPred::Ne,
         ] {
             assert!(FloatCmpPred::from_u8(p as u8) == p);
         }

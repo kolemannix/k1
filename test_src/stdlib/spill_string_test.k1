@@ -1,0 +1,47 @@
+ns spill_string_test
+
+use std/spill-string
+use std/map
+
+fn test() {
+  let empty = spill-string/new[8]()
+  assert-equals(empty.&.len(), 0)
+  assert-equals(empty.&.as-string(), "")
+  assert(not empty.&.is-spilled())
+
+  let hello = spill-string/from-string[8]("hello")
+  assert-equals(hello.&.len(), 5)
+  assert-equals(hello.&.as-string(), "hello")
+  assert-equals(hello, spill-string/from-string[8]("hello"))
+  assert(hello != spill-string/from-string[8]("help"))
+  assert-equals(hello.show(), "hello")
+
+  let full = spill-string/from-string[8]("abcdefgh")
+  assert(not full.&.is-spilled())
+  full.&.write-char('i')
+  assert(full.&.is-spilled())
+  assert-equals(full.&.as-string(), "abcdefghi")
+  full.&.write("jklmnopqrstuvwxyz")
+  assert-equals(full.&.as-string(), "abcdefghijklmnopqrstuvwxyz")
+  assert-equals(full, spill-string/from-string[8]("abcdefghijklmnopqrstuvwxyz"))
+
+  let n = spill-string/new[4]()
+  (12345: u64).print-to(n.&)
+  n.&.write-char('!')
+  assert-equals(n.&.as-string(), "12345!")
+  n.&.clear()
+  (u64/max-value).print-to(n.&)
+  assert-equals(n.&.to-string(), "18446744073709551615")
+
+  let inline-copy = hello
+  inline-copy.&.write-char('!')
+  assert-equals(hello.&.as-string(), "hello")
+  assert-equals(inline-copy.&.as-string(), "hello!")
+
+  let counts = map/new[spill-string[8], int]()
+  counts.insert(hello, 1)
+  counts.insert(full, 2)
+  assert-equals(counts.get(spill-string/from-string[8]("hello")), :some 1)
+  assert-equals(counts.get(spill-string/from-string[8]("abcdefghijklmnopqrstuvwxyz")), :some 2)
+  assert(counts.get(spill-string/from-string[8]("world")).is-none())
+}

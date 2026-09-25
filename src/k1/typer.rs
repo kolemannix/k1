@@ -1340,6 +1340,13 @@ pub struct TypedReturn {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub enum TrivialExit {
+    Fallthrough,
+    Break(ScopeId),
+    Continue(ScopeId),
+}
+
+#[derive(Debug, Clone, Copy)]
 pub struct TypedBreak {
     pub value: TypedExprId,
     pub loop_scope: ScopeId,
@@ -1834,6 +1841,7 @@ impl ArithOpClass {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ArithOpOp {
     Equals,
+    NotEquals,
     Add,
     Sub,
     Mul,
@@ -1849,6 +1857,7 @@ impl ArithOpOp {
     pub fn kind_name(&self) -> &'static str {
         match self {
             ArithOpOp::Equals => "eq",
+            ArithOpOp::NotEquals => "ne",
             ArithOpOp::Add => "add",
             ArithOpOp::Sub => "sub",
             ArithOpOp::Mul => "mul",
@@ -1873,6 +1882,7 @@ impl ArithOpKind {
         match self.class {
             ArithOpClass::Float => match self.op {
                 ArithOpOp::Equals => "float_eq",
+                ArithOpOp::NotEquals => "float_ne",
                 ArithOpOp::Add => "float_add",
                 ArithOpOp::Sub => "float_sub",
                 ArithOpOp::Mul => "float_mul",
@@ -1885,6 +1895,7 @@ impl ArithOpKind {
             },
             ArithOpClass::UnsignedInt | ArithOpClass::SignedInt => match self.op {
                 ArithOpOp::Equals => "int_eq",
+                ArithOpOp::NotEquals => "int_ne",
                 ArithOpOp::Add => "int_add",
                 ArithOpOp::Sub => "int_sub",
                 ArithOpOp::Mul => "int_mul",
@@ -2724,7 +2735,7 @@ pub struct TypedProgram {
     pub type_instance_info: VPool<Option<GenericInstanceInfo>, TypeId>,
     pub type_defn_info: FxHashMap<TypeId, TypeDefnInfo>,
     pub type_specializations: ahash::HashMap<(TypeId, TypeSliceId), TypeId>,
-    pub phys_types: FxHashMap<TypeId, PhysicalTypeResult>,
+    pub phys_types: VPool<Option<PhysicalTypeResult>, TypeId>,
     /// InferenceHole type ids by hole index, for holes with no static constraint.
     /// `add_type` hash-conses holes to one id per (index, static_type) anyway; this skips
     /// the hash+probe on the common path. PENDING marks not-yet-created indices.
@@ -2865,7 +2876,7 @@ impl TypedProgram {
         let inputs_hash = snapshot::inputs_hash_from_settings(&ast.idents, &config, &plan);
 
         let type_idents = TypeIdents { tag: ast.idents.b.tag, payload: ast.idents.b.payload };
-        let mut agg_types = VPool::make("phys_types");
+        let mut agg_types = VPool::make("agg_types");
         // Reserve the lower values so they dont conflict with scalars once packed
         agg_types.skip_next_n_slots(PhysicalType::MIN_AGG_ID as usize);
 
@@ -2926,7 +2937,7 @@ impl TypedProgram {
             type_instance_info: VPool::make("instance_info"),
             type_defn_info: FxHashMap::new(),
             type_specializations: ahash::HashMap::new(),
-            phys_types: FxHashMap::new(),
+            phys_types: VPool::make("phys_types"),
             hole_type_cache: Vec::new(),
             builtin_types: BuiltinTypes::default(),
             agg_types,
@@ -3388,6 +3399,23 @@ impl TypedProgram {
         let primary =
             self.modules.get_opt(ModuleId::from_u32(self.plan.modules().len() as u32)?)?;
         self.scopes.find_function_local(primary.namespace_scope_id, self.ast.idents.b.main)
+    }
+
+    fn add_match_expr(&mut self, m: TypedMatchExpr, type_id: TypeId, span: SpanId) -> TypedExprId {
+        if let Some(last) = self.mem.getn_mut(m.arms).last_mut() {
+            last.case = None;
+            let instrs = self.mem.getn(last.condition.instrs);
+            if instrs.iter().any(|i| !matches!(i, MatchingConditionInstr::Binding { .. })) {
+                let mut bindings = self.mem.new_list(instrs.len() as u32);
+                for instr in instrs {
+                    if matches!(instr, MatchingConditionInstr::Binding { .. }) {
+                        bindings.push(*instr);
+                    }
+                }
+                last.condition.instrs = bindings.to_slice();
+            }
+        }
+        self.exprs.add(TypedExpr::Match(m), type_id, span)
     }
 
     fn push_block_stmt_id(&self, block: &mut BlockBuilder, stmt: TypedStmtId) {
@@ -4202,15 +4230,17 @@ impl TypedProgram {
         let mut impl_functions = self.mem.new_list(functions.len());
         for ability_fn_ref in self.mem.getn(functions) {
             let ability_fn = self.functions.get(ability_fn_ref.function_id);
+            let parsed_fn_id = ability_fn.parsed_id.as_function_id().unwrap();
+            let is_default = self.ast.get_function(parsed_fn_id).body.is_some();
             let spec_fn_id = self
                 .declare_function(
-                    ability_fn.parsed_id.as_function_id().unwrap(),
+                    parsed_fn_id,
                     scope_id,
                     Some(FunctionAbilityContextInfo::ability_impl(
                         base_ability_id,
                         self_type_id,
                         AbilityImplKind::BuiltinDerived,
-                        false,
+                        is_default,
                     )),
                     // Why root namespace?! Answer: the namespace is only used for companion type stuff, so
                     // this isn't doing any harm
@@ -6958,6 +6988,14 @@ impl TypedProgram {
             kbail!(self, span, "'while' body must be a block");
         };
 
+        if let ParsedExpr::Literal(ParsedLiteral::Bool(true)) = self.ast.exprs.get(while_expr.cond) {
+            kbail!(
+                self,
+                self.ast.exprs.get_span(while_expr.cond),
+                "loop is wayyy better than while true"
+            );
+        }
+
         let cond_ctx = if self.matching_condition_binds(while_expr.cond) {
             let condition_scope_id = self.scopes.add_child_scope(
                 ctx.scope_id,
@@ -6992,10 +7030,6 @@ impl TypedProgram {
         let body_block =
             self.eval_block(&parsed_block, ctx.with_scope(body_block_scope_id), false)?;
 
-        // TODO: detect divergent loops: if loop has no breaks or returns, can we type it as never?
-        //
-        // Loop Info should be able to track this, if we report every
-        // break and return
         let loop_type = self.builtin_types.empty;
 
         Ok(self.exprs.add(
@@ -8509,12 +8543,9 @@ impl TypedProgram {
             condition: MatchingCondition { instrs: MSlice::empty() },
             consequent_expr: alternate,
         };
-        Ok(self.exprs.add(
-            TypedExpr::Match(TypedMatchExpr {
-                subject_defn: None,
-                scrutinee: None,
-                arms: self.mem.pushn(&[cons_arm, alt_arm]),
-            }),
+        let arms = self.mem.pushn(&[cons_arm, alt_arm]);
+        Ok(self.add_match_expr(
+            TypedMatchExpr { subject_defn: None, scrutinee: None, arms },
             overall_type,
             span,
         ))
@@ -8767,12 +8798,12 @@ impl TypedProgram {
             condition: MatchingCondition { instrs: MSlice::empty() },
             consequent_expr: self.synth_bool(false, span),
         };
-        let match_expr = TypedExpr::Match(TypedMatchExpr {
+        let match_expr = TypedMatchExpr {
             subject_defn: None,
             scrutinee: None,
             arms: self.mem.pushn(&[true_arm, false_arm]),
-        });
-        Ok(self.exprs.add(match_expr, BOOL_TYPE_ID, span))
+        };
+        Ok(self.add_match_expr(match_expr, BOOL_TYPE_ID, span))
     }
 
     fn eval_binary_op(
@@ -8852,7 +8883,8 @@ impl TypedProgram {
         use BinaryOpKind as K;
         let f = &self.ast.idents.f;
         match op_kind {
-            K::Equals | K::NotEquals => (f.equals__equals, ABILITY_ID_EQUALS),
+            K::Equals => (f.equals__equals, ABILITY_ID_EQUALS),
+            K::NotEquals => (f.equals__not_equals, ABILITY_ID_EQUALS),
             K::Add => (f.add__add, ABILITY_ID_ADD),
             K::Subtract => (f.sub__sub, ABILITY_ID_SUB),
             K::Multiply => (f.mul__mul, ABILITY_ID_MUL),
@@ -9000,10 +9032,7 @@ impl TypedProgram {
                 )?
             }
         };
-        if binary_op.op_kind != K::NotEquals || self.exprs.get_type(result) == NEVER_TYPE_ID {
-            return Ok(result);
-        }
-        self.synth_negated(result, ctx, span)
+        Ok(result)
     }
 
     fn eval_optional_else(
@@ -9315,6 +9344,27 @@ impl TypedProgram {
         })
     }
 
+    pub fn get_expr_trivial_exit(&self, expr: TypedExprId) -> Option<TrivialExit> {
+        match self.exprs.get(expr) {
+            TypedExpr::StaticValue(s) if s.value_id == self.static_values.empty_id() => {
+                Some(TrivialExit::Fallthrough)
+            }
+            TypedExpr::Break(brk) => match self.get_expr_trivial_exit(brk.value) {
+                Some(TrivialExit::Fallthrough) => Some(TrivialExit::Break(brk.loop_scope)),
+                _ => None,
+            },
+            TypedExpr::Continue { loop_scope } => Some(TrivialExit::Continue(*loop_scope)),
+            TypedExpr::Block(block) => match self.mem.getn(block.statements) {
+                [stmt] => match self.stmts.get(*stmt) {
+                    TypedStmt::Expr(inner, _) => self.get_expr_trivial_exit(*inner),
+                    _ => None,
+                },
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     fn eval_continue(
         &mut self,
         cont: ParsedContinue,
@@ -9529,68 +9579,48 @@ impl TypedProgram {
 
         let array_reference_type = self.get_expr_type(receiver).as_reference();
         let array_expr = self.synth_dereference_when(receiver, array_reference_type.is_some());
+        let packed = self.is_place_in_packed(array_expr);
+        let element_type = array_type.element_type;
 
-        let get_element_expr = self.exprs.add(
-            TypedExpr::ArrayGetElement(ArrayGetElement {
-                base_array: array_expr,
-                index: index_expr,
-                packed: self.is_place_in_packed(array_expr),
-            }),
-            array_type.element_type,
-            span,
-        );
-        let Some(concrete_size) = concrete_count else {
-            return Ok(get_element_expr);
-        };
-        if let Ok(static_index_expr) = self.attempt_static_lift(index_expr) {
-            let static_index_type = self.exprs.get_type(static_index_expr);
-            if let Some(index_size) = self
-                .get_value_from_value_type(static_index_type)
-                .and_then(|sv| self.static_values.get(sv).as_size())
-            {
-                if index_size >= concrete_size {
-                    kbail!(
-                        self,
-                        span,
-                        "Array index out of bounds: {} >= {}",
-                        index_size,
-                        concrete_size
-                    );
+        let index = match concrete_count {
+            None => index_expr,
+            Some(concrete_size) => {
+                let static_index = match self.attempt_static_lift(index_expr) {
+                    Ok(static_index_expr) => {
+                        let static_index_type = self.exprs.get_type(static_index_expr);
+                        self.get_value_from_value_type(static_index_type)
+                            .and_then(|sv| self.static_values.get(sv).as_size())
+                    }
+                    Err(_) => None,
+                };
+                match static_index {
+                    Some(index_size) => {
+                        if index_size as u64 >= concrete_size as u64 {
+                            kbail!(
+                                self,
+                                span,
+                                "Array index out of bounds: {} >= {}",
+                                index_size,
+                                concrete_size
+                            );
+                        }
+                        index_expr
+                    }
+                    None => {
+                        let array_length_expr = self.synth_i64(concrete_size, span);
+                        self.synth_typed_call_typed_args(
+                            self.ast.idents.f.core_checked_index.with_span(span),
+                            &[],
+                            &[index_expr, array_length_expr],
+                            ctx.with_no_expected_type(),
+                            false,
+                        )?
+                    }
                 }
-                return Ok(get_element_expr);
             }
-        }
-        let array_length_expr = self.synth_i64(concrete_size, span);
-        let lt_name = self.ast.idents.f.ScalarCmp_lt.name;
-        let Some(lt_fn) = self.direct_ability_fn(SIZE_TYPE_ID, ABILITY_ID_SCALAR_CMP, lt_name)
-        else {
-            self.ice_span(span, "expected scalar-cmp impl for size")
         };
-        let is_in_bounds =
-            self.synth_static_call(lt_fn, &[index_expr, array_length_expr], BOOL_TYPE_ID, span);
-        let crash_message = self.synth_string_literal(self.ast.idents.b.crash_msg_array_oob, span);
-        let crash_oob = self.synth_typed_call_typed_args(
-            self.ast.idents.f.core_crash_bounds.with_span(span),
-            &[],
-            &[array_length_expr, index_expr, crash_message],
-            ctx.with_no_expected_type(),
-            false,
-        )?;
-        // We emit `{ if !in_bounds crash; array[index] }` rather than an if/else
-        // over the element so that the element access is the block's trailing
-        // expr: blocks are place-transparent, which is what makes
-        // `arr.[i].&` and `arr.[i] = v` work
-        let unit_expr = self.synth_empty_value(span);
-        let bounds_check_expr =
-            self.synth_if_else(self.builtin_types.empty, is_in_bounds, unit_expr, crash_oob, span);
-        let mut statements = self.mem.new_list(2);
-        statements.push(self.add_expr_stmt(bounds_check_expr));
-        statements.push(self.add_expr_stmt(get_element_expr));
-        let block_expr = self.exprs.add_block(
-            BlockBuilder { scope_id: ctx.scope_id, statements, span },
-            array_type.element_type,
-        );
-        Ok(block_expr)
+        let get_element = ArrayGetElement { base_array: array_expr, index, packed };
+        Ok(self.exprs.add(TypedExpr::ArrayGetElement(get_element), element_type, span))
     }
 
     fn handle_array_method_call(
@@ -13183,30 +13213,29 @@ impl TypedProgram {
                 (ABILITY_ID_SUM, "sum-name") => {
                     Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::SumAbilityGetName))
                 }
-                (ABILITY_ID_EQUALS, "equals") => match t {
-                    Some(Type::Char) | Some(Type::Bool) | Some(Type::Pointer) => {
-                        mk_arith!(OpKind::uint(Op::Equals))
+                (ABILITY_ID_EQUALS, "equals" | "not-equals") => {
+                    let op = if fn_name_str == "equals" { Op::Equals } else { Op::NotEquals };
+                    match t {
+                        Some(Type::Char) | Some(Type::Bool) | Some(Type::Pointer) => {
+                            mk_arith!(OpKind::uint(op))
+                        }
+                        Some(Type::Integer(i)) => {
+                            let o = if i.is_signed() { OpKind::sint(op) } else { OpKind::uint(op) };
+                            mk_arith!(o)
+                        }
+                        Some(Type::Float(_)) => mk_arith!(OpKind::float(op)),
+                        Some(Type::Enum(_)) if op == Op::Equals => {
+                            Some(Builtin::TyperInline(BuiltinTyperInline::EnumEquals))
+                        }
+                        Some(Type::Sum(_)) if op == Op::Equals => {
+                            Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::SumEquals))
+                        }
+                        Some(Type::Struct(_)) if op == Op::Equals => Some(
+                            Builtin::TyperPhysicalFunction(BuiltinTyperFunction::StructEquals),
+                        ),
+                        _ => None,
                     }
-                    Some(Type::Integer(i)) => {
-                        let o = if i.is_signed() {
-                            OpKind::sint(Op::Equals)
-                        } else {
-                            OpKind::uint(Op::Equals)
-                        };
-                        mk_arith!(o)
-                    }
-                    Some(Type::Float(_)) => mk_arith!(OpKind::float(Op::Equals)),
-                    Some(Type::Enum(_)) => {
-                        Some(Builtin::TyperInline(BuiltinTyperInline::EnumEquals))
-                    }
-                    Some(Type::Sum(_)) => {
-                        Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::SumEquals))
-                    }
-                    Some(Type::Struct(_)) => {
-                        Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::StructEquals))
-                    }
-                    _ => None,
-                },
+                }
                 (ABILITY_ID_PRINT, "print-to") => match t {
                     Some(Type::Struct(_)) => {
                         Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::StructPrintTo))
@@ -13360,9 +13389,9 @@ impl TypedProgram {
                     _ => None,
                 },
                 Some("mem") => match fn_name_str {
-                    "copy" => Some(Builtin::Backend(BackendBuiltin::MemCopy)),
-                    "move" => Some(Builtin::Backend(BackendBuiltin::MemMove)),
-                    "set" => Some(Builtin::Backend(BackendBuiltin::MemSet)),
+                    "copy-memcpy" => Some(Builtin::Backend(BackendBuiltin::MemCopy)),
+                    "move-memmove" => Some(Builtin::Backend(BackendBuiltin::MemMove)),
+                    "set-memset" => Some(Builtin::Backend(BackendBuiltin::MemSet)),
                     "equals-memcmp" => Some(Builtin::Backend(BackendBuiltin::MemEquals)),
                     "bitcast" => Some(Builtin::Ir(BuiltinIr::Bitcast)),
                     "load-volatile" => Some(Builtin::Ir(BuiltinIr::VolatileLoad)),
@@ -14681,7 +14710,9 @@ impl TypedProgram {
         }
 
         let linkage = match impl_info {
-            Some(info) if info.impl_kind == AbilityImplKind::BuiltinDerived => Linkage::Intrinsic,
+            Some(info) if info.impl_kind == AbilityImplKind::BuiltinDerived && !info.is_default => {
+                Linkage::Intrinsic
+            }
             _ => match ast_fn.linkage {
                 // Fill in the containing ns's lib(..) unless the fn declares its own lib
                 Linkage::External { module_id, lib_name: None, fn_name } => Linkage::External {
@@ -15265,12 +15296,12 @@ impl TypedProgram {
                 consequent_expr: member_name_expr,
             });
         }
-        let match_expr = TypedExpr::Match(TypedMatchExpr {
+        let match_expr = TypedMatchExpr {
             subject_defn: None,
             scrutinee: Some(enum_arg_int_expr),
             arms: arms.to_slice(),
-        });
-        self.exprs.add(match_expr, self.builtin_types.string(), fn_span)
+        };
+        self.add_match_expr(match_expr, self.builtin_types.string(), fn_span)
     }
 
     fn generate_intrinsic_function_body(
@@ -15366,12 +15397,12 @@ impl TypedProgram {
                     condition: MatchingCondition { instrs: MSlice::empty() },
                     consequent_expr: self.synth_bool(false, fn_span),
                 });
-                let match_expr = TypedExpr::Match(TypedMatchExpr {
+                let match_expr = TypedMatchExpr {
                     subject_defn: None,
                     scrutinee: Some(param_a_tag_expr),
                     arms: arms.to_slice(),
-                });
-                let match_expr_id = self.exprs.add(match_expr, BOOL_TYPE_ID, fn_span);
+                };
+                let match_expr_id = self.add_match_expr(match_expr, BOOL_TYPE_ID, fn_span);
                 Ok(match_expr_id)
             }
             BuiltinTyperFunction::SumAbilityGetName => {
@@ -15392,12 +15423,12 @@ impl TypedProgram {
                         consequent_expr: member_name_expr,
                     });
                 }
-                let match_expr = TypedExpr::Match(TypedMatchExpr {
+                let match_expr = TypedMatchExpr {
                     subject_defn: None,
                     scrutinee: Some(sum_arg_int_expr),
                     arms: arms.to_slice(),
-                });
-                Ok(self.exprs.add(match_expr, self.builtin_types.string(), fn_span))
+                };
+                Ok(self.add_match_expr(match_expr, self.builtin_types.string(), fn_span))
             }
             BuiltinTyperFunction::StructEquals => {
                 let struct_param_a = *self.mem.get_nth(params, 0);
@@ -15425,9 +15456,8 @@ impl TypedProgram {
                     consequent_expr: self.synth_bool(false, fn_span),
                 };
                 let arms = self.mem.pushn(&[equals_arm, false_arm]);
-                let match_expr =
-                    TypedExpr::Match(TypedMatchExpr { subject_defn: None, scrutinee: None, arms });
-                let match_expr_id = self.exprs.add(match_expr, BOOL_TYPE_ID, fn_span);
+                let match_expr = TypedMatchExpr { subject_defn: None, scrutinee: None, arms };
+                let match_expr_id = self.add_match_expr(match_expr, BOOL_TYPE_ID, fn_span);
                 // eprintln!("STRUCT EQUALS\n{}", self.expr_to_string(match_expr_id));
                 Ok(match_expr_id)
             }
@@ -15537,12 +15567,12 @@ impl TypedProgram {
                         consequent_expr: self.exprs.add_block(block, EMPTY_TYPE_ID),
                     });
                 }
-                let match_expr = TypedExpr::Match(TypedMatchExpr {
+                let match_expr = TypedMatchExpr {
                     subject_defn: None,
                     scrutinee: Some(tag_expr),
                     arms: arms.to_slice(),
-                });
-                Ok(self.exprs.add(match_expr, EMPTY_TYPE_ID, fn_span))
+                };
+                Ok(self.add_match_expr(match_expr, EMPTY_TYPE_ID, fn_span))
             }
             BuiltinTyperFunction::EnumPrintTo => {
                 let enum_param = *self.mem.get_nth(params, 0);

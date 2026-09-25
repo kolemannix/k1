@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="736" viewBox="0 0 1200 736" font-family="system-ui, -apple-system, Helvetica, Arial, sans-serif">
+<style>
+  .bg { fill: #fcfcfb; }
+  .title { fill: #0b0b0b; font-weight: 600; font-size: 26px; }
+  .sub { fill: #52514e; font-size: 16px; }
+  .name { fill: #0b0b0b; font-weight: 600; font-size: 16px; }
+  .name-muted { fill: #898781; font-weight: 600; font-size: 16px; font-style: italic; }
+  .detail { fill: #52514e; font-size: 13px; }
+  .value { fill: #0b0b0b; font-size: 16px; font-variant-numeric: tabular-nums; }
+  .value-muted { fill: #898781; font-size: 16px; font-style: italic; }
+  .axis { fill: #898781; font-size: 13px; }
+  .grid { stroke: #e8e7e3; stroke-width: 1; }
+  .k1 { fill: #2a78d6; }
+  .cpp { fill: #c3c2b7; }
+  .lemire { fill: #e8e7e3; stroke: #c3c2b7; stroke-width: 1; stroke-dasharray: 4 3; }
+</style>
+<rect class="bg" width="1200" height="736"/>
+<text class="title" x="32" y="44">Integer to string, million strings per second</text>
+<text class="sub" x="32" y="72">buf[i &amp; 1023] = to_string(i) for i in 0..100M, best of 5, Apple M3 Max unless noted. Higher is better.</text>
+<line class="grid" x1="330.0" y1="88" x2="330.0" y2="700"/>
+<text class="axis" x="330.0" y="720" text-anchor="middle">0</text>
+<line class="grid" x1="416.7" y1="88" x2="416.7" y2="700"/>
+<text class="axis" x="416.7" y="720" text-anchor="middle">50</text>
+<line class="grid" x1="503.3" y1="88" x2="503.3" y2="700"/>
+<text class="axis" x="503.3" y="720" text-anchor="middle">100</text>
+<line class="grid" x1="590.0" y1="88" x2="590.0" y2="700"/>
+<text class="axis" x="590.0" y="720" text-anchor="middle">150</text>
+<line class="grid" x1="676.7" y1="88" x2="676.7" y2="700"/>
+<text class="axis" x="676.7" y="720" text-anchor="middle">200</text>
+<line class="grid" x1="763.3" y1="88" x2="763.3" y2="700"/>
+<text class="axis" x="763.3" y="720" text-anchor="middle">250</text>
+<line class="grid" x1="850.0" y1="88" x2="850.0" y2="700"/>
+<text class="axis" x="850.0" y="720" text-anchor="middle">300</text>
+<line class="grid" x1="936.7" y1="88" x2="936.7" y2="700"/>
+<text class="axis" x="936.7" y="720" text-anchor="middle">350</text>
+<line class="grid" x1="1023.3" y1="88" x2="1023.3" y2="700"/>
+<text class="axis" x="1023.3" y="720" text-anchor="middle">400</text>
+<line class="grid" x1="1110.0" y1="88" x2="1110.0" y2="700"/>
+<text class="axis" x="1110.0" y="720" text-anchor="middle">450</text>
+<text class="name-muted" x="316" y="106.0" text-anchor="end">C++ std::to_string</text>
+<text class="detail" x="316" y="123.0" text-anchor="end">Lemire&#x27;s M4 Max</text>
+<path class="lemire" d="M330,96 h314.5866666666667 a4,4 0 0 1 4,4 v16 a4,4 0 0 1 -4,4 h-314.5866666666667 z"/>
+<text class="value-muted" x="656.6" y="113.0">183.8</text>
+<text class="name-muted" x="316" y="156.0" text-anchor="end">Go strconv.Itoa</text>
+<text class="detail" x="316" y="173.0" text-anchor="end">Lemire&#x27;s M4 Max</text>
+<path class="lemire" d="M330,146 h142.12 a4,4 0 0 1 4,4 v16 a4,4 0 0 1 -4,4 h-142.12 z"/>
+<text class="value-muted" x="484.1" y="163.0">84.3</text>
+<text class="name-muted" x="316" y="206.0" text-anchor="end">Bun String(i)</text>
+<text class="detail" x="316" y="223.0" text-anchor="end">Lemire&#x27;s M4 Max</text>
+<path class="lemire" d="M330,196 h114.73333333333333 a4,4 0 0 1 4,4 v16 a4,4 0 0 1 -4,4 h-114.73333333333333 z"/>
+<text class="value-muted" x="456.7" y="213.0">68.5</text>
+<text class="name-muted" x="316" y="256.0" text-anchor="end">Rust to_string()</text>
+<text class="detail" x="316" y="273.0" text-anchor="end">Lemire&#x27;s M4 Max</text>
+<path class="lemire" d="M330,246 h106.24000000000001 a4,4 0 0 1 4,4 v16 a4,4 0 0 1 -4,4 h-106.24000000000001 z"/>
+<text class="value-muted" x="448.2" y="263.0">63.6</text>
+<text class="name-muted" x="316" y="306.0" text-anchor="end">Python str(i)</text>
+<text class="detail" x="316" y="323.0" text-anchor="end">Lemire&#x27;s M4 Max</text>
+<path class="lemire" d="M330,296 h35.693333333333335 a4,4 0 0 1 4,4 v16 a4,4 0 0 1 -4,4 h-35.693333333333335 z"/>
+<text class="value-muted" x="377.7" y="313.0">22.9</text>
+<text class="name" x="316" y="356.0" text-anchor="end">C++ std::to_string</text>
+<text class="detail" x="316" y="373.0" text-anchor="end">clang -O3, this machine</text>
+<path class="cpp" d="M330,346 h273.33333333333337 a4,4 0 0 1 4,4 v16 a4,4 0 0 1 -4,4 h-273.33333333333337 z"/>
+<text class="value" x="615.3" y="363.0">160.0</text>
+<text class="name" x="316" y="406.0" text-anchor="end">k1 show()</text>
+<text class="detail" x="316" y="423.0" text-anchor="end">naive formatter, growing builder</text>
+<path class="k1" d="M330,396 h106.76 a4,4 0 0 1 4,4 v16 a4,4 0 0 1 -4,4 h-106.76 z"/>
+<text class="value" x="448.8" y="413.0">63.9</text>
+<text class="name" x="316" y="456.0" text-anchor="end">k1 show()</text>
+<text class="detail" x="316" y="473.0" text-anchor="end">stack buffer</text>
+<path class="k1" d="M330,446 h114.03999999999999 a4,4 0 0 1 4,4 v16 a4,4 0 0 1 -4,4 h-114.03999999999999 z"/>
+<text class="value" x="456.0" y="463.0">68.1</text>
+<text class="name" x="316" y="506.0" text-anchor="end">k1 show()</text>
+<text class="detail" x="316" y="523.0" text-anchor="end">two digits per step</text>
+<path class="k1" d="M330,496 h297.94666666666666 a4,4 0 0 1 4,4 v16 a4,4 0 0 1 -4,4 h-297.94666666666666 z"/>
+<text class="value" x="639.9" y="513.0">174.2</text>
+<text class="name" x="316" y="556.0" text-anchor="end">k1 smolstr</text>
+<text class="detail" x="316" y="573.0" text-anchor="end">23 bytes inline, no spill (unfair)</text>
+<path class="k1" d="M330,546 h703.72 a4,4 0 0 1 4,4 v16 a4,4 0 0 1 -4,4 h-703.72 z"/>
+<text class="value" x="1045.7" y="563.0">408.3</text>
+<text class="name" x="316" y="606.0" text-anchor="end">k1 spill-string[22]</text>
+<text class="detail" x="316" y="623.0" text-anchor="end">spill-list as either (fair)</text>
+<path class="k1" d="M330,596 h685.6933333333333 a4,4 0 0 1 4,4 v16 a4,4 0 0 1 -4,4 h-685.6933333333333 z"/>
+<text class="value" x="1027.7" y="613.0">397.9</text>
+<text class="name" x="316" y="656.0" text-anchor="end">k1 spill-string[22]</text>
+<text class="detail" x="316" y="673.0" text-anchor="end">spill-list as hand-rolled union</text>
+<path class="k1" d="M330,646 h718.6266666666667 a4,4 0 0 1 4,4 v16 a4,4 0 0 1 -4,4 h-718.6266666666667 z"/>
+<text class="value" x="1060.6" y="663.0">416.9</text>
+</svg>

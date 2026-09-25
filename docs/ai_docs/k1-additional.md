@@ -114,7 +114,7 @@ body (not intern/extern) and is rejected in reloadable namespaces; a cycle of
 inliner never inlines a cold fn, and LLVM gets the `cold` attribute.
 `fn(noinline)` keeps a fn out of line in both the IR inliner and LLVM. It
 belongs on the out-of-line half of a fast path (`buffer/_grow-to`,
-`arena/_grow`, `map/_make-room`). It needs a body and cannot be combined with
+`arena/_alloc-in-new-chunk`, `map/_make-room`). It needs a body and cannot be combined with
 `inline`.
 
 A manifest may declare a setup step — `m.setup(outputs, inputs)` — paired with
@@ -626,7 +626,9 @@ See `test_src/suite1/is_patterns.k1`,
 The basics guide does not yet enumerate operators. Tests cover:
 
 - Arithmetic: `+`, `-`, `*`, `/`, `%`.
-- Comparison: `==`, `!=`, `<`, `<=`, `>`, `>=`.
+- Comparison: `==`, `!=`, `<`, `<=`, `>`, `>=`. `==` and `!=` resolve to the
+  `equals` ability's `equals` and `not-equals`; `not-equals` defaults to
+  `not self.equals(other)`, and the scalar impls are intern (one `icmp ne`).
 - Boolean: `not`, `and`, `or`, with short-circuiting.
 - Bitwise: `&`, `|`, `^`, `<<`, `>>`.
 
@@ -724,6 +726,18 @@ let(returned) v = zeroed()
 ```
 
 See `test_src/suite1/rvo_test.k1`.
+
+## Parameter Passing And Aliasing
+
+A by-value aggregate parameter gets no private copy: it may alias storage the
+caller can still reach, because the compiler passes the caller's storage
+instead of copying it, whether the argument is a variable, a field, an element
+or a deref. A callee that writes through a pointer into that storage may see
+its parameter change, and a later argument's side effects are visible in an
+earlier aggregate argument: `f(p.*, bump(p))` sees the bumped value. The one
+alias the compiler never makes is the
+return slot (sret): the destination a call writes its result into never aliases
+any of that call's arguments.
 
 ## Threads And Runtime Module Behavior
 

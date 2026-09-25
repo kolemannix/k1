@@ -1,22 +1,6 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
 
-//! Lowering from `ir` units to the flat `bc` stream.
-//!
-//! Per unit, three passes:
-//! - Pass A (analyze): assign a dense frame-word slot to every value-producing
-//!   instruction, map each no-op inst to the value it is the same as, collect
-//!   phis per block, and lay out the frame (allocas + agg-return temps at
-//!   fixed byte offsets).
-//! - Pass B (emit): walk blocks in order, emitting into a unit-local buffer
-//!   (so recursive callee lowering can append to the shared stream without
-//!   interleaving). Phis emit nothing; each CFG edge into a phi-carrying
-//!   block gets sequential `Mov` copies — inline before a `Jump`, or in an
-//!   appended trampoline for `JumpIf` edges.
-//! - Finalize: patch intra-unit jump targets, relocate local pcs by the
-//!   append base, splice into `k1.bc.code`, and patch any recursion fixups
-//!   that were waiting on this unit's `code_start`.
-
 use crate::debug;
 
 use crate::ir::{
@@ -25,7 +9,7 @@ use crate::ir::{
 use crate::kbail;
 use crate::lex::SpanId;
 use crate::typer::trace::TraceKind;
-use crate::typer::types::{Layout, PhysicalType, PhysicalTypeEnum, ScalarType};
+use crate::typer::types::{Layout, PhysicalType, ScalarType};
 use crate::typer::{FunctionId, K1Result, TypedExprId, TypedProgram};
 use crate::vm;
 
@@ -57,13 +41,11 @@ pub fn get_or_lower_function(
         !k1.trace.stack_contains_key(TraceKind::Bcgen, function_id.as_u32()),
         "get_or_lower_function called on in-progress function; caller must check"
     );
-    if !k1.ir.functions.contains_key(&function_id) {
+    if k1.ir.function_unit(function_id).is_none() {
         let requester = k1.trace.top();
         k1.compile_function_for_exec(function_id, requester, span)?;
     }
-    let unit = *k1.ir.functions.get(&function_id).unwrap();
-    // Builtins and externs have no body to lower; record a sentinel so
-    // indirect-call resolution can produce a good error.
+    let unit = *k1.ir.function_unit(function_id).unwrap();
     let sentinel_kind = if unit.function_builtin_kind.is_some() {
         Some(UnitKind::Builtin)
     } else if unit.blocks.is_empty() {
@@ -84,7 +66,7 @@ pub fn get_or_lower_function(
         return Ok(info);
     }
     ir::optimize_unit(k1, IrUnitId::Function(function_id))?;
-    let unit = *k1.ir.functions.get(&function_id).unwrap();
+    let unit = *k1.ir.function_unit(function_id).unwrap();
     lower_unit(k1, unit)
 }
 
@@ -103,53 +85,41 @@ pub fn get_or_lower_expr(
 }
 
 struct PendingTramp {
-    /// the jump operand to patch with this trampoline's pc
     operand: u32,
     from: BlockId,
     target: BlockId,
 }
 
+struct PhiMove {
+    dst: u32,
+    src: ir::Value,
+    src_word: Option<u32>,
+}
+
 pub(crate) struct LowerCtx {
     u: UnitView<'static>,
     ret_pt: PhysicalType,
-    /// Total frame size in bytes, 16-aligned; known after pass A
     frame_bytes: u32,
     scratch0: u32,
     scratch1: u32,
     scratch_flip: bool,
 
-    /// What each inst lowered to, one rung below `ir::Value`: a frame word
-    /// index, or `VALUE_MASK_FRAME_OFFSET | byte offset` for allocas and agg call temps
-    /// (their frame address is baked into consumers; nothing materializes it)
     inst_to_frame_value: IdMap<InstId, u32>,
-    /// Insts that own no bc value
     inst_to_parent_value: IdMap<InstId, ir::Value>,
-    /// StructOffsets that emit nothing: every use is a scalar Load address or
-    /// Store destination, so the byte offset is baked into those instead
     folded_struct_offsets: IdMap<InstId, (ir::Value, u16)>,
-    /// Uses of each inst within the unit, from `ir::count_uses`
     use_counts: IdMap<InstId, u32>,
-    /// Of those uses, the ones in a scalar Load address or Store destination
-    /// position; a StructOffset folds when the two counts agree
     addr_use_counts: IdMap<InstId, u32>,
-    /// IntCmps that emit nothing: the sole use is the `JumpIf` terminating
-    /// their own block, so the compare rides that branch as `JumpIfIntCmp`
     fused_cmps: IdMap<InstId, ()>,
     call_arg_values: Vec<u32>,
-    /// Flat (block, phi) pairs in block-then-phi order; blocks with phis are
-    /// rare, so edge-copy emission just scans this
     phis: Vec<(BlockId, InstId)>,
-    /// Pass A worklists for frame layout
+    phi_moves: Vec<PhiMove>,
     allocas: Vec<(InstId, Layout)>,
     agg_call_temps: Vec<(InstId, Layout)>,
 
     bc_out: Vec<u32>,
     block_to_entry_pc: IdMap<BlockId, u32>,
-    /// Operands holding a local pc that must be shifted by the final append base
     pc_operands_to_rebase: Vec<u32>,
-    /// Operands to patch with a block's entry pc
     operand_to_block: Vec<(u32, BlockId)>,
-    /// Operands to patch with a (recursive) callee's absolute code_start
     operand_to_callee: Vec<(u32, FunctionId)>,
     trampolines: Vec<PendingTramp>,
     spans: Vec<(u32, SpanId)>,
@@ -173,6 +143,7 @@ impl LowerCtx {
             fused_cmps: IdMap::default(),
             call_arg_values: Vec::new(),
             phis: Vec::new(),
+            phi_moves: Vec::new(),
             allocas: Vec::new(),
             agg_call_temps: Vec::new(),
             bc_out: Vec::with_capacity(1024),
@@ -201,6 +172,7 @@ impl LowerCtx {
         self.fused_cmps.clear();
         self.call_arg_values.clear();
         self.phis.clear();
+        self.phi_moves.clear();
         self.allocas.clear();
         self.agg_call_temps.clear();
         self.bc_out.clear();
@@ -243,7 +215,6 @@ impl LowerCtx {
         }
     }
 
-    /// Reset scratch alternation; call before resolving a new instruction's operands
     fn begin_inst(&mut self) {
         self.scratch_flip = false;
     }
@@ -254,7 +225,6 @@ impl LowerCtx {
         s
     }
 
-    /// Walk parent links to the value that owns storage
     fn walk_to_frame_value(&self, mut value: ir::Value) -> ir::Value {
         while let ir::Value::Inst(id) = value {
             match self.inst_to_parent_value.get(id) {
@@ -275,12 +245,10 @@ impl LowerCtx {
         self.phis.iter().any(|(pb, _)| *pb == b)
     }
 
-    /// Word index of the k-th out-arg (the callee's future param slot k)
     fn out_arg_word(&self, k: u32) -> u32 {
         self.frame_bytes / 8 + FRAME_HEADER_WORDS + k
     }
 
-    /// Word index of the callee's future sret header word
     fn out_sret_word(&self) -> u32 {
         self.frame_bytes / 8 + 2
     }
@@ -310,8 +278,6 @@ fn resolve_lowered_value(k1: &mut TypedProgram, ctx: &mut LowerCtx, value: ir::V
             }
             match *ctx.u.inst(inst_id) {
                 Inst::Data(imm) => k1.bc.intern_const(imm.bits()),
-                // Value-kind insts without a bc value are empty-typed; reads are 0
-                // (parity with the old VM's default-0 for never-written insts)
                 _ => k1.bc.intern_const(0),
             }
         }
@@ -319,13 +285,10 @@ fn resolve_lowered_value(k1: &mut TypedProgram, ctx: &mut LowerCtx, value: ir::V
         ir::Value::Data32 { t, data } => k1.bc.intern_const(ir::data32_bits(t, data)),
         ir::Value::IsStatic => k1.bc.intern_const(1),
         ir::Value::StaticValue { id, .. } => {
-            // Memoized; materializes into the shared k1.vm_static_stack, so
-            // the address is stable and valid across every VM.
             let v = vm::static_value_to_vm_value(k1, id, ctx.cur_span);
             k1.bc.intern_const(v.bits())
         }
         ir::Value::FunctionAddr(function_id) => {
-            // Be sure to lower functions whose addresses have been taken
             if !k1.bc.functions.contains_key(&function_id)
                 && !k1.trace.stack_contains_key(TraceKind::Bcgen, function_id.as_u32())
             {
@@ -350,8 +313,6 @@ fn resolve_lowered_value(k1: &mut TypedProgram, ctx: &mut LowerCtx, value: ir::V
     }
 }
 
-/// Resolve a memory operand for Load/Store, baking a folded StructOffset's
-/// byte offset into the returned B value instead of an address computation.
 fn resolve_addr(k1: &mut TypedProgram, ctx: &mut LowerCtx, value: ir::Value) -> (u32, u16) {
     if let ir::Value::Inst(id) = value {
         if let Some((base, off)) = ctx.folded_struct_offsets.get(id) {
@@ -378,14 +339,10 @@ fn lower_unit_with_ctx(
     let unit_id = unit.unit_id;
 
     let u = unit.view(&k1.ir.mem);
-    #[cfg(debug_assertions)]
-    validate_unit_shape(u, unit.unit_id);
-
     let param_count = unit.fn_type.params.len();
     let ret_pt = unit.fn_type.return_type;
     ctx.reset(u, ret_pt);
 
-    // ------------------------- Pass A: analyze -------------------------
     ir::count_uses(&u, &mut ctx.use_counts);
     let mut next_word: u32 = FRAME_HEADER_WORDS + param_count;
     let mut call_arg_words: usize = 0;
@@ -399,7 +356,7 @@ fn lower_unit_with_ctx(
                 Inst::Data(_) => {}
                 Inst::BitCast { v, .. }
                 | Inst::IntExtU { v, .. }
-                | Inst::PtrToWord { v }
+                | Inst::PtrToWord { v, .. }
                 | Inst::WordToPtr { v } => {
                     ctx.inst_to_parent_value.insert(inst_id, v);
                 }
@@ -422,11 +379,9 @@ fn lower_unit_with_ctx(
                                 !call.ret_type.is_empty(),
                                 "call with dst but empty return type"
                             );
-                            // The call's value IS its destination
                             ctx.inst_to_parent_value.insert(inst_id, dst);
                         }
                         None if call.ret_type.is_agg() => {
-                            // Value = the temp's frame address; encoded fp-relative
                             let layout = k1.get_pt_layout(call.ret_type);
                             ctx.agg_call_temps.push((inst_id, layout));
                         }
@@ -466,14 +421,8 @@ fn lower_unit_with_ctx(
                 }
             }
             let addr_use = match inst {
-                Inst::Load { t, src, .. } if matches!(t.as_enum(), PhysicalTypeEnum::Scalar(_)) => {
-                    Some(src)
-                }
-                Inst::Store { t, dst, .. }
-                    if matches!(t.as_enum(), PhysicalTypeEnum::Scalar(_)) =>
-                {
-                    Some(dst)
-                }
+                Inst::Load { src, .. } => Some(src),
+                Inst::Store { dst, .. } => Some(dst),
                 _ => None,
             };
             if let Some(ir::Value::Inst(id)) = addr_use {
@@ -483,8 +432,6 @@ fn lower_unit_with_ctx(
         }
     }
 
-    // Any use outside an address position forces the StructOffset to
-    // materialize as PtrAddImm
     let LowerCtx { folded_struct_offsets, addr_use_counts, use_counts, .. } = &mut *ctx;
     folded_struct_offsets.retain(|id, _| addr_use_counts.get(id) == use_counts.get(id));
 
@@ -492,9 +439,6 @@ fn lower_unit_with_ctx(
     ctx.scratch1 = next_word + 1;
     next_word += 2;
 
-    // Frame layout: [header|params|slots|scratch] then allocas, then agg temps.
-    // Frame bases and sizes are 64-aligned so allocas may align up to 64
-    // (512-bit vectors get natural alignment)
     let mut area_bytes: u32 = next_word * 8;
     for i in 0..ctx.allocas.len() {
         let (inst_id, layout) = ctx.allocas[i];
@@ -526,7 +470,6 @@ fn lower_unit_with_ctx(
         "bc: frame too large for fp-relative operand encoding"
     );
 
-    // -------------------------- Pass B: emit ---------------------------
     ctx.bc_out.reserve(u.inst_count() * 4 + call_arg_words);
     let mut first = true;
     for block_h in u.block_ids() {
@@ -543,7 +486,6 @@ fn lower_unit_with_ctx(
         }
     }
 
-    // Trampolines: phi edge copies for conditional jumps
     let mut tramp_i = 0;
     while tramp_i < ctx.trampolines.len() {
         let PendingTramp { operand, from, target } = ctx.trampolines[tramp_i];
@@ -555,7 +497,6 @@ fn lower_unit_with_ctx(
         ctx.push_block_target(target);
     }
 
-    // -------------------------- Finalize -------------------------------
     for i in 0..ctx.operand_to_block.len() {
         let (at, block_id) = ctx.operand_to_block[i];
         let Some(target_pc) = ctx.block_to_entry_pc.get(block_id) else {
@@ -657,9 +598,6 @@ fn emit_inst(
     }
 
     match inst {
-        // No code: constants and no-op conversions are handled at operand
-        // resolution; phis are handled as edge copies; alloca addresses are
-        // baked into consumers as fp-relative operands.
         Inst::Data(_) => {}
         Inst::ReloadGlobalAddr { storage_pt, id } => {
             ctx.emit(Opcode::LoadGlobal, 0, 0);
@@ -673,43 +611,20 @@ fn emit_inst(
         | Inst::WordToPtr { .. } => {}
         Inst::Phi { .. } => {}
         Inst::Alloca { .. } => {}
-        Inst::Store { dst, value, t, volatile: _, unaligned: _ } => match t.as_enum() {
-            PhysicalTypeEnum::Scalar(t) => {
-                let (addr, off) = resolve_addr(k1, ctx, dst);
-                let value = resolve_lowered_value(k1, ctx, value);
-                ctx.emit(Opcode::Store, t.width_bits(), off);
-                ctx.push(addr);
-                ctx.push(value);
-            }
-            PhysicalTypeEnum::Agg(_) => {
-                let dst = resolve_lowered_value(k1, ctx, dst);
-                let value = resolve_lowered_value(k1, ctx, value);
-                ctx.emit(Opcode::Copy, 0, 0);
-                ctx.push(dst);
-                ctx.push(value);
-                ctx.push(k1.get_pt_layout(t).size);
-            }
-            PhysicalTypeEnum::Empty => unreachable!(),
-        },
-        Inst::Load { t, src, dst, volatile: _, unaligned: _ } => match t.as_enum() {
-            PhysicalTypeEnum::Scalar(t) => {
-                debug_assert!(dst == ir::Value::Empty);
-                let (addr, off) = resolve_addr(k1, ctx, src);
-                let result = ctx.bc_value_of(inst_id);
-                ctx.emit(Opcode::Load, t.width_bits(), off);
-                ctx.push(result);
-                ctx.push(addr);
-            }
-            PhysicalTypeEnum::Agg(_) => {
-                let result = resolve_lowered_value(k1, ctx, dst);
-                let src = resolve_lowered_value(k1, ctx, src);
-                ctx.emit(Opcode::Copy, 0, 0);
-                ctx.push(result);
-                ctx.push(src);
-                ctx.push(k1.get_pt_layout(t).size);
-            }
-            PhysicalTypeEnum::Empty => unreachable!(),
-        },
+        Inst::Store { dst, value, t, volatile: _, unaligned: _ } => {
+            let (addr, off) = resolve_addr(k1, ctx, dst);
+            let value = resolve_lowered_value(k1, ctx, value);
+            ctx.emit(Opcode::Store, t.width_bits(), off);
+            ctx.push(addr);
+            ctx.push(value);
+        }
+        Inst::Load { t, src, volatile: _, unaligned: _ } => {
+            let (addr, off) = resolve_addr(k1, ctx, src);
+            let result = ctx.bc_value_of(inst_id);
+            ctx.emit(Opcode::Load, t.width_bits(), off);
+            ctx.push(result);
+            ctx.push(addr);
+        }
         Inst::AtomicLoad { t, src, ord } => {
             let addr = resolve_lowered_value(k1, ctx, src);
             let dst = ctx.bc_value_of(inst_id);
@@ -750,7 +665,6 @@ fn emit_inst(
             ctx.push(desired);
             ctx.push(cas.ok_vm_offset);
         }
-        // Vector ops unroll to scalar opcodes per lane; no vector opcodes exist
         Inst::VecOp { id } => {
             use ir::VecOpIr;
             let vop = *ctx.u.vec_op(id);
@@ -806,7 +720,6 @@ fn emit_inst(
                                 ctx.push(s0);
                                 ctx.push(s0);
                                 ctx.push(s1);
-                                // Fan the 0/1 out to a 0/all-ones lane: s0 = 0 - s0
                                 ctx.emit(Opcode::IntSub, elem_bits, 0);
                                 ctx.push(s0);
                                 ctx.push(zero);
@@ -878,7 +791,6 @@ fn emit_inst(
                     }
                 }
                 VecOpIr::ToMask => {
-                    // acc |= lane_msb << lane, for each lane
                     let (lhs_addr, lhs_off) = resolve_addr(k1, ctx, vop.lhs);
                     let acc = ctx.bc_value_of(inst_id);
                     let s0 = ctx.next_scratch();
@@ -945,8 +857,6 @@ fn emit_inst(
         }
         Inst::Jump(target) => {
             emit_phi_copies(k1, ctx, block_id, target);
-            // Fall through when the target is emitted next; only one pred of
-            // a join can be laid out before it, every other pred still jumps
             if Some(target) != next_block {
                 ctx.emit(Opcode::Jump, 0, 0);
                 ctx.push_block_target(target);
@@ -999,8 +909,6 @@ fn emit_inst(
                 ctx.push(src);
                 ctx.push(size);
             } else {
-                // Empty returns arrive as `Ret { v: Empty }` and resolve to
-                // const 0; nobody reads ret_reg for them
                 let src = resolve_lowered_value(k1, ctx, v);
                 ctx.emit(Opcode::Ret, 0, 0);
                 ctx.push(src);
@@ -1008,11 +916,8 @@ fn emit_inst(
         }
 
         Inst::BoolNegate { v } => unop!(Opcode::BoolNegate, 0, 0, v),
-        Inst::BitNot { v } => {
-            let t = ir::get_value_kind(&ctx.u, v).expect_scalar();
-            unop!(Opcode::BitNot, t.width_bits(), 0, v)
-        }
-        Inst::FloatNeg { v, width } => unop!(Opcode::FloatNeg, width, 0, v),
+        Inst::BitNot { v, t } => unop!(Opcode::BitNot, t.width_bits(), 0, v),
+        Inst::FloatNeg { v, t } => unop!(Opcode::FloatNeg, t.width_bits(), 0, v),
 
         Inst::IntTrunc { v, to } => cast!(CastKind::IntTrunc, 0, to.width_bits(), v),
         Inst::IntExtS { v, from, to } => {
@@ -1035,34 +940,34 @@ fn emit_inst(
             cast!(kind, from.width_bits(), to.width_bits(), v)
         }
 
-        Inst::IntAdd { lhs, rhs, width } => binop!(Opcode::IntAdd, width, 0, lhs, rhs),
-        Inst::IntSub { lhs, rhs, width } => binop!(Opcode::IntSub, width, 0, lhs, rhs),
-        Inst::IntMul { lhs, rhs, width } => binop!(Opcode::IntMul, width, 0, lhs, rhs),
-        Inst::IntDivUnsigned { lhs, rhs, width } => binop!(Opcode::IntDivU, width, 0, lhs, rhs),
-        Inst::IntDivSigned { lhs, rhs, width } => binop!(Opcode::IntDivS, width, 0, lhs, rhs),
-        Inst::IntRemUnsigned { lhs, rhs, width } => binop!(Opcode::IntRemU, width, 0, lhs, rhs),
-        Inst::IntRemSigned { lhs, rhs, width } => binop!(Opcode::IntRemS, width, 0, lhs, rhs),
+        Inst::IntAdd { lhs, rhs, t } => binop!(Opcode::IntAdd, t.width_bits(), 0, lhs, rhs),
+        Inst::IntSub { lhs, rhs, t } => binop!(Opcode::IntSub, t.width_bits(), 0, lhs, rhs),
+        Inst::IntMul { lhs, rhs, t } => binop!(Opcode::IntMul, t.width_bits(), 0, lhs, rhs),
+        Inst::IntDivUnsigned { lhs, rhs, t } => binop!(Opcode::IntDivU, t.width_bits(), 0, lhs, rhs),
+        Inst::IntDivSigned { lhs, rhs, t } => binop!(Opcode::IntDivS, t.width_bits(), 0, lhs, rhs),
+        Inst::IntRemUnsigned { lhs, rhs, t } => binop!(Opcode::IntRemU, t.width_bits(), 0, lhs, rhs),
+        Inst::IntRemSigned { lhs, rhs, t } => binop!(Opcode::IntRemS, t.width_bits(), 0, lhs, rhs),
         Inst::IntCmp { lhs, rhs, pred, width } => {
             if !ctx.fused_cmps.contains(inst_id) {
                 binop!(Opcode::IntCmp, width, pred as u16, lhs, rhs)
             }
         }
-        Inst::FloatAdd { lhs, rhs, width } => binop!(Opcode::FloatAdd, width, 0, lhs, rhs),
-        Inst::FloatSub { lhs, rhs, width } => binop!(Opcode::FloatSub, width, 0, lhs, rhs),
-        Inst::FloatMul { lhs, rhs, width } => binop!(Opcode::FloatMul, width, 0, lhs, rhs),
-        Inst::FloatDiv { lhs, rhs, width } => binop!(Opcode::FloatDiv, width, 0, lhs, rhs),
-        Inst::FloatRem { lhs, rhs, width } => binop!(Opcode::FloatRem, width, 0, lhs, rhs),
+        Inst::FloatAdd { lhs, rhs, t } => binop!(Opcode::FloatAdd, t.width_bits(), 0, lhs, rhs),
+        Inst::FloatSub { lhs, rhs, t } => binop!(Opcode::FloatSub, t.width_bits(), 0, lhs, rhs),
+        Inst::FloatMul { lhs, rhs, t } => binop!(Opcode::FloatMul, t.width_bits(), 0, lhs, rhs),
+        Inst::FloatDiv { lhs, rhs, t } => binop!(Opcode::FloatDiv, t.width_bits(), 0, lhs, rhs),
+        Inst::FloatRem { lhs, rhs, t } => binop!(Opcode::FloatRem, t.width_bits(), 0, lhs, rhs),
         Inst::FloatCmp { lhs, rhs, pred, width } => {
             binop!(Opcode::FloatCmp, width, pred as u16, lhs, rhs)
         }
-        Inst::BitAnd { lhs, rhs, width } => binop!(Opcode::BitAnd, width, 0, lhs, rhs),
-        Inst::BitOr { lhs, rhs, width } => binop!(Opcode::BitOr, width, 0, lhs, rhs),
-        Inst::BitXor { lhs, rhs, width } => binop!(Opcode::BitXor, width, 0, lhs, rhs),
-        Inst::BitShiftLeft { lhs, rhs, width } => binop!(Opcode::Shl, width, 0, lhs, rhs),
-        Inst::BitUnsignedShiftRight { lhs, rhs, width } => {
-            binop!(Opcode::ShrU, width, 0, lhs, rhs)
+        Inst::BitAnd { lhs, rhs, t } => binop!(Opcode::BitAnd, t.width_bits(), 0, lhs, rhs),
+        Inst::BitOr { lhs, rhs, t } => binop!(Opcode::BitOr, t.width_bits(), 0, lhs, rhs),
+        Inst::BitXor { lhs, rhs, t } => binop!(Opcode::BitXor, t.width_bits(), 0, lhs, rhs),
+        Inst::BitShiftLeft { lhs, rhs, t } => binop!(Opcode::Shl, t.width_bits(), 0, lhs, rhs),
+        Inst::BitUnsignedShiftRight { lhs, rhs, t } => {
+            binop!(Opcode::ShrU, t.width_bits(), 0, lhs, rhs)
         }
-        Inst::BitSignedShiftRight { lhs, rhs, width } => binop!(Opcode::ShrS, width, 0, lhs, rhs),
+        Inst::BitSignedShiftRight { lhs, rhs, t } => binop!(Opcode::ShrS, t.width_bits(), 0, lhs, rhs),
 
         Inst::BakeStaticValue { type_id, value } => {
             let value_lowered = resolve_lowered_value(k1, ctx, value);
@@ -1090,8 +995,6 @@ fn emit_call(
     assert!(nargs <= u16::MAX as u32, "call with more than u16::MAX args");
     let frame_bytes = ctx.frame_bytes;
 
-    // The lowered sret: the destination address for agg returns, else const 0
-    // (the callee only reads sret when it returns an aggregate)
     let resolve_sret = |k1: &mut TypedProgram, ctx: &mut LowerCtx| -> u32 {
         if !is_agg {
             return k1.bc.intern_const(0);
@@ -1099,17 +1002,12 @@ fn emit_call(
         ctx.begin_inst();
         match call.dst {
             Some(dst) => resolve_lowered_value(k1, ctx, dst),
-            None => ctx.bc_value_of(inst_id), // fp-relative reserved temp
+            None => ctx.bc_value_of(inst_id),
         }
     };
 
     match call.callee {
-        // Direct and indirect calls carry sret + args as operands (nargs in
-        // the header B field); the exec arm writes them into the new frame
         IrCallee::Direct(_) | IrCallee::Indirect(_, _) => {
-            // Resolve operands up front; they are all live at the Call, so a
-            // value in a LoadGlobal scratch slot is parked in the callee slot
-            // it is destined for anyway (the Call arm rewrites it in place)
             ctx.call_arg_values.clear();
             for (k, arg) in args.iter().enumerate() {
                 ctx.begin_inst();
@@ -1135,7 +1033,6 @@ fn emit_call(
             match call.callee {
                 IrCallee::Direct(function_id) => {
                     if k1.trace.stack_contains_key(TraceKind::Bcgen, function_id.as_u32()) {
-                        // Recursion cycle: patch when the callee's code_start lands
                         ctx.emit(Opcode::Call, 0, nargs as u16);
                         let at = ctx.bc_out.len() as u32;
                         ctx.push(PENDING_PC);
@@ -1158,7 +1055,6 @@ fn emit_call(
                     }
                 }
                 IrCallee::Indirect(_, fn_value) => {
-                    // Resolved last: nothing after it can clobber its scratch
                     ctx.begin_inst();
                     let fn_lowered = resolve_lowered_value(k1, ctx, fn_value);
                     ctx.emit(Opcode::CallIndirect, 0, nargs as u16);
@@ -1173,8 +1069,6 @@ fn emit_call(
                 ctx.push(s);
             }
         }
-        // Extern/builtin handlers read args from the callee param slots, so
-        // those are staged with Movs as before
         IrCallee::Extern { library_name, function_name, function_id } => {
             get_or_lower_function(k1, function_id, ctx.cur_span)?;
             emit_arg_movs(k1, ctx, args);
@@ -1187,7 +1081,6 @@ fn emit_call(
             }
             ctx.emit(Opcode::CallExtern, 0, 0);
             ctx.push(function_id.as_u32());
-            // StringIds are nonzero, so 0 means "none"
             ctx.push(library_name.map(|s| s.as_u32()).unwrap_or(0));
             ctx.push(function_name.as_u32());
             ctx.push(ret_pt.to_u32());
@@ -1225,8 +1118,6 @@ fn emit_call(
         }
     }
 
-    // Result delivery for scalar returns (agg results were written through
-    // sret by the callee/handler; empty returns produce nothing).
     if !ret_pt.is_empty() && !is_agg {
         match call.dst {
             Some(dst) => {
@@ -1258,6 +1149,7 @@ fn emit_arg_movs(k1: &mut TypedProgram, ctx: &mut LowerCtx, args: &[ir::Value]) 
 }
 
 fn emit_phi_copies(k1: &mut TypedProgram, ctx: &mut LowerCtx, from: BlockId, target: BlockId) {
+    ctx.phi_moves.clear();
     let mut i = 0;
     while i < ctx.phis.len() {
         let (phi_block, phi_id) = ctx.phis[i];
@@ -1269,72 +1161,215 @@ fn emit_phi_copies(k1: &mut TypedProgram, ctx: &mut LowerCtx, from: BlockId, tar
             unreachable!("non-phi in block_phis")
         };
         let Some(dst) = ctx.inst_to_frame_value.get(phi_id) else {
-            continue; // empty-typed phi
+            continue;
         };
-        let case = ctx.u.phi_cases(incomings).iter().find(|c| c.from == from).copied();
-        ctx.begin_inst();
-        let src = match case {
-            Some(case) => resolve_lowered_value(k1, ctx, case.value),
-            None => {
-                // The old VM is UB (assume_init) here; we pick 0 and warn.
-                if cfg!(debug_assertions) {
-                    eprintln!(
-                        "[bc] warning: phi i{} in b{} has no incoming for edge from b{}; using 0",
-                        phi_id.as_u32(),
-                        target,
-                        from
-                    );
-                }
-                k1.bc.intern_const(0)
-            }
+        let case = ctx.u.phi_cases(incomings).iter().find(|c| c.from == from);
+        let Some(case) = case else {
+            unreachable!("phi i{phi_id} in b{target} has no incoming for the edge from b{from}")
         };
-        ctx.emit(Opcode::Mov, 0, 0);
-        ctx.push(dst);
-        ctx.push(src);
+        let src = case.value;
+        let src_word = match ctx.walk_to_frame_value(src) {
+            ir::Value::GlobalAddr { .. } => None,
+            _ => Some(resolve_lowered_value(k1, ctx, src)),
+        };
+        if src_word == Some(dst) {
+            continue;
+        }
+        ctx.phi_moves.push(PhiMove { dst, src, src_word });
     }
-}
 
-/// Debug-only structural checks: phis should sit at the front of their block
-/// and allocas in the entry block. Violations are warnings (the lowering
-/// handles both shapes defensively) — but they indicate latent iropt bugs.
-#[cfg(debug_assertions)]
-fn validate_unit_shape(u: UnitView, unit_id: IrUnitId) {
-    let mut is_entry = true;
-    for block_h in u.block_ids() {
-        let mut seen_non_phi = false;
-        for inst_id in u.block_insts(block_h) {
-            match u.inst(inst_id) {
-                Inst::Phi { .. } => {
-                    if seen_non_phi {
-                        eprintln!(
-                            "[bc] validator: mid-block phi i{} in b{} of {:?}",
-                            inst_id.as_u32(),
-                            block_h,
-                            unit_id
-                        );
-                    }
-                }
-                Inst::Alloca { .. } => {
-                    seen_non_phi = true;
-                    if !is_entry {
-                        eprintln!(
-                            "[bc] validator: alloca i{} outside entry block in {:?}",
-                            inst_id.as_u32(),
-                            unit_id
-                        );
-                    }
-                }
-                _ => seen_non_phi = true,
+    while !ctx.phi_moves.is_empty() {
+        let mut ready = None;
+        for i in 0..ctx.phi_moves.len() {
+            let dst = ctx.phi_moves[i].dst;
+            if !ctx.phi_moves.iter().any(|m| m.src_word == Some(dst)) {
+                ready = Some(i);
+                break;
             }
         }
-        is_entry = false;
+        ctx.begin_inst();
+        match ready {
+            Some(i) => {
+                let PhiMove { dst, src, src_word } = ctx.phi_moves.swap_remove(i);
+                let src = match src_word {
+                    Some(word) => word,
+                    None => resolve_lowered_value(k1, ctx, src),
+                };
+                ctx.emit(Opcode::Mov, 0, 0);
+                ctx.push(dst);
+                ctx.push(src);
+            }
+            None => {
+                debug_assert!(ctx.phi_moves.iter().all(|m| m.src_word.is_some()));
+                let blocked = ctx.phi_moves[0].dst;
+                let scratch = ctx.next_scratch();
+                ctx.emit(Opcode::Mov, 0, 0);
+                ctx.push(scratch);
+                ctx.push(blocked);
+                for m in ctx.phi_moves.iter_mut() {
+                    if m.src_word == Some(blocked) {
+                        m.src_word = Some(scratch);
+                    }
+                }
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::ir::data32_bits;
+    use super::*;
+    use crate::compiler::test_support::{compile_source, function_named};
+    use crate::ir::{
+        BlockSourceKind, IntCmpPred, IrComment, IrRange, PhiCase, UnitBuf, commit_unit, data32_bits,
+    };
     use crate::typer::types::ScalarType;
+
+    fn u64_value(n: u32) -> ir::Value {
+        ir::Value::Data32 { t: ScalarType::U64, data: n }
+    }
+
+    fn push(u: &mut UnitBuf, block: BlockId, inst: Inst) -> InstId {
+        let id = u.new_inst(inst, SpanId::NONE, IrComment::None);
+        u.push_inst(block, id);
+        id
+    }
+
+    fn run_phi_rotation(
+        name: &str,
+        inits: &[u32],
+        sources: &[usize],
+        trips: u32,
+        body_block: bool,
+    ) -> u64 {
+        let mut k1 = compile_source(name, "fn f(): u64 { 0 }\nfn main(): i32 { 0 }\n");
+        let f = function_named(&k1, "f");
+        k1.compile_function_for_exec(f, None, SpanId::NONE).unwrap();
+        let mut unit = *k1.ir.function_unit(f).unwrap();
+        let mut u = k1.ir.take_unit_buf();
+        let t = PhysicalType::scalar(ScalarType::U64);
+        let entry = u.add_block(BlockSourceKind::Entry);
+        let header = u.add_block(BlockSourceKind::WhileLoopCondition);
+        let body = if body_block { u.add_block(BlockSourceKind::WhileLoopBody) } else { header };
+        let exit = u.add_block(BlockSourceKind::WhileLoopEnd);
+        push(&mut u, entry, Inst::Jump(header));
+        let mut phis = Vec::new();
+        for _ in inits {
+            phis.push(push(&mut u, header, Inst::Phi { t, incomings: IrRange::EMPTY }));
+        }
+        let counter = push(&mut u, header, Inst::Phi { t, incomings: IrRange::EMPTY });
+        for (k, phi) in phis.iter().enumerate() {
+            let incomings = u.push_phi_cases(&[
+                PhiCase { from: entry, value: u64_value(inits[k]) },
+                PhiCase { from: body, value: ir::Value::Inst(phis[sources[k]]) },
+            ]);
+            *u.inst_mut(*phi) = Inst::Phi { t, incomings };
+        }
+        let next = push(
+            &mut u,
+            body,
+            Inst::IntAdd { lhs: ir::Value::Inst(counter), rhs: u64_value(1), t: ScalarType::U64 },
+        );
+        let incomings = u.push_phi_cases(&[
+            PhiCase { from: entry, value: u64_value(0) },
+            PhiCase { from: body, value: ir::Value::Inst(next) },
+        ]);
+        *u.inst_mut(counter) = Inst::Phi { t, incomings };
+        let again = push(
+            &mut u,
+            body,
+            Inst::IntCmp {
+                lhs: ir::Value::Inst(counter),
+                rhs: u64_value(trips),
+                pred: IntCmpPred::Ult,
+                width: 64,
+            },
+        );
+        push(&mut u, body, Inst::JumpIf { cond: ir::Value::Inst(again), cons: header, alt: exit });
+        let mut acc = u64_value(0);
+        for phi in &phis {
+            let scaled = push(
+                &mut u,
+                exit,
+                Inst::IntMul { lhs: acc, rhs: u64_value(100), t: ScalarType::U64 },
+            );
+            let summed = push(
+                &mut u,
+                exit,
+                Inst::IntAdd {
+                    lhs: ir::Value::Inst(scaled),
+                    rhs: ir::Value::Inst(*phi),
+                    t: ScalarType::U64,
+                },
+            );
+            acc = ir::Value::Inst(summed);
+        }
+        push(&mut u, exit, Inst::Ret { v: acc, agg: false });
+        commit_unit(&mut k1.ir, &u, &mut unit);
+        k1.ir.release_unit_buf(u);
+        unit.is_optimized = true;
+        *k1.ir.function_unit_mut(f).unwrap() = unit;
+
+        let mut vm = vm::Vm::make();
+        let raw =
+            super::super::exec::execute_compiled_function_raw(&mut k1, &mut vm, f, &[], false)
+                .unwrap();
+        vm::load_value(raw.ret_pt, raw.ret_addr).bits()
+    }
+
+    fn expected_rotation(inits: &[u32], sources: &[usize], trips: u32) -> u64 {
+        let mut values: Vec<u64> = Vec::new();
+        for init in inits {
+            values.push(*init as u64);
+        }
+        for _ in 0..trips {
+            let mut next = Vec::new();
+            for source in sources {
+                next.push(values[*source]);
+            }
+            values = next;
+        }
+        let mut acc = 0;
+        for value in values {
+            acc = acc * 100 + value;
+        }
+        acc
+    }
+
+    #[test]
+    fn phi_swap_copies_in_parallel() {
+        for body_block in [false, true] {
+            let name = if body_block { "phi_swap_body" } else { "phi_swap_header" };
+            let expected = expected_rotation(&[1, 2], &[1, 0], 3);
+            assert_eq!(expected, 201);
+            assert_eq!(run_phi_rotation(name, &[1, 2], &[1, 0], 3, body_block), expected);
+        }
+    }
+
+    #[test]
+    fn phi_three_cycle_with_chain_copies_in_parallel() {
+        for body_block in [false, true] {
+            let name = if body_block { "phi_cycle_body" } else { "phi_cycle_header" };
+            let expected = expected_rotation(&[1, 2, 3, 4], &[2, 0, 1, 0], 1);
+            assert_eq!(expected, 3_01_02_01);
+            assert_eq!(
+                run_phi_rotation(name, &[1, 2, 3, 4], &[2, 0, 1, 0], 1, body_block),
+                expected
+            );
+            let expected = expected_rotation(&[1, 2, 3, 4], &[2, 0, 1, 0], 5);
+            assert_eq!(
+                run_phi_rotation(name, &[1, 2, 3, 4], &[2, 0, 1, 0], 5, body_block),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn phi_chain_without_cycle_orders_reads_before_writes() {
+        let expected = expected_rotation(&[7, 8, 9], &[0, 0, 1], 1);
+        assert_eq!(expected, 7_07_08);
+        assert_eq!(run_phi_rotation("phi_chain", &[7, 8, 9], &[0, 0, 1], 1, true), expected);
+    }
 
     #[test]
     fn float_immediates_are_bit_patterns() {

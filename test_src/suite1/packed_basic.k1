@@ -41,6 +41,7 @@ fn test() {
   assert-equals(m.inner.x, 100u32)
   assert-equals(m.inner.y, 2u8)
   assert-equals(m.tail, 200u8)
+  assert(m.inner == .{ x = 100, y = 2 })
 
   // packed nested in a plain struct
   let h: holder = .{ lead = 9, p = .{ x = 12345, y = 6 }, trail = 777 }

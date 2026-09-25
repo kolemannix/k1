@@ -35,6 +35,14 @@ fn bitwise() {
 }
 
 fn compares() {
+  assert-equals(1 != 2, opaque(1) != opaque(2))
+  assert-equals(1 != 1, opaque(1) != opaque(1))
+  assert-equals(-1i8 != 255u8.signed(), opaque(-1i8) != opaque(255u8).signed())
+  assert-equals('x' != 'y', opaque('x') != opaque('y'))
+  assert-equals(if opaque(3) != 4 1 else 0, 1)
+  let nan: f64 = opaque(0.0) / 0.0
+  assert(nan != nan)
+  assert("ab" != "ac")
   assert-equals(-1i32 < 0i32, opaque(-1i32) < opaque(0i32))
   assert-equals(255u8 > 0u8, opaque(255u8) > opaque(0u8))
   assert-equals(-1 >= 1, opaque(-1) >= opaque(1))
@@ -73,6 +81,17 @@ fn casts() {
   assert-equals(t, ot)
 }
 
+fn bitcasts() {
+  let x = opaque(42)
+  assert-equals(mem/bitcast[int, int](x), 42)
+  assert-equals(mem/bitcast[f64, u64](1.5), mem/bitcast[f64, u64](opaque(1.5)))
+  assert-equals(mem/bitcast[u8, i8](255u8), opaque(-1i8))
+  let p = x.&.as[ptr]
+  assert-equals(p.to-int(), opaque(p).to-int())
+  assert-equals(p.to-int().to-ptr(), p)
+  assert(mem/bitcast[u64, ptr](0).is-null())
+}
+
 fn identities() {
   let x = opaque(42)
   assert-equals(x + 0, 42)
@@ -96,5 +115,6 @@ fn test() {
   compares()
   floats()
   casts()
+  bitcasts()
   identities()
 }

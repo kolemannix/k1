@@ -628,9 +628,10 @@ while i < 10 {
 }
 ```
 
-`loop` can yield a value through `break value`; a bare `break` exits with unit.
-`continue` skips to the next iteration (the condition check of a `while`, the
-next `iter.next()` of a `for`):
+`loop` is the infinite loop; `while true` is a compile error. `loop` can yield
+a value through `break value`; a bare `break` exits with unit, and a `loop`
+with no `break` has type `never`. `continue` skips to the next iteration (the
+condition check of a `while`, the next `iter.next()` of a `for`):
 
 ```rust
 let found: int = loop {
@@ -710,9 +711,9 @@ Collection API naming follows a doctrine:
   `*arena` or `heap` (e.g. `cloned`/`cloned-in`, `push`/`push-in`,
   `reserve`/`reserve-in`). Long-lived data takes an explicit allocator;
   transient data uses the ambient arena.
-- Every allocation is zeroed (zero is initialized). Arena `reset`,
-  `pop-to-mark`, and `free` are O(1): the arena tracks a clean watermark and
-  zeroes reused bytes lazily when they are next allocated.
+- Every allocation is zeroed (zero is initialized). Arena `reset` and
+  `pop-to-mark` restore that by zeroing the bytes they release, so they cost
+  O(bytes used); arena `free` is a no-op.
 - Mutators take `*self` and reuse the verb (`sort`, `reverse`); functional
   variants get `-ed` (`sorted`, `reversed`).
 - Shared collection ops are ability defaults: reads and views on `as-span`

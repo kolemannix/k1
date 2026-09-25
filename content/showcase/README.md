@@ -41,8 +41,8 @@ The examples are deliberately fun, provocative, and a little ridiculous
 9. [The runtime model](sections/09-model.md). Abilities, blanket impls,
    ability objects with inline function tables, closures that capture only
    what you name, context parameters, `.try` as an ability you can implement
-   for a C status code, arenas with O(1) reset, and exhaustive matching
-   through references.
+   for a C status code, arenas whose reset zeroes only the bytes they
+   handed out, and exhaustive matching through references.
 10. [Systems programming](sections/10-systems.md). A SIMD scanner generated
     at compile time and run in the VM, typed tasks over threads built from a
     closure's own type, atomics, FFI with no bindings file, build steps that are K1 running inside the compiler, a K1
@@ -87,6 +87,10 @@ working-tree status, binary hash, and measurement dates.
   the per-run K1/C throughput ratios. The current bit writer takes an
   `inout` pointer; the [earlier investigation](benchmarks/brotli.md) records
   the previous by-value workaround and its assembly findings.
+- [Integer to string](benchmarks/int-strings/lemire-reply.md): Daniel
+  Lemire's strings-per-second loop against clang's `std::to_string`, from
+  the naive `show()` to an inline `spill-string` built in plain K1.
+  `run.sh` builds and runs both programs.
 
 K1 performs IR optimization and program inlining before splitting LLVM
 units. Optimized builds retain LLVM's per-unit O3 passes and ThinLTO, with

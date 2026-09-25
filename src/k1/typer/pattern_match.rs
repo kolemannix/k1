@@ -926,6 +926,7 @@ impl TypedProgram {
 
         let mut all_unguarded_patterns: List<TypedPatternId, MemTmp> =
             self.tmp.new_list(parsed_pattern_count);
+        let mut last_unguarded_arm: Option<usize> = None;
         let subject_type = self.exprs.get_type(match_subject_variable.variable_expr);
         let subject_expr_span = self.exprs.get_span(match_subject_variable.variable_expr);
 
@@ -1085,6 +1086,9 @@ impl TypedProgram {
                     // impossible bindings
                     if !self.pattern_matches_uninhabited(pattern) {
                         typed_arms.push(match_arm);
+                        if parsed_case.guard_condition_expr.is_none() {
+                            last_unguarded_arm = Some(typed_arms.len() - 1);
+                        }
                     }
                 }
             }
@@ -1095,12 +1099,19 @@ impl TypedProgram {
         }
 
         match fallback_expr {
-            None => self.check_pattern_exhaustiveness(
-                subject_type,
-                all_unguarded_patterns.as_slice_mut(),
-                subject_expr_span,
-                false,
-            )?,
+            None => {
+                self.check_pattern_exhaustiveness(
+                    subject_type,
+                    all_unguarded_patterns.as_slice_mut(),
+                    subject_expr_span,
+                    false,
+                )?;
+                if let Some(last_unguarded_arm) = last_unguarded_arm {
+                    while typed_arms.len() > last_unguarded_arm + 1 {
+                        typed_arms.pop();
+                    }
+                }
+            }
             Some(fallback_value) => typed_arms.push(TypedMatchArm {
                 case: None,
                 condition: MatchingCondition { instrs: MSlice::empty() },
@@ -1126,12 +1137,12 @@ impl TypedProgram {
                 if conseqent_type != NEVER_TYPE_ID { Some(conseqent_type) } else { None }
             })
             .unwrap_or(NEVER_TYPE_ID);
-        Ok(self.exprs.add(
-            TypedExpr::Match(TypedMatchExpr {
+        Ok(self.add_match_expr(
+            TypedMatchExpr {
                 subject_defn: Some(match_subject_variable.defn_stmt),
                 scrutinee,
                 arms: typed_arms.to_slice(),
-            }),
+            },
             match_result_type,
             match_expr_span,
         ))

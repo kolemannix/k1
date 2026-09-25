@@ -59,7 +59,17 @@ fn ref-match(s: *shape): int {
   if s is { :dot* -> 0, :circle r* -> r.*, _ -> -1 }
 }
 
+fn guarded-tail(n: int): int {
+  if n is { 1 -> 10, _ -> 0, x if x < 0 -> -1 }
+}
+
+fn diverging(c: bool): int {
+  if c { return 1 } else { return 2 }
+}
+
 fn test() {
+  assert-equals(guarded-tail(-5), 0)
+  assert-equals(diverging(false), 2)
   assert-equals(color-rank(:red), 0)
   assert-equals(color-rank(:blue), 4)
   assert-equals(color-rank(:gray), 9)

@@ -1,5 +1,3 @@
-use core/spill-list
-
 type string-builder = { list: list[u8] }
 ns for string-builder {
   fn new(): string-builder {

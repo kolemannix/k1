@@ -42,6 +42,18 @@ fn bases() {
   assert-equals(to-base(0xDEADBEEF, 16), "deadbeef")
   assert-equals(to-base(u64/max-value, 16), "ffffffffffffffff")
   assert-equals(to-base(u64/max-value, 10), "18446744073709551615")
+  assert-equals(to-base(7, 10), "7")
+  assert-equals(to-base(0, 10), "0")
+  assert-equals(to-base(42, 10), "42")
+  assert-equals(to-base(100, 10), "100")
+  assert-equals(to-base(1000, 10), "1000")
+  assert-equals(to-base(10001, 10), "10001")
+  assert-equals(u8/to-ascii-digit(0), '0')
+  assert-equals(u8/to-ascii-digit(9), '9')
+  assert-equals(u8/to-ascii-digit(10), 'a')
+  assert-equals(u8/to-ascii-digit(35), 'z')
+  assert-equals(u8/to-ascii-digit(36), 'A')
+  assert-equals(u8/to-ascii-digit(61), 'Z')
 }
 
 fn floats() {

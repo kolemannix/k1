@@ -1,0 +1,27 @@
+fn(inline) spin(n: int): int {
+  if n == 0 0 else spin(n - 1)
+}
+
+fn(inline) pick[mm: static int](x: int): int {
+  let min: int = core/meta/static-type-to-value[_, mm]()
+  if min > 4 { x + 100 } else { spin(x) }
+}
+
+fn tail-guard(b: bool): int {
+  if b is { true -> 1, false -> 2, x if x -> spin(1) }
+}
+
+fn dead-arms(): int {
+  let a = if 4 is { 3 -> spin(1), 4 -> 20, _ -> spin(2) }
+  let verbose = false
+  let b = if verbose spin(4) else 2
+  let c = if false and spin(1) == 0 3 else 4
+  while false { spin(2) }
+  a + b + c + pick[6](0) + tail-guard(true)
+}
+
+fn main(): i32 {
+  assert-equals(dead-arms(), 127)
+  #static assert-equals(dead-arms(), 127)
+  0
+}

@@ -6,4 +6,4 @@ fn main(): i32 {
 
   0
 }
-//abortmsg: Array index out of bounds: 44 >= 10
+//abortmsg: Index out of bounds: 44 >= 10

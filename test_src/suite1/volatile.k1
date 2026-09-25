@@ -30,4 +30,10 @@ fn test() {
   aggregate-volatile.store(.{ first = 3, second = 4 })
   assert-equals(aggregate.first, 3)
   assert-equals(aggregate.second, 4)
+
+  let copy: pair = .{ first = 0, second = 0 }
+  copy = aggregate-volatile.load()
+  aggregate.first = 9
+  assert-equals(copy.first, 3)
+  assert-equals(copy.second, 4)
 }

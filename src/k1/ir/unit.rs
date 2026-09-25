@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 use std::num::NonZeroU32;
 
 nz_u32_id!(BlockId);
+nz_u32_id!(PredEdgeId);
 
 #[inline]
 fn ix(id: impl Into<NonZeroU32>) -> usize {
@@ -68,6 +69,13 @@ pub struct BlockData {
 }
 
 static_assert_size!(InstLayout, 12);
+static_assert_size!(IrUnit, 124);
+
+#[derive(Clone, Copy)]
+struct PredEdge {
+    pred: BlockId,
+    next: Option<PredEdgeId>,
+}
 
 #[derive(Clone, Copy, Default)]
 pub struct UnitBody {
@@ -153,7 +161,7 @@ impl IrUnit {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct UnitView<'a> {
     body: UnitBody,
     insts: &'a [Inst],
@@ -218,6 +226,38 @@ impl<'a> UnitView<'a> {
     #[inline]
     pub fn phi_cases(&self, cases: IrRange<PhiCase>) -> &'a [PhiCase] {
         cases.of(self.phi_cases)
+    }
+
+    pub fn get_successor(
+        &self,
+        b: BlockId,
+        is_static: Option<bool>,
+        index: usize,
+    ) -> Option<BlockId> {
+        let last = self.block(b).last?;
+        match *self.inst(last) {
+            Inst::Jump(target) => (index == 0).then_some(target),
+            Inst::JumpIf { cond, cons, alt } => match (cond == Value::IsStatic, is_static) {
+                (true, Some(taken)) => (index == 0).then_some(if taken { cons } else { alt }),
+                _ => [cons, alt].get(index).copied(),
+            },
+            Inst::Switch { cases, default, .. } => {
+                let cases = self.switch_cases(cases);
+                match cases.get(index) {
+                    Some(case) => Some(case.target),
+                    None => (index == cases.len()).then_some(default),
+                }
+            }
+            _ => None,
+        }
+    }
+
+    pub fn successors(
+        &self,
+        b: BlockId,
+        is_static: Option<bool>,
+    ) -> impl Iterator<Item = BlockId> + '_ {
+        (0..).map_while(move |index| self.get_successor(b, is_static, index))
     }
 
     #[inline]
@@ -307,9 +347,8 @@ pub struct UnitBuf {
     cmpxchgs: Vec<AtomicCmpxchgData>,
     vec_ops: Vec<VecOpData>,
 
-    preds: Vec<BlockId>,
-    pred_ranges: Vec<(u32, u32)>,
-    cfg_edges: Vec<(BlockId, BlockId)>,
+    first_pred: Vec<Option<PredEdgeId>>,
+    pred_edges: Vec<PredEdge>,
     cfg_seen: Vec<bool>,
     cfg_stack: Vec<BlockId>,
 }
@@ -345,8 +384,8 @@ impl UnitBuf {
         self.switch_cases.clear();
         self.cmpxchgs.clear();
         self.vec_ops.clear();
-        self.preds.clear();
-        self.pred_ranges.clear();
+        self.first_pred.clear();
+        self.pred_edges.clear();
     }
 
     pub fn load(&mut self, mem: &kmem::Mem<ProgramIr>, unit: &IrUnit) {
@@ -365,6 +404,7 @@ impl UnitBuf {
         self.vec_ops.extend_from_slice(v.vec_ops);
         self.inst_layout
             .resize(self.insts.len(), InstLayout { block: None, prev: None, next: None });
+        self.first_pred.resize(self.blocks.len(), None);
         for b in v.block_ids() {
             let BlockData { first, last, .. } = *v.block(b);
             let (Some(first), Some(last)) = (first, last) else { continue };
@@ -375,6 +415,9 @@ impl UnitBuf {
                     next: if i < ix(last) { Some(id_at(i + 1)) } else { None },
                 };
             }
+        }
+        for b in v.block_ids() {
+            self.record_edges(b);
         }
     }
 
@@ -456,16 +499,18 @@ impl UnitBuf {
         id_at(self.vec_ops.len() - 1)
     }
 
-    pub fn retain_phi_cases(&mut self, phi: InstId, mut keep: impl FnMut(&PhiCase) -> bool) {
-        let Inst::Phi { incomings, .. } = &mut self.insts[ix(phi)] else { panic!("not a phi") };
-        let cases = incomings.of_mut(&mut self.phi_cases);
+    pub fn retain_phi_cases(&mut self, phi: InstId, mut keep: impl FnMut(&Self, PhiCase) -> bool) {
+        let Inst::Phi { incomings, .. } = self.insts[ix(phi)] else { panic!("not a phi") };
+        let start = incomings.start as usize;
         let mut kept = 0;
-        for i in 0..cases.len() {
-            if keep(&cases[i]) {
-                cases[kept] = cases[i];
+        for i in 0..incomings.len as usize {
+            let case = self.phi_cases[start + i];
+            if keep(self, case) {
+                self.phi_cases[start + kept] = case;
                 kept += 1;
             }
         }
+        let Inst::Phi { incomings, .. } = &mut self.insts[ix(phi)] else { unreachable!() };
         incomings.len = kept as u32;
     }
 
@@ -486,6 +531,7 @@ impl UnitBuf {
     fn new_block(&mut self, kind: BlockSourceKind) -> BlockId {
         let b = id_at(self.blocks.len());
         self.blocks.push(BlockData { kind, first: None, last: None, prev: None, next: None });
+        self.first_pred.push(None);
         b
     }
 
@@ -530,6 +576,12 @@ impl UnitBuf {
     }
 
     pub fn push_inst(&mut self, b: BlockId, id: InstId) {
+        let last = self.blocks[ix(b)].last;
+        self.link_inst(b, id, last, None);
+        self.record_edges(b);
+    }
+
+    pub fn move_inst_to_end(&mut self, b: BlockId, id: InstId) {
         let last = self.blocks[ix(b)].last;
         self.link_inst(b, id, last, None);
     }
@@ -581,14 +633,72 @@ impl UnitBuf {
         after
     }
 
-    pub fn compute_preds(&mut self) {
-        let block_count = self.blocks.len();
-        self.cfg_edges.clear();
+    pub fn for_each_successor(&mut self, b: BlockId, mut f: impl FnMut(&mut Self, BlockId)) {
+        let mut index = 0;
+        while let Some(target) = self.view().get_successor(b, None, index) {
+            f(self, target);
+            index += 1;
+        }
+    }
+
+    pub fn record_edges(&mut self, b: BlockId) {
+        self.for_each_successor(b, |u, target| {
+            let next = u.first_pred[ix(target)];
+            u.pred_edges.push(PredEdge { pred: b, next });
+            u.first_pred[ix(target)] = Some(id_at(u.pred_edges.len() - 1));
+        });
+    }
+
+    pub fn drop_edges(&mut self, b: BlockId) {
+        self.for_each_successor(b, |u, target| {
+            let mut prev: Option<PredEdgeId> = None;
+            let mut cur = u.first_pred[ix(target)];
+            while let Some(edge) = cur {
+                let PredEdge { pred, next } = u.pred_edges[ix(edge)];
+                if pred == b {
+                    match prev {
+                        None => u.first_pred[ix(target)] = next,
+                        Some(p) => u.pred_edges[ix(p)].next = next,
+                    }
+                } else {
+                    prev = Some(edge);
+                }
+                cur = next;
+            }
+        });
+    }
+
+    pub fn replace_pred(&mut self, b: BlockId, old: BlockId, new: BlockId) {
+        let mut cur = self.first_pred[ix(b)];
+        while let Some(edge) = cur {
+            let e = &mut self.pred_edges[ix(edge)];
+            if e.pred == old {
+                e.pred = new;
+            }
+            cur = e.next;
+        }
+    }
+
+    pub fn preds(&self, b: BlockId) -> PredIter<'_> {
+        PredIter { edges: &self.pred_edges, next: self.first_pred[ix(b)] }
+    }
+
+    pub fn has_preds(&self, b: BlockId) -> bool {
+        self.first_pred[ix(b)].is_some()
+    }
+
+    pub fn single_pred(&self, b: BlockId) -> Option<BlockId> {
+        let edge = self.pred_edges[ix(self.first_pred[ix(b)]?)];
+        if edge.next.is_some() { None } else { Some(edge.pred) }
+    }
+
+    pub fn is_pred(&self, b: BlockId, pred: BlockId) -> bool {
+        self.preds(b).any(|p| p == pred)
+    }
+
+    pub fn mark_reachable(&mut self) {
         self.cfg_seen.clear();
-        self.cfg_seen.resize(block_count, false);
-        self.pred_ranges.clear();
-        self.pred_ranges.resize(block_count, (0, 0));
-        self.preds.clear();
+        self.cfg_seen.resize(self.blocks.len(), false);
         self.cfg_stack.clear();
         if let Some(entry) = self.body.first_block {
             self.cfg_stack.push(entry);
@@ -598,58 +708,12 @@ impl UnitBuf {
                 continue;
             }
             self.cfg_seen[ix(b)] = true;
-            let Some(terminator) = self.blocks[ix(b)].last else { continue };
-            match self.insts[ix(terminator)] {
-                Inst::Jump(target) => {
-                    self.cfg_edges.push((b, target));
-                    self.cfg_stack.push(target);
-                }
-                Inst::JumpIf { cons, alt, .. } => {
-                    self.cfg_edges.push((b, cons));
-                    self.cfg_edges.push((b, alt));
-                    self.cfg_stack.push(cons);
-                    self.cfg_stack.push(alt);
-                }
-                Inst::Switch { cases, default, .. } => {
-                    for case in cases.of(&self.switch_cases) {
-                        self.cfg_edges.push((b, case.target));
-                        self.cfg_stack.push(case.target);
-                    }
-                    self.cfg_edges.push((b, default));
-                    self.cfg_stack.push(default);
-                }
-                _ => {}
-            }
-        }
-        for (_, target) in &self.cfg_edges {
-            self.pred_ranges[ix(*target)].1 += 1;
-        }
-        let mut start = 0;
-        for range in &mut self.pred_ranges {
-            range.0 = start;
-            start += range.1;
-            range.1 = 0;
-        }
-        self.preds.resize(start as usize, BlockId::PENDING);
-        for (pred, target) in &self.cfg_edges {
-            let range = &mut self.pred_ranges[ix(*target)];
-            self.preds[(range.0 + range.1) as usize] = *pred;
-            range.1 += 1;
+            self.for_each_successor(b, |u, target| u.cfg_stack.push(target));
         }
     }
 
-    pub fn preds(&self, b: BlockId) -> &[BlockId] {
-        match self.pred_ranges.get(ix(b)) {
-            None => &[],
-            Some((start, len)) => &self.preds[*start as usize..(*start + *len) as usize],
-        }
-    }
-
-    pub fn preds_mut(&mut self, b: BlockId) -> &mut [BlockId] {
-        match self.pred_ranges.get(ix(b)) {
-            None => &mut [],
-            Some((start, len)) => &mut self.preds[*start as usize..(*start + *len) as usize],
-        }
+    pub fn is_reachable(&self, b: BlockId) -> bool {
+        self.cfg_seen[ix(b)]
     }
 
     pub fn clone_payload(&mut self, from: &UnitView, inst: &mut Inst) {
@@ -677,6 +741,17 @@ impl UnitBuf {
         value: &impl Fn(&mut Value),
         block: &impl Fn(&mut BlockId),
     ) {
+        let mut inst = self.insts[ix(id)];
+        self.map_refs_of(&mut inst, value, block);
+        self.insts[ix(id)] = inst;
+    }
+
+    pub fn map_refs_of(
+        &mut self,
+        inst: &mut Inst,
+        value: &impl Fn(&mut Value),
+        block: &impl Fn(&mut BlockId),
+    ) {
         let mut p = PayloadsMut {
             calls: &mut self.calls,
             call_args: &mut self.call_args,
@@ -685,7 +760,21 @@ impl UnitBuf {
             cmpxchgs: &mut self.cmpxchgs,
             vec_ops: &mut self.vec_ops,
         };
-        map_refs(&mut self.insts[ix(id)], &mut p, value, block);
+        map_refs(inst, &mut p, value, block);
+    }
+}
+
+pub struct PredIter<'a> {
+    edges: &'a [PredEdge],
+    next: Option<PredEdgeId>,
+}
+
+impl Iterator for PredIter<'_> {
+    type Item = BlockId;
+    fn next(&mut self) -> Option<BlockId> {
+        let edge = self.edges[ix(self.next?)];
+        self.next = edge.next;
+        Some(edge.pred)
     }
 }
 
@@ -714,13 +803,7 @@ fn map_refs(
             value(dst);
             value(v);
         }
-        Inst::Load { src, dst, .. } => {
-            value(src);
-            if *dst != Value::Empty {
-                value(dst);
-            }
-        }
-        Inst::AtomicLoad { src, .. } => value(src),
+        Inst::Load { src, .. } | Inst::AtomicLoad { src, .. } => value(src),
         Inst::AtomicRmw { dst, operand, .. } => {
             value(dst);
             value(operand);
@@ -779,7 +862,7 @@ fn map_refs(
         }
         Inst::Ret { v, .. }
         | Inst::BoolNegate { v }
-        | Inst::BitNot { v }
+        | Inst::BitNot { v, .. }
         | Inst::FloatNeg { v, .. }
         | Inst::BitCast { v, .. }
         | Inst::IntTrunc { v, .. }
@@ -793,7 +876,7 @@ fn map_refs(
         | Inst::Float64ToIntSigned { v, .. }
         | Inst::IntToFloatUnsigned { v, .. }
         | Inst::IntToFloatSigned { v, .. }
-        | Inst::PtrToWord { v }
+        | Inst::PtrToWord { v, .. }
         | Inst::WordToPtr { v }
         | Inst::BakeStaticValue { value: v, .. } => value(v),
         Inst::IntAdd { lhs, rhs, .. }
@@ -834,7 +917,7 @@ impl ProgramIr {
 
     pub fn live_inst_count(&self) -> usize {
         let mut count = 0;
-        for unit in self.functions.values() {
+        for unit in self.units.iter() {
             count += unit.insts.len() as usize;
         }
         for unit in self.exprs.values() {

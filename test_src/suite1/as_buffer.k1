@@ -4,22 +4,31 @@ use core/fixlist
 use core/spill-list
 
 fn sweep-position[t: equals](fill: t, needle: t) {
-  let max-len = 8 * (k1/simd-bytes) / types/size[t] + 1
-  let len: size = 0
-  while len <= max-len {
+  let w = (k1/simd-bytes) / types/size[t]
+  let lens: list[size] = [0, 1, w - 1, w, w + 1, 4 * w, 6 * w - 1]
+  let ats: list[size] = [0, w - 1, w, 2 * w - 1, 2 * w, 3 * w - 1, 3 * w, 4 * w - 1, 4 * w, 5 * w - 1, 5 * w, 6 * w - 2]
+  for len in lens {
     let buf = buffer/filled[t](len, fill)
     assert(buf.position(needle) is :none)
-    let at: size = 0
-    while at < len {
-      buf.[at] = needle
-      buf.[len - 1] = needle
-      assert(buf.position(needle) == :some at)
-      buf.[at] = fill
-      buf.[len - 1] = fill
-      at = at + 1
+    for at in ats {
+      if at < len {
+        buf.[at] = needle
+        buf.[len - 1] = needle
+        assert(buf.position(needle) == :some at)
+        buf.[at] = fill
+        buf.[len - 1] = fill
+      }
     }
-    len = len + 1
   }
+}
+
+fn sweep-positions() {
+  sweep-position[u8](0, 1)
+  sweep-position[i16](-1, 7)
+  sweep-position[u32](0, 1)
+  sweep-position[i64](0, -1)
+  sweep-position[char]('a', 'b')
+  sweep-position[bool](false, true)
 }
 
 fn check-position[t: equals](fill: t, a: t, b: t) {
@@ -81,9 +90,15 @@ fn test() {
   let sl = spill-list/new[i64, 2]()
   sl.push(5)
   sl.push(6)
+  assert(not sl.&.is-spilled())
   sl.push(7)
+  assert(sl.&.is-spilled())
   assert-equals(sum-via-buffer(sl.&), 18)
   assert-equals(sl.&.as-span().len(), 3)
+  sl.clear()
+  assert-equals(sl.&.len(), 0)
+  sl.push-n([1, 2, 3, 4].as-span())
+  assert-equals(sum-via-buffer(sl.&), 10)
 
   let parts: list[string] = ["a", "bc", "d"]
   assert-equals(string/join(parts, "-"), "a-bc-d")
@@ -196,13 +211,6 @@ fn test() {
   check-position[char]('a', 'b', 'c')
   check-position[f32](0.0, 1.5, -2.5)
   check-position[string]("x", "y", "z")
-
-  sweep-position[u8](0, 1)
-  sweep-position[i16](-1, 7)
-  sweep-position[u32](0, 1)
-  sweep-position[i64](0, -1)
-  sweep-position[char]('a', 'b')
-  sweep-position[bool](false, true)
 
   let flags = buffer/filled[bool](37, false)
   assert(not flags.contains(true))

@@ -1,0 +1,58 @@
+use core/spill-list
+
+type spill-string[n: static size] = { bytes: spill-list[u8, n] }
+
+ns for spill-string {
+  fn new[n](): spill-string[n] { .{ bytes = spill-list/new() } }
+
+  fn from-string[n](s: string): spill-string[n] {
+    let out = new[n]()
+    out.&.write-string(s)
+    out
+  }
+
+  fn(inline) as-string[n](self: *spill-string[n]): string {
+    string/wrap-bytes(self.bytes.&.as-span())
+  }
+
+  fn to-string[n](self: *spill-string[n]): string { self.as-string().cloned() }
+
+  fn is-spilled[n](self: *spill-string[n]): bool { self.bytes.&.is-spilled() }
+
+  fn clear[n](self: *spill-string[n]) { self.bytes.&.clear() }
+}
+
+impl[n: static size] writer for *spill-string[n] {
+  fn(inline) write-byte(self, value: u8) { self.bytes.&.push(value) }
+  fn(inline) write-bytes(self, bytes: span[u8]) { self.bytes.&.push-n(bytes) }
+}
+
+impl[n: static size] as-span[t = char] for *spill-string[n] {
+  fn(inline) as-span(self): span[char] { self.as-string().span }
+}
+
+impl[n: static size] from-string[e = never] for spill-string[n] {
+  fn from-string(s: string): result[spill-string[n], never] { :ok spill-string/from-string(s) }
+}
+
+impl[n: static size] print for spill-string[n] {
+  fn print-to[w: writer](self: spill-string[n], w) {
+    let s = self
+    w.write-string(s.&.as-string())
+  }
+}
+
+impl[n: static size] equals for spill-string[n] {
+  fn equals(self: spill-string[n], other: spill-string[n]): bool {
+    let a = self
+    let b = other
+    a.&.as-string() == b.&.as-string()
+  }
+}
+
+impl[n: static size] hash for spill-string[n] {
+  fn hash(self: spill-string[n]): u64 {
+    let s = self
+    s.&.as-string().hash()
+  }
+}

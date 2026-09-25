@@ -487,7 +487,9 @@ impl TypedProgram {
         writeln!(out, "\t{} idents", self.ast.idents.len())?;
         writeln!(
             out,
-            "\t{} instructions, {} code words",
+            "\t{} emitted, {} committed, {} live, {} code words",
+            self.ir.insts_emitted,
+            self.ir.insts_committed,
             self.ir.live_inst_count(),
             self.bc.code.len()
         )?;
@@ -532,11 +534,15 @@ impl TypedProgram {
             }
         }
         writeln!(out, "\t{:<18} {:>8} {:>10} {:>6}", "kind", "count", "excl ms", "speculative %")?;
+        let mut kinds = Vec::with_capacity(kind_count);
         for kind in TraceKind::ALL {
-            let i = kind as usize;
-            if counts[i] == 0 {
-                continue;
+            if counts[kind as usize] > 0 {
+                kinds.push(kind);
             }
+        }
+        kinds.sort_by_key(|kind| std::cmp::Reverse(exclusive[*kind as usize]));
+        for kind in kinds {
+            let i = kind as usize;
             let spec_pct = if exclusive[i] > 0 {
                 speculative[i] as f64 * 100.0 / exclusive[i] as f64
             } else {

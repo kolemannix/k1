@@ -22,19 +22,26 @@ fn bid(n: u32) -> BlockId {
     BlockId::from_u32(n).unwrap()
 }
 
+fn preds(u: &UnitBuf, block: BlockId) -> Vec<BlockId> {
+    let mut out = Vec::new();
+    for b in u.preds(block) {
+        out.push(b);
+    }
+    out
+}
+
 #[test]
-fn cfg_preds_follow_terminators_with_duplicate_edges() {
+fn recorded_preds_follow_terminators_with_duplicate_edges() {
     let mut u = UnitBuf::default();
     let entry = u.add_block(BlockSourceKind::Entry);
     let loop_block = u.add_block(BlockSourceKind::LoopBody);
     let exit = u.add_block(BlockSourceKind::LoopEnd);
-    let dead = u.add_block(BlockSourceKind::MatchFail);
+    let dead = u.add_block(BlockSourceKind::MatchEnd);
     let cases = u.push_switch_cases(&[
         SwitchCase { value: 0, target: loop_block },
         SwitchCase { value: 1, target: loop_block },
     ]);
-    let switch = Inst::Switch { value: Value::byte(0), width: 8, cases, default: exit };
-    let entry_inst = inst(&mut u, entry, switch);
+    inst(&mut u, entry, Inst::Switch { value: Value::byte(0), width: 8, cases, default: exit });
     inst(
         &mut u,
         loop_block,
@@ -42,21 +49,25 @@ fn cfg_preds_follow_terminators_with_duplicate_edges() {
     );
     inst(&mut u, exit, Inst::Ret { v: Value::Empty, agg: false });
     inst(&mut u, dead, Inst::Jump(exit));
+    assert_eq!(preds(&u, loop_block), [entry, entry]);
+    assert_eq!(preds(&u, entry), [loop_block]);
+    assert_eq!(preds(&u, exit), [dead, loop_block, entry]);
+    assert!(preds(&u, dead).is_empty());
+    assert_eq!(u.single_pred(entry), Some(loop_block));
+    assert_eq!(u.single_pred(loop_block), None);
+    assert!(u.has_preds(exit));
 
-    for _ in 0..4 {
-        *u.inst_mut(entry_inst) = switch;
-        u.compute_preds();
-        assert_eq!(u.preds(loop_block), [entry, entry]);
-        assert_eq!(u.preds(entry), [loop_block]);
-        assert_eq!(u.preds(exit), [entry, loop_block]);
-        assert!(u.preds(dead).is_empty());
+    u.mark_reachable();
+    assert!(u.is_reachable(entry) && u.is_reachable(loop_block) && u.is_reachable(exit));
+    assert!(!u.is_reachable(dead));
 
-        *u.inst_mut(entry_inst) = Inst::Ret { v: Value::Empty, agg: false };
-        u.compute_preds();
-        for b in [entry, loop_block, exit, dead] {
-            assert!(u.preds(b).is_empty());
-        }
-    }
+    u.drop_edges(dead);
+    assert_eq!(preds(&u, exit), [loop_block, entry]);
+    u.drop_edges(entry);
+    assert!(preds(&u, loop_block).is_empty());
+    assert_eq!(preds(&u, exit), [loop_block]);
+    u.replace_pred(exit, loop_block, dead);
+    assert_eq!(u.single_pred(exit), Some(dead));
 }
 
 #[test]
@@ -72,12 +83,12 @@ fn commit_renumbers_into_layout_order_and_drops_unlinked() {
     let sum = inst(
         &mut u,
         middle,
-        Inst::IntAdd { lhs: Value::FnParam { t, index: 0 }, rhs: Value::byte(1), width: 64 },
+        Inst::IntAdd { lhs: Value::FnParam { t, index: 0 }, rhs: Value::byte(1), t: ScalarType::U64 },
     );
     inst(&mut u, middle, Inst::Jump(exit));
     inst(&mut u, entry, Inst::Jump(middle));
     let front = u.new_inst(
-        Inst::IntSub { lhs: Value::Inst(sum), rhs: Value::byte(2), width: 64 },
+        Inst::IntSub { lhs: Value::Inst(sum), rhs: Value::byte(2), t: ScalarType::U64 },
         SpanId::NONE,
         IrComment::None,
     );
@@ -136,6 +147,9 @@ fn cloned_phi_and_switch_payloads_are_owned_by_the_clone() {
     let first = u.add_block(BlockSourceKind::Entry);
     let second = u.add_block(BlockSourceKind::Entry);
     let source = src.add_block(BlockSourceKind::Entry);
+    for _ in 0..4 {
+        src.add_block(BlockSourceKind::Entry);
+    }
     let t = PhysicalType::scalar(ScalarType::U8);
     let incomings = src.push_phi_cases(&[
         PhiCase { from: dead, value: Value::byte(1) },
@@ -159,13 +173,18 @@ fn cloned_phi_and_switch_payloads_are_owned_by_the_clone() {
     let mut cloned = *src.inst(switch);
     u.clone_payload(&src.view(), &mut cloned);
     let cloned_switch = inst(&mut u, first, cloned);
-    let mut mappings = RewriteMappings::default();
+    let mut st = InlineState::default();
     const ARGS: &[Value] = &[Value::byte(9)];
-    mappings.fn_params = Some(ARGS);
-    mappings.blocks.insert(from, to);
+    st.args = ARGS;
+    st.blocks.insert(from, to);
+    st.blocks.insert(dead, dead);
+    for id in [clones[0], clones[1], cloned_switch] {
+        let mut cloned = *u.inst(id);
+        st.map_inst(&mut u, &mut cloned);
+        *u.inst_mut(id) = cloned;
+    }
 
     for _ in 0..4 {
-        rewrite_in_block(&mut u, first, &mappings);
         rewrite_phi_incoming(&mut u, first, to, from);
         rewrite_phi_incoming(&mut u, first, from, to);
         remove_phi_incomings(&mut u, first, &[dead]);

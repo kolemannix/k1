@@ -250,6 +250,7 @@ ns meta {
 // equals must have ability id 2
 ability equals {
   fn equals(self, other: self): bool
+  fn not-equals(self, other: self): bool { not self.equals(other) }
 }
 
 // TODO(dogfood): Enhance with an `impl error` type parameter
@@ -737,18 +738,18 @@ impl equals for {} {
 ns mem {
 
   // Does not handle overlaps; memcpy
-  fn(intern) copy(
+  fn(intern) copy-memcpy(
     dst: ptr,
     src: ptr,
     count: size
   )
   // Handles overlaps; memmove
-  fn(intern) move(
+  fn(intern) move-memmove(
     dst: ptr,
     src: ptr,
     count: size
   )
-  fn(intern) set(
+  fn(intern) set-memset(
     dst: ptr,
     value: u8,
     count: size
@@ -1023,19 +1024,49 @@ ns for bool {
 }
 
 impl neg for bool { fn(intern) negated(self: bool): bool }
-impl equals for bool { fn(intern) equals(self: bool, other: bool): bool }
+impl equals for bool {
+  fn(intern) equals(self: bool, other: bool): bool
+  fn(intern) not-equals(self: bool, other: bool): bool
+}
 
-impl equals for u8 { fn(intern) equals(self: u8, other: u8): bool }
-impl equals for u16 { fn(intern) equals(self: u16, other: u16): bool }
-impl equals for u32 { fn(intern) equals(self: u32, other: u32): bool }
-impl equals for u64 { fn(intern) equals(self: u64, other: u64): bool }
+impl equals for u8 {
+  fn(intern) equals(self: u8, other: u8): bool
+  fn(intern) not-equals(self: u8, other: u8): bool
+}
+impl equals for u16 {
+  fn(intern) equals(self: u16, other: u16): bool
+  fn(intern) not-equals(self: u16, other: u16): bool
+}
+impl equals for u32 {
+  fn(intern) equals(self: u32, other: u32): bool
+  fn(intern) not-equals(self: u32, other: u32): bool
+}
+impl equals for u64 {
+  fn(intern) equals(self: u64, other: u64): bool
+  fn(intern) not-equals(self: u64, other: u64): bool
+}
 
-impl equals for i8 { fn(intern) equals(self: i8, other: i8): bool }
-impl equals for i16 { fn(intern) equals(self: i16, other: i16): bool }
-impl equals for i32 { fn(intern) equals(self: i32, other: i32): bool }
-impl equals for i64 { fn(intern) equals(self: i64, other: i64): bool }
+impl equals for i8 {
+  fn(intern) equals(self: i8, other: i8): bool
+  fn(intern) not-equals(self: i8, other: i8): bool
+}
+impl equals for i16 {
+  fn(intern) equals(self: i16, other: i16): bool
+  fn(intern) not-equals(self: i16, other: i16): bool
+}
+impl equals for i32 {
+  fn(intern) equals(self: i32, other: i32): bool
+  fn(intern) not-equals(self: i32, other: i32): bool
+}
+impl equals for i64 {
+  fn(intern) equals(self: i64, other: i64): bool
+  fn(intern) not-equals(self: i64, other: i64): bool
+}
 
-impl equals for char { fn(intern) equals(self: char, other: char): bool }
+impl equals for char {
+  fn(intern) equals(self: char, other: char): bool
+  fn(intern) not-equals(self: char, other: char): bool
+}
 
 fn discard[t](_t: t): empty {}
 fn phony[t](): t { crash("phony") }
@@ -1156,6 +1187,11 @@ fn crash(context locn: k1/source-location)(msg: string): never {
 
 fn crash-bounds(context locn: k1/source-location)(size: size, index: size, msg: string): never {
   crash("$msg: $index >= $size")
+}
+
+fn(inline) checked-index(context locn: k1/source-location)(index: size, len: size): size {
+  if index.unsigned() >= len.unsigned() crash-bounds(len, index, "Index out of bounds")
+  index
 }
 
 ns k1 {

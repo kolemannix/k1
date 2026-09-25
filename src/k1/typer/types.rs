@@ -1279,6 +1279,10 @@ impl ScalarType {
         }
     }
 
+    pub fn is_word_int(&self) -> bool {
+        self.is_int() && self.width_bits() == 64
+    }
+
     pub fn is_int(&self) -> bool {
         matches!(
             self,
@@ -2514,19 +2518,17 @@ impl TypedProgram {
     }
 
     pub fn get_physical_type(&mut self, type_id: TypeId) -> PhysicalTypeResult {
-        match self.phys_types.get(&type_id) {
-            Some(result) => *result,
-            None => {
-                let pt_result = self.compute_physical_type(type_id);
-                self.phys_types.insert(type_id, pt_result);
-                pt_result
-            }
+        if let Some(result) = self.phys_types.lookup(type_id) {
+            return result;
         }
+        let pt_result = self.compute_physical_type(type_id);
+        self.phys_types.grow_and_set(type_id, Some(pt_result));
+        pt_result
     }
 
     pub fn get_physical_type_computed(&self, type_id: TypeId) -> PhysicalTypeResult {
-        match self.phys_types.get(&type_id) {
-            Some(result) => *result,
+        match self.phys_types.lookup(type_id) {
+            Some(result) => result,
             None => panic!("physical type of {} not computed", self.type_id_to_string(type_id)),
         }
     }
@@ -2550,11 +2552,11 @@ impl TypedProgram {
     }
 
     pub fn get_layout_nonmut(&self, type_id: TypeId) -> Option<Layout> {
-        match self.phys_types.get(&type_id) {
+        match self.phys_types.lookup(type_id) {
             Some(maybe_pt) => match maybe_pt {
                 PhysicalTypeResult::No => None,
                 PhysicalTypeResult::Infinite => None,
-                PhysicalTypeResult::Yes(pt) => Some(self.get_pt_layout(*pt)),
+                PhysicalTypeResult::Yes(pt) => Some(self.get_pt_layout(pt)),
             },
             None => None,
         }

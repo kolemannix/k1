@@ -116,8 +116,11 @@ fn core-lib() {
   buffer_test/test()
   #static buffer_test/test()
 
+  mem_test/test()
+
   as_buffer/test()
   #static as_buffer/test()
+  as_buffer/sweep-positions()
 
   ability_deref_self/test()
   #static ability_deref_self/test()

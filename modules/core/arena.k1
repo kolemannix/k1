@@ -94,34 +94,20 @@ ns for arena {
   }
 
   let MIN_ALIGN: size = types/size[ptr]
-  fn alloc-layout(self: *arena, size: size, align: size): ptr {
+  fn(inline) alloc-layout(self: *arena, size: size, align: size): ptr {
     let cursor = self.cur-addr
-
-    // cursor is already MIN_ALIGN-aligned, so only stricter
-    // alignments need extra padding before the returned allocation.
     let prefix-padding =
       if align > MIN_ALIGN ptr/get-align-offset(cursor.to-size(), align) else 0
-
     let raw-bump = size + prefix-padding
-
-    let available = self.end-addr.diff(cursor)
-    if available >= raw-bump {
-      // Keep the arena cursor MIN_ALIGN-aligned for the next allocation.
-      let offset-to-min-align = ptr/get-align-offset(raw-bump, MIN_ALIGN)
-      let total-bump = raw-bump + offset-to-min-align
-      let alloc-ptr = cursor.add-bytes(prefix-padding)
-      self.cur-addr = cursor.add-bytes(total-bump)
-      alloc-ptr
+    if self.end-addr.diff(cursor) >= raw-bump {
+      self.cur-addr = cursor.add-bytes(raw-bump + ptr/get-align-offset(raw-bump, MIN_ALIGN))
+      cursor.add-bytes(prefix-padding)
     } else {
-      self._grow(size, align)
-      // The fresh chunk is sized to fit this allocation
-      self.alloc-layout(size, align)
+      self._alloc-in-new-chunk(size, align)
     }
   }
 
-  fn(noinline) _grow(self: *arena, size: size, align: size) {
-    // Static message: interpolation would allocate, possibly from this same
-    // exhausted arena when it is the ambient allocator
+  fn(noinline) _alloc-in-new-chunk(self: *arena, size: size, align: size): ptr {
     if self.fixed crash("fixed arena exhausted")
     let overhead = types/stride[arena-chunk] + MIN_ALIGN + align
     let needed = size + overhead
@@ -135,6 +121,7 @@ ns for arena {
     self.base-ptr = data-start
     self.cur-addr = data-start
     self.end-addr = region.base.add-bytes(region.len)
+    self.alloc-layout(size, align)
   }
 
   fn push[t](self: *arena, t: t): *t {
@@ -197,7 +184,7 @@ ns for arena {
 type arena-mark = { start: ptr }
 
 impl allocator for *arena {
-  fn alloc(self: *arena, size: size, align: size): ptr {
+  fn(inline) alloc(self: *arena, size: size, align: size): ptr {
     self.alloc-layout(size, align)
   }
   fn realloc(self: *arena, old-ptr: ptr, old-size: size, align: size, new-size: size): ptr {
