@@ -46,11 +46,11 @@ fn(inline) _write-decimal-pair(digits: *array[u8, 64], at: size, pair: u64) {
 
 The table has 100 entries and the index is `n % 100`, so LLVM proves the table check can never fail and deletes it.
 
-**408M/s, smolstr.** But `show()` was paying for something that C++ wasn't: an allocation, albeit a bump arena allocation, plus a copy per string. libc++ keeps short strings inside the object, so I did too: 23 bytes inline plus a length byte, never allocates. But this isn't completely fair, as this `smolstr` can't grow past 23 bytes, so its harder to reach for.
+**408M/s, smolstr.** But `show()` was paying for something that C++ wasn't: an allocation, albeit a bump arena allocation, plus a copy per string. libc++ keeps short strings inside the object, so I did too: 23 bytes inline plus a length byte, never allocates. But this isn't completely fair, as this `smolstr` can't grow past 23 bytes, so it's harder to reach for.
 
 **398M/s, spill-string.** `spill-string[n]` holds up to n bytes inline and spills to the arena past that, so now it's apples to apples with `std::string`. It's built on k1's existing `spill-list`, which was an `either` of an inline list and a heap list: 40 bytes.
 
-**417M/s, a hand-rolled sum.** `spill-list` is now a union whose two variants both start with a `u32`: the inline length, or a SPILLED sentinel. 32 bytes, 28 of them inline, and zeroed memory is a valid empty value. A bit less ergonomic, a bit more 'unsafe', but for corelib datastructure code like this that is the tradeoff you want to make, as its easy to check the correctness. It even edges out the unfair smolstr.
+**417M/s, a hand-rolled sum.** `spill-list` is now a union whose two variants both start with a `u32`: the inline length, or a SPILLED sentinel. 32 bytes, 28 of them inline, and zeroed memory is a valid empty value. A bit less ergonomic, a bit more 'unsafe', but for corelib datastructure code like this that is the tradeoff you want to make as it's very much a 'write-once-run-lots' scenario. (Fun fact: k1's typer understands that these two unions share a binary-compatible prefix!)
 
 ## No compiler support
 
@@ -58,14 +58,14 @@ This is the core of it:
 
 ```k1
 type spill-list[t, n: static size] = union {
-  inline: { len: u32, items: array[t, n] },
+  inline:  { len: u32, items: array[t, n] },
   spilled: { marker: u32, list: list[t] },
 }
 
 type spill-string[n: static size] = { bytes: spill-list[u8, n] }
 
 impl[n: static size] writer for *spill-string[n] {
-  fn(inline) write-byte(self, value: u8) { self.bytes.&.push(value) }
+  fn(inline) write-byte(self, value: u8)        { self.bytes.&.push(value) }
   fn(inline) write-bytes(self, bytes: span[u8]) { self.bytes.&.push-n(bytes) }
 }
 ```
@@ -104,7 +104,7 @@ C++ never allocates here; every string fits in the object. `spill-string` doesn'
 
 I didn't write this benchmark or `spill-string`; just the compiler and the rest of k1. I pasted the tweet into an Opus 5.5 session and said "write a k1 version." Then: make `show` use a stack buffer. Rewrite the formatter. Implement a smolstr. Make it generic with a spill path. Make spill-list a hand-rolled sum.
 
-Agents are great at k1 because the whole standard library is plain k1, and there are very, very few compiler builtins. The model can read and almost fit in context. Heck, the entire compiler almost even fits in context! Very little is magic or builtin (our string is a userland type).
+Agents are great at k1 because the whole standard library is plain k1, and there are very few compiler builtins. Or maybe they're great at k1 because it's just a tasteful amalgamation of a lot of excellent, but pre-existing, ideas! Regardless, the model can fit the whole core lib in context. Heck, the entire compiler almost fits in context!
 
 ## Repro
 

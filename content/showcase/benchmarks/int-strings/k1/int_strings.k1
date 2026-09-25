@@ -42,7 +42,7 @@ fn report(name: string, nanos: u64) {
 }
 
 fn main(): i32 {
-  let slots = mem/alloc-t[array[string, 1024]]()
+  let slots = mem/alloc-t[array[string, 1024]]
   let arenas: array[*arena, 2] = [arena/init-default(), arena/init-default()]
   let best: u64 = u64/max-value
   for 0.until(RUNS) {
@@ -51,7 +51,7 @@ fn main(): i32 {
   assert-equals(slots.[((N - 1) & 1023).signed()], (N - 1).show())
   report("k1 string show()", best)
 
-  let spill-slots = mem/alloc-t[array[spill-string[22], 1024]]()
+  let spill-slots = mem/alloc-t[array[spill-string[22], 1024]]
   best = u64/max-value
   for 0.until(RUNS) {
     best = best.min(timed(fn[spill-slots]. from-int-spill(spill-slots, N)))
