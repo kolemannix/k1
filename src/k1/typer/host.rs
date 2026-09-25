@@ -46,12 +46,12 @@ pub fn plan_in_host(
     let mut host_strings = Interner::make_small();
     let Some(host_target) = crate::compiler::detect_host_target() else {
         return Err(CompileProgramError::Build(
-            "Unsupported host platform; fn build runs on the host",
+            "Unsupported host platform; fn build runs on the host".to_string(),
         ));
     };
     let host_build = BuildConfig::new(host_target, &mut host_strings)
         .resolve(&mut host_strings)
-        .map_err(CompileProgramError::Build)?;
+        .map_err(|e| CompileProgramError::Build(e.to_string()))?;
     let host_plan =
         BuildPlan::trivial(host_strings, host_build, &ast.idents, &mut ast.tmp, k1_home, None);
     let host_lsp = LspCompileOptions {

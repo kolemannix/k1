@@ -485,7 +485,7 @@ macro_rules! static_assert_niched {
 }
 
 pub enum CompileProgramError {
-    Build(&'static str),
+    Build(String),
     TyperFailure(Box<TypedProgram>),
 }
 
@@ -1085,10 +1085,13 @@ fn plan_program(
     if !has_build_file && !is_setup {
         if is_dir && !is_module_dir(src_path) {
             return Err(CompileProgramError::Build(
-                "a module dir needs a build.k1, module.k1 or <dir>.k1",
+                "a module dir needs a build.k1, module.k1 or <dir>.k1".to_string(),
             ));
         }
-        let resolved = request.default.resolve(&mut strings).map_err(CompileProgramError::Build)?;
+        let resolved = request
+            .default
+            .resolve(&mut strings)
+            .map_err(|e| CompileProgramError::Build(e.to_string()))?;
         let primary = crate::plan::PlannedModule::primary(
             strings.intern(idents.get_string(module_name)),
             strings.intern(src_path),
@@ -1203,6 +1206,32 @@ fn restore_longest_prefix(
     Err(plan)
 }
 
+fn locate_k1_home(requested: Option<String>) -> std::result::Result<String, String> {
+    let (home, origin) = if let Some(home) = requested {
+        (PathBuf::from(home), "the compile request".to_string())
+    } else if let Ok(home) = std::env::var("K1_HOME") {
+        (PathBuf::from(home), "K1_HOME".to_string())
+    } else {
+        let current_exe = std::env::current_exe().unwrap();
+        let exe_parent = current_exe.parent().unwrap();
+        if exe_parent.ends_with("debug") {
+            (std::env::current_dir().unwrap(), "the working directory of a debug k1".to_string())
+        } else {
+            let origin = format!("the location of the k1 binary {}", current_exe.display());
+            (exe_parent.parent().unwrap().to_path_buf(), origin)
+        }
+    };
+    let core_dir = home.join("modules").join("core");
+    if !core_dir.is_dir() {
+        return Err(format!(
+            "k1 home {} came from {origin}, but has no modules/core.\nSet K1_HOME to the directory that holds modules/ (the repo root, for a k1 built from source).",
+            home.display()
+        ));
+    }
+    kpath::canonicalize_owned(&home)
+        .map_err(|e| format!("k1 home {} is not usable: {e}", home.display()))
+}
+
 /// If `path` is a directory,
 /// - compile all files in the directory.
 /// - program name is the name of the directory.
@@ -1241,24 +1270,7 @@ pub fn compile_program(
     let cache_dir = kpath::join_id(&ast.idents, &mut ast.mem, out_dir, crate::snap::CACHE_DIR_NAME);
     std::fs::create_dir_all(Path::new(ast.idents.get_string(out_dir_generated))).unwrap();
 
-    // Find the installation. The request's wins, env var overrides, otherwise
-    // release mode says co-located with the binary. dev mode says cwd
-    let k1_home_raw = k1_home
-        .map(PathBuf::from)
-        .or_else(|| std::env::var("K1_HOME").map(PathBuf::from).ok())
-        .unwrap_or_else(|| {
-            let current_exe = std::env::current_exe().unwrap();
-            let exe_parent = current_exe.parent().unwrap();
-            if exe_parent.ends_with("debug") {
-                // its a cargo run
-                std::env::current_dir().unwrap()
-            } else {
-                // its in k1/bin, most likely
-                exe_parent.parent().unwrap().to_path_buf()
-            }
-        });
-    let k1_home = kpath::canonicalize_owned(&k1_home_raw)
-        .unwrap_or_else(|e| panic!("K1 home {} is not usable: {e}", k1_home_raw.display()));
+    let k1_home = locate_k1_home(k1_home).map_err(CompileProgramError::Build)?;
     if tools.chatty {
         eprintln!("using k1 home: {k1_home}");
     }

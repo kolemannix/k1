@@ -1233,8 +1233,8 @@ fn compile_check(
     setting: &serde_json::Value,
     lsp: LspCompileOptions,
 ) -> std::result::Result<TypedProgram, CompileProgramError> {
-    let mut request =
-        CompileRequest::new(file, Command::Check, None).map_err(CompileProgramError::Build)?;
+    let mut request = CompileRequest::new(file, Command::Check, None)
+        .map_err(|e| CompileProgramError::Build(e.to_string()))?;
     request.build.default.debug = true;
     apply_build_setting(&mut request, setting).expect("k1.build is validated when set");
     request.lsp = lsp;

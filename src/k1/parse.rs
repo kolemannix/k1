@@ -1931,12 +1931,6 @@ pub fn write_source_location(
     message: Option<&str>,
     use_color: bool,
 ) -> std::io::Result<()> {
-    let span = ast.spans.get(span_id);
-    let source = ast.sources.source_by_span(span);
-    let Some(line) = source.get_line_for_span_start(&ast.mem, span) else {
-        writeln!(w, "Critical Error: could not find line for span {:?}", span)?;
-        return Ok(());
-    };
     use colored::*;
 
     let color = match level {
@@ -1954,6 +1948,22 @@ pub fn write_source_location(
         MessageLevel::Info => "info",
         MessageLevel::Hint => "hint",
     });
+
+    if span_id.is_none() {
+        writeln!(w, "┌────────────────────────────────────────╴")?;
+        writeln!(w, "{level_name}")?;
+        if let Some(msg) = message {
+            writeln!(w, "│  {msg}")?;
+        }
+        writeln!(w, "└────────────────────────────────────────╴")?;
+        return Ok(());
+    }
+    let span = ast.spans.get(span_id);
+    let source = ast.sources.source_by_span(span);
+    let Some(line) = source.get_line_for_span_start(&ast.mem, span) else {
+        writeln!(w, "Critical Error: could not find line for span {:?}", span)?;
+        return Ok(());
+    };
 
     // If the span is longer than the line, just highlight the whole first line
     let highlight_length = if span.len > line.len { line.len as usize } else { span.len as usize };
