@@ -989,9 +989,20 @@ pub fn store_value(k1: &TypedProgram, t: PhysicalType, dst: *mut u8, value: Valu
 }
 
 pub(crate) fn memmove(src: *const u8, dst: *mut u8, size_bytes: usize) {
-    //debug!("memmove src {:?} dst {:?} size {}", src, dst, size_bytes);
+    match size_bytes {
+        8 => memmove_fixed::<8>(src, dst),
+        16 => memmove_fixed::<16>(src, dst),
+        24 => memmove_fixed::<24>(src, dst),
+        32 => memmove_fixed::<32>(src, dst),
+        _ => unsafe { core::ptr::copy(src, dst, size_bytes) },
+    }
+}
+
+#[inline(always)]
+fn memmove_fixed<const N: usize>(src: *const u8, dst: *mut u8) {
     unsafe {
-        core::ptr::copy(src, dst, size_bytes);
+        let bytes = (src as *const [u8; N]).read_unaligned();
+        (dst as *mut [u8; N]).write_unaligned(bytes);
     }
 }
 
