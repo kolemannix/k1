@@ -40,6 +40,21 @@ fn run(): result[i32, error] {
   :ok 0
 }
 
+type abc = either(u8) { a, b, c }
+fn get-result(): result[int, error] { :ok(4) }
+
+fn unwrap-expected-type() {
+  let from-value: abc = enum/enum-from-value(2).!
+  assert(from-value is :c)
+  let parsed: u64 = u64/from-string("42").!
+  assert-equals(parsed, 42)
+  let res: int = get-result().!
+  assert-equals(res, 4)
+  let lit: int = :some(3).!
+  assert-equals(lit, 3)
+}
+
 fn test() {
   assert(run().is-ok())
+  unwrap-expected-type()
 }

@@ -1,5 +1,8 @@
 ns enum_basic
 
+use core/types/enum/enum-from-value
+use core/types/enum/enum-from-value-unchecked
+
 fn enum-no-payload() {
   let v: either { yes, no } = :no
   if v is :no .{} else crash("")
@@ -53,7 +56,25 @@ fn derived-print-test() {
   assert-equals[string]("${custom-enum-tags:b} ${custom-enum-tags:c}", "b c")
 }
 
+fn from-value-generic[i, e: types/enum[v = i]](value: i): ?e { enum-from-value(value) }
+
+fn from-value-test() {
+  let b: ?custom-enum-tags = enum-from-value(11)
+  assert(b is :some :b)
+  let missing: ?custom-enum-tags = enum-from-value(13)
+  assert(missing is :none)
+  let zero: ?custom-enum-tags = enum-from-value(0)
+  assert(zero is :none)
+  let c: custom-enum-tags = enum-from-value-unchecked(12)
+  assert(c is :c)
+  let abc-c: enum-abc = enum/enum-from-value(2).!
+  assert(abc-c is :c)
+  assert(from-value-generic[u8, enum-abc](1) is :some :b)
+  assert(from-value-generic[u8, enum-abc](3) is :none)
+}
+
 fn test() {
+  from-value-test()
   custom-tags-test()
   derived-print-test()
   enum-no-payload()

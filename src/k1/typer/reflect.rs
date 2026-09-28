@@ -147,6 +147,7 @@ impl TypedProgram {
             self.add_type_anon(Type::Enum(ScalarEnumType {
                 member_values: members.to_slice(),
                 int_type: tag_type,
+                partial: false,
             }))
         };
         self.register_type_metainfo(new_type_id);
@@ -339,6 +340,7 @@ impl TypedProgram {
                     self.get_struct_field(enum_schema_payload_type_id, 1).type_id;
                 let value_struct_type_id = self.get_as_span_instance(values_span_type_id).unwrap();
                 let int_type = enum_type.int_type;
+                let partial = enum_type.partial;
                 let int_type_value_id =
                     self.static_values.add(TypedProgram::make_int_kind(int_kind_type_id, int_type));
                 let mut member_values = self.tmp.new_list(target_enum_members.len());
@@ -375,9 +377,14 @@ impl TypedProgram {
                     values_span_type_id,
                     member_values.as_slice(),
                 );
+                let partial_value_id = if partial {
+                    self.static_values.true_id()
+                } else {
+                    self.static_values.false_id()
+                };
                 let payload_value_id = self.static_values.add_struct_from_slice(
                     enum_schema_payload_type_id,
-                    &[int_type_value_id, variants_span_value_id],
+                    &[int_type_value_id, variants_span_value_id, partial_value_id],
                 );
                 make_variant(self, self.ast.idents.b.enum_, Some(payload_value_id))
             }

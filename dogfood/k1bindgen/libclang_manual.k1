@@ -81,7 +81,7 @@ fn(extern("clang_getCursorKindSpelling")) getCursorKindSpelling(kind: CXCursorKi
 // A value of this enumeration type should be returned by each
 // CXCursorVisitor to indicate how clang_visitChildren() proceed.
 //
-type CXChildVisitResult = either(c-unsigned) {
+type CXChildVisitResult = either(c-unsigned, partial) {
   // Terminates the cursor traversal.
   Break,
   // Continues the cursor traversal with the next sibling of
@@ -195,7 +195,7 @@ type(alias) CXDiagnostic = ptr
 
 fn(extern("clang_getDiagnostic")) getDiagnostic(Unit: CXTranslationUnit, Index: u32): CXDiagnostic
 
-type CXDiagnosticSeverity = either(c-unsigned) {
+type CXDiagnosticSeverity = either(c-unsigned, partial) {
   CXDiagnostic_Ignored = 0,
   CXDiagnostic_Note = 1,
   CXDiagnostic_Warning = 2,
@@ -233,7 +233,7 @@ fn(extern("clang_getCursorExtent")) getCursorExtent(C: CXCursor): CXSourceRange
 fn(extern("clang_Cursor_isMacroFunctionLike")) Cursor_isMacroFunctionLike(C: CXCursor): c-unsigned
 fn(extern("clang_Cursor_isMacroBuiltin")) Cursor_isMacroBuiltin(C: CXCursor): c-unsigned
 
-type CXLinkageKind = either(c-unsigned) {
+type CXLinkageKind = either(c-unsigned, partial) {
   Invalid = 0,
   NoLinkage = 1,
   Internal = 2,
@@ -242,7 +242,7 @@ type CXLinkageKind = either(c-unsigned) {
 }
 fn(extern("clang_getCursorLinkage")) getCursorLinkage(C: CXCursor): CXLinkageKind
 
-type CXTLSKind = either(c-unsigned) {
+type CXTLSKind = either(c-unsigned, partial) {
   None = 0,
   Dynamic = 1,
   Static = 2
@@ -251,7 +251,7 @@ fn(extern("clang_getCursorTLSKind")) getCursorTLSKind(C: CXCursor): CXTLSKind
 
 fn(extern("clang_isConstQualifiedType")) isConstQualifiedType(T: CXType): c-unsigned
 
-type CXTokenKind = either(c-unsigned) {
+type CXTokenKind = either(c-unsigned, partial) {
   Punctuation = 0,
   Keyword = 1,
   Identifier = 2,
@@ -278,7 +278,7 @@ fn(extern("clang_getTokenSpelling")) getTokenSpelling(TU: CXTranslationUnit, Tok
 
 fn(extern("clang_disposeTokens")) disposeTokens(TU: CXTranslationUnit, Tokens: *CXToken, NumTokens: c-unsigned)
 
-type CXCursorKind = either(c-unsigned) {
+type CXCursorKind = either(c-unsigned, partial) {
   // Declarations
   // A declaration whose specific kind is not exposed via this
   // interface.
@@ -1326,7 +1326,7 @@ type CXCursorKind = either(c-unsigned) {
   OverloadCandidate = 700
 }
 
-type CXTypeKind = either(c-unsigned) {
+type CXTypeKind = either(c-unsigned, partial) {
   //*
   // Represents an invalid type (e.g., where no type is available).
   ///

@@ -330,7 +330,7 @@ type sum-variant = {
   explicit-value: ?numeric-lit,
   name-span: src-span,
 }
-type sum-type = { variants: list[sum-variant], tag-type: ?type-expr-id, span: src-span }
+type sum-type = { variants: list[sum-variant], tag-type: ?type-expr-id, partial: bool, span: src-span }
 
 type member-access-kind = either(u8) { dot, colon }
 

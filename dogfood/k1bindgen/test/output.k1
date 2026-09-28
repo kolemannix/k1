@@ -67,18 +67,18 @@ fn(extern("cinput_unnamed_param")) unnamed_param(
   named: u32,
   loop_c: f32,
 ): i32
-type Color = either(i32) {
+type Color = either(i32, partial) {
   Color_Red = 577,
   Color_Green = -10,
 }
 #static assert-layout[Color](4, 4, [])
-type Size = either(u32) {
+type Size = either(u32, partial) {
   Size_Small = 0,
   Size_Medium = 1,
   Size_Large = 2,
 }
 #static assert-layout[Size](4, 4, [])
-type Packed = either(u8) {
+type Packed = either(u8, partial) {
   Packed_First = 0,
   Packed_Last = 255,
 }

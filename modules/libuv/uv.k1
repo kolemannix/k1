@@ -86,7 +86,7 @@ type lib = {
   errmsg: optref[u8],
 }
 #static assert-layout[lib](16, 8, [0, 8, ])
-type errno = either(i32) {
+type errno = either(i32, partial) {
   UV_E2BIG = -7,
   UV_EACCES = -13,
   UV_EADDRINUSE = -48,
@@ -175,7 +175,7 @@ type errno = either(i32) {
   UV_ERRNO_MAX = -4096,
 }
 #static assert-layout[errno](4, 4, [])
-type handle_type = either(u32) {
+type handle_type = either(u32, partial) {
   UV_UNKNOWN_HANDLE = 0,
   UV_ASYNC = 1,
   UV_CHECK = 2,
@@ -197,7 +197,7 @@ type handle_type = either(u32) {
   UV_HANDLE_TYPE_MAX = 18,
 }
 #static assert-layout[handle_type](4, 4, [])
-type req_type = either(u32) {
+type req_type = either(u32, partial) {
   UV_UNKNOWN_REQ = 0,
   UV_REQ = 1,
   UV_CONNECT = 2,
@@ -258,13 +258,13 @@ type(alias) statfs = statfs_s
 #static assert-layout[statfs](88, 8, [])
 type(alias) metrics = metrics_s
 #static assert-layout[metrics](128, 8, [])
-type loop_option = either(u32) {
+type loop_option = either(u32, partial) {
   UV_LOOP_BLOCK_SIGNAL = 0,
   UV_METRICS_IDLE_TIME = 1,
   UV_LOOP_USE_IO_URING_SQPOLL = 2,
 }
 #static assert-layout[loop_option](4, 4, [])
-type run_mode = either(u32) {
+type run_mode = either(u32, partial) {
   UV_RUN_DEFAULT = 0,
   UV_RUN_ONCE = 1,
   UV_RUN_NOWAIT = 2,
@@ -453,7 +453,7 @@ type(alias) random_cb = *fn(
   usize
 ) -> {}
 #static assert-layout[random_cb](8, 8, [])
-type clock_id = either(u32) {
+type clock_id = either(u32, partial) {
   UV_CLOCK_MONOTONIC = 0,
   UV_CLOCK_REALTIME = 1,
 }
@@ -516,7 +516,7 @@ type(alias) signal_cb = *fn(
   i32
 ) -> {}
 #static assert-layout[signal_cb](8, 8, [])
-type membership = either(u32) {
+type membership = either(u32, partial) {
   UV_LEAVE_GROUP = 0,
   UV_JOIN_GROUP = 1,
 }
@@ -720,7 +720,7 @@ fn(extern("uv_tcp_simultaneous_accepts")) tcp_simultaneous_accepts(
   handle: *tcp,
   enable: i32,
 ): i32
-type tcp_flags = either(u32) {
+type tcp_flags = either(u32, partial) {
   UV_TCP_IPV6ONLY = 1,
   UV_TCP_REUSEPORT = 2,
 }
@@ -750,7 +750,7 @@ fn(extern("uv_tcp_connect")) tcp_connect(
   addr: *sockaddr,
   cb: connect_cb,
 ): i32
-type udp_flags = either(u32) {
+type udp_flags = either(u32, partial) {
   UV_UDP_IPV6ONLY = 1,
   UV_UDP_PARTIAL = 2,
   UV_UDP_REUSEADDR = 4,
@@ -883,14 +883,14 @@ fn(extern("uv_udp_get_send_queue_size")) udp_get_send_queue_size(
 fn(extern("uv_udp_get_send_queue_count")) udp_get_send_queue_count(
   handle: *udp,
 ): usize
-type tty_mode = either(u32) {
+type tty_mode = either(u32, partial) {
   UV_TTY_MODE_NORMAL = 0,
   UV_TTY_MODE_RAW = 1,
   UV_TTY_MODE_IO = 2,
   UV_TTY_MODE_RAW_VT = 3,
 }
 #static assert-layout[tty_mode](4, 4, [])
-type tty_vtermstate = either(u32) {
+type tty_vtermstate = either(u32, partial) {
   UV_TTY_SUPPORTED = 0,
   UV_TTY_UNSUPPORTED = 1,
 }
@@ -977,7 +977,7 @@ fn(extern("uv_pipe_chmod")) pipe_chmod(
   handle: *pipe,
   flags: i32,
 ): i32
-type poll_event = either(u32) {
+type poll_event = either(u32, partial) {
   UV_READABLE = 1,
   UV_WRITABLE = 2,
   UV_DISCONNECT = 4,
@@ -1087,7 +1087,7 @@ fn(extern("uv_getnameinfo")) getnameinfo(
   addr: *sockaddr,
   flags: i32,
 ): i32
-type stdio_flags = either(u32) {
+type stdio_flags = either(u32, partial) {
   UV_IGNORE = 0,
   UV_CREATE_PIPE = 1,
   UV_INHERIT_FD = 2,
@@ -1122,7 +1122,7 @@ type process_options_s = {
 #static assert-layout[process_options_s](64, 8, [0, 8, 16, 24, 32, 40, 44, 48, 56, 60, ])
 type(alias) process_options = process_options_s
 #static assert-layout[process_options](64, 8, [])
-type process_flags = either(u32) {
+type process_flags = either(u32, partial) {
   UV_PROCESS_SETUID = 1,
   UV_PROCESS_SETGID = 2,
   UV_PROCESS_WINDOWS_VERBATIM_ARGUMENTS = 4,
@@ -1219,7 +1219,7 @@ type statfs_s = {
   f_spare: array[u64, 3],
 }
 #static assert-layout[statfs_s](88, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, ])
-type dirent_type = either(u32) {
+type dirent_type = either(u32, partial) {
   UV_DIRENT_UNKNOWN = 0,
   UV_DIRENT_FILE = 1,
   UV_DIRENT_DIR = 2,
@@ -1390,7 +1390,7 @@ fn(extern("uv_metrics_info")) metrics_info(
 fn(extern("uv_metrics_idle_time")) metrics_idle_time(
   loop_c: *uv-loop,
 ): u64
-type fs_type = either(i32) {
+type fs_type = either(i32, partial) {
   UV_FS_UNKNOWN = -1,
   UV_FS_CUSTOM = 0,
   UV_FS_OPEN = 1,
@@ -1707,7 +1707,7 @@ fn(extern("uv_fs_statfs")) fs_statfs(
   path: *u8,
   cb: fs_cb,
 ): i32
-type fs_event_kind = either(u32) {
+type fs_event_kind = either(u32, partial) {
   UV_RENAME = 1,
   UV_CHANGE = 2,
 }
@@ -1750,7 +1750,7 @@ fn(extern("uv_signal_stop")) signal_stop(
 fn(extern("uv_loadavg")) loadavg(
   avg: array[f64, 3],
 ): {}
-type fs_event_flags = either(u32) {
+type fs_event_flags = either(u32, partial) {
   UV_FS_EVENT_WATCH_ENTRY = 1,
   UV_FS_EVENT_STAT = 2,
   UV_FS_EVENT_RECURSIVE = 4,
@@ -1990,7 +1990,7 @@ fn(extern("uv_thread_create")) thread_create(
 fn(extern("uv_thread_detach")) thread_detach(
   tid: *thread,
 ): i32
-type thread_create_flags = either(u32) {
+type thread_create_flags = either(u32, partial) {
   UV_THREAD_NO_FLAGS = 0,
   UV_THREAD_HAS_STACK_SIZE = 1,
 }

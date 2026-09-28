@@ -30,6 +30,8 @@ fn low() {
   union_basic/test()
   packed-basic/test()
   enum_basic/test()
+  enum_partial/test()
+  #static enum_partial/test()
   sum_basic/test()
   match_switch/test()
   abi-odd-size-struct/test()

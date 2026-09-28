@@ -1,0 +1,66 @@
+ns enum_partial
+
+use core/types/enum/enum-from-value
+use core/types/enum/enum-from-value-unchecked
+
+type event-kind = either(u32, partial) { quit = 256, key-down = 768, key-up = 769 }
+
+fn describe(k: event-kind): string {
+  if k is {
+    :quit -> "quit",
+    :key-down -> "down",
+    :key-up -> "up",
+    _ -> "other",
+  }
+}
+
+fn casts() {
+  let n: u32 = 8192
+  let unknown: event-kind = enum-from-value-unchecked(n)
+  assert-equals(unknown.value, 8192)
+  assert(test-compile(n.&.as[*event-kind]) is :none)
+  assert(test-compile(n.&.as[*either(u32) { a, b }]) is :some _)
+  let known: event-kind = enum-from-value-unchecked(768)
+  assert(known is :key-down)
+}
+
+fn exhaustiveness() {
+  let k: event-kind = :quit
+  assert(test-compile(if k is { :quit -> 1, :key-down -> 2, :key-up -> 3 }) is :some _)
+  assert(test-compile(if k is { :quit -> 1, _ -> 2 }) is :none)
+  assert-equals[string](describe(k), "quit")
+  assert-equals[string](describe(enum-from-value-unchecked(5)), "other")
+}
+
+fn from-value() {
+  let up: ?event-kind = enum-from-value(769)
+  assert(up is :some :key-up)
+  let other: ?event-kind = enum-from-value(8192)
+  require other is :some unknown else crash("partial from-value is total")
+  assert-equals(unknown.value, 8192)
+}
+
+fn names() {
+  let known: event-kind = :key-up
+  assert-equals[string](known.enum-name(), "key-up")
+  assert-equals[string](known.show(), "key-up")
+  let unknown: event-kind = enum-from-value-unchecked(8192)
+  assert-equals[string](unknown.enum-name(), "event-kind(8192)")
+  assert-equals[string](unknown.show(), "event-kind(8192)")
+  assert-equals[string]("${unknown}", "event-kind(8192)")
+}
+
+fn schema() {
+  require types/schema[event-kind] is :enum .{ partial } else crash("event-kind is an enum")
+  assert(partial)
+  require types/schema[either(u32) { a, b }] is :enum .{ partial } else crash("an enum")
+  assert(not partial)
+}
+
+fn test() {
+  casts()
+  exhaustiveness()
+  from-value()
+  names()
+  schema()
+}

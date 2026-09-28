@@ -1,6 +1,6 @@
 use crate::lex::{Span, SpanId, is_ident_char};
 use crate::parse::{FileId, ParsedExpr, ParsedId, ParsedProgram, StringId};
-use crate::typer::scopes::{ScopeId, VariableInScope};
+use crate::typer::scopes::{Provenance, ScopeId, ScopeMember, VariableInScope};
 use crate::typer::types::{FnParamKind, Type, TypeId};
 use crate::{SV8, typer::*};
 use fxhash::FxHashSet;
@@ -57,6 +57,16 @@ pub fn get_hover_message_for_entity(k1: &mut TypedProgram, entity: LsEntity) -> 
                 k1.function_id_to_string(function_id, false)
             )
         }
+        LsEntityKind::Ability(ability_id) => {
+            let ability = k1.abilities.get(ability_id);
+            let mut msg = "ability ".to_string();
+            k1.write_scope_path(&mut msg, k1.namespaces.get_scope(ability.namespace_id), "/", true);
+            for function_ref in k1.mem.getn(ability.functions) {
+                msg.push('\n');
+                msg.push_str(&k1.function_id_to_string(function_ref.function_id, false));
+            }
+            msg
+        }
         LsEntityKind::Variable { variable_id } => {
             let v = k1.variables.get(variable_id);
             let kind_str = match v.kind {
@@ -103,36 +113,17 @@ pub fn get_hover_message_for_entity(k1: &mut TypedProgram, entity: LsEntity) -> 
 pub fn get_entity_definition_span(k1: &TypedProgram, entity_kind: LsEntityKind) -> Span {
     let span_id = match entity_kind {
         LsEntityKind::Namespace(ns_id) => {
-            let ns = k1.namespaces.get(ns_id);
-            eprintln!("span for ns: {}", k1.ident_str(ns.name));
-            let span_id = k1.ast.get_span_for_id(ns.parsed_id);
-            eprintln!("span id: {}", span_id);
-            span_id
+            k1.ast.get_span_for_id(k1.namespaces.get(ns_id).parsed_id)
         }
-        LsEntityKind::Function { function_id, .. } => {
-            let function = k1.functions.get(function_id);
-            let span_id = match function.parsed_id {
-                ParsedId::Function(parsed_function_id) => {
-                    k1.ast.functions.get(parsed_function_id).name_span
-                }
-                _ => k1.ast.get_span_for_id(function.parsed_id),
-            };
-            span_id
+        LsEntityKind::Function { function_id, .. } => k1.get_function_span(function_id),
+        LsEntityKind::Ability(ability_id) => {
+            k1.ast.get_span_for_id(ParsedId::Ability(k1.abilities.get(ability_id).ast_id))
         }
-        LsEntityKind::Variable { variable_id } => {
-            let span_id = k1.variables.get(variable_id).defn_span;
-            span_id
-        }
-        LsEntityKind::Type { type_id, .. } => {
-            let defn_info = k1.type_defn_info.get(&type_id);
-            match defn_info {
-                Some(d) => {
-                    let span_id = k1.ast.get_span_for_id(d.ast_id);
-                    span_id
-                }
-                None => SpanId::NONE,
-            }
-        }
+        LsEntityKind::Variable { variable_id } => k1.variables.get(variable_id).defn_span,
+        LsEntityKind::Type { type_id, .. } => match k1.type_defn_info.get(&type_id) {
+            Some(d) => k1.ast.get_span_for_id(d.ast_id),
+            None => SpanId::NONE,
+        },
         LsEntityKind::Variant { type_id, variant_index } => match k1.types.get(type_id) {
             Type::Sum(sum) => {
                 let variant = k1.sum_variant_by_index(sum.variants, variant_index);
@@ -209,15 +200,15 @@ pub fn scope_at_point(k1: &TypedProgram, file_id: FileId, line: u32, col: u32) -
 
 pub struct CompletionCandidate {
     pub label: String,
-    pub kind: CompletionCandidateKind,
+    pub kind: NameKind,
     pub detail: String,
     pub sort_group: u8,
     /// LSP snippet text inserted instead of the label
     pub snippet: Option<String>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum CompletionCandidateKind {
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NameKind {
     Field,
     Variant,
     Method,
@@ -243,7 +234,7 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
                 for field in k1.mem.getn(st.fields) {
                     items.push(CompletionCandidate {
                         label: k1.ident_str(field.name).to_string(),
-                        kind: CompletionCandidateKind::Field,
+                        kind: NameKind::Field,
                         detail: k1.type_id_to_string(field.type_id),
                         sort_group: 0,
                         snippet: None,
@@ -258,7 +249,7 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
                         seen_methods.insert(name);
                         items.push(CompletionCandidate {
                             label: k1.ident_str(name).to_string(),
-                            kind: CompletionCandidateKind::Method,
+                            kind: NameKind::Method,
                             detail: k1.function_id_to_string(function_id, false),
                             sort_group: 1,
                             snippet: None,
@@ -286,7 +277,7 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
                         {
                             items.push(CompletionCandidate {
                                 label: k1.ident_str(fn_ref.function_name).to_string(),
-                                kind: CompletionCandidateKind::Method,
+                                kind: NameKind::Method,
                                 detail: k1.function_id_to_string(function_id, false),
                                 sort_group: 1,
                                 snippet: None,
@@ -301,7 +292,7 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
             for kw in KEYWORDS {
                 items.push(CompletionCandidate {
                     label: kw.to_string(),
-                    kind: CompletionCandidateKind::Keyword,
+                    kind: NameKind::Keyword,
                     detail: String::new(),
                     sort_group: 9,
                     snippet: None,
@@ -327,7 +318,7 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
                     for v in k1.mem.getn(sum.variants) {
                         items.push(CompletionCandidate {
                             label: k1.ident_str(v.name).to_string(),
-                            kind: CompletionCandidateKind::Variant,
+                            kind: NameKind::Variant,
                             detail: match v.payload {
                                 Some(payload) => k1.type_id_to_string(payload),
                                 None => String::new(),
@@ -341,7 +332,7 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
                     for v in k1.mem.getn(e.member_values) {
                         items.push(CompletionCandidate {
                             label: k1.ident_str(v.name).to_string(),
-                            kind: CompletionCandidateKind::Variant,
+                            kind: NameKind::Variant,
                             detail: format!("= {}", v.int_value),
                             sort_group: 0,
                             snippet: None,
@@ -369,7 +360,7 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
                 all_fields.push_str(&format!("{name} = ${{{}:{name}}}", items.len() + 1));
                 items.push(CompletionCandidate {
                     label: name.to_string(),
-                    kind: CompletionCandidateKind::Field,
+                    kind: NameKind::Field,
                     detail: k1.type_id_to_string(field.type_id),
                     sort_group: 1,
                     snippet: None,
@@ -378,7 +369,7 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
             if items.len() > 1 {
                 items.push(CompletionCandidate {
                     label: "all fields".to_string(),
-                    kind: CompletionCandidateKind::Field,
+                    kind: NameKind::Field,
                     detail: all_fields.clone(),
                     sort_group: 0,
                     snippet: Some(all_fields),
@@ -432,14 +423,7 @@ fn is_method_shaped(k1: &TypedProgram, function_id: FunctionId, base_type_id: Ty
     first.type_id == base_type_id || k1.get_base_for_method(first.type_id) == base_type_id
 }
 
-#[derive(Default)]
-struct Seen {
-    variables: FxHashSet<StringId>,
-    functions: FxHashSet<StringId>,
-    types: FxHashSet<StringId>,
-    namespaces: FxHashSet<StringId>,
-    abilities: FxHashSet<StringId>,
-}
+type Seen = FxHashSet<(StringId, NameKind)>;
 
 fn collect_scope_chain(k1: &TypedProgram, scope_id: ScopeId, items: &mut Vec<CompletionCandidate>) {
     let mut seen = Seen::default();
@@ -457,79 +441,100 @@ fn collect_completion_candidates_in_scope_immediate(
     items: &mut Vec<CompletionCandidate>,
     exposed_only: bool,
 ) {
-    for (name, in_scope, prov) in k1.scopes.iter_scope_variables(scope_id) {
+    for (name, member, prov) in k1.scopes.iter_scope_members(scope_id) {
         if exposed_only && !prov.is_exposed() {
             continue;
         }
-        // A masked name still hides outer definitions, so it claims the seen-slot
-        if !seen.variables.insert(name) {
+        let (kind, sort_group) = match member {
+            ScopeMember::Variable(_) => (NameKind::Variable, 2),
+            ScopeMember::Function(_) => (NameKind::Function, 3),
+            ScopeMember::Type(_) => (NameKind::Type, 4),
+            ScopeMember::Namespace(_) => (NameKind::Namespace, 5),
+            ScopeMember::Ability(_) => (NameKind::Ability, 6),
+        };
+        if !seen.insert((name, kind)) {
             continue;
         }
-        let VariableInScope::Defined(variable_id) = in_scope else { continue };
+        let detail = match member {
+            ScopeMember::Variable(VariableInScope::Masked) => continue,
+            ScopeMember::Variable(VariableInScope::Defined(variable_id)) => {
+                k1.type_id_to_string(k1.variables.get(variable_id).type_id)
+            }
+            ScopeMember::Function(function_id) => k1.function_id_to_string(function_id, false),
+            ScopeMember::Type(type_id) => k1.type_id_to_string(type_id),
+            ScopeMember::Namespace(_) => "ns".to_string(),
+            ScopeMember::Ability(_) => "ability".to_string(),
+        };
         items.push(CompletionCandidate {
             label: k1.ident_str(name).to_string(),
-            kind: CompletionCandidateKind::Variable,
-            detail: k1.type_id_to_string(k1.variables.get(variable_id).type_id),
-            sort_group: 2,
+            kind,
+            detail,
+            sort_group,
             snippet: None,
         });
     }
-    for (name, function_id, prov) in k1.scopes.iter_scope_functions(scope_id) {
-        if exposed_only && !prov.is_exposed() {
-            continue;
-        }
-        if seen.functions.insert(name) {
-            items.push(CompletionCandidate {
-                label: k1.ident_str(name).to_string(),
-                kind: CompletionCandidateKind::Function,
-                detail: k1.function_id_to_string(function_id, false),
-                sort_group: 3,
-                snippet: None,
+}
+
+pub struct WorkspaceSymbol {
+    pub name: String,
+    pub kind: NameKind,
+    pub container: String,
+    pub span: Span,
+}
+
+pub fn collect_workspace_symbols(k1: &TypedProgram, query: &str) -> Vec<WorkspaceSymbol> {
+    let mut symbols = vec![];
+    for ns in k1.namespaces.iter() {
+        let mut container = String::new();
+        k1.write_scope_path(&mut container, ns.scope_id, "/", true);
+        let function_kind = match ns.namespace_type {
+            NamespaceKind::TypeCompanion | NamespaceKind::Ability => NameKind::Method,
+            NamespaceKind::User | NamespaceKind::Root => NameKind::Function,
+        };
+        for (name, member, prov) in k1.scopes.iter_scope_members(ns.scope_id) {
+            if prov != Provenance::Defined || !matches_query(k1.ident_str(name), query) {
+                continue;
+            }
+            let defn = |entity| get_entity_definition_span(k1, entity);
+            let (kind, span) = match member {
+                ScopeMember::Namespace(ns_id)
+                    if k1.namespaces.get(ns_id).namespace_type == NamespaceKind::User =>
+                {
+                    (NameKind::Namespace, defn(LsEntityKind::Namespace(ns_id)))
+                }
+                ScopeMember::Function(function_id) => {
+                    (function_kind, defn(LsEntityKind::Function { function_id, is_defn: true }))
+                }
+                ScopeMember::Type(type_id)
+                    if k1.type_defn_info.get(&type_id).is_some_and(|info| info.name == name) =>
+                {
+                    (NameKind::Type, defn(LsEntityKind::Type { type_id, applied_type_id: None }))
+                }
+                ScopeMember::Variable(VariableInScope::Defined(variable_id)) => {
+                    (NameKind::Variable, defn(LsEntityKind::Variable { variable_id }))
+                }
+                ScopeMember::Ability(ability_id) => {
+                    (NameKind::Ability, defn(LsEntityKind::Ability(ability_id)))
+                }
+                _ => continue,
+            };
+            if span == Span::NONE {
+                continue;
+            }
+            symbols.push(WorkspaceSymbol {
+                name: k1.ident_str(name).to_string(),
+                kind,
+                container: container.clone(),
+                span,
             });
         }
     }
-    for (name, type_id, prov) in k1.scopes.iter_scope_types(scope_id) {
-        if exposed_only && !prov.is_exposed() {
-            continue;
-        }
-        if seen.types.insert(name) {
-            items.push(CompletionCandidate {
-                label: k1.ident_str(name).to_string(),
-                kind: CompletionCandidateKind::Type,
-                detail: k1.type_id_to_string(type_id),
-                sort_group: 4,
-                snippet: None,
-            });
-        }
-    }
-    for (name, _ns_id, prov) in k1.scopes.iter_scope_namespaces(scope_id) {
-        if exposed_only && !prov.is_exposed() {
-            continue;
-        }
-        if seen.namespaces.insert(name) {
-            items.push(CompletionCandidate {
-                label: k1.ident_str(name).to_string(),
-                kind: CompletionCandidateKind::Namespace,
-                detail: "ns".to_string(),
-                sort_group: 5,
-                snippet: None,
-            });
-        }
-    }
-    for (name, _ability_id, prov) in k1.scopes.iter_scope_abilities(scope_id) {
-        if exposed_only && !prov.is_exposed() {
-            continue;
-        }
-        if seen.abilities.insert(name) {
-            items.push(CompletionCandidate {
-                label: k1.ident_str(name).to_string(),
-                kind: CompletionCandidateKind::Ability,
-                detail: "ability".to_string(),
-                sort_group: 6,
-                snippet: None,
-            });
-        }
-    }
+    symbols
+}
+
+fn matches_query(name: &str, query: &str) -> bool {
+    let mut name_chars = name.chars();
+    query.chars().all(|q| name_chars.any(|c| c.eq_ignore_ascii_case(&q)))
 }
 
 pub fn get_expr_at_point(
@@ -953,6 +958,93 @@ fn use-it(): int {
 "#,
         );
         assert!(labels(&k1).contains(&"x".to_string()));
+    }
+
+    const SYMBOLS_SRC: &str = r#"
+ns lsp-symbols
+
+type sym-point = { x: int, y: int }
+type sym-alias = sym-point
+ns for sym-point {
+  fn sym-length(self: sym-point): int { self.x + self.y }
+}
+ability sym-describe {
+  fn sym-describe(self: self): int
+}
+let sym-limit: int = 10
+ns sym-inner {
+  fn sym-helper(): int { 3 }
+}
+use sym-inner/sym-helper
+fn sym-main(): int { sym-helper() }
+"#;
+
+    #[test]
+    fn workspace_symbols() {
+        let k1 = compile_check("workspace_symbols", SYMBOLS_SRC, None);
+        assert_eq!(k1.messages.borrow().len(), 0, "expected a clean compile");
+        let mut found = vec![];
+        for symbol in collect_workspace_symbols(&k1, "") {
+            let content = k1.ast.sources.get_span_content(&k1.ast.mem, symbol.span);
+            assert!(content.contains(&symbol.name), "{} at {content}", symbol.name);
+            if symbol.name.starts_with("sym-") {
+                found.push(format!("{}/{}", symbol.container, symbol.name));
+            }
+        }
+        found.sort();
+        assert_eq!(
+            found,
+            vec![
+                "workspace_symbols/lsp-symbols/sym-alias",
+                "workspace_symbols/lsp-symbols/sym-describe",
+                "workspace_symbols/lsp-symbols/sym-describe/sym-describe",
+                "workspace_symbols/lsp-symbols/sym-inner",
+                "workspace_symbols/lsp-symbols/sym-inner/sym-helper",
+                "workspace_symbols/lsp-symbols/sym-limit",
+                "workspace_symbols/lsp-symbols/sym-main",
+                "workspace_symbols/lsp-symbols/sym-point",
+                "workspace_symbols/lsp-symbols/sym-point/sym-length",
+            ]
+        );
+        let mut fuzzy = vec![];
+        for symbol in collect_workspace_symbols(&k1, "SYMLEN") {
+            fuzzy.push(symbol.name);
+        }
+        assert_eq!(fuzzy, vec!["sym-length"]);
+    }
+
+    const ABILITY_SRC: &str = r#"
+ns lsp-ability
+
+ability greet {
+  fn greet(self: self): int
+}
+impl greet for int {
+  fn greet(self: int): int { self }
+}
+fn call-greet[t](x: t): int where t: greet { x.greet() }
+fn use-it(): int { call-greet(3) }
+"#;
+
+    #[test]
+    fn ability_entities() {
+        let mut k1 = compile_check("ability_entities", ABILITY_SRC, None);
+        assert_eq!(k1.messages.borrow().len(), 0, "expected a clean compile");
+        let defn_entity = entity_at(&k1, "ability_entities", ABILITY_SRC, "greet {")
+            .expect("entity at ability name");
+        let LsEntityKind::Ability(ability_id) = defn_entity.kind else {
+            panic!("expected an ability at its definition")
+        };
+        for needle in ["greet for int", "greet { x"] {
+            let entity = entity_at(&k1, "ability_entities", ABILITY_SRC, needle)
+                .unwrap_or_else(|| panic!("entity at {needle}"));
+            assert!(matches!(entity.kind, LsEntityKind::Ability(id) if id == ability_id));
+            let definition = get_entity_definition_span(&k1, entity.kind);
+            assert_eq!(definition, defn_entity.span);
+            assert_eq!(k1.ast.sources.get_span_content(&k1.ast.mem, definition), "greet");
+        }
+        let hover = get_hover_message_for_entity(&mut k1, defn_entity);
+        assert!(hover.starts_with("ability ability_entities/lsp-ability/greet\n"), "{hover}");
     }
 
     const DEFN_MACRO_SRC: &str = r#"

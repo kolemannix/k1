@@ -312,7 +312,7 @@ fn write-k1-type(context w: *string-builder, name-config)(k1-type, indent: size,
       w.write("}")
     },
     :enum e -> {
-      w.writeln("either(${e.int-type}) {")
+      w.writeln("either(${e.int-type}, partial) {")
       for e.members {
         w.repeat("  ", indent + 1)
         let transformed-name = name-config.transformed-name(it.name)

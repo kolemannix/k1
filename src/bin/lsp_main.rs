@@ -11,7 +11,7 @@ use k1::compiler::{
     Command, CompileProgramError, CompileRequest, LspCompileOptions, Target, compile_program,
 };
 use k1::lex::{self, Span, SpanId};
-use k1::lsp_support::CompletionCandidateKind;
+use k1::lsp_support::NameKind;
 use k1::parse;
 use k1::parse::{ParsedProgram, SourceFile};
 use k1::typer::trace::LiveProgressSink;
@@ -191,15 +191,15 @@ fn uri_to_edited_source(backend: &Backend, url: &Url) -> Option<(SourceFile, boo
 
 fn candidate_to_item(candidate: k1::lsp_support::CompletionCandidate) -> CompletionItem {
     let kind = match candidate.kind {
-        CompletionCandidateKind::Field => CompletionItemKind::FIELD,
-        CompletionCandidateKind::Variant => CompletionItemKind::ENUM_MEMBER,
-        CompletionCandidateKind::Method => CompletionItemKind::METHOD,
-        CompletionCandidateKind::Variable => CompletionItemKind::VARIABLE,
-        CompletionCandidateKind::Function => CompletionItemKind::FUNCTION,
-        CompletionCandidateKind::Type => CompletionItemKind::STRUCT,
-        CompletionCandidateKind::Namespace => CompletionItemKind::MODULE,
-        CompletionCandidateKind::Ability => CompletionItemKind::INTERFACE,
-        CompletionCandidateKind::Keyword => CompletionItemKind::KEYWORD,
+        NameKind::Field => CompletionItemKind::FIELD,
+        NameKind::Variant => CompletionItemKind::ENUM_MEMBER,
+        NameKind::Method => CompletionItemKind::METHOD,
+        NameKind::Variable => CompletionItemKind::VARIABLE,
+        NameKind::Function => CompletionItemKind::FUNCTION,
+        NameKind::Type => CompletionItemKind::STRUCT,
+        NameKind::Namespace => CompletionItemKind::MODULE,
+        NameKind::Ability => CompletionItemKind::INTERFACE,
+        NameKind::Keyword => CompletionItemKind::KEYWORD,
     };
     CompletionItem {
         kind: Some(kind),
@@ -661,6 +661,7 @@ impl LanguageServer for Backend {
             }));
         res.capabilities.definition_provider = Some(OneOf::Left(true));
         res.capabilities.references_provider = Some(OneOf::Left(true));
+        res.capabilities.workspace_symbol_provider = Some(OneOf::Left(true));
         res.capabilities.hover_provider = Some(HoverProviderCapability::Simple(true));
         res.capabilities.diagnostic_provider =
             Some(DiagnosticServerCapabilities::Options(DiagnosticOptions {
@@ -1113,6 +1114,49 @@ impl LanguageServer for Backend {
         self.with_k1(|k1| find_references(k1, &uri, line, char, include_declaration))
             .unwrap_or(Ok(None))
     }
+
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> Result<Option<Vec<SymbolInformation>>> {
+        info!("workspace/symbol: {:?}", params.query);
+        Ok(self.with_k1(|k1| {
+            let mut infos = Vec::new();
+            for symbol in k1::lsp_support::collect_workspace_symbols(k1, &params.query) {
+                let Some(location) = location_from_resolved_span(k1, symbol.span) else {
+                    continue;
+                };
+                #[allow(deprecated)]
+                infos.push(SymbolInformation {
+                    name: symbol.name,
+                    kind: name_kind_to_symbol_kind(symbol.kind),
+                    tags: None,
+                    deprecated: None,
+                    location,
+                    container_name: if symbol.container.is_empty() {
+                        None
+                    } else {
+                        Some(symbol.container)
+                    },
+                });
+            }
+            infos
+        }))
+    }
+}
+
+fn name_kind_to_symbol_kind(kind: NameKind) -> SymbolKind {
+    match kind {
+        NameKind::Field => SymbolKind::FIELD,
+        NameKind::Variant => SymbolKind::ENUM_MEMBER,
+        NameKind::Method => SymbolKind::METHOD,
+        NameKind::Variable => SymbolKind::VARIABLE,
+        NameKind::Function => SymbolKind::FUNCTION,
+        NameKind::Type => SymbolKind::STRUCT,
+        NameKind::Namespace => SymbolKind::NAMESPACE,
+        NameKind::Ability => SymbolKind::INTERFACE,
+        NameKind::Keyword => SymbolKind::KEY,
+    }
 }
 
 fn find_references(
@@ -1149,9 +1193,26 @@ fn find_references(
                 }
             }
         }
+        LsEntityKind::Ability(ability_id) => {
+            let target = k1.abilities.get(ability_id).base_ability_id;
+            let defn_span = k1::lsp_support::get_entity_definition_span(k1, ls_entity.kind);
+            for entities in k1.ls_entities.borrow().values() {
+                for entity in entities {
+                    let LsEntityKind::Ability(aid) = entity.kind else {
+                        continue;
+                    };
+                    if k1.abilities.get(aid).base_ability_id != target {
+                        continue;
+                    }
+                    if entity.span == defn_span && !include_declaration {
+                        continue;
+                    }
+                    spans.push(entity.span);
+                }
+            }
+        }
         LsEntityKind::Variable { variable_id } => {
-            let defn_span =
-                k1.remap_span(k1.ast.spans.get(k1.variables.get(variable_id).defn_span));
+            let defn_span = k1::lsp_support::get_entity_definition_span(k1, ls_entity.kind);
             for entities in k1.ls_entities.borrow().values() {
                 for entity in entities {
                     let LsEntityKind::Variable { variable_id: vid } = entity.kind else {

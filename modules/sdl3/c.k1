@@ -1010,7 +1010,7 @@ type alignment_test = {
   b: ptr,
 }
 #static assert-layout[alignment_test](16, 8, [0, 8, ])
-type DUMMY_ENUM = either(u32) {
+type DUMMY_ENUM = either(u32, partial) {
   DUMMY_ENUM_VALUE = 0,
 }
 #static assert-layout[DUMMY_ENUM](4, 4, [])
@@ -1713,7 +1713,7 @@ type(alias) FunctionPointer = *fn(
 
 ) -> {}
 #static assert-layout[FunctionPointer](8, 8, [])
-type AssertState = either(u32) {
+type AssertState = either(u32, partial) {
   ASSERTION_RETRY = 0,
   ASSERTION_BREAK = 1,
   ASSERTION_ABORT = 2,
@@ -1753,13 +1753,13 @@ fn(extern("SDL_GetAssertionHandler")) GetAssertionHandler(
 fn(extern("SDL_GetAssertionReport")) GetAssertionReport(): optref[AssertData]
 fn(extern("SDL_ResetAssertionReport")) ResetAssertionReport(): {}
 type AsyncIO = opaque[0, 1]
-type AsyncIOTaskType = either(u32) {
+type AsyncIOTaskType = either(u32, partial) {
   ASYNCIO_TASK_READ = 0,
   ASYNCIO_TASK_WRITE = 1,
   ASYNCIO_TASK_CLOSE = 2,
 }
 #static assert-layout[AsyncIOTaskType](4, 4, [])
-type AsyncIOResult = either(u32) {
+type AsyncIOResult = either(u32, partial) {
   ASYNCIO_COMPLETE = 0,
   ASYNCIO_FAILURE = 1,
   ASYNCIO_CANCELED = 2,
@@ -1907,7 +1907,7 @@ fn(extern("SDL_GetError")) GetError(): optref[u8]
 fn(extern("SDL_ClearError")) ClearError(): bool
 type(alias) PropertiesID = Uint32
 #static assert-layout[PropertiesID](4, 4, [])
-type PropertyType = either(u32) {
+type PropertyType = either(u32, partial) {
   PROPERTY_TYPE_INVALID = 0,
   PROPERTY_TYPE_POINTER = 1,
   PROPERTY_TYPE_STRING = 2,
@@ -2021,14 +2021,14 @@ type(alias) ThreadID = Uint64
 #static assert-layout[ThreadID](8, 8, [])
 type(alias) TLSID = AtomicInt
 #static assert-layout[TLSID](4, 4, [])
-type ThreadPriority = either(u32) {
+type ThreadPriority = either(u32, partial) {
   THREAD_PRIORITY_LOW = 0,
   THREAD_PRIORITY_NORMAL = 1,
   THREAD_PRIORITY_HIGH = 2,
   THREAD_PRIORITY_TIME_CRITICAL = 3,
 }
 #static assert-layout[ThreadPriority](4, 4, [])
-type ThreadState = either(u32) {
+type ThreadState = either(u32, partial) {
   THREAD_UNKNOWN = 0,
   THREAD_ALIVE = 1,
   THREAD_DETACHED = 2,
@@ -2161,7 +2161,7 @@ fn(extern("SDL_WaitConditionTimeout")) WaitConditionTimeout(
   mutex: *Mutex,
   timeoutMS: Sint32,
 ): bool
-type InitStatus = either(u32) {
+type InitStatus = either(u32, partial) {
   INIT_STATUS_UNINITIALIZED = 0,
   INIT_STATUS_INITIALIZING = 1,
   INIT_STATUS_INITIALIZED = 2,
@@ -2184,7 +2184,7 @@ fn(extern("SDL_SetInitialized")) SetInitialized(
   state: *InitState,
   initialized: bool,
 ): {}
-type IOStatus = either(u32) {
+type IOStatus = either(u32, partial) {
   IO_STATUS_READY = 0,
   IO_STATUS_ERROR = 1,
   IO_STATUS_EOF = 2,
@@ -2193,7 +2193,7 @@ type IOStatus = either(u32) {
   IO_STATUS_WRITEONLY = 5,
 }
 #static assert-layout[IOStatus](4, 4, [])
-type IOWhence = either(u32) {
+type IOWhence = either(u32, partial) {
   IO_SEEK_SET = 0,
   IO_SEEK_CUR = 1,
   IO_SEEK_END = 2,
@@ -2422,7 +2422,7 @@ fn(extern("SDL_WriteS64BE")) WriteS64BE(
   dst: *IOStream,
   value: Sint64,
 ): bool
-type AudioFormat = either(u32) {
+type AudioFormat = either(u32, partial) {
   AUDIO_UNKNOWN = 0,
   AUDIO_U8 = 8,
   AUDIO_S8 = 32776,
@@ -2699,7 +2699,7 @@ fn(extern("SDL_HasExactlyOneBitSet32")) HasExactlyOneBitSet32(
 ): bool
 type(alias) BlendMode = Uint32
 #static assert-layout[BlendMode](4, 4, [])
-type BlendOperation = either(u32) {
+type BlendOperation = either(u32, partial) {
   BLENDOPERATION_ADD = 1,
   BLENDOPERATION_SUBTRACT = 2,
   BLENDOPERATION_REV_SUBTRACT = 3,
@@ -2707,7 +2707,7 @@ type BlendOperation = either(u32) {
   BLENDOPERATION_MAXIMUM = 5,
 }
 #static assert-layout[BlendOperation](4, 4, [])
-type BlendFactor = either(u32) {
+type BlendFactor = either(u32, partial) {
   BLENDFACTOR_ZERO = 1,
   BLENDFACTOR_ONE = 2,
   BLENDFACTOR_SRC_COLOR = 3,
@@ -2728,7 +2728,7 @@ fn(extern("SDL_ComposeCustomBlendMode")) ComposeCustomBlendMode(
   dstAlphaFactor: BlendFactor,
   alphaOperation: BlendOperation,
 ): BlendMode
-type PixelType = either(u32) {
+type PixelType = either(u32, partial) {
   PIXELTYPE_UNKNOWN = 0,
   PIXELTYPE_INDEX1 = 1,
   PIXELTYPE_INDEX4 = 2,
@@ -2744,13 +2744,13 @@ type PixelType = either(u32) {
   PIXELTYPE_INDEX2 = 12,
 }
 #static assert-layout[PixelType](4, 4, [])
-type BitmapOrder = either(u32) {
+type BitmapOrder = either(u32, partial) {
   BITMAPORDER_NONE = 0,
   BITMAPORDER_4321 = 1,
   BITMAPORDER_1234 = 2,
 }
 #static assert-layout[BitmapOrder](4, 4, [])
-type PackedOrder = either(u32) {
+type PackedOrder = either(u32, partial) {
   PACKEDORDER_NONE = 0,
   PACKEDORDER_XRGB = 1,
   PACKEDORDER_RGBX = 2,
@@ -2762,7 +2762,7 @@ type PackedOrder = either(u32) {
   PACKEDORDER_BGRA = 8,
 }
 #static assert-layout[PackedOrder](4, 4, [])
-type ArrayOrder = either(u32) {
+type ArrayOrder = either(u32, partial) {
   ARRAYORDER_NONE = 0,
   ARRAYORDER_RGB = 1,
   ARRAYORDER_RGBA = 2,
@@ -2772,7 +2772,7 @@ type ArrayOrder = either(u32) {
   ARRAYORDER_ABGR = 6,
 }
 #static assert-layout[ArrayOrder](4, 4, [])
-type PackedLayout = either(u32) {
+type PackedLayout = either(u32, partial) {
   PACKEDLAYOUT_NONE = 0,
   PACKEDLAYOUT_332 = 1,
   PACKEDLAYOUT_4444 = 2,
@@ -2784,7 +2784,7 @@ type PackedLayout = either(u32) {
   PACKEDLAYOUT_1010102 = 8,
 }
 #static assert-layout[PackedLayout](4, 4, [])
-type PixelFormat = either(u32) {
+type PixelFormat = either(u32, partial) {
   PIXELFORMAT_UNKNOWN = 0,
   PIXELFORMAT_INDEX1LSB = 286261504,
   PIXELFORMAT_INDEX1MSB = 287310080,
@@ -2852,19 +2852,19 @@ type PixelFormat = either(u32) {
   PIXELFORMAT_MJPG = 1196444237,
 }
 #static assert-layout[PixelFormat](4, 4, [])
-type ColorType = either(u32) {
+type ColorType = either(u32, partial) {
   COLOR_TYPE_UNKNOWN = 0,
   COLOR_TYPE_RGB = 1,
   COLOR_TYPE_YCBCR = 2,
 }
 #static assert-layout[ColorType](4, 4, [])
-type ColorRange = either(u32) {
+type ColorRange = either(u32, partial) {
   COLOR_RANGE_UNKNOWN = 0,
   COLOR_RANGE_LIMITED = 1,
   COLOR_RANGE_FULL = 2,
 }
 #static assert-layout[ColorRange](4, 4, [])
-type ColorPrimaries = either(u32) {
+type ColorPrimaries = either(u32, partial) {
   COLOR_PRIMARIES_UNKNOWN = 0,
   COLOR_PRIMARIES_BT709 = 1,
   COLOR_PRIMARIES_UNSPECIFIED = 2,
@@ -2881,7 +2881,7 @@ type ColorPrimaries = either(u32) {
   COLOR_PRIMARIES_CUSTOM = 31,
 }
 #static assert-layout[ColorPrimaries](4, 4, [])
-type TransferCharacteristics = either(u32) {
+type TransferCharacteristics = either(u32, partial) {
   TRANSFER_CHARACTERISTICS_UNKNOWN = 0,
   TRANSFER_CHARACTERISTICS_BT709 = 1,
   TRANSFER_CHARACTERISTICS_UNSPECIFIED = 2,
@@ -2903,7 +2903,7 @@ type TransferCharacteristics = either(u32) {
   TRANSFER_CHARACTERISTICS_CUSTOM = 31,
 }
 #static assert-layout[TransferCharacteristics](4, 4, [])
-type MatrixCoefficients = either(u32) {
+type MatrixCoefficients = either(u32, partial) {
   MATRIX_COEFFICIENTS_IDENTITY = 0,
   MATRIX_COEFFICIENTS_BT709 = 1,
   MATRIX_COEFFICIENTS_UNSPECIFIED = 2,
@@ -2921,14 +2921,14 @@ type MatrixCoefficients = either(u32) {
   MATRIX_COEFFICIENTS_CUSTOM = 31,
 }
 #static assert-layout[MatrixCoefficients](4, 4, [])
-type ChromaLocation = either(u32) {
+type ChromaLocation = either(u32, partial) {
   CHROMA_LOCATION_NONE = 0,
   CHROMA_LOCATION_LEFT = 1,
   CHROMA_LOCATION_CENTER = 2,
   CHROMA_LOCATION_TOPLEFT = 3,
 }
 #static assert-layout[ChromaLocation](4, 4, [])
-type Colorspace = either(u32) {
+type Colorspace = either(u32, partial) {
   COLORSPACE_UNKNOWN = 0,
   COLORSPACE_SRGB = 301991328,
   COLORSPACE_SRGB_LINEAR = 301991168,
@@ -3158,14 +3158,14 @@ fn(extern("SDL_GetRectAndLineIntersectionFloat")) GetRectAndLineIntersectionFloa
 ): bool
 type(alias) SurfaceFlags = Uint32
 #static assert-layout[SurfaceFlags](4, 4, [])
-type ScaleMode = either(i32) {
+type ScaleMode = either(i32, partial) {
   SCALEMODE_INVALID = -1,
   SCALEMODE_NEAREST = 0,
   SCALEMODE_LINEAR = 1,
   SCALEMODE_PIXELART = 2,
 }
 #static assert-layout[ScaleMode](4, 4, [])
-type FlipMode = either(u32) {
+type FlipMode = either(u32, partial) {
   FLIP_NONE = 0,
   FLIP_HORIZONTAL = 1,
   FLIP_VERTICAL = 2,
@@ -3537,13 +3537,13 @@ type CameraSpec = {
   framerate_denominator: i32,
 }
 #static assert-layout[CameraSpec](24, 4, [0, 4, 8, 12, 16, 20, ])
-type CameraPosition = either(u32) {
+type CameraPosition = either(u32, partial) {
   CAMERA_POSITION_UNKNOWN = 0,
   CAMERA_POSITION_FRONT_FACING = 1,
   CAMERA_POSITION_BACK_FACING = 2,
 }
 #static assert-layout[CameraPosition](4, 4, [])
-type CameraPermissionState = either(i32) {
+type CameraPermissionState = either(i32, partial) {
   CAMERA_PERMISSION_STATE_DENIED = -1,
   CAMERA_PERMISSION_STATE_PENDING = 0,
   CAMERA_PERMISSION_STATE_APPROVED = 1,
@@ -3656,7 +3656,7 @@ type(alias) DisplayID = Uint32
 #static assert-layout[DisplayID](4, 4, [])
 type(alias) WindowID = Uint32
 #static assert-layout[WindowID](4, 4, [])
-type SystemTheme = either(u32) {
+type SystemTheme = either(u32, partial) {
   SYSTEM_THEME_UNKNOWN = 0,
   SYSTEM_THEME_LIGHT = 1,
   SYSTEM_THEME_DARK = 2,
@@ -3675,7 +3675,7 @@ type DisplayMode = {
   internal: optref[DisplayModeData],
 }
 #static assert-layout[DisplayMode](40, 8, [0, 4, 8, 12, 16, 20, 24, 28, 32, ])
-type DisplayOrientation = either(u32) {
+type DisplayOrientation = either(u32, partial) {
   ORIENTATION_UNKNOWN = 0,
   ORIENTATION_LANDSCAPE = 1,
   ORIENTATION_LANDSCAPE_FLIPPED = 2,
@@ -3686,13 +3686,13 @@ type DisplayOrientation = either(u32) {
 type Window = opaque[0, 1]
 type(alias) WindowFlags = Uint64
 #static assert-layout[WindowFlags](8, 8, [])
-type FlashOperation = either(u32) {
+type FlashOperation = either(u32, partial) {
   FLASH_CANCEL = 0,
   FLASH_BRIEFLY = 1,
   FLASH_UNTIL_FOCUSED = 2,
 }
 #static assert-layout[FlashOperation](4, 4, [])
-type ProgressState = either(i32) {
+type ProgressState = either(i32, partial) {
   PROGRESS_STATE_INVALID = -1,
   PROGRESS_STATE_NONE = 0,
   PROGRESS_STATE_INDETERMINATE = 1,
@@ -3724,7 +3724,7 @@ type(alias) EGLIntArrayCallback = *fn(
   EGLConfig
 ) -> optref[EGLint]
 #static assert-layout[EGLIntArrayCallback](8, 8, [])
-type GLAttr = either(u32) {
+type GLAttr = either(u32, partial) {
   GL_RED_SIZE = 0,
   GL_GREEN_SIZE = 1,
   GL_BLUE_SIZE = 2,
@@ -4067,7 +4067,7 @@ fn(extern("SDL_ShowWindowSystemMenu")) ShowWindowSystemMenu(
   x: i32,
   y: i32,
 ): bool
-type HitTestResult = either(u32) {
+type HitTestResult = either(u32, partial) {
   HITTEST_NORMAL = 0,
   HITTEST_DRAGGABLE = 1,
   HITTEST_RESIZE_TOPLEFT = 2,
@@ -4208,7 +4208,7 @@ fn(extern("SDL_ShowOpenFolderDialog")) ShowOpenFolderDialog(
   default_location: *u8,
   allow_many: bool,
 ): {}
-type FileDialogType = either(u32) {
+type FileDialogType = either(u32, partial) {
   FILEDIALOG_OPENFILE = 0,
   FILEDIALOG_SAVEFILE = 1,
   FILEDIALOG_OPENFOLDER = 2,
@@ -4232,7 +4232,7 @@ fn(extern("SDL_GUIDToString")) GUIDToString(
 fn(extern("SDL_StringToGUID")) StringToGUID(
   pchGUID: *u8,
 ): GUID
-type PowerState = either(i32) {
+type PowerState = either(i32, partial) {
   POWERSTATE_ERROR = -1,
   POWERSTATE_UNKNOWN = 0,
   POWERSTATE_ON_BATTERY = 1,
@@ -4248,7 +4248,7 @@ fn(extern("SDL_GetPowerInfo")) GetPowerInfo(
 type Sensor = opaque[0, 1]
 type(alias) SensorID = Uint32
 #static assert-layout[SensorID](4, 4, [])
-type SensorType = either(i32) {
+type SensorType = either(i32, partial) {
   SENSOR_INVALID = -1,
   SENSOR_UNKNOWN = 0,
   SENSOR_ACCEL = 1,
@@ -4305,7 +4305,7 @@ fn(extern("SDL_UpdateSensors")) UpdateSensors(): {}
 type Joystick = opaque[0, 1]
 type(alias) JoystickID = Uint32
 #static assert-layout[JoystickID](4, 4, [])
-type JoystickType = either(u32) {
+type JoystickType = either(u32, partial) {
   JOYSTICK_TYPE_UNKNOWN = 0,
   JOYSTICK_TYPE_GAMEPAD = 1,
   JOYSTICK_TYPE_WHEEL = 2,
@@ -4319,7 +4319,7 @@ type JoystickType = either(u32) {
   JOYSTICK_TYPE_COUNT = 10,
 }
 #static assert-layout[JoystickType](4, 4, [])
-type JoystickConnectionState = either(i32) {
+type JoystickConnectionState = either(i32, partial) {
   JOYSTICK_CONNECTION_INVALID = -1,
   JOYSTICK_CONNECTION_UNKNOWN = 0,
   JOYSTICK_CONNECTION_WIRED = 1,
@@ -4601,7 +4601,7 @@ fn(extern("SDL_GetJoystickPowerInfo")) GetJoystickPowerInfo(
   percent: *i32,
 ): PowerState
 type Gamepad = opaque[0, 1]
-type GamepadType = either(u32) {
+type GamepadType = either(u32, partial) {
   GAMEPAD_TYPE_UNKNOWN = 0,
   GAMEPAD_TYPE_STANDARD = 1,
   GAMEPAD_TYPE_XBOX360 = 2,
@@ -4617,7 +4617,7 @@ type GamepadType = either(u32) {
   GAMEPAD_TYPE_COUNT = 12,
 }
 #static assert-layout[GamepadType](4, 4, [])
-type GamepadButton = either(i32) {
+type GamepadButton = either(i32, partial) {
   GAMEPAD_BUTTON_INVALID = -1,
   GAMEPAD_BUTTON_SOUTH = 0,
   GAMEPAD_BUTTON_EAST = 1,
@@ -4648,7 +4648,7 @@ type GamepadButton = either(i32) {
   GAMEPAD_BUTTON_COUNT = 26,
 }
 #static assert-layout[GamepadButton](4, 4, [])
-type GamepadButtonLabel = either(u32) {
+type GamepadButtonLabel = either(u32, partial) {
   GAMEPAD_BUTTON_LABEL_UNKNOWN = 0,
   GAMEPAD_BUTTON_LABEL_A = 1,
   GAMEPAD_BUTTON_LABEL_B = 2,
@@ -4660,7 +4660,7 @@ type GamepadButtonLabel = either(u32) {
   GAMEPAD_BUTTON_LABEL_TRIANGLE = 8,
 }
 #static assert-layout[GamepadButtonLabel](4, 4, [])
-type GamepadAxis = either(i32) {
+type GamepadAxis = either(i32, partial) {
   GAMEPAD_AXIS_INVALID = -1,
   GAMEPAD_AXIS_LEFTX = 0,
   GAMEPAD_AXIS_LEFTY = 1,
@@ -4671,7 +4671,7 @@ type GamepadAxis = either(i32) {
   GAMEPAD_AXIS_COUNT = 6,
 }
 #static assert-layout[GamepadAxis](4, 4, [])
-type GamepadBindingType = either(u32) {
+type GamepadBindingType = either(u32, partial) {
   GAMEPAD_BINDTYPE_NONE = 0,
   GAMEPAD_BINDTYPE_BUTTON = 1,
   GAMEPAD_BINDTYPE_AXIS = 2,
@@ -4953,7 +4953,7 @@ fn(extern("SDL_GetGamepadAppleSFSymbolsNameForAxis")) GetGamepadAppleSFSymbolsNa
   gamepad: *Gamepad,
   axis: GamepadAxis,
 ): optref[u8]
-type Scancode = either(u32) {
+type Scancode = either(u32, partial) {
   SCANCODE_UNKNOWN = 0,
   SCANCODE_A = 4,
   SCANCODE_B = 5,
@@ -5255,7 +5255,7 @@ fn(extern("SDL_GetKeyFromName")) GetKeyFromName(
 fn(extern("SDL_StartTextInput")) StartTextInput(
   window: *Window,
 ): bool
-type TextInputType = either(u32) {
+type TextInputType = either(u32, partial) {
   TEXTINPUT_TYPE_TEXT = 0,
   TEXTINPUT_TYPE_TEXT_NAME = 1,
   TEXTINPUT_TYPE_TEXT_EMAIL = 2,
@@ -5267,7 +5267,7 @@ type TextInputType = either(u32) {
   TEXTINPUT_TYPE_NUMBER_PASSWORD_VISIBLE = 8,
 }
 #static assert-layout[TextInputType](4, 4, [])
-type Capitalization = either(u32) {
+type Capitalization = either(u32, partial) {
   CAPITALIZE_NONE = 0,
   CAPITALIZE_SENTENCES = 1,
   CAPITALIZE_WORDS = 2,
@@ -5304,7 +5304,7 @@ fn(extern("SDL_ScreenKeyboardShown")) ScreenKeyboardShown(
 type(alias) MouseID = Uint32
 #static assert-layout[MouseID](4, 4, [])
 type Cursor = opaque[0, 1]
-type SystemCursor = either(u32) {
+type SystemCursor = either(u32, partial) {
   SYSTEM_CURSOR_DEFAULT = 0,
   SYSTEM_CURSOR_TEXT = 1,
   SYSTEM_CURSOR_WAIT = 2,
@@ -5328,7 +5328,7 @@ type SystemCursor = either(u32) {
   SYSTEM_CURSOR_COUNT = 20,
 }
 #static assert-layout[SystemCursor](4, 4, [])
-type MouseWheelDirection = either(u32) {
+type MouseWheelDirection = either(u32, partial) {
   MOUSEWHEEL_NORMAL = 0,
   MOUSEWHEEL_FLIPPED = 1,
 }
@@ -5429,7 +5429,7 @@ type(alias) TouchID = Uint64
 #static assert-layout[TouchID](8, 8, [])
 type(alias) FingerID = Uint64
 #static assert-layout[FingerID](8, 8, [])
-type TouchDeviceType = either(i32) {
+type TouchDeviceType = either(i32, partial) {
   TOUCH_DEVICE_INVALID = -1,
   TOUCH_DEVICE_DIRECT = 0,
   TOUCH_DEVICE_INDIRECT_ABSOLUTE = 1,
@@ -5460,7 +5460,7 @@ type(alias) PenID = Uint32
 #static assert-layout[PenID](4, 4, [])
 type(alias) PenInputFlags = Uint32
 #static assert-layout[PenInputFlags](4, 4, [])
-type PenAxis = either(u32) {
+type PenAxis = either(u32, partial) {
   PEN_AXIS_PRESSURE = 0,
   PEN_AXIS_XTILT = 1,
   PEN_AXIS_YTILT = 2,
@@ -5471,7 +5471,7 @@ type PenAxis = either(u32) {
   PEN_AXIS_COUNT = 7,
 }
 #static assert-layout[PenAxis](4, 4, [])
-type PenDeviceType = either(i32) {
+type PenDeviceType = either(i32, partial) {
   PEN_DEVICE_TYPE_INVALID = -1,
   PEN_DEVICE_TYPE_UNKNOWN = 0,
   PEN_DEVICE_TYPE_DIRECT = 1,
@@ -5481,7 +5481,7 @@ type PenDeviceType = either(i32) {
 fn(extern("SDL_GetPenDeviceType")) GetPenDeviceType(
   instance_id: PenID,
 ): PenDeviceType
-type EventType = either(u32) {
+type EventType = either(u32, partial) {
   EVENT_FIRST = 0,
   EVENT_QUIT = 256,
   EVENT_TERMINATING = 257,
@@ -6041,7 +6041,7 @@ type Event = union {
 }
 #static assert-layout[Event](128, 8, [])
 fn(extern("SDL_PumpEvents")) PumpEvents(): {}
-type EventAction = either(u32) {
+type EventAction = either(u32, partial) {
   ADDEVENT = 0,
   PEEKEVENT = 1,
   GETEVENT = 2,
@@ -6129,7 +6129,7 @@ fn(extern("SDL_GetPrefPath")) GetPrefPath(
   org: *u8,
   app: *u8,
 ): optref[u8]
-type Folder = either(u32) {
+type Folder = either(u32, partial) {
   FOLDER_HOME = 0,
   FOLDER_DESKTOP = 1,
   FOLDER_DOCUMENTS = 2,
@@ -6147,7 +6147,7 @@ type Folder = either(u32) {
 fn(extern("SDL_GetUserFolder")) GetUserFolder(
   folder: Folder,
 ): optref[u8]
-type PathType = either(u32) {
+type PathType = either(u32, partial) {
   PATHTYPE_NONE = 0,
   PATHTYPE_FILE = 1,
   PATHTYPE_DIRECTORY = 2,
@@ -6167,7 +6167,7 @@ type(alias) GlobFlags = Uint32
 fn(extern("SDL_CreateDirectory")) CreateDirectory(
   path: *u8,
 ): bool
-type EnumerationResult = either(u32) {
+type EnumerationResult = either(u32, partial) {
   ENUM_CONTINUE = 0,
   ENUM_SUCCESS = 1,
   ENUM_FAILURE = 2,
@@ -6219,7 +6219,7 @@ type GPURenderPass = opaque[0, 1]
 type GPUComputePass = opaque[0, 1]
 type GPUCopyPass = opaque[0, 1]
 type GPUFence = opaque[0, 1]
-type GPUPrimitiveType = either(u32) {
+type GPUPrimitiveType = either(u32, partial) {
   GPU_PRIMITIVETYPE_TRIANGLELIST = 0,
   GPU_PRIMITIVETYPE_TRIANGLESTRIP = 1,
   GPU_PRIMITIVETYPE_LINELIST = 2,
@@ -6227,25 +6227,25 @@ type GPUPrimitiveType = either(u32) {
   GPU_PRIMITIVETYPE_POINTLIST = 4,
 }
 #static assert-layout[GPUPrimitiveType](4, 4, [])
-type GPULoadOp = either(u32) {
+type GPULoadOp = either(u32, partial) {
   GPU_LOADOP_LOAD = 0,
   GPU_LOADOP_CLEAR = 1,
   GPU_LOADOP_DONT_CARE = 2,
 }
 #static assert-layout[GPULoadOp](4, 4, [])
-type GPUStoreOp = either(u32) {
+type GPUStoreOp = either(u32, partial) {
   GPU_STOREOP_STORE = 0,
   GPU_STOREOP_DONT_CARE = 1,
   GPU_STOREOP_RESOLVE = 2,
   GPU_STOREOP_RESOLVE_AND_STORE = 3,
 }
 #static assert-layout[GPUStoreOp](4, 4, [])
-type GPUIndexElementSize = either(u32) {
+type GPUIndexElementSize = either(u32, partial) {
   GPU_INDEXELEMENTSIZE_16BIT = 0,
   GPU_INDEXELEMENTSIZE_32BIT = 1,
 }
 #static assert-layout[GPUIndexElementSize](4, 4, [])
-type GPUTextureFormat = either(u32) {
+type GPUTextureFormat = either(u32, partial) {
   GPU_TEXTUREFORMAT_INVALID = 0,
   GPU_TEXTUREFORMAT_A8_UNORM = 1,
   GPU_TEXTUREFORMAT_R8_UNORM = 2,
@@ -6355,7 +6355,7 @@ type GPUTextureFormat = either(u32) {
 #static assert-layout[GPUTextureFormat](4, 4, [])
 type(alias) GPUTextureUsageFlags = Uint32
 #static assert-layout[GPUTextureUsageFlags](4, 4, [])
-type GPUTextureType = either(u32) {
+type GPUTextureType = either(u32, partial) {
   GPU_TEXTURETYPE_2D = 0,
   GPU_TEXTURETYPE_2D_ARRAY = 1,
   GPU_TEXTURETYPE_3D = 2,
@@ -6363,14 +6363,14 @@ type GPUTextureType = either(u32) {
   GPU_TEXTURETYPE_CUBE_ARRAY = 4,
 }
 #static assert-layout[GPUTextureType](4, 4, [])
-type GPUSampleCount = either(u32) {
+type GPUSampleCount = either(u32, partial) {
   GPU_SAMPLECOUNT_1 = 0,
   GPU_SAMPLECOUNT_2 = 1,
   GPU_SAMPLECOUNT_4 = 2,
   GPU_SAMPLECOUNT_8 = 3,
 }
 #static assert-layout[GPUSampleCount](4, 4, [])
-type GPUCubeMapFace = either(u32) {
+type GPUCubeMapFace = either(u32, partial) {
   GPU_CUBEMAPFACE_POSITIVEX = 0,
   GPU_CUBEMAPFACE_NEGATIVEX = 1,
   GPU_CUBEMAPFACE_POSITIVEY = 2,
@@ -6381,19 +6381,19 @@ type GPUCubeMapFace = either(u32) {
 #static assert-layout[GPUCubeMapFace](4, 4, [])
 type(alias) GPUBufferUsageFlags = Uint32
 #static assert-layout[GPUBufferUsageFlags](4, 4, [])
-type GPUTransferBufferUsage = either(u32) {
+type GPUTransferBufferUsage = either(u32, partial) {
   GPU_TRANSFERBUFFERUSAGE_UPLOAD = 0,
   GPU_TRANSFERBUFFERUSAGE_DOWNLOAD = 1,
 }
 #static assert-layout[GPUTransferBufferUsage](4, 4, [])
-type GPUShaderStage = either(u32) {
+type GPUShaderStage = either(u32, partial) {
   GPU_SHADERSTAGE_VERTEX = 0,
   GPU_SHADERSTAGE_FRAGMENT = 1,
 }
 #static assert-layout[GPUShaderStage](4, 4, [])
 type(alias) GPUShaderFormat = Uint32
 #static assert-layout[GPUShaderFormat](4, 4, [])
-type GPUVertexElementFormat = either(u32) {
+type GPUVertexElementFormat = either(u32, partial) {
   GPU_VERTEXELEMENTFORMAT_INVALID = 0,
   GPU_VERTEXELEMENTFORMAT_INT = 1,
   GPU_VERTEXELEMENTFORMAT_INT2 = 2,
@@ -6427,28 +6427,28 @@ type GPUVertexElementFormat = either(u32) {
   GPU_VERTEXELEMENTFORMAT_HALF4 = 30,
 }
 #static assert-layout[GPUVertexElementFormat](4, 4, [])
-type GPUVertexInputRate = either(u32) {
+type GPUVertexInputRate = either(u32, partial) {
   GPU_VERTEXINPUTRATE_VERTEX = 0,
   GPU_VERTEXINPUTRATE_INSTANCE = 1,
 }
 #static assert-layout[GPUVertexInputRate](4, 4, [])
-type GPUFillMode = either(u32) {
+type GPUFillMode = either(u32, partial) {
   GPU_FILLMODE_FILL = 0,
   GPU_FILLMODE_LINE = 1,
 }
 #static assert-layout[GPUFillMode](4, 4, [])
-type GPUCullMode = either(u32) {
+type GPUCullMode = either(u32, partial) {
   GPU_CULLMODE_NONE = 0,
   GPU_CULLMODE_FRONT = 1,
   GPU_CULLMODE_BACK = 2,
 }
 #static assert-layout[GPUCullMode](4, 4, [])
-type GPUFrontFace = either(u32) {
+type GPUFrontFace = either(u32, partial) {
   GPU_FRONTFACE_COUNTER_CLOCKWISE = 0,
   GPU_FRONTFACE_CLOCKWISE = 1,
 }
 #static assert-layout[GPUFrontFace](4, 4, [])
-type GPUCompareOp = either(u32) {
+type GPUCompareOp = either(u32, partial) {
   GPU_COMPAREOP_INVALID = 0,
   GPU_COMPAREOP_NEVER = 1,
   GPU_COMPAREOP_LESS = 2,
@@ -6460,7 +6460,7 @@ type GPUCompareOp = either(u32) {
   GPU_COMPAREOP_ALWAYS = 8,
 }
 #static assert-layout[GPUCompareOp](4, 4, [])
-type GPUStencilOp = either(u32) {
+type GPUStencilOp = either(u32, partial) {
   GPU_STENCILOP_INVALID = 0,
   GPU_STENCILOP_KEEP = 1,
   GPU_STENCILOP_ZERO = 2,
@@ -6472,7 +6472,7 @@ type GPUStencilOp = either(u32) {
   GPU_STENCILOP_DECREMENT_AND_WRAP = 8,
 }
 #static assert-layout[GPUStencilOp](4, 4, [])
-type GPUBlendOp = either(u32) {
+type GPUBlendOp = either(u32, partial) {
   GPU_BLENDOP_INVALID = 0,
   GPU_BLENDOP_ADD = 1,
   GPU_BLENDOP_SUBTRACT = 2,
@@ -6481,7 +6481,7 @@ type GPUBlendOp = either(u32) {
   GPU_BLENDOP_MAX = 5,
 }
 #static assert-layout[GPUBlendOp](4, 4, [])
-type GPUBlendFactor = either(u32) {
+type GPUBlendFactor = either(u32, partial) {
   GPU_BLENDFACTOR_INVALID = 0,
   GPU_BLENDFACTOR_ZERO = 1,
   GPU_BLENDFACTOR_ONE = 2,
@@ -6500,29 +6500,29 @@ type GPUBlendFactor = either(u32) {
 #static assert-layout[GPUBlendFactor](4, 4, [])
 type(alias) GPUColorComponentFlags = Uint8
 #static assert-layout[GPUColorComponentFlags](1, 1, [])
-type GPUFilter = either(u32) {
+type GPUFilter = either(u32, partial) {
   GPU_FILTER_NEAREST = 0,
   GPU_FILTER_LINEAR = 1,
 }
 #static assert-layout[GPUFilter](4, 4, [])
-type GPUSamplerMipmapMode = either(u32) {
+type GPUSamplerMipmapMode = either(u32, partial) {
   GPU_SAMPLERMIPMAPMODE_NEAREST = 0,
   GPU_SAMPLERMIPMAPMODE_LINEAR = 1,
 }
 #static assert-layout[GPUSamplerMipmapMode](4, 4, [])
-type GPUSamplerAddressMode = either(u32) {
+type GPUSamplerAddressMode = either(u32, partial) {
   GPU_SAMPLERADDRESSMODE_REPEAT = 0,
   GPU_SAMPLERADDRESSMODE_MIRRORED_REPEAT = 1,
   GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE = 2,
 }
 #static assert-layout[GPUSamplerAddressMode](4, 4, [])
-type GPUPresentMode = either(u32) {
+type GPUPresentMode = either(u32, partial) {
   GPU_PRESENTMODE_VSYNC = 0,
   GPU_PRESENTMODE_IMMEDIATE = 1,
   GPU_PRESENTMODE_MAILBOX = 2,
 }
 #static assert-layout[GPUPresentMode](4, 4, [])
-type GPUSwapchainComposition = either(u32) {
+type GPUSwapchainComposition = either(u32, partial) {
   GPU_SWAPCHAINCOMPOSITION_SDR = 0,
   GPU_SWAPCHAINCOMPOSITION_SDR_LINEAR = 1,
   GPU_SWAPCHAINCOMPOSITION_HDR_EXTENDED_LINEAR = 2,
@@ -7521,7 +7521,7 @@ fn(extern("SDL_StopHapticRumble")) StopHapticRumble(
   haptic: *Haptic,
 ): bool
 type hid_device = opaque[0, 1]
-type hid_bus_type = either(u32) {
+type hid_bus_type = either(u32, partial) {
   HID_API_BUS_UNKNOWN = 0,
   HID_API_BUS_USB = 1,
   HID_API_BUS_BLUETOOTH = 2,
@@ -7638,7 +7638,7 @@ fn(extern("SDL_hid_get_report_descriptor")) hid_get_report_descriptor(
 fn(extern("SDL_hid_ble_scan")) hid_ble_scan(
   active: bool,
 ): {}
-type HintPriority = either(u32) {
+type HintPriority = either(u32, partial) {
   HINT_DEFAULT = 0,
   HINT_NORMAL = 1,
   HINT_OVERRIDE = 2,
@@ -7683,7 +7683,7 @@ fn(extern("SDL_RemoveHintCallback")) RemoveHintCallback(
 ): {}
 type(alias) InitFlags = Uint32
 #static assert-layout[InitFlags](4, 4, [])
-type AppResult = either(u32) {
+type AppResult = either(u32, partial) {
   APP_CONTINUE = 0,
   APP_SUCCESS = 1,
   APP_FAILURE = 2,
@@ -7763,7 +7763,7 @@ type Locale = {
 fn(extern("SDL_GetPreferredLocales")) GetPreferredLocales(
   count: *i32,
 ): optref[optref[Locale]]
-type LogCategory = either(u32) {
+type LogCategory = either(u32, partial) {
   LOG_CATEGORY_APPLICATION = 0,
   LOG_CATEGORY_ERROR = 1,
   LOG_CATEGORY_ASSERT = 2,
@@ -7786,7 +7786,7 @@ type LogCategory = either(u32) {
   LOG_CATEGORY_CUSTOM = 19,
 }
 #static assert-layout[LogCategory](4, 4, [])
-type LogPriority = either(u32) {
+type LogPriority = either(u32, partial) {
   LOG_PRIORITY_INVALID = 0,
   LOG_PRIORITY_TRACE = 1,
   LOG_PRIORITY_VERBOSE = 2,
@@ -7887,7 +7887,7 @@ type MessageBoxColor = {
   b: Uint8,
 }
 #static assert-layout[MessageBoxColor](3, 1, [0, 1, 2, ])
-type MessageBoxColorType = either(u32) {
+type MessageBoxColorType = either(u32, partial) {
   MESSAGEBOX_COLOR_BACKGROUND = 0,
   MESSAGEBOX_COLOR_TEXT = 1,
   MESSAGEBOX_COLOR_BUTTON_BORDER = 2,
@@ -7940,7 +7940,7 @@ fn(extern("SDL_CreateProcess")) CreateProcess(
   args: *optref[u8],
   pipe_stdio: bool,
 ): optref[Process]
-type ProcessIO = either(u32) {
+type ProcessIO = either(u32, partial) {
   PROCESS_STDIO_INHERITED = 0,
   PROCESS_STDIO_NULL = 1,
   PROCESS_STDIO_APP = 2,
@@ -7982,20 +7982,20 @@ type Vertex = {
   tex_coord: FPoint,
 }
 #static assert-layout[Vertex](32, 4, [0, 8, 24, ])
-type TextureAccess = either(u32) {
+type TextureAccess = either(u32, partial) {
   TEXTUREACCESS_STATIC = 0,
   TEXTUREACCESS_STREAMING = 1,
   TEXTUREACCESS_TARGET = 2,
 }
 #static assert-layout[TextureAccess](4, 4, [])
-type TextureAddressMode = either(i32) {
+type TextureAddressMode = either(i32, partial) {
   TEXTURE_ADDRESS_INVALID = -1,
   TEXTURE_ADDRESS_AUTO = 0,
   TEXTURE_ADDRESS_CLAMP = 1,
   TEXTURE_ADDRESS_WRAP = 2,
 }
 #static assert-layout[TextureAddressMode](4, 4, [])
-type RendererLogicalPresentation = either(u32) {
+type RendererLogicalPresentation = either(u32, partial) {
   LOGICAL_PRESENTATION_DISABLED = 0,
   LOGICAL_PRESENTATION_STRETCH = 1,
   LOGICAL_PRESENTATION_LETTERBOX = 2,
@@ -8669,7 +8669,7 @@ fn(extern("SDL_SetX11EventHook")) SetX11EventHook(
 ): {}
 fn(extern("SDL_IsTablet")) IsTablet(): bool
 fn(extern("SDL_IsTV")) IsTV(): bool
-type Sandbox = either(u32) {
+type Sandbox = either(u32, partial) {
   SANDBOX_NONE = 0,
   SANDBOX_UNKNOWN_CONTAINER = 1,
   SANDBOX_FLATPAK = 2,
@@ -8696,13 +8696,13 @@ type DateTime = {
   utc_offset: i32,
 }
 #static assert-layout[DateTime](36, 4, [0, 4, 8, 12, 16, 20, 24, 28, 32, ])
-type DateFormat = either(u32) {
+type DateFormat = either(u32, partial) {
   DATE_FORMAT_YYYYMMDD = 0,
   DATE_FORMAT_DDMMYYYY = 1,
   DATE_FORMAT_MMDDYYYY = 2,
 }
 #static assert-layout[DateFormat](4, 4, [])
-type TimeFormat = either(u32) {
+type TimeFormat = either(u32, partial) {
   TIME_FORMAT_24HR = 0,
   TIME_FORMAT_12HR = 1,
 }

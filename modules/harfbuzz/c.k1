@@ -52,7 +52,7 @@ fn(extern("hb_tag_to_string")) tag_to_string(
   tag: tag_t,
   buf: *u8,
 ): {}
-type direction_t = either(u32) {
+type direction_t = either(u32, partial) {
   HB_DIRECTION_INVALID = 0,
   HB_DIRECTION_LTR = 4,
   HB_DIRECTION_RTL = 5,
@@ -82,7 +82,7 @@ fn(extern("hb_language_matches")) language_matches(
   language: language_t,
   specific: language_t,
 ): bool_t
-type script_t = either(u32) {
+type script_t = either(u32, partial) {
   HB_SCRIPT_COMMON = 1517910393,
   HB_SCRIPT_INHERITED = 1516858984,
   HB_SCRIPT_UNKNOWN = 1517976186,
@@ -352,7 +352,7 @@ fn(extern("hb_realloc")) realloc(
 fn(extern("hb_free")) free(
   ptr: ptr,
 ): {}
-type memory_mode_t = either(u32) {
+type memory_mode_t = either(u32, partial) {
   HB_MEMORY_MODE_DUPLICATE = 0,
   HB_MEMORY_MODE_READONLY = 1,
   HB_MEMORY_MODE_WRITABLE = 2,
@@ -423,7 +423,7 @@ fn(extern("hb_blob_get_data_writable")) blob_get_data_writable(
   blob: *blob_t,
   length: *u32,
 ): optref[u8]
-type unicode_general_category_t = either(u32) {
+type unicode_general_category_t = either(u32, partial) {
   HB_UNICODE_GENERAL_CATEGORY_CONTROL = 0,
   HB_UNICODE_GENERAL_CATEGORY_FORMAT = 1,
   HB_UNICODE_GENERAL_CATEGORY_UNASSIGNED = 2,
@@ -456,7 +456,7 @@ type unicode_general_category_t = either(u32) {
   HB_UNICODE_GENERAL_CATEGORY_SPACE_SEPARATOR = 29,
 }
 #static assert-layout[unicode_general_category_t](4, 4, [])
-type unicode_combining_class_t = either(u32) {
+type unicode_combining_class_t = either(u32, partial) {
   HB_UNICODE_COMBINING_CLASS_NOT_REORDERED = 0,
   HB_UNICODE_COMBINING_CLASS_OVERLAY = 1,
   HB_UNICODE_COMBINING_CLASS_NUKTA = 7,
@@ -1257,7 +1257,7 @@ type color_stop_t = {
   color: color_t,
 }
 #static assert-layout[color_stop_t](12, 4, [0, 4, 8, ])
-type paint_extend_t = either(u32) {
+type paint_extend_t = either(u32, partial) {
   HB_PAINT_EXTEND_PAD = 0,
   HB_PAINT_EXTEND_REPEAT = 1,
   HB_PAINT_EXTEND_REFLECT = 2,
@@ -1340,7 +1340,7 @@ type(alias) paint_sweep_gradient_func_t = *fn(
   ptr
 ) -> {}
 #static assert-layout[paint_sweep_gradient_func_t](8, 8, [])
-type paint_composite_mode_t = either(u32) {
+type paint_composite_mode_t = either(u32, partial) {
   HB_PAINT_COMPOSITE_MODE_CLEAR = 0,
   HB_PAINT_COMPOSITE_MODE_SRC = 1,
   HB_PAINT_COMPOSITE_MODE_DEST = 2,
@@ -2288,7 +2288,7 @@ type glyph_info_t = {
   var2: var_int_t,
 }
 #static assert-layout[glyph_info_t](20, 4, [0, 4, 8, 12, 16, ])
-type glyph_flags_t = either(u32) {
+type glyph_flags_t = either(u32, partial) {
   HB_GLYPH_FLAG_UNSAFE_TO_BREAK = 1,
   HB_GLYPH_FLAG_UNSAFE_TO_CONCAT = 2,
   HB_GLYPH_FLAG_SAFE_TO_INSERT_TATWEEL = 4,
@@ -2351,7 +2351,7 @@ fn(extern("hb_buffer_get_user_data")) buffer_get_user_data(
   buffer: *buffer_t,
   key: *user_data_key_t,
 ): ptr
-type buffer_content_type_t = either(u32) {
+type buffer_content_type_t = either(u32, partial) {
   HB_BUFFER_CONTENT_TYPE_INVALID = 0,
   HB_BUFFER_CONTENT_TYPE_UNICODE = 1,
   HB_BUFFER_CONTENT_TYPE_GLYPHS = 2,
@@ -2403,7 +2403,7 @@ fn(extern("hb_buffer_get_segment_properties")) buffer_get_segment_properties(
 fn(extern("hb_buffer_guess_segment_properties")) buffer_guess_segment_properties(
   buffer: *buffer_t,
 ): {}
-type buffer_flags_t = either(u32) {
+type buffer_flags_t = either(u32, partial) {
   HB_BUFFER_FLAG_DEFAULT = 0,
   HB_BUFFER_FLAG_BOT = 1,
   HB_BUFFER_FLAG_EOT = 2,
@@ -2423,7 +2423,7 @@ fn(extern("hb_buffer_set_flags")) buffer_set_flags(
 fn(extern("hb_buffer_get_flags")) buffer_get_flags(
   buffer: *buffer_t,
 ): buffer_flags_t
-type buffer_cluster_level_t = either(u32) {
+type buffer_cluster_level_t = either(u32, partial) {
   HB_BUFFER_CLUSTER_LEVEL_MONOTONE_GRAPHEMES = 0,
   HB_BUFFER_CLUSTER_LEVEL_MONOTONE_CHARACTERS = 1,
   HB_BUFFER_CLUSTER_LEVEL_CHARACTERS = 2,
@@ -2560,7 +2560,7 @@ fn(extern("hb_buffer_has_positions")) buffer_has_positions(
 fn(extern("hb_buffer_normalize_glyphs")) buffer_normalize_glyphs(
   buffer: *buffer_t,
 ): {}
-type buffer_serialize_flags_t = either(u32) {
+type buffer_serialize_flags_t = either(u32, partial) {
   HB_BUFFER_SERIALIZE_FLAG_DEFAULT = 0,
   HB_BUFFER_SERIALIZE_FLAG_NO_CLUSTERS = 1,
   HB_BUFFER_SERIALIZE_FLAG_NO_POSITIONS = 2,
@@ -2571,7 +2571,7 @@ type buffer_serialize_flags_t = either(u32) {
   HB_BUFFER_SERIALIZE_FLAG_DEFINED = 63,
 }
 #static assert-layout[buffer_serialize_flags_t](4, 4, [])
-type buffer_serialize_format_t = either(u32) {
+type buffer_serialize_format_t = either(u32, partial) {
   HB_BUFFER_SERIALIZE_FORMAT_TEXT = 1413830740,
   HB_BUFFER_SERIALIZE_FORMAT_JSON = 1246973774,
   HB_BUFFER_SERIALIZE_FORMAT_INVALID = 0,
@@ -2632,7 +2632,7 @@ fn(extern("hb_buffer_deserialize_unicode")) buffer_deserialize_unicode(
   end_ptr: *optref[u8],
   format: buffer_serialize_format_t,
 ): bool_t
-type buffer_diff_flags_t = either(u32) {
+type buffer_diff_flags_t = either(u32, partial) {
   HB_BUFFER_DIFF_FLAG_EQUAL = 0,
   HB_BUFFER_DIFF_FLAG_CONTENT_TYPE_MISMATCH = 1,
   HB_BUFFER_DIFF_FLAG_LENGTH_MISMATCH = 2,
@@ -2856,7 +2856,7 @@ fn(extern("hb_shape_plan_execute")) shape_plan_execute(
 fn(extern("hb_shape_plan_get_shaper")) shape_plan_get_shaper(
   shape_plan: *shape_plan_t,
 ): optref[u8]
-type style_tag_t = either(u32) {
+type style_tag_t = either(u32, partial) {
   HB_STYLE_TAG_ITALIC = 1769234796,
   HB_STYLE_TAG_OPTICAL_SIZE = 1869640570,
   HB_STYLE_TAG_SLANT_ANGLE = 1936486004,

@@ -246,6 +246,7 @@ impl InferenceContext {
 pub enum LsEntityKind {
     Namespace(NamespaceId),
     Function { function_id: FunctionId, is_defn: bool },
+    Ability(AbilityId),
     Variable { variable_id: VariableId },
     Type { type_id: TypeId, applied_type_id: Option<TypeId> },
     Variant { type_id: TypeId, variant_index: u32 },
@@ -1959,6 +1960,8 @@ impl BuiltinTyperInline {
 pub enum BuiltinTyperFunction {
     EnumAbilityGetValue,
     EnumAbilityGetTagName,
+    EnumAbilityFromValue,
+    EnumAbilityFromValueUnchecked,
     SumAbilityGetTag,
     SumAbilityGetName,
     SumEquals,
@@ -1973,6 +1976,10 @@ impl BuiltinTyperFunction {
         match self {
             BuiltinTyperFunction::EnumAbilityGetValue => "enum_ability_get_value",
             BuiltinTyperFunction::EnumAbilityGetTagName => "enum_ability_get_tag_name",
+            BuiltinTyperFunction::EnumAbilityFromValue => "enum_ability_from_value",
+            BuiltinTyperFunction::EnumAbilityFromValueUnchecked => {
+                "enum_ability_from_value_unchecked"
+            }
             BuiltinTyperFunction::SumAbilityGetTag => "sum_ability_get_tag",
             BuiltinTyperFunction::SumAbilityGetName => "sum_ability_get_name",
             BuiltinTyperFunction::SumEquals => "sum_equals",
@@ -6078,7 +6085,12 @@ impl TypedProgram {
         ctx: EvalExprContext,
         span: SpanId,
     ) -> K1Result<TypedExprId> {
-        let operand_expr = self.eval_expr_inner(operand, ctx.with_no_expected_type())?;
+        let operand_expected_type = match ctx.expected_type_id {
+            Some(expected) => Some(self.synth_optional_type(expected)),
+            None => None,
+        };
+        let operand_expr =
+            self.eval_expr_inner(operand, ctx.with_expected_type(operand_expected_type))?;
         let operand_type = self.exprs.get_type(operand_expr);
         let (try_impl, self_adjust) =
             self.expect_ability_impl(operand_type, ABILITY_ID_TRY, true, ctx.scope_id, span)?;
@@ -7743,7 +7755,8 @@ impl TypedProgram {
             }
 
             (Type::Integer(i), Type::Enum(e)) if *i == e.int_type => {
-                succeed_if_indirect(self, CastView::CLAIMS, from_type, to_type, span, depth)
+                let view = if e.partial { CastView::TOTAL } else { CastView::CLAIMS };
+                succeed_if_indirect(self, view, from_type, to_type, span, depth)
             }
             (Type::Enum(e), Type::Integer(i)) if *i == e.int_type => {
                 succeed_if_indirect(self, CastView::TOTAL, from_type, to_type, span, depth)
@@ -13179,6 +13192,14 @@ impl TypedProgram {
                 (ABILITY_ID_ENUM, "enum-name") => Some(Builtin::TyperPhysicalFunction(
                     BuiltinTyperFunction::EnumAbilityGetTagName,
                 )),
+                (ABILITY_ID_ENUM, "enum-from-value") => Some(Builtin::TyperPhysicalFunction(
+                    BuiltinTyperFunction::EnumAbilityFromValue,
+                )),
+                (ABILITY_ID_ENUM, "enum-from-value-unchecked") => {
+                    Some(Builtin::TyperPhysicalFunction(
+                        BuiltinTyperFunction::EnumAbilityFromValueUnchecked,
+                    ))
+                }
                 (ABILITY_ID_SUM, "sum-tag") => {
                     Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::SumAbilityGetTag))
                 }
@@ -14003,6 +14024,7 @@ impl TypedProgram {
     ) -> K1Result<(AbilityId, TypeIdSlice, TypeIdSlice)> {
         let ability_expr = self.ast.mem.get(ability_expr_id).clone();
         let ability_id = self.find_ability_or_declare(&ability_expr.name, scope_id)?;
+        self.emit_ls_entity(ability_expr.name.name_span, LsEntityKind::Ability(ability_id));
 
         let mut arguments: SV8<NameAndType> = smallvec![];
         for arg in self.ast.mem.getn(ability_expr.arguments) {
@@ -15248,14 +15270,16 @@ impl TypedProgram {
     fn synth_enum_tag_name_match(
         &mut self,
         enum_param_expr: TypedExprId,
+        ctx: EvalExprContext,
         fn_span: SpanId,
-    ) -> TypedExprId {
+    ) -> K1Result<TypedExprId> {
         let enum_type_id = self.exprs.get_type(enum_param_expr);
         let enum_arg_int_expr = self.synth_enum_get_value(enum_param_expr, fn_span);
-        let Type::Enum(enum_type) = self.types.get(enum_type_id) else {
+        let Type::Enum(enum_type) = *self.types.get(enum_type_id) else {
             self.ice_span(fn_span, "not an enum");
         };
-        let mut arms: List<TypedMatchArm, _> = self.mem.new_list(enum_type.member_values.len());
+        let mut arms: List<TypedMatchArm, _> =
+            self.mem.new_list(enum_type.member_values.len() + enum_type.partial as u32);
         for member in self.mem.getn(enum_type.member_values) {
             let case = self.static_values.add_int(member.int_value);
             let member_name_expr = self.synth_string_literal(member.name, fn_span);
@@ -15265,12 +15289,29 @@ impl TypedProgram {
                 consequent_expr: member_name_expr,
             });
         }
+        if enum_type.partial {
+            let type_name = self.type_id_to_string(enum_type_id);
+            let type_name_id = self.ast.idents.intern(type_name);
+            let type_name_expr = self.synth_string_literal(type_name_id, fn_span);
+            let unknown_name_expr = self.synth_typed_call_typed_args(
+                self.ast.idents.f.core_enum_unknown_name.with_span(fn_span),
+                &[],
+                &[type_name_expr, enum_arg_int_expr],
+                ctx,
+                false,
+            )?;
+            arms.push(TypedMatchArm {
+                case: None,
+                condition: MatchingCondition { instrs: MSlice::empty() },
+                consequent_expr: unknown_name_expr,
+            });
+        }
         let match_expr = TypedMatchExpr {
             subject_defn: None,
             scrutinee: Some(enum_arg_int_expr),
             arms: arms.to_slice(),
         };
-        self.add_match_expr(match_expr, self.builtin_types.string(), fn_span)
+        Ok(self.add_match_expr(match_expr, self.builtin_types.string(), fn_span))
     }
 
     fn generate_intrinsic_function_body(
@@ -15293,7 +15334,62 @@ impl TypedProgram {
             BuiltinTyperFunction::EnumAbilityGetTagName => {
                 let enum_param = *self.mem.get_nth(params, 0);
                 let enum_param_expr = self.synth_variable_expr(enum_param.variable_id, fn_span);
-                Ok(self.synth_enum_tag_name_match(enum_param_expr, fn_span))
+                let ctx = EvalExprContext::make(fn_scope_id);
+                self.synth_enum_tag_name_match(enum_param_expr, ctx, fn_span)
+            }
+            BuiltinTyperFunction::EnumAbilityFromValue => {
+                let value_param = *self.mem.get_nth(params, 0);
+                let value_expr = self.synth_variable_expr(value_param.variable_id, fn_span);
+                let enum_type_id = self.get_as_opt_instance(return_type).unwrap();
+                let enum_type = *self.types.get(enum_type_id).expect_enum();
+                if enum_type.partial {
+                    let cast = self.synth_cast(
+                        value_expr,
+                        enum_type_id,
+                        CastType::ReferenceToReference,
+                        Some(fn_span),
+                    );
+                    Ok(self.synth_optional_some(cast).0)
+                } else {
+                    let mut arms: List<TypedMatchArm, _> =
+                        self.mem.new_list(enum_type.member_values.len() + 1);
+                    for index in 0..enum_type.member_values.len() {
+                        let member = self.mem.get_nth(enum_type.member_values, index as usize);
+                        let case = self.static_values.add_int(member.int_value);
+                        let member_expr = self.exprs.add(
+                            TypedExpr::Enum(EnumConstructor { value_index: index }),
+                            enum_type_id,
+                            fn_span,
+                        );
+                        let (some_expr, _) = self.synth_optional_some(member_expr);
+                        arms.push(TypedMatchArm {
+                            case: Some(case),
+                            condition: MatchingCondition { instrs: MSlice::empty() },
+                            consequent_expr: some_expr,
+                        });
+                    }
+                    arms.push(TypedMatchArm {
+                        case: None,
+                        condition: MatchingCondition { instrs: MSlice::empty() },
+                        consequent_expr: self.synth_optional_none(enum_type_id, fn_span),
+                    });
+                    let match_expr = TypedMatchExpr {
+                        subject_defn: None,
+                        scrutinee: Some(value_expr),
+                        arms: arms.to_slice(),
+                    };
+                    Ok(self.add_match_expr(match_expr, return_type, fn_span))
+                }
+            }
+            BuiltinTyperFunction::EnumAbilityFromValueUnchecked => {
+                let value_param = *self.mem.get_nth(params, 0);
+                let value_expr = self.synth_variable_expr(value_param.variable_id, fn_span);
+                Ok(self.synth_cast(
+                    value_expr,
+                    return_type,
+                    CastType::ReferenceToReference,
+                    Some(fn_span),
+                ))
             }
             BuiltinTyperFunction::SumAbilityGetTag => {
                 let sum_param = *self.mem.get_nth(params, 0);
@@ -15548,8 +15644,8 @@ impl TypedProgram {
                 let writer_param = *self.mem.get_nth(params, 1);
                 let enum_param_expr = self.synth_variable_expr(enum_param.variable_id, fn_span);
                 let writer_expr = self.synth_variable_expr(writer_param.variable_id, fn_span);
-                let name_expr = self.synth_enum_tag_name_match(enum_param_expr, fn_span);
                 let ctx = EvalExprContext::make(fn_scope_id);
+                let name_expr = self.synth_enum_tag_name_match(enum_param_expr, ctx, fn_span)?;
                 self.synth_print_call(name_expr, writer_expr, None, ctx)
             }
         }?;
@@ -15781,6 +15877,7 @@ impl TypedProgram {
             kind,
         };
         let ability_id = self.abilities.add(typed_ability);
+        self.emit_ls_entity(parsed_ability.name_span, LsEntityKind::Ability(ability_id));
         let added = self.scopes.add_ability(scope_id, parsed_ability.name, ability_id);
         if !added {
             kbail!(

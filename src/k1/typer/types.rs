@@ -283,6 +283,7 @@ pub struct ScalarEnumValue {
 pub struct ScalarEnumType {
     pub member_values: MSlice<ScalarEnumValue, TypedProgram>,
     pub int_type: IntegerType,
+    pub partial: bool,
 }
 
 impl SumType {}
@@ -610,7 +611,9 @@ impl TypedProgram {
                 if defn1 != defn2 {
                     return false;
                 }
-                if se1.member_values.len() != se2.member_values.len() {
+                if se1.partial != se2.partial
+                    || se1.member_values.len() != se2.member_values.len()
+                {
                     return false;
                 }
                 for (v1, v2) in
@@ -762,8 +765,9 @@ impl TypedProgram {
         match typ {
             Type::Char => {}
             Type::Integer(int) => discriminant(int).hash(state),
-            Type::Enum(_se) => {
+            Type::Enum(se) => {
                 defn.hash(state);
+                se.partial.hash(state);
             }
             Type::Bool => {}
             Type::Struct(s) => {

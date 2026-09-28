@@ -180,6 +180,9 @@ impl TypedProgram {
                         return Some(witness);
                     }
                 }
+                if enum_type.partial {
+                    return self.match_useful_open(matrix, query, columns, type_id);
+                }
                 None
             }
             Type::Sum(sum_type) => {

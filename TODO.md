@@ -5,7 +5,12 @@
 
 ## [ ] More IR analysis and opts
 - [ ] add lifetimes? (start/end for allocas, temps, inlined stuff)
-- [ ] Get 'range' metadata into sum tags, bools, and other?, for our IR and LLVM optimizations (a sum's tag could only be 0 or 1; this would attach those 2 possible values to the loaded value)
+- [ ] Range facts on loaded tags and bools.
+  - [ ] Bools, codegen only: `!range [0,2)` on Bool loads, `trunc nuw` in `bool_to_i1`, `range(i8 0, 2)` on K1-ABI bool params/returns
+  - [ ] `Inst::Load.fact: LoadFact { None, TagsOf(TypeId) }`: SumGetTag (inhabited variants) and variable/deref/field loads of non-partial enums; codegen emits multi-pair `!range` cached per TypeId, hull `range(..)` attr on params/returns
+  - [ ] IR: switch on a `TagsOf` load covering every tag drops its default
+  - [ ] `LoadFact::NonNull` for `*t` loads -> `!nonnull`
+  - A/B refchess, brotli, stress100 in `profiling`; check folds in --emit-llvm
 
 ## [x] token stream based macros
 
@@ -228,7 +233,6 @@ Primarily an execution target for the VM, but also would DRY up the significant 
 ## Project: system interface, 'Write' ability and intrinsic fix.
 
 ## Project: More LSP features
-- [ ] LSP Workspace symbols
 - [x] Rest of the completion sites (fill in as I hit them)
 - [x] Hover first pass
 - [x] Hover much better

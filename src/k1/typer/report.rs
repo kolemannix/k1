@@ -20,28 +20,24 @@ impl TypedProgram {
         delimiter: &str,
         skip_root: bool,
     ) {
-        let starting_namespace = self.scopes.nearest_parent_namespace(scope);
         let mut chain: SmallVec<[StringId; 8]> = smallvec![];
-        let mut ns_id = starting_namespace;
+        let mut ns_id = self.scopes.nearest_parent_namespace(scope);
         loop {
             let namespace = self.namespaces.get(ns_id);
+            let Some(parent_id) = namespace.parent_id else {
+                if !skip_root {
+                    chain.push(namespace.name);
+                }
+                break;
+            };
             chain.push(namespace.name);
-            match namespace.parent_id {
-                Some(parent_id) => ns_id = parent_id,
-                None => break,
-            }
+            ns_id = parent_id;
         }
         for (i, name) in chain.iter().rev().enumerate() {
-            let ident_str = self.ident_str(*name);
-            let is_last = i == chain.len() - 1;
-
-            let is_root = ident_str == "_root";
-            if !(is_root && skip_root) {
-                write!(w, "{ident_str}").unwrap();
-                if !is_last {
-                    write!(w, "{delimiter}").unwrap();
-                }
+            if i > 0 {
+                w.write_str(delimiter).unwrap();
             }
+            w.write_str(self.ident_str(*name)).unwrap();
         }
     }
 
@@ -347,9 +343,9 @@ impl TypedProgram {
         if span_id == SpanId::NONE {
             return None;
         }
-        let span = self.ast.spans.get(span_id);
+        let span = self.remap_span(self.ast.spans.get(span_id));
         let source = self.ast.sources.get(span.file_id);
-        let (line, _) = self.ast.get_lines_for_span_id(span_id)?;
+        let (line, _) = self.ast.sources.get_lines_for_span(&self.ast.mem, span)?;
         Some(format!("{}:{}", source.filename_str(&self.ast.idents), line.line_number()))
     }
 

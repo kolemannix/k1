@@ -221,7 +221,7 @@ type BBox_ = {
 #static assert-layout[BBox_](32, 8, [0, 8, 16, 24, ])
 type(alias) BBox = BBox_
 #static assert-layout[BBox](32, 8, [])
-type Pixel_Mode_ = either(u32) {
+type Pixel_Mode_ = either(u32, partial) {
   PIXEL_MODE_NONE = 0,
   PIXEL_MODE_MONO = 1,
   PIXEL_MODE_GRAY = 2,
@@ -293,7 +293,7 @@ type Outline_Funcs_ = {
 #static assert-layout[Outline_Funcs_](48, 8, [0, 8, 16, 24, 32, 40, ])
 type(alias) Outline_Funcs = Outline_Funcs_
 #static assert-layout[Outline_Funcs](48, 8, [])
-type Glyph_Format_ = either(u32) {
+type Glyph_Format_ = either(u32, partial) {
   GLYPH_FORMAT_NONE = 0,
   GLYPH_FORMAT_COMPOSITE = 1668246896,
   GLYPH_FORMAT_BITMAP = 1651078259,
@@ -526,7 +526,7 @@ type(alias) GlyphSlot = *GlyphSlotRec_
 #static assert-layout[GlyphSlot](8, 8, [])
 type(alias) CharMap = *CharMapRec_
 #static assert-layout[CharMap](8, 8, [])
-type Encoding_ = either(u32) {
+type Encoding_ = either(u32, partial) {
   ENCODING_NONE = 0,
   ENCODING_MS_SYMBOL = 1937337698,
   ENCODING_UNICODE = 1970170211,
@@ -714,7 +714,7 @@ fn(extern("FT_Select_Size")) Select_Size(
   face: Face,
   strike_index: Int,
 ): Error
-type Size_Request_Type_ = either(u32) {
+type Size_Request_Type_ = either(u32, partial) {
   SIZE_REQUEST_TYPE_NOMINAL = 0,
   SIZE_REQUEST_TYPE_REAL_DIM = 1,
   SIZE_REQUEST_TYPE_BBOX = 2,
@@ -773,7 +773,7 @@ fn(extern("FT_Get_Transform")) Get_Transform(
   matrix: *Matrix,
   delta: *Vector,
 ): {}
-type Render_Mode_ = either(u32) {
+type Render_Mode_ = either(u32, partial) {
   RENDER_MODE_NORMAL = 0,
   RENDER_MODE_LIGHT = 1,
   RENDER_MODE_MONO = 2,
@@ -789,7 +789,7 @@ fn(extern("FT_Render_Glyph")) Render_Glyph(
   slot: GlyphSlot,
   render_mode: Render_Mode,
 ): Error
-type Kerning_Mode_ = either(u32) {
+type Kerning_Mode_ = either(u32, partial) {
   KERNING_DEFAULT = 0,
   KERNING_UNFITTED = 1,
   KERNING_UNSCALED = 2,
@@ -981,7 +981,7 @@ fn(extern("FT_Outline_Render")) Outline_Render(
   outline: *Outline,
   params: *Raster_Params,
 ): Error
-type Orientation_ = either(u32) {
+type Orientation_ = either(u32, partial) {
   ORIENTATION_TRUETYPE = 0,
   ORIENTATION_POSTSCRIPT = 1,
   ORIENTATION_NONE = 2,

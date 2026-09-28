@@ -6,15 +6,15 @@ use core/c-int
 
 
 
-type mode = either(u32) { generic = 0, text = 1, font = 2 }
+type mode = either(u32, partial) { generic = 0, text = 1, font = 2 }
 
-type decoder-result = either(u32) {
+type decoder-result = either(u32, partial) {
   error = 0, success = 1, needs-more-input = 2, needs-more-output = 3
 }
 
-type encoder-op = either(u32) { process = 0, flush = 1, finish = 2, emit-metadata = 3 }
+type encoder-op = either(u32, partial) { process = 0, flush = 1, finish = 2, emit-metadata = 3 }
 
-type encoder-param = either(u32) { mode = 0, quality = 1, lgwin = 2 }
+type encoder-param = either(u32, partial) { mode = 0, quality = 1, lgwin = 2 }
 
 fn(extern("BrotliEncoderCompress"), lib("brotli")) encoder-compress(
   quality: c-int,

@@ -86,6 +86,8 @@ ns types {
   ability enum[impl v] {
     fn(intern) enum-value(self): v
     fn(intern) enum-name(self): string
+    fn(intern) enum-from-value(value: v): ?self
+    fn(intern) enum-from-value-unchecked(value: v): self
   }
 
   ability sum[impl v] {
@@ -185,7 +187,8 @@ ns types {
       values: span[{
         name: string,
         value: int-value,
-      }]
+      }],
+      partial: bool,
     }),
     reference({ inner-type-id: type-id }),
     array({
@@ -1077,6 +1080,7 @@ impl equals for char {
 }
 
 fn discard[t](_t: t): empty {}
+fn(cold) enum-unknown-name[v: print](type-name: string, value: v): string { "${type-name}(${value})" }
 fn phony[t](): t { crash("phony") }
 
 ns array {

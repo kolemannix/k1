@@ -242,6 +242,7 @@ pub(crate) struct BuiltinFunctions {
     pub neg__negated: QIdent,
     pub core_checked_index: QIdent,
     pub core_discard: QIdent,
+    pub core_enum_unknown_name: QIdent,
     pub core_print_print_to: QIdent,
     pub core_print_precise_print_precise_to: QIdent,
     pub fmt_pad_new: QIdent,
@@ -658,6 +659,7 @@ impl IdentPool {
         let path_core = intern_path!(b.core);
         let core_checked_index = make_fn!(path_core, intern!("checked-index"));
         let core_discard = make_fn!(path_core, intern!("discard"));
+        let core_enum_unknown_name = make_fn!(path_core, intern!("enum-unknown-name"));
 
         let path_core_print = intern_path!(b.core, intern!("print"));
         let core_print_print_to = make_fn!(path_core_print, intern!("print-to"));
@@ -736,6 +738,7 @@ impl IdentPool {
             neg__negated,
             core_checked_index,
             core_discard,
+            core_enum_unknown_name,
             core_print_print_to,
             core_print_precise_print_precise_to,
             fmt_pad_new,

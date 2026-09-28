@@ -990,6 +990,7 @@ pub struct ParsedSumTypeVariant {
 pub struct ParsedSumType {
     pub variants: AstSlice<ParsedSumTypeVariant>,
     pub tag_type: Option<ParsedTypeExprId>,
+    pub partial: bool,
     pub span: SpanId,
 }
 
@@ -1301,6 +1302,7 @@ pub struct ParsedAbilityParameter {
 pub struct ParsedAbility {
     pub name: StringId,
     pub functions: AstSlice<ParsedFunctionId>,
+    pub name_span: SpanId,
     pub span: SpanId,
     pub params: AstSlice<ParsedAbilityParameter>,
     pub id: ParsedAbilityId,
@@ -1807,7 +1809,7 @@ impl ParsedProgram {
             ParsedId::Macro(id) => self.get_macro(id).name_span,
             ParsedId::Namespace(ns) => self.namespaces.get(ns).span,
             ParsedId::Global(id) => self.get_global(id).span,
-            ParsedId::Ability(id) => self.get_ability(id).span,
+            ParsedId::Ability(id) => self.get_ability(id).name_span,
             ParsedId::AbilityImpl(id) => self.get_ability_impl(id).span,
             ParsedId::TypeDefn(id) => self.get_type_defn(id).span,
             ParsedId::Expression(id) => self.exprs.get_span(id),
@@ -3325,13 +3327,21 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn expect_sum_type_expression(&mut self) -> ParseResult<ParsedSumType> {
         let (keyword, _) = self.expect_ident_chars("either")?;
-        let explicit_tag_type_expr = if self.maybe_consume_no_whitespace(K::OpenParen).is_some() {
-            let tag_expr = self.expect_type_expression()?;
-            self.expect_kind(K::CloseParen)?;
-            Some(tag_expr)
-        } else {
-            None
-        };
+        let (explicit_tag_type_expr, partial) =
+            if self.maybe_consume_no_whitespace(K::OpenParen).is_some() {
+                let tag_expr = self.expect_type_expression()?;
+                let partial = if self.maybe_consume(K::Comma).is_some() {
+                    let (partial_token, _) = self.expect_ident_chars("partial")?;
+                    self.emit_semantic_token(partial_token, SemanticTokenKind::Keyword);
+                    true
+                } else {
+                    false
+                };
+                self.expect_kind(K::CloseParen)?;
+                (Some(tag_expr), partial)
+            } else {
+                (None, false)
+            };
         self.expect_kind(K::OpenBrace)?;
         let mut variants = self.ast.mem.new_list(0);
         self.eat_delimited(
@@ -3345,6 +3355,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(ParsedSumType {
             variants: variants.to_slice_trim(&mut self.ast.mem),
             tag_type: explicit_tag_type_expr,
+            partial,
             span,
         })
     }
@@ -5221,6 +5232,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let keyword_ability = self.expect_kind(K::KeywordAbility)?;
         let name_token = self.expect_kind(K::Ident)?;
         let name_identifier = self.make_ident(name_token);
+        let name_span = self.tok_span_id(name_token);
         let mut ability_params = self.ast.mem.new_list(0);
         if let Some(_params_open) = self.maybe_consume(K::OpenBracket) {
             self.eat_delimited(
@@ -5238,6 +5250,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             name: name_identifier,
             functions,
             params,
+            name_span,
             span,
             id: ParsedAbilityId::PENDING,
             compile_condition,

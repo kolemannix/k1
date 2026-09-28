@@ -484,6 +484,9 @@ impl TypedProgram {
 
                 let has_payloads =
                     self.ast.mem.getn(sum.variants).iter().any(|v| v.payload.is_some());
+                if has_payloads && sum.partial {
+                    kbail!(self, sum.span, "Only an either without payloads can be partial");
+                }
                 if has_payloads {
                     let mut variants: List<TypedSumVariant, _> = self.mem.new_list(variant_count);
                     let mut next_tag = tag_type.zero();
@@ -579,6 +582,7 @@ impl TypedProgram {
                     let enum_type = Type::Enum(ScalarEnumType {
                         member_values: member_values.to_slice(),
                         int_type: tag_type,
+                        partial: sum.partial,
                     });
                     let sum_type_id = self.add_type_anon(enum_type);
                     Ok(sum_type_id)
@@ -639,6 +643,7 @@ impl TypedProgram {
                                         self.add_type_anon(Type::Enum(ScalarEnumType {
                                             member_values: members.to_slice(),
                                             int_type: sum.tag_type,
+                                            partial: false,
                                         }));
                                     Ok(enum_type_id)
                                 } else {

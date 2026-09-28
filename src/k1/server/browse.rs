@@ -5,7 +5,7 @@ use fxhash::FxHashMap;
 use maud::{Markup, html};
 
 use crate::parse::StringId;
-use crate::typer::scopes::Provenance;
+use crate::typer::scopes::{Provenance, ScopeMember, VariableInScope};
 use crate::typer::types::TypeId;
 use crate::typer::{
     AbilityId, FunctionId, GlobalInitialValue, NamespaceId, NamespaceKind, TypedProgram, VariableId,
@@ -63,14 +63,9 @@ fn ns_href(path: &[&str]) -> String {
 }
 
 fn ns_canonical_href(k1: &TypedProgram, ns_id: NamespaceId) -> String {
-    let mut names: Vec<&str> = Vec::new();
-    let mut current = ns_id;
-    while let Some(parent) = k1.namespaces.get(current).parent_id {
-        names.push(k1.ident_str(k1.namespaces.get(current).name));
-        current = parent;
-    }
-    names.reverse();
-    ns_href(&names)
+    let mut path = String::new();
+    k1.write_scope_path(&mut path, k1.namespaces.get_scope(ns_id), "/", true);
+    if path.is_empty() { "/ns".to_string() } else { format!("/ns/{path}") }
 }
 
 pub fn render_page(k1: &TypedProgram, path: &[&str]) -> Option<Markup> {
@@ -150,45 +145,29 @@ fn render_ns_main(k1: &TypedProgram, tree: &NsTree, ns_id: NamespaceId, path: &[
     let scope_id = ns.scope_id;
 
     let mut functions: Vec<(StringId, FunctionId)> = Vec::new();
-    for (name, function_id, prov) in k1.scopes.iter_scope_functions(scope_id) {
-        if prov.is_exposed() {
-            functions.push((name, function_id));
+    let mut types: Vec<(StringId, TypeId)> = Vec::new();
+    let mut abilities: Vec<(StringId, AbilityId)> = Vec::new();
+    let mut globals: Vec<(StringId, VariableId)> = Vec::new();
+    let mut used_namespaces: Vec<(StringId, NamespaceId)> = Vec::new();
+    for (name, member, prov) in k1.scopes.iter_scope_members(scope_id) {
+        if !prov.is_exposed() {
+            continue;
+        }
+        match member {
+            ScopeMember::Function(function_id) => functions.push((name, function_id)),
+            ScopeMember::Type(type_id) => types.push((name, type_id)),
+            ScopeMember::Ability(ability_id) => abilities.push((name, ability_id)),
+            ScopeMember::Variable(VariableInScope::Defined(vid)) => globals.push((name, vid)),
+            ScopeMember::Namespace(used_ns_id) if prov == Provenance::UseExposed => {
+                used_namespaces.push((name, used_ns_id))
+            }
+            ScopeMember::Variable(VariableInScope::Masked) | ScopeMember::Namespace(_) => {}
         }
     }
     functions.sort_by(|a, b| k1.ident_str(a.0).cmp(k1.ident_str(b.0)));
-
-    let mut types: Vec<(StringId, TypeId)> = Vec::new();
-    for (name, type_id, prov) in k1.scopes.iter_scope_types(scope_id) {
-        if prov.is_exposed() {
-            types.push((name, type_id));
-        }
-    }
     types.sort_by(|a, b| k1.ident_str(a.0).cmp(k1.ident_str(b.0)));
-
-    let mut abilities: Vec<(StringId, AbilityId)> = Vec::new();
-    for (name, ability_id, prov) in k1.scopes.iter_scope_abilities(scope_id) {
-        if prov.is_exposed() {
-            abilities.push((name, ability_id));
-        }
-    }
     abilities.sort_by(|a, b| k1.ident_str(a.0).cmp(k1.ident_str(b.0)));
-
-    let mut globals: Vec<(StringId, VariableId)> = Vec::new();
-    for (name, vis, prov) in k1.scopes.iter_scope_variables(scope_id) {
-        if let Some(vid) = vis.variable_id()
-            && prov.is_exposed()
-        {
-            globals.push((name, vid));
-        }
-    }
     globals.sort_by(|a, b| k1.ident_str(a.0).cmp(k1.ident_str(b.0)));
-
-    let mut used_namespaces: Vec<(StringId, NamespaceId)> = Vec::new();
-    for (name, used_ns_id, prov) in k1.scopes.iter_scope_namespaces(scope_id) {
-        if prov == Provenance::UseExposed {
-            used_namespaces.push((name, used_ns_id));
-        }
-    }
     used_namespaces.sort_by(|a, b| k1.ident_str(a.0).cmp(k1.ident_str(b.0)));
 
     let child_namespaces = tree.children.get(&ns_id);

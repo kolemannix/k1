@@ -248,9 +248,10 @@ impl TypedProgram {
                 Ok(())
             }
             Type::Enum(se) => {
+                let partial = if se.partial { ", partial" } else { "" };
                 if mode == TypeDisplayMode::Structural {
                     // Member values are abi: they cross the boundary
-                    write!(w, "enum({}) ", se.int_type)?;
+                    write!(w, "enum({}{partial}) ", se.int_type)?;
                     for (idx, member) in self.mem.getn(se.member_values).iter().enumerate() {
                         if idx > 0 {
                             w.write_str(", ")?;
@@ -265,7 +266,7 @@ impl TypedProgram {
                     }
                     if mode == TypeDisplayMode::Expand {
                         w.write_str("(")?;
-                        write!(w, "enum {}", se.int_type)?;
+                        write!(w, "enum {}{partial}", se.int_type)?;
                         w.write_str(")")?;
                     }
                 } else {

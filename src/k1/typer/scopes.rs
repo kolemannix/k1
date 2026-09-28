@@ -1301,100 +1301,85 @@ impl Scopes {
         }
     }
 
+    pub fn iter_scope_members(
+        &self,
+        scope_id: ScopeId,
+    ) -> impl Iterator<Item = (StringId, ScopeMember, Provenance)> + '_ {
+        let scope = self.get_scope(scope_id);
+        let map = scope.ns_map.map(|m| {
+            self.ns_maps.get(m).iter().flat_map(|(name, e)| {
+                let ty = match e.ty {
+                    NsEntryTypeValue::Defined(t, p) => Some((ScopeMember::Type(t), p)),
+                    NsEntryTypeValue::None | NsEntryTypeValue::Pending(_) => None,
+                };
+                let ability = match e.ability {
+                    NsEntryAbilityVAlue::Defined(a, p) => Some((ScopeMember::Ability(a), p)),
+                    NsEntryAbilityVAlue::None | NsEntryAbilityVAlue::Pending(_) => None,
+                };
+                let global = match e.global {
+                    NsEntryGlobalValue::Bound(v, p) => Some((ScopeMember::Variable(v), p)),
+                    NsEntryGlobalValue::None | NsEntryGlobalValue::Pending(_) => None,
+                };
+                let function = e.function.map(|(f, p)| (ScopeMember::Function(f), p));
+                let namespace = e.namespace.map(|(ns, p)| (ScopeMember::Namespace(ns), p));
+                [global, function, ty, namespace, ability]
+                    .into_iter()
+                    .flatten()
+                    .map(move |(member, p)| (*name, member, p))
+            })
+        });
+        let list = self.scope_entries(scope.entries).filter_map(|e| {
+            let member = match e.payload {
+                EntryPayload::Variable(v) => ScopeMember::Variable(v),
+                EntryPayload::Function(f) => ScopeMember::Function(f),
+                EntryPayload::Type(t) => ScopeMember::Type(t),
+                EntryPayload::Namespace(ns) => ScopeMember::Namespace(ns),
+                EntryPayload::Ability(a) => ScopeMember::Ability(a),
+                _ => return None,
+            };
+            Some((StringId::from_u32(e.key).unwrap(), member, e.provenance))
+        });
+        map.into_iter().flatten().chain(list)
+    }
+
     pub fn iter_scope_variables(
         &self,
         scope_id: ScopeId,
     ) -> impl Iterator<Item = (StringId, VariableInScope, Provenance)> + '_ {
-        let scope = self.get_scope(scope_id);
-        let map = scope.ns_map.map(|m| {
-            self.ns_maps.get(m).iter().filter_map(|(name, e)| match e.global {
-                NsEntryGlobalValue::Bound(vis, p) => Some((*name, vis, p)),
-                NsEntryGlobalValue::None | NsEntryGlobalValue::Pending(_) => None,
-            })
-        });
-        let list = self.scope_entries(scope.entries).filter_map(|e| match e.payload {
-            EntryPayload::Variable(vis) => {
-                Some((StringId::from_u32(e.key).unwrap(), vis, e.provenance))
-            }
+        self.iter_scope_members(scope_id).filter_map(|(name, member, p)| match member {
+            ScopeMember::Variable(v) => Some((name, v, p)),
             _ => None,
-        });
-        map.into_iter().flatten().chain(list)
+        })
     }
 
     pub fn iter_scope_functions(
         &self,
         scope_id: ScopeId,
     ) -> impl Iterator<Item = (StringId, FunctionId, Provenance)> + '_ {
-        let scope = self.get_scope(scope_id);
-        let map = scope.ns_map.map(|m| {
-            self.ns_maps
-                .get(m)
-                .iter()
-                .filter_map(|(name, e)| e.function.map(|(f, p)| (*name, f, p)))
-        });
-        let list = self.scope_entries(scope.entries).filter_map(|e| match e.payload {
-            EntryPayload::Function(f) => {
-                Some((StringId::from_u32(e.key).unwrap(), f, e.provenance))
-            }
+        self.iter_scope_members(scope_id).filter_map(|(name, member, p)| match member {
+            ScopeMember::Function(f) => Some((name, f, p)),
             _ => None,
-        });
-        map.into_iter().flatten().chain(list)
+        })
     }
 
     pub fn iter_scope_types(
         &self,
         scope_id: ScopeId,
     ) -> impl Iterator<Item = (StringId, TypeId, Provenance)> + '_ {
-        let scope = self.get_scope(scope_id);
-        let map = scope.ns_map.map(|m| {
-            self.ns_maps.get(m).iter().filter_map(|(name, e)| match e.ty {
-                NsEntryTypeValue::Defined(t, p) => Some((*name, t, p)),
-                NsEntryTypeValue::None | NsEntryTypeValue::Pending(_) => None,
-            })
-        });
-        let list = self.scope_entries(scope.entries).filter_map(|e| match e.payload {
-            EntryPayload::Type(t) => Some((StringId::from_u32(e.key).unwrap(), t, e.provenance)),
+        self.iter_scope_members(scope_id).filter_map(|(name, member, p)| match member {
+            ScopeMember::Type(t) => Some((name, t, p)),
             _ => None,
-        });
-        map.into_iter().flatten().chain(list)
+        })
     }
 
     pub fn iter_scope_namespaces(
         &self,
         scope_id: ScopeId,
     ) -> impl Iterator<Item = (StringId, NamespaceId, Provenance)> + '_ {
-        let scope = self.get_scope(scope_id);
-        let map = scope.ns_map.map(|m| {
-            self.ns_maps
-                .get(m)
-                .iter()
-                .filter_map(|(name, e)| e.namespace.map(|(ns, p)| (*name, ns, p)))
-        });
-        let list = self.scope_entries(scope.entries).filter_map(|e| match e.payload {
-            EntryPayload::Namespace(ns) => {
-                Some((StringId::from_u32(e.key).unwrap(), ns, e.provenance))
-            }
+        self.iter_scope_members(scope_id).filter_map(|(name, member, p)| match member {
+            ScopeMember::Namespace(ns) => Some((name, ns, p)),
             _ => None,
-        });
-        map.into_iter().flatten().chain(list)
-    }
-
-    pub fn iter_scope_abilities(
-        &self,
-        scope_id: ScopeId,
-    ) -> impl Iterator<Item = (StringId, AbilityId, Provenance)> + '_ {
-        let scope = self.get_scope(scope_id);
-        let map = scope.ns_map.map(|m| {
-            self.ns_maps.get(m).iter().filter_map(|(name, e)| match e.ability {
-                NsEntryAbilityVAlue::Defined(a, p) => Some((*name, a, p)),
-                NsEntryAbilityVAlue::None | NsEntryAbilityVAlue::Pending(_) => None,
-            })
-        });
-        let list = self.scope_entries(scope.entries).filter_map(|e| match e.payload {
-            EntryPayload::Ability(a) => Some((StringId::from_u32(e.key).unwrap(), a, e.provenance)),
-            _ => None,
-        });
-        map.into_iter().flatten().chain(list)
+        })
     }
 
     pub fn scope_has_ancestor(&self, scope_id: ScopeId, ancestor: ScopeId) -> bool {
@@ -1732,6 +1717,15 @@ impl UseableSymbolId {
             _ => None,
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ScopeMember {
+    Variable(VariableInScope),
+    Function(FunctionId),
+    Type(TypeId),
+    Namespace(NamespaceId),
+    Ability(AbilityId),
 }
 
 #[derive(Debug, Clone, Copy)]

@@ -38,7 +38,7 @@ fn(extern("llhttp__internal_execute")) _internal_execute(
   p: *u8,
   endp: *u8,
 ): i32
-type errno = either(u32) {
+type errno = either(u32, partial) {
   HPE_OK = 0,
   HPE_INTERNAL = 1,
   HPE_STRICT = 2,
@@ -78,7 +78,7 @@ type errno = either(u32) {
   HPE_CB_PROTOCOL_COMPLETE = 38,
 }
 #static assert-layout[errno](4, 4, [])
-type flags = either(u32) {
+type flags = either(u32, partial) {
   F_CONNECTION_KEEP_ALIVE = 1,
   F_CONNECTION_CLOSE = 2,
   F_CONNECTION_UPGRADE = 4,
@@ -90,7 +90,7 @@ type flags = either(u32) {
   F_TRANSFER_ENCODING = 512,
 }
 #static assert-layout[flags](4, 4, [])
-type lenient_flags = either(u32) {
+type lenient_flags = either(u32, partial) {
   LENIENT_HEADERS = 1,
   LENIENT_CHUNKED_LENGTH = 2,
   LENIENT_KEEP_ALIVE = 4,
@@ -104,19 +104,19 @@ type lenient_flags = either(u32) {
   LENIENT_HEADER_VALUE_RELAXED = 1024,
 }
 #static assert-layout[lenient_flags](4, 4, [])
-type type = either(u32) {
+type type = either(u32, partial) {
   BOTH = 0,
   REQUEST = 1,
   RESPONSE = 2,
 }
 #static assert-layout[type](4, 4, [])
-type finish = either(u32) {
+type finish = either(u32, partial) {
   FINISH_SAFE = 0,
   FINISH_SAFE_WITH_CB = 1,
   FINISH_UNSAFE = 2,
 }
 #static assert-layout[finish](4, 4, [])
-type method = either(u32) {
+type method = either(u32, partial) {
   DELETE = 0,
   GET = 1,
   HEAD = 2,
@@ -166,7 +166,7 @@ type method = either(u32) {
   QUERY = 46,
 }
 #static assert-layout[method](4, 4, [])
-type status = either(u32) {
+type status = either(u32, partial) {
   STATUS_CONTINUE = 100,
   STATUS_SWITCHING_PROTOCOLS = 101,
   STATUS_PROCESSING = 102,

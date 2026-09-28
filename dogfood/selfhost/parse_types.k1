@@ -560,8 +560,13 @@ ns for parser {
 
   fn expect-sum-type-expression(self: *parser): result[ast/sum-type, perror] {
     let keyword = self.expect-ident-chars("either").try
+    let partial = false
     let tag-type: ?ast/type-expr-id = if self.maybe-consume-no-ws(:open-paren) is :some _ {
       let t = self.expect-type-expression().try
+      if self.maybe-consume(:comma) is :some _ {
+        let _ = self.expect-ident-chars("partial").try
+        partial = true
+      }
       let _ = self.expect-kind(:close-paren).try
       :some(t)
     } else :none
@@ -569,7 +574,7 @@ ns for parser {
     let variants = list/empty[ast/sum-variant]()
     self.eat-delimited("either members", variants.&, :comma, :close-brace, fn(p: *parser) p.expect-sum-variant()).try
     let span = self.extend-tok-to-here(keyword.tok)
-    :ok(.{ variants, tag-type, span })
+    :ok(.{ variants, tag-type, partial, span })
   }
 
   fn expect-sum-variant(self: *parser): result[ast/sum-variant, perror] {

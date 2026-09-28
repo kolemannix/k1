@@ -409,12 +409,37 @@ assert-equals(color:green.value, 1)
 assert-equals(c.enum-value(), 0)
 ```
 
+The `enum` ability (in the core prelude) also constructs from the scalar,
+resolving the impl from the expected type, including through `.!`:
+`enum-from-value` checks membership, and `enum-from-value-unchecked`
+reinterprets (an undeclared value is UB unless the enum is `partial`):
+
+```rust
+let c: ?color = enum/enum-from-value(2)
+let d: color = enum/enum-from-value(1).!
+let e: color = enum/enum-from-value-unchecked(1)
+```
+
 Enum tags may be explicit:
 
 ```rust
 type status = either { ok = 10, missing = 20 }
 assert-equals(status:missing.value, 20)
 ```
+
+An enum or sum holding a value outside its declared tags is undefined
+behavior, zeroed memory included. C enums are open, so interop enums are
+`partial` (k1bindgen emits it for every C enum): a match needs a `_` arm,
+`*u32` to `*event-kind` is a total `.as` view, and `enum-name`/print render
+an undeclared value as `event-kind(8192)`. Only payload-less eithers can be
+partial, and the tag type is required.
+
+```rust
+type event-kind = either(u32, partial) { quit = 256, key-down = 768 }
+if k is { :quit -> 1, :key-down -> 2, _ -> 3 }
+```
+
+See `test_src/suite1/enum_partial.k1`.
 
 Payload-carrying sums expose their active tag through `.tag`, and generated
 variant helpers such as `.as-ok()` return an optional payload:
