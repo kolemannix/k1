@@ -387,6 +387,21 @@ fn namespaced_val() -> ParseResult<()> {
 }
 
 #[test]
+fn namespaced_val_divided() -> ParseResult<()> {
+    let input = "foo/bar / baz/qux";
+    let (ast, result) = test_single_expr(input)?;
+    let ParsedExpr::BinaryOp(op) = result else { panic!("not binop") };
+    assert_eq!(op.op_kind, BinaryOpKind::Divide);
+    let ParsedExpr::Variable(lhs) = ast.exprs.get(op.lhs) else { panic!("lhs not variable") };
+    assert_eq!(ast.idents.get_string(ast.mem.get_nth(lhs.name.path(&ast.mem), 0).name), "foo");
+    assert_eq!(lhs.name.name, ast.idents.intern("bar"));
+    let ParsedExpr::Variable(rhs) = ast.exprs.get(op.rhs) else { panic!("rhs not variable") };
+    assert_eq!(ast.idents.get_string(ast.mem.get_nth(rhs.name.path(&ast.mem), 0).name), "baz");
+    assert_eq!(rhs.name.name, ast.idents.intern("qux"));
+    Ok(())
+}
+
+#[test]
 fn type_hint() -> ParseResult<()> {
     let input = "None: ?u64";
     let (ast, expr, _expr_id) = test_single_expr_with_id(input)?;
@@ -630,6 +645,7 @@ fn long_token_materializes_to_a_span() {
     let file_id = ast.sources.add_file(source);
     let mut lexed = lex(&content, Lexed::default());
     assert_eq!(lexed.long_tokens.len(), 1);
+    assert_eq!(lexed.get_token_start_len(lexed.tokens[3]), (8, 70_002));
     ast.materialize_lexed_file(file_id, &mut lexed).unwrap();
     let string_token = lexed.tokens[3];
     assert_eq!(string_token.kind, TokenKind::StringDoneDq);

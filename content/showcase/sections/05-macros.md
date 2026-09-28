@@ -1,15 +1,15 @@
 # Macros and metaprogramming
 
-A K1 `macro` is a compile-time function. A parameter of type `code` receives
-the caller's argument unevaluated: the source text plus the span it came
-from. Parameters of any other type (`n: int`, `table: span[transition]`) are
-evaluated at compile time into ordinary values. The macro returns `code`, and the
-compiler compiles that in place of the call. Macro bodies run in the same
-bytecode VM as `#static`, in the same language as the rest of the program:
-lists, string builders, pattern matching, and reflection are all available to
-the emitter.
+A `macro` is a compile-time function. A `code` parameter gets the caller's
+argument unevaluated: its source text and the span it came from. Any other
+parameter is evaluated at compile time into an ordinary value. The macro
+returns `code`, which is compiled in place of the call. Macro bodies run in
+the same VM as `#static`, in plain K1: lists, string builders, pattern
+matching and reflection all work.
 
 ## Arguments are code, parameters can be values
+
+The argument is spliced, not evaluated:
 
 ```k1
 let(mutable) calls: int = 0
@@ -22,7 +22,20 @@ fn next(): int {
 macro twice(e: code) {
   "$e + $e"
 }
+```
 
+```k1
+  let x = twice(next())
+  println("twice(next()) = $x after $calls calls")
+```
+
+```text
+twice(next()) = 3 after 2 calls
+```
+
+`n` is a compile-time `int`, `body` is code:
+
+```k1
 macro repeat(n: int, body: code) {
   let cb = code-builder/new()
   for 0.until(n) {
@@ -30,11 +43,35 @@ macro repeat(n: int, body: code) {
   }
   cb.build()
 }
+```
 
+```k1
+  repeat(3, println("hello"))
+```
+
+```text
+hello
+hello
+hello
+```
+
+Return empty code and the argument is never compiled, `crash` included:
+
+```k1
 macro debug(e: code) {
   #if false "println($e)" else ""
 }
+```
 
+```k1
+  debug(crash("never compiled"))
+```
+
+Macros can be generic. `core/meta/baked-variable` turns any compile-time value
+into an expression that rebuilds it, so this is a fully unrolled loop with
+`it` as a real local:
+
+```k1
 macro static-for[t](items: span[t], body: code) {
   let cb = code-builder/new()
   for items {
@@ -43,57 +80,242 @@ macro static-for[t](items: span[t], body: code) {
   }
   cb.build()
 }
+```
 
-fn main(): i32 {
-  let x = twice(next())
-  println("twice(next()) = $x after $calls calls")
-
-  repeat(3, println("hello"))
-
-  debug(crash("never compiled"))
-
+```k1
   static-for[int]([1, 2, 3], println("unrolled $it"))
+```
 
+```text
+unrolled 1
+unrolled 2
+unrolled 3
+```
+
+`\expr` quotes into a `code` value: a chunk of text plus its source span.
+
+```k1
   let c = \next() * 2
   println("chunk: `${c.chunks.[0].text}` sourced=${c.chunks.[0].source != 0}")
+```
+
+```text
+chunk: `next() * 2` sourced=true
+```
+
+A string literal in `code` position gets its own span, and a `$c` hole keeps
+`c`'s chunks as they are:
+
+```k1
   let wrapped: code = "let y = $c"
   println("${wrapped.text()} in ${wrapped.chunks.len()} chunks")
-  0
+```
+
+```text
+let y = next() * 2 in 2 chunks
+```
+
+Only `.text()` flattens chunks into a string, so spans survive every step
+until the compiler consumes the result.
+
+## Token macros: typechecked embedded HTML+k1 templating
+
+`code` arguments must parse as K1. `\{ ... }` only has to lex: a
+`span[code-token]` parameter gets the balanced group as tokens, each with its
+own span. `std/html` is a template language built on that, in a few hundred
+lines of K1:
+
+```k1
+fn todo-item(out: *string-builder, t: todo) {
+  html/write(out, \{
+    <li class={if t.done "done" else "open"} data-on:click="@post('/toggle')">
+      {t.title} #if t.done { <small>"(done)"</small> }
+    </li>
+  })
+}
+```
+
+Tags and text fold into constant writes at compile time. Holes like
+`{t.title}` are spliced back as `code`, typechecked in place, and HTML-escaped
+as they're written. `#for`, `#if` and `#{ ... }` drop into K1, so a component
+is just a function writing into the same builder:
+
+```k1
+fn page(user: string, todos: span[todo]): string {
+  html/render(\{
+    <main id="todos">
+      <h1>Hello, {user}! {todos.len()} things to do</h1>
+      <ul>
+        #for t in todos { #{ todo-item(html-sb.&, t) } }
+      </ul>
+    </main>
+  })
+}
+```
+
+```k1
+  let todos: span[todo] = [
+    .{ title = "Write a <macro>", done = true },
+    .{ title = "Watch TV & relax", done = false },
+  ]
+  let got = page("Ko", todos)
+  println(got)
+```
+
+```text
+<main id="todos"><h1>Hello, Ko! 2 things to do</h1><ul><li class="done" data-on:click="@post(&#39;/toggle&#39;)">Write a &lt;macro&gt; <small>(done)</small></li><li class="open" data-on:click="@post(&#39;/toggle&#39;)">Watch TV &amp; relax</li></ul></main>
+```
+
+The macro checks structure as it expands:
+
+```k1
+fn card(title: string): string {
+  html/render(\{
+    <section>
+      <h2>{title}</h2>
+      <p>Cards close their tags.</div>
+    </section>
+  })
 }
 ```
 
 ```text
-twice(next()) = 3 after 2 calls
-hello
-hello
-hello
-unrolled 1
-unrolled 2
-unrolled 3
-chunk: `next() * 2` sourced=true
-let y = next() * 2 in 2 chunks
+┌────────────────────────────────────────╴
+/Users/knix/dev/k1/content/showcase/examples/macro_html_wrong.k1:7:34: error
+├─────
+│     html/render(\{
+│       <section>
+│         <h2>{title}</h2>
+│ ->      <p>Cards close their tags.</div>
+│                                     ^^^
+│       </section>
+│     })
+├─────
+│  </div> does not close <p>
 ```
 
-`twice(next())` expands to `next() + next()`: the argument is spliced twice,
-so it runs twice, and the result is `1 + 2`. `repeat` mixes both parameter
-kinds: `n` is a compile-time `int`, `body` is code, and `cb.line` appends it
-three times. `debug` returns the empty string under `#if false`, so its
-argument is never compiled, `crash` included. `static-for` is a generic macro:
-for every element of a compile-time span it bakes the value into a `let it`
-(`core/meta/baked-variable` serializes any compile-time value into an
-expression that rebuilds it) and splices the body after it, so the loop is
-fully unrolled with `it` bound as a real local.
+That's one line in the emitter,
+`close-name.fail("</${close-name.text}> does not close <$name>")`: `fail` on a
+token reports at that token, in your file. `httpapp` renders its home page
+this way.
 
-The last lines show `code` itself. `\expr` quotes a statement into a `code`
-value: one chunk holding the text and its source span. A string literal whose
-expected type is `code` elaborates into chunks too: the literal part gets its
-own span, and the `$c` hole appends `c`'s chunks unchanged. `.text()` flattens
-the chunks into a string; nothing else ever does, so spans survive every
-composition step until the compiler consumes the result.
+## Typed HTTP routing
+
+The biggest macro in the repo is `http/pre/routing/define`. `httpapp`
+declares its routes once, as data:
+
+```k1 path=dogfood/httpapp/app.k1
+$http/pre/routing/define(route, {
+  use http/pre/routing/get
+  use http/pre/routing/post
+  use http/pre/routing/delete
+  use http/pre/routing/seg
+  let game: span[seg] = [:text "game", :u64 "id"]
+
+  [
+    get(   "home",                    []),
+    get(   "events",                  [:text "events"]),
+    get(   "counter",                 [:text "counter", :text "events"]),
+    get(   "big-file",                [:text "static", :text "big-file.json"]),
+    get(   "starry",                  [:text "app", :text "starry-night"]),
+    get(   "game-events", game.concat([:text "events"])),
+    post(  "game-poke",   game.concat([:text "poke"])),
+    delete("delete-game", game),
+  ]
+})
+```
+
+Out come:
+
+- `type route`, one variant per row, with a payload for captures
+  (`game-events({ id: u64 })`)
+- `route/parse(header)`: an allocation-free trie matcher that percent-decodes,
+  answers `HEAD` for `GET` routes, parses captures through `from-string`, and
+  returns `:bad-method` with the allowed list or `:not-found`
+- `route/url` and `route/url-string`, back to a percent-encoded URL
+
+The top of the emitter:
+
+```k1 path=modules/http/routing.k1
+fn define-impl(base: string, entries: span[entry]): code {
+  check-ident(base, "route type name")
+  if entries.len() == 0 crash("routing: no routes given")
+  validate(entries)
+
+  let cb-storage = code-builder/new()
+  let cb = cb-storage.&
+
+  let variants = list/empty[string]()
+  for en in entries {
+    let caps = params(en)
+    if caps.len() == 0 {
+      variants.push(en.name)
+    } else {
+      let fields = list/empty[string]()
+      for c in caps { fields.push("${c.name}: ${c.ty}") }
+      variants.push("${en.name}({ ${string/join(fields, ", ")} })")
+    }
+  }
+  cb.line("type $base = either { ${string/join(variants, ", ")} }")
+
+  cb.block("ns for $base", fn[cb, base, entries]. {
+    emit-parse-fn(cb, base, entries)
+    emit-url-fn(cb, base, entries)
+    emit-url-string-fn(cb, base)
+  })
+
+  cb.build()
+}
+```
+
+`validate` rejects bad identifiers, routes deeper than sixteen segments, a
+misplaced `rest`, double bindings, duplicate names, and same-shape collisions.
+The trie emitter also catches one a hand-written matcher gets wrong silently:
+literal edges win, so a capture route has to stay reachable under every
+literal that shares its prefix.
+
+```k1 path=modules/http/routing.k1
+  for t in lit-texts {
+    for ci in caps {
+      let cshape = shape-suffix(entries.[ci], d + 1)
+      let covered = false
+      for gi in group {
+        let en = entries.[gi]
+        if en.path.len() > d and en.path.[d] is :text lt and lt == t {
+          if shape-suffix(en, d + 1) == cshape { covered = true }
+        }
+      }
+      if not covered {
+        crash("routing: route `${render-pattern(entries.[ci].path)}` is unreachable for URLs whose segment $d is `$t`: add the same route shape under `$t`, or remove the overlap")
+      }
+    }
+  }
+```
+
+And the whole table is round-trip tested in a `#static` block, every compile:
+
+```k1 path=dogfood/httpapp/app.k1
+  assert(route/url-string(:home) == "/")
+  assert(route/url-string(:game-poke .{ id = 42 }) == "/game/42/poke")
+  assert(route/url-string(:big-file) == "/static/big-file.json")
+
+  assert(th(:GET, "/") is :ok :home)
+  assert(th(:GET, "/events") is :ok :events)
+  assert(th(:HEAD, "/events") is :ok :events)
+  assert(th(:GET, "/events?foo=1") is :ok :events)
+  assert(th(:GET, "/%65vents") is :ok :events)
+  assert(th(:POST, "/game/42/poke") is :ok :game-poke p and p.id == 42)
+  assert(th(:POST, "/game/42/poke/") is :ok :game-poke _)
+  assert(th(:GET, "/game/42/poke") is :err :bad-method _)
+  assert(th(:POST, "/game/abc/poke") is :err :bad-param b and b.got == "abc")
+  assert(th(:POST, "/game/18446744073709551617/poke") is :err :bad-param _)
+  assert(th(:GET, "/game/42/zzz") is :err :not-found)
+  assert(th(:GET, "/nope") is :err :not-found)
+  assert(th(:GET, "/game/%zz/poke") is :err :bad-encoding _)
+  assert(th(:OPTIONS, "*") is :err :not-found)
+```
 
 ## Errors point at your source, not the expansion
-
-`swap` takes two places and emits a three-statement block around them:
 
 ```k1
 macro swap(a: code, b: code) {
@@ -103,8 +325,9 @@ macro swap(a: code, b: code) {
   $b = tmp
   `
 }
+```
 
-fn main(): i32 {
+```k1
   let xs: list[int] = [1, 2, 3]
   swap(xs.[0], xs.[2])
   println("${xs.[0]} ${xs.[1]} ${xs.[2]}")
@@ -113,8 +336,6 @@ fn main(): i32 {
   let hi = 20
   swap(lo, hi)
   println("lo=$lo hi=$hi")
-  0
-}
 ```
 
 ```text
@@ -122,7 +343,7 @@ fn main(): i32 {
 lo=20 hi=10
 ```
 
-Now call it with an `int` and a `string`:
+Now swap an `int` and a `string`:
 
 ```k1
 fn main(): i32 {
@@ -160,28 +381,18 @@ fn main(): i32 {
 ├─────
 │  Invalid type for assignment: Expected string but got i64
 └────────────────────────────────────────╴
-Module macro_provenance_wrong failed typechecking with 2 errors
+Module macro_provenance_wrong failed compiling with 2 errors
 ```
 
-The expansion contains two bad assignments, and each error box carets the
-text that actually caused it. `count = label` fails on `label`, which the
-caller wrote, so the caret sits on the caller's line. `label = tmp` fails on
-`tmp`, which the macro author wrote, so that caret sits inside the macro body.
-No generated file appears anywhere. This is the difference between `code` and
-a string: every chunk remembers where it came from, and the compiler maps
-byte offsets in the expansion back through those chunks. A Rust proc macro
-keeps the spans of tokens it passes through, but tokens it creates get
-`Span::call_site()`, the whole invocation, unless the author threads spans
-through `quote_spanned!` by hand. Here both halves come for free: a string
-literal in `code` position carries its own span, and a `\` quote carries the
-argument's.
+Each caret lands on whoever wrote the bad text: `label` is yours, `tmp` is the
+macro's. No generated file anywhere. Every chunk of `code` remembers where it
+came from.
 
-## A definition-level megaprogram: a state machine from a table
+## A state machine from a table
 
-Definition-level macros are invoked with the `$` sentinel and their output is
-compiled as declarations. This one takes a transition table and emits two
-enums, a `step` method with a full match, and a `#static` block that checks
-the generated code against the table at compile time:
+Definition-level macros are invoked with `$` and emit declarations. This one
+turns a transition table into two enums, a `step` method, and a `#static`
+test of the generated code:
 
 ```k1
 $pre/fsm/define(door, {
@@ -193,7 +404,9 @@ $pre/fsm/define(door, {
     on("locked", "unlock", "closed"),
   ]
 })
+```
 
+```k1
 fn main(): i32 {
   let s: door/state = :closed
   let script: span[door/event] = [:lock, :open, :unlock, :open, :close]
@@ -218,11 +431,8 @@ closed --open--> opened
 opened --close--> closed
 ```
 
-The table argument is annotated `span[transition]`, so the block is evaluated
-at compile time as a normal expression: it opens a `use`, calls a helper, and
-yields a list. The emitter lives in the module's `pre` namespace, which is
-compiled before the rest of the module so that definition-level macros can
-run early:
+The table is a `span[transition]`, so that block is just evaluated at compile
+time. The emitter lives in `pre`, which compiles before the rest of the module:
 
 ```k1
 ns pre { ns fsm {
@@ -230,18 +440,11 @@ ns pre { ns fsm {
 type transition = { from: string, event: string, to: string }
 
 fn on(from: string, event: string, to: string): transition { .{ from, event, to } }
+```
 
-fn names(table: span[transition]): { states: list[string], events: list[string] } {
-  let states = list/empty[string]()
-  let events = list/empty[string]()
-  for tr in table {
-    if not states.contains(tr.from) { states.push(tr.from) }
-    if not states.contains(tr.to) { states.push(tr.to) }
-    if not events.contains(tr.event) { events.push(tr.event) }
-  }
-  .{ states, events }
-}
+`names` collects the states and events, then:
 
+```k1
 fn define-impl(name: string, table: span[transition]): code {
   if table.is-empty() crash("fsm `$name`: no transitions")
   let n = names(table)
@@ -277,17 +480,9 @@ fn define-impl(name: string, table: span[transition]): code {
 macro define(name: code, table: span[transition]) {
   define-impl(name.text(), table)
 }
-
-}}
 ```
 
-`code-builder` handles the shape of the output: `block` writes a header, a
-brace, an indented body, and the closing brace; `line` indents and appends a
-`code` value, so the template literals at each call site keep their spans.
-Nested blocks capture the builder reference at each level. The generated text
-(obtained by printing `define-impl(...).text()` inside a `#static` block; the
-`#debug` marker on a macro definition dumps the macro's own IR rather than its
-expansion) is exactly what a person would have written:
+It expands to exactly what you'd write by hand:
 
 ```text
 ns door {
@@ -313,9 +508,7 @@ ns door {
 }
 ```
 
-The emitted `#static` block runs the generated `step` in the compile-time VM
-on every row of the table, so a bug in the emitter fails the build rather than
-a test. Validation runs in the emitter as well. Drop the `unlock` row so that
+An emitter bug fails the build, not a test. Drop the `unlock` row and
 `locked` becomes a dead end:
 
 ```k1
@@ -343,37 +536,29 @@ $pre/fsm/define(door, {
 ├─────
 │  fsm `door`: state `locked` has no outgoing transition
 bc Execution Trace
-[00] core/crash builtin.k1:1083
-[01] macro_state_machine_wrong/pre/fsm/define-impl macro_state_machine_wrong.k1:37
-[02] macro_state_machine_wrong/pre/fsm/define macro_state_machine_wrong.k1:64
+[00] core/platform/process/exit platform.k1:201
+[01] core/sys/exit builtin.k1:964
+[02] core/crash builtin.k1:1171
+[03] macro_state_machine_wrong/pre/fsm/define-impl macro_state_machine_wrong.k1:37
+[04] macro_state_machine_wrong/pre/fsm/define macro_state_machine_wrong.k1:64
 
 └────────────────────────────────────────╴
-Module macro_state_machine_wrong failed namespace declaration with 1 errors
+Module macro_state_machine_wrong failed compiling with 1 errors
 ```
-
-The error is reported at the emitter's `crash` call, with the VM's stack from
-there back to the macro, and the build stops. Compare the alternatives: Zig's `comptime` can synthesize the two
-enums with `@Type` but cannot emit declarations, so no generated `step`, no
-namespace, and no compile-time test from the table; C++ templates and
-`constexpr` cannot either, and P2996 reflection adds `define_aggregate` for
-data members, not functions; a Rust proc macro can do all of it, but lives in
-a separate crate, receives a `TokenStream` it has to parse itself, and cannot
-call the program it is generating for. Here the emitter is forty lines in the
-same file, its input is a typed value, and its output is checked by running
-it.
 
 ## Library megaprograms: bitfields and struct-of-arrays
 
-`std/bitfield` is the same technique packaged as a library. One `$` line
-produces a newtype over `u16`, a mask constant per field, typed getters and
-setters, and a `print` impl:
+`std/bitfield` is the same trick as a library. One `$` line gives you a `u16`
+newtype, a mask per field, typed getters and setters, and `print`:
 
 ```k1
 use std/bitfield/b1
 use std/bitfield/bn
 
 $std/bitfield/define[u16](ship, [b1(shielded), b1(cloaked), b1(damaged), .{ name = "sector", bits = 5 }, bn("hull", 8)])
+```
 
+```k1
 fn main(): i32 {
   let s = ship/zero.set-shielded(true).set-sector(17).set-hull(200)
   println("bits=${s.bits} $s")
@@ -390,16 +575,22 @@ sector mask=248 hull mask=65280
 shielded=false,cloaked=false,damaged=true,sector=17,hull=0
 ```
 
-The `members` argument is a compile-time `span[{ name: string, bits: size }]`.
-`b1(shielded)` is itself a macro that turns a bare identifier into a record
-literal, and `bn("hull", 8)` is a plain function; both are just expressions
-evaluated to produce the argument. The layout work happens once, in the
-emitter, using `types/id[int-type]` reflection to learn the base width:
+`b1(shielded)` is itself a macro, turning a bare identifier into a record;
+`bn("hull", 8)` is a plain function. Either way the argument is a
+compile-time `span[{ name: string, bits: size }]`:
 
 ```k1 path=modules/std/bitfield.k1
-  // Now let's do a getter and setter for each bitfield. If the width is 1,
-  // we'll use bool since that's what the people likely want. Note that we could configure
-  // any of this behavior because this is just a regular function
+macro define[int-type](type-name: code, members: span[{ name: string, bits: size}]) {
+  code/from-string(define-impl(types/id[int-type](), type-name.text(), members))
+}
+macro b1(name: code) { `.{ name = "$name", bits = 1 }` }
+macro b8(name: code) { `bn("$name", 8)` }
+```
+
+`define-impl` learns the base width from `types/id[int-type]` and writes each
+field's accessors:
+
+```k1 path=modules/std/bitfield.k1
   for members {
     let info = member-info.[it-index]
     let is-bool = it.bits == 1
@@ -436,17 +627,8 @@ emitter, using `types/id[int-type]` reflection to learn the base width:
   }
 ```
 
-```k1 path=modules/std/bitfield.k1
-macro define[int-type](type-name: code, members: span[{ name: string, bits: size}]) {
-  code/from-string(define-impl(types/id[int-type](), type-name.text(), members))
-}
-macro b1(name: code) { `.{ name = "$name", bits = 1 }` }
-macro b8(name: code) { `bn("$name", 8)` }
-```
-
-An excerpt of the expansion for `ship` (printed from a `#static` block by
-calling `define-impl` directly): masks and shifts are already constants, and
-the five-bit `sector` field got the smallest unsigned type that holds it.
+Masks and shifts come out as constants, and the five-bit `sector` gets the
+smallest unsigned type that holds it:
 
 ```text
 type ship = { bits: u16 }
@@ -474,14 +656,15 @@ ns for ship {
   }
 ```
 
-`core/meta/define-soa` is a `#meta` metaprogram rather than a macro: a plain
-function that returns `code`, invoked with `#meta` at definition level. Given
-a struct type it emits a struct-of-arrays container with `empty`, `push`, and
-`row`, using the type's schema to enumerate the fields:
+`core/meta/define-soa` isn't even a macro: it's a plain function returning
+`code`, run with `#meta` at definition level. Hand it a struct type, get a
+struct-of-arrays:
 
 ```k1
 #meta core/meta/define-soa[{ x: f32, y: f32, mass: f32 }]("particles")
+```
 
+```k1
 fn main(): i32 {
   let ps = particles/empty()
   ps.push(.{ x = 1.0, y = 2.0, mass = 0.5 })
@@ -499,10 +682,8 @@ fn main(): i32 {
 row 1 = (3.0, 4.0) mass 1.5; total mass 4.0
 ```
 
-Its expansion shows a detail of emitting types: `type-id.spell()` renders a
-type as a `#type` expression over its id, so the emitted code resolves to the
-exact same type no matter which scope it is compiled in. `f32` comes out as
-`(#type type-id/make(14))`, and the anonymous input struct likewise.
+`type-id.spell()` writes a type as `#type` over its id, so emitted code means
+the same type in any scope:
 
 ```text
 type particles = {
@@ -511,8 +692,8 @@ type particles = {
   ARR_mass: list[(#type type-id/make(14))],
 }
 ns for particles {
-  fn row(self: particles, index: size): (#type type-id/make(6750)) {
-    let(returned) ret: (#type type-id/make(6750)) = .0;
+  fn row(self: particles, index: size): (#type type-id/make(7162)) {
+    let(returned) ret: (#type type-id/make(7162)) = .0;
     ret.x = self.ARR_x.[index];
     ret.y = self.ARR_y.[index];
     ret.mass = self.ARR_mass.[index];
@@ -523,142 +704,18 @@ ns for particles {
     ARR_y = list/empty(),
     ARR_mass = list/empty(),
   } }
-  fn push(self: *particles, value: (#type type-id/make(6750))) {
+  fn push(self: *particles, value: (#type type-id/make(7162))) {
     self.ARR_x.push(value.x);
     self.ARR_y.push(value.y);
     self.ARR_mass.push(value.mass);
-}
-}
-```
-
-## Typed HTTP routing
-
-The largest macro in the repo is `http/pre/routing/define`, used by the
-`httpapp` dogfood program. The application declares its routes once, as data:
-
-```k1 path=dogfood/httpapp/app.k1
-$http/pre/routing/define(route, {
-  use http/pre/routing/get
-  use http/pre/routing/post
-  use http/pre/routing/delete
-  use http/pre/routing/seg
-  let game: span[seg] = [:text "game", :u64 "id"]
-
-  [
-    get(   "home",                    []),
-    get(   "events",                  [:text "events"]),
-    get(   "counter",                 [:text "counter", :text "events"]),
-    get(   "big-file",                [:text "static", :text "big-file.json"]),
-    get(   "starry",                  [:text "app", :text "starry-night"]),
-    get(   "game-events", game.concat([:text "events"])),
-    post(  "game-poke",   game.concat([:text "poke"])),
-    delete("delete-game", game),
-  ]
-})
-```
-
-From that table the macro generates three things. First, `type route`, an
-enum with one variant per row, where rows with captures get a payload struct
-(`game-events({ id: u64 })`). Second, `route/parse(header)`, which returns
-`result[route, routing/route-error]`: it splits the path into up to sixteen
-segment views without allocating, then descends a trie the emitter laid out
-from the table, taking literal edges before capture edges at each depth,
-percent-decoding segments as it goes; at a leaf it checks the method (a `GET`
-route also answers `HEAD` unless the leaf declares its own `HEAD` route),
-parses captures through the `from-string` ability, and otherwise answers
-`:bad-method` with the allowed list, or `:not-found`. Third, `route/url` and `route/url-string`, the reverse mapping
-from a `route` value back to a percent-encoded URL. The enum assembly and the
-top of the emitter:
-
-```k1 path=modules/http/routing.k1
-fn define-impl(base: string, entries: span[entry]): code {
-  check-ident(base, "route type name")
-  if entries.len() == 0 crash("routing: no routes given")
-  validate(entries)
-
-  let cb-storage = code-builder/new()
-  let cb = cb-storage.&
-
-  let variants = list/empty[string]()
-  for en in entries {
-    let caps = params(en)
-    if caps.len() == 0 {
-      variants.push(en.name)
-    } else {
-      let fields = list/empty[string]()
-      for c in caps { fields.push("${c.name}: ${c.ty}") }
-      variants.push("${en.name}({ ${string/join(fields, ", ")} })")
-    }
   }
-  cb.line("type $base = either { ${string/join(variants, ", ")} }")
-
-  cb.block("ns for $base", fn[cb, base, entries]. {
-    emit-parse-fn(cb, base, entries)
-    emit-url-fn(cb, base, entries)
-    emit-url-string-fn(cb, base)
-  })
-
-  cb.build()
 }
-```
-
-`validate` rejects bad identifiers, routes deeper than sixteen segments, a
-`rest` segment that is not last, a parameter bound twice, duplicate names, and
-two routes with the same method and shape. The trie emitter adds a
-reachability check that a hand-written matcher would silently get wrong:
-because literal edges are committed to first, a capture route must remain
-matchable under every literal that shares its prefix:
-
-```k1 path=modules/http/routing.k1
-  // Reachability: taking a literal edge must never lose a URL that the capture
-  // edge could have matched, since the matcher commits to literals first
-  for t in lit-texts {
-    for ci in caps {
-      let cshape = shape-suffix(entries.[ci], d + 1)
-      let covered = false
-      for gi in group {
-        let en = entries.[gi]
-        if en.path.len() > d and en.path.[d] is :text lt and lt == t {
-          if shape-suffix(en, d + 1) == cshape { covered = true }
-        }
-      }
-      if not covered {
-        crash("routing: route `${render-pattern(entries.[ci].path)}` is unreachable for URLs whose segment $d is `$t`: add the same route shape under `$t`, or remove the overlap")
-      }
-    }
-  }
-```
-
-The application then does what the state machine example did: it runs the
-generated parser and URL renderer in a `#static` block, so the route table is
-round-trip tested every time the program compiles:
-
-```k1 path=dogfood/httpapp/app.k1
-  assert(route/url-string(:home) == "/")
-  assert(route/url-string(:game-poke .{ id = 42 }) == "/game/42/poke")
-  assert(route/url-string(:big-file) == "/static/big-file.json")
-
-  assert(th(:GET, "/") is :ok :home)
-  assert(th(:GET, "/events") is :ok :events)
-  assert(th(:HEAD, "/events") is :ok :events)
-  assert(th(:GET, "/events?foo=1") is :ok :events)
-  assert(th(:GET, "/%65vents") is :ok :events)
-  assert(th(:POST, "/game/42/poke") is :ok :game-poke p and p.id == 42)
-  assert(th(:POST, "/game/42/poke/") is :ok :game-poke _)
-  assert(th(:GET, "/game/42/poke") is :err :bad-method _)
-  assert(th(:POST, "/game/abc/poke") is :err :bad-param b and b.got == "abc")
-  assert(th(:POST, "/game/18446744073709551617/poke") is :err :bad-param _)
-  assert(th(:GET, "/game/42/zzz") is :err :not-found)
-  assert(th(:GET, "/nope") is :err :not-found)
-  assert(th(:GET, "/game/%zz/poke") is :err :bad-encoding _)
-  assert(th(:OPTIONS, "*") is :err :not-found)
 ```
 
 ## Small macros in the core library
 
-Macros are not reserved for megaprograms. `mem/with-arena` scopes the ambient
-allocator around an expression, and needs a macro only because the expression
-must be evaluated inside the push/pop pair:
+Macros aren't only for megaprograms. `mem/with-arena` is one only because the
+expression has to run between the push and the pop:
 
 ```k1 path=modules/core/mem.k1
   macro with-arena(arena: code, expr: code) {
@@ -674,6 +731,15 @@ must be evaluated inside the push/pop pair:
   }
 ```
 
-A closure would do the same job at the cost of a call and an environment; the
-macro costs nothing at runtime and keeps the spliced expression's spans, so a
-type error inside `with-arena(a, ...)` still points at the caller's code.
+No closure, no runtime cost, and a type error inside `with-arena(a, ...)`
+still points at your code.
+
+## Elsewhere
+
+- Rust proc macros live in a separate crate, parse a `TokenStream`
+  themselves, and give tokens they create `Span::call_site()` unless you
+  thread `quote_spanned!` by hand.
+- Zig's `comptime` can build the enums with `@Type` but can't emit
+  declarations: no generated `step`, no namespace.
+- C++ templates and `constexpr` can't either; P2996's `define_aggregate`
+  adds data members, not functions.

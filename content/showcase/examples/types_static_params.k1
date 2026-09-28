@@ -41,11 +41,11 @@ fn main(): i32 {
   println("${add-static[type-of(five)](10)}")
 
   let a: matrix[2] = .{ rows = [[1, 2], [3, 4]] }
-  let sq = a.&.mul(a.&)
+  let sq = a.mul(a.&)
   println("${sq.rows} dim ${sq.dim()} size ${types/size[matrix[2]]}")
   let i3 = matrix/identity[3]()
   println("${i3.rows} size ${types/size[matrix[3]]}")
-  let mismatch: ?string = test-compile(a.&.mul(i3.&))
+  let mismatch: ?string = test-compile(a.mul(i3.&))
   println(mismatch.!)
 
   let total = 0

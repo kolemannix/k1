@@ -37,6 +37,20 @@ ns layout {
     }
     println("  $holes of $stride bytes are padding\n")
   }
+
+  fn warn-padding[t](context locn: k1/source-location)() {
+    require types/schema[t] is :struct .{ fields } else crash("${types/name[t]} is not a struct")
+    let end: size = 0
+    for f in fields {
+      if f.offset > end {
+        k1/emit-compiler-message(locn, :warn, "${types/name[t]}: ${f.offset - end} byte hole before '${f.name}'")
+      }
+      end = f.offset + f.type-id.stride()
+    }
+    if types/stride[t] > end {
+      k1/emit-compiler-message(locn, :warn, "${types/name[t]}: ${types/stride[t] - end} bytes of tail padding")
+    }
+  }
 }
 
 type sloppy = { flag: bool, id: u64, kind: u16, count: u32, tail: u8 }
@@ -53,5 +67,7 @@ fn main(): i32 {
   layout/dump[nested]()
   #static types/assert-layout[tidy](16, 8, [0, 8, 12, 14, 15])
   #static types/assert-layout[wire](16, 1, [0, 1, 9, 11, 15])
+  #static layout/warn-padding[tidy]()
+  #static layout/warn-padding[sloppy]()
   0
 }

@@ -1,0 +1,207 @@
+type(alias) bitboard = u64
+type(alias) square = u32
+
+let NO_SQUARE: square = 64
+
+let RANK_1: bitboard = 0x00000000000000FF
+let RANK_2: bitboard = 0x000000000000FF00
+let RANK_7: bitboard = 0x00FF000000000000
+let RANK_8: bitboard = 0xFF00000000000000
+
+fn(inline) bit(sq: square): bitboard { 1u64 << sq }
+fn(inline) lsb(b: bitboard): square { b.trailing-zeros().trunc[u32] }
+fn(inline) more-than-one(b: bitboard): bool { b & (b - 1) != 0 }
+fn(inline) file-of(sq: square): u32 { sq & 7 }
+fn(inline) rank-of(sq: square): u32 { sq >> 3 }
+
+type square-iter = { rest: bitboard }
+
+fn(inline) squares(b: bitboard): square-iter { .{ rest = b } }
+
+impl iterator[item = square] for square-iter {
+  fn(inline) next(self: *square-iter): ?square {
+    if self.rest == 0 return :none
+    let sq = lsb(self.rest)
+    self.rest = self.rest & (self.rest - 1)
+    :some sq
+  }
+}
+
+impl iterable[item = square, i = square-iter] for square-iter {
+  fn(inline) iterator(self): square-iter { self }
+}
+
+fn square-name(sq: square): string {
+  let file = ('a'.as-u8() + file-of(sq).trunc[u8]).as-char()
+  let rank = ('1'.as-u8() + rank-of(sq).trunc[u8]).as-char()
+  "$file$rank"
+}
+
+fn parse-square(s: string): ?square {
+  if s.len() != 2 return :none
+  let file = s.[0].as-u8()
+  let rank = s.[1].as-u8()
+  if file < 'a'.as-u8() or file > 'h'.as-u8() or rank < '1'.as-u8() or rank > '8'.as-u8() return :none
+  :some ((rank - '1'.as-u8()).widen[u32] * 8 + (file - 'a'.as-u8()).widen[u32])
+}
+
+type step = { df: i32, dr: i32 }
+
+fn(inline) shifted(sq: square, s: step): ?square {
+  let f = file-of(sq).signed() + s.df
+  let r = rank-of(sq).signed() + s.dr
+  if f < 0 or f > 7 or r < 0 or r > 7 :none else :some((r * 8 + f).unsigned())
+}
+
+fn leaper-table(steps: span[step]): array[bitboard, 64] {
+  let out: array[bitboard, 64] = .0
+  for sq in 0u32.until(64) {
+    for s in steps {
+      if shifted(sq, s) is :some to { out.[sq] = out.[sq] | bit(to) }
+    }
+  }
+  out
+}
+
+let KNIGHT_ATTACKS: array[bitboard, 64] = leaper-table([
+  .{ df = 1, dr = 2 }, .{ df = 2, dr = 1 }, .{ df = 2, dr = -1 }, .{ df = 1, dr = -2 },
+  .{ df = -1, dr = -2 }, .{ df = -2, dr = -1 }, .{ df = -2, dr = 1 }, .{ df = -1, dr = 2 },
+])
+
+let KING_ATTACKS: array[bitboard, 64] = leaper-table([
+  .{ df = 1, dr = 0 }, .{ df = 1, dr = 1 }, .{ df = 0, dr = 1 }, .{ df = -1, dr = 1 },
+  .{ df = -1, dr = 0 }, .{ df = -1, dr = -1 }, .{ df = 0, dr = -1 }, .{ df = 1, dr = -1 },
+])
+
+let PAWN_ATTACKS: array[array[bitboard, 64], 2] = [
+  leaper-table([.{ df = -1, dr = 1 }, .{ df = 1, dr = 1 }]),
+  leaper-table([.{ df = -1, dr = -1 }, .{ df = 1, dr = -1 }]),
+]
+
+let ROOK_STEPS: array[step, 4] = [.{ df = 1, dr = 0 }, .{ df = -1, dr = 0 }, .{ df = 0, dr = 1 }, .{ df = 0, dr = -1 }]
+let BISHOP_STEPS: array[step, 4] = [.{ df = 1, dr = 1 }, .{ df = -1, dr = 1 }, .{ df = 1, dr = -1 }, .{ df = -1, dr = -1 }]
+
+fn slide(sq: square, occ: bitboard, steps: array[step, 4]): bitboard {
+  let out: bitboard = 0
+  for s in steps {
+    let at = sq
+    while shifted(at, s) is :some to {
+      out = out | bit(to)
+      if occ & bit(to) != 0 break
+      at = to
+    }
+  }
+  out
+}
+
+fn relevant-mask(sq: square, steps: array[step, 4]): bitboard {
+  let out: bitboard = 0
+  for s in steps {
+    let at = sq
+    while shifted(at, s) is :some to and shifted(to, s).is-some() {
+      out = out | bit(to)
+      at = to
+    }
+  }
+  out
+}
+
+type magic = { mask: bitboard, factor: u64, shift: u32, offset: u32 }
+
+type slider-table = { magics: array[magic, 64], attacks: buffer[bitboard] }
+
+ns for slider-table {
+  fn(inline) attacks-from(self: *slider-table, sq: square, occ: bitboard): bitboard {
+    let m = self.magics.[sq]
+    self.attacks.[m.offset + ((occ & m.mask) * m.factor >> m.shift).trunc[u32]]
+  }
+}
+
+let ROOK_MAGICS: array[u64, 64] = [
+  0x0A80004000801220, 0x8040004010002008, 0x2080200010008008, 0x1100100008210004,
+  0xC200209084020008, 0x2100010004000208, 0x0400081000822421, 0x0200010422048844,
+  0x0800800080400024, 0x0001402000401000, 0x3000801000802001, 0x4400800800100083,
+  0x0904802402480080, 0x4040800400020080, 0x0018808042000100, 0x4040800080004100,
+  0x0040048001458024, 0x00A0004000205000, 0x3100808010002000, 0x4825010010000820,
+  0x5004808008000401, 0x2024818004000A00, 0x0005808002000100, 0x2100060004806104,
+  0x0080400880008421, 0x4062220600410280, 0x010A004A00108022, 0x0000100080080080,
+  0x0021000500080010, 0x0044000202001008, 0x0000100400080102, 0xC020128200040545,
+  0x0080002000400040, 0x0000804000802004, 0x0000120022004080, 0x010A386103001001,
+  0x9010080080800400, 0x8440020080800400, 0x0004228824001001, 0x000000490A000084,
+  0x0080002000504000, 0x200020005000C000, 0x0012088020420010, 0x0010010080080800,
+  0x0085001008010004, 0x0002000204008080, 0x0040413002040008, 0x0000304081020004,
+  0x0080204000800080, 0x3008804000290100, 0x1010100080200080, 0x2008100208028080,
+  0x5000850800910100, 0x8402019004680200, 0x0120911028020400, 0x0000008044010200,
+  0x0020850200244012, 0x0020850200244012, 0x0000102001040841, 0x140900040A100021,
+  0x000200282410A102, 0x000200282410A102, 0x000200282410A102, 0x4048240043802106,
+]
+let BISHOP_MAGICS: array[u64, 64] = [
+  0x40106000A1160020, 0x0020010250810120, 0x2010010220280081, 0x002806004050C040,
+  0x0002021018000000, 0x2001112010000400, 0x0881010120218080, 0x1030820110010500,
+  0x0000120222042400, 0x2000020404040044, 0x8000480094208000, 0x0003422A02000001,
+  0x000A220210100040, 0x8004820202226000, 0x0018234854100800, 0x0100004042101040,
+  0x0004001004082820, 0x0010000810010048, 0x1014004208081300, 0x2080818802044202,
+  0x0040880C00A00100, 0x0080400200522010, 0x0001000188180B04, 0x0080249202020204,
+  0x1004400004100410, 0x00013100A0022206, 0x2148500001040080, 0x4241080011004300,
+  0x4020848004002000, 0x10101380D1004100, 0x0008004422020284, 0x01010A1041008080,
+  0x0808080400082121, 0x0808080400082121, 0x0091128200100C00, 0x0202200802010104,
+  0x8C0A020200440085, 0x01A0008080B10040, 0x0889520080122800, 0x100902022202010A,
+  0x04081A0816002000, 0x0000681208005000, 0x8170840041008802, 0x0A00004200810805,
+  0x0830404408210100, 0x2602208106006102, 0x1048300680802628, 0x2602208106006102,
+  0x0602010120110040, 0x0941010801043000, 0x000040440A210428, 0x0008240020880021,
+  0x0400002012048200, 0x00AC102001210220, 0x0220021002009900, 0x84440C080A013080,
+  0x0001008044200440, 0x0004C04410841000, 0x2000500104011130, 0x1A0C010011C20229,
+  0x0044800112202200, 0x0434804908100424, 0x0300404822C08200, 0x48081010008A2A80,
+]
+
+fn build-slider-table(steps: array[step, 4], factors: array[u64, 64]): slider-table {
+  let magics: array[magic, 64] = .0
+  let table-len: u32 = 0
+  for sq in 0u32.until(64) {
+    let mask = relevant-mask(sq, steps)
+    let bits = mask.count-ones().trunc[u32]
+    magics.[sq] = .{ mask, factor = factors.[sq], shift = 64 - bits, offset = table-len }
+    table-len = table-len + (1u32 << bits)
+  }
+  let attacks = buffer/allocate[bitboard](table-len.widen[size])
+  for sq in 0u32.until(64) {
+    let m = magics.[sq]
+    let subset: bitboard = 0
+    loop {
+      let slot = m.offset + (subset * m.factor >> m.shift).trunc[u32]
+      let reach = slide(sq, subset, steps)
+      if attacks.[slot] != 0 and attacks.[slot] != reach crash("magic for ${square-name(sq)} collides")
+      attacks.[slot] = reach
+      subset = (subset - m.mask) & m.mask
+      if subset == 0 break
+    }
+  }
+  .{ magics, attacks }
+}
+
+let ROOK_TABLE: slider-table = build-slider-table(ROOK_STEPS, ROOK_MAGICS)
+let BISHOP_TABLE: slider-table = build-slider-table(BISHOP_STEPS, BISHOP_MAGICS)
+
+fn(inline) rook-attacks(sq: square, occ: bitboard): bitboard { ROOK_TABLE.&.attacks-from(sq, occ) }
+fn(inline) bishop-attacks(sq: square, occ: bitboard): bitboard { BISHOP_TABLE.&.attacks-from(sq, occ) }
+
+fn square-pair-table(include-ends: bool): array[array[bitboard, 64], 64] {
+  let out: array[array[bitboard, 64], 64] = .0
+  for a in 0u32.until(64) {
+    for b in 0u32.until(64) {
+      if a == b continue
+      for steps in [ROOK_STEPS, BISHOP_STEPS] {
+        if slide(a, 0, steps) & bit(b) == 0 continue
+        out.[a].[b] = if include-ends {
+          (slide(a, 0, steps) & slide(b, 0, steps)) | bit(a) | bit(b)
+        } else {
+          slide(a, bit(b), steps) & slide(b, bit(a), steps)
+        }
+      }
+    }
+  }
+  out
+}
+
+let BETWEEN: array[array[bitboard, 64], 64] = square-pair-table(false)
+let LINE: array[array[bitboard, 64], 64] = square-pair-table(true)

@@ -26,6 +26,7 @@ fn test() {
 
   bases()
   floats()
+  specs()
 }
 
 fn to-base(value: u64, base: u64): string {
@@ -104,4 +105,42 @@ fn places32(f: f32, places: i32): string {
   let w = string-builder/new()
   f32/format(f, w.&, places)
   w.build()
+}
+
+fn specs() {
+  let f = 3.14159
+  let n: i32 = -42
+  let s = "héllo"
+  assert-equals("${f:.2}", "3.14")
+  assert-equals("${f:.0}", "3")
+  assert-equals("${(1.5: f32):.3}", "1.500")
+  assert-equals("${f:8.3}", "   3.142")
+  assert-equals("${f:<8.1}|", "3.1     |")
+  assert-equals("${f:09.3}", "00003.142")
+  assert-equals("${n:6}", "   -42")
+  assert-equals("${n:<6}", "-42   ")
+  assert-equals("${n:^7}", "  -42  ")
+  assert-equals("${n:^6}", " -42  ")
+  assert-equals("${n:06}", "-00042")
+  assert-equals("${42:0<5}", "42000")
+  assert-equals("${7:x>3}", "xx7")
+  assert-equals("${12345:3}", "12345")
+  assert-equals("${true:6}|", "true  |")
+  assert-equals("${true:>6}", "  true")
+  assert-equals("${s:8}|", "héllo   |")
+  assert-equals("${s:>8}", "   héllo")
+  assert-equals("${s:*^9}", "**héllo**")
+  assert-equals("${s:.2}", "hé")
+  assert-equals("${s:.9}", "héllo")
+  assert-equals("${s:·>8.3}", "·····hél")
+  assert-equals("${f: f64}", "3.14159")
+  assert-equals("${:>6}|${:.1}".fmt(.{ a = 12, b = 2.25 }), "    12|2.2")
+  let long = "0123456789012345678901234567890123456789012345678901234567890123456789"
+  assert-equals("${long:>71}", " $long")
+
+  let w = string-builder/new()
+  w.write("[${:<4}]", 7)
+  assert-equals(w.build-tmp(), "[7   ]")
+
+  assert(test-compile("${n:.2}").is-some())
 }

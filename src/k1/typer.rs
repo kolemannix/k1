@@ -140,19 +140,20 @@ pub const ABILITY_ID_SUM: AbilityId = AbilityId(NonZeroU32::new(2).unwrap());
 pub const ABILITY_ID_EQUALS: AbilityId = AbilityId(NonZeroU32::new(3).unwrap());
 pub const ABILITY_ID_WRITER: AbilityId = AbilityId(NonZeroU32::new(4).unwrap());
 pub const ABILITY_ID_PRINT: AbilityId = AbilityId(NonZeroU32::new(5).unwrap());
-pub const ABILITY_ID_SHOW: AbilityId = AbilityId(NonZeroU32::new(6).unwrap());
-pub const ABILITY_ID_BITWISE: AbilityId = AbilityId(NonZeroU32::new(7).unwrap());
-pub const ABILITY_ID_ADD: AbilityId = AbilityId(NonZeroU32::new(8).unwrap());
-pub const ABILITY_ID_SUB: AbilityId = AbilityId(NonZeroU32::new(9).unwrap());
-pub const ABILITY_ID_MUL: AbilityId = AbilityId(NonZeroU32::new(10).unwrap());
-pub const ABILITY_ID_DIV: AbilityId = AbilityId(NonZeroU32::new(11).unwrap());
-pub const ABILITY_ID_REM: AbilityId = AbilityId(NonZeroU32::new(12).unwrap());
-pub const ABILITY_ID_NEG: AbilityId = AbilityId(NonZeroU32::new(13).unwrap());
-pub const ABILITY_ID_SCALAR_CMP: AbilityId = AbilityId(NonZeroU32::new(14).unwrap());
-pub const ABILITY_ID_COMPARABLE: AbilityId = AbilityId(NonZeroU32::new(15).unwrap());
-pub const ABILITY_ID_TRY: AbilityId = AbilityId(NonZeroU32::new(16).unwrap());
-pub const ABILITY_ID_ITERATOR: AbilityId = AbilityId(NonZeroU32::new(17).unwrap());
-pub const ABILITY_ID_ITERABLE: AbilityId = AbilityId(NonZeroU32::new(18).unwrap());
+pub const ABILITY_ID_PRINT_PRECISE: AbilityId = AbilityId(NonZeroU32::new(6).unwrap());
+pub const ABILITY_ID_SHOW: AbilityId = AbilityId(NonZeroU32::new(7).unwrap());
+pub const ABILITY_ID_BITWISE: AbilityId = AbilityId(NonZeroU32::new(8).unwrap());
+pub const ABILITY_ID_ADD: AbilityId = AbilityId(NonZeroU32::new(9).unwrap());
+pub const ABILITY_ID_SUB: AbilityId = AbilityId(NonZeroU32::new(10).unwrap());
+pub const ABILITY_ID_MUL: AbilityId = AbilityId(NonZeroU32::new(11).unwrap());
+pub const ABILITY_ID_DIV: AbilityId = AbilityId(NonZeroU32::new(12).unwrap());
+pub const ABILITY_ID_REM: AbilityId = AbilityId(NonZeroU32::new(13).unwrap());
+pub const ABILITY_ID_NEG: AbilityId = AbilityId(NonZeroU32::new(14).unwrap());
+pub const ABILITY_ID_SCALAR_CMP: AbilityId = AbilityId(NonZeroU32::new(15).unwrap());
+pub const ABILITY_ID_COMPARABLE: AbilityId = AbilityId(NonZeroU32::new(16).unwrap());
+pub const ABILITY_ID_TRY: AbilityId = AbilityId(NonZeroU32::new(17).unwrap());
+pub const ABILITY_ID_ITERATOR: AbilityId = AbilityId(NonZeroU32::new(18).unwrap());
+pub const ABILITY_ID_ITERABLE: AbilityId = AbilityId(NonZeroU32::new(19).unwrap());
 //rustfmt: on
 
 pub const FUNC_PARAM_IDEAL_COUNT: usize = 8;
@@ -6381,14 +6382,8 @@ impl TypedProgram {
                     }
                 }
             }
-            ParsedExpr::Code(code) => {
-                let parsed_stmt_span = self.ast.get_stmt_span(code.parsed_stmt);
-                let span_content = self
-                    .ast
-                    .sources
-                    .get_span_content(&self.ast.mem, self.ast.spans.get(parsed_stmt_span));
-                let string_id = self.ast.idents.intern(span_content);
-                let value_id = self.make_static_code_value(&[(string_id, parsed_stmt_span)]);
+            ParsedExpr::Code(_) => {
+                let value_id = self.code_from_parsed_expr(expr_id);
                 Ok(self.add_static_constant_expr(value_id, span))
             }
             ParsedExpr::QualifiedAbilityCall(qcall) => {
@@ -7205,9 +7200,7 @@ impl TypedProgram {
             typed_params.push(FnParamType {
                 name: arg.binding,
                 type_id: arg_type_id,
-                is_context: false,
-                is_lambda_env: false,
-                is_macro_code: false,
+                kind: FnParamKind::Plain,
             });
         }
 
@@ -7247,9 +7240,7 @@ impl TypedProgram {
             let environment_param = FnParamType {
                 name: self.ast.idents.b.lambda_env_var_name,
                 type_id: POINTER_TYPE_ID,
-                is_context: false,
-                is_lambda_env: true,
-                is_macro_code: false,
+                kind: FnParamKind::LambdaEnv,
             };
             let environment_param_variable_id = self.variables.add(Variable {
                 name: environment_param.name,
@@ -10360,9 +10351,7 @@ impl TypedProgram {
         new_params.push(FnParamType {
             name: self.ast.idents.b.lambda_env_var_name,
             type_id: empty_env_struct_ref,
-            is_context: false,
-            is_lambda_env: true,
-            is_macro_code: false,
+            kind: FnParamKind::LambdaEnv,
         });
         new_params.extend(self.mem.getn(physical_params));
 
@@ -10892,7 +10881,7 @@ impl TypedProgram {
         let mut final_params: TmpList<FnParamType> = self.tmp.new_list(params.len());
         let all_params = self.mem.getn(params);
         if !explicit_context_args {
-            for context_param in all_params.iter().filter(|p| p.is_context) {
+            for context_param in all_params.iter().filter(|p| p.kind == FnParamKind::Context) {
                 let resolved = self.resolve_context_arg(
                     context_param,
                     context_param.type_id,
@@ -10908,9 +10897,10 @@ impl TypedProgram {
             }
         }
 
-        let is_lambda = all_params.first().is_some_and(|p| p.is_lambda_env);
+        let is_lambda = all_params.first().is_some_and(|p| p.kind == FnParamKind::LambdaEnv);
         let params_slice = if is_lambda { &all_params[1..] } else { all_params };
-        let explicit_param_count = params_slice.iter().filter(|p| !p.is_context).count();
+        let explicit_param_count =
+            params_slice.iter().filter(|p| p.kind != FnParamKind::Context).count();
         let context_param_count = params_slice.len() - explicit_param_count;
         let total_expected =
             if explicit_context_args { params_slice.len() } else { explicit_param_count };
@@ -10925,7 +10915,7 @@ impl TypedProgram {
             // If the user opted to pass context params explicitly, then check all params
             // If the user did not, then just check the non-context params, since the compiler is responsible
             // for looking up context params
-            .filter(|p| explicit_context_args || !p.is_context);
+            .filter(|p| explicit_context_args || p.kind != FnParamKind::Context);
 
         if let Some(pre_evaled_params) = known_typed_args {
             for (expr, param) in pre_evaled_params.iter().zip(expected_literal_params) {
@@ -11096,7 +11086,7 @@ impl TypedProgram {
 
         if !explicit_context_args {
             for (index, context_param) in
-                specialized.iter().enumerate().filter(|(_, p)| p.is_context)
+                specialized.iter().enumerate().filter(|(_, p)| p.kind == FnParamKind::Context)
             {
                 let generic_param = &generic[index];
                 debug_assert_eq!(generic_param.name, context_param.name);
@@ -11135,7 +11125,7 @@ impl TypedProgram {
         }
 
         for (arg, param) in orig_args.iter().zip(orig_params.iter()) {
-            if !explicit_context_args && param.is_context {
+            if !explicit_context_args && param.kind == FnParamKind::Context {
                 continue;
             }
             let specialized_param = specialized
@@ -11482,7 +11472,10 @@ impl TypedProgram {
                 // The receiver is the first non-context param; context params come first
                 // in the aligned args
                 let receiver_index = if is_method {
-                    self.tmp.getn(args_and_params.params).iter().position(|p| !p.is_context)
+                    self.tmp
+                        .getn(args_and_params.params)
+                        .iter()
+                        .position(|p| p.kind != FnParamKind::Context)
                 } else {
                     None
                 };
@@ -11666,7 +11659,10 @@ impl TypedProgram {
                     // The receiver is the first non-context param; context params come
                     // first in the aligned args
                     let receiver_index = if is_method {
-                        self.tmp.getn(args_and_params.params).iter().position(|p| !p.is_context)
+                        self.tmp
+                            .getn(args_and_params.params)
+                            .iter()
+                            .position(|p| p.kind != FnParamKind::Context)
                     } else {
                         None
                     };
@@ -11708,7 +11704,7 @@ impl TypedProgram {
                                         kerr!(
                                             self,
                                             err.span,
-                                            "Error in parameter '{}' in call to '{}''\n{}",
+                                            "Error in parameter '{}' in call to '{}'\n{}",
                                             param.name,
                                             &fn_call.name,
                                             err.message
@@ -11808,7 +11804,7 @@ impl TypedProgram {
         }
         for i in 0..args.len() as usize {
             let param = *self.mem.get_nth(params, i);
-            if param.is_macro_code {
+            if matches!(param.kind, FnParamKind::MacroCode | FnParamKind::MacroTokens) {
                 continue;
             }
             let Some(layout) = self.get_layout(param.type_id) else { continue };
@@ -12417,7 +12413,7 @@ impl TypedProgram {
         {
             let name = self.variables.get(generic_param.variable_id).name;
             let mut flags = VariableFlags::empty();
-            flags.set(VariableFlags::Context, specialized_param_type.is_context);
+            flags.set(VariableFlags::Context, specialized_param_type.kind == FnParamKind::Context);
             let variable_id = self.variables.add(Variable {
                 type_id: specialized_param_type.type_id,
                 name,
@@ -12427,7 +12423,7 @@ impl TypedProgram {
                 usage_count: 0,
                 defn_span: generic_param.span,
             });
-            if specialized_param_type.is_context {
+            if specialized_param_type.kind == FnParamKind::Context {
                 let added = self.scopes.add_context_variable(
                     spec_fn_scope,
                     name,
@@ -14270,7 +14266,7 @@ impl TypedProgram {
         let physical_params = fn_type.physical_params;
         let return_type = fn_type.return_type;
         let params = self.mem.getn(physical_params);
-        if params.iter().any(|p| p.is_context) {
+        if params.iter().any(|p| p.kind == FnParamKind::Context) {
             return Err("it takes context parameters".to_string());
         }
         let self_probe = [spair! { ability_self_type => NEVER_TYPE_ID }];
@@ -14284,9 +14280,7 @@ impl TypedProgram {
             slot_params.push(FnParamType {
                 name: self.ast.idents.b.lambda_env_var_name,
                 type_id: POINTER_TYPE_ID,
-                is_context: false,
-                is_lambda_env: true,
-                is_macro_code: false,
+                kind: FnParamKind::LambdaEnv,
             });
             &params[1..]
         } else {
@@ -14677,9 +14671,7 @@ impl TypedProgram {
             param_types.push(FnParamType {
                 name: fn_param.name,
                 type_id,
-                is_context,
-                is_lambda_env: false,
-                is_macro_code: false,
+                kind: if is_context { FnParamKind::Context } else { FnParamKind::Plain },
             });
             params.push(TypedFunctionParam { variable_id, span: fn_param.span });
             if is_context {
@@ -15084,6 +15076,7 @@ impl TypedProgram {
             ScopeOwnerId::None,
         );
         let code_type = self.builtin_types.code();
+        let token_span_type = self.builtin_types.code_token_span();
 
         let type_params = self.compile_function_type_params(
             fn_scope_id,
@@ -15099,7 +15092,13 @@ impl TypedProgram {
         let mut params = self.mem.new_list(param_count);
         for fn_param in self.ast.mem.getn(params_slice).iter() {
             let type_id = self.eval_type_expr(fn_param.type_expr, fn_scope_id)?;
-            let is_code = type_id == code_type;
+            let kind = if type_id == code_type {
+                FnParamKind::MacroCode
+            } else if type_id == token_span_type {
+                FnParamKind::MacroTokens
+            } else {
+                FnParamKind::Plain
+            };
             if let Type::FunctionTypeParameter(_ftp) = self.types.get(type_id) {
                 kbail!(
                     self,
@@ -15116,13 +15115,7 @@ impl TypedProgram {
                 kind: VariableKind::FnParam(FunctionId::PENDING),
                 defn_span: fn_param.span,
             });
-            param_types.push(FnParamType {
-                name: fn_param.name,
-                type_id,
-                is_context: false,
-                is_lambda_env: false,
-                is_macro_code: is_code,
-            });
+            param_types.push(FnParamType { name: fn_param.name, type_id, kind });
             params.push(TypedFunctionParam { variable_id, span: fn_param.span });
             if !self.scopes.add_variable(fn_scope_id, fn_param.name, variable_id) {
                 kbail!(self, fn_param.span, "Duplicate parameter name: {}", fn_param.name);
@@ -15481,7 +15474,7 @@ impl TypedProgram {
                 let ctx = EvalExprContext::make(block.scope_id);
 
                 let obrace_expr = self.synth_string_literal_from_str(".{ ", fn_span);
-                let write_obrace = self.synth_printto_call(obrace_expr, writer_expr, ctx)?;
+                let write_obrace = self.synth_print_call(obrace_expr, writer_expr, None, ctx)?;
                 self.push_block_expr_id(&mut block, write_obrace);
 
                 let comma_expr = self.synth_string_literal_from_str(", ", fn_span);
@@ -15490,10 +15483,10 @@ impl TypedProgram {
                 for (index, field) in self.mem.getn(struct_type.fields).iter().enumerate() {
                     let field_expr = self.synth_field_access(struct_expr, index, fn_span);
                     let name_expr = self.synth_string_literal(field.name, fn_span);
-                    let print_name_expr = self.synth_printto_call(name_expr, writer_expr, ctx)?;
-                    let print_colon_expr = self.synth_printto_call(colon_expr, writer_expr, ctx)?;
+                    let print_name_expr = self.synth_print_call(name_expr, writer_expr, None, ctx)?;
+                    let print_colon_expr = self.synth_print_call(colon_expr, writer_expr, None, ctx)?;
 
-                    let print_value_expr = self.synth_printto_call(field_expr, writer_expr, ctx)?;
+                    let print_value_expr = self.synth_print_call(field_expr, writer_expr, None, ctx)?;
 
                     self.push_block_expr_id(&mut block, print_name_expr);
                     self.push_block_expr_id(&mut block, print_colon_expr);
@@ -15501,13 +15494,13 @@ impl TypedProgram {
 
                     if index as u32 != struct_type.fields.len() - 1 {
                         let print_comma_expr =
-                            self.synth_printto_call(comma_expr, writer_expr, ctx)?;
+                            self.synth_print_call(comma_expr, writer_expr, None, ctx)?;
                         self.push_block_expr_id(&mut block, print_comma_expr);
                     }
                 }
 
                 let cbrace_expr = self.synth_string_literal_from_str(" }", fn_span);
-                let write_cbrace = self.synth_printto_call(cbrace_expr, writer_expr, ctx)?;
+                let write_cbrace = self.synth_print_call(cbrace_expr, writer_expr, None, ctx)?;
                 self.push_block_expr_id(&mut block, write_cbrace);
 
                 let block_expr_id = self.exprs.add_block(block, EMPTY_TYPE_ID);
@@ -15542,11 +15535,11 @@ impl TypedProgram {
                     let ctx = EvalExprContext::make(block.scope_id);
                     let label = format!(":{}", self.ident_str(variant.name));
                     let label_expr = self.synth_string_literal_from_str(&label, fn_span);
-                    let write_label = self.synth_printto_call(label_expr, writer_expr, ctx)?;
+                    let write_label = self.synth_print_call(label_expr, writer_expr, None, ctx)?;
                     self.push_block_expr_id(&mut block, write_label);
                     if let Some(payload_type_id) = variant.payload {
                         let space_expr = self.synth_string_literal_from_str(" ", fn_span);
-                        let write_space = self.synth_printto_call(space_expr, writer_expr, ctx)?;
+                        let write_space = self.synth_print_call(space_expr, writer_expr, None, ctx)?;
                         self.push_block_expr_id(&mut block, write_space);
                         let payload_expr = self.exprs.add(
                             TypedExpr::SumGetPayload(GetSumPayload {
@@ -15558,7 +15551,7 @@ impl TypedProgram {
                             fn_span,
                         );
                         let write_payload =
-                            self.synth_printto_call(payload_expr, writer_expr, ctx)?;
+                            self.synth_print_call(payload_expr, writer_expr, None, ctx)?;
                         self.push_block_expr_id(&mut block, write_payload);
                     }
                     arms.push(TypedMatchArm {
@@ -15581,7 +15574,7 @@ impl TypedProgram {
                 let writer_expr = self.synth_variable_expr(writer_param.variable_id, fn_span);
                 let name_expr = self.synth_enum_tag_name_match(enum_param_expr, fn_span);
                 let ctx = EvalExprContext::make(fn_scope_id);
-                self.synth_printto_call(name_expr, writer_expr, ctx)
+                self.synth_print_call(name_expr, writer_expr, None, ctx)
             }
         }?;
 
@@ -17384,6 +17377,10 @@ impl TypedProgram {
             ]);
             let t = self.add_type_anon(Type::Struct(StructType::struc(fields)));
             self.builtin_types.dyn_lambda_obj = Some(t);
+            self.builtin_types.code_token_span = Some(self.instantiate_generic_type(
+                self.builtin_types.span(),
+                &[self.builtin_types.code_token()],
+            ));
             self.assert_builtin_types_correct();
         }
 
@@ -17670,6 +17667,7 @@ impl TypedProgram {
             core!("string-builder"),
             core!("code"),
             core!("code-builder"),
+            core!("code-token"),
             core!("optref"),
             {
                 let name = get_ident!(self, "min");

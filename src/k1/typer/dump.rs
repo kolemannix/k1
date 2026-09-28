@@ -415,10 +415,10 @@ impl TypedProgram {
             Type::Function(fun) => {
                 w.write_str("fn(")?;
                 for (idx, param) in self.mem.getn(fun.physical_params).iter().enumerate() {
-                    if param.is_lambda_env {
+                    if param.kind == FnParamKind::LambdaEnv {
                         w.write_str("(env)")?;
                     }
-                    if param.is_context {
+                    if param.kind == FnParamKind::Context {
                         w.write_str("(ctx)")?;
                     }
                     // Param names are not abi: a rename must not change the

@@ -1,7 +1,7 @@
 use crate::lex::{Span, SpanId, is_ident_char};
 use crate::parse::{FileId, ParsedExpr, ParsedId, ParsedProgram, StringId};
 use crate::typer::scopes::{ScopeId, VariableInScope};
-use crate::typer::types::{Type, TypeId};
+use crate::typer::types::{FnParamKind, Type, TypeId};
 use crate::{SV8, typer::*};
 use fxhash::FxHashSet;
 use smallvec::smallvec;
@@ -406,7 +406,7 @@ pub fn signature_help_info(k1: &TypedProgram, site: CompletionSite) -> Option<Si
         .mem
         .getn(ft.physical_params)
         .iter()
-        .filter(|p| !p.is_context && !p.is_lambda_env)
+        .filter(|p| p.kind != FnParamKind::Context && p.kind != FnParamKind::LambdaEnv)
         .map(|p| format!("{}: {}", k1.ident_str(p.name), k1.type_id_to_string(p.type_id)))
         .collect();
     let label = format!(
@@ -424,7 +424,9 @@ fn is_method_shaped(k1: &TypedProgram, function_id: FunctionId, base_type_id: Ty
         return true;
     }
     let Type::Function(ft) = k1.types.get(function.type_id) else { return false };
-    let Some(first) = k1.mem.getn(ft.physical_params).iter().find(|p| !p.is_context) else {
+    let Some(first) =
+        k1.mem.getn(ft.physical_params).iter().find(|p| p.kind != FnParamKind::Context)
+    else {
         return false;
     };
     first.type_id == base_type_id || k1.get_base_for_method(first.type_id) == base_type_id

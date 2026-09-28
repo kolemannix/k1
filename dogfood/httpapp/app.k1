@@ -12,6 +12,7 @@ use std/rc-byte-stream
 use std/owned
 use std/heap-bytes
 use std/pubsub
+use std/html
 
 type deps = {
   config: { jwt-secret: string },
@@ -107,9 +108,27 @@ fn error-response(e: routing/route-error): http-response {
 
 fn home-page(): http-response {
   let styles = core/files/read-to-string("web/styles.css")
-  let template: string = core/files/read-to-string("web/header.html")
-  let output = template(template, [.{ key = "styles.css", value = styles }]).!
-  response/html(output)
+  response/html(html/render(\{
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="UTF-8"/>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+        <script type="module" src="../datastar.js"></script>
+        <title>k1/d* stress test</title>
+        <link id="live-css" rel="stylesheet"/>
+        <style>{styles}</style>
+      </head>
+      <body>
+        <div data-json-signals></div>
+        <h1>Hello, World!</h1>
+        <input data-bind="foo"/>
+        <label><input type="checkbox" name="sync" data-bind="sync"/> Sync</label>
+        <div data-on-interval__duration.1000ms="if (\$sync) @get('/app/sync')"></div>
+        <div id="grid"></div>
+      </body>
+    </html>
+  }))
 }
 
 #static {
@@ -181,29 +200,6 @@ fn start-mock-publisher(bus: *pubsub/bus[span[u8]]) {
     }
   }, bus.as[ptr])
   if rc != 0 crash("failed to spawn publisher thread: $rc")
-}
-
-fn template(template: string, values: span[{ key: string, value: string }]): ?string {
-  let out = string-builder/new()
-  let i = 0
-  while i < template.len() {
-    let c = template.[i]
-    // TODO: simd scan
-    if c == '{' and template.[i + 1] == '{' {
-      let rest = template.drop(i + 2)
-      require rest.position('}') is :some close else return :none
-      let key = rest.take(close)
-      if values.find(fn[key] p. p.key == key) is {
-        :none -> return :none,
-        :some pair -> out.write-string(pair.value)
-      }
-      i = i + 2 + close + 2
-    } else {
-      out.write-char(c)
-      i = i + 1
-    }
-  }
-  :some out.build()
 }
 
 #if false ns wip-pixel-grid {

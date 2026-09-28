@@ -347,12 +347,6 @@ expression takes its name from the type, exactly as a function parameter does.
 type glyph = { *atlas-cursor, ?parent, list[int], count: int }
 ```
 
-Use `.with(...)` to copy a struct with selected fields changed:
-
-```rust
-let next = current.with(.{ count = current.count + 1 })
-```
-
 Attach methods to a type with `ns for`:
 
 ```rust
@@ -910,6 +904,22 @@ assert-equals("len ${name.len()}", "len 2")
 followed by anything that cannot start an identifier is literal (`"$5.99"`), and
 `\$` escapes a `$` that would otherwise open a hole. Braces are ordinary
 characters in strings and need no escaping.
+
+A `${...}` hole takes a format spec after a colon, Python/Rust style:
+`${value:[[fill]align][0][width][.precision]}`. Align is `<`, `>` or `^`
+(default: right for integers and floats, left otherwise); fill is any one
+char. `0` pads with zeros after the sign and cannot combine with align. Width
+counts UTF-8 chars. Precision needs the `print-precise` ability (floats: digits
+after the point; strings: max chars); ints reject it. Bare `${:spec}` holes take
+specs too. `${x: f64}` (space after the colon) stays a type ascription.
+
+```rust
+assert-equals("${3.14159:.2}", "3.14")
+assert-equals("${-42:06}", "-00042")
+assert-equals("${7:x>3}", "xx7")
+assert-equals("${"hi":*^6}", "**hi**")
+assert-equals("${:>4}".fmt(12), "  12")
+```
 
 Call `.write` on any value that implements the `writer` ability to write
 formatted text to it. The argument is the template, and an optional second

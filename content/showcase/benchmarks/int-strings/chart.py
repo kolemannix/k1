@@ -74,4 +74,5 @@ def main():
     subprocess.run(["rsvg-convert", "-z", "2", "-o", str(HERE / "chart.png"), str(HERE / "chart.svg")], check=True)
 
 
-main()
+if __name__ == "__main__":
+    main()

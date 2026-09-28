@@ -1,0 +1,89 @@
+use core/arena
+
+type perft-case = { fen: string, depth: u32, nodes: u64 }
+
+let PERFT_SUITE: array[perft-case, 23] = [
+  .{ fen = START_FEN, depth = 6, nodes = 119060324 },
+  .{ fen = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1", depth = 5, nodes = 193690690 },
+  .{ fen = "8/2p5/3p4/KP5r/1R3p1k/8/4P1P1/8 w - - 0 1", depth = 6, nodes = 11030083 },
+  .{ fen = "r3k2r/Pppp1ppp/1b3nbN/nP6/BBP1P3/q4N2/Pp1P2PP/R2Q1RK1 w kq - 0 1", depth = 5, nodes = 15833292 },
+  .{ fen = "r2q1rk1/pP1p2pp/Q4n2/bbp1p3/Np6/1B3NBn/pPPP1PPP/R3K2R b KQ - 0 1", depth = 5, nodes = 15833292 },
+  .{ fen = "rnbq1k1r/pp1Pbppp/2p5/8/2B5/8/PPP1NnPP/RNBQK2R w KQ - 1 8", depth = 5, nodes = 89941194 },
+  .{ fen = "r4rk1/1pp1qppp/p1np1n2/2b1p1B1/2B1P1b1/P1NP1N2/1PP1QPPP/R4RK1 w - - 0 10", depth = 5, nodes = 164075551 },
+  .{ fen = "3k4/3p4/8/K1P4r/8/8/8/8 b - - 0 1", depth = 6, nodes = 1134888 },
+  .{ fen = "8/8/4k3/8/2p5/8/B2P2K1/8 w - - 0 1", depth = 6, nodes = 1015133 },
+  .{ fen = "8/8/1k6/2b5/2pP4/8/5K2/8 b - d3 0 1", depth = 6, nodes = 1440467 },
+  .{ fen = "5k2/8/8/8/8/8/8/4K2R w K - 0 1", depth = 6, nodes = 661072 },
+  .{ fen = "3k4/8/8/8/8/8/8/R3K3 w Q - 0 1", depth = 6, nodes = 803711 },
+  .{ fen = "r3k2r/1b4bq/8/8/8/8/7B/R3K2R w KQkq - 0 1", depth = 4, nodes = 1274206 },
+  .{ fen = "r3k2r/8/3Q4/8/8/5q2/8/R3K2R b KQkq - 0 1", depth = 4, nodes = 1720476 },
+  .{ fen = "2K2r2/4P3/8/8/8/8/8/3k4 w - - 0 1", depth = 6, nodes = 3821001 },
+  .{ fen = "8/8/1P2K3/8/2n5/1q6/8/5k2 b - - 0 1", depth = 5, nodes = 1004658 },
+  .{ fen = "4k3/1P6/8/8/8/8/K7/8 w - - 0 1", depth = 6, nodes = 217342 },
+  .{ fen = "8/P1k5/K7/8/8/8/8/8 w - - 0 1", depth = 6, nodes = 92683 },
+  .{ fen = "K1k5/8/P7/8/8/8/8/8 w - - 0 1", depth = 6, nodes = 2217 },
+  .{ fen = "8/k1P5/8/1K6/8/8/8/8 w - - 0 1", depth = 7, nodes = 567584 },
+  .{ fen = "8/8/2k5/5q2/5n2/8/5K2/8 b - - 0 1", depth = 4, nodes = 23527 },
+  .{ fen = "n1n5/PPPk4/8/8/8/8/4Kppp/5N1N b - - 0 1", depth = 5, nodes = 3605103 },
+  .{ fen = "8/Pk6/8/8/8/8/6Kp/8 w - - 0 1", depth = 6, nodes = 1030499 },
+]
+
+type search-case = { fen: string, depth: u32, best: string }
+
+let SEARCH_SUITE: array[search-case, 4] = [
+  .{ fen = "6k1/5ppp/8/8/8/8/5PPP/3R2K1 w - - 0 1", depth = 4, best = "d1d8" },
+  .{ fen = "r1bqkb1r/pppp1ppp/2n2n2/4p2Q/2B1P3/8/PPPP1PPP/RNB1K1NR w KQkq - 4 4", depth = 3, best = "h5f7" },
+  .{ fen = "4k3/8/8/3q4/8/8/8/3RK3 w - - 0 1", depth = 5, best = "d1d5" },
+  .{ fen = "7k/5Q2/6K1/8/8/8/8/8 b - - 0 1", depth = 4, best = "0000" },
+]
+
+fn test(): i32 {
+  let(context) ply: *arena = arena/init(arena/mb)
+  let failures: i32 = 0
+  for c in PERFT_SUITE {
+    let pos = position/from-fen(c.fen).!
+    let t = std/time/read-cpu-counter()
+    let nodes = perft(pos.&, c.depth)
+    let ok = nodes == c.nodes
+    if not ok { failures = failures + 1 }
+    println("${if ok "ok  " else "FAIL"} perft ${c.depth} = $nodes (want ${c.nodes}) ${std/time/elapsed-ms(t)}ms  ${c.fen}")
+    assert-equals(ply.used-bytes(), 0)
+    check-fen-roundtrip(pos.&, 3)
+  }
+
+  let game = arena/init(64 * arena/kb)
+  let tt = transposition-table/new(1)
+  for c in SEARCH_SUITE {
+    game.reset()
+    tt.&.clear()
+    let pos = position/from-fen(c.fen).!
+    let keys: list[u64] = list/with-capacity-in(game, 8)
+    keys.push-in(game, pos.key)
+    let lim = limits/NONE
+    lim.depth = c.depth
+    let s = searcher/new(ply, game, tt.&, keys.&, :none, lim)
+    let best = s.&.run(pos.&)
+    let got = if best.bits == move/NONE.bits "0000" else best.to-uci()
+    let ok = got == c.best
+    if not ok { failures = failures + 1 }
+    println("${if ok "ok  " else "FAIL"} search depth ${c.depth} = $got (want ${c.best})  ${c.fen}")
+    assert-equals(ply.used-bytes(), 0)
+    assert-equals(keys.len(), 1)
+  }
+  failures
+}
+
+fn check-fen-roundtrip(context ply: *arena)(pos: *position, depth: u32) {
+  let fen = pos.to-fen()
+  let parsed = position/from-fen(fen).!
+  assert-equals(parsed.&.to-fen(), fen)
+  assert-equals(parsed.key, pos.key)
+  if depth == 0 return
+  let mark = ply.mark()
+  defer ply.pop-to-mark(mark)
+  for m in gen-moves(pos, :all) {
+    let child = pos.*
+    child.make(m)
+    check-fen-roundtrip(child.&, depth - 1)
+  }
+}

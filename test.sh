@@ -24,7 +24,7 @@ K1_HOME=$(pwd) target/$target_dir/k1 --optimize --no-cache run test_src/suite1
 K1_HOME=$(pwd) target/$target_dir/k1 --debug --no-cache build test_src/suite1
 K1_HOME=$(pwd) target/$target_dir/k1 --emit-llvm --no-cache run test_src/suite1
 
-target/$target_dir/k1 --no-cache build dogfood/refchess
+K1_HOME=$(pwd) target/$target_dir/k1 --optimize --no-cache test dogfood/refchess
 target/$target_dir/k1 --no-cache build dogfood/profiling
 target/$target_dir/k1 --no-cache build dogfood/k1bindgen
 export PATH="$(pwd)/dogfood/k1bindgen/.k1-out:$PATH"
@@ -46,6 +46,7 @@ K1_HOME=$(pwd) K1_EXE=$(pwd)/target/$target_dir/k1 target/$target_dir/k1 run dog
 if command -v wasmtime > /dev/null; then
     make -C modules/core/libs wasm
     K1_HOME=$(pwd) target/$target_dir/k1 --optimize --no-cache --target wasm64-wasi run test_src/suite1
+    K1_HOME=$(pwd) target/$target_dir/k1 --optimize --no-cache --target wasm64-wasi test dogfood/refchess
 fi
 
 if rg --type-add 'k1:*.k1' -c 'nocommit' -t rust -t c -t k1 .

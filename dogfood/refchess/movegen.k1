@@ -1,0 +1,142 @@
+use core/arena
+
+type move = { bits: u16 }
+
+let QUIET: u16 = 0
+let DOUBLE_PUSH: u16 = 1
+let KING_CASTLE: u16 = 2
+let QUEEN_CASTLE: u16 = 3
+let CAPTURE: u16 = 4
+let EN_PASSANT: u16 = 5
+let PROMOTION: u16 = 8
+
+ns for move {
+  let NONE: move = .{ bits = 0 }
+
+  fn(inline) new(from: square, to: square, flag: u16): move {
+    .{ bits = (flag << 12) | (to.trunc[u16] << 6) | from.trunc[u16] }
+  }
+  fn(inline) from(self): square { (self.bits & 63).widen[u32] }
+  fn(inline) to(self): square { ((self.bits >> 6) & 63).widen[u32] }
+  fn(inline) flag(self): u16 { self.bits >> 12 }
+  fn(inline) is-capture(self): bool { self.flag() & CAPTURE != 0 }
+  fn(inline) is-promotion(self): bool { self.flag() & PROMOTION != 0 }
+  fn(inline) is-en-passant(self): bool { self.flag() == EN_PASSANT }
+  fn(inline) promotion-kind(self): kind {
+    if self.flag() & 3 is { 0 -> :knight, 1 -> :bishop, 2 -> :rook, _ -> :queen }
+  }
+
+  fn to-uci(self): string {
+    let promo = if not self.is-promotion() "" else if self.promotion-kind() is {
+      :knight -> "n", :bishop -> "b", :rook -> "r", _ -> "q"
+    }
+    "${square-name(self.from())}${square-name(self.to())}$promo"
+  }
+}
+
+type gen-mode = either(u8) { all, noisy }
+
+fn(inline) add-move(context ply: *arena)(moves: *list[move], from: square, to: square, flag: u16) {
+  moves.push-in(ply, move/new(from, to, flag))
+}
+
+fn add-pawn-move(context ply: *arena)(moves: *list[move], from: square, to: square, flag: u16) {
+  if bit(to) & (RANK_1 | RANK_8) != 0 {
+    for promo in 0u16.until(4) { add-move(moves, from, to, flag | PROMOTION | promo) }
+  } else {
+    add-move(moves, from, to, flag)
+  }
+}
+
+fn add-targets(context ply: *arena)(moves: *list[move], from: square, targets: bitboard, enemy: bitboard) {
+  for to in squares(targets) {
+    add-move(moves, from, to, if enemy & bit(to) != 0 CAPTURE else QUIET)
+  }
+}
+
+fn gen-moves(context ply: *arena)(pos: *position, mode: gen-mode): list[move] {
+  let moves: list[move] = list/with-capacity-in(ply, 64)
+  let us = pos.side
+  let them = us.other()
+  let own = pos.by-color.[us.value]
+  let enemy = pos.by-color.[them.value]
+  let occ = own | enemy
+  let ksq = pos.king-square(us)
+  let checkers = pos.attackers-to(ksq, occ) & enemy
+  let wanted = if (mode is :noisy) enemy else own.bit-not()
+
+  let without-king = occ ^ bit(ksq)
+  for to in squares(KING_ATTACKS.[ksq] & wanted) {
+    if pos.attackers-to(to, without-king) & enemy == 0 {
+      add-move(moves.&, ksq, to, if enemy & bit(to) != 0 CAPTURE else QUIET)
+    }
+  }
+  if more-than-one(checkers) return moves
+
+  let evasion: bitboard = if checkers == 0 u64/max-value else checkers | BETWEEN.[ksq].[lsb(checkers)]
+  let target = wanted & evasion
+
+  let their-rooks = pos.pieces(them, :rook) | pos.pieces(them, :queen)
+  let their-bishops = pos.pieces(them, :bishop) | pos.pieces(them, :queen)
+  let snipers = (rook-attacks(ksq, enemy) & their-rooks) | (bishop-attacks(ksq, enemy) & their-bishops)
+  let pinned: bitboard = 0
+  for sniper in squares(snipers) {
+    let blockers = BETWEEN.[ksq].[sniper] & occ
+    if blockers & own != 0 and not more-than-one(blockers) { pinned = pinned | blockers }
+  }
+
+  for from in squares(pos.pieces(us, :knight) & pinned.bit-not()) {
+    add-targets(moves.&, from, KNIGHT_ATTACKS.[from] & target, enemy)
+  }
+  for from in squares(pos.pieces(us, :bishop) | pos.pieces(us, :queen)) {
+    let pin-line = if pinned & bit(from) != 0 LINE.[ksq].[from] else u64/max-value
+    add-targets(moves.&, from, bishop-attacks(from, occ) & target & pin-line, enemy)
+  }
+  for from in squares(pos.pieces(us, :rook) | pos.pieces(us, :queen)) {
+    let pin-line = if pinned & bit(from) != 0 LINE.[ksq].[from] else u64/max-value
+    add-targets(moves.&, from, rook-attacks(from, occ) & target & pin-line, enemy)
+  }
+
+  let white = us is :white
+  let double-rank = if white RANK_2 else RANK_7
+  let empty = occ.bit-not()
+  for from in squares(pos.pieces(us, :pawn)) {
+    let pin-line = if pinned & bit(from) != 0 LINE.[ksq].[from] else u64/max-value
+    let legal-to = evasion & pin-line
+    let one = if white from + 8 else from - 8
+    if empty & bit(one) != 0 {
+      if bit(one) & legal-to != 0 and (mode is :all or bit(one) & (RANK_1 | RANK_8) != 0) {
+        add-pawn-move(moves.&, from, one, QUIET)
+      }
+      if mode is :all and bit(from) & double-rank != 0 {
+        let two = if white one + 8 else one - 8
+        if bit(two) & empty & legal-to != 0 { add-move(moves.&, from, two, DOUBLE_PUSH) }
+      }
+    }
+    let attacks = PAWN_ATTACKS.[us.value].[from]
+    for to in squares(attacks & enemy & legal-to) { add-pawn-move(moves.&, from, to, CAPTURE) }
+    if pos.ep != NO_SQUARE and attacks & bit(pos.ep) != 0 {
+      let captured = if white pos.ep - 8 else pos.ep + 8
+      let after = occ ^ bit(from) ^ bit(captured) ^ bit(pos.ep)
+      if pos.attackers-to(ksq, after) & (enemy ^ bit(captured)) == 0 {
+        add-move(moves.&, from, pos.ep, EN_PASSANT)
+      }
+    }
+  }
+
+  if mode is :all and checkers == 0 {
+    let base: square = if white 0 else 56
+    let rights = if white pos.castling else pos.castling >> 2
+    if rights & WHITE_OO != 0 and occ & (bit(base + 5) | bit(base + 6)) == 0
+      and pos.attackers-to(base + 5, occ) & enemy == 0
+      and pos.attackers-to(base + 6, occ) & enemy == 0 {
+      add-move(moves.&, base + 4, base + 6, KING_CASTLE)
+    }
+    if rights & WHITE_OOO != 0 and occ & (bit(base + 1) | bit(base + 2) | bit(base + 3)) == 0
+      and pos.attackers-to(base + 3, occ) & enemy == 0
+      and pos.attackers-to(base + 2, occ) & enemy == 0 {
+      add-move(moves.&, base + 4, base + 2, QUEEN_CASTLE)
+    }
+  }
+  moves
+}

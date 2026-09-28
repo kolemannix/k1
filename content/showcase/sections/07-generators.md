@@ -1,17 +1,14 @@
 # Generators: a keyword recognizer and a Brainfuck compiler
 
-Two classic code-generation exercises, done the same way: a plain K1 function
-in the `pre` namespace builds a `code` value, and a one-line `macro` hands it
-to the compiler at definition level with `$`. The generator runs in the
-compile-time VM, its output is compiled in place, and the generator is also an
-ordinary function you can call at runtime to look at what it emits.
+Two classic code generators. Each is a plain function in `pre` that builds a
+`code` value, plus a one-line `macro` that hands it to the compiler with `$`.
+Since the generator is just a function, you can also call it at runtime and
+print what it emits.
 
-## A gperf in 120 lines
+## A gperf in 140 lines
 
-`gperf` takes a keyword list and emits a C recognizer: pick a few byte
-positions that tell the keywords apart, find hash constants that map them to
-distinct slots, then compare once. Here the whole pipeline is a K1 macro. It
-is invoked twice, on K1's 23 keywords and on the 92 C++ keywords:
+`gperf` takes a keyword list and spits out a C recognizer. This one is a K1
+macro:
 
 ```k1
 $pre/keywords/define(k1-keyword, [
@@ -21,13 +18,56 @@ $pre/keywords/define(k1-keyword, [
 ])
 ```
 
-Each invocation emits an enum (`k1-keyword:kw-while`), `lookup`, a naive
-`lookup-linear` for comparison, `words()`, and a `#static` block that
-round-trips every keyword through `lookup` at compile time. The position
-search tries every set of one, two, then three positions (counting from the
-front, plus the last byte) until the `(length, bytes)` signatures are all
-distinct. The hash search then walks power-of-two table sizes and draws
-multipliers from an LCG until no two keywords share a slot:
+Here's what it generates for five words:
+
+```k1
+  print(pre/keywords/generate("tiny", ["if", "in", "is", "fn", "for"]).text())
+```
+
+```text
+type tiny = either { kw-if, kw-in, kw-is, kw-fn, kw-for }
+ns for tiny {
+  fn lookup(s: string): ?tiny {
+    let n = s.len()
+    if n < 2 or n > 3 return :none
+    let kl = s.[n - 1].as-u8().widen[size]
+    let k0 = s.[0].as-u8().widen[size]
+    let h = (n * 137 + kl * 59 + k0 * 125) & 15
+    if h is {
+      9 -> if s == "if" :some :kw-if else :none,
+      1 -> if s == "in" :some :kw-in else :none,
+      8 -> if s == "is" :some :kw-is else :none,
+      10 -> if s == "fn" :some :kw-fn else :none,
+      15 -> if s == "for" :some :kw-for else :none,
+      _ -> :none,
+    }
+  }
+  fn lookup-linear(s: string): ?tiny {
+    if s is {
+      "if" -> :some :kw-if,
+      "in" -> :some :kw-in,
+      "is" -> :some :kw-is,
+      "fn" -> :some :kw-fn,
+      "for" -> :some :kw-for,
+      _ -> :none,
+    }
+  }
+  fn words(): span[string] {
+    ["if", "in", "is", "fn", "for"]
+  }
+}
+#static {
+  assert(tiny/lookup("if") is :some :kw-if)
+  assert(tiny/lookup("in") is :some :kw-in)
+  assert(tiny/lookup("is") is :some :kw-is)
+  assert(tiny/lookup("fn") is :some :kw-fn)
+  assert(tiny/lookup("for") is :some :kw-for)
+}
+```
+
+First it picks one, two, then three byte positions until every
+`(length, bytes)` signature is distinct. Then it hunts for multipliers that
+put every keyword in its own slot:
 
 ```k1
 fn find-hash(name: string, words: span[string], ps: span[pos]): hash {
@@ -57,9 +97,7 @@ fn find-hash(name: string, words: span[string], ps: span[pos]): hash {
 }
 ```
 
-Emission is a `code-builder` walk. Templates in `cb.line` and `cb.block`
-elaborate as `code`, so the literal parts keep their source spans; the hash
-constants and the per-keyword arms are interpolated:
+Emitting is a `code-builder` walk:
 
 ```k1
   let cb-storage = code-builder/new()
@@ -101,84 +139,81 @@ constants and the per-keyword arms are interpolated:
 }
 ```
 
-`main` prints `pre/keywords/generate("tiny", ["if", "in", "is", "fn", "for"]).text()`
-before it benchmarks anything, so the generated K1 is visible without any
-compiler flag. For those five words the search settles on the last byte plus
-byte 0, and a 16-slot table:
-
-```text
-type tiny = either { kw-if, kw-in, kw-is, kw-fn, kw-for }
-ns for tiny {
-  fn lookup(s: string): ?tiny {
-    let n = s.len()
-    if n < 2 or n > 3 return :none
-    let kl = s.[n - 1].as-u8().widen[size]
-    let k0 = s.[0].as-u8().widen[size]
-    let h = (n * 137 + kl * 59 + k0 * 125) & 15
-    if h is {
-      9 -> if s == "if" :some :kw-if else :none,
-      1 -> if s == "in" :some :kw-in else :none,
-      8 -> if s == "is" :some :kw-is else :none,
-      10 -> if s == "fn" :some :kw-fn else :none,
-      15 -> if s == "for" :some :kw-for else :none,
-      _ -> :none,
-    }
-  }
-```
-
-The table is the `match`: LLVM lowers the dense integer match to a jump table
-and each arm's `s == "if"` to an inlined constant-size compare, so a lookup is
-two byte loads, three multiplies, one indirect jump and one compare. The
-in-program benchmark runs every keyword plus 13 near-misses (`"fnn"`,
-`"whil"`, `"context "`, `"reinterpret_casts"`, ...) 100,000 times through
-both recognizers, `k1 --optimize`, Apple Silicon:
+LLVM turns the dense `if h is` into a jump table, so a `tiny` lookup is two
+byte loads, three multiplies, one indirect jump and one compare. Every keyword
+plus 13 near-misses (`"fnn"`, `"whil"`, `"reinterpret_casts"`, ...), 100,000
+times each, `--optimize`, Apple Silicon:
 
 ```text
 23 k1 keywords, 36 probes
-  perfect hash: 3.26 ns/lookup (2300000 hits)
-  linear scan : 6.55 ns/lookup (2300000 hits)
+  perfect hash: 3.32 ns/lookup (2300000 hits)
+  linear scan : 6.61 ns/lookup (2300000 hits)
 92 c++ keywords, 105 probes
-  perfect hash: 5.06 ns/lookup (9200000 hits)
-  linear scan : 17.72 ns/lookup (9200000 hits)
+  perfect hash: 4.93 ns/lookup (9200000 hits)
+  linear scan : 17.78 ns/lookup (9200000 hits)
 ```
 
-The honest part: the naive `if s is { "fn" -> ..., "let" -> ... }` is not
-far behind at 23 keywords, and how far depends on how `string ==` lowers.
-With string equality as a `memcmp` intrinsic, LLVM turns that match into a
-switch on the length followed by a short chain of inlined constant-size
-compares, and with at most six keywords per length the chain wins outright
-at 2.5 ns. With the current `mem/equals`, a K1 routine, LLVM inlines the
-first few compares and then calls the rest, and the chain costs 6.5 ns. The
-perfect hash does one compare either way and is flat in the keyword count,
-so at 92 keywords it is three and a half times faster (unoptimized the gap
-is 23 vs 77 ns and 35 vs 243 ns).
-Everything above, search included, happens in the compile-time VM during the
-build of the program that uses it: no generator tool, no generated file to
-check in, and the `#static` self-check runs before the first native
-instruction is emitted.
+At 23 keywords the plain `if s is` isn't far behind. The hash does one string
+compare no matter how many keywords there are, so at 92 it's three and a half
+times faster.
+
+The whole search runs in the compile-time VM, during the build. No generator
+tool, no generated file to check in.
 
 ## Brainfuck, compiled
 
-The sibling section interprets Brainfuck inside `#static`. This macro compiles
-it: `$pre/bf/define(hello, "...")` emits `fn hello(): string` whose loops are
-native `while` loops and whose runs of `+`/`>` are folded into single adds.
+[Section 1](01-static.md) interprets Brainfuck in `#static`. This one
+compiles it: `define` emits `fn hello(): string` with native `while` loops,
+and runs of `+`/`>` folded into single adds.
 
 ```k1
 $pre/bf/define(hello, "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++.")
+```
 
-fn main(): i32 {
+Call it at compile time and at runtime:
+
+```k1
   let baked: "Hello World!\n" = #static hello()
   print(baked.from-static())
   print(hello())
+```
+
+```text
+Hello World!
+Hello World!
+```
+
+`baked` is a `static[string, "Hello World!\n"]`. A macro generated a function,
+the VM ran it, and the type checker checked what it printed. Any other output
+is a type error.
+
+Here's what `++++++++[>++++++++<-]>+.` (it prints `A`) becomes:
+
+```k1
   print(pre/bf/transpile("letter-a", "++++++++[>++++++++<-]>+.").text())
-  0
+```
+
+```text
+fn letter-a(): string {
+  let tape: array[u8, 30000] = .0
+  let p: size = 0
+  let out = string-builder/new()
+  tape.[p] = tape.[p] + 8
+  while tape.[p] != 0 {
+    p = p + 1
+    tape.[p] = tape.[p] + 8
+    p = p - 1
+    tape.[p] = tape.[p] - 1
+  }
+  p = p + 1
+  tape.[p] = tape.[p] + 1
+  out.write-char(tape.[p].as-char())
+  out.build()
 }
 ```
 
-The emitter is a recursive walk over the program string. `[` opens a
-`cb.block("while tape.[p] != 0", ...)` whose body is the recursive call; the
-call reports whether it stopped at a `]`, which is how unbalanced brackets are
-caught at compile time:
+The emitter is a recursive walk. `[` opens a `while` block whose body is the
+recursive call, and that call reports whether it hit a `]`:
 
 ```k1
 fn emit-body(cb: *code-builder, name: string, program: string, i: *size): bool {
@@ -240,39 +275,11 @@ macro define(name: code, program: string) {
 }
 ```
 
-Running it prints the greeting twice and then the K1 that a small program
-(`++++++++[>++++++++<-]>+.`, which prints `A`) turns into:
+So unbalanced brackets are a compile error:
 
-```text
-Hello World!
-Hello World!
-fn letter-a(): string {
-  let tape: array[u8, 30000] = .0
-  let p: size = 0
-  let out = string-builder/new()
-  tape.[p] = tape.[p] + 8
-  while tape.[p] != 0 {
-    p = p + 1
-    tape.[p] = tape.[p] + 8
-    p = p - 1
-    tape.[p] = tape.[p] - 1
-  }
-  p = p + 1
-  tape.[p] = tape.[p] + 1
-  out.write-char(tape.[p].as-char())
-  out.build()
-}
+```k1 path=content/showcase/examples/bf_transpile_wrong.k1
+$pre/bf/define(broken, "++[>+<-")
 ```
-
-The first `Hello World!` never ran at runtime. `let baked: "Hello World!\n" =
-#static hello()` executes the compiled function in the compile-time VM and
-checks the result against the literal type; `baked` is a
-`static[string, "Hello World!\n"]` and any other output would be a type error
-at the declaration. That is the whole chain in one line: a macro generates a
-function, the VM runs it, the type system checks what it produced.
-
-An unbalanced program is refused while the macro runs (`bf_transpile_wrong.k1`
-defines `broken` from `"++[>+<-"`):
 
 ```text
 ┌────────────────────────────────────────╴
@@ -288,18 +295,18 @@ defines `broken` from `"++[>+<-"`):
 ├─────
 │  bf `broken`: unmatched `[` at byte 2
 bc Execution Trace
-[00] core/crash builtin.k1:1083
-[01] bf_transpile_wrong/pre/bf/emit-body bf_transpile_wrong.k1:42
-[02] bf_transpile_wrong/pre/bf/bf_transpile_wrong.pre.bf.transpile_lam_6215 bf_transpile_wrong.k1:62
-[03] core/code-builder/block code.k1:68
-[04] bf_transpile_wrong/pre/bf/transpile bf_transpile_wrong.k1:65
-[05] bf_transpile_wrong/pre/bf/define bf_transpile_wrong.k1:69
+[00] core/platform/process/exit platform.k1:201
+[01] core/sys/exit builtin.k1:964
+[02] core/crash builtin.k1:1171
+[03] bf_transpile_wrong/pre/bf/emit-body bf_transpile_wrong.k1:42
+[04] bf_transpile_wrong/pre/bf/bf_transpile_wrong.pre.bf.transpile_lam_6684 bf_transpile_wrong.k1:62
+[05] core/code-builder/block code.k1:85
+[06] bf_transpile_wrong/pre/bf/transpile bf_transpile_wrong.k1:65
+[07] bf_transpile_wrong/pre/bf/define bf_transpile_wrong.k1:69
 
 └────────────────────────────────────────╴
-Module bf_transpile_wrong failed namespace declaration with 1 errors
+Module bf_transpile_wrong failed compiling with 1 errors
 ```
 
-The message names the program and the byte, the box carets the `crash` in
-the emitter, and the trace shows the lambda passed to `cb.block` on the way.
-The trace stops at the macro body rather than at the `$pre/bf/define(broken,
-...)` line, which is the one thing here that could be sharper.
+The trace stops at the macro body, not the `$pre/bf/define(broken, ...)`
+line. That one could be sharper.

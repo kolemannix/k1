@@ -452,9 +452,16 @@ impl FloatType {
 pub struct FnParamType {
     pub type_id: TypeId,
     pub name: StringId,
-    pub is_context: bool,
-    pub is_lambda_env: bool,
-    pub is_macro_code: bool,
+    pub kind: FnParamKind,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum FnParamKind {
+    Plain,
+    Context,
+    LambdaEnv,
+    MacroCode,
+    MacroTokens,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq)]
@@ -690,11 +697,7 @@ impl TypedProgram {
                         .getn(f1.physical_params)
                         .iter()
                         .zip(self.mem.getn(f2.physical_params))
-                        .all(|(p1, p2)| {
-                            p1.type_id == p2.type_id
-                                && p1.is_macro_code == p2.is_macro_code
-                                && p1.is_context == p2.is_context
-                        })
+                        .all(|(p1, p2)| p1.type_id == p2.type_id && p1.kind == p2.kind)
                 } else {
                     false
                 }
@@ -812,9 +815,7 @@ impl TypedProgram {
                 for param in self.mem.getn(fun.physical_params) {
                     param.type_id.hash(state);
                     param.name.hash(state);
-                    param.is_context.hash(state);
-                    param.is_lambda_env.hash(state);
-                    param.is_macro_code.hash(state);
+                    param.kind.hash(state);
                 }
             }
             Type::FunctionPointer(fp) => fp.function_type_id.hash(state),
@@ -1148,6 +1149,8 @@ pub struct BuiltinTypes {
     pub opt: Option<TypeId>,
     pub code: Option<TypeId>,
     pub code_chunk: Option<TypeId>,
+    pub code_token: Option<TypeId>,
+    pub code_token_span: Option<TypeId>,
     pub code_builder: Option<TypeId>,
     pub dyn_lambda_obj: Option<TypeId>,
     pub source_location: Option<TypeId>,
@@ -1179,6 +1182,8 @@ impl BuiltinTypes {
         debug_assert!(self.opt.is_some());
         debug_assert!(self.code.is_some());
         debug_assert!(self.code_chunk.is_some());
+        debug_assert!(self.code_token.is_some());
+        debug_assert!(self.code_token_span.is_some());
         debug_assert!(self.code_builder.is_some());
         debug_assert!(self.dyn_lambda_obj.is_some());
         debug_assert!(self.k1_module.is_some());
@@ -1220,6 +1225,12 @@ impl BuiltinTypes {
     }
     pub fn code_chunk(&self) -> TypeId {
         self.code_chunk.expect("code-chunk builtin missing")
+    }
+    pub fn code_token(&self) -> TypeId {
+        self.code_token.expect("code-token builtin missing")
+    }
+    pub fn code_token_span(&self) -> TypeId {
+        self.code_token_span.expect("span[code-token] builtin missing")
     }
     pub fn code_builder(&self) -> TypeId {
         self.code_builder.expect("code-builder builtin missing")

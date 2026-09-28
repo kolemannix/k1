@@ -222,7 +222,7 @@ pub(super) fn compile_inline_call(
     b: &mut Builder,
     callee_id: FunctionId,
     call: IrCall,
-) -> K1Result<Value> {
+) -> K1Result<Option<Value>> {
     if b.k1.trace.stack_contains_key(TraceKind::IrLower, callee_id.as_u32()) {
         kbail!(
             b.k1,
@@ -244,12 +244,12 @@ pub(super) fn compile_inline_call(
     if inlined.returns == 0 {
         let dead = b.push_block(BlockSourceKind::InlineExit);
         b.goto_block(dead);
-        return Ok(b.push_inst_anon(Inst::Unreachable).as_value());
+        return Ok(None);
     }
-    Ok(match call.dst {
+    Ok(Some(match call.dst {
         Some(dst) => dst,
         None => inlined.result.unwrap_or(Value::Empty),
-    })
+    }))
 }
 
 struct InlinedBody {
@@ -607,13 +607,18 @@ pub fn cfg_simplify(k1: &mut TypedProgram, u: &mut UnitBuf) -> u64 {
 
         let mut cur = u.body.first_block;
         while let Some(block_id) = cur {
+            if let Some(pred) = u.single_pred(block_id)
+                && strip_single_pred_phis(u, block_id, pred, merged_phis)
+            {
+                noop = false;
+            }
             let node = *u.block(block_id);
 
             if let Some(pred) = u.single_pred(block_id)
                 && node.first.is_some()
                 && node.first == node.last
                 && let Inst::Jump(succ) = *u.inst(node.first.unwrap())
-                && !u.inst(u.block(succ).first.unwrap()).is_phi()
+                && (!u.inst(u.block(succ).first.unwrap()).is_phi() || !u.is_pred(succ, pred))
             {
                 let pred_last = u.block(pred).last.unwrap();
                 u.map_inst_refs(pred_last, &|_| {}, &|target| {
@@ -636,23 +641,13 @@ pub fn cfg_simplify(k1: &mut TypedProgram, u: &mut UnitBuf) -> u64 {
                 && u.single_pred(succ) == Some(block_id)
             {
                 u.remove_inst(jump);
+                strip_single_pred_phis(u, succ, block_id, merged_phis);
 
                 let mut succ_cur = u.block(succ).first;
                 while let Some(inst_id) = succ_cur {
                     succ_cur = u.next_inst(inst_id);
-                    let mut keep = true;
-                    if let Inst::Phi { incomings, .. } = *u.inst(inst_id) {
-                        if incomings.len() == 1 {
-                            let only_case = u.view().phi_cases(incomings)[0];
-                            debug_assert_eq!(only_case.from, block_id);
-                            merged_phis.insert(inst_id, only_case.value);
-                            keep = false;
-                        }
-                    }
                     u.remove_inst(inst_id);
-                    if keep {
-                        u.move_inst_to_end(block_id, inst_id);
-                    }
+                    u.move_inst_to_end(block_id, inst_id);
                 }
 
                 retarget_successors(u, block_id, succ);
@@ -668,6 +663,26 @@ pub fn cfg_simplify(k1: &mut TypedProgram, u: &mut UnitBuf) -> u64 {
     }
     debug!("cfg_simplify end\n{}", blocks_to_string(k1, &u.view(), false));
     passes
+}
+
+fn strip_single_pred_phis(
+    u: &mut UnitBuf,
+    block_id: BlockId,
+    pred: BlockId,
+    merged_phis: &mut ValueSubst,
+) -> bool {
+    let mut stripped = false;
+    while let Some(inst_id) = u.block(block_id).first
+        && let Inst::Phi { incomings, .. } = *u.inst(inst_id)
+    {
+        debug_assert_eq!(incomings.len(), 1);
+        let only_case = u.view().phi_cases(incomings)[0];
+        debug_assert_eq!(only_case.from, pred);
+        merged_phis.insert(inst_id, only_case.value);
+        u.remove_inst(inst_id);
+        stripped = true;
+    }
+    stripped
 }
 
 fn retarget_successors(u: &mut UnitBuf, block: BlockId, old_source: BlockId) {

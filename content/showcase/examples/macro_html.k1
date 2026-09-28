@@ -1,0 +1,33 @@
+use std/html
+
+type todo = { title: string, done: bool }
+
+fn todo-item(out: *string-builder, t: todo) {
+  html/write(out, \{
+    <li class={if t.done "done" else "open"} data-on:click="@post('/toggle')">
+      {t.title} #if t.done { <small>"(done)"</small> }
+    </li>
+  })
+}
+
+fn page(user: string, todos: span[todo]): string {
+  html/render(\{
+    <main id="todos">
+      <h1>Hello, {user}! {todos.len()} things to do</h1>
+      <ul>
+        #for t in todos { #{ todo-item(html-sb.&, t) } }
+      </ul>
+    </main>
+  })
+}
+
+fn main(): i32 {
+  let todos: span[todo] = [
+    .{ title = "Write a <macro>", done = true },
+    .{ title = "Watch TV & relax", done = false },
+  ]
+  let got = page("Ko", todos)
+  println(got)
+  assert(got == "<main id=\"todos\"><h1>Hello, Ko! 2 things to do</h1><ul><li class=\"done\" data-on:click=\"@post(&#39;/toggle&#39;)\">Write a &lt;macro&gt; <small>(done)</small></li><li class=\"open\" data-on:click=\"@post(&#39;/toggle&#39;)\">Watch TV &amp; relax</li></ul></main>")
+  0
+}

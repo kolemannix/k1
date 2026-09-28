@@ -1,0 +1,69 @@
+ns fmt {
+  fn(inline) is-char-start(b: u8): bool { b.bit-and(0xC0) != 0x80 }
+
+  fn char-count(bytes: span[u8]): size {
+    let count: size = 0
+    for b in bytes {
+      if is-char-start(b) { count = count + 1 }
+    }
+    count
+  }
+
+  fn chars-prefix(bytes: span[u8], n: u32): span[u8] {
+    let count: u32 = 0
+    let end: size = 0
+    while end < bytes.len() {
+      if is-char-start(bytes.[end]) {
+        if count == n break
+        count = count + 1
+      }
+      end = end + 1
+    }
+    bytes.slice(0, end)
+  }
+
+  type pad = { text: spill-list[u8, 64] }
+
+  ns for pad {
+    fn new(): pad { .0 }
+
+    fn shortfall(self: *pad, width: u32): size {
+      let len = char-count(self.text.as-span())
+      let width = width.widen[size]
+      if len >= width 0 else width - len
+    }
+
+    fn align-left[w: writer](self: *pad, w, fill: string, width: u32) {
+      let short = self.shortfall(width)
+      w.write-bytes(self.text.as-span())
+      w.repeat(fill, short)
+    }
+
+    fn align-right[w: writer](self: *pad, w, fill: string, width: u32) {
+      w.repeat(fill, self.shortfall(width))
+      w.write-bytes(self.text.as-span())
+    }
+
+    fn align-center[w: writer](self: *pad, w, fill: string, width: u32) {
+      let short = self.shortfall(width)
+      w.repeat(fill, short / 2)
+      w.write-bytes(self.text.as-span())
+      w.repeat(fill, short - short / 2)
+    }
+
+    fn align-zeros[w: writer](self: *pad, w, width: u32) {
+      let text = self.text.as-span()
+      let short = self.shortfall(width)
+      let signed = text.len() > 0 and (text.[0] == '-'.as-u8() or text.[0] == '+'.as-u8())
+      let digits-start: size = if signed 1 else 0
+      w.write-bytes(text.slice(0, digits-start))
+      w.repeat("0", short)
+      w.write-bytes(text.slice(digits-start, text.len()))
+    }
+  }
+
+  impl writer for *pad {
+    fn write-byte(self, b: u8) { self.text.push(b) }
+    fn write-bytes(self, b: span[u8]) { self.text.push-n(b) }
+  }
+}

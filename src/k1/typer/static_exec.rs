@@ -1,6 +1,8 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
 
+use crate::vm::k1_types;
+
 use super::trace::{FrameId, TraceKind};
 use super::*;
 
@@ -964,13 +966,119 @@ impl TypedProgram {
         self.static_values.add_struct_from_slice(code_type, &[chunks_value])
     }
 
+    fn get_expr_span_quoted(&self, parsed_expr: ParsedExprId) -> SpanId {
+        match self.ast.exprs.get(parsed_expr) {
+            ParsedExpr::Code(code) => code.content,
+            _ => self.ast.exprs.get_span(parsed_expr),
+        }
+    }
+
     pub(super) fn code_from_parsed_expr(&mut self, parsed_expr: ParsedExprId) -> StaticValueId {
-        let arg_span = self.ast.exprs.get_span(parsed_expr);
-        let content =
-            self.ast.sources.get_span_content(&self.ast.mem, self.ast.spans.get(arg_span));
+        let span = self.get_expr_span_quoted(parsed_expr);
+        let content = self.ast.sources.get_span_content(&self.ast.mem, self.ast.spans.get(span));
         let string_id = self.ast.idents.intern(content);
-        let value_id = self.make_static_code_value(&[(string_id, arg_span)]);
-        value_id
+        self.make_static_code_value(&[(string_id, span)])
+    }
+
+    pub(super) fn tokens_from_parsed_expr(
+        &mut self,
+        parsed_expr: ParsedExprId,
+    ) -> K1Result<StaticValueId> {
+        use crate::lex::TokenKind as K;
+        let code_span = self.ast.spans.get(self.get_expr_span_quoted(parsed_expr));
+        let content = self.ast.sources.get_span_content(&self.ast.mem, code_span);
+        let mut lexed = crate::lex::lex(content, std::mem::take(&mut self.buffers.lexed));
+        if let Some(e) = lexed.error.take() {
+            let span = self.ast.spans.add(Span {
+                file_id: code_span.file_id,
+                start: code_span.start + e.start,
+                len: e.len,
+            });
+            self.buffers.lexed = lexed;
+            kbail!(self, span, "{}", e.message);
+        }
+        let token_type = self.builtin_types.code_token();
+        let kind_type = self.get_struct_field(token_type, 0).type_id;
+        let spacing_type = self.get_struct_field(token_type, 3).type_id;
+        let mut elements = self.tmp.new_list(lexed.tokens.len() as u32);
+        let mut i = 0;
+        while i < lexed.tokens.len() {
+            let first = lexed.tokens[i];
+            let first_index = i;
+            let token_kind = match first.kind {
+                K::Eof => {
+                    i += 1;
+                    continue;
+                }
+                K::Ident => k1_types::CodeTokenKind::ident,
+                k if k.is_keyword() => k1_types::CodeTokenKind::ident,
+                K::Numeric => k1_types::CodeTokenKind::number,
+                K::StringDoneDq | K::StringDoneBt => k1_types::CodeTokenKind::string,
+                K::Char => k1_types::CodeTokenKind::char,
+                K::StringOpenDq | K::StringOpenBt => {
+                    let mut holes: SV8<u32> = smallvec![0];
+                    while let Some(&depth) = holes.last() {
+                        i += 1;
+                        match lexed.tokens[i].kind {
+                            K::OpenBrace => *holes.last_mut().unwrap() += 1,
+                            K::CloseBrace => *holes.last_mut().unwrap() -= 1,
+                            K::StringOpenDq | K::StringOpenBt if depth > 0 => holes.push(0),
+                            K::StringDoneDq | K::StringDoneBt if depth == 0 => {
+                                holes.pop();
+                            }
+                            _ => {}
+                        }
+                    }
+                    k1_types::CodeTokenKind::string
+                }
+                _ => k1_types::CodeTokenKind::punct,
+            };
+            let last_index = i;
+            let (start, _) = lexed.get_token_start_len(first);
+            let (last_start, last_len) = lexed.get_token_start_len(lexed.tokens[last_index]);
+
+            let output_span = Span {
+                file_id: code_span.file_id,
+                start: code_span.start + start,
+                len: last_start + last_len - start,
+            };
+            let text = self.ast.sources.get_span_content(&self.ast.mem, output_span);
+            let text_value = self.static_values.add_string(self.ast.idents.intern(text));
+            let output_span_id = self.ast.spans.add(output_span);
+            let source_value =
+                self.static_values.add_int(TypedIntValue::U64(output_span_id.as_u32() as u64));
+            let kind_value = self
+                .static_values
+                .add(StaticValue::Enum(kind_type, TypedIntValue::U8(token_kind as u8)));
+            let token_spacing = match first_index {
+                0 => k1_types::CodeTokenSpacing::none,
+                _ if first.is_newline_preceded() => k1_types::CodeTokenSpacing::newline,
+                _ if first.is_whitespace_preceded() => k1_types::CodeTokenSpacing::inline,
+                _ => k1_types::CodeTokenSpacing::none,
+            };
+            let spacing_value = self
+                .static_values
+                .add(StaticValue::Enum(spacing_type, TypedIntValue::U8(token_spacing as u8)));
+
+            // MUST MATCH
+            // type code-token = {
+            //   kind: either(u8) { ident = 0, number = 1, string = 2, char = 3, punct = 4 },
+            //   text: string,
+            //   source: u64,
+            //   spacing: either(u8) { none = 0, inline = 1, newline = 2 },
+            // }
+            elements.push(self.static_values.add_struct_from_slice(
+                token_type,
+                &[kind_value, text_value, source_value, spacing_value],
+            ));
+            i += 1;
+        }
+        self.buffers.lexed = lexed;
+        Ok(self.add_static_container_from_ids(
+            StaticContainerKind::Span,
+            self.builtin_types.code_token_span(),
+            elements.as_slice(),
+        ))
     }
 
     pub(super) fn materialize_static_value(
@@ -1471,19 +1579,14 @@ impl TypedProgram {
                     );
                 }
             }
-            match param.is_macro_code {
-                true => {
-                    // when the parameter is of type code,
-                    // it gets auto 'quoted' at the callsite
-                    // So we just yoink the source text from its span
-                    // and actually ignore the previously parsed value.
-                    // This means its kinda hard to synthesize one of these arguments
-                    //
-                    // which is why we're accepting MaybeTypedExpr here
-                    let code_value_id = self.code_from_parsed_expr(parsed_arg.value);
-                    static_args.push(code_value_id);
+            match param.kind {
+                FnParamKind::MacroCode => {
+                    static_args.push(self.code_from_parsed_expr(parsed_arg.value));
                 }
-                false => {
+                FnParamKind::MacroTokens => {
+                    static_args.push(self.tokens_from_parsed_expr(parsed_arg.value)?);
+                }
+                _ => {
                     let value_id = self.execute_static_expr(
                         parsed_arg.value,
                         ctx.with_expected_type(Some(param.type_id)),

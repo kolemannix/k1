@@ -134,6 +134,10 @@ fn test() {
     some("Integer division overflow: min-value / -1")
   )
 
+  assert-equals((-7: i32).abs(), 7)
+  assert-equals((7: i32).abs(), 7)
+  assert-equals((-7: i64).abs(), 7)
+
   .{}
 
 }

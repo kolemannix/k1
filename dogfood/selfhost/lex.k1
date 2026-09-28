@@ -13,13 +13,13 @@ type token-kind = either(u8) {
   string-open-dq,
   string-open-bt,
   char,
+  fmt-spec,
 
   kw-fn, kw-let, kw-and, kw-or, kw-if, kw-else, kw-while, kw-loop,
   kw-ns, kw-intern, kw-for, kw-in, kw-ability, kw-impl, kw-is, kw-not,
   kw-builtin, kw-where, kw-context, kw-use, kw-require, kw-defer,
 
   slash,
-  line-comment,
 
   open-paren, close-paren,
   open-bracket, close-bracket,
@@ -76,6 +76,7 @@ ns for token-kind {
       :string-open-dq -> "<\"string...>",
       :string-open-bt -> "<`string...>",
       :char -> "<char>",
+      :fmt-spec -> "<fmt spec>",
       :kw-fn -> "fn", :kw-let -> "let", :kw-and -> "and",
       :kw-or -> "or", :kw-if -> "if", :kw-else -> "else", :kw-while -> "while",
       :kw-loop -> "loop", :kw-ns -> "ns", :kw-intern -> "intern", :kw-for -> "for",
@@ -84,7 +85,6 @@ ns for token-kind {
       :kw-context -> "context", :kw-use -> "use", :kw-require -> "require",
       :kw-defer -> "defer",
       :slash -> "/",
-      :line-comment -> "//",
       :open-paren -> "(", :close-paren -> ")",
       :open-bracket -> "[", :close-bracket -> "]",
       :open-brace -> "{", :close-brace -> "}",
@@ -224,6 +224,67 @@ fn char-escape(c: char): ?u8 {
   else :none
 }
 
+fn fmt-align-of(c: char): ?ast/fmt-align {
+  if c == '<' :some(:left)
+  else if c == '>' :some(:right)
+  else if c == '^' :some(:center)
+  else :none
+}
+
+fn utf8-lead-len(c: char): size {
+  let b = c.as-u8()
+  if b < 0x80 1 else if b < 0xE0 2 else if b < 0xF0 3 else 4
+}
+
+fn digits-end(text: string, start: size): size {
+  let end = start
+  while end < text.len() and text.[end].is-ascii-digit() { end = end + 1 }
+  end
+}
+
+fn parse-u32(digits: string): ?u32 {
+  let value: u64 = 0
+  for c in digits {
+    value = value * 10 + (c.as-u8() - '0'.as-u8()).widen[u64]
+    if value > u32/max-value.widen[u64] return :none
+  }
+  :some(value.trunc[u32])
+}
+
+fn parse-fmt-spec(text: string): ?ast/fmt-spec {
+  if text.len() == 0 return :none
+  let first-len = utf8-lead-len(text.[0])
+  let fill = " "
+  let align: ?ast/fmt-align = :none
+  let i: size = 0
+  if first-len < text.len() and fmt-align-of(text.[first-len]) is :some a {
+    fill = text.slice(0, first-len)
+    align = :some(a)
+    i = first-len + 1
+  } else if fmt-align-of(text.[0]) is :some a {
+    align = :some(a)
+    i = 1
+  }
+  if fill == "{" return :none
+  let width-end = digits-end(text, i)
+  let width-text = text.slice(i, width-end)
+  if width-text.len() > 1 and width-text.[0] == '0' {
+    if align is :some _ return :none
+    align = :some(:sign-zeros)
+    fill = "0"
+  }
+  let width = parse-u32(width-text).try
+  if (width == 0) != (width-text.len() == 0) or (align is :some _ and width == 0) return :none
+  let precision: ?u32 = :none
+  if width-end < text.len() {
+    if text.[width-end] != '.' return :none
+    let precision-end = digits-end(text, width-end + 1)
+    if precision-end == width-end + 1 or precision-end != text.len() return :none
+    precision = :some(parse-u32(text.slice(width-end + 1, precision-end)).try)
+  }
+  :some(.{ fill, align, width, precision })
+}
+
 type lex-error = { message: string, span: ast/src-span }
 
 type lex-mode = either { tokens, interp(u32), dq-string, bt-string }
@@ -295,6 +356,17 @@ ns for lexer {
       :some k -> self.make-token(k, start, tok-len),
       :none -> self.make-token(:ident, start, tok-len),
     }
+  }
+
+  fn fmt-spec-len(self: *lexer): ?u32 {
+    let start = self.pos + 1
+    let end = start
+    while end < self.content.len() and self.content.[end] != '}' and self.content.[end] != '\n' {
+      end = end + 1
+    }
+    if end >= self.content.len() or self.content.[end] != '}' return :none
+    if parse-fmt-spec(self.content.slice(start, end)).is-none() return :none
+    :some((end - start).trunc[u32])
   }
 
   fn top-mode(self: *lexer): lex-mode {
@@ -403,6 +475,11 @@ ns for lexer {
           if next == '>' { return :ok(self.emit(tokens, :r-angle-r-angle, n, 2)) }
           return :ok(self.emit(tokens, :r-angle, n, 1))
         } else if c == ':' {
+          if self.top-mode() is :interp depth and depth == 1 {
+            if self.fmt-spec-len() is :some len {
+              return :ok(self.emit(tokens, :fmt-spec, n, len + 1))
+            }
+          }
           return :ok(self.emit(tokens, :colon, n, 1))
         } else if c == ';' {
           return :ok(self.emit(tokens, :semicolon, n, 1))

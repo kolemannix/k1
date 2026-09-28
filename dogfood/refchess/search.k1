@@ -1,0 +1,309 @@
+use core/arena
+
+let INFINITY: i32 = 32000
+let MATE: i32 = 31000
+let MATE_BOUND: i32 = 30000
+let MAX_PLY: u32 = 100
+
+type bound = either(u8) { none, exact, lower, upper }
+
+type tt-entry = { key: u64, best: move, score: i16, depth: u8, bound: bound }
+
+type transposition-table = { store: *arena, entries: buffer[tt-entry] }
+
+ns for transposition-table {
+  fn new(megabytes: size): transposition-table {
+    let count = (megabytes * arena/mb / types/stride[tt-entry]).unsigned()
+    let pow2 = if count.next-pow2() == count count else count.next-pow2() / 2
+    let bytes = pow2.signed() * types/stride[tt-entry]
+    let store = arena/init-fixed(bytes + arena/kb * 64)
+    .{ store, entries = store.alloc-buffer[tt-entry](pow2.signed()) }
+  }
+
+  fn clear(self: *transposition-table) {
+    let count = self.entries.len
+    self.store.reset()
+    self.entries = self.store.alloc-buffer[tt-entry](count)
+  }
+
+  fn release(self: *transposition-table) { self.store.release() }
+
+  fn(inline) slot(self: *transposition-table, key: u64): *tt-entry {
+    self.entries.[(key & (self.entries.len.unsigned() - 1)).signed()].&
+  }
+
+  fn probe(self: *transposition-table, key: u64): ?tt-entry {
+    let e = self.slot(key)
+    if e.key == key and not (e.bound is :none) :some e.* else :none
+  }
+
+  fn store(self: *transposition-table, key: u64, best: move, score: i32, depth: i32, bound: bound) {
+    let e = self.slot(key)
+    if e.key == key and depth < e.depth.widen[i32] and not (bound is :exact) return
+    e.* = .{ key, best, score = score.trunc[i16], depth = depth.max(0).trunc[u8], bound }
+  }
+}
+
+fn emit(line: string) {
+  println(line)
+  core/io/flush-stdout()
+}
+
+fn(inline) score-to-tt(score: i32, ply: u32): i32 {
+  if score > MATE_BOUND score + ply.signed() else if score < MATE_BOUND.negated() score - ply.signed() else score
+}
+
+fn(inline) score-from-tt(score: i32, ply: u32): i32 {
+  if score > MATE_BOUND score - ply.signed() else if score < MATE_BOUND.negated() score + ply.signed() else score
+}
+
+type limits = { depth: u32, soft-ms: u64, hard-ms: u64, nodes: u64, infinite: bool }
+
+ns for limits {
+  let NONE: limits = .{ depth = MAX_PLY - 1, soft-ms = 0, hard-ms = 0, nodes = 0, infinite = false }
+}
+
+type searcher = {
+  ply: *arena,
+  game: *arena,
+  tt: *transposition-table,
+  keys: *list[u64],
+  input: ?*input,
+  limits: limits,
+  started: u64,
+  nodes: u64,
+  stopped: bool,
+  killers: array[array[move, 2], 100],
+  pv: array[array[move, 100], 100],
+  pv-len: array[u32, 100],
+}
+
+ns for searcher {
+  fn new(ply: *arena, game: *arena, tt: *transposition-table, keys: *list[u64], input: ?*input, limits: limits): searcher {
+    .{
+      ply,
+      game,
+      tt,
+      keys,
+      input,
+      limits,
+      started = std/time/read-cpu-counter(),
+      nodes = 0,
+      stopped = false,
+      killers = .0,
+      pv = .0,
+      pv-len = .0,
+    }
+  }
+
+  fn elapsed-ms(self: *searcher): u64 { std/time/elapsed-ms(self.started) }
+
+  fn poll(self: *searcher) {
+    if self.limits.hard-ms != 0 and self.elapsed-ms() >= self.limits.hard-ms { self.stopped = true }
+    if self.limits.nodes != 0 and self.nodes >= self.limits.nodes { self.stopped = true }
+    require self.input is :some input else return
+    while input.has-line() {
+      let command = if input.peek-line() is :some line { words(line).first() ? "" } else ""
+      if command != "isready" {
+        if command == "stop" input.skip-line()
+        self.stopped = true
+        return
+      }
+      input.skip-line()
+      emit("readyok")
+    }
+  }
+
+  fn is-repetition(self: *searcher, pos: *position): bool {
+    let n = self.keys.len()
+    let reach = pos.halfmove.widen[size].min(n - 1)
+    let back: size = 4
+    while back <= reach {
+      if self.keys.[n - 1 - back] == pos.key return true
+      back = back + 2
+    }
+    false
+  }
+
+  fn move-score(self: *searcher, pos: *position, m: move, tt-move: move, ply: u32): i32 {
+    if m.bits == tt-move.bits return 1000000
+    if m.is-capture() {
+      let victim = if m.is-en-passant() kind:pawn else pos.board.[m.to()]
+      return 100000 + PIECE_VALUE_MG.[victim.value] * 10 - PIECE_VALUE_MG.[pos.board.[m.from()].value] / 10
+    }
+    if m.is-promotion() return 90000 + PIECE_VALUE_MG.[m.promotion-kind().value]
+    if m.bits == self.killers.[ply].[0].bits return 80000
+    if m.bits == self.killers.[ply].[1].bits return 79000
+    0
+  }
+
+  fn score-moves(context ply-arena: *arena)(self: *searcher, pos: *position, moves: list[move], tt-move: move, ply: u32): buffer[i32] {
+    let scores = ply-arena.alloc-buffer[i32](moves.len())
+    for m in moves { scores.[it-index] = self.move-score(pos, m, tt-move, ply) }
+    scores
+  }
+
+  fn(inline) pick-next(moves: list[move], scores: buffer[i32], from: size): move {
+    let best = from
+    let i = from + 1
+    while i < moves.len() {
+      if scores.[i] > scores.[best] { best = i }
+      i = i + 1
+    }
+    moves.swap(from, best)
+    scores.swap(from, best)
+    moves.[from]
+  }
+
+  fn quiesce(self: *searcher, pos: *position, alpha: i32, beta: i32, ply: u32): i32 {
+    let alpha = alpha
+    self.pv-len.[ply] = 0
+    self.nodes = self.nodes + 1
+    if self.nodes & 2047 == 0 self.poll()
+    if self.stopped return 0
+    let in-check = pos.in-check()
+    if ply >= MAX_PLY - 1 return if in-check 0 else evaluate(pos)
+    let best = INFINITY.negated()
+    if not in-check {
+      best = evaluate(pos)
+      if best >= beta return best
+      if best > alpha { alpha = best }
+    }
+    let(context) ply-arena: *arena = self.ply
+    let mark = ply-arena.mark()
+    defer ply-arena.pop-to-mark(mark)
+    let moves = gen-moves(pos, if in-check gen-mode:all else gen-mode:noisy)
+    if in-check and moves.len() == 0 return ply.signed() - MATE
+    let scores = self.score-moves(pos, moves, move/NONE, ply)
+    for i in 0.until(moves.len()) {
+      let m = pick-next(moves, scores, i)
+      let child = pos.*
+      child.make(m)
+      let score = self.quiesce(child.&, beta.negated(), alpha.negated(), ply + 1).negated()
+      if self.stopped return 0
+      if score > best {
+        best = score
+        if score > alpha {
+          alpha = score
+          if alpha >= beta break
+        }
+      }
+    }
+    best
+  }
+
+  fn negamax(self: *searcher, pos: *position, depth: i32, alpha: i32, beta: i32, ply: u32): i32 {
+    let alpha = alpha
+    self.pv-len.[ply] = 0
+    let in-check = pos.in-check()
+    let depth = if in-check depth + 1 else depth
+    if depth <= 0 return self.quiesce(pos, alpha, beta, ply)
+    self.nodes = self.nodes + 1
+    if self.nodes & 2047 == 0 self.poll()
+    if self.stopped return 0
+    if ply > 0 {
+      if pos.halfmove >= 100 or self.is-repetition(pos) return 0
+      if ply >= MAX_PLY - 1 return evaluate(pos)
+    }
+
+    let tt-move = move/NONE
+    if self.tt.probe(pos.key) is :some e {
+      tt-move = e.best
+      let score = score-from-tt(e.score.widen[i32], ply)
+      if ply > 0 and e.depth.widen[i32] >= depth {
+        if e.bound is {
+          :exact -> return score,
+          :lower -> if score >= beta return score,
+          :upper -> if score <= alpha return score,
+          :none -> {}
+        }
+      }
+    }
+
+    let(context) ply-arena: *arena = self.ply
+    let mark = ply-arena.mark()
+    defer ply-arena.pop-to-mark(mark)
+    let moves = gen-moves(pos, :all)
+    if moves.len() == 0 return if in-check ply.signed() - MATE else 0
+    let scores = self.score-moves(pos, moves, tt-move, ply)
+
+    let original-alpha = alpha
+    let best = INFINITY.negated()
+    let best-move = move/NONE
+    for i in 0.until(moves.len()) {
+      let m = pick-next(moves, scores, i)
+      let child = pos.*
+      child.make(m)
+      self.keys.push-in(self.game, child.key)
+      let score = if i == 0 {
+        self.negamax(child.&, depth - 1, beta.negated(), alpha.negated(), ply + 1).negated()
+      } else {
+        let probe = self.negamax(child.&, depth - 1, alpha.negated() - 1, alpha.negated(), ply + 1).negated()
+        if probe > alpha and probe < beta {
+          self.negamax(child.&, depth - 1, beta.negated(), alpha.negated(), ply + 1).negated()
+        } else probe
+      }
+      let _ = self.keys.pop()
+      if self.stopped return 0
+      if score > best {
+        best = score
+        best-move = m
+        if score > alpha {
+          alpha = score
+          self.pv.[ply].[0] = m
+          let child-len = self.pv-len.[ply + 1]
+          for j in 0u32.until(child-len) { self.pv.[ply].[j + 1] = self.pv.[ply + 1].[j] }
+          self.pv-len.[ply] = child-len + 1
+          if alpha >= beta {
+            if (not m.is-capture()) and m.bits != self.killers.[ply].[0].bits {
+              self.killers.[ply].[1] = self.killers.[ply].[0]
+              self.killers.[ply].[0] = m
+            }
+            break
+          }
+        }
+      }
+    }
+
+    let kind: bound = if best >= beta :lower else if best > original-alpha :exact else :upper
+    self.tt.store(pos.key, best-move, score-to-tt(best, ply), depth, kind)
+    best
+  }
+
+  fn pv-text(self: *searcher): string {
+    let sb = string-builder/new()
+    for i in 0u32.until(self.pv-len.[0]) {
+      if i > 0 sb.write-char(' ')
+      sb.write(self.pv.[0].[i].to-uci())
+    }
+    sb.build()
+  }
+
+  fn run(self: *searcher, root: *position): move {
+    let(context) ply-arena: *arena = self.ply
+    let fallback = {
+      let mark = ply-arena.mark()
+      defer ply-arena.pop-to-mark(mark)
+      gen-moves(root, :all).first() ? move/NONE
+    }
+    if fallback.bits == move/NONE.bits return fallback
+    self.pv.[0].[0] = fallback
+    for depth in 1u32.until(self.limits.depth + 1) {
+      let score = self.negamax(root, depth.signed(), INFINITY.negated(), INFINITY, 0)
+      if self.stopped break
+      let elapsed = self.elapsed-ms()
+      let nps = self.nodes * 1000 / elapsed.max(1)
+      let score-text = if score > MATE_BOUND "mate ${(MATE - score + 1) / 2}"
+        else if score < MATE_BOUND.negated() "mate ${(MATE + score).negated() / 2}"
+        else "cp $score"
+      emit("info depth $depth score $score-text nodes ${self.nodes} nps $nps time $elapsed pv ${self.pv-text()}")
+      if (not self.limits.infinite) and self.limits.soft-ms != 0 and elapsed >= self.limits.soft-ms break
+      if (not self.limits.infinite) and score.abs() > MATE_BOUND and (MATE - score.abs()).unsigned() <= depth break
+    }
+    while self.limits.infinite and not self.stopped {
+      core/platform/thread/sleep-ms(5)
+      self.poll()
+    }
+    self.pv.[0].[0]
+  }
+}

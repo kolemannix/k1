@@ -1,0 +1,60 @@
+ns html_test
+use std/html
+
+type item = { name: string, n: int }
+
+fn row(out: *string-builder, it: item) {
+  html/write(out, \{ <li data-n={it.n}>{it.name}</li> })
+}
+
+fn test-escaping() {
+  let s = "<b> & \"q\" 'a'"
+  assert-equals(html/render(\{ <p title={s}>{s}</p> }), "<p title=\"&lt;b&gt; &amp; &quot;q&quot; &#39;a&#39;\">&lt;b&gt; &amp; &quot;q&quot; &#39;a&#39;</p>")
+  assert-equals(html/render(\{ <p>"a < b" & c</p> }), "<p>a &lt; b &amp; c</p>")
+  assert-equals(html/render(\{ <p>#raw {s}</p> }), "<p><b> & \"q\" 'a'</p>")
+  assert-equals(html/render(\{ <style>{"a > b { }"}</style> }), "<style>a > b { }</style>")
+}
+
+fn test-whitespace() {
+  let got = html/render(\{
+    <div>
+      Hello, world!
+      <b>bold</b> and
+      more text
+    </div>
+  })
+  assert-equals(got, "<div>Hello, world!<b>bold</b> and more text</div>")
+}
+
+fn test-attributes() {
+  let x = 7
+  assert-equals(html/render(\{ <input type="text" disabled data-on:click="@get('/x')"/> }), "<input type=\"text\" disabled data-on:click=\"@get(&#39;/x&#39;)\">")
+  assert-equals(html/render(\{ <a href="/p/$x" class=big>go</a> }), "<a href=\"/p/7\" class=\"big\">go</a>")
+  assert-equals(html/render(\{ <div id={x + 1}/> }), "<div id=\"8\"></div>")
+}
+
+fn test-directives() {
+  let items: span[item] = [.{ name = "a", n = 1 }, .{ name = "b&", n = 2 }]
+  let got = html/render(\{
+    <ul>
+      #for it in items { #{ row(html-sb.&, it) } }
+    </ul>
+    #if items.len() == 0 { <p>none</p> } else #if items.len() == 1 { <p>one</p> } else { <p>{items.len()} items</p> }
+  })
+  assert-equals(got, "<ul><li data-n=\"1\">a</li><li data-n=\"2\">b&amp;</li></ul><p>2 items</p>")
+  assert-equals(html/render(\{ <!DOCTYPE html> <br/> }), "<!DOCTYPE html> <br>")
+  assert-equals(html/render(\{}), "")
+}
+
+fn test-errors() {
+  let mismatched: ?string = test-compile(html/render(\{ <div><p>hi</div> }))
+  assert(mismatched.!.starts-with("</div> does not close <p>"))
+}
+
+fn test() {
+  test-escaping()
+  test-whitespace()
+  test-attributes()
+  test-directives()
+  test-errors()
+}

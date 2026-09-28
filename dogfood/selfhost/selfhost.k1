@@ -83,6 +83,12 @@ fn use-point(): int {
   require prec.get-expr(root.rhs).* is :bin-op(rhs) else { crash("expected bin-op rhs") }
   assert(rhs.op is :multiply)
 
+  let path-div = parse-source("path-div.k1", "fn d(): int { a/b / c/d }")
+  assert-equals(path-div.errors.len(), 0)
+  let pd = first-fn-body-expr(path-div.&)
+  require path-div.get-expr(pd).* is :bin-op(div) else { crash("expected bin-op") }
+  assert(div.op is :divide)
+
   let dedent = parse-source("dedent.k1", "fn g(): string { `\n  ab\n  cd\n  ` }")
   assert-equals(dedent.errors.len(), 0)
   let ds = first-fn-body-expr(dedent.&)

@@ -269,7 +269,9 @@ fn emit(name: string, d: dfa): code {
 }
 
 macro define(name: code, pattern: string) {
-  emit(name.text(), compile(pattern))
+  let generated = emit(name.text(), compile(pattern))
+  k1/emit-compiler-message(k1/location(), :info, generated.text())
+  generated
 }
 
 }}

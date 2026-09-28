@@ -259,9 +259,8 @@ also appear in metaprograms.
 `code-chunk = { text, source }` is a run of text plus the original span it came
 from (`source` is a compiler span id widened to u64; 0 means no source).
 Final text and byte offsets only materialize at the compile boundary, so
-composing `code` values never copies or re-offsets text. `\ <stmt>` (or
-`#code <stmt>`) produces a `code` value: one chunk holding the statement's
-source text and span.
+composing `code` values never copies or re-offsets text. `\ <stmt>` produces a
+`code` value: one chunk holding the statement's source text and span.
 
 A string template in `code`-expected position elaborates as `code`: each
 literal part becomes a chunk carrying its own span, a `code` part in a hole
@@ -349,6 +348,33 @@ ns pre {
     "type $name = { x: i32, y: i32 }"
   }
 }
+```
+
+`\{ ... }` quotes a balanced brace group without parsing it: the contents only
+have to lex, so it carries syntax K1 has no grammar for. As a `code` value its
+text is the inside of the braces. A macro param of type `span[code-token]`
+receives its argument lexed (`\{ ... }` contents, or a plain expression's
+source): each `code-token = { kind, text, source, spacing }` has its own span,
+`kind` is `ident` (keywords included), `number`, `string` (one token for the
+whole literal, interpolation holes included), `char` or `punct`, and `spacing` is
+`none`, `inline` or `newline` (always `none` on the first token).
+`tok.code()` re-emits a token with its span, and `tok.fail(msg)` stops
+expansion with an error at that token in the caller's source. `std/html` is the
+worked example: `html/write(out, \{ <p class={c}>{text}</p> })` and
+`html/render(\{ ... })` check tag structure at compile time and splice holes
+as spanned code.
+
+```rust
+macro sum(t: span[code-token]) {
+  let cb = code-builder/new()
+  for tok in t {
+    if tok.kind is :number cb.code(tok.code())
+    else if tok.text == "," cb.write(" + ")
+    else tok.fail("expected a number")
+  }
+  cb.build()
+}
+let six: int = sum(\{ 1, 2, 3 })
 ```
 
 Macros expand when the call is typechecked, so a macro must be defined in the

@@ -581,18 +581,12 @@ pub struct ParsedLambda {
     pub body: ParsedExprId,
 }
 
-#[derive(Clone, Copy, Default)]
-pub struct ParsedFmtSettings {
-    pub precision: u8,
-    pub pretty: bool,
-}
-
 #[derive(Clone, Copy)]
 pub enum InterpolatedStringPart {
     // we could put spans on each string part if we need them
     String { string_id: StringId, span: SpanId },
-    Expr(ParsedExprId, ParsedFmtSettings),
-    Hole { fmt_settings: ParsedFmtSettings, span: SpanId },
+    Expr(ParsedExprId, Option<FmtSpec>),
+    Hole { spec: Option<FmtSpec>, span: SpanId },
 }
 
 #[derive(Clone, Copy)]
@@ -631,13 +625,9 @@ pub struct ParsedStaticExpr {
     pub start_span: SpanId,
 }
 
-/// While ParsedCode is an expression type, it can hold
-/// any `statement`, since you may want to metaprogram with
-/// statements; the value it contains is independent from the
-/// AST node type used to create it
 #[derive(Clone, Copy)]
 pub struct ParsedCode {
-    pub parsed_stmt: ParsedStmtId,
+    pub content: SpanId,
 }
 
 /// When you need to refer to a specific ability implementation:
@@ -2645,7 +2635,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
             K::Colon => {
                 !self.peek().is_whitespace_preceded()
-                    && !self.tokens.peek_n(1).is_whitespace_preceded()
+                    && self.tokens.peek_n(1).is_kind_nonspaced(K::Ident)
             }
             _ => false,
         }
@@ -2840,6 +2830,22 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
     }
 
+    fn parse_fmt_spec(&mut self) -> ParseResult<Option<FmtSpec>> {
+        let token = self.peek();
+        match token.kind {
+            K::FmtSpec => {
+                self.advance();
+                self.emit_semantic_token(token, SemanticTokenKind::Operator);
+                Ok(FmtSpec::parse(&self.token_chars(token)[1..]))
+            }
+            K::Colon => Err(self.error(
+                "Invalid format spec; expected ${value:[[fill]align][0][width][.precision]}",
+                token,
+            )),
+            _ => Ok(None),
+        }
+    }
+
     fn expect_string(&mut self) -> ParseResult<ParsedExprId> {
         let first = self.tokens.peek();
 
@@ -2859,20 +2865,20 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             match current_token.kind {
                 // ${expr} interpolation case
                 K::OpenBrace => {
-                    if let Some(close) = self.maybe_consume(K::CloseBrace) {
-                        let span = self.extend_token_span(current_token, close);
-                        pending.push(Pending::Part(InterpolatedStringPart::Hole {
-                            fmt_settings: ParsedFmtSettings::default(),
-                            span,
-                        }));
-                    } else {
-                        let expr_id = self.expect_expression()?;
-                        pending.push(Pending::Part(InterpolatedStringPart::Expr(
-                            expr_id,
-                            ParsedFmtSettings::default(),
-                        )));
-                        self.expect_kind(K::CloseBrace)?;
-                    }
+                    let expr_id = match self.peek_kind() {
+                        K::CloseBrace | K::FmtSpec => None,
+                        _ => Some(self.expect_expression()?),
+                    };
+                    let spec = self.parse_fmt_spec()?;
+                    let close = self.expect_kind(K::CloseBrace)?;
+                    let part = match expr_id {
+                        Some(expr_id) => InterpolatedStringPart::Expr(expr_id, spec),
+                        None => {
+                            let span = self.extend_token_span(current_token, close);
+                            InterpolatedStringPart::Hole { spec, span }
+                        }
+                    };
+                    pending.push(Pending::Part(part));
                 }
                 // Bare $ident interpolation case
                 K::Ident => {
@@ -2884,10 +2890,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         ParsedExpr::Variable(ParsedVariable { name: QIdent::naked(string_id, sp) }),
                         sp,
                     );
-                    pending.push(Pending::Part(InterpolatedStringPart::Expr(
-                        expr_id,
-                        ParsedFmtSettings::default(),
-                    )));
+                    pending.push(Pending::Part(InterpolatedStringPart::Expr(expr_id, None)));
                 }
                 k if k.is_string() => {
                     let StringTokenInfo { delim: _, done } = k.as_string().unwrap();
@@ -3734,7 +3737,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.advance_n(2);
         loop {
             let (a, b) = self.tokens.peek_two();
-            if a.kind == K::Ident && b.kind == K::Slash {
+            if a.kind == K::Ident && b.kind == K::Slash && !b.is_whitespace_preceded() {
                 self.advance_n(2);
                 let ident = self.make_ident_spanned(a);
                 namespaces.push_grow(&mut self.ast.mem, ident);
@@ -3902,10 +3905,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
             K::BackSlash => {
                 self.advance();
-                let parsed_stmt = self.expect_statement()?;
-                let stmt_span = self.ast.get_stmt_span(parsed_stmt);
-                let span = self.extend_tok_span(first, stmt_span);
-                Ok(Some(self.add_expression(ParsedExpr::Code(ParsedCode { parsed_stmt }), span)))
+                let content = if self.peek_kind() == K::OpenBrace {
+                    self.expect_raw_token_group()?
+                } else {
+                    let parsed_stmt = self.expect_statement()?;
+                    self.ast.get_stmt_span(parsed_stmt)
+                };
+                let span = self.extend_tok_to_here(first);
+                Ok(Some(self.add_expression(ParsedExpr::Code(ParsedCode { content }), span)))
             }
             K::Hash => {
                 self.advance();
@@ -4689,6 +4696,34 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let body = self.expect_expression()?;
         let span = self.extend_tok_to_here(while_token);
         Ok(self.add_expression(ParsedExpr::While(ParsedWhileExpr { label, cond, body }), span))
+    }
+
+    fn expect_raw_token_group(&mut self) -> ParseResult<SpanId> {
+        let open = self.expect_kind(K::OpenBrace)?;
+        let first = self.peek();
+        let mut depth = 1u32;
+        loop {
+            let tok = self.peek();
+            match tok.kind {
+                K::OpenBrace => depth += 1,
+                K::CloseBrace => depth -= 1,
+                K::Eof => return Err(self.error("Unclosed '\\{' token group", open)),
+                _ => {}
+            }
+            if depth == 0 {
+                break;
+            }
+            self.advance();
+        }
+        let content = if first.kind == K::CloseBrace {
+            let open_span = self.tok_span(open);
+            self.ast.spans.add(Span { file_id: open_span.file_id, start: open_span.end(), len: 0 })
+        } else {
+            let last = self.peek_back();
+            self.extend_token_span(first, last)
+        };
+        self.advance();
+        Ok(content)
     }
 
     pub fn expect_statement(&mut self) -> ParseResult<ParsedStmtId> {
@@ -5568,13 +5603,20 @@ impl ParsedProgram {
                         InterpolatedStringPart::String { string_id, .. } => {
                             w.write_str(self.get_string(*string_id))?
                         }
-                        InterpolatedStringPart::Expr(expr_id, _) => {
+                        InterpolatedStringPart::Expr(expr_id, spec) => {
                             w.write_str("${")?;
                             self.display_expr_id(w, *expr_id)?;
+                            if let Some(spec) = spec {
+                                write!(w, "{spec}")?;
+                            }
                             w.write_char('}')?;
                         }
-                        InterpolatedStringPart::Hole { fmt_settings: _, span: _ } => {
-                            w.write_str("${}")?;
+                        InterpolatedStringPart::Hole { spec, span: _ } => {
+                            w.write_str("${")?;
+                            if let Some(spec) = spec {
+                                write!(w, "{spec}")?;
+                            }
+                            w.write_char('}')?;
                         }
                     }
                 }
@@ -5764,8 +5806,10 @@ impl ParsedProgram {
                 Ok(())
             }
             ParsedExpr::Code(code) => {
-                w.write_str("#code ")?;
-                self.display_stmt_id(w, code.parsed_stmt)?;
+                w.write_str("\\")?;
+                w.write_str(
+                    self.sources.get_span_content(&self.mem, self.spans.get(code.content)),
+                )?;
                 Ok(())
             }
             ParsedExpr::QualifiedAbilityCall(qcall) => {
@@ -6082,16 +6126,14 @@ impl ParsedProgram {
         lexed: &mut Lexed,
     ) -> ParseResult<()> {
         if !lexed.long_tokens.is_empty() {
-            let mut long_tokens = lexed.long_tokens.iter();
             for token in lexed.tokens.iter_mut() {
                 if token.flags & TOKEN_FLAG_SPAN_ID == 0 {
                     continue;
                 }
-                let long = long_tokens.next().expect("a long_tokens entry per flagged token");
+                let long = lexed.long_tokens[token.start as usize];
                 let span_id = self.spans.add(Span { file_id, start: long.start, len: long.len });
                 token.start = Into::<std::num::NonZeroU32>::into(span_id).get();
             }
-            debug_assert!(long_tokens.next().is_none());
         }
         match lexed.error.take() {
             Some(e) => {

@@ -1,0 +1,16 @@
+use std/html
+
+fn card(title: string): string {
+  html/render(\{
+    <section>
+      <h2>{title}</h2>
+      <p>Cards close their tags.</div>
+    </section>
+  })
+}
+
+fn main(): i32 {
+  println(card("hi"))
+  0
+}
+//errmsg: </div> does not close <p>

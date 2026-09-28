@@ -127,12 +127,14 @@ ns for binary-op-kind {
 type binary-op = { op: binary-op-kind, lhs: expr-id, rhs: expr-id, span: src-span }
 type not-expr = { expr: expr-id, span: src-span }
 
-type fmt-settings = { precision: u8, pretty: bool }
+type fmt-align = either { left, right, center, sign-zeros }
+
+type fmt-spec = { fill: string, align: ?fmt-align, width: u32, precision: ?u32 }
 
 type interp-part = either {
   str-part({ string: string-id, span: src-span }),
-  expr-part({ expr: expr-id, fmt: fmt-settings }),
-  hole({ fmt: fmt-settings, span: src-span }),
+  expr-part({ expr: expr-id, spec: ?fmt-spec }),
+  hole({ spec: ?fmt-spec, span: src-span }),
 }
 
 type interp-string = { parts: list[interp-part], span: src-span }
@@ -196,7 +198,7 @@ type static-expr = {
   span: src-span,
 }
 
-type code-expr = { stmt: stmt-id, span: src-span }
+type code-expr = { content: src-span, span: src-span }
 
 type ability-expr = { name: qident, arguments: list[type-arg], span: src-span }
 

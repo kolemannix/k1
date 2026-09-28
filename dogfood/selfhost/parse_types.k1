@@ -41,6 +41,16 @@ ns for parser {
     }
   }
 
+  fn parse-fmt-spec(self: *parser): result[?ast/fmt-spec, perror] {
+    let t = self.peek()
+    if t.kind is :fmt-spec {
+      self.advance()
+      :ok(lex/parse-fmt-spec(self.tok-chars(t).slice(1, t.len.widen[size])))
+    } else if t.kind is :colon {
+      :err(make-error("Invalid format spec; expected \${value:[[fill]align][0][width][.precision]}", t))
+    } else :ok(:none)
+  }
+
   fn expect-string(self: *parser): result[ast/expr-id, perror] {
     let first = self.peek()
     let pending = list/empty[pending-part]()
@@ -48,18 +58,22 @@ ns for parser {
     loop {
       let current = self.next-tok()
       if current.kind is :open-brace {
-        if self.maybe-consume(:close-brace) is :some close {
-          let sp = current.span().thru(close.span())
-          pending.push(:part(:hole(.{ fmt = .{ precision = 0, pretty = false }, span = sp })))
+        let next = self.peek()
+        let expr: ?ast/expr-id = if next.kind is :close-brace or next.kind is :fmt-spec {
+          :none
         } else {
-          let expr-id = self.expect-expression().try
-          pending.push(:part(:expr-part(.{ expr = expr-id, fmt = .{ precision = 0, pretty = false } })))
-          let _ = self.expect-kind(:close-brace).try
+          :some(self.expect-expression().try)
+        }
+        let spec = self.parse-fmt-spec().try
+        let close = self.expect-kind(:close-brace).try
+        if expr is {
+          :some expr-id -> pending.push(:part(:expr-part(.{ expr = expr-id, spec }))),
+          :none -> pending.push(:part(:hole(.{ spec, span = current.span().thru(close.span()) }))),
         }
       } else if current.kind is :ident {
         let sid = self.make-ident(current)
         let var-id = self.add-expr(:variable(.{ name = ast/qident/naked(sid, current.span()), span = current.span() }))
-        pending.push(:part(:expr-part(.{ expr = var-id, fmt = .{ precision = 0, pretty = false } })))
+        pending.push(:part(:expr-part(.{ expr = var-id, spec = :none })))
       } else if current.kind.is-string() {
         pending.push(:raw(.{ tok = current, starts-fresh = first-segment }))
         first-segment = false
@@ -324,7 +338,7 @@ ns for parser {
       loop {
         let a = self.peek()
         let b = self.peek-at(1)
-        if a.kind is :ident and b.kind is :slash {
+        if a.kind is :ident and b.is-kind-nonspaced(:slash) {
           self.advance-n(2)
           path.push(self.make-ident-spanned(a))
         } else {

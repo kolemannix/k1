@@ -2473,25 +2473,26 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
             }
             debug_assert_eq!(callee_fn_type.params.len(), args.len() as u32);
             let args_handle = b.u.push_args(args.as_slice());
-            let ir_call =
-                IrCall { ret_type: callee_fn_type.return_type, callee, args: args_handle, dst };
-            if let IrCallee::Direct(function_id) = callee
+            let ret_type = callee_fn_type.return_type;
+            let sret_dst = if ret_type.is_agg() { dst } else { None };
+            let ir_call = IrCall { ret_type, callee, args: args_handle, dst: sret_dst };
+            let result = if let IrCallee::Direct(function_id) = callee
                 && b.k1.get_function(function_id).is_inline()
             {
-                return iropt::compile_inline_call(b, function_id, ir_call);
-            }
-            let call_id = add_call(b, ir_call);
-            let call_inst = Inst::Call { call_id };
-            let call_inst_id = b.push_inst_anon(call_inst);
-            let value_for_call = {
-                if callee_fn_type.diverges {
-                    let unreachable = b.push_inst_anon(Inst::Unreachable);
-                    unreachable.as_value()
-                } else {
-                    dst.unwrap_or(call_inst_id.as_value())
-                }
+                iropt::compile_inline_call(b, function_id, ir_call)?
+            } else {
+                let call_id = add_call(b, ir_call);
+                let call_inst_id = b.push_inst_anon(Inst::Call { call_id });
+                (!callee_fn_type.diverges).then(|| sret_dst.unwrap_or(call_inst_id.as_value()))
             };
-            Ok(value_for_call)
+            let Some(result) = result else {
+                return Ok(b.push_inst_anon(Inst::Unreachable).as_value());
+            };
+            if ret_type.is_agg() {
+                Ok(result)
+            } else {
+                Ok(store_rich_if_dst(b, dst, ret_type, result, IrComment::StoreScalarToDst))
+            }
         }
         TypedExpr::Match(match_expr) => {
             let match_result_type = expr_type;

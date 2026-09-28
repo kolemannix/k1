@@ -93,7 +93,7 @@ impl TypedProgram {
                 let witness = self.tmp.getn(witnesses)[0];
                 k1_format_user!(
                     self,
-                    "Non-exhaustive match. this pattern is not covered:\n- {}",
+                    "Non-exhaustive match; this pattern is not covered:\n- {}",
                     witness
                 )
             };

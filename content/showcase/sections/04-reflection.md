@@ -1,10 +1,7 @@
 # Reflection: a type is a value you can look at
 
-`types/schema[t]` returns an ordinary sum value describing `t`. It is not a
-special syntax, a separate reflection language, or a token stream: it is a
-`type-schema`, defined in `modules/core/builtin.k1`, and you take it apart with
-the same `if x is { ... }` you use on any other sum. It works inside `#static`,
-inside `#meta`, and in plain runtime code.
+`types/schema[t]` returns an ordinary sum value describing `t`, taken apart
+with the same `if x is { ... }` as any other sum, at compile time or runtime.
 
 ```k1 path=modules/core/builtin.k1
   type type-schema = either {
@@ -65,9 +62,12 @@ inside `#meta`, and in plain runtime code.
 
 Alongside it: `types/id[t]` (a `type-id` with `.name()`, `.schema()`,
 `.instance-info()`, `.size()`, `.stride()`, `.align()`, `.spell()`),
-`types/size`, `types/stride`, `types/align`, and `types/assert-layout`. Everything below is built from those.
+`types/size`, `types/stride`, `types/align`, and `types/assert-layout`.
 
 ## JSON for any type, generated per type
+
+A generic function whose body is a `#meta` block: each new `t` runs the block
+at compile time, and the `code` it returns becomes the body for that `t`.
 
 ```k1
   fn write[t, w: writer](w: w, v: t) {
@@ -120,18 +120,7 @@ Alongside it: `types/id[t]` (a `type-id` with `.name()`, `.schema()`,
   }
 ```
 
-`write` is a generic function whose body is a `#meta` block. Every time the
-compiler instantiates `write` at a new `t`, the block runs in the compile-time
-VM, inspects `types/schema[t]`, and returns the `code` that becomes the body
-for that `t`. The generated body calls `write` on each field, which instantiates
-the next type, so the whole serializer for a nested type is assembled one
-schema at a time. Optionals are recognized as instances of the `opt` generic
-before the general `either` arm, so `?string` becomes `null` or the string
-rather than `{"some": ...}`; enums become their variant name; sums with a
-payload become a one-key object.
-
-The last line of the block is the metaprogram logging its own expansion with
-the compiler's message facility. Given
+None of these types mention JSON:
 
 ```k1
 type role = either { admin, member, guest }
@@ -149,7 +138,17 @@ type person = {
 }
 ```
 
-the compiler prints, while compiling `json/to-string(ada)`:
+```k1
+  println(json/to-string(ada))
+  println(json/to-string(ada | .{ nickname = :some "Ada", contacts = [] }))
+```
+
+```text
+{"name":"Ada \"Countess\" Lovelace","initial":"A","age":36,"score":99.5,"active":true,"role":"admin","nickname":null,"contacts":[{"email":"ada@example.com"},"unreachable"],"scores":[10,20,30]}
+{"name":"Ada \"Countess\" Lovelace","initial":"A","age":36,"score":99.5,"active":true,"role":"admin","nickname":"Ada","contacts":[],"scores":[10,20,30]}
+```
+
+The block logs what it generated, so compiling that call also prints, among others:
 
 ```text
 [reflect_json.k1:65 info] json/write[person]
@@ -185,26 +184,24 @@ if v is {
 if v is { :some x -> write(w, x), :none -> w.write("null") }
 ```
 
-and the program itself prints:
+Each field's `write` call instantiates the next type. No declaration is
+needed at all:
+
+```k1
+  println(json/to-string(.{ nested = .{ deep = [.{ ok = true }] }, tab = "a\tb\n" }))
+```
 
 ```text
-{"name":"Ada \"Countess\" Lovelace","initial":"A","age":36,"score":99.5,"active":true,"role":"admin","nickname":null,"contacts":[{"email":"ada@example.com"},"unreachable"],"scores":[10,20,30]}
-{"name":"Ada \"Countess\" Lovelace","initial":"A","age":36,"score":99.5,"active":true,"role":"admin","nickname":"Ada","contacts":[],"scores":[10,20,30]}
-[1,2,3]
-[{"email":"ada@example.com"},"unreachable"]
 {"nested":{"deep":[{"ok":true}]},"tab":"a\tb\n"}
 ```
 
-The last line serializes an anonymous struct literal that was never declared
-anywhere; there is no type to attach a derive to, and none is needed. Nothing
-in `person`, `role` or `contact` mentions JSON. Rust gets the same
-per-type serializer from `#[derive(Serialize)]`, but the derive is a proc
-macro reading the tokens of the type definition: it sees that a field is
-spelled `Option<String>`, not that it is an optional, and it cannot see the
-definition of `contact` at all. Here the walk is over resolved types, so a
-field of type `?string` and a field of a type alias for it take the same arm.
+Rust's `#[derive(Serialize)]` reads tokens: it sees `Option<String>` spelled
+out, not an optional, and can't see `contact` at all. Here the walk is over
+resolved types.
 
 ## Derive without derive
+
+Same shape, printing K1 literal syntax. No `impl`, no annotation.
 
 ```k1
 fn show[t](v: t): string {
@@ -258,10 +255,7 @@ fn show-to[t, w: writer](w: w, v: t, depth: size) {
 }
 ```
 
-The same shape as the JSON writer, producing K1 literal syntax with
-indentation. `show` needs no `impl` on the user's types and no annotation:
-it is a plain generic function, and the types it prints were written without
-knowing it exists.
+Types written without knowing `show` exists:
 
 ```k1
 type role = either { admin, member }
@@ -276,6 +270,10 @@ type person = {
   favorite: shape,
   manager: ?*person,
 }
+```
+
+```k1
+  println(show(ada))
 ```
 
 ```text
@@ -302,121 +300,115 @@ type person = {
     manager = none,
   },
 }
-[1, none]
-[a, b, c]
-:some .{ city = London, zip = 12345 }
 ```
 
-The last line is the compiler's own derived `print` for `ada.home`, which
-exists for every struct and sum automatically. It does not quote strings, and
-it refuses `person` outright because `opt[*person]` has no `print` impl for
-references; `show` follows the reference and prints what it finds. The point
-is not that the built-in derive is weak but that it is not privileged: what
-the compiler does for `print`, a library can do for anything else, with the
-same information, in the same language.
+## Enums: names out, names in
 
-## `enum_to_string`, both ways
-
-Payload-less enums already carry their names: `c.enum-name()` is built in.
-The generic version, the poster child of C++26's P2996 reflection paper, is a
-few lines when the schema is data:
+`enum_to_string`, the poster child of C++26's P2996, is built in:
+`c.enum-name()`. The table of all names:
 
 ```k1
   fn names[t](): span[string] {
     #static {
       require types/schema[t] is :enum .{ values } else crash("${types/name[t]} is not an enum")
-      let out = list/empty[string]()
-      for v in values { out.push(v.name) }
-      out.as-span()
+      values.map(fn v. v.name)
     }
   }
 ```
 
-`names[color]()` is a compile-time constant: the `#static` block runs once per
-instantiation and the resulting span is baked into the binary. Baked values
-have literal types, so the compiler can check the table's contents in a type
-annotation:
+It is a compile-time value, and `#static(colors)` hands it back to
+compile-time code:
 
 ```k1
-  let count: 3 = #static enums/names[color]().len()
-  let first: "red" = #static enums/names[color]().[0]
+  let colors = #static enums/names[color]
+  #static(colors) assert-equals(colors.len(), 3)
+  let first: "red" = #static(colors) colors.[0]
+  println("$colors ${enums/names[level]} ${first.from-static()}")
 ```
 
-For the string-to-enum direction, and for a `to-string` that does not go
-through a table at all, a `#meta` block emits the match directly:
+```text
+[red,green,blue] [debug,info,warn,error] red
+```
+
+The schema carries tag types and values, enough to rebuild the declaration:
 
 ```k1
-  fn enum-to-string[t](v: t): string {
-    #meta {
-      require types/schema[t] is :enum .{ values } else crash("${types/name[t]} is not an enum")
-      let cb = code-builder/new()
-      cb.line("if v is {")
-      cb.indent()
-      for x in values { cb.line(`:${x.name} -> ${meta/str-lit(x.name)},`) }
-      cb.dedent()
-      cb.line("}")
-      cb.build()
-    }
-  }
+  println(enums/describe[color])
+  println(enums/describe[level])
+```
 
-  fn enum-from-string[t](s: string): ?t {
-    #meta {
-      require types/schema[t] is :enum .{ values } else crash("${types/name[t]} is not an enum")
-      let cb = code-builder/new()
-      for x in values { cb.line(`if s == ${meta/str-lit(x.name)} return :some :${x.name}`) }
-      cb.line(":none")
-      cb.build()
-    }
+```text
+color = either(u8) { red = 0u8, green = 1u8, blue = 2u8 }
+level = either(u8) { debug = 10u8, info = 20u8, warn = 30u8, error = 40u8 }
+```
+
+String to enum: a macro that writes the `from-string` impl for any enum.
+
+```k1
+  macro derive-from-string[t]() {
+    require types/schema[t] is :enum .{ values } else crash("${types/name[t]} is not an enum")
+    let names = values.map(fn v. v.name)
+    let cb = code-builder/new()
+    cb.line(`impl from-string[e = string] for ${types/name[t]} {`)
+    cb.indent()
+    cb.line(`fn from-string(s: string): result[${types/name[t]}, string] {`)
+    cb.indent()
+    for x in values { cb.line(`if s == ${meta/str-lit(x.name)} return :ok :${x.name}`) }
+    cb.line(`:err("expected one of $names, got '\$s'")`)
+    cb.dedent()
+    cb.line("}")
+    cb.dedent()
+    cb.line("}")
+    let generated = cb.build()
+    k1/emit-compiler-message(k1/location(), :info, generated.text())
+    generated
   }
 ```
 
-The generic parser then plugs into the standard `from-string` ability, so
-`level` parses like `u64` does, with an error message listing the valid names
-from the same compile-time table:
-
 ```k1
-type color = either { red, green, blue }
-type level = either(u8) { debug = 10, info = 20, warn = 30, error = 40 }
+$pre/derive-from-string[color]()
+$pre/derive-from-string[level]()
+```
 
-impl from-string[e = string] for level {
+For `level` it emits:
+
+```text
+[reflect_enum.k1:40 info] impl from-string[e = string] for level {
   fn from-string(s: string): result[level, string] {
-    if enums/enum-from-string[level](s) is {
-      :some v -> :ok v,
-      :none -> :err("expected one of ${enums/names[level]()}, got '$s'"),
-    }
+    if s == "debug" return :ok :debug
+    if s == "info" return :ok :info
+    if s == "warn" return :ok :warn
+    if s == "error" return :ok :error
+    :err("expected one of [debug,info,warn,error], got '$s'")
   }
 }
 ```
 
+Both enums now parse like `u64` does:
+
+```k1
+  let parsed: result[color, string] = from-string/from-string("blue")
+  println("$parsed")
+  println("${from-string@(color)/from-string("purple")}")
+  println("${from-string@(level)/from-string("warn")}")
+  let bad: result[level, string] = from-string/from-string("fatal")
+  println("$bad")
+```
+
 ```text
-green
-green
-warn
-[red,green,blue] [debug,info,warn,error]
-3 red
-color = either(u8) { red = 0u8, green = 1u8, blue = 2u8 }
-level = either(u8) { debug = 10u8, info = 20u8, warn = 30u8, error = 40u8 }
-:some blue
-:none
+:ok(blue)
+:err(expected one of [red,green,blue], got 'purple')
 :ok(warn)
 :err(expected one of [debug,info,warn,error], got 'fatal')
 ```
 
-The two `either(u8) { ... }` lines are `describe[t]`, which reconstructs the
-declaration from `int-kind` and the tag values; `level`'s explicit tags come
-back as `10u8` because `int-value` is itself a sum over the integer kinds. In
-P2996 the equivalent is `template for (constexpr auto e :
-std::meta::enumerators_of(^^E))` with `[:e:]` to splice each reflection back
-into an expression and `std::meta::identifier_of(e)` for the name; Zig has
-`@tagName` built in and `std.meta.stringToEnum` in its library. K1 has no
-splice operator because there is nothing to splice: a variant name is a
-`string`, and emitting `:${x.name}` into code is string interpolation.
+P2996 needs `template for`, `^^E` and `[:e:]` splices for this. K1 has no
+splice operator: a variant name is a `string`, and `:${x.name}` is
+interpolation.
 
 ## pahole in a screenful
 
-Struct schemas carry field offsets, and every `type-id` answers `.size()`,
-`.stride()` and `.align()`, so a layout dumper is a plain loop over the fields
-that keeps a cursor, with no code generation:
+Schemas carry full, precise layout information too. Here's padding detection:
 
 ```k1
   fn dump[t]() {
@@ -451,12 +443,6 @@ that keeps a cursor, with no code generation:
     println("  $holes of $stride bytes are padding\n")
   }
 ```
-
-`types/size[t]` and its siblings give the same numbers for a type named at the
-call site, folded to integer constants; the `type-id` methods read them from
-the type's `type-info`, which works on a `type-id` held in a variable. Run over
-a badly ordered struct, the same fields sorted by alignment, the packed
-version, a union, and a struct nesting two of them:
 
 ```k1
 type sloppy = { flag: bool, id: u64, kind: u16, count: u32, tail: u8 }
@@ -507,23 +493,47 @@ nested: size 48, stride 48, align 8
   0 of 48 bytes are padding
 ```
 
-K1 distinguishes `size` (the bytes a value occupies) from `stride` (the bytes
-between array elements, C's `sizeof`): `sloppy` is 25 bytes of data in a
-32-byte slot, and as a field of `nested` it takes its stride. Packed structs
-are an ordinary `:struct` schema; the packing is visible only in the offsets.
+`size` is the bytes a value occupies; `stride` is C's `sizeof`.
 
-The same numbers make a compile-time guard. `types/assert-layout` is a
-library function in `modules/core/types.k1`, run under `#static`:
+You can even issue compiler warnings, at the caller's line:
+
+```k1
+  fn warn-padding[t](context locn: k1/source-location)() {
+    require types/schema[t] is :struct .{ fields } else crash("${types/name[t]} is not a struct")
+    let end: size = 0
+    for f in fields {
+      if f.offset > end {
+        k1/emit-compiler-message(locn, :warn, "${types/name[t]}: ${f.offset - end} byte hole before '${f.name}'")
+      }
+      end = f.offset + f.type-id.stride()
+    }
+    if types/stride[t] > end {
+      k1/emit-compiler-message(locn, :warn, "${types/name[t]}: ${types/stride[t] - end} bytes of tail padding")
+    }
+  }
+```
+
+```k1
+  #static layout/warn-padding[tidy]()
+  #static layout/warn-padding[sloppy]()
+```
+
+`tidy` passes; `sloppy` warns during compilation:
+
+```text
+[reflect_layout.k1:71 warn] sloppy: 7 byte hole before 'id'
+[reflect_layout.k1:71 warn] sloppy: 2 byte hole before 'count'
+[reflect_layout.k1:71 warn] sloppy: 7 bytes of tail padding
+```
+
+Or a hard guard, `types/assert-layout`, a plain library function:
 
 ```k1
   #static types/assert-layout[tidy](16, 8, [0, 8, 12, 14, 15])
   #static types/assert-layout[wire](16, 1, [0, 1, 9, 11, 15])
 ```
 
-A wrong guard (`reflect_layout_fail.k1` claims a packed `{ tag: u8, len: u32 }`
-is 8 bytes) is a compile error. The failing assertion is an ordinary
-`assert-equals` inside the library function; the error is reported at that
-line, and the VM's stack trace leads back to the `#static` in `main`:
+Get it wrong:
 
 ```k1
 type header = packed { tag: u8, len: u32 }
@@ -533,6 +543,8 @@ fn main(): i32 {
   0
 }
 ```
+
+The VM's stack trace leads back to `main`:
 
 ```text
 ┌────────────────────────────────────────╴
@@ -548,24 +560,20 @@ fn main(): i32 {
 ├─────
 │  ASSERT FAILED: 8 != 5
 bc Execution Trace
-[00] core/crash builtin.k1:1083
-[01] core/assert-equals core.k1:6
-[02] core/types/assert-layout types.k1:43
-[03] expr reflect_layout_fail.k1:4 reflect_layout_fail.k1:4
+[00] core/platform/process/exit platform.k1:201
+[01] core/sys/exit builtin.k1:964
+[02] core/crash builtin.k1:1171
+[03] core/assert-equals core.k1:8
+[04] core/types/assert-layout types.k1:43
+[05] expr reflect_layout_fail.k1:4 reflect_layout_fail.k1:4
 
 └────────────────────────────────────────╴
-Module reflect_layout_fail failed typechecking with 1 errors
+Module reflect_layout_fail failed compiling with 1 errors
 ```
-
-Zig has `@offsetOf` and `@sizeOf` as builtins and `@typeInfo(T).@"struct".fields`
-for the walk; the pieces are equivalent, and this tool ports almost line for
-line. C++ has `offsetof` and `sizeof` and, until P2996 ships, no standard way
-to enumerate the members.
 
 ## Generics and functions are types too
 
-A bare generic name is a type: `types/id[list]` is the id of `list[t]` itself,
-and an instance knows its parent and arguments.
+A bare generic name is a type, and an instance knows its parent and arguments.
 
 ```k1
 fn describe[t](): string {
@@ -581,8 +589,27 @@ fn describe[t](): string {
 }
 ```
 
-That query can gate a generic. A predicate bound is a compile-time boolean
-function over a type, declared in the module's `pre` namespace:
+```k1
+  println(describe[list[int]]())
+  println(describe[pair[string, ?u8]]())
+  println(describe[result[int, string]]())
+  println(describe[int]())
+  println(describe[*pair[int, int]]())
+  println(types/id[list].name())
+  println("${types/id[list[int]].is-instance-of(types/id[list])} ${types/id[list[int]].is-instance-of(types/id[pair])}")
+```
+
+```text
+list[i64] = list[t] applied to [i64]
+pair[string, opt[u8]] = pair[a, b] applied to [string, opt[u8]]
+result[i64, string] = result[t, e] applied to [i64, string]
+i64 is not a generic instance
+*pair[i64, i64] is not a generic instance
+list[t]
+true false
+```
+
+That query can gate a generic, via a predicate in the `pre` namespace:
 
 ```k1
 ns pre {
@@ -594,10 +621,20 @@ ns pre {
 fn element-type[t: pred pre/is-list](): string { types/instance-info[t].!.args.[0].name() }
 ```
 
-Functions reflect as `:function` schemas with parameter names, and a function's
-parameter and return types are addressable as `types/id[do-it.return]` and
-`types/id[do-it.input]`. A bare function name is a zero-sized value of its own
-function type; `do-it.&` is the pointer:
+`test-compile` returns the rejection as a string:
+
+```k1
+  println(element-type[list[string]]())
+  let rejected = test-compile(element-type[int]())
+  println(rejected.!)
+```
+
+```text
+string
+Predicate 'pre/is-list' failed on type i64. Therefore, cannot call function 'element-type' with given types: i64
+```
+
+Functions reflect too, down to parameter names:
 
 ```k1
 fn do-it(input: string, count: u32): bool { count > 0 and input.len() > 0 }
@@ -617,15 +654,6 @@ fn do-it(input: string, count: u32): bool { count > 0 and input.len() > 0 }
 ```
 
 ```text
-list[i64] = list[t] applied to [i64]
-pair[string, opt[u8]] = pair[a, b] applied to [string, opt[u8]]
-result[i64, string] = result[t, e] applied to [i64, string]
-i64 is not a generic instance
-*pair[i64, i64] is not a generic instance
-list[t]
-true false
-string
-Predicate 'pre/is-list' failed on type i64. Therefore, cannot call function 'element-type' with given types: i64
 bool
 string
   input: string
@@ -634,27 +662,11 @@ string
 fn(input: string, count: u32) -> bool
 ```
 
-The `Predicate 'pre/is-list' failed` line is `test-compile(element-type[int]())`
-returning the compiler's error for the rejected instantiation as a string, at
-compile time, to a program that then prints it. `?u8` shows up as `opt[u8]`
-and `int` as `i64`: names come from the resolved type, not from how it was
-spelled.
-
 ## Elsewhere
 
-C++26's P2996 introduces `^^T` to produce a `std::meta::info`, `[: r :]` to
-splice one back into code, and a `std::meta` library (`members_of`,
-`nonstatic_data_members_of`, `enumerators_of`, `identifier_of`, `offset_of`)
-usable in `constexpr` evaluation, with `template for` to iterate. It is
-the closest design to K1's, and it arrives with two new operators and a
-consteval-only value type; in K1 the reflection value is a plain `either` and
-code generation is string interpolation into `code`. Zig's `@typeInfo` is the
-same idea as `type-schema` (a tagged union you switch on at comptime) with
-`inline for` and `@field(v, name)` for the walk; where K1 differs is that a
-`#meta` block can emit any code, including new declarations, and the
-`#static` table of names becomes a literal type the checker can see. Rust has
-no reflection at either compile time or runtime; proc macros see the tokens
-of one item and reconstruct what they can, which is why `serde_derive` treats
-a field as optional only when its type is literally spelled `Option<...>`, and
-why a derive on `person` cannot tell that `role` is an enum without `role`
-also opting in.
+- C++26 P2996: `^^T`, `[: r :]` splices, `template for`, a consteval-only
+  `std::meta::info`. The closest design; K1's reflection value is a plain
+  `either` and codegen is string interpolation.
+- Zig: `@typeInfo` is the same idea as `type-schema`. K1's `#meta` can also
+  emit new declarations.
+- Rust: no reflection; proc macros see one item's tokens.

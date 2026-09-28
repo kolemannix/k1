@@ -72,16 +72,25 @@ ns for list {
   }
 
   fn(inline) push-in[t, a: allocator](self: *list[t], alloc: a, elem: t) {
+    if self.len == self.cap() self._grow(alloc)
+    self._push-within-capacity(elem)
+  }
+
+  fn(inline) push[t](self: *list[t], elem: t) {
+    if self.len == self.cap() self._grow(mem/current-arena())
+    self._push-within-capacity(elem)
+  }
+
+  fn(inline) _push-within-capacity[t](self: *list[t], elem: t) {
     let start-length = self.len
-    if start-length == self.*.cap() {
-      self._grow(alloc)
-    }
     self.len = start-length + 1
     self.[start-length] = elem
   }
 
-  fn(inline) push[t](self: *list[t], elem: t) {
-    self.push-in[t, _](mem/current-arena(), elem)
+  fn(inline) pop[t](self: *list[t]): ?t {
+    if self.len == 0 return :none
+    self.len = self.len - 1
+    :some self.buffer.[self.len]
   }
 
   fn(inline) clear[t](self: *list[t]) {

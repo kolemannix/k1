@@ -46,6 +46,17 @@ fractal-web:
   just run-frag -D web build dogfood/fractal
   python3 -m http.server -d dogfood/fractal 8088
 
+# The reference chess engine: perft and search suites natively and under wasmtime, then UCI on stdin
+refchess:
+  just run-frag --optimize test dogfood/refchess
+
+refchess-wasm:
+  make -C modules/core/libs wasm
+  just run-frag --optimize --target wasm64-wasi test dogfood/refchess
+
+refchess-uci:
+  just run-frag --optimize run dogfood/refchess
+
 # Cross-built freestanding k1 library consumed by a C bootstrap, run in docker.
 # The clang/ld.lld/llvm-nm binaries here play the CONSUMER's toolchain, not k1's
 ts-freestanding:

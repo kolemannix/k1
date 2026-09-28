@@ -71,6 +71,9 @@ fn test-code-fmt() {
   // No expectation nearby? Ascribe.
   let d = "let v = ${}".fmt(7): code
   assert-equals(d.text(), "let v = 7")
+
+  let e: code = "let p = ${:03}".fmt(7)
+  assert-equals(e.text(), "let p = 007")
 }
 
 fn test-code-builder() {
@@ -114,6 +117,53 @@ fn test-emitter() {
   assert-equals(cb3.build().text(), "a, b, c")
 }
 
+macro token-summary(t: span[code-token]) {
+  let sb = string-builder/new()
+  for tok in t {
+    sb.write("${tok.kind.enum-name()}:${tok.text}:${tok.spacing.enum-name()} ")
+  }
+  "${meta/str-lit(sb.build())}"
+}
+
+macro sum-list(t: span[code-token]) {
+  let cb = code-builder/new()
+  for tok in t {
+    if tok.kind is :punct and tok.text == "," cb.write(" + ") else cb.code(tok.code())
+  }
+  cb.build()
+}
+
+macro numbers(t: span[code-token]) {
+  for tok in t {
+    if not (tok.kind is :number) tok.fail("expected a number, got `${tok.text}`")
+  }
+  "0"
+}
+
+fn test-token-params() {
+  let x = 4
+  assert-equals(
+    token-summary(\{ <a b="s ${x + 1}">'c'
+      9 fn }),
+    "punct:<:none ident:a:none ident:b:inline punct:=:none string:\"s \${x + 1}\":none punct:>:none char:'c':none number:9:newline ident:fn:inline ",
+  )
+  assert-equals(token-summary(\{}), "")
+  assert-equals(token-summary(x+1), "ident:x:none punct:+:none number:1:none ")
+  let s: int = sum-list(\{ 1, 2, x })
+  assert-equals(s, 7)
+  let n: int = numbers(\{ 1 2 3 })
+  assert-equals(n, 0)
+  let fail: ?string = test-compile(numbers(\{ 1 2 three 4 }))
+  assert(fail.!.starts-with("expected a number, got `three`"))
+}
+
+fn test-raw-group() {
+  let c = \{ any < tokens > here }
+  assert-equals(c.text(), "any < tokens > here")
+  assert(c.chunks.[0].source != 0)
+  assert-equals((\{}).text(), "")
+}
+
 use core/meta/str-lit
 
 fn test-str-lit() {
@@ -132,6 +182,8 @@ fn test() {
   test-code-builder()
   test-emitter()
   test-str-lit()
+  test-token-params()
+  test-raw-group()
 
   .{}
 }

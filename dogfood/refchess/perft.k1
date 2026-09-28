@@ -1,0 +1,32 @@
+use core/arena
+
+fn perft(context ply: *arena)(pos: *position, depth: u32): u64 {
+  if depth == 0 return 1
+  let mark = ply.mark()
+  defer ply.pop-to-mark(mark)
+  let moves = gen-moves(pos, :all)
+  if depth == 1 return moves.len().unsigned()
+  let nodes: u64 = 0
+  for m in moves {
+    let child = pos.*
+    child.make(m)
+    nodes = nodes + perft(child.&, depth - 1)
+  }
+  nodes
+}
+
+fn divide(context ply: *arena)(pos: *position, depth: u32): u64 {
+  let mark = ply.mark()
+  defer ply.pop-to-mark(mark)
+  let total: u64 = 0
+  for m in gen-moves(pos, :all) {
+    let child = pos.*
+    child.make(m)
+    let nodes: u64 = if depth <= 1 1 else perft(child.&, depth - 1)
+    println("${m.to-uci()}: $nodes")
+    total = total + nodes
+  }
+  println("")
+  println("Nodes searched: $total")
+  total
+}

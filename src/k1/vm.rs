@@ -44,8 +44,29 @@ pub fn value_to_type_id(k1: &mut TypedProgram, value: Value, span: SpanId) -> K1
 }
 
 /// Bit-for-bit mappings of K1 types
-#[allow(non_snake_case)]
+#[allow(non_snake_case, non_camel_case_types)]
 pub mod k1_types {
+
+    #[derive(Clone, Copy)]
+    #[repr(u8)]
+    pub enum CodeTokenKind {
+        ident = 0, number, string, char, punct
+    }
+
+    #[derive(Clone, Copy)]
+    #[repr(u8)]
+    pub enum CodeTokenSpacing {
+        none = 0, inline, newline
+    }
+
+    #[derive(Clone, Copy)]
+    #[repr(C)]
+    pub struct CodeToken {
+        kind: CodeTokenKind,
+        text: K1BufferLike,
+        source: u64,
+        spacing: CodeTokenSpacing
+    }
 
     #[derive(Clone, Copy)]
     #[repr(C)]

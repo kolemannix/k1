@@ -52,6 +52,15 @@ impl Lexed {
         self.error = None;
     }
 
+    pub fn get_token_start_len(&self, token: Token) -> (u32, u32) {
+        if token.flags & TOKEN_FLAG_SPAN_ID != 0 {
+            let long = self.long_tokens[token.start as usize];
+            (long.start, long.len)
+        } else {
+            (token.start, token.len as u32)
+        }
+    }
+
     #[inline]
     fn push(&mut self, token: Token) {
         self.tokens.push(token);
@@ -233,6 +242,7 @@ pub enum TokenKind {
     StringOpenBt,
 
     Char,
+    FmtSpec,
 
     KeywordFn,
     KeywordLet,
@@ -258,7 +268,6 @@ pub enum TokenKind {
     KeywordDefer,
 
     Slash,
-    LineComment,
 
     // Symbols
     OpenParen,
@@ -313,6 +322,105 @@ pub struct StringTokenInfo {
     pub delim: StringDelimKind,
     /// false = unterminated segment (ends at a `$` interpolation hole)
     pub done: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FmtAlign {
+    Left,
+    Right,
+    Center,
+    SignZeros,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FmtSpec {
+    pub fill: char,
+    pub align: Option<FmtAlign>,
+    pub width: u32,
+    pub precision: Option<u32>,
+}
+
+impl FmtSpec {
+    pub fn parse(text: &str) -> Option<FmtSpec> {
+        fn align_of(c: char) -> Option<FmtAlign> {
+            match c {
+                '<' => Some(FmtAlign::Left),
+                '>' => Some(FmtAlign::Right),
+                '^' => Some(FmtAlign::Center),
+                _ => None,
+            }
+        }
+        fn digits(s: &str) -> (&str, &str) {
+            let end = s.bytes().position(|b| !b.is_ascii_digit()).unwrap_or(s.len());
+            s.split_at(end)
+        }
+        let mut chars = text.chars();
+        let first = chars.next()?;
+        let (fill, mut align, rest) = match chars.next().and_then(align_of) {
+            Some(align) => (first, Some(align), chars.as_str()),
+            None => match align_of(first) {
+                Some(align) => (' ', Some(align), &text[1..]),
+                None => (' ', None, text),
+            },
+        };
+        if fill == '{' {
+            return None;
+        }
+        let (width_text, rest) = digits(rest);
+        let fill = if width_text.len() > 1 && width_text.starts_with('0') {
+            if align.is_some() {
+                return None;
+            }
+            align = Some(FmtAlign::SignZeros);
+            '0'
+        } else {
+            fill
+        };
+        let width = if width_text.is_empty() { 0 } else { width_text.parse().ok()? };
+        if (width == 0) != width_text.is_empty() || (align.is_some() && width == 0) {
+            return None;
+        }
+        let precision = match rest.strip_prefix('.') {
+            None if rest.is_empty() => None,
+            None => return None,
+            Some(rest) => {
+                let (precision_text, rest) = digits(rest);
+                if precision_text.is_empty() || !rest.is_empty() {
+                    return None;
+                }
+                Some(precision_text.parse().ok()?)
+            }
+        };
+        Some(FmtSpec { fill, align, width, precision })
+    }
+}
+
+impl Display for FmtSpec {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.write_str(":")?;
+        match self.align {
+            None => {}
+            Some(FmtAlign::SignZeros) => f.write_str("0")?,
+            Some(align) => {
+                if self.fill != ' ' {
+                    write!(f, "{}", self.fill)?;
+                }
+                let c = match align {
+                    FmtAlign::Left => '<',
+                    FmtAlign::Right => '>',
+                    _ => '^',
+                };
+                write!(f, "{c}")?;
+            }
+        }
+        if self.width != 0 {
+            write!(f, "{}", self.width)?;
+        }
+        if let Some(precision) = self.precision {
+            write!(f, ".{precision}")?;
+        }
+        Ok(())
+    }
 }
 
 impl fmt::Display for TokenKind {
@@ -413,7 +521,6 @@ impl TokenKind {
             K::KeywordDefer => "defer",
 
             K::Slash => "/",
-            K::LineComment => "//",
 
             K::OpenParen => "(",
             K::CloseParen => ")",
@@ -462,6 +569,7 @@ impl TokenKind {
             K::StringOpenBt => "<`string...>",
             K::StringOpenDq => "<\"string...>",
             K::Char => "<char>",
+            K::FmtSpec => "<fmt spec>",
 
             K::Eof => "<EOF>",
         }
@@ -493,6 +601,9 @@ impl TokenKind {
             KW_DEFER => Some(K::KeywordDefer),
             _ => None,
         }
+    }
+    pub fn is_keyword(&self) -> bool {
+        (K::KeywordFn as u8..=K::KeywordDefer as u8).contains(&(*self as u8))
     }
     pub fn is_binary_operator(&self) -> bool {
         BinaryOpKind::from_tokenkind(*self).is_some()
@@ -574,8 +685,8 @@ fn nzu32(v: u32) -> std::num::NonZeroU32 {
     std::num::NonZeroU32::new(v).unwrap()
 }
 
-/// A token longer than u16::MAX (giant string literals) gets an interned SpanId instead
-/// TOKEN_FLAG_SPAN_ID is set and `start` holds the SpanId.
+/// A token longer than u16::MAX (giant string literals) sets TOKEN_FLAG_SPAN_ID; `start`
+/// indexes `Lexed::long_tokens` until `materialize_lexed_file` swaps in its SpanId.
 #[derive(Debug, Clone, Copy)]
 pub struct Token {
     pub kind: TokenKind,
@@ -596,8 +707,9 @@ impl Token {
         match u16::try_from(len) {
             Ok(len16) => Token { kind, flags, len: len16, start },
             Err(_) => {
+                let index = long_tokens.len() as u32;
                 long_tokens.push(LongToken { start, len });
-                Token { kind, flags: flags | TOKEN_FLAG_SPAN_ID, len: 0, start: 0 }
+                Token { kind, flags: flags | TOKEN_FLAG_SPAN_ID, len: 0, start: index }
             }
         }
     }
@@ -1059,7 +1171,16 @@ impl<'content> Lexer<'content> {
                                 return_single!(K::RAngle)
                             }
                         }
-                        ':' => return_single!(K::Colon),
+                        ':' => {
+                            if let LexMode::Interp { brace_depth: 1 } = lex_mode
+                                && let Some(len) = self.fmt_spec_len()
+                            {
+                                self.advance_n(len + 1);
+                                push_token(self, out, K::FmtSpec, n, len + 1);
+                                return Ok(Some(()));
+                            }
+                            return_single!(K::Colon)
+                        }
                         ';' => return_single!(K::Semicolon),
                         '=' => {
                             if self.peek_n(1) == '=' {
@@ -1239,6 +1360,18 @@ impl<'content> Lexer<'content> {
             None => EOF_CHAR,
             Some(c) => *c as char,
         }
+    }
+
+    fn fmt_spec_len(&self) -> Option<u32> {
+        let start = self.pos as usize + 1;
+        let rest = self.content.get(start..)?;
+        let len = rest.iter().position(|b| *b == b'}' || *b == b'\n')?;
+        if rest[len] != b'}' {
+            return None;
+        }
+        let text = std::str::from_utf8(&rest[..len]).ok()?;
+        FmtSpec::parse(text)?;
+        Some(len as u32)
     }
 
     fn peek_with_pos(&self) -> (char, u32) {
@@ -1532,6 +1665,36 @@ mod test {
             input,
             vec![K::StringOpenDq, K::OpenBrace, K::Ident, K::CloseBrace, K::StringDoneDq],
         )
+    }
+
+    #[test]
+    fn interpolation_fmt_spec() -> anyhow::Result<()> {
+        let (spans, tokens) = set_up(r#""${x:>8.2}${: f64}""#)?;
+        assert_token(&spans, &tokens, 2, K::Ident, 3, 1, false);
+        assert_token(&spans, &tokens, 3, K::FmtSpec, 4, 5, false);
+        assert_token(&spans, &tokens, 6, K::OpenBrace, 10, 2, false);
+        assert_token(&spans, &tokens, 7, K::Colon, 12, 1, false);
+        Ok(())
+    }
+
+    #[test]
+    fn fmt_spec_parse() {
+        use super::{FmtAlign as A, FmtSpec};
+        let spec = |fill, align, width, precision| Some(FmtSpec { fill, align, width, precision });
+        assert_eq!(FmtSpec::parse(".2"), spec(' ', None, 0, Some(2)));
+        assert_eq!(FmtSpec::parse("8"), spec(' ', None, 8, None));
+        assert_eq!(FmtSpec::parse(">8.3"), spec(' ', Some(A::Right), 8, Some(3)));
+        assert_eq!(FmtSpec::parse("*^10"), spec('*', Some(A::Center), 10, None));
+        assert_eq!(FmtSpec::parse("·<4"), spec('·', Some(A::Left), 4, None));
+        assert_eq!(FmtSpec::parse("0<5"), spec('0', Some(A::Left), 5, None));
+        assert_eq!(FmtSpec::parse("08.1"), spec('0', Some(A::SignZeros), 8, Some(1)));
+        for bad in
+            ["", "0", "00", "<", "<05", "8.", ".x", "x", "none", " f64", "{<3", "99999999999"]
+        {
+            assert_eq!(FmtSpec::parse(bad), None, "{bad}");
+        }
+        assert_eq!(FmtSpec::parse("*^10").unwrap().to_string(), ":*^10");
+        assert_eq!(FmtSpec::parse("08.1").unwrap().to_string(), ":08.1");
     }
 
     #[test]

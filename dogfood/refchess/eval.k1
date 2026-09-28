@@ -1,0 +1,67 @@
+let PIECE_VALUE_MG: array[i32, 6] = [82, 337, 365, 477, 1025, 0]
+let PIECE_VALUE_EG: array[i32, 6] = [94, 281, 297, 512, 936, 0]
+let PHASE_WEIGHT: array[i32, 6] = [0, 1, 1, 2, 4, 0]
+let PHASE_TOTAL: i32 = 24
+
+type square-tables = { mg: array[i32, 384], eg: array[i32, 384] }
+
+fn center-distance(sq: square): i32 {
+  let f = file-of(sq).signed() * 2 - 7
+  let r = rank-of(sq).signed() * 2 - 7
+  (f.abs() + r.abs()) / 2
+}
+
+fn build-square-tables(): square-tables {
+  let t: square-tables = .0
+  for sq in 0u32.until(64) {
+    let rank = rank-of(sq).signed()
+    let file = file-of(sq).signed()
+    let center = center-distance(sq)
+    let central-file = file == 3 or file == 4
+    let edge-file = file == 0 or file == 7
+    let values-mg: array[i32, 6] = [
+      if rank == 0 or rank == 7 0 else (rank - 1) * 6 + (if central-file and rank >= 2 and rank <= 4 20 else 0) - (if edge-file 5 else 0),
+      20 - center * 8,
+      12 - center * 3 - (if rank == 0 8 else 0),
+      (if rank == 6 20 else 0) + (if central-file 5 else 0),
+      4 - center * 2,
+      (if rank == 0 10 else 0) - rank * 15 + (if file == 1 or file == 6 15 else if file == 2 5 else if central-file -10 else 0),
+    ]
+    let values-eg: array[i32, 6] = [
+      if rank == 0 or rank == 7 0 else (rank - 1) * (rank - 1) * 5,
+      10 - center * 6,
+      8 - center * 3,
+      if rank == 6 10 else 0,
+      12 - center * 4,
+      20 - center * 10,
+    ]
+    for k in 0u32.until(6) {
+      t.mg.[k * 64 + sq] = PIECE_VALUE_MG.[k] + values-mg.[k]
+      t.eg.[k * 64 + sq] = PIECE_VALUE_EG.[k] + values-eg.[k]
+    }
+  }
+  t
+}
+
+let SQUARE_TABLES: square-tables = build-square-tables()
+
+fn evaluate(pos: *position): i32 {
+  let mg: array[i32, 2] = .0
+  let eg: array[i32, 2] = .0
+  let phase: i32 = 0
+  for side in 0u32.until(2) {
+    let flip: u32 = if side == 0 0 else 56
+    for k in 0u32.until(6) {
+      for sq in squares(pos.by-kind.[k] & pos.by-color.[side]) {
+        let i = k * 64 + (sq ^ flip)
+        mg.[side] = mg.[side] + SQUARE_TABLES.mg.[i]
+        eg.[side] = eg.[side] + SQUARE_TABLES.eg.[i]
+        phase = phase + PHASE_WEIGHT.[k]
+      }
+    }
+  }
+  let us = pos.side.value
+  let them = pos.side.other().value
+  let mg-phase = phase.min(PHASE_TOTAL)
+  ((mg.[us] - mg.[them]) * mg-phase + (eg.[us] - eg.[them]) * (PHASE_TOTAL - mg-phase)) / PHASE_TOTAL
+}

@@ -1,0 +1,309 @@
+type color = either(u8) { white, black }
+
+ns for color {
+  fn(inline) other(self: color): color { if (self is :white) :black else :white }
+}
+
+type kind = either(u8) { pawn, knight, bishop, rook, queen, king, none }
+
+let WHITE_OO: u8 = 1
+let WHITE_OOO: u8 = 2
+let BLACK_OO: u8 = 4
+let BLACK_OOO: u8 = 8
+
+let START_FEN: string = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+
+type xorshift = { state: u64 }
+
+ns for xorshift {
+  fn(inline) next(self: *xorshift): u64 {
+    self.state = self.state ^ (self.state >> 12)
+    self.state = self.state ^ (self.state << 25)
+    self.state = self.state ^ (self.state >> 27)
+    self.state * 2685821657736338717
+  }
+}
+
+type zobrist = { pieces: array[u64, 768], castling: array[u64, 16], ep-file: array[u64, 8], side: u64 }
+
+fn make-zobrist(): zobrist {
+  let rng: xorshift = .{ state = 1070372 }
+  let z: zobrist = .0
+  for i in 0.until(768) { z.pieces.[i] = rng.next() }
+  for i in 0.until(16) { z.castling.[i] = rng.next() }
+  for i in 0.until(8) { z.ep-file.[i] = rng.next() }
+  z.side = rng.next()
+  z
+}
+
+let ZOBRIST: zobrist = make-zobrist()
+
+fn(inline) piece-key(c: color, k: kind, sq: square): u64 {
+  ZOBRIST.pieces.[(c.value.widen[u32] * 6 + k.value.widen[u32]) * 64 + sq]
+}
+
+fn castle-mask-table(): array[u8, 64] {
+  let out: array[u8, 64] = .0
+  for sq in 0.until(64) { out.[sq] = 15 }
+  out.[4] = 15 ^ (WHITE_OO | WHITE_OOO)
+  out.[7] = 15 ^ WHITE_OO
+  out.[0] = 15 ^ WHITE_OOO
+  out.[60] = 15 ^ (BLACK_OO | BLACK_OOO)
+  out.[63] = 15 ^ BLACK_OO
+  out.[56] = 15 ^ BLACK_OOO
+  out
+}
+
+let CASTLE_MASK: array[u8, 64] = castle-mask-table()
+
+type position = {
+  by-kind: array[bitboard, 6],
+  by-color: array[bitboard, 2],
+  board: array[kind, 64],
+  side: color,
+  castling: u8,
+  ep: square,
+  halfmove: u32,
+  fullmove: u32,
+  key: u64,
+}
+
+ns for position {
+  fn(inline) pieces(self: *position, c: color, k: kind): bitboard {
+    self.by-kind.[k.value] & self.by-color.[c.value]
+  }
+
+  fn(inline) occupied(self: *position): bitboard { self.by-color.[0] | self.by-color.[1] }
+
+  fn(inline) king-square(self: *position, c: color): square { lsb(self.pieces(c, :king)) }
+
+  fn(inline) put(self: *position, c: color, k: kind, sq: square) {
+    self.by-kind.[k.value] = self.by-kind.[k.value] | bit(sq)
+    self.by-color.[c.value] = self.by-color.[c.value] | bit(sq)
+    self.board.[sq] = k
+    self.key = self.key ^ piece-key(c, k, sq)
+  }
+
+  fn(inline) remove(self: *position, c: color, k: kind, sq: square) {
+    self.by-kind.[k.value] = self.by-kind.[k.value] ^ bit(sq)
+    self.by-color.[c.value] = self.by-color.[c.value] ^ bit(sq)
+    self.board.[sq] = :none
+    self.key = self.key ^ piece-key(c, k, sq)
+  }
+
+  fn attackers-to(self: *position, sq: square, occ: bitboard): bitboard {
+    let rooks = self.by-kind.[kind:rook.value] | self.by-kind.[kind:queen.value]
+    let bishops = self.by-kind.[kind:bishop.value] | self.by-kind.[kind:queen.value]
+    (PAWN_ATTACKS.[0].[sq] & self.pieces(:black, :pawn))
+      | (PAWN_ATTACKS.[1].[sq] & self.pieces(:white, :pawn))
+      | (KNIGHT_ATTACKS.[sq] & self.by-kind.[kind:knight.value])
+      | (KING_ATTACKS.[sq] & self.by-kind.[kind:king.value])
+      | (rook-attacks(sq, occ) & rooks)
+      | (bishop-attacks(sq, occ) & bishops)
+  }
+
+  fn in-check(self: *position): bool {
+    let us = self.side
+    self.attackers-to(self.king-square(us), self.occupied()) & self.by-color.[us.other().value] != 0
+  }
+
+  fn empty(): position {
+    let p: position = .0
+    for sq in 0.until(64) { p.board.[sq] = :none }
+    p.ep = NO_SQUARE
+    p.fullmove = 1
+    p
+  }
+
+  fn from-fen(fen: string): result[position, string] {
+    let fields = words(fen)
+    if fields.len() < 4 return :err "FEN needs at least 4 fields: $fen"
+    let p = empty()
+    let rank: u32 = 7
+    let file: u32 = 0
+    for c in fields.[0] {
+      if c == '/' {
+        if file != 8 or rank == 0 return :err "bad FEN rank layout: ${fields.[0]}"
+        rank = rank - 1
+        file = 0
+      } else if c >= '1' and c <= '8' {
+        file = file + (c.as-u8() - '0'.as-u8()).widen[u32]
+      } else {
+        require kind-of-char(c) is :some k else return :err "bad FEN piece '$c'"
+        if file > 7 return :err "bad FEN rank layout: ${fields.[0]}"
+        let pc: color = if c >= 'a' :black else :white
+        p.put(pc, k, rank * 8 + file)
+        file = file + 1
+      }
+    }
+    if rank != 0 or file != 8 return :err "bad FEN board: ${fields.[0]}"
+    if p.pieces(:white, :king).count-ones() != 1 or p.pieces(:black, :king).count-ones() != 1 {
+      return :err "FEN needs exactly one king per side"
+    }
+
+    p.side = if fields.[1] is {
+      "w" -> :white,
+      "b" -> :black,
+      _ -> return :err "bad FEN side: ${fields.[1]}"
+    }
+    if fields.[2] != "-" {
+      for c in fields.[2] {
+        p.castling = p.castling | if c is {
+          'K' -> WHITE_OO,
+          'Q' -> WHITE_OOO,
+          'k' -> BLACK_OO,
+          'q' -> BLACK_OOO,
+          _ -> return :err "bad FEN castling: ${fields.[2]}"
+        }
+      }
+    }
+    if p.by-kind.[kind:pawn.value] & (RANK_1 | RANK_8) != 0 return :err "FEN has a pawn on the first or last rank"
+    for rights in [
+      .{ flag = WHITE_OO, king = 4u32, rook = 7u32, c = color:white },
+      .{ flag = WHITE_OOO, king = 4u32, rook = 0u32, c = color:white },
+      .{ flag = BLACK_OO, king = 60u32, rook = 63u32, c = color:black },
+      .{ flag = BLACK_OOO, king = 60u32, rook = 56u32, c = color:black },
+    ] {
+      if p.pieces(rights.c, :king) & bit(rights.king) == 0 or p.pieces(rights.c, :rook) & bit(rights.rook) == 0 {
+        p.castling = p.castling & rights.flag.bit-not()
+      }
+    }
+    if fields.[3] != "-" {
+      require parse-square(fields.[3]) is :some sq else return :err "bad FEN en passant: ${fields.[3]}"
+      let white = p.side is :white
+      let pushed = if white sq - 8 else sq + 8
+      if rank-of(sq) == (if white 5 else 2) and p.pieces(p.side.other(), :pawn) & bit(pushed) != 0 { p.ep = sq }
+    }
+    if fields.len() > 4 {
+      require u64/from-string(fields.[4]) is :ok n else return :err "bad FEN halfmove: ${fields.[4]}"
+      p.halfmove = n.trunc[u32]
+    }
+    if fields.len() > 5 {
+      require u64/from-string(fields.[5]) is :ok n else return :err "bad FEN fullmove: ${fields.[5]}"
+      p.fullmove = n.trunc[u32]
+    }
+    p.key = p.key ^ ZOBRIST.castling.[p.castling] ^ p.ep-key()
+    if p.side is :black { p.key = p.key ^ ZOBRIST.side }
+    if p.attackers-to(p.king-square(p.side.other()), p.occupied()) & p.by-color.[p.side.value] != 0 {
+      return :err "side not to move is in check"
+    }
+    :ok p
+  }
+
+  fn(inline) ep-key(self: *position): u64 {
+    if self.ep == NO_SQUARE 0 else ZOBRIST.ep-file.[file-of(self.ep)]
+  }
+
+  fn to-fen(self: *position): string {
+    let sb = string-builder/new()
+    let rank: u32 = 8
+    while rank > 0 {
+      rank = rank - 1
+      let gap = 0
+      for file in 0u32.until(8) {
+        let sq = rank * 8 + file
+        if self.board.[sq] is :none {
+          gap = gap + 1
+        } else {
+          if gap > 0 { sb.write("$gap"); gap = 0 }
+          sb.write-char(self.piece-char(sq))
+        }
+      }
+      if gap > 0 sb.write("$gap")
+      if rank > 0 sb.write-char('/')
+    }
+    sb.write(if (self.side is :white) " w " else " b ")
+    if self.castling == 0 sb.write-char('-')
+    if self.castling & WHITE_OO != 0 sb.write-char('K')
+    if self.castling & WHITE_OOO != 0 sb.write-char('Q')
+    if self.castling & BLACK_OO != 0 sb.write-char('k')
+    if self.castling & BLACK_OOO != 0 sb.write-char('q')
+    sb.write(if self.ep == NO_SQUARE " -" else " ${square-name(self.ep)}")
+    sb.write(" ${self.halfmove} ${self.fullmove}")
+    sb.build()
+  }
+
+  fn piece-char(self: *position, sq: square): char {
+    let c = if self.board.[sq] is {
+      :pawn -> 'p', :knight -> 'n', :bishop -> 'b', :rook -> 'r', :queen -> 'q', :king -> 'k', :none -> return '.'
+    }
+    if self.by-color.[0] & bit(sq) != 0 c.to-ascii-upper() else c
+  }
+
+  fn diagram(self: *position): string {
+    let sb = string-builder/new()
+    let rank: u32 = 8
+    while rank > 0 {
+      rank = rank - 1
+      sb.write("${rank + 1} ")
+      for file in 0u32.until(8) {
+        sb.write-char(self.piece-char(rank * 8 + file))
+        sb.write-char(' ')
+      }
+      sb.write-char('\n')
+    }
+    sb.writeln("  a b c d e f g h")
+    sb.writeln("fen: ${self.to-fen()}")
+    sb.write("key: ${self.key}")
+    sb.build()
+  }
+
+  fn make(self: *position, m: move) {
+    let us = self.side
+    let them = us.other()
+    let from = m.from()
+    let to = m.to()
+    let moving = self.board.[from]
+
+    self.key = self.key ^ ZOBRIST.castling.[self.castling] ^ self.ep-key() ^ ZOBRIST.side
+    self.ep = NO_SQUARE
+    self.halfmove = self.halfmove + 1
+
+    if m.is-en-passant() {
+      self.remove(them, :pawn, if (us is :white) to - 8 else to + 8)
+    } else if m.is-capture() {
+      self.remove(them, self.board.[to], to)
+      self.halfmove = 0
+    }
+
+    self.remove(us, moving, from)
+    self.put(us, if m.is-promotion() m.promotion-kind() else moving, to)
+
+    if moving is :pawn {
+      self.halfmove = 0
+      if m.flag() == DOUBLE_PUSH { self.ep = (from + to) / 2 }
+    } else if m.flag() == KING_CASTLE {
+      self.remove(us, :rook, to + 1)
+      self.put(us, :rook, to - 1)
+    } else if m.flag() == QUEEN_CASTLE {
+      self.remove(us, :rook, to - 2)
+      self.put(us, :rook, to + 1)
+    }
+
+    self.castling = self.castling & CASTLE_MASK.[from] & CASTLE_MASK.[to]
+    if us is :black { self.fullmove = self.fullmove + 1 }
+    self.side = them
+    self.key = self.key ^ ZOBRIST.castling.[self.castling] ^ self.ep-key()
+  }
+}
+
+fn kind-of-char(c: char): ?kind {
+  if c.to-ascii-lower() is {
+    'p' -> :some :pawn,
+    'n' -> :some :knight,
+    'b' -> :some :bishop,
+    'r' -> :some :rook,
+    'q' -> :some :queen,
+    'k' -> :some :king,
+    _ -> :none
+  }
+}
+
+fn words(s: string): list[string] {
+  let out: list[string] = list/empty()
+  for part in s.split-by-char(' ') {
+    let w = if part.ends-with("\r") part.slice(0, part.len() - 1) else part
+    if w.len() > 0 out.push(w)
+  }
+  out
+}

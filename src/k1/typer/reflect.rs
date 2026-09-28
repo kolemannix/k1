@@ -192,13 +192,7 @@ impl TypedProgram {
         for (index, raw) in raw_param_types.iter().enumerate() {
             let type_id = self.type_id_from_raw(*raw, span)?;
             let name = self.positional_param_name(index);
-            params.push(FnParamType {
-                type_id,
-                name,
-                is_context: false,
-                is_lambda_env: false,
-                is_macro_code: false,
-            });
+            params.push(FnParamType { type_id, name, kind: FnParamKind::Plain });
         }
         let new_type_id = self.add_type_anon(Type::Function(FunctionType {
             physical_params: params.to_slice(),

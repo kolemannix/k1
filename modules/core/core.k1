@@ -488,6 +488,11 @@ ns for i32 {
 
   fn(inline) as-bool(self: i32): bool { self != 0 }
   fn(inline) unsigned(self: i32): u32 { mem/bitcast(self) }
+
+  fn abs(self: i32): i32 {
+    let mask = self >> 31
+    self.xor(mask) - mask
+  }
 }
 
 ns for i64 {
@@ -572,6 +577,12 @@ ns for u64 {
 
   fn leading-zeros(self: u64): u64 {
     _ctlz(self, false)
+  }
+
+  fn(intern("llvm.ctpop.i64")) _ctpop(x: u64): u64
+
+  fn count-ones(self: u64): u64 {
+    _ctpop(self)
   }
 
 }
@@ -755,6 +766,18 @@ impl print for f32 {
 impl print for f64 {
   fn print-to[w: writer](self: f64, w) {
     f64/format(self, w, places = -1)
+  }
+}
+
+impl print-precise for f32 {
+  fn print-precise-to[w: writer](self: f32, w, precision: u32) {
+    f32/format(self, w, places = precision.signed())
+  }
+}
+
+impl print-precise for f64 {
+  fn print-precise-to[w: writer](self: f64, w, precision: u32) {
+    f64/format(self, w, places = precision.signed())
   }
 }
 

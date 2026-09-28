@@ -184,6 +184,7 @@ pub(crate) struct BuiltinIdents {
     pub string_builder: StringId,
     pub code: StringId,
     pub code_chunk: StringId,
+    pub code_token: StringId,
     pub code_builder: StringId,
     pub builder: StringId,
     pub bitwise: StringId,
@@ -243,6 +244,12 @@ pub(crate) struct BuiltinFunctions {
     pub core_checked_index: QIdent,
     pub core_discard: QIdent,
     pub core_print_print_to: QIdent,
+    pub core_print_precise_print_precise_to: QIdent,
+    pub fmt_pad_new: QIdent,
+    pub fmt_pad_align_left: QIdent,
+    pub fmt_pad_align_right: QIdent,
+    pub fmt_pad_align_center: QIdent,
+    pub fmt_pad_align_zeros: QIdent,
     pub buffer_allocate: QIdent,
     pub buffer_index_unchecked: QIdent,
     pub buffer_from_span: QIdent,
@@ -588,6 +595,7 @@ impl IdentPool {
             string_builder: intern!("string-builder"),
             code: intern!("code"),
             code_chunk: intern!("code-chunk"),
+            code_token: intern!("code-token"),
             code_builder: intern!("code-builder"),
             builder: intern!("builder"),
             bitwise: intern!("bitwise"),
@@ -655,6 +663,16 @@ impl IdentPool {
 
         let path_core_print = intern_path!(b.core, intern!("print"));
         let core_print_print_to = make_fn!(path_core_print, intern!("print-to"));
+        let path_core_print_precise = intern_path!(b.core, intern!("print-precise"));
+        let core_print_precise_print_precise_to =
+            make_fn!(path_core_print_precise, intern!("print-precise-to"));
+
+        let path_fmt_pad = intern_path!(b.core, b.fmt, intern!("pad"));
+        let fmt_pad_new = make_fn!(path_fmt_pad, intern!("new"));
+        let fmt_pad_align_left = make_fn!(path_fmt_pad, intern!("align-left"));
+        let fmt_pad_align_right = make_fn!(path_fmt_pad, intern!("align-right"));
+        let fmt_pad_align_center = make_fn!(path_fmt_pad, intern!("align-center"));
+        let fmt_pad_align_zeros = make_fn!(path_fmt_pad, intern!("align-zeros"));
 
         let path_try = intern_path!(b.try_);
         let try__is_ok: QIdent = make_fn!(path_try, intern!("is-ok"));
@@ -721,6 +739,12 @@ impl IdentPool {
             core_checked_index,
             core_discard,
             core_print_print_to,
+            core_print_precise_print_precise_to,
+            fmt_pad_new,
+            fmt_pad_align_left,
+            fmt_pad_align_right,
+            fmt_pad_align_center,
+            fmt_pad_align_zeros,
             buffer_allocate,
             buffer_index_unchecked,
             buffer_from_span,

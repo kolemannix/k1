@@ -1,0 +1,405 @@
+ns html
+
+type escaper[w] = { out: w }
+
+fn entity(b: u8): string {
+  if b == '&'.as-u8() "&amp;"
+  else if b == '<'.as-u8() "&lt;"
+  else if b == '>'.as-u8() "&gt;"
+  else if b == '"'.as-u8() "&quot;"
+  else if b == '\''.as-u8() "&#39;"
+  else ""
+}
+
+impl[w: writer] writer for escaper[w] {
+  fn write-byte(self, value: u8) {
+    let e = entity(value)
+    if e.len() == 0 self.out.write-byte(value) else self.out.write-string(e)
+  }
+  fn write-bytes(self, bytes: span[byte]) {
+    let start: size = 0
+    for b in bytes {
+      let e = entity(b)
+      if e.len() > 0 {
+        self.out.write-bytes(bytes.slice(start, it-index))
+        self.out.write-string(e)
+        start = it-index + 1
+      }
+    }
+    self.out.write-bytes(bytes.drop(start))
+  }
+}
+
+fn write-escaped[w: writer, t: print](out: w, value: t) {
+  value.print-to(escaper[w].{ out })
+}
+
+fn escape(s: string): string {
+  let sb = string-builder/new()
+  write-escaped(sb.&, s)
+  sb.build()
+}
+
+fn is-void(name: string): bool {
+  name == "br" or name == "hr" or name == "img" or name == "input" or name == "meta" or
+  name == "link" or name == "area" or name == "base" or name == "col" or name == "embed" or
+  name == "source" or name == "track" or name == "wbr"
+}
+
+macro write(out: code, markup: span[code-token]) {
+  emit(out, markup)
+}
+
+macro render(markup: span[code-token]) {
+  let cb = code-builder/new()
+  cb.line("let html-sb = string-builder/new()")
+  cb.code(emit(\html-sb.&, markup))
+  cb.line("html-sb.build()")
+  cb.build()
+}
+
+fn emit(out: code, markup: span[code-token]): code {
+  let e: emitter = .{
+    toks = markup,
+    i = 0,
+    cb = code-builder/new(),
+    pending = string-builder/new(),
+    out,
+    after-text = false,
+    lead = :as-written,
+  }
+  e.nodes(in-block = false, raw = false)
+  if not e.at-end() e.peek().fail("Unexpected `${e.peek().text}`")
+  e.flush()
+  e.cb.build()
+}
+
+type emitter = {
+  toks: span[code-token],
+  i: size,
+  cb: code-builder,
+  pending: string-builder,
+  out: code,
+  after-text: bool,
+  lead: either(u8) { as-written, trim, space },
+}
+
+ns for emitter {
+  fn at-end(self: *emitter): bool { self.i >= self.toks.len() }
+
+  fn peek(self: *emitter): code-token { self.toks.[self.i] }
+
+  fn peek-is(self: *emitter, offset: size, text: string): bool {
+    self.i + offset < self.toks.len() and self.toks.[self.i + offset].text == text
+  }
+
+  fn peek-joined(self: *emitter, offset: size, text: string): bool {
+    self.peek-is(offset, text) and self.toks.[self.i + offset].spacing is :none
+  }
+
+  fn next(self: *emitter): code-token {
+    let t = self.peek()
+    self.i = self.i + 1
+    t
+  }
+
+  fn expect(self: *emitter, text: string, at: code-token): code-token {
+    if self.at-end() at.fail("Expected `$text` before the end of the template")
+    let t = self.next()
+    if t.text != text t.fail("Expected `$text`, got `${t.text}`")
+    t
+  }
+
+  fn at-self-close(self: *emitter): bool { self.peek-is(0, "/") and self.peek-joined(1, ">") }
+
+  fn joined-continues(self: *emitter): bool {
+    if self.at-end() or self.peek-is(0, ">") or self.at-self-close() return false
+    self.peek().spacing is :none
+  }
+
+  fn text(self: *emitter, s: string) { self.pending.write(s) }
+
+  fn flush(self: *emitter) {
+    let s = self.pending.build()
+    if s.len() == 0 return
+    self.cb.code(self.out)
+    self.cb.write(".write(${meta/str-lit(s)})\n")
+    self.pending.reset()
+  }
+
+  fn dynamic(self: *emitter, value: code, raw: bool) {
+    self.flush()
+    if raw {
+      self.cb.write("(")
+      self.cb.code(value)
+      self.cb.write(").print-to(")
+      self.cb.code(self.out)
+      self.cb.write(")\n")
+    } else {
+      self.cb.write("std/html/write-escaped(")
+      self.cb.code(self.out)
+      self.cb.write(", ")
+      self.cb.code(value)
+      self.cb.write(")\n")
+    }
+  }
+
+  fn tokens-code(self: *emitter, start: size, end: size): code {
+    let cb = code-builder/new()
+    for tok in self.toks.slice(start, end) {
+      if it-index > 0 {
+        if tok.spacing is {
+          :none -> {},
+          :inline -> cb.write(" "),
+          :newline -> cb.write("\n"),
+        }
+      }
+      cb.code(tok.code())
+    }
+    cb.build()
+  }
+
+  fn braced(self: *emitter): code {
+    let open = self.expect("{", self.peek())
+    let start = self.i
+    let depth: size = 1
+    loop {
+      if self.at-end() open.fail("This `{` is never closed")
+      let t = self.next()
+      if is-punct(t, "{") { depth = depth + 1 }
+      if is-punct(t, "}") {
+        depth = depth - 1
+        if depth == 0 break
+      }
+    }
+    self.tokens-code(start, self.i - 1)
+  }
+
+  fn header-until-brace(self: *emitter, directive: code-token): code {
+    let start = self.i
+    while not self.peek-is(0, "{") {
+      if self.at-end() directive.fail("Expected `{` after #${directive.text}")
+      self.i = self.i + 1
+    }
+    self.tokens-code(start, self.i)
+  }
+
+  fn block(self: *emitter, raw: bool, spaced: bool) {
+    let open = self.expect("{", self.peek())
+    self.lead = if spaced :space else :trim
+    self.nodes(in-block = true, raw)
+    self.flush()
+    self.expect("}", open)
+    self.after-text = false
+  }
+
+  fn space-before(self: *emitter, t: code-token, is-text: bool) {
+    if self.lead is {
+      :trim -> {},
+      :space -> self.text(" "),
+      :as-written -> if t.spacing is :inline or (t.spacing is :newline and is-text and self.after-text) {
+        self.text(" ")
+      },
+    }
+    self.lead = :as-written
+    self.after-text = is-text
+  }
+
+  fn nodes(self: *emitter, in-block: bool, raw: bool) {
+    while not self.at-end() {
+      let t = self.peek()
+      if in-block and is-punct(t, "}") return
+      if is-punct(t, "<") {
+        if self.peek-joined(1, "/") return
+        if (not raw) and self.peek-joined(1, "!") {
+          self.space-before(t, false)
+          self.doctype()
+          continue
+        }
+        if (not raw) and self.i + 1 < self.toks.len() {
+          let n = self.toks.[self.i + 1]
+          if n.kind is :ident and n.spacing is :none {
+            self.space-before(t, false)
+            self.element()
+            continue
+          }
+        }
+      }
+      if is-punct(t, "{") {
+        self.space-before(t, true)
+        let value = self.braced()
+        self.dynamic(value, raw)
+        continue
+      }
+      if is-punct(t, "#") and self.i + 1 < self.toks.len() {
+        let n = self.toks.[self.i + 1]
+        if n.spacing is :none {
+          if n.text == "for" or n.text == "if" {
+            let spaced = self.lead is :space or (self.lead is :as-written and t.spacing is :inline)
+            self.lead = :as-written
+            self.after-text = false
+            self.flush()
+            self.i = self.i + 1
+            if n.text == "for" self.directive-for(raw, spaced) else self.directive-if(raw, spaced)
+            continue
+          }
+          if n.text == "raw" {
+            self.space-before(t, true)
+            self.i = self.i + 2
+            let value = self.braced()
+            self.dynamic(value, true)
+            continue
+          }
+          if n.text == "{" {
+            self.space-before(t, false)
+            self.flush()
+            self.i = self.i + 1
+            let stmts = self.braced()
+            self.cb.code(stmts)
+            self.cb.write("\n")
+            continue
+          }
+        }
+      }
+      self.text-token(self.next(), raw)
+    }
+  }
+
+  fn text-token(self: *emitter, t: code-token, raw: bool) {
+    self.space-before(t, true)
+    if t.kind is :string {
+      if foldable(t.text) {
+        let inner = t.text.slice(1, t.text.len() - 1)
+        self.text(if raw inner else escape(inner))
+      } else {
+        self.dynamic(t.code(), raw)
+      }
+    } else {
+      self.text(if raw t.text else escape(t.text))
+    }
+  }
+
+  fn doctype(self: *emitter) {
+    let open = self.next()
+    self.text("<")
+    loop {
+      if self.at-end() open.fail("This `<!` is never closed")
+      let t = self.next()
+      if not (t.spacing is :none) self.text(" ")
+      self.text(t.text)
+      if t.text == ">" break
+    }
+  }
+
+  fn directive-for(self: *emitter, raw: bool, spaced: bool) {
+    let directive = self.next()
+    let header = self.header-until-brace(directive)
+    self.cb.write("for ")
+    self.cb.code(header)
+    self.cb.write(" {\n")
+    self.block(raw, spaced)
+    self.cb.write("}\n")
+  }
+
+  fn directive-if(self: *emitter, raw: bool, spaced: bool) {
+    let directive = self.next()
+    let cond = self.header-until-brace(directive)
+    self.cb.write("if ")
+    self.cb.code(cond)
+    self.cb.write(" {\n")
+    self.block(raw, spaced)
+    self.cb.write("}")
+    if self.peek-is(0, "else") {
+      self.i = self.i + 1
+      self.cb.write(" else ")
+      if self.peek-is(0, "#") and self.peek-joined(1, "if") {
+        self.i = self.i + 1
+        self.directive-if(raw, spaced)
+        return
+      }
+      self.cb.write("{\n")
+      self.block(raw, spaced)
+      self.cb.write("}")
+    }
+    self.cb.write("\n")
+  }
+
+  fn element(self: *emitter) {
+    self.i = self.i + 1
+    let name-tok = self.next()
+    let name = name-tok.text
+    self.text("<$name")
+    loop {
+      if self.at-end() name-tok.fail("<$name> has no closing `>`")
+      if self.peek-is(0, ">") {
+        self.i = self.i + 1
+        break
+      }
+      if self.at-self-close() {
+        self.i = self.i + 2
+        self.text(if is-void(name) ">" else "></$name>")
+        self.after-text = false
+        return
+      }
+      self.attr()
+    }
+    self.text(">")
+    self.after-text = false
+    if is-void(name) return
+    let raw = name == "script" or name == "style"
+    self.nodes(in-block = false, raw)
+    if self.at-end() name-tok.fail("<$name> is never closed")
+    let slash = self.toks.[self.i + 1]
+    self.i = self.i + 2
+    if self.at-end() slash.fail("Expected </$name>")
+    let close-name = self.next()
+    if close-name.text != name close-name.fail("</${close-name.text}> does not close <$name>")
+    let _ = self.expect(">", close-name)
+    self.text("</$name>")
+    self.after-text = false
+  }
+
+  fn attr(self: *emitter) {
+    let first = self.next()
+    if first.kind is :string or first.text == "=" or first.text == "{" {
+      first.fail("Expected an attribute name, got `${first.text}`")
+    }
+    self.text(" ")
+    self.text(first.text)
+    while self.joined-continues() and not self.peek-is(0, "=") {
+      self.text(self.next().text)
+    }
+    if not self.peek-is(0, "=") return
+    let eq = self.next()
+    if self.at-end() or self.peek-is(0, ">") or self.at-self-close() eq.fail("Expected a value after `=`")
+    let v = self.peek()
+    self.text("=\"")
+    if v.kind is :string {
+      self.i = self.i + 1
+      if foldable(v.text) {
+        self.text(escape(v.text.slice(1, v.text.len() - 1)))
+      } else {
+        self.dynamic(v.code(), false)
+      }
+    } else if v.text == "{" {
+      let value = self.braced()
+      self.dynamic(value, false)
+    } else {
+      self.i = self.i + 1
+      self.text(escape(v.text))
+      while self.joined-continues() {
+        self.text(escape(self.next().text))
+      }
+    }
+    self.text("\"")
+  }
+}
+
+fn is-punct(t: code-token, text: string): bool { t.kind is :punct and t.text == text }
+
+fn foldable(literal: string): bool {
+  for c in literal {
+    if c == '\\' or c == '$' return false
+  }
+  true
+}

@@ -188,6 +188,15 @@ fn test-swap() {
   assert(a == [1,2])
 }
 
+fn test-pop() {
+  let a = [1,2]
+  assert(a.pop() == :some 2)
+  assert(a.pop() == :some 1)
+  assert(a.pop() == :none)
+  a.push(3)
+  assert(a == [3])
+}
+
 fn iterator(): int {
   let l = [1,2,3]
   let i = l.iterator()
@@ -213,6 +222,7 @@ fn test() {
   list_test/test-sort-stable()
   list_test/test-filter-in-place()
   list_test/test-swap()
+  list_test/test-pop()
   list_test/iterator()
   assert([1,2,3].show() == "[1,2,3]")
 }

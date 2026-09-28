@@ -1,3 +1,0 @@
-- Install https://github.com/Disservin/fastchess/ and get set up with UCI
-- Move to separate repo
-- Board repr, movegen, and perftt https://www.chessprogramming.org/Perft

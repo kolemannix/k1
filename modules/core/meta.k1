@@ -96,7 +96,7 @@ ns meta {
     for f in fields {
       code.writeln(`    self.ARR_${f.name}.push(value.${f.name});`)
     }
-    code.writeln(`}`) // end fn push
+    code.writeln(`  }`) // end fn push
 
     code.writeln(`}`) // end ns
     code/from-string(code.build())

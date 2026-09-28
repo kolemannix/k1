@@ -152,6 +152,9 @@ fn test-compare() {
   assert-equals((0b1000: u64).trailing-zeros(), 3)
   assert-equals((1: u64).trailing-zeros(), 0)
   assert-equals((0: u64).trailing-zeros(), 64)
+  assert-equals((0xF0F0: u64).count-ones(), 8)
+  assert-equals((0: u64).count-ones(), 0)
+  assert-equals(u64/max-value.count-ones(), 64)
 
   assert-equals(hits.first-true-lane(), 2)
   assert-equals(vector/zeroed[u8, 16]().first-true-lane(), -1)

@@ -310,6 +310,8 @@ impl TypedProgram {
                 self.builtin_types.code = Some(type_id);
             } else if name == b.code_chunk {
                 self.builtin_types.code_chunk = Some(type_id);
+            } else if name == b.code_token {
+                self.builtin_types.code_token = Some(type_id);
             } else if name == b.code_builder {
                 self.builtin_types.code_builder = Some(type_id);
             }
@@ -738,13 +740,7 @@ impl TypedProgram {
                     let type_id = self.eval_type_expr(*param, scope_id)?;
 
                     let name = self.positional_param_name(index);
-                    params.push(FnParamType {
-                        type_id,
-                        name,
-                        is_context: false,
-                        is_lambda_env: false,
-                        is_macro_code: false,
-                    });
+                    params.push(FnParamType { type_id, name, kind: FnParamKind::Plain });
                 }
                 let return_type = self.eval_type_expr(fun_type.return_type, scope_id)?;
                 let params_handle = params.to_slice();
@@ -2011,13 +2007,8 @@ impl TypedProgram {
                     if new_param_type != param.type_id {
                         any_new = true;
                     }
-                    let new_param = FnParamType {
-                        name: param.name,
-                        type_id: new_param_type,
-                        is_context: param.is_context,
-                        is_lambda_env: param.is_lambda_env,
-                        is_macro_code: param.is_macro_code,
-                    };
+                    let new_param =
+                        FnParamType { name: param.name, type_id: new_param_type, kind: param.kind };
                     new_params.push(new_param);
                 }
                 if any_new {

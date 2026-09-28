@@ -71,6 +71,18 @@ ns for span {
     array/from-buffer[t, n](self.buffer)
   }
 
+  fn(inline) slice[t](self: span[t], start: size, end: size): span[t] {
+    .{ buffer = self.buffer.slice(start, end) }
+  }
+  fn(inline) take[t](self: span[t], count: size): span[t] { .{ buffer = self.buffer.take(count) } }
+  fn(inline) drop[t](self: span[t], count: size): span[t] { .{ buffer = self.buffer.drop(count) } }
+
+  fn map[t, u](self: span[t], f: some fn t -> u): span[u] {
+    let buf = buffer/allocate[u](self.len())
+    for x in self { buf.[it-index] = f(x) }
+    wrap-buffer(buf)
+  }
+
   fn first-ref[t](self: span[t]): ?*t {
     if not self.is-empty() {
       :some self.[0].&

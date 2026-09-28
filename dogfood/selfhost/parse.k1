@@ -156,6 +156,27 @@ ns for parser {
     }
   }
 
+  fn expect-raw-token-group(self: *parser): result[ast/src-span, perror] {
+    let open = self.expect-kind(:open-brace).try
+    let first = self.peek()
+    let depth: size = 1
+    loop {
+      let t = self.peek()
+      if t.kind is :open-brace { depth = depth + 1 }
+      if t.kind is :close-brace { depth = depth - 1 }
+      if t.kind is :eof { return :err(make-error("Unclosed '\\{' token group", open)) }
+      if depth == 0 break
+      self.advance()
+    }
+    let content = if first.kind is :close-brace {
+      ast/src-span.{ start = open.end(), len = 0 }
+    } else {
+      first.span().thru(self.peek-back().span())
+    }
+    self.advance()
+    :ok(content)
+  }
+
   fn expect-ident(self: *parser): result[ident-tok, perror] {
     let t = self.expect-kind(:ident).try
     :ok(.{ tok = t, name = self.make-ident(t) })

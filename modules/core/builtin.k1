@@ -247,7 +247,6 @@ ns meta {
 ////////////////////////////////
 // Built-in Abilities
 
-// equals must have ability id 2
 ability equals {
   fn equals(self, other: self): bool
   fn not-equals(self, other: self): bool { not self.equals(other) }
@@ -282,6 +281,10 @@ ability writer {
 ability print {
   fn print-to[w: writer](self, w)
 }
+
+ability print-precise {
+  fn print-precise-to[w: writer](self, w, precision: u32)
+}
 // where formatter is a concrete type that always writes into a string-builder?
 // or generic over w
 // ability inspect { fn inspect-to[w: writer](f: formatter[w], self) }
@@ -289,7 +292,6 @@ ability print {
 // TODO: show does not belong in k1 long term because the name is too Haskelly, which is to say
 //       both erudite and pedestrian at the same time? Looking at you, 'Just'
 
-// show must have ability id 4
 // prints self into the current default allocator
 ability show {
   fn show(self): string
@@ -724,6 +726,12 @@ impl equals for string {
 
 impl print for string {
   fn print-to[w: writer](self: string, w) { w.write-string(self) }
+}
+
+impl print-precise for string {
+  fn print-precise-to[w: writer](self: string, w, precision: u32) {
+    w.write-bytes(fmt/chars-prefix(self.span-bytes(), precision))
+  }
 }
 
 impl print for {} {

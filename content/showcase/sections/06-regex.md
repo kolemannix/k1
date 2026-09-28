@@ -1,35 +1,20 @@
 # A regex engine that runs at compile time
 
-`$pre/regex/define(name, "pattern")` compiles a regular expression while the
-program compiles and expands into three ordinary functions: `name-scan`, the
-DFA itself; `name(s): bool`, the anchored match; and `name-find(s)`, the
-leftmost-longest search. The engine is under 270 lines of plain K1 in `ns pre`
-(literals, `.`, `[a-z]` classes, `*` `+` `?`, `|`, grouping, `\` escapes), run
-by the compile-time VM. Example: `examples/regex_dfa.k1`.
+`$pre/regex/define(name, "pattern")` compiles a regex while your program
+compiles, and expands into three plain functions: `name-scan` (the DFA),
+`name(s): bool` (anchored match) and `name-find(s)` (leftmost-longest search).
+The engine is under 300 lines of ordinary K1 sitting in `ns pre`.
 
 ```k1
 $pre/regex/define(ident, "[A-Za-z_][A-Za-z0-9_]*")
 $pre/regex/define(number, "[0-9]+([.][0-9]+)?")
 $pre/regex/define(email, "[a-z0-9._+-]+@[a-z0-9-]+([.][a-z0-9-]+)*[.][a-z][a-z]+")
+```
 
-fn report(name: string, hit: bool, s: string) {
-  let verdict = if hit "match   " else "no match"
-  println("$name $verdict \"$s\"")
-}
-
-fn main(): i32 {
+```k1
   for s in ["foo_bar", "x9", "_", "9x", "", "a-b"] { report("ident ", ident(s), s) }
   for s in ["42", "3.14", "0.0", "3.", ".5", "1e5"] { report("number", number(s), s) }
   for s in ["a.b@c.io", "x+y@mail.example.org", "no-at.com", "a@b", "a@b.c"] { report("email ", email(s), s) }
-
-  let line = "total: 12.5 units, 3 left"
-  if number-find(line) is :some m {
-    println("first number in \"$line\": ${line.slice(m.start, m.end)} at ${m.start}..${m.end}")
-  }
-  println("ident-find in \"  42abc\": ${ident-find("  42abc")}")
-  println("email-find in \"nothing here\": ${email-find("nothing here")}")
-  0
-}
 ```
 
 ```text
@@ -50,6 +35,20 @@ email  match    "x+y@mail.example.org"
 email  no match "no-at.com"
 email  no match "a@b"
 email  no match "a@b.c"
+```
+
+Searching:
+
+```k1
+  let line = "total: 12.5 units, 3 left"
+  if number-find(line) is :some m {
+    println("first number in \"$line\": ${line.slice(m.start, m.end)} at ${m.start}..${m.end}")
+  }
+  println("ident-find in \"  42abc\": ${ident-find("  42abc")}")
+  println("email-find in \"nothing here\": ${email-find("nothing here")}")
+```
+
+```text
 first number in "total: 12.5 units, 3 left": 12.5 at 7..11
 ident-find in "  42abc": :some .{ start = 4, end = 7 }
 email-find in "nothing here": :none
@@ -57,12 +56,10 @@ email-find in "nothing here": :none
 
 ## What the macro emitted
 
-The expansion for `number`, printed by temporarily adding `println(c.text())`
-to the macro body (the VM's `println` runs during compilation and tags its
-output with the printing line):
+The macro logs its expansion, so compiling prints this for `number`:
 
 ```text
-[regex_dfa.k1:288 info] fn number-scan(s: string): ?size {
+[regex_dfa.k1:289 info] fn number-scan(s: string): ?size {
   let state = 0
   let end: ?size = :none
   for c in s {
@@ -88,22 +85,36 @@ fn number-find(s: string): ?{ start: size, end: size } {
 }
 ```
 
-Each DFA state is one match arm, each arm a chain of range tests ordered by
-target state, and the accepting states sit on one line. The alternative, a
-baked `array[u8, states * 256]` table and a four-line loop, is what runtime
-regex libraries do because the table is data; here the state count is known,
-so the match reads as the automaton: state 1 is "in the integer part", `.`
-moves to 2, 3 is "in the fraction". The DFA is minimized (Moore's partition
-refinement after subset construction), so `[A-Za-z_][A-Za-z0-9_]*` is two
-states, not the eight that subset construction produces from three ranges.
-In the `--optimize --emit-llvm` output, `email-scan` dispatches the state with
-a single `switch` instruction.
+No 256-entry transition table. The state count is known at compile time, so
+the match arms *are* the automaton: 1 is the integer part, `.` moves to 2, 3
+is the fraction.
+
+The DFA is minimized, so `ident` is two states, not the eight that subset
+construction produces from its three ranges:
+
+```text
+[regex_dfa.k1:289 info] fn ident-scan(s: string): ?size {
+  let state = 0
+  let end: ?size = :none
+  for c in s {
+    state = if state is {
+      0 -> if (c >= 'A' and c <= 'Z') or c == '_' or (c >= 'a' and c <= 'z') 1 else break,
+      1 -> if (c >= '0' and c <= '9') or (c >= 'A' and c <= 'Z') or c == '_' or (c >= 'a' and c <= 'z') 1 else break,
+      _ -> break,
+    }
+    if state == 1 { end = :some(it-index + 1) }
+  }
+  end
+}
+```
+
+With `--optimize`, the state dispatch in `email-scan` becomes a single LLVM
+`switch`.
 
 ## The engine
 
-A recursive-descent parser that builds a Thompson NFA as it goes. Each
-fragment has one start and one end state; `*` `+` `?` add epsilon edges to the
-fragment just parsed:
+Recursive descent, building a Thompson NFA as it parses. `*` `+` `?` just add
+epsilon edges to the fragment it just parsed:
 
 ```k1
   fn repeat(self: *parser): frag {
@@ -120,7 +131,9 @@ fragment just parsed:
     }
     f
   }
+```
 
+```k1
   fn atom(self: *parser): frag {
     let c = self.next()
     if c is {
@@ -138,8 +151,7 @@ fragment just parsed:
   }
 ```
 
-Subset construction with epsilon closure, one row of 256 optional targets per
-DFA state:
+Subset construction, one row of 256 optional targets per DFA state:
 
 ```k1
 fn build(nfa: list[nstate], start: size, accept: size): dfa {
@@ -167,11 +179,8 @@ fn build(nfa: list[nstate], start: size, accept: size): dfa {
 }
 ```
 
-The emitter writes K1 source with `code-builder`. Literal template parts carry
-their spans into the expansion; the values interpolated in are the state
-numbers and the range conditions. One gotcha is visible: `${name}-scan` needs
-the braces, because `$name-scan` would read the kebab-case identifier
-`name-scan`.
+And the emitter just writes K1 source with `code-builder`. (`${name}-scan`
+needs the braces: `$name-scan` is the kebab-case identifier `name-scan`.)
 
 ```k1
 fn emit(name: string, d: dfa): code {
@@ -205,17 +214,16 @@ fn emit(name: string, d: dfa): code {
 }
 
 macro define(name: code, pattern: string) {
-  emit(name.text(), compile(pattern))
+  let generated = emit(name.text(), compile(pattern))
+  k1/emit-compiler-message(k1/location(), :info, generated.text())
+  generated
 }
 ```
 
-Nothing in the engine is a comptime dialect: `list`, `?size`, `string-builder`
-and `loop` are the same types and syntax the runtime program uses, and the
-engine would run unchanged at runtime.
+None of it is a comptime dialect. Same `list`, `?size`, `string-builder` and
+`loop` as the runtime program; the engine would run unchanged at runtime.
 
 ## A malformed pattern
-
-`examples/regex_dfa_wrong.k1` asks for `(ab|cd*`:
 
 ```k1
 $pre/regex/define(broken, "(ab|cd*")
@@ -235,35 +243,30 @@ $pre/regex/define(broken, "(ab|cd*")
 ├─────
 │  regex `(ab|cd*` at offset 7: expected `)`
 bc Execution Trace
-[00] core/crash builtin.k1:1083
-[01] regex_dfa_wrong/pre/regex/parser/fail regex_dfa_wrong.k1:29
-[02] regex_dfa_wrong/pre/regex/parser/atom regex_dfa_wrong.k1:92
-[03] regex_dfa_wrong/pre/regex/parser/repeat regex_dfa_wrong.k1:75
-[04] regex_dfa_wrong/pre/regex/parser/concat regex_dfa_wrong.k1:66
-[05] regex_dfa_wrong/pre/regex/parser/alt regex_dfa_wrong.k1:48
-[06] regex_dfa_wrong/pre/regex/compile regex_dfa_wrong.k1:192
-[07] regex_dfa_wrong/pre/regex/define regex_dfa_wrong.k1:272
+[00] core/platform/process/exit platform.k1:201
+[01] core/sys/exit builtin.k1:964
+[02] core/crash builtin.k1:1171
+[03] regex_dfa_wrong/pre/regex/parser/fail regex_dfa_wrong.k1:29
+[04] regex_dfa_wrong/pre/regex/parser/atom regex_dfa_wrong.k1:92
+[05] regex_dfa_wrong/pre/regex/parser/repeat regex_dfa_wrong.k1:75
+[06] regex_dfa_wrong/pre/regex/parser/concat regex_dfa_wrong.k1:66
+[07] regex_dfa_wrong/pre/regex/parser/alt regex_dfa_wrong.k1:48
+[08] regex_dfa_wrong/pre/regex/compile regex_dfa_wrong.k1:192
+[09] regex_dfa_wrong/pre/regex/define regex_dfa_wrong.k1:272
 
 └────────────────────────────────────────╴
-Module regex_dfa_wrong failed namespace declaration with 1 errors
+Module regex_dfa_wrong failed compiling with 1 errors
 ```
 
-The parser's crash message carries the pattern, the offset and what was
-expected; it is the diagnostic (the test harness matches on it), the box
-carets the `crash` in the parser, and the VM's stack shows the descent that
-got there, down to the macro. What is still missing is the last hop: the
-trace ends in `define`'s body, not at the `$pre/regex/define(broken, ...)`
-call or the pattern literal, even though the compiler knows that span. That
-is a compiler gap, not an engine one.
+The engine's own `crash` is the diagnostic, and the VM trace walks the descent
+back to the macro. It stops in `define`'s body, though, not at the
+`define(broken, ...)` call. That's a compiler gap, not an engine one.
 
 ## Elsewhere
 
-In C++ this is CTRE: the pattern is parsed by template metaprogramming into a
-type-level AST and the matcher is instantiated from it, so a malformed pattern
-surfaces as a template instantiation error. In Rust it takes a proc-macro
-crate, a separate compilation unit built on `syn` and `quote`; the `regex`
-crate itself is a runtime engine. Zig's comptime can parse the pattern and
-build the tables, and `inline for` unrolls the loops, but there is no emitted
-function to read: the automaton exists only as whatever the comptime-unrolled
-code lowers to. Here the expansion is source text, printable and readable, and
-the engine that produced it is the same language as the program.
+- C++ (CTRE): template metaprogramming parses the pattern into a type-level
+  AST; a bad pattern is a template instantiation error.
+- Rust: a proc-macro crate on `syn` and `quote`. The `regex` crate itself is a
+  runtime engine.
+- Zig: comptime can build the tables and `inline for` can unroll the loop, but
+  there's no emitted function to read.

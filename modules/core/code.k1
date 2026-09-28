@@ -6,6 +6,23 @@ type code-chunk = { text: string, source: u64 }
 
 type code = { chunks: list[code-chunk] }
 
+type code-token = {
+  kind: either(u8) { ident = 0, number = 1, string = 2, char = 3, punct = 4 },
+  text: string,
+  source: u64,
+  spacing: either(u8) { none = 0, inline = 1, newline = 2 },
+}
+
+ns for code-token {
+  fn code(self): code {
+    .{ chunks = [.{ text = self.text, source = self.source }] }
+  }
+
+  fn fail(self, msg: string): never {
+    crash(context .{ filename = "", line = 0, span = self.source.trunc[u32]() })(msg)
+  }
+}
+
 // #static types/assert-layout[code-chunk](24, 8, [0, 16].as-span())
 // #static types/assert-layout[code](24, 8, [0].as-span())
 

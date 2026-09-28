@@ -1,0 +1,48 @@
+use core/arena
+use core/platform/io
+
+type input = { file: io/file-handle, buf: buffer[u8], start: size, end: size, eof: bool }
+
+ns for input {
+  fn new(a: *arena, file: io/file-handle, capacity: size): input {
+    .{ file, buf = a.alloc-buffer[u8](capacity), start = 0, end = 0, eof = false }
+  }
+
+  fn(inline) line-end(self: *input): ?size {
+    if self.buf.slice(self.start, self.end).position('\n'.as-u8()) is :some i { :some(self.start + i) } else :none
+  }
+
+  fn has-line(self: *input): bool {
+    self.line-end().is-some() or ((not self.eof) and io/poll-readable(self.file))
+  }
+
+  fn peek-line(self: *input): ?string {
+    loop {
+      if self.line-end() is :some nl return :some string/wrap-bytes(self.buf.slice(self.start, nl).as-span())
+      if self.eof {
+        if self.start == self.end return :none
+        return :some string/wrap-bytes(self.buf.slice(self.start, self.end).as-span())
+      }
+      let pending = self.end - self.start
+      mem/move(dst = self.buf.data-ptr(), src = self.buf.data-ptr().add-bytes(self.start), count = pending)
+      self.start = 0
+      self.end = pending
+      if self.end == self.buf.len crash("input line longer than ${self.buf.len} bytes")
+      let n = if io/read(self.file, self.buf.data-ptr().add-bytes(self.end), self.buf.len - self.end).result() is {
+        :ok n -> n,
+        :err _ -> 0
+      }
+      if n == 0 { self.eof = true } else { self.end = self.end + n }
+    }
+  }
+
+  fn skip-line(self: *input) {
+    self.start = if self.line-end() is :some nl { nl + 1 } else self.end
+  }
+
+  fn next-line(self: *input): ?string {
+    let line = self.peek-line()
+    self.skip-line()
+    line
+  }
+}

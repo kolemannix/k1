@@ -1,6 +1,7 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
 
+use crate::lex::{FmtAlign, FmtSpec};
 use crate::{kbail, kerr};
 
 /// `synth`, synthesis, aka spitting out typed code, used for features that desugar, as well
@@ -426,26 +427,100 @@ impl TypedProgram {
         Some(Callee::StaticFunction(function_id))
     }
 
-    pub(super) fn synth_printto_call(
+    pub(super) fn synth_print_call(
         &mut self,
         to_print: TypedExprId,
         writer: TypedExprId,
+        precision: Option<u32>,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let span = self.exprs.get_span(to_print);
         let writer_type_id = self.exprs.get_type(writer);
         let to_print_type = self.get_type_family_type(self.exprs.get_type(to_print));
+        let (ability_id, fn_name) = match precision {
+            None => (ABILITY_ID_PRINT, self.ast.idents.f.core_print_print_to),
+            Some(_) => {
+                (ABILITY_ID_PRINT_PRECISE, self.ast.idents.f.core_print_precise_print_precise_to)
+            }
+        };
         let (print_impl, self_adjust) =
-            self.expect_ability_impl(to_print_type, ABILITY_ID_PRINT, true, ctx.scope_id, span)?;
+            self.expect_ability_impl(to_print_type, ability_id, true, ctx.scope_id, span)?;
         let to_print = self.apply_self_adjust(to_print, self_adjust, span)?;
+        let precision_arg = precision.map(|p| self.synth_int(TypedIntValue::U32(p), span));
+        let args: &[TypedExprId] = match &precision_arg {
+            None => &[to_print, writer],
+            Some(precision_arg) => &[to_print, writer, *precision_arg],
+        };
         self.synth_ability_call(
             print_impl,
-            self.ast.idents.f.core_print_print_to,
+            fn_name,
             &[writer_type_id],
-            &[to_print, writer],
+            args,
             ctx.with_no_expected_type(),
             span,
         )
+    }
+
+    fn synth_format_part(
+        &mut self,
+        value: TypedExprId,
+        writer: TypedExprId,
+        spec: Option<FmtSpec>,
+        code_mode: bool,
+        ctx: EvalExprContext,
+    ) -> K1Result<TypedExprId> {
+        let span = self.exprs.get_span(value);
+        if code_mode && self.expr_type_is_code(value) {
+            if spec.is_some() {
+                kbail!(self, span, "A format spec does not apply to a code value");
+            }
+            return self.synth_code_append_call(value, writer, ctx);
+        }
+        let Some(spec) = spec else { return self.synth_print_call(value, writer, None, ctx) };
+        if spec.width == 0 {
+            return self.synth_print_call(value, writer, spec.precision, ctx);
+        }
+        let mut block = self.new_block_builder(ctx.scope_id, ScopeType::LexicalBlock, span, 3);
+        let block_ctx = ctx.with_scope(block.scope_id);
+        let new_pad = self.synth_typed_call_typed_args(
+            self.ast.idents.f.fmt_pad_new.with_span(span),
+            &[],
+            &[],
+            block_ctx,
+            false,
+        )?;
+        let pad_var =
+            self.synth_variable_defn_simple(self.ast.idents.b.fmt, new_pad, block.scope_id);
+        self.push_block_stmt_id(&mut block, pad_var.defn_stmt);
+        let pad = self.synth_address_of(pad_var.variable_expr, SpanId::NONE, true)?;
+        let print_call = self.synth_print_call(value, pad, spec.precision, block_ctx)?;
+        self.push_block_expr_id(&mut block, print_call);
+
+        let align = match spec.align {
+            Some(align) => align,
+            None => match self.types.get(self.exprs.get_type(value)) {
+                Type::Integer(_) | Type::Float(_) => FmtAlign::Right,
+                _ => FmtAlign::Left,
+            },
+        };
+        let width = self.synth_int(TypedIntValue::U32(spec.width), span);
+        let fill = self.synth_string_literal_from_str(spec.fill.to_string(), span);
+        let f = &self.ast.idents.f;
+        let (align_fn, args): (QIdent, &[TypedExprId]) = match align {
+            FmtAlign::Left => (f.fmt_pad_align_left, &[pad, writer, fill, width]),
+            FmtAlign::Right => (f.fmt_pad_align_right, &[pad, writer, fill, width]),
+            FmtAlign::Center => (f.fmt_pad_align_center, &[pad, writer, fill, width]),
+            FmtAlign::SignZeros => (f.fmt_pad_align_zeros, &[pad, writer, width]),
+        };
+        let align_call = self.synth_typed_call_typed_args(
+            align_fn.with_span(span),
+            &[],
+            args,
+            block_ctx,
+            false,
+        )?;
+        self.push_block_expr_id(&mut block, align_call);
+        Ok(self.exprs.add_block(block, EMPTY_TYPE_ID))
     }
 
     pub(super) fn synth_code_append_call(
@@ -761,16 +836,17 @@ impl TypedProgram {
                         }
                         if !self.ast.idents.get_string(string_to_print).is_empty() {
                             let string_expr = self.synth_string_literal(string_to_print, span);
-                            let print_call = self.synth_printto_call(
+                            let print_call = self.synth_print_call(
                                 string_expr,
                                 writer_expr,
+                                None,
                                 block_ctx.with_hidden_calls(true),
                             )?;
                             self.push_block_expr_id(&mut block, print_call);
                         }
                     }
                 }
-                parse::InterpolatedStringPart::Expr(expr_id, _fmt_settings) => {
+                parse::InterpolatedStringPart::Expr(expr_id, spec) => {
                     let parsed_expr = self.ast.exprs.get(*expr_id);
                     let expr_span = self.ast.exprs.get_span(*expr_id);
                     let naked_variable_name = match parsed_expr {
@@ -798,30 +874,25 @@ impl TypedProgram {
                         }
                     };
 
-                    let part_call = if code_mode && self.expr_type_is_code(typed_expr) {
-                        self.synth_code_append_call(
-                            typed_expr,
-                            writer_expr,
-                            block_ctx.with_hidden_calls(true),
-                        )?
-                    } else {
-                        self.synth_printto_call(
-                            typed_expr,
-                            writer_expr,
-                            block_ctx.with_hidden_calls(true),
-                        )?
-                    };
+                    let part_call = self.synth_format_part(
+                        typed_expr,
+                        writer_expr,
+                        *spec,
+                        code_mode,
+                        block_ctx.with_hidden_calls(true),
+                    )?;
                     self.push_block_expr_id(&mut block, part_call);
                 }
-                parse::InterpolatedStringPart::Hole { fmt_settings: _, span } => {
-                    // Grab the hole_index'th argument from args_variable.
+                parse::InterpolatedStringPart::Hole { spec, span } => {
                     let arg = get_nth_arg(self, args_variable.variable_expr, hole_index, *span)?;
                     hole_index += 1;
-                    let part_call = if code_mode && self.expr_type_is_code(arg) {
-                        self.synth_code_append_call(arg, writer_expr, ctx)?
-                    } else {
-                        self.synth_printto_call(arg, writer_expr, ctx)?
-                    };
+                    let part_call = self.synth_format_part(
+                        arg,
+                        writer_expr,
+                        *spec,
+                        code_mode,
+                        block_ctx.with_hidden_calls(true),
+                    )?;
                     self.push_block_expr_id(&mut block, part_call);
                 }
             }

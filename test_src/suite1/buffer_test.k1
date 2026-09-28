@@ -70,6 +70,14 @@ fn buffer-clone() {
   assert(cloned.[0] == 99)
 }
 
+fn span-map() {
+  let words: span[string] = ["a", "bb", "ccc"].as-span()
+  let lens = words.map(fn w. w.len())
+  assert-equals(lens.len(), 3)
+  assert-equals(lens.[2], 3)
+  assert-equals(span/empty[string]().map(fn w. w.len()).len(), 0)
+}
+
 fn test() {
   buffer-empty()
   buffer-filled()
@@ -77,4 +85,5 @@ fn test() {
   buffer-concat()
   buffer-clone()
   buffer-chunks()
+  span-map()
 }

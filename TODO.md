@@ -4,12 +4,12 @@
 ## [ ] asm
 
 ## [ ] More IR analysis and opts
-- [ ] Constant-folding, SCCP
+- [x] Constant-folding
+- [ ] SCCP
 - [ ] add lifetimes (start/end for allocas, temps, inlined stuff)
 - [ ] Get 'range' metadata into sum tag loads for our IR and LLVM optimizations (a sum's tag could only be 0 or 1; this would attach those 2 possible values to the loaded value)
-- [ ] Tail calls
 
-## [ ] token stream based macros
+## [x] token stream based macros
 
 ## [x] expr-level macros
 - [x] source-location preservation via 'code' type
@@ -24,7 +24,6 @@
 - [ ] smarter union lowering (see codegen_llvm.rs comment)
 - [x] add cpu feature string to k1/module
 - [x] convert the add_module train off of anyhow::error
-- [ ] fork global syntax: `let(mutable) x` -> `global x`. `let x` -> `constant x`. This differentiates from local lets in a more-useful-than-costly way
 - [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
 - [ ] compiler cli watch mode: watch the primary module's source dir (or single file). on change, compile from the snapshot right before starting primary module (keep it in memory?)
 - [ ] Generic aliases: `type(alias) pair[t] = { a: t, b: t }` (rejected with an error for now; an alias is transparent, so this is a type-level function)
@@ -38,14 +37,12 @@ kind: either(u64, { rounded = false, even = false, faces: u8 }) {
 }
   - [ ] implement with a macro, for sure
 - [ ] new lib type: :runtime; this is the ideal dependency kind for libclang in k1bindgen
-- [ ] Pull warnings config and other compiler-mode settings from module-manifest. Want to run a particular lint? edit `fn module()`, save, boom, check lsp diagnostics (or `k1 c`)
 - [ ] `#[must_use]` equivalent
 - [ ] literal inference issue (a) `2 * d` vs `d * 2` differ — literal-lhs
       defaults i64 and widens the u32 rhs up, literal-rhs adopts u32 and wraps; (b) binary ops widen
       rhs into lhs type but have no least-upper-bound, so `u32 + i64` errors while `i64 + u32` works;
       (c) expected-type propagation into generic calls pins the type param before argument-driven
       inference, so `write-bits(depth.get-unchecked(i), ...)` fails where the two-line form widens fine
-- [ ] Implement precision format specifier
 - [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, empty])
         I think doing 'defaults' is relatively easy. You just hit consult the default on the unprovided path. For partially-applieds,
         you need essentially some notion of an 'ability signature function', just like type aliases would need

@@ -514,9 +514,13 @@ ns for parser {
       :some(self.add-expr(:list-literal(.{ elements, span })))
     } else if first.kind is :back-slash {
       self.advance()
-      let stmt = self.expect-statement().try
-      let span = first.span().thru(self.program.get-stmt-span(stmt))
-      :some(self.add-expr(:code-expr(.{ stmt, span })))
+      let content = if self.peek().kind is :open-brace {
+        self.expect-raw-token-group().try
+      } else {
+        self.program.get-stmt-span(self.expect-statement().try)
+      }
+      let span = self.extend-tok-to-here(first)
+      :some(self.add-expr(:code-expr(.{ content, span })))
     } else if first.kind is :hash {
       self.advance()
       let directive = self.peek()
@@ -569,7 +573,7 @@ ns for parser {
   }
 
   fn is-nominated-literal-start(self: *parser, sigil: token, tail: token): bool {
-    (sigil.is-kind-nonspaced(:dot) and self.is-dot-literal-tail(tail)) or (sigil.is-kind-nonspaced(:colon) and not tail.is-ws-preceded())
+    (sigil.is-kind-nonspaced(:dot) and self.is-dot-literal-tail(tail)) or (sigil.is-kind-nonspaced(:colon) and tail.is-kind-nonspaced(:ident))
   }
 
   fn add-zero-literal(self: *parser, span: ast/src-span): ast/expr-id {

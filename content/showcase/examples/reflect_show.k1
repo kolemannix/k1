@@ -85,6 +85,5 @@ fn main(): i32 {
   println(show(opts))
   let grid: array[char, 3] = ['a', 'b', 'c']
   println(show(grid))
-  println("${ada.home}")
   0
 }
