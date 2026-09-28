@@ -8528,18 +8528,7 @@ impl TypedProgram {
             )?
         };
 
-        let cons_arm = TypedMatchArm { case: None, condition, consequent_expr: consequent };
-        let alt_arm = TypedMatchArm {
-            case: None,
-            condition: MatchingCondition { instrs: MSlice::empty() },
-            consequent_expr: alternate,
-        };
-        let arms = self.mem.pushn(&[cons_arm, alt_arm]);
-        Ok(self.add_match_expr(
-            TypedMatchExpr { subject_defn: None, scrutinee: None, arms },
-            overall_type,
-            span,
-        ))
+        Ok(self.synth_matching_if_else(overall_type, condition, consequent, alternate, span))
     }
 
     fn eval_matching_condition(
@@ -8779,22 +8768,9 @@ impl TypedProgram {
             MatchingConditionResult::NeverBlock(never_block) => return Ok(never_block),
         };
         let span = self.ast.exprs.get_span(expr_id);
-        let true_arm = TypedMatchArm {
-            case: None,
-            condition: matching_condition,
-            consequent_expr: self.synth_bool(true, span),
-        };
-        let false_arm = TypedMatchArm {
-            case: None,
-            condition: MatchingCondition { instrs: MSlice::empty() },
-            consequent_expr: self.synth_bool(false, span),
-        };
-        let match_expr = TypedMatchExpr {
-            subject_defn: None,
-            scrutinee: None,
-            arms: self.mem.pushn(&[true_arm, false_arm]),
-        };
-        Ok(self.add_match_expr(match_expr, BOOL_TYPE_ID, span))
+        let true_expr = self.synth_bool(true, span);
+        let false_expr = self.synth_bool(false, span);
+        Ok(self.synth_matching_if_else(BOOL_TYPE_ID, matching_condition, true_expr, false_expr, span))
     }
 
     fn eval_binary_op(

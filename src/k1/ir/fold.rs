@@ -53,6 +53,18 @@ pub(super) fn fold_inst(u: &UnitView, inst: &Inst) -> Option<Simplified> {
         Inst::FloatNeg { v, t } => {
             Some(Simplified::Const(t, arith::float_neg(t.width_bits(), v.const_bits(u)?)))
         }
+        Inst::Select { cond, cons, alt, t } => {
+            if let Some(c) = cond.const_bits(u) {
+                return Some(Simplified::Value(if c != 0 { cons } else { alt }));
+            }
+            if cons == alt {
+                return Some(Simplified::Value(cons));
+            }
+            match (t, cons.const_bits(u), alt.const_bits(u)) {
+                (ScalarType::Bool, Some(1), Some(0)) => Some(Simplified::Value(cond)),
+                _ => None,
+            }
+        }
         Inst::BoolNegate { v } => {
             Some(Simplified::Const(ScalarType::Bool, (v.const_bits(u)? == 0) as u64))
         }

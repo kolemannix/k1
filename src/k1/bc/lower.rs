@@ -915,6 +915,17 @@ fn emit_inst(
             }
         }
 
+        Inst::Select { cond, cons, alt, .. } => {
+            let cond = resolve_lowered_value(k1, ctx, cond);
+            let cons = resolve_lowered_value(k1, ctx, cons);
+            let alt = resolve_lowered_value(k1, ctx, alt);
+            let dst = ctx.bc_value_of(inst_id);
+            ctx.emit(Opcode::Select, 0, 0);
+            ctx.push(dst);
+            ctx.push(cond);
+            ctx.push(cons);
+            ctx.push(alt);
+        }
         Inst::BoolNegate { v } => unop!(Opcode::BoolNegate, 0, 0, v),
         Inst::BitNot { v, t } => unop!(Opcode::BitNot, t.width_bits(), 0, v),
         Inst::FloatNeg { v, t } => unop!(Opcode::FloatNeg, t.width_bits(), 0, v),

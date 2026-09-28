@@ -4115,6 +4115,15 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 }
                 Ok(())
             }
+            Inst::Select { cond, cons, alt, .. } => {
+                let cond = self.resolve_value(inst_mappings, cond)?.into_int_value();
+                let cond_i1 = self.bool_to_i1(cond, "");
+                let cons = self.resolve_value(inst_mappings, cons)?;
+                let alt = self.resolve_value(inst_mappings, alt)?;
+                let selected = self.builder.build_select(cond_i1, cons, alt, "").unwrap();
+                inst_mappings.insert(inst_id, selected);
+                Ok(())
+            }
             Inst::BoolNegate { v } => {
                 let input = self.resolve_value(inst_mappings, v)?.into_int_value();
                 let i1_input = self.bool_to_i1(input, "");

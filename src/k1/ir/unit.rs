@@ -860,6 +860,11 @@ fn map_refs(
                 block(&mut case.from);
             }
         }
+        Inst::Select { cond, cons, alt, .. } => {
+            value(cond);
+            value(cons);
+            value(alt);
+        }
         Inst::Ret { v, .. }
         | Inst::BoolNegate { v }
         | Inst::BitNot { v, .. }

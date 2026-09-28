@@ -86,6 +86,7 @@ pub enum Opcode {
     BitNot,
     FloatNeg,
     Cast, // A = CastKind, B = (from_bits << 8) | to_bits
+    Select,
     // Metaprogramming
     BakeStaticValue,
     // Atomics (A = width in bits; B packs ordering / op, see operand_count comments)
@@ -163,6 +164,7 @@ impl Opcode {
             | Opcode::ShrS => 3, // [dst][lhs][rhs]
             Opcode::BoolNegate | Opcode::BitNot | Opcode::FloatNeg => 2, // [dst][src]
             Opcode::Cast => 2,       // A = CastKind, B = from_bits << 8 | to_bits; [dst][src]
+            Opcode::Select => 4,
             Opcode::BakeStaticValue => 3, // [dst][type_id][src]
             Opcode::AtomicLoad => 2, // A = width in bits, B = ordering; [dst][addr src]
             Opcode::AtomicStore => 2, // A = width in bits, B = ordering; [addr src][val src]
@@ -223,6 +225,7 @@ impl Opcode {
             Opcode::BitNot => "bit_not",
             Opcode::FloatNeg => "fneg",
             Opcode::Cast => "cast",
+            Opcode::Select => "select",
             Opcode::BakeStaticValue => "bake_static",
             Opcode::AtomicLoad => "atomic_load",
             Opcode::AtomicStore => "atomic_store",

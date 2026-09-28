@@ -173,13 +173,21 @@ impl TypedProgram {
         alternate: TypedExprId,
         span: SpanId,
     ) -> TypedExprId {
-        let cons_arm = TypedMatchArm {
-            case: None,
-            condition: MatchingCondition {
-                instrs: self.mem.pushn(&[MatchingConditionInstr::cond(condition)]),
-            },
-            consequent_expr: consequent,
+        let condition = MatchingCondition {
+            instrs: self.mem.pushn(&[MatchingConditionInstr::cond(condition)]),
         };
+        self.synth_matching_if_else(result_type, condition, consequent, alternate, span)
+    }
+
+    pub(super) fn synth_matching_if_else(
+        &mut self,
+        result_type: TypeId,
+        condition: MatchingCondition,
+        consequent: TypedExprId,
+        alternate: TypedExprId,
+        span: SpanId,
+    ) -> TypedExprId {
+        let cons_arm = TypedMatchArm { case: None, condition, consequent_expr: consequent };
         let alt_arm = TypedMatchArm {
             case: None,
             condition: MatchingCondition { instrs: MSlice::empty() },

@@ -842,6 +842,12 @@ pub enum Inst {
         agg: bool,
     },
 
+    Select {
+        cond: Value,
+        cons: Value,
+        alt: Value,
+        t: ScalarType,
+    },
     BoolNegate {
         v: Value,
     },
@@ -1097,6 +1103,11 @@ pub fn visit_inst_values(u: &UnitView, inst: &Inst, f: &mut impl FnMut(Value)) {
         }
         Inst::Ret { v, .. } => f(v),
         Inst::BakeStaticValue { value, .. } => f(value),
+        Inst::Select { cond, cons, alt, .. } => {
+            f(cond);
+            f(cons);
+            f(alt);
+        }
         Inst::BoolNegate { v }
         | Inst::BitNot { v, .. }
         | Inst::FloatNeg { v, .. }
@@ -1297,6 +1308,7 @@ pub fn get_inst_kind(u: &UnitView, inst_id: InstId) -> InstKind {
         Inst::Unreachable => InstKind::Terminator,
         Inst::Phi { t, .. } => InstKind::Value(t),
         Inst::Ret { .. } => InstKind::Terminator,
+        Inst::Select { t, .. } => InstKind::scalar(t),
         Inst::BoolNegate { .. } => InstKind::BOOL,
         Inst::BitNot { t, .. } => InstKind::scalar(t),
         Inst::BitCast { to, .. } => InstKind::Value(to),
@@ -2499,6 +2511,12 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
             let result_inst_kind = b.type_to_inst_kind(match_result_type)?;
             if let Some(stmt) = match_expr.subject_defn {
                 compile_stmt(b, None, stmt)?;
+            }
+            if let InstKind::Value(pt) = result_inst_kind
+                && let Some(t) = pt.as_scalar()
+                && let Some(selected) = compile_match_as_select(b, &match_expr, t)?
+            {
+                return Ok(store_scalar_if_dst(b, dst, selected));
             }
 
             let arms = b.k1.mem.getn(match_expr.arms);
@@ -3941,6 +3959,66 @@ fn get_static_value_int_bits_masked(k1: &TypedProgram, value_id: StaticValueId, 
     bits & low_mask_from_u8(width)
 }
 
+fn compile_match_as_select(
+    b: &mut Builder,
+    match_expr: &TypedMatchExpr,
+    t: ScalarType,
+) -> K1Result<Option<Value>> {
+    let &[cons_arm, alt_arm] = b.k1.mem.getn(match_expr.arms) else { return Ok(None) };
+    if alt_arm.case.is_some()
+        || !alt_arm.condition.instrs.is_empty()
+        || !can_speculate(b, cons_arm.consequent_expr)
+        || !can_speculate(b, alt_arm.consequent_expr)
+    {
+        return Ok(None);
+    }
+    let instrs = b.k1.mem.getn(cons_arm.condition.instrs);
+    let is_binding =
+        |i: &MatchingConditionInstr| matches!(i, MatchingConditionInstr::Binding { .. });
+    let cond = match (cons_arm.case, match_expr.scrutinee, instrs.split_last()) {
+        (Some(case), Some(scrutinee), None) => compile_int_equals(b, scrutinee, case)?,
+        (None, _, Some((test, bindings)))
+            if !is_binding(test) && bindings.iter().all(is_binding) =>
+        {
+            for binding in bindings {
+                let MatchingConditionInstr::Binding { let_stmt } = *binding else { unreachable!() };
+                compile_stmt(b, None, let_stmt)?;
+            }
+            compile_condition_test(b, test)?
+        }
+        _ => return Ok(None),
+    };
+    let cons = compile_expr(b, None, cons_arm.consequent_expr)?;
+    let alt = compile_expr(b, None, alt_arm.consequent_expr)?;
+    Ok(Some(b.push_value(Inst::Select { cond, cons, alt, t }, IrComment::None)))
+}
+
+fn compile_condition_test(b: &mut Builder, test: &MatchingConditionInstr) -> K1Result<Value> {
+    match *test {
+        MatchingConditionInstr::Cond { value } => compile_expr(b, None, value),
+        MatchingConditionInstr::IntEquals { subject, value } => {
+            compile_int_equals(b, subject, value)
+        }
+        MatchingConditionInstr::Binding { .. } => unreachable!(),
+    }
+}
+
+fn can_speculate(b: &Builder, expr: TypedExprId) -> bool {
+    match b.k1.exprs.get(expr) {
+        TypedExpr::StaticValue(_) | TypedExpr::Enum(_) => true,
+        TypedExpr::EnumGetValue(get_value) => can_speculate(b, get_value.enum_expr),
+        TypedExpr::Variable(v) => b.get_variable(v.variable_id).is_some(),
+        TypedExpr::Block(block) => match b.k1.mem.getn(block.statements) {
+            [stmt] => match b.k1.stmts.get(*stmt) {
+                TypedStmt::Expr(inner, _) => can_speculate(b, *inner),
+                _ => false,
+            },
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 fn condition_can_branch(k1: &TypedProgram, mc: &MatchingCondition) -> bool {
     k1.mem
         .getn(mc.instrs)
@@ -3974,13 +4052,7 @@ fn compile_matching_condition(
                 compile_stmt(b, None, *let_stmt)?;
             }
             MatchingConditionInstr::Cond { .. } | MatchingConditionInstr::IntEquals { .. } => {
-                let cond_value: Value = match inst {
-                    MatchingConditionInstr::Cond { value } => compile_expr(b, None, *value)?,
-                    MatchingConditionInstr::IntEquals { subject, value } => {
-                        compile_int_equals(b, *subject, *value)?
-                    }
-                    MatchingConditionInstr::Binding { .. } => unreachable!(),
-                };
+                let cond_value = compile_condition_test(b, inst)?;
                 let Some(fail_block) = condition_fail_block else { continue };
                 match b.known_bool(cond_value) {
                     Some(true) => {}
@@ -4388,6 +4460,17 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     let ret_val_type = get_value_kind(&u, v);
                     if ret_val_type.is_terminator() || ret_val_type.is_void() {
                         errors.push(format!("i{inst_id}: ret value is not a value"))
+                    }
+                }
+                Inst::Select { cond, cons, alt, t } => {
+                    if !get_value_kind(&u, cond).is_bool() {
+                        errors.push(format!("i{inst_id}: select cond is not a bool"))
+                    }
+                    let pt = Some(PhysicalType::scalar(t));
+                    if get_value_kind(&u, cons).as_value() != pt
+                        || get_value_kind(&u, alt).as_value() != pt
+                    {
+                        errors.push(format!("i{inst_id}: select arm type mismatch"))
                     }
                 }
                 Inst::BoolNegate { v } => {
@@ -5023,6 +5106,14 @@ pub fn display_inst(
                 w.write_str("agg ")?;
             }
             v(w, value)?;
+        }
+        Inst::Select { cond, cons, alt, .. } => {
+            write!(w, "select ")?;
+            v(w, cond)?;
+            w.write_str(", ")?;
+            v(w, cons)?;
+            w.write_str(", ")?;
+            v(w, alt)?;
         }
         Inst::BoolNegate { v: value } => {
             write!(w, "bool not ")?;

@@ -814,6 +814,15 @@ fn exec_loop(
             Opcode::Shl => int_binop!(h, IntOp::Shl, Opcode::Shl),
             Opcode::ShrU => int_binop!(h, IntOp::ShrU, Opcode::ShrU),
             Opcode::ShrS => int_binop!(h, IntOp::ShrS, Opcode::ShrS),
+            Opcode::Select => {
+                let v = if read_src!(operand!(1)).as_bool() {
+                    read_src!(operand!(2))
+                } else {
+                    read_src!(operand!(3))
+                };
+                write_slot!(operand!(0), v);
+                advance!(Opcode::Select);
+            }
             Opcode::BoolNegate => {
                 let b = read_src!(operand!(1)).as_bool();
                 write_slot!(operand!(0), Value::bool(!b));

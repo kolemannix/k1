@@ -3,7 +3,7 @@
 | status | item | finding |
 |---|---|---|
 | Planned             | B2, B8, B9   | Reassigned scalar locals, splittable aggregate allocas and copy-only temps live in memory: alloca promotion pass, see below |
-| Partly done         | B6           | 394 jump-only blocks feed a phi in suite1 (was 1,442): ~240 are the second edge of a two-way branch into one phi (select at lowering), 156 have several preds |
+| Partly done         | B6           | 171 jump-only blocks feed a phi in suite1 (was 1,442): 158 have several preds; 13 are n-way switches on tags that are constant after promotion, with an arm reading a payload |
 | Not started         | B7           | `for` loops round-trip each `?item` through memory every iteration                                               |
 | Proposed, after promo | B10          | Recomputation (1,551 duplicate `struct_offset`s, repeated branches, fixlist re-checking `used < cap`): value numbering at emission, see below |
 | Not started         | align functions to 64 bytes | 
