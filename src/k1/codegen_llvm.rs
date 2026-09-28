@@ -19,7 +19,7 @@ use inkwell::module::{Linkage as LlvmLinkage, Module as LlvmModule};
 use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{InitializationConfig, Target, TargetData, TargetMachine};
 use inkwell::types::{
-    AnyType, ArrayType, AsTypeRef, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FloatType,
+    AnyType, ArrayType, AsTypeRef, BasicMetadataTypeEnum, BasicType, BasicTypeEnum,
     FunctionType as LlvmFunctionType, IntType, PointerType, StructType,
     VectorType as LlvmVectorType,
 };
@@ -46,7 +46,7 @@ use crate::lex::SpanId;
 use crate::parse::{FileId, StringId};
 use crate::typer::types::{
     AbiMode, AggType, AggregateTypeId, Layout, PhysicalType, PhysicalTypeEnum, PhysicalTypeResult,
-    ScalarType, Type, TypeDefnInfo, TypeId,
+    RegisterClass, ScalarType, Type, TypeDefnInfo, TypeId,
 };
 use crate::typer::{
     FunctionId, K1Result, Linkage as TyperLinkage, NamespaceId, StaticContainerKind,
@@ -101,10 +101,9 @@ enum AbiParamMapping {
     },
     /// Same registers as an i64 but keeps pointer provenance
     StructAsPointer,
-    /// A single SYS-V SSE eightbyte, which travels packed in one XMM register.
-    /// clang types it `float`, `<2 x float>`, or `double`.
-    StructInSse {
+    InVectorRegisters {
         element: ScalarType,
+        lanes: u32,
         count: u32,
     },
     /// How clang does X86 9-16 byte structs
@@ -113,42 +112,12 @@ enum AbiParamMapping {
         class2: RegisterClass,
         active_bits2: u32,
     },
-    StructByHfa {
-        element: ScalarType,
-        count: u32,
-    },
     /// How clang does ARM64 9-16 byte structs
     StructByIntPairArray,
     BigStructByPtrToCopy {
         byval_attr: bool,
     },
     BigStructByPtr,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum RegisterClass {
-    Initial,
-    Int,
-    Float,
-    Ptr,
-}
-
-impl RegisterClass {
-    fn combine(&self, other: RegisterClass) -> RegisterClass {
-        match (self, other) {
-            (RegisterClass::Initial, _) => other,
-            // A pointer eightbyte is a GPR just like Int, so this never changes
-            // which register is used; preferring Ptr for union overlaps keeps
-            // the pointer type (and thus provenance/capabilities) in the IR
-            (RegisterClass::Ptr, _) | (_, RegisterClass::Ptr) => RegisterClass::Ptr,
-            (RegisterClass::Int, RegisterClass::Int) => RegisterClass::Int,
-            (RegisterClass::Float, RegisterClass::Float) => RegisterClass::Float,
-            // Anything can go in a general purpose register like an int, but
-            // only more specific things (floats, vectors later) can go in
-            // those special registers, so mixtures result in int
-            _mix => RegisterClass::Int,
-        }
-    }
 }
 
 #[derive(Copy, Clone)]
@@ -2079,11 +2048,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     }
                     AggType::Vector { element_pt, len } => {
                         let element_type = self.codegen_type(PhysicalType::scalar(element_pt));
-                        let vector_type = match element_type.rich_type() {
-                            BasicTypeEnum::IntType(it) => it.vec_type(len),
-                            BasicTypeEnum::FloatType(ft) => ft.vec_type(len),
-                            other => panic!("Non-scalar vector element type: {other}"),
-                        };
+                        let vector_type = self.vec_llvm_type(element_pt, len);
                         let vector_layout = self.k1.get_pt_layout(pt);
                         let di_type = self
                             .debug
@@ -2104,10 +2069,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     }
                     AggType::Union { members } => {
                         let mut di_members = self.tmp.new_list(members.len());
-                        let mut basic_type_members = self.tmp.new_list(members.len());
                         for m in self.k1.mem.getn(members) {
                             let cg_member = self.codegen_type(m.ty);
-                            basic_type_members.push(cg_member.rich_type());
                             di_members.push(cg_member.debug_type());
                         }
                         let span = self.debug.current_span();
@@ -2129,7 +2092,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             )
                             .as_type();
 
-                        let aligned_repr = self.codegen_union_repr(basic_type_members, agg_layout);
+                        let aligned_repr =
+                            self.codegen_opaque_repr(agg_layout).as_basic_type_enum();
                         CgType::Union(CgUnionType { pt, aligned_repr, layout: agg_layout, di_type })
                     }
                     AggType::Sum(e) => {
@@ -2205,36 +2169,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
     }
 
-    fn codegen_union_repr(
-        &self,
-        members: List<BasicTypeEnum<'ctx>, CgTmp>,
-        layout: Layout,
-    ) -> BasicTypeEnum<'ctx> {
-        // TODO: If we classify the union's members instead, we could produce a more
-        //       solid representation of other unions as well, like
-        //       union { a: i64, b: i64, c: i64 }, or even maybe a(i64), b(f64) if we
-        //       decided it was helpful to classify that as integer
-        //
-        //       And then obviously once you start thinking about aggregates
-        //       in the payloads, you're actually doing some sort of
-        //       'collect_leaf_types' then element-wise classify stuff.
-        //       Maybe this is why clang produces lots of different types for
-        //       different unions. Probably good place to start testing
-        if members.len() == 1 {
-            *members.first().unwrap()
-        } else {
-            self.codegen_opaque_repr(layout).as_basic_type_enum()
-        }
-    }
-
     fn codegen_opaque_repr(&self, expected_layout: Layout) -> StructType<'ctx> {
         // For union types (and actual opaques), we generate a 2-field struct to trick LLVM.
 
         // Field 1 is a synthetic integer wide enough to force the alignment of the
         // struct, and Field 2 is an array of bytes, ensuring NO padding at all,
         // large enough to get the whole thing to be exactly `size`, with no end padding.
-        // This is mostly what clang does for unions, modulo maybe some cleverness for simple cases
-        // and maybe Class detection (for possible float reg passing?)
 
         if expected_layout.align > expected_layout.size && expected_layout.size != 0 {
             panic!(
@@ -2295,9 +2235,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             AbiParamMapping::ScalarInRegister => false,
             AbiParamMapping::StructInInteger { .. } => false,
             AbiParamMapping::StructAsPointer => false,
-            AbiParamMapping::StructInSse { .. } => false,
+            AbiParamMapping::InVectorRegisters { .. } => false,
             AbiParamMapping::StructByEightbytePair { .. } => false,
-            AbiParamMapping::StructByHfa { .. } => false,
             AbiParamMapping::StructByIntPairArray => false,
             AbiParamMapping::BigStructByPtrToCopy { .. } => true,
             AbiParamMapping::BigStructByPtr => false,
@@ -2358,14 +2297,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         })
     }
 
-    fn get_float_type(&self, scalar_type: ScalarType) -> FloatType<'ctx> {
-        match scalar_type {
-            ScalarType::F32 => self.ctx.f32_type(),
-            ScalarType::F64 => self.ctx.f64_type(),
-            other => panic!("Expected a float scalar type, got {other:?}"),
-        }
-    }
-
     fn mapped_abi_type_return(
         &mut self,
         pt: PhysicalType,
@@ -2392,13 +2323,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 int_type
             }
             AbiParamMapping::StructAsPointer => self.builtin_types.ptr.as_basic_type_enum(),
-            AbiParamMapping::StructInSse { element, count } => {
-                let element_type = self.get_float_type(element);
-                if count == 1 {
-                    element_type.as_basic_type_enum()
+            AbiParamMapping::InVectorRegisters { element, lanes, count } => {
+                let base_type = if lanes == 1 {
+                    self.scalar_basic_type(element)
                 } else {
-                    element_type.vec_type(count).as_basic_type_enum()
-                }
+                    self.vec_llvm_type(element, lanes).as_basic_type_enum()
+                };
+                if count == 1 { base_type } else { base_type.array_type(count).as_basic_type_enum() }
             }
             AbiParamMapping::StructByEightbytePair { class1, class2, active_bits2 } => {
                 // We know field 1 is a full 8 bits
@@ -2432,14 +2363,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 };
                 let struct_type = self.ctx.struct_type(&[f1, f2], false).as_basic_type_enum();
                 struct_type
-            }
-            AbiParamMapping::StructByHfa { element, count } => {
-                let element_type = self.get_float_type(element).as_basic_type_enum();
-                let mut fields = self.tmp.new_list(count);
-                for _ in 0..count {
-                    fields.push(element_type);
-                }
-                self.ctx.struct_type(&fields, false).as_basic_type_enum()
             }
             AbiParamMapping::StructByIntPairArray => {
                 let array_type = self.ctx.i64_type().array_type(2).as_basic_type_enum();
@@ -2488,8 +2411,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.store_at_k1_align(ptr, abi_value, cg_ty);
                 ptr.as_basic_value_enum()
             }
-            AbiParamMapping::StructInSse { .. } => {
-                let ptr = self.build_k1_alloca(cg_ty, "struct_in_sse_storage");
+            AbiParamMapping::InVectorRegisters { .. } => {
+                let ptr = self.build_k1_alloca(cg_ty, "in_vector_registers_storage");
                 self.store_at_k1_align(ptr, abi_value, cg_ty);
                 ptr.as_basic_value_enum()
             }
@@ -2508,12 +2431,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     self.build_zhas_union_marker(dst_ptr);
                 }
                 self.builder.build_store(dst_ptr, abi_value).unwrap();
-                dst_ptr.as_basic_value_enum()
-            }
-            AbiParamMapping::StructByHfa { .. } => {
-                let dst_ptr = self.build_k1_alloca(cg_ty, "struct_by_hfa_storage");
-                debug_assert!(abi_value.get_type().is_struct_type());
-                self.store_at_k1_align(dst_ptr, abi_value, cg_ty);
                 dst_ptr.as_basic_value_enum()
             }
             AbiParamMapping::BigStructByPtrToCopy { .. } | AbiParamMapping::BigStructByPtr => {
@@ -2648,7 +2565,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             AbiParamMapping::StructAsPointer => {
                 self.load_at_k1_align(self.builtin_types.ptr, k1_value.into_pointer_value(), cg_ty)
             }
-            AbiParamMapping::StructInSse { .. } => {
+            AbiParamMapping::InVectorRegisters { .. } => {
                 let abi_type = self.mapped_abi_type_param(pt, mapping);
                 self.load_at_k1_align(abi_type, k1_value.into_pointer_value(), cg_ty)
             }
@@ -2694,10 +2611,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     self.emit_lifetime_marker(false, tmp, abi_alloc_size);
                     abi_value
                 }
-            }
-            AbiParamMapping::StructByHfa { .. } => {
-                let abi_type = self.mapped_abi_type_param(pt, mapping);
-                self.load_at_k1_align(abi_type, k1_value.into_pointer_value(), cg_ty)
             }
             AbiParamMapping::BigStructByPtrToCopy { byval_attr } => {
                 // Our canonical representation of all aggregates is an llvm ptr
@@ -3976,6 +3889,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 call.add_attribute(AttributeLoc::Param(1), align_attr);
                 Ok(())
             }
+            Inst::Zero { dst, t, unaligned, .. } => {
+                let dst_value = self.resolve_value(inst_mappings, dst)?.into_pointer_value();
+                let layout = self.k1.get_pt_layout(t);
+                let align = self.claimed_align(t, unaligned);
+                let bytes = self.builtin_types.ptr_sized_int.const_int(layout.size as u64, false);
+                self.builder
+                    .build_memset(dst_value, align, self.ctx.i8_type().const_zero(), bytes)
+                    .unwrap();
+                Ok(())
+            }
             Inst::StructOffset { struct_t, base, field_index, .. } => {
                 let base_ptr = self.resolve_value(inst_mappings, base)?.into_pointer_value();
 
@@ -4719,16 +4642,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         pt: PhysicalType,
         is_return: bool,
     ) -> AbiParamMapping {
-        enum CallConv {
-            AMD64,
-            ARM64,
-        }
-        let callconv = match self.k1.plan.config.target.arch() {
-            compiler::Arch::Intel => CallConv::AMD64,
-            compiler::Arch::Arm => CallConv::ARM64,
-            compiler::Arch::Wasm => CallConv::ARM64,
-        };
-
+        let arch = self.k1.plan.config.target.arch();
         // https://yorickpeterse.com/articles/the-mess-that-is-handling-structure-arguments-and-returns-in-llvm/
         match pt.as_enum() {
             PhysicalTypeEnum::Empty => {
@@ -4741,294 +4655,84 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             PhysicalTypeEnum::Scalar(_) => AbiParamMapping::ScalarInRegister,
             PhysicalTypeEnum::Agg(agg_id) => {
                 let agg_record = self.k1.agg_types.get(agg_id);
-                match agg_record.agg_type {
-                    AggType::Sum(_)
-                    | AggType::Union { .. }
-                    | AggType::Struct { .. }
-                    | AggType::Array { .. }
-                    | AggType::Vector { .. }
-                    | AggType::Opaque { .. } => {
-                        let size_bytes = agg_record.layout.size;
-                        if size_bytes == 8 {
-                            let ([class1, _], _) = self.collect_aggregate_eightbytes(pt);
-                            if class1 == RegisterClass::Ptr {
-                                return AbiParamMapping::StructAsPointer;
+                let size_bytes = agg_record.layout.size;
+                if size_bytes == 8 {
+                    let ([class1, _], _) = self.k1.get_pt_eightbyte_classes(pt);
+                    if class1 == RegisterClass::Ptr {
+                        return AbiParamMapping::StructAsPointer;
+                    }
+                }
+                if let Some(ha) = self.k1.get_pt_vector_registers(pt, is_return, arch) {
+                    return AbiParamMapping::InVectorRegisters {
+                        element: ha.element,
+                        lanes: ha.lanes,
+                        count: ha.count,
+                    };
+                }
+                match arch {
+                    compiler::Arch::Arm | compiler::Arch::Wasm => {
+                        if size_bytes <= 8 {
+                            // Returns use an ABI type of the exact size of the struct
+                            // Params use an ABI type of 64, but need to know the 'active' bits
+                            let struct_bits = size_bytes * 8;
+                            let abi_bits = if is_return { struct_bits } else { 64 };
+                            AbiParamMapping::StructInInteger {
+                                abi_width: abi_bits,
+                                active_width: struct_bits,
                             }
+                        } else if size_bytes <= 16 {
+                            // If the size of the structure is between 9 and 16 bytes, pass the structure as
+                            // [an array of] two integers of 8 bytes each
+                            AbiParamMapping::StructByIntPairArray
+                        } else {
+                            AbiParamMapping::BigStructByPtrToCopy { byval_attr: false }
                         }
-                        match callconv {
-                            CallConv::ARM64 => {
-                                if let Some((element, count)) = self.detect_float_aggregate(pt) {
-                                    AbiParamMapping::StructByHfa { element, count }
-                                } else if size_bytes <= 8 {
-                                    // Returns use an ABI type of the exact size of the struct
-                                    // Params use an ABI type of 64, but need to know the 'active' bits
-
-                                    let struct_bits = size_bytes * 8;
-                                    let abi_bits = if is_return { struct_bits } else { 64 };
-                                    let active_bits = struct_bits;
-                                    AbiParamMapping::StructInInteger {
-                                        abi_width: abi_bits,
-                                        active_width: active_bits,
-                                    }
-                                } else if size_bytes <= 16 {
-                                    // If the size of the structure is between 9 and 16 bytes, pass the structure as
-                                    // [an array of] two integers of 8 bytes each
-                                    AbiParamMapping::StructByIntPairArray
-                                } else {
-                                    AbiParamMapping::BigStructByPtrToCopy { byval_attr: false }
+                    }
+                    compiler::Arch::Intel => {
+                        // SysV AMD64 3.2.3: unaligned fields force class MEMORY
+                        if agg_record.has_misaligned_fields {
+                            AbiParamMapping::BigStructByPtrToCopy { byval_attr: true }
+                        } else if size_bytes <= 8 {
+                            let ([class1, _], _) = self.k1.get_pt_eightbyte_classes(pt);
+                            if class1 == RegisterClass::Float {
+                                // One SSE eightbyte: it rides in an XMM register, so it
+                                // must be typed as floats, not as an integer
+                                let (element, lanes) = match self.k1.get_pt_homogeneous_aggregate(pt) {
+                                    Some(ha) if ha.lanes == 1 => (ha.element, ha.count),
+                                    _ => (ScalarType::F64, 1),
+                                };
+                                AbiParamMapping::InVectorRegisters { element, lanes, count: 1 }
+                            } else {
+                                // Otherwise it rides in a GPR as an integer of its size
+                                let width_bits = size_bytes * 8;
+                                AbiParamMapping::StructInInteger {
+                                    abi_width: width_bits,
+                                    active_width: width_bits,
                                 }
                             }
-                            CallConv::AMD64 => {
-                                // SysV AMD64 3.2.3: unaligned fields force class MEMORY
-                                if agg_record.has_misaligned_fields {
-                                    AbiParamMapping::BigStructByPtrToCopy { byval_attr: true }
-                                } else if size_bytes <= 8 {
-                                    let ([class1, _], _) = self.collect_aggregate_eightbytes(pt);
-                                    if class1 == RegisterClass::Float {
-                                        // One SSE eightbyte: it rides in an XMM register, so it
-                                        // must be typed as floats, not as an integer
-                                        let (element, count) = self
-                                            .detect_float_aggregate(pt)
-                                            .unwrap_or((ScalarType::F64, 1));
-                                        AbiParamMapping::StructInSse { element, count }
-                                    } else {
-                                        // Otherwise it rides in a GPR as an integer of its size
-                                        let width_bits = size_bytes * 8;
-                                        AbiParamMapping::StructInInteger {
-                                            abi_width: width_bits,
-                                            active_width: width_bits,
-                                        }
-                                    }
-                                } else if size_bytes <= 16 {
-                                    // "If the size is between 8 and 16 bytes, the logic is a little more difficult."
-                                    // Pass by classified eightbytes
-                                    let ([eb1, eb2], eb2_bits) =
-                                        self.collect_aggregate_eightbytes(pt);
-                                    if eb1 == RegisterClass::Initial
-                                        || eb2 == RegisterClass::Initial
-                                    {
-                                        panic!(
-                                            "Failed to collect 2 eightbytes for 9-16 byte struct {}. Likely a bug.",
-                                            self.k1.pt_to_string(pt)
-                                        )
-                                    }
-                                    AbiParamMapping::StructByEightbytePair {
-                                        class1: eb1,
-                                        class2: eb2,
-                                        active_bits2: eb2_bits,
-                                    }
-                                } else {
-                                    // Without the byval attribute, SYS-V does not work
-                                    AbiParamMapping::BigStructByPtrToCopy { byval_attr: true }
-                                }
+                        } else if size_bytes <= 16 {
+                            // "If the size is between 8 and 16 bytes, the logic is a little more difficult."
+                            // Pass by classified eightbytes
+                            let ([eb1, eb2], eb2_bits) = self.k1.get_pt_eightbyte_classes(pt);
+                            if eb1 == RegisterClass::Initial || eb2 == RegisterClass::Initial {
+                                panic!(
+                                    "Failed to collect 2 eightbytes for 9-16 byte struct {}. Likely a bug.",
+                                    self.k1.pt_to_string(pt)
+                                )
                             }
+                            AbiParamMapping::StructByEightbytePair {
+                                class1: eb1,
+                                class2: eb2,
+                                active_bits2: eb2_bits,
+                            }
+                        } else {
+                            // Without the byval attribute, SYS-V does not work
+                            AbiParamMapping::BigStructByPtrToCopy { byval_attr: true }
                         }
                     }
                 }
             }
         }
-    }
-
-    fn detect_float_aggregate(&self, pt: PhysicalType) -> Option<(ScalarType, u32)> {
-        fn add_member(element: &mut Option<ScalarType>, count: &mut u32, st: ScalarType) -> bool {
-            if !matches!(st, ScalarType::F32 | ScalarType::F64) {
-                return false;
-            }
-
-            match element {
-                Some(existing) if *existing != st => false,
-                _ => {
-                    *element = Some(st);
-                    *count += 1;
-                    *count <= 4
-                }
-            }
-        }
-
-        fn visit<'ctx, 'k1>(
-            c: &Cg<'ctx, 'k1>,
-            element: &mut Option<ScalarType>,
-            count: &mut u32,
-            t: PhysicalType,
-        ) -> bool {
-            match t.as_enum() {
-                PhysicalTypeEnum::Empty => true,
-                PhysicalTypeEnum::Scalar(st) => add_member(element, count, st),
-                PhysicalTypeEnum::Agg(agg_id) => {
-                    let agg_record = c.k1.agg_types.get(agg_id);
-                    match agg_record.agg_type {
-                        AggType::Struct { fields, .. } => {
-                            c.k1.mem
-                                .getn(fields)
-                                .iter()
-                                .all(|f| visit(c, element, count, f.field_t))
-                        }
-                        AggType::Array { element_pt, len } => {
-                            (0..len).all(|_| visit(c, element, count, element_pt))
-                        }
-                        AggType::Vector { .. }
-                        | AggType::Union { .. }
-                        | AggType::Sum(_)
-                        | AggType::Opaque { .. } => false,
-                    }
-                }
-            }
-        }
-
-        let mut element = None;
-        let mut count = 0;
-        if visit(self, &mut element, &mut count, pt) && count > 0 {
-            Some((element.unwrap(), count))
-        } else {
-            None
-        }
-    }
-
-    // What a horrible amount of code for such a small transformation!
-    fn collect_aggregate_eightbytes(&self, pt: PhysicalType) -> ([RegisterClass; 2], u32) {
-        // This whole thing could be generalized to collect N eightbytes, rather than 2, which would let me use it
-        // for the HFA detection
-        fn mark_bits(
-            classes: &mut [RegisterClass; 2],
-            active_bits2: &mut u32,
-            offset_bits: u32,
-            size_bits: u32,
-            class: RegisterClass,
-        ) {
-            if size_bits == 0 {
-                return;
-            }
-
-            let end_bits = offset_bits + size_bits;
-            debug_assert!(end_bits <= 128);
-
-            for eightbyte in (offset_bits / 64)..=((end_bits - 1) / 64) {
-                let i = eightbyte as usize;
-                classes[i] = classes[i].combine(class);
-                if i == 1 {
-                    *active_bits2 = (*active_bits2).max(end_bits.min(128) - 64);
-                }
-            }
-        }
-
-        fn scalar_register_class(st: ScalarType) -> RegisterClass {
-            match st {
-                ScalarType::U8
-                | ScalarType::U16
-                | ScalarType::U32
-                | ScalarType::U64
-                | ScalarType::I8
-                | ScalarType::I16
-                | ScalarType::I32
-                | ScalarType::I64
-                | ScalarType::Char
-                | ScalarType::Bool => RegisterClass::Int,
-                ScalarType::F32 | ScalarType::F64 => RegisterClass::Float,
-                ScalarType::Pointer => RegisterClass::Ptr,
-            }
-        }
-
-        fn handle_type_rec<'ctx, 'k1>(
-            c: &Cg<'ctx, 'k1>,
-            classes: &mut [RegisterClass; 2],
-            active_bits2: &mut u32,
-            offset_bits: u32,
-            t: PhysicalType,
-        ) {
-            match t.as_enum() {
-                PhysicalTypeEnum::Empty => {}
-                PhysicalTypeEnum::Scalar(st) => {
-                    let class = scalar_register_class(st);
-                    mark_bits(
-                        classes,
-                        active_bits2,
-                        offset_bits,
-                        st.get_layout().size_bits() as u32,
-                        class,
-                    )
-                }
-                PhysicalTypeEnum::Agg(agg_id) => {
-                    let agg_record = c.k1.agg_types.get(agg_id);
-                    match agg_record.agg_type {
-                        AggType::Struct { fields, .. } => {
-                            for f in c.k1.mem.getn(fields) {
-                                handle_type_rec(
-                                    c,
-                                    classes,
-                                    active_bits2,
-                                    offset_bits + f.offset * 8,
-                                    f.field_t,
-                                )
-                            }
-                        }
-                        AggType::Array { element_pt: element_t, len } => {
-                            let element_layout = c.k1.get_pt_layout(element_t);
-                            for i in 0..len {
-                                let element_offset = element_layout.offset_at_index(i as usize);
-                                handle_type_rec(
-                                    c,
-                                    classes,
-                                    active_bits2,
-                                    offset_bits + element_offset as u32 * 8,
-                                    element_t,
-                                )
-                            }
-                        }
-                        AggType::Vector { element_pt, len } => {
-                            let element_layout = element_pt.get_layout();
-                            for i in 0..len {
-                                let element_offset = element_layout.offset_at_index(i as usize);
-                                handle_type_rec(
-                                    c,
-                                    classes,
-                                    active_bits2,
-                                    offset_bits + element_offset as u32 * 8,
-                                    PhysicalType::scalar(element_pt),
-                                )
-                            }
-                        }
-                        AggType::Union { members } => {
-                            // Classify every member at the same offset; combine()
-                            // prefers Ptr so pointer-bearing unions travel as ptr
-                            for m in c.k1.mem.getn(members) {
-                                handle_type_rec(c, classes, active_bits2, offset_bits, m.ty)
-                            }
-                            // Members may not cover the union's full (max) size
-                            mark_bits(
-                                classes,
-                                active_bits2,
-                                offset_bits,
-                                agg_record.layout.size_bits() as u32,
-                                RegisterClass::Int,
-                            )
-                        }
-                        AggType::Sum(e) => {
-                            // Just handle the sum's struct representation
-                            handle_type_rec(
-                                c,
-                                classes,
-                                active_bits2,
-                                offset_bits,
-                                PhysicalType::agg(e.struct_repr),
-                            )
-                        }
-                        AggType::Opaque { size, .. } => mark_bits(
-                            classes,
-                            active_bits2,
-                            offset_bits,
-                            size * 8,
-                            RegisterClass::Int,
-                        ),
-                    }
-                }
-            }
-        }
-        let mut classes = [RegisterClass::Initial, RegisterClass::Initial];
-        let mut active_bits2 = 0;
-
-        handle_type_rec(self, &mut classes, &mut active_bits2, 0, pt);
-
-        (classes, active_bits2)
     }
 
     fn codegen_function_body(

@@ -555,6 +555,7 @@ fn mark_unaligned(u: &UnitView, inst: &mut Inst) {
         Inst::Store { dst, .. } => is_addr_unaligned(u, dst),
         Inst::Load { src, .. } => is_addr_unaligned(u, src),
         Inst::Copy { dst, src, .. } => is_addr_unaligned(u, dst) || is_addr_unaligned(u, src),
+        Inst::Zero { dst, .. } => is_addr_unaligned(u, dst),
         Inst::StructOffset { base, .. } => is_addr_unaligned(u, base),
         _ => false,
     };
@@ -563,6 +564,7 @@ fn mark_unaligned(u: &UnitView, inst: &mut Inst) {
             Inst::Store { unaligned, .. }
             | Inst::Load { unaligned, .. }
             | Inst::Copy { unaligned, .. }
+            | Inst::Zero { unaligned, .. }
             | Inst::StructOffset { unaligned, .. } => *unaligned = true,
             _ => {}
         }

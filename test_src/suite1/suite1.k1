@@ -43,6 +43,8 @@ fn low() {
   continue_test/test()
   labeled_loops/test()
   inline_test/test()
+  copy_forward/test()
+  #static copy_forward/test()
   newline-stmt/test()
   use_test/test()
   opaque_test/test()
@@ -91,6 +93,8 @@ fn moderate() {
   condcomp/test()
   struct_composition/test()
   zero_test/test-zero()
+  zero_test/test-zero-sizes()
+  #static zero_test/test-zero-sizes()
   zero_test/test-bitcast()
   type_schema/test()
   type_synthesis/test()
@@ -117,6 +121,7 @@ fn core-lib() {
   #static buffer_test/test()
 
   mem_test/test()
+  #static mem_test/unaligned-round-trip()
 
   as_buffer/test()
   #static as_buffer/test()

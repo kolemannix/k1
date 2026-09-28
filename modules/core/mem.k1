@@ -32,16 +32,11 @@ ns mem {
 
   fn(inline) new[t](t: t): *t { current-arena().new(t) }
 
-  fn(inline) read-unaligned[t](src: ptr): t {
-    let value: t = .0
-    copy-memcpy(value.&.as[ptr], src, types/size[t])
-    value
-  }
+  type _unaligned[t] = packed { value: t }
 
-  fn(inline) write-unaligned[t](dst: ptr, value: t) {
-    let v = value
-    copy-memcpy(dst, v.&.as[ptr], types/size[t])
-  }
+  fn(inline) read-unaligned[t](src: ptr): t { mem/bitcast[ptr, *_unaligned[t]](src).value }
+
+  fn(inline) write-unaligned[t](dst: ptr, value: t) { mem/bitcast[ptr, *_unaligned[t]](dst).value = value }
 
   fn(inline) copy(dst: ptr, src: ptr, count: size) {
     if k1/is-static {

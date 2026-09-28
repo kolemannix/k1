@@ -115,6 +115,40 @@ HFA4 hfa4_add(HFA4 x, HFA4 y) {
   return r;
 }
 
+typedef union { float a[2]; struct { float x; float y; } p; } UnionHFA2;
+UnionHFA2 union_hfa2_add(UnionHFA2 a, UnionHFA2 b) {
+  UnionHFA2 r;
+  r.p.x = a.p.x + b.a[0];
+  r.p.y = a.a[1] + b.p.y;
+  return r;
+}
+
+typedef union { float f; float g[3]; } UnionHFA3;
+UnionHFA3 union_hfa3_add(UnionHFA3 a, UnionHFA3 b) {
+  UnionHFA3 r;
+  r.g[0] = a.g[0] + b.g[0];
+  r.g[1] = a.g[1] + b.g[1];
+  r.g[2] = a.g[2] + b.g[2];
+  return r;
+}
+
+typedef struct { UnionHFA2 u; float z; } StructUnionHFA3;
+StructUnionHFA3 struct_union_hfa3_add(StructUnionHFA3 a, StructUnionHFA3 b) {
+  StructUnionHFA3 r;
+  r.u.a[0] = a.u.a[0] + b.u.a[0];
+  r.u.a[1] = a.u.a[1] + b.u.a[1];
+  r.z = a.z + b.z;
+  return r;
+}
+
+typedef union { double d; float f[2]; } UnionMixedFloat;
+UnionMixedFloat union_mixed_float_swap(UnionMixedFloat a) {
+  UnionMixedFloat r;
+  r.f[0] = a.f[1];
+  r.f[1] = a.f[0];
+  return r;
+}
+
 enum CXCursorKind {
   UnexposedDecl = 1,
   StructDecl = 2,
@@ -240,3 +274,66 @@ int abi_link_name_source = 33;
 
 int abi_counter_get(void) { return abi_counter; }
 int abi_tls_counter_get(void) { return abi_tls_counter; }
+
+typedef float V2F __attribute__((vector_size(8)));
+typedef float V4F __attribute__((vector_size(16)));
+typedef float V8F __attribute__((vector_size(32)));
+typedef int32_t V2I __attribute__((vector_size(8)));
+typedef int32_t V4I __attribute__((vector_size(16)));
+typedef uint8_t V4B __attribute__((vector_size(4)));
+
+V2F v2_madd(V2F a, V2F b) { return a * 2.0f + b; }
+V2I v2i_madd(V2I a, V2I b) { return a * 2 + b; }
+V4F v4_madd(V4F a, V4F b) { return a * 2.0f + b; }
+V4I v4i_madd(V4I a, V4I b) { return a * 2 + b; }
+V8F v8_madd(V8F a, V8F b) { return a * 2.0f + b; }
+V4B v4b_add(V4B a, V4B b) { return a + b; }
+
+float v4_after_floats(float a, float b, float c, float d, float e, float f, float g, V4F v) {
+  return a + b + c + d + e + f + g + v[0] + v[3] * 10.0f;
+}
+
+typedef struct { V4F a; } WrapV4;
+WrapV4 wrap_v4_reverse(WrapV4 w) {
+  WrapV4 r = { { w.a[3], w.a[2], w.a[1], w.a[0] } };
+  return r;
+}
+
+typedef struct { V8F a; } WrapV8;
+WrapV8 wrap_v8_reverse(WrapV8 w) {
+  WrapV8 r;
+  for (int i = 0; i < 8; i++) r.a[i] = w.a[7 - i];
+  return r;
+}
+
+typedef struct { V4F a; V4F b; } Sv2;
+Sv2 sv2_shuffle(Sv2 s) {
+  Sv2 r = { s.b, s.a + s.b };
+  return r;
+}
+
+float sv2_after_vectors(V4F a, V4F b, V4F c, V4F d, V4F e, V4F f, V4F g, Sv2 s) {
+  return a[0] + g[1] + s.a[2] * 10.0f + s.b[3] * 100.0f;
+}
+
+typedef struct { V2F a; V2F b; V2F c; } S3v2;
+S3v2 s3v2_rotate(S3v2 s) {
+  S3v2 r = { s.b, s.c, s.a };
+  return r;
+}
+
+typedef struct { V2F a; double b; } V2Double;
+V2Double v2_double_swap(V2Double s) {
+  V2Double r = { { s.a[1], s.a[0] }, s.b * 2.0 };
+  return r;
+}
+
+typedef struct { V2F a; float b; float c; } V2Floats;
+V2Floats v2_floats_mix(V2Floats s) {
+  V2Floats r = { { s.c, s.b }, s.a[0], s.a[1] };
+  return r;
+}
+
+float hfa2_after_floats(float a, float b, float c, float d, float e, float f, float g, HFA2 h, float z) {
+  return a + b + c + d + e + f + g + h.x * 10.0f + h.y * 100.0f + z * 1000.0f;
+}

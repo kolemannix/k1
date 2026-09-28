@@ -243,6 +243,11 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
         Opcode::Fence => {
             write!(w, "fence {}", ir::AtomicOrderingIr::from_tag(b as u8).name()).unwrap();
         }
+        Opcode::Zero => {
+            write!(w, "zero [").unwrap();
+            write_src(w, k1, ops[0]);
+            write!(w, "] size={}", ops[1]).unwrap();
+        }
         Opcode::Copy => {
             write!(w, "copy [").unwrap();
             write_src(w, k1, ops[0]);

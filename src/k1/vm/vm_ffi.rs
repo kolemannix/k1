@@ -6,7 +6,11 @@ use libffi::{low::*, raw};
 
 use crate::ir::PhysicalFunctionType;
 use crate::lex::SpanId;
-use crate::typer::types::{AggType, Layout, PhysicalType, PhysicalTypeEnum, ScalarType};
+use crate::compiler::Arch;
+use crate::typer::types::{
+    AggType, HomogeneousAggregate, Layout, PhysicalType, PhysicalTypeEnum, RegisterClass,
+    ScalarType,
+};
 use crate::typer::{FunctionId, K1Result, Linkage, TypedProgram};
 use crate::vm;
 use crate::vm::{Value, Vm};
@@ -146,7 +150,7 @@ fn prep_ffi_cif(
     let mut ffi_args_types_storage = k1.mem.new_list(param_count as u32);
     let mut ffi_args_types_ptrs = k1.mem.new_list(param_count as u32);
     for fn_param in k1.ir.mem.getn(fn_params) {
-        let ffi_type: ffi_type = pt_to_ffi_type(k1, fn_param.pt)
+        let ffi_type: ffi_type = pt_to_ffi_type(k1, fn_param.pt, false)
             .map_err(|msg| kerr!(k1, span, "parameter type is not FFI compatible: {msg}"))?;
 
         // We need a stable address to each type here; so we push them to
@@ -157,7 +161,7 @@ fn prep_ffi_cif(
     }
     let atypes: *mut *mut ffi_type = ffi_args_types_ptrs.as_mut_ptr().cast();
 
-    let ffi_ret_type: ffi_type = pt_to_ffi_type(k1, return_type)
+    let ffi_ret_type: ffi_type = pt_to_ffi_type(k1, return_type, true)
         .map_err(|msg| kerr!(k1, span, "return type is not FFI compatible: {msg}"))?;
     let ffi_ret_type_alloced: &mut ffi_type = k1.mem.push(ffi_ret_type);
 
@@ -226,6 +230,57 @@ fn memory_class_ffi_type(k1: &mut TypedProgram, layout: Layout) -> libffi::low::
 fn pt_to_ffi_type(
     k1: &mut TypedProgram,
     pt: PhysicalType,
+    is_return: bool,
+) -> std::result::Result<libffi::low::ffi_type, &'static str> {
+    let host_arch = if cfg!(target_arch = "aarch64") { Arch::Arm } else { Arch::Intel };
+    match k1.get_pt_vector_registers(pt, is_return, host_arch) {
+        Some(ha) => vector_registers_ffi_type(k1, ha),
+        None => member_ffi_type(k1, pt),
+    }
+}
+
+fn vector_registers_ffi_type(
+    k1: &mut TypedProgram,
+    ha: HomogeneousAggregate,
+) -> std::result::Result<libffi::low::ffi_type, &'static str> {
+    let base = match (ha.lanes, ha.base_size()) {
+        (1, _) => scalar_to_ffi_type(ha.element),
+        _ if cfg!(target_arch = "x86_64") => {
+            return Err(
+                "libffi has no SSEUP class, so it cannot pass a 16+ byte vector in one vector register",
+            );
+        }
+        (_, 8) => unsafe { types::double },
+        (_, 16) => ffi_type {
+            size: 16,
+            alignment: 16,
+            type_: raw::FFI_TYPE_LONGDOUBLE,
+            elements: core::ptr::null_mut(),
+        },
+        _ => {
+            return Err(
+                "a vector smaller than 8 bytes returns in a vector register with widened lanes, which libffi cannot describe",
+            );
+        }
+    };
+    if ha.count == 1 {
+        return Ok(base);
+    }
+    if ha.base_size() == 16 && unsafe { types::longdouble.size } != 16 {
+        return Err(
+            "this host's libffi sizes quad HFA members as its 8-byte long double, so it cannot pass aggregates of 16-byte vectors",
+        );
+    }
+    let mut element_storage = k1.mem.new_list(ha.count);
+    for _ in 0..ha.count {
+        element_storage.push(base);
+    }
+    Ok(make_struct_ffi_type(k1, element_storage.as_slice_mut(), 0, 0))
+}
+
+fn member_ffi_type(
+    k1: &mut TypedProgram,
+    pt: PhysicalType,
 ) -> std::result::Result<libffi::low::ffi_type, &'static str> {
     if cfg!(target_arch = "x86_64") && k1.pt_has_misaligned_fields(pt) {
         let layout = k1.get_pt_layout(pt);
@@ -242,7 +297,7 @@ fn pt_to_ffi_type(
 
                 element_storage.push(scalar_to_ffi_type(tag_field.field_t.expect_scalar()));
                 if let Some(payload) = payload_field {
-                    let payload_ffi_type = pt_to_ffi_type(k1, payload.field_t)?;
+                    let payload_ffi_type = member_ffi_type(k1, payload.field_t)?;
                     element_storage.push(payload_ffi_type);
                 }
                 let t = make_struct_ffi_type(k1, element_storage.as_slice_mut(), 0, 0);
@@ -261,7 +316,7 @@ fn pt_to_ffi_type(
                 }
                 let mut element_storage = k1.mem.new_list(fields.len());
                 for field in k1.mem.getn(fields).iter() {
-                    let field_ffi_type = pt_to_ffi_type(k1, field.field_t)?;
+                    let field_ffi_type = member_ffi_type(k1, field.field_t)?;
                     element_storage.push(field_ffi_type);
                 }
                 let t = make_struct_ffi_type(k1, element_storage.as_slice_mut(), 0, 0);
@@ -271,55 +326,68 @@ fn pt_to_ffi_type(
                 // size and alignment get filled in my ffi_prep_cif
                 // Arrays should just be represented as repeated structs
                 let mut element_storage = k1.mem.new_list(len);
-                let element_ffi_type = pt_to_ffi_type(k1, element_pt)?;
+                let element_ffi_type = member_ffi_type(k1, element_pt)?;
                 for _ in 0..len {
                     element_storage.push(element_ffi_type);
                 }
                 let t = make_struct_ffi_type(k1, element_storage.as_slice_mut(), 0, 0);
                 Ok(t)
             }
-            AggType::Vector { element_pt, len } => {
-                let mut element_storage = k1.mem.new_list(len);
-                let element_ffi_type = scalar_to_ffi_type(element_pt);
-                for _ in 0..len {
-                    element_storage.push(element_ffi_type);
+            AggType::Vector { .. } => {
+                let layout = k1.agg_types.get(agg_id).layout;
+                if cfg!(target_arch = "x86_64") && layout.size == 8 {
+                    return Ok(unsafe { types::double });
                 }
-                let t = make_struct_ffi_type(k1, element_storage.as_slice_mut(), 0, 0);
-                Ok(t)
-            }
-            AggType::Union { members } => {
-                // Default is zeroed()
-                let mut max_size_member: ffi_type = ffi_type::default();
-                let mut max_align_member: ffi_type = ffi_type::default();
-
-                for member in k1.mem.getn(members) {
-                    let member_ffi_type = pt_to_ffi_type(k1, member.ty)?;
-                    if member_ffi_type.size > max_size_member.size {
-                        max_size_member = member_ffi_type;
-                    }
-                    if member_ffi_type.alignment > max_align_member.alignment {
-                        max_align_member = member_ffi_type;
-                    }
+                let mut element_storage = k1.mem.new_list(layout.size);
+                for _ in 0..layout.size {
+                    element_storage.push(unsafe { types::uint8 });
                 }
-
-                // Put our ffi_types in the heap
-                let mut element_storage = k1.mem.new_list(2);
-                element_storage.push(max_size_member);
-                element_storage.push(max_align_member);
-
-                let t = make_struct_ffi_type(
+                Ok(make_struct_ffi_type(
                     k1,
                     element_storage.as_slice_mut(),
-                    max_size_member.size,
-                    max_align_member.alignment,
-                );
-                Ok(t)
+                    layout.size as usize,
+                    layout.align as u16,
+                ))
             }
+            AggType::Union { .. } => Ok(union_ffi_type(k1, pt)),
             AggType::Opaque { .. } => Err(
                 "opaque types are only FFI-compatible by pointer; by-value opaque ABI is not representable safely",
             ),
         },
     }
+}
+
+fn union_ffi_type(k1: &mut TypedProgram, pt: PhysicalType) -> libffi::low::ffi_type {
+    let layout = k1.get_pt_layout(pt);
+    if layout.size > 16 {
+        return memory_class_ffi_type(k1, layout);
+    }
+    let (classes, _) = k1.get_pt_eightbyte_classes(pt);
+    let mut element_storage = k1.mem.new_list(layout.size);
+    for (i, class) in classes.iter().enumerate() {
+        let start = i as u32 * 8;
+        if start >= layout.size {
+            break;
+        }
+        let bytes = (layout.size - start).min(8);
+        let is_sse = cfg!(target_arch = "x86_64") && *class == RegisterClass::Float;
+        match (is_sse, bytes) {
+            (true, 4) => element_storage.push(unsafe { types::float }),
+            (true, _) => element_storage.push(unsafe { types::double }),
+            (false, 8) => element_storage.push(unsafe { types::uint64 }),
+            (false, _) => {
+                for _ in 0..bytes {
+                    element_storage.push(unsafe { types::uint8 });
+                }
+            }
+        }
+    }
+    make_struct_ffi_type(
+        k1,
+        element_storage.as_slice_mut(),
+        layout.size as usize,
+        layout.align as u16,
+    )
 }
 
 #[allow(clippy::field_reassign_with_default)]

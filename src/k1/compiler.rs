@@ -230,6 +230,32 @@ impl BuildConfig {
         simd_bytes
     }
 
+    pub fn vector_abi_bytes(&self, strings: &Interner) -> u32 {
+        if self.target.arch() != Arch::Intel {
+            return 16;
+        }
+        let mut vector_abi_bytes = 16;
+        for feature in strings.get(self.features).split(',') {
+            let width = if feature.starts_with("+avx512") {
+                64
+            } else if feature.starts_with("+avx") {
+                32
+            } else {
+                16
+            };
+            vector_abi_bytes = vector_abi_bytes.max(width);
+        }
+        #[cfg(target_arch = "x86_64")]
+        if strings.get(self.cpu) == "native" {
+            if std::arch::is_x86_feature_detected!("avx512f") {
+                vector_abi_bytes = 64;
+            } else if std::arch::is_x86_feature_detected!("avx") {
+                vector_abi_bytes = 32;
+            }
+        }
+        vector_abi_bytes
+    }
+
     pub fn add_to_hash(
         &self,
         strings: &Interner,

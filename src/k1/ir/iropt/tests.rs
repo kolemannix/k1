@@ -14,6 +14,10 @@ fn insts(u: &UnitBuf, block: BlockId) -> Vec<InstId> {
     out
 }
 
+const fn byte(n: u8) -> Value {
+    Value::imm32(ScalarType::U8, n as u32)
+}
+
 fn iid(n: u32) -> InstId {
     InstId::from_u32(n).unwrap()
 }
@@ -41,7 +45,7 @@ fn recorded_preds_follow_terminators_with_duplicate_edges() {
         SwitchCase { value: 0, target: loop_block },
         SwitchCase { value: 1, target: loop_block },
     ]);
-    inst(&mut u, entry, Inst::Switch { value: Value::byte(0), width: 8, cases, default: exit });
+    inst(&mut u, entry, Inst::Switch { value: byte(0), width: 8, cases, default: exit });
     inst(
         &mut u,
         loop_block,
@@ -83,12 +87,12 @@ fn commit_renumbers_into_layout_order_and_drops_unlinked() {
     let sum = inst(
         &mut u,
         middle,
-        Inst::IntAdd { lhs: Value::FnParam { t, index: 0 }, rhs: Value::byte(1), t: ScalarType::U64 },
+        Inst::IntAdd { lhs: Value::FnParam { t, index: 0 }, rhs: byte(1), t: ScalarType::U64 },
     );
     inst(&mut u, middle, Inst::Jump(exit));
     inst(&mut u, entry, Inst::Jump(middle));
     let front = u.new_inst(
-        Inst::IntSub { lhs: Value::Inst(sum), rhs: Value::byte(2), t: ScalarType::U64 },
+        Inst::IntSub { lhs: Value::Inst(sum), rhs: byte(2), t: ScalarType::U64 },
         SpanId::NONE,
         IrComment::None,
     );
@@ -152,17 +156,17 @@ fn cloned_phi_and_switch_payloads_are_owned_by_the_clone() {
     }
     let t = PhysicalType::scalar(ScalarType::U8);
     let incomings = src.push_phi_cases(&[
-        PhiCase { from: dead, value: Value::byte(1) },
+        PhiCase { from: dead, value: byte(1) },
         PhiCase { from, value: Value::FnParam { t, index: 0 } },
-        PhiCase { from: dead, value: Value::byte(2) },
-        PhiCase { from, value: Value::byte(3) },
+        PhiCase { from: dead, value: byte(2) },
+        PhiCase { from, value: byte(3) },
     ]);
     let original = inst(&mut src, source, Inst::Phi { t, incomings });
     let cases = src.push_switch_cases(&[SwitchCase { value: 0, target: from }]);
     let switch = inst(
         &mut src,
         source,
-        Inst::Switch { value: Value::byte(0), width: 8, cases, default: dead },
+        Inst::Switch { value: byte(0), width: 8, cases, default: dead },
     );
     let mut clones = Vec::new();
     for target in [first, first, second] {
@@ -174,7 +178,7 @@ fn cloned_phi_and_switch_payloads_are_owned_by_the_clone() {
     u.clone_payload(&src.view(), &mut cloned);
     let cloned_switch = inst(&mut u, first, cloned);
     let mut st = InlineState::default();
-    const ARGS: &[Value] = &[Value::byte(9)];
+    const ARGS: &[Value] = &[byte(9)];
     st.args = ARGS;
     st.blocks.insert(from, to);
     st.blocks.insert(dead, dead);
@@ -196,8 +200,8 @@ fn cloned_phi_and_switch_payloads_are_owned_by_the_clone() {
         assert_eq!(actual.len(), 2);
         assert_eq!(actual[0].from, to);
         assert_eq!(actual[1].from, to);
-        assert!(actual[0].value == Value::byte(9));
-        assert!(actual[1].value == Value::byte(3));
+        assert!(actual[0].value == byte(9));
+        assert!(actual[1].value == byte(3));
     }
     let Inst::Phi { incomings: untouched, .. } = *view.inst(clones[2]) else { panic!() };
     for payload in [src.view().phi_cases(incomings), view.phi_cases(untouched)] {

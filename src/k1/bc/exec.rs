@@ -749,6 +749,14 @@ fn exec_loop(
                 std::sync::atomic::fence(vm::rust_atomic_ordering(ord));
                 advance!(Opcode::Fence);
             }
+            Opcode::Zero => {
+                let dst_ptr = read_src!(operand!(0)).as_ptr();
+                if cfg!(debug_assertions) && dst_ptr.is_null() {
+                    vmerr!("Zero touching null pointer");
+                }
+                vm::memzero(dst_ptr, operand!(1) as usize);
+                advance!(Opcode::Zero);
+            }
             Opcode::Copy => {
                 let size = operand!(2) as usize;
                 if size != 0 {

@@ -38,6 +38,18 @@ ns(lib("foo")) foo {
   type HFA4 = { a: f64, b: f64, c: f64, d: f64 }
   fn(extern("hfa4_add")) hfa4-add(a: HFA4, b: HFA4): HFA4
 
+  type union-hfa2 = union { a: array[f32, 2], p: { x: f32, y: f32 } }
+  fn(extern("union_hfa2_add")) union-hfa2-add(a: union-hfa2, b: union-hfa2): union-hfa2
+
+  type union-hfa3 = union { f: f32, g: array[f32, 3] }
+  fn(extern("union_hfa3_add")) union-hfa3-add(a: union-hfa3, b: union-hfa3): union-hfa3
+
+  type struct-union-hfa3 = { u: union-hfa2, z: f32 }
+  fn(extern("struct_union_hfa3_add")) struct-union-hfa3-add(a: struct-union-hfa3, b: struct-union-hfa3): struct-union-hfa3
+
+  type union-mixed-float = union { d: f64, f: array[f32, 2] }
+  fn(extern("union_mixed_float_swap")) union-mixed-float-swap(a: union-mixed-float): union-mixed-float
+
   type cx-cursor-kind = either(u32) { unexposed-decl = 1, struct-decl = 2 }
   type cx-cursor = {
     kind: cx-cursor-kind,
@@ -84,6 +96,42 @@ ns(lib("foo")) foo {
   let(extern("abi_counter"), mutable) counter: i32
   let(extern("abi_tls_counter"), mutable, tls) tls-counter: i32
   let(extern("abi_link_name_source")) renamed: i32
+
+  fn(extern("v2_madd")) v2-madd(a: vector[f32, 2], b: vector[f32, 2]): vector[f32, 2]
+  fn(extern("v2i_madd")) v2i-madd(a: vector[i32, 2], b: vector[i32, 2]): vector[i32, 2]
+  fn(extern("v4_madd")) v4-madd(a: vector[f32, 4], b: vector[f32, 4]): vector[f32, 4]
+  fn(extern("v4i_madd")) v4i-madd(a: vector[i32, 4], b: vector[i32, 4]): vector[i32, 4]
+  fn(extern("v8_madd")) v8-madd(a: vector[f32, 8], b: vector[f32, 8]): vector[f32, 8]
+  fn(extern("v4b_add")) v4b-add(a: vector[u8, 4], b: vector[u8, 4]): vector[u8, 4]
+  fn(extern("v4_after_floats")) v4-after-floats(
+    a: f32, b: f32, c: f32, d: f32, e: f32, f: f32, g: f32, v: vector[f32, 4]
+  ): f32
+
+  type wrap-v4 = { a: vector[f32, 4] }
+  fn(extern("wrap_v4_reverse")) wrap-v4-reverse(w: wrap-v4): wrap-v4
+
+  type wrap-v8 = { a: vector[f32, 8] }
+  fn(extern("wrap_v8_reverse")) wrap-v8-reverse(w: wrap-v8): wrap-v8
+
+  type sv2 = { a: vector[f32, 4], b: vector[f32, 4] }
+  fn(extern("sv2_shuffle")) sv2-shuffle(s: sv2): sv2
+  fn(extern("sv2_after_vectors")) sv2-after-vectors(
+    a: vector[f32, 4], b: vector[f32, 4], c: vector[f32, 4], d: vector[f32, 4],
+    e: vector[f32, 4], f: vector[f32, 4], g: vector[f32, 4], s: sv2
+  ): f32
+
+  type s3v2 = { a: vector[f32, 2], b: vector[f32, 2], c: vector[f32, 2] }
+  fn(extern("s3v2_rotate")) s3v2-rotate(s: s3v2): s3v2
+
+  type v2-double = { a: vector[f32, 2], b: f64 }
+  fn(extern("v2_double_swap")) v2-double-swap(s: v2-double): v2-double
+
+  type v2-floats = { a: vector[f32, 2], b: f32, c: f32 }
+  fn(extern("v2_floats_mix")) v2-floats-mix(s: v2-floats): v2-floats
+
+  fn(extern("hfa2_after_floats")) hfa2-after-floats(
+    a: f32, b: f32, c: f32, d: f32, e: f32, f: f32, g: f32, h: HFA2, z: f32
+  ): f32
 
   fn(extern("abi_counter_get")) counter-get(): i32
   fn(extern("abi_tls_counter_get")) tls-counter-get(): i32
@@ -147,6 +195,27 @@ fn test-all() {
   assert-equals(hfa4.b, 22.0)
   assert-equals(hfa4.c, 33.0)
   assert-equals(hfa4.d, 44.0)
+
+  let uh2 = foo/union-hfa2-add(.{ a = [1.0, 2.0] }, .{ p = .{ x = 10.0, y = 20.0 } })
+  assert-equals(uh2.a.[0], 11.0)
+  assert-equals(uh2.a.[1], 22.0)
+
+  let uh3 = foo/union-hfa3-add(.{ g = [1.0, 2.0, 3.0] }, .{ g = [10.0, 20.0, 30.0] })
+  assert-equals(uh3.g.[0], 11.0)
+  assert-equals(uh3.g.[1], 22.0)
+  assert-equals(uh3.g.[2], 33.0)
+
+  let suh3 = foo/struct-union-hfa3-add(
+    .{ u = .{ a = [1.0, 2.0] }, z = 3.0 },
+    .{ u = .{ a = [10.0, 20.0] }, z = 30.0 }
+  )
+  assert-equals(suh3.u.a.[0], 11.0)
+  assert-equals(suh3.u.a.[1], 22.0)
+  assert-equals(suh3.z, 33.0)
+
+  let umf = foo/union-mixed-float-swap(.{ f = [1.0, 2.0] })
+  assert-equals(umf.f.[0], 2.0)
+  assert-equals(umf.f.[1], 1.0)
 
   let cursor: foo/cx-cursor = .{
     kind = :unexposed-decl,
@@ -236,6 +305,98 @@ fn sum-fn-struct(s: { a: u64, b: u64, c: u64, d: u64 }): i32 {
 
 // TODO: abi/ffi test some 'sum' types
 
+fn f2(a: f32, b: f32): vector[f32, 2] { vector/splat[f32, 2](a).with-lane(1, b) }
+fn f4(a: f32, b: f32, c: f32, d: f32): vector[f32, 4] {
+  vector/splat[f32, 4](a).with-lane(1, b).with-lane(2, c).with-lane(3, d)
+}
+fn i4(a: i32, b: i32, c: i32, d: i32): vector[i32, 4] {
+  vector/splat[i32, 4](a).with-lane(1, b).with-lane(2, c).with-lane(3, d)
+}
+fn assert-f2(v: vector[f32, 2], a: f32, b: f32) {
+  assert-equals(v.get-lane(0), a)
+  assert-equals(v.get-lane(1), b)
+}
+fn assert-f4(v: vector[f32, 4], a: f32, b: f32, c: f32, d: f32) {
+  assert-equals(v.get-lane(0), a)
+  assert-equals(v.get-lane(1), b)
+  assert-equals(v.get-lane(2), c)
+  assert-equals(v.get-lane(3), d)
+}
+
+fn test-vectors() {
+  assert-f2(foo/v2-madd(f2(1.0, 2.0), f2(10.0, 20.0)), 12.0, 24.0)
+
+  let v2i = foo/v2i-madd(vector/splat[i32, 2](3).with-lane(1, -4), vector/splat[i32, 2](100).with-lane(1, 200))
+  assert-equals(v2i.get-lane(0), 106)
+  assert-equals(v2i.get-lane(1), 192)
+
+  let s3 = foo/s3v2-rotate(.{ a = f2(1.0, 2.0), b = f2(3.0, 4.0), c = f2(5.0, 6.0) })
+  assert-f2(s3.a, 3.0, 4.0)
+  assert-f2(s3.b, 5.0, 6.0)
+  assert-f2(s3.c, 1.0, 2.0)
+
+  let vd = foo/v2-double-swap(.{ a = f2(1.0, 2.0), b = 3.5 })
+  assert-f2(vd.a, 2.0, 1.0)
+  assert-equals(vd.b, 7.0)
+
+  let vf = foo/v2-floats-mix(.{ a = f2(1.0, 2.0), b = 3.0, c = 4.0 })
+  assert-f2(vf.a, 4.0, 3.0)
+  assert-equals(vf.b, 1.0)
+  assert-equals(vf.c, 2.0)
+
+  let h = foo/hfa2-after-floats(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, .{ x = 1.0, y = 2.0 }, 3.0)
+  assert-equals(h, 3238.0)
+}
+
+fn test-vector-registers() {
+  assert-f4(foo/v4-madd(f4(1.0, 2.0, 3.0, 4.0), f4(10.0, 20.0, 30.0, 40.0)), 12.0, 24.0, 36.0, 48.0)
+
+  let v4i = foo/v4i-madd(i4(1, -2, 3, -4), i4(100, 200, 300, 400))
+  assert-equals(v4i.get-lane(0), 102)
+  assert-equals(v4i.get-lane(1), 196)
+  assert-equals(v4i.get-lane(2), 306)
+  assert-equals(v4i.get-lane(3), 392)
+
+  assert-equals(foo/v4-after-floats(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, f4(1.0, 2.0, 3.0, 4.0)), 69.0)
+
+  let w = foo/wrap-v4-reverse(.{ a = f4(1.0, 2.0, 3.0, 4.0) })
+  assert-f4(w.a, 4.0, 3.0, 2.0, 1.0)
+}
+
+fn test-vector-aggregates() {
+  let s = foo/sv2-shuffle(.{ a = f4(1.0, 2.0, 3.0, 4.0), b = f4(10.0, 20.0, 30.0, 40.0) })
+  assert-f4(s.a, 10.0, 20.0, 30.0, 40.0)
+  assert-f4(s.b, 11.0, 22.0, 33.0, 44.0)
+
+  let z = vector/splat[f32, 4](0.0)
+  let after = foo/sv2-after-vectors(
+    f4(1.0, 0.0, 0.0, 0.0), z, z, z, z, z, f4(0.0, 5.0, 0.0, 0.0),
+    .{ a = f4(0.0, 0.0, 3.0, 0.0), b = f4(0.0, 0.0, 0.0, 7.0) }
+  )
+  assert-equals(after, 736.0)
+
+  let b = foo/v4b-add(
+    vector/splat[u8, 4](1).with-lane(1, 2).with-lane(2, 3).with-lane(3, 250),
+    vector/splat[u8, 4](10).with-lane(1, 20).with-lane(2, 30)
+  )
+  assert-equals(b.get-lane(0), 11)
+  assert-equals(b.get-lane(1), 22)
+  assert-equals(b.get-lane(2), 33)
+  assert-equals(b.get-lane(3), 4)
+}
+
+fn test-wide-vectors() {
+  let v8 = foo/v8-madd(vector/splat[f32, 8](1.0).with-lane(7, 8.0), vector/splat[f32, 8](2.0))
+  assert-equals(v8.get-lane(0), 4.0)
+  assert-equals(v8.get-lane(6), 4.0)
+  assert-equals(v8.get-lane(7), 18.0)
+
+  let w8 = foo/wrap-v8-reverse(.{ a = vector/splat[f32, 8](0.0).with-lane(0, 1.0).with-lane(7, 8.0) })
+  assert-equals(w8.a.get-lane(0), 8.0)
+  assert-equals(w8.a.get-lane(1), 0.0)
+  assert-equals(w8.a.get-lane(7), 1.0)
+}
+
 fn test-globals-readonly() {
   assert-equals(foo/readonly, 7)
   assert-equals(foo/renamed, 33)
@@ -262,5 +423,17 @@ fn main(): i32 {
   #static test-globals-readonly()
   test-globals-readonly()
   test-globals()
+  #static test-vectors()
+  test-vectors()
+  test-vector-registers()
+  test-vector-aggregates()
+  #if k1/arch is {
+    :arm64 -> {
+      #static test-vector-registers()
+      #static test-wide-vectors()
+      test-wide-vectors()
+    },
+    :intel64 or :wasm64 -> {}
+  }
   0
 }

@@ -56,6 +56,7 @@ pub enum Opcode {
     Load,
     Store,
     Copy,
+    Zero,
     PtrAddImm,
     PtrIndex,
     // Int ALU (A = width in bits)
@@ -140,6 +141,7 @@ impl Opcode {
             Opcode::Load => 2,       // A = width in bits; [dst][addr src]
             Opcode::Store => 2,      // A = width in bits; [addr src][val src]
             Opcode::Copy => 3,       // [dst src][src src][size]
+            Opcode::Zero => 2,       // [dst src][size]
             Opcode::PtrAddImm => 3,  // [dst][base src][byte offset]
             Opcode::PtrIndex => 4,   // [dst][base src][index src][stride]
             Opcode::IntAdd
@@ -199,6 +201,7 @@ impl Opcode {
             Opcode::Load => "load",
             Opcode::Store => "store",
             Opcode::Copy => "copy",
+            Opcode::Zero => "zero",
             Opcode::PtrAddImm => "ptr_add_imm",
             Opcode::PtrIndex => "ptr_index",
             Opcode::IntAdd => "iadd",

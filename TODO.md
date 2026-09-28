@@ -4,10 +4,8 @@
 ## [ ] asm
 
 ## [ ] More IR analysis and opts
-- [x] Constant-folding
-- [ ] SCCP
-- [ ] add lifetimes (start/end for allocas, temps, inlined stuff)
-- [ ] Get 'range' metadata into sum tag loads for our IR and LLVM optimizations (a sum's tag could only be 0 or 1; this would attach those 2 possible values to the loaded value)
+- [ ] add lifetimes? (start/end for allocas, temps, inlined stuff)
+- [ ] Get 'range' metadata into sum tags, bools, and other?, for our IR and LLVM optimizations (a sum's tag could only be 0 or 1; this would attach those 2 possible values to the loaded value)
 
 ## [x] token stream based macros
 
@@ -21,7 +19,6 @@
 ## [x] Ability objects; dyn[<ability expr>]
 
 ## grab bag list mid2026
-- [ ] smarter union lowering (see codegen_llvm.rs comment)
 - [x] add cpu feature string to k1/module
 - [x] convert the add_module train off of anyhow::error
 - [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**

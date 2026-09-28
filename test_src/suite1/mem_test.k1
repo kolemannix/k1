@@ -42,7 +42,21 @@ fn mem-set-sizes() {
   }
 }
 
+fn unaligned-round-trip() {
+  let buf = buffer/filled[u8](24, 0)
+  mem/write-unaligned(buf.data.add-bytes(1), 0x01020304: u32)
+  mem/write-unaligned(buf.data.add-bytes(7), 0x1122334455667788: u64)
+  assert-equals(mem/read-unaligned[u32](buf.data.add-bytes(1)), 0x01020304)
+  assert-equals(mem/read-unaligned[u64](buf.data.add-bytes(7)), 0x1122334455667788)
+  assert-equals(mem/read-unaligned[u16](buf.data.add-bytes(3)), 0x0102)
+  assert-equals(buf.[1], 0x04)
+  assert-equals(buf.[4], 0x01)
+  assert-equals(buf.[7], 0x88)
+  assert-equals(buf.[14], 0x11)
+}
+
 fn test() {
+  unaligned-round-trip()
   mem-copy-sizes()
   mem-move-sizes()
   mem-set-sizes()

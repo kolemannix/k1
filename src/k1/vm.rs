@@ -1019,6 +1019,28 @@ pub(crate) fn memmove(src: *const u8, dst: *mut u8, size_bytes: usize) {
     }
 }
 
+pub(crate) fn memzero(dst: *mut u8, size_bytes: usize) {
+    unsafe {
+        match size_bytes {
+            8..=16 => {
+                (dst as *mut u64).write_unaligned(0);
+                (dst.add(size_bytes - 8) as *mut u64).write_unaligned(0);
+            }
+            17..=32 => {
+                (dst as *mut u128).write_unaligned(0);
+                (dst.add(size_bytes - 16) as *mut u128).write_unaligned(0);
+            }
+            33..=64 => {
+                (dst as *mut u128).write_unaligned(0);
+                (dst.add(16) as *mut u128).write_unaligned(0);
+                (dst.add(size_bytes - 32) as *mut u128).write_unaligned(0);
+                (dst.add(size_bytes - 16) as *mut u128).write_unaligned(0);
+            }
+            _ => core::ptr::write_bytes(dst, 0, size_bytes),
+        }
+    }
+}
+
 #[inline(always)]
 fn memmove_fixed<const N: usize>(src: *const u8, dst: *mut u8) {
     unsafe {

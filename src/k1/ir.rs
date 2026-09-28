@@ -178,7 +178,6 @@ pub enum IrComment {
     MatchResultSlot,
     MatchSwitch,
     MatchingCondCond,
-    MemsetSize,
     None,
     RefAtIndexOffset,
     ReturnAggregateAtAddress,
@@ -209,7 +208,7 @@ pub enum IrComment {
     WithLaneOffset,
     WithLaneResult,
     WithLaneStore,
-    ZeroedMemset,
+    Zeroed,
     ZeroedNoDst,
 }
 
@@ -262,7 +261,6 @@ impl IrComment {
             IrComment::MatchResultSlot => "match result slot",
             IrComment::MatchSwitch => "match switch",
             IrComment::MatchingCondCond => "matching cond cond",
-            IrComment::MemsetSize => "memset size",
             IrComment::None => "",
             IrComment::RefAtIndexOffset => "refAtIndex offset",
             IrComment::ReturnAggregateAtAddress => "return aggregate at address",
@@ -293,7 +291,7 @@ impl IrComment {
             IrComment::WithLaneOffset => "with-lane offset",
             IrComment::WithLaneResult => "with-lane result",
             IrComment::WithLaneStore => "with-lane store",
-            IrComment::ZeroedMemset => "zeroed memset",
+            IrComment::Zeroed => "zeroed",
             IrComment::ZeroedNoDst => "zeroed no dst",
         }
     }
@@ -692,9 +690,6 @@ pub enum Value {
 }
 
 impl Value {
-    const fn byte(u8: u8) -> Value {
-        Value::Data32 { t: ScalarType::U8, data: u8 as u32 }
-    }
     const fn imm32(t: ScalarType, u32: u32) -> Value {
         Value::Data32 { t, data: u32 }
     }
@@ -801,6 +796,12 @@ pub enum Inst {
         t: PhysicalType,
         vm_size: u32,
         volatile: bool,
+        unaligned: bool,
+    },
+    Zero {
+        dst: Value,
+        t: PhysicalType,
+        vm_size: u32,
         unaligned: bool,
     },
     StructOffset {
@@ -1077,6 +1078,7 @@ pub fn visit_inst_values(u: &UnitView, inst: &Inst, f: &mut impl FnMut(Value)) {
             f(dst);
             f(src);
         }
+        Inst::Zero { dst, .. } => f(dst),
         Inst::StructOffset { base, .. } => f(base),
         Inst::ArrayOffset { base, element_index, .. } => {
             f(base);
@@ -1298,7 +1300,7 @@ pub fn get_inst_kind(u: &UnitView, inst_id: InstId) -> InstKind {
             _ => InstKind::Void,
         },
         Inst::Fence { .. } => InstKind::Void,
-        Inst::Copy { .. } => InstKind::Void,
+        Inst::Copy { .. } | Inst::Zero { .. } => InstKind::Void,
         Inst::StructOffset { .. } => InstKind::PTR,
         Inst::ArrayOffset { .. } => InstKind::PTR,
         Inst::Call { call_id: id } => InstKind::Value(u.call(id).ret_type),
@@ -3019,23 +3021,11 @@ fn compile_zero(b: &mut Builder, type_id: TypeId, dst: Option<Value>) -> K1Resul
                 None => b.push_alloca(pt, IrComment::ZeroedNoDst).as_value(),
                 Some(dst) => dst,
             };
-            let zero_u8 = Value::byte(0);
-            let count =
-                b.make_int_value(&TypedIntValue::I64(pt_layout.size as i64), IrComment::MemsetSize);
-            let memset_args = b.u.push_args(&[dst, zero_u8, count]);
-            let Some(memset_function_id) =
-                b.k1.scopes.find_function(b.k1.scopes.mem_scope_id, b.k1.ast.idents.b.set)
-            else {
-                b_ice!(b, "Missing memset function");
-            };
-            let memset_call = IrCall {
-                ret_type: PhysicalType::EMPTY,
-                callee: IrCallee::BackendBuiltin(memset_function_id, BackendBuiltin::MemSet),
-                args: memset_args,
-                dst: None,
-            };
-            let call_id = add_call(b, memset_call);
-            b.push_inst(Inst::Call { call_id }, IrComment::ZeroedMemset);
+            let unaligned = b.is_addr_unaligned(dst);
+            b.push_inst(
+                Inst::Zero { dst, t: pt, vm_size: pt_layout.size, unaligned },
+                IrComment::Zeroed,
+            );
             Ok(dst)
         }
         PhysicalTypeEnum::Scalar(st) => {
@@ -4362,6 +4352,14 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                         errors.push(format!("i{inst_id}: copy of a non-aggregate"))
                     }
                 }
+                Inst::Zero { dst, t, .. } => {
+                    if !get_value_kind(&u, dst).is_storage() {
+                        errors.push(format!("i{inst_id}: zero dst is not a ptr"))
+                    }
+                    if !t.is_agg() {
+                        errors.push(format!("i{inst_id}: zero of a non-aggregate"))
+                    }
+                }
                 Inst::StructOffset { base, .. } => {
                     let base_type = get_value_kind(&u, base);
                     if !base_type.is_storage() {
@@ -5007,6 +5005,13 @@ pub fn display_inst(
             w.write_str(" ")?;
             v(w, src)?;
             w.write_str(" to ")?;
+            v(w, dst)?;
+            unaligned_suffix(w, unaligned)?;
+        }
+        Inst::Zero { dst, t, vm_size: _, unaligned } => {
+            write!(w, "zero ")?;
+            k1.display_pt(w, t)?;
+            w.write_str(" ")?;
             v(w, dst)?;
             unaligned_suffix(w, unaligned)?;
         }

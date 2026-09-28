@@ -824,6 +824,7 @@ fn map_refs(
             value(dst);
             value(src);
         }
+        Inst::Zero { dst, .. } => value(dst),
         Inst::StructOffset { base, .. } => value(base),
         Inst::ArrayOffset { base, element_index, .. } => {
             value(base);

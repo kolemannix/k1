@@ -1266,6 +1266,62 @@ pub enum ScalarType {
     Bool = 13,
 }
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct HomogeneousAggregate {
+    pub element: ScalarType,
+    pub lanes: u32,
+    pub count: u32,
+}
+
+impl HomogeneousAggregate {
+    pub fn base_size(&self) -> u32 {
+        self.element.get_layout().size * self.lanes
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum RegisterClass {
+    Initial,
+    Int,
+    Float,
+    Ptr,
+}
+
+impl RegisterClass {
+    pub fn of_scalar(st: ScalarType) -> RegisterClass {
+        match st {
+            ScalarType::U8
+            | ScalarType::U16
+            | ScalarType::U32
+            | ScalarType::U64
+            | ScalarType::I8
+            | ScalarType::I16
+            | ScalarType::I32
+            | ScalarType::I64
+            | ScalarType::Char
+            | ScalarType::Bool => RegisterClass::Int,
+            ScalarType::F32 | ScalarType::F64 => RegisterClass::Float,
+            ScalarType::Pointer => RegisterClass::Ptr,
+        }
+    }
+
+    pub fn combine(&self, other: RegisterClass) -> RegisterClass {
+        match (self, other) {
+            (RegisterClass::Initial, _) => other,
+            // A pointer eightbyte is a GPR just like Int, so this never changes
+            // which register is used; preferring Ptr for union overlaps keeps
+            // the pointer type (and thus provenance/capabilities) in the IR
+            (RegisterClass::Ptr, _) | (_, RegisterClass::Ptr) => RegisterClass::Ptr,
+            (RegisterClass::Int, RegisterClass::Int) => RegisterClass::Int,
+            (RegisterClass::Float, RegisterClass::Float) => RegisterClass::Float,
+            // Anything can go in a general purpose register like an int, but
+            // only more specific things (floats, vectors) can go in
+            // those special registers, so mixtures result in int
+            _mix => RegisterClass::Int,
+        }
+    }
+}
+
 impl ScalarType {
     pub const fn to_tag(self) -> u8 {
         self as u8
@@ -1750,6 +1806,145 @@ impl TypedProgram {
         match pt.as_enum() {
             PhysicalTypeEnum::Agg(agg_id) => self.agg_types.get(agg_id).has_misaligned_fields,
             _ => false,
+        }
+    }
+
+    pub fn visit_pt_leaves(
+        &self,
+        pt: PhysicalType,
+        offset: u32,
+        visit: &mut impl FnMut(u32, ScalarType, u32),
+    ) {
+        match pt.as_enum() {
+            PhysicalTypeEnum::Empty => {}
+            PhysicalTypeEnum::Scalar(st) => visit(offset, st, 1),
+            PhysicalTypeEnum::Agg(agg_id) => match self.agg_types.get(agg_id).agg_type {
+                AggType::Struct { fields, .. } => {
+                    for f in self.mem.getn(fields) {
+                        self.visit_pt_leaves(f.field_t, offset + f.offset, visit)
+                    }
+                }
+                AggType::Array { element_pt, len } => {
+                    let element_layout = self.get_pt_layout(element_pt);
+                    for i in 0..len {
+                        let element_offset = element_layout.offset_at_index(i as usize) as u32;
+                        self.visit_pt_leaves(element_pt, offset + element_offset, visit)
+                    }
+                }
+                AggType::Vector { element_pt, len } => visit(offset, element_pt, len),
+                AggType::Union { members } => {
+                    for m in self.mem.getn(members) {
+                        self.visit_pt_leaves(m.ty, offset, visit)
+                    }
+                }
+                AggType::Sum(e) => {
+                    self.visit_pt_leaves(PhysicalType::agg(e.struct_repr), offset, visit)
+                }
+                AggType::Opaque { size, .. } => {
+                    for i in 0..size {
+                        visit(offset + i, ScalarType::U8, 1)
+                    }
+                }
+            },
+        }
+    }
+
+    pub fn get_pt_eightbyte_classes(&self, pt: PhysicalType) -> ([RegisterClass; 2], u32) {
+        let mut classes = [RegisterClass::Initial; 2];
+        let mut active_bits2 = 0;
+        self.visit_pt_leaves(pt, 0, &mut |offset, st, lanes| {
+            let size = st.get_layout().size * lanes;
+            let start_bits = offset * 8;
+            let end_bits = start_bits + size * 8;
+            debug_assert!(end_bits <= 128);
+            let class =
+                if lanes > 1 && size >= 8 { RegisterClass::Float } else { RegisterClass::of_scalar(st) };
+            for i in (start_bits / 64)..end_bits.div_ceil(64) {
+                classes[i as usize] = classes[i as usize].combine(class);
+            }
+            if end_bits > 64 {
+                active_bits2 = active_bits2.max(end_bits - 64);
+            }
+        });
+        (classes, active_bits2)
+    }
+
+    pub fn get_pt_homogeneous_aggregate(&self, pt: PhysicalType) -> Option<HomogeneousAggregate> {
+        const MAX_MEMBERS: u32 = 4;
+        let size = self.get_pt_layout(pt).size;
+        if size == 0 {
+            return None;
+        }
+        let mut base: Option<HomogeneousAggregate> = None;
+        let mut homogeneous = true;
+        let mut slots: u32 = 0;
+        self.visit_pt_leaves(pt, 0, &mut |offset, st, lanes| {
+            let leaf = HomogeneousAggregate { element: st, lanes, count: 1 };
+            let base = *base.get_or_insert(leaf);
+            let base_size = base.base_size();
+            let same_base = if lanes == 1 {
+                base.lanes == 1 && st == base.element
+            } else {
+                base.lanes > 1 && leaf.base_size() == base_size
+            };
+            if !same_base
+                || (lanes == 1 && !matches!(st, ScalarType::F32 | ScalarType::F64))
+                || offset % base_size != 0
+                || offset / base_size >= MAX_MEMBERS
+            {
+                homogeneous = false;
+                return;
+            }
+            slots |= 1 << (offset / base_size);
+        });
+        let base = base?;
+        let count = size / base.base_size();
+        if homogeneous
+            && size % base.base_size() == 0
+            && count <= MAX_MEMBERS
+            && slots == (1 << count) - 1
+        {
+            Some(HomogeneousAggregate { count, ..base })
+        } else {
+            None
+        }
+    }
+
+    pub fn get_pt_vector_registers(
+        &self,
+        pt: PhysicalType,
+        is_return: bool,
+        arch: crate::compiler::Arch,
+    ) -> Option<HomogeneousAggregate> {
+        let PhysicalTypeEnum::Agg(agg_id) = pt.as_enum() else {
+            return None;
+        };
+        let agg_record = self.agg_types.get(agg_id);
+        let size = agg_record.layout.size;
+        let bare_vector = match agg_record.agg_type {
+            AggType::Vector { element_pt, len } => {
+                Some(HomogeneousAggregate { element: element_pt, lanes: len, count: 1 })
+            }
+            _ => None,
+        };
+        let homogeneous = self.get_pt_homogeneous_aggregate(pt);
+        match arch {
+            crate::compiler::Arch::Arm | crate::compiler::Arch::Wasm => match homogeneous {
+                Some(ha) if ha.lanes == 1 || matches!(ha.base_size(), 8 | 16) => Some(ha),
+                _ if is_return && size <= 4 => bare_vector,
+                _ => None,
+            },
+            crate::compiler::Arch::Intel => match homogeneous {
+                Some(ha) if ha.lanes > 1 && ha.count == 1 && size >= 16 => {
+                    let vector_abi_bytes = self.plan.config.vector_abi_bytes(&self.plan.strings);
+                    if size <= vector_abi_bytes || (is_return && bare_vector.is_some()) {
+                        Some(ha)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            },
         }
     }
 

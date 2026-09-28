@@ -115,6 +115,8 @@ pub(crate) struct LowerCtx {
     phi_moves: Vec<PhiMove>,
     allocas: Vec<(InstId, Layout)>,
     agg_call_temps: Vec<(InstId, Layout)>,
+    blocks: Vec<BlockId>,
+    block_seen: Vec<bool>,
 
     bc_out: Vec<u32>,
     block_to_entry_pc: IdMap<BlockId, u32>,
@@ -146,6 +148,8 @@ impl LowerCtx {
             phi_moves: Vec::new(),
             allocas: Vec::new(),
             agg_call_temps: Vec::new(),
+            blocks: Vec::new(),
+            block_seen: Vec::new(),
             bc_out: Vec::with_capacity(1024),
             block_to_entry_pc: IdMap::default(),
             pc_operands_to_rebase: Vec::new(),
@@ -175,6 +179,8 @@ impl LowerCtx {
         self.phi_moves.clear();
         self.allocas.clear();
         self.agg_call_temps.clear();
+        self.blocks.clear();
+        self.block_seen.clear();
         self.bc_out.clear();
         self.block_to_entry_pc.clear();
         self.pc_operands_to_rebase.clear();
@@ -187,6 +193,30 @@ impl LowerCtx {
 
     fn pc(&self) -> u32 {
         self.bc_out.len() as u32
+    }
+
+    fn collect_static_blocks(&mut self) {
+        let u = self.u;
+        self.block_seen.resize(u.block_count(), false);
+        let Some(entry) = u.first_block() else { return };
+        self.blocks.push(entry);
+        self.block_seen[entry.as_u32() as usize - 1] = true;
+        let mut i = 0;
+        while i < self.blocks.len() {
+            for succ in u.successors(self.blocks[i], Some(true)) {
+                if !self.block_seen[succ.as_u32() as usize - 1] {
+                    self.block_seen[succ.as_u32() as usize - 1] = true;
+                    self.blocks.push(succ);
+                }
+            }
+            i += 1;
+        }
+        self.blocks.clear();
+        for b in u.block_ids() {
+            if self.block_seen[b.as_u32() as usize - 1] {
+                self.blocks.push(b);
+            }
+        }
     }
 
     fn emit(&mut self, op: Opcode, a: u8, b: u16) {
@@ -344,11 +374,13 @@ fn lower_unit_with_ctx(
     ctx.reset(u, ret_pt);
 
     ir::count_uses(&u, &mut ctx.use_counts);
+    ctx.collect_static_blocks();
     let mut next_word: u32 = FRAME_HEADER_WORDS + param_count;
     let mut call_arg_words: usize = 0;
     let mut block_cmps: Vec<InstId> = Vec::new();
 
-    for block_h in u.block_ids() {
+    for block_index in 0..ctx.blocks.len() {
+        let block_h = ctx.blocks[block_index];
         block_cmps.clear();
         for inst_id in u.block_insts(block_h) {
             let inst = *u.inst(inst_id);
@@ -472,7 +504,8 @@ fn lower_unit_with_ctx(
 
     ctx.bc_out.reserve(u.inst_count() * 4 + call_arg_words);
     let mut first = true;
-    for block_h in u.block_ids() {
+    for block_index in 0..ctx.blocks.len() {
+        let block_h = ctx.blocks[block_index];
         ctx.block_to_entry_pc.insert(block_h, ctx.pc());
         if first {
             ctx.emit(Opcode::Enter, 0, 0);
@@ -480,7 +513,7 @@ fn lower_unit_with_ctx(
             ctx.push(fb);
             first = false;
         }
-        let next_block = u.block(block_h).next;
+        let next_block = ctx.blocks.get(block_index + 1).copied();
         for inst_id in u.block_insts(block_h) {
             emit_inst(k1, ctx, block_h, next_block, inst_id)?;
         }
@@ -823,6 +856,12 @@ fn emit_inst(
         Inst::Fence { ord } => {
             ctx.emit(Opcode::Fence, 0, ord.to_tag() as u16);
         }
+        Inst::Zero { dst, vm_size, .. } => {
+            let dst_addr = resolve_lowered_value(k1, ctx, dst);
+            ctx.emit(Opcode::Zero, 0, 0);
+            ctx.push(dst_addr);
+            ctx.push(vm_size);
+        }
         Inst::Copy { dst, src, vm_size, .. } => {
             let dst_addr = resolve_lowered_value(k1, ctx, dst);
             let src_addr = resolve_lowered_value(k1, ctx, src);
@@ -855,7 +894,7 @@ fn emit_inst(
         Inst::Call { call_id } => {
             emit_call(k1, ctx, inst_id, call_id)?;
         }
-        Inst::Jump(target) => {
+        Inst::Jump(target) | Inst::JumpIf { cond: ir::Value::IsStatic, cons: target, .. } => {
             emit_phi_copies(k1, ctx, block_id, target);
             if Some(target) != next_block {
                 ctx.emit(Opcode::Jump, 0, 0);
@@ -1269,6 +1308,9 @@ mod tests {
             phis.push(push(&mut u, header, Inst::Phi { t, incomings: IrRange::EMPTY }));
         }
         let counter = push(&mut u, header, Inst::Phi { t, incomings: IrRange::EMPTY });
+        if body_block {
+            push(&mut u, header, Inst::Jump(body));
+        }
         for (k, phi) in phis.iter().enumerate() {
             let incomings = u.push_phi_cases(&[
                 PhiCase { from: entry, value: u64_value(inits[k]) },

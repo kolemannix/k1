@@ -146,4 +146,32 @@ fn test-zero() {
   .{}
 }
 
+type guarded[n: static size] = packed { pre: u8, body: array[u8, n], post: u8 }
+
+fn zero-unaligned[n: static size]() {
+  for round in (0: size).until(2) {
+    let g: guarded[n] = .{ pre = 0xAA, body = .0, post = 0xBB }
+    assert-equals(g.pre, 0xAA)
+    assert-equals(g.post, 0xBB)
+    for i in (0: size).until(types/size[array[u8, n]]) {
+      assert-equals(g.body.[i], 0)
+      g.body.[i] = 0xFF
+    }
+  }
+}
+
+fn test-zero-sizes() {
+  zero-unaligned[1]()
+  zero-unaligned[7]()
+  zero-unaligned[8]()
+  zero-unaligned[9]()
+  zero-unaligned[16]()
+  zero-unaligned[17]()
+  zero-unaligned[32]()
+  zero-unaligned[33]()
+  zero-unaligned[64]()
+  zero-unaligned[65]()
+  zero-unaligned[72]()
+}
+
 let ZERO-POINT: zpoint = .0
