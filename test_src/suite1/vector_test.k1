@@ -111,6 +111,8 @@ fn test-ops() {
   assert-equals(x.shift-right(2).get-lane(0), 0b11)
   let neg = vector/splat[i16, 8](-8)
   assert-equals(neg.shift-right(1).get-lane(0), -4)
+  let high = vector/splat[u16, 8](0x8000)
+  assert-equals(high.shift-right(1).get-lane(0), 0x4000)
 }
 
 fn test-compare() {

@@ -1457,11 +1457,11 @@ impl PhysicalType {
     }
 
     pub const fn is_ptr(self) -> bool {
-        self.0 as u8 == ScalarType::Pointer as u8
+        self.0 == ScalarType::Pointer as u32
     }
 
     pub const fn is_bool(self) -> bool {
-        self.0 as u8 == ScalarType::Bool as u8
+        self.0 == ScalarType::Bool as u32
     }
 
     pub const fn is_agg(self) -> bool {

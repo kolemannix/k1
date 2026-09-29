@@ -40,6 +40,15 @@ fn test-repeat() {
   assert-equals(repeat-counter, 3)
 }
 
+macro widen-arg(n: i8) {
+  "${n.unsigned().widen[u64]}"
+}
+
+fn test-signed-arg() {
+  let w: u64 = widen-arg(-1)
+  assert-equals(w, 255)
+}
+
 fn test-debug-elided() {
   debug(crash("this must never run"))
 }
@@ -175,6 +184,7 @@ fn test-str-lit() {
 fn test() {
   test-twice()
   test-repeat()
+  test-signed-arg()
   test-debug-elided()
   test-code-value()
   test-code-literal()

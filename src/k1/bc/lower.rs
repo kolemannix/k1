@@ -704,10 +704,6 @@ fn emit_inst(
             let elem_bits = vop.elem.width_bits();
             let stride = vop.elem.get_layout().stride() as u16;
             let is_float = matches!(vop.elem, ScalarType::F32 | ScalarType::F64);
-            let is_signed = matches!(
-                vop.elem,
-                ScalarType::I8 | ScalarType::I16 | ScalarType::I32 | ScalarType::I64
-            );
             match vop.op {
                 VecOpIr::Splat => {
                     let (addr, base_off) = resolve_addr(k1, ctx, vop.dst);
@@ -799,14 +795,14 @@ fn emit_inst(
                         ctx.push(s0);
                     }
                 }
-                VecOpIr::Shl | VecOpIr::Shr => {
+                VecOpIr::Shl | VecOpIr::ShrS | VecOpIr::ShrU => {
                     let (lhs_addr, lhs_off) = resolve_addr(k1, ctx, vop.lhs);
                     let (dst_addr, dst_off) = resolve_addr(k1, ctx, vop.dst);
                     let count = resolve_lowered_value(k1, ctx, vop.rhs);
                     let s0 = ctx.next_scratch();
                     let opcode = match vop.op {
                         VecOpIr::Shl => Opcode::Shl,
-                        _ if is_signed => Opcode::ShrS,
+                        VecOpIr::ShrS => Opcode::ShrS,
                         _ => Opcode::ShrU,
                     };
                     for lane in 0..vop.lanes as u16 {

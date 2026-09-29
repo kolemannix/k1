@@ -108,3 +108,14 @@ fn array_me() {
     assert_eq!(l3.align, 4);
     assert_eq!(l3.stride(), 80);
 }
+
+#[test]
+fn physical_type_scalar_checks_ignore_agg_low_byte() {
+    for id in [256 + ScalarType::Pointer as u32, 256 + ScalarType::Bool as u32] {
+        let pt = PhysicalType::agg(AggregateTypeId::from_u32(id).unwrap());
+        assert!(!pt.is_ptr());
+        assert!(!pt.is_bool());
+    }
+    assert!(PhysicalType::PTR.is_ptr());
+    assert!(PhysicalType::scalar(ScalarType::Bool).is_bool());
+}

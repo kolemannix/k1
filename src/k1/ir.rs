@@ -575,7 +575,8 @@ pub enum VecOpIr {
     BitOr,
     Xor,
     Shl,
-    Shr,
+    ShrS,
+    ShrU,
     EqLanes,
     ToMask,
 }
@@ -592,7 +593,8 @@ impl VecOpIr {
             VecOpIr::BitOr => "bit_or",
             VecOpIr::Xor => "xor",
             VecOpIr::Shl => "shl",
-            VecOpIr::Shr => "shr",
+            VecOpIr::ShrS => "shr_s",
+            VecOpIr::ShrU => "shr_u",
             VecOpIr::EqLanes => "eq_lanes",
             VecOpIr::ToMask => "to_mask",
         }
@@ -713,7 +715,7 @@ impl Value {
 pub fn data32_bits(t: ScalarType, data: u32) -> u64 {
     match t {
         ScalarType::F64 => (f32::from_bits(data) as f64).to_bits(),
-        ScalarType::I64 => data as i32 as i64 as u64,
+        ScalarType::I64 | ScalarType::U64 => data as i32 as i64 as u64,
         ScalarType::F32
         | ScalarType::Pointer
         | ScalarType::I8
@@ -722,7 +724,6 @@ pub fn data32_bits(t: ScalarType, data: u32) -> u64 {
         | ScalarType::U8
         | ScalarType::U16
         | ScalarType::U32
-        | ScalarType::U64
         | ScalarType::Char
         | ScalarType::Bool => data as u64,
     }
@@ -1900,8 +1901,7 @@ impl<'k1> Builder<'k1> {
 
     fn make_int_value(&mut self, int_value: &TypedIntValue, comment: IrComment) -> Value {
         let t = int_value.get_integer_type().get_scalar_type();
-        let bits = crate::arith::int_trunc(t.width_bits(), int_value.to_u64_bits());
-        self.push_const(t, bits, comment)
+        self.push_const(t, int_value.to_zext_bits(), comment)
     }
 
     fn push_const(&mut self, t: ScalarType, bits: u64, comment: IrComment) -> Value {
@@ -3428,8 +3428,11 @@ fn compile_ir_builtin(
             let allow_pointer = op == Op::Xchg;
             let type_id = call.type_args.as_slice(&b.k1.mem)[0];
             let t = check_atomic_scalar_type(b, type_id, allow_pointer)?;
-            let signed =
-                matches!(t, ScalarType::I8 | ScalarType::I16 | ScalarType::I32 | ScalarType::I64);
+            let signed = match b.k1.types.get(type_id) {
+                Type::Integer(i) => i.is_signed(),
+                Type::Enum(e) => e.int_type.is_signed(),
+                _ => false,
+            };
             let op = match op {
                 Op::Xchg => AtomicRmwOpIr::Xchg,
                 Op::Add => AtomicRmwOpIr::Add,
@@ -3568,7 +3571,21 @@ fn compile_vector_op(
             Ok(locn)
         }
         VecOpKind::ShiftLeft | VecOpKind::ShiftRight => {
-            let op = if op == VecOpKind::ShiftLeft { VecOpIr::Shl } else { VecOpIr::Shr };
+            let op = match op {
+                VecOpKind::ShiftLeft => VecOpIr::Shl,
+                _ => {
+                    let Type::Vector(vector) = b.k1.types.get(call.return_type) else {
+                        b.k1.ice_span(call.span, "vector shift must return a vector")
+                    };
+                    let elem_signed = b
+                        .k1
+                        .types
+                        .get(vector.element_type)
+                        .as_integer()
+                        .is_some_and(|i| i.is_signed());
+                    if elem_signed { VecOpIr::ShrS } else { VecOpIr::ShrU }
+                }
+            };
             let ret_pt = callee_fn_type.return_type;
             let (elem, lanes) = vector_pt_parts(b, ret_pt)?;
             let lhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;

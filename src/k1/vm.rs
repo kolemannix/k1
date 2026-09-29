@@ -592,8 +592,8 @@ pub fn static_value_to_vm_value(
         StaticValue::Empty(_) => Value(0),
         StaticValue::Bool(bool_value) => Value::bool(*bool_value),
         StaticValue::Char(char_byte) => Value(*char_byte as u64),
-        StaticValue::Int(iv) => Value(iv.to_u64_bits()),
-        StaticValue::Enum(_, iv) => Value(iv.to_u64_bits()),
+        StaticValue::Int(iv) => Value(iv.to_zext_bits()),
+        StaticValue::Enum(_, iv) => Value(iv.to_zext_bits()),
         StaticValue::Float(fv) => Value::float_value(*fv),
         StaticValue::String(string_id) => {
             let value = string_id_to_value(k1, *string_id);

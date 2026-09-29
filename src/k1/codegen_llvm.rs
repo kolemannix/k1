@@ -3408,24 +3408,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             ir::Value::Data32 { t, data } => {
                 let v: BasicValueEnum<'ctx> = match t {
-                    ScalarType::U8 | ScalarType::Char | ScalarType::Bool => {
-                        self.ctx.i8_type().const_int(data as u64, false).into()
-                    }
-                    ScalarType::U16 => self.ctx.i16_type().const_int(data as u64, false).into(),
-                    ScalarType::U32 => self.ctx.i32_type().const_int(data as u64, false).into(),
-                    ScalarType::U64 => self.ctx.i64_type().const_int(data as u64, false).into(),
-                    ScalarType::I8 => {
-                        self.ctx.i8_type().const_int(data as i32 as i64 as u64, true).into()
-                    }
-                    ScalarType::I16 => {
-                        self.ctx.i16_type().const_int(data as i32 as i64 as u64, true).into()
-                    }
-                    ScalarType::I32 => {
-                        self.ctx.i32_type().const_int(data as i32 as i64 as u64, true).into()
-                    }
-                    ScalarType::I64 => {
-                        self.ctx.i64_type().const_int(data as i32 as i64 as u64, true).into()
-                    }
                     ScalarType::F32 => {
                         llvm_float_constant(self.ctx, TypedFloatValue::F32(f32::from_bits(data)))
                             .into()
@@ -3442,6 +3424,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             panic!("Got non-zero Pointer in codegen_llvm: {data}")
                         }
                     }
+                    _ => self
+                        .scalar_basic_type(t)
+                        .into_int_type()
+                        .const_int(ir::data32_bits(t, data), false)
+                        .into(),
                 };
                 Ok(v)
             }
@@ -3554,7 +3541,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.vec_store(&vop, inst_mappings, result)?;
                 Ok(None)
             }
-            VecOpIr::Shl | VecOpIr::Shr => {
+            VecOpIr::Shl | VecOpIr::ShrS | VecOpIr::ShrU => {
                 let l = self.vec_load(&vop, inst_mappings, vop.lhs)?;
                 let count = self.resolve_value(inst_mappings, vop.rhs)?.into_int_value();
                 let elem_int_type = l.get_type().get_element_type().into_int_type();
@@ -3572,13 +3559,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     .builder
                     .build_shuffle_vector(c0, undef, LlvmVectorType::const_vector(&mask_zeroes), "")
                     .unwrap();
-                let is_signed = matches!(
-                    vop.elem,
-                    ScalarType::I8 | ScalarType::I16 | ScalarType::I32 | ScalarType::I64
-                );
                 let result = match vop.op {
                     VecOpIr::Shl => self.builder.build_left_shift(l, counts, "").unwrap(),
-                    _ => self.builder.build_right_shift(l, counts, is_signed, "").unwrap(),
+                    VecOpIr::ShrS => self.builder.build_right_shift(l, counts, true, "").unwrap(),
+                    _ => self.builder.build_right_shift(l, counts, false, "").unwrap(),
                 };
                 self.vec_store(&vop, inst_mappings, result)?;
                 Ok(None)
@@ -3655,8 +3639,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         match inst {
             Inst::Data(data_inst) => {
                 let value: BasicValueEnum<'ctx> = match data_inst {
-                    ir::DataInst::U64(u) => self.ctx.i64_type().const_int(u, false).into(),
-                    ir::DataInst::I64(i) => self.ctx.i64_type().const_int(i as u64, true).into(),
+                    ir::DataInst::U64(_) | ir::DataInst::I64(_) => {
+                        self.ctx.i64_type().const_int(data_inst.bits(), false).into()
+                    }
                     ir::DataInst::F64(f) => {
                         llvm_float_constant(self.ctx, TypedFloatValue::F64(f)).into()
                     }

@@ -116,6 +116,19 @@ impl TypedIntValue {
         }
     }
 
+    pub fn to_zext_bits(&self) -> u64 {
+        match self {
+            TypedIntValue::U8(v) => *v as u64,
+            TypedIntValue::U16(v) => *v as u64,
+            TypedIntValue::U32(v) => *v as u64,
+            TypedIntValue::U64(v) => *v,
+            TypedIntValue::I8(v) => *v as u8 as u64,
+            TypedIntValue::I16(v) => *v as u16 as u64,
+            TypedIntValue::I32(v) => *v as u32 as u64,
+            TypedIntValue::I64(v) => *v as u64,
+        }
+    }
+
     // Used for truncation/extension in vm
     pub fn to_u32(&self) -> u32 {
         match self {

@@ -14,6 +14,16 @@ fn wrapping() {
   assert-equals(-2147483648i32 * -1i32, opaque(-2147483648i32) * opaque(-1i32))
 }
 
+fn immediates() {
+  assert-equals(4294967295u64, opaque(1u64).shift-left(32) - opaque(1u64))
+  assert-equals(2147483648u64, opaque(1u64).shift-left(31))
+  assert-equals(18446744073709551615u64, opaque(0u64) - opaque(1u64))
+  assert-equals(18446744071562067968u64, opaque(0u64) - opaque(2147483648u64))
+  assert-equals(-2147483648, opaque(0) - opaque(2147483648))
+  assert-equals(2147483648, opaque(1).shift-left(31))
+  assert-equals(4294967295u32.widen[u64], opaque(1u64).shift-left(32) - opaque(1u64))
+}
+
 fn division() {
   assert-equals(255u8 / 7u8, opaque(255u8) / opaque(7u8))
   assert-equals(255u8 % 7u8, opaque(255u8) % opaque(7u8))
@@ -110,6 +120,7 @@ fn identities() {
 
 fn test() {
   wrapping()
+  immediates()
   division()
   bitwise()
   compares()
