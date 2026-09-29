@@ -1297,8 +1297,8 @@ pub fn vm_value_to_static_value(
             let sum_pt = k1.agg_types.get(sum_agg_id).agg_type.expect_sum();
             let payload_offset = sum_pt.payload_offset;
 
-            let tag_scalar_type = sum_pt.tag_type;
-            let tag = load_scalar(tag_scalar_type, sum_ptr).as_typed_int(tag_int_type);
+            let tag =
+                load_scalar(sum_pt.tag_pt.expect_scalar(), sum_ptr).as_typed_int(tag_int_type);
             let Some(variant) = k1.mem.getn(variants).iter().find(|v| v.tag_value == tag) else {
                 kbail!(k1, span, "No variant found with tag value {}", tag);
             };

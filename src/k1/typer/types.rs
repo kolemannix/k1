@@ -1637,7 +1637,7 @@ pub struct StructField {
 
 #[derive(Clone, Copy)]
 pub struct SumPt {
-    pub tag_type: ScalarType,
+    pub tag_pt: PhysicalType,
     pub struct_repr: AggregateTypeId,
     pub variants: MSlice<SumVariantPt, TypedProgram>,
     pub payload_offset: u32,
@@ -2642,12 +2642,10 @@ impl TypedProgram {
                 let union_id = self.make_union_type(type_id, members_handle);
                 let union_layout = self.get_pt_layout(union_id);
 
+                let tag_pt = self.make_named_scalar(tag_scalar, type_id);
                 let mut struct_layout = tag_layout;
-                let tag_field = StructField {
-                    offset: 0,
-                    field_t: self.make_named_scalar(tag_scalar, type_id),
-                    name: self.type_idents.tag,
-                };
+                let tag_field =
+                    StructField { offset: 0, field_t: tag_pt, name: self.type_idents.tag };
                 let union_offset = struct_layout.append_to_aggregate(union_layout);
                 let payload_field = StructField {
                     offset: union_offset,
@@ -2667,7 +2665,7 @@ impl TypedProgram {
                     has_misaligned_fields: misaligned_fields,
                 });
                 let agg_sum = AggType::Sum(SumPt {
-                    tag_type: tag_scalar,
+                    tag_pt,
                     struct_repr,
                     variants: physical_variants.to_slice(),
                     payload_offset: union_offset,

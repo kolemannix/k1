@@ -2837,19 +2837,11 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
         }
         TypedExpr::SumGetTag(sum_get_tag) => {
             let (sum_base, _frozen) = compile_expr_place(b, sum_get_tag.sum_expr)?;
-            // nocommit claude why the switch to relying on the struct repr here?
             let sum_type_id = b.k1.exprs.get_type(sum_get_tag.sum_expr);
             let sum_pt = b.get_physical_type(sum_type_id)?;
-            let (tag_field, _) = b.k1.get_sums_struct_layout(sum_pt.expect_agg());
+            let tag_pt = b.k1.agg_types.get(sum_pt.expect_agg()).agg_type.expect_sum().tag_pt;
 
-            Ok(load_or_copy(
-                b,
-                tag_field.field_t,
-                dst,
-                sum_base,
-                false,
-                IrComment::GetSumTagLoadOrCopyToDst,
-            ))
+            Ok(load_or_copy(b, tag_pt, dst, sum_base, false, IrComment::GetSumTagLoadOrCopyToDst))
         }
         TypedExpr::SumGetPayload(_sum_get_payload) => {
             let (payload_place, frozen) = compile_expr_place(b, expr)?;
