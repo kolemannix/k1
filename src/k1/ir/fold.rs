@@ -26,7 +26,7 @@ pub(super) fn fold_inst(u: &UnitView, inst: &Inst) -> Option<Simplified> {
         Inst::IntCmp { lhs, rhs, pred, width } => {
             if let (Some(l), Some(r)) = (lhs.const_bits(u), rhs.const_bits(u)) {
                 let b = arith::int_cmp(width, pred, l, r);
-                return Some(Simplified::Const(ScalarType::Bool, b as u64));
+                return Some(Simplified::Const(ScalarType::I8, b as u64));
             }
             if lhs != rhs {
                 return None;
@@ -39,7 +39,7 @@ pub(super) fn fold_inst(u: &UnitView, inst: &Inst) -> Option<Simplified> {
                     | IntCmpPred::Ule
                     | IntCmpPred::Uge
             );
-            Some(Simplified::Const(ScalarType::Bool, b as u64))
+            Some(Simplified::Const(ScalarType::I8, b as u64))
         }
         Inst::FloatAdd { lhs, rhs, t } => float_binop(u, FloatOp::Add, lhs, rhs, t),
         Inst::FloatSub { lhs, rhs, t } => float_binop(u, FloatOp::Sub, lhs, rhs, t),
@@ -48,7 +48,7 @@ pub(super) fn fold_inst(u: &UnitView, inst: &Inst) -> Option<Simplified> {
         Inst::FloatRem { lhs, rhs, t } => float_binop(u, FloatOp::Rem, lhs, rhs, t),
         Inst::FloatCmp { lhs, rhs, pred, width } => {
             let b = arith::float_cmp(width, pred, lhs.const_bits(u)?, rhs.const_bits(u)?);
-            Some(Simplified::Const(ScalarType::Bool, b as u64))
+            Some(Simplified::Const(ScalarType::I8, b as u64))
         }
         Inst::FloatNeg { v, t } => {
             Some(Simplified::Const(t, arith::float_neg(t.width_bits(), v.const_bits(u)?)))
@@ -61,12 +61,12 @@ pub(super) fn fold_inst(u: &UnitView, inst: &Inst) -> Option<Simplified> {
                 return Some(Simplified::Value(cons));
             }
             match (t, cons.const_bits(u), alt.const_bits(u)) {
-                (ScalarType::Bool, Some(1), Some(0)) => Some(Simplified::Value(cond)),
+                (ScalarType::I8, Some(1), Some(0)) => Some(Simplified::Value(cond)),
                 _ => None,
             }
         }
         Inst::BoolNegate { v } => {
-            Some(Simplified::Const(ScalarType::Bool, (v.const_bits(u)? == 0) as u64))
+            Some(Simplified::Const(ScalarType::I8, (v.const_bits(u)? == 0) as u64))
         }
         Inst::BitNot { v, t } => {
             Some(Simplified::Const(t, arith::bit_not(t.width_bits(), v.const_bits(u)?)))

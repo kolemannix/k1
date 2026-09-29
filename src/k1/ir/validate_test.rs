@@ -2,7 +2,7 @@ use super::*;
 use crate::compiler::test_support::{compile_source, function_named};
 
 fn u64_value(n: u32) -> Value {
-    Value::Data32 { t: ScalarType::U64, data: n }
+    Value::Data32 { t: ScalarType::I64, data: n }
 }
 
 fn push(u: &mut UnitBuf, block: BlockId, inst: Inst) -> InstId {
@@ -28,7 +28,7 @@ fn validate_handmade(name: &str, build: impl FnOnce(&mut UnitBuf)) -> Result<(),
 }
 
 fn self_loop(u: &mut UnitBuf, extra_case: Option<fn(BlockId, BlockId, BlockId) -> PhiCase>) {
-    let t = PhysicalType::scalar(ScalarType::U64);
+    let t = PhysicalType::scalar(ScalarType::I64);
     let entry = u.add_block(BlockSourceKind::Entry);
     let body = u.add_block(BlockSourceKind::LoopBody);
     let exit = u.add_block(BlockSourceKind::LoopEnd);
@@ -37,7 +37,7 @@ fn self_loop(u: &mut UnitBuf, extra_case: Option<fn(BlockId, BlockId, BlockId) -
     let next = push(
         u,
         body,
-        Inst::IntAdd { lhs: Value::Inst(counter), rhs: u64_value(1), t: ScalarType::U64 },
+        Inst::IntAdd { lhs: Value::Inst(counter), rhs: u64_value(1), t: ScalarType::I64 },
     );
     let mut cases = vec![PhiCase { from: entry, value: u64_value(0) }];
     match extra_case {
@@ -90,11 +90,7 @@ fn entry_with_predecessor_is_rejected() {
     let error = validate_handmade("validate_entry_pred", |u| {
         let entry = u.add_block(BlockSourceKind::Entry);
         let exit = u.add_block(BlockSourceKind::LoopEnd);
-        push(
-            u,
-            entry,
-            Inst::JumpIf { cond: Value::zero(ScalarType::Bool), cons: entry, alt: exit },
-        );
+        push(u, entry, Inst::JumpIf { cond: Value::zero(ScalarType::I8), cons: entry, alt: exit });
         push(u, exit, Inst::Ret { v: u64_value(0), agg: false });
     })
     .unwrap_err();
@@ -108,24 +104,20 @@ fn use_that_does_not_dominate_is_rejected() {
         let left = u.add_block(BlockSourceKind::ArmCons);
         let right = u.add_block(BlockSourceKind::ArmCons);
         let join = u.add_block(BlockSourceKind::MatchEnd);
-        push(
-            u,
-            entry,
-            Inst::JumpIf { cond: Value::zero(ScalarType::Bool), cons: left, alt: right },
-        );
+        push(u, entry, Inst::JumpIf { cond: Value::zero(ScalarType::I8), cons: left, alt: right });
         let only_left = push(
             u,
             left,
-            Inst::IntAdd { lhs: u64_value(1), rhs: u64_value(2), t: ScalarType::U64 },
+            Inst::IntAdd { lhs: u64_value(1), rhs: u64_value(2), t: ScalarType::I64 },
         );
         push(u, left, Inst::Jump(join));
         let only_right = push(
             u,
             right,
-            Inst::IntAdd { lhs: u64_value(3), rhs: u64_value(4), t: ScalarType::U64 },
+            Inst::IntAdd { lhs: u64_value(3), rhs: u64_value(4), t: ScalarType::I64 },
         );
         push(u, right, Inst::Jump(join));
-        let t = PhysicalType::scalar(ScalarType::U64);
+        let t = PhysicalType::scalar(ScalarType::I64);
         let incomings = u.push_phi_cases(&[
             PhiCase { from: left, value: Value::Inst(only_right) },
             PhiCase { from: right, value: Value::Inst(only_right) },
@@ -137,7 +129,7 @@ fn use_that_does_not_dominate_is_rejected() {
             Inst::IntAdd {
                 lhs: Value::Inst(only_left),
                 rhs: Value::Inst(joined),
-                t: ScalarType::U64,
+                t: ScalarType::I64,
             },
         );
         push(u, join, Inst::Ret { v: Value::Inst(sum), agg: false });

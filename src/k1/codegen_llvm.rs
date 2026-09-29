@@ -1898,10 +1898,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     const DW_ATE_ADDRESS: u32 = 0x01;
     const DW_ATE_BOOLEAN: u32 = 0x02;
-    const _DW_ATE_COMPLEX_FLOAT: u32 = 0x03;
     const DW_ATE_FLOAT: u32 = 0x04;
     const DW_ATE_SIGNED: u32 = 0x05;
-    const _DW_ATE_CHAR: u32 = 0x06;
     const DW_ATE_UNSIGNED: u32 = 0x07;
     const DW_ATE_UNSIGNED_CHAR: u32 = 0x08;
 
@@ -1912,28 +1910,19 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         st: ScalarType,
     ) -> LlvmScalarType<'ctx> {
         let layout = st.get_layout();
-        let (name, encoding): (&'static str, u32) = match st {
-            ScalarType::U8 => ("u8", Self::DW_ATE_UNSIGNED),
-            ScalarType::U16 => ("u16", Self::DW_ATE_UNSIGNED),
-            ScalarType::U32 => ("u32", Self::DW_ATE_UNSIGNED),
-            ScalarType::U64 => ("u64", Self::DW_ATE_UNSIGNED),
-            ScalarType::I8 => ("i8", Self::DW_ATE_SIGNED),
-            ScalarType::I16 => ("i16", Self::DW_ATE_SIGNED),
-            ScalarType::I32 => ("i32", Self::DW_ATE_SIGNED),
-            ScalarType::I64 => ("i64", Self::DW_ATE_SIGNED),
-            ScalarType::F32 => ("f32", Self::DW_ATE_FLOAT),
-            ScalarType::F64 => ("f64", Self::DW_ATE_FLOAT),
-            ScalarType::Pointer => ("ptr", Self::DW_ATE_ADDRESS),
-            ScalarType::Char => ("char", Self::DW_ATE_UNSIGNED_CHAR),
-            ScalarType::Bool => ("bool", Self::DW_ATE_BOOLEAN),
-        };
-        let basic_type: BasicTypeEnum<'ctx> = match st {
-            ScalarType::U8 | ScalarType::Char | ScalarType::Bool | ScalarType::I8 => {
-                ctx.i8_type().into()
+        let encoding = match st {
+            ScalarType::I8 | ScalarType::I16 | ScalarType::I32 | ScalarType::I64 => {
+                Self::DW_ATE_SIGNED
             }
-            ScalarType::U16 | ScalarType::I16 => ctx.i16_type().into(),
-            ScalarType::U32 | ScalarType::I32 => ctx.i32_type().into(),
-            ScalarType::U64 | ScalarType::I64 => ctx.i64_type().into(),
+            ScalarType::F32 | ScalarType::F64 => Self::DW_ATE_FLOAT,
+            ScalarType::Pointer => Self::DW_ATE_ADDRESS,
+        };
+        let name: &'static str = st.into();
+        let basic_type: BasicTypeEnum<'ctx> = match st {
+            ScalarType::I8 => ctx.i8_type().into(),
+            ScalarType::I16 => ctx.i16_type().into(),
+            ScalarType::I32 => ctx.i32_type().into(),
+            ScalarType::I64 => ctx.i64_type().into(),
             ScalarType::F32 => ctx.f32_type().into(),
             ScalarType::F64 => ctx.f64_type().into(),
             ScalarType::Pointer => ptr.into(),
@@ -2239,8 +2228,28 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             NumericWidth::B8 | NumericWidth::B16 => Some(self.make_enum_attribute("zeroext", 0)),
             NumericWidth::B32 | NumericWidth::B64 => None,
         };
+        let origin = *self.k1.named_scalars.get(id);
+        let int_encoding = if self.k1.is_named_scalar_signed(id) {
+            Self::DW_ATE_SIGNED
+        } else {
+            Self::DW_ATE_UNSIGNED
+        };
+        let (name, encoding) = match self.k1.types.get(origin) {
+            Type::Bool => ("bool".to_string(), Self::DW_ATE_BOOLEAN),
+            Type::Char => ("char".to_string(), Self::DW_ATE_UNSIGNED_CHAR),
+            Type::Integer(int_type) => (int_type.to_string(), int_encoding),
+            Type::Sum(sum) => (sum.tag_type.to_string(), int_encoding),
+            _ => (self.codegen_type_name(origin), int_encoding),
+        };
+        let di_type = self
+            .debug
+            .debug_builder
+            .create_basic_type(&name, st.get_layout().size_bits(), encoding, 0)
+            .unwrap()
+            .as_type();
         let named = LlvmScalarType {
             pt: PhysicalType::named(st, id),
+            di_type,
             range,
             range_attribute,
             ext_attribute,
@@ -3753,9 +3762,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         match inst {
             Inst::Data(data_inst) => {
                 let value: BasicValueEnum<'ctx> = match data_inst {
-                    ir::DataInst::U64(_) | ir::DataInst::I64(_) => {
-                        self.ctx.i64_type().const_int(data_inst.bits(), false).into()
-                    }
+                    ir::DataInst::I64(bits) => self.ctx.i64_type().const_int(bits, false).into(),
                     ir::DataInst::F64(f) => {
                         llvm_float_constant(self.ctx, TypedFloatValue::F64(f)).into()
                     }
@@ -3776,8 +3783,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::Alloca { t, returned, debug, .. } => {
-                // task(debug info): Eventually we could supplement with the type_id from the
-                // VariableDebugInfo here in order to differentiate between byte/char/bool
                 let cg_type = self.codegen_type(t);
 
                 let alloca_ptr = if returned {

@@ -1273,7 +1273,7 @@ mod tests {
     use crate::typer::types::ScalarType;
 
     fn u64_value(n: u32) -> ir::Value {
-        ir::Value::Data32 { t: ScalarType::U64, data: n }
+        ir::Value::Data32 { t: ScalarType::I64, data: n }
     }
 
     fn push(u: &mut UnitBuf, block: BlockId, inst: Inst) -> InstId {
@@ -1294,7 +1294,7 @@ mod tests {
         k1.compile_function_for_exec(f, None, SpanId::NONE).unwrap();
         let mut unit = *k1.ir.function_unit(f).unwrap();
         let mut u = k1.ir.take_unit_buf();
-        let t = PhysicalType::scalar(ScalarType::U64);
+        let t = PhysicalType::scalar(ScalarType::I64);
         let entry = u.add_block(BlockSourceKind::Entry);
         let header = u.add_block(BlockSourceKind::WhileLoopCondition);
         let body = if body_block { u.add_block(BlockSourceKind::WhileLoopBody) } else { header };
@@ -1318,7 +1318,7 @@ mod tests {
         let next = push(
             &mut u,
             body,
-            Inst::IntAdd { lhs: ir::Value::Inst(counter), rhs: u64_value(1), t: ScalarType::U64 },
+            Inst::IntAdd { lhs: ir::Value::Inst(counter), rhs: u64_value(1), t: ScalarType::I64 },
         );
         let incomings = u.push_phi_cases(&[
             PhiCase { from: entry, value: u64_value(0) },
@@ -1341,7 +1341,7 @@ mod tests {
             let scaled = push(
                 &mut u,
                 exit,
-                Inst::IntMul { lhs: acc, rhs: u64_value(100), t: ScalarType::U64 },
+                Inst::IntMul { lhs: acc, rhs: u64_value(100), t: ScalarType::I64 },
             );
             let summed = push(
                 &mut u,
@@ -1349,7 +1349,7 @@ mod tests {
                 Inst::IntAdd {
                     lhs: ir::Value::Inst(scaled),
                     rhs: ir::Value::Inst(*phi),
-                    t: ScalarType::U64,
+                    t: ScalarType::I64,
                 },
             );
             acc = ir::Value::Inst(summed);

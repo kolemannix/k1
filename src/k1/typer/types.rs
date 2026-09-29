@@ -396,14 +396,10 @@ impl IntegerType {
 
     pub fn get_scalar_type(&self) -> ScalarType {
         match self {
-            IntegerType::U8 => ScalarType::U8,
-            IntegerType::U16 => ScalarType::U16,
-            IntegerType::U32 => ScalarType::U32,
-            IntegerType::U64 => ScalarType::U64,
-            IntegerType::I8 => ScalarType::I8,
-            IntegerType::I16 => ScalarType::I16,
-            IntegerType::I32 => ScalarType::I32,
-            IntegerType::I64 => ScalarType::I64,
+            IntegerType::U8 | IntegerType::I8 => ScalarType::I8,
+            IntegerType::U16 | IntegerType::I16 => ScalarType::I16,
+            IntegerType::U32 | IntegerType::I32 => ScalarType::I32,
+            IntegerType::U64 | IntegerType::I64 => ScalarType::I64,
         }
     }
 
@@ -1253,21 +1249,13 @@ impl BuiltinTypes {
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ScalarType {
-    U8 = 1,
-    U16 = 2,
-    U32 = 3,
-    U64 = 4,
-    I8 = 5,
-    I16 = 6,
-    I32 = 7,
-    I64 = 8,
-    F32 = 9,
-    F64 = 10,
-    Pointer = 11,
-    // u8-layout unsigned ints in every backend sense; separate tags so debug
-    // info can carry the right name and DWARF encoding
-    Char = 12,
-    Bool = 13,
+    I8 = 1,
+    I16 = 2,
+    I32 = 3,
+    I64 = 4,
+    F32 = 5,
+    F64 = 6,
+    Pointer = 7,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -1294,16 +1282,9 @@ pub enum RegisterClass {
 impl RegisterClass {
     pub fn of_scalar(st: ScalarType) -> RegisterClass {
         match st {
-            ScalarType::U8
-            | ScalarType::U16
-            | ScalarType::U32
-            | ScalarType::U64
-            | ScalarType::I8
-            | ScalarType::I16
-            | ScalarType::I32
-            | ScalarType::I64
-            | ScalarType::Char
-            | ScalarType::Bool => RegisterClass::Int,
+            ScalarType::I8 | ScalarType::I16 | ScalarType::I32 | ScalarType::I64 => {
+                RegisterClass::Int
+            }
             ScalarType::F32 | ScalarType::F64 => RegisterClass::Float,
             ScalarType::Pointer => RegisterClass::Ptr,
         }
@@ -1327,11 +1308,7 @@ impl RegisterClass {
 }
 
 impl ScalarType {
-    pub const ALL: [ScalarType; 13] = [
-        ScalarType::U8,
-        ScalarType::U16,
-        ScalarType::U32,
-        ScalarType::U64,
+    pub const ALL: [ScalarType; 7] = [
         ScalarType::I8,
         ScalarType::I16,
         ScalarType::I32,
@@ -1339,8 +1316,6 @@ impl ScalarType {
         ScalarType::F32,
         ScalarType::F64,
         ScalarType::Pointer,
-        ScalarType::Char,
-        ScalarType::Bool,
     ];
 
     /// Position in `ALL`, for tables with one entry per scalar type
@@ -1354,41 +1329,23 @@ impl ScalarType {
 
     pub const fn from_tag(tag: u32) -> Self {
         match tag {
-            1 => Self::U8,
-            2 => Self::U16,
-            3 => Self::U32,
-            4 => Self::U64,
-            5 => Self::I8,
-            6 => Self::I16,
-            7 => Self::I32,
-            8 => Self::I64,
-            9 => Self::F32,
-            10 => Self::F64,
-            11 => Self::Pointer,
-            12 => Self::Char,
-            13 => Self::Bool,
+            1 => Self::I8,
+            2 => Self::I16,
+            3 => Self::I32,
+            4 => Self::I64,
+            5 => Self::F32,
+            6 => Self::F64,
+            7 => Self::Pointer,
             _ => panic!("Not a scalartype tag"),
         }
     }
 
     pub fn is_word_int(&self) -> bool {
-        self.is_int() && self.width_bits() == 64
+        *self == ScalarType::I64
     }
 
     pub fn is_int(&self) -> bool {
-        matches!(
-            self,
-            ScalarType::I8
-                | ScalarType::I16
-                | ScalarType::I32
-                | ScalarType::I64
-                | ScalarType::U8
-                | ScalarType::U16
-                | ScalarType::U32
-                | ScalarType::U64
-                | ScalarType::Char
-                | ScalarType::Bool
-        )
+        matches!(self, ScalarType::I8 | ScalarType::I16 | ScalarType::I32 | ScalarType::I64)
     }
 
     pub fn get_layout(&self) -> Layout {
@@ -1397,15 +1354,10 @@ impl ScalarType {
 
     pub fn width(&self) -> NumericWidth {
         match self {
-            ScalarType::U8 | ScalarType::I8 | ScalarType::Char | ScalarType::Bool => {
-                NumericWidth::B8
-            }
-            ScalarType::U16 | ScalarType::I16 => NumericWidth::B16,
-            ScalarType::U32 | ScalarType::I32 => NumericWidth::B32,
-            ScalarType::U64 | ScalarType::I64 => NumericWidth::B64,
-            ScalarType::F32 => NumericWidth::B32,
-            ScalarType::F64 => NumericWidth::B64,
-            ScalarType::Pointer => NumericWidth::B64,
+            ScalarType::I8 => NumericWidth::B8,
+            ScalarType::I16 => NumericWidth::B16,
+            ScalarType::I32 | ScalarType::F32 => NumericWidth::B32,
+            ScalarType::I64 | ScalarType::F64 | ScalarType::Pointer => NumericWidth::B64,
         }
     }
 
@@ -1467,7 +1419,7 @@ impl PhysicalType {
     const fn scalar_tag(self) -> u32 {
         if self.0 & Self::NAMED_BIT != 0 {
             (self.0 >> Self::NAMED_TAG_SHIFT) & 0xF
-        } else if self.0 <= ScalarType::Bool as u32 {
+        } else if self.0 <= ScalarType::Pointer as u32 {
             self.0
         } else {
             0
@@ -1510,10 +1462,6 @@ impl PhysicalType {
         self.scalar_tag() == ScalarType::Pointer as u32
     }
 
-    pub const fn is_bool(self) -> bool {
-        self.scalar_tag() == ScalarType::Bool as u32
-    }
-
     pub const fn is_agg(self) -> bool {
         self.0 >= Self::MIN_AGG_ID && self.0 & Self::NAMED_BIT == 0
     }
@@ -1524,9 +1472,7 @@ impl PhysicalType {
 
     pub const fn is_int(self) -> bool {
         let tag = self.scalar_tag();
-        (tag >= ScalarType::U8 as u32 && tag <= ScalarType::I64 as u32)
-            || tag == ScalarType::Char as u32
-            || tag == ScalarType::Bool as u32
+        tag >= ScalarType::I8 as u32 && tag <= ScalarType::I64 as u32
     }
 
     pub const fn is_float(self) -> bool {
@@ -1907,7 +1853,7 @@ impl TypedProgram {
                 }
                 AggType::Opaque { size, .. } => {
                     for i in 0..size {
-                        visit(offset + i, ScalarType::U8, 1)
+                        visit(offset + i, ScalarType::I8, 1)
                     }
                 }
             },
@@ -2464,11 +2410,8 @@ impl TypedProgram {
             return PhysicalTypeResult::No;
         }
         match self.types.get(type_id) {
-            Type::Char => {
-                PhysicalTypeResult::Yes(self.make_named_scalar(ScalarType::Char, type_id))
-            }
-            Type::Bool => {
-                PhysicalTypeResult::Yes(self.make_named_scalar(ScalarType::Bool, type_id))
+            Type::Char | Type::Bool => {
+                PhysicalTypeResult::Yes(self.make_named_scalar(ScalarType::I8, type_id))
             }
             Type::Integer(i) => {
                 let st = i.get_scalar_type();

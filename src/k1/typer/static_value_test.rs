@@ -211,7 +211,7 @@ fn raw_u16_span(system: &mut StaticValuePool, type_id: TypeId, values: &[u16]) -
         bytes,
         type_id,
         kind: StaticContainerKind::Span,
-        scalar: ScalarType::U16,
+        scalar: ScalarType::I16,
     }))
 }
 

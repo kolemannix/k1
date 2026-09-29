@@ -15,7 +15,7 @@ fn insts(u: &UnitBuf, block: BlockId) -> Vec<InstId> {
 }
 
 const fn byte(n: u8) -> Value {
-    Value::imm32(ScalarType::U8, n as u32)
+    Value::imm32(ScalarType::I8, n as u32)
 }
 
 fn iid(n: u32) -> InstId {
@@ -49,7 +49,7 @@ fn recorded_preds_follow_terminators_with_duplicate_edges() {
     inst(
         &mut u,
         loop_block,
-        Inst::JumpIf { cond: Value::zero(ScalarType::Bool), cons: entry, alt: exit },
+        Inst::JumpIf { cond: Value::zero(ScalarType::I8), cons: entry, alt: exit },
     );
     inst(&mut u, exit, Inst::Ret { v: Value::Empty, agg: false });
     inst(&mut u, dead, Inst::Jump(exit));
@@ -81,18 +81,18 @@ fn commit_renumbers_into_layout_order_and_drops_unlinked() {
     let entry = u.add_block(BlockSourceKind::Entry);
     let exit = u.add_block(BlockSourceKind::LoopEnd);
     let middle = u.insert_block_after(entry, BlockSourceKind::LoopBody);
-    let t = PhysicalType::scalar(ScalarType::U64);
+    let t = PhysicalType::scalar(ScalarType::I64);
     let ret = inst(&mut u, exit, Inst::Ret { v: Value::Empty, agg: false });
-    let dead = inst(&mut u, middle, Inst::Data(DataInst::U64(7)));
+    let dead = inst(&mut u, middle, Inst::Data(DataInst::I64(7)));
     let sum = inst(
         &mut u,
         middle,
-        Inst::IntAdd { lhs: Value::FnParam { t, index: 0 }, rhs: byte(1), t: ScalarType::U64 },
+        Inst::IntAdd { lhs: Value::FnParam { t, index: 0 }, rhs: byte(1), t: ScalarType::I64 },
     );
     inst(&mut u, middle, Inst::Jump(exit));
     inst(&mut u, entry, Inst::Jump(middle));
     let front = u.new_inst(
-        Inst::IntSub { lhs: Value::Inst(sum), rhs: byte(2), t: ScalarType::U64 },
+        Inst::IntSub { lhs: Value::Inst(sum), rhs: byte(2), t: ScalarType::I64 },
         SpanId::NONE,
         IrComment::None,
     );
@@ -154,7 +154,7 @@ fn cloned_phi_and_switch_payloads_are_owned_by_the_clone() {
     for _ in 0..4 {
         src.add_block(BlockSourceKind::Entry);
     }
-    let t = PhysicalType::scalar(ScalarType::U8);
+    let t = PhysicalType::scalar(ScalarType::I8);
     let incomings = src.push_phi_cases(&[
         PhiCase { from: dead, value: byte(1) },
         PhiCase { from, value: Value::FnParam { t, index: 0 } },

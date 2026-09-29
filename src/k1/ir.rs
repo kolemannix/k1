@@ -38,7 +38,7 @@ pub struct IrDebugVariableInfo {
 }
 
 nz_u32_id!(IrCallId);
-const WORD_SIZED_INT: ScalarType = ScalarType::U64;
+const WORD_SIZED_INT: ScalarType = ScalarType::I64;
 pub struct ProgramIr {
     pub mem: kmem::Mem<ProgramIr>,
     units: VPool<IrUnit, IrUnitIndex>,
@@ -379,23 +379,20 @@ impl BlockSourceKind {
 
 #[derive(Clone, Copy)]
 pub enum DataInst {
-    U64(u64),
-    I64(i64),
+    I64(u64),
     F64(f64),
 }
 
 impl DataInst {
     pub fn bits(self) -> u64 {
         match self {
-            DataInst::U64(v) => v,
-            DataInst::I64(v) => v as u64,
+            DataInst::I64(v) => v,
             DataInst::F64(f) => f.to_bits(),
         }
     }
 
     pub fn scalar_type(self) -> ScalarType {
         match self {
-            DataInst::U64(_) => ScalarType::U64,
             DataInst::I64(_) => ScalarType::I64,
             DataInst::F64(_) => ScalarType::F64,
         }
@@ -715,17 +712,12 @@ impl Value {
 pub fn data32_bits(t: ScalarType, data: u32) -> u64 {
     match t {
         ScalarType::F64 => (f32::from_bits(data) as f64).to_bits(),
-        ScalarType::I64 | ScalarType::U64 => data as i32 as i64 as u64,
+        ScalarType::I64 => data as i32 as i64 as u64,
         ScalarType::F32
         | ScalarType::Pointer
         | ScalarType::I8
         | ScalarType::I16
-        | ScalarType::I32
-        | ScalarType::U8
-        | ScalarType::U16
-        | ScalarType::U32
-        | ScalarType::Char
-        | ScalarType::Bool => data as u64,
+        | ScalarType::I32 => data as u64,
     }
 }
 
@@ -1251,7 +1243,7 @@ pub fn get_value_kind(u: &UnitView, value: Value) -> InstKind {
         Value::Data32 { t: scalar_type, data: _ } => {
             InstKind::Value(PhysicalType::scalar(scalar_type))
         }
-        Value::IsStatic => InstKind::Value(PhysicalType::scalar(ScalarType::Bool)),
+        Value::IsStatic => InstKind::BOOL,
         Value::Empty => InstKind::Value(PhysicalType::EMPTY),
     }
 }
@@ -1298,7 +1290,7 @@ pub fn get_inst_kind(u: &UnitView, inst_id: InstId) -> InstKind {
         Inst::AtomicRmw { t, .. } => InstKind::scalar(t),
         Inst::AtomicCmpxchg { .. } => InstKind::Void,
         Inst::VecOp { id } => match u.vec_op(id).op {
-            VecOpIr::ToMask => InstKind::U64,
+            VecOpIr::ToMask => InstKind::I64,
             _ => InstKind::Void,
         },
         Inst::Fence { .. } => InstKind::Void,
@@ -1350,7 +1342,7 @@ pub fn get_inst_kind(u: &UnitView, inst_id: InstId) -> InstKind {
         Inst::BitShiftLeft { t, .. } => InstKind::scalar(t),
         Inst::BitUnsignedShiftRight { t, .. } => InstKind::scalar(t),
         Inst::BitSignedShiftRight { t, .. } => InstKind::scalar(t),
-        Inst::BakeStaticValue { .. } => InstKind::scalar(ScalarType::U64),
+        Inst::BakeStaticValue { .. } => InstKind::I64,
     }
 }
 
@@ -1363,9 +1355,9 @@ pub enum InstKind {
 
 impl InstKind {
     pub const EMPTY: InstKind = Self::Value(PhysicalType::EMPTY);
-    pub const BOOL: InstKind = Self::scalar(ScalarType::Bool);
+    pub const BOOL: InstKind = Self::scalar(ScalarType::I8);
     pub const PTR: InstKind = Self::scalar(ScalarType::Pointer);
-    pub const U64: InstKind = Self::scalar(ScalarType::U64);
+    pub const I64: InstKind = Self::scalar(ScalarType::I64);
 
     pub const fn scalar(st: ScalarType) -> InstKind {
         InstKind::Value(PhysicalType::scalar(st))
@@ -1377,8 +1369,8 @@ impl InstKind {
     fn is_int(&self) -> bool {
         matches!(self, InstKind::Value(pt) if pt.is_int())
     }
-    fn is_bool(&self) -> bool {
-        matches!(self, InstKind::Value(pt) if pt.is_bool())
+    fn is_i8(&self) -> bool {
+        matches!(self, InstKind::Value(pt) if pt.as_scalar() == Some(ScalarType::I8))
     }
     fn is_float(&self) -> bool {
         matches!(self, InstKind::Value(pt) if pt.is_float())
@@ -1914,8 +1906,7 @@ impl<'k1> Builder<'k1> {
             return Value::imm32(t, data32);
         }
         let data = match t {
-            ScalarType::U64 => DataInst::U64(bits),
-            ScalarType::I64 => DataInst::I64(bits as i64),
+            ScalarType::I64 => DataInst::I64(bits),
             ScalarType::F64 => DataInst::F64(f64::from_bits(bits)),
             _ => panic!("{t:?} constant {bits:#x} has no encoding"),
         };
@@ -3033,8 +3024,8 @@ fn compile_zero(b: &mut Builder, type_id: TypeId, dst: Option<Value>) -> K1Resul
 fn compile_static_value(b: &mut Builder, value_id: StaticValueId, pt: PhysicalType) -> Value {
     match b.k1.static_values.get(value_id) {
         StaticValue::Empty(_) => Value::Empty,
-        StaticValue::Bool(bv) => Value::imm32(ScalarType::Bool, *bv as u32),
-        StaticValue::Char(byte) => Value::imm32(ScalarType::Char, *byte as u32),
+        StaticValue::Bool(bv) => Value::imm32(ScalarType::I8, *bv as u32),
+        StaticValue::Char(byte) => Value::imm32(ScalarType::I8, *byte as u32),
         StaticValue::Int(int) => {
             let int = *int;
             let int_value = b.make_int_value(&int, IrComment::StaticInt);
@@ -3211,11 +3202,11 @@ fn compile_ir_builtin(
         BuiltinIr::Negate => {
             let arg0 = *b.k1.mem.get_nth(call.args, 0);
             let base = compile_expr(b, None, arg0)?;
-            let pt = b.get_physical_type(b.k1.exprs.get_type(arg0))?;
-            let st = pt.expect_scalar();
-            let neg = match st {
-                ScalarType::Bool => Inst::BoolNegate { v: base },
-                ScalarType::F32 | ScalarType::F64 => Inst::FloatNeg { v: base, t: st },
+            let arg_type_id = b.k1.exprs.get_type(arg0);
+            let st = b.get_physical_type(arg_type_id)?.expect_scalar();
+            let neg = match (b.k1.types.get(arg_type_id), st) {
+                (Type::Bool, _) => Inst::BoolNegate { v: base },
+                (_, ScalarType::F32 | ScalarType::F64) => Inst::FloatNeg { v: base, t: st },
                 _ => Inst::IntSub { lhs: Value::zero(st), rhs: base, t: st },
             };
             let neg = b.push_value(neg, IrComment::None);
@@ -4475,8 +4466,8 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     }
                 }
                 Inst::Select { cond, cons, alt, t } => {
-                    if !get_value_kind(&u, cond).is_bool() {
-                        errors.push(format!("i{inst_id}: select cond is not a bool"))
+                    if !get_value_kind(&u, cond).is_i8() {
+                        errors.push(format!("i{inst_id}: select cond is not i8"))
                     }
                     let arm_scalar =
                         |v| get_value_kind(&u, v).as_value().and_then(|pt| pt.as_scalar());
@@ -4486,7 +4477,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                 }
                 Inst::BoolNegate { v } => {
                     let inst_type = get_value_kind(&u, v);
-                    if !inst_type.is_bool() {
+                    if !inst_type.is_i8() {
                         errors.push(format!("i{inst_id}: bool_negate src is not a bool"))
                     }
                 }
@@ -5250,10 +5241,6 @@ fn binop(
 impl From<ScalarType> for &'static str {
     fn from(st: ScalarType) -> &'static str {
         match st {
-            ScalarType::U8 => "u8",
-            ScalarType::U16 => "u16",
-            ScalarType::U32 => "u32",
-            ScalarType::U64 => "u64",
             ScalarType::I8 => "i8",
             ScalarType::I16 => "i16",
             ScalarType::I32 => "i32",
@@ -5261,8 +5248,6 @@ impl From<ScalarType> for &'static str {
             ScalarType::F32 => "f32",
             ScalarType::F64 => "f64",
             ScalarType::Pointer => "ptr",
-            ScalarType::Char => "char",
-            ScalarType::Bool => "bool",
         }
     }
 }
@@ -5281,14 +5266,6 @@ pub fn display_const_value(w: &mut dyn Write, t: ScalarType, bits: u64) -> std::
         ScalarType::I8 | ScalarType::I16 | ScalarType::I32 | ScalarType::I64 => {
             write!(w, "{}", crate::arith::sign_extend(t.width_bits(), bits))
         }
-        ScalarType::U8 | ScalarType::U16 | ScalarType::U32 | ScalarType::U64 => {
-            write!(w, "{}", bits)
-        }
-        ScalarType::Bool => write!(w, "{}", bits != 0),
-        ScalarType::Char => match bits as u8 {
-            c @ 0x20..0x7f => write!(w, "'{}'", c as char),
-            _ => write!(w, "{}", bits),
-        },
         ScalarType::Pointer => {
             if bits == 0 {
                 w.write_str("null")

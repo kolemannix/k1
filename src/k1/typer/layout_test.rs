@@ -111,18 +111,17 @@ fn array_me() {
 
 #[test]
 fn physical_type_scalar_checks_ignore_agg_low_byte() {
-    for id in [256 + ScalarType::Pointer as u32, 256 + ScalarType::Bool as u32] {
+    for id in [256 + ScalarType::Pointer as u32, 256 + ScalarType::I8 as u32] {
         let pt = PhysicalType::agg(AggregateTypeId::from_u32(id).unwrap());
         assert!(!pt.is_ptr());
-        assert!(!pt.is_bool());
+        assert_eq!(pt.as_scalar(), None);
     }
     assert!(PhysicalType::PTR.is_ptr());
-    assert!(PhysicalType::scalar(ScalarType::Bool).is_bool());
 }
 
 #[test]
 fn named_scalar_encoding() {
-    for st in [ScalarType::U8, ScalarType::I64, ScalarType::Bool, ScalarType::Char] {
+    for st in ScalarType::ALL {
         for raw_id in [1, 267, (1 << 27) - 1] {
             let id = NamedScalarId::from_u32(raw_id).unwrap();
             let pt = PhysicalType::named(st, id);
@@ -130,15 +129,15 @@ fn named_scalar_encoding() {
             assert_eq!(pt.named_scalar(), Some(id));
             assert_eq!(pt.machine(), PhysicalType::scalar(st));
             assert_eq!(pt.as_enum(), PhysicalTypeEnum::Scalar(st));
-            assert!(pt.is_scalar() && pt.is_int() && !pt.is_agg() && !pt.is_empty());
-            assert_eq!(pt.is_bool(), st == ScalarType::Bool);
+            assert!(pt.is_scalar() && !pt.is_agg() && !pt.is_empty());
+            assert_eq!(pt.is_int(), st.is_int());
             assert_eq!(PhysicalType::from_u32(pt.to_u32()), pt);
         }
     }
     let agg = PhysicalType::agg(AggregateTypeId::from_u32(267).unwrap());
     assert!(agg.is_agg() && agg.as_scalar().is_none() && agg.named_scalar().is_none());
     assert_eq!(agg.machine(), agg);
-    assert_eq!(PhysicalType::scalar(ScalarType::U8).named_scalar(), None);
+    assert_eq!(PhysicalType::scalar(ScalarType::I8).named_scalar(), None);
 }
 
 #[test]

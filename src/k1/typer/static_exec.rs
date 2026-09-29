@@ -839,8 +839,7 @@ impl TypedProgram {
         element_type_id: TypeId,
     ) -> Option<ScalarType> {
         match self.types.get(element_type_id) {
-            Type::Char => Some(ScalarType::Char),
-            Type::Bool => Some(ScalarType::Bool),
+            Type::Char | Type::Bool => Some(ScalarType::I8),
             Type::Integer(int_type) => Some(int_type.get_scalar_type()),
             Type::Enum(enum_type) => Some(enum_type.int_type.get_scalar_type()),
             Type::Float(float_type) => Some(float_type.get_scalar_type()),
