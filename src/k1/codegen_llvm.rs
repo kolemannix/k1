@@ -11,8 +11,8 @@ use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::{AsContextRef, Context};
 use inkwell::debug_info::{
-    AsDIScope, DICompileUnit, DIExpression, DIFile, DILocalVariable, DILocation, DIScope,
-    DISubprogram, DIType, DWARFEmissionKind, DWARFSourceLanguage, DebugInfoBuilder,
+    AsDIScope, DICompileUnit, DIEnumerator, DIExpression, DIFile, DILocalVariable, DILocation,
+    DIScope, DISubprogram, DIType, DWARFEmissionKind, DWARFSourceLanguage, DebugInfoBuilder,
 };
 use inkwell::intrinsics::Intrinsic;
 use inkwell::module::{Linkage as LlvmLinkage, Module as LlvmModule};
@@ -2228,25 +2228,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             NumericWidth::B8 | NumericWidth::B16 => Some(self.make_enum_attribute("zeroext", 0)),
             NumericWidth::B32 | NumericWidth::B64 => None,
         };
-        let origin = *self.k1.named_scalars.get(id);
-        let int_encoding = if self.k1.is_named_scalar_signed(id) {
-            Self::DW_ATE_SIGNED
-        } else {
-            Self::DW_ATE_UNSIGNED
-        };
-        let (name, encoding) = match self.k1.types.get(origin) {
-            Type::Bool => ("bool".to_string(), Self::DW_ATE_BOOLEAN),
-            Type::Char => ("char".to_string(), Self::DW_ATE_UNSIGNED_CHAR),
-            Type::Integer(int_type) => (int_type.to_string(), int_encoding),
-            Type::Sum(sum) => (sum.tag_type.to_string(), int_encoding),
-            _ => (self.codegen_type_name(origin), int_encoding),
-        };
-        let di_type = self
-            .debug
-            .debug_builder
-            .create_basic_type(&name, st.get_layout().size_bits(), encoding, 0)
-            .unwrap()
-            .as_type();
+        let di_type = self.make_named_scalar_debug_type(st, id);
         let named = LlvmScalarType {
             pt: PhysicalType::named(st, id),
             di_type,
@@ -2257,6 +2239,60 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
         self.llvm_named_scalars.insert(id, named);
         named
+    }
+
+    fn make_named_scalar_debug_type(&mut self, st: ScalarType, id: NamedScalarId) -> DIType<'ctx> {
+        let origin = *self.k1.named_scalars.get(id);
+        let signed = self.k1.is_named_scalar_signed(id);
+        let int_encoding = if signed { Self::DW_ATE_SIGNED } else { Self::DW_ATE_UNSIGNED };
+        let layout = st.get_layout();
+        let make_basic = |cg: &Self, name: &str, encoding: u32| {
+            cg.debug.debug_builder.create_basic_type(name, layout.size_bits(), encoding, 0).unwrap()
+        };
+        let mut enumerators: SV8<DIEnumerator<'ctx>> = smallvec::smallvec![];
+        let (name, int_type) = match *self.k1.types.get(origin) {
+            Type::Bool => return make_basic(self, "bool", Self::DW_ATE_BOOLEAN).as_type(),
+            Type::Char => return make_basic(self, "char", Self::DW_ATE_UNSIGNED_CHAR).as_type(),
+            Type::Integer(int_type) => {
+                return make_basic(self, &int_type.to_string(), int_encoding).as_type();
+            }
+            Type::Enum(e) => {
+                for member in self.k1.mem.getn(e.member_values) {
+                    enumerators.push(self.debug.debug_builder.create_enumerator(
+                        self.k1.ident_str(member.name),
+                        member.int_value.to_u64_bits() as i64,
+                        !signed,
+                    ));
+                }
+                (self.codegen_type_name(origin), e.int_type)
+            }
+            Type::Sum(sum) => {
+                for variant in self.k1.mem.getn(sum.variants) {
+                    enumerators.push(self.debug.debug_builder.create_enumerator(
+                        self.k1.ident_str(variant.name),
+                        variant.tag_value.to_u64_bits() as i64,
+                        !signed,
+                    ));
+                }
+                (format!("{}.tag", self.codegen_type_name(origin)), sum.tag_type)
+            }
+            _ => self.k1.ice_span(SpanId::NONE, "named scalar origin is not a scalar type"),
+        };
+        let inner = make_basic(self, &int_type.to_string(), int_encoding);
+        let line_number = self.get_line_number(self.debug.current_span());
+        self.debug
+            .debug_builder
+            .create_enumeration_type(
+                self.debug.current_scope(),
+                &name,
+                self.debug.current_file(),
+                line_number,
+                layout.size_bits(),
+                layout.align_bits(),
+                &enumerators,
+                inner.as_type(),
+            )
+            .as_type()
     }
 
     fn get_type_range_runs(&self, type_id: TypeId, width: NumericWidth) -> SV4<(u64, u64)> {
