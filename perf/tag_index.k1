@@ -1,0 +1,27 @@
+use std/time
+
+type piece = either(u8) { pawn, knight, bishop, rook, queen, king }
+let WEIGHTS: array[int, 6] = [100, 320, 330, 500, 900, 0]
+
+fn(noinline) material(pieces: span[piece], start: int): int {
+  let total = start
+  for p in pieces { total = total + WEIGHTS.[p.value] }
+  total
+}
+
+fn main(): i32 {
+  let n: size = 1 << 20
+  let pieces: list[piece] = list/empty()
+  let seed: u64 = 88172645463325252
+  for 0.until(n) {
+    seed = seed.xor(seed.shift-left(13))
+    seed = seed.xor(seed.shift-right(7))
+    seed = seed.xor(seed.shift-left(17))
+    pieces.push(enum/enum-from-value-unchecked((seed % 6).trunc[u8]))
+  }
+  let start = time/read-cpu-counter()
+  let sum = 0
+  for r in 0.until(400) { sum = material(pieces.as-span(), sum.xor(r)) }
+  println("material ${time/elapsed-ms(start)}ms sum $sum")
+  0
+}

@@ -5,12 +5,11 @@
 
 ## [ ] More IR analysis and opts
 - [ ] add lifetimes? (start/end for allocas, temps, inlined stuff)
-- [ ] Range facts on loaded tags and bools.
-  - [ ] Bools, codegen only: `!range [0,2)` on Bool loads, `trunc nuw` in `bool_to_i1`, `range(i8 0, 2)` on K1-ABI bool params/returns
-  - [ ] `Inst::Load.fact: LoadFact { None, TagsOf(TypeId) }`: SumGetTag (inhabited variants) and variable/deref/field loads of non-partial enums; codegen emits multi-pair `!range` cached per TypeId, hull `range(..)` attr on params/returns
-  - [ ] IR: switch on a `TagsOf` load covering every tag drops its default
-  - [ ] `LoadFact::NonNull` for `*t` loads -> `!nonnull`
-  - A/B refchess, brotli, stress100 in `profiling`; check folds in --emit-llvm
+- [ ] Scalar identity (named scalars in PhysicalType)
+  - [ ] Collapse `ScalarType` to machine types {I8, I16, I32, I64, F32, F64, Ptr}: U*/Char/Bool deleted, `DataInst::{U64, I64}` merge, builtin scalar table shrinks; bool/char identity via fixed named ids
+  - [ ] Enum enumeration debug types from named scalars
+  - [ ] IR: a switch on a named enum/sum-tag load covering every tag drops its default (keep only if a suite1 A/B pays for it)
+  - [ ] Named `*t` pointer scalar: `!nonnull` on loads, `nonnull` on K1-ABI params/returns
 
 ## [x] token stream based macros
 

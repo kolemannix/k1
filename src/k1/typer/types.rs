@@ -1327,6 +1327,27 @@ impl RegisterClass {
 }
 
 impl ScalarType {
+    pub const ALL: [ScalarType; 13] = [
+        ScalarType::U8,
+        ScalarType::U16,
+        ScalarType::U32,
+        ScalarType::U64,
+        ScalarType::I8,
+        ScalarType::I16,
+        ScalarType::I32,
+        ScalarType::I64,
+        ScalarType::F32,
+        ScalarType::F64,
+        ScalarType::Pointer,
+        ScalarType::Char,
+        ScalarType::Bool,
+    ];
+
+    /// Position in `ALL`, for tables with one entry per scalar type
+    pub const fn index(self) -> usize {
+        self as usize - 1
+    }
+
     pub const fn to_tag(self) -> u8 {
         self as u8
     }
@@ -1429,6 +1450,9 @@ impl PhysicalType {
     pub const PTR: PhysicalType = PhysicalType(ScalarType::Pointer as u32);
 
     pub(crate) const MIN_AGG_ID: u32 = 16;
+    const NAMED_BIT: u32 = 1 << 31;
+    const NAMED_TAG_SHIFT: u32 = 27;
+    const NAMED_ID_MASK: u32 = (1 << Self::NAMED_TAG_SHIFT) - 1;
 
     /// Raw representation, for encoding into bytecode operands
     pub const fn to_u32(self) -> u32 {
@@ -1440,15 +1464,41 @@ impl PhysicalType {
         PhysicalType(v)
     }
 
+    const fn scalar_tag(self) -> u32 {
+        if self.0 & Self::NAMED_BIT != 0 {
+            (self.0 >> Self::NAMED_TAG_SHIFT) & 0xF
+        } else if self.0 <= ScalarType::Bool as u32 {
+            self.0
+        } else {
+            0
+        }
+    }
+
     pub const fn as_scalar(self) -> Option<ScalarType> {
-        match self.0 {
-            1..=13 => Some(ScalarType::from_tag(self.0)),
-            _ => None,
+        match self.scalar_tag() {
+            0 => None,
+            tag => Some(ScalarType::from_tag(tag)),
         }
     }
 
     pub const fn expect_scalar(&self) -> ScalarType {
         self.as_scalar().unwrap()
+    }
+
+    pub const fn named_scalar(self) -> Option<NamedScalarId> {
+        if self.0 & Self::NAMED_BIT != 0 {
+            NamedScalarId::from_u32(self.0 & Self::NAMED_ID_MASK)
+        } else {
+            None
+        }
+    }
+
+    /// The machine representation: a named scalar without its identity
+    pub const fn machine(self) -> PhysicalType {
+        match self.as_scalar() {
+            Some(st) => Self::scalar(st),
+            None => self,
+        }
     }
 
     pub const fn expect_agg(&self) -> AggregateTypeId {
@@ -1457,29 +1507,31 @@ impl PhysicalType {
     }
 
     pub const fn is_ptr(self) -> bool {
-        self.0 == ScalarType::Pointer as u32
+        self.scalar_tag() == ScalarType::Pointer as u32
     }
 
     pub const fn is_bool(self) -> bool {
-        self.0 == ScalarType::Bool as u32
+        self.scalar_tag() == ScalarType::Bool as u32
     }
 
     pub const fn is_agg(self) -> bool {
-        self.0 >= Self::MIN_AGG_ID
+        self.0 >= Self::MIN_AGG_ID && self.0 & Self::NAMED_BIT == 0
     }
 
     pub const fn is_scalar(self) -> bool {
-        self.0 >= ScalarType::U8 as u32 && self.0 <= ScalarType::Bool as u32
+        self.scalar_tag() != 0
     }
 
     pub const fn is_int(self) -> bool {
-        (self.0 >= ScalarType::U8 as u32 && self.0 <= ScalarType::I64 as u32)
-            || self.0 == ScalarType::Char as u32
-            || self.0 == ScalarType::Bool as u32
+        let tag = self.scalar_tag();
+        (tag >= ScalarType::U8 as u32 && tag <= ScalarType::I64 as u32)
+            || tag == ScalarType::Char as u32
+            || tag == ScalarType::Bool as u32
     }
 
     pub const fn is_float(self) -> bool {
-        self.0 == ScalarType::F32 as u32 || self.0 == ScalarType::F64 as u32
+        let tag = self.scalar_tag();
+        tag == ScalarType::F32 as u32 || tag == ScalarType::F64 as u32
     }
 
     pub fn is_empty(self) -> bool {
@@ -1494,9 +1546,11 @@ impl PhysicalType {
         }
     }
     pub fn as_enum(self) -> PhysicalTypeEnum {
+        if let Some(st) = self.as_scalar() {
+            return PhysicalTypeEnum::Scalar(st);
+        }
         match self.0 {
             0 => PhysicalTypeEnum::Empty,
-            t @ 1..=13 => PhysicalTypeEnum::Scalar(ScalarType::from_tag(t)),
             agg_id => PhysicalTypeEnum::Agg(AggregateTypeId::from_u32(agg_id).unwrap()),
         }
     }
@@ -1505,8 +1559,14 @@ impl PhysicalType {
         PhysicalType(st.to_tag() as u32)
     }
 
+    pub const fn named(st: ScalarType, id: NamedScalarId) -> PhysicalType {
+        debug_assert!(id.as_u32() <= Self::NAMED_ID_MASK);
+        PhysicalType(Self::NAMED_BIT | (st.to_tag() as u32) << Self::NAMED_TAG_SHIFT | id.as_u32())
+    }
+
     pub const fn agg(agg_id: AggregateTypeId) -> PhysicalType {
         debug_assert!(agg_id.as_u32() >= Self::MIN_AGG_ID);
+        debug_assert!(agg_id.as_u32() & Self::NAMED_BIT == 0);
         PhysicalType(agg_id.as_u32())
     }
 }
@@ -1644,6 +1704,7 @@ impl AggType {
 }
 
 nz_u32_id!(AggregateTypeId);
+nz_u32_id!(NamedScalarId);
 #[derive(Clone, Copy)]
 pub struct AggregateTypeRecord {
     pub agg_type: AggType,
@@ -2385,21 +2446,37 @@ impl TypedProgram {
         }
     }
 
+    fn make_named_scalar(&mut self, st: ScalarType, origin: TypeId) -> PhysicalType {
+        PhysicalType::named(st, self.named_scalars.add(origin))
+    }
+
+    pub fn is_named_scalar_signed(&self, id: NamedScalarId) -> bool {
+        match self.types.get(*self.named_scalars.get(id)) {
+            Type::Integer(i) => i.is_signed(),
+            Type::Enum(e) => e.int_type.is_signed(),
+            Type::Sum(s) => s.tag_type.is_signed(),
+            _ => false,
+        }
+    }
+
     pub fn compute_physical_type(&mut self, type_id: TypeId) -> PhysicalTypeResult {
         if !self.type_variable_counts.get(type_id).is_inhabited {
             return PhysicalTypeResult::No;
         }
         match self.types.get(type_id) {
-            Type::Char => PhysicalTypeResult::Yes(PhysicalType::scalar(ScalarType::Char)),
-            Type::Bool => PhysicalTypeResult::Yes(PhysicalType::scalar(ScalarType::Bool)),
-
+            Type::Char => {
+                PhysicalTypeResult::Yes(self.make_named_scalar(ScalarType::Char, type_id))
+            }
+            Type::Bool => {
+                PhysicalTypeResult::Yes(self.make_named_scalar(ScalarType::Bool, type_id))
+            }
             Type::Integer(i) => {
                 let st = i.get_scalar_type();
-                PhysicalTypeResult::Yes(PhysicalType::scalar(st))
+                PhysicalTypeResult::Yes(self.make_named_scalar(st, type_id))
             }
             Type::Enum(se) => {
                 let st = se.int_type.get_scalar_type();
-                PhysicalTypeResult::Yes(PhysicalType::scalar(st))
+                PhysicalTypeResult::Yes(self.make_named_scalar(st, type_id))
             }
             Type::Float(FloatType::F32) => {
                 PhysicalTypeResult::Yes(PhysicalType::scalar(ScalarType::F32))
@@ -2568,7 +2645,7 @@ impl TypedProgram {
                 let mut struct_layout = tag_layout;
                 let tag_field = StructField {
                     offset: 0,
-                    field_t: PhysicalType::scalar(tag_scalar),
+                    field_t: self.make_named_scalar(tag_scalar, type_id),
                     name: self.type_idents.tag,
                 };
                 let union_offset = struct_layout.append_to_aggregate(union_layout);

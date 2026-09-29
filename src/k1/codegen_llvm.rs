@@ -10,11 +10,11 @@ use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::{AsContextRef, Context};
-use inkwell::intrinsics::Intrinsic;
 use inkwell::debug_info::{
     AsDIScope, DICompileUnit, DIExpression, DIFile, DILocalVariable, DILocation, DIScope,
     DISubprogram, DIType, DWARFEmissionKind, DWARFSourceLanguage, DebugInfoBuilder,
 };
+use inkwell::intrinsics::Intrinsic;
 use inkwell::module::{Linkage as LlvmLinkage, Module as LlvmModule};
 use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{InitializationConfig, Target, TargetData, TargetMachine};
@@ -25,8 +25,8 @@ use inkwell::types::{
 };
 use inkwell::values::{
     AggregateValue, ArrayValue, AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum,
-    CallSiteValue, FloatValue, FunctionValue, GlobalValue, InstructionValue, IntValue, PhiValue,
-    PointerValue, StructValue, ValueKind,
+    CallSiteValue, FloatValue, FunctionValue, GlobalValue, InstructionValue, IntValue,
+    MetadataValue, PhiValue, PointerValue, StructValue, ValueKind,
 };
 use inkwell::{
     AddressSpace, AtomicOrdering, FloatPredicate, IntPredicate, OptimizationLevel, ThreadLocalMode,
@@ -43,10 +43,10 @@ use crate::ir::{
 };
 use crate::kmem::{List, MSlice};
 use crate::lex::SpanId;
-use crate::parse::{FileId, StringId};
+use crate::parse::{FileId, NumericWidth, StringId};
 use crate::typer::types::{
-    AbiMode, AggType, AggregateTypeId, Layout, PhysicalType, PhysicalTypeEnum, PhysicalTypeResult,
-    RegisterClass, ScalarType, Type, TypeDefnInfo, TypeId,
+    AbiMode, AggType, AggregateTypeId, Layout, NamedScalarId, PhysicalType, PhysicalTypeEnum,
+    PhysicalTypeResult, RegisterClass, ScalarType, Type, TypeDefnInfo, TypeId,
 };
 use crate::typer::{
     FunctionId, K1Result, Linkage as TyperLinkage, NamespaceId, StaticContainerKind,
@@ -88,6 +88,7 @@ pub struct CgFunctionType<'ctx> {
     return_logical_cg_type: CgType<'ctx>,
     return_abi_mapping: AbiParamMapping,
     is_sret: bool,
+    abi: AbiMode,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -126,6 +127,9 @@ struct LlvmScalarType<'ctx> {
     basic_type: BasicTypeEnum<'ctx>,
     di_type: DIType<'ctx>,
     layout: Layout,
+    range: Option<MetadataValue<'ctx>>,
+    range_attribute: Option<Attribute>,
+    ext_attribute: Option<Attribute>,
 }
 
 #[derive(Clone, Copy)]
@@ -253,7 +257,7 @@ impl<'ctx> CgType<'ctx> {
 }
 
 struct BuiltinTypes<'ctx> {
-    scalars: [LlvmScalarType<'ctx>; 13],
+    scalars: [LlvmScalarType<'ctx>; ScalarType::ALL.len()],
     boolean: IntType<'ctx>,
     true_value: IntValue<'ctx>,
     false_value: IntValue<'ctx>,
@@ -265,6 +269,10 @@ struct BuiltinTypes<'ctx> {
 }
 
 impl<'ctx> BuiltinTypes<'ctx> {
+    fn scalar(&self, st: ScalarType) -> LlvmScalarType<'ctx> {
+        self.scalars[st.index()]
+    }
+
     fn empty_struct_value(&self) -> BasicValueEnum<'ctx> {
         self.empty_struct.get_undef().as_basic_value_enum()
     }
@@ -366,6 +374,7 @@ pub struct Cg<'ctx, 'k1> {
     pub llvm_functions: FxHashMap<FunctionId, CgFunction<'ctx>>,
     functions_pending_body_compilation: Vec<FunctionId>,
     llvm_types: FxHashMap<AggregateTypeId, CgType<'ctx>>,
+    llvm_named_scalars: FxHashMap<NamedScalarId, LlvmScalarType<'ctx>>,
     globals: FxHashMap<TypedGlobalId, GlobalValue<'ctx>>,
     builtin_types: BuiltinTypes<'ctx>,
     strings: FxHashMap<StringId, GlobalValue<'ctx>>,
@@ -697,7 +706,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         let ptr = ctx.ptr_type(AddressSpace::default());
         let scalars = std::array::from_fn(|i| {
-            Cg::make_scalar_type(ctx, &debug_context, ptr, ScalarType::from_tag(i as u32 + 1))
+            Cg::make_scalar_type(ctx, &debug_context, ptr, ScalarType::ALL[i])
         });
         let builtin_types = BuiltinTypes {
             scalars,
@@ -732,6 +741,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             llvm_functions: FxHashMap::new(),
             functions_pending_body_compilation: Vec::new(),
             llvm_types: FxHashMap::new(),
+            llvm_named_scalars: FxHashMap::new(),
             builtin_types,
             strings: FxHashMap::new(),
             static_values_basics: FxHashMap::new(),
@@ -1933,15 +1943,24 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             .create_basic_type(name, layout.size_bits(), encoding, 0)
             .unwrap()
             .as_type();
-        LlvmScalarType { pt: PhysicalType::scalar(st), basic_type, layout, di_type }
+        LlvmScalarType {
+            pt: PhysicalType::scalar(st),
+            basic_type,
+            layout,
+            di_type,
+            range: None,
+            range_attribute: None,
+            ext_attribute: None,
+        }
     }
 
     fn codegen_type(&mut self, pt: PhysicalType) -> CgType<'ctx> {
         //eprintln!("codegen_type {}", self.k1.pt_to_string(pt));
         match pt.as_enum() {
-            PhysicalTypeEnum::Scalar(st) => {
-                self.builtin_types.scalars[st.to_tag() as usize - 1].into()
-            }
+            PhysicalTypeEnum::Scalar(st) => match pt.named_scalar() {
+                None => self.builtin_types.scalar(st).into(),
+                Some(id) => self.codegen_named_scalar(st, id).into(),
+            },
             PhysicalTypeEnum::Agg(agg_id) => {
                 if let Some(k1) = self.llvm_types.get(&agg_id) {
                     return *k1;
@@ -2182,10 +2201,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 expected_layout.align, expected_layout.size
             );
         }
-        let aligner_type = self
-            .ctx
-            .custom_width_int_type(NonZeroU32::new(expected_layout.align_bits()).unwrap())
-            .unwrap();
+        let aligner_type = self.custom_width_int_type(expected_layout.align_bits());
         let padding_bytes = expected_layout.size.saturating_sub(aligner_type.get_bit_width() / 8);
 
         let padding = self.padding_type(padding_bytes);
@@ -2205,8 +2221,103 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         aligned_struct_repr
     }
 
+    fn codegen_named_scalar(&mut self, st: ScalarType, id: NamedScalarId) -> LlvmScalarType<'ctx> {
+        if let Some(named) = self.llvm_named_scalars.get(&id) {
+            return *named;
+        }
+        let runs = self.get_type_range_runs(*self.k1.named_scalars.get(id), st.width());
+        let range =
+            if runs.is_empty() { None } else { Some(self.make_range_metadata(st.width(), &runs)) };
+        let range_attribute = match runs.as_slice() {
+            [(lo, hi)] => Some(self.make_range_attribute(st.width(), *lo, *hi)),
+            _ => None,
+        };
+        let ext_attribute = match st.width() {
+            NumericWidth::B8 | NumericWidth::B16 if self.k1.is_named_scalar_signed(id) => {
+                Some(self.make_enum_attribute("signext", 0))
+            }
+            NumericWidth::B8 | NumericWidth::B16 => Some(self.make_enum_attribute("zeroext", 0)),
+            NumericWidth::B32 | NumericWidth::B64 => None,
+        };
+        let named = LlvmScalarType {
+            pt: PhysicalType::named(st, id),
+            range,
+            range_attribute,
+            ext_attribute,
+            ..self.builtin_types.scalar(st)
+        };
+        self.llvm_named_scalars.insert(id, named);
+        named
+    }
+
+    fn get_type_range_runs(&self, type_id: TypeId, width: NumericWidth) -> SV4<(u64, u64)> {
+        let mut values: SV8<u64> = smallvec::smallvec![];
+        match self.k1.types.get(type_id) {
+            Type::Bool => {
+                values.push(0);
+                values.push(1);
+            }
+            Type::Enum(e) if !e.partial => {
+                for member in self.k1.mem.getn(e.member_values) {
+                    values.push(member.int_value.to_u64_bits());
+                }
+            }
+            Type::Sum(_) => {
+                let agg_id = self.k1.get_physical_type_computed(type_id).unwrap().expect_agg();
+                let sum = self.k1.agg_types.get(agg_id).agg_type.expect_sum();
+                for variant in self.k1.mem.getn(sum.variants) {
+                    values.push(variant.tag.to_u64_bits());
+                }
+            }
+            _ => return smallvec::smallvec![],
+        }
+        collect_ranges_from_values(width.bits() as u32, &mut values)
+    }
+
+    fn make_range_metadata(&self, width: NumericWidth, runs: &[(u64, u64)]) -> MetadataValue<'ctx> {
+        let int_type = self.custom_width_int_type(width.bits() as u32);
+        let mut bounds: SV8<BasicMetadataValueEnum<'ctx>> = smallvec::smallvec![];
+        for (lo, hi) in runs {
+            bounds.push(int_type.const_int(*lo, false).into());
+            bounds.push(int_type.const_int(*hi, false).into());
+        }
+        self.ctx.metadata_node(&bounds)
+    }
+
+    fn scalar_abi_attribute(
+        abi: AbiMode,
+        mapping: AbiParamMapping,
+        cg_type: &CgType<'ctx>,
+    ) -> Option<Attribute> {
+        let (AbiParamMapping::ScalarInRegister, CgType::Scalar(scalar)) = (mapping, cg_type) else {
+            return None;
+        };
+        match abi {
+            AbiMode::Internal => scalar.range_attribute,
+            AbiMode::Native => scalar.ext_attribute,
+        }
+    }
+
+    fn make_range_attribute(&self, width: NumericWidth, lo: u64, hi: u64) -> Attribute {
+        let lower = [lo];
+        let upper = [hi];
+        unsafe {
+            Attribute::new(llvm_sys::core::LLVMCreateConstantRangeAttribute(
+                self.ctx.raw(),
+                Attribute::get_named_enum_kind_id("range"),
+                width.bits() as u32,
+                lower.as_ptr(),
+                upper.as_ptr(),
+            ))
+        }
+    }
+
+    fn custom_width_int_type(&self, width_bits: u32) -> IntType<'ctx> {
+        self.ctx.custom_width_int_type(NonZeroU32::new(width_bits).unwrap()).unwrap()
+    }
+
     fn scalar_basic_type(&self, st: ScalarType) -> BasicTypeEnum<'ctx> {
-        self.builtin_types.scalars[st.to_tag() as usize - 1].basic_type
+        self.builtin_types.scalar(st).basic_type
     }
 
     fn pt_canon_type(&self, pt: PhysicalType) -> BasicTypeEnum<'ctx> {
@@ -2294,6 +2405,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             return_logical_cg_type,
             return_abi_mapping: return_type_abi_mapping,
             is_sret,
+            abi,
         })
     }
 
@@ -2315,11 +2427,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             AbiParamMapping::ScalarInRegister => self.pt_canon_type(pt),
             AbiParamMapping::StructInInteger { abi_width, .. } => {
-                let int_type = self
-                    .ctx
-                    .custom_width_int_type(NonZeroU32::new(abi_width).unwrap())
-                    .unwrap()
-                    .as_basic_type_enum();
+                let int_type = self.custom_width_int_type(abi_width).as_basic_type_enum();
                 int_type
             }
             AbiParamMapping::StructAsPointer => self.builtin_types.ptr.as_basic_type_enum(),
@@ -2329,7 +2437,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 } else {
                     self.vec_llvm_type(element, lanes).as_basic_type_enum()
                 };
-                if count == 1 { base_type } else { base_type.array_type(count).as_basic_type_enum() }
+                if count == 1 {
+                    base_type
+                } else {
+                    base_type.array_type(count).as_basic_type_enum()
+                }
             }
             AbiParamMapping::StructByEightbytePair { class1, class2, active_bits2 } => {
                 // We know field 1 is a full 8 bits
@@ -2396,9 +2508,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     .builder
                     .build_int_truncate(
                         abi_value.into_int_value(),
-                        self.ctx
-                            .custom_width_int_type(NonZeroU32::new(active_width).unwrap())
-                            .unwrap(),
+                        self.custom_width_int_type(active_width),
                         "",
                     )
                     .unwrap();
@@ -2801,7 +2911,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     fn bool_to_i1(&self, bool: IntValue<'ctx>, name: &str) -> IntValue<'ctx> {
-        self.builder.build_int_truncate(bool, self.builtin_types.i1, name).unwrap()
+        let i1 = self.builder.build_int_truncate(bool, self.builtin_types.i1, name).unwrap();
+        if let Some(trunc) = i1.as_instruction() {
+            unsafe { llvm_sys::core::LLVMSetNUW(trunc.as_value_ref(), 1) };
+        }
+        i1
     }
 
     fn i1_to_bool(&self, i1: IntValue<'ctx>, name: &str) -> IntValue<'ctx> {
@@ -3028,6 +3142,21 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 callsite_value.add_attribute(AttributeLoc::Param(0), attr);
             }
         };
+        let param_offset = cg_fn_type.is_sret as u32;
+        for index in 0..cg_fn_type.param_k1_types.len() {
+            let k1_type = self.mem.get_nth_lt(cg_fn_type.param_k1_types, index as usize);
+            let mapping = *self.mem.get_nth_lt(cg_fn_type.param_abi_mappings, index as usize);
+            if let Some(attr) = Self::scalar_abi_attribute(cg_fn_type.abi, mapping, k1_type) {
+                callsite_value.add_attribute(AttributeLoc::Param(index + param_offset), attr);
+            }
+        }
+        if let Some(attr) = Self::scalar_abi_attribute(
+            cg_fn_type.abi,
+            cg_fn_type.return_abi_mapping,
+            &cg_fn_type.return_logical_cg_type,
+        ) {
+            callsite_value.add_attribute(AttributeLoc::Return, attr);
+        }
         for (copy_ptr, size) in caller_copies.as_slice() {
             self.emit_lifetime_marker(false, *copy_ptr, *size);
         }
@@ -3132,11 +3261,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             let arg_value = self.resolve_value(inst_mappings, *arg_ir_value)?;
             let param_type_id = params[index].type_id;
             let marshalled: BasicValueEnum<'ctx> = match self.k1.types.get(param_type_id) {
-                Type::Bool => self
-                    .builder
-                    .build_int_truncate(arg_value.into_int_value(), self.builtin_types.i1, "")
-                    .unwrap()
-                    .as_basic_value_enum(),
+                Type::Bool => self.bool_to_i1(arg_value.into_int_value(), "").as_basic_value_enum(),
                 Type::Vector(_) => {
                     // Vector args arrive as addresses; pass by value
                     let pt =
@@ -3576,11 +3701,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     self.builder.build_int_compare(IntPredicate::EQ, l, r, "").unwrap()
                 };
                 let elem_bits = vop.elem.get_layout().size_bits() as u32;
-                let int_lane_vec = self
-                    .ctx
-                    .custom_width_int_type(std::num::NonZeroU32::new(elem_bits).unwrap())
-                    .unwrap()
-                    .vec_type(vop.lanes);
+                let int_lane_vec = self.custom_width_int_type(elem_bits).vec_type(vop.lanes);
                 let mask_lanes = self.builder.build_int_s_extend(cmp_i1, int_lane_vec, "").unwrap();
                 let result = if is_float {
                     let float_vec = self.vec_llvm_type(vop.elem, vop.lanes);
@@ -3597,11 +3718,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             VecOpIr::ToMask => {
                 let l = self.vec_load(&vop, inst_mappings, vop.lhs)?;
                 let elem_bits = vop.elem.get_layout().size_bits() as u32;
-                let int_lane_vec = self
-                    .ctx
-                    .custom_width_int_type(std::num::NonZeroU32::new(elem_bits).unwrap())
-                    .unwrap()
-                    .vec_type(vop.lanes);
+                let int_lane_vec = self.custom_width_int_type(elem_bits).vec_type(vop.lanes);
                 let as_ints = if is_float {
                     self.builder.build_bit_cast(l, int_lane_vec, "").unwrap().into_vector_value()
                 } else {
@@ -3610,10 +3727,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let zero = int_lane_vec.const_zero();
                 let msbs =
                     self.builder.build_int_compare(IntPredicate::SLT, as_ints, zero, "").unwrap();
-                let mask_int_type = self
-                    .ctx
-                    .custom_width_int_type(std::num::NonZeroU32::new(vop.lanes).unwrap())
-                    .unwrap();
+                let mask_int_type = self.custom_width_int_type(vop.lanes);
                 let mask_small =
                     self.builder.build_bit_cast(msbs, mask_int_type, "").unwrap().into_int_value();
                 let mask =
@@ -3725,7 +3839,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::Load { t, src, volatile, unaligned } => {
-                let t = PhysicalType::scalar(t);
                 let cg_ty = self.codegen_type(t);
                 let src_ptr = self.resolve_value(inst_mappings, src)?.into_pointer_value();
                 let load = self.builder.build_load(cg_ty.rich_type(), src_ptr, "").unwrap();
@@ -3733,6 +3846,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 load_inst.set_alignment(self.claimed_align(t, unaligned)).unwrap();
                 if volatile {
                     unsafe { llvm_sys::core::LLVMSetVolatile(load_inst.as_value_ref(), 1) };
+                }
+                if let CgType::Scalar(scalar) = cg_ty
+                    && let Some(range) = scalar.range
+                {
+                    load_inst.set_metadata(range, self.ctx.get_kind_id("range")).unwrap();
                 }
                 inst_mappings.insert(inst_id, load);
                 Ok(())
@@ -4580,7 +4698,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     }
                     _ => {}
                 }
+                if let Some(attr) = Self::scalar_abi_attribute(abi_mode, *abi_mapping, &k1_type) {
+                    function_value.add_attribute(AttributeLoc::Param(i as u32), attr);
+                }
             }
+        }
+        if let Some(attr) = Self::scalar_abi_attribute(
+            abi_mode,
+            llvm_function_type.return_abi_mapping,
+            &llvm_function_type.return_logical_cg_type,
+        ) {
+            function_value.add_attribute(AttributeLoc::Return, attr);
         }
 
         if is_definition {
@@ -4682,10 +4810,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             if class1 == RegisterClass::Float {
                                 // One SSE eightbyte: it rides in an XMM register, so it
                                 // must be typed as floats, not as an integer
-                                let (element, lanes) = match self.k1.get_pt_homogeneous_aggregate(pt) {
-                                    Some(ha) if ha.lanes == 1 => (ha.element, ha.count),
-                                    _ => (ScalarType::F64, 1),
-                                };
+                                let (element, lanes) =
+                                    match self.k1.get_pt_homogeneous_aggregate(pt) {
+                                        Some(ha) if ha.lanes == 1 => (ha.element, ha.count),
+                                        _ => (ScalarType::F64, 1),
+                                    };
                                 AbiParamMapping::InVectorRegisters { element, lanes, count: 1 }
                             } else {
                                 // Otherwise it rides in a GPR as an integer of its size
@@ -5555,9 +5684,68 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 }
 
+fn collect_ranges_from_values(width: u32, values: &mut [u64]) -> SV4<(u64, u64)> {
+    let modulus = 1u128 << width;
+    for v in values.iter_mut() {
+        *v = (*v as u128 % modulus) as u64;
+    }
+    values.sort_unstable();
+    let mut runs: SV4<(u128, u128)> = smallvec::smallvec![];
+    for v in values.iter() {
+        let v = *v as u128;
+        match runs.last_mut() {
+            Some((_, hi)) if *hi >= v => *hi = (*hi).max(v + 1),
+            _ => runs.push((v, v + 1)),
+        }
+    }
+    if runs.len() == 1 && runs[0] == (0, modulus) {
+        return smallvec::smallvec![];
+    }
+    if runs.len() > 1 && runs[0].0 == 0 && runs[runs.len() - 1].1 == modulus {
+        let first = runs.remove(0);
+        let last = runs.last_mut().unwrap();
+        last.1 = first.1;
+    }
+    let sign_bit = 1u128 << (width - 1);
+    let mut signed_order: SV4<(u64, u64)> = smallvec::smallvec![];
+    for (lo, hi) in runs {
+        signed_order.push((lo as u64, (hi % modulus) as u64));
+    }
+    signed_order.sort_by_key(|(lo, _)| (*lo as u128) ^ sign_bit);
+    signed_order
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn collect_ranges_from_values_merge_and_order() {
+        assert_eq!(collect_ranges_from_values(8, &mut [1, 0]).as_slice(), &[(0, 2)]);
+        assert_eq!(collect_ranges_from_values(8, &mut [10, 11, 12]).as_slice(), &[(10, 13)]);
+        assert_eq!(collect_ranges_from_values(8, &mut [3, 2, 1, 0]).as_slice(), &[(0, 4)]);
+        assert_eq!(
+            collect_ranges_from_values(8, &mut [0b11, 0b01, 0b00]).as_slice(),
+            &[(0, 2), (3, 4)]
+        );
+        assert_eq!(collect_ranges_from_values(8, &mut [255, 0]).as_slice(), &[(255, 1)]);
+        assert_eq!(collect_ranges_from_values(8, &mut [127, 128]).as_slice(), &[(127, 129)]);
+        assert_eq!(collect_ranges_from_values(8, &mut [200, 5]).as_slice(), &[(200, 201), (5, 6)]);
+        assert_eq!(
+            collect_ranges_from_values(8, &mut [0xFFFF_FFFF_FFFF_FFFF]).as_slice(),
+            &[(255, 0)]
+        );
+        let mut all: Vec<u64> = Vec::new();
+        for v in 0..256 {
+            all.push(v);
+        }
+        assert!(collect_ranges_from_values(8, &mut all).is_empty());
+        assert_eq!(collect_ranges_from_values(64, &mut [u64::MAX, 0]).as_slice(), &[(u64::MAX, 1)]);
+        assert_eq!(
+            collect_ranges_from_values(32, &mut [256, 768, 769]).as_slice(),
+            &[(256, 257), (768, 770)]
+        );
+    }
 
     fn assert_float_bits(ctx: &Context, value: TypedFloatValue, expected: u64) {
         let int_type = match value {

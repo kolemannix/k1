@@ -119,3 +119,32 @@ fn physical_type_scalar_checks_ignore_agg_low_byte() {
     assert!(PhysicalType::PTR.is_ptr());
     assert!(PhysicalType::scalar(ScalarType::Bool).is_bool());
 }
+
+#[test]
+fn named_scalar_encoding() {
+    for st in [ScalarType::U8, ScalarType::I64, ScalarType::Bool, ScalarType::Char] {
+        for raw_id in [1, 267, (1 << 27) - 1] {
+            let id = NamedScalarId::from_u32(raw_id).unwrap();
+            let pt = PhysicalType::named(st, id);
+            assert_eq!(pt.as_scalar(), Some(st));
+            assert_eq!(pt.named_scalar(), Some(id));
+            assert_eq!(pt.machine(), PhysicalType::scalar(st));
+            assert_eq!(pt.as_enum(), PhysicalTypeEnum::Scalar(st));
+            assert!(pt.is_scalar() && pt.is_int() && !pt.is_agg() && !pt.is_empty());
+            assert_eq!(pt.is_bool(), st == ScalarType::Bool);
+            assert_eq!(PhysicalType::from_u32(pt.to_u32()), pt);
+        }
+    }
+    let agg = PhysicalType::agg(AggregateTypeId::from_u32(267).unwrap());
+    assert!(agg.is_agg() && agg.as_scalar().is_none() && agg.named_scalar().is_none());
+    assert_eq!(agg.machine(), agg);
+    assert_eq!(PhysicalType::scalar(ScalarType::U8).named_scalar(), None);
+}
+
+#[test]
+fn scalar_type_index_matches_all() {
+    for (i, st) in ScalarType::ALL.iter().enumerate() {
+        assert_eq!(st.index(), i);
+        assert_eq!(ScalarType::from_tag(st.to_tag() as u32), *st);
+    }
+}

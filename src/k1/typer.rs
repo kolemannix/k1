@@ -2750,6 +2750,8 @@ pub struct TypedProgram {
     pub hole_type_cache: Vec<TypeId>,
     pub builtin_types: BuiltinTypes,
     pub agg_types: VPool<AggregateTypeRecord, AggregateTypeId>,
+    /// The origin type of each named scalar: the identity a scalar PhysicalType can carry
+    pub named_scalars: VPool<TypeId, NamedScalarId>,
     /// Lambda types are big, they get extended storage
     pub lambda_types: VPool<LambdaType, LambdaTypeId>,
     pub type_idents: TypeIdents,
@@ -2949,6 +2951,7 @@ impl TypedProgram {
             hole_type_cache: Vec::new(),
             builtin_types: BuiltinTypes::default(),
             agg_types,
+            named_scalars: VPool::make("named_scalars"),
             lambda_types: VPool::make("lambdas"),
             type_idents,
             globals: VPool::make("typed_globals"),

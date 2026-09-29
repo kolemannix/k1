@@ -651,7 +651,8 @@ fn emit_inst(
             ctx.push(addr);
             ctx.push(value);
         }
-        Inst::Load { t, src, volatile: _, unaligned: _ } => {
+        Inst::Load { t, src, .. } => {
+            let t = t.expect_scalar();
             let (addr, off) = resolve_addr(k1, ctx, src);
             let result = ctx.bc_value_of(inst_id);
             ctx.emit(Opcode::Load, t.width_bits(), off);

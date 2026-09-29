@@ -97,6 +97,7 @@ impl TypedProgram {
             hole_type_cache: _,
             builtin_types,
             agg_types,
+            named_scalars,
             lambda_types,
             type_idents,
             globals,
@@ -167,6 +168,7 @@ impl TypedProgram {
         phys_types.snap(w);
         w.write_t(builtin_types);
         agg_types.snap(w);
+        named_scalars.snap(w);
         lambda_types.snap(w);
         w.write_t(type_idents);
         globals.snap(w);
@@ -281,6 +283,7 @@ impl TypedProgram {
         k1.phys_types.restore(r);
         k1.builtin_types = r.read_t();
         k1.agg_types.restore(r);
+        k1.named_scalars.restore(r);
         k1.lambda_types.restore(r);
         k1.type_idents = r.read_t();
         k1.trace_pop(section);

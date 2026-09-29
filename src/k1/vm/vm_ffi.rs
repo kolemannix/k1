@@ -11,6 +11,7 @@ use crate::typer::types::{
     AggType, HomogeneousAggregate, Layout, PhysicalType, PhysicalTypeEnum, RegisterClass,
     ScalarType,
 };
+use crate::parse::NumericWidth;
 use crate::typer::{FunctionId, K1Result, Linkage, TypedProgram};
 use crate::vm;
 use crate::vm::{Value, Vm};
@@ -179,20 +180,23 @@ fn prep_ffi_cif(
     Ok(cif)
 }
 
-fn scalar_to_ffi_type(st: ScalarType) -> libffi::low::ffi_type {
+fn scalar_to_ffi_type(k1: &TypedProgram, pt: PhysicalType) -> libffi::low::ffi_type {
+    let signed = pt.named_scalar().is_some_and(|id| k1.is_named_scalar_signed(id));
     unsafe {
-        match st {
-            ScalarType::U8 | ScalarType::Char | ScalarType::Bool => types::uint8,
-            ScalarType::U16 => types::uint16,
-            ScalarType::U32 => types::uint32,
-            ScalarType::U64 => types::uint64,
-            ScalarType::I8 => types::sint8,
-            ScalarType::I16 => types::sint16,
-            ScalarType::I32 => types::sint32,
-            ScalarType::I64 => types::sint64,
+        match pt.expect_scalar() {
             ScalarType::F32 => types::float,
             ScalarType::F64 => types::double,
             ScalarType::Pointer => types::pointer,
+            st => match (st.width(), signed) {
+                (NumericWidth::B8, false) => types::uint8,
+                (NumericWidth::B16, false) => types::uint16,
+                (NumericWidth::B32, false) => types::uint32,
+                (NumericWidth::B64, false) => types::uint64,
+                (NumericWidth::B8, true) => types::sint8,
+                (NumericWidth::B16, true) => types::sint16,
+                (NumericWidth::B32, true) => types::sint32,
+                (NumericWidth::B64, true) => types::sint64,
+            },
         }
     }
 }
@@ -244,7 +248,7 @@ fn vector_registers_ffi_type(
     ha: HomogeneousAggregate,
 ) -> std::result::Result<libffi::low::ffi_type, &'static str> {
     let base = match (ha.lanes, ha.base_size()) {
-        (1, _) => scalar_to_ffi_type(ha.element),
+        (1, _) => scalar_to_ffi_type(k1, PhysicalType::scalar(ha.element)),
         _ if cfg!(target_arch = "x86_64") => {
             return Err(
                 "libffi has no SSEUP class, so it cannot pass a 16+ byte vector in one vector register",
@@ -288,14 +292,14 @@ fn member_ffi_type(
     }
     match pt.as_enum() {
         PhysicalTypeEnum::Empty => Ok(unsafe { types::void }),
-        PhysicalTypeEnum::Scalar(st) => Ok(scalar_to_ffi_type(st)),
+        PhysicalTypeEnum::Scalar(_) => Ok(scalar_to_ffi_type(k1, pt)),
         PhysicalTypeEnum::Agg(agg_id) => match k1.agg_types.get(agg_id).agg_type {
             AggType::Sum(_e) => {
                 let (tag_field, payload_field) = k1.get_sums_struct_layout(agg_id);
                 let count = if payload_field.is_some() { 2 } else { 1 };
                 let mut element_storage = k1.mem.new_list(count as u32);
 
-                element_storage.push(scalar_to_ffi_type(tag_field.field_t.expect_scalar()));
+                element_storage.push(scalar_to_ffi_type(k1, tag_field.field_t));
                 if let Some(payload) = payload_field {
                     let payload_ffi_type = member_ffi_type(k1, payload.field_t)?;
                     element_storage.push(payload_ffi_type);

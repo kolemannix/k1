@@ -759,7 +759,7 @@ pub enum Inst {
         unaligned: bool,
     },
     Load {
-        t: ScalarType,
+        t: PhysicalType,
         src: Value,
         volatile: bool,
         unaligned: bool,
@@ -1292,7 +1292,8 @@ pub fn get_inst_kind(u: &UnitView, inst_id: InstId) -> InstKind {
         Inst::Data(data) => InstKind::scalar(data.scalar_type()),
         Inst::Alloca { .. } | Inst::ReloadGlobalAddr { .. } => InstKind::PTR,
         Inst::Store { .. } => InstKind::Void,
-        Inst::Load { t, .. } | Inst::AtomicLoad { t, .. } => InstKind::scalar(t),
+        Inst::Load { t, .. } => InstKind::Value(t),
+        Inst::AtomicLoad { t, .. } => InstKind::scalar(t),
         Inst::AtomicStore { .. } => InstKind::Void,
         Inst::AtomicRmw { t, .. } => InstKind::scalar(t),
         Inst::AtomicCmpxchg { .. } => InstKind::Void,
@@ -1866,13 +1867,13 @@ impl<'k1> Builder<'k1> {
         }
     }
 
-    fn push_load(&mut self, st: ScalarType, src: Value, comment: IrComment) -> InstId {
-        self.push_load_ext(st, src, false, false, comment)
+    fn push_load(&mut self, t: PhysicalType, src: Value, comment: IrComment) -> InstId {
+        self.push_load_ext(t, src, false, false, comment)
     }
 
     fn push_load_ext(
         &mut self,
-        t: ScalarType,
+        t: PhysicalType,
         src: Value,
         forced_unaligned: bool,
         volatile: bool,
@@ -2836,12 +2837,14 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
         }
         TypedExpr::SumGetTag(sum_get_tag) => {
             let (sum_base, _frozen) = compile_expr_place(b, sum_get_tag.sum_expr)?;
-            let sum_type = b.k1.get_expr_type(sum_get_tag.sum_expr).expect_sum();
-            let tag_scalar = PhysicalType::scalar(sum_type.tag_type.get_scalar_type());
+            // nocommit claude why the switch to relying on the struct repr here?
+            let sum_type_id = b.k1.exprs.get_type(sum_get_tag.sum_expr);
+            let sum_pt = b.get_physical_type(sum_type_id)?;
+            let (tag_field, _) = b.k1.get_sums_struct_layout(sum_pt.expect_agg());
 
             Ok(load_or_copy(
                 b,
-                tag_scalar,
+                tag_field.field_t,
                 dst,
                 sum_base,
                 false,
@@ -3307,11 +3310,11 @@ fn compile_ir_builtin(
                     );
                     Ok(locn)
                 }
-                (PhysicalTypeEnum::Agg(_), PhysicalTypeEnum::Scalar(to_st)) => {
+                (PhysicalTypeEnum::Agg(_), PhysicalTypeEnum::Scalar(_)) => {
                     let unaligned =
                         b.k1.get_pt_layout(from_pt).align < b.k1.get_pt_layout(to_pt).align;
                     let loaded = b.push_load_ext(
-                        to_st,
+                        to_pt,
                         from_value,
                         unaligned,
                         false,
@@ -3379,8 +3382,8 @@ fn compile_ir_builtin(
             }
             let src = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             match t.as_enum() {
-                PhysicalTypeEnum::Scalar(st) => {
-                    let loaded = b.push_load_ext(st, src, false, true, IrComment::None);
+                PhysicalTypeEnum::Scalar(_) => {
+                    let loaded = b.push_load_ext(t, src, false, true, IrComment::None);
                     Ok(store_scalar_if_dst(b, dst, loaded.as_value()))
                 }
                 PhysicalTypeEnum::Agg(_) => {
@@ -3641,7 +3644,8 @@ fn compile_vector_op(
                 Inst::ArrayOffset { element_t: PhysicalType::scalar(elem), base, element_index },
                 IrComment::GetLaneOffset,
             );
-            let loaded = b.push_load(elem, offset.as_value(), IrComment::GetLaneLoad);
+            let loaded =
+                b.push_load(PhysicalType::scalar(elem), offset.as_value(), IrComment::GetLaneLoad);
             Ok(store_scalar_if_dst(b, dst, loaded.as_value()))
         }
         VecOpKind::WithLane => {
@@ -3892,7 +3896,7 @@ fn load_value(
                 src
             }
         }
-        PhysicalTypeEnum::Scalar(st) => b.push_load(st, src, comment).as_value(),
+        PhysicalTypeEnum::Scalar(_) => b.push_load(pt, src, comment).as_value(),
         PhysicalTypeEnum::Empty => Value::Empty,
     }
 }
@@ -4314,7 +4318,8 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     if !get_value_kind(&u, dst).is_storage() {
                         errors.push(format!("i{inst_id}: store dst is not a ptr"))
                     }
-                    if get_value_kind(&u, value).as_value() != Some(PhysicalType::scalar(t)) {
+                    if get_value_kind(&u, value).as_value().and_then(|pt| pt.as_scalar()) != Some(t)
+                    {
                         errors.push(format!("i{inst_id}: store value type is not the store type"))
                     }
                 }
@@ -4481,10 +4486,9 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     if !get_value_kind(&u, cond).is_bool() {
                         errors.push(format!("i{inst_id}: select cond is not a bool"))
                     }
-                    let pt = Some(PhysicalType::scalar(t));
-                    if get_value_kind(&u, cons).as_value() != pt
-                        || get_value_kind(&u, alt).as_value() != pt
-                    {
+                    let arm_scalar =
+                        |v| get_value_kind(&u, v).as_value().and_then(|pt| pt.as_scalar());
+                    if arm_scalar(cons) != Some(t) || arm_scalar(alt) != Some(t) {
                         errors.push(format!("i{inst_id}: select arm type mismatch"))
                     }
                 }
