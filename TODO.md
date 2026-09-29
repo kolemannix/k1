@@ -5,9 +5,7 @@
 
 ## [ ] More IR analysis and opts
 - [ ] add lifetimes? (start/end for allocas, temps, inlined stuff)
-- [ ] Scalar identity (named scalars in PhysicalType)
-  - [ ] IR: a switch on a named enum/sum-tag load covering every tag drops its default (keep only if a suite1 A/B pays for it)
-  - [ ] Named `*t` pointer scalar: `!nonnull` on loads, `nonnull` on K1-ABI params/returns
+- [ ] Debug arena reset: mprotect used range, catch stale refs
 
 ## [x] token stream based macros
 

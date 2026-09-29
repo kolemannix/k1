@@ -216,6 +216,12 @@ assert-equals(counter.*, 1)
 Use `.*` to read through a reference, and the postfix `.&` operator to take the
 address of a place when you need a reference to it.
 
+A `*t` is never null, aligned for `t`, and valid for `types/size[t]` bytes for
+as long as it is live; optimized builds speculate loads through it. Keeping a
+`*t` across the free of its memory (an arena reset, a list growing) is UB even
+if it is never read again. Use `optref[t]` for nullable references and `ptr` for
+raw addresses.
+
 Indexing is `.[key]`. `xs.[i]` is the element's place, so it reads, assigns,
 and takes addresses like any other place:
 

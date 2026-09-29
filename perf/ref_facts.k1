@@ -1,0 +1,50 @@
+use std/time
+
+type cell = { value: int, pad: int }
+
+fn(inline) value-or-zero(r: optref[cell]): int { if r.is-null() 0 else r.get().value }
+
+fn(noinline) sum-optrefs(cells: span[*cell], start: int): int {
+  let sum = start
+  for c in cells { sum = sum + value-or-zero(optref/make(c)) }
+  sum
+}
+
+fn(noinline) count-below-param(xs: span[int], limit: *cell): int {
+  let n = 0
+  for x in xs { if x > 0 and x < limit.value { n = n + 1 } }
+  n
+}
+
+fn(noinline) count-below-loaded(xs: span[int], limits: span[*cell], j: int): int {
+  let limit = limits.[j]
+  let n = 0
+  for x in xs { if x > 0 and x < limit.value { n = n + 1 } }
+  n
+}
+
+fn main(): i32 {
+  let n = 1 << 12
+  let storage: list[cell] = list/empty()
+  for i in 0.until(n) { storage.push(.{ value = i % 7, pad = 0 }) }
+  let cells: list[*cell] = list/empty()
+  for i in 0.until(n) { cells.push(storage.[(i * 7919) % n].&) }
+  let xs: list[int] = list/empty()
+  for i in 0.until(n) { xs.push((i * 7919) % 97 - 13) }
+
+  let start = time/read-cpu-counter()
+  let sum = 0
+  for r in 0.until(50000) { sum = sum-optrefs(cells.as-span(), sum.xor(r)) }
+  let optref-ms = time/elapsed-ms(start)
+
+  let start = time/read-cpu-counter()
+  for r in 0.until(50000) { sum = sum + count-below-param(xs.as-span(), cells.[r % 64]) }
+  let param-ms = time/elapsed-ms(start)
+
+  let start = time/read-cpu-counter()
+  for r in 0.until(50000) { sum = sum + count-below-loaded(xs.as-span(), cells.as-span(), r % 64) }
+  let loaded-ms = time/elapsed-ms(start)
+
+  println("optref ${optref-ms}ms param ${param-ms}ms loaded ${loaded-ms}ms sum $sum")
+  0
+}

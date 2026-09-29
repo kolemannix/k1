@@ -2427,7 +2427,10 @@ impl TypedProgram {
             Type::Float(FloatType::F64) => {
                 PhysicalTypeResult::Yes(PhysicalType::scalar(ScalarType::F64))
             }
-            Type::Pointer | Type::Reference(_) | Type::FunctionPointer(_) => {
+            Type::Reference(_) => {
+                PhysicalTypeResult::Yes(self.make_named_scalar(ScalarType::Pointer, type_id))
+            }
+            Type::Pointer | Type::FunctionPointer(_) => {
                 PhysicalTypeResult::Yes(PhysicalType::scalar(ScalarType::Pointer))
             }
             Type::Array(array) => {

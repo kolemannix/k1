@@ -127,9 +127,9 @@ struct LlvmScalarType<'ctx> {
     basic_type: BasicTypeEnum<'ctx>,
     di_type: DIType<'ctx>,
     layout: Layout,
-    range: Option<MetadataValue<'ctx>>,
-    range_attribute: Option<Attribute>,
-    ext_attribute: Option<Attribute>,
+    load_metadata: [Option<(u32, MetadataValue<'ctx>)>; 2],
+    internal_abi_attributes: [Option<Attribute>; 2],
+    native_abi_attribute: Option<Attribute>,
 }
 
 #[derive(Clone, Copy)]
@@ -1937,9 +1937,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             basic_type,
             layout,
             di_type,
-            range: None,
-            range_attribute: None,
-            ext_attribute: None,
+            load_metadata: [None, None],
+            internal_abi_attributes: [None, None],
+            native_abi_attribute: None,
         }
     }
 
@@ -2214,14 +2214,41 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         if let Some(named) = self.llvm_named_scalars.get(&id) {
             return *named;
         }
-        let runs = self.get_type_range_runs(*self.k1.named_scalars.get(id), st.width());
-        let range =
-            if runs.is_empty() { None } else { Some(self.make_range_metadata(st.width(), &runs)) };
-        let range_attribute = match runs.as_slice() {
-            [(lo, hi)] => Some(self.make_range_attribute(st.width(), *lo, *hi)),
-            _ => None,
+        let origin = *self.k1.named_scalars.get(id);
+        let (load_metadata, internal_abi_attributes) = if let Type::Reference(r) =
+            self.k1.types.get(origin)
+        {
+            match self.k1.get_layout_nonmut(r.inner_type) {
+                Some(inner) if inner.size > 0 => (
+                    [
+                        Some((
+                            self.ctx.get_kind_id("dereferenceable"),
+                            self.make_i64_metadata(inner.size as u64),
+                        )),
+                        Some((
+                            self.ctx.get_kind_id("align"),
+                            self.make_i64_metadata(inner.align as u64),
+                        )),
+                    ],
+                    self.make_pointee_attributes(inner).map(Some),
+                ),
+                _ => (
+                    [Some((self.ctx.get_kind_id("nonnull"), self.ctx.metadata_node(&[]))), None],
+                    [Some(self.make_enum_attribute("nonnull", 0)), None],
+                ),
+            }
+        } else {
+            let runs = self.get_type_range_runs(origin, st.width());
+            let range = (!runs.is_empty()).then(|| {
+                (self.ctx.get_kind_id("range"), self.make_range_metadata(st.width(), &runs))
+            });
+            let range_attribute = match runs.as_slice() {
+                [(lo, hi)] => Some(self.make_range_attribute(st.width(), *lo, *hi)),
+                _ => None,
+            };
+            ([range, None], [range_attribute, None])
         };
-        let ext_attribute = match st.width() {
+        let native_abi_attribute = match st.width() {
             NumericWidth::B8 | NumericWidth::B16 if self.k1.is_named_scalar_signed(id) => {
                 Some(self.make_enum_attribute("signext", 0))
             }
@@ -2232,9 +2259,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let named = LlvmScalarType {
             pt: PhysicalType::named(st, id),
             di_type,
-            range,
-            range_attribute,
-            ext_attribute,
+            load_metadata,
+            internal_abi_attributes,
+            native_abi_attribute,
             ..self.builtin_types.scalar(st)
         };
         self.llvm_named_scalars.insert(id, named);
@@ -2256,6 +2283,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Type::Integer(int_type) => {
                 return make_basic(self, &int_type.to_string(), int_encoding).as_type();
             }
+            Type::Reference(_) => return self.builtin_types.scalar(st).di_type,
             Type::Enum(e) => {
                 for member in self.k1.mem.getn(e.member_values) {
                     enumerators.push(self.debug.debug_builder.create_enumerator(
@@ -2329,17 +2357,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.ctx.metadata_node(&bounds)
     }
 
-    fn scalar_abi_attribute(
+    fn scalar_abi_attributes(
         abi: AbiMode,
         mapping: AbiParamMapping,
         cg_type: &CgType<'ctx>,
-    ) -> Option<Attribute> {
+    ) -> [Option<Attribute>; 2] {
         let (AbiParamMapping::ScalarInRegister, CgType::Scalar(scalar)) = (mapping, cg_type) else {
-            return None;
+            return [None, None];
         };
         match abi {
-            AbiMode::Internal => scalar.range_attribute,
-            AbiMode::Native => scalar.ext_attribute,
+            AbiMode::Internal => scalar.internal_abi_attributes,
+            AbiMode::Native => [scalar.native_abi_attribute, None],
         }
     }
 
@@ -3191,15 +3219,20 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         for index in 0..cg_fn_type.param_k1_types.len() {
             let k1_type = self.mem.get_nth_lt(cg_fn_type.param_k1_types, index as usize);
             let mapping = *self.mem.get_nth_lt(cg_fn_type.param_abi_mappings, index as usize);
-            if let Some(attr) = Self::scalar_abi_attribute(cg_fn_type.abi, mapping, k1_type) {
+            for attr in
+                Self::scalar_abi_attributes(cg_fn_type.abi, mapping, k1_type).into_iter().flatten()
+            {
                 callsite_value.add_attribute(AttributeLoc::Param(index + param_offset), attr);
             }
         }
-        if let Some(attr) = Self::scalar_abi_attribute(
+        for attr in Self::scalar_abi_attributes(
             cg_fn_type.abi,
             cg_fn_type.return_abi_mapping,
             &cg_fn_type.return_logical_cg_type,
-        ) {
+        )
+        .into_iter()
+        .flatten()
+        {
             callsite_value.add_attribute(AttributeLoc::Return, attr);
         }
         for (copy_ptr, size) in caller_copies.as_slice() {
@@ -3888,10 +3921,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 if volatile {
                     unsafe { llvm_sys::core::LLVMSetVolatile(load_inst.as_value_ref(), 1) };
                 }
-                if let CgType::Scalar(scalar) = cg_ty
-                    && let Some(range) = scalar.range
-                {
-                    load_inst.set_metadata(range, self.ctx.get_kind_id("range")).unwrap();
+                if let CgType::Scalar(scalar) = cg_ty {
+                    for (kind_id, metadata) in scalar.load_metadata.into_iter().flatten() {
+                        load_inst.set_metadata(metadata, kind_id).unwrap();
+                    }
                 }
                 inst_mappings.insert(inst_id, load);
                 Ok(())
@@ -4739,16 +4772,22 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     }
                     _ => {}
                 }
-                if let Some(attr) = Self::scalar_abi_attribute(abi_mode, *abi_mapping, &k1_type) {
+                for attr in Self::scalar_abi_attributes(abi_mode, *abi_mapping, &k1_type)
+                    .into_iter()
+                    .flatten()
+                {
                     function_value.add_attribute(AttributeLoc::Param(i as u32), attr);
                 }
             }
         }
-        if let Some(attr) = Self::scalar_abi_attribute(
+        for attr in Self::scalar_abi_attributes(
             abi_mode,
             llvm_function_type.return_abi_mapping,
             &llvm_function_type.return_logical_cg_type,
-        ) {
+        )
+        .into_iter()
+        .flatten()
+        {
             function_value.add_attribute(AttributeLoc::Return, attr);
         }
 
@@ -5704,14 +5743,20 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         ]
     }
 
-    fn make_borrowed_ptr_attributes(&self, param_type: &CgType<'ctx>) -> [Attribute; 4] {
-        let layout = param_type.rich_repr_layout();
+    fn make_borrowed_ptr_attributes(&self, param_type: &CgType<'ctx>) -> [Attribute; 3] {
+        let [dereferenceable, align] = self.make_pointee_attributes(param_type.rich_repr_layout());
+        [self.make_enum_attribute("readonly", 0), dereferenceable, align]
+    }
+
+    fn make_pointee_attributes(&self, pointee: Layout) -> [Attribute; 2] {
         [
-            self.make_enum_attribute("readonly", 0),
-            self.make_enum_attribute("nonnull", 0),
-            self.make_enum_attribute("dereferenceable", layout.size as u64),
-            self.make_enum_attribute("align", layout.align as u64),
+            self.make_enum_attribute("dereferenceable", pointee.size as u64),
+            self.make_enum_attribute("align", pointee.align as u64),
         ]
+    }
+
+    fn make_i64_metadata(&self, value: u64) -> MetadataValue<'ctx> {
+        self.ctx.metadata_node(&[self.ctx.i64_type().const_int(value, false).into()])
     }
 
     fn make_byval_attributes(&self, param_type: &CgType<'ctx>) -> [Attribute; 2] {
