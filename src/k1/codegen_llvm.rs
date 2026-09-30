@@ -1853,7 +1853,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.builder.get_current_debug_location().unwrap()
     }
 
-    /// 0 for a synthesized entity, which DWARF reads as "no line"
     fn get_line_number(&self, span: Span) -> u32 {
         if span.is_none() {
             return 0;

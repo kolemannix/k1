@@ -1463,8 +1463,6 @@ pub struct SourceFiles {
 }
 
 impl SourceFiles {
-    /// Positions are compile-wide: each file starts one past the previous
-    /// file's end, and position 0 is never a location
     pub fn add_file(&mut self, mut source: SourceFile) -> FileId {
         let id = self.next_file_id();
         source.file_id = id;
@@ -1484,7 +1482,6 @@ impl SourceFiles {
         self.sources.partition_point(|s| s.base <= lo).saturating_sub(1) as FileId
     }
 
-    /// Whether `span` lies inside one registered file; for spans arriving from K1 code
     pub fn contains(&self, span: Span) -> bool {
         if span.lo == 0 {
             return false;
@@ -2037,7 +2034,6 @@ type Mem = kmem::Mem<ParsedProgram>;
 #[derive(Debug, Clone, Copy)]
 pub struct SourceFile {
     pub file_id: FileId,
-    /// Compile-wide position of this file's first byte; set by `SourceFiles::add_file`
     pub base: u32,
     pub file_path: StringId,
     content: kmem::MSlice<u8, ParsedProgram>,
@@ -2108,7 +2104,6 @@ impl SourceFile {
         &self.content(mem)[start as usize..(start + len) as usize]
     }
 
-    /// A compile-wide position as an offset into this file's content
     pub fn local(&self, lo: u32) -> u32 {
         lo - self.base
     }

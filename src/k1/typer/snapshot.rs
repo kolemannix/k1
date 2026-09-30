@@ -163,8 +163,8 @@ impl TypedProgram {
         type_slices.snap(w);
         type_variable_counts.snap(w);
         type_instance_info.snap(w);
-        write_map_snap(w, type_defn_info);
-        write_map_snap(w, type_specializations);
+        type_defn_info.snap(w);
+        w.sorted_entries(type_specializations.iter(), |w, s| w.write_t(s));
         phys_types.snap(w);
         w.write_t(builtin_types);
         agg_types.snap(w);
@@ -260,14 +260,6 @@ impl TypedProgram {
 
         let section = k1.trace_push(TraceKind::SnapRestoreSection, restore_section("functions"), 0);
         k1.functions.restore(r);
-        k1.function_specializations.reserve(k1.functions.len());
-        for (id, function) in k1.functions.iter_with_ids() {
-            if let Some(info) = function.specialization_info {
-                k1.function_specializations
-                    .entry((info.parent_function, info.type_arguments, info.fnlike_type_arguments))
-                    .or_insert(id);
-            }
-        }
         k1.trace_pop(section);
 
         let section = k1.trace_push(TraceKind::SnapRestoreSection, restore_section("types"), 0);
@@ -276,10 +268,24 @@ impl TypedProgram {
         k1.type_hashes = restore_map_snap(r);
         k1.type_slices.restore(r);
         k1.rebuild_type_slice_dedup();
+        let mut infos = Vec::new();
+        for function in k1.functions.iter() {
+            if let Some(info) = function.specialization_info {
+                infos.push(info);
+            }
+        }
+        for info in infos {
+            k1.register_function_specialization(info);
+        }
         k1.type_variable_counts.restore(r);
         k1.type_instance_info.restore(r);
-        k1.type_defn_info = restore_map_snap(r);
-        k1.type_specializations = restore_map_snap(r);
+        k1.type_defn_info.restore(r);
+        let specialization_count = r.read_len();
+        let mut specializations = Vec::with_capacity(specialization_count);
+        for _ in 0..specialization_count {
+            specializations.push(r.read_t());
+        }
+        k1.restore_type_specializations(specializations);
         k1.phys_types.restore(r);
         k1.builtin_types = r.read_t();
         k1.agg_types.restore(r);

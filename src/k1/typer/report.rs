@@ -477,6 +477,7 @@ impl TypedProgram {
             ("variables", self.variables.bytes_used()),
             ("types", self.types.bytes_used()),
             ("type instance info", self.type_instance_info.bytes_used()),
+            ("type defn info", self.type_defn_info.bytes_used()),
             ("type variable counts", self.type_variable_counts.bytes_used()),
             ("phys types", self.phys_types.bytes_used()),
             ("scopes", self.scopes.bytes_used()),
@@ -497,6 +498,7 @@ impl TypedProgram {
             writeln!(out, "\t{:>8}kb {}", bytes / crate::KILOBYTE, name)?;
         }
         writeln!(out, "\t{:>8}kb pools total", total / crate::KILOBYTE)?;
+
         writeln!(out, "\t{} idents", self.ast.idents.len())?;
         writeln!(
             out,

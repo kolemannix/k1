@@ -11,8 +11,6 @@ pub enum LangItem {
     Defn(ParsedId),
 }
 
-/// Positions are compile-wide, so a span from another file never contains a
-/// point in `file_id`
 pub fn is_point_in_span(ast: &ParsedProgram, file_id: FileId, line: u32, col: u32, span: Span) -> bool {
     let source = ast.sources.get(file_id);
     let Some(line_info) = source.get_line(&ast.mem, line as usize) else {
@@ -122,7 +120,7 @@ pub fn get_entity_definition_span(k1: &TypedProgram, entity_kind: LsEntityKind) 
             k1.ast.get_span_for_id(ParsedId::Ability(k1.abilities.get(ability_id).ast_id))
         }
         LsEntityKind::Variable { variable_id } => k1.variables.get(variable_id).defn_span,
-        LsEntityKind::Type { type_id, .. } => match k1.type_defn_info.get(&type_id) {
+        LsEntityKind::Type { type_id, .. } => match k1.get_defn_info(type_id) {
             Some(d) => k1.ast.get_span_for_id(d.ast_id),
             None => Span::NONE,
         },
@@ -511,7 +509,7 @@ pub fn collect_workspace_symbols(k1: &TypedProgram, query: &str) -> Vec<Workspac
                     (function_kind, defn(LsEntityKind::Function { function_id, is_defn: true }))
                 }
                 ScopeMember::Type(type_id)
-                    if k1.type_defn_info.get(&type_id).is_some_and(|info| info.name == name) =>
+                    if k1.get_defn_info(type_id).is_some_and(|info| info.name == name) =>
                 {
                     (NameKind::Type, defn(LsEntityKind::Type { type_id, applied_type_id: None }))
                 }

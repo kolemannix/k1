@@ -2636,6 +2636,21 @@ pub struct CodeChunkPos {
 }
 
 #[derive(Clone, Copy)]
+pub struct FunctionSpecialization {
+    pub parent: FunctionId,
+    pub type_arguments: TypeSliceId,
+    pub fnlike_type_arguments: TypeSliceId,
+    pub function: FunctionId,
+}
+
+#[derive(Clone, Copy)]
+pub struct TypeSpecialization {
+    pub generic: TypeId,
+    pub args: TypeSliceId,
+    pub instance: TypeId,
+}
+
+#[derive(Clone, Copy)]
 pub struct EmittedSource {
     pub file_id: FileId,
     pub call_span: Span,
@@ -2721,8 +2736,7 @@ pub struct TypedProgram {
     pub functions: VPool<TypedFunction, FunctionId>,
     /// (parent function, type args, fnlike type args) -> specialized function.
     /// Rebuilt from `functions` on snapshot restore
-    pub function_specializations:
-        ahash::HashMap<(FunctionId, TypeSliceId, TypeSliceId), FunctionId>,
+    function_specializations: hashbrown::HashTable<FunctionSpecialization>,
 
     pub variables: VPool<Variable, VariableId>,
 
@@ -2735,8 +2749,8 @@ pub struct TypedProgram {
     type_slice_dedup: hashbrown::HashTable<TypeSliceId>,
     pub type_variable_counts: VPool<TypeInfo, TypeId>,
     pub type_instance_info: VPool<Option<GenericInstanceInfo>, TypeId>,
-    pub type_defn_info: FxHashMap<TypeId, TypeDefnInfo>,
-    pub type_specializations: ahash::HashMap<(TypeId, TypeSliceId), TypeId>,
+    pub type_defn_info: VPool<Option<TypeDefnInfo>, TypeId>,
+    type_specializations: hashbrown::HashTable<TypeSpecialization>,
     pub phys_types: VPool<Option<PhysicalTypeResult>, TypeId>,
     /// InferenceHole type ids by hole index, for holes with no static constraint.
     /// `add_type` hash-conses holes to one id per (index, static_type) anyway; this skips
@@ -2931,7 +2945,7 @@ impl TypedProgram {
             config,
             plan,
             functions: VPool::make("typed_functions"),
-            function_specializations: ahash::HashMap::new(),
+            function_specializations: hashbrown::HashTable::new(),
             variables: VPool::make("typed_variables"),
             types: VPool::make("types"),
             type_hashes: FxHashMap::new(),
@@ -2939,8 +2953,8 @@ impl TypedProgram {
             type_slice_dedup: hashbrown::HashTable::new(),
             type_variable_counts: VPool::make("type_variable_counts"),
             type_instance_info: VPool::make("instance_info"),
-            type_defn_info: FxHashMap::new(),
-            type_specializations: ahash::HashMap::new(),
+            type_defn_info: VPool::make("type_defn_info"),
+            type_specializations: hashbrown::HashTable::new(),
             phys_types: VPool::make("phys_types"),
             hole_type_cache: Vec::new(),
             builtin_types: BuiltinTypes::default(),
@@ -3101,6 +3115,16 @@ impl TypedProgram {
         self.calls.advise_additional_bytes(2 * source_bytes);
         self.mem.advise_additional_bytes(2 * source_bytes);
         self.functions.advise_additional_bytes(source_bytes);
+        self.reserve_type_tables(source_bytes);
+        let mem = &self.mem;
+        let slices = &self.type_slices;
+        self.function_specializations.reserve(source_bytes / 128, |s| {
+            Self::function_specialization_hash(
+                s.parent,
+                mem.getn(*slices.get(s.type_arguments)),
+                mem.getn(*slices.get(s.fnlike_type_arguments)),
+            )
+        });
     }
 
     pub(crate) fn compile_module(
@@ -4118,10 +4142,7 @@ impl TypedProgram {
         let id = self.functions.next_id();
         if let Some(specialization_info) = &mut function.specialization_info {
             specialization_info.specialized_function_id = id;
-            let info = *specialization_info;
-            self.function_specializations
-                .entry((info.parent_function, info.type_arguments, info.fnlike_type_arguments))
-                .or_insert(id);
+            self.register_function_specialization(*specialization_info);
         }
         let is_concrete = self.is_function_concrete(&function);
         if function.compiler_debug() {
@@ -5315,9 +5336,14 @@ impl TypedProgram {
             }
             let solutions_handle = self.intern_type_slice(&solutions);
             let no_fnlike_args = self.intern_type_args(TypeArgs::empty());
+            let function_type = self.substitute_in_type(
+                self.get_function(blanket_function_id).type_id,
+                self.mem.getn(imp.substitutions),
+            );
             let specialized_function_id = self.specialize_function(
                 blanket_function_id,
                 self.mem.getn(imp.substitutions),
+                function_type,
                 imp.scope_id,
                 solutions_handle,
                 no_fnlike_args,
@@ -10182,10 +10208,11 @@ impl TypedProgram {
         }
         let specialized_function_id = match cached_specialization {
             Some(function_id) => function_id,
-            None => self.specialize_function_declaration(
+            None => self.add_function_specialization(
                 type_args,
                 TypeArgs::empty(),
                 generic_function_id,
+                specialized_function_type,
             ),
         };
         Ok(self.function_to_reference(specialized_function_id, span))
@@ -11628,10 +11655,11 @@ impl TypedProgram {
                         Callee::StaticFunction(function_id) => {
                             let function_id = match cached_specialization {
                                 Some(specialized_function_id) => specialized_function_id,
-                                None => self.specialize_function_declaration(
+                                None => self.add_function_specialization(
                                     type_args,
                                     fnlike_type_args,
                                     function_id,
+                                    specialized_function_type,
                                 ),
                             };
                             Callee::StaticFunction(function_id)
@@ -12294,17 +12322,61 @@ impl TypedProgram {
         subst_pairs.to_slice()
     }
 
+    fn function_specialization_hash(parent: FunctionId, args: &[TypeId], fnlike: &[TypeId]) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = fxhash::FxHasher::default();
+        parent.hash(&mut h);
+        args.hash(&mut h);
+        fnlike.hash(&mut h);
+        h.finish()
+    }
+
     fn find_function_specialization(
-        &mut self,
+        &self,
         generic_function_id: FunctionId,
         type_arguments: TypeArgs,
         fnlike_type_arguments: TypeArgs,
     ) -> Option<FunctionId> {
-        let type_arguments = self.intern_type_args(type_arguments);
-        let fnlike_type_arguments = self.intern_type_args(fnlike_type_arguments);
+        let args = type_arguments.as_slice(&self.mem);
+        let fnlike = fnlike_type_arguments.as_slice(&self.mem);
+        let hash = Self::function_specialization_hash(generic_function_id, args, fnlike);
         self.function_specializations
-            .get(&(generic_function_id, type_arguments, fnlike_type_arguments))
-            .copied()
+            .find(hash, |s| {
+                s.parent == generic_function_id
+                    && self.get_type_slice(s.type_arguments) == args
+                    && self.get_type_slice(s.fnlike_type_arguments) == fnlike
+            })
+            .map(|s| s.function)
+    }
+
+    pub(crate) fn register_function_specialization(&mut self, info: SpecializationInfo) {
+        let entry = FunctionSpecialization {
+            parent: info.parent_function,
+            type_arguments: info.type_arguments,
+            fnlike_type_arguments: info.fnlike_type_arguments,
+            function: info.specialized_function_id,
+        };
+        let mem = &self.mem;
+        let slices = &self.type_slices;
+        let hash_one = |s: &FunctionSpecialization| {
+            Self::function_specialization_hash(
+                s.parent,
+                mem.getn(*slices.get(s.type_arguments)),
+                mem.getn(*slices.get(s.fnlike_type_arguments)),
+            )
+        };
+        let hash = hash_one(&entry);
+        let exists = self
+            .function_specializations
+            .find(hash, |s| {
+                s.parent == entry.parent
+                    && s.type_arguments == entry.type_arguments
+                    && s.fnlike_type_arguments == entry.fnlike_type_arguments
+            })
+            .is_some();
+        if !exists {
+            self.function_specializations.insert_unique(hash, entry, hash_one);
+        }
     }
 
     fn specialize_function_declaration(
@@ -12322,6 +12394,32 @@ impl TypedProgram {
         ) {
             return specialized_function_id;
         }
+        let signature = self.get_function(generic_function_id).signature();
+        let function_type =
+            self.substitute_in_function_signature(type_arguments, fnlike_type_arguments, signature);
+        self.add_function_specialization(
+            type_arguments,
+            fnlike_type_arguments,
+            generic_function_id,
+            function_type,
+        )
+    }
+
+    fn add_function_specialization(
+        &mut self,
+        type_arguments: TypeArgs,
+        fnlike_type_arguments: TypeArgs,
+        generic_function_id: FunctionId,
+        function_type: TypeId,
+    ) -> FunctionId {
+        debug_assert!(
+            self.find_function_specialization(
+                generic_function_id,
+                type_arguments,
+                fnlike_type_arguments
+            )
+            .is_none()
+        );
         let generic_function = *self.get_function(generic_function_id);
         debug_assert_eq!(type_arguments.len(), generic_function.type_params.len());
         let mark = self.tmp.mark();
@@ -12336,6 +12434,7 @@ impl TypedProgram {
         let specialized_function_id = self.specialize_function(
             generic_function_id,
             self.tmp.getn(pairs),
+            function_type,
             scope_parent,
             type_arguments,
             fnlike_type_arguments,
@@ -12364,6 +12463,7 @@ impl TypedProgram {
         &mut self,
         parent_function_id: FunctionId,
         pairs: &[TypeSubstitutionPair],
+        specialized_function_type_id: TypeId,
         scope_parent: ScopeId,
         type_arguments: TypeSliceId,
         fnlike_type_arguments: TypeSliceId,
@@ -12373,6 +12473,7 @@ impl TypedProgram {
             k1.specialize_function_body(
                 parent_function_id,
                 pairs,
+                specialized_function_type_id,
                 scope_parent,
                 type_arguments,
                 fnlike_type_arguments,
@@ -12385,13 +12486,13 @@ impl TypedProgram {
         &mut self,
         parent_function_id: FunctionId,
         pairs: &[TypeSubstitutionPair],
+        specialized_function_type_id: TypeId,
         scope_parent: ScopeId,
         type_arguments: TypeSliceId,
         fnlike_type_arguments: TypeSliceId,
         impl_for: Option<(AbilityId, TypeId)>,
     ) -> FunctionId {
         let parent_function = *self.get_function(parent_function_id);
-        let specialized_function_type_id = self.substitute_in_type(parent_function.type_id, pairs);
         let specialized_function_id = self.functions.next_id();
         let specialized_function_type =
             self.types.get(specialized_function_type_id).as_function().unwrap().clone();

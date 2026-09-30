@@ -1678,7 +1678,7 @@ impl TypedProgram {
         if let Entry::Occupied(entry) = self.type_hashes.entry(hash) {
             let existing_id = *entry.get();
             let existing = self.types.get(existing_id);
-            let existing_defn_info = self.type_defn_info.get(&existing_id);
+            let existing_defn_info = self.type_defn_info.get(existing_id).as_ref();
             let existing_instance_info = self.type_instance_info.get(existing_id).as_ref();
             if self.type_eq(
                 &typ,
@@ -1695,16 +1695,14 @@ impl TypedProgram {
         let type_id = self.types.add(typ);
         self.type_hashes.insert(hash, type_id);
         self.type_instance_info.add_expected_id(instance_info, type_id);
+        self.type_defn_info.add_expected_id(defn_info, type_id);
 
         let variable_counts = self.compute_type_info(type_id);
         self.type_variable_counts.add_expected_id(variable_counts, type_id);
 
-        if let Some(defn_info) = defn_info {
-            self.type_defn_info.insert(type_id, defn_info);
-        }
-
         debug_assert_eq!(self.type_variable_counts.len(), self.types.len());
         debug_assert_eq!(self.type_instance_info.len(), self.types.len());
+        debug_assert_eq!(self.type_defn_info.len(), self.types.len());
 
         type_id
     }
@@ -1723,9 +1721,8 @@ impl TypedProgram {
         *self.type_instance_info.get_mut(id) = instance_info;
         let variable_counts = self.compute_type_info(id);
         *self.type_variable_counts.get_mut(id) = variable_counts;
-
-        if let Some(defn_info) = defn_info {
-            self.type_defn_info.insert(id, defn_info);
+        if defn_info.is_some() {
+            *self.type_defn_info.get_mut(id) = defn_info;
         }
     }
 
@@ -1739,13 +1736,13 @@ impl TypedProgram {
         }
         let hash = self.hash_type(
             self.types.get(id),
-            self.type_defn_info.get(&id).copied(),
+            *self.type_defn_info.get(id),
             *self.type_instance_info.get(id),
         );
         if self.type_hashes.get(&hash) == Some(&id) {
             self.type_hashes.remove(&hash);
         }
-        self.type_defn_info.remove(&id);
+        self.type_defn_info.pop_expected(id);
         self.types.pop_expected(id);
         self.type_variable_counts.pop_expected(id);
         self.type_instance_info.pop_expected(id);
@@ -1758,8 +1755,10 @@ impl TypedProgram {
         let id = self.types.reserve_id();
         let id2 = self.type_instance_info.add_expected_id(None, id);
         let id3 = self.type_variable_counts.add_expected_id(TypeInfo::EMPTY, id);
+        let id4 = self.type_defn_info.add_expected_id(None, id);
         debug_assert_eq!(id, id2);
         debug_assert_eq!(id, id3);
+        debug_assert_eq!(id, id4);
         id
     }
 
@@ -2110,7 +2109,7 @@ impl TypedProgram {
     }
 
     pub fn get_defn_info(&self, type_id: TypeId) -> Option<TypeDefnInfo> {
-        self.type_defn_info.get(&type_id).copied()
+        *self.type_defn_info.get(type_id)
     }
 
     pub fn get_companion_namespace(&self, type_id: TypeId) -> Option<NamespaceId> {
@@ -2929,12 +2928,55 @@ impl TypedProgram {
         self.mem.getn(*self.type_slices.get(id))
     }
 
-    pub fn get_specialization(&self, base: TypeId, args: TypeSliceId) -> Option<TypeId> {
-        self.type_specializations.get(&(base, args)).copied()
+    fn specialization_hash(generic: TypeId, args: &[TypeId]) -> u64 {
+        use std::hash::Hash;
+        let mut h = fxhash::FxHasher::default();
+        generic.hash(&mut h);
+        args.hash(&mut h);
+        h.finish()
     }
 
-    pub fn insert_specialization(&mut self, base: TypeId, args: TypeSliceId, specialized: TypeId) {
-        self.type_specializations.insert((base, args), specialized);
+    pub fn get_specialization(&self, generic: TypeId, args: &[TypeId]) -> Option<TypeId> {
+        let hash = Self::specialization_hash(generic, args);
+        let mem = &self.mem;
+        let slices = &self.type_slices;
+        self.type_specializations
+            .find(hash, |s| s.generic == generic && mem.getn(*slices.get(s.args)) == args)
+            .map(|s| s.instance)
+    }
+
+    pub fn insert_specialization(&mut self, generic: TypeId, args: TypeSliceId, instance: TypeId) {
+        let mem = &self.mem;
+        let slices = &self.type_slices;
+        let hash_one = |s: &TypeSpecialization| {
+            Self::specialization_hash(s.generic, mem.getn(*slices.get(s.args)))
+        };
+        let entry = TypeSpecialization { generic, args, instance };
+        self.type_specializations.insert_unique(hash_one(&entry), entry, hash_one);
+    }
+
+    pub(crate) fn reserve_type_tables(&mut self, source_bytes: usize) {
+        self.type_hashes.reserve(source_bytes / 48);
+        let mem = &self.mem;
+        let slices = &self.type_slices;
+        self.type_slice_dedup
+            .reserve(source_bytes / 400, |&id| Self::type_slice_hash(mem.getn(*slices.get(id))));
+        self.type_specializations.reserve(source_bytes / 160, |s| {
+            Self::specialization_hash(s.generic, mem.getn(*slices.get(s.args)))
+        });
+    }
+
+    pub(crate) fn restore_type_specializations(&mut self, entries: Vec<TypeSpecialization>) {
+        debug_assert!(self.type_specializations.is_empty());
+        let mem = &self.mem;
+        let slices = &self.type_slices;
+        let hash_one = |s: &TypeSpecialization| {
+            Self::specialization_hash(s.generic, mem.getn(*slices.get(s.args)))
+        };
+        self.type_specializations.reserve(entries.len(), hash_one);
+        for s in entries {
+            self.type_specializations.insert_unique(hash_one(&s), s, hash_one);
+        }
     }
 
     pub fn pt_to_string(&self, t: PhysicalType) -> String {

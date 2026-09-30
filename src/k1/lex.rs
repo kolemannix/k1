@@ -576,8 +576,6 @@ impl TokenKind {
     }
 }
 
-/// A compile-wide source position range; `lo` is never 0 for a real
-/// location, so `NONE` is distinct from every span
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Span {
     pub lo: u32,
@@ -597,7 +595,6 @@ impl Span {
         self.lo + self.len
     }
 
-    /// The K1-side encoding (`source-location.span`, `code-chunk.source`); 0 is NONE
     pub fn to_u64(self) -> u64 {
         self.lo as u64 | (self.len as u64) << 32
     }

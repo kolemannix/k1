@@ -252,7 +252,7 @@ impl TypedProgram {
             let generic_id = reserved_type_id.unwrap();
             self.set_type(generic_id, Type::Generic(gen_type), None, defn_info);
             let type_args = self.intern_type_slice_handle(type_params_handle);
-            if self.get_specialization(generic_id, type_args).is_none() {
+            if self.get_specialization(generic_id, self.get_type_slice(type_args)).is_none() {
                 let inner_content = *self.types.get(rhs_type_id);
                 let self_instance = self.add_type(
                     inner_content,
@@ -1285,15 +1285,17 @@ impl TypedProgram {
         generic_type: TypeId,
         type_arguments: &[TypeId],
     ) -> TypeId {
-        let args = self.intern_type_slice(type_arguments);
-        match self.get_specialization(generic_type, args) {
+        match self.get_specialization(generic_type, type_arguments) {
             Some(existing) => existing,
-            None => self.traced(
-                super::trace::TraceKind::TypeInstantiate,
-                generic_type.as_u32(),
-                0,
-                |k1| k1.instantiate_generic_type_miss(generic_type, args),
-            ),
+            None => {
+                let args = self.intern_type_slice(type_arguments);
+                self.traced(
+                    super::trace::TraceKind::TypeInstantiate,
+                    generic_type.as_u32(),
+                    0,
+                    |k1| k1.instantiate_generic_type_miss(generic_type, args),
+                )
+            }
         }
     }
 
@@ -1373,10 +1375,10 @@ impl TypedProgram {
         generic_parent: TypeId,
         type_args: &[TypeId],
     ) -> TypeId {
-        let args = self.intern_type_slice(type_args);
-        if let Some(existing) = self.get_specialization(generic_parent, args) {
+        if let Some(existing) = self.get_specialization(generic_parent, type_args) {
             return existing;
         }
+        let args = self.intern_type_slice(type_args);
         let type_id = self.reserve_instance_id(generic_parent, args);
         self.type_defn_context.pending_instances.push(PendingRecursiveInstance {
             type_id,
@@ -1756,6 +1758,23 @@ impl TypedProgram {
         res
     }
 
+    fn add_type_with_items<T: Copy>(
+        &mut self,
+        items: &[T],
+        make_type: impl FnOnce(MSlice<T, TypedProgram>) -> Type,
+        defn_info: Option<TypeDefnInfo>,
+        instance_info: Option<GenericInstanceInfo>,
+    ) -> TypeId {
+        let mark = self.mem.mark();
+        let handle = self.mem.pushn(items);
+        let type_count = self.types.len();
+        let type_id = self.add_type(make_type(handle), defn_info, instance_info);
+        if self.types.len() == type_count {
+            self.mem.reset_to(mark);
+        }
+        type_id
+    }
+
     pub(super) fn substitute_in_type_ext_inner(
         &mut self,
         type_id: TypeId,
@@ -1868,10 +1887,9 @@ impl TypedProgram {
                         None => self.get_instance_info(type_id).cloned(),
                     };
 
-                    let new_fields_handle = self.mem.pushn(new_fields.as_slice());
-                    let specialized_struct = StructType { fields: new_fields_handle, record_kind };
-                    self.add_type(
-                        Type::Struct(specialized_struct),
+                    self.add_type_with_items(
+                        new_fields.as_slice(),
+                        |fields| Type::Struct(StructType { fields, record_kind }),
                         defn_info_to_use,
                         generic_instance_info,
                     )
@@ -1919,12 +1937,12 @@ impl TypedProgram {
                         }
                         None => self.get_instance_info(type_id).cloned(),
                     };
-                    let new_variants_handle = self.mem.pushn(new_variants.as_slice());
-                    let new_sum =
-                        SumType { variants: new_variants_handle, tag_type: original_tag_type };
-                    let new_sum_id =
-                        self.add_type(Type::Sum(new_sum), defn_info_to_use, generic_instance_info);
-                    new_sum_id
+                    self.add_type_with_items(
+                        new_variants.as_slice(),
+                        |variants| Type::Sum(SumType { variants, tag_type: original_tag_type }),
+                        defn_info_to_use,
+                        generic_instance_info,
+                    )
                 } else {
                     type_id
                 }
@@ -2017,14 +2035,18 @@ impl TypedProgram {
                     new_params.push(new_param);
                 }
                 if any_new {
-                    let new_params_handle = self.mem.pushn(new_params.as_slice());
-                    let new_fun_type = FunctionType {
-                        physical_params: new_params_handle,
-                        return_type: new_return_type,
-                        is_lambda,
-                    };
-                    let new_function_type_id = self.add_type_anon(Type::Function(new_fun_type));
-                    new_function_type_id
+                    self.add_type_with_items(
+                        new_params.as_slice(),
+                        |physical_params| {
+                            Type::Function(FunctionType {
+                                physical_params,
+                                return_type: new_return_type,
+                                is_lambda,
+                            })
+                        },
+                        None,
+                        None,
+                    )
                 } else {
                     type_id
                 }
