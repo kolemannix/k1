@@ -11588,6 +11588,7 @@ impl TypedProgram {
                     ctx.scope_id,
                     skip_leading_receiver_arg,
                 )?;
+                self.splice_stashed_args(args_and_params.args, &stashed_args);
 
                 // We've finished inference and all types are known; we now compile all the expressions
                 // again to generate code with no holes and fully concrete types.
