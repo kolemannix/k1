@@ -152,6 +152,10 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
         pool
     }
 
+    pub fn bytes_used(&self) -> usize {
+        self.len * std::mem::size_of::<T>()
+    }
+
     #[inline]
     fn data_inbounds(&self) -> &[T] {
         unsafe { core::slice::from_raw_parts(self.mmap.as_ptr() as *const T, self.len) }

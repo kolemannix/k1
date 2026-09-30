@@ -467,6 +467,36 @@ impl TypedProgram {
         writeln!(out, "\t{} statements", self.stmts.len())?;
         writeln!(out, "\t{} functions", self.functions.len())?;
         writeln!(out, "\t{} types", self.type_count())?;
+        let mut pools: Vec<(&str, usize)> = vec![
+            ("typed exprs", self.exprs.exprs.bytes_used()),
+            ("typed expr type ids", self.exprs.type_ids.bytes_used()),
+            ("typed expr spans", self.exprs.spans.bytes_used()),
+            ("typed stmts", self.stmts.bytes_used()),
+            ("calls", self.calls.bytes_used()),
+            ("functions", self.functions.bytes_used()),
+            ("variables", self.variables.bytes_used()),
+            ("types", self.types.bytes_used()),
+            ("type instance info", self.type_instance_info.bytes_used()),
+            ("type variable counts", self.type_variable_counts.bytes_used()),
+            ("phys types", self.phys_types.bytes_used()),
+            ("scopes", self.scopes.bytes_used()),
+            ("static values", self.static_values.pool.bytes_used()),
+            ("trace frames", self.trace.frames.bytes_used()),
+            ("parsed exprs", self.ast.exprs.bytes_used()),
+            ("parsed stmts", self.ast.stmts.bytes_used()),
+            ("parsed type exprs", self.ast.type_exprs.bytes_used()),
+            ("parsed patterns", self.ast.patterns.bytes_used()),
+            ("parsed functions", self.ast.functions.bytes_used()),
+            ("perm arena", self.mem.bytes_used()),
+            ("ast arena", self.ast.mem.bytes_used()),
+        ];
+        pools.sort_by_key(|(_, bytes)| std::cmp::Reverse(*bytes));
+        let mut total = 0usize;
+        for (name, bytes) in &pools {
+            total += bytes;
+            writeln!(out, "\t{:>8}kb {}", bytes / crate::KILOBYTE, name)?;
+        }
+        writeln!(out, "\t{:>8}kb pools total", total / crate::KILOBYTE)?;
         writeln!(out, "\t{} idents", self.ast.idents.len())?;
         writeln!(
             out,

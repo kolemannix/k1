@@ -230,6 +230,11 @@ pub struct Scopes {
 }
 
 impl Scopes {
+    pub fn bytes_used(&self) -> usize {
+        self.scopes.bytes_used() + self.entries.bytes_used() + self.ns_maps.bytes_used()
+    }
+
+
     pub fn snap(&self, w: &mut crate::snap::SnapWriter) {
         use crate::snap::{snap_map_with, write_map_snap};
         let Scopes {

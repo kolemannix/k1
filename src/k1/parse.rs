@@ -1421,6 +1421,10 @@ impl ParsedExpressionPool {
         *self.spans.get(id)
     }
 
+    pub fn bytes_used(&self) -> usize {
+        self.expressions.bytes_used() + self.spans.bytes_used()
+    }
+
     pub fn set_span(&mut self, id: ParsedExprId, span: Span) {
         *self.spans.get_mut(id) = span
     }
@@ -1434,6 +1438,10 @@ pub struct ParsedTypeExpressionPool {
     type_expressions: VPool<ParsedTypeExpr, ParsedTypeExprId>,
 }
 impl ParsedTypeExpressionPool {
+    pub fn bytes_used(&self) -> usize {
+        self.type_expressions.bytes_used()
+    }
+
     fn new() -> Self {
         ParsedTypeExpressionPool { type_expressions: VPool::make("parsed_type_expr") }
     }
