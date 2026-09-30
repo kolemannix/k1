@@ -1110,11 +1110,15 @@ pub enum Callee {
     /// it's far cheaper and simpler to just say "Abstract call of this function type" than
     /// to specialize a copy of a function over a bunch of type params
     Abstract {
-        function_sig: FunctionSignature,
+        name: Option<StringId>,
+        function_type: TypeId,
+    },
+    AbstractGeneric {
+        signature: Handle<FunctionSignature, TypedProgram>,
     },
     Builtin {
-        function_sig: FunctionSignature,
-        builtin: Builtin,
+        function_id: FunctionId,
+        function_type: TypeId,
     },
     /// Must contain a LambdaObject
     DynamicLambda(TypedExprId),
@@ -1134,24 +1138,15 @@ pub enum Callee {
     /// Used by function type parameters
     DynamicAbstract {
         callee_expr: TypedExprId,
-        function_sig: FunctionSignature,
+        name: StringId,
+        function_type: TypeId,
     },
 }
-impl_copy_if_small!(32, Callee);
+impl_copy_if_small!(16, Callee);
 
 impl Callee {
     pub fn make_static(function_id: FunctionId) -> Callee {
         Callee::StaticFunction(function_id)
-    }
-
-    pub fn from_ability_impl_fn(ability_impl_fn: &AbilityImplFunction) -> Callee {
-        match *ability_impl_fn {
-            AbilityImplFunction::FunctionId(function_id) => Callee::StaticFunction(function_id),
-            AbilityImplFunction::Abstract(function_sig) => Callee::Abstract { function_sig },
-            AbilityImplFunction::Pending | AbilityImplFunction::Unavailable => {
-                unreachable!("callers resolve availability before building a Callee")
-            }
-        }
     }
 
     pub fn maybe_function_id(&self) -> Option<FunctionId> {
@@ -1159,6 +1154,7 @@ impl Callee {
             Callee::StaticFunction(function_id) => Some(*function_id),
             Callee::StaticLambda { function_id, .. } => Some(*function_id),
             Callee::Abstract { .. } => None,
+            Callee::AbstractGeneric { .. } => None,
             Callee::Builtin { .. } => None,
             Callee::DynamicLambda(_) => None,
             Callee::DynamicAbilityFn { .. } => None,
@@ -1168,6 +1164,7 @@ impl Callee {
     }
 }
 
+static_assert_size!(Call, 36);
 #[derive(Clone, Copy)]
 pub struct Call {
     pub callee: Callee,
@@ -1176,7 +1173,6 @@ pub struct Call {
     /// Specifically sizeOf[T], since there's no actual value to specialize on. kinda a hack would be
     /// better to specialize anyway and inline? idk
     pub type_args: TypeArgs,
-    pub return_type: TypeId,
 }
 
 #[derive(Clone, Copy)]
@@ -6378,13 +6374,8 @@ impl TypedProgram {
                 };
                 let impl_function =
                     self.get_ability_impl_function(impl_handle.full_impl_id, tafr.index);
-                self.eval_function_call(
-                    &call_ast_expr,
-                    call_span,
-                    None,
-                    ctx,
-                    Some(Callee::from_ability_impl_fn(&impl_function)),
-                )
+                let callee = self.make_ability_impl_fn_callee(impl_function);
+                self.eval_function_call(&call_ast_expr, call_span, None, ctx, Some(callee))
             }
             ParsedExpr::TypeHint(th) => {
                 let th = *th;
@@ -8929,7 +8920,6 @@ impl TypedProgram {
                     callee: Callee::StaticFunction(function_id),
                     args: self.mem.pushn(&[lhs, rhs]),
                     type_args: TypeArgs::empty(),
-                    return_type: fn_type.return_type,
                 };
                 self.finish_call(call, span, ctx)?
             }
@@ -9113,9 +9103,9 @@ impl TypedProgram {
                             ctx,
                             stashed_args,
                         )?;
-                        Ok(CallResolution::Call(Callee::from_ability_impl_fn(
-                            &ability_impl_function,
-                        )))
+                        Ok(CallResolution::Call(
+                            self.make_ability_impl_fn_callee(ability_impl_function),
+                        ))
                     } else {
                         Ok(CallResolution::Call(Callee::make_static(function_id)))
                     }
@@ -9996,7 +9986,7 @@ impl TypedProgram {
             ) {
                 Ok(ability_impl_fn) => {
                     return Ok(CallResolution::MethodCall {
-                        callee: Callee::from_ability_impl_fn(&ability_impl_fn),
+                        callee: self.make_ability_impl_fn_callee(ability_impl_fn),
                         receiver: base_expr,
                     });
                 }
@@ -11094,8 +11084,14 @@ impl TypedProgram {
         match callee {
             Callee::StaticFunction(function_id) => self.get_function(*function_id).signature(),
             Callee::StaticLambda { function_id, .. } => self.get_function(*function_id).signature(),
-            Callee::Abstract { function_sig, .. } => *function_sig,
-            Callee::Builtin { function_sig, .. } => *function_sig,
+            Callee::Abstract { name, function_type } => {
+                FunctionSignature::make_no_generics(*name, *function_type)
+            }
+            Callee::AbstractGeneric { signature } => *self.mem.get(*signature),
+            Callee::Builtin { function_id, function_type } => FunctionSignature::make_no_generics(
+                Some(self.get_function(*function_id).name),
+                *function_type,
+            ),
             Callee::DynamicFunction { .. } => {
                 let function_type = self.get_callee_function_type(callee);
                 FunctionSignature::make_no_generics(None, function_type)
@@ -11107,8 +11103,24 @@ impl TypedProgram {
             Callee::DynamicAbilityFn { slot_function_type, .. } => {
                 FunctionSignature::make_no_generics(None, *slot_function_type)
             }
-            // Should always be false...
-            Callee::DynamicAbstract { function_sig, .. } => *function_sig,
+            Callee::DynamicAbstract { name, function_type, .. } => {
+                FunctionSignature::make_no_generics(Some(*name), *function_type)
+            }
+        }
+    }
+
+    fn make_ability_impl_fn_callee(&mut self, ability_impl_fn: AbilityImplFunction) -> Callee {
+        match ability_impl_fn {
+            AbilityImplFunction::FunctionId(function_id) => Callee::StaticFunction(function_id),
+            AbilityImplFunction::Abstract(signature) if signature.has_type_params() => {
+                Callee::AbstractGeneric { signature: self.mem.push_h(signature) }
+            }
+            AbilityImplFunction::Abstract(signature) => {
+                Callee::Abstract { name: signature.name, function_type: signature.function_type }
+            }
+            AbilityImplFunction::Pending | AbilityImplFunction::Unavailable => {
+                unreachable!("callers resolve availability before building a Callee")
+            }
         }
     }
 
@@ -11117,8 +11129,10 @@ impl TypedProgram {
             Callee::StaticFunction(function_id) | Callee::StaticLambda { function_id, .. } => {
                 self.get_function(*function_id).type_id
             }
-            Callee::Abstract { function_sig, .. } => function_sig.function_type,
-            Callee::Builtin { function_sig, .. } => function_sig.function_type,
+            Callee::Abstract { function_type, .. } | Callee::Builtin { function_type, .. } => {
+                *function_type
+            }
+            Callee::AbstractGeneric { signature } => self.mem.get(*signature).function_type,
             Callee::DynamicFunction { function_pointer_expr } => {
                 let function_pointer_type =
                     self.get_expr_type(*function_pointer_expr).as_function_pointer().unwrap();
@@ -11134,7 +11148,7 @@ impl TypedProgram {
                 }
             },
             Callee::DynamicAbilityFn { slot_function_type, .. } => *slot_function_type,
-            Callee::DynamicAbstract { function_sig, .. } => function_sig.function_type,
+            Callee::DynamicAbstract { function_type, .. } => *function_type,
         }
     }
 
@@ -11143,8 +11157,8 @@ impl TypedProgram {
             Callee::StaticFunction(function_id) | Callee::StaticLambda { function_id, .. } => {
                 self.get_function(*function_id).builtin_type
             }
-            Callee::Abstract { .. } => None,
-            Callee::Builtin { builtin, .. } => Some(*builtin),
+            Callee::Abstract { .. } | Callee::AbstractGeneric { .. } => None,
+            Callee::Builtin { function_id, .. } => self.get_function(*function_id).builtin_type,
             Callee::DynamicFunction { .. } => None,
             Callee::DynamicLambda(_) => None,
             Callee::DynamicAbilityFn { .. } => None,
@@ -11225,10 +11239,8 @@ impl TypedProgram {
             Type::FunctionReference(fr) => Callee::StaticFunction(fr.function_id),
             Type::FunctionTypeParameter(ftp) => Callee::DynamicAbstract {
                 callee_expr: value,
-                function_sig: FunctionSignature::make_no_generics(
-                    Some(ftp.name),
-                    ftp.function_type,
-                ),
+                name: ftp.name,
+                function_type: ftp.function_type,
             },
             Type::FunctionPointer(_) => Callee::DynamicFunction { function_pointer_expr: value },
             _ => kbail!(
@@ -11525,24 +11537,18 @@ impl TypedProgram {
 
                 let final_callee = if is_abstract || ctx.is_inference() {
                     Callee::Abstract {
-                        function_sig: FunctionSignature::make_no_generics(
-                            signature.name,
-                            specialized_function_type,
-                        ),
+                        name: signature.name,
+                        function_type: specialized_function_type,
                     }
                 } else {
                     match callee {
                         Callee::StaticFunction(function_id)
-                            if let Some(builtin @ Builtin::TyperInline(_)) =
-                                self.get_function(function_id).builtin_type =>
+                            if matches!(
+                                self.get_function(function_id).builtin_type,
+                                Some(Builtin::TyperInline(_))
+                            ) =>
                         {
-                            Callee::Builtin {
-                                function_sig: FunctionSignature::make_no_generics(
-                                    signature.name,
-                                    specialized_function_type,
-                                ),
-                                builtin,
-                            }
+                            Callee::Builtin { function_id, function_type: specialized_function_type }
                         }
                         Callee::StaticFunction(function_id) => {
                             let function_id = match cached_specialization {
@@ -11556,11 +11562,9 @@ impl TypedProgram {
                             };
                             Callee::StaticFunction(function_id)
                         }
-                        Callee::Abstract { function_sig } => Callee::Abstract {
-                            function_sig: FunctionSignature::make_no_generics(
-                                function_sig.name,
-                                specialized_function_type,
-                            ),
+                        Callee::AbstractGeneric { .. } => Callee::Abstract {
+                            name: signature.name,
+                            function_type: specialized_function_type,
                         },
                         _ => self.ice(
                             "Unexpected Callee type for a generic that required specialization",
@@ -11668,16 +11672,7 @@ impl TypedProgram {
             }
         }
 
-        let callee_function_type = self.get_callee_function_type(&callee);
-        let call_return_type =
-            self.types.get(callee_function_type).as_function().unwrap().return_type;
-        let call = Call {
-            callee,
-            args: typechecked_arguments,
-            type_args,
-            return_type: call_return_type,
-        };
-        self.finish_call(call, span, ctx)
+        self.finish_call(Call { callee, args: typechecked_arguments, type_args }, span, ctx)
     }
 
     fn finish_call(
@@ -11688,12 +11683,13 @@ impl TypedProgram {
     ) -> K1Result<TypedExprId> {
         let callee_function_type = self.get_callee_function_type(&call.callee);
         self.warn_large_arg_copies(call.args, callee_function_type);
+        let return_type = self.types.get(callee_function_type).as_function().unwrap().return_type;
 
         // Builtins that are handled by the typechecking phase are implemented here.
         if let Some(builtin) = self.get_callee_builtin(&call.callee) {
             match builtin {
                 Builtin::TyperInline(kind) => {
-                    return self.handle_inline_builtin(call, span, kind, ctx);
+                    return self.handle_inline_builtin(call, return_type, span, kind, ctx);
                 }
                 Builtin::Backend(BackendBuiltin::TypeInfo) => {
                     let type_id_arg = *self.mem.get_nth(call.args, 0);
@@ -11712,7 +11708,6 @@ impl TypedProgram {
             }
         }
 
-        let return_type = call.return_type;
         let call_id = self.calls.add(call);
         Ok(self.exprs.add(TypedExpr::Call { call_id }, return_type, span))
     }
@@ -11826,6 +11821,7 @@ impl TypedProgram {
     fn handle_inline_builtin(
         &mut self,
         call: Call,
+        return_type: TypeId,
         span: Span,
         intrinsic: BuiltinTyperInline,
         _ctx: EvalExprContext,
@@ -11859,7 +11855,6 @@ impl TypedProgram {
                 // intern fn staticTypeToValue[T, ST: value T](): T
                 let value_type_arg = call.type_args.as_slice(&self.mem)[1];
 
-                let return_type = call.return_type;
                 let Type::StaticValue(value_type) = self.types.get(value_type_arg) else {
                     kbail!(
                         self,

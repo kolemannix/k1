@@ -99,7 +99,13 @@ impl TypedProgram {
                 }
             }
             AbilityImplFunction::Abstract(function_sig) if !function_sig.has_type_params() => {
-                (Callee::Abstract { function_sig }, TypeArgs::empty())
+                (
+                    Callee::Abstract {
+                        name: function_sig.name,
+                        function_type: function_sig.function_type,
+                    },
+                    TypeArgs::empty(),
+                )
             }
             AbilityImplFunction::Pending => unreachable!(),
             AbilityImplFunction::Abstract(_) | AbilityImplFunction::Unavailable => {
@@ -131,8 +137,7 @@ impl TypedProgram {
             )?);
         }
         let args = self.mem.pushn(&checked_args);
-        let return_type = self.types.get(function_type).as_function().unwrap().return_type;
-        self.finish_call(Call { callee, args, type_args, return_type }, span, ctx)
+        self.finish_call(Call { callee, args, type_args }, span, ctx)
     }
 
     pub(super) fn synth_negated(
@@ -157,7 +162,6 @@ impl TypedProgram {
             callee: Callee::StaticFunction(function_id),
             args: self.mem.pushn(args),
             type_args: TypeArgs::empty(),
-            return_type,
         });
         self.exprs.add(TypedExpr::Call { call_id }, return_type, span)
     }
@@ -653,7 +657,6 @@ impl TypedProgram {
             callee: Callee::StaticFunction(specialized_phony_fn_id),
             args: MSlice::empty(),
             type_args,
-            return_type: type_id,
         };
         let call_id = self.calls.add(call);
         self.exprs.add(TypedExpr::Call { call_id }, type_id, span)

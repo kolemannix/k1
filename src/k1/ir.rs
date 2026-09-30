@@ -2382,11 +2382,16 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
                         callee = IrCallee::Direct(*function_id);
                         environment_arg = Some(env_ptr);
                     }
-                    Callee::Abstract { .. } => {
+                    Callee::Abstract { .. } | Callee::AbstractGeneric { .. } => {
                         kbail!(b.k1, b.cur_span, "ir abstract callee");
                     }
-                    Callee::Builtin { builtin, .. } => {
-                        kbail!(b.k1, b.cur_span, "ir builtin callee: {}", builtin.kind_name());
+                    Callee::Builtin { function_id, .. } => {
+                        kbail!(
+                            b.k1,
+                            b.cur_span,
+                            "ir builtin callee: {}",
+                            b.k1.ident_str(b.k1.get_function(*function_id).name)
+                        );
                     }
                     Callee::DynamicLambda(dl) => {
                         let lambda_obj = compile_expr(b, None, *dl)?;
@@ -3560,7 +3565,10 @@ fn compile_vector_op(
             let op = match op {
                 VecOpKind::ShiftLeft => VecOpIr::Shl,
                 _ => {
-                    let Type::Vector(vector) = b.k1.types.get(call.return_type) else {
+                    let function_type = b.k1.get_callee_function_type(&call.callee);
+                    let return_type =
+                        b.k1.types.get(function_type).as_function().unwrap().return_type;
+                    let Type::Vector(vector) = b.k1.types.get(return_type) else {
                         b.k1.ice_span(b.cur_span, "vector shift must return a vector")
                     };
                     let elem_signed = b

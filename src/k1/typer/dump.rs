@@ -760,15 +760,15 @@ impl TypedProgram {
                         let name = self.get_function(*function_id).name;
                         self.write_ident(w, name)?;
                     }
-                    Callee::Abstract { function_sig } => {
+                    Callee::Abstract { .. } | Callee::AbstractGeneric { .. } => {
                         w.write_str("abstract ")?;
-                        self.display_function_signature(w, function_sig, None)?;
+                        let signature = self.get_callee_function_signature(&call.callee);
+                        self.display_function_signature(w, &signature, None)?;
                     }
-                    Callee::Builtin { function_sig, builtin } => {
+                    Callee::Builtin { .. } => {
                         w.write_str("builtin ")?;
-                        self.display_function_signature(w, function_sig, None)?;
-                        w.write_str(" ")?;
-                        w.write_str(builtin.kind_name())?;
+                        let signature = self.get_callee_function_signature(&call.callee);
+                        self.display_function_signature(w, &signature, None)?;
                     }
                     Callee::DynamicFunction { function_pointer_expr } => {
                         self.display_expr_id(*function_pointer_expr, w, indentation)?;
