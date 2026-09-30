@@ -1482,7 +1482,7 @@ impl SourceFiles {
         self.sources.partition_point(|s| s.base <= lo).saturating_sub(1) as FileId
     }
 
-    pub fn contains(&self, span: Span) -> bool {
+    pub fn contains_span(&self, span: Span) -> bool {
         if span.lo == 0 {
             return false;
         }
@@ -1973,7 +1973,7 @@ pub fn write_source_location(
     // If the span is longer than the line, just highlight the whole first line
     let highlight_length = if span.len > line.len { line.len as usize } else { span.len as usize };
     let thingies = "^".repeat(highlight_length).color(color);
-    let column = source.local(span.lo) - line.start_char;
+    let column = source.local_from_global_offset(span.lo) - line.start_char;
     let spaces = " ".repeat(column as usize);
     let line_start = line.line_index as i32 - context_lines as i32 / 2;
     let line_end = line_start + context_lines as i32;
@@ -2104,12 +2104,12 @@ impl SourceFile {
         &self.content(mem)[start as usize..(start + len) as usize]
     }
 
-    pub fn local(&self, lo: u32) -> u32 {
+    pub fn local_from_global_offset(&self, lo: u32) -> u32 {
         lo - self.base
     }
 
     pub fn get_span_content<'m>(&self, mem: &'m Mem, span: Span) -> &'m str {
-        self.get_content(mem, self.local(span.lo), span.len)
+        self.get_content(mem, self.local_from_global_offset(span.lo), span.len)
     }
 
     pub fn line_count(&self, mem: &Mem) -> usize {
@@ -2147,8 +2147,8 @@ impl SourceFile {
     }
 
     pub fn get_lines_for_span(&self, mem: &Mem, span: Span) -> Option<(Line, Line)> {
-        let start = self.get_line_for_offset(mem, self.local(span.lo))?;
-        let end = self.get_line_for_offset(mem, self.local(span.end()))?;
+        let start = self.get_line_for_offset(mem, self.local_from_global_offset(span.lo))?;
+        let end = self.get_line_for_offset(mem, self.local_from_global_offset(span.end()))?;
         Some((start, end))
     }
 
@@ -2163,7 +2163,7 @@ impl SourceFile {
     }
 
     pub fn get_line_for_span_start(&self, mem: &Mem, span: Span) -> Option<Line> {
-        self.get_line_for_offset(mem, self.local(span.lo))
+        self.get_line_for_offset(mem, self.local_from_global_offset(span.lo))
     }
 }
 

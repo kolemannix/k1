@@ -717,7 +717,7 @@ impl TypedProgram {
                 .intern(self.plan.get(self.plan.module(provider.from as usize).name));
             let span = self.provider_span(*provider)?;
             let source = self.ast.sources.source_by_span(span);
-            let start = source.local(span.lo) as usize;
+            let start = source.local_from_global_offset(span.lo) as usize;
             let literal = &source.content(&self.ast.mem)[start..start + span.len as usize];
             let table = self.mem.pushn(&[CodeChunkPos { start: 0, end: span.len, source: span }]);
             let emitted = self.add_emitted_source(literal, table, span);
@@ -952,7 +952,7 @@ impl TypedProgram {
         for (text, source) in chunks {
             let text_value = self.static_values.add_string(*text);
             let source_value =
-                self.static_values.add_int(TypedIntValue::U64(source.to_u64()));
+                self.static_values.add_int(TypedIntValue::U64(source.encoded_k1_u64()));
             let chunk_value =
                 self.static_values.add_struct_from_slice(chunk_type, &[text_value, source_value]);
             elements.push(chunk_value);
@@ -1037,7 +1037,7 @@ impl TypedProgram {
             let text = self.ast.sources.get_span_content(&self.ast.mem, output_span);
             let text_value = self.static_values.add_string(self.ast.idents.intern(text));
             let source_value =
-                self.static_values.add_int(TypedIntValue::U64(output_span.to_u64()));
+                self.static_values.add_int(TypedIntValue::U64(output_span.encoded_k1_u64()));
             let kind_value = self
                 .static_values
                 .add(StaticValue::Enum(kind_type, TypedIntValue::U8(token_kind as u8)));
@@ -1298,7 +1298,7 @@ impl TypedProgram {
             }
             let start = content.len() as u32;
             content.push_str(text);
-            if let Some(source) = Span::from_u64(chunk.source) {
+            if let Some(source) = Span::from_encoded_k1_u64(chunk.source) {
                 table.push(CodeChunkPos { start, end: start + text.len() as u32, source });
             }
         }

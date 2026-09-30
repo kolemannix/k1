@@ -176,7 +176,7 @@ impl TypedProgram {
                     continue;
                 };
                 if let Some(s) = params_span {
-                    let offset = self.ast.sources.source_by_span(s).local(s.lo);
+                    let offset = self.ast.sources.source_by_span(s).local_from_global_offset(s.lo);
                     let provider = ParamsProvider { from: index as u32, offset, len: s.len };
                     planner.providers.push((dep, provider));
                 }
@@ -353,9 +353,9 @@ impl TypedProgram {
             else {
                 self.ice_span(span, "dep-entry params-span was not a u64");
             };
-            let params_span = match Span::from_u64(raw) {
+            let params_span = match Span::from_encoded_k1_u64(raw) {
                 None => None,
-                Some(s) if !self.ast.sources.contains(s) => {
+                Some(s) if !self.ast.sources.contains_span(s) => {
                     kbail!(self, span, "invalid params span for dependency {}", name)
                 }
                 Some(s) if self.ast.sources.file_of(s.lo) != build_file_id => kbail!(

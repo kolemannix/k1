@@ -598,7 +598,7 @@ impl TypedProgram {
         let filename_string_id = source.filename(&self.ast.idents);
         let filename_value = self.static_values.add_string(filename_string_id);
         let line_value = self.static_values.add_int(TypedIntValue::U32(line_number));
-        let span_value = self.static_values.add_int(TypedIntValue::U64(span.to_u64()));
+        let span_value = self.static_values.add_int(TypedIntValue::U64(span.encoded_k1_u64()));
         let source_location_type_id = self.builtin_types.source_location.unwrap();
         let value = self.static_values.add_struct_from_slice(
             source_location_type_id,

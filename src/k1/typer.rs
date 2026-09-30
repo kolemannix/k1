@@ -3219,7 +3219,7 @@ impl TypedProgram {
                 let path = self.ast.idents.intern(from.ast.idents.get_string(source.file_path));
                 let file_id = self.register_source(path, source.content(&from.ast.mem));
                 let base = self.ast.sources.get(file_id).base;
-                Span { lo: base + source.local(message.span.lo), len: message.span.len }
+                Span { lo: base + source.local_from_global_offset(message.span.lo), len: message.span.len }
             };
             let text = self.ast.idents.intern(from.ast.idents.get_string(message.message));
             self.report_ext(K1Message { message: text, span, ..*message }, true);
@@ -11482,7 +11482,7 @@ impl TypedProgram {
                 kbail!(self, params_span, "dep params must be a struct literal");
             };
             let span_value_id =
-                self.static_values.add_int(TypedIntValue::U64(params_span.to_u64()));
+                self.static_values.add_int(TypedIntValue::U64(params_span.encoded_k1_u64()));
             let span_expr = self.exprs.add_static(span_value_id, U64_TYPE_ID, false, params_span);
             stashed_args.push((params_arg, span_expr));
         }

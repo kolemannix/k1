@@ -652,6 +652,6 @@ fn long_token_has_a_span() {
     assert_eq!(string_token.kind, TokenKind::StringDoneDq);
     let source = ast.sources.get(file_id);
     let span = string_token.span(source.base, &lexed.long_tokens);
-    assert_eq!((ast.sources.file_of(span.lo), source.local(span.lo), span.len), (file_id, 8, 70_002));
+    assert_eq!((ast.sources.file_of(span.lo), source.local_from_global_offset(span.lo), span.len), (file_id, 8, 70_002));
     assert_eq!(lexed.tokens[4].kind, TokenKind::KeywordLet);
 }

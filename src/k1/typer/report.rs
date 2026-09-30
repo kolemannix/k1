@@ -156,7 +156,7 @@ impl TypedProgram {
     fn remap_span_hop(&self, span: Span) -> Option<(Span, &EmittedSource)> {
         let file_id = self.ast.sources.file_of(span.lo);
         let table = &self.emitted_sources[self.emitted_source_for_file(file_id)?];
-        let local = self.ast.sources.get(file_id).local(span.lo);
+        let local = self.ast.sources.get(file_id).local_from_global_offset(span.lo);
         let entries = self.mem.getn(table.entries);
         let candidate = entries.partition_point(|entry| entry.start <= local);
         let &CodeChunkPos { start, end, source: source_span } = &entries[candidate.checked_sub(1)?];
@@ -508,9 +508,6 @@ impl TypedProgram {
             self.ir.live_inst_count(),
             self.bc.code.len()
         )?;
-        self.tmp.print_usage("\ttmp");
-        self.mem.print_usage("\tperm");
-        self.ir.mem.print_usage("\tmem ir");
         #[cfg(feature = "profile")]
         crate::kmem::print_stranded_counters();
         if self.restored_module_count > 0 {

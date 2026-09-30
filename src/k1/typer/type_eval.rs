@@ -1758,23 +1758,6 @@ impl TypedProgram {
         res
     }
 
-    fn add_type_with_items<T: Copy>(
-        &mut self,
-        items: &[T],
-        make_type: impl FnOnce(MSlice<T, TypedProgram>) -> Type,
-        defn_info: Option<TypeDefnInfo>,
-        instance_info: Option<GenericInstanceInfo>,
-    ) -> TypeId {
-        let mark = self.mem.mark();
-        let handle = self.mem.pushn(items);
-        let type_count = self.types.len();
-        let type_id = self.add_type(make_type(handle), defn_info, instance_info);
-        if self.types.len() == type_count {
-            self.mem.reset_to(mark);
-        }
-        type_id
-    }
-
     pub(super) fn substitute_in_type_ext_inner(
         &mut self,
         type_id: TypeId,
@@ -1783,6 +1766,23 @@ impl TypedProgram {
         generic_parent_to_attach: Option<TypeId>,
         defn_info_to_attach: Option<TypeDefnInfo>,
     ) -> TypeId {
+        fn add_type_with_items<T: Copy>(
+            k1: &mut TypedProgram,
+            items: &[T],
+            make_type: impl FnOnce(MSlice<T, TypedProgram>) -> Type,
+            defn_info: Option<TypeDefnInfo>,
+            instance_info: Option<GenericInstanceInfo>,
+        ) -> TypeId {
+            let mark = k1.mem.mark();
+            let handle = k1.mem.pushn(items);
+            let type_count = k1.types.len();
+            let type_id = k1.add_type(make_type(handle), defn_info, instance_info);
+            if k1.types.len() == type_count {
+                k1.mem.reset_to(mark);
+            }
+            type_id
+        }
+
         if generic_parent_to_attach.is_none()
             && defn_info_to_attach.is_none()
             && from_kinds.no_from_occurs_in(self.type_variable_counts.get(type_id))
@@ -1887,7 +1887,8 @@ impl TypedProgram {
                         None => self.get_instance_info(type_id).cloned(),
                     };
 
-                    self.add_type_with_items(
+                    add_type_with_items(
+                        self,
                         new_fields.as_slice(),
                         |fields| Type::Struct(StructType { fields, record_kind }),
                         defn_info_to_use,
@@ -1937,7 +1938,8 @@ impl TypedProgram {
                         }
                         None => self.get_instance_info(type_id).cloned(),
                     };
-                    self.add_type_with_items(
+                    add_type_with_items(
+                        self,
                         new_variants.as_slice(),
                         |variants| Type::Sum(SumType { variants, tag_type: original_tag_type }),
                         defn_info_to_use,
@@ -2035,7 +2037,8 @@ impl TypedProgram {
                     new_params.push(new_param);
                 }
                 if any_new {
-                    self.add_type_with_items(
+                    add_type_with_items(
+                        self,
                         new_params.as_slice(),
                         |physical_params| {
                             Type::Function(FunctionType {

@@ -1,72 +1,95 @@
 using k1 home: /Users/knix/dev/k1
-Wrote 1 emitted sources in 292.00ns
-	sources: 47 files 31501kb + 1 emitted 0kb (1 unique, 0kb); line tables 4058kb, trivia 8kb, tokens 0kb
-program stress100 took 754ms (1376186.86 line/s, 1038999 lines)
-	4945293 expressions
+Wrote 1 emitted sources in 84.00ns
+	sources: 47 files 31501kb + 1 emitted 0kb (1 unique, 0kb); line tables 4058kb, trivia 8kb
+program stress100 took 624ms (1664679.01 line/s, 1038999 lines)
+	4945292 expressions
 	988064 statements
 	358991 functions
 	603531 types
+	  136626kb parsed exprs
+	   96587kb typed exprs
+	   82776kb ast arena
+	   79639kb calls
+	   73619kb perm arena
+	   56680kb scopes
+	   50483kb functions
+	   44574kb trace frames
+	   38635kb typed expr spans
+	   28858kb parsed type exprs
+	   28701kb variables
+	   23157kb typed stmts
+	   19317kb typed expr type ids
+	   18860kb types
+	   18725kb parsed stmts
+	   14145kb type defn info
+	   10605kb parsed functions
+	    9430kb type variable counts
+	    4742kb parsed patterns
+	    4715kb type instance info
+	    4715kb phys types
+	     119kb static values
+	  845718kb pools total
 	6189 idents
 	5185 emitted, 5139 committed, 5645 live, 3671 code words
 	tmp usage: 0/1048576kb (0.00%), hwm: 21kb
-	perm usage: 72886/1048576kb (6.95%), hwm: 72886kb
-	mem ir usage: 408/1048576kb (0.04%), hwm: 408kb
+	perm usage: 73619/1048576kb (7.02%), hwm: 73619kb
+	mem ir usage: 435/1048576kb (0.04%), hwm: 435kb
 	kind                  count    excl ms speculative %
-	typecheck            106300     301.03     0%
-	infer                417173     162.44     0%
-	parse                    51     116.42     0%
-	specialize           241803      43.14     0%
-	pass types                3      35.56     0%
-	instantiate          184461      31.18     0%
-	read                      3      30.49     0%
-	pass declarations         3      23.55     0%
-	pass bodies               3       3.06     0%
-	pass namespaces           3       2.82     0%
-	lower                   401       1.25     0%
-	bcgen                    45       0.29     0%
-	optimize                197       0.18     0%  694 insts created
-	static exec             197       0.16     0%
-	inline                   40       0.14     0%  94 inlines
-	module                    3       0.13     0%
-	plan check                1       0.08     0%
+	typecheck            106300     267.80     0%
+	infer                417173     130.98     0%
+	parse                    51     104.06     0%
+	pass types                3      31.98     0%
+	read                      3      23.38     0%
+	pass declarations         3      20.33     0%
+	instantiate          184461      19.47     0%
+	specialize           241803      18.03     0%
+	pass bodies               3       2.75     0%
+	pass namespaces           3       2.53     0%
+	lower                   401       0.64     0%
+	bcgen                    45       0.18     0%
+	optimize                197       0.11     0%  694 insts created
+	static exec             197       0.09     0%
+	inline                   40       0.09     0%  94 inlines
 	run                      18       0.08     0%  4174 instrs (0.02us/instr)
-	simplify                 40       0.05     0%  80 passes
-	global                  137       0.02     0%
-	ferry                    35       0.02     0%
-	pass uses                 3       0.01     0%
+	module                    3       0.08     0%
+	plan check                1       0.03     0%
+	simplify                 40       0.02     0%  80 passes
+	global                  137       0.01     0%
 	macro                     1       0.01     0%
-	untracked                         2.91
+	pass uses                 3       0.01     0%
+	ferry                    35       0.01     0%
+	untracked                         1.47
 	top frames:
-	     38.44ms (    38ms incl) parse stress100.k1
-	     37.24ms (    37ms incl) parse stress100-c.k1
-	     36.94ms (    37ms incl) parse stress100-b.k1
-	     33.83ms (    37ms incl) pass types stress100
-	     25.70ms (    26ms incl) read stress100
-	     22.58ms (    25ms incl) pass declarations stress100
-	      4.76ms (     5ms incl) read core
-	      3.07ms (     3ms incl) infer stress100-b.k1:240508
-	      2.88ms (   527ms incl) pass bodies stress100
-	      2.71ms (     3ms incl) pass namespaces stress100
+	     34.96ms (    35ms incl) parse stress100.k1
+	     34.36ms (    34ms incl) parse stress100-c.k1
+	     33.37ms (    33ms incl) parse stress100-b.k1
+	     31.30ms (    34ms incl) pass types stress100
+	     21.96ms (    22ms incl) read stress100
+	     19.94ms (    22ms incl) pass declarations stress100
+	      2.65ms (   431ms incl) pass bodies stress100
+	      2.48ms (     2ms incl) pass namespaces stress100
+	      1.81ms (     2ms incl) typecheck main stress100.k1:342003
+	      1.31ms (     1ms incl) read core
 	top generics by specialization + body time:
-	      3.81ms  7235 instances next for buffer-iterator['t]
-	      2.05ms  7212 instances iterator for list['t]
-	      1.72ms     8 instances zero
-	      1.54ms  7214 instances push
-	      1.28ms  3608 instances index-ref for list['t]
-	      0.97ms  7211 instances empty
-	      0.88ms     8 instances zero
-	      0.60ms     3 instances copy
-	      0.43ms     9 instances mk-pair
-	      0.17ms     1 instances position-lanes
+	      1.02ms  7212 instances iterator for list['t]
+	      0.78ms  7235 instances next for buffer-iterator['t]
+	      0.55ms  7211 instances empty
+	      0.52ms  3608 instances index-ref for list['t]
+	      0.52ms  7214 instances push
+	      0.08ms     4 instances wrap2
+	      0.08ms     8 instances get
+	      0.07ms     3 instances encode
+	      0.07ms     8 instances zero
+	      0.07ms     5 instances total
 	top requesters of specializations (declaration + body time):
-	      1.72ms     1 declared by infer stress100-c.k1:289249
-	      0.88ms     1 declared by infer stress100-b.k1:143337
-	      0.60ms     0 declared by lower _enlarged-clone-in[char, *arena]
-	      0.58ms     0 declared by optimize expr core.k1:296
-	      0.44ms    43 declared by typecheck test stress100.k1:241355
-	      0.16ms    43 declared by typecheck test stress100.k1:119375
-	      0.14ms    43 declared by typecheck test stress100-c.k1:243350
-	      0.11ms     2 declared by typecheck sample-run stress100-c.k1:296034
-	      0.11ms     1 declared by infer stress100-c.k1:228540
-	      0.10ms     3 declared by typecheck summarize stress100-c.k1:316525
+	      0.16ms     0 declared by optimize expr core.k1:296
+	      0.11ms     2 declared by typecheck sample-run stress100-b.k1:11034
+	      0.08ms     1 declared by infer stress100.k1:54121
+	      0.08ms    43 declared by typecheck test stress100.k1:72635
+	      0.08ms    43 declared by typecheck test stress100-c.k1:291800
+	      0.07ms     2 declared by infer stress100-b.k1:235097
+	      0.07ms    43 declared by typecheck test stress100-b.k1:31595
+	      0.07ms    43 declared by typecheck test stress100.k1:242495
+	      0.07ms    43 declared by typecheck test stress100.k1:260735
+	      0.07ms    43 declared by typecheck test stress100.k1:223115
 	  ops: load 20% (833), store 18% (772), jump_if_icmp 13% (548), iadd 10% (409), jump 10% (407), ptr_index 7% (309), mov 6% (232), copy 3% (119), zero 2% (100), idiv_u 2% (100), irem_u 2% (100), enter 1% (47), other 5% (198)

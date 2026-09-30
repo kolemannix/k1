@@ -1820,7 +1820,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let source = self.k1.ast.sources.source_by_span(span);
         let line =
             source.get_line_for_span_start(&self.k1.ast.mem, span).expect("No line for span");
-        let column = source.local(span.lo) + 1 - line.start_char;
+        let column = source.local_from_global_offset(span.lo) + 1 - line.start_char;
         let locn = self.debug.debug_builder.create_debug_location(
             self.ctx,
             line.line_index + 1,

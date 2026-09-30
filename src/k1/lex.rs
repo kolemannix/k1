@@ -595,11 +595,11 @@ impl Span {
         self.lo + self.len
     }
 
-    pub fn to_u64(self) -> u64 {
+    pub fn encoded_k1_u64(self) -> u64 {
         self.lo as u64 | (self.len as u64) << 32
     }
 
-    pub fn from_u64(v: u64) -> Option<Span> {
+    pub fn from_encoded_k1_u64(v: u64) -> Option<Span> {
         if v == 0 { None } else { Some(Span { lo: v as u32, len: (v >> 32) as u32 }) }
     }
 
