@@ -138,9 +138,15 @@ fn test() {
   assert-equals((7: i32).abs(), 7)
   assert-equals((-7: i64).abs(), 7)
 
+  assert(test-compile({ let _x: u8 = 256; .{} }) is :some "Invalid u8: 256 does not fit")
+  assert(test-compile(emit("5q")).!.contains-string("Invalid integer suffix 'q'"))
+  assert(test-compile(emit("99999999999999999999")).!.contains-string("Invalid decimal integer: too large for any integer type"))
+
   .{}
 
 }
+
+macro emit(s: string) { code/from-string(s) }
 
 fn negate-generic[t](x: t): t where t: neg {
   x.negated()

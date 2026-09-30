@@ -1632,7 +1632,7 @@ impl TypedProgram {
         &mut self,
         module_id: ModuleId,
         file_id: FileId,
-        f: impl FnOnce(&mut parse::Parser) -> K1Result<R>,
+        f: impl FnOnce(&mut parse::Parser) -> parse::ParseResult<R>,
     ) -> K1Result<R> {
         let buffer = std::mem::take(&mut self.buffers.lexed);
 
@@ -1655,9 +1655,16 @@ impl TypedProgram {
             file_id,
         );
 
+        let error_count_start = p.ast.errors.len();
         let r = f(&mut p);
+        let recovered = p.ast.errors.drain(error_count_start..).last();
         self.buffers.lexed = lexed;
-        r
+        match (r, recovered) {
+            (Err(e), _) | (Ok(_), Some(e)) => {
+                Err(kerr!(self, e.span(), "Failed to parse the code you returned: {e}"))
+            }
+            (Ok(r), None) => Ok(r),
+        }
     }
 
     pub(super) fn parse_metaprogram_source(
@@ -1666,45 +1673,11 @@ impl TypedProgram {
         file_id: FileId,
         kind: ParseAdHocKind,
     ) -> K1Result<ParseMetaprogramResult> {
-        self.with_parser(module_id, file_id, move |p| {
-            let msg_base = "Failed to parse the code you returned: ";
-            let error_count_start = p.ast.errors.len();
-            match kind {
-                ParseAdHocKind::Expr => match p.expect_expression() {
-                    Err(e) => Err(make_message(
-                        p.ast.idents.intern(format!("{msg_base}{e}")),
-                        e.span(),
-                        MessageLevel::Error,
-                    )),
-                    Ok(parsed_expr) => {
-                        if p.ast.errors.len() > error_count_start {
-                            let e = p.ast.errors.last().unwrap().clone();
-                            let src = p.source().content(&p.ast.mem);
-                            Err(make_message(
-                                p.ast.idents.intern(format!("{msg_base}{e}\n{src}")),
-                                e.span(),
-                                MessageLevel::Error,
-                            ))
-                        } else {
-                            Ok(ParseMetaprogramResult::Expr(parsed_expr))
-                        }
-                    }
-                },
-                ParseAdHocKind::Definitions => {
-                    let defns = p.parse_definitions(TokenKind::Eof);
-                    if p.ast.errors.len() > error_count_start {
-                        let e = p.ast.errors.last().unwrap().clone();
-                        let src = p.source().content(&p.ast.mem);
-                        Err(make_message(
-                            p.ast.idents.intern(format!("{msg_base}{e}\n{src}")),
-                            e.span(),
-                            MessageLevel::Error,
-                        ))
-                    } else {
-                        Ok(ParseMetaprogramResult::Definitions(defns.to_mslice()))
-                    }
-                }
-            }
+        self.with_parser(module_id, file_id, move |p| match kind {
+            ParseAdHocKind::Expr => p.expect_expression().map(ParseMetaprogramResult::Expr),
+            ParseAdHocKind::Definitions => Ok(ParseMetaprogramResult::Definitions(
+                p.parse_definitions(TokenKind::Eof).to_mslice(),
+            )),
         })
     }
 

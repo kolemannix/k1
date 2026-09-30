@@ -1,5 +1,0 @@
-fn main(): i32 {
-  let x = 99999999999999999999
-  0
-}
-//errmsg: Invalid decimal integer: too large for any integer type

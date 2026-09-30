@@ -3256,20 +3256,24 @@ impl TypedProgram {
         let file_id = self.ast.sources.add_file(source);
         let lex_result = self.ast.register_lexed_file(file_id, &mut file.lexed);
         self.modules.get_mut(module_id).files.push_grow(&mut self.mem, file_id);
-        if let Err(e) = lex_result {
-            self.ast.report_error(e);
-            return file_id;
+        let error_count_start = self.ast.errors.len();
+        match lex_result {
+            Err(e) => self.ast.errors.push(e),
+            Ok(()) => {
+                let mut parser = parse::Parser::make_for_file(
+                    module_id,
+                    module_name,
+                    parsed_namespace_id,
+                    &mut self.ast,
+                    &file.lexed,
+                    file_id,
+                );
+                parser.parse_file_into_module();
+            }
         }
-
-        let mut parser = parse::Parser::make_for_file(
-            module_id,
-            module_name,
-            parsed_namespace_id,
-            &mut self.ast,
-            &file.lexed,
-            file_id,
-        );
-        parser.parse_file_into_module();
+        for e in &self.ast.errors[error_count_start..] {
+            parse::print_error(&self.ast, e);
+        }
         file_id
     }
 

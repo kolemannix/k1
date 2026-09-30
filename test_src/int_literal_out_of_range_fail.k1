@@ -1,5 +1,0 @@
-fn main(): i32 {
-  let x: u8 = 256
-  0
-}
-//errmsg: Invalid u8: 256 does not fit

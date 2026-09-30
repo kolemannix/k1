@@ -98,37 +98,11 @@ impl TypedProgram {
     fn parse_repl_source(&mut self, file_id: FileId) -> K1Result<ParseReplSourceResult> {
         let module_id = self.primary_module().id;
         self.with_parser(module_id, file_id, move |p| {
-            let msg_base = "Failed to parse the code you returned: ";
-            let error_count_start = p.ast.errors.len();
-            let p_result = if p.peek().kind == TokenKind::KeywordFn {
-                p.expect_function(None, false).map(Some)
+            if p.peek().kind == TokenKind::KeywordFn {
+                let defn = p.expect_function(None, false)?;
+                Ok(ParseReplSourceResult::Defn(ParsedId::Function(defn)))
             } else {
-                Ok(None)
-            };
-            let new_errors = p.ast.errors.len() - error_count_start;
-            match p_result {
-                Err(e) => Err(make_message(
-                    p.ast.idents.intern(format!("{msg_base}{e}")),
-                    e.span(),
-                    MessageLevel::Error,
-                )),
-                Ok(_) if new_errors > 0 => {
-                    let e = p.ast.errors.last().unwrap();
-                    Err(make_message(
-                        p.ast.idents.intern(format!("{msg_base}{e}")),
-                        e.span(),
-                        MessageLevel::Error,
-                    ))
-                }
-                Ok(Some(defn)) => Ok(ParseReplSourceResult::Defn(ParsedId::Function(defn))),
-                Ok(None) => match p.parse_block_statements(TokenKind::Eof) {
-                    Err(e) => Err(make_message(
-                        p.ast.idents.intern(format!("{msg_base}{e}")),
-                        e.span(),
-                        MessageLevel::Error,
-                    )),
-                    Ok(stmts) => Ok(ParseReplSourceResult::Stmts(stmts)),
-                },
+                p.parse_block_statements(TokenKind::Eof).map(ParseReplSourceResult::Stmts)
             }
         })
     }

@@ -1700,11 +1700,6 @@ impl ParsedProgram {
         ast
     }
 
-    pub fn report_error(&mut self, e: ParseError) {
-        print_error(self, &e);
-        self.errors.push(e);
-    }
-
     pub fn get_span_content(&self, span: Span) -> &str {
         self.sources.get_span_content(&self.mem, span)
     }
@@ -2182,20 +2177,6 @@ pub fn init_module(module_name: StringId, ast: &mut ParsedProgram) -> ParsedName
         .definitions
         .push_grow(&mut ast.mem, ParsedId::Namespace(module_namespace_id));
     module_namespace_id
-}
-
-pub fn parse_file(
-    ast: &mut ParsedProgram,
-    module_id: ModuleId,
-    module_name: StringId,
-    module_namespace_id: ParsedNamespaceId,
-    file_id: FileId,
-    lexed: &Lexed,
-) -> ParseResult<()> {
-    let mut parser =
-        Parser::make_for_file(module_id, module_name, module_namespace_id, ast, lexed, file_id);
-    parser.parse_file_into_module();
-    Ok(())
 }
 
 pub struct Parser<'toks, 'module> {
@@ -4702,7 +4683,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
             match parse(self) {
                 Err(e) => {
-                    self.ast.report_error(e);
+                    self.ast.errors.push(e);
                     match self.scan_to_kind(&[K::Comma, terminator])? {
                         t if t.kind == K::Comma => continue,
                         t if t.kind == terminator => break Ok(()),
@@ -4732,7 +4713,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 continue;
             }
             let e = self.error_expected(format!("new line or ',' in between each {name}"), next);
-            self.ast.report_error(e);
+            self.ast.errors.push(e);
             match self.scan_to_kind(&[K::Comma, terminator])? {
                 t if t.kind == K::Comma => continue,
                 t if t.kind == terminator => break Ok(()),
@@ -4885,9 +4866,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     }
                     let e = self
                         .error_expected("new line or ';' in between each statement", self.peek());
-                    self.ast.report_error(e);
+                    self.ast.errors.push(e);
                 }
-                Err(e) => self.ast.report_error(e),
+                Err(e) => self.ast.errors.push(e),
             }
             if self.tokens.cursor_position() == cursor_before {
                 self.advance();
@@ -5293,7 +5274,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 ParsedId::Function(fn_id) => functions.push_grow(&mut self.ast.mem, *fn_id),
                 other => {
                     let span = self.ast.get_span_for_id(*other);
-                    self.ast.report_error(ParseError::Parse {
+                    self.ast.errors.push(ParseError::Parse {
                         message: format!("Only fn definitions can appear in {container}"),
                         kind: K::Ident,
                         span,
@@ -5559,14 +5540,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             if t.kind == K::Eof {
                 let back = self.peek_back();
                 let e = self.error_expected(format!("a definition or {terminator}"), back);
-                self.ast.report_error(e);
+                self.ast.errors.push(e);
                 break;
             }
             let cursor_before = self.tokens.cursor_position();
             match self.expect_definition() {
                 Ok(def) => self.scratch_defns.push(def),
                 Err(e) => {
-                    self.ast.report_error(e);
+                    self.ast.errors.push(e);
                     if self.tokens.cursor_position() == cursor_before {
                         self.advance();
                     }
