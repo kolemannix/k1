@@ -17,6 +17,7 @@ mkdir -p $logs
 cargo build --features=llvm-sys/prefer-dynamic,single-thread --profile $profile --target-dir target/single-thread --bin k1 > $logs/single-thread-build.log 2>&1 &
 single_thread_build=$!
 cargo test --lib --no-run --features=llvm-sys/prefer-dynamic,lsp
+cargo check --features=llvm-sys/prefer-dynamic,lsp --bin lsp
 cargo build --features=llvm-sys/prefer-dynamic --profile $profile --bin k1_test --bin k1
 wait $single_thread_build || { cat $logs/single-thread-build.log; exit 1; }
 

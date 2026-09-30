@@ -132,7 +132,7 @@ impl TypedProgram {
         }
         let args = self.mem.pushn(&checked_args);
         let return_type = self.types.get(function_type).as_function().unwrap().return_type;
-        self.finish_call(Call { callee, args, type_args, return_type, span }, ctx)
+        self.finish_call(Call { callee, args, type_args, return_type }, span, ctx)
     }
 
     pub(super) fn synth_negated(
@@ -158,7 +158,6 @@ impl TypedProgram {
             args: self.mem.pushn(args),
             type_args: TypeArgs::empty(),
             return_type,
-            span,
         });
         self.exprs.add(TypedExpr::Call { call_id }, return_type, span)
     }
@@ -655,7 +654,6 @@ impl TypedProgram {
             args: MSlice::empty(),
             type_args,
             return_type: type_id,
-            span,
         };
         let call_id = self.calls.add(call);
         self.exprs.add(TypedExpr::Call { call_id }, type_id, span)

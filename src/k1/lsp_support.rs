@@ -1080,6 +1080,6 @@ fn use-it(): int { my-fn() }
         let (line, col) = point_of(DEFN_MACRO_SRC, "my-fn)");
         let defn_line = source.get_line_for_span_start(&k1.ast.mem, definition).unwrap();
         assert_eq!(defn_line.line_index, line);
-        assert_eq!(source.local(definition.lo) - defn_line.start_char, col);
+        assert_eq!(source.local_from_global_offset(definition.lo) - defn_line.start_char, col);
     }
 }

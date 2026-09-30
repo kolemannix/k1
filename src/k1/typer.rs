@@ -1177,7 +1177,6 @@ pub struct Call {
     /// better to specialize anyway and inline? idk
     pub type_args: TypeArgs,
     pub return_type: TypeId,
-    pub span: Span,
 }
 
 #[derive(Clone, Copy)]
@@ -9037,9 +9036,8 @@ impl TypedProgram {
                     args: self.mem.pushn(&[lhs, rhs]),
                     type_args: TypeArgs::empty(),
                     return_type: fn_type.return_type,
-                    span,
                 };
-                self.finish_call(call, ctx)?
+                self.finish_call(call, span, ctx)?
             }
             None => {
                 let lhs = match lhs_hint {
@@ -11784,13 +11782,16 @@ impl TypedProgram {
             args: typechecked_arguments,
             type_args,
             return_type: call_return_type,
-            span,
         };
-        self.finish_call(call, ctx)
+        self.finish_call(call, span, ctx)
     }
 
-    fn finish_call(&mut self, call: Call, ctx: EvalExprContext) -> K1Result<TypedExprId> {
-        let span = call.span;
+    fn finish_call(
+        &mut self,
+        call: Call,
+        span: Span,
+        ctx: EvalExprContext,
+    ) -> K1Result<TypedExprId> {
         let callee_function_type = self.get_callee_function_type(&call.callee);
         self.warn_large_arg_copies(call.args, callee_function_type);
 
@@ -11798,7 +11799,7 @@ impl TypedProgram {
         if let Some(builtin) = self.get_callee_builtin(&call.callee) {
             match builtin {
                 Builtin::TyperInline(kind) => {
-                    return self.handle_inline_builtin(call, kind, ctx);
+                    return self.handle_inline_builtin(call, span, kind, ctx);
                 }
                 Builtin::Backend(BackendBuiltin::TypeInfo) => {
                     let type_id_arg = *self.mem.get_nth(call.args, 0);
@@ -11809,11 +11810,11 @@ impl TypedProgram {
                         let info = self.get_type_info(type_id);
                         return Ok(self.add_static_constant_expr(info, span));
                     } else {
-                        self.check_builtin(&call, builtin, ctx)?
+                        self.check_builtin(&call, span, builtin, ctx)?
                     }
                 }
                 // All other builtins can still be checked for correctness here
-                _ => self.check_builtin(&call, builtin, ctx)?,
+                _ => self.check_builtin(&call, span, builtin, ctx)?,
             }
         }
 
@@ -11931,10 +11932,10 @@ impl TypedProgram {
     fn handle_inline_builtin(
         &mut self,
         call: Call,
+        span: Span,
         intrinsic: BuiltinTyperInline,
         _ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
-        let span = call.span;
         match intrinsic {
             BuiltinTyperInline::GetStaticValue => {
                 let arg0 = *self.mem.get_nth(call.args, 0);
@@ -12041,6 +12042,7 @@ impl TypedProgram {
     fn check_builtin(
         &mut self,
         call: &Call,
+        span: Span,
         intrinsic: Builtin,
         _ctx: EvalExprContext,
     ) -> K1Result<()> {
@@ -12049,21 +12051,21 @@ impl TypedProgram {
                 let type_from = call.type_args.as_slice(&self.mem)[0];
                 let type_to = call.type_args.as_slice(&self.mem)[1];
                 let Some(layout_from) = self.get_layout(type_from) else {
-                    kbail!(self, call.span, "Cannot bitcast from unsized type: {}", type_from)
+                    kbail!(self, span, "Cannot bitcast from unsized type: {}", type_from)
                 };
                 let Some(layout_to) = self.get_layout(type_to) else {
-                    kbail!(self, call.span, "Cannot bitcast to unsized type: {}", type_to)
+                    kbail!(self, span, "Cannot bitcast to unsized type: {}", type_to)
                 };
                 if layout_from.size == 0 {
-                    kbail!(self, call.span, "Cannot bitcast from zero-sized type: {}", type_from)
+                    kbail!(self, span, "Cannot bitcast from zero-sized type: {}", type_from)
                 }
                 if layout_to.size == 0 {
-                    kbail!(self, call.span, "Cannot bitcast to zero-sized type: {}", type_to)
+                    kbail!(self, span, "Cannot bitcast to zero-sized type: {}", type_to)
                 }
                 if layout_from.size != layout_to.size {
                     kbail!(
                         self,
-                        call.span,
+                        span,
                         "Cannot bitcast between types of different sizes: {} (size {}) -> {} (size {})",
                         type_from,
                         layout_from.size,
@@ -12079,7 +12081,7 @@ impl TypedProgram {
                 | BuiltinIr::AtomicRmw(_)
                 | BuiltinIr::AtomicCmpxchg { .. }
                 | BuiltinIr::AtomicFence),
-            ) => self.check_atomic_builtin(call, b),
+            ) => self.check_atomic_builtin(call, span, b),
             _ => Ok(()),
         }
     }
@@ -12106,19 +12108,19 @@ impl TypedProgram {
         }
     }
 
-    fn check_atomic_builtin(&self, call: &Call, builtin: BuiltinIr) -> K1Result<()> {
+    fn check_atomic_builtin(&self, call: &Call, span: Span, builtin: BuiltinIr) -> K1Result<()> {
         match builtin {
             BuiltinIr::AtomicLoad => {
                 let ord = self.atomic_ordering_arg(call, 1)?;
                 if matches!(ord, AtomicOrderingIr::Release | AtomicOrderingIr::AcqRel) {
-                    kbail!(self, call.span, "atomic load cannot use `:{}` ordering", ord.name());
+                    kbail!(self, span, "atomic load cannot use `:{}` ordering", ord.name());
                 }
                 Ok(())
             }
             BuiltinIr::AtomicStore => {
                 let ord = self.atomic_ordering_arg(call, 2)?;
                 if matches!(ord, AtomicOrderingIr::Acquire | AtomicOrderingIr::AcqRel) {
-                    kbail!(self, call.span, "atomic store cannot use `:{}` ordering", ord.name());
+                    kbail!(self, span, "atomic store cannot use `:{}` ordering", ord.name());
                 }
                 Ok(())
             }
@@ -12132,7 +12134,7 @@ impl TypedProgram {
                 if matches!(failure, AtomicOrderingIr::Release | AtomicOrderingIr::AcqRel) {
                     kbail!(
                         self,
-                        call.span,
+                        span,
                         "atomic cmpxchg failure ordering cannot be `:{}`",
                         failure.name()
                     );
@@ -12140,7 +12142,7 @@ impl TypedProgram {
                 if failure.to_tag() > success.to_tag() {
                     kbail!(
                         self,
-                        call.span,
+                        span,
                         "atomic cmpxchg failure ordering `:{}` cannot be stronger than success ordering `:{}`",
                         failure.name(),
                         success.name()
@@ -12153,7 +12155,7 @@ impl TypedProgram {
                 if ord == AtomicOrderingIr::Relaxed {
                     kbail!(
                         self,
-                        call.span,
+                        span,
                         "atomic fence requires an ordering stronger than `:relaxed`"
                     );
                 }

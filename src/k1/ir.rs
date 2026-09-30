@@ -3561,7 +3561,7 @@ fn compile_vector_op(
                 VecOpKind::ShiftLeft => VecOpIr::Shl,
                 _ => {
                     let Type::Vector(vector) = b.k1.types.get(call.return_type) else {
-                        b.k1.ice_span(call.span, "vector shift must return a vector")
+                        b.k1.ice_span(b.cur_span, "vector shift must return a vector")
                     };
                     let elem_signed = b
                         .k1

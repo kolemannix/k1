@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use k1::compiler::{
     Command, CompileProgramError, CompileRequest, LspCompileOptions, Target, compile_program,
 };
-use k1::lex::{self, Span, Span};
+use k1::lex::{self, Span};
 use k1::lsp_support::NameKind;
 use k1::parse;
 use k1::parse::{ParsedProgram, SourceFile};
@@ -105,9 +105,12 @@ fn span_to_range_in_ast(ast: &ParsedProgram, span: Span) -> Option<Range> {
     Some(Range {
         start: Position {
             line: start_line.line_index,
-            character: span.start - start_line.start_char,
+            character: source.local_from_global_offset(span.lo) - start_line.start_char,
         },
-        end: Position { line: end_line.line_index, character: span.end() - end_line.start_char },
+        end: Position {
+            line: end_line.line_index,
+            character: source.local_from_global_offset(span.end()) - end_line.start_char,
+        },
     })
 }
 
@@ -163,9 +166,8 @@ fn source_to_uri(path: impl AsRef<Path>) -> Url {
     Url::from_file_path(path.as_ref()).unwrap()
 }
 
-fn uri_from_span(k1: &TypedProgram, span_id: Span) -> Url {
-    let span = span_id;
-    let source = k1.ast.sources.get(span.file_id);
+fn uri_from_span(k1: &TypedProgram, span: Span) -> Url {
+    let source = k1.ast.sources.source_by_span(span);
     source_to_uri(k1.ast.idents.get_string(source.file_path))
 }
 
@@ -615,15 +617,13 @@ impl Backend {
             return vec![];
         };
         let file_id = source.file_id;
-        k1.messages
-            .borrow()
-            .iter()
-            .filter(|m| {
-                let span = m.span;
-                span.file_id == file_id
-            })
-            .cloned()
-            .collect()
+        let mut messages_in_file = Vec::new();
+        for m in k1.messages.borrow().iter() {
+            if !m.span.is_none() && k1.ast.sources.file_of(m.span.lo) == file_id {
+                messages_in_file.push(m.clone());
+            }
+        }
+        messages_in_file
     }
 
     fn messages_to_diagnostics(&self, messages: &[K1Message]) -> Vec<Diagnostic> {
@@ -880,8 +880,7 @@ impl LanguageServer for Backend {
                 match entry.trivia.kind {
                     lex::TokenTriviaKind::LineComment => {
                         let span = lex::Span {
-                            file_id: source.file_id,
-                            start: entry.trivia.start,
+                            lo: source.base + entry.trivia.start,
                             len: entry.trivia.len,
                         };
                         spans_and_kinds.push((span, TokenTypes::Comment as u32, 0));
@@ -890,13 +889,13 @@ impl LanguageServer for Backend {
                 }
             }
             spans_and_kinds.sort_unstable_by_key(|(span, token_type, _)| {
-                (span.start, *token_type != TokenTypes::Comment as u32)
+                (span.lo, *token_type != TokenTypes::Comment as u32)
             });
             let mut comment_end = 0;
             let mut prev_line = 1;
             let mut prev_start_col = 0;
             for (span, token_type, bitflags) in spans_and_kinds {
-                if span.start < comment_end {
+                if span.lo < comment_end {
                     continue;
                 }
                 if token_type == TokenTypes::Comment as u32 {
@@ -907,7 +906,7 @@ impl LanguageServer for Backend {
                     continue;
                 };
                 let line_number = line.line_number();
-                let start_col = span.start - line.start_char;
+                let start_col = source.local_from_global_offset(span.lo) - line.start_char;
                 let delta_line = line_number - prev_line;
                 let delta_start =
                     if delta_line == 0 { start_col - prev_start_col } else { start_col };
@@ -1093,7 +1092,7 @@ impl LanguageServer for Backend {
             error!("definition span is nil");
             return Ok(None);
         }
-        let definition_source = k1.ast.sources.get(definition_span.file_id);
+        let definition_source = k1.ast.sources.source_by_span(definition_span);
         let Some(range) = span_to_range(k1, definition_span) else {
             error!("Failed to convert span to range for goto_definition");
             return Ok(None);
@@ -1238,7 +1237,7 @@ fn find_references(
             return Ok(None);
         }
     }
-    spans.sort_by_key(|span| (span.file_id, span.start, span.len));
+    spans.sort_by_key(|span| (span.lo, span.len));
     spans.dedup();
     let mut locations = Vec::new();
     for span in spans {
@@ -1251,7 +1250,7 @@ fn find_references(
 
 fn location_from_resolved_span(k1: &TypedProgram, span: Span) -> Option<Location> {
     let range = span_to_range(k1, span)?;
-    let source = k1.ast.sources.get(span.file_id);
+    let source = k1.ast.sources.source_by_span(span);
     let uri = source_to_uri(k1.ast.idents.get_string(source.file_path));
     Some(Location { uri, range })
 }
