@@ -1,0 +1,5 @@
+fn main(): i32 {
+  let x = 5q
+  0
+}
+//errmsg: Invalid integer suffix
