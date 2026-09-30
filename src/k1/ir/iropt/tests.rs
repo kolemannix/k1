@@ -1,7 +1,7 @@
 use super::*;
 
 fn inst(u: &mut UnitBuf, block: BlockId, inst: Inst) -> InstId {
-    let id = u.new_inst(inst, SpanId::NONE, IrComment::None);
+    let id = u.new_inst(inst, Span::NONE, IrComment::None);
     u.push_inst(block, id);
     id
 }
@@ -93,7 +93,7 @@ fn commit_renumbers_into_layout_order_and_drops_unlinked() {
     inst(&mut u, entry, Inst::Jump(middle));
     let front = u.new_inst(
         Inst::IntSub { lhs: Value::Inst(sum), rhs: byte(2), t: ScalarType::I64 },
-        SpanId::NONE,
+        Span::NONE,
         IrComment::None,
     );
     u.insert_inst_after(sum, front);
@@ -135,7 +135,7 @@ fn commit_renumbers_into_layout_order_and_drops_unlinked() {
     let split = u.split_block_at(bid(2), iid(3));
     assert_eq!(insts(&u, bid(2)), [iid(2)]);
     assert_eq!(insts(&u, split), [iid(3), iid(4)]);
-    let after = u.new_inst(Inst::Unreachable, SpanId::NONE, IrComment::None);
+    let after = u.new_inst(Inst::Unreachable, Span::NONE, IrComment::None);
     u.insert_inst_after(iid(4), after);
     assert_eq!(insts(&u, split), [iid(3), iid(4), after]);
     ir.release_unit_buf(u);

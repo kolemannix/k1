@@ -17,7 +17,7 @@ const PRIMARY: usize = 0;
 struct Entry {
     module: PlannedModule,
     host: Option<ModuleId>,
-    manifest_span: SpanId,
+    manifest_span: Span,
     resolved_by: usize,
     deps: SV8<u32>,
 }
@@ -118,7 +118,7 @@ impl TypedProgram {
         planner.entries.push(Entry {
             module,
             host: None,
-            manifest_span: SpanId::NONE,
+            manifest_span: Span::NONE,
             resolved_by,
             deps: SV8::new(),
         });
@@ -175,10 +175,9 @@ impl TypedProgram {
                     }
                     continue;
                 };
-                if let Some(params_span) = params_span {
-                    let s = self.ast.spans.get(params_span);
-                    let provider =
-                        ParamsProvider { from: index as u32, offset: s.start, len: s.len };
+                if let Some(s) = params_span {
+                    let offset = self.ast.sources.source_by_span(s).local(s.lo);
+                    let provider = ParamsProvider { from: index as u32, offset, len: s.len };
                     planner.providers.push((dep, provider));
                 }
                 planner.entries[index].deps.push(dep as u32);
@@ -194,7 +193,7 @@ impl TypedProgram {
         param_type: TypeId,
         return_type: Option<TypeId>,
         signature: &str,
-    ) -> K1Result<Option<(FunctionId, SpanId)>> {
+    ) -> K1Result<Option<(FunctionId, Span)>> {
         let scope = self.modules.get(module).namespace_scope_id;
         let Some(fn_id) = self.scopes.find_function_local(scope, name) else { return Ok(None) };
         let function = self.get_function(fn_id);
@@ -229,7 +228,7 @@ impl TypedProgram {
             None => None,
         };
         let (unresolved, span) = match build_fn {
-            None => (request.default, SpanId::NONE),
+            None => (request.default, Span::NONE),
             Some((fn_id, span)) => {
                 let request_value = self.encode_build_request(&planner.plan, request);
                 let result = self.execute_static_function(fn_id, &[request_value], span)?;
@@ -249,7 +248,7 @@ impl TypedProgram {
         planner: &mut Planner,
         dependent: usize,
         dep_name: StringId,
-        span: SpanId,
+        span: Span,
         pending: &mut Pending,
     ) -> K1Result<Option<usize>> {
         let name = self.ast.idents.get_string(dep_name);
@@ -311,8 +310,8 @@ impl TypedProgram {
         planner: &mut Planner,
         index: usize,
         build_value: StaticValueId,
-    ) -> K1Result<SV8<(StringId, Option<SpanId>)>> {
-        let mut deps: SV8<(StringId, Option<SpanId>)> = SV8::new();
+    ) -> K1Result<SV8<(StringId, Option<Span>)>> {
+        let mut deps: SV8<(StringId, Option<Span>)> = SV8::new();
         planner.entries[index].module.kind =
             if index == PRIMARY { ModuleKind::Executable } else { ModuleKind::Library };
         let Some(host) = planner.entries[index].host else { return Ok(deps) };
@@ -349,17 +348,17 @@ impl TypedProgram {
         let build_file_id = self.modules.get(host).files.as_slice(&self.mem)[0];
         for dep in self.field_list(manifest, "deps") {
             let name = self.ast.idents.intern(self.field_str(*dep, "name"));
-            let StaticValue::Int(TypedIntValue::U32(raw)) =
+            let StaticValue::Int(TypedIntValue::U64(raw)) =
                 *self.static_values.get(self.static_field(*dep, "params-span"))
             else {
-                self.ice_span(span, "dep-entry params-span was not a u32");
+                self.ice_span(span, "dep-entry params-span was not a u64");
             };
-            let params_span = match SpanId::from_u32(raw) {
+            let params_span = match Span::from_u64(raw) {
                 None => None,
-                Some(s) if self.ast.spans.span_pool.get_opt(s).is_none() => {
+                Some(s) if !self.ast.sources.contains(s) => {
                     kbail!(self, span, "invalid params span for dependency {}", name)
                 }
-                Some(s) if self.ast.spans.get(s).file_id != build_file_id => kbail!(
+                Some(s) if self.ast.sources.file_of(s.lo) != build_file_id => kbail!(
                     self,
                     s,
                     "dep params for '{}' must be written in the module's build.k1",
@@ -416,7 +415,7 @@ impl TypedProgram {
         let s = self.static_values.get(value).as_struct().unwrap();
         let name_id = self.ast.idents.intern(name);
         let Some((index, _)) = self.get_struct_field_by_name(s.type_id, name_id) else {
-            self.ice_span(SpanId::NONE, format!("static struct has no field '{name}'"))
+            self.ice_span(Span::NONE, format!("static struct has no field '{name}'"))
         };
         self.static_values.get_slice(s.fields)[index]
     }
@@ -448,7 +447,7 @@ impl TypedProgram {
         let (type_id, int_value) = self.static_values.get(value).as_enum().unwrap();
         let members = self.mem.getn(self.types.get(type_id).expect_enum().member_values);
         let Some(member) = members.iter().find(|m| m.int_value == int_value) else {
-            self.ice_span(SpanId::NONE, "enum value matches no member")
+            self.ice_span(Span::NONE, "enum value matches no member")
         };
         self.ast.idents.get_string(member.name)
     }
@@ -457,7 +456,7 @@ impl TypedProgram {
         let name_id = self.ast.idents.intern(name);
         let members = self.mem.getn(self.types.get(enum_type).expect_enum().member_values);
         let Some(member) = members.iter().find(|m| m.name == name_id) else {
-            self.ice_span(SpanId::NONE, format!("enum has no member '{name}'"))
+            self.ice_span(Span::NONE, format!("enum has no member '{name}'"))
         };
         self.static_values.add(StaticValue::Enum(enum_type, member.int_value))
     }
@@ -481,7 +480,7 @@ impl TypedProgram {
         for field in self.mem.getn(struct_type.fields) {
             let name = self.ast.idents.get_string(field.name);
             let Some((_, value)) = fields.iter().find(|(n, _)| *n == name) else {
-                self.ice_span(SpanId::NONE, format!("no value for field '{name}'"))
+                self.ice_span(Span::NONE, format!("no value for field '{name}'"))
             };
             values.push(*value);
         }
@@ -508,7 +507,7 @@ impl TypedProgram {
         &mut self,
         value: StaticValueId,
         plan: &mut BuildPlan,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<BuildConfig> {
         let target_name = self.enum_name(self.static_field(value, "target"));
         let Some(target) = Target::parse(target_name) else {

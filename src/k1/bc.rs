@@ -8,7 +8,7 @@ pub mod lower;
 use fxhash::FxHashMap;
 
 use crate::ir::IrUnitId;
-use crate::lex::SpanId;
+use crate::lex::Span;
 use crate::typer::types::PhysicalType;
 use crate::typer::{FunctionId, TypedExprId};
 use crate::vpool::VVec;
@@ -349,7 +349,7 @@ pub struct BcProgram {
     pub unit_ranges: VVec<(u32, u32, IrUnitId)>,
     /// Sorted by pc: the span for all code from this pc until the next entry.
     /// Only consulted on slow paths and errors.
-    pub spans: VVec<(u32, SpanId)>,
+    pub spans: VVec<(u32, Span)>,
 
     /// Reusable lowering state; a stack because callee lowering recurses.
     /// Popped/pushed by `lower::lower_unit`, `reset()` between uses — so the
@@ -403,10 +403,10 @@ impl BcProgram {
         if pc >= start && pc < end { Some(unit) } else { None }
     }
 
-    pub fn span_for_pc(&self, pc: u32) -> SpanId {
+    pub fn span_for_pc(&self, pc: u32) -> Span {
         let idx = self.spans.partition_point(|(span_pc, _)| *span_pc <= pc);
         if idx == 0 {
-            return SpanId::NONE;
+            return Span::NONE;
         }
         self.spans[idx - 1].1
     }

@@ -57,7 +57,7 @@ impl TypedProgram {
         &mut self,
         subject_type: TypeId,
         all_unguarded_patterns: &[TypedPatternId],
-        subject_span: SpanId,
+        subject_span: Span,
         skip_build_message: bool,
     ) -> K1Result<()> {
         let mark = self.tmp.mark();
@@ -100,7 +100,7 @@ impl TypedProgram {
             self.ast.idents.intern(mstr)
         });
         let useless_message = first_useless.map(|pattern| {
-            let span = self.patterns.get(pattern).span_id();
+            let span = self.patterns.get(pattern).span();
             let message = k1_format_user!(self, "This pattern handled no cases: {}", pattern);
             (span, self.ast.idents.intern(message))
         });
@@ -887,7 +887,7 @@ impl TypedProgram {
     pub(super) fn eval_match_expr(
         &mut self,
         parsed_match: parse::ParsedMatch,
-        match_expr_span: SpanId,
+        match_expr_span: Span,
         ctx: EvalExprContext,
         allow_bindings: bool,
         fallback_expr: Option<TypedExprId>,
@@ -895,7 +895,7 @@ impl TypedProgram {
         pub(super) fn synth_match_scrutinee(
             k1: &mut TypedProgram,
             subject: TypedExprId,
-            span: SpanId,
+            span: Span,
         ) -> TypedExprId {
             match k1.types.get(k1.exprs.get_type(subject)) {
                 Type::Reference(_) => {
@@ -959,7 +959,7 @@ impl TypedProgram {
                             if this_pattern_bindings.is_empty() && !expected_bindings.is_empty() {
                                 kbail!(
                                     self,
-                                    self.patterns.get(pattern).span_id(),
+                                    self.patterns.get(pattern).span(),
                                     "Patterns in a multiple pattern arm must have the exact same bindings; but this one has none"
                                 );
                             }
@@ -1223,7 +1223,7 @@ impl TypedProgram {
         &mut self,
         pattern_id: TypedPatternId,
         value_id: StaticValueId,
-        bindings: &mut List<(StringId, SpanId, StaticValueId), MemTmp>,
+        bindings: &mut List<(StringId, Span, StaticValueId), MemTmp>,
     ) -> K1Result<bool> {
         let pattern = *self.patterns.get(pattern_id);
         let value = *self.static_values.get(value_id);
@@ -1239,7 +1239,7 @@ impl TypedProgram {
             }
             (TypedPattern::Reference(_), _) => kbail!(
                 self,
-                pattern.span_id(),
+                pattern.span(),
                 "A {} pattern cannot be matched statically: a reference has no compile-time identity",
                 pattern.kind_name()
             ),
@@ -1314,7 +1314,7 @@ impl TypedProgram {
             (TypedPattern::PointerNull(_), StaticValue::Zero(_)) => true,
             (TypedPattern::PointerNull(_), StaticValue::Int(v)) => v.is_zero(),
             (pattern, value) => self.ice_span(
-                pattern.span_id(),
+                pattern.span(),
                 format!(
                     "Static match: {} pattern against {} value",
                     pattern.kind_name(),
@@ -1377,11 +1377,11 @@ impl TypedProgram {
                     let get_struct_field = self.synth_field_access(
                         struct_base,
                         pattern_field.field_index as usize,
-                        SpanId::NONE,
+                        Span::NONE,
                     );
                     let final_field = if is_referencing {
                         // Infallible: when referencing, struct_base is a Deref
-                        self.synth_address_of(get_struct_field, SpanId::NONE, false).unwrap()
+                        self.synth_address_of(get_struct_field, Span::NONE, false).unwrap()
                     } else {
                         get_struct_field
                     };
@@ -1446,7 +1446,7 @@ impl TypedProgram {
                     );
                     let final_payload_expr = if is_referencing {
                         // Infallible: when referencing, sum_base is a Deref
-                        self.synth_address_of(get_payload_expr, SpanId::NONE, false).unwrap()
+                        self.synth_address_of(get_payload_expr, Span::NONE, false).unwrap()
                     } else {
                         get_payload_expr
                     };

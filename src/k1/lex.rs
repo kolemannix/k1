@@ -5,9 +5,7 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 
 use crate::debug;
-use crate::nz_u32_id;
 use crate::parse::BinaryOpKind;
-use crate::vpool::VPool;
 use crate::{static_assert_niched, static_assert_size};
 use TokenKind as K;
 
@@ -25,8 +23,7 @@ pub struct LexError {
 
 pub type LexResult<A> = anyhow::Result<A, LexError>;
 
-/// A token too long for the positional Token; carried under TOKEN_FLAG_SPAN_ID
-/// until `materialize_lexed_file` gives it a SpanId
+/// A token too long for the positional Token; its `start` indexes this table
 #[derive(Debug, Clone, Copy)]
 pub struct LongToken {
     pub start: u32,
@@ -38,7 +35,7 @@ pub struct Lexed {
     pub tokens: Vec<Token>,
     pub kinds: Vec<TokenKind>,
     pub trivia: TokenTriviaTable,
-    /// In token order, one per TOKEN_FLAG_SPAN_ID token
+    /// In token order, one per TOKEN_FLAG_LONG token
     pub long_tokens: Vec<LongToken>,
     pub error: Option<LexError>,
 }
@@ -53,7 +50,7 @@ impl Lexed {
     }
 
     pub fn get_token_start_len(&self, token: Token) -> (u32, u32) {
-        if token.flags & TOKEN_FLAG_SPAN_ID != 0 {
+        if token.flags & TOKEN_FLAG_LONG != 0 {
             let long = self.long_tokens[token.start as usize];
             (long.start, long.len)
         } else {
@@ -75,52 +72,6 @@ pub fn lex(content: &str, mut out: Lexed) -> Lexed {
     let mut lexer = Lexer::make(content);
     out.error = lexer.run(&mut out).err();
     out
-}
-
-nz_u32_id!(SpanId);
-impl SpanId {
-    pub fn is_none(self) -> bool {
-        self == Self::NONE
-    }
-    pub const NONE: SpanId = Self::ONE;
-}
-
-pub struct Spans {
-    pub span_pool: VPool<Span, SpanId>,
-}
-
-impl Spans {
-    pub fn new() -> Spans {
-        let mut span_pool = VPool::make("spans");
-        span_pool.add(Span::NONE);
-        Spans { span_pool }
-    }
-
-    pub fn add(&mut self, span: Span) -> SpanId {
-        self.span_pool.add(span)
-    }
-
-    pub fn get(&self, id: SpanId) -> Span {
-        *self.span_pool.get(id)
-    }
-
-    pub fn get_end(&self, id: SpanId) -> u32 {
-        let s = self.span_pool.get(id);
-        s.end()
-    }
-
-    #[inline]
-    pub fn extend(&mut self, span1: SpanId, span2: SpanId) -> SpanId {
-        let mut span1 = self.get(span1);
-        span1.extend_to(self.get_end(span2));
-        self.add(span1)
-    }
-}
-
-impl Default for Spans {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl Display for LexError {
@@ -625,19 +576,34 @@ impl TokenKind {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// A compile-wide source position range; `lo` is never 0 for a real
+/// location, so `NONE` is distinct from every span
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Span {
-    pub file_id: u32,
-    pub start: u32,
+    pub lo: u32,
     pub len: u32,
 }
+static_assert_size!(Span, 8);
 
 impl Span {
-    pub const NONE: Span = Span { file_id: 0, start: 0, len: 0 };
+    pub const NONE: Span = Span { lo: 0, len: 0 };
+
+    pub fn is_none(self) -> bool {
+        self == Self::NONE
+    }
 
     #[inline]
     pub fn end(&self) -> u32 {
-        self.start + self.len
+        self.lo + self.len
+    }
+
+    /// The K1-side encoding (`source-location.span`, `code-chunk.source`); 0 is NONE
+    pub fn to_u64(self) -> u64 {
+        self.lo as u64 | (self.len as u64) << 32
+    }
+
+    pub fn from_u64(v: u64) -> Option<Span> {
+        if v == 0 { None } else { Some(Span { lo: v as u32, len: (v >> 32) as u32 }) }
     }
 
     #[track_caller]
@@ -648,8 +614,7 @@ impl Span {
                 panic!("Attempt to extend span from {} to {}", self.end(), new_end)
             }
         }
-        let new_len = new_end - self.start;
-        self.len = new_len;
+        self.len = new_end - self.lo;
     }
 }
 
@@ -679,14 +644,10 @@ const TOKEN_FLAG_IS_WHITESPACE_PRECEDED: u8 = 0x01;
 #[allow(unused)]
 const TOKEN_FLAG_IS_WHITESPACE_FOLLOWED: u8 = 0x02;
 const TOKEN_FLAG_IS_NEWLINE_PRECEDED: u8 = 0x04;
-pub const TOKEN_FLAG_SPAN_ID: u8 = 0x08;
+pub const TOKEN_FLAG_LONG: u8 = 0x08;
 
-fn nzu32(v: u32) -> std::num::NonZeroU32 {
-    std::num::NonZeroU32::new(v).unwrap()
-}
-
-/// A token longer than u16::MAX (giant string literals) sets TOKEN_FLAG_SPAN_ID; `start`
-/// indexes `Lexed::long_tokens` until `materialize_lexed_file` swaps in its SpanId.
+/// A token longer than u16::MAX (giant string literals) sets TOKEN_FLAG_LONG; `start`
+/// then indexes `Lexed::long_tokens`.
 #[derive(Debug, Clone, Copy)]
 pub struct Token {
     pub kind: TokenKind,
@@ -709,60 +670,17 @@ impl Token {
             Err(_) => {
                 let index = long_tokens.len() as u32;
                 long_tokens.push(LongToken { start, len });
-                Token { kind, flags: flags | TOKEN_FLAG_SPAN_ID, len: 0, start: index }
+                Token { kind, flags: flags | TOKEN_FLAG_LONG, len: 0, start: index }
             }
         }
     }
 
-    pub fn from_span_id(kind: TokenKind, span_id: SpanId) -> Token {
-        Token {
-            kind,
-            flags: TOKEN_FLAG_SPAN_ID,
-            len: 0,
-            start: Into::<std::num::NonZeroU32>::into(span_id).get(),
-        }
-    }
-
-    /// Convert to a span-id-backed token; error constructors call this so a
-    /// stored error can recover its span with no pool or file in hand
-    pub fn materialize(self, file_id: u32, spans: &mut Spans) -> Token {
-        if self.flags & TOKEN_FLAG_SPAN_ID != 0 {
-            self
+    pub fn span(&self, base: u32, long_tokens: &[LongToken]) -> Span {
+        if self.flags & TOKEN_FLAG_LONG != 0 {
+            let long = long_tokens[self.start as usize];
+            Span { lo: base + long.start, len: long.len }
         } else {
-            let span_id = spans.add(Span { file_id, start: self.start, len: self.len as u32 });
-            Token {
-                kind: self.kind,
-                flags: self.flags | TOKEN_FLAG_SPAN_ID,
-                len: 0,
-                start: Into::<std::num::NonZeroU32>::into(span_id).get(),
-            }
-        }
-    }
-
-    /// The pooled span of a materialized token; NONE (with a debug panic) if
-    /// this token never went through `materialize`
-    pub fn materialized_span_id(&self) -> SpanId {
-        if self.flags & TOKEN_FLAG_SPAN_ID != 0 {
-            SpanId::from(nzu32(self.start))
-        } else {
-            debug_assert!(false, "materialized_span_id on a positional token");
-            SpanId::NONE
-        }
-    }
-
-    pub fn span(&self, file_id: u32, spans: &Spans) -> Span {
-        if self.flags & TOKEN_FLAG_SPAN_ID != 0 {
-            spans.get(SpanId::from(nzu32(self.start)))
-        } else {
-            Span { file_id, start: self.start, len: self.len as u32 }
-        }
-    }
-
-    pub fn span_id(&self, file_id: u32, spans: &mut Spans) -> SpanId {
-        if self.flags & TOKEN_FLAG_SPAN_ID != 0 {
-            SpanId::from(nzu32(self.start))
-        } else {
-            spans.add(Span { file_id, start: self.start, len: self.len as u32 })
+            Span { lo: base + self.start, len: self.len as u32 }
         }
     }
     pub fn is_whitespace_preceded(&self) -> bool {
@@ -1446,7 +1364,7 @@ fn is_numeric_char(c: char) -> bool {
 
 #[cfg(test)]
 mod test {
-    use crate::lex::{Lexed, Spans, TOKEN_LOOKAHEAD, Token, TokenKind as K, TokenTriviaKind, lex};
+    use crate::lex::{Lexed, TOKEN_LOOKAHEAD, Token, TokenKind as K, TokenTriviaKind, lex};
 
     #[test]
     fn byte_class_matches_char_methods() {
@@ -1492,12 +1410,12 @@ mod test {
         Ok(lexed)
     }
 
-    fn set_up(input: &str) -> anyhow::Result<(Spans, Vec<Token>)> {
-        Ok((Spans::new(), lex_ok(input)?.tokens))
+    fn set_up(input: &str) -> anyhow::Result<Vec<Token>> {
+        Ok(lex_ok(input)?.tokens)
     }
 
     fn expect_token_kinds(input: &str, expected: Vec<K>) -> anyhow::Result<()> {
-        let (_, token_vec) = set_up(input)?;
+        let token_vec = set_up(input)?;
         let mut kinds: Vec<K> = Vec::with_capacity(token_vec.len());
         for t in &token_vec {
             kinds.push(t.kind);
@@ -1508,7 +1426,6 @@ mod test {
     }
 
     fn assert_token(
-        spans: &Spans,
         tokens: &[Token],
         index: usize,
         kind: K,
@@ -1516,9 +1433,9 @@ mod test {
         len: u32,
         is_whitespace_preceded: bool,
     ) {
-        let span = tokens[index].span(0, spans);
+        let span = tokens[index].span(0, &[]);
         assert_eq!(tokens[index].kind, kind);
-        assert_eq!(span.start, start);
+        assert_eq!(span.lo, start);
         assert_eq!(span.len, len);
         assert_eq!(tokens[index].is_whitespace_preceded(), is_whitespace_preceded);
     }
@@ -1543,18 +1460,18 @@ mod test {
     #[test]
     fn signed_int() -> anyhow::Result<()> {
         let input = "-43";
-        let (spans, tokens) = set_up(input)?;
+        let tokens = set_up(input)?;
         let mut kinds: Vec<K> = Vec::with_capacity(tokens.len());
         for t in &tokens {
             kinds.push(t.kind);
         }
         assert_eq!(kinds, vec![K::Minus, K::Numeric, K::Eof]);
-        let span0 = tokens[0].span(0, &spans);
-        assert_eq!(span0.start, 0);
+        let span0 = tokens[0].span(0, &[]);
+        assert_eq!(span0.lo, 0);
         assert_eq!(span0.len, 1);
         assert_eq!(span0.end(), 1);
-        let span1 = tokens[1].span(0, &spans);
-        assert_eq!(span1.start, 1);
+        let span1 = tokens[1].span(0, &[]);
+        assert_eq!(span1.lo, 1);
         assert_eq!(span1.len, 2);
         assert_eq!(span1.end(), 3);
         assert!(!tokens[1].is_whitespace_preceded());
@@ -1564,19 +1481,19 @@ mod test {
     #[test]
     fn minus_int() -> anyhow::Result<()> {
         let input = "- 43";
-        let (spans, tokens) = set_up(input)?;
+        let tokens = set_up(input)?;
         let mut kinds: Vec<K> = Vec::with_capacity(tokens.len());
         for t in &tokens {
             kinds.push(t.kind);
         }
         assert_eq!(kinds, vec![K::Minus, K::Numeric, K::Eof]);
-        let span0 = tokens[0].span(0, &spans);
-        assert_eq!(span0.start, 0);
+        let span0 = tokens[0].span(0, &[]);
+        assert_eq!(span0.lo, 0);
         assert_eq!(span0.len, 1);
         assert_eq!(span0.end(), 1);
 
-        let span1 = tokens[1].span(0, &spans);
-        assert_eq!(span1.start, 2);
+        let span1 = tokens[1].span(0, &[]);
+        assert_eq!(span1.lo, 2);
         assert_eq!(span1.len, 2);
         assert_eq!(span1.end(), 4);
         assert!(tokens[1].is_whitespace_preceded());
@@ -1626,8 +1543,8 @@ mod test {
             ],
             kinds
         );
-        let let_span = tokens[0].span(0, &Spans::new());
-        assert_eq!((let_span.start, let_span.len), (45, 3));
+        let let_span = tokens[0].span(0, &[]);
+        assert_eq!((let_span.lo, let_span.len), (45, 3));
 
         let let_trivia = trivia.for_token(0);
         assert_eq!(let_trivia.len(), 2);
@@ -1668,21 +1585,21 @@ mod test {
 
     #[test]
     fn literal_string_simple() -> anyhow::Result<()> {
-        let (spans, tokens) = set_up("\"foobear\"")?;
-        assert_token(&spans, &tokens, 0, K::StringDoneDq, 0, 9, false);
+        let tokens = set_up("\"foobear\"")?;
+        assert_token(&tokens, 0, K::StringDoneDq, 0, 9, false);
         Ok(())
     }
 
     #[test]
     fn literal_string_in_call() -> anyhow::Result<()> {
-        let (spans, tokens) = set_up("let x = println(\"foobear\")")?;
-        assert_token(&spans, &tokens, 0, K::KeywordLet, 0, 3, false);
-        assert_token(&spans, &tokens, 1, K::Ident, 4, 1, true);
-        assert_token(&spans, &tokens, 2, K::Equals, 6, 1, true);
-        assert_token(&spans, &tokens, 3, K::Ident, 8, 7, true);
-        assert_token(&spans, &tokens, 4, K::OpenParen, 15, 1, false);
-        assert_token(&spans, &tokens, 5, K::StringDoneDq, 16, 9, false);
-        assert_token(&spans, &tokens, 6, K::CloseParen, 25, 1, false);
+        let tokens = set_up("let x = println(\"foobear\")")?;
+        assert_token(&tokens, 0, K::KeywordLet, 0, 3, false);
+        assert_token(&tokens, 1, K::Ident, 4, 1, true);
+        assert_token(&tokens, 2, K::Equals, 6, 1, true);
+        assert_token(&tokens, 3, K::Ident, 8, 7, true);
+        assert_token(&tokens, 4, K::OpenParen, 15, 1, false);
+        assert_token(&tokens, 5, K::StringDoneDq, 16, 9, false);
+        assert_token(&tokens, 6, K::CloseParen, 25, 1, false);
         Ok(())
     }
 
@@ -1697,11 +1614,11 @@ mod test {
 
     #[test]
     fn interpolation_fmt_spec() -> anyhow::Result<()> {
-        let (spans, tokens) = set_up(r#""${x:>8.2}${: f64}""#)?;
-        assert_token(&spans, &tokens, 2, K::Ident, 3, 1, false);
-        assert_token(&spans, &tokens, 3, K::FmtSpec, 4, 5, false);
-        assert_token(&spans, &tokens, 6, K::OpenBrace, 10, 2, false);
-        assert_token(&spans, &tokens, 7, K::Colon, 12, 1, false);
+        let tokens = set_up(r#""${x:>8.2}${: f64}""#)?;
+        assert_token(&tokens, 2, K::Ident, 3, 1, false);
+        assert_token(&tokens, 3, K::FmtSpec, 4, 5, false);
+        assert_token(&tokens, 6, K::OpenBrace, 10, 2, false);
+        assert_token(&tokens, 7, K::Colon, 12, 1, false);
         Ok(())
     }
 
@@ -1727,10 +1644,10 @@ mod test {
 
     #[test]
     fn interpolation_bare_ident() -> anyhow::Result<()> {
-        let (spans, tokens) = set_up(r#""Hello, $wide-world!""#)?;
-        assert_token(&spans, &tokens, 0, K::StringOpenDq, 0, 8, false);
-        assert_token(&spans, &tokens, 1, K::Ident, 9, 10, false);
-        assert_token(&spans, &tokens, 2, K::StringDoneDq, 19, 2, false);
+        let tokens = set_up(r#""Hello, $wide-world!""#)?;
+        assert_token(&tokens, 0, K::StringOpenDq, 0, 8, false);
+        assert_token(&tokens, 1, K::Ident, 9, 10, false);
+        assert_token(&tokens, 2, K::StringDoneDq, 19, 2, false);
         Ok(())
     }
 

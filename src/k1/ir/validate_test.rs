@@ -6,7 +6,7 @@ fn u64_value(n: u32) -> Value {
 }
 
 fn push(u: &mut UnitBuf, block: BlockId, inst: Inst) -> InstId {
-    let id = u.new_inst(inst, SpanId::NONE, IrComment::None);
+    let id = u.new_inst(inst, Span::NONE, IrComment::None);
     u.push_inst(block, id);
     id
 }
@@ -14,7 +14,7 @@ fn push(u: &mut UnitBuf, block: BlockId, inst: Inst) -> InstId {
 fn validate_handmade(name: &str, build: impl FnOnce(&mut UnitBuf)) -> Result<(), String> {
     let mut k1 = compile_source(name, "fn f(): u64 { 0 }\nfn main(): i32 { 0 }\n");
     let f = function_named(&k1, "f");
-    k1.compile_function_for_exec(f, None, SpanId::NONE).unwrap();
+    k1.compile_function_for_exec(f, None, Span::NONE).unwrap();
     let mut unit = *k1.ir.function_unit(f).unwrap();
     let mut u = k1.ir.take_unit_buf();
     build(&mut u);

@@ -104,9 +104,9 @@ impl Display for Layout {
 pub struct StructTypeField {
     pub name: StringId,
     pub type_id: TypeId,
-    pub span: SpanId,
+    pub span: Span,
 }
-impl_copy_if_small!(12, StructTypeField);
+impl_copy_if_small!(16, StructTypeField);
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GenericInstanceInfo {
@@ -220,15 +220,15 @@ pub struct TypeParameter {
     pub static_constraint: Option<TypeId>,
     pub predicate_functions: MSlice<QIdent, TypedProgram>,
     pub scope_id: ScopeId,
-    pub span: SpanId,
+    pub span: Span,
 }
-impl_copy_if_small!(24, TypeParameter);
+impl_copy_if_small!(28, TypeParameter);
 
 #[derive(Clone, Copy)]
 pub struct FunctionTypeParameter {
     pub name: StringId,
     pub scope_id: ScopeId,
-    pub span: SpanId,
+    pub span: Span,
     pub function_type: TypeId,
 }
 
@@ -263,7 +263,7 @@ pub struct TypedSumVariant {
     pub index: u32,
     pub payload: Option<TypeId>,
     pub tag_value: TypedIntValue,
-    pub name_span: SpanId,
+    pub name_span: Span,
 }
 
 #[derive(Clone, Copy)]
@@ -276,7 +276,7 @@ pub struct SumType {
 pub struct ScalarEnumValue {
     pub name: StringId,
     pub int_value: TypedIntValue,
-    pub name_span: SpanId,
+    pub name_span: Span,
 }
 
 #[derive(Copy, Clone)]
@@ -442,7 +442,7 @@ impl FloatType {
 
 // pub struct Spanned<T> {
 //     pub v: T,
-//     pub span: SpanId,
+//     pub span: Span,
 // }
 
 #[derive(Clone, Copy)]
@@ -546,7 +546,7 @@ impl OpaqueType {
     }
 }
 
-static_assert_size!(Type, 28);
+static_assert_size!(Type, 32);
 #[derive(Clone, Copy)]
 pub enum Type {
     Char,
@@ -2151,12 +2151,12 @@ impl TypedProgram {
             StructTypeField {
                 name: self.ast.idents.b.fn_ptr,
                 type_id: fn_ptr_type,
-                span: SpanId::NONE,
+                span: Span::NONE,
             },
             StructTypeField {
                 name: self.ast.idents.b.env_ptr,
                 type_id: POINTER_TYPE_ID,
-                span: SpanId::NONE,
+                span: Span::NONE,
             },
         ]);
         let struct_representation = self.add_type_anon(Type::Struct(StructType::struc(fields)));

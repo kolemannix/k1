@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use k1::compiler::{
     Command, CompileProgramError, CompileRequest, LspCompileOptions, Target, compile_program,
 };
-use k1::lex::{self, Span, SpanId};
+use k1::lex::{self, Span, Span};
 use k1::lsp_support::NameKind;
 use k1::parse;
 use k1::parse::{ParsedProgram, SourceFile};
@@ -111,8 +111,8 @@ fn span_to_range_in_ast(ast: &ParsedProgram, span: Span) -> Option<Range> {
     })
 }
 
-fn span_id_to_range(k1: &TypedProgram, span_id: SpanId) -> Option<Range> {
-    let span = k1.ast.spans.get(span_id);
+fn span_id_to_range(k1: &TypedProgram, span_id: Span) -> Option<Range> {
+    let span = span_id;
     span_to_range(k1, span)
 }
 
@@ -124,9 +124,9 @@ fn error_to_diagnostic(
     k1: &TypedProgram,
     message: String,
     level: MessageLevel,
-    span_id: SpanId,
+    span_id: Span,
 ) -> Option<(Url, Diagnostic)> {
-    if span_id == SpanId::NONE {
+    if span_id == Span::NONE {
         return None;
     }
     let url = uri_from_span(k1, span_id);
@@ -163,8 +163,8 @@ fn source_to_uri(path: impl AsRef<Path>) -> Url {
     Url::from_file_path(path.as_ref()).unwrap()
 }
 
-fn uri_from_span(k1: &TypedProgram, span_id: SpanId) -> Url {
-    let span = k1.ast.spans.get(span_id);
+fn uri_from_span(k1: &TypedProgram, span_id: Span) -> Url {
+    let span = span_id;
     let source = k1.ast.sources.get(span.file_id);
     source_to_uri(k1.ast.idents.get_string(source.file_path))
 }
@@ -593,7 +593,7 @@ impl Backend {
             .with_k1(|k1| {
                 let mut messages = vec![];
                 for m in k1.messages.borrow().iter() {
-                    if m.level == MessageLevel::Error && m.span == SpanId::NONE {
+                    if m.level == MessageLevel::Error && m.span == Span::NONE {
                         messages.push(k1.ident_str(m.message).to_string());
                     }
                 }
@@ -619,7 +619,7 @@ impl Backend {
             .borrow()
             .iter()
             .filter(|m| {
-                let span = k1.ast.spans.get(m.span);
+                let span = m.span;
                 span.file_id == file_id
             })
             .cloned()
@@ -743,7 +743,7 @@ impl LanguageServer for Backend {
             ast.errors.len()
         );
         for error in &ast.errors {
-            if let Some(range) = span_to_range_in_ast(&ast, ast.spans.get(error.span())) {
+            if let Some(range) = span_to_range_in_ast(&ast, error.span()) {
                 let diagnostic = Diagnostic {
                     range,
                     severity: Some(DiagnosticSeverity::ERROR),

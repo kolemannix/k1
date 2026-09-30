@@ -257,7 +257,7 @@ also appear in metaprograms.
 
 `core/code.k1` defines `code = { chunks: list[code-chunk] }`, where each
 `code-chunk = { text, source }` is a run of text plus the original span it came
-from (`source` is a compiler span id widened to u64; 0 means no source).
+from (`source` is a compiler span packed into a u64; 0 means no source).
 Final text and byte offsets only materialize at the compile boundary, so
 composing `code` values never copies or re-offsets text. `\ <stmt>` produces a
 `code` value: one chunk holding the statement's source text and span.

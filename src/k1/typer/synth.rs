@@ -9,13 +9,13 @@ use crate::{kbail, kerr};
 use super::*;
 
 impl TypedProgram {
-    pub(super) fn synth_bool(&mut self, value: bool, span: SpanId) -> TypedExprId {
+    pub(super) fn synth_bool(&mut self, value: bool, span: Span) -> TypedExprId {
         let value_id = self.static_values.add(StaticValue::Bool(value));
         let expr_id = self.add_static_constant_expr(value_id, span);
         expr_id
     }
 
-    pub(super) fn synth_empty_value(&mut self, span: SpanId) -> TypedExprId {
+    pub(super) fn synth_empty_value(&mut self, span: Span) -> TypedExprId {
         let value_id = self.static_values.empty_id();
         self.add_static_constant_expr(value_id, span)
     }
@@ -24,7 +24,7 @@ impl TypedProgram {
         &mut self,
         lhs: TypedExprId,
         rhs: TypedExprId,
-        span: SpanId,
+        span: Span,
     ) -> TypedExprId {
         let ty = self.exprs.get_type(lhs);
         let rhs_type = self.exprs.get_type(rhs);
@@ -41,7 +41,7 @@ impl TypedProgram {
         &mut self,
         expr: TypedExprId,
         self_adjust: SelfAdjust,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<TypedExprId> {
         match self_adjust {
             SelfAdjust::None => Ok(expr),
@@ -57,7 +57,7 @@ impl TypedProgram {
         fn_type_args: &[TypeId],
         args: &[TypedExprId],
         ctx: EvalExprContext,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<TypedExprId> {
         let ability_fn = self
             .abilities
@@ -139,7 +139,7 @@ impl TypedProgram {
         &mut self,
         expr: TypedExprId,
         ctx: EvalExprContext,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<TypedExprId> {
         let (neg_impl, _) =
             self.expect_ability_impl(BOOL_TYPE_ID, ABILITY_ID_NEG, false, ctx.scope_id, span)?;
@@ -151,7 +151,7 @@ impl TypedProgram {
         function_id: FunctionId,
         args: &[TypedExprId],
         return_type: TypeId,
-        span: SpanId,
+        span: Span,
     ) -> TypedExprId {
         let call_id = self.calls.add(Call {
             callee: Callee::StaticFunction(function_id),
@@ -169,7 +169,7 @@ impl TypedProgram {
         condition: TypedExprId,
         consequent: TypedExprId,
         alternate: TypedExprId,
-        span: SpanId,
+        span: Span,
     ) -> TypedExprId {
         let condition = MatchingCondition {
             instrs: self.mem.pushn(&[MatchingConditionInstr::cond(condition)]),
@@ -183,7 +183,7 @@ impl TypedProgram {
         condition: MatchingCondition,
         consequent: TypedExprId,
         alternate: TypedExprId,
-        span: SpanId,
+        span: Span,
     ) -> TypedExprId {
         let cons_arm = TypedMatchArm { case: None, condition, consequent_expr: consequent };
         let alt_arm = TypedMatchArm {
@@ -204,7 +204,7 @@ impl TypedProgram {
         expr: TypedExprId,
         target_type: TypeId,
         cast_type: CastType,
-        span: Option<SpanId>,
+        span: Option<Span>,
     ) -> TypedExprId {
         let span = span.unwrap_or_else(|| self.exprs.get_span(expr));
         self.exprs.add(TypedExpr::Cast(TypedCast { cast_type, base_expr: expr }), target_type, span)
@@ -230,7 +230,7 @@ impl TypedProgram {
         (some_expr, optional_type)
     }
 
-    pub(super) fn synth_optional_none(&mut self, type_id: TypeId, span: SpanId) -> TypedExprId {
+    pub(super) fn synth_optional_none(&mut self, type_id: TypeId, span: Span) -> TypedExprId {
         let optional_type = self.synth_optional_type(type_id);
         let none_expr = self.exprs.add(
             TypedExpr::SumConstructor(TypedSumConstructor { variant_index: 0, payload: None }),
@@ -242,7 +242,7 @@ impl TypedProgram {
 
     pub(super) fn synth_dereference(&mut self, base: TypedExprId) -> TypedExprId {
         let type_id = self.get_expr_type(base).expect_reference().inner_type;
-        self.exprs.add(TypedExpr::Deref(DerefExpr { target: base }), type_id, SpanId::NONE)
+        self.exprs.add(TypedExpr::Deref(DerefExpr { target: base }), type_id, Span::NONE)
     }
 
     pub(super) fn synth_dereference_when(
@@ -256,7 +256,7 @@ impl TypedProgram {
     pub(super) fn synth_enum_get_value(
         &mut self,
         enum_expr: TypedExprId,
-        span: SpanId,
+        span: Span,
     ) -> TypedExprId {
         let Type::Enum(e) = self.types.get(self.exprs.get_type(enum_expr)) else {
             self.ice_span(span, "need enum")
@@ -269,7 +269,7 @@ impl TypedProgram {
         )
     }
 
-    pub(super) fn synth_sum_get_tag(&mut self, sum_expr: TypedExprId, span: SpanId) -> TypedExprId {
+    pub(super) fn synth_sum_get_tag(&mut self, sum_expr: TypedExprId, span: Span) -> TypedExprId {
         let Type::Sum(sum) = self.types.get(self.exprs.get_type(sum_expr)) else {
             self.ice_span(span, "need sum")
         };
@@ -281,7 +281,7 @@ impl TypedProgram {
         &mut self,
         parent_scope: ScopeId,
         scope_type: ScopeType,
-        span: SpanId,
+        span: Span,
         max_stmt_len: u32,
     ) -> BlockBuilder {
         let block_scope_id =
@@ -299,7 +299,7 @@ impl TypedProgram {
         &mut self,
         exprs: &[TypedExprId],
         scope_id: ScopeId,
-        span: SpanId,
+        span: Span,
     ) -> TypedExprId {
         let mut b =
             BlockBuilder { statements: self.mem.new_list(exprs.len() as u32), scope_id, span };
@@ -314,7 +314,7 @@ impl TypedProgram {
         &mut self,
         instrs: &[MatchingConditionInstr],
         scope_id: ScopeId,
-        span: SpanId,
+        span: Span,
     ) -> TypedExprId {
         let mut b =
             BlockBuilder { statements: self.mem.new_list(instrs.len() as u32), scope_id, span };
@@ -349,7 +349,7 @@ impl TypedProgram {
         name: StringId,
         initializer: TypedExprId,
         owner_scope: ScopeId,
-        span: SpanId,
+        span: Span,
     ) -> SynthedVariable {
         self.synth_variable_defn(name, initializer, true, owner_scope, Some(span))
     }
@@ -361,7 +361,7 @@ impl TypedProgram {
         initializer_id: TypedExprId,
         user_visible: bool,
         owner_scope: ScopeId,
-        span: Option<SpanId>,
+        span: Option<Span>,
     ) -> SynthedVariable {
         let initializer_type = self.exprs.get_type(initializer_id);
         let span = match span {
@@ -498,7 +498,7 @@ impl TypedProgram {
         let pad_var =
             self.synth_variable_defn_simple(self.ast.idents.b.fmt, new_pad, block.scope_id);
         self.push_block_stmt_id(&mut block, pad_var.defn_stmt);
-        let pad = self.synth_address_of(pad_var.variable_expr, SpanId::NONE, true)?;
+        let pad = self.synth_address_of(pad_var.variable_expr, Span::NONE, true)?;
         let print_call = self.synth_print_call(value, pad, spec.precision, block_ctx)?;
         self.push_block_expr_id(&mut block, print_call);
 
@@ -548,7 +548,7 @@ impl TypedProgram {
     pub(super) fn synth_string_literal(
         &mut self,
         string_id: StringId,
-        span: SpanId,
+        span: Span,
     ) -> TypedExprId {
         let string_value = self.static_values.add_string(string_id);
         self.add_static_constant_expr(string_value, span)
@@ -559,7 +559,7 @@ impl TypedProgram {
         &mut self,
         scope_id: ScopeId,
         expr: TypedExprId,
-        span: SpanId,
+        span: Span,
     ) -> TypedExprId {
         let return_expr = self.exprs.add_return(expr, None, span);
         let mut block_builder = BlockBuilder { statements: self.mem.new_list(1), scope_id, span };
@@ -570,36 +570,35 @@ impl TypedProgram {
     pub(super) fn synth_string_literal_from_str(
         &mut self,
         s: impl AsRef<str>,
-        span: SpanId,
+        span: Span,
     ) -> TypedExprId {
         let string_id = self.ast.idents.intern(s);
         self.synth_string_literal(string_id, span)
     }
 
-    pub(super) fn synth_int(&mut self, int_value: TypedIntValue, span: SpanId) -> TypedExprId {
+    pub(super) fn synth_int(&mut self, int_value: TypedIntValue, span: Span) -> TypedExprId {
         let int_value_id = self.static_values.add_int(int_value);
         self.add_static_constant_expr(int_value_id, span)
     }
 
-    pub(super) fn synth_type_id_literal(&mut self, type_id: TypeId, span: SpanId) -> TypedExprId {
+    pub(super) fn synth_type_id_literal(&mut self, type_id: TypeId, span: Span) -> TypedExprId {
         let type_id_struct_value_id = self.add_type_id_value(type_id);
         self.add_static_constant_expr(type_id_struct_value_id, span)
     }
 
-    pub(super) fn synth_i64(&mut self, value: i64, span: SpanId) -> TypedExprId {
+    pub(super) fn synth_i64(&mut self, value: i64, span: Span) -> TypedExprId {
         self.synth_int(TypedIntValue::I64(value), span)
     }
 
-    pub(super) fn synth_source_location(&mut self, span: SpanId) -> TypedExprId {
-        let span = self.remap_to_source_span(span);
-        let the_span = self.ast.spans.get(span);
-        let source = self.ast.sources.get(the_span.file_id);
+    pub(super) fn synth_source_location(&mut self, span: Span) -> TypedExprId {
+        let span = self.remap_span(span);
+        let source = self.ast.sources.source_by_span(span);
         let line_number =
-            source.get_line_for_span_start(&self.ast.mem, the_span).unwrap().line_number();
+            source.get_line_for_span_start(&self.ast.mem, span).unwrap().line_number();
         let filename_string_id = source.filename(&self.ast.idents);
         let filename_value = self.static_values.add_string(filename_string_id);
         let line_value = self.static_values.add_int(TypedIntValue::U32(line_number));
-        let span_value = self.static_values.add_int(TypedIntValue::U32(span.as_u32()));
+        let span_value = self.static_values.add_int(TypedIntValue::U64(span.to_u64()));
         let source_location_type_id = self.builtin_types.source_location.unwrap();
         let value = self.static_values.add_struct_from_slice(
             source_location_type_id,
@@ -608,7 +607,7 @@ impl TypedProgram {
         self.add_static_constant_expr(value, span)
     }
 
-    pub(super) fn synth_module_dir(&mut self, span: SpanId) -> TypedExprId {
+    pub(super) fn synth_module_dir(&mut self, span: Span) -> TypedExprId {
         let module_id = self.module_of_span(span);
         let dir_value = self.static_values.add_string(self.modules.get(module_id).home_dir);
         self.add_static_constant_expr(dir_value, span)
@@ -645,7 +644,7 @@ impl TypedProgram {
     /// Used when we skip static execution, but still need to typecheck the rest of the
     /// body; this expression should never be executed; it should either be a call to
     /// crash, but transmuted to the expected type, or a special Unreachable node
-    pub(super) fn synth_phony(&mut self, type_id: TypeId, span: SpanId) -> TypedExprId {
+    pub(super) fn synth_phony(&mut self, type_id: TypeId, span: Span) -> TypedExprId {
         let type_args = TypeArgs::one(type_id);
         let phony_fn_id =
             self.scopes.find_function(self.scopes.core_scope_id, self.ast.idents.b.phony).unwrap();
@@ -665,7 +664,7 @@ impl TypedProgram {
     pub(super) fn synth_phony_expected_type(
         &mut self,
         expected_type: Option<TypeId>,
-        span: SpanId,
+        span: Span,
     ) -> TypedExprId {
         self.synth_phony(expected_type.unwrap_or(self.builtin_types.empty), span)
     }
@@ -674,7 +673,7 @@ impl TypedProgram {
         &mut self,
         struct_expr: TypedExprId,
         field_index: usize,
-        span: SpanId,
+        span: Span,
     ) -> TypedExprId {
         let struct_type_id = self.exprs.get_type(struct_expr);
         let Type::Struct(s) = self.types.get(struct_type_id) else {
@@ -698,7 +697,7 @@ impl TypedProgram {
         &mut self,
         sum_expr: TypedExprId,
         variant_index: u32,
-        span: Option<SpanId>,
+        span: Option<Span>,
     ) -> K1Result<TypedExprId> {
         let sum_type = self.types.get(self.exprs.get_type(sum_expr)).expect_sum();
         let tag_type = sum_type.tag_type;
@@ -718,7 +717,7 @@ impl TypedProgram {
         writer_expr: TypedExprId,
         parts: MSlice<InterpolatedStringPart, ParsedProgram>,
         args_expr: TypedExprId,
-        span: SpanId,
+        span: Span,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let code_mode = match self.types.get(self.exprs.get_type(writer_expr)) {
@@ -737,7 +736,7 @@ impl TypedProgram {
             k1: &mut TypedProgram,
             args: TypedExprId,
             name: StringId,
-            span: SpanId,
+            span: Span,
         ) -> Option<TypedExprId> {
             let type_id = k1.exprs.get_type(args);
             match k1.types.get(type_id) {
@@ -757,7 +756,7 @@ impl TypedProgram {
             k1: &mut TypedProgram,
             args: TypedExprId,
             n: usize,
-            span: SpanId,
+            span: Span,
         ) -> K1Result<TypedExprId> {
             let type_id = k1.exprs.get_type(args);
             match k1.types.get(type_id) {
@@ -955,7 +954,7 @@ impl TypedProgram {
             None,
         );
         let string_builder_expr =
-            self.synth_address_of(string_builder_var.variable_expr, SpanId::NONE, true).unwrap();
+            self.synth_address_of(string_builder_var.variable_expr, Span::NONE, true).unwrap();
         self.push_block_stmt_id(&mut block, string_builder_var.defn_stmt);
         let args_expr = args_expr.unwrap_or(self.synth_empty_value(span));
         let format_block = self.synth_format_calls(
@@ -995,7 +994,7 @@ impl TypedProgram {
     pub(super) fn synth_interpolated_code(
         &mut self,
         parts: MSlice<InterpolatedStringPart, ParsedProgram>,
-        span: SpanId,
+        span: Span,
         ctx: EvalExprContext,
         args_expr: Option<TypedExprId>,
     ) -> K1Result<TypedExprId> {
@@ -1028,7 +1027,7 @@ impl TypedProgram {
             None,
         );
         let code_builder_expr =
-            self.synth_address_of(code_builder_var.variable_expr, SpanId::NONE, true).unwrap();
+            self.synth_address_of(code_builder_var.variable_expr, Span::NONE, true).unwrap();
         self.push_block_stmt_id(&mut block, code_builder_var.defn_stmt);
         let args_expr = args_expr.unwrap_or(self.synth_empty_value(span));
         let format_block =
@@ -1050,7 +1049,7 @@ impl TypedProgram {
     pub(crate) fn synth_variable_expr(
         &mut self,
         variable_id: VariableId,
-        span: SpanId,
+        span: Span,
     ) -> TypedExprId {
         let type_id = self.variables.get(variable_id).type_id;
         let expr = self.exprs.add(TypedExpr::Variable(VariableExpr { variable_id }), type_id, span);

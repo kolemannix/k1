@@ -1668,7 +1668,7 @@ impl TypedProgram {
         &self,
         element_type: TypeId,
         size_type_id: TypeId,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<()> {
         let element_size = match self.types.get(element_type) {
             Type::Integer(it) => Some(it.width().bits() / 8),
@@ -2086,7 +2086,7 @@ impl TypedProgram {
                         specialized_ability_id: ao.specialized_ability_id,
                         impl_arguments,
                     };
-                    match self.eval_dyn_ability_object_type(new_signature, SpanId::NONE) {
+                    match self.eval_dyn_ability_object_type(new_signature, Span::NONE) {
                         Ok(t) => t,
                         Err(e) => {
                             self.ice("dyn ability substitution produced invalid object", Some(&e))

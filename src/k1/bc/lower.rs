@@ -7,7 +7,7 @@ use crate::ir::{
     self, BlockId, IdMap, Inst, InstId, InstKind, IrCallee, IrUnit, IrUnitId, UnitView,
 };
 use crate::kbail;
-use crate::lex::SpanId;
+use crate::lex::Span;
 use crate::typer::trace::TraceKind;
 use crate::typer::types::{Layout, PhysicalType, ScalarType};
 use crate::typer::{FunctionId, K1Result, TypedExprId, TypedProgram};
@@ -21,7 +21,7 @@ use super::{
 pub fn get_or_lower_unit(
     k1: &mut TypedProgram,
     unit_id: IrUnitId,
-    span: SpanId,
+    span: Span,
 ) -> K1Result<UnitInfo> {
     match unit_id {
         IrUnitId::Function(fid) => get_or_lower_function(k1, fid, span),
@@ -32,7 +32,7 @@ pub fn get_or_lower_unit(
 pub fn get_or_lower_function(
     k1: &mut TypedProgram,
     function_id: FunctionId,
-    span: SpanId,
+    span: Span,
 ) -> K1Result<UnitInfo> {
     if let Some(info) = k1.bc.functions.get(&function_id) {
         return Ok(*info);
@@ -73,7 +73,7 @@ pub fn get_or_lower_function(
 pub fn get_or_lower_expr(
     k1: &mut TypedProgram,
     expr_id: TypedExprId,
-    span: SpanId,
+    span: Span,
 ) -> K1Result<UnitInfo> {
     if let Some(info) = k1.bc.exprs.get(&expr_id) {
         return Ok(*info);
@@ -124,8 +124,8 @@ pub(crate) struct LowerCtx {
     operand_to_block: Vec<(u32, BlockId)>,
     operand_to_callee: Vec<(u32, FunctionId)>,
     trampolines: Vec<PendingTramp>,
-    spans: Vec<(u32, SpanId)>,
-    cur_span: SpanId,
+    spans: Vec<(u32, Span)>,
+    cur_span: Span,
 }
 
 impl LowerCtx {
@@ -157,7 +157,7 @@ impl LowerCtx {
             operand_to_callee: Vec::new(),
             trampolines: Vec::new(),
             spans: Vec::new(),
-            cur_span: SpanId::NONE,
+            cur_span: Span::NONE,
         }
     }
 
@@ -188,7 +188,7 @@ impl LowerCtx {
         self.operand_to_callee.clear();
         self.trampolines.clear();
         self.spans.clear();
-        self.cur_span = SpanId::NONE;
+        self.cur_span = Span::NONE;
     }
 
     fn pc(&self) -> u32 {
@@ -283,7 +283,7 @@ impl LowerCtx {
         self.frame_bytes / 8 + 2
     }
 
-    fn record_span(&mut self, span: SpanId) {
+    fn record_span(&mut self, span: Span) {
         if span != self.cur_span {
             self.spans.push((self.pc(), span));
             self.cur_span = span;
@@ -1277,7 +1277,7 @@ mod tests {
     }
 
     fn push(u: &mut UnitBuf, block: BlockId, inst: Inst) -> InstId {
-        let id = u.new_inst(inst, SpanId::NONE, IrComment::None);
+        let id = u.new_inst(inst, Span::NONE, IrComment::None);
         u.push_inst(block, id);
         id
     }
@@ -1291,7 +1291,7 @@ mod tests {
     ) -> u64 {
         let mut k1 = compile_source(name, "fn f(): u64 { 0 }\nfn main(): i32 { 0 }\n");
         let f = function_named(&k1, "f");
-        k1.compile_function_for_exec(f, None, SpanId::NONE).unwrap();
+        k1.compile_function_for_exec(f, None, Span::NONE).unwrap();
         let mut unit = *k1.ir.function_unit(f).unwrap();
         let mut u = k1.ir.take_unit_buf();
         let t = PhysicalType::scalar(ScalarType::I64);

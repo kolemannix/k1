@@ -56,7 +56,7 @@ use types::*;
 
 use crate::compiler::CompilerConfig;
 use crate::kpath;
-use crate::lex::{self, Span, SpanId, TokenKind};
+use crate::lex::{self, Span, TokenKind};
 use crate::parse::{
     self, AstHandle, AstSlice, BinaryOpKind, FileId, ForExpr, IdentPool, IdentSpanned,
     InterpolatedStringPart, NamedTypeArg, NumericWidth, ParsedAbilityExpr, ParsedAbilityId,
@@ -126,7 +126,7 @@ impl_copy_if_small!(16, TypedAbilityFunctionRef);
 pub struct AbilityFnWhereConstraint {
     pub target: TypeId,
     pub signature: TypedAbilitySignature,
-    pub span: SpanId,
+    pub span: Span,
 }
 
 pub const GLOBAL_ID_COMPILER_CAPTURE_PRINTS: TypedGlobalId =
@@ -216,7 +216,7 @@ pub struct InferenceSlot {
 
 #[derive(Default)]
 pub struct InferenceContext {
-    pub origin_stack: Vec<SpanId>,
+    pub origin_stack: Vec<Span>,
     /// slot index == hole index
     pub slots: Vec<InferenceSlot>,
     /// Slot indices whose solution just became hole-free
@@ -581,9 +581,9 @@ pub struct TypedAbilityParam {
     type_variable_id: TypeId,
     is_impl_param: bool,
     #[allow(unused)]
-    span: SpanId,
+    span: Span,
 }
-impl_copy_if_small!(16, TypedAbilityParam);
+impl_copy_if_small!(20, TypedAbilityParam);
 
 impl TypedAbilityParam {
     fn is_ability_side_param(&self) -> bool {
@@ -666,7 +666,7 @@ pub struct TypedSumPattern {
     pub variant_name: StringId,
     pub variant_index: u32,
     pub payload: Option<TypedPatternId>,
-    pub span: SpanId,
+    pub span: Span,
 }
 
 #[derive(Clone, Copy)]
@@ -675,7 +675,7 @@ pub struct TypedEnumPattern {
     pub member_name: StringId,
     pub index: u32,
     pub int_value: TypedIntValue,
-    pub span: SpanId,
+    pub span: Span,
 }
 
 #[derive(Clone, Copy)]
@@ -690,20 +690,20 @@ pub struct TypedStructPatternField {
 pub struct TypedStructPattern {
     pub struct_type_id: TypeId,
     pub fields: MSlice<TypedStructPatternField, TypedPatternPool>,
-    pub span: SpanId,
+    pub span: Span,
 }
 
 #[derive(Clone, Copy)]
 pub struct VariablePattern {
     pub name: StringId,
     pub type_id: TypeId,
-    pub span: SpanId,
+    pub span: Span,
 }
 
 #[derive(Clone, Copy)]
 pub struct TypedReferencePattern {
     pub inner_pattern: TypedPatternId,
-    pub span: SpanId,
+    pub span: Span,
 }
 
 #[derive(Clone, Copy)]
@@ -715,7 +715,7 @@ pub struct TypedReferencePattern {
 pub struct TypePattern {
     pub inner_pattern: TypedPatternId,
     pub type_id: TypeId,
-    pub span: SpanId,
+    pub span: Span,
 }
 
 // <pattern> ::= <literal> | <variable> | <sum> | <struc>
@@ -796,7 +796,7 @@ impl TypedPatternPool {
             TypedPattern::LiteralInteger(_, _span) => true,
             TypedPattern::LiteralFloat(_, _span) => true,
             TypedPattern::LiteralString(_, _span) => true,
-            TypedPattern::LiteralBool(_, _span_id) => false,
+            TypedPattern::LiteralBool(_, _span) => false,
             TypedPattern::Variable(_variable_pattern) => false,
             TypedPattern::Sum(typed_sum_pattern) => {
                 typed_sum_pattern.payload.as_ref().is_some_and(|p| self.pattern_never_useless(*p))
@@ -807,7 +807,7 @@ impl TypedPatternPool {
                 .getn(typed_struct_pattern.fields)
                 .iter()
                 .any(|field_pattern| self.pattern_never_useless(field_pattern.pattern)),
-            TypedPattern::Wildcard(_span_id) => false,
+            TypedPattern::Wildcard(_span) => false,
             TypedPattern::Reference(refer) => self.pattern_never_useless(refer.inner_pattern),
             TypedPattern::PointerNull(_) => true,
             TypedPattern::Type(_) => true,
@@ -818,18 +818,18 @@ impl TypedPatternPool {
 #[derive(Clone, Copy)]
 pub enum TypedPattern {
     // Consider replacing with a single Literal using StaticValue
-    LiteralChar(u8, SpanId),
-    LiteralInteger(StaticValueId, SpanId),
-    LiteralFloat(StaticValueId, SpanId),
-    LiteralBool(bool, SpanId),
-    LiteralString(StringId, SpanId),
+    LiteralChar(u8, Span),
+    LiteralInteger(StaticValueId, Span),
+    LiteralFloat(StaticValueId, Span),
+    LiteralBool(bool, Span),
+    LiteralString(StringId, Span),
     Variable(VariablePattern),
     Sum(TypedSumPattern),
     Enum(TypedEnumPattern),
     Struct(TypedStructPattern),
-    Wildcard(SpanId),
+    Wildcard(Span),
     Reference(TypedReferencePattern),
-    PointerNull(SpanId),
+    PointerNull(Span),
     Type(TypePattern),
 }
 
@@ -851,7 +851,7 @@ impl TypedPattern {
             TypedPattern::Type(_) => "type pattern",
         }
     }
-    pub fn span_id(&self) -> SpanId {
+    pub fn span(&self) -> Span {
         match self {
             TypedPattern::LiteralChar(_, span) => *span,
             TypedPattern::LiteralInteger(_, span) => *span,
@@ -878,7 +878,7 @@ enum MatchingConditionResult {
 pub struct BlockBuilder {
     pub scope_id: ScopeId,
     pub statements: List<TypedStmtId, TypedProgram>,
-    pub span: SpanId,
+    pub span: Span,
 }
 
 #[derive(Clone, Copy)]
@@ -942,7 +942,7 @@ impl FunctionSignature {
 #[derive(Clone, Copy)]
 pub struct TypedFunctionParam {
     pub variable_id: VariableId,
-    pub span: SpanId,
+    pub span: Span,
 }
 
 bitflags! {
@@ -1046,7 +1046,7 @@ pub struct FnlikeTypeParam {
     pub name: StringId,
     pub type_id: TypeId,
     pub value_param_index: u32,
-    pub span: SpanId,
+    pub span: Span,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1177,7 +1177,7 @@ pub struct Call {
     /// better to specialize anyway and inline? idk
     pub type_args: TypeArgs,
     pub return_type: TypeId,
-    pub span: SpanId,
+    pub span: Span,
 }
 
 #[derive(Clone, Copy)]
@@ -1530,7 +1530,7 @@ pub struct LetStmt {
     pub variable_id: VariableId,
     pub variable_type: TypeId,
     pub initializer: Option<TypedExprId>,
-    pub span: SpanId,
+    pub span: Span,
 }
 impl_copy_if_small!(20, LetStmt);
 
@@ -1538,21 +1538,21 @@ impl_copy_if_small!(20, LetStmt);
 pub struct AssignmentStmt {
     pub destination: TypedExprId,
     pub value: TypedExprId,
-    pub span: SpanId,
+    pub span: Span,
 }
-impl_copy_if_small!(12, AssignmentStmt);
+impl_copy_if_small!(16, AssignmentStmt);
 
 #[derive(Clone, Copy)]
 pub struct TypedRequireStmt {
     pub condition: MatchingCondition,
     pub else_body: Option<TypedExprId>,
-    pub span: SpanId,
+    pub span: Span,
 }
 
 #[derive(Clone, Copy)]
 pub struct TypedDeferStmt {
     pub parsed_expr: ParsedExprId,
-    pub span: SpanId,
+    pub span: Span,
 }
 
 /// How far up the scope tree a scope exit travels, for defer gathering:
@@ -1564,7 +1564,7 @@ enum DeferExtent {
     LoopScope(ScopeId),
 }
 
-static_assert_size!(TypedStmt, 20);
+static_assert_size!(TypedStmt, 24);
 #[derive(Clone, Copy)]
 pub enum TypedStmt {
     Expr(TypedExprId, TypeId),
@@ -1635,7 +1635,7 @@ pub enum ErrorKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct K1Message {
     pub message: StringId,
-    pub span: SpanId,
+    pub span: Span,
     pub error_kind: ErrorKind,
     pub level: MessageLevel,
 }
@@ -1677,7 +1677,7 @@ pub struct Variable {
     pub flags: VariableFlags,
     pub usage_count: u32,
     pub kind: VariableKind,
-    pub defn_span: SpanId,
+    pub defn_span: Span,
 }
 
 impl Variable {
@@ -1738,7 +1738,7 @@ pub struct TypedGlobal {
     pub parsed_expr: Option<ParsedExprId>,
     pub initial_value: GlobalInitialValue,
     pub type_id: TypeId,
-    pub span: SpanId,
+    pub span: Span,
     pub is_constant: bool,
     pub is_tls: bool,
     pub is_exported: bool,
@@ -2140,7 +2140,7 @@ impl Builtin {
     }
 }
 
-pub fn make_message(message: StringId, span: SpanId, level: MessageLevel) -> K1Message {
+pub fn make_message(message: StringId, span: Span, level: MessageLevel) -> K1Message {
     let error_kind = match level {
         MessageLevel::Hint => ErrorKind::None,
         MessageLevel::Info => ErrorKind::None,
@@ -2207,7 +2207,7 @@ pub fn write_error(
     ast: &ParsedProgram,
     message: impl AsRef<str>,
     level: MessageLevel,
-    span: SpanId,
+    span: Span,
     use_color: bool,
 ) -> std::io::Result<()> {
     parse::write_source_location(w, ast, span, level, 6, Some(message.as_ref()), use_color)?;
@@ -2288,7 +2288,7 @@ pub struct TypedAbilityImpl {
     pub functions: PermSlice<AbilityImplFunction>,
     pub substitutions: PermSlice<TypeSubstitutionPair>,
     pub scope_id: ScopeId,
-    pub span: SpanId,
+    pub span: Span,
     /// I need this so that I don't try to instantiate blanket implementations that fail
     /// typechecking
     pub compile_errors: PermList<K1Message>,
@@ -2481,7 +2481,7 @@ pub struct TypedExprPool {
     // SoA pools
     pub exprs: VPool<TypedExpr, TypedExprId>,
     pub type_ids: VPool<TypeId, TypedExprId>,
-    pub spans: VPool<SpanId, TypedExprId>,
+    pub spans: VPool<Span, TypedExprId>,
 }
 
 impl TypedExprPool {
@@ -2501,7 +2501,7 @@ impl TypedExprPool {
         &mut self,
         return_value: TypedExprId,
         returned_variable: Option<VariableId>,
-        span: SpanId,
+        span: Span,
     ) -> TypedExprId {
         self.add(
             TypedExpr::Return(TypedReturn { value: return_value, returned_variable }),
@@ -2526,7 +2526,7 @@ impl TypedExprPool {
         value_id: StaticValueId,
         type_id: TypeId,
         is_typed_as_static: bool,
-        span: SpanId,
+        span: Span,
     ) -> TypedExprId {
         self.add(
             TypedExpr::StaticValue(StaticConstantExpr { value_id, is_typed_as_static }),
@@ -2535,7 +2535,7 @@ impl TypedExprPool {
         )
     }
 
-    pub fn add(&mut self, expr: TypedExpr, type_id: TypeId, span: SpanId) -> TypedExprId {
+    pub fn add(&mut self, expr: TypedExpr, type_id: TypeId, span: Span) -> TypedExprId {
         let id = self.exprs.next_id();
         let id0 = self.type_ids.add(type_id);
         let id1 = self.spans.add(span);
@@ -2550,13 +2550,13 @@ impl TypedExprPool {
         self.exprs.get(id)
     }
 
-    pub fn set_full(&mut self, id: TypedExprId, expr: TypedExpr, type_id: TypeId, span: SpanId) {
+    pub fn set_full(&mut self, id: TypedExprId, expr: TypedExpr, type_id: TypeId, span: Span) {
         *self.exprs.get_mut(id) = expr;
         *self.type_ids.get_mut(id) = type_id;
         *self.spans.get_mut(id) = span;
     }
 
-    pub fn get_full(&self, id: TypedExprId) -> (&TypedExpr, TypeId, SpanId) {
+    pub fn get_full(&self, id: TypedExprId) -> (&TypedExpr, TypeId, Span) {
         let expr = self.exprs.get(id);
         let type_id = *self.type_ids.get(id);
         let span = *self.spans.get(id);
@@ -2571,7 +2571,7 @@ impl TypedExprPool {
         *self.type_ids.get(id)
     }
 
-    pub fn get_span(&self, id: TypedExprId) -> SpanId {
+    pub fn get_span(&self, id: TypedExprId) -> Span {
         *self.spans.get(id)
     }
 }
@@ -2612,7 +2612,7 @@ pub struct TypeDefnContext {
     pub pending_instances: Vec<PendingRecursiveInstance>,
 
     /// Defns completed in this cluster; finiteness-checked once pending instances are resolved
-    pub completed: Vec<(TypeId, SpanId)>,
+    pub completed: Vec<(TypeId, Span)>,
 
     /// Aliases whose rhs is being expanded to resolve a re-entrant reference; hitting one
     /// again means the alias cycle contains no nominal type, which cannot terminate
@@ -2632,13 +2632,13 @@ impl TypeDefnContext {
 pub struct CodeChunkPos {
     start: u32,
     end: u32,
-    source: SpanId,
+    source: Span,
 }
 
 #[derive(Clone, Copy)]
 pub struct EmittedSource {
     pub file_id: FileId,
-    pub call_span: SpanId,
+    pub call_span: Span,
     pub entries: MSlice<CodeChunkPos, TypedProgram>,
     has_diagnostic: bool,
 }
@@ -2778,7 +2778,7 @@ pub struct TypedProgram {
     pub uses_pending_resolution: VecDeque<UsePendingResolution>,
     pub types_pending_definition: Vec<TypePendingDefinition>,
 
-    exported_symbols: FxHashMap<StringId, SpanId>,
+    exported_symbols: FxHashMap<StringId, Span>,
 
     // Status and phases
     module_in_progress: Option<ModuleId>,
@@ -2814,7 +2814,7 @@ pub struct TypedProgram {
 
     /// Every metaprogram-emitted source, in emission order
     pub emitted_sources: Vec<EmittedSource>,
-    pub emitted_parse_cache: FxHashMap<(u64, SpanId), ParsedExprId>,
+    pub emitted_parse_cache: FxHashMap<(u64, Span), ParsedExprId>,
 
     // For every static value, once evaluated, we store its runtime representation
     // here; the data lives in vm_static_stack
@@ -3072,7 +3072,7 @@ impl TypedProgram {
             if let Err(e) = stored {
                 let warning = self.make_warning(
                     self.ast.idents.intern(format!("failed to store snapshot cache entry: {e}")),
-                    SpanId::NONE,
+                    Span::NONE,
                 );
                 self.report(warning);
             }
@@ -3091,13 +3091,12 @@ impl TypedProgram {
         }
         let files = sources.join();
         self.trace_pop(frame);
-        files.map_err(|e| self.error_from_anyhow(anyhow::anyhow!(e), SpanId::NONE))
+        files.map_err(|e| self.error_from_anyhow(anyhow::anyhow!(e), Span::NONE))
     }
 
     fn advise_for_source_bytes(&mut self, source_bytes: usize) {
         self.exprs.exprs.advise_additional_bytes(3 * source_bytes);
         self.ast.exprs.advise_additional_bytes(3 * source_bytes);
-        self.ast.spans.span_pool.advise_additional_bytes(3 * source_bytes);
         self.ast.mem.advise_additional_bytes(2 * source_bytes);
         self.calls.advise_additional_bytes(2 * source_bytes);
         self.mem.advise_additional_bytes(2 * source_bytes);
@@ -3129,7 +3128,7 @@ impl TypedProgram {
         module.namespace_scope_id = scope_id;
         self.typecheck_module(module_id, parsed_namespace_id)?;
         self.completed_module_count += 1;
-        self.compile_all_pending_ir(SpanId::NONE)?;
+        self.compile_all_pending_ir(Span::NONE)?;
         Ok(module_id)
     }
 
@@ -3155,7 +3154,7 @@ impl TypedProgram {
     pub(crate) fn provider_span(
         &mut self,
         provider: crate::plan::ParamsProvider,
-    ) -> K1Result<SpanId> {
+    ) -> K1Result<Span> {
         let from = *self.plan.module(provider.from as usize);
         let tmp = self.get_tmp_unsafe();
         let path = kpath::join_id(
@@ -3169,11 +3168,12 @@ impl TypedProgram {
             None => {
                 let path_str = self.ast.idents.get_string(path);
                 let content = compiler::read_source(path_str, &self.lsp.source_overrides)
-                    .map_err(|e| self.make_error(self.ast.idents.intern(e), SpanId::NONE))?;
+                    .map_err(|e| self.make_error(self.ast.idents.intern(e), Span::NONE))?;
                 self.register_source(path, &content)
             }
         };
-        Ok(self.ast.spans.add(Span { file_id, start: provider.offset, len: provider.len }))
+        let base = self.ast.sources.get(file_id).base;
+        Ok(Span { lo: base + provider.offset, len: provider.len })
     }
 
     fn register_source(&mut self, path: StringId, content: &str) -> FileId {
@@ -3188,14 +3188,14 @@ impl TypedProgram {
 
     pub fn adopt_messages(&mut self, from: &TypedProgram) {
         for message in from.messages.borrow().iter() {
-            let span = if message.span == SpanId::NONE {
-                SpanId::NONE
+            let span = if message.span == Span::NONE {
+                Span::NONE
             } else {
-                let span = from.ast.spans.get(message.span);
-                let source = from.ast.sources.get(span.file_id);
+                let source = from.ast.sources.source_by_span(message.span);
                 let path = self.ast.idents.intern(from.ast.idents.get_string(source.file_path));
                 let file_id = self.register_source(path, source.content(&from.ast.mem));
-                self.ast.spans.add(Span { file_id, ..span })
+                let base = self.ast.sources.get(file_id).base;
+                Span { lo: base + source.local(message.span.lo), len: message.span.len }
             };
             let text = self.ast.idents.intern(from.ast.idents.get_string(message.message));
             self.report_ext(K1Message { message: text, span, ..*message }, true);
@@ -3237,17 +3237,12 @@ impl TypedProgram {
             &file.newline_positions,
         );
         let file_id = self.ast.sources.add_file(source);
-        let lex_result = self.ast.materialize_lexed_file(file_id, &mut file.lexed);
+        let lex_result = self.ast.register_lexed_file(file_id, &mut file.lexed);
         self.modules.get_mut(module_id).files.push_grow(&mut self.mem, file_id);
         if let Err(e) = lex_result {
             self.ast.report_error(e);
             return file_id;
         }
-
-        if cfg!(feature = "lsp") {
-            let tokens = self.ast.mem.pushn(&file.lexed.tokens);
-            self.ast.sources.get_mut(file_id).tokens = tokens;
-        };
 
         let mut parser = parse::Parser::make_for_file(
             module_id,
@@ -3314,7 +3309,7 @@ impl TypedProgram {
         self.functions.iter_with_ids()
     }
 
-    pub fn get_function_span(&self, function_id: FunctionId) -> SpanId {
+    pub fn get_function_span(&self, function_id: FunctionId) -> Span {
         self.ast.get_span_for_id(self.functions.get(function_id).parsed_id)
     }
 
@@ -3381,8 +3376,8 @@ impl TypedProgram {
     }
 
     // pub fn validate_exports(&mut self) -> K1Result<()> {
-    //     let mut symbols: FxHashMap<StringId, SpanId> = FxHashMap::default();
-    //     let mut duplicate: Option<(StringId, SpanId)> = None;
+    //     let mut symbols: FxHashMap<StringId, Span> = FxHashMap::default();
+    //     let mut duplicate: Option<(StringId, Span)> = None;
     //     for (function_id, function) in self.function_iter() {
     //         let Linkage::Exported { fn_name } = function.linkage else {
     //             continue;
@@ -3424,7 +3419,7 @@ impl TypedProgram {
         self.scopes.find_function_local(primary.namespace_scope_id, self.ast.idents.b.main)
     }
 
-    fn add_match_expr(&mut self, m: TypedMatchExpr, type_id: TypeId, span: SpanId) -> TypedExprId {
+    fn add_match_expr(&mut self, m: TypedMatchExpr, type_id: TypeId, span: Span) -> TypedExprId {
         if let Some(last) = self.mem.getn_mut(m.arms).last_mut() {
             last.case = None;
             let instrs = self.mem.getn(last.condition.instrs);
@@ -3465,7 +3460,7 @@ impl TypedProgram {
         }
     }
 
-    pub fn get_stmt_span(&self, stmt: TypedStmtId) -> SpanId {
+    pub fn get_stmt_span(&self, stmt: TypedStmtId) -> Span {
         match self.stmts.get(stmt) {
             TypedStmt::Expr(e, _ty) => self.exprs.get_span(*e),
             TypedStmt::Let(val_def) => val_def.span,
@@ -3479,7 +3474,7 @@ impl TypedProgram {
         &mut self,
         destination: TypedExprId,
         value: TypedExprId,
-        span: SpanId,
+        span: Span,
     ) -> TypedStmtId {
         if let TypedExpr::Variable(variable_expr) = *self.exprs.get(destination) {
             let variable = self.variables.get_mut(variable_expr.variable_id);
@@ -4179,7 +4174,7 @@ impl TypedProgram {
         self_type_id: TypeId,
         base_ability_id: AbilityId,
         impl_arguments: TypeIdSlice,
-        span: SpanId,
+        span: Span,
     ) -> AbilityImplHandle {
         let ability = self.abilities.get(base_ability_id);
         let base_scope_id = ability.scope_id;
@@ -4283,7 +4278,7 @@ impl TypedProgram {
         implementor_self_type_id: TypeId,
         impl_signature: TypedAbilitySignature,
         scope_id: ScopeId,
-        span: SpanId,
+        span: Span,
     ) -> AbilityImplId {
         let ability = self.abilities.get(impl_signature.specialized_ability_id);
         let ability_functions = ability.functions;
@@ -4441,7 +4436,7 @@ impl TypedProgram {
         allow_self_adjust: bool,
 
         scope_id: ScopeId,
-        span: SpanId,
+        span: Span,
     ) -> Result<(AbilityImplHandle, SelfAdjust), MStr<MemTmp>> {
         // let mut attempts: SV4<String> = smallvec![];
         if let Some(impl_handle) = self.find_unique_valid_ability_impl(
@@ -4758,7 +4753,7 @@ impl TypedProgram {
         self_type_id: TypeId,
         base_ability_id: AbilityId,
         impl_arguments: TypeIdSlice,
-        span: SpanId,
+        span: Span,
     ) -> AbilityImplHandle {
         let handle = self.register_builtin_ability_impl_shell(
             self_type_id,
@@ -4787,7 +4782,7 @@ impl TypedProgram {
         self_type_id: TypeId,
         target_base_ability_id: AbilityId,
         scope_id: ScopeId,
-        span: SpanId,
+        span: Span,
     ) -> Result<AbilityImplHandle, MStr<MemTmp>> {
         let first_impl_id = self.ability_impls.next_id();
         let impl_handle = self.register_builtin_ability_impl_shell(
@@ -4950,7 +4945,7 @@ impl TypedProgram {
         target_specialized_ability_id: AbilityId,
         allow_self_adjust: bool,
         scope_id: ScopeId,
-        span: SpanId,
+        span: Span,
     ) -> Result<(AbilityImplHandle, SelfAdjust), MStr<MemTmp>> {
         let specialized_ability = self.abilities.get(target_specialized_ability_id);
         let base_ability = specialized_ability.base_ability_id;
@@ -4976,7 +4971,7 @@ impl TypedProgram {
         self_type_id: TypeId,
         target_base_ability_id: AbilityId,
         target_ability_args: &[Option<TypeId>],
-        span: SpanId,
+        span: Span,
     ) -> Option<AbilityImplHandle> {
         let blanket_impl = self.ability_impls.get(blanket_impl_id);
         let blanket_impl_ability_id = blanket_impl.ability_id;
@@ -5336,7 +5331,7 @@ impl TypedProgram {
 
     fn eval_numeric_value(
         &mut self,
-        span: SpanId,
+        span: Span,
         ctx: EvalExprContext,
     ) -> K1Result<StaticValueId> {
         let parsed_text = self.ast.get_span_content(span);
@@ -5354,7 +5349,7 @@ impl TypedProgram {
 
     fn eval_float_value(
         &self,
-        span: SpanId,
+        span: Span,
         expected_type_id: Option<TypeId>,
     ) -> K1Result<TypedFloatValue> {
         let parsed_text = self.ast.get_span_content(span);
@@ -5379,7 +5374,7 @@ impl TypedProgram {
 
     fn eval_integer_value(
         &mut self,
-        span: SpanId,
+        span: Span,
         expected_type_id: Option<TypeId>,
     ) -> K1Result<TypedIntValue> {
         let parsed_text = self.ast.get_span_content(span);
@@ -5626,7 +5621,7 @@ impl TypedProgram {
         variable_id: VariableId,
         variable_scope_id: ScopeId,
         name: StringId,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<()> {
         let Some(lambda_scope_id) = self.scopes.nearest_parent_lambda(use_scope) else {
             return Ok(());
@@ -5645,7 +5640,7 @@ impl TypedProgram {
         Ok(())
     }
 
-    pub fn register_variable_usage(&mut self, variable_id: VariableId, span: SpanId) {
+    pub fn register_variable_usage(&mut self, variable_id: VariableId, span: Span) {
         self.emit_ls_entity(span, LsEntityKind::Variable { variable_id });
         self.variables.get_mut(variable_id).usage_count += 1;
     }
@@ -5661,7 +5656,7 @@ impl TypedProgram {
     fn eval_field_access(
         &mut self,
         field_access: &parse::FieldAccess,
-        span: SpanId,
+        span: Span,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         if !field_access.type_args.is_empty() {
@@ -5844,7 +5839,7 @@ impl TypedProgram {
         &mut self,
         base_expr: ParsedExprId,
         ctx: EvalExprContext,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<TypedExprId> {
         if let ParsedExpr::Call(call) = self.ast.exprs.get(base_expr)
             && !call.type_args(&self.ast.mem).is_empty()
@@ -5886,7 +5881,7 @@ impl TypedProgram {
         record_kind == RecordKind::Packed || self.is_place_in_packed(base_expr)
     }
 
-    fn warn_packed_field_address_of(&mut self, expr: TypedExprId, span: SpanId) {
+    fn warn_packed_field_address_of(&mut self, expr: TypedExprId, span: Span) {
         if self.is_place_in_packed(expr) {
             self.report(kwarn!(
                 self,
@@ -5899,7 +5894,7 @@ impl TypedProgram {
     fn synth_address_of(
         &mut self,
         input: TypedExprId,
-        span: SpanId,
+        span: Span,
         allow_synthetic: bool,
     ) -> K1Result<TypedExprId> {
         let kind = self.check_place_for_address_of(input, allow_synthetic, span)?;
@@ -5925,7 +5920,7 @@ impl TypedProgram {
         &self,
         expr: TypedExprId,
         allow_synthetic: bool,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<AddressOfKind> {
         match self.exprs.get(expr) {
             TypedExpr::Variable(v) => {
@@ -5994,7 +5989,7 @@ impl TypedProgram {
         &mut self,
         operand: ParsedExprId,
         ctx: EvalExprContext,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<TypedExprId> {
         let scope_id = ctx.scope_id;
         let try_value_original_expr = self.eval_expr(operand, ctx.with_no_expected_type())?;
@@ -6115,7 +6110,7 @@ impl TypedProgram {
         &mut self,
         operand: ParsedExprId,
         ctx: EvalExprContext,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<TypedExprId> {
         let operand_expected_type = match ctx.expected_type_id {
             Some(expected) => Some(self.synth_optional_type(expected)),
@@ -6141,7 +6136,7 @@ impl TypedProgram {
         &mut self,
         operand: ParsedExprId,
         ctx: EvalExprContext,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<TypedExprId> {
         // Example:
         // let x: int = intptr.*
@@ -6720,7 +6715,7 @@ impl TypedProgram {
             None,
         );
         let dest_coll_expr = if needs_address_of {
-            self.synth_address_of(dest_coll_variable.variable_expr, SpanId::NONE, true).unwrap()
+            self.synth_address_of(dest_coll_variable.variable_expr, Span::NONE, true).unwrap()
         } else {
             dest_coll_variable.variable_expr
         };
@@ -6862,7 +6857,7 @@ impl TypedProgram {
         let expected_struct_defn_info = self.get_defn_info(expected_struct_id);
         let field_count = expected_struct.fields.len();
 
-        let mut passed_fields_aligned: SV8<(Option<&parse::StructValueField>, SpanId)> =
+        let mut passed_fields_aligned: SV8<(Option<&parse::StructValueField>, Span)> =
             smallvec![];
 
         let mut missing_fields: SV4<StringId> = smallvec![];
@@ -7020,7 +7015,7 @@ impl TypedProgram {
     fn eval_while_loop(
         &mut self,
         while_expr: &ParsedWhileExpr,
-        span: SpanId,
+        span: Span,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let ParsedExpr::Block(parsed_block) = *self.ast.exprs.get(while_expr.body) else {
@@ -7081,7 +7076,7 @@ impl TypedProgram {
     fn eval_loop_expr(
         &mut self,
         loop_expr: &ParsedLoopExpr,
-        span: SpanId,
+        span: Span,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let body_scope =
@@ -7124,7 +7119,7 @@ impl TypedProgram {
             environment_param: FnParamType,
             environment_param_variable_id: VariableId,
             prologue_stmts: SV8<TypedStmtId>,
-            capture_bindings: SV4<(VariableId, SpanId)>,
+            capture_bindings: SV4<(VariableId, Span)>,
         }
 
         let lambda = self.ast.exprs.get(expr_id).expect_lambda();
@@ -7317,7 +7312,7 @@ impl TypedProgram {
 
             let mut prologue_stmts: SV8<TypedStmtId> = smallvec![];
             prologue_stmts.push(environment_casted_variable.defn_stmt);
-            let mut capture_bindings: SV4<(VariableId, SpanId)> = smallvec![];
+            let mut capture_bindings: SV4<(VariableId, Span)> = smallvec![];
             for (field_index, capture) in captures.iter().enumerate() {
                 let field_type = capture_field_types[field_index];
                 let env_variable_expr =
@@ -7557,7 +7552,7 @@ impl TypedProgram {
         &mut self,
         base_expr: ParsedExprId,
         target_type: TypeId,
-        span: SpanId,
+        span: Span,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let base_expr = self.eval_expr(base_expr, ctx.with_no_expected_type())?;
@@ -7629,7 +7624,7 @@ impl TypedProgram {
         base_expr: ParsedExprId,
         target_type: TypeId,
         widen: bool,
-        span: SpanId,
+        span: Span,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let base_expr = self.eval_expr(base_expr, ctx.with_no_expected_type())?;
@@ -7748,7 +7743,7 @@ impl TypedProgram {
         &mut self,
         from_type: TypeId,
         to_type: TypeId,
-        span: SpanId,
+        span: Span,
         depth: u32,
     ) -> K1Result<CastView> {
         #[inline(always)]
@@ -7757,7 +7752,7 @@ impl TypedProgram {
             view: CastView,
             from_type: TypeId,
             to_type: TypeId,
-            span: SpanId,
+            span: Span,
             depth: u32,
         ) -> K1Result<CastView> {
             if depth > 0 {
@@ -7931,7 +7926,7 @@ impl TypedProgram {
         &mut self,
         from_type: TypeId,
         to_type: TypeId,
-        span: SpanId,
+        span: Span,
         depth: u32,
     ) -> K1Result<CastView> {
         fn struct_fields(
@@ -8020,7 +8015,7 @@ impl TypedProgram {
         to_type: TypeId,
         from_fields: MSlice<StructTypeField, TypedProgram>,
         to_fields: MSlice<StructTypeField, TypedProgram>,
-        span: SpanId,
+        span: Span,
         depth: u32,
     ) -> K1Result<CastView> {
         let from_fields = self.mem.getn(from_fields);
@@ -8096,7 +8091,7 @@ impl TypedProgram {
         &mut self,
         base_expr: ParsedExprId,
         target_type: TypeId,
-        span: SpanId,
+        span: Span,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let base_expr = self.eval_expr(base_expr, ctx.with_no_expected_type())?;
@@ -8128,7 +8123,7 @@ impl TypedProgram {
     fn eval_for_expr(
         &mut self,
         for_expr: &ForExpr,
-        span: SpanId,
+        span: Span,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         // Basically no overlap here in what we need to do.
@@ -8140,7 +8135,7 @@ impl TypedProgram {
             Some(b) => self.ast.exprs.get(b).expect_variable().name.name,
         };
         let binding_span = match for_expr.binding {
-            None => SpanId::NONE,
+            None => Span::NONE,
             Some(binding_expr) => self.ast.exprs.get_span(binding_expr),
         };
         let iterable_expr = self.eval_expr(for_expr.iterable_expr, ctx.with_no_expected_type())?;
@@ -8196,7 +8191,7 @@ impl TypedProgram {
         let coerced_iterable_expr = match self_adjust {
             SelfAdjust::None => iterable_expr,
             SelfAdjust::Deref => self.synth_dereference(iterable_expr),
-            SelfAdjust::AddrOf => match self.synth_address_of(iterable_expr, SpanId::NONE, true) {
+            SelfAdjust::AddrOf => match self.synth_address_of(iterable_expr, Span::NONE, true) {
                 Ok(addr) => addr,
                 Err(_) => {
                     // The iterable is an rvalue (e.g. a call result); bind it to a
@@ -8209,7 +8204,7 @@ impl TypedProgram {
                         Some(iterable_span),
                     );
                     iterable_defn_stmt = Some(iterable_variable.defn_stmt);
-                    self.synth_address_of(iterable_variable.variable_expr, SpanId::NONE, true)?
+                    self.synth_address_of(iterable_variable.variable_expr, Span::NONE, true)?
                 }
             },
         };
@@ -8246,7 +8241,7 @@ impl TypedProgram {
             .0
         };
         let iterator_expr =
-            self.synth_address_of(iterator_variable.variable_expr, SpanId::NONE, true)?;
+            self.synth_address_of(iterator_variable.variable_expr, Span::NONE, true)?;
         let mut loop_block =
             self.new_block_builder(outer_for_expr_scope, ScopeType::WhileLoopBody, body_span, 3);
         let loop_scope_id = loop_block.scope_id;
@@ -8379,7 +8374,7 @@ impl TypedProgram {
     fn eval_static_for_expr(
         &mut self,
         for_expr: &ForExpr,
-        span: SpanId,
+        span: Span,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         if for_expr.label.is_some() {
@@ -8436,7 +8431,7 @@ impl TypedProgram {
         base_ability_id: AbilityId,
         allow_self_adjust: bool,
         scope_id: ScopeId,
-        span_for_error: SpanId,
+        span_for_error: Span,
     ) -> K1Result<(AbilityImplHandle, SelfAdjust)> {
         self.find_or_generate_ability_impl_for_type(
             type_id,
@@ -8473,7 +8468,7 @@ impl TypedProgram {
     fn eval_static_if_expr(
         &mut self,
         if_expr: &ParsedIfExpr,
-        span: SpanId,
+        span: Span,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         if let Some(phony) = self.synth_phony_if_generic_pass(ctx, span) {
@@ -8495,7 +8490,7 @@ impl TypedProgram {
     fn eval_if_expr(
         &mut self,
         if_expr: &ParsedIfExpr,
-        span: SpanId,
+        span: Span,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         if if_expr.is_static {
@@ -8938,7 +8933,7 @@ impl TypedProgram {
     fn eval_struct_patch(
         &mut self,
         binary_op: parse::BinaryOp,
-        span: SpanId,
+        span: Span,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let base = self.eval_expr(binary_op.lhs, ctx.with_is_method_receiver(false))?;
@@ -8964,7 +8959,7 @@ impl TypedProgram {
     fn eval_operator_call(
         &mut self,
         binary_op: parse::BinaryOp,
-        span: SpanId,
+        span: Span,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         use BinaryOpKind as K;
@@ -9050,7 +9045,7 @@ impl TypedProgram {
         lhs: ParsedExprId,
         rhs: ParsedExprId,
         ctx: EvalExprContext,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<TypedExprId> {
         // LHS must implement Try and RHS must be its contained type
         let lhs = self.eval_expr(lhs, ctx.with_no_expected_type())?;
@@ -9110,7 +9105,7 @@ impl TypedProgram {
         lhs: ParsedExprId,
         rhs: ParsedExprId,
         ctx: EvalExprContext,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<TypedExprId> {
         let new_fn_call = match self.ast.exprs.get(rhs) {
             ParsedExpr::Variable(var) => {
@@ -9140,7 +9135,7 @@ impl TypedProgram {
     fn resolve_parsed_call(
         &mut self,
         fn_call: &ParsedCall,
-        call_span: SpanId,
+        call_span: Span,
         known_args: Option<&(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
         stashed_args: &mut SV8<(ParsedExprId, TypedExprId)>,
@@ -9247,7 +9242,7 @@ impl TypedProgram {
         }
     }
 
-    fn get_return_type_for_scope(&self, scope_id: ScopeId, span: SpanId) -> K1Result<TypeId> {
+    fn get_return_type_for_scope(&self, scope_id: ScopeId, span: Span) -> K1Result<TypeId> {
         match self.scopes.enclosing_function_info(scope_id) {
             ScopeEnclosingFunctions { lambda_scope: Some(lambda_scope), .. } => {
                 let Some(expected_return_type) =
@@ -9283,7 +9278,7 @@ impl TypedProgram {
         name: &str,
         label: Option<StringId>,
         ctx: EvalExprContext,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<(ScopeId, LoopType)> {
         if ctx.flags.contains(EvalExprFlags::Defer) {
             kbail!(self, span, "{name} cannot be used inside `defer` blocks");
@@ -9302,7 +9297,7 @@ impl TypedProgram {
     fn eval_break(
         &mut self,
         brk: ParsedBreak,
-        span: SpanId,
+        span: Span,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let (loop_scope_id, loop_type) = self.find_loop_for_exit("break", brk.label, ctx, span)?;
@@ -9378,7 +9373,7 @@ impl TypedProgram {
     fn eval_continue(
         &mut self,
         cont: ParsedContinue,
-        span: SpanId,
+        span: Span,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let (loop_scope_id, _) = self.find_loop_for_exit("continue", cont.label, ctx, span)?;
@@ -9393,7 +9388,7 @@ impl TypedProgram {
         &mut self,
         parsed_expr: Option<ParsedExprId>,
         ctx: EvalExprContext,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<TypedExprId> {
         let expected_return_type = if ctx.is_static() {
             // When _typechecking_, not executing, inside #static blocks
@@ -9428,7 +9423,7 @@ impl TypedProgram {
     fn gather_defers(
         &self,
         from_scope: ScopeId,
-        span: SpanId,
+        span: Span,
         extent: DeferExtent,
     ) -> SV4<ParsedExprId> {
         let mut gathered: SV4<ParsedExprId> = smallvec![];
@@ -9462,7 +9457,7 @@ impl TypedProgram {
         defers: SV4<ParsedExprId>,
         value: TypedExprId,
         ctx: EvalExprContext,
-        span: SpanId,
+        span: Span,
         make_exit: impl FnOnce(&mut Self, TypedExprId) -> TypedExprId,
     ) -> K1Result<TypedExprId> {
         if defers.is_empty() {
@@ -9502,7 +9497,7 @@ impl TypedProgram {
     fn handle_builtin_function_call_lookalikes(
         &mut self,
         fn_call: &ParsedCall,
-        call_span: SpanId,
+        call_span: Span,
         ctx: EvalExprContext,
     ) -> K1Result<Option<TypedExprId>> {
         if fn_call.name.has_path() {
@@ -9578,7 +9573,7 @@ impl TypedProgram {
         array_type_id: TypeId,
         key: ParsedExprId,
         ctx: EvalExprContext,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<TypedExprId> {
         let array_type = self.types.get(array_type_id).as_array().unwrap();
         let concrete_count = self.get_concrete_count_of_array(array_type.size_type);
@@ -9638,7 +9633,7 @@ impl TypedProgram {
         receiver: TypedExprId,
         array_type_id: TypeId,
         call: &ParsedCall,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<Option<CallResolution>> {
         let array_type = self.types.get(array_type_id).as_array().unwrap();
         let concrete_count = self.get_concrete_count_of_array(array_type.size_type);
@@ -9676,7 +9671,7 @@ impl TypedProgram {
         &mut self,
         base_expr: MaybeTypedExpr,
         call: &ParsedCall,
-        call_span: SpanId,
+        call_span: Span,
         known_args: Option<&(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
         stashed_args: &mut SV8<(ParsedExprId, TypedExprId)>,
@@ -10110,7 +10105,7 @@ impl TypedProgram {
         &mut self,
         generic_function_id: FunctionId,
         call: &ParsedCall,
-        span: SpanId,
+        span: Span,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let function = self.get_function(generic_function_id);
@@ -10196,7 +10191,7 @@ impl TypedProgram {
         Ok(self.function_to_reference(specialized_function_id, span))
     }
 
-    pub fn function_to_reference(&mut self, function_id: FunctionId, span: SpanId) -> TypedExprId {
+    pub fn function_to_reference(&mut self, function_id: FunctionId, span: Span) -> TypedExprId {
         let function_type = self.get_function(function_id).type_id;
         let reference_type = self.add_function_reference_type(function_id, function_type);
         self.emit_ls_entity(span, LsEntityKind::Function { function_id, is_defn: false });
@@ -10207,7 +10202,7 @@ impl TypedProgram {
         )
     }
 
-    pub fn function_to_pointer(&mut self, function_id: FunctionId, span: SpanId) -> TypedExprId {
+    pub fn function_to_pointer(&mut self, function_id: FunctionId, span: Span) -> TypedExprId {
         let function_type = self.get_function(function_id).type_id;
         self.make_function_pointer(function_id, function_type, span)
     }
@@ -10215,7 +10210,7 @@ impl TypedProgram {
     fn reference_to_pointer(
         &mut self,
         reference: TypedExprId,
-        span: SpanId,
+        span: Span,
         scope_id: ScopeId,
     ) -> TypedExprId {
         let fr = self.types.get(self.exprs.get_type(reference)).as_function_reference().unwrap();
@@ -10227,7 +10222,7 @@ impl TypedProgram {
         &mut self,
         function_id: FunctionId,
         function_type: TypeId,
-        span: SpanId,
+        span: Span,
     ) -> TypedExprId {
         let function_pointer_type = self.add_function_pointer_type(function_type);
         self.get_function_mut(function_id).flags.insert(TypedFunctionFlags::AddressTaken);
@@ -10262,7 +10257,7 @@ impl TypedProgram {
     pub fn function_to_lambda_object(
         &mut self,
         function_id: FunctionId,
-        call_span: SpanId,
+        call_span: Span,
     ) -> TypedExprId {
         let function = self.get_function(function_id);
         let function_defn_span = self.ast.get_span_for_id(function.parsed_id);
@@ -10389,7 +10384,7 @@ impl TypedProgram {
         &mut self,
         ability_function_ref: TypedAbilityFunctionRef,
         fn_call: &ParsedCall,
-        call_span: SpanId,
+        call_span: Span,
         receiver_if_method: Option<TypedExprId>,
         known_args: Option<&(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
@@ -10591,7 +10586,7 @@ impl TypedProgram {
     fn handle_enum_get_value(
         &mut self,
         base_expr_id: TypedExprId,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<Option<TypedExprId>> {
         match self.get_expr_type(base_expr_id) {
             Type::Enum(_) => Ok(Some(self.synth_enum_get_value(base_expr_id, span))),
@@ -10602,7 +10597,7 @@ impl TypedProgram {
     fn handle_sum_get_tag(
         &mut self,
         base_expr_id: TypedExprId,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<Option<TypedExprId>> {
         let sum_type = match self.get_expr_type(base_expr_id) {
             Type::Sum(s) => s,
@@ -10622,7 +10617,7 @@ impl TypedProgram {
         &mut self,
         base_expr: TypedExprId,
         fn_call: &ParsedCall,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<Option<TypedExprId>> {
         let fn_name = self.ident_str(fn_call.name.name);
         let preconditions = fn_name.starts_with("as")
@@ -10680,7 +10675,7 @@ impl TypedProgram {
         );
         let payload_referenced = if is_reference {
             // Infallible: when is_reference, sum_base_expr is a Deref
-            self.synth_address_of(payload_expr, SpanId::NONE, false).unwrap()
+            self.synth_address_of(payload_expr, Span::NONE, false).unwrap()
         } else {
             payload_expr
         };
@@ -10695,7 +10690,7 @@ impl TypedProgram {
     fn eval_variant(
         &mut self,
         parsed_variant: ParsedVariant,
-        span: SpanId,
+        span: Span,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let provided_type = match parsed_variant.ty {
@@ -10881,7 +10876,7 @@ impl TypedProgram {
     fn align_call_arguments_with_parameters(
         &mut self,
         fn_call: &ParsedCall,
-        span: SpanId,
+        span: Span,
         signature: &FunctionSignature,
         // If a method call and we've already compiled the first argument
         // this is it, we should use it instead of the fn_call's first arg
@@ -11011,7 +11006,7 @@ impl TypedProgram {
         constraint_source_type: TypeId,
         calling_scope: ScopeId,
         fn_call: &ParsedCall,
-        span: SpanId,
+        span: Span,
         tolerate_missing: bool,
     ) -> K1Result<Option<MaybeTypedExpr>> {
         let ability_match = self.find_context_variable_by_ability_constraints(
@@ -11090,7 +11085,7 @@ impl TypedProgram {
         generic_params: MSlice<FnParamType, TypedProgram>,
         specialized_params: MSlice<FnParamType, TypedProgram>,
         fn_call: &ParsedCall,
-        span: SpanId,
+        span: Span,
         calling_scope: ScopeId,
         skip_leading_receiver_arg: bool,
     ) -> K1Result<ArgsAndParams> {
@@ -11279,7 +11274,7 @@ impl TypedProgram {
     fn eval_function_call(
         &mut self,
         fn_call: &ParsedCall,
-        span: SpanId,
+        span: Span,
         known_args: Option<(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
         known_callee: Option<Callee>,
@@ -11295,7 +11290,7 @@ impl TypedProgram {
         &mut self,
         value: TypedExprId,
         fn_call: &ParsedCall,
-        span: SpanId,
+        span: Span,
         known_args: Option<(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
         pre_typed_args: &[(ParsedExprId, TypedExprId)],
@@ -11346,7 +11341,7 @@ impl TypedProgram {
     fn eval_function_call_with_typed_first_arg(
         &mut self,
         fn_call: &ParsedCall,
-        span: SpanId,
+        span: Span,
         first_arg: (ParsedExprId, TypedExprId),
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
@@ -11359,7 +11354,7 @@ impl TypedProgram {
     fn eval_function_call_inner(
         &mut self,
         fn_call: &ParsedCall,
-        span: SpanId,
+        span: Span,
         known_args: Option<(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
         known_callee: Option<Callee>,
@@ -11460,8 +11455,8 @@ impl TypedProgram {
                 kbail!(self, params_span, "dep params must be a struct literal");
             };
             let span_value_id =
-                self.static_values.add_int(TypedIntValue::U32(params_span.as_u32()));
-            let span_expr = self.exprs.add_static(span_value_id, U32_TYPE_ID, false, params_span);
+                self.static_values.add_int(TypedIntValue::U64(params_span.to_u64()));
+            let span_expr = self.exprs.add_static(span_value_id, U64_TYPE_ID, false, params_span);
             stashed_args.push((params_arg, span_expr));
         }
 
@@ -12145,7 +12140,7 @@ impl TypedProgram {
         set: &[TypeSubstitutionPair],
         signature: TypedAbilitySignature,
         scope_id: ScopeId,
-        span: SpanId,
+        span: Span,
     ) -> TypedAbilitySignature {
         let specialized_ability = self.abilities.get(signature.specialized_ability_id);
         let base_ability_id = specialized_ability.base_ability_id;
@@ -12511,7 +12506,7 @@ impl TypedProgram {
 
     /// Used to drill down to the span that is responsible for the type of the given expression
     /// For example, the last statement of a block, rather than the entire span
-    pub fn get_span_responsible_for_expr_type(&self, typed_expr_id: TypedExprId) -> SpanId {
+    pub fn get_span_responsible_for_expr_type(&self, typed_expr_id: TypedExprId) -> Span {
         match self.exprs.get(typed_expr_id) {
             TypedExpr::Block(typed_block) => match self.mem.get_last_opt(typed_block.statements) {
                 None => self.exprs.get_span(typed_expr_id),
@@ -12593,7 +12588,7 @@ impl TypedProgram {
                 Ok(None)
             }
             ParsedStmt::Let(parsed_let) => {
-                static_assert_size!(parse::ParsedLet, 28);
+                static_assert_size!(parse::ParsedLet, 32);
                 let parsed_let = *parsed_let;
                 let annotated_type = match parsed_let.type_expr.as_ref() {
                     None => None,
@@ -12761,7 +12756,7 @@ impl TypedProgram {
                 }
             }
             ParsedStmt::Require(require) => {
-                static_assert_size!(parse::ParsedRequire, 12);
+                static_assert_size!(parse::ParsedRequire, 16);
                 let require = *require;
                 let has_else = require.else_body.is_some();
                 let skip_message = has_else;
@@ -12838,7 +12833,7 @@ impl TypedProgram {
                 Ok(Some(id))
             }
             ParsedStmt::Assign(assign) => {
-                static_assert_size!(parse::AssignStmt, 12);
+                static_assert_size!(parse::AssignStmt, 16);
                 let assignment = *assign;
                 let lhs_span = self.ast.exprs.get_span(assignment.lhs);
                 let (destination, root_variable) = if let ParsedExpr::Variable(lhs_variable) =
@@ -13520,7 +13515,7 @@ impl TypedProgram {
         variant_name: StringId,
         payload: Option<ParsedExprId>,
         ctx: EvalExprContext,
-        variant_span: SpanId,
+        variant_span: Span,
     ) -> K1Result<TypedExprId> {
         let sum = self.types.get(concrete_sum_type).expect_sum();
         let Some(variant) = self.sum_variant_by_name(sum.variants, variant_name) else {
@@ -13594,7 +13589,7 @@ impl TypedProgram {
         impl_self_type: TypeId,
         fn_index: u32,
         scope_id: ScopeId,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<()> {
         let decl_fn = *self
             .mem
@@ -13649,7 +13644,7 @@ impl TypedProgram {
         signature: TypedAbilitySignature,
         name: StringId,
         scope_id: ScopeId,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<()> {
         debug!(
             "Checking constraint {}: {}",
@@ -13725,7 +13720,7 @@ impl TypedProgram {
         passed_type: TypeId,
         substitution_pairs: &[TypeSubstitutionPair],
         scope_id: ScopeId,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<()> {
         let tp = *self.get_type_parameter(param_type);
         if let Some(static_constraint) = tp.static_constraint {
@@ -13792,7 +13787,7 @@ impl TypedProgram {
         &mut self,
         function_id: FunctionId,
         type_id: TypeId,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<bool> {
         self.require_function_body(function_id, span)?;
         let generic_function = self.functions.get(function_id);
@@ -13844,7 +13839,7 @@ impl TypedProgram {
         &mut self,
         ability_id: AbilityId,
         arguments: &[NameAndType],
-        span: SpanId,
+        span: Span,
         scope_id: ScopeId,
         skip_impl_check: bool,
     ) -> K1Result<(TypeIdSlice, TypeIdSlice)> {
@@ -13916,7 +13911,7 @@ impl TypedProgram {
         &mut self,
         ability_id: AbilityId,
         arguments: TypeSliceId,
-        span: SpanId,
+        span: Span,
         parent_scope_id: ScopeId,
     ) -> AbilityId {
         let ability = self.abilities.get(ability_id);
@@ -14192,7 +14187,7 @@ impl TypedProgram {
         &self,
         scope_id: ScopeId,
         param_type_id: TypeId,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<Option<VariableId>> {
         if self.types.get(param_type_id).as_type_parameter().is_none() {
             return Ok(None);
@@ -14340,7 +14335,7 @@ impl TypedProgram {
     fn eval_dyn_ability_object_type(
         &mut self,
         signature: TypedAbilitySignature,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<TypeId> {
         let ability = self.abilities.get(signature.specialized_ability_id);
         let ability_name = ability.name;
@@ -14396,7 +14391,7 @@ impl TypedProgram {
         base_expr: TypedExprId,
         target_dyn_type: TypeId,
         scope_id: ScopeId,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<TypedExprId> {
         let ao = *self.types.get(target_dyn_type).as_ability_object().unwrap();
         let base_type = self.exprs.get_type(base_expr);
@@ -14940,7 +14935,7 @@ impl TypedProgram {
         &mut self,
         ns_id: NamespaceId,
         name: StringId,
-        span: SpanId,
+        span: Span,
     ) -> TypeId {
         if let Some(existing) = self.namespace_type_params.get(&NameInNamespace { ns_id, name }) {
             return *existing;
@@ -15300,7 +15295,7 @@ impl TypedProgram {
         &mut self,
         enum_param_expr: TypedExprId,
         ctx: EvalExprContext,
-        fn_span: SpanId,
+        fn_span: Span,
     ) -> K1Result<TypedExprId> {
         let enum_type_id = self.exprs.get_type(enum_param_expr);
         let enum_arg_int_expr = self.synth_enum_get_value(enum_param_expr, fn_span);
@@ -15698,7 +15693,7 @@ impl TypedProgram {
         &mut self,
         kind_name: &str,
         variable_id: VariableId,
-        span: SpanId,
+        span: Span,
     ) {
         let v = self.variables.get(variable_id);
         if v.usage_count == 0 && !v.is_user_hidden() {
@@ -16736,7 +16731,7 @@ impl TypedProgram {
         }
     }
 
-    fn fail_if_reload_ns(&self, ns_id: NamespaceId, span: SpanId, what: &str) -> K1Result<()> {
+    fn fail_if_reload_ns(&self, ns_id: NamespaceId, span: Span, what: &str) -> K1Result<()> {
         if self.namespaces.get(ns_id).reload {
             kbail!(self, span, "{} are not allowed in reloadable namespaces", what);
         }
@@ -17310,8 +17305,8 @@ impl TypedProgram {
         if !self.execute_static_condition(condition, parent_scope) {
             self.ast.namespaces.get_mut(parsed_namespace_id).typer_state =
                 ParsedNamespaceDeclareOutcome::IfDefedOut;
-            let ns_span_id = self.ast.namespaces.get(parsed_namespace_id).span;
-            self.emit_semantic_token(ns_span_id, parse::SemanticTokenKind::Comment);
+            let ns_span = self.ast.namespaces.get(parsed_namespace_id).span;
+            self.emit_semantic_token(ns_span, parse::SemanticTokenKind::Comment);
             return Ok(None);
         }
         let ns_id = self.declare_namespace(parsed_namespace_id, parent_scope)?;
@@ -17319,13 +17314,9 @@ impl TypedProgram {
         Ok(Some(ns_id))
     }
 
-    fn emit_semantic_token(&mut self, span_id: SpanId, kind: parse::SemanticTokenKind) {
+    fn emit_semantic_token(&mut self, span: Span, kind: parse::SemanticTokenKind) {
         if cfg!(feature = "lsp") {
-            let whole_span = self.ast.spans.get(span_id);
-            parse::add_semantic_token(
-                &mut self.ast,
-                parse::SemanticToken { span: whole_span, kind },
-            );
+            parse::add_semantic_token(&mut self.ast, parse::SemanticToken { span, kind });
         }
     }
 
@@ -17470,12 +17461,12 @@ impl TypedProgram {
                 StructTypeField {
                     name: self.ast.idents.b.fn_ptr,
                     type_id: POINTER_TYPE_ID,
-                    span: SpanId::NONE,
+                    span: Span::NONE,
                 },
                 StructTypeField {
                     name: self.ast.idents.b.env_ptr,
                     type_id: POINTER_TYPE_ID,
-                    span: SpanId::NONE,
+                    span: Span::NONE,
                 },
             ]);
             let t = self.add_type_anon(Type::Struct(StructType::struc(fields)));
@@ -17675,7 +17666,7 @@ impl TypedProgram {
 
     fn add_core_prelude_to_root(&mut self) -> K1Result<()> {
         let scope = self.scopes.root_scope_id();
-        let span = SpanId::NONE;
+        let span = Span::NONE;
         macro_rules! intern_path {
             ($($name: expr),*) => {
                 self.ast.mem.pushn(&[$(parse::IdentSpanned { name: $name, span }),*])
@@ -17808,11 +17799,11 @@ impl TypedProgram {
         Ok(())
     }
 
-    fn emit_ls_entity(&self, span: SpanId, kind: LsEntityKind) {
+    fn emit_ls_entity(&self, span: Span, kind: LsEntityKind) {
         if cfg!(feature = "lsp") {
-            let Some(span) = self.remap_call_arg_span(self.ast.spans.get(span)) else { return };
+            let Some(span) = self.remap_call_arg_span(span) else { return };
             let mut ls_entities = self.ls_entities.borrow_mut();
-            let file_id = span.file_id;
+            let file_id = self.ast.sources.file_of(span.lo);
             let entities_entry = ls_entities.entry(file_id);
             let entities = entities_entry.or_insert_with(|| Vec::with_capacity(128));
             entities.push(LsEntity { kind, span });

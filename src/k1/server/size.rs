@@ -7,7 +7,7 @@ use maud::{Markup, PreEscaped, html};
 use serde_json::{Value, json};
 
 use crate::codegen_llvm::Cg;
-use crate::lex::SpanId;
+use crate::lex::Span;
 use crate::typer::{AbilityId, FunctionId, NamespaceId, TypedFunctionKind, TypedProgram};
 
 struct Node {
@@ -45,7 +45,7 @@ fn placement(k1: &TypedProgram, function_id: FunctionId) -> (NamespaceId, Option
         return (function.namespace_id, None);
     };
     let span = k1.get_function_span(function_id);
-    if span == SpanId::NONE {
+    if span == Span::NONE {
         return (function.namespace_id, Some(ability_id));
     }
     let module = k1.modules.get(k1.module_of_span(span));

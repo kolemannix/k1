@@ -5,7 +5,7 @@ use libffi::raw::ffi_cif;
 use libffi::{low::*, raw};
 
 use crate::ir::PhysicalFunctionType;
-use crate::lex::SpanId;
+use crate::lex::Span;
 use crate::compiler::Arch;
 use crate::typer::types::{
     AggType, HomogeneousAggregate, Layout, PhysicalType, PhysicalTypeEnum, RegisterClass,
@@ -143,7 +143,7 @@ pub(crate) fn handle_ffi_call_resolved(
 fn prep_ffi_cif(
     k1: &mut TypedProgram,
     physical_function_type: PhysicalFunctionType,
-    span: SpanId,
+    span: Span,
 ) -> K1Result<ffi_cif> {
     let param_count = physical_function_type.params.len() as usize;
     let fn_params = physical_function_type.params;

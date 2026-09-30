@@ -1,6 +1,6 @@
 // `code` is source text as a sequence of chunks; metaprograms return it so
 // diagnostics in compiled output can point back at the original source.
-// `source` is a compiler span id, widened to u64; 0 means no source.
+// `source` is a compiler span packed into a u64; 0 means no source.
 
 type code-chunk = { text: string, source: u64 }
 
@@ -19,7 +19,7 @@ ns for code-token {
   }
 
   fn fail(self, msg: string): never {
-    crash(context .{ filename = "", line = 0, span = self.source.trunc[u32]() })(msg)
+    crash(context .{ filename = "", line = 0, span = self.source })(msg)
   }
 }
 

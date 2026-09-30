@@ -6,10 +6,9 @@ use crate::typer::trace::{FRAME_FLAG_EXPR_UNIT, FrameId, RESTORE_SECTIONS, Trace
 use fxhash::FxHashMap;
 
 impl TypedProgram {
-    pub fn get_span_location(&self, span: SpanId) -> (&parse::SourceFile, parse::Line) {
-        let the_span = self.ast.spans.get(span);
-        let source = self.ast.sources.get(the_span.file_id);
-        let line = source.get_line_for_span_start(&self.ast.mem, the_span).unwrap();
+    pub fn get_span_location(&self, span: Span) -> (&parse::SourceFile, parse::Line) {
+        let source = self.ast.sources.source_by_span(span);
+        let line = source.get_line_for_span_start(&self.ast.mem, span).unwrap();
         (source, line)
     }
 
@@ -123,20 +122,20 @@ impl TypedProgram {
         anyhow::anyhow!("{}: {}", e.level, self.ident_str(e.message))
     }
 
-    pub fn error_from_anyhow(&self, e: anyhow::Error, span: SpanId) -> K1Message {
+    pub fn error_from_anyhow(&self, e: anyhow::Error, span: Span) -> K1Message {
         let string_id = self.ast.idents.intern(format!("{e}"));
         self.make_error(string_id, span)
     }
 
-    pub fn make_error(&self, message: StringId, span: SpanId) -> K1Message {
+    pub fn make_error(&self, message: StringId, span: Span) -> K1Message {
         make_message(message, span, MessageLevel::Error)
     }
 
-    pub fn make_warning(&self, message: StringId, span: SpanId) -> K1Message {
+    pub fn make_warning(&self, message: StringId, span: Span) -> K1Message {
         make_message(message, span, MessageLevel::Warn)
     }
 
-    pub fn make_fail<A>(&self, message: StringId, span: SpanId) -> K1Result<A> {
+    pub fn make_fail<A>(&self, message: StringId, span: Span) -> K1Result<A> {
         Err(self.make_error(message, span))
     }
 
@@ -155,18 +154,19 @@ impl TypedProgram {
     /// the emitted text outran it (escapes, dedent). None when `span` is not
     /// chunk text: a real file, or glue
     fn remap_span_hop(&self, span: Span) -> Option<(Span, &EmittedSource)> {
-        let table = &self.emitted_sources[self.emitted_source_for_file(span.file_id)?];
+        let file_id = self.ast.sources.file_of(span.lo);
+        let table = &self.emitted_sources[self.emitted_source_for_file(file_id)?];
+        let local = self.ast.sources.get(file_id).local(span.lo);
         let entries = self.mem.getn(table.entries);
-        let candidate = entries.partition_point(|entry| entry.start <= span.start);
-        let &CodeChunkPos { start, end, source } = &entries[candidate.checked_sub(1)?];
-        if span.start >= end {
+        let candidate = entries.partition_point(|entry| entry.start <= local);
+        let &CodeChunkPos { start, end, source: source_span } = &entries[candidate.checked_sub(1)?];
+        if local >= end {
             return None;
         }
-        let source_span = self.ast.spans.get(source);
-        let offset = span.start - start;
+        let offset = local - start;
         let remapped = if offset < source_span.len {
-            let len = span.len.min(end - span.start).min(source_span.len - offset);
-            Span { file_id: source_span.file_id, start: source_span.start + offset, len }
+            let len = span.len.min(end - local).min(source_span.len - offset);
+            Span { lo: source_span.lo + offset, len }
         } else {
             source_span
         };
@@ -181,37 +181,26 @@ impl TypedProgram {
         span
     }
 
-    pub fn module_of_span(&self, span_id: SpanId) -> ModuleId {
-        let span = self.remap_span(self.ast.spans.get(span_id));
+    pub fn module_of_span(&self, span: Span) -> ModuleId {
+        let span = self.remap_span(span);
+        let span_file = self.ast.sources.file_of(span.lo);
         for module in self.modules.iter() {
-            for file_id in module.files.as_slice(&self.mem) {
-                if *file_id == span.file_id {
-                    return module.id;
-                }
+            if module.contains_file(&self.mem, span_file) {
+                return module.id;
             }
         }
         self.primary_module().id
-    }
-
-    pub fn remap_to_source_span(&mut self, span_id: SpanId) -> SpanId {
-        let span = self.ast.spans.get(span_id);
-        let remapped = self.remap_span(span);
-        if remapped == span { span_id } else { self.ast.spans.add(remapped) }
     }
 
     /// Follows argument text back to the call it was written in; template
     /// text and glue land outside the call span and yield None
     pub fn remap_call_arg_span(&self, mut span: Span) -> Option<Span> {
         for _ in 0..16 {
-            if self.emitted_source_for_file(span.file_id).is_none() {
+            if self.emitted_source_for_file(self.ast.sources.file_of(span.lo)).is_none() {
                 return Some(span);
             }
             let (remapped, table) = self.remap_span_hop(span)?;
-            let call = self.ast.spans.get(table.call_span);
-            if remapped.file_id != call.file_id
-                || remapped.start < call.start
-                || remapped.end() > call.end()
-            {
+            if remapped.lo < table.call_span.lo || remapped.end() > table.call_span.end() {
                 return None;
             }
             span = remapped;
@@ -220,24 +209,22 @@ impl TypedProgram {
     }
 
     pub fn report_ext(&mut self, e: K1Message, no_print: bool) {
-        let e = K1Message { span: self.remap_to_source_span(e.span), ..e };
-        // Check for duplicates (happens a lot with generic code); remapping makes
-        // fresh span ids, so spans compare by contents
+        let e = K1Message { span: self.remap_span(e.span), ..e };
+        // Check for duplicates (happens a lot with generic code)
         //
         // This will be kind quadraticy if we ever have a lot of diagnostics, which could
         // happen in happy path if we're doing a lot of hints
-        let e_span = self.ast.spans.get(e.span);
         let is_duplicate = self.messages.borrow().iter().any(|m| {
             m.message == e.message
                 && m.level == e.level
                 && m.error_kind == e.error_kind
-                && self.ast.spans.get(m.span) == e_span
+                && m.span == e.span
         });
         if is_duplicate {
             return;
         }
 
-        if let Some(table_index) = self.emitted_source_for_file(e_span.file_id) {
+        if let Some(table_index) = self.emitted_source_for_file(self.ast.sources.file_of(e.span.lo)) {
             if e.level == MessageLevel::Error {
                 self.emitted_sources[table_index].has_diagnostic = true
             }
@@ -261,7 +248,7 @@ impl TypedProgram {
         self.messages.borrow_mut().push(e);
     }
 
-    pub fn report_hint(&mut self, span: SpanId, message: impl AsRef<str>) {
+    pub fn report_hint(&mut self, span: Span, message: impl AsRef<str>) {
         self.report(K1Message {
             message: self.ast.idents.intern(message),
             span,
@@ -270,7 +257,7 @@ impl TypedProgram {
         });
     }
 
-    pub fn report_warn(&mut self, span: SpanId, message: impl AsRef<str>) {
+    pub fn report_warn(&mut self, span: Span, message: impl AsRef<str>) {
         self.report(K1Message {
             message: self.ast.idents.intern(message),
             span,
@@ -279,7 +266,7 @@ impl TypedProgram {
         });
     }
 
-    pub fn log_hint(&self, span: SpanId, message: impl AsRef<str>) {
+    pub fn log_hint(&self, span: Span, message: impl AsRef<str>) {
         let use_color = std::io::stderr().is_terminal();
         let hint = K1Message {
             message: self.ast.idents.intern(message),
@@ -304,7 +291,7 @@ impl TypedProgram {
             error.span,
             use_color,
         )?;
-        let file_id = self.ast.spans.get(error.span).file_id;
+        let file_id = self.ast.sources.file_of(error.span.lo);
         if let Some(emitted_index) = self.emitted_source_for_file(file_id) {
             writeln!(w, "note: in code compiled in place of this call:")?;
             self.write_location(w, self.emitted_sources[emitted_index].call_span, use_color);
@@ -312,18 +299,18 @@ impl TypedProgram {
         Ok(())
     }
 
-    pub fn write_location(&self, w: &mut impl std::io::Write, span: SpanId, use_color: bool) {
+    pub fn write_location(&self, w: &mut impl std::io::Write, span: Span, use_color: bool) {
         parse::write_source_location(w, &self.ast, span, MessageLevel::Info, 6, None, use_color)
             .unwrap()
     }
 
-    pub fn write_location_error(&self, w: &mut impl std::io::Write, span: SpanId, use_color: bool) {
+    pub fn write_location_error(&self, w: &mut impl std::io::Write, span: Span, use_color: bool) {
         parse::write_source_location(w, &self.ast, span, MessageLevel::Error, 6, None, use_color)
             .unwrap()
     }
 
     #[track_caller]
-    pub fn ice_span(&self, span: SpanId, msg: impl AsRef<str>) -> ! {
+    pub fn ice_span(&self, span: Span, msg: impl AsRef<str>) -> ! {
         let use_color = std::io::stderr().is_terminal();
         self.write_location_error(&mut std::io::stderr(), span, use_color);
         panic!("Internal Compiler Error: {}", msg.as_ref())
@@ -339,13 +326,13 @@ impl TypedProgram {
     }
 
     /// "file.k1:line" for definitions; None for synthesized spans
-    pub fn span_location(&self, span_id: SpanId) -> Option<String> {
-        if span_id == SpanId::NONE {
+    pub fn span_location(&self, span: Span) -> Option<String> {
+        if span.is_none() {
             return None;
         }
-        let span = self.remap_span(self.ast.spans.get(span_id));
-        let source = self.ast.sources.get(span.file_id);
-        let (line, _) = self.ast.sources.get_lines_for_span(&self.ast.mem, span)?;
+        let span = self.remap_span(span);
+        let source = self.ast.sources.source_by_span(span);
+        let (line, _) = source.get_lines_for_span(&self.ast.mem, span)?;
         Some(format!("{}:{}", source.filename_str(&self.ast.idents), line.line_number()))
     }
 
@@ -364,7 +351,7 @@ impl TypedProgram {
     pub fn frame_label(&self, frame: &TraceFrame) -> String {
         let key = frame.key;
         let span_label = || {
-            self.span_location(SpanId::from_u32(key).unwrap()).unwrap_or_else(|| "?".to_string())
+            self.span_location(Span { lo: key, len: 0 }).unwrap_or_else(|| "?".to_string())
         };
         let mut label = match frame.kind {
             TraceKind::PlanCheck | TraceKind::HostPlan => self.program_name().to_string(),

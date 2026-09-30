@@ -240,7 +240,7 @@ impl TypedProgram {
         let mr = self.megarepl.as_mut().unwrap();
         let cell_id = mr.cells.len() as CellId;
         let source_id = self.megarepl_create_source(cell_id, 0, code);
-        let uninit_warning = self.make_warning(self.ast.idents.intern("uninit"), SpanId::NONE);
+        let uninit_warning = self.make_warning(self.ast.idents.intern("uninit"), Span::NONE);
         let mr = self.megarepl.as_mut().unwrap();
         mr.cells.push(MegareplCell {
             id: cell_id,
@@ -490,7 +490,7 @@ impl TypedProgram {
         &mut self,
         name: StringId,
         type_id: TypeId,
-        span: SpanId,
+        span: Span,
     ) -> (TypedGlobalId, VariableId) {
         let repl_ns_scope = self.megarepl.as_ref().unwrap().ns_scope;
         let global_id = self.globals.next_id();
@@ -535,7 +535,7 @@ impl TypedProgram {
         cell_id: CellId,
         iteration: u32,
     ) -> K1Result<(TypedExprId, Vec<(TypedGlobalId, TypeId)>)> {
-        let span = stmts.first().map(|s| self.ast.get_stmt_span(*s)).unwrap_or(SpanId::NONE);
+        let span = stmts.first().map(|s| self.ast.get_stmt_span(*s)).unwrap_or(Span::NONE);
         let repl_ns_scope = self.megarepl.as_ref().unwrap().ns_scope;
         let mut output_globals: Vec<(TypedGlobalId, TypeId)> = vec![];
         // We're putting a Lexical Block in a Namespace directly.
@@ -598,7 +598,7 @@ impl TypedProgram {
                     // Global exists. Now at this position in the block, we do
                     // a set
                     if let Some(initializer) = rhs {
-                        let variable_expr = self.synth_variable_expr(variable_id, SpanId::NONE);
+                        let variable_expr = self.synth_variable_expr(variable_id, Span::NONE);
                         let assign_stmt =
                             self.add_assignment_stmt(variable_expr, initializer, parsed_let.span);
                         self.push_block_stmt_id(&mut cell_block, assign_stmt);
@@ -639,7 +639,7 @@ impl TypedProgram {
                             ));
                             let (global_id, variable_id) =
                                 self.megarepl_make_global(name, expr_type, expr_span);
-                            let variable_expr = self.synth_variable_expr(variable_id, SpanId::NONE);
+                            let variable_expr = self.synth_variable_expr(variable_id, Span::NONE);
                             let assign_stmt =
                                 self.add_assignment_stmt(variable_expr, expr_id, expr_span);
                             self.push_block_stmt_id(&mut cell_block, assign_stmt);

@@ -43,13 +43,13 @@ pub(crate) enum InferenceFailure {
         expected: TypeId,
         actual: TypeId,
         reason: &'static str,
-        span: SpanId,
+        span: Span,
     },
     Unsolved {
         params: MSlice<TypeId, MemTmp>,
         arguments: MSlice<(TypeId, TypeId), MemTmp>,
         solutions: MSlice<TypeSubstitutionPair, MemTmp>,
-        span: SpanId,
+        span: Span,
     },
     Constraint(K1Message),
 }
@@ -75,7 +75,7 @@ impl TypedProgram {
         // as a separate step
         must_solve_params: TypeIdSlice,
         inference_pairs: &[InferenceInputPair],
-        span: SpanId,
+        span: Span,
         scope_id: ScopeId,
         stash: Option<InferArgStash>,
     ) -> Result<(TypeArgs, TypeArgs), InferenceFailure> {
@@ -84,7 +84,7 @@ impl TypedProgram {
         }
 
         self.ictx_mut().origin_stack.push(span);
-        let frame = self.trace_push(TraceKind::TypeInfer, span.as_u32(), 0);
+        let frame = self.trace_push(TraceKind::TypeInfer, span.lo, 0);
         let result = self.infer_types_inner(
             all_type_params,
             must_solve_params,
@@ -109,7 +109,7 @@ impl TypedProgram {
         all_type_params: &[TypeId],
         must_solve_params: TypeIdSlice,
         inference_pairs: &[InferenceInputPair],
-        span: SpanId,
+        span: Span,
         scope_id: ScopeId,
         mut stash: Option<InferArgStash>,
     ) -> Result<(TypeArgs, TypeArgs), InferenceFailure> {
@@ -407,7 +407,7 @@ impl TypedProgram {
         type_param_id: TypeId,
         solution_type_id: TypeId,
         scope_id: ScopeId,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<()> {
         let infer_depth = self.ictx().origin_stack.len();
         if let Some(static_type) = self.get_type_parameter(type_param_id).static_constraint {
@@ -530,7 +530,7 @@ impl TypedProgram {
     pub(crate) fn infer_and_constrain_call_type_args(
         &mut self,
         fn_call: &ParsedCall,
-        call_span: SpanId,
+        call_span: Span,
         generic_function_sig: FunctionSignature,
         ctx: EvalExprContext,
         args_and_params: &ArgsAndParams,

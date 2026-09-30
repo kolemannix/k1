@@ -4,7 +4,7 @@ use crate::snap::{SnapReader, SnapWriter, restore_map_snap, write_map_snap};
 
 use super::*;
 
-static_assert_size!(K1Message, 12);
+static_assert_size!(K1Message, 16);
 static_assert_size!(AbilitySpec9nInfo, 12);
 static_assert_size!(NameInNamespace, 8);
 

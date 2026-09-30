@@ -9,7 +9,7 @@ use std::path::Path;
 
 use crate::kmem::{self, MStr, Mem};
 use crate::parse::{IdentPool, Interner, StringId, write_source_location};
-use crate::lex::SpanId;
+use crate::lex::Span;
 use crate::typer::{
     K1Message, K1Result, LibRefLinkType, Linkage, MemTmp, MessageLevel, NamespaceId, TypedProgram,
 };
@@ -1140,7 +1140,7 @@ fn dump_checked_ir(k1: &mut TypedProgram) -> K1Result<()> {
     let roots = ir::get_program_roots(k1)?;
     let reachable = ir::compile_reachable(k1, &roots.functions)?;
     if let Err(e) = ir::dump_program_ir(k1, &reachable) {
-        kbail!(k1, SpanId::NONE, "Failed to write the ir dump: {e}");
+        kbail!(k1, Span::NONE, "Failed to write the ir dump: {e}");
     }
     Ok(())
 }

@@ -50,13 +50,13 @@ impl TypedProgram {
         }
     }
 
-    pub fn warn_if_not_zerosafe(&mut self, type_id: TypeId, span: SpanId) {
+    pub fn warn_if_not_zerosafe(&mut self, type_id: TypeId, span: Span) {
         if !self.get_type_variable_counts(type_id).is_zero_safe {
             self.report_warn(span, k1_format_user!(self, "Type {} is not zero-safe", type_id))
         }
     }
 
-    pub fn require_function_body(&mut self, function_id: FunctionId, span: SpanId) -> K1Result<()> {
+    pub fn require_function_body(&mut self, function_id: FunctionId, span: Span) -> K1Result<()> {
         if let Err(e) = self.eval_function_body(function_id) {
             self.report(e)
         }
@@ -81,7 +81,7 @@ impl TypedProgram {
     pub(super) fn synth_phony_if_generic_pass(
         &mut self,
         ctx: EvalExprContext,
-        span: SpanId,
+        span: Span,
     ) -> Option<TypedExprId> {
         if !ctx.is_generic_pass() {
             return None;
@@ -93,7 +93,7 @@ impl TypedProgram {
         &mut self,
         function_id: FunctionId,
         requester_frame: Option<FrameId>,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<()> {
         if let Err(e) = ir::compile_function(self, function_id, requester_frame)
             && self.get_function(function_id).body_failure.is_none()
@@ -104,7 +104,7 @@ impl TypedProgram {
         self.require_function_body(function_id, span)
     }
 
-    pub fn compile_all_pending_ir(&mut self, on_behalf_of_span: SpanId) -> K1Result<()> {
+    pub fn compile_all_pending_ir(&mut self, on_behalf_of_span: Span) -> K1Result<()> {
         loop {
             if let Some((function_id, requester)) = self.ir.units_pending_compile.pop() {
                 if let Err(e) =
@@ -236,11 +236,11 @@ impl TypedProgram {
 
     pub(super) fn do_with_vm<T>(
         &mut self,
-        span: SpanId,
+        span: Span,
         trace_flags: u8,
         mut f: impl FnMut(&mut TypedProgram, &mut vm::Vm) -> T,
     ) -> T {
-        let frame = self.trace_push(TraceKind::StaticExec, span.as_u32(), trace_flags);
+        let frame = self.trace_push(TraceKind::StaticExec, span.lo, trace_flags);
         let (mut vm, used_alt) = match *std::mem::take(&mut self.vm) {
             None => {
                 let maybe_alt = self.vm_alts.pop();
@@ -271,7 +271,7 @@ impl TypedProgram {
         &mut self,
         function_id: FunctionId,
         function_parameters: &[StaticValueId],
-        span: SpanId,
+        span: Span,
     ) -> K1Result<StaticValueId> {
         self.do_with_vm(span, 0, |k1, vm| {
             let result =
@@ -284,7 +284,7 @@ impl TypedProgram {
     pub(super) fn static_exec_prepare_function(
         k1: &mut TypedProgram,
         function_id: FunctionId,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<()> {
         let requester = k1.trace.top();
         k1.compile_function_for_exec(function_id, requester, span)?;
@@ -298,7 +298,7 @@ impl TypedProgram {
         vm: &mut vm::Vm,
         function_id: FunctionId,
         function_parameters: &[StaticValueId],
-        span: SpanId,
+        span: Span,
     ) -> K1Result<StaticValueId> {
         Self::static_exec_prepare_function(k1, function_id, span)?;
         bc::exec::execute_compiled_function(k1, vm, function_id, function_parameters, true)
@@ -356,15 +356,15 @@ impl TypedProgram {
             self.ast.globals.get_mut(parsed_global_id).typer_state =
                 ParsedGlobalDeclareOutcome::IfDefedOut;
             if cfg!(feature = "lsp") {
-                let span = self.ast.spans.get(parsed.span);
                 let kind = parse::SemanticTokenKind::Comment;
-                parse::add_semantic_token(&mut self.ast, parse::SemanticToken { span, kind });
+                let token = parse::SemanticToken { span: parsed.span, kind };
+                parse::add_semantic_token(&mut self.ast, token);
             }
             return Ok(None);
         }
         let owner_ns = match self.scopes.get_scope(scope_id).owner_id {
             ScopeOwnerId::Namespace(ns) => ns,
-            _ => kbail!(self, SpanId::NONE, "declare_global's scope_id should be an namespace"),
+            _ => kbail!(self, Span::NONE, "declare_global's scope_id should be an namespace"),
         };
         if parsed.is_thread_local {
             self.fail_if_reload_ns(owner_ns, parsed.span, "tls globals")?;
@@ -567,7 +567,7 @@ impl TypedProgram {
         defn_name: StringId,
         scope_id: ScopeId,
         expected_type_id: TypeId,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<StaticValueId> {
         let name = self.ident_str(defn_name);
         let float = match (name, expected_type_id) {
@@ -631,7 +631,7 @@ impl TypedProgram {
     pub(super) fn handle_module_params_decl_call(
         &mut self,
         global_id: TypedGlobalId,
-        call_span: SpanId,
+        call_span: Span,
         call_args: AstSlice<ParsedCallArg>,
         schema_type: TypeId,
         scope_id: ScopeId,
@@ -639,7 +639,7 @@ impl TypedProgram {
         let global = self.globals.get(global_id);
         let global_span = global.span;
         let global_parent_scope = global.parent_scope;
-        let file_id = self.ast.spans.get(global_span).file_id;
+        let file_id = self.ast.sources.file_of(global_span.lo);
         let Some(module_id) =
             self.modules.iter().find(|m| m.contains_file(&self.mem, file_id)).map(|m| m.id)
         else {
@@ -715,19 +715,19 @@ impl TypedProgram {
                 .ast
                 .idents
                 .intern(self.plan.get(self.plan.module(provider.from as usize).name));
-            let params_span = self.provider_span(*provider)?;
-            let Span { file_id, start, len } = self.ast.spans.get(params_span);
-            let build_file = self.ast.sources.get(file_id).content(&self.ast.mem);
-            let literal = &build_file[start as usize..(start + len) as usize];
-            let table = self.mem.pushn(&[CodeChunkPos { start: 0, end: len, source: params_span }]);
-            let emitted = self.add_emitted_source(literal, table, params_span);
+            let span = self.provider_span(*provider)?;
+            let source = self.ast.sources.source_by_span(span);
+            let start = source.local(span.lo) as usize;
+            let literal = &source.content(&self.ast.mem)[start..start + span.len as usize];
+            let table = self.mem.pushn(&[CodeChunkPos { start: 0, end: span.len, source: span }]);
+            let emitted = self.add_emitted_source(literal, table, span);
             let ParseMetaprogramResult::Expr(params_expr) =
                 self.parse_metaprogram_source(module_id, emitted, ParseAdHocKind::Expr)?
             else {
-                self.ice_span(params_span, "dep params parsed as definitions");
+                self.ice_span(span, "dep params parsed as definitions");
             };
             let ParsedExpr::Struct(s) = self.ast.exprs.get(params_expr) else {
-                kbail!(self, params_span, "dep params must be a struct literal");
+                kbail!(self, span, "dep params must be a struct literal");
             };
             let literal_fields = self.ast.mem.getn(s.fields);
             for field in literal_fields {
@@ -818,7 +818,7 @@ impl TypedProgram {
     pub(super) fn add_static_value_expr(
         &mut self,
         value_id: StaticValueId,
-        span: SpanId,
+        span: Span,
     ) -> TypedExprId {
         let inner_type_id = self.get_static_value_type(value_id);
         let static_type_id = self.add_value_type(inner_type_id, Some(value_id));
@@ -828,7 +828,7 @@ impl TypedProgram {
     pub(super) fn add_static_constant_expr(
         &mut self,
         value_id: StaticValueId,
-        span: SpanId,
+        span: Span,
     ) -> TypedExprId {
         let type_id = self.get_static_value_type(value_id);
         self.exprs.add_static(value_id, type_id, false, span)
@@ -942,7 +942,7 @@ impl TypedProgram {
     /// A constant `code` value: a list of chunks, each text plus its source span
     pub(super) fn make_static_code_value(
         &mut self,
-        chunks: &[(StringId, SpanId)],
+        chunks: &[(StringId, Span)],
     ) -> StaticValueId {
         let code_type = self.builtin_types.code();
         let chunk_type = self.builtin_types.code_chunk();
@@ -952,7 +952,7 @@ impl TypedProgram {
         for (text, source) in chunks {
             let text_value = self.static_values.add_string(*text);
             let source_value =
-                self.static_values.add_int(TypedIntValue::U64(source.as_u32() as u64));
+                self.static_values.add_int(TypedIntValue::U64(source.to_u64()));
             let chunk_value =
                 self.static_values.add_struct_from_slice(chunk_type, &[text_value, source_value]);
             elements.push(chunk_value);
@@ -965,7 +965,7 @@ impl TypedProgram {
         self.static_values.add_struct_from_slice(code_type, &[chunks_value])
     }
 
-    fn get_expr_span_quoted(&self, parsed_expr: ParsedExprId) -> SpanId {
+    fn get_expr_span_quoted(&self, parsed_expr: ParsedExprId) -> Span {
         match self.ast.exprs.get(parsed_expr) {
             ParsedExpr::Code(code) => code.content,
             _ => self.ast.exprs.get_span(parsed_expr),
@@ -974,7 +974,7 @@ impl TypedProgram {
 
     pub(super) fn code_from_parsed_expr(&mut self, parsed_expr: ParsedExprId) -> StaticValueId {
         let span = self.get_expr_span_quoted(parsed_expr);
-        let content = self.ast.sources.get_span_content(&self.ast.mem, self.ast.spans.get(span));
+        let content = self.ast.sources.get_span_content(&self.ast.mem, span);
         let string_id = self.ast.idents.intern(content);
         self.make_static_code_value(&[(string_id, span)])
     }
@@ -984,15 +984,11 @@ impl TypedProgram {
         parsed_expr: ParsedExprId,
     ) -> K1Result<StaticValueId> {
         use crate::lex::TokenKind as K;
-        let code_span = self.ast.spans.get(self.get_expr_span_quoted(parsed_expr));
+        let code_span = self.get_expr_span_quoted(parsed_expr);
         let content = self.ast.sources.get_span_content(&self.ast.mem, code_span);
         let mut lexed = crate::lex::lex(content, std::mem::take(&mut self.buffers.lexed));
         if let Some(e) = lexed.error.take() {
-            let span = self.ast.spans.add(Span {
-                file_id: code_span.file_id,
-                start: code_span.start + e.start,
-                len: e.len,
-            });
+            let span = Span { lo: code_span.lo + e.start, len: e.len };
             self.buffers.lexed = lexed;
             kbail!(self, span, "{}", e.message);
         }
@@ -1036,16 +1032,12 @@ impl TypedProgram {
             let (start, _) = lexed.get_token_start_len(first);
             let (last_start, last_len) = lexed.get_token_start_len(lexed.tokens[last_index]);
 
-            let output_span = Span {
-                file_id: code_span.file_id,
-                start: code_span.start + start,
-                len: last_start + last_len - start,
-            };
+            let output_span =
+                Span { lo: code_span.lo + start, len: last_start + last_len - start };
             let text = self.ast.sources.get_span_content(&self.ast.mem, output_span);
             let text_value = self.static_values.add_string(self.ast.idents.intern(text));
-            let output_span_id = self.ast.spans.add(output_span);
             let source_value =
-                self.static_values.add_int(TypedIntValue::U64(output_span_id.as_u32() as u64));
+                self.static_values.add_int(TypedIntValue::U64(output_span.to_u64()));
             let kind_value = self
                 .static_values
                 .add(StaticValue::Enum(kind_type, TypedIntValue::U8(token_kind as u8)));
@@ -1084,7 +1076,7 @@ impl TypedProgram {
         &mut self,
         family_type_id: TypeId,
         value_id: Option<StaticValueId>,
-        span: SpanId,
+        span: Span,
     ) -> TypedExprId {
         match value_id {
             Some(value_id) => self.add_static_constant_expr(value_id, span),
@@ -1219,7 +1211,7 @@ impl TypedProgram {
                 Ok(StaticExecutionResult::TypedExpr(expr))
             }
             ParsedStaticBlockKind::Metaprogram => {
-                self.traced(TraceKind::Metaprogram, span.as_u32(), ctx.trace_flags(), |k1| {
+                self.traced(TraceKind::Metaprogram, span.lo, ctx.trace_flags(), |k1| {
                     let emitted = k1.do_with_vm(span, ctx.trace_flags(), |k1, vm| {
                         let result = (|| {
                             let expr = k1.compile_parsed_expr_for_exec(
@@ -1244,7 +1236,7 @@ impl TypedProgram {
     pub(super) fn read_emitted_code_raw(
         k1: &mut TypedProgram,
         raw: &bc::exec::RawUnitResult,
-        span: SpanId,
+        span: Span,
         is_definition: bool,
     ) -> K1Result<Option<(String, PermSlice<CodeChunkPos>)>> {
         use crate::vm::k1_types::{K1Code, K1CodeChunk};
@@ -1258,7 +1250,7 @@ impl TypedProgram {
         }
         #[cfg(debug_assertions)]
         k1.assert_code_layouts();
-        let frame = k1.trace_push(TraceKind::VmValueFerry, span.as_u32(), 0);
+        let frame = k1.trace_push(TraceKind::VmValueFerry, span.lo, 0);
         let code = unsafe { *(raw.ret_addr as *const K1Code) };
         let chunks = unsafe {
             std::slice::from_raw_parts(
@@ -1273,7 +1265,7 @@ impl TypedProgram {
 
     pub(super) fn build_emitted_source(
         &mut self,
-        span: SpanId,
+        span: Span,
         is_definition: bool,
         chunks: &[vm::k1_types::K1CodeChunk],
     ) -> K1Result<Option<(String, PermSlice<CodeChunkPos>)>> {
@@ -1306,7 +1298,7 @@ impl TypedProgram {
             }
             let start = content.len() as u32;
             content.push_str(text);
-            if let Some(source) = SpanId::from_u32(chunk.source as u32) {
+            if let Some(source) = Span::from_u64(chunk.source) {
                 table.push(CodeChunkPos { start, end: start + text.len() as u32, source });
             }
         }
@@ -1332,7 +1324,7 @@ impl TypedProgram {
     pub(super) fn compile_emitted_code(
         &mut self,
         emitted: Option<(String, PermSlice<CodeChunkPos>)>,
-        span: SpanId,
+        span: Span,
         ctx: EvalExprContext,
         is_definition: bool,
     ) -> K1Result<StaticExecutionResult> {
@@ -1392,7 +1384,7 @@ impl TypedProgram {
         &mut self,
         content: &str,
         table: PermSlice<CodeChunkPos>,
-        span: SpanId,
+        span: Span,
     ) -> FileId {
         let (source, line) = self.get_span_location(span);
         let line_number = line.line_number();
@@ -1442,7 +1434,6 @@ impl TypedProgram {
             let mut emitted_bytes = 0usize;
             let mut newline_bytes = 0usize;
             let mut trivia_bytes = 0usize;
-            let mut token_bytes = 0usize;
             for (file_id, source) in self.ast.sources.iter() {
                 if self.emitted_source_for_file(file_id).is_some() {
                     emitted_bytes += source.content_len();
@@ -1452,7 +1443,6 @@ impl TypedProgram {
                 }
                 newline_bytes += source.newline_count() * size_of::<u32>();
                 trivia_bytes += source.trivia.len() as usize * size_of::<crate::lex::TriviaEntry>();
-                token_bytes += source.tokens.len() as usize * size_of::<crate::lex::Token>();
             }
             let mut unique_emissions: ahash::HashSet<u64> = ahash::HashSet::default();
             let mut unique_bytes = 0usize;
@@ -1466,7 +1456,7 @@ impl TypedProgram {
                 }
             }
             eprintln!(
-                "\tsources: {} files {}kb + {} emitted {}kb ({} unique, {}kb); line tables {}kb, trivia {}kb, tokens {}kb",
+                "\tsources: {} files {}kb + {} emitted {}kb ({} unique, {}kb); line tables {}kb, trivia {}kb",
                 real_files,
                 real_bytes / crate::KILOBYTE,
                 self.emitted_sources.len(),
@@ -1475,7 +1465,6 @@ impl TypedProgram {
                 unique_bytes / crate::KILOBYTE,
                 newline_bytes / crate::KILOBYTE,
                 trivia_bytes / crate::KILOBYTE,
-                token_bytes / crate::KILOBYTE,
             );
         }
     }
@@ -1484,7 +1473,7 @@ impl TypedProgram {
         &mut self,
         type_args: &[NamedTypeArg],
         args: &[ParsedCallArg],
-        span: SpanId,
+        span: Span,
         function_id: FunctionId,
         is_definition: bool,
         ctx: EvalExprContext,
@@ -1498,7 +1487,7 @@ impl TypedProgram {
         &mut self,
         type_args: &[NamedTypeArg],
         args: &[ParsedCallArg],
-        span: SpanId,
+        span: Span,
         function_id: FunctionId,
         is_definition: bool,
         ctx: EvalExprContext,
@@ -1613,7 +1602,7 @@ impl TypedProgram {
         &mut self,
         function_id: FunctionId,
         static_args: &[StaticValueId],
-        span: SpanId,
+        span: Span,
         is_definition: bool,
         ctx: EvalExprContext,
     ) -> K1Result<StaticExecutionResult> {
@@ -1631,7 +1620,7 @@ impl TypedProgram {
         vm: &mut vm::Vm,
         function_id: FunctionId,
         static_args: &[StaticValueId],
-        span: SpanId,
+        span: Span,
         is_definition: bool,
     ) -> K1Result<Option<(String, PermSlice<CodeChunkPos>)>> {
         Self::static_exec_prepare_function(k1, function_id, span)?;
@@ -1651,7 +1640,7 @@ impl TypedProgram {
         let parsed_namespace_id = module.parsed_namespace_id;
         let code_str = self.ast.sources.get(file_id).content(&self.ast.mem);
         let mut lexed = crate::lex::lex(code_str, buffer);
-        if let Err(e) = self.ast.materialize_lexed_file(file_id, &mut lexed) {
+        if let Err(e) = self.ast.register_lexed_file(file_id, &mut lexed) {
             parse::print_error(&self.ast, &e);
             self.buffers.lexed = lexed;
             kbail!(self, e.span(), "Failed to lex code emitted from here");
@@ -1723,7 +1712,7 @@ impl TypedProgram {
         &mut self,
         module_id: ModuleId,
         lib_name_ident: StringId,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<*mut std::ffi::c_void> {
         if let Some(handle) = self.vm_dylib_handles.get(&(module_id, lib_name_ident)) {
             return Ok(*handle);

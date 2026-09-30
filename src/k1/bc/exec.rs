@@ -14,7 +14,7 @@ use std::num::NonZeroU32;
 
 use crate::arith::{self, FloatOp, IntOp};
 use crate::ir::{self, BackendBuiltin, IrUnitId};
-use crate::lex::SpanId;
+use crate::lex::Span;
 use crate::typer::trace::TraceKind;
 use crate::typer::types::{PhysicalType, RecordKind, TypeId};
 use crate::typer::{
@@ -95,14 +95,14 @@ pub fn execute_compiled_unit(
     vm: &mut Vm,
     unit_id: IrUnitId,
     arguments: &[StaticValueId],
-    span: SpanId,
+    span: Span,
     report_messages: bool,
 ) -> K1Result<StaticValueId> {
     let raw = execute_compiled_unit_raw(k1, vm, unit_id, arguments, span, report_messages)?;
     if !raw.returns_value {
         return Ok(k1.static_values.add_empty_typed(raw.result_type_id));
     }
-    let frame = k1.trace_push(TraceKind::VmValueFerry, span.as_u32(), 0);
+    let frame = k1.trace_push(TraceKind::VmValueFerry, span.lo, 0);
     let loaded = load_value(raw.ret_pt, raw.ret_addr);
     let result = vm::vm_value_to_static_value(k1, raw.result_type_id, loaded, span);
     k1.trace_pop(frame);
@@ -114,7 +114,7 @@ pub fn execute_compiled_unit_raw(
     vm: &mut Vm,
     unit_id: IrUnitId,
     arguments: &[StaticValueId],
-    span: SpanId,
+    span: Span,
     report_messages: bool,
 ) -> K1Result<RawUnitResult> {
     vm.eval_span = span;
@@ -137,7 +137,7 @@ pub fn execute_compiled_unit_raw(
     let align_mask = super::FRAME_ALIGN as usize - 1;
     let fp0: *mut u8 = vm.stack.mem.cursor().map_addr(|a| (a + align_mask) & !align_mask);
     vm.stack.mem.set_cursor(fp0);
-    let ferry_frame = k1.trace_push(TraceKind::VmValueFerry, span.as_u32(), 0);
+    let ferry_frame = k1.trace_push(TraceKind::VmValueFerry, span.lo, 0);
     unsafe {
         let words = fp0 as *mut u64;
         words.write(0); // caller_fp: none
@@ -210,7 +210,7 @@ pub fn make_stack_trace(k1: &TypedProgram, fault_fp: *const u8, fault_pc: u32) -
             }
         }
         let span = k1.bc.span_for_pc(pc);
-        if span != SpanId::NONE {
+        if span != Span::NONE {
             let (source, line) = k1.get_span_location(span);
             write!(&mut s, " {}:{}", source.filename_str(&k1.ast.idents), line.line_number())
                 .unwrap();

@@ -1,4 +1,4 @@
-use crate::lex::{Span, SpanId, is_ident_char};
+use crate::lex::{Span, is_ident_char};
 use crate::parse::{FileId, ParsedExpr, ParsedId, ParsedProgram, StringId};
 use crate::typer::scopes::{Provenance, ScopeId, ScopeMember, VariableInScope};
 use crate::typer::types::{FnParamKind, Type, TypeId};
@@ -11,13 +11,15 @@ pub enum LangItem {
     Defn(ParsedId),
 }
 
-pub fn is_point_in_span(ast: &ParsedProgram, line: u32, col: u32, span: Span) -> bool {
-    let source = ast.sources.get(span.file_id);
+/// Positions are compile-wide, so a span from another file never contains a
+/// point in `file_id`
+pub fn is_point_in_span(ast: &ParsedProgram, file_id: FileId, line: u32, col: u32, span: Span) -> bool {
+    let source = ast.sources.get(file_id);
     let Some(line_info) = source.get_line(&ast.mem, line as usize) else {
         return false;
     };
-    let char_index_abs = line_info.start_char + col;
-    span.start <= char_index_abs && char_index_abs < span.end()
+    let point = source.base + line_info.start_char + col;
+    span.lo <= point && point < span.end()
 }
 
 pub fn find_entity_at_point(
@@ -31,7 +33,7 @@ pub fn find_entity_at_point(
     let ls_entities = k1.ls_entities.borrow();
     if let Some(entities) = ls_entities.get(&file_id) {
         for entity in entities {
-            if is_point_in_span(&k1.ast, line, col, entity.span) {
+            if is_point_in_span(&k1.ast, file_id, line, col, entity.span) {
                 return Some(*entity);
             }
         }
@@ -111,7 +113,7 @@ pub fn get_hover_message_for_entity(k1: &mut TypedProgram, entity: LsEntity) -> 
 }
 
 pub fn get_entity_definition_span(k1: &TypedProgram, entity_kind: LsEntityKind) -> Span {
-    let span_id = match entity_kind {
+    let span = match entity_kind {
         LsEntityKind::Namespace(ns_id) => {
             k1.ast.get_span_for_id(k1.namespaces.get(ns_id).parsed_id)
         }
@@ -122,7 +124,7 @@ pub fn get_entity_definition_span(k1: &TypedProgram, entity_kind: LsEntityKind) 
         LsEntityKind::Variable { variable_id } => k1.variables.get(variable_id).defn_span,
         LsEntityKind::Type { type_id, .. } => match k1.type_defn_info.get(&type_id) {
             Some(d) => k1.ast.get_span_for_id(d.ast_id),
-            None => SpanId::NONE,
+            None => Span::NONE,
         },
         LsEntityKind::Variant { type_id, variant_index } => match k1.types.get(type_id) {
             Type::Sum(sum) => {
@@ -135,7 +137,7 @@ pub fn get_entity_definition_span(k1: &TypedProgram, entity_kind: LsEntityKind) 
             }
             _ => {
                 eprintln!("Invalid Variant entity; type is not a sum or enum!");
-                SpanId::NONE
+                Span::NONE
             }
         },
         LsEntityKind::StructField { type_id, field_index, .. } => match k1.types.get(type_id) {
@@ -145,11 +147,11 @@ pub fn get_entity_definition_span(k1: &TypedProgram, entity_kind: LsEntityKind) 
             }
             _ => {
                 eprintln!("Invalid StructField entity; type is not a struct!");
-                SpanId::NONE
+                Span::NONE
             }
         },
     };
-    k1.remap_span(k1.ast.spans.get(span_id))
+    k1.remap_span(span)
 }
 
 pub fn get_function_generic_id(k1: &TypedProgram, function_id: FunctionId) -> FunctionId {
@@ -184,9 +186,9 @@ pub fn splice_completion_marker(content: &str, mut offset: usize) -> String {
 /// CompletionSite was recorded
 pub fn scope_at_point(k1: &TypedProgram, file_id: FileId, line: u32, col: u32) -> Option<ScopeId> {
     let mut best: Option<(ScopeId, u32)> = None;
-    for (expr_id, span_id) in k1.exprs.spans.iter_with_ids() {
-        let Some(span) = k1.remap_call_arg_span(k1.ast.spans.get(*span_id)) else { continue };
-        if span.file_id != file_id || !is_point_in_span(&k1.ast, line, col, span) {
+    for (expr_id, expr_span) in k1.exprs.spans.iter_with_ids() {
+        let Some(span) = k1.remap_call_arg_span(*expr_span) else { continue };
+        if !is_point_in_span(&k1.ast, file_id, line, col, span) {
             continue;
         }
         if let TypedExpr::Block(block) = k1.exprs.get(expr_id)
@@ -547,9 +549,9 @@ pub fn get_expr_at_point(
     char_index: u32,
 ) -> Option<String> {
     let mut matching_exprs: SV8<_> = smallvec![];
-    for (expr_id, span_id) in k1.exprs.spans.iter_with_ids() {
-        let Some(span) = k1.remap_call_arg_span(k1.ast.spans.get(*span_id)) else { continue };
-        if span.file_id == file && is_point_in_span(&k1.ast, line_index, char_index, span) {
+    for (expr_id, expr_span) in k1.exprs.spans.iter_with_ids() {
+        let Some(span) = k1.remap_call_arg_span(*expr_span) else { continue };
+        if is_point_in_span(&k1.ast, file, line_index, char_index, span) {
             matching_exprs.push((expr_id, span.len));
         }
     }
@@ -1074,27 +1076,12 @@ fn use-it(): int { my-fn() }
         let entity =
             entity_at(&k1, "goto_defn_macro", DEFN_MACRO_SRC, "my-fn()").expect("entity at call");
         let definition = get_entity_definition_span(&k1, entity.kind);
-        assert_eq!(definition.file_id, main_file_id(&k1, "goto_defn_macro"));
+        let source = k1.ast.sources.source_by_span(definition);
+        assert_eq!(source.file_id, main_file_id(&k1, "goto_defn_macro"));
         assert_eq!(k1.ast.sources.get_span_content(&k1.ast.mem, definition), "my-fn");
         let (line, col) = point_of(DEFN_MACRO_SRC, "my-fn)");
-        assert_eq!(
-            k1.ast
-                .sources
-                .get(definition.file_id)
-                .get_line_for_span_start(&k1.ast.mem, definition)
-                .unwrap()
-                .line_index,
-            line
-        );
-        assert_eq!(
-            definition.start
-                - k1.ast
-                    .sources
-                    .get(definition.file_id)
-                    .get_line_for_span_start(&k1.ast.mem, definition)
-                    .unwrap()
-                    .start_char,
-            col
-        );
+        let defn_line = source.get_line_for_span_start(&k1.ast.mem, definition).unwrap();
+        assert_eq!(defn_line.line_index, line);
+        assert_eq!(source.local(definition.lo) - defn_line.start_char, col);
     }
 }

@@ -42,7 +42,7 @@ use crate::ir::{
     BackendBuiltin, BlockId, IdMap, Inst, InstId, IrCallee, PhysicalFunctionType, Value,
 };
 use crate::kmem::{List, MSlice};
-use crate::lex::SpanId;
+use crate::lex::Span;
 use crate::parse::{FileId, NumericWidth, StringId};
 use crate::typer::types::{
     AbiMode, AggType, AggregateTypeId, Layout, NamedScalarId, PhysicalType, PhysicalTypeEnum,
@@ -297,7 +297,7 @@ pub struct CgTmp;
 #[derive(Debug)]
 pub struct CgError {
     pub message: String,
-    pub span: SpanId,
+    pub span: Span,
 }
 pub type CgResult<A> = Result<A, CgError>;
 
@@ -387,7 +387,7 @@ pub struct Cg<'ctx, 'k1> {
     current_insert_function: FunctionId,
     cur_unit: ir::UnitView<'static>,
     cur_blocks: IdMap<BlockId, BasicBlock<'ctx>>,
-    last_debug_location: std::cell::Cell<Option<(SpanId, DILocation<'ctx>)>>,
+    last_debug_location: std::cell::Cell<Option<(Span, DILocation<'ctx>)>>,
 
     buffers: CgBuffers,
 }
@@ -449,7 +449,7 @@ impl<'ctx> DebugContext<'ctx> {
         };
     }
 
-    fn push_scope(&mut self, span: SpanId, scope: DIScope<'ctx>, file: DIFile<'ctx>) {
+    fn push_scope(&mut self, span: Span, scope: DIScope<'ctx>, file: DIFile<'ctx>) {
         self.debug_stack.push(DebugStackEntry { span, scope, file });
     }
     fn pop_scope(&mut self) {
@@ -458,7 +458,7 @@ impl<'ctx> DebugContext<'ctx> {
     fn current_entry(&self) -> &DebugStackEntry<'ctx> {
         self.debug_stack.last().unwrap()
     }
-    fn current_span(&self) -> SpanId {
+    fn current_span(&self) -> Span {
         self.current_entry().span
     }
     fn current_scope(&self) -> DIScope<'ctx> {
@@ -471,7 +471,7 @@ impl<'ctx> DebugContext<'ctx> {
 
 #[derive(Debug)]
 struct DebugStackEntry<'ctx> {
-    span: SpanId,
+    span: Span,
     scope: DIScope<'ctx>,
     file: DIFile<'ctx>,
 }
@@ -502,7 +502,7 @@ pub fn emit_object(module: &LlvmModule, machine: &TargetMachine, path: &str) -> 
     if let Err(e) =
         machine.write_to_file(module, inkwell::targets::FileType::Object, Path::new(path))
     {
-        cgbail!(SpanId::NONE, "Error writing object file to path {path}: {}", e.to_string_lossy());
+        cgbail!(Span::NONE, "Error writing object file to path {path}: {}", e.to_string_lossy());
     }
     Ok(())
 }
@@ -675,7 +675,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             debug_stack: Vec::new(),
             line_tables_only: !build.debug,
         };
-        debug.push_scope(SpanId::NONE, compile_unit.as_debug_info_scope(), compile_unit.get_file());
+        debug.push_scope(Span::NONE, compile_unit.as_debug_info_scope(), compile_unit.get_file());
         debug
     }
 
@@ -872,7 +872,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             let (entrypoint_name, entrypoint_fn_type) = if is_wasi {
                 // WASI rejects any entry signature other than void _start()
                 if !function_value.get_type().get_param_types().is_empty() {
-                    cgbail!(SpanId::NONE, "main with parameters is not supported on wasm");
+                    cgbail!(Span::NONE, "main with parameters is not supported on wasm");
                 }
                 ("_start", self.ctx.void_type().fn_type(&[], false))
             } else {
@@ -924,7 +924,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
         for name in compiler_required_k1_fns {
             let Some(id) = Cg::find_k1_ns_fn(k1, name) else {
-                kbail!(k1, SpanId::NONE, "core is missing fn k1/{name}");
+                kbail!(k1, Span::NONE, "core is missing fn k1/{name}");
             };
             roots.push(id);
         }
@@ -1119,7 +1119,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 for worker in workers {
                     results.push(match worker.join() {
                         Ok(result) => result,
-                        Err(_) => Err(cgerr!(SpanId::NONE, "a codegen unit panicked")),
+                        Err(_) => Err(cgerr!(Span::NONE, "a codegen unit panicked")),
                     });
                 }
             });
@@ -1167,13 +1167,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             };
             let module = match LlvmModule::parse_bitcode_from_buffer(&buffer, ctx) {
                 Ok(module) => module,
-                Err(e) => cgbail!(SpanId::NONE, "Unit {i} bitcode failed to parse: {}", e),
+                Err(e) => cgbail!(Span::NONE, "Unit {i} bitcode failed to parse: {}", e),
             };
             match &merged {
                 None => merged = Some(module),
                 Some(base) => {
                     if let Err(e) = base.link_in_module(module) {
-                        cgbail!(SpanId::NONE, "Merging unit {i}: {}", e);
+                        cgbail!(Span::NONE, "Merging unit {i}: {}", e);
                     }
                 }
             }
@@ -1238,7 +1238,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let cache_dir = if k1.config.tools.cache {
             let dir = format!("{}/thinlto", k1.ast.idents.get_string(k1.config.cache_dir));
             if let Err(e) = std::fs::create_dir_all(&dir) {
-                cgbail!(SpanId::NONE, "Failed to create ThinLTO cache dir {dir}: {e}");
+                cgbail!(Span::NONE, "Failed to create ThinLTO cache dir {dir}: {e}");
             }
             dir
         } else {
@@ -1263,10 +1263,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             )
         };
         if let Some(e) = sink.error {
-            cgbail!(SpanId::NONE, "{e}");
+            cgbail!(Span::NONE, "{e}");
         }
         if code != 0 {
-            cgbail!(SpanId::NONE, "ThinLTO failed with code {code}");
+            cgbail!(Span::NONE, "ThinLTO failed with code {code}");
         }
         Ok(())
     }
@@ -1439,7 +1439,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn k1_ns_fn_value(&mut self, name: &str) -> CgResult<FunctionValue<'ctx>> {
         let Some(function_id) = Cg::find_k1_ns_fn(self.k1, name) else {
-            cgbail!(SpanId::NONE, "core is missing fn k1/{name}");
+            cgbail!(Span::NONE, "core is missing fn k1/{name}");
         };
         self.declare_llvm_function(function_id)
     }
@@ -1816,15 +1816,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.ctx.i8_type().array_type(size_bytes)
     }
 
-    fn get_debug_location_from_span(&self, span: SpanId) -> DILocation<'ctx> {
-        let span = self.k1.ast.spans.get(span);
-        let line = self
-            .k1
-            .ast
-            .sources
-            .get_line_for_span_start(&self.k1.ast.mem, span)
-            .expect("No line for span");
-        let column = span.start + 1 - line.start_char;
+    fn get_debug_location_from_span(&self, span: Span) -> DILocation<'ctx> {
+        let source = self.k1.ast.sources.source_by_span(span);
+        let line =
+            source.get_line_for_span_start(&self.k1.ast.mem, span).expect("No line for span");
+        let column = source.local(span.lo) + 1 - line.start_char;
         let locn = self.debug.debug_builder.create_debug_location(
             self.ctx,
             line.line_index + 1,
@@ -1834,7 +1830,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         );
         locn
     }
-    fn set_debug_location_from_span(&self, span: SpanId) {
+    fn set_debug_location_from_span(&self, span: Span) {
         if span.is_none() {
             return;
         }
@@ -1857,8 +1853,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.builder.get_current_debug_location().unwrap()
     }
 
-    fn get_line_number(&self, span: SpanId) -> u32 {
-        let span = self.k1.ast.spans.get(span);
+    /// 0 for a synthesized entity, which DWARF reads as "no line"
+    fn get_line_number(&self, span: Span) -> u32 {
+        if span.is_none() {
+            return 0;
+        }
         let line = self
             .k1
             .ast
@@ -2308,7 +2307,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 }
                 (format!("{}.tag", self.codegen_type_name(origin)), sum.tag_type)
             }
-            _ => self.k1.ice_span(SpanId::NONE, "named scalar origin is not a scalar type"),
+            _ => self.k1.ice_span(Span::NONE, "named scalar origin is not a scalar type"),
         };
         let inner = make_basic(self, &int_type.to_string(), int_encoding);
         let line_number = self.get_line_number(self.debug.current_span());
@@ -2678,7 +2677,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.builder.build_unconditional_branch(*block).unwrap();
     }
 
-    fn codegen_return_block(&mut self, function_span: SpanId) {
+    fn codegen_return_block(&mut self, function_span: Span) {
         let Some((block, phis)) = self.get_current_function_mut().return_block.take() else {
             return;
         };
@@ -3101,7 +3100,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         &mut self,
         inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
         call_id: ir::IrCallId,
-        span: SpanId,
+        span: Span,
     ) -> CgResult<Option<BasicValueEnum<'ctx>>> {
         let call = self.cur_unit.call(call_id);
         let callee = call.callee;
@@ -3283,7 +3282,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         function_id: FunctionId,
         call_args: ir::IrRange<ir::Value>,
         call_dst: Option<ir::Value>,
-        span: SpanId,
+        span: Span,
     ) -> CgResult<Option<BasicValueEnum<'ctx>>> {
         let fn_type_id = self.k1.get_function(function_id).type_id;
         let fn_type = *self.k1.types.get(fn_type_id).expect_function();
@@ -3880,6 +3879,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                 if let Some(var_info) = debug
                     && !var_info.user_hidden
+                    && !var_info.source_span.is_none()
                     && !self.debug.line_tables_only
                 {
                     let name_str = self.k1.ident_str(var_info.name);
@@ -4537,15 +4537,20 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn make_function_debug_info(
         &mut self,
         function_name: &str,
-        function_span: SpanId,
+        function_span: Span,
         return_type: DIType<'ctx>,
         param_debug_types: &[DIType<'ctx>],
         is_definition: bool,
     ) -> CgResult<(DISubprogram<'ctx>, DIFile<'ctx>)> {
-        let span_id = function_span;
-        let function_file_id = self.k1.ast.spans.get(span_id).file_id;
-        let (function_line, _) = self.k1.ast.get_lines_for_span_id(span_id).expect("line for span");
-        let function_line_number = function_line.line_number();
+        let (function_file_id, function_line_number) = if function_span.is_none() {
+            (0, 0)
+        } else {
+            let source = self.k1.ast.sources.source_by_span(function_span);
+            let line = source
+                .get_line_for_span_start(&self.k1.ast.mem, function_span)
+                .expect("line for span");
+            (source.file_id, line.line_number())
+        };
         let function_scope_start_line_number = function_line_number;
         let function_file = self.debug.files.get(&function_file_id).unwrap();
         let dbg_fn_type = self.debug.debug_builder.create_subroutine_type(
@@ -4949,7 +4954,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let function_line_number = self
             .k1
             .ast
-            .get_lines_for_span_id(function_span)
+            .get_lines_for_span(function_span)
             .expect("line for function span")
             .0
             .line_number();
@@ -5689,7 +5694,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         if let Err(err) = self.llvm_module.verify() {
             self.write_failure_file();
             cgbail!(
-                SpanId::NONE,
+                Span::NONE,
                 "Module '{}' failed validation: {}",
                 self.unit_name(),
                 err.to_string_lossy()

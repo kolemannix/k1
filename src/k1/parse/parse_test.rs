@@ -17,7 +17,7 @@ fn set_up<'ast>(input: &str, ast: &'ast mut ParsedProgram) -> Parser<'static, 'a
     let module_name = ast.idents.intern("unit_test");
     let file_id = ast.sources.add_file(source);
     let mut lexed = lex(input, Lexed::default());
-    ast.materialize_lexed_file(file_id, &mut lexed).unwrap();
+    ast.register_lexed_file(file_id, &mut lexed).unwrap();
     println!("{:#?}", lexed.tokens);
     println!("{:#?}", lexed.kinds);
     let lexed: &'static Lexed = Box::leak(Box::new(lexed));
@@ -69,11 +69,11 @@ fn basic_fn() -> Result<(), ParseError> {
 fn string_literal() -> ParseResult<()> {
     let (ast, result, expr_id) = test_single_expr_with_id(r#""Hello, World!""#)?;
     let ParsedExpr::Literal(ParsedLiteral::String(s)) = result else { panic!() };
-    let span = ast.spans.get(ast.exprs.get_span(expr_id));
+    let span = ast.exprs.get_span(expr_id);
     assert_eq!(ast.get_string(s), "Hello, World!");
-    assert_eq!(span.start, 0);
+    assert_eq!(span.lo, 1);
     assert_eq!(span.len, 13 + 2);
-    assert_eq!(span.end(), 15);
+    assert_eq!(span.end(), 16);
     Ok(())
 }
 
@@ -363,13 +363,13 @@ fn namespaced_fncall() -> ParseResult<()> {
     let ParsedExpr::Call(fn_call) = result else { panic!("not fncall") };
     assert_eq!(ast.idents.get_string(ast.mem.get_nth(fn_call.name.path(&ast.mem), 0).name), "foo");
     assert_eq!(
-        ast.spans.get(ast.mem.get_nth(fn_call.name.path(&ast.mem), 0).span),
-        Span { file_id: 0, start: 0, len: 3 }
+        ast.mem.get_nth(fn_call.name.path(&ast.mem), 0).span,
+        Span { lo: 1, len: 3 }
     );
     assert_eq!(ast.idents.get_string(ast.mem.get_nth(fn_call.name.path(&ast.mem), 1).name), "bar");
     assert_eq!(
-        ast.spans.get(ast.mem.get_nth(fn_call.name.path(&ast.mem), 1).span),
-        Span { file_id: 0, start: 4, len: 3 }
+        ast.mem.get_nth(fn_call.name.path(&ast.mem), 1).span,
+        Span { lo: 5, len: 3 }
     );
     assert_eq!(fn_call.name.name, ast.idents.intern("baz"));
     assert!(fn_call.args.is_empty());
@@ -594,7 +594,7 @@ fn consecutive_strings() -> ParseResult<()> {
     let input = r#""Hello, " "World!""#;
     let (ast, expr, expr_id) = test_single_expr_with_id(input)?;
     let ParsedExpr::InterpolatedString(is) = expr else { panic!() };
-    let span = ast.spans.get(ast.exprs.get_span(expr_id));
+    let span = ast.exprs.get_span(expr_id);
     assert_eq!(is.parts.len(), 2);
     let InterpolatedStringPart::String { string_id: s1, .. } = ast.mem.get_nth(is.parts, 0) else {
         panic!()
@@ -604,7 +604,7 @@ fn consecutive_strings() -> ParseResult<()> {
     };
     assert_eq!(ast.get_string(*s1), "Hello, ");
     assert_eq!(ast.get_string(*s2), "World!");
-    assert_eq!(span.start, 0);
+    assert_eq!(span.lo, 1);
     assert_eq!(span.len, 18);
     Ok(())
 }
@@ -621,22 +621,23 @@ fn lex_error_does_not_poison_reused_token_buffer() {
     let bad_id = ast.sources.add_file(bad);
     let bad_content = ast.sources.get(bad_id).content(&ast.mem);
     let mut lexed = lex(bad_content, Lexed::default());
-    assert!(ast.materialize_lexed_file(bad_id, &mut lexed).is_err());
+    assert!(ast.register_lexed_file(bad_id, &mut lexed).is_err());
     assert!(!lexed.tokens.is_empty());
 
     let good_id = ast.sources.add_file(good);
     let good_content = ast.sources.get(good_id).content(&ast.mem);
     let mut lexed = lex(good_content, lexed);
-    ast.materialize_lexed_file(good_id, &mut lexed).unwrap();
+    ast.register_lexed_file(good_id, &mut lexed).unwrap();
+    let base = ast.sources.get(good_id).base;
     for t in &lexed.tokens {
         if t.kind != TokenKind::Eof {
-            assert_eq!(t.span(1, &ast.spans).file_id, 1);
+            assert_eq!(ast.sources.file_of(t.span(base, &lexed.long_tokens).lo), good_id);
         }
     }
 }
 
 #[test]
-fn long_token_materializes_to_a_span() {
+fn long_token_has_a_span() {
     let mut ast = make_test_ast();
     let path = ast.idents.intern("unit_test/long.k1");
     let literal = "x".repeat(70_000);
@@ -646,11 +647,11 @@ fn long_token_materializes_to_a_span() {
     let mut lexed = lex(&content, Lexed::default());
     assert_eq!(lexed.long_tokens.len(), 1);
     assert_eq!(lexed.get_token_start_len(lexed.tokens[3]), (8, 70_002));
-    ast.materialize_lexed_file(file_id, &mut lexed).unwrap();
+    ast.register_lexed_file(file_id, &mut lexed).unwrap();
     let string_token = lexed.tokens[3];
     assert_eq!(string_token.kind, TokenKind::StringDoneDq);
-    let span = string_token.span(file_id, &ast.spans);
-    assert_eq!((span.file_id, span.start, span.len), (file_id, 8, 70_002));
-    assert_eq!(string_token.materialized_span_id(), string_token.span_id(file_id, &mut ast.spans));
+    let source = ast.sources.get(file_id);
+    let span = string_token.span(source.base, &lexed.long_tokens);
+    assert_eq!((ast.sources.file_of(span.lo), source.local(span.lo), span.len), (file_id, 8, 70_002));
     assert_eq!(lexed.tokens[4].kind, TokenKind::KeywordLet);
 }

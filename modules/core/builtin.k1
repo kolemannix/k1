@@ -778,7 +778,7 @@ ns mem {
 // Compiler builtins
 ns k1 {
 
-  type source-location = { filename: string, line: u32, span: u32 }
+  type source-location = { filename: string, line: u32, span: u64 }
 
   // Need some way to mark this and is-static as comptime only
   let capture-prints: bool = true
@@ -843,7 +843,7 @@ ns k1 {
     link-type: link-kind,
   }
 
-  type dep-entry = { name: string, params-span: u32 }
+  type dep-entry = { name: string, params-span: u64 }
 
   type setup-decl = {
     outputs: list[string],
@@ -920,7 +920,7 @@ ns k1 {
       self.deps.push(.{ name, params-span = 0 })
     }
 
-    fn dep-params(self: *module, name: string, params-span: u32) {
+    fn dep-params(self: *module, name: string, params-span: u64) {
       self.dep(name)
       self.deps.[self.deps.len() - 1].params-span = params-span
     }

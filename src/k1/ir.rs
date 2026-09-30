@@ -11,7 +11,7 @@ use crate::{SV4, debug};
 use crate::{kbail, kerr, static_assert_size};
 use crate::{
     kmem::{self, MSlice},
-    lex::SpanId,
+    lex::Span,
     nz_u32_id,
     typer::{types::*, *},
 };
@@ -34,7 +34,7 @@ pub struct IrDebugVariableInfo {
     pub name: StringId,
     pub original_type_id: TypeId,
     pub user_hidden: bool,
-    pub source_span: SpanId,
+    pub source_span: Span,
 }
 
 nz_u32_id!(IrCallId);
@@ -1656,8 +1656,8 @@ pub struct Builder<'k1> {
 
     returned_alloca: Option<InstId>,
     cur_block: BlockId,
-    cur_span: SpanId,
-    entry_span: SpanId,
+    cur_span: Span,
+    entry_span: Span,
 }
 
 impl<'k1> Builder<'k1> {
@@ -1670,8 +1670,8 @@ impl<'k1> Builder<'k1> {
 
             returned_alloca: None,
             cur_block: BlockId::PENDING,
-            cur_span: SpanId::NONE,
-            entry_span: SpanId::NONE,
+            cur_span: Span::NONE,
+            entry_span: Span::NONE,
         }
     }
 
@@ -4097,7 +4097,7 @@ pub fn get_compiled_unit_mut(ir: &mut ProgramIr, unit: IrUnitId) -> Option<&mut 
     }
 }
 
-pub fn get_unit_span(k1: &TypedProgram, unit: IrUnitId) -> SpanId {
+pub fn get_unit_span(k1: &TypedProgram, unit: IrUnitId) -> Span {
     match unit {
         IrUnitId::Function(function_id) => k1.get_function_span(function_id),
         IrUnitId::Expr(typed_expr_id) => k1.exprs.get_span(typed_expr_id),
@@ -4125,14 +4125,14 @@ pub fn get_program_roots(k1: &TypedProgram) -> K1Result<ProgramRoots> {
     }
     let main = if k1.plan.is_executable() {
         let Some(main_function_id) = k1.get_main_function_id() else {
-            kbail!(k1, SpanId::NONE, "Program {} has no main function", k1.program_name());
+            kbail!(k1, Span::NONE, "Program {} has no main function", k1.program_name());
         };
         Some(main_function_id)
     } else {
         if exports.is_empty() && !any_exported_global {
             kbail!(
                 k1,
-                SpanId::NONE,
+                Span::NONE,
                 "Library {} exports no functions or globals",
                 k1.program_name()
             );
@@ -4144,7 +4144,7 @@ pub fn get_program_roots(k1: &TypedProgram) -> K1Result<ProgramRoots> {
         let Some(program_exit_id) =
             k1.scopes.find_function(k1.scopes.k1_scope_id, program_exit_ident)
         else {
-            kbail!(k1, SpanId::NONE, "Missing k1/program-exit");
+            kbail!(k1, Span::NONE, "Missing k1/program-exit");
         };
         Some(program_exit_id)
     } else {
@@ -4162,7 +4162,7 @@ pub fn compile_reachable(k1: &mut TypedProgram, roots: &[FunctionId]) -> K1Resul
         let requester = k1.trace.top();
         k1.ir.units_pending_compile.push(*root, requester);
     }
-    k1.compile_all_pending_ir(SpanId::NONE)?;
+    k1.compile_all_pending_ir(Span::NONE)?;
     for root in roots {
         optimize_unit(k1, IrUnitId::Function(*root))?;
     }
@@ -4874,13 +4874,12 @@ pub fn display_block(
     for inst_id in u.block_insts(block_id) {
         let inst_str = inst_to_string(k1, u, inst_id);
         write!(w, "  {:66}; {:30}", inst_str, u.comment(inst_id).str())?;
-        if show_source {
-            let span_id = u.span(inst_id);
-            let lines = k1.ast.get_span_content(span_id);
-            let the_span = k1.ast.spans.get(span_id);
-            let (_, line) = k1.get_span_location(span_id);
+        let span = u.span(inst_id);
+        if show_source && !span.is_none() {
+            let lines = k1.ast.get_span_content(span);
+            let (source, line) = k1.get_span_location(span);
             let first_line = lines.lines().next().unwrap_or("");
-            let column = the_span.start + 1 - line.start_char;
+            let column = source.local(span.lo) + 1 - line.start_char;
             write!(w, "| {first_line:30}|{:3}:{}|", line.line_number(), column)?;
         }
         writeln!(w)?;

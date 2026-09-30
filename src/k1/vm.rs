@@ -25,7 +25,7 @@ use crate::typer::{
 use crate::{
     ice_span, kbail, kerr,
     kmem::{self, MSlice},
-    lex::SpanId,
+    lex::Span,
     parse::StringId,
 };
 
@@ -38,7 +38,7 @@ macro_rules! vm_ice {
     };
 }
 
-pub fn value_to_type_id(k1: &mut TypedProgram, value: Value, span: SpanId) -> K1Result<TypeId> {
+pub fn value_to_type_id(k1: &mut TypedProgram, value: Value, span: Span) -> K1Result<TypeId> {
     let raw = unsafe { (value.as_ptr() as *const k1_types::TypeId).read() };
     k1.type_id_from_raw(raw, span)
 }
@@ -134,7 +134,7 @@ pub mod k1_types {
     pub struct K1SourceLocation {
         pub filename: K1BufferLike,
         pub line: u32,
-        pub span: u32,
+        pub span: u64,
     }
 
     #[repr(C)]
@@ -228,7 +228,7 @@ pub struct VmFfiHandle {
 pub struct CompilerMessage {
     level: MessageLevel,
     message: StringId,
-    span: SpanId,
+    span: Span,
 }
 
 /// A repl command issued by cell code during execution (`k1/repl/*`
@@ -242,7 +242,7 @@ pub struct Vm {
     pub(crate) globals: FxHashMap<TypedGlobalId, Value>,
     pub static_stack: Stack,
     pub stack: Stack,
-    pub(crate) eval_span: SpanId,
+    pub(crate) eval_span: Span,
     pub(crate) compiler_messages: Vec<CompilerMessage>,
     pub(crate) repl_commands: Vec<ReplCommand>,
     /// When set, emitted messages are only recorded, not printed to the
@@ -286,7 +286,7 @@ impl Vm {
             self.globals.insert(arena_global_id.unwrap(), Value::ptr(cell));
         }
 
-        self.eval_span = SpanId::NONE;
+        self.eval_span = Span::NONE;
     }
 
     pub fn make() -> Self {
@@ -298,7 +298,7 @@ impl Vm {
             static_stack,
             overall_return_addr: core::ptr::null_mut(),
             stack,
-            eval_span: SpanId::NONE,
+            eval_span: Span::NONE,
             compiler_messages: Vec::with_capacity(16),
             repl_commands: vec![],
             quiet_messages: false,
@@ -582,7 +582,7 @@ pub(crate) fn resolve_global(
 pub fn static_value_to_vm_value(
     k1: &mut TypedProgram,
     static_value_id: StaticValueId,
-    span: SpanId,
+    span: Span,
 ) -> Value {
     if let Some(v) = k1.vm_static_value_lookups.get(&static_value_id) {
         return *v;
@@ -1151,7 +1151,7 @@ pub fn vm_value_to_static_value(
     k1: &mut TypedProgram,
     type_id: TypeId,
     vm_value: Value,
-    span: SpanId,
+    span: Span,
 ) -> K1Result<StaticValueId> {
     debug!("vm_to_static: {:?}: {}", vm_value, k1.type_id_to_string(type_id));
     let PhysicalTypeResult::Yes(pt) = k1.get_physical_type(type_id) else {
@@ -1392,7 +1392,7 @@ pub fn get_span_element(
     load_value(elem_pt, elem_ptr)
 }
 
-fn static_zero_value(k1: &mut TypedProgram, type_id: TypeId, span: SpanId) -> Value {
+fn static_zero_value(k1: &mut TypedProgram, type_id: TypeId, span: Span) -> Value {
     match k1.get_physical_type(type_id) {
         PhysicalTypeResult::No | PhysicalTypeResult::Infinite => {
             ice_span!(
@@ -1465,8 +1465,7 @@ pub(crate) fn builtin_compiler_message(
     let message = value_to_string_id(k1, message_arg).map_err(|msg| {
         kerr!(k1, vm.eval_span, "Bad message string passed to EmitCompilerMessage: {msg}")
     })?;
-    let span =
-        SpanId::from_u32(location.span).filter(|id| k1.ast.spans.span_pool.get_opt(*id).is_some());
+    let span = Span::from_u64(location.span).filter(|s| k1.ast.sources.contains(*s));
     let Some(span) = span else {
         kbail!(
             k1,
@@ -1581,11 +1580,11 @@ pub fn peek_global_as_static(
 pub(crate) fn report_execution_messages(
     k1: &mut TypedProgram,
     vm: &mut Vm,
-    span: SpanId,
+    span: Span,
 ) -> Option<K1Message> {
     let mut formatted_messages = String::new();
     let mut error_message = String::new();
-    let mut error_span = SpanId::NONE;
+    let mut error_span = Span::NONE;
     for message in vm.compiler_messages.drain(..) {
         if message.level == MessageLevel::Error {
             if error_message.is_empty() {

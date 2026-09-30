@@ -4,7 +4,7 @@ use crate::nz_u32_id;
 use crate::parse::ParsedProgram;
 use crate::parse::{AstHandle, AstSlice};
 use crate::vpool::VPool;
-use crate::{impl_copy_if_small, lex::SpanId};
+use crate::{impl_copy_if_small, lex::Span};
 
 nz_u32_id!(StringId);
 
@@ -25,15 +25,15 @@ pub type IdentSlice = AstSlice<StringId>;
 #[derive(Clone, Copy)]
 pub struct IdentSpanned {
     pub name: StringId,
-    pub span: SpanId,
+    pub span: Span,
 }
 
 impl IdentSpanned {
-    pub fn make(ident: StringId, span: SpanId) -> Self {
+    pub fn make(ident: StringId, span: Span) -> Self {
         IdentSpanned { name: ident, span }
     }
     pub fn make_anon(ident: StringId) -> Self {
-        IdentSpanned { name: ident, span: SpanId::NONE }
+        IdentSpanned { name: ident, span: Span::NONE }
     }
 }
 
@@ -45,23 +45,23 @@ impl IdentSpanned {
 ///```
 pub struct QIdent {
     pub name: StringId,
-    pub name_span: SpanId,
+    pub name_span: Span,
     path: AstHandle<AstSlice<IdentSpanned>>,
 }
-impl_copy_if_small!(12, QIdent);
+impl_copy_if_small!(16, QIdent);
 impl QIdent {
-    pub fn naked(name: StringId, span: SpanId) -> QIdent {
+    pub fn naked(name: StringId, span: Span) -> QIdent {
         QIdent { name, name_span: span, path: AstHandle::nil() }
     }
     pub fn make(
         mem: &mut Mem<ParsedProgram>,
         path: AstSlice<IdentSpanned>,
         name: StringId,
-        name_span: SpanId,
+        name_span: Span,
     ) -> QIdent {
         QIdent { name, name_span, path: mem.push_slice_h(path) }
     }
-    pub fn with_span(&self, span: SpanId) -> QIdent {
+    pub fn with_span(&self, span: Span) -> QIdent {
         QIdent { name_span: span, ..*self }
     }
     pub fn has_path(&self) -> bool {
@@ -651,7 +651,7 @@ impl IdentPool {
             ($path: expr, $name: expr) => {{
                 let path = $path;
                 let name = $name;
-                QIdent::make(mem, path, name, SpanId::NONE)
+                QIdent::make(mem, path, name, Span::NONE)
             }};
         }
 

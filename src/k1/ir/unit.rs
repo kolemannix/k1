@@ -94,7 +94,7 @@ pub struct IrUnit {
     pub is_optimized: bool,
     pub body: UnitBody,
     pub insts: MSlice<Inst, ProgramIr>,
-    pub inst_src: MSlice<SpanId, ProgramIr>,
+    pub inst_src: MSlice<Span, ProgramIr>,
     pub inst_comment: MSlice<IrComment, ProgramIr>,
     pub blocks: MSlice<BlockData, ProgramIr>,
     pub calls: MSlice<IrCall, ProgramIr>,
@@ -165,7 +165,7 @@ impl IrUnit {
 pub struct UnitView<'a> {
     body: UnitBody,
     insts: &'a [Inst],
-    inst_src: &'a [SpanId],
+    inst_src: &'a [Span],
     inst_comment: &'a [IrComment],
     inst_layout: &'a [InstLayout],
     blocks: &'a [BlockData],
@@ -199,7 +199,7 @@ impl<'a> UnitView<'a> {
     }
 
     #[inline]
-    pub fn span(&self, id: InstId) -> SpanId {
+    pub fn span(&self, id: InstId) -> Span {
         self.inst_src[ix(id)]
     }
 
@@ -336,7 +336,7 @@ impl Iterator for BlockIter<'_> {
 pub struct UnitBuf {
     pub body: UnitBody,
     insts: Vec<Inst>,
-    inst_src: Vec<SpanId>,
+    inst_src: Vec<Span>,
     inst_comment: Vec<IrComment>,
     inst_layout: Vec<InstLayout>,
     blocks: Vec<BlockData>,
@@ -445,7 +445,7 @@ impl UnitBuf {
         self.insts.len()
     }
 
-    pub fn new_inst(&mut self, inst: Inst, span: SpanId, comment: IrComment) -> InstId {
+    pub fn new_inst(&mut self, inst: Inst, span: Span, comment: IrComment) -> InstId {
         let id = id_at(self.insts.len());
         self.insts.push(inst);
         self.inst_src.push(span);

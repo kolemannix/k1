@@ -7,7 +7,7 @@ impl TypedProgram {
     pub fn type_id_from_raw(
         &mut self,
         raw: vm::k1_types::TypeId,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<TypeId> {
         let type_id_ok = u32::try_from(raw.inner)
             .ok()
@@ -23,7 +23,7 @@ impl TypedProgram {
         &mut self,
         record_kind: RecordKind,
         raw_field_descs: &[vm::k1_types::K1MakeStructField],
-        span: SpanId,
+        span: Span,
     ) -> K1Result<TypeId> {
         let mut fields: List<StructTypeField, _> = self.mem.new_list(raw_field_descs.len() as u32);
         for desc in raw_field_descs {
@@ -38,7 +38,7 @@ impl TypedProgram {
                 }
             }
             let type_id = self.type_id_from_raw(desc.type_id, span)?;
-            fields.push(StructTypeField { name, type_id, span: SpanId::NONE });
+            fields.push(StructTypeField { name, type_id, span: Span::NONE });
         }
         let new_type_id =
             self.add_type_anon(Type::Struct(StructType { fields: fields.to_slice(), record_kind }));
@@ -50,7 +50,7 @@ impl TypedProgram {
         &mut self,
         explicit_tag_type: Option<vm::k1_types::TypeId>,
         raw_variant_descs: &[vm::k1_types::K1MakeEitherVariant],
-        span: SpanId,
+        span: Span,
     ) -> K1Result<TypeId> {
         let variant_count = raw_variant_descs.len() as u32;
         let tag_type = match explicit_tag_type {
@@ -129,7 +129,7 @@ impl TypedProgram {
                 index: index as u32,
                 payload,
                 tag_value,
-                name_span: SpanId::NONE,
+                name_span: Span::NONE,
             });
         }
 
@@ -168,7 +168,7 @@ impl TypedProgram {
         &mut self,
         element_type: TypeId,
         size: i64,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<TypeId> {
         if size < 0 {
             kbail!(self, span, "make-array: negative size {}", size);
@@ -187,7 +187,7 @@ impl TypedProgram {
         &mut self,
         raw_param_types: &[vm::k1_types::TypeId],
         return_type: TypeId,
-        span: SpanId,
+        span: Span,
     ) -> K1Result<TypeId> {
         let mut params: List<FnParamType, _> = self.mem.new_list(raw_param_types.len() as u32);
         for (index, raw) in raw_param_types.iter().enumerate() {
@@ -208,7 +208,7 @@ impl TypedProgram {
         &mut self,
         parent: TypeId,
         raw_args: &[vm::k1_types::TypeId],
-        span: SpanId,
+        span: Span,
     ) -> K1Result<TypeId> {
         let Some(generic) = self.types.get(parent).as_generic() else {
             kbail!(self, span, "make-instance: {} is not a generic type", parent);
