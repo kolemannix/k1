@@ -6534,7 +6534,7 @@ impl TypedProgram {
         let element_type = match element_type.or(expected_element_type) {
             Some(et) => et,
             None => {
-                if ctx.is_inference() {
+                if self.is_evaluating_for_inference(ctx) {
                     kbail!(self, span, "Not enough information to determine empty list type");
                 } else {
                     self.builtin_types.empty
@@ -6855,7 +6855,7 @@ impl TypedProgram {
         let output_instance_info = match self.get_instance_info(expected_struct_id).cloned() {
             None => None,
             Some(mut gi) => {
-                if ctx.is_inference() {
+                if self.is_evaluating_for_inference(ctx) {
                     debug!(
                         "I need to set the right info for {} from expected [{}] and my literal values [{}]",
                         self.type_id_to_string_ext(
@@ -9450,7 +9450,7 @@ impl TypedProgram {
                 let arg = self.ast.mem.get_nth(fn_call.args, 0);
                 // Because test-compile errors get swallowed, we have to be
                 // more restrictive about what you can do in there
-                if ctx.is_inference() {
+                if self.is_evaluating_for_inference(ctx) {
                     kbail!(
                         self,
                         call_span,

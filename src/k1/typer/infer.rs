@@ -15,9 +15,10 @@ use crate::spair;
 use crate::{kbail, kerr};
 
 /// Wiring for reusing argument evaluations done during inference (see infer_types):
-/// when a value argument's expected type is already fully concrete, it can no longer be
-/// changed by later learning, so the argument is evaluated once with the caller's
-/// context and recorded here for eval_function_call to reuse instead of re-evaluating
+/// a value argument is evaluated once with the caller's context. If its parameter type
+/// is hole-free once the argument's own type has been learned from, later learning can
+/// no longer change it, and the argument is recorded here for eval_function_call to
+/// reuse instead of re-evaluating
 pub(crate) struct InferArgStash<'a> {
     /// The caller's evaluation context; when it is inference-mode, stashed exprs are
     /// inference-mode results, which is exactly what the later argument walks of the
@@ -104,6 +105,31 @@ impl TypedProgram {
         result
     }
 
+    pub(crate) fn is_evaluating_for_inference(&self, ctx: EvalExprContext) -> bool {
+        ctx.is_inference()
+            || ctx.expected_type_id.is_some_and(|expected| !self.is_type_free_of_holes(expected))
+    }
+
+    fn is_type_free_of_holes(&self, type_id: TypeId) -> bool {
+        let counts = self.get_type_variable_counts(type_id);
+        counts.inference_hole_count == 0 && counts.unresolved_static_count == 0
+    }
+
+    fn get_expected_type_so_far(&mut self, gen_param: TypeId, frame_start: u32) -> TypeId {
+        let frame_slots = &self.ictx().slots[frame_start as usize..];
+        match frame_slots.iter().find(|s| s.param_type == gen_param) {
+            Some(slot) => slot.solution.unwrap_or(slot.hole_type),
+            None if self.type_variable_counts.get(gen_param).type_parameter_count == 0 => gen_param,
+            None => {
+                let mut frame_subst: SV8<TypeSubstitutionPair> = smallvec![];
+                for s in frame_slots {
+                    frame_subst.push(spair! { s.param_type => s.solution.unwrap_or(s.hole_type) });
+                }
+                self.substitute_in_type(gen_param, &frame_subst)
+            }
+        }
+    }
+
     fn infer_types_inner(
         &mut self,
         all_type_params: &[TypeId],
@@ -130,6 +156,8 @@ impl TypedProgram {
             });
         }
 
+        let slots_are_final = must_solve_params.len() as usize == all_type_params.len();
+
         // Used for the error message, mainly
         let mut argument_types: SmallVec<[TypeId; 8]> = smallvec![];
         // The heart of the inference process:
@@ -149,82 +177,42 @@ impl TypedProgram {
                 inference_pairs.len()
             );
 
-            let frame_slots = &self.ictx().slots[frame_start as usize..];
-            let expected_type_so_far = match frame_slots.iter().find(|s| s.param_type == *gen_param)
-            {
-                Some(slot) => slot.solution.unwrap_or(slot.hole_type),
-                None if self.type_variable_counts.get(*gen_param).type_parameter_count == 0 => {
-                    *gen_param
-                }
-                None => {
-                    let mut frame_subst: SV8<TypeSubstitutionPair> = smallvec![];
-                    for s in frame_slots {
-                        frame_subst
-                            .push(spair! { s.param_type => s.solution.unwrap_or(s.hole_type) });
-                    }
-                    self.substitute_in_type(*gen_param, &frame_subst)
-                }
-            };
+            let expected_type_so_far = self.get_expected_type_so_far(*gen_param, frame_start);
             debug!(
                 "[infer {infer_depth}] Expected type is: {}",
                 self.type_id_to_string(expected_type_so_far)
             );
 
+            let mut stash_candidate: Option<(ParsedExprId, TypedExprId, ScopeId)> = None;
             let (argument_type, argument_span) = match expr {
                 TypeOrParsedExpr::Type(type_id) => (*type_id, span),
                 TypeOrParsedExpr::Parsed(parsed_expr) => {
-                    let expected_counts = self.get_type_variable_counts(expected_type_so_far);
-                    let expected_is_concrete = expected_counts.inference_hole_count == 0
-                        && expected_counts.unresolved_static_count == 0;
-
-                    // If the expected type is fully concrete (no holes) this argument can't teach us anything
-                    // and its expected type can no longer change:
-                    // evaluate it once with the caller's context and stash the
-                    // result for the later argument passes to reuse
-                    let stashable = match &stash {
+                    let expected_is_concrete = self.is_type_free_of_holes(expected_type_so_far);
+                    let stash_ctx = match &stash {
                         Some(st)
-                            if expected_is_concrete
-                                && index as u32 >= st.first_value_pair_index =>
+                            if (expected_is_concrete || slots_are_final)
+                                && index as u32 >= st.first_value_pair_index
+                                && !st
+                                    .excluded_args
+                                    .contains(&(index as u32 - st.first_value_pair_index)) =>
                         {
-                            !st.excluded_args.contains(&(index as u32 - st.first_value_pair_index))
+                            Some(st.ctx)
                         }
-                        _ => false,
+                        _ => None,
                     };
-
-                    let evaluation_result = if stashable {
-                        let stash = stash.as_mut().unwrap();
-                        let eval_ctx = stash
-                            .ctx
+                    let eval_ctx = match stash_ctx {
+                        Some(ctx) => ctx
                             .with_expected_type(Some(expected_type_so_far))
-                            .with_is_method_receiver(false);
-                        match self.eval_expr(*parsed_expr, eval_ctx) {
-                            Err(e) => Err(e),
-                            Ok(expr_id) => {
-                                match self.check_and_coerce_expr(
-                                    expected_type_so_far,
-                                    expr_id,
-                                    eval_ctx.scope_id,
-                                    false,
-                                ) {
-                                    Ok(coerced) => {
-                                        stash.stashed.push((*parsed_expr, coerced));
-                                        Ok(coerced)
-                                    }
-                                    // On coercion failure, don't stash: the
-                                    // post-inference pass re-evaluates and produces
-                                    // its usual error
-                                    Err(_) => Ok(expr_id),
-                                }
-                            }
-                        }
-                    } else {
-                        let inference_context = EvalExprContext::make(scope_id)
+                            .with_is_method_receiver(false),
+                        None => EvalExprContext::make(scope_id)
                             .with_inference()
-                            .with_expected_type(Some(expected_type_so_far));
-                        self.eval_expr_with_coercion(*parsed_expr, inference_context, false)
+                            .with_expected_type(Some(expected_type_so_far)),
                     };
-                    match evaluation_result {
+                    match self.eval_expr_with_coercion(*parsed_expr, eval_ctx, false) {
                         Ok(expr_id) => {
+                            if stash_ctx.is_some() {
+                                stash_candidate = Some((*parsed_expr, expr_id, eval_ctx.scope_id));
+                            }
                             let expr_type = self.exprs.get_type(expr_id);
                             let expr_span = self.exprs.get_span(expr_id);
                             debug!(
@@ -303,6 +291,17 @@ impl TypedProgram {
                     argument_span,
                 )
                 .map_err(InferenceFailure::Constraint)?;
+            }
+
+            if let Some((parsed_expr, expr_id, arg_scope_id)) = stash_candidate {
+                let final_type = self.get_expected_type_so_far(*gen_param, frame_start);
+                if self.is_type_free_of_holes(final_type) {
+                    if let Ok(coerced) =
+                        self.check_and_coerce_expr(final_type, expr_id, arg_scope_id, false)
+                    {
+                        stash.as_mut().unwrap().stashed.push((parsed_expr, coerced));
+                    }
+                }
             }
         }
 
