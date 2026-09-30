@@ -1305,7 +1305,18 @@ impl<'content> Lexer<'content> {
                             return Ok(Some(()));
                         }
                         _ => {
-                            return Err(self.make_error(format!("Unexpected character {c}"), n, 1));
+                            let start = n as usize;
+                            let width = (c as u8).leading_ones().max(1) as usize;
+                            let end = (start + width).min(self.content.len());
+                            let text = String::from_utf8_lossy(&self.content[start..end]);
+                            let message = if c.is_ascii() {
+                                format!("Unexpected character {text}")
+                            } else {
+                                format!(
+                                    "Unexpected character {text}: only ASCII is allowed outside strings and comments"
+                                )
+                            };
+                            return Err(self.make_error(message, n, (end - start) as u32));
                         }
                     };
                 }
@@ -1406,22 +1417,19 @@ static BYTE_CLASS: [u8; 256] = [
     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 1, // 0x50 P Q R S T U V W X Y Z [ \ ] ^ _
     0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 0x60 ` a b c d e f g h i j k l m n o
     1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, // 0x70 p q r s t u v w x y z { | } ~ del
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0x80 Latin-1 control
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // 0x90 Latin-1 control
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, // 0xa0 punctuation, except ª (0xaa) is alphabetic
-    0, 0, 3, 3, 0, 1, 0, 0, 0, 3, 1, 0, 3, 3, 3, 0, // 0xb0 punctuation, except ² ³ µ ¹ º ¼ ½ ¾
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 0xc0 À Á Â Ã Ä Å Æ Ç È É Ê Ë Ì Í Î Ï
-    1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, // 0xd0 Ð Ñ Ò Ó Ô Õ Ö × Ø Ù Ú Û Ü Ý Þ ß (× is not)
-    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, // 0xe0 à á â ã ä å æ ç è é ê ë ì í î ï
-    1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, // 0xf0 ð ñ ò ó ô õ ö ÷ ø ù ú û ü ý þ ÿ (÷ is not)
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
 
 #[inline]
 pub fn is_ident_char(c: char) -> bool {
-    match BYTE_CLASS.get(c as usize) {
-        Some(class) => class & CLASS_IDENT != 0,
-        None => c.is_alphanumeric(),
-    }
+    BYTE_CLASS.get(c as usize).is_some_and(|class| class & CLASS_IDENT != 0)
 }
 
 /// Whether c can start a bare `$ident` interpolation hole: an ident char that
@@ -1433,10 +1441,7 @@ fn is_ident_start(c: char) -> bool {
 
 #[inline]
 fn is_numeric_char(c: char) -> bool {
-    match BYTE_CLASS.get(c as usize) {
-        Some(class) => class & CLASS_NUMERIC != 0,
-        None => c.is_numeric(),
-    }
+    BYTE_CLASS.get(c as usize).is_some_and(|class| class & CLASS_NUMERIC != 0)
 }
 
 #[cfg(test)]
@@ -1448,11 +1453,34 @@ mod test {
         for b in 0..=255u8 {
             let c = b as char;
             let class = super::BYTE_CLASS[b as usize];
-            let ident = c.is_alphanumeric() || c == '_' || c == '-';
-            let numeric = c.is_numeric();
+            let ident = c.is_ascii_alphanumeric() || c == '_' || c == '-';
+            let numeric = c.is_ascii_digit();
             assert_eq!(class & super::CLASS_IDENT != 0, ident, "ident class for byte {b:#x}");
             assert_eq!(class & super::CLASS_NUMERIC != 0, numeric, "numeric class for byte {b:#x}");
         }
+    }
+
+    #[test]
+    fn non_ascii_outside_strings_is_rejected() {
+        for input in ["let é = 1", "let aé = 1", "let ê = 1", "let x = 日", "x²"] {
+            let lexed = lex(input, Lexed::default());
+            let e = lexed.error.expect(input);
+            assert!(e.message.contains("only ASCII"), "{input}: {}", e.message);
+            assert!(input.is_char_boundary(e.start as usize), "{input}");
+            assert!(input.is_char_boundary((e.start + e.len) as usize), "{input}");
+        }
+    }
+
+    #[test]
+    fn token_bounds_are_char_bounds() -> anyhow::Result<()> {
+        let input = "let s = \"héllo $name wörld ${a + 1}日本\" // ç\nlet t = `é$x-ç` + 'a'";
+        let lexed = lex_ok(input)?;
+        for token in lexed.tokens.iter() {
+            let (start, len) = lexed.get_token_start_len(*token);
+            assert!(input.is_char_boundary(start as usize), "{token:?}");
+            assert!(input.is_char_boundary((start + len) as usize), "{token:?}");
+        }
+        Ok(())
     }
 
     fn lex_ok(input: &str) -> anyhow::Result<Lexed> {

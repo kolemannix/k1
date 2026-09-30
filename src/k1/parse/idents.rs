@@ -301,11 +301,18 @@ fn content_hash(b: &[u8]) -> u64 {
 const SHORT_LEN: usize = 8;
 
 fn short_key(b: &[u8]) -> u64 {
-    let mut key = 0u64;
-    for (i, &byte) in b.iter().enumerate() {
-        key |= (byte as u64) << (8 * i);
+    let len = b.len();
+    if len >= 4 {
+        let lo = u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as u64;
+        let hi = u32::from_le_bytes([b[len - 4], b[len - 3], b[len - 2], b[len - 1]]) as u64;
+        lo | hi << (8 * (len - 4))
+    } else if len > 0 {
+        b[0] as u64
+            | (b[len / 2] as u64) << (8 * (len / 2))
+            | (b[len - 1] as u64) << (8 * (len - 1))
+    } else {
+        0
     }
-    key
 }
 
 fn short_hash(key: u64, len: usize) -> u64 {
@@ -430,6 +437,9 @@ pub struct IdentPool {
 impl IdentPool {
     pub fn intern(&self, s: impl AsRef<str>) -> StringId {
         self.pool.borrow_mut().intern(s.as_ref())
+    }
+    pub fn intern_mut(&mut self, s: &str) -> StringId {
+        self.pool.get_mut().intern(s)
     }
     pub fn lookup(&self, s: impl AsRef<str>) -> Option<StringId> {
         unsafe { &*self.pool.as_ptr() }.lookup(s.as_ref())
@@ -786,6 +796,18 @@ mod test {
     fn make_pool() -> IdentPool {
         let mut mem = Mem::make();
         IdentPool::make(&mut mem)
+    }
+
+    #[test]
+    fn short_key_packs_bytes_little_endian() {
+        let src = b"abcdefgh";
+        for len in 0..=SHORT_LEN {
+            let mut expected = 0u64;
+            for (i, &byte) in src[..len].iter().enumerate() {
+                expected |= (byte as u64) << (8 * i);
+            }
+            assert_eq!(short_key(&src[..len]), expected, "len {len}");
+        }
     }
 
     #[test]

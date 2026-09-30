@@ -53,6 +53,9 @@ K1 language reference for agents: `docs/ai_docs/k1-syntax-basics.md` and
 - `K1_HOME` is where the compiler finds `modules/`. Debug binaries under
   `target/debug` default it to the cwd; anything else (release, `profiling`
   profile, worktrees) needs `K1_HOME=<repo root>` exported.
+- `--features single-thread` builds a compiler that spawns no threads:
+  `get_thread_limit()` (lib.rs) returns 1, every threaded site runs inline,
+  and `--optimize` uses whole-module O3 instead of ThinLTO.
 - Binaries: `k1` (`src/bin/compiler_main.rs`), `k1_test`
   (`src/bin/test_suite.rs`), `lsp` (`src/bin/lsp_main.rs`, needs
   `--features lsp`).
@@ -70,9 +73,13 @@ K1 language reference for agents: `docs/ai_docs/k1-syntax-basics.md` and
 
 - `just ts1`: build `k1`, run `test_src/suite1` plain and `--optimize`. The
   fast correctness check.
-- `just test` = `./test.sh`: Rust unit tests, `k1_test` over `test_src`, suite1
-  under optimize/debug/emit-llvm, every dogfood project, klib C consumer, reload
-  driver, wasm suite1 if wasmtime exists, then fails on any `nocommit` marker.
+- `just test` = `./test.sh`: builds, then runs in parallel lanes (one per
+  module, since same-module runs share `.k1-out`): Rust unit tests, `k1_test`
+  over `test_src` (every case with `--emit-llvm`), suite1 under
+  optimize/debug and a `single-thread` build (`target/single-thread`), every
+  dogfood project, klib C consumer, reload driver, wasm suite1 and refchess if
+  wasmtime exists, then fails on any `nocommit` marker. Each lane logs to
+  `target/test-logs/<lane>.log`; a failed lane's log is printed at the end.
   Run it bare and check the exit code; do not pipe it into `tail`.
 - `cargo test --lib --features=llvm-sys/prefer-dynamic,lsp`: Rust unit tests
   (parse, vm, kmem, layout, static values, bc, kpath, compiler, snapshot).

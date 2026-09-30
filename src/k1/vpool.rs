@@ -114,6 +114,7 @@ pub struct VPool<T, Index: PoolIndex> {
     // type of pool
     mmap: memmap2::MmapMut,
     len: usize,
+    advised_len: usize,
     max_len: usize,
     expected_hint: Option<usize>,
     #[allow(unused)]
@@ -132,26 +133,23 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
     pub fn make_bytes(name: &'static str, bytes: usize, expected_usage: Option<usize>) -> Self {
         let mmap = memmap2::MmapMut::map_anon(bytes).unwrap();
         mmap.advise(memmap2::Advice::Sequential).unwrap();
-        if let Some(expected_usage) = expected_usage
-            && expected_usage != 0
-        {
-            mmap.advise_range(
-                memmap2::Advice::WillNeed,
-                0,
-                expected_usage * std::mem::size_of::<T>(),
-            )
-            .unwrap();
-        }
         let len_in_ts = mmap.len() / std::mem::size_of::<T>();
-        VPool {
+        let mut pool = VPool {
             name,
             mmap,
             len: 0,
+            advised_len: 0,
             max_len: len_in_ts,
             expected_hint: expected_usage,
             _index: std::marker::PhantomData,
             _elem: std::marker::PhantomData,
+        };
+        if let Some(expected_usage) = expected_usage
+            && expected_usage != 0
+        {
+            pool.advise_through(expected_usage.min(len_in_ts));
         }
+        pool
     }
 
     #[inline]
@@ -195,11 +193,8 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
 
     pub fn add(&mut self, t: T) -> Index {
         let id = self.next_id();
-
-        self.set(id, t);
-
         self.set_len_checked(self.len + 1);
-
+        self.set(id, t);
         id
     }
 
@@ -224,10 +219,8 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
             );
         }
 
-        self.set(id, t);
-
         self.set_len_checked(self.len + 1);
-
+        self.set(id, t);
         id
     }
 
@@ -289,10 +282,29 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
     #[inline]
     #[track_caller]
     fn set_len_checked(&mut self, proposed_len: usize) {
-        if proposed_len > self.max_len {
-            panic!("VPool out of space: len {} > {}", proposed_len, self.max_len);
+        if proposed_len > self.advised_len {
+            self.advise_through(proposed_len);
         }
         self.len = proposed_len
+    }
+
+    pub fn advise_additional_bytes(&mut self, bytes: usize) {
+        let needed_len = (self.len + bytes / std::mem::size_of::<T>()).min(self.max_len);
+        if needed_len > self.advised_len {
+            self.advise_through(needed_len);
+        }
+    }
+
+    #[track_caller]
+    #[cold]
+    fn advise_through(&mut self, needed_len: usize) {
+        if needed_len > self.max_len {
+            panic!("VPool out of space: len {} > {}", needed_len, self.max_len);
+        }
+        let size = std::mem::size_of::<T>();
+        let advised_bytes =
+            crate::kmem::advise_ahead(&self.mmap, self.advised_len * size, needed_len * size);
+        self.advised_len = advised_bytes / size;
     }
 
     pub fn get_mut(&mut self, id: Index) -> &mut T {
@@ -483,9 +495,9 @@ impl<T: Copy, Index: PoolIndex> VPool<T, Index> {
         let items_len = items.len();
         let id = self.next_id();
         let index = Self::id_to_actual_index(id);
+        self.set_len_checked(self.len + items_len);
         let dst = &mut self.data_mut()[index..index + items_len];
         dst.copy_from_slice(items);
-        self.set_len_checked(self.len + items_len);
         SliceHandle::make(id, items_len as u32)
     }
 }

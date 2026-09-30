@@ -64,10 +64,7 @@ impl TypedProgram {
             .get(impl_handle.base_ability_id)
             .find_function_by_name(&self.mem, fn_name.name)
             .unwrap();
-        let impl_fn = *self
-            .ability_impls
-            .get(impl_handle.full_impl_id)
-            .function_at_index(&self.mem, ability_fn.index);
+        let impl_fn = self.get_ability_impl_function(impl_handle.full_impl_id, ability_fn.index);
         let (callee, type_args) = match impl_fn {
             AbilityImplFunction::FunctionId(function_id) => {
                 let signature = self.get_function(function_id).signature();
@@ -104,6 +101,7 @@ impl TypedProgram {
             AbilityImplFunction::Abstract(function_sig) if !function_sig.has_type_params() => {
                 (Callee::Abstract { function_sig }, TypeArgs::empty())
             }
+            AbilityImplFunction::Pending => unreachable!(),
             AbilityImplFunction::Abstract(_) | AbilityImplFunction::Unavailable => {
                 return self.synth_typed_call_typed_args(
                     fn_name.with_span(span),

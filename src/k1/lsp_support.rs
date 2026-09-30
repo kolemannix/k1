@@ -170,11 +170,11 @@ pub fn splice_completion_marker(content: &str, mut offset: usize) -> String {
     }
     let bytes = content.as_bytes();
     let mut wstart = offset;
-    while wstart > 0 && bytes[wstart - 1].is_ascii() && is_ident_char(bytes[wstart - 1] as char) {
+    while wstart > 0 && is_ident_char(bytes[wstart - 1] as char) {
         wstart -= 1;
     }
     let mut wend = offset;
-    while wend < bytes.len() && bytes[wend].is_ascii() && is_ident_char(bytes[wend] as char) {
+    while wend < bytes.len() && is_ident_char(bytes[wend] as char) {
         wend += 1;
     }
     format!("{}{}{}", &content[..wstart], COMPLETION_MARKER, &content[wend..])
@@ -226,7 +226,10 @@ const KEYWORDS: &[&str] = &[
     "return", "break", "continue",
 ];
 
-pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<CompletionCandidate> {
+pub fn collect_completions(
+    k1: &mut TypedProgram,
+    site: CompletionSite,
+) -> Vec<CompletionCandidate> {
     let mut items: Vec<CompletionCandidate> = vec![];
     match site {
         CompletionSite::Member { raw_base_type_id, base_type_id, .. } => {
@@ -262,14 +265,14 @@ pub fn collect_completions(k1: &TypedProgram, site: CompletionSite) -> Vec<Compl
             // on the reference type itself
             for type_id in [base_type_id, raw_base_type_id] {
                 let Some(handles) = k1.ability_impl_table.get(&type_id) else { continue };
-                for handle in handles.as_slice(&k1.mem) {
-                    let ability = k1.abilities.get(handle.specialized_ability_id);
-                    let impl_functions = k1.ability_impls.get(handle.full_impl_id).functions;
-                    // Impl functions are ordered as declared in the ability
-                    for (fn_ref, impl_fn) in
-                        k1.mem.getn(ability.functions).iter().zip(k1.mem.getn(impl_functions))
-                    {
-                        let AbilityImplFunction::FunctionId(function_id) = *impl_fn else {
+                let handles = handles.as_slice(&k1.mem);
+                for handle in handles {
+                    let ability_functions =
+                        k1.abilities.get(handle.specialized_ability_id).functions;
+                    for fn_ref in k1.mem.getn(ability_functions) {
+                        let AbilityImplFunction::FunctionId(function_id) =
+                            k1.get_ability_impl_function(handle.full_impl_id, fn_ref.index)
+                        else {
                             continue;
                         };
                         if is_method_shaped(k1, function_id, type_id)
@@ -642,7 +645,7 @@ mod completion_tests {
         find_entity_at_point(k1, main_file_id(k1, test_name), line, col)
     }
 
-    fn labels(k1: &TypedProgram) -> Vec<String> {
+    fn labels(k1: &mut TypedProgram) -> Vec<String> {
         let site =
             k1.completion.as_ref().and_then(|cs| cs.site).expect("expected a completion site");
         collect_completions(k1, site).into_iter().map(|c| c.label).collect()
@@ -650,7 +653,7 @@ mod completion_tests {
 
     #[test]
     fn member_completion_on_struct() {
-        let k1 = compile_with_cursor(
+        let mut k1 = compile_with_cursor(
             "member",
             r#"
 ns completion-member
@@ -693,7 +696,7 @@ fn use-it(): int {
             k1.completion.as_ref().unwrap().site,
             Some(CompletionSite::Member { .. })
         ));
-        let labels = labels(&k1);
+        let labels = labels(&mut k1);
         assert!(labels.contains(&"x".to_string()));
         assert!(labels.contains(&"y".to_string()));
         assert!(labels.contains(&"magnitude".to_string()));
@@ -704,7 +707,7 @@ fn use-it(): int {
 
     #[test]
     fn scope_completion() {
-        let k1 = compile_with_cursor(
+        let mut k1 = compile_with_cursor(
             "scope",
             r#"
 ns completion-scope
@@ -720,7 +723,7 @@ fn use-it(): int {
 "#,
         );
         assert!(matches!(k1.completion.as_ref().unwrap().site, Some(CompletionSite::Scope { .. })));
-        let labels = labels(&k1);
+        let labels = labels(&mut k1);
         assert!(labels.contains(&"alpha".to_string()));
         assert!(labels.contains(&"beta".to_string()));
         assert!(labels.contains(&"helper".to_string()));
@@ -731,7 +734,7 @@ fn use-it(): int {
 
     #[test]
     fn path_completion() {
-        let k1 = compile_with_cursor(
+        let mut k1 = compile_with_cursor(
             "path",
             r#"
 ns completion-path
@@ -748,7 +751,7 @@ fn use-it(): int {
 "#,
         );
         assert!(matches!(k1.completion.as_ref().unwrap().site, Some(CompletionSite::Path { .. })));
-        let labels = labels(&k1);
+        let labels = labels(&mut k1);
         assert!(labels.contains(&"helper".to_string()));
         assert!(labels.contains(&"helper-two".to_string()));
         // Path enumeration is local to the namespace: no keywords, no outer names
@@ -758,7 +761,7 @@ fn use-it(): int {
 
     #[test]
     fn variant_completion_named() {
-        let k1 = compile_with_cursor(
+        let mut k1 = compile_with_cursor(
             "variant_named",
             r#"
 ns completion-variant-named
@@ -775,12 +778,12 @@ fn use-it(): int {
             k1.completion.as_ref().unwrap().site,
             Some(CompletionSite::Variant { .. })
         ));
-        assert_eq!(labels(&k1), vec!["blue", "green", "red"]);
+        assert_eq!(labels(&mut k1), vec!["blue", "green", "red"]);
     }
 
     #[test]
     fn variant_completion_bare() {
-        let k1 = compile_with_cursor(
+        let mut k1 = compile_with_cursor(
             "variant_bare",
             r#"
 ns completion-variant-bare
@@ -797,12 +800,12 @@ fn use-it(): int {
             k1.completion.as_ref().unwrap().site,
             Some(CompletionSite::Variant { .. })
         ));
-        assert_eq!(labels(&k1), vec!["circle", "square"]);
+        assert_eq!(labels(&mut k1), vec!["circle", "square"]);
     }
 
     #[test]
     fn variant_completion_in_pattern() {
-        let k1 = compile_with_cursor(
+        let mut k1 = compile_with_cursor(
             "variant_pattern",
             r#"
 ns completion-variant-pattern
@@ -818,12 +821,12 @@ fn use-it(s: shape): int {
             k1.completion.as_ref().unwrap().site,
             Some(CompletionSite::Variant { .. })
         ));
-        assert_eq!(labels(&k1), vec!["circle", "square"]);
+        assert_eq!(labels(&mut k1), vec!["circle", "square"]);
     }
 
     #[test]
     fn call_arg_signature_help() {
-        let k1 = compile_with_cursor(
+        let mut k1 = compile_with_cursor(
             "callarg",
             r#"
 ns completion-callarg
@@ -842,12 +845,12 @@ fn use-it(): int {
         assert_eq!(info.params, vec!["a: i64", "b: i64"]);
         assert_eq!(info.active_param, 1);
         // The site still serves completions, as scope completions
-        assert!(labels(&k1).contains(&"add2".to_string()));
+        assert!(labels(&mut k1).contains(&"add2".to_string()));
     }
 
     #[test]
     fn struct_field_completion() {
-        let k1 = compile_with_cursor(
+        let mut k1 = compile_with_cursor(
             "struct_field",
             r#"
 ns completion-struct-field
@@ -862,8 +865,11 @@ fn use-it(): int {
         );
         let site = k1.completion.as_ref().unwrap().site.expect("expected a site");
         assert!(matches!(site, CompletionSite::StructField { .. }));
-        assert_eq!(labels(&k1), vec!["all fields".to_string(), "x".to_string(), "z".to_string()]);
-        let items = collect_completions(&k1, site);
+        assert_eq!(
+            labels(&mut k1),
+            vec!["all fields".to_string(), "x".to_string(), "z".to_string()]
+        );
+        let items = collect_completions(&mut k1, site);
         let all = items.iter().find(|c| c.label == "all fields").unwrap();
         assert_eq!(all.snippet.as_deref(), Some("x = ${1:x}, z = ${2:z}"));
         assert!(items.iter().filter(|c| c.snippet.is_some()).count() == 1);
@@ -871,7 +877,7 @@ fn use-it(): int {
 
     #[test]
     fn earlier_error_still_yields_site() {
-        let k1 = compile_with_cursor(
+        let mut k1 = compile_with_cursor(
             "earlier_error",
             r#"
 ns completion-fallback
@@ -885,7 +891,7 @@ fn use-it(): int {
         );
         let site = k1.completion.as_ref().unwrap().site.expect("expected a site");
         assert!(matches!(site, CompletionSite::Scope { .. }));
-        assert!(labels(&k1).contains(&"use-it".to_string()));
+        assert!(labels(&mut k1).contains(&"use-it".to_string()));
     }
 
     const MACRO_SRC: &str = r#"
@@ -942,7 +948,7 @@ fn use-it(): int {
 
     #[test]
     fn completion_inside_macro_arg() {
-        let k1 = compile_with_cursor(
+        let mut k1 = compile_with_cursor(
             "completion_macro_arg",
             r#"
 ns lsp-macro-completion
@@ -957,7 +963,7 @@ fn use-it(): int {
 }
 "#,
         );
-        assert!(labels(&k1).contains(&"x".to_string()));
+        assert!(labels(&mut k1).contains(&"x".to_string()));
     }
 
     const SYMBOLS_SRC: &str = r#"

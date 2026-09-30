@@ -47,9 +47,24 @@ use std::{
 pub struct Mem<Tag = ()> {
     mmap: memmap2::MmapMut,
     cursor: *mut u8,
+    advised_end: usize,
     /// See `high_water_mark`; only updated on `reset`/`reset_to`
     hwm: usize,
     _marker: PhantomData<Tag>,
+}
+
+const ADVISE_MIN_BYTES: usize = 64 * crate::KILOBYTE;
+const ADVISE_MAX_BYTES: usize = crate::MEGABYTE;
+
+pub(crate) fn advise_ahead(
+    mmap: &memmap2::MmapMut,
+    advised_bytes: usize,
+    needed_bytes: usize,
+) -> usize {
+    let chunk = needed_bytes.clamp(ADVISE_MIN_BYTES, ADVISE_MAX_BYTES);
+    let end = (needed_bytes + chunk).min(mmap.len());
+    let _ = mmap.advise_range(memmap2::Advice::WillNeed, advised_bytes, end - advised_bytes);
+    end
 }
 
 fn poison_arena_resets() -> bool {
@@ -402,8 +417,9 @@ impl<Tag> Mem<Tag> {
         // We could instead store offsets as (true offset) + 1, but I'd rather waste 8 bytes per
         // arena than convert on every single access
         let cursor = unsafe { mmap.as_mut_ptr().byte_add(8) };
+        let advised_end = cursor.addr();
 
-        Self { cursor, mmap, hwm: 0, _marker: PhantomData }
+        Self { cursor, mmap, advised_end, hwm: 0, _marker: PhantomData }
     }
 
     pub fn reset(&mut self, zero: bool) {
@@ -519,13 +535,40 @@ impl<Tag> Mem<Tag> {
         self.cursor = proposed_cursor;
     }
 
+    #[track_caller]
+    #[inline]
+    fn advance_cursor(&mut self, new_cursor: *mut u8) {
+        if new_cursor.addr() >= self.advised_end {
+            self.advise_through(new_cursor.addr());
+        }
+        self.cursor = new_cursor;
+    }
+
+    pub fn advise_additional_bytes(&mut self, bytes: usize) {
+        let needed_end = (self.cursor.addr() + bytes).min(self.end_ptr().addr() - 1);
+        if needed_end >= self.advised_end {
+            self.advise_through(needed_end);
+        }
+    }
+
+    #[track_caller]
+    #[cold]
+    fn advise_through(&mut self, needed_end: usize) {
+        if needed_end >= self.end_ptr().addr() {
+            panic!("Address beyond end: {}", needed_end);
+        }
+        let base = self.base_ptr().addr();
+        self.advised_end =
+            base + advise_ahead(&self.mmap, self.advised_end - base, needed_end - base);
+    }
+
     pub fn push<T>(&mut self, t: T) -> &mut T {
         unsafe {
             let dst = self.cursor();
             let dst = dst.byte_add(dst.align_offset(align_of::<T>()));
 
             let new_cursor = dst.byte_add(size_of::<T>());
-            self.set_cursor_checked(new_cursor);
+            self.advance_cursor(new_cursor);
 
             let dst = dst as *mut T;
             core::ptr::write(dst, t);
@@ -557,7 +600,7 @@ impl<Tag> Mem<Tag> {
             );
             let dst = self.cursor();
             let dst = dst.byte_add(dst.align_offset(align));
-            self.set_cursor_checked(dst);
+            self.advance_cursor(dst);
         }
     }
 
@@ -575,12 +618,13 @@ impl<Tag> Mem<Tag> {
             let dst = dst.byte_add(dst.align_offset(align as usize));
 
             let new_cursor = dst.byte_add(size as usize);
-            self.set_cursor_checked(new_cursor);
+            self.advance_cursor(new_cursor);
 
             dst
         }
     }
 
+    #[inline]
     pub fn push_slice_uninit_raw<T>(&mut self, len: usize) -> *mut T {
         unsafe {
             let dst = self.cursor();
@@ -588,7 +632,7 @@ impl<Tag> Mem<Tag> {
 
             let array_layout = core::alloc::Layout::array::<T>(len).unwrap();
             let new_cursor = dst.byte_add(array_layout.size());
-            self.set_cursor_checked(new_cursor);
+            self.advance_cursor(new_cursor);
 
             dst as *mut T
         }
@@ -612,7 +656,7 @@ impl<Tag> Mem<Tag> {
 
             let array_layout = core::alloc::Layout::array::<T>(len).unwrap();
             let new_cursor = dst.byte_add(array_layout.size());
-            self.set_cursor_checked(new_cursor);
+            self.advance_cursor(new_cursor);
 
             dst as *mut T
         }
@@ -711,6 +755,7 @@ impl<Tag> Mem<Tag> {
     }
 
     /// We know we can't address more than 4GB (to keep handles small), so we accept a u32 len, not a usize
+    #[inline]
     pub fn new_list<T>(&mut self, cap: u32) -> List<T, Tag> {
         let dst = self.push_slice_uninit_raw(cap as usize);
         let offset = self.ptr_to_offset(dst).get();
@@ -939,11 +984,10 @@ impl<Tag> Mem<Tag> {
         self.reset(false);
         let header = r.read_blob_header();
         let used = header.raw_len;
-        let dst = unsafe { slice::from_raw_parts_mut(self.cursor, used) };
+        let start = self.cursor;
+        self.advance_cursor(unsafe { start.add(used) });
+        let dst = unsafe { slice::from_raw_parts_mut(start, used) };
         r.read_blob_body(header, dst);
-        unsafe {
-            self.cursor = self.cursor.add(used);
-        }
     }
 }
 //////////////// Doubly Linked List Impl

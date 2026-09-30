@@ -1320,6 +1320,9 @@ impl TypedProgram {
                         w.write_str("abstract ")?;
                         self.display_function_signature(w, sig, None)?;
                     }
+                    AbilityImplFunction::Pending => {
+                        w.write_str("pending")?;
+                    }
                     AbilityImplFunction::Unavailable => {
                         w.write_str("unavailable")?;
                     }

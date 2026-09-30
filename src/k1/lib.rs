@@ -34,6 +34,14 @@ pub const MEGABYTE: usize = KILOBYTE * 1024;
 pub const GIGABYTE: usize = MEGABYTE * 1024;
 
 pub const STACK_SIZE: usize = 10 * MEGABYTE;
+
+pub fn get_thread_limit() -> usize {
+    if cfg!(feature = "single-thread") {
+        1
+    } else {
+        std::thread::available_parallelism().map_or(1, |n| n.get())
+    }
+}
 // I have spoken
 pub const WORD_SIZE_BITS: usize = 64;
 

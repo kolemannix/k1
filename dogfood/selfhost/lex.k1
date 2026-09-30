@@ -167,23 +167,11 @@ ns for token {
 }
 
 fn is-ident-char(c: char): bool {
-  let b = c.as-u8()
-  if b < 0x80 {
-    c.is-ascii-letter() or c.is-ascii-digit() or b == '-'.as-u8() or b == '_'.as-u8()
-  } else {
-    b == 0xaa or b == 0xb5 or b == 0xba
-      or (b >= 0xc0 and b != 0xd7 and b != 0xf7)
-      or b == 0xb2 or b == 0xb3 or b == 0xb9 or (b >= 0xbc and b <= 0xbe)
-  }
+  c.is-ascii-letter() or c.is-ascii-digit() or c == '-' or c == '_'
 }
 
 fn is-numeric-char(c: char): bool {
-  let b = c.as-u8()
-  if b < 0x80 {
-    c.is-ascii-digit()
-  } else {
-    b == 0xb2 or b == 0xb3 or b == 0xb9 or (b >= 0xbc and b <= 0xbe)
-  }
+  c.is-ascii-digit()
 }
 
 fn is-ident-start(c: char): bool {
@@ -193,11 +181,6 @@ fn is-ident-start(c: char): bool {
 fn is-run-space(c: char): bool {
   let b = c.as-u8()
   b == 32 or (b >= 9 and b <= 13)
-}
-
-fn is-flag-space(c: char): bool {
-  let b = c.as-u8()
-  b == 32 or (b >= 9 and b <= 13) or b == 0x85 or b == 0xa0
 }
 
 fn shared-escape(c: char): ?u8 {
@@ -324,14 +307,14 @@ ns for lexer {
 
   fn make-token(self: *lexer, kind: token-kind, start: u32, len: u32): token {
     let s = start.widen[size]
-    let ws = s > 0 and s <= self.content.len() and is-flag-space(self.content.[s - 1])
+    let ws = s > 0 and s <= self.content.len() and is-run-space(self.content.[s - 1])
     let nl = false
     let i = s
     loop {
       if i == 0 { nl = true; break }
       let c = self.content.[i - 1]
       if c == '\n' or c == '\r' { nl = true; break }
-      if not is-flag-space(c) { break }
+      if not is-run-space(c) { break }
       i = i - 1
     }
     let flags: u8 = 0

@@ -1044,8 +1044,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let timings: std::sync::Mutex<Vec<UnitTiming>> =
             std::sync::Mutex::new(Vec::with_capacity(unit_count));
         let timings = &timings;
-        let cores = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
-        let worker_count = unit_count.min(cores).max(1);
+        let worker_count = unit_count.min(crate::get_thread_limit()).max(1);
         let queue = std::sync::Mutex::new(plans);
         let queue = &queue;
         let mut artifacts: Vec<Option<UnitArtifact>> = Vec::with_capacity(unit_count);
@@ -1054,72 +1053,77 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
         let artifacts = std::sync::Mutex::new(artifacts);
         let artifacts = &artifacts;
-        let mut results = Vec::with_capacity(worker_count);
-        std::thread::scope(|scope| {
-            let mut workers = Vec::with_capacity(worker_count);
-            for worker_index in 0..worker_count {
-                let worker = std::thread::Builder::new()
-                    .stack_size(crate::STACK_SIZE)
-                    .name(format!("{}.cg{}", k1.program_name(), worker_index))
-                    .spawn_scoped(scope, move || -> CgResult<()> {
-                        loop {
-                            let Some(plan) = queue.lock().unwrap().pop() else { return Ok(()) };
-                            let clock = shared.0.trace.clock;
-                            let clock_start = clock.raw();
-                            let index = plan.index;
-                            let ctx = Context::create();
-                            let mut cg = Cg::create(&ctx, shared.0, kind, plan);
-                            cg.codegen_program(roots)?;
-                            let clock_generated = clock.raw();
-                            cg.finalize_debug_info();
-                            if cfg!(debug_assertions) {
-                                cg.verify()?;
-                            }
-                            let clock_passed;
-                            let artifact = match output {
-                                UnitOutput::Object(pipeline) => {
-                                    cg.run_passes(*pipeline);
-                                    clock_passed = clock.raw();
-                                    let path = object_path(index);
-                                    cg.emit_object_file(&path)?;
-                                    UnitArtifact::Object(path)
-                                }
-                                UnitOutput::Bitcode(pipeline) => {
-                                    cg.run_passes(*pipeline);
-                                    clock_passed = clock.raw();
-                                    let bytes = if *pipeline == Pipeline::ThinLtoPreLink {
-                                        cg.thinlto_bitcode()
-                                    } else {
-                                        buffer_bytes(&cg.llvm_module.write_bitcode_to_memory())
-                                    };
-                                    UnitArtifact::Bitcode {
-                                        bytes,
-                                        exported: cg.collect_module_exported_symbols(),
-                                        referenced: cg.collect_all_module_symbols(),
-                                    }
-                                }
-                            };
-                            timings.lock().unwrap().push(UnitTiming {
-                                index,
-                                fn_count: cg.owned.len(),
-                                clock_start,
-                                clock_generated,
-                                clock_passed,
-                                clock_end: clock.raw(),
-                            });
-                            artifacts.lock().unwrap()[index] = Some(artifact);
+        let work = move || -> CgResult<()> {
+            loop {
+                let Some(plan) = queue.lock().unwrap().pop() else { return Ok(()) };
+                let clock = shared.0.trace.clock;
+                let clock_start = clock.raw();
+                let index = plan.index;
+                let ctx = Context::create();
+                let mut cg = Cg::create(&ctx, shared.0, kind, plan);
+                cg.codegen_program(roots)?;
+                let clock_generated = clock.raw();
+                cg.finalize_debug_info();
+                if cfg!(debug_assertions) {
+                    cg.verify()?;
+                }
+                let clock_passed;
+                let artifact = match output {
+                    UnitOutput::Object(pipeline) => {
+                        cg.run_passes(*pipeline);
+                        clock_passed = clock.raw();
+                        let path = object_path(index);
+                        cg.emit_object_file(&path)?;
+                        UnitArtifact::Object(path)
+                    }
+                    UnitOutput::Bitcode(pipeline) => {
+                        cg.run_passes(*pipeline);
+                        clock_passed = clock.raw();
+                        let bytes = if *pipeline == Pipeline::ThinLtoPreLink {
+                            cg.thinlto_bitcode()
+                        } else {
+                            buffer_bytes(&cg.llvm_module.write_bitcode_to_memory())
+                        };
+                        UnitArtifact::Bitcode {
+                            bytes,
+                            exported: cg.collect_module_exported_symbols(),
+                            referenced: cg.collect_all_module_symbols(),
                         }
-                    })
-                    .unwrap();
-                workers.push(worker);
-            }
-            for worker in workers {
-                results.push(match worker.join() {
-                    Ok(result) => result,
-                    Err(_) => Err(cgerr!(SpanId::NONE, "a codegen unit panicked")),
+                    }
+                };
+                timings.lock().unwrap().push(UnitTiming {
+                    index,
+                    fn_count: cg.owned.len(),
+                    clock_start,
+                    clock_generated,
+                    clock_passed,
+                    clock_end: clock.raw(),
                 });
+                artifacts.lock().unwrap()[index] = Some(artifact);
             }
-        });
+        };
+        let mut results = Vec::with_capacity(worker_count);
+        if worker_count == 1 {
+            results.push(work());
+        } else {
+            std::thread::scope(|scope| {
+                let mut workers = Vec::with_capacity(worker_count);
+                for worker_index in 0..worker_count {
+                    let worker = std::thread::Builder::new()
+                        .stack_size(crate::STACK_SIZE)
+                        .name(format!("{}.cg{}", k1.program_name(), worker_index))
+                        .spawn_scoped(scope, work)
+                        .unwrap();
+                    workers.push(worker);
+                }
+                for worker in workers {
+                    results.push(match worker.join() {
+                        Ok(result) => result,
+                        Err(_) => Err(cgerr!(SpanId::NONE, "a codegen unit panicked")),
+                    });
+                }
+            });
+        }
         for result in results {
             result?;
         }

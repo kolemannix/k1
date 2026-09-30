@@ -1148,8 +1148,8 @@ impl Callee {
         match *ability_impl_fn {
             AbilityImplFunction::FunctionId(function_id) => Callee::StaticFunction(function_id),
             AbilityImplFunction::Abstract(function_sig) => Callee::Abstract { function_sig },
-            AbilityImplFunction::Unavailable => {
-                unreachable!("callers check availability before building a Callee")
+            AbilityImplFunction::Pending | AbilityImplFunction::Unavailable => {
+                unreachable!("callers resolve availability before building a Callee")
             }
         }
     }
@@ -2263,6 +2263,7 @@ impl AbilityImplKind {
 #[derive(Clone, Copy)]
 pub enum AbilityImplFunction {
     FunctionId(FunctionId),
+    Pending,
     Abstract(FunctionSignature),
     /// The function is not available in this particular impl for this ability for this type.
     /// Currently only used when a default fn has constraints that aren't satisfied
@@ -2285,6 +2286,7 @@ pub struct TypedAbilityImpl {
     /// Invariant: These functions are ordered how they are defined in the ability, NOT how they appear in
     /// the impl code
     pub functions: PermSlice<AbilityImplFunction>,
+    pub substitutions: PermSlice<TypeSubstitutionPair>,
     pub scope_id: ScopeId,
     pub span: SpanId,
     /// I need this so that I don't try to instantiate blanket implementations that fail
@@ -2293,14 +2295,6 @@ pub struct TypedAbilityImpl {
 }
 
 impl TypedAbilityImpl {
-    pub fn function_at_index(
-        &self,
-        mem: &kmem::Mem<TypedProgram>,
-        index: u32,
-    ) -> &AbilityImplFunction {
-        mem.get_nth(self.functions, index as usize)
-    }
-
     pub fn signature(&self) -> TypedAbilitySignature {
         TypedAbilitySignature {
             specialized_ability_id: self.ability_id,
@@ -3092,9 +3086,22 @@ impl TypedProgram {
         sources: compiler::ModuleSources,
     ) -> K1Result<Vec<compiler::SourceFile>> {
         let frame = self.trace_push(TraceKind::ModuleRead, name.as_u32(), 0);
+        if let Some(source_bytes) = sources.wait_source_bytes() {
+            self.advise_for_source_bytes(source_bytes);
+        }
         let files = sources.join();
         self.trace_pop(frame);
         files.map_err(|e| self.error_from_anyhow(anyhow::anyhow!(e), SpanId::NONE))
+    }
+
+    fn advise_for_source_bytes(&mut self, source_bytes: usize) {
+        self.exprs.exprs.advise_additional_bytes(3 * source_bytes);
+        self.ast.exprs.advise_additional_bytes(3 * source_bytes);
+        self.ast.spans.span_pool.advise_additional_bytes(3 * source_bytes);
+        self.ast.mem.advise_additional_bytes(2 * source_bytes);
+        self.calls.advise_additional_bytes(2 * source_bytes);
+        self.mem.advise_additional_bytes(2 * source_bytes);
+        self.functions.advise_additional_bytes(source_bytes);
     }
 
     pub(crate) fn compile_module(
@@ -3223,7 +3230,12 @@ impl TypedProgram {
         mut file: compiler::SourceFile,
         path: StringId,
     ) -> FileId {
-        let source = parse::SourceFile::make(&mut self.ast.mem, path, &file.content);
+        let source = parse::SourceFile::make_with_newlines(
+            &mut self.ast.mem,
+            path,
+            &file.content,
+            &file.newline_positions,
+        );
         let file_id = self.ast.sources.add_file(source);
         let lex_result = self.ast.materialize_lexed_file(file_id, &mut file.lexed);
         self.modules.get_mut(module_id).files.push_grow(&mut self.mem, file_id);
@@ -4220,6 +4232,7 @@ impl TypedProgram {
             ability_id: base_ability_id,
             impl_arguments,
             functions: MSlice::empty(),
+            substitutions: MSlice::empty(),
             scope_id,
             span,
             compile_errors: MList::empty(),
@@ -4359,6 +4372,7 @@ impl TypedProgram {
             ability_id: impl_signature.specialized_ability_id,
             impl_arguments: impl_signature.impl_arguments,
             functions: impl_functions.to_slice(),
+            substitutions: MSlice::empty(),
             scope_id,
             span,
             compile_errors: MList::empty(),
@@ -5182,7 +5196,7 @@ impl TypedProgram {
             self.mem.getn(target_ability_impl_params).iter().filter(|p| p.is_impl_param).count();
 
         // Blanket params come first so their names shadow the ability's param names
-        let mut pairs = self.tmp.new_list(
+        let mut pairs = self.mem.new_list(
             blanket_impl.blanket_type_params.len()
                 + ability_side_param_count as u32
                 + impl_param_count as u32
@@ -5241,49 +5255,9 @@ impl TypedProgram {
         pairs.push(TypeSubstitutionPair { from: blanket_ability_self, to: self_type_id });
         self.bind_substitutions(new_impl_scope, pairs.as_slice());
 
-        let substituted_impl_arguments_handle = substituted_impl_arguments.to_slice();
-        let mut specialized_functions = self.mem.new_list(blanket_impl.functions.len());
-        let solutions_handle = self.intern_type_args(solutions);
-        let no_fnlike_args = self.intern_type_args(TypeArgs::empty());
-        for (index, blanket_impl_function) in
-            self.mem.getn(blanket_impl.functions).iter().enumerate()
-        {
-            let specialized_function = match *blanket_impl_function {
-                AbilityImplFunction::FunctionId(blanket_impl_function_id) => {
-                    if self
-                        .check_ability_fn_where_constraints(
-                            concrete_ability_id,
-                            substituted_impl_arguments_handle,
-                            self_type_id,
-                            index as u32,
-                            new_impl_scope,
-                            blanket_impl.span,
-                        )
-                        .is_err()
-                    {
-                        AbilityImplFunction::Unavailable
-                    } else {
-                        let specialized_function_id = self.specialize_function(
-                            blanket_impl_function_id,
-                            pairs.as_slice(),
-                            new_impl_scope,
-                            solutions_handle,
-                            no_fnlike_args,
-                            Some((concrete_ability_id, self_type_id)),
-                        );
-                        AbilityImplFunction::FunctionId(specialized_function_id)
-                    }
-                }
-                AbilityImplFunction::Unavailable => AbilityImplFunction::Unavailable,
-                AbilityImplFunction::Abstract(_) => {
-                    ice_span!(
-                        self,
-                        blanket_impl.span,
-                        "encountered abstract ability impl function in instantiate blanket impl"
-                    );
-                }
-            };
-            specialized_functions.push(specialized_function);
+        let mut pending_functions = self.mem.new_list(blanket_impl.functions.len());
+        for _ in 0..blanket_impl.functions.len() {
+            pending_functions.push(AbilityImplFunction::Pending);
         }
 
         let id = self.add_ability_impl(TypedAbilityImpl {
@@ -5292,8 +5266,9 @@ impl TypedProgram {
             self_type_id,
             ability_id: concrete_ability_id,
             base_ability_id: generic_base_ability_id,
-            impl_arguments: substituted_impl_arguments_handle,
-            functions: specialized_functions.to_slice(),
+            impl_arguments: substituted_impl_arguments.to_slice(),
+            functions: pending_functions.to_slice(),
+            substitutions: pairs.to_slice(),
             scope_id: new_impl_scope,
             span: blanket_impl.span,
             compile_errors: MList::empty(),
@@ -5303,6 +5278,60 @@ impl TypedProgram {
             specialized_ability_id: concrete_ability_id,
             full_impl_id: id,
         })
+    }
+
+    pub fn get_ability_impl_function(
+        &mut self,
+        impl_id: AbilityImplId,
+        index: u32,
+    ) -> AbilityImplFunction {
+        let imp = *self.ability_impls.get(impl_id);
+        let function = *self.mem.get_nth(imp.functions, index as usize);
+        let AbilityImplFunction::Pending = function else {
+            return function;
+        };
+        let AbilityImplKind::DerivedFromBlanket { blanket_impl_id } = imp.kind else {
+            self.ice_span(imp.span, "pending function on a non-blanket-derived impl")
+        };
+        let blanket_functions = self.ability_impls.get(blanket_impl_id).functions;
+        let AbilityImplFunction::FunctionId(blanket_function_id) =
+            *self.mem.get_nth(blanket_functions, index as usize)
+        else {
+            self.ice_span(imp.span, "blanket impl function is not a declared function")
+        };
+        let resolved = if self
+            .check_ability_fn_where_constraints(
+                imp.ability_id,
+                imp.impl_arguments,
+                imp.self_type_id,
+                index,
+                imp.scope_id,
+                imp.span,
+            )
+            .is_err()
+        {
+            AbilityImplFunction::Unavailable
+        } else {
+            let blanket_param_count =
+                self.ability_impls.get(blanket_impl_id).blanket_type_params.len() as usize;
+            let mut solutions: SV8<TypeId> = smallvec![];
+            for pair in &self.mem.getn(imp.substitutions)[..blanket_param_count] {
+                solutions.push(pair.to);
+            }
+            let solutions_handle = self.intern_type_slice(&solutions);
+            let no_fnlike_args = self.intern_type_args(TypeArgs::empty());
+            let specialized_function_id = self.specialize_function(
+                blanket_function_id,
+                self.mem.getn(imp.substitutions),
+                imp.scope_id,
+                solutions_handle,
+                no_fnlike_args,
+                Some((imp.ability_id, imp.self_type_id)),
+            );
+            AbilityImplFunction::FunctionId(specialized_function_id)
+        };
+        self.mem.getn_mut(imp.functions)[index as usize] = resolved;
+        resolved
     }
 
     fn eval_numeric_value(
@@ -6433,14 +6462,14 @@ impl TypedProgram {
                         self.ability_signature_to_string(signature)
                     );
                 };
-                let impl_ = self.ability_impls.get(impl_handle.full_impl_id);
-                let impl_function = impl_.function_at_index(&self.mem, tafr.index);
+                let impl_function =
+                    self.get_ability_impl_function(impl_handle.full_impl_id, tafr.index);
                 self.eval_function_call(
                     &call_ast_expr,
                     call_span,
                     None,
                     ctx,
-                    Some(Callee::from_ability_impl_fn(impl_function)),
+                    Some(Callee::from_ability_impl_fn(&impl_function)),
                 )
             }
             ParsedExpr::TypeHint(th) => {
@@ -8887,7 +8916,7 @@ impl TypedProgram {
     }
 
     pub(super) fn direct_ability_fn(
-        &self,
+        &mut self,
         self_type: TypeId,
         ability_id: AbilityId,
         fn_name: StringId,
@@ -8896,14 +8925,12 @@ impl TypedProgram {
             .ability_impl_table_by_ability
             .get(&TypeAbilityPair { self_type_id: self_type, base_ability_id: ability_id })?;
         let [handle] = handles.as_slice(&self.mem) else { return None };
+        let impl_id = handle.full_impl_id;
         let ability_fn =
             self.abilities.get(ability_id).find_function_by_name(&self.mem, fn_name)?;
-        match self
-            .ability_impls
-            .get(handle.full_impl_id)
-            .function_at_index(&self.mem, ability_fn.index)
-        {
-            AbilityImplFunction::FunctionId(function_id) => Some(*function_id),
+        match self.get_ability_impl_function(impl_id, ability_fn.index) {
+            AbilityImplFunction::FunctionId(function_id) => Some(function_id),
+            AbilityImplFunction::Pending => unreachable!(),
             AbilityImplFunction::Abstract(_) | AbilityImplFunction::Unavailable => None,
         }
     }
@@ -10520,13 +10547,14 @@ impl TypedProgram {
             })?;
 
         let full_impl = *self.ability_impls.get(impl_handle.full_impl_id);
-        let impl_function = *full_impl.function_at_index(&self.mem, ability_function_ref.index);
-        // FunctionId: availability was decided when the impl was built.
+        let impl_function =
+            self.get_ability_impl_function(impl_handle.full_impl_id, ability_function_ref.index);
+        // FunctionId: availability was decided when the function was resolved.
         // Abstract (a type-param constraint pseudo-impl): the fn's where
         // constraints are checked here, at the call, because not all of the
         // param's constraints exist yet when the pseudo-impl is built.
-        // Unavailable: decided at impl build; Unavailable carries no payload,
-        // so we re-run the check to name the failing constraint
+        // Unavailable carries no payload, so we re-run the check to name the
+        // failing constraint
         if let AbilityImplFunction::Unavailable | AbilityImplFunction::Abstract(_) = impl_function {
             if let Err(failure) = self.check_ability_fn_where_constraints(
                 full_impl.ability_id,
@@ -14432,17 +14460,15 @@ impl TypedProgram {
                 .get(ao.specialized_ability_id)
                 .find_function_by_name(&self.mem, field.name)
                 .unwrap();
-            let fn_index = fn_ref.index;
-            let impl_function = *self
-                .ability_impls
-                .get(impl_handle.full_impl_id)
-                .function_at_index(&self.mem, fn_index);
+            let impl_function =
+                self.get_ability_impl_function(impl_handle.full_impl_id, fn_ref.index);
             match impl_function {
                 AbilityImplFunction::FunctionId(impl_fn_id) => {
                     let fn_ptr_expr = self.function_to_pointer(impl_fn_id, span);
                     literal_fields
                         .push(StructLiteralField { name: field.name, expr: Some(fn_ptr_expr) });
                 }
+                AbilityImplFunction::Pending => unreachable!(),
                 AbilityImplFunction::Unavailable => {
                     kbail!(
                         self,
@@ -16358,6 +16384,7 @@ impl TypedProgram {
             base_ability_id,
             impl_arguments: impl_arguments_handle,
             functions: typed_functions.to_slice(),
+            substitutions: MSlice::empty(),
             scope_id: impl_scope_id,
             span,
             compile_errors: MList::empty(),
@@ -16393,8 +16420,8 @@ impl TypedProgram {
             let impl_fn = match *impl_fn {
                 AbilityImplFunction::FunctionId(impl_fn) => impl_fn,
                 AbilityImplFunction::Unavailable => continue,
-                AbilityImplFunction::Abstract(_) => {
-                    self.ice("Expected impl function id, not abstract, in eval_ability_impl", None);
+                AbilityImplFunction::Pending | AbilityImplFunction::Abstract(_) => {
+                    self.ice("Expected a declared impl function in eval_ability_impl", None);
                 }
             };
             if self

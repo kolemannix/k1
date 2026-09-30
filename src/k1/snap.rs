@@ -7,7 +7,7 @@ use std::mem::size_of;
 pub const SNAP_MAGIC: [u8; 8] = *b"K1SNAP01";
 
 const BLOB_COMPRESS_MIN: usize = 1 << 16;
-const BLOB_CHUNK: usize = 1 << 20;
+const BLOB_CHUNK: usize = crate::MEGABYTE;
 const SNAP_RESERVE_BYTES: usize = 16 << 30;
 
 pub struct BlobHeader {
@@ -16,8 +16,7 @@ pub struct BlobHeader {
 }
 
 fn blob_worker_count(chunks: usize) -> usize {
-    let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
-    chunks.clamp(1, cpus)
+    chunks.clamp(1, crate::get_thread_limit())
 }
 
 pub struct SnapWriter {
@@ -169,7 +168,7 @@ impl SnapWriter {
                 out_rest = rest;
                 let (lens_part, rest) = std::mem::take(&mut lens_rest).split_at_mut(count);
                 lens_rest = rest;
-                s.spawn(move || {
+                let mut job = move || {
                     for i in 0..count {
                         let chunk_start = (start + i) * BLOB_CHUNK;
                         let chunk_end = (chunk_start + BLOB_CHUNK).min(bytes.len());
@@ -178,7 +177,12 @@ impl SnapWriter {
                             lz4_flex::block::compress_into(&bytes[chunk_start..chunk_end], out)
                                 .expect("lz4 compress failed");
                     }
-                });
+                };
+                if workers == 1 {
+                    job();
+                } else {
+                    s.spawn(job);
+                }
             }
         });
         for (chunk_index, &compressed_len) in compressed_lens.iter().enumerate() {
@@ -405,7 +409,7 @@ impl<'a> SnapReader<'a> {
                 let dst_take = (count * BLOB_CHUNK).min(dst_rest.len());
                 let (dst_part, rest) = std::mem::take(&mut dst_rest).split_at_mut(dst_take);
                 dst_rest = rest;
-                s.spawn(move || {
+                let job = move || {
                     let mut d = dst_part;
                     for (src, compressed) in chunk_part {
                         let chunk_take = BLOB_CHUNK.min(d.len());
@@ -423,7 +427,12 @@ impl<'a> SnapReader<'a> {
                             chunk_dst.copy_from_slice(src);
                         }
                     }
-                });
+                };
+                if workers == 1 {
+                    job();
+                } else {
+                    s.spawn(job);
+                }
             }
         });
     }

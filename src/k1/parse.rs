@@ -1372,6 +1372,10 @@ pub struct ParsedExpressionPool {
     debug_exprs: Vec<ParsedExprId>,
 }
 impl ParsedExpressionPool {
+    pub fn advise_additional_bytes(&mut self, bytes: usize) {
+        self.expressions.advise_additional_bytes(bytes);
+    }
+
     pub fn make() -> Self {
         ParsedExpressionPool {
             expressions: VPool::make("parsed_expr"),
@@ -1828,7 +1832,6 @@ pub enum ParseError {
     Parse {
         message: String,
         token: Token,
-        cause: Option<Box<ParseError>>,
     },
     Lex {
         message: String,
@@ -1858,11 +1861,7 @@ impl Display for ParseError {
             ParseError::Lex { message, .. } => {
                 write!(f, "LexError: {}", message)
             }
-            ParseError::Parse { message, token, cause, .. } => {
-                if let Some(cause) = &cause {
-                    cause.fmt(f)?;
-                    writeln!(f)?;
-                }
+            ParseError::Parse { message, token } => {
                 write!(f, "ParseError: {}, at {}", message, token.kind)
             }
         }
@@ -1887,12 +1886,8 @@ pub fn print_error(module: &ParsedProgram, parse_error: &ParseError) {
             )
             .unwrap();
         }
-        ParseError::Parse { message, token, cause } => {
+        ParseError::Parse { message, token } => {
             let span_id = parse_error.span();
-
-            if let Some(cause) = cause {
-                print_error(module, cause);
-            }
             let got_str = if token.kind == K::Ident {
                 module.get_span_content(span_id).to_string()
             } else {
@@ -2030,19 +2025,34 @@ pub struct SourceFile {
     pub semantic_tokens: kmem::MList<SemanticToken, ParsedProgram>,
 }
 
+pub fn newline_positions(content: &str) -> Vec<u32> {
+    let mut positions = Vec::new();
+    for pos in memchr::memchr_iter(b'\n', content.as_bytes()) {
+        positions.push(pos as u32);
+    }
+    positions
+}
+
 impl SourceFile {
     pub fn make(
         mem: &mut kmem::Mem<ParsedProgram>,
         file_path: StringId,
         content: &str,
     ) -> SourceFile {
-        let newline_positions =
-            mem.pushn_iter(memchr::memchr_iter(b'\n', content.as_bytes()).map(|pos| pos as u32));
+        SourceFile::make_with_newlines(mem, file_path, content, &newline_positions(content))
+    }
+
+    pub fn make_with_newlines(
+        mem: &mut kmem::Mem<ParsedProgram>,
+        file_path: StringId,
+        content: &str,
+        newline_positions: &[u32],
+    ) -> SourceFile {
         SourceFile {
             file_id: 0,
             file_path,
             content: mem.pushn(content.as_bytes()),
-            newline_positions,
+            newline_positions: mem.pushn(newline_positions),
             tokens: kmem::MSlice::empty(),
             trivia: kmem::MSlice::empty(),
             semantic_tokens: kmem::MList::empty(),
@@ -2215,7 +2225,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         let p = self.peek();
         let token = if p.kind == K::Eof { self.peek_back() } else { p };
         let token = token.materialize(self.file_id, &mut self.ast.spans);
-        ParseError::Parse { message: message.as_ref().to_string(), token, cause: None }
+        ParseError::Parse { message: message.as_ref().to_string(), token }
     }
 
     pub fn expect_definition(&mut self) -> ParseResult<ParsedId> {
@@ -2372,7 +2382,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
 
     fn error(&mut self, message: impl AsRef<str>, token: Token) -> ParseError {
         let token = token.materialize(self.file_id, &mut self.ast.spans);
-        ParseError::Parse { message: message.as_ref().to_string(), token, cause: None }
+        ParseError::Parse { message: message.as_ref().to_string(), token }
     }
 
     fn error_expected(&mut self, expected: impl AsRef<str>, token: Token) -> ParseError {
@@ -2723,7 +2733,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn make_ident(&mut self, token: Token) -> StringId {
-        self.ast.idents.intern(self.token_chars(token))
+        let chars = self.token_chars(token);
+        self.ast.idents.intern_mut(chars)
     }
 
     fn bool_literal_from_string(&self, ident: StringId) -> Option<bool> {
@@ -2885,7 +2896,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 // Bare $ident interpolation case
                 K::Ident => {
                     let text = self.token_chars(current_token);
-                    let string_id = self.ast.idents.intern(text);
+                    let string_id = self.ast.idents.intern_mut(text);
                     self.emit_semantic_token(current_token, SemanticTokenKind::Variable);
                     let sp = self.tok_span_id(current_token);
                     let expr_id = self.add_expression(
@@ -3063,7 +3074,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             buf.pop();
                         }
                     }
-                    let string_id = self.ast.idents.intern(&buf);
+                    let string_id = self.ast.idents.intern_mut(&buf);
 
                     let sp = self.tok_span_id(*token);
                     parts.push(InterpolatedStringPart::String { string_id, span: sp });
@@ -3820,9 +3831,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     /// binary operations, in terms of recursion or induction, its an atom,
     /// or a 'base case'; it doesn't have any real meaning at the language level
     fn parse_base_expression(&mut self) -> ParseResult<Option<ParsedExprId>> {
-        let compiler_debug = self.parse_compiler_debug();
         let first = self.peek();
-        let resulting_expression = match first.kind {
+        match first.kind {
             K::OpenParen => {
                 self.advance();
                 let expr = self.expect_expression()?;
@@ -3926,6 +3936,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 Ok(Some(self.add_expression(ParsedExpr::Code(ParsedCode { content }), span)))
             }
             K::Hash => {
+                if self.parse_compiler_debug() {
+                    let Some(expr) = self.parse_base_expression()? else {
+                        return Err(self.error_expected("expression following #debug", self.peek()));
+                    };
+                    self.ast.exprs.set_debug(expr);
+                    return Ok(Some(expr));
+                }
                 self.advance();
 
                 let maybe_directive = self.peek();
@@ -4078,21 +4095,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             span,
                         )))
                     }
-                } else if let Some(literal_id) = self.parse_literal_atom()? {
-                    Ok(Some(literal_id))
-                } else if compiler_debug {
-                    Err(self.error_expected("expression following #debug", first))
                 } else {
-                    Ok(None)
+                    self.parse_literal_atom()
                 }
             }
-        }?;
-        if let Some(expression_id) = resulting_expression {
-            if compiler_debug {
-                self.ast.exprs.set_debug(expression_id);
-            }
         }
-        Ok(resulting_expression)
     }
 
     fn expect_expression_with_postfix_ops(&mut self) -> ParseResult<ParsedExprId> {
@@ -5137,7 +5144,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 self.error("Internal Error: expected string prefix/suffix", external_name_token)
             );
         };
-        let ident = self.ast.idents.intern(string_text_trimmed);
+        let ident = self.ast.idents.intern_mut(string_text_trimmed);
         Ok(ident)
     }
 

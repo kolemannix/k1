@@ -453,7 +453,6 @@ ns for parser {
   }
 
   fn parse-base-expression(self: *parser): result[?ast/expr-id, perror] {
-    let compiler-debug = self.parse-compiler-debug()
     let first = self.peek()
     let result-opt: ?ast/expr-id = if first.kind is :open-paren {
       self.advance()
@@ -522,6 +521,11 @@ ns for parser {
       let span = self.extend-tok-to-here(first)
       :some(self.add-expr(:code-expr(.{ content, span })))
     } else if first.kind is :hash {
+      if self.parse-compiler-debug() {
+        let inner = self.parse-base-expression().try
+        if inner is :none { return :err(error-expected("expression following #debug", self.peek())) }
+        return :ok(inner)
+      }
       self.advance()
       let directive = self.peek()
       let static-opt = self.parse-static-expr(first, directive, :none).try
@@ -546,14 +550,7 @@ ns for parser {
         :some(self.parse-ident-base-expression(first).try)
       }
     } else {
-      let lit = self.parse-literal-atom().try
-      if lit is :some lit-id {
-        :some(lit-id)
-      } else if compiler-debug {
-        return :err(error-expected("expression following #debug", first))
-      } else {
-        :none
-      }
+      self.parse-literal-atom().try
     }
     let final-opt: ?ast/expr-id = if result-opt is :some expr-id and self.peek().kind is :colon and self.peek-at(1).is-ws-preceded() {
       self.advance()

@@ -57,7 +57,9 @@ See `test_src/suite1/suite1.k1`, `test_src/suite1/format.k1`, and
 ## Naming
 
 K1 code uses kebab-case for everything: namespaces, functions, types, fields,
-and enum variants. Constants are SCREAMING_SNAKE.
+and enum variants. Constants are SCREAMING_SNAKE. Identifiers are ASCII
+letters, digits, `-` and `_`; non-ASCII text is only allowed in strings and
+comments.
 
 ```rust
 ns allocator-test

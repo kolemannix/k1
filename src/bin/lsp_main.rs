@@ -400,9 +400,9 @@ impl Backend {
         Ok(program)
     }
 
-    fn with_k1<T>(&self, f: impl Fn(&TypedProgram) -> T) -> Option<T> {
-        let m_lock = self.module.lock().unwrap();
-        match &*m_lock {
+    fn with_k1<T>(&self, f: impl FnOnce(&mut TypedProgram) -> T) -> Option<T> {
+        let mut m_lock = self.module.lock().unwrap();
+        match &mut *m_lock {
             None => None,
             Some(k1) => Some(f(k1)),
         }
@@ -997,13 +997,13 @@ impl LanguageServer for Backend {
         let col = position.position.character;
         info!("completion: {}:{}:{}", file_url.path(), line, col);
 
-        let Some(program) = self.compile_with_marker(&file_url, line, col).await? else {
+        let Some(mut program) = self.compile_with_marker(&file_url, line, col).await? else {
             return Ok(None);
         };
 
         let site = program.completion.as_ref().and_then(|cs| cs.site);
         let (candidates, is_incomplete) = match site {
-            Some(site) => (k1::lsp_support::collect_completions(&program, site), false),
+            Some(site) => (k1::lsp_support::collect_completions(&mut program, site), false),
             None => {
                 info!("completion: no site recorded, falling back to enclosing scope");
                 let fallback = self

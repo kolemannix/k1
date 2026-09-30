@@ -575,6 +575,7 @@ pub struct SourceFile {
     pub path: String,
     pub content: String,
     pub content_hash: u64,
+    pub newline_positions: Vec<u32>,
     pub lexed: crate::lex::Lexed,
 }
 
@@ -589,14 +590,99 @@ pub fn read_source(
     }
 }
 
-fn read_and_lex_source_file(
-    path: String,
+const SOURCE_BYTES_PER_WORKER: usize = crate::MEGABYTE;
+
+enum SourceWork {
+    Lexed { file: usize, lexed: crate::lex::Lexed },
+    Scanned { file: usize, content_hash: u64, newline_positions: Vec<u32> },
+}
+
+fn read_and_lex_source_files(
+    paths: Vec<String>,
     overrides: &fxhash::FxHashMap<String, String>,
-) -> Result<SourceFile, String> {
-    let content = read_source(&path, overrides)?;
-    let content_hash = content_hash64(content.as_bytes());
-    let lexed = crate::lex::lex(&content, crate::lex::Lexed::default());
-    Ok(SourceFile { path, content, content_hash, lexed })
+    source_bytes: std::sync::mpsc::Sender<usize>,
+) -> Result<Vec<SourceFile>, String> {
+    let mut contents = Vec::with_capacity(paths.len());
+    for path in &paths {
+        contents.push(read_source(path, overrides)?);
+    }
+    let file_count = contents.len();
+    let mut largest_first = Vec::with_capacity(file_count);
+    for index in 0..file_count {
+        largest_first.push(index);
+    }
+    largest_first.sort_by_key(|&index| std::cmp::Reverse(contents[index].len()));
+    let mut total_bytes = 0;
+    for content in &contents {
+        total_bytes += content.len();
+    }
+    let _ = source_bytes.send(total_bytes);
+    let task_count = 2 * file_count;
+    let worker_count =
+        crate::get_thread_limit().min(task_count).min(1 + total_bytes / SOURCE_BYTES_PER_WORKER);
+    let next_task = std::sync::atomic::AtomicUsize::new(0);
+    let work = || {
+        let mut done = Vec::new();
+        loop {
+            let task = next_task.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if task >= task_count {
+                return done;
+            }
+            let file = largest_first[task % file_count];
+            let content = &contents[file];
+            if task < file_count {
+                done.push(SourceWork::Lexed {
+                    file,
+                    lexed: crate::lex::lex(content, crate::lex::Lexed::default()),
+                });
+            } else {
+                done.push(SourceWork::Scanned {
+                    file,
+                    content_hash: content_hash64(content.as_bytes()),
+                    newline_positions: crate::parse::newline_positions(content),
+                });
+            }
+        }
+    };
+    let finished = std::thread::scope(|s| {
+        let mut workers = Vec::with_capacity(worker_count);
+        for _ in 1..worker_count {
+            workers.push(s.spawn(work));
+        }
+        let mut finished = vec![work()];
+        for worker in workers {
+            finished.push(worker.join().expect("source worker thread panicked"));
+        }
+        finished
+    });
+    let mut lexeds = Vec::with_capacity(file_count);
+    let mut scans = Vec::with_capacity(file_count);
+    for _ in 0..file_count {
+        lexeds.push(None);
+        scans.push(None);
+    }
+    for done in finished {
+        for item in done {
+            match item {
+                SourceWork::Lexed { file, lexed } => lexeds[file] = Some(lexed),
+                SourceWork::Scanned { file, content_hash, newline_positions } => {
+                    scans[file] = Some((content_hash, newline_positions))
+                }
+            }
+        }
+    }
+    let mut sources = Vec::with_capacity(file_count);
+    for (((path, content), scan), lexed) in paths.into_iter().zip(contents).zip(scans).zip(lexeds) {
+        let (content_hash, newline_positions) = scan.unwrap();
+        sources.push(SourceFile {
+            path,
+            content,
+            content_hash,
+            newline_positions,
+            lexed: lexed.unwrap(),
+        });
+    }
+    Ok(sources)
 }
 
 fn collect_module_source_paths(module_dir: &str, is_core: bool) -> Result<Vec<String>, String> {
@@ -653,26 +739,36 @@ pub fn spawn_module_sources_read(
 ) -> ModuleSources {
     let overrides = source_overrides.clone();
     let path = path.to_string();
-    let reader = std::thread::spawn(move || {
+    let (source_bytes_tx, source_bytes) = std::sync::mpsc::channel();
+    let read = move || {
         let paths = if is_dir { collect_module_source_paths(&path, is_core)? } else { vec![path] };
-        let mut sources = Vec::with_capacity(paths.len());
-        for path in paths {
-            sources.push(read_and_lex_source_file(path, &overrides)?);
-        }
-        Ok(sources)
-    });
-    ModuleSources::Reading(reader)
+        read_and_lex_source_files(paths, &overrides, source_bytes_tx)
+    };
+    if crate::get_thread_limit() == 1 {
+        return ModuleSources::Read(read());
+    }
+    ModuleSources::Reading(std::thread::spawn(read), source_bytes)
 }
 
 pub enum ModuleSources {
-    Reading(std::thread::JoinHandle<Result<Vec<SourceFile>, String>>),
+    Reading(
+        std::thread::JoinHandle<Result<Vec<SourceFile>, String>>,
+        std::sync::mpsc::Receiver<usize>,
+    ),
     Read(Result<Vec<SourceFile>, String>),
 }
 
 impl ModuleSources {
+    pub fn wait_source_bytes(&self) -> Option<usize> {
+        match self {
+            ModuleSources::Reading(_, source_bytes) => source_bytes.recv().ok(),
+            ModuleSources::Read(_) => None,
+        }
+    }
+
     pub fn wait(&mut self) -> &Result<Vec<SourceFile>, String> {
-        if let ModuleSources::Reading(_) = self {
-            let ModuleSources::Reading(reader) =
+        if let ModuleSources::Reading(..) = self {
+            let ModuleSources::Reading(reader, _) =
                 std::mem::replace(self, ModuleSources::Read(Ok(Vec::new())))
             else {
                 unreachable!()
@@ -682,13 +778,13 @@ impl ModuleSources {
         }
         match self {
             ModuleSources::Read(result) => result,
-            ModuleSources::Reading(_) => unreachable!(),
+            ModuleSources::Reading(..) => unreachable!(),
         }
     }
 
     pub fn join(self) -> Result<Vec<SourceFile>, String> {
         match self {
-            ModuleSources::Reading(reader) => {
+            ModuleSources::Reading(reader, _) => {
                 reader.join().expect("module sources reader thread panicked")
             }
             ModuleSources::Read(result) => result,
@@ -1471,6 +1567,9 @@ fn lld_link(flavor: &str, args: &[String]) -> Result<()> {
     for arg in args {
         cstrings.push(std::ffi::CString::new(arg.as_str())?);
     }
+    if crate::get_thread_limit() == 1 {
+        cstrings.push(std::ffi::CString::new("--threads=1").unwrap());
+    }
     let mut ptrs: Vec<*const std::ffi::c_char> = Vec::with_capacity(cstrings.len());
     for c in &cstrings {
         ptrs.push(c.as_ptr());
@@ -1958,7 +2057,10 @@ fn write_unit_artifacts(
     } else {
         Pipeline::Dev
     };
-    let single_file = k1.plan.config.filc || k1.config.tools.emit_llvm || object_is_artifact;
+    let single_file = k1.plan.config.filc
+        || k1.config.tools.emit_llvm
+        || object_is_artifact
+        || crate::get_thread_limit() == 1;
     let object_path = |i: usize| format!("{out_dir}/{module_name}.{i}.o");
     let output = if single_file {
         UnitOutput::Bitcode(Pipeline::None)
