@@ -552,42 +552,34 @@ impl TypedProgram {
                             target_type_id
                         )),
                     },
-                    ParsedLiteral::Numeric { text_span } => {
-                        let num_value_id = self.eval_numeric_value(
-                            *text_span,
-                            EvalExprContext::make(scope_id)
-                                .with_expected_type(Some(target_type_id)),
-                        )?;
-                        match self.static_values.get(num_value_id) {
-                            StaticValue::Int(_) => match self.types.get(target_type_id) {
-                                Type::Integer(_) => Ok(self
-                                    .patterns
-                                    .add(TypedPattern::LiteralInteger(num_value_id, span))),
-                                _ => Err(kerr!(
-                                    self,
-                                    self.ast.get_pattern_span(pat_expr),
-                                    "integer literal pattern will never match {}",
-                                    target_type_id
-                                )),
-                            },
-                            StaticValue::Float(_) => match self.types.get(target_type_id) {
-                                Type::Float(_) => Ok(self
-                                    .patterns
-                                    .add(TypedPattern::LiteralFloat(num_value_id, span))),
-                                _ => Err(kerr!(
-                                    self,
-                                    self.ast.get_pattern_span(pat_expr),
-                                    "float literal pattern will never match {}",
-                                    target_type_id
-                                )),
-                            },
-                            _ => {
-                                unreachable!(
-                                    "eval_numeric_value should produce only Integer and Float exprs"
-                                )
-                            }
+                    ParsedLiteral::Int(int_literal) => match self.types.get(target_type_id) {
+                        Type::Integer(_) => {
+                            let int_value =
+                                self.eval_integer_value(*int_literal, span, Some(target_type_id))?;
+                            let value_id = self.static_values.add(StaticValue::Int(int_value));
+                            Ok(self.patterns.add(TypedPattern::LiteralInteger(value_id, span)))
                         }
-                    }
+                        _ => Err(kerr!(
+                            self,
+                            self.ast.get_pattern_span(pat_expr),
+                            "integer literal pattern will never match {}",
+                            target_type_id
+                        )),
+                    },
+                    ParsedLiteral::Float { text_span } => match self.types.get(target_type_id) {
+                        Type::Float(_) => {
+                            let float_value =
+                                self.eval_float_value(*text_span, Some(target_type_id))?;
+                            let value_id = self.static_values.add(StaticValue::Float(float_value));
+                            Ok(self.patterns.add(TypedPattern::LiteralFloat(value_id, span)))
+                        }
+                        _ => Err(kerr!(
+                            self,
+                            self.ast.get_pattern_span(pat_expr),
+                            "float literal pattern will never match {}",
+                            target_type_id
+                        )),
+                    },
                     ParsedLiteral::Bool(b) => match self.types.get(target_type_id) {
                         Type::Bool => Ok(self.patterns.add(TypedPattern::LiteralBool(*b, span))),
                         _ => Err(kerr!(

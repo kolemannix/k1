@@ -62,7 +62,7 @@ use crate::parse::{
     InterpolatedStringPart, NamedTypeArg, NumericWidth, ParsedAbilityExpr, ParsedAbilityId,
     ParsedAbilityImplId, ParsedBlock, ParsedBlockKind, ParsedBreak, ParsedCall, ParsedCallArg,
     ParsedContinue, ParsedExpr, ParsedExprId, ParsedFunctionId, ParsedGlobalId, ParsedId,
-    ParsedIfExpr, ParsedListLiteral, ParsedLiteral, ParsedLoopExpr, ParsedNamespaceId,
+    ParsedIfExpr, ParsedIntLiteral, ParsedListLiteral, ParsedLiteral, ParsedLoopExpr, ParsedNamespaceId,
     ParsedPattern, ParsedPatternId, ParsedProgram, ParsedStaticBlockKind, ParsedStaticExpr,
     ParsedStmt, ParsedStmtId, ParsedTypeConstraint, ParsedTypeConstraintExpr, ParsedTypeDefnId,
     ParsedTypeExpr, ParsedTypeExprId, ParsedTypeParam, ParsedUseId, ParsedVariable, ParsedVariant,
@@ -2405,7 +2405,6 @@ pub enum SelfAdjust {
 pub struct TypedModuleBuffers {
     name_builder: String,
     lexed: lex::Lexed,
-    int_parse: String,
 }
 
 nz_u32_id!(ModuleId);
@@ -2992,7 +2991,6 @@ impl TypedProgram {
             buffers: TypedModuleBuffers {
                 name_builder: String::new(),
                 lexed: lex::Lexed::default(),
-                int_parse: String::with_capacity(128),
             },
             patterns: TypedPatternPool::make(),
             vm: Box::new(Some(vm::Vm::make())),
@@ -5354,169 +5352,60 @@ impl TypedProgram {
         resolved
     }
 
-    fn eval_numeric_value(
-        &mut self,
-        span: Span,
-        ctx: EvalExprContext,
-    ) -> K1Result<StaticValueId> {
-        let parsed_text = self.ast.get_span_content(span);
-        let is_float = parsed_text.contains('.');
-        if is_float {
-            let float_value = self.eval_float_value(span, ctx.expected_type_id)?;
-            let value_id = self.static_values.add(StaticValue::Float(float_value));
-            Ok(value_id)
-        } else {
-            let int_value = self.eval_integer_value(span, ctx.expected_type_id)?;
-            let value_id = self.static_values.add(StaticValue::Int(int_value));
-            Ok(value_id)
-        }
-    }
-
     fn eval_float_value(
         &self,
-        span: Span,
+        text_span: Span,
         expected_type_id: Option<TypeId>,
     ) -> K1Result<TypedFloatValue> {
-        let parsed_text = self.ast.get_span_content(span);
-        let expected_width = match expected_type_id {
-            None => NumericWidth::B64,
-            Some(F64_TYPE_ID) => NumericWidth::B64,
-            Some(F32_TYPE_ID) => NumericWidth::B32,
-            Some(_) => {
-                // Parse as f64 and let typechecking fail
-                NumericWidth::B64
-            }
+        let parsed_text = self.ast.get_span_content(text_span);
+        let value = match expected_type_id {
+            Some(F32_TYPE_ID) => parsed_text
+                .parse::<f32>()
+                .map(TypedFloatValue::F32)
+                .map_err(|e| kerr!(self, text_span, "Invalid f32: {e}"))?,
+            _ => parsed_text
+                .parse::<f64>()
+                .map(TypedFloatValue::F64)
+                .map_err(|e| kerr!(self, text_span, "Invalid f64: {e}"))?,
         };
-        let value: Result<TypedFloatValue, std::num::ParseFloatError> = match expected_width {
-            NumericWidth::B32 => parsed_text.parse::<f32>().map(TypedFloatValue::F32),
-            NumericWidth::B64 => parsed_text.parse::<f64>().map(TypedFloatValue::F64),
-            _ => unreachable!("unreachable float width"),
-        };
-        let value =
-            value.map_err(|e| kerr!(self, span, "Invalid f{}: {e}", expected_width.bits()))?;
         Ok(value)
     }
 
     fn eval_integer_value(
-        &mut self,
+        &self,
+        literal: ParsedIntLiteral,
         span: Span,
         expected_type_id: Option<TypeId>,
     ) -> K1Result<TypedIntValue> {
-        let parsed_text = self.ast.get_span_content(span);
-
-        let is_negative = parsed_text.starts_with('-');
-        let num_text = if is_negative { &parsed_text[1..] } else { parsed_text };
-
-        // The number ends at the first byte that can't be part of one; the rest is a suffix
-        let mut suffix_start = num_text.len();
-        for (idx, b) in num_text.bytes().enumerate() {
-            if !(b.is_ascii_hexdigit() || b == b'_' || b == b'x') {
-                suffix_start = idx;
-                break;
-            }
-        }
-        let suffix_result = match suffix_start == num_text.len() {
-            true => None,
-            false => {
-                let (num, suffix) = num_text.split_at(suffix_start);
-                let int_type = match suffix {
-                    "u8" => IntegerType::U8,
-                    "u16" => IntegerType::U16,
-                    "u32" => IntegerType::U32,
-                    "u64" => IntegerType::U64,
-                    "uint" => IntegerType::U64,
-                    "usize" => IntegerType::U64,
-                    "i8" => IntegerType::I8,
-                    "i16" => IntegerType::I16,
-                    "i32" => IntegerType::I32,
-                    "i64" => IntegerType::I64,
-                    "int" => IntegerType::I64,
-                    "size" => IntegerType::I64,
-                    _ => {
-                        kbail!(
-                            self,
-                            span,
-                            "Invalid integer suffix '{}'; expected u8, u16, u32, u64, uint, usize, i8, i16, i32, i64, int, size",
-                            suffix
-                        );
-                    }
-                };
-                Some((int_type, num))
-            }
-        };
-
-        let (suffix_int_type, num_text) = match suffix_result {
-            None => (None, num_text),
-            Some((int_type, num_text)) => (Some(int_type), num_text),
-        };
-
-        let (base, digits) = if let Some(d) = num_text.strip_prefix("0x") {
-            (16, d)
-        } else if let Some(d) = num_text.strip_prefix("0b") {
-            (2, d)
-        } else {
-            (10, num_text)
-        };
-
-        let expected_int_type = match suffix_int_type {
+        let int_type = match literal.suffix {
             Some(int_type) => int_type,
             None => match expected_type_id.map(|t| self.types.get(t)) {
                 Some(Type::Integer(int_type)) => *int_type,
-                Some(_other) => {
-                    // Here we're expecting some non-integer type.
-                    // The best bet for a good compiler error is to parse as a large signed
-                    // value and let typechecking fail
-                    IntegerType::I64
-                }
-                None => IntegerType::I64,
+                _ => IntegerType::I64,
             },
         };
-        // from_str_radix takes a leading '-' but not '_' separators or 0x/0b prefixes, so
-        // digit-only positive literals (and base-10 negatives, whose '-' is adjacent in the
-        // source) parse straight from the source text; the rest get rebuilt in a scratch buffer
-        let has_underscore = digits.as_bytes().contains(&b'_');
-        let num_to_parse: &str = if !has_underscore && (!is_negative || base == 10) {
-            if is_negative { &parsed_text[..1 + digits.len()] } else { digits }
-        } else {
-            self.buffers.int_parse.clear();
-            if is_negative {
-                self.buffers.int_parse.push('-');
-            }
-            for c in digits.chars() {
-                if c != '_' {
-                    self.buffers.int_parse.push(c);
-                }
-            }
-            &self.buffers.int_parse
-        };
-        debug!("num_to_parse: {num_to_parse}, base: {base}, type: {expected_int_type}");
-        macro_rules! parse_int {
-            ($int_type:ident, $rust_int_type:ty, $base: expr) => {{
-                let result = <$rust_int_type>::from_str_radix(num_to_parse, $base);
-                result.map(|int| TypedIntValue::$int_type(int)).map_err(|e| {
-                    let err_msg = self.ast.idents.intern(format!(
-                        "Invalid {} {expected_int_type}: {num_to_parse}. {e}",
-                        if base == 16 {
-                            "hex"
-                        } else if base == 10 {
-                            "decimal"
-                        } else {
-                            "binary"
-                        }
-                    ));
-                    self.make_error(err_msg, span)
-                })
-            }};
+        let magnitude = literal.magnitude;
+        if literal.is_negative && !int_type.is_signed() {
+            kbail!(self, span, "Invalid {int_type}: -{magnitude} is negative");
         }
-        match expected_int_type {
-            IntegerType::U8 => parse_int!(U8, u8, base),
-            IntegerType::U16 => parse_int!(U16, u16, base),
-            IntegerType::U32 => parse_int!(U32, u32, base),
-            IntegerType::U64 => parse_int!(U64, u64, base),
-            IntegerType::I8 => parse_int!(I8, i8, base),
-            IntegerType::I16 => parse_int!(I16, i16, base),
-            IntegerType::I32 => parse_int!(I32, i32, base),
-            IntegerType::I64 => parse_int!(I64, i64, base),
+        let value: i128 = if literal.is_negative { -(magnitude as i128) } else { magnitude as i128 };
+        macro_rules! fit {
+            ($variant:ident, $rust_int_type:ty) => {
+                match <$rust_int_type>::try_from(value) {
+                    Ok(int) => Ok(TypedIntValue::$variant(int)),
+                    Err(_) => Err(kerr!(self, span, "Invalid {int_type}: {value} does not fit")),
+                }
+            };
+        }
+        match int_type {
+            IntegerType::U8 => fit!(U8, u8),
+            IntegerType::U16 => fit!(U16, u16),
+            IntegerType::U32 => fit!(U32, u32),
+            IntegerType::U64 => fit!(U64, u64),
+            IntegerType::I8 => fit!(I8, i8),
+            IntegerType::I16 => fit!(I16, i16),
+            IntegerType::I32 => fit!(I32, i32),
+            IntegerType::I64 => fit!(I64, i64),
         }
     }
 
@@ -6281,10 +6170,15 @@ impl TypedProgram {
                 let expr_id = self.add_static_constant_expr(value_id, span);
                 Ok(expr_id)
             }
-            ParsedExpr::Literal(ParsedLiteral::Numeric { text_span }) => {
-                let value_id = self.eval_numeric_value(*text_span, ctx)?;
-                let expr_id = self.add_static_constant_expr(value_id, span);
-                Ok(expr_id)
+            ParsedExpr::Literal(ParsedLiteral::Int(int_literal)) => {
+                let int_value = self.eval_integer_value(*int_literal, span, ctx.expected_type_id)?;
+                let value_id = self.static_values.add(StaticValue::Int(int_value));
+                Ok(self.add_static_constant_expr(value_id, span))
+            }
+            ParsedExpr::Literal(ParsedLiteral::Float { text_span }) => {
+                let float_value = self.eval_float_value(*text_span, ctx.expected_type_id)?;
+                let value_id = self.static_values.add(StaticValue::Float(float_value));
+                Ok(self.add_static_constant_expr(value_id, span))
             }
             ParsedExpr::Literal(ParsedLiteral::Bool(b)) => Ok(self.synth_bool(*b, span)),
             ParsedExpr::Literal(ParsedLiteral::String(string_id)) => {
@@ -11851,12 +11745,12 @@ impl TypedProgram {
             if matches!(param.kind, FnParamKind::MacroCode | FnParamKind::MacroTokens) {
                 continue;
             }
-            let Some(layout) = self.get_layout(param.type_id) else { continue };
-            if layout.size < Self::LARGE_ARG_COPY_BYTES {
-                continue;
-            }
             let arg = *self.mem.get_nth(args, i);
             if !self.expr_is_place_read(arg) {
+                continue;
+            }
+            let Some(layout) = self.get_layout(param.type_id) else { continue };
+            if layout.size < Self::LARGE_ARG_COPY_BYTES {
                 continue;
             }
             let span = self.exprs.get_span(arg);

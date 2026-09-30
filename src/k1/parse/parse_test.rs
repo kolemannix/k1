@@ -2,6 +2,7 @@
 // All rights reserved.
 
 use crate::parse::*;
+use crate::typer::types::IntegerType;
 use std::fs;
 
 fn make_test_ast() -> ParsedProgram {
@@ -286,7 +287,7 @@ fn precedence() -> Result<(), ParseError> {
     let ParsedExpr::Literal(rhs) = ast.exprs.get(bin_op.rhs) else { panic!() };
     assert_eq!(bin_op.op_kind, BinaryOpKind::Add);
     assert_eq!(lhs.op_kind, BinaryOpKind::Multiply);
-    assert!(matches!(rhs, ParsedLiteral::Numeric { .. }));
+    assert!(matches!(rhs, ParsedLiteral::Int(_)));
     Ok(())
 }
 
@@ -561,16 +562,22 @@ fn integer_suffix() -> ParseResult<()> {
     let input_u8 = r#"42u8"#;
     let input_i64 = r#"-42i64"#;
     let (ast, expr, expr_id) = test_single_expr_with_id(input_u8)?;
-    let ParsedExpr::Literal(ParsedLiteral::Numeric { .. }) = expr else {
+    let ParsedExpr::Literal(ParsedLiteral::Int(literal)) = expr else {
         panic!("`{input_u8}` did not parse as expected")
     };
+    assert_eq!({ literal.magnitude }, 42);
+    assert!(!literal.is_negative);
+    assert!(literal.suffix == Some(IntegerType::U8));
     let text = ast.get_span_content(ast.exprs.get_span(expr_id));
     assert_eq!(text, "42u8");
 
     let (ast, expr, expr_id) = test_single_expr_with_id(input_i64)?;
-    let ParsedExpr::Literal(ParsedLiteral::Numeric { .. }) = expr else {
+    let ParsedExpr::Literal(ParsedLiteral::Int(literal)) = expr else {
         panic!("`{input_i64}` did not parse as expected")
     };
+    assert_eq!({ literal.magnitude }, 42);
+    assert!(literal.is_negative);
+    assert!(literal.suffix == Some(IntegerType::I64));
     let text = ast.get_span_content(ast.exprs.get_span(expr_id));
     assert_eq!(text, "-42i64");
     Ok(())

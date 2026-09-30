@@ -7,6 +7,7 @@ use std::io::IsTerminal;
 use crate::kmem::{self, Handle, List, MSL2, MSS2, MSlice, MSpillList};
 use crate::rawref::RawRef;
 use crate::typer;
+use crate::typer::types::IntegerType;
 use crate::typer::{Linkage, MessageLevel, ModuleId};
 use crate::vpool::VPool;
 use crate::{SV8, impl_copy_if_small, kpath, lex::*, nz_u32_id, static_assert_size};
@@ -173,13 +174,18 @@ pub struct ParsedListLiteral {
 }
 
 #[derive(Clone, Copy)]
+#[repr(packed(4))]
+pub struct ParsedIntLiteral {
+    pub magnitude: u64,
+    pub is_negative: bool,
+    pub suffix: Option<IntegerType>,
+}
+
+#[derive(Clone, Copy)]
 pub enum ParsedLiteral {
     Char(u8),
-    /// The digits (and optional sign/suffix) alone; the value is parsed from
-    /// this text, while the node's span may widen to cover parens or a type hint
-    Numeric {
-        text_span: Span,
-    },
+    Int(ParsedIntLiteral),
+    Float { text_span: Span },
     Bool(bool),
     String(StringId),
 }
@@ -982,7 +988,7 @@ pub struct ParsedReference {
 pub struct ParsedSumTypeVariant {
     pub tag_name: StringId,
     pub payload: Option<ParsedTypeExprId>,
-    pub explicit_value: Option<Span>,
+    pub explicit_value: Option<ParsedIntLiteral>,
     pub name_span: Span,
 }
 
@@ -1041,13 +1047,6 @@ impl NumericWidth {
             NumericWidth::B64 => 8,
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct ParsedNumericType {
-    pub width: NumericWidth,
-    pub signed: bool,
-    pub span: Span,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2643,6 +2642,78 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         &self.source_text[start..start + span.len as usize]
     }
 
+    fn parse_numeric_literal(
+        &mut self,
+        number_token: Token,
+        is_negative: bool,
+        text_span: Span,
+    ) -> ParseResult<ParsedLiteral> {
+        let text = self.token_chars(number_token);
+        if text.contains('.') {
+            return Ok(ParsedLiteral::Float { text_span });
+        }
+        let mut number_len = text.len();
+        for (index, b) in text.bytes().enumerate() {
+            if !(b.is_ascii_hexdigit() || b == b'_' || b == b'x') {
+                number_len = index;
+                break;
+            }
+        }
+        let (number, suffix_text) = text.split_at(number_len);
+        let suffix = match suffix_text {
+            "" => None,
+            "u8" => Some(IntegerType::U8),
+            "u16" => Some(IntegerType::U16),
+            "u32" => Some(IntegerType::U32),
+            "u64" | "uint" | "usize" => Some(IntegerType::U64),
+            "i8" => Some(IntegerType::I8),
+            "i16" => Some(IntegerType::I16),
+            "i32" => Some(IntegerType::I32),
+            "i64" | "int" | "size" => Some(IntegerType::I64),
+            _ => {
+                return Err(self.error(
+                    format!(
+                        "Invalid integer suffix '{suffix_text}'; expected u8, u16, u32, u64, uint, usize, i8, i16, i32, i64, int, size"
+                    ),
+                    number_token,
+                ));
+            }
+        };
+        let (base, base_name, digits) = if let Some(digits) = number.strip_prefix("0x") {
+            (16, "hex", digits)
+        } else if let Some(digits) = number.strip_prefix("0b") {
+            (2, "binary", digits)
+        } else {
+            (10, "decimal", number)
+        };
+        let mut magnitude: u64 = 0;
+        let mut has_digit = false;
+        for b in digits.bytes() {
+            if b == b'_' {
+                continue;
+            }
+            let Some(digit) = (b as char).to_digit(base) else {
+                return Err(self.error(
+                    format!("Invalid {base_name} integer: '{}' is not a digit", b as char),
+                    number_token,
+                ));
+            };
+            let widened = magnitude.checked_mul(base as u64).and_then(|m| m.checked_add(digit as u64));
+            let Some(widened) = widened else {
+                return Err(self.error(
+                    format!("Invalid {base_name} integer: too large for any integer type"),
+                    number_token,
+                ));
+            };
+            magnitude = widened;
+            has_digit = true;
+        }
+        if !has_digit {
+            return Err(self.error(format!("Invalid {base_name} integer: no digits"), number_token));
+        }
+        Ok(ParsedLiteral::Int(ParsedIntLiteral { magnitude, is_negative, suffix }))
+    }
+
     fn is_zero_literal_nonspaced(&self, tok: Token) -> bool {
         tok.is_kind_nonspaced(K::Numeric) && self.token_chars(tok) == "0"
     }
@@ -2834,13 +2905,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let second = self.tokens.peek_n(1);
                 self.advance_n(2);
                 let span = self.extend_token_span(first, second);
-                let numeric = ParsedLiteral::Numeric { text_span: span };
+                let numeric = self.parse_numeric_literal(second, true, span)?;
                 Ok(Some(self.add_expression(ParsedExpr::Literal(numeric), span)))
             }
             K::Numeric => {
                 self.advance();
                 let sp = self.tok_span(first);
-                let numeric = ParsedLiteral::Numeric { text_span: sp };
+                let numeric = self.parse_numeric_literal(first, false, sp)?;
                 Ok(Some(self.add_expression(ParsedExpr::Literal(numeric), sp)))
             }
             K::Ident => {
@@ -3397,13 +3468,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     self.error("Expected number after equals for member value", self.peek())
                 );
             };
-            let ParsedExpr::Literal(ParsedLiteral::Numeric { text_span }) =
+            let ParsedExpr::Literal(ParsedLiteral::Int(int_literal)) =
                 self.ast.exprs.get(num_result)
             else {
                 return Err(self
-                    .error("Expected numeric literal after equals for member value", self.peek()));
+                    .error("Expected integer literal after equals for member value", self.peek()));
             };
-            Some(*text_span)
+            Some(*int_literal)
         } else {
             None
         };
@@ -5874,11 +5945,18 @@ impl ParsedProgram {
                 w.write_char(*byte as char)?;
                 w.write_char('\'')
             }
-            ParsedLiteral::Numeric { text_span } => {
-                let s = self.get_span_content(*text_span);
-                w.write_str(s)?;
-                Ok(())
+            ParsedLiteral::Int(int_literal) => {
+                if int_literal.is_negative {
+                    w.write_char('-')?;
+                }
+                let magnitude = int_literal.magnitude;
+                write!(w, "{magnitude}")?;
+                match int_literal.suffix {
+                    Some(suffix) => write!(w, "{suffix}"),
+                    None => Ok(()),
+                }
             }
+            ParsedLiteral::Float { text_span } => w.write_str(self.get_span_content(*text_span)),
             ParsedLiteral::Bool(true) => w.write_str("true"),
             ParsedLiteral::Bool(false) => w.write_str("false"),
             ParsedLiteral::String(s) => {

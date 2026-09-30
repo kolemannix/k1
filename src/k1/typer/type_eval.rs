@@ -504,11 +504,11 @@ impl TypedProgram {
                         };
                         let tag_int = match v.explicit_value {
                             None => next_tag,
-                            Some(explicit_value) => {
-                                let parsed = self
-                                    .eval_integer_value(explicit_value, Some(tag_type.type_id()))?;
-                                parsed
-                            }
+                            Some(explicit_value) => self.eval_integer_value(
+                                explicit_value,
+                                v.name_span,
+                                Some(tag_type.type_id()),
+                            )?,
                         };
                         if let Some(existing) = variants.iter().find(|v| v.tag_value == tag_int) {
                             kbail!(
@@ -547,11 +547,11 @@ impl TypedProgram {
                     for v in self.ast.mem.getn(sum.variants).iter() {
                         let tag_value = match v.explicit_value {
                             None => next_tag,
-                            Some(explicit_value) => {
-                                let parsed = self
-                                    .eval_integer_value(explicit_value, Some(tag_type.type_id()))?;
-                                parsed
-                            }
+                            Some(explicit_value) => self.eval_integer_value(
+                                explicit_value,
+                                v.name_span,
+                                Some(tag_type.type_id()),
+                            )?,
                         };
                         if let Some(existing) =
                             member_values.iter().find(|v| v.int_value == tag_value)
@@ -816,10 +816,9 @@ impl TypedProgram {
                 let static_type_id = self.add_type_anon(Type::StaticValue(value_type));
                 Ok(static_type_id)
             }
-            ParsedTypeExpr::StaticLiteral(parsed_literal, _) => {
-                let parsed_literal = *parsed_literal;
+            ParsedTypeExpr::StaticLiteral(parsed_literal, span) => {
                 let (static_value_id, inner_type_id) =
-                    self.literal_to_static_value_and_type(&parsed_literal, scope_id, None)?;
+                    self.literal_to_static_value_and_type(*parsed_literal, *span)?;
                 let static_type_id = self.add_value_type(inner_type_id, Some(static_value_id));
                 Ok(static_type_id)
             }
@@ -871,27 +870,28 @@ impl TypedProgram {
 
     pub(super) fn literal_to_static_value_and_type(
         &mut self,
-        parsed_literal: &ParsedLiteral,
-        scope_id: ScopeId,
-        expected_type_hint: Option<TypeId>,
+        parsed_literal: ParsedLiteral,
+        span: Span,
     ) -> K1Result<(StaticValueId, TypeId)> {
         match parsed_literal {
             ParsedLiteral::Char(byte) => {
-                Ok((self.static_values.add(StaticValue::Char(*byte)), CHAR_TYPE_ID))
+                Ok((self.static_values.add(StaticValue::Char(byte)), CHAR_TYPE_ID))
             }
             ParsedLiteral::Bool(b) => {
-                Ok((self.static_values.add(StaticValue::Bool(*b)), BOOL_TYPE_ID))
+                Ok((self.static_values.add(StaticValue::Bool(b)), BOOL_TYPE_ID))
             }
             ParsedLiteral::String(s) => {
-                Ok((self.static_values.add(StaticValue::String(*s)), self.builtin_types.string()))
+                Ok((self.static_values.add(StaticValue::String(s)), self.builtin_types.string()))
             }
-            ParsedLiteral::Numeric { text_span } => {
-                // Parse the numeric literal and determine its type and value
-                // Use the expected type hint if provided (e.g., i64 for array sizes)
-                let eval_context =
-                    EvalExprContext::make(scope_id).with_expected_type(expected_type_hint);
-                let num_static_value_id = self.eval_numeric_value(*text_span, eval_context)?;
-                Ok((num_static_value_id, self.get_static_value_type(num_static_value_id)))
+            ParsedLiteral::Int(int_literal) => {
+                let int_value = self.eval_integer_value(int_literal, span, None)?;
+                let type_id = int_value.get_type();
+                Ok((self.static_values.add(StaticValue::Int(int_value)), type_id))
+            }
+            ParsedLiteral::Float { text_span } => {
+                let float_value = self.eval_float_value(text_span, None)?;
+                let type_id = float_value.get_type();
+                Ok((self.static_values.add(StaticValue::Float(float_value)), type_id))
             }
         }
     }
@@ -1553,23 +1553,23 @@ impl TypedProgram {
         let Some(align_expr) = self.ast.mem.get_nth(ty_app.args, 1).type_expr else {
             kbail!(self, ty_app.span, "Wildcard _ type not accepted here");
         };
-        let ParsedTypeExpr::StaticLiteral(ParsedLiteral::Numeric { text_span: size_span }, _) =
+        let ParsedTypeExpr::StaticLiteral(ParsedLiteral::Int(size_literal), size_span) =
             *self.ast.type_exprs.get(size_expr)
         else {
-            kbail!(self, ty_app.span, "Expected a static literal for opaque size");
+            kbail!(self, ty_app.span, "Expected an integer literal for opaque size");
         };
-        let ParsedTypeExpr::StaticLiteral(ParsedLiteral::Numeric { text_span: align_span }, _) =
+        let ParsedTypeExpr::StaticLiteral(ParsedLiteral::Int(align_literal), align_span) =
             *self.ast.type_exprs.get(align_expr)
         else {
-            kbail!(self, ty_app.span, "Expected a static literal for opaque alignment");
+            kbail!(self, ty_app.span, "Expected an integer literal for opaque alignment");
         };
         let TypedIntValue::U32(size) =
-            self.eval_integer_value(size_span, Some(IntegerType::U32.type_id()))?
+            self.eval_integer_value(size_literal, size_span, Some(IntegerType::U32.type_id()))?
         else {
             kbail!(self, size_span, "Expected a u32 value for opaque size");
         };
         let TypedIntValue::U32(align) =
-            self.eval_integer_value(align_span, Some(IntegerType::U32.type_id()))?
+            self.eval_integer_value(align_literal, align_span, Some(IntegerType::U32.type_id()))?
         else {
             kbail!(self, align_span, "Expected a u32 value for opaque alignment");
         };
