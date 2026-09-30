@@ -149,11 +149,22 @@ impl TypedProgram {
                 inference_pairs.len()
             );
 
-            let mut frame_subst: SV8<TypeSubstitutionPair> = smallvec![];
-            for s in &self.ictx().slots[frame_start as usize..] {
-                frame_subst.push(spair! { s.param_type => s.solution.unwrap_or(s.hole_type) });
-            }
-            let expected_type_so_far = self.substitute_in_type(*gen_param, &frame_subst);
+            let frame_slots = &self.ictx().slots[frame_start as usize..];
+            let expected_type_so_far = match frame_slots.iter().find(|s| s.param_type == *gen_param)
+            {
+                Some(slot) => slot.solution.unwrap_or(slot.hole_type),
+                None if self.type_variable_counts.get(*gen_param).type_parameter_count == 0 => {
+                    *gen_param
+                }
+                None => {
+                    let mut frame_subst: SV8<TypeSubstitutionPair> = smallvec![];
+                    for s in frame_slots {
+                        frame_subst
+                            .push(spair! { s.param_type => s.solution.unwrap_or(s.hole_type) });
+                    }
+                    self.substitute_in_type(*gen_param, &frame_subst)
+                }
+            };
             debug!(
                 "[infer {infer_depth}] Expected type is: {}",
                 self.type_id_to_string(expected_type_so_far)
