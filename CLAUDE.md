@@ -120,7 +120,8 @@ for compile-time execution, codegen_llvm for binaries.
   the plan.
 - `kpath.rs`: paths are canonical UTF-8 strings interned in the ident pool;
   `std::path` only at OS call sites.
-- `lex.rs`: positional lexer, `Token`, `Span`/`SpanId`, trivia side table.
+- `lex.rs`: positional lexer, `Token`, `Span` (global byte position + length),
+  trivia side table.
 - `parse.rs` + `parse/idents.rs`: parser, `ParsedProgram`, all `Parsed*` AST
   pools, `IdentPool`/`StringId`, `ParsedExpr` variants.
 - `typer.rs`: `TypedProgram` (every pool: modules, functions, variables,

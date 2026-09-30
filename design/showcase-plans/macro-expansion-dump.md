@@ -151,10 +151,10 @@ covers a macro's IR when someone wants it. That noise is why the wall reads
 ### 4. Call site in the diagnostic
 
 One helper in typer/report.rs, modelled on `with_bc_trace` so `K1Message`
-stays 12 bytes and the snapshot format is untouched:
+stays 16 bytes and the snapshot format is untouched:
 
 ```rust
-fn expansion_trail(&self, call_span: SpanId) -> String
+fn expansion_trail(&self, call_span: Span) -> String
 ```
 
 returns one line per hop, `\nexpanded from <path>:<line>:<col>`, for

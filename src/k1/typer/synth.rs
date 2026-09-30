@@ -75,18 +75,11 @@ impl TypedProgram {
                     && fn_type_args.len() == signature.type_params.len() as usize
                 {
                     let type_args = TypeArgs::from_slice_in(fn_type_args, &mut self.mem);
-                    let specialized = match self.find_function_specialization(
-                        function_id,
+                    let specialized = self.specialize_function_declaration(
                         type_args,
                         TypeArgs::empty(),
-                    ) {
-                        Some(specialized) => specialized,
-                        None => self.specialize_function_declaration(
-                            type_args,
-                            TypeArgs::empty(),
-                            function_id,
-                        ),
-                    };
+                        function_id,
+                    );
                     (Callee::StaticFunction(specialized), type_args)
                 } else {
                     return self.synth_typed_call_typed_args(
