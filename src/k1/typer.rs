@@ -5339,12 +5339,15 @@ impl TypedProgram {
             );
             let specialized_function_id = self.specialize_function(
                 blanket_function_id,
-                self.mem.getn(imp.substitutions),
                 function_type,
-                imp.scope_id,
                 solutions_handle,
                 no_fnlike_args,
                 Some((imp.ability_id, imp.self_type_id)),
+            );
+            self.add_specialized_function_scope(
+                specialized_function_id,
+                imp.scope_id,
+                self.mem.getn(imp.substitutions),
             );
             AbilityImplFunction::FunctionId(specialized_function_id)
         };
@@ -10177,7 +10180,8 @@ impl TypedProgram {
         let dyn_function_id = if let Some(dyn_fn_id) = function.dyn_fn_id {
             dyn_fn_id
         } else {
-            let mut new_function = function.clone();
+            self.get_function_scope(function_id);
+            let mut new_function = *self.get_function(function_id);
             let new_function_id = self.functions.next_id();
 
             let empty_env_variable = self.variables.add(Variable {
@@ -12169,8 +12173,8 @@ impl TypedProgram {
     ) -> TypeId {
         let mark = self.tmp.mark();
         let pairs = self.signature_substitution_pairs(
-            type_arguments,
-            fnlike_type_arguments,
+            type_arguments.as_slice(&self.mem),
+            fnlike_type_arguments.as_slice(&self.mem),
             generic_function_sig,
         );
         let substituted =
@@ -12182,9 +12186,9 @@ impl TypedProgram {
     fn signature_substitution_pairs(
         &mut self,
         // Must 'zip' up with each type param
-        type_arguments: TypeArgs,
+        type_arguments: &[TypeId],
         // Must 'zip' up with each function type param
-        fnlike_type_arguments: TypeArgs,
+        fnlike_type_arguments: &[TypeId],
         generic_function_sig: FunctionSignature,
     ) -> TmpSlice<TypeSubstitutionPair> {
         let mut subst_pairs = self.tmp.new_list(
@@ -12193,11 +12197,8 @@ impl TypedProgram {
 
         // Here, we're substituting **the entire function type params** for the function types we
         // have. The pairs look like "some T -> T" -> "(int -> int)*"
-        for (function_type_param, function_type_arg) in self
-            .mem
-            .getn(generic_function_sig.fnlike_type_params)
-            .iter()
-            .zip(fnlike_type_arguments.as_slice(&self.mem))
+        for (function_type_param, function_type_arg) in
+            self.mem.getn(generic_function_sig.fnlike_type_params).iter().zip(fnlike_type_arguments)
         {
             subst_pairs.push(TypeSubstitutionPair {
                 from: function_type_param.type_id,
@@ -12207,11 +12208,8 @@ impl TypedProgram {
 
         // Here, we're substituting the actual 'normal' type params as well,
         // such as T, U in fn makePair[T, U](t: T, u: U)
-        for (gen_param, type_arg) in self
-            .mem
-            .getn(generic_function_sig.type_params)
-            .iter()
-            .zip(type_arguments.as_slice(&self.mem))
+        for (gen_param, type_arg) in
+            self.mem.getn(generic_function_sig.type_params).iter().zip(type_arguments)
         {
             subst_pairs.push(TypeSubstitutionPair { from: *gen_param, to: *type_arg });
         }
@@ -12316,28 +12314,19 @@ impl TypedProgram {
             )
             .is_none()
         );
-        let generic_function = *self.get_function(generic_function_id);
-        debug_assert_eq!(type_arguments.len(), generic_function.type_params.len());
-        let mark = self.tmp.mark();
-        let pairs = self.signature_substitution_pairs(
-            type_arguments,
-            fnlike_type_arguments,
-            generic_function.signature(),
+        debug_assert_eq!(
+            type_arguments.len(),
+            self.get_function(generic_function_id).type_params.len()
         );
-        let scope_parent = self.scopes.get_scope(generic_function.scope).parent.unwrap();
         let type_arguments = self.intern_type_args(type_arguments);
         let fnlike_type_arguments = self.intern_type_args(fnlike_type_arguments);
-        let specialized_function_id = self.specialize_function(
+        self.specialize_function(
             generic_function_id,
-            self.tmp.getn(pairs),
             function_type,
-            scope_parent,
             type_arguments,
             fnlike_type_arguments,
             None,
-        );
-        self.tmp.reset_to(mark);
-        specialized_function_id
+        )
     }
 
     fn bind_substitutions(&mut self, scope_id: ScopeId, pairs: &[TypeSubstitutionPair]) {
@@ -12351,16 +12340,13 @@ impl TypedProgram {
         }
     }
 
-    /// One instance of `parent_function_id`: a function scope under `scope_parent` binding
-    /// `pairs`, with the parent's signature substituted through them. `impl_for` names the
-    /// ability impl instance a blanket impl fn belongs to; such an instance stays generic
-    /// over the fn's own type params, which the pairs never cover
+    /// One instance of `parent_function_id`, its signature substituted to
+    /// `specialized_function_type_id`. `impl_for` names the ability impl instance a blanket impl
+    /// fn belongs to; such an instance stays generic over the fn's own type params
     fn specialize_function(
         &mut self,
         parent_function_id: FunctionId,
-        pairs: &[TypeSubstitutionPair],
         specialized_function_type_id: TypeId,
-        scope_parent: ScopeId,
         type_arguments: TypeSliceId,
         fnlike_type_arguments: TypeSliceId,
         impl_for: Option<(AbilityId, TypeId)>,
@@ -12368,9 +12354,7 @@ impl TypedProgram {
         self.traced(TraceKind::FunctionSpecialize, parent_function_id.as_u32(), 0, |k1| {
             k1.specialize_function_body(
                 parent_function_id,
-                pairs,
                 specialized_function_type_id,
-                scope_parent,
                 type_arguments,
                 fnlike_type_arguments,
                 impl_for,
@@ -12381,26 +12365,26 @@ impl TypedProgram {
     fn specialize_function_body(
         &mut self,
         parent_function_id: FunctionId,
-        pairs: &[TypeSubstitutionPair],
         specialized_function_type_id: TypeId,
-        scope_parent: ScopeId,
         type_arguments: TypeSliceId,
         fnlike_type_arguments: TypeSliceId,
         impl_for: Option<(AbilityId, TypeId)>,
     ) -> FunctionId {
         let parent_function = *self.get_function(parent_function_id);
-        let specialized_function_id = self.functions.next_id();
-        let specialized_function_type =
-            self.types.get(specialized_function_type_id).as_function().unwrap().clone();
         let (kind, type_params, fnlike_type_params) = match impl_for {
             None => (parent_function.kind, MSlice::empty(), MSlice::empty()),
             Some((ability_id, self_type_id)) => {
+                let physical_params = self
+                    .types
+                    .get(specialized_function_type_id)
+                    .as_function()
+                    .unwrap()
+                    .physical_params;
                 let mut fnlike_type_params =
                     self.mem.new_list(parent_function.fnlike_type_params.len());
                 for parent_param in self.mem.getn(parent_function.fnlike_type_params) {
                     let index = parent_param.value_param_index as usize;
-                    let type_id =
-                        self.mem.get_nth(specialized_function_type.physical_params, index).type_id;
+                    let type_id = self.mem.get_nth(physical_params, index).type_id;
                     fnlike_type_params.push(FnlikeTypeParam { type_id, ..*parent_param });
                 }
                 (
@@ -12410,18 +12394,83 @@ impl TypedProgram {
                 )
             }
         };
+        let specialization_info = SpecializationInfo {
+            parent_function: parent_function_id,
+            type_arguments,
+            fnlike_type_arguments,
+            specialized_function_id: FunctionId::PENDING,
+            specialized_function_type: specialized_function_type_id,
+        };
+        let flags = parent_function.flags
+            & (TypedFunctionFlags::CompilerDebug
+                | TypedFunctionFlags::Macro
+                | TypedFunctionFlags::AbiNative
+                | TypedFunctionFlags::Inline
+                | TypedFunctionFlags::NoInline
+                | TypedFunctionFlags::Cold);
+        self.add_function(TypedFunction {
+            name: parent_function.name,
+            scope: ScopeId::PENDING,
+            namespace_id: parent_function.namespace_id,
+            params: MSlice::empty(),
+            type_params,
+            fnlike_type_params,
+            ability_where_constraints: parent_function.ability_where_constraints,
+            body_block: None,
+            builtin_type: parent_function.builtin_type,
+            linkage: parent_function.linkage,
+            specialization_info: Some(specialization_info),
+            parsed_id: parent_function.parsed_id,
+            type_id: specialized_function_type_id,
+            kind,
+            flags,
+            dyn_fn_id: None,
+            returned_variable: None,
+            body_failure: None,
+        })
+    }
 
-        let spec_fn_scope =
-            self.scopes.add_child_scope(scope_parent, ScopeType::FunctionScope, ScopeOwnerId::None);
+    fn get_function_scope(&mut self, function_id: FunctionId) -> ScopeId {
+        let function = self.get_function(function_id);
+        if function.scope != ScopeId::PENDING {
+            return function.scope;
+        }
+        let spec_info = function.specialization_info.unwrap();
+        let generic_function = *self.get_function(spec_info.parent_function);
+        let scope_parent = self.scopes.get_scope(generic_function.scope).parent.unwrap();
+        let mark = self.tmp.mark();
+        let pairs = self.signature_substitution_pairs(
+            self.get_type_slice(spec_info.type_arguments),
+            self.get_type_slice(spec_info.fnlike_type_arguments),
+            generic_function.signature(),
+        );
+        let scope_id =
+            self.add_specialized_function_scope(function_id, scope_parent, self.tmp.getn(pairs));
+        self.tmp.reset_to(mark);
+        scope_id
+    }
+
+    fn add_specialized_function_scope(
+        &mut self,
+        specialized_function_id: FunctionId,
+        scope_parent: ScopeId,
+        pairs: &[TypeSubstitutionPair],
+    ) -> ScopeId {
+        let function = *self.get_function(specialized_function_id);
+        let parent_function =
+            *self.get_function(function.specialization_info.unwrap().parent_function);
+        let specialized_params =
+            self.types.get(function.type_id).as_function().unwrap().physical_params;
+        let spec_fn_scope = self.scopes.add_child_scope(
+            scope_parent,
+            ScopeType::FunctionScope,
+            ScopeOwnerId::Function(specialized_function_id),
+        );
         self.bind_substitutions(spec_fn_scope, pairs);
 
-        let mut param_variables =
-            self.mem.new_list(specialized_function_type.physical_params.len());
-        for (specialized_param_type, generic_param) in self
-            .mem
-            .getn(specialized_function_type.physical_params)
-            .iter()
-            .zip(self.mem.getn(parent_function.params))
+        let mut param_variables = self.mem.new_list(specialized_params.len());
+        for (specialized_param_type, generic_param) in
+            self.mem.getn(specialized_params).iter().zip(self.mem.getn(parent_function.params))
         {
             let name = self.variables.get(generic_param.variable_id).name;
             let mut flags = VariableFlags::empty();
@@ -12460,45 +12509,10 @@ impl TypedProgram {
             }
             param_variables.push(TypedFunctionParam { variable_id, span: generic_param.span })
         }
-        let specialization_info = SpecializationInfo {
-            parent_function: parent_function_id,
-            type_arguments,
-            fnlike_type_arguments,
-            specialized_function_id: FunctionId::PENDING,
-            specialized_function_type: specialized_function_type_id,
-        };
-        let flags = parent_function.flags
-            & (TypedFunctionFlags::CompilerDebug
-                | TypedFunctionFlags::Macro
-                | TypedFunctionFlags::AbiNative
-                | TypedFunctionFlags::Inline
-                | TypedFunctionFlags::NoInline
-                | TypedFunctionFlags::Cold);
-        let specialized_function = TypedFunction {
-            name: parent_function.name,
-            scope: spec_fn_scope,
-            namespace_id: parent_function.namespace_id,
-            params: param_variables.to_slice(),
-            type_params,
-            fnlike_type_params,
-            ability_where_constraints: parent_function.ability_where_constraints,
-            body_block: None,
-            builtin_type: parent_function.builtin_type,
-            linkage: parent_function.linkage,
-            specialization_info: Some(specialization_info),
-            parsed_id: parent_function.parsed_id,
-            type_id: specialized_function_type_id,
-            kind,
-            flags,
-            dyn_fn_id: None,
-            returned_variable: None,
-            body_failure: None,
-        };
-        let actual_specialized_function_id = self.add_function(specialized_function);
-        debug_assert_eq!(specialized_function_id, actual_specialized_function_id);
-        self.scopes
-            .set_scope_owner_id(spec_fn_scope, ScopeOwnerId::Function(specialized_function_id));
-        specialized_function_id
+        let function = self.get_function_mut(specialized_function_id);
+        function.scope = spec_fn_scope;
+        function.params = param_variables.to_slice();
+        spec_fn_scope
     }
 
     /// Used to drill down to the span that is responsible for the type of the given expression
@@ -15208,7 +15222,6 @@ impl TypedProgram {
 
     fn eval_function_body_inner(&mut self, function_id: FunctionId) -> K1Result<()> {
         let function = *self.get_function(function_id);
-        let fn_scope_id = function.scope;
         let return_type = self.get_function_type(function_id).return_type;
         let (parsed_ret_type, signature_span, parsed_body) = match function.parsed_id {
             ParsedId::Function(ast_id) => {
@@ -15243,6 +15256,7 @@ impl TypedProgram {
                 return Ok(());
             }
         }
+        let fn_scope_id = self.get_function_scope(function_id);
 
         let body_block = if let Some(Builtin::TyperPhysicalFunction(kind)) = function.builtin_type {
             Some(self.generate_intrinsic_function_body(function_id, fn_scope_id, kind)?)

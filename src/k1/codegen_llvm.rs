@@ -46,7 +46,7 @@ use crate::lex::Span;
 use crate::parse::{FileId, NumericWidth, StringId};
 use crate::typer::types::{
     AbiMode, AggType, AggregateTypeId, Layout, NamedScalarId, PhysicalType, PhysicalTypeEnum,
-    PhysicalTypeResult, RegisterClass, ScalarType, Type, TypeDefnInfo, TypeId,
+    PhysicalTypeResult, RegisterClass, ScalarType, StructField, Type, TypeDefnInfo, TypeId,
 };
 use crate::typer::{
     FunctionId, K1Result, Linkage as TyperLinkage, NamespaceId, StaticContainerKind,
@@ -125,7 +125,7 @@ enum AbiParamMapping {
 struct LlvmScalarType<'ctx> {
     pt: PhysicalType,
     basic_type: BasicTypeEnum<'ctx>,
-    di_type: DIType<'ctx>,
+    di_type: Option<DIType<'ctx>>,
     layout: Layout,
     load_metadata: [Option<(u32, MetadataValue<'ctx>)>; 2],
     internal_abi_attributes: [Option<Attribute>; 2],
@@ -137,7 +137,7 @@ struct CgStructType<'ctx> {
     pt: PhysicalType,
     struct_type: StructType<'ctx>,
     fields: MSlice<CgType<'ctx>, CgPerm>,
-    di_type: DIType<'ctx>,
+    di_type: Option<DIType<'ctx>>,
     layout: Layout,
 }
 
@@ -145,7 +145,7 @@ struct CgStructType<'ctx> {
 struct CgArrayType<'ctx> {
     pt: PhysicalType,
     array_type: ArrayType<'ctx>,
-    di_type: DIType<'ctx>,
+    di_type: Option<DIType<'ctx>>,
     layout: Layout,
 }
 
@@ -153,7 +153,7 @@ struct CgArrayType<'ctx> {
 struct CgVectorType<'ctx> {
     pt: PhysicalType,
     vector_type: LlvmVectorType<'ctx>,
-    di_type: DIType<'ctx>,
+    di_type: Option<DIType<'ctx>>,
     layout: Layout,
 }
 
@@ -162,7 +162,7 @@ struct CgUnionType<'ctx> {
     pt: PhysicalType,
     aligned_repr: BasicTypeEnum<'ctx>,
     layout: Layout,
-    di_type: DIType<'ctx>,
+    di_type: Option<DIType<'ctx>>,
 }
 
 #[derive(Copy, Clone)]
@@ -245,7 +245,7 @@ impl<'ctx> CgType<'ctx> {
         }
     }
 
-    fn debug_type(&self) -> DIType<'ctx> {
+    fn debug_type(&self) -> Option<DIType<'ctx>> {
         match self {
             CgType::Scalar(value) => value.di_type,
             CgType::StructType(s) => s.di_type,
@@ -492,7 +492,7 @@ pub fn run_passes(module: &LlvmModule, machine: &TargetMachine, pipeline: Pipeli
         Pipeline::ThinLtoPreLink => "thinlto-pre-link<O3>",
         // Default builds, not optimized but not debug
         Pipeline::Dev => {
-            "always-inline,function(mem2reg,instcombine<no-verify-fixpoint;max-iterations=1>,simplifycfg),mergefunc"
+            "always-inline,function(sroa,instcombine<no-verify-fixpoint;max-iterations=1>,simplifycfg),mergefunc"
         }
     };
     module.run_passes(text, machine, options).unwrap();
@@ -1929,11 +1929,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             ScalarType::F64 => ctx.f64_type().into(),
             ScalarType::Pointer => ptr.into(),
         };
-        let di_type = debug
-            .debug_builder
-            .create_basic_type(name, layout.size_bits(), encoding, 0)
-            .unwrap()
-            .as_type();
+        let di_type = (!debug.line_tables_only).then(|| {
+            debug
+                .debug_builder
+                .create_basic_type(name, layout.size_bits(), encoding, 0)
+                .unwrap()
+                .as_type()
+        });
         LlvmScalarType {
             pt: PhysicalType::scalar(st),
             basic_type,
@@ -1958,37 +1960,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 }
                 let agg = self.k1.agg_types.get(agg_id);
                 let agg_layout = agg.layout;
-                let type_name = self.codegen_type_name(agg.origin_type_id);
+                let full_debug = !self.debug.line_tables_only;
                 let cg_type = match agg.agg_type {
                     AggType::Struct { fields, packed } => {
                         let mut cg_field_types = self.mem.new_list(fields.len());
                         let mut field_rich_types = self.tmp.new_list(fields.len());
-                        let mut field_di_types = self.tmp.new_list(fields.len());
-
-                        let span = self.debug.current_span();
-                        let line_number = self.get_line_number(span);
                         for phys_field in self.k1.mem.getn(fields) {
                             let cg_type = self.codegen_type(phys_field.field_t);
-                            let field_name = self.k1.ident_str(phys_field.name);
                             cg_field_types.push(cg_type);
                             field_rich_types.push(cg_type.rich_type());
-                            let debug_member = self
-                                .debug
-                                .debug_builder
-                                .create_member_type(
-                                    self.debug.current_scope(),
-                                    field_name,
-                                    self.debug.current_file(),
-                                    line_number,
-                                    cg_type.rich_repr_layout().size_bits(),
-                                    cg_type.rich_repr_layout().align_bits(),
-                                    phys_field.offset as u64,
-                                    0,
-                                    cg_type.debug_type(),
-                                )
-                                .as_type();
-                            field_di_types.push(debug_member)
                         }
+                        let cg_field_types = cg_field_types.to_slice();
                         let struct_type = self.ctx.struct_type(&field_rich_types, packed);
                         if cfg!(debug_assertions) {
                             let td = self.llvm_machine.get_target_data();
@@ -1996,9 +1978,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 let llvm_offset =
                                     td.offset_of_element(&struct_type, i as u32).unwrap();
                                 assert_eq!(
-                                    llvm_offset, phys_field.offset as u64,
+                                    llvm_offset,
+                                    phys_field.offset as u64,
                                     "K1/LLVM field offset mismatch in {}, field {}",
-                                    type_name, i
+                                    self.codegen_type_name(agg.origin_type_id),
+                                    i
                                 );
                             }
                             let llvm_layout = self.layout_per_llvm(&struct_type);
@@ -2006,31 +1990,21 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 llvm_layout.size,
                                 agg_layout.stride(),
                                 "K1/LLVM struct size mismatch in {}",
-                                type_name
+                                self.codegen_type_name(agg.origin_type_id)
                             );
                         }
-                        let di_type = self
-                            .debug
-                            .debug_builder
-                            .create_struct_type(
-                                self.debug.current_scope(),
-                                &type_name,
-                                self.debug.current_file(),
-                                line_number,
-                                agg_layout.size as u64,
-                                agg_layout.align,
-                                0,
-                                None,
-                                &field_di_types,
-                                0,
-                                None,
-                                &type_name,
+                        let di_type = full_debug.then(|| {
+                            self.make_struct_debug_type(
+                                agg.origin_type_id,
+                                agg_layout,
+                                fields,
+                                cg_field_types,
                             )
-                            .as_type();
+                        });
                         CgType::StructType(CgStructType {
                             pt,
                             struct_type,
-                            fields: cg_field_types.to_slice(),
+                            fields: cg_field_types,
                             di_type,
                             layout: agg_layout,
                         })
@@ -2039,16 +2013,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         let element_type = self.codegen_type(element_pt);
                         let array_type = element_type.rich_type().array_type(len);
                         let array_layout = self.k1.get_pt_layout(pt);
-                        let di_type = self
-                            .debug
-                            .debug_builder
-                            .create_array_type(
-                                element_type.debug_type(),
-                                array_layout.size_bits(),
-                                array_layout.align_bits(),
-                                &[],
-                            )
-                            .as_type();
+                        let di_type = element_type.debug_type().map(|element_di_type| {
+                            self.debug
+                                .debug_builder
+                                .create_array_type(
+                                    element_di_type,
+                                    array_layout.size_bits(),
+                                    array_layout.align_bits(),
+                                    &[],
+                                )
+                                .as_type()
+                        });
                         CgType::ArrayType(CgArrayType {
                             pt,
                             array_type,
@@ -2060,16 +2035,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         let element_type = self.codegen_type(PhysicalType::scalar(element_pt));
                         let vector_type = self.vec_llvm_type(element_pt, len);
                         let vector_layout = self.k1.get_pt_layout(pt);
-                        let di_type = self
-                            .debug
-                            .debug_builder
-                            .create_array_type(
-                                element_type.debug_type(),
-                                vector_layout.size_bits(),
-                                vector_layout.align_bits(),
-                                &[],
-                            )
-                            .as_type();
+                        let di_type = element_type.debug_type().map(|element_di_type| {
+                            self.debug
+                                .debug_builder
+                                .create_array_type(
+                                    element_di_type,
+                                    vector_layout.size_bits(),
+                                    vector_layout.align_bits(),
+                                    &[],
+                                )
+                                .as_type()
+                        });
                         CgType::Vector(CgVectorType {
                             pt,
                             vector_type,
@@ -2078,30 +2054,19 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         })
                     }
                     AggType::Union { members } => {
-                        let mut di_members = self.tmp.new_list(members.len());
-                        for m in self.k1.mem.getn(members) {
-                            let cg_member = self.codegen_type(m.ty);
-                            di_members.push(cg_member.debug_type());
-                        }
-                        let span = self.debug.current_span();
-                        let line_number = self.get_line_number(span);
-                        let di_type = self
-                            .debug
-                            .debug_builder
-                            .create_union_type(
-                                self.debug.current_scope(),
-                                &type_name,
-                                self.debug.current_file(),
-                                line_number,
-                                agg_layout.size_bits(),
-                                agg_layout.align_bits(),
-                                0,
-                                &di_members,
-                                0,
-                                &type_name,
-                            )
-                            .as_type();
-
+                        let di_type = if full_debug {
+                            let mut di_members = self.tmp.new_list(members.len());
+                            for m in self.k1.mem.getn(members) {
+                                di_members.push(self.codegen_type(m.ty).debug_type().unwrap());
+                            }
+                            Some(self.make_union_debug_type(
+                                agg.origin_type_id,
+                                agg_layout,
+                                di_members.as_slice(),
+                            ))
+                        } else {
+                            None
+                        };
                         let aligned_repr =
                             self.codegen_opaque_repr(agg_layout).as_basic_type_enum();
                         CgType::Union(CgUnionType { pt, aligned_repr, layout: agg_layout, di_type })
@@ -2115,25 +2080,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     AggType::Opaque { size, align } => {
                         let layout = Layout { size, align };
                         let aligned_opaque_repr = self.codegen_opaque_repr(layout);
-
-                        let span = self.debug.current_span();
-                        let line_number = self.get_line_number(span);
-                        let di_type = self
-                            .debug
-                            .debug_builder
-                            .create_union_type(
-                                self.debug.current_scope(),
-                                &type_name,
-                                self.debug.current_file(),
-                                line_number,
-                                agg_layout.size_bits(),
-                                agg_layout.align_bits(),
-                                0,
-                                &[],
-                                0,
-                                &type_name,
-                            )
-                            .as_type();
+                        let di_type = full_debug.then(|| {
+                            self.make_union_debug_type(agg.origin_type_id, agg_layout, &[])
+                        });
 
                         // For now, we'll call this a 'Union', its just our own type anyway,
                         // arguably it shouldn't even be a Sum since they share so much
@@ -2150,24 +2099,25 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             PhysicalTypeEnum::Empty => {
                 let struct_type = self.ctx.struct_type(&[], false);
-                let di_type = self
-                    .debug
-                    .debug_builder
-                    .create_struct_type(
-                        self.debug.current_scope(),
-                        "empty",
-                        self.debug.current_file(),
-                        1,
-                        0,
-                        1,
-                        0,
-                        None,
-                        &[],
-                        0,
-                        None,
-                        "empty",
-                    )
-                    .as_type();
+                let di_type = (!self.debug.line_tables_only).then(|| {
+                    self.debug
+                        .debug_builder
+                        .create_struct_type(
+                            self.debug.current_scope(),
+                            "empty",
+                            self.debug.current_file(),
+                            1,
+                            0,
+                            1,
+                            0,
+                            None,
+                            &[],
+                            0,
+                            None,
+                            "empty",
+                        )
+                        .as_type()
+                });
                 CgType::StructType(CgStructType {
                     pt,
                     struct_type,
@@ -2177,6 +2127,80 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 })
             }
         }
+    }
+
+    fn make_struct_debug_type(
+        &mut self,
+        type_id: TypeId,
+        layout: Layout,
+        fields: MSlice<StructField, TypedProgram>,
+        cg_fields: MSlice<CgType<'ctx>, CgPerm>,
+    ) -> DIType<'ctx> {
+        let type_name = self.codegen_type_name(type_id);
+        let line_number = self.get_line_number(self.debug.current_span());
+        let mut field_di_types = self.tmp.new_list(fields.len());
+        for (phys_field, cg_type) in
+            self.k1.mem.getn(fields).iter().zip(self.mem.getn_lt(cg_fields))
+        {
+            let debug_member = self
+                .debug
+                .debug_builder
+                .create_member_type(
+                    self.debug.current_scope(),
+                    self.k1.ident_str(phys_field.name),
+                    self.debug.current_file(),
+                    line_number,
+                    cg_type.rich_repr_layout().size_bits(),
+                    cg_type.rich_repr_layout().align_bits(),
+                    phys_field.offset as u64,
+                    0,
+                    cg_type.debug_type().unwrap(),
+                )
+                .as_type();
+            field_di_types.push(debug_member)
+        }
+        self.debug
+            .debug_builder
+            .create_struct_type(
+                self.debug.current_scope(),
+                &type_name,
+                self.debug.current_file(),
+                line_number,
+                layout.size as u64,
+                layout.align,
+                0,
+                None,
+                field_di_types.as_slice(),
+                0,
+                None,
+                &type_name,
+            )
+            .as_type()
+    }
+
+    fn make_union_debug_type(
+        &self,
+        type_id: TypeId,
+        layout: Layout,
+        di_members: &[DIType<'ctx>],
+    ) -> DIType<'ctx> {
+        let type_name = self.codegen_type_name(type_id);
+        let line_number = self.get_line_number(self.debug.current_span());
+        self.debug
+            .debug_builder
+            .create_union_type(
+                self.debug.current_scope(),
+                &type_name,
+                self.debug.current_file(),
+                line_number,
+                layout.size_bits(),
+                layout.align_bits(),
+                0,
+                di_members,
+                0,
+                &type_name,
+            )
+            .as_type()
     }
 
     fn codegen_opaque_repr(&self, expected_layout: Layout) -> StructType<'ctx> {
@@ -2257,7 +2281,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             NumericWidth::B8 | NumericWidth::B16 => Some(self.make_enum_attribute("zeroext", 0)),
             NumericWidth::B32 | NumericWidth::B64 => None,
         };
-        let di_type = self.make_named_scalar_debug_type(st, id);
+        let di_type = if self.debug.line_tables_only {
+            None
+        } else {
+            Some(self.make_named_scalar_debug_type(st, id))
+        };
         let named = LlvmScalarType {
             pt: PhysicalType::named(st, id),
             di_type,
@@ -2285,7 +2313,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Type::Integer(int_type) => {
                 return make_basic(self, &int_type.to_string(), int_encoding).as_type();
             }
-            Type::Reference(_) => return self.builtin_types.scalar(st).di_type,
+            Type::Reference(_) => return self.builtin_types.scalar(st).di_type.unwrap(),
             Type::Enum(e) => {
                 for member in self.k1.mem.getn(e.member_values) {
                     enumerators.push(self.debug.debug_builder.create_enumerator(
@@ -3888,7 +3916,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         name_str,
                         self.debug.current_file(),
                         self.get_line_number(var_info.source_span),
-                        cg_type.debug_type(),
+                        cg_type.debug_type().unwrap(),
                         true,
                         0,
                         cg_type.rich_repr_layout().align,
@@ -4537,7 +4565,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         &mut self,
         function_name: &str,
         function_span: Span,
-        return_type: DIType<'ctx>,
+        return_type: Option<DIType<'ctx>>,
         param_debug_types: &[DIType<'ctx>],
         is_definition: bool,
     ) -> CgResult<(DISubprogram<'ctx>, DIFile<'ctx>)> {
@@ -4554,7 +4582,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let function_file = self.debug.files.get(&function_file_id).unwrap();
         let dbg_fn_type = self.debug.debug_builder.create_subroutine_type(
             *function_file,
-            Some(return_type),
+            return_type,
             param_debug_types,
             0,
         );
@@ -4656,7 +4684,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         let mut di_types: SV8<_> = smallvec::smallvec![];
         for t in self.mem.getn_lt(llvm_function_type.param_k1_types).iter() {
-            di_types.push(t.debug_type());
+            if let Some(di_type) = t.debug_type() {
+                di_types.push(di_type);
+            }
         }
         let (di_subprogram, di_file) = self.make_function_debug_info(
             &llvm_name,
@@ -5005,7 +5035,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     logical_param_index as u32,
                     self.debug.current_file(),
                     function_line_number,
-                    param_k1_type.debug_type(),
+                    param_k1_type.debug_type().unwrap(),
                     true,
                     0,
                 );
