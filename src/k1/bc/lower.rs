@@ -647,7 +647,7 @@ fn emit_inst(
         Inst::Store { dst, value, t, volatile: _, unaligned: _ } => {
             let (addr, off) = resolve_addr(k1, ctx, dst);
             let value = resolve_lowered_value(k1, ctx, value);
-            ctx.emit(Opcode::Store, t.width_bits(), off);
+            ctx.emit(Opcode::store(t.width_bits()), 0, off);
             ctx.push(addr);
             ctx.push(value);
         }
@@ -655,7 +655,7 @@ fn emit_inst(
             let t = t.expect_scalar();
             let (addr, off) = resolve_addr(k1, ctx, src);
             let result = ctx.bc_value_of(inst_id);
-            ctx.emit(Opcode::Load, t.width_bits(), off);
+            ctx.emit(Opcode::load(t.width_bits()), 0, off);
             ctx.push(result);
             ctx.push(addr);
         }
@@ -710,7 +710,7 @@ fn emit_inst(
                     let (addr, base_off) = resolve_addr(k1, ctx, vop.dst);
                     let val = resolve_lowered_value(k1, ctx, vop.lhs);
                     for lane in 0..vop.lanes as u16 {
-                        ctx.emit(Opcode::Store, elem_bits, base_off + lane * stride);
+                        ctx.emit(Opcode::store(elem_bits), 0, base_off + lane * stride);
                         ctx.push(addr);
                         ctx.push(val);
                     }
@@ -730,10 +730,10 @@ fn emit_inst(
                     let zero = k1.bc.intern_const(0);
                     for lane in 0..vop.lanes as u16 {
                         let off = lane * stride;
-                        ctx.emit(Opcode::Load, elem_bits, lhs_off + off);
+                        ctx.emit(Opcode::load(elem_bits), 0, lhs_off + off);
                         ctx.push(s0);
                         ctx.push(lhs_addr);
-                        ctx.emit(Opcode::Load, elem_bits, rhs_off + off);
+                        ctx.emit(Opcode::load(elem_bits), 0, rhs_off + off);
                         ctx.push(s1);
                         ctx.push(rhs_addr);
                         match vop.op {
@@ -774,7 +774,7 @@ fn emit_inst(
                                 ctx.push(s1);
                             }
                         }
-                        ctx.emit(Opcode::Store, elem_bits, dst_off + off);
+                        ctx.emit(Opcode::store(elem_bits), 0, dst_off + off);
                         ctx.push(dst_addr);
                         ctx.push(s0);
                     }
@@ -785,13 +785,13 @@ fn emit_inst(
                     let s0 = ctx.next_scratch();
                     for lane in 0..vop.lanes as u16 {
                         let off = lane * stride;
-                        ctx.emit(Opcode::Load, elem_bits, lhs_off + off);
+                        ctx.emit(Opcode::load(elem_bits), 0, lhs_off + off);
                         ctx.push(s0);
                         ctx.push(lhs_addr);
                         ctx.emit(Opcode::BitNot, elem_bits, 0);
                         ctx.push(s0);
                         ctx.push(s0);
-                        ctx.emit(Opcode::Store, elem_bits, dst_off + off);
+                        ctx.emit(Opcode::store(elem_bits), 0, dst_off + off);
                         ctx.push(dst_addr);
                         ctx.push(s0);
                     }
@@ -808,14 +808,14 @@ fn emit_inst(
                     };
                     for lane in 0..vop.lanes as u16 {
                         let off = lane * stride;
-                        ctx.emit(Opcode::Load, elem_bits, lhs_off + off);
+                        ctx.emit(Opcode::load(elem_bits), 0, lhs_off + off);
                         ctx.push(s0);
                         ctx.push(lhs_addr);
                         ctx.emit(opcode, elem_bits, 0);
                         ctx.push(s0);
                         ctx.push(s0);
                         ctx.push(count);
-                        ctx.emit(Opcode::Store, elem_bits, dst_off + off);
+                        ctx.emit(Opcode::store(elem_bits), 0, dst_off + off);
                         ctx.push(dst_addr);
                         ctx.push(s0);
                     }
@@ -830,7 +830,7 @@ fn emit_inst(
                     ctx.push(acc);
                     ctx.push(zero);
                     for lane in 0..vop.lanes as u16 {
-                        ctx.emit(Opcode::Load, elem_bits, lhs_off + lane * stride);
+                        ctx.emit(Opcode::load(elem_bits), 0, lhs_off + lane * stride);
                         ctx.push(s0);
                         ctx.push(lhs_addr);
                         ctx.emit(Opcode::ShrU, elem_bits, 0);
@@ -906,7 +906,7 @@ fn emit_inst(
                     };
                     let lhs_lowered = resolve_lowered_value(k1, ctx, lhs);
                     let rhs_lowered = resolve_lowered_value(k1, ctx, rhs);
-                    ctx.emit(Opcode::JumpIfIntCmp, width, pred as u16);
+                    ctx.emit(Opcode::jump_if_icmp(pred), width, 0);
                     ctx.push(lhs_lowered);
                     ctx.push(rhs_lowered);
                 }

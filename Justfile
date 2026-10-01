@@ -6,7 +6,7 @@ bundle-name := if os == "linux" {
 } else {
   error("Unsupported OS: " + os)
 }
-export LLVM_SYS_211_PREFIX := env_var_or_default("LLVM_SYS_211_PREFIX", "./llvm/install-llvm")
+export LLVM_SYS_231_PREFIX := env_var_or_default("LLVM_SYS_231_PREFIX", "./llvm/install-llvm")
 
 run-frag +args:
   RUST_BACKTRACE=full RUST_LOG=info cargo run --features=llvm-sys/prefer-dynamic --bin k1 -- {{args}}
@@ -106,6 +106,10 @@ profile-stress: build-profile
 # metaprogramming stress: 200 #meta define-soa expansions in one file
 profile-soa: build-profile
   hyperfine --warmup 2 'K1_HOME=. target/profiling/k1 --no-cache c perf/soa_x_200.k1'
+
+profile-magic: build-profile
+  hyperfine --warmup 1 'K1_HOME=. target/profiling/k1 --no-cache c perf/magic.k1'
+  K1_HOME=. target/profiling/k1 --no-cache --chatty c perf/magic.k1 2>&1 | grep -E '^\s+run\s|ops:'
 
 valgrind-linux:
   git pull

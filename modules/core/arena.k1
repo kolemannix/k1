@@ -18,7 +18,7 @@ type arena = {
 }
 
 // At the start of each chunk acquired after the first
-type arena-chunk = { region: platform/memory/region, next: ptr }
+type arena-chunk = { region: platform/memory/region, next: ptr, prev-cur: ptr }
 
 ns for arena {
   let kb: size = 1024
@@ -68,29 +68,38 @@ ns for arena {
     init(1 * gb)
   }
 
-  fn _release-extra-chunks(self: *arena) {
+  fn _chunk-data-start(chunk: ptr): ptr {
+    chunk.add-bytes(types/stride[arena-chunk]).aligned(MIN_ALIGN)
+  }
+
+  fn(noinline) _drop-chunks-to(self: *arena, keep: ptr): ptr {
+    let dirty-end = self.cur-addr
     let chunk = self.extra-chunks
-    while not chunk.is-null() {
-      let record = chunk.ref[arena-chunk]
-      let next = record.next
+    while chunk != keep {
+      assert(not chunk.is-null())
+      let record = chunk.ref[arena-chunk].*
+      dirty-end = record.prev-cur
       platform/memory/release(record.region)
-      chunk = next
+      chunk = record.next
     }
-    self.extra-chunks = ptr/null
+    self.extra-chunks = keep
+    if keep.is-null() {
+      self.base-ptr = self.first-base
+      self.end-addr = self.first-end
+    } else {
+      self.base-ptr = _chunk-data-start(keep)
+      self.end-addr = keep.add-bytes(keep.ref[arena-chunk].region.len)
+    }
+    dirty-end
   }
 
   fn release(self: *arena) {
-    self._release-extra-chunks()
+    let _ = self._drop-chunks-to(ptr/null)
     platform/memory/release(self.first-region())
   }
 
   fn reset(self: *arena) {
-    let dirty-end = if self.extra-chunks.is-null() self.cur-addr else self.first-end
-    self._release-extra-chunks()
-    mem/set(dst = self.first-base, value = 0, count = dirty-end.diff(self.first-base))
-    self.base-ptr = self.first-base
-    self.cur-addr = self.first-base
-    self.end-addr = self.first-end
+    self.pop-to-mark(.{ start = self.first-base, chunks = ptr/null })
   }
 
   let MIN_ALIGN: size = types/size[ptr]
@@ -115,11 +124,10 @@ ns for arena {
     let chunk-len = needed.max(first-len)
     let region = platform/memory/acquire(chunk-len)
     let record: *arena-chunk = region.base.ref[arena-chunk]
-    record.* = .{ region, next = self.extra-chunks }
+    record.* = .{ region, next = self.extra-chunks, prev-cur = self.cur-addr }
     self.extra-chunks = region.base
-    let data-start = region.base.add-bytes(types/stride[arena-chunk]).aligned(MIN_ALIGN)
-    self.base-ptr = data-start
-    self.cur-addr = data-start
+    self.base-ptr = _chunk-data-start(region.base)
+    self.cur-addr = self.base-ptr
     self.end-addr = region.base.add-bytes(region.len)
     self.alloc-layout(size, align)
   }
@@ -169,19 +177,21 @@ ns for arena {
   }
 
   fn mark(self: *arena): arena-mark {
-    .{ start = self.cur-addr }
+    .{ start = self.cur-addr, chunks = self.extra-chunks }
   }
 
   fn pop-to-mark(self: *arena, arena-mark) {
+    let dirty-end =
+      if self.extra-chunks == arena-mark.chunks self.cur-addr
+      else self._drop-chunks-to(arena-mark.chunks)
     assert(arena-mark.start >= self.base-ptr)
-    assert(arena-mark.start < self.end-addr)
-    assert(arena-mark.start <= self.cur-addr)
-    mem/set(dst = arena-mark.start, value = 0, count = self.cur-addr.diff(arena-mark.start))
+    assert(arena-mark.start <= dirty-end)
+    mem/set(dst = arena-mark.start, value = 0, count = dirty-end.diff(arena-mark.start))
     self.cur-addr = arena-mark.start
   }
 
 }
-type arena-mark = { start: ptr }
+type arena-mark = { start: ptr, chunks: ptr }
 
 impl allocator for *arena {
   fn(inline) alloc(self: *arena, size: size, align: size): ptr {

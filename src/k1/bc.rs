@@ -36,8 +36,16 @@ pub enum Opcode {
     Enter,
     Jump,
     JumpIf,
-    /// Fused compare-and-branch: A = width in bits, B = IntCmpPred tag
-    JumpIfIntCmp,
+    JumpIfEq,
+    JumpIfSlt,
+    JumpIfSle,
+    JumpIfSgt,
+    JumpIfSge,
+    JumpIfUlt,
+    JumpIfUle,
+    JumpIfUgt,
+    JumpIfUge,
+    JumpIfNe,
     /// A = width in bits, B = case count; cases sorted by value
     Switch,
     Unreachable,
@@ -53,8 +61,14 @@ pub enum Opcode {
     // Memory / data
     Mov,
     LoadGlobal,
-    Load,
-    Store,
+    Load8,
+    Load16,
+    Load32,
+    Load64,
+    Store8,
+    Store16,
+    Store32,
+    Store64,
     Copy,
     Zero,
     PtrAddImm,
@@ -122,7 +136,16 @@ impl Opcode {
             Opcode::Enter => 1,        // [frame_bytes]
             Opcode::Jump => 1,         // [pc]
             Opcode::JumpIf => 3,       // [cond src][cons pc][alt pc]
-            Opcode::JumpIfIntCmp => 4, // [lhs src][rhs src][cons pc][alt pc]
+            Opcode::JumpIfEq
+            | Opcode::JumpIfSlt
+            | Opcode::JumpIfSle
+            | Opcode::JumpIfSgt
+            | Opcode::JumpIfSge
+            | Opcode::JumpIfUlt
+            | Opcode::JumpIfUle
+            | Opcode::JumpIfUgt
+            | Opcode::JumpIfUge
+            | Opcode::JumpIfNe => 4, // [lhs src][rhs src][cons pc][alt pc]
             Opcode::Switch => 2,       // [src][default pc] + B cases of [value lo][value hi][pc]
             Opcode::Unreachable => 0,
             Opcode::Ret => 1,    // [src]
@@ -138,8 +161,8 @@ impl Opcode {
             Opcode::RetStore => 1,   // A = width in bits; [addr src]
             Opcode::Mov => 2,        // [dst][src]
             Opcode::LoadGlobal => 3, // [dst][global_id][storage_pt]
-            Opcode::Load => 2,       // A = width in bits; [dst][addr src]
-            Opcode::Store => 2,      // A = width in bits; [addr src][val src]
+            Opcode::Load8 | Opcode::Load16 | Opcode::Load32 | Opcode::Load64 => 2, // [dst][addr src]
+            Opcode::Store8 | Opcode::Store16 | Opcode::Store32 | Opcode::Store64 => 2, // [addr src][val src]
             Opcode::Copy => 3,       // [dst src][src src][size]
             Opcode::Zero => 2,       // [dst src][size]
             Opcode::PtrAddImm => 3,  // [dst][base src][byte offset]
@@ -178,13 +201,44 @@ impl Opcode {
         }
     }
 
+    pub fn jump_if_icmp(pred: crate::ir::IntCmpPred) -> Opcode {
+        Opcode::from_u8(Opcode::JumpIfEq as u8 + pred as u8)
+    }
+
+    pub fn load(width_bits: u8) -> Opcode {
+        match width_bits {
+            8 => Opcode::Load8,
+            16 => Opcode::Load16,
+            32 => Opcode::Load32,
+            _ => Opcode::Load64,
+        }
+    }
+
+    pub fn store(width_bits: u8) -> Opcode {
+        match width_bits {
+            8 => Opcode::Store8,
+            16 => Opcode::Store16,
+            32 => Opcode::Store32,
+            _ => Opcode::Store64,
+        }
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Opcode::Halt => "halt",
             Opcode::Enter => "enter",
             Opcode::Jump => "jump",
             Opcode::JumpIf => "jump_if",
-            Opcode::JumpIfIntCmp => "jump_if_icmp",
+            Opcode::JumpIfEq => "jump_if_eq",
+            Opcode::JumpIfSlt => "jump_if_slt",
+            Opcode::JumpIfSle => "jump_if_sle",
+            Opcode::JumpIfSgt => "jump_if_sgt",
+            Opcode::JumpIfSge => "jump_if_sge",
+            Opcode::JumpIfUlt => "jump_if_ult",
+            Opcode::JumpIfUle => "jump_if_ule",
+            Opcode::JumpIfUgt => "jump_if_ugt",
+            Opcode::JumpIfUge => "jump_if_uge",
+            Opcode::JumpIfNe => "jump_if_ne",
             Opcode::Switch => "switch",
             Opcode::Unreachable => "unreachable",
             Opcode::Ret => "ret",
@@ -198,8 +252,14 @@ impl Opcode {
             Opcode::RetStore => "ret_store",
             Opcode::Mov => "mov",
             Opcode::LoadGlobal => "load_global",
-            Opcode::Load => "load",
-            Opcode::Store => "store",
+            Opcode::Load8 => "load.8",
+            Opcode::Load16 => "load.16",
+            Opcode::Load32 => "load.32",
+            Opcode::Load64 => "load.64",
+            Opcode::Store8 => "store.8",
+            Opcode::Store16 => "store.16",
+            Opcode::Store32 => "store.32",
+            Opcode::Store64 => "store.64",
             Opcode::Copy => "copy",
             Opcode::Zero => "zero",
             Opcode::PtrAddImm => "ptr_add_imm",

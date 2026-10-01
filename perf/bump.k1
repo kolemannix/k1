@@ -1,0 +1,138 @@
+type triple = { a: u64, b: u64, c: u64 }
+
+
+fn report(name: string, ops: int, start: u64, sink: u64) {
+  let nanos = std/time/elapsed-nanos(start)
+  let ps = nanos * 1000 / ops.unsigned()
+  println("${name}: ${nanos / 1_000_000} ms, ${ps} ps/op (sink ${sink & 0xff})")
+}
+
+fn(noinline) bench-push(a: *core/arena, ROUNDS: int, PER_ROUND: int): u64 {
+  let sink: u64 = 0
+  for r in 0.until(ROUNDS) {
+    for i in 0.until(PER_ROUND) {
+      let p = a.push(.{ a = i.unsigned(), b = r.unsigned(), c = 3 }: triple)
+      sink = sink + p.a
+    }
+    a.reset()
+  }
+  sink
+}
+
+fn(noinline) bench-dyn(a: *core/arena, ROUNDS: int, PER_ROUND: int): u64 {
+  let sink: u64 = 0
+  let x: u64 = 88172645463325252
+  for _r in 0.until(ROUNDS) {
+    for _i in 0.until(PER_ROUND) {
+      x = x ^ (x << 13)
+      x = x ^ (x >> 7)
+      x = x ^ (x << 17)
+      let p = a.alloc-layout((x & 63).signed() + 1, 8)
+      p.ref[u8].* = 1
+      sink = sink + p.to-size().unsigned()
+    }
+    a.reset()
+  }
+  sink
+}
+
+fn(noinline) bench-align16(a: *core/arena, ROUNDS: int, PER_ROUND: int): u64 {
+  let sink: u64 = 0
+  let x: u64 = 88172645463325252
+  for _r in 0.until(ROUNDS) {
+    for _i in 0.until(PER_ROUND) {
+      x = x ^ (x << 13)
+      x = x ^ (x >> 7)
+      x = x ^ (x << 17)
+      let p = a.alloc-layout((x & 63).signed() + 1, 16)
+      p.ref[u8].* = 1
+      sink = sink + p.to-size().unsigned()
+    }
+    a.reset()
+  }
+  sink
+}
+
+fn(noinline) bench-list(a: *core/arena, ROUNDS: int, PER_ROUND: int): u64 {
+  let sink: u64 = 0
+  for _r in 0.until(ROUNDS) {
+    let i = 0
+    while i < PER_ROUND {
+      let l: list[u64] = .0
+      for j in 0.until(1000) {
+        l.push-in(a, j.unsigned())
+      }
+      sink = sink + l.len().unsigned()
+      i = i + 1000
+    }
+    a.reset()
+  }
+  sink
+}
+
+fn(noinline) bench-mark(a: *core/arena, ROUNDS: int, PER_ROUND: int): u64 {
+  let sink: u64 = 0
+  for _r in 0.until(ROUNDS) {
+    let i = 0
+    while i < PER_ROUND {
+      let m = a.mark()
+      for j in 0.until(16) {
+        let p = a.push(.{ a = j.unsigned(), b = 0, c = 0 }: triple)
+        sink = sink + p.a
+      }
+      a.pop-to-mark(m)
+      i = i + 16
+    }
+  }
+  sink
+}
+
+fn(noinline) bench-reg-push(a: *core/arena, ROUNDS: int, PER_ROUND: int): u64 {
+  let sink: u64 = 0
+  for r in 0.until(ROUNDS) {
+    let cur = a.cur-addr
+    let end = a.end-addr
+    for i in 0.until(PER_ROUND) {
+      if end.diff(cur) < 24 crash("reg exhausted")
+      let p = cur.ref[triple]
+      cur = cur.add-bytes(24)
+      p.* = .{ a = i.unsigned(), b = r.unsigned(), c = 3 }
+      sink = sink + p.a
+    }
+  }
+  sink
+}
+
+fn(noinline) bench-mem-new(a: *core/arena, ROUNDS: int, PER_ROUND: int): u64 {
+  let sink: u64 = 0
+  mem/push-arena(a)
+  for r in 0.until(ROUNDS) {
+    for i in 0.until(PER_ROUND) {
+      let p = mem/new(.{ a = i.unsigned(), b = r.unsigned(), c = 3 }: triple)
+      sink = sink + p.a
+    }
+    a.reset()
+  }
+  let _ = mem/pop-arena()
+  sink
+}
+
+fn run(name: string, a: *core/arena, rounds: int, per: int, f: some fn(*core/arena, int, int) -> u64) {
+  let t = std/time/read-cpu-counter()
+  let sink = f(a, rounds, per)
+  report(name, rounds * per, t, sink)
+}
+
+fn main(): i32 {
+  let a = core/arena/init-default()
+  run("push24 big", a, 100, 1_000_000, bench-push)
+  run("push24", a, 10_000, 10_000, bench-push)
+  run("dyn", a, 10_000, 10_000, bench-dyn)
+  run("align16", a, 10_000, 10_000, bench-align16)
+  run("list", a, 10_000, 10_000, bench-list)
+  run("mark", a, 10_000, 10_000, bench-mark)
+  run("mem/new24", a, 10_000, 10_000, bench-mem-new)
+  run("reg push24", a, 10_000, 10_000, bench-reg-push)
+  a.release()
+  0
+}

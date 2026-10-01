@@ -46,7 +46,7 @@ K1 language reference for agents: `docs/ai_docs/k1-syntax-basics.md` and
 
 ## Build And Run
 
-- Every cargo command needs `LLVM_SYS_211_PREFIX` (repo default:
+- Every cargo command needs `LLVM_SYS_231_PREFIX` (repo default:
   `llvm/install-llvm`, set in `~/.zshrc`, not inherited by non-login shells)
   and `--features=llvm-sys/prefer-dynamic` for dev builds. Release and LSP
   bundles use `llvm-sys/force-static`.
@@ -246,7 +246,7 @@ not in the suite.
   notes, not always current. `content/`: writing about K1.
 - `perf/`: stress generators. `sandbox/`: scratch. `examples/`: two demos.
 - `builds/`: bundle/install scripts and Linux cross-build notes. `llvm/`: the
-  pinned LLVM 21 build (`get_llvm.sh`).
+  pinned LLVM 23 build (`get_llvm.sh`).
 - `resources/c/`: C scratch files for checking ABI/codegen questions.
 - `tools/vscode-k1/`: the VS Code extension.
 

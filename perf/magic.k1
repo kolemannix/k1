@@ -1,0 +1,128 @@
+type(alias) bitboard = u64
+type(alias) square = u32
+
+type step = { df: i32, dr: i32 }
+
+fn(inline) bit(sq: square): bitboard { 1u64 << sq }
+fn(inline) file-of(sq: square): u32 { sq & 7 }
+fn(inline) rank-of(sq: square): u32 { sq >> 3 }
+
+fn(inline) shifted(sq: square, s: step): ?square {
+  let f = file-of(sq).signed() + s.df
+  let r = rank-of(sq).signed() + s.dr
+  if f < 0 or f > 7 or r < 0 or r > 7 :none else :some((r * 8 + f).unsigned())
+}
+
+let ROOK_STEPS: array[step, 4] = [.{ df = 1, dr = 0 }, .{ df = -1, dr = 0 }, .{ df = 0, dr = 1 }, .{ df = 0, dr = -1 }]
+let BISHOP_STEPS: array[step, 4] = [.{ df = 1, dr = 1 }, .{ df = -1, dr = 1 }, .{ df = 1, dr = -1 }, .{ df = -1, dr = -1 }]
+
+fn slide(sq: square, occ: bitboard, steps: array[step, 4]): bitboard {
+  let out: bitboard = 0
+  for s in steps {
+    let at = sq
+    while shifted(at, s) is :some to {
+      out = out | bit(to)
+      if occ & bit(to) != 0 break
+      at = to
+    }
+  }
+  out
+}
+
+fn relevant-mask(sq: square, steps: array[step, 4]): bitboard {
+  let out: bitboard = 0
+  for s in steps {
+    let at = sq
+    while shifted(at, s) is :some to and shifted(to, s).is-some() {
+      out = out | bit(to)
+      at = to
+    }
+  }
+  out
+}
+
+type magic = { mask: bitboard, factor: u64, shift: u32, offset: u32 }
+
+type slider-table = { magics: array[magic, 64], attacks: buffer[bitboard] }
+
+type xorshift = { state: u64 }
+
+ns for xorshift {
+  fn(inline) next(self: *xorshift): u64 {
+    self.state = self.state ^ (self.state >> 12)
+    self.state = self.state ^ (self.state << 25)
+    self.state = self.state ^ (self.state >> 27)
+    self.state * 2685821657736338717
+  }
+  fn(inline) sparse(self: *xorshift): u64 { self.next() & self.next() & self.next() }
+}
+
+let MAGIC_SEEDS: array[u64, 8] = [728, 10316, 55013, 32803, 12281, 15100, 16645, 255]
+
+fn find-magics(steps: array[step, 4]): slider-table {
+  let magics: array[magic, 64] = .0
+  let table-len: size = 0
+  for sq in 0u32.until(64) {
+    table-len = table-len + ((1: size) << relevant-mask(sq, steps).count-ones().trunc[u32])
+  }
+  let attacks = buffer/allocate[bitboard](table-len)
+  let occupancies: array[bitboard, 4096] = .0
+  let references: array[bitboard, 4096] = .0
+  let stamps: array[u32, 4096] = .0
+  let trial: u32 = 0
+  let offset: u32 = 0
+  for sq in 0u32.until(64) {
+    let rng: xorshift = .{ state = MAGIC_SEEDS.[rank-of(sq)] }
+    let mask = relevant-mask(sq, steps)
+    let bits = mask.count-ones().trunc[u32]
+    let count: u32 = 0
+    let subset: bitboard = 0
+    loop {
+      occupancies.[count] = subset
+      references.[count] = slide(sq, subset, steps)
+      count = count + 1
+      subset = (subset - mask) & mask
+      if subset == 0 break
+    }
+    let shift = 64u32 - bits
+    loop @search {
+      let factor = rng.sparse()
+      if (mask * factor >> 56).count-ones() < 6 continue
+      trial = trial + 1
+      for i in 0u32.until(count) {
+        let index = (occupancies.[i] * factor >> shift).trunc[u32]
+        if stamps.[index] != trial {
+          stamps.[index] = trial
+          attacks.[offset + index] = references.[i]
+        } else if attacks.[offset + index] != references.[i] {
+          continue @search
+        }
+      }
+      magics.[sq] = .{ mask, factor, shift, offset }
+      break
+    }
+    offset = offset + count
+  }
+  .{ magics, attacks }
+}
+
+fn checksum(t: *slider-table): u64 {
+  let sum: u64 = 0
+  for m in t.magics { sum = sum * 31 + m.factor }
+  for a in t.attacks { sum = sum * 31 + a }
+  sum
+}
+
+let ROOK_TABLE: slider-table = find-magics(ROOK_STEPS)
+let BISHOP_TABLE: slider-table = find-magics(BISHOP_STEPS)
+
+fn main(): i32 {
+  let rook-table = find-magics(ROOK_STEPS)
+  let bishop-table = find-magics(BISHOP_STEPS)
+  let rook = checksum(rook-table.&)
+  let bishop = checksum(bishop-table.&)
+  assert(checksum(ROOK_TABLE.&) == rook)
+  assert(checksum(BISHOP_TABLE.&) == bishop)
+  println("rook $rook bishop $bishop")
+  0
+}

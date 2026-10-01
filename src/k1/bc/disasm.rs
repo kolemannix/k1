@@ -82,8 +82,17 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
         Opcode::Jump => {
             write!(w, "jump @{}", ops[0]).unwrap();
         }
-        Opcode::JumpIfIntCmp => {
-            write!(w, "jump_if_icmp.{}.{} ", crate::ir::IntCmpPred::from_u8(b as u8), a).unwrap();
+        Opcode::JumpIfEq
+        | Opcode::JumpIfSlt
+        | Opcode::JumpIfSle
+        | Opcode::JumpIfSgt
+        | Opcode::JumpIfSge
+        | Opcode::JumpIfUlt
+        | Opcode::JumpIfUle
+        | Opcode::JumpIfUgt
+        | Opcode::JumpIfUge
+        | Opcode::JumpIfNe => {
+            write!(w, "{}.{} ", op.name(), a).unwrap();
             write_src(w, k1, ops[0]);
             write!(w, ", ").unwrap();
             write_src(w, k1, ops[1]);
@@ -172,8 +181,8 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
             write_dst(w, ops[0]);
             write!(w, " <- global#{}", ops[1]).unwrap();
         }
-        Opcode::Load => {
-            write!(w, "load.{} ", a).unwrap();
+        Opcode::Load8 | Opcode::Load16 | Opcode::Load32 | Opcode::Load64 => {
+            write!(w, "{} ", op.name()).unwrap();
             write_dst(w, ops[0]);
             write!(w, " <- [").unwrap();
             write_src(w, k1, ops[1]);
@@ -182,8 +191,8 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
             }
             write!(w, "]").unwrap();
         }
-        Opcode::Store => {
-            write!(w, "store.{} [", a).unwrap();
+        Opcode::Store8 | Opcode::Store16 | Opcode::Store32 | Opcode::Store64 => {
+            write!(w, "{} [", op.name()).unwrap();
             write_src(w, k1, ops[0]);
             if b != 0 {
                 write!(w, "+{}", b).unwrap();

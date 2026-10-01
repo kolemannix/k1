@@ -529,14 +529,6 @@ pub fn llvm_ir_text_filc(module: &LlvmModule) -> String {
     )
 }
 
-fn buffer_bytes(buffer: &inkwell::memory_buffer::MemoryBuffer) -> Box<[u8]> {
-    unsafe {
-        let start = llvm_sys::core::LLVMGetBufferStart(buffer.as_mut_ptr()) as *const u8;
-        let size = llvm_sys::core::LLVMGetBufferSize(buffer.as_mut_ptr());
-        std::slice::from_raw_parts(start, size).into()
-    }
-}
-
 #[repr(C)]
 struct K1ThinLtoUnit {
     data: *const u8,
@@ -1082,7 +1074,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         let bytes = if *pipeline == Pipeline::ThinLtoPreLink {
                             cg.thinlto_bitcode()
                         } else {
-                            buffer_bytes(&cg.llvm_module.write_bitcode_to_memory())
+                            cg.llvm_module.write_bitcode_to_memory().as_slice().into()
                         };
                         UnitArtifact::Bitcode {
                             bytes,
@@ -1142,7 +1134,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.llvm_module.as_mut_ptr(),
             ))
         };
-        buffer_bytes(&buffer)
+        buffer.as_slice().into()
     }
 
     pub fn merge_units<'c>(
@@ -1155,16 +1147,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             let UnitArtifact::Bitcode { bytes, .. } = artifact else {
                 panic!("merge_units on an object artifact")
             };
-            let buffer_name = std::ffi::CString::new(format!("{name}.{i}")).unwrap();
-            let buffer = unsafe {
-                inkwell::memory_buffer::MemoryBuffer::new(
-                    llvm_sys::core::LLVMCreateMemoryBufferWithMemoryRangeCopy(
-                        bytes.as_ptr() as *const std::ffi::c_char,
-                        bytes.len(),
-                        buffer_name.as_ptr(),
-                    ),
-                )
-            };
+            let buffer = inkwell::memory_buffer::MemoryBuffer::create_from_memory_range_copy(
+                bytes,
+                &format!("{name}.{i}"),
+            );
             let module = match LlvmModule::parse_bitcode_from_buffer(&buffer, ctx) {
                 Ok(module) => module,
                 Err(e) => cgbail!(Span::NONE, "Unit {i} bitcode failed to parse: {}", e),
@@ -2748,9 +2734,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 // is also exactly what the alloca below gets.
                 let td = self.llvm_machine.get_target_data();
                 let dst_int_align = td.get_abi_alignment(&dst_int_type);
-                let dst_int_size = td.get_abi_size(&dst_int_type);
                 let integer_ptr = self.build_alloca(dst_int_type, "abi_struct_int");
-                self.emit_lifetime_marker(true, integer_ptr, dst_int_size);
+                self.emit_lifetime_marker(true, integer_ptr);
                 self.builder.build_store(integer_ptr, dst_int_type.const_zero()).unwrap();
 
                 // %1 = alloca %struct.Small2, align 1
@@ -2772,7 +2757,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     )
                     .unwrap();
                 let integer_value = self.builder.build_load(abi_type, integer_ptr, "").unwrap();
-                self.emit_lifetime_marker(false, integer_ptr, dst_int_size);
+                self.emit_lifetime_marker(false, integer_ptr);
                 integer_value
             }
             AbiParamMapping::StructAsPointer => {
@@ -2800,7 +2785,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 } else {
                     let tmp = self.build_alloca(abi_type, "abi_pair_tmp");
                     let abi_alloc_size = td.get_abi_size(&abi_type);
-                    self.emit_lifetime_marker(true, tmp, abi_alloc_size);
+                    self.emit_lifetime_marker(true, tmp);
                     self.builder
                         .build_memset(
                             tmp,
@@ -2821,7 +2806,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         )
                         .unwrap();
                     let abi_value = self.builder.build_load(abi_type, tmp, "").unwrap();
-                    self.emit_lifetime_marker(false, tmp, abi_alloc_size);
+                    self.emit_lifetime_marker(false, tmp);
                     abi_value
                 }
             }
@@ -2844,11 +2829,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         // The callee may only read it during the call, so the caller
                         // (codegen_function_call) ends its lifetime after the callsite
                         let callers_copy = self.build_k1_alloca(cg_ty, "abi_caller_copy");
-                        self.emit_lifetime_marker(
-                            true,
-                            callers_copy,
-                            cg_ty.rich_repr_layout().size as u64,
-                        );
+                        self.emit_lifetime_marker(true, callers_copy);
                         self.memcpy_k1_value(callers_copy, k1_value.into_pointer_value(), cg_ty);
                         callers_copy.as_basic_value_enum()
                     }
@@ -2920,20 +2901,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             .into_int_value()
     }
 
-    fn emit_lifetime_marker(&self, start: bool, ptr: PointerValue<'ctx>, size_bytes: u64) {
-        let name = if start { "llvm.lifetime.start.p0" } else { "llvm.lifetime.end.p0" };
-        let function = match self.llvm_module.get_function(name) {
-            Some(f) => f,
-            None => {
-                let fn_type = self
-                    .ctx
-                    .void_type()
-                    .fn_type(&[self.ctx.i64_type().into(), self.builtin_types.ptr.into()], false);
-                self.llvm_module.add_function(name, fn_type, None)
-            }
-        };
-        let size = self.ctx.i64_type().const_int(size_bytes, false);
-        self.build_call(function, &[size.into(), ptr.into()]);
+    fn emit_lifetime_marker(&self, start: bool, alloca: PointerValue<'ctx>) {
+        let name = if start { "llvm.lifetime.start" } else { "llvm.lifetime.end" };
+        let function = Intrinsic::find(name)
+            .unwrap()
+            .get_declaration(&self.llvm_module, &[self.builtin_types.ptr.as_basic_type_enum()])
+            .unwrap();
+        self.build_call(function, &[alloca.into()]);
     }
 
     fn memcpy_layout(
@@ -3016,7 +2990,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn bool_to_i1(&self, bool: IntValue<'ctx>, name: &str) -> IntValue<'ctx> {
         let i1 = self.builder.build_int_truncate(bool, self.builtin_types.i1, name).unwrap();
         if let Some(trunc) = i1.as_instruction() {
-            unsafe { llvm_sys::core::LLVMSetNUW(trunc.as_value_ref(), 1) };
+            trunc.set_no_unsigned_wrap_flag(true).unwrap();
         }
         i1
     }
@@ -3203,13 +3177,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 // marshal made a fresh caller-owned copy; the callee may only
                 // read it during the call, so it dies at the callsite
                 AbiParamMapping::BigStructByPtrToCopy { byval_attr: false } => {
-                    caller_copies.push_grow(
-                        &mut self.tmp,
-                        (
-                            value_marshalled.into_pointer_value(),
-                            param_k1_ty.rich_repr_layout().size as u64,
-                        ),
-                    );
+                    caller_copies.push_grow(&mut self.tmp, value_marshalled.into_pointer_value());
                 }
                 _ => {}
             };
@@ -3265,8 +3233,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         {
             callsite_value.add_attribute(AttributeLoc::Return, attr);
         }
-        for (copy_ptr, size) in caller_copies.as_slice() {
-            self.emit_lifetime_marker(false, *copy_ptr, *size);
+        for copy_ptr in caller_copies.as_slice() {
+            self.emit_lifetime_marker(false, *copy_ptr);
         }
         match callsite_value.try_as_basic_value() {
             ValueKind::Basic(returned_value) => {
@@ -3939,7 +3907,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let store = self.builder.build_store(dst_ptr, value).unwrap();
                 store.set_alignment(align).unwrap();
                 if volatile {
-                    unsafe { llvm_sys::core::LLVMSetVolatile(store.as_value_ref(), 1) };
+                    store.set_volatile(true).unwrap();
                 }
                 Ok(())
             }
@@ -3950,7 +3918,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let load_inst = load.as_instruction_value().unwrap();
                 load_inst.set_alignment(self.claimed_align(t, unaligned)).unwrap();
                 if volatile {
-                    unsafe { llvm_sys::core::LLVMSetVolatile(load_inst.as_value_ref(), 1) };
+                    load_inst.set_volatile(true).unwrap();
                 }
                 if let CgType::Scalar(scalar) = cg_ty {
                     for (kind_id, metadata) in scalar.load_metadata.into_iter().flatten() {

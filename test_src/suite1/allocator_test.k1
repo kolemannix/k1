@@ -18,6 +18,36 @@ fn test() {
   ability-test()
   chaining-test()
   zeroing-test()
+  chunk-mark-test()
+}
+
+fn chunk-mark-test() {
+  let a = core/arena/init(256)
+  let keep = a.push(7: u64)
+  let m = a.mark()
+  a.alloc-buffer[u64](4).fill(3)
+  for i in 0.until(100) {
+    a.push(i.unsigned() + 1)
+  }
+  assert(not a.extra-chunks.is-null())
+  a.pop-to-mark(m)
+  assert(a.extra-chunks.is-null())
+  assert-equals(keep.*, 7)
+  assert-all-zero(a.alloc-buffer[u64](16))
+
+  a.reset()
+  a.alloc-buffer[u64](8).fill(4)
+  let chunk-m = a.mark()
+  for i in 0.until(100) {
+    a.push(i.unsigned() + 1)
+  }
+  let inner = a.mark()
+  a.push(9: u64)
+  a.pop-to-mark(inner)
+  a.pop-to-mark(chunk-m)
+  assert(a.extra-chunks.is-null())
+  assert-all-zero(a.alloc-buffer[u64](4))
+  a.release()
 }
 
 fn assert-all-zero(b: buffer[u64]) {

@@ -90,8 +90,8 @@ fn main() {
     }
 
     let llvm_prefix =
-        std::env::var("LLVM_SYS_211_PREFIX").expect("LLVM_SYS_211_PREFIX must be set");
-    println!("cargo:rerun-if-env-changed=LLVM_SYS_211_PREFIX");
+        std::env::var("LLVM_SYS_231_PREFIX").expect("LLVM_SYS_231_PREFIX must be set");
+    println!("cargo:rerun-if-env-changed=LLVM_SYS_231_PREFIX");
     let mut llvm_shims = cc::Build::new();
     llvm_shims
         .cpp(true)

@@ -23,4 +23,4 @@ RUN apt-get update && apt-get install -y \
 COPY --from=llvm-builder /llvm-build/install-llvm /opt/llvm
 
 ENV PATH="/opt/llvm/bin:${PATH}"
-ENV LLVM_SYS_221_PREFIX="/opt/llvm"
+ENV LLVM_SYS_231_PREFIX="/opt/llvm"

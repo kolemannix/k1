@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  LLVM_SYS_211_PREFIX: /usr/lib/llvm-21
+  LLVM_SYS_231_PREFIX: /usr/lib/llvm-23
   CARGO_TERM_COLOR: always
 
 jobs:
@@ -20,12 +20,12 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Install LLVM 21
+      - name: Install LLVM 23
         run: |
           wget -q https://apt.llvm.org/llvm.sh
           chmod +x llvm.sh
-          sudo ./llvm.sh 21
-          sudo apt-get install -y llvm-21-dev liblld-21-dev libclang-21-dev ripgrep
+          sudo ./llvm.sh 23
+          sudo apt-get install -y llvm-23-dev liblld-23-dev libclang-23-dev ripgrep
           rm llvm.sh
 
       - uses: dtolnay/rust-toolchain@stable

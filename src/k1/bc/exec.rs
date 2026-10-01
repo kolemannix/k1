@@ -152,7 +152,11 @@ pub fn execute_compiled_unit_raw(
     k1.trace_pop(ferry_frame);
 
     let run_frame = k1.trace_push_unit(TraceKind::VmRun, unit_id, None);
-    let exec_result = exec_loop(k1, vm, info.code_start, fp0, ret_pt);
+    let exec_result = if k1.config.tools.chatty {
+        exec_loop::<true>(k1, vm, info.code_start, fp0, ret_pt)
+    } else {
+        exec_loop::<false>(k1, vm, info.code_start, fp0, ret_pt)
+    };
     k1.trace_pop(run_frame);
 
     let exit_code = match exec_result {
@@ -247,20 +251,7 @@ fn store_bits(width_bits: u8, dst: *mut u8, v: Value) {
     }
 }
 
-#[inline]
-fn load_bits(width_bits: u8, src: *const u8) -> Value {
-    debug_assert!(!src.is_null(), "load_bits from null (width {})", width_bits);
-    unsafe {
-        match width_bits {
-            8 => Value::u8(src.read()),
-            16 => Value::u16((src as *const u16).read_unaligned()),
-            32 => Value::u32((src as *const u32).read_unaligned()),
-            _ => Value::u64((src as *const u64).read_unaligned()),
-        }
-    }
-}
-
-fn exec_loop(
+fn exec_loop<const COUNT_OPS: bool>(
     k1: &mut TypedProgram,
     vm: &mut Vm,
     start_pc: u32,
@@ -275,7 +266,6 @@ fn exec_loop(
     let mut fp: *mut u8 = top_fp;
     let mut ret_reg: Value = Value::u64(0);
     let mut instrs_run = 0;
-    let count_ops = k1.config.tools.chatty;
     let mut op_counts = [0u64; OPCODE_COUNT as usize];
 
     // Callers wrap uses in `unsafe`; pointer arithmetic + deref together
@@ -298,12 +288,14 @@ fn exec_loop(
     macro_rules! read_src {
         ($w:expr) => {{
             let w: u32 = $w;
-            if w & (VALUE_MASK_CONST_ID | VALUE_MASK_FRAME_OFFSET) == 0 {
-                Value::u64(unsafe { *word_ptr!(w) })
-            } else if w & VALUE_MASK_CONST_ID != 0 {
-                let idx = (w & !VALUE_MASK_CONST_ID) as usize;
-                debug_assert!(idx < k1.bc.consts.len(), "const operand out of bounds");
-                Value::u64(unsafe { *consts_base.add(idx) })
+            if w & VALUE_MASK_FRAME_OFFSET == 0 {
+                let is_const = w & VALUE_MASK_CONST_ID != 0;
+                debug_assert!(
+                    !is_const || ((w & !VALUE_MASK_CONST_ID) as usize) < k1.bc.consts.len(),
+                    "const operand out of bounds"
+                );
+                let base = if is_const { consts_base } else { fp as *const u64 };
+                Value::u64(unsafe { *base.add((w & !VALUE_MASK_CONST_ID) as usize) })
             } else {
                 Value::ptr(unsafe { fp.add((w & !VALUE_MASK_FRAME_OFFSET) as usize) })
             }
@@ -376,6 +368,46 @@ fn exec_loop(
             advance!($opcode);
         }};
     }
+    macro_rules! check_instr_limit {
+        () => {
+            if instrs_run > STATIC_EXEC_INSTR_LIMIT {
+                vmerr!(
+                    "Static execution exceeded {} instructions; likely an infinite loop",
+                    STATIC_EXEC_INSTR_LIMIT
+                );
+            }
+        };
+    }
+    macro_rules! jump_if_icmp {
+        ($h:ident, $pred:expr) => {{
+            check_instr_limit!();
+            let width = header_a($h);
+            let lhs = read_src!(operand!(0)).bits();
+            let rhs = read_src!(operand!(1)).bits();
+            let target =
+                if arith::int_cmp(width, $pred, lhs, rhs) { operand!(2) } else { operand!(3) };
+            set_pc!(target);
+        }};
+    }
+    // B = folded byte offset (0 when the address is used directly)
+    macro_rules! load_op {
+        ($h:ident, $t:ty, $opcode:path) => {{
+            let addr = read_src!(operand!(1)).as_ptr().wrapping_byte_add(header_b($h) as usize);
+            debug_assert!(!addr.is_null(), "load from null");
+            let v = unsafe { (addr as *const $t).read_unaligned() } as u64;
+            write_slot!(operand!(0), Value::u64(v));
+            advance!($opcode);
+        }};
+    }
+    macro_rules! store_op {
+        ($h:ident, $t:ty, $opcode:path) => {{
+            let addr = read_src!(operand!(0)).as_ptr().wrapping_byte_add(header_b($h) as usize);
+            debug_assert!(!addr.is_null(), "store to null");
+            let v = read_src!(operand!(1)).bits() as $t;
+            unsafe { (addr as *mut $t).write_unaligned(v) };
+            advance!($opcode);
+        }};
+    }
     macro_rules! pop_frame {
         () => {{
             let words = fp as *const u64;
@@ -389,14 +421,8 @@ fn exec_loop(
         debug_assert!((pc_u32!() as usize) < k1.bc.code.len(), "bc pc out of bounds");
         let h = unsafe { *pc };
         instrs_run += 1;
-        if instrs_run > STATIC_EXEC_INSTR_LIMIT {
-            vmerr!(
-                "Static execution exceeded {} instructions; likely an infinite loop",
-                STATIC_EXEC_INSTR_LIMIT
-            );
-        }
         let op = Opcode::from_u8(header_op(h));
-        if count_ops {
+        if COUNT_OPS {
             op_counts[op as usize] += 1;
         }
 
@@ -408,7 +434,7 @@ fn exec_loop(
                     store_value(k1, top_ret_pt, vm.overall_return_addr, ret_reg);
                 }
                 k1.trace.set_top_count(instrs_run as u64);
-                if count_ops {
+                if COUNT_OPS {
                     for (i, n) in op_counts.iter().enumerate() {
                         k1.trace.opcode_counts[i] += *n as i64;
                     }
@@ -424,15 +450,18 @@ fn exec_loop(
                 advance!(Opcode::Enter);
             }
             Opcode::Jump => {
+                check_instr_limit!();
                 let tgt = operand!(0);
                 set_pc!(tgt);
             }
             Opcode::JumpIf => {
+                check_instr_limit!();
                 let cond = read_src!(operand!(0));
                 let target = if cond.as_bool() { operand!(1) } else { operand!(2) };
                 set_pc!(target);
             }
             Opcode::Switch => {
+                check_instr_limit!();
                 let width = header_a(h);
                 let count = header_b(h) as usize;
                 let key = read_src!(operand!(0)).bits() & ir::low_mask_from_u8(width);
@@ -455,15 +484,16 @@ fn exec_loop(
                 }
                 set_pc!(target);
             }
-            Opcode::JumpIfIntCmp => {
-                let width = header_a(h);
-                let pred = ir::IntCmpPred::from_u8(header_b(h) as u8);
-                let lhs = read_src!(operand!(0)).bits();
-                let rhs = read_src!(operand!(1)).bits();
-                let target =
-                    if arith::int_cmp(width, pred, lhs, rhs) { operand!(2) } else { operand!(3) };
-                set_pc!(target);
-            }
+            Opcode::JumpIfEq => jump_if_icmp!(h, ir::IntCmpPred::Eq),
+            Opcode::JumpIfSlt => jump_if_icmp!(h, ir::IntCmpPred::Slt),
+            Opcode::JumpIfSle => jump_if_icmp!(h, ir::IntCmpPred::Sle),
+            Opcode::JumpIfSgt => jump_if_icmp!(h, ir::IntCmpPred::Sgt),
+            Opcode::JumpIfSge => jump_if_icmp!(h, ir::IntCmpPred::Sge),
+            Opcode::JumpIfUlt => jump_if_icmp!(h, ir::IntCmpPred::Ult),
+            Opcode::JumpIfUle => jump_if_icmp!(h, ir::IntCmpPred::Ule),
+            Opcode::JumpIfUgt => jump_if_icmp!(h, ir::IntCmpPred::Ugt),
+            Opcode::JumpIfUge => jump_if_icmp!(h, ir::IntCmpPred::Uge),
+            Opcode::JumpIfNe => jump_if_icmp!(h, ir::IntCmpPred::Ne),
             Opcode::Unreachable => {
                 vmerr!("Reached unreachable instruction");
             }
@@ -481,6 +511,7 @@ fn exec_loop(
                 pop_frame!();
             }
             Opcode::Call => {
+                check_instr_limit!();
                 let target = operand!(0);
                 let fp_delta = operand!(1) as usize;
                 let nargs = header_b(h) as usize;
@@ -504,6 +535,7 @@ fn exec_loop(
                 set_pc!(target);
             }
             Opcode::CallIndirect => {
+                check_instr_limit!();
                 let fn_value = read_src!(operand!(0));
                 let fp_delta = operand!(1) as usize;
                 let fid_u32 = fn_value.bits() as u32;
@@ -685,18 +717,14 @@ fn exec_loop(
                 write_slot!(dst, v);
                 advance!(Opcode::LoadGlobal);
             }
-            Opcode::Load => {
-                // B = folded byte offset (0 when the address is used directly)
-                let addr = read_src!(operand!(1)).as_ptr().wrapping_byte_add(header_b(h) as usize);
-                write_slot!(operand!(0), load_bits(header_a(h), addr));
-                advance!(Opcode::Load);
-            }
-            Opcode::Store => {
-                let addr = read_src!(operand!(0)).as_ptr().wrapping_byte_add(header_b(h) as usize);
-                let v = read_src!(operand!(1));
-                store_bits(header_a(h), addr, v);
-                advance!(Opcode::Store);
-            }
+            Opcode::Load8 => load_op!(h, u8, Opcode::Load8),
+            Opcode::Load16 => load_op!(h, u16, Opcode::Load16),
+            Opcode::Load32 => load_op!(h, u32, Opcode::Load32),
+            Opcode::Load64 => load_op!(h, u64, Opcode::Load64),
+            Opcode::Store8 => store_op!(h, u8, Opcode::Store8),
+            Opcode::Store16 => store_op!(h, u16, Opcode::Store16),
+            Opcode::Store32 => store_op!(h, u32, Opcode::Store32),
+            Opcode::Store64 => store_op!(h, u64, Opcode::Store64),
             Opcode::AtomicLoad => {
                 let ord = ir::AtomicOrderingIr::from_tag(header_b(h) as u8);
                 let addr = read_src!(operand!(1));

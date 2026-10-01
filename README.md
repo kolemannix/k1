@@ -51,16 +51,16 @@ north star.
 
 ### Contributing setup
 
-To build from source, you'll want to install Rust, `just`, and LLVM 21. Rust may be installed via [`rustup`](https://rustup.rs). At the time of this
+To build from source, you'll want to install Rust, `just`, and LLVM 23. Rust may be installed via [`rustup`](https://rustup.rs). At the time of this
 writing, `rustc` 1.95 is the latest version and works great. You can install [`just`](https://github.com/casey/just#installation) via your package
-manager, pre-built binary, etc. LLVM may also be installed via your package manager. On Mac for example, `brew install llvm@21`. `llvm-sys` won't know
+manager, pre-built binary, etc. LLVM may also be installed via your package manager. On Mac for example, `brew install llvm@23`. `llvm-sys` won't know
 where the install is at on its own though, so tell it via an environment variable in your shell config. Again on Mac for example:
 
 ```bash
-export LLVM_SYS_211_PREFIX="$(brew --prefix llvm@21)"
+export LLVM_SYS_231_PREFIX="$(brew --prefix llvm@23)"
 ```
 
-If you're really serious about building binaries, there is a script located in the repo [llvm/get_llvm.sh](llvm/get_llvm.sh) that will help you cut an LLVM 21 build
+If you're really serious about building binaries, there is a script located in the repo [llvm/get_llvm.sh](llvm/get_llvm.sh) that will help you cut an LLVM 23 build
 from source, with the flags k1 needs to enable fully static linking of llvm.
 
 With the dependencies installed, `k1` and the language server may be built via:
