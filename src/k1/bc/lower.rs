@@ -15,7 +15,7 @@ use crate::vm;
 
 use super::{
     CastKind, FRAME_ALIGN, FRAME_HEADER_WORDS, Opcode, PENDING_PC, UnitInfo, UnitKind,
-    VALUE_MASK_FRAME_OFFSET, builtin_tag, header,
+    VALUE_MASK_CONST_ID, VALUE_MASK_FRAME_OFFSET, builtin_tag, header,
 };
 
 pub fn get_or_lower_unit(
@@ -225,6 +225,30 @@ impl LowerCtx {
 
     fn push(&mut self, w: u32) {
         self.bc_out.push(w);
+    }
+
+    fn emit_load(&mut self, width_bits: u8, dst: u32, addr: u32, off: u16) {
+        if addr & (VALUE_MASK_FRAME_OFFSET | VALUE_MASK_CONST_ID) == VALUE_MASK_FRAME_OFFSET {
+            self.emit(Opcode::load_fp(width_bits), 0, 0);
+            self.push(dst);
+            self.push((addr & !VALUE_MASK_FRAME_OFFSET) + off as u32);
+        } else {
+            self.emit(Opcode::load(width_bits), 0, off);
+            self.push(dst);
+            self.push(addr);
+        }
+    }
+
+    fn emit_store(&mut self, width_bits: u8, addr: u32, off: u16, value: u32) {
+        if addr & (VALUE_MASK_FRAME_OFFSET | VALUE_MASK_CONST_ID) == VALUE_MASK_FRAME_OFFSET {
+            self.emit(Opcode::store_fp(width_bits), 0, 0);
+            self.push((addr & !VALUE_MASK_FRAME_OFFSET) + off as u32);
+            self.push(value);
+        } else {
+            self.emit(Opcode::store(width_bits), 0, off);
+            self.push(addr);
+            self.push(value);
+        }
     }
 
     fn push_block_target(&mut self, b: BlockId) {
@@ -647,17 +671,13 @@ fn emit_inst(
         Inst::Store { dst, value, t, volatile: _, unaligned: _ } => {
             let (addr, off) = resolve_addr(k1, ctx, dst);
             let value = resolve_lowered_value(k1, ctx, value);
-            ctx.emit(Opcode::store(t.width_bits()), 0, off);
-            ctx.push(addr);
-            ctx.push(value);
+            ctx.emit_store(t.width_bits(), addr, off, value);
         }
         Inst::Load { t, src, .. } => {
             let t = t.expect_scalar();
             let (addr, off) = resolve_addr(k1, ctx, src);
             let result = ctx.bc_value_of(inst_id);
-            ctx.emit(Opcode::load(t.width_bits()), 0, off);
-            ctx.push(result);
-            ctx.push(addr);
+            ctx.emit_load(t.width_bits(), result, addr, off);
         }
         Inst::AtomicLoad { t, src, ord } => {
             let addr = resolve_lowered_value(k1, ctx, src);
@@ -710,9 +730,7 @@ fn emit_inst(
                     let (addr, base_off) = resolve_addr(k1, ctx, vop.dst);
                     let val = resolve_lowered_value(k1, ctx, vop.lhs);
                     for lane in 0..vop.lanes as u16 {
-                        ctx.emit(Opcode::store(elem_bits), 0, base_off + lane * stride);
-                        ctx.push(addr);
-                        ctx.push(val);
+                        ctx.emit_store(elem_bits, addr, base_off + lane * stride, val);
                     }
                 }
                 VecOpIr::Add
@@ -730,12 +748,8 @@ fn emit_inst(
                     let zero = k1.bc.intern_const(0);
                     for lane in 0..vop.lanes as u16 {
                         let off = lane * stride;
-                        ctx.emit(Opcode::load(elem_bits), 0, lhs_off + off);
-                        ctx.push(s0);
-                        ctx.push(lhs_addr);
-                        ctx.emit(Opcode::load(elem_bits), 0, rhs_off + off);
-                        ctx.push(s1);
-                        ctx.push(rhs_addr);
+                        ctx.emit_load(elem_bits, s0, lhs_addr, lhs_off + off);
+                        ctx.emit_load(elem_bits, s1, rhs_addr, rhs_off + off);
                         match vop.op {
                             VecOpIr::EqLanes => {
                                 if is_float {
@@ -774,9 +788,7 @@ fn emit_inst(
                                 ctx.push(s1);
                             }
                         }
-                        ctx.emit(Opcode::store(elem_bits), 0, dst_off + off);
-                        ctx.push(dst_addr);
-                        ctx.push(s0);
+                        ctx.emit_store(elem_bits, dst_addr, dst_off + off, s0);
                     }
                 }
                 VecOpIr::BitNot => {
@@ -785,15 +797,11 @@ fn emit_inst(
                     let s0 = ctx.next_scratch();
                     for lane in 0..vop.lanes as u16 {
                         let off = lane * stride;
-                        ctx.emit(Opcode::load(elem_bits), 0, lhs_off + off);
-                        ctx.push(s0);
-                        ctx.push(lhs_addr);
+                        ctx.emit_load(elem_bits, s0, lhs_addr, lhs_off + off);
                         ctx.emit(Opcode::BitNot, elem_bits, 0);
                         ctx.push(s0);
                         ctx.push(s0);
-                        ctx.emit(Opcode::store(elem_bits), 0, dst_off + off);
-                        ctx.push(dst_addr);
-                        ctx.push(s0);
+                        ctx.emit_store(elem_bits, dst_addr, dst_off + off, s0);
                     }
                 }
                 VecOpIr::Shl | VecOpIr::ShrS | VecOpIr::ShrU => {
@@ -808,16 +816,12 @@ fn emit_inst(
                     };
                     for lane in 0..vop.lanes as u16 {
                         let off = lane * stride;
-                        ctx.emit(Opcode::load(elem_bits), 0, lhs_off + off);
-                        ctx.push(s0);
-                        ctx.push(lhs_addr);
+                        ctx.emit_load(elem_bits, s0, lhs_addr, lhs_off + off);
                         ctx.emit(opcode, elem_bits, 0);
                         ctx.push(s0);
                         ctx.push(s0);
                         ctx.push(count);
-                        ctx.emit(Opcode::store(elem_bits), 0, dst_off + off);
-                        ctx.push(dst_addr);
-                        ctx.push(s0);
+                        ctx.emit_store(elem_bits, dst_addr, dst_off + off, s0);
                     }
                 }
                 VecOpIr::ToMask => {
@@ -830,9 +834,7 @@ fn emit_inst(
                     ctx.push(acc);
                     ctx.push(zero);
                     for lane in 0..vop.lanes as u16 {
-                        ctx.emit(Opcode::load(elem_bits), 0, lhs_off + lane * stride);
-                        ctx.push(s0);
-                        ctx.push(lhs_addr);
+                        ctx.emit_load(elem_bits, s0, lhs_addr, lhs_off + lane * stride);
                         ctx.emit(Opcode::ShrU, elem_bits, 0);
                         ctx.push(s0);
                         ctx.push(s0);

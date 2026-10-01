@@ -69,6 +69,14 @@ pub enum Opcode {
     Store16,
     Store32,
     Store64,
+    LoadFp8,
+    LoadFp16,
+    LoadFp32,
+    LoadFp64,
+    StoreFp8,
+    StoreFp16,
+    StoreFp32,
+    StoreFp64,
     Copy,
     Zero,
     PtrAddImm,
@@ -163,6 +171,8 @@ impl Opcode {
             Opcode::LoadGlobal => 3, // [dst][global_id][storage_pt]
             Opcode::Load8 | Opcode::Load16 | Opcode::Load32 | Opcode::Load64 => 2, // [dst][addr src]
             Opcode::Store8 | Opcode::Store16 | Opcode::Store32 | Opcode::Store64 => 2, // [addr src][val src]
+            Opcode::LoadFp8 | Opcode::LoadFp16 | Opcode::LoadFp32 | Opcode::LoadFp64 => 2, // [dst][fp byte offset]
+            Opcode::StoreFp8 | Opcode::StoreFp16 | Opcode::StoreFp32 | Opcode::StoreFp64 => 2, // [fp byte offset][val src]
             Opcode::Copy => 3,       // [dst src][src src][size]
             Opcode::Zero => 2,       // [dst src][size]
             Opcode::PtrAddImm => 3,  // [dst][base src][byte offset]
@@ -223,6 +233,24 @@ impl Opcode {
         }
     }
 
+    pub fn load_fp(width_bits: u8) -> Opcode {
+        match width_bits {
+            8 => Opcode::LoadFp8,
+            16 => Opcode::LoadFp16,
+            32 => Opcode::LoadFp32,
+            _ => Opcode::LoadFp64,
+        }
+    }
+
+    pub fn store_fp(width_bits: u8) -> Opcode {
+        match width_bits {
+            8 => Opcode::StoreFp8,
+            16 => Opcode::StoreFp16,
+            32 => Opcode::StoreFp32,
+            _ => Opcode::StoreFp64,
+        }
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Opcode::Halt => "halt",
@@ -260,6 +288,14 @@ impl Opcode {
             Opcode::Store16 => "store.16",
             Opcode::Store32 => "store.32",
             Opcode::Store64 => "store.64",
+            Opcode::LoadFp8 => "load_fp.8",
+            Opcode::LoadFp16 => "load_fp.16",
+            Opcode::LoadFp32 => "load_fp.32",
+            Opcode::LoadFp64 => "load_fp.64",
+            Opcode::StoreFp8 => "store_fp.8",
+            Opcode::StoreFp16 => "store_fp.16",
+            Opcode::StoreFp32 => "store_fp.32",
+            Opcode::StoreFp64 => "store_fp.64",
             Opcode::Copy => "copy",
             Opcode::Zero => "zero",
             Opcode::PtrAddImm => "ptr_add_imm",

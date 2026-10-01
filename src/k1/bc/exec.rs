@@ -408,6 +408,22 @@ fn exec_loop<const COUNT_OPS: bool>(
             advance!($opcode);
         }};
     }
+    macro_rules! load_fp_op {
+        ($t:ty, $opcode:path) => {{
+            let slot = operand!(1) as usize;
+            let v = unsafe { (fp.add(slot) as *const $t).read_unaligned() } as u64;
+            write_slot!(operand!(0), Value::u64(v));
+            advance!($opcode);
+        }};
+    }
+    macro_rules! store_fp_op {
+        ($t:ty, $opcode:path) => {{
+            let slot = operand!(0) as usize;
+            let v = read_src!(operand!(1)).bits() as $t;
+            unsafe { (fp.add(slot) as *mut $t).write_unaligned(v) };
+            advance!($opcode);
+        }};
+    }
     macro_rules! pop_frame {
         () => {{
             let words = fp as *const u64;
@@ -725,6 +741,14 @@ fn exec_loop<const COUNT_OPS: bool>(
             Opcode::Store16 => store_op!(h, u16, Opcode::Store16),
             Opcode::Store32 => store_op!(h, u32, Opcode::Store32),
             Opcode::Store64 => store_op!(h, u64, Opcode::Store64),
+            Opcode::LoadFp8 => load_fp_op!(u8, Opcode::LoadFp8),
+            Opcode::LoadFp16 => load_fp_op!(u16, Opcode::LoadFp16),
+            Opcode::LoadFp32 => load_fp_op!(u32, Opcode::LoadFp32),
+            Opcode::LoadFp64 => load_fp_op!(u64, Opcode::LoadFp64),
+            Opcode::StoreFp8 => store_fp_op!(u8, Opcode::StoreFp8),
+            Opcode::StoreFp16 => store_fp_op!(u16, Opcode::StoreFp16),
+            Opcode::StoreFp32 => store_fp_op!(u32, Opcode::StoreFp32),
+            Opcode::StoreFp64 => store_fp_op!(u64, Opcode::StoreFp64),
             Opcode::AtomicLoad => {
                 let ord = ir::AtomicOrderingIr::from_tag(header_b(h) as u8);
                 let addr = read_src!(operand!(1));

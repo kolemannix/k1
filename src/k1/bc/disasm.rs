@@ -200,6 +200,15 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
             write!(w, "] <- ").unwrap();
             write_src(w, k1, ops[1]);
         }
+        Opcode::LoadFp8 | Opcode::LoadFp16 | Opcode::LoadFp32 | Opcode::LoadFp64 => {
+            write!(w, "{} ", op.name()).unwrap();
+            write_dst(w, ops[0]);
+            write!(w, " <- [fp+{}]", ops[1]).unwrap();
+        }
+        Opcode::StoreFp8 | Opcode::StoreFp16 | Opcode::StoreFp32 | Opcode::StoreFp64 => {
+            write!(w, "{} [fp+{}] <- ", op.name(), ops[0]).unwrap();
+            write_src(w, k1, ops[1]);
+        }
         Opcode::AtomicLoad => {
             write!(w, "atomic_load.{} {} ", a, ir::AtomicOrderingIr::from_tag(b as u8).name())
                 .unwrap();
