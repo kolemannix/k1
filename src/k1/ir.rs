@@ -61,8 +61,9 @@ pub struct ProgramIr {
     opt_buf_visit_stack: Vec<iropt::OptVisit>,
     opt_buf_visited: FxHashSet<IrUnitId>,
     opt_buf_callees: Vec<FunctionId>,
-    opt_buf_value_subst: iropt::ValueSubst,
     opt_buf_inline: iropt::InlineState,
+    opt_buf_promote: Option<Box<iropt::PromoteState>>,
+    opt_buf_local_uses: Vec<Box<iropt::LocalUses>>,
 }
 
 static_assert_size!(IrComment, 1);
@@ -90,8 +91,9 @@ impl ProgramIr {
             opt_buf_visit_stack: _,
             opt_buf_visited: _,
             opt_buf_callees: _,
-            opt_buf_value_subst: _,
             opt_buf_inline: _,
+            opt_buf_promote: _,
+            opt_buf_local_uses: _,
         } = self;
         w.write_section("ir");
         w.write_u64(*insts_emitted);
@@ -175,6 +177,8 @@ pub enum IrComment {
     LoopBreakValue,
     LoopPhi,
     MatchPhi,
+    PromotedPhi,
+    PromotedCopy,
     MatchResultSlot,
     MatchSwitch,
     MatchingCondCond,
@@ -258,6 +262,8 @@ impl IrComment {
             IrComment::LoopBreakValue => "loop break value",
             IrComment::LoopPhi => "loop phi",
             IrComment::MatchPhi => "match phi",
+            IrComment::PromotedPhi => "promoted phi",
+            IrComment::PromotedCopy => "promoted copy",
             IrComment::MatchResultSlot => "match result slot",
             IrComment::MatchSwitch => "match switch",
             IrComment::MatchingCondCond => "matching cond cond",
@@ -330,8 +336,9 @@ impl ProgramIr {
             opt_buf_visit_stack: vec![],
             opt_buf_visited: FxHashSet::default(),
             opt_buf_callees: vec![],
-            opt_buf_value_subst: iropt::ValueSubst::default(),
             opt_buf_inline: iropt::InlineState::default(),
+            opt_buf_promote: None,
+            opt_buf_local_uses: Vec::new(),
         }
     }
 }
@@ -575,7 +582,11 @@ pub enum VecOpIr {
     ShrS,
     ShrU,
     EqLanes,
+    LtLanesS,
+    LtLanesU,
+    ShuffleBytes,
     ToMask,
+    ReduceOr,
 }
 
 impl VecOpIr {
@@ -593,7 +604,11 @@ impl VecOpIr {
             VecOpIr::ShrS => "shr_s",
             VecOpIr::ShrU => "shr_u",
             VecOpIr::EqLanes => "eq_lanes",
+            VecOpIr::LtLanesS => "lt_lanes_s",
+            VecOpIr::LtLanesU => "lt_lanes_u",
+            VecOpIr::ShuffleBytes => "shuffle_bytes",
             VecOpIr::ToMask => "to_mask",
+            VecOpIr::ReduceOr => "reduce_or",
         }
     }
 }
@@ -1291,6 +1306,7 @@ pub fn get_inst_kind(u: &UnitView, inst_id: InstId) -> InstKind {
         Inst::AtomicCmpxchg { .. } => InstKind::Void,
         Inst::VecOp { id } => match u.vec_op(id).op {
             VecOpIr::ToMask => InstKind::I64,
+            VecOpIr::ReduceOr => InstKind::scalar(u.vec_op(id).elem),
             _ => InstKind::Void,
         },
         Inst::Fence { .. } => InstKind::Void,
@@ -1606,7 +1622,14 @@ fn finalize_unit(
 ) -> K1Result<()> {
     let mut unit = IrUnit::new(result_type_id, unit_id, fn_type, builtin_kind, is_debug);
     b.k1.ir.insts_emitted += b.u.inst_count() as u64;
-    iropt::cfg_simplify(b.k1, b.u);
+    iropt::remove_unreachable_blocks(b.k1, b.u);
+    if let Some(mut local_uses) = b.local_uses.take() {
+        if local_uses.has_allocas() {
+            iropt::promote_unit(b.k1, b.u, unit_id, Some(&mut local_uses));
+        }
+        b.k1.ir.opt_buf_local_uses.push(local_uses);
+    }
+    iropt::merge_blocks(b.k1, b.u);
     commit_unit(&mut b.k1.ir, b.u, &mut unit);
     b.k1.ir.insts_committed += unit.insts.len() as u64;
     match unit_id {
@@ -1658,10 +1681,16 @@ pub struct Builder<'k1> {
     cur_block: BlockId,
     cur_span: Span,
     entry_span: Span,
+    local_uses: Option<Box<iropt::LocalUses>>,
 }
 
 impl<'k1> Builder<'k1> {
     fn new(k1: &'k1 mut TypedProgram, u: &'k1 mut UnitBuf) -> Self {
+        let local_uses = k1.optimize_ir().then(|| {
+            let mut local_uses = k1.ir.opt_buf_local_uses.pop().unwrap_or_default();
+            local_uses.clear();
+            local_uses
+        });
         Self {
             k1,
             u,
@@ -1672,6 +1701,7 @@ impl<'k1> Builder<'k1> {
             cur_block: BlockId::PENDING,
             cur_span: Span::NONE,
             entry_span: Span::NONE,
+            local_uses,
         }
     }
 
@@ -1702,11 +1732,20 @@ impl<'k1> Builder<'k1> {
     }
 
     fn link_alloca(&mut self, inst_id: InstId) {
+        let entry = self.u.body.first_block.unwrap();
         match self.u.body.last_alloca {
-            None => self.u.push_inst_front(self.u.body.first_block.unwrap(), inst_id),
+            None => self.u.push_inst_front(entry, inst_id),
             Some(last_alloca) => self.u.insert_inst_after(last_alloca, inst_id),
         }
         self.u.body.last_alloca = Some(inst_id);
+        let inst = *self.u.inst(inst_id);
+        self.record_local_uses(&inst, inst_id, entry);
+    }
+
+    fn record_local_uses(&mut self, inst: &Inst, id: InstId, block: BlockId) {
+        if let Some(local_uses) = &mut self.local_uses {
+            local_uses.record_inst(self.k1, self.u, id, inst, block);
+        }
     }
 
     pub fn get_inst_kind(&self, inst: InstId) -> InstKind {
@@ -1728,12 +1767,14 @@ impl<'k1> Builder<'k1> {
     fn push_inst_front(&mut self, inst: Inst, comment: IrComment) -> InstId {
         let id = self.make_inst(inst, comment);
         self.u.push_inst_front(self.cur_block, id);
+        self.record_local_uses(&inst, id, self.cur_block);
         id
     }
 
     fn push_inst(&mut self, inst: Inst, comment: IrComment) -> InstId {
         let id = self.make_inst(inst, comment);
         self.u.push_inst(self.cur_block, id);
+        self.record_local_uses(&inst, id, self.cur_block);
         id
     }
 
@@ -3519,7 +3560,9 @@ fn compile_vector_op(
         | VecOpKind::BitAnd
         | VecOpKind::BitOr
         | VecOpKind::Xor
-        | VecOpKind::EqLanes => {
+        | VecOpKind::EqLanes
+        | VecOpKind::LtLanes
+        | VecOpKind::ShuffleBytes => {
             let op = match op {
                 VecOpKind::Add => VecOpIr::Add,
                 VecOpKind::Sub => VecOpIr::Sub,
@@ -3528,6 +3571,14 @@ fn compile_vector_op(
                 VecOpKind::BitOr => VecOpIr::BitOr,
                 VecOpKind::Xor => VecOpIr::Xor,
                 VecOpKind::EqLanes => VecOpIr::EqLanes,
+                VecOpKind::ShuffleBytes => VecOpIr::ShuffleBytes,
+                VecOpKind::LtLanes => {
+                    if callee_vector_elem_is_signed(b, call) {
+                        VecOpIr::LtLanesS
+                    } else {
+                        VecOpIr::LtLanesU
+                    }
+                }
                 _ => unreachable!(),
             };
             let ret_pt = callee_fn_type.return_type;
@@ -3565,19 +3616,11 @@ fn compile_vector_op(
             let op = match op {
                 VecOpKind::ShiftLeft => VecOpIr::Shl,
                 _ => {
-                    let function_type = b.k1.get_callee_function_type(&call.callee);
-                    let return_type =
-                        b.k1.types.get(function_type).as_function().unwrap().return_type;
-                    let Type::Vector(vector) = b.k1.types.get(return_type) else {
-                        b.k1.ice_span(b.cur_span, "vector shift must return a vector")
-                    };
-                    let elem_signed = b
-                        .k1
-                        .types
-                        .get(vector.element_type)
-                        .as_integer()
-                        .is_some_and(|i| i.is_signed());
-                    if elem_signed { VecOpIr::ShrS } else { VecOpIr::ShrU }
+                    if callee_vector_elem_is_signed(b, call) {
+                        VecOpIr::ShrS
+                    } else {
+                        VecOpIr::ShrU
+                    }
                 }
             };
             let ret_pt = callee_fn_type.return_type;
@@ -3592,12 +3635,12 @@ fn compile_vector_op(
             b.push_inst_anon(Inst::VecOp { id });
             Ok(locn)
         }
-        VecOpKind::ToMask => {
+        VecOpKind::ToMask | VecOpKind::ReduceOr => {
             let vec_pt = b.k1.ir.mem.get_nth(callee_fn_type.params, 0).pt;
             let (elem, lanes) = vector_pt_parts(b, vec_pt)?;
             let lhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let id = b.u.add_vec_op(VecOpData {
-                op: VecOpIr::ToMask,
+                op: if op == VecOpKind::ToMask { VecOpIr::ToMask } else { VecOpIr::ReduceOr },
                 elem,
                 lanes,
                 dst: Value::Empty,
@@ -3662,6 +3705,15 @@ fn compile_vector_op(
             Ok(locn)
         }
     }
+}
+
+fn callee_vector_elem_is_signed(b: &mut Builder, call: &Call) -> bool {
+    let function_type = b.k1.get_callee_function_type(&call.callee);
+    let return_type = b.k1.types.get(function_type).as_function().unwrap().return_type;
+    let Type::Vector(vector) = b.k1.types.get(return_type) else {
+        b.k1.ice_span(b.cur_span, "vector op must return a vector")
+    };
+    b.k1.types.get(vector.element_type).as_integer().is_some_and(|i| i.is_signed())
 }
 
 fn vector_pt_parts(b: &mut Builder, pt: PhysicalType) -> K1Result<(ScalarType, u32)> {
@@ -4138,12 +4190,7 @@ pub fn get_program_roots(k1: &TypedProgram) -> K1Result<ProgramRoots> {
         Some(main_function_id)
     } else {
         if exports.is_empty() && !any_exported_global {
-            kbail!(
-                k1,
-                Span::NONE,
-                "Library {} exports no functions or globals",
-                k1.program_name()
-            );
+            kbail!(k1, Span::NONE, "Library {} exports no functions or globals", k1.program_name());
         }
         None
     };
@@ -4347,7 +4394,9 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                 }
                 Inst::VecOp { id } => {
                     let vop = u.vec_op(id);
-                    if vop.op != VecOpIr::ToMask && !get_value_kind(&u, vop.dst).is_storage() {
+                    if !matches!(vop.op, VecOpIr::ToMask | VecOpIr::ReduceOr)
+                        && !get_value_kind(&u, vop.dst).is_storage()
+                    {
                         errors.push(format!("i{inst_id}: vec op dst is not storage"))
                     }
                 }

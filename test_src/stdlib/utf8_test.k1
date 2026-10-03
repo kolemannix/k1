@@ -1,0 +1,64 @@
+ns utf8_test
+use std/utf8
+
+fn scalar-valid-utf8(bytes: span[u8]): bool {
+  let n = bytes.len()
+  let i: size = 0
+  while i < n {
+    let c = bytes.[i]
+    if c < 0x80 { i = i + 1; continue }
+    let need: size = 0
+    let lo: u8 = 0x80
+    let hi: u8 = 0xBF
+    if c >= 0xC2 and c <= 0xDF { need = 1 }
+    else if c == 0xE0 { need = 2; lo = 0xA0 }
+    else if (c >= 0xE1 and c <= 0xEC) or c == 0xEE or c == 0xEF { need = 2 }
+    else if c == 0xED { need = 2; hi = 0x9F }
+    else if c == 0xF0 { need = 3; lo = 0x90 }
+    else if c >= 0xF1 and c <= 0xF3 { need = 3 }
+    else if c == 0xF4 { need = 3; hi = 0x8F }
+    else { return false }
+    if i + need >= n { return false }
+    let second = bytes.[i + 1]
+    if second < lo or second > hi { return false }
+    let j: size = 2
+    while j <= need {
+      let t = bytes.[i + j]
+      if t < 0x80 or t > 0xBF { return false }
+      j = j + 1
+    }
+    i = i + need + 1
+  }
+  true
+}
+
+fn test() {
+  let seed: u64 = 0x9E3779B97F4A7C15
+  let buf = list/empty[u8]()
+  for 0.until(3000) {
+    buf.clear()
+    seed = seed * 6364136223846793005 + 1442695040888963407
+    let len = ((seed >> 33) % 40).signed()
+    for 0.until(len) {
+      seed = seed * 6364136223846793005 + 1442695040888963407
+      let r = (seed >> 24).trunc[u8]
+      let b: u8 = if r < 96 (r % 128) else if r < 160 (0x80 + r % 64) else if r < 200 (0xC2 + r % 30) else if r < 230 (0xE0 + r % 16) else (0xF0 + r % 8)
+      buf.push(b)
+    }
+    let bytes = buf.as-span()
+    if utf8/is-valid(bytes) != scalar-valid-utf8(bytes) {
+      let sb = string-builder/new()
+      for bytes { sb.write(" "); core/format-uint(context sb.&)(it.widen[u64], 16) }
+      crash("utf8 mismatch, simd=${utf8/is-valid(bytes)}:${sb.build()}")
+    }
+  }
+  let edges: span[span[u8]] = [
+    [0xE2, 0x82], [0xE2, 0x82, 0xAC], [0xF0, 0x9F, 0x98], [0xF0, 0x9F, 0x98, 0x80], [0xC0, 0x80], [0xED, 0xA0, 0x80],
+    [0xF4, 0x90, 0x80, 0x80], [0xF4, 0x8F, 0xBF, 0xBF], [0x80], [0xC2], [0x61, 0xC3, 0xA9],
+    [0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0xE2],
+    [0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0xE2, 0x82],
+    [0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0xC3, 0xA9],
+    [0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0xE2, 0x82],
+  ]
+  for edges { assert-equals(utf8/is-valid(it), scalar-valid-utf8(it)) }
+}

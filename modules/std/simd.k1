@@ -65,12 +65,12 @@ fn map-impl(
 
 macro map[t](name: code, binding: code, consts: span[{ name: string, value: i64 }], body: code) {
   code/from-string(map-impl(
-    name.text(),
+    name.text,
     types/name[t],
     types/size[t],
-    binding.text(),
+    binding.text,
     consts,
-    body.text()
+    body.text
   ))
 }
 
@@ -118,12 +118,12 @@ fn reduce-impl(
 
 macro reduce[t](name: code, acc-binding: code, item-binding: code, body: code, identity: i64) {
   code/from-string(reduce-impl(
-    name.text(),
+    name.text,
     types/name[t],
     types/size[t],
-    acc-binding.text(),
-    item-binding.text(),
-    body.text(),
+    acc-binding.text,
+    item-binding.text,
+    body.text,
     identity
   ))
 }
@@ -196,5 +196,5 @@ fn first-of-impl(name: string, needles: span[char]): string {
 }
 
 macro first-of(name: code, needles: span[char]) {
-  code/from-string(first-of-impl(name.text(), needles))
+  code/from-string(first-of-impl(name.text, needles))
 }

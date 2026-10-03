@@ -939,30 +939,28 @@ impl TypedProgram {
         }
     }
 
-    /// A constant `code` value: a list of chunks, each text plus its source span
-    pub(super) fn make_static_code_value(
-        &mut self,
-        chunks: &[(StringId, Span)],
-    ) -> StaticValueId {
+    /// A constant `code` value: one text with one source span covering it
+    pub(super) fn make_static_code_value(&mut self, text: StringId, source: Span) -> StaticValueId {
         let code_type = self.builtin_types.code();
-        let chunk_type = self.builtin_types.code_chunk();
-        let chunks_list_type =
-            self.instantiate_generic_type(self.builtin_types.list(), &[chunk_type]);
-        let mut elements = self.tmp.new_list(chunks.len() as u32);
-        for (text, source) in chunks {
-            let text_value = self.static_values.add_string(*text);
-            let source_value =
-                self.static_values.add_int(TypedIntValue::U64(source.encoded_k1_u64()));
-            let chunk_value =
-                self.static_values.add_struct_from_slice(chunk_type, &[text_value, source_value]);
-            elements.push(chunk_value);
-        }
-        let chunks_value = self.add_static_container_from_ids(
-            StaticContainerKind::List,
-            chunks_list_type,
-            elements.as_slice(),
+        let span_type = self.builtin_types.code_span();
+        let spans_list_type =
+            self.instantiate_generic_type(self.builtin_types.list(), &[span_type]);
+        let len = self.ast.idents.get_string(text).len() as u32;
+        let text_value = self.static_values.add_string(text);
+        let start_value = self.static_values.add_int(TypedIntValue::U32(0));
+        let len_value = self.static_values.add_int(TypedIntValue::U32(len));
+        let source_value =
+            self.static_values.add_int(TypedIntValue::U64(source.encoded_k1_u64()));
+        let span_value = self.static_values.add_struct_from_slice(
+            span_type,
+            &[start_value, len_value, source_value],
         );
-        self.static_values.add_struct_from_slice(code_type, &[chunks_value])
+        let spans_value = self.add_static_container_from_ids(
+            StaticContainerKind::List,
+            spans_list_type,
+            &[span_value],
+        );
+        self.static_values.add_struct_from_slice(code_type, &[text_value, spans_value])
     }
 
     fn get_expr_span_quoted(&self, parsed_expr: ParsedExprId) -> Span {
@@ -976,7 +974,7 @@ impl TypedProgram {
         let span = self.get_expr_span_quoted(parsed_expr);
         let content = self.ast.sources.get_span_content(&self.ast.mem, span);
         let string_id = self.ast.idents.intern(content);
-        self.make_static_code_value(&[(string_id, span)])
+        self.make_static_code_value(string_id, span)
     }
 
     pub(super) fn tokens_from_parsed_expr(
@@ -1239,7 +1237,7 @@ impl TypedProgram {
         span: Span,
         is_definition: bool,
     ) -> K1Result<Option<(String, PermSlice<CodeChunkPos>)>> {
-        use crate::vm::k1_types::{K1Code, K1CodeChunk};
+        use crate::vm::k1_types::{K1Code, K1CodeSpan};
         if !raw.returns_value || Some(raw.result_type_id) != k1.builtin_types.code {
             kbail!(
                 k1,
@@ -1252,13 +1250,20 @@ impl TypedProgram {
         k1.assert_code_layouts();
         let frame = k1.trace_push(TraceKind::VmValueFerry, span.lo, 0);
         let code = unsafe { *(raw.ret_addr as *const K1Code) };
-        let chunks = unsafe {
-            std::slice::from_raw_parts(
-                code.chunks.k1_buffer.data as *const K1CodeChunk,
-                code.chunks.len as usize,
-            )
+        let Ok(text) = (unsafe { code.text.to_str() }) else {
+            kbail!(k1, span, "Metaprogram produced non-utf8 code");
         };
-        let emitted = k1.build_emitted_source(span, is_definition, chunks);
+        let spans: &[K1CodeSpan] = if code.spans.len == 0 {
+            &[]
+        } else {
+            unsafe {
+                std::slice::from_raw_parts(
+                    code.spans.k1_buffer.data as *const K1CodeSpan,
+                    code.spans.len as usize,
+                )
+            }
+        };
+        let emitted = k1.build_emitted_source(span, is_definition, text, spans);
         k1.trace_pop(frame);
         emitted
     }
@@ -1267,17 +1272,17 @@ impl TypedProgram {
         &mut self,
         span: Span,
         is_definition: bool,
-        chunks: &[vm::k1_types::K1CodeChunk],
+        text: &str,
+        spans: &[vm::k1_types::K1CodeSpan],
     ) -> K1Result<Option<(String, PermSlice<CodeChunkPos>)>> {
-        let chunks_len: usize = chunks.iter().map(|c| c.text.len as usize).sum();
-        if chunks_len == 0 {
+        if text.is_empty() {
             return Ok(None);
         }
         let (source, line) = self.get_span_location(span);
         let filepath = self.ast.idents.get_string(source.file_path);
         // The source keeps `content` forever, so size it exactly and move it
         // in; 48 covers the header boilerplate and block wrapper
-        let mut content = String::with_capacity(chunks_len + filepath.len() + 48);
+        let mut content = String::with_capacity(text.len() + filepath.len() + 48);
         writeln!(
             &mut content,
             "// generated by #meta block at {}:{}",
@@ -1288,18 +1293,16 @@ impl TypedProgram {
         if !is_definition {
             content.push_str("{\n");
         }
-        let mut table: List<CodeChunkPos, _> = self.mem.new_list(chunks.len() as u32);
-        for chunk in chunks {
-            let Ok(text) = (unsafe { chunk.text.to_str() }) else {
-                kbail!(self, span, "Metaprogram produced a non-utf8 chunk");
-            };
-            if text.is_empty() {
+        let base = content.len() as u32;
+        content.push_str(text);
+        let mut table: List<CodeChunkPos, _> = self.mem.new_list(spans.len() as u32);
+        for s in spans {
+            if s.len == 0 {
                 continue;
             }
-            let start = content.len() as u32;
-            content.push_str(text);
-            if let Some(source) = Span::from_encoded_k1_u64(chunk.source) {
-                table.push(CodeChunkPos { start, end: start + text.len() as u32, source });
+            if let Some(source) = Span::from_encoded_k1_u64(s.source) {
+                let start = base + s.start;
+                table.push(CodeChunkPos { start, end: start + s.len, source });
             }
         }
         if !is_definition {
@@ -1310,14 +1313,18 @@ impl TypedProgram {
 
     #[cfg(debug_assertions)]
     pub(super) fn assert_code_layouts(&mut self) {
-        use crate::vm::k1_types::{K1Code, K1CodeChunk};
+        use crate::vm::k1_types::{K1Code, K1CodeSpan};
         let code_type = self.builtin_types.code.unwrap();
-        let chunk_type = self.builtin_types.code_chunk.unwrap();
+        let span_type = self.builtin_types.code_span.unwrap();
         assert_eq!(self.get_layout(code_type).unwrap().size as usize, size_of::<K1Code>());
-        assert_eq!(self.get_layout(chunk_type).unwrap().size as usize, size_of::<K1CodeChunk>());
-        let fields = self.get_struct_layout(chunk_type);
-        assert_eq!(fields[0].offset as usize, std::mem::offset_of!(K1CodeChunk, text));
-        assert_eq!(fields[1].offset as usize, std::mem::offset_of!(K1CodeChunk, source));
+        assert_eq!(self.get_layout(span_type).unwrap().size as usize, size_of::<K1CodeSpan>());
+        let fields = self.get_struct_layout(code_type);
+        assert_eq!(fields[0].offset as usize, std::mem::offset_of!(K1Code, text));
+        assert_eq!(fields[1].offset as usize, std::mem::offset_of!(K1Code, spans));
+        let fields = self.get_struct_layout(span_type);
+        assert_eq!(fields[0].offset as usize, std::mem::offset_of!(K1CodeSpan, start));
+        assert_eq!(fields[1].offset as usize, std::mem::offset_of!(K1CodeSpan, len));
+        assert_eq!(fields[2].offset as usize, std::mem::offset_of!(K1CodeSpan, source));
     }
 
     /// parses emitted source as a fresh file, then compiles it in place of the invocation

@@ -1,10 +1,6 @@
-// `code` is source text as a sequence of chunks; metaprograms return it so
-// diagnostics in compiled output can point back at the original source.
-// `source` is a compiler span packed into a u64; 0 means no source.
+type code-span = { start: u32, len: u32, source: u64 }
 
-type code-chunk = { text: string, source: u64 }
-
-type code = { chunks: list[code-chunk] }
+type code = { text: string, spans: list[code-span] }
 
 type code-token = {
   kind: either(u8) { ident = 0, number = 1, string = 2, char = 3, punct = 4 },
@@ -14,53 +10,124 @@ type code-token = {
 }
 
 ns for code-token {
-  fn code(self): code {
-    .{ chunks = [.{ text = self.text, source = self.source }] }
-  }
-
   fn fail(self, msg: string): never {
     crash(context .{ filename = "", line = 0, span = self.source })(msg)
   }
 }
 
-// #static types/assert-layout[code-chunk](24, 8, [0, 16].as-span())
-// #static types/assert-layout[code](24, 8, [0].as-span())
-
 ns for code {
   fn from-string(s: string): code {
-    .{ chunks = [.{ text = s, source = 0 }] }
-  }
-
-  fn text(self: code): string {
-    let sb = string-builder/new()
-    for c in self.chunks { sb.write(c.text) }
-    sb.build()
+    .{ text = s, spans = list/empty() }
   }
 }
 
-// Bytes written via `writer` accumulate in `pending` until a chunk boundary
-// seals them into a sourceless chunk.
-type code-builder = { chunks: list[code-chunk], pending: list[u8], indent-level: size }
+type token-cursor = { toks: span[code-token], i: size }
+
+ns for token-cursor {
+  fn new(toks: span[code-token]): token-cursor { .{ toks, i = 0 } }
+
+  fn(inline) is-at-end(self: *token-cursor): bool { self.i >= self.toks.len() }
+
+  fn fail-at-end(self: *token-cursor, msg: string): never {
+    if self.toks.is-empty() crash(msg)
+    self.toks.[self.toks.len() - 1].fail(msg)
+  }
+
+  fn(inline) peek(self: *token-cursor): code-token {
+    if self.is-at-end() self.fail-at-end("Unexpected end of input")
+    self.toks.[self.i]
+  }
+
+  fn(inline) peek-2(self: *token-cursor): ?{ fst: code-token, snd: code-token } {
+    if self.i + 1 < self.toks.len() :some .{ fst = self.toks.[self.i], snd = self.toks.[self.i + 1] } else :none
+  }
+
+  fn(inline) eat(self: *token-cursor): code-token {
+    let t = self.peek()
+    self.i = self.i + 1
+    t
+  }
+
+  fn(inline) skip(self: *token-cursor, n: size) { self.i = self.i + n }
+
+  fn(inline) peek-text-eq(self: *token-cursor, text: string): bool {
+    (not self.is-at-end()) and self.peek().text == text
+  }
+
+  fn(inline) eat-if-text-eq(self: *token-cursor, text: string): bool {
+    let hit = self.peek-text-eq(text)
+    if hit self.skip(1)
+    hit
+  }
+
+  fn expect(self: *token-cursor, text: string): code-token {
+    if self.is-at-end() self.fail-at-end("Expected `$text` before the end of the input")
+    let t = self.eat()
+    if t.text != text t.fail("Expected `$text`, got `${t.text}`")
+    t
+  }
+
+  fn expect-ident(self: *token-cursor): code-token {
+    let t = self.eat()
+    if not (t.kind is :ident) t.fail("Expected a name, got `${t.text}`")
+    t
+  }
+
+  fn eat-until-close(self: *token-cursor, open: code-token, close: string): span[code-token] {
+    let start = self.i
+    let depth: size = 1
+    loop {
+      if self.is-at-end() open.fail("This `${open.text}` is never closed")
+      let t = self.eat()
+      if t.text == open.text { depth = depth + 1 }
+      else if t.text == close {
+        depth = depth - 1
+        if depth == 0 break
+      }
+    }
+    self.toks.slice(start, self.i - 1)
+  }
+}
+
+type code-builder = { text: list[u8], spans: list[code-span], indent-level: size }
 
 ns for code-builder {
   fn new(): code-builder {
-    .{ chunks = list/with-capacity(8), pending = list/empty(), indent-level = 0 }
+    .{ text = list/empty(), spans = list/empty(), indent-level = 0 }
   }
 
-  fn seal(self: *code-builder) {
-    if self.pending.is-empty() return
-    self.chunks.push(.{ text = string/wrap-bytes(self.pending.as-span()).cloned(), source = 0 })
-    self.pending.clear()
+  fn(inline) write-spanned(self: *code-builder, text: string, source: u64) {
+    self.spans.push(.{ start = self.text.len.trunc[u32], len = text.len().trunc[u32], source })
+    self.write(text)
   }
 
-  fn code(self: *code-builder, c: code) {
-    self.seal()
-    self.chunks.append-list(c.chunks)
+  fn(inline) write-token(self: *code-builder, tok: code-token) {
+    self.write-spanned(tok.text, tok.source)
+  }
+
+  fn write-tokens(self: *code-builder, toks: span[code-token]) {
+    for tok in toks {
+      if it-index > 0 {
+        if tok.spacing is {
+          :none -> {},
+          :inline -> self.write-char(' '),
+          :newline -> self.write-char('\n'),
+        }
+      }
+      self.write-token(tok)
+    }
+  }
+
+  fn write-code(self: *code-builder, c: code) {
+    let base = self.text.len.trunc[u32]
+    self.write(c.text)
+    for s in c.spans {
+      self.spans.push(.{ start = base + s.start, len = s.len, source = s.source })
+    }
   }
 
   fn build(self: *code-builder): code {
-    self.seal()
-    .{ chunks = self.chunks }
+    .{ text = string/wrap-bytes(self.text.as-span()), spans = self.spans }
   }
 
   fn indent(self: *code-builder) { self.indent-level = self.indent-level + 1 }
@@ -72,13 +139,13 @@ ns for code-builder {
 
   fn line(self: *code-builder, c: code) {
     self.pad()
-    self.code(c)
+    self.write-code(c)
     self.write-char('\n')
   }
 
   fn block(self: *code-builder, header: code, body: some fn() -> {}) {
     self.pad()
-    self.code(header)
+    self.write-code(header)
     self.write(" {\n")
     self.indent()
     body()
@@ -89,7 +156,7 @@ ns for code-builder {
 
   fn block-close(self: *code-builder, header: code, close: string, body: some fn() -> {}) {
     self.pad()
-    self.code(header)
+    self.write-code(header)
     self.write(" {\n")
     self.indent()
     body()
@@ -109,10 +176,10 @@ ns for code-builder {
 }
 
 impl writer for *code-builder {
-  fn write-byte(self, b: u8): empty {
-    self.pending.push(b)
+  fn(inline) write-byte(self, b: u8): empty {
+    self.text.push(b)
   }
-  fn write-bytes(self, b: span[u8]): empty {
-    self.pending.append-span(b)
+  fn(inline) write-bytes(self, b: span[u8]): empty {
+    self.text.append-span(b)
   }
 }

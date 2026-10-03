@@ -333,8 +333,34 @@ impl Iterator for BlockIter<'_> {
 }
 
 #[derive(Default)]
+pub struct ValueSubst {
+    values: IdMap<InstId, Value>,
+}
+
+impl ValueSubst {
+    pub fn resolve(&self, mut v: Value) -> Value {
+        while let Value::Inst(id) = v
+            && let Some(next) = self.values.get(id)
+        {
+            v = next;
+        }
+        v
+    }
+
+    pub fn insert(&mut self, from: InstId, to: Value) {
+        debug_assert!(!matches!(self.resolve(to), Value::Inst(id) if id == from));
+        self.values.insert(from, to);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
+    }
+}
+
+#[derive(Default)]
 pub struct UnitBuf {
     pub body: UnitBody,
+    pub subst: ValueSubst,
     insts: Vec<Inst>,
     inst_src: Vec<Span>,
     inst_comment: Vec<IrComment>,
@@ -373,6 +399,7 @@ impl UnitBuf {
 
     fn clear(&mut self) {
         self.body = UnitBody::default();
+        self.subst.values.clear();
         self.insts.clear();
         self.inst_src.clear();
         self.inst_comment.clear();
@@ -457,6 +484,14 @@ impl UnitBuf {
     pub fn add_call(&mut self, call: IrCall) -> IrCallId {
         self.calls.push(call);
         id_at(self.calls.len() - 1)
+    }
+
+    pub fn call(&self, id: IrCallId) -> &IrCall {
+        &self.calls[ix(id)]
+    }
+
+    pub fn args(&self, args: IrRange<Value>) -> &[Value] {
+        args.of(&self.call_args)
     }
 
     pub fn call_mut(&mut self, id: IrCallId) -> &mut IrCall {
@@ -607,6 +642,9 @@ impl UnitBuf {
             None => self.blocks[ix(b)].last = prev,
             Some(n) => self.inst_layout[ix(n)].prev = prev,
         }
+        if self.body.last_alloca == Some(id) {
+            self.body.last_alloca = prev;
+        }
         self.inst_layout[ix(id)] = InstLayout { block: None, prev: None, next: None };
     }
 
@@ -732,6 +770,39 @@ impl UnitBuf {
                 *cases = self.push_switch_cases(from.switch_cases(*cases))
             }
             _ => {}
+        }
+    }
+
+    fn is_addr_unaligned(&self, mut v: Value) -> bool {
+        loop {
+            let Value::Inst(id) = self.subst.resolve(v) else { return false };
+            match self.insts[ix(id)] {
+                Inst::StructOffset { unaligned, .. } => return unaligned,
+                Inst::ArrayOffset { base, .. } => v = base,
+                _ => return false,
+            }
+        }
+    }
+
+    pub fn mark_unaligned(&self, inst: &mut Inst) {
+        let unaligned = |addr: Value| self.is_addr_unaligned(addr);
+        let now_unaligned = match *inst {
+            Inst::Store { dst, .. } => unaligned(dst),
+            Inst::Load { src, .. } => unaligned(src),
+            Inst::Copy { dst, src, .. } => unaligned(dst) || unaligned(src),
+            Inst::Zero { dst, .. } => unaligned(dst),
+            Inst::StructOffset { base, .. } => unaligned(base),
+            _ => false,
+        };
+        if now_unaligned {
+            match inst {
+                Inst::Store { unaligned, .. }
+                | Inst::Load { unaligned, .. }
+                | Inst::Copy { unaligned, .. }
+                | Inst::Zero { unaligned, .. }
+                | Inst::StructOffset { unaligned, .. } => *unaligned = true,
+                _ => {}
+            }
         }
     }
 
@@ -937,7 +1008,7 @@ fn push_slice<T: Copy>(mem: &mut kmem::Mem<ProgramIr>, values: &[T]) -> MSlice<T
     if values.is_empty() { MSlice::empty() } else { mem.pushn(values) }
 }
 
-pub fn commit_unit(ir: &mut ProgramIr, u: &UnitBuf, unit: &mut IrUnit) {
+pub fn commit_unit(ir: &mut ProgramIr, u: &mut UnitBuf, unit: &mut IrUnit) {
     let mut inst_map = std::mem::take(&mut ir.compact_inst_map);
     let mut block_map = std::mem::take(&mut ir.compact_block_map);
     inst_map.clear();
@@ -945,7 +1016,8 @@ pub fn commit_unit(ir: &mut ProgramIr, u: &UnitBuf, unit: &mut IrUnit) {
     block_map.clear();
     block_map.resize(u.blocks.len(), None);
 
-    let mut identity = true;
+    let substituting = !u.subst.is_empty();
+    let mut identity = !substituting;
     let mut inst_count = 0;
     let mut block_count = 0;
     let mut cur_block = u.body.first_block;
@@ -958,11 +1030,17 @@ pub fn commit_unit(ir: &mut ProgramIr, u: &UnitBuf, unit: &mut IrUnit) {
             identity &= ix(id) == inst_count;
             inst_map[ix(id)] = Some(id_at(inst_count));
             inst_count += 1;
+            if substituting {
+                let mut inst = u.insts[ix(id)];
+                u.mark_unaligned(&mut inst);
+                u.insts[ix(id)] = inst;
+            }
             cur = u.inst_layout[ix(id)].next;
         }
         cur_block = u.blocks[ix(b)].next;
     }
     identity &= inst_count == u.insts.len() && block_count == u.blocks.len();
+    let u = &*u;
 
     let mem = &mut ir.mem;
     unit.calls = push_slice(mem, &u.calls);
@@ -988,6 +1066,7 @@ pub fn commit_unit(ir: &mut ProgramIr, u: &UnitBuf, unit: &mut IrUnit) {
             vec_ops: mem.getn_mut(unit.vec_ops),
         };
         let map_value = |v: &mut Value| {
+            *v = u.subst.resolve(*v);
             if let Value::Inst(id) = v {
                 *id = inst_map[ix(*id)].expect("live inst refers to a removed inst");
             }
@@ -1076,19 +1155,15 @@ impl<K: crate::vpool::PoolIndex, V: Copy> IdMap<K, V> {
         self.keys.is_empty()
     }
 
+    pub fn keys(&self) -> &[K] {
+        &self.keys
+    }
+
     pub fn clear(&mut self) {
         for k in &self.keys {
             self.slots[ix(*k)] = None;
         }
         self.keys.clear();
-    }
-
-    pub fn update_values(&mut self, mut f: impl FnMut(&mut V)) {
-        for k in &self.keys {
-            if let Some(v) = &mut self.slots[ix(*k)] {
-                f(v);
-            }
-        }
     }
 
     pub fn retain(&mut self, mut keep: impl FnMut(K, V) -> bool) {

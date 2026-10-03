@@ -116,3 +116,10 @@ impl[t: add] sink[t = t, out = t] for sum-sink[t] {
   }
   fn finish(self: *sum-sink[t]): t { self.total }
 }
+
+type collect-sink[t] = { items: list[t] }
+
+impl[t] sink[t = t, out = span[t]] for collect-sink[t] {
+  fn receive(self: *collect-sink[t], chunk: span[t]) { self.items.append-span(chunk) }
+  fn finish(self: *collect-sink[t]): span[t] { self.items.as-span() }
+}

@@ -127,16 +127,7 @@ ns report {
     sb.build()
   }
 
-  fn to-json(rows: list[row]): string {
-    let sb = string-builder/new()
-    sb.write("[")
-    for r in rows {
-      if it-index > 0 { sb.write(",") }
-      sb.write(`{"service":"${r.service}","count":${r.count},"errors":${r.errors},"bytes":${r.bytes}}`)
-    }
-    sb.write("]")
-    sb.build()
-  }
+  fn to-json(rows: list[row]): string { json/to-string(rows) }
 
   fn timeline(entries: list[log/entry]): array[int, 4] {
     let buckets: array[int, 4] = .0
@@ -201,12 +192,12 @@ fn main(): i32 {
   assert-equals(tails.[5], "query ok")
 
   let text = report/to-json(rows)
-  require json/parse-from-string(text) is :ok(doc) else { crash("emitted invalid json: $text") }
+  require json/parse[json/json](text) is :ok(doc) else { crash("emitted invalid json: $text") }
   require doc is :array(items) else { crash("expected a json array") }
   assert-equals(items.len(), 3)
   require items.[0] is :object(first) else { crash("expected a json object") }
   assert(first.[0].value is :str "db")
-  assert(json/parse-from-string("${text} trailing") is :err(_))
+  assert(json/parse[json/json]("${text} trailing") is :err(_))
   println("\njson: $text")
 
   let names = list/empty[string]()

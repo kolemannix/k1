@@ -182,7 +182,7 @@ pub(crate) struct BuiltinIdents {
     pub param_8: StringId,
     pub string_builder: StringId,
     pub code: StringId,
-    pub code_chunk: StringId,
+    pub code_span: StringId,
     pub code_token: StringId,
     pub code_builder: StringId,
     pub builder: StringId,
@@ -271,7 +271,8 @@ pub(crate) struct BuiltinFunctions {
     pub StringBuilder_build_tmp: QIdent,
     pub CodeBuilder_new: QIdent,
     pub CodeBuilder_build: QIdent,
-    pub CodeBuilder_code: QIdent,
+    pub CodeBuilder_write_code: QIdent,
+    pub CodeBuilder_write_spanned: QIdent,
     pub bitwise_and: QIdent,
     pub bitwise_or: QIdent,
     pub bitwise_xor: QIdent,
@@ -603,7 +604,7 @@ impl IdentPool {
             param_8: intern!("param_8"),
             string_builder: intern!("string-builder"),
             code: intern!("code"),
-            code_chunk: intern!("code-chunk"),
+            code_span: intern!("code-span"),
             code_token: intern!("code-token"),
             code_builder: intern!("code-builder"),
             builder: intern!("builder"),
@@ -726,7 +727,8 @@ impl IdentPool {
         let path_codebuilder = intern_path!(b.core, b.code_builder);
         let CodeBuilder_new: QIdent = make_fn!(path_codebuilder, intern!("new"));
         let CodeBuilder_build: QIdent = make_fn!(path_codebuilder, intern!("build"));
-        let CodeBuilder_code: QIdent = make_fn!(path_codebuilder, b.code);
+        let CodeBuilder_write_code: QIdent = make_fn!(path_codebuilder, intern!("write-code"));
+        let CodeBuilder_write_spanned: QIdent = make_fn!(path_codebuilder, intern!("write-spanned"));
 
         let path_core_bitwise = intern_path!(b.core, b.bitwise);
         let bitwise_and = make_fn!(path_core_bitwise, intern!("bit-and"));
@@ -777,7 +779,8 @@ impl IdentPool {
             StringBuilder_build_tmp,
             CodeBuilder_new,
             CodeBuilder_build,
-            CodeBuilder_code,
+            CodeBuilder_write_code,
+            CodeBuilder_write_spanned,
             bitwise_and,
             bitwise_or,
             bitwise_xor,

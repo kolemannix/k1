@@ -397,6 +397,7 @@ impl TypedProgram {
             | TraceKind::IrOptimize
             | TraceKind::IrInline
             | TraceKind::IrSimplify
+            | TraceKind::IrPromote
             | TraceKind::Bcgen
             | TraceKind::VmRun => self.unit_frame_label(frame),
             TraceKind::CodegenPrepare | TraceKind::ReloadDylib => {

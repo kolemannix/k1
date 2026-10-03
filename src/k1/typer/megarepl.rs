@@ -509,7 +509,13 @@ impl TypedProgram {
         cell_id: CellId,
         iteration: u32,
     ) -> K1Result<(TypedExprId, Vec<(TypedGlobalId, TypeId)>)> {
-        let span = stmts.first().map(|s| self.ast.get_stmt_span(*s)).unwrap_or(Span::NONE);
+        let span = match stmts.first() {
+            Some(s) => self.ast.get_stmt_span(*s),
+            None => {
+                let source = self.ast.sources.get(self.megarepl_get_cell(cell_id).source_id);
+                Span { lo: source.base, len: 0 }
+            }
+        };
         let repl_ns_scope = self.megarepl.as_ref().unwrap().ns_scope;
         let mut output_globals: Vec<(TypedGlobalId, TypeId)> = vec![];
         // We're putting a Lexical Block in a Namespace directly.

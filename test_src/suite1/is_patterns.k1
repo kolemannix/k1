@@ -1,6 +1,7 @@
 ns is_patterns
 
 fn test() {
+  control-flow-after-pattern()
   // Empty
   let e = .{}
   assert(e is .{})
@@ -81,4 +82,21 @@ fn test() {
   if qr is :some r* {
     assert(r.* == 42)
   } else crash("")
+}
+
+fn early(k: either { a, b }): string {
+  if k is :a return "early"
+  "late"
+}
+
+fn first-some(xs: span[?int]): int {
+  for x in xs { if x is :some v return v }
+  -1
+}
+
+fn control-flow-after-pattern() {
+  assert-equals(early(:a), "early")
+  assert-equals(early(:b), "late")
+  let xs: span[?int] = [:none, :some 7, :some 9]
+  assert-equals(first-some(xs), 7)
 }

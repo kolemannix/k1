@@ -1,1 +1,0 @@
-let params: { tlog: bool } = k1/module-params(.{ tlog = false })

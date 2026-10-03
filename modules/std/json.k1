@@ -2,213 +2,950 @@ ns json
 
 type json = either {
   null,
-  str   (string),
-  number(f64),
   bool  (bool),
-  array (list[json]),
-  object(list[{ key: string, value: json }])
+  int   (i64),
+  uint  (u64),
+  float (f64),
+  str   (string),
+  array (span[json]),
+  object(span[{ key: string, value: json }])
 }
 
-type parser = {
-  input: string,
-  cursor: size,
+ns for json {
+  fn get(self: json, key: string): ?json {
+    if self is :object members {
+      for m in members { if m.key == key return :some m.value }
+    }
+    :none
+  }
 }
-ns for parser {
-  fn peek(self: parser): ?char { self.input.index-opt(self.cursor) }
-  fn next(self: *parser): ?char {
-    if self.peek() is {
-      :none -> :none,
-      :some c -> {
-        self.cursor = self.cursor + 1
-        :some c
+
+type opts = {
+  key-case: either { as-is, camel, snake },
+  skip-none: bool,
+  renames: span[{ field: string, key: string }],
+}
+
+ns for opts {
+  let default: opts = .{ key-case = :as-is, skip-none = false, renames = [] }
+
+  fn apply-key-case(self: opts, name: string): string {
+    if self.key-case is :as-is { return name }
+    let sb = string-builder/new()
+    let upper = false
+    for c in name {
+      if c == '-' {
+        if self.key-case is :snake { sb.write-char('_') } else { upper = true }
+      } else {
+        sb.write-char(if upper c.to-ascii-upper() else c)
+        upper = false
       }
     }
-  }
-  fn advance(self: *parser) { self.cursor = self.cursor + 1 }
-  fn advance-n(self: *parser, n: size) { self.cursor = self.cursor + n }
-  fn expect(self: *parser, c: char): bool {
-    if self.peek() is {
-      :some p -> {
-        let ok = p == c
-        if ok { self.advance() }
-        ok
-      },
-      :none -> false
-    }
-  }
-  fn eat-whitespace(self: *parser) {
-    loop {
-      if self.peek() is {
-        :none -> break,
-        :some c -> {
-          if c == ' ' or c == '\n' or c == '\t' or c == '\r' {
-            self.advance()
-          } else {
-            break
-          }
-        }
-      }
-    }
+    sb.build()
   }
 
-  fn remaining-input(self: parser): string {
-    self.input.drop(self.cursor)
-  }
-
-  fn new-from-here(self: parser): parser {
-    .{ input = self.remaining-input(), cursor = 0 }
-  }
-
-}
-
-fn next-or(context p: *parser)(msg: string): result[char, string] {
-  if p.next() is {
-    :none -> :err msg,
-    :some c -> :ok c
+  fn get-field-key(self: opts, field: string): string {
+    for r in self.renames { if r.field == field return r.key }
+    self.apply-key-case(field)
   }
 }
 
-fn _parse-string(context p: *parser)(): result[json, string] {
-  if not p.expect('"') { return :err "expected string" }
+ability json-write {
+  fn write-json[w: writer, o: static opts](self, w)
+}
+
+fn write[t: json-write, w: writer](w: w, value: t) { value.write-json[_, opts/default](w) }
+
+fn to-string[t: json-write](value: t): string {
   let sb = string-builder/new()
+  write(sb.&, value)
+  sb.build()
+}
+
+fn to-string-with[t: json-write, o: static opts](value: t): string {
+  let sb = string-builder/new()
+  value.write-json[_, o](sb.&)
+  sb.build()
+}
+
+fn to-string-pretty[t: json-write](value: t, indent: size): string {
+  let sb = string-builder/new()
+  pretty(sb.&, to-string(value), indent)
+  sb.build()
+}
+
+fn write-float[w: writer](w: w, f: f64) {
+  if f != f or f == f64/inf or f == f64/neg-inf w.write("null") else f.print-to(w)
+}
+
+fn write-string[w: writer](w: w, s: string) {
+  w.write-char('"')
+  let bytes = s.span-bytes()
+  let i: size = 0
   loop {
-    let c1 = next-or("Unterminated string").try
-    if c1 == '\\' {
-      // Escaped chars
-      let c2 = next-or("Unterminated string").try
-      if c2 is {
-        '\\' -> { sb.write-char('\\') },
-        '"' ->  { sb.write-char('"') },
-        '/' ->  { sb.write-char('/') },
-        'n' ->  { sb.write-char('\n') },
-        't' ->  { sb.write-char('\t') },
-        'r' ->  { sb.write-char('\r') },
-        'b' ->  { sb.write-char(8u8.as-char()) },
-        'f' ->  { sb.write-char(12u8.as-char()) },
-        _ -> return :err "Unsupported escape sequence: $c2"
+    let next = internal/escape-position(bytes, i)
+    w.write-bytes(bytes.slice(i, next))
+    if next == bytes.len() break
+    internal/write-escape(w, bytes.[next])
+    i = next + 1
+  }
+  w.write-char('"')
+}
+
+impl json-write for json {
+  fn write-json[w: writer, o: static opts](self: json, w) {
+    if self is {
+      :null -> w.write("null"),
+      :bool b -> b.print-to(w),
+      :int i -> i.print-to(w),
+      :uint u -> u.print-to(w),
+      :float f -> write-float(w, f),
+      :str s -> write-string(w, s),
+      :array items -> {
+        w.write-char('[')
+        for items {
+          if it-index > 0 w.write-char(',')
+          it.write-json[_, o](w)
+        }
+        w.write-char(']')
+      },
+      :object members -> {
+        w.write-char('{')
+        for members {
+          if it-index > 0 w.write-char(',')
+          write-string(w, it.key)
+          w.write-char(':')
+          it.value.write-json[_, o](w)
+        }
+        w.write-char('}')
       }
-    } else if c1 == '"' {
-      break :ok :str sb.build()
+    }
+  }
+}
+
+impl[t] json-write for t {
+  fn write-json[w: writer, o: static opts](self: t, w) {
+    #meta {
+      let o: opts = core/meta/static-type-to-value[_, o]()
+      internal/write-code(o, types/id[t])
+    }
+  }
+}
+
+fn pretty[w: writer](w: w, compact: string, indent: size) {
+  let bytes = compact.span-bytes()
+  let len = bytes.len()
+  let depth: size = 0
+  let i: size = 0
+  while i < len {
+    let b = bytes.[i]
+    if b == 34 {
+      let end = i + 1
+      loop {
+        if end >= len break
+        let c = bytes.[end]
+        end = end + (if c == 92 2 else 1)
+        if c == 34 break
+      }
+      w.write-bytes(bytes.slice(i, end))
+      i = end
+      continue
+    }
+    i = i + 1
+    if b == 123 or b == 91 {
+      let close: u8 = if b == 123 125 else 93
+      if i < len and bytes.[i] == close {
+        w.write-byte(b)
+        w.write-byte(close)
+        i = i + 1
+        continue
+      }
+      depth = depth + 1
+      w.write-byte(b)
+      internal/newline(w, depth, indent)
+    } else if b == 125 or b == 93 {
+      depth = depth - 1
+      internal/newline(w, depth, indent)
+      w.write-byte(b)
+    } else if b == 44 {
+      w.write-byte(b)
+      internal/newline(w, depth, indent)
+    } else if b == 58 {
+      w.write(": ")
     } else {
-      sb.write-char(c1)
+      w.write-byte(b)
     }
   }
 }
 
-fn _expect-array(context p: *parser)(): result[json, string] {
-  // eprintln("_expect-array {p.remaining-input().take(10)}");
-  if not p.expect('[') return :err "internal error at _expect-array"
-  p.eat-whitespace()
-  if p.peek() == :some ']' {
-    p.advance()
-    return :ok :array []
-  }
+type error-kind = either {
+  unexpected-char(u8),
+  unexpected-end,
+  control-char,
+  bad-escape,
+  invalid-utf8,
+  bad-number,
+  overflow,
+  depth,
+  trailing,
+  missing-field(string),
+  wrong-type(string),
+  unknown-variant(string),
+}
+type error = { pos: size, kind: error-kind, input: span[u8] }
 
-  let elements = list/empty[json]()
-
-  loop {
-    // eprintln("parseArray len={elements.len()} {p.peek()}");
-    p.eat-whitespace()
-    let value = _parse-next-value().try
-    elements.push(value)
-
-    p.eat-whitespace()
-    if p.peek() is {
-      :none -> break :err "Unexpected end of input in array",
-      :some ']' -> {
-        p.advance()
-        break :ok :array elements
-      },
-      :some ',' -> {
-        p.advance()
-      },
-      :some c -> break :err "Expected comma or ], got $c"
+impl print for error {
+  fn print-to[w: writer](self, w) {
+    if self.kind is {
+      :unexpected-char b -> { w.write("unexpected '"); w.write-char(b.as-char()); w.write("'") },
+      :unexpected-end -> w.write("unexpected end of input"),
+      :control-char -> w.write("control character in string"),
+      :bad-escape -> w.write("bad escape sequence"),
+      :invalid-utf8 -> w.write("invalid utf-8"),
+      :bad-number -> w.write("bad number"),
+      :overflow -> w.write("number out of range"),
+      :depth -> w.write("nesting too deep"),
+      :trailing -> w.write("trailing content after value"),
+      :missing-field f -> { w.write("missing field "); w.write(f) },
+      :wrong-type t -> { w.write("expected "); w.write(t) },
+      :unknown-variant v -> { w.write("unknown variant "); w.write(v) },
     }
+    let line: size = 1
+    let col: size = 1
+    let i: size = 0
+    let end = if self.pos < self.input.len() self.pos else self.input.len()
+    while i < end {
+      if self.input.[i] == 10 { line = line + 1; col = 1 } else { col = col + 1 }
+      i = i + 1
+    }
+    w.write(" at line ")
+    line.print-to(w)
+    w.write(", column ")
+    col.print-to(w)
   }
 }
 
-fn _expect-object(context p: *parser)(): result[json, string] {
-  // eprintln("_expect-object {p.remaining-input().take(10)}");
-  if not p.expect('{') { return :err "internal error at _expect-object" }
-  p.eat-whitespace()
-  if p.peek() == :some '}' {
-    p.advance()
-    return :ok :object []
-  }
-
-  let members = list/empty[{ key: string, value: json }]()
-
-  loop {
-    // eprintln("parseObject len={members.len()} {p.remaining-input().take(10)}");
-    p.eat-whitespace()
-    require _parse-string().try is :str key-name else {
-      return :err "expected string key in object"
-    }
-
-    p.eat-whitespace()
-    if not p.expect(':') return :err "expected colon"
-    p.eat-whitespace()
-    let value = _parse-next-value().try
-    members.push(.{ key = key-name, value })
-
-    p.eat-whitespace()
-    if p.peek() is {
-      :none -> break :err "Unexpected end of input in object",
-      :some '}' -> {
-        p.advance()
-        break :ok :object members
-      },
-      :some ',' -> {
-        p.advance()
-      },
-      :some _ -> break :err "Expected comma or }"
-    }
-  }
+ability json-read {
+  fn read-json[o: static opts](r: *reader): result[self, error]
 }
 
-fn _expect-literal(context p: *parser)(text: string, value: json): result[json, string] {
-  if not p.remaining-input().starts-with(text) { return :err "Expected $text" }
-  p.advance-n(text.len())
+fn parse[t: json-read](input: string): result[t, error] { parse-with[t, opts/default](input) }
+
+fn parse-with[t: json-read, o: static opts](input: string): result[t, error] {
+  let r = reader/new(input)
+  r.skip-ws()
+  let value = json-read@(t)/read-json[o](r.&).try
+  r.skip-ws()
+  if not r.at-end() { return r.fail(:trailing) }
   :ok value
 }
 
-fn _parse-number(context p: *parser)(): result[json, string] {
-  let result = f64/parse-string(s = p.remaining-input(), require-total = false).try
-  p.advance-n(result.len)
-  :ok :number result.value
+type reader = {
+  input: span[u8],
+  pos: size,
+  depth: size,
+  max-depth: size,
+  arena: *core/arena,
+  scratch: list[json],
+  members: list[{ key: string, value: json }],
 }
 
-fn _parse-next-value(context p: *parser)(): result[json, string] {
-  // eprintln("pnv {p.remaining-input().take(10)}");
-  p.eat-whitespace()
-  if p.peek() is :some c {
-    if c is {
-      'n' -> _expect-literal("null", :null),
-      'f' -> _expect-literal("false", :bool false),
-      't' -> _expect-literal("true", :bool true),
-      '"' -> _parse-string(),
-      '{' -> _expect-object(),
-      '[' -> _expect-array(),
-      _ if c.is-ascii-digit() or c == '-' -> 
-        _parse-number(),
-      _ -> return :err "Not valid json"
+ns for reader {
+  fn new(input: string): reader {
+    .{
+      input = input.span-bytes(),
+      pos = 0,
+      depth = 0,
+      max-depth = 1024,
+      arena = mem/current-arena(),
+      scratch = list/empty(),
+      members = list/empty(),
     }
-  } else {
-    return :err "No content"
+  }
+
+  fn(inline) at-end(self: *reader): bool { self.pos >= self.input.len() }
+
+  fn(inline) peek(self: *reader): u8 {
+    if self.pos < self.input.len() self.input.[self.pos] else 0
+  }
+
+  fn fail[t](self: *reader, kind: error-kind): result[t, error] {
+    :err .{ pos = self.pos, kind, input = self.input }
+  }
+
+  fn unexpected[t](self: *reader): result[t, error] {
+    if self.at-end() self.fail(:unexpected-end) else self.fail(:unexpected-char self.peek())
+  }
+
+  fn expect(self: *reader, b: u8): result[empty, error] {
+    if self.peek() == b {
+      self.pos = self.pos + 1
+      :ok(.{})
+    } else {
+      self.unexpected()
+    }
+  }
+
+  fn skip-ws(self: *reader) {
+    let input = self.input
+    let len = input.len()
+    let base = input.data-ptr()
+    let pos = self.pos
+    while pos < len {
+      let b = input.[pos]
+      if not (b == 32 or b == 10 or b == 13 or b == 9) { break }
+      pos = pos + 1
+      while pos + 8 <= len and mem/read-unaligned[u64](base.add-bytes(pos)) == 0x2020202020202020 {
+        pos = pos + 8
+      }
+    }
+    self.pos = pos
+  }
+
+  fn enter(self: *reader): result[empty, error] {
+    self.depth = self.depth + 1
+    if self.depth > self.max-depth { return self.fail(:depth) }
+    :ok(.{})
+  }
+
+  fn array-start(self: *reader): result[empty, error] {
+    self.expect(91).try
+    self.enter()
+  }
+
+  fn object-start(self: *reader): result[empty, error] {
+    self.expect(123).try
+    self.enter()
+  }
+
+  fn next-item(self: *reader, first: bool): result[bool, error] {
+    self.skip-ws()
+    if self.peek() == 93 {
+      self.pos = self.pos + 1
+      self.depth = self.depth - 1
+      return :ok false
+    }
+    if not first {
+      self.expect(44).try
+      self.skip-ws()
+    }
+    :ok true
+  }
+
+  fn next-key(self: *reader, first: bool): result[?string, error] {
+    self.skip-ws()
+    if self.peek() == 125 {
+      self.pos = self.pos + 1
+      self.depth = self.depth - 1
+      return :ok :none
+    }
+    if not first {
+      self.expect(44).try
+      self.skip-ws()
+    }
+    let key = self.read-string().try
+    self.skip-ws()
+    self.expect(58).try
+    self.skip-ws()
+    :ok :some key
+  }
+
+  fn literal(self: *reader, text: string): result[empty, error] {
+    let n = text.len()
+    if self.pos + n > self.input.len() { return self.unexpected() }
+    let have = self.input.data-ptr().add-bytes(self.pos)
+    let want = text.data-ptr()
+    let i: size = 0
+    while i < n {
+      if have.ref-at[u8](i).* != want.ref-at[u8](i).* { return self.unexpected() }
+      i = i + 1
+    }
+    self.pos = self.pos + n
+    :ok(.{})
+  }
+
+  fn read-null(self: *reader): result[empty, error] { self.literal("null") }
+
+  fn read-bool(self: *reader): result[bool, error] {
+    if self.peek() == 116 {
+      self.literal("true").try
+      :ok true
+    } else if self.peek() == 102 {
+      self.literal("false").try
+      :ok false
+    } else {
+      self.unexpected()
+    }
+  }
+
+  fn read-string(self: *reader): result[string, error] {
+    if self.peek() != 34 { return self.unexpected() }
+    let input = self.input
+    let len = input.len()
+    let start = self.pos + 1
+    let seg = internal/string-stop(input, start)
+    if seg.stop >= len {
+      self.pos = len
+      return self.fail(:unexpected-end)
+    }
+    let b = input.[seg.stop]
+    if b == 34 {
+      let bytes = input.slice(start, seg.stop)
+      if seg.high and not utf8/is-valid(bytes) {
+        self.pos = start
+        return self.fail(:invalid-utf8)
+      }
+      self.pos = seg.stop + 1
+      return :ok string/wrap-bytes(bytes)
+    }
+    if b < 32 {
+      self.pos = seg.stop
+      return self.fail(:control-char)
+    }
+    let sb = string-builder/new()
+    sb.write-bytes(input.slice(start, seg.stop))
+    let high = seg.high
+    let i = seg.stop
+    loop {
+      self.pos = i
+      i = i + 1
+      if i >= len { return self.fail(:unexpected-end) }
+      let e = input.[i]
+      i = i + 1
+      if e is {
+        34  -> sb.write-char('"'),
+        92  -> sb.write-char('\\'),
+        47  -> sb.write-char('/'),
+        98  -> sb.write-byte(8),
+        102 -> sb.write-byte(12),
+        110 -> sb.write-char('\n'),
+        114 -> sb.write-char('\r'),
+        116 -> sb.write-char('\t'),
+        117 -> {
+          let cp = self.read-hex4(i).try
+          i = i + 4
+          if cp >= 0xD800 and cp <= 0xDBFF {
+            if i + 6 > len or input.[i] != 92 or input.[i + 1] != 117 { return self.fail(:bad-escape) }
+            let low = self.read-hex4(i + 2).try
+            if low < 0xDC00 or low > 0xDFFF { return self.fail(:bad-escape) }
+            i = i + 6
+            cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00)
+          } else if cp >= 0xDC00 and cp <= 0xDFFF {
+            return self.fail(:bad-escape)
+          }
+          utf8/write-codepoint(sb.&, cp)
+        },
+        _ -> return self.fail(:bad-escape)
+      }
+      let next = internal/string-stop(input, i)
+      sb.write-bytes(input.slice(i, next.stop))
+      high = high or next.high
+      if next.stop >= len {
+        self.pos = len
+        return self.fail(:unexpected-end)
+      }
+      let c = input.[next.stop]
+      if c == 34 {
+        self.pos = next.stop + 1
+        break
+      }
+      if c < 32 {
+        self.pos = next.stop
+        return self.fail(:control-char)
+      }
+      i = next.stop
+    }
+    let s = sb.build()
+    if high and not utf8/is-valid(s.span-bytes()) {
+      self.pos = start
+      return self.fail(:invalid-utf8)
+    }
+    :ok s
+  }
+
+  fn read-hex4(self: *reader, at: size): result[u32, error] {
+    if at + 4 > self.input.len() { return self.fail(:bad-escape) }
+    let v: u32 = 0
+    let j: size = 0
+    while j < 4 {
+      require self.input.[at + j].as-char().to-ascii-hex-digit() is :some d else { return self.fail(:bad-escape) }
+      v = (v << 4) + d.widen[u32]
+      j = j + 1
+    }
+    :ok v
+  }
+
+  fn scan-number(self: *reader): result[{ end: size, is-int: bool, neg: bool }, error] {
+    let input = self.input
+    let len = input.len()
+    let i = self.pos
+    let neg = i < len and input.[i] == 45
+    if neg { i = i + 1 }
+    if i >= len { self.pos = i; return self.fail(:unexpected-end) }
+    if input.[i] == 48 {
+      i = i + 1
+    } else if internal/is-digit(input.[i]) {
+      i = internal/skip-digits(input, i)
+    } else {
+      self.pos = i
+      return self.fail(:bad-number)
+    }
+    let is-int = true
+    if i < len and input.[i] == 46 {
+      is-int = false
+      i = i + 1
+      let digits = internal/skip-digits(input, i)
+      if digits == i { self.pos = i; return self.fail(:bad-number) }
+      i = digits
+    }
+    if i < len and (input.[i] == 101 or input.[i] == 69) {
+      is-int = false
+      i = i + 1
+      if i < len and (input.[i] == 43 or input.[i] == 45) { i = i + 1 }
+      let digits = internal/skip-digits(input, i)
+      if digits == i { self.pos = i; return self.fail(:bad-number) }
+      i = digits
+    }
+    :ok .{ end = i, is-int, neg }
+  }
+
+  fn digits-u64(self: *reader, start: size, end: size): ?u64 {
+    let v: u64 = 0
+    let i = start
+    while i < end {
+      let d = (self.input.[i] - 48).widen[u64]
+      if v > 1844674407370955161 or (v == 1844674407370955161 and d > 5) { return :none }
+      v = v * 10 + d
+      i = i + 1
+    }
+    :some v
+  }
+
+  fn read-f64(self: *reader): result[f64, error] {
+    let n = self.scan-number().try
+    self.read-f64-to(n.end)
+  }
+
+  fn read-f64-to(self: *reader, end: size): result[f64, error] {
+    let out: f64 = uninit
+    let r = core/ffc/parse_double(end - self.pos, self.input.data-ptr().add-bytes(self.pos), out.&)
+    if r.outcome == core/ffc/FFC_OUTCOME_INVALID_INPUT { return self.fail(:bad-number) }
+    self.pos = end
+    :ok out
+  }
+
+  fn read-int(self: *reader, min: i64, max: i64): result[i64, error] {
+    let n = self.scan-number().try
+    if not n.is-int { return self.fail(:wrong-type "integer") }
+    let start = if n.neg self.pos + 1 else self.pos
+    require self.digits-u64(start, n.end) is :some digits else { return self.fail(:overflow) }
+    let v: i64 = if n.neg {
+      if digits > 9223372036854775808 { return self.fail(:overflow) }
+      if digits == 9223372036854775808 i64/min-value else digits.signed().negated()
+    } else {
+      if digits > 9223372036854775807 { return self.fail(:overflow) }
+      digits.signed()
+    }
+    if v < min or v > max { return self.fail(:overflow) }
+    self.pos = n.end
+    :ok v
+  }
+
+  fn read-u64(self: *reader): result[u64, error] {
+    let n = self.scan-number().try
+    if not n.is-int { return self.fail(:wrong-type "integer") }
+    let start = if n.neg self.pos + 1 else self.pos
+    require self.digits-u64(start, n.end) is :some digits else { return self.fail(:overflow) }
+    if n.neg and digits != 0 { return self.fail(:overflow) }
+    self.pos = n.end
+    :ok digits
+  }
+
+  fn read-number(self: *reader): result[json, error] {
+    let n = self.scan-number().try
+    if n.is-int {
+      let start = if n.neg self.pos + 1 else self.pos
+      if self.digits-u64(start, n.end) is :some digits {
+        if n.neg {
+          if digits <= 9223372036854775808 {
+            self.pos = n.end
+            let v: json = :int (if digits == 9223372036854775808 i64/min-value else digits.signed().negated())
+            return :ok v
+          }
+        } else if digits <= 9223372036854775807 {
+          self.pos = n.end
+          let v: json = :int digits.signed()
+          return :ok v
+        } else {
+          self.pos = n.end
+          let v: json = :uint digits
+          return :ok v
+        }
+      }
+    }
+    :ok :float self.read-f64-to(n.end).try
+  }
+
+  fn read-value(self: *reader): result[json, error] {
+    let b = self.peek()
+    if b is {
+      123 -> self.read-object(),
+      91 -> self.read-array(),
+      34 -> { :ok :str self.read-string().try },
+      116 -> { self.literal("true").try; :ok :bool true },
+      102 -> { self.literal("false").try; :ok :bool false },
+      110 -> { self.literal("null").try; :ok :null },
+      _ -> if b == 45 or internal/is-digit(b) self.read-number() else self.unexpected()
+    }
+  }
+
+  fn read-array(self: *reader): result[json, error] {
+    self.array-start().try
+    let mark = self.scratch.len
+    let first = true
+    while self.next-item(first).try {
+      let v = self.read-value().try
+      self.scratch.push(v)
+      first = false
+    }
+    let items = self.arena.push-span(self.scratch.as-span().drop(mark)).as-span()
+    self.scratch.len = mark
+    :ok :array items
+  }
+
+  fn read-object(self: *reader): result[json, error] {
+    self.object-start().try
+    let mark = self.members.len
+    let first = true
+    loop {
+      require self.next-key(first).try is :some key else { break }
+      first = false
+      let value = self.read-value().try
+      self.members.push(.{ key, value })
+    }
+    let members = self.arena.push-span(self.members.as-span().drop(mark)).as-span()
+    self.members.len = mark
+    :ok :object members
+  }
+
+  fn skip-value(self: *reader): result[empty, error] {
+    let b = self.peek()
+    if b is {
+      123 -> {
+        self.object-start().try
+        let first = true
+        loop {
+          require self.next-key(first).try is :some _ else { break }
+          first = false
+          self.skip-value().try
+        }
+        :ok(.{})
+      },
+      91 -> {
+        self.array-start().try
+        let first = true
+        while self.next-item(first).try {
+          self.skip-value().try
+          first = false
+        }
+        :ok(.{})
+      },
+      34 -> { self.read-string().try; :ok(.{}) },
+      116 -> self.literal("true"),
+      102 -> self.literal("false"),
+      110 -> self.literal("null"),
+      _ -> {
+        if not (b == 45 or internal/is-digit(b)) { return self.unexpected() }
+        self.pos = self.scan-number().try.end
+        :ok(.{})
+      }
+    }
   }
 }
 
-fn parse-from-string(input: string): result[json, string] {
-  let p: parser = .{ input, cursor = 0 }
-  if _parse-next-value(context p.&)() is {
-    :err msg -> :err "Failed at pos ${p.cursor}: $msg",
-    :ok json -> {
-      p.eat-whitespace()
-      if p.peek() is :some c {
-        :err "Failed at pos ${p.cursor}: Trailing content after json value: $c"
-      } else {
-        :ok json
+impl json-read for json {
+  fn read-json[o: static opts](r: *reader): result[json, error] { r.read-value() }
+}
+
+impl[t] json-read for t {
+  fn read-json[o: static opts](r: *reader): result[t, error] {
+    #meta {
+      let o: opts = core/meta/static-type-to-value[_, o]()
+      internal/read-code(o, types/id[t])
+    }
+  }
+}
+
+ns internal {
+  fn write-escape[w: writer](w: w, b: u8) {
+    w.write-char('\\')
+    if b is {
+      34  -> w.write-char('"'),
+      92  -> w.write-char('\\'),
+      10  -> w.write-char('n'),
+      13  -> w.write-char('r'),
+      9   -> w.write-char('t'),
+      8   -> w.write-char('b'),
+      12  -> w.write-char('f'),
+      _ -> {
+        w.write("u00")
+        w.write-char(u8/to-ascii-digit(b >> 4))
+        w.write-char(u8/to-ascii-digit(b.bit-and(0xF)))
       }
     }
+  }
+
+  fn escape-position(bytes: span[u8], from: size): size {
+    let len = bytes.len()
+    let base = bytes.data-ptr()
+    let lanes: size = k1/simd-bytes
+    let i = from
+    if i + lanes <= len {
+      let quote = vector/splat[u8, k1/simd-bytes]('"'.as-u8())
+      let slash = vector/splat[u8, k1/simd-bytes]('\\'.as-u8())
+      let high = vector/splat[u8, k1/simd-bytes](0xE0)
+      let zero = vector/splat[u8, k1/simd-bytes](0)
+      while i + lanes <= len {
+        let chunk = vector/load-unchecked[u8, k1/simd-bytes](base.add-bytes(i))
+        let hit = chunk.eq-lanes(quote).bit-or(chunk.eq-lanes(slash)).bit-or(chunk.bit-and(high).eq-lanes(zero))
+        let mask = hit.to-mask()
+        if mask != 0 return i + mask.trailing-zeros().signed()
+        i = i + lanes
+      }
+    }
+    while i < len {
+      let b = bytes.[i]
+      if b == 34 or b == 92 or b < 32 return i
+      i = i + 1
+    }
+    len
+  }
+
+  fn write-code(o: opts, id: types/type-id): code {
+    let cb = code-builder/new()
+    if id.is-instance-of(types/id[opt]) {
+      cb.line(`if self is { :some x -> x.write-json[_, o](w), :none -> w.write("null") }`)
+    } else if id.is-instance-of(types/id[list]) or id.is-instance-of(types/id[span]) {
+      write-seq-code(cb.&)
+    } else if id.schema() is {
+      :bool -> cb.line(`self.print-to(w)`),
+      :int _ -> cb.line(`self.print-to(w)`),
+      :float _ -> cb.line(if id == types/id[f32] `write-float(w, self.widen[f64])` else `write-float(w, self)`),
+      :string -> cb.line(`write-string(w, self)`),
+      :char -> cb.line(`write-string(w, self.to-string())`),
+      :array _ -> write-seq-code(cb.&),
+      :reference _ -> cb.line(`self.*.write-json[_, o](w)`),
+      :enum _ -> cb.line(`write-string(w, self.enum-name())`),
+      :struct .{ fields } -> {
+        let flag = false
+        if o.skip-none {
+          for f in fields { if f.type-id.is-instance-of(types/id[opt]) { flag = true } }
+        }
+        cb.line(`w.write-char('{')`)
+        if flag cb.line(`let first = true`)
+        for f in fields {
+          let key = meta/str-lit(`"${o.get-field-key(f.name)}":`)
+          let write-key = if flag `if first { first = false } else { w.write-char(',') }; w.write($key)`
+            else if it-index == 0 `w.write($key)`
+            else `w.write-char(','); w.write($key)`
+          if flag and f.type-id.is-instance-of(types/id[opt]) {
+            cb.line(`if self.${f.name} is :some x { $write-key; x.write-json[_, o](w) }`)
+          } else {
+            cb.line(`$write-key; self.${f.name}.write-json[_, o](w)`)
+          }
+        }
+        cb.line(`w.write-char('}')`)
+      },
+      :either .{ variants } -> {
+        cb.line("if self is {")
+        for v in variants {
+          let name = meta/str-lit(`"${o.apply-key-case(v.name)}"`)
+          if v.payload is :some _ {
+            let key = meta/str-lit(`{"${o.apply-key-case(v.name)}":`)
+            cb.line(`:${v.name} p -> { w.write($key); p.write-json[_, o](w); w.write-char('}') },`)
+          } else {
+            cb.line(`:${v.name} -> w.write($name),`)
+          }
+        }
+        cb.line("}")
+      },
+      _ -> crash("json: no encoding for ${id.name()}")
+    }
+    cb.build()
+  }
+
+  fn write-seq-code(cb: *code-builder) {
+    cb.line(`w.write-char('[')`)
+    cb.line(`for self { if it-index > 0 w.write-char(','); it.write-json[_, o](w) }`)
+    cb.line(`w.write-char(']')`)
+  }
+
+  fn newline[w: writer](w: w, depth: size, indent: size) {
+    w.write-char('\n')
+    w.repeat(" ", depth * indent)
+  }
+
+  fn(inline) is-digit(b: u8): bool { b >= 48 and b <= 57 }
+
+  fn skip-digits(bytes: span[u8], from: size): size {
+    let len = bytes.len()
+    let lanes: size = k1/simd-bytes
+    let i = from
+    if i + lanes <= len {
+      let chunk = vector/load-unchecked[u8, k1/simd-bytes](bytes.data-ptr().add-bytes(i))
+      let digits = chunk.sub(vector/splat[u8, k1/simd-bytes](48)).lt-lanes(vector/splat[u8, k1/simd-bytes](10))
+      let all = u64/bitmask-low(lanes)
+      let mask = digits.to-mask()
+      if mask != all { return i + mask.bit-not().bit-and(all).trailing-zeros().signed() }
+      i = i + lanes
+    }
+    while i < len and is-digit(bytes.[i]) { i = i + 1 }
+    i
+  }
+
+  fn string-stop(bytes: span[u8], from: size): { stop: size, high: bool } {
+    let len = bytes.len()
+    let base = bytes.data-ptr()
+    let lanes: size = k1/simd-bytes
+    let i = from
+    let high = false
+    if i + lanes <= len {
+      let quote = vector/splat[u8, k1/simd-bytes](34)
+      let slash = vector/splat[u8, k1/simd-bytes](92)
+      let space = vector/splat[u8, k1/simd-bytes](32)
+      let seen = vector/splat[u8, k1/simd-bytes](0)
+      while i + lanes <= len {
+        let chunk = vector/load-unchecked[u8, k1/simd-bytes](base.add-bytes(i))
+        seen = seen.bit-or(chunk)
+        let hit = chunk.eq-lanes(quote).bit-or(chunk.eq-lanes(slash)).bit-or(chunk.lt-lanes(space))
+        if hit.reduce-or() != 0 {
+          return .{ stop = i + hit.to-mask().trailing-zeros().signed(), high = seen.reduce-or() >= 0x80 }
+        }
+        i = i + lanes
+      }
+      high = seen.reduce-or() >= 0x80
+    }
+    while i < len {
+      let b = bytes.[i]
+      if b == 34 or b == 92 or b < 32 { return .{ stop = i, high } }
+      if b >= 0x80 { high = true }
+      i = i + 1
+    }
+    .{ stop = len, high }
+  }
+
+  fn read-of(id: types/type-id): string { `json-read@(${id.spell()})/read-json[o](r).try` }
+
+  fn read-seq-code(cb: *code-builder, elem: types/type-id) {
+    cb.line(`r.array-start().try`)
+    cb.line(`let items = list/empty[${elem.spell()}]()`)
+    cb.line(`let first = true`)
+    cb.line(`while r.next-item(first).try { items.push(${read-of(elem)}); first = false }`)
+  }
+
+  fn read-code(o: opts, id: types/type-id): code {
+    let cb = code-builder/new()
+    if id.is-instance-of(types/id[opt]) {
+      cb.line(`if r.peek() == 110 { r.read-null().try; :ok :none } else { :ok :some ${read-of(id.instance-info().!.args.[0])} }`)
+    } else if id.is-instance-of(types/id[list]) {
+      read-seq-code(cb.&, id.instance-info().!.args.[0])
+      cb.line(`:ok items`)
+    } else if id.is-instance-of(types/id[span]) {
+      read-seq-code(cb.&, id.instance-info().!.args.[0])
+      cb.line(`:ok items.as-span()`)
+    } else if id == types/id[u8] { cb.line(`:ok r.read-int(0, 255).try.trunc[u8]`) }
+    else if id == types/id[u16] { cb.line(`:ok r.read-int(0, 65535).try.trunc[u16]`) }
+    else if id == types/id[u32] { cb.line(`:ok r.read-int(0, 4294967295).try.trunc[u32]`) }
+    else if id == types/id[u64] { cb.line(`r.read-u64()`) }
+    else if id == types/id[i8] { cb.line(`:ok r.read-int(-128, 127).try.trunc[i8]`) }
+    else if id == types/id[i16] { cb.line(`:ok r.read-int(-32768, 32767).try.trunc[i16]`) }
+    else if id == types/id[i32] { cb.line(`:ok r.read-int(-2147483648, 2147483647).try.trunc[i32]`) }
+    else if id == types/id[i64] { cb.line(`r.read-int(i64/min-value, i64/max-value)`) }
+    else if id == types/id[f32] { cb.line(`:ok r.read-f64().try.trunc[f32]`) }
+    else if id == types/id[f64] { cb.line(`r.read-f64()`) }
+    else if id.schema() is {
+      :bool -> cb.line(`r.read-bool()`),
+      :string -> cb.line(`r.read-string()`),
+      :char -> {
+        cb.line(`let s = r.read-string().try`)
+        cb.line(`if s.len() != 1 { return r.fail(:wrong-type "single character") }`)
+        cb.line(`:ok s.[0]`)
+      },
+      :array .{ element-type-id, size } -> {
+        let n = size.!
+        read-seq-code(cb.&, element-type-id)
+        cb.line(`if items.len() != $n { return r.fail(:wrong-type "array of $n") }`)
+        cb.line(`:ok items.as-span().to-array[${element-type-id.spell()}, $n]()`)
+      },
+      :reference .{ inner-type-id } -> cb.line(`:ok mem/new(${read-of(inner-type-id)})`),
+      :enum .{ values } -> {
+        cb.line(`let s = r.read-string().try`)
+        for v in values {
+          let name = meta/str-lit(o.apply-key-case(v.name))
+          cb.line(`${if it-index == 0 "if" else "else if"} s == $name { :ok :${v.name} }`)
+        }
+        cb.line(`else { r.fail(:unknown-variant s) }`)
+      },
+      :either .{ variants } -> {
+        cb.line(`if r.peek() == 34 {`)
+        cb.line(`let s = r.read-string().try`)
+        for v in variants {
+          if v.payload is :none {
+            let name = meta/str-lit(o.apply-key-case(v.name))
+            cb.line(`if s == $name { return :ok :${v.name} }`)
+          }
+        }
+        cb.line(`r.fail(:unknown-variant s)`)
+        cb.line(`} else {`)
+        cb.line(`r.object-start().try`)
+        cb.line(`require r.next-key(true).try is :some key else { return r.fail(:wrong-type "variant") }`)
+        cb.line(`let v: ${id.spell()} = uninit`)
+        for v in variants {
+          if v.payload is :some p {
+            let name = meta/str-lit(o.apply-key-case(v.name))
+            cb.line(`${if it-index == 0 "if" else "else if"} key == $name { v = :${v.name} (${read-of(p.type-id)}) }`)
+          }
+        }
+        cb.line(`else { return r.fail(:unknown-variant key) }`)
+        cb.line(`if r.next-key(false).try is :some _ { return r.fail(:wrong-type "single-key variant object") }`)
+        cb.line(`:ok v`)
+        cb.line(`}`)
+      },
+      :struct .{ fields } -> {
+        cb.line(`r.object-start().try`)
+        for f in fields {
+          if f.type-id.is-instance-of(types/id[opt]) {
+            cb.line(`let f$it-index: ${f.type-id.spell()} = :none`)
+          } else {
+            cb.line(`let f$it-index: ?${f.type-id.spell()} = :none`)
+          }
+        }
+        cb.line(`let first = true`)
+        cb.line(`loop {`)
+        cb.line(`require r.next-key(first).try is :some key else { break }`)
+        cb.line(`first = false`)
+        for f in fields {
+          let key = meta/str-lit(o.get-field-key(f.name))
+          let assign = if f.type-id.is-instance-of(types/id[opt]) `f$it-index = ${read-of(f.type-id)}`
+            else `f$it-index = :some (${read-of(f.type-id)})`
+          cb.line(`${if it-index == 0 "if" else "else if"} key == $key { $assign }`)
+        }
+        cb.line(`${if fields.len() == 0 "" else "else "}{ r.skip-value().try }`)
+        cb.line(`}`)
+        for f in fields {
+          if not f.type-id.is-instance-of(types/id[opt]) {
+            cb.line(`require f$it-index is :some v$it-index else { return r.fail(:missing-field ${meta/str-lit(o.get-field-key(f.name))}) }`)
+          }
+        }
+        cb.line(`:ok(.{`)
+        for f in fields {
+          let v = if f.type-id.is-instance-of(types/id[opt]) `f$it-index` else `v$it-index`
+          cb.line(`${f.name} = $v,`)
+        }
+        cb.line(`})`)
+      },
+      _ -> crash("json: no decoding for ${id.name()}")
+    }
+    cb.build()
   }
 }

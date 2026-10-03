@@ -1,21 +1,21 @@
 ns json_test
-use std/json/json
 use std/json
+use std/json/json-write
 
 fn test-basic-enum() {
-  let size = core/types/size[json]()
-  let align = core/types/align[json]()
-  assert-equals(size, 32)
+  let size = core/types/size[json/json]()
+  let align = core/types/align[json/json]()
+  assert-equals(size, 24)
   assert-equals(align, 8)
 
-  let obj: json = :str "hello"
-  let null: json = :null
+  let obj: json/json = :str "hello"
+  let null: json/json = :null
   assert(obj is :str "hello")
   assert(null is :null)
 
-  let obj2: json = :array [:str "hello", :number 123.0]
+  let obj2: json/json = :array [:str "hello", :float 123.0]
   assert(obj2.as-array().!.[0] is :str "hello")
-  assert(obj2.as-array().!.[1] is :number 123.0)
+  assert(obj2.as-array().!.[1] is :float 123.0)
 }
 
 fn test-parsing() {
@@ -64,15 +64,221 @@ fn test-escapes() {
 }
 
 fn reject(s: string) {
-  if json/parse-from-string(s) is :ok(_) { crash("expected a parse failure for '$s'") }
+  if json/parse[json/json](s) is :ok(_) { crash("expected a parse failure for '$s'") }
 }
 
 fn accept(s: string) {
-  if json/parse-from-string(s) is :err msg { crash("expected '$s' to parse: $msg") }
+  if json/parse[json/json](s) is :err msg { crash("expected '$s' to parse: $msg") }
+}
+
+type role = either { admin, member, guest }
+type contact = either { email(string), phone(string), unreachable }
+type person = {
+  name: string,
+  initial: char,
+  age: u32,
+  score: f64,
+  active: bool,
+  role: role,
+  nickname: ?string,
+  contacts: list[contact],
+  scores: array[i32, 3],
+  home-city: string,
+}
+
+let camel-skip: std/json/opts = .{ key-case = :camel, skip-none = true, renames = [] }
+let snake-renamed: std/json/opts = .{ key-case = :snake, skip-none = false, renames = [.{ field = "home-city", key = "city" }] }
+
+fn with-opts[t: json-write, o: static std/json/opts](value: t): string {
+  let sb = string-builder/new()
+  value.write-json[_, o](sb.&)
+  sb.build()
+}
+
+fn test-write() {
+  let ada: person = .{
+    name = "Ada \"Countess\"",
+    initial = 'A',
+    age = 36,
+    score = 99.5,
+    active = true,
+    role = :admin,
+    nickname = :none,
+    contacts = [:email "ada@example.com", :unreachable],
+    scores = [10, 20, 30],
+    home-city = "London",
+  }
+  assert-equals(json/to-string(ada), `{"name":"Ada \"Countess\"","initial":"A","age":36,"score":99.5,"active":true,"role":"admin","nickname":null,"contacts":[{"email":"ada@example.com"},"unreachable"],"scores":[10,20,30],"home-city":"London"}`)
+  assert-equals(with-opts[_, camel-skip](ada), `{"name":"Ada \"Countess\"","initial":"A","age":36,"score":99.5,"active":true,"role":"admin","contacts":[{"email":"ada@example.com"},"unreachable"],"scores":[10,20,30],"homeCity":"London"}`)
+  let none: ?int = :none
+  let one: ?int = :some 1
+  assert-equals(with-opts[_, camel-skip](.{ a = none, b = one, c = none }), `{"b":1}`)
+  assert-equals(with-opts[_, snake-renamed](.{ home-city = "x", zip-code = 1 }), `{"city":"x","zip_code":1}`)
+
+  let control = "a\tb\n".concat((1: u8).as-char().to-string()).concat("\"\\/")
+  assert-equals(json/to-string(control), `"a\\tb\\n\\u0001\"\\\\/"`)
+  let long = "0123456789012345678901234567890123456789\"0123456789012345678901234567890123456789\\"
+  assert-equals(json/to-string(long), `"0123456789012345678901234567890123456789\"0123456789012345678901234567890123456789\\\\"`)
+  assert-equals(json/to-string("héllo"), `"héllo"`)
+  assert-equals(json/to-string(""), `""`)
+
+  assert-equals(json/to-string(f64/nan), "null")
+  assert-equals(json/to-string(f64/inf), "null")
+  assert-equals(json/to-string(1.5), "1.5")
+  assert-equals(json/to-string(2.5: f32), "2.5")
+  assert-equals(json/to-string(255: u8), "255")
+  assert-equals(json/to-string(-9223372036854775807), "-9223372036854775807")
+  assert-equals(json/to-string(true), "true")
+  assert-equals(json/to-string(.{ a = [.{ b = one }], c = .{} }), `{"a":[{"b":1}],"c":{}}`)
+  assert-equals(json/to-string([1, 2, 3].as-span()), `[1,2,3]`)
+  let five = 5
+  assert-equals(json/to-string(five.&), "5")
+
+  let doc: json/json = :object [
+    .{ key = "n", value = :int -3 },
+    .{ key = "u", value = :uint 18446744073709551615 },
+    .{ key = "f", value = :float 0.5 },
+    .{ key = "s", value = :str "q\"" },
+    .{ key = "l", value = :array [:null, :bool false] },
+  ]
+  assert-equals(json/to-string(doc), `{"n":-3,"u":18446744073709551615,"f":0.5,"s":"q\"","l":[null,false]}`)
+  require json/parse[json/json](example-json) is :ok parsed else crash("parse")
+  assert-equals(json/to-string(parsed), `{"school":"Greenwood High","location":{"city":"New York","state":"NY"},"students":[{"name":"Emma","age":15,"grade":"10"},{"name":"Liam","age":14,"grade":"9"},{"name":"Olivia","age":16,"grade":"11"}],"active":true,"principal":null}`)
+  assert(parsed.get("location").!.get("city").! is :str "New York")
+
+  assert-equals(
+    json/to-string-pretty(.{ a = [1, 2], b = .{}, s = "x{y", e = span/empty[int]() }, 2),
+    "{\n  \"a\": [\n    1,\n    2\n  ],\n  \"b\": {},\n  \"s\": \"x{y\",\n  \"e\": []\n}"
+  )
+}
+
+fn parsed(s: string): json/json {
+  if json/parse[json/json](s) is {
+    :ok j -> j,
+    :err e -> crash("'$s': $e"),
+  }
+}
+
+fn error-of(s: string): json/error {
+  if json/parse[json/json](s) is {
+    :ok _ -> crash("expected '$s' to fail"),
+    :err e -> e,
+  }
+}
+
+fn test-numbers() {
+  assert(parsed("123") is :int 123)
+  assert(parsed("-0") is :int 0)
+  assert(parsed("-9223372036854775808") is :int v and v == i64/min-value)
+  assert(parsed("9223372036854775807") is :int v and v == i64/max-value)
+  assert(parsed("9223372036854775808") is :uint 9223372036854775808)
+  assert(parsed("18446744073709551615") is :uint 18446744073709551615)
+  assert(parsed("18446744073709551616") is :float 18446744073709551616.0)
+  assert(parsed("-9223372036854775809") is :float -9223372036854775809.0)
+  assert(parsed("1.5e3") is :float 1500.0)
+  assert(parsed("-0.0") is :float -0.0)
+  assert(parsed("1E-2") is :float 0.01)
+  for ["01", "1.", ".5", "1e", "1e+", "+1", "-", "NaN", "Infinity", "0x1", "1 2", "--1"] {
+    reject(it)
+  }
+}
+
+fn test-strict() {
+  for ["[1,]", "{\"a\":1,}", "{\"a\" 1}", "{\"a\":}", "[,1]", "{,}", "[1 2]", "{\"a\":1 \"b\":2}",
+       "\"\\x\"", "\"\\u12\"", "\"\\ud800\"", "\"\\udc00\"", "\"\\ud800\\u0041\"", "\"abc", "[", "{\"a\"", "tru", "nul", "falsee",
+       "{1:2}", "['a']", "", " ", "\"a\" \"b\""] {
+    reject(it)
+  }
+  let raw-control = "\"a".concat((9: u8).as-char().to-string()).concat("b\"")
+  assert(error-of(raw-control).kind is :control-char)
+  let bad-utf8 = "\"a".concat((0xFF: u8).as-char().to-string()).concat("\"")
+  assert(error-of(bad-utf8).kind is :invalid-utf8)
+  let overlong = "\"".concat((0xC0: u8).as-char().to-string()).concat((0x80: u8).as-char().to-string()).concat("\"")
+  assert(error-of(overlong).kind is :invalid-utf8)
+  let surrogate = "\"".concat((0xED: u8).as-char().to-string()).concat((0xA0: u8).as-char().to-string()).concat((0x80: u8).as-char().to-string()).concat("\"")
+  assert(error-of(surrogate).kind is :invalid-utf8)
+  let deep = string-builder/new()
+  deep.repeat("[", 1025)
+  deep.repeat("]", 1025)
+  assert(error-of(deep.build()).kind is :depth)
+  let ok-deep = string-builder/new()
+  ok-deep.repeat("[", 1024)
+  ok-deep.repeat("]", 1024)
+  accept(ok-deep.build())
+
+  let e = error-of("{\"a\":\n  1 x}")
+  assert(e.kind is :unexpected-char 120)
+  assert-equals("$e", "unexpected 'x' at line 2, column 5")
+  assert(error-of("[1] 2").kind is :trailing)
+  assert(error-of("[1").kind is :unexpected-end)
+}
+
+fn test-unicode() {
+  assert(parsed(`"\ud83d\ude00"`) is :str "😀")
+  assert(parsed(`"\u00e9"`) is :str "é")
+  assert(parsed(`"\u0041\u20ac"`) is :str "A€")
+  assert(parsed(`"héllo wörld"`) is :str "héllo wörld")
+  assert(parsed(`"\/\b\f"`) is :str s and s.len() == 3 and s.[0] == '/' and s.[1].u8() == 8 and s.[2].u8() == 12)
+  let long = "\"0123456789012345678901234567890123456789\\n0123456789012345678901234567890123456789é\""
+  assert(parsed(long) is :str s and s.len() == 83 and s.[40] == '\n')
+}
+
+fn test-typed() {
+  let text = `{"name":"Ada \"Countess\"","initial":"A","age":36,"score":99.5,"active":true,"role":"admin","nickname":null,"contacts":[{"email":"ada@example.com"},"unreachable"],"scores":[10,20,30],"home-city":"London"}`
+  require json/parse[person](text) is :ok ada else { crash("typed parse failed") }
+  assert-equals(ada.name, "Ada \"Countess\"")
+  assert-equals(ada.initial, 'A')
+  assert-equals(ada.age, 36)
+  assert(ada.role is :admin)
+  assert(ada.nickname is :none)
+  assert(ada.contacts.[1] is :unreachable)
+  assert(ada.contacts.[0] is :email "ada@example.com")
+  assert-equals(ada.scores.[2], 30)
+  assert-equals(json/to-string(ada), text)
+
+  let camel = ` { "name" : "n", "initial":"i", "age":1, "score":2, "active":false, "role":"guest", "nickname":"nick", "contacts":[], "scores":[1,2,3], "homeCity":"x", "extra": [1, {"q": null, "r": "s"}, "t"] } `
+  require json/parse-with[person, camel-skip](camel) is :ok p else { crash("camel parse failed") }
+  assert(p.nickname is :some "nick")
+  assert-equals(p.home-city, "x")
+  assert(p.contacts.is-empty())
+
+  assert(json/parse[person](`{"name":"n"}`) is :err e and e.kind is :missing-field "initial")
+  assert(json/parse[person](`{"name":5}`) is :err e and e.kind is :unexpected-char 53)
+  assert(json/parse[person](`{"role":"king"}`) is :err e and e.kind is :unknown-variant "king")
+  assert(json/parse[u8](`256`) is :err e and e.kind is :overflow)
+  assert(json/parse[i8](`-129`) is :err e and e.kind is :overflow)
+  assert(json/parse[u64](`-1`) is :err e and e.kind is :overflow)
+  assert(json/parse[u32](`1.5`) is :err e and e.kind is :wrong-type "integer")
+  assert(json/parse[char](`"ab"`) is :err e and e.kind is :wrong-type _)
+  assert(json/parse[array[u8, 2]](`[1,2,3]`) is :err e and e.kind is :wrong-type _)
+  assert(json/parse[contact](`{"email":"a","phone":"b"}`) is :err e and e.kind is :wrong-type _)
+  assert(json/parse[contact](`{"email":"a"}`) is :ok c and c is :email "a")
+  assert(json/parse[contact](`"unreachable"`) is :ok c and c is :unreachable)
+  assert(json/parse[contact](`"email"`) is :err e and e.kind is :unknown-variant "email")
+
+  assert(json/parse[u64](`18446744073709551615`) is :ok 18446744073709551615)
+  assert(json/parse[i64](`-9223372036854775808`) is :ok v and v == i64/min-value)
+  assert(json/parse[f32](`2.5`) is :ok 2.5)
+  assert(json/parse[f64](`-25e-2`) is :ok -0.25)
+  assert(json/parse[bool](`true`) is :ok true)
+  assert(json/parse[?int](`null`) is :ok :none)
+  assert(json/parse[?int](`7`) is :ok :some 7)
+  assert(json/parse[list[int]](`[1, 2, 3]`) is :ok l and l == [1, 2, 3])
+  assert(json/parse[span[string]](`["a","b"]`) is :ok l and l.len() == 2 and l.[1] == "b")
+  assert(json/parse[*int](`5`) is :ok p and p.* == 5)
+  assert(json/parse[{}](`{"anything": [1,2]}`) is :ok _)
+  assert(json/parse[{ a: list[?u8] }](`{"a":[1,null,3]}`) is :ok s and s.a.[1] is :none and s.a.[2] is :some 3)
+  assert(json/parse[string](`"x"`) is :ok "x")
+  assert(json/parse[char](`"x"`) is :ok 'x')
 }
 
 fn test() {
   test-basic-enum()
+  test-write()
+  test-numbers()
+  test-strict()
+  test-unicode()
+  test-typed()
   test-parsing()
   test-rejects()
   test-escapes()
@@ -82,8 +288,8 @@ fn test() {
   })
 }
 
-fn test-parse(s: string, f: some fn json -> bool) {
-  if json/parse-from-string(s) is {
+fn test-parse(s: string, f: some fn json/json -> bool) {
+  if json/parse[json/json](s) is {
     :err msg -> crash("Failed: $msg"),
     :ok json -> if not f(json) crash("Failed '$s'")
   }

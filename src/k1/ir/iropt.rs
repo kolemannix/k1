@@ -1,5 +1,9 @@
 use super::*;
 
+mod promote;
+pub(super) use promote::promote_unit;
+pub use promote::{LocalUses, PromoteState};
+
 #[cfg(test)]
 mod tests;
 
@@ -73,16 +77,21 @@ fn optimize_unit_body(k1: &mut TypedProgram, root: IrUnitId, unit: IrUnit) -> K1
                     let loaded_insts = u.inst_count();
 
                     let inline_frame = k1.trace_push_unit(TraceKind::IrInline, unit_id, None);
-                    inline_calls_in_unit(k1, &mut u, unit_id);
+                    let exposes_locals = inline_calls_in_unit(k1, &mut u, unit_id);
                     k1.trace_pop(inline_frame);
 
                     let simplify_frame = k1.trace_push_unit(TraceKind::IrSimplify, unit_id, None);
-                    let passes = cfg_simplify(k1, &mut u);
+                    remove_unreachable_blocks(k1, &mut u);
+                    let passes = merge_blocks(k1, &mut u);
                     k1.trace.set_top_count(passes);
                     k1.trace_pop(simplify_frame);
 
+                    if exposes_locals {
+                        promote_unit(k1, &mut u, unit_id, None);
+                    }
+
                     insts_created += (u.inst_count() - loaded_insts) as u64;
-                    commit_unit(&mut k1.ir, &u, &mut unit);
+                    commit_unit(&mut k1.ir, &mut u, &mut unit);
                     k1.ir.release_unit_buf(u);
                 }
                 *get_compiled_unit_mut(&mut k1.ir, unit_id).unwrap() = unit;
@@ -141,16 +150,17 @@ fn has_inline_target(k1: &TypedProgram, u: &UnitView) -> bool {
     false
 }
 
-fn inline_calls_in_unit(k1: &mut TypedProgram, u: &mut UnitBuf, unit_id: IrUnitId) {
+fn inline_calls_in_unit(k1: &mut TypedProgram, u: &mut UnitBuf, unit_id: IrUnitId) -> bool {
     debug!("Inlining calls in {}", unit_name_to_string(k1, unit_id));
-    let mut value_subst = std::mem::take(&mut k1.ir.opt_buf_value_subst);
     let mut inlined_inst_count = 0u64;
+    let mut exposes_locals = false;
     let mut cur_block = u.body.first_block;
     'scan: while let Some(block) = cur_block {
         let mut cur_inst = u.block(block).first;
         while let Some(inst_id) = cur_inst {
             if let Some(call) = inline_target(k1, &u.view(), u.inst(inst_id)) {
-                cur_block = inline_call(k1, u, unit_id, block, inst_id, call, &mut value_subst);
+                exposes_locals |= inline_exposes_locals(k1, u, call);
+                cur_block = inline_call(k1, u, unit_id, block, inst_id, call);
                 inlined_inst_count += 1;
                 continue 'scan;
             }
@@ -159,9 +169,29 @@ fn inline_calls_in_unit(k1: &mut TypedProgram, u: &mut UnitBuf, unit_id: IrUnitI
         cur_block = u.block(block).next;
     }
 
-    value_subst.apply_to_unit(u);
-    k1.ir.opt_buf_value_subst = value_subst;
     k1.trace.set_top_count(inlined_inst_count);
+    exposes_locals
+}
+
+fn inline_exposes_locals(k1: &TypedProgram, u: &UnitBuf, call: IrCall) -> bool {
+    let IrCallee::Direct(callee_fn_id) = call.callee else { return false };
+    let callee = k1.ir.function_unit(callee_fn_id).unwrap().view(&k1.ir.mem);
+    let callee_has_allocas = callee
+        .first_block()
+        .and_then(|entry| callee.block(entry).first)
+        .is_some_and(|first| matches!(callee.inst(first), Inst::Alloca { .. }));
+    if callee_has_allocas || (call.dst.is_none() && call.ret_type.is_agg()) {
+        return true;
+    }
+    let is_local_addr = |v: Value| match u.subst.resolve(v) {
+        Value::Inst(id) => matches!(
+            u.inst(id),
+            Inst::Alloca { .. } | Inst::StructOffset { .. } | Inst::ArrayOffset { .. }
+        ),
+        _ => false,
+    };
+    call.dst.is_some_and(is_local_addr)
+        || u.view().args(call.args).iter().any(|a| is_local_addr(*a))
 }
 
 fn inline_call(
@@ -171,7 +201,6 @@ fn inline_call(
     call_block: BlockId,
     call_inst_id: InstId,
     call: IrCall,
-    results: &mut ValueSubst,
 ) -> Option<BlockId> {
     debug!("Inlining call i{} {}", call_inst_id, inst_to_string(k1, &u.view(), call_inst_id));
     let self_fn_type = get_compiled_unit(&k1.ir, self_unit_id).unwrap().fn_type;
@@ -201,12 +230,13 @@ fn inline_call(
         cur_block: call_block,
         cur_span: call_span,
         entry_span,
+        local_uses: None,
     };
     let inlined = inline_body(&mut b, callee_unit, call, call_post_block);
     if call.dst.is_none()
         && let Some(result) = inlined.result
     {
-        results.insert(call_inst_id, result);
+        b.u.subst.insert(call_inst_id, result);
     }
 
     match inlined.last_block {
@@ -282,7 +312,7 @@ impl InlineState {
         u.map_refs_of(inst, &|v| *v = self.mapped_value(*v), &|b| {
             *b = self.blocks.get(*b).expect("inlined edge to an uncopied block")
         });
-        mark_unaligned(&u.view(), inst);
+        u.mark_unaligned(inst);
     }
 
     fn block(&mut self, u: &mut UnitBuf, callee_block: BlockId) -> BlockId {
@@ -466,6 +496,7 @@ fn inline_body(
         let mut inst = *b.u.inst(phi);
         inline_state.map_inst(b.u, &mut inst);
         *b.u.inst_mut(phi) = inst;
+        b.record_local_uses(&inst, phi, block);
     }
 
     let result = match return_storage {
@@ -499,79 +530,7 @@ fn inline_body(
     InlinedBody { result, last_block, returns }
 }
 
-#[derive(Default)]
-pub struct ValueSubst {
-    values: IdMap<InstId, Value>,
-}
-
-impl ValueSubst {
-    fn insert(&mut self, from: InstId, mut to: Value) {
-        if let Value::Inst(id) = to
-            && let Some(resolved) = self.values.get(id)
-        {
-            to = resolved;
-        }
-        debug_assert!(!matches!(to, Value::Inst(id) if id == from));
-        self.values.update_values(|v| {
-            if matches!(*v, Value::Inst(id) if id == from) {
-                *v = to;
-            }
-        });
-        self.values.insert(from, to);
-    }
-
-    fn apply_to_unit(&mut self, u: &mut UnitBuf) {
-        if self.values.is_empty() {
-            return;
-        }
-        let mut cur = u.body.first_block;
-        while let Some(block) = cur {
-            let mut cur_inst = u.block(block).first;
-            while let Some(inst_id) = cur_inst {
-                let mut inst = *u.inst(inst_id);
-                u.map_refs_of(
-                    &mut inst,
-                    &|v| {
-                        if let Value::Inst(id) = *v
-                            && let Some(new) = self.values.get(id)
-                        {
-                            *v = new;
-                        }
-                    },
-                    &|_| {},
-                );
-                mark_unaligned(&u.view(), &mut inst);
-                *u.inst_mut(inst_id) = inst;
-                cur_inst = u.next_inst(inst_id);
-            }
-            cur = u.block(block).next;
-        }
-        self.values.clear();
-    }
-}
-
-fn mark_unaligned(u: &UnitView, inst: &mut Inst) {
-    let now_unaligned = match *inst {
-        Inst::Store { dst, .. } => is_addr_unaligned(u, dst),
-        Inst::Load { src, .. } => is_addr_unaligned(u, src),
-        Inst::Copy { dst, src, .. } => is_addr_unaligned(u, dst) || is_addr_unaligned(u, src),
-        Inst::Zero { dst, .. } => is_addr_unaligned(u, dst),
-        Inst::StructOffset { base, .. } => is_addr_unaligned(u, base),
-        _ => false,
-    };
-    if now_unaligned {
-        match inst {
-            Inst::Store { unaligned, .. }
-            | Inst::Load { unaligned, .. }
-            | Inst::Copy { unaligned, .. }
-            | Inst::Zero { unaligned, .. }
-            | Inst::StructOffset { unaligned, .. } => *unaligned = true,
-            _ => {}
-        }
-    }
-}
-
-pub fn cfg_simplify(k1: &mut TypedProgram, u: &mut UnitBuf) -> u64 {
+pub fn remove_unreachable_blocks(k1: &mut TypedProgram, u: &mut UnitBuf) {
     u.mark_reachable();
     let mut remove = k1.tmp.new_list(0);
     let mut cur = u.body.first_block;
@@ -593,24 +552,21 @@ pub fn cfg_simplify(k1: &mut TypedProgram, u: &mut UnitBuf) -> u64 {
             u.remove_block(*block_id);
         }
     }
+}
 
-    let mut merged_phis = std::mem::take(&mut k1.ir.opt_buf_value_subst);
-
+pub fn merge_blocks(k1: &mut TypedProgram, u: &mut UnitBuf) -> u64 {
     let mut passes = 1u64;
-    while do_pass(u, &mut merged_phis) {
+    while do_pass(u) {
         passes += 1;
     }
 
-    merged_phis.apply_to_unit(u);
-    k1.ir.opt_buf_value_subst = merged_phis;
-
-    fn do_pass(u: &mut UnitBuf, merged_phis: &mut ValueSubst) -> bool {
+    fn do_pass(u: &mut UnitBuf) -> bool {
         let mut noop = true;
 
         let mut cur = u.body.first_block;
         while let Some(block_id) = cur {
             if let Some(pred) = u.single_pred(block_id)
-                && strip_single_pred_phis(u, block_id, pred, merged_phis)
+                && strip_single_pred_phis(u, block_id, pred)
             {
                 noop = false;
             }
@@ -643,7 +599,7 @@ pub fn cfg_simplify(k1: &mut TypedProgram, u: &mut UnitBuf) -> u64 {
                 && u.single_pred(succ) == Some(block_id)
             {
                 u.remove_inst(jump);
-                strip_single_pred_phis(u, succ, block_id, merged_phis);
+                strip_single_pred_phis(u, succ, block_id);
 
                 let mut succ_cur = u.block(succ).first;
                 while let Some(inst_id) = succ_cur {
@@ -663,16 +619,11 @@ pub fn cfg_simplify(k1: &mut TypedProgram, u: &mut UnitBuf) -> u64 {
         }
         !noop
     }
-    debug!("cfg_simplify end\n{}", blocks_to_string(k1, &u.view(), false));
+    debug!("merge_blocks end\n{}", blocks_to_string(k1, &u.view(), false));
     passes
 }
 
-fn strip_single_pred_phis(
-    u: &mut UnitBuf,
-    block_id: BlockId,
-    pred: BlockId,
-    merged_phis: &mut ValueSubst,
-) -> bool {
+fn strip_single_pred_phis(u: &mut UnitBuf, block_id: BlockId, pred: BlockId) -> bool {
     let mut stripped = false;
     while let Some(inst_id) = u.block(block_id).first
         && let Inst::Phi { incomings, .. } = *u.inst(inst_id)
@@ -680,7 +631,7 @@ fn strip_single_pred_phis(
         debug_assert_eq!(incomings.len(), 1);
         let only_case = u.view().phi_cases(incomings)[0];
         debug_assert_eq!(only_case.from, pred);
-        merged_phis.insert(inst_id, only_case.value);
+        u.subst.insert(inst_id, only_case.value);
         u.remove_inst(inst_id);
         stripped = true;
     }

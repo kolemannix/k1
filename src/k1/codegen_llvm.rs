@@ -389,12 +389,13 @@ pub struct Cg<'ctx, 'k1> {
     cur_blocks: IdMap<BlockId, BasicBlock<'ctx>>,
     last_debug_location: std::cell::Cell<Option<(Span, DILocation<'ctx>)>>,
 
-    buffers: CgBuffers,
+    buffers: CgBuffers<'ctx>,
 }
 
-struct CgBuffers {
+struct CgBuffers<'ctx> {
     cfg_seen: IdMap<BlockId, ()>,
     cfg_blocks_rpo: Vec<BlockId>,
+    pending_phis: Vec<(PhiValue<'ctx>, BlockId, InstId, Option<DILocation<'ctx>>)>,
 }
 
 struct DebugContext<'ctx> {
@@ -750,6 +751,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             buffers: CgBuffers {
                 cfg_seen: IdMap::default(),
                 cfg_blocks_rpo: Vec::with_capacity(16),
+                pending_phis: Vec::new(),
             },
         }
     }
@@ -3572,6 +3574,35 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         Ok(llvm_block)
     }
 
+    fn codegen_phi_incomings(
+        &mut self,
+        inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
+        phi: PhiValue<'ctx>,
+        block_id: BlockId,
+        inst_id: InstId,
+        debug_locn: Option<DILocation<'ctx>>,
+    ) -> CgResult<()> {
+        let Inst::Phi { incomings, .. } = *self.cur_unit.inst(inst_id) else { unreachable!() };
+        for incoming in self.cur_unit.phi_cases(incomings) {
+            let Some(block) = self.cur_blocks.get(incoming.from) else {
+                continue;
+            };
+            let incoming_is_real_succ =
+                self.cur_unit.successors(incoming.from, Some(false)).any(|succ| succ == block_id);
+            if !incoming_is_real_succ {
+                continue;
+            }
+            match block.get_terminator() {
+                Some(terminator) => self.builder.position_before(&terminator),
+                None => self.builder.position_at_end(block),
+            }
+            self.restore_debug_location(debug_locn);
+            let value = self.resolve_value(inst_mappings, incoming.value)?;
+            phi.add_incoming(&[(&value, block)])
+        }
+        Ok(())
+    }
+
     fn resolve_value(
         &mut self,
         inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
@@ -3768,13 +3799,53 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.vec_store(&vop, inst_mappings, result)?;
                 Ok(None)
             }
-            VecOpIr::EqLanes => {
+            VecOpIr::ShuffleBytes => {
+                let table = self.vec_load(&vop, inst_mappings, vop.lhs)?;
+                let idx = self.vec_load(&vop, inst_mappings, vop.rhs)?;
+                let v16i8 = self.vec_llvm_type(ScalarType::I8, 16);
+                let arch = self.k1.plan.config.target.arch();
+                let (name, idx, overloads): (&str, _, &[BasicTypeEnum<'ctx>]) = match arch {
+                    compiler::Arch::Intel => ("llvm.x86.ssse3.pshuf.b.128", idx, &[]),
+                    compiler::Arch::Arm | compiler::Arch::Wasm => {
+                        let keep = self.ctx.i8_type().const_int(0x8F, false);
+                        let keep_lanes = LlvmVectorType::const_vector(&[keep; 16]);
+                        let masked = self.builder.build_and(idx, keep_lanes, "").unwrap();
+                        if arch == compiler::Arch::Arm {
+                            ("llvm.aarch64.neon.tbl1", masked, &[v16i8.as_basic_type_enum()])
+                        } else {
+                            ("llvm.wasm.swizzle", masked, &[])
+                        }
+                    }
+                };
+                let f = Intrinsic::find(name)
+                    .unwrap()
+                    .get_declaration(&self.llvm_module, overloads)
+                    .unwrap();
+                let call = self.builder.build_call(f, &[table.into(), idx.into()], "").unwrap();
+                let result = match call.try_as_basic_value() {
+                    ValueKind::Basic(v) => v.into_vector_value(),
+                    ValueKind::Instruction(_) => unreachable!("byte shuffle returns a vector"),
+                };
+                self.vec_store(&vop, inst_mappings, result)?;
+                Ok(None)
+            }
+            VecOpIr::EqLanes | VecOpIr::LtLanesS | VecOpIr::LtLanesU => {
                 let l = self.vec_load(&vop, inst_mappings, vop.lhs)?;
                 let r = self.vec_load(&vop, inst_mappings, vop.rhs)?;
-                let cmp_i1 = if is_float {
-                    self.builder.build_float_compare(FloatPredicate::OEQ, l, r, "").unwrap()
-                } else {
-                    self.builder.build_int_compare(IntPredicate::EQ, l, r, "").unwrap()
+                let cmp_i1 = match (vop.op, is_float) {
+                    (VecOpIr::EqLanes, true) => {
+                        self.builder.build_float_compare(FloatPredicate::OEQ, l, r, "").unwrap()
+                    }
+                    (VecOpIr::EqLanes, false) => {
+                        self.builder.build_int_compare(IntPredicate::EQ, l, r, "").unwrap()
+                    }
+                    (_, true) => {
+                        self.builder.build_float_compare(FloatPredicate::OLT, l, r, "").unwrap()
+                    }
+                    (VecOpIr::LtLanesS, false) => {
+                        self.builder.build_int_compare(IntPredicate::SLT, l, r, "").unwrap()
+                    }
+                    _ => self.builder.build_int_compare(IntPredicate::ULT, l, r, "").unwrap(),
                 };
                 let elem_bits = vop.elem.get_layout().size_bits() as u32;
                 let int_lane_vec = self.custom_width_int_type(elem_bits).vec_type(vop.lanes);
@@ -3790,6 +3861,19 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 };
                 self.vec_store(&vop, inst_mappings, result)?;
                 Ok(None)
+            }
+            VecOpIr::ReduceOr => {
+                let l = self.vec_load(&vop, inst_mappings, vop.lhs)?;
+                let f = Intrinsic::find("llvm.vector.reduce.or")
+                    .unwrap()
+                    .get_declaration(&self.llvm_module, &[l.get_type().as_basic_type_enum()])
+                    .unwrap();
+                let call = self.builder.build_call(f, &[l.into()], "").unwrap();
+                let result = match call.try_as_basic_value() {
+                    ValueKind::Basic(v) => v,
+                    ValueKind::Instruction(_) => unreachable!("reduce-or returns a scalar"),
+                };
+                Ok(Some(result))
             }
             VecOpIr::ToMask => {
                 let l = self.vec_load(&vop, inst_mappings, vop.lhs)?;
@@ -4142,36 +4226,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_unreachable().unwrap();
                 Ok(())
             }
-            Inst::Phi { t, incomings } => {
+            Inst::Phi { t, .. } => {
                 let phi_ty = self.pt_canon_type(t);
                 let phi = self.builder.build_phi(phi_ty, "").unwrap();
-                let phi_block = self.builder.get_insert_block().unwrap();
                 let debug_locn = self.builder.get_current_debug_location();
-
-                for incoming in self.cur_unit.phi_cases(incomings) {
-                    let Some(block) = self.cur_blocks.get(incoming.from) else {
-                        continue;
-                    };
-                    let incoming_is_real_succ = self
-                        .cur_unit
-                        .successors(incoming.from, Some(false))
-                        .any(|succ| succ == block_id);
-                    if !incoming_is_real_succ {
-                        continue;
-                    }
-                    // Resolve in the edge's source block: anything it emits (e.g. a
-                    // reload-global addr call) must dominate the edge, and the phi
-                    // must stay at block top
-                    match block.get_terminator() {
-                        Some(terminator) => self.builder.position_before(&terminator),
-                        None => self.builder.position_at_end(block),
-                    }
-                    let value = self.resolve_value(inst_mappings, incoming.value)?;
-                    self.builder.position_at_end(phi_block);
-                    self.restore_debug_location(debug_locn);
-                    phi.add_incoming(&[(&value, block)])
-                }
-
+                self.buffers.pending_phis.push((phi, block_id, inst_id, debug_locn));
                 inst_mappings.insert(inst_id, phi.as_basic_value());
                 Ok(())
             }
@@ -5079,9 +5138,15 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
 
         inst_mappings.clear();
+        self.buffers.pending_phis.clear();
         for block in &blocks_rpo {
             self.codegen_block(inst_mappings, *block)?;
         }
+        let pending_phis = std::mem::take(&mut self.buffers.pending_phis);
+        for (phi, block_id, inst_id, debug_locn) in &pending_phis {
+            self.codegen_phi_incomings(inst_mappings, *phi, *block_id, *inst_id, *debug_locn)?;
+        }
+        self.buffers.pending_phis = pending_phis;
         self.codegen_return_block(self.k1.get_function_span(function_id));
         {
             blocks_rpo.clear();

@@ -18,7 +18,7 @@ fn validate_handmade(name: &str, build: impl FnOnce(&mut UnitBuf)) -> Result<(),
     let mut unit = *k1.ir.function_unit(f).unwrap();
     let mut u = k1.ir.take_unit_buf();
     build(&mut u);
-    commit_unit(&mut k1.ir, &u, &mut unit);
+    commit_unit(&mut k1.ir, &mut u, &mut unit);
     k1.ir.release_unit_buf(u);
     *k1.ir.function_unit_mut(f).unwrap() = unit;
     match validate_unit(&k1, IrUnitId::Function(f)) {

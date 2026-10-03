@@ -1,0 +1,248 @@
+use libuv/uv
+use libuv/uv-request
+use libuv/uv-handle
+use libuv/uv-stream
+use http/http-response
+use http/response
+use http/routing
+use http/llhttp
+use http/server
+use http/server/framework-deps
+use http/datastar
+use http/pair
+use http/pairs
+use http/percent
+use http/urlencoded
+use http/cookie
+use std/rc-byte-stream
+
+$http/pre/routing/define(route, {
+  use http/pre/routing/get
+  use http/pre/routing/post
+  use http/pre/routing/seg
+  let game: span[seg] = [:text "game", :u64 "id"]
+  [
+    get(   "home",        []),
+    get(   "events",      [:text "events"]),
+    get(   "big-file",    [:text "static", :text "big-file.json"]),
+    get(   "game-events", game.concat([:text "events"])),
+    post(  "game-poke",   game.concat([:text "poke"])),
+  ]
+})
+
+fn test-routing() {
+  let th = fn(method: llhttp/method, url: string) { route/parse(http/header/make(method, url)) }
+
+  assert(route/url-string(:home) == "/")
+  assert(route/url-string(:game-poke .{ id = 42 }) == "/game/42/poke")
+  assert(route/url-string(:big-file) == "/static/big-file.json")
+
+  assert(th(:GET, "/") is :ok :home)
+  assert(th(:GET, "/events") is :ok :events)
+  assert(th(:HEAD, "/events") is :ok :events)
+  assert(th(:GET, "/events?foo=1") is :ok :events)
+  assert(th(:GET, "/%65vents") is :ok :events)
+  assert(th(:POST, "/game/42/poke") is :ok :game-poke p and p.id == 42)
+  assert(th(:POST, "/game/42/poke/") is :ok :game-poke _)
+  assert(th(:GET, "/game/42/poke") is :err :bad-method _)
+  assert(th(:POST, "/game/abc/poke") is :err :bad-param b and b.got == "abc")
+  assert(th(:POST, "/game/18446744073709551617/poke") is :err :bad-param _)
+  assert(th(:GET, "/game/42/zzz") is :err :not-found)
+  assert(th(:GET, "/nope") is :err :not-found)
+  assert(th(:GET, "/game/%zz/poke") is :err :bad-encoding _)
+  assert(th(:OPTIONS, "*") is :err :not-found)
+}
+
+fn test-parsers() {
+  assert(percent/decode("a%20b", plus-is-space = false) == :some "a b")
+  assert(percent/decode("a+b", plus-is-space = false) == :some "a+b")
+  assert(percent/decode("a+b%2B", plus-is-space = true) == :some "a b+")
+  assert(percent/decode("%zz", plus-is-space = false) is :none)
+  assert(percent/decode("%2", plus-is-space = false) is :none)
+
+  let q = urlencoded/parse("a=1&b=x+y&flag&c=%3D%26&&d=")
+  assert-equals(q.len(), 5)
+  assert(pairs/find-by-name(q.as-span(), "a") == :some "1")
+  assert(pairs/find-by-name(q.as-span(), "b") == :some "x y")
+  assert(pairs/find-by-name(q.as-span(), "flag") == :some "")
+  assert(pairs/find-by-name(q.as-span(), "c") == :some "=&")
+  assert(pairs/find-by-name(q.as-span(), "d") == :some "")
+  assert(pairs/find-by-name(q.as-span(), "zzz") is :none)
+  assert(pairs/find-by-name(urlencoded/parse("a=%zz").as-span(), "a") == :some "%zz")
+  let straddled = urlencoded/parse-chunks(["a=1&lo".span-bytes(), "ng=x%2".span-bytes(), "0y&b=2".span-bytes(), "&c".span-bytes()])
+  assert-equals(straddled.len(), 4)
+  assert(pairs/find-by-name(straddled.as-span(), "long") == :some "x y")
+  assert(pairs/find-by-name(straddled.as-span(), "b") == :some "2")
+  assert(pairs/find-by-name(straddled.as-span(), "c") == :some "")
+
+  let c = cookie/parse("who=bob; theme=dark;junk ; x=a=b; enc=a%20b%3B; raw=%zz")
+  assert-equals(c.len(), 5)
+  assert(pairs/find-by-name(c.as-span(), "who") == :some "bob")
+  assert(pairs/find-by-name(c.as-span(), "enc") == :some "a b;")
+  assert(pairs/find-by-name(c.as-span(), "raw") == :some "%zz")
+  assert(pairs/find-by-name(c.as-span(), "theme") == :some "dark")
+  assert(pairs/find-by-name(c.as-span(), "x") == :some "a=b")
+  assert-equals(
+    cookie/set-header("who", "bob smith", cookie/attrs/default() | .{ max-age = :some 60, secure = true, same-site = :strict }),
+    "Set-Cookie: who=bob%20smith; Path=/; Max-Age=60; HttpOnly; Secure; SameSite=Strict")
+
+  let h = http/header/make(:POST, "/login?next=%2Fhome&who=a+b")
+  h.headers.push(.{ field = "content-type", value = "application/x-www-form-urlencoded" })
+  h.headers.push(.{ field = "Cookie", value = "who=bob" })
+  let req: http/request = .{ header = h, body = ["who=al".span-bytes(), "ice&x=1".span-bytes()] }
+  assert(h.find("Content-Type") == :some "application/x-www-form-urlencoded")
+  assert(h.find("nope") is :none)
+  assert(pairs/find-by-name(req.query(), "next") == :some "/home")
+  assert(pairs/find-by-name(req.query(), "who") == :some "a b")
+  assert(pairs/find-by-name(req.form().!, "who") == :some "alice")
+  assert(pairs/find-by-name(req.form().!, "x") == :some "1")
+  assert(pairs/find-by-name(req.cookies(), "who") == :some "bob")
+  let plain: http/request = .{ header = http/header/make(:GET, "/"), body = [] }
+  assert(plain.form() is :none)
+  assert(plain.query().is-empty())
+}
+
+type deps = { *framework-deps }
+fn make-deps(framework: *framework-deps): *deps { heap.new(.{ framework-deps = framework }) }
+
+fn handle(req: http/request, deps: *deps): http-response {
+  let url = req.header.url
+  if url == "/hello" response/text("hi")
+  else if url == "/slow" { uv/sleep(300); response/text("slow-done") }
+  else if url == "/events" datastar/patch-signals(deps.framework-deps.bus.subscribe("t") || rc-byte-stream)
+  else response/not-found()
+}
+
+type client = {
+  tcp: uv/tcp,
+  connect-req: uv/connect,
+  write-req: uv/write,
+  buf: uv/buf,
+  read-buf: array[u8, 4096],
+  send: string,
+  received: list[u8],
+  started: u64,
+  elapsed-ms: u64,
+  eof: bool,
+  on-eof: *fn(*client) -> {},
+}
+
+ns for client {
+  fn start(port: u16, send: string, on-eof: *fn(*client) -> {}): *client {
+    let c: *client = heap.new(.{
+      tcp = uninit, connect-req = uninit, write-req = uninit, buf = uninit, read-buf = uninit,
+      send, received = list/empty(), started = uv/hrtime(), elapsed-ms = 0, eof = false, on-eof,
+    })
+    let l = uv/default_loop().get()
+    uv/check(uv/tcp_init(l, c.tcp.&)).!
+    c.tcp.&.set-data(c)
+    c.connect-req.&.set-data(c)
+    c.write-req.&.set-data(c)
+    let addr: uv/sockaddr_in = uninit
+    uv/check(uv/ip4_addr("127.0.0.1\0".data-ref-byte(), port.widen[i32], addr.&)).!
+    uv/check(uv/tcp_connect(c.connect-req.&, c.tcp.&, addr.&.as[ptr].narrow(), on-connect.&)).!
+    c
+  }
+
+  fn text(self: *client): string { string/wrap-bytes(self.received.as-span()) }
+}
+
+fn on-connect(req: *uv/connect, status: i32) {
+  let c = req.get-data[client]()
+  if status != 0 crash("client connect failed: $status")
+  c.buf = uv/buf/wrap-span(c.send.span-bytes())
+  uv/check(uv/write(c.write-req.&, c.tcp.&.as-stream(), c.buf.&, 1, fn(_req, status) { uv/check(status).! })).!
+  if uv/read_start(c.tcp.&.as-stream(), fn(h, _size, buf) {
+    let c = h.get-data[client]()
+    buf.* = uv/buf/wrap-span(c.read-buf.&.as-span())
+  }, on-read.&) != 0 crash("client read_start")
+}
+
+fn on-read(stream: *uv/stream, nread: size, buf: *uv/buf) {
+  let c = stream.get-data[client]()
+  if nread > 0 {
+    c.received.append-span-in(heap, span/wrap-raw[u8](buf.base.inner, nread))
+  } else if nread < 0 {
+    c.eof = true
+    c.elapsed-ms = (uv/hrtime() - c.started) / 1000000
+    uv/close(c.tcp.&.as-handle(), fn h. {
+      let c = h.get-data[client]()
+      (c.on-eof)(c)
+    })
+  }
+}
+
+let(mutable) srv: ptr = ptr/null
+let(mutable) phase1-done: u32 = 0
+let(mutable) slowloris-cut: bool = false
+let(mutable) hello-idle-cut: bool = false
+let(mutable) events-cut: bool = false
+let(mutable) slow-finished: bool = false
+
+fn get-server(): *server/server { srv.ref[server/server] }
+
+fn on-slowloris-eof(c: *client) {
+  assert(c.received.is-empty())
+  assert(c.elapsed-ms >= 200)
+  slowloris-cut = true
+  phase1-done = phase1-done + 1
+  if phase1-done == 2 { phase2() }
+}
+
+fn on-hello-eof(c: *client) {
+  let t = c.text()
+  assert(t.starts-with("HTTP/1.1 200 OK\r\n"))
+  assert(t.ends-with("\r\n\r\nhi"))
+  assert(c.elapsed-ms >= 300)
+  hello-idle-cut = true
+  phase1-done = phase1-done + 1
+  if phase1-done == 2 { phase2() }
+}
+
+fn phase2() {
+  client/start(get-server().port, "GET /events HTTP/1.1\r\nHost: x\r\n\r\n", fn c. {
+    let t = c.text()
+    assert(t.starts-with("HTTP/1.1 200 OK\r\n"))
+    assert(t.contains-string("Content-Type: text/event-stream\r\n"))
+    events-cut = true
+  })
+  client/start(get-server().port, "GET /slow HTTP/1.1\r\nHost: x\r\n\r\n", fn c. {
+    let t = c.text()
+    assert(t.starts-with("HTTP/1.1 200 OK\r\n"))
+    assert(t.ends-with("\r\n\r\nslow-done"))
+    slow-finished = true
+  })
+  let t: *uv/timer = heap.alloc-t()
+  uv/check(uv/timer_init(uv/default_loop().get(), t)).!
+  let _ = uv/timer_start(t, fn t. {
+    server/stop(get-server())
+    uv/close(t.as-handle(), fn _h. .{})
+  }, 100, 0)
+}
+
+fn test-server() {
+  let config: server/config = .{
+    host = "127.0.0.1", port = 0, accept-queue-len = 128,
+    header-timeout-ms = 200, body-timeout-ms = 30000, write-timeout-ms = 30000,
+    idle-timeout-ms = 300, drain-timeout-ms = 3000, handle-signals = false,
+  }
+  let s = server/start[deps](config, make-deps.&, handle.&).!
+  srv = s.as[ptr]
+  assert(s.port != 0)
+  client/start(s.port, "GET / HTTP/1.1\r\nHost: x\r\n", on-slowloris-eof.&)
+  client/start(s.port, "GET /hello HTTP/1.1\r\nHost: x\r\n\r\n", on-hello-eof.&)
+  server/run(s)
+  assert(slowloris-cut)
+  assert(hello-idle-cut)
+  assert(events-cut)
+  assert(slow-finished)
+  assert(s.connections.is-empty())
+}
+
+fn main(): i32 {
+  test-routing()
+  test-parsers()
+  test-server()
+  println("http_test passed")
+  0
+}

@@ -40,12 +40,5 @@ fn setup(ctx: k1/setup-ctx) {
     "+clangarg", "-Ivendor/include",
     "+strip-prefix", "SDL_",
   ]
-  if (ctx.build.target is :arm64-macos) {
-    let sdk = process/sh("printf %s $(xcrun --sdk macosx --show-sdk-path)").!
-    bindgen-args.push("+clangarg")
-    bindgen-args.push("-isysroot")
-    bindgen-args.push("+clangarg")
-    bindgen-args.push(sdk)
-  }
   let _ = process/run-verbose("k1bindgen", bindgen-args.as-span()).!
 }

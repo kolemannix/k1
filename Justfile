@@ -95,6 +95,11 @@ build-r:
 build-profile:
   cargo build --profile profiling --bin k1 --features=llvm-sys/force-static
 
+# std/json against simdjson and serde_json on the perf/json corpus
+bench-json:
+  cargo build --features=llvm-sys/prefer-dynamic --bin k1
+  K1=target/debug/k1 content/showcase/benchmarks/json/run.sh
+
 profile-suite1: build-profile
   hyperfine --warmup 100 'K1_HOME=. target/profiling/k1 --no-cache c test_src/suite1'
 
@@ -121,6 +126,7 @@ bundle:
   just build-r
   cargo build --profile release --bin k1_test
   make -C modules/core/libs build wasm nocrt
+  K1_HOME={{justfile_directory()}} target/release/k1 --optimize build dogfood/k1bindgen
   ./builds/bundle.sh target/release builds/{{bundle-name}}
 
 install: bundle

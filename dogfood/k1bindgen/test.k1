@@ -22,13 +22,6 @@ fn test(): i32 {
     "+clangarg", "-isystem",
     "+clangarg", clang-include,
   ])
-  let args = #if k1/platform-macos {
-    args.concat([
-      "+clangarg", "-isysroot",
-      "+clangarg", "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.sdk"
-    ])
-  } else args
-
   // TODO: Use 'diff' instead sys/cmd("diff", "input.c", "test/output.k1")
   let expected = core/files/read-to-string("test/expected.k1")
   if start(args) is {

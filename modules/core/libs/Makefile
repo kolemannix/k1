@@ -26,10 +26,10 @@ clean:
 	rm -f *.o libk1rt.a libk1rt.so libk1rt.dylib libk1rt-freestanding.a libk1rt-filc.a libk1rt-wasm.a libk1rt-nocrt.a
 
 k1rt.o: k1rt.c $(HEADERS)
-	$(CC) $(MINVER) -fPIC -c k1rt.c -o k1rt.o
+	$(CC) $(MINVER) -O2 -fPIC -c k1rt.c -o k1rt.o
 
 k1rt_hosted.o: k1rt_hosted.c
-	$(CC) $(MINVER) -fPIC -c k1rt_hosted.c -o k1rt_hosted.o
+	$(CC) $(MINVER) -O2 -fPIC -c k1rt_hosted.c -o k1rt_hosted.o
 
 bt-%.o: $(BT_DIR)/%.c
 	$(CC) -O2 -fPIC -I$(BT_DIR) -c $< -o $@
@@ -38,10 +38,10 @@ libk1rt.a: k1rt.o k1rt_hosted.o $(BT_OBJS)
 	ar rcs libk1rt.a k1rt.o k1rt_hosted.o $(BT_OBJS)
 
 libk1rt.$(DYLIB_EXT): k1rt.c k1rt_hosted.c $(HEADERS) $(BT_OBJS)
-	$(CC) $(MINVER) -fPIC -shared k1rt.c k1rt_hosted.c $(BT_OBJS) -o libk1rt.$(DYLIB_EXT)
+	$(CC) $(MINVER) -O2 -fPIC -shared k1rt.c k1rt_hosted.c $(BT_OBJS) -o libk1rt.$(DYLIB_EXT)
 
 k1rt-freestanding.o: k1rt.c $(HEADERS)
-	$(CC) $(MINVER) -ffreestanding -fno-stack-protector -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -c k1rt.c -o k1rt-freestanding.o
+	$(CC) $(MINVER) -O2 -ffreestanding -fno-stack-protector -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -c k1rt.c -o k1rt-freestanding.o
 
 libk1rt-freestanding.a: k1rt-freestanding.o
 	ar rcs libk1rt-freestanding.a k1rt-freestanding.o

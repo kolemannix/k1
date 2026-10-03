@@ -17,6 +17,10 @@ impl uv-request for uv/write {
   fn as-request(self: *self): *uv/req { self.narrow() }
 }
 
+impl uv-request for uv/connect {
+  fn as-request(self: *self): *uv/req { self.narrow() }
+}
+
 fn set-request-data[r: uv-request, t](
   req: *r,
   data: *t,
@@ -40,6 +44,14 @@ impl uv-handle for uv/tcp {
 }
 
 impl uv-handle for uv/async {
+  fn as-handle(self: *self): *uv/handle { self.narrow() }
+}
+
+impl uv-handle for uv/timer {
+  fn as-handle(self: *self): *uv/handle { self.narrow() }
+}
+
+impl uv-handle for uv/signal {
   fn as-handle(self: *self): *uv/handle { self.narrow() }
 }
 
@@ -70,6 +82,24 @@ ns uv {
     fn from-i32(i: i32): errno {
       if i >= 0 crash("not an errno: $i")
       enum/enum-from-value-unchecked(i)
+    }
+  }
+
+  impl print for errno {
+    fn print-to[w: writer](self, w) { w.write(string/wrap-c(strerror(self.enum-value()).inner)) }
+  }
+
+  type status = { code: i32 }
+
+  fn check(code: i32): status { .{ code } }
+
+  impl try[t = empty, e = errno] for status {
+    fn error(e: errno): status { .{ code = e.enum-value() } }
+    fn value(_t: empty): status { .{ code = 0 } }
+    fn is-ok(self): bool { self.code >= 0 }
+    fn get-error(self): errno { errno/from-i32(self.code) }
+    fn get-value(self): empty {
+      if self.code < 0 crash("libuv call failed: ${errno/from-i32(self.code)}")
     }
   }
 }

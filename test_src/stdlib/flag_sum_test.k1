@@ -1,0 +1,109 @@
+ns flag_sum_test
+
+$std/flag-sum/define(\{
+  shape = either(u8, [rounded, even]) {
+    circle({ radius: i32 }) = [rounded, even],
+    oval({ rx: i32, ry: i32 }) = [rounded],
+    square({ len: i32 }) = [even],
+    rect({ w: i32, h: i32 }) = [even],
+    line({ len: i32 }),
+    dot,
+  }
+})
+
+$std/flag-sum/define(\{
+  tone = either([bright, warm]) {
+    red = [warm],
+    orange = [bright, warm],
+    yellow = [bright],
+    navy,
+    sky = [bright],
+    black,
+  }
+})
+
+$std/flag-sum/define(\{
+  packet = either([small]) {
+    tiny(u8) = [small],
+    big({ a: i64, b: i64 }),
+  }
+})
+
+fn test-shrunk-subtype-has-no-view() {
+  let t: packet = :tiny(9)
+  assert-equals(t.as-small().!.as-packet().tag, t.tag)
+  assert(types/size[packet-small] < types/size[packet])
+  assert(test-compile(t.&.view-small()).is-some())
+}
+
+fn test-tags() {
+  assert-equals((shape:circle(.{ radius = 1 })).tag, 0b011)
+  assert-equals((shape:oval(.{ rx = 1, ry = 2 })).tag, 0b001)
+  assert-equals((shape:square(.{ len = 1 })).tag, 0b010)
+  assert-equals((shape:rect(.{ w = 1, h = 2 })).tag, 0b110)
+  assert-equals((shape:line(.{ len = 1 })).tag, 0b000)
+  assert-equals(shape:dot.tag, 0b100)
+
+  assert-equals(tone:red.value, 0b010)
+  assert-equals(tone:orange.value, 0b011)
+  assert-equals(tone:yellow.value, 0b001)
+  assert-equals(tone:navy.value, 0b000)
+  assert-equals(tone:sky.value, 0b101)
+  assert-equals(tone:black.value, 0b100)
+}
+
+fn test-predicates() {
+  let c: shape = :circle(.{ radius = 3 })
+  let r: shape = :rect(.{ w = 2, h = 5 })
+  let l: shape = :line(.{ len = 9 })
+  assert(c.rounded() and c.even())
+  assert((not r.rounded()) and r.even())
+  assert((not l.rounded()) and (not l.even()))
+  assert(tone:orange.bright() and tone:orange.warm())
+  assert((not tone:navy.bright()) and (not tone:navy.warm()))
+}
+
+fn test-narrow() {
+  let c: shape = :circle(.{ radius = 3 })
+  let r: shape = :rect(.{ w = 2, h = 5 })
+  let rounded: shape-rounded = c.as-rounded().!
+  assert(rounded is :circle(p) and p.radius == 3)
+  assert(rounded.even())
+  assert(r.as-rounded() is :none)
+  let even: shape-even = r.as-even().!
+  assert(even is :rect(p) and p.w == 2 and p.h == 5)
+  assert((not even.rounded()))
+  assert-equals(even.tag, r.tag)
+  assert(even.as-shape() is :rect(p) and p.h == 5)
+  assert-equals(even.as-shape().tag, 0b110)
+
+  let s: tone = :sky
+  let bright: tone-bright = s.as-bright().!
+  assert(bright is :sky)
+  assert((not bright.warm()))
+  assert(tone:black.as-bright() is :none)
+  assert(bright.as-tone() is :sky)
+  assert(tone:red.as-warm().!.as-tone() is :red)
+}
+
+fn test-view() {
+  let r: shape = :rect(.{ w = 2, h = 5 })
+  let r-ref = r.&
+  let even: *shape-even = r-ref.view-even().!
+  assert(even.* is :rect(p) and p.w == 2)
+  assert(r-ref.view-rounded() is :none)
+  if even is :rect(p)* { p.w = 7 }
+  assert(r is :rect(p) and p.w == 7)
+
+  let s: tone = :orange
+  let warm: *tone-warm = s.&.view-warm().!
+  assert(warm.* is :orange)
+}
+
+fn test() {
+  test-tags()
+  test-predicates()
+  test-narrow()
+  test-view()
+  test-shrunk-subtype-has-no-view()
+}

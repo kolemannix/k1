@@ -533,7 +533,7 @@ impl TypedProgram {
     ) -> K1Result<TypedExprId> {
         let span = self.exprs.get_span(code_expr);
         self.synth_typed_call_typed_args(
-            self.ast.idents.f.CodeBuilder_code.with_span(span),
+            self.ast.idents.f.CodeBuilder_write_code.with_span(span),
             &[],
             &[writer, code_expr],
             ctx.with_no_expected_type(),
@@ -802,14 +802,19 @@ impl TypedProgram {
                         let string_id = *string_id;
                         let part_span = *part_span;
                         if !self.ast.idents.get_string(string_id).is_empty() {
-                            let value_id = self.make_static_code_value(&[(string_id, part_span)]);
-                            let code_expr = self.add_static_constant_expr(value_id, part_span);
-                            let code_call = self.synth_code_append_call(
-                                code_expr,
-                                writer_expr,
-                                block_ctx.with_hidden_calls(true),
+                            let text = self.synth_string_literal(string_id, part_span);
+                            let source = self.synth_int(
+                                TypedIntValue::U64(part_span.encoded_k1_u64()),
+                                part_span,
+                            );
+                            let call = self.synth_typed_call_typed_args(
+                                self.ast.idents.f.CodeBuilder_write_spanned.with_span(part_span),
+                                &[],
+                                &[writer_expr, text, source],
+                                block_ctx.with_hidden_calls(true).with_no_expected_type(),
+                                false,
                             )?;
-                            self.push_block_expr_id(&mut block, code_call);
+                            self.push_block_expr_id(&mut block, call);
                         }
                     } else {
                         // Combine consecutive strings into a single constant
@@ -998,7 +1003,7 @@ impl TypedProgram {
             {
                 let string_id = *string_id;
                 let part_span = *part_span;
-                let value_id = self.make_static_code_value(&[(string_id, part_span)]);
+                let value_id = self.make_static_code_value(string_id, part_span);
                 return Ok(self.add_static_constant_expr(value_id, span));
             }
         }

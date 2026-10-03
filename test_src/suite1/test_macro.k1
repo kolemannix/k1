@@ -19,7 +19,7 @@ macro twice(e: code) {
 macro repeat(n: int, body: code) {
   let cb = code-builder/new()
   for 0.until(n) {
-    cb.code(body)
+    cb.write-code(body)
     cb.writeln("")
   }
   cb.build()
@@ -55,34 +55,33 @@ fn test-debug-elided() {
 
 fn test-code-value() {
   let c = \incr()
-  assert-equals(c.chunks.len(), 1)
-  let chunk = c.chunks.[0]
-  assert-equals(chunk.text, "incr()")
-  assert(chunk.source != 0)
+  assert-equals(c.text, "incr()")
+  assert-equals(c.spans.len(), 1)
+  assert(c.spans.[0].source != 0)
 }
 
 fn test-code-literal() {
   let a = \9 * 9
   let c: code = "let q = $a"
-  assert-equals(c.text(), "let q = 9 * 9")
-  assert-equals(c.chunks.len(), 2)
-  assert-equals(c.chunks.[1].text, "9 * 9")
-  assert(c.chunks.[1].source != 0)
+  assert-equals(c.text, "let q = 9 * 9")
+  assert-equals(c.spans.len(), 2)
+  assert-equals(c.spans.[1].start, 8)
+  assert-equals(c.spans.[1].len, 5)
+  assert(c.spans.[1].source != 0)
 }
 
 fn test-code-fmt() {
   let c: code = "let w = ${}".fmt(42)
-  assert-equals(c.text(), "let w = 42")
-  assert-equals(c.chunks.len(), 2)
-  assert-equals(c.chunks.[0].text, "let w = ")
-  assert-equals(c.chunks.[1].source, 0)
+  assert-equals(c.text, "let w = 42")
+  assert-equals(c.spans.len(), 1)
+  assert-equals(c.spans.[0].len, 8)
 
   // No expectation nearby? Ascribe.
   let d = "let v = ${}".fmt(7): code
-  assert-equals(d.text(), "let v = 7")
+  assert-equals(d.text, "let v = 7")
 
   let e: code = "let p = ${:03}".fmt(7)
-  assert-equals(e.text(), "let p = 007")
+  assert-equals(e.text, "let p = 007")
 }
 
 fn test-code-builder() {
@@ -90,9 +89,10 @@ fn test-code-builder() {
   let cb = code-builder/new()
   cb.write("let z = $a; z * 2")
   let built = cb.build()
-  assert-equals(built.text(), "let z = 1 + 2; z * 2")
-  assert-equals(built.chunks.len(), 3)
-  assert-equals(built.chunks.[1].text, "1 + 2")
+  assert-equals(built.text, "let z = 1 + 2; z * 2")
+  assert-equals(built.spans.len(), 3)
+  assert-equals(built.spans.[1].start, 8)
+  assert-equals(built.spans.[1].len, 5)
 }
 
 fn test-emitter() {
@@ -106,24 +106,19 @@ fn test-emitter() {
       cb.line("v")
     })
   })
-  assert-equals(cb.build().text(), "fn f() {\n  let x = 1\n  :ok v -> {\n    v\n  },\n}\n")
+  assert-equals(cb.build().text, "fn f() {\n  let x = 1\n  :ok v -> {\n    v\n  },\n}\n")
 
   // line's code param makes call-site literals span-carrying
   let cb2 = code-builder/new()
   cb2.line("let y = 2")
   let built = cb2.build()
-  assert-equals(built.text(), "let y = 2\n")
-  let has-sourced = {
-    let found = false
-    for c in built.chunks { if c.source != 0 { found = true } }
-    found
-  }
-  assert(has-sourced)
+  assert-equals(built.text, "let y = 2\n")
+  assert-equals(built.spans.len(), 1)
 
   let cb3-storage = code-builder/new()
   let cb3 = cb3-storage.&
   cb3.sep(["a", "b", "c"], ", ", fn[cb3] s. cb3.write(s))
-  assert-equals(cb3.build().text(), "a, b, c")
+  assert-equals(cb3.build().text, "a, b, c")
 }
 
 macro token-summary(t: span[code-token]) {
@@ -137,7 +132,7 @@ macro token-summary(t: span[code-token]) {
 macro sum-list(t: span[code-token]) {
   let cb = code-builder/new()
   for tok in t {
-    if tok.kind is :punct and tok.text == "," cb.write(" + ") else cb.code(tok.code())
+    if tok.kind is :punct and tok.text == "," cb.write(" + ") else cb.write-token(tok)
   }
   cb.build()
 }
@@ -168,9 +163,9 @@ fn test-token-params() {
 
 fn test-raw-group() {
   let c = \{ any < tokens > here }
-  assert-equals(c.text(), "any < tokens > here")
-  assert(c.chunks.[0].source != 0)
-  assert-equals((\{}).text(), "")
+  assert-equals(c.text, "any < tokens > here")
+  assert(c.spans.[0].source != 0)
+  assert-equals((\{}).text, "")
 }
 
 use core/meta/str-lit

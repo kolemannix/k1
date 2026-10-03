@@ -7,21 +7,11 @@ ns work {
       submissions = list/empty[uv-work-submission](),
     })
   
-    let mutex-rc = uv/mutex_init(queue.mutex)
-    if mutex-rc != 0 {
-      crash("uv_mutex_init for work queue failed: $mutex-rc")
-    }
-  
-    let async-rc = uv/async_init(uv-loop, queue.async-handle, drain-work-queue.&)
-    if async-rc != 0 {
-      uv/mutex_destroy(queue.mutex)
-      heap.free-t(queue.async-handle)
-      heap.free-t(queue.mutex)
-      heap.free-t(queue)
-      crash("uv_async_init for work queue failed: $async-rc")
-    }
+    uv/check(uv/mutex_init(queue.mutex)).!
+    uv/check(uv/async_init(uv-loop, queue.async-handle, drain-work-queue.&)).!
   
     queue.async-handle.set-data(queue)
+    uv/unref(queue.async-handle.as-handle())
     work-queue = queue.as[ptr]
   }
   
@@ -35,8 +25,7 @@ ns work {
     queue.submissions.push-in(heap, .{ req, work-cb, after-cb })
     uv/mutex_unlock(queue.mutex)
   
-    let send-rc = uv/async_send(queue.async-handle)
-    if send-rc < 0 crash("uv_async_send for work queue failed: $send-rc")
+    uv/check(uv/async_send(queue.async-handle)).!
   }
   
   type uv-work-submission = {
@@ -64,15 +53,7 @@ ns work {
       }
   
       for submission in queue.submissions {
-        let queue-rc = uv/queue_work(
-          queue.uv-loop,
-          submission.req,
-          submission.work-cb,
-          submission.after-cb,
-        )
-        if queue-rc != 0 {
-          crash("uv_queue_work failed: $queue-rc")
-        }
+        uv/check(uv/queue_work(queue.uv-loop, submission.req, submission.work-cb, submission.after-cb)).!
       }
       queue.submissions.clear()
       uv/mutex_unlock(queue.mutex)

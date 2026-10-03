@@ -10,17 +10,6 @@ fn module(_b: k1/build-config): k1/module {
   m
 }
 
-// The host SDK, for system headers
-fn sdk-args(target: k1/target): list[string] {
-  if not (target is :arm64-macos) { return list/empty() }
-  let sdk = process/run("/bin/sh", ["-c", "printf %s $(xcrun --sdk macosx --show-sdk-path)"]).!
-  let args: list[string] = [
-    "+clangarg", "-isysroot",
-    "+clangarg", sdk,
-  ]
-  args
-}
-
 // Builds the vendored libuv release (v1.52.1, from github.com/libuv/libuv;
 // vendor bumps replace vendor/ wholesale) and regenerates the uv/net bindings.
 // Needs cmake and k1bindgen on PATH.
@@ -52,7 +41,6 @@ fn setup(ctx: k1/setup-ctx) {
     "+include", "FILE",
     "+opaque", "FILE",
   ]
-  for sdk-args(ctx.build.target) { net-args.push(it) }
   process/run-command("k1bindgen", net-args.as-span(), :inherit).!
 
   let uv-args: list[string] = [
@@ -141,6 +129,5 @@ fn setup(ctx: k1/setup-ctx) {
     uv-args.push("+opaque")
     uv-args.push("uv_barrier_t")
   }
-  for sdk-args(ctx.build.target) { uv-args.push(it) }
   let _ = process/run-command("k1bindgen", uv-args.as-span(), :inherit).!
 }

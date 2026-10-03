@@ -1,22 +1,19 @@
-// Server-Sent Events framing as a pipe: each upstream group becomes one SSE
-// event — an "event: <name>" line, each payload line as a "data: " line, a
-// blank-line terminator. Payload segments pass through zero-copy; only the
-// framing segments and the reused segment list are the pipe's own.
-
 use std/source
 use std/pull
 use std/waker
 
 type sse-encoder = {
   upstream: dyn[source[t = u8]],
-  event-name: string,
+  event-line: span[u8],
+  line-prefix: span[u8],
   parts: list[span[u8]],
 }
 
-fn sse-events(upstream: dyn[source[t = u8]], event-name: string): dyn[source[t = u8]] {
+fn sse-events(upstream: dyn[source[t = u8]], event-name: string, data-prefix: string): dyn[source[t = u8]] {
   let state: *sse-encoder = mem/new(.{
     upstream,
-    event-name,
+    event-line = "event: $event-name\n".span-bytes(),
+    line-prefix = (if data-prefix.is-empty() "data: " else "data: $data-prefix ").span-bytes(),
     parts = list/empty[span[u8]](),
   })
   state.to-dyn()
@@ -29,24 +26,29 @@ impl source[t = u8] for sse-encoder {
     if self.upstream.next() is {
       :chunk group -> {
         self.parts.clear()
-        self.parts.push("event: ".span-bytes())
-        self.parts.push(self.event-name.span-bytes())
-        self.parts.push("\ndata: ".span-bytes())
+        self.parts.push(self.event-line)
         let newline: u8 = 10
+        let at-line-start = true
         for seg in group {
           let line-start: size = 0
           let i: size = 0
           while i < seg.len() {
             if seg.[i] == newline {
-              if i > line-start { self.parts.push(seg.slice(line-start, i)) }
-              self.parts.push("\ndata: ".span-bytes())
+              if at-line-start { self.parts.push(self.line-prefix) }
+              self.parts.push(seg.slice(line-start, i + 1))
+              at-line-start = true
               line-start = i + 1
             }
             i = i + 1
           }
-          if line-start < seg.len() { self.parts.push(seg.slice(line-start, seg.len())) }
+          if line-start < seg.len() {
+            if at-line-start { self.parts.push(self.line-prefix) }
+            self.parts.push(seg.slice(line-start, seg.len()))
+            at-line-start = false
+          }
         }
-        self.parts.push("\n\n".span-bytes())
+        if not at-line-start { self.parts.push("\n".span-bytes()) }
+        self.parts.push("\n".span-bytes())
         :chunk self.parts.as-span()
       },
       :pending -> :pending,
@@ -56,11 +58,48 @@ impl source[t = u8] for sse-encoder {
   }
 }
 
-fn sse-response(stream: dyn[source[t = u8]], event-name: string): http-response {
+fn sse-response(events: dyn[source[t = u8]]): http-response {
   .{
     status = 200,
     content-type = "text/event-stream",
     extra-headers = ["Cache-Control: no-cache"],
-    body = :stream (stream || sse-events(event-name)),
+    body = :stream events,
+  }
+}
+
+ns datastar {
+  fn patch-elements(elements: dyn[source[t = u8]]): http-response {
+    sse-response(elements || sse-events("datastar-patch-elements", "elements"))
+  }
+  fn patch-signals(signals: dyn[source[t = u8]]): http-response {
+    sse-response(signals || sse-events("datastar-patch-signals", "signals"))
+  }
+}
+
+ns sse-test {
+  use std/collect-sink
+  fn frame(src: dyn[source[t = u8]], event-name: string, data-prefix: string): string {
+    let sink: collect-sink[u8] = .{ items = list/empty() }
+    string/wrap-bytes(source/run-to(src || sse-events(event-name, data-prefix), sink.&))
+  }
+  fn items(items: span[string]): dyn[source[t = u8]] { source/from-items(items) }
+  fn group(segs: span[string]): dyn[source[t = u8]] {
+    let bytes = list/empty[span[u8]]()
+    for s in segs { bytes.push(s.span-bytes()) }
+    let g: *group-source = mem/new(.{ group = bytes.as-span(), done = false })
+    g.to-dyn()
+  }
+
+  #static {
+    assert-equals(
+      frame(items(["<div id=\"x\">\n  hi\n</div>"]), "datastar-patch-elements", "elements"),
+      "event: datastar-patch-elements\ndata: elements <div id=\"x\">\ndata: elements   hi\ndata: elements </div>\n\n")
+    assert-equals(
+      frame(items(["{\"cells_0_tab\": \"output\"}"]), "datastar-patch-signals", "signals"),
+      "event: datastar-patch-signals\ndata: signals {\"cells_0_tab\": \"output\"}\n\n")
+    assert-equals(frame(group(["ab", "\n", "c"]), "e", "p"), "event: e\ndata: p ab\ndata: p c\n\n")
+    assert-equals(frame(items(["line\n"]), "e", "p"), "event: e\ndata: p line\n\n")
+    assert-equals(frame(items(["a", "b"]), "n", ""), "event: n\ndata: a\n\nevent: n\ndata: b\n\n")
+    assert-equals(frame(items(["x\n\ny"]), "e", "p"), "event: e\ndata: p x\ndata: p \ndata: p y\n\n")
   }
 }

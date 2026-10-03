@@ -54,6 +54,7 @@ ns qualified_syntax {
   }
 
   fn test() {
+  path-constraint()
     let s-foo: int = has-secret-gen[a = int]@(foo)/secret()
     assert-equals(s-foo, 10)
     let s-bar: int = has-secret-gen[a = int]@(bar)/secret()
@@ -94,4 +95,15 @@ impl num for i32 {
   fn num(self): i32 {
     self
   }
+}
+
+ns remote {
+  ability greet { fn greet(self): string }
+  impl greet for u8 { fn greet(self: u8): string { "hi $self" } }
+}
+
+fn greet-twice[t: remote/greet](x: t): string { "${x.greet()} ${x.greet()}" }
+
+fn path-constraint() {
+  assert-equals(greet-twice(7: u8), "hi 7 hi 7")
 }

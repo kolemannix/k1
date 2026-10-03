@@ -1,0 +1,63 @@
+use std/json
+use std/time
+
+type user = { id: u64, screen_name: string, followers_count: u32, friends_count: u32, verified: bool }
+type status = { id: u64, text: string, user: user, retweet_count: u32, favorite_count: u32, lang: string }
+type twitter = { statuses: list[status] }
+type canada = { features: list[{ geometry: { coordinates: list[list[array[f64, 2]]] } }] }
+
+let(mutable) sink: size = 0
+
+fn best-nanos(iters: size, prep: some fn() -> {}, f: some fn() -> {}): u64 {
+  let best: u64 = u64/max-value
+  for 0.until(iters) {
+    prep()
+    let t = time/read-cpu-counter()
+    f()
+    let nanos = time/elapsed-nanos(t)
+    if nanos < best { best = nanos }
+  }
+  best
+}
+
+fn report(name: string, bytes: size, nanos: u64) {
+  println("k1    ${name}: ${bytes.as[f64] / nanos.as[f64]} GB/s")
+}
+
+fn main(argc: i32, argv: ptr): i32 {
+  if argc < 2 { crash("usage: bench <corpus dir>") }
+  let dir = string/wrap-c(argv.ref-at[ptr](1).*)
+  let only = if argc > 2 string/wrap-c(argv.ref-at[ptr](2).*) else ""
+  let iters: size = if only == "" 20 else 2000
+  let scratch = core/arena/init(1 << 30)
+  for ["twitter", "canada", "citm_catalog"] {
+    if only != "" and only != it { continue }
+    let text = files/read-to-string("$dir/${it}.json")
+    let bytes = text.len()
+    mem/push-arena(scratch)
+    let reset = fn[scratch]. scratch.reset()
+    report("$it parse", bytes, best-nanos(iters, reset, fn[text]. {
+      if json/parse[json/json](text) is :err e { crash("$e") }
+    }))
+    if it == "twitter" {
+      report("$it typed", bytes, best-nanos(iters, reset, fn[text]. {
+        if json/parse[twitter](text) is :err e { crash("$e") }
+      }))
+    }
+    if it == "canada" {
+      report("$it typed", bytes, best-nanos(iters, reset, fn[text]. {
+        if json/parse[canada](text) is :err e { crash("$e") }
+      }))
+    }
+    scratch.reset()
+    require json/parse[json/json](text) is :ok doc else { crash("parse") }
+    let out-len = json/to-string(doc).len()
+    let keep = scratch.mark()
+    report("$it write", out-len, best-nanos(iters, fn[scratch, keep]. scratch.pop-to-mark(keep), fn[doc]. {
+      sink = sink + json/to-string(doc).len()
+    }))
+    scratch.reset()
+    mem/pop-arena()
+  }
+  0
+}

@@ -255,39 +255,43 @@ also appear in metaprograms.
 
 ### `code` and `code-builder`
 
-`core/code.k1` defines `code = { chunks: list[code-chunk] }`, where each
-`code-chunk = { text, source }` is a run of text plus the original span it came
-from (`source` is a compiler span packed into a u64; 0 means no source).
-Final text and byte offsets only materialize at the compile boundary, so
-composing `code` values never copies or re-offsets text. `\ <stmt>` produces a
-`code` value: one chunk holding the statement's source text and span.
+`core/code.k1` defines `code = { text: string, spans: list[code-span] }`: the
+emitted text plus a table of `code-span = { start, len, source }` entries
+naming which byte ranges came from where (`source` is a compiler span packed
+into a u64). Text with no entry is sourceless. `\ <stmt>` produces a `code`
+value whose single span covers the statement's source.
 
 A string template in `code`-expected position elaborates as `code`: each
-literal part becomes a chunk carrying its own span, a `code` part in a hole
-appends its chunks, and every other part is printed as bytes into a sourceless
-chunk. This applies to any string literal (double-quoted or backtick, holes
-or not) whose expected type is `code` — a macro body's return position, a
-`code`-typed let or parameter, and so on. Only literals elaborate; a
-string-typed *value* in `code` position is still a type error, since a literal
-carries its own spans while a value has none. `.fmt(values)` on a template
-works here too: with expected type `code` it yields `code`. When no context
-supplies the type, ascribe it: `` `1 + 2`: code `` or
-`"let w = ${}".fmt(42): code`. Escapes resolve before emission: `\n` in a
-template emits a newline into the generated source; write `\\n` to emit an
-escape the generated code will see.
+literal part is written with its own span, a `code` part in a hole is appended
+with its spans shifted, and every other part is printed as sourceless bytes.
+This applies to any string literal (double-quoted or backtick, holes or not)
+whose expected type is `code` — a macro body's return position, a `code`-typed
+let or parameter, and so on. Only literals elaborate; a string-typed *value* in
+`code` position is still a type error, since a literal carries its own spans
+while a value has none. `.fmt(values)` on a template works here too: with
+expected type `code` it yields `code`. When no context supplies the type,
+ascribe it: `` `1 + 2`: code `` or `"let w = ${}".fmt(42): code`. Escapes
+resolve before emission: `\n` in a template emits a newline into the generated
+source; write `\\n` to emit an escape the generated code will see.
 
-Building imperatively works by writing to a code-builder (`cb.write(...)`,
-`cb.writeln(...)`) — the same hole rules apply; `cb.code(c)` appends another
-`code` value's chunks, and `cb.build()` yields the `code`. `code/from-string(s)`
-is the explicit sourceless wrap.
+`code-builder` is the only way to build code, and everything appends into one
+text buffer with no per-part allocation: `cb.write(...)`/`cb.writeln(...)`
+templates write literal parts with their spans and holes as sourceless bytes,
+`cb.write(s)` with a string value is a plain sourceless write, `cb.write-code(c)`
+appends another `code` value, `cb.write-token(tok)` and `cb.write-tokens(span)`
+re-emit lexed tokens with their spans (`write-tokens` restores one space or
+newline per token's `spacing`), `cb.write-spanned(text, source)` is the
+primitive under all of them, and `cb.build()` yields the `code` without
+copying. `code/from-string(s)` wraps a string value as sourceless `code` and
+allocates nothing. Emit through one builder; a template whose expected type is
+`code` costs a builder of its own, so prefer `cb.writeln(...)` over
+`cb.line("...")` in hot emitters.
 
-Emitters should use the code-builder emission helpers: `cb.line(c)` (indent +
-append + newline), `cb.block(header, fn[cb]. ...)` / `cb.block-close(header,
-close, fn[cb]. ...)` (braces + indentation around the body), `cb.sep(items,
-", ", fn[cb] x. ...)`, and `cb.indent()`/`cb.dedent()` for manual runs. `line`/`block` take
-`code`, so literal templates at their call sites keep spans — note that
-`cb.writeln("...")` does NOT (writer takes `string`), which makes `line` the
-default for emission. Nested blocks capture the builder at each level
+Emitters that want indentation use `cb.line(c)` (indent + append + newline),
+`cb.block(header, fn[cb]. ...)` / `cb.block-close(header, close, fn[cb]. ...)`
+(braces + indentation around the body), `cb.sep(items, ", ", fn[cb] x. ...)`,
+and `cb.indent()`/`cb.dedent()` for manual runs. Nested blocks capture the
+builder at each level
 (`cb.block(h, fn[cb]. { ... cb.block-close(h2, c2, fn[cb]. ...) ... })`).
 No flag dumps a macro's expansion: `#debug` on the macro definition prints the
 macro function's own IR and bytecode, and definition-level `#debug $call(...)`
@@ -298,7 +302,7 @@ into a valid K1 literal, interpolation sigil included, so emitted literals
 need no character restrictions.
 
 `code` does not implement `print`: interpolating one into an ordinary string is
-an error, since it would drop the source info silently — `.text()` is the
+an error, since it would drop the source info silently — `.text` is the
 explicit escape. There is no implicit conversion between `string` and `code` in
 either direction.
 
@@ -320,7 +324,7 @@ macro debug(e: code) {
 macro repeat(n: int, body: code) {
   let cb = code-builder/new()
   for 0.until(n) {
-    cb.code(body)
+    cb.write-code(body)
     cb.writeln("")
   }
   cb.build()
@@ -358,7 +362,7 @@ source): each `code-token = { kind, text, source, spacing }` has its own span,
 `kind` is `ident` (keywords included), `number`, `string` (one token for the
 whole literal, interpolation holes included), `char` or `punct`, and `spacing` is
 `none`, `inline` or `newline` (always `none` on the first token).
-`tok.code()` re-emits a token with its span, and `tok.fail(msg)` stops
+`cb.write-token(tok)` re-emits a token with its span, and `tok.fail(msg)` stops
 expansion with an error at that token in the caller's source. `std/html` is the
 worked example: `html/write(out, \{ <p class={c}>{text}</p> })` and
 `html/render(\{ ... })` check tag structure at compile time and splice holes
@@ -368,7 +372,7 @@ as spanned code.
 macro sum(t: span[code-token]) {
   let cb = code-builder/new()
   for tok in t {
-    if tok.kind is :number cb.code(tok.code())
+    if tok.kind is :number cb.write-token(tok)
     else if tok.text == "," cb.write(" + ")
     else tok.fail("expected a number")
   }
@@ -384,7 +388,17 @@ an upstream module. Self-recursive expansion is an error. Macros cannot be used
 as values, and unused macro params get no warning (conditionally ignoring an
 argument is the point of a debug macro).
 
-See `test_src/suite1/test_macro.k1`.
+`std/flag-sum` is the definition-level worked example: `$std/flag-sum/define(\{ shape =
+either(u8, [rounded, even]) { circle({ radius: i32 }) = [rounded, even], ... } })`
+reads a sum declaration whose variants list boolean flags, packs flag `i` into
+tag bit `i` (variants with the same flag set get an ordinal above the flag
+bits), and emits the sum, a `shape-rounded` subtype per flag holding only its
+members with identical tags and payloads, `rounded()` bit-test predicates,
+`as-rounded(): ?shape-rounded`, `as-shape()` on the subtype, and
+`view-rounded(self: *shape): ?*shape-rounded` when the subtype's layout equals
+the parent's.
+
+See `test_src/suite1/test_macro.k1` and `test_src/stdlib/flag_sum_test.k1`.
 
 See `test_src/suite1/test_meta.k1`, `test_src/suite1/meta_defns.k1`, and
 `test_src/stdlib/metaprintf.k1`.
@@ -612,7 +626,8 @@ type wire = packed { tag: u8, value: u64, crc: u16 }
 #static types/assert-layout[wire](11, 1, [0, 1, 9])
 ```
 
-`uninit` creates an uninitialized value. `zeroed()` creates a zeroed value.
+`let x: t = uninit` leaves a local uninitialized. `.0` (or `t.0`) is the zero
+value.
 `mem/bitcast` reinterprets bits between same-sized representations.
 
 See `test_src/suite1/opaque_type.k1`, `test_src/suite1/union_basic.k1`,
@@ -748,7 +763,7 @@ See `test_src/suite1/char_test.k1`,
 return value optimization or return-slot feature.
 
 ```rust
-let(returned) v = zeroed()
+let(returned) v: point = .0
 ```
 
 See `test_src/suite1/rvo_test.k1`.
@@ -801,3 +816,31 @@ the call site — to dispatch over a runtime ordering, match on it, as
 
 See `test_src/suite1/atomics.k1` and `test_src/atomic_threads.k1`.
 
+## JSON
+
+`std/json` encodes and decodes any type from its schema: `json/to-string(v)`,
+`json/write(w, v)` for any writer, `json/to-string-pretty(v, indent)`,
+`json/parse[t](text): result[t, json/error]`. The `json-write` and
+`json-read` abilities have blanket `#meta` impls generated from
+`types/schema`; a concrete `impl json-read for my-type` overrides one.
+Options are a static type argument naming a global:
+
+```rust
+let camel: json/opts = .{ key-case = :camel, skip-none = true, renames = [] }
+v.write-json[_, camel](w)
+json/parse-with[my-type, camel](text)
+```
+
+Mapping: struct -> object keyed by field name (unknown keys are skipped on
+read, a missing non-opt field is an error), `?t` -> null or the value, either
+-> `"name"` or `{"name": payload}`, list/span/array -> array, enum -> its
+name, `*t` -> the inner value (read allocates in the ambient arena), char ->
+one-char string, non-finite floats -> null, ints range-checked on read.
+Decoded strings without escapes borrow the input. Errors carry `pos`, a
+`kind` enum, and print as `unexpected 'x' at line 2, column 5`.
+`use std/json/json` shadows the `json` namespace: import `std/json` and write
+`json/json` for the AST type (`null, bool, int, uint, float, str,
+array(span[json]), object(span[{ key, value }])`), `doc.get(key)` for lookup.
+Vector intrinsics: `lt-lanes`/`gt-lanes` and `shuffle-bytes` (16 lanes, pshufb
+semantics) join `eq-lanes`/`to-mask`; `vector/shift-bytes[k](prev, cur)` is
+built on them.

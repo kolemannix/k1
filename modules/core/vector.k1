@@ -20,9 +20,42 @@ ns vector {
 
   // Lane-wise compare: each lane is all-ones on equal, all-zeros otherwise.
   fn(intern) eq-lanes[t, n: static size](a: vector[t, n], b: vector[t, n]): vector[t, n]
+  // Lane-wise a < b; unsigned for unsigned elements, ordered for floats
+  fn(intern) lt-lanes[t, n: static size](a: vector[t, n], b: vector[t, n]): vector[t, n]
+  fn(inline) gt-lanes[t, n: static size](a: vector[t, n], b: vector[t, n]): vector[t, n] {
+    lt-lanes(b, a)
+  }
+
+  // Byte table lookup with pshufb semantics: a lane whose top bit is set
+  // yields 0, any other lane yields table[idx & 15]
+  fn(intern) shuffle-bytes(table: vector[u8, 16], idx: vector[u8, 16]): vector[u8, 16]
+
+  fn iota16(): vector[u8, 16] {
+    #static {
+      let v = vector/zeroed[u8, 16]()
+      let i: size = 0
+      while i < 16 {
+        v = v.with-lane(i, i.trunc[u8])
+        i = i + 1
+      }
+      v
+    }
+  }
+
+  // The 16 bytes ending k before the end of cur: prev's last k bytes, then cur's first 16-k
+  fn shift-bytes[k: static size](prev: vector[u8, 16], cur: vector[u8, 16]): vector[u8, 16] {
+    let k: size = core/meta/static-type-to-value[_, k]()
+    let iota = iota16()
+    let from-cur = shuffle-bytes(cur, iota.sub(splat[u8, 16](k.trunc[u8])))
+    let from-prev = shuffle-bytes(prev, iota.add(splat[u8, 16]((16 - k).trunc[u8])))
+    from-cur.bit-or(from-prev.bit-and(iota.lt-lanes(splat[u8, 16](k.trunc[u8]))))
+  }
 
   // collapses lane MSBs into one bit per lane (movemask)
   fn(intern) to-mask[t, n: static size](v: vector[t, n]): u64
+
+  // The bitwise or of every lane; integer elements only
+  fn(intern) reduce-or[t, n: static size](v: vector[t, n]): t
 
   fn(inline) load-simd-bytes(ptr): vector[u8, k1/simd-bytes] { load-unchecked[u8, k1/simd-bytes](ptr) }
   fn(inline) load-word(ptr): u64 { load-unchecked[u8, 8](ptr).to-u64() }

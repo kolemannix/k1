@@ -156,11 +156,12 @@ pub mod k1_types {
         pub len: i64,
     }
 
-    /// core/code.k1 `code-chunk`
+    /// core/code.k1 `code-span`
     #[repr(C)]
     #[derive(Clone, Copy)]
-    pub struct K1CodeChunk {
-        pub text: K1BufferLike,
+    pub struct K1CodeSpan {
+        pub start: u32,
+        pub len: u32,
         pub source: u64,
     }
 
@@ -168,7 +169,8 @@ pub mod k1_types {
     #[repr(C)]
     #[derive(Clone, Copy)]
     pub struct K1Code {
-        pub chunks: K1List,
+        pub text: K1BufferLike,
+        pub spans: K1List,
     }
 
     #[derive(Clone, Copy)]

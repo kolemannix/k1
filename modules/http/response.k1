@@ -41,6 +41,7 @@ ns response {
     else if status == 400 "Bad Request"
     else if status == 404 "Not Found"
     else if status == 405 "Method Not Allowed"
+    else if status == 415 "Unsupported Media Type"
     else if status == 500 "Internal Server Error"
     else "Status"
   }

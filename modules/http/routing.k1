@@ -35,7 +35,7 @@ fn patch(name: string, path: span[seg]): entry   { .{ method = :patch,   name, p
 fn options(name: string, path: span[seg]): entry { .{ method = :options, name, path } }
 
 macro define(base-name: code, entries: span[entry]) {
-  define-impl(base-name.text(), entries)
+  define-impl(base-name.text, entries)
 }
 
 fn render-pattern(path: span[seg]): string {
@@ -162,7 +162,7 @@ fn emit-leaf-body(cb: *code-builder, en: entry, d: size) {
       :str -> cb.line("let ${c.name} = sd${c.idx}"),
       :rest -> {
         cb.line(`let rest-raw = if (not sp.more) and sp.count == $d "" else routing/tail-from(path, segs.[$d])`)
-        cb.line(`require routing/decode-seg(rest-raw) is :some ${c.name} else { return :err :bad-encoding .{ segment = rest-raw } }`)
+        cb.line(`require http/percent/decode(rest-raw, plus-is-space = false) is :some ${c.name} else { return :err :bad-encoding .{ segment = rest-raw } }`)
       },
     }
   }
@@ -198,7 +198,7 @@ fn emit-leafs(cb: *code-builder, entries: span[entry], idxs: list[size], d: size
 // The has-a-segment-at-`d` branch: decode it, then literal edges (committing
 // is safe under the cover rule), then the capture edge
 fn emit-seg-edges(cb: *code-builder, entries: span[entry], group: list[size], d: size, lit-texts: list[string], caps: list[size]) {
-  cb.line(`require routing/decode-seg(segs.[$d]) is :some sd$d else { return :err :bad-encoding .{ segment = segs.[$d] } }`)
+  cb.line(`require http/percent/decode(segs.[$d], plus-is-space = false) is :some sd$d else { return :err :bad-encoding .{ segment = segs.[$d] } }`)
   for t in lit-texts {
     let sub = list/empty[size]()
     for gi in group {
@@ -293,12 +293,12 @@ fn emit-url-arm(cb: *code-builder, en: entry) {
         if s is {
           :u64 n -> cb.line("p.$n.print-to(w)"),
           :int n -> cb.line("p.$n.print-to(w)"),
-          :str n -> cb.line("routing/encode-into(p.$n, w, keep-slash = false)"),
-          :rest n -> cb.line("routing/encode-into(p.$n, w, keep-slash = true)"),
+          :str n -> cb.line("http/percent/encode-into(p.$n, w, keep-slash = false)"),
+          :rest n -> cb.line("http/percent/encode-into(p.$n, w, keep-slash = true)"),
           :custom c -> {
             cb.line("let b-${c.name} = string-builder/new()")
             cb.line("p.${c.name}.print-to(b-${c.name}.&)")
-            cb.line("routing/encode-into(b-${c.name}.build(), w, keep-slash = false)")
+            cb.line("http/percent/encode-into(b-${c.name}.build(), w, keep-slash = false)")
           },
           :text _ -> .{},
         }
@@ -400,55 +400,6 @@ fn split-path(path: string, out: *array[string, 16]): { count: size, more: bool 
     i = i + 1
   }
   .{ count, more = false }
-}
-
-fn hex-val(c: char): ?u8 {
-  let b = c.u8()
-  if c.is-ascii-digit() :some (b - '0'.u8())
-  else if b >= 'a'.u8() and b <= 'f'.u8() :some (b - 'a'.u8() + 10)
-  else if b >= 'A'.u8() and b <= 'F'.u8() :some (b - 'A'.u8() + 10)
-  else :none
-}
-
-// Percent-decodes one segment; allocation-free when no '%' is present.
-// :none on a malformed escape
-fn decode-seg(s: string): ?string {
-  if not s.contains('%') return :some s
-  let b = string-builder/new()
-  let i: size = 0
-  while i < s.len() {
-    let c = s.[i]
-    if c == '%' {
-      if i + 2 >= s.len() return :none
-      require hex-val(s.[i + 1]) is :some hi else { return :none }
-      require hex-val(s.[i + 2]) is :some lo else { return :none }
-      b.write-char((hi * 16 + lo).as-char())
-      i = i + 3
-    } else {
-      b.write-char(c)
-      i = i + 1
-    }
-  }
-  :some b.build()
-}
-
-fn is-unreserved(c: char): bool {
-  c.is-ascii-letter() or c.is-ascii-digit() or c == '-' or c == '.' or c == '_' or c == '~'
-}
-
-fn hex-digit(v: u8): char { "0123456789ABCDEF".[v.widen[size]] }
-
-fn encode-into[w: writer](s: string, w, keep-slash: bool) {
-  for c in s {
-    if is-unreserved(c) or (keep-slash and c == '/') {
-      w.write-char(c)
-    } else {
-      let b = c.u8()
-      w.write-char('%')
-      w.write-char(hex-digit(b / 16))
-      w.write-char(hex-digit(b % 16))
-    }
-  }
 }
 
 // The raw remainder of path starting at segment `seg` (a view into path)

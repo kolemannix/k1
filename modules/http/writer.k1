@@ -3,14 +3,20 @@
 // pull. A :pending pull parks the driver until the source wakes it. One
 // write is in flight at a time, so the driver reuses a single uv/write
 // request and buf list for the response's lifetime.
-ns response-writer {
+use libuv/uv
+use libuv/uv-request
+use libuv/uv-handle
+use libuv/uv-stream
+use std/source
+use std/pull
+
+ns server { ns response-writer {
 
   type driver = {
     *connection,
     stream: dyn[source[t = u8]],
     write-req: *uv/write,
     bufs: list[uv/buf],
-    parked: bool,
   }
 
   fn begin(connection: *connection, resp: http-response) {
@@ -39,7 +45,6 @@ ns response-writer {
       stream = body,
       write-req = connection.request-arena.alloc-t[uv/write](),
       bufs = list/empty[uv/buf](),
-      parked = false,
     })
     driver.write-req.set-data(driver)
     connection.active-stream = :some body
@@ -68,14 +73,15 @@ ns response-writer {
     let connection = driver.connection
     driver.bufs.clear()
     for seg in group { driver.bufs.push(uv/buf/wrap-span(seg)) }
-    let rc = uv/write(
+    connection.enter(:writing false)
+    let written = uv/check(uv/write(
       driver.write-req,
       connection.client().as-stream(),
       driver.bufs.data-ref(),
       driver.bufs.len().trunc[u32],
-      on-write-complete.&)
-    if rc != 0 {
-      tprintln("response uv_write failed: $rc")
+      on-write-complete.&))
+    if written.result() is :err e {
+      tprintln("response uv_write failed: $e")
       close-connection(connection)
     }
   }
@@ -87,8 +93,7 @@ ns response-writer {
     if connection.close-state.is-closing { return }
     if connection.close-state.should-close { close-connection(connection); return }
     if status != 0 {
-      let errno = uv/errno/from-i32(status)
-      tprintln("response write failed: ${errno.enum-name()}")
+      tprintln("response write failed: ${uv/errno/from-i32(status).enum-name()}")
       close-connection(connection)
       return
     }
@@ -98,10 +103,10 @@ ns response-writer {
   // The waker target: a parked source has data again (loop thread only)
   fn on-wake(state: ptr) {
     let driver: *driver = state.ref[driver]()
-    if driver.connection.close-state.is-closing { return }
+    let connection = driver.connection
+    if connection.close-state.is-closing { return }
     // A write is in flight; its completion will pump
-    if not driver.parked { return }
-    driver.parked = false
+    if not (connection.phase is :writing true) { return }
     pump(driver)
   }
 
@@ -111,7 +116,7 @@ ns response-writer {
     defer { mem/pop-arena() }
     if driver.stream.next() is {
       :chunk group -> write-group(driver, group),
-      :pending -> { driver.parked = true },
+      :pending -> connection.enter(:writing true),
       :done -> {
         if connection.active-stream is :some s {
           connection.active-stream = :none
@@ -126,4 +131,4 @@ ns response-writer {
     }
     .{}
   }
-}
+} }

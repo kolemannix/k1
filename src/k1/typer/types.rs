@@ -1148,7 +1148,7 @@ pub struct BuiltinTypes {
     pub string: Option<TypeId>,
     pub opt: Option<TypeId>,
     pub code: Option<TypeId>,
-    pub code_chunk: Option<TypeId>,
+    pub code_span: Option<TypeId>,
     pub code_token: Option<TypeId>,
     pub code_token_span: Option<TypeId>,
     pub code_builder: Option<TypeId>,
@@ -1181,7 +1181,7 @@ impl BuiltinTypes {
         debug_assert!(self.string.is_some());
         debug_assert!(self.opt.is_some());
         debug_assert!(self.code.is_some());
-        debug_assert!(self.code_chunk.is_some());
+        debug_assert!(self.code_span.is_some());
         debug_assert!(self.code_token.is_some());
         debug_assert!(self.code_token_span.is_some());
         debug_assert!(self.code_builder.is_some());
@@ -1223,8 +1223,8 @@ impl BuiltinTypes {
     pub fn code(&self) -> TypeId {
         self.code.expect("code builtin missing")
     }
-    pub fn code_chunk(&self) -> TypeId {
-        self.code_chunk.expect("code-chunk builtin missing")
+    pub fn code_span(&self) -> TypeId {
+        self.code_span.expect("code-span builtin missing")
     }
     pub fn code_token(&self) -> TypeId {
         self.code_token.expect("code-token builtin missing")

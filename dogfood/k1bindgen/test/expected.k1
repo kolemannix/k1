@@ -92,3 +92,6 @@ fn(extern("cinput_main")) main(): i32
 let(extern("cinput_readonly")) readonly: i32
 let(extern("cinput_counter"), mutable) counter: i32
 let(extern("cinput_tls_counter"), mutable, tls) tls_counter: i32
+let(extern("cinput_version")) version: u8
+let(extern("cinput_table")) table: array[i32, 4]
+let(extern("cinput_grid"), mutable) grid: array[array[i32, 3], 2]

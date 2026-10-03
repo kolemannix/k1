@@ -189,7 +189,7 @@ impl BuildConfig {
             ("native", "")
         } else {
             match target.arch() {
-                Arch::Intel => ("x86-64", ""),
+                Arch::Intel => ("x86-64-v2", ""),
                 Arch::Arm => ("generic", "+neon"),
                 Arch::Wasm => (
                     "generic",

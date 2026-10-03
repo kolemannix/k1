@@ -85,6 +85,9 @@ int cinput_main(void) {
 extern const int cinput_readonly;
 extern int cinput_counter;
 extern _Thread_local int cinput_tls_counter;
+extern const char cinput_version[];
+extern const int cinput_table[4];
+extern int cinput_grid[2][3];
 // should be omitted: internal linkage
 static int cinput_header_local;
 

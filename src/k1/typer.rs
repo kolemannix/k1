@@ -2024,7 +2024,10 @@ pub enum VecOpKind {
     ShiftLeft,
     ShiftRight,
     EqLanes,
+    LtLanes,
+    ShuffleBytes,
     ToMask,
+    ReduceOr,
 }
 
 impl VecOpKind {
@@ -2045,7 +2048,10 @@ impl VecOpKind {
             VecOpKind::ShiftLeft => "vector_shift_left",
             VecOpKind::ShiftRight => "vector_shift_right",
             VecOpKind::EqLanes => "vector_eq_lanes",
+            VecOpKind::LtLanes => "vector_lt_lanes",
+            VecOpKind::ShuffleBytes => "vector_shuffle_bytes",
             VecOpKind::ToMask => "vector_to_mask",
+            VecOpKind::ReduceOr => "vector_reduce_or",
         }
     }
 }
@@ -6187,7 +6193,7 @@ impl TypedProgram {
             ParsedExpr::Literal(ParsedLiteral::String(string_id)) => {
                 let string_id = *string_id;
                 if self.expected_type_is_code(ctx.expected_type_id) {
-                    let value_id = self.make_static_code_value(&[(string_id, span)]);
+                    let value_id = self.make_static_code_value(string_id, span);
                     return Ok(self.add_static_constant_expr(value_id, span));
                 }
                 let static_value_id = self.static_values.add_string(string_id);
@@ -8215,25 +8221,31 @@ impl TypedProgram {
             false,
         )?;
 
-        let one_expr = self.synth_i64(1, iterable_span);
-        let (add_impl, _) = self.expect_ability_impl(
-            I64_TYPE_ID,
-            ABILITY_ID_ADD,
-            false,
-            outer_for_expr_scope,
-            iterable_span,
-        )?;
-        let add_operation = self.synth_ability_call(
-            add_impl,
-            self.ast.idents.f.add__add,
-            &[],
-            &[index_variable.variable_expr, one_expr],
-            ctx.with_no_expected_type(),
-            iterable_span,
-        )?;
-        let index_increment_statement =
-            self.add_assignment_stmt(index_variable.variable_expr, add_operation, iterable_span);
-        self.push_block_stmt_id(&mut loop_block, index_increment_statement);
+        let index_used = self.variables.get(index_variable.variable_id).usage_count > 0;
+        if index_used {
+            let one_expr = self.synth_i64(1, iterable_span);
+            let (add_impl, _) = self.expect_ability_impl(
+                I64_TYPE_ID,
+                ABILITY_ID_ADD,
+                false,
+                outer_for_expr_scope,
+                iterable_span,
+            )?;
+            let add_operation = self.synth_ability_call(
+                add_impl,
+                self.ast.idents.f.add__add,
+                &[],
+                &[index_variable.variable_expr, one_expr],
+                ctx.with_no_expected_type(),
+                iterable_span,
+            )?;
+            let index_increment_statement = self.add_assignment_stmt(
+                index_variable.variable_expr,
+                add_operation,
+                iterable_span,
+            );
+            self.push_block_stmt_id(&mut loop_block, index_increment_statement);
+        }
 
         self.push_block_stmt_id(&mut loop_block, next_variable.defn_stmt); // let next = iter.next();
 
@@ -8269,7 +8281,9 @@ impl TypedProgram {
         if let Some(iterable_defn_stmt) = iterable_defn_stmt {
             for_expr_initial_statements.push(iterable_defn_stmt);
         }
-        for_expr_initial_statements.push(index_variable.defn_stmt);
+        if index_used {
+            for_expr_initial_statements.push(index_variable.defn_stmt);
+        }
         for_expr_initial_statements.push(iterator_variable.defn_stmt);
         let loop_stmt_id = self.add_expr_stmt(loop_expr);
         for_expr_initial_statements.push(loop_stmt_id);
@@ -9976,6 +9990,25 @@ impl TypedProgram {
             &mut ability_ids,
             &mut self.tmp,
         );
+        let mut constrained_types: SV8<TypeId> = smallvec![base_expr_type];
+        if let Some(fn_id) = self.scopes.nearest_parent_function(ctx.scope_id) {
+            let function = self.get_function(fn_id);
+            let generic_id = match &function.specialization_info {
+                Some(info) => info.parent_function,
+                None => fn_id,
+            };
+            for type_param in self.mem.getn(self.get_function(generic_id).type_params) {
+                constrained_types.push(*type_param);
+            }
+        }
+        for type_id in constrained_types {
+            for handle in self.get_constrained_ability_impls_for_type(type_id) {
+                let base_ability_id = self.ability_impls.get(handle.full_impl_id).base_ability_id;
+                if !ability_ids.as_slice().contains(&base_ability_id) {
+                    ability_ids.push_grow(&mut self.tmp, base_ability_id);
+                }
+            }
+        }
         for ability_id in ability_ids.as_slice() {
             let Some(ability_function_ref) =
                 self.abilities.get(*ability_id).find_function_by_name(&self.mem, fn_name)
@@ -13458,7 +13491,12 @@ impl TypedProgram {
                     "get-lane" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::GetLane))),
                     "with-lane" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::WithLane))),
                     "eq-lanes" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::EqLanes))),
+                    "lt-lanes" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::LtLanes))),
+                    "shuffle-bytes" => {
+                        Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::ShuffleBytes)))
+                    }
                     "to-mask" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::ToMask))),
+                    "reduce-or" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::ReduceOr))),
                     _ => None,
                 },
                 Some("atomic") => match fn_name_str {
@@ -17773,6 +17811,7 @@ impl TypedProgram {
             core!("code"),
             core!("code-builder"),
             core!("code-token"),
+            core!("token-cursor"),
             core!("optref"),
             {
                 let name = get_ident!(self, "min");

@@ -91,6 +91,24 @@ ns for string {
     pieces
   }
 
+  fn trim-ascii-space(self: string): string {
+    let start: size = 0
+    let end = self.len()
+    while start < end and self.[start].is-ascii-space() { start = start + 1 }
+    while end > start and self.[end - 1].is-ascii-space() { end = end - 1 }
+    self.slice(start, end)
+  }
+
+  fn(inline) index-of(self: string, c: char): ?size { self.position(c) }
+
+  fn equals-ignore-ascii-case(self: string, other: string): bool {
+    if self.len() != other.len() return false
+    for c in self {
+      if c.to-ascii-lower() != other.[it-index].to-ascii-lower() return false
+    }
+    true
+  }
+
   fn index-of-string(self: string, target: string): ?size {
     self.span.inner-buffer().index-of-buffer(target.span.inner-buffer())
   }

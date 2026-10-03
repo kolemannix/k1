@@ -5,12 +5,12 @@ use libuv/uv-request
 use libuv/uv-handle
 use libuv/uv-stream
 
+let params: { tlog: bool } = k1/module-params(.{ tlog = false })
+
 type header = {
   url: string,
   headers: list[{ field: string, value: string }],
   method: llhttp/method,
-
-  // TODO: populate cache of important, known, parsed headers
   keep-alive: bool,
   content-length: ?size
 }
@@ -26,6 +26,10 @@ ns for header {
       keep-alive = true,
       content-length = :none,
     }
+  }
+  fn find(self: header, name: string): ?string {
+    for h in self.headers { if h.field.equals-ignore-ascii-case(name) { return :some h.value } }
+    :none
   }
 }
 
@@ -195,19 +199,19 @@ fn parser-init[user-data](
   on-header-complete: *fn(*user-data, header) -> header-action,
   on-body-complete: *fn(*user-data, span[span[u8]]) -> {}
 ): parser {
-  let settings: llhttp/settings = .0
+  let settings: llhttp/settings = uninit
   llhttp/settings_init(settings.&)
   let settings = connection-arena.push(settings | .{
-    on_method            = fn(_p, _, _) 0,
-    on_url               = on-url-part.&.narrow(),
-    on_url_complete      = on-url-complete.&.narrow(),
-    on_header_field      = on-header-field.&.narrow(),
-    on_header_field_complete = on-header-field-complete.&.narrow(),
-    on_header_value      = on-header-value.&.narrow(),
-    on_header_value_complete = on-header-value-complete.&.narrow(),
-    on_headers_complete  = on-headers-complete.&.narrow(),
-    on_body              = impl-on-body.&.narrow(),
-    on_message_complete  = impl-on-body-complete.&.narrow(),
+    on_method                = fn(_p, _, _) 0,
+    on_url                   = on-url-part.&.as(),
+    on_url_complete          = on-url-complete.&.as(),
+    on_header_field          = on-header-field.&.as(),
+    on_header_field_complete = on-header-field-complete.&.as(),
+    on_header_value          = on-header-value.&.as(),
+    on_header_value_complete = on-header-value-complete.&.as(),
+    on_headers_complete      = on-headers-complete.&.as(),
+    on_body                  = impl-on-body.&.as(),
+    on_message_complete      = impl-on-body-complete.&.as(),
   })
 
   let parser: parser = uninit

@@ -231,6 +231,11 @@ ns for char {
     (s >= 'a'.as-u8() and s <= 'z'.as-u8()) or (s >= 'A'.as-u8() and s <= 'Z'.as-u8())
   }
 
+  fn is-ascii-space(self: char): bool {
+    let s = self.as-u8()
+    s == 32 or (s >= 9 and s <= 13)
+  }
+
   fn is-ascii-digit(self: char): bool {
     let s = self.as-u8()
     s >= '0'.as-u8() and s <= '9'.as-u8()
@@ -238,6 +243,14 @@ ns for char {
 
   fn to-ascii-digit(self: char): ?u8 {
     if self.is-ascii-digit() { :some(self.as-u8() - '0'.as-u8()) } 
+    else :none
+  }
+
+  fn to-ascii-hex-digit(self: char): ?u8 {
+    let s = self.as-u8()
+    if self.is-ascii-digit() :some(s - '0'.as-u8())
+    else if s >= 'a'.as-u8() and s <= 'f'.as-u8() :some(s - 'a'.as-u8() + 10)
+    else if s >= 'A'.as-u8() and s <= 'F'.as-u8() :some(s - 'A'.as-u8() + 10)
     else :none
   }
 
@@ -619,7 +632,7 @@ ns for f64 {
   }
 
   fn format[w: writer](f: f64, w, places: i32) {
-    let buf = array/zeroed[u8, 512]
+    let buf: array[u8, 512] = uninit
     float-impl/write-output(w, buf.as-span(), k1rt/snprintf_f64(buf.data-ptr(), 512, f, places), places)
   }
 
@@ -655,7 +668,7 @@ ns for f32 {
   let neg-inf: f32 = builtin
 
   fn format[w: writer](f: f32, w, places: i32) {
-    let buf = array/zeroed[u8, 512]
+    let buf: array[u8, 512] = uninit
     float-impl/write-output(w, buf.as-span(), k1rt/snprintf_f32(buf.data-ptr(), 512, f, places), places)
   }
 

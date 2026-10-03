@@ -26,13 +26,6 @@
 - [ ] Generic aliases: `type(alias) pair[t] = { a: t, b: t }` (rejected with an error for now; an alias is transparent, so this is a type-level function)
 - [ ] Add `self -> *self` thunk adapters for ability objects, `dyn[allocator]` is impossible
 - [x] unaligned load/store for scalars
-- [ ] [design/flags_in_tags.k1.wip] 
-kind: either(u64, { rounded = false, even = false, faces: u8 }) {
-  Circle({ radius: i32 }) = [rounded, even, faces = 1],
-  Square({ len: i32 }) = [even, faces = 4],
-  ...
-}
-  - [ ] implement with a macro, for sure
 - [ ] new lib type: :runtime; this is the ideal dependency kind for libclang in k1bindgen
 - [ ] `#[must_use]` equivalent
 - [ ] literal inference issue (a) `2 * d` vs `d * 2` differ — literal-lhs
@@ -44,6 +37,10 @@ kind: either(u64, { rounded = false, even = false, faces: u8 }) {
         I think doing 'defaults' is relatively easy. You just hit consult the default on the unprovided path. For partially-applieds,
         you need essentially some notion of an 'ability signature function', just like type aliases would need
 
+- [ ] std/utf8 has only `is-valid` and `write-codepoint`. Missing: decode one codepoint at an offset,
+      a codepoint iterator over string, lead-byte sequence length (dogfood/selfhost/lex.k1 has its own
+      `utf8-lead-len`), codepoint count, encoded length of a codepoint, validation that reports the
+      failing offset, lossy decode with U+FFFD, UTF-16 conversion
 - [x] parse_statement: same peek-dispatch conversion parse_definition got (expect_ variants, no conditional parse_* chain)
 - [x] zeroing after alloc should not be necessary; either buffer/zeroed or ensure all k1 allocations always zero, even arena push (does arena.reset() always clear, or is there a special path for 'alloc-no-ensure-zeroed?')
 - [x] 

@@ -107,7 +107,7 @@ fn commit_renumbers_into_layout_order_and_drops_unlinked() {
         None,
         false,
     );
-    commit_unit(&mut ir, &u, &mut unit);
+    commit_unit(&mut ir, &mut u, &mut unit);
     let v = unit.view(&ir.mem);
     assert_eq!(v.inst_count(), 5);
     let mut kinds = Vec::new();
@@ -163,11 +163,8 @@ fn cloned_phi_and_switch_payloads_are_owned_by_the_clone() {
     ]);
     let original = inst(&mut src, source, Inst::Phi { t, incomings });
     let cases = src.push_switch_cases(&[SwitchCase { value: 0, target: from }]);
-    let switch = inst(
-        &mut src,
-        source,
-        Inst::Switch { value: byte(0), width: 8, cases, default: dead },
-    );
+    let switch =
+        inst(&mut src, source, Inst::Switch { value: byte(0), width: 8, cases, default: dead });
     let mut clones = Vec::new();
     for target in [first, first, second] {
         let mut cloned = *src.inst(original);

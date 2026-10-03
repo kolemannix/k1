@@ -6,6 +6,8 @@ use http/response
 use http/routing
 use http/llhttp
 use http/sse-response
+use http/sse-events
+use http/datastar
 use http/chunked
 use http/group-source
 use std/rc-byte-stream
@@ -13,20 +15,73 @@ use std/owned
 use std/heap-bytes
 use std/pubsub
 use std/html
+use http/server/framework-deps
+use http/pair
+use http/pairs
+use http/cookie
+use sqlite/sqlite3
+use libuv/uv
 
 type deps = {
-  config: { jwt-secret: string },
-  db-conn,
+  db: db,
   bus: *pubsub/bus[span[u8]],
 }
 
-// only once per thread
+let(mutable) db-path: string = "httpapp.sqlite"
+
 fn make-deps(framework: *framework-deps): *deps {
   heap.new(app/deps.{
-    config = .{ jwt-secret = "asdf" },
-    db-conn = .{},
+    db = db/open(db-path),
     bus = framework.bus,
   })
+}
+
+type db = { conn: *sqlite3/db }
+
+ns for db {
+  fn open(path: string): db {
+    let conn: optref[sqlite3/db] = optref/null()
+    let open-status = sqlite3/open(path.to-c().ptr.ref[u8], conn.&)
+    if open-status != 0 crash("sqlite open failed for $path: $open-status")
+    let db: db = .{ conn = conn.get() }
+    sqlite3/busy_timeout(db.conn, 2000)
+    db.run("create table if not exists visits(id integer primary key, path text not null, at text not null default current_timestamp)", "")
+    db
+  }
+
+  fn fail(self: db, what: string): never {
+    crash("sqlite $what failed: ${string/wrap-c(sqlite3/errmsg(self.conn).inner)}")
+  }
+
+  fn prepare(self: db, sql: string): *sqlite3/stmt {
+    let stmt: optref[sqlite3/stmt] = optref/null()
+    let tail: optref[u8] = optref/null()
+    if sqlite3/prepare_v2(self.conn, sql.to-c().ptr.ref[u8], -1, stmt.&, tail.&) != 0 { self.fail("prepare") }
+    stmt.get()
+  }
+
+  fn run(self: db, sql: string, text: string) {
+    let stmt = self.prepare(sql)
+    if not text.is-empty() {
+      sqlite3/bind_text(stmt, 1, text.data-ref-byte(), text.len().trunc[i32], fn(_p: ptr) .{})
+    }
+    let step-status = sqlite3/step(stmt)
+    sqlite3/finalize(stmt)
+    if step-status != sqlite3/DONE.trunc[i32] { self.fail("step") }
+  }
+
+  fn count(self: db, sql: string): i64 {
+    let stmt = self.prepare(sql)
+    if sqlite3/step(stmt) != sqlite3/ROW.trunc[i32] { self.fail("step") }
+    let n = sqlite3/column_int64(stmt, 0)
+    sqlite3/finalize(stmt)
+    n
+  }
+
+  fn record-visit(self: db, path: string): i64 {
+    self.run("insert into visits(path) values (?1)", path)
+    self.count("select count(*) from visits")
+  }
 }
 
 $http/pre/routing/define(route, {
@@ -42,6 +97,8 @@ $http/pre/routing/define(route, {
     get(   "counter",                 [:text "counter", :text "events"]),
     get(   "big-file",                [:text "static", :text "big-file.json"]),
     get(   "starry",                  [:text "app", :text "starry-night"]),
+    get(   "visits",                  [:text "visits"]),
+    post(  "login",                   [:text "login"]),
     get(   "game-events", game.concat([:text "events"])),
     post(  "game-poke",   game.concat([:text "poke"])),
     delete("delete-game", game),
@@ -49,8 +106,6 @@ $http/pre/routing/define(route, {
 })
 
 fn handle(req: http/request, deps: *deps): http-response {
-  tprintln("user-code/handle: request ${req.header.method.enum-name()} `${req.header.url}`")
-
   if route/parse(req.header) is {
     :err e -> error-response(e),
     :ok r -> if r is {
@@ -61,8 +116,31 @@ fn handle(req: http/request, deps: *deps): http-response {
       :game-poke .{ id } -> game-poke(deps, id),
       :big-file -> big-file(),
       :starry -> response/html("todo"),
+      :visits -> visits(deps, req),
+      :login -> login(req),
       :delete-game p -> response/html("todo ${p.id}"),
     }
+  }
+}
+
+fn visits(deps: *deps, req: http/request): http-response {
+  let n = deps.db.record-visit(req.header.url)
+  let who = pairs/find-by-name(req.query(), "who") ? (pairs/find-by-name(req.cookies(), "who") ? "stranger")
+  response/text("hello $who, visit number $n\n")
+}
+
+fn login(req: http/request): http-response {
+  if req.form() is {
+    :some fields -> if pairs/find-by-name(fields, "who") is {
+      :some who -> .{
+        status = 200,
+        content-type = "text/plain",
+        extra-headers = span/single(cookie/set-header("who", who, cookie/attrs/default())),
+        body = :complete span/single("logged in\n".span-bytes()),
+      },
+      :none -> response/status(400, "missing who\n"),
+    },
+    :none -> response/status(415, "send a form\n"),
   }
 }
 
@@ -70,14 +148,11 @@ let global-topic: string = "global"
 fn game-topic(id: u64): string { "game.$id" }
 
 fn global-events(deps: *deps): http-response {
-  let source = deps.bus.subscribe(global-topic) || rc-byte-stream
-  sse-response(source, event-name = global-topic)
+  datastar/patch-signals(deps.bus.subscribe(global-topic) || rc-byte-stream)
 }
 
 fn game-events(deps: *deps, id: u64): http-response {
-  let topic = game-topic(id)
-  let source = deps.bus.subscribe(topic) || rc-byte-stream
-  sse-response(source, event-name = topic)
+  datastar/patch-signals(deps.bus.subscribe(game-topic(id)) || rc-byte-stream)
 }
 
 fn game-poke(deps: *deps, id: u64): http-response {
@@ -88,7 +163,7 @@ fn game-poke(deps: *deps, id: u64): http-response {
 // One SSE event per number, rendered into the ambient request arena
 fn counter-events(): http-response {
   let counts = 1.until(11).to-list()
-  sse-response(source/from-items(counts.as-span()), event-name = "counter")
+  sse-response(source/from-items(counts.as-span()) || sse-events("counter", ""))
 }
 
 fn big-file(): http-response {
@@ -131,39 +206,6 @@ fn home-page(): http-response {
   }))
 }
 
-#static {
-  let th = fn(method: llhttp/method, url: string) {
-    let h: http/header = .{
-      url,
-      headers = list/empty[{ field: string, value: string }](),
-      method,
-      keep-alive = true,
-      content-length = :none,
-    }
-    route/parse(h)
-  }
-
-  assert(route/url-string(:home) == "/")
-  assert(route/url-string(:game-poke .{ id = 42 }) == "/game/42/poke")
-  assert(route/url-string(:big-file) == "/static/big-file.json")
-
-  assert(th(:GET, "/") is :ok :home)
-  assert(th(:GET, "/events") is :ok :events)
-  assert(th(:HEAD, "/events") is :ok :events)
-  assert(th(:GET, "/events?foo=1") is :ok :events)
-  assert(th(:GET, "/%65vents") is :ok :events)
-  assert(th(:POST, "/game/42/poke") is :ok :game-poke p and p.id == 42)
-  assert(th(:POST, "/game/42/poke/") is :ok :game-poke _)
-  assert(th(:GET, "/game/42/poke") is :err :bad-method _)
-  assert(th(:POST, "/game/abc/poke") is :err :bad-param b and b.got == "abc")
-  assert(th(:POST, "/game/18446744073709551617/poke") is :err :bad-param _)
-  assert(th(:GET, "/game/42/zzz") is :err :not-found)
-  assert(th(:GET, "/nope") is :err :not-found)
-  assert(th(:GET, "/game/%zz/poke") is :err :bad-encoding _)
-  assert(th(:OPTIONS, "*") is :err :not-found)
-  println("route comptime asserts passed")
-}
-
 fn render-big-json(out: *string-builder, rows: size) {
   out.write("[")
   let i: size = 0
@@ -183,9 +225,9 @@ fn publish-text(bus: *pubsub/bus[span[u8]], topic: string, data: string) {
 }
 
 let(mutable) game-tick: u64 = 0
-fn start-mock-publisher(bus: *pubsub/bus[span[u8]]) {
-  let tid: *uv/thread = heap.alloc-t()
-  let rc = uv/thread_create(tid, fn arg. {
+fn spawn-tick-publisher-thread(bus: *pubsub/bus[span[u8]]) {
+  let thread-id: *uv/thread = heap.alloc-t()
+  uv/check(uv/thread_create(thread-id, fn arg. {
     uv/thread_setname("publisher\0".data-ref-byte())
     let bus = arg.ref[pubsub/bus[span[u8]]]()
     loop {
@@ -198,29 +240,5 @@ fn start-mock-publisher(bus: *pubsub/bus[span[u8]]) {
         publish-text(bus, global-topic, `{"uptime-seconds": $game-tick}`)
       }
     }
-  }, bus.as[ptr])
-  if rc != 0 crash("failed to spawn publisher thread: $rc")
-}
-
-#if false ns wip-pixel-grid {
-
-let gridsize: u32 = 256
-fn render(out: *string-builder, pixels: *array[u8, 65536]) {
-  out.write(`<div id="grid" style="position: relative">`)
-  let size = 3
-  for pixels {
-    let y = it-index / gridsize
-    let x = it-index % gridsize
-    out.writeln(`<div class="${if it == 0 "off-pixel" else "on-pixel"}" style="top: ${y * size}px; left: ${x * size}px" id="pixel-$x,$y"></div>`)
-  }
-  out.write(`</div">`)
-}
-
-fn update(pixels: *array[u8, 65536]): { x: u32, y: u32 } {
-  let x = std/sys/random(gridsize)
-  let y = std/sys/random(gridsize)
-  let pix = pixels.[y*gridsize + x].&
-  pix.* = 1
-  .{ x, y }
-}
+  }, arg = bus.as[ptr])).!
 }

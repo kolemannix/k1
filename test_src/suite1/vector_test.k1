@@ -8,6 +8,7 @@ use core/types/align
 let BAKED: vector[u8, 32] = vector/splat[u8, 32](9).with-lane(31, 4)
 
 fn test() {
+  compares-and-shuffles()
   // Layout: natural (total-size) alignment, up to 512-bit
   assert-equals(size[vector[u8, 16]], 16)
   assert-equals(align[vector[u8, 16]], 16)
@@ -173,4 +174,45 @@ fn test-compare() {
   assert-equals(native.size-bytes(), width)
   assert(native == native)
   assert-equals(native.get-lane(width - 1), 5)
+}
+
+fn compares-and-shuffles() {
+  let bytes: span[u8] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+  let a = vector/from-span[u8, 16](bytes, 0)
+  let eight = vector/splat[u8, 16](8)
+  assert-equals(a.reduce-or(), 15)
+  assert-equals(a.lt-lanes(eight).reduce-or(), 255)
+  assert-equals(vector/splat[u32, 4](0).reduce-or(), 0)
+  assert-equals(a.lt-lanes(eight).to-mask(), 0x00FF)
+  assert-equals(a.gt-lanes(eight).to-mask(), 0xFE00)
+
+  let signed: span[i8] = [-2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
+  let s = vector/from-span[i8, 16](signed, 0)
+  assert-equals(s.lt-lanes(vector/splat[i8, 16](0)).to-mask(), 0b11)
+
+  let floats: span[f32] = [1.0, 2.0, 3.0, 4.0]
+  let f = vector/from-span[f32, 4](floats, 0)
+  assert-equals(f.lt-lanes(vector/splat[f32, 4](2.5)).to-mask(), 0b0011)
+
+  let idx-bytes: span[u8] = [15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0]
+  let reversed = vector/shuffle-bytes(a, vector/from-span[u8, 16](idx-bytes, 0))
+  assert-equals(reversed.get-lane(0), 15)
+  assert-equals(reversed.get-lane(15), 0)
+  let odd-bytes: span[u8] = [0x80, 17, 0xFF, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+  let odd = vector/shuffle-bytes(a, vector/from-span[u8, 16](odd-bytes, 0))
+  assert-equals(odd.get-lane(0), 0)
+  assert-equals(odd.get-lane(1), 1)
+  assert-equals(odd.get-lane(2), 0)
+  assert-equals(odd.get-lane(3), 3)
+
+  let prev-bytes: span[u8] = [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115]
+  let prev = vector/from-span[u8, 16](prev-bytes, 0)
+  let shifted = vector/shift-bytes[3](prev, a)
+  assert-equals(shifted.get-lane(0), 113)
+  assert-equals(shifted.get-lane(2), 115)
+  assert-equals(shifted.get-lane(3), 0)
+  assert-equals(shifted.get-lane(15), 12)
+  let one = vector/shift-bytes[1](prev, a)
+  assert-equals(one.get-lane(0), 115)
+  assert-equals(one.get-lane(1), 0)
 }

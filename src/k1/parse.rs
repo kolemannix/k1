@@ -2118,10 +2118,10 @@ impl SourceFile {
     }
 
     pub fn get_line(&self, mem: &Mem, line_index: usize) -> Option<Line> {
-        if line_index >= self.line_count(mem) {
+        let newline_positions = mem.getn_lt(self.newline_positions);
+        if line_index > newline_positions.len() {
             return None;
         }
-        let newline_positions = mem.getn_lt(self.newline_positions);
         let start = match line_index {
             0 => 0,
             i => newline_positions[i - 1] + 1,
@@ -3772,7 +3772,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     /// an explicit empty-struct payload
     fn peek_starts_quiet_payload(&self) -> bool {
         match self.peek_kind() {
-            K::Ident | K::Numeric | K::Char | K::OpenBracket => true,
+            K::Ident => {
+                !matches!(self.token_chars(self.peek()), "return" | "break" | "continue")
+            }
+            K::Numeric | K::Char | K::OpenBracket => true,
             K::Dot => {
                 let two = self.tokens.peek_n(1);
                 (two.is_kind_nonspaced(K::OpenBrace) && self.peek_kind_n(2) != K::CloseBrace)

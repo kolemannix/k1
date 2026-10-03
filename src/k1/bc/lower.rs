@@ -739,7 +739,9 @@ fn emit_inst(
                 | VecOpIr::BitAnd
                 | VecOpIr::BitOr
                 | VecOpIr::Xor
-                | VecOpIr::EqLanes => {
+                | VecOpIr::EqLanes
+                | VecOpIr::LtLanesS
+                | VecOpIr::LtLanesU => {
                     let (lhs_addr, lhs_off) = resolve_addr(k1, ctx, vop.lhs);
                     let (rhs_addr, rhs_off) = resolve_addr(k1, ctx, vop.rhs);
                     let (dst_addr, dst_off) = resolve_addr(k1, ctx, vop.dst);
@@ -751,16 +753,21 @@ fn emit_inst(
                         ctx.emit_load(elem_bits, s0, lhs_addr, lhs_off + off);
                         ctx.emit_load(elem_bits, s1, rhs_addr, rhs_off + off);
                         match vop.op {
-                            VecOpIr::EqLanes => {
-                                if is_float {
-                                    ctx.emit(
-                                        Opcode::FloatCmp,
-                                        elem_bits,
-                                        ir::FloatCmpPred::Eq as u16,
-                                    );
-                                } else {
-                                    ctx.emit(Opcode::IntCmp, elem_bits, ir::IntCmpPred::Eq as u16);
-                                }
+                            VecOpIr::EqLanes | VecOpIr::LtLanesS | VecOpIr::LtLanesU => {
+                                let (opcode, pred) = match (vop.op, is_float) {
+                                    (VecOpIr::EqLanes, true) => {
+                                        (Opcode::FloatCmp, ir::FloatCmpPred::Eq as u16)
+                                    }
+                                    (VecOpIr::EqLanes, false) => {
+                                        (Opcode::IntCmp, ir::IntCmpPred::Eq as u16)
+                                    }
+                                    (_, true) => (Opcode::FloatCmp, ir::FloatCmpPred::Lt as u16),
+                                    (VecOpIr::LtLanesS, false) => {
+                                        (Opcode::IntCmp, ir::IntCmpPred::Slt as u16)
+                                    }
+                                    _ => (Opcode::IntCmp, ir::IntCmpPred::Ult as u16),
+                                };
+                                ctx.emit(opcode, elem_bits, pred);
                                 ctx.push(s0);
                                 ctx.push(s0);
                                 ctx.push(s1);
@@ -822,6 +829,58 @@ fn emit_inst(
                         ctx.push(s0);
                         ctx.push(count);
                         ctx.emit_store(elem_bits, dst_addr, dst_off + off, s0);
+                    }
+                }
+                VecOpIr::ShuffleBytes => {
+                    let (table_addr, table_off) = resolve_addr(k1, ctx, vop.lhs);
+                    let (idx_addr, idx_off) = resolve_addr(k1, ctx, vop.rhs);
+                    let (dst_addr, dst_off) = resolve_addr(k1, ctx, vop.dst);
+                    let s0 = ctx.next_scratch();
+                    let s1 = ctx.next_scratch();
+                    let low = k1.bc.intern_const(15);
+                    let seven = k1.bc.intern_const(7);
+                    let one = k1.bc.intern_const(1);
+                    for lane in 0..vop.lanes as u16 {
+                        ctx.emit_load(8, s0, idx_addr, idx_off + lane);
+                        ctx.emit(Opcode::BitAnd, 8, 0);
+                        ctx.push(s1);
+                        ctx.push(s0);
+                        ctx.push(low);
+                        ctx.emit(Opcode::PtrIndex, 0, 0);
+                        ctx.push(s1);
+                        ctx.push(table_addr);
+                        ctx.push(s1);
+                        ctx.push(1);
+                        ctx.emit_load(8, s1, s1, table_off);
+                        ctx.emit(Opcode::ShrU, 8, 0);
+                        ctx.push(s0);
+                        ctx.push(s0);
+                        ctx.push(seven);
+                        ctx.emit(Opcode::IntSub, 8, 0);
+                        ctx.push(s0);
+                        ctx.push(s0);
+                        ctx.push(one);
+                        ctx.emit(Opcode::BitAnd, 8, 0);
+                        ctx.push(s0);
+                        ctx.push(s0);
+                        ctx.push(s1);
+                        ctx.emit_store(8, dst_addr, dst_off + lane, s0);
+                    }
+                }
+                VecOpIr::ReduceOr => {
+                    let (lhs_addr, lhs_off) = resolve_addr(k1, ctx, vop.lhs);
+                    let acc = ctx.bc_value_of(inst_id);
+                    let s0 = ctx.next_scratch();
+                    let zero = k1.bc.intern_const(0);
+                    ctx.emit(Opcode::Mov, 0, 0);
+                    ctx.push(acc);
+                    ctx.push(zero);
+                    for lane in 0..vop.lanes as u16 {
+                        ctx.emit_load(elem_bits, s0, lhs_addr, lhs_off + lane * stride);
+                        ctx.emit(Opcode::BitOr, elem_bits, 0);
+                        ctx.push(acc);
+                        ctx.push(acc);
+                        ctx.push(s0);
                     }
                 }
                 VecOpIr::ToMask => {
@@ -1357,7 +1416,7 @@ mod tests {
             acc = ir::Value::Inst(summed);
         }
         push(&mut u, exit, Inst::Ret { v: acc, agg: false });
-        commit_unit(&mut k1.ir, &u, &mut unit);
+        commit_unit(&mut k1.ir, &mut u, &mut unit);
         k1.ir.release_unit_buf(u);
         unit.is_optimized = true;
         *k1.ir.function_unit_mut(f).unwrap() = unit;

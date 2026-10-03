@@ -25,12 +25,30 @@ static int put_str(char *out, const char *s) {
   return n;
 }
 
+static const char DIGIT_PAIRS[201] =
+    "00010203040506070809101112131415161718192021222324252627282930313233343536373839"
+    "40414243444546474849505152535455565758596061626364656667686970717273747576777879"
+    "8081828384858687888990919293949596979899";
+
 static int put_uint(char *out, uint64_t v) {
-  int n = 0;
-  for (uint64_t t = v; t != 0; t /= 10)
-    n++;
-  for (int i = n; i-- > 0; v /= 10)
-    out[i] = (char)('0' + v % 10);
+  char buf[20];
+  int i = 20;
+  while (v >= 100) {
+    uint64_t q = v / 100;
+    unsigned r = (unsigned)(v - q * 100) * 2;
+    buf[--i] = DIGIT_PAIRS[r + 1];
+    buf[--i] = DIGIT_PAIRS[r];
+    v = q;
+  }
+  if (v >= 10) {
+    buf[--i] = DIGIT_PAIRS[v * 2 + 1];
+    buf[--i] = DIGIT_PAIRS[v * 2];
+  } else {
+    buf[--i] = (char)('0' + v);
+  }
+  int n = 20 - i;
+  for (int k = 0; k < n; k++)
+    out[k] = buf[i + k];
   return n;
 }
 

@@ -63,6 +63,15 @@ fn clang-resource-dir(): ?string {
   :some "$lib-dir/clang/$major"
 }
 
+fn default-sysroot(caller-args: list[string]): ?string {
+  if not k1/platform-macos return :none
+  for caller-args { if it == "-isysroot" return :none }
+  if std/process/sh("printf %s $(xcrun --sdk macosx --show-sdk-path)") is {
+    :ok sdk -> :some sdk,
+    :err _ -> :none,
+  }
+}
+
 type bindgen-args = {
   lib-name: string,
   ns-name: ?string,
@@ -90,6 +99,10 @@ fn start(args: span[string]): result[string, string] {
   if clang-resource-dir() is :some dir {
     clang-args.push("-resource-dir")
     clang-args.push(dir)
+  }
+  if default-sysroot(args.clangarg) is :some sdk {
+    clang-args.push("-isysroot")
+    clang-args.push(sdk)
   }
   for args.clangarg { clang-args.push(it) }
   let clang-args-c-strs: list[ptr] = clang-args.map(fn s. s.to-c-tmp().ptr)
@@ -439,7 +452,7 @@ ns for bindgen-state {
   }
 }
 
-fn visit-struct(struct-root: CXCursor): { fields: k1-type:struct.fields, pending-anon-decl: ?k1-type, error: ?string } {
+fn visit-struct(struct-root: CXCursor): { fields: k1-type:struct.fields, nested: list[k1-defn], pending-anon-decl: ?k1-type, error: ?string } {
   let(returned) result = .0
   debug("Handling struct decl")
   clang/visitChildren(
@@ -494,6 +507,7 @@ fn visit-struct-member(
       if is-anon {
         debug("recursing into struct member $cursor-spelling")
         let anon-result = visit-struct(current)
+        for anon-result.nested { result.nested.push(it) }
         if anon-result.error is :some msg {
           result.error = :some msg
           :Break
@@ -502,11 +516,15 @@ fn visit-struct-member(
           :Continue
         }
       } else {
-        let field-name = cursor-spelling
-        let cx-type = clang/getCursorType(current)
-        let type = map-type(cx-type)
-        
-        result.fields.push(.{ name = field-name, type, offset = :none })
+        if not clang/isCursorDefinition(current).as-bool() return :Continue
+        let nested-result = visit-struct(current)
+        for nested-result.nested { result.nested.push(it) }
+        result.nested.push(.{
+          name = cursor-spelling,
+          error = nested-result.error,
+          kind = :typedef .{ type = :struct .{ fields = nested-result.fields, kind }, alias = false },
+          layout = layout-for-cursor(current),
+        })
         :Continue
       }
     },
@@ -611,6 +629,7 @@ fn visit-root(
         }
 
         let struct-decl-result = visit-struct(current)
+        for struct-decl-result.nested { bg.defns.push(it) }
 
         bg.defns.push(.{
           name,
@@ -689,7 +708,10 @@ fn visit-root(
         return :Continue
       }
       let cx-type = clang/getCursorType(current)
-      let mutable = clang/isConstQualifiedType(cx-type) == 0
+      let cx-type = if (cx-type.kind is :IncompleteArray) clang/getArrayElementType(cx-type) else cx-type
+      let elem-type = cx-type
+      while elem-type.kind is :ConstantArray { elem-type = clang/getArrayElementType(elem-type) }
+      let mutable = clang/isConstQualifiedType(elem-type) == 0
       let tls = not (clang/getCursorTLSKind(current) is :None)
       let type = map-type(cx-type)
       bg.defns.push(.{

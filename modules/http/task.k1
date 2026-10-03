@@ -63,16 +63,8 @@ ns for task {
       handler,
     })
 
-    let mutex-rc = uv/mutex_init(state.mutex)
-    if mutex-rc != 0 {
-      crash("uv_mutex_init failed: $mutex-rc")
-    }
-
-    let cond-rc = uv/cond_init(state.cond)
-    if cond-rc != 0 {
-      uv/mutex_destroy(state.mutex)
-      crash("uv_cond_init failed: $cond-rc")
-    }
+    uv/check(uv/mutex_init(state.mutex)).!
+    uv/check(uv/cond_init(state.cond)).!
 
     state.req.set-data(work)
 

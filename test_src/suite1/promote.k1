@@ -1,0 +1,135 @@
+ns promote
+
+type pair = { a: i64, b: i64 }
+type nest = { tag: u8, p: pair, f: f64 }
+type bits = union { as-u32: u32, as-f32: f32 }
+type halves = { lo: u32, hi: u32 }
+type wide = union { as-u64: u64, parts: halves }
+type shape = either { dot, line(i64), box(pair) }
+
+fn val(x: i64): i64 { x }
+
+fn(noinline) sink(p: *pair): i64 {
+  p.a = p.a + 1
+  p.b
+}
+
+fn(noinline) fib-pairs(n: i64): i64 {
+  let s: pair = .{ a = 0, b = 1 }
+  let i: i64 = 0
+  while i < n {
+    s = .{ a = s.b, b = s.a + s.b }
+    i = i + 1
+  }
+  s.a
+}
+
+fn(noinline) option-payload(n: i64): i64 {
+  let total: i64 = 0
+  for i in (0: i64).until(n) {
+    let o: ?i64 = if i % 3 == 0 :none else :some(i)
+    if o is :some v {
+      total = total + v
+    }
+  }
+  total
+}
+
+fn(noinline) swap-fields(): i64 {
+  let p: pair = .{ a = val(1), b = val(2) }
+  let t = p.a
+  p.a = p.b
+  p.b = t
+  p.a * 10 + p.b
+}
+
+fn(noinline) zero-then-partial(flag: bool): i64 {
+  let n: nest = .0
+  if flag {
+    n.p.b = 7
+  }
+  n.p.a + n.p.b
+}
+
+fn(noinline) punned(): u32 {
+  let b: bits = .{ as-f32 = 1.0 }
+  b.as-u32
+}
+
+fn(noinline) punned-parts(): u32 {
+  let w: wide = .{ as-u64 = 21474836483 }
+  w.parts.lo + w.parts.hi
+}
+
+fn(noinline) escapes(): i64 {
+  let p: pair = .{ a = val(1), b = val(2) }
+  p.a = p.a + 10
+  let r = sink(p.&)
+  p.a + r
+}
+
+fn(noinline) nested(x: i64): i64 {
+  let n: nest = .{ tag = 1, p = .{ a = x, b = x + 1 }, f = 2.5 }
+  n.p.b = n.p.a + n.p.b
+  if n.f > 2.0 n.p.b else 0
+}
+
+fn(noinline) const-index(): i64 {
+  let xs: array[i64, 3] = [val(1), val(2), val(3)]
+  xs.[1] = xs.[0] + xs.[2]
+  xs.[1]
+}
+
+fn(noinline) dynamic-index(i: size): i64 {
+  let xs: array[i64, 3] = [val(1), val(2), val(3)]
+  xs.[i] = 9
+  xs.[0] + xs.[1] + xs.[2]
+}
+
+fn(noinline) first-over(limit: i64): i64 {
+  let s: pair = .{ a = 1, b = 1 }
+  loop {
+    if s.b > limit break
+    s = .{ a = s.b, b = s.a + s.b }
+  }
+  s.b
+}
+
+fn(noinline) shapes(n: i64): i64 {
+  let total: i64 = 0
+  for i in (0: i64).until(n) {
+    let s: shape = if i % 3 == 0 :dot else if i % 3 == 1 :line(i) else :box(.{ a = i, b = 1 })
+    total = total + if s is {
+      :dot -> { 100 },
+      :line(len) -> { len },
+      :box(p) -> { p.a * p.b }
+    }
+  }
+  total
+}
+
+fn(noinline) float-fields(n: i64): f64 {
+  let acc: { x: f64, y: f64 } = .{ x = 0.0, y = 1.0 }
+  for _ in (0: i64).until(n) {
+    acc.x = acc.x + acc.y
+    acc.y = acc.y * 2.0
+  }
+  acc.x
+}
+
+fn test() {
+  assert-equals(fib-pairs(10), 55)
+  assert-equals(option-payload(10), 27)
+  assert-equals(swap-fields(), 21)
+  assert-equals(zero-then-partial(true), 7)
+  assert-equals(zero-then-partial(false), 0)
+  assert-equals(punned(), 1065353216)
+  assert-equals(punned-parts(), 8)
+  assert-equals(escapes(), 14)
+  assert-equals(nested(3), 7)
+  assert-equals(const-index(), 4)
+  assert-equals(dynamic-index(1), 13)
+  assert-equals(first-over(50), 55)
+  assert-equals(shapes(6), 212)
+  assert-equals(float-fields(4), 15.0)
+}

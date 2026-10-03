@@ -19,9 +19,7 @@ pub(super) fn fold_inst(u: &UnitView, inst: &Inst) -> Option<Simplified> {
         Inst::BitOr { lhs, rhs, t } => int_binop(u, IntOp::Or, lhs, rhs, t),
         Inst::BitXor { lhs, rhs, t } => int_binop(u, IntOp::Xor, lhs, rhs, t),
         Inst::BitShiftLeft { lhs, rhs, t } => int_binop(u, IntOp::Shl, lhs, rhs, t),
-        Inst::BitUnsignedShiftRight { lhs, rhs, t } => {
-            int_binop(u, IntOp::ShrU, lhs, rhs, t)
-        }
+        Inst::BitUnsignedShiftRight { lhs, rhs, t } => int_binop(u, IntOp::ShrU, lhs, rhs, t),
         Inst::BitSignedShiftRight { lhs, rhs, t } => int_binop(u, IntOp::ShrS, lhs, rhs, t),
         Inst::IntCmp { lhs, rhs, pred, width } => {
             if let (Some(l), Some(r)) = (lhs.const_bits(u), rhs.const_bits(u)) {
@@ -125,7 +123,13 @@ fn int_binop(u: &UnitView, op: IntOp, lhs: Value, rhs: Value, t: ScalarType) -> 
     }
 }
 
-fn float_binop(u: &UnitView, op: FloatOp, lhs: Value, rhs: Value, t: ScalarType) -> Option<Simplified> {
+fn float_binop(
+    u: &UnitView,
+    op: FloatOp,
+    lhs: Value,
+    rhs: Value,
+    t: ScalarType,
+) -> Option<Simplified> {
     let bits = arith::float_op(op, t.width_bits(), lhs.const_bits(u)?, rhs.const_bits(u)?);
     Some(Simplified::Const(t, bits))
 }

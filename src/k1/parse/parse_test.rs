@@ -662,3 +662,21 @@ fn long_token_has_a_span() {
     assert_eq!((ast.sources.file_of(span.lo), source.local_from_global_offset(span.lo), span.len), (file_id, 8, 70_002));
     assert_eq!(lexed.tokens[4].kind, TokenKind::KeywordLet);
 }
+
+#[test]
+fn line_for_offset_at_eof() {
+    let mut ast = make_test_ast();
+    let path = ast.idents.intern("unit_test/eof.k1");
+    let empty = SourceFile::make(&mut ast.mem, path, "");
+    let line = empty.get_line_for_offset(&ast.mem, 0).unwrap();
+    assert_eq!((line.line_index, line.start_char, line.len), (0, 0, 0));
+    assert!(empty.get_line_for_offset(&ast.mem, 1).is_none());
+
+    let trailing = SourceFile::make(&mut ast.mem, path, "a\nbc\n");
+    let line = trailing.get_line_for_offset(&ast.mem, 5).unwrap();
+    assert_eq!((line.line_index, line.start_char, line.len), (2, 5, 0));
+    let line = trailing.get_line_for_offset(&ast.mem, 3).unwrap();
+    assert_eq!((line.line_index, line.start_char, line.len), (1, 2, 2));
+    assert_eq!(trailing.line_count(&ast.mem), 2);
+    assert_eq!(empty.line_count(&ast.mem), 0);
+}

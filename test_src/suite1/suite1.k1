@@ -47,6 +47,8 @@ fn low() {
   inline_test/test()
   copy_forward/test()
   #static copy_forward/test()
+  promote/test()
+  #static promote/test()
   newline-stmt/test()
   use_test/test()
   opaque_test/test()

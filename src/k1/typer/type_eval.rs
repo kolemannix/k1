@@ -308,8 +308,8 @@ impl TypedProgram {
                 self.builtin_types.ordering = Some(type_id);
             } else if name == b.code {
                 self.builtin_types.code = Some(type_id);
-            } else if name == b.code_chunk {
-                self.builtin_types.code_chunk = Some(type_id);
+            } else if name == b.code_span {
+                self.builtin_types.code_span = Some(type_id);
             } else if name == b.code_token {
                 self.builtin_types.code_token = Some(type_id);
             } else if name == b.code_builder {

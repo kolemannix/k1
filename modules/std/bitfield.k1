@@ -123,7 +123,7 @@ fn define-impl(base-type-id: type-id, type-name: string, members: span[{ name: s
 }
 
 macro define[int-type](type-name: code, members: span[{ name: string, bits: size}]) {
-  code/from-string(define-impl(types/id[int-type](), type-name.text(), members))
+  code/from-string(define-impl(types/id[int-type](), type-name.text, members))
 }
 macro b1(name: code) { `.{ name = "$name", bits = 1 }` }
 macro b8(name: code) { `bn("$name", 8)` }

@@ -1,0 +1,148 @@
+ns flag-sum
+
+type flag = { name: string, bit: u64 }
+type variant = { name: string, payload: ?span[code-token], mask: u64, tag: u64 }
+
+fn find-by-name(flags: span[flag], name: string): ?flag {
+  for f in flags { if f.name == name return :some f }
+  :none
+}
+
+fn bit-length(n: u64): u64 { 64 - n.leading-zeros() }
+
+fn uint-bit-width(name: string): ?u64 {
+  if name == "u8" :some 8 else if name == "u16" :some 16 else if name == "u32" :some 32 else if name == "u64" :some 64 else :none
+}
+
+fn uint-name-for-bits(bits: u64): string {
+  if bits <= 8 "u8" else if bits <= 16 "u16" else if bits <= 32 "u32" else "u64"
+}
+
+fn write-variants(cb: *code-builder, tag-type: string, variants: span[variant], bit: u64) {
+  cb.write(" = either($tag-type) {\n")
+  for v in variants {
+    if (v.mask & bit) != bit continue
+    cb.write(v.name)
+    if v.payload is :some p {
+      cb.write("(")
+      cb.write-tokens(p)
+      cb.write(")")
+    }
+    cb.write(" = ${v.tag},\n")
+  }
+  cb.write("}\n")
+}
+
+fn write-arms(cb: *code-builder, variants: span[variant], bit: u64, open: string, close: string) {
+  for v in variants {
+    if (v.mask & bit) != bit continue
+    let p = if v.payload.is-some() "(p)" else ""
+    cb.write(":${v.name}$p -> $open:${v.name}$p$close,\n")
+  }
+}
+
+fn write-predicate(cb: *code-builder, f: flag, field: string) {
+  cb.write("fn ${f.name}(self): bool { (self.$field & ${f.bit}) != 0 }\n")
+}
+
+macro define(decl: span[code-token]) {
+  if decl.is-empty() crash("flag-sum/define: expected `name = either([flag, ...]) { variant(payload) = [flag, ...], ... }`")
+  let rd = token-cursor/new(decl)
+  let name-tok = rd.expect-ident()
+  let name = name-tok.text
+  rd.expect("=")
+  let kw = rd.expect-ident()
+  if kw.text != "either" kw.fail("Expected `either`, got `${kw.text}`")
+  rd.expect("(")
+  let explicit-tag: ?code-token = if rd.peek-text-eq("[") :none else {
+    let t = rd.expect-ident()
+    rd.expect(",")
+    :some t
+  }
+  rd.expect("[")
+  let flags: list[flag] = list/empty()
+  while not rd.eat-if-text-eq("]") {
+    let f = rd.expect-ident()
+    if find-by-name(flags.as-span(), f.text).is-some() f.fail("Duplicate flag `${f.text}`")
+    if f.text == name f.fail("Flag `${f.text}` is named like the type; `as-${f.text}` would be ambiguous")
+    flags.push(.{ name = f.text, bit = (1: u64) << flags.len().trunc[u32] })
+    if not rd.peek-text-eq("]") rd.expect(",")
+  }
+  rd.expect(")")
+  rd.expect("{")
+
+  let variants: list[variant] = list/empty()
+  let is-enum = true
+  while not rd.eat-if-text-eq("}") {
+    let v = rd.expect-ident()
+    for w in variants { if w.name == v.text v.fail("Duplicate variant `${v.text}`") }
+    if find-by-name(flags.as-span(), v.text).is-some() v.fail("Variant `${v.text}` is named like a flag; `as-${v.text}` would be ambiguous")
+    let payload: ?span[code-token] = if rd.peek-text-eq("(") {
+      is-enum = false
+      let open = rd.eat()
+      :some rd.eat-until-close(open, ")")
+    } else :none
+    let mask: u64 = 0
+    if rd.eat-if-text-eq("=") {
+      rd.expect("[")
+      while not rd.eat-if-text-eq("]") {
+        let f = rd.expect-ident()
+        require find-by-name(flags.as-span(), f.text) is :some flag else f.fail("Unknown flag `${f.text}`")
+        if (mask & flag.bit) != 0 f.fail("Flag `${f.text}` given twice on `${v.text}`")
+        mask = mask | flag.bit
+        if not rd.peek-text-eq("]") rd.expect(",")
+      }
+    }
+    let ordinal: u64 = 0
+    for w in variants { if w.mask == mask { ordinal = ordinal + 1 } }
+    variants.push(.{ name = v.text, payload, mask, tag = (ordinal << flags.len().trunc[u32]) | mask })
+    if not rd.peek-text-eq("}") rd.expect(",")
+  }
+  if not rd.is-at-end() rd.peek().fail("Unexpected `${rd.peek().text}` after the flag-sum declaration")
+  if variants.is-empty() rd.toks.[rd.i - 1].fail("A flag-sum needs at least one variant")
+
+  let max-tag: u64 = 0
+  for v in variants { if v.tag > max-tag { max-tag = v.tag } }
+  let needed = bit-length(max-tag)
+  let tag-type = if explicit-tag is :some t {
+    require uint-bit-width(t.text) is :some width else t.fail("A flag-sum needs an unsigned tag type, got `${t.text}`")
+    if width < needed t.fail("`${t.text}` cannot hold $needed tag bits (${flags.len()} flags plus the ordinal)")
+    t.text
+  } else uint-name-for-bits(needed)
+
+  let field = if is-enum "value" else "tag"
+  let from-value = "core/types/enum/enum-from-value-unchecked(self.value)"
+  let vs = variants.as-span()
+  let cb-storage = code-builder/new()
+  let cb = cb-storage.&
+  cb.write("type ")
+  cb.write-token(name-tok)
+  write-variants(cb, tag-type, vs, 0)
+  for f in flags {
+    let has-member = false
+    for v in vs { if (v.mask & f.bit) != 0 { has-member = true } }
+    if not has-member continue
+    let sub = "$name-${f.name}"
+    cb.write("type $sub")
+    write-variants(cb, tag-type, vs, f.bit)
+    cb.write("ns for $sub {\n")
+    for g in flags { if g.bit != f.bit write-predicate(cb, g, field) }
+    if is-enum cb.write("fn as-$name(self): $name { $from-value }\n") else {
+      cb.write("fn as-$name(self): $name { if self is {\n")
+      write-arms(cb, vs, f.bit, "", "")
+      cb.write("} }\n")
+    }
+    cb.write("}\nns for $name {\n")
+    if is-enum cb.write("fn as-${f.name}(self): ?$sub { if self.${f.name}() :some($from-value) else :none }\n") else {
+      cb.write("fn as-${f.name}(self): ?$sub { if self is {\n")
+      write-arms(cb, vs, f.bit, ":some(", ")")
+      cb.write("_ -> :none,\n} }\n")
+    }
+    cb.write("}\n#if types/size[$sub] == types/size[$name] and types/align[$sub] == types/align[$name] ns for $name {\n")
+    cb.write("fn view-${f.name}(self: *$name): ?*$sub { if self.${f.name}() :some(self.as[ptr].ref[$sub]) else :none }\n}\n")
+  }
+  cb.write("ns for $name {\n")
+  for f in flags { write-predicate(cb, f, field) }
+  cb.write("}\n")
+  cb.build()
+}

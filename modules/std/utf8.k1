@@ -1,0 +1,101 @@
+ns utf8
+
+fn write-codepoint[w: writer](w: w, cp: u32) {
+  if cp < 0x80 {
+    w.write-byte(cp.trunc[u8])
+  } else if cp < 0x800 {
+    w.write-byte((0xC0 + (cp >> 6)).trunc[u8])
+    w.write-byte((0x80 + cp.bit-and(0x3F)).trunc[u8])
+  } else if cp < 0x10000 {
+    w.write-byte((0xE0 + (cp >> 12)).trunc[u8])
+    w.write-byte((0x80 + (cp >> 6).bit-and(0x3F)).trunc[u8])
+    w.write-byte((0x80 + cp.bit-and(0x3F)).trunc[u8])
+  } else {
+    w.write-byte((0xF0 + (cp >> 18)).trunc[u8])
+    w.write-byte((0x80 + (cp >> 12).bit-and(0x3F)).trunc[u8])
+    w.write-byte((0x80 + (cp >> 6).bit-and(0x3F)).trunc[u8])
+    w.write-byte((0x80 + cp.bit-and(0x3F)).trunc[u8])
+  }
+}
+
+let TOO_SHORT: u8 = 1
+let TOO_LONG: u8 = 2
+let OVERLONG_3: u8 = 4
+let TOO_LARGE: u8 = 8
+let SURROGATE: u8 = 16
+let OVERLONG_2: u8 = 32
+let TOO_LARGE_1000: u8 = 64
+let OVERLONG_4: u8 = 64
+let TWO_CONTS: u8 = 128
+let CARRY: u8 = 131
+
+let byte-1-high: array[u8, 16] = [
+  TOO_LONG, TOO_LONG, TOO_LONG, TOO_LONG, TOO_LONG, TOO_LONG, TOO_LONG, TOO_LONG,
+  TWO_CONTS, TWO_CONTS, TWO_CONTS, TWO_CONTS,
+  TOO_SHORT.bit-or(OVERLONG_2),
+  TOO_SHORT,
+  TOO_SHORT.bit-or(OVERLONG_3).bit-or(SURROGATE),
+  TOO_SHORT.bit-or(TOO_LARGE).bit-or(TOO_LARGE_1000).bit-or(OVERLONG_4),
+]
+let byte-1-low: array[u8, 16] = [
+  CARRY.bit-or(OVERLONG_3).bit-or(OVERLONG_2).bit-or(OVERLONG_4),
+  CARRY.bit-or(OVERLONG_2),
+  CARRY, CARRY,
+  CARRY.bit-or(TOO_LARGE),
+  CARRY.bit-or(TOO_LARGE).bit-or(TOO_LARGE_1000),
+  CARRY.bit-or(TOO_LARGE).bit-or(TOO_LARGE_1000),
+  CARRY.bit-or(TOO_LARGE).bit-or(TOO_LARGE_1000),
+  CARRY.bit-or(TOO_LARGE).bit-or(TOO_LARGE_1000),
+  CARRY.bit-or(TOO_LARGE).bit-or(TOO_LARGE_1000),
+  CARRY.bit-or(TOO_LARGE).bit-or(TOO_LARGE_1000),
+  CARRY.bit-or(TOO_LARGE).bit-or(TOO_LARGE_1000),
+  CARRY.bit-or(TOO_LARGE).bit-or(TOO_LARGE_1000),
+  CARRY.bit-or(TOO_LARGE).bit-or(TOO_LARGE_1000).bit-or(SURROGATE),
+  CARRY.bit-or(TOO_LARGE).bit-or(TOO_LARGE_1000),
+  CARRY.bit-or(TOO_LARGE).bit-or(TOO_LARGE_1000),
+]
+let byte-2-high: array[u8, 16] = [
+  TOO_SHORT, TOO_SHORT, TOO_SHORT, TOO_SHORT, TOO_SHORT, TOO_SHORT, TOO_SHORT, TOO_SHORT,
+  TOO_LONG.bit-or(OVERLONG_2).bit-or(TWO_CONTS).bit-or(OVERLONG_3).bit-or(TOO_LARGE_1000).bit-or(OVERLONG_4),
+  TOO_LONG.bit-or(OVERLONG_2).bit-or(TWO_CONTS).bit-or(OVERLONG_3).bit-or(TOO_LARGE),
+  TOO_LONG.bit-or(OVERLONG_2).bit-or(TWO_CONTS).bit-or(SURROGATE).bit-or(TOO_LARGE),
+  TOO_LONG.bit-or(OVERLONG_2).bit-or(TWO_CONTS).bit-or(SURROGATE).bit-or(TOO_LARGE),
+  TOO_SHORT, TOO_SHORT, TOO_SHORT, TOO_SHORT,
+]
+
+fn get-block-errors(prev: vector[u8, 16], cur: vector[u8, 16]): vector[u8, 16] {
+  let low-nibble = vector/splat[u8, 16](0x0F)
+  let prev1 = vector/shift-bytes[1](prev, cur)
+  let high1 = vector/shuffle-bytes(vector/from-span(byte-1-high.&.as-span(), 0), prev1.shift-right(4))
+  let low1 = vector/shuffle-bytes(vector/from-span(byte-1-low.&.as-span(), 0), prev1.bit-and(low-nibble))
+  let high2 = vector/shuffle-bytes(vector/from-span(byte-2-high.&.as-span(), 0), cur.shift-right(4))
+  let special = high1.bit-and(low1).bit-and(high2)
+  let prev2 = vector/shift-bytes[2](prev, cur)
+  let prev3 = vector/shift-bytes[3](prev, cur)
+  let third = prev2.gt-lanes(vector/splat[u8, 16](0xDF))
+  let fourth = prev3.gt-lanes(vector/splat[u8, 16](0xEF))
+  let must23 = third.bit-or(fourth).bit-and(vector/splat[u8, 16](0x80))
+  special.xor(must23)
+}
+
+fn is-valid(bytes: span[u8]): bool {
+  let len = bytes.len()
+  let base = bytes.data-ptr()
+  let prev = vector/splat[u8, 16](0)
+  let errors = vector/splat[u8, 16](0)
+  let i: size = 0
+  while i + 16 <= len {
+    let cur = vector/load-unchecked[u8, 16](base.add-bytes(i))
+    errors = errors.bit-or(get-block-errors(prev, cur))
+    prev = cur
+    i = i + 16
+  }
+  let tail: array[u8, 16] = .0
+  mem/copy(tail.&.data-ptr(), base.add-bytes(i), len - i)
+  let cur = vector/load-unchecked[u8, 16](tail.&.data-ptr())
+  errors = errors.bit-or(get-block-errors(prev, cur))
+  if len - i > 12 {
+    errors = errors.bit-or(get-block-errors(cur, vector/splat[u8, 16](0)))
+  }
+  errors.eq-lanes(vector/splat[u8, 16](0)).all()
+}

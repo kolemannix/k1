@@ -43,6 +43,9 @@ K1 language reference for agents: `docs/ai_docs/k1-syntax-basics.md` and
   don't build collections (`any`, `all`, `find`, `zip`/`enumerate`/`rev` in a
   for-loop header) are fine. Exception: string-building for messages (error
   reports, debug output) may use map/collect chains.
+- Inline any function that has a single call site: long functions that read
+  top to bottom beat a web of one-use helpers (Carmack style). Each inlined
+  section gets a one-line `//` header, the one place comments belong.
 
 ## Build And Run
 
@@ -148,12 +151,18 @@ for compile-time execution, codegen_llvm for binaries.
 - `ir.rs` + `ir/iropt.rs`: typed exprs -> SSA `IrUnit`s per function, IR
   optimization and inlining.
   - `ir/unit.rs`: unit storage. Inst and block ids are unit-local indices;
-    passes edit a pooled `UnitBuf` (linked layout, preds), `commit_unit`
-    compacts it into layout order and stores it as arena slices on the
-    `Copy` `IrUnit`; every reader takes a `UnitView`. Call, phi, switch,
+    passes edit a pooled `UnitBuf` (linked layout, preds, a pending
+    `ValueSubst` that passes resolve through), `commit_unit` applies the
+    substitution while compacting into layout order and stores it as arena
+    slices on the `Copy` `IrUnit`; every reader takes a `UnitView`. Call, phi, switch,
     cmpxchg and vec-op payloads are per-unit arrays.
   - `ir/fold.rs`: the builder's `push_value` folds constant scalar ops and
     identities as they are emitted.
+  - `ir/iropt/promote.rs`: promotes allocas to SSA values keyed by
+    (alloca, offset, scalar type), through local copies, copy-ins and call
+    results. At lowering the `Builder` records each alloca access as it
+    emits (`LocalUses`) and `finalize_unit` promotes between unreachable-block
+    removal and block merging; after inlining it rescans only when an inlined call exposed a local.
 - `arith.rs`: integer and float op semantics shared by the bc VM and
   `ir/fold.rs`; integer results are zero-extended to their width.
 - `bc.rs` + `bc/{lower,exec,disasm}.rs`: flat bytecode lowered from IR, the VM
@@ -183,7 +192,7 @@ for compile-time execution, codegen_llvm for binaries.
   `//errmsg: <substring>`, `//exitcode: <n> [stderr substring]`,
   `//abortmsg: <substring>`, else exit 0.
 - `test_src/<dir>/`: module cases (`suite1`, `stdlib`, `ffi_abi_test`,
-  `dep_*_test`). `k1_test` runs every top-level file and dir in parallel (`--serial` for one at a time); it
+  `dep_*_test`, `http_test` for the http server, which binds an ephemeral port). `k1_test` runs every top-level file and dir in parallel (`--serial` for one at a time); it
   does not recurse.
 - `test_src/suite1`: ~110 files, each `ns foo` with `fn test()`, registered by
   hand in `suite1.k1` (`low`, `moderate`, `core-lib`, `main`). Nearly every
@@ -219,13 +228,17 @@ declaring `dep`/`dep-params`, `lib`, `library()`, `setup`, and an optional
   `Makefile` targets `build`, `wasm`, `nocrt`, `filc`.
 - `std/`: `--no-std` drops it. `posix.k1`/`libc.k1` raw bindings,
   `process.k1`, `thread.k1`, `time.k1`, `fd.k1`, `sys.k1`, `cliarg.k1`,
-  `hash.k1` (hash ability, `map`, `set`), `json.k1`, `bitfield.k1`,
+  `hash.k1` (hash ability, `map`, `set`), `json.k1`, `utf8.k1`, `bitfield.k1`,
   `math.k1`, `simd.k1`, `rc.k1`, `spill-string.k1` (inline string that spills
   to the arena), `stream.k1`, `channel.k1`, `pubsub.k1`, `reload.k1` (dylib
   hot reload), `watch.k1` (kqueue/inotify).
-- C wrapper modules: `libuv/`, `http/` (llhttp, depends on libuv), `sdl3/`,
-  `stb/`, `freetype/`, `harfbuzz/`, `cbrotli/`, `sqlite/` (system lib, no
-  vendor). Most vendor source under `vendor/`, build `libs/*.a` in `setup`,
+- `http/`: HTTP/1.1 server over libuv (llhttp parser, `server.k1` connection
+  loop with timeouts and graceful shutdown, `writer.k1` response driver,
+  `request.k1` query/form/cookie parsing, `routing.k1` comptime route tables,
+  `sse.k1` SSE and Datastar framing).
+- C wrapper modules: `libuv/`, `sdl3/`,
+  `stb/`, `freetype/`, `harfbuzz/`, `cbrotli/`, `sqlite/` (the amalgamation).
+  Most vendor source under `vendor/`, build `libs/*.a` in `setup`,
   and generate bindings with `k1bindgen` (`dogfood/k1bindgen`). Bindings live
   in a namespace named after the C library, or `c` when that would collide
   with the module name.

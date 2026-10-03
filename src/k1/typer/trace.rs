@@ -47,6 +47,7 @@ pub enum TraceKind {
     IrOptimize,
     IrInline,
     IrSimplify,
+    IrPromote,
     Bcgen,
     VmRun,
     CodegenPrepare,
@@ -60,7 +61,7 @@ pub enum TraceKind {
 }
 
 impl TraceKind {
-    pub const ALL: [TraceKind; 40] = [
+    pub const ALL: [TraceKind; 41] = [
         TraceKind::PlanCheck,
         TraceKind::HostPlan,
         TraceKind::HostWave,
@@ -91,6 +92,7 @@ impl TraceKind {
         TraceKind::IrOptimize,
         TraceKind::IrInline,
         TraceKind::IrSimplify,
+        TraceKind::IrPromote,
         TraceKind::Bcgen,
         TraceKind::VmRun,
         TraceKind::CodegenPrepare,
@@ -135,6 +137,7 @@ impl TraceKind {
             TraceKind::IrOptimize => "optimize",
             TraceKind::IrInline => "inline",
             TraceKind::IrSimplify => "simplify",
+            TraceKind::IrPromote => "promote",
             TraceKind::Bcgen => "bcgen",
             TraceKind::VmRun => "run",
             TraceKind::CodegenPrepare => "prepare",
@@ -182,6 +185,7 @@ impl TraceKind {
             | TraceKind::IrOptimize
             | TraceKind::IrInline
             | TraceKind::IrSimplify
+            | TraceKind::IrPromote
             | TraceKind::VmRun
             | TraceKind::CodegenPrepare
             | TraceKind::Codegen
@@ -286,6 +290,7 @@ impl TraceKind {
             TraceKind::IrOptimize => Some("insts created"),
             TraceKind::IrInline => Some("inlines"),
             TraceKind::IrSimplify => Some("passes"),
+            TraceKind::IrPromote => Some("allocas"),
             TraceKind::CodegenPrepare => Some("reachable fns"),
             TraceKind::Codegen => Some("fns"),
             _ => None,
