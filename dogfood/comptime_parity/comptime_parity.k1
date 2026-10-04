@@ -114,7 +114,7 @@ ns work {
     let w = string-builder/new()
     let m = map/new[string, int]()
     for i in 0.until(200) { m.insert("k$i", i * i) }
-    for i in 0.until(200) { if i % 3 == 0 { let _ = m.remove("k$i") } }
+    for i in 0.until(200) { if i % 3 == 0 { m.remove("k$i") } }
     let total = 0
     for kv in m { total = total + kv.value }
     w.write("${m.len()},$total,${m.get("k7")},${m.get("k9")};")

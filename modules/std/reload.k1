@@ -78,7 +78,7 @@ ns reload {
     // Loaders cache images by path, so we load through a unique temp copy
     let n = atomic/fetch-add(load-count.&, 1, :seq-cst)
     let temp-path = "${dylib-path}.load-${n}"
-    files/write-entire-file(temp-path, files/read-to-string(dylib-path))
+    files/write-entire-file(temp-path, files/read-to-string(dylib-path).!).!
     let maybe-handle = core/platform/dylib/open(temp-path)
     posix/unlink(temp-path.to-c-tmp().ptr)
     let handle = if maybe-handle is {
@@ -179,7 +179,7 @@ ns reload {
   // 0 doubles as the "missing" sentinel
   fn artifact-hash(path: string): u64 {
     if not files/exists(path) return 0
-    let h = files/read-to-string(path).hash()
+    let h = files/read-to-string(path).!.hash()
     if h == 0 1 else h
   }
 

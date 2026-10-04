@@ -479,10 +479,15 @@ impl TypedProgram {
             return self.synth_code_append_call(value, writer, ctx);
         }
         let Some(spec) = spec else { return self.synth_print_call(value, writer, None, ctx) };
-        if spec.width == 0 {
+        let is_number =
+            matches!(self.types.get(self.exprs.get_type(value)), Type::Integer(_) | Type::Float(_));
+        if spec.group && !is_number {
+            kbail!(self, span, "The `,` format option groups digits; it needs an integer or float");
+        }
+        if spec.width == 0 && !spec.group {
             return self.synth_print_call(value, writer, spec.precision, ctx);
         }
-        let mut block = self.new_block_builder(ctx.scope_id, ScopeType::LexicalBlock, span, 3);
+        let mut block = self.new_block_builder(ctx.scope_id, ScopeType::LexicalBlock, span, 4);
         let block_ctx = ctx.with_scope(block.scope_id);
         let new_pad = self.synth_typed_call_typed_args(
             self.ast.idents.f.fmt_pad_new.with_span(span),
@@ -497,13 +502,21 @@ impl TypedProgram {
         let pad = self.synth_address_of(pad_var.variable_expr, Span::NONE, true)?;
         let print_call = self.synth_print_call(value, pad, spec.precision, block_ctx)?;
         self.push_block_expr_id(&mut block, print_call);
+        if spec.group {
+            let group_call = self.synth_typed_call_typed_args(
+                self.ast.idents.f.fmt_pad_group.with_span(span),
+                &[],
+                &[pad],
+                block_ctx,
+                false,
+            )?;
+            self.push_block_expr_id(&mut block, group_call);
+        }
 
         let align = match spec.align {
             Some(align) => align,
-            None => match self.types.get(self.exprs.get_type(value)) {
-                Type::Integer(_) | Type::Float(_) => FmtAlign::Right,
-                _ => FmtAlign::Left,
-            },
+            None if is_number => FmtAlign::Right,
+            None => FmtAlign::Left,
         };
         let width = self.synth_int(TypedIntValue::U32(spec.width), span);
         let fill = self.synth_string_literal_from_str(spec.fill.to_string(), span);
@@ -622,19 +635,8 @@ impl TypedProgram {
         self.exprs.add_block(b, self.exprs.get_type(result))
     }
 
-    pub(super) fn synth_discard_call(
-        &mut self,
-        value: TypedExprId,
-        ctx: EvalExprContext,
-    ) -> K1Result<TypedExprId> {
-        let span = self.exprs.get_span(value);
-        self.synth_typed_call_typed_args(
-            self.ast.idents.f.core_discard.with_span(span),
-            &[],
-            &[value],
-            ctx,
-            false,
-        )
+    pub(super) fn synth_discard(&mut self, value: TypedExprId) -> TypedExprId {
+        self.synth_cast(value, self.builtin_types.empty, CastType::Discard, None)
     }
 
     /// Used when we skip static execution, but still need to typecheck the rest of the

@@ -8,7 +8,7 @@ type writer-input = { path: string }
 
 fn writer-thread(input: *writer-input): ptr {
   thread/sleep-ms(100)
-  files/write-entire-file(input.path, "changed")
+  files/write-entire-file(input.path, "changed").!
   heap.free-t(input)
   ptr/null
 }
@@ -17,7 +17,7 @@ fn test() {
   let dir = "/tmp/k1-watch-test"
   let file = "${dir}/f.txt"
   process/sh("rm -rf ${dir} && mkdir -p ${dir}").!
-  files/write-entire-file(file, "orig")
+  files/write-entire-file(file, "orig").!
 
   let w = watch/create().!
   w.add(dir).!

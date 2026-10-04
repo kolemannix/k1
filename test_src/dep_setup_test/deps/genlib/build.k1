@@ -5,5 +5,5 @@ fn module(_b: k1/build-config): k1/module {
 }
 
 fn setup(_ctx: k1/setup-ctx) {
-  core/files/write-entire-file("${k1/module-dir()}/gen.k1", "fn gen-value(): int { 42 }\n")
+  core/files/write-entire-file("${k1/module-dir()}/gen.k1", "fn gen-value(): int { 42 }\n").!
 }

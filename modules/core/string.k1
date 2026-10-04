@@ -210,6 +210,14 @@ ns for string {
     wrap-buffer(clone-chars)
   }
 
+  fn to-ascii-lower(self: string): string {
+    let clone-chars: buffer[char] = self.span.buffer.cloned()
+    for c in self {
+      if c.is-ascii-upper() { clone-chars.[it-index] = c.to-ascii-lower() }
+    }
+    wrap-buffer(clone-chars)
+  }
+
 }
 
 impl as-span[t = char] for string {

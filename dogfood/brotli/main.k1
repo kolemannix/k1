@@ -109,7 +109,7 @@ fn make-corpora(): list[{ name: string, data: span[u8] }] {
   }
   corpora.push(.{ name = "random-300k", data = rand.as-span() })
 
-  let text = core/files/read-to-string("../../src/k1/typer.rs").span-bytes()
+  let text = core/files/read-to-string("../../src/k1/typer.rs").!.span-bytes()
   corpora.push(.{ name = "typer.rs", data = text })
 
   corpora
@@ -156,7 +156,7 @@ fn bench-one(name: string, input: span[u8], quality: size) {
       k1-out.clear()
       e.compress(input, k1-out.&)
       let c-start = time/read-cpu-counter()
-      let _ = c-compress-into(input, cq, c-out)
+      c-compress-into(input, cq, c-out)
       let end = time/read-cpu-counter()
       k1-nanos = k1-nanos + time/counter-to-nanos(c-start - k1-start)
       c-nanos = c-nanos + time/counter-to-nanos(end - c-start)

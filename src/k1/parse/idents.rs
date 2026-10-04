@@ -190,6 +190,7 @@ pub(crate) struct BuiltinIdents {
     pub arena_tmp: StringId,
     pub t: StringId,
     pub phony: StringId,
+    pub underscore: StringId,
     pub none: StringId,
     pub some: StringId,
     pub test_compile: StringId,
@@ -241,11 +242,11 @@ pub(crate) struct BuiltinFunctions {
     pub try__error: QIdent,
     pub neg__negated: QIdent,
     pub core_checked_index: QIdent,
-    pub core_discard: QIdent,
     pub core_enum_unknown_name: QIdent,
     pub core_print_print_to: QIdent,
     pub core_print_precise_print_precise_to: QIdent,
     pub fmt_pad_new: QIdent,
+    pub fmt_pad_group: QIdent,
     pub fmt_pad_align_left: QIdent,
     pub fmt_pad_align_right: QIdent,
     pub fmt_pad_align_center: QIdent,
@@ -612,6 +613,7 @@ impl IdentPool {
             arena_tmp: intern!("arena-tmp"),
             t: intern!("t"),
             phony: intern!("phony"),
+            underscore: intern!("_"),
             none: intern!("none"),
             some: intern!("some"),
             test_compile: intern!("test-compile"),
@@ -669,7 +671,6 @@ impl IdentPool {
 
         let path_core = intern_path!(b.core);
         let core_checked_index = make_fn!(path_core, intern!("checked-index"));
-        let core_discard = make_fn!(path_core, intern!("discard"));
         let core_enum_unknown_name = make_fn!(path_core, intern!("enum-unknown-name"));
 
         let path_core_print = intern_path!(b.core, intern!("print"));
@@ -680,6 +681,7 @@ impl IdentPool {
 
         let path_fmt_pad = intern_path!(b.core, b.fmt, intern!("pad"));
         let fmt_pad_new = make_fn!(path_fmt_pad, intern!("new"));
+        let fmt_pad_group = make_fn!(path_fmt_pad, intern!("group"));
         let fmt_pad_align_left = make_fn!(path_fmt_pad, intern!("align-left"));
         let fmt_pad_align_right = make_fn!(path_fmt_pad, intern!("align-right"));
         let fmt_pad_align_center = make_fn!(path_fmt_pad, intern!("align-center"));
@@ -749,11 +751,11 @@ impl IdentPool {
             try__error,
             neg__negated,
             core_checked_index,
-            core_discard,
             core_enum_unknown_name,
             core_print_print_to,
             core_print_precise_print_precise_to,
             fmt_pad_new,
+            fmt_pad_group,
             fmt_pad_align_left,
             fmt_pad_align_right,
             fmt_pad_align_center,

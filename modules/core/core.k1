@@ -128,14 +128,27 @@ ns io {
 
 ns files {
 
-  fn read-to-string(path: string): string {
+  type error = { code: i32, path: string }
+
+  ns for error {
+    fn not-found(self: error): bool { self.code == platform/io/ERROR-NOT-FOUND }
+    fn already-exists(self: error): bool { self.code == platform/io/ERROR-EXISTS }
+  }
+
+  impl print for error {
+    fn print-to[w: writer](self, w) {
+      w.write("`${self.path}`: ${platform/error-string(self.code)}")
+    }
+  }
+
+  fn read-to-string(path: string): result[string, error] {
     read-to-string-in(mem/current-arena(), path)
   }
 
-  fn read-to-string-in[a: allocator](alloc: a, path: string): string {
+  fn read-to-string-in[a: allocator](alloc: a, path: string): result[string, error] {
     let fd = if platform/io/open-to-read(path) is {
-      :some(fd) -> fd,
-      :none -> crash("open failed: `$path`")
+      :ok(fd) -> fd,
+      :err(code) -> return :err(.{ code, path })
     }
     defer platform/io/close(fd)
 
@@ -149,19 +162,19 @@ ns files {
     while total < buf.len() {
       let n = if platform/io/read(fd, buf.data-ptr().add-bytes(total), buf.len() - total).result() is {
         :ok(n) -> n,
-        :err(_) -> crash("read failed: `$path`")
+        :err(code) -> return :err(.{ code, path })
       }
       if n == 0 break
       total = total + n
     }
     buf.len = total
-    string/wrap-buffer(buf)
+    :ok(string/wrap-buffer(buf))
   }
 
-  fn write-entire-file(out-path: string, contents: string) {
+  fn write-entire-file(out-path: string, contents: string): result[empty, error] {
     let fd = if platform/io/open-to-write(out-path) is {
-      :some(fd) -> fd,
-      :none -> crash("open for write failed: `$out-path`")
+      :ok(fd) -> fd,
+      :err(code) -> return :err(.{ code, path = out-path })
     }
     defer platform/io/close(fd)
 
@@ -173,18 +186,56 @@ ns files {
         count = contents.len() - written
       ).result() is {
         :ok(n) -> n,
-        :err(_) -> crash("write of $out-path failed")
+        :err(code) -> return :err(.{ code, path = out-path })
       }
-      if n == 0 crash("write of $out-path failed")
+      if n == 0 crash("write of $out-path made no progress")
       written = written + n
     }
+    :ok
   }
 
   fn exists(path: string): bool {
     if platform/io/open-to-read(path) is {
-      :some(fd) -> { platform/io/close(fd); true },
-      :none -> false
+      :ok(fd) -> { platform/io/close(fd); true },
+      :err(_) -> false
     }
+  }
+
+  fn list-dir(path: string): result[list[string], error] {
+    list-dir-in(mem/current-arena(), path)
+  }
+
+  fn list-dir-in[a: allocator](alloc: a, path: string): result[list[string], error] {
+    let dir = if platform/io/dir-open(path) is {
+      :ok(dir) -> dir,
+      :err(code) -> return :err(.{ code, path })
+    }
+    defer platform/io/dir-close(dir)
+    let names: list[string] = list/empty()
+    while platform/io/dir-next(dir) is :some(name) {
+      if name != "." and name != ".." { names.push-in(alloc, name.cloned-in(alloc)) }
+    }
+    :ok(names)
+  }
+
+  fn make-dir(path: string): result[empty, error] {
+    if platform/io/make-dir(path) is :err(code) :err(.{ code, path }) else :ok
+  }
+
+  fn link(from: string, to: string): result[empty, error] {
+    if platform/io/link(from, to) is :err(code) :err(.{ code, path = to }) else :ok
+  }
+
+  fn rename(from: string, to: string): result[empty, error] {
+    if platform/io/rename(from, to) is :err(code) :err(.{ code, path = from }) else :ok
+  }
+
+  fn remove(path: string): result[empty, error] {
+    if platform/io/remove(path) is :err(code) :err(.{ code, path }) else :ok
+  }
+
+  fn remove-dir(path: string): result[empty, error] {
+    if platform/io/remove-dir(path) is :err(code) :err(.{ code, path }) else :ok
   }
 
 }

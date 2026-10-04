@@ -15,7 +15,7 @@ fn parse-source(file-name: string, source: string): ast/program {
 }
 
 fn parse-path(path: string): ast/program {
-  parse-source(path, core/files/read-to-string(path))
+  parse-source(path, core/files/read-to-string(path).!)
 }
 
 fn run(args: span[string]): i32 {

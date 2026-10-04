@@ -163,7 +163,7 @@ let NUM_CHARS: size = 95
 type atlas = { pixels: span[u8], glyphs: span[baked-char] }
 
 fn bake(font-path: string, pixel-height: f32): atlas {
-  let ttf = files/read-to-string(font-path)
+  let ttf = files/read-to-string(font-path).!
   let pixels = buffer/allocate[u8](ATLAS_W * ATLAS_H)
   let glyphs = buffer/allocate[baked-char](NUM_CHARS)
   let rows-used = bake-font-bitmap(

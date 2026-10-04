@@ -32,7 +32,7 @@ fn main(argc: i32, argv: ptr): i32 {
   let scratch = core/arena/init(1 << 30)
   for ["twitter", "canada", "citm_catalog"] {
     if only != "" and only != it { continue }
-    let text = files/read-to-string("$dir/${it}.json")
+    let text = files/read-to-string("$dir/${it}.json").!
     let bytes = text.len()
     mem/push-arena(scratch)
     let reset = fn[scratch]. scratch.reset()

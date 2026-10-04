@@ -288,6 +288,7 @@ pub struct FmtSpec {
     pub fill: char,
     pub align: Option<FmtAlign>,
     pub width: u32,
+    pub group: bool,
     pub precision: Option<u32>,
 }
 
@@ -331,6 +332,13 @@ impl FmtSpec {
         if (width == 0) != width_text.is_empty() || (align.is_some() && width == 0) {
             return None;
         }
+        let (group, rest) = match rest.strip_prefix(',') {
+            Some(rest) => (true, rest),
+            None => (false, rest),
+        };
+        if group && align == Some(FmtAlign::SignZeros) {
+            return None;
+        }
         let precision = match rest.strip_prefix('.') {
             None if rest.is_empty() => None,
             None => return None,
@@ -342,7 +350,7 @@ impl FmtSpec {
                 Some(precision_text.parse().ok()?)
             }
         };
-        Some(FmtSpec { fill, align, width, precision })
+        Some(FmtSpec { fill, align, width, group, precision })
     }
 }
 
@@ -366,6 +374,9 @@ impl Display for FmtSpec {
         }
         if self.width != 0 {
             write!(f, "{}", self.width)?;
+        }
+        if self.group {
+            f.write_str(",")?;
         }
         if let Some(precision) = self.precision {
             write!(f, ".{precision}")?;
@@ -1622,7 +1633,14 @@ mod test {
     #[test]
     fn fmt_spec_parse() {
         use super::{FmtAlign as A, FmtSpec};
-        let spec = |fill, align, width, precision| Some(FmtSpec { fill, align, width, precision });
+        let spec = |fill, align, width, precision| {
+            Some(FmtSpec { fill, align, width, group: false, precision })
+        };
+        let grouped = |width, precision| {
+            Some(FmtSpec { fill: ' ', align: None, width, group: true, precision })
+        };
+        assert_eq!(FmtSpec::parse(","), grouped(0, None));
+        assert_eq!(FmtSpec::parse("12,.2"), grouped(12, Some(2)));
         assert_eq!(FmtSpec::parse(".2"), spec(' ', None, 0, Some(2)));
         assert_eq!(FmtSpec::parse("8"), spec(' ', None, 8, None));
         assert_eq!(FmtSpec::parse(">8.3"), spec(' ', Some(A::Right), 8, Some(3)));
@@ -1631,12 +1649,13 @@ mod test {
         assert_eq!(FmtSpec::parse("0<5"), spec('0', Some(A::Left), 5, None));
         assert_eq!(FmtSpec::parse("08.1"), spec('0', Some(A::SignZeros), 8, Some(1)));
         for bad in
-            ["", "0", "00", "<", "<05", "8.", ".x", "x", "none", " f64", "{<3", "99999999999"]
+            ["", "0", "00", "<", "<05", "8.", ".x", "x", "none", " f64", "{<3", "99999999999", "08,", ",,", ",8"]
         {
             assert_eq!(FmtSpec::parse(bad), None, "{bad}");
         }
         assert_eq!(FmtSpec::parse("*^10").unwrap().to_string(), ":*^10");
         assert_eq!(FmtSpec::parse("08.1").unwrap().to_string(), ":08.1");
+        assert_eq!(FmtSpec::parse(">12,.2").unwrap().to_string(), ":>12,.2");
     }
 
     #[test]

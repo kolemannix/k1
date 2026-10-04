@@ -38,7 +38,7 @@ ns for task {
   }
 
   fn join[t](self: task[t]): t {
-    let _ = core/platform/thread/join(.{ raw = self.thread })
+    core/platform/thread/join(.{ raw = self.thread })
     let value = self.result.*
     heap.free-t(self.result)
     value

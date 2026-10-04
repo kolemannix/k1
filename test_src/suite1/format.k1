@@ -142,5 +142,21 @@ fn specs() {
   w.write("[${:<4}]", 7)
   assert-equals(w.build(), "[7   ]")
 
+  assert-equals("${1234567:,}", "1,234,567")
+  assert-equals("${-1234567:,}", "-1,234,567")
+  assert-equals("${999:,}", "999")
+  assert-equals("${1000:,}", "1,000")
+  assert-equals("${-100000:,}", "-100,000")
+  assert-equals("${0:,}", "0")
+  assert-equals("${1234567:12,}", "   1,234,567")
+  assert-equals("${1234567:*<12,}", "1,234,567***")
+  assert-equals("${1234567.891:,.2}", "1,234,567.89")
+  assert-equals("${u64/max-value:,}", "18,446,744,073,709,551,615")
+  assert-equals("${:,}".fmt(4096), "4,096")
+  assert-equals(0o755, 493)
+  assert-equals(0o0, 0)
+  assert-equals(0o7_7u8, 63)
+
   assert(test-compile("${n:.2}").is-some())
+  assert(test-compile("${s:,}").is-some())
 }

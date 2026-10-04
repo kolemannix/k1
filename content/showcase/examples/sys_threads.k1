@@ -10,7 +10,7 @@ let(mutable, tls) my-bumps: u64 = 0
 
 fn worker(s: *shared): u64 {
   for 0u64.until(N_ITERS) {
-    let _ = atomic/fetch-add(s.atomic-total.&, 1, :relaxed)
+    atomic/fetch-add(s.atomic-total.&, 1, :relaxed)
     my-bumps = my-bumps + 1
   }
   while not atomic/cmpxchg(s.lock.&, 0: u64, 1, :acquire, :relaxed).ok {}

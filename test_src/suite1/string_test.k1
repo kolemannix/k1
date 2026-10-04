@@ -59,6 +59,10 @@ fn test() {
 
   assert("abc".concat-char('x') == "abcx")
 
+  assert-equals("Example.IO-42".to-ascii-lower(), "example.io-42")
+  assert-equals("Example.io-42".to-ascii-upper(), "EXAMPLE.IO-42")
+  assert-equals("".to-ascii-lower(), "")
+
   assert("".split-by-char('.') == [])
 
   assert-equals("a.".split-by-char('.'), ["a"])

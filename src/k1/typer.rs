@@ -1305,6 +1305,7 @@ pub enum CastType {
     ReferenceToReference,
     PointerToReference,
     ReferenceToPointer,
+    Discard,
 }
 
 impl Display for CastType {
@@ -1320,6 +1321,7 @@ impl Display for CastType {
             CastType::FloatToSignedInteger => write!(f, "ftosint"),
             CastType::IntegerUnsignedToFloat => write!(f, "uinttof"),
             CastType::IntegerSignedToFloat => write!(f, "sinttof"),
+            CastType::Discard => write!(f, "discard"),
         }
     }
 }
@@ -1933,6 +1935,7 @@ pub enum BuiltinTyperInline {
     StaticTypeToValue,
     TypeId,
     EnumEquals,
+    Discard,
 }
 
 impl BuiltinTyperInline {
@@ -1947,6 +1950,7 @@ impl BuiltinTyperInline {
             BuiltinTyperInline::StaticTypeToValue => "static_type_to_value",
             BuiltinTyperInline::TypeId => "type_id",
             BuiltinTyperInline::EnumEquals => "enum_equals",
+            BuiltinTyperInline::Discard => "discard",
         }
     }
 }
@@ -8445,7 +8449,9 @@ impl TypedProgram {
             MatchingConditionResult::NeverBlock(never_block) => return Ok(never_block),
         };
 
-        let consequent = self.eval_expr(if_expr.cons, cond_ctx)?;
+        let cons_ctx =
+            if if_expr.alt.is_none() { cond_ctx.with_no_expected_type() } else { cond_ctx };
+        let consequent = self.eval_expr(if_expr.cons, cons_ctx)?;
         let consequent_original_type = self.exprs.get_type(consequent);
 
         let cons_original_never = consequent_original_type == NEVER_TYPE_ID;
@@ -8459,7 +8465,7 @@ impl TypedProgram {
             && !cons_original_never
             && consequent_original_type != self.builtin_types.empty
         {
-            self.synth_discard_call(consequent, ctx.with_no_expected_type())?
+            self.synth_discard(consequent)
         } else {
             consequent
         };
@@ -11967,6 +11973,10 @@ impl TypedProgram {
                 let int_value_b = self.synth_enum_get_value(arg_b, span);
                 Ok(self.synth_equals_call_simple(int_value_a, int_value_b, span))
             }
+            BuiltinTyperInline::Discard => {
+                let value = *self.mem.get_nth(call.args, 0);
+                Ok(self.synth_discard(value))
+            }
         }
     }
 
@@ -12702,6 +12712,24 @@ impl TypedProgram {
                     let never_expr = value_expr.unwrap();
                     let never_stmt = self.stmts.add(TypedStmt::Expr(never_expr, NEVER_TYPE_ID));
                     Ok(Some(never_stmt))
+                } else if parsed_let.name == self.ast.idents.b.underscore
+                    && !parsed_let.is_context()
+                    && !parsed_let.is_returned()
+                {
+                    if let Some(err) = value_error {
+                        return Err(err);
+                    }
+                    let Some(value_expr) = value_expr else {
+                        kbail!(self, parsed_let.span, "Cannot discard uninit");
+                    };
+                    let discarded = if actual_type == Some(self.builtin_types.empty) {
+                        value_expr
+                    } else {
+                        self.synth_discard(value_expr)
+                    };
+                    let discard_stmt =
+                        self.stmts.add(TypedStmt::Expr(discarded, self.builtin_types.empty));
+                    Ok(Some(discard_stmt))
                 } else {
                     let variable_type = match actual_type {
                         None => match provided_type {
@@ -13449,6 +13477,7 @@ impl TypedProgram {
             match second {
                 // _root
                 None => match fn_name_str {
+                    "discard" => Some(Builtin::TyperInline(BuiltinTyperInline::Discard)),
                     _ => None,
                 },
                 Some("mem") => match fn_name_str {

@@ -108,7 +108,7 @@ fn install-signal(s: *server, handle: *uv/signal, signum: i32) {
 fn run(s: *server) {
   let outer-tmp = mem/tmp()
   mem/set-tmp-arena(s.scratch)
-  let _ = uv/run(s.uv-loop, :UV_RUN_DEFAULT)
+  uv/run(s.uv-loop, :UV_RUN_DEFAULT)
   mem/set-tmp-arena(outer-tmp)
   s.scratch.release()
 }

@@ -141,7 +141,7 @@ ns platform {
         :bare -> port/bare/is-tty(file.raw)
       }
     }
-    fn open-to-read(path: string): ?file-handle {
+    fn open-to-read(path: string): result[file-handle, i32] {
       let fd =
         if k1/is-static port/posix/open-to-read(path)
         else #if k1/platform is {
@@ -149,9 +149,9 @@ ns platform {
           :wasi -> port/wasi/open-to-read(path),
           :bare -> port/bare/open-to-read(path)
         }
-      if fd < 0 :none else :some(.{ raw = fd })
+      if fd < 0 :err(0 - fd) else :ok(.{ raw = fd })
     }
-    fn open-to-write(path: string): ?file-handle {
+    fn open-to-write(path: string): result[file-handle, i32] {
       let fd =
         if k1/is-static port/posix/open-to-write(path)
         else #if k1/platform is {
@@ -159,7 +159,7 @@ ns platform {
           :wasi -> port/wasi/open-to-write(path),
           :bare -> port/bare/open-to-write(path)
         }
-      if fd < 0 :none else :some(.{ raw = fd })
+      if fd < 0 :err(0 - fd) else :ok(.{ raw = fd })
     }
     fn close(file: file-handle) {
       if k1/is-static port/posix/close(file.raw)
@@ -200,6 +200,83 @@ ns platform {
         :posix-macos or :posix-linux -> port/posix/is-executable(path),
         :wasi -> crash("file io is not supported on wasi"),
         :bare -> port/bare/is-executable(path)
+      }
+    }
+
+    let ERROR-NOT-FOUND: i32 = 2
+    let ERROR-EXISTS: i32 = 17
+
+    fn status(rc: i32): result[empty, i32] {
+      if rc < 0 :err(0 - rc) else :ok
+    }
+    fn make-dir(path: string): result[empty, i32] {
+      status(
+        if k1/is-static port/posix/make-dir(path)
+        else #if k1/platform is {
+          :posix-macos or :posix-linux -> port/posix/make-dir(path),
+          :wasi or :bare -> crash("directories are not supported on this platform")
+        }
+      )
+    }
+    fn link(from: string, to: string): result[empty, i32] {
+      status(
+        if k1/is-static port/posix/link(from, to)
+        else #if k1/platform is {
+          :posix-macos or :posix-linux -> port/posix/link(from, to),
+          :wasi or :bare -> crash("links are not supported on this platform")
+        }
+      )
+    }
+    fn rename(from: string, to: string): result[empty, i32] {
+      status(
+        if k1/is-static port/posix/rename(from, to)
+        else #if k1/platform is {
+          :posix-macos or :posix-linux -> port/posix/rename(from, to),
+          :wasi or :bare -> crash("rename is not supported on this platform")
+        }
+      )
+    }
+    fn remove(path: string): result[empty, i32] {
+      status(
+        if k1/is-static port/posix/remove(path)
+        else #if k1/platform is {
+          :posix-macos or :posix-linux -> port/posix/remove(path),
+          :wasi or :bare -> crash("remove is not supported on this platform")
+        }
+      )
+    }
+
+    fn remove-dir(path: string): result[empty, i32] {
+      status(
+        if k1/is-static port/posix/remove-dir(path)
+        else #if k1/platform is {
+          :posix-macos or :posix-linux -> port/posix/remove-dir(path),
+          :wasi or :bare -> crash("directories are not supported on this platform")
+        }
+      )
+    }
+
+    type dir-handle = { raw: ptr }
+
+    fn dir-open(path: string): result[dir-handle, i32] {
+      if k1/is-static port/posix/dir-open(path)
+      else #if k1/platform is {
+        :posix-macos or :posix-linux -> port/posix/dir-open(path),
+        :wasi or :bare -> crash("directories are not supported on this platform")
+      }
+    }
+    fn dir-next(dir: dir-handle): ?string {
+      if k1/is-static port/posix/dir-next(dir.raw)
+      else #if k1/platform is {
+        :posix-macos or :posix-linux -> port/posix/dir-next(dir.raw),
+        :wasi or :bare -> crash("directories are not supported on this platform")
+      }
+    }
+    fn dir-close(dir: dir-handle) {
+      if k1/is-static port/posix/dir-close(dir.raw)
+      else #if k1/platform is {
+        :posix-macos or :posix-linux -> port/posix/dir-close(dir.raw),
+        :wasi or :bare -> crash("directories are not supported on this platform")
       }
     }
   }
@@ -362,6 +439,14 @@ ns platform {
         :wasi or :bare -> counter
       }
     }
+    fn wall-nanos(): u64 {
+      if k1/is-static port/posix/wall-nanos()
+      else #if k1/platform is {
+        :posix-macos or :posix-linux -> port/posix/wall-nanos(),
+        :wasi -> port/wasi/wall-nanos(),
+        :bare -> crash("no wall clock on this platform")
+      }
+    }
   }
 
   // No spawn/join arms for wasi or bare: TLS lowers to plain globals there,
@@ -445,7 +530,7 @@ ns platform {
         new-ptr
       }
 
-      fn free(p: ptr) { let _ = p }
+      fn free(_p: ptr) { }
     }
 
     ns posix {
@@ -475,6 +560,14 @@ ns platform {
         fn(extern("read")) read(file-no: c-int, buffer: ptr, count: c-sizet): i64
         fn(extern("write")) write(file-no: c-int, data: ptr, count: c-sizet): i64
         fn(extern("close")) close(fd: c-int): c-int
+        fn(extern("mkdir")) mkdir(path: ptr, mode: c-int): c-int
+        fn(extern("link")) link(from: ptr, to: ptr): c-int
+        fn(extern("rename")) rename(from: ptr, to: ptr): c-int
+        fn(extern("unlink")) unlink(path: ptr): c-int
+        fn(extern("rmdir")) rmdir(path: ptr): c-int
+        fn(extern("opendir")) opendir(path: ptr): ptr
+        fn(extern("readdir")) readdir(dir: ptr): ptr
+        fn(extern("closedir")) closedir(dir: ptr): c-int
         fn(extern("lseek")) lseek(fd: c-int, offset: i64, whence: c-int): i64
         fn(extern("isatty")) isatty(fd: c-int): c-int
         type pollfd = { fd: c-int, events: i16, revents: i16 }
@@ -595,15 +688,33 @@ ns platform {
         }
         n > 0
       }
-      fn open-to-read(path: string): i32 { c/open(path.to-c-tmp().ptr, c/O_RDONLY) }
+      fn or-errno(rc: c-int): i32 { if rc < 0 { 0 - errno-now() } else rc }
+      fn open-to-read(path: string): i32 { or-errno(c/open(path.to-c-tmp().ptr, c/O_RDONLY)) }
       // open(2) is variadic, which a fixed 3-arg extern miscompiles on
       // arm64-darwin; creat(2) is a real 2-arg fn equal to
       // O_WRONLY|O_CREAT|O_TRUNC
-      fn open-to-write(path: string): i32 { c/creat(path.to-c-tmp().ptr, c/CREATE_MODE_RW_ALL) }
+      fn open-to-write(path: string): i32 { or-errno(c/creat(path.to-c-tmp().ptr, c/CREATE_MODE_RW_ALL)) }
       fn close(fd: i32) { let _ = c/close(fd) }
+      fn make-dir(path: string): i32 { or-errno(c/mkdir(path.to-c-tmp().ptr, 0o755)) }
+      fn link(from: string, to: string): i32 { or-errno(c/link(from.to-c-tmp().ptr, to.to-c-tmp().ptr)) }
+      fn rename(from: string, to: string): i32 { or-errno(c/rename(from.to-c-tmp().ptr, to.to-c-tmp().ptr)) }
+      fn remove(path: string): i32 { or-errno(c/unlink(path.to-c-tmp().ptr)) }
+      fn remove-dir(path: string): i32 { or-errno(c/rmdir(path.to-c-tmp().ptr)) }
+      fn dir-open(path: string): result[io/dir-handle, i32] {
+        let dir = c/opendir(path.to-c-tmp().ptr)
+        if dir.is-null() :err(errno-now()) else :ok(.{ raw = dir })
+      }
+      fn dir-next(dir: ptr): ?string {
+        let entry = c/readdir(dir)
+        let name-offset: size =
+          if k1/is-static { #if k1/host-platform is { :posix-macos -> 21, :posix-linux or :wasi or :bare -> 19 } }
+          else { #if k1/platform is { :posix-macos -> 21, :posix-linux or :wasi or :bare -> 19 } }
+        if entry.is-null() :none else :some(string/wrap-c(entry.add-bytes(name-offset)))
+      }
+      fn dir-close(dir: ptr) { let _ = c/closedir(dir) }
       fn file-size(fd: i32): i64 {
         let end = c/lseek(fd, 0, c/SEEK_END)
-        let _ = c/lseek(fd, 0, c/SEEK_SET)
+        c/lseek(fd, 0, c/SEEK_SET)
         end
       }
       fn exit(code: i32): never { c/exit(code) }
@@ -635,14 +746,23 @@ ns platform {
       let(mutable) timebase: c/mach-timebase = .{ numer = 0, denom = 0 }
 
       fn mach-counter-to-nanos(counter: u64): u64 {
-        if timebase.denom == 0 { let _ = c/mach_timebase_info(timebase.&) }
+        if timebase.denom == 0 { c/mach_timebase_info(timebase.&) }
         counter * timebase.numer.widen[u64] / timebase.denom.widen[u64]
       }
 
-      fn monotonic-nanos(): u64 {
+      fn(inline) monotonic-nanos(): u64 {
         let monotonic: u32 = 1
-        let ts: c/timespec = .{ tv_sec = 0, tv_nsec = 0 }
-        let _ = c/clock_gettime(monotonic, ts.&)
+        get-time(clockid = monotonic)
+      }
+
+      fn(inline) wall-nanos(): u64 {
+        let realtime: u32 = 0
+        get-time(clockid = realtime)
+      }
+
+      fn get-time(clockid: u32): u64 {
+        let ts: c/timespec = .0
+        c/clock_gettime(clockid, ts.&)
         ts.tv_sec * 1_000_000_000 + ts.tv_nsec
       }
 
@@ -728,22 +848,22 @@ ns platform {
         // posix_spawn_file_actions_t is opaque: 8 bytes on darwin, 80 on glibc
         let fa-buf = array/zeroed[u8, 128]()
         let fa = fa-buf.&.as[ptr]
-        let _ = c/spawn-fa-init(fa)
-        defer { let _ = c/spawn-fa-destroy(fa) }
+        c/spawn-fa-init(fa)
+        defer { c/spawn-fa-destroy(fa) }
 
-        if fd0 >= 0 { let _ = c/spawn-fa-adddup2(fa, fd0, 0) }
-        if fd1 >= 0 { let _ = c/spawn-fa-adddup2(fa, fd1, 1) }
-        if fd2 >= 0 { let _ = c/spawn-fa-adddup2(fa, fd2, 2) }
+        if fd0 >= 0 { c/spawn-fa-adddup2(fa, fd0, 0) }
+        if fd1 >= 0 { c/spawn-fa-adddup2(fa, fd1, 1) }
+        if fd2 >= 0 { c/spawn-fa-adddup2(fa, fd2, 2) }
         let closed = list/with-capacity[i32](extra-close.len() + 3)
         for fd in [fd0, fd1, fd2] {
           if fd >= 0 and not closed.as-span().contains(fd) {
-            let _ = c/spawn-fa-addclose(fa, fd)
+            c/spawn-fa-addclose(fa, fd)
             closed.push(fd)
           }
         }
         for fd in extra-close {
           if fd >= 0 and not closed.as-span().contains(fd) {
-            let _ = c/spawn-fa-addclose(fa, fd)
+            c/spawn-fa-addclose(fa, fd)
             closed.push(fd)
           }
         }
@@ -906,6 +1026,13 @@ ns platform {
         let monotonic: u32 = 1
         let t: u64 = 0
         if clock-time-get(monotonic, 1, a32(t.&.as[ptr])) != 0 crash("wasi clock_time_get failed")
+        t
+      }
+
+      fn wall-nanos(): u64 {
+        let realtime: u32 = 0
+        let t: u64 = 0
+        if clock-time-get(realtime, 1, a32(t.&.as[ptr])) != 0 crash("wasi clock_time_get failed")
         t
       }
 

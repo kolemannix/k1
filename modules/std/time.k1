@@ -11,4 +11,10 @@ ns time {
   fn elapsed-ms(counter: u64): u64 {
     elapsed-nanos(counter) / 1_000_000
   }
+  fn unix-nanos(): u64 {
+    core/platform/clock/wall-nanos()
+  }
+  fn unix-seconds(): u64 {
+    unix-nanos() / 1_000_000_000
+  }
 }

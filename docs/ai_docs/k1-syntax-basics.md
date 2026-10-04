@@ -243,11 +243,15 @@ elements live inline in `t`, so the returned reference points into real
 storage rather than into a copy. Implementing `as-span` does not imply
 `index`; a viewable type declares its own impl.
 
-A statement that discards a non-unit expression result gets a warning; bind to
-`_` to discard explicitly:
+A statement may drop its result silently unless the type implements `try`
+(`opt`, `result`); that gets a warning, and `let _ = expr` discards it
+explicitly. `let _` binds nothing and lowers to `core/discard`, a builtin with
+no call. It is also how a block's tail expression is turned into `empty`:
 
 ```rust
-let _ = posix/madvise(base-ptr, len, advice = posix/MADV_SEQUENTIAL)
+posix/madvise(base-ptr, len, advice = posix/MADV_SEQUENTIAL)
+let _ = m.remove("k")
+fn close(fd: i32) { let _ = c/close(fd) }
 ```
 
 See `test_src/suite1/assign.k1`, `test_src/suite1/place_test.k1`,
@@ -940,10 +944,11 @@ followed by anything that cannot start an identifier is literal (`"$5.99"`), and
 characters in strings and need no escaping.
 
 A `${...}` hole takes a format spec after a colon, Python/Rust style:
-`${value:[[fill]align][0][width][.precision]}`. Align is `<`, `>` or `^`
+`${value:[[fill]align][0][width][,][.precision]}`. Align is `<`, `>` or `^`
 (default: right for integers and floats, left otherwise); fill is any one
-char. `0` pads with zeros after the sign and cannot combine with align. Width
-counts UTF-8 chars. Precision needs the `print-precise` ability (floats: digits
+char. `0` pads with zeros after the sign and cannot combine with align or `,`.
+Width counts UTF-8 chars. `,` groups the integer digits of an int or float in
+threes (`${1234567:,}` is `1,234,567`). Precision needs the `print-precise` ability (floats: digits
 after the point; strings: max chars); ints reject it. Bare `${:spec}` holes take
 specs too. `${x: f64}` (space after the colon) stays a type ascription.
 

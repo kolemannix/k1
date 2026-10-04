@@ -27,6 +27,36 @@ ns fmt {
   ns for pad {
     fn new(): pad { .0 }
 
+    fn group(self: *pad) {
+      let old-len = self.text.len()
+      let text = self.text.as-span()
+      let signed = old-len > 0 and (text.[0] == '-'.as-u8() or text.[0] == '+'.as-u8())
+      let start: size = if signed 1 else 0
+      let end = start
+      while end < old-len and text.[end] >= '0'.as-u8() and text.[end] <= '9'.as-u8() { end = end + 1 }
+      if end - start > 3 {
+        let commas = (end - start - 1) / 3
+        for 0.until(commas) { self.text.push(0) }
+        let buf = self.text.as-buffer()
+        let i = old-len
+        while i > end {
+          i = i - 1
+          buf.[i + commas] = buf.[i]
+        }
+        let dst = end + commas
+        let src = end
+        while src > start {
+          src = src - 1
+          dst = dst - 1
+          buf.[dst] = buf.[src]
+          if (end - src) % 3 == 0 and src > start {
+            dst = dst - 1
+            buf.[dst] = ','.as-u8()
+          }
+        }
+      }
+    }
+
     fn shortfall(self: *pad, width: u32): size {
       let len = char-count(self.text.as-span())
       let width = width.widen[size]

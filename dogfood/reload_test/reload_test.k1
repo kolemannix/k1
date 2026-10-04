@@ -27,7 +27,7 @@ fn build-app(k1-exe: string, greeting: string, two-arg-helper: bool, speed: i64,
   files/write-entire-file(
     "${app-dir}/scene.k1",
     scene-source(greeting, two-arg-helper, speed, extra-global)
-  )
+  ).!
   if process/run(k1-exe, ["build", app-dir]) is {
     :ok _ -> .{},
     :err e -> crash("app build failed: ${e}"),
@@ -82,8 +82,8 @@ fn main(argc: c-int, argv: ptr): i32 {
   process/sh("rm -rf /tmp/k1-reload-driver && mkdir -p ${app-dir}").!
   files/write-entire-file(
     "${app-dir}/app.k1",
-    files/read-to-string("${template-dir}/app.k1")
-  )
+    files/read-to-string("${template-dir}/app.k1").!
+  ).!
 
   build-app(k1-exe, "one", false, 10, false)
   test-evaluation-order()

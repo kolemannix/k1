@@ -3774,6 +3774,10 @@ fn compile_cast(
 ) -> K1Result<Value> {
     let target_type_id = b.k1.exprs.get_type(expr_id);
     match c.cast_type {
+        CastType::Discard => {
+            compile_expr(b, None, c.base_expr)?;
+            Ok(Value::Empty)
+        }
         CastType::ReferenceToReference
         | CastType::IntegerCast(IntegerCastDirection::SignChange)
         | CastType::PointerToReference

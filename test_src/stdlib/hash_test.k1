@@ -326,7 +326,7 @@ fn test-shift() {
     let victim = (i * 7) % 12
     assert-equals(m.remove(victim * 7919), :some victim)
     assert-equals(m.remove(victim * 7919), :none)
-    let _ = removed.add(victim)
+    removed.add(victim)
     for j in 0.until(12) {
       let expected: ?int = if removed.contains(j) :none else :some j
       assert-equals(m.get(j * 7919), expected)

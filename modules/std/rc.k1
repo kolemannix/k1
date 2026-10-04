@@ -31,7 +31,7 @@ ns for rc {
       atomic/fence(:acquire)
       if self.inner.drop-fn is :some drop { drop(self.inner.value.&) }
       heap.free-t(self.inner)
-      let _ = atomic/fetch-sub(live-cells.&, 1, :relaxed)
+      atomic/fetch-sub(live-cells.&, 1, :relaxed)
     }
   }
 

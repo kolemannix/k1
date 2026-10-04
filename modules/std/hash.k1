@@ -15,25 +15,24 @@ ability hash {
   fn hash(self): u64
 }
 
-// murmur3's 64-bit finalizer: full avalanche, cheap, and good enough
-// that low-quality inputs (sequential ints, FNV output) mask cleanly
-fn fmix64(h0: u64): u64 {
-  let m1: u64 = 0xff51afd7ed558ccd
-  let m2: u64 = 0xc4ceb9fe1a85ec53
-  let h = h0 ^ (h0 >> 33)
-  h = h * m1
-  h = h ^ (h >> 33)
-  h = h * m2
-  h ^ (h >> 33)
-}
+ns hash {
+  // murmur3's 64-bit finalizer: full avalanche, cheap, and good enough
+  // that low-quality inputs (sequential ints, FNV output) mask cleanly
+  fn fmix64(h0: u64): u64 {
+    let m1: u64 = 0xff51afd7ed558ccd
+    let m2: u64 = 0xc4ceb9fe1a85ec53
+    let h = h0 ^ (h0 >> 33)
+    h = h * m1
+    h = h ^ (h >> 33)
+    h = h * m2
+    h ^ (h >> 33)
+  }
 
-fn(inline) mix-word(h: u64, w: u64): u64 {
-  (((h << 5) | (h >> 59)) ^ w) * 0x9E3779B97F4A7C15
-}
+  fn(inline) mix-word(h: u64, w: u64): u64 {
+    (((h << 5) | (h >> 59)) ^ w) * 0x9E3779B97F4A7C15
+  }
 
-impl hash for string {
-  fn hash(self): u64 {
-    let bytes = self.span-bytes()
+  fn bytes(bytes: span[u8]): u64 {
     let p = bytes.data-ptr()
     let len = bytes.len()
     let h: u64 = 0xcbf29ce484222325 ^ len.unsigned()
@@ -56,21 +55,30 @@ impl hash for string {
     }
     fmix64(h)
   }
+
+  fn fnv1a(bytes: span[u8]): u64 {
+    let h: u64 = 0xcbf29ce484222325
+    for b in bytes { h = (h ^ b.widen[u64]) * 0x100000001b3 }
+    h
+  }
 }
 
-impl hash for u8   { fn hash(self): u64 { fmix64(self.widen[u64]) } }
-impl hash for u16  { fn hash(self): u64 { fmix64(self.widen[u64]) } }
-impl hash for u32  { fn hash(self): u64 { fmix64(self.widen[u64]) } }
-impl hash for u64  { fn hash(self): u64 { fmix64(self) } }
-impl hash for i8   { fn hash(self): u64 { fmix64(self.widen[i64].unsigned()) } }
-impl hash for i16  { fn hash(self): u64 { fmix64(self.widen[i64].unsigned()) } }
-impl hash for i32  { fn hash(self): u64 { fmix64(self.widen[i64].unsigned()) } }
-impl hash for i64  { fn hash(self): u64 { fmix64(self.unsigned()) } }
-impl hash for char { fn hash(self): u64 { fmix64(self.as-u8().widen[u64]) } }
+impl hash for string { fn hash(self): u64 { hash/bytes(self.span-bytes()) } }
+impl hash for span[u8] { fn hash(self): u64 { hash/bytes(self) } }
+
+impl hash for u8   { fn hash(self): u64 { hash/fmix64(self.widen[u64]) } }
+impl hash for u16  { fn hash(self): u64 { hash/fmix64(self.widen[u64]) } }
+impl hash for u32  { fn hash(self): u64 { hash/fmix64(self.widen[u64]) } }
+impl hash for u64  { fn hash(self): u64 { hash/fmix64(self) } }
+impl hash for i8   { fn hash(self): u64 { hash/fmix64(self.widen[i64].unsigned()) } }
+impl hash for i16  { fn hash(self): u64 { hash/fmix64(self.widen[i64].unsigned()) } }
+impl hash for i32  { fn hash(self): u64 { hash/fmix64(self.widen[i64].unsigned()) } }
+impl hash for i64  { fn hash(self): u64 { hash/fmix64(self.unsigned()) } }
+impl hash for char { fn hash(self): u64 { hash/fmix64(self.as-u8().widen[u64]) } }
 impl hash for bool {
   fn hash(self): u64 {
     let v: u64 = if self 1 else 0
-    fmix64(v)
+    hash/fmix64(v)
   }
 }
 

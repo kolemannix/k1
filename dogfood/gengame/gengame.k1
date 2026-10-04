@@ -870,13 +870,13 @@ fn try-add(context g: *game)(t: token) {
   let row = row-of(g.active)
   if row.len() >= MAX-ROW-TOKENS { return }
   if t is :mir and sel-closed(row).is-some() {
-    let _ = wrap-sel(row, :mir)
+    wrap-sel(row, :mir)
     return
   }
   let callo-ok = cur-level().syms.contains('_') or level-recursive(cur-level())
   if t is :name(d) and callo-ok {
     if sel-closed(row).is-some() {
-      let _ = wrap-sel(row, :callo(d))
+      wrap-sel(row, :callo(d))
       return
     }
     if seal-call(row, d) { return }
@@ -902,7 +902,7 @@ fn scale-row(context g: *game)(n: u8) {
 
 fn scale-row-apply(context g: *game)(row: *list[token], n: u8) {
   if sel-closed(row).is-some() {
-    let _ = wrap-sel(row, :rep(n))
+    wrap-sel(row, :rep(n))
     return
   }
   let depth: size = 0
@@ -1925,8 +1925,8 @@ fn self-test(context g: *game)() {
       :clr -> .{}
     }
   }
-  let _ = expand-player(4)
-  let _ = score-of()
+  expand-player(4)
+  score-of()
   load-level(0)
   try-add(:sym(0))
   scale-row(5)

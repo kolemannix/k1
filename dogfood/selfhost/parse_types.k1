@@ -239,7 +239,7 @@ ns for parser {
     }
     if first.kind is :dot {
       let dot-token = self.next-tok()
-      let _ = self.expect-kind(:open-brace).try
+      self.expect-kind(:open-brace).try
       let fields = list/empty[ast/struct-pattern-field]()
       while not self.peek().kind.eq(:close-brace) {
         let ident-token = self.expect-kind(:ident).try
@@ -265,7 +265,7 @@ ns for parser {
       let sum-name: ?ast/string-id = if first.kind is :ident {
         self.advance()
         let sn = self.make-ident(first)
-        let _ = self.expect-kind(:colon).try
+        self.expect-kind(:colon).try
         :some(sn)
       } else {
         self.advance()
@@ -296,12 +296,12 @@ ns for parser {
         return :ok(self.program.add-pattern(:wildcard(it.tok.span())))
       }
       if ident-str == "type" {
-        let _ = self.expect-kind(:open-bracket).try
+        self.expect-kind(:open-bracket).try
         let type-expr = self.expect-type-expression().try
-        let _ = self.expect-kind(:close-bracket).try
-        let _ = self.expect-kind(:open-paren).try
+        self.expect-kind(:close-bracket).try
+        self.expect-kind(:open-paren).try
         let inner = self.expect-parse-pattern().try
-        let _ = self.expect-kind(:close-paren).try
+        self.expect-kind(:close-paren).try
         let span = self.extend-tok-to-here(it.tok)
         return :ok(self.program.add-pattern(:type-pat(.{ inner, type-expr, span })))
       }
@@ -413,7 +413,7 @@ ns for parser {
     if first.kind is :open-paren {
       self.advance()
       let expr = self.expect-type-expression().try
-      let _ = self.expect-kind(:close-paren).try
+      self.expect-kind(:close-paren).try
       return :ok(:some(expr))
     }
     if first.kind is :asterisk {
@@ -429,7 +429,7 @@ ns for parser {
         else :packed
       self.advance()
       if not (kind is :struct) {
-        let _ = self.expect-kind(:open-brace).try
+        self.expect-kind(:open-brace).try
       }
       let fields = list/empty[ast/struct-type-field]()
       self.eat-delimited("Struct fields", fields.&, :comma, :close-brace, fn(p: *parser) p.expect-struct-type-field()).try
@@ -451,7 +451,7 @@ ns for parser {
     }
     if first.kind is :hash {
       self.advance()
-      let _ = self.expect-ident-chars("type").try
+      self.expect-ident-chars("type").try
       let body = self.expect-expression().try
       let span = self.extend-tok-to-here(first)
       return :ok(:some(self.program.add-type-expr(:exec-static(.{ body-expr = body, span }))))
@@ -469,7 +469,7 @@ ns for parser {
       }
       if first-chars == "type-of" {
         self.advance()
-        let _ = self.expect-kind(:open-paren).try
+        self.expect-kind(:open-paren).try
         let target = self.expect-expression().try
         let end = self.expect-kind(:close-paren).try
         let span = first.span().thru(end.span())
@@ -511,7 +511,7 @@ ns for parser {
     let two = self.peek-at(1)
     let name: ?ast/string-id = if one.kind is :ident and two.kind is :equals {
       let it = self.expect-ident().try
-      let _ = self.expect-kind(:equals).try
+      self.expect-kind(:equals).try
       :some(it.name)
     } else :none
     let peeked = self.peek()
@@ -547,11 +547,11 @@ ns for parser {
           self.advance()
           break
         }
-        let _ = self.expect-kind(:comma).try
+        self.expect-kind(:comma).try
       }
     }
     if has-open-paren {
-      let _ = self.expect-kind(:r-thin-arrow).try
+      self.expect-kind(:r-thin-arrow).try
     }
     let return-type = self.expect-type-expression().try
     let span = start.span().thru(self.program.get-type-expr-span(return-type))
@@ -564,13 +564,13 @@ ns for parser {
     let tag-type: ?ast/type-expr-id = if self.maybe-consume-no-ws(:open-paren) is :some _ {
       let t = self.expect-type-expression().try
       if self.maybe-consume(:comma) is :some _ {
-        let _ = self.expect-ident-chars("partial").try
+        self.expect-ident-chars("partial").try
         partial = true
       }
-      let _ = self.expect-kind(:close-paren).try
+      self.expect-kind(:close-paren).try
       :some(t)
     } else :none
-    let _ = self.expect-kind(:open-brace).try
+    self.expect-kind(:open-brace).try
     let variants = list/empty[ast/sum-variant]()
     self.eat-delimited("either members", variants.&, :comma, :close-brace, fn(p: *parser) p.expect-sum-variant()).try
     let span = self.extend-tok-to-here(keyword.tok)
@@ -581,7 +581,7 @@ ns for parser {
     let it = self.expect-ident().try
     let payload: ?ast/type-expr-id = if self.maybe-consume(:open-paren) is :some _ {
       let p = self.expect-type-expression().try
-      let _ = self.expect-kind(:close-paren).try
+      self.expect-kind(:close-paren).try
       :some(p)
     } else :none
     let explicit-value: ?ast/numeric-lit = if self.maybe-consume(:equals) is :some _ {

@@ -34,25 +34,25 @@ fn test() {
   let x = identity(12)
   assert(x == 12)
 
-  let _ = identity(identity([])): list[bool]
+  identity(identity([])): list[bool]
 
   assert(identity-nested(4) == 4)
   assert(identity-nested(true))
   assert(identity-nested(.{ value = 42 }).value == 42)
 
-  let _ = identity(true): bool
-  let _ = identity(true)
-  let _ = identity(true): bool
-  let _ = identity(identity(12))
+  identity(true): bool
+  identity(true)
+  identity(true): bool
+  identity(identity(12))
   let _ = some(identity(13))
 
-  let _ = get(some(10)): u32
-  let _ = combine(identity(4000), get(some(5000))): u32
-  let _ = combine(identity(8000), identity(get(some(9000)))): u32
+  get(some(10)): u32
+  combine(identity(4000), get(some(5000))): u32
+  combine(identity(8000), identity(get(some(9000)))): u32
 
   assert-equals(get-or-else(some(1000), -1), 1000)
 
-  let _ = occurs-check-test(42)
+  occurs-check-test(42)
 
   assert(first-u(0.until(3), first-u(5.until(9), 0)) is :some(0))
 

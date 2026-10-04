@@ -136,7 +136,7 @@ ns for emitter {
   }
 
   fn block(self: *emitter, raw: bool, spaced: bool) {
-    let _ = self.cur.expect("{")
+    self.cur.expect("{")
     self.lead = if spaced :space else :trim
     self.nodes(in-block = true, raw)
     self.flush()
@@ -299,7 +299,7 @@ ns for emitter {
     if self.cur.is-at-end() slash.fail("Expected </$name>")
     let close-name = self.cur.eat()
     if close-name.text != name close-name.fail("</${close-name.text}> does not close <$name>")
-    let _ = self.cur.expect(">")
+    self.cur.expect(">")
     self.text("</$name>")
     self.after-text = false
   }

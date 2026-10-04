@@ -1079,7 +1079,7 @@ impl equals for char {
   fn(intern) not-equals(self: char, other: char): bool
 }
 
-fn discard[t](_t: t): empty {}
+fn(intern) discard[t](_t: t): empty
 fn(cold) enum-unknown-name[v: print](type-name: string, value: v): string { "${type-name}(${value})" }
 fn phony[t](): t { crash("phony") }
 

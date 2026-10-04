@@ -113,7 +113,7 @@ fn(noinline) bench-mem-new(a: *core/arena, ROUNDS: int, PER_ROUND: int): u64 {
     }
     a.reset()
   }
-  let _ = mem/pop-arena()
+  mem/pop-arena()
   sink
 }
 

@@ -179,7 +179,7 @@ fn error-response(e: routing/route-error): http-response {
 }
 
 fn home-page(): http-response {
-  let styles = core/files/read-to-string("web/styles.css")
+  let styles = core/files/read-to-string("web/styles.css").!
   response/html(html/render(\{
     <!DOCTYPE html>
     <html lang="en">

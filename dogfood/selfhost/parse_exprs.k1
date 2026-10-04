@@ -133,15 +133,15 @@ ns for parser {
   }
 
   fn expect-index-postfix(self: *parser, base: ast/expr-id): result[ast/expr-id, perror] {
-    let _ = self.expect-kind(:open-bracket).try
+    self.expect-kind(:open-bracket).try
     let key = self.expect-expression().try
-    let _ = self.expect-kind(:close-bracket).try
+    self.expect-kind(:close-bracket).try
     let span = self.extend-to-here(self.expr-span(base))
     :ok(self.add-expr(:index(.{ base, key, span })))
   }
 
   fn expect-match-arms(self: *parser, subject: ast/expr-id, is-static: bool): result[ast/expr-id, perror] {
-    let _ = self.expect-kind(:open-brace).try
+    self.expect-kind(:open-brace).try
     let cases = list/empty[ast/match-case]()
     while not self.peek().kind.eq(:close-brace) {
       let arm-patterns = list/empty[ast/pattern-id]()
@@ -152,7 +152,7 @@ ns for parser {
       let guard: ?ast/expr-id = if self.maybe-consume(:kw-if) is :some _ {
         :some(self.expect-expression().try)
       } else :none
-      let _ = self.expect-kind(:r-thin-arrow).try
+      self.expect-kind(:r-thin-arrow).try
       let arm-expr = self.expect-expression().try
       cases.push(.{ patterns = arm-patterns, guard, expr = arm-expr })
       let next = self.peek()
@@ -277,7 +277,7 @@ ns for parser {
         let after = self.peek()
         let terminates = after.kind is :close-paren or after.kind is :r-thin-arrow or after.kind is :dot
         if not terminates {
-          let _ = self.expect-kind(:comma).try
+          self.expect-kind(:comma).try
         }
       } else {
         return :err(make-error("Expected a comma, thin arrow, or close paren", next))
@@ -304,8 +304,8 @@ ns for parser {
     let is-context = second.kind is :kw-context
     let args = list/empty[ast/call-arg]()
     if is-context {
-      let _ = self.expect-kind(:open-paren).try
-      let _ = self.expect-kind(:kw-context).try
+      self.expect-kind(:open-paren).try
+      self.expect-kind(:kw-context).try
       self.eat-delimited("Function context arguments", args.&, :comma, :close-paren, fn(p: *parser) p.expect-fn-arg(true)).try
     }
     let open-tok = self.expect-kind(:open-paren).try
@@ -319,7 +319,7 @@ ns for parser {
     if self.peek().is-newline-preceded() { return :ok(:none) }
     if self.maybe-consume(:open-paren) is :some _ {
       let payload = self.expect-expression().try
-      let _ = self.expect-kind(:close-paren).try
+      self.expect-kind(:close-paren).try
       :ok(:some(payload))
     } else if self.peek-starts-quiet-payload() {
       :ok(:some(self.expect-expression-with-postfix-ops().try))
@@ -413,7 +413,7 @@ ns for parser {
   }
 
   fn expect-struct-value(self: *parser, dot-token: token): result[ast/struct-value, perror] {
-    let _ = self.expect-kind(:open-brace).try
+    self.expect-kind(:open-brace).try
     let fields = list/empty[ast/struct-field]()
     self.eat-delimited("Struct", fields.&, :comma, :close-brace, fn(p: *parser) p.expect-struct-field()).try
     let span = self.extend-tok-to-here(dot-token)
@@ -626,10 +626,10 @@ ns for parser {
       }
       if after-tparams.kind is :at {
         self.advance()
-        let _ = self.expect-kind(:open-paren).try
+        self.expect-kind(:open-paren).try
         let target-type = self.expect-type-expression().try
-        let _ = self.expect-kind(:close-paren).try
-        let _ = self.expect-kind(:slash).try
+        self.expect-kind(:close-paren).try
+        self.expect-kind(:slash).try
         let cit = self.expect-ident().try
         let call-type-args = self.parse-bracketed-type-args().try
         let call-args = self.expect-fn-call-args().try

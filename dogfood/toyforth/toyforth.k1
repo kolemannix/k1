@@ -36,7 +36,7 @@ fn main(argc: core/c-int, argv: ptr): i32 {
     return 1
   }
   let program-text-path = args.[1]
-  let program-text = core/files/read-to-string(program-text-path)
+  let program-text = core/files/read-to-string(program-text-path).!
 
   let program = compile(program-text-path)
 

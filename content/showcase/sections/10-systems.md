@@ -424,7 +424,7 @@ fn module(_b: k1/build-config): k1/module {
     emit-int-table(w.&, cf2, "kInsertOffset", "k-insert-offset", "u32", 0, 12)
     emit-float-table(w.&, fl, "kBrotliLog2Table", "k-log2-table", 6)
 
-    files/write-entire-file("tables.k1", w.build())
+    files/write-entire-file("tables.k1", w.build()).!
 ```
 
 `modules/libuv` builds libuv with cmake and then runs `k1bindgen` to

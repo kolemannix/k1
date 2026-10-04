@@ -1,0 +1,32 @@
+ns files_test
+
+fn test() {
+  let dir = "/tmp/k1-files-test-${std/time/unix-nanos()}"
+  files/make-dir(dir).!
+  assert(files/make-dir(dir) is :err(e) and e.already-exists())
+  assert-equals(files/list-dir(dir).!.len, 0)
+
+  files/write-entire-file("$dir/a.txt", "hello").!
+  assert-equals(files/read-to-string("$dir/a.txt").!, "hello")
+  assert(files/read-to-string("$dir/missing") is :err(e) and e.not-found())
+  assert(files/list-dir("$dir/missing") is :err(e) and e.not-found())
+
+  files/link("$dir/a.txt", "$dir/b.txt").!
+  assert(files/link("$dir/a.txt", "$dir/b.txt") is :err(e) and e.already-exists())
+  files/rename("$dir/b.txt", "$dir/c.txt").!
+  assert(not files/exists("$dir/b.txt"))
+
+  let names = files/list-dir(dir).!
+  names.sort()
+  assert-equals(names.as-span(), ["a.txt", "c.txt"])
+
+  files/remove("$dir/a.txt").!
+  files/remove("$dir/c.txt").!
+  assert(files/remove("$dir/c.txt") is :err(e) and e.not-found())
+  files/remove-dir(dir).!
+  assert(not files/exists(dir))
+  if files/remove-dir(dir) is :err(e) {
+    assert(e.path == dir)
+    assert("$e".starts-with("`$dir`: "))
+  } else crash("removed a missing dir")
+}

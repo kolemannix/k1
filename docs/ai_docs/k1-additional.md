@@ -682,7 +682,7 @@ Bitwise binds above comparisons (Rust/Zig, not C): `a & b == c` is
   counts are taken modulo the width (`1u64 << 64` is `1`), and `/ %` crash on
   a zero divisor and on `min-value / -1`. Checked or trapping arithmetic is
   library code, not a mode.
-- Hex, binary, and underscore numeric literals.
+- Hex (`0xff`), octal (`0o755`), binary (`0b1010`), and underscore numeric literals.
 - Integer suffixes such as `255u8`, `-128i8`, and `3u64`.
 
 See `test_src/suite1/arith.k1`, `test_src/suite1/bits_test.k1`, and
@@ -815,6 +815,23 @@ the call site — to dispatch over a runtime ordering, match on it, as
 `atomic/cell[t]` (the plain-K1 wrapper type in the same file) does.
 
 See `test_src/suite1/atomics.k1` and `test_src/atomic_threads.k1`.
+
+## Files, hashing and time
+
+Core `files` returns `result[_, files/error]` (`{ code, path }`, prints as
+`` `path`: strerror ``, with `e.not-found()` and `e.already-exists()`):
+`read-to-string`, `write-entire-file`, `list-dir` (names, no `.`/`..`),
+`make-dir`, `link` (fails if the target exists), `rename`, `remove`,
+`remove-dir`; `exists` is a plain bool. `.!` crashes with the error. They run
+in `#static` too, so compile-time code can list a directory. posix only.
+
+`use std/hash` brings the `hash` ability and its namespace. `string` and
+`span[u8]` hash through `hash/bytes`, an FxHash-style word-at-a-time hash
+finished with `hash/fmix64`: fast, unseeded, not stable across versions.
+`hash/fnv1a(bytes)` is the stable one, for checksums and file formats.
+
+`std/time/unix-nanos()` and `unix-seconds()` read the wall clock;
+`read-cpu-counter()` with `elapsed-nanos`/`elapsed-ms` is the monotonic one.
 
 ## JSON
 

@@ -2635,7 +2635,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
         let mut number_len = text.len();
         for (index, b) in text.bytes().enumerate() {
-            if !(b.is_ascii_hexdigit() || b == b'_' || b == b'x') {
+            if !(b.is_ascii_hexdigit() || b == b'_' || b == b'x' || b == b'o') {
                 number_len = index;
                 break;
             }
@@ -2662,6 +2662,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
         let (base, base_name, digits) = if let Some(digits) = number.strip_prefix("0x") {
             (16, "hex", digits)
+        } else if let Some(digits) = number.strip_prefix("0o") {
+            (8, "octal", digits)
         } else if let Some(digits) = number.strip_prefix("0b") {
             (2, "binary", digits)
         } else {
@@ -2915,7 +2917,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 Ok(FmtSpec::parse(&self.token_chars(token)[1..]))
             }
             K::Colon => Err(self.error(
-                "Invalid format spec; expected ${value:[[fill]align][0][width][.precision]}",
+                "Invalid format spec; expected ${value:[[fill]align][0][width][,][.precision]}",
                 token,
             )),
             _ => Ok(None),

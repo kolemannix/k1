@@ -88,8 +88,8 @@ ns process {
       },
       :drop -> {
         if core/platform/io/open-to-write("/dev/null") is {
-          :some(h) -> h.raw,
-          :none -> return :err :spawn .{ program = program, message = "open /dev/null failed" }
+          :ok(h) -> h.raw,
+          :err(_) -> return :err :spawn .{ program = program, message = "open /dev/null failed" }
         }
       }
     }

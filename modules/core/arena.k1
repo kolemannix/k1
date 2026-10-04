@@ -94,7 +94,7 @@ ns for arena {
   }
 
   fn release(self: *arena) {
-    let _ = self._drop-chunks-to(ptr/null)
+    self._drop-chunks-to(ptr/null)
     platform/memory/release(self.first-region())
   }
 
