@@ -10,7 +10,7 @@ fn test() {
   // If you have a buffer already, or any writer at all, you can 'write' to it formatted
   w.write("hello $world -- ")
   w.write("hello $world ${}", 42)
-  assert-equals(w.build-tmp(), "hello Budapest -- hello Budapest 42")
+  assert-equals(w.build(), "hello Budapest -- hello Budapest 42")
   assert-equals("true", "${}".fmt(true))
   assert-equals("-3.14", "${}".fmt(-3.14))
   assert-equals("-3", "${}".fmt(-3i8))
@@ -140,7 +140,7 @@ fn specs() {
 
   let w = string-builder/new()
   w.write("[${:<4}]", 7)
-  assert-equals(w.build-tmp(), "[7   ]")
+  assert-equals(w.build(), "[7   ]")
 
   assert(test-compile("${n:.2}").is-some())
 }

@@ -22,8 +22,8 @@ fn main(argc: i32, argv: ptr): i32 {
     drain-timeout-ms = 5000,
     handle-signals = true,
   }
-  let server = server/start[app/deps](config, app/make-deps.&, app/handle.&).!
-  app/spawn-tick-publisher-thread(server.framework.bus)
+  let server = server/start(config, app/handle.to-dyn()).!
+  app/spawn-tick-publisher-thread(server.services.bus)
   eprintln("listening on ${server.port}...")
   server/run(server)
   0

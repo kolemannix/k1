@@ -924,7 +924,8 @@ See `test_src/suite1/static_run.k1`,
 ## Formatting And Strings
 
 String interpolation is supported inside string literals and formatting helpers.
-A hole is `$ident` for a bare identifier, or `${expr}` for any expression:
+A hole is `$ident` for a bare identifier, or `${expr}` for any expression. The
+resulting string is allocated in the ambient arena, like any bare operation:
 
 ```rust
 let name = "k1"

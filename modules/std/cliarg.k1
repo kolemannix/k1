@@ -27,7 +27,7 @@ fn gen-help-text[t](summary: string): string {
       :list-string -> sb.writeln(`  -${it.name} - list. (/-${it.name} to comment out)`),
     }
   }
-  sb.build-tmp()
+  sb.take()
 }
 
 // For each field in the target type, a local variable to house its parsed data

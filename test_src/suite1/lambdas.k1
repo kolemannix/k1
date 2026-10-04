@@ -164,7 +164,33 @@ fn test() {
   escape-list-test()
   arena-mode-test()
   static-closure-test()
+  aggregate-then-scalar-test()
   .{}
+}
+
+type agg-arg = { a: u64, b: u64, c: u64, d: u64, e: u64 }
+type agg-svc = { x: u64, y: u64 }
+type agg-holder = { call: dyn[fn(agg-arg, *agg-svc) -> u64], svc: *agg-svc }
+
+fn sum-agg(req: agg-arg, s: *agg-svc): u64 { req.a + req.e + s.x + s.y }
+
+fn forward-agg(inner: dyn[fn(agg-arg, *agg-svc) -> u64]): dyn[fn(agg-arg, *agg-svc) -> u64] {
+  (fn[inner](req: agg-arg, s: *agg-svc) inner(req, s)).to-dyn()
+}
+
+fn aggregate-then-scalar-test() {
+  let svc: agg-svc = .{ x = 3, y = 4 }
+  let s = svc.&
+  let req: agg-arg = .{ a = 1, b = 0, c = 0, d = 0, e = 2 }
+  let named = sum-agg.to-dyn()
+  assert-equals(named(req, s), 10)
+  let k: u64 = 100
+  let closure = fn[k](req: agg-arg, s: *agg-svc) req.a + req.e + s.x + s.y + k
+  assert-equals(closure(req, s), 110)
+  assert-equals(closure.to-dyn()(req, s), 110)
+  let holder: agg-holder = .{ call = named, svc = s }
+  assert-equals((holder.call)(req, holder.svc), 10)
+  assert-equals(forward-agg(named)(req, s), 10)
 }
 
 // Returning as dyn allocates the env in the ambient allocator, so the object

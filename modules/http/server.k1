@@ -23,7 +23,7 @@ type config = {
   handle-signals: bool,
 }
 
-type framework-deps = {
+type services = {
   *uv-loop,
   bus: *pubsub/bus[span[u8]],
 }
@@ -31,40 +31,43 @@ type framework-deps = {
 type server = {
   config,
   *uv-loop,
-  framework: *framework-deps,
+  services: *services,
   listener: uv/tcp,
   sigint: uv/signal,
   sigterm: uv/signal,
   drain-timer: uv/timer,
+  scratch: *arena,
+  scratch-prepare: uv/prepare,
   port: u16,
-  handle: *fn(http/request, ptr) -> http-response,
-  make-deps: *fn(*framework-deps) -> ptr,
+  handle: dyn[fn(http/request, *services) -> http-response],
   connections: list[*connection],
   draining: bool,
   conn-serial: u64,
 }
 
-fn start[deps](
+fn start(
   config: config,
-  make-deps: *fn(*framework-deps) -> *deps,
-  handle: *fn(http/request, *deps) -> http-response
+  handle: dyn[fn(http/request, *services) -> http-response]
 ): result[*server, uv/errno] {
   let l = uv/default_loop().get()
   uv/thread_setname("mainthread\0".data-ref-byte())
   work/init-work-queue(l)
-  let framework = framework-init(l)
+  let services = init-services(l)
+  let scratch = core/arena/init-default()
+  scratch.set-name("loop-scratch")
 
   let s: *server = heap.new(.{
     config,
     uv-loop = l,
-    framework,
+    services,
     listener = uninit,
     sigint = uninit,
     sigterm = uninit,
     drain-timer = uninit,
+    scratch,
+    scratch-prepare = uninit,
     port = config.port,
-    handle = handle.narrow[*fn(http/request, ptr) -> http-response],
-    make-deps = make-deps.as[*fn(*framework-deps) -> ptr],
+    handle,
     connections = list/empty(),
     draining = false,
     conn-serial = 0,
@@ -84,6 +87,11 @@ fn start[deps](
     s.port = ((bound.sin_port & 0xff) << 8) | (bound.sin_port >> 8)
   }
 
+  uv/check(uv/prepare_init(l, s.scratch-prepare.&)).!
+  s.scratch-prepare.&.set-data(s)
+  uv/check(uv/prepare_start(s.scratch-prepare.&, fn p. p.get-data[server]().scratch.reset())).!
+  uv/unref(s.scratch-prepare.&.as-handle())
+
   if config.handle-signals {
     install-signal(s, s.sigint.&, 2)
     install-signal(s, s.sigterm.&, 15)
@@ -98,7 +106,11 @@ fn install-signal(s: *server, handle: *uv/signal, signum: i32) {
 }
 
 fn run(s: *server) {
+  let outer-tmp = mem/tmp()
+  mem/set-tmp-arena(s.scratch)
   let _ = uv/run(s.uv-loop, :UV_RUN_DEFAULT)
+  mem/set-tmp-arena(outer-tmp)
+  s.scratch.release()
 }
 
 fn stop(s: *server) {
@@ -106,6 +118,7 @@ fn stop(s: *server) {
   s.draining = true
   tprintln("server stopping; draining ${s.connections.len()} connections")
   uv/close(s.listener.&.as-handle(), fn _h. .{})
+  uv/close(s.scratch-prepare.&.as-handle(), fn _h. .{})
   if s.config.handle-signals {
     uv/close(s.sigint.&.as-handle(), fn _h. .{})
     uv/close(s.sigterm.&.as-handle(), fn _h. .{})
@@ -143,7 +156,7 @@ fn on-connection-closed(s: *server) {
 
 // The bus is loop-agnostic: publishes fire a notify that pokes a uv_async,
 // whose main-thread callback drives bus.dispatch().
-fn framework-init(uv-loop: *uv-loop): *framework-deps {
+fn init-services(uv-loop: *uv-loop): *services {
   let async-handle = heap.alloc-t[uv/async]
   // Fail a subscriber once 1MB of payload is queued and undelivered: a
   // client that isn't draining its socket would otherwise grow it forever
@@ -353,26 +366,27 @@ type http-handler-work = {
   ?http-response,
 }
 
-let(mutable, tls) worker-user-data: ptr = ptr/null
+let(mutable, tls) worker-scratch: ptr = ptr/null
 
 fn do-work(req: *uv/work) {
-  // this is a good time to clear our thread-local temporary allocator
-  mem/tmp().reset()
-
   let work: *http-handler-work = req.get-data()
+  if worker-scratch.is-null() {
+    let scratch = core/arena/init-default()
+    scratch.set-name("worker-scratch")
+    worker-scratch = scratch.as[ptr]
+    mem/set-tmp-arena(scratch)
+  }
+  worker-scratch.ref[arena].reset()
+
   let close-state = work.connection.get-close-state-sync()
   if close-state.is-closing or close-state.should-close {
     tprintln("connection closing; skipping handler")
     return
   }
 
-  if worker-user-data.is-null() {
-    worker-user-data = (work.connection.server.make-deps)(work.connection.server.framework)
-  }
-
   let response = mem/with-arena(
     work.connection.request-arena,
-    (work.connection.server.handle)(work.request, worker-user-data)
+    (work.connection.server.handle)(work.request, work.connection.server.services)
   )
   work.http-response = :some response
   .{}
@@ -498,7 +512,6 @@ fn on-complete-http-body(connection: *connection, chunks: span[span[u8]]) {
 }
 
 fn on-new-connection(listener: *uv/stream, status: i32) {
-  mem/tmp().reset()
   if status < 0 {
     tprintln("new connection error: ${uv/errno/from-i32(status)}")
     return

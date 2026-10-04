@@ -4,10 +4,8 @@ use libuv/uv-handle
 use libuv/uv-stream
 use http/http-response
 use http/response
-use http/routing
-use http/llhttp
 use http/server
-use http/server/framework-deps
+use http/server/services
 use http/datastar
 use http/pair
 use http/pairs
@@ -31,7 +29,7 @@ $http/pre/routing/define(route, {
 })
 
 fn test-routing() {
-  let th = fn(method: llhttp/method, url: string) { route/parse(http/header/make(method, url)) }
+  let th = fn(method: http/llhttp/method, url: string) { route/parse(http/header/make(method, url)) }
 
   assert(route/url-string(:home) == "/")
   assert(route/url-string(:game-poke .{ id = 42 }) == "/game/42/poke")
@@ -102,14 +100,11 @@ fn test-parsers() {
   assert(plain.query().is-empty())
 }
 
-type deps = { *framework-deps }
-fn make-deps(framework: *framework-deps): *deps { heap.new(.{ framework-deps = framework }) }
-
-fn handle(req: http/request, deps: *deps): http-response {
+fn handle(req: http/request, services: *services): http-response {
   let url = req.header.url
   if url == "/hello" response/text("hi")
   else if url == "/slow" { uv/sleep(300); response/text("slow-done") }
-  else if url == "/events" datastar/patch-signals(deps.framework-deps.bus.subscribe("t") || rc-byte-stream)
+  else if url == "/events" datastar/patch-signals(services.bus.subscribe("t") || rc-byte-stream)
   else response/not-found()
 }
 
@@ -173,6 +168,7 @@ fn on-read(stream: *uv/stream, nread: size, buf: *uv/buf) {
 }
 
 let(mutable) srv: ptr = ptr/null
+let(mutable) startup-state: string = ""
 let(mutable) phase1-done: u32 = 0
 let(mutable) slowloris-cut: bool = false
 let(mutable) hello-idle-cut: bool = false
@@ -200,6 +196,7 @@ fn on-hello-eof(c: *client) {
 }
 
 fn phase2() {
+  assert(startup-state == "startup-lifetime")
   client/start(get-server().port, "GET /events HTTP/1.1\r\nHost: x\r\n\r\n", fn c. {
     let t = c.text()
     assert(t.starts-with("HTTP/1.1 200 OK\r\n"))
@@ -226,12 +223,14 @@ fn test-server() {
     header-timeout-ms = 200, body-timeout-ms = 30000, write-timeout-ms = 30000,
     idle-timeout-ms = 300, drain-timeout-ms = 3000, handle-signals = false,
   }
-  let s = server/start[deps](config, make-deps.&, handle.&).!
+  startup-state = "startup-lifetime".cloned()
+  let s = server/start(config, handle.to-dyn()).!
   srv = s.as[ptr]
   assert(s.port != 0)
   client/start(s.port, "GET / HTTP/1.1\r\nHost: x\r\n", on-slowloris-eof.&)
   client/start(s.port, "GET /hello HTTP/1.1\r\nHost: x\r\n\r\n", on-hello-eof.&)
   server/run(s)
+  assert(startup-state == "startup-lifetime")
   assert(slowloris-cut)
   assert(hello-idle-cut)
   assert(events-cut)

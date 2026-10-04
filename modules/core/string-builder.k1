@@ -16,8 +16,10 @@ ns for string-builder {
     string/wrap-bytes(self.list.as-span()).cloned()
   }
 
-  fn build-tmp(self: *string-builder): string {
-    string/wrap-bytes(self.list.as-span()).cloned-in(mem/tmp())
+  fn take(self: *string-builder): string {
+    let taken = string/wrap-bytes(self.list.as-span())
+    self.list = list/empty()
+    taken
   }
 }
 

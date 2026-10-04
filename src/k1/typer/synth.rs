@@ -964,18 +964,17 @@ impl TypedProgram {
             ctx,
         )?;
         self.push_block_expr_id(&mut block, format_block);
-        let build_call = self.synth_typed_call_typed_args(
-            self.ast.idents.f.StringBuilder_build_tmp.with_span(span),
+        let take_call = self.synth_typed_call_typed_args(
+            self.ast.idents.f.StringBuilder_take.with_span(span),
             &[],
             &[string_builder_expr],
             ctx_for_calls,
             false,
         )?;
-        self.push_block_expr_id(&mut block, build_call);
+        self.push_block_expr_id(&mut block, take_call);
 
-        // build_call_type should definitely be string
-        let build_call_type = self.exprs.get_type(build_call);
-        Ok(self.exprs.add_block(block, build_call_type))
+        let string_type = self.exprs.get_type(take_call);
+        Ok(self.exprs.add_block(block, string_type))
     }
 
     fn expr_type_is_code(&self, expr: TypedExprId) -> bool {

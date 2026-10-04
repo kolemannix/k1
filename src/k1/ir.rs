@@ -2500,14 +2500,16 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
             if let Some(environment_arg) = environment_arg {
                 args.push(environment_arg)
             }
+            let env_param_count = environment_arg.iter().count();
 
-            for (original_index, arg) in b.k1.mem.getn(call.args).iter().enumerate() {
+            for (arg_index, arg) in b.k1.mem.getn(call.args).iter().enumerate() {
+                let param_index = (arg_index + env_param_count) as u16;
                 let phys_param =
                     b.k1.ir
                         .mem
                         .getn(callee_fn_type.params)
                         .iter()
-                        .find(|p| p.original_index == Some(original_index as u16))
+                        .find(|p| p.original_index == Some(param_index))
                         .copied();
 
                 let value = match phys_param {

@@ -1,4 +1,3 @@
-// FIXME Human review of promote.rs
 use super::*;
 
 const MAX_SLOTS_PER_ALLOCA: usize = 64;

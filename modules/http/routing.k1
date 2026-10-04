@@ -161,7 +161,7 @@ fn emit-leaf-body(cb: *code-builder, en: entry, d: size) {
       :parsed -> cb.line(`require from-string@(${c.ty})/from-string(sd${c.idx}) is :ok ${c.name} else { return :err :bad-param .{ pattern = ${str-lit(pat)}, name = ${str-lit(c.name)}, ty = ${str-lit(c.ty)}, got = sd${c.idx} } }`),
       :str -> cb.line("let ${c.name} = sd${c.idx}"),
       :rest -> {
-        cb.line(`let rest-raw = if (not sp.more) and sp.count == $d "" else routing/tail-from(path, segs.[$d])`)
+        cb.line(`let rest-raw = if (not sp.more) and sp.count == $d "" else http/routing/tail-from(path, segs.[$d])`)
         cb.line(`require http/percent/decode(rest-raw, plus-is-space = false) is :some ${c.name} else { return :err :bad-encoding .{ segment = rest-raw } }`)
       },
     }
@@ -183,9 +183,9 @@ fn emit-leafs(cb: *code-builder, entries: span[entry], idxs: list[size], d: size
   }
   for gi in idxs {
     let en = entries.[gi]
-    let cond = "header.method == llhttp/method:${en.method.enum-name().to-ascii-upper()}"
+    let cond = "header.method == http/llhttp/method:${en.method.enum-name().to-ascii-upper()}"
     if en.method is :get and not head-present {
-      cond = "$cond or header.method == llhttp/method:HEAD"
+      cond = "$cond or header.method == http/llhttp/method:HEAD"
     }
     cb.block("if $cond", fn[cb, entries, gi, d]. emit-leaf-body(cb, entries.[gi], d))
   }
@@ -265,12 +265,12 @@ fn emit-node(cb: *code-builder, entries: span[entry], group: list[size], d: size
 fn emit-parse-fn(cb: *code-builder, base: string, entries: span[entry]) {
   // Captures in the parsed route are views into the url's memory (the request
   // arena): a route value must not outlive its request
-  cb.block("fn parse(header: http/header): result[$base, routing/route-error]", fn[cb, entries]. {
+  cb.block("fn parse(header: http/header): result[$base, http/routing/route-error]", fn[cb, entries]. {
     cb.line(`let url = header.url`)
     cb.line(`if url.is-empty() or url.[0] != '/' { return :err :not-found }`)
     cb.line(`let path = if url.position('?') is :some qi url.take(qi) else url`)
     cb.line(`let segs = array/zeroed[string, 16]()`)
-    cb.line(`let sp = routing/split-path(path, segs.&)`)
+    cb.line(`let sp = http/routing/split-path(path, segs.&)`)
     let all = list/empty[size]()
     for en in entries { all.push(it-index) }
     emit-node(cb, entries, all, 0)

@@ -4,7 +4,6 @@ use std/source
 use http/http-response
 use http/response
 use http/routing
-use http/llhttp
 use http/sse-response
 use http/sse-events
 use http/datastar
@@ -15,7 +14,7 @@ use std/owned
 use std/heap-bytes
 use std/pubsub
 use std/html
-use http/server/framework-deps
+use http/server/services
 use http/pair
 use http/pairs
 use http/cookie
@@ -28,13 +27,7 @@ type deps = {
 }
 
 let(mutable) db-path: string = "httpapp.sqlite"
-
-fn make-deps(framework: *framework-deps): *deps {
-  heap.new(app/deps.{
-    db = db/open(db-path),
-    bus = framework.bus,
-  })
-}
+let(mutable, tls) worker-deps: ptr = ptr/null
 
 type db = { conn: *sqlite3/db }
 
@@ -105,7 +98,11 @@ $http/pre/routing/define(route, {
   ]
 })
 
-fn handle(req: http/request, deps: *deps): http-response {
+fn handle(req: http/request, services: *services): http-response {
+  if worker-deps.is-null() {
+    worker-deps = heap.new(app/deps.{ db = db/open(db-path), bus = services.bus }).as[ptr]
+  }
+  let deps = worker-deps.ref[deps]
   if route/parse(req.header) is {
     :err e -> error-response(e),
     :ok r -> if r is {

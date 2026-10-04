@@ -55,6 +55,10 @@ impl uv-handle for uv/signal {
   fn as-handle(self: *self): *uv/handle { self.narrow() }
 }
 
+impl uv-handle for uv/prepare {
+  fn as-handle(self: *self): *uv/handle { self.narrow() }
+}
+
 impl uv-handle for uv/stream {
   fn as-handle(self: *self): *uv/handle { self.narrow() }
 }
