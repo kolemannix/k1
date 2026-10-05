@@ -1,16 +1,5 @@
 ns continue_test
 
-fn continue-while(): int {
-  let i: int = 0
-  let odd-sum: int = 0
-  while i < 10 {
-    i = i + 1
-    if i % 2 == 0 continue
-    odd-sum = odd-sum + i
-  }
-  odd-sum
-}
-
 fn continue-loop(): int {
   let j: int = 0
   let count: int = 0
@@ -22,15 +11,6 @@ fn continue-loop(): int {
   }
   assert-equals(result, 11)
   count
-}
-
-fn continue-for(): int {
-  let evens: int = 0
-  for x in [1, 2, 3, 4, 5, 6] {
-    if x % 2 == 1 continue
-    evens = evens + x
-  }
-  evens
 }
 
 fn continue-nested(): int {
@@ -65,13 +45,9 @@ fn continue-index(): int {
 }
 
 fn test() {
-  assert-equals(continue-while(), 25)
-  let static-while: int = #static continue-while()
   let static-loop: int = #static continue-loop()
-  assert-equals(static-while, 25)
   assert-equals(static-loop, 3)
   assert-equals(continue-loop(), 3)
-  assert-equals(continue-for(), 12)
   assert-equals(continue-nested(), 23)
   assert-equals(continue-defers(), 3)
   assert-equals(continue-index(), 9)

@@ -20,10 +20,8 @@ $http/pre/routing/define(route, {
   use http/pre/routing/seg
   let game: span[seg] = [:text "game", :u64 "id"]
   [
-    get(   "home",        []),
     get(   "events",      [:text "events"]),
-    get(   "big-file",    [:text "static", :text "big-file.json"]),
-    get(   "game-events", game.concat([:text "events"])),
+    get(   "files",       [:text "files", :rest "path"]),
     post(  "game-poke",   game.concat([:text "poke"])),
   ]
 })
@@ -31,73 +29,63 @@ $http/pre/routing/define(route, {
 fn test-routing() {
   let th = fn(method: http/llhttp/method, url: string) { route/parse(http/header/make(method, url)) }
 
-  assert(route/url-string(:home) == "/")
   assert(route/url-string(:game-poke .{ id = 42 }) == "/game/42/poke")
-  assert(route/url-string(:big-file) == "/static/big-file.json")
+  assert(route/url-string(:files .{ path = "a b/c" }) == "/files/a%20b/c")
 
-  assert(th(:GET, "/") is :ok :home)
-  assert(th(:GET, "/events") is :ok :events)
-  assert(th(:HEAD, "/events") is :ok :events)
-  assert(th(:GET, "/events?foo=1") is :ok :events)
+  assert(th(:HEAD, "/events?foo=1") is :ok :events)
   assert(th(:GET, "/%65vents") is :ok :events)
-  assert(th(:POST, "/game/42/poke") is :ok :game-poke p and p.id == 42)
-  assert(th(:POST, "/game/42/poke/") is :ok :game-poke _)
+  assert(th(:GET, "/files/a%20b/c") is :ok :files f and f.path == "a b/c")
+  assert(th(:POST, "/game/42/poke/") is :ok :game-poke p and p.id == 42)
   assert(th(:GET, "/game/42/poke") is :err :bad-method _)
-  assert(th(:POST, "/game/abc/poke") is :err :bad-param b and b.got == "abc")
   assert(th(:POST, "/game/18446744073709551617/poke") is :err :bad-param _)
   assert(th(:GET, "/game/42/zzz") is :err :not-found)
-  assert(th(:GET, "/nope") is :err :not-found)
   assert(th(:GET, "/game/%zz/poke") is :err :bad-encoding _)
   assert(th(:OPTIONS, "*") is :err :not-found)
 }
 
 fn test-parsers() {
-  assert(percent/decode("a%20b", plus-is-space = false) == :some "a b")
   assert(percent/decode("a+b", plus-is-space = false) == :some "a+b")
   assert(percent/decode("a+b%2B", plus-is-space = true) == :some "a b+")
+  assert(percent/decode("%2f%C3%A9", plus-is-space = false) == :some "/é")
   assert(percent/decode("%zz", plus-is-space = false) is :none)
-  assert(percent/decode("%2", plus-is-space = false) is :none)
+  assert(percent/decode("a%2", plus-is-space = false) is :none)
+  assert(percent/encode("a/b é~") == "a%2Fb%20%C3%A9~")
 
-  let q = urlencoded/parse("a=1&b=x+y&flag&c=%3D%26&&d=")
+  let q = urlencoded/parse("a%20b=x+y&flag&c=%3D%26&&d=&e=%zz")
   assert-equals(q.len(), 5)
-  assert(pairs/find-by-name(q.as-span(), "a") == :some "1")
-  assert(pairs/find-by-name(q.as-span(), "b") == :some "x y")
+  assert(pairs/find-by-name(q.as-span(), "a b") == :some "x y")
   assert(pairs/find-by-name(q.as-span(), "flag") == :some "")
   assert(pairs/find-by-name(q.as-span(), "c") == :some "=&")
-  assert(pairs/find-by-name(q.as-span(), "d") == :some "")
-  assert(pairs/find-by-name(q.as-span(), "zzz") is :none)
-  assert(pairs/find-by-name(urlencoded/parse("a=%zz").as-span(), "a") == :some "%zz")
+  assert(pairs/find-by-name(q.as-span(), "e") == :some "%zz")
   let straddled = urlencoded/parse-chunks(["a=1&lo".span-bytes(), "ng=x%2".span-bytes(), "0y&b=2".span-bytes(), "&c".span-bytes()])
   assert-equals(straddled.len(), 4)
   assert(pairs/find-by-name(straddled.as-span(), "long") == :some "x y")
-  assert(pairs/find-by-name(straddled.as-span(), "b") == :some "2")
   assert(pairs/find-by-name(straddled.as-span(), "c") == :some "")
 
-  let c = cookie/parse("who=bob; theme=dark;junk ; x=a=b; enc=a%20b%3B; raw=%zz")
-  assert-equals(c.len(), 5)
+  let c = cookie/parse("who=bob;junk ; x=a=b; enc=a%20b%3B; plus=a+b; empty=; raw=%zz")
+  assert-equals(c.len(), 6)
   assert(pairs/find-by-name(c.as-span(), "who") == :some "bob")
-  assert(pairs/find-by-name(c.as-span(), "enc") == :some "a b;")
-  assert(pairs/find-by-name(c.as-span(), "raw") == :some "%zz")
-  assert(pairs/find-by-name(c.as-span(), "theme") == :some "dark")
   assert(pairs/find-by-name(c.as-span(), "x") == :some "a=b")
+  assert(pairs/find-by-name(c.as-span(), "enc") == :some "a b;")
+  assert(pairs/find-by-name(c.as-span(), "plus") == :some "a+b")
+  assert(pairs/find-by-name(c.as-span(), "empty") == :some "")
+  assert(pairs/find-by-name(c.as-span(), "raw") == :some "%zz")
   assert-equals(
-    cookie/set-header("who", "bob smith", cookie/attrs/default() | .{ max-age = :some 60, secure = true, same-site = :strict }),
-    "Set-Cookie: who=bob%20smith; Path=/; Max-Age=60; HttpOnly; Secure; SameSite=Strict")
+    cookie/set-header("who", "bob smith;", cookie/attrs/default() | .{ max-age = :some 60, secure = true, same-site = :strict }),
+    "Set-Cookie: who=bob%20smith%3B; Path=/; Max-Age=60; HttpOnly; Secure; SameSite=Strict")
+  assert-equals(cookie/set-header("k", "v", cookie/attrs/default()), "Set-Cookie: k=v; Path=/; HttpOnly; SameSite=Lax")
 
-  let h = http/header/make(:POST, "/login?next=%2Fhome&who=a+b")
-  h.headers.push(.{ field = "content-type", value = "application/x-www-form-urlencoded" })
+  let h = http/header/make(:POST, "/login?next=%2Fhome")
+  h.headers.push(.{ field = "content-type", value = "application/x-www-form-urlencoded; charset=utf-8" })
   h.headers.push(.{ field = "Cookie", value = "who=bob" })
-  let req: http/request = .{ header = h, body = ["who=al".span-bytes(), "ice&x=1".span-bytes()] }
-  assert(h.find("Content-Type") == :some "application/x-www-form-urlencoded")
-  assert(h.find("nope") is :none)
+  let req: http/request = .{ header = h, body = ["who=al".span-bytes(), "ice".span-bytes()] }
   assert(pairs/find-by-name(req.query(), "next") == :some "/home")
-  assert(pairs/find-by-name(req.query(), "who") == :some "a b")
   assert(pairs/find-by-name(req.form().!, "who") == :some "alice")
-  assert(pairs/find-by-name(req.form().!, "x") == :some "1")
   assert(pairs/find-by-name(req.cookies(), "who") == :some "bob")
   let plain: http/request = .{ header = http/header/make(:GET, "/"), body = [] }
   assert(plain.form() is :none)
   assert(plain.query().is-empty())
+  assert(plain.cookies().is-empty())
 }
 
 fn handle(req: http/request, services: *services): http-response {

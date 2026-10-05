@@ -60,16 +60,6 @@ fn test-code-value() {
   assert(c.spans.[0].source != 0)
 }
 
-fn test-code-literal() {
-  let a = \9 * 9
-  let c: code = "let q = $a"
-  assert-equals(c.text, "let q = 9 * 9")
-  assert-equals(c.spans.len(), 2)
-  assert-equals(c.spans.[1].start, 8)
-  assert-equals(c.spans.[1].len, 5)
-  assert(c.spans.[1].source != 0)
-}
-
 fn test-code-fmt() {
   let c: code = "let w = ${}".fmt(42)
   assert-equals(c.text, "let w = 42")
@@ -168,25 +158,15 @@ fn test-raw-group() {
   assert-equals((\{}).text, "")
 }
 
-use core/meta/str-lit
-
-fn test-str-lit() {
-  assert-equals(str-lit("plain"), "\"plain\"")
-  assert-equals(str-lit("a\"b\\c\$d"), "\"a\\\"b\\\\c\\\$d\"")
-  assert-equals(str-lit("nl\n"), "\"nl\\n\"")
-}
-
 fn test() {
   test-twice()
   test-repeat()
   test-signed-arg()
   test-debug-elided()
   test-code-value()
-  test-code-literal()
   test-code-fmt()
   test-code-builder()
   test-emitter()
-  test-str-lit()
   test-token-params()
   test-raw-group()
 

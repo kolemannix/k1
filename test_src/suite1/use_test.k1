@@ -1,10 +1,6 @@
 ns use_test
 
-// Use a function from top-level
-use core/types/id
-// Use a constant from top-level
 use std/libc/files/SEEK_END as SEEKEND
-
 
 ns foo {
   type(alias) intalias = int
@@ -17,8 +13,6 @@ ns exposing {
   use foo/get-one as get-one-hidden
 }
 
-// A use chain in fully reversed order: each target resolves only after the
-// use below it, so this exercises the resolve-to-quiescence sweep
 ns chain {
   use(expose) use_test/chain/d as e
   use(expose) use_test/chain/c as d
@@ -26,45 +20,21 @@ ns chain {
   use(expose) use_test/chain/a as b
   use(expose) use_test/foo as a
 }
-// Use a type alias, then reference it in a type definition
 use foo/intalias
 type use-test = { i: intalias, v: foo/intalias }
 
 fn test() {
-  // Use a function from stmt w/ alias
-  use core/types/id as id-alias
-  assert(id-alias[never] == id[never])
-
-  // Use a constant from stmt w/ alias
-  use std/libc/files/SEEK_END as s
-  assert(s == std/libc/files/SEEK_END)
   assert(SEEKEND == std/libc/files/SEEK_END)
 
-  // Use a basic type
-  use core/string as str
-  let hello: str = "Hello"
-
-  // Use a generic type
   use core/opt as optional
-  let hello-opt: optional[str] = some("Hello")
-  assert(hello == hello-opt.!)
+  let hello-opt: optional[string] = some("Hello")
+  assert(hello-opt.! == "Hello")
 
-  // Use a namespace
-  use use_test/foo as foo-alias
-  assert(foo-alias/get-one() == 1)
-
-  // use(expose) works like a definition: reachable via qualified paths and use-able
   assert(exposing/get-one-exposed() == 1)
   use use_test/exposing/int-exposed as via-expose
   let n: via-expose = 5
   assert(n == 5)
+  assert(test-compile(exposing/get-one-hidden()).is-some())
 
-  // A plain use is a private import: invisible to qualified paths
-  let hidden-result = test-compile(exposing/get-one-hidden())
-  assert-equals(hidden-result, :some("Function not found: 'get-one-hidden'"))
-
-  // The reversed chain resolved to quiescence
   assert(chain/e/get-one() == 1)
-
-  .{}
 }

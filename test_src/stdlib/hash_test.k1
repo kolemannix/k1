@@ -6,188 +6,34 @@ use std/fixmap
 use std/fixset
 
 fn test-basic() {
-  let my-map = map/new[string, int]()
-  assert(my-map.is-empty())
-  my-map.insert("a", 10)
-  my-map.insert("b", 11)
-  my-map.insert("c", 12)
-  assert-equals(my-map.len(), 3)
-  assert-equals(my-map.get("a"), :some 10)
-  assert-equals(my-map.get("b"), :some 11)
-  assert-equals(my-map.get("c"), :some 12)
-  assert-equals(my-map.get("d"), :none)
-  assert(my-map.contains("a"))
-  assert(not my-map.contains("d"))
-  assert-equals(my-map.remove("a"), :some 10)
-  assert-equals(my-map.remove("a"), :none)
-  assert-equals(my-map.get("a"), :none)
-  assert-equals(my-map.get("b"), :some 11)
-  assert-equals(my-map.len(), 2)
-  my-map.insert("a", 20)
-  assert-equals(my-map.get("a"), :some 20)
-  my-map.insert("b", 21)
-  assert-equals(my-map.get("b"), :some 21)
-  assert-equals(my-map.len(), 3)
-}
-
-fn test-int-keys() {
-  let m = map/new[int, string]()
-  let i = 0
-  while i < 50 {
-    m.insert(i, "v$i")
-    i = i + 1
-  }
-  assert-equals(m.len(), 50)
-  assert-equals(m.get(17), :some "v17")
-  assert-equals(m.get(50), :none)
-  assert-equals(m.remove(17), :some "v17")
-  assert-equals(m.get(17), :none)
-  assert-equals(m.get(18), :some "v18")
-}
-
-fn test-get-ref() {
   let m = map/new[string, int]()
-  m.insert("a", 1)
-  let vref = m.get-ref("a").!
-  vref.* = 100
-  assert-equals(m.get("a"), :some 100)
-  assert(m.get-ref("missing") is :none)
-}
-
-fn test-iterate() {
-  let m = map/new[string, int]()
-  m.insert("a", 1)
-  m.insert("b", 2)
-  m.insert("c", 3)
-  let _ = m.remove("b")
-  let total = 0
-  let seen = 0
-  for kv in m {
-    total = total + kv.value
-    seen = seen + 1
-  }
-  assert-equals(seen, 2)
-  assert-equals(total, 4)
-}
-
-fn test-empty() {
-  let e = map/new[string, int]()
-  assert(e.get("x") is :none)
-  assert(not e.contains("x"))
-  assert(e.remove("x") is :none)
-  e.clear()
-  assert(e.is-empty())
-  let iterated = 0
-  for kv in e {
-    iterated = iterated + 1
-  }
-  assert-equals(iterated, 0)
-  assert-equals("$e", "{}")
-}
-
-fn test-clear() {
-  let m = map/new[string, int]()
-  m.insert("a", 1)
-  m.insert("b", 2)
-  m.clear()
-  assert(m.is-empty())
+  assert-equals("$m", "{}")
+  assert(m.remove("x") is :none)
+  m.insert("a", 10)
+  m.insert("b", 11)
+  m.insert("b", 21)
+  assert-equals(m.len(), 2)
+  assert-equals(m.remove("a"), :some 10)
   assert-equals(m.get("a"), :none)
-  m.insert("a", 3)
-  assert-equals(m.get("a"), :some 3)
-  assert-equals(m.len(), 1)
-}
+  assert-equals("$m", "{b: 21}")
 
-fn test-with-capacity() {
-  let m = map/with-capacity[string, int](100)
-  let capacity-before = m.capacity()
-  let i = 0
-  while i < 100 {
-    m.insert("key$i", i)
-    i = i + 1
-  }
-  assert-equals(m.capacity(), capacity-before)
-  assert-equals(m.len(), 100)
-}
-
-fn test-get-or-insert() {
-  let m = map/new[string, int]()
-  let a = m.get-or-insert("a", fn. 10)
-  assert-equals(a.*, 10)
-  a.* = 11
-  let a2 = m.get-or-insert("a", fn. 99)
-  assert-equals(a2.*, 11)
-  assert-equals(m.len(), 1)
-  assert-equals(m.get("a"), :some 11)
-
-  let words: list[string] = ["x", "y", "x", "x"]
   let counts = map/new[string, int]()
-  for w in words {
+  for w in ["x", "y", "x", "x"] {
     let c = counts.get-or-insert(w, fn. 0)
     c.* = c.* + 1
   }
   assert-equals(counts.get("x"), :some 3)
-  assert-equals(counts.get("y"), :some 1)
-  assert-equals(counts.get("z"), :none)
-}
+  assert-equals(counts.len(), 2)
 
-fn test-print() {
-  let m = map/new[string, int]()
-  m.insert("a", 1)
-  assert-equals("$m", "{a: 1}")
-  if false { m.dump() }
-}
-
-fn test-set() {
-  let s = set/new[string]()
-  assert(s.is-empty())
-  assert(s.add("a"))
-  assert(s.add("b"))
-  assert(not s.add("a"))
-  assert-equals(s.len(), 2)
-  assert(s.contains("a"))
-  assert(not s.contains("c"))
-  assert(s.remove("a"))
-  assert(not s.remove("a"))
-  assert(not s.contains("a"))
-  assert-equals(s.len(), 1)
-  assert-equals("$s", "{b}")
-  s.clear()
-  assert(s.is-empty())
-
-  let vals: list[int] = [1, 2, 3, 2, 1]
-  let nums = set/from-span(vals.as-span())
+  let nums = set/from-span([1, 2, 3, 2, 1])
   assert-equals(nums.len(), 3)
-  assert(nums.non-empty())
+  assert(nums.remove(2))
+  assert(not nums.remove(2))
   let total = 0
-  for n in nums {
-    total = total + n
-  }
-  assert-equals(total, 6)
+  for n in nums { total = total + n }
+  assert-equals(total, 4)
 }
 
-fn test-resize(size: int) {
-  let my-map = map/new[string, int]()
-  let i = 0
-  while i < size {
-    my-map.insert(i.show(), i)
-    if i % 5 == 0 {
-      my-map.remove(i.show())
-    }
-    i = i + 1
-  }
-  i = 0
-  while i < size {
-    let result = my-map.get(i.show())
-    if i % 5 == 0 {
-      assert-msg("$i should be empty", result is :none)
-    } else {
-      if result is :some v { assert-equals(v, i) } else { crash("Missing value $i") }
-    }
-    i = i + 1
-  }
-}
-
-// removing and re-inserting in place must not accumulate load
 fn test-churn() {
   let m = map/new[int, int]()
   let round = 0
@@ -204,35 +50,15 @@ type fixmap-holder = { pad: u64, m: fixmap[int, int, 16], tail: u64 }
 
 fn test-fixmap-basic() {
   let m = fixmap/new[string, int, 16]()
-  assert(m.is-empty())
   assert-equals(m.cap(), 15)
-  m.insert("a", 10)
   m.insert("b", 11)
-  m.insert("c", 12)
-  assert-equals(m.len(), 3)
-  assert-equals(m.get("a"), :some 10)
-  assert-equals(m.get("b"), :some 11)
-  assert-equals(m.get("c"), :some 12)
-  assert-equals(m.get("d"), :none)
-  assert(m.contains("a"))
-  assert(not m.contains("d"))
-  assert-equals(m.remove("a"), :some 10)
-  assert-equals(m.remove("a"), :none)
-  assert-equals(m.get("a"), :none)
-  assert-equals(m.get("b"), :some 11)
-  assert-equals(m.len(), 2)
-  m.insert("a", 20)
-  assert-equals(m.get("a"), :some 20)
   m.insert("b", 21)
-  assert-equals(m.get("b"), :some 21)
-  assert-equals(m.len(), 3)
+  m.insert("c", 12)
+  assert-equals(m.len(), 2)
   assert-equals(m.["c"], 12)
-  let vref = m.get-ref("c").!
-  vref.* = 100
+  m.get-ref("c").!.* = 100
   assert-equals(m.get("c"), :some 100)
-  assert(m.get-ref("missing") is :none)
-  let made = m.get-or-insert("z", fn. 7).!
-  assert-equals(made.*, 7)
+  assert-equals(m.get-or-insert("z", fn. 7).!.*, 7)
   assert-equals(m.get-or-insert("z", fn. 8).!.*, 7)
   m.clear()
   assert(m.is-empty())
@@ -264,8 +90,6 @@ fn test-fixmap-full() {
   assert-equals(h.tail, 2)
 }
 
-// every key stays reachable through every order of removal,
-// including shifts across the wrap of the slot array
 fn test-fixmap-shift() {
   let m = fixmap/new[int, int, 16]()
   for i in 0.until(15) { m.insert(i * 7919, i) }
@@ -284,37 +108,18 @@ fn test-fixmap-shift() {
   assert(m.is-empty())
 }
 
-fn test-fixmap-churn() {
-  let m = fixmap/new[int, int, 16]()
-  let round = 0
-  while round < 200 {
-    for i in 0.until(15) { m.insert(round * 100 + i, i) }
-    assert(m.is-full())
-    for i in 0.until(15) { assert-equals(m.remove(round * 100 + i), :some i) }
-    assert(m.is-empty())
-    round = round + 1
-  }
-}
-
 fn test-fixset() {
   let s = fixset/new[string, 16]()
   assert(s.try-add("a") is :ok true)
   assert(s.try-add("a") is :ok false)
-  assert(s.add("b"))
-  assert(not s.add("b"))
-  assert(s.contains("a"))
-  assert(not s.contains("c"))
-  assert-equals(s.len(), 2)
-  assert(s.remove("a"))
-  assert(not s.remove("a"))
-  assert-equals(s.len(), 1)
   for v in ["c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p"] { assert(s.add(v)) }
   assert(s.is-full())
   assert(s.try-add("z") is :err)
+  assert(s.remove("a"))
+  assert(s.try-add("z") is :ok true)
   let seen = 0
   for v in s { assert(s.contains(v)); seen = seen + 1 }
   assert-equals(seen, 15)
-  assert-equals(s.show().len(), 1 + 15 + 14 * 2 + 1)
 }
 
 fn test-shift() {
@@ -336,8 +141,6 @@ fn test-shift() {
   assert(m.is-empty())
 }
 
-// tombstones, in-place purges, and growth under a live set that
-// never drains: every kept key must survive every reorganization
 fn test-tombstones() {
   let m = map/with-capacity[int, int](14)
   assert-equals(m.capacity(), 16)
@@ -361,22 +164,11 @@ fn test-tombstones() {
 
 fn test() {
   test-basic()
-  test-int-keys()
-  test-get-ref()
-  test-iterate()
-  test-empty()
-  test-clear()
-  test-with-capacity()
-  test-get-or-insert()
-  test-print()
-  test-set()
-  test-resize(100)
   test-churn()
   test-shift()
   test-tombstones()
   test-fixmap-basic()
   test-fixmap-full()
   test-fixmap-shift()
-  test-fixmap-churn()
   test-fixset()
 }

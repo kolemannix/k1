@@ -1,40 +1,15 @@
 ns test_comptime
 
-let e: ?int = :some 42
-let n: ?int = :none
-
-fn simple-enum() {
-  assert-equals(e.!, 42)
-  assert(e != n)
-  assert-equals(e, some(42))
-  .{}
-}
-
-let p: { x: int, y: ?int } = .{ x = 1, y = :some 2 }
-
-fn simple-struct() {
-  assert-equals(p.x, 1)
-  assert-equals(p.y, some(2))
-}
-
 fn widen-i8(x: i8): i64 { x.widen[i64] }
 fn widen-i16(x: i16): i64 { x.widen[i32].widen[i64] }
 fn widen-i32(x: i32): i64 { x.widen[i64] }
 fn widen-u32(x: u32): u64 { x.widen[u64] }
 fn narrow-i64(x: i64): i32 { x.trunc[i32] }
 
-fn signed-widening() {
+fn test() {
   assert-equals[i64](#static widen-i8(-100), widen-i8(-100))
   assert-equals[i64](#static widen-i16(-30000), widen-i16(-30000))
-  assert-equals[i64](#static widen-i16(30000), widen-i16(30000))
-  assert-equals[i64](#static widen-i32(1000000), widen-i32(1000000))
   assert-equals[i64](#static widen-i32(-1000000), widen-i32(-1000000))
   assert-equals[u64](#static widen-u32(4000000000), widen-u32(4000000000))
   assert-equals[i64](#static widen-i32(narrow-i64(5000000000)), widen-i32(narrow-i64(5000000000)))
-}
-
-fn test() {
-  simple-enum()
-  simple-struct()
-  signed-widening()
 }

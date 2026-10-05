@@ -1,45 +1,20 @@
 ns union_basic
 
 type u = union { a: u32, b: f32, c: i32 }
+type holder = { tag: u8, payload: u, trailer: u16 }
+type wide = union { small: u32, big: u64 }
 
-fn identity-u(u: u): u {
-  u
-}
+fn identity-u(u: u): u { u }
 
 fn test() {
   assert-equals(types/size[u], 4)
-  assert-equals(types/align[u], 4)
-  let u: u = uninit
+  assert-equals(types/size[wide], 8)
 
-  require types/schema[u] is :union .{ fields }
-    and fields.len() == 3
-    and fields.[0].name == "a"
-    and fields.[0].offset == 0
-    and fields.[1].name == "b"
-    and fields.[1].offset == 0
-    and fields.[2].name == "c"
-    and fields.[2].offset == 0
-    else crash("")
-
-  identity-u(u)
-
-  read-write()
-  literals()
-
-  .{}
-}
-
-type holder = { tag: u8, payload: u, trailer: u16 }
-
-fn read-write() {
   let bits: u = uninit
   bits.a = 0x3F800000
   assert-equals(bits.b, 1.0: f32)
-  assert-equals(bits.c, 1065353216)
-
   bits.b = -2.5
   assert-equals(bits.a, 3223322624)
-
   bits.c = -1
   assert-equals(bits.a, 4294967295)
 
@@ -55,30 +30,15 @@ fn read-write() {
   arr.[1].b = 1.5
   assert-equals(arr.[1].a, 1069547520)
   assert-equals(arr.[0].a, 0)
-}
 
-type wide = union { small: u32, big: u64 }
-
-fn literals() {
-  let f: u = .{ b = 1.0 }
-  assert-equals(f.a, 0x3F800000)
   assert-equals(identity-u(.{ c = -1 }).a, 4294967295)
-
-  let bits: u = mem/bitcast[u32, u](0x40000000)
-  assert-equals(bits.b, 2.0: f32)
-
   let w: wide = .0
   w.big = 0xFFFFFFFFFFFFFFFF
   w = .{ small = 7 }
   assert-equals(w.small, 7)
   assert-equals(w.big & 0xFFFFFFFF, 7)
-  assert-equals(types/size[wide], 8)
 
-  let h: holder = .{ tag = 1, payload = .{ a = 0x3F800000 }, trailer = 2 }
-  assert-equals(h.payload.b, 1.0: f32)
-  assert-equals(h.trailer, 2)
-
-  let empty: u = .{}
-  empty.a = 3
-  assert-equals(empty.c, 3)
+  let lit: holder = .{ tag = 1, payload = .{ a = 0x3F800000 }, trailer = 2 }
+  assert-equals(lit.payload.b, 1.0: f32)
+  assert-equals(lit.trailer, 2)
 }

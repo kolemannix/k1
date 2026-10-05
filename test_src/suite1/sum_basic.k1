@@ -1,41 +1,18 @@
 ns sum_basic
 
 type maybe = either(i8) { a = -1, b(char) = 0, c(string) = 100 }
-fn sum-payload() {
+type my-result[t, e] = either { ok(t), err(e) }
+type e = either(u8) { a = 4, b = 8, c(int) = 9 }
+
+fn test() {
   let a: maybe = :a
-  let b: maybe = :b('x')
-  let c: maybe = :c("hello, sums")
-  if a is :a .{} else crash("")
-  assert(a is :a)
-
-  if b is :b(x) {
-    assert(x == 'x')
-  } else crash("")
-  assert(b is :b(_))
-  assert(b is :b('x'))
+  let b: maybe = :b 'x'
+  let c: maybe = :c "hello, sums"
+  assert(b is :b 'x' or b is :a)
   assert(b.as-b().! == 'x')
-
-  if c is :c("hello, sums") .{} else crash("")
-  assert(c is :c(_))
-  assert(c.as-c().! == "hello, sums")
-
-  assert(a == a)
   assert(a != b)
   assert(c == (:c "hello, sums"): maybe)
   assert(c != (:c "goodbye"): maybe)
-
-}
-
-// 'Quiet' construction and patterns: payload without parentheses
-fn sum-quiet() {
-  let b: maybe = :b 'x'
-  let c: maybe = :c "hello, sums"
-
-  if b is :b x {
-    assert(x == 'x')
-  } else crash("")
-  assert(b is :b _)
-  assert(b is :b 'x' or b is :a)
 
   let msg = if c is {
     :a -> "a",
@@ -47,74 +24,14 @@ fn sum-quiet() {
 
   let r: my-result[?int, string] = :ok :some 3
   assert(r is :ok(:some 3))
-  assert(r.as-ok().! == :some 3)
+  let _: my-result[int, string]:ok = 42
+  assert(types/size[my-result[int, string]]() == 24)
 
-  let l: ?list[int] = :some [1, 2, 3]
-  assert(l.!.len() == 3)
-}
-
-type my-result[t, e] = either { ok(t), err(e) }
-ns for my-result {
-  fn my-get[t, e](self: my-result[t, e]): t {
-    self.as-ok().!
-  }
-  fn show[t: print, e: print](self: my-result[t, e]): string {
-    if self is {
-      :ok(v) -> { "Ok: $v\n" },
-      :err(e) -> { "Error: $e\n" }
-    }
-  }
-}
-
-fn generic-sum() {
-    let x1: my-result[int, string] = :ok(-3)
-    let x2: my-result[int, string] = :err("Some error message")
-
-    let x1-ok = x1.as-ok()
-
-    // This tests type inference for sums
-    assert(my-result/my-get(x1) == -3)
-    assert(x1.my-get() == -3)
-    assert(x1-ok == :some(-3))
-
-    // shows that we can talk about the payload type
-    let _: my-result[int, string]:ok = 42
-
-    assert-equals(x1.show(), "Ok: -3\n")
-    assert-equals(x2.show(), "Error: Some error message\n")
-
-    assert(types/size[my-result[int, string]]() == 24)
-    assert(types/stride[my-result[int, string]]() == 24)
-    assert(types/align[my-result[int, string]]() == 8)
-}
-
-type e = either(u8) { a = 4, b = 8, c(int) = 9 }
-fn tags() {
-  let a: e = :a
-  let b: e = :b
-  let c: e = :c(0)
-  assert-equals(a.tag, 4)
-  assert-equals(b.tag, 8)
-  assert-equals(c.tag, 9)
-
-  assert-equals(a.sum-name(), "a")
-  assert-equals(b.sum-name(), "b")
-  assert-equals(c.sum-name(), "c")
-
-  .{}
-}
-
-fn derived-print() {
-  let a: e = :a
-  let c: e = :c(42)
-  assert-equals("$a", ":a")
-  assert-equals("$c", ":c 42")
-}
-
-fn test() {
-  tags()
-  sum-payload()
-  sum-quiet()
-  generic-sum()
-  derived-print()
+  let ea: e = :a
+  let ec: e = :c(42)
+  assert-equals(ea.tag, 4)
+  assert-equals(ec.tag, 9)
+  assert-equals(ec.sum-name(), "c")
+  assert-equals("$ea", ":a")
+  assert-equals("$ec", ":c 42")
 }

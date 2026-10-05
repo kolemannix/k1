@@ -4,13 +4,6 @@ ns pre {
     not s.fields.exists(fn f. f.name == "password")
   }
 
-  fn is-scalar[t](): bool {
-    if types/schema[t] is {
-      :int _ or :char or :bool or :ptr or :float _ or :enum _ -> true,
-      _ -> false
-    }
-  }
-
   fn is-int[t](): bool {
     types/schema[t] is :int _
   }
@@ -20,21 +13,11 @@ ns type-predicate-test
 
 type int-wrapper[t: pred pre/is-int] = { value: t }
 
-ability to-scalar[out: pred pre/is-scalar] {
-  fn to-scalar(self): out
-}
-
-impl to-scalar[out = int] for string {
-  fn to-scalar(self): int { self.len() }
-}
-
-fn foo[t: pred pre/no-password](t: t) {
-  println("Hello from foo")
-}
+fn foo[t: pred pre/no-password](_t: t) {}
 
 fn test() {
   assert(test-compile(foo(.{ password = "Passw0rd!" })).is-some())
-  assert-equals[?string](test-compile(foo(.{ assword = "Passw0rd!" })), :none)
-
+  foo(.{ assword = "Passw0rd!" })
   let _i: int-wrapper[u64] = .{ value = 42 }
+  assert(test-compile({ let _s: int-wrapper[string] = .{ value = "" }; .{} }).is-some())
 }

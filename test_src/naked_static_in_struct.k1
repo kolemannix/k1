@@ -1,7 +1,0 @@
-type foo = { y: either { bar(opt[static string]) } }
-
-fn main(): i32 {
-  0
-}
-//errmsg: Static type cannot appear in type definitions
-

@@ -254,8 +254,8 @@ let _ = m.remove("k")
 fn close(fd: i32) { let _ = c/close(fd) }
 ```
 
-See `test_src/suite1/assign.k1`, `test_src/suite1/place_test.k1`,
-`test_src/suite1/pointer.k1`, and `test_src/suite1/struct.k1`.
+See `test_src/suite1/assign.k1`, `test_src/suite1/place_test.k1`, and
+`test_src/suite1/struct.k1`.
 
 ## Core Types
 
@@ -588,8 +588,6 @@ fn run(): result[int, string] {
 }
 ```
 
-See `test_src/suite1/optionals.k1` and `test_src/suite1/try_test.k1`.
-
 ## Conditionals And Pattern Matching
 
 `if` is an expression:
@@ -645,9 +643,8 @@ require value is :some(x) else {
 assert(x > 0)
 ```
 
-See `test_src/suite1/matching_if.k1`, `test_src/suite1/match_fails.k1`,
-`test_src/suite1/match_references.k1`, and
-`test_src/suite1/require_test.k1`.
+See `test_src/suite1/matching_if.k1`, `test_src/suite1/match_fails.k1`, and
+`test_src/suite1/match_references.k1`.
 
 ## Loops
 
@@ -711,8 +708,7 @@ for i in 0.until(10) {
 defer cleanup()
 ```
 
-See `test_src/suite1/while.k1`, `test_src/suite1/control_flow.k1`,
-`test_src/suite1/for_yield.k1`, and `test_src/suite1/defer_test.k1`.
+See `test_src/suite1/control_flow.k1` and `test_src/suite1/defer_test.k1`.
 
 ## Arrays, Buffers, Lists, And Spans
 
@@ -765,8 +761,7 @@ Collection API naming follows a doctrine:
   everything else a scalar loop. `index-of-span` has the same split, SIMD
   for byte-sized `t` only.
 
-See `test_src/suite1/array_test.k1`, `test_src/suite1/list_test.k1`,
-`test_src/suite1/range_test.k1`, and `test_src/suite1/buffer_test.k1`.
+See `test_src/suite1/array_test.k1` and `test_src/suite1/list_test.k1`.
 
 ## Lambdas And Function Values
 
@@ -834,7 +829,7 @@ let result = [1,2,3]
   || filter(fn x. x % 2 == 0)
 ```
 
-See `test_src/suite1/lambdas.k1` and `test_src/suite1/pipe.k1`.
+See `test_src/suite1/lambdas.k1`.
 
 ## Abilities And Impls
 
@@ -874,9 +869,7 @@ When multiple impls could apply, tests also use explicit ability/type selection:
 some-ability@(some-type)/function-name()
 ```
 
-See `test_src/suite1/ability.k1`,
-`test_src/suite1/ability_constraint.k1`,
-`test_src/suite1/ability_generic.k1`, and
+See `test_src/suite1/ability.k1`, `test_src/suite1/ability_generic.k1`, and
 `test_src/suite1/ability_complex.k1`.
 
 ## Imports

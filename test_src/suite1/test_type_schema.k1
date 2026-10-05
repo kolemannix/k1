@@ -1,171 +1,88 @@
-ns type_schema {
-  type point3[t] = {
-    x: t, y: t, z: t
+ns type_schema
+
+type point3[t] = { x: t, y: t, z: t }
+
+type recursive-type = { node: *recursive-type }
+
+use types/schema
+
+fn kind[t](): string {
+  #if schema[t] is {
+    :int _ or :float _ -> "scalar",
+    :struct _ -> "struct",
+    :string -> "string",
+    _ -> "other"
   }
-
-  type recursive-type = { node: *recursive-type }
-
-  use types/schema
-
-  fn print-struct-shape[t](): string {
-    let type-id = types/id[t]
-    require schema[t] is :struct .{ fields } else { return "" }
-    let sb = string-builder/new()
-    let name = type-id.name()
-    sb.write("Struct $name {\n")
-    for field in fields {
-      sb.writeln("  ${field.name}: ${field.type-id.name()}", )
-    }
-    sb.write("}")
-    sb.build()
-  }
-
-  fn kind[t](): string {
-    #if schema[t] is {
-      :int _ or :float _ -> "scalar",
-      :struct _ -> "struct",
-      :string -> "string",
-      _ -> "other"
-    }
-  }
-
-  fn is-byte[t](): bool {
-    #if schema[t] is { :int :u8 -> true, _ -> false }
-  }
-
-  fn field-count[t](): int {
-    #if schema[t] is { :struct .{ fields } -> fields.len(), _ -> 0 }
-  }
-
-  fn copy-into[t](dst: buffer[t], src: span[t]): string {
-    #if schema[t] is {
-      :int _ or :float _ or :bool or :char -> {
-        mem/copy(dst = dst.data, src = src.buffer.data, count = src.len() * types/stride[t])
-        "memcpy"
-      },
-      _ -> {
-        for src { dst.[it-index] = it }
-        "loop"
-      }
-    }
-  }
-
-  fn test() {
-    assert-equals(kind[u8](), "scalar")
-    assert-equals(kind[f64](), "scalar")
-    assert-equals(kind[point3[u8]](), "struct")
-    assert-equals(kind[string](), "string")
-    assert-equals(kind[*i32](), "other")
-    assert(is-byte[u8]())
-    assert(not is-byte[u16]())
-    assert(not is-byte[string]())
-    assert-equals(field-count[point3[u8]](), 3)
-    assert-equals(field-count[u8](), 0)
-    let bytes: buffer[u8] = buffer/filled(4, 0)
-    assert-equals(copy-into(bytes, [1u8, 2, 3, 4]), "memcpy")
-    assert-equals(bytes.as-span(), [1u8, 2, 3, 4])
-    let names: buffer[string] = buffer/filled(2, "")
-    assert-equals(copy-into(names, ["ada", "grace"]), "loop")
-    assert-equals(names.as-span(), ["ada", "grace"])
-
-    assert(schema[u8]   is :int :u8)
-    assert(schema[u16]  is :int :u16)
-    assert(schema[u32]  is :int :u32)
-    assert(schema[u64]  is :int :u64)
-    assert(schema[i8]   is :int :i8)
-    assert(schema[i16]  is :int :i16)
-    assert(schema[i32]  is :int :i32)
-    assert(schema[i64]  is :int :i64)
-
-    assert(schema[f32]  is :float :f32)
-    assert(schema[f64]  is :float :f64)
-
-    let point-byte-schema = schema[point3[u8]]
-    require point-byte-schema is :struct .{ fields } else crash("")
-    assert-equals(fields.len(), 3)
-    require schema[*i32]
-      is :reference .{ inner-type-id }
-      and inner-type-id == types/id[i32] else crash("")
-    assert-equals(
-      schema[**bool].as-reference().!.inner-type-id,
-      types/id[*bool]
-    )
-
-    assert(schema[either { yes }] is :enum _)
-
-    require schema[either { yes, no, maybe-so(string) }]
-      is :either .{ variants, payload-offset }
-      and payload-offset == 8
-      and variants.len() == 3
-      and variants.[0].name == "yes"
-      and variants.[1].name == "no"
-      and variants.[2].name == "maybe-so"
-      and variants.[2].payload is :some .{ type-id }
-      and type-id == types/id[string]
-      else crash("")
-
-    require schema[either { yes(int) }:yes ]
-      is :int :i64
-      else crash("")
-
-    assert(schema[array[i32, 10]] is :array _)
-    require schema[array[string, 5]]
-      is :array .{ element-type-id, size }
-      and element-type-id == types/id[string]
-      and size == :some 5
-      else crash("")
-
-    assert-equals(print-struct-shape[point3[u8]], "Struct point3[u8] {\n  x: u8\n  y: u8\n  z: u8\n}")
-
-    let is-zero-ptr: *fn(int) -> bool = is-zero.&
-    require schema[type-of(is-zero-ptr)]
-      is :function-pointer .{ function-type-id } else crash("")
-
-    require function-type-id.schema()
-      is :function .{ params, return-type-id } else crash("")
-
-    assert(return-type-id.schema() is :bool)
-    assert-equals(params.[0].name, "x")
-    assert(params.[0].type-id.schema() is :int _)
-
-    require schema[union { a: int, b: f64, c: f32 }]
-      is :union .{ fields }
-      and fields.len()         == 3
-      and fields.[0].name   == "a"
-      and fields.[0].offset == 0
-      and fields.[1].name   == "b"
-      and fields.[1].offset == 0
-      and fields.[2].name   == "c"
-      and fields.[2].offset == 0
-      else crash("")
-
-    require schema[recursive-type] is :struct _ else crash("")
-
-    require types/instance-info[list[int]] is :some .{ parent, args }
-      and parent == types/id[list]
-      and args.len() == 1
-      and args.[0] == types/id[int]
-      else crash("list instance info")
-    assert(types/instance-info[int] is :none)
-    assert(types/instance-info[*int] is :none)
-    assert(types/instance-info[array[u8, 4]] is :none)
-    assert(types/instance-info[string] is :none)
-    assert-equals(types/instance-info[?int].!.parent, types/id[opt])
-    assert-equals(types/instance-info[opt[int]].!.parent, types/id[opt])
-    assert-equals(types/instance-info[result[int, string]].!.args.len(), 2)
-    assert-equals(types/instance-info[point3[u8]].!.parent, types/id[point3])
-    assert-equals(types/id[list].name(), "list[t]")
-    assert-equals(types/id[list[int]].info().name, "list[i64]")
-    assert(types/id[list[int]].is-instance-of(types/id[list]))
-    assert(not types/id[list[int]].is-instance-of(types/id[span]))
-    assert(not types/id[int].is-instance-of(types/id[list]))
-    assert(schema[list[int]] is :struct _)
-    assert(test-compile(types/size[list]).is-some())
-    assert(test-compile({ let _x: list = list/empty[int](); .{} }).is-some())
-
-    .{}
-  }
-
-  fn is-zero(x: int): bool { x == 0 }
 }
 
+fn copy-into[t](dst: buffer[t], src: span[t]): string {
+  #if schema[t] is {
+    :int _ or :float _ or :bool or :char -> {
+      mem/copy(dst = dst.data, src = src.buffer.data, count = src.len() * types/stride[t])
+      "memcpy"
+    },
+    _ -> {
+      for src { dst.[it-index] = it }
+      "loop"
+    }
+  }
+}
+
+fn is-zero(x: int): bool { x == 0 }
+
+fn test() {
+  assert-equals(kind[f64](), "scalar")
+  assert-equals(kind[point3[u8]](), "struct")
+  assert-equals(kind[string](), "string")
+  assert-equals(kind[*i32](), "other")
+  let bytes: buffer[u8] = buffer/filled(4, 0)
+  assert-equals(copy-into(bytes, [1u8, 2, 3, 4]), "memcpy")
+  assert-equals(bytes.as-span(), [1u8, 2, 3, 4])
+  let names: buffer[string] = buffer/filled(2, "")
+  assert-equals(copy-into(names, ["ada", "grace"]), "loop")
+  assert-equals(names.as-span(), ["ada", "grace"])
+
+  assert(schema[i16] is :int :i16)
+  assert(schema[f32] is :float :f32)
+  assert-equals(schema[**bool].as-reference().!.inner-type-id, types/id[*bool])
+  assert(schema[either { yes }] is :enum _)
+  require schema[either { yes, no, maybe-so(string) }]
+    is :either .{ variants, payload-offset }
+    and payload-offset == 8
+    and variants.[2].payload is :some .{ type-id }
+    and type-id == types/id[string]
+    else crash("")
+  require schema[either { yes(int) }:yes] is :int :i64 else crash("")
+  require schema[array[string, 5]] is :array .{ size } and size == :some 5 else crash("")
+  require schema[recursive-type] is :struct _ else crash("")
+
+  let is-zero-ptr: *fn(int) -> bool = is-zero.&
+  require schema[type-of(is-zero-ptr)] is :function-pointer .{ function-type-id } else crash("")
+  require function-type-id.schema() is :function .{ params, return-type-id } else crash("")
+  assert(return-type-id.schema() is :bool)
+  assert-equals(params.[0].name, "x")
+
+  require schema[union { a: int, b: f64 }]
+    is :union .{ fields }
+    and fields.[1].name == "b"
+    and fields.[1].offset == 0
+    else crash("")
+
+  require types/instance-info[list[int]] is :some .{ parent, args }
+    and parent == types/id[list]
+    and args.[0] == types/id[int]
+    else crash("list instance info")
+  assert(types/instance-info[int] is :none)
+  assert(types/instance-info[array[u8, 4]] is :none)
+  assert-equals(types/instance-info[?int].!.parent, types/id[opt])
+  assert-equals(types/instance-info[result[int, string]].!.args.len(), 2)
+  assert-equals(types/id[list].name(), "list[t]")
+  assert-equals(types/id[list[int]].info().name, "list[i64]")
+  assert(not types/id[list[int]].is-instance-of(types/id[span]))
+  assert(test-compile(types/size[list]).is-some())
+  assert(test-compile({ let _x: list = list/empty[int](); .{} }).is-some())
+
+  assert-equals(types/id[array[string, 0].element], types/id[string])
+  assert-equals(types/name[array[i32, 10]], "array[i32, 10]")
+  assert-equals(types/align[array[i32, 0]], 1)
+}

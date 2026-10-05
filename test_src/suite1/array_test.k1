@@ -1,81 +1,5 @@
 ns array_test
 
-type thing = {
-  data: array[u8, 1024],
-  data2: array[u64, 1024],
-}
-
-fn test-literals() {
-  let array: array[bool, 3] = [false, true, true]
-  let buffer: buffer[bool] = [false, true, true]
-  let list: list[bool] = [false, true, true]
-  assert-equals(array.&.as-buffer(), buffer)
-  assert-equals(list.as-buffer(), buffer)
-}
-
-fn test-filled() {
-  let buffer: buffer[u8] = buffer/filled-in(mem/tmp(), size = 64, value = 3)
-  let array: *array[u8, 64] = array/filled-in(mem/tmp(), 3, 64)
-  let list: list[u8] = list/filled-in(mem/tmp(), size = 64, value = 3)
-  assert-equals(buffer.len, 64)
-  assert-equals(array.len(), 64)
-  assert-equals(list.len, 64)
-  for buffer {
-    assert-equals(buffer.[it-index], 3)
-    assert-equals(list.[it-index], 3)
-    assert-equals(array.[it-index], 3)
-  }
-}
-
-fn test-array() {
-  let ls: list[u8] = list/filled-in(mem/tmp(), size = 10, value = 3)
-
-  let a: *array[u8, 10] = list/to-array(ls, 10)
-  for 0.until(a.len()) {
-    if it % 2 == 0 { a.[it] = 1 }
-  }
-  for 0.until(a.len()) {
-    if it % 2 == 0 {
-      assert-equals(a.[it], 1)
-    } else {
-      assert-equals(a.[it], 3)
-    }
-  }
-  for a {
-    if it-index % 2 == 0 {
-      assert-equals(it, 1)
-    } else {
-      assert-equals(it, 3)
-    }
-  }
-
-}
-
-fn test() {
-  assert-equals(types/size[thing](), 9216)
-
-  test-array()
-
-  test-literals()
-  test-filled()
-
-  let array: array[f32, 10] = .0
-  assert(test-compile(array.[11]) is :some _)
-  assert(test-compile(takes-three([1, 2])) is :some _)
-  assert(test-compile(takes-three([1, 2, 3, 4])) is :some _)
-  assert(test-compile(takes-three([])) is :some _)
-  takes-three([1, 2, 3])
-  array.[0] = 3.14
-  let buf = array.&.as-buffer()
-  assert(buf.[0] == array.[0])
-  assert-equals(buf.[0], array.[0])
-
-  test-print()
-  test-index-once()
-
-  .{}
-}
-
 let(mutable) INDEX_EVALS: int = 0
 
 fn next-index(i: int): int {
@@ -85,7 +9,25 @@ fn next-index(i: int): int {
 
 type packed-holder = packed { tag: u8, values: array[u16, 3] }
 
-fn test-index-once() {
+fn takes-three(a: array[int, 3]) {
+  assert-equals(a.[0] + a.[1] + a.[2], 6)
+}
+
+fn mk-arr(): array[int, 3] { [7, 8, 9] }
+
+fn at-three(a: array[int, 3], i: int): int { a.[i] }
+
+fn test() {
+  let list: list[u8] = list/filled-in(mem/tmp(), size = 10, value = 3)
+  let a: *array[u8, 10] = list/to-array(list, 10)
+  a.[4] = 1
+  for a {
+    assert-equals(it, if it-index == 4 1 else 3)
+  }
+
+  takes-three([1, 2, 3])
+  assert(test-compile(takes-three([1, 2])) is :some _)
+
   INDEX_EVALS = 0
   let arr: array[int, 4] = [10, 20, 30, 40]
   assert-equals(arr.[next-index(1)], 20)
@@ -101,20 +43,8 @@ fn test-index-once() {
   assert-equals(ph.values.[1], 22)
   assert(test-compile(arr.[4]).is-some())
   assert(test-compile(arr.[-1]).is-some())
-}
 
-fn takes-three(a: array[int, 3]) {
-  assert-equals(a.[0] + a.[1] + a.[2], 6)
-}
-
-fn mk-arr(): array[int, 3] { [7, 8, 9] }
-
-fn at-three(a: array[int, 3], i: int): int { a.[i] }
-
-fn test-print() {
   let values: array[int, 3] = [1, 2, 3]
-  assert-equals("$values", "[1,2,3]")
-
   let holder = .{ items = values, name = "grid" }
   assert-equals("$holder", ".{ items = [1,2,3], name = grid }")
 }

@@ -194,7 +194,7 @@ for compile-time execution, codegen_llvm for binaries.
 - `test_src/<dir>/`: module cases (`suite1`, `stdlib`, `ffi_abi_test`,
   `dep_*_test`, `http_test` for the http server, which binds an ephemeral port). `k1_test` runs every top-level file and dir in parallel (`--serial` for one at a time); it
   does not recurse.
-- `test_src/suite1`: ~110 files, each `ns foo` with `fn test()`, registered by
+- `test_src/suite1`: ~75 files, each `ns foo` with `fn test()`, registered by
   hand in `suite1.k1` (`low`, `moderate`, `core-lib`, `main`). Nearly every
   test runs both natively and `#static` in the VM. New feature tests go here
   and must be added to `suite1.k1`.

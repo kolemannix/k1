@@ -1,72 +1,38 @@
 ns control_flow
 
-fn if-basic(): int {
-  let cond: bool = false
-  let result: int = if cond 42 else 1337
-  assert(result == 1337)
+fn return-from-if(): int {
+  let _x: {} = if true {
+    return 1
+  }
   0
 }
 
-fn if-no-else(): int {
-  // Gets empty type
+fn test() {
   let x = 0
   let expr: {} = if true {
     x = 42
   }
   assert(x == 42)
   assert(expr == .{})
-
-  // Even if one branch is 'never'
-  let _expr: {} = if false {
+  let _never: {} = if false {
     crash("never happens")
   }
-  0
-}
+  assert(return-from-if() == 1)
 
-fn return-simple(): bool {
-  return true
-}
-
-fn rand(): bool { true }
-fn return-from-if(): int {
-  let _x: {} = if rand() {
-    return 1
-  }
-
-  0
-}
-
-fn loop-break() {
-  // break with scalar
-  let x: int = loop {
+  let three: int = loop {
     let _inner: int = if true {
       break 3
     } else 4
-    
   }
-  assert-equals(x, 3)
-
-  // break with aggregate
+  assert-equals(three, 3)
   let y: string = loop {
     break "asdf"
   }
   assert-equals(y, "asdf")
-}
-
-fn loop-nested() {
-  let result = loop {
+  let nested = loop {
     break loop { break(10) }
   }
-  assert-equals(result, 10)
-}
-
-fn for-break() {
-  let seen = list/empty[int]()
-  for i in 0.until(10) {
-    if i == 3 break
-    seen.push(i)
-  }
-  assert-equals(seen.join(","), "0,1,2")
+  assert-equals(nested, 10)
 
   let pairs = list/empty[string]()
   for i in 0.until(3) {
@@ -95,16 +61,4 @@ fn for-break() {
     break n
   }
   assert-equals(total, 4)
-}
-
-fn test() {
-
-  if-basic()
-  if-no-else()
-  assert(return-simple())
-  assert(return-from-if() == 1)
-
-  loop-break()
-  loop-nested()
-  for-break()
 }

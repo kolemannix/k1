@@ -58,8 +58,7 @@ type, so they satisfy concrete-typed context params too. A param constrained
 by several abilities picks the variable hit by the most ability keys; a tie is
 an ambiguity error.
 
-See `test_src/suite1/context_params.k1`, `test_src/suite1/context_generic.k1`,
-and `test_src/suite1/context_ability.k1`.
+See `test_src/suite1/context_ability.k1`.
 
 ## Module Manifests And FFI
 
@@ -140,7 +139,7 @@ ns(lib("foo")) foo {
 }
 ```
 
-See `test_src/ffi_abi_test` and `test_src/threads.k1`.
+See `test_src/ffi_abi_test`.
 
 ## Function Pointers
 
@@ -184,8 +183,7 @@ let(extern("abi_counter"), mutable) counter: i32
 let(extern) environ: ptr
 ```
 
-See `test_src/suite1/globals.k1`, `test_src/suite1/ability_default_fns.k1`, and
-`test_src/threads.k1`.
+See `test_src/suite1/ability_default_fns.k1`.
 
 ## Static Parameters And Literal Types
 
@@ -400,8 +398,7 @@ the parent's.
 
 See `test_src/suite1/test_macro.k1` and `test_src/stdlib/flag_sum_test.k1`.
 
-See `test_src/suite1/test_meta.k1`, `test_src/suite1/meta_defns.k1`, and
-`test_src/stdlib/metaprintf.k1`.
+See `test_src/suite1/test_meta.k1` and `test_src/suite1/meta_defns.k1`.
 
 ## Conditional Compilation
 
@@ -469,8 +466,7 @@ types/instance-info[int]                                     // :none
 types/id[list[int]].is-instance-of(types/id[list])           // true
 ```
 
-See `test_src/suite1/test_type_schema.k1`,
-`test_src/suite1/type_info.k1`, and `test_src/suite1/array_type_test.k1`.
+See `test_src/suite1/test_type_schema.k1`.
 
 ## Type Synthesis
 
@@ -547,8 +543,7 @@ ability to-scalar[out: pred is-scalar] {
 }
 ```
 
-See `test_src/suite1/ability_constraint.k1` and
-`test_src/suite1/type_predicate.k1`.
+See `test_src/suite1/type_predicate.k1`.
 
 ## Advanced Abilities
 
@@ -630,8 +625,7 @@ type wire = packed { tag: u8, value: u64, crc: u16 }
 value.
 `mem/bitcast` reinterprets bits between same-sized representations.
 
-See `test_src/suite1/opaque_type.k1`, `test_src/suite1/union_basic.k1`,
-`test_src/suite1/packed_basic.k1`, `test_src/suite1/test_uninit.k1`, and
+See `test_src/suite1/union_basic.k1`, `test_src/suite1/packed_basic.k1`, and
 `test_src/suite1/zero_test.k1`.
 
 ## Type-Level Struct Transforms
@@ -685,8 +679,7 @@ Bitwise binds above comparisons (Rust/Zig, not C): `a & b == c` is
 - Hex (`0xff`), octal (`0o755`), binary (`0b1010`), and underscore numeric literals.
 - Integer suffixes such as `255u8`, `-128i8`, and `3u64`.
 
-See `test_src/suite1/arith.k1`, `test_src/suite1/bits_test.k1`, and
-`test_src/suite1/bool.k1`.
+See `test_src/suite1/arith.k1`.
 
 ## Named Arguments
 
@@ -710,9 +703,6 @@ ns foo { type bar = { value: int } }
 ns foo { fn make(): bar { .{ value = 1 } } }
 ```
 
-See `test_src/suite1/ns_extend.k1`,
-`test_src/suite1/ns_collision.k1`, and `test_src/suite1/scopes.k1`.
-
 ## Pointer And Address Syntax
 
 The guide covers field references, but tests also use:
@@ -732,8 +722,7 @@ The guide covers field references, but tests also use:
   `if (x is null) :none else ...`.
 - Multi-level references such as `***` in patterns.
 
-See `test_src/suite1/pointer.k1`,
-`test_src/suite1/recurse_basic.k1`, and
+See `test_src/suite1/recurse_basic.k1` and
 `test_src/suite1/match_references.k1`.
 
 ## String And Char Details
@@ -753,9 +742,7 @@ Tests cover string and char escapes:
 String tests also cover `\n`, `\0`, `\t`, `\r`, `\"`, `\\`, and `\$`, plus
 nested interpolation and backtick strings.
 
-See `test_src/suite1/char_test.k1`,
-`test_src/suite1/string_test.k1`, and
-`test_src/suite1/string_interp.k1`.
+See `test_src/suite1/string_test.k1` and `test_src/suite1/string_interp.k1`.
 
 ## RVO And Returned Locals
 
@@ -791,7 +778,7 @@ Thread tests combine several runtime features:
   thread and `.join()` returns its `t`.
 - Arena-backed allocation for cross-thread values.
 
-See `test_src/atomic_threads.k1` and `test_src/stdlib/thread_test.k1`.
+See `test_src/stdlib/thread_test.k1`.
 
 ## Atomics
 
@@ -814,7 +801,7 @@ the non-arithmetic ops also take `ptr`. Orderings
 the call site — to dispatch over a runtime ordering, match on it, as
 `atomic/cell[t]` (the plain-K1 wrapper type in the same file) does.
 
-See `test_src/suite1/atomics.k1` and `test_src/atomic_threads.k1`.
+See `test_src/suite1/atomics.k1`.
 
 ## Files, hashing and time
 

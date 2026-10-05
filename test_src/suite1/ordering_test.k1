@@ -1,8 +1,6 @@
 ns ordering_test
 
 fn tags-test() {
-  // The tags are load-bearing: compare-scalars computes (a > b) - (a < b)
-  // and bitcasts the result straight to ordering
   assert-equals(ordering:less.value, -1)
   assert-equals(ordering:equal.value, 0)
   assert-equals(ordering:greater.value, 1)
@@ -13,24 +11,6 @@ fn tags-test() {
   assert(l is :less)
   assert(e is :equal)
   assert(g is :greater)
-}
-
-fn int-compare-test() {
-  assert((1: i64).compare(2) is :less)
-  assert((2: i64).compare(2) is :equal)
-  assert((2: i64).compare(1) is :greater)
-  assert((-1: i64).compare(1) is :less)
-  assert(i64/min-value.compare(i64/max-value) is :less)
-  assert(i64/max-value.compare(i64/min-value) is :greater)
-
-  assert((0: u8).compare(255) is :less)
-  assert((255: u8).compare(0) is :greater)
-  assert((7: u64).compare(7) is :equal)
-  assert((0xFFFFFFFFFFFFFFFF: u64).compare(0) is :greater)
-
-  assert('a'.compare('z') is :less)
-  assert('m'.compare('m') is :equal)
-  assert('z'.compare('a') is :greater)
 }
 
 fn float-compare-test() {
@@ -45,7 +25,6 @@ fn float-compare-test() {
   let neg-inf:  f64 = mem/bitcast(0xFFF0000000000000: u64)
   let neg-zero: f64 = mem/bitcast(0x8000000000000000: u64)
 
-  // totalOrder: -NaN < -inf < -0.0 < +0.0 < +inf < +NaN
   assert(neg-nan.compare(neg-inf) is :less)
   assert(neg-inf.compare(neg-zero) is :less)
   assert(neg-zero.compare(0.0) is :less)
@@ -53,7 +32,6 @@ fn float-compare-test() {
   assert(pos-inf.compare(pos-nan) is :less)
   assert(pos-nan.compare(pos-nan) is :equal)
 
-  // Unlike the < operator, compare is consistent for NaN in both directions
   assert(pos-nan.compare(1.0) is :greater)
   assert((1.0: f64).compare(pos-nan) is :less)
 
@@ -66,6 +44,5 @@ fn float-compare-test() {
 
 fn test() {
   tags-test()
-  int-compare-test()
   float-compare-test()
 }

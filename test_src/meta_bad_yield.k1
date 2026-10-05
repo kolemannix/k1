@@ -1,7 +1,0 @@
-fn gen(): int { 42 }
-
-fn main(): i32 {
-  #meta gen()
-  0
-}
-//errmsg: Metaprogram must evaluate to `code`

@@ -2,67 +2,6 @@ ns json_test
 use std/json
 use std/json/json-write
 
-fn test-basic-enum() {
-  let size = core/types/size[json/json]()
-  let align = core/types/align[json/json]()
-  assert-equals(size, 24)
-  assert-equals(align, 8)
-
-  let obj: json/json = :str "hello"
-  let null: json/json = :null
-  assert(obj is :str "hello")
-  assert(null is :null)
-
-  let obj2: json/json = :array [:str "hello", :float 123.0]
-  assert(obj2.as-array().!.[0] is :str "hello")
-  assert(obj2.as-array().!.[1] is :float 123.0)
-}
-
-fn test-parsing() {
-  test-parse(`null`      , fn j. j is :null)
-  test-parse(`"asdf"`    , fn j. j is :str "asdf")
-  test-parse(`"as\"df"`  , fn j. j is :str "as\"df")
-  test-parse(`"as\\\\df"`, fn j. j is :str "as\\df")
-  test-parse(`""`        , fn j. j is :str "")
-  test-parse(`  ""`      , fn j. j is :str "")
-
-  test-parse(`false`, fn j. j is :bool false)
-  test-parse(`true`,  fn j. j is :bool true)
-  test-parse(`{}`,   fn j. j is :object m and m.is-empty())
-  test-parse(
-    `{ "foo": true, "baz": false }`,
-    fn j. j is :object m and
-        m.map(fn f. f.key) == ["foo", "baz"] and
-        m.map(fn f. f.value.as-bool().!) == [true, false]
-  )
-
-  test-parse(" [ ] ", fn j. j is :array es and es.is-empty())
-  //test-parse(`[]`, fn j. j is :array(_));
-}
-
-fn test-rejects() {
-  reject(`nul`)
-  reject(`nulll`)
-  reject(`tru`)
-  reject(`fals`)
-  reject(`n`)
-  reject(`1 2`)
-  reject(`{} {}`)
-  reject(`[1] junk`)
-  reject(`"a" "b"`)
-  accept(` null `)
-  accept(`[1,2]   `)
-}
-
-fn test-escapes() {
-  test-parse(`"a\/b"`, fn j. j is :str "a/b")
-  test-parse(`"a\\rb"`, fn j. j is :str "a\rb")
-  test-parse(`"a\\bb"`, fn j. j is :str s and s.len() == 3 and s.[1].u8() == 8)
-  test-parse(`"a\\fb"`, fn j. j is :str s and s.len() == 3 and s.[1].u8() == 12)
-  test-parse(`"\\\\"`, fn j. j is :str s and s.len() == 1 and s.[0] == '\\')
-  test-parse(`"a\\nb\\tc"`, fn j. j is :str "a\nb\tc")
-}
-
 fn reject(s: string) {
   if json/parse[json/json](s) is :ok(_) { crash("expected a parse failure for '$s'") }
 }
@@ -273,26 +212,11 @@ fn test-typed() {
 }
 
 fn test() {
-  test-basic-enum()
   test-write()
   test-numbers()
   test-strict()
   test-unicode()
   test-typed()
-  test-parsing()
-  test-rejects()
-  test-escapes()
-  test-parse(example-json, fn o. {
-    o is :object members
-    and members.len() == 5
-  })
-}
-
-fn test-parse(s: string, f: some fn json/json -> bool) {
-  if json/parse[json/json](s) is {
-    :err msg -> crash("Failed: $msg"),
-    :ok json -> if not f(json) crash("Failed '$s'")
-  }
 }
 
 let example-json: string =

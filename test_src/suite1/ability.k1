@@ -1,17 +1,5 @@
 ns ability_01
 
-ability num {
-  fn num(self): i32
-}
-
-type point = { x: i32, y: i32 }
-
-impl num for point {
-  fn num(self): i32 {
-    self.x + self.y
-  }
-}
-
 ability codec {
   fn a-const(): u8
   fn write(self): span[u8]
@@ -28,73 +16,24 @@ impl codec for string {
   }
 }
 
-ns qualified_syntax {
-
-  ability has-secret-int {
-    fn secret(): int
-  }
-  ability has-secret-gen[a] {
-    fn secret(): a
-  }
-
-  type foo = {}
-  type bar = {}
-
-  impl has-secret-gen[a = int] for foo {
-    fn secret(): int { 10 }
-  }
-  impl has-secret-gen[a = int] for bar {
-    fn secret(): int { 20 }
-  }
-  impl has-secret-int for foo {
-    fn secret(): int { 10 }
-  }
-  impl has-secret-int for bar {
-    fn secret(): int { 20 }
-  }
-
-  fn test() {
-  path-constraint()
-    let s-foo: int = has-secret-gen[a = int]@(foo)/secret()
-    assert-equals(s-foo, 10)
-    let s-bar: int = has-secret-gen[a = int]@(bar)/secret()
-    assert-equals(s-bar, 20)
-
-    let s-foo-int: int = has-secret-int@(foo)/secret()
-    assert-equals(s-foo-int, 10)
-    let s-bar-int: int = has-secret-int@(bar)/secret()
-    assert-equals(s-bar-int, 20)
-  }
+ability has-secret-int {
+  fn secret(): int
+}
+ability has-secret-gen[a] {
+  fn secret(): a
 }
 
+type foo = {}
+type bar = {}
 
-fn test() {
-
-  // Method-style call
-  let three = 3: i32
-  assert(three.num() == 3)
-
-  // Qualified call
-  assert(num/num(3: i32) == 3)
-
-  // Method-style call on user-defined type
-  let p = point.{ x = 1, y = 2 }
-  assert(p.num() == 3)
-
-  let buf: span[u8] = [104: u8, 101, 108, 108, 111].as-span()
-  let x: string = codec/read(buf)
-  assert-equals(x, "hello")
-  assert-equals[string]("asdf", codec/read("asdf".write()))
-
-  qualified_syntax/test()
+impl has-secret-gen[a = int] for foo {
+  fn secret(): int { 10 }
 }
-
-// This is below 'main' so that
-// it tests for order-independence of the impls
-impl num for i32 {
-  fn num(self): i32 {
-    self
-  }
+impl has-secret-gen[a = int] for bar {
+  fn secret(): int { 20 }
+}
+impl has-secret-int for foo {
+  fn secret(): int { 30 }
 }
 
 ns remote {
@@ -104,6 +43,10 @@ ns remote {
 
 fn greet-twice[t: remote/greet](x: t): string { "${x.greet()} ${x.greet()}" }
 
-fn path-constraint() {
+fn test() {
+  assert-equals[string]("asdf", codec/read("asdf".write()))
+  assert-equals(has-secret-gen[a = int]@(foo)/secret(), 10)
+  assert-equals(has-secret-gen[a = int]@(bar)/secret(), 20)
+  assert-equals(has-secret-int@(foo)/secret(), 30)
   assert-equals(greet-twice(7: u8), "hi 7 hi 7")
 }

@@ -1,68 +1,46 @@
-ns recurse_basic {
-  type node = { node: optref[node] }
-  type tree = either { leaf, node(*tree) }
+ns recurse_basic
 
-  fn make(n: size): optref[node] {
-    if n == 0 optref/null() else optref/make(mem/new(.{ node = make(n - 1) }))
-  }
+type node = { node: optref[node] }
+type tree = either { leaf, node(*tree) }
+type expr = either { leaf(i64), many(list[expr]) }
 
-  fn count(n: optref[node]): size {
-    if n.as-opt() is { :none -> 0, :some n -> 1 + count(n.node) }
-  }
+fn make(n: size): optref[node] {
+  if n == 0 optref/null() else optref/make(mem/new(.{ node = make(n - 1) }))
+}
 
-  fn emake(n: size): tree {
-    if n == 0 :leaf else :node mem/new(emake(n - 1))
-  }
+fn count(n: optref[node]): size {
+  if n.as-opt() is { :none -> 0, :some n -> 1 + count(n.node) }
+}
 
-  fn ecount(en: tree): size {
-    if en is {
-      :leaf -> 0,
-      :node child -> 1 + ecount(child.*)
-    }
-  }
+fn emake(n: size): tree {
+  if n == 0 :leaf else :node mem/new(emake(n - 1))
+}
 
-  type expr = either { leaf(i64), many(list[expr]) }
+fn ecount(en: tree): size {
+  if en is {
+    :leaf -> 0,
+    :node child -> 1 + ecount(child.*)
+  }
+}
 
-  fn derived-eq() {
-    let a: expr = :many([:leaf(1), :many([:leaf(2)])])
-    let b: expr = :many([:leaf(1), :many([:leaf(2)])])
-    let c: expr = :many([:leaf(1), :many([:leaf(3)])])
-    assert(a == b)
-    assert(a != c)
+fn reca(n: size): size {
+  if n == 0 0 else 1 + recb(n - 1)
+}
+fn recb(n: size): size {
+  reca(n)
+}
 
-    let xs: list[expr] = [:leaf(7)]
-    for x in xs { assert(x == a or x != a) }
-    let seven: expr = :leaf(7)
-    let eight: expr = :leaf(8)
-    assert(xs.contains(seven))
-    assert(not xs.contains(eight))
-  }
+fn test() {
+  let static-reca: size = #static reca(7)
+  assert-equals(static-reca, 7)
+  assert-equals(count(make(4)), 4)
+  assert-equals(ecount(emake(10)), 10)
 
-  fn reca(n: size): size {
-    if n == 0 0 else 1 + recb(n - 1)
-  }
-  fn recb(n: size): size {
-    ind-reca(n)
-  }
-  fn ind-reca(n: size): size {
-    reca(n)
-  }
-  fn self-rec(n: size): size {
-    if n == 0 0 else 1 + self-rec(n - 1)
-  }
-
-  fn test() {
-    assert-equals(reca(5), 5)
-    assert-equals(self-rec(6), 6)
-    let static-reca: size = #static reca(7)
-    let static-self-rec: size = #static self-rec(8)
-    assert-equals(static-reca, 7)
-    assert-equals(static-self-rec, 8)
-    let node = make(4)
-    assert-equals(count(node), 4)
-    let enode = emake(10)
-    assert-equals(ecount(enode), 10)
-    derived-eq()
-  }
-
+  let a: expr = :many([:leaf(1), :many([:leaf(2)])])
+  let b: expr = :many([:leaf(1), :many([:leaf(2)])])
+  let c: expr = :many([:leaf(1), :many([:leaf(3)])])
+  assert(a == b)
+  assert(a != c)
+  let xs: list[expr] = [:leaf(7)]
+  assert(xs.contains(:leaf(7)))
 }

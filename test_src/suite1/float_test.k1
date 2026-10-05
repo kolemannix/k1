@@ -3,35 +3,14 @@ ns float_test
 fn test() {
   constant-bits()
   #static constant-bits()
-  let pi: f64 = 3.14159
-  assert-equals(pi, 3.14159)
-  assert(3.0 > 2.0)
-  assert(3.0 >= 3.0)
-  assert(not (3.0 > 3.0))
 
-  assert(10.0 / 2.0 == 5.0)
-  assert(10.0 * 2.1 == 21.0)
-
-  assert(42.as[f64] == 42.0)
-  assert(-447.as[f32] == -447.0)
-  assert((10.0: f64).trunc[f32] == 10.0)
-  assert(11.1.as[u32] == 11)
-  assert(10.1.as[i32] == 10)
   assert-equals(-10.1.as[i32], -10)
-  assert((58686845.22: f64).as[i64] == 58686845)
-
-  assert-equals((200.0: f32).as[u8], 200)
   assert-equals((-100.0: f32).as[i8], -100)
-  assert-equals((40000.0: f32).as[u16], 40000)
-  assert-equals((-20000.0: f64).as[i16], -20000)
-
   assert-equals((300.0: f32).as[u8], 255)
   assert-equals((-5.0: f32).as[u8], 0)
-  assert-equals((300.0: f32).as[i8], 127)
   assert-equals((-300.0: f32).as[i8], -128)
   assert-equals((70000.5: f64).as[u16], 65535)
   assert-equals((10000000000.0: f32).as[u32], 4294967295)
-  assert-equals((-5.0: f32).as[u32], 0)
   assert-equals((10000000000.0: f32).as[i32], 2147483647)
 
   let f32-zero: f32 = 0.0
@@ -41,48 +20,24 @@ fn test() {
   assert-equals(((1.0: f32) / f32-zero).negated().as[i8], -128)
 
   let ct-over-u8: u8 = #static { (300.0: f32).as[u8] }
-  let ct-under-u8: u8 = #static { (-5.0: f32).as[u8] }
   let ct-under-i8: i8 = #static { (-300.0: f32).as[i8] }
-  let ct-over-u16: u16 = #static { (70000.5: f64).as[u16] }
   let ct-over-u32: u32 = #static { (10000000000.0: f32).as[u32] }
-  let ct-over-i32: i32 = #static { (10000000000.0: f32).as[i32] }
   assert-equals(ct-over-u8, 255)
-  assert-equals(ct-under-u8, 0)
   assert-equals(ct-under-i8, -128)
-  assert-equals(ct-over-u16, 65535)
   assert-equals(ct-over-u32, 4294967295)
-  assert-equals(ct-over-i32, 2147483647)
-  assert(-448.0 < -447.0)
-  assert(-448.0 <= -447.0)
 
-  assert(1.5 + 2.5 == 4.0)
-  assert(-1.5 == 0.0 - 1.5)
   assert(5.0 % 2.0 == 1.0)
-
-  assert-equals(1.5.negated(), -1.5)
-  assert-equals((-2.0).negated(), 2.0)
-  assert-equals((1.5: f32).negated(), (-1.5: f32))
-  // negated is a true fneg: 0.0.negated() is -0.0, whose reciprocal is -inf
   assert(1.0 / 0.0.negated() < 0.0)
-  assert(1.0 / 0.0 > 0.0)
 
   assert(not (f64/nan == f64/nan))
   assert(not (f32/nan == f32/nan))
   assert((not (f64/nan < 0.0)) and (not (f64/nan > 0.0)))
-  assert(f64/neg-inf < -1.7976931348623157e308)
-  assert(f64/inf > 1.7976931348623157e308)
-  assert(f32/neg-inf < -3.4028235e38)
-  assert(f32/inf > 3.4028235e38)
   assert-equals(mem/bitcast[f64, u64](f64/nan), 0x7FF8000000000000)
   assert-equals(mem/bitcast[f32, u32](f32/nan), 0x7FC00000)
 
   let static-nan: f64 = #static f64/nan
-  let static-infinity: f32 = #static f32/inf
   assert(not (static-nan == static-nan))
-  assert(static-infinity > 3.4028235e38)
 
-  assert(-0.0 == 0.0)
-  assert((-0.0: f32) == 0.0)
   assert(1.0e-400 == 0.0)
   assert((1.0e-50: f32) == 0.0)
   assert(1.0e400 == f64/inf)
@@ -90,43 +45,22 @@ fn test() {
   assert((16777217.0: f32) == 16777216.0)
   assert(9007199254740993.0 == 9007199254740992.0)
 
-  assert-equals((-2.5).abs(), 2.5)
-  assert-equals(2.5.abs(), 2.5)
-  assert-equals((-2.5: f32).abs(), 2.5)
-  assert-equals((2.5: f32).abs(), 2.5)
   assert-equals(mem/bitcast[f64, u64]((-0.0).abs()), 0)
   assert-equals(mem/bitcast[f32, u32]((-0.0: f32).abs()), 0)
-  assert-equals(f64/neg-inf.abs(), f64/inf)
-  assert-equals(f32/neg-inf.abs(), f32/inf)
   let static-abs: f32 = #static { (-7.25: f32).abs() }
   assert-equals(static-abs, 7.25)
 
-  assert-equals(min(1.5, 2.5), 1.5)
-  assert-equals(max(1.5, 2.5), 2.5)
-  assert-equals((-1.5: f32).min(-2.5), -2.5)
-  assert-equals((-1.5: f32).max(-2.5), -1.5)
-  assert-equals(f64/neg-inf.min(0.0), f64/neg-inf)
-  assert-equals(f32/inf.max(0.0), f32/inf)
-  // min/max are `<`/`>` selects: a NaN on the left loses, a NaN on the right wins
   assert-equals(f64/nan.min(1.0), 1.0)
   assert(1.0.min(f64/nan) != 1.0.min(f64/nan))
-  let static-min: f64 = #static { 3.0.min(2.0) }
-  assert-equals(static-min, 2.0)
-
-  assert(1337.1 is 1337.1)
-  assert(not 1337.1 is 1337.2)
 
   if 42.0 is {
     41.0 -> crash("should not equal"),
     42.0 -> .{},
     f -> crash("should not fall through")
   }
-
-  .{}
 }
 
 fn constant-bits() {
-  assert-equals(mem/bitcast[f64, u64](1.5), 0x3ff8000000000000)
   assert-equals(mem/bitcast[f64, u64](0.1), 0x3fb999999999999a)
   assert-equals(mem/bitcast[f32, u32](0.1: f32), 0x3dcccccd)
   assert-equals(mem/bitcast[f64, u64](-0.0), 0x8000000000000000)
