@@ -58,7 +58,7 @@ fn(inline) find-match-length(s1: ptr, s2: ptr, limit: size): size {
 
 fn(inline) emit-code(code: size, depth: buffer[u8], bits: buffer[u16], histo: buffer[u32], bw: bit-writer): bit-writer {
   histo.index-unchecked(code).* = histo.index-unchecked(code).* + 1
-  bw.write-bits(depth.index-unchecked(code).*.widen[size], bits.index-unchecked(code).*.widen[u64])
+  bw.write-bits(depth.index-unchecked(code).*.as-size(), bits.index-unchecked(code).*.widen[u64])
 }
 
 fn(inline) emit-insert-len(insertlen: size, depth: buffer[u8], bits: buffer[u16], histo: buffer[u32], bw: bit-writer): bit-writer {
@@ -146,7 +146,7 @@ fn(inline) emit-literals(input: ptr, len: size, depth: buffer[u8], bits: buffer[
   let j: size = 0
   while j < len {
     let lit = input.add-bytes(j).ref[u8].*
-    bw = bw.write-bits(depth.index-unchecked(lit).*.widen[size], bits.index-unchecked(lit).*.widen[u64])
+    bw = bw.write-bits(depth.index-unchecked(lit).*.as-size(), bits.index-unchecked(lit).*.widen[u64])
     j = j + 1
   }
   bw
@@ -196,7 +196,7 @@ fn should-merge-block(s: *one-pass-arena, data: ptr, len: size, depths: buffer[u
   let r = (fast-log2(total) + 0.5) * total.as[f64] + 200.0
   i = 0
   while i < 256 {
-    let h = histo.index-unchecked(i).*.widen[size]
+    let h = histo.index-unchecked(i).*.as-size()
     r = r - h.as[f64] * (depths.index-unchecked(i).*.widen[i64].as[f64] + fast-log2(h))
     i = i + 1
   }
@@ -224,7 +224,7 @@ fn build-and-store-literal-prefix-code(
       let h = histogram.index-unchecked(i).*
       let adjust: u32 = 2 * (if h < 11 h else 11)
       histogram.index-unchecked(i).* = h + adjust
-      histogram-total = histogram-total + adjust.widen[size]
+      histogram-total = histogram-total + adjust.as-size()
       i = i + 1
     }
   } else {
@@ -241,7 +241,7 @@ fn build-and-store-literal-prefix-code(
       let h = histogram.index-unchecked(i).*
       let adjust: u32 = 1 + 2 * (if h < 11 h else 11)
       histogram.index-unchecked(i).* = h + adjust
-      histogram-total = histogram-total + adjust.widen[size]
+      histogram-total = histogram-total + adjust.as-size()
       i = i + 1
     }
   }
@@ -251,7 +251,7 @@ fn build-and-store-literal-prefix-code(
   while i < 256 {
     let h = histogram.index-unchecked(i).*
     if h != 0 {
-      literal-ratio = literal-ratio + (h.widen[size] * depths.index-unchecked(i).*.widen[size])
+      literal-ratio = literal-ratio + (h.as-size() * depths.index-unchecked(i).*.as-size())
     }
     i = i + 1
   }
@@ -327,7 +327,7 @@ fn(inline) update-table-after-copy-1p(ip: ptr, base-ip: ptr, table: buffer[i32],
   table.index-unchecked(hash-bytes-at-offset(input-bytes, 1, shift)).* = (pos - 2).trunc[i32]
   table.index-unchecked(hash-bytes-at-offset(input-bytes, 2, shift)).* = (pos - 1).trunc[i32]
   let cur-hash = hash-bytes-at-offset(input-bytes, 3, shift)
-  let candidate = base-ip.add-bytes(table.index-unchecked(cur-hash).*.widen[size])
+  let candidate = base-ip.add-bytes(table.index-unchecked(cur-hash).*.as-size())
   table.index-unchecked(cur-hash).* = pos.trunc[i32]
   candidate
 }
@@ -392,7 +392,7 @@ fn compress-fragment-impl(
 
         loop {
           let h = next-hash
-          let bytes-between = (skip >> 5).widen[size]
+          let bytes-between = (skip >> 5).as-size()
           skip = skip + 1
           ip = next-ip
           next-ip = ip.add-bytes(bytes-between)
@@ -404,7 +404,7 @@ fn compress-fragment-impl(
             table.index-unchecked(h).* = ip.diff(base-ip).trunc[i32]
             found = true
           } else {
-            candidate = base-ip.add-bytes(table.index-unchecked(h).*.widen[size])
+            candidate = base-ip.add-bytes(table.index-unchecked(h).*.as-size())
             table.index-unchecked(h).* = ip.diff(base-ip).trunc[i32]
             found = is-match(ip, candidate)
           }

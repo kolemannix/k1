@@ -91,7 +91,7 @@ ns for parser {
   }
 
   fn tok-chars(self: *parser, t: token): string {
-    self.program.source.slice(t.start.widen[size], t.end().widen[size])
+    self.program.source.slice(t.start.as-size(), t.end().as-size())
   }
 
   fn make-ident(self: *parser, t: token): ast/string-id {

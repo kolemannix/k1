@@ -153,7 +153,7 @@ fn(inline) update-table-after-copy(
     table.index-unchecked(hash-2p-at-offset(input-bytes, 0, shift, min-match)).* = (pos - 3).trunc[i32]
     table.index-unchecked(hash-2p-at-offset(input-bytes, 1, shift, min-match)).* = (pos - 2).trunc[i32]
     table.index-unchecked(hash-2p-at-offset(input-bytes, third-offset, shift, min-match)).* = (pos - 1).trunc[i32]
-    let candidate = base-ip.add-bytes(table.index-unchecked(cur-hash).*.widen[size])
+    let candidate = base-ip.add-bytes(table.index-unchecked(cur-hash).*.as-size())
     table.index-unchecked(cur-hash).* = pos.trunc[i32]
     candidate
   } else {
@@ -165,7 +165,7 @@ fn(inline) update-table-after-copy(
     let cur-hash = hash-2p-at-offset(input-bytes2, 2, shift, min-match)
     table.index-unchecked(hash-2p-at-offset(input-bytes2, 0, shift, min-match)).* = (pos - 2).trunc[i32]
     table.index-unchecked(hash-2p-at-offset(input-bytes2, 1, shift, min-match)).* = (pos - 1).trunc[i32]
-    let candidate = base-ip.add-bytes(table.index-unchecked(cur-hash).*.widen[size])
+    let candidate = base-ip.add-bytes(table.index-unchecked(cur-hash).*.as-size())
     table.index-unchecked(cur-hash).* = pos.trunc[i32]
     candidate
   }
@@ -195,7 +195,7 @@ fn(inline) create-commands[mm: static size](
 
       loop {
         let h = next-hash
-        let bytes-between = (skip >> 5).widen[size]
+        let bytes-between = (skip >> 5).as-size()
         skip = skip + 1
         ip = next-ip
         next-ip = ip.add-bytes(bytes-between)
@@ -207,7 +207,7 @@ fn(inline) create-commands[mm: static size](
           table.index-unchecked(h).* = ip.diff(base-ip).trunc[i32]
           found = true
         } else {
-          candidate = base-ip.add-bytes(table.index-unchecked(h).*.widen[size])
+          candidate = base-ip.add-bytes(table.index-unchecked(h).*.as-size())
           table.index-unchecked(h).* = ip.diff(base-ip).trunc[i32]
           found = is-match-2p(ip, candidate, min-match)
         }
@@ -330,7 +330,7 @@ fn store-commands(s: *two-pass-arena, sink: *cmd-sink, bw: bit-writer): bit-writ
 
   let i: size = 0
   while i < sink.num-literals {
-    let lit = sink.literals.index-unchecked(i).*.widen[size]
+    let lit = sink.literals.index-unchecked(i).*.as-size()
     lit-histo.index-unchecked(lit).* = lit-histo.index-unchecked(lit).* + 1
     i = i + 1
   }
@@ -339,7 +339,7 @@ fn store-commands(s: *two-pass-arena, sink: *cmd-sink, bw: bit-writer): bit-writ
 
   i = 0
   while i < sink.num-commands {
-    let code = (sink.commands.index-unchecked(i).* & 0xFF).widen[size]
+    let code = (sink.commands.index-unchecked(i).* & 0xFF).as-size()
     cmd-histo.index-unchecked(code).* = cmd-histo.index-unchecked(code).* + 1
     i = i + 1
   }
@@ -353,16 +353,16 @@ fn store-commands(s: *two-pass-arena, sink: *cmd-sink, bw: bit-writer): bit-writ
   i = 0
   while i < sink.num-commands {
     let cmd = sink.commands.index-unchecked(i).*
-    let code = (cmd & 0xFF).widen[size]
+    let code = (cmd & 0xFF).as-size()
     let extra = (cmd >> 8).widen[u64]
-    bw = bw.write-bits(cmd-depth.index-unchecked(code).*.widen[size], cmd-bits.index-unchecked(code).*.widen[u64])
-    bw = bw.write-bits(k-num-extra-bits.[code].widen[size], extra)
+    bw = bw.write-bits(cmd-depth.index-unchecked(code).*.as-size(), cmd-bits.index-unchecked(code).*.widen[u64])
+    bw = bw.write-bits(k-num-extra-bits.[code].as-size(), extra)
     if code < 24 {
-      let insert = k-insert-offset.[code].widen[size] + extra.signed()
+      let insert = k-insert-offset.[code].as-size() + extra.signed()
       let j: size = 0
       while j < insert {
-        let lit = sink.literals.index-unchecked(lit-pos).*.widen[size]
-        bw = bw.write-bits(lit-depth.index-unchecked(lit).*.widen[size], lit-bits.index-unchecked(lit).*.widen[u64])
+        let lit = sink.literals.index-unchecked(lit-pos).*.as-size()
+        bw = bw.write-bits(lit-depth.index-unchecked(lit).*.as-size(), lit-bits.index-unchecked(lit).*.widen[u64])
         lit-pos = lit-pos + 1
         j = j + 1
       }
@@ -377,7 +377,7 @@ fn bits-entropy(population: buffer[u32], count: size): f64 {
   let retval = 0.0
   let i: size = 0
   while i < count {
-    let p = population.index-unchecked(i).*.widen[size]
+    let p = population.index-unchecked(i).*.as-size()
     sum = sum + p
     retval = retval - p.as[f64] * fast-log2(p)
     i = i + 1

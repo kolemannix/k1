@@ -116,7 +116,7 @@ ns for searcher {
 
   fn is-repetition(self: *searcher, pos: *position): bool {
     let n = self.keys.len()
-    let reach = pos.halfmove.widen[size].min(n - 1)
+    let reach = pos.halfmove.as-size().min(n - 1)
     let back: size = 4
     while back <= reach {
       if self.keys.[n - 1 - back] == pos.key return true

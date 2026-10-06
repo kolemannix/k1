@@ -15,6 +15,7 @@ fn main(argc: i32, argv: ptr): i32 {
     host = "0.0.0.0",
     port,
     accept-queue-len = 128,
+    max-connections = 1024,
     header-timeout-ms = 10000,
     body-timeout-ms = 30000,
     write-timeout-ms = 30000,

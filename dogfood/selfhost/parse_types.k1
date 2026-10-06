@@ -45,7 +45,7 @@ ns for parser {
     let t = self.peek()
     if t.kind is :fmt-spec {
       self.advance()
-      :ok(lex/parse-fmt-spec(self.tok-chars(t).slice(1, t.len.widen[size])))
+      :ok(lex/parse-fmt-spec(self.tok-chars(t).slice(1, t.len.as-size())))
     } else if t.kind is :colon {
       :err(make-error("Invalid format spec; expected \${value:[[fill]align][0][width][.precision]}", t))
     } else :ok(:none)

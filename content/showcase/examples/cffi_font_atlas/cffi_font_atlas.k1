@@ -32,10 +32,10 @@ fn shade(v: u8): char {
 }
 
 fn print-glyph(c: char) {
-  let g = ATLAS.glyphs.[c.as-u8().widen[size] - FIRST_CHAR]
-  for y in g.y0.widen[size].until(g.y1.widen[size]) {
+  let g = ATLAS.glyphs.[c.as-u8().as-size() - FIRST_CHAR]
+  for y in g.y0.as-size().until(g.y1.as-size()) {
     let line = string-builder/new()
-    for x in g.x0.widen[size].until(g.x1.widen[size]) {
+    for x in g.x0.as-size().until(g.x1.as-size()) {
       line.write-byte(shade(ATLAS.pixels.[y * ATLAS_W + x]).as-u8())
     }
     println(line.build())

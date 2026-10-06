@@ -724,7 +724,7 @@ Arrays have a compile-time length in their type. Buffers, lists, and spans are
 used heavily in the core library and dogfood programs.
 
 Common helpers include `.len()`, `.[index]`, `.[index] = value`,
-`.as-span()`, `buffer/wrap-array(...)`, and `list/filled-in(...)`.
+`.as-span()`, `.as-buffer()`, and `list/filled-in(...)`.
 
 Collection API naming follows a doctrine:
 
@@ -741,6 +741,24 @@ Collection API naming follows a doctrine:
 - Every allocation is zeroed (zero is initialized). Arena `reset` and
   `pop-to-mark` restore that by zeroing the bytes they release, so they cost
   O(bytes used); arena `free` is a no-op.
+- `arena/init(size)` acquires its own region and chains when full;
+  `arena/init-from-buffer(bytes)` puts the header in caller memory, which must
+  be zeroed, and is fixed (exhaustion crashes); `release` frees only what the
+  arena acquired.
+- `arena/handle[t]` (`{offset: u32}`) and `arena/span-handle[t]`
+  (`{offset, len: u32}`) are relocatable references into an arena's first
+  region, measured from its header, so `.0` is nil/empty. Allocate as usual
+  and convert (`handle-from(*t)`, `handle-from-many(span)`), or use the
+  `*arena`-only `push-handle`, `push-many`, `alloc-many`; read
+  with `get(h): *t` and `get-many(h): buffer[t]`. Converting memory outside
+  the first region crashes; debug and `#static` builds check reads against
+  live memory.
+- `std/pool`: `pool[t]` holds fixed-capacity slots addressed by
+  `pool/handle[t]`. Slot 0 is a zeroed nil: `get` on a handle that isn't live
+  (released, `.0`, or garbage) returns nil, a full pool's `acquire` returns
+  `.0`; check `is-live` where it matters. When `t` is not zero-safe
+  (`types/is-zero-safe[t]()`, false for types holding `*t`), `get` on a
+  handle that isn't live crashes instead.
 - Mutators take `*self` and reuse the verb (`sort`, `reverse`); functional
   variants get `-ed` (`sorted`, `reversed`).
 - Shared collection ops are ability defaults: reads and views on `as-span`

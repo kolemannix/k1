@@ -59,7 +59,7 @@ ns fmt {
 
     fn shortfall(self: *pad, width: u32): size {
       let len = char-count(self.text.as-span())
-      let width = width.widen[size]
+      let width = width.as-size()
       if len >= width 0 else width - len
     }
 

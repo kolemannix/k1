@@ -70,11 +70,11 @@ fn set-depth(p0: size, pool: buffer[huffman-tree], depth: buffer[u8], max-depth:
     if node.index-left >= 0 {
       level = level + 1
       if level > max-depth return false
-      stack.[level] = node.index-right-or-value.widen[size]
-      p = node.index-left.widen[size]
+      stack.[level] = node.index-right-or-value.as-size()
+      p = node.index-left.as-size()
       continue
     }
-    depth.index-unchecked(node.index-right-or-value.widen[size]).* = level.trunc[u8]
+    depth.index-unchecked(node.index-right-or-value.as-size()).* = level.trunc[u8]
     while level >= 0 and stack.[level] == -1 {
       level = level - 1
     }
@@ -105,7 +105,7 @@ fn create-huffman-tree(
 
     if n == 1 {
       let v = tree.index-unchecked(0).*.index-right-or-value
-      depth.index-unchecked(v.widen[size]).* = 1
+      depth.index-unchecked(v.as-size()).* = 1
       break
     }
 
@@ -149,13 +149,13 @@ fn create-huffman-tree(
 
 fn reverse-bits(num-bits: size, bits: u16): u16 {
   let lut: array[size, 16] = [0, 8, 4, 12, 2, 10, 6, 14, 1, 9, 5, 13, 3, 11, 7, 15]
-  let retval = lut.[(bits & 0x0F).widen[size]]
+  let retval = lut.[(bits & 0x0F).as-size()]
   let i: size = 4
   let b = bits
   while i < num-bits {
     retval = retval << 4
     b = b >> 4
-    retval = retval | lut.[(b & 0x0F).widen[size]]
+    retval = retval | lut.[(b & 0x0F).as-size()]
     i = i + 4
   }
   (retval >> (num-bits.negated() & 0x03).trunc[u32]).trunc[u16]
@@ -166,7 +166,7 @@ fn convert-bit-depths-to-symbols(depth: buffer[u8], len: size, bits: buffer[u16]
   let next-code = array/zeroed[u16, 16]()
   let i: size = 0
   while i < len {
-    let d = depth.index-unchecked(i).*.widen[size]
+    let d = depth.index-unchecked(i).*.as-size()
     bl-count.[d] = bl-count.[d] + 1
     i = i + 1
   }
@@ -182,7 +182,7 @@ fn convert-bit-depths-to-symbols(depth: buffer[u8], len: size, bits: buffer[u16]
   while i < len {
     let d = depth.index-unchecked(i).*
     if d != 0 {
-      let ds = d.widen[size]
+      let ds = d.as-size()
       bits.index-unchecked(i).* = reverse-bits(ds, next-code.[ds])
       next-code.[ds] = next-code.[ds] + 1
     }
@@ -378,7 +378,7 @@ fn store-huffman-tree-of-huffman-tree(
   bw = bw.write-bits(2, skip-some.unsigned())
   let i = skip-some
   while i < codes-to-store {
-    let l = code-length-bitdepth.index-unchecked(storage-order.[i]).*.widen[size]
+    let l = code-length-bitdepth.index-unchecked(storage-order.[i]).*.as-size()
     bw = bw.write-bits(code-lengths.[l], code-symbols.[l])
     i = i + 1
   }
@@ -393,9 +393,9 @@ fn store-huffman-tree-to-bit-mask(
   let bw = bw
   let i: size = 0
   while i < huffman-tree-size {
-    let ix = huffman-tree.index-unchecked(i).*.widen[size]
+    let ix = huffman-tree.index-unchecked(i).*.as-size()
     bw = bw.write-bits(
-      code-length-bitdepth.index-unchecked(ix).*.widen[size],
+      code-length-bitdepth.index-unchecked(ix).*.as-size(),
       code-length-bitdepth-symbols.index-unchecked(ix).*.widen[u64])
     if ix == REPEAT_PREVIOUS_CODE_LENGTH {
       bw = bw.write-bits(2, huffman-tree-extra-bits.index-unchecked(i).*.widen[u64])
@@ -425,7 +425,7 @@ fn store-huffman-tree(depths: buffer[u8], num: size, tree: buffer[huffman-tree],
 
   let i: size = 0
   while i < huffman-tree-size {
-    let sym = huffman-tree.index-unchecked(i).*.widen[size]
+    let sym = huffman-tree.index-unchecked(i).*.as-size()
     histogram.index-unchecked(sym).* = histogram.index-unchecked(sym).* + 1
     i = i + 1
   }
@@ -476,7 +476,7 @@ fn build-and-store-huffman-tree-fast(
         symbols.[count] = length
       }
       count = count + 1
-      total = total - h.widen[size]
+      total = total - h.as-size()
     }
     length = length + 1
   }
@@ -590,21 +590,21 @@ fn build-and-store-huffman-tree-fast(
       }
       i = i + reps
       if value == 0 {
-        bw = bw.write-bits(k-zero-reps-depth.[reps].widen[size], k-zero-reps-bits.[reps])
+        bw = bw.write-bits(k-zero-reps-depth.[reps].as-size(), k-zero-reps-bits.[reps])
       } else {
-        let vs = value.widen[size]
+        let vs = value.as-size()
         if previous-value != value {
-          bw = bw.write-bits(k-code-length-depth.[vs].widen[size], k-code-length-bits.[vs].widen[u64])
+          bw = bw.write-bits(k-code-length-depth.[vs].as-size(), k-code-length-bits.[vs].widen[u64])
           reps = reps - 1
         }
         if reps < 3 {
           while reps != 0 {
             reps = reps - 1
-            bw = bw.write-bits(k-code-length-depth.[vs].widen[size], k-code-length-bits.[vs].widen[u64])
+            bw = bw.write-bits(k-code-length-depth.[vs].as-size(), k-code-length-bits.[vs].widen[u64])
           }
         } else {
           reps = reps - 3
-          bw = bw.write-bits(k-non-zero-reps-depth.[reps].widen[size], k-non-zero-reps-bits.[reps])
+          bw = bw.write-bits(k-non-zero-reps-depth.[reps].as-size(), k-non-zero-reps-bits.[reps])
         }
         previous-value = value
       }

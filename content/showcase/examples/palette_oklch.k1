@@ -50,8 +50,8 @@ fn hex(c: srgb8): string {
   let sb = string-builder/new()
   sb.write-char('#')
   for [c.r, c.g, c.b] {
-    sb.write-char(HEX-DIGITS.[(it >> 4).widen[size]])
-    sb.write-char(HEX-DIGITS.[(it & 15).widen[size]])
+    sb.write-char(HEX-DIGITS.[(it >> 4).as-size()])
+    sb.write-char(HEX-DIGITS.[(it & 15).as-size()])
   }
   sb.build()
 }

@@ -114,7 +114,7 @@ ns for client {
   fn start(port: u16, send: string, on-eof: *fn(*client) -> {}): *client {
     let c: *client = heap.new(.{
       tcp = uninit, connect-req = uninit, write-req = uninit, buf = uninit, read-buf = uninit,
-      send, received = list/empty(), started = uv/hrtime(), elapsed-ms = 0, eof = false, on-eof,
+      send, received = list/empty(), started = uv/now(uv/default_loop().get()), elapsed-ms = 0, eof = false, on-eof,
     })
     let l = uv/default_loop().get()
     uv/check(uv/tcp_init(l, c.tcp.&)).!
@@ -147,7 +147,7 @@ fn on-read(stream: *uv/stream, nread: size, buf: *uv/buf) {
     c.received.append-span-in(heap, span/wrap-raw[u8](buf.base.inner, nread))
   } else if nread < 0 {
     c.eof = true
-    c.elapsed-ms = (uv/hrtime() - c.started) / 1000000
+    c.elapsed-ms = uv/now(uv/default_loop().get()) - c.started
     uv/close(c.tcp.&.as-handle(), fn h. {
       let c = h.get-data[client]()
       (c.on-eof)(c)
@@ -162,6 +162,7 @@ let(mutable) slowloris-cut: bool = false
 let(mutable) hello-idle-cut: bool = false
 let(mutable) events-cut: bool = false
 let(mutable) slow-finished: bool = false
+let(mutable) over-cap-rejected: bool = false
 
 fn get-server(): *server/server { srv.ref[server/server] }
 
@@ -207,7 +208,7 @@ fn phase2() {
 
 fn test-server() {
   let config: server/config = .{
-    host = "127.0.0.1", port = 0, accept-queue-len = 128,
+    host = "127.0.0.1", port = 0, accept-queue-len = 128, max-connections = 2,
     header-timeout-ms = 200, body-timeout-ms = 30000, write-timeout-ms = 30000,
     idle-timeout-ms = 300, drain-timeout-ms = 3000, handle-signals = false,
   }
@@ -217,12 +218,22 @@ fn test-server() {
   assert(s.port != 0)
   client/start(s.port, "GET / HTTP/1.1\r\nHost: x\r\n", on-slowloris-eof.&)
   client/start(s.port, "GET /hello HTTP/1.1\r\nHost: x\r\n\r\n", on-hello-eof.&)
+  let t: *uv/timer = heap.alloc-t()
+  uv/check(uv/timer_init(uv/default_loop().get(), t)).!
+  let _ = uv/timer_start(t, fn t. {
+    client/start(get-server().port, "GET /hello HTTP/1.1\r\nHost: x\r\n\r\n", fn c. {
+      assert(c.text().starts-with("HTTP/1.1 503 Service Unavailable\r\n"))
+      over-cap-rejected = true
+    })
+    uv/close(t.as-handle(), fn _h. .{})
+  }, 50, 0)
   server/run(s)
   assert(startup-state == "startup-lifetime")
   assert(slowloris-cut)
   assert(hello-idle-cut)
   assert(events-cut)
   assert(slow-finished)
+  assert(over-cap-rejected)
   assert(s.connections.is-empty())
 }
 

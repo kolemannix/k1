@@ -8,6 +8,7 @@ use std/source
 use std/pubsub
 use std/notify
 use std/rc-bytes
+use std/pool
 
 ns server {
 
@@ -15,6 +16,7 @@ type config = {
   host: string,
   port: u16,
   accept-queue-len: i32,
+  max-connections: size,
   header-timeout-ms: u64,
   body-timeout-ms: u64,
   write-timeout-ms: u64,
@@ -40,7 +42,7 @@ type server = {
   scratch-prepare: uv/prepare,
   port: u16,
   handle: dyn[fn(http/request, *services) -> http-response],
-  connections: list[*connection],
+  connections: pool[connection],
   draining: bool,
   conn-serial: u64,
 }
@@ -68,7 +70,7 @@ fn start(
     scratch-prepare = uninit,
     port = config.port,
     handle,
-    connections = list/empty(),
+    connections = pool/with-capacity-in[connection, _](heap, config.max-connections),
     draining = false,
     conn-serial = 0,
   })
@@ -130,8 +132,8 @@ fn stop(s: *server) {
     return
   }
 
-  let snapshot = s.connections.cloned()
-  for conn in snapshot {
+  for s.connections.& {
+    let conn = s.connections.get(it)
     if conn.phase is {
       :idle or :header or :body -> close-connection(conn),
       :handling -> .{},
@@ -141,8 +143,7 @@ fn stop(s: *server) {
   let _ = uv/timer_start(s.drain-timer.&, fn t. {
     let s = t.get-data[server]()
     tprintln("drain deadline passed; closing ${s.connections.len()} connections")
-    let snapshot = s.connections.cloned()
-    for conn in snapshot { close-connection(conn) }
+    for s.connections.& { close-connection(s.connections.get(it)) }
     uv/close(t.as-handle(), fn _h. .{})
   }, s.config.drain-timeout-ms, 0)
 }
@@ -189,7 +190,7 @@ type connection = {
   client-storage: uv/tcp,
   timer-storage: uv/timer,
   serial-no: u64,
-  registry-index: size,
+  handle: pool/handle[connection],
   pending-closes: u32,
   phase: phase,
   close-state: {
@@ -216,16 +217,14 @@ ns for connection {
     connection-arena.set-name("connection")
     let request-arena: *arena = core/arena/init-default()
     request-arena.set-name("request")
-    let conn: *connection = heap.alloc-t()
     s.conn-serial = s.conn-serial + 1
-
-    conn.* = .{
+    let handle = s.connections.acquire(.{
       server = s,
       connection-arena,
       client-storage = uninit,
       timer-storage = uninit,
       serial-no = s.conn-serial,
-      registry-index = s.connections.len(),
+      handle = .0,
       pending-closes = 0,
       phase = :header,
       close-state = .{
@@ -237,16 +236,18 @@ ns for connection {
 
       request-arena,
       active-stream = :none,
-      request-parser = http/parser-init[connection](
-        connection-arena = connection-arena,
-        request-arena = request-arena,
-        user-data = conn,
-        on-header-complete = on-complete-http-header.&,
-        on-body-complete = on-complete-http-body.&,
-      ),
+      request-parser = uninit,
       parsed-header = :none,
-    }
-    s.connections.push-in(heap, conn)
+    })
+    let conn = s.connections.get(handle)
+    conn.handle = handle
+    conn.request-parser = http/parser-init[connection](
+      connection-arena = connection-arena,
+      request-arena = request-arena,
+      user-data = conn,
+      on-header-complete = on-complete-http-header.&,
+      on-body-complete = on-complete-http-body.&,
+    )
 
     uv/check(uv/mutex_init(conn.close-state.lock.&)).!
     uv/check(uv/tcp_init(s.uv-loop, conn.client())).!
@@ -260,17 +261,11 @@ ns for connection {
 
   fn release(self: *connection) {
     let s = self.server
-    let idx = self.registry-index
-    let last = s.connections.pop().!
-    if idx < s.connections.len() {
-      s.connections.[idx] = last
-      last.registry-index = idx
-    }
-    tprintln("conn${self.serial-no} released; active connections: ${s.connections.len()}")
     self.request-arena.release()
     self.connection-arena.release()
     uv/mutex_destroy(self.close-state.lock.&)
-    heap.free-t(self)
+    s.connections.release(self.handle)
+    tprintln("conn${self.serial-no} released; active connections: ${s.connections.len()}")
     on-connection-closed(s)
   }
 
@@ -517,6 +512,21 @@ fn on-new-connection(listener: *uv/stream, status: i32) {
     return
   }
   let s = listener.as-handle().get-data[server]()
+  if s.connections.is-full() {
+    // Over capacity: accept so the listener keeps going, answer 503, close
+    let client: *uv/tcp = heap.alloc-t()
+    uv/check(uv/tcp_init(s.uv-loop, client)).!
+    if uv/check(uv/accept(listener, client.as-stream())).result() is :err e {
+      tprintln("accept error while rejecting: $e")
+    } else {
+      tprintln("at ${s.connections.capacity()} connections; rejecting")
+      let response = "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+      let buf = uv/buf/wrap-span(response.span-bytes())
+      let _ = uv/try_write(client.as-stream(), buf.&, 1)
+    }
+    uv/close(client.as-handle(), fn closed. heap.free-t(closed.as[ptr].ref[uv/tcp]))
+    return
+  }
   let connection = connection/make(s)
   let client = connection.client()
 

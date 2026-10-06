@@ -1,0 +1,140 @@
+type pool[t] = {
+  values      : buffer[t],
+  gens        : buffer[u32],
+  next-free   : buffer[u32],
+  last-touched: u32,
+  first-free  : u32,
+  last-free   : u32,
+  live        : u32,
+}
+
+ns for pool {
+  type handle[t] = { index: u32, gen: u32 }
+
+  let RETIRED-GEN: u32 = 4294967294
+
+  fn with-capacity-in[t, a: allocator](alloc: a, capacity: size): pool[t] {
+    let slots = capacity + 1
+    .{
+      values       = buffer/allocate-in[t, a](alloc, slots),
+      gens         = buffer/allocate-in[u32, a](alloc, slots),
+      next-free    = buffer/allocate-in[u32, a](alloc, slots),
+      last-touched = 0,
+      first-free   = 0,
+      last-free    = 0,
+      live         = 0,
+    }
+  }
+
+  fn with-capacity[t](capacity: size): pool[t] {
+    with-capacity-in[t, *core/arena](mem/current-arena(), capacity)
+  }
+
+  fn capacity[t](self: *pool[t]): size { self.values.len - 1 }
+
+  fn len[t](self: *pool[t]): size { self.live.as-size() }
+
+  fn is-empty[t](self: *pool[t]): bool { self.live == 0 }
+
+  fn is-full[t](self: *pool[t]): bool {
+    self.first-free == 0 and self.last-touched.as-size() == self.capacity()
+  }
+
+  fn(inline) is-live[t](self: *pool[t], handle: handle[t]): bool {
+    handle.index - 1 < self.last-touched
+      and (handle.gen & 1) == 1
+      and self.gens.index-unchecked(handle.index.as-size()).* == handle.gen
+  }
+
+  fn(inline) get[t](self: *pool[t], handle: handle[t]): *t {
+    if self.is-live(handle) self.values.index-unchecked(handle.index.as-size()) else self._nil(handle)
+  }
+
+  fn(cold) _nil[t](self: *pool[t], handle: handle[t]): *t {
+    #if types/is-zero-safe[t] {
+      let nil = self.values.index-unchecked(0)
+      let bytes = nil.as[ptr]
+      if k1/debug or k1/is-static {
+        if span/wrap-raw[byte](bytes, types/size[t]).exists(fn value. value != 0) {
+          crash("pool nil slot was written")
+        }
+      }
+      mem/set(dst = bytes, value = 0, count = types/size[t])
+      nil
+    } else {
+      crash("invalid pool handle: index ${handle.index}, gen ${handle.gen}")
+    }
+  }
+
+  fn acquire[t](self: *pool[t], value: t): handle[t] {
+    let index = self.first-free
+    if index != 0 {
+      self.first-free = self.next-free.[index.as-size()]
+      if self.first-free == 0 { self.last-free = 0 }
+    } else {
+      if self.last-touched.as-size() == self.capacity() return .0
+      self.last-touched = self.last-touched + 1
+      index = self.last-touched
+    }
+    let i = index.as-size()
+    let gen = self.gens.[i] + 1
+    self.gens.[i] = gen
+    self.values.[i] = value
+    self.live = self.live + 1
+    .{ index, gen }
+  }
+
+  fn release[t](self: *pool[t], handle: handle[t]) {
+    if not self.is-live(handle) return
+    let gen = handle.gen + 1
+    self.gens.[handle.index.as-size()] = gen
+    self.live = self.live - 1
+    if gen != RETIRED-GEN self._push-free(handle.index)
+  }
+
+  fn release-all[t](self: *pool[t]) {
+    self.first-free = 0
+    self.last-free = 0
+    self.live = 0
+    let index: u32 = 1
+    while index <= self.last-touched {
+      let i = index.as-size()
+      let gen = self.gens.[i]
+      if (gen & 1) == 1 {
+        gen = gen + 1
+        self.gens.[i] = gen
+      }
+      if gen != RETIRED-GEN self._push-free(index)
+      index = index + 1
+    }
+  }
+
+  fn _push-free[t](self: *pool[t], index: u32) {
+    self.next-free.[index.as-size()] = 0
+    if self.last-free == 0 {
+      self.first-free = index
+    } else {
+      self.next-free.[self.last-free.as-size()] = index
+    }
+    self.last-free = index
+  }
+}
+
+type pool-iterator[t] = { gens: buffer[u32], index: u32, last-touched: u32 }
+
+impl[t] iterator[item = pool/handle[t]] for pool-iterator[t] {
+  fn next(self: *self): ?item {
+    while self.index < self.last-touched {
+      self.index = self.index + 1
+      let gen = self.gens.index-unchecked(self.index.as-size()).*
+      if (gen & 1) == 1 return :some .{ index = self.index, gen }
+    }
+    :none
+  }
+}
+
+impl[t] iterable[item = pool/handle[t], i = pool-iterator[t]] for *pool[t] {
+  fn iterator(self): i {
+    .{ gens = self.gens, index = 0, last-touched = self.last-touched }
+  }
+}

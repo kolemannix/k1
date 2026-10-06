@@ -361,7 +361,7 @@ let DECIMAL_PAIRS: array[u16, 100] = {
   let pairs: array[u16, 100] = uninit
   for i in (0: u8).until(100) {
     let two: array[u8, 2] = [u8/to-ascii-digit(i / 10).as-u8(), u8/to-ascii-digit(i % 10).as-u8()]
-    pairs.[i.widen[size]] = mem/read-unaligned[u16](two.&.as[ptr])
+    pairs.[i.as-size()] = mem/read-unaligned[u16](two.&.as[ptr])
   }
   pairs
 }
@@ -522,18 +522,22 @@ ns for u8 {
 
   fn(inline) as-char(self: u8): char { mem/bitcast[u8, char](self) }
   fn(inline) signed(self: u8): i8 { mem/bitcast[u8, i8](self) }
+  fn(inline) as-size(self: u8): size { self.widen[size] }
 }
 
 ns for i8 {
   fn(inline) unsigned(self: i8): u8 { mem/bitcast[i8, u8](self) }
+  fn(inline) as-size(self: i8): size { self.widen[size] }
 }
 
 ns for u16 {
   fn(inline) signed(self: u16): i16 { mem/bitcast[u16, i16](self) }
+  fn(inline) as-size(self: u16): size { self.widen[size] }
 }
 
 ns for i16 {
   fn(inline) unsigned(self: i16): u16 { mem/bitcast[i16, u16](self) }
+  fn(inline) as-size(self: i16): size { self.widen[size] }
 }
 
 ns for u32 {
@@ -552,6 +556,7 @@ ns for i32 {
 
   fn(inline) as-bool(self: i32): bool { self != 0 }
   fn(inline) unsigned(self: i32): u32 { mem/bitcast(self) }
+  fn(inline) as-size(self: i32): size { self.widen[size] }
 
   fn abs(self: i32): i32 {
     let mask = self >> 31
@@ -667,7 +672,7 @@ ns(lib("k1rt")) k1rt {
 ns float-impl {
   fn write-output[w: writer](w, buf: span[u8], written-len: i32, places: i32) {
     if written-len <= 0 crash("snprintf float returned $written-len")
-    let len = written-len.widen[size]
+    let len = written-len.as-size()
     if len >= buf.len() crash("float format: $places places needs $len bytes, cap is ${buf.len()}")
     w.write-bytes(buf.slice(0, len))
   }

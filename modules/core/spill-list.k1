@@ -22,7 +22,7 @@ ns for spill-list {
   }
 
   fn(inline) len[t, n](self: *spill-list[t, n]): size {
-    if self.is-spilled() self.spilled.list.len else self.inline.len.widen[size]
+    if self.is-spilled() self.spilled.list.len else self.inline.len.as-size()
   }
 
   fn(noinline) _spill[t, n](self: *spill-list[t, n], needed: size) {

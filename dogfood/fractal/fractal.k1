@@ -3,7 +3,7 @@ let(mutable) frame-width: i32 = 0
 let(mutable) frame-height: i32 = 0
 
 fn ensure-frame(width: i32, height: i32) {
-  let needed = (width * height * 4).widen[size]
+  let needed = (width * height * 4).as-size()
   if frame.len < needed { frame = buffer/allocate-in(heap, needed) }
   frame-width = width
   frame-height = height
@@ -84,6 +84,6 @@ fn print-frame() {
 }
 
 fn pixel-at(x: i32, y: i32): { red: u8, green: u8, blue: u8 } {
-  let at = ((y * frame-width + x) * 4).widen[size]
+  let at = ((y * frame-width + x) * 4).as-size()
   .{ red = frame.[at], green = frame.[at + 1], blue = frame.[at + 2] }
 }

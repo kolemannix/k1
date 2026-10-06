@@ -648,7 +648,7 @@ ns platform {
       }
 
       fn commit(base: ptr, len: size) {
-        let page = c/getpagesize().widen[size]
+        let page = c/getpagesize().as-size()
         let start = base.to-size() / page * page
         let end = (base.to-size() + len + page - 1) / page * page
         if c/mprotect(start.to-ptr(), end - start, c/PROT_READ | c/PROT_WRITE) != 0 {
@@ -1073,12 +1073,12 @@ ns platform {
         let buf-size: u32 = 0
         if environ-sizes-get(a32(count.&.as[ptr]), a32(buf-size.&.as[ptr])) != 0 return :none
         if count == 0 return :none
-        let entry-ptrs = mem/alloc-layout(count.widen[size] * 4, 4)
-        let entry-bytes = mem/alloc-layout(buf-size.widen[size], 1)
+        let entry-ptrs = mem/alloc-layout(count.as-size() * 4, 4)
+        let entry-bytes = mem/alloc-layout(buf-size.as-size(), 1)
         if environ-get(a32(entry-ptrs), a32(entry-bytes)) != 0 return :none
-        for i in 0.until(count.widen[size]) {
+        for i in 0.until(count.as-size()) {
           let entry-addr = entry-ptrs.add-bytes(i * 4).ref[u32].*
-          let entry = string/wrap-c(entry-addr.widen[size].to-ptr())
+          let entry = string/wrap-c(entry-addr.as-size().to-ptr())
           if entry.starts-with(name) and entry.drop(name.len()).starts-with("=") {
             return :some(entry.drop(name.len() + 1))
           }

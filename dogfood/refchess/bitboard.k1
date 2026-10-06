@@ -163,7 +163,7 @@ fn build-slider-table(steps: array[step, 4], factors: array[u64, 64]): slider-ta
     magics.[sq] = .{ mask, factor = factors.[sq], shift = 64 - bits, offset = table-len }
     table-len = table-len + (1u32 << bits)
   }
-  let attacks = buffer/allocate[bitboard](table-len.widen[size])
+  let attacks = buffer/allocate[bitboard](table-len.as-size())
   for sq in 0u32.until(64) {
     let m = magics.[sq]
     let subset: bitboard = 0

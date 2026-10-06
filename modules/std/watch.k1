@@ -70,7 +70,7 @@
       n = kevent(w.fd, ptr/null, 0, out.data, 8, ptr/null)
     }
     if n < 0 return :err "watch/wait kevent failed: ${libc/errno-k1-string()}"
-    for i in 0.until(n.widen[size]) {
+    for i in 0.until(n.as-size()) {
       let ev = out.[i]
       if ev.flags.bit-and(EV_ERROR) != 0 continue
       let kind: watch/event-kind = if ev.fflags.bit-and(NOTE_DELETE) != 0 :deleted
@@ -155,7 +155,7 @@
         }
       }
       // Records are variable-length: a fixed header then name[len]
-      offset = offset + types/stride[event-t]() + ev.len.widen[size]
+      offset = offset + types/stride[event-t]() + ev.len.as-size()
     }
     :ok events
   }

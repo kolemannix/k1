@@ -182,15 +182,6 @@ fn uri_to_source<'ast>(ast: &'ast ParsedProgram, url: &Url) -> Option<&'ast Sour
     source.map(|s| s.1)
 }
 
-fn uri_to_edited_source(backend: &Backend, url: &Url) -> Option<(SourceFile, bool)> {
-    match backend.edited_sources.lock().unwrap().get(url) {
-        None => backend
-            .with_k1(|k1| uri_to_source(&k1.ast, url).map(|source| (source.clone(), false)))
-            .unwrap_or(None),
-        Some(ast) => Some((ast.sources.get_main().clone(), true)),
-    }
-}
-
 fn candidate_to_item(candidate: k1::lsp_support::CompletionCandidate) -> CompletionItem {
     let kind = match candidate.kind {
         NameKind::Field => CompletionItemKind::FIELD,
@@ -217,7 +208,7 @@ fn candidate_to_item(candidate: k1::lsp_support::CompletionCandidate) -> Complet
 struct Backend {
     client: Client,
     module: k1::server::SharedProgram,
-    edited_sources: Mutex<HashMap<Url, ParsedProgram>>,
+    open_sources: Mutex<HashMap<Url, ParsedProgram>>,
     /// Canonical src_path of the program we compile (a module dir or single
     /// file), derived from the files the client opens and saves
     src_path: RwLock<Option<PathBuf>>,
@@ -309,7 +300,7 @@ impl Backend {
         Backend {
             client,
             module,
-            edited_sources: Mutex::new(HashMap::new()),
+            open_sources: Mutex::new(HashMap::new()),
             src_path: RwLock::new(None),
             published_diagnostic_urls: Mutex::new(HashSet::new()),
             compile_iteration: AtomicU32::new(0),
@@ -349,8 +340,8 @@ impl Backend {
         };
         let spliced = {
             let content_and_line = {
-                let edited_sources = self.edited_sources.lock().unwrap();
-                edited_sources
+                let open_sources = self.open_sources.lock().unwrap();
+                open_sources
                     .get(file_url)
                     .and_then(|ast| content_at_line(ast, ast.sources.get_main()))
             };
@@ -479,16 +470,15 @@ impl Backend {
     /// Point the program at `file_url`'s module if it isn't already covered,
     /// then compile when the target changed, no program exists yet, or
     /// `force_compile` (saves). Publishes diagnostics after compiling.
-    /// Returns whether a compile ran.
-    async fn ensure_target_and_compile(&self, file_url: &Url, force_compile: bool) -> bool {
+    async fn ensure_target_and_compile(&self, file_url: &Url, force_compile: bool) {
         let my_generation = self.retarget_generation.fetch_add(1, Ordering::SeqCst) + 1;
         let _guard = self.retarget_lock.lock().await;
         if self.retarget_generation.load(Ordering::SeqCst) != my_generation {
             // A newer open/save superseded this one while we waited
-            return false;
+            return;
         }
         let Some(target) = self.target_file_for_url(file_url) else {
-            return false;
+            return;
         };
         let changed = {
             let mut src_path = self.src_path.write().unwrap();
@@ -498,11 +488,10 @@ impl Backend {
         };
         let no_program = self.with_k1(|_| ()).is_none();
         if !(changed || no_program || force_compile) {
-            return false;
+            return;
         }
         self.compile().await;
         self.send_diagnostics().await;
-        true
     }
 
     async fn compile(&self) -> u32 {
@@ -680,7 +669,6 @@ impl LanguageServer for Backend {
                 range: Some(false),
                 full: Some(SemanticTokensFullOptions::Delta { delta: Some(false) }),
             }));
-        // res.capabilities.semantic_tokens_provider = None;
         res.capabilities.completion_provider = Some(CompletionOptions {
             resolve_provider: Some(false),
             trigger_characters: Some(vec![".".to_string(), ":".to_string(), "/".to_string()]),
@@ -760,8 +748,8 @@ impl LanguageServer for Backend {
         }
 
         {
-            let mut edited_sources = self.edited_sources.lock().unwrap();
-            edited_sources.insert(file_url.clone(), ast);
+            let mut open_sources = self.open_sources.lock().unwrap();
+            open_sources.insert(file_url.clone(), ast);
         }
         let version = self.compile_iteration.load(Ordering::Relaxed);
 
@@ -847,90 +835,79 @@ impl LanguageServer for Backend {
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
         let file_url = params.text_document.uri;
-        let Some((source, is_edited)) = uri_to_edited_source(self, &file_url) else {
-            info!("Could not get source for {}", file_url.path());
+        info!("semantic_tokens {}", file_url.path());
+        let open_sources = self.open_sources.lock().unwrap();
+        let Some(ast_for_file) = open_sources.get(&file_url) else {
+            info!("semantic_tokens: {} is not open", file_url.path());
             return Ok(None);
         };
-        info!("semantic_tokens {}. is_edited={is_edited}", file_url.path(),);
-        self.with_k1(|k1| {
-            let edited_sources = self.edited_sources.lock().unwrap();
-            let ast_for_file: &ParsedProgram = match is_edited {
-                false => &k1.ast,
-                true => edited_sources.get(&file_url).unwrap(),
+        let source = ast_for_file.sources.get_main();
+        let file_tokens = source.semantic_tokens.as_slice(&ast_for_file.mem);
+        let capacity = file_tokens.len() + source.trivia.len() as usize;
+        let mut tokens: Vec<SemanticToken> = Vec::with_capacity(capacity);
+        let mut spans_and_kinds = Vec::with_capacity(capacity);
+        for semantic_token in file_tokens {
+            let token_type = match semantic_token.kind {
+                parse::SemanticTokenKind::Type => TokenTypes::Type,
+                parse::SemanticTokenKind::Variable => TokenTypes::Variable,
+                parse::SemanticTokenKind::String => TokenTypes::String,
+                parse::SemanticTokenKind::Keyword => TokenTypes::Keyword,
+                parse::SemanticTokenKind::Function => TokenTypes::Function,
+                parse::SemanticTokenKind::Namespace => TokenTypes::Namespace,
+                parse::SemanticTokenKind::Operator => TokenTypes::Operator,
+                parse::SemanticTokenKind::Comment => TokenTypes::Comment,
             };
+            spans_and_kinds.push((semantic_token.span, token_type as u32, 0))
+        }
+        for entry in ast_for_file.mem.getn_lt(source.trivia) {
+            match entry.trivia.kind {
+                lex::TokenTriviaKind::LineComment => {
+                    let span =
+                        lex::Span { lo: source.base + entry.trivia.start, len: entry.trivia.len };
+                    spans_and_kinds.push((span, TokenTypes::Comment as u32, 0));
+                }
+                _ => {}
+            }
+        }
+        spans_and_kinds.sort_unstable_by_key(|(span, token_type, _)| {
+            (span.lo, *token_type != TokenTypes::Comment as u32)
+        });
+        let mut comment_end = 0;
+        let mut prev_line = 1;
+        let mut prev_start_col = 0;
+        for (span, token_type, bitflags) in spans_and_kinds {
+            if span.lo < comment_end {
+                continue;
+            }
+            if token_type == TokenTypes::Comment as u32 {
+                comment_end = span.end()
+            }
+            let length = span.len;
+            let Some(line) = source.get_line_for_span_start(&ast_for_file.mem, span) else {
+                continue;
+            };
+            let line_number = line.line_number();
+            let start_col = source.local_from_global_offset(span.lo) - line.start_char;
+            let delta_line = line_number - prev_line;
+            let delta_start = if delta_line == 0 { start_col - prev_start_col } else { start_col };
 
-            let file_tokens = source.semantic_tokens.as_slice(&ast_for_file.mem);
-            let capacity = file_tokens.len() + source.trivia.len() as usize;
-            let mut tokens: Vec<SemanticToken> = Vec::with_capacity(capacity);
-            let mut spans_and_kinds = Vec::with_capacity(capacity);
-            for semantic_token in file_tokens {
-                let token_type = match semantic_token.kind {
-                    parse::SemanticTokenKind::Type => TokenTypes::Type,
-                    parse::SemanticTokenKind::Variable => TokenTypes::Variable,
-                    parse::SemanticTokenKind::String => TokenTypes::String,
-                    parse::SemanticTokenKind::Keyword => TokenTypes::Keyword,
-                    parse::SemanticTokenKind::Function => TokenTypes::Function,
-                    parse::SemanticTokenKind::Namespace => TokenTypes::Namespace,
-                    parse::SemanticTokenKind::Operator => TokenTypes::Operator,
-                    parse::SemanticTokenKind::Comment => TokenTypes::Comment,
-                };
-                spans_and_kinds.push((semantic_token.span, token_type as u32, 0))
-            }
-            for entry in ast_for_file.mem.getn_lt(source.trivia) {
-                match entry.trivia.kind {
-                    lex::TokenTriviaKind::LineComment => {
-                        let span = lex::Span {
-                            lo: source.base + entry.trivia.start,
-                            len: entry.trivia.len,
-                        };
-                        spans_and_kinds.push((span, TokenTypes::Comment as u32, 0));
-                    }
-                    _ => {}
-                }
-            }
-            spans_and_kinds.sort_unstable_by_key(|(span, token_type, _)| {
-                (span.lo, *token_type != TokenTypes::Comment as u32)
-            });
-            let mut comment_end = 0;
-            let mut prev_line = 1;
-            let mut prev_start_col = 0;
-            for (span, token_type, bitflags) in spans_and_kinds {
-                if span.lo < comment_end {
-                    continue;
-                }
-                if token_type == TokenTypes::Comment as u32 {
-                    comment_end = span.end()
-                }
-                let length = span.len;
-                let Some(line) = source.get_line_for_span_start(&ast_for_file.mem, span) else {
-                    continue;
-                };
-                let line_number = line.line_number();
-                let start_col = source.local_from_global_offset(span.lo) - line.start_char;
-                let delta_line = line_number - prev_line;
-                let delta_start =
-                    if delta_line == 0 { start_col - prev_start_col } else { start_col };
-
-                prev_line = line_number;
-                prev_start_col = start_col;
-                let token = SemanticToken {
-                    delta_line,
-                    delta_start,
-                    length,
-                    token_type,
-                    token_modifiers_bitset: bitflags,
-                };
-                // info!("pushing token {:?}", token);
-                tokens.push(token);
-            }
-            info!(
-                "semantic_tokens: iterated {} tokens, returning {}",
-                file_tokens.len() + source.trivia.len() as usize,
-                tokens.len()
-            );
-            Ok(Some(SemanticTokensResult::Tokens(SemanticTokens { result_id: None, data: tokens })))
-        })
-        .unwrap_or(Ok(None))
+            prev_line = line_number;
+            prev_start_col = start_col;
+            let token = SemanticToken {
+                delta_line,
+                delta_start,
+                length,
+                token_type,
+                token_modifiers_bitset: bitflags,
+            };
+            tokens.push(token);
+        }
+        info!(
+            "semantic_tokens: iterated {} tokens, returning {}",
+            file_tokens.len() + source.trivia.len() as usize,
+            tokens.len()
+        );
+        Ok(Some(SemanticTokensResult::Tokens(SemanticTokens { result_id: None, data: tokens })))
     }
 
     async fn diagnostic(
@@ -961,31 +938,24 @@ impl LanguageServer for Backend {
         }
         self.compile().await;
         self.send_diagnostics().await;
-        self.client.semantic_tokens_refresh().await.unwrap();
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let file_url = params.text_document.uri;
         info!("handling did_open for document: {}", file_url.path());
+        let ast = parse::parse_standalone(file_url.path().to_string(), &params.text_document.text);
+        self.open_sources.lock().unwrap().insert(file_url.clone(), ast);
         self.ensure_target_and_compile(&file_url, false).await;
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        let mut es = self.edited_sources.lock().unwrap();
+        let mut es = self.open_sources.lock().unwrap();
         es.remove(&params.text_document.uri);
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         info!("handling did_save for document: {}", params.text_document.uri.path());
-        {
-            let mut es = self.edited_sources.lock().unwrap();
-            es.remove(&params.text_document.uri);
-        }
-        let compiled = self.ensure_target_and_compile(&params.text_document.uri, true).await;
-        if !compiled {
-            return;
-        }
-        self.client.semantic_tokens_refresh().await.unwrap();
+        self.ensure_target_and_compile(&params.text_document.uri, true).await;
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {

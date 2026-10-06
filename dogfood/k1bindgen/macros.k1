@@ -8,8 +8,8 @@ fn macro-body-tokens(unit: clang/CXTranslationUnit, cursor: clang/CXCursor): lis
   let toks-ptr: *clang/CXToken = ptr/null.narrow()
   let count: u32 = 0
   clang/tokenize(unit, extent, toks-ptr.&, count.&)
-  let body: list[c-token] = list/with-capacity(count.widen[size])
-  let toks = buffer/wrap-raw[clang/CXToken](toks-ptr.as[ptr], count.widen[size])
+  let body: list[c-token] = list/with-capacity(count.as-size())
+  let toks = buffer/wrap-raw[clang/CXToken](toks-ptr.as[ptr], count.as-size())
   // Token 0 is the macro's own name
   let i: size = 1
   while i < toks.len() {

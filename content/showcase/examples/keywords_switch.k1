@@ -47,7 +47,7 @@ fn checked-probes[t: equals](words: span[string], misses: span[string], lookup: 
 }
 
 fn main(): i32 {
-  print(pre/keywords/generate("tiny", ["if", "in", "is", "fn", "for"]).text())
+  print(pre/keywords/generate("tiny", ["if", "in", "is", "fn", "for"]).text)
   let misses: span[string] = ["", "f", "fnn", "le", "whil", "loops", "ability2", "context ", "self", "count", "clas", "const_", "reinterpret_casts"]
   for w in k1-keyword/words() {
     assert-equals(k1-keyword/lookup(w).!.enum-name(), "kw-$w")
@@ -71,8 +71,8 @@ type pos = either { at(size), last }
 
 fn key(w: string, p: pos): size {
   if p is {
-    :at i -> if i < w.len() w.[i].as-u8().widen[size] else 0,
-    :last -> w.[w.len() - 1].as-u8().widen[size],
+    :at i -> if i < w.len() w.[i].as-u8().as-size() else 0,
+    :last -> w.[w.len() - 1].as-u8().as-size(),
   }
 }
 
@@ -181,9 +181,9 @@ fn generate(name: string, words: span[string]): code {
       cb.line("if n < $min-len or n > $max-len return :none")
       for p in ps {
         if p is {
-          :at i if i < min-len -> cb.line("let k$i = s.[$i].as-u8().widen[size]"),
-          :at i -> cb.line("let k$i: size = if n > $i s.[$i].as-u8().widen[size] else 0"),
-          :last -> cb.line("let kl = s.[n - 1].as-u8().widen[size]"),
+          :at i if i < min-len -> cb.line("let k$i = s.[$i].as-u8().as-size()"),
+          :at i -> cb.line("let k$i: size = if n > $i s.[$i].as-u8().as-size() else 0"),
+          :last -> cb.line("let kl = s.[n - 1].as-u8().as-size()"),
         }
       }
       cb.line("let h = (${terms.build()}) & ${h.slots - 1}")
@@ -211,7 +211,7 @@ fn generate(name: string, words: span[string]): code {
 }
 
 macro define(name: code, words: span[string]) {
-  generate(name.text(), words)
+  generate(name.text, words)
 }
 
 }}

@@ -264,7 +264,7 @@ fn row-of(context g: *game)(i: u8): *list[token] {
 }
 
 fn row-enabled(context g: *game)(i: size): bool {
-  i == 2 or i < cur-level().ndefs.widen[size]
+  i == 2 or i < cur-level().ndefs.as-size()
 }
 
 fn row-editable(context g: *game)(i: size): bool {
@@ -391,11 +391,11 @@ fn src-pack(row: u8, idx: size): u16 {
 }
 
 fn src-row(s: u16): size {
-  (s / 4096).widen[size]
+  (s / 4096).as-size()
 }
 
 fn src-idx(s: u16): size {
-  (s % 4096).widen[size]
+  (s % 4096).as-size()
 }
 
 type expand-ctx = {
@@ -430,11 +430,11 @@ fn expand-toks(ctx: *expand-ctx, toks: span[token], self: span[token], self-d: u
     let t = toks.[i]
     if t is {
       :sym(s) -> {
-        assert(s.widen[size] < ctx.nsyms)
-        let v = ((s.widen[size] + ctx.shift) % ctx.nsyms).trunc[u8]
+        assert(s.as-size() < ctx.nsyms)
+        let v = ((s.as-size() + ctx.shift) % ctx.nsyms).trunc[u8]
         let gv = if ndepth > 255 255u8 else ndepth.trunc[u8]
         let sv = src-pack(row, base + i)
-        if v.widen[size] == ctx.pop-sym {
+        if v.as-size() == ctx.pop-sym {
           if ctx.bdepth > floor {
             ctx.bdepth = ctx.bdepth - 1
             e.syms.push(v)
@@ -442,7 +442,7 @@ fn expand-toks(ctx: *expand-ctx, toks: span[token], self: span[token], self-d: u
             e.srcs.push(sv)
           }
         } else {
-          if v.widen[size] == ctx.push-sym { ctx.bdepth = ctx.bdepth + 1 }
+          if v.as-size() == ctx.push-sym { ctx.bdepth = ctx.bdepth + 1 }
           e.syms.push(v)
           e.gens.push(gv)
           e.srcs.push(sv)
@@ -612,8 +612,8 @@ fn expand-target(lv: level, growth: size): expansion {
 type gview = { cur: size, kf: size, unfurl: f32 }
 
 fn growth-view(context g: *game)(): gview {
-  let full = cur-level().growth.widen[size]
-  let cur = g.grow-t.as[i32].widen[size]
+  let full = cur-level().growth.as-size()
+  let cur = g.grow-t.as[i32].as-size()
   if cur >= full { return .{ cur = full, kf = full, unfurl = 1.0 } }
   let u = g.grow-t - cur.as[f32]
   if u < 0.001 { return .{ cur, kf = cur, unfurl = 1.0 } }
@@ -1052,7 +1052,7 @@ fn fold-row(context g: *game)() {
   if k < 2 { return }
   let before: fixlist[token, MAX-ROW-TOKENS] = fixlist/uninit()
   for t in row { before.push(t) }
-  let full = cur-level().growth.widen[size]
+  let full = cur-level().growth.as-size()
   let e0 = expand-row(g.active, full)
   let tail = s.a + k * p
   let shot: fixlist[token, MAX-ROW-TOKENS] = fixlist/uninit()
@@ -1102,7 +1102,7 @@ fn extract-def(context g: *game)() {
   for t in row { base.push(t) }
   let at = s.a
   let n = base.len()
-  let full = cur-level().growth.widen[size]
+  let full = cur-level().growth.as-size()
   let e0 = expand-row(g.active, full)
   let hits: fixlist[size, MAX-ROW-TOKENS] = fixlist/uninit()
   let i: size = 0
@@ -1195,7 +1195,7 @@ fn handle-input(context g: *game)() {
     g.preview-growth = g.preview-growth - 1
   }
   if rl/is-key-pressed(KEY-TAB) {
-    let i = g.active.widen[size]
+    let i = g.active.as-size()
     let tries: size = 0
     while tries < 3 {
       i = if i >= 2 0 else i + 1
@@ -1291,9 +1291,9 @@ ns(reload) view {
       :sym(s) -> {
         if world is :plant {
           let alpha = world-alphabet(world)
-          text-center(alpha.[s.widen[size]].to-string(), cx, cy - sz / 2, sz, C_TEXT-MAIN)
+          text-center(alpha.[s.as-size()].to-string(), cx, cy - sz / 2, sz, C_TEXT-MAIN)
         } else {
-          rl/draw-circle(cx, cy, r, SYM-COLORS.[s.widen[size]])
+          rl/draw-circle(cx, cy, r, SYM-COLORS.[s.as-size()])
         }
       },
       :rep(n) -> text-center("${n}(", cx, cy - sz / 2, sz, C_TEXT-MAIN),
@@ -1357,12 +1357,12 @@ ns(reload) view {
     for i in 0.until(3) {
       if not row-enabled(i) { continue }
       let y = row-y(i)
-      let active = g.active.widen[size] == i
+      let active = g.active.as-size() == i
       rl/draw-rectangle(20, y, W - 40, ROW-H, if active C_PANEL-ACTIVE else C_PANEL)
       rl/draw-rectangle-lines(20, y, W - 40, ROW-H, if active C_ACCENT else C_BORDER)
       let label = if i == 0 "A =" else if i == 1 "B =" else "out"
       text(label, 36, y + 14, 20, if i == 0 C_ACCENT else if i == 1 C_ACCENT-B else if row-editable(i) C_TEXT-MAIN else C_TEXT-DIM)
-      if g.anim-t < 1.0 and g.anim-row.widen[size] == i {
+      if g.anim-t < 1.0 and g.anim-row.as-size() == i {
         draw-row-collapse(y)
         continue
       }
@@ -1428,7 +1428,7 @@ ns(reload) view {
       let w = cell-weight(e.gens.[it-index], gv)
       if sel is :some(sr) {
         let sv = e.srcs.[it-index]
-        if sv != SRC-NONE and src-row(sv) == g.active.widen[size] and src-idx(sv) >= sr.a and src-idx(sv) < sr.b {
+        if sv != SRC-NONE and src-row(sv) == g.active.as-size() and src-idx(sv) >= sr.a and src-idx(sv) < sr.b {
           rl/draw-rectangle(x.as[i32], top - 4, (cf * w).as[i32], cell + 8, C_PANEL-ACTIVE)
         }
       }
@@ -1447,7 +1447,7 @@ ns(reload) view {
         si = si + 1
       }
       if w > 0.02 {
-        draw-bead(SYM-COLORS.[s.widen[size]], x, top + cell / 2, cf * w, cf * 0.72)
+        draw-bead(SYM-COLORS.[s.as-size()], x, top + cell / 2, cf * w, cf * 0.72)
       }
       x = x + cf * w
     }
@@ -1505,7 +1505,7 @@ ns(reload) view {
     let fit: i32 = (W - 120) / nf.as[i32]
     let cell: i32 = if fit > 44 44 else if fit < 4 4 else fit
     let x0: i32 = ((W.as[f32] - cell.as[f32] * nf) * 0.5).as[i32]
-    let maxn = ((W - 60 - x0) / cell).widen[size]
+    let maxn = ((W - 60 - x0) / cell).as-size()
     let show-buds = g.preview-growth < lv.growth
     text("target", 40, 226, 18, C_TEXT-DIM)
     draw-strip(target.&, 250, cell, x0, maxn, gv, show-buds, false, false)
@@ -1758,7 +1758,7 @@ ns(reload) view {
       if it-index >= maxn { break }
       let cx = x0 + (it-index % w).trunc[i32] * cell
       let cy = y0 + (it-index / w).trunc[i32] * cell
-      rl/draw-rectangle(cx + 1, cy + 1, cell - 2, cell - 2, SYM-COLORS.[s.widen[size]])
+      rl/draw-rectangle(cx + 1, cy + 1, cell - 2, cell - 2, SYM-COLORS.[s.as-size()])
     }
     if show-shifts {
       for at in e.shifts.& {
@@ -1781,10 +1781,10 @@ ns(reload) view {
 
   fn draw-grid-world(context g: *game)() {
     let lv = cur-level()
-    let growth = g.preview-growth.widen[size]
+    let growth = g.preview-growth.as-size()
     let target = expand-target(lv, growth)
     let player = expand-player(growth)
-    let w = lv.width.widen[size]
+    let w = lv.width.as-size()
     let rows = (target.syms.len() + w - 1) / w
     if rows == 0 { rows = 1 }
     rl/draw-rectangle-lines(CANVAS-X, CANVAS-Y, CANVAS-W, CANVAS-H, C_BORDER)
@@ -1829,7 +1829,7 @@ ns(reload) view {
     rl/clear-background(C_INK)
     g.play-src = SRC-NONE
     let lv = cur-level()
-    let full = lv.growth.widen[size]
+    let full = lv.growth.as-size()
     let target = expand-target(lv, full).syms
     let pe = expand-player(full)
     let player = pe.syms
@@ -1873,7 +1873,7 @@ ns(reload) view {
 
 fn assert-solved(context g: *game)(want-score: size) {
   let lv = cur-level()
-  let full = lv.growth.widen[size]
+  let full = lv.growth.as-size()
   let te = expand-target(lv, full)
   let pe = expand-player(full)
   assert(score-of() == want-score)
@@ -1886,7 +1886,7 @@ fn self-test(context g: *game)() {
     load-level(li)
     let lv = cur-level()
     let alpha = world-alphabet(lv.world)
-    let texp = expand-target(lv, lv.growth.widen[size])
+    let texp = expand-target(lv, lv.growth.as-size())
     let target = texp.syms
     assert(target.len() > 0)
     assert(target.len() < MAX-EXPAND)
@@ -1895,16 +1895,16 @@ fn self-test(context g: *game)() {
     assert(lv.limit <= target.len())
     if lv.world is :grid {
       assert(lv.width > 0)
-      assert(target.len() % lv.width.widen[size] == 0)
+      assert(target.len() % lv.width.as-size() == 0)
     }
     if lv.start.len() > 0 {
-      let pe = expand-player(lv.growth.widen[size])
+      let pe = expand-player(lv.growth.as-size())
       assert(texp.syms.&.as-span() == pe.syms.&.as-span())
       assert(score-of() > lv.par)
     }
     let uses-shift = lv.target.contains('>') or lv.target-a.contains('>') or lv.target-b.contains('>')
     for s in target {
-      let c = alpha.[s.widen[size]]
+      let c = alpha.[s.as-size()]
       if not uses-shift {
         assert(sym-index(lv.syms, c).is-some())
       }
@@ -2543,12 +2543,12 @@ fn main(): i32 {
   if sys/env("GENGAME_DUMP").is-some() {
     for li in 0.until(LEVELS.len()) {
       let lv = LEVELS.[li]
-      let e = expand-target(lv, lv.growth.widen[size])
+      let e = expand-target(lv, lv.growth.as-size())
       let sum: size = 0
       let head = ""
       for s in e.syms.& {
-        sum = sum + (s.widen[size] + 1) * (it-index + 1)
-        if it-index < 40 { head = "$head${s.widen[size]}" }
+        sum = sum + (s.as-size() + 1) * (it-index + 1)
+        if it-index < 40 { head = "$head${s.as-size()}" }
       }
       println("${lv.name} len=${e.syms.len()} sum=$sum $head")
     }

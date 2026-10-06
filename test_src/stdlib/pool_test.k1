@@ -1,0 +1,24 @@
+ns pool_test
+
+use std/pool
+
+fn test() {
+  let p = pool/with-capacity[int](3)
+  let a = p.acquire(1)
+  let b = p.acquire(2)
+  let c = p.acquire(3)
+  assert(p.is-full() and not p.is-live(p.acquire(4)))
+  p.release(a)
+  p.release(c)
+  assert(p.get(a).* == 0 and not p.is-live(a))
+  let a2 = p.acquire(5)
+  assert(a2.index == a.index and a2 != a and p.acquire(6).index == c.index)
+  let total = 0
+  for p.& { total = total + p.get(it).* }
+  assert-equals(total, 13)
+  p.gens.[b.index.as-size()] = pool/RETIRED-GEN - 1
+  p.release(.{ index = b.index, gen = pool/RETIRED-GEN - 1 })
+  p.release-all()
+  assert(p.is-empty() and not p.is-live(a2))
+  assert(p.acquire(7).index == a.index and p.acquire(8).index == c.index and p.is-full())
+}

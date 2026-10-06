@@ -46,7 +46,7 @@ fn main(): i32 {
       :data _ -> :data,
       :closed -> :closed,
     }
-    counts.[kind.value.widen[size]] = counts.[kind.value.widen[size]] + 1
+    counts.[kind.value.as-size()] = counts.[kind.value.as-size()] + 1
   }
   println("counts ${counts}")
   0

@@ -605,7 +605,7 @@ ns for fixmap {
   }
 
   fn(inline) cap[k, v, n](self: *fixmap[k, v, n]): size { self._slots() - 1 }
-  fn(inline) len[k, v, n](self: *fixmap[k, v, n]): size { self.count.widen[size] }
+  fn(inline) len[k, v, n](self: *fixmap[k, v, n]): size { self.count.as-size() }
   fn(inline) is-empty[k, v, n](self: *fixmap[k, v, n]): bool { self.count == 0 }
   fn(inline) is-full[k, v, n](self: *fixmap[k, v, n]): bool { self.len() == self.cap() }
 
@@ -618,8 +618,8 @@ ns for fixmap {
 
   fn(inline) _table[k, v, n](self: *fixmap[k, v, n]): map[k, v] {
     .{
-      count = self.count.widen[size],
-      growth-left = self.growth-left.widen[size],
+      count = self.count.as-size(),
+      growth-left = self.growth-left.as-size(),
       ctrl = .{ data = self.ctrl.data-ptr(), len = self._slots() + map/MIRROR },
       entries = self.slots.as-buffer(),
     }

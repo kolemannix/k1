@@ -60,7 +60,13 @@ ns types {
   type type-id = { inner: u64 }
   type instance-info = { parent: type-id, args: span[type-id] }
   type layout = { size: size, align: size }
-  type type-info = { name: string, schema: type-schema, instance: ?instance-info, layout: layout }
+  type type-info = {
+    name: string,
+    schema: type-schema,
+    instance: ?instance-info,
+    layout: layout,
+    zero-safe: bool,
+  }
   ns for type-id {
     fn(intern) info(self: type-id): type-info
     fn name(self: type-id): string { self.info().name }
@@ -118,6 +124,7 @@ ns types {
   fn type-name-of-val[t](_t: t): string { name[t] }
   fn schema[t](): type-schema { id[t].info().schema }
   fn instance-info[t](): ?instance-info { id[t].info().instance }
+  fn is-zero-safe[t](): bool { id[t].info().zero-safe }
 
   // FIXME: We should encode both width and signedness into the bits instead, 'flags in tags' project
   type int-value = either {

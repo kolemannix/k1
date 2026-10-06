@@ -85,4 +85,11 @@ fn test() {
   assert-equals(types/id[array[string, 0].element], types/id[string])
   assert-equals(types/name[array[i32, 10]], "array[i32, 10]")
   assert-equals(types/align[array[i32, 0]], 1)
+
+  assert(types/is-zero-safe[int]())
+  assert(types/is-zero-safe[list[int]]())
+  assert(types/is-zero-safe[?*int]())
+  assert(not types/is-zero-safe[*int]())
+  assert(not types/is-zero-safe[{ a: int, b: *int }]())
+  assert(not types/id[*int].info().zero-safe)
 }

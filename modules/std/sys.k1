@@ -40,7 +40,7 @@ fn random(upper-bound: u32): u32 {
 
 fn parse-main-args(arg-count: c-int, args: ptr): span[string] {
   let buf = buffer/wrap-raw[ptr](
-    count = arg-count.widen[size],
+    count = arg-count.as-size(),
     ptr = args
   )
   let strings = list/from-mapping(buf, fn cstr. string/wrap-c(cstr))

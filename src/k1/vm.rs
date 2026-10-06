@@ -84,6 +84,7 @@ pub mod k1_types {
         pub firstEnd: u64,
         pub extraChunks: *const u8,
         pub fixed: bool,
+        pub ownsFirst: bool,
         pub name: K1BufferLike,
     }
 

@@ -14,6 +14,7 @@ type arena = {
   extra-chunks: ptr,
   // Hard limit, no chaining
   fixed: bool,
+  owns-first: bool,
   name: string,
 }
 
@@ -31,16 +32,12 @@ ns for arena {
 
   fn set-name(self: *arena, name: string) { self.name = name }
 
-  fn first-region(self: *arena): platform/memory/region {
-    let base = self.first-base.sub-bytes(types/stride[arena])
-    .{ base, len = self.first-end.diff(base) }
-  }
-
-  fn store-header(region: platform/memory/region): *arena {
-    assert(region.len >= types/stride[arena] * 2)
-    let memory-start = region.base.add-bytes(types/stride[arena])
-    let region-end = region.base.add-bytes(region.len)
-    let arena: *arena = region.base.ref[arena]
+  fn init-from-buffer(bytes: buffer[byte]): *arena {
+    let header = bytes.data.aligned(types/align[arena])
+    let memory-start = header.add-bytes(types/stride[arena])
+    let region-end = bytes.data.add-bytes(bytes.len)
+    assert(memory-start <= region-end)
+    let arena: *arena = header.ref[arena]
     arena.* = .{
       base-ptr = memory-start,
       cur-addr = memory-start,
@@ -48,14 +45,19 @@ ns for arena {
       first-base = memory-start,
       first-end = region-end,
       extra-chunks = ptr/null,
-      fixed = false,
+      fixed = true,
+      owns-first = false,
       name = "",
     }
     arena
   }
 
   fn init(region-size: size): *arena {
-    store-header(platform/memory/acquire(region-size))
+    let region = platform/memory/acquire(region-size)
+    let a = init-from-buffer(buffer/wrap-raw[byte](region.base, region.len))
+    a.fixed = false
+    a.owns-first = true
+    a
   }
 
   fn init-fixed(region-size: size): *arena {
@@ -95,7 +97,10 @@ ns for arena {
 
   fn release(self: *arena) {
     self._drop-chunks-to(ptr/null)
-    platform/memory/release(self.first-region())
+    if self.owns-first {
+      let base = self.first-base.sub-bytes(types/stride[arena])
+      platform/memory/release(.{ base, len = self.first-end.diff(base) })
+    }
   }
 
   fn reset(self: *arena) {
@@ -188,6 +193,65 @@ ns for arena {
     assert(arena-mark.start <= dirty-end)
     mem/set(dst = arena-mark.start, value = 0, count = dirty-end.diff(arena-mark.start))
     self.cur-addr = arena-mark.start
+  }
+
+  type handle[t] = { offset: u32 }
+  type span-handle[t] = { offset: u32, len: u32 }
+
+  fn _offset-in-first-region(self: *arena, start: ptr, bytes: size): u32 {
+    if start < self.first-base or start.add-bytes(bytes) > self.first-end {
+      crash("arena handle: memory is outside the arena's first region")
+    }
+    if start.add-bytes(bytes).diff(self.as[ptr]) > 4294967295 {
+      crash("arena handle: memory is beyond 4GB from the arena header")
+    }
+    start.diff(self.as[ptr]).trunc[u32]
+  }
+
+  fn _check-handle-bytes(self: *arena, offset: u32, bytes: size) {
+    if k1/debug or k1/is-static {
+      let start = self.as[ptr].add-bytes(offset.as-size())
+      let live-end = if self.extra-chunks.is-null() self.cur-addr else self.first-end
+      if start < self.first-base or start.add-bytes(bytes) > live-end {
+        crash("arena handle: offset $offset is not in this arena's live memory")
+      }
+    }
+  }
+
+  fn handle-from[t](self: *arena, item: *t): handle[t] {
+    .{ offset = self._offset-in-first-region(item.as[ptr], types/size[t]) }
+  }
+
+  fn handle-from-many[t](self: *arena, items: span[t]): span-handle[t] {
+    if items.buffer.len == 0 return .0
+    .{
+      offset = self._offset-in-first-region(items.buffer.data, items.buffer.size-bytes()),
+      len = items.buffer.len.trunc[u32],
+    }
+  }
+
+  fn(inline) get[t](self: *arena, handle: handle[t]): *t {
+    self._check-handle-bytes(handle.offset, types/size[t])
+    self.as[ptr].add-bytes(handle.offset.as-size()).ref[t]
+  }
+
+  fn(inline) get-many[t](self: *arena, handle: span-handle[t]): buffer[t] {
+    if handle.len == 0 return buffer/empty()
+    let len = handle.len.as-size()
+    self._check-handle-bytes(handle.offset, len * types/stride[t])
+    buffer/wrap-raw(self.as[ptr].add-bytes(handle.offset.as-size()), len)
+  }
+
+  fn push-handle[t](self: *arena, value: t): handle[t] {
+    self.handle-from(self.push(value))
+  }
+
+  fn push-many[t](self: *arena, values: span[t]): span-handle[t] {
+    self.handle-from-many(self.push-span(values).as-span())
+  }
+
+  fn alloc-many[t](self: *arena, len: size): span-handle[t] {
+    self.handle-from-many(self.alloc-buffer[t](len).as-span())
   }
 
 }

@@ -1,6 +1,7 @@
 fn test-all() {
   stream_test/test()
   hash_test/test()
+  pool_test/test()
   files_test/test()
   test-bitfield()
   utf8_test/test()

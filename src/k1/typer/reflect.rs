@@ -245,11 +245,17 @@ impl TypedProgram {
         let schema_value_id = self.build_type_schema(family_type_id);
         let instance_value_id = self.build_instance_info(family_type_id);
         let layout_value_id = self.build_layout(type_id);
+        let zero_safe_value_id = if self.get_type_variable_counts(type_id).is_zero_safe {
+            self.static_values.true_id()
+        } else {
+            self.static_values.false_id()
+        };
         let fields = self.static_values.mem.pushn(&[
             name_value_id,
             schema_value_id,
             instance_value_id,
             layout_value_id,
+            zero_safe_value_id,
         ]);
         let type_info_type_id = self.builtin_types.type_info();
         self.static_values.set(

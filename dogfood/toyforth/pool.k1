@@ -1,1 +1,0 @@
-type pool[t] = { arena: *core/arena, free: list[u32], len: u32 }

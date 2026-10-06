@@ -19,6 +19,19 @@ fn test() {
   chaining-test()
   zeroing-test()
   chunk-mark-test()
+  from-buffer-and-handle-test()
+}
+
+fn from-buffer-and-handle-test() {
+  let storage: array[byte, 1024] = .0
+  let bytes = storage.&.as-buffer()
+  let a = core/arena/init-from-buffer(bytes.slice(3, bytes.len))
+  assert(a.fixed and a.as[ptr].to-size() % types/align[core/arena] == 0)
+  let kid = a.push-handle(7)
+  assert-equals(a.get(a.get-many(a.push-many([kid, kid])).[1]).*, 7)
+  assert-equals(a.get-many(a.handle-from-many(span/empty[int]())).len, 0)
+  a.release()
+  assert-equals(storage.[1023], 0)
 }
 
 fn chunk-mark-test() {

@@ -45,7 +45,7 @@ ns for ident-pool {
   }
 
   fn get(self: *ident-pool, id: string-id): string {
-    self.strings.[id.widen[size]]
+    self.strings.[id.as-size()]
   }
 }
 
@@ -640,11 +640,11 @@ ns for program {
   }
 
   fn get-expr(self: *program, id: expr-id): *expr {
-    self.exprs.[id.widen[size]].&
+    self.exprs.[id.as-size()].&
   }
 
   fn get-type-expr(self: *program, id: type-expr-id): *type-expr {
-    self.type-exprs.[id.widen[size]].&
+    self.type-exprs.[id.as-size()].&
   }
 
   fn get-expr-span(self: *program, id: expr-id): src-span {
@@ -656,7 +656,7 @@ ns for program {
   }
 
   fn get-pattern-span(self: *program, id: pattern-id): src-span {
-    if self.patterns.[id.widen[size]] is {
+    if self.patterns.[id.as-size()] is {
       :literal e -> self.get-expr-span(e),
       :variable v -> v.span,
       :struct-pat s -> s.span,
@@ -668,8 +668,8 @@ ns for program {
   }
 
   fn get-stmt-span(self: *program, id: stmt-id): src-span {
-    if self.stmts.[id.widen[size]] is {
-      :use-stmt u -> self.uses.[u.widen[size]].span,
+    if self.stmts.[id.as-size()] is {
+      :use-stmt u -> self.uses.[u.as-size()].span,
       :let-stmt l -> l.span,
       :require-stmt r -> r.span,
       :assign a -> a.span,
@@ -680,20 +680,20 @@ ns for program {
 
   fn get-defn-span(self: *program, d: defn-id): src-span {
     if d is {
-      :use-defn id -> self.uses.[id.widen[size]].span,
-      :function id -> self.functions.[id.widen[size]].name-span,
-      :macro-defn id -> self.macros.[id.widen[size]].name-span,
-      :type-defn id -> self.type-defns.[id.widen[size]].span,
-      :namespace id -> self.namespaces.[id.widen[size]].span,
-      :ability-defn id -> self.abilities.[id.widen[size]].span,
-      :ability-impl id -> self.ability-impls.[id.widen[size]].span,
-      :global id -> self.globals.[id.widen[size]].span,
+      :use-defn id -> self.uses.[id.as-size()].span,
+      :function id -> self.functions.[id.as-size()].name-span,
+      :macro-defn id -> self.macros.[id.as-size()].name-span,
+      :type-defn id -> self.type-defns.[id.as-size()].span,
+      :namespace id -> self.namespaces.[id.as-size()].span,
+      :ability-defn id -> self.abilities.[id.as-size()].span,
+      :ability-impl id -> self.ability-impls.[id.as-size()].span,
+      :global id -> self.globals.[id.as-size()].span,
       :static-defn id -> self.get-expr-span(id),
     }
   }
 
   fn set-expr-span(self: *program, id: expr-id, new-span: src-span) {
-    let e = self.exprs.[id.widen[size]].&
+    let e = self.exprs.[id.as-size()].&
     if e is {
       :bin-op(op)* -> { op.span = new-span },
       :not-expr(n)* -> { n.span = new-span },
@@ -735,7 +735,7 @@ ns for program {
   }
 
   fn line-for-offset(self: *program, offset: u32): ?line {
-    if offset.widen[size] > self.source.len() { return :none }
+    if offset.as-size() > self.source.len() { return :none }
     let lo: size = 0
     let hi = self.newline-positions.len()
     while lo < hi {
@@ -745,7 +745,7 @@ ns for program {
     let start: u32 = if lo == 0 0 else self.newline-positions.[lo - 1] + 1
     let end: u32 = if lo < self.newline-positions.len() {
       let nl = self.newline-positions.[lo]
-      if nl > start and self.source.[(nl - 1).widen[size]] == '\r' { nl - 1 } else nl
+      if nl > start and self.source.[(nl - 1).as-size()] == '\r' { nl - 1 } else nl
     } else {
       self.source.len().trunc[u32]
     }
@@ -760,17 +760,17 @@ ns for program {
     }
     eprintln("$where-str: error: ${e.message}")
     if self.line-for-offset(e.span.start) is :some line {
-      let content = self.source.slice(line.start.widen[size], (line.start + line.len).widen[size])
+      let content = self.source.slice(line.start.as-size(), (line.start + line.len).as-size())
       eprintln("  | $content")
       let sb = string-builder/new()
       sb.write("  | ")
       let col = if e.span.start >= line.start e.span.start - line.start else 0
-      for 0.until(col.widen[size]) { sb.write-char(' ') }
+      for 0.until(col.as-size()) { sb.write-char(' ') }
       let avail = if line.len > col line.len - col else 1
       let caret-len: u32 = if e.span.len == 0 1
         else if e.span.len > avail avail
         else e.span.len
-      for 0.until(caret-len.widen[size]) { sb.write-char('^') }
+      for 0.until(caret-len.as-size()) { sb.write-char('^') }
       eprintln(sb.build())
     }
   }
