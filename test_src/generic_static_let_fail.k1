@@ -1,0 +1,11 @@
+type box[t] = { value: t }
+fn make-box[t](value: t): *box[t] {
+  let b = mem/new-in-place[box[t]](.{ value = value })
+  b.value = value
+  b
+}
+fn main(): i32 {
+  println("${make-box[i64](2).value}")
+  0
+}
+//errmsg: unknown in generic code; annotate the binding

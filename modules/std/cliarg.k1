@@ -86,15 +86,10 @@ fn emit-arg-construct(cb: *code-builder, s: types/type-schema:struct) {
   cb.line("})")
 }
 
-fn parse-args[t](args: span[string], customizations: span[{ name: string, settings: {} }]): result[t, string] {
-  // Note: it would be better to move these two lines inside the meta call
-  // But this exercises the compiler better
-  let _t-id = #static types/id[t]
-  let _s = #static if types/schema[t] is { :struct s -> s, _ -> crash("need a struct") }
-
-  let result: result[t, string] = #meta(_s, _t-id) {
-    let args-type-id = _t-id
-    let s: types/type-schema:struct = _s.from-static()
+fn parse-args[t](args: span[string]): result[t, string] {
+  #meta {
+    let args-type-id = types/id[t]
+    let s = if types/schema[t] is { :struct s -> s, _ -> crash("need a struct") }
     let cb-storage = code-builder/new()
     let cb = cb-storage.&
     emit-arg-locals(cb, s, args-type-id)
@@ -103,17 +98,4 @@ fn parse-args[t](args: span[string], customizations: span[{ name: string, settin
     emit-arg-construct(cb, s)
     cb.build()
   }
-
-  result
 }
-
-// type args = { max: ?string, min: ?string, name: string, items: list[string] }
-// fn main(argc: i32, argv: ptr): i32 {
-//   let args-span: span[string] = std/sys/parse-main-args(argc, argv);
-//   let args: args = parse-args[args](args-span, customizations = [.{ name = "name", settings = .{} }]) is {
-//     :err msg -> { println(msg); println(gen-help-text[args]("welcome to the derived args parser test program.")); return 1 },
-//     :ok args -> args,
-//   };
-//   println("args result: {args}");
-//   0
-// }

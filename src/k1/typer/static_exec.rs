@@ -78,6 +78,21 @@ impl TypedProgram {
         }
     }
 
+    pub(super) fn synth_deferred_static(
+        &mut self,
+        ctx: EvalExprContext,
+        span: Span,
+    ) -> K1Result<TypedExprId> {
+        let Some(expected_type) = ctx.expected_type_id else {
+            kbail!(
+                self,
+                span,
+                "The type of this compile-time result is unknown in generic code; annotate the binding or pass an expected type"
+            )
+        };
+        Ok(self.synth_phony(expected_type, span))
+    }
+
     pub(super) fn synth_phony_if_generic_pass(
         &mut self,
         ctx: EvalExprContext,
@@ -1135,8 +1150,8 @@ impl TypedProgram {
             );
         }
 
-        if let Some(phony) = self.synth_phony_if_generic_pass(ctx, span) {
-            return Ok(StaticExecutionResult::TypedExpr(phony));
+        if ctx.is_generic_pass() {
+            return Ok(StaticExecutionResult::TypedExpr(self.synth_deferred_static(ctx, span)?));
         }
 
         let kind = stat.kind;
@@ -1547,6 +1562,9 @@ impl TypedProgram {
             let type_args = TypeArgs::from_slice_in(self.mem.getn(typed_type_args), &mut self.mem);
             let spec_fn_id =
                 self.specialize_function_declaration(type_args, TypeArgs::empty(), function_id);
+            if !self.get_function(spec_fn_id).is_concrete() {
+                return Ok(StaticExecutionResult::TypedExpr(self.synth_deferred_static(ctx, span)?));
+            }
             self.require_function_body(spec_fn_id, span)?;
             spec_fn_id
         } else {

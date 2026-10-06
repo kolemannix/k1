@@ -88,7 +88,7 @@ type bindgen-args = {
   rename: list[string],
 }
 fn start(args: span[string]): result[string, string] {
-  let args = if std/sys/parse-args[bindgen-args](args, []) is { :ok args -> args, :err msg -> return :err "Failed to parse arguments: $msg" }
+  let args = if std/sys/parse-args[bindgen-args](args) is { :ok args -> args, :err msg -> return :err "Failed to parse arguments: $msg" }
 
 
   let index: CXIndex = clang/createIndex(1, 1)

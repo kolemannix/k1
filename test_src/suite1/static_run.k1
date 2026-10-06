@@ -104,7 +104,27 @@ fn test() {
    assert-equals(it % 2, 0)
   })
 
+  assert-equals(make-boxed(7).value, 7)
+  assert-equals(make-boxed-let("hi").value, "hi")
+  assert-equals(size-of-param[u32](), 4)
+
   .{}
+}
+
+type boxed[t] = { value: t }
+
+fn make-boxed[t](value: t): *boxed[t] {
+  mem/new-in-place[boxed[t]](.{ value = value })
+}
+
+fn make-boxed-let[t](value: t): *boxed[t] {
+  let b: *boxed[t] = mem/new-in-place[boxed[t]](.{ value = value })
+  b
+}
+
+fn size-of-param[t](): size {
+  let s: size = #static types/size[t]()
+  s
 }
 
 macro static-for[t](items: span[t], expr: code) {
