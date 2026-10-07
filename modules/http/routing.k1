@@ -1,10 +1,11 @@
-// Typed routing: $pre/routing/define(name, entries) generates a route enum, a
-// parse fn (header -> result[route, routing/route-error]), and a reverse url
-// renderer. Matching is structural (trie descent over literals/captures);
-// captures parse only after a leaf's shape is confirmed, via the from-string
-// ability. See ns routing below for the runtime pieces.
+// Typed routing: $http/routing/define(name, entries) generates a route enum,
+// parse fns ((method, url) or header -> result[route, route-error]) and a
+// reverse url renderer. Matching is structural (trie descent over
+// literals/captures); captures parse only after a leaf's shape is confirmed,
+// via the from-string ability. route-error and split-path at the bottom are
+// the runtime pieces.
 
-ns pre { ns routing {
+ns routing {
 
 use core/meta/str-lit
 
@@ -183,9 +184,9 @@ fn emit-leafs(cb: *code-builder, entries: span[entry], idxs: list[size], d: size
   }
   for gi in idxs {
     let en = entries.[gi]
-    let cond = "header.method == http/llhttp/method:${en.method.enum-name().to-ascii-upper()}"
+    let cond = "method == http/llhttp/method:${en.method.enum-name().to-ascii-upper()}"
     if en.method is :get and not head-present {
-      cond = "$cond or header.method == http/llhttp/method:HEAD"
+      cond = "$cond or method == http/llhttp/method:HEAD"
     }
     cb.block("if $cond", fn[cb, entries, gi, d]. emit-leaf-body(cb, entries.[gi], d))
   }
@@ -265,8 +266,8 @@ fn emit-node(cb: *code-builder, entries: span[entry], group: list[size], d: size
 fn emit-parse-fn(cb: *code-builder, base: string, entries: span[entry]) {
   // Captures in the parsed route are views into the url's memory (the request
   // arena): a route value must not outlive its request
-  cb.block("fn parse(header: http/header): result[$base, http/routing/route-error]", fn[cb, entries]. {
-    cb.line(`let url = header.url`)
+  cb.line("fn from-header(header: http/header): result[$base, http/routing/route-error] { parse(header.method, header.url) }")
+  cb.block("fn parse(method: http/llhttp/method, url: string): result[$base, http/routing/route-error]", fn[cb, entries]. {
     cb.line(`if url.is-empty() or url.[0] != '/' { return :err :not-found }`)
     cb.line(`let path = if url.position('?') is :some qi url.take(qi) else url`)
     cb.line(`let segs = array/zeroed[string, 16]()`)
@@ -366,10 +367,6 @@ fn define-impl(base: string, entries: span[entry]): code {
 
   cb.build()
 }
-
-}}
-
-ns routing {
 
 type route-error = either {
   not-found,

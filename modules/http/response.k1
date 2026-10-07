@@ -1,7 +1,3 @@
-// The HTTP/1.1 response model and the event-loop driver that delivers one.
-// A strict body is just a one-group stream with a known Content-Length; a
-// streamed body goes out chunked-transfer-encoded.
-
 use std/source
 use std/pull
 use std/waker
@@ -18,9 +14,8 @@ ns response {
     .{ status, content-type, extra-headers = [], body = :complete span/single(body.span-bytes()) }
   }
   fn html(body: string): http-response { complete(200, "text/html", body) }
-  fn text(body: string): http-response { complete(200, "text/plain", body) }
   fn not-found(): http-response { complete(404, "text/plain", "Not Found\n") }
-  fn status(status: u16, msg: string): http-response { complete(status, "text/plain", msg) }
+  fn text(status: u16, body: string): http-response { complete(status, "text/plain", body) }
   fn method-not-allowed(allowed: span[string]): http-response {
     let allow = string-builder/new()
     allow.write("Allow: ")
@@ -90,7 +85,7 @@ impl source[t = u8] for chunked-encoder {
         let total: size = 0
         for seg in group { total = total + seg.len() }
         self.prefix.clear()
-        push-hex(self.prefix.&, total)
+        core/format-uint(context self.prefix.&)(total.unsigned(), 16)
         self.prefix.append-span("\r\n".span-bytes())
         self.parts.clear()
         self.parts.push(self.prefix.as-span())
@@ -110,8 +105,11 @@ impl source[t = u8] for chunked-encoder {
   }
 }
 
-let hex-digits: string = "0123456789abcdef"
-fn push-hex(out: *list[u8], value: size) {
-  if value >= 16 { push-hex(out, value / 16) }
-  out.push(hex-digits.span-bytes().[value % 16])
+ns chunked-test {
+  use std/collect-sink
+  #static {
+    let sink: collect-sink[u8] = .{ items = list/empty() }
+    let out = string/wrap-bytes(source/run-to(source/from-items(["0123456789abcdefg"]) || chunked, sink.&))
+    assert-equals(out, "11\r\n0123456789abcdefg\r\n0\r\n\r\n")
+  }
 }

@@ -71,6 +71,9 @@
           "include": "#call"
         },
         {
+          "include": "#field"
+        },
+        {
           "include": "#number"
         },
         {
@@ -459,7 +462,7 @@
       ]
     },
     "variant": {
-      "name": "variable.other.enummember.k1",
+      "name": "constant.other.variant.k1 variable.other.enummember.k1",
       "match": ":[\\p{L}_][\\p{L}\\p{N}_-]*"
     },
     "label": {
@@ -507,6 +510,10 @@
     "call": {
       "name": "entity.name.function.call.k1",
       "match": "[\\p{L}_][\\p{L}\\p{N}_-]*(?=\\()"
+    },
+    "field": {
+      "name": "variable.other.property.k1",
+      "match": "(?<=\\.)[\\p{L}_][\\p{L}\\p{N}_-]*"
     },
     "number": {
       "name": "constant.numeric.k1",

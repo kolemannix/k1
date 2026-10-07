@@ -79,6 +79,7 @@ required-features = ["lsp"]
 
 [profile.dev]
 debug = "line-tables-only"
+split-debuginfo = "packed"
 
 [profile.release]
 panic = "abort"

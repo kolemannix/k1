@@ -372,7 +372,7 @@ impl TypedProgram {
                 ParsedGlobalDeclareOutcome::IfDefedOut;
             if cfg!(feature = "lsp") {
                 let kind = parse::SemanticTokenKind::Comment;
-                let token = parse::SemanticToken { span: parsed.span, kind };
+                let token = parse::SemanticToken { span: parsed.span, kind, mods: 0 };
                 parse::add_semantic_token(&mut self.ast, token);
             }
             return Ok(None);

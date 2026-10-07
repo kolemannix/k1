@@ -201,15 +201,15 @@ this way.
 
 ## Typed HTTP routing
 
-The biggest macro in the repo is `http/pre/routing/define`. `httpapp`
+The biggest macro in the repo is `http/routing/define`. `httpapp`
 declares its routes once, as data:
 
 ```k1 path=dogfood/httpapp/app.k1
-$http/pre/routing/define(route, {
-  use http/pre/routing/get
-  use http/pre/routing/post
-  use http/pre/routing/delete
-  use http/pre/routing/seg
+$http/routing/define(route, {
+  use http/routing/get
+  use http/routing/post
+  use http/routing/delete
+  use http/routing/seg
   let game: span[seg] = [:text "game", :u64 "id"]
 
   [
@@ -229,7 +229,7 @@ Out come:
 
 - `type route`, one variant per row, with a payload for captures
   (`game-events({ id: u64 })`)
-- `route/parse(header)`: an allocation-free trie matcher that percent-decodes,
+- `route/parse(method, url)` and `route/from-header(header)`: an allocation-free trie matcher that percent-decodes,
   answers `HEAD` for `GET` routes, parses captures through `from-string`, and
   returns `:bad-method` with the allowed list or `:not-found`
 - `route/url` and `route/url-string`, back to a percent-encoded URL

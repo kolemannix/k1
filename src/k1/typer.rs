@@ -17394,7 +17394,7 @@ impl TypedProgram {
 
     fn emit_semantic_token(&mut self, span: Span, kind: parse::SemanticTokenKind) {
         if cfg!(feature = "lsp") {
-            parse::add_semantic_token(&mut self.ast, parse::SemanticToken { span, kind });
+            parse::add_semantic_token(&mut self.ast, parse::SemanticToken { span, kind, mods: 0 });
         }
     }
 

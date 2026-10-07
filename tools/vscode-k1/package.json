@@ -36,6 +36,16 @@
         "path": "./syntaxes/k1.tmLanguage.json"
       }
     ],
+    "semanticTokenScopes": [
+      {
+        "language": "k1",
+        "scopes": {
+          "variable.declaration": ["variable.parameter.k1"],
+          "property": ["variable.other.property.k1"],
+          "enumMember": ["constant.other.variant.k1", "variable.other.enummember.k1"]
+        }
+      }
+    ],
     "configuration": {
       "title": "k1",
       "properties": {

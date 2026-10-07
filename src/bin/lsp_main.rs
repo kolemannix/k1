@@ -72,17 +72,12 @@ enum TokenTypes {
     Operator = 21,
 }
 
-const TOKEN_MODIFIERS: [SemanticTokenModifier; 10] = [
+const TOKEN_MODIFIERS: [SemanticTokenModifier; 5] = [
     SemanticTokenModifier::DECLARATION,
     SemanticTokenModifier::DEFINITION,
     SemanticTokenModifier::READONLY,
     SemanticTokenModifier::STATIC,
-    SemanticTokenModifier::DEPRECATED,
-    SemanticTokenModifier::ABSTRACT,
-    SemanticTokenModifier::ASYNC,
     SemanticTokenModifier::MODIFICATION,
-    SemanticTokenModifier::DOCUMENTATION,
-    SemanticTokenModifier::DEFAULT_LIBRARY,
 ];
 #[allow(unused)]
 #[repr(u32)]
@@ -850,6 +845,8 @@ impl LanguageServer for Backend {
             let token_type = match semantic_token.kind {
                 parse::SemanticTokenKind::Type => TokenTypes::Type,
                 parse::SemanticTokenKind::Variable => TokenTypes::Variable,
+                parse::SemanticTokenKind::Property => TokenTypes::Property,
+                parse::SemanticTokenKind::EnumMember => TokenTypes::EnumMember,
                 parse::SemanticTokenKind::String => TokenTypes::String,
                 parse::SemanticTokenKind::Keyword => TokenTypes::Keyword,
                 parse::SemanticTokenKind::Function => TokenTypes::Function,
@@ -857,7 +854,11 @@ impl LanguageServer for Backend {
                 parse::SemanticTokenKind::Operator => TokenTypes::Operator,
                 parse::SemanticTokenKind::Comment => TokenTypes::Comment,
             };
-            spans_and_kinds.push((semantic_token.span, token_type as u32, 0))
+            spans_and_kinds.push((
+                semantic_token.span,
+                token_type as u32,
+                semantic_token.mods as u32,
+            ))
         }
         for entry in ast_for_file.mem.getn_lt(source.trivia) {
             match entry.trivia.kind {

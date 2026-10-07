@@ -77,11 +77,11 @@ ns for db {
   }
 }
 
-$http/pre/routing/define(route, {
-  use http/pre/routing/get
-  use http/pre/routing/post
-  use http/pre/routing/delete
-  use http/pre/routing/seg
+$http/routing/define(route, {
+  use http/routing/get
+  use http/routing/post
+  use http/routing/delete
+  use http/routing/seg
   let game: span[seg] = [:text "game", :u64 "id"]
 
   [
@@ -103,7 +103,7 @@ fn handle(req: http/request, services: *services): http-response {
     worker-deps = heap.new(app/deps.{ db = db/open(db-path), bus = services.bus }).as[ptr]
   }
   let deps = worker-deps.ref[deps]
-  if route/parse(req.header) is {
+  if route/from-header(req.header) is {
     :err e -> error-response(e),
     :ok r -> if r is {
       :home -> home-page(),
@@ -123,7 +123,7 @@ fn handle(req: http/request, services: *services): http-response {
 fn visits(deps: *deps, req: http/request): http-response {
   let n = deps.db.record-visit(req.header.url)
   let who = pairs/find-by-name(req.query(), "who") ? (pairs/find-by-name(req.cookies(), "who") ? "stranger")
-  response/text("hello $who, visit number $n\n")
+  response/text(200, "hello $who, visit number $n\n")
 }
 
 fn login(req: http/request): http-response {
@@ -135,9 +135,9 @@ fn login(req: http/request): http-response {
         extra-headers = span/single(cookie/set-header("who", who, cookie/attrs/default())),
         body = :complete span/single("logged in\n".span-bytes()),
       },
-      :none -> response/status(400, "missing who\n"),
+      :none -> response/text(400, "missing who\n"),
     },
-    :none -> response/status(415, "send a form\n"),
+    :none -> response/text(415, "send a form\n"),
   }
 }
 
@@ -154,7 +154,7 @@ fn game-events(deps: *deps, id: u64): http-response {
 
 fn game-poke(deps: *deps, id: u64): http-response {
   publish-text(deps.bus, game-topic(id), "poked\nover http")
-  response/text("poked; events at ${route/url-string(:game-events .{ id })}\n")
+  response/text(200, "poked; events at ${route/url-string(:game-events .{ id })}\n")
 }
 
 // One SSE event per number, rendered into the ambient request arena
@@ -172,8 +172,8 @@ fn big-file(): http-response {
 fn error-response(e: routing/route-error): http-response {
   if e is {
     :not-found -> response/not-found(),
-    :bad-encoding b -> response/status(400, "Bad percent-encoding in `${b.segment}`\n"),
-    :bad-param b -> response/status(400, "Expected ${b.pattern}: `${b.got}` is not a valid ${b.ty} for ${b.name}\n"),
+    :bad-encoding b -> response/text(400, "Bad percent-encoding in `${b.segment}`\n"),
+    :bad-param b -> response/text(400, "Expected ${b.pattern}: `${b.got}` is not a valid ${b.ty} for ${b.name}\n"),
     :bad-method b -> response/method-not-allowed(b.allowed),
   }
 }
