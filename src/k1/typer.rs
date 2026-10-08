@@ -10678,6 +10678,16 @@ impl TypedProgram {
             self.set_completion_site(CompletionSite::Variant { type_id: provided_type });
         }
 
+        let provided_type = match self.get_instance_info(provided_type) {
+            Some(info)
+                if matches!(self.types.get(info.generic_parent), Type::Generic(g)
+                    if self.types.get(g.inner).as_sum().is_some()) =>
+            {
+                info.generic_parent
+            }
+            _ => provided_type,
+        };
+
         match self.types.get(provided_type) {
             Type::Sum(_s) => Ok(()),
             Type::Generic(g) => match self.types.get(g.inner).as_sum() {
@@ -10724,6 +10734,7 @@ impl TypedProgram {
                         provided_type,
                         variant_name,
                         parsed_variant.payload,
+                        None,
                         ctx,
                         parsed_variant.name_span,
                     )?;
@@ -10762,6 +10773,7 @@ impl TypedProgram {
                     }
                 };
 
+                let mut stashed_payload: SV8<(ParsedExprId, TypedExprId)> = smallvec![];
                 let solved_type_params: TypeSliceId = match payload_if_needed {
                     None => {
                         match ctx.expected_type_id.map(|t| (t, self.get_instance_info(t))) {
@@ -10797,12 +10809,17 @@ impl TypedProgram {
                         // - The expected return type together with the type of the sum itself
                         // - The passed payload together with the type of the payload itself
                         if let Some(expected) = ctx.expected_type_id {
+                            let self_instance = self.instantiate_generic_type(
+                                provided_type,
+                                self.mem.getn(g_params),
+                            );
                             args_and_params.push(InferenceInputPair {
                                 arg: TypeOrParsedExpr::Type(expected),
-                                param_type: g.inner,
+                                param_type: self_instance,
                                 allow_mismatch: true,
                             })
                         };
+                        let first_value_pair_index = args_and_params.len() as u32;
                         args_and_params.push(InferenceInputPair {
                             arg: TypeOrParsedExpr::Parsed(payload),
                             param_type: generic_variant_payload,
@@ -10816,7 +10833,12 @@ impl TypedProgram {
                                 &args_and_params,
                                 span,
                                 ctx.scope_id,
-                                None,
+                                Some(infer::InferArgStash {
+                                    ctx,
+                                    first_value_pair_index,
+                                    excluded_args: &[],
+                                    stashed: &mut stashed_payload,
+                                }),
                             )
                             .map_err(|f| self.render_inference_failure(f))?;
                         self.intern_type_args(solutions)
@@ -10831,6 +10853,7 @@ impl TypedProgram {
                     concrete_type,
                     variant_name,
                     parsed_variant.payload,
+                    stashed_payload.first().map(|(_, typed)| *typed),
                     ctx,
                     span,
                 )?;
@@ -13604,6 +13627,7 @@ impl TypedProgram {
         concrete_sum_type: TypeId,
         variant_name: StringId,
         payload: Option<ParsedExprId>,
+        stashed_payload: Option<TypedExprId>,
         ctx: EvalExprContext,
         variant_span: Span,
     ) -> K1Result<TypedExprId> {
@@ -13636,7 +13660,9 @@ impl TypedProgram {
                 }
             }
             Some(payload_type) => {
-                if let Some(payload_arg) = payload {
+                if let Some(stashed) = stashed_payload {
+                    Ok(Some(stashed))
+                } else if let Some(payload_arg) = payload {
                     let payload_value = self.eval_expr_with_coercion(
                         payload_arg,
                         ctx.with_expected_type(Some(payload_type)),
