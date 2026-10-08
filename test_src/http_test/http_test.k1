@@ -8,10 +8,8 @@ use http/server
 use std/pubsub
 use std/rc-bytes
 use http/datastar
-use http/pair
-use http/pairs
-use http/percent
-use http/urlencoded
+use std/url
+use std/url/pair
 use http/cookie
 use std/rc-byte-stream
 use std/source
@@ -27,59 +25,46 @@ $http/routing/define(route, \{
   get  grade-rate "/cmd/grade-rate/{who: string}" ?{ plan-id: int, item-id: u64, note: ?string }
 })
 
+fn route-of(method: http/llhttp/method, target: string): result[route, http/routing/route-error] {
+  route/parse(method, url/parse(target).!)
+}
+
 fn test-routing() {
   assert(route/parse-request(http/header/get("/game/42/poke")) is :err :bad-method _)
   assert((route:game-poke .{ id = 42 }).show() == "/game/42/poke")
   assert("${route:files .{ path = "a b/c" }}" == "/files/a%20b/c")
 
-  assert(route/parse(:HEAD, "/events?foo=1") is :ok :events)
-  assert(route/parse(:GET, "/%65vents") is :ok :events)
-  assert(route/parse(:GET, "/files/a%20b/c") is :ok :files f and f.path == "a b/c")
-  assert(route/parse(:POST, "/game/42/poke/") is :ok :game-poke p and p.id == 42)
-  assert(route/parse(:GET, "/game/42/poke") is :err :bad-method _)
-  assert(route/parse(:POST, "/game/18446744073709551617/poke") is :err :bad-param _)
-  assert(route/parse(:GET, "/game/42/zzz") is :err :not-found)
-  assert(route/parse(:GET, "/game/%zz/poke") is :err :bad-encoding _)
-  assert(route/parse(:OPTIONS, "*") is :err :not-found)
+  assert(route-of(:HEAD, "/events?foo=1") is :ok :events)
+  assert(route-of(:GET, "http://h/%65vents") is :ok :events)
+  assert(route-of(:GET, "/files/a%20b/c") is :ok :files f and f.path == "a b/c")
+  assert(route-of(:POST, "/game/42/poke/") is :ok :game-poke p and p.id == 42)
+  assert(route-of(:GET, "/game/42/poke") is :err :bad-method _)
+  assert(route-of(:POST, "/game/18446744073709551617/poke") is :err :bad-param _)
+  assert(route-of(:GET, "/game/42/zzz") is :err :not-found)
+  assert(route-of(:POST, "/game/%zz/poke") is :err :bad-param _)
+  assert(route-of(:OPTIONS, "*") is :err :not-found)
 
   let g = route:grade-rate .{ who = "a b", plan-id = -3, item-id = 9, note = :some "x&y=1+z" }
   assert-equals(g.show(), "/cmd/grade-rate/a%20b?plan-id=-3&item-id=9&note=x%26y%3D1%2Bz")
-  assert(route/parse(:GET, g.show()) is :ok :grade-rate r and r.who == "a b" and r.plan-id == -3 and r.item-id == 9 and r.note is :some nt and nt == "x&y=1+z")
-  assert(route/parse(:GET, "/cmd/grade-rate/x?zz=1&note=a+b&item-id=2&&plan-id=1") is :ok :grade-rate r2 and r2.note is :some nn and nn == "a b")
-  assert(route/parse(:GET, "/cmd/grade-rate/x?item-id=2&plan-id=1") is :ok :grade-rate r3 and r3.note is :none)
+  assert-equals((route:grade-rate .{ who = "a/b", plan-id = 1, item-id = 2, note = :some "x y" }).show(), "/cmd/grade-rate/a%2Fb?plan-id=1&item-id=2&note=x+y")
+  assert(route-of(:GET, g.show()) is :ok :grade-rate r and r.who == "a b" and r.plan-id == -3 and r.item-id == 9 and r.note is :some nt and nt == "x&y=1+z")
+  assert(route-of(:GET, "/cmd/grade-rate/x?zz=1&note=a+b&item-id=2&&plan-id=1") is :ok :grade-rate r2 and r2.note is :some nn and nn == "a b")
+  assert(route-of(:GET, "/cmd/grade-rate/x?item-id=2&plan-id=1") is :ok :grade-rate r3 and r3.note is :none)
   assert-equals((route:grade-rate .{ who = "x", plan-id = 1, item-id = 2, note = :none }).show(), "/cmd/grade-rate/x?plan-id=1&item-id=2")
-  assert(route/parse(:GET, "/cmd/grade-rate/x?plan-id=1") is :err :missing-param m and m.name == "item-id")
-  assert(route/parse(:GET, "/cmd/grade-rate/x?plan-id=one&item-id=2") is :err :bad-param b and b.got == "one")
-  assert(route/parse(:GET, "/cmd/grade-rate/x?plan-id=1&item-id=2&plan-id=1") is :err :bad-param b2 and b2.name == "plan-id")
+  assert(route-of(:GET, "/cmd/grade-rate/x?plan-id=1") is :err :missing-param m and m.name == "item-id")
+  assert(route-of(:GET, "/cmd/grade-rate/x?plan-id=one&item-id=2") is :err :bad-param b and b.got == "one")
+  assert(route-of(:GET, "/cmd/grade-rate/x?plan-id=1&item-id=2&plan-id=1") is :err :bad-param b2 and b2.name == "plan-id")
 }
 
 fn test-parsers() {
-  assert(percent/decode("a+b", plus-is-space = false) == :some "a+b")
-  assert(percent/decode("a+b%2B", plus-is-space = true) == :some "a b+")
-  assert(percent/decode("%2f%C3%A9", plus-is-space = false) == :some "/é")
-  assert(percent/decode("%zz", plus-is-space = false) is :none)
-  assert(percent/decode("a%2", plus-is-space = false) is :none)
-  assert(percent/encode("a/b é~") == "a%2Fb%20%C3%A9~")
-
-  let q = urlencoded/parse("a%20b=x+y&flag&c=%3D%26&&d=&e=%zz")
-  assert-equals(q.len(), 5)
-  assert(pairs/find-by-name(q.as-span(), "a b") == :some "x y")
-  assert(pairs/find-by-name(q.as-span(), "flag") == :some "")
-  assert(pairs/find-by-name(q.as-span(), "c") == :some "=&")
-  assert(pairs/find-by-name(q.as-span(), "e") == :some "%zz")
-  let straddled = urlencoded/parse-chunks(["a=1&lo".span-bytes(), "ng=x%2".span-bytes(), "0y&b=2".span-bytes(), "&c".span-bytes()])
-  assert-equals(straddled.len(), 4)
-  assert(pairs/find-by-name(straddled.as-span(), "long") == :some "x y")
-  assert(pairs/find-by-name(straddled.as-span(), "c") == :some "")
-
   let c = cookie/parse("who=bob;junk ; x=a=b; enc=a%20b%3B; plus=a+b; empty=; raw=%zz")
   assert-equals(c.len(), 6)
-  assert(pairs/find-by-name(c.as-span(), "who") == :some "bob")
-  assert(pairs/find-by-name(c.as-span(), "x") == :some "a=b")
-  assert(pairs/find-by-name(c.as-span(), "enc") == :some "a b;")
-  assert(pairs/find-by-name(c.as-span(), "plus") == :some "a+b")
-  assert(pairs/find-by-name(c.as-span(), "empty") == :some "")
-  assert(pairs/find-by-name(c.as-span(), "raw") == :some "%zz")
+  assert(pair/find(c.as-span(), "who") == :some "bob")
+  assert(pair/find(c.as-span(), "x") == :some "a=b")
+  assert(pair/find(c.as-span(), "enc") == :some "a b;")
+  assert(pair/find(c.as-span(), "plus") == :some "a+b")
+  assert(pair/find(c.as-span(), "empty") == :some "")
+  assert(pair/find(c.as-span(), "raw") == :some "%zz")
   assert-equals(
     cookie/set-header("who", "bob smith;", cookie/attrs/default() | .{ max-age = :some 60, secure = true, same-site = :strict }),
     "Set-Cookie: who=bob%20smith%3B; Path=/; Max-Age=60; HttpOnly; Secure; SameSite=Strict")
@@ -89,12 +74,11 @@ fn test-parsers() {
   h.headers.push(.{ field = "content-type", value = "application/x-www-form-urlencoded; charset=utf-8" })
   h.headers.push(.{ field = "Cookie", value = "who=bob" })
   let req: http/request = .{ header = h, body = ["who=al".span-bytes(), "ice".span-bytes()] }
-  assert(pairs/find-by-name(req.query(), "next") == :some "/home")
-  assert(pairs/find-by-name(req.form().!, "who") == :some "alice")
-  assert(pairs/find-by-name(req.cookies(), "who") == :some "bob")
+  assert(pair/find(req.header.url.query-pairs(), "next") == :some "/home")
+  assert(pair/find(req.form().!, "who") == :some "alice")
+  assert(pair/find(req.cookies(), "who") == :some "bob")
   let plain: http/request = .{ header = http/header/make(:GET, "/"), body = [] }
   assert(plain.form() is :none)
-  assert(plain.query().is-empty())
   assert(plain.cookies().is-empty())
   assert(not plain.accepts-encoding("br"))
   plain.header.headers.push(.{ field = "accept-encoding", value = "gzip, BR;q=0.5, zstd;q=0.0" })
@@ -130,10 +114,11 @@ fn test-encoders() {
   assert-equals(sse(source/from-printed(["line\n"]), "e", "p"), "event: e\ndata: p line\n\n")
   assert-equals(sse(source/from-printed(["a", "b"]), "n", ""), "event: n\ndata: a\n\nevent: n\ndata: b\n\n")
   assert-equals(sse(source/from-printed(["x\n\ny"]), "e", "p"), "event: e\ndata: p x\ndata: p \ndata: p y\n\n")
+  assert-equals(sse(source/once(["a\rb\r".span-bytes(), "\nc\r\n".span-bytes()]), "e", "p"), "event: e\ndata: p a\ndata: p b\ndata: p c\n\n")
 }
 
 fn handle(req: http/request, bus: *pubsub/bus[span[u8]]): http-response {
-  let url = req.header.url
+  let url = req.header.url.text
   if url == "/hello" response/text(200, "hi")
   else if url == "/slow" { libuv/sleep(300); response/text(200, "slow-done") }
   else if url == "/len" response/text(200, "len ${req.header.content-length.!}")
@@ -225,10 +210,13 @@ fn on-slowloris-eof(c: *client) {
     chunked.append-span-in(heap, "\r\n0\r\n\r\n".span-bytes())
     client/start(get-server().port, string/wrap-bytes(chunked.as-span()), fn c. {
       assert(c.text().starts-with("HTTP/1.1 413 Content Too Large\r\n"))
-      client/start(get-server().port, "POST /len HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello", fn c. {
-        assert(c.text().ends-with("\r\n\r\nlen 5"))
-        body-limits-checked = true
-        phase1-step()
+      client/start(get-server().port, "GET http://h:99999/ HTTP/1.1\r\nHost: x\r\n\r\n", fn c. {
+        assert(c.text().starts-with("HTTP/1.1 400 Bad Request\r\n"))
+        client/start(get-server().port, "POST /len HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello", fn c. {
+          assert(c.text().ends-with("\r\n\r\nlen 5"))
+          body-limits-checked = true
+          phase1-step()
+        })
       })
     })
   })

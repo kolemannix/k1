@@ -1,6 +1,7 @@
 ns process_test
 
 use std/fd
+use std/posix
 use std/process
 
 fn write-line(child: *process/child, line: string) {
@@ -31,7 +32,9 @@ fn test() {
   // Death by signal
   let signaled = process/run-status("/bin/sh", ["-c", "kill -9 $$"], :capture).!
   assert-equals(signaled.exit-code, -1)
-  assert-equals(signaled.signal, 9)
+  assert-equals(signaled.signal, posix/SIGKILL)
+  let usr1 = process/run-status("/bin/sh", ["-c", "kill -USR1 $$"], :capture).!
+  assert-equals(usr1.signal, posix/SIGUSR1)
 
   // Spawn failure is the err for both flavors
   assert(process/run("definitely-not-a-real-cmd-k1", []) is :err :spawn _)
@@ -67,5 +70,5 @@ fn test() {
   let sleeper = process/spawn("sleep", ["100"]).!
   sleeper.kill()
   let sleeper-status = sleeper.wait().!
-  assert-equals(sleeper-status.signal, 9)
+  assert-equals(sleeper-status.signal, posix/SIGKILL)
 }

@@ -53,18 +53,18 @@ fn test-channel() {
   chan.flush()
   assert-equals(wakes, 1)
 
-  assert-equals(expect-one(src.next()), 10)
-  assert-equals(expect-one(src.next()), 20)
-  assert-equals(expect-one(src.next()), 30)
-  assert(src.next() is :pending)
+  assert-equals(expect-one(src.pull()), 10)
+  assert-equals(expect-one(src.pull()), 20)
+  assert-equals(expect-one(src.pull()), 30)
+  assert(src.pull() is :pending)
 
   assert(chan.push(11))
   chan.flush()
   assert-equals(wakes, 2)
-  assert-equals(expect-one(src.next()), 11)
+  assert-equals(expect-one(src.pull()), 11)
 
   chan.fail("boom")
-  assert(src.next() is :fail _)
+  assert(src.pull() is :fail _)
   src.stop()
 }
 
@@ -95,9 +95,9 @@ fn test-rc-byte-stream() {
   let payloads: span[rc-bytes] = [heap-bytes/cloned("ab".span-bytes()).to-rc(), heap-bytes/cloned("cde".span-bytes()).to-rc()]
   let src = source/from-span(payloads, chunk-size = 1) || rc-byte-stream
   src.start(waker/noop())
-  if src.next() is { :chunk g -> assert-equals(g.[0].len(), 2), _ -> crash("expected chunk") }
-  if src.next() is { :chunk g -> assert-equals(g.[0].len(), 3), _ -> crash("expected chunk") }
-  assert(src.next() is :done)
+  if src.pull() is { :chunk g -> assert-equals(g.[0].len(), 2), _ -> crash("expected chunk") }
+  if src.pull() is { :chunk g -> assert-equals(g.[0].len(), 3), _ -> crash("expected chunk") }
+  assert(src.pull() is :done)
   src.stop()
 }
 

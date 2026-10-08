@@ -1,9 +1,10 @@
 ns html_test
 use std/html
+use std/html/dom as h
 
 type item = { name: string, n: int }
 
-fn row(out: *string-builder, it: item) {
+fn row[w: writer](context out: w)(it: item) {
   html/write(out, \{ <li data-n={it.n}>{it.name}</li> })
 }
 
@@ -11,6 +12,7 @@ fn test-escaping() {
   let s = "<b> & \"q\" 'a'"
   assert-equals(html/render(\{ <p title={s}>{s}</p> }), "<p title=\"&lt;b&gt; &amp; &quot;q&quot; &#39;a&#39;\">&lt;b&gt; &amp; &quot;q&quot; &#39;a&#39;</p>")
   assert-equals(html/render(\{ <p>"a < b" & c</p> }), "<p>a &lt; b &amp; c</p>")
+  assert-equals(html/render(\{ <p>aren't 'quoted' rock'n'roll</p> }), "<p>aren&#39;t &#39;quoted&#39; rock&#39;n&#39;roll</p>")
   assert-equals(html/render(\{ <p>#raw {s}</p> }), "<p><b> & \"q\" 'a'</p>")
   assert-equals(html/render(\{ <style>{"a > b { }"}</style> }), "<style>a > b { }</style>")
 }
@@ -31,13 +33,17 @@ fn test-attributes() {
   assert-equals(html/render(\{ <input type="text" disabled data-on:click="@get('/x')"/> }), "<input type=\"text\" disabled data-on:click=\"@get(&#39;/x&#39;)\">")
   assert-equals(html/render(\{ <a href="/p/$x" class=big>go</a> }), "<a href=\"/p/7\" class=\"big\">go</a>")
   assert-equals(html/render(\{ <div id={x + 1}/> }), "<div id=\"8\"></div>")
+  let on = true
+  let t: ?string = :some "a<b"
+  let n: ?string = :none
+  assert-equals(html/render(\{ <input checked={on} disabled={not on} aria-invalid={on} title={t} alt={n}/> }), "<input checked aria-invalid=\"true\" title=\"a&lt;b\">")
 }
 
 fn test-directives() {
   let items: span[item] = [.{ name = "a", n = 1 }, .{ name = "b&", n = 2 }]
   let got = html/render(\{
     <ul>
-      #for it in items { #{ row(html-sb.&, it) } }
+      #for it in items { #{ row(it) } }
     </ul>
     #if items.len() == 0 { <p>none</p> } else #if items.len() == 1 { <p>one</p> } else { <p>{items.len()} items</p> }
   })
@@ -51,10 +57,32 @@ fn test-errors() {
   assert(mismatched.!.starts-with("</div> does not close <p>"))
 }
 
+fn test-dom() {
+  let items: span[item] = [.{ name = "a<b", n = 1 }, .{ name = "c", n = 2 }]
+  let t: ?string = :none
+  let n = h/div([h/class("card"), h/at("data-on:click", "@post('/x')"),
+    h/ul([h/each(items, fn it. h/li([h/at("data-n", it.n), h/at("checked", it.n == 1), :text it.name]))]),
+    h/input([h/at("disabled", true), h/at("title", t), h/at("aria-invalid", false)]),
+    :raw(html/render(\{ <b>raw</b> })),
+  ])
+  let want = "<div class=\"card\" data-on:click=\"@post(&#39;/x&#39;)\"><ul><li data-n=\"1\" checked>a&lt;b</li><li data-n=\"2\">c</li></ul><input disabled aria-invalid=\"false\"><b>raw</b></div>"
+  assert-equals(n.show(), want)
+  assert-equals(html/render(\{ <section>{n}</section> }), "<section>$want</section>")
+  if n is :elem e {
+    e.children.push(:text "late")
+    e.attrs.push(.{ name = "id", value = :text "x" })
+  }
+  assert(n.show().ends-with("late</div>"))
+  assert(n.show().starts-with("<div class=\"card\" data-on:click=\"@post(&#39;/x&#39;)\" id=\"x\">"))
+  let baked: string = #static h/p([h/id("s"), :text "1 < 2"]).show()
+  assert-equals(baked, "<p id=\"s\">1 &lt; 2</p>")
+}
+
 fn test() {
   test-escaping()
   test-whitespace()
   test-attributes()
   test-directives()
   test-errors()
+  test-dom()
 }
