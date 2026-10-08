@@ -13,6 +13,7 @@
 // Macros are invoked at definition level with the '$' sentinel;
 // bare params arrive as source text, so the name is a bare ident
 $pre/make-point-macro(my-macro-point)
+$pre/make-point-twice(my-nested-point)
 
 ns pre {
   let pi: f32 = 3.14
@@ -21,6 +22,9 @@ ns pre {
   }
   macro make-point-macro(name: code) {
     "type $name = { x: i32, y: i32 }"
+  }
+  macro make-point-twice(name: code) {
+    "\$pre/make-point-macro($name)"
   }
 }
 
@@ -123,6 +127,7 @@ fn test() {
 
   let _x: my-meta-point = .{ x = 0, y = 42 }
   let _y: my-macro-point = .{ x = 1, y = 2 }
+  let _z: my-nested-point = .{ x = 3, y = 4 }
   pre/pi
   
   .{}

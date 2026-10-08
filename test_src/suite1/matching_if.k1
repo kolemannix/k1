@@ -18,6 +18,8 @@ fn test() {
     v == "foo"
   } else (false)
   assert(result)
+  let rewrapped: ?string = if x is :some v :some v else :none
+  assert-equals(rewrapped.!, "foo")
 
   assert(test-compile(
     if x is :some(illegal_binding) or true .{

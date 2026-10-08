@@ -39,4 +39,6 @@ fn test() {
     _ -> crash("expected a circle")
   }
   assert(shape is :circle .{ radius = 10, filled = true })
+  let inner-ref = outer.inner.&
+  assert(test-compile(inner/me(inner-ref.&)) is :some m and m.starts-with("Expected *inner but got **inner"))
 }

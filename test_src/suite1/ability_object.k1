@@ -86,4 +86,14 @@ fn test() {
   #static assert(test-compile(
     { let d: dyn[counter[t = int]] = #static { let o: *by-ones = mem/new(.{ current = 0 }); o.to-dyn() }; d }
   ).is-some())
+
+  let shown: *int = mem/new(42)
+  assert-equals(shown.to-dyn[show]().show(), "42")
+  let shown-static: string = #static { let s: *int = mem/new(7); s.to-dyn[show]().show() }
+  assert-equals(shown-static, "7")
+  let h: *heap = mem/new(.{})
+  let a: dyn[allocator] = h.to-dyn()
+  let p = a.alloc(16, 8)
+  a.free(p, 16, 8)
+  assert(test-compile({ let d: ?dyn[equals] = :none; d }).!.contains-string("'equals': parameter 'other' mentions self"))
 }

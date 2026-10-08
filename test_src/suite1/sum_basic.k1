@@ -17,7 +17,7 @@ fn test() {
   let msg = if c is {
     :a -> "a",
     :b _ -> "b",
-    :c s if s.len() > 0 -> s,
+    :c s if s.non-empty() -> s,
     :c _ -> "empty"
   }
   assert(msg == "hello, sums")
