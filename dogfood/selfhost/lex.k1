@@ -32,7 +32,7 @@ type token-kind = either(u8) {
   pipe, pipe-pipe, amp, amp-amp,
   percent, back-slash, hash, at, dollar, caret,
 
-  double-quote, single-quote,
+  single-quote,
 
   plus, minus, asterisk,
   less-equal, greater-equal,
@@ -96,7 +96,7 @@ ns for token-kind {
       :pipe -> "|", :pipe-pipe -> "||", :amp -> "&", :amp-amp -> "&&",
       :percent -> "%", :back-slash -> "\\", :hash -> "#", :at -> "@",
       :dollar -> "$", :caret -> "^",
-      :double-quote -> "\"", :single-quote -> "singleq",
+      :single-quote -> "'",
       :plus -> "+", :minus -> "-", :asterisk -> "*",
       :less-equal -> "<=", :greater-equal -> ">=",
       :r-thin-arrow -> "->",
@@ -295,12 +295,6 @@ ns for lexer {
     if p >= self.content.len() EOF_CHAR else self.content.[p]
   }
 
-  fn next-char(self: *lexer): char {
-    let c = self.peek()
-    self.pos = self.pos + 1
-    c
-  }
-
   fn advance(self: *lexer) {
     self.pos = self.pos + 1
   }
@@ -474,24 +468,12 @@ ns for lexer {
         } else if c == ',' {
           return :ok(self.emit(tokens, :comma, n, 1))
         } else if c == '\'' {
-          self.advance()
-          let c2 = self.next-char()
-          if c2 == '\\' {
-            self.advance()
-            let q = self.next-char()
-            if q != '\'' {
-              return :err(make-error("Expected closing ' for char literal", n + 3, 1))
-            }
-            tokens.push(self.make-token(:char, n, 4))
-            return :ok(true)
-          } else {
-            let q = self.next-char()
-            if q != '\'' {
-              return :err(make-error("Expected closing ' for char literal", n + 2, 1))
-            }
-            tokens.push(self.make-token(:char, n, 3))
-            return :ok(true)
-          }
+          let char-len: u32 = if self.peek-at(1) == '\\' and self.peek-at(3) == '\'' 4
+            else if self.peek-at(1) != '\'' and self.peek-at(2) == '\'' 3
+            else return :ok(self.emit(tokens, :single-quote, n, 1))
+          for _ in 0.until(char-len) { self.advance() }
+          tokens.push(self.make-token(:char, n, char-len))
+          return :ok(true)
         } else if c == '+' {
           return :ok(self.emit(tokens, :plus, n, 1))
         } else if c == '-' {

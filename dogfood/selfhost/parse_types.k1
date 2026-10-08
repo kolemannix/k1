@@ -198,7 +198,7 @@ ns for parser {
             }
           }
           if drop-trailing-ws-line and idx == pending.len() - 1 {
-            while buf.len() > 0 and (buf.[buf.len() - 1] == ' ' or buf.[buf.len() - 1] == '\t') {
+            while buf.non-empty() and (buf.[buf.len() - 1] == ' ' or buf.[buf.len() - 1] == '\t') {
               buf.remove(buf.len() - 1)
             }
           }
@@ -261,7 +261,7 @@ ns for parser {
       let span = dot-token.span().thru(end.span())
       return :ok(self.program.add-pattern(:struct-pat(.{ fields, span })))
     }
-    if first.kind is :colon or (first.kind is :ident and second.kind is :colon) {
+    if first.kind is :colon or (first.kind is :ident and second.is-kind-nonspaced(:colon)) {
       let sum-name: ?ast/string-id = if first.kind is :ident {
         self.advance()
         let sn = self.make-ident(first)

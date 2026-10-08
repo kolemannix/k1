@@ -82,7 +82,7 @@ ns io {
   }
 
   fn flush-stdout() {
-    if stdout-buf.len() > 0 {
+    if stdout-buf.non-empty() {
       write-all(1, stdout-buf.as-span().data-ptr(), stdout-buf.len())
       stdout-buf.clear()
     }

@@ -84,7 +84,7 @@ ns fmt {
     fn align-zeros[w: writer](self: *pad, w, width: u32) {
       let text = self.text.as-span()
       let short = self.shortfall(width)
-      let signed = text.len() > 0 and (text.[0] == '-'.as-u8() or text.[0] == '+'.as-u8())
+      let signed = text.non-empty() and (text.[0] == '-'.as-u8() or text.[0] == '+'.as-u8())
       let digits-start: size = if signed 1 else 0
       w.write-bytes(text.slice(0, digits-start))
       w.repeat("0", short)

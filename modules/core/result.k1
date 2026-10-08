@@ -8,5 +8,19 @@ ns for result {
       }
     }
   }
+
+  fn map-err[t, e, e2](self: result[t, e], f: some fn(e) -> e2): result[t, e2] {
+    if self is {
+      :ok t  -> :ok t,
+      :err e -> :err f(e)
+    }
+  }
+
+  fn show-err[t, e: print](self: result[t, e]): result[t, string] {
+    if self is {
+      :ok t  -> :ok t,
+      :err e -> :err e.show()
+    }
+  }
   
 }

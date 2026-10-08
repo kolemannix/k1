@@ -303,7 +303,7 @@ fn words(s: string): list[string] {
   let out: list[string] = list/empty()
   for part in s.split-by-char(' ') {
     let w = if part.ends-with("\r") part.slice(0, part.len() - 1) else part
-    if w.len() > 0 out.push(w)
+    if w.non-empty() out.push(w)
   }
   out
 }

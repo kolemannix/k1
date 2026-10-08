@@ -92,9 +92,7 @@ ns for token-cursor {
 type code-builder = { text: list[u8], spans: list[code-span], indent-level: size }
 
 ns for code-builder {
-  fn new(): code-builder {
-    .{ text = list/empty(), spans = list/empty(), indent-level = 0 }
-  }
+  fn new(): code-builder { .0 }
 
   fn(inline) write-spanned(self: *code-builder, text: string, source: u64) {
     self.spans.push(.{ start = self.text.len.trunc[u32], len = text.len().trunc[u32], source })

@@ -347,7 +347,7 @@ fn(extern("BrotliEncoderCompress"), lib("brotli")) encoder-compress(
 Big APIs get generated. `dogfood/k1bindgen` reads C headers through libclang
 and writes K1. Its libuv output:
 
-```k1 path=modules/libuv/uv.k1
+```k1 path=modules/uv/libuv.k1
 fn(extern("uv_default_loop")) default_loop(): optref[uv-loop]
 fn(extern("uv_loop_init")) loop_init(
   loop_c: *uv-loop,
@@ -362,7 +362,7 @@ fn(extern("uv_loop_close")) loop_close(
 libclang's layout as a compile-time assertion, so drift from the C definition
 fails the build:
 
-```k1 path=modules/libuv/net.k1
+```k1 path=modules/uv/net.k1
 type sockaddr_in = {
   sin_len: u8,
   sin_family: sa_family_t,
@@ -427,15 +427,15 @@ fn module(_b: k1/build-config): k1/module {
     files/write-entire-file("tables.k1", w.build()).!
 ```
 
-`modules/libuv` builds libuv with cmake and then runs `k1bindgen` to
+`modules/uv` builds libuv with cmake and then runs `k1bindgen` to
 regenerate two of its own source files:
 
-```k1 path=modules/libuv/build.k1
+```k1 path=modules/uv/build.k1
 fn module(_b: k1/build-config): k1/module {
   let m = k1/module/new()
   m.lib("uv", :static)
   m.setup(
-    ["libs/libuv.a", "uv.k1", "net.k1"],
+    ["libs/libuv.a", "libuv.k1", "net.k1"],
     ["net.c", "uv_bindgen_prelude.k1.txt"]
   )
   m

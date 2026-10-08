@@ -80,7 +80,7 @@ ns tablegen {
             let tokens: list[string] = list/empty()
             for part in body.split-by-char(',') {
               let t = trim(part)
-              if t.len() > 0 tokens.push(t)
+              if t.non-empty() tokens.push(t)
             }
             return .{ tokens, declared = declared-count(decl, tokens.len()) }
           }

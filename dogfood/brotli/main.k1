@@ -185,7 +185,7 @@ fn main(argc: c-int, argv: ptr): i32 {
       check-input(c.name, c.data, q)
     }
     for c in corpora {
-      if c.data.len() > 0 {
+      if c.data.non-empty() {
         check-streaming("${c.name}/64k-chunks", c.data, q, 1 << 16)
       }
     }

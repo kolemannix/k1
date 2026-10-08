@@ -8,7 +8,7 @@ ns for list {
   ///////////////////////////
   // Construction functions
 
-  fn(inline) empty[t](): list[t] { with-capacity[t](0) }
+  fn(inline) empty[t](): list[t] { .0 }
 
   fn(inline) len[t](self: list[t]): size { self.len }
   fn(inline) cap[t](self: list[t]): size { self.buffer.len }

@@ -121,7 +121,7 @@ A manifest may declare a setup step — `m.setup(outputs, inputs)` — paired wi
 are stale (hashed together with the inputs, `build.k1`, and the target), the
 compiler runs `fn setup` on the host with cwd = the module dir, then stamps the
 outputs; a run that fails leaves no stamp, so it is retried on the next compile.
-Setups finish before any program source is read. See `modules/libuv`,
+Setups finish before any program source is read. See `modules/uv`,
 `modules/http`, `modules/sdl3`.
 
 ```rust
@@ -143,13 +143,15 @@ See `test_src/ffi_abi_test`.
 
 ## Function Pointers
 
-Function pointer types are written with `*fn(...) -> ...`. Function names can be
-used as values, stored in structs, reassigned, and called through the pointer.
+Function pointer types are written with `*fn(...) -> ...`. A named function's
+address, `f.&`, is a function pointer: store it, reassign it, and call through
+it. A pointer held in a field is called as `(s.callback)(x)`; `s.callback(x)`
+looks for a method.
 
 ```rust
 fn add-one(x: int): int { x + 1 }
 
-let f: *fn(int) -> int = add-one
+let f: *fn(int) -> int = add-one.&
 assert-equals(f(10), 11)
 
 type has-fn = { callback: *fn(x: int) -> int }
@@ -233,6 +235,13 @@ text on purpose rather than by accident.
   "type $name = { x: int, y: int }"
 }
 ```
+
+A metaprogram's output may itself contain definition-level `#meta` or `$`
+invocations; they expand in place, in order. That is how a macro gets the
+schema of a type the caller wrote as tokens: stage one emits a call to a
+stage-two macro whose param is a `types/type-id`, built as `types/id[{ ...the
+tokens... }]`, and non-`code` macro params are statically evaluated at the
+call site. `sandbox/sandbox.k1` is the worked example.
 
 The `pre` namespace is compiled early for metaprogramming support:
 
@@ -364,7 +373,23 @@ whole literal, interpolation holes included), `char` or `punct`, and `spacing` i
 expansion with an error at that token in the caller's source. `std/html` is the
 worked example: `html/write(out, \{ <p class={c}>{text}</p> })` and
 `html/render(\{ ... })` check tag structure at compile time and splice holes
-as spanned code.
+as spanned code. A braced attribute value dispatches on its type: a `bool` on
+a spec boolean attribute (`checked={on}`) emits the bare attribute or nothing,
+a `bool` elsewhere (`aria-invalid={bad}`) prints `"true"`/`"false"`, an `opt`
+omits the attribute on `:none`, anything else prints escaped. `render` binds
+its builder as a `writer` context, so `#{ write-row(it) }` composes helpers
+declared `fn write-row[w: writer](context out: w)(...)`.
+
+`std/html/dom` is the in-memory counterpart: `node = either { text, raw, attr,
+elem(*element), frag(span[node]) }`, one function per tag taking a single
+`span[node]` of modifiers (`:attr` entries become attributes, the rest
+children, scalatags style), `at(name, value)` with the same `opt`/`bool`
+dispatch as braced attribute values, `class`/`id`/`href`/`src`, and
+`each(items, f)`. `node` implements `print`, so `n.show()` serializes it, a
+`{n}` hole in `render` writes it unescaped, and `:raw(html/render(\{ ... }))`
+goes the other way. The tree is plain data: match `:elem e` and push onto
+`e.children`/`e.attrs`. Tag names collide with locals and the `div` ability,
+so alias the namespace: `use std/html/dom as h`, `h/div([h/class("x"), :text s])`.
 
 ```rust
 macro sum(t: span[code-token]) {
@@ -581,15 +606,17 @@ let d = state.as[dyn[source[t = u8]]]()     // as-cast form
 let d = my-value.to-dyn[source[t = u8]]()   // value: mem/new then erase
 ```
 
-Methods dispatch through the object (`d.next()`), including ability default
+Methods dispatch through the object (`d.pull()`), including ability default
 methods and impl overrides. Functions that mention self nowhere in their
 signature also dispatch (`d.kind()`); the object acts as a type witness and
-no state is passed. `dyn[source[t = t]]` may appear in generic signatures
-and specializes at instantiation. Functions that take self by value, mention
-self outside the receiver, have their own type params, or take context
-params are excluded per-function from the object (they still dispatch
-statically on concrete types); an ability with no dispatchable functions
-cannot form a dyn type. Dyn objects contain function pointers, so
+no state is passed. By-value receivers (`fn show(self)`) dispatch through a
+generated thunk that loads self from the state pointer, so `dyn[show]` and
+`dyn[allocator]` work. `dyn[source[t = t]]` may appear in generic signatures
+and specializes at instantiation. Functions that mention self outside the
+receiver, have their own type params, or take context params are excluded
+per-function from the object (they still dispatch statically on concrete
+types); an ability with no dispatchable functions cannot form a dyn type,
+and the error lists each function's reason. Dyn objects contain function pointers, so
 they cannot cross the `#static` boundary into runtime constants; comptime
 creation and dispatch inside `#static` works.
 
@@ -848,3 +875,24 @@ array(span[json]), object(span[{ key, value }])`), `doc.get(key)` for lookup.
 Vector intrinsics: `lt-lanes`/`gt-lanes` and `shuffle-bytes` (16 lanes, pshufb
 semantics) join `eq-lanes`/`to-mask`; `vector/shift-bytes[k](prev, cur)` is
 built on them.
+
+## URLs
+
+`std/url` parses RFC 3986 URI references, origin-form request targets
+included: `url/parse(s): result[url/url, url/error]`. A `url` is its text plus
+`u32` component offsets, so `scheme()`, `authority()`, `userinfo()`, `host()`,
+`port()`, `path()`, `query()` and `fragment()` are zero-copy, still-encoded
+views, and parse borrows its input. Scheme, authority and percent-escapes in
+userinfo/host are strict; path, query and fragment take any visible byte (what
+browsers actually send), so `normalized()` is what yields strict RFC 3986 text
+(case, escapes, dot segments, default port). `base.resolve(ref)` is RFC 3986
+§5.2. `path-segments()` and `query-pairs()` iterate decoded values;
+`url/pair/find(pairs, name)` looks one up in any iterable of `url/pair`.
+`url/builder` writes each component through its encode set (`segment`,
+`query-pair` and `port` take data; `path`, `query`, `fragment` take URL text
+and keep valid escapes) and `build()` returns the `url`. `url/percent` has
+`decode` (malformed escapes pass through), `encode`/`write-encoded` with an
+`encode-set` (`unreserved`, `segment`, `path`, `query`, `userinfo`, `host`,
+`form`); `url/form` has `decode` (`+` is space), `pairs(s)` and
+`parse-chunks` for `application/x-www-form-urlencoded`. `http/header.url` is a
+parsed `url`; a target that doesn't parse is answered 400.

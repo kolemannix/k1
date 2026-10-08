@@ -28,7 +28,7 @@ ns for buffer {
   ////////////////////////
   // Constructor functions
 
-  fn(inline) empty[t](): buffer[t] { .{ len = 0, data = ptr/null } }
+  fn(inline) empty[t](): buffer[t] { .0 }
   fn(inline) wrap-raw[t](ptr, count: size): buffer[t] { .{ len = count, data = ptr } }
   fn(inline) wrap-ref[t](data: *t, len: size): buffer[t] { .{ len, data = data.as[ptr] } }
 
@@ -286,7 +286,7 @@ ns for buffer {
   }
 
   fn first-ref[t](self: buffer[t]): ?(*t) {
-    if not self.is-empty() {
+    if self.non-empty() {
       :some self.[0].&
     } else {
       :none
@@ -301,7 +301,7 @@ ns for buffer {
   }
 
   fn last-ref[t](self: buffer[t]): ?(*t) {
-    if not self.is-empty() {
+    if self.non-empty() {
       :some self.[self.len - 1].&
     } else {
       :none

@@ -1,7 +1,9 @@
 type string-builder = { list: list[u8] }
 ns for string-builder {
-  fn new(): string-builder {
-    .{ list = list/empty() }
+  fn new(): string-builder { .0 }
+
+  fn with-capacity(cap: size): string-builder {
+    .{ list = list/with-capacity(cap) }
   }
 
   fn reset(self: *string-builder) {

@@ -73,7 +73,7 @@ ns for engine {
   fn set-position(self: *engine, args: span[string]): {} {
     let moves-at = args.position("moves") ? args.len()
     let setup = args.take(moves-at)
-    let fen = if setup.len() > 0 and setup.[0] == "startpos" START_FEN
+    let fen = if setup.non-empty() and setup.[0] == "startpos" START_FEN
       else if setup.len() > 1 and setup.[0] == "fen" string/join(setup.drop(1), " ")
       else return println("info string position needs startpos or fen")
     let root = if position/from-fen(fen) is {

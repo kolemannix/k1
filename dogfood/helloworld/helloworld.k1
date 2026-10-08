@@ -51,7 +51,7 @@ ns orders {
     let orders = list/empty[order]()
     for line in lines {
       // Skip the header; split-by-char already drops the trailing empty line
-      if it-index > 0 and line.len() > 0 {
+      if it-index > 0 and line.non-empty() {
         orders.push(parse-line(line))
       }
     }

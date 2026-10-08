@@ -11,7 +11,7 @@ impl print for parse-error {
 }
 
 fn parse-digits(s: string): result[u64, parse-error] {
-  require s.len() > 0 else { return :err :empty-input }
+  require s.non-empty() else { return :err :empty-input }
   let n: u64 = 0
   for c in s {
     require c.is-ascii-digit() else { return :err :bad-digit c }

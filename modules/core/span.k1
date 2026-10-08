@@ -40,9 +40,7 @@ ns for span {
     self.buffer.data-ref()
   }
 
-  fn empty[t](): span[t] {
-    .{ buffer = buffer/empty[t]() }
-  }
+  fn(inline) empty[t](): span[t] { .0 }
 
   fn from-array[t, n: static size](array: *array[t, n]): span[t] {
     let buffer = buffer/from-array[t, n](array)
@@ -84,7 +82,7 @@ ns for span {
   }
 
   fn first-ref[t](self: span[t]): ?*t {
-    if not self.is-empty() {
+    if self.non-empty() {
       :some self.[0].&
     } else {
       :none
@@ -92,7 +90,7 @@ ns for span {
   }
 
   fn last-ref[t](self: span[t]): ?*t {
-    if not self.is-empty() {
+    if self.non-empty() {
       :some self.[self.len() - 1].&
     } else {
       :none

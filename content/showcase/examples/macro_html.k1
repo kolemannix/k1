@@ -2,7 +2,7 @@ use std/html
 
 type todo = { title: string, done: bool }
 
-fn todo-item(out: *string-builder, t: todo) {
+fn todo-item[w: writer](context out: w)(t: todo) {
   html/write(out, \{
     <li class={if t.done "done" else "open"} data-on:click="@post('/toggle')">
       {t.title} #if t.done { <small>"(done)"</small> }
@@ -15,7 +15,7 @@ fn page(user: string, todos: span[todo]): string {
     <main id="todos">
       <h1>Hello, {user}! {todos.len()} things to do</h1>
       <ul>
-        #for t in todos { #{ todo-item(html-sb.&, t) } }
+        #for t in todos { #{ todo-item(t) } }
       </ul>
     </main>
   })

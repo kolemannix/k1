@@ -759,6 +759,8 @@ Collection API naming follows a doctrine:
   `.0`; check `is-live` where it matters. When `t` is not zero-safe
   (`types/is-zero-safe[t]()`, false for types holding `*t`), `get` on a
   handle that isn't live crashes instead.
+- Every collection has `is-empty()` and `non-empty()`; write `x.non-empty()`,
+  never `not x.is-empty()` or `x.len() > 0`.
 - Mutators take `*self` and reuse the verb (`sort`, `reverse`); functional
   variants get `-ed` (`sorted`, `reversed`).
 - Shared collection ops are ability defaults: reads and views on `as-span`

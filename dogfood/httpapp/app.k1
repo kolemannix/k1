@@ -7,19 +7,15 @@ use http/routing
 use http/sse-response
 use http/sse-events
 use http/datastar
-use http/chunked
-use http/group-source
 use std/rc-byte-stream
 use std/owned
 use std/heap-bytes
 use std/pubsub
 use std/html
-use http/server/services
-use http/pair
-use http/pairs
+use std/url/pair
 use http/cookie
 use sqlite/sqlite3
-use libuv/uv
+use uv/libuv
 
 type deps = {
   db: db,
@@ -55,7 +51,7 @@ ns for db {
 
   fn run(self: db, sql: string, text: string) {
     let stmt = self.prepare(sql)
-    if not text.is-empty() {
+    if text.non-empty() {
       sqlite3/bind_text(stmt, 1, text.data-ref-byte(), text.len().trunc[i32], fn(_p: ptr) .{})
     }
     let step-status = sqlite3/step(stmt)
@@ -77,33 +73,25 @@ ns for db {
   }
 }
 
-$http/routing/define(route, {
-  use http/routing/get
-  use http/routing/post
-  use http/routing/delete
-  use http/routing/seg
-  let game: span[seg] = [:text "game", :u64 "id"]
-
-  [
-    get(   "home",                    []),
-    get(   "events",                  [:text "events"]),
-    get(   "counter",                 [:text "counter", :text "events"]),
-    get(   "big-file",                [:text "static", :text "big-file.json"]),
-    get(   "starry",                  [:text "app", :text "starry-night"]),
-    get(   "visits",                  [:text "visits"]),
-    post(  "login",                   [:text "login"]),
-    get(   "game-events", game.concat([:text "events"])),
-    post(  "game-poke",   game.concat([:text "poke"])),
-    delete("delete-game", game),
-  ]
+$http/routing/define(route, \{
+  get    home         "/"
+  get    events       "/events"
+  get    counter      "/counter/events"
+  get    big-file     "/static/big-file.json"
+  get    starry       "/app/starry-night"
+  get    visits       "/visits" ?{ who: ?string }
+  post   login        "/login"
+  get    game-events  "/game/{id: u64}/events"
+  post   game-poke    "/game/{id: u64}/poke"
+  delete delete-game  "/game/{id: u64}"
 })
 
-fn handle(req: http/request, services: *services): http-response {
+fn handle(req: http/request, bus: *pubsub/bus[span[u8]]): http-response {
   if worker-deps.is-null() {
-    worker-deps = heap.new(app/deps.{ db = db/open(db-path), bus = services.bus }).as[ptr]
+    worker-deps = heap.new(app/deps.{ db = db/open(db-path), bus }).as[ptr]
   }
   let deps = worker-deps.ref[deps]
-  if route/from-header(req.header) is {
+  if route/parse-request(req.header) is {
     :err e -> error-response(e),
     :ok r -> if r is {
       :home -> home-page(),
@@ -113,22 +101,22 @@ fn handle(req: http/request, services: *services): http-response {
       :game-poke .{ id } -> game-poke(deps, id),
       :big-file -> big-file(),
       :starry -> response/html("todo"),
-      :visits -> visits(deps, req),
+      :visits p -> visits(deps, req, p.who),
       :login -> login(req),
       :delete-game p -> response/html("todo ${p.id}"),
     }
   }
 }
 
-fn visits(deps: *deps, req: http/request): http-response {
-  let n = deps.db.record-visit(req.header.url)
-  let who = pairs/find-by-name(req.query(), "who") ? (pairs/find-by-name(req.cookies(), "who") ? "stranger")
-  response/text(200, "hello $who, visit number $n\n")
+fn visits(deps: *deps, req: http/request, who: ?string): http-response {
+  let n = deps.db.record-visit(req.header.url.path())
+  let name = who ? (pair/find(req.cookies(), "who") ? "stranger")
+  response/text(200, "hello $name, visit number $n\n")
 }
 
 fn login(req: http/request): http-response {
   if req.form() is {
-    :some fields -> if pairs/find-by-name(fields, "who") is {
+    :some fields -> if pair/find(fields, "who") is {
       :some who -> .{
         status = 200,
         content-type = "text/plain",
@@ -154,13 +142,13 @@ fn game-events(deps: *deps, id: u64): http-response {
 
 fn game-poke(deps: *deps, id: u64): http-response {
   publish-text(deps.bus, game-topic(id), "poked\nover http")
-  response/text(200, "poked; events at ${route/url-string(:game-events .{ id })}\n")
+  response/text(200, "poked; events at ${route:game-events .{ id }}\n")
 }
 
 // One SSE event per number, rendered into the ambient request arena
 fn counter-events(): http-response {
   let counts = 1.until(11).to-list()
-  sse-response(source/from-items(counts.as-span()) || sse-events("counter", ""))
+  sse-response(source/from-printed(counts.as-span()) || sse-events("counter", ""))
 }
 
 fn big-file(): http-response {
@@ -172,8 +160,8 @@ fn big-file(): http-response {
 fn error-response(e: routing/route-error): http-response {
   if e is {
     :not-found -> response/not-found(),
-    :bad-encoding b -> response/text(400, "Bad percent-encoding in `${b.segment}`\n"),
     :bad-param b -> response/text(400, "Expected ${b.pattern}: `${b.got}` is not a valid ${b.ty} for ${b.name}\n"),
+    :missing-param m -> response/text(400, "Expected ${m.pattern}: missing query param ${m.name}\n"),
     :bad-method b -> response/method-not-allowed(b.allowed),
   }
 }
@@ -223,12 +211,12 @@ fn publish-text(bus: *pubsub/bus[span[u8]], topic: string, data: string) {
 
 let(mutable) game-tick: u64 = 0
 fn spawn-tick-publisher-thread(bus: *pubsub/bus[span[u8]]) {
-  let thread-id: *uv/thread = heap.alloc-t()
-  uv/check(uv/thread_create(thread-id, fn arg. {
-    uv/thread_setname("publisher\0".data-ref-byte())
+  let thread-id: *libuv/thread = heap.alloc-t()
+  uv/check(libuv/thread_create(thread-id, fn arg. {
+    libuv/thread_setname("publisher\0".data-ref-byte())
     let bus = arg.ref[pubsub/bus[span[u8]]]()
     loop {
-      uv/sleep(1000)
+      libuv/sleep(1000)
       // this thread's tmp arena holds the interpolated event data
       mem/tmp().reset()
       game-tick = game-tick + 1

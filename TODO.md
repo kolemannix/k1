@@ -24,7 +24,6 @@
 - [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
 - [ ] compiler cli watch mode: watch the primary module's source dir (or single file). on change, compile from the snapshot right before starting primary module (keep it in memory?)
 - [ ] Generic aliases: `type(alias) pair[t] = { a: t, b: t }` (rejected with an error for now; an alias is transparent, so this is a type-level function)
-- [ ] Add `self -> *self` thunk adapters for ability objects, `dyn[allocator]` is impossible
 - [x] unaligned load/store for scalars
 - [ ] new lib type: :runtime; this is the ideal dependency kind for libclang in k1bindgen
 - [ ] `#[must_use]` equivalent

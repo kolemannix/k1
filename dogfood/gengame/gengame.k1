@@ -284,7 +284,7 @@ fn load-level(context g: *game)(i: size) {
   g.def-a.clear()
   g.def-b.clear()
   g.out.clear()
-  for t in parse-text(lv.world, if lv.given.len() > 0 lv.given else lv.start) { g.out.push-in(g.perm, t) }
+  for t in parse-text(lv.world, if lv.given.non-empty() lv.given else lv.start) { g.out.push-in(g.perm, t) }
   for t in parse-text(lv.world, lv.given-a) { g.def-a.push-in(g.perm, t) }
   for t in parse-text(lv.world, lv.given-b) { g.def-b.push-in(g.perm, t) }
   g.active = 2
@@ -497,7 +497,7 @@ fn expand-toks(ctx: *expand-ctx, toks: span[token], self: span[token], self-d: u
         i = if close < toks.len() close + 1 else close
       },
       :hole -> {
-        let filled = ctx.args.len() > 0 and ctx.args.[ctx.args.len() - 1].len() > 0
+        let filled = ctx.args.non-empty() and ctx.args.[ctx.args.len() - 1].non-empty()
         if not filled {
           if e.buds.len() < MAX-BUDS { e.buds.push(.{ at = e.syms.len(), d = self-d, socket = true }) }
         } else if ctx.args.pop() is :some(arg) {
@@ -515,7 +515,7 @@ fn expand-toks(ctx: *expand-ctx, toks: span[token], self: span[token], self-d: u
           expand-toks(ctx, self, self, self-d, e, depth + 1, ndepth + 1, d0, self-d, 0)
           close-scope(ctx, e, d0, ndepth)
           ctx.shift = s0
-        } else if ctx.args.len() > 0 and ctx.args.[ctx.args.len() - 1].len() > 0 {
+        } else if ctx.args.non-empty() and ctx.args.[ctx.args.len() - 1].non-empty() {
           e.capped = true
           if ctx.args.pop() is :some(arg) {
             let asrc = if ctx.arg-srcs.pop() is :some(v) { v } else { SRC-NONE }
@@ -661,8 +661,8 @@ fn genes-of(context g: *game)(row: *list[token]): size {
 
 fn score-of(context g: *game)(): size {
   let s = genes-of(g.out.&)
-  if g.def-a.len() > 0 { s = s + 1 + genes-of(g.def-a.&) }
-  if g.def-b.len() > 0 { s = s + 1 + genes-of(g.def-b.&) }
+  if g.def-a.non-empty() { s = s + 1 + genes-of(g.def-a.&) }
+  if g.def-b.non-empty() { s = s + 1 + genes-of(g.def-b.&) }
   s
 }
 
@@ -1151,7 +1151,7 @@ fn delete-tokens(context g: *game)() {
     row.clear()
     for i in 0.until(s.a) { row.push-in(g.perm, keep.[i]) }
     for i in s.b.until(n) { row.push-in(g.perm, keep.[i]) }
-  } else if row.len() > 0 {
+  } else if row.non-empty() {
     row.remove(row.len() - 1)
   }
   drop-sel()
@@ -1510,7 +1510,7 @@ ns(reload) view {
     text("target", 40, 226, 18, C_TEXT-DIM)
     draw-strip(target.&, 250, cell, x0, maxn, gv, show-buds, false, false)
     let prefix = matched-prefix(target.syms.&, player.syms.&)
-    if prefix > 0 and player.syms.len() > 0 {
+    if prefix > 0 and player.syms.non-empty() {
       let pw = strip-cells(target.&, gv, prefix) * cell.as[f32]
       rl/draw-rectangle(x0, 250 + cell + 4, pw.as[i32], 4, .{ r = 110, g = 230, b = 150, a = 140 })
     }
@@ -1521,7 +1521,7 @@ ns(reload) view {
       draw-strip(player.&, 360, cell, x0, maxn, gv, show-buds, true, g.active == 2)
       if g.active == 2 { draw-playhead(player.&, 360, cell, x0, gv) }
     }
-    if target.syms.&.first-diff(player.syms.&.as-span()) is :some(i) and player.syms.len() > 0 {
+    if target.syms.&.first-diff(player.syms.&.as-span()) is :some(i) and player.syms.non-empty() {
       let mx = x0.as[f32] + (strip-cells(target.&, gv, i) + 0.5) * cell.as[f32]
       let my: i32 = 360 + cell + 10
       rl/draw-poly(.{ x = mx, y = my.as[f32] }, 3, 8.0, -90.0, C_BAD)
@@ -1584,7 +1584,7 @@ ns(reload) view {
   }
 
   fn branch-dim0(t: *turtle-out): size {
-    if t.marks.len() > 0 { t.marks.[t.marks.len() - 1].seg0 } else { 0 }
+    if t.marks.non-empty() { t.marks.[t.marks.len() - 1].seg0 } else { 0 }
   }
 
   fn draw-bookmarks(marks: *fixlist[turtle-mark, MAX-STACK], scale: f32, ox: f32, oy: f32) {
@@ -1812,7 +1812,7 @@ ns(reload) view {
     text("yours", x0, y2 - 20, 16, C_TEXT-DIM)
     draw-grid(player.&, w, x0, y2, cell, maxn, show-buds, true)
     rl/draw-rectangle-lines(x0, y2, gw, gh, C_BORDER)
-    if target.syms.&.first-diff(player.syms.&.as-span()) is :some(i) and player.syms.len() > 0 and i < maxn {
+    if target.syms.&.first-diff(player.syms.&.as-span()) is :some(i) and player.syms.non-empty() and i < maxn {
       rl/draw-rectangle-lines(x0 + (i % w).trunc[i32] * cell, y2 + (i / w).trunc[i32] * cell, cell, cell, C_BAD)
     }
     if g.active != 2 {
@@ -1845,7 +1845,7 @@ ns(reload) view {
     text("genes $sc/${lv.limit} · par ${lv.par}", 830, 42, 18, if sc == 0 C_TEXT-DIM else if sc <= lv.par C_GOOD else if sc >= lv.limit C_WARN else C_TEXT-MAIN)
     text("unexplained $residual of ${target.len()}", 830, 66, 16, C_TEXT-DIM)
 
-    let matched = player.len() > 0 and target.&.as-span() == player.&.as-span()
+    let matched = player.non-empty() and target.&.as-span() == player.&.as-span()
     if matched {
       if level-recursive(lv) and not pe.capped {
         text-center("matched, but nothing regrows · a living rule needs a bud", W / 2, 44, 20, C_WARN)
@@ -1888,7 +1888,7 @@ fn self-test(context g: *game)() {
     let alpha = world-alphabet(lv.world)
     let texp = expand-target(lv, lv.growth.as-size())
     let target = texp.syms
-    assert(target.len() > 0)
+    assert(target.non-empty())
     assert(target.len() < MAX-EXPAND)
     assert(lv.par <= target.len())
     assert(lv.limit >= lv.par)
@@ -1897,7 +1897,7 @@ fn self-test(context g: *game)() {
       assert(lv.width > 0)
       assert(target.len() % lv.width.as-size() == 0)
     }
-    if lv.start.len() > 0 {
+    if lv.start.non-empty() {
       let pe = expand-player(lv.growth.as-size())
       assert(texp.syms.&.as-span() == pe.syms.&.as-span())
       assert(score-of() > lv.par)
@@ -1911,7 +1911,7 @@ fn self-test(context g: *game)() {
     }
     if lv.world is :plant {
       let walk = turtle-walk(texp.&, lv.angle, 0, 1.0)
-      assert(walk.segs.len() > 0)
+      assert(walk.segs.non-empty())
     }
   }
   load-level(0)
@@ -2051,7 +2051,7 @@ fn self-test(context g: *game)() {
   assert-solved(10)
   let blossom-e = expand-player(4)
   let blossom-walk = turtle-walk(blossom-e.&, 30.0, 0, 1.0)
-  assert(blossom-walk.blooms.len() > 0)
+  assert(blossom-walk.blooms.non-empty())
   solve-bonsai()
   assert-solved(10)
   let bonsai-e = expand-player(5)
@@ -2580,7 +2580,7 @@ fn main(): i32 {
         rest = rest.drop(semi + 1)
         skipped = skipped + 1
       }
-      if skipped == ti and rest.len() > 0 {
+      if skipped == ti and rest.non-empty() {
         let one = if rest.position(';') is :some semi rest.take(semi) else rest
         require one.position(',') is :some comma else crash("tap needs x,y")
         let tx = u64/from-string(one.take(comma)).!

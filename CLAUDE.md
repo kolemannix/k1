@@ -228,16 +228,16 @@ declaring `dep`/`dep-params`, `lib`, `library()`, `setup`, and an optional
   `Makefile` targets `build`, `wasm`, `nocrt`, `filc`.
 - `std/`: `--no-std` drops it. `posix.k1`/`libc.k1` raw bindings,
   `process.k1`, `thread.k1`, `time.k1`, `fd.k1`, `sys.k1`, `cliarg.k1`,
-  `hash.k1` (hash ability, `map`, `set`), `json.k1`, `utf8.k1`, `bitfield.k1`,
+  `hash.k1` (hash ability, `map`, `set`), `json.k1`, `url.k1`, `utf8.k1`, `bitfield.k1`,
   `math.k1`, `simd.k1`, `rc.k1`, `pool.k1` (fixed-capacity generational
   handle pool, nil slot at index 0), `spill-string.k1` (inline string that spills
   to the arena), `stream.k1`, `channel.k1`, `pubsub.k1`, `reload.k1` (dylib
   hot reload), `watch.k1` (kqueue/inotify).
 - `http/`: HTTP/1.1 server over libuv (llhttp parser, `server.k1` connection
-  loop with timeouts and graceful shutdown, `writer.k1` response driver,
-  `request.k1` query/form/cookie parsing, `routing.k1` comptime route tables,
+  loop with timeouts, graceful shutdown and the response writer,
+  `request.k1` form and cookie parsing over `std/url`, `routing.k1` comptime route tables,
   `sse.k1` SSE and Datastar framing).
-- C wrapper modules: `libuv/`, `sdl3/`,
+- C wrapper modules: `uv/` (raw bindings in `uv/libuv`), `sdl3/`,
   `stb/`, `freetype/`, `harfbuzz/`, `cbrotli/`, `sqlite/` (the amalgamation).
   Most vendor source under `vendor/`, build `libs/*.a` in `setup`,
   and generate bindings with `k1bindgen` (`dogfood/k1bindgen`). Bindings live

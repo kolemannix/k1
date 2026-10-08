@@ -892,15 +892,7 @@ ns k1 {
   }
 
   ns for module {
-    fn new(): module {
-      .{
-        kind = :none,
-        deps = list/empty(),
-        libs = list/empty(),
-        link-args = list/empty(),
-        setup = :none,
-      }
-    }
+    fn new(): module { .0 }
 
     fn executable(self: *module) {
       if self.kind.is-some() { crash("module kind set twice") }

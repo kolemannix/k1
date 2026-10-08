@@ -251,7 +251,6 @@ pub enum TokenKind {
     Dollar,
     Caret,
 
-    DoubleQuote,
     SingleQuote,
 
     Plus,
@@ -521,8 +520,7 @@ impl TokenKind {
             K::GreaterEqual => ">=",
             K::RThinArrow => "->",
 
-            K::DoubleQuote => "\"",
-            K::SingleQuote => "singleq",
+            K::SingleQuote => "'",
 
             K::Ident => "<ident>",
             K::Numeric => "<numeric>",
@@ -707,15 +705,6 @@ impl Token {
     pub fn is_kind_spaced(&self, kind: TokenKind) -> bool {
         self.kind == kind && self.is_whitespace_preceded()
     }
-}
-
-macro_rules! errf {
-    ($self:expr, $pos:expr, $($format_args:expr),* $(,)?) => {
-        {
-            let s: String = format!($($format_args),*);
-            Lexer::make_error($self, s, $pos, 1)
-        }
-    };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1118,33 +1107,18 @@ impl<'content> Lexer<'content> {
                         '.' => return_single!(K::Dot),
                         ',' => return_single!(K::Comma),
                         '\'' => {
-                            self.advance();
-                            let c = self.next();
-                            if c == '\\' {
-                                self.advance();
-
-                                let q = self.next();
-                                if q != '\'' {
-                                    return Err(errf!(
-                                        self,
-                                        n + 3,
-                                        "Expected closing ' for char literal at {q}"
-                                    ));
-                                }
-                                push_token(self, out, TokenKind::Char, n, 4);
-                                return Ok(Some(()));
+                            let char_len = if self.peek_n(1) == '\\' && self.peek_n(3) == '\'' {
+                                4
+                            } else if self.peek_n(1) != '\'' && self.peek_n(2) == '\'' {
+                                3
                             } else {
-                                let q = self.next();
-                                if q != '\'' {
-                                    return Err(errf!(
-                                        self,
-                                        n + 2,
-                                        "Expected closing ' for char literal at {q}"
-                                    ));
-                                }
-                                push_token(self, out, TokenKind::Char, n, 3);
-                                return Ok(Some(()));
+                                return_single!(K::SingleQuote)
+                            };
+                            for _ in 0..char_len {
+                                self.advance();
                             }
+                            push_token(self, out, TokenKind::Char, n, char_len);
+                            return Ok(Some(()));
                         }
                         '+' => return_single!(K::Plus),
                         '-' => {
@@ -1248,12 +1222,6 @@ impl<'content> Lexer<'content> {
                 }
             }
         }
-    }
-
-    fn next(&mut self) -> char {
-        let c = self.peek();
-        self.pos += 1;
-        c
     }
 
     #[inline]

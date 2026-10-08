@@ -185,7 +185,7 @@ ns for parser {
   fn expect-ident-lower(self: *parser): result[ident-tok, perror] {
     let t = self.expect-kind(:ident).try
     let text = self.tok-chars(t)
-    if text.len() > 0 and text.[0].is-ascii-upper() {
+    if text.non-empty() and text.[0].is-ascii-upper() {
       return :err(make-error("This name must not be capitalized", t))
     }
     :ok(.{ tok = t, name = self.program.intern-string(text) })

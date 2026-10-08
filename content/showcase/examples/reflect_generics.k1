@@ -4,7 +4,7 @@ ns pre {
 
 type pair[a, b] = { first: a, second: b }
 
-fn do-it(input: string, count: u32): bool { count > 0 and input.len() > 0 }
+fn do-it(input: string, count: u32): bool { count > 0 and input.non-empty() }
 
 fn describe[t](): string {
   let id = types/id[t]

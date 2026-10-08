@@ -33,7 +33,7 @@ ns log {
   fn fields(line: string): list[string] {
     let out = list/empty[string]()
     for piece in line.split-by-char(' ') {
-      if piece.len() > 0 { out.push(piece) }
+      if piece.non-empty() { out.push(piece) }
     }
     out
   }

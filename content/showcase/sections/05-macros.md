@@ -126,7 +126,7 @@ own span. `std/html` is a template language built on that, in a few hundred
 lines of K1:
 
 ```k1
-fn todo-item(out: *string-builder, t: todo) {
+fn todo-item[w: writer](context out: w)(t: todo) {
   html/write(out, \{
     <li class={if t.done "done" else "open"} data-on:click="@post('/toggle')">
       {t.title} #if t.done { <small>"(done)"</small> }
@@ -137,8 +137,8 @@ fn todo-item(out: *string-builder, t: todo) {
 
 Tags and text fold into constant writes at compile time. Holes like
 `{t.title}` are spliced back as `code`, typechecked in place, and HTML-escaped
-as they're written. `#for`, `#if` and `#{ ... }` drop into K1, so a component
-is just a function writing into the same builder:
+as they're written. `#for`, `#if` and `#{ ... }` drop into K1. `render` binds its builder as a
+`writer` context, so a component is just a function writing into that context:
 
 ```k1
 fn page(user: string, todos: span[todo]): string {
@@ -146,7 +146,7 @@ fn page(user: string, todos: span[todo]): string {
     <main id="todos">
       <h1>Hello, {user}! {todos.len()} things to do</h1>
       <ul>
-        #for t in todos { #{ todo-item(html-sb.&, t) } }
+        #for t in todos { #{ todo-item(t) } }
       </ul>
     </main>
   })
@@ -202,77 +202,78 @@ this way.
 ## Typed HTTP routing
 
 The biggest macro in the repo is `http/routing/define`. `httpapp`
-declares its routes once, as data:
+declares its routes once, as a token stream: method, name, path pattern.
 
 ```k1 path=dogfood/httpapp/app.k1
-$http/routing/define(route, {
-  use http/routing/get
-  use http/routing/post
-  use http/routing/delete
-  use http/routing/seg
-  let game: span[seg] = [:text "game", :u64 "id"]
-
-  [
-    get(   "home",                    []),
-    get(   "events",                  [:text "events"]),
-    get(   "counter",                 [:text "counter", :text "events"]),
-    get(   "big-file",                [:text "static", :text "big-file.json"]),
-    get(   "starry",                  [:text "app", :text "starry-night"]),
-    get(   "game-events", game.concat([:text "events"])),
-    post(  "game-poke",   game.concat([:text "poke"])),
-    delete("delete-game", game),
-  ]
+$http/routing/define(route, \{
+  get    home         "/"
+  get    events       "/events"
+  get    counter      "/counter/events"
+  get    big-file     "/static/big-file.json"
+  get    starry       "/app/starry-night"
+  get    visits       "/visits" ?{ who: ?string }
+  post   login        "/login"
+  get    game-events  "/game/{id: u64}/events"
+  post   game-poke    "/game/{id: u64}/poke"
+  delete delete-game  "/game/{id: u64}"
 })
+```
+
+A row can also carry query params, written as the struct they parse into. A `?t`
+field is optional:
+
+```k1 path=test_src/http_test/http_test.k1
+  get  grade-rate "/cmd/grade-rate/{who: string}" ?{ plan-id: int, item-id: u64, note: ?string }
 ```
 
 Out come:
 
-- `type route`, one variant per row, with a payload for captures
-  (`game-events({ id: u64 })`)
-- `route/parse(method, url)` and `route/from-header(header)`: an allocation-free trie matcher that percent-decodes,
-  answers `HEAD` for `GET` routes, parses captures through `from-string`, and
-  returns `:bad-method` with the allowed list or `:not-found`
-- `route/url` and `route/url-string`, back to a percent-encoded URL
+- `type route`, one variant per row, with one payload struct for path and query
+  captures (`game-events({ id: u64 })`); the query struct is pasted as written,
+  and `#meta` fns over the payload's schema decode both kinds of capture and
+  write the query string
+- `route/parse(method, url)` and `route/parse-request(header)`: an allocation-free trie matcher that percent-decodes,
+  answers `HEAD` for `GET` routes, parses captures through `from-string`, scans the
+  query for its params without building a list, and returns `:bad-method` with
+  the allowed list, `:missing-param`, or `:not-found`
+- `impl print for route`, back to a percent-encoded URL: `"$r"` and `r.show()`
 
-The top of the emitter:
+The macro reads the rows with a token cursor, then emits:
 
 ```k1 path=modules/http/routing.k1
-fn define-impl(base: string, entries: span[entry]): code {
-  check-ident(base, "route type name")
-  if entries.len() == 0 crash("routing: no routes given")
+macro define(base: code, rows: span[code-token]) {
+  let entries = parse-rows(rows).as-span()
   validate(entries)
 
   let cb-storage = code-builder/new()
   let cb = cb-storage.&
 
-  let variants = list/empty[string]()
+  cb.write-code("type $base = either { ")
   for en in entries {
-    let caps = params(en)
-    if caps.len() == 0 {
-      variants.push(en.name)
-    } else {
-      let fields = list/empty[string]()
-      for c in caps { fields.push("${c.name}: ${c.ty}") }
-      variants.push("${en.name}({ ${string/join(fields, ", ")} })")
+    if it-index > 0 cb.write(", ")
+    cb.write-token(en.name)
+    if payload-type(en) is :some ty {
+      cb.write("(")
+      cb.write-code(ty)
+      cb.write(")")
     }
   }
-  cb.line("type $base = either { ${string/join(variants, ", ")} }")
+  cb.write(" }\n")
 
-  cb.block("ns for $base", fn[cb, base, entries]. {
-    emit-parse-fn(cb, base, entries)
-    emit-url-fn(cb, base, entries)
-    emit-url-string-fn(cb, base)
-  })
+  cb.block("ns for $base", fn[cb, base, entries]. emit-parse-fn(cb, base, entries))
+  emit-print-impl(cb, base, entries)
 
   cb.build()
 }
 ```
 
-`validate` rejects bad identifiers, routes deeper than sixteen segments, a
-misplaced `rest`, double bindings, duplicate names, and same-shape collisions.
-The trie emitter also catches one a hand-written matcher gets wrong silently:
-literal edges win, so a capture route has to stay reachable under every
-literal that shares its prefix.
+Query types are re-emitted from the caller's tokens, so `?{ id: intt }` reports
+`Type 'intt' not found` at `intt` in your file. The row parser rejects bad
+identifiers, literal segments outside `-._~`, routes deeper than sixteen
+segments, a misplaced `*rest`, double bindings, duplicate names, and same-shape
+collisions, each at the offending token. The trie emitter also catches one a
+hand-written matcher gets wrong silently: literal edges win, so a capture route
+has to stay reachable under every literal that shares its prefix.
 
 ```k1 path=modules/http/routing.k1
   for t in lit-texts {
@@ -286,33 +287,24 @@ literal that shares its prefix.
         }
       }
       if not covered {
-        crash("routing: route `${render-pattern(entries.[ci].path)}` is unreachable for URLs whose segment $d is `$t`: add the same route shape under `$t`, or remove the overlap")
+        entries.[ci].pattern-tok.fail("Route `${entries.[ci].pattern}` is unreachable for URLs whose segment $d is `$t`: add the same route shape under `$t`, or remove the overlap")
       }
     }
   }
 ```
 
-And the whole table is round-trip tested in a `#static` block, every compile:
+Both directions come from the one row, and the test round-trips them:
 
-```k1 path=dogfood/httpapp/app.k1
-  assert(route/url-string(:home) == "/")
-  assert(route/url-string(:game-poke .{ id = 42 }) == "/game/42/poke")
-  assert(route/url-string(:big-file) == "/static/big-file.json")
-
-  assert(th(:GET, "/") is :ok :home)
-  assert(th(:GET, "/events") is :ok :events)
-  assert(th(:HEAD, "/events") is :ok :events)
-  assert(th(:GET, "/events?foo=1") is :ok :events)
-  assert(th(:GET, "/%65vents") is :ok :events)
-  assert(th(:POST, "/game/42/poke") is :ok :game-poke p and p.id == 42)
-  assert(th(:POST, "/game/42/poke/") is :ok :game-poke _)
-  assert(th(:GET, "/game/42/poke") is :err :bad-method _)
-  assert(th(:POST, "/game/abc/poke") is :err :bad-param b and b.got == "abc")
-  assert(th(:POST, "/game/18446744073709551617/poke") is :err :bad-param _)
-  assert(th(:GET, "/game/42/zzz") is :err :not-found)
-  assert(th(:GET, "/nope") is :err :not-found)
-  assert(th(:GET, "/game/%zz/poke") is :err :bad-encoding _)
-  assert(th(:OPTIONS, "*") is :err :not-found)
+```k1 path=test_src/http_test/http_test.k1
+  let g = route:grade-rate .{ who = "a b", plan-id = -3, item-id = 9, note = :some "x&y=1+z" }
+  assert-equals(g.show(), "/cmd/grade-rate/a%20b?plan-id=-3&item-id=9&note=x%26y%3D1%2Bz")
+  assert(route/parse(:GET, g.show()) is :ok :grade-rate r and r.who == "a b" and r.plan-id == -3 and r.item-id == 9 and r.note is :some nt and nt == "x&y=1+z")
+  assert(route/parse(:GET, "/cmd/grade-rate/x?zz=1&note=a+b&item-id=2&&plan-id=1") is :ok :grade-rate r2 and r2.note is :some nn and nn == "a b")
+  assert(route/parse(:GET, "/cmd/grade-rate/x?item-id=2&plan-id=1") is :ok :grade-rate r3 and r3.note is :none)
+  assert-equals((route:grade-rate .{ who = "x", plan-id = 1, item-id = 2, note = :none }).show(), "/cmd/grade-rate/x?plan-id=1&item-id=2")
+  assert(route/parse(:GET, "/cmd/grade-rate/x?plan-id=1") is :err :missing-param m and m.name == "item-id")
+  assert(route/parse(:GET, "/cmd/grade-rate/x?plan-id=one&item-id=2") is :err :bad-param b and b.got == "one")
+  assert(route/parse(:GET, "/cmd/grade-rate/x?plan-id=1&item-id=2&plan-id=1") is :err :bad-param b2 and b2.name == "plan-id")
 ```
 
 ## Errors point at your source, not the expansion
