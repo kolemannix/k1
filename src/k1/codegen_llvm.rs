@@ -860,7 +860,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             self.codegen_function_body(&mut inst_mappings, fn_id)?;
         }
 
-        if let Some((_, function_value)) = main_function {
+        if let Some((main_function_id, function_value)) = main_function {
             self.builder.unset_current_debug_location();
             let is_wasi = self.k1.plan.config.target.platform() == compiler::Platform::Wasi;
             let (entrypoint_name, entrypoint_fn_type) = if is_wasi {
@@ -889,9 +889,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             let main_call = self.build_call(function_value, &params);
             let res = main_call.try_as_basic_value().basic();
-            let exit_code: BasicValueEnum<'ctx> = match res {
-                None => self.ctx.i32_type().const_zero().as_basic_value_enum(),
-                Some(v) => v,
+            let i32_type = self.ctx.i32_type();
+            let exit_code = match res {
+                None => i32_type.const_zero(),
+                Some(v) => {
+                    let ret_type = self.k1.get_function_type(main_function_id).return_type;
+                    let signed = self.k1.types.get(ret_type).expect_integer().is_signed();
+                    self.builder
+                        .build_int_cast_sign_flag(v.into_int_value(), i32_type, signed, "")
+                        .unwrap()
+                }
             };
             let exit_fv = program_exit_value.unwrap();
             self.build_call(exit_fv, &[exit_code.into()]);

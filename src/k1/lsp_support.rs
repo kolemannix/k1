@@ -1054,30 +1054,30 @@ fn use-it(): int { call-greet(3) }
     }
 
     const DEFN_MACRO_SRC: &str = r#"
-$pre/make-fn(my-fn)
+$pre/make-ns(my-ns)
 
 ns pre {
-  macro make-fn(name: code) {
-    "fn $name(): int { 7 }"
+  macro make-ns(name: code) {
+    "ns $name { fn go(): int { 7 } }"
   }
 }
 
 ns lsp-defn-macro
 
-fn use-it(): int { my-fn() }
+fn use-it(): int { my-ns/go() }
 "#;
 
     #[test]
-    fn goto_definition_of_macro_generated_fn() {
+    fn goto_definition_of_macro_generated_ns() {
         let k1 = compile_check("goto_defn_macro", DEFN_MACRO_SRC, None);
         assert_eq!(k1.messages.borrow().len(), 0, "expected a clean compile");
         let entity =
-            entity_at(&k1, "goto_defn_macro", DEFN_MACRO_SRC, "my-fn()").expect("entity at call");
+            entity_at(&k1, "goto_defn_macro", DEFN_MACRO_SRC, "my-ns/go()").expect("entity at ns");
         let definition = get_entity_definition_span(&k1, entity.kind);
         let source = k1.ast.sources.source_by_span(definition);
         assert_eq!(source.file_id, main_file_id(&k1, "goto_defn_macro"));
-        assert_eq!(k1.ast.sources.get_span_content(&k1.ast.mem, definition), "my-fn");
-        let (line, col) = point_of(DEFN_MACRO_SRC, "my-fn)");
+        assert_eq!(k1.ast.sources.get_span_content(&k1.ast.mem, definition), "my-ns");
+        let (line, col) = point_of(DEFN_MACRO_SRC, "my-ns)");
         let defn_line = source.get_line_for_span_start(&k1.ast.mem, definition).unwrap();
         assert_eq!(defn_line.line_index, line);
         assert_eq!(source.local_from_global_offset(definition.lo) - defn_line.start_char, col);

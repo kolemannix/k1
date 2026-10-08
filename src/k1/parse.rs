@@ -1836,7 +1836,7 @@ impl ParsedProgram {
             ParsedId::Use(id) => self.uses.get(id).span,
             ParsedId::Function(id) => self.get_function(id).name_span,
             ParsedId::Macro(id) => self.get_macro(id).name_span,
-            ParsedId::Namespace(ns) => self.namespaces.get(ns).span,
+            ParsedId::Namespace(ns) => self.namespaces.get(ns).name_span,
             ParsedId::Global(id) => self.get_global(id).span,
             ParsedId::Ability(id) => self.get_ability(id).name_span,
             ParsedId::AbilityImpl(id) => self.get_ability_impl(id).span,
@@ -2504,7 +2504,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             Ok(pattern_id)
         } else if first.kind == K::Colon
             || (first.kind == K::Ident
-                && self.peek_kind_n(1) == K::Colon
+                && self.tokens.peek_n(1).is_kind_nonspaced(K::Colon)
                 && self.token_chars(first) != "_")
         {
             let (sum_name, colon) = if first.kind == K::Ident {

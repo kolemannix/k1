@@ -1,0 +1,169 @@
+use std/pubsub
+use std/rc
+
+ability handle {
+  fn as-handle(self: *self): *libuv/handle
+  fn set-data[t](self: *self, data: *t) { libuv/handle_set_data(self.as-handle(), data.as[ptr]) }
+  fn get-data[t](self: *self): *t { libuv/handle_get_data(self.as-handle()).narrow[*t] }
+}
+
+impl handle for libuv/handle { fn as-handle(self: *self): *libuv/handle { self } }
+impl handle for libuv/tcp { fn as-handle(self: *self): *libuv/handle { self.narrow() } }
+impl handle for libuv/async { fn as-handle(self: *self): *libuv/handle { self.narrow() } }
+impl handle for libuv/timer { fn as-handle(self: *self): *libuv/handle { self.narrow() } }
+impl handle for libuv/signal { fn as-handle(self: *self): *libuv/handle { self.narrow() } }
+impl handle for libuv/prepare { fn as-handle(self: *self): *libuv/handle { self.narrow() } }
+impl handle for libuv/stream { fn as-handle(self: *self): *libuv/handle { self.narrow() } }
+
+ability req {
+  fn as-req(self: *self): *libuv/req
+  fn set-data[t](self: *self, data: *t) { libuv/req_set_data(self.as-req(), data.as[ptr]) }
+  fn get-data[t](self: *self): *t { libuv/req_get_data(self.as-req()).narrow[*t] }
+}
+
+impl req for libuv/fs { fn as-req(self: *self): *libuv/req { self.narrow() } }
+impl req for libuv/work { fn as-req(self: *self): *libuv/req { self.narrow() } }
+impl req for libuv/write { fn as-req(self: *self): *libuv/req { self.narrow() } }
+impl req for libuv/connect { fn as-req(self: *self): *libuv/req { self.narrow() } }
+
+ability stream {
+  fn as-stream(self: *self): *libuv/stream
+  fn read-start(self: *self, alloc-cb: libuv/alloc_cb, read-cb: libuv/read_cb): result[empty, libuv/errno] {
+    check(libuv/read_start(self.as-stream(), alloc-cb, read-cb))
+  }
+  fn read-stop(self: *self) { check(libuv/read_stop(self.as-stream())).! }
+  fn write(self: *self, req: *libuv/write, bufs: span[span[u8]], cb: libuv/write_cb): result[empty, libuv/errno] {
+    check(libuv/write(req, self.as-stream(), bufs.data-ptr().narrow[*libuv/buf], bufs.len().trunc[u32], cb))
+  }
+}
+
+impl stream for libuv/stream { fn as-stream(self: *self): *libuv/stream { self } }
+impl stream for libuv/tcp { fn as-stream(self: *self): *libuv/stream { self.narrow() } }
+
+ns libuv {
+  ns for buf {
+    fn as-buffer(self: buf): buffer[u8] {
+      buffer/wrap-raw(self.base.inner, self.len.signed())
+    }
+
+    fn wrap-buffer(buffer: buffer[u8]): buf {
+      buf_init(mem/bitcast[ptr, *u8](buffer.data), buffer.len.trunc[u32])
+    }
+
+    fn wrap-span(span: span[u8]): buf {
+      wrap-buffer(span.inner-buffer())
+    }
+  }
+
+  ns for timer {
+    fn start(self: *timer, cb: timer_cb, timeout-ms: u64, repeat-ms: u64) { check(timer_start(self, cb, timeout-ms, repeat-ms)).! }
+    fn stop(self: *timer) { check(timer_stop(self)).! }
+  }
+
+  ns for errno {
+    fn from-i32(i: i32): errno {
+      if i >= 0 crash("not an errno: $i")
+      enum/enum-from-value-unchecked(i)
+    }
+  }
+
+  impl print for errno {
+    fn print-to[w: writer](self, w) { w.write(string/wrap-c(strerror(self.enum-value()).inner)) }
+  }
+}
+
+fn(inline) check(code: i32): result[empty, libuv/errno] {
+  if code < 0 :err libuv/errno/from-i32(code) else :ok
+}
+
+#static {
+  let unwrap = fn(id: types/type-id -> types/type-id) {
+    if id.schema() is :struct s and s.fields.len() == 1 s.fields.[0].type-id else id
+  }
+  types/assert-wrapper-type[span[u8], buffer[u8]]()
+  assert-equals(types/size[buffer[u8]], types/size[libuv/buf])
+  assert-equals(types/align[buffer[u8]], types/align[libuv/buf])
+  let span-fields = types/schema[buffer[u8]].as-struct().!.fields
+  let buf-fields = types/schema[libuv/buf].as-struct().!.fields
+  assert-equals(span-fields.len(), 2)
+  assert-equals(buf-fields.len(), 2)
+  for f in span-fields {
+    let g = buf-fields.[it-index]
+    assert-equals(f.offset, g.offset)
+    let fs = unwrap(f.type-id)
+    let gs = unwrap(g.type-id)
+    assert-equals(fs.size(), gs.size())
+    let compatible = if fs.schema() is {
+      :ptr or :reference _ -> gs.schema() is :ptr or gs.schema() is :reference _,
+      :int _ -> gs.schema() is :int _,
+      _ -> false,
+    }
+    assert-msg("span[u8] field ${f.name} is not ABI-compatible with libuv/buf field ${g.name}", compatible)
+  }
+}
+
+type mutex[t] = { raw: libuv/mutex, value: t }
+
+type guard[t] = { raw: *libuv/mutex, value: *t }
+
+ns for mutex {
+  fn init[t](self: *self[t], value: t) {
+    self.value = value
+    check(libuv/mutex_init(self.raw.&)).!
+  }
+  fn init-recursive[t](self: *self[t], value: t) {
+    self.value = value
+    check(libuv/mutex_init_recursive(self.raw.&)).!
+  }
+  fn destroy-lock[t](self: *self[t]) { libuv/mutex_destroy(self.raw.&) }
+  fn lock[t](self: *self[t]): guard[t] {
+    libuv/mutex_lock(self.raw.&)
+    .{ raw = self.raw.&, value = self.value.& }
+  }
+  fn try-lock[t](self: *self[t]): ?guard[t] {
+    if libuv/mutex_trylock(self.raw.&) != 0 return :none
+    :some .{ raw = self.raw.&, value = self.value.& }
+  }
+}
+
+ns for guard {
+  fn unlock[t](self: self[t]) { libuv/mutex_unlock(self.raw) }
+}
+
+type cond = { raw: libuv/cond }
+
+ns for cond {
+  fn init(self: *self) { check(libuv/cond_init(self.raw.&)).! }
+  fn destroy(self: *self) { libuv/cond_destroy(self.raw.&) }
+  fn signal(self: *self) { libuv/cond_signal(self.raw.&) }
+  fn broadcast(self: *self) { libuv/cond_broadcast(self.raw.&) }
+  fn wait[t](self: *self, guard: guard[t]) { libuv/cond_wait(self.raw.&, guard.raw) }
+}
+
+macro locked(target: code, name: code, body: code) {
+  `{
+    let uv-held-guard = ($target).lock()
+    defer { uv-held-guard.unlock() }
+    let $name = uv-held-guard.value
+    $body
+  }`
+}
+
+ns bus {
+  fn create[t](
+    uv-loop: *libuv/uv-loop,
+    subscriber-cap-weight: size,
+    weight-fn: *fn(rc[t]) -> size,
+  ): *pubsub/bus[t] {
+    let async-handle = heap.alloc-t[libuv/async]
+    let bus = pubsub/create[t](.{ state = async-handle.as[ptr], notify-fn = notify-async.& }, subscriber-cap-weight, weight-fn)
+    check(libuv/async_init(uv-loop, async-handle, fn handle. handle.get-data[pubsub/bus[t]]().dispatch())).!
+    async-handle.set-data(bus)
+    libuv/unref(async-handle.as-handle())
+    bus
+  }
+
+  fn notify-async(state: ptr) {
+    check(libuv/async_send(state.ref[libuv/async]())).!
+  }
+}

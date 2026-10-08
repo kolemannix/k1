@@ -982,6 +982,7 @@ pub struct TypedFunction {
     flags: TypedFunctionFlags,
     /// If we've generated a 'dyn' copy of this function, we store its id
     pub dyn_fn_id: Option<FunctionId>,
+    pub dyn_receiver_thunk_id: Option<FunctionId>,
     /// 'let(returned)', RVO
     pub returned_variable: Option<VariableId>,
     pub body_failure: Option<K1Message>,
@@ -3441,12 +3442,15 @@ impl TypedProgram {
     //     Ok(())
     // }
 
-    pub fn get_main_function_id(&self) -> Option<FunctionId> {
+    fn get_executable_primary_module(&self) -> Option<&Module> {
         if !self.plan.is_executable() {
             return None;
         }
-        let primary =
-            self.modules.get_opt(ModuleId::from_u32(self.plan.modules().len() as u32)?)?;
+        self.modules.get_opt(ModuleId::from_u32(self.plan.modules().len() as u32)?)
+    }
+
+    pub fn get_main_function_id(&self) -> Option<FunctionId> {
+        let primary = self.get_executable_primary_module()?;
         self.scopes.find_function_local(primary.namespace_scope_id, self.ast.idents.b.main)
     }
 
@@ -3886,9 +3890,9 @@ impl TypedProgram {
                 }
                 Ok(())
             }
-            (Type::Reference(exp_ref), Type::Reference(act_ref)) => {
-                self.check_types(exp_ref.inner_type, act_ref.inner_type, scope_id)
-            }
+            (Type::Reference(exp_ref), Type::Reference(act_ref)) => self
+                .check_types(exp_ref.inner_type, act_ref.inner_type, scope_id)
+                .map_err(|_| k1_format_user!(self, "Expected {} but got {}", expected, actual)),
             (Type::Sum(_exp_sum), Type::Sum(_act_sum)) => {
                 // FIXME: We'll probably need a structural treatment for sums eventually
                 Err(k1_format_user!(self, "expected sum {} but got sum {}", expected, actual))
@@ -3929,9 +3933,11 @@ impl TypedProgram {
                     Ok(())
                 }
             }
-            (Type::FunctionPointer(fp1), Type::FunctionPointer(fp2)) => {
-                self.check_types(fp1.function_type_id, fp2.function_type_id, scope_id)
-            }
+            (Type::FunctionPointer(fp1), Type::FunctionPointer(fp2)) => self
+                .check_types(fp1.function_type_id, fp2.function_type_id, scope_id)
+                .map_err(|msg| {
+                    k1_format_user!(self, "Expected {} but got {}: {msg}", expected, actual)
+                }),
             (Type::Lambda(expected_lambda_id), Type::Lambda(actual_lambda_id)) => {
                 let expected_lambda = self.lambda_types.get(*expected_lambda_id);
                 let actual_lambda = self.lambda_types.get(*actual_lambda_id);
@@ -3951,7 +3957,10 @@ impl TypedProgram {
                     exp_lambda_object.function_type,
                     act_lambda_object.function_type,
                     scope_id,
-                ),
+                )
+                .map_err(|msg| {
+                    k1_format_user!(self, "Expected {} but got {}: {msg}", expected, actual)
+                }),
             (Type::StaticValue(exp_value_type), Type::StaticValue(act_value_type)) => {
                 if exp_value_type.family_type_id == act_value_type.family_type_id {
                     match (exp_value_type.value_id, act_value_type.value_id) {
@@ -5947,7 +5956,7 @@ impl TypedProgram {
                     span,
                 ).map_err(|mut e| {
                         e.message = self.ast.idents.intern(format!(
-                            "`.try` can only be used from a function or lambda that returns a type implementing `Try`. {}",
+                            "`.try` can only be used from a function or lambda that returns a type implementing `try`. {}",
                             self.ident_str(e.message)
                         ));
                         e
@@ -5959,7 +5968,7 @@ impl TypedProgram {
             kbail!(
                 self,
                 span,
-                "This function expects a Try, but with a different Error type than the value: {msg}"
+                "This function expects a try, but with a different error type than the value: {msg}"
             );
         };
         let value_success_type =
@@ -7361,6 +7370,7 @@ impl TypedProgram {
                 kind: TypedFunctionKind::Lambda,
                 flags: TypedFunctionFlags::empty(),
                 dyn_fn_id: None,
+                dyn_receiver_thunk_id: None,
                 returned_variable: None,
                 body_failure: None,
             });
@@ -7429,6 +7439,7 @@ impl TypedProgram {
             kind: TypedFunctionKind::Lambda,
             flags: TypedFunctionFlags::empty(),
             dyn_fn_id: None,
+            dyn_receiver_thunk_id: None,
             returned_variable: None,
             body_failure: None,
         });
@@ -12468,6 +12479,7 @@ impl TypedProgram {
             kind,
             flags,
             dyn_fn_id: None,
+            dyn_receiver_thunk_id: None,
             returned_variable: None,
             body_failure: None,
         })
@@ -14345,11 +14357,12 @@ impl TypedProgram {
 
     /// Computes the slot function type an ability function gets inside a dyn object,
     /// or the reason it is excluded from dynamic dispatch. Two shapes are accepted:
-    /// a `self: *self` receiver, whose slot replaces self with an opaque state
-    /// pointer in lambda-env position; or a function mentioning self nowhere, whose
-    /// slot is just the substituted signature (the object acts as a type witness and
-    /// no state is passed). Both are physically identical to the impl function, so
-    /// its address is directly callable through the slot.
+    /// a `self` or `self: *self` receiver, whose slot replaces self with an opaque
+    /// state pointer in lambda-env position; or a function mentioning self nowhere,
+    /// whose slot is just the substituted signature (the object acts as a type
+    /// witness and no state is passed). A `*self` receiver or no receiver is
+    /// physically identical to the impl function, so its address fills the slot
+    /// directly; a by-value receiver fills it with a thunk that loads self.
     fn dyn_slot_fn_type(
         &mut self,
         ability_self_type: TypeId,
@@ -14372,9 +14385,13 @@ impl TypedProgram {
             return Err("it takes context parameters".to_string());
         }
         let self_probe = [spair! { ability_self_type => NEVER_TYPE_ID }];
-        let has_receiver = params.first().is_some_and(|p| match self.types.get(p.type_id) {
-            Type::Reference(r) => r.inner_type == ability_self_type,
-            _ => false,
+        let has_receiver = params.first().is_some_and(|p| {
+            p.type_id == ability_self_type
+                || self
+                    .types
+                    .get(p.type_id)
+                    .as_reference()
+                    .is_some_and(|r| r.inner_type == ability_self_type)
         });
 
         let mut slot_params = self.mem.new_list(physical_params.len());
@@ -14386,9 +14403,6 @@ impl TypedProgram {
             });
             &params[1..]
         } else {
-            if params.first().is_some_and(|p| p.type_id == ability_self_type) {
-                return Err("it must take self by reference: `self: *self`".to_string());
-            }
             params
         };
         for param in value_params {
@@ -14438,6 +14452,7 @@ impl TypedProgram {
             type_id: POINTER_TYPE_ID,
             span,
         });
+        let mut excluded = String::new();
         for fn_ref in self.mem.getn(ability_functions) {
             match self.dyn_slot_fn_type(ability_self_type, &subst_pairs, fn_ref.function_id) {
                 Ok(slot_fn_type) => {
@@ -14448,11 +14463,20 @@ impl TypedProgram {
                         span,
                     });
                 }
-                Err(_reason) => {}
+                Err(reason) => {
+                    write!(excluded, "\n  '{}': {}", self.ident_str(fn_ref.function_name), reason)
+                        .unwrap();
+                }
             }
         }
         if fields.len() == 1 {
-            kbail!(self, span, "Ability '{}' has no dyn-dispatchable functions", ability_name);
+            kbail!(
+                self,
+                span,
+                "Ability '{}' has no dyn-dispatchable functions:{}",
+                ability_name,
+                excluded
+            );
         }
         let fields_handle = fields.to_slice();
         let struct_representation =
@@ -14537,7 +14561,106 @@ impl TypedProgram {
                 self.get_ability_impl_function(impl_handle.full_impl_id, fn_ref.index);
             match impl_function {
                 AbilityImplFunction::FunctionId(impl_fn_id) => {
-                    let fn_ptr_expr = self.function_to_pointer(impl_fn_id, span);
+                    //review any re-use potential here for 'synthesizing a function', or not worth
+                    //it? 
+                    let impl_fn = *self.get_function(impl_fn_id);
+                    let impl_fn_type = *self.types.get(impl_fn.type_id).as_function().unwrap();
+                    let impl_fn_params = self.mem.getn(impl_fn_type.physical_params);
+                    let by_value_receiver =
+                        impl_fn_params.first().is_some_and(|p| p.type_id == implementor_type);
+                    let slot_fn_id = if !by_value_receiver {
+                        impl_fn_id
+                    } else if let Some(thunk_id) = impl_fn.dyn_receiver_thunk_id {
+                        thunk_id
+                    } else {
+                        // Thunk for a by-value receiver: load self from the state pointer
+                        let thunk_scope = self.scopes.add_child_scope(
+                            impl_fn.scope,
+                            ScopeType::FunctionScope,
+                            ScopeOwnerId::None,
+                        );
+                        let thunk_id = self.functions.next_id();
+                        self.scopes
+                            .set_scope_owner_id(thunk_scope, ScopeOwnerId::Function(thunk_id));
+                        let mut thunk_params = self.mem.new_list(impl_fn_params.len() as u32);
+                        let mut thunk_param_types = self.mem.new_list(impl_fn_params.len() as u32);
+                        let mut call_args: SV4<TypedExprId> = smallvec![];
+                        for (index, param) in impl_fn_params.iter().enumerate() {
+                            let (param_type, kind) = if index == 0 {
+                                (POINTER_TYPE_ID, FnParamKind::LambdaEnv)
+                            } else {
+                                (param.type_id, param.kind)
+                            };
+                            let variable_id = self.variables.add(Variable {
+                                name: param.name,
+                                type_id: param_type,
+                                owner_scope: thunk_scope,
+                                kind: VariableKind::FnParam(thunk_id),
+                                flags: VariableFlags::empty(),
+                                usage_count: 0,
+                                defn_span: span,
+                            });
+                            thunk_params.push(TypedFunctionParam { variable_id, span });
+                            thunk_param_types.push(FnParamType {
+                                name: param.name,
+                                type_id: param_type,
+                                kind,
+                            });
+                            let variable_expr = self.synth_variable_expr(variable_id, span);
+                            call_args.push(if index == 0 {
+                                let self_ref_type = self.add_reference_type(implementor_type);
+                                let self_ref = self.synth_cast(
+                                    variable_expr,
+                                    self_ref_type,
+                                    CastType::PointerToReference,
+                                    None,
+                                );
+                                self.synth_dereference(self_ref)
+                            } else {
+                                variable_expr
+                            });
+                        }
+                        let call = self.synth_static_call(
+                            impl_fn_id,
+                            &call_args,
+                            impl_fn_type.return_type,
+                            span,
+                        );
+                        let body_block = self.synth_return_only_block(thunk_scope, call, span);
+                        let thunk_type = self.add_type_anon(Type::Function(FunctionType {
+                            physical_params: thunk_param_types.to_slice(),
+                            return_type: impl_fn_type.return_type,
+                            is_lambda: true,
+                        }));
+                        let name = self.build_ident_with(|k1, s| {
+                            write!(s, "{}__dyn_thunk", k1.ident_str(impl_fn.name)).unwrap()
+                        });
+                        let actual_thunk_id = self.add_function(TypedFunction {
+                            name,
+                            scope: thunk_scope,
+                            namespace_id: impl_fn.namespace_id,
+                            params: thunk_params.to_slice(),
+                            type_params: MSlice::empty(),
+                            fnlike_type_params: MSlice::empty(),
+                            ability_where_constraints: MSlice::empty(),
+                            body_block: Some(body_block),
+                            builtin_type: None,
+                            linkage: Linkage::Standard,
+                            specialization_info: None,
+                            parsed_id: impl_fn.parsed_id,
+                            type_id: thunk_type,
+                            kind: TypedFunctionKind::Standard,
+                            flags: TypedFunctionFlags::empty(),
+                            dyn_fn_id: None,
+                            dyn_receiver_thunk_id: None,
+                            returned_variable: None,
+                            body_failure: None,
+                        });
+                        debug_assert_eq!(actual_thunk_id, thunk_id);
+                        self.get_function_mut(impl_fn_id).dyn_receiver_thunk_id = Some(thunk_id);
+                        thunk_id
+                    };
+                    let fn_ptr_expr = self.function_to_pointer(slot_fn_id, span);
                     literal_fields
                         .push(StructLiteralField { name: field.name, expr: Some(fn_ptr_expr) });
                 }
@@ -14872,9 +14995,8 @@ impl TypedProgram {
             Some(parsed_ret_type) => self.eval_type_expr(parsed_ret_type, fn_scope_id)?,
         };
 
-        // Typecheck 'main': It must take argc and argv of correct types, or nothing
-        // And it must return an i32
-        let is_main_fn = namespace_id == ROOT_NAMESPACE_ID && ast_fn.name == self.ast.idents.b.main;
+        let is_main_fn = ast_fn.name == self.ast.idents.b.main
+            && self.get_executable_primary_module().map(|m| m.namespace_id) == Some(namespace_id);
         if is_main_fn {
             match param_types.len() {
                 0 => {}
@@ -14901,11 +15023,15 @@ impl TypedProgram {
                     );
                 }
             };
-            match return_type {
-                I32_TYPE_ID => {}
-                _other => {
-                    kbail!(self, ast_fn.span, "main must return i32");
-                }
+            if return_type != self.builtin_types.empty
+                && self.types.get(return_type).as_integer().is_none()
+            {
+                kbail!(
+                    self,
+                    ast_fn.signature_span,
+                    "main must return an integer or nothing, got {}",
+                    self.type_id_to_string(return_type)
+                );
             }
         };
 
@@ -14957,6 +15083,7 @@ impl TypedProgram {
             type_id: function_type_id,
             flags,
             dyn_fn_id: None,
+            dyn_receiver_thunk_id: None,
             returned_variable: None,
             body_failure: None,
         });
@@ -15253,6 +15380,7 @@ impl TypedProgram {
             type_id: function_type_id,
             flags,
             dyn_fn_id: None,
+            dyn_receiver_thunk_id: None,
             returned_variable: None,
             body_failure: None,
         });
@@ -16996,6 +17124,7 @@ impl TypedProgram {
             kind: TypedFunctionKind::Standard,
             flags: TypedFunctionFlags::empty(),
             dyn_fn_id: None,
+            dyn_receiver_thunk_id: None,
             returned_variable: None,
             body_failure: None,
         });
@@ -17281,18 +17410,24 @@ impl TypedProgram {
         let namespace_scope_id = self.namespaces.get(namespace_id).scope_id;
 
         // new_defns will contain all of the namespace's original parsed definitions
-        // as well as any new ones generated via metaprogramming
+        // as well as any new ones generated via metaprogramming; the worklist processes a
+        // metaprogram's output right after it, through these same arms, so nested
+        // definition-level metaprograms run too
         let mut new_defns = self.ast.mem.new_list(ast_definitions.len() as u32);
+        let mut defn_stack = self.tmp.new_list(ast_definitions.len() as u32);
+        for defn in ast_definitions.iter().rev() {
+            defn_stack.push_grow(&mut self.tmp, *defn);
+        }
 
-        for defn in ast_definitions.iter() {
-            new_defns.push_grow(&mut self.ast.mem, *defn);
-            if skip_defns.contains(defn) {
+        while let Some(defn) = defn_stack.pop() {
+            new_defns.push_grow(&mut self.ast.mem, defn);
+            if skip_defns.contains(&defn) {
                 continue;
             }
-            match *defn {
+            match defn {
                 ParsedId::Use(_) => {}
                 ParsedId::Global(_) | ParsedId::TypeDefn(_) | ParsedId::Ability(_) => {
-                    self.register_pending_defn(*defn, namespace_id);
+                    self.register_pending_defn(defn, namespace_id);
                 }
                 ParsedId::Namespace(namespace_id) => {
                     if let Err(e) = self.declare_namespace_recursive(
@@ -17323,9 +17458,6 @@ impl TypedProgram {
                     // We simply run the program, getting a `code` (basically a string),
                     // parse it as definitions, then we load those definitions
                     // injecting them into the AST, as if they appeared right here.
-                    // If it is a namespace, we ensure we handle it right now, as this is the phase that
-                    // namespaces should be declared. Everything else will get handled naturally
-                    // as we iterate over the namespace's definitions in the future phases
                     let static_ctx = StaticExecContext { expected_return_type: Some(I32_TYPE_ID) };
                     let eval_expr_ctx =
                         EvalExprContext::make(namespace_scope_id).with_static_ctx(Some(static_ctx));
@@ -17338,32 +17470,9 @@ impl TypedProgram {
                             Ok(StaticExecutionResult::Definitions(defns)) => defns,
                             Ok(StaticExecutionResult::TypedExpr(_)) => unreachable!(),
                         };
-                    // If any of the meta definitions are themselves namespaces,
-                    // we need to run them now, in-loop, so that the program behaves
-                    // exactly as if they had been literally written in place
-                    //
-                    // We'll add them to the AST definitions later so that further
-                    // passes can find them
-                    for &d in self.ast.mem.getn(newly_parsed_defns) {
-                        match d {
-                            ParsedId::Namespace(ns) => {
-                                if let Err(e) = self.declare_namespace_recursive(
-                                    ns,
-                                    namespace_scope_id,
-                                    skip_defns,
-                                ) {
-                                    self.report(e)
-                                };
-                            }
-                            ParsedId::Global(_) | ParsedId::TypeDefn(_) | ParsedId::Ability(_) => {
-                                self.register_pending_defn(d, namespace_id);
-                            }
-                            _ => {}
-                        }
+                    for &d in self.ast.mem.getn(newly_parsed_defns).iter().rev() {
+                        defn_stack.push_grow(&mut self.tmp, d);
                     }
-                    // We want to insert a given #meta's definitions right after that meta
-                    let new_defns_slice = self.ast.mem.getn(newly_parsed_defns);
-                    new_defns.extend_grow(&mut self.ast.mem, new_defns_slice);
                 }
                 _ => {}
             }

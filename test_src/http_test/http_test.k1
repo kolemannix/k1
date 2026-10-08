@@ -1,11 +1,12 @@
-use libuv/uv
-use libuv/uv-request
-use libuv/uv-handle
-use libuv/uv-stream
+use uv/libuv
+use uv/req
+use uv/handle
+use uv/stream
 use http/http-response
 use http/response
 use http/server
-use http/server/services
+use std/pubsub
+use std/rc-bytes
 use http/datastar
 use http/pair
 use http/pairs
@@ -13,23 +14,23 @@ use http/percent
 use http/urlencoded
 use http/cookie
 use std/rc-byte-stream
+use std/source
+use std/collect-sink
+use std/byte-source
+use http/chunked
+use http/sse-events
 
-$http/routing/define(route, {
-  use http/routing/get
-  use http/routing/post
-  use http/routing/seg
-  let game: span[seg] = [:text "game", :u64 "id"]
-  [
-    get(   "events",      [:text "events"]),
-    get(   "files",       [:text "files", :rest "path"]),
-    post(  "game-poke",   game.concat([:text "poke"])),
-  ]
+$http/routing/define(route, \{
+  get  events     "/events"
+  get  files      "/files/*path"
+  post game-poke  "/game/{id: u64}/poke"
+  get  grade-rate "/cmd/grade-rate/{who: string}" ?{ plan-id: int, item-id: u64, note: ?string }
 })
 
 fn test-routing() {
-  assert(route/from-header(http/header/get("/game/42/poke")) is :err :bad-method _)
-  assert(route/url-string(:game-poke .{ id = 42 }) == "/game/42/poke")
-  assert(route/url-string(:files .{ path = "a b/c" }) == "/files/a%20b/c")
+  assert(route/parse-request(http/header/get("/game/42/poke")) is :err :bad-method _)
+  assert((route:game-poke .{ id = 42 }).show() == "/game/42/poke")
+  assert("${route:files .{ path = "a b/c" }}" == "/files/a%20b/c")
 
   assert(route/parse(:HEAD, "/events?foo=1") is :ok :events)
   assert(route/parse(:GET, "/%65vents") is :ok :events)
@@ -40,6 +41,16 @@ fn test-routing() {
   assert(route/parse(:GET, "/game/42/zzz") is :err :not-found)
   assert(route/parse(:GET, "/game/%zz/poke") is :err :bad-encoding _)
   assert(route/parse(:OPTIONS, "*") is :err :not-found)
+
+  let g = route:grade-rate .{ who = "a b", plan-id = -3, item-id = 9, note = :some "x&y=1+z" }
+  assert-equals(g.show(), "/cmd/grade-rate/a%20b?plan-id=-3&item-id=9&note=x%26y%3D1%2Bz")
+  assert(route/parse(:GET, g.show()) is :ok :grade-rate r and r.who == "a b" and r.plan-id == -3 and r.item-id == 9 and r.note is :some nt and nt == "x&y=1+z")
+  assert(route/parse(:GET, "/cmd/grade-rate/x?zz=1&note=a+b&item-id=2&&plan-id=1") is :ok :grade-rate r2 and r2.note is :some nn and nn == "a b")
+  assert(route/parse(:GET, "/cmd/grade-rate/x?item-id=2&plan-id=1") is :ok :grade-rate r3 and r3.note is :none)
+  assert-equals((route:grade-rate .{ who = "x", plan-id = 1, item-id = 2, note = :none }).show(), "/cmd/grade-rate/x?plan-id=1&item-id=2")
+  assert(route/parse(:GET, "/cmd/grade-rate/x?plan-id=1") is :err :missing-param m and m.name == "item-id")
+  assert(route/parse(:GET, "/cmd/grade-rate/x?plan-id=one&item-id=2") is :err :bad-param b and b.got == "one")
+  assert(route/parse(:GET, "/cmd/grade-rate/x?plan-id=1&item-id=2&plan-id=1") is :err :bad-param b2 and b2.name == "plan-id")
 }
 
 fn test-parsers() {
@@ -85,21 +96,57 @@ fn test-parsers() {
   assert(plain.form() is :none)
   assert(plain.query().is-empty())
   assert(plain.cookies().is-empty())
+  assert(not plain.accepts-encoding("br"))
+  plain.header.headers.push(.{ field = "accept-encoding", value = "gzip, BR;q=0.5, zstd;q=0.0" })
+  assert(plain.accepts-encoding("br"))
+  assert(not plain.accepts-encoding("zstd"))
+  assert(not plain.accepts-encoding("deflate"))
+  let moved = response/redirect(303, "/a?b=1", ["Set-Cookie: k=v"])
+  assert-equals(moved.extra-headers.[0], "Location: /a?b=1")
+  assert-equals(response/status-text(303), "See Other")
+  assert(not response/may-have-content(204))
 }
 
-fn handle(req: http/request, services: *services): http-response {
+fn drain(src: byte-source): string {
+  let sink: collect-sink[u8] = .{ items = list/empty() }
+  string/wrap-bytes(source/run-to(src, sink.&))
+}
+
+fn sse(src: byte-source, event-name: string, data-prefix: string): string {
+  drain(src || sse-events(event-name, data-prefix))
+}
+
+fn test-encoders() {
+  assert-equals(drain(source/from-printed(["0123456789abcdefg"]) || chunked), "11\r\n0123456789abcdefg\r\n0\r\n\r\n")
+  assert-equals(drain(source/once(["".span-bytes()]) || chunked), "0\r\n\r\n")
+
+  assert-equals(
+    sse(source/from-printed(["<div id=\"x\">\n  hi\n</div>"]), "datastar-patch-elements", "elements"),
+    "event: datastar-patch-elements\ndata: elements <div id=\"x\">\ndata: elements   hi\ndata: elements </div>\n\n")
+  assert-equals(
+    sse(source/from-printed(["{\"cells_0_tab\": \"output\"}"]), "datastar-patch-signals", "signals"),
+    "event: datastar-patch-signals\ndata: signals {\"cells_0_tab\": \"output\"}\n\n")
+  assert-equals(sse(source/once(["ab".span-bytes(), "\n".span-bytes(), "c".span-bytes()]), "e", "p"), "event: e\ndata: p ab\ndata: p c\n\n")
+  assert-equals(sse(source/from-printed(["line\n"]), "e", "p"), "event: e\ndata: p line\n\n")
+  assert-equals(sse(source/from-printed(["a", "b"]), "n", ""), "event: n\ndata: a\n\nevent: n\ndata: b\n\n")
+  assert-equals(sse(source/from-printed(["x\n\ny"]), "e", "p"), "event: e\ndata: p x\ndata: p \ndata: p y\n\n")
+}
+
+fn handle(req: http/request, bus: *pubsub/bus[span[u8]]): http-response {
   let url = req.header.url
   if url == "/hello" response/text(200, "hi")
-  else if url == "/slow" { uv/sleep(300); response/text(200, "slow-done") }
-  else if url == "/events" datastar/patch-signals(services.bus.subscribe("t") || rc-byte-stream)
+  else if url == "/slow" { libuv/sleep(300); response/text(200, "slow-done") }
+  else if url == "/len" response/text(200, "len ${req.header.content-length.!}")
+  else if url == "/stall" { libuv/sleep(2000); response/text(200, "stall-done") }
+  else if url == "/events" datastar/patch-signals(bus.subscribe("t") || rc-byte-stream)
   else response/not-found()
 }
 
 type client = {
-  tcp: uv/tcp,
-  connect-req: uv/connect,
-  write-req: uv/write,
-  buf: uv/buf,
+  tcp: libuv/tcp,
+  connect-req: libuv/connect,
+  write-req: libuv/write,
+  buf: libuv/buf,
   read-buf: array[u8, 4096],
   send: string,
   received: list[u8],
@@ -110,44 +157,43 @@ type client = {
 }
 
 ns for client {
-  fn start(port: u16, send: string, on-eof: *fn(*client) -> {}): *client {
+  fn start(port: u16, send: string, on-eof: *fn(*client) -> {}) {
     let c: *client = heap.new(.{
       tcp = uninit, connect-req = uninit, write-req = uninit, buf = uninit, read-buf = uninit,
-      send, received = list/empty(), started = uv/now(uv/default_loop().get()), elapsed-ms = 0, eof = false, on-eof,
+      send, received = list/empty(), started = libuv/now(libuv/default_loop().get()), elapsed-ms = 0, eof = false, on-eof,
     })
-    let l = uv/default_loop().get()
-    uv/check(uv/tcp_init(l, c.tcp.&)).!
+    let l = libuv/default_loop().get()
+    uv/check(libuv/tcp_init(l, c.tcp.&)).!
     c.tcp.&.set-data(c)
     c.connect-req.&.set-data(c)
     c.write-req.&.set-data(c)
-    let addr: uv/sockaddr_in = uninit
-    uv/check(uv/ip4_addr("127.0.0.1\0".data-ref-byte(), port.widen[i32], addr.&)).!
-    uv/check(uv/tcp_connect(c.connect-req.&, c.tcp.&, addr.&.as[ptr].narrow(), on-connect.&)).!
-    c
+    let addr: libuv/sockaddr_in = uninit
+    uv/check(libuv/ip4_addr("127.0.0.1\0".data-ref-byte(), port.widen[i32], addr.&)).!
+    uv/check(libuv/tcp_connect(c.connect-req.&, c.tcp.&, addr.&.as[ptr].narrow(), on-connect.&)).!
   }
 
   fn text(self: *client): string { string/wrap-bytes(self.received.as-span()) }
 }
 
-fn on-connect(req: *uv/connect, status: i32) {
+fn on-connect(req: *libuv/connect, status: i32) {
   let c = req.get-data[client]()
   if status != 0 crash("client connect failed: $status")
-  c.buf = uv/buf/wrap-span(c.send.span-bytes())
-  uv/check(uv/write(c.write-req.&, c.tcp.&.as-stream(), c.buf.&, 1, fn(_req, status) { uv/check(status).! })).!
-  if uv/read_start(c.tcp.&.as-stream(), fn(h, _size, buf) {
+  c.buf = libuv/buf/wrap-span(c.send.span-bytes())
+  uv/check(libuv/write(c.write-req.&, c.tcp.&.as-stream(), c.buf.&, 1, fn(_req, status) { uv/check(status).! })).!
+  if libuv/read_start(c.tcp.&.as-stream(), fn(h, _size, buf) {
     let c = h.get-data[client]()
-    buf.* = uv/buf/wrap-span(c.read-buf.&.as-span())
+    buf.* = libuv/buf/wrap-span(c.read-buf.&.as-span())
   }, on-read.&) != 0 crash("client read_start")
 }
 
-fn on-read(stream: *uv/stream, nread: size, buf: *uv/buf) {
+fn on-read(stream: *libuv/stream, nread: size, buf: *libuv/buf) {
   let c = stream.get-data[client]()
   if nread > 0 {
     c.received.append-span-in(heap, span/wrap-raw[u8](buf.base.inner, nread))
   } else if nread < 0 {
     c.eof = true
-    c.elapsed-ms = uv/now(uv/default_loop().get()) - c.started
-    uv/close(c.tcp.&.as-handle(), fn h. {
+    c.elapsed-ms = libuv/now(libuv/default_loop().get()) - c.started
+    libuv/close(c.tcp.&.as-handle(), fn h. {
       let c = h.get-data[client]()
       (c.on-eof)(c)
     })
@@ -161,16 +207,37 @@ let(mutable) slowloris-cut: bool = false
 let(mutable) hello-idle-cut: bool = false
 let(mutable) events-cut: bool = false
 let(mutable) slow-finished: bool = false
+let(mutable) stall-cut: bool = false
 let(mutable) over-cap-rejected: bool = false
+let(mutable) body-limits-checked: bool = false
 
-fn get-server(): *server/server { srv.ref[server/server] }
+fn get-server(): *server { srv.ref[server] }
 
 fn on-slowloris-eof(c: *client) {
   assert(c.received.is-empty())
   assert(c.elapsed-ms >= 200)
   slowloris-cut = true
+  client/start(get-server().port, "POST /len HTTP/1.1\r\nHost: x\r\nContent-Length: 5000\r\n\r\n", fn c. {
+    assert(c.text().starts-with("HTTP/1.1 413 Content Too Large\r\n"))
+    let chunked = list/empty[u8]()
+    chunked.append-span-in(heap, "POST /len HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n7d0\r\n".span-bytes())
+    for _ in 0.until(2000) { chunked.push-in(heap, 'a'.as-u8()) }
+    chunked.append-span-in(heap, "\r\n0\r\n\r\n".span-bytes())
+    client/start(get-server().port, string/wrap-bytes(chunked.as-span()), fn c. {
+      assert(c.text().starts-with("HTTP/1.1 413 Content Too Large\r\n"))
+      client/start(get-server().port, "POST /len HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello", fn c. {
+        assert(c.text().ends-with("\r\n\r\nlen 5"))
+        body-limits-checked = true
+        phase1-step()
+      })
+    })
+  })
+  phase1-step()
+}
+
+fn phase1-step() {
   phase1-done = phase1-done + 1
-  if phase1-done == 2 { phase2() }
+  if phase1-done == 3 { phase2() }
 }
 
 fn on-hello-eof(c: *client) {
@@ -179,8 +246,7 @@ fn on-hello-eof(c: *client) {
   assert(t.ends-with("\r\n\r\nhi"))
   assert(c.elapsed-ms >= 300)
   hello-idle-cut = true
-  phase1-done = phase1-done + 1
-  if phase1-done == 2 { phase2() }
+  phase1-step()
 }
 
 fn phase2() {
@@ -197,41 +263,50 @@ fn phase2() {
     assert(t.ends-with("\r\n\r\nslow-done"))
     slow-finished = true
   })
-  let t: *uv/timer = heap.alloc-t()
-  uv/check(uv/timer_init(uv/default_loop().get(), t)).!
-  let _ = uv/timer_start(t, fn t. {
-    server/stop(get-server())
-    uv/close(t.as-handle(), fn _h. .{})
+
+  let t: *libuv/timer = heap.alloc-t()
+  uv/check(libuv/timer_init(libuv/default_loop().get(), t)).!
+  let _ = libuv/timer_start(t, fn t. {
+    get-server().stop()
+    libuv/close(t.as-handle(), fn _h. .{})
   }, 100, 0)
 }
 
 fn test-server() {
   let config: server/config = .{
-    host = "127.0.0.1", port = 0, accept-queue-len = 128, max-connections = 2,
+    host = "127.0.0.1", port = 0, accept-queue-len = 128, max-connections = 3, max-body-size = 1024,
     header-timeout-ms = 200, body-timeout-ms = 30000, write-timeout-ms = 30000,
-    idle-timeout-ms = 300, drain-timeout-ms = 3000, handle-signals = false,
+    idle-timeout-ms = 300, drain-timeout-ms = 500, handle-signals = false,
   }
   startup-state = "startup-lifetime".cloned()
-  let s = server/start(config, handle.to-dyn()).!
+  let bus = uv/bus/create[span[u8]](libuv/default_loop().get(), 1048576, fn(payload: rc-bytes) payload.bytes().len())
+  let s = server/start(config, (fn[bus](req: http/request) handle(req, bus)).to-dyn()).!
   srv = s.as[ptr]
   assert(s.port != 0)
   client/start(s.port, "GET / HTTP/1.1\r\nHost: x\r\n", on-slowloris-eof.&)
   client/start(s.port, "GET /hello HTTP/1.1\r\nHost: x\r\n\r\n", on-hello-eof.&)
-  let t: *uv/timer = heap.alloc-t()
-  uv/check(uv/timer_init(uv/default_loop().get(), t)).!
-  let _ = uv/timer_start(t, fn t. {
+  client/start(s.port, "GET /stall HTTP/1.1\r\nHost: x\r\n\r\n", fn c. {
+    assert(c.received.is-empty())
+    assert(c.elapsed-ms >= 2000)
+    stall-cut = true
+  })
+  let t: *libuv/timer = heap.alloc-t()
+  uv/check(libuv/timer_init(libuv/default_loop().get(), t)).!
+  let _ = libuv/timer_start(t, fn t. {
     client/start(get-server().port, "GET /hello HTTP/1.1\r\nHost: x\r\n\r\n", fn c. {
       assert(c.text().starts-with("HTTP/1.1 503 Service Unavailable\r\n"))
       over-cap-rejected = true
     })
-    uv/close(t.as-handle(), fn _h. .{})
+    libuv/close(t.as-handle(), fn _h. .{})
   }, 50, 0)
-  server/run(s)
+  s.run()
   assert(startup-state == "startup-lifetime")
   assert(slowloris-cut)
   assert(hello-idle-cut)
   assert(events-cut)
   assert(slow-finished)
+  assert(stall-cut)
+  assert(body-limits-checked)
   assert(over-cap-rejected)
   assert(s.connections.is-empty())
 }
@@ -239,6 +314,8 @@ fn test-server() {
 fn main(): i32 {
   test-routing()
   test-parsers()
+  test-encoders()
+  #static test-encoders()
   test-server()
   println("http_test passed")
   0
