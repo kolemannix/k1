@@ -1,0 +1,624 @@
+ns url
+
+type url = {
+  text: string,
+  scheme-end: u32,
+  authority-start: u32,
+  host-start: u32,
+  host-end: u32,
+  path-start: u32,
+  query-start: u32,
+  fragment-start: u32,
+  port-number: ?u16,
+}
+
+type pair = { name: string, value: string }
+
+ns for pair {
+  fn find[i: iterator[item = pair], c: iterable[item = pair, i = i]](pairs: c, name: string): ?string {
+    for p in pairs { if p.name == name { return :some p.value } }
+    :none
+  }
+}
+
+type error-kind = either(u8) { too-long, invalid-scheme, invalid-userinfo, invalid-host, invalid-port, invalid-char }
+
+type error = { pos: size, kind: error-kind }
+
+impl print for error {
+  fn print-to[w: writer](self, w) {
+    w.write(if self.kind is {
+      :too-long -> "URL longer than 4 GiB",
+      :invalid-scheme -> "invalid scheme",
+      :invalid-userinfo -> "invalid userinfo",
+      :invalid-host -> "invalid host",
+      :invalid-port -> "invalid port",
+      :invalid-char -> "invalid character",
+    })
+    w.write(" at byte ")
+    self.pos.print-to(w)
+  }
+}
+
+fn is-scheme-char(c: char): bool {
+  c.is-ascii-letter() or c.is-ascii-digit() or c == '+' or c == '-' or c == '.'
+}
+
+fn is-visible(c: char): bool {
+  let b = c.as-u8()
+  b > 0x20 and b != 0x7F
+}
+
+fn find-invalid(text: string, from: size, to: size, allowed: percent/encode-set): ?size {
+  let i = from
+  while i < to {
+    if text.[i] == '%' {
+      if i + 2 >= to or percent/escape-at(text, i).is-none() return :some i
+      i = i + 3
+    } else {
+      if not allowed.keeps(text.[i]) return :some i
+      i = i + 1
+    }
+  }
+  :none
+}
+
+fn find-stop(text: string, from: size, a: char, b: char, c: char, invisible: bool): size {
+  let len = text.len()
+  let base = text.data-ptr()
+  let low: u8 = if invisible 0x21 else 0
+  let del: u8 = if invisible 0x7F else a.as-u8()
+  let lanes: size = k1/simd-bytes
+  let i = from
+  if i + lanes <= len {
+    let va = vector/splat[u8, k1/simd-bytes](a.as-u8())
+    let vb = vector/splat[u8, k1/simd-bytes](b.as-u8())
+    let vc = vector/splat[u8, k1/simd-bytes](c.as-u8())
+    let vdel = vector/splat[u8, k1/simd-bytes](del)
+    let vlow = vector/splat[u8, k1/simd-bytes](low)
+    while i + lanes <= len {
+      let chunk = vector/load-unchecked[u8, k1/simd-bytes](base.add-bytes(i))
+      let hit = chunk.eq-lanes(va).bit-or(chunk.eq-lanes(vb)).bit-or(chunk.eq-lanes(vc))
+        .bit-or(chunk.eq-lanes(vdel)).bit-or(chunk.lt-lanes(vlow))
+      let lane = hit.first-true-lane()
+      if lane >= 0 return i + lane
+      i = i + lanes
+    }
+  }
+  while i < len {
+    let x = text.[i]
+    if x == a or x == b or x == c or x.as-u8() < low or x.as-u8() == del return i
+    i = i + 1
+  }
+  len
+}
+
+fn scan-visible(text: string, from: size, a: char, b: char): result[size, error] {
+  let i = find-stop(text, from, a, b, b, invisible = true)
+  if i < text.len() and not is-visible(text.[i]) return :err .{ pos = i, kind = :invalid-char }
+  :ok i
+}
+
+fn parse(text: string): result[url, error] {
+  let n = text.len()
+  if n > 4294967295 return :err .{ pos = 0, kind = :too-long }
+
+  let i: size = 0
+  let scheme-end: size = 0
+  while i < n and is-scheme-char(text.[i]) { i = i + 1 }
+  if i < n and text.[i] == ':' {
+    if i == 0 or not text.[0].is-ascii-letter() return :err .{ pos = i, kind = :invalid-scheme }
+    scheme-end = i
+    i = i + 1
+  } else {
+    i = 0
+  }
+
+  let authority-start: size = 0
+  let host-start = i
+  let host-end = i
+  let port-number: ?u16 = :none
+  if text.drop(i).starts-with("//") {
+    authority-start = i + 2
+    let end = find-stop(text, authority-start, '/', '?', '#', invisible = false)
+    host-start = authority-start
+    if text.slice(authority-start, end).index-of('@') is :some at {
+      host-start = authority-start + at + 1
+      if find-invalid(text, authority-start, host-start - 1, :userinfo) is :some bad {
+        return :err .{ pos = bad, kind = :invalid-userinfo }
+      }
+    }
+    host-end = host-start
+    if host-start < end and text.[host-start] == '[' {
+      require text.slice(host-start, end).index-of(']') is :some close else {
+        return :err .{ pos = host-start, kind = :invalid-host }
+      }
+      host-end = host-start + close + 1
+      if close == 1 return :err .{ pos = host-start, kind = :invalid-host }
+      for c in text.slice(host-start + 1, host-end - 1) {
+        if not percent/encode-set:userinfo.keeps(c) return :err .{ pos = host-start + 1 + it-index, kind = :invalid-host }
+      }
+    } else {
+      while host-end < end and text.[host-end] != ':' { host-end = host-end + 1 }
+      if find-invalid(text, host-start, host-end, :host) is :some bad {
+        return :err .{ pos = bad, kind = :invalid-host }
+      }
+    }
+    if host-end < end {
+      if text.[host-end] != ':' return :err .{ pos = host-end, kind = :invalid-host }
+      let p: u32 = 0
+      let k = host-end + 1
+      while k < end {
+        require text.[k].to-ascii-digit() is :some d else return :err .{ pos = k, kind = :invalid-port }
+        p = p * 10 + d.widen[u32]
+        if p > 65535 return :err .{ pos = k, kind = :invalid-port }
+        k = k + 1
+      }
+      if k > host-end + 1 { port-number = :some p.trunc[u16] }
+    }
+    i = end
+  }
+
+  let path-start = i
+  i = scan-visible(text, i, '?', '#').try
+  if authority-start == 0 and scheme-end == 0 and path-start < i and text.[path-start] != '/' {
+    let first = text.slice(path-start, i)
+    let first-end = first.index-of('/') ? first.len()
+    if first.take(first-end).index-of(':') is :some c return :err .{ pos = path-start + c, kind = :invalid-scheme }
+  }
+
+  let query-start = i
+  if i < n and text.[i] == '?' { i = scan-visible(text, i + 1, '#', '#').try }
+  let fragment-start = i
+  if i < n { i = scan-visible(text, i + 1, '\0', '\0').try }
+
+  :ok .{
+    text,
+    scheme-end = scheme-end.trunc[u32],
+    authority-start = authority-start.trunc[u32],
+    host-start = host-start.trunc[u32],
+    host-end = host-end.trunc[u32],
+    path-start = path-start.trunc[u32],
+    query-start = query-start.trunc[u32],
+    fragment-start = fragment-start.trunc[u32],
+    port-number,
+  }
+}
+
+fn default-port(scheme: string): ?u16 {
+  if scheme.equals-ignore-ascii-case("http") or scheme.equals-ignore-ascii-case("ws") :some 80
+  else if scheme.equals-ignore-ascii-case("https") or scheme.equals-ignore-ascii-case("wss") :some 443
+  else :none
+}
+
+fn remove-dot-segments(path: string): string {
+  let out = list/with-capacity[char](path.len())
+  let input = path
+  while input.non-empty() {
+    if input.starts-with("../") {
+      input = input.drop(3)
+    } else if input.starts-with("./") or input.starts-with("/./") {
+      input = input.drop(2)
+    } else if input == "/." {
+      input = "/"
+    } else if input.starts-with("/../") or input == "/.." {
+      input = if input == "/.." { "/" } else input.drop(3)
+      let k = out.len()
+      while k > 0 and out.[k - 1] != '/' { k = k - 1 }
+      out.len = if k > 0 k - 1 else 0
+    } else if input == "." or input == ".." {
+      input = ""
+    } else {
+      let end = (input.drop(1).index-of('/') ? (input.len() - 1)) + 1
+      out.append-span(input.take(end).span)
+      input = input.drop(end)
+    }
+  }
+  string/wrap-list(out)
+}
+
+ns for url {
+  fn(inline) _slice(self, start: u32, end: u32): string { self.text.slice(start.as-size(), end.as-size()) }
+
+  fn scheme(self): ?string {
+    if self.scheme-end == 0 { :none } else :some self.text.take(self.scheme-end.as-size())
+  }
+
+  fn authority(self): ?string {
+    if self.authority-start == 0 { :none } else :some self._slice(self.authority-start, self.path-start)
+  }
+
+  fn userinfo(self): ?string {
+    if self.authority-start == 0 or self.host-start == self.authority-start { :none } else :some self._slice(self.authority-start, self.host-start - 1)
+  }
+
+  fn host(self): ?string {
+    if self.authority-start == 0 { :none } else :some self._slice(self.host-start, self.host-end)
+  }
+
+  fn port(self): ?u16 { self.port-number }
+
+  fn path(self): string { self._slice(self.path-start, self.query-start) }
+
+  fn query(self): ?string {
+    if self.query-start == self.fragment-start { :none } else :some self._slice(self.query-start + 1, self.fragment-start)
+  }
+
+  fn fragment(self): ?string {
+    if self.fragment-start.as-size() == self.text.len() { :none } else :some self.text.drop(self.fragment-start.as-size() + 1)
+  }
+
+  fn path-segments(self): segment-iterator {
+    let p = self.path()
+    if p.is-empty() { .{ rest = :none } } else .{ rest = :some(if p.starts-with("/") p.drop(1) else p) }
+  }
+
+  fn query-pairs(self): form/pair-iterator { form/pairs(self.query() ? "") }
+
+  fn normalized(self): url {
+    let out = string-builder/with-capacity(self.text.len() + 1)
+    let w = out.&
+    if self.scheme() is :some s {
+      for c in s { w.write-char(c.to-ascii-lower()) }
+      w.write-char(':')
+    }
+    if self.authority-start != 0 {
+      w.write("//")
+      if self.userinfo() is :some u {
+        percent/write-normalized(w, u, :userinfo, lower = false)
+        w.write-char('@')
+      }
+      let host = self._slice(self.host-start, self.host-end)
+      if host.starts-with("[") {
+        for c in host { w.write-char(c.to-ascii-lower()) }
+      } else {
+        percent/write-normalized(w, host, :host, lower = true)
+      }
+      if self.port-number is :some p and default-port(self.scheme() ? "") != :some p {
+        w.write-char(':')
+        p.print-to(w)
+      }
+    }
+    let path-out = string-builder/with-capacity(self.path().len())
+    percent/write-normalized(path-out.&, self.path(), :path, lower = false)
+    let path = path-out.take()
+    if path.starts-with("/") { path = remove-dot-segments(path) }
+    if path.is-empty() and self.authority-start != 0 { path = "/" }
+    w.write(path)
+    if self.query() is :some q {
+      w.write-char('?')
+      percent/write-normalized(w, q, :query, lower = false)
+    }
+    if self.fragment() is :some f {
+      w.write-char('#')
+      percent/write-normalized(w, f, :query, lower = false)
+    }
+    parse(out.take()).!
+  }
+
+  fn resolve(self, reference: url): url {
+    let has-scheme = reference.scheme-end != 0
+    let own-authority = has-scheme or reference.authority-start != 0
+    let path = reference.path()
+    let query = reference.query()
+    if own-authority or path.starts-with("/") {
+      path = remove-dot-segments(path)
+    } else if path.is-empty() {
+      path = self.path()
+      if query is :none { query = self.query() }
+    } else {
+      let base = self.path()
+      let k = base.len()
+      while k > 0 and base.[k - 1] != '/' { k = k - 1 }
+      let merged = if self.authority-start != 0 and base.is-empty() "/".concat(path) else base.take(k).concat(path)
+      path = remove-dot-segments(merged)
+    }
+
+    let out = string-builder/with-capacity(self.text.len() + reference.text.len())
+    let w = out.&
+    if (if has-scheme reference.scheme() else self.scheme()) is :some s {
+      w.write(s)
+      w.write-char(':')
+    }
+    if (if own-authority reference.authority() else self.authority()) is :some a {
+      w.write("//")
+      w.write(a)
+    }
+    w.write(path)
+    if query is :some q {
+      w.write-char('?')
+      w.write(q)
+    }
+    if reference.fragment() is :some f {
+      w.write-char('#')
+      w.write(f)
+    }
+    parse(out.take()).!
+  }
+}
+
+impl print for url {
+  fn print-to[w: writer](self, w) { w.write(self.text) }
+}
+
+type segment-iterator = { rest: ?string }
+
+impl iterator[item = string] for segment-iterator {
+  fn next(self: *self): ?item {
+    require self.rest is :some r else return :none
+    if r.index-of('/') is :some i {
+      self.rest = :some r.drop(i + 1)
+      :some(percent/decode(r.take(i)))
+    } else {
+      self.rest = :none
+      :some(percent/decode(r))
+    }
+  }
+}
+
+type builder = { out: string-builder, stage: u8, has-authority: bool, path-start: size }
+
+ns for builder {
+  fn new(): builder { .0 }
+
+  fn _enter(self: *builder, stage: u8, what: string, repeatable: bool): bool {
+    if self.stage > stage or (self.stage == stage and not repeatable) {
+      crash("url/builder: $what comes too late")
+    }
+    let first = self.stage < stage
+    self.stage = stage
+    first
+  }
+
+  fn _enter-path(self: *builder) {
+    if self._enter(5, "the path", repeatable = true) { self.path-start = self.out.list.len() }
+  }
+
+  fn _check-path(self: *builder) {
+    if (not self.has-authority) and string/wrap-span(self.out.peek()).drop(self.path-start).starts-with("//") {
+      crash("url/builder: a path without a host cannot start with `//`")
+    }
+  }
+
+  fn scheme(self: *builder, s: string) {
+    let _ = self._enter(1, "the scheme", repeatable = false)
+    if s.is-empty() or (not s.[0].is-ascii-letter()) or s.exists(fn c. not is-scheme-char(c)) {
+      crash("url/builder: invalid scheme `$s`")
+    }
+    self.out.&.write(s)
+    self.out.&.write-char(':')
+  }
+
+  fn userinfo(self: *builder, text: string) {
+    let _ = self._enter(2, "userinfo", repeatable = false)
+    self.has-authority = true
+    self.out.&.write("//")
+    percent/write-normalized(self.out.&, text, :userinfo, lower = false)
+    self.out.&.write-char('@')
+  }
+
+  fn host(self: *builder, text: string) {
+    if self._enter(3, "the host", repeatable = false) and not self.has-authority { self.out.&.write("//") }
+    self.has-authority = true
+    if text.starts-with("[") self.out.&.write(text)
+    else percent/write-normalized(self.out.&, text, :host, lower = false)
+  }
+
+  fn port(self: *builder, p: u16) {
+    if self.stage != 3 crash("url/builder: the port needs a host first")
+    self.stage = 4
+    self.out.&.write-char(':')
+    p.print-to(self.out.&)
+  }
+
+  fn path(self: *builder, text: string) {
+    if text.non-empty() and not text.starts-with("/") crash("url/builder: the path `$text` must start with `/`")
+    self._enter-path()
+    percent/write-normalized(self.out.&, text, :path, lower = false)
+    self._check-path()
+  }
+
+  fn segment[t: print](self: *builder, value: t) {
+    self._enter-path()
+    self.out.&.write-char('/')
+    percent/write-encoded(self.out.&, value, :segment)
+    self._check-path()
+  }
+
+  fn query(self: *builder, text: string) {
+    let _ = self._enter(6, "the query", repeatable = false)
+    self.out.&.write-char('?')
+    percent/write-normalized(self.out.&, text, :query, lower = false)
+  }
+
+  fn query-pair[n: print, v: print](self: *builder, name: n, value: v) {
+    self.out.&.write-char(if self._enter(6, "a query pair", repeatable = true) '?' else '&')
+    percent/write-encoded(self.out.&, name, :form)
+    self.out.&.write-char('=')
+    percent/write-encoded(self.out.&, value, :form)
+  }
+
+  fn fragment(self: *builder, text: string) {
+    let _ = self._enter(7, "the fragment", repeatable = false)
+    self.out.&.write-char('#')
+    percent/write-normalized(self.out.&, text, :query, lower = false)
+  }
+
+  fn build(self: *builder): url { parse(self.out.take()).! }
+}
+
+ns percent {
+  type encode-set = either(u8) { unreserved, segment, path, query, userinfo, host, form }
+
+  fn bit(s: encode-set): u8 { 1u8 << s.value }
+
+  fn make-classes(): array[u8, 128] {
+    let table: array[u8, 128] = .0
+    let i: size = 0
+    while i < 128 {
+      let c = i.trunc[u8].as-char()
+      let unreserved = c.is-ascii-letter() or c.is-ascii-digit() or c == '-' or c == '.' or c == '_' or c == '~'
+      let sub-delim = "!$&'()*+,;=".contains(c)
+      let bits: u8 = 0
+      if unreserved { bits = bits | bit(:unreserved) | bit(:form) }
+      if unreserved or sub-delim { bits = bits | bit(:host) }
+      if unreserved or sub-delim or c == ':' { bits = bits | bit(:userinfo) }
+      if unreserved or sub-delim or c == ':' or c == '@' { bits = bits | bit(:segment) | bit(:path) | bit(:query) }
+      if c == '/' { bits = bits | bit(:path) | bit(:query) }
+      if c == '?' { bits = bits | bit(:query) }
+      table.[i] = bits
+      i = i + 1
+    }
+    table
+  }
+
+  let CLASSES: array[u8, 128] = make-classes()
+
+  ns for encode-set {
+    fn(inline) keeps(self, c: char): bool {
+      let b = c.as-u8()
+      b < 128 and (CLASSES.[b.as-size()] >> self.value) & 1 == 1
+    }
+  }
+
+  fn escape-at(s: string, i: size): ?u8 {
+    if i + 2 >= s.len() return :none
+    require s.[i + 1].to-ascii-hex-digit() is :some hi else return :none
+    require s.[i + 2].to-ascii-hex-digit() is :some lo else return :none
+    :some(hi * 16 + lo)
+  }
+
+  fn hex-digit(v: u8): char { "0123456789ABCDEF".[v.as-size()] }
+
+  fn write-escape[w: writer](out: w, value: u8) {
+    out.write-char('%')
+    out.write-char(hex-digit(value / 16))
+    out.write-char(hex-digit(value % 16))
+  }
+
+  fn _decode(s: string, plus-is-space: bool): string {
+    let plus = if plus-is-space '+' else '%'
+    let i = find-stop(s, 0, '%', plus, plus, invisible = false)
+    if i == s.len() return s
+    let out = string-builder/with-capacity(s.len())
+    let start: size = 0
+    while i < s.len() {
+      out.&.write(s.slice(start, i))
+      if s.[i] == '+' {
+        out.&.write-char(' ')
+        start = i + 1
+      } else if escape-at(s, i) is :some v {
+        out.&.write-byte(v)
+        start = i + 3
+      } else {
+        out.&.write-char('%')
+        start = i + 1
+      }
+      i = find-stop(s, start, '%', plus, plus, invisible = false)
+    }
+    out.&.write(s.drop(start))
+    out.take()
+  }
+
+  fn decode(s: string): string { _decode(s, plus-is-space = false) }
+
+  type encoder[w] = { out: w, allowed: encode-set }
+
+  impl[w: writer] writer for encoder[w] {
+    fn write-byte(self, value: u8) {
+      let c = value.as-char()
+      if self.allowed.keeps(c) self.out.write-byte(value)
+      else if self.allowed is :form and c == ' ' self.out.write-char('+')
+      else write-escape(self.out, value)
+    }
+    fn write-bytes(self, bytes: span[byte]) {
+      let start: size = 0
+      for b in bytes {
+        if not self.allowed.keeps(b.as-char()) {
+          self.out.write-bytes(bytes.slice(start, it-index))
+          self.write-byte(b)
+          start = it-index + 1
+        }
+      }
+      self.out.write-bytes(bytes.drop(start))
+    }
+  }
+
+  fn write-encoded[w: writer, t: print](out: w, value: t, allowed: encode-set) {
+    value.print-to(encoder[w].{ out, allowed })
+  }
+
+  fn encode(s: string, allowed: encode-set): string {
+    let out = string-builder/new()
+    write-encoded(out.&, s, allowed)
+    out.take()
+  }
+
+  fn write-normalized[w: writer](out: w, s: string, allowed: encode-set, lower: bool) {
+    let i: size = 0
+    while i < s.len() {
+      let c = s.[i]
+      if c == '%' and escape-at(s, i) is :some v {
+        let d = v.as-char()
+        if encode-set:unreserved.keeps(d) out.write-char(if lower d.to-ascii-lower() else d)
+        else write-escape(out, v)
+        i = i + 3
+      } else {
+        if allowed.keeps(c) out.write-char(if lower c.to-ascii-lower() else c)
+        else write-escape(out, c.as-u8())
+        i = i + 1
+      }
+    }
+  }
+}
+
+ns form {
+  fn decode(s: string): string { percent/_decode(s, plus-is-space = true) }
+
+  fn decode-field(field: string): pair {
+    if field.index-of('=') is :some i {
+      .{ name = decode(field.take(i)), value = decode(field.drop(i + 1)) }
+    } else {
+      .{ name = decode(field), value = "" }
+    }
+  }
+
+  fn pairs(s: string): pair-iterator { .{ rest = s } }
+
+  type pair-iterator = { rest: string }
+
+  impl iterator[item = pair] for pair-iterator {
+    fn next(self: *self): ?item {
+      while self.rest.non-empty() {
+        let s = self.rest
+        let amp = s.index-of('&') ? s.len()
+        self.rest = s.drop(amp + 1)
+        if amp > 0 return :some decode-field(s.take(amp))
+      }
+      :none
+    }
+  }
+
+  fn push-field(out: *list[pair], straddling: *string-builder, piece: string) {
+    let field = if straddling.list.is-empty() piece else {
+      straddling.write(piece)
+      straddling.take()
+    }
+    if field.non-empty() { out.push(decode-field(field)) }
+  }
+
+  fn parse-chunks(chunks: span[span[u8]]): list[pair] {
+    let out = list/empty[pair]()
+    let straddling = string-builder/new()
+    for chunk in chunks {
+      let rest = string/wrap-bytes(chunk)
+      while rest.index-of('&') is :some i {
+        push-field(out.&, straddling.&, rest.take(i))
+        rest = rest.drop(i + 1)
+      }
+      if it-index + 1 == chunks.len() push-field(out.&, straddling.&, rest)
+      else straddling.write(rest)
+    }
+    out
+  }
+}

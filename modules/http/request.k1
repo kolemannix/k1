@@ -1,94 +1,6 @@
-type pair = { name: string, value: string }
-
-ns pairs {
-  fn find-by-name(pairs: span[pair], name: string): ?string {
-    for p in pairs { if p.name == name { return :some p.value } }
-    :none
-  }
-}
-
-ns percent {
-  fn decode(s: string, plus-is-space: bool): ?string {
-    if (not s.contains('%')) and (not (plus-is-space and s.contains('+'))) return :some s
-    let b = string-builder/new()
-    let i: size = 0
-    while i < s.len() {
-      let c = s.[i]
-      if c == '%' {
-        if i + 2 >= s.len() return :none
-        require s.[i + 1].to-ascii-hex-digit() is :some hi else { return :none }
-        require s.[i + 2].to-ascii-hex-digit() is :some lo else { return :none }
-        b.write-char((hi * 16 + lo).as-char())
-        i = i + 3
-      } else {
-        b.write-char(if plus-is-space and c == '+' ' ' else c)
-        i = i + 1
-      }
-    }
-    :some b.build()
-  }
-
-  fn is-unreserved(c: char): bool {
-    c.is-ascii-letter() or c.is-ascii-digit() or c == '-' or c == '.' or c == '_' or c == '~'
-  }
-
-  fn hex-digit(v: u8): char { "0123456789ABCDEF".[v.as-size()] }
-
-  fn encode-into[w: writer](s: string, w, keep-slash: bool) {
-    for c in s {
-      if is-unreserved(c) or (keep-slash and c == '/') {
-        w.write-char(c)
-      } else {
-        let b = c.u8()
-        w.write-char('%')
-        w.write-char(hex-digit(b / 16))
-        w.write-char(hex-digit(b % 16))
-      }
-    }
-  }
-
-  fn encode(s: string): string {
-    let b = string-builder/new()
-    encode-into(s, b.&, keep-slash = false)
-    b.build()
-  }
-}
-
-ns urlencoded {
-  fn push-field(out: *list[pair], straddling: *string-builder, piece: string) {
-    let field = if straddling.list.is-empty() piece else {
-      straddling.write(piece)
-      let joined = straddling.build()
-      straddling.reset()
-      joined
-    }
-    if field.is-empty() return
-    let eq = field.index-of('=')
-    let raw-name = if eq is :some i field.take(i) else field
-    let raw-value = if eq is :some i field.drop(i + 1) else ""
-    out.push(.{
-      name = percent/decode(raw-name, plus-is-space = true) ? raw-name,
-      value = percent/decode(raw-value, plus-is-space = true) ? raw-value,
-    })
-  }
-
-  fn parse-chunks(chunks: span[span[u8]]): list[pair] {
-    let out = list/empty[pair]()
-    let straddling = string-builder/new()
-    for chunk in chunks {
-      let rest = string/wrap-bytes(chunk)
-      while rest.index-of('&') is :some i {
-        push-field(out.&, straddling.&, rest.take(i))
-        rest = rest.drop(i + 1)
-      }
-      if it-index + 1 == chunks.len() push-field(out.&, straddling.&, rest)
-      else straddling.write(rest)
-    }
-    out
-  }
-
-  fn parse(s: string): list[pair] { parse-chunks(span/single(s.span-bytes())) }
-}
+use std/url
+use std/url/pair
+use std/url/percent
 
 ns cookie {
   fn parse(header: string): list[pair] {
@@ -96,8 +8,7 @@ ns cookie {
     for part in header.split-by-char(';') {
       let field = part.trim-ascii-space()
       if field.index-of('=') is :some i {
-        let raw = field.drop(i + 1)
-        out.push(.{ name = field.take(i), value = percent/decode(raw, plus-is-space = false) ? raw })
+        out.push(.{ name = field.take(i), value = percent/decode(field.drop(i + 1)) })
       }
     }
     out
@@ -116,7 +27,7 @@ ns cookie {
 
   fn set-header(name: string, value: string, attrs: attrs): string {
     let out = string-builder/new()
-    out.write("Set-Cookie: $name=${percent/encode(value)}; Path=${attrs.path}")
+    out.write("Set-Cookie: $name=${percent/encode(value, :unreserved)}; Path=${attrs.path}")
     if attrs.max-age is :some n { out.write("; Max-Age=$n") }
     if attrs.http-only { out.write("; HttpOnly") }
     if attrs.secure { out.write("; Secure") }
@@ -126,11 +37,20 @@ ns cookie {
 }
 
 ns for request {
-  fn query(self: request): span[pair] {
-    if self.header.url.index-of('?') is {
-      :some i -> urlencoded/parse(self.header.url.drop(i + 1)).as-span(),
-      :none -> span/empty(),
+  fn accepts-encoding(self: request, coding: string): bool {
+    require self.header.find("Accept-Encoding") is :some value else return false
+    for value.split-by-char(',') {
+      let params = it.split-by-char(';')
+      if not params.[0].trim-ascii-space().equals-ignore-ascii-case(coding) continue
+      for p in params.drop(1) {
+        let param = p.trim-ascii-space()
+        if param.starts-with("q=") or param.starts-with("Q=") {
+          return param.drop(2).exists(fn c. c != '0' and c != '.')
+        }
+      }
+      return true
     }
+    false
   }
 
   fn join-body-chunks(self: request): span[u8] {
@@ -143,7 +63,7 @@ ns for request {
   fn form(self: request): ?span[pair] {
     require self.header.find("Content-Type") is :some ct else { return :none }
     if not ct.starts-with("application/x-www-form-urlencoded") return :none
-    :some urlencoded/parse-chunks(self.body).as-span()
+    :some url/form/parse-chunks(self.body).as-span()
   }
 
   fn cookies(self: request): span[pair] {

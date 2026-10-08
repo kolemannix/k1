@@ -10,15 +10,17 @@ ns for waker {
 
 type pull[t] = either { chunk(span[span[t]]), pending, done, fail(string) }
 
-// The stream interface. Synchronous sources implement `next` and keep the
+type(alias) byte-source = dyn[source[t = u8]]
+
+// The stream interface. Synchronous sources implement `pull` and keep the
 // default no-op lifecycle; async sources also implement `start` (which
 // delivers the waker to call when a :pending source has data again) and
 // `stop` (which must release everything the source owns).
 // Erase to a storable handle with `.to-dyn()`.
 ability source[impl t] {
-  fn start(self: *self, _waker: waker) {}
-  fn next(self: *self): pull[t]
-  fn stop(self: *self) {}
+  fn start(_self: *self, _waker: waker) {}
+  fn pull(self: *self): pull[t]
+  fn stop(_self: *self) {}
 }
 
 // Consumes a stream chunk by chunk, then yields a single result value.
@@ -27,12 +29,18 @@ ability sink[impl t, impl out] {
   fn finish(self: *self): out
 }
 
+ability pipe[impl t, impl out] {
+  fn map(self: *self, group: span[span[t]], out: *list[span[out]])
+  fn finish(_self: *self, _out: *list[span[out]]) {}
+  fn retire(_self: *self) {}
+}
+
 // Constructors: `source/` is the place to look for ways to make a stream
 ns source {
   // A source over an in-memory span, yielding fixed-size chunks. Allocates its
   // cursor state in the ambient mode
   fn from-span[t](items: span[t], chunk-size: size): dyn[source[t = t]] {
-    let state: *buffer-source[t] = mem/new(.{
+    let state: *span-source[t] = mem/new(.{
       items,
       cursor = 0,
       chunk-size,
@@ -43,8 +51,8 @@ ns source {
 
   // One printed item per pull, rendered into a reused buffer: each element
   // becomes its own chunk (and so, downstream, its own SSE event or message)
-  fn from-items[t: print](items: span[t]): dyn[source[t = u8]] {
-    let state: *item-source[t] = mem/new(.{
+  fn from-printed[t: print](items: span[t]): byte-source {
+    let state: *print-source[t] = mem/new(.{
       items,
       cursor = 0,
       buf = list/empty[u8](),
@@ -53,11 +61,26 @@ ns source {
     state.to-dyn()
   }
 
+  fn once[t](group: span[span[t]]): dyn[source[t = t]] {
+    let state: *once-source[t] = mem/new(.{ group, done = false })
+    state.to-dyn()
+  }
+
+  fn through[t, out, p](upstream: dyn[source[t = t]], stage: p): dyn[source[t = out]] where p: pipe[t = t, out = out] {
+    let state: *piped[t, out, p] = mem/new(.{
+      upstream,
+      stage,
+      parts = list/empty[span[out]](),
+      finished = false,
+    })
+    state.to-dyn()
+  }
+
   // Drain a synchronous source through a sink, returning the sink's value.
   fn run-to[t, out, k](src: dyn[source[t = t]], into: *k): out where k: sink[t = t, out = out] {
     src.start(waker/noop())
     loop {
-      if src.next() is {
+      if src.pull() is {
         :chunk group -> for c in group { sink@(k)/receive(into, c) },
         :pending -> crash("run-to: source returned pending; drive async sources from an event loop"),
         :done -> break,
@@ -69,7 +92,7 @@ ns source {
   }
 }
 
-type buffer-source[t] = {
+type span-source[t] = {
   items: span[t],
   cursor: size,
   chunk-size: size,
@@ -77,8 +100,8 @@ type buffer-source[t] = {
   part: span[t],
 }
 
-impl[t] source[t = t] for buffer-source[t] {
-  fn next(self: *buffer-source[t]): pull[t] {
+impl[t] source[t = t] for span-source[t] {
+  fn pull(self: *span-source[t]): pull[t] {
     let remaining = self.items.len() - self.cursor
     if remaining == 0 { return :done }
     let n = remaining.min(self.chunk-size)
@@ -88,7 +111,53 @@ impl[t] source[t = t] for buffer-source[t] {
   }
 }
 
-type item-source[t] = {
+type piped[t, out, p] = {
+  upstream: dyn[source[t = t]],
+  stage: p,
+  parts: list[span[out]],
+  finished: bool,
+}
+
+impl[t, out, p: pipe[t = t, out = out]] source[t = out] for piped[t, out, p] {
+  fn start(self: *piped[t, out, p], waker: waker) { self.upstream.start(waker) }
+  fn stop(self: *piped[t, out, p]) {
+    pipe@(p)/retire(self.stage.&)
+    self.upstream.stop()
+  }
+  fn pull(self: *piped[t, out, p]): pull[out] {
+    self.parts.clear()
+    pipe@(p)/retire(self.stage.&)
+    if self.finished { return :done }
+    loop {
+      if self.upstream.pull() is {
+        :chunk group -> {
+          pipe@(p)/map(self.stage.&, group, self.parts.&)
+          if self.parts.non-empty() { return :chunk self.parts.as-span() }
+        },
+        :pending -> return :pending,
+        :done -> {
+          self.finished = true
+          pipe@(p)/finish(self.stage.&, self.parts.&)
+          if self.parts.non-empty() { return :chunk self.parts.as-span() }
+          return :done
+        },
+        :fail message -> return :fail message,
+      }
+    }
+  }
+}
+
+type once-source[t] = { group: span[span[t]], done: bool }
+
+impl[t] source[t = t] for once-source[t] {
+  fn pull(self: *once-source[t]): pull[t] {
+    if self.done { return :done }
+    self.done = true
+    :chunk self.group
+  }
+}
+
+type print-source[t] = {
   items: span[t],
   cursor: size,
   // rendering buffer, overwritten each pull
@@ -96,14 +165,39 @@ type item-source[t] = {
   part: span[u8],
 }
 
-impl[t: print] source[t = u8] for item-source[t] {
-  fn next(self: *item-source[t]): pull[u8] {
+impl[t: print] source[t = u8] for print-source[t] {
+  fn pull(self: *print-source[t]): pull[u8] {
     if self.cursor == self.items.len() { return :done }
     self.buf.clear()
     self.items.[self.cursor].print-to(self.buf.&)
     self.cursor = self.cursor + 1
     self.part = self.buf.as-span()
     :chunk span/wrap-single(self.part.&)
+  }
+}
+
+// Unwraps a stream of rc-bytes into the payload bytes, zero-copy. Each
+// handed-out payload is released when its group retires: on the following
+// pull, or at stop.
+type rc-byte-stream = { inflight: list[rc-bytes] }
+
+fn rc-byte-stream(upstream: dyn[source[t = rc-bytes]]): byte-source {
+  let stage: rc-byte-stream = .{ inflight = list/empty() }
+  source/through(upstream, stage)
+}
+
+impl pipe[t = rc-bytes, out = u8] for rc-byte-stream {
+  fn map(self: *rc-byte-stream, group: span[span[rc-bytes]], out: *list[span[u8]]) {
+    for seg in group {
+      for payload in seg {
+        self.inflight.push(payload)
+        out.push(payload.bytes())
+      }
+    }
+  }
+  fn retire(self: *rc-byte-stream) {
+    for payload in self.inflight { payload.release() }
+    self.inflight.clear()
   }
 }
 

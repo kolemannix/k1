@@ -3,7 +3,7 @@ use core/spill-list
 type spill-string[n: static size] = { bytes: spill-list[u8, n] }
 
 ns for spill-string {
-  fn new[n](): spill-string[n] { .{ bytes = spill-list/new() } }
+  fn new[n](): spill-string[n] { .0 }
 
   fn from-string[n](s: string): spill-string[n] {
     let out = new[n]()

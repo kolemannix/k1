@@ -111,8 +111,8 @@ ns pubsub {
   }
 
   impl[t] source[t = rc[t]] for subscription[t] {
-    fn next(self: *subscription[t]): pull[rc[t]] {
-      source@(channel[rc[t]])/next(self.chan)
+    fn pull(self: *subscription[t]): pull[rc[t]] {
+      source@(channel[rc[t]])/pull(self.chan)
     }
 
     fn start(self: *subscription[t], waker: waker) {

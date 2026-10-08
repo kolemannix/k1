@@ -111,9 +111,7 @@ ns for map {
     b
   }
 
-  fn new[k, v](): map[k, v] {
-    .{ count = 0, growth-left = 0, ctrl = buffer/empty(), entries = buffer/empty() }
-  }
+  fn new[k, v](): map[k, v] { .0 }
 
   fn _allocate[k, v, a: allocator](alloc: a, buckets: size): map[k, v] {
     .{
@@ -142,6 +140,7 @@ ns for map {
   fn len[k, v](self: *map[k, v]): size { self.count }
 
   fn is-empty[k, v](self: *map[k, v]): bool { self.count == 0 }
+  fn non-empty[k, v](self: *map[k, v]): bool { self.count != 0 }
 
   fn capacity[k, v](self: *map[k, v]): size { self.entries.len }
 
@@ -490,9 +489,7 @@ type set[t] = { inner: map[t, empty] }
 
 ns for set {
 
-  fn new[t](): set[t] {
-    .{ inner = map/new() }
-  }
+  fn new[t](): set[t] { .0 }
 
   fn with-capacity-in[t, a: allocator](alloc: a, min-capacity: size): set[t] {
     .{ inner = map/with-capacity-in[t, empty, _](alloc, min-capacity) }
@@ -518,7 +515,7 @@ ns for set {
 
   fn is-empty[t](self: *set[t]): bool { self.inner.is-empty() }
 
-  fn non-empty[t](self: *set[t]): bool { not self.inner.is-empty() }
+  fn non-empty[t](self: *set[t]): bool { self.inner.non-empty() }
 
   // true if the value was newly added
   fn add-in[t, a: allocator](self: *set[t], alloc: a, value: t): bool where t: hash, t: equals {
@@ -607,6 +604,7 @@ ns for fixmap {
   fn(inline) cap[k, v, n](self: *fixmap[k, v, n]): size { self._slots() - 1 }
   fn(inline) len[k, v, n](self: *fixmap[k, v, n]): size { self.count.as-size() }
   fn(inline) is-empty[k, v, n](self: *fixmap[k, v, n]): bool { self.count == 0 }
+  fn(inline) non-empty[k, v, n](self: *fixmap[k, v, n]): bool { self.count != 0 }
   fn(inline) is-full[k, v, n](self: *fixmap[k, v, n]): bool { self.len() == self.cap() }
 
   fn clear[k, v, n](self: *fixmap[k, v, n]) {
@@ -751,6 +749,7 @@ ns for fixset {
   fn(inline) cap[t, n](self: *fixset[t, n]): size { self.inner.cap() }
   fn(inline) len[t, n](self: *fixset[t, n]): size { self.inner.len() }
   fn(inline) is-empty[t, n](self: *fixset[t, n]): bool { self.inner.is-empty() }
+  fn(inline) non-empty[t, n](self: *fixset[t, n]): bool { self.inner.non-empty() }
   fn(inline) is-full[t, n](self: *fixset[t, n]): bool { self.inner.is-full() }
 
   fn clear[t, n](self: *fixset[t, n]) { self.inner.clear() }

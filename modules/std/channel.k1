@@ -117,7 +117,7 @@ ns for channel {
 
 impl[t] source[t = t] for channel[t] {
   fn start(self: *channel[t], waker: waker) { self.waker = :some waker }
-  fn next(self: *channel[t]): pull[t] {
+  fn pull(self: *channel[t]): pull[t] {
     if self.failure is :some message { return :fail message }
     if self.queue.is-empty() { return :pending }
     let item = self.queue.[0]

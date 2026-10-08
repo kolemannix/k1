@@ -36,6 +36,8 @@ ns for pool {
 
   fn is-empty[t](self: *pool[t]): bool { self.live == 0 }
 
+  fn non-empty[t](self: *pool[t]): bool { self.live != 0 }
+
   fn is-full[t](self: *pool[t]): bool {
     self.first-free == 0 and self.last-touched.as-size() == self.capacity()
   }

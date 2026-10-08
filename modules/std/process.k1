@@ -25,7 +25,7 @@ ns process {
           } else {
             w.write("'${f.program}' exited with code ${f.status.exit-code}")
           }
-          if not f.status.output.is-empty() {
+          if f.status.output.non-empty() {
             w.write(": ")
             w.write(f.status.output)
           }

@@ -1,63 +1,105 @@
-// Typed routing: $http/routing/define(name, entries) generates a route enum,
-// parse fns ((method, url) or header -> result[route, route-error]) and a
-// reverse url renderer. Matching is structural (trie descent over
-// literals/captures); captures parse only after a leaf's shape is confirmed,
-// via the from-string ability. route-error and split-path at the bottom are
-// the runtime pieces.
-
 ns routing {
 
 use core/meta/str-lit
 
-type method = either { get, head, post, put, delete, patch, options }
+type field = { name: string, ty: code }
 
-// One path segment of a route pattern. Payload = param name (text: the text).
-type seg = either {
-  text(string),
-  u64(string),
-  int(string),
-  str(string),
-  // Raw remainder incl. slashes (and a trailing slash); may be empty; must be
-  // the last segment, and its node may hold no other routes
-  rest(string),
-  // Any type implementing from-string + print; the name resolves where the
-  // generated code compiles
-  custom({ name: string, ty: string }),
+type seg = either { text(string), capture(field), rest(string) }
+
+type entry = {
+  method: string,
+  name: code-token,
+  pattern: string,
+  pattern-tok: code-token,
+  path: list[seg],
+  query: ?code,
 }
 
-type entry = { method: method, name: string, path: span[seg] }
-
-fn get(name: string, path: span[seg]): entry     { .{ method = :get,     name, path } }
-fn head(name: string, path: span[seg]): entry    { .{ method = :head,    name, path } }
-fn post(name: string, path: span[seg]): entry    { .{ method = :post,    name, path } }
-fn put(name: string, path: span[seg]): entry     { .{ method = :put,     name, path } }
-fn delete(name: string, path: span[seg]): entry  { .{ method = :delete,  name, path } }
-fn patch(name: string, path: span[seg]): entry   { .{ method = :patch,   name, path } }
-fn options(name: string, path: span[seg]): entry { .{ method = :options, name, path } }
-
-macro define(base-name: code, entries: span[entry]) {
-  define-impl(base-name.text, entries)
-}
-
-fn render-pattern(path: span[seg]): string {
-  if path.len() == 0 return "/"
-  let b = string-builder/new()
-  for s in path {
-    b.write("/")
-    if s is {
-      :text t -> b.write(t),
-      :u64 n -> b.write("{$n: u64}"),
-      :int n -> b.write("{$n: int}"),
-      :str n -> b.write("{$n: str}"),
-      :rest n -> b.write("*$n"),
-      :custom c -> b.write("{${c.name}: ${c.ty}}"),
+fn check-ident(at: code-token, s: string, what: string) {
+  if s.is-empty() at.fail("Empty $what")
+  if not s.[0].is-ascii-letter() at.fail("The $what `$s` must start with a letter")
+  for c in s {
+    if not (c.is-ascii-letter() or c.is-ascii-digit() or c == '-') {
+      at.fail("The $what `$s` is not a valid identifier")
     }
   }
-  b.build()
 }
 
-// Canonical suffix shape for reachability analysis: literal text is
-// significant, all capture kinds are interchangeable, method included
+fn parse-pattern(tok: code-token, pat: string): list[seg] {
+  if pat.is-empty() or pat.[0] != '/' tok.fail("A route pattern starts with `/`")
+  let segs = list/empty[seg]()
+  if pat == "/" return segs
+  let rest = pat.drop(1)
+  loop {
+    if rest.starts-with("{") {
+      require rest.index-of('}') is :some close else tok.fail("Unclosed `{` in `$pat`")
+      let inner = rest.slice(1, close)
+      require inner.index-of(':') is :some colon else tok.fail("Expected `{name: type}`, got `{${inner}}`")
+      let name = inner.take(colon).trim-ascii-space()
+      let ty = inner.drop(colon + 1).trim-ascii-space()
+      check-ident(tok, name, "param name")
+      if ty.is-empty() tok.fail("Param `$name` needs a type")
+      let ty-code = code-builder/new()
+      ty-code.write-spanned(ty, tok.source)
+      segs.push(:capture .{ name, ty = ty-code.build() })
+      rest = rest.drop(close + 1)
+      if rest.non-empty() and rest.[0] != '/' tok.fail("Expected `/` after `{${inner}}`")
+    } else {
+      let piece = rest.take(rest.index-of('/') ? rest.len())
+      rest = rest.drop(piece.len())
+      if piece.starts-with("*") {
+        check-ident(tok, piece.drop(1), "param name")
+        if rest.non-empty() tok.fail("The rest capture `$piece` must be the last segment")
+        segs.push(:rest piece.drop(1))
+      } else {
+        if piece.is-empty() tok.fail("Empty segment in `$pat`")
+        for c in piece {
+          if not std/url/percent/encode-set:unreserved.keeps(c) {
+            tok.fail("The literal segment `$piece` may only hold letters, digits and `-._~`")
+          }
+        }
+        segs.push(:text piece)
+      }
+    }
+    if rest.is-empty() break
+    rest = rest.drop(1)
+  }
+  if segs.len() > 16 tok.fail("A route pattern is at most 16 segments deep")
+  segs
+}
+
+fn parse-rows(rows: span[code-token]): list[entry] {
+  if rows.is-empty() crash("routing: no routes given")
+  let rd = token-cursor/new(rows)
+  let entries = list/empty[entry]()
+  while not rd.is-at-end() {
+    let m = rd.expect-ident()
+    if not ["get", "head", "post", "put", "delete", "patch", "options"].contains(m.text) {
+      m.fail("Expected a method (get, head, post, put, delete, patch, options), got `${m.text}`")
+    }
+    let name = rd.expect-ident()
+    check-ident(name, name.text, "route name")
+    let pat = rd.eat()
+    if (not (pat.kind is :string)) or pat.text.contains('$') or pat.text.contains('\\') {
+      pat.fail("Expected a plain pattern string like \"/game/{id: u64}/poke\", got `${pat.text}`")
+    }
+    let pattern = pat.text.slice(1, pat.text.len() - 1)
+    let path = parse-pattern(pat, pattern)
+    let query: ?code = if rd.eat-if-text-eq("?") {
+      let open = rd.expect("{")
+      let toks = rd.eat-until-close(open, "}")
+      if toks.is-empty() open.fail("`?{}` declares no query params")
+      let ty = code-builder/new()
+      ty.write("{ ")
+      ty.write-tokens(toks)
+      ty.write(" }")
+      :some ty.build()
+    } else :none
+    entries.push(.{ method = m.text, name, pattern, pattern-tok = pat, path, query })
+  }
+  entries
+}
+
 fn shape-suffix(e: entry, from: size): string {
   let b = string-builder/new()
   let j = from
@@ -69,53 +111,17 @@ fn shape-suffix(e: entry, from: size): string {
     }
     j = j + 1
   }
-  b.write("@${e.method.enum-name()}")
+  b.write("@${e.method}")
   b.build()
-}
-
-fn check-ident(s: string, what: string) {
-  if s.is-empty() crash("routing: empty $what")
-  if not s.[0].is-ascii-letter() crash("routing: $what `$s` must start with a letter")
-  for c in s {
-    if not (c.is-ascii-letter() or c.is-ascii-digit() or c == '-') {
-      crash("routing: $what `$s` is not a valid identifier")
-    }
-  }
 }
 
 fn validate(entries: span[entry]) {
   for en in entries {
-    check-ident(en.name, "route name")
-    if en.path.len() > 16 crash("routing: route `${en.name}` is deeper than 16 segments")
-    for seg in en.path {
-      if seg is {
-        :text t -> {
-          if t.is-empty() crash("routing: route `${en.name}` has an empty literal segment")
-          for c in t {
-            if (not c.is-ascii()) or c == '/' or c == '%' {
-              crash("routing: route `${en.name}` literal `$t` contains a forbidden character")
-            }
-          }
-        },
-        :rest n -> {
-          check-ident(n, "param name")
-          if it-index != en.path.len() - 1 {
-            crash("routing: route `${en.name}` has a rest segment that is not last")
-          }
-        },
-        :u64 n -> check-ident(n, "param name"),
-        :int n -> check-ident(n, "param name"),
-        :str n -> check-ident(n, "param name"),
-        :custom c -> check-ident(c.name, "param name"),
-      }
-    }
     let ps = params(en)
     for p in ps {
       let j = it-index + 1
       while j < ps.len() {
-        if ps.[j].name == p.name {
-          crash("routing: route `${en.name}` binds param `${p.name}` twice")
-        }
+        if ps.[j].name == p.name en.pattern-tok.fail("Route `${en.name.text}` binds param `${p.name}` twice")
         j = j + 1
       }
     }
@@ -124,82 +130,194 @@ fn validate(entries: span[entry]) {
     let outer = it-index
     for b in entries {
       if it-index > outer {
-        if a.name == b.name crash("routing: duplicate route name `${a.name}`")
+        if a.name.text == b.name.text b.name.fail("Duplicate route name `${b.name.text}`")
         if shape-suffix(a, 0) == shape-suffix(b, 0) {
-          crash("routing: routes `${a.name}` and `${b.name}` have the same method and shape")
+          b.pattern-tok.fail("Routes `${a.name.text}` and `${b.name.text}` have the same method and shape")
         }
       }
     }
   }
 }
 
-type param = { name: string, ty: string, idx: size, kind: either { parsed, str, rest } }
+type param = { name: string, ty: code, at: either { seg(size), rest } }
 
 fn params(e: entry): list[param] {
   let ps = list/empty[param]()
-  for seg in e.path {
+  for s in e.path {
     let j: size = it-index
-    if seg is {
+    if s is {
       :text _ -> .{},
-      :u64 n -> ps.push(.{ name = n, ty = "u64", idx = j, kind = :parsed }),
-      :int n -> ps.push(.{ name = n, ty = "int", idx = j, kind = :parsed }),
-      :str n -> ps.push(.{ name = n, ty = "string", idx = j, kind = :str }),
-      :rest n -> ps.push(.{ name = n, ty = "string", idx = j, kind = :rest }),
-      :custom c -> ps.push(.{ name = c.name, ty = c.ty, idx = j, kind = :parsed }),
+      :capture f -> ps.push(.{ name = f.name, ty = f.ty, at = :seg j }),
+      :rest n -> ps.push(.{ name = n, ty = code/from-string("string"), at = :rest }),
     }
   }
   ps
 }
 
-fn emit-leaf-body(cb: *code-builder, en: entry, d: size) {
-  let pat = render-pattern(en.path)
-  let payload = list/empty[string]()
-  for c in params(en) {
-    payload.push(c.name)
-    if c.kind is {
-      // The qualified form is required: `ty/from-string` only resolves for
-      // types whose ns declares it directly, not through an ability impl
-      :parsed -> cb.line(`require from-string@(${c.ty})/from-string(sd${c.idx}) is :ok ${c.name} else { return :err :bad-param .{ pattern = ${str-lit(pat)}, name = ${str-lit(c.name)}, ty = ${str-lit(c.ty)}, got = sd${c.idx} } }`),
-      :str -> cb.line("let ${c.name} = sd${c.idx}"),
-      :rest -> {
-        cb.line(`let rest-raw = if (not sp.more) and sp.count == $d "" else http/routing/tail-from(path, segs.[$d])`)
-        cb.line(`require http/percent/decode(rest-raw, plus-is-space = false) is :some ${c.name} else { return :err :bad-encoding .{ segment = rest-raw } }`)
-      },
-    }
+fn path-type(e: entry): code {
+  let cb = code-builder/new()
+  cb.write("{ ")
+  for c in params(e) {
+    if it-index > 0 cb.write(", ")
+    cb.write("${c.name}: ")
+    cb.write-code(c.ty)
   }
-  if payload.len() == 0 {
-    cb.line("return :ok :${en.name}")
-  } else {
-    cb.line("return :ok :${en.name} .{ ${string/join(payload, ", ")} }")
+  cb.write(" }")
+  cb.build()
+}
+
+fn payload-type(e: entry): ?code {
+  let has-path = params(e).non-empty()
+  if e.query is {
+    :none -> if has-path :some path-type(e) else :none,
+    :some q -> if has-path {
+      let cb = code-builder/new()
+      cb.write("_struct_combine[")
+      cb.write-code(path-type(e))
+      cb.write(", ")
+      cb.write-code(q)
+      cb.write("]")
+      :some cb.build()
+    } else :some q,
   }
 }
 
-// Leaf dispatch for routes terminating at depth `d`: method checks, capture
-// parses, and the 405 fallback
+fn struct-fields(id: types/type-id): span[{ name: string, type-id: types/type-id, offset: size }] {
+  if id.schema().as-struct() is :some st st.fields else span/empty()
+}
+
+fn from-string-line(cb: *code-builder, ty: types/type-id, src: string, name: string, out: string) {
+  if ty == types/id[string] {
+    cb.line("let $out = $src")
+  } else {
+    cb.line(`require from-string@(${ty.spell()})/from-string($src) is :ok $out else { return :err :bad-param .{ pattern, name = ${str-lit(name)}, ty = ${str-lit(ty.name())}, got = $src } }`)
+  }
+}
+
+fn parse-payload[t, n: static size](segs: span[string], u: std/url/url, pattern: string): result[t, route-error] {
+  #meta { payload-code(types/id[t], core/meta/static-type-to-value[_, n]()) }
+}
+
+fn payload-code(payload-id: types/type-id, n: size): code {
+  let fields = struct-fields(payload-id)
+  let cb-storage = code-builder/new()
+  let cb = cb-storage.&
+  for f in fields {
+    if it-index < n from-string-line(cb, f.type-id, "segs.[$it-index]", f.name, "v$it-index")
+  }
+  if fields.len() > n {
+    for f in fields {
+      if it-index >= n cb.line("let q$it-index: ?string = :none")
+    }
+    cb.block("for kv in u.query-pairs()", fn[cb, fields, n]. {
+      for f in fields {
+        let k = it-index
+        if k >= n {
+          cb.block(`if kv.name == ${str-lit(f.name)}`, fn[cb, f, k]. {
+            cb.line(`if q$k.is-some() { return :err :bad-param .{ pattern, name = ${str-lit(f.name)}, ty = ${str-lit(f.type-id.name())}, got = kv.value } }`)
+            cb.line("q$k = :some kv.value")
+          })
+        }
+      }
+    })
+  }
+  for f in fields {
+    let k = it-index
+    if k >= n {
+      if f.type-id.is-instance-of(types/id[opt]) {
+        let inner = f.type-id.instance-info().!.args.[0]
+        cb.block-close(`let v$k: ${f.type-id.spell()} = if q$k is :some qv$k`, "} else :none", fn[cb, k, inner, f]. {
+          from-string-line(cb, inner, "qv$k", f.name, "d$k")
+          cb.line(":some d$k")
+        })
+      } else {
+        cb.line(`require q$k is :some qv$k else { return :err :missing-param .{ pattern, name = ${str-lit(f.name)} } }`)
+        from-string-line(cb, f.type-id, "qv$k", f.name, "v$k")
+      }
+    }
+  }
+  cb.line(":ok .{")
+  for f in fields {
+    cb.line("${f.name} = v$it-index,")
+  }
+  cb.line("}")
+  cb.build()
+}
+
+fn write-query[t, n: static size, w: writer](v: t, w: w) {
+  #meta { query-print-code(types/id[t], core/meta/static-type-to-value[_, n]()) }
+}
+
+fn query-print-code(payload-id: types/type-id, n: size): code {
+  let cb-storage = code-builder/new()
+  let cb = cb-storage.&
+  cb.line(`let sep = "?"`)
+  for f in struct-fields(payload-id) {
+    if it-index >= n {
+      let lit = str-lit("${f.name}=")
+      if f.type-id.is-instance-of(types/id[opt]) {
+        cb.block(`if v.${f.name} is :some x`, fn[cb, lit]. {
+          cb.line("w.write(sep)")
+          cb.line("w.write($lit)")
+          cb.line("std/url/percent/write-encoded(w, x, :form)")
+          cb.line(`sep = "&"`)
+        })
+      } else {
+        cb.line("w.write(sep)")
+        cb.line("w.write($lit)")
+        cb.line("std/url/percent/write-encoded(w, v.${f.name}, :form)")
+        cb.line(`sep = "&"`)
+      }
+    }
+  }
+  cb.build()
+}
+
+fn emit-leaf-body(cb: *code-builder, en: entry, d: size) {
+  let srcs = list/empty[string]()
+  for c in params(en) {
+    srcs.push(if c.at is {
+      :seg i -> "sd$i",
+      :rest -> {
+        cb.line(`let rest = std/url/percent/decode(if (not sp.more) and sp.count == $d "" else http/routing/tail-from(path, segs.[$d]))`)
+        "rest"
+      },
+    })
+  }
+  if payload-type(en) is :some ty {
+    cb.pad()
+    cb.write("let payload = http/routing/parse-payload[")
+    cb.write-code(ty)
+    cb.write(`, ${srcs.len()}]([${string/join(srcs, ", ")}], u, ${str-lit(en.pattern)}).try`)
+    cb.write("\n")
+    cb.line("return :ok :${en.name.text} payload")
+  } else {
+    cb.line("return :ok :${en.name.text}")
+  }
+}
+
 fn emit-leafs(cb: *code-builder, entries: span[entry], idxs: list[size], d: size) {
   let head-present = {
     let found = false
-    for gi in idxs { if entries.[gi].method is :head { found = true } }
+    for gi in idxs { if entries.[gi].method == "head" { found = true } }
     found
   }
   for gi in idxs {
     let en = entries.[gi]
-    let cond = "method == http/llhttp/method:${en.method.enum-name().to-ascii-upper()}"
-    if en.method is :get and not head-present {
+    let cond = "method == http/llhttp/method:${en.method.to-ascii-upper()}"
+    if en.method == "get" and not head-present {
       cond = "$cond or method == http/llhttp/method:HEAD"
     }
     cb.block("if $cond", fn[cb, entries, gi, d]. emit-leaf-body(cb, entries.[gi], d))
   }
   let first = entries.[idxs.[0]]
   let allowed = list/empty[string]()
-  for gi in idxs { allowed.push(str-lit(entries.[gi].method.enum-name().to-ascii-upper())) }
-  cb.line(`return :err :bad-method .{ pattern = ${str-lit(render-pattern(first.path))}, allowed = [${string/join(allowed, ", ")}] }`)
+  for gi in idxs { allowed.push(str-lit(entries.[gi].method.to-ascii-upper())) }
+  cb.line(`return :err :bad-method .{ pattern = ${str-lit(first.pattern)}, allowed = [${string/join(allowed, ", ")}] }`)
 }
 
-// The has-a-segment-at-`d` branch: decode it, then literal edges (committing
-// is safe under the cover rule), then the capture edge
 fn emit-seg-edges(cb: *code-builder, entries: span[entry], group: list[size], d: size, lit-texts: list[string], caps: list[size]) {
-  cb.line(`require http/percent/decode(segs.[$d], plus-is-space = false) is :some sd$d else { return :err :bad-encoding .{ segment = segs.[$d] } }`)
+  cb.line(`let sd$d = std/url/percent/decode(segs.[$d])`)
   for t in lit-texts {
     let sub = list/empty[size]()
     for gi in group {
@@ -208,7 +326,7 @@ fn emit-seg-edges(cb: *code-builder, entries: span[entry], group: list[size], d:
     }
     cb.block("if sd$d == ${str-lit(t)}", fn[cb, entries, sub, d]. emit-node(cb, entries, sub, d + 1))
   }
-  if caps.len() > 0 {
+  if caps.non-empty() {
     emit-node(cb, entries, caps, d + 1)
   }
 }
@@ -228,12 +346,10 @@ fn emit-node(cb: *code-builder, entries: span[entry], group: list[size], d: size
     }
   }
 
-  if rests.len() > 0 and (exact.len() > 0 or caps.len() > 0 or lit-texts.len() > 0) {
-    crash("routing: a rest route shares a prefix with other routes: `${render-pattern(entries.[rests.[0]].path)}` would shadow or be shadowed by them")
+  if rests.non-empty() and (exact.non-empty() or caps.non-empty() or lit-texts.non-empty()) {
+    entries.[rests.[0]].pattern-tok.fail("A rest route shares a prefix with other routes: `${entries.[rests.[0]].pattern}` would shadow or be shadowed by them")
   }
 
-  // Reachability: taking a literal edge must never lose a URL that the capture
-  // edge could have matched, since the matcher commits to literals first
   for t in lit-texts {
     for ci in caps {
       let cshape = shape-suffix(entries.[ci], d + 1)
@@ -245,31 +361,29 @@ fn emit-node(cb: *code-builder, entries: span[entry], group: list[size], d: size
         }
       }
       if not covered {
-        crash("routing: route `${render-pattern(entries.[ci].path)}` is unreachable for URLs whose segment $d is `$t`: add the same route shape under `$t`, or remove the overlap")
+        entries.[ci].pattern-tok.fail("Route `${entries.[ci].pattern}` is unreachable for URLs whose segment $d is `$t`: add the same route shape under `$t`, or remove the overlap")
       }
     }
   }
 
-  if lit-texts.len() > 0 or caps.len() > 0 {
+  if lit-texts.non-empty() or caps.non-empty() {
     cb.block("if sp.more or sp.count > $d", fn[cb, entries, group, d, lit-texts, caps]. emit-seg-edges(cb, entries, group, d, lit-texts, caps))
   }
-  if exact.len() > 0 {
+  if exact.non-empty() {
     cb.block("if (not sp.more) and sp.count == $d", fn[cb, entries, exact, d]. emit-leafs(cb, entries, exact, d))
   }
-  if rests.len() > 0 {
+  if rests.non-empty() {
     emit-leafs(cb, entries, rests, d)
   } else {
     cb.line("return :err :not-found")
   }
 }
 
-fn emit-parse-fn(cb: *code-builder, base: string, entries: span[entry]) {
-  // Captures in the parsed route are views into the url's memory (the request
-  // arena): a route value must not outlive its request
-  cb.line("fn from-header(header: http/header): result[$base, http/routing/route-error] { parse(header.method, header.url) }")
-  cb.block("fn parse(method: http/llhttp/method, url: string): result[$base, http/routing/route-error]", fn[cb, entries]. {
-    cb.line(`if url.is-empty() or url.[0] != '/' { return :err :not-found }`)
-    cb.line(`let path = if url.position('?') is :some qi url.take(qi) else url`)
+fn emit-parse-fn(cb: *code-builder, base: code, entries: span[entry]) {
+  cb.line("fn parse-request(header: http/header): result[$base, http/routing/route-error] { parse(header.method, header.url) }")
+  cb.block("fn parse(method: http/llhttp/method, u: std/url/url): result[$base, http/routing/route-error]", fn[cb, entries]. {
+    cb.line(`let path = u.path()`)
+    cb.line(`if not path.starts-with("/") { return :err :not-found }`)
     cb.line(`let segs = array/zeroed[string, 16]()`)
     cb.line(`let sp = http/routing/split-path(path, segs.&)`)
     let all = list/empty[size]()
@@ -279,127 +393,92 @@ fn emit-parse-fn(cb: *code-builder, base: string, entries: span[entry]) {
 }
 
 fn emit-url-arm(cb: *code-builder, en: entry) {
-  if en.path.len() == 0 {
-    cb.line(`w.write("/")`)
-    return
-  }
-  let lit-run = string-builder/new()
+  let lit = string-builder/new()
+  if en.path.is-empty() lit.write("/")
   for s in en.path {
-    lit-run.write("/")
+    lit.write("/")
     if s is {
-      :text t -> lit-run.write(t),
-      _ -> {
-        cb.line("w.write(${str-lit(lit-run.build())})")
-        lit-run = string-builder/new()
-        if s is {
-          :u64 n -> cb.line("p.$n.print-to(w)"),
-          :int n -> cb.line("p.$n.print-to(w)"),
-          :str n -> cb.line("http/percent/encode-into(p.$n, w, keep-slash = false)"),
-          :rest n -> cb.line("http/percent/encode-into(p.$n, w, keep-slash = true)"),
-          :custom c -> {
-            cb.line("let b-${c.name} = string-builder/new()")
-            cb.line("p.${c.name}.print-to(b-${c.name}.&)")
-            cb.line("http/percent/encode-into(b-${c.name}.build(), w, keep-slash = false)")
-          },
-          :text _ -> .{},
-        }
+      :text t -> lit.write(t),
+      :capture f -> {
+        cb.line("w.write(${str-lit(lit.build())})")
+        lit.reset()
+        cb.line("std/url/percent/write-encoded(w, p.${f.name}, :segment)")
+      },
+      :rest n -> {
+        cb.line("w.write(${str-lit(lit.build())})")
+        lit.reset()
+        cb.line("std/url/percent/write-encoded(w, p.$n, :path)")
       },
     }
   }
-  let tail = lit-run.build()
-  if tail.non-empty() {
-    cb.line("w.write(${str-lit(tail)})")
+  let tail = lit.build()
+  if tail.non-empty() cb.line("w.write(${str-lit(tail)})")
+  if en.query is :some _ {
+    cb.pad()
+    cb.write("http/routing/write-query[")
+    cb.write-code(payload-type(en).!)
+    cb.write(", ${params(en).len()}, _](p, w)\n")
   }
 }
 
-fn emit-url-arms(cb: *code-builder, entries: span[entry]) {
-  for en in entries {
-    if params(en).len() == 0 {
-      cb.block-close(":${en.name} ->", "},", fn[cb, en]. emit-url-arm(cb, en))
-    } else {
-      cb.block-close(":${en.name} p ->", "},", fn[cb, en]. emit-url-arm(cb, en))
-    }
-  }
-}
-
-fn emit-url-match(cb: *code-builder, entries: span[entry]) {
-  cb.block("if self is", fn[cb, entries]. emit-url-arms(cb, entries))
-}
-
-fn emit-url-fn(cb: *code-builder, base: string, entries: span[entry]) {
-  cb.block("fn url[w: writer](self: $base, w)", fn[cb, entries]. emit-url-match(cb, entries))
-}
-
-fn emit-url-string-fn(cb: *code-builder, base: string) {
-  cb.block("fn url-string(self: $base): string", fn[cb]. {
-    cb.line(`let b = string-builder/new()`)
-    cb.line(`self.url(b.&)`)
-    cb.line(`b.build()`)
+fn emit-print-impl(cb: *code-builder, base: code, entries: span[entry]) {
+  cb.block("impl print for $base", fn[cb, base, entries]. {
+    cb.block("fn print-to[w: writer](self: $base, w)", fn[cb, entries]. {
+      cb.block("if self is", fn[cb, entries]. {
+        for en in entries {
+          let arm: code = if (payload-type(en) is :none) ":${en.name.text} ->" else ":${en.name.text} p ->"
+          cb.block-close(arm, "},", fn[cb, en]. emit-url-arm(cb, en))
+        }
+      })
+    })
   })
 }
 
-fn define-impl(base: string, entries: span[entry]): code {
-  check-ident(base, "route type name")
-  if entries.len() == 0 crash("routing: no routes given")
+macro define(base: code, rows: span[code-token]) {
+  let entries = parse-rows(rows).as-span()
   validate(entries)
 
   let cb-storage = code-builder/new()
   let cb = cb-storage.&
 
-  let variants = list/empty[string]()
+  cb.write-code("type $base = either { ")
   for en in entries {
-    let caps = params(en)
-    if caps.len() == 0 {
-      variants.push(en.name)
-    } else {
-      let fields = list/empty[string]()
-      for c in caps { fields.push("${c.name}: ${c.ty}") }
-      variants.push("${en.name}({ ${string/join(fields, ", ")} })")
+    if it-index > 0 cb.write(", ")
+    cb.write-token(en.name)
+    if payload-type(en) is :some ty {
+      cb.write("(")
+      cb.write-code(ty)
+      cb.write(")")
     }
   }
-  cb.line("type $base = either { ${string/join(variants, ", ")} }")
+  cb.write(" }\n")
 
-  cb.block("ns for $base", fn[cb, base, entries]. {
-    emit-parse-fn(cb, base, entries)
-    emit-url-fn(cb, base, entries)
-    emit-url-string-fn(cb, base)
-  })
+  cb.block("ns for $base", fn[cb, base, entries]. emit-parse-fn(cb, base, entries))
+  emit-print-impl(cb, base, entries)
 
   cb.build()
 }
 
 type route-error = either {
   not-found,
-  bad-encoding({ segment: string }),
   bad-param({ pattern: string, name: string, ty: string, got: string }),
+  missing-param({ pattern: string, name: string }),
   bad-method({ pattern: string, allowed: span[string] }),
 }
 
-// Splits a query-stripped path ("/a/b") into segment views, dropping one
-// trailing empty segment. more=true means segments beyond 16 exist (only a
-// rest route can match such a path)
 fn split-path(path: string, out: *array[string, 16]): { count: size, more: bool } {
   let count: size = 0
-  let start: size = 1
-  let i: size = 1
-  let n = path.len()
-  while i <= n {
-    if i == n or path.[i] == '/' {
-      if i == n and i == start {
-        .{} // trailing slash: drop the final empty segment
-      } else {
-        if count == 16 { return .{ count = 16, more = true } }
-        out.[count] = path.slice(start, i)
-        count = count + 1
-      }
-      start = i + 1
-    }
-    i = i + 1
+  let rest = path.drop(1)
+  while rest.non-empty() {
+    let end = rest.index-of('/') ? rest.len()
+    if count == 16 { return .{ count = 16, more = true } }
+    out.[count] = rest.take(end)
+    count = count + 1
+    rest = rest.drop(end + 1)
   }
   .{ count, more = false }
 }
 
-// The raw remainder of path starting at segment `seg` (a view into path)
 fn tail-from(path: string, seg: string): string {
   path.drop(seg.data-ptr().diff(path.data-ptr()))
 }

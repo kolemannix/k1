@@ -2,61 +2,56 @@ ns work {
   fn init-work-queue(uv-loop: *uv-loop) {
     let queue: *uv-work-queue = heap.new(.{
       uv-loop,
-      async-handle = heap.alloc-t[uv/async],
-      mutex = heap.alloc-t[uv/mutex],
-      submissions = list/empty[uv-work-submission](),
+      async-handle = heap.alloc-t[libuv/async],
+      submissions = uninit,
     })
-  
-    uv/check(uv/mutex_init(queue.mutex)).!
-    uv/check(uv/async_init(uv-loop, queue.async-handle, drain-work-queue.&)).!
-  
+    queue.submissions.init(list/empty[uv-work-submission]())
+    uv/check(libuv/async_init(uv-loop, queue.async-handle, drain-work-queue.&)).!
+
     queue.async-handle.set-data(queue)
-    uv/unref(queue.async-handle.as-handle())
+    libuv/unref(queue.async-handle.as-handle())
     work-queue = queue.as[ptr]
   }
-  
-  fn submit-work(req: *uv/work, work-cb: uv/work_cb, after-cb: uv/after_work_cb) {
+
+  fn submit-work(req: *libuv/work, work-cb: libuv/work_cb, after-cb: libuv/after_work_cb) {
     if work-queue.is-null() {
       crash("uv work queue not initialized")
     }
     let queue = work-queue.narrow[*uv-work-queue]
-  
-    uv/mutex_lock(queue.mutex)
-    queue.submissions.push-in(heap, .{ req, work-cb, after-cb })
-    uv/mutex_unlock(queue.mutex)
-  
-    uv/check(uv/async_send(queue.async-handle)).!
+
+    uv/locked(queue.submissions, submissions, {
+      submissions.push-in(heap, .{ req, work-cb, after-cb })
+    })
+
+    uv/check(libuv/async_send(queue.async-handle)).!
   }
-  
+
   type uv-work-submission = {
-    req: *uv/work,
-    work-cb: uv/work_cb,
-    after-cb: uv/after_work_cb,
+    req: *libuv/work,
+    work-cb: libuv/work_cb,
+    after-cb: libuv/after_work_cb,
   }
-  
+
   type uv-work-queue = {
     *uv-loop,
-    async-handle: *uv/async,
-    mutex: *uv/mutex,
-    submissions: list[uv-work-submission],
+    async-handle: *libuv/async,
+    submissions: uv/mutex[list[uv-work-submission]],
   }
-  
+
   let(mutable) work-queue: ptr = ptr/null
-  
-  fn drain-work-queue(handle: *uv/async) {
+
+  fn drain-work-queue(handle: *libuv/async) {
     let queue = handle.get-data[uv-work-queue]()
     loop {
-      uv/mutex_lock(queue.mutex)
-      if queue.submissions.is-empty() {
-        uv/mutex_unlock(queue.mutex)
-        break
-      }
-  
-      for submission in queue.submissions {
-        uv/check(uv/queue_work(queue.uv-loop, submission.req, submission.work-cb, submission.after-cb)).!
-      }
-      queue.submissions.clear()
-      uv/mutex_unlock(queue.mutex)
+      let drained = uv/locked(queue.submissions, submissions, {
+        for submission in submissions.* {
+          uv/check(libuv/queue_work(queue.uv-loop, submission.req, submission.work-cb, submission.after-cb)).!
+        }
+        let drained = submissions.len()
+        submissions.clear()
+        drained
+      })
+      if drained == 0 break
     }
   }
 }

@@ -1,0 +1,119 @@
+ns url_test
+
+use std/url
+use std/url/pair
+use std/url/percent
+use std/url/form
+
+fn p(s: string): url/url { url/parse(s).! }
+
+fn test-parse() {
+  let u = p("https://user:pw@Example.com:8080/a%20b/c?x=1&y=a+b#frag")
+  assert(u.scheme() == :some "https")
+  assert(u.authority() == :some "user:pw@Example.com:8080")
+  assert(u.userinfo() == :some "user:pw")
+  assert(u.host() == :some "Example.com")
+  assert(u.port() == :some 8080)
+  assert-equals(u.path(), "/a%20b/c")
+  assert(u.query() == :some "x=1&y=a+b")
+  assert(u.fragment() == :some "frag")
+  let raw = "/a/b?c"
+  assert(p(raw).text.data-ptr() == raw.data-ptr())
+
+  let o = p("/game/42?")
+  assert(o.scheme() is :none and o.host() is :none and o.query() == :some "" and o.fragment() is :none)
+  assert-equals(o.path(), "/game/42")
+  let v6 = p("http://[::1]:/x")
+  assert(v6.host() == :some "[::1]" and v6.port() is :none)
+  assert(p("file:///etc").host() == :some "" and p("mailto:a@b").path() == "a@b" and p("mailto:a@b").userinfo() is :none)
+  assert(p("*").path() == "*" and p("").path() == "")
+  assert(p("/q?{\"a\":1}|^").query() == :some "{\"a\":1}|^")
+
+  assert(url/parse("1a:b") is :err e1 and e1.kind is :invalid-scheme)
+  assert(url/parse("a%20:b") is :err e2 and e2.kind is :invalid-scheme)
+  assert(url/parse("http://h:65536/") is :err e3 and e3.kind is :invalid-port)
+  assert(url/parse("http://h:8x/") is :err e4 and e4.kind is :invalid-port)
+  assert(url/parse("http://a b/") is :err e5 and e5.kind is :invalid-host)
+  assert(url/parse("http://h%zz/") is :err e6 and e6.pos == 8)
+  assert(url/parse("http://[::1]x/") is :err e7 and e7.kind is :invalid-host)
+  assert(url/parse("/a b") is :err e8 and e8.kind is :invalid-char and e8.pos == 2)
+  assert-equals("${url/parse("/a\nb").as-err().!}", "invalid character at byte 2")
+
+  let segs = list/empty[string]()
+  for p("/a%2Fb//c%20d/").path-segments() { segs.push(it) }
+  assert-equals(segs.len(), 4)
+  assert(segs.[0] == "a/b" and segs.[1] == "" and segs.[2] == "c d" and segs.[3] == "")
+  let none = p("").path-segments()
+  assert(none.&.next() is :none)
+
+  assert(pair/find(p("/?a=1&b=x+y%26&&c").query-pairs(), "b") == :some "x y&")
+  assert(pair/find(p("/?a=1&c").query-pairs(), "c") == :some "")
+  assert(pair/find(p("/").query-pairs(), "a") is :none)
+  assert-equals(p("/x").show(), "/x")
+}
+
+fn test-resolve() {
+  let base = p("http://a/b/c/d;p?q")
+  for [
+    "g:h", "g:h", "g", "http://a/b/c/g", "./g", "http://a/b/c/g", "g/", "http://a/b/c/g/",
+    "/g", "http://a/g", "//g", "http://g", "?y", "http://a/b/c/d;p?y", "g?y", "http://a/b/c/g?y",
+    "#s", "http://a/b/c/d;p?q#s", "g#s", "http://a/b/c/g#s", ";x", "http://a/b/c/;x", "", "http://a/b/c/d;p?q",
+    ".", "http://a/b/c/", "./", "http://a/b/c/", "..", "http://a/b/", "../g", "http://a/b/g",
+    "../..", "http://a/", "../../g", "http://a/g", "../../../g", "http://a/g", "/./g", "http://a/g",
+    "g.", "http://a/b/c/g.", "..g", "http://a/b/c/..g", "./../g", "http://a/b/g", "g/./h", "http://a/b/c/g/h",
+    "g/../h", "http://a/b/c/h", "g;x=1/../y", "http://a/b/c/y", "http:g", "http:g",
+  ].chunks(2) {
+    assert-equals(base.resolve(p(it.[0])).text, it.[1])
+  }
+  assert-equals(p("http://h").resolve(p("x")).text, "http://h/x")
+  assert-equals(p("/a/b").resolve(p("../c?d")).text, "/c?d")
+}
+
+fn test-normalize() {
+  assert-equals(p("HTTP://User@Ex%41mple.COM:80/a/./b/../%7e%2fc?q=%7a%zz\"é#f\"g").normalized().text,
+    "http://User@example.com/a/~%2Fc?q=z%25zz%22%C3%A9#f%22g")
+  assert-equals(p("https://h:443").normalized().text, "https://h/")
+  assert-equals(p("https://h:8443/").normalized().text, "https://h:8443/")
+  assert-equals(p("../a/./b").normalized().text, "../a/./b")
+}
+
+fn test-build() {
+  let b = url/builder/new()
+  b.scheme("https")
+  b.host("example.com")
+  b.port(8443)
+  b.segment("a b/c")
+  b.segment(42)
+  b.query-pair("q", "x&y=1 2+")
+  b.query-pair("n", 7)
+  b.fragment("top here")
+  let u = b.build()
+  assert-equals(u.text, "https://example.com:8443/a%20b%2Fc/42?q=x%26y%3D1+2%2B&n=7#top%20here")
+  assert(pair/find(u.query-pairs(), "q") == :some "x&y=1 2+")
+
+  let r = url/builder/new()
+  r.path("/files/a b/%41")
+  r.query("raw=1")
+  r.query-pair("k", "v")
+  assert-equals(r.build().text, "/files/a%20b/A?raw=1&k=v")
+
+  assert-equals(percent/encode("a/b é~", :unreserved), "a%2Fb%20%C3%A9~")
+  assert-equals(percent/encode("a/b:c@d e", :path), "a/b:c@d%20e")
+  assert-equals(percent/decode("%2f%C3%A9+%zz%2"), "/é+%zz%2")
+  assert-equals(form/decode("a+b%2B"), "a b+")
+}
+
+fn test-form() {
+  let straddled = form/parse-chunks(["a=1&lo".span-bytes(), "ng=x%2".span-bytes(), "0y&b=2".span-bytes(), "&c".span-bytes()])
+  assert-equals(straddled.len(), 4)
+  assert(pair/find(straddled.as-span(), "long") == :some "x y")
+  assert(pair/find(straddled.as-span(), "c") == :some "")
+}
+
+fn test() {
+  test-parse()
+  test-resolve()
+  test-normalize()
+  test-build()
+  test-form()
+}

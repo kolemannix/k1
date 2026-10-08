@@ -1,22 +1,39 @@
 use core/arena
-use libuv/uv
-use libuv/uv/uv-loop
-use libuv/uv-request
-use libuv/uv-handle
-use libuv/uv-stream
+use uv/libuv
+use uv/libuv/uv-loop
+use uv/req
+use uv/handle
+use uv/stream
 use std/source
-use std/pubsub
-use std/notify
-use std/rc-bytes
+use std/pull
+use std/byte-source
 use std/pool
+use std/posix
 
-ns server {
+type server = {
+  server/config,
+  *uv-loop,
+  listener: libuv/tcp,
+  sigint: libuv/signal,
+  sigterm: libuv/signal,
+  drain-timer: libuv/timer,
+  scratch: *arena,
+  scratch-prepare: libuv/prepare,
+  port: u16,
+  handler: dyn[fn(http/request) -> http-response],
+  connections: pool[server/connection],
+  draining: bool,
+  conn-serial: u64,
+}
+
+ns for server {
 
 type config = {
   host: string,
   port: u16,
   accept-queue-len: i32,
   max-connections: size,
+  max-body-size: size,
   header-timeout-ms: u64,
   body-timeout-ms: u64,
   write-timeout-ms: u64,
@@ -25,43 +42,19 @@ type config = {
   handle-signals: bool,
 }
 
-type services = {
-  *uv-loop,
-  bus: *pubsub/bus[span[u8]],
-}
-
-type server = {
-  config,
-  *uv-loop,
-  services: *services,
-  listener: uv/tcp,
-  sigint: uv/signal,
-  sigterm: uv/signal,
-  drain-timer: uv/timer,
-  scratch: *arena,
-  scratch-prepare: uv/prepare,
-  port: u16,
-  handle: dyn[fn(http/request, *services) -> http-response],
-  connections: pool[connection],
-  draining: bool,
-  conn-serial: u64,
-}
-
 fn start(
   config: config,
-  handle: dyn[fn(http/request, *services) -> http-response]
-): result[*server, uv/errno] {
-  let l = uv/default_loop().get()
-  uv/thread_setname("mainthread\0".data-ref-byte())
+  handler: dyn[fn(http/request) -> http-response]
+): result[*server, libuv/errno] {
+  let l = libuv/default_loop().get()
+  libuv/thread_setname("mainthread\0".data-ref-byte())
   work/init-work-queue(l)
-  let services = init-services(l)
-  let scratch = core/arena/init-default()
+  let scratch = core/arena/init(8 * core/arena/mb)
   scratch.set-name("loop-scratch")
 
   let s: *server = heap.new(.{
     config,
     uv-loop = l,
-    services,
     listener = uninit,
     sigint = uninit,
     sigterm = uninit,
@@ -69,287 +62,313 @@ fn start(
     scratch,
     scratch-prepare = uninit,
     port = config.port,
-    handle,
+    handler,
     connections = pool/with-capacity-in[connection, _](heap, config.max-connections),
     draining = false,
     conn-serial = 0,
   })
 
-  uv/check(uv/tcp_init(l, s.listener.&)).try
+  uv/check(libuv/tcp_init(l, s.listener.&)).try
   s.listener.&.set-data(s)
 
-  let addr: uv/sockaddr_in = uninit
-  uv/check(uv/ip4_addr(config.host.to-c().ptr.ref[u8], config.port.widen[i32], addr.&)).try
-  uv/check(uv/tcp_bind(s.listener.&, addr.&.as[ptr].narrow(), 0)).try
-  uv/check(uv/listen(s.listener.&.as-stream(), config.accept-queue-len, on-new-connection.&)).try
+  let addr: libuv/sockaddr_in = uninit
+  uv/check(libuv/ip4_addr(config.host.to-c().ptr.ref[u8], config.port.widen[i32], addr.&)).try
+  uv/check(libuv/tcp_bind(s.listener.&, addr.&.as[ptr].narrow(), 0)).try
+  uv/check(libuv/listen(s.listener.&.as-stream(), config.accept-queue-len, on-new-connection.&)).try
 
-  let bound: uv/sockaddr_in = uninit
-  let bound-len: i32 = types/size[uv/sockaddr_in].trunc[i32]
-  if uv/tcp_getsockname(s.listener.&, bound.&.as[ptr].narrow(), bound-len.&) == 0 {
+  let bound: libuv/sockaddr_in = uninit
+  let bound-len: i32 = types/size[libuv/sockaddr_in].trunc[i32]
+  if libuv/tcp_getsockname(s.listener.&, bound.&.as[ptr].narrow(), bound-len.&) == 0 {
     s.port = ((bound.sin_port & 0xff) << 8) | (bound.sin_port >> 8)
   }
 
-  uv/check(uv/prepare_init(l, s.scratch-prepare.&)).!
+  uv/check(libuv/prepare_init(l, s.scratch-prepare.&)).!
   s.scratch-prepare.&.set-data(s)
-  uv/check(uv/prepare_start(s.scratch-prepare.&, fn p. p.get-data[server]().scratch.reset())).!
-  uv/unref(s.scratch-prepare.&.as-handle())
+  uv/check(libuv/prepare_start(s.scratch-prepare.&, fn p. p.get-data[server]().scratch.reset())).!
+  libuv/unref(s.scratch-prepare.&.as-handle())
 
   if config.handle-signals {
-    install-signal(s, s.sigint.&, 2)
-    install-signal(s, s.sigterm.&, 15)
+    s.install-signal(s.sigint.&, posix/SIGINT)
+    s.install-signal(s.sigterm.&, posix/SIGTERM)
   }
   :ok s
 }
 
-fn install-signal(s: *server, handle: *uv/signal, signum: i32) {
-  uv/check(uv/signal_init(s.uv-loop, handle)).!
-  handle.set-data(s)
-  uv/check(uv/signal_start(handle, fn(h, _signum) { stop(h.get-data[server]()) }, signum)).!
+fn install-signal(*self, handle: *libuv/signal, signum: i32) {
+  uv/check(libuv/signal_init(self.uv-loop, handle)).!
+  handle.set-data(self)
+  uv/check(libuv/signal_start(handle, fn(h, _signum) { h.get-data[server]().stop() }, signum)).!
 }
 
-fn run(s: *server) {
+fn run(*self) {
   let outer-tmp = mem/tmp()
-  mem/set-tmp-arena(s.scratch)
-  uv/run(s.uv-loop, :UV_RUN_DEFAULT)
+  mem/set-tmp-arena(self.scratch)
+  libuv/run(self.uv-loop, :UV_RUN_DEFAULT)
   mem/set-tmp-arena(outer-tmp)
-  s.scratch.release()
+  self.scratch.release()
 }
 
-fn stop(s: *server) {
-  if s.draining return
-  s.draining = true
-  tprintln("server stopping; draining ${s.connections.len()} connections")
-  uv/close(s.listener.&.as-handle(), fn _h. .{})
-  uv/close(s.scratch-prepare.&.as-handle(), fn _h. .{})
-  if s.config.handle-signals {
-    uv/close(s.sigint.&.as-handle(), fn _h. .{})
-    uv/close(s.sigterm.&.as-handle(), fn _h. .{})
+fn stop(*self) {
+  if self.draining return
+  self.draining = true
+  tprintln("server stopping; draining ${self.connections.len()} connections")
+  libuv/close(self.listener.&.as-handle(), fn _h. .{})
+  libuv/close(self.scratch-prepare.&.as-handle(), fn _h. .{})
+  if self.config.handle-signals {
+    libuv/close(self.sigint.&.as-handle(), fn _h. .{})
+    libuv/close(self.sigterm.&.as-handle(), fn _h. .{})
   }
-  uv/check(uv/timer_init(s.uv-loop, s.drain-timer.&)).!
-  s.drain-timer.&.set-data(s)
-  if s.connections.is-empty() {
-    uv/close(s.drain-timer.&.as-handle(), fn _h. .{})
-    return
-  }
+  if self.connections.is-empty() return
 
-  for s.connections.& {
-    let conn = s.connections.get(it)
+  for self.connections.& {
+    let conn = self.connections.get(it)
     if conn.phase is {
-      :idle or :header or :body -> close-connection(conn),
-      :handling -> .{},
-      :writing parked -> if parked { close-connection(conn) },
+      :idle or :header or :body or :parked -> conn.close(),
+      :handling or :writing or :closing -> .{},
     }
   }
-  let _ = uv/timer_start(s.drain-timer.&, fn t. {
+  uv/check(libuv/timer_init(self.uv-loop, self.drain-timer.&)).!
+  self.drain-timer.&.set-data(self)
+  self.drain-timer.&.start(fn t. {
     let s = t.get-data[server]()
     tprintln("drain deadline passed; closing ${s.connections.len()} connections")
-    for s.connections.& { close-connection(s.connections.get(it)) }
-    uv/close(t.as-handle(), fn _h. .{})
-  }, s.config.drain-timeout-ms, 0)
+    for s.connections.& { s.connections.get(it).close() }
+    libuv/close(t.as-handle(), fn _h. .{})
+  }, self.config.drain-timeout-ms, 0)
 }
 
-fn on-connection-closed(s: *server) {
-  if s.draining and s.connections.is-empty() and uv/is_active(s.drain-timer.&.as-handle()).as-bool() {
-    uv/timer_stop(s.drain-timer.&)
-    uv/close(s.drain-timer.&.as-handle(), fn _h. .{})
-  }
-}
-
-// The bus is loop-agnostic: publishes fire a notify that pokes a uv_async,
-// whose main-thread callback drives bus.dispatch().
-fn init-services(uv-loop: *uv-loop): *services {
-  let async-handle = heap.alloc-t[uv/async]
-  // Fail a subscriber once 1MB of payload is queued and undelivered: a
-  // client that isn't draining its socket would otherwise grow it forever
-  let bus = pubsub/create[span[u8]](
-    on-event = .{ state = async-handle.as[ptr], notify-fn = notify-pubsub-async.& },
-    subscriber-cap-weight = 1048576,
-    weight-fn = fn(payload: rc-bytes) payload.bytes().len(),
-  )
-  uv/check(uv/async_init(uv-loop, async-handle, dispatch-pubsub.&)).!
-  async-handle.set-data(bus)
-  uv/unref(async-handle.as-handle())
-  heap.new(.{ uv-loop, bus })
-}
-
-fn notify-pubsub-async(state: ptr) {
-  uv/check(uv/async_send(state.ref[uv/async]())).!
-}
-
-fn dispatch-pubsub(handle: *uv/async) {
-  handle.get-data[pubsub/bus[span[u8]]]().dispatch()
-}
-
-type phase = either { header, body, handling, writing(bool), idle }
+type phase = either { header, body, handling, writing, parked, idle, closing }
 
 type connection = {
   *server,
-  connection-arena: *arena,
-  // Inline uv handle storage: a by-value copy is a dead handle libuv never
-  // sees, so always go through client() and timer()
-  client-storage: uv/tcp,
-  timer-storage: uv/timer,
+  client-storage: libuv/tcp,
+  timer-storage: libuv/timer,
+  write-storage: libuv/write,
+  work-storage: libuv/work,
   serial-no: u64,
-  handle: pool/handle[connection],
+  slot: pool/handle[connection],
   pending-closes: u32,
   phase: phase,
-  close-state: {
-    lock: uv/mutex,
-    // Someone has called close-connection() and uv/close()
-    is-closing: bool,
-    // The worker thread should do no work
-    // And call close-connection in the after work cb
-    should-close: bool,
-  },
-  current-work: ?*uv/work,
 
   request-arena: *arena,
+  request-start: core/arena-mark,
   request-parser: http/parser,
 
-  // The source being drained by response-writer/, stopped on finish or close
-  active-stream: ?dyn[source[t = u8]],
+  active-stream: ?byte-source,
   parsed-header: ?http/header,
 }
 
 ns for connection {
   fn make(s: *server): *connection {
-    let connection-arena = core/arena/init-default()
-    connection-arena.set-name("connection")
-    let request-arena: *arena = core/arena/init-default()
+    let request-arena: *arena = core/arena/init(8 * core/arena/mb)
     request-arena.set-name("request")
     s.conn-serial = s.conn-serial + 1
-    let handle = s.connections.acquire(.{
+    let slot = s.connections.acquire(.{
       server = s,
-      connection-arena,
       client-storage = uninit,
       timer-storage = uninit,
+      write-storage = uninit,
+      work-storage = uninit,
       serial-no = s.conn-serial,
-      handle = .0,
+      slot = .0,
       pending-closes = 0,
       phase = :header,
-      close-state = .{
-        lock = uninit,
-        is-closing = false,
-        should-close = false,
-      },
-      current-work = :none,
 
       request-arena,
+      request-start = .0,
       active-stream = :none,
       request-parser = uninit,
       parsed-header = :none,
     })
-    let conn = s.connections.get(handle)
-    conn.handle = handle
+    let conn = s.connections.get(slot)
+    conn.slot = slot
     conn.request-parser = http/parser-init[connection](
-      connection-arena = connection-arena,
+      state-arena = request-arena,
       request-arena = request-arena,
       user-data = conn,
       on-header-complete = on-complete-http-header.&,
       on-body-complete = on-complete-http-body.&,
+      max-body-size = s.config.max-body-size,
     )
+    conn.request-start = request-arena.mark()
 
-    uv/check(uv/mutex_init(conn.close-state.lock.&)).!
-    uv/check(uv/tcp_init(s.uv-loop, conn.client())).!
+    uv/check(libuv/tcp_init(s.uv-loop, conn.client())).!
     conn.client().set-data(conn)
-    uv/tcp_nodelay(conn.client(), 1)
+    libuv/tcp_nodelay(conn.client(), 1)
 
-    uv/check(uv/timer_init(s.uv-loop, conn.timer())).!
+    uv/check(libuv/timer_init(s.uv-loop, conn.timer())).!
     conn.timer().set-data(conn)
+    conn.write-req().set-data(conn)
     conn
   }
 
-  fn release(self: *connection) {
+  fn release(*self) {
     let s = self.server
     self.request-arena.release()
-    self.connection-arena.release()
-    uv/mutex_destroy(self.close-state.lock.&)
-    s.connections.release(self.handle)
+    s.connections.release(self.slot)
     tprintln("conn${self.serial-no} released; active connections: ${s.connections.len()}")
-    on-connection-closed(s)
+    if s.draining and s.connections.is-empty() and libuv/is_active(s.drain-timer.&.as-handle()).as-bool() {
+      s.drain-timer.&.stop()
+      libuv/close(s.drain-timer.&.as-handle(), fn _h. .{})
+    }
   }
 
-  fn finish-request(self: *connection) {
-    tprintln("finish-request")
-    if self.server.draining or not self.parsed-header.!.keep-alive {
-      close-connection(self)
-    } else {
-      self.current-work = :none
-      self.parsed-header = :none
-      self.request-arena.reset()
-      self.request-parser.reset()
-      self.enter(:idle)
-      if uv/check(uv/read_start(self.client().as-stream(), alloc-read-buffer.&, on-client-read.&)).result() is :err e {
-        tprintln("read restart error: $e")
-        close-connection(self)
+  fn finish-request(*self) {
+    self.stop-stream()
+    if self.server.draining or not (self.parsed-header is :some h and h.keep-alive) {
+      self.close()
+      return
+    }
+    self.parsed-header = :none
+    self.request-arena.pop-to-mark(self.request-start)
+    self.request-parser.reset()
+    self.enter-phase(:idle)
+    self.client().read-stop()
+    if self.client().read-start(alloc-read-buffer.&, on-client-read.&) is :err e {
+      tprintln("read restart error: $e")
+      self.close()
+    }
+  }
+
+  fn enter-phase(*self, phase) {
+    core/assert(not (self.phase is :closing))
+    self.phase = phase
+    let c = self.server.config
+    let deadline-ms = if phase is {
+      :header -> c.header-timeout-ms,
+      :body -> c.body-timeout-ms,
+      :writing -> c.write-timeout-ms,
+      :idle -> c.idle-timeout-ms,
+      :handling or :parked or :closing -> 0,
+    }
+    if deadline-ms == 0 self.timer().stop() else self.timer().start(on-timeout.&, deadline-ms, 0)
+  }
+
+  fn close(*self) {
+    if self.phase is :closing { return }
+    let handling = self.phase is :handling
+    self.enter-phase(:closing)
+    tprintln("conn${self.serial-no} closing")
+    self.stop-stream()
+    if handling {
+      if uv/check(libuv/cancel(self.work-req().as-req())) is :err e { tprintln("handler already running: $e") }
+      return
+    }
+    self.close-handles()
+  }
+
+  fn close-handles(*self) {
+    self.pending-closes = 2
+    libuv/close(self.client().as-handle(), on-handle-closed.&)
+    libuv/close(self.timer().as-handle(), on-handle-closed.&)
+  }
+
+  fn stop-stream(*self) {
+    if self.active-stream is :some s {
+      self.active-stream = :none
+      s.stop()
+    }
+  }
+
+  fn begin-response(*self, resp: http-response) {
+    mem/push-arena(self.request-arena)
+    defer { mem/pop-arena() }
+    let out = string-builder/with-capacity(1024)
+    out.write("HTTP/1.1 ${resp.status} ${response/status-text(resp.status)}\r\n")
+    if resp.content-type.non-empty() out.write("Content-Type: ${resp.content-type}\r\n")
+    for h in resp.extra-headers { out.write("$h\r\n") }
+    let body = if resp.body is {
+      :complete segments -> {
+        if response/may-have-content(resp.status) {
+          let total: size = 0
+          for seg in segments { total = total + seg.len() }
+          out.write("Content-Length: $total\r\n")
+        }
+        out.write("\r\n")
+        source/once(segments)
+      },
+      :stream source -> {
+        out.write("Transfer-Encoding: chunked\r\n\r\n")
+        source || chunked
+      },
+    }
+    let headers = out.take()
+
+    self.active-stream = :some body
+    body.start(.{ state = self.as[ptr], wake-fn = on-wake.& })
+
+    let group = if body.pull() is {
+      :chunk group -> group,
+      :pending or :done -> span/empty(),
+      :fail message -> {
+        tprintln("stream failed on first pull: $message")
+        self.close()
+        return
+      },
+    }
+    let first = list/with-capacity[span[u8]](group.len() + 1)
+    first.push(headers.span-bytes())
+    first.append-span(group)
+    self.write-group(first.as-span())
+    if resp.body is :stream _ and not (self.phase is :closing) {
+      if self.client().read-start(alloc-read-buffer.&, on-hangup-read.&) is :err e {
+        tprintln("hangup watch error: $e")
+        self.close()
       }
     }
   }
 
-  fn enter(self: *connection, phase: phase) {
-    self.phase = phase
-    let c = self.server.config
-    let deadline: u64 = if phase is {
-      :header -> c.header-timeout-ms,
-      :body -> c.body-timeout-ms,
-      :handling -> 0,
-      :writing parked -> if parked 0 else c.write-timeout-ms,
-      :idle -> c.idle-timeout-ms,
-    }
-    if deadline == 0 {
-      let _ = uv/timer_stop(self.timer())
-    } else {
-      let _ = uv/timer_start(self.timer(), on-timeout.&, deadline, 0)
+  fn write-group(*self, group: span[span[u8]]) {
+    self.enter-phase(:writing)
+    if self.client().write(self.write-req(), group, on-write-complete.&) is :err e {
+      tprintln("response write failed: $e")
+      self.close()
     }
   }
 
-  fn get-close-state-sync(self: *connection): { is-closing: bool, should-close: bool } {
-    uv/mutex_lock(self.close-state.lock.&)
-    let state = .{ is-closing = self.close-state.is-closing, should-close = self.close-state.should-close }
-    uv/mutex_unlock(self.close-state.lock.&)
-    state
-  }
-  fn set-is-closing-sync(self: *connection, is-closing: bool) {
-    uv/mutex_lock(self.close-state.lock.&)
-    self.close-state.is-closing = is-closing
-    uv/mutex_unlock(self.close-state.lock.&)
-  }
-  fn set-should-close-sync(self: *connection, should-close: bool) {
-    uv/mutex_lock(self.close-state.lock.&)
-    self.close-state.should-close = should-close
-    uv/mutex_unlock(self.close-state.lock.&)
+  fn pump(*self) {
+    mem/push-arena(self.request-arena)
+    defer { mem/pop-arena() }
+    if self.active-stream.!.pull() is {
+      :chunk group -> self.write-group(group),
+      :pending -> self.enter-phase(:parked),
+      :done -> self.finish-request(),
+      :fail message -> {
+        tprintln("stream failed: $message")
+        self.close()
+      },
+    }
   }
 
-  fn client(self: *connection): *uv/tcp { self.client-storage.& }
-  fn client-handle(self: *connection): *uv/handle { self.client().as-handle() }
-  fn timer(self: *connection): *uv/timer { self.timer-storage.& }
+  fn client(*self): *libuv/tcp { self.client-storage.& }
+  fn timer(*self): *libuv/timer { self.timer-storage.& }
+  fn write-req(*self): *libuv/write { self.write-storage.& }
+  fn work-req(*self): *libuv/work { self.work-storage.& }
 }
 
-fn on-timeout(t: *uv/timer) {
+fn on-write-complete(req: *libuv/write, status: i32) {
+  let connection = req.get-data[connection]()
+  if connection.phase is :closing { return }
+  if status != 0 {
+    tprintln("response write failed: ${libuv/errno/from-i32(status).enum-name()}")
+    connection.close()
+    return
+  }
+  connection.pump()
+}
+
+fn on-wake(state: ptr) {
+  let connection = state.ref[connection]()
+  if connection.phase is :parked { connection.pump() }
+}
+
+fn on-timeout(t: *libuv/timer) {
   let conn = t.get-data[connection]()
   tprintln("conn${conn.serial-no} timed out")
-  close-connection(conn)
+  conn.close()
 }
 
-fn close-connection(conn: *connection) {
-  if conn.close-state.is-closing { return }
-  conn.set-is-closing-sync(true)
-  tprintln("close-connection ${conn.serial-no}")
-  if conn.active-stream is :some s {
-    conn.active-stream = :none
-    s.stop()
-  }
-  if conn.current-work is :some work {
-    if uv/check(uv/cancel(work.as-request())).result() is :err e {
-      tprintln("failed cancel work: $e")
-    }
-  }
-  conn.pending-closes = 2
-  uv/close(conn.client-handle(), on-handle-closed.&)
-  uv/close(conn.timer().as-handle(), on-handle-closed.&)
-}
-
-fn on-handle-closed(h: *uv/handle) {
+fn on-handle-closed(h: *libuv/handle) {
   let conn = h.get-data[connection]()
   conn.pending-closes = conn.pending-closes - 1
   if conn.pending-closes == 0 { conn.release() }
@@ -363,185 +382,135 @@ type http-handler-work = {
 
 let(mutable, tls) worker-scratch: ptr = ptr/null
 
-fn do-work(req: *uv/work) {
-  let work: *http-handler-work = req.get-data()
+fn reset-worker-scratch() {
   if worker-scratch.is-null() {
-    let scratch = core/arena/init-default()
+    let scratch = core/arena/init(8 * core/arena/mb)
     scratch.set-name("worker-scratch")
     worker-scratch = scratch.as[ptr]
     mem/set-tmp-arena(scratch)
   }
   worker-scratch.ref[arena].reset()
-
-  let close-state = work.connection.get-close-state-sync()
-  if close-state.is-closing or close-state.should-close {
-    tprintln("connection closing; skipping handler")
-    return
-  }
-
-  let response = mem/with-arena(
-    work.connection.request-arena,
-    (work.connection.server.handle)(work.request, work.connection.server.services)
-  )
-  work.http-response = :some response
-  .{}
 }
 
-fn after-do-work(req: *uv/work, status: i32) {
+fn do-work(req: *libuv/work) {
   let work: *http-handler-work = req.get-data()
-  work.connection.current-work = :none
-  defer { heap.free-t(req) }
+  reset-worker-scratch()
+  work.http-response = :some mem/with-arena(
+    work.connection.request-arena,
+    (work.connection.server.handler)(work.request)
+  )
+}
 
-  if status != 0 { return }
-
+fn after-do-work(req: *libuv/work, _status: i32) {
+  let work: *http-handler-work = req.get-data()
   let connection = work.connection
-  let close-state = connection.get-close-state-sync()
-  if close-state.is-closing {
-    abandon-response(work)
+  if connection.phase is :closing {
+    if work.http-response is :some response and response.body is :stream s { s.stop() }
+    connection.close-handles()
     return
   }
-  if close-state.should-close {
-    abandon-response(work)
-    close-connection(connection)
-    return
-  }
-
-  require work.http-response is :some response else {
-    crash("[bug] handler did not set work.http-response")
-  }
-  response-writer/begin(connection, response)
-  .{}
+  connection.begin-response(work.http-response.!)
 }
 
-// A handler response that will never be delivered: release any stream source
-// it carries, which response-writer/begin never got the chance to start.
-fn abandon-response(work: *http-handler-work) {
-  if work.http-response is :some response {
-    if response.body is :stream s { s.stop() }
-  }
-}
-
-fn alloc-read-buffer(handle: *uv/handle, suggested-size: usize, buf: *uv/buf) {
+fn alloc-read-buffer(handle: *libuv/handle, suggested-size: usize, buf: *libuv/buf) {
   let connection = handle.get-data[connection]()
   let byte-buffer = connection.request-arena.alloc-buffer[u8](suggested-size.signed())
-  buf.* = uv/buf/wrap-buffer(byte-buffer)
+  buf.* = libuv/buf/wrap-buffer(byte-buffer)
 }
 
-fn queue-http-handler(connection: *connection, request: http/request) {
-  let work: *http-handler-work = connection.request-arena.push(.{
-    connection,
-    request,
-    http-response = :none,
-  })
-  let work-req = heap.alloc-t[uv/work]
-  work-req.set-data(work)
-  if uv/check(uv/queue_work(connection.server.uv-loop, work-req, do-work.&, after-do-work.&)).result() is :err e {
-    tprintln("uv_queue_work for request handler failed: $e")
-    close-connection(connection)
-  } else {
-    core/assert(connection.current-work is :none)
-    connection.current-work = :some work-req
-    connection.enter(:handling)
-    // No reads while a request is in flight: the worker owns the request
-    // arena, and the paused parser isn't ticked again until finish-request
-    let _ = uv/read_stop(connection.client().as-stream())
-  }
-}
-
-fn on-client-read(client: *uv/stream, nread: size, buf: *uv/buf) {
+fn on-client-read(client: *libuv/stream, nread: size, buf: *libuv/buf) {
+  if nread == 0 return
   let connection = client.get-data[connection]()
   if nread < 0 {
-    let uv-errno = uv/errno/from-i32(nread.trunc[i32])
-    if uv-errno is {
-      :UV_EOF or :UV_ECONNRESET -> {
-        if connection.current-work is :none {
-          close-connection(connection)
-        } else {
-          connection.set-should-close-sync(true)
-        }
-      },
-      _ -> {
-        tprintln("read error: ${uv-errno.enum-name()}")
-        close-connection(connection)
-      }
-    }
+    tprintln("conn${connection.serial-no} read ended: ${libuv/errno/from-i32(nread.trunc[i32]).enum-name()}")
+    connection.close()
     return
   }
-
-  if nread > 0 {
-    if connection.phase is :idle { connection.enter(:header) }
-    let chunk-bytes = span/wrap-raw[byte](buf.base.inner, nread)
-    if http/tick(connection.request-parser.&, chunk-bytes) is {
-      :ok -> .{},
-      :paused leftover -> {
-        if leftover > 0 {
-          // Pipelined bytes we'll never parse: answer the in-flight request,
-          // then close so the client retries on a fresh connection
-          tprintln("client pipelined $leftover unparsed bytes; closing after response")
-          if connection.parsed-header is :some h {
-            connection.parsed-header = :some (h | .{ keep-alive = false })
-          }
+  if connection.phase is :idle { connection.enter-phase(:header) }
+  if http/tick(connection.request-parser.&, span/wrap-raw[byte](buf.base.inner, nread)) is {
+    :ok -> .{},
+    :paused leftover -> {
+      if leftover > 0 {
+        tprintln("client pipelined $leftover unparsed bytes; closing after response")
+        if connection.parsed-header is :some h {
+          connection.parsed-header = :some (h | .{ keep-alive = false })
         }
-      },
-      :fail e -> {
-        tprintln("http parse error ${e.enum-name()}; closing connection")
-        close-connection(connection)
-      },
-    }
+      }
+    },
+    :reject status -> {
+      tprintln("conn${connection.serial-no} rejected with $status; closing after response")
+      if connection.parsed-header is :some h {
+        connection.parsed-header = :some (h | .{ keep-alive = false })
+      }
+      connection.client().read-stop()
+      connection.begin-response(response/text(status, "${response/status-text(status)}\n"))
+    },
+    :fail e -> {
+      tprintln("http parse error ${e.enum-name()}; closing connection")
+      connection.close()
+    },
   }
-  .{}
 }
 
-fn on-complete-http-header(connection: *connection, header: http/header): http/header-action {
+fn on-hangup-read(client: *libuv/stream, nread: size, _buf: *libuv/buf) {
+  if nread == 0 return
+  let connection = client.get-data[connection]()
+  if nread > 0 tprintln("client sent $nread bytes during a streamed response; closing")
+  connection.close()
+}
+
+fn on-complete-http-header(connection: *connection, header: http/header) {
   connection.parsed-header = :some header
-  connection.enter(:body)
-  :proceed
+  connection.enter-phase(:body)
 }
 
 fn on-complete-http-body(connection: *connection, chunks: span[span[u8]]) {
-  let request: http/request = .{
-    header = connection.parsed-header.get(),
-    body = chunks
-  }
-  queue-http-handler(connection, request)
+  let work: *http-handler-work = connection.request-arena.push(.{
+    connection,
+    request = .{ header = connection.parsed-header.get(), body = chunks },
+    http-response = :none,
+  })
+  connection.work-req().set-data(work)
+  connection.client().read-stop()
+  uv/check(libuv/queue_work(connection.server.uv-loop, connection.work-req(), do-work.&, after-do-work.&)).!
+  connection.enter-phase(:handling)
 }
 
-fn on-new-connection(listener: *uv/stream, status: i32) {
+fn on-new-connection(listener: *libuv/stream, status: i32) {
   if status < 0 {
-    tprintln("new connection error: ${uv/errno/from-i32(status)}")
+    tprintln("new connection error: ${libuv/errno/from-i32(status)}")
     return
   }
   let s = listener.as-handle().get-data[server]()
   if s.connections.is-full() {
-    // Over capacity: accept so the listener keeps going, answer 503, close
-    let client: *uv/tcp = heap.alloc-t()
-    uv/check(uv/tcp_init(s.uv-loop, client)).!
-    if uv/check(uv/accept(listener, client.as-stream())).result() is :err e {
+    let client: *libuv/tcp = heap.alloc-t()
+    uv/check(libuv/tcp_init(s.uv-loop, client)).!
+    if uv/check(libuv/accept(listener, client.as-stream())) is :err e {
       tprintln("accept error while rejecting: $e")
     } else {
       tprintln("at ${s.connections.capacity()} connections; rejecting")
       let response = "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
-      let buf = uv/buf/wrap-span(response.span-bytes())
-      let _ = uv/try_write(client.as-stream(), buf.&, 1)
+      let buf = libuv/buf/wrap-span(response.span-bytes())
+      let written = libuv/try_write(client.as-stream(), buf.&, 1)
+      if written < 0 { tprintln("503 write failed: ${libuv/errno/from-i32(written)}") }
     }
-    uv/close(client.as-handle(), fn closed. heap.free-t(closed.as[ptr].ref[uv/tcp]))
+    libuv/close(client.as-handle(), fn closed. heap.free-t(closed.as[ptr].ref[libuv/tcp]))
     return
   }
   let connection = connection/make(s)
   let client = connection.client()
 
-  if uv/check(uv/accept(listener, client.as-stream())).result() is :err e {
+  if uv/check(libuv/accept(listener, client.as-stream())) is :err e {
     tprintln("accept error: $e")
-    close-connection(connection)
+    connection.close()
     return
   }
-  uv/tcp_keepalive_ex(client, 1, idle = 60, intvl = 10, cnt = 3)
-  connection.enter(:header)
-  if uv/check(uv/read_start(client.as-stream(), alloc-read-buffer.&, on-client-read.&)).result() is :err e {
+  libuv/tcp_keepalive_ex(client, 1, idle = 60, intvl = 10, cnt = 3)
+  connection.enter-phase(:header)
+  if client.read-start(alloc-read-buffer.&, on-client-read.&) is :err e {
     tprintln("read start error: $e")
-    close-connection(connection)
+    connection.close()
   }
-  .{}
 }
 
 }
@@ -550,9 +519,9 @@ macro tprintln(arg: code) {
   if params.tlog `tprintln-log($arg)` else `.{}`
 }
 fn tprintln-log[t: print](t) {
-  let thread-self = uv/thread_self()
+  let thread-self = libuv/thread_self()
   let thread-name-buf = array/zeroed[u8, 256]()
-  let _rc = uv/thread_getname(thread-self.&, thread-name-buf.data-ref(), thread-name-buf.len().unsigned())
+  let _rc = libuv/thread_getname(thread-self.&, thread-name-buf.data-ref(), thread-name-buf.len().unsigned())
   let thread-name = string/wrap-c(thread-name-buf.data-ptr())
   eprintln("[$thread-name] $t")
 }

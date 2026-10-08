@@ -6,6 +6,7 @@ fn test-all() {
   test-bitfield()
   utf8_test/test()
   json_test/test()
+  url_test/test()
   html_test/test()
   flag_sum_test/test()
   simd_test/test()

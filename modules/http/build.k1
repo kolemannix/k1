@@ -2,7 +2,7 @@ use std/process
 
 fn module(_b: k1/build-config): k1/module {
   let m = k1/module/new()
-  m.dep("libuv")
+  m.dep("uv")
   m.lib("llhttp", :static)
   m.setup(outputs = ["libs/libllhttp.a", "llhttp.k1"], inputs = ["vendor"])
   m

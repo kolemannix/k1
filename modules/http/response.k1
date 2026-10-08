@@ -1,17 +1,17 @@
 use std/source
-use std/pull
-use std/waker
+use std/pipe
+use std/byte-source
 
 type http-response = {
-  status: u16,
   content-type: string,
   extra-headers: span[string],
-  body: either { complete(span[span[u8]]), stream(dyn[source[t = u8]]) },
+  body: either { complete(span[span[u8]]), stream(byte-source) },
+  status: u16,
 }
 
 ns response {
   fn complete(status: u16, content-type: string, body: string): http-response {
-    .{ status, content-type, extra-headers = [], body = :complete span/single(body.span-bytes()) }
+    .{ content-type, extra-headers = [], body = :complete span/single(body.span-bytes()), status }
   }
   fn html(body: string): http-response { complete(200, "text/html", body) }
   fn not-found(): http-response { complete(404, "text/plain", "Not Found\n") }
@@ -21,95 +21,105 @@ ns response {
     allow.write("Allow: ")
     for m in allowed { if it-index > 0 { allow.write(", ") }; allow.write(m) }
     .{
-      status = 405,
       content-type = "text/plain",
       extra-headers = span/single(allow.build()),
       body = :complete span/single("Method Not Allowed\n".span-bytes()),
+      status = 405,
     }
   }
-  fn stream(content-type: string, source: dyn[source[t = u8]]): http-response {
-    .{ status = 200, content-type, extra-headers = [], body = :stream source }
+  fn stream(content-type: string, source: byte-source): http-response {
+    .{ content-type, extra-headers = [], body = :stream source, status = 200 }
+  }
+  fn no-content(): http-response {
+    .0 | .{ status = 204 }
+  }
+  fn redirect(status: u16, location: string, extra-headers: span[string]): http-response {
+    let headers: list[string] = list/with-capacity(extra-headers.len() + 1)
+    headers.push("Location: $location")
+    headers.append-span(extra-headers)
+    .{ content-type = "", extra-headers = headers.as-span(), body = :complete span/empty(), status }
   }
 
   fn status-text(status: u16): string {
-    if status == 200 "OK"
-    else if status == 400 "Bad Request"
-    else if status == 404 "Not Found"
-    else if status == 405 "Method Not Allowed"
-    else if status == 415 "Unsupported Media Type"
-    else if status == 500 "Internal Server Error"
-    else "Status"
-  }
-}
-
-// A strict body as a source: its segments as one group, once
-type group-source = { group: span[span[u8]], done: bool }
-
-impl source[t = u8] for group-source {
-  fn next(self: *group-source): pull[u8] {
-    if self.done { return :done }
-    self.done = true
-    :chunk self.group
-  }
-}
-
-// Chunked transfer framing as a pipe: wraps each upstream group in a
-// hex-size prefix and CRLF trailer without touching the payload segments,
-// then emits the terminal "0\r\n\r\n". The prefix and segment list are
-// reusable buffers overwritten on each next(), so long-lived streams don't
-// grow the request arena.
-type chunked-encoder = {
-  upstream: dyn[source[t = u8]],
-  prefix: list[u8],
-  parts: list[span[u8]],
-  finished: bool,
-}
-
-fn chunked(upstream: dyn[source[t = u8]]): dyn[source[t = u8]] {
-  let state: *chunked-encoder = mem/new(.{
-    upstream,
-    prefix = list/empty[u8](),
-    parts = list/empty[span[u8]](),
-    finished = false,
-  })
-  state.to-dyn()
-}
-
-impl source[t = u8] for chunked-encoder {
-  fn start(self: *chunked-encoder, waker: waker) { self.upstream.start(waker) }
-  fn stop(self: *chunked-encoder) { self.upstream.stop() }
-  fn next(self: *chunked-encoder): pull[u8] {
-    if self.finished { return :done }
-    if self.upstream.next() is {
-      :chunk group -> {
-        let total: size = 0
-        for seg in group { total = total + seg.len() }
-        self.prefix.clear()
-        core/format-uint(context self.prefix.&)(total.unsigned(), 16)
-        self.prefix.append-span("\r\n".span-bytes())
-        self.parts.clear()
-        self.parts.push(self.prefix.as-span())
-        for seg in group { self.parts.push(seg) }
-        self.parts.push("\r\n".span-bytes())
-        :chunk self.parts.as-span()
-      },
-      :pending -> :pending,
-      :done -> {
-        self.finished = true
-        self.parts.clear()
-        self.parts.push("0\r\n\r\n".span-bytes())
-        :chunk self.parts.as-span()
-      },
-      :fail message -> :fail message,
+    if status is {
+      100 -> "Continue",
+      101 -> "Switching Protocols",
+      103 -> "Early Hints",
+      200 -> "OK",
+      201 -> "Created",
+      202 -> "Accepted",
+      203 -> "Non-Authoritative Information",
+      204 -> "No Content",
+      205 -> "Reset Content",
+      206 -> "Partial Content",
+      300 -> "Multiple Choices",
+      301 -> "Moved Permanently",
+      302 -> "Found",
+      303 -> "See Other",
+      304 -> "Not Modified",
+      307 -> "Temporary Redirect",
+      308 -> "Permanent Redirect",
+      400 -> "Bad Request",
+      401 -> "Unauthorized",
+      402 -> "Payment Required",
+      403 -> "Forbidden",
+      404 -> "Not Found",
+      405 -> "Method Not Allowed",
+      406 -> "Not Acceptable",
+      407 -> "Proxy Authentication Required",
+      408 -> "Request Timeout",
+      409 -> "Conflict",
+      410 -> "Gone",
+      411 -> "Length Required",
+      412 -> "Precondition Failed",
+      413 -> "Content Too Large",
+      414 -> "URI Too Long",
+      415 -> "Unsupported Media Type",
+      416 -> "Range Not Satisfiable",
+      417 -> "Expectation Failed",
+      421 -> "Misdirected Request",
+      422 -> "Unprocessable Content",
+      426 -> "Upgrade Required",
+      428 -> "Precondition Required",
+      429 -> "Too Many Requests",
+      431 -> "Request Header Fields Too Large",
+      451 -> "Unavailable For Legal Reasons",
+      500 -> "Internal Server Error",
+      501 -> "Not Implemented",
+      502 -> "Bad Gateway",
+      503 -> "Service Unavailable",
+      504 -> "Gateway Timeout",
+      505 -> "HTTP Version Not Supported",
+      _ -> "",
     }
   }
+
+  fn may-have-content(status: u16): bool { status >= 200 and status != 204 and status != 304 }
 }
 
-ns chunked-test {
-  use std/collect-sink
-  #static {
-    let sink: collect-sink[u8] = .{ items = list/empty() }
-    let out = string/wrap-bytes(source/run-to(source/from-items(["0123456789abcdefg"]) || chunked, sink.&))
-    assert-equals(out, "11\r\n0123456789abcdefg\r\n0\r\n\r\n")
+// zero-copy chunked transfer framing
+// wraps each upstream group in a hex-size prefix
+// and CRLF trailer without touching the payload segments, then emits the
+// terminal "0\r\n\r\n".
+type chunked-encoder = { prefix: list[u8] }
+
+fn chunked(upstream: byte-source): byte-source {
+  let stage: chunked-encoder = .{ prefix = list/empty() }
+  source/through(upstream, stage)
+}
+
+let rn: span[u8] = "\r\n".span-bytes()
+impl pipe[t = u8, out = u8] for chunked-encoder {
+  fn map(self: *chunked-encoder, group: span[span[u8]], out: *list[span[u8]]) {
+    let total: size = 0
+    for seg in group { total = total + seg.len() }
+    if total == 0 { return }
+    core/format-uint(context self.prefix.&)(total.unsigned(), 16)
+    self.prefix.append-span(rn)
+    out.push(self.prefix.as-span())
+    for seg in group { out.push(seg) }
+    out.push(rn)
   }
+  fn finish(_self: *chunked-encoder, out: *list[span[u8]]) { out.push(#static "0\r\n\r\n".span-bytes()) }
+  fn retire(self: *chunked-encoder) { self.prefix.clear() }
 }

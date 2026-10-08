@@ -20,7 +20,7 @@ impl[w: writer] writer for escaper[w] {
     let start: size = 0
     for b in bytes {
       let e = entity(b)
-      if e.len() > 0 {
+      if e.non-empty() {
         self.out.write-bytes(bytes.slice(start, it-index))
         self.out.write-string(e)
         start = it-index + 1
@@ -31,7 +31,8 @@ impl[w: writer] writer for escaper[w] {
 }
 
 fn write-escaped[w: writer, t: print](out: w, value: t) {
-  value.print-to(escaper[w].{ out })
+  #if types/id[t] == types/id[dom/node] value.print-to(out)
+  else value.print-to(escaper[w].{ out })
 }
 
 fn escape(s: string): string {
@@ -41,9 +42,110 @@ fn escape(s: string): string {
 }
 
 fn is-void(name: string): bool {
-  name == "br" or name == "hr" or name == "img" or name == "input" or name == "meta" or
-  name == "link" or name == "area" or name == "base" or name == "col" or name == "embed" or
-  name == "source" or name == "track" or name == "wbr"
+  let names: span[string] = ["br", "hr", "img", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"]
+  names.contains(name)
+}
+
+fn is-boolean-attr(name: string): bool {
+  let names: span[string] = [
+    "allowfullscreen", "async", "autofocus", "autoplay", "checked", "controls", "default", "defer",
+    "disabled", "formnovalidate", "hidden", "inert", "ismap", "itemscope", "loop", "multiple", "muted",
+    "nomodule", "novalidate", "open", "playsinline", "readonly", "required", "reversed", "selected",
+  ]
+  names.contains(name)
+}
+
+ns dom {
+  type attr = { name: string, value: either { text(string), present } }
+  type element = { tag: string, attrs: list[attr], children: list[node] }
+  type node = either { text(string), raw(string), attr(attr), elem(*element), frag(span[node]) }
+
+  fn el(tag: string, mods: span[node]): node {
+    let e: element = .{ tag, attrs = list/empty(), children = list/empty() }
+    for m in mods {
+      if m is :attr a e.attrs.push(a) else e.children.push(m)
+    }
+    :elem mem/new(e)
+  }
+
+  fn at[t](name: string, value: t): node {
+    #if types/id[t].is-instance-of(types/id[opt]) {
+      if value is :some v at(name, v) else :frag span/empty()
+    } else if value is {
+      type[bool](b) -> if is-boolean-attr(name) {
+        if b :attr .{ name, value = :present } else :frag span/empty()
+      } else {
+        :attr .{ name, value = :text b.show() }
+      },
+      _ -> :attr .{ name, value = :text value.show() },
+    }
+  }
+
+  fn class(value: string): node { at("class", value) }
+  fn id(value: string): node { at("id", value) }
+  fn href(value: string): node { at("href", value) }
+  fn src(value: string): node { at("src", value) }
+
+  fn each[t](items: span[t], f: some fn t -> node): node { :frag items.map(f) }
+
+  impl print for node {
+    fn print-to[w: writer](self, w) {
+      if self is {
+        :text s -> write-escaped(w, s),
+        :raw s -> w.write(s),
+        :attr _ -> {},
+        :frag nodes -> for n in nodes { n.print-to(w) },
+        :elem e -> {
+          w.write("<${e.tag}")
+          for a in e.attrs {
+            w.write(" ${a.name}")
+            if a.value is :text v {
+              w.write("=\"")
+              write-escaped(w, v)
+              w.write("\"")
+            }
+          }
+          w.write(">")
+          if is-void(e.tag) return
+          for c in e.children { c.print-to(w) }
+          w.write("</${e.tag}>")
+        },
+      }
+    }
+  }
+}
+
+#meta {
+  let tags: span[string] = [
+    "a", "abbr", "address", "area", "article", "aside", "audio", "b", "base", "bdi", "bdo", "blockquote",
+    "body", "br", "button", "canvas", "caption", "cite", "code", "col", "colgroup", "data", "datalist",
+    "dd", "del", "details", "dfn", "dialog", "div", "dl", "dt", "em", "embed", "fieldset", "figcaption",
+    "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "head", "header", "hgroup", "hr",
+    "html", "i", "iframe", "img", "input", "ins", "kbd", "label", "legend", "li", "link", "main", "map",
+    "mark", "menu", "meta", "meter", "nav", "noscript", "object", "ol", "optgroup", "option", "output",
+    "p", "picture", "pre", "progress", "q", "rp", "rt", "ruby", "s", "samp", "script", "section",
+    "select", "slot", "small", "source", "span", "strong", "style", "sub", "summary", "sup", "table",
+    "tbody", "td", "template", "textarea", "tfoot", "th", "thead", "time", "title", "tr", "track", "u",
+    "ul", "var", "video", "wbr",
+  ]
+  let cb = code-builder/new()
+  cb.write("ns dom {\n")
+  for tags { cb.write("fn $it(mods: span[node]): node { el(${meta/str-lit(it)}, mods) }\n") }
+  cb.write("}\n")
+  cb.build()
+}
+
+fn write-attr[w: writer, t](out: w, name: string, value: t, presence: bool) {
+  #if types/id[t].is-instance-of(types/id[opt]) {
+    if value is :some v write-attr(out, name, v, presence)
+  } else if value is {
+    type[bool](b) -> if presence { if b out.write(" $name") } else { out.write(" $name=\"$b\"") },
+    _ -> {
+      out.write(" $name=\"")
+      write-escaped(out, value)
+      out.write("\"")
+    },
+  }
 }
 
 macro write(out: code, markup: span[code-token]) {
@@ -52,9 +154,10 @@ macro write(out: code, markup: span[code-token]) {
 
 macro render(markup: span[code-token]) {
   let cb = code-builder/new()
-  cb.line("let html-sb = string-builder/new()")
-  cb.write-code(emit(\html-sb.&, markup))
-  cb.line("html-sb.build()")
+  cb.line("let html-render-sb = string-builder/new()")
+  cb.line("let(context(impl writer)) _html-render-out: *string-builder = html-render-sb.&")
+  cb.write-code(emit(\_html-render-out, markup))
+  cb.line("html-render-sb.build()")
   cb.build()
 }
 
@@ -309,16 +412,30 @@ ns for emitter {
     if first.kind is :string or first.text == "=" or first.text == "{" {
       first.fail("Expected an attribute name, got `${first.text}`")
     }
-    self.text(" ")
-    self.text(first.text)
+    let name-sb = string-builder/new()
+    name-sb.write(first.text)
     while self.joined-continues() and not self.cur.peek-text-eq("=") {
-      self.text(self.cur.eat().text)
+      name-sb.write(self.cur.eat().text)
     }
-    if not self.cur.peek-text-eq("=") return
+    let name = name-sb.build()
+    if not self.cur.peek-text-eq("=") {
+      self.text(" $name")
+      return
+    }
     let eq = self.cur.eat()
     if self.cur.is-at-end() or self.cur.peek-text-eq(">") or self.peek-self-close() eq.fail("Expected a value after `=`")
     let v = self.cur.peek()
-    self.text("=\"")
+    if v.text == "{" {
+      let value = self.braced()
+      self.flush()
+      self.cb.write("std/html/write-attr(")
+      self.cb.write-code(self.out)
+      self.cb.write(", ${meta/str-lit(name)}, ")
+      self.cb.write-tokens(value)
+      self.cb.write(", presence = ${is-boolean-attr(name)})\n")
+      return
+    }
+    self.text(" $name=\"")
     if v.kind is :string {
       self.cur.skip(1)
       if foldable(v.text) {
@@ -326,9 +443,6 @@ ns for emitter {
       } else {
         self.dynamic([v].as-span(), false)
       }
-    } else if v.text == "{" {
-      let value = self.braced()
-      self.dynamic(value, false)
     } else {
       self.cur.skip(1)
       self.text(escape(v.text))

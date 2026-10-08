@@ -54,7 +54,7 @@ type sleep-poll-mutex = { state: u64 }
 
 ns for sleep-poll-mutex {
 
-  fn new(): sleep-poll-mutex { .{ state = 0 } }
+  fn new(): sleep-poll-mutex { .0 }
 
   fn lock(self: *sleep-poll-mutex) {
     while atomic/cmpxchg(self.state.&, 0: u64, 1, :acquire, :relaxed).ok == false {
