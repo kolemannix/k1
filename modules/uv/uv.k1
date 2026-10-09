@@ -137,7 +137,32 @@ ns for cond {
   fn destroy(self: *self) { libuv/cond_destroy(self.raw.&) }
   fn signal(self: *self) { libuv/cond_signal(self.raw.&) }
   fn broadcast(self: *self) { libuv/cond_broadcast(self.raw.&) }
-  fn wait[t](self: *self, guard: guard[t]) { libuv/cond_wait(self.raw.&, guard.raw) }
+}
+
+type monitor[t] = { mutex: mutex[t], cond: cond }
+
+type monitor-guard[t] = { raw: *libuv/mutex, value: *t, cond: *cond }
+
+ns for monitor {
+  fn init[t](self: *self[t], value: t) {
+    self.mutex.init(value)
+    self.cond.init()
+  }
+  fn destroy[t](self: *self[t]) {
+    self.cond.destroy()
+    self.mutex.destroy-lock()
+  }
+  fn lock[t](self: *self[t]): monitor-guard[t] {
+    let guard = self.mutex.lock()
+    .{ raw = guard.raw, value = guard.value, cond = self.cond.& }
+  }
+}
+
+ns for monitor-guard {
+  fn wait[t](self: self[t]) { libuv/cond_wait(self.cond.raw.&, self.raw) }
+  fn signal[t](self: self[t]) { self.cond.signal() }
+  fn broadcast[t](self: self[t]) { self.cond.broadcast() }
+  fn unlock[t](self: self[t]) { libuv/mutex_unlock(self.raw) }
 }
 
 macro locked(target: code, name: code, body: code) {

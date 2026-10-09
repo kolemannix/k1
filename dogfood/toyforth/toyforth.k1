@@ -29,7 +29,7 @@ fn compile(program-text: string): *tf-obj {
   crash("todo")
 }
 
-fn main(argc: core/c-int, argv: ptr): i32 {
+fn main(argc: u32, argv: ptr): i32 {
   let args: span[string] = std/sys/parse-main-args(argc, argv)
   if args.len() != 2 {
     eprintln("Usage: ${args.[0]} <fname>")

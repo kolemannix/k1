@@ -154,7 +154,7 @@ The standard check value is the *type* of `check`. The same `crc32` runs in the
 VM for that, and compiled for the command line:
 
 ```k1
-fn main(argc: core/c-int, argv: ptr): i32 {
+fn main(argc: u32, argv: ptr): i32 {
   let check: 0xCBF43926u32 = #static crc32("123456789".span-bytes())
   println("check value 0x${hex(check.from-static())} verified while compiling")
   let args = std/sys/parse-main-args(argc, argv)
@@ -184,7 +184,7 @@ Use the non-reflected polynomial by mistake:
 ├─────
 │   }
 │   
-│   fn main(argc: core/c-int, argv: ptr): i32 {
+│   fn main(argc: u32, argv: ptr): i32 {
 │ ->  let check: 0xCBF43926u32 = #static crc32("123456789".span-bytes())
 │                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 │     println("check value 0x${hex(check.from-static())} verified while compiling")

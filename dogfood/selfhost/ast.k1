@@ -386,7 +386,7 @@ type let-stmt = {
 
 type assign = { lhs: expr-id, rhs: expr-id, span: src-span }
 type require-stmt = { condition: expr-id, else-body: ?expr-id, span: src-span }
-type defer-stmt = { expr: expr-id, span: src-span }
+type defer-stmt = { binder: ?{ name: string-id, span: src-span }, expr: expr-id, span: src-span }
 
 type stmt = either {
   use-stmt(use-id),

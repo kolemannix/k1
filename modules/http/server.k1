@@ -9,6 +9,9 @@ use std/pull
 use std/byte-source
 use std/pool
 use std/posix
+use std/mpsc
+use uv/worker-pool
+use uv/job
 
 type server = {
   server/config,
@@ -21,6 +24,11 @@ type server = {
   scratch-prepare: libuv/prepare,
   port: u16,
   handler: dyn[fn(http/request) -> http-response],
+  worker-pool: *worker-pool,
+  handler-results: *mpsc[*server/http-handler-work],
+  on-handler-result: libuv/async,
+  finished-handlers: list[*server/http-handler-work],
+  handlers-in-flight: u32,
   connections: pool[server/connection],
   draining: bool,
   conn-serial: u64,
@@ -44,11 +52,11 @@ type config = {
 
 fn start(
   config: config,
+  worker-pool: *worker-pool,
   handler: dyn[fn(http/request) -> http-response]
 ): result[*server, libuv/errno] {
   let l = libuv/default_loop().get()
   libuv/thread_setname("mainthread\0".data-ref-byte())
-  work/init-work-queue(l)
   let scratch = core/arena/init(8 * core/arena/mb)
   scratch.set-name("loop-scratch")
 
@@ -63,6 +71,11 @@ fn start(
     scratch-prepare = uninit,
     port = config.port,
     handler,
+    worker-pool,
+    handler-results = uninit,
+    on-handler-result = uninit,
+    finished-handlers = list/empty(),
+    handlers-in-flight = 0,
     connections = pool/with-capacity-in[connection, _](heap, config.max-connections),
     draining = false,
     conn-serial = 0,
@@ -81,6 +94,14 @@ fn start(
   if libuv/tcp_getsockname(s.listener.&, bound.&.as[ptr].narrow(), bound-len.&) == 0 {
     s.port = ((bound.sin_port & 0xff) << 8) | (bound.sin_port >> 8)
   }
+
+  uv/check(libuv/async_init(l, s.on-handler-result.&, finish-handlers.&)).!
+  s.on-handler-result.&.set-data(s)
+  libuv/unref(s.on-handler-result.&.as-handle())
+  s.handler-results = mpsc/make(.{
+    state = s.as[ptr],
+    notify-fn = fn(state: ptr) uv/check(libuv/async_send(state.ref[server]().on-handler-result.&)).!,
+  })
 
   uv/check(libuv/prepare_init(l, s.scratch-prepare.&)).!
   s.scratch-prepare.&.set-data(s)
@@ -112,6 +133,7 @@ fn stop(*self) {
   if self.draining return
   self.draining = true
   tprintln("server stopping; draining ${self.connections.len()} connections")
+  self.worker-pool.close()
   libuv/close(self.listener.&.as-handle(), fn _h. .{})
   libuv/close(self.scratch-prepare.&.as-handle(), fn _h. .{})
   if self.config.handle-signals {
@@ -144,7 +166,7 @@ type connection = {
   client-storage: libuv/tcp,
   timer-storage: libuv/timer,
   write-storage: libuv/write,
-  work-storage: libuv/work,
+  handler-job: pool/handle[job],
   serial-no: u64,
   slot: pool/handle[connection],
   pending-closes: u32,
@@ -168,7 +190,7 @@ ns for connection {
       client-storage = uninit,
       timer-storage = uninit,
       write-storage = uninit,
-      work-storage = uninit,
+      handler-job = .0,
       serial-no = s.conn-serial,
       slot = .0,
       pending-closes = 0,
@@ -251,8 +273,8 @@ ns for connection {
     tprintln("conn${self.serial-no} closing")
     self.stop-stream()
     if handling {
-      if uv/check(libuv/cancel(self.work-req().as-req())) is :err e { tprintln("handler already running: $e") }
-      return
+      if not self.server.worker-pool.cancel(self.handler-job) return
+      self.server.end-handler()
     }
     self.close-handles()
   }
@@ -343,7 +365,6 @@ ns for connection {
   fn client(*self): *libuv/tcp { self.client-storage.& }
   fn timer(*self): *libuv/timer { self.timer-storage.& }
   fn write-req(*self): *libuv/write { self.write-storage.& }
-  fn work-req(*self): *libuv/work { self.work-storage.& }
 }
 
 fn on-write-complete(req: *libuv/write, status: i32) {
@@ -380,36 +401,31 @@ type http-handler-work = {
   ?http-response,
 }
 
-let(mutable, tls) worker-scratch: ptr = ptr/null
-
-fn reset-worker-scratch() {
-  if worker-scratch.is-null() {
-    let scratch = core/arena/init(8 * core/arena/mb)
-    scratch.set-name("worker-scratch")
-    worker-scratch = scratch.as[ptr]
-    mem/set-tmp-arena(scratch)
-  }
-  worker-scratch.ref[arena].reset()
+fn run-handler(work: *http-handler-work) {
+  let s = work.connection.server
+  work.http-response = :some mem/with-arena(work.connection.request-arena, (s.handler)(work.request))
+  s.handler-results.send(work)
 }
 
-fn do-work(req: *libuv/work) {
-  let work: *http-handler-work = req.get-data()
-  reset-worker-scratch()
-  work.http-response = :some mem/with-arena(
-    work.connection.request-arena,
-    (work.connection.server.handler)(work.request)
-  )
+fn finish-handlers(handle: *libuv/async) {
+  let s = handle.get-data[server]()
+  s.handler-results.take(s.finished-handlers.&)
+  for work in s.finished-handlers {
+    s.end-handler()
+    let connection = work.connection
+    if connection.phase is :closing {
+      if work.http-response is :some response and response.body is :stream source { source.stop() }
+      connection.close-handles()
+    } else {
+      connection.begin-response(work.http-response.!)
+    }
+  }
+  s.finished-handlers.clear()
 }
 
-fn after-do-work(req: *libuv/work, _status: i32) {
-  let work: *http-handler-work = req.get-data()
-  let connection = work.connection
-  if connection.phase is :closing {
-    if work.http-response is :some response and response.body is :stream s { s.stop() }
-    connection.close-handles()
-    return
-  }
-  connection.begin-response(work.http-response.!)
+fn end-handler(*self) {
+  self.handlers-in-flight = self.handlers-in-flight - 1
+  if self.handlers-in-flight == 0 { libuv/unref(self.on-handler-result.&.as-handle()) }
 }
 
 fn alloc-read-buffer(handle: *libuv/handle, suggested-size: usize, buf: *libuv/buf) {
@@ -470,9 +486,17 @@ fn on-complete-http-body(connection: *connection, chunks: span[span[u8]]) {
     request = .{ header = connection.parsed-header.get(), body = chunks },
     http-response = :none,
   })
-  connection.work-req().set-data(work)
   connection.client().read-stop()
-  uv/check(libuv/queue_work(connection.server.uv-loop, connection.work-req(), do-work.&, after-do-work.&)).!
+  let s = connection.server
+  require s.worker-pool.submit(work, run-handler.&) is :some job else {
+    tprintln("conn${connection.serial-no} handler queue full; answering 503")
+    connection.parsed-header = :some (connection.parsed-header.! | .{ keep-alive = false })
+    connection.begin-response(response/text(503, "Service Unavailable\n"))
+    return
+  }
+  connection.handler-job = job
+  s.handlers-in-flight = s.handlers-in-flight + 1
+  if s.handlers-in-flight == 1 { libuv/ref(s.on-handler-result.&.as-handle()) }
   connection.enter-phase(:handling)
 }
 

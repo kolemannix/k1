@@ -114,7 +114,7 @@ fn first-fn-body-expr(p: *ast/program): ast/expr-id {
   e
 }
 
-fn main(argc: i32, argv: ptr): i32 {
+fn main(argc: u32, argv: ptr): i32 {
   #if k1/test {
     test()
   } else {

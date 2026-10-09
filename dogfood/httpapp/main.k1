@@ -5,7 +5,7 @@ use std/sys
 
 type args = { port: ?string, db: ?string }
 
-fn main(argc: i32, argv: ptr): i32 {
+fn main(argc: u32, argv: ptr): i32 {
   let args = if sys/parse-args-c[args](argc, argv) is {
     :ok a -> a,
     :err msg -> { eprintln(msg); eprintln(sys/gen-help-text[args]("k1 datastar demo server")); return 1 },
@@ -31,9 +31,11 @@ fn main(argc: i32, argv: ptr): i32 {
     subscriber-cap-weight = 1048576,
     weight-fn = fn(payload: rc-bytes) payload.bytes().len(),
   )
-  let server = server/start(config, (fn[bus](req: http/request) app/handle(req, bus)).to-dyn()).!
+  let pool = uv/worker-pool/start(32, 4096)
+  let server = server/start(config, pool, (fn[bus](req: http/request) app/handle(req, bus)).to-dyn()).!
   app/spawn-tick-publisher-thread(bus)
   eprintln("listening on ${server.port}...")
   server.run()
+  pool.join()
   0
 }

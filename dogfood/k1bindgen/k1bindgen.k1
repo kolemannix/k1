@@ -12,7 +12,7 @@ use std/set
 // - [x] Use derived cli arg parser
 // - [x] Embed sizeof / alignof / offsetof assertions
 // - [x] Support Unions
-fn main(argc: c-int, argv: ptr): i32 { 
+fn main(argc: u32, argv: ptr): i32 { 
   #if k1/test
     test()
   else {

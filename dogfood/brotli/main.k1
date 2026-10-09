@@ -177,7 +177,7 @@ fn bench-one(name: string, input: span[u8], quality: size) {
   println(sb.&.build())
 }
 
-fn main(argc: c-int, argv: ptr): i32 {
+fn main(argc: u32, argv: ptr): i32 {
   let args = std/sys/parse-main-args(argc, argv)
   let corpora = make-corpora()
   for q in [0: size, 1] {

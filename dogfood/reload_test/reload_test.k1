@@ -70,7 +70,7 @@ fn test-evaluation-order() {
   assert-equals(status.exit-code, 0)
 }
 
-fn main(argc: c-int, argv: ptr): i32 {
+fn main(argc: u32, argv: ptr): i32 {
   let args = std/sys/parse-main-args(argc, argv)
   // `k1 run` starts us in the program's home dir, so the app template is ./app
   let template-dir = if args.index-opt(1) is {

@@ -100,4 +100,4 @@ fn parse-args[t](args: span[string]): result[t, string] {
   }
 }
 
-fn parse-args-c[t](arg-count: c-int, args: ptr): result[t, string] { parse-args[t](parse-main-args(arg-count, args)) }
+fn parse-args-c[t](arg-count: u32, args: ptr): result[t, string] { parse-args[t](parse-main-args(arg-count, args)) }

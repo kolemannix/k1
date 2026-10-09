@@ -96,9 +96,14 @@ ns for parser {
 
   fn parse-defer(self: *parser): result[?ast/defer-stmt, perror] {
     require self.maybe-consume(:kw-defer) is :some keyword else { return :ok(:none) }
+    let binder: ?{ name: ast/string-id, span: ast/src-span } = if self.peek().kind is :ident and self.peek-at(1).is-kind-nonspaced(:dot) and self.peek-at(2).is-ws-preceded() {
+      let it = self.expect-ident().try
+      self.advance()
+      :some(.{ name = it.name, span = it.tok.span() })
+    } else :none
     let expr = self.expect-expression().try
     let span = self.extend-tok-to-here(keyword)
-    :ok(:some(.{ expr, span }))
+    :ok(:some(.{ binder, expr, span }))
   }
 
   fn expect-use(self: *parser): result[ast/use-id, perror] {

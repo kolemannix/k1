@@ -38,7 +38,7 @@ fn random(upper-bound: u32): u32 {
   }
 }
 
-fn parse-main-args(arg-count: c-int, args: ptr): span[string] {
+fn parse-main-args(arg-count: u32, args: ptr): span[string] {
   let buf = buffer/wrap-raw[ptr](
     count = arg-count.as-size(),
     ptr = args

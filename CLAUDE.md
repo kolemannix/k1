@@ -237,7 +237,7 @@ declaring `dep`/`dep-params`, `lib`, `library()`, `setup`, and an optional
   loop with timeouts, graceful shutdown and the response writer,
   `request.k1` form and cookie parsing over `std/url`, `routing.k1` comptime route tables,
   `sse.k1` SSE and Datastar framing).
-- C wrapper modules: `uv/` (raw bindings in `uv/libuv`), `sdl3/`,
+- C wrapper modules: `uv/` (raw bindings in `uv/libuv`; `uv.k1` mutex/monitor/bus; `workers.k1` the worker pool the http server runs handlers on), `sdl3/`,
   `stb/`, `freetype/`, `harfbuzz/`, `cbrotli/`, `sqlite/` (the amalgamation).
   Most vendor source under `vendor/`, build `libs/*.a` in `setup`,
   and generate bindings with `k1bindgen` (`dogfood/k1bindgen`). Bindings live

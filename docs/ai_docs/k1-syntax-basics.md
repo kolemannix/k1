@@ -702,10 +702,24 @@ for i in 0.until(10) {
 }
 ```
 
-`defer` runs when leaving the current scope, including early returns:
+`defer` runs when leaving the current scope, including early returns, `break`,
+`continue` and `.try` propagation, last-declared first:
 
 ```rust
 defer cleanup()
+```
+
+Names in a defer resolve where it is written, and it is typechecked once there.
+An exit computes its value before the defers run, so a defer cannot change the
+result, except by assigning a `let(returned)` variable. `return`, `break`,
+`continue` and `.try` cannot leave a defer body.
+
+`defer r. <expr>` binds the value the function is returning to `r`. It must be
+at the top level of a function body, and it runs on every function exit:
+
+```rust
+let guard = lock.lock()
+defer r. if r is :err _ guard.unlock()
 ```
 
 See `test_src/suite1/control_flow.k1` and `test_src/suite1/defer_test.k1`.
