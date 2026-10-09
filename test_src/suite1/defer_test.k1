@@ -92,6 +92,48 @@ fn lifo-return-test(sensor: *int) {
   assert(false)
 }
 
+fn lexical-test(): int {
+  let x = 1
+  defer assert-equals(x, 1)
+  if true {
+    let x = 2
+    return x
+  }
+  0
+}
+
+fn value-before-defers-test(): int {
+  let x = 1
+  defer { x = 99 }
+  x
+}
+
+fn returned-var-test(): int {
+  let(returned) x = 1
+  defer { x = 99 }
+  x
+}
+
+fn loop-in-defer-test(sensor: *int) {
+  defer {
+    loop { inc(sensor); if sensor.* == 3 break }
+  }
+}
+
+fn static-return-test(sensor: *int): int {
+  defer inc(sensor)
+  #static { if true return 3; 4 }
+}
+
+fn failing(fail: bool): result[int, string] { if fail :err "failed" else :ok 1 }
+
+fn binder-test(fail-early: bool, fail-try: bool, sensor: *int): result[int, string] {
+  defer r. if r is :err _ inc(sensor)
+  if fail-early return :err "early"
+  let v = failing(fail-try).try
+  :ok v
+}
+
 fn test() {
   // We use an integer so that we can detect if a defer
   // runs too few or too many times!
@@ -129,6 +171,24 @@ fn test() {
 
   sensor = 0
   lifo-return-test(sensor.&)
+  assert-equals(sensor, 2)
+
+  assert-equals(lexical-test(), 2)
+  assert-equals(value-before-defers-test(), 1)
+  assert-equals(returned-var-test(), 99)
+
+  sensor = 0
+  loop-in-defer-test(sensor.&)
+  assert-equals(sensor, 3)
+
+  sensor = 0
+  assert-equals(static-return-test(sensor.&), 3)
+  assert-equals(sensor, 1)
+
+  sensor = 0
+  assert(binder-test(true, false, sensor.&) is :err "early")
+  assert(binder-test(false, true, sensor.&) is :err "failed")
+  assert(binder-test(false, false, sensor.&) is :ok 1)
   assert-equals(sensor, 2)
 
   .{}

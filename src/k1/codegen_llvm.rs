@@ -5267,11 +5267,19 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     debug_assert_eq!(self.layout_per_llvm(&value.get_type()).size, field_size.size);
                     last_offset = field_layout.offset + field_size.size;
                 }
+                let struct_size = self.k1.get_layout_computed(s_type_id).unwrap().size;
+                if struct_size > last_offset {
+                    let padding_value = self
+                        .padding_type(struct_size - last_offset)
+                        .get_undef()
+                        .as_basic_value_enum();
+                    packed_values.push_grow(&mut self.tmp, padding_value);
+                }
                 let struct_value = self.ctx.const_struct(&packed_values, true);
 
                 debug_assert_eq!(
                     self.layout_per_llvm(&struct_value.get_type()).size,
-                    self.k1.get_layout_computed(s_type_id).unwrap().size,
+                    struct_size,
                     "Checking Size of: {}",
                     struct_value
                 );

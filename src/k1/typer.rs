@@ -33,7 +33,6 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::VecDeque;
-use std::collections::hash_map::Entry;
 use std::ffi::c_void;
 use std::fmt::Write;
 use std::fmt::{Display, Formatter};
@@ -332,7 +331,6 @@ bitflags! {
         /// Indicates whether we are typechecking generic code
         /// Most commonly, the body of a generic function
         const GenericPass = 1 << 1;
-        const Defer = 1 << 2;
         /// Indicates that we are generating code
         /// that the user shouldn't see or care about; should
         /// pevent emission of language server entities, perhaps
@@ -461,13 +459,6 @@ impl EvalExprContext {
     #[inline(always)]
     fn is_generic_pass(&self) -> bool {
         self.flags.contains(EvalExprFlags::GenericPass)
-    }
-
-    #[inline(always)]
-    pub fn with_is_defer(&self, defer: bool) -> EvalExprContext {
-        let mut flags = self.flags;
-        flags.set(EvalExprFlags::Defer, defer);
-        EvalExprContext { flags, ..*self }
     }
 
     #[inline(always)]
@@ -1548,9 +1539,10 @@ pub struct TypedRequireStmt {
 }
 
 #[derive(Clone, Copy)]
-pub struct TypedDeferStmt {
-    pub parsed_expr: ParsedExprId,
-    pub span: Span,
+struct PendingDefer {
+    scope: ScopeId,
+    body: TypedExprId,
+    binder: Option<VariableId>,
 }
 
 /// How far up the scope tree a scope exit travels, for defer gathering:
@@ -1569,7 +1561,6 @@ pub enum TypedStmt {
     Let(LetStmt),
     Assignment(AssignmentStmt),
     Require(TypedRequireStmt),
-    Defer(TypedDeferStmt),
 }
 
 impl TypedStmt {
@@ -2807,10 +2798,9 @@ pub struct TypedProgram {
     /// Per-session LSP compile options; never snapshotted
     pub lsp: compiler::LspCompileOptions,
 
-    /// Interned filename per file, so synthesizing source locations (e.g. for
-    /// every assert call) doesn't re-hash the filename string each time
     inference_context_stack: Vec<InferenceContext>,
     inference_context_extras: Vec<InferenceContext>,
+    pending_defers: Vec<PendingDefer>,
 
     type_defn_context: TypeDefnContext,
 
@@ -2993,6 +2983,7 @@ impl TypedProgram {
             lsp,
             inference_context_stack: Vec::new(),
             inference_context_extras,
+            pending_defers: Vec::new(),
             exported_symbols: FxHashMap::new(),
             type_defn_context: TypeDefnContext::default(),
             buffers: TypedModuleBuffers {
@@ -3490,8 +3481,7 @@ impl TypedProgram {
             TypedStmt::Expr(_, ty) => *ty,
             TypedStmt::Let(_)
             | TypedStmt::Assignment(_)
-            | TypedStmt::Require(_)
-            | TypedStmt::Defer(_) => self.builtin_types.empty,
+            | TypedStmt::Require(_) => self.builtin_types.empty,
         }
     }
 
@@ -3501,7 +3491,6 @@ impl TypedProgram {
             TypedStmt::Let(val_def) => val_def.span,
             TypedStmt::Assignment(assgn) => assgn.span,
             TypedStmt::Require(req) => req.span,
-            TypedStmt::Defer(defer) => defer.span,
         }
     }
 
@@ -6014,11 +6003,10 @@ impl TypedProgram {
             result_block_ctx,
             span,
         )?;
-        let defers = self.gather_defers(result_block.scope_id, span, DeferExtent::FunctionTop);
-        let return_error_expr = self.synth_defers_then_exit(
-            defers,
+        let return_error_expr = self.synth_exit(
+            result_block.scope_id,
+            DeferExtent::FunctionTop,
             make_error_call,
-            result_block_ctx,
             span,
             |k1, value| {
                 k1.exprs.add(
@@ -6166,9 +6154,6 @@ impl TypedProgram {
             ParsedExpr::Loop(loop_expr) => self.eval_loop_expr(&loop_expr.clone(), span, ctx),
             ParsedExpr::Return(r) => {
                 let r = *r;
-                if ctx.flags.contains(EvalExprFlags::Defer) {
-                    kbail!(self, span, "return cannot be used inside `defer` blocks");
-                }
                 self.eval_return(r.value, ctx, span)
             }
             ParsedExpr::Break(b) => self.eval_break(*b, span, ctx),
@@ -6256,9 +6241,7 @@ impl TypedProgram {
                     }
                 });
                 // be thrifty with scopes
-                let needs_scope = declares
-                    || block.kind == ParsedBlockKind::LoopBody
-                    || self.scopes.block_defers.contains_key(&ctx.scope_id);
+                let needs_scope = declares || block.kind == ParsedBlockKind::LoopBody;
                 let block_ctx = if needs_scope {
                     let block_scope =
                         self.scopes.add_child_scope(ctx.scope_id, scope_type, ScopeOwnerId::None);
@@ -9226,9 +9209,6 @@ impl TypedProgram {
         ctx: EvalExprContext,
         span: Span,
     ) -> K1Result<(ScopeId, LoopType)> {
-        if ctx.flags.contains(EvalExprFlags::Defer) {
-            kbail!(self, span, "{name} cannot be used inside `defer` blocks");
-        }
         match self.scopes.find_loop(ctx.scope_id, label) {
             Some(found) => Ok(found),
             None => match label {
@@ -9285,8 +9265,8 @@ impl TypedProgram {
                 ..loop_info
             },
         );
-        let defers = self.gather_defers(ctx.scope_id, span, DeferExtent::LoopScope(loop_scope_id));
-        self.synth_defers_then_exit(defers, break_value, ctx, span, |k1, value| {
+        let extent = DeferExtent::LoopScope(loop_scope_id);
+        self.synth_exit(ctx.scope_id, extent, break_value, span, |k1, value| {
             k1.exprs.add(
                 TypedExpr::Break(TypedBreak { value, loop_scope: loop_scope_id }),
                 NEVER_TYPE_ID,
@@ -9323,9 +9303,9 @@ impl TypedProgram {
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let (loop_scope_id, _) = self.find_loop_for_exit("continue", cont.label, ctx, span)?;
-        let defers = self.gather_defers(ctx.scope_id, span, DeferExtent::LoopScope(loop_scope_id));
         let empty_value = self.synth_empty_value(span);
-        self.synth_defers_then_exit(defers, empty_value, ctx, span, |k1, _value| {
+        let extent = DeferExtent::LoopScope(loop_scope_id);
+        self.synth_exit(ctx.scope_id, extent, empty_value, span, |k1, _value| {
             k1.exprs.add(TypedExpr::Continue { loop_scope: loop_scope_id }, NEVER_TYPE_ID, span)
         })
     }
@@ -9336,13 +9316,7 @@ impl TypedProgram {
         ctx: EvalExprContext,
         span: Span,
     ) -> K1Result<TypedExprId> {
-        let expected_return_type = if ctx.is_static() {
-            // When _typechecking_, not executing, inside #static blocks
-            // The expected return type should just be the expected type of the static block
-            ctx.static_expected_return_type
-        } else {
-            Some(self.get_return_type_for_scope(ctx.scope_id, span)?)
-        };
+        let expected_return_type = self.get_exit_return_type(ctx, span)?;
         let return_value = match parsed_expr {
             None => self.synth_empty_value(span),
             Some(parsed_expr) => self.eval_expr_with_coercion(
@@ -9357,34 +9331,39 @@ impl TypedProgram {
         if return_value_type == NEVER_TYPE_ID {
             return Ok(return_value);
         }
-        let defers = self.gather_defers(ctx.scope_id, span, DeferExtent::FunctionTop);
-        self.synth_defers_then_exit(defers, return_value, ctx, span, |k1, value| {
+        self.synth_exit(ctx.scope_id, DeferExtent::FunctionTop, return_value, span, |k1, value| {
             k1.exprs.add_return(value, returned_variable, span)
         })
     }
 
-    /// Collects the pending `defer` expressions of every scope exited when control leaves
-    /// `from_scope` for the given extent, in execution order: innermost scope first,
-    /// last-declared first within a scope.
+    fn get_exit_return_type(&self, ctx: EvalExprContext, span: Span) -> K1Result<Option<TypeId>> {
+        if ctx.is_static() {
+            Ok(ctx.static_expected_return_type)
+        } else {
+            Ok(Some(self.get_return_type_for_scope(ctx.scope_id, span)?))
+        }
+    }
+
     fn gather_defers(
         &self,
         from_scope: ScopeId,
         span: Span,
         extent: DeferExtent,
-    ) -> SV4<ParsedExprId> {
-        let mut gathered: SV4<ParsedExprId> = smallvec![];
+    ) -> K1Result<SV4<PendingDefer>> {
+        let mut exited_scopes: SV8<ScopeId> = smallvec![];
         let mut scope_id = from_scope;
         loop {
-            if let Some(defers) = self.scopes.block_defers.get(&scope_id) {
-                gathered.extend(defers.deferred_exprs.iter().rev().copied());
-            }
+            exited_scopes.push(scope_id);
             let scope = self.scopes.get_scope(scope_id);
             let at_boundary = match extent {
                 DeferExtent::FunctionTop => scope.scope_type.is_top_of_function(),
                 DeferExtent::LoopScope(loop_scope) => scope_id == loop_scope,
             };
             if at_boundary {
-                return gathered;
+                break;
+            }
+            if scope.scope_type == ScopeType::DeferBody {
+                kbail!(self, span, "Cannot return, break, continue, or `.try` out of a `defer`");
             }
             let overshot_function = matches!(extent, DeferExtent::LoopScope(_))
                 && scope.scope_type.is_top_of_function();
@@ -9393,48 +9372,81 @@ impl TypedProgram {
                 _ => self.ice_span(span, "Defer gathering walked past its boundary scope"),
             }
         }
+        let mut gathered: SV4<PendingDefer> = smallvec![];
+        for pending in self.pending_defers.iter().rev() {
+            if !exited_scopes.contains(&pending.scope) {
+                break;
+            }
+            gathered.push(*pending);
+        }
+        Ok(gathered)
     }
 
-    /// At a divergent scope exit (return or break) with pending `defers`: computes `value`,
-    /// runs the defers, then hands the computed value to `make_exit` so the exit carries it
-    /// out past the deferred code. Returns `make_exit(value)` alone when nothing is deferred.
-    fn synth_defers_then_exit(
+    fn synth_exit(
         &mut self,
-        defers: SV4<ParsedExprId>,
+        from_scope: ScopeId,
+        extent: DeferExtent,
         value: TypedExprId,
-        ctx: EvalExprContext,
         span: Span,
         make_exit: impl FnOnce(&mut Self, TypedExprId) -> TypedExprId,
     ) -> K1Result<TypedExprId> {
+        let defers = self.gather_defers(from_scope, span, extent)?;
         if defers.is_empty() {
             return Ok(make_exit(self, value));
         }
         let mut block = self.new_block_builder(
-            ctx.scope_id,
+            from_scope,
             ScopeType::LexicalBlock,
             span,
-            defers.len() as u32 + 2,
+            2 * defers.len() as u32 + 2,
         );
-        let value = if matches!(self.exprs.get(value), TypedExpr::Variable(_)) {
-            value
-        } else {
-            let bound = self.synth_variable_defn_simple(
-                self.ast.idents.b.defer_value,
-                value,
-                block.scope_id,
-            );
-            self.push_block_stmt_id(&mut block, bound.defn_stmt);
-            bound.variable_expr
-        };
-        for deferred_parsed_expr in defers.into_iter() {
-            let deferred_expr = self
-                .eval_expr(deferred_parsed_expr, ctx.with_no_expected_type().with_is_defer(true))?;
-            let deferred_expr_type_id = self.exprs.get_type(deferred_expr);
-            self.push_block_stmt(&mut block, TypedStmt::Expr(deferred_expr, deferred_expr_type_id));
-        }
+        let value = self.push_defers(&mut block.statements, &defers, value, block.scope_id);
         let exit = make_exit(self, value);
         self.push_block_stmt(&mut block, TypedStmt::Expr(exit, NEVER_TYPE_ID));
         Ok(self.exprs.add_block(block, NEVER_TYPE_ID))
+    }
+
+    fn push_defers(
+        &mut self,
+        stmts: &mut List<TypedStmtId, TypedProgram>,
+        defers: &[PendingDefer],
+        value: TypedExprId,
+        scope_id: ScopeId,
+    ) -> TypedExprId {
+        if defers.is_empty() {
+            return value;
+        }
+        let value_is_fixed = match self.exprs.get(value) {
+            TypedExpr::StaticValue(_) => true,
+            TypedExpr::Variable(v) => {
+                Some(v.variable_id) == self.get_returned_var_for_scope(scope_id)
+            }
+            _ => false,
+        };
+        let value = if value_is_fixed {
+            value
+        } else {
+            let bound =
+                self.synth_variable_defn_simple(self.ast.idents.b.defer_value, value, scope_id);
+            stmts.push_grow(&mut self.mem, bound.defn_stmt);
+            bound.variable_expr
+        };
+        let value_span = self.exprs.get_span(value);
+        for pending in defers {
+            if let Some(variable_id) = pending.binder {
+                let binding = self.stmts.add(TypedStmt::Let(LetStmt {
+                    variable_id,
+                    variable_type: self.variables.get(variable_id).type_id,
+                    initializer: Some(value),
+                    span: value_span,
+                }));
+                stmts.push_grow(&mut self.mem, binding);
+            }
+            let body_type = self.exprs.get_type(pending.body);
+            let body = self.stmts.add(TypedStmt::Expr(pending.body, body_type));
+            stmts.push_grow(&mut self.mem, body);
+        }
+        value
     }
 
     ////////////////////////////////////////
@@ -12606,7 +12618,6 @@ impl TypedProgram {
                     TypedStmt::Let(let_stmt) => let_stmt.span,
                     TypedStmt::Assignment(a) => a.span,
                     TypedStmt::Require(r) => r.span,
-                    TypedStmt::Defer(defer) => defer.span,
                 },
             },
             TypedExpr::Match(typed_match_expr) => self.get_span_responsible_for_expr_type(
@@ -13019,16 +13030,47 @@ impl TypedProgram {
                 Ok(Some(self.add_assignment_stmt(destination, rhs, assignment.span)))
             }
             ParsedStmt::Defer(defer) => {
-                if ctx.flags.contains(EvalExprFlags::Defer) {
-                    kbail!(self, defer.span, "defer cannot be used inside `defer` blocks");
-                }
                 let defer = *defer;
-                let defer_stmt = self.stmts.add(TypedStmt::Defer(TypedDeferStmt {
-                    parsed_expr: defer.expr,
-                    span: defer.span,
-                }));
-
-                Ok(Some(defer_stmt))
+                let defer_scope = self.scopes.add_child_scope(
+                    ctx.scope_id,
+                    ScopeType::DeferBody,
+                    ScopeOwnerId::None,
+                );
+                let binder = match defer.binder {
+                    None => None,
+                    Some((name, name_span)) => {
+                        if !self.scopes.get_scope(ctx.scope_id).scope_type.is_top_of_function() {
+                            kbail!(
+                                self,
+                                name_span,
+                                "A defer that binds the return value must be at the top level of a function body"
+                            );
+                        }
+                        let Some(type_id) = self.get_exit_return_type(ctx, name_span)? else {
+                            kbail!(self, name_span, "The return type here is unknown; annotate it");
+                        };
+                        let variable_id = self.variables.add(Variable {
+                            name,
+                            type_id,
+                            owner_scope: defer_scope,
+                            kind: VariableKind::Stack,
+                            flags: VariableFlags::empty(),
+                            usage_count: 0,
+                            defn_span: name_span,
+                        });
+                        self.scopes.add_variable(defer_scope, name, variable_id);
+                        self.emit_ls_entity(name_span, LsEntityKind::Variable { variable_id });
+                        Some(variable_id)
+                    }
+                };
+                let body =
+                    self.eval_expr(defer.expr, ctx.with_scope(defer_scope).with_no_expected_type())?;
+                if let Some(variable_id) = binder {
+                    let name_span = self.variables.get(variable_id).defn_span;
+                    self.warn_variable_usage_counts("Defer binding", variable_id, name_span);
+                }
+                self.pending_defers.push(PendingDefer { scope: ctx.scope_id, body, binder });
+                Ok(None)
             }
             ParsedStmt::LoneExpression(expression) => {
                 let expr = if coerce_expr {
@@ -13050,6 +13092,19 @@ impl TypedProgram {
         // HEY KOLEMAN This block's scope is ALREADY PROVIDED AND SET IN CTX
         ctx: EvalExprContext,
         needs_terminator: bool,
+    ) -> K1Result<TypedExprId> {
+        let defers_base = self.pending_defers.len();
+        let result = self.eval_block_stmts(block, ctx, needs_terminator, defers_base);
+        self.pending_defers.truncate(defers_base);
+        result
+    }
+
+    fn eval_block_stmts(
+        &mut self,
+        block: &ParsedBlock,
+        ctx: EvalExprContext,
+        needs_terminator: bool,
+        defers_base: usize,
     ) -> K1Result<TypedExprId> {
         let block_scope = ctx.scope_id;
         if block.stmts.is_empty() {
@@ -13073,6 +13128,7 @@ impl TypedProgram {
         let mut stmts = self.mem.new_list(block.stmts.len());
         let mut last_expr_type: TypeId = self.builtin_types.empty;
         let mut last_stmt_is_divergent = false;
+        let mut final_stmt = None;
         let mut last_error = None;
         for (index, stmt) in self.ast.mem.getn(block.stmts).iter().enumerate() {
             if last_stmt_is_divergent {
@@ -13093,7 +13149,10 @@ impl TypedProgram {
             self.tmp.reset_to(tmp_mark);
             let stmt_id = match stmt_result {
                 Ok(Some(stmt_id)) => stmt_id,
-                Ok(None) => continue,
+                Ok(None) => {
+                    last_expr_type = self.builtin_types.empty;
+                    continue;
+                }
                 Err(err) => {
                     if ctx.is_speculative() {
                         return Err(err);
@@ -13104,138 +13163,57 @@ impl TypedProgram {
                 }
             };
 
-            let stmt = self.stmts.get(stmt_id);
-            if let TypedStmt::Defer(defer) = stmt {
-                match self.scopes.block_defers.entry(block_scope) {
-                    Entry::Occupied(mut defers) => {
-                        defers.get_mut().deferred_exprs.push(defer.parsed_expr);
-                    }
-                    Entry::Vacant(vacant) => {
-                        vacant.insert(ScopeDefers { deferred_exprs: smallvec![defer.parsed_expr] });
-                    }
-                }
-            }
-
             let stmt_span = self.get_stmt_span(stmt_id);
             last_expr_type = self.get_stmt_type(stmt_id);
             last_stmt_is_divergent = last_expr_type == NEVER_TYPE_ID;
 
-            if !is_last {
-                if !last_stmt_is_divergent {
-                    let expr_type = match self.stmts.get(stmt_id) {
-                        TypedStmt::Expr(_, expr_type) => Some(*expr_type),
-                        _ => None,
-                    };
-                    if let Some(expr_type) = expr_type {
-                        let implements_try = self
-                            .find_or_generate_ability_impl_for_type(
-                                expr_type,
-                                ABILITY_ID_TRY,
-                                &[],
-                                true,
-                                block_scope,
-                                stmt_span,
-                            )
-                            .is_ok();
-                        if implements_try {
-                            self.report(kwarn!(
-                                self,
-                                stmt_span,
-                                "Discarded expression result of type {}; handle it or discard with `let _`",
-                                expr_type
-                            ));
-                        }
-                    }
-                }
-                stmts.push(stmt_id);
+            if is_last {
+                final_stmt = Some(stmt_id);
                 continue;
             }
-
-            // Falling off the end of the block exits its scope, so the block's pending defers
-            // run now after the final value is computed, which we ensure by binding a
-            // non-trivial final expression and yielding the binding. We typecheck deferred
-            // exprs NOW, as if the deferred code were textually pasted here. A divergent final
-            // statement instead exits through return/break, which emit defers for every scope
-            // they leave themselves.
-            let deferred_exprs = if last_stmt_is_divergent {
-                smallvec![]
-            } else {
-                self.scopes
-                    .block_defers
-                    .get(&block_scope)
-                    .map(|d| d.deferred_exprs.clone())
-                    .unwrap_or_default()
-            };
-
-            let final_value = match self.stmts.get(stmt_id) {
-                TypedStmt::Expr(expr, _) if !last_stmt_is_divergent => Some(*expr),
-                _ => None,
-            };
-            let yielded = match final_value {
-                None => {
-                    stmts.push(stmt_id);
-                    None
-                }
-                Some(final_expr) => {
-                    if deferred_exprs.is_empty() {
-                        if needs_terminator {
-                            Some(final_expr)
-                        } else {
-                            stmts.push(stmt_id);
-                            None
-                        }
-                    } else if matches!(self.exprs.get(final_expr), TypedExpr::Variable(_)) {
-                        Some(final_expr)
-                    } else {
-                        let bound = self.synth_variable_defn_simple(
-                            self.ast.idents.b.defer_value,
-                            final_expr,
+            if !last_stmt_is_divergent {
+                let expr_type = match self.stmts.get(stmt_id) {
+                    TypedStmt::Expr(_, expr_type) => Some(*expr_type),
+                    _ => None,
+                };
+                if let Some(expr_type) = expr_type {
+                    let implements_try = self
+                        .find_or_generate_ability_impl_for_type(
+                            expr_type,
+                            ABILITY_ID_TRY,
+                            &[],
+                            true,
                             block_scope,
-                        );
-                        stmts.push_grow(&mut self.mem, bound.defn_stmt);
-                        Some(bound.variable_expr)
+                            stmt_span,
+                        )
+                        .is_ok();
+                    if implements_try {
+                        self.report(kwarn!(
+                            self,
+                            stmt_span,
+                            "Discarded expression result of type {}; handle it or discard with `let _`",
+                            expr_type
+                        ));
                     }
                 }
-            };
-            for deferred_parsed_expr in deferred_exprs.iter().rev() {
-                let deferred_code = self.eval_expr(
-                    *deferred_parsed_expr,
-                    ctx.with_no_expected_type().with_is_defer(true),
-                )?;
-                let defer_type = self.exprs.get_type(deferred_code);
-                let defer_stmt_id = self.stmts.add(TypedStmt::Expr(deferred_code, defer_type));
-                stmts.push_grow(&mut self.mem, defer_stmt_id);
             }
-            // Ensure termination because this is a 'real' control flow block
-            // Not just a lexical block the user made. For example, a function body.
-            match yielded {
-                Some(yielded_expr) if needs_terminator => {
-                    let returned_variable =
-                        self.check_returned_value_expr(yielded_expr, block_scope)?;
-                    let expr_span = self.exprs.get_span(yielded_expr);
-                    let return_expr =
-                        self.exprs.add_return(yielded_expr, returned_variable, expr_span);
-                    let return_stmt = self.stmts.add(TypedStmt::Expr(return_expr, NEVER_TYPE_ID));
-                    stmts.push_grow(&mut self.mem, return_stmt);
-                }
-                Some(yielded_expr) => {
-                    let yield_stmt = self.stmts.add(TypedStmt::Expr(yielded_expr, last_expr_type));
-                    stmts.push_grow(&mut self.mem, yield_stmt);
-                }
-                None if needs_terminator && !last_stmt_is_divergent => {
-                    let empty = self.synth_empty_value(stmt_span);
-                    let return_empty_expr = self.exprs.add_return(empty, None, stmt_span);
-                    let return_empty =
-                        self.stmts.add(TypedStmt::Expr(return_empty_expr, NEVER_TYPE_ID));
-                    stmts.push_grow(&mut self.mem, return_empty);
-                }
-                None => {}
-            }
+            stmts.push(stmt_id);
         }
 
         if let Some(last_error) = last_error {
             return Err(last_error);
         }
+
+        let final_value = match final_stmt {
+            None => None,
+            Some(stmt_id) => match self.stmts.get(stmt_id) {
+                TypedStmt::Expr(expr, _) if !last_stmt_is_divergent => Some((stmt_id, *expr)),
+                _ => {
+                    stmts.push(stmt_id);
+                    None
+                }
+            },
+        };
 
         for stmt in stmts.iter() {
             if let TypedStmt::Let(let_stmt) = self.stmts.get(*stmt) {
@@ -13244,6 +13222,38 @@ impl TypedProgram {
                     let_stmt.variable_id,
                     let_stmt.span,
                 );
+            }
+        }
+
+        if !last_stmt_is_divergent {
+            let mut defers: SV4<PendingDefer> = smallvec![];
+            for pending in self.pending_defers[defers_base..].iter().rev() {
+                defers.push(*pending);
+            }
+            match final_value {
+                Some((final_stmt_id, _)) if defers.is_empty() && !needs_terminator => {
+                    stmts.push_grow(&mut self.mem, final_stmt_id);
+                }
+                None if defers.is_empty() && !needs_terminator => {}
+                _ => {
+                    let value = match final_value {
+                        Some((_, final_expr)) => final_expr,
+                        None => self.synth_empty_value(block.span),
+                    };
+                    let value = self.push_defers(&mut stmts, &defers, value, block_scope);
+                    let exit = if needs_terminator {
+                        let returned_variable =
+                            self.check_returned_value_expr(value, block_scope)?;
+                        let value_span = self.exprs.get_span(value);
+                        let return_expr =
+                            self.exprs.add_return(value, returned_variable, value_span);
+                        TypedStmt::Expr(return_expr, NEVER_TYPE_ID)
+                    } else {
+                        TypedStmt::Expr(value, last_expr_type)
+                    };
+                    let exit = self.stmts.add(exit);
+                    stmts.push_grow(&mut self.mem, exit);
+                }
             }
         }
 

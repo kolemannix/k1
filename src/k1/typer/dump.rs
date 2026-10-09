@@ -674,12 +674,6 @@ impl TypedProgram {
                 }
                 Ok(())
             }
-            TypedStmt::Defer(defer) => {
-                w.write_str("defer parsed<<")?;
-                self.ast.display_expr_id(w, defer.parsed_expr)?;
-                w.write_str(">>")?;
-                Ok(())
-            }
         }
     }
 

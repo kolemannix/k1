@@ -6,10 +6,10 @@ use fxhash::FxHashMap;
 use std::{fmt::Display, num::NonZeroU32};
 
 use crate::{
-    SV4, kbail, kerr,
+    kbail, kerr,
     kmem::{Dlist, List, Mem},
     nz_u32_id,
-    parse::{ParsedAbilityId, ParsedExprId, ParsedGlobalId, ParsedTypeDefnId, QIdent},
+    parse::{ParsedAbilityId, ParsedGlobalId, ParsedTypeDefnId, QIdent},
     static_assert_niched, static_assert_size,
     typer::{
         AbilityId, FunctionId, K1Result, LoopType, LsEntityKind, MemTmp, NamespaceId, StringId,
@@ -27,6 +27,8 @@ nz_u32_id!(NsMapId);
 pub enum ScopeType {
     FunctionScope,
     LambdaScope,
+    StaticBody,
+    DeferBody,
     LexicalBlock,
     Namespace,
     WhileLoopBody,
@@ -45,6 +47,8 @@ impl ScopeType {
         match self {
             ScopeType::FunctionScope => "fn",
             ScopeType::LambdaScope => "clos",
+            ScopeType::StaticBody => "static",
+            ScopeType::DeferBody => "defer",
             ScopeType::LexicalBlock => "block",
             ScopeType::Namespace => "ns",
             ScopeType::WhileLoopBody => "while",
@@ -60,13 +64,15 @@ impl ScopeType {
     }
 
     pub fn is_top_of_function(&self) -> bool {
-        matches!(self, ScopeType::FunctionScope | ScopeType::LambdaScope)
+        matches!(self, ScopeType::FunctionScope | ScopeType::LambdaScope | ScopeType::StaticBody)
     }
 
     pub fn loop_type(&self) -> Option<LoopType> {
         match self {
             ScopeType::FunctionScope => None,
             ScopeType::LambdaScope => None,
+            ScopeType::StaticBody => None,
+            ScopeType::DeferBody => None,
             ScopeType::LexicalBlock => None,
             ScopeType::Namespace => None,
             ScopeType::WhileLoopBody => Some(LoopType::While),
@@ -107,10 +113,6 @@ pub struct ScopeLoopInfo {
     pub break_type: Option<TypeId>,
     pub label: Option<StringId>,
     pub has_break: bool,
-}
-
-pub struct ScopeDefers {
-    pub deferred_exprs: SV4<ParsedExprId>,
 }
 
 /// A context variable registered under an ability key. `Ambiguous` marks a key
@@ -220,7 +222,6 @@ pub struct Scopes {
     ns_maps: VPool<FxHashMap<StringId, NsEntry>, NsMapId>,
     pub lambda_info: FxHashMap<ScopeId, ScopeLambdaInfo>,
     pub loop_info: FxHashMap<ScopeId, ScopeLoopInfo>,
-    pub block_defers: FxHashMap<ScopeId, ScopeDefers>,
     pub core_scope_id: ScopeId,
     pub k1_scope_id: ScopeId,
     pub mem_scope_id: ScopeId,
@@ -236,14 +237,13 @@ impl Scopes {
 
 
     pub fn snap(&self, w: &mut crate::snap::SnapWriter) {
-        use crate::snap::{snap_map_with, write_map_snap};
+        use crate::snap::write_map_snap;
         let Scopes {
             scopes,
             entries,
             ns_maps,
             lambda_info,
             loop_info,
-            block_defers,
             core_scope_id,
             k1_scope_id,
             mem_scope_id,
@@ -260,7 +260,6 @@ impl Scopes {
         }
         write_map_snap(w, lambda_info);
         write_map_snap(w, loop_info);
-        snap_map_with(w, block_defers, |w, defers| w.write_slice(&defers.deferred_exprs));
         for id in [
             core_scope_id,
             k1_scope_id,
@@ -274,7 +273,7 @@ impl Scopes {
     }
 
     pub fn restore(r: &mut crate::snap::SnapReader) -> Scopes {
-        use crate::snap::{restore_map_snap, restore_map_with};
+        use crate::snap::restore_map_snap;
         r.section("scopes");
         let mut scopes = VPool::make("scopes");
         scopes.restore(r);
@@ -290,9 +289,6 @@ impl Scopes {
             ns_maps,
             lambda_info: restore_map_snap(r),
             loop_info: restore_map_snap(r),
-            block_defers: restore_map_with(r, |r| ScopeDefers {
-                deferred_exprs: SV4::from_slice(&r.read_vec::<ParsedExprId>()),
-            }),
             core_scope_id: r.read_t(),
             k1_scope_id: r.read_t(),
             mem_scope_id: r.read_t(),
@@ -310,7 +306,6 @@ impl Scopes {
             ns_maps: VPool::make("scope_ns_maps"),
             lambda_info: FxHashMap::default(),
             loop_info: FxHashMap::default(),
-            block_defers: FxHashMap::default(),
             core_scope_id: ScopeId::PENDING,
             k1_scope_id: ScopeId::PENDING,
             mem_scope_id: ScopeId::PENDING,

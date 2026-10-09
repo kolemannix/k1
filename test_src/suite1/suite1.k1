@@ -40,6 +40,7 @@ fn moderate() {
   recurse_basic/test()
   recursive_generics/test()
   defer_test/test()
+  #static defer_test/test()
   structural/test()
   never_everywhere/test()
   never_type/test()

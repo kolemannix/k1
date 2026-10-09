@@ -123,6 +123,7 @@ fn handle(req: http/request, bus: *pubsub/bus[span[u8]]): http-response {
   else if url == "/slow" { libuv/sleep(300); response/text(200, "slow-done") }
   else if url == "/len" response/text(200, "len ${req.header.content-length.!}")
   else if url == "/stall" { libuv/sleep(2000); response/text(200, "stall-done") }
+  else if url == "/outlast" { libuv/sleep(2600); response/text(200, "outlast-done") }
   else if url == "/events" datastar/patch-signals(bus.subscribe("t") || rc-byte-stream)
   else response/not-found()
 }
@@ -138,14 +139,19 @@ type client = {
   started: u64,
   elapsed-ms: u64,
   eof: bool,
+  hang-up: bool,
   on-eof: *fn(*client) -> {},
 }
 
 ns for client {
-  fn start(port: u16, send: string, on-eof: *fn(*client) -> {}) {
+  fn start(port: u16, send: string, on-eof: *fn(*client) -> {}) { open(port, send, on-eof, hang-up = false) }
+
+  fn start-and-hang-up(port: u16, send: string) { open(port, send, fn _c. .{}, hang-up = true) }
+
+  fn open(port: u16, send: string, on-eof: *fn(*client) -> {}, hang-up: bool) {
     let c: *client = heap.new(.{
       tcp = uninit, connect-req = uninit, write-req = uninit, buf = uninit, read-buf = uninit,
-      send, received = list/empty(), started = libuv/now(libuv/default_loop().get()), elapsed-ms = 0, eof = false, on-eof,
+      send, received = list/empty(), started = libuv/now(libuv/default_loop().get()), elapsed-ms = 0, eof = false, hang-up, on-eof,
     })
     let l = libuv/default_loop().get()
     uv/check(libuv/tcp_init(l, c.tcp.&)).!
@@ -164,7 +170,12 @@ fn on-connect(req: *libuv/connect, status: i32) {
   let c = req.get-data[client]()
   if status != 0 crash("client connect failed: $status")
   c.buf = libuv/buf/wrap-span(c.send.span-bytes())
-  uv/check(libuv/write(c.write-req.&, c.tcp.&.as-stream(), c.buf.&, 1, fn(_req, status) { uv/check(status).! })).!
+  uv/check(libuv/write(c.write-req.&, c.tcp.&.as-stream(), c.buf.&, 1, fn(req, status) {
+    uv/check(status).!
+    let c = req.get-data[client]()
+    if c.hang-up { libuv/close(c.tcp.&.as-handle(), fn _h. .{}) }
+  })).!
+  if c.hang-up return
   if libuv/read_start(c.tcp.&.as-stream(), fn(h, _size, buf) {
     let c = h.get-data[client]()
     buf.* = libuv/buf/wrap-span(c.read-buf.&.as-span())
@@ -262,17 +273,19 @@ fn phase2() {
 
 fn test-server() {
   let config: server/config = .{
-    host = "127.0.0.1", port = 0, accept-queue-len = 128, max-connections = 3, max-body-size = 1024,
+    host = "127.0.0.1", port = 0, accept-queue-len = 128, max-connections = 4, max-body-size = 1024,
     header-timeout-ms = 200, body-timeout-ms = 30000, write-timeout-ms = 30000,
     idle-timeout-ms = 300, drain-timeout-ms = 500, handle-signals = false,
   }
   startup-state = "startup-lifetime".cloned()
   let bus = uv/bus/create[span[u8]](libuv/default_loop().get(), 1048576, fn(payload: rc-bytes) payload.bytes().len())
-  let s = server/start(config, (fn[bus](req: http/request) handle(req, bus)).to-dyn()).!
+  let pool = uv/worker-pool/start(4, 64)
+  let s = server/start(config, pool, (fn[bus](req: http/request) handle(req, bus)).to-dyn()).!
   srv = s.as[ptr]
   assert(s.port != 0)
   client/start(s.port, "GET / HTTP/1.1\r\nHost: x\r\n", on-slowloris-eof.&)
   client/start(s.port, "GET /hello HTTP/1.1\r\nHost: x\r\n\r\n", on-hello-eof.&)
+  client/start-and-hang-up(s.port, "GET /outlast HTTP/1.1\r\nHost: x\r\n\r\n")
   client/start(s.port, "GET /stall HTTP/1.1\r\nHost: x\r\n\r\n", fn c. {
     assert(c.received.is-empty())
     assert(c.elapsed-ms >= 2000)
@@ -288,6 +301,7 @@ fn test-server() {
     libuv/close(t.as-handle(), fn _h. .{})
   }, 50, 0)
   s.run()
+  pool.join()
   assert(startup-state == "startup-lifetime")
   assert(slowloris-cut)
   assert(hello-idle-cut)

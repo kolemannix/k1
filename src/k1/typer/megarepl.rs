@@ -627,10 +627,10 @@ impl TypedProgram {
                         }
                     }
                 }
-                ParsedStmt::Use(_)
-                | ParsedStmt::Require(_)
-                | ParsedStmt::Assign(_)
-                | ParsedStmt::Defer(_) => {
+                ParsedStmt::Defer(defer) => {
+                    kbail!(self, defer.span, "defer is not supported at the top level of a cell");
+                }
+                ParsedStmt::Use(_) | ParsedStmt::Require(_) | ParsedStmt::Assign(_) => {
                     if let Some(stmt_id) = self.eval_stmt(*stmt, ctx, false, index)? {
                         self.push_block_stmt_id(&mut cell_block, stmt_id);
                     }

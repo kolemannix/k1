@@ -233,10 +233,7 @@ pub fn write_map_snap<K: Copy, V: Copy, S>(
     w: &mut SnapWriter,
     map: &std::collections::HashMap<K, V, S>,
 ) {
-    w.sorted_entries(map.iter(), |w, (k, v)| {
-        w.write_t(k);
-        w.write_t(v);
-    });
+    snap_map_with(w, map, |w, v| w.write_t(v))
 }
 
 pub fn restore_map_snap<K, V, S>(r: &mut SnapReader) -> std::collections::HashMap<K, V, S>

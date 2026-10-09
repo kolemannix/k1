@@ -41,6 +41,7 @@ pub struct ParsedUse {
 
 #[derive(Clone, Copy)]
 pub struct ParsedDefer {
+    pub binder: Option<(StringId, Span)>,
     pub expr: ParsedExprId,
     pub span: Span,
 }
@@ -5743,9 +5744,25 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn expect_defer(&mut self) -> ParseResult<ParsedDefer> {
         let defer_token = self.expect_kind(K::KeywordDefer)?;
+        let (name, dot, after_dot) = self.peek_three();
+        let binder = if name.kind == K::Ident
+            && dot.is_kind_nonspaced(K::Dot)
+            && after_dot.is_whitespace_preceded()
+        {
+            let (binder_token, binder) = self.expect_ident()?;
+            self.emit_semantic_token_mods(
+                binder_token,
+                SemanticTokenKind::Variable,
+                SemanticToken::DECLARATION,
+            );
+            self.advance();
+            Some((binder, self.tok_span(binder_token)))
+        } else {
+            None
+        };
         let expr = self.expect_expression()?;
         let span = self.extend_tok_to_here(defer_token);
-        Ok(ParsedDefer { expr, span })
+        Ok(ParsedDefer { binder, expr, span })
     }
 }
 
@@ -6303,6 +6320,10 @@ impl ParsedProgram {
             }
             ParsedStmt::Defer(defer) => {
                 w.write_str("defer ")?;
+                if let Some((binder, _)) = defer.binder {
+                    self.display_ident(w, binder)?;
+                    w.write_str(". ")?;
+                }
                 self.display_expr_id(w, defer.expr)?;
                 Ok(())
             }

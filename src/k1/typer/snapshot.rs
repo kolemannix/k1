@@ -126,6 +126,7 @@ impl TypedProgram {
             lsp: _,
             inference_context_stack,
             inference_context_extras: _,
+            pending_defers,
             type_defn_context,
             buffers: _,
             patterns,
@@ -150,6 +151,7 @@ impl TypedProgram {
         } = self;
         assert!(megarepl.is_none(), "cannot snapshot a megarepl session");
         assert!(inference_context_stack.is_empty(), "cannot snapshot mid-inference");
+        assert!(pending_defers.is_empty(), "cannot snapshot mid-block");
 
         ast.snap(w);
         w.write_section("typed");

@@ -2236,7 +2236,6 @@ fn compile_stmt(b: &mut Builder, dst: Option<Value>, stmt: TypedStmtId) -> K1Res
 
             Ok(Value::Empty)
         }
-        TypedStmt::Defer(_) => Ok(Value::Empty),
     }
 }
 

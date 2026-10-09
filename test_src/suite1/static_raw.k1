@@ -36,6 +36,9 @@ let(mutable) BUF2: buffer[u8] = { let l = list/with-capacity[u8](2); l.push(1); 
 type flag = either { off, on }
 let FLAGS: span[flag] = [:on, :off, :on]
 
+type tail-padded = { name: string, code: u16 }
+let NESTED_TAIL: { name: string, inner: tail-padded } = .{ name = "a", inner = .{ name = "b", code = 2 } }
+
 fn same-type[t](_a: t, _b: t) {}
 
 fn test() {
@@ -56,6 +59,7 @@ fn test() {
   assert-equals(EMPTY.buffer.len, 0)
   assert-equals(FLAGS.[1], :off)
   assert-equals(FLAGS.[2], :on)
+  assert(NESTED_TAIL.inner.name == "b" and NESTED_TAIL.inner.code == 2)
 
   let arr: array[u8, 3] = [1, 2, 3]
   let lst: list[u8] = [1, 2, 3]

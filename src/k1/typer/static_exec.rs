@@ -187,7 +187,7 @@ impl TypedProgram {
         let parsed_expr_as_block =
             self.ensure_parsed_expr_to_block(parsed_expr, ParsedBlockKind::FunctionBody);
         let static_block_scope =
-            self.scopes.add_child_scope(ctx.scope_id, ScopeType::LexicalBlock, ScopeOwnerId::None);
+            self.scopes.add_child_scope(ctx.scope_id, ScopeType::StaticBody, ScopeOwnerId::None);
         let mut cur_scope = ctx.scope_id;
         let mut locals_to_mask = self.tmp.new_list(0);
 
