@@ -469,7 +469,7 @@ ability try[impl t, impl e] {
 
 ability iterator[impl item] {
   fn next(self: *self): ?item
-  fn size-hint(self: *self): { at-least: size, at-most: ?size } {
+  fn size-hint(_self: *self): { at-least: size, at-most: ?size } {
     .{ at-least = 0, at-most = :none }
   }
   fn advance-by(self: *self, n: size) {
@@ -499,6 +499,13 @@ ability iterable[impl item, impl i: iterator[item = item]] {
   fn find(self, pred: some fn item -> bool): ?item {
     for self {
       if pred(it) return :some it
+    }
+    :none
+  }
+
+  fn find-index(self, pred: some fn item -> bool): ?size {
+    for self {
+      if pred(it) return :some it-index
     }
     :none
   }

@@ -7,6 +7,7 @@ use std/waker
 use std/sum-sink
 use std/channel
 use std/mpsc
+use std/mpsc-node
 use std/notify
 use std/rc
 use std/rc-bytes
@@ -104,21 +105,28 @@ fn test-rc-byte-stream() {
 let(mutable) notify-count: int = 0
 fn count-notify(_p: ptr) { notify-count = notify-count + 1 }
 
+type mpsc-test-node = { value: int, link: optref[mpsc-test-node] }
+impl mpsc-node for mpsc-test-node {
+  fn mpsc-link(self: *mpsc-test-node): *optref[mpsc-test-node] { self.link.& }
+}
+
 fn test-mpsc() {
-  let q = mpsc/make[int](.{ state = ptr/null, notify-fn = count-notify.& })
-  q.send(1)
-  q.send(2)
-  q.send(3)
-  assert-equals(notify-count, 3)
-  let out = list/empty[int]()
-  q.take(out.&)
-  assert-equals(out.len(), 3)
-  assert-equals(out.[0], 1)
-  assert-equals(out.[1], 2)
-  assert-equals(out.[2], 3)
-  out.clear()
-  q.take(out.&)
-  assert(out.is-empty())
+  let q = mpsc/make[mpsc-test-node](.{ state = ptr/null, notify-fn = count-notify.& })
+  let a: mpsc-test-node = .{ value = 1, link = optref/null() }
+  let b: mpsc-test-node = .{ value = 2, link = optref/null() }
+  let c: mpsc-test-node = .{ value = 3, link = optref/null() }
+  q.&.send(a.&)
+  q.&.send(b.&)
+  q.&.send(c.&)
+  assert-equals(notify-count, 1)
+  let seen = list/empty[int]()
+  for n in q.&.take() { seen.push(n.value) }
+  assert-equals(seen, [1, 2, 3])
+  seen.clear()
+  for n in q.&.take() { seen.push(n.value) }
+  assert(seen.is-empty())
+  q.&.send(a.&)
+  assert-equals(notify-count, 2)
 }
 
 fn test() {

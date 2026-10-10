@@ -10,6 +10,8 @@ use std/byte-source
 use std/pool
 use std/posix
 use std/mpsc
+use std/mpsc-node
+use std/notify
 use uv/worker-pool
 use uv/job
 
@@ -25,10 +27,10 @@ type server = {
   port: u16,
   handler: dyn[fn(http/request) -> http-response],
   worker-pool: *worker-pool,
-  handler-results: *mpsc[*server/http-handler-work],
-  on-handler-result: libuv/async,
-  finished-handlers: list[*server/http-handler-work],
-  handlers-in-flight: u32,
+  handled: mpsc[server/http-handler-work],
+  woken: mpsc[server/connection],
+  on-loop-event: libuv/async,
+  awaited-events: u32,
   connections: pool[server/connection],
   draining: bool,
   conn-serial: u64,
@@ -72,10 +74,10 @@ fn start(
     port = config.port,
     handler,
     worker-pool,
-    handler-results = uninit,
-    on-handler-result = uninit,
-    finished-handlers = list/empty(),
-    handlers-in-flight = 0,
+    handled = uninit,
+    woken = uninit,
+    on-loop-event = uninit,
+    awaited-events = 0,
     connections = pool/with-capacity-in[connection, _](heap, config.max-connections),
     draining = false,
     conn-serial = 0,
@@ -95,13 +97,15 @@ fn start(
     s.port = ((bound.sin_port & 0xff) << 8) | (bound.sin_port >> 8)
   }
 
-  uv/check(libuv/async_init(l, s.on-handler-result.&, finish-handlers.&)).!
-  s.on-handler-result.&.set-data(s)
-  libuv/unref(s.on-handler-result.&.as-handle())
-  s.handler-results = mpsc/make(.{
+  uv/check(libuv/async_init(l, s.on-loop-event.&, run-loop-events.&)).!
+  s.on-loop-event.&.set-data(s)
+  libuv/unref(s.on-loop-event.&.as-handle())
+  let on-send: notify = .{
     state = s.as[ptr],
-    notify-fn = fn(state: ptr) uv/check(libuv/async_send(state.ref[server]().on-handler-result.&)).!,
-  })
+    notify-fn = fn(state: ptr) uv/check(libuv/async_send(state.ref[server]().on-loop-event.&)).!,
+  }
+  s.handled = mpsc/make(on-send)
+  s.woken = mpsc/make(on-send)
 
   uv/check(libuv/prepare_init(l, s.scratch-prepare.&)).!
   s.scratch-prepare.&.set-data(s)
@@ -170,6 +174,8 @@ type connection = {
   serial-no: u64,
   slot: pool/handle[connection],
   pending-closes: u32,
+  wake-queued: bool,
+  wake-link: optref[connection],
   phase: phase,
 
   request-arena: *arena,
@@ -194,6 +200,8 @@ ns for connection {
       serial-no = s.conn-serial,
       slot = .0,
       pending-closes = 0,
+      wake-queued = false,
+      wake-link = optref/null(),
       phase = :header,
 
       request-arena,
@@ -226,6 +234,10 @@ ns for connection {
 
   fn release(*self) {
     let s = self.server
+    if atomic/load(self.wake-queued.&, :relaxed) {
+      s.await-event()
+      return
+    }
     self.request-arena.release()
     s.connections.release(self.slot)
     tprintln("conn${self.serial-no} released; active connections: ${s.connections.len()}")
@@ -274,7 +286,7 @@ ns for connection {
     self.stop-stream()
     if handling {
       if not self.server.worker-pool.cancel(self.handler-job) return
-      self.server.end-handler()
+      self.server.end-await()
     }
     self.close-handles()
   }
@@ -380,7 +392,7 @@ fn on-write-complete(req: *libuv/write, status: i32) {
 
 fn on-wake(state: ptr) {
   let connection = state.ref[connection]()
-  if connection.phase is :parked { connection.pump() }
+  if not atomic/xchg(connection.wake-queued.&, true, :acq-rel) { connection.server.woken.&.send(connection) }
 }
 
 fn on-timeout(t: *libuv/timer) {
@@ -399,19 +411,27 @@ type http-handler-work = {
   *connection,
   request: http/request,
   ?http-response,
+  link: optref[http-handler-work],
+}
+
+impl mpsc-node for http-handler-work {
+  fn mpsc-link(self: *http-handler-work): *optref[http-handler-work] { self.link.& }
+}
+
+impl mpsc-node for connection {
+  fn mpsc-link(self: *connection): *optref[connection] { self.wake-link.& }
 }
 
 fn run-handler(work: *http-handler-work) {
   let s = work.connection.server
   work.http-response = :some mem/with-arena(work.connection.request-arena, (s.handler)(work.request))
-  s.handler-results.send(work)
+  s.handled.&.send(work)
 }
 
-fn finish-handlers(handle: *libuv/async) {
+fn run-loop-events(handle: *libuv/async) {
   let s = handle.get-data[server]()
-  s.handler-results.take(s.finished-handlers.&)
-  for work in s.finished-handlers {
-    s.end-handler()
+  for work in s.handled.&.take() {
+    s.end-await()
     let connection = work.connection
     if connection.phase is :closing {
       if work.http-response is :some response and response.body is :stream source { source.stop() }
@@ -420,12 +440,27 @@ fn finish-handlers(handle: *libuv/async) {
       connection.begin-response(work.http-response.!)
     }
   }
-  s.finished-handlers.clear()
+  for connection in s.woken.&.take() {
+    let _ = atomic/xchg(connection.wake-queued.&, false, :acq-rel)
+    if connection.phase is {
+      :parked -> connection.pump(),
+      :closing -> if connection.pending-closes == 0 and libuv/is_closing(connection.client().as-handle()) != 0 {
+        s.end-await()
+        connection.release()
+      },
+      _ -> .{},
+    }
+  }
 }
 
-fn end-handler(*self) {
-  self.handlers-in-flight = self.handlers-in-flight - 1
-  if self.handlers-in-flight == 0 { libuv/unref(self.on-handler-result.&.as-handle()) }
+fn await-event(*self) {
+  self.awaited-events = self.awaited-events + 1
+  if self.awaited-events == 1 { libuv/ref(self.on-loop-event.&.as-handle()) }
+}
+
+fn end-await(*self) {
+  self.awaited-events = self.awaited-events - 1
+  if self.awaited-events == 0 { libuv/unref(self.on-loop-event.&.as-handle()) }
 }
 
 fn alloc-read-buffer(handle: *libuv/handle, suggested-size: usize, buf: *libuv/buf) {
@@ -485,6 +520,7 @@ fn on-complete-http-body(connection: *connection, chunks: span[span[u8]]) {
     connection,
     request = .{ header = connection.parsed-header.get(), body = chunks },
     http-response = :none,
+    link = optref/null(),
   })
   connection.client().read-stop()
   let s = connection.server
@@ -495,8 +531,7 @@ fn on-complete-http-body(connection: *connection, chunks: span[span[u8]]) {
     return
   }
   connection.handler-job = job
-  s.handlers-in-flight = s.handlers-in-flight + 1
-  if s.handlers-in-flight == 1 { libuv/ref(s.on-handler-result.&.as-handle()) }
+  s.await-event()
   connection.enter-phase(:handling)
 }
 

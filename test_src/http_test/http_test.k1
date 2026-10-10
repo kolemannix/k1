@@ -17,6 +17,9 @@ use std/collect-sink
 use std/byte-source
 use http/chunked
 use http/sse-events
+use std/waker
+use std/pull
+use uv/worker-pool
 
 $http/routing/define(route, \{
   get  events     "/events"
@@ -117,7 +120,32 @@ fn test-encoders() {
   assert-equals(sse(source/once(["a\rb\r".span-bytes(), "\nc\r\n".span-bytes()]), "e", "p"), "event: e\ndata: p a\ndata: p b\ndata: p c\n\n")
 }
 
-fn handle(req: http/request, bus: *pubsub/bus[span[u8]]): http-response {
+type worker-woken = { pool: *worker-pool, waker: waker, state: uv/mutex[{ stopped: bool, ready: bool }], sent: bool }
+
+impl source[t = u8] for worker-woken {
+  fn start(self: *worker-woken, waker: waker) {
+    self.waker = waker
+    self.state.init(.{ stopped = false, ready = false })
+    let _ = self.pool.submit(self, fn(src: *worker-woken) {
+      libuv/sleep(50)
+      uv/locked(src.state, state, {
+        if not state.stopped {
+          state.ready = true
+          src.waker.wake()
+        }
+      })
+    }).!
+  }
+  fn pull(self: *worker-woken): pull[u8] {
+    if self.sent return :done
+    require uv/locked(self.state, state, state.ready) else return :pending
+    self.sent = true
+    :chunk ["woken".span-bytes()]
+  }
+  fn stop(self: *worker-woken) { uv/locked(self.state, state, { state.stopped = true }) }
+}
+
+fn handle(req: http/request, bus: *pubsub/bus[span[u8]], pool: *worker-pool): http-response {
   let url = req.header.url.text
   if url == "/hello" response/text(200, "hi")
   else if url == "/slow" { libuv/sleep(300); response/text(200, "slow-done") }
@@ -125,6 +153,10 @@ fn handle(req: http/request, bus: *pubsub/bus[span[u8]]): http-response {
   else if url == "/stall" { libuv/sleep(2000); response/text(200, "stall-done") }
   else if url == "/outlast" { libuv/sleep(2600); response/text(200, "outlast-done") }
   else if url == "/events" datastar/patch-signals(bus.subscribe("t") || rc-byte-stream)
+  else if url == "/worker-woken" {
+    let src: *worker-woken = mem/new(.{ pool, waker = waker/noop(), state = uninit, sent = false })
+    .{ status = 200, content-type = "text/plain", extra-headers = [], body = :stream src.to-dyn[source[t = u8]] }
+  }
   else response/not-found()
 }
 
@@ -206,6 +238,7 @@ let(mutable) slow-finished: bool = false
 let(mutable) stall-cut: bool = false
 let(mutable) over-cap-rejected: bool = false
 let(mutable) body-limits-checked: bool = false
+let(mutable) worker-woke-stream: bool = false
 
 fn get-server(): *server { srv.ref[server] }
 
@@ -226,7 +259,11 @@ fn on-slowloris-eof(c: *client) {
         client/start(get-server().port, "POST /len HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello", fn c. {
           assert(c.text().ends-with("\r\n\r\nlen 5"))
           body-limits-checked = true
-          phase1-step()
+          client/start(get-server().port, "GET /worker-woken HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n", fn c. {
+            assert(c.text().ends-with("\r\n\r\n5\r\nwoken\r\n0\r\n\r\n"))
+            worker-woke-stream = true
+            phase1-step()
+          })
         })
       })
     })
@@ -280,7 +317,7 @@ fn test-server() {
   startup-state = "startup-lifetime".cloned()
   let bus = uv/bus/create[span[u8]](libuv/default_loop().get(), 1048576, fn(payload: rc-bytes) payload.bytes().len())
   let pool = uv/worker-pool/start(4, 64)
-  let s = server/start(config, pool, (fn[bus](req: http/request) handle(req, bus)).to-dyn()).!
+  let s = server/start(config, pool, (fn[bus, pool](req: http/request) handle(req, bus, pool)).to-dyn()).!
   srv = s.as[ptr]
   assert(s.port != 0)
   client/start(s.port, "GET / HTTP/1.1\r\nHost: x\r\n", on-slowloris-eof.&)
@@ -309,6 +346,7 @@ fn test-server() {
   assert(slow-finished)
   assert(stall-cut)
   assert(body-limits-checked)
+  assert(worker-woke-stream)
   assert(over-cap-rejected)
   assert(s.connections.is-empty())
 }

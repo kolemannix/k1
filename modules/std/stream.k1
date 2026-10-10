@@ -1,7 +1,5 @@
 // Pull-based chunk streams with async support via wakers
 
-// Loop-thread-only wake: exactly one party holds a waker and calls it from
-// the thread that runs the stream. For cross-thread signaling use notify.
 type waker = { state: ptr, wake-fn: *fn(ptr) -> {} }
 ns for waker {
   fn wake(self: waker) { (self.wake-fn)(self.state) }

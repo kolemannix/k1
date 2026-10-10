@@ -50,6 +50,10 @@ fn test() {
   values.push(9)
   assert-equals(values.show(), "[9]")
 
+  let found: list[int] = [5, 8, 13]
+  assert(found.find-index(fn v. v > 6) == :some 1)
+  assert(found.find-index(fn v. v > 20) == :none)
+
   let a = [1,2]
   assert(a.pop() == :some 2)
   assert(a.pop() == :some 1)

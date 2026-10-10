@@ -22,12 +22,15 @@ ns pubsub {
     // both released after dispatch; data is retained per matching subscriber
     topic: rc[string],
     data: rc[t],
+    link: optref[event[t]],
+  }
+
+  impl[t] mpsc-node for event[t] {
+    fn mpsc-link(self: *event[t]): *optref[event[t]] { self.link.& }
   }
 
   type bus[t] = {
-    ingress: *mpsc[event[t]],
-    // consumer thread: reused drain buffer
-    scratch: list[event[t]],
+    ingress: mpsc[event[t]],
     // consumer thread only
     subscribers: list[*subscription[t]],
     subscriber-cap-weight: size,
@@ -41,7 +44,6 @@ ns pubsub {
   ): *bus[t] {
     heap.new(.{
       ingress = mpsc/make[event[t]](on-event),
-      scratch = list/empty[event[t]](),
       subscribers = list/empty[*subscription[t]](),
       subscriber-cap-weight,
       weight-fn,
@@ -51,10 +53,11 @@ ns pubsub {
   ns for bus {
     // Any thread. Takes ownership of one reference to `value`.
     fn publish[t](self: *bus[t], topic: string, value: rc[t]) {
-      self.ingress.send(.{
+      self.ingress.&.send(heap.new[event[t]](.{
         topic = heap-string/cloned(topic).to-rc(),
         data = value,
-      })
+        link = optref/null(),
+      }))
     }
 
     // Any thread: only allocates; the bus learns about the subscription when
@@ -76,9 +79,7 @@ ns pubsub {
     // Consumer thread only: route every queued event to its subscribers,
     // then wake the ones that got something.
     fn dispatch[t](self: *bus[t]) {
-      self.scratch.clear()
-      self.ingress.take(self.scratch.&)
-      for event in self.scratch {
+      for event in self.ingress.&.take() {
         for sub in self.subscribers {
           if sub.topic.get().* == event.topic.get().* {
             let payload = event.data.retain()
@@ -90,8 +91,8 @@ ns pubsub {
         }
         event.topic.release()
         event.data.release()
+        heap.free-t(event)
       }
-      self.scratch.clear()
 
       // Flush after dispatch, on a snapshot: a woken stream can fail
       // synchronously and detach its subscription from subscribers, so never

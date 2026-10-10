@@ -4,39 +4,49 @@ ns for notify {
   fn notify(self: notify) { (self.notify-fn)(self.state) }
 }
 
-// Lock-free multi-producer single-consumer handoff: send from any thread,
-// take on the consumer's thread. Each send allocates one node and fires the
-// notify; take drains everything queued in send order.
-type mpsc-node[t] = { value: t, next: ptr }
+ability mpsc-node {
+  fn mpsc-link(self: *self): *optref[self]
+}
+
 type mpsc[t] = { head: ptr, on-send: notify }
 
+type mpsc-batch[t] = { at: optref[t] }
+
 ns for mpsc {
-  fn make[t](on-send: notify): *mpsc[t] {
-    heap.new(.{ head = ptr/null, on-send })
-  }
+  fn make[t](on-send: notify): mpsc[t] { .{ head = ptr/null, on-send } }
 
   // Any thread
-  fn send[t](self: *mpsc[t], value: t) {
-    let node: *mpsc-node[t] = heap.new(.{ value, next = ptr/null })
+  fn send[t: mpsc-node](self: *mpsc[t], node: *t) {
+    let old = atomic/load(self.head.&, :relaxed)
     loop {
-      let old = atomic/load(self.head.&, :relaxed)
-      node.next = old
-      if atomic/cmpxchg-weak(self.head.&, old, node.as[ptr], :release, :relaxed).ok { break }
+      node.mpsc-link().* = .{ inner = old }
+      let swap = atomic/cmpxchg-weak(self.head.&, old, node.as[ptr], :release, :relaxed)
+      if swap.ok { break }
+      old = swap.prev
     }
-    self.on-send.notify()
+    if old is null { self.on-send.notify() }
   }
 
-  // Consumer thread only. Appends every queued value to `out` (assumed
-  // empty) in send order; out's pushes go to the system heap.
-  fn take[t](self: *mpsc[t], out: *list[t]) {
+  // Consumer thread only
+  fn take[t: mpsc-node](self: *mpsc[t]): mpsc-batch[t] {
     let n = atomic/xchg(self.head.&, ptr/null, :acquire)
+    let ordered: optref[t] = optref/null()
     while not (n is null) {
-      let node = n.ref[mpsc-node[t]]
-      out.push-in(heap, node.value)
-      n = node.next
-      heap.free-t(node)
+      let node = n.ref[t]
+      let link = node.mpsc-link()
+      n = link.inner
+      link.* = ordered
+      ordered = optref/make(node)
     }
-    out.reverse()
+    .{ at = ordered }
+  }
+}
+
+impl[t: mpsc-node] iterator[item = *t] for mpsc-batch[t] {
+  fn next(self: *mpsc-batch[t]): ?*t {
+    require self.at.as-opt() is :some node else return :none
+    self.at = node.mpsc-link().*
+    :some node
   }
 }
 
@@ -47,6 +57,7 @@ ns for mpsc {
 // in weight-fn units (pass fn(_) 1 for a plain item count).
 type channel[t] = {
   queue: list[t],
+  head: size,
   queued-weight: size,
   cap-weight: size,
   weight-fn: *fn(t) -> size,
@@ -64,6 +75,7 @@ ns for channel {
   fn make[t](cap-weight: size, weight-fn: *fn(t) -> size, drop-fn: *fn(t) -> {}): *channel[t] {
     heap.new(.{
       queue = list/empty[t](),
+      head = 0,
       queued-weight = 0,
       cap-weight,
       weight-fn,
@@ -83,6 +95,12 @@ ns for channel {
     if self.closed or self.failure.is-some() { return false }
     let w = (self.weight-fn)(value)
     if self.queued-weight + w > self.cap-weight { return false }
+    if self.head > 0 and self.head * 2 >= self.queue.len() {
+      let live = self.queue.len() - self.head
+      for i in 0.until(live) { self.queue.[i] = self.queue.[self.head + i] }
+      self.queue.len = live
+      self.head = 0
+    }
     self.queue.push-in(heap, value)
     self.queued-weight = self.queued-weight + w
     self.pending-wake = true
@@ -107,7 +125,7 @@ ns for channel {
   // can arrive.
   fn close-and-free[t](self: *channel[t]) {
     self.closed = true
-    for item in self.queue { (self.drop-fn)(item) }
+    for item in self.queue.as-span().slice(self.head, self.queue.len()) { (self.drop-fn)(item) }
     if self.queue.cap() > 0 {
       heap.free(self.queue.data-ptr(), self.queue.cap() * types/size[t], types/align[t])
     }
@@ -119,9 +137,9 @@ impl[t] source[t = t] for channel[t] {
   fn start(self: *channel[t], waker: waker) { self.waker = :some waker }
   fn pull(self: *channel[t]): pull[t] {
     if self.failure is :some message { return :fail message }
-    if self.queue.is-empty() { return :pending }
-    let item = self.queue.[0]
-    self.queue.remove(0)
+    if self.head == self.queue.len() { return :pending }
+    let item = self.queue.[self.head]
+    self.head = self.head + 1
     self.queued-weight = self.queued-weight - (self.weight-fn)(item)
     self.part = item
     self.seg = span/wrap-single(self.part.&)
