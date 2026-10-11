@@ -61,15 +61,6 @@ pub mod k1_types {
 
     #[derive(Clone, Copy)]
     #[repr(C)]
-    pub struct CodeToken {
-        kind: CodeTokenKind,
-        text: K1BufferLike,
-        source: u64,
-        spacing: CodeTokenSpacing
-    }
-
-    #[derive(Clone, Copy)]
-    #[repr(C)]
     pub struct TypeId {
         pub inner: u64,
     }

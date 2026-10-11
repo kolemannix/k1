@@ -112,9 +112,9 @@ impl mpsc-node for mpsc-test-node {
 
 fn test-mpsc() {
   let q = mpsc/make[mpsc-test-node](.{ state = ptr/null, notify-fn = count-notify.& })
-  let a: mpsc-test-node = .{ value = 1, link = optref/null() }
-  let b: mpsc-test-node = .{ value = 2, link = optref/null() }
-  let c: mpsc-test-node = .{ value = 3, link = optref/null() }
+  let a: mpsc-test-node = .{ value = 1, link = null() }
+  let b: mpsc-test-node = .{ value = 2, link = null() }
+  let c: mpsc-test-node = .{ value = 3, link = null() }
   q.&.send(a.&)
   q.&.send(b.&)
   q.&.send(c.&)

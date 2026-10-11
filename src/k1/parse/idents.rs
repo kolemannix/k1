@@ -138,6 +138,7 @@ pub(crate) struct BuiltinIdents {
     pub std: StringId,
     pub k1: StringId,
     pub types: StringId,
+    pub optref: StringId,
     pub type_schema: StringId,
     pub type_info: StringId,
     pub int_kind: StringId,
@@ -562,6 +563,7 @@ impl IdentPool {
             std: intern!("std"),
             k1: intern!("k1"),
             types: intern!("types"),
+            optref: intern!("optref"),
             type_schema: intern!("type-schema"),
             type_info: intern!("type-info"),
             int_kind: intern!("int-kind"),
@@ -730,7 +732,8 @@ impl IdentPool {
         let CodeBuilder_new: QIdent = make_fn!(path_codebuilder, intern!("new"));
         let CodeBuilder_build: QIdent = make_fn!(path_codebuilder, intern!("build"));
         let CodeBuilder_write_code: QIdent = make_fn!(path_codebuilder, intern!("write-code"));
-        let CodeBuilder_write_spanned: QIdent = make_fn!(path_codebuilder, intern!("write-spanned"));
+        let CodeBuilder_write_spanned: QIdent =
+            make_fn!(path_codebuilder, intern!("write-spanned"));
 
         let path_core_bitwise = intern_path!(b.core, b.bitwise);
         let bitwise_and = make_fn!(path_core_bitwise, intern!("bit-and"));

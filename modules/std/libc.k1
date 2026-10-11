@@ -12,8 +12,8 @@ ns libc {
   fn(extern("free")) free(ptr: ptr)
   fn(extern("realloc")) realloc(ptr: ptr, size: size): ptr
 
-  fn(extern("strlen")) strlen(c-str: ptr): size
-  fn(extern("getenv")) getenv(name: ptr): ptr
+  fn(extern("strlen")) strlen(c-str: *u8): size
+  fn(extern("getenv")) getenv(name: *u8): optref[u8]
 
   // errno is a libc thread-local reached through its address fn; there is
   // no plain symbol to bind
@@ -26,10 +26,10 @@ ns libc {
     loc.ref[c-int].*
   }
   let EINTR: c-int = 4
-  fn(extern("strerror")) strerror(errno: c-int): optref[char]
-  fn(extern("perror")) perror(msg: ptr)
+  fn(extern("strerror")) strerror(errno: c-int): *u8
+  fn(extern("perror")) perror(msg: optref[u8])
   fn strerror-string(code: c-int): string {
-    string/wrap-c(strerror(code).inner)
+    string/wrap-c(strerror(code))
   }
   fn errno-k1-string(): string {
     strerror-string(errno())
@@ -38,7 +38,7 @@ ns libc {
   ns files {
     let SEEK_END: i32 = 2
     let SEEK_SET: i32 = 0
-    fn(extern("fopen")) fopen(path-c-string: ptr, mode-c-string: ptr): ptr
+    fn(extern("fopen")) fopen(path: *u8, mode: *u8): ptr
     fn(extern("fseek")) fseek(file-desc: ptr, offset: i64, whence: i32): i32
     fn(extern("fread")) fread(buffer: ptr, size: size, num: size, stream: ptr): usize
     fn(extern("fclose")) fclose(file-desc: ptr): c-int
@@ -46,8 +46,8 @@ ns libc {
     fn(extern("fwrite")) fwrite(data-ptr: ptr, item-size: size, item-count: size, file-desc: ptr): usize
   }
 
-  fn(extern("strtod")) strtod(nptr: ptr, endptr: *ptr): f64
-  fn(extern("strtof")) strtof(nptr: ptr, endptr: *ptr): f32
+  fn(extern("strtod")) strtod(nptr: *u8, endptr: *ptr): f64
+  fn(extern("strtof")) strtof(nptr: *u8, endptr: *ptr): f32
 
   ns math {
     fn(extern("expf")) exp_f32(f32): f32

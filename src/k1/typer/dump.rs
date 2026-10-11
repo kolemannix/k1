@@ -248,8 +248,8 @@ impl TypedProgram {
                 Ok(())
             }
             Type::Enum(se) => {
-                let partial = if se.partial { ", partial" } else { "" };
                 if mode == TypeDisplayMode::Structural {
+                    let partial = if se.partial { ", partial" } else { "" };
                     // Member values are abi: they cross the boundary
                     write!(w, "enum({}{partial}) ", se.int_type)?;
                     for (idx, member) in self.mem.getn(se.member_values).iter().enumerate() {
@@ -259,18 +259,29 @@ impl TypedProgram {
                         self.write_ident(w, member.name)?;
                         write!(w, "={}", member.int_value.to_u64_bits())?;
                     }
-                } else if let Some(defn_info) = defn_info {
-                    self.write_ident(w, defn_info.name)?;
-                    if let Some(spec_info) = self.get_instance_info(type_id) {
-                        self.display_instance_info(w, spec_info, mode, visiting)?;
-                    }
-                    if mode == TypeDisplayMode::Expand {
-                        w.write_str("(")?;
-                        write!(w, "enum {}{partial}", se.int_type)?;
-                        w.write_str(")")?;
-                    }
                 } else {
-                    write!(w, "anon_enum_{}_{}", se.int_type, type_id.as_u32())?;
+                    if let Some(defn_info) = defn_info {
+                        self.write_ident(w, defn_info.name)?;
+                        if let Some(spec_info) = self.get_instance_info(type_id) {
+                            self.display_instance_info(w, spec_info, mode, visiting)?;
+                        }
+                        if mode == TypeDisplayMode::Expand {
+                            w.write_str("(")?;
+                        }
+                    }
+                    let is_named = defn_info.is_some();
+                    if !is_named || mode == TypeDisplayMode::Expand {
+                        w.write_str("either ")?;
+                        for (idx, member) in self.mem.getn(se.member_values).iter().enumerate() {
+                            if idx > 0 {
+                                w.write_str(", ")?;
+                            }
+                            self.write_ident(w, member.name)?;
+                        }
+                        if is_named {
+                            w.write_str(")")?;
+                        }
+                    }
                 }
                 Ok(())
             }

@@ -21,13 +21,13 @@ ns reload {
   }
 
   type descriptor = {
-    dylib-file-name: ptr,
+    dylib-file-name: *u8,
     api-hash: u64,
     version: *u64,
     entry-count: u64,
     entries: ptr,
   }
-  type entry = { symbol: ptr, slot: *ptr }
+  type entry = { symbol: *u8, slot: *ptr }
 
   // A sloppy helper since we lack this in std
   fn dir-of(path: string): string {
@@ -80,7 +80,7 @@ ns reload {
     let temp-path = "${dylib-path}.load-${n}"
     files/write-entire-file(temp-path, files/read-to-string(dylib-path).!).!
     let maybe-handle = core/platform/dylib/open(temp-path)
-    posix/unlink(temp-path.to-c-tmp().ptr)
+    posix/unlink(temp-path.to-c-tmp())
     let handle = if maybe-handle is {
       :some(h) -> h,
       :none -> {

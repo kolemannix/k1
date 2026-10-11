@@ -30,7 +30,7 @@ ns for mpsc {
   // Consumer thread only
   fn take[t: mpsc-node](self: *mpsc[t]): mpsc-batch[t] {
     let n = atomic/xchg(self.head.&, ptr/null, :acquire)
-    let ordered: optref[t] = optref/null()
+    let ordered: optref[t] = null()
     while not (n is null) {
       let node = n.ref[t]
       let link = node.mpsc-link()

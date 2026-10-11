@@ -42,7 +42,7 @@
   }
 
   fn add(w: *watch/watcher, path: string): result[empty, string] {
-    let file-fd = posix/open(path.to-c-tmp().ptr, O_EVTONLY)
+    let file-fd = posix/open(path.to-c-tmp(), O_EVTONLY)
     if file-fd < 0 {
       return :err "watch/add open of $path failed: ${libc/errno-k1-string()}"
     }
@@ -113,7 +113,7 @@
   let IN_MOVE_SELF: u32 = 0x800
 
   fn(extern("inotify_init1")) inotify_init1(flags: c-int): c-int
-  fn(extern("inotify_add_watch")) inotify_add_watch(fd: c-int, path: ptr, mask: u32): c-int
+  fn(extern("inotify_add_watch")) inotify_add_watch(fd: c-int, path: *u8, mask: u32): c-int
 
   fn create(): result[watch/watcher, string] {
     let fd: i32 = inotify_init1(0)
@@ -125,7 +125,7 @@
     let mask = IN_MODIFY | IN_ATTRIB | IN_CLOSE_WRITE
       | IN_MOVED_FROM | IN_MOVED_TO | IN_CREATE
       | IN_DELETE | IN_DELETE_SELF | IN_MOVE_SELF
-    let wd = inotify_add_watch(w.fd, path.to-c-tmp().ptr, mask)
+    let wd = inotify_add_watch(w.fd, path.to-c-tmp(), mask)
     if wd < 0 {
       return :err "watch/add of $path failed: ${libc/errno-k1-string()}"
     }

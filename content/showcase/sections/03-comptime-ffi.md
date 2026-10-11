@@ -13,7 +13,7 @@ fn(extern("gethostname")) gethostname(name: ptr, len: size): i32
 fn(extern("getpid")) getpid(): i32
 fn(extern("time")) c-time(tloc: ptr): i64
 fn(extern("localtime")) localtime(t: *i64): ptr
-fn(extern("strftime")) strftime(s: ptr, max: size, format: ptr, tm: ptr): size
+fn(extern("strftime")) strftime(s: ptr, max: size, format: *u8, tm: ptr): size
 ```
 
 Wrap them in plain K1:
@@ -22,20 +22,20 @@ Wrap them in plain K1:
 fn hostname(): string {
   let buf = buffer/allocate[u8](256)
   if gethostname(buf.data-ptr(), buf.len()) != 0 crash("gethostname failed")
-  string/wrap-c(buf.data-ptr())
+  string/wrap-c(buf.data-ref())
 }
 
 fn local-time-string(): string {
   let now = c-time(ptr/null)
   let out = buffer/allocate[u8](64)
-  let n = strftime(out.data-ptr(), out.len(), "%Y-%m-%d %H:%M:%S %Z".to-c().ptr, localtime(now.&))
+  let n = strftime(out.data-ptr(), out.len(), "%Y-%m-%d %H:%M:%S %Z".to-c(), localtime(now.&))
   if n == 0 crash("strftime failed")
-  string/wrap-c(out.data-ptr())
+  string/wrap-c(out.data-ref())
 }
 
 fn env-or(name: string, fallback: string): string {
-  let v = libc/getenv(name.to-c().ptr)
-  if v is null fallback else string/wrap-c(v)
+  let v = libc/getenv(name.to-c())
+  if v.is-null() fallback else string/wrap-c(v.get())
 }
 ```
 

@@ -996,57 +996,169 @@ impl TypedProgram {
         &mut self,
         parsed_expr: ParsedExprId,
     ) -> K1Result<StaticValueId> {
-        use crate::lex::TokenKind as K;
         let code_span = self.get_expr_span_quoted(parsed_expr);
-        let content = self.ast.sources.get_span_content(&self.ast.mem, code_span);
-        let mut lexed = crate::lex::lex(content, std::mem::take(&mut self.buffers.lexed));
+        let content = self.ast.sources.get_span_content(&self.ast.mem, code_span).to_string();
+        let mut lexed = crate::lex::lex(&content, std::mem::take(&mut self.buffers.lexed));
         if let Some(e) = lexed.error.take() {
             let span = Span { lo: code_span.lo + e.start, len: e.len };
             self.buffers.lexed = lexed;
             kbail!(self, span, "{}", e.message);
         }
+        let token_count = lexed.tokens.len();
+        let tokens = self.code_tokens_from_lexed(&lexed, &content, code_span, 0, token_count);
+        self.buffers.lexed = lexed;
+        tokens
+    }
+
+    fn code_tokens_from_lexed(
+        &mut self,
+        lexed: &crate::lex::Lexed,
+        content: &str,
+        code_span: Span,
+        start: usize,
+        end: usize,
+    ) -> K1Result<StaticValueId> {
+        use crate::lex::{StringPiece, TokenKind as K};
         let token_type = self.builtin_types.code_token();
         let kind_type = self.get_struct_field(token_type, 0).type_id;
         let spacing_type = self.get_struct_field(token_type, 3).type_id;
-        let mut elements = self.tmp.new_list(lexed.tokens.len() as u32);
-        let mut i = 0;
-        while i < lexed.tokens.len() {
+        let parts_type = self.get_struct_field(token_type, 4).type_id;
+        let no_parts =
+            self.add_static_container_from_ids(StaticContainerKind::Span, parts_type, &[]);
+        let token_span = |token: crate::lex::Token| {
+            let (token_start, token_len) = lexed.get_token_start_len(token);
+            Span { lo: code_span.lo + token_start, len: token_len }
+        };
+        let mut elements = self.tmp.new_list((end - start) as u32);
+        let mut i = start;
+        while i < end {
             let first = lexed.tokens[i];
             let first_index = i;
-            let token_kind = match first.kind {
+            let (token_kind, parts) = match first.kind {
                 K::Eof => {
                     i += 1;
                     continue;
                 }
-                K::Ident => k1_types::CodeTokenKind::ident,
-                k if k.is_keyword() => k1_types::CodeTokenKind::ident,
-                K::Numeric => k1_types::CodeTokenKind::number,
-                K::StringDoneDq | K::StringDoneBt => k1_types::CodeTokenKind::string,
-                K::Char => k1_types::CodeTokenKind::char,
-                K::StringOpenDq | K::StringOpenBt => {
-                    let mut holes: SV8<u32> = smallvec![0];
-                    while let Some(&depth) = holes.last() {
+                K::Ident => (k1_types::CodeTokenKind::ident, no_parts),
+                k if k.is_keyword() => (k1_types::CodeTokenKind::ident, no_parts),
+                K::Numeric => (k1_types::CodeTokenKind::number, no_parts),
+                K::Char => (k1_types::CodeTokenKind::char, no_parts),
+                k if k.is_string() => {
+                    let literal = |index: usize| {
+                        let token = lexed.tokens[index];
+                        let (token_start, token_len) = lexed.get_token_start_len(token);
+                        StringPiece::Literal {
+                            token,
+                            text: &content
+                                [token_start as usize..(token_start + token_len) as usize],
+                            starts_fresh: index == first_index,
+                        }
+                    };
+                    let mut pieces: SV8<StringPiece<(usize, usize)>> = smallvec![literal(i)];
+                    let mut done = k.as_string().unwrap().done;
+                    while !done {
                         i += 1;
                         match lexed.tokens[i].kind {
-                            K::OpenBrace => *holes.last_mut().unwrap() += 1,
-                            K::CloseBrace => *holes.last_mut().unwrap() -= 1,
-                            K::StringOpenDq | K::StringOpenBt if depth > 0 => holes.push(0),
-                            K::StringDoneDq | K::StringDoneBt if depth == 0 => {
-                                holes.pop();
+                            K::OpenBrace => {
+                                let mut close = i + 1;
+                                let mut depth = 1;
+                                loop {
+                                    match lexed.tokens[close].kind {
+                                        K::OpenBrace => depth += 1,
+                                        K::CloseBrace if depth == 1 => break,
+                                        K::CloseBrace => depth -= 1,
+                                        _ => {}
+                                    }
+                                    close += 1;
+                                }
+                                pieces.push(StringPiece::Hole((i + 1, close)));
+                                i = close;
                             }
-                            _ => {}
+                            k if k.is_string() => {
+                                pieces.push(literal(i));
+                                done = k.as_string().unwrap().done;
+                            }
+                            _ => pieces.push(StringPiece::Hole((i, i + 1))),
                         }
                     }
-                    k1_types::CodeTokenKind::string
-                }
-                _ => k1_types::CodeTokenKind::punct,
-            };
-            let last_index = i;
-            let (start, _) = lexed.get_token_start_len(first);
-            let (last_start, last_len) = lexed.get_token_start_len(lexed.tokens[last_index]);
+                    let mut cooked = String::new();
+                    let mut ends: SV8<u32> = smallvec![];
+                    if let Err(message) = crate::lex::cook_string(&pieces, &mut cooked, &mut ends) {
+                        kbail!(self, token_span(first), "{message}");
+                    }
 
-            let output_span =
-                Span { lo: code_span.lo + start, len: last_start + last_len - start };
+                    let part_type = self.get_linear_container_element(parts_type).unwrap();
+                    let part_variants = self.types.get(part_type).expect_sum().variants;
+                    let text_payload_type =
+                        self.sum_variant_by_index(part_variants, 0).payload.unwrap();
+                    let hole_payload_type =
+                        self.sum_variant_by_index(part_variants, 1).payload.unwrap();
+                    let mut part_values = self.tmp.new_list(pieces.len() as u32);
+                    let mut cooked_ends = ends.iter();
+                    let mut cooked_start = 0;
+                    for piece in &pieces {
+                        let (variant_index, payload) = match *piece {
+                            StringPiece::Literal { token, .. } => {
+                                let cooked_end = *cooked_ends.next().unwrap() as usize;
+                                let text = &cooked[cooked_start..cooked_end];
+                                cooked_start = cooked_end;
+                                if text.is_empty() {
+                                    continue;
+                                }
+                                let value =
+                                    self.static_values.add_string(self.ast.idents.intern(text));
+                                let source = self.static_values.add_int(TypedIntValue::U64(
+                                    token_span(token).encoded_k1_u64(),
+                                ));
+                                (
+                                    0,
+                                    self.static_values
+                                        .add_struct_from_slice(text_payload_type, &[value, source]),
+                                )
+                            }
+                            StringPiece::Hole((lo, hi)) => {
+                                let hole_span = if lo < hi {
+                                    let mut span = token_span(lexed.tokens[lo]);
+                                    span.extend_to(token_span(lexed.tokens[hi - 1]).end());
+                                    span
+                                } else {
+                                    let mut span = token_span(lexed.tokens[lo - 1]);
+                                    span.extend_to(token_span(lexed.tokens[hi]).end());
+                                    span
+                                };
+                                let tokens =
+                                    self.code_tokens_from_lexed(lexed, content, code_span, lo, hi)?;
+                                let source = self
+                                    .static_values
+                                    .add_int(TypedIntValue::U64(hole_span.encoded_k1_u64()));
+                                (
+                                    1,
+                                    self.static_values.add_struct_from_slice(
+                                        hole_payload_type,
+                                        &[tokens, source],
+                                    ),
+                                )
+                            }
+                        };
+                        part_values.push(self.static_values.add(StaticValue::Sum(StaticSum {
+                            sum_type_id: part_type,
+                            variant_index,
+                            payload: Some(payload),
+                        })));
+                    }
+                    let parts = self.add_static_container_from_ids(
+                        StaticContainerKind::Span,
+                        parts_type,
+                        part_values.as_slice(),
+                    );
+                    (k1_types::CodeTokenKind::string, parts)
+                }
+                _ => (k1_types::CodeTokenKind::punct, no_parts),
+            };
+            let output_span = Span {
+                lo: token_span(first).lo,
+                len: token_span(lexed.tokens[i]).end() - token_span(first).lo,
+            };
             let text = self.ast.sources.get_span_content(&self.ast.mem, output_span);
             let text_value = self.static_values.add_string(self.ast.idents.intern(text));
             let source_value =
@@ -1055,7 +1167,7 @@ impl TypedProgram {
                 .static_values
                 .add(StaticValue::Enum(kind_type, TypedIntValue::U8(token_kind as u8)));
             let token_spacing = match first_index {
-                0 => k1_types::CodeTokenSpacing::none,
+                _ if first_index == start => k1_types::CodeTokenSpacing::none,
                 _ if first.is_newline_preceded() => k1_types::CodeTokenSpacing::newline,
                 _ if first.is_whitespace_preceded() => k1_types::CodeTokenSpacing::inline,
                 _ => k1_types::CodeTokenSpacing::none,
@@ -1063,21 +1175,12 @@ impl TypedProgram {
             let spacing_value = self
                 .static_values
                 .add(StaticValue::Enum(spacing_type, TypedIntValue::U8(token_spacing as u8)));
-
-            // MUST MATCH
-            // type code-token = {
-            //   kind: either(u8) { ident = 0, number = 1, string = 2, char = 3, punct = 4 },
-            //   text: string,
-            //   source: u64,
-            //   spacing: either(u8) { none = 0, inline = 1, newline = 2 },
-            // }
             elements.push(self.static_values.add_struct_from_slice(
                 token_type,
-                &[kind_value, text_value, source_value, spacing_value],
+                &[kind_value, text_value, source_value, spacing_value, parts],
             ));
             i += 1;
         }
-        self.buffers.lexed = lexed;
         Ok(self.add_static_container_from_ids(
             StaticContainerKind::Span,
             self.builtin_types.code_token_span(),

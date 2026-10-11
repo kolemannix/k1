@@ -15,6 +15,7 @@ type job = {
 type job-group = {
   name: string,
   max-active: u32,
+  is-blocking: bool,
   active: u32,
   backlog: job-queue,
 }
@@ -24,57 +25,71 @@ type worker = {
   index: u32,
   thread: libuv/thread,
   scratch: *arena,
+  is-blocked: bool,
+  next: optref[worker],
 }
 
 type worker-pool-shared = {
   jobs: pool[job],
   ready: job-queue,
+  worker-count: u32,
+  blocked: u32,
+  created-worker-count: u32,
+  exited: optref[worker],
   pool-is-closing: bool,
 }
 
 type worker-pool = {
   *arena,
+  target-free-count: u32,
+  max-worker-count: u32,
   default-group: job-group,
+  blocking-group: job-group,
   shared: monitor[worker-pool-shared],
-  workers: span[worker],
 }
 
+let(mutable, tls) current-worker: optref[worker] = null()
+
 ns for worker-pool {
-  fn start(worker-count: u32, capacity: size): *worker-pool {
+  fn start(target-free-count: u32, max-worker-count: u32, capacity: size): *worker-pool {
+    assert(target-free-count > 0 and target-free-count <= max-worker-count)
     let arena = core/arena/init(64 * 1024)
     arena.set-name("worker-pool")
     let pool: *worker-pool = arena.push(.{
       arena,
-      default-group = .{ name = "default", max-active = u32/max-value, active = 0, backlog = .0 },
+      target-free-count,
+      max-worker-count,
+      default-group = .{ name = "default", max-active = u32/max-value, is-blocking = false, active = 0, backlog = .0 },
+      blocking-group = .{ name = "blocking", max-active = u32/max-value, is-blocking = true, active = 0, backlog = .0 },
       shared = uninit,
-      workers = span/empty(),
     })
     pool.shared.init(.{
       jobs = pool/with-capacity-in[job, _](arena, capacity),
       ready = .0,
+      worker-count = 0,
+      blocked = 0,
+      created-worker-count = 0,
+      exited = null(),
       pool-is-closing = false,
     })
-
-    let workers = list/with-capacity-in[worker, _](arena, worker-count.widen[size])
-    for i in 0.until(worker-count.widen[size]) {
-      let scratch = core/arena/init(8 * core/arena/mb)
-      scratch.set-name("worker-scratch")
-      workers.push-in(arena, .{ pool, index = i.trunc[u32], thread = uninit, scratch })
-      let w = workers.[i].&
-      check(libuv/thread_create(w.thread.&, worker-fn.&, w.as[ptr])).!
-    }
-    pool.workers = workers.as-span()
+    let guard = pool.shared.lock()
+    add-workers(pool, guard)
+    guard.unlock()
     pool
   }
 
-  fn create-group(*self, name: string, max-active: u32): *job-group {
+  fn create-group(*self, name: string, max-active: u32, is-blocking: bool): *job-group {
     locked(self.shared, _s, {
-      self.arena.push[job-group](.{ name = name.cloned-in(self.arena), max-active, active = 0, backlog = .0 })
+      self.arena.push[job-group](.{ name = name.cloned-in(self.arena), max-active, is-blocking, active = 0, backlog = .0 })
     })
   }
 
   fn submit[t](*self, data: *t, run-fn: *fn(*t) -> {}): ?pool/handle[job] {
     self.submit-to-group(self.default-group.&, data, run-fn)
+  }
+
+  fn submit-blocking[t](*self, data: *t, run-fn: *fn(*t) -> {}): ?pool/handle[job] {
+    self.submit-to-group(self.blocking-group.&, data, run-fn)
   }
 
   fn submit-to-group[t](*self, group: *job-group, data: *t, run-fn: *fn(*t) -> {}): ?pool/handle[job] {
@@ -90,7 +105,7 @@ ns for worker-pool {
       group,
       handle = .0,
       state = if is-admitted :ready else :backlogged,
-      next = optref/null(),
+      next = null(),
     })
     let job = guard.value.jobs.get(handle)
     job.handle = handle
@@ -135,15 +150,88 @@ ns for worker-pool {
   }
 
   fn join(*self) {
-    require locked(self.shared, s, s.pool-is-closing) else crash("worker-pool/join before close never returns")
-    for i in 0.until(self.workers.len()) {
-      let w = self.workers.[i].&
+    let guard = self.shared.lock()
+    require guard.value.pool-is-closing else crash("worker-pool/join before close never returns")
+    while guard.value.worker-count > 0 { guard.wait() }
+    let exited = guard.value.exited
+    guard.unlock()
+    while exited.as-opt() is :some w {
       check(libuv/thread_join(w.thread.&)).!
       w.scratch.release()
+      exited = w.next
     }
     self.shared.destroy()
     self.arena.release()
   }
+
+  fn try-run-inline(*self, handle: pool/handle[job]): bool {
+    require current-worker.as-opt() is :some w and w.pool.as[ptr] == self.as[ptr] else return false
+    let guard = self.shared.lock()
+    require guard.value.jobs.is-live(handle) and guard.value.jobs.get(handle).state is :ready else {
+      guard.unlock()
+      return false
+    }
+    let job = guard.value.jobs.get(handle)
+    guard.value.ready.remove(job)
+    let mark = w.scratch.mark()
+    run-job(guard, w, job)
+    w.scratch.pop-to-mark(mark)
+    true
+  }
+
+  fn block-in-place[t](body: some fn() -> t): t {
+    require current-worker.as-opt() is :some w and not w.is-blocked else return body()
+    let guard = w.pool.shared.lock()
+    enter-blocked(guard, w)
+    guard.unlock()
+    let output = body()
+    let guard = w.pool.shared.lock()
+    exit-blocked(guard, w)
+    guard.unlock()
+    output
+  }
+}
+
+fn add-workers(pool: *worker-pool, guard: monitor-guard[worker-pool-shared]) {
+  let s = guard.value
+  while s.worker-count - s.blocked < pool.target-free-count and s.worker-count < pool.max-worker-count {
+    s.worker-count = s.worker-count + 1
+    let w = if s.exited.as-opt() is :some w {
+      s.exited = w.next
+      check(libuv/thread_join(w.thread.&)).!
+      w
+    } else {
+      let scratch = core/arena/init(8 * core/arena/mb)
+      scratch.set-name("worker-scratch")
+      let index = s.created-worker-count
+      s.created-worker-count = index + 1
+      pool.arena.push[worker](.{ pool, index, thread = uninit, scratch, is-blocked = false, next = null() })
+    }
+    check(libuv/thread_create(w.thread.&, worker-fn.&, w.as[ptr])).!
+  }
+}
+
+fn enter-blocked(guard: monitor-guard[worker-pool-shared], w: *worker) {
+  w.is-blocked = true
+  guard.value.blocked = guard.value.blocked + 1
+  add-workers(w.pool, guard)
+}
+
+fn exit-blocked(guard: monitor-guard[worker-pool-shared], w: *worker) {
+  w.is-blocked = false
+  guard.value.blocked = guard.value.blocked - 1
+}
+
+fn run-job(guard: monitor-guard[worker-pool-shared], w: *worker, job: *job) {
+  job.state = :running
+  let is-blocking = job.group.is-blocking and not w.is-blocked
+  if is-blocking { enter-blocked(guard, w) }
+  guard.unlock()
+  (job.run-fn)(job.data)
+  let guard = w.pool.shared.lock()
+  if is-blocking { exit-blocked(guard, w) }
+  release-job(guard, job)
+  guard.unlock()
 }
 
 fn release-job(guard: monitor-guard[worker-pool-shared], job: *job) {
@@ -160,33 +248,35 @@ fn release-job(guard: monitor-guard[worker-pool-shared], job: *job) {
 
 fn worker-fn(arg: ptr) {
   let w = arg.ref[worker]()
+  current-worker = optref/make(w)
   mem/set-tmp-arena(w.scratch)
-  libuv/thread_setname("worker-${w.index}".to-c-tmp().ptr.ref[u8])
+  libuv/thread_setname("worker-${w.index}".to-c-tmp())
   let pool = w.pool
   loop {
+    w.scratch.reset()
     let guard = pool.shared.lock()
+    let s = guard.value
     let maybe-job: ?*job = loop {
-      if guard.value.ready.pop() is :some job break :some job
-      if guard.value.pool-is-closing break :none
+      if s.ready.pop() is :some job break :some job
+      if s.pool-is-closing or s.worker-count - s.blocked > pool.target-free-count break :none
       guard.wait()
     }
-    if maybe-job is :some job { job.state = :running }
-    guard.unlock()
-    require maybe-job is :some job else return
-
-    w.scratch.reset()
-    (job.run-fn)(job.data)
-
-    let guard = pool.shared.lock()
-    release-job(guard, job)
-    guard.unlock()
+    require maybe-job is :some job else {
+      s.worker-count = s.worker-count - 1
+      w.next = s.exited
+      s.exited = optref/make(w)
+      if s.worker-count == 0 { guard.broadcast() }
+      guard.unlock()
+      return
+    }
+    run-job(guard, w, job)
   }
 }
 
 type job-queue = { head: optref[job], tail: optref[job] }
 ns for job-queue {
   fn push(self: *job-queue, job: *job) {
-    job.next = optref/null()
+    job.next = null()
     if self.tail.as-opt() is :some tail { tail.next = optref/make(job) } else { self.head = optref/make(job) }
     self.tail = optref/make(job)
   }
@@ -194,19 +284,19 @@ ns for job-queue {
   fn pop(self: *job-queue): ?*job {
     require self.head.as-opt() is :some job else return :none
     self.head = job.next
-    if self.head.is-null() { self.tail = optref/null() }
-    job.next = optref/null()
+    if self.head.is-null() { self.tail = null() }
+    job.next = null()
     :some job
   }
 
   fn remove(self: *job-queue, job: *job): bool {
-    let prev: optref[job] = optref/null()
+    let prev: optref[job] = null()
     let at = self.head
     while at.as-opt() is :some candidate {
       if candidate.as[ptr] == job.as[ptr] {
         if prev.as-opt() is :some p { p.next = job.next } else { self.head = job.next }
         if job.next.is-null() { self.tail = prev }
-        job.next = optref/null()
+        job.next = null()
         return true
       }
       prev = at
@@ -220,8 +310,8 @@ ns job-queue-test {
   fn run-nothing(_data: ptr) {}
 
   #static {
-    let group: job-group = .{ name = "test", max-active = 1, active = 0, backlog = .0 }
-    let a: job = .{ run-fn = run-nothing.&, data = ptr/null, group = group.&, handle = .0, state = :ready, next = optref/null() }
+    let group: job-group = .{ name = "test", max-active = 1, is-blocking = false, active = 0, backlog = .0 }
+    let a: job = .{ run-fn = run-nothing.&, data = ptr/null, group = group.&, handle = .0, state = :ready, next = null() }
     let b = a
     let c = a
     let q: job-queue = .0

@@ -60,7 +60,7 @@ type(alias) CXTranslationUnit = ptr
 
 fn(extern("clang_parseTranslationUnit2")) parseTranslationUnit2(
   index: CXIndex,
-  source_filename: ptr,
+  source_filename: *u8,
   command_line_args: ptr,
   command_line_args_len: c-int,
   unsaved_files: *CXUnsavedFile,
@@ -106,7 +106,7 @@ fn(extern("clang_visitChildren")) visitChildren(
 
 fn(extern("clang_getCursorDisplayName")) getCursorDisplayName(cursor: CXCursor): CXString
 
-fn(extern("clang_getCString")) getCString(cx-string: CXString): ptr
+fn(extern("clang_getCString")) getCString(cx-string: CXString): *u8
 
 fn(extern("clang_disposeString")) disposeString(cx-string: CXString)
 

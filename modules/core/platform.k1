@@ -405,7 +405,7 @@ ns platform {
           :wasi -> crash("dylibs are not supported on wasi"),
           :bare -> port/bare/dylib-error()
         }
-      if e.is-null() :none else :some(string/wrap-c(e))
+      if e.is-null() :none else :some(string/wrap-c(e.get()))
     }
   }
 
@@ -555,17 +555,17 @@ ns platform {
         let SEEK_SET: c-int = 0
         let SEEK_END: c-int = 2
         let CREATE_MODE_RW_ALL: c-int = 0x1B6
-        fn(extern("open")) open(path: ptr, oflag: c-int): c-int
-        fn(extern("creat")) creat(path: ptr, mode: c-int): c-int
+        fn(extern("open")) open(path: *u8, oflag: c-int): c-int
+        fn(extern("creat")) creat(path: *u8, mode: c-int): c-int
         fn(extern("read")) read(file-no: c-int, buffer: ptr, count: c-sizet): i64
         fn(extern("write")) write(file-no: c-int, data: ptr, count: c-sizet): i64
         fn(extern("close")) close(fd: c-int): c-int
-        fn(extern("mkdir")) mkdir(path: ptr, mode: c-int): c-int
-        fn(extern("link")) link(from: ptr, to: ptr): c-int
-        fn(extern("rename")) rename(from: ptr, to: ptr): c-int
-        fn(extern("unlink")) unlink(path: ptr): c-int
-        fn(extern("rmdir")) rmdir(path: ptr): c-int
-        fn(extern("opendir")) opendir(path: ptr): ptr
+        fn(extern("mkdir")) mkdir(path: *u8, mode: c-int): c-int
+        fn(extern("link")) link(from: *u8, to: *u8): c-int
+        fn(extern("rename")) rename(from: *u8, to: *u8): c-int
+        fn(extern("unlink")) unlink(path: *u8): c-int
+        fn(extern("rmdir")) rmdir(path: *u8): c-int
+        fn(extern("opendir")) opendir(path: *u8): ptr
         fn(extern("readdir")) readdir(dir: ptr): ptr
         fn(extern("closedir")) closedir(dir: ptr): c-int
         fn(extern("lseek")) lseek(fd: c-int, offset: i64, whence: c-int): i64
@@ -578,15 +578,15 @@ ns platform {
 
         fn(extern("exit")) exit(code: i32): never
         fn(extern("abort")) abort(): never
-        fn(extern("getenv")) getenv(name: ptr): ptr
-        fn(extern("strerror")) strerror(code: c-int): ptr
+        fn(extern("getenv")) getenv(name: *u8): optref[u8]
+        fn(extern("strerror")) strerror(code: c-int): *u8
 
         let RTLD_NOW: c-int = 0x2
         let RTLD_LOCAL: c-int = #if k1/platform is { :posix-macos -> 0x4, :posix-linux or :wasi or :bare -> 0 }
-        fn(extern("dlopen")) dlopen(path: ptr, mode: c-int): ptr
-        fn(extern("dlsym")) dlsym(handle: ptr, symbol: ptr): ptr
+        fn(extern("dlopen")) dlopen(path: optref[u8], mode: c-int): ptr
+        fn(extern("dlsym")) dlsym(handle: ptr, symbol: *u8): ptr
         fn(extern("dlclose")) dlclose(handle: ptr): c-int
-        fn(extern("dlerror")) dlerror(): ptr
+        fn(extern("dlerror")) dlerror(): optref[u8]
 
         fn(extern("getentropy")) getentropy(buf: ptr, count: c-sizet): c-int
 
@@ -602,12 +602,12 @@ ns platform {
         fn(extern("pthread_detach")) pthread_detach(thread: ptr): i32
 
         let X_OK: c-int = 1
-        fn(extern("access")) access(path: ptr, mode: c-int): c-int
+        fn(extern("access")) access(path: *u8, mode: c-int): c-int
         fn(extern("pipe")) pipe(fds: ptr): c-int
         let SIGKILL: c-int = 9
         fn(extern("kill")) kill(pid: i32, sig: c-int): c-int
         fn(extern("waitpid")) waitpid(pid: i32, status: *i32, options: i32): i32
-        fn(extern("posix_spawn")) posix_spawn(pid: *i32, path: ptr, file-actions: ptr, attrp: ptr, argv: ptr, envp: ptr): c-int
+        fn(extern("posix_spawn")) posix_spawn(pid: *i32, path: *u8, file-actions: ptr, attrp: ptr, argv: ptr, envp: ptr): c-int
         fn(extern("posix_spawn_file_actions_init")) spawn-fa-init(file-actions: ptr): c-int
         fn(extern("posix_spawn_file_actions_destroy")) spawn-fa-destroy(file-actions: ptr): c-int
         fn(extern("posix_spawn_file_actions_adddup2")) spawn-fa-adddup2(file-actions: ptr, fd: c-int, new-fd: c-int): c-int
@@ -689,19 +689,19 @@ ns platform {
         n > 0
       }
       fn or-errno(rc: c-int): i32 { if rc < 0 { 0 - errno-now() } else rc }
-      fn open-to-read(path: string): i32 { or-errno(c/open(path.to-c-tmp().ptr, c/O_RDONLY)) }
+      fn open-to-read(path: string): i32 { or-errno(c/open(path.to-c-tmp(), c/O_RDONLY)) }
       // open(2) is variadic, which a fixed 3-arg extern miscompiles on
       // arm64-darwin; creat(2) is a real 2-arg fn equal to
       // O_WRONLY|O_CREAT|O_TRUNC
-      fn open-to-write(path: string): i32 { or-errno(c/creat(path.to-c-tmp().ptr, c/CREATE_MODE_RW_ALL)) }
+      fn open-to-write(path: string): i32 { or-errno(c/creat(path.to-c-tmp(), c/CREATE_MODE_RW_ALL)) }
       fn close(fd: i32) { let _ = c/close(fd) }
-      fn make-dir(path: string): i32 { or-errno(c/mkdir(path.to-c-tmp().ptr, 0o755)) }
-      fn link(from: string, to: string): i32 { or-errno(c/link(from.to-c-tmp().ptr, to.to-c-tmp().ptr)) }
-      fn rename(from: string, to: string): i32 { or-errno(c/rename(from.to-c-tmp().ptr, to.to-c-tmp().ptr)) }
-      fn remove(path: string): i32 { or-errno(c/unlink(path.to-c-tmp().ptr)) }
-      fn remove-dir(path: string): i32 { or-errno(c/rmdir(path.to-c-tmp().ptr)) }
+      fn make-dir(path: string): i32 { or-errno(c/mkdir(path.to-c-tmp(), 0o755)) }
+      fn link(from: string, to: string): i32 { or-errno(c/link(from.to-c-tmp(), to.to-c-tmp())) }
+      fn rename(from: string, to: string): i32 { or-errno(c/rename(from.to-c-tmp(), to.to-c-tmp())) }
+      fn remove(path: string): i32 { or-errno(c/unlink(path.to-c-tmp())) }
+      fn remove-dir(path: string): i32 { or-errno(c/rmdir(path.to-c-tmp())) }
       fn dir-open(path: string): result[io/dir-handle, i32] {
-        let dir = c/opendir(path.to-c-tmp().ptr)
+        let dir = c/opendir(path.to-c-tmp())
         if dir.is-null() :err(errno-now()) else :ok(.{ raw = dir })
       }
       fn dir-next(dir: ptr): ?string {
@@ -709,7 +709,7 @@ ns platform {
         let name-offset: size =
           if k1/is-static { #if k1/host-platform is { :posix-macos -> 21, :posix-linux or :wasi or :bare -> 19 } }
           else { #if k1/platform is { :posix-macos -> 21, :posix-linux or :wasi or :bare -> 19 } }
-        if entry.is-null() :none else :some(string/wrap-c(entry.add-bytes(name-offset)))
+        if entry.is-null() :none else :some(string/wrap-c(entry.add-bytes(name-offset).ref[u8]))
       }
       fn dir-close(dir: ptr) { let _ = c/closedir(dir) }
       fn file-size(fd: i32): i64 {
@@ -721,17 +721,17 @@ ns platform {
       fn abort(): never { c/abort() }
 
       fn env-get(name: string): ?string {
-        let v = c/getenv(name.to-c-tmp().ptr)
-        if v.is-null() :none else :some(string/wrap-c(v))
+        let v = c/getenv(name.to-c-tmp())
+        if v.is-null() :none else :some(string/wrap-c(v.get()))
       }
 
       fn error-string(code: i32): string { string/wrap-c(c/strerror(code)) }
 
-      fn dylib-open(path: string): ptr { c/dlopen(path.to-c-tmp().ptr, c/RTLD_NOW | c/RTLD_LOCAL) }
-      fn dylib-open-self(): ptr { c/dlopen(ptr/null, c/RTLD_NOW) }
-      fn dylib-sym(lib: ptr, name: string): ptr { c/dlsym(lib, name.to-c-tmp().ptr) }
+      fn dylib-open(path: string): ptr { c/dlopen(optref/make(path.to-c-tmp()), c/RTLD_NOW | c/RTLD_LOCAL) }
+      fn dylib-open-self(): ptr { c/dlopen(.0, c/RTLD_NOW) }
+      fn dylib-sym(lib: ptr, name: string): ptr { c/dlsym(lib, name.to-c-tmp()) }
       fn dylib-close(lib: ptr) { let _ = c/dlclose(lib) }
-      fn dylib-error(): ptr { c/dlerror() }
+      fn dylib-error(): optref[u8] { c/dlerror() }
 
       // getentropy caps each call at 256 bytes
       fn random-fill(dest: ptr, count: size) {
@@ -820,7 +820,7 @@ ns platform {
       }
 
       fn is-executable(path: string): bool {
-        c/access(path.to-c-tmp().ptr, c/X_OK) == 0
+        c/access(path.to-c-tmp(), c/X_OK) == 0
       }
 
       fn environ-ptr(): ptr {
@@ -841,7 +841,7 @@ ns platform {
         // argv for exec-family calls: strings, then a null terminator, all in tmp
         mem/push-arena(mem/tmp())
         let cargv = list/with-capacity[ptr](argv.len() + 1)
-        for a in argv { cargv.push(a.to-c().ptr) }
+        for a in argv { cargv.push(a.to-c().as[ptr]) }
         cargv.push(ptr/null)
         mem/pop-arena()
 
@@ -869,7 +869,7 @@ ns platform {
         }
 
         let pid: i32 = 0
-        let rc = c/posix_spawn(pid.&, path.to-c-tmp().ptr, fa, ptr/null, cargv.data-ptr(), environ-ptr())
+        let rc = c/posix_spawn(pid.&, path.to-c-tmp(), fa, ptr/null, cargv.data-ptr(), environ-ptr())
         if rc != 0 :err rc else :ok pid
       }
 
@@ -1078,7 +1078,7 @@ ns platform {
         if environ-get(a32(entry-ptrs), a32(entry-bytes)) != 0 return :none
         for i in 0.until(count.as-size()) {
           let entry-addr = entry-ptrs.add-bytes(i * 4).ref[u32].*
-          let entry = string/wrap-c(entry-addr.as-size().to-ptr())
+          let entry = string/wrap-c(entry-addr.as-size().to-ptr().ref[u8])
           if entry.starts-with(name) and entry.drop(name.len()).starts-with("=") {
             return :some(entry.drop(name.len() + 1))
           }
@@ -1104,21 +1104,21 @@ ns platform {
       fn(extern("k1_platform_io_write")) write(file-no: i32, data: ptr, count: size): i64
       fn(extern("k1_platform_io_read")) read(file-no: i32, buffer: ptr, count: size): i64
       fn(extern("k1_platform_io_is_tty")) is-tty-flag(file-no: i32): i32
-      fn(extern("k1_platform_file_open_read")) open-read-c(path: ptr): i32
-      fn(extern("k1_platform_file_open_write")) open-write-c(path: ptr): i32
+      fn(extern("k1_platform_file_open_read")) open-read-c(path: *u8): i32
+      fn(extern("k1_platform_file_open_write")) open-write-c(path: *u8): i32
       fn(extern("k1_platform_file_close")) close-fd(fd: i32)
       fn(extern("k1_platform_file_size")) file-size(fd: i32): i64
       fn(extern("k1_platform_process_exit")) exit(code: i32): never
-      fn(extern("k1_platform_env_get")) getenv(name: ptr): ptr
-      fn(extern("k1_platform_dylib_open")) dylib-open-c(path: ptr): ptr
+      fn(extern("k1_platform_env_get")) getenv(name: *u8): optref[u8]
+      fn(extern("k1_platform_dylib_open")) dylib-open-c(path: *u8): ptr
       fn(extern("k1_platform_dylib_open_self")) dylib-open-self(): ptr
-      fn(extern("k1_platform_dylib_sym")) dylib-sym-c(lib: ptr, name: ptr): ptr
+      fn(extern("k1_platform_dylib_sym")) dylib-sym-c(lib: ptr, name: *u8): ptr
       fn(extern("k1_platform_dylib_close")) dylib-close(lib: ptr)
-      fn(extern("k1_platform_dylib_error")) dylib-error(): ptr
+      fn(extern("k1_platform_dylib_error")) dylib-error(): optref[u8]
       fn(extern("k1_platform_random_fill")) random-fill(dest: ptr, count: size)
       fn(extern("k1_platform_clock_nanos")) clock-nanos(): u64
       fn(extern("k1_platform_thread_sleep_ms")) sleep-ms(ms: u64)
-      fn(extern("k1_platform_file_is_executable")) is-executable-flag(path: ptr): i32
+      fn(extern("k1_platform_file_is_executable")) is-executable-flag(path: *u8): i32
 
       fn(intern("llvm.trap")) trap()
 
@@ -1127,16 +1127,16 @@ ns platform {
       }
       fn release(r: memory/region) { release-bytes(r.base, r.len) }
       fn is-tty(file-no: i32): bool { is-tty-flag(file-no) == 1 }
-      fn open-to-read(path: string): i32 { open-read-c(path.to-c-tmp().ptr) }
-      fn open-to-write(path: string): i32 { open-write-c(path.to-c-tmp().ptr) }
+      fn open-to-read(path: string): i32 { open-read-c(path.to-c-tmp()) }
+      fn open-to-write(path: string): i32 { open-write-c(path.to-c-tmp()) }
       fn close(fd: i32) { close-fd(fd) }
-      fn is-executable(path: string): bool { is-executable-flag(path.to-c-tmp().ptr) == 1 }
-      fn dylib-open(path: string): ptr { dylib-open-c(path.to-c-tmp().ptr) }
-      fn dylib-sym(lib: ptr, name: string): ptr { dylib-sym-c(lib, name.to-c-tmp().ptr) }
+      fn is-executable(path: string): bool { is-executable-flag(path.to-c-tmp()) == 1 }
+      fn dylib-open(path: string): ptr { dylib-open-c(path.to-c-tmp()) }
+      fn dylib-sym(lib: ptr, name: string): ptr { dylib-sym-c(lib, name.to-c-tmp()) }
       fn abort(): never { trap(); k1/exit(134) }
       fn env-get(name: string): ?string {
-        let v = getenv(name.to-c-tmp().ptr)
-        if v.is-null() :none else :some(string/wrap-c(v))
+        let v = getenv(name.to-c-tmp())
+        if v.is-null() :none else :some(string/wrap-c(v.get()))
       }
     }
   }

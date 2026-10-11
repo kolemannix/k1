@@ -577,6 +577,14 @@ ns for parser {
       is-type = true
     }
     let nit = self.expect-ident().try
+    let enclosing: list[ident-tok] = list/empty()
+    if not is-type {
+      while self.peek().is-kind-nonspaced(:slash) {
+        self.advance()
+        enclosing.push(nit)
+        nit = self.expect-ident().try
+      }
+    }
     let t = self.peek()
     let is-braced = if t.kind is :open-brace {
       self.advance()
@@ -591,7 +599,7 @@ ns for parser {
     let terminator: token-kind = if is-braced { :close-brace } else { :eof }
     let definitions = self.parse-definitions(terminator)
     let span = self.extend-tok-to-here(keyword)
-    :ok(self.program.add-namespace(.{
+    let id = self.program.add-namespace(.{
       name = nit.name,
       definitions,
       name-span = nit.tok.span(),
@@ -599,8 +607,25 @@ ns for parser {
       is-type-companion = is-type,
       lib-name,
       reload,
-      compile-condition = condition,
-    }))
+      compile-condition = if enclosing.is-empty() condition else :none,
+    })
+    let index = enclosing.len()
+    while index > 0 {
+      index = index - 1
+      let outer = enclosing.[index]
+      let wrapped: list[ast/defn-id] = [:namespace(id)]
+      id = self.program.add-namespace(.{
+        name = outer.name,
+        definitions = wrapped,
+        name-span = outer.tok.span(),
+        span,
+        is-type-companion = false,
+        lib-name = :none,
+        reload = false,
+        compile-condition = if index == 0 condition else :none,
+      })
+    }
+    :ok(id)
   }
 
   fn error-expected-definition(self: *parser, after-condition: bool): perror {

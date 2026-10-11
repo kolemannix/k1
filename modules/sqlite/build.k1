@@ -3,12 +3,13 @@ use std/process
 fn module(_b: k1/build-config): k1/module {
   let m = k1/module/new()
   m.lib("sqlite3", :static)
-  m.setup(outputs = ["libs/libsqlite3.a", "sqlite3.k1"], inputs = ["vendor"])
+  m.setup(outputs = ["libs/libsqlite3.a", "libs/libsqlite3.${k1/host-platform.dylib-ext()}", "sqlite3.k1"], inputs = ["vendor"])
   m
 }
 
 let defines: span[string] = [
   "SQLITE_DQS=0",
+  "SQLITE_ENABLE_COLUMN_METADATA",
   "SQLITE_DEFAULT_MEMSTATUS=0",
   "SQLITE_DEFAULT_WAL_SYNCHRONOUS=1",
   "SQLITE_LIKE_DOESNT_MATCH_BLOBS",
@@ -25,8 +26,9 @@ fn setup(ctx: k1/setup-ctx) {
   for defines { cflags.write(" -D$it") }
   process/sh-verbose(`
     mkdir -p libs .k1-out/sqlite
-    cc -O2 ${minver}${cflags.build()} -c vendor/sqlite3.c -o .k1-out/sqlite/sqlite3.o
+    cc -O2 -fPIC ${minver}${cflags.build()} -c vendor/sqlite3.c -o .k1-out/sqlite/sqlite3.o
     ar rcs libs/libsqlite3.a .k1-out/sqlite/sqlite3.o
+    cc -shared .k1-out/sqlite/sqlite3.o -o libs/libsqlite3.${k1/host-platform.dylib-ext()}
     `).!
 
   let bindgen-args: list[string] = [

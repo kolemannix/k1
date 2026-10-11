@@ -7,6 +7,12 @@ type code-token = {
   text: string,
   source: u64,
   spacing: either(u8) { none = 0, inline = 1, newline = 2 },
+  parts: span[code-string-part],
+}
+
+type code-string-part = either {
+  text({ value: string, source: u64 }),
+  hole({ tokens: span[code-token], source: u64 }),
 }
 
 ns for code-token {

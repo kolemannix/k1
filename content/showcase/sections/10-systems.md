@@ -280,7 +280,7 @@ function the new thread starts in.
 Three declarations, no header, no build step:
 
 ```k1
-fn(extern("strlen")) strlen(s: ptr): size
+fn(extern("strlen")) strlen(s: *u8): size
 fn(extern("getpid")) getpid(): c-int
 fn(extern("qsort")) qsort(base: ptr, count: size, width: size, compare: *fn(ptr, ptr) -> c-int)
 ```
@@ -300,7 +300,7 @@ place:
 
 ```k1
   let greeting = "hello from libc".to-c-tmp()
-  println("strlen: ${strlen(greeting.ptr)}")
+  println("strlen: ${strlen(greeting)}")
 
   let xs: list[i32] = [40, 7, 23, 1, 99, 15]
   qsort(xs.as-span().data-ptr(), xs.len(), types/size[i32], compare-i32.&)

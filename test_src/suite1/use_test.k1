@@ -20,6 +20,8 @@ ns chain {
   use(expose) use_test/chain/a as b
   use(expose) use_test/foo as a
 }
+ns foo/deeper/deepest { fn get-two(): int { get-one() + 1 } }
+
 use foo/intalias
 type use-test = { i: intalias, v: foo/intalias }
 
@@ -37,4 +39,5 @@ fn test() {
   assert(test-compile(exposing/get-one-hidden()).is-some())
 
   assert(chain/e/get-one() == 1)
+  assert(foo/deeper/deepest/get-two() == 2)
 }

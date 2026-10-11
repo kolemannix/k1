@@ -56,7 +56,7 @@ ns pubsub {
       self.ingress.&.send(heap.new[event[t]](.{
         topic = heap-string/cloned(topic).to-rc(),
         data = value,
-        link = optref/null(),
+        link = null(),
       }))
     }
 

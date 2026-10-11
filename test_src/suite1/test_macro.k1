@@ -119,6 +119,29 @@ macro token-summary(t: span[code-token]) {
   "${meta/str-lit(sb.build())}"
 }
 
+macro string-parts(t: span[code-token]) {
+  let sb = string-builder/new()
+  for t.[0].parts {
+    if it is {
+      :text p -> sb.write("[${p.value}]"),
+      :hole h -> sb.write("{${h.tokens.len()}}"),
+    }
+  }
+  "${meta/str-lit(sb.build())}"
+}
+
+macro hole-sum(t: span[code-token]) {
+  let cb = code-builder/new()
+  cb.write("0")
+  for t.[0].parts {
+    if it is :hole h {
+      cb.write(" + ")
+      cb.write-tokens(h.tokens)
+    }
+  }
+  cb.build()
+}
+
 macro sum-list(t: span[code-token]) {
   let cb = code-builder/new()
   for tok in t {
@@ -149,6 +172,8 @@ fn test-token-params() {
   assert-equals(n, 0)
   let fail: ?string = test-compile(numbers(\{ 1 2 three 4 }))
   assert(fail.!.starts-with("expected a number, got `three`"))
+  assert-equals(string-parts(\{ "a\t${x + 1} b $x" }), "[a\t]{3}[ b ]{1}")
+  assert-equals(hole-sum(\{ "${x} and ${x * 2}" }), 12)
 }
 
 fn test-raw-group() {

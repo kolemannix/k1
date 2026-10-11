@@ -1219,7 +1219,7 @@ ns k1 {
 
   // Called by the codegen-emitted stub of a reloadable fn when its slot is
   // still null; both args are NUL-terminated names baked into the stub
-  fn crash-unloaded-ns(ns-name: ptr, fn-name: ptr): never {
+  fn crash-unloaded-ns(ns-name: *u8, fn-name: *u8): never {
     let loaded-ns = string/wrap-c(ns-name)
     crash("reloadable ns ${loaded-ns} not loaded; call ${loaded-ns}/load() (called: ${string/wrap-c(fn-name)})")
   }

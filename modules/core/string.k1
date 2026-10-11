@@ -144,33 +144,33 @@ ns for string {
   fn(inline) data-ref-byte(self: string): *u8 { self.span.data-ref().as[*u8] }
 
   // Converts self to a c-style (NUL byte terminated) string
-  fn to-c(self: string): { ptr: ptr, len: size } { to-c-in(self, mem/current-arena()) }
-  fn to-c-in[allocator: allocator](self: string, allocator): { ptr: ptr, len: size } {
+  fn to-c(self: string): *u8 { self.to-c-ext().ptr.ref[u8] }
+  fn to-c-tmp(self: string): *u8 { self.to-c-ext-in(mem/tmp()).ptr.ref[u8] }
+
+  fn to-c-ext(self: string): { ptr: ptr, len: size } { to-c-ext-in(self, mem/current-arena()) }
+  fn to-c-ext-in[allocator: allocator](self: string, allocator): { ptr: ptr, len: size } {
     if self.is-empty()                  .{ ptr = "\0".data-ptr(), len = 0 }
     else if self.last() is :some('\0') .{ ptr = self.data-ptr(), len = self.len() - 1 }
     else                               .{ ptr = self.concat-char-in(allocator, '\0').data-ptr(), len = self.len() }
-  }
-
-  fn to-c-tmp(self: string): { ptr: ptr, len: size } {
-    self.to-c-in(mem/tmp())
   }
 
   // The scan is unbounded, so past the scalar head every load is w-aligned:
   // an aligned load cannot cross a page, so it cannot fault before the NUL.
   // The VM checks loads against allocation bounds, not pages, so static
   // execution stays scalar
-  fn c-string-len(c-string: ptr): size {
+  fn c-string-len(c-string: *u8): size {
+    let start = c-string.as[ptr]
     if k1/is-static {
       let n = 0: size
-      while c-string.add-bytes(n).ref[u8].* != 0u8 {
+      while start.add-bytes(n).ref[u8].* != 0u8 {
         n = n + 1
       }
       n
     } else {
       let w: size = k1/simd-bytes
-      let p = c-string
+      let p = start
       while p.to-size() & (w - 1) != 0 {
-        if p.ref[u8].* == 0u8 return p.diff(c-string)
+        if p.ref[u8].* == 0u8 return p.diff(start)
         p = p.add-bytes(1)
       }
       let zeros = vector/splat[u8, k1/simd-bytes](0u8)
@@ -180,19 +180,15 @@ ns for string {
         lane = chunk.eq-lanes(zeros).first-true-lane()
         if lane < 0 { p = p.add-bytes(w) }
       }
-      p.diff(c-string) + lane
+      p.diff(start) + lane
     }
   }
 
-  fn wrap-c(c-string: ptr): string {
-    wrap-raw(ptr = c-string, len = c-string-len(c-string))
+  fn wrap-c(c-string: *u8): string {
+    wrap-raw(ptr = c-string.as[ptr], len = c-string-len(c-string))
   }
 
-  fn from-c(c-string: ptr): string {
-    let wrapped = wrap-c(c-string)
-    let copy = wrapped.cloned()
-    copy
-  }
+  fn from-c(c-string: *u8): string { wrap-c(c-string).cloned() }
 
   fn capitalize-ascii(self: string): string {
     if self.first() is :some c and c.is-ascii-lower() {

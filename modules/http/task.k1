@@ -1,6 +1,8 @@
+use std/pool
+use uv/job
 use uv/worker-pool
 
-type task[t] = { output: *uv/monitor[?t] }
+type task[t] = { pool: *worker-pool, job: pool/handle[job], output: *uv/monitor[?t] }
 
 type task-work[t, params] = {
   output: *uv/monitor[?t],
@@ -13,20 +15,25 @@ ns for task {
     let output: *uv/monitor[?t] = heap.alloc-t()
     output.init(:none)
     let work: *task-work[t, params] = heap.new(.{ output, params, handler })
-    if pool.submit(work, run-task-work[t, params].&) is :none {
+    require pool.submit(work, run-task-work[t, params].&) is :some job else {
       heap.free-t(work)
       output.destroy()
       heap.free-t(output)
       return :none
     }
-    :some .{ output }
+    :some .{ pool, job, output }
   }
 
   fn await[t](self: task[t]): t {
-    let guard = self.output.lock()
-    while guard.value.* is :none { guard.wait() }
-    let output = guard.value.*.!
-    guard.unlock()
+    let _ = self.pool.try-run-inline(self.job)
+    let monitor = self.output
+    let output = worker-pool/block-in-place(fn[monitor]. {
+      let guard = monitor.lock()
+      while guard.value.* is :none { guard.wait() }
+      let output = guard.value.*.!
+      guard.unlock()
+      output
+    })
     self.output.destroy()
     heap.free-t(self.output)
     output

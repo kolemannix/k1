@@ -31,7 +31,7 @@ fn main(argc: u32, argv: ptr): i32 {
     subscriber-cap-weight = 1048576,
     weight-fn = fn(payload: rc-bytes) payload.bytes().len(),
   )
-  let pool = uv/worker-pool/start(32, 4096)
+  let pool = uv/worker-pool/start(target-free-count = 32, max-worker-count = 512, capacity = 4096)
   let server = server/start(config, pool, (fn[bus](req: http/request) app/handle(req, bus)).to-dyn()).!
   app/spawn-tick-publisher-thread(bus)
   eprintln("listening on ${server.port}...")

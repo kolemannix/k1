@@ -87,7 +87,7 @@ fn start(
   s.listener.&.set-data(s)
 
   let addr: libuv/sockaddr_in = uninit
-  uv/check(libuv/ip4_addr(config.host.to-c().ptr.ref[u8], config.port.widen[i32], addr.&)).try
+  uv/check(libuv/ip4_addr(config.host.to-c(), config.port.widen[i32], addr.&)).try
   uv/check(libuv/tcp_bind(s.listener.&, addr.&.as[ptr].narrow(), 0)).try
   uv/check(libuv/listen(s.listener.&.as-stream(), config.accept-queue-len, on-new-connection.&)).try
 
@@ -201,7 +201,7 @@ ns for connection {
       slot = .0,
       pending-closes = 0,
       wake-queued = false,
-      wake-link = optref/null(),
+      wake-link = null(),
       phase = :header,
 
       request-arena,
@@ -520,7 +520,7 @@ fn on-complete-http-body(connection: *connection, chunks: span[span[u8]]) {
     connection,
     request = .{ header = connection.parsed-header.get(), body = chunks },
     http-response = :none,
-    link = optref/null(),
+    link = null(),
   })
   connection.client().read-stop()
   let s = connection.server
@@ -581,6 +581,6 @@ fn tprintln-log[t: print](t) {
   let thread-self = libuv/thread_self()
   let thread-name-buf = array/zeroed[u8, 256]()
   let _rc = libuv/thread_getname(thread-self.&, thread-name-buf.data-ref(), thread-name-buf.len().unsigned())
-  let thread-name = string/wrap-c(thread-name-buf.data-ptr())
+  let thread-name = string/wrap-c(thread-name-buf.data-ref())
   eprintln("[$thread-name] $t")
 }

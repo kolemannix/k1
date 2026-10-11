@@ -2960,12 +2960,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn expect_string(&mut self) -> ParseResult<ParsedExprId> {
         let first = self.tokens.peek();
 
-        enum Pending {
-            Raw { token: Token, starts_fresh: bool },
-            Part(InterpolatedStringPart),
-        }
-
-        let mut pending: SV8<Pending> = smallvec![];
+        let mut pending: SV8<StringPiece<InterpolatedStringPart>> = smallvec![];
         let mut first_segment = true;
 
         // First we collect the token sequence: string segments stay raw for now
@@ -2989,7 +2984,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                             InterpolatedStringPart::Hole { spec, span }
                         }
                     };
-                    pending.push(Pending::Part(part));
+                    pending.push(StringPiece::Hole(part));
                 }
                 // Bare $ident interpolation case
                 K::Ident => {
@@ -3001,12 +2996,15 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                         ParsedExpr::Variable(ParsedVariable { name: QIdent::naked(string_id, sp) }),
                         sp,
                     );
-                    pending.push(Pending::Part(InterpolatedStringPart::Expr(expr_id, None)));
+                    pending.push(StringPiece::Hole(InterpolatedStringPart::Expr(expr_id, None)));
                 }
                 k if k.is_string() => {
                     let StringTokenInfo { delim: _, done } = k.as_string().unwrap();
-                    pending
-                        .push(Pending::Raw { token: current_token, starts_fresh: first_segment });
+                    pending.push(StringPiece::Literal {
+                        token: current_token,
+                        text: self.token_chars(current_token),
+                        starts_fresh: first_segment,
+                    });
                     first_segment = false;
                     self.emit_semantic_token(current_token, SemanticTokenKind::String);
 
@@ -3031,151 +3029,27 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
         }
 
-        // A literal whose content starts with a newline is a block (only
-        // backticks can contain raw newlines): the leading newline is dropped,
-        // indentation common to every line — the closing delimiter's line
-        // included — is stripped, and a whitespace-only last line is removed
-        let is_block = match pending.first() {
-            Some(Pending::Raw { token, .. }) => {
-                let text = self.token_chars(*token);
-                text.as_bytes().get(1) == Some(&b'\n')
-            }
-            _ => false,
-        };
-        let mut strip: u32 = 0;
-        let mut drop_trailing_ws_line = false;
-        if is_block {
-            let mut min_indent: Option<u32> = None;
-            let mut at_line_start = false;
-            let mut ws_count = 0u32;
-            macro_rules! commit_line {
-                () => {
-                    min_indent = Some(min_indent.map_or(ws_count, |m| m.min(ws_count)));
-                    at_line_start = false;
-                };
-            }
-            for p in pending.iter() {
-                match p {
-                    Pending::Part(_) => {
-                        if at_line_start {
-                            commit_line!();
-                        }
-                    }
-                    Pending::Raw { token, starts_fresh } => {
-                        let info = token.kind.as_string().unwrap();
-                        let text = self.token_chars(*token);
-                        let mut chars = text.chars().peekable();
-                        if *starts_fresh {
-                            chars.next();
-                        }
-                        while let Some(c) = chars.next() {
-                            if c == '\\' {
-                                chars.next();
-                                if at_line_start {
-                                    commit_line!();
-                                }
-                            } else if c == info.delim.char() && info.done && chars.peek().is_none()
-                            {
-                                // Closing delimiter; its line's indent already counted
-                            } else if c == '\n' {
-                                at_line_start = true;
-                                ws_count = 0;
-                            } else if at_line_start && (c == ' ' || c == '\t') {
-                                ws_count += 1;
-                            } else if at_line_start {
-                                commit_line!();
-                            }
-                        }
-                    }
-                }
-            }
-            if at_line_start {
-                min_indent = Some(min_indent.map_or(ws_count, |m| m.min(ws_count)));
-                drop_trailing_ws_line = true;
-            }
-            strip = min_indent.unwrap_or(0);
-        }
-
         let mut buf = std::mem::take(&mut self.string_buffer);
+        let mut ends: SV8<u32> = smallvec![];
+        if let Err(message) = cook_string(&pending, &mut buf, &mut ends) {
+            self.string_buffer = buf;
+            return Err(self.error(message, first));
+        }
         let mut parts: AstList<InterpolatedStringPart> =
             self.ast.mem.new_list(pending.len() as u32);
-        let mut skip_ws: u32 = 0;
-        let mut drop_first_newline = is_block;
-        let pending_len = pending.len();
-        for (i, p) in pending.iter().enumerate() {
-            match p {
-                Pending::Part(part) => {
-                    skip_ws = 0;
-                    parts.push(*part);
-                }
-                Pending::Raw { token, starts_fresh } => {
-                    let info = token.kind.as_string().unwrap();
-                    let delim = info.delim;
-                    let text = self.token_chars(*token);
-
-                    buf.clear();
-                    let mut chars = text.chars().peekable();
-                    if *starts_fresh {
-                        // Skip opening " or `
-                        // Note(ugh!): Maybe we just lex the actual strings (with tok_buf)
-                        // because this is very duplicative between here and lex
-                        let c = chars.next();
-                        if c != Some('"') && c != Some('`') {
-                            return Err(self.error(
-                                format!("Internal Error: should start with \" or `; got {:?}", c),
-                                first,
-                            ));
-                        }
-                    }
-                    let is_terminated = info.done;
-                    while let Some(c) = chars.next() {
-                        if c == '\\' {
-                            skip_ws = 0;
-                            let Some(next) = chars.next() else {
-                                return Err(self.error("String ended with '\\'", first));
-                            };
-                            if let Some(c) =
-                                SHARED_STRING_ESCAPED_CHARS.iter().find(|c| c.sentinel == next)
-                            {
-                                buf.push(c.output as char)
-                            } else if next == delim.char() {
-                                // Escaped closing delimiter ` or "
-                                buf.push(delim.char())
-                            } else {
-                                // Push both; not an escape sequence
-                                buf.push('\\');
-                                buf.push(next);
-                            };
-                        } else if c == delim.char() {
-                            // Skip closing delimiters of terminated string tokens
-                            if chars.peek().is_none() && is_terminated {
-                            } else {
-                                skip_ws = 0;
-                                buf.push(c)
-                            }
-                        } else if c == '\n' {
-                            if drop_first_newline {
-                                drop_first_newline = false;
-                            } else {
-                                buf.push('\n');
-                            }
-                            skip_ws = strip;
-                        } else if skip_ws > 0 && (c == ' ' || c == '\t') {
-                            skip_ws -= 1;
-                        } else {
-                            skip_ws = 0;
-                            buf.push(c)
-                        }
-                    }
-                    if drop_trailing_ws_line && i == pending_len - 1 {
-                        while buf.ends_with(' ') || buf.ends_with('\t') {
-                            buf.pop();
-                        }
-                    }
-                    let string_id = self.ast.idents.intern_mut(&buf);
-
-                    let sp = self.tok_span(*token);
-                    parts.push(InterpolatedStringPart::String { string_id, span: sp });
+        let mut cooked_ends = ends.iter();
+        let mut cooked_start = 0;
+        for piece in pending.iter() {
+            match piece {
+                StringPiece::Hole(part) => parts.push(*part),
+                StringPiece::Literal { token, .. } => {
+                    let cooked_end = *cooked_ends.next().unwrap() as usize;
+                    let string_id = self.ast.idents.intern_mut(&buf[cooked_start..cooked_end]);
+                    cooked_start = cooked_end;
+                    parts.push(InterpolatedStringPart::String {
+                        string_id,
+                        span: self.tok_span(*token),
+                    });
                 }
             }
         }
@@ -5596,6 +5470,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         };
 
         let (name_token, name) = self.expect_ident()?;
+        let mut enclosing: SV4<(Token, StringId)> = smallvec![];
+        let mut name_token = name_token;
+        let mut name = name;
 
         if is_type {
             self.emit_semantic_token(name_token, SemanticTokenKind::Type);
@@ -5605,6 +5482,16 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 SemanticTokenKind::Namespace,
                 SemanticToken::DEFINITION,
             );
+            while self.peek_kind() == K::Slash && !self.peek().is_whitespace_preceded() {
+                self.advance();
+                enclosing.push((name_token, name));
+                (name_token, name) = self.expect_ident()?;
+                self.emit_semantic_token_mods(
+                    name_token,
+                    SemanticTokenKind::Namespace,
+                    SemanticToken::DEFINITION,
+                );
+            }
         }
 
         let is_braced = match self.peek() {
@@ -5623,7 +5510,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let definitions = self.parse_definitions(terminator);
         let span = self.extend_tok_to_here(keyword);
         let name_span = self.tok_span(name_token);
-        let namespace_id = self.ast.add_namespace(ParsedNamespace {
+        let mut namespace_id = self.ast.add_namespace(ParsedNamespace {
             name,
             definitions,
             id: ParsedNamespaceId::PENDING,
@@ -5632,9 +5519,25 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             is_type_companion: is_type,
             lib_name,
             reload,
-            compile_condition: condition,
+            compile_condition: if enclosing.is_empty() { condition } else { None },
             typer_state: typer::ParsedNamespaceDeclareOutcome::Parsed,
         });
+        for (index, (token, name)) in enclosing.iter().enumerate().rev() {
+            let mut definitions = self.ast.mem.new_list(1);
+            definitions.push(ParsedId::Namespace(namespace_id));
+            namespace_id = self.ast.add_namespace(ParsedNamespace {
+                name: *name,
+                definitions: definitions.to_mlist(),
+                id: ParsedNamespaceId::PENDING,
+                name_span: self.tok_span(*token),
+                span,
+                is_type_companion: false,
+                lib_name: None,
+                reload: false,
+                compile_condition: if index == 0 { condition } else { None },
+                typer_state: typer::ParsedNamespaceDeclareOutcome::Parsed,
+            });
+        }
         Ok(namespace_id)
     }
 

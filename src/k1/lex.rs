@@ -624,6 +624,142 @@ impl Span {
     }
 }
 
+pub enum StringPiece<'a, H> {
+    Literal { token: Token, text: &'a str, starts_fresh: bool },
+    Hole(H),
+}
+
+pub fn cook_string<H>(
+    pieces: &[StringPiece<H>],
+    out: &mut String,
+    ends: &mut crate::SV8<u32>,
+) -> Result<(), &'static str> {
+    // A literal whose content starts with a newline is a block (only
+    // backticks can contain raw newlines): the leading newline is dropped,
+    // indentation common to every line — the closing delimiter's line
+    // included — is stripped, and a whitespace-only last line is removed
+    let is_block = match pieces.first() {
+        Some(StringPiece::Literal { text, .. }) => text.as_bytes().get(1) == Some(&b'\n'),
+        _ => false,
+    };
+    let mut strip: u32 = 0;
+    let mut drop_trailing_ws_line = false;
+    if is_block {
+        let mut min_indent: Option<u32> = None;
+        let mut at_line_start = false;
+        let mut ws_count = 0u32;
+        macro_rules! commit_line {
+            () => {
+                min_indent = Some(min_indent.map_or(ws_count, |m| m.min(ws_count)));
+                at_line_start = false;
+            };
+        }
+        for piece in pieces {
+            match piece {
+                StringPiece::Hole(_) => {
+                    if at_line_start {
+                        commit_line!();
+                    }
+                }
+                StringPiece::Literal { token, text, starts_fresh } => {
+                    let info = token.kind.as_string().unwrap();
+                    let mut chars = text.chars().peekable();
+                    if *starts_fresh {
+                        chars.next();
+                    }
+                    while let Some(c) = chars.next() {
+                        if c == '\\' {
+                            chars.next();
+                            if at_line_start {
+                                commit_line!();
+                            }
+                        } else if c == info.delim.char() && info.done && chars.peek().is_none() {
+                            // Closing delimiter; its line's indent already counted
+                        } else if c == '\n' {
+                            at_line_start = true;
+                            ws_count = 0;
+                        } else if at_line_start && (c == ' ' || c == '\t') {
+                            ws_count += 1;
+                        } else if at_line_start {
+                            commit_line!();
+                        }
+                    }
+                }
+            }
+        }
+        if at_line_start {
+            min_indent = Some(min_indent.map_or(ws_count, |m| m.min(ws_count)));
+            drop_trailing_ws_line = true;
+        }
+        strip = min_indent.unwrap_or(0);
+    }
+
+    out.clear();
+    let mut skip_ws: u32 = 0;
+    let mut drop_first_newline = is_block;
+    let piece_count = pieces.len();
+    for (i, piece) in pieces.iter().enumerate() {
+        let StringPiece::Literal { token, text, starts_fresh } = piece else {
+            skip_ws = 0;
+            continue;
+        };
+        let info = token.kind.as_string().unwrap();
+        let delim = info.delim;
+        let piece_start = out.len();
+        let mut chars = text.chars().peekable();
+        if *starts_fresh {
+            let c = chars.next();
+            if c != Some('"') && c != Some('`') {
+                return Err("Internal Error: a string should start with \" or `");
+            }
+        }
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                skip_ws = 0;
+                let Some(next) = chars.next() else {
+                    return Err("String ended with '\\'");
+                };
+                if let Some(c) = SHARED_STRING_ESCAPED_CHARS.iter().find(|c| c.sentinel == next) {
+                    out.push(c.output as char)
+                } else if next == delim.char() {
+                    // Escaped closing delimiter ` or "
+                    out.push(delim.char())
+                } else {
+                    // Push both; not an escape sequence
+                    out.push('\\');
+                    out.push(next);
+                };
+            } else if c == delim.char() {
+                // Skip closing delimiters of terminated string tokens
+                if chars.peek().is_none() && info.done {
+                } else {
+                    skip_ws = 0;
+                    out.push(c)
+                }
+            } else if c == '\n' {
+                if drop_first_newline {
+                    drop_first_newline = false;
+                } else {
+                    out.push('\n');
+                }
+                skip_ws = strip;
+            } else if skip_ws > 0 && (c == ' ' || c == '\t') {
+                skip_ws -= 1;
+            } else {
+                skip_ws = 0;
+                out.push(c)
+            }
+        }
+        if drop_trailing_ws_line && i == piece_count - 1 {
+            while out.len() > piece_start && (out.ends_with(' ') || out.ends_with('\t')) {
+                out.pop();
+            }
+        }
+        ends.push(out.len() as u32);
+    }
+    Ok(())
+}
+
 pub struct EscapedChar {
     pub sentinel: char,
     pub output: u8,

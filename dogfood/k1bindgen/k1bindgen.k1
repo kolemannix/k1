@@ -21,8 +21,8 @@ fn main(argc: u32, argv: ptr): i32 {
     0
   }
 }
-type dl-info = { fname: ptr, fbase: ptr, sname: ptr, saddr: ptr }
-fn(extern("dlsym")) dlsym(handle: ptr, symbol: ptr): ptr
+type dl-info = { fname: *u8, fbase: ptr, sname: ptr, saddr: ptr }
+fn(extern("dlsym")) dlsym(handle: ptr, symbol: *u8): ptr
 fn(extern("dladdr")) dladdr(addr: ptr, info: *dl-info): c-int
 
 fn dirname(path: string): string {
@@ -51,7 +51,7 @@ fn clang-major-version(version-string: string): ?string {
 // -resource-dir explicitly.
 fn clang-resource-dir(): ?string {
   let rtld-default: i64 = if k1/platform-macos { -2 } else { 0 }
-  let sym = dlsym(rtld-default.to-ptr(), "clang_createIndex".to-c-tmp().ptr)
+  let sym = dlsym(rtld-default.to-ptr(), "clang_createIndex".to-c-tmp())
   if sym.is-null() return :none
   let info: dl-info = uninit
   if dladdr(sym, info.&) == 0 return :none
@@ -105,11 +105,11 @@ fn start(args: span[string]): result[string, string] {
     clang-args.push(sdk)
   }
   for args.clangarg { clang-args.push(it) }
-  let clang-args-c-strs: list[ptr] = clang-args.map(fn s. s.to-c-tmp().ptr)
+  let clang-args-c-strs: list[*u8] = clang-args.map(fn s. s.to-c-tmp())
 
   let err = clang/parseTranslationUnit2(
     index,
-    source_filename = args.in-path.to-c().ptr,
+    source_filename = args.in-path.to-c(),
     command_line_args = clang-args-c-strs.data-ptr(),
     command_line_args_len = clang-args-c-strs.len().trunc[i32],
     ptr/null.narrow(), 0,

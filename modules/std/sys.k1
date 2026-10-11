@@ -14,11 +14,11 @@ fn exe-path(): string {
       if _NSGetExecutablePath(buf.data, cap-buf.data) != 0 {
         crash("exe-path: buffer too small")
       }
-      string/wrap-c(buf.data)
+      string/wrap-c(buf.data-ref())
     },
     :posix-linux -> {
       let buf = buffer/allocate[u8](4096)
-      let n = posix/readlink("/proc/self/exe".to-c-tmp().ptr, buf.data, 4096)
+      let n = posix/readlink("/proc/self/exe".to-c-tmp(), buf.data, 4096)
       if n < 0 crash("exe-path: readlink /proc/self/exe failed")
       buf.len = n
       string/wrap-byte-buffer(buf)
@@ -39,7 +39,7 @@ fn random(upper-bound: u32): u32 {
 }
 
 fn parse-main-args(arg-count: u32, args: ptr): span[string] {
-  let buf = buffer/wrap-raw[ptr](
+  let buf = buffer/wrap-raw[*u8](
     count = arg-count.as-size(),
     ptr = args
   )

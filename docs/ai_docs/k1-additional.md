@@ -365,10 +365,15 @@ ns pre {
 have to lex, so it carries syntax K1 has no grammar for. As a `code` value its
 text is the inside of the braces. A macro param of type `span[code-token]`
 receives its argument lexed (`\{ ... }` contents, or a plain expression's
-source): each `code-token = { kind, text, source, spacing }` has its own span,
-`kind` is `ident` (keywords included), `number`, `string` (one token for the
-whole literal, interpolation holes included), `char` or `punct`, and `spacing` is
-`none`, `inline` or `newline` (always `none` on the first token).
+source): each `code-token = { kind, text, source, spacing, parts }` has its own
+span, `kind` is `ident` (keywords included), `number`, `string` (one token for
+the whole literal, interpolation holes included), `char` or `punct`, and
+`spacing` is `none`, `inline` or `newline` (always `none` on the first token).
+A `string` token's `parts` are its pieces in order: `:text { value, source }`
+for each non-empty literal segment, cooked as the compiler cooks string
+literals (escapes and block indentation resolved), and `:hole { tokens, source }`
+for each `$name` or `${...}`, whose tokens carry their own spans (a format spec
+arrives as a trailing punct token). Other tokens have no parts.
 `cb.write-token(tok)` re-emits a token with its span, and `tok.fail(msg)` stops
 expansion with an error at that token in the caller's source. `std/html` is the
 worked example: `html/write(out, \{ <p class={c}>{text}</p> })` and
@@ -407,7 +412,10 @@ let six: int = sum(\{ 1, 2, 3 })
 Macros expand when the call is typechecked, so a macro must be defined in the
 same module (any namespace) or an upstream module; a definition-level `$`
 invocation runs early, so its macro must live in the module's `pre` namespace or
-an upstream module. Self-recursive expansion is an error. Macros cannot be used
+an upstream module. A definition-level macro may emit `macro` definitions into
+the invoking namespace, which is how a namespace binds a static argument once:
+`$pre/define-scaled(3)` emitting `` `macro scaled(x: code) { pre/scaled-code(x, $factor) }` ``
+(`test_src/suite1/test_meta.k1`). Self-recursive expansion is an error. Macros cannot be used
 as values, and unused macro params get no warning (conditionally ignoring an
 argument is the point of a debug macro).
 
@@ -723,11 +731,12 @@ See `test_src/suite1/arith.k1` and `test_src/suite1/ability_complex.k1`.
 
 Namespaces can be reopened in multiple blocks, and `ns for type` extensions can
 be added from those blocks. Nested namespaces and aliases participate in normal
-scope resolution.
+scope resolution. `ns a/b { ... }` is `ns a { ns b { ... } }`.
 
 ```rust
 ns foo { type bar = { value: int } }
 ns foo { fn make(): bar { .{ value = 1 } } }
+ns foo/inner { fn make-two(): bar { .{ value = 2 } } }
 ```
 
 ## Pointer And Address Syntax
@@ -735,7 +744,7 @@ ns foo { fn make(): bar { .{ value = 1 } } }
 The guide covers field references, but tests also use:
 
 - `x.&` / `array.&` to take addresses.
-- `ptr/null`.
+- `.0` for a null `ptr` or `optref[t]`.
 - `.as[ptr]` and `.as[*t]` for total pointer views (`*t` to `ptr`, `*t` to
   `*u` when every `t` is a valid `u`); a claiming view (`ptr` to `*t`) is
   `.ref[t]` or `.narrow`.

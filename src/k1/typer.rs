@@ -61,11 +61,11 @@ use crate::parse::{
     InterpolatedStringPart, NamedTypeArg, NumericWidth, ParsedAbilityExpr, ParsedAbilityId,
     ParsedAbilityImplId, ParsedBlock, ParsedBlockKind, ParsedBreak, ParsedCall, ParsedCallArg,
     ParsedContinue, ParsedExpr, ParsedExprId, ParsedFunctionId, ParsedGlobalId, ParsedId,
-    ParsedIfExpr, ParsedIntLiteral, ParsedListLiteral, ParsedLiteral, ParsedLoopExpr, ParsedNamespaceId,
-    ParsedPattern, ParsedPatternId, ParsedProgram, ParsedStaticBlockKind, ParsedStaticExpr,
-    ParsedStmt, ParsedStmtId, ParsedTypeConstraint, ParsedTypeConstraintExpr, ParsedTypeDefnId,
-    ParsedTypeExpr, ParsedTypeExprId, ParsedTypeParam, ParsedUseId, ParsedVariable, ParsedVariant,
-    ParsedWhileExpr, QIdent, StringId, StructValueFieldKind,
+    ParsedIfExpr, ParsedIntLiteral, ParsedListLiteral, ParsedLiteral, ParsedLoopExpr,
+    ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedProgram, ParsedStaticBlockKind,
+    ParsedStaticExpr, ParsedStmt, ParsedStmtId, ParsedTypeConstraint, ParsedTypeConstraintExpr,
+    ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId, ParsedTypeParam, ParsedUseId,
+    ParsedVariable, ParsedVariant, ParsedWhileExpr, QIdent, StringId, StructValueFieldKind,
 };
 use crate::vpool::VPool;
 use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size};
@@ -3214,7 +3214,10 @@ impl TypedProgram {
                 let path = self.ast.idents.intern(from.ast.idents.get_string(source.file_path));
                 let file_id = self.register_source(path, source.content(&from.ast.mem));
                 let base = self.ast.sources.get(file_id).base;
-                Span { lo: base + source.local_from_global_offset(message.span.lo), len: message.span.len }
+                Span {
+                    lo: base + source.local_from_global_offset(message.span.lo),
+                    len: message.span.len,
+                }
             };
             let text = self.ast.idents.intern(from.ast.idents.get_string(message.message));
             self.report_ext(K1Message { message: text, span, ..*message }, true);
@@ -3479,9 +3482,9 @@ impl TypedProgram {
     pub fn get_stmt_type(&self, stmt: TypedStmtId) -> TypeId {
         match self.stmts.get(stmt) {
             TypedStmt::Expr(_, ty) => *ty,
-            TypedStmt::Let(_)
-            | TypedStmt::Assignment(_)
-            | TypedStmt::Require(_) => self.builtin_types.empty,
+            TypedStmt::Let(_) | TypedStmt::Assignment(_) | TypedStmt::Require(_) => {
+                self.builtin_types.empty
+            }
         }
     }
 
@@ -3922,11 +3925,11 @@ impl TypedProgram {
                     Ok(())
                 }
             }
-            (Type::FunctionPointer(fp1), Type::FunctionPointer(fp2)) => self
-                .check_types(fp1.function_type_id, fp2.function_type_id, scope_id)
-                .map_err(|msg| {
-                    k1_format_user!(self, "Expected {} but got {}: {msg}", expected, actual)
-                }),
+            (Type::FunctionPointer(fp1), Type::FunctionPointer(fp2)) => {
+                self.check_types(fp1.function_type_id, fp2.function_type_id, scope_id).map_err(
+                    |msg| k1_format_user!(self, "Expected {} but got {}: {msg}", expected, actual),
+                )
+            }
             (Type::Lambda(expected_lambda_id), Type::Lambda(actual_lambda_id)) => {
                 let expected_lambda = self.lambda_types.get(*expected_lambda_id);
                 let actual_lambda = self.lambda_types.get(*actual_lambda_id);
@@ -5399,7 +5402,8 @@ impl TypedProgram {
         if literal.is_negative && !int_type.is_signed() {
             kbail!(self, span, "Invalid {int_type}: -{magnitude} is negative");
         }
-        let value: i128 = if literal.is_negative { -(magnitude as i128) } else { magnitude as i128 };
+        let value: i128 =
+            if literal.is_negative { -(magnitude as i128) } else { magnitude as i128 };
         macro_rules! fit {
             ($variant:ident, $rust_int_type:ty) => {
                 match <$rust_int_type>::try_from(value) {
@@ -6178,7 +6182,8 @@ impl TypedProgram {
                 Ok(expr_id)
             }
             ParsedExpr::Literal(ParsedLiteral::Int(int_literal)) => {
-                let int_value = self.eval_integer_value(*int_literal, span, ctx.expected_type_id)?;
+                let int_value =
+                    self.eval_integer_value(*int_literal, span, ctx.expected_type_id)?;
                 let value_id = self.static_values.add(StaticValue::Int(int_value));
                 Ok(self.add_static_constant_expr(value_id, span))
             }
@@ -6776,8 +6781,7 @@ impl TypedProgram {
         let expected_struct_defn_info = self.get_defn_info(expected_struct_id);
         let field_count = expected_struct.fields.len();
 
-        let mut passed_fields_aligned: SV8<(Option<&parse::StructValueField>, Span)> =
-            smallvec![];
+        let mut passed_fields_aligned: SV8<(Option<&parse::StructValueField>, Span)> = smallvec![];
 
         let mut missing_fields: SV4<StringId> = smallvec![];
         for (index, expected_field) in self.mem.getn(expected_struct.fields).iter().enumerate() {
@@ -6941,7 +6945,8 @@ impl TypedProgram {
             kbail!(self, span, "'while' body must be a block");
         };
 
-        if let ParsedExpr::Literal(ParsedLiteral::Bool(true)) = self.ast.exprs.get(while_expr.cond) {
+        if let ParsedExpr::Literal(ParsedLiteral::Bool(true)) = self.ast.exprs.get(while_expr.cond)
+        {
             kbail!(
                 self,
                 self.ast.exprs.get_span(while_expr.cond),
@@ -8741,7 +8746,13 @@ impl TypedProgram {
         let span = self.ast.exprs.get_span(expr_id);
         let true_expr = self.synth_bool(true, span);
         let false_expr = self.synth_bool(false, span);
-        Ok(self.synth_matching_if_else(BOOL_TYPE_ID, matching_condition, true_expr, false_expr, span))
+        Ok(self.synth_matching_if_else(
+            BOOL_TYPE_ID,
+            matching_condition,
+            true_expr,
+            false_expr,
+            span,
+        ))
     }
 
     fn eval_binary_op(
@@ -9662,7 +9673,8 @@ impl TypedProgram {
                                 "Cannot get a pointer to an intrinsic operation. (If you need one, make a wrapper function)"
                             );
                         }
-                        let lambda_object = self.function_to_lambda_object(fr.function_id, call_span);
+                        let lambda_object =
+                            self.function_to_lambda_object(fr.function_id, call_span);
                         return Ok(CallResolution::OtherExpr(self.synth_discard_then(
                             base,
                             lambda_object,
@@ -10821,10 +10833,8 @@ impl TypedProgram {
                         // - The expected return type together with the type of the sum itself
                         // - The passed payload together with the type of the payload itself
                         if let Some(expected) = ctx.expected_type_id {
-                            let self_instance = self.instantiate_generic_type(
-                                provided_type,
-                                self.mem.getn(g_params),
-                            );
+                            let self_instance = self
+                                .instantiate_generic_type(provided_type, self.mem.getn(g_params));
                             args_and_params.push(InferenceInputPair {
                                 arg: TypeOrParsedExpr::Type(expected),
                                 param_type: self_instance,
@@ -11336,12 +11346,7 @@ impl TypedProgram {
                 function_type: ftp.function_type,
             },
             Type::FunctionPointer(_) => Callee::DynamicFunction { function_pointer_expr: value },
-            _ => kbail!(
-                self,
-                self.exprs.get_span(value),
-                "Not callable: type is '{}'",
-                value_type
-            ),
+            _ => kbail!(self, self.exprs.get_span(value), "Not callable: type is '{}'", value_type),
         };
         let is_function_reference = matches!(callee, Callee::StaticFunction(_));
         let tmp_mark = self.tmp.mark();
@@ -11641,7 +11646,10 @@ impl TypedProgram {
                                 Some(Builtin::TyperInline(_))
                             ) =>
                         {
-                            Callee::Builtin { function_id, function_type: specialized_function_type }
+                            Callee::Builtin {
+                                function_id,
+                                function_type: specialized_function_type,
+                            }
                         }
                         Callee::StaticFunction(function_id) => {
                             let function_id = match cached_specialization {
@@ -13063,8 +13071,8 @@ impl TypedProgram {
                         Some(variable_id)
                     }
                 };
-                let body =
-                    self.eval_expr(defer.expr, ctx.with_scope(defer_scope).with_no_expected_type())?;
+                let body = self
+                    .eval_expr(defer.expr, ctx.with_scope(defer_scope).with_no_expected_type())?;
                 if let Some(variable_id) = binder {
                     let name_span = self.variables.get(variable_id).defn_span;
                     self.warn_variable_usage_counts("Defer binding", variable_id, name_span);
@@ -13335,9 +13343,9 @@ impl TypedProgram {
                 (ABILITY_ID_ENUM, "enum-name") => Some(Builtin::TyperPhysicalFunction(
                     BuiltinTyperFunction::EnumAbilityGetTagName,
                 )),
-                (ABILITY_ID_ENUM, "enum-from-value") => Some(Builtin::TyperPhysicalFunction(
-                    BuiltinTyperFunction::EnumAbilityFromValue,
-                )),
+                (ABILITY_ID_ENUM, "enum-from-value") => {
+                    Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::EnumAbilityFromValue))
+                }
                 (ABILITY_ID_ENUM, "enum-from-value-unchecked") => {
                     Some(Builtin::TyperPhysicalFunction(
                         BuiltinTyperFunction::EnumAbilityFromValueUnchecked,
@@ -13366,9 +13374,9 @@ impl TypedProgram {
                         Some(Type::Sum(_)) if op == Op::Equals => {
                             Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::SumEquals))
                         }
-                        Some(Type::Struct(_)) if op == Op::Equals => Some(
-                            Builtin::TyperPhysicalFunction(BuiltinTyperFunction::StructEquals),
-                        ),
+                        Some(Type::Struct(_)) if op == Op::Equals => {
+                            Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::StructEquals))
+                        }
                         _ => None,
                     }
                 }
@@ -14598,7 +14606,7 @@ impl TypedProgram {
             match impl_function {
                 AbilityImplFunction::FunctionId(impl_fn_id) => {
                     //review any re-use potential here for 'synthesizing a function', or not worth
-                    //it? 
+                    //it?
                     let impl_fn = *self.get_function(impl_fn_id);
                     let impl_fn_type = *self.types.get(impl_fn.type_id).as_function().unwrap();
                     let impl_fn_params = self.mem.getn(impl_fn_type.physical_params);
@@ -15821,10 +15829,13 @@ impl TypedProgram {
                 for (index, field) in self.mem.getn(struct_type.fields).iter().enumerate() {
                     let field_expr = self.synth_field_access(struct_expr, index, fn_span);
                     let name_expr = self.synth_string_literal(field.name, fn_span);
-                    let print_name_expr = self.synth_print_call(name_expr, writer_expr, None, ctx)?;
-                    let print_colon_expr = self.synth_print_call(colon_expr, writer_expr, None, ctx)?;
+                    let print_name_expr =
+                        self.synth_print_call(name_expr, writer_expr, None, ctx)?;
+                    let print_colon_expr =
+                        self.synth_print_call(colon_expr, writer_expr, None, ctx)?;
 
-                    let print_value_expr = self.synth_print_call(field_expr, writer_expr, None, ctx)?;
+                    let print_value_expr =
+                        self.synth_print_call(field_expr, writer_expr, None, ctx)?;
 
                     self.push_block_expr_id(&mut block, print_name_expr);
                     self.push_block_expr_id(&mut block, print_colon_expr);
@@ -15877,7 +15888,8 @@ impl TypedProgram {
                     self.push_block_expr_id(&mut block, write_label);
                     if let Some(payload_type_id) = variant.payload {
                         let space_expr = self.synth_string_literal_from_str(" ", fn_span);
-                        let write_space = self.synth_print_call(space_expr, writer_expr, None, ctx)?;
+                        let write_space =
+                            self.synth_print_call(space_expr, writer_expr, None, ctx)?;
                         self.push_block_expr_id(&mut block, write_space);
                         let payload_expr = self.exprs.add(
                             TypedExpr::SumGetPayload(GetSumPayload {
@@ -15931,12 +15943,7 @@ impl TypedProgram {
         Ok(block_id)
     }
 
-    fn warn_variable_usage_counts(
-        &mut self,
-        kind_name: &str,
-        variable_id: VariableId,
-        span: Span,
-    ) {
+    fn warn_variable_usage_counts(&mut self, kind_name: &str, variable_id: VariableId, span: Span) {
         let v = self.variables.get(variable_id);
         if v.usage_count == 0 && !v.is_user_hidden() {
             let var_name_str = self.ident_str(v.name);
@@ -17776,7 +17783,11 @@ impl TypedProgram {
     }
 
     pub fn failure_summary(&self) -> String {
-        format!("Module {} failed compiling with {} errors", self.program_name(), self.error_count())
+        format!(
+            "Module {} failed compiling with {} errors",
+            self.program_name(),
+            self.error_count()
+        )
     }
 
     fn assert_builtin_types_correct(&self) {
@@ -17899,6 +17910,7 @@ impl TypedProgram {
         let core_ns = intern_path!(self.ast.idents.b.core);
         let core_mem = intern_path!(self.ast.idents.b.core, self.ast.idents.b.mem);
         let core_types = intern_path!(self.ast.idents.b.core, self.ast.idents.b.types);
+        let core_optref = intern_path!(self.ast.idents.b.core, self.ast.idents.b.optref);
         let core_scalarcmp = intern_path!(self.ast.idents.b.core, self.ast.idents.b.scalar_cmp);
 
         macro_rules! core {
@@ -17987,27 +17999,13 @@ impl TypedProgram {
             core!("code-token"),
             core!("token-cursor"),
             core!("optref"),
-            {
-                let name = get_ident!(self, "min");
-                QIdent::make(&mut self.ast.mem, core_scalarcmp, name, span)
-            },
-            {
-                let name = get_ident!(self, "max");
-                QIdent::make(&mut self.ast.mem, core_scalarcmp, name, span)
-            },
-            {
-                let name = get_ident!(self, "bitcast");
-                QIdent::make(&mut self.ast.mem, core_mem, name, span)
-            },
+            QIdent::make(&mut self.ast.mem, core_scalarcmp, get_ident!(self, "min"), span),
+            QIdent::make(&mut self.ast.mem, core_scalarcmp, get_ident!(self, "max"), span),
+            QIdent::make(&mut self.ast.mem, core_mem, get_ident!(self, "bitcast"), span),
             QIdent::make(&mut self.ast.mem, core_types, self.ast.idents.b.enum_, span),
-            {
-                let name = get_ident!(self, "sum");
-                QIdent::make(&mut self.ast.mem, core_types, name, span)
-            },
-            {
-                let name = get_ident!(self, "type-id");
-                QIdent::make(&mut self.ast.mem, core_types, name, span)
-            },
+            QIdent::make(&mut self.ast.mem, core_types, get_ident!(self, "sum"), span),
+            QIdent::make(&mut self.ast.mem, core_types, self.ast.idents.b.type_id, span),
+            QIdent::make(&mut self.ast.mem, core_optref, self.ast.idents.b.null, span),
         ];
         for qid in idents_to_use.into_iter() {
             let use_id = self.ast.uses.add(parse::ParsedUse {

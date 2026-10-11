@@ -3,34 +3,33 @@ ns(lib("pq")) pg {
   let PGRES_COMMAND_OK: core/c-int = 1
   let PGRES_TUPLES_OK: core/c-int = 2
 
-  fn(extern("PQconnectdb")) connectdb(conninfo: ptr): ptr
+  fn(extern("PQconnectdb")) connectdb(conninfo: *u8): ptr
   fn(extern("PQstatus")) status(conn: ptr): core/c-int
-  fn(extern("PQerrorMessage")) error-message(conn: ptr): ptr
+  fn(extern("PQerrorMessage")) error-message(conn: ptr): optref[u8]
   fn(extern("PQfinish")) finish(conn: ptr)
 
-  fn(extern("PQexec")) exec(conn: ptr, query: ptr): ptr
+  fn(extern("PQexec")) exec(conn: ptr, query: *u8): ptr
   fn(extern("PQresultStatus")) result-status(result: ptr): core/c-int
-  fn(extern("PQresultErrorMessage")) result-error-message(result: ptr): ptr
+  fn(extern("PQresultErrorMessage")) result-error-message(result: ptr): optref[u8]
   fn(extern("PQclear")) clear(result: ptr)
 
   fn(extern("PQntuples")) n-tuples(result: ptr): core/c-int
   fn(extern("PQnfields")) n-fields(result: ptr): core/c-int
-  fn(extern("PQfname")) field-name(result: ptr, column: core/c-int): ptr
+  fn(extern("PQfname")) field-name(result: ptr, column: core/c-int): optref[u8]
   fn(extern("PQgetisnull")) is-null(result: ptr, row: core/c-int, column: core/c-int): core/c-int
-  fn(extern("PQgetvalue")) get-value(result: ptr, row: core/c-int, column: core/c-int): ptr
+  fn(extern("PQgetvalue")) get-value(result: ptr, row: core/c-int, column: core/c-int): optref[u8]
 }
 
 type connection = { raw: ptr }
 type query-result = { raw: ptr }
 
-fn c-string-or-default(c-str: ptr, fallback: string): string {
+fn c-string-or-default(c-str: optref[u8], fallback: string): string {
   if c-str.is-null() fallback
-  else string/from-c(c-str)
+  else string/from-c(c-str.get())
 }
 
 fn connect(conninfo: string): result[connection, string] {
-  let conninfo-c = conninfo.to-c()
-  let conn = pg/connectdb(conninfo-c.ptr)
+  let conn = pg/connectdb(conninfo.to-c())
   if conn.is-null() {
     return :err "PQconnectdb returned null"
   }
@@ -53,8 +52,7 @@ ns for connection {
   }
 
   fn exec(self: connection, query: string): result[query-result, string] {
-    let query-c = query.to-c()
-    let raw-result = pg/exec(self.raw, query-c.ptr)
+    let raw-result = pg/exec(self.raw, query.to-c())
     if raw-result.is-null() {
       return :err "PQexec returned null"
     }

@@ -68,7 +68,7 @@ ns libuv {
   }
 
   impl print for errno {
-    fn print-to[w: writer](self, w) { w.write(string/wrap-c(strerror(self.enum-value()).inner)) }
+    fn print-to[w: writer](self, w) { w.write(string/wrap-c(strerror(self.enum-value()).get())) }
   }
 }
 

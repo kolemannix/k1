@@ -20,6 +20,7 @@ use http/sse-events
 use std/waker
 use std/pull
 use uv/worker-pool
+use http/task
 
 $http/routing/define(route, \{
   get  events     "/events"
@@ -316,7 +317,7 @@ fn test-server() {
   }
   startup-state = "startup-lifetime".cloned()
   let bus = uv/bus/create[span[u8]](libuv/default_loop().get(), 1048576, fn(payload: rc-bytes) payload.bytes().len())
-  let pool = uv/worker-pool/start(4, 64)
+  let pool = uv/worker-pool/start(target-free-count = 4, max-worker-count = 8, capacity = 64)
   let s = server/start(config, pool, (fn[bus, pool](req: http/request) handle(req, bus, pool)).to-dyn()).!
   srv = s.as[ptr]
   assert(s.port != 0)
@@ -351,11 +352,47 @@ fn test-server() {
   assert(s.connections.is-empty())
 }
 
+fn add-one(x: i32): i32 { x + 1 }
+
+fn await-on-own-pool(pool: *worker-pool): i32 {
+  task/spawn(pool, add-one.&, 41).!.await()
+}
+
+fn wait-for-flag(flag: *uv/monitor[bool]) {
+  let guard = flag.lock()
+  while not guard.value.* { guard.wait() }
+  guard.unlock()
+}
+
+fn set-flag(flag: *uv/monitor[bool]) {
+  let guard = flag.lock()
+  guard.value.* = true
+  guard.signal()
+  guard.unlock()
+}
+
+fn test-pool() {
+  let inline-only = worker-pool/start(target-free-count = 1, max-worker-count = 1, capacity = 8)
+  assert-equals(task/spawn(inline-only, await-on-own-pool.&, inline-only).!.await(), 42)
+  inline-only.close()
+  inline-only.join()
+
+  let elastic = worker-pool/start(target-free-count = 1, max-worker-count = 2, capacity = 8)
+  let flag: uv/monitor[bool] = uninit
+  flag.init(false)
+  let _ = elastic.submit-blocking(flag.&, wait-for-flag.&).!
+  let _ = elastic.submit(flag.&, set-flag.&).!
+  elastic.close()
+  elastic.join()
+  flag.destroy()
+}
+
 fn main(): i32 {
   test-routing()
   test-parsers()
   test-encoders()
   #static test-encoders()
+  test-pool()
   test-server()
   println("http_test passed")
   0

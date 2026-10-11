@@ -28,7 +28,7 @@ ns(lib("raylib")) rl {
   type color = { r: u8, g: u8, b: u8, a: u8 }
   type vec2 = { x: f32, y: f32 }
 
-  fn(extern("InitWindow")) init(width: i32, height: i32, name: ptr)
+  fn(extern("InitWindow")) init(width: i32, height: i32, name: *u8)
   fn(extern("CloseWindow")) close-window()
   fn(extern("WindowShouldClose")) window-should-close(): bool
 
@@ -36,8 +36,8 @@ ns(lib("raylib")) rl {
   fn(extern("EndDrawing")) end-drawing()
   fn(extern("ClearBackground")) clear-background(color: color)
 
-  fn(extern("DrawText")) draw-text(text: ptr, pos-x: i32, pos-y: i32, font-size: i32, color: color)
-  fn(extern("MeasureText")) measure-text(text: ptr, font-size: i32): i32
+  fn(extern("DrawText")) draw-text(text: *u8, pos-x: i32, pos-y: i32, font-size: i32, color: color)
+  fn(extern("MeasureText")) measure-text(text: *u8, font-size: i32): i32
   fn(extern("DrawCircle")) draw-circle(center-x: i32, center-y: i32, radius: f32, color: color)
   fn(extern("DrawCircleLines")) draw-circle-lines(center-x: i32, center-y: i32, radius: f32, color: color)
   fn(extern("DrawRectangle")) draw-rectangle(x: i32, y: i32, w: i32, h: i32, color: color)
@@ -45,7 +45,7 @@ ns(lib("raylib")) rl {
   fn(extern("DrawPoly")) draw-poly(center: vec2, sides: i32, radius: f32, rotation: f32, color: color)
   fn(extern("DrawLineEx")) draw-line-ex(start: vec2, end: vec2, thick: f32, color: color)
 
-  fn(extern("TakeScreenshot")) take-screenshot(name: ptr)
+  fn(extern("TakeScreenshot")) take-screenshot(name: *u8)
   fn(extern("SetTargetFPS")) set-target-fps(fps: i32)
   fn(extern("GetFrameTime")) get-frame-time(): f32
   fn(extern("IsKeyPressed")) is-key-pressed(key: i32): bool
@@ -1268,11 +1268,11 @@ type rect = { x: i32, y: i32, w: i32, h: i32 }
 
 ns(reload) view {
   fn text(s: string, x: i32, y: i32, sz: i32, col: rl/color) {
-    rl/draw-text(s.to-c().ptr, x, y, sz, col)
+    rl/draw-text(s.to-c(), x, y, sz, col)
   }
 
   fn text-center(s: string, cx: i32, y: i32, sz: i32, col: rl/color) {
-    let c = s.to-c().ptr
+    let c = s.to-c()
     let w = rl/measure-text(c, sz)
     rl/draw-text(c, cx - w / 2, y, sz, col)
   }
@@ -2561,7 +2561,7 @@ fn main(): i32 {
   if sys/env("GENGAME_VIEW") is :some(vs) and u64/from-string(vs) is :ok(v) and v <= 2 { g.view = v.trunc[u8] }
   let shot = sys/env("GENGAME_SHOT")
 
-  rl/init(W, H, "gengame".to-c-tmp().ptr)
+  rl/init(W, H, "gengame".to-c-tmp())
   rl/set-target-fps(60)
 
   let frame = core/arena/init-default()
@@ -2593,7 +2593,7 @@ fn main(): i32 {
     rl/end-drawing()
     frames = frames + 1
     if frames == shot-frame and shot is :some(name) {
-      rl/take-screenshot(name.to-c().ptr)
+      rl/take-screenshot(name.to-c())
       break
     }
     frame.reset()

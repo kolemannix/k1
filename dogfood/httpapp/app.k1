@@ -29,8 +29,8 @@ type db = { conn: *sqlite3/db }
 
 ns for db {
   fn open(path: string): db {
-    let conn: optref[sqlite3/db] = optref/null()
-    let open-status = sqlite3/open(path.to-c().ptr.ref[u8], conn.&)
+    let conn: optref[sqlite3/db] = null()
+    let open-status = sqlite3/open(path.to-c(), conn.&)
     if open-status != 0 crash("sqlite open failed for $path: $open-status")
     let db: db = .{ conn = conn.get() }
     sqlite3/busy_timeout(db.conn, 2000)
@@ -39,13 +39,13 @@ ns for db {
   }
 
   fn fail(self: db, what: string): never {
-    crash("sqlite $what failed: ${string/wrap-c(sqlite3/errmsg(self.conn).inner)}")
+    crash("sqlite $what failed: ${string/wrap-c(sqlite3/errmsg(self.conn).get())}")
   }
 
   fn prepare(self: db, sql: string): *sqlite3/stmt {
-    let stmt: optref[sqlite3/stmt] = optref/null()
-    let tail: optref[u8] = optref/null()
-    if sqlite3/prepare_v2(self.conn, sql.to-c().ptr.ref[u8], -1, stmt.&, tail.&) != 0 { self.fail("prepare") }
+    let stmt: optref[sqlite3/stmt] = null()
+    let tail: optref[u8] = null()
+    if sqlite3/prepare_v2(self.conn, sql.to-c(), -1, stmt.&, tail.&) != 0 { self.fail("prepare") }
     stmt.get()
   }
 

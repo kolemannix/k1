@@ -1,6 +1,7 @@
 use crate::lex::{Span, is_ident_char};
 use crate::parse::{FileId, ParsedExpr, ParsedId, ParsedProgram, StringId};
 use crate::typer::scopes::{Provenance, ScopeId, ScopeMember, VariableInScope};
+use crate::typer::dump::TypeDisplayMode;
 use crate::typer::types::{FnParamKind, Type, TypeId};
 use crate::{SV8, typer::*};
 use fxhash::FxHashSet;
@@ -86,7 +87,7 @@ pub fn get_hover_message_for_entity(k1: &mut TypedProgram, entity: LsEntity) -> 
                 None => "No layout".to_string(),
                 Some(layout) => format!("Size: {}, Align: {}", layout.size, layout.align),
             };
-            let type_string = k1.type_id_to_string(type_id);
+            let type_string = k1.type_id_to_string_ext(type_id, TypeDisplayMode::Expand);
             let applied_type_string = match applied_type_id {
                 None => "".to_string(),
                 Some(type_id) => format!("Applied: {}", k1.type_id_to_string(type_id)),
@@ -1081,5 +1082,28 @@ fn use-it(): int { my-ns/go() }
         let defn_line = source.get_line_for_span_start(&k1.ast.mem, definition).unwrap();
         assert_eq!(defn_line.line_index, line);
         assert_eq!(source.local_from_global_offset(definition.lo) - defn_line.start_char, col);
+    }
+
+    const HOVER_DEFN_SRC: &str = r#"
+ns lsp-hover-defn
+
+type opts = { key-case: either { snake, kebab }, n: int }
+fn is-snake(o: opts): bool { o.key-case is :snake }
+"#;
+
+    #[test]
+    fn hover_shows_definitions() {
+        let mut k1 = compile_check("hover_defn", HOVER_DEFN_SRC, None);
+        let field = entity_at(&k1, "hover_defn", HOVER_DEFN_SRC, "key-case is").unwrap();
+        assert_eq!(
+            get_hover_message_for_entity(&mut k1, field),
+            "key-case: either snake, kebab"
+        );
+        let ty = entity_at(&k1, "hover_defn", HOVER_DEFN_SRC, "opts)").unwrap();
+        let message = get_hover_message_for_entity(&mut k1, ty);
+        assert_eq!(
+            message.lines().next(),
+            Some("opts({ key-case: either snake, kebab, n: i64 })")
+        );
     }
 }

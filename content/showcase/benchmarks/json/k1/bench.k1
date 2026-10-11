@@ -26,8 +26,8 @@ fn report(name: string, bytes: size, nanos: u64) {
 
 fn main(argc: u32, argv: ptr): i32 {
   if argc < 2 { crash("usage: bench <corpus dir>") }
-  let dir = string/wrap-c(argv.ref-at[ptr](1).*)
-  let only = if argc > 2 string/wrap-c(argv.ref-at[ptr](2).*) else ""
+  let dir = string/wrap-c(argv.ref-at[*u8](1).*)
+  let only = if argc > 2 string/wrap-c(argv.ref-at[*u8](2).*) else ""
   let iters: size = if only == "" 20 else 2000
   let scratch = core/arena/init(1 << 30)
   for ["twitter", "canada", "citm_catalog"] {

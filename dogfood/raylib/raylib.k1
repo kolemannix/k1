@@ -12,7 +12,7 @@ use std/math/trig
 ns(lib("raylib")) raylib {
   type color = { r: u8, g: u8, b: u8, a: u8 }
 
-  fn(extern("InitWindow")) init(width: i32, height: i32, name: ptr)
+  fn(extern("InitWindow")) init(width: i32, height: i32, name: *u8)
   fn(extern("CloseWindow")) close-window()
   fn(extern("WindowShouldClose")) window-should-close(): bool
 
@@ -20,7 +20,7 @@ ns(lib("raylib")) raylib {
   fn(extern("EndDrawing")) end-drawing()
   fn(extern("ClearBackground")) clear-background(color: color)
 
-  fn(extern("DrawText")) draw-text(text: ptr, pos-x: i32, pos-y: i32, font-size: i32, color: color)
+  fn(extern("DrawText")) draw-text(text: *u8, pos-x: i32, pos-y: i32, font-size: i32, color: color)
   fn(extern("DrawCircle")) draw-circle(center-x: i32, center-y: i32, radius: f32, color: color)
   fn(extern("DrawLine")) draw-line(start-x: i32, start-y: i32, end-x: i32, end-y: i32, color: color)
 
@@ -81,8 +81,8 @@ ns(reload) scene {
     }
 
     let fps = raylib/get-fps()
-    draw-text("orbs: ${orbs.len()}   reloads: $reloads   fps: $fps".to-c().ptr, 16, 16, 20, PURPLE)
-    draw-text("click: spawn orb    R: hot-swap scene (edit, rebuild, press R)".to-c().ptr, 16, 522, 20, FAINT)
+    draw-text("orbs: ${orbs.len()}   reloads: $reloads   fps: $fps".to-c(), 16, 16, 20, PURPLE)
+    draw-text("click: spawn orb    R: hot-swap scene (edit, rebuild, press R)".to-c(), 16, 522, 20, FAINT)
   }
 }
 
@@ -91,7 +91,7 @@ fn main(): i32 {
   let orbs: list[orb] = list/with-capacity-in(perm, 256)
   orbs.push-in(perm, .{ x = 450, y = 280, born = 0.0 })
 
-  raylib/init(900, 560, "k1 ns(reload)".to-c-tmp().ptr)
+  raylib/init(900, 560, "k1 ns(reload)".to-c-tmp())
   raylib/set-target-fps(60)
 
 
