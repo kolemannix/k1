@@ -127,7 +127,7 @@ def chatty_frames(name):
 
 
 def brotli_loc():
-    k1_files = sorted((REPO / "dogfood" / "brotli").glob("*.k1"))
+    k1_files = sorted((REPO / "examples" / "brotli").glob("*.k1"))
     k1_lines = sum(p.read_text().count("\n") for p in k1_files)
     inputs = (RES / "brotli-c-inputs.txt").read_text().split()
     c_files = [f for f in inputs if f.endswith(".c")]
@@ -156,7 +156,7 @@ for mode, label in MODES:
 brotli = cells_table(
     "Program",
     MODE_COLS,
-    [("brotli-k1", "K1 `dogfood/brotli` (whole program, links)"), ("brotli-c", "C: 4 files, one `clang` process"), ("brotli-cpar", "C: 4 files, 4 `clang` processes in parallel")],
+    [("brotli-k1", "K1 `examples/brotli` (whole program, links)"), ("brotli-c", "C: 4 files, one `clang` process"), ("brotli-cpar", "C: 4 files, 4 `clang` processes in parallel")],
     lambda key, mode: results.get(f"{key}-{mode}"),
 )
 
@@ -395,13 +395,13 @@ the LLVM backend.
 {chr(10).join(warm_tables)}
 
 
-`dogfood/brotli` is a K1 port of the brotli quality-0/1 encoders that is
-byte-identical to the C. K1 side: `k1 ... build dogfood/brotli` compiles
+`examples/brotli` is a K1 port of the brotli quality-0/1 encoders that is
+byte-identical to the C. K1 side: `k1 ... build examples/brotli` compiles
 the whole module ({len(k1_files)} files, {k1_lines} lines including the
 generated tables and the table generator in `module.k1`), plus core, std and
 the `cbrotli` bindings module it depends on for its parity checks, and links
 an executable. C side: the four vendored files the port corresponds to
-(`dogfood/brotli/vendor/*.c`, {c_lines} lines) compiled with `-c`, no link;
+(`examples/brotli/vendor/*.c`, {c_lines} lines) compiled with `-c`, no link;
 they pull in {len(h_files)} project headers from `modules/cbrotli/vendor`
 ({h_lines} lines). Two C rows: one `clang` process compiling the four files in
 sequence, and four processes at once (`par-cc.sh`, what `make -j` does),

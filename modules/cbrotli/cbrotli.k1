@@ -1,6 +1,6 @@
 // Bindings to the vendored google/brotli C library (v1.1 tree): encoder,
 // decoder, and streaming encoder API, plus one-shot compress/decompress
-// helpers. The K1-native encoder port lives in dogfood/brotli; this module is
+// helpers. The K1-native encoder port lives in examples/brotli; this module is
 // the reference implementation for benchmarks and round-trip verification.
 use core/c-int
 

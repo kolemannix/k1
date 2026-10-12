@@ -182,7 +182,7 @@ fn signature or reachable type layout changes it.
 - Fail tests (test_src, //errmsg): reload_global_fail (tls global),
   reload_generic_fn_fail; reload_unloaded_abort (//abortmsg) locks in the
   null-stub crash message.
-- `dogfood/reload_test`: the live-swap driver, in test.sh. Builds the app
+- `examples/reload_test`: the live-swap driver, in test.sh. Builds the app
   template into /tmp, runs it, rebuilds scene.k1 underneath it via K1_EXE, and
   drives it over stdin (std/process child API): body-only rebuild swaps live;
   a global's value edit swaps in and resets a host-side mutation; signature

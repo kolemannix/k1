@@ -465,8 +465,8 @@ fn end-await(*self) {
 
 fn alloc-read-buffer(handle: *libuv/handle, suggested-size: usize, buf: *libuv/buf) {
   let connection = handle.get-data[connection]()
-  let byte-buffer = connection.request-arena.alloc-buffer[u8](suggested-size.signed())
-  buf.* = libuv/buf/wrap-buffer(byte-buffer)
+  let target = connection.request-parser.data().body-read-target() ? connection.request-arena.alloc-buffer[u8](suggested-size.signed())
+  buf.* = libuv/buf/wrap-buffer(target)
 }
 
 fn on-client-read(client: *libuv/stream, nread: size, buf: *libuv/buf) {
@@ -515,10 +515,10 @@ fn on-complete-http-header(connection: *connection, header: http/header) {
   connection.enter-phase(:body)
 }
 
-fn on-complete-http-body(connection: *connection, chunks: span[span[u8]]) {
+fn on-complete-http-body(connection: *connection, body: span[u8]) {
   let work: *http-handler-work = connection.request-arena.push(.{
     connection,
-    request = .{ header = connection.parsed-header.get(), body = chunks },
+    request = .{ header = connection.parsed-header.get(), body },
     http-response = :none,
     link = null(),
   })

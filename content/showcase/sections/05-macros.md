@@ -204,7 +204,7 @@ this way.
 The biggest macro in the repo is `http/routing/define`. `httpapp`
 declares its routes once, as a token stream: method, name, path pattern.
 
-```k1 path=dogfood/httpapp/app.k1
+```k1 path=examples/httpapp/app.k1
 $http/routing/define(route, \{
   get    home         "/"
   get    events       "/events"

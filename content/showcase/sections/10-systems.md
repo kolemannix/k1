@@ -344,7 +344,7 @@ fn(extern("BrotliEncoderCompress"), lib("brotli")) encoder-compress(
 ): c-int
 ```
 
-Big APIs get generated. `dogfood/k1bindgen` reads C headers through libclang
+Big APIs get generated. `tools/k1bindgen` reads C headers through libclang
 and writes K1. Its libuv output:
 
 ```k1 path=modules/uv/libuv.k1
@@ -410,11 +410,11 @@ fn setup(ctx: k1/setup-ctx) {
 }
 ```
 
-`dogfood/brotli`, the K1 port of the encoder, needs the C encoder's static
+`examples/brotli`, the K1 port of the encoder, needs the C encoder's static
 tables. Its setup parses them out of the C sources and writes one of its own
 source files, `tables.k1`:
 
-```k1 path=dogfood/brotli/build.k1
+```k1 path=examples/brotli/build.k1
 fn module(_b: k1/build-config): k1/module {
   let m = k1/module/new()
   m.executable()
@@ -424,7 +424,7 @@ fn module(_b: k1/build-config): k1/module {
 }
 ```
 
-```k1 path=dogfood/brotli/build.k1
+```k1 path=examples/brotli/build.k1
     emit-int-table(w.&, cf, "kCmdHistoSeed", "k-cmd-histo-seed", "u32", 0, 24)
     emit-int-table(w.&, cf2, "kNumExtraBits", "k-num-extra-bits", "u32", 0, 16)
     emit-int-table(w.&, cf2, "kInsertOffset", "k-insert-offset", "u32", 0, 12)
@@ -472,10 +472,10 @@ fails if a declared output is missing. Forcing it reruns the table
 extraction and rewrites `tables.k1` byte-identically in 40ms:
 
 ```text
-$ time k1 setup --force dogfood/brotli
-Setting up module 'brotli' (running fn setup in /Users/knix/dev/k1/dogfood/brotli/build.k1)...
-k1 setup --force dogfood/brotli 2>&1  0.03s user 0.00s system 0.04 total
-$ diff dogfood/brotli/tables.k1 tables_before.k1 && echo byte-identical
+$ time k1 setup --force examples/brotli
+Setting up module 'brotli' (running fn setup in /Users/knix/dev/k1/examples/brotli/build.k1)...
+k1 setup --force examples/brotli 2>&1  0.03s user 0.00s system 0.04 total
+$ diff examples/brotli/tables.k1 tables_before.k1 && echo byte-identical
 byte-identical
 ```
 
@@ -488,7 +488,7 @@ one runs in the compiler that's already running.
 Mark the module a library and mark what it exports. Everything else, the
 runtime's C helpers included, stays hidden.
 
-```k1 path=dogfood/klib/build.k1
+```k1 path=examples/klib/build.k1
 fn module(_b: k1/build-config): k1/module {
   let m = k1/module/new()
   m.library()
@@ -496,7 +496,7 @@ fn module(_b: k1/build-config): k1/module {
 }
 ```
 
-```k1 path=dogfood/klib/module.k1
+```k1 path=examples/klib/module.k1
 type pair = { a: i32, b: i32 }
 
 fn(export) klib_add(a: i32, b: i32): i32 { a + b }
@@ -535,16 +535,16 @@ extern int32_t klib_answer;
 linked with every static lib, k1rt included), and C links either one:
 
 ```text
-$ k1 --no-cache build dogfood/klib
-$ make -C dogfood/klib/consumer clean run
+$ k1 --no-cache build examples/klib
+$ make -C examples/klib/consumer clean run
 rm -f consumer_static.a consumer_dylib.dylib out_static.txt out_dylib.txt
 clang consumer.c ../.k1-out/libklib.a  -o consumer_static.a
-clang consumer.c -L../.k1-out -lklib -Wl,-rpath,/Users/knix/dev/k1/dogfood/klib/.k1-out -o consumer_dylib.dylib
+clang consumer.c -L../.k1-out -lklib -Wl,-rpath,/Users/knix/dev/k1/examples/klib/.k1-out -o consumer_dylib.dylib
 ./consumer_static.a > out_static.txt
 ./consumer_dylib.dylib > out_dylib.txt
 diff out_static.txt out_dylib.txt
 diff out_static.txt expected.txt
-$ cat dogfood/klib/consumer/out_static.txt
+$ cat examples/klib/consumer/out_static.txt
 add=5
 scale=42
 swap=2,1
@@ -559,7 +559,7 @@ any runtime.
 
 Mark a namespace `ns(reload)`:
 
-```k1 path=dogfood/reload_test/app/scene.k1
+```k1 path=examples/reload_test/app/scene.k1
 ns(reload) scene {
   let(mutable) speed: i64 = 10
   fn greeting(): string { "one" }
@@ -569,7 +569,7 @@ ns(reload) scene {
 
 and it gets `load()`, `watch()` and `loaded-version()`:
 
-```k1 path=dogfood/reload_test/app/app.k1
+```k1 path=examples/reload_test/app/app.k1
     } else if line == "load" {
       if scene/load() is {
         :ok -> println("load ok"),
@@ -607,10 +607,10 @@ and only then patch the slots:
 ```
 
 `watch` does the same on a kqueue/inotify thread whenever the file changes.
-`dogfood/reload_test` rebuilds the app under a live process with new bodies,
+`examples/reload_test` rebuilds the app under a live process with new bodies,
 an added global, and a changed signature, which gets refused:
 
-```k1 path=dogfood/reload_test/reload_test.k1
+```k1 path=examples/reload_test/reload_test.k1
   build-app(k1-exe, "three", true, 20, false)
   send(app.&, "load")
   expect(app.&, "load err: restart required: api of app/scene changed")
@@ -619,7 +619,7 @@ an added global, and a changed signature, which gets refused:
 ```
 
 ```text
-$ K1_EXE=$(which k1) k1 run dogfood/reload_test
+$ K1_EXE=$(which k1) k1 run examples/reload_test
 [INFO  k1] run executable: reload_test
 reload: app/scene swapped to v1 (3 syms)
 reload: app/scene swapped to v2 (3 syms)
@@ -650,11 +650,11 @@ $ k1 --optimize --no-cache --target wasm64-wasi run test_src/suite1
 [suite1] All tests passed!
 ```
 
-`dogfood/fractal` is one `.wasm` that renders to the terminal under wasmtime
+`examples/fractal` is one `.wasm` that renders to the terminal under wasmtime
 and to a canvas in the browser. It exports to JavaScript with the same
 `export` the C library used:
 
-```k1 path=dogfood/fractal/fractal.k1
+```k1 path=examples/fractal/fractal.k1
 fn(export("k1_frame")) frame-address(width: i32, height: i32): u32 {
   ensure-frame(width, height)
   frame.data-ptr().to-size().trunc[u32]
@@ -662,14 +662,14 @@ fn(export("k1_frame")) frame-address(width: i32, height: i32): u32 {
 ```
 
 ```text
-$ k1 --optimize --no-cache --target wasm64-wasi run dogfood/fractal
+$ k1 --optimize --no-cache --target wasm64-wasi run examples/fractal
 [INFO  k1] run executable: fractal
 k1 escape-time fractals, one binary for terminal and canvas
   mandelbrot at -0.65, 0.0 span 2.4
   julia at 0.0, 0.0 span 3.0
   burning ship at -1.755, -0.03 span 0.22
-$ file dogfood/fractal/.k1-out/fractal
-dogfood/fractal/.k1-out/fractal: WebAssembly (wasm) binary module version 0x1 (MVP)
+$ file examples/fractal/.k1-out/fractal
+examples/fractal/.k1-out/fractal: WebAssembly (wasm) binary module version 0x1 (MVP)
 ```
 
 `index.html` loads that same file, stubs a handful of WASI imports, and
@@ -677,9 +677,9 @@ paints the framebuffer `k1_frame` returns.
 
 ## Bare metal
 
-`dogfood/freestanding_lib` pins its own target and drops `std`:
+`examples/freestanding_lib` pins its own target and drops `std`:
 
-```k1 path=dogfood/freestanding_lib/build.k1
+```k1 path=examples/freestanding_lib/build.k1
 fn build(req: k1/build-request): k1/build-config {
   let b = req.default
   b.target = :intel64-bare
@@ -688,7 +688,7 @@ fn build(req: k1/build-request): k1/build-config {
 }
 ```
 
-```k1 path=dogfood/freestanding_lib/module.k1
+```k1 path=examples/freestanding_lib/module.k1
 fn(export) k1_add(a: i64, b: i64): i64 { a + b }
 
 fn(export) k1_sum(data: ptr, count: size): i64 {
@@ -710,20 +710,20 @@ Cross-built from macOS, the undefined symbols are the entire platform
 contract:
 
 ```text
-$ k1 --no-cache build dogfood/freestanding_lib
-$ llvm-nm --undefined-only dogfood/freestanding_lib/.k1-out/freestanding_lib.o
+$ k1 --no-cache build examples/freestanding_lib
+$ llvm-nm --undefined-only examples/freestanding_lib/.k1-out/freestanding_lib.o
                  U k1_platform_io_is_tty
                  U k1_platform_io_write
                  U k1_platform_mem_commit
                  U k1_platform_mem_reserve
                  U k1_platform_process_exit
                  U memcpy
-$ llvm-nm --defined-only --extern-only dogfood/freestanding_lib/.k1-out/freestanding_lib.o
+$ llvm-nm --defined-only --extern-only examples/freestanding_lib/.k1-out/freestanding_lib.o
 0000000000001c00 T k1_add
 0000000000001d20 T k1_describe_sum
 0000000000001c10 T k1_sum
-$ file dogfood/freestanding_lib/.k1-out/freestanding_lib.o
-dogfood/freestanding_lib/.k1-out/freestanding_lib.o: ELF 64-bit LSB relocatable, x86-64, version 1 (SYSV), with debug_info, not stripped
+$ file examples/freestanding_lib/.k1-out/freestanding_lib.o
+examples/freestanding_lib/.k1-out/freestanding_lib.o: ELF 64-bit LSB relocatable, x86-64, version 1 (SYSV), with debug_info, not stripped
 ```
 
 A freestanding C bootstrap with its own `_start` supplies them over raw

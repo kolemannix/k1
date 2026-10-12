@@ -735,7 +735,7 @@ let view: span[bool] = dynamic.as-span()
 ```
 
 Arrays have a compile-time length in their type. Buffers, lists, and spans are
-used heavily in the core library and dogfood programs.
+used heavily in the core library and the example programs.
 
 Common helpers include `.len()`, `.[index]`, `.[index] = value`,
 `.as-span()`, `.as-buffer()`, and `list/filled-in(...)`.

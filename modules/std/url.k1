@@ -598,27 +598,4 @@ ns form {
       :none
     }
   }
-
-  fn push-field(out: *list[pair], straddling: *string-builder, piece: string) {
-    let field = if straddling.list.is-empty() piece else {
-      straddling.write(piece)
-      straddling.take()
-    }
-    if field.non-empty() { out.push(decode-field(field)) }
-  }
-
-  fn parse-chunks(chunks: span[span[u8]]): list[pair] {
-    let out = list/empty[pair]()
-    let straddling = string-builder/new()
-    for chunk in chunks {
-      let rest = string/wrap-bytes(chunk)
-      while rest.index-of('&') is :some i {
-        push-field(out.&, straddling.&, rest.take(i))
-        rest = rest.drop(i + 1)
-      }
-      if it-index + 1 == chunks.len() push-field(out.&, straddling.&, rest)
-      else straddling.write(rest)
-    }
-    out
-  }
 }

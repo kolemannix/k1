@@ -29,7 +29,7 @@ mkdir -p $DST
 cp $TT/k1 $DST/k1
 cp $TT/lsp $DST/k1lsp
 cp $TT/k1_test $DST/k1_test
-cp dogfood/k1bindgen/.k1-out/k1bindgen $DST/k1bindgen
+cp tools/k1bindgen/.k1-out/k1bindgen $DST/k1bindgen
 
 rsync -a "${EXCLUDES[@]}" modules/ "$DST/modules/"
 rsync -a "${EXCLUDES[@]}" test_src/ "$DST/test_src/"

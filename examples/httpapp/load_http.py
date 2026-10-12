@@ -200,7 +200,7 @@ async def amain(args: argparse.Namespace) -> int:
 
 def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Send concurrent HTTP requests to dogfood/httpapp."
+        description="Send concurrent HTTP requests to examples/httpapp."
     )
     parser.add_argument("-n", "--requests", type=int, default=100, help="total requests to send")
     parser.add_argument("-c", "--concurrency", type=int, default=20, help="requests in flight")
@@ -210,7 +210,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--timeout", type=float, default=2.0, help="per-request timeout in seconds")
     parser.add_argument(
         "--server-cmd",
-        help="optional command to start before testing, e.g. dogfood/httpapp/.k1-out/httpapp",
+        help="optional command to start before testing, e.g. examples/httpapp/.k1-out/httpapp",
     )
     parser.add_argument("--startup-timeout", type=float, default=3.0)
     parser.add_argument(

@@ -98,7 +98,7 @@ exported C ABI is declared per-fn with the `export`
 modifier — `fn(export)` exports under the fn's own name, `fn(export("sym"))`
 under an explicit symbol — plus `let(export)` globals. Exported fns must be
 concrete, non-ability fns with bodies; duplicate export symbols are an error.
-See `dogfood/klib`. FFI declarations use the `extern` fn modifier; its optional
+See `examples/klib`. FFI declarations use the `extern` fn modifier; its optional
 argument is the link symbol (defaults to the fn name). The providing library is
 declared once on the containing namespace with `ns(lib("foo"))` — whole-ns, any
 opening may declare it, disagreeing openings are an error — or per-fn with the
@@ -905,6 +905,6 @@ browsers actually send), so `normalized()` is what yields strict RFC 3986 text
 and keep valid escapes) and `build()` returns the `url`. `url/percent` has
 `decode` (malformed escapes pass through), `encode`/`write-encoded` with an
 `encode-set` (`unreserved`, `segment`, `path`, `query`, `userinfo`, `host`,
-`form`); `url/form` has `decode` (`+` is space), `pairs(s)` and
-`parse-chunks` for `application/x-www-form-urlencoded`. `http/header.url` is a
+`form`); `url/form` has `decode` (`+` is space) and `pairs(s)` for
+`application/x-www-form-urlencoded`. `http/header.url` is a
 parsed `url`; a target that doesn't parse is answered 400.

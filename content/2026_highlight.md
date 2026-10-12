@@ -147,7 +147,7 @@ took it a level lower still (see the bytecode VM below).
 - **std/process (Aug 2–6)** — posix_spawnp, checked-by-default exit codes,
   merged output capture.
 
-## Real programs (dogfood — the proof it all works)
+## Real programs (the proof it all works)
 
 - ★ **Brotli encoder (Aug 11–12)** — quality 0 and 1 encoders
   **byte-identical to the C reference, at 0.97–1.3× C's speed**, verified

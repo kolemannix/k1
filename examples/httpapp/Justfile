@@ -5,4 +5,4 @@ run:
   k1 --optimize r .
 
 serve:
-  cd web && ./caddy run --config Caddyfile --watch
+  cd web && caddy run --config Caddyfile --watch

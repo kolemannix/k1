@@ -140,7 +140,7 @@ arm64 lowers to `tbl1` and wasm to `swizzle` after masking the index with
 
 ## Replaced
 
-`dogfood/logreport`'s hand-written `to-json` is a std/json call. The schema
+`examples/logreport`'s hand-written `to-json` is a std/json call. The schema
 encoders under `content/showcase` and in `test_src/suite1/test_meta.k1` stay:
 they document and test `#meta` itself, not JSON. The current `parser` type and
 string-typed errors are deleted with the reader.

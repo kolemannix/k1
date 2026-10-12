@@ -26,7 +26,7 @@ make -C test_src/ffi_abi_test/libs clean build
 if [ -n "$wasmtime" ]; then
     make -C modules/core/libs wasm
 fi
-export PATH="$(pwd)/dogfood/k1bindgen/.k1-out:$PATH"
+export PATH="$(pwd)/tools/k1bindgen/.k1-out:$PATH"
 
 test_src() {
     target/$target_dir/k1_test $k1_test_filter
@@ -39,28 +39,28 @@ test_src() {
 }
 
 refchess() {
-    $k1 --optimize --no-cache test dogfood/refchess
+    $k1 --optimize --no-cache test examples/refchess
     if [ -n "$wasmtime" ]; then
-        $k1 --optimize --no-cache --target wasm64-wasi test dogfood/refchess
+        $k1 --optimize --no-cache --target wasm64-wasi test examples/refchess
     fi
 }
 
 k1bindgen_httpapp() {
-    $k1 --no-cache build dogfood/k1bindgen
-    $k1 --no-cache test dogfood/k1bindgen
-    rm -rf dogfood/httpapp/.k1-out/cache
-    $k1 --no-cache build dogfood/httpapp
-    $k1 --no-cache test dogfood/httpapp
-    $k1 build dogfood/httpapp
+    $k1 --no-cache build tools/k1bindgen
+    $k1 --no-cache test tools/k1bindgen
+    rm -rf examples/httpapp/.k1-out/cache
+    $k1 --no-cache build examples/httpapp
+    $k1 --no-cache test examples/httpapp
+    $k1 build examples/httpapp
 }
 
 fractal() {
-    $k1 --no-cache run dogfood/fractal > /dev/null
+    $k1 --no-cache run examples/fractal > /dev/null
 }
 
 klib() {
-    $k1 --no-cache build dogfood/klib
-    make -C dogfood/klib/consumer clean run
+    $k1 --no-cache build examples/klib
+    make -C examples/klib/consumer clean run
 }
 
 lanes=()
@@ -77,16 +77,15 @@ lane unit cargo test --lib --features=llvm-sys/prefer-dynamic,lsp
 lane test_src test_src
 lane refchess refchess
 lane k1bindgen_httpapp k1bindgen_httpapp
-lane profiling $k1 --no-cache build dogfood/profiling
-lane logreport $k1 --no-cache run dogfood/logreport
-lane comptime_parity $k1 --no-cache run dogfood/comptime_parity
-lane brotli $k1 --no-cache run dogfood/brotli
+lane profiling $k1 --no-cache build perf/profiling
+lane logreport $k1 --no-cache run examples/logreport
+lane brotli $k1 --no-cache run examples/brotli
 if [ "$(uname -s)" = Darwin ]; then
-    lane gengame $k1 --no-cache build dogfood/gengame
+    lane gengame $k1 --no-cache build examples/gengame
 fi
 lane fractal fractal
 lane klib klib
-lane reload_test env K1_EXE=$(pwd)/$k1 $k1 run dogfood/reload_test
+lane reload_test env K1_EXE=$(pwd)/$k1 $k1 run examples/reload_test
 
 set +x
 failed=()

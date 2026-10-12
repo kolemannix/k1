@@ -37,7 +37,7 @@
         you need essentially some notion of an 'ability signature function', just like type aliases would need
 
 - [ ] std/utf8 has only `is-valid` and `write-codepoint`. Missing: decode one codepoint at an offset,
-      a codepoint iterator over string, lead-byte sequence length (dogfood/selfhost/lex.k1 has its own
+      a codepoint iterator over string, lead-byte sequence length (examples/selfhost/lex.k1 has its own
       `utf8-lead-len`), codepoint count, encoded length of a codepoint, validation that reports the
       failing offset, lossy decode with U+FFFD, UTF-16 conversion
 - [x] parse_statement: same peek-dispatch conversion parse_definition got (expect_ variants, no conditional parse_* chain)
@@ -111,18 +111,12 @@
 - [x] static #switch
 - [x] else { cap } is a struct literal. Field shorthand makes any { ident } ambiguous with a block, and it resolved to { cap: cap }, giving "Expected i64 but got { cap: i64 }". I could decode it, but this will bite everyone eventually. Worth a deliberate rule — e.g. struct literal requires : or , or the type being expected, or a parse-time warning when a block position resolves to a shorthand struct.
       Fixed by the dotted struct literal syntax: { cap } is a block, { .cap } is the struct.
-- [x] Static-execution file reads (`#static` + `files/read-to-string`, global initializers) resolve relative paths against the compiler's cwd, so `k1 c dogfood/aoc/2025` only works from inside that dir. Consider resolving against the module dir (or the source file's dir) during static execution.
+- [x] Static-execution file reads (`#static` + `files/read-to-string`, global initializers) resolve relative paths against the compiler's cwd, so `k1 c examples/aoc/2025` only works from inside that dir. Consider resolving against the module dir (or the source file's dir) during static execution.
 - [x] Iterator ability: why is peek the primitive? With peek(self: *self) immutable, a filtering iterator like mine can't cache what it found — next() = scan (peek) + scan again (advance-by). Also every nth impl in the codebase is the identical advance-by(n); self.next() — could that be a default? Was peek chosen for for-loop desugaring reasons, or would nextced-as-primitive with peek-via-buffering be on the table?
 
 ## [x] vector types
 ## [x] live reload featureset (design/reload.md)
 
-bindgen dogfood list
-- [x] dogfood(k1): implement 'continue'
-- [x] dogfood(lsp): failed call still ls entity
-- [x] dogfood(lsp): sum/enum ctors ls entities
-- [x] dogfood(lsp): failed match arm still check others
-- [x] dogfood(lsp): sum patterns ls entities
 - [x] design program 'params' / 'args' so we can toggle things like tlog
       A program can take arguments; this replaces macro features in C.
       Make it plain k1 data; pass it where you depend on the module.
@@ -138,7 +132,7 @@ Most instances come from as-buffer/as-span default methods, eagerly declared per
 - [x] 4. Blanket-derived fns are specializations of the blanket fn (specialize_function with substitution pairs); AbilityImplDerivedBlanket kind, blanket_parent_function and the declare_function re-run are gone; generic derived fns no longer get an out-of-regime body pass (suite1 9763 -> 9413 fns)
 - [x] 5. mergefunc in the dev pipeline: httpapp 781 -> 566 defined fns, binary -7%, no codegen time change. ThinLTOCodeGenerator has no tuning hook, so optimized builds would only get it per unit in pre-link
 - [x] 6. Rejected: typed-tree substitution instead of re-typechecking. Bodies are tiny; the work is call re-resolution and inference, which a copy still has to do since the generic pass skips statics, type patterns and abstract callees
-- [x] 7. Scan the k1 corpus (modules/, dogfood/) for concrete-core opportunities: generic fns whose body only needs ptr/len/stride, rewritten as an erased core (ptr, len, stride) with a generic shell, the way position-lanes and index-of-bytes already are
+- [x] 7. Scan the k1 corpus (modules/, examples/) for concrete-core opportunities: generic fns whose body only needs ptr/len/stride, rewritten as an erased core (ptr, len, stride) with a generic shell, the way position-lanes and index-of-bytes already are
 
 
 ## [x] Distribute builds that work
@@ -289,7 +283,7 @@ It currently runs directly off the typed tree
 - [x] Commit a test in test suite
 
 
-# Profiler dogfood round
+# Profiler round
 - [x] Introduce an "uninitialized" specifier, similar to `zeroed()`
 - [x] Add 'zeroed()' static value special case for efficiency?
 - [x] provide a way to specify if globals are comptime available or just runtime globals?

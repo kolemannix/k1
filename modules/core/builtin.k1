@@ -262,8 +262,8 @@ ability equals {
   fn not-equals(self, other: self): bool { not self.equals(other) }
 }
 
-// TODO(dogfood): Enhance with an `impl error` type parameter
-// TODO(dogfood): Allow error = never for infallible writes
+// TODO: Enhance with an `impl error` type parameter
+// TODO: Allow error = never for infallible writes
 ability writer {
   fn write-byte(self, value: u8)
   fn write-bytes(self, bytes: span[byte])

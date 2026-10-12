@@ -55,7 +55,7 @@ Each run checks byte identity with C and streaming round trips. K1 and C are int
 
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
 |:---|---:|---:|---:|---:|
-| `k1 --optimize build dogfood/brotli` | 319.5 ± 144.9 | 247.7 | 578.3 | 2.51 ± 1.14 |
-| `k1 build dogfood/brotli` | 127.2 ± 1.4 | 125.1 | 129.0 | 1.00 |
+| `k1 --optimize build examples/brotli` | 319.5 ± 144.9 | 247.7 | 578.3 | 2.51 ± 1.14 |
+| `k1 build examples/brotli` | 127.2 ± 1.4 | 125.1 | 129.0 | 1.00 |
 | `cc -O2 -c compress_fragment.c compress_fragment_two_pass.c encode.c` | 826.9 ± 39.0 | 784.0 | 867.2 | 6.50 ± 0.32 |
 

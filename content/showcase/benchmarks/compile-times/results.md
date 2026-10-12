@@ -265,13 +265,13 @@ the LLVM backend.
 | K1 warm cache (core+std restored, program changed) | 0.035 ± 0.002 (0.033) | 0.04 |
 
 
-`dogfood/brotli` is a K1 port of the brotli quality-0/1 encoders that is
-byte-identical to the C. K1 side: `k1 ... build dogfood/brotli` compiles
+`examples/brotli` is a K1 port of the brotli quality-0/1 encoders that is
+byte-identical to the C. K1 side: `k1 ... build examples/brotli` compiles
 the whole module (7 files, 2430 lines including the
 generated tables and the table generator in `module.k1`), plus core, std and
 the `cbrotli` bindings module it depends on for its parity checks, and links
 an executable. C side: the four vendored files the port corresponds to
-(`dogfood/brotli/vendor/*.c`, 3588 lines) compiled with `-c`, no link;
+(`examples/brotli/vendor/*.c`, 3588 lines) compiled with `-c`, no link;
 they pull in 50 project headers from `modules/cbrotli/vendor`
 (7814 lines). Two C rows: one `clang` process compiling the four files in
 sequence, and four processes at once (`par-cc.sh`, what `make -j` does),
@@ -279,7 +279,7 @@ since K1's build is parallel.
 
 | Program | check wall s | check cpu s |
 |---|---|---|
-| K1 `dogfood/brotli` (whole program, links) | 0.022 ± 0.001 (0.020) | 0.02 |
+| K1 `examples/brotli` (whole program, links) | 0.022 ± 0.001 (0.020) | 0.02 |
 | C: 4 files, one `clang` process | 0.532 ± 0.658 (0.149) | 0.15 |
 | C: 4 files, 4 `clang` processes in parallel | 0.079 ± 0.003 (0.075) | 0.20 |
 

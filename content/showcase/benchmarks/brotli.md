@@ -1,6 +1,6 @@
 # Brotli q0/q1: the K1 port against google/brotli's C encoder
 
-`dogfood/brotli` is a K1 port of the two fast brotli encoders, quality 0
+`examples/brotli` is a K1 port of the two fast brotli encoders, quality 0
 (`compress_fragment.c`, one pass, adaptive command code) and quality 1
 (`compress_fragment_two_pass.c`), plus the slice of `entropy_encode.c`,
 `brotli_bit_stream.c` and `encode.c`'s streaming path they need. Its output
@@ -77,7 +77,7 @@ disturbed and the best column is the one to read.
 ## Results
 
 "Before" is the encoder at the commit this work started from, "after" is
-`dogfood/brotli` as it is now; both were built with `k1 --optimize
+`examples/brotli` as it is now; both were built with `k1 --optimize
 --no-cache build` and run through the same harness, alternating the
 two binaries three times. Each MB/s figure is the median of the three
 runs' median rounds; K1/C is the median ratio. C is the same code in both
@@ -173,7 +173,7 @@ bit-writer` and returns the advanced writer, every emitter takes and
 returns a `bit-writer`, and the one function that also returns a number
 returns `{ bw, literal-ratio }`.
 
-```k1 path=dogfood/brotli/bits.k1
+```k1 path=examples/brotli/bits.k1
   fn(inline) write-bits(self: bit-writer, n-bits: size, bits: u64): bit-writer {
     let p = self.storage.add-bytes(self.pos >> 3)
     store64-le(p, p.ref[u8].*.widen[u64] | (bits << (self.pos & 7).trunc[u32]))
@@ -181,7 +181,7 @@ returns `{ bw, literal-ratio }`.
   }
 ```
 
-```k1 path=dogfood/brotli/encoder.k1
+```k1 path=examples/brotli/encoder.k1
 fn(inline) emit-literals(input: ptr, len: size, depth: buffer[u8], bits: buffer[u16], bw: bit-writer): bit-writer {
   let bw = bw
   let j: size = 0
@@ -259,7 +259,7 @@ and the table update all branched on it inside the scan loop (`cmp x7,
 #0x4; b.ne` twice per candidate). `create-commands[mm: static size]`
 with two instances, chosen once per fragment, removes those branches:
 
-```k1 path=dogfood/brotli/twopass.k1
+```k1 path=examples/brotli/twopass.k1
     if table-bits <= 15 {
       create-commands[4](input, block-size, input-size, base-ip, table, table-bits, sink.&)
     } else {
@@ -297,8 +297,8 @@ and does not link):
 
 | Command | Mean [ms] | Min [ms] | Max [ms] | Relative |
 |:---|---:|---:|---:|---:|
-| `k1 --optimize --no-cache build dogfood/brotli` | 288.7 ± 14.4 | 267.9 | 305.7 | 2.43 ± 0.39 |
-| `k1 --no-cache build dogfood/brotli` | 118.6 ± 18.3 | 92.3 | 139.7 | 1.00 |
+| `k1 --optimize --no-cache build examples/brotli` | 288.7 ± 14.4 | 267.9 | 305.7 | 2.43 ± 0.39 |
+| `k1 --no-cache build examples/brotli` | 118.6 ± 18.3 | 92.3 | 139.7 | 1.00 |
 | `cc -O2 -c compress_fragment.c compress_fragment_two_pass.c encode.c` | 1073.0 ± 66.3 | 983.9 | 1144.7 | 9.05 ± 1.50 |
 
 A direct `time` of the optimized build: 0.22 s wall, 0.79 s user (LLVM
@@ -390,7 +390,7 @@ would remove them.
 ### Compiler asks
 
 Things that the language author could do in the compiler; each was
-worked around in `dogfood/brotli`.
+worked around in `examples/brotli`.
 
 1. **No way to say `restrict`.** A `*bit-writer` whose address
    escapes into any out-of-line call forces a reload of `bw.pos` after

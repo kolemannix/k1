@@ -104,10 +104,10 @@ fn test-build() {
 }
 
 fn test-form() {
-  let straddled = form/parse-chunks(["a=1&lo".span-bytes(), "ng=x%2".span-bytes(), "0y&b=2".span-bytes(), "&c".span-bytes()])
-  assert-equals(straddled.len(), 4)
-  assert(pair/find(straddled.as-span(), "long") == :some "x y")
-  assert(pair/find(straddled.as-span(), "c") == :some "")
+  let fields = form/pairs("a=1&long=x%20y&b=2&&c").to-list()
+  assert-equals(fields.len(), 4)
+  assert(pair/find(fields.as-span(), "long") == :some "x y")
+  assert(pair/find(fields.as-span(), "c") == :some "")
 }
 
 fn test() {

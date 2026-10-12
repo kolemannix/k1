@@ -38,32 +38,37 @@ type parse-state = {
   user-data: ptr,
   *arena,
   on-header-complete: *fn(ptr, header) -> {},
-  on-body-complete: *fn(ptr, span[span[byte]]) -> {},
+  on-body-complete: *fn(ptr, span[u8]) -> {},
   max-body-size: size,
-  body-size: size,
   reject: ?u16,
   url: list[char],
   current-header-field: list[char],
   current-header-value: list[char],
   headers: list[{ field: string, value: string }],
-  body-chunks: list[span[u8]],
+  body: list[u8],
+  body-in-place: bool,
 }
 ns for parse-state {
-  fn empty[t](arena: *arena, user-data: *t, on-header-complete: *fn(ptr, header) -> {}, on-body-complete: *fn(ptr, span[span[byte]]) -> {}, max-body-size: size): parse-state {
+  fn empty[t](arena: *arena, user-data: *t, on-header-complete: *fn(ptr, header) -> {}, on-body-complete: *fn(ptr, span[u8]) -> {}, max-body-size: size): parse-state {
     .{
       user-data = user-data.as[ptr],
       arena,
       on-header-complete,
       on-body-complete,
       max-body-size,
-      body-size = 0,
       reject = :none,
       url = list/empty(),
       current-header-field = list/empty(),
       current-header-value = list/empty(),
       headers = list/empty(),
-      body-chunks = list/empty(),
+      body = list/empty(),
+      body-in-place = false,
     }
+  }
+
+  fn body-read-target(self: *parse-state): ?buffer[u8] {
+    if self.body.len == self.body.cap() or not self.body-in-place return :none
+    :some self.body.inner-buffer().drop(self.body.len)
   }
 
   fn reset(self: *parse-state) {
@@ -95,7 +100,7 @@ ns for parser {
 // a fully parsed request
 type request = {
   header,
-  body: span[span[u8]],
+  body: span[u8],
 }
 
 fn on-url-part(parser: *parser, data: *u8, count: usize): i32 {
@@ -173,26 +178,32 @@ fn on-headers-complete(parser: *parser): i32 {
     state.reject = :some 413
     return llhttp/errno:HPE_PAUSED.value.signed()
   }
+  if content-length is :some n {
+    state.body.reserve-in(state.arena, n)
+    state.body-in-place = true
+  }
   0
 }
 
 fn impl-on-body(parser: *parser, data: *u8, count: usize): i32 {
   let state = parser.data()
-  let a = state.arena
-  state.body-size = state.body-size + count.signed()
-  if state.body-size > state.max-body-size {
+  let n = count.signed()
+  if state.body.len + n > state.max-body-size {
     state.reject = :some 413
     return llhttp/errno:HPE_PAUSED.value.signed()
   }
-  let bytes: span[byte] = span/wrap-raw(data.as[ptr], count.signed())
   // FIXME: streamed request bodies — hand chunks to the handler as they
   // arrive instead of buffering the whole body
-  state.body-chunks.push-in(a, bytes)
+  if state.body-in-place and data.as[ptr] == state.body.data-ptr().add-bytes(state.body.len) {
+    state.body.len = state.body.len + n
+  } else {
+    state.body.append-span-in(state.arena, span/wrap-raw(data.as[ptr], n))
+  }
   0
 }
 fn impl-on-body-complete(parser: *parser): i32 {
   let state = parser.data()
-  (state.on-body-complete)(state.user-data, state.body-chunks.as-span())
+  (state.on-body-complete)(state.user-data, state.body.as-span())
   // Pause at every message boundary: one request in flight per connection.
   // finish-request resets the parser and restarts reads
   llhttp/errno:HPE_PAUSED.value.signed()
@@ -203,7 +214,7 @@ fn parser-init[user-data](
   request-arena: *arena,
   *user-data,
   on-header-complete: *fn(*user-data, header) -> {},
-  on-body-complete: *fn(*user-data, span[span[u8]]) -> {},
+  on-body-complete: *fn(*user-data, span[u8]) -> {},
   max-body-size: size,
 ): parser {
   let settings: llhttp/settings = uninit

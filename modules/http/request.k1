@@ -53,17 +53,10 @@ ns for request {
     false
   }
 
-  fn join-body-chunks(self: request): span[u8] {
-    if self.body.len() == 1 return self.body.[0]
-    let joined = list/empty[u8]()
-    for chunk in self.body { joined.append-span(chunk) }
-    joined.as-span()
-  }
-
   fn form(self: request): ?span[pair] {
     require self.header.find("Content-Type") is :some ct else { return :none }
     if not ct.starts-with("application/x-www-form-urlencoded") return :none
-    :some url/form/parse-chunks(self.body).as-span()
+    :some url/form/pairs(string/wrap-bytes(self.body)).to-list().as-span()
   }
 
   fn cookies(self: request): span[pair] {

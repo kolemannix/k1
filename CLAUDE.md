@@ -30,7 +30,7 @@ Unless otherwise noted, post a patch in the chat session after every turn of cod
 K1 is a programming language: compile-time execution, typeclasses (abilities),
 metaprogramming, C-like layout and ABI. This repo is the Rust compiler, its
 compile-time VM, the LLVM backend, the language server, the K1 module library,
-and the K1 programs that dogfood all of it.
+and the K1 programs that exercise all of it.
 
 K1 language reference for agents: `docs/ai_docs/k1-syntax-basics.md` and
 `docs/ai_docs/k1-additional.md`. `test_src/suite1` is the executable reference.
@@ -80,7 +80,7 @@ K1 language reference for agents: `docs/ai_docs/k1-syntax-basics.md` and
   module, since same-module runs share `.k1-out`): Rust unit tests, `k1_test`
   over `test_src` (every case with `--emit-llvm`), suite1 under
   optimize/debug and a `single-thread` build (`target/single-thread`), every
-  dogfood project, klib C consumer, reload driver, wasm suite1 and refchess if
+  example project, klib C consumer, reload driver, wasm suite1 and refchess if
   wasmtime exists, then fails on any `nocommit` marker. Each lane logs to
   `target/test-logs/<lane>.log`; a failed lane's log is printed at the end.
   Run it bare and check the exit code; do not pipe it into `tail`.
@@ -207,7 +207,7 @@ for compile-time execution, codegen_llvm for binaries.
   `//errmsg: <substring>`, `//exitcode: <n> [stderr substring]`,
   `//abortmsg: <substring>`, else exit 0.
 - `test_src/<dir>/`: module cases (`suite1`, `stdlib`, `ffi_abi_test`,
-  `dep_*_test`, `http_test` for the http server, which binds an ephemeral port). `k1_test` runs every top-level file and dir in parallel (`--serial` for one at a time); it
+  `dep_*_test`, `comptime_parity`, `http_test` for the http server, which binds an ephemeral port). `k1_test` runs every top-level file and dir in parallel (`--serial` for one at a time); it
   does not recurse.
 - `test_src/suite1`: ~75 files, each `ns foo` with `fn test()`, registered by
   hand in `suite1.k1` (`low`, `moderate`, `core-lib`, `main`). Nearly every
@@ -255,29 +255,31 @@ declaring `dep`/`dep-params`, `lib`, `library()`, `setup`, and an optional
 - C wrapper modules: `uv/` (raw bindings in `uv/libuv`; `uv.k1` mutex/monitor/bus; `workers.k1` the worker pool the http server runs handlers on), `sdl3/`,
   `stb/`, `freetype/`, `harfbuzz/`, `cbrotli/`, `sqlite/` (the amalgamation).
   Most vendor source under `vendor/`, build `libs/*.a` in `setup`,
-  and generate bindings with `k1bindgen` (`dogfood/k1bindgen`). Bindings live
+  and generate bindings with `k1bindgen` (`tools/k1bindgen`). Bindings live
   in a namespace named after the C library, or `c` when that would collide
   with the module name.
 
-## Dogfood (`dogfood/`)
+## Examples (`examples/`)
 
-Larger programs `test.sh` builds or runs: `refchess`, `brotli` (byte-identical
-to the C encoder), `httpapp`, `logreport`, `comptime_parity`, `gengame`
-(raylib), `fractal` (native + wasm + browser canvas), `klib` (K1 library
-consumed from C), `freestanding_lib`, `reload_test`, `profiling`, `k1bindgen`
-(the C binding generator, run via `k1 test`), `selfhost` (K1 lexer/parser in
-K1). Others (`aoc`, `postgres`, `raylib`, `toyforth`, `helloworld`) are
-not in the suite.
+Real programs; `test.sh` builds or runs every one: `refchess` (chess engine,
+native and wasm), `brotli` (byte-identical to the C encoder), `httpapp`,
+`logreport`, `gengame` (raylib), `fractal` (native + wasm + browser canvas),
+`klib` (K1 library consumed from C), `freestanding_lib` (bare-metal library
+consumed from C, `just ts-freestanding`), `reload_test` (hot reload driver),
+`selfhost` (K1 lexer/parser in K1, `just slophost`), `postgres` (libpq
+binding demo, `run.sh`). `content/showcase/sections` quotes their source by
+path and `content/showcase/check.sh` verifies the quotes.
 
 ## Everything Else
 
 - `docs/ai_docs/`: K1 language notes maintained for agents. `design/`: exploratory
   notes, not always current. `content/`: writing about K1.
-- `perf/`: stress generators. `sandbox/`: scratch. `examples/`: two demos.
+- `perf/`: stress generators and `profiling`, the hyperfine target. `sandbox/`: scratch.
 - `builds/`: bundle/install scripts and Linux cross-build notes. `llvm/`: the
   pinned LLVM 23 build (`get_llvm.sh`).
 - `resources/c/`: C scratch files for checking ABI/codegen questions.
-- `tools/vscode-k1/`: the VS Code extension.
+- `tools/vscode-k1/`: the VS Code extension. `tools/k1bindgen/`: the C binding
+  generator (`k1 test tools/k1bindgen`; `test.sh` puts its `.k1-out` on PATH).
 
 ## Generated And Noisy Files
 

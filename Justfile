@@ -29,43 +29,43 @@ ts1-wasm:
 # a simple one-shot ai-generated k1 parser
 slophost:
   cargo build --features=llvm-sys/prefer-dynamic --bin k1
-  target/debug/k1 test dogfood/selfhost
-  target/debug/k1 build dogfood/selfhost
-  dogfood/selfhost/.k1-out/selfhost $(find {{justfile_directory()}}/modules {{justfile_directory()}}/test_src {{justfile_directory()}}/dogfood -name '*.k1' -not -path '*/.k1-out/*' -not -path '*vendor*' -not -path '*/selfhost/*' -not -name 'fn_lib_requires_extern_fail.k1')
+  target/debug/k1 test examples/selfhost
+  target/debug/k1 build examples/selfhost
+  examples/selfhost/.k1-out/selfhost $(find {{justfile_directory()}}/modules {{justfile_directory()}}/test_src {{justfile_directory()}}/examples -name '*.k1' -not -path '*/.k1-out/*' -not -path '*vendor*' -not -path '*/selfhost/*' -not -name 'fn_lib_requires_extern_fail.k1')
 
 # The fractal demo: same program natively, under wasmtime, and on a canvas
 fractal:
-  just run-frag run dogfood/fractal
+  just run-frag run examples/fractal
 
 fractal-wasi:
   make -C modules/core/libs wasm
-  just run-frag -D web run dogfood/fractal
+  just run-frag -D web run examples/fractal
 
 fractal-web:
   make -C modules/core/libs wasm
-  just run-frag -D web build dogfood/fractal
-  python3 -m http.server -d dogfood/fractal 8088
+  just run-frag -D web build examples/fractal
+  python3 -m http.server -d examples/fractal 8088
 
 # The reference chess engine: perft and search suites natively and under wasmtime, then UCI on stdin
 refchess:
-  just run-frag --optimize test dogfood/refchess
+  just run-frag --optimize test examples/refchess
 
 refchess-wasm:
   make -C modules/core/libs wasm
-  just run-frag --optimize --target wasm64-wasi test dogfood/refchess
+  just run-frag --optimize --target wasm64-wasi test examples/refchess
 
 refchess-uci:
-  just run-frag --optimize run dogfood/refchess
+  just run-frag --optimize run examples/refchess
 
 # Cross-built freestanding k1 library consumed by a C bootstrap, run in docker.
 # The clang/ld.lld/llvm-nm binaries here play the CONSUMER's toolchain, not k1's
 ts-freestanding:
   make -C modules/core/libs nocrt
-  just run-frag --no-cache build dogfood/freestanding_lib
-  llvm/install-llvm/bin/llvm-nm --undefined-only dogfood/freestanding_lib/.k1-out/freestanding_lib.o | awk '$2 !~ /^k1_platform_/ && $2 !~ /^(memcpy|memmove|memset|memcmp|bcmp)$/' | awk 'END { exit NR != 0 }'
-  llvm/install-llvm/bin/clang --target=x86_64-unknown-linux-gnu -ffreestanding -nostdinc -O2 -fno-stack-protector -c dogfood/freestanding_lib/consumer/consumer.c -o dogfood/freestanding_lib/.k1-out/consumer.o
-  llvm/install-llvm/bin/ld.lld -z separate-loadable-segments dogfood/freestanding_lib/.k1-out/consumer.o dogfood/freestanding_lib/.k1-out/freestanding_lib.o modules/core/libs/libk1rt-nocrt.a -o dogfood/freestanding_lib/.k1-out/consumer_bin
-  docker run --rm --platform linux/amd64 -v {{justfile_directory()}}/dogfood/freestanding_lib/.k1-out:/w alpine:latest /w/consumer_bin | grep -cxE 'k1 sum: 100|103' | grep -x 2
+  just run-frag --no-cache build examples/freestanding_lib
+  llvm/install-llvm/bin/llvm-nm --undefined-only examples/freestanding_lib/.k1-out/freestanding_lib.o | awk '$2 !~ /^k1_platform_/ && $2 !~ /^(memcpy|memmove|memset|memcmp|bcmp)$/' | awk 'END { exit NR != 0 }'
+  llvm/install-llvm/bin/clang --target=x86_64-unknown-linux-gnu -ffreestanding -nostdinc -O2 -fno-stack-protector -c examples/freestanding_lib/consumer/consumer.c -o examples/freestanding_lib/.k1-out/consumer.o
+  llvm/install-llvm/bin/ld.lld -z separate-loadable-segments examples/freestanding_lib/.k1-out/consumer.o examples/freestanding_lib/.k1-out/freestanding_lib.o modules/core/libs/libk1rt-nocrt.a -o examples/freestanding_lib/.k1-out/consumer_bin
+  docker run --rm --platform linux/amd64 -v {{justfile_directory()}}/examples/freestanding_lib/.k1-out:/w alpine:latest /w/consumer_bin | grep -cxE 'k1 sum: 100|103' | grep -x 2
 
 # Dev loop for a reloadable app: rebuild on source change
 watch dir:
@@ -74,7 +74,7 @@ watch dir:
 showcase:
   cd content/showcase && npm ci && npm run dev
 
-# exhaustive path; notably runs larger projects in dogfood
+# exhaustive path; notably builds and runs every project in examples
 test:
   ./test.sh
 
@@ -126,7 +126,7 @@ bundle:
   just build-r
   cargo build --profile release --bin k1_test
   make -C modules/core/libs build wasm nocrt
-  K1_HOME={{justfile_directory()}} target/release/k1 --optimize build dogfood/k1bindgen
+  K1_HOME={{justfile_directory()}} target/release/k1 --optimize build tools/k1bindgen
   ./builds/bundle.sh target/release builds/{{bundle-name}}
 
 install: bundle

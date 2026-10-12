@@ -8,7 +8,7 @@ perft suites and runs unchanged natively and as wasm64 under wasmtime.
 just refchess        # perft + search suites, native
 just refchess-wasm   # the same suites under wasmtime
 just refchess-uci    # UCI on stdin
-echo "go perft 6" | dogfood/refchess/.k1-out/refchess
+echo "go perft 6" | examples/refchess/.k1-out/refchess
 ```
 
 ## Engine

@@ -77,7 +77,7 @@ fn test-parsers() {
   let h = http/header/make(:POST, "/login?next=%2Fhome")
   h.headers.push(.{ field = "content-type", value = "application/x-www-form-urlencoded; charset=utf-8" })
   h.headers.push(.{ field = "Cookie", value = "who=bob" })
-  let req: http/request = .{ header = h, body = ["who=al".span-bytes(), "ice".span-bytes()] }
+  let req: http/request = .{ header = h, body = "who=alice".span-bytes() }
   assert(pair/find(req.header.url.query-pairs(), "next") == :some "/home")
   assert(pair/find(req.form().!, "who") == :some "alice")
   assert(pair/find(req.cookies(), "who") == :some "bob")
@@ -150,7 +150,7 @@ fn handle(req: http/request, bus: *pubsub/bus[span[u8]], pool: *worker-pool): ht
   let url = req.header.url.text
   if url == "/hello" response/text(200, "hi")
   else if url == "/slow" { libuv/sleep(300); response/text(200, "slow-done") }
-  else if url == "/len" response/text(200, "len ${req.header.content-length.!}")
+  else if url == "/len" response/text(200, "len ${req.body.len()} ${string/wrap-bytes(req.body)}")
   else if url == "/stall" { libuv/sleep(2000); response/text(200, "stall-done") }
   else if url == "/outlast" { libuv/sleep(2600); response/text(200, "outlast-done") }
   else if url == "/events" datastar/patch-signals(bus.subscribe("t") || rc-byte-stream)
@@ -165,9 +165,12 @@ type client = {
   tcp: libuv/tcp,
   connect-req: libuv/connect,
   write-req: libuv/write,
+  rest-req: libuv/write,
+  rest-timer: libuv/timer,
   buf: libuv/buf,
   read-buf: array[u8, 4096],
   send: string,
+  rest: string,
   received: list[u8],
   started: u64,
   elapsed-ms: u64,
@@ -177,20 +180,25 @@ type client = {
 }
 
 ns for client {
-  fn start(port: u16, send: string, on-eof: *fn(*client) -> {}) { open(port, send, on-eof, hang-up = false) }
+  fn start(port: u16, send: string, on-eof: *fn(*client) -> {}) { open(port, send, "", on-eof, hang-up = false) }
 
-  fn start-and-hang-up(port: u16, send: string) { open(port, send, fn _c. .{}, hang-up = true) }
+  fn start-split(port: u16, send: string, rest: string, on-eof: *fn(*client) -> {}) { open(port, send, rest, on-eof, hang-up = false) }
 
-  fn open(port: u16, send: string, on-eof: *fn(*client) -> {}, hang-up: bool) {
+  fn start-and-hang-up(port: u16, send: string) { open(port, send, "", fn _c. .{}, hang-up = true) }
+
+  fn open(port: u16, send: string, rest: string, on-eof: *fn(*client) -> {}, hang-up: bool) {
     let c: *client = heap.new(.{
-      tcp = uninit, connect-req = uninit, write-req = uninit, buf = uninit, read-buf = uninit,
-      send, received = list/empty(), started = libuv/now(libuv/default_loop().get()), elapsed-ms = 0, eof = false, hang-up, on-eof,
+      tcp = uninit, connect-req = uninit, write-req = uninit, rest-req = uninit, rest-timer = uninit, buf = uninit, read-buf = uninit,
+      send, rest, received = list/empty(), started = libuv/now(libuv/default_loop().get()), elapsed-ms = 0, eof = false, hang-up, on-eof,
     })
     let l = libuv/default_loop().get()
     uv/check(libuv/tcp_init(l, c.tcp.&)).!
+    uv/check(libuv/timer_init(l, c.rest-timer.&)).!
     c.tcp.&.set-data(c)
     c.connect-req.&.set-data(c)
     c.write-req.&.set-data(c)
+    c.rest-req.&.set-data(c)
+    c.rest-timer.&.set-data(c)
     let addr: libuv/sockaddr_in = uninit
     uv/check(libuv/ip4_addr("127.0.0.1\0".data-ref-byte(), port.widen[i32], addr.&)).!
     uv/check(libuv/tcp_connect(c.connect-req.&, c.tcp.&, addr.&.as[ptr].narrow(), on-connect.&)).!
@@ -207,6 +215,14 @@ fn on-connect(req: *libuv/connect, status: i32) {
     uv/check(status).!
     let c = req.get-data[client]()
     if c.hang-up { libuv/close(c.tcp.&.as-handle(), fn _h. .{}) }
+    if c.rest.non-empty() {
+      c.rest-timer.&.start(fn t. {
+        let c = t.get-data[client]()
+        libuv/close(t.as-handle(), fn _h. .{})
+        c.buf = libuv/buf/wrap-span(c.rest.span-bytes())
+        uv/check(libuv/write(c.rest-req.&, c.tcp.&.as-stream(), c.buf.&, 1, fn(_req, status) { uv/check(status).! })).!
+      }, 50, 0)
+    }
   })).!
   if c.hang-up return
   if libuv/read_start(c.tcp.&.as-stream(), fn(h, _size, buf) {
@@ -258,12 +274,18 @@ fn on-slowloris-eof(c: *client) {
       client/start(get-server().port, "GET http://h:99999/ HTTP/1.1\r\nHost: x\r\n\r\n", fn c. {
         assert(c.text().starts-with("HTTP/1.1 400 Bad Request\r\n"))
         client/start(get-server().port, "POST /len HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello", fn c. {
-          assert(c.text().ends-with("\r\n\r\nlen 5"))
-          body-limits-checked = true
-          client/start(get-server().port, "GET /worker-woken HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n", fn c. {
-            assert(c.text().ends-with("\r\n\r\n5\r\nwoken\r\n0\r\n\r\n"))
-            worker-woke-stream = true
-            phase1-step()
+          assert(c.text().ends-with("\r\n\r\nlen 5 hello"))
+          client/start(get-server().port, "POST /len HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n3\r\nhel\r\n2\r\nlo\r\n0\r\n\r\n", fn c. {
+            assert(c.text().ends-with("\r\n\r\nlen 5 hello"))
+            client/start-split(get-server().port, "POST /len HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhel", "lo", fn c. {
+              assert(c.text().ends-with("\r\n\r\nlen 5 hello"))
+              body-limits-checked = true
+              client/start(get-server().port, "GET /worker-woken HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n", fn c. {
+                assert(c.text().ends-with("\r\n\r\n5\r\nwoken\r\n0\r\n\r\n"))
+                worker-woke-stream = true
+                phase1-step()
+              })
+            })
           })
         })
       })
