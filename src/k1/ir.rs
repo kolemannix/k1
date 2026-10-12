@@ -2359,6 +2359,7 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
             };
             Ok(block_value)
         }
+        TypedExpr::ScalarOp(scalar_op) => compile_scalar_op(b, scalar_op, dst),
         TypedExpr::Call { call_id } => {
             let call = b.k1.calls.get(call_id).clone();
 
@@ -3246,28 +3247,7 @@ fn compile_ir_builtin(
             );
             Ok(stored)
         }
-        BuiltinIr::Negate => {
-            let arg0 = *b.k1.mem.get_nth(call.args, 0);
-            let base = compile_expr(b, None, arg0)?;
-            let arg_type_id = b.k1.exprs.get_type(arg0);
-            let st = b.get_physical_type(arg_type_id)?.expect_scalar();
-            let neg = match (b.k1.types.get(arg_type_id), st) {
-                (Type::Bool, _) => Inst::BoolNegate { v: base },
-                (_, ScalarType::F32 | ScalarType::F64) => Inst::FloatNeg { v: base, t: st },
-                _ => Inst::IntSub { lhs: Value::zero(st), rhs: base, t: st },
-            };
-            let neg = b.push_value(neg, IrComment::None);
-            let stored = store_scalar_if_dst(b, dst, neg);
-            Ok(stored)
-        }
-        BuiltinIr::BitNot => {
-            let arg0 = *b.k1.mem.get_nth(call.args, 0);
-            let base = compile_expr(b, None, arg0)?;
-            let t = b.get_physical_type(b.k1.exprs.get_type(arg0))?.expect_scalar();
-            let neg = b.push_value(Inst::BitNot { v: base, t }, IrComment::None);
-            let stored = store_scalar_if_dst(b, dst, neg);
-            Ok(stored)
-        }
+        BuiltinIr::Scalar(_) => b_ice!(b, "scalar op builtins are typed as ScalarOp, not calls"),
         BuiltinIr::Bitcast => {
             let from_type_id = call.type_args.as_slice(&b.k1.mem)[0];
             let to_type_id = call.type_args.as_slice(&b.k1.mem)[1];
@@ -3370,25 +3350,6 @@ fn compile_ir_builtin(
                     Ok(locn)
                 }
             }
-        }
-        BuiltinIr::ArithBinop(op) => compile_arith_binop(b, op, &call, dst),
-        BuiltinIr::BitwiseBinop(op) => {
-            let arg0 = *b.k1.mem.get_nth(call.args, 0);
-            let lhs = compile_expr(b, None, arg0)?;
-            let arg1 = *b.k1.mem.get_nth(call.args, 1);
-            let rhs = compile_expr(b, None, arg1)?;
-            let t = b.get_physical_type(b.k1.exprs.get_type(arg0))?.expect_scalar();
-            let inst = match op {
-                BitwiseBinopKind::And => Inst::BitAnd { lhs, rhs, t },
-                BitwiseBinopKind::Or => Inst::BitOr { lhs, rhs, t },
-                BitwiseBinopKind::Xor => Inst::BitXor { lhs, rhs, t },
-                BitwiseBinopKind::ShiftLeft => Inst::BitShiftLeft { lhs, rhs, t },
-                BitwiseBinopKind::UnsignedShiftRight => Inst::BitUnsignedShiftRight { lhs, rhs, t },
-                BitwiseBinopKind::SignedShiftRight => Inst::BitSignedShiftRight { lhs, rhs, t },
-            };
-            let res = b.push_value(inst, IrComment::None);
-            let stored = store_scalar_if_dst(b, dst, res);
-            Ok(stored)
         }
         BuiltinIr::PointerIndex => {
             let elem_type_id = call.type_args.as_slice(&b.k1.mem)[0];
@@ -3845,20 +3806,43 @@ fn compile_cast(
     }
 }
 
-fn compile_arith_binop(
-    b: &mut Builder,
-    op: ArithOpKind,
-    call: &Call,
-    dst: Option<Value>,
-) -> K1Result<Value> {
-    let arg0 = *b.k1.mem.get_nth(call.args, 0);
-    let lhs = compile_expr(b, None, arg0)?;
-    let arg1 = *b.k1.mem.get_nth(call.args, 1);
-    let rhs = compile_expr(b, None, arg1)?;
+fn compile_scalar_op(b: &mut Builder, scalar_op: ScalarOp, dst: Option<Value>) -> K1Result<Value> {
+    let lhs = compile_expr(b, None, scalar_op.lhs)?;
+    let lhs_type = b.k1.exprs.get_type(scalar_op.lhs);
+    let t = b.get_physical_type(lhs_type)?.expect_scalar();
+    let op = match (scalar_op.kind, scalar_op.rhs) {
+        (ScalarOpKind::Negate, None) => {
+            let inst = match (b.k1.types.get(lhs_type), t) {
+                (Type::Bool, _) => Inst::BoolNegate { v: lhs },
+                (_, ScalarType::F32 | ScalarType::F64) => Inst::FloatNeg { v: lhs, t },
+                _ => Inst::IntSub { lhs: Value::zero(t), rhs: lhs, t },
+            };
+            let res = b.push_value(inst, IrComment::None);
+            return Ok(store_scalar_if_dst(b, dst, res));
+        }
+        (ScalarOpKind::BitNot, None) => {
+            let res = b.push_value(Inst::BitNot { v: lhs, t }, IrComment::None);
+            return Ok(store_scalar_if_dst(b, dst, res));
+        }
+        (ScalarOpKind::Bitwise(op), Some(rhs_expr)) => {
+            let rhs = compile_expr(b, None, rhs_expr)?;
+            let inst = match op {
+                BitwiseBinopKind::And => Inst::BitAnd { lhs, rhs, t },
+                BitwiseBinopKind::Or => Inst::BitOr { lhs, rhs, t },
+                BitwiseBinopKind::Xor => Inst::BitXor { lhs, rhs, t },
+                BitwiseBinopKind::ShiftLeft => Inst::BitShiftLeft { lhs, rhs, t },
+                BitwiseBinopKind::UnsignedShiftRight => Inst::BitUnsignedShiftRight { lhs, rhs, t },
+                BitwiseBinopKind::SignedShiftRight => Inst::BitSignedShiftRight { lhs, rhs, t },
+            };
+            let res = b.push_value(inst, IrComment::None);
+            return Ok(store_scalar_if_dst(b, dst, res));
+        }
+        (ScalarOpKind::Arith(op), Some(_)) => op,
+        _ => b_ice!(b, "scalar op arity mismatch"),
+    };
+    let rhs = compile_expr(b, None, scalar_op.rhs.unwrap())?;
     use ArithOpClass as Class;
     use ArithOpOp as Op;
-    let lhs_type = b.k1.exprs.get_type(arg0);
-    let t = b.get_physical_type(lhs_type)?.expect_scalar();
     let lhs_width = t.width_bits();
     let inst = match (op.op, op.class) {
         (Op::Add, Class::SignedInt | Class::UnsignedInt) => Inst::IntAdd { lhs, rhs, t },

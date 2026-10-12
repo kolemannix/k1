@@ -164,7 +164,6 @@ pub(crate) struct BuiltinIdents {
     pub mul: StringId,
     pub div: StringId,
     pub rem: StringId,
-    pub neg: StringId,
     pub scalar_cmp: StringId,
     pub invoke: StringId,
     pub lt: StringId,
@@ -241,7 +240,6 @@ pub(crate) struct BuiltinFunctions {
     pub try__get_value: QIdent,
     pub try__get_error: QIdent,
     pub try__error: QIdent,
-    pub neg__negated: QIdent,
     pub core_checked_index: QIdent,
     pub core_enum_unknown_name: QIdent,
     pub core_print_print_to: QIdent,
@@ -589,7 +587,6 @@ impl IdentPool {
             mul: intern!("mul"),
             div: intern!("div"),
             rem: intern!("rem"),
-            neg: intern!("neg"),
             scalar_cmp: intern!("scalar-cmp"),
             invoke: intern!("invoke"),
             lt: intern!("lt"),
@@ -712,7 +709,6 @@ impl IdentPool {
         let equals__not_equals: QIdent = make_fn!(path_core_equals, intern!("not-equals"));
 
         let add__add: QIdent = make_fn!(intern_path!(b.add), b.add);
-        let neg__negated: QIdent = make_fn!(intern_path!(b.neg), intern!("negated"));
         let sub__sub: QIdent = make_fn!(intern_path!(b.sub), b.sub);
         let mul__mul: QIdent = make_fn!(intern_path!(b.mul), b.mul);
         let div__div: QIdent = make_fn!(intern_path!(b.div), b.div);
@@ -752,7 +748,6 @@ impl IdentPool {
             try__get_value,
             try__get_error,
             try__error,
-            neg__negated,
             core_checked_index,
             core_enum_unknown_name,
             core_print_print_to,

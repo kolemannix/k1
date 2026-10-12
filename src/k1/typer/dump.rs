@@ -754,6 +754,15 @@ impl TypedProgram {
                 let variable = self.variables.get(v.variable_id);
                 self.write_ident(w, variable.name)
             }
+            TypedExpr::ScalarOp(op) => {
+                write!(w, "{}(", op.kind.kind_name())?;
+                self.display_expr_id(op.lhs, w, indentation)?;
+                if let Some(rhs) = op.rhs {
+                    w.write_str(", ")?;
+                    self.display_expr_id(rhs, w, indentation)?;
+                }
+                w.write_str(")")
+            }
             TypedExpr::Call { call_id, .. } => {
                 let call = self.calls.get(*call_id);
                 match &call.callee {

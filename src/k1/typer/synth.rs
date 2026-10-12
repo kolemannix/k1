@@ -133,17 +133,6 @@ impl TypedProgram {
         self.finish_call(Call { callee, args, type_args }, span, ctx)
     }
 
-    pub(super) fn synth_negated(
-        &mut self,
-        expr: TypedExprId,
-        ctx: EvalExprContext,
-        span: Span,
-    ) -> K1Result<TypedExprId> {
-        let (neg_impl, _) =
-            self.expect_ability_impl(BOOL_TYPE_ID, ABILITY_ID_NEG, false, ctx.scope_id, span)?;
-        self.synth_ability_call(neg_impl, self.ast.idents.f.neg__negated, &[], &[expr], ctx, span)
-    }
-
     pub(super) fn synth_static_call(
         &mut self,
         function_id: FunctionId,
@@ -151,12 +140,12 @@ impl TypedProgram {
         return_type: TypeId,
         span: Span,
     ) -> TypedExprId {
-        let call_id = self.calls.add(Call {
+        let call = Call {
             callee: Callee::StaticFunction(function_id),
             args: self.mem.pushn(args),
             type_args: TypeArgs::empty(),
-        });
-        self.exprs.add(TypedExpr::Call { call_id }, return_type, span)
+        };
+        self.add_call_expr(call, return_type, span)
     }
 
     pub(super) fn synth_if_else(
@@ -387,8 +376,6 @@ impl TypedProgram {
         if !flags.contains(VariableFlags::UserHidden) {
             self.emit_ls_entity(span, LsEntityKind::Variable { variable_id })
         }
-        let variable_expr =
-            self.exprs.add(TypedExpr::Variable(VariableExpr { variable_id }), type_id, span);
         let defn_stmt = self.stmts.add(TypedStmt::Let(LetStmt {
             variable_id,
             variable_type: type_id,
@@ -398,7 +385,7 @@ impl TypedProgram {
         if user_visible {
             self.scopes.add_variable(owner_scope, name, variable_id);
         }
-        SynthedVariable { variable_id, defn_stmt, variable_expr }
+        SynthedVariable { variable_id, defn_stmt }
     }
 
     pub(super) fn synth_typed_call_typed_args(
@@ -499,7 +486,8 @@ impl TypedProgram {
         let pad_var =
             self.synth_variable_defn_simple(self.ast.idents.b.fmt, new_pad, block.scope_id);
         self.push_block_stmt_id(&mut block, pad_var.defn_stmt);
-        let pad = self.synth_address_of(pad_var.variable_expr, Span::NONE, true)?;
+        let pad_ref = self.synth_variable_ref(pad_var.variable_id);
+        let pad = self.synth_address_of(pad_ref, Span::NONE, true)?;
         let print_call = self.synth_print_call(value, pad, spec.precision, block_ctx)?;
         self.push_block_expr_id(&mut block, print_call);
         if spec.group {
@@ -730,11 +718,11 @@ impl TypedProgram {
         let mut hole_index = 0;
         fn get_named_arg(
             k1: &mut TypedProgram,
-            args: TypedExprId,
+            args: VariableId,
             name: StringId,
             span: Span,
         ) -> Option<TypedExprId> {
-            let type_id = k1.exprs.get_type(args);
+            let type_id = k1.variables.get(args).type_id;
             match k1.types.get(type_id) {
                 Type::Struct(_) => {
                     if type_id == k1.builtin_types.string() {
@@ -742,7 +730,8 @@ impl TypedProgram {
                     }
 
                     let (field_index, _field) = k1.get_struct_field_by_name(type_id, name)?;
-                    let field_expr = k1.synth_field_access(args, field_index, span);
+                    let args_ref = k1.synth_variable_ref(args);
+                    let field_expr = k1.synth_field_access(args_ref, field_index, span);
                     Some(field_expr)
                 }
                 _ => None,
@@ -750,11 +739,11 @@ impl TypedProgram {
         }
         fn get_nth_arg(
             k1: &mut TypedProgram,
-            args: TypedExprId,
+            args: VariableId,
             n: usize,
             span: Span,
         ) -> K1Result<TypedExprId> {
-            let type_id = k1.exprs.get_type(args);
+            let type_id = k1.variables.get(args).type_id;
             match k1.types.get(type_id) {
                 Type::Char
                 | Type::Bool
@@ -764,11 +753,11 @@ impl TypedProgram {
                 | Type::Reference(_)
                 | Type::Array(_)
                 | Type::Vector(_)
-                | Type::Sum(_) => Ok(args),
+                | Type::Sum(_) => Ok(k1.synth_variable_ref(args)),
                 Type::Struct(s) => {
                     if type_id == k1.builtin_types.string() {
                         if n == 0 {
-                            Ok(args)
+                            Ok(k1.synth_variable_ref(args))
                         } else {
                             Err(kerr!(
                                 k1,
@@ -787,7 +776,8 @@ impl TypedProgram {
                                 n + 1
                             );
                         }
-                        let field_expr = k1.synth_field_access(args, n, span);
+                        let args_ref = k1.synth_variable_ref(args);
+                        let field_expr = k1.synth_field_access(args_ref, n, span);
                         Ok(field_expr)
                     }
                 }
@@ -865,7 +855,7 @@ impl TypedProgram {
                     let typed_expr = match naked_variable_name {
                         Some(name) => {
                             let struct_arg =
-                                get_named_arg(self, args_variable.variable_expr, name, expr_span);
+                                get_named_arg(self, args_variable.variable_id, name, expr_span);
                             match struct_arg {
                                 Some(field_expr) => field_expr,
                                 None => {
@@ -890,7 +880,7 @@ impl TypedProgram {
                     self.push_block_expr_id(&mut block, part_call);
                 }
                 parse::InterpolatedStringPart::Hole { spec, span } => {
-                    let arg = get_nth_arg(self, args_variable.variable_expr, hole_index, *span)?;
+                    let arg = get_nth_arg(self, args_variable.variable_id, hole_index, *span)?;
                     hole_index += 1;
                     let part_call = self.synth_format_part(
                         arg,
@@ -954,8 +944,9 @@ impl TypedProgram {
             block.scope_id,
             None,
         );
+        let string_builder_ref = self.synth_variable_ref(string_builder_var.variable_id);
         let string_builder_expr =
-            self.synth_address_of(string_builder_var.variable_expr, Span::NONE, true).unwrap();
+            self.synth_address_of(string_builder_ref, Span::NONE, true).unwrap();
         self.push_block_stmt_id(&mut block, string_builder_var.defn_stmt);
         let args_expr = args_expr.unwrap_or(self.synth_empty_value(span));
         let format_block = self.synth_format_calls(
@@ -1026,8 +1017,8 @@ impl TypedProgram {
             block.scope_id,
             None,
         );
-        let code_builder_expr =
-            self.synth_address_of(code_builder_var.variable_expr, Span::NONE, true).unwrap();
+        let code_builder_ref = self.synth_variable_ref(code_builder_var.variable_id);
+        let code_builder_expr = self.synth_address_of(code_builder_ref, Span::NONE, true).unwrap();
         self.push_block_stmt_id(&mut block, code_builder_var.defn_stmt);
         let args_expr = args_expr.unwrap_or(self.synth_empty_value(span));
         let format_block =
@@ -1055,6 +1046,12 @@ impl TypedProgram {
         let expr = self.exprs.add(TypedExpr::Variable(VariableExpr { variable_id }), type_id, span);
         self.register_variable_usage(variable_id, span);
         expr
+    }
+
+    pub(super) fn synth_variable_ref(&mut self, variable_id: VariableId) -> TypedExprId {
+        let variable = self.variables.get(variable_id);
+        let (type_id, span) = (variable.type_id, variable.defn_span);
+        self.exprs.add(TypedExpr::Variable(VariableExpr { variable_id }), type_id, span)
     }
 }
 

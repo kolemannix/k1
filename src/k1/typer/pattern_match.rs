@@ -1,6 +1,12 @@
 use super::*;
 
 #[derive(Clone, Copy)]
+pub(super) enum PatternTarget {
+    Variable(VariableId),
+    Expr(TypedExprId),
+}
+
+#[derive(Clone, Copy)]
 enum MatchCell {
     Any,
     Pattern(TypedPatternId),
@@ -922,8 +928,9 @@ impl TypedProgram {
         let mut all_unguarded_patterns: List<TypedPatternId, MemTmp> =
             self.tmp.new_list(parsed_pattern_count);
         let mut last_unguarded_arm: Option<usize> = None;
-        let subject_type = self.exprs.get_type(match_subject_variable.variable_expr);
-        let subject_expr_span = self.exprs.get_span(match_subject_variable.variable_expr);
+        let subject_variable = self.variables.get(match_subject_variable.variable_id);
+        let subject_type = subject_variable.type_id;
+        let subject_expr_span = subject_variable.defn_span;
 
         // Core loop to build up the typed, compiled match arms
         let mut first_error = None;
@@ -1007,7 +1014,7 @@ impl TypedProgram {
                     let mut instrs = self.mem.new_list(4);
                     let case = self.compile_pattern_into_values(
                         pattern,
-                        match_subject_variable.variable_expr,
+                        PatternTarget::Variable(match_subject_variable.variable_id),
                         &mut instrs,
                         false,
                         true,
@@ -1114,11 +1121,8 @@ impl TypedProgram {
             }),
         }
         let scrutinee = if typed_arms.iter().any(|arm| arm.case.is_some()) {
-            Some(synth_match_scrutinee(
-                self,
-                match_subject_variable.variable_expr,
-                subject_expr_span,
-            ))
+            let subject_ref = self.synth_variable_ref(match_subject_variable.variable_id);
+            Some(synth_match_scrutinee(self, subject_ref, subject_expr_span))
         } else {
             None
         };
@@ -1349,25 +1353,47 @@ impl TypedProgram {
     /// Basically, every part of a pattern match boils down to either
     /// - A boolean condition to be evaluated
     /// - A new variable binding
+    fn materialize_pattern_target(&mut self, target: PatternTarget) -> TypedExprId {
+        match target {
+            PatternTarget::Variable(variable_id) => self.synth_variable_ref(variable_id),
+            PatternTarget::Expr(expr) => expr,
+        }
+    }
+
+    fn is_wildcard_pattern(&self, pattern_id: TypedPatternId) -> bool {
+        matches!(self.patterns.get(pattern_id), TypedPattern::Wildcard(_))
+    }
+
     pub(super) fn compile_pattern_into_values(
         &mut self,
         pattern_id: TypedPatternId,
-        target_expr: TypedExprId,
+        target: PatternTarget,
         instrs: &mut List<MatchingConditionInstr, TypedProgram>,
         is_immediately_inside_reference_pattern: bool,
         hoist_case: bool,
         ctx: EvalExprContext,
     ) -> K1Result<Option<StaticValueId>> {
-        let target_expr_type = self.exprs.get_type(target_expr);
         let pat = self.patterns.get(pattern_id);
         match pat {
             TypedPattern::Struct(struct_pattern) => {
                 let pattern_fields = struct_pattern.fields;
                 let is_referencing = is_immediately_inside_reference_pattern;
-                let struct_base = self.synth_dereference_when(target_expr, is_referencing);
+                let mut struct_base = None;
                 for pattern_field in self.patterns.get_slice(pattern_fields).iter() {
+                    if self.is_wildcard_pattern(pattern_field.pattern) {
+                        continue;
+                    }
+                    let base = match struct_base {
+                        Some(base) => base,
+                        None => {
+                            let target_expr = self.materialize_pattern_target(target);
+                            let base = self.synth_dereference_when(target_expr, is_referencing);
+                            struct_base = Some(base);
+                            base
+                        }
+                    };
                     let get_struct_field = self.synth_field_access(
-                        struct_base,
+                        base,
                         pattern_field.field_index as usize,
                         Span::NONE,
                     );
@@ -1390,7 +1416,7 @@ impl TypedProgram {
                     );
                     self.compile_pattern_into_values(
                         pattern_field.pattern,
-                        struct_field_variable.variable_expr,
+                        PatternTarget::Variable(struct_field_variable.variable_id),
                         instrs,
                         is_referencing,
                         false,
@@ -1402,7 +1428,6 @@ impl TypedProgram {
             TypedPattern::Sum(sum_pattern) => {
                 let sum_pattern = *sum_pattern;
                 let is_referencing = is_immediately_inside_reference_pattern;
-                let sum_base = self.synth_dereference_when(target_expr, is_referencing);
                 let sum_type = self.types.get(sum_pattern.sum_type_id).expect_sum();
                 let variant =
                     self.sum_variant_by_index(sum_type.variants, sum_pattern.variant_index);
@@ -1410,6 +1435,29 @@ impl TypedProgram {
                 let variant_index = variant.index;
                 let variant_payload = variant.payload;
                 let case = self.static_values.add_int(variant.tag_value);
+                let payload = match sum_pattern.payload {
+                    None => None,
+                    Some(payload_pattern) => {
+                        let Some(payload_type_id) = variant_payload else {
+                            kbail!(
+                                self,
+                                sum_pattern.span,
+                                "Impossible pattern: Variant '{}' does not have data",
+                                variant_name
+                            );
+                        };
+                        if self.is_wildcard_pattern(payload_pattern) {
+                            None
+                        } else {
+                            Some((payload_pattern, payload_type_id))
+                        }
+                    }
+                };
+                if hoist_case && payload.is_none() {
+                    return Ok(Some(case));
+                }
+                let target_expr = self.materialize_pattern_target(target);
+                let sum_base = self.synth_dereference_when(target_expr, is_referencing);
                 if !hoist_case {
                     let subject = self.synth_sum_get_tag(sum_base, sum_pattern.span);
                     instrs.push_grow(
@@ -1418,15 +1466,7 @@ impl TypedProgram {
                     );
                 }
 
-                if let Some(payload_pattern) = sum_pattern.payload {
-                    let Some(payload_type_id) = variant_payload else {
-                        kbail!(
-                            self,
-                            sum_pattern.span,
-                            "Impossible pattern: Variant '{}' does not have data",
-                            variant_name
-                        );
-                    };
+                if let Some((payload_pattern, payload_type_id)) = payload {
                     let get_payload_expr = self.exprs.add(
                         TypedExpr::SumGetPayload(GetSumPayload {
                             sum_expr: sum_base,
@@ -1453,7 +1493,7 @@ impl TypedProgram {
                     );
                     self.compile_pattern_into_values(
                         payload_pattern,
-                        payload_variable.variable_expr,
+                        PatternTarget::Variable(payload_variable.variable_id),
                         instrs,
                         is_referencing,
                         false,
@@ -1464,11 +1504,13 @@ impl TypedProgram {
             }
             TypedPattern::Variable(variable_pattern) => {
                 let variable_ident = variable_pattern.name;
+                let variable_span = variable_pattern.span;
+                let target_expr = self.materialize_pattern_target(target);
                 let binding_variable = self.synth_variable_defn_visible(
                     variable_ident,
                     target_expr,
                     ctx.scope_id,
-                    variable_pattern.span,
+                    variable_span,
                 );
                 instrs.push_grow(
                     &mut self.mem,
@@ -1479,14 +1521,15 @@ impl TypedProgram {
             TypedPattern::Wildcard(_span) => Ok(None),
             TypedPattern::Reference(reference_pattern) => {
                 let inner_pattern = reference_pattern.inner_pattern;
-                let target_expr = if is_immediately_inside_reference_pattern {
-                    self.synth_dereference(target_expr)
+                let target = if is_immediately_inside_reference_pattern {
+                    let target_expr = self.materialize_pattern_target(target);
+                    PatternTarget::Expr(self.synth_dereference(target_expr))
                 } else {
-                    target_expr
+                    target
                 };
                 self.compile_pattern_into_values(
                     inner_pattern,
-                    target_expr,
+                    target,
                     instrs,
                     true,
                     hoist_case,
@@ -1495,6 +1538,7 @@ impl TypedProgram {
             }
             TypedPattern::PointerNull(span) => {
                 let span = *span;
+                let target_expr = self.materialize_pattern_target(target);
                 let ptr_null_expr =
                     self.add_static_constant_expr(self.static_values.nullptr_id(), span);
                 let is_null_expr = self.synth_equals_call_simple(target_expr, ptr_null_expr, span);
@@ -1504,25 +1548,29 @@ impl TypedProgram {
             TypedPattern::Type(pattern) => {
                 // We want to push a cond to instrs representing whether the type matches
                 let pattern = *pattern;
-                let pattern_did_match = target_expr_type == pattern.type_id;
+                let target_type = match target {
+                    PatternTarget::Variable(variable_id) => self.variables.get(variable_id).type_id,
+                    PatternTarget::Expr(expr) => self.exprs.get_type(expr),
+                };
+                let pattern_did_match = target_type == pattern.type_id;
                 debug!(
                     "type {} == {}? {pattern_did_match}",
-                    self.type_id_to_string(target_expr_type),
+                    self.type_id_to_string(target_type),
                     self.type_id_to_string(pattern.type_id)
                 );
                 let cond = self.synth_bool(pattern_did_match, pattern.span);
                 instrs.push_grow(&mut self.mem, MatchingConditionInstr::cond(cond));
-                let inner_target_expr = if pattern_did_match {
+                let inner_target = if pattern_did_match {
                     // The variable is already of the correct type, so don't do anything at all
-                    target_expr
+                    target
                 } else {
                     // The type pattern failed, and the consequent code will never run, but we need
                     // it to typecheck
-                    self.synth_phony(pattern.type_id, pattern.span)
+                    PatternTarget::Expr(self.synth_phony(pattern.type_id, pattern.span))
                 };
                 self.compile_pattern_into_values(
                     pattern.inner_pattern,
-                    inner_target_expr,
+                    inner_target,
                     instrs,
                     false,
                     false,
@@ -1531,25 +1579,7 @@ impl TypedProgram {
                 Ok(None)
             }
             literal_pat => {
-                match literal_pat {
-                    TypedPattern::LiteralChar(_, _) => {}
-                    TypedPattern::LiteralInteger(_, _) => {}
-                    TypedPattern::LiteralFloat(_, _) => {}
-                    TypedPattern::LiteralBool(_, _) => {}
-                    TypedPattern::LiteralString(_, _) => {}
-                    TypedPattern::Enum(_) => {}
-                    _ => unreachable!("all non-literals should be handled by now"),
-                };
-                let target_expr = if is_immediately_inside_reference_pattern {
-                    // Literal patterns don't do anything special for references; they just need to
-                    // function on the de-rereferenced target. Whereas structs, sums, even
-                    // reference patterns do different and unique things when matching on
-                    // references
-                    self.synth_dereference(target_expr)
-                } else {
-                    target_expr
-                };
-                let literal_pat = *self.patterns.get(pattern_id);
+                let literal_pat = *literal_pat;
                 let case = match literal_pat {
                     TypedPattern::Enum(e) => self.static_values.add_int(e.int_value),
                     TypedPattern::LiteralChar(byte, _) => {
@@ -1559,21 +1589,25 @@ impl TypedProgram {
                     TypedPattern::LiteralBool(bool_value, _) => {
                         self.static_values.add(StaticValue::Bool(bool_value))
                     }
-                    TypedPattern::LiteralFloat(float_value, span) => {
-                        let pattern_float_literal =
-                            self.add_static_constant_expr(float_value, span);
-                        let equals_pattern_float =
-                            self.synth_equals_call_simple(target_expr, pattern_float_literal, span);
-                        instrs.push_grow(
-                            &mut self.mem,
-                            MatchingConditionInstr::cond(equals_pattern_float),
-                        );
-                        return Ok(None);
-                    }
-                    TypedPattern::LiteralString(string_id, span) => {
-                        let string_expr = self.synth_string_literal(string_id, span);
+                    TypedPattern::LiteralFloat(_, _) | TypedPattern::LiteralString(_, _) => {
+                        let target_expr = self.materialize_pattern_target(target);
+                        let target_expr = if is_immediately_inside_reference_pattern {
+                            self.synth_dereference(target_expr)
+                        } else {
+                            target_expr
+                        };
+                        let literal_expr = match literal_pat {
+                            TypedPattern::LiteralFloat(float_value, span) => {
+                                self.add_static_constant_expr(float_value, span)
+                            }
+                            TypedPattern::LiteralString(string_id, span) => {
+                                self.synth_string_literal(string_id, span)
+                            }
+                            _ => unreachable!(),
+                        };
+                        let span = self.exprs.get_span(literal_expr);
                         let condition =
-                            self.synth_equals_call_simple(target_expr, string_expr, span);
+                            self.synth_equals_call_simple(target_expr, literal_expr, span);
                         instrs.push_grow(&mut self.mem, MatchingConditionInstr::cond(condition));
                         return Ok(None);
                     }
@@ -1587,6 +1621,16 @@ impl TypedProgram {
                 if hoist_case {
                     return Ok(Some(case));
                 }
+                let target_expr = self.materialize_pattern_target(target);
+                // Literal patterns don't do anything special for references; they just need to
+                // function on the de-rereferenced target. Whereas structs, sums, even
+                // reference patterns do different and unique things when matching on
+                // references
+                let target_expr = if is_immediately_inside_reference_pattern {
+                    self.synth_dereference(target_expr)
+                } else {
+                    target_expr
+                };
                 let subject = match literal_pat {
                     TypedPattern::Enum(e) => self.synth_enum_get_value(target_expr, e.span),
                     _ => target_expr,

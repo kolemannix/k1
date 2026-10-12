@@ -155,12 +155,13 @@ impl TypedProgram {
         ctx: EvalExprContext,
         input_parameters: &[(VariableId, StaticValueId)],
     ) -> K1Result<StaticValueId> {
-        let expr = self.compile_parsed_expr_for_exec(parsed_expr, ctx, input_parameters)?;
+        let expr = self.typecheck_parsed_expr_for_exec(parsed_expr, ctx, input_parameters)?;
 
         // Intercepts very simple expressions to avoid a VM execution
         if let Some(shortcut_value_id) = self.convert_trivial_static_block(expr) {
             return Ok(shortcut_value_id);
         }
+        self.compile_static_unit(parsed_expr, expr, input_parameters)?;
         let execution_result = bc::exec::execute_compiled_expr(self, vm, expr, true);
 
         vm.reset(self.global_id_k1_arena);
@@ -170,8 +171,7 @@ impl TypedProgram {
         Ok(static_value_id)
     }
 
-    /// Typecheck, compile, and optimize a static expr's unit for execution
-    pub(super) fn compile_parsed_expr_for_exec(
+    pub(super) fn typecheck_parsed_expr_for_exec(
         &mut self,
         parsed_expr: ParsedExprId,
         ctx: EvalExprContext,
@@ -221,11 +221,19 @@ impl TypedProgram {
 
         let static_eval_ctx = ctx.with_scope(static_block_scope).without_inference();
         let expr = self.eval_block(&parsed_expr_as_block, static_eval_ctx, true)?;
-        let is_debug = self.ast.exprs.is_debug(parsed_expr);
-        if is_debug {
+        if self.ast.exprs.is_debug(parsed_expr) {
             eprintln!("COMPILED TO BLOCK\n\n{}", self.expr_to_string_with_type(expr));
         }
+        Ok(expr)
+    }
 
+    pub(super) fn compile_static_unit(
+        &mut self,
+        parsed_expr: ParsedExprId,
+        expr: TypedExprId,
+        input_parameters: &[(VariableId, StaticValueId)],
+    ) -> K1Result<()> {
+        let is_debug = self.ast.exprs.is_debug(parsed_expr);
         ir::compile_top_level_expr(self, expr, input_parameters, is_debug)?;
         ir::optimize_unit(self, IrUnitId::Expr(expr))?;
         if is_debug {
@@ -234,7 +242,7 @@ impl TypedProgram {
                 ir::unit_to_string(self, IrUnitId::Expr(expr), false)
             );
         }
-        Ok(expr)
+        Ok(())
     }
 
     pub(super) fn execute_static_expr(
@@ -1374,11 +1382,12 @@ impl TypedProgram {
                 self.traced(TraceKind::Metaprogram, span.lo, ctx.trace_flags(), |k1| {
                     let emitted = k1.do_with_vm(span, ctx.trace_flags(), |k1, vm| {
                         let result = (|| {
-                            let expr = k1.compile_parsed_expr_for_exec(
+                            let expr = k1.typecheck_parsed_expr_for_exec(
                                 base_expr,
                                 exec_ctx,
                                 &static_parameters,
                             )?;
+                            k1.compile_static_unit(base_expr, expr, &static_parameters)?;
                             let raw = bc::exec::execute_compiled_expr_raw(k1, vm, expr, true)?;
                             Self::read_emitted_code_raw(k1, &raw, span, is_definition)
                         })();

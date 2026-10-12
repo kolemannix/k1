@@ -1424,6 +1424,7 @@ pub enum TypedExpr {
     Call {
         call_id: CallId,
     },
+    ScalarOp(ScalarOp),
     /// In the past, we lowered match to an if/else chain. This proves not quite powerful enough
     /// of a representation to do everything we want
     /// Now we lower if/else to a match!
@@ -1476,6 +1477,7 @@ impl TypedExpr {
             TypedExpr::AddressOf(_) => "addressof",
             TypedExpr::Block(_) => "block",
             TypedExpr::Call { .. } => "call",
+            TypedExpr::ScalarOp(_) => "scalar_op",
             TypedExpr::Match(_) => "match",
             TypedExpr::WhileLoop(_) => "while_loop",
             TypedExpr::LoopExpr(_) => "loop",
@@ -1497,14 +1499,6 @@ impl TypedExpr {
 
     pub fn expect_variable(self) -> VariableExpr {
         if let Self::Variable(v) = self { v } else { panic!("Expected variable expression") }
-    }
-
-    pub fn expect_call_id(&self) -> CallId {
-        if let Self::Call { call_id, .. } = self {
-            *call_id
-        } else {
-            panic!("Expected call expression")
-        }
     }
 }
 
@@ -1635,7 +1629,6 @@ pub type K1Result<A> = Result<A, K1Message>;
 struct SynthedVariable {
     pub variable_id: VariableId,
     pub defn_stmt: TypedStmtId,
-    pub variable_expr: TypedExprId,
 }
 
 bitflags! {
@@ -1912,6 +1905,32 @@ impl ArithOpKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ScalarOpKind {
+    Arith(ArithOpKind),
+    Bitwise(BitwiseBinopKind),
+    Negate,
+    BitNot,
+}
+
+impl ScalarOpKind {
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            ScalarOpKind::Arith(op) => op.kind_name(),
+            ScalarOpKind::Bitwise(op) => op.kind_name(),
+            ScalarOpKind::Negate => "negate",
+            ScalarOpKind::BitNot => "bit_not",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct ScalarOp {
+    pub kind: ScalarOpKind,
+    pub lhs: TypedExprId,
+    pub rhs: Option<TypedExprId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BuiltinAbility {
     Enum,
 }
@@ -1986,11 +2005,8 @@ impl BuiltinTyperFunction {
 pub enum BuiltinIr {
     Unreachable,
     BakeStaticValue,
-    Negate,
-    BitNot,
+    Scalar(ScalarOpKind),
     Bitcast,
-    ArithBinop(ArithOpKind),
-    BitwiseBinop(BitwiseBinopKind),
     PointerIndex,
     VolatileLoad,
     VolatileStore,
@@ -2070,11 +2086,8 @@ impl BuiltinIr {
         match self {
             BuiltinIr::Unreachable => "unreachable",
             BuiltinIr::BakeStaticValue => "bake_static_value",
-            BuiltinIr::Negate => "negate",
-            BuiltinIr::BitNot => "bit_not",
+            BuiltinIr::Scalar(kind) => kind.kind_name(),
             BuiltinIr::Bitcast => "bitcast",
-            BuiltinIr::ArithBinop(op_kind) => op_kind.kind_name(),
-            BuiltinIr::BitwiseBinop(op_kind) => op_kind.kind_name(),
             BuiltinIr::PointerIndex => "pointer_index",
             BuiltinIr::VolatileLoad => "volatile_load",
             BuiltinIr::VolatileStore => "volatile_store",
@@ -5973,8 +5986,8 @@ impl TypedProgram {
             result_block.scope_id,
         );
         let result_block_ctx = ctx.with_scope(result_block.scope_id).with_no_expected_type();
-        let try_value =
-            self.apply_self_adjust(try_value_var.variable_expr, value_self_adjust, span)?;
+        let try_value_ref = self.synth_variable_ref(try_value_var.variable_id);
+        let try_value = self.apply_self_adjust(try_value_ref, value_self_adjust, span)?;
         let is_ok_call = self.synth_ability_call(
             value_try_impl,
             self.ast.idents.f.try__is_ok,
@@ -6173,7 +6186,8 @@ impl TypedProgram {
                 if self.exprs.get_type(base) == NEVER_TYPE_ID {
                     Ok(base)
                 } else {
-                    self.synth_negated(base, ctx, span)
+                    let op = ScalarOp { kind: ScalarOpKind::Negate, lhs: base, rhs: None };
+                    Ok(self.exprs.add(TypedExpr::ScalarOp(op), BOOL_TYPE_ID, span))
                 }
             }
             ParsedExpr::Literal(ParsedLiteral::Char(byte)) => {
@@ -6638,10 +6652,11 @@ impl TypedProgram {
             list_lit_scope,
             None,
         );
+        let dest_coll_ref = self.synth_variable_ref(dest_coll_variable.variable_id);
         let dest_coll_expr = if needs_address_of {
-            self.synth_address_of(dest_coll_variable.variable_expr, Span::NONE, true).unwrap()
+            self.synth_address_of(dest_coll_ref, Span::NONE, true).unwrap()
         } else {
-            dest_coll_variable.variable_expr
+            dest_coll_ref
         };
 
         list_lit_block.statements.push(dest_coll_variable.defn_stmt);
@@ -6688,17 +6703,18 @@ impl TypedProgram {
             let store_stmt = self.add_assignment_stmt(element_place, *element_value_expr, span);
             self.push_block_stmt_id(&mut list_lit_block, store_stmt);
         }
+        let dest_coll_final = self.synth_variable_ref(dest_coll_variable.variable_id);
         let final_expr = match list_kind {
-            ContainerKind::List => dest_coll_variable.variable_expr,
-            ContainerKind::Buffer => dest_coll_variable.variable_expr,
+            ContainerKind::List | ContainerKind::Buffer | ContainerKind::Array(_) => {
+                dest_coll_final
+            }
             ContainerKind::Span => self.synth_typed_call_typed_args(
                 self.ast.idents.f.span_wrapBuffer.with_span(span),
                 &[element_type],
-                &[dest_coll_variable.variable_expr],
+                &[dest_coll_final],
                 ctx.with_no_expected_type(),
                 false,
             )?,
-            ContainerKind::Array(_array_type_id) => dest_coll_variable.variable_expr,
         };
         self.push_block_expr_id(&mut list_lit_block, final_expr);
         let final_expr_type = self.exprs.get_type(final_expr);
@@ -8130,7 +8146,8 @@ impl TypedProgram {
                         Some(iterable_span),
                     );
                     iterable_defn_stmt = Some(iterable_variable.defn_stmt);
-                    self.synth_address_of(iterable_variable.variable_expr, Span::NONE, true)?
+                    let iterable_ref = self.synth_variable_ref(iterable_variable.variable_id);
+                    self.synth_address_of(iterable_ref, Span::NONE, true)?
                 }
             },
         };
@@ -8156,7 +8173,7 @@ impl TypedProgram {
         let iterator_impl = if target_is_iterator {
             target_impl
         } else {
-            let iterator_type = self.exprs.get_type(iterator_variable.variable_expr);
+            let iterator_type = self.variables.get(iterator_variable.variable_id).type_id;
             self.expect_ability_impl(
                 iterator_type,
                 ABILITY_ID_ITERATOR,
@@ -8166,8 +8183,8 @@ impl TypedProgram {
             )?
             .0
         };
-        let iterator_expr =
-            self.synth_address_of(iterator_variable.variable_expr, Span::NONE, true)?;
+        let iterator_ref = self.synth_variable_ref(iterator_variable.variable_id);
+        let iterator_expr = self.synth_address_of(iterator_ref, Span::NONE, true)?;
         let mut loop_block =
             self.new_block_builder(outer_for_expr_scope, ScopeType::WhileLoopBody, body_span, 3);
         let loop_scope_id = loop_block.scope_id;
@@ -8199,13 +8216,14 @@ impl TypedProgram {
         );
         // The is-some check below guards this arm, so project the payload
         // directly; try/get-value's crash arm would survive as reachable code
-        let next_type = self.exprs.get_type(next_variable.variable_expr);
+        let next_type = self.variables.get(next_variable.variable_id).type_id;
         let next_sum_type = self.types.get(next_type).expect_sum();
         let some_variant = self.sum_variant_by_index(next_sum_type.variants, 1);
         let some_payload_type = some_variant.payload.unwrap();
+        let next_payload_base = self.synth_variable_ref(next_variable.variable_id);
         let next_get_payload = self.exprs.add(
             TypedExpr::SumGetPayload(GetSumPayload {
-                sum_expr: next_variable.variable_expr,
+                sum_expr: next_payload_base,
                 variant_index: 1,
                 packed: false,
             }),
@@ -8227,23 +8245,19 @@ impl TypedProgram {
         let index_used = self.variables.get(index_variable.variable_id).usage_count > 0;
         if index_used {
             let one_expr = self.synth_i64(1, iterable_span);
-            let (add_impl, _) = self.expect_ability_impl(
+            let index_value = self.synth_variable_ref(index_variable.variable_id);
+            let add_operation = self.exprs.add(
+                TypedExpr::ScalarOp(ScalarOp {
+                    kind: ScalarOpKind::Arith(ArithOpKind::sint(ArithOpOp::Add)),
+                    lhs: index_value,
+                    rhs: Some(one_expr),
+                }),
                 I64_TYPE_ID,
-                ABILITY_ID_ADD,
-                false,
-                outer_for_expr_scope,
                 iterable_span,
-            )?;
-            let add_operation = self.synth_ability_call(
-                add_impl,
-                self.ast.idents.f.add__add,
-                &[],
-                &[index_variable.variable_expr, one_expr],
-                ctx.with_no_expected_type(),
-                iterable_span,
-            )?;
+            );
+            let index_place = self.synth_variable_ref(index_variable.variable_id);
             let index_increment_statement = self.add_assignment_stmt(
-                index_variable.variable_expr,
+                index_place,
                 add_operation,
                 iterable_span,
             );
@@ -8255,7 +8269,8 @@ impl TypedProgram {
         consequent_block.statements.push(binding_variable.defn_stmt);
         self.push_block_expr_id(&mut consequent_block, body_block);
 
-        let next_is_some_call = self.synth_sum_is_variant(next_variable.variable_expr, 1, None)?;
+        let next_is_some_base = self.synth_variable_ref(next_variable.variable_id);
+        let next_is_some_call = self.synth_sum_is_variant(next_is_some_base, 1, None)?;
         let empty_break = self.synth_empty_value(body_span);
         let break_expr = self.exprs.add(
             TypedExpr::Break(TypedBreak { value: empty_break, loop_scope: loop_scope_id }),
@@ -8675,7 +8690,7 @@ impl TypedProgram {
                 );
                 self.compile_pattern_into_values(
                     pattern,
-                    subject_var.variable_expr,
+                    pattern_match::PatternTarget::Variable(subject_var.variable_id),
                     instrs,
                     false,
                     false,
@@ -8888,9 +8903,10 @@ impl TypedProgram {
         let base_var =
             self.synth_variable_defn_simple(self.ast.idents.b.base_struct, base, block.scope_id);
         self.push_block_stmt_id(&mut block, base_var.defn_stmt);
+        let base_ref = self.synth_variable_ref(base_var.variable_id);
         let patched = self.eval_struct_expected(
             binary_op.rhs,
-            Some(base_var.variable_expr),
+            Some(base_ref),
             ctx.with_expected_type(Some(base_type_id)),
         )?;
         self.push_block_expr_id(&mut block, patched);
@@ -9016,7 +9032,8 @@ impl TypedProgram {
             coalesce_block.scope_id,
         );
         let coalesce_ctx = ctx.with_scope(coalesce_block.scope_id).with_no_expected_type();
-        let lhs_value = self.apply_self_adjust(lhs_variable.variable_expr, self_adjust, span)?;
+        let lhs_ref = self.synth_variable_ref(lhs_variable.variable_id);
+        let lhs_value = self.apply_self_adjust(lhs_ref, self_adjust, span)?;
         let lhs_has_value = self.synth_ability_call(
             try_impl,
             self.ast.idents.f.try__is_ok,
@@ -9440,7 +9457,7 @@ impl TypedProgram {
             let bound =
                 self.synth_variable_defn_simple(self.ast.idents.b.defer_value, value, scope_id);
             stmts.push_grow(&mut self.mem, bound.defn_stmt);
-            bound.variable_expr
+            self.synth_variable_ref(bound.variable_id)
         };
         let value_span = self.exprs.get_span(value);
         for pending in defers {
@@ -11810,8 +11827,22 @@ impl TypedProgram {
             }
         }
 
+        Ok(self.add_call_expr(call, return_type, span))
+    }
+
+    pub(super) fn add_call_expr(
+        &mut self,
+        call: Call,
+        return_type: TypeId,
+        span: Span,
+    ) -> TypedExprId {
+        if let Some(Builtin::Ir(BuiltinIr::Scalar(kind))) = self.get_callee_builtin(&call.callee) {
+            let args = self.mem.getn(call.args);
+            let op = ScalarOp { kind, lhs: args[0], rhs: args.get(1).copied() };
+            return self.exprs.add(TypedExpr::ScalarOp(op), return_type, span);
+        }
         let call_id = self.calls.add(call);
-        Ok(self.exprs.add(TypedExpr::Call { call_id }, return_type, span))
+        self.exprs.add(TypedExpr::Call { call_id }, return_type, span)
     }
 
     fn is_static_type_id_expr(&self, expr: TypedExprId) -> Option<TypeId> {
@@ -13326,12 +13357,12 @@ impl TypedProgram {
             use ArithOpOp as Op;
             macro_rules! mk_arith {
                 ($e: expr) => {
-                    Some(Builtin::Ir(BuiltinIr::ArithBinop($e)))
+                    Some(Builtin::Ir(BuiltinIr::Scalar(ScalarOpKind::Arith($e))))
                 };
             }
             macro_rules! mk_bitwise {
                 ($e: expr) => {
-                    Some(Builtin::Ir(BuiltinIr::BitwiseBinop($e)))
+                    Some(Builtin::Ir(BuiltinIr::Scalar(ScalarOpKind::Bitwise($e))))
                 };
             }
             let t = ability_impl_self_type.map(|t| self.types.get(t));
@@ -13393,7 +13424,7 @@ impl TypedProgram {
                     _ => None,
                 },
                 (ABILITY_ID_BITWISE, "bit-not") if is_integer => {
-                    Some(Builtin::Ir(BuiltinIr::BitNot))
+                    Some(Builtin::Ir(BuiltinIr::Scalar(ScalarOpKind::BitNot)))
                 }
                 (ABILITY_ID_BITWISE, "bit-and") if is_integer => {
                     mk_bitwise!(BitwiseBinopKind::And)
@@ -13487,7 +13518,7 @@ impl TypedProgram {
                 },
                 (ABILITY_ID_NEG, "negated") => match t {
                     Some(Type::Bool) | Some(Type::Integer(_)) | Some(Type::Float(_)) => {
-                        Some(Builtin::Ir(BuiltinIr::Negate))
+                        Some(Builtin::Ir(BuiltinIr::Scalar(ScalarOpKind::Negate)))
                     }
                     _ => None,
                 },
