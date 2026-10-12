@@ -1117,6 +1117,50 @@ impl TypedProgram {
                                 )
                             }
                             StringPiece::Hole((lo, hi)) => {
+                                let mut depth = 0;
+                                for index in lo..hi {
+                                    let token = lexed.tokens[index];
+                                    match token.kind {
+                                        K::OpenParen | K::OpenBracket | K::OpenBrace => depth += 1,
+                                        K::CloseParen | K::CloseBracket | K::CloseBrace => {
+                                            depth -= 1
+                                        }
+                                        K::Colon
+                                            if depth == 0
+                                                && index > lo
+                                                && !token.is_whitespace_preceded()
+                                                && matches!(
+                                                    lexed.tokens[index - 1].kind,
+                                                    K::Ident
+                                                        | K::Numeric
+                                                        | K::Char
+                                                        | K::CloseParen
+                                                        | K::CloseBracket
+                                                        | K::CloseBrace
+                                                ) =>
+                                        {
+                                            kbail!(
+                                                self,
+                                                token_span(token),
+                                                "{}",
+                                                crate::lex::FmtSpec::INVALID_MESSAGE
+                                            )
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                                let (hi, spec) =
+                                    if hi > lo && lexed.tokens[hi - 1].kind == K::FmtSpec {
+                                        let (spec_start, spec_len) =
+                                            lexed.get_token_start_len(lexed.tokens[hi - 1]);
+                                        let spec = &content[spec_start as usize + 1
+                                            ..(spec_start + spec_len) as usize];
+                                        (hi - 1, spec)
+                                    } else {
+                                        (hi, "")
+                                    };
+                                let spec =
+                                    self.static_values.add_string(self.ast.idents.intern(spec));
                                 let hole_span = if lo < hi {
                                     let mut span = token_span(lexed.tokens[lo]);
                                     span.extend_to(token_span(lexed.tokens[hi - 1]).end());
@@ -1135,7 +1179,7 @@ impl TypedProgram {
                                     1,
                                     self.static_values.add_struct_from_slice(
                                         hole_payload_type,
-                                        &[tokens, source],
+                                        &[tokens, spec, source],
                                     ),
                                 )
                             }

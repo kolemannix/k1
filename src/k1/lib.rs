@@ -16,6 +16,7 @@ pub mod lex;
 #[cfg(feature = "lsp")]
 pub mod lsp_support;
 pub mod parse;
+mod perfect_hash;
 pub mod plan;
 mod rawref;
 pub mod server;

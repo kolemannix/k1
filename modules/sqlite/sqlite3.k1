@@ -523,13 +523,9 @@ fn(extern("sqlite3_compileoption_get")) compileoption_get(
 fn(extern("sqlite3_threadsafe")) threadsafe(): i32
 type db = opaque[0, 1]
 type(alias) sqlite_int64 = i64
-#static assert-layout[sqlite_int64](8, 8, [])
 type(alias) sqlite_uint64 = u64
-#static assert-layout[sqlite_uint64](8, 8, [])
 type(alias) int64 = sqlite_int64
-#static assert-layout[int64](8, 8, [])
 type(alias) uint64 = sqlite_uint64
-#static assert-layout[uint64](8, 8, [])
 fn(extern("sqlite3_close")) close(
   p0: *db,
 ): i32
@@ -542,7 +538,6 @@ type(alias) callback = *fn(
   *optref[u8],
   *optref[u8]
 ) -> i32
-#static assert-layout[callback](8, 8, [])
 fn(extern("sqlite3_exec")) exec(
   p0: *db,
   sql: *u8,
@@ -558,7 +553,6 @@ fn(extern("sqlite3_exec")) exec(
 type file = {
   pMethods: optref[io_methods],
 }
-#static assert-layout[file](8, 8, [0, ])
 type io_methods = {
   iVersion: i32,
   xClose: optref[fn(
@@ -643,15 +637,12 @@ type io_methods = {
     ptr
   ) -> i32],
 }
-#static assert-layout[io_methods](152, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, ])
 type mutex = opaque[0, 1]
 type api_routines = opaque[0, 1]
 type(alias) filename = *u8
-#static assert-layout[filename](8, 8, [])
 type(alias) syscall_ptr = *fn(
 
 ) -> {}
-#static assert-layout[syscall_ptr](8, 8, [])
 type vfs = {
   iVersion: i32,
   szOsFile: i32,
@@ -739,7 +730,6 @@ type vfs = {
     *u8
   ) -> optref[u8]],
 }
-#static assert-layout[vfs](168, 8, [0, 4, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152, 160, ])
 fn(extern("sqlite3_initialize")) initialize(): i32
 fn(extern("sqlite3_shutdown")) shutdown(): i32
 fn(extern("sqlite3_os_init")) os_init(): i32
@@ -776,7 +766,6 @@ type mem_methods = {
   ) -> {}],
   pAppData: ptr,
 }
-#static assert-layout[mem_methods](64, 8, [0, 8, 16, 24, 32, 40, 48, 56, ])
 fn(extern("sqlite3_extended_result_codes")) extended_result_codes(
   p0: *db,
   onoff: i32,
@@ -1464,7 +1453,6 @@ fn(extern("sqlite3_set_clientdata")) set_clientdata(
 type(alias) destructor_type = *fn(
   ptr
 ) -> {}
-#static assert-layout[destructor_type](8, 8, [])
 fn(extern("sqlite3_result_blob")) result_blob(
   p0: *context_c,
   p1: ptr,
@@ -1878,24 +1866,20 @@ type module = {
     *optref[u8]
   ) -> i32],
 }
-#static assert-layout[module](200, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176, 184, 192, ])
 type index_constraint = {
   iColumn: i32,
   op: u8,
   usable: u8,
   iTermOffset: i32,
 }
-#static assert-layout[index_constraint](12, 4, [0, 4, 5, 8, ])
 type index_orderby = {
   iColumn: i32,
   desc: u8,
 }
-#static assert-layout[index_orderby](8, 4, [0, 4, ])
 type index_constraint_usage = {
   argvIndex: i32,
   omit: u8,
 }
-#static assert-layout[index_constraint_usage](8, 4, [0, 4, ])
 type index_info = {
   nConstraint: i32,
   aConstraint: optref[index_constraint],
@@ -1911,7 +1895,6 @@ type index_info = {
   idxFlags: i32,
   colUsed: uint64,
 }
-#static assert-layout[index_info](96, 8, [0, 8, 16, 24, 32, 40, 48, 56, 60, 64, 72, 80, 88, ])
 fn(extern("sqlite3_create_module")) create_module(
   db: *db,
   zName: *u8,
@@ -1936,11 +1919,9 @@ type vtab = {
   nRef: i32,
   zErrMsg: optref[u8],
 }
-#static assert-layout[vtab](24, 8, [0, 8, 16, ])
 type vtab_cursor = {
   pVtab: optref[vtab],
 }
-#static assert-layout[vtab_cursor](8, 8, [0, ])
 fn(extern("sqlite3_declare_vtab")) declare_vtab(
   p0: *db,
   zSQL: *u8,
@@ -2036,7 +2017,6 @@ type mutex_methods = {
     *mutex
   ) -> i32],
 }
-#static assert-layout[mutex_methods](72, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, ])
 fn(extern("sqlite3_mutex_held")) mutex_held(
   p0: *mutex,
 ): i32
@@ -2150,7 +2130,6 @@ type pcache_page = {
   pBuf: ptr,
   pExtra: ptr,
 }
-#static assert-layout[pcache_page](16, 8, [0, 8, ])
 type pcache_methods2 = {
   iVersion: i32,
   pArg: ptr,
@@ -2199,7 +2178,6 @@ type pcache_methods2 = {
     *pcache
   ) -> {}],
 }
-#static assert-layout[pcache_methods2](104, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, ])
 type pcache_methods = {
   pArg: ptr,
   xInit: optref[fn(
@@ -2243,7 +2221,6 @@ type pcache_methods = {
     *pcache
   ) -> {}],
 }
-#static assert-layout[pcache_methods](88, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, ])
 type backup = opaque[0, 1]
 fn(extern("sqlite3_backup_init")) backup_init(
   pDest: *db,
@@ -2379,7 +2356,6 @@ fn(extern("sqlite3_system_errno")) system_errno(
 type snapshot = {
   hidden: array[u8, 48],
 }
-#static assert-layout[snapshot](48, 1, [0, ])
 fn(extern("sqlite3_snapshot_get")) snapshot_get(
   db: *db,
   zSchema: *u8,
@@ -2437,7 +2413,6 @@ fn(extern("sqlite3_carray_bind")) carray_bind(
   ) -> {},
 ): i32
 type(alias) rtree_dbl = f64
-#static assert-layout[rtree_dbl](8, 8, [])
 fn(extern("sqlite3_rtree_geometry_callback")) rtree_geometry_callback(
   db: *db,
   zGeom: *u8,
@@ -2458,7 +2433,6 @@ type rtree_geometry = {
     ptr
   ) -> {}],
 }
-#static assert-layout[rtree_geometry](40, 8, [0, 8, 16, 24, 32, ])
 fn(extern("sqlite3_rtree_query_callback")) rtree_query_callback(
   db: *db,
   zQueryFunc: *u8,
@@ -2490,7 +2464,6 @@ type rtree_query_info = {
   rScore: rtree_dbl,
   apSqlParam: optref[optref[value]],
 }
-#static assert-layout[rtree_query_info](112, 8, [0, 8, 16, 24, 32, 40, 48, 56, 60, 64, 72, 80, 88, 92, 96, 104, ])
 type Fts5Context = opaque[0, 1]
 type(alias) fts5_extension_function = *fn(
   *Fts5ExtensionApi,
@@ -2499,12 +2472,10 @@ type(alias) fts5_extension_function = *fn(
   i32,
   *optref[value]
 ) -> {}
-#static assert-layout[fts5_extension_function](8, 8, [])
 type Fts5PhraseIter = {
   a: optref[u8],
   b: optref[u8],
 }
-#static assert-layout[Fts5PhraseIter](16, 8, [0, 8, ])
 type Fts5ExtensionApi = {
   iVersion: i32,
   xUserData: optref[fn(
@@ -2650,7 +2621,6 @@ type Fts5ExtensionApi = {
     ) -> i32
   ) -> i32],
 }
-#static assert-layout[Fts5ExtensionApi](192, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176, 184, ])
 type Fts5Tokenizer = opaque[0, 1]
 type fts5_tokenizer_v2 = {
   iVersion: i32,
@@ -2681,7 +2651,6 @@ type fts5_tokenizer_v2 = {
     ) -> i32
   ) -> i32],
 }
-#static assert-layout[fts5_tokenizer_v2](32, 8, [0, 8, 16, 24, ])
 type fts5_tokenizer = {
   xCreate: optref[fn(
     ptr,
@@ -2708,7 +2677,6 @@ type fts5_tokenizer = {
     ) -> i32
   ) -> i32],
 }
-#static assert-layout[fts5_tokenizer](24, 8, [0, 8, 16, ])
 type fts5_api = {
   iVersion: i32,
   xCreateTokenizer: optref[fn(
@@ -2751,4 +2719,39 @@ type fts5_api = {
     *optref[fts5_tokenizer_v2]
   ) -> i32],
 }
-#static assert-layout[fts5_api](48, 8, [0, 8, 16, 24, 32, 40, ])
+
+#if k1/test #static {
+  assert-layout[sqlite_int64](8, 8, [])
+  assert-layout[sqlite_uint64](8, 8, [])
+  assert-layout[int64](8, 8, [])
+  assert-layout[uint64](8, 8, [])
+  assert-layout[callback](8, 8, [])
+  assert-layout[file](8, 8, [0, ])
+  assert-layout[io_methods](152, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, ])
+  assert-layout[filename](8, 8, [])
+  assert-layout[syscall_ptr](8, 8, [])
+  assert-layout[vfs](168, 8, [0, 4, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152, 160, ])
+  assert-layout[mem_methods](64, 8, [0, 8, 16, 24, 32, 40, 48, 56, ])
+  assert-layout[destructor_type](8, 8, [])
+  assert-layout[module](200, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176, 184, 192, ])
+  assert-layout[index_constraint](12, 4, [0, 4, 5, 8, ])
+  assert-layout[index_orderby](8, 4, [0, 4, ])
+  assert-layout[index_constraint_usage](8, 4, [0, 4, ])
+  assert-layout[index_info](96, 8, [0, 8, 16, 24, 32, 40, 48, 56, 60, 64, 72, 80, 88, ])
+  assert-layout[vtab](24, 8, [0, 8, 16, ])
+  assert-layout[vtab_cursor](8, 8, [0, ])
+  assert-layout[mutex_methods](72, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, ])
+  assert-layout[pcache_page](16, 8, [0, 8, ])
+  assert-layout[pcache_methods2](104, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, ])
+  assert-layout[pcache_methods](88, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, ])
+  assert-layout[snapshot](48, 1, [0, ])
+  assert-layout[rtree_dbl](8, 8, [])
+  assert-layout[rtree_geometry](40, 8, [0, 8, 16, 24, 32, ])
+  assert-layout[rtree_query_info](112, 8, [0, 8, 16, 24, 32, 40, 48, 56, 60, 64, 72, 80, 88, 92, 96, 104, ])
+  assert-layout[fts5_extension_function](8, 8, [])
+  assert-layout[Fts5PhraseIter](16, 8, [0, 8, ])
+  assert-layout[Fts5ExtensionApi](192, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152, 160, 168, 176, 184, ])
+  assert-layout[fts5_tokenizer_v2](32, 8, [0, 8, 16, 24, ])
+  assert-layout[fts5_tokenizer](24, 8, [0, 8, 16, ])
+  assert-layout[fts5_api](48, 8, [0, 8, 16, 24, 32, 40, ])
+}

@@ -59,13 +59,9 @@ type buf = {
   base: optref[u8],
   len: usize,
 }
-#static assert-layout[buf](16, 8, [0, 8, ])
 type(alias) file = i32
-#static assert-layout[file](4, 4, [])
 type(alias) os_sock = i32
-#static assert-layout[os_sock](4, 4, [])
 type(alias) os_fd = i32
-#static assert-layout[os_fd](4, 4, [])
 type pid = opaque[4, 4]
 type once = opaque[16, 8]
 type thread = opaque[8, 8]
@@ -78,14 +74,12 @@ type _uv_barrier = opaque[128, 8]
 type barrier = {
   b: optref[_uv_barrier],
 }
-#static assert-layout[barrier](8, 8, [0, ])
 type gid = opaque[4, 4]
 type uid = opaque[4, 4]
 type lib = {
   handle: ptr,
   errmsg: optref[u8],
 }
-#static assert-layout[lib](16, 8, [0, 8, ])
 type errno = either(i32, partial) {
   UV_E2BIG = -7,
   UV_EACCES = -13,
@@ -174,7 +168,6 @@ type errno = either(i32, partial) {
   UV_ENOEXEC = -8,
   UV_ERRNO_MAX = -4096,
 }
-#static assert-layout[errno](4, 4, [])
 type handle_type = either(u32, partial) {
   UV_UNKNOWN_HANDLE = 0,
   UV_ASYNC = 1,
@@ -196,7 +189,6 @@ type handle_type = either(u32, partial) {
   UV_FILE = 17,
   UV_HANDLE_TYPE_MAX = 18,
 }
-#static assert-layout[handle_type](4, 4, [])
 type req_type = either(u32, partial) {
   UV_UNKNOWN_REQ = 0,
   UV_REQ = 1,
@@ -211,7 +203,6 @@ type req_type = either(u32, partial) {
   UV_RANDOM = 10,
   UV_REQ_TYPE_MAX = 11,
 }
-#static assert-layout[req_type](4, 4, [])
 type uv-loop = opaque[1072, 8]
 type handle = opaque[96, 8]
 type dir = opaque[56, 8]
@@ -241,55 +232,40 @@ type fs = opaque[440, 8]
 type work = opaque[128, 8]
 type random = opaque[144, 8]
 type(alias) env_item = env_item_s
-#static assert-layout[env_item](16, 8, [])
 type(alias) cpu_info = cpu_info_s
-#static assert-layout[cpu_info](56, 8, [])
 type(alias) interface_address = interface_address_s
-#static assert-layout[interface_address](80, 8, [])
 type(alias) dirent = dirent_s
-#static assert-layout[dirent](16, 8, [])
 type(alias) passwd = passwd_s
-#static assert-layout[passwd](40, 8, [])
 type(alias) group = group_s
-#static assert-layout[group](24, 8, [])
 type(alias) utsname = utsname_s
-#static assert-layout[utsname](1024, 1, [])
 type(alias) statfs = statfs_s
-#static assert-layout[statfs](88, 8, [])
 type(alias) metrics = metrics_s
-#static assert-layout[metrics](128, 8, [])
 type loop_option = either(u32, partial) {
   UV_LOOP_BLOCK_SIGNAL = 0,
   UV_METRICS_IDLE_TIME = 1,
   UV_LOOP_USE_IO_URING_SQPOLL = 2,
 }
-#static assert-layout[loop_option](4, 4, [])
 type run_mode = either(u32, partial) {
   UV_RUN_DEFAULT = 0,
   UV_RUN_ONCE = 1,
   UV_RUN_NOWAIT = 2,
 }
-#static assert-layout[run_mode](4, 4, [])
 fn(extern("uv_version")) version(): u32
 fn(extern("uv_version_string")) version_string(): optref[u8]
 type(alias) malloc_func = *fn(
   usize
 ) -> ptr
-#static assert-layout[malloc_func](8, 8, [])
 type(alias) realloc_func = *fn(
   ptr,
   usize
 ) -> ptr
-#static assert-layout[realloc_func](8, 8, [])
 type(alias) calloc_func = *fn(
   usize,
   usize
 ) -> ptr
-#static assert-layout[calloc_func](8, 8, [])
 type(alias) free_func = *fn(
   ptr
 ) -> {}
-#static assert-layout[free_func](8, 8, [])
 fn(extern("uv_library_shutdown")) library_shutdown(): {}
 fn(extern("uv_replace_allocator")) replace_allocator(
   malloc_func: malloc_func,
@@ -352,132 +328,106 @@ type(alias) alloc_cb = *fn(
   usize,
   *buf
 ) -> {}
-#static assert-layout[alloc_cb](8, 8, [])
 type(alias) read_cb = *fn(
   *stream,
   size,
   *buf
 ) -> {}
-#static assert-layout[read_cb](8, 8, [])
 type(alias) write_cb = *fn(
   *write,
   i32
 ) -> {}
-#static assert-layout[write_cb](8, 8, [])
 type(alias) connect_cb = *fn(
   *connect,
   i32
 ) -> {}
-#static assert-layout[connect_cb](8, 8, [])
 type(alias) shutdown_cb = *fn(
   *shutdown,
   i32
 ) -> {}
-#static assert-layout[shutdown_cb](8, 8, [])
 type(alias) connection_cb = *fn(
   *stream,
   i32
 ) -> {}
-#static assert-layout[connection_cb](8, 8, [])
 type(alias) close_cb = *fn(
   *handle
 ) -> {}
-#static assert-layout[close_cb](8, 8, [])
 type(alias) poll_cb = *fn(
   *poll,
   i32,
   i32
 ) -> {}
-#static assert-layout[poll_cb](8, 8, [])
 type(alias) timer_cb = *fn(
   *timer
 ) -> {}
-#static assert-layout[timer_cb](8, 8, [])
 type(alias) async_cb = *fn(
   *async
 ) -> {}
-#static assert-layout[async_cb](8, 8, [])
 type(alias) prepare_cb = *fn(
   *prepare
 ) -> {}
-#static assert-layout[prepare_cb](8, 8, [])
 type(alias) check_cb = *fn(
   *check
 ) -> {}
-#static assert-layout[check_cb](8, 8, [])
 type(alias) idle_cb = *fn(
   *idle
 ) -> {}
-#static assert-layout[idle_cb](8, 8, [])
 type(alias) exit_cb = *fn(
   *process,
   i64,
   i32
 ) -> {}
-#static assert-layout[exit_cb](8, 8, [])
 type(alias) walk_cb = *fn(
   *handle,
   ptr
 ) -> {}
-#static assert-layout[walk_cb](8, 8, [])
 type(alias) fs_cb = *fn(
   *fs
 ) -> {}
-#static assert-layout[fs_cb](8, 8, [])
 type(alias) work_cb = *fn(
   *work
 ) -> {}
-#static assert-layout[work_cb](8, 8, [])
 type(alias) after_work_cb = *fn(
   *work,
   i32
 ) -> {}
-#static assert-layout[after_work_cb](8, 8, [])
 type(alias) getaddrinfo_cb = *fn(
   *getaddrinfo,
   i32,
   *addrinfo
 ) -> {}
-#static assert-layout[getaddrinfo_cb](8, 8, [])
 type(alias) getnameinfo_cb = *fn(
   *getnameinfo,
   i32,
   *u8,
   *u8
 ) -> {}
-#static assert-layout[getnameinfo_cb](8, 8, [])
 type(alias) random_cb = *fn(
   *random,
   i32,
   ptr,
   usize
 ) -> {}
-#static assert-layout[random_cb](8, 8, [])
 type clock_id = either(u32, partial) {
   UV_CLOCK_MONOTONIC = 0,
   UV_CLOCK_REALTIME = 1,
 }
-#static assert-layout[clock_id](4, 4, [])
 type timespec = {
   tv_sec: i64,
   tv_nsec: i64,
 }
-#static assert-layout[timespec](16, 8, [0, 8, ])
 type timespec64 = {
   tv_sec: i64,
   tv_nsec: i32,
 }
-#static assert-layout[timespec64](16, 8, [0, 8, ])
 type timeval = {
   tv_sec: i64,
   tv_usec: i64,
 }
-#static assert-layout[timeval](16, 8, [0, 8, ])
 type timeval64 = {
   tv_sec: i64,
   tv_usec: i32,
 }
-#static assert-layout[timeval64](16, 8, [0, 8, ])
 type stat = {
   st_dev: u64,
   st_mode: u64,
@@ -496,31 +446,26 @@ type stat = {
   st_ctim: timespec,
   st_birthtim: timespec,
 }
-#static assert-layout[stat](160, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 112, 128, 144, ])
 type(alias) fs_event_cb = *fn(
   *fs_event,
   *u8,
   i32,
   i32
 ) -> {}
-#static assert-layout[fs_event_cb](8, 8, [])
 type(alias) fs_poll_cb = *fn(
   *fs_poll,
   i32,
   *stat,
   *stat
 ) -> {}
-#static assert-layout[fs_poll_cb](8, 8, [])
 type(alias) signal_cb = *fn(
   *signal,
   i32
 ) -> {}
-#static assert-layout[signal_cb](8, 8, [])
 type membership = either(u32, partial) {
   UV_LEAVE_GROUP = 0,
   UV_JOIN_GROUP = 1,
 }
-#static assert-layout[membership](4, 4, [])
 fn(extern("uv_translate_sys_error")) translate_sys_error(
   sys_errno: i32,
 ): i32
@@ -724,7 +669,6 @@ type tcp_flags = either(u32, partial) {
   UV_TCP_IPV6ONLY = 1,
   UV_TCP_REUSEPORT = 2,
 }
-#static assert-layout[tcp_flags](4, 4, [])
 fn(extern("uv_tcp_bind")) tcp_bind(
   handle: *tcp,
   addr: *sockaddr,
@@ -760,12 +704,10 @@ type udp_flags = either(u32, partial) {
   UV_UDP_REUSEPORT = 64,
   UV_UDP_RECVMMSG = 256,
 }
-#static assert-layout[udp_flags](4, 4, [])
 type(alias) udp_send_cb = *fn(
   *udp_send,
   i32
 ) -> {}
-#static assert-layout[udp_send_cb](8, 8, [])
 type(alias) udp_recv_cb = *fn(
   *udp,
   size,
@@ -773,7 +715,6 @@ type(alias) udp_recv_cb = *fn(
   *sockaddr,
   u32
 ) -> {}
-#static assert-layout[udp_recv_cb](8, 8, [])
 fn(extern("uv_udp_init")) udp_init(
   p0: *uv-loop,
   handle: *udp,
@@ -889,12 +830,10 @@ type tty_mode = either(u32, partial) {
   UV_TTY_MODE_IO = 2,
   UV_TTY_MODE_RAW_VT = 3,
 }
-#static assert-layout[tty_mode](4, 4, [])
 type tty_vtermstate = either(u32, partial) {
   UV_TTY_SUPPORTED = 0,
   UV_TTY_UNSUPPORTED = 1,
 }
-#static assert-layout[tty_vtermstate](4, 4, [])
 fn(extern("uv_tty_init")) tty_init(
   p0: *uv-loop,
   p1: *tty,
@@ -983,7 +922,6 @@ type poll_event = either(u32, partial) {
   UV_DISCONNECT = 4,
   UV_PRIORITIZED = 8,
 }
-#static assert-layout[poll_event](4, 4, [])
 fn(extern("uv_poll_init")) poll_init(
   loop_c: *uv-loop,
   handle: *poll,
@@ -1096,7 +1034,6 @@ type stdio_flags = either(u32, partial) {
   UV_WRITABLE_PIPE = 32,
   UV_NONBLOCK_PIPE = 64,
 }
-#static assert-layout[stdio_flags](4, 4, [])
 type stdio_container_s = {
   flags: stdio_flags,
   data: union {
@@ -1104,9 +1041,7 @@ type stdio_container_s = {
     fd: i32,
   },
 }
-#static assert-layout[stdio_container_s](16, 8, [0, 8, ])
 type(alias) stdio_container = stdio_container_s
-#static assert-layout[stdio_container](16, 8, [])
 type process_options_s = {
   exit_cb: exit_cb,
   file: optref[u8],
@@ -1119,9 +1054,7 @@ type process_options_s = {
   uid: uid,
   gid: gid,
 }
-#static assert-layout[process_options_s](64, 8, [0, 8, 16, 24, 32, 40, 44, 48, 56, 60, ])
 type(alias) process_options = process_options_s
-#static assert-layout[process_options](64, 8, [])
 type process_flags = either(u32, partial) {
   UV_PROCESS_SETUID = 1,
   UV_PROCESS_SETGID = 2,
@@ -1132,7 +1065,6 @@ type process_flags = either(u32, partial) {
   UV_PROCESS_WINDOWS_HIDE_GUI = 64,
   UV_PROCESS_WINDOWS_FILE_PATH_EXACT_NAME = 128,
 }
-#static assert-layout[process_flags](4, 4, [])
 fn(extern("uv_spawn")) spawn(
   loop_c: *uv-loop,
   handle: *process,
@@ -1165,13 +1097,11 @@ type cpu_times_s = {
   idle: u64,
   irq: u64,
 }
-#static assert-layout[cpu_times_s](40, 8, [0, 8, 16, 24, 32, ])
 type cpu_info_s = {
   model: optref[u8],
   speed: i32,
   cpu_times: cpu_times_s,
 }
-#static assert-layout[cpu_info_s](56, 8, [0, 8, 16, ])
 type interface_address_s = {
   name: optref[u8],
   phys_addr: array[u8, 6],
@@ -1185,7 +1115,6 @@ type interface_address_s = {
     netmask6: sockaddr_in6,
   },
 }
-#static assert-layout[interface_address_s](80, 8, [0, 8, 16, 20, 48, ])
 type passwd_s = {
   username: optref[u8],
   uid: u64,
@@ -1193,20 +1122,17 @@ type passwd_s = {
   shell: optref[u8],
   homedir: optref[u8],
 }
-#static assert-layout[passwd_s](40, 8, [0, 8, 16, 24, 32, ])
 type group_s = {
   groupname: optref[u8],
   gid: u64,
   members: optref[optref[u8]],
 }
-#static assert-layout[group_s](24, 8, [0, 8, 16, ])
 type utsname_s = {
   sysname: array[u8, 256],
   release: array[u8, 256],
   version: array[u8, 256],
   machine: array[u8, 256],
 }
-#static assert-layout[utsname_s](1024, 1, [0, 256, 512, 768, ])
 type statfs_s = {
   f_type: u64,
   f_bsize: u64,
@@ -1218,7 +1144,6 @@ type statfs_s = {
   f_frsize: u64,
   f_spare: array[u64, 3],
 }
-#static assert-layout[statfs_s](88, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, ])
 type dirent_type = either(u32, partial) {
   UV_DIRENT_UNKNOWN = 0,
   UV_DIRENT_FILE = 1,
@@ -1229,12 +1154,10 @@ type dirent_type = either(u32, partial) {
   UV_DIRENT_CHAR = 6,
   UV_DIRENT_BLOCK = 7,
 }
-#static assert-layout[dirent_type](4, 4, [])
 type dirent_s = {
   name: optref[u8],
   type: dirent_type,
 }
-#static assert-layout[dirent_s](16, 8, [0, 8, ])
 fn(extern("uv_setup_args")) setup_args(
   argc: i32,
   argv: *optref[u8],
@@ -1276,7 +1199,6 @@ type rusage = {
   ru_nvcsw: u64,
   ru_nivcsw: u64,
 }
-#static assert-layout[rusage](144, 8, [0, 16, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, ])
 fn(extern("uv_getrusage")) getrusage(
   rusage: *rusage,
 ): i32
@@ -1348,7 +1270,6 @@ type env_item_s = {
   name: optref[u8],
   value: optref[u8],
 }
-#static assert-layout[env_item_s](16, 8, [0, 8, ])
 fn(extern("uv_os_environ")) os_environ(
   envitems: *optref[env_item],
   count: *i32,
@@ -1382,7 +1303,6 @@ type metrics_s = {
   events_waiting: u64,
   reserved: array[optref[u64], 13],
 }
-#static assert-layout[metrics_s](128, 8, [0, 8, 16, 24, ])
 fn(extern("uv_metrics_info")) metrics_info(
   loop_c: *uv-loop,
   metrics: *metrics,
@@ -1430,7 +1350,6 @@ type fs_type = either(i32, partial) {
   UV_FS_MKSTEMP = 35,
   UV_FS_LUTIME = 36,
 }
-#static assert-layout[fs_type](4, 4, [])
 fn(extern("uv_fs_get_type")) fs_get_type(
   p0: *fs,
 ): fs_type
@@ -1711,7 +1630,6 @@ type fs_event_kind = either(u32, partial) {
   UV_RENAME = 1,
   UV_CHANGE = 2,
 }
-#static assert-layout[fs_event_kind](4, 4, [])
 fn(extern("uv_fs_poll_init")) fs_poll_init(
   loop_c: *uv-loop,
   handle: *fs_poll,
@@ -1755,7 +1673,6 @@ type fs_event_flags = either(u32, partial) {
   UV_FS_EVENT_STAT = 2,
   UV_FS_EVENT_RECURSIVE = 4,
 }
-#static assert-layout[fs_event_flags](4, 4, [])
 fn(extern("uv_fs_event_init")) fs_event_init(
   loop_c: *uv-loop,
   handle: *fs_event,
@@ -1981,7 +1898,6 @@ fn(extern("uv_gettimeofday")) gettimeofday(
 type(alias) thread_cb = *fn(
   ptr
 ) -> {}
-#static assert-layout[thread_cb](8, 8, [])
 fn(extern("uv_thread_create")) thread_create(
   tid: *thread,
   entry: thread_cb,
@@ -1994,14 +1910,11 @@ type thread_create_flags = either(u32, partial) {
   UV_THREAD_NO_FLAGS = 0,
   UV_THREAD_HAS_STACK_SIZE = 1,
 }
-#static assert-layout[thread_create_flags](4, 4, [])
 type thread_options_s = {
   flags: u32,
   stack_size: usize,
 }
-#static assert-layout[thread_options_s](16, 8, [0, 8, ])
 type(alias) thread_options = thread_options_s
-#static assert-layout[thread_options](16, 8, [])
 fn(extern("uv_thread_create_ex")) thread_create_ex(
   tid: *thread,
   params: *thread_options,
@@ -2063,3 +1976,93 @@ fn(extern("uv_wtf8_to_utf16")) wtf8_to_utf16(
   utf16: *u16,
   utf16_len: usize,
 ): {}
+
+#if k1/test #static {
+  assert-layout[buf](16, 8, [0, 8, ])
+  assert-layout[file](4, 4, [])
+  assert-layout[os_sock](4, 4, [])
+  assert-layout[os_fd](4, 4, [])
+  assert-layout[barrier](8, 8, [0, ])
+  assert-layout[lib](16, 8, [0, 8, ])
+  assert-layout[errno](4, 4, [])
+  assert-layout[handle_type](4, 4, [])
+  assert-layout[req_type](4, 4, [])
+  assert-layout[env_item](16, 8, [])
+  assert-layout[cpu_info](56, 8, [])
+  assert-layout[interface_address](80, 8, [])
+  assert-layout[dirent](16, 8, [])
+  assert-layout[passwd](40, 8, [])
+  assert-layout[group](24, 8, [])
+  assert-layout[utsname](1024, 1, [])
+  assert-layout[statfs](88, 8, [])
+  assert-layout[metrics](128, 8, [])
+  assert-layout[loop_option](4, 4, [])
+  assert-layout[run_mode](4, 4, [])
+  assert-layout[malloc_func](8, 8, [])
+  assert-layout[realloc_func](8, 8, [])
+  assert-layout[calloc_func](8, 8, [])
+  assert-layout[free_func](8, 8, [])
+  assert-layout[alloc_cb](8, 8, [])
+  assert-layout[read_cb](8, 8, [])
+  assert-layout[write_cb](8, 8, [])
+  assert-layout[connect_cb](8, 8, [])
+  assert-layout[shutdown_cb](8, 8, [])
+  assert-layout[connection_cb](8, 8, [])
+  assert-layout[close_cb](8, 8, [])
+  assert-layout[poll_cb](8, 8, [])
+  assert-layout[timer_cb](8, 8, [])
+  assert-layout[async_cb](8, 8, [])
+  assert-layout[prepare_cb](8, 8, [])
+  assert-layout[check_cb](8, 8, [])
+  assert-layout[idle_cb](8, 8, [])
+  assert-layout[exit_cb](8, 8, [])
+  assert-layout[walk_cb](8, 8, [])
+  assert-layout[fs_cb](8, 8, [])
+  assert-layout[work_cb](8, 8, [])
+  assert-layout[after_work_cb](8, 8, [])
+  assert-layout[getaddrinfo_cb](8, 8, [])
+  assert-layout[getnameinfo_cb](8, 8, [])
+  assert-layout[random_cb](8, 8, [])
+  assert-layout[clock_id](4, 4, [])
+  assert-layout[timespec](16, 8, [0, 8, ])
+  assert-layout[timespec64](16, 8, [0, 8, ])
+  assert-layout[timeval](16, 8, [0, 8, ])
+  assert-layout[timeval64](16, 8, [0, 8, ])
+  assert-layout[stat](160, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 112, 128, 144, ])
+  assert-layout[fs_event_cb](8, 8, [])
+  assert-layout[fs_poll_cb](8, 8, [])
+  assert-layout[signal_cb](8, 8, [])
+  assert-layout[membership](4, 4, [])
+  assert-layout[tcp_flags](4, 4, [])
+  assert-layout[udp_flags](4, 4, [])
+  assert-layout[udp_send_cb](8, 8, [])
+  assert-layout[udp_recv_cb](8, 8, [])
+  assert-layout[tty_mode](4, 4, [])
+  assert-layout[tty_vtermstate](4, 4, [])
+  assert-layout[poll_event](4, 4, [])
+  assert-layout[stdio_flags](4, 4, [])
+  assert-layout[stdio_container_s](16, 8, [0, 8, ])
+  assert-layout[stdio_container](16, 8, [])
+  assert-layout[process_options_s](64, 8, [0, 8, 16, 24, 32, 40, 44, 48, 56, 60, ])
+  assert-layout[process_options](64, 8, [])
+  assert-layout[process_flags](4, 4, [])
+  assert-layout[cpu_times_s](40, 8, [0, 8, 16, 24, 32, ])
+  assert-layout[cpu_info_s](56, 8, [0, 8, 16, ])
+  assert-layout[interface_address_s](80, 8, [0, 8, 16, 20, 48, ])
+  assert-layout[passwd_s](40, 8, [0, 8, 16, 24, 32, ])
+  assert-layout[group_s](24, 8, [0, 8, 16, ])
+  assert-layout[utsname_s](1024, 1, [0, 256, 512, 768, ])
+  assert-layout[statfs_s](88, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, ])
+  assert-layout[dirent_type](4, 4, [])
+  assert-layout[dirent_s](16, 8, [0, 8, ])
+  assert-layout[rusage](144, 8, [0, 16, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, ])
+  assert-layout[env_item_s](16, 8, [0, 8, ])
+  assert-layout[metrics_s](128, 8, [0, 8, 16, 24, ])
+  assert-layout[fs_type](4, 4, [])
+  assert-layout[fs_event_kind](4, 4, [])
+  assert-layout[fs_event_flags](4, 4, [])
+  assert-layout[thread_cb](8, 8, [])
+  assert-layout[thread_create_flags](4, 4, [])
+  assert-layout[thread_options_s](16, 8, [0, 8, ])
+  assert-layout[thread_options](16, 8, [])
+}

@@ -32,6 +32,7 @@ fn test-attributes() {
   let x = 7
   assert-equals(html/render(\{ <input type="text" disabled data-on:click="@get('/x')"/> }), "<input type=\"text\" disabled data-on:click=\"@get(&#39;/x&#39;)\">")
   assert-equals(html/render(\{ <a href="/p/$x" class=big>go</a> }), "<a href=\"/p/7\" class=\"big\">go</a>")
+  assert-equals(html/render(\{ <p title="t\t$x">"<$x>\n${x:>3}"</p> }), "<p title=\"t\t7\">&lt;7&gt;\n  7</p>")
   assert-equals(html/render(\{ <div id={x + 1}/> }), "<div id=\"8\"></div>")
   let on = true
   let t: ?string = :some "a<b"

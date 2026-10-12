@@ -22,13 +22,11 @@ type i2 = {
   x: i32,
   y: i32,
 }
-#static assert-layout[i2](8, 4, [0, 4, ])
 type Union1 = union {
   x: i32,
   f: f32,
   l: i64,
 }
-#static assert-layout[Union1](8, 8, [])
 type foo = {
   _char: u8,
   _unsigned_char: u8,
@@ -54,7 +52,6 @@ type foo = {
   },
   _muh_floats: array[f32, 0],
 }
-#static assert-layout[foo](104, 8, [0, 1, 8, 16, 24, 32, 36, 40, 48, 56, 64, 72, 80, 88, 96, 100, ])
 fn(extern("myFunction")) myFunction(
   incompleteArray: *u8,
 ): {}
@@ -71,22 +68,17 @@ type Color = either(i32, partial) {
   Color_Red = 577,
   Color_Green = -10,
 }
-#static assert-layout[Color](4, 4, [])
 type Size = either(u32, partial) {
   Size_Small = 0,
   Size_Medium = 1,
   Size_Large = 2,
 }
-#static assert-layout[Size](4, 4, [])
 type Packed = either(u8, partial) {
   Packed_First = 0,
   Packed_Last = 255,
 }
-#static assert-layout[Packed](1, 1, [])
 type loop_c = {}
-#static assert-layout[loop_c](0, 1, [])
 type my-custom-name = {}
-#static assert-layout[my-custom-name](0, 1, [])
 type opaq = opaque[104, 4]
 fn(extern("cinput_main")) main(): i32
 let(extern("cinput_readonly")) readonly: i32
@@ -95,3 +87,14 @@ let(extern("cinput_tls_counter"), mutable, tls) tls_counter: i32
 let(extern("cinput_version")) version: u8
 let(extern("cinput_table")) table: array[i32, 4]
 let(extern("cinput_grid"), mutable) grid: array[array[i32, 3], 2]
+
+#if k1/test #static {
+  assert-layout[i2](8, 4, [0, 4, ])
+  assert-layout[Union1](8, 8, [])
+  assert-layout[foo](104, 8, [0, 1, 8, 16, 24, 32, 36, 40, 48, 56, 64, 72, 80, 88, 96, 100, ])
+  assert-layout[Color](4, 4, [])
+  assert-layout[Size](4, 4, [])
+  assert-layout[Packed](1, 1, [])
+  assert-layout[loop_c](0, 1, [])
+  assert-layout[my-custom-name](0, 1, [])
+}

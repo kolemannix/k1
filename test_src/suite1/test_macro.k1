@@ -124,7 +124,7 @@ macro string-parts(t: span[code-token]) {
   for t.[0].parts {
     if it is {
       :text p -> sb.write("[${p.value}]"),
-      :hole h -> sb.write("{${h.tokens.len()}}"),
+      :hole h -> sb.write("{${h.tokens.len()}${h.spec}}"),
     }
   }
   "${meta/str-lit(sb.build())}"
@@ -172,7 +172,8 @@ fn test-token-params() {
   assert-equals(n, 0)
   let fail: ?string = test-compile(numbers(\{ 1 2 three 4 }))
   assert(fail.!.starts-with("expected a number, got `three`"))
-  assert-equals(string-parts(\{ "a\t${x + 1} b $x" }), "[a\t]{3}[ b ]{1}")
+  assert-equals(string-parts(\{ "a\t${x + 1:>2} b $x" }), "[a\t]{3>2}[ b ]{1}")
+  assert(test-compile(string-parts(\{ "${x:zz}" })).!.starts-with("Invalid format spec"))
   assert-equals(hole-sum(\{ "${x} and ${x * 2}" }), 12)
 }
 

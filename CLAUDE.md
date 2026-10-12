@@ -101,6 +101,21 @@ K1 language reference for agents: `docs/ai_docs/k1-syntax-basics.md` and
 - Native prerequisites for the full suite: `make -C modules/core/libs clean
   build` and `make -C test_src/ffi_abi_test/libs clean build`.
 
+## Profiling
+When profiling the compiler or working on performance, we use the `profiling` cargo profile, 
+the cli flag --dump-trace, --chatty output, and of course actual process sampling.
+
+Samples are more likely to tell us if we've implemented something poorly at the Rust level, and the trace helps
+us understand the work in terms of the source program and the k1 language itself. 'Are we doing work slowly'
+and 'Are we doing stupid work' are 2 sides of the same coin. We always consider whether the work should even need to
+be done while considering making it get done faster.
+
+We check with and without the k1 cache (`--no-cache`). The cached version is really about making sure that snapshotting
+and snapshot restoration haven't regressed. Making the snapshot smaller by reducing compiler state is a key lever there as well.
+Occasionally we'll inventory **everything** that makes it into a snapshot and look for garbage.
+
+You report findings and possible leads, never make changes, unless explicitly asked or the change is approved.
+
 ## Compiler Source Map (`src/k1/`)
 
 Pipeline: lex -> parse -> typer (typecheck + static execution) -> ir -> bc VM

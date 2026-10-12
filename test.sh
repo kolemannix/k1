@@ -50,6 +50,7 @@ k1bindgen_httpapp() {
     $k1 --no-cache test dogfood/k1bindgen
     rm -rf dogfood/httpapp/.k1-out/cache
     $k1 --no-cache build dogfood/httpapp
+    $k1 --no-cache test dogfood/httpapp
     $k1 build dogfood/httpapp
 }
 

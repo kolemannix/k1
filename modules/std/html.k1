@@ -2,6 +2,8 @@ ns html
 
 type escaper[w] = { out: w }
 
+fn escaping[w: writer](out: w): escaper[w] { .{ out } }
+
 fn entity(b: u8): string {
   if b == '&'.as-u8() "&amp;"
   else if b == '<'.as-u8() "&lt;"
@@ -32,7 +34,7 @@ impl[w: writer] writer for escaper[w] {
 
 fn write-escaped[w: writer, t: print](out: w, value: t) {
   #if types/id[t] == types/id[dom/node] value.print-to(out)
-  else value.print-to(escaper[w].{ out })
+  else value.print-to(escaping(out))
 }
 
 fn escape(s: string): string {
@@ -209,18 +211,36 @@ ns for emitter {
 
   fn dynamic(self: *emitter, value: span[code-token], raw: bool) {
     self.flush()
-    if raw {
-      self.cb.write("(")
-      self.cb.write-tokens(value)
-      self.cb.write(").print-to(")
-      self.cb.write-code(self.out)
-      self.cb.write(")\n")
-    } else {
+    if raw self.cb.write("(") else {
       self.cb.write("std/html/write-escaped(")
       self.cb.write-code(self.out)
       self.cb.write(", ")
-      self.cb.write-tokens(value)
-      self.cb.write(")\n")
+    }
+    self.cb.write-tokens(value)
+    if raw {
+      self.cb.write(").print-to(")
+      self.cb.write-code(self.out)
+    }
+    self.cb.write(")\n")
+  }
+
+  fn literal(self: *emitter, t: code-token, raw: bool) {
+    for t.parts {
+      if it is {
+        :text p -> self.text(if raw p.value else escape(p.value)),
+        :hole h -> {
+          if h.spec.is-empty() { self.dynamic(h.tokens, raw); continue }
+          self.flush()
+          if raw self.cb.write-code(self.out) else {
+            self.cb.write("std/html/escaping(")
+            self.cb.write-code(self.out)
+            self.cb.write(")")
+          }
+          self.cb.write(".write(\"\${")
+          self.cb.write-tokens(h.tokens)
+          self.cb.write(":${h.spec}}\")\n")
+        },
+      }
     }
   }
 
@@ -315,16 +335,7 @@ ns for emitter {
 
   fn text-token(self: *emitter, t: code-token, raw: bool) {
     self.space-before(t, true)
-    if t.kind is :string {
-      if foldable(t.text) {
-        let inner = t.text.slice(1, t.text.len() - 1)
-        self.text(if raw inner else escape(inner))
-      } else {
-        self.dynamic([t].as-span(), raw)
-      }
-    } else {
-      self.text(if raw t.text else escape(t.text))
-    }
+    if t.kind is :string { self.literal(t, raw) } else self.text(if raw t.text else escape(t.text))
   }
 
   fn doctype(self: *emitter) {
@@ -438,11 +449,7 @@ ns for emitter {
     self.text(" $name=\"")
     if v.kind is :string {
       self.cur.skip(1)
-      if foldable(v.text) {
-        self.text(escape(v.text.slice(1, v.text.len() - 1)))
-      } else {
-        self.dynamic([v].as-span(), false)
-      }
+      self.literal(v, false)
     } else {
       self.cur.skip(1)
       self.text(escape(v.text))
@@ -455,10 +462,3 @@ ns for emitter {
 }
 
 fn is-punct(t: code-token, text: string): bool { t.kind is :punct and t.text == text }
-
-fn foldable(literal: string): bool {
-  for c in literal {
-    if c == '\\' or c == '$' return false
-  }
-  true
-}

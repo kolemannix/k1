@@ -31,7 +31,6 @@ use inkwell::values::{
 use inkwell::{
     AddressSpace, AtomicOrdering, FloatPredicate, IntPredicate, OptimizationLevel, ThreadLocalMode,
 };
-use itertools::Itertools;
 use llvm_sys::debuginfo::LLVMDIBuilderInsertDbgValueRecordAtEnd;
 use llvm_sys::debuginfo::LLVMDIBuilderInsertDeclareRecordAtEnd;
 
@@ -53,6 +52,7 @@ use crate::typer::{
     StaticRawContainer, StaticValue, StaticValueId, TypedFloatValue, TypedGlobalId, TypedIntValue,
     TypedProgram,
 };
+use crate::perfect_hash::{self, PerfectHash};
 use crate::{SV4, SV8, ir, kbail, kmem};
 
 fn llvm_size_info(td: &TargetData, typ: &dyn AnyType) -> Layout {
@@ -1031,7 +1031,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     pub fn codegen_units(
         k1: &TypedProgram,
         roots: &CodegenRoots,
-        plans: Vec<UnitPlan>,
+        mut plans: Vec<UnitPlan>,
         kind: CgKind,
         output: UnitOutput,
         object_path: impl Fn(usize) -> String + Sync,
@@ -1046,6 +1046,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             std::sync::Mutex::new(Vec::with_capacity(unit_count));
         let timings = &timings;
         let worker_count = unit_count.min(crate::get_thread_limit()).max(1);
+        plans.reverse();
         let queue = std::sync::Mutex::new(plans);
         let queue = &queue;
         let mut artifacts: Vec<Option<UnitArtifact>> = Vec::with_capacity(unit_count);
@@ -3513,47 +3514,107 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     .into_int_value();
                 let cg_fn = self.llvm_functions.get(&function_id).unwrap();
                 let type_info_cg_type = cg_fn.function_type.return_logical_cg_type;
-                let entry_block = self.builder.get_insert_block().unwrap();
+                let i32_type = self.ctx.i32_type();
+                let i64_type = self.ctx.i64_type();
+                let i16_type = self.ctx.i16_type();
+                let ptr_type = self.builtin_types.ptr;
 
-                let else_block = self.append_basic_block("miss");
-                self.builder.position_at_end(else_block);
+                let mut entries: Vec<(TypeId, StaticValueId)> =
+                    Vec::with_capacity(self.k1.type_infos.len());
+                for (type_id, info_value_id) in self.k1.type_infos.iter() {
+                    // No point re-ifying types that don't exist at runtime like type parameters
+                    if !self.k1.get_type_variable_counts(*type_id).is_abstract() {
+                        entries.push((*type_id, *info_value_id));
+                    }
+                }
+                entries.sort_unstable_by_key(|(type_id, _)| type_id.as_u32());
+
+                let mut type_keys: Vec<u64> = Vec::with_capacity(entries.len());
+                for (type_id, _) in &entries {
+                    type_keys.push(type_id.as_u32() as u64);
+                }
+                let hash = PerfectHash::build(&type_keys);
+
+                // Seed, key and info tables
+                let mut keys: Vec<IntValue<'ctx>> = Vec::with_capacity(hash.slot_keys.len());
+                let mut infos: Vec<PointerValue<'ctx>> = Vec::with_capacity(hash.slot_keys.len());
+                for (key, entry) in hash.slot_keys.iter().zip(hash.slot_entries.iter()) {
+                    keys.push(i32_type.const_int(*key, false));
+                    match entry {
+                        Some(index) => {
+                            let info = self.codegen_static_value_canonical(entries[*index].1)?;
+                            infos.push(info.into_pointer_value());
+                        }
+                        None => infos.push(ptr_type.const_null()),
+                    }
+                }
+                let mut seeds: Vec<IntValue<'ctx>> = Vec::with_capacity(hash.bucket_seeds.len());
+                for seed in &hash.bucket_seeds {
+                    seeds.push(i16_type.const_int(*seed as u64, false));
+                }
+                let table_global = |name: &str, array: inkwell::values::ArrayValue<'ctx>| {
+                    let global = self.llvm_module.add_global(array.get_type(), None, name);
+                    global.set_initializer(&array);
+                    global.set_constant(true);
+                    global.set_unnamed_addr(true);
+                    global.set_linkage(LlvmLinkage::Private);
+                    global.as_pointer_value()
+                };
+                let seeds_global = table_global("type_info_seeds", i16_type.const_array(&seeds));
+                let keys_global = table_global("type_info_keys", i32_type.const_array(&keys));
+                let infos_global = table_global("type_info_values", ptr_type.const_array(&infos));
+
+                let c1 = i64_type.const_int(perfect_hash::C1, false);
+                let c2 = i64_type.const_int(perfect_hash::C2, false);
+                let hashed = self.builder.build_int_mul(type_id_arg, c1, "").unwrap();
+                let bucket = self
+                    .builder
+                    .build_right_shift(
+                        hashed,
+                        i64_type.const_int(64 - hash.bucket_bits as u64, false),
+                        false,
+                        "bucket",
+                    )
+                    .unwrap();
+                let seed_ptr = unsafe {
+                    self.builder.build_in_bounds_gep(i16_type, seeds_global, &[bucket], "").unwrap()
+                };
+                let seed = self.builder.build_load(i16_type, seed_ptr, "").unwrap().into_int_value();
+                let seed = self.builder.build_int_z_extend(seed, i64_type, "").unwrap();
+                let mix = self.builder.build_int_mul(seed, c1, "").unwrap();
+                let mixed = self.builder.build_xor(type_id_arg, mix, "").unwrap();
+                let rehashed = self.builder.build_int_mul(mixed, c2, "").unwrap();
+                let slot = self
+                    .builder
+                    .build_right_shift(
+                        rehashed,
+                        i64_type.const_int(64 - hash.slot_bits as u64, false),
+                        false,
+                        "slot",
+                    )
+                    .unwrap();
+                let key_ptr = unsafe {
+                    self.builder.build_in_bounds_gep(i32_type, keys_global, &[slot], "").unwrap()
+                };
+                let key = self.builder.build_load(i32_type, key_ptr, "").unwrap().into_int_value();
+                let key = self.builder.build_int_z_extend(key, i64_type, "").unwrap();
+                let hit =
+                    self.builder.build_int_compare(IntPredicate::EQ, key, type_id_arg, "").unwrap();
+                let found_block = self.append_basic_block("found");
+                let miss_block = self.append_basic_block("miss");
+                self.builder.build_conditional_branch(hit, found_block, miss_block).unwrap();
+
+                self.builder.position_at_end(miss_block);
                 let crash_fn = self.k1_ns_fn_value("crash-missing-type-info")?;
                 self.build_call(crash_fn, &[type_id_arg.into()]);
                 self.builder.build_unreachable().unwrap();
 
-                let finish_block = self.append_basic_block("finish");
-
-                let mut cases: Vec<(IntValue<'ctx>, BasicBlock<'ctx>)> =
-                    Vec::with_capacity(self.k1.type_infos.len());
-
-                for (type_id, info_value_id) in self
-                    .k1
-                    .type_infos
-                    .iter()
-                    .map(|(x, y)| (*x, *y))
-                    .sorted_unstable_by_key(|(type_id, _)| type_id.as_u32())
-                {
-                    if self.k1.get_type_variable_counts(type_id).is_abstract() {
-                        // No point re-ifying types that don't exist at runtime
-                        // like type parameters
-                        continue;
-                    }
-                    let my_block =
-                        self.append_basic_block(&format!("arm_type_{}", type_id.as_u32()));
-                    self.builder.position_at_end(my_block);
-                    let type_id_int_value =
-                        self.ctx.i64_type().const_int(type_id.as_u32() as u64, false);
-
-                    let value = self.codegen_static_value_canonical(info_value_id)?;
-
-                    self.store_k1_value(&type_info_cg_type, out_storage, value);
-                    self.builder.build_unconditional_branch(finish_block).unwrap();
-                    cases.push((type_id_int_value, my_block));
-                }
-                self.builder.position_at_end(entry_block);
-                let _switch = self.builder.build_switch(type_id_arg, else_block, &cases).unwrap();
-
-                self.builder.position_at_end(finish_block);
+                self.builder.position_at_end(found_block);
+                let info_slot = unsafe {
+                    self.builder.build_in_bounds_gep(ptr_type, infos_global, &[slot], "").unwrap()
+                };
+                let info = self.builder.build_load(ptr_type, info_slot, "").unwrap();
+                self.store_k1_value(&type_info_cg_type, out_storage, info);
                 self.builder.build_return(None).unwrap()
             }
             BackendBuiltin::MakeStruct

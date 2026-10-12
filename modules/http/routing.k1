@@ -80,10 +80,10 @@ fn parse-rows(rows: span[code-token]): list[entry] {
     let name = rd.expect-ident()
     check-ident(name, name.text, "route name")
     let pat = rd.eat()
-    if (not (pat.kind is :string)) or pat.text.contains('$') or pat.text.contains('\\') {
+    require pat.parts.len() == 1 and pat.parts.[0] is :text lit else {
       pat.fail("Expected a plain pattern string like \"/game/{id: u64}/poke\", got `${pat.text}`")
     }
-    let pattern = pat.text.slice(1, pat.text.len() - 1)
+    let pattern = lit.value
     let path = parse-pattern(pat, pattern)
     let query: ?code = if rd.eat-if-text-eq("?") {
       let open = rd.expect("{")

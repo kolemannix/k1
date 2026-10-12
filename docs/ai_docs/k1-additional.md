@@ -371,15 +371,18 @@ the whole literal, interpolation holes included), `char` or `punct`, and
 `spacing` is `none`, `inline` or `newline` (always `none` on the first token).
 A `string` token's `parts` are its pieces in order: `:text { value, source }`
 for each non-empty literal segment, cooked as the compiler cooks string
-literals (escapes and block indentation resolved), and `:hole { tokens, source }`
-for each `$name` or `${...}`, whose tokens carry their own spans (a format spec
-arrives as a trailing punct token). Other tokens have no parts.
+literals (escapes and block indentation resolved), and `:hole { tokens, spec,
+source }` for each `$name` or `${...}`, whose tokens carry their own spans and
+whose `spec` is the format spec after the `:` (`">3"` for `${x:>3}`, else
+empty). Other tokens have no parts.
 `cb.write-token(tok)` re-emits a token with its span, and `tok.fail(msg)` stops
 expansion with an error at that token in the caller's source. `std/html` is the
 worked example: `html/write(out, \{ <p class={c}>{text}</p> })` and
 `html/render(\{ ... })` check tag structure at compile time and splice holes
-as spanned code. A braced attribute value dispatches on its type: a `bool` on
-a spec boolean attribute (`checked={on}`) emits the bare attribute or nothing,
+as spanned code. A quoted literal in markup is read through its `parts`: cooked
+text folds into the static output and each `$x` hole splices like `{x}`. A
+braced attribute value dispatches on its type: a `bool` on a spec boolean
+attribute (`checked={on}`) emits the bare attribute or nothing,
 a `bool` elsewhere (`aria-invalid={bad}`) prints `"true"`/`"false"`, an `opt`
 omits the attribute on `:none`, anything else prints escaped. `render` binds
 its builder as a `writer` context, so `#{ write-row(it) }` composes helpers

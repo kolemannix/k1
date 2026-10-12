@@ -359,8 +359,9 @@ fn(extern("uv_loop_close")) loop_close(
 
 `*t` is never null in K1, so a returned C pointer comes back as
 `optref[uv-loop]`, one word you have to check. Every generated struct carries
-libclang's layout as a compile-time assertion, so drift from the C definition
-fails the build:
+libclang's layout as a compile-time assertion, collected in one `#static`
+block at the end of the file that compiles under `k1 test`, so drift from the
+C definition fails the tests without costing every build:
 
 ```k1 path=modules/uv/net.k1
 type sockaddr_in = {
@@ -370,7 +371,12 @@ type sockaddr_in = {
   sin_addr: in_addr,
   sin_zero: array[u8, 8],
 }
-#static assert-layout[sockaddr_in](16, 4, [0, 1, 2, 4, 8, ])
+...
+#if k1/test #static {
+  ...
+  assert-layout[sockaddr_in](16, 4, [0, 1, 2, 4, 8, ])
+  ...
+}
 ```
 
 ## Build steps are K1 running inside the compiler

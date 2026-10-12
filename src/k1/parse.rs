@@ -2949,10 +2949,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 self.emit_semantic_token(token, SemanticTokenKind::Operator);
                 Ok(FmtSpec::parse(&self.token_chars(token)[1..]))
             }
-            K::Colon => Err(self.error(
-                "Invalid format spec; expected ${value:[[fill]align][0][width][,][.precision]}",
-                token,
-            )),
+            K::Colon => Err(self.error(FmtSpec::INVALID_MESSAGE, token)),
             _ => Ok(None),
         }
     }

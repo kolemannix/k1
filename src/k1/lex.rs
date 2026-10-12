@@ -292,6 +292,9 @@ pub struct FmtSpec {
 }
 
 impl FmtSpec {
+    pub const INVALID_MESSAGE: &str =
+        "Invalid format spec; expected ${value:[[fill]align][0][width][,][.precision]}";
+
     pub fn parse(text: &str) -> Option<FmtSpec> {
         fn align_of(c: char) -> Option<FmtAlign> {
             match c {

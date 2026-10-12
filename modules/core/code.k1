@@ -12,7 +12,7 @@ type code-token = {
 
 type code-string-part = either {
   text({ value: string, source: u64 }),
-  hole({ tokens: span[code-token], source: u64 }),
+  hole({ tokens: span[code-token], spec: string, source: u64 }),
 }
 
 ns for code-token {
