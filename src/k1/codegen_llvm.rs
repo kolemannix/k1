@@ -43,6 +43,7 @@ use crate::ir::{
 use crate::kmem::{List, MSlice};
 use crate::lex::Span;
 use crate::parse::{FileId, NumericWidth, StringId};
+use crate::perfect_hash::{self, PerfectHash};
 use crate::typer::types::{
     AbiMode, AggType, AggregateTypeId, Layout, NamedScalarId, PhysicalType, PhysicalTypeEnum,
     PhysicalTypeResult, RegisterClass, ScalarType, StructField, Type, TypeDefnInfo, TypeId,
@@ -52,7 +53,6 @@ use crate::typer::{
     StaticRawContainer, StaticValue, StaticValueId, TypedFloatValue, TypedGlobalId, TypedIntValue,
     TypedProgram,
 };
-use crate::perfect_hash::{self, PerfectHash};
 use crate::{SV4, SV8, ir, kbail, kmem};
 
 fn llvm_size_info(td: &TargetData, typ: &dyn AnyType) -> Layout {
@@ -3579,7 +3579,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let seed_ptr = unsafe {
                     self.builder.build_in_bounds_gep(i16_type, seeds_global, &[bucket], "").unwrap()
                 };
-                let seed = self.builder.build_load(i16_type, seed_ptr, "").unwrap().into_int_value();
+                let seed =
+                    self.builder.build_load(i16_type, seed_ptr, "").unwrap().into_int_value();
                 let seed = self.builder.build_int_z_extend(seed, i64_type, "").unwrap();
                 let mix = self.builder.build_int_mul(seed, c1, "").unwrap();
                 let mixed = self.builder.build_xor(type_id_arg, mix, "").unwrap();

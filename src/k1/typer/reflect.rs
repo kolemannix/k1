@@ -4,11 +4,7 @@
 use super::*;
 
 impl TypedProgram {
-    pub fn type_id_from_raw(
-        &mut self,
-        raw: vm::k1_types::TypeId,
-        span: Span,
-    ) -> K1Result<TypeId> {
+    pub fn type_id_from_raw(&mut self, raw: vm::k1_types::TypeId, span: Span) -> K1Result<TypeId> {
         let type_id_ok = u32::try_from(raw.inner)
             .ok()
             .and_then(TypeId::from_u32)

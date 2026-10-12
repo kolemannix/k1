@@ -1854,15 +1854,8 @@ pub type ParseResult<A> = anyhow::Result<A, ParseError>;
 
 #[derive(Debug, Clone)]
 pub enum ParseError {
-    Parse {
-        message: String,
-        kind: TokenKind,
-        span: Span,
-    },
-    Lex {
-        message: String,
-        span: Span,
-    },
+    Parse { message: String, kind: TokenKind, span: Span },
+    Lex { message: String, span: Span },
 }
 
 impl ParseError {
@@ -2624,7 +2617,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let tok = self.peek();
         tok.kind == K::Minus
             && (tok.is_newline_preceded()
-                || (tok.is_whitespace_preceded() && !self.tokens.peek_n(1).is_whitespace_preceded()))
+                || (tok.is_whitespace_preceded()
+                    && !self.tokens.peek_n(1).is_whitespace_preceded()))
     }
 
     #[inline]
@@ -2706,7 +2700,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     number_token,
                 ));
             };
-            let widened = magnitude.checked_mul(base as u64).and_then(|m| m.checked_add(digit as u64));
+            let widened =
+                magnitude.checked_mul(base as u64).and_then(|m| m.checked_add(digit as u64));
             let Some(widened) = widened else {
                 return Err(self.error(
                     format!("Invalid {base_name} integer: too large for any integer type"),
@@ -3684,9 +3679,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     /// an explicit empty-struct payload
     fn peek_starts_quiet_payload(&self) -> bool {
         match self.peek_kind() {
-            K::Ident => {
-                !matches!(self.token_chars(self.peek()), "return" | "break" | "continue")
-            }
+            K::Ident => !matches!(self.token_chars(self.peek()), "return" | "break" | "continue"),
             K::Numeric | K::Char | K::OpenBracket => true,
             K::Dot => {
                 let two = self.tokens.peek_n(1);
@@ -5919,9 +5912,7 @@ impl ParsedProgram {
             }
             ParsedExpr::Code(code) => {
                 w.write_str("\\")?;
-                w.write_str(
-                    self.sources.get_span_content(&self.mem, code.content),
-                )?;
+                w.write_str(self.sources.get_span_content(&self.mem, code.content))?;
                 Ok(())
             }
             ParsedExpr::QualifiedAbilityCall(qcall) => {

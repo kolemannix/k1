@@ -1051,9 +1051,13 @@ fn emit_inst(
         Inst::IntAdd { lhs, rhs, t } => binop!(Opcode::IntAdd, t.width_bits(), 0, lhs, rhs),
         Inst::IntSub { lhs, rhs, t } => binop!(Opcode::IntSub, t.width_bits(), 0, lhs, rhs),
         Inst::IntMul { lhs, rhs, t } => binop!(Opcode::IntMul, t.width_bits(), 0, lhs, rhs),
-        Inst::IntDivUnsigned { lhs, rhs, t } => binop!(Opcode::IntDivU, t.width_bits(), 0, lhs, rhs),
+        Inst::IntDivUnsigned { lhs, rhs, t } => {
+            binop!(Opcode::IntDivU, t.width_bits(), 0, lhs, rhs)
+        }
         Inst::IntDivSigned { lhs, rhs, t } => binop!(Opcode::IntDivS, t.width_bits(), 0, lhs, rhs),
-        Inst::IntRemUnsigned { lhs, rhs, t } => binop!(Opcode::IntRemU, t.width_bits(), 0, lhs, rhs),
+        Inst::IntRemUnsigned { lhs, rhs, t } => {
+            binop!(Opcode::IntRemU, t.width_bits(), 0, lhs, rhs)
+        }
         Inst::IntRemSigned { lhs, rhs, t } => binop!(Opcode::IntRemS, t.width_bits(), 0, lhs, rhs),
         Inst::IntCmp { lhs, rhs, pred, width } => {
             if !ctx.fused_cmps.contains(inst_id) {
@@ -1075,7 +1079,9 @@ fn emit_inst(
         Inst::BitUnsignedShiftRight { lhs, rhs, t } => {
             binop!(Opcode::ShrU, t.width_bits(), 0, lhs, rhs)
         }
-        Inst::BitSignedShiftRight { lhs, rhs, t } => binop!(Opcode::ShrS, t.width_bits(), 0, lhs, rhs),
+        Inst::BitSignedShiftRight { lhs, rhs, t } => {
+            binop!(Opcode::ShrS, t.width_bits(), 0, lhs, rhs)
+        }
 
         Inst::BakeStaticValue { type_id, value } => {
             let value_lowered = resolve_lowered_value(k1, ctx, value);

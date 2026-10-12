@@ -159,7 +159,8 @@ impl TypedProgram {
         let local = self.ast.sources.get(file_id).local_from_global_offset(span.global_start);
         let entries = self.mem.getn(table.entries);
         let candidate = entries.partition_point(|entry| entry.start <= local);
-        let &CodeChunkPos { start, end, source: source_span } = &entries[candidate.checked_sub(1)?];
+        let &CodeChunkPos { start, end, source: source_span } =
+            &entries[candidate.checked_sub(1)?];
         if local >= end {
             return None;
         }
@@ -373,9 +374,7 @@ impl TypedProgram {
             | TraceKind::SetupFn
             | TraceKind::ModuleRead
             | TraceKind::ModuleCompile
-            | TraceKind::Parse => {
-                self.ident_str(StringId::from_u32(key).unwrap()).to_string()
-            }
+            | TraceKind::Parse => self.ident_str(StringId::from_u32(key).unwrap()).to_string(),
             TraceKind::TypeInfer
             | TraceKind::StaticExec
             | TraceKind::Metaprogram

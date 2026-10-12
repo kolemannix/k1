@@ -50,13 +50,19 @@ pub mod k1_types {
     #[derive(Clone, Copy)]
     #[repr(u8)]
     pub enum CodeTokenKind {
-        ident = 0, number, string, char, punct
+        ident = 0,
+        number,
+        string,
+        char,
+        punct,
     }
 
     #[derive(Clone, Copy)]
     #[repr(u8)]
     pub enum CodeTokenSpacing {
-        none = 0, inline, newline
+        none = 0,
+        inline,
+        newline,
     }
 
     #[derive(Clone, Copy)]
@@ -1459,7 +1465,8 @@ pub(crate) fn builtin_compiler_message(
     let message = value_to_string_id(k1, message_arg).map_err(|msg| {
         kerr!(k1, vm.eval_span, "Bad message string passed to EmitCompilerMessage: {msg}")
     })?;
-    let span = Span::from_encoded_k1_u64(location.span).filter(|s| k1.ast.sources.contains_span(*s));
+    let span =
+        Span::from_encoded_k1_u64(location.span).filter(|s| k1.ast.sources.contains_span(*s));
     let Some(span) = span else {
         kbail!(
             k1,

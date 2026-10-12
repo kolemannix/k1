@@ -235,7 +235,6 @@ impl Scopes {
         self.scopes.bytes_used() + self.entries.bytes_used() + self.ns_maps.bytes_used()
     }
 
-
     pub fn snap(&self, w: &mut crate::snap::SnapWriter) {
         use crate::snap::write_map_snap;
         let Scopes {

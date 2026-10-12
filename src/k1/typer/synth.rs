@@ -91,15 +91,13 @@ impl TypedProgram {
                     );
                 }
             }
-            AbilityImplFunction::Abstract(function_sig) if !function_sig.has_type_params() => {
-                (
-                    Callee::Abstract {
-                        name: function_sig.name,
-                        function_type: function_sig.function_type,
-                    },
-                    TypeArgs::empty(),
-                )
-            }
+            AbilityImplFunction::Abstract(function_sig) if !function_sig.has_type_params() => (
+                Callee::Abstract {
+                    name: function_sig.name,
+                    function_type: function_sig.function_type,
+                },
+                TypeArgs::empty(),
+            ),
             AbilityImplFunction::Pending => unreachable!(),
             AbilityImplFunction::Abstract(_) | AbilityImplFunction::Unavailable => {
                 return self.synth_typed_call_typed_args(
@@ -542,11 +540,7 @@ impl TypedProgram {
         )
     }
 
-    pub(super) fn synth_string_literal(
-        &mut self,
-        string_id: StringId,
-        span: Span,
-    ) -> TypedExprId {
+    pub(super) fn synth_string_literal(&mut self, string_id: StringId, span: Span) -> TypedExprId {
         let string_value = self.static_values.add_string(string_id);
         self.add_static_constant_expr(string_value, span)
     }

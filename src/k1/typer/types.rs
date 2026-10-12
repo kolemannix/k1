@@ -607,8 +607,7 @@ impl TypedProgram {
                 if defn1 != defn2 {
                     return false;
                 }
-                if se1.partial != se2.partial
-                    || se1.member_values.len() != se2.member_values.len()
+                if se1.partial != se2.partial || se1.member_values.len() != se2.member_values.len()
                 {
                     return false;
                 }
@@ -1867,8 +1866,11 @@ impl TypedProgram {
             let start_bits = offset * 8;
             let end_bits = start_bits + size * 8;
             debug_assert!(end_bits <= 128);
-            let class =
-                if lanes > 1 && size >= 8 { RegisterClass::Float } else { RegisterClass::of_scalar(st) };
+            let class = if lanes > 1 && size >= 8 {
+                RegisterClass::Float
+            } else {
+                RegisterClass::of_scalar(st)
+            };
             for i in (start_bits / 64)..end_bits.div_ceil(64) {
                 classes[i as usize] = classes[i as usize].combine(class);
             }

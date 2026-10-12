@@ -141,9 +141,9 @@ impl Opcode {
         // TODO(perf): I think we could bake the operand count into the opcode bits.
         match self {
             Opcode::Halt => 0,
-            Opcode::Enter => 1,        // [frame_bytes]
-            Opcode::Jump => 1,         // [pc]
-            Opcode::JumpIf => 3,       // [cond src][cons pc][alt pc]
+            Opcode::Enter => 1,  // [frame_bytes]
+            Opcode::Jump => 1,   // [pc]
+            Opcode::JumpIf => 3, // [cond src][cons pc][alt pc]
             Opcode::JumpIfEq
             | Opcode::JumpIfSlt
             | Opcode::JumpIfSle
@@ -154,7 +154,7 @@ impl Opcode {
             | Opcode::JumpIfUgt
             | Opcode::JumpIfUge
             | Opcode::JumpIfNe => 4, // [lhs src][rhs src][cons pc][alt pc]
-            Opcode::Switch => 2,       // [src][default pc] + B cases of [value lo][value hi][pc]
+            Opcode::Switch => 2, // [src][default pc] + B cases of [value lo][value hi][pc]
             Opcode::Unreachable => 0,
             Opcode::Ret => 1,    // [src]
             Opcode::RetAgg => 2, // [src][size]
@@ -173,10 +173,10 @@ impl Opcode {
             Opcode::Store8 | Opcode::Store16 | Opcode::Store32 | Opcode::Store64 => 2, // [addr src][val src]
             Opcode::LoadFp8 | Opcode::LoadFp16 | Opcode::LoadFp32 | Opcode::LoadFp64 => 2, // [dst][fp byte offset]
             Opcode::StoreFp8 | Opcode::StoreFp16 | Opcode::StoreFp32 | Opcode::StoreFp64 => 2, // [fp byte offset][val src]
-            Opcode::Copy => 3,       // [dst src][src src][size]
-            Opcode::Zero => 2,       // [dst src][size]
-            Opcode::PtrAddImm => 3,  // [dst][base src][byte offset]
-            Opcode::PtrIndex => 4,   // [dst][base src][index src][stride]
+            Opcode::Copy => 3,      // [dst src][src src][size]
+            Opcode::Zero => 2,      // [dst src][size]
+            Opcode::PtrAddImm => 3, // [dst][base src][byte offset]
+            Opcode::PtrIndex => 4,  // [dst][base src][index src][stride]
             Opcode::IntAdd
             | Opcode::IntSub
             | Opcode::IntMul
@@ -198,11 +198,11 @@ impl Opcode {
             | Opcode::ShrU
             | Opcode::ShrS => 3, // [dst][lhs][rhs]
             Opcode::BoolNegate | Opcode::BitNot | Opcode::FloatNeg => 2, // [dst][src]
-            Opcode::Cast => 2,       // A = CastKind, B = from_bits << 8 | to_bits; [dst][src]
+            Opcode::Cast => 2,      // A = CastKind, B = from_bits << 8 | to_bits; [dst][src]
             Opcode::Select => 4,
             Opcode::BakeStaticValue => 3, // [dst][type_id][src]
-            Opcode::AtomicLoad => 2, // A = width in bits, B = ordering; [dst][addr src]
-            Opcode::AtomicStore => 2, // A = width in bits, B = ordering; [addr src][val src]
+            Opcode::AtomicLoad => 2,      // A = width in bits, B = ordering; [dst][addr src]
+            Opcode::AtomicStore => 2,     // A = width in bits, B = ordering; [addr src][val src]
             Opcode::AtomicRmw => 3, // A = width in bits, B = op << 8 | ordering; [dst][addr src][operand src]
             // A = width in bits, B = success | failure << 4 | weak << 8;
             // [result src][addr src][expected src][desired src][ok byte offset]

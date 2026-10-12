@@ -8290,11 +8290,8 @@ impl TypedProgram {
                 iterable_span,
             );
             let index_place = self.synth_variable_ref(index_variable.variable_id);
-            let index_increment_statement = self.add_assignment_stmt(
-                index_place,
-                add_operation,
-                iterable_span,
-            );
+            let index_increment_statement =
+                self.add_assignment_stmt(index_place, add_operation, iterable_span);
             self.push_block_stmt_id(&mut loop_block, index_increment_statement);
         }
 

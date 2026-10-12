@@ -4,14 +4,14 @@ use crate::debug;
 use libffi::raw::ffi_cif;
 use libffi::{low::*, raw};
 
+use crate::compiler::Arch;
 use crate::ir::PhysicalFunctionType;
 use crate::lex::Span;
-use crate::compiler::Arch;
+use crate::parse::NumericWidth;
 use crate::typer::types::{
     AggType, HomogeneousAggregate, Layout, PhysicalType, PhysicalTypeEnum, RegisterClass,
     ScalarType,
 };
-use crate::parse::NumericWidth;
 use crate::typer::{FunctionId, K1Result, Linkage, TypedProgram};
 use crate::vm;
 use crate::vm::{Value, Vm};

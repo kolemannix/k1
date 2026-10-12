@@ -1755,9 +1755,23 @@ mod test {
         assert_eq!(FmtSpec::parse("·<4"), spec('·', Some(A::Left), 4, None));
         assert_eq!(FmtSpec::parse("0<5"), spec('0', Some(A::Left), 5, None));
         assert_eq!(FmtSpec::parse("08.1"), spec('0', Some(A::SignZeros), 8, Some(1)));
-        for bad in
-            ["", "0", "00", "<", "<05", "8.", ".x", "x", "none", " f64", "{<3", "99999999999", "08,", ",,", ",8"]
-        {
+        for bad in [
+            "",
+            "0",
+            "00",
+            "<",
+            "<05",
+            "8.",
+            ".x",
+            "x",
+            "none",
+            " f64",
+            "{<3",
+            "99999999999",
+            "08,",
+            ",,",
+            ",8",
+        ] {
             assert_eq!(FmtSpec::parse(bad), None, "{bad}");
         }
         assert_eq!(FmtSpec::parse("*^10").unwrap().to_string(), ":*^10");

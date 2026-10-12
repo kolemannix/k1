@@ -1,7 +1,7 @@
 use crate::lex::{Span, is_ident_char};
 use crate::parse::{FileId, ParsedExpr, ParsedId, ParsedProgram, StringId};
-use crate::typer::scopes::{Provenance, ScopeId, ScopeMember, VariableInScope};
 use crate::typer::dump::TypeDisplayMode;
+use crate::typer::scopes::{Provenance, ScopeId, ScopeMember, VariableInScope};
 use crate::typer::types::{FnParamKind, Type, TypeId};
 use crate::{SV8, typer::*};
 use fxhash::FxHashSet;
@@ -12,7 +12,13 @@ pub enum LangItem {
     Defn(ParsedId),
 }
 
-pub fn is_point_in_span(ast: &ParsedProgram, file_id: FileId, line: u32, col: u32, span: Span) -> bool {
+pub fn is_point_in_span(
+    ast: &ParsedProgram,
+    file_id: FileId,
+    line: u32,
+    col: u32,
+    span: Span,
+) -> bool {
     let source = ast.sources.get(file_id);
     let Some(line_info) = source.get_line(&ast.mem, line as usize) else {
         return false;
@@ -1098,15 +1104,9 @@ fn is-snake(o: opts): bool { o.key-case is :snake }
     fn hover_shows_definitions() {
         let mut k1 = compile_check("hover_defn", HOVER_DEFN_SRC, None);
         let field = entity_at(&k1, "hover_defn", HOVER_DEFN_SRC, "key-case is").unwrap();
-        assert_eq!(
-            get_hover_message_for_entity(&mut k1, field),
-            "key-case: either snake, kebab"
-        );
+        assert_eq!(get_hover_message_for_entity(&mut k1, field), "key-case: either snake, kebab");
         let ty = entity_at(&k1, "hover_defn", HOVER_DEFN_SRC, "opts)").unwrap();
         let message = get_hover_message_for_entity(&mut k1, ty);
-        assert_eq!(
-            message.lines().next(),
-            Some("opts({ key-case: either snake, kebab, n: i64 })")
-        );
+        assert_eq!(message.lines().next(), Some("opts({ key-case: either snake, kebab, n: i64 })"));
     }
 }
