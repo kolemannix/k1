@@ -3239,7 +3239,7 @@ impl TypedProgram {
             }
         };
         let base = self.ast.sources.get(file_id).base;
-        Ok(Span { lo: base + offset, len })
+        Ok(Span { global_start: base + offset, len })
     }
 
     fn register_source(&mut self, path: StringId, content: &str) -> FileId {
@@ -3284,7 +3284,7 @@ impl TypedProgram {
                 let file_id = self.register_source(path, source.content(&from.ast.mem));
                 let base = self.ast.sources.get(file_id).base;
                 Span {
-                    lo: base + source.local_from_global_offset(message.span.lo),
+                    global_start: base + source.local_from_global_offset(message.span.global_start),
                     len: message.span.len,
                 }
             };
@@ -18069,7 +18069,7 @@ impl TypedProgram {
         if cfg!(feature = "lsp") {
             let Some(span) = self.remap_call_arg_span(span) else { return };
             let mut ls_entities = self.ls_entities.borrow_mut();
-            let file_id = self.ast.sources.file_of(span.lo);
+            let file_id = self.ast.sources.file_of(span.global_start);
             let entities_entry = ls_entities.entry(file_id);
             let entities = entities_entry.or_insert_with(|| Vec::with_capacity(128));
             entities.push(LsEntity { kind, span });

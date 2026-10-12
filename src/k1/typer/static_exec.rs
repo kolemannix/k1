@@ -263,7 +263,7 @@ impl TypedProgram {
         trace_flags: u8,
         mut f: impl FnMut(&mut TypedProgram, &mut vm::Vm) -> T,
     ) -> T {
-        let frame = self.trace_push(TraceKind::StaticExec, span.lo, trace_flags);
+        let frame = self.trace_push(TraceKind::StaticExec, span.global_start, trace_flags);
         let (mut vm, used_alt) = match *std::mem::take(&mut self.vm) {
             None => {
                 let maybe_alt = self.vm_alts.pop();
@@ -845,7 +845,7 @@ impl TypedProgram {
         let content = self.ast.sources.get_span_content(&self.ast.mem, code_span).to_string();
         let mut lexed = crate::lex::lex(&content, std::mem::take(&mut self.buffers.lexed));
         if let Some(e) = lexed.error.take() {
-            let span = Span { lo: code_span.lo + e.start, len: e.len };
+            let span = Span { global_start: code_span.global_start + e.start, len: e.len };
             self.buffers.lexed = lexed;
             kbail!(self, span, "{}", e.message);
         }
@@ -872,7 +872,7 @@ impl TypedProgram {
             self.add_static_container_from_ids(StaticContainerKind::Span, parts_type, &[]);
         let token_span = |token: crate::lex::Token| {
             let (token_start, token_len) = lexed.get_token_start_len(token);
-            Span { lo: code_span.lo + token_start, len: token_len }
+            Span { global_start: code_span.global_start + token_start, len: token_len }
         };
         let mut elements = self.tmp.new_list((end - start) as u32);
         let mut i = start;
@@ -1045,8 +1045,8 @@ impl TypedProgram {
                 _ => (k1_types::CodeTokenKind::punct, no_parts),
             };
             let output_span = Span {
-                lo: token_span(first).lo,
-                len: token_span(lexed.tokens[i]).end() - token_span(first).lo,
+                global_start: token_span(first).global_start,
+                len: token_span(lexed.tokens[i]).end() - token_span(first).global_start,
             };
             let text = self.ast.sources.get_span_content(&self.ast.mem, output_span);
             let text_value = self.static_values.add_string(self.ast.idents.intern(text));
@@ -1216,7 +1216,7 @@ impl TypedProgram {
                 Ok(StaticExecutionResult::TypedExpr(expr))
             }
             ParsedStaticBlockKind::Metaprogram => {
-                self.traced(TraceKind::Metaprogram, span.lo, ctx.trace_flags(), |k1| {
+                self.traced(TraceKind::Metaprogram, span.global_start, ctx.trace_flags(), |k1| {
                     let emitted = k1.do_with_vm(span, ctx.trace_flags(), |k1, vm| {
                         let result = (|| {
                             let expr = k1.typecheck_parsed_expr_for_exec(
@@ -1256,7 +1256,7 @@ impl TypedProgram {
         }
         #[cfg(debug_assertions)]
         k1.assert_code_layouts();
-        let frame = k1.trace_push(TraceKind::VmValueFerry, span.lo, 0);
+        let frame = k1.trace_push(TraceKind::VmValueFerry, span.global_start, 0);
         let code = unsafe { *(raw.ret_addr as *const K1Code) };
         let Ok(text) = (unsafe { code.text.to_str() }) else {
             kbail!(k1, span, "Metaprogram produced non-utf8 code");

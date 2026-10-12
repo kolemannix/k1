@@ -154,9 +154,9 @@ impl TypedProgram {
     /// the emitted text outran it (escapes, dedent). None when `span` is not
     /// chunk text: a real file, or glue
     fn remap_span_hop(&self, span: Span) -> Option<(Span, &EmittedSource)> {
-        let file_id = self.ast.sources.file_of(span.lo);
+        let file_id = self.ast.sources.file_of(span.global_start);
         let table = &self.emitted_sources[self.emitted_source_for_file(file_id)?];
-        let local = self.ast.sources.get(file_id).local_from_global_offset(span.lo);
+        let local = self.ast.sources.get(file_id).local_from_global_offset(span.global_start);
         let entries = self.mem.getn(table.entries);
         let candidate = entries.partition_point(|entry| entry.start <= local);
         let &CodeChunkPos { start, end, source: source_span } = &entries[candidate.checked_sub(1)?];
@@ -166,7 +166,7 @@ impl TypedProgram {
         let offset = local - start;
         let remapped = if offset < source_span.len {
             let len = span.len.min(end - local).min(source_span.len - offset);
-            Span { lo: source_span.lo + offset, len }
+            Span { global_start: source_span.global_start + offset, len }
         } else {
             source_span
         };
@@ -183,7 +183,7 @@ impl TypedProgram {
 
     pub fn module_of_span(&self, span: Span) -> ModuleId {
         let span = self.remap_span(span);
-        let span_file = self.ast.sources.file_of(span.lo);
+        let span_file = self.ast.sources.file_of(span.global_start);
         for module in self.modules.iter() {
             if module.contains_file(&self.mem, span_file) {
                 return module.id;
@@ -196,11 +196,13 @@ impl TypedProgram {
     /// text and glue land outside the call span and yield None
     pub fn remap_call_arg_span(&self, mut span: Span) -> Option<Span> {
         for _ in 0..16 {
-            if self.emitted_source_for_file(self.ast.sources.file_of(span.lo)).is_none() {
+            if self.emitted_source_for_file(self.ast.sources.file_of(span.global_start)).is_none() {
                 return Some(span);
             }
             let (remapped, table) = self.remap_span_hop(span)?;
-            if remapped.lo < table.call_span.lo || remapped.end() > table.call_span.end() {
+            if remapped.global_start < table.call_span.global_start
+                || remapped.end() > table.call_span.end()
+            {
                 return None;
             }
             span = remapped;
@@ -224,7 +226,9 @@ impl TypedProgram {
             return;
         }
 
-        if let Some(table_index) = self.emitted_source_for_file(self.ast.sources.file_of(e.span.lo)) {
+        if let Some(table_index) =
+            self.emitted_source_for_file(self.ast.sources.file_of(e.span.global_start))
+        {
             if e.level == MessageLevel::Error {
                 self.emitted_sources[table_index].has_diagnostic = true
             }
@@ -291,7 +295,7 @@ impl TypedProgram {
             error.span,
             use_color,
         )?;
-        let file_id = self.ast.sources.file_of(error.span.lo);
+        let file_id = self.ast.sources.file_of(error.span.global_start);
         if let Some(emitted_index) = self.emitted_source_for_file(file_id) {
             writeln!(w, "note: in code compiled in place of this call:")?;
             self.write_location(w, self.emitted_sources[emitted_index].call_span, use_color);
@@ -351,7 +355,8 @@ impl TypedProgram {
     pub fn frame_label(&self, frame: &TraceFrame) -> String {
         let key = frame.key;
         let span_label = || {
-            self.span_location(Span { lo: key, len: 0 }).unwrap_or_else(|| "?".to_string())
+            self.span_location(Span { global_start: key, len: 0 })
+                .unwrap_or_else(|| "?".to_string())
         };
         let mut label = match frame.kind {
             TraceKind::PlanCheck | TraceKind::HostPlan => self.program_name().to_string(),

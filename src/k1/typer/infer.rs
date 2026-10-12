@@ -85,7 +85,7 @@ impl TypedProgram {
         }
 
         self.ictx_mut().origin_stack.push(span);
-        let frame = self.trace_push(TraceKind::TypeInfer, span.lo, 0);
+        let frame = self.trace_push(TraceKind::TypeInfer, span.global_start, 0);
         let result = self.infer_types_inner(
             all_type_params,
             must_solve_params,

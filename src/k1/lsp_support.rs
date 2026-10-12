@@ -18,7 +18,7 @@ pub fn is_point_in_span(ast: &ParsedProgram, file_id: FileId, line: u32, col: u3
         return false;
     };
     let point = source.base + line_info.start_char + col;
-    span.lo <= point && point < span.end()
+    span.global_start <= point && point < span.end()
 }
 
 pub fn find_entity_at_point(
@@ -1081,7 +1081,10 @@ fn use-it(): int { my-ns/go() }
         let (line, col) = point_of(DEFN_MACRO_SRC, "my-ns)");
         let defn_line = source.get_line_for_span_start(&k1.ast.mem, definition).unwrap();
         assert_eq!(defn_line.line_index, line);
-        assert_eq!(source.local_from_global_offset(definition.lo) - defn_line.start_char, col);
+        assert_eq!(
+            source.local_from_global_offset(definition.global_start) - defn_line.start_char,
+            col
+        );
     }
 
     const HOVER_DEFN_SRC: &str = r#"

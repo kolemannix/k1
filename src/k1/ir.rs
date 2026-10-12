@@ -4925,7 +4925,7 @@ pub fn display_block(
             let lines = k1.ast.get_span_content(span);
             let (source, line) = k1.get_span_location(span);
             let first_line = lines.lines().next().unwrap_or("");
-            let column = source.local_from_global_offset(span.lo) + 1 - line.start_char;
+            let column = source.local_from_global_offset(span.global_start) + 1 - line.start_char;
             write!(w, "| {first_line:30}|{:3}:{}|", line.line_number(), column)?;
         }
         writeln!(w)?;

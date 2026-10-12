@@ -102,7 +102,7 @@ pub fn execute_compiled_unit(
     if !raw.returns_value {
         return Ok(k1.static_values.add_empty_typed(raw.result_type_id));
     }
-    let frame = k1.trace_push(TraceKind::VmValueFerry, span.lo, 0);
+    let frame = k1.trace_push(TraceKind::VmValueFerry, span.global_start, 0);
     let loaded = load_value(raw.ret_pt, raw.ret_addr);
     let result = vm::vm_value_to_static_value(k1, raw.result_type_id, loaded, span);
     k1.trace_pop(frame);
@@ -137,7 +137,7 @@ pub fn execute_compiled_unit_raw(
     let align_mask = super::FRAME_ALIGN as usize - 1;
     let fp0: *mut u8 = vm.stack.mem.cursor().map_addr(|a| (a + align_mask) & !align_mask);
     vm.stack.mem.set_cursor(fp0);
-    let ferry_frame = k1.trace_push(TraceKind::VmValueFerry, span.lo, 0);
+    let ferry_frame = k1.trace_push(TraceKind::VmValueFerry, span.global_start, 0);
     unsafe {
         let words = fp0 as *mut u64;
         words.write(0); // caller_fp: none

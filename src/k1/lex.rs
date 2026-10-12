@@ -590,13 +590,13 @@ impl TokenKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Span {
-    pub lo: u32,
+    pub global_start: u32,
     pub len: u32,
 }
 static_assert_size!(Span, 8);
 
 impl Span {
-    pub const NONE: Span = Span { lo: 0, len: 0 };
+    pub const NONE: Span = Span { global_start: 0, len: 0 };
 
     pub fn is_none(self) -> bool {
         self == Self::NONE
@@ -604,15 +604,15 @@ impl Span {
 
     #[inline]
     pub fn end(&self) -> u32 {
-        self.lo + self.len
+        self.global_start + self.len
     }
 
     pub fn encoded_k1_u64(self) -> u64 {
-        self.lo as u64 | (self.len as u64) << 32
+        self.global_start as u64 | (self.len as u64) << 32
     }
 
     pub fn from_encoded_k1_u64(v: u64) -> Option<Span> {
-        if v == 0 { None } else { Some(Span { lo: v as u32, len: (v >> 32) as u32 }) }
+        if v == 0 { None } else { Some(Span { global_start: v as u32, len: (v >> 32) as u32 }) }
     }
 
     #[track_caller]
@@ -623,7 +623,7 @@ impl Span {
                 panic!("Attempt to extend span from {} to {}", self.end(), new_end)
             }
         }
-        self.len = new_end - self.lo;
+        self.len = new_end - self.global_start;
     }
 }
 
@@ -823,9 +823,9 @@ impl Token {
     pub fn span(&self, base: u32, long_tokens: &[LongToken]) -> Span {
         if self.flags & TOKEN_FLAG_LONG != 0 {
             let long = long_tokens[self.start as usize];
-            Span { lo: base + long.start, len: long.len }
+            Span { global_start: base + long.start, len: long.len }
         } else {
-            Span { lo: base + self.start, len: self.len as u32 }
+            Span { global_start: base + self.start, len: self.len as u32 }
         }
     }
     pub fn is_whitespace_preceded(&self) -> bool {
@@ -1550,7 +1550,7 @@ mod test {
     ) {
         let span = tokens[index].span(0, &[]);
         assert_eq!(tokens[index].kind, kind);
-        assert_eq!(span.lo, start);
+        assert_eq!(span.global_start, start);
         assert_eq!(span.len, len);
         assert_eq!(tokens[index].is_whitespace_preceded(), is_whitespace_preceded);
     }
@@ -1582,11 +1582,11 @@ mod test {
         }
         assert_eq!(kinds, vec![K::Minus, K::Numeric, K::Eof]);
         let span0 = tokens[0].span(0, &[]);
-        assert_eq!(span0.lo, 0);
+        assert_eq!(span0.global_start, 0);
         assert_eq!(span0.len, 1);
         assert_eq!(span0.end(), 1);
         let span1 = tokens[1].span(0, &[]);
-        assert_eq!(span1.lo, 1);
+        assert_eq!(span1.global_start, 1);
         assert_eq!(span1.len, 2);
         assert_eq!(span1.end(), 3);
         assert!(!tokens[1].is_whitespace_preceded());
@@ -1603,12 +1603,12 @@ mod test {
         }
         assert_eq!(kinds, vec![K::Minus, K::Numeric, K::Eof]);
         let span0 = tokens[0].span(0, &[]);
-        assert_eq!(span0.lo, 0);
+        assert_eq!(span0.global_start, 0);
         assert_eq!(span0.len, 1);
         assert_eq!(span0.end(), 1);
 
         let span1 = tokens[1].span(0, &[]);
-        assert_eq!(span1.lo, 2);
+        assert_eq!(span1.global_start, 2);
         assert_eq!(span1.len, 2);
         assert_eq!(span1.end(), 4);
         assert!(tokens[1].is_whitespace_preceded());
@@ -1659,7 +1659,7 @@ mod test {
             kinds
         );
         let let_span = tokens[0].span(0, &[]);
-        assert_eq!((let_span.lo, let_span.len), (45, 3));
+        assert_eq!((let_span.global_start, let_span.len), (45, 3));
 
         let let_trivia = trivia.for_token(0);
         assert_eq!(let_trivia.len(), 2);

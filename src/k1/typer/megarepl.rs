@@ -513,7 +513,7 @@ impl TypedProgram {
             Some(s) => self.ast.get_stmt_span(*s),
             None => {
                 let source = self.ast.sources.get(self.megarepl_get_cell(cell_id).source_id);
-                Span { lo: source.base, len: 0 }
+                Span { global_start: source.base, len: 0 }
             }
         };
         let repl_ns_scope = self.megarepl.as_ref().unwrap().ns_scope;

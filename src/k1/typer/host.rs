@@ -412,7 +412,7 @@ impl TypedProgram {
                 Some(s) if !self.ast.sources.contains_span(s) => {
                     kbail!(self, span, "invalid params span for dependency {}", name)
                 }
-                Some(s) if self.ast.sources.file_of(s.lo) != build_file_id => kbail!(
+                Some(s) if self.ast.sources.file_of(s.global_start) != build_file_id => kbail!(
                     self,
                     s,
                     "dep params for '{}' must be written in the module's build.k1",
@@ -773,13 +773,13 @@ impl TypedProgram {
         // The value above serves fn setup in this host program; the program being built
         // shares nothing with it but the plan, so it gets the same `let` as source text
         let parsed_global = self.ast.globals.get(global.ast_id);
-        let name_lo = parsed_global.name_span.lo;
+        let name_start = parsed_global.name_span.global_start;
         let schema_end = self.ast.get_type_expr_span(parsed_global.type_expr).end();
         let mut text = String::from("let ");
         let mut let_plan_chunks: SV8<PlanChunk> = SV8::new();
         self.push_plan_chunk(
             planner,
-            Span { lo: name_lo, len: schema_end - name_lo },
+            Span { global_start: name_start, len: schema_end - name_start },
             &mut text,
             &mut let_plan_chunks,
         );
@@ -801,9 +801,9 @@ impl TypedProgram {
         text: &mut String,
         chunks: &mut SV8<PlanChunk>,
     ) {
-        let file_id = self.ast.sources.file_of(span.lo);
+        let file_id = self.ast.sources.file_of(span.global_start);
         let source = self.ast.sources.get(file_id);
-        let offset = source.local_from_global_offset(span.lo);
+        let offset = source.local_from_global_offset(span.global_start);
         let from = planner
             .entries
             .iter()

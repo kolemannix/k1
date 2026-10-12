@@ -1478,15 +1478,15 @@ impl SourceFiles {
         id
     }
 
-    pub fn file_of(&self, lo: u32) -> FileId {
-        self.sources.partition_point(|s| s.base <= lo).saturating_sub(1) as FileId
+    pub fn file_of(&self, global_start: u32) -> FileId {
+        self.sources.partition_point(|s| s.base <= global_start).saturating_sub(1) as FileId
     }
 
     pub fn contains_span(&self, span: Span) -> bool {
-        if span.lo == 0 {
+        if span.global_start == 0 {
             return false;
         }
-        let source = self.get(self.file_of(span.lo));
+        let source = self.get(self.file_of(span.global_start));
         span.end() <= source.base + source.content.len()
     }
 
@@ -1515,7 +1515,7 @@ impl SourceFiles {
     }
 
     pub fn source_by_span(&self, span: Span) -> &SourceFile {
-        self.get(self.file_of(span.lo))
+        self.get(self.file_of(span.global_start))
     }
 
     pub fn find_by_path(&self, path: StringId) -> Option<FileId> {
@@ -1572,7 +1572,7 @@ impl SemanticToken {
 }
 
 pub fn add_semantic_token(ast: &mut ParsedProgram, token: SemanticToken) {
-    let file_id = ast.sources.file_of(token.span.lo);
+    let file_id = ast.sources.file_of(token.span.global_start);
     ast.sources.get_mut(file_id).semantic_tokens.push_grow(&mut ast.mem, token)
 }
 
@@ -1978,7 +1978,7 @@ pub fn write_source_location(
     // If the span is longer than the line, just highlight the whole first line
     let highlight_length = if span.len > line.len { line.len as usize } else { span.len as usize };
     let thingies = "^".repeat(highlight_length).color(color);
-    let column = source.local_from_global_offset(span.lo) - line.start_char;
+    let column = source.local_from_global_offset(span.global_start) - line.start_char;
     let spaces = " ".repeat(column as usize);
     let line_start = line.line_index as i32 - context_lines as i32 / 2;
     let line_end = line_start + context_lines as i32;
@@ -2109,12 +2109,12 @@ impl SourceFile {
         &self.content(mem)[start as usize..(start + len) as usize]
     }
 
-    pub fn local_from_global_offset(&self, lo: u32) -> u32 {
-        lo - self.base
+    pub fn local_from_global_offset(&self, global_start: u32) -> u32 {
+        global_start - self.base
     }
 
     pub fn get_span_content<'m>(&self, mem: &'m Mem, span: Span) -> &'m str {
-        self.get_content(mem, self.local_from_global_offset(span.lo), span.len)
+        self.get_content(mem, self.local_from_global_offset(span.global_start), span.len)
     }
 
     pub fn line_count(&self, mem: &Mem) -> usize {
@@ -2152,7 +2152,8 @@ impl SourceFile {
     }
 
     pub fn get_lines_for_span(&self, mem: &Mem, span: Span) -> Option<(Line, Line)> {
-        let start = self.get_line_for_offset(mem, self.local_from_global_offset(span.lo))?;
+        let start =
+            self.get_line_for_offset(mem, self.local_from_global_offset(span.global_start))?;
         let end = self.get_line_for_offset(mem, self.local_from_global_offset(span.end()))?;
         Some((start, end))
     }
@@ -2168,7 +2169,7 @@ impl SourceFile {
     }
 
     pub fn get_line_for_span_start(&self, mem: &Mem, span: Span) -> Option<Line> {
-        self.get_line_for_offset(mem, self.local_from_global_offset(span.lo))
+        self.get_line_for_offset(mem, self.local_from_global_offset(span.global_start))
     }
 }
 
@@ -2643,7 +2644,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn token_chars(&self, tok: Token) -> &'static str {
         let span = self.tok_span(tok);
-        let start = (span.lo - self.base) as usize;
+        let start = (span.global_start - self.base) as usize;
         &self.source_text[start..start + span.len as usize]
     }
 
@@ -4764,7 +4765,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
         let content = if first.kind == K::CloseBrace {
             let open_span = self.tok_span(open);
-            Span { lo: open_span.end(), len: 0 }
+            Span { global_start: open_span.end(), len: 0 }
         } else {
             let last = self.peek_back();
             self.extend_token_span(first, last)
@@ -6246,7 +6247,7 @@ impl ParsedProgram {
         match lexed.error.take() {
             Some(e) => {
                 let base = self.sources.get(file_id).base;
-                let span = Span { lo: base + e.start, len: e.len };
+                let span = Span { global_start: base + e.start, len: e.len };
                 Err(ParseError::Lex { message: e.message, span })
             }
             None => {

@@ -72,7 +72,7 @@ fn string_literal() -> ParseResult<()> {
     let ParsedExpr::Literal(ParsedLiteral::String(s)) = result else { panic!() };
     let span = ast.exprs.get_span(expr_id);
     assert_eq!(ast.get_string(s), "Hello, World!");
-    assert_eq!(span.lo, 1);
+    assert_eq!(span.global_start, 1);
     assert_eq!(span.len, 13 + 2);
     assert_eq!(span.end(), 16);
     Ok(())
@@ -365,12 +365,12 @@ fn namespaced_fncall() -> ParseResult<()> {
     assert_eq!(ast.idents.get_string(ast.mem.get_nth(fn_call.name.path(&ast.mem), 0).name), "foo");
     assert_eq!(
         ast.mem.get_nth(fn_call.name.path(&ast.mem), 0).span,
-        Span { lo: 1, len: 3 }
+        Span { global_start: 1, len: 3 }
     );
     assert_eq!(ast.idents.get_string(ast.mem.get_nth(fn_call.name.path(&ast.mem), 1).name), "bar");
     assert_eq!(
         ast.mem.get_nth(fn_call.name.path(&ast.mem), 1).span,
-        Span { lo: 5, len: 3 }
+        Span { global_start: 5, len: 3 }
     );
     assert_eq!(fn_call.name.name, ast.idents.intern("baz"));
     assert!(fn_call.args.is_empty());
@@ -611,7 +611,7 @@ fn consecutive_strings() -> ParseResult<()> {
     };
     assert_eq!(ast.get_string(*s1), "Hello, ");
     assert_eq!(ast.get_string(*s2), "World!");
-    assert_eq!(span.lo, 1);
+    assert_eq!(span.global_start, 1);
     assert_eq!(span.len, 18);
     Ok(())
 }
@@ -638,7 +638,7 @@ fn lex_error_does_not_poison_reused_token_buffer() {
     let base = ast.sources.get(good_id).base;
     for t in &lexed.tokens {
         if t.kind != TokenKind::Eof {
-            assert_eq!(ast.sources.file_of(t.span(base, &lexed.long_tokens).lo), good_id);
+            assert_eq!(ast.sources.file_of(t.span(base, &lexed.long_tokens).global_start), good_id);
         }
     }
 }
@@ -659,7 +659,7 @@ fn long_token_has_a_span() {
     assert_eq!(string_token.kind, TokenKind::StringDoneDq);
     let source = ast.sources.get(file_id);
     let span = string_token.span(source.base, &lexed.long_tokens);
-    assert_eq!((ast.sources.file_of(span.lo), source.local_from_global_offset(span.lo), span.len), (file_id, 8, 70_002));
+    assert_eq!((ast.sources.file_of(span.global_start), source.local_from_global_offset(span.global_start), span.len), (file_id, 8, 70_002));
     assert_eq!(lexed.tokens[4].kind, TokenKind::KeywordLet);
 }
 
