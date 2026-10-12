@@ -49,8 +49,11 @@ pub struct ParsedDefer {
 pub type FileId = u32;
 
 #[cfg(test)]
+mod highlight_test;
+#[cfg(test)]
 mod parse_test;
 
+pub mod highlight;
 mod idents;
 
 #[derive(PartialEq, Eq, Copy, Clone, Hash)]
@@ -1594,6 +1597,7 @@ pub struct ParsedProgram {
     pub stmts: VPool<ParsedStmt, ParsedStmtId>,
     pub uses: VPool<ParsedUse, ParsedUseId>,
     pub errors: Vec<ParseError>,
+    pub collect_semantic_tokens: bool,
 
     pub mem: kmem::Mem<ParsedProgram>,
     pub tmp: kmem::Mem<ParsedTmp>,
@@ -1626,6 +1630,7 @@ impl ParsedProgram {
             stmts: VPool::make("parsed_stmts"),
             uses: VPool::make("parsed_uses"),
             errors: Vec::new(),
+            collect_semantic_tokens: cfg!(feature = "lsp"),
 
             mem,
             tmp: kmem::Mem::make(),
@@ -1659,6 +1664,7 @@ impl ParsedProgram {
             stmts,
             uses,
             errors,
+            collect_semantic_tokens: _,
             mem,
             tmp,
         } = self;
@@ -2862,14 +2868,14 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn emit_semantic_token_mods(&mut self, token: Token, kind: SemanticTokenKind, mods: u8) {
-        if cfg!(feature = "lsp") {
+        if self.ast.collect_semantic_tokens {
             let span = self.tok_span(token);
             add_semantic_token(self.ast, SemanticToken { span, kind, mods });
         }
     }
 
     fn emit_semantic_token_span(&mut self, span: Span, kind: SemanticTokenKind) {
-        if cfg!(feature = "lsp") {
+        if self.ast.collect_semantic_tokens {
             add_semantic_token(self.ast, SemanticToken { span, kind, mods: 0 });
         }
     }
@@ -4476,7 +4482,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         lhs: ParsedExprId,
         lhs_tokens_start: usize,
     ) -> ParseResult<AssignStmt> {
-        if cfg!(feature = "lsp") {
+        if self.ast.collect_semantic_tokens {
             let mut place_spans: SV4<Span> = smallvec![];
             let mut place = lhs;
             loop {
@@ -6252,9 +6258,10 @@ impl ParsedProgram {
 
 /// To be used by the lsp or other tools that are
 /// only interested in parsing a single file independently
-pub fn parse_standalone(program_name: String, content: &str) -> ParsedProgram {
+pub fn parse_standalone(program_name: String, content: &str) -> (ParsedProgram, Lexed) {
     let mut ast = ParsedProgram::make();
     ast.set_name(&program_name);
+    ast.collect_semantic_tokens = true;
 
     let program_name_id = ast.idents.intern(&program_name);
     let source_file_path = if std::path::Path::new(&program_name).is_absolute() {
@@ -6268,7 +6275,7 @@ pub fn parse_standalone(program_name: String, content: &str) -> ParsedProgram {
     let mut lexed = lex(content, Lexed::default());
     if let Err(e) = ast.register_lexed_file(file_id, &mut lexed) {
         ast.errors.push(e);
-        return ast;
+        return (ast, lexed);
     }
 
     let module_id = ModuleId::from_u32(1).unwrap();
@@ -6278,12 +6285,12 @@ pub fn parse_standalone(program_name: String, content: &str) -> ParsedProgram {
     let mut parser =
         Parser::make_for_file(module_id, module_name, module_ns_id, &mut ast, &lexed, file_id);
     parser.parse_file_into_module();
-    ast
+    (ast, lexed)
 }
 
 #[cfg(test)]
 pub fn test_parse_input(name: String, source: impl AsRef<str>) -> ParseResult<ParsedProgram> {
-    let ast = parse_standalone(name, source.as_ref());
+    let (ast, _) = parse_standalone(name, source.as_ref());
     if let Some(e) = ast.errors.first() {
         print_error(&ast, e);
         Err(e.clone())

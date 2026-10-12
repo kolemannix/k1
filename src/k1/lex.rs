@@ -1274,13 +1274,11 @@ impl<'content> Lexer<'content> {
                                 self.advance();
                                 let rest = &self.content[self.pos as usize..];
                                 self.pos = match memchr::memchr(b'\n', rest) {
-                                    Some(i) if i > 0 && rest[i - 1] == b'\r' => self.pos + i as u32,
-                                    Some(i) => {
-                                        self.next_token_flags |= TOKEN_FLAG_IS_WHITESPACE_PRECEDED
-                                            | TOKEN_FLAG_IS_NEWLINE_PRECEDED;
-                                        self.pos + i as u32 + 1
+                                    Some(i) if i > 0 && rest[i - 1] == b'\r' => {
+                                        self.pos + i as u32 - 1
                                     }
-                                    None => self.content.len() as u32 + 1,
+                                    Some(i) => self.pos + i as u32,
+                                    None => self.content.len() as u32,
                                 };
                                 out.trivia.push(TriviaEntry {
                                     token_idx: out.tokens.len() as u32,
@@ -1664,17 +1662,17 @@ mod test {
         let let_trivia = trivia.for_token(0);
         assert_eq!(let_trivia.len(), 2);
         assert_eq!(let_trivia[0].trivia.kind, TokenTriviaKind::LineComment);
-        assert_eq!((let_trivia[0].trivia.start, let_trivia[0].trivia.len), (0, 16));
+        assert_eq!((let_trivia[0].trivia.start, let_trivia[0].trivia.len), (0, 15));
         assert_eq!(let_trivia[1].trivia.kind, TokenTriviaKind::LineComment);
-        assert_eq!((let_trivia[1].trivia.start, let_trivia[1].trivia.len), (24, 13));
+        assert_eq!((let_trivia[1].trivia.start, let_trivia[1].trivia.len), (24, 12));
 
         assert!(trivia.for_token(3).is_empty());
 
         // Trailing comments attach to the EOF sentinel, the last token
         let trailing = trivia.for_token(tokens.len() as u32 - 1);
         assert_eq!(trailing.len(), 2);
-        assert_eq!((trailing[0].trivia.start, trailing[0].trivia.len), (72, 34));
-        assert_eq!((trailing[1].trivia.start, trailing[1].trivia.len), (114, 3));
+        assert_eq!((trailing[0].trivia.start, trailing[0].trivia.len), (72, 33));
+        assert_eq!((trailing[1].trivia.start, trailing[1].trivia.len), (114, 2));
         Ok(())
     }
 

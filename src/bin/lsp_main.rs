@@ -100,7 +100,7 @@ fn span_to_range_in_ast(ast: &ParsedProgram, span: Span) -> Option<Range> {
     Some(Range {
         start: Position {
             line: start_line.line_index,
-            character: source.local_from_global_offset(span.lo) - start_line.start_char,
+            character: source.local_from_global_offset(span.global_start) - start_line.start_char,
         },
         end: Position {
             line: end_line.line_index,
@@ -603,7 +603,7 @@ impl Backend {
         let file_id = source.file_id;
         let mut messages_in_file = Vec::new();
         for m in k1.messages.borrow().iter() {
-            if !m.span.is_none() && k1.ast.sources.file_of(m.span.lo) == file_id {
+            if !m.span.is_none() && k1.ast.sources.file_of(m.span.global_start) == file_id {
                 messages_in_file.push(m.clone());
             }
         }
@@ -718,7 +718,7 @@ impl LanguageServer for Backend {
         }
         let new_content = change.text;
         info!("textDocument/did_change: parsing file {}", &file_url);
-        let ast = parse::parse_standalone(file_url.path().to_string(), &new_content);
+        let (ast, _) = parse::parse_standalone(file_url.path().to_string(), &new_content);
         let mut parse_diagnostics = vec![];
         info!(
             "textDocument/did_change: parsed file {} with {} errors",
@@ -863,21 +863,23 @@ impl LanguageServer for Backend {
         for entry in ast_for_file.mem.getn_lt(source.trivia) {
             match entry.trivia.kind {
                 lex::TokenTriviaKind::LineComment => {
-                    let span =
-                        lex::Span { lo: source.base + entry.trivia.start, len: entry.trivia.len };
+                    let span = lex::Span {
+                        global_start: source.base + entry.trivia.start,
+                        len: entry.trivia.len,
+                    };
                     spans_and_kinds.push((span, TokenTypes::Comment as u32, 0));
                 }
                 _ => {}
             }
         }
         spans_and_kinds.sort_unstable_by_key(|(span, token_type, _)| {
-            (span.lo, *token_type != TokenTypes::Comment as u32)
+            (span.global_start, *token_type != TokenTypes::Comment as u32)
         });
         let mut comment_end = 0;
         let mut prev_line = 1;
         let mut prev_start_col = 0;
         for (span, token_type, bitflags) in spans_and_kinds {
-            if span.lo < comment_end {
+            if span.global_start < comment_end {
                 continue;
             }
             if token_type == TokenTypes::Comment as u32 {
@@ -888,7 +890,7 @@ impl LanguageServer for Backend {
                 continue;
             };
             let line_number = line.line_number();
-            let start_col = source.local_from_global_offset(span.lo) - line.start_char;
+            let start_col = source.local_from_global_offset(span.global_start) - line.start_char;
             let delta_line = line_number - prev_line;
             let delta_start = if delta_line == 0 { start_col - prev_start_col } else { start_col };
 
@@ -944,7 +946,8 @@ impl LanguageServer for Backend {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let file_url = params.text_document.uri;
         info!("handling did_open for document: {}", file_url.path());
-        let ast = parse::parse_standalone(file_url.path().to_string(), &params.text_document.text);
+        let (ast, _) =
+            parse::parse_standalone(file_url.path().to_string(), &params.text_document.text);
         self.open_sources.lock().unwrap().insert(file_url.clone(), ast);
         self.ensure_target_and_compile(&file_url, false).await;
     }
@@ -1208,7 +1211,7 @@ fn find_references(
             return Ok(None);
         }
     }
-    spans.sort_by_key(|span| (span.lo, span.len));
+    spans.sort_by_key(|span| (span.global_start, span.len));
     spans.dedup();
     let mut locations = Vec::new();
     for span in spans {

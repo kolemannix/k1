@@ -2833,6 +2833,7 @@ pub struct TypedProgram {
 
     pub uses_pending_resolution: VecDeque<UsePendingResolution>,
     pub types_pending_definition: Vec<TypePendingDefinition>,
+    pub functions_pending_body: Vec<FunctionId>,
 
     exported_symbols: FxHashMap<StringId, Span>,
 
@@ -3024,6 +3025,7 @@ impl TypedProgram {
             namespace_type_params: FxHashMap::new(),
             uses_pending_resolution: VecDeque::new(),
             types_pending_definition: Vec::new(),
+            functions_pending_body: Vec::new(),
             ast,
             module_in_progress: None,
             module_params_phase: ModuleParamsPhase::Program,
@@ -12567,7 +12569,7 @@ impl TypedProgram {
                 | TypedFunctionFlags::Inline
                 | TypedFunctionFlags::NoInline
                 | TypedFunctionFlags::Cold);
-        self.add_function(TypedFunction {
+        let specialized_function_id = self.add_function(TypedFunction {
             name: parent_function.name,
             scope: ScopeId::PENDING,
             namespace_id: parent_function.namespace_id,
@@ -12587,7 +12589,9 @@ impl TypedProgram {
             dyn_receiver_thunk_id: None,
             returned_variable: None,
             body_failure: None,
-        })
+        });
+        self.functions_pending_body.push(specialized_function_id);
+        specialized_function_id
     }
 
     fn get_function_scope(&mut self, function_id: FunctionId) -> ScopeId {
@@ -17583,7 +17587,7 @@ impl TypedProgram {
     }
 
     fn emit_semantic_token(&mut self, span: Span, kind: parse::SemanticTokenKind) {
-        if cfg!(feature = "lsp") {
+        if self.ast.collect_semantic_tokens {
             parse::add_semantic_token(&mut self.ast, parse::SemanticToken { span, kind, mods: 0 });
         }
     }
@@ -17785,6 +17789,15 @@ impl TypedProgram {
         debug!(">> Pass 5 bodies (functions, globals, abilities, non-metaprogram statics)");
         let pass = self.trace_push(TraceKind::PassBodies, module_id.as_u32(), 0);
         self.compile_ns_body(module_root_parsed_namespace, skip_defns);
+        let mut i = 0;
+        while i < self.functions_pending_body.len() {
+            let function_id = self.functions_pending_body[i];
+            i += 1;
+            if let Err(e) = self.eval_function_body(function_id) {
+                self.report(e);
+            }
+        }
+        self.functions_pending_body.clear();
         self.trace_pop(pass);
 
         check_for_errors!();

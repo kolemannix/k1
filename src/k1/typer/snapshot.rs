@@ -119,6 +119,7 @@ impl TypedProgram {
             exported_symbols,
             uses_pending_resolution,
             types_pending_definition,
+            functions_pending_body,
             module_in_progress,
             module_params_phase: _,
             deferred_module_params,
@@ -201,6 +202,7 @@ impl TypedProgram {
 
         assert!(uses_pending_resolution.is_empty());
         assert!(types_pending_definition.is_empty());
+        assert!(functions_pending_body.is_empty());
         assert!(module_in_progress.is_none());
         assert!(deferred_module_params.is_empty());
         let TypeDefnContext {

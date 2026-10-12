@@ -1,10 +1,11 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use k1::compiler;
 use k1::compiler::{Command, CompileProgramError, CompileRequest, Target, ToolFlags};
+use k1::parse;
 use log::info;
 use mimalloc::MiMalloc;
 
@@ -21,7 +22,8 @@ fn main() -> anyhow::Result<ExitCode> {
     log::set_logger(l).unwrap();
     log::set_max_level(max_level);
     let (request, program_args) = match parse_cli() {
-        Ok(cli) => cli,
+        Ok(Cli::Compile(request, program_args)) => (request, program_args),
+        Ok(Cli::Parse(path)) => return Ok(parse_file(&path)),
         Err(e) => {
             eprintln!("k1: {e}\nRun `k1 --help` for usage");
             return Ok(ExitCode::FAILURE);
@@ -120,6 +122,22 @@ fn main() -> anyhow::Result<ExitCode> {
     Ok(if success { ExitCode::SUCCESS } else { ExitCode::FAILURE })
 }
 
+fn parse_file(path: &Path) -> ExitCode {
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(e) => {
+            eprintln!("k1: cannot read {}: {e}", path.display());
+            return ExitCode::FAILURE;
+        }
+    };
+    let (ast, lexed) = parse::parse_standalone(path.to_string_lossy().into_owned(), &content);
+    print!("{}", parse::highlight::highlight_text(&ast, &lexed));
+    for error in &ast.errors {
+        parse::print_error(&ast, error);
+    }
+    if ast.errors.is_empty() { ExitCode::SUCCESS } else { ExitCode::FAILURE }
+}
+
 fn usage() -> String {
     let mut targets = String::new();
     for target in Target::ALL {
@@ -144,6 +162,7 @@ Commands:
   server      Serve the megarepl for the program
   setup       Run the module's setup if its stamp is stale
   clean       Delete the module's .k1-out
+  parse       Print one file's tokens as `<start> <len> <class>` lines for highlighting
 
 Build options (fn build sees these as req.default and req.options):
   --target <{targets}>
@@ -185,10 +204,16 @@ fn parse_command(name: &str) -> Result<Command, lexopt::Error> {
     })
 }
 
-fn parse_cli() -> Result<(CompileRequest, Vec<String>), lexopt::Error> {
+enum Cli {
+    Compile(CompileRequest, Vec<String>),
+    Parse(PathBuf),
+}
+
+fn parse_cli() -> Result<Cli, lexopt::Error> {
     use lexopt::prelude::*;
     let mut parser = lexopt::Parser::from_env();
     let mut command = None;
+    let mut parse_only = false;
     let mut path = None;
     let mut program_args = Vec::new();
     let mut target = None;
@@ -230,11 +255,24 @@ fn parse_cli() -> Result<(CompileRequest, Vec<String>), lexopt::Error> {
                 println!("k1 {}", env!("CARGO_PKG_VERSION"));
                 std::process::exit(0);
             }
-            Value(value) if command.is_none() => command = Some(parse_command(&value.string()?)?),
+            Value(value) if command.is_none() && !parse_only => {
+                let name = value.string()?;
+                if name == "parse" {
+                    parse_only = true
+                } else {
+                    command = Some(parse_command(&name)?)
+                }
+            }
             Value(value) if path.is_none() => path = Some(PathBuf::from(value)),
             Value(value) if command == Some(Command::Run) => program_args.push(value.string()?),
             _ => return Err(arg.unexpected()),
         }
+    }
+    if parse_only {
+        return match path {
+            Some(path) => Ok(Cli::Parse(path)),
+            None => Err("parse needs a .k1 file".into()),
+        };
     }
     let command = match command {
         None => return Err("missing command".into()),
@@ -252,5 +290,5 @@ fn parse_cli() -> Result<(CompileRequest, Vec<String>), lexopt::Error> {
     build.filc = filc;
     request.build.options = options;
     request.tools = tools;
-    Ok((request, program_args))
+    Ok(Cli::Compile(request, program_args))
 }
