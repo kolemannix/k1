@@ -10,5 +10,9 @@ rm -rf ~/.k1/modules ~/.k1/test_src
 cp -r modules/. ~/.k1/modules
 cp -r test_src/. ~/.k1/test_src
 
+if [ "$(uname)" = Darwin ]; then
+  xattr -dr com.apple.quarantine ~/.k1
+fi
+
 echo "K1 installed at ~/.k1"
 echo "You should add ~/.k1/bin to your \$PATH"

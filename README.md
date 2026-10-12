@@ -73,7 +73,7 @@ just lsprelease
 The resulting binaries will be available under `./target/release`. You can install the binaries and the dependent `modules` to `~/.k1` via:
 
 ```bash
-just install-macos-from-macos # Or: just install-linux-from-linux
+just install
 ```
 
 As the install command suggests, you'll want to add `~/.k1/bin` to your `PATH`.
