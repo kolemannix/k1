@@ -1,5 +1,7 @@
 use std/process
 
+let params: { compile-defines: span[string] } = k1/module-params(.{ compile-defines = [] })
+
 fn module(_b: k1/build-config): k1/module {
   let m = k1/module/new()
   m.lib("sqlite3", :static)
@@ -22,6 +24,8 @@ let defines: span[string] = [
 
 fn setup(ctx: k1/setup-ctx) {
   let minver = if (ctx.build.target is :arm64-macos) "-mmacosx-version-min=15.0.0" else ""
+  let defines: list[string] = list/from-span(defines)
+  for params.compile-defines { defines.push(it) }
   let cflags = string-builder/new()
   for defines { cflags.write(" -D$it") }
   process/sh-verbose(`

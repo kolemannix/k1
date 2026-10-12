@@ -8,8 +8,8 @@ use std::os::unix::prelude::ExitStatusExt;
 use std::path::Path;
 
 use crate::kmem::{self, MStr, Mem};
-use crate::parse::{IdentPool, Interner, StringId, write_source_location};
 use crate::lex::Span;
+use crate::parse::{IdentPool, Interner, StringId, write_source_location};
 use crate::typer::{
     K1Message, K1Result, LibRefLinkType, Linkage, MemTmp, MessageLevel, NamespaceId, TypedProgram,
 };
@@ -815,6 +815,7 @@ pub struct SetupRequest {
     pub module_dir: StringId,
     pub module_name: StringId,
     pub build_hash: u64,
+    pub params_hash: u64,
     pub outputs: SV8<StringId>,
     pub inputs: SV8<StringId>,
     pub target: Target,
@@ -1038,9 +1039,10 @@ fn compute_setup_fingerprint<Tag>(
     use std::fmt::Write;
     let module_dir = idents.get_string(req.module_dir);
     let mut s = String::new();
-    writeln!(s, "k1-setup-stamp v6").unwrap();
+    writeln!(s, "k1-setup-stamp v7").unwrap();
     writeln!(s, "target: {}", req.target.to_str()).unwrap();
     writeln!(s, "build: {:016x}", req.build_hash).unwrap();
+    writeln!(s, "params: {:016x}", req.params_hash).unwrap();
     for (label, ids) in [("outputs", &req.outputs), ("inputs", &req.inputs)] {
         write!(s, "{label}: ").unwrap();
         for (i, id) in ids.iter().enumerate() {

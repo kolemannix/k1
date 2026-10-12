@@ -82,9 +82,17 @@ loads is named with `k1/host-platform.dylib-ext()` (`dylib` or `so`).
 (the dir itself for a module dir, the file's parent for a single-file program),
 resolved like `k1/location()`: text a macro splices in from its arguments
 counts as the caller's, template text as the macro's. Deps are named in the manifest with
-`m.dep("y")`, or `m.dep-params("y", .{ field = value })` to set y's
-`let p: S = k1/module-params(defaults)` fields; the literal is typed later, in y.
-A dep name resolves to the first existing dir of `<primary>/deps/y`,
+`m.dep("y")`. A module declares its parameters in its own `build.k1` with
+`let params: { field: type, .. } = k1/module-params(defaults)`; the annotation is
+the schema and `defaults` a literal typed against it. Only the primary configures
+them: `m.dep-params("y", .{ field = value })` in the primary's `build.k1` is
+merged over y's defaults as `defaults | literal`, so it may name a subset (a
+non-primary writing `dep-params` is an error, as is omitting both). The value is
+final after every manifest has run, so
+`fn setup` reads the global but `fn module` cannot. The same `let` is seeded into
+y's root namespace, so program code reads `params.field` inside y and
+`y/params.field` anywhere else; a library that needs a setting asserts it there
+with `#static`. A dep name resolves to the first existing dir of `<primary>/deps/y`,
 `<dependent>/deps/y`, `$K1_HOME/modules/y`; two dependents resolving `y` to
 different dirs is an error settled by adding `<primary>/deps/y`. The whole plan
 is cached under `.k1-out/cache/plan-*` and rebuilt when a `build.k1`, a dep
@@ -118,11 +126,13 @@ belongs on the out-of-line half of a fast path (`buffer/_grow-to`,
 
 A manifest may declare a setup step — `m.setup(outputs, inputs)` — paired with
 `fn setup(ctx: k1/setup-ctx)` in the same `build.k1`. When the declared outputs
-are stale (hashed together with the inputs, `build.k1`, and the target), the
+are stale (hashed together with the inputs, `build.k1`, the module params, and the target), the
 compiler runs `fn setup` on the host with cwd = the module dir, then stamps the
 outputs; a run that fails leaves no stamp, so it is retried on the next compile.
 Setups finish before any program source is read. See `modules/uv`,
-`modules/http`, `modules/sdl3`.
+`modules/http`, `modules/sdl3`; `modules/sqlite` takes `compile-defines:
+span[string]`, extra `-D` flags for the amalgamation and bindgen (the session
+extension needs `SQLITE_ENABLE_SESSION` and `SQLITE_ENABLE_PREUPDATE_HOOK`).
 
 ```rust
 // build.k1

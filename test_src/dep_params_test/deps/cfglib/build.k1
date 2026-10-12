@@ -1,0 +1,12 @@
+let cfg: { backlog: u32, tls: bool } = k1/module-params(.{ backlog = 128, tls = false })
+
+fn module(_b: k1/build-config): k1/module {
+  let m = k1/module/new()
+  m.setup(["gen.k1"], [])
+  m
+}
+
+fn setup(_ctx: k1/setup-ctx) {
+  let text = "fn setup-backlog(): u32 { ${cfg.backlog} }\n"
+  core/files/write-entire-file("${k1/module-dir()}/gen.k1", text).!
+}

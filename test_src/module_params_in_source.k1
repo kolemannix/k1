@@ -1,0 +1,3 @@
+let p: { x: u32 } = k1/module-params(.{ x = 1 })
+fn main(): i32 { 0 }
+//errmsg: k1/module-params is declared in a module's build.k1

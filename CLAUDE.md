@@ -131,7 +131,7 @@ for compile-time execution, codegen_llvm for binaries.
   running compiled programs, `static_assert_size`/`static_assert_niched`,
   `compiler_test`.
 - `plan.rs`: `BuildPlan` (config + modules in dependency order, libs, link
-  args, setups, dep-params providers), dep lookup, the plan cache and its
+  args, setups, module params), dep lookup, the plan cache and its
   freshness check. Strings are `StringId`s in the plan's own `Interner`.
 - `typer/host.rs`: the host world H that compiles every `build.k1` against
   host core+std, runs `fn build`/`fn module`/`fn setup` in waves, and produces

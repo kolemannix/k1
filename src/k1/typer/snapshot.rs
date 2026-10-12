@@ -57,9 +57,8 @@ pub(crate) fn module_inputs_hash(
     for dep in plan.mem.getn(m.deps) {
         hash = hash.add(&[&dep.to_le_bytes()]);
     }
-    for p in plan.mem.getn(m.providers) {
-        let file_hash = plan.module(p.from as usize).build_file_hash.unwrap();
-        hash = hash.add(&[&file_hash.to_le_bytes(), &p.offset.to_le_bytes(), &p.len.to_le_bytes()]);
+    if let Some(p) = m.params {
+        hash = hash.add(&[plan.get(p.text).as_bytes()]);
     }
     for f in files {
         hash = hash.add(&[f.path.as_bytes(), &f.content_hash.to_le_bytes()]);
@@ -121,6 +120,8 @@ impl TypedProgram {
             uses_pending_resolution,
             types_pending_definition,
             module_in_progress,
+            module_params_phase: _,
+            deferred_module_params,
             ls_entities,
             completion: _,
             lsp: _,
@@ -201,6 +202,7 @@ impl TypedProgram {
         assert!(uses_pending_resolution.is_empty());
         assert!(types_pending_definition.is_empty());
         assert!(module_in_progress.is_none());
+        assert!(deferred_module_params.is_empty());
         let TypeDefnContext {
             stack,
             recursive_mentions,

@@ -8,10 +8,11 @@ use crate::compiler::{
 };
 use crate::parse::Interner;
 use crate::plan::{
-    BUILD_FILE_NAME, BuildPlan, ParamsProvider, PlanMem, PlannedLib, PlannedModule, PlannedSetup,
+    BUILD_FILE_NAME, BuildPlan, PlanChunk, PlanMem, PlannedLib, PlannedModule, PlannedSetup,
+    PlannedSource,
 };
 
-const PRIMARY: usize = 0;
+const PRIMARY_MODULE_INDEX: usize = 0;
 
 #[derive(Clone)]
 struct Entry {
@@ -20,15 +21,22 @@ struct Entry {
     manifest_span: Span,
     resolved_by: usize,
     deps: SV8<u32>,
+    params_expr_span: Option<Span>,
 }
 
 struct Planner {
     plan: BuildPlan,
     entries: SV8<Entry>,
-    providers: SV8<(usize, ParamsProvider)>,
 }
 
 type Pending = SV8<(usize, Option<ModuleSources>)>;
+
+#[derive(Clone, Copy)]
+enum Visit {
+    Unvisited,
+    InProgress,
+    Done,
+}
 
 pub fn plan_in_host(
     config: CompilerConfig,
@@ -62,6 +70,7 @@ pub fn plan_in_host(
     let snapshot_count = host_plan.modules().len();
     let (mut h, sources) =
         crate::compiler::open_program(ast, host_config, host_plan, host_lsp, snapshot_count);
+    h.module_params_phase = ModuleParamsPhase::HostDiscovery;
     let result = h
         .load_plan_modules(sources, snapshot_count)
         .and_then(|()| h.plan_build(BuildPlan::new(strings, request.default), request));
@@ -77,12 +86,19 @@ pub fn plan_in_host(
 
 impl TypedProgram {
     fn plan_build(&mut self, plan: BuildPlan, request: &BuildRequest) -> K1Result<BuildPlan> {
-        let mut planner = Planner { plan, entries: SV8::new(), providers: SV8::new() };
+        let mut planner = Planner { plan, entries: SV8::new() };
         let src_path = self.ast.idents.get_string(self.config.src_path);
         let primary_name = self.ast.idents.get_string(self.ast.name_id);
         let mut pending: Pending = SV8::new();
         let is_dir = Path::new(src_path).is_dir();
-        self.reach(&mut planner, primary_name, src_path, is_dir, PRIMARY, &mut pending);
+        self.reach(
+            &mut planner,
+            primary_name,
+            src_path,
+            is_dir,
+            PRIMARY_MODULE_INDEX,
+            &mut pending,
+        );
 
         let mut build_value = None;
         let mut wave = 0;
@@ -94,7 +110,32 @@ impl TypedProgram {
             wave += 1;
         }
 
-        let order = self.order_modules(&planner)?;
+        // Every manifest has run, so the primary's dep-params are known: evaluate
+        // each module's deferred k1/module-params global against them
+        self.module_params_phase = ModuleParamsPhase::HostSetup;
+        for global_id in std::mem::take(&mut self.deferred_module_params) {
+            let span = self.globals.get(global_id).span;
+            let module_id = self.module_of_span(span);
+            let Some(index) = planner.entries.iter().position(|e| e.host == Some(module_id)) else {
+                self.ice_span(span, "module params global outside any planned module")
+            };
+            let params = self.evaluate_module_params(&mut planner, index, global_id)?;
+            planner.entries[index].module.params = Some(params);
+        }
+        for entry in &planner.entries {
+            if let Some(span) = entry.params_expr_span
+                && entry.module.params.is_none()
+            {
+                kbail!(
+                    self,
+                    span,
+                    "Module '{}' accepts no parameters",
+                    planner.plan.get(entry.module.name)
+                );
+            }
+        }
+
+        let order = self.get_dependency_order(&planner)?;
         let force_primary = matches!(request.command, Command::Setup { force: true });
         self.run_setups(&planner, &order, build_value.unwrap(), force_primary)?;
         Ok(self.finish_plan(planner, &order))
@@ -121,6 +162,7 @@ impl TypedProgram {
             manifest_span: Span::NONE,
             resolved_by,
             deps: SV8::new(),
+            params_expr_span: None,
         });
         let overrides = &self.lsp.source_overrides;
         let build_path = if is_dir {
@@ -176,9 +218,16 @@ impl TypedProgram {
                     continue;
                 };
                 if let Some(s) = params_span {
-                    let offset = self.ast.sources.source_by_span(s).local_from_global_offset(s.lo);
-                    let provider = ParamsProvider { from: index as u32, offset, len: s.len };
-                    planner.providers.push((dep, provider));
+                    if index != PRIMARY_MODULE_INDEX {
+                        kbail!(
+                            self,
+                            s,
+                            "Only the primary configures module params; '{}' cannot set params for '{}'",
+                            planner.plan.get(planner.entries[index].module.name),
+                            dep_name
+                        );
+                    }
+                    planner.entries[dep].params_expr_span = Some(s);
                 }
                 planner.entries[index].deps.push(dep as u32);
             }
@@ -217,7 +266,7 @@ impl TypedProgram {
     ) -> K1Result<StaticValueId> {
         let config_type = self.builtin_types.k1_build_config.unwrap();
         let request_type = self.builtin_types.k1_build_request.unwrap();
-        let build_fn = match planner.entries[PRIMARY].host {
+        let build_fn = match planner.entries[PRIMARY_MODULE_INDEX].host {
             Some(host) => self.host_fn(
                 host,
                 self.ast.idents.b.build,
@@ -260,10 +309,10 @@ impl TypedProgram {
             "std" => return Ok(None),
             _ => {}
         }
-        if planner.plan.get(planner.entries[PRIMARY].module.name) == name {
-            return Ok(Some(PRIMARY));
+        if planner.plan.get(planner.entries[PRIMARY_MODULE_INDEX].module.name) == name {
+            return Ok(Some(PRIMARY_MODULE_INDEX));
         }
-        let primary_dir = planner.plan.module_dir(&planner.entries[PRIMARY].module);
+        let primary_dir = planner.plan.module_dir(&planner.entries[PRIMARY_MODULE_INDEX].module);
         let dependent_dir = planner.plan.module_dir(&planner.entries[dependent].module);
         let k1_home = self.ast.idents.get_string(self.config.k1_home);
         let tmp = self.get_tmp_unsafe();
@@ -312,8 +361,11 @@ impl TypedProgram {
         build_value: StaticValueId,
     ) -> K1Result<SV8<(StringId, Option<Span>)>> {
         let mut deps: SV8<(StringId, Option<Span>)> = SV8::new();
-        planner.entries[index].module.kind =
-            if index == PRIMARY { ModuleKind::Executable } else { ModuleKind::Library };
+        planner.entries[index].module.kind = if index == PRIMARY_MODULE_INDEX {
+            ModuleKind::Executable
+        } else {
+            ModuleKind::Library
+        };
         let Some(host) = planner.entries[index].host else { return Ok(deps) };
         let module_type = self.builtin_types.k1_module.unwrap();
         let config_type = self.builtin_types.k1_build_config.unwrap();
@@ -336,7 +388,9 @@ impl TypedProgram {
                 _ => ModuleKind::Library,
             };
         }
-        if index != PRIMARY && planner.entries[index].module.kind == ModuleKind::Executable {
+        if index != PRIMARY_MODULE_INDEX
+            && planner.entries[index].module.kind == ModuleKind::Executable
+        {
             kbail!(
                 self,
                 span,
@@ -550,11 +604,11 @@ impl TypedProgram {
         self.encode_struct(type_id, &fields)
     }
 
-    fn order_modules(&self, planner: &Planner) -> K1Result<SV8<usize>> {
-        let mut state: SV8<u8> = smallvec![0; planner.entries.len()];
-        let mut stack: SV8<usize> = SV8::new();
-        let mut order: SV8<usize> = SV8::new();
-        self.visit_module(planner, PRIMARY, &mut state, &mut stack, &mut order)?;
+    fn get_dependency_order(&self, planner: &Planner) -> K1Result<SV8<usize>> {
+        let mut state: SV8<Visit> = smallvec![Visit::Unvisited; planner.entries.len()];
+        let mut stack: SV8<usize> = smallvec![];
+        let mut order: SV8<usize> = smallvec![];
+        self.visit_module(planner, PRIMARY_MODULE_INDEX, &mut state, &mut stack, &mut order)?;
         Ok(order)
     }
 
@@ -562,13 +616,13 @@ impl TypedProgram {
         &self,
         planner: &Planner,
         index: usize,
-        state: &mut SV8<u8>,
+        state: &mut SV8<Visit>,
         stack: &mut SV8<usize>,
         order: &mut SV8<usize>,
     ) -> K1Result<()> {
         match state[index] {
-            2 => return Ok(()),
-            1 => {
+            Visit::Done => return Ok(()),
+            Visit::InProgress => {
                 let mut cycle: Vec<&str> = vec![];
                 for open in stack.iter().skip_while(|open| **open != index) {
                     cycle.push(planner.plan.get(planner.entries[*open].module.name));
@@ -577,15 +631,15 @@ impl TypedProgram {
                 let span = planner.entries[*stack.last().unwrap()].manifest_span;
                 kbail!(self, span, "Module dependency cycle: {}", cycle.join(" -> "));
             }
-            _ => {}
+            Visit::Unvisited => {}
         }
-        state[index] = 1;
+        state[index] = Visit::InProgress;
         stack.push(index);
         for dep in &planner.entries[index].deps {
             self.visit_module(planner, *dep as usize, state, stack, order)?;
         }
         stack.pop();
-        state[index] = 2;
+        state[index] = Visit::Done;
         order.push(index);
         Ok(())
     }
@@ -599,7 +653,7 @@ impl TypedProgram {
     ) -> K1Result<()> {
         for &index in order {
             let entry = &planner.entries[index];
-            let force = force_primary && index == PRIMARY;
+            let force = force_primary && index == PRIMARY_MODULE_INDEX;
             let Some(req) = planner.plan.setup_request(&self.ast.idents, &entry.module, force)
             else {
                 continue;
@@ -650,6 +704,120 @@ impl TypedProgram {
         Ok(())
     }
 
+    fn evaluate_module_params(
+        &mut self,
+        planner: &mut Planner,
+        index: usize,
+        global_id: TypedGlobalId,
+    ) -> K1Result<PlannedSource> {
+        let global = *self.globals.get(global_id);
+        let host = planner.entries[index].host.unwrap();
+        let module_name = planner.plan.get(planner.entries[index].module.name);
+        if global.parent_scope != self.modules.get(host).namespace_scope_id {
+            kbail!(
+                self,
+                global.span,
+                "k1/module-params must initialize a top-level global of build.k1"
+            );
+        }
+        let schema_type = global.type_id;
+        let value_expr = global.parsed_expr.unwrap();
+        let call_span = self.ast.exprs.get_span(value_expr);
+        let args = self.ast.mem.getn(self.find_module_params_call_args(value_expr).unwrap());
+        let deps_provider_expr_span = planner.entries[index].params_expr_span;
+        let defaults = match args {
+            [] if deps_provider_expr_span.is_none() => {
+                kbail!(self, call_span, "Module '{}' requires parameters", module_name)
+            }
+            [] => None,
+            [defaults] => Some(self.ast.exprs.get_span(defaults.value)),
+            _ => {
+                kbail!(self, call_span, "k1/module-params takes at most one argument: the defaults")
+            }
+        };
+
+        let mut expr = String::new();
+        let mut expr_plan_chunks: SV8<PlanChunk> = SV8::new();
+        let mut emitted_chunks: SV4<CodeChunkPos> = SV4::new();
+        for span in [defaults, deps_provider_expr_span].into_iter().flatten() {
+            if !expr.is_empty() {
+                expr.push_str(" | ");
+            }
+            self.push_plan_chunk(planner, span, &mut expr, &mut expr_plan_chunks);
+            let c = expr_plan_chunks.last().unwrap();
+            emitted_chunks.push(CodeChunkPos { start: c.start, end: c.end, source: span });
+        }
+        let emitted_chunks = self.mem.pushn(&emitted_chunks);
+        let source_file_id = self.add_emitted_source(&expr, emitted_chunks, call_span);
+        let ParseMetaprogramResult::Expr(parsed) =
+            self.parse_metaprogram_source(host, source_file_id, ParseAdHocKind::Expr)?
+        else {
+            self.ice_span(call_span, "module params parsed as definitions");
+        };
+        let ctx = EvalExprContext::make(Scopes::ROOT_SCOPE_ID)
+            .with_expected_type(Some(schema_type))
+            .with_static_ctx(Some(StaticExecContext { expected_return_type: Some(schema_type) }));
+        let value_id = self.execute_static_expr(parsed, ctx, &[])?;
+        let value_type = self.get_static_value_type(value_id);
+        if let Err(msg) = self.check_types(schema_type, value_type, Scopes::ROOT_SCOPE_ID) {
+            kbail!(
+                self,
+                call_span,
+                "Type mismatch in params for module '{}': {}",
+                module_name,
+                msg
+            );
+        }
+        self.globals.get_mut(global_id).initial_value = GlobalInitialValue::Value(value_id);
+
+        // The value above serves fn setup in this host program; the program being built
+        // shares nothing with it but the plan, so it gets the same `let` as source text
+        let parsed_global = self.ast.globals.get(global.ast_id);
+        let name_lo = parsed_global.name_span.lo;
+        let schema_end = self.ast.get_type_expr_span(parsed_global.type_expr).end();
+        let mut text = String::from("let ");
+        let mut let_plan_chunks: SV8<PlanChunk> = SV8::new();
+        self.push_plan_chunk(
+            planner,
+            Span { lo: name_lo, len: schema_end - name_lo },
+            &mut text,
+            &mut let_plan_chunks,
+        );
+        text.push_str(" = ");
+        let shift = text.len() as u32;
+        for c in &expr_plan_chunks {
+            let_plan_chunks.push(PlanChunk { start: c.start + shift, end: c.end + shift, ..*c });
+        }
+        text.push_str(&expr);
+        text.push('\n');
+        let chunks = planner.plan.mem.pushn(&let_plan_chunks);
+        Ok(PlannedSource { text: planner.plan.strings.intern(&text), chunks })
+    }
+
+    fn push_plan_chunk(
+        &self,
+        planner: &Planner,
+        span: Span,
+        text: &mut String,
+        chunks: &mut SV8<PlanChunk>,
+    ) {
+        let file_id = self.ast.sources.file_of(span.lo);
+        let source = self.ast.sources.get(file_id);
+        let offset = source.local_from_global_offset(span.lo);
+        let from = planner
+            .entries
+            .iter()
+            .position(|e| {
+                e.host.is_some_and(|h| self.modules.get(h).contains_file(&self.mem, file_id))
+            })
+            .unwrap() as u32;
+        let start = text.len() as u32;
+        text.push_str(
+            &source.content(&self.ast.mem)[offset as usize..(offset + span.len) as usize],
+        );
+        chunks.push(PlanChunk { start, end: text.len() as u32, from, offset, len: span.len });
+    }
+
     fn finish_plan(&mut self, mut planner: Planner, order: &[usize]) -> BuildPlan {
         let mut modules: SV8<PlannedModule> = SV8::new();
         let k1_home = self.ast.idents.get_string(self.config.k1_home);
@@ -667,16 +835,14 @@ impl TypedProgram {
                 deps.push(position[*dep as usize]);
             }
             m.deps = planner.plan.mem.pushn(&deps);
-            let mut providers: SV4<ParamsProvider> = SV4::new();
-            for (to, provider) in &planner.providers {
-                if *to == index {
-                    providers.push(ParamsProvider {
-                        from: position[provider.from as usize],
-                        ..*provider
-                    });
+            if let Some(params) = m.params {
+                let mut chunks: SV8<PlanChunk> = SV8::new();
+                for c in planner.plan.mem.getn(params.chunks) {
+                    chunks.push(PlanChunk { from: position[c.from as usize], ..*c });
                 }
+                let chunks = planner.plan.mem.pushn(&chunks);
+                m.params = Some(PlannedSource { chunks, ..params });
             }
-            m.providers = planner.plan.mem.pushn(&providers);
             modules.push(m);
         }
         planner.plan.modules = planner.plan.mem.pushn(&modules);

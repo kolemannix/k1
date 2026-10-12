@@ -1,5 +1,7 @@
 use std/process
 
+let params: { tlog: bool } = k1/module-params(.{ tlog = false })
+
 fn module(_b: k1/build-config): k1/module {
   let m = k1/module/new()
   m.dep("uv")

@@ -1,8 +1,7 @@
-let opts: { verbose: bool } = k1/module-params(.{ verbose = false })
-
 fn main(): i32 {
   assert(cfglib/backlog() == 500)
   assert(not cfglib/tls())
+  assert(cfglib/setup-backlog() == 500)
   assert(consumer/effective() == 500)
   assert(not opts.verbose)
   0

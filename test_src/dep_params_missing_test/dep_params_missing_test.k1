@@ -1,2 +1,2 @@
 fn main(): i32 { 0 }
-//errmsg: Missing required parameter 'tls' for module 'cfglib'
+//errmsg: struct is missing fields tls

@@ -22,10 +22,18 @@ pub struct PlannedLib {
 }
 
 #[derive(Clone, Copy)]
-pub struct ParamsProvider {
+pub struct PlanChunk {
+    pub start: u32,
+    pub end: u32,
     pub from: u32,
     pub offset: u32,
     pub len: u32,
+}
+
+#[derive(Clone, Copy)]
+pub struct PlannedSource {
+    pub text: StringId,
+    pub chunks: MSlice<PlanChunk, PlanMem>,
 }
 
 #[derive(Clone, Copy)]
@@ -43,7 +51,7 @@ pub struct PlannedModule {
     pub deps: MSlice<u32, PlanMem>,
     pub libs: MSlice<PlannedLib, PlanMem>,
     pub link_args: MSlice<StringId, PlanMem>,
-    pub providers: MSlice<ParamsProvider, PlanMem>,
+    pub params: Option<PlannedSource>,
     pub setup: Option<PlannedSetup>,
     pub build_file_hash: Option<u64>,
 }
@@ -62,7 +70,7 @@ impl PlannedModule {
             deps: MSlice::empty(),
             libs: MSlice::empty(),
             link_args: MSlice::empty(),
-            providers: MSlice::empty(),
+            params: None,
             setup: None,
             build_file_hash: None,
         }
@@ -165,10 +173,15 @@ impl BuildPlan {
         for id in self.mem.getn(setup.inputs) {
             inputs.push(idents.intern(self.get(*id)));
         }
+        let params_hash = match m.params {
+            None => 0,
+            Some(p) => crate::compiler::content_hash64(self.get(p.text).as_bytes()),
+        };
         Some(SetupRequest {
             module_dir: idents.intern(self.module_dir(m)),
             module_name: idents.intern(self.get(m.name)),
             build_hash: m.build_file_hash.unwrap(),
+            params_hash,
             outputs,
             inputs,
             target: self.config.target,

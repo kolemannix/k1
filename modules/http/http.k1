@@ -6,8 +6,6 @@ use uv/req
 use uv/handle
 use uv/stream
 
-let params: { tlog: bool } = k1/module-params(.{ tlog = false })
-
 type header = {
   url: url/url,
   headers: list[{ field: string, value: string }],

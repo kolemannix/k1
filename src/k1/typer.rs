@@ -1732,6 +1732,48 @@ pub struct TypedGlobal {
     pub reload_ns: Option<NamespaceId>,
 }
 
+impl TypedFunction {
+    pub fn synthesized(
+        name: StringId,
+        scope: ScopeId,
+        namespace_id: NamespaceId,
+        params: MSlice<TypedFunctionParam, TypedProgram>,
+        body_block: TypedExprId,
+        parsed_id: ParsedId,
+        type_id: TypeId,
+        kind: TypedFunctionKind,
+    ) -> TypedFunction {
+        TypedFunction {
+            name,
+            scope,
+            namespace_id,
+            params,
+            type_params: MSlice::empty(),
+            fnlike_type_params: MSlice::empty(),
+            ability_where_constraints: MSlice::empty(),
+            body_block: Some(body_block),
+            builtin_type: None,
+            linkage: Linkage::Standard,
+            specialization_info: None,
+            parsed_id,
+            type_id,
+            kind,
+            flags: TypedFunctionFlags::empty(),
+            dyn_fn_id: None,
+            dyn_receiver_thunk_id: None,
+            returned_variable: None,
+            body_failure: None,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum ModuleParamsPhase {
+    Program,
+    HostDiscovery,
+    HostSetup,
+}
+
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum NamespaceKind {
     User,
@@ -2440,20 +2482,12 @@ pub enum LibRefLinkType {
 }
 
 #[derive(Clone, Copy)]
-pub struct ModuleParams {
-    pub schema_type: TypeId,
-    pub value_id: StaticValueId,
-}
-
-#[derive(Clone, Copy)]
 pub struct Module {
     pub id: ModuleId,
     pub name: StringId,
     pub home_dir: StringId,
     pub namespace_id: NamespaceId,
     pub namespace_scope_id: ScopeId,
-    /// Schema type and merged value of the module's k1/module-params declaration
-    pub params: Option<ModuleParams>,
     /// One entry per source file in compile order
     pub files: PermList<FileId>,
     /// The module's parsed root namespace
@@ -2469,7 +2503,6 @@ impl Module {
             home_dir,
             namespace_id: NamespaceId::PENDING,
             namespace_scope_id: ScopeId::PENDING,
-            params: None,
             files: MList::empty(),
             parsed_namespace_id: ParsedNamespaceId::PENDING,
         }
@@ -2805,6 +2838,8 @@ pub struct TypedProgram {
 
     // Status and phases
     module_in_progress: Option<ModuleId>,
+    pub module_params_phase: ModuleParamsPhase,
+    pub deferred_module_params: Vec<TypedGlobalId>,
 
     pub ls_entities: RefCell<FxHashMap<FileId, Vec<LsEntity>>>,
     pub completion: Option<CompletionState>,
@@ -2991,6 +3026,8 @@ impl TypedProgram {
             types_pending_definition: Vec::new(),
             ast,
             module_in_progress: None,
+            module_params_phase: ModuleParamsPhase::Program,
+            deferred_module_params: Vec::new(),
             ls_entities: RefCell::new(ls_entities),
             completion,
             lsp,
@@ -3164,7 +3201,7 @@ impl TypedProgram {
         Ok(module_id)
     }
 
-    pub fn planned_module(&self, module_id: ModuleId) -> Option<&crate::plan::PlannedModule> {
+    pub fn get_planned_module(&self, module_id: ModuleId) -> Option<&crate::plan::PlannedModule> {
         self.plan.modules().get(module_id.as_u32() as usize - 1)
     }
 
@@ -3183,16 +3220,13 @@ impl TypedProgram {
         Path::new(self.get_string(self.config.cache_dir))
     }
 
-    pub(crate) fn provider_span(
-        &mut self,
-        provider: crate::plan::ParamsProvider,
-    ) -> K1Result<Span> {
-        let from = *self.plan.module(provider.from as usize);
+    fn get_span_in_build_file(&mut self, module: u32, offset: u32, len: u32) -> K1Result<Span> {
+        let module = *self.plan.module(module as usize);
         let tmp = self.get_tmp_unsafe();
         let path = kpath::join_id(
             &self.ast.idents,
             tmp,
-            self.plan.module_dir(&from),
+            self.plan.module_dir(&module),
             crate::plan::BUILD_FILE_NAME,
         );
         let file_id = match self.ast.sources.find_by_path(path) {
@@ -3205,7 +3239,7 @@ impl TypedProgram {
             }
         };
         let base = self.ast.sources.get(file_id).base;
-        Ok(Span { lo: base + provider.offset, len: provider.len })
+        Ok(Span { lo: base + offset, len })
     }
 
     fn register_source(&mut self, path: StringId, content: &str) -> FileId {
@@ -3216,6 +3250,28 @@ impl TypedProgram {
                 self.ast.sources.add_file(source)
             }
         }
+    }
+
+    fn append_emitted_definitions(
+        &mut self,
+        module_id: ModuleId,
+        ns: ParsedNamespaceId,
+        text: &str,
+        table: PermSlice<CodeChunkPos>,
+        span: Span,
+    ) -> K1Result<()> {
+        let file_id = self.add_emitted_source(text, table, span);
+        let ParseMetaprogramResult::Definitions(parsed) =
+            self.parse_metaprogram_source(module_id, file_id, ParseAdHocKind::Definitions)?
+        else {
+            self.ice_span(span, "emitted definitions parsed as an expression")
+        };
+        let mut defns = self.ast.namespaces.get(ns).definitions;
+        for defn in self.ast.mem.getn(parsed) {
+            defns.push_grow(&mut self.ast.mem, *defn);
+        }
+        self.ast.namespaces.get_mut(ns).definitions = defns;
+        Ok(())
     }
 
     pub fn adopt_messages(&mut self, from: &TypedProgram) {
@@ -7357,27 +7413,16 @@ impl TypedProgram {
             for v in param_variables.iter() {
                 self.variables.get_mut(v.variable_id).kind = VariableKind::FnParam(body_function_id)
             }
-            self.add_function(TypedFunction {
+            self.add_function(TypedFunction::synthesized(
                 name,
-                scope: lambda_scope_id,
-                namespace_id: self.scopes.nearest_parent_namespace(lambda_scope_id),
-                params: param_variables.to_slice(),
-                type_params: MSlice::empty(),
-                fnlike_type_params: MSlice::empty(),
-                ability_where_constraints: MSlice::empty(),
-                body_block: Some(body_expr_id),
-                builtin_type: None,
-                linkage: Linkage::Standard,
-                specialization_info: None,
-                parsed_id: expr_id.into(),
-                type_id: function_type,
-                kind: TypedFunctionKind::Lambda,
-                flags: TypedFunctionFlags::empty(),
-                dyn_fn_id: None,
-                dyn_receiver_thunk_id: None,
-                returned_variable: None,
-                body_failure: None,
-            });
+                lambda_scope_id,
+                self.scopes.nearest_parent_namespace(lambda_scope_id),
+                param_variables.to_slice(),
+                body_expr_id,
+                expr_id.into(),
+                function_type,
+                TypedFunctionKind::Lambda,
+            ));
             if let Some(Type::FunctionPointer(_)) = ctx.expected_type_id.map(|t| self.types.get(t))
             {
                 return Ok(self.function_to_pointer(body_function_id, span));
@@ -7426,27 +7471,16 @@ impl TypedProgram {
             is_lambda: true,
         }));
 
-        let actual_body_function_id = self.add_function(TypedFunction {
+        let actual_body_function_id = self.add_function(TypedFunction::synthesized(
             name,
-            scope: lambda_scope_id,
-            namespace_id: self.scopes.nearest_parent_namespace(lambda_scope_id),
-            params: param_variables.to_slice(),
-            type_params: MSlice::empty(),
-            fnlike_type_params: MSlice::empty(),
-            ability_where_constraints: MSlice::empty(),
-            body_block: Some(body_expr_id),
-            builtin_type: None,
-            linkage: Linkage::Standard,
-            specialization_info: None,
-            parsed_id: expr_id.into(),
-            type_id: function_type,
-            kind: TypedFunctionKind::Lambda,
-            flags: TypedFunctionFlags::empty(),
-            dyn_fn_id: None,
-            dyn_receiver_thunk_id: None,
-            returned_variable: None,
-            body_failure: None,
-        });
+            lambda_scope_id,
+            self.scopes.nearest_parent_namespace(lambda_scope_id),
+            param_variables.to_slice(),
+            body_expr_id,
+            expr_id.into(),
+            function_type,
+            TypedFunctionKind::Lambda,
+        ));
         debug_assert_eq!(actual_body_function_id, body_function_id);
 
         let lambda_type_id = self.add_lambda(
@@ -14636,8 +14670,6 @@ impl TypedProgram {
                 self.get_ability_impl_function(impl_handle.full_impl_id, fn_ref.index);
             match impl_function {
                 AbilityImplFunction::FunctionId(impl_fn_id) => {
-                    //review any re-use potential here for 'synthesizing a function', or not worth
-                    //it?
                     let impl_fn = *self.get_function(impl_fn_id);
                     let impl_fn_type = *self.types.get(impl_fn.type_id).as_function().unwrap();
                     let impl_fn_params = self.mem.getn(impl_fn_type.physical_params);
@@ -14710,27 +14742,16 @@ impl TypedProgram {
                         let name = self.build_ident_with(|k1, s| {
                             write!(s, "{}__dyn_thunk", k1.ident_str(impl_fn.name)).unwrap()
                         });
-                        let actual_thunk_id = self.add_function(TypedFunction {
+                        let actual_thunk_id = self.add_function(TypedFunction::synthesized(
                             name,
-                            scope: thunk_scope,
-                            namespace_id: impl_fn.namespace_id,
-                            params: thunk_params.to_slice(),
-                            type_params: MSlice::empty(),
-                            fnlike_type_params: MSlice::empty(),
-                            ability_where_constraints: MSlice::empty(),
-                            body_block: Some(body_block),
-                            builtin_type: None,
-                            linkage: Linkage::Standard,
-                            specialization_info: None,
-                            parsed_id: impl_fn.parsed_id,
-                            type_id: thunk_type,
-                            kind: TypedFunctionKind::Standard,
-                            flags: TypedFunctionFlags::empty(),
-                            dyn_fn_id: None,
-                            dyn_receiver_thunk_id: None,
-                            returned_variable: None,
-                            body_failure: None,
-                        });
+                            thunk_scope,
+                            impl_fn.namespace_id,
+                            thunk_params.to_slice(),
+                            body_block,
+                            impl_fn.parsed_id,
+                            thunk_type,
+                            TypedFunctionKind::Standard,
+                        ));
                         debug_assert_eq!(actual_thunk_id, thunk_id);
                         self.get_function_mut(impl_fn_id).dyn_receiver_thunk_id = Some(thunk_id);
                         thunk_id
@@ -15253,7 +15274,7 @@ impl TypedProgram {
             type_params.push(self_type_id)
         }
         for type_parameter in self.ast.mem.getn(ast_type_params) {
-            let mut ability_constraint_signatures = SmallVec::new();
+            let mut ability_constraint_signatures = smallvec![];
             let mut predicate_functions = self.mem.new_list(0);
             let mut static_constraint: Option<TypeId> = None;
 
@@ -17181,27 +17202,16 @@ impl TypedProgram {
             return_type,
             is_lambda: false,
         }));
-        let actual_function_id = self.add_function(TypedFunction {
+        let actual_function_id = self.add_function(TypedFunction::synthesized(
             name,
-            scope: fn_scope,
+            fn_scope,
             namespace_id,
-            params: MSlice::empty(),
-            type_params: MSlice::empty(),
-            fnlike_type_params: MSlice::empty(),
-            ability_where_constraints: MSlice::empty(),
-            body_block: Some(body_block),
-            builtin_type: None,
-            linkage: Linkage::Standard,
-            specialization_info: None,
-            parsed_id: ParsedId::Namespace(ns_parsed_id),
-            type_id: function_type,
-            kind: TypedFunctionKind::Standard,
-            flags: TypedFunctionFlags::empty(),
-            dyn_fn_id: None,
-            dyn_receiver_thunk_id: None,
-            returned_variable: None,
-            body_failure: None,
-        });
+            MSlice::empty(),
+            body_block,
+            ParsedId::Namespace(ns_parsed_id),
+            function_type,
+            TypedFunctionKind::Standard,
+        ));
         debug_assert_eq!(actual_function_id, function_id);
         let added = self.scopes.add_function(ns_scope, name, function_id);
         debug_assert!(added, "the name was free in the ns scope; we just checked");
@@ -17589,6 +17599,24 @@ impl TypedProgram {
         self.module_in_progress = Some(module_id);
         let is_core = module_id == MODULE_ID_CORE;
         let module_root_namespace_scope_id = self.modules.get(module_id).namespace_scope_id;
+        if let Some(params) = self.get_planned_module(module_id).and_then(|m| m.params) {
+            // The module's params `let`, assembled by the host from build.k1 fragments
+            let mut table: SV4<CodeChunkPos> = smallvec![];
+            for c in self.plan.mem.getn(params.chunks) {
+                let source = self.get_span_in_build_file(c.from, c.offset, c.len)?;
+                table.push(CodeChunkPos { start: c.start, end: c.end, source });
+            }
+            let span = table[0].source;
+            let table = self.mem.pushn(&table);
+            let text = self.plan.get(params.text);
+            self.append_emitted_definitions(
+                module_id,
+                module_root_parsed_namespace,
+                text,
+                table,
+                span,
+            )?;
+        }
 
         let mut skip_defns: SV4<ParsedId> = smallvec![];
         if !is_core {
@@ -17612,21 +17640,6 @@ impl TypedProgram {
 
         if is_core {
             self.add_core_prelude_to_root()?;
-        }
-
-        let first_provider = self
-            .planned_module(module_id)
-            .and_then(|planned| self.plan.mem.getn(planned.providers).first().copied());
-        if let Some(provider) = first_provider
-            && self.modules.get(module_id).params.is_none()
-        {
-            let span = self.provider_span(provider)?;
-            kbail!(
-                self,
-                span,
-                "Module '{}' accepts no parameters",
-                self.ident_str(self.modules.get(module_id).name)
-            );
         }
 
         self.module_in_progress = None;

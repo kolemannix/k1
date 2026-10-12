@@ -489,8 +489,32 @@ impl TypedProgram {
             }
             ParsedGlobalDeclareOutcome::IfDefedOut => Ok(()),
             ParsedGlobalDeclareOutcome::Failed => Ok(()),
-            ParsedGlobalDeclareOutcome::Declared(global_id) => self.eval_global_body(global_id),
+            ParsedGlobalDeclareOutcome::Declared(global_id) => {
+                if self.module_params_phase == ModuleParamsPhase::HostDiscovery
+                    && let Some(expr) = self.globals.get(global_id).parsed_expr
+                    && self.find_module_params_call_args(expr).is_some()
+                {
+                    self.deferred_module_params.push(global_id);
+                    return Ok(());
+                }
+                self.eval_global_body(global_id)
+            }
         }
+    }
+
+    pub(super) fn find_module_params_call_args(
+        &self,
+        expr_id: ParsedExprId,
+    ) -> Option<AstSlice<ParsedCallArg>> {
+        let ParsedExpr::Call(call) = self.ast.exprs.get(expr_id) else { return None };
+        if call.name.name != self.ast.idents.b.module_params {
+            return None;
+        }
+        let path = self.ast.mem.getn(call.name.path(&self.ast.mem));
+        if path.len() != 1 || path[0].name != self.ast.idents.b.k1 {
+            return None;
+        }
+        Some(call.args)
     }
 
     pub(super) fn eval_global_body_inner(&mut self, global_id: TypedGlobalId) -> K1Result<()> {
@@ -524,21 +548,23 @@ impl TypedProgram {
             let span = self.ast.exprs.get_span(value_expr_id);
             let global_name = self.variables.get(variable_id).name;
             self.eval_builtin_global(global_name, scope_id, expected_type_for_execution, span)?
-        } else if let ParsedExpr::Call(call) = self.ast.exprs.get(value_expr_id)
-            && call.name.name == self.ast.idents.b.module_params
-            && {
-                let path = self.ast.mem.getn(call.name.path(&self.ast.mem));
-                path.len() == 1 && path[0].name == self.ast.idents.b.k1
+        } else if self.find_module_params_call_args(value_expr_id).is_some() {
+            let span = self.ast.exprs.get_span(value_expr_id);
+            match self.module_params_phase {
+                ModuleParamsPhase::Program => kbail!(
+                    self,
+                    span,
+                    "k1/module-params is declared in a module's build.k1, not in its source"
+                ),
+                ModuleParamsPhase::HostDiscovery => kbail!(
+                    self,
+                    span,
+                    "module params are read in fn setup; fn module runs before the primary has configured them"
+                ),
+                ModuleParamsPhase::HostSetup => {
+                    self.ice_span(span, "module params global was not finalized")
+                }
             }
-        {
-            let (call_span, call_args) = (self.ast.exprs.get_span(value_expr_id), call.args);
-            self.handle_module_params_decl_call(
-                global_id,
-                call_span,
-                call_args,
-                expected_type_for_execution,
-                scope_id,
-            )?
         } else {
             let ctx = EvalExprContext::make(scope_id)
                 .with_expected_type(Some(expected_type_for_execution))
@@ -649,193 +675,6 @@ impl TypedProgram {
             s => kbail!(self, span, "Unknown builtin name: {s}"),
         };
         Ok(self.static_values.add(StaticValue::Bool(bool_value)))
-    }
-
-    pub(super) fn handle_module_params_decl_call(
-        &mut self,
-        global_id: TypedGlobalId,
-        call_span: Span,
-        call_args: AstSlice<ParsedCallArg>,
-        schema_type: TypeId,
-        scope_id: ScopeId,
-    ) -> K1Result<StaticValueId> {
-        let global = self.globals.get(global_id);
-        let global_span = global.span;
-        let global_parent_scope = global.parent_scope;
-        let file_id = self.ast.sources.file_of(global_span.lo);
-        let Some(module_id) =
-            self.modules.iter().find(|m| m.contains_file(&self.mem, file_id)).map(|m| m.id)
-        else {
-            kbail!(self, call_span, "k1/module-params must be declared in a module source file");
-        };
-        let module = self.modules.get(module_id);
-        let module_name = module.name;
-        if global_parent_scope != module.namespace_scope_id {
-            kbail!(
-                self,
-                global_span,
-                "k1/module-params must initialize a top-level global of module '{}'",
-                self.ident_str(module_name)
-            );
-        }
-        if module.params.is_some() {
-            kbail!(
-                self,
-                global_span,
-                "Module '{}' already declared its parameters; k1/module-params may \
-                 appear once per module",
-                self.ident_str(module_name)
-            );
-        }
-        let Some(schema_struct) = self.types.get(schema_type).as_struct() else {
-            kbail!(
-                self,
-                global_span,
-                "The type annotation of a k1/module-params global is the params schema \
-                 and must be a struct type"
-            );
-        };
-        let schema_fields = self.mem.getn(schema_struct.fields);
-
-        let args = self.ast.mem.getn(call_args);
-        let defaults: Option<SV8<StaticValueId>> = match args {
-            [] => None,
-            [defaults_arg] => {
-                let defaults_expr = defaults_arg.value;
-                let defaults_span = self.ast.exprs.get_span(defaults_expr);
-                let ctx = EvalExprContext::make(scope_id)
-                    .with_expected_type(Some(schema_type))
-                    .with_static_ctx(Some(StaticExecContext {
-                        expected_return_type: Some(schema_type),
-                    }));
-                let value_id = self.execute_static_expr(defaults_expr, ctx, &[])?;
-                let value_type = self.get_static_value_type(value_id);
-                if let Err(msg) = self.check_types(schema_type, value_type, scope_id) {
-                    kbail!(self, defaults_span, "Type mismatch in params defaults: {msg}");
-                }
-                let StaticValue::Struct(s) = self.static_values.get(value_id) else {
-                    kbail!(
-                        self,
-                        defaults_span,
-                        "params defaults did not evaluate to a struct value"
-                    );
-                };
-                Some(SmallVec::from_slice(self.static_values.get_slice(s.fields)))
-            }
-            _ => kbail!(
-                self,
-                call_span,
-                "k1/module-params takes at most one argument: the defaults struct"
-            ),
-        };
-
-        let providers = self.planned_module(module_id).map_or(MSlice::empty(), |m| m.providers);
-
-        let mut bound: SV8<Option<(StaticValueId, StringId)>> =
-            smallvec![None; schema_fields.len()];
-        for provider in self.plan.mem.getn(providers) {
-            let provider_name = self
-                .ast
-                .idents
-                .intern(self.plan.get(self.plan.module(provider.from as usize).name));
-            let span = self.provider_span(*provider)?;
-            let source = self.ast.sources.source_by_span(span);
-            let start = source.local_from_global_offset(span.lo) as usize;
-            let literal = &source.content(&self.ast.mem)[start..start + span.len as usize];
-            let table = self.mem.pushn(&[CodeChunkPos { start: 0, end: span.len, source: span }]);
-            let emitted = self.add_emitted_source(literal, table, span);
-            let ParseMetaprogramResult::Expr(params_expr) =
-                self.parse_metaprogram_source(module_id, emitted, ParseAdHocKind::Expr)?
-            else {
-                self.ice_span(span, "dep params parsed as definitions");
-            };
-            let ParsedExpr::Struct(s) = self.ast.exprs.get(params_expr) else {
-                kbail!(self, span, "dep params must be a struct literal");
-            };
-            let literal_fields = self.ast.mem.getn(s.fields);
-            for field in literal_fields {
-                let Some(field_index) = schema_fields.iter().position(|f| f.name == field.name)
-                else {
-                    kbail!(
-                        self,
-                        field.span,
-                        "Module '{}' has no parameter '{}'",
-                        self.ident_str(module_name),
-                        self.ident_str(field.name)
-                    );
-                };
-                let field_type = schema_fields[field_index].type_id;
-                let StructValueFieldKind::Expr(field_expr) = field.value else {
-                    kbail!(
-                        self,
-                        field.span,
-                        "module params must be provided as explicit field values"
-                    );
-                };
-                let ctx = EvalExprContext::make(Scopes::ROOT_SCOPE_ID)
-                    .with_expected_type(Some(field_type))
-                    .with_static_ctx(Some(StaticExecContext {
-                        expected_return_type: Some(field_type),
-                    }));
-                let value_id = self.execute_static_expr(field_expr, ctx, &[])?;
-                let value_type = self.get_static_value_type(value_id);
-                if let Err(msg) = self.check_types(field_type, value_type, Scopes::ROOT_SCOPE_ID) {
-                    kbail!(
-                        self,
-                        field.span,
-                        "Type mismatch for parameter '{}' of module '{}': {}",
-                        self.ident_str(field.name),
-                        self.ident_str(module_name),
-                        msg
-                    );
-                }
-                match bound[field_index] {
-                    None => bound[field_index] = Some((value_id, provider_name)),
-                    Some((existing_id, existing_provider)) => {
-                        if existing_id != value_id {
-                            kbail!(
-                                self,
-                                field.span,
-                                "Conflicting values for parameter '{}' of module '{}': \
-                                 {} (from '{}') vs {} (from '{}')",
-                                field.name,
-                                module_name,
-                                self.static_value_to_string(existing_id),
-                                existing_provider,
-                                self.static_value_to_string(value_id),
-                                provider_name,
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        let mut merged: List<StaticValueId, _> =
-            self.static_values.mem.new_list(schema_fields.len() as u32);
-        for (i, schema_field) in schema_fields.iter().enumerate() {
-            let value_id = match bound[i] {
-                Some((id, _)) => id,
-                None => match &defaults {
-                    Some(d) => d[i],
-                    None => kbail!(
-                        self,
-                        call_span,
-                        "Missing required parameter '{}' for module '{}'",
-                        self.ident_str(schema_field.name),
-                        self.ident_str(module_name)
-                    ),
-                },
-            };
-            merged.push(value_id);
-        }
-        let fields_slice = merged.to_slice();
-        let merged_id = self
-            .static_values
-            .add(StaticValue::Struct(StaticStruct { type_id: schema_type, fields: fields_slice }));
-        self.modules.get_mut(module_id).params =
-            Some(ModuleParams { schema_type, value_id: merged_id });
-        Ok(merged_id)
     }
 
     pub(super) fn add_static_value_expr(
@@ -972,12 +811,10 @@ impl TypedProgram {
         let text_value = self.static_values.add_string(text);
         let start_value = self.static_values.add_int(TypedIntValue::U32(0));
         let len_value = self.static_values.add_int(TypedIntValue::U32(len));
-        let source_value =
-            self.static_values.add_int(TypedIntValue::U64(source.encoded_k1_u64()));
-        let span_value = self.static_values.add_struct_from_slice(
-            span_type,
-            &[start_value, len_value, source_value],
-        );
+        let source_value = self.static_values.add_int(TypedIntValue::U64(source.encoded_k1_u64()));
+        let span_value = self
+            .static_values
+            .add_struct_from_slice(span_type, &[start_value, len_value, source_value]);
         let spans_value = self.add_static_container_from_ids(
             StaticContainerKind::List,
             spans_list_type,
@@ -1719,7 +1556,9 @@ impl TypedProgram {
             let spec_fn_id =
                 self.specialize_function_declaration(type_args, TypeArgs::empty(), function_id);
             if !self.get_function(spec_fn_id).is_concrete() {
-                return Ok(StaticExecutionResult::TypedExpr(self.synth_deferred_static(ctx, span)?));
+                return Ok(StaticExecutionResult::TypedExpr(
+                    self.synth_deferred_static(ctx, span)?,
+                ));
             }
             self.require_function_body(spec_fn_id, span)?;
             spec_fn_id

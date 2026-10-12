@@ -5,7 +5,6 @@
 
 ## [ ] More IR analysis and opts
 - [ ] add lifetimes? (start/end for allocas, temps, inlined stuff)
-- [ ] Debug arena reset: mprotect used range, catch stale refs
 
 ## [x] token stream based macros
 
@@ -19,6 +18,7 @@
 ## [x] Ability objects; dyn[<ability expr>]
 
 ## grab bag list mid2026
+- [ ] replace fn(intern) with fn(builtin)
 - [x] add cpu feature string to k1/module
 - [x] convert the add_module train off of anyhow::error
 - [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
