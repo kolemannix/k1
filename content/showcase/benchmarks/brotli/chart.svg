@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 224" width="1080" height="224" style="max-width:100%;height:auto" font-family="var(--mono, 'Martian Mono', ui-monospace, Menlo, monospace)" font-size="12">
+<style>
+  .bg { fill: var(--p, #151920); }
+  .t1 { fill: var(--b, #FFFFFF); font-weight: 600; font-size: 13px; }
+  .t2 { fill: var(--m, #7E8794); font-size: 10.5px; }
+  .t3 { fill: var(--f, #E6E9EE); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .t4 { fill: var(--m, #7E8794); font-size: 11px; font-style: italic; }
+  text.muted { fill: var(--m, #7E8794); }
+  rect.k1 { fill: var(--s, #E6C070); }
+  rect.k1-dim { fill: var(--s, #E6C070); opacity: .45; }
+  rect.other { fill: var(--l2, #333944); }
+  rect.muted { fill: var(--l, #262B34); }
+  .ref { stroke: var(--m, #7E8794); stroke-width: 1; stroke-dasharray: 3 3; }
+</style>
+<rect class="bg" width="1080" height="224"/>
+<text class="t1" x="24" y="38">brotli encoder, k1 port vs C</text>
+<line class="ref" x1="972.0" y1="64" x2="972.0" y2="196"/>
+<text class="t2" x="972.0" y="60" text-anchor="middle">C</text>
+<text class="t2" x="24" y="54">k1 throughput as a fraction of C, per corpus; higher is better</text>
+<text class="t3 k1" x="138" y="79" text-anchor="end">typer.rs q0</text>
+<rect class="k1" x="148" y="68" width="812.9" height="14"/>
+<text class="t3" x="978.0" y="79">0.99×</text>
+<text class="t3 k1" x="138" y="101" text-anchor="end">typer.rs q1</text>
+<rect class="k1" x="148" y="90" width="811.1" height="14"/>
+<text class="t3" x="978.0" y="101">0.98×</text>
+<text class="t3 k1" x="138" y="123" text-anchor="end">cycle-251 q0</text>
+<rect class="k1" x="148" y="112" width="794.3" height="14"/>
+<text class="t3" x="978.0" y="123">0.96×</text>
+<text class="t3 k1" x="138" y="145" text-anchor="end">zeros-1mb q0</text>
+<rect class="k1" x="148" y="134" width="774.7" height="14"/>
+<text class="t3" x="978.0" y="145">0.94×</text>
+<text class="t3 k1" x="138" y="167" text-anchor="end">random-300k q0</text>
+<rect class="k1" x="148" y="156" width="751.3" height="14"/>
+<text class="t3" x="978.0" y="167">0.91×</text>
+<text class="t3 k1" x="138" y="189" text-anchor="end">random-300k q1</text>
+<rect class="k1" x="148" y="178" width="805.6" height="14"/>
+<text class="t3" x="978.0" y="189">0.98×</text>
+</svg>

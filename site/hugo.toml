@@ -1,0 +1,75 @@
+baseURL = 'https://k1-lang.org/'
+title = 'k1'
+locale = 'en-us'
+enableRobotsTXT = true
+ignoreFiles = ['/gen/', '__pycache__']
+disableKinds = ['taxonomy', 'term', 'rss']
+
+[markup.goldmark.renderer]
+  unsafe = true
+
+[permalinks]
+  blog = '/blog/:slug/'
+
+[[module.mounts]]
+  source = 'content'
+  target = 'content'
+
+[[module.mounts]]
+  source = '../content/showcase/sections'
+  target = 'content/examples'
+
+[[module.mounts]]
+  source = '../content/showcase/benchmarks'
+  target = 'assets/benchmarks'
+  files = ['**/*.svg']
+
+[[module.mounts]]
+  source = 'layouts'
+  target = 'layouts'
+
+[[module.mounts]]
+  source = 'static'
+  target = 'static'
+
+[[module.mounts]]
+  source = '../examples'
+  target = 'static/demo'
+  files = ['wasi.js', 'refchess/web/app.js', 'refchess/web/worker.js', 'refchess/refchess.wasm']
+
+[[module.mounts]]
+  source = 'assets'
+  target = 'assets'
+
+[[module.mounts]]
+  source = 'data'
+  target = 'data'
+
+[params]
+  description = 'k1 is an expressive language for systems and applications, designed around what you can do.'
+  repo = 'https://github.com/kolemannix/k1'
+
+[[menu.main]]
+  name = 'examples'
+  url = '/examples/'
+  weight = 1
+
+[[menu.main]]
+  name = 'benchmarks'
+  url = '/benchmarks/'
+  weight = 2
+
+[[menu.main]]
+  name = 'manifesto'
+  url = '/manifesto/'
+  weight = 3
+
+[[menu.main]]
+  name = 'blog'
+  url = '/blog/'
+  weight = 4
+
+[[menu.main]]
+  name = 'install'
+  url = '/install/'
+  weight = 5

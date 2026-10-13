@@ -65,9 +65,12 @@ ns for buffer {
     buffer/filled-in[t, _](mem/current-arena(), size, value)
   }
 
+  fn(inline) _alloc-raw[a: allocator](alloc: a, stride: size, align: size, count: size): ptr {
+    if count == 0 ptr/null else alloc.alloc(count * stride, align)
+  }
+
   fn(inline) allocate-in[t, a: allocator](alloc: a, count: size): buffer[t] {
-    let data = if count == 0 ptr/null else alloc.alloc(count * types/stride[t], types/align[t]())
-    .{ data, len = count }
+    .{ data = _alloc-raw(alloc, types/stride[t], types/align[t](), count), len = count }
   }
 
   fn(inline) allocate[t](count: size): buffer[t] {
@@ -77,14 +80,8 @@ ns for buffer {
   ////////////////////////
   // Modification
 
-  fn(noinline) _grow-to[t, a: allocator](self: *buffer[t], alloc: a, new-count: size): empty {
-    let data = alloc.realloc(
-      old-ptr = self.data,
-      old-size = self.size-bytes(),
-      align = types/align[t](),
-      new-size = new-count * types/stride[t],
-    )
-    self.* = .{ data, len = new-count }
+  fn(noinline) _grow-raw[a: allocator](alloc: a, data: ptr, old-count: size, stride: size, align: size, new-count: size): ptr {
+    alloc.realloc(old-ptr = data, old-size = old-count * stride, align = align, new-size = new-count * stride)
   }
 
   fn(inline) _enlarged-clone-in[t, a: allocator](self: buffer[t], alloc: a, new-count: size): buffer[t] {
@@ -111,32 +108,37 @@ ns for buffer {
     self._enlarged-clone-in(alloc, new-count = self.len)
   }
 
-  fn remove[t](self: buffer[t], index: size) {
-    checked-index(index, self.len)
-    if index + 1 < self.len {
-      buffer/move(src = self.slice(index + 1, self.len), dst = self.slice(index, self.len - 1))
-    }
-    mem/set(dst = self.data.add-bytes((self.len - 1) * types/stride[t]), value = 0, count = types/stride[t])
+  fn(inline) _remove-raw(data: ptr, len: size, stride: size, index: size) {
+    checked-index(index, len)
+    let at = data.add-bytes(index * stride)
+    let last = data.add-bytes((len - 1) * stride)
+    if index + 1 < len mem/move(dst = at, src = at.add-bytes(stride), count = (len - 1 - index) * stride)
+    mem/set(dst = last, value = 0, count = stride)
   }
+
+  fn(inline) remove[t](self: buffer[t], index: size) { _remove-raw(self.data, self.len, types/stride[t], index) }
 
   ///////////////////////////
   // Accessor functions
 
   fn(inline) index-unchecked[t](self: buffer[t], index: size): *t {
-    self.data-ptr().ref-at[t](index)
+    self.data.ref-at[t](index)
   }
 
   fn(inline) memset[t](self: buffer[t], value: u8): empty {
     mem/set(dst = self.data, value = value, count = self.size-bytes())
   }
 
-  fn slice[t](self: buffer[t], start: size, end: size): buffer[t] {
-    if start.unsigned() > self.len.unsigned() crash-bounds(self.len, start, "slice start out of bounds")
-    let end-clamp = end.min(self.len)
-    if end-clamp <= start or self.len == 0 {
-      return .{ data = ptr/null, len = 0 }
-    }
-    .{ data = self.data.add-bytes(types/stride[t] * start), len = end-clamp - start }
+  fn(inline) _slice-raw(data: ptr, len: size, stride: size, start: size, end: size): { data: ptr, len: size } {
+    if start.unsigned() > len.unsigned() crash-bounds(len, start, "slice start out of bounds")
+    let end-clamp = end.min(len)
+    if end-clamp <= start or len == 0 return .{ data = ptr/null, len = 0 }
+    .{ data = data.add-bytes(stride * start), len = end-clamp - start }
+  }
+
+  fn(inline) slice[t](self: buffer[t], start: size, end: size): buffer[t] {
+    let raw = _slice-raw(self.data, self.len, types/stride[t], start, end)
+    .{ data = raw.data, len = raw.len }
   }
 
   fn(inline) take[t](self: buffer[t], count: size): buffer[t] { self.slice(0, count) }
@@ -439,7 +441,7 @@ ns for buffer-iterator {
 impl[t] iterator[item = t] for buffer-iterator[t] {
   fn(inline) next(self: *self): ?item {
     if self.pos < self.buf.len {
-      let item = self.buf.index-unchecked(self.pos).*
+      let item = self.buf.data.ref-at[t](self.pos).*
       self.pos = self.pos + 1
       :some item
     } else :none
@@ -480,14 +482,12 @@ impl[t] as-buffer[t = t] for buffer[t] {
 
 impl[t] index[key = size, t = t] for buffer[t] {
   fn(inline) index-ref(self, key: size): *t {
-    self.index-unchecked(checked-index(key, self.len))
+    self.data.ref-at[t](checked-index(key, self.len))
   }
 }
 
 impl[t] iterable[item = t, i = buffer-iterator[t]] for buffer[t] {
-  fn(inline) iterator(self): i {
-    buffer-iterator/from-buffer(self)
-  }
+  fn(inline) iterator(self): i { .{ buf = self, pos = 0 } }
 }
 
 impl[t: print] print for buffer[t] {
@@ -509,15 +509,13 @@ type buffer-ref-iterator[t] = {
   pos: size
 }
 ns for buffer-ref-iterator {
-  fn from-buffer[t](buf: buffer[t]): buffer-ref-iterator[t] { 
-    .{ buf, pos = 0 }
-  }
+  fn(inline) from-buffer[t](buf: buffer[t]): buffer-ref-iterator[t] { .{ buf, pos = 0 } }
 }
 
 impl[t] iterator[item = *t] for buffer-ref-iterator[t] {
   fn(inline) next(self: *self): ?item {
     if self.pos < self.buf.len {
-      let item = self.buf.index-unchecked(self.pos)
+      let item = self.buf.data.ref-at[t](self.pos)
       self.pos = self.pos + 1
       :some item
     } else :none
@@ -544,17 +542,9 @@ impl[t: equals] equals for buffer[t] {
 }
 
 impl[n: static size, t] iterable[item = t, i = buffer-iterator[t]] for *array[t, n] {
-  fn(inline) iterator(self): i {
-    buffer-iterator/from-buffer(
-      self.as-span().inner-buffer()
-    )
-  }
+  fn(inline) iterator(self): i { .{ buf = self.as-span().inner-buffer(), pos = 0 } }
 }
 
 impl[n: static size, t] iterable[item = *t, i = buffer-ref-iterator[t]] for *array[t, n] {
-  fn(inline) iterator(self): i {
-    buffer-ref-iterator/from-buffer(
-      self.as-span().inner-buffer()
-    )
-  }
+  fn(inline) iterator(self): i { .{ buf = self.as-span().inner-buffer(), pos = 0 } }
 }

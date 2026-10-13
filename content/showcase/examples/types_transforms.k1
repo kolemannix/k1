@@ -1,3 +1,5 @@
+use pre/patch-of
+
 type user = { id: u64, name: string, password: string, email: string }
 type user-view = _struct_remove[user, { password: string }]
 type audited = { created: u64, updated: u64 }
@@ -14,7 +16,7 @@ ns pre {
   }
 }
 
-type(alias) user-patch = #type pre/patch-of(types/id[user])
+type(alias) user-patch = #type patch-of(types/id[user])
 
 fn view(u: user): user-view {
   .{ id = u.id, name = u.name, email = u.email }

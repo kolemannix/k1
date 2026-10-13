@@ -1,3 +1,5 @@
+use pre/errors-of
+
 type parse-error = either { empty-input, bad-digit(char), too-big }
 
 impl print for parse-error {
@@ -45,7 +47,7 @@ ns pre {
   }
 }
 
-type errno = #type pre/errors-of(types/id[rc], "ok")
+type errno = #type errors-of(types/id[rc], "ok")
 
 impl try[t = empty, e = errno] for rc {
   fn error(e: errno): rc { mem/bitcast(e) }

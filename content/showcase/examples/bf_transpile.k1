@@ -1,10 +1,12 @@
-$pre/bf/define(hello, "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++.")
+use pre/bf
+
+$bf/define(hello, "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++.")
 
 fn main(): i32 {
   let baked: "Hello World!\n" = #static hello()
   print(baked.from-static())
   print(hello())
-  print(pre/bf/transpile("letter-a", "++++++++[>++++++++<-]>+.").text())
+  print(bf/transpile("letter-a", "++++++++[>++++++++<-]>+.").text)
   0
 }
 
@@ -69,7 +71,7 @@ fn transpile(name: string, program: string): code {
 }
 
 macro define(name: code, program: string) {
-  transpile(name.text(), program)
+  transpile(name.text, program)
 }
 
 }}

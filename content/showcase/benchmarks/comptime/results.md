@@ -1,15 +1,13 @@
 # Compile-time execution benchmarks
 
-> **Fresh run with the IR optimizer working tree; provenance: ../run-info.json.**
-
-Generated 2026-09-17 22:19 by `run.sh`. Load average at start 15.8, at end 7.2 (a busy machine inflates every number).
+Generated 2026-10-12 16:44 by `run.sh`. Load average at start 2.3, at end 1.8 (a busy machine inflates every number).
 
 ## Machine and toolchains
 
-- Apple M3 Max, 14 cores, 36 GB, macOS 26.6.2
+- Apple M3 Max, 14 cores, 36 GB, macOS 27.0
 - k1 0.1.0
-- zig 0.14.0
-- Apple clang version 21.0.0 (clang-2100.1.1.101)
+- zig 0.17.0
+- Apple clang version 21.0.0 (clang-2100.3.34.2)
 - clang version 21.0.0git (https://github.com/bloomberg/clang-p2996.git 0664c3f65dd5b198341412d7402b41f8e766b4b4)
 - rustc 1.98.1 (48a229cea 2026-09-01)
 - cargo 1.98.1 (797e8a9bc 2026-08-05)
@@ -17,24 +15,39 @@ Generated 2026-09-17 22:19 by `run.sh`. Load average at start 15.8, at end 7.2 (
 
 ## Methodology
 
-- Every cell is a full compile to an executable, timed with `hyperfine --warmup 1 --min-runs 5`
-  (mean ± standard deviation in seconds). A cell whose first compile took more than 60 s is
-  timed with `--runs 2` instead and marked †. A first compile that exceeds 300 s is a timeout;
+- Every cell first does a full compile to an executable, runs it and compares its output with a
+  Python reference. sieve, crc32 and strbuild time that full compile; reflect-serialize times a
+  front-end-only compile of the same source (no machine code, no link), because its work is
+  generating code from types and in a full build LLVM codegen and linking of the N serializers
+  take over 90% of the time. The untimed first compile is the warm-up; timing is then
+  `hyperfine --runs n` (mean ± standard deviation in seconds) with n = 5, reduced for slow cells
+  so that n runs fit in about 45 s, down to a single run; cells with fewer than 5 runs are
+  marked † and results.json records the count. A compile that exceeds 300 s is a timeout;
   larger sizes of that language are then not attempted.
-- Commands: K1 `k1 --no-cache build <file>`; Zig `zig build-exe -O Debug -target aarch64-macos`
-  with the local cache dir deleted before every run (the global cache keeps compiler_rt; the
-  explicit target works around Zig 0.14.0 failing to find libSystem on this macOS);
+- Full-build commands: k1 `k1 --no-cache build <file>`; Zig `zig build-exe -O Debug`
+  with the local cache dir deleted before every run (the global cache keeps compiler_rt);
   C++ `clang++ -std=c++23 -O0 -fconstexpr-steps=2000000000`; Rust `rustc -C opt-level=0`
   (`#![allow(long_running_const_eval)]` in the source, `--cfg comptime` selects the comptime variant);
-  Rust reflect `cargo build` with dependencies prebuilt and `src/main.rs` touched before every run;
+  Rust reflect `cargo build` with `CARGO_INCREMENTAL=0`, dependencies prebuilt and `src/main.rs` touched before every run;
   C++26 the Bloomberg clang-p2996 fork (`$CXX_P2996`, a wrapper baking
   in `-std=c++26 -freflection-latest -stdlib=libc++`) at `-O0`.
+- reflect-serialize front-end commands: k1 `k1 --no-cache --no-optimize-ir --dump-ir check <file>`
+  (`check` alone never instantiates the generic serializers, so their `#meta` never runs; `--dump-ir`
+  makes it compile every function reachable from `main`, which typechecks the specializations, runs
+  `#meta` and the VM and lowers to k1 IR, and then writes the IR dump, the one cost here that no
+  other toolchain pays; `--no-optimize-ir` skips k1's inliner and IR passes, the middle end the
+  other commands also stop before); Zig `zig build-exe -O Debug -fno-emit-bin` with the local cache
+  dir deleted before every run (semantic analysis of everything reachable from `main`, including the
+  `inline for` expansions, no codegen); C++ and C++26 `-fsyntax-only` (parsing, semantic analysis and
+  template instantiation); Rust `cargo check` with `CARGO_INCREMENTAL=0`, dependencies prebuilt and
+  `src/main.rs` touched before every run (macro expansion, type checking, MIR building and borrow
+  checking, no codegen). Each cell's front-end command also ran once untimed to confirm it succeeds.
 - Compiles run in their own process group and a timeout kills the whole group, so no compiler
   outlives the harness.
-- Control: the same source with the work moved to runtime (K1 `#static` dropped, Zig `comptime`
+- Control: the same source with the work moved to runtime (k1 `#static` dropped, Zig `comptime`
   dropped, C++ `constexpr` dropped so clang cannot fold it, Rust the `const` item removed). The
   compile-time cost is the difference of the two means; throughput divides the benchmark's work
-  by that difference. K1 also reports what the compiler measures itself (`--chatty`): the
+  by that difference. k1 also reports what the compiler measures itself (`--chatty`): the
   time spent running bytecode in the compile-time VM and the number of VM instructions executed.
 - Every executable is run once (`ulimit -s 65520`, and `--stack 67092480` for Zig whose
   linked-in main-thread stack size ignores the rlimit, so the runtime controls can hold their
@@ -42,120 +55,126 @@ Generated 2026-09-17 22:19 by `run.sh`. Load average at start 15.8, at end 7.2 (
 
 ## sieve
 
-Sieve of Eratosthenes below N at compile time, collecting the primes into an array; the runtime prints the count and the last prime. Work = outer iterations plus composite marks.
+Sieve of Eratosthenes below N at compile time, collecting the primes into an array; the runtime prints the count and the last prime. Work = outer iterations plus composite marks. Zig keeps the composite flags bit-packed in u64 words (what std::bitset would be) because a comptime array element read costs time proportional to the array's length and indexing a local array by value copies it, which is what killed the byte-array version at 1,000,000; the loops and marks are the same as the other languages.
 
 | N | language | comptime build (s) | runtime-control build (s) | comptime cost (s) | throughput | output |
 |---|---|---|---|---|---|---|
-| 10,000 | K1 | 0.083 ± 0.003 | 0.083 ± 0.004 | 0.000 | 91.8 M sieve steps/s | `1229 9973` |
-| 10,000 | Zig | 1.222 ± 0.009 | 0.714 ± 0.012 | 0.507 | 53.2 k sieve steps/s | `1229 9973` |
-| 10,000 | C++ | 0.155 ± 0.009 | 0.112 ± 0.006 | 0.043 | 624.1 k sieve steps/s | `1229 9973` |
-| 10,000 | Rust | 0.136 ± 0.008 | 0.105 ± 0.004 | 0.030 | 886.5 k sieve steps/s | `1229 9973` |
-| 100,000 | K1 | 0.098 ± 0.005 | 0.086 ± 0.004 | 0.012 | 24.4 M sieve steps/s | `9592 99991` |
-| 100,000 | Zig | 47.508 ± 0.188 | 0.696 ± 0.005 | 46.812 | 6.3 k sieve steps/s | `9592 99991` |
-| 100,000 | C++ | 0.707 ± 0.236 | 0.116 ± 0.003 | 0.592 | 495.4 k sieve steps/s | `9592 99991` |
-| 100,000 | Rust | 0.391 ± 0.007 | 0.104 ± 0.003 | 0.288 | 1.0 M sieve steps/s | `9592 99991` |
-| 1,000,000 | K1 | 0.229 ± 0.003 | 0.083 ± 0.002 | 0.145 | 21.5 M sieve steps/s | `78498 999983` |
-| 1,000,000 | Zig | compile error | 1.159 ± 0.266 | - | - | - |
-| 1,000,000 | C++ | 6.050 ± 0.056 | 0.132 ± 0.026 | 5.919 | 527.5 k sieve steps/s | `78498 999983` |
-| 1,000,000 | Rust | 3.188 ± 0.042 | 0.139 ± 0.020 | 3.049 | 1.0 M sieve steps/s | `78498 999983` |
+| 10,000 | k1 | 0.070 ± 0.006 | 0.074 ± 0.010 | -0.004 | - | `1229 9973` |
+| 10,000 | Zig | 1.553 ± 0.025 | 1.418 ± 0.021 | 0.135 | 199.6 k sieve steps/s | `1229 9973` |
+| 10,000 | C++ | 0.160 ± 0.003 | 0.119 ± 0.006 | 0.041 | 656.4 k sieve steps/s | `1229 9973` |
+| 10,000 | Rust | 0.153 ± 0.010 | 0.124 ± 0.004 | 0.029 | 923.1 k sieve steps/s | `1229 9973` |
+| 100,000 | k1 | 0.076 ± 0.003 | 0.070 ± 0.003 | 0.006 | 49.4 M sieve steps/s | `9592 99991` |
+| 100,000 | Zig | 2.634 ± 0.057 | 1.406 ± 0.039 | 1.229 | 238.5 k sieve steps/s | `9592 99991` |
+| 100,000 | C++ | 0.643 ± 0.021 | 0.117 ± 0.002 | 0.525 | 557.8 k sieve steps/s | `9592 99991` |
+| 100,000 | Rust | 0.415 ± 0.007 | 0.125 ± 0.005 | 0.290 | 1.0 M sieve steps/s | `9592 99991` |
+| 1,000,000 | k1 | 0.131 ± 0.001 | 0.071 ± 0.004 | 0.060 | 52.0 M sieve steps/s | `78498 999983` |
+| 1,000,000 | Zig | 28.340 ± 0.000 † | 1.686 ± 0.213 | 26.654 | 117.1 k sieve steps/s | `78498 999983` |
+| 1,000,000 | C++ | 6.806 ± 1.205 | 0.114 ± 0.007 | 6.692 | 466.6 k sieve steps/s | `78498 999983` |
+| 1,000,000 | Rust | 3.089 ± 0.014 | 0.110 ± 0.004 | 2.979 | 1.0 M sieve steps/s | `78498 999983` |
 
-K1 compile-time VM, as reported by `k1 --chatty` for the comptime variant:
+k1 compile-time VM, as reported by `k1 --chatty` for the comptime variant:
 
 | N | VM run (ms) | VM instructions | VM instr/s | typecheck (ms) | IR optimization (ms) | whole compile (ms) |
 |---|---|---|---|---|---|---|
-| 10,000 | 1.5 | 0.5 M | 331.3 M instr/s | 2.7 | 4.1 | 73 |
-| 100,000 | 14.5 | 5.1 M | 350.8 M instr/s | 2.6 | 4.1 | 86 |
-| 1,000,000 | 147.6 | 52.7 M | 357.1 M instr/s | 2.7 | 4.1 | 225 |
+| 10,000 | 0.9 | 0.4 M | 413.8 M instr/s | 3.2 | 0.3 | 57 |
+| 100,000 | 6.6 | 3.1 M | 472.6 M instr/s | 3.3 | 0.4 | 66 |
+| 1,000,000 | 63.4 | 31.1 M | 490.5 M instr/s | 3.2 | 0.3 | 123 |
 
 ## crc32
 
-Generate the CRC-32 table (polynomial 0xEDB88320), generate B pseudo-random bytes with xorshift32, and checksum them, all at compile time; the runtime prints the checksum. Work = bytes.
+Generate the CRC-32 table (polynomial 0xEDB88320), generate B pseudo-random bytes with xorshift32, and checksum them, all at compile time; the runtime prints the checksum. Work = bytes. The Zig buffer is zero-initialised and the checksum loop indexes the array value rather than a slice: filling an `undefined` comptime array is quadratic and element reads through a slice cost the array's length.
 
 | N | language | comptime build (s) | runtime-control build (s) | comptime cost (s) | throughput | output |
 |---|---|---|---|---|---|---|
-| 64 KB | K1 | 0.111 ± 0.038 | 0.091 ± 0.004 | 0.020 | 3.3 M bytes/s | `3373053292` |
-| 64 KB | Zig | 10.980 ± 0.343 | 0.738 ± 0.002 | 10.242 | 6.4 k bytes/s | `3373053292` |
-| 64 KB | C++ | 0.469 ± 0.006 | 0.127 ± 0.002 | 0.342 | 191.7 k bytes/s | `3373053292` |
-| 64 KB | Rust | 0.528 ± 0.003 | 0.116 ± 0.007 | 0.411 | 159.3 k bytes/s | `3373053292` |
-| 1 MB | K1 | 0.307 ± 0.003 | 0.086 ± 0.002 | 0.221 | 4.8 M bytes/s | `2058353098` |
-| 1 MB | Zig | timed out (> 300 s) | 0.697 ± 0.006 | - | - | - |
-| 1 MB | C++ | 6.152 ± 0.115 | 0.126 ± 0.004 | 6.026 | 174.0 k bytes/s | `2058353098` |
-| 1 MB | Rust | 6.308 ± 0.044 | 0.115 ± 0.006 | 6.193 | 169.3 k bytes/s | `2058353098` |
-| 8 MB | K1 | 1.818 ± 0.015 | 0.083 ± 0.002 | 1.735 | 4.8 M bytes/s | `1790965047` |
-| 8 MB | Zig | not attempted | 0.699 ± 0.007 | - | - | - |
-| 8 MB | C++ | 52.301 ± 2.591 | 0.128 ± 0.004 | 52.173 | 160.8 k bytes/s | `1790965047` |
-| 8 MB | Rust | 50.497 ± 0.774 | 0.120 ± 0.005 | 50.376 | 166.5 k bytes/s | `1790965047` |
+| 64 KB | k1 | 0.079 ± 0.018 | 0.069 ± 0.002 | 0.010 | 6.3 M bytes/s | `3373053292` |
+| 64 KB | Zig | 2.010 ± 0.195 | 1.368 ± 0.025 | 0.642 | 102.0 k bytes/s | `3373053292` |
+| 64 KB | C++ | 0.477 ± 0.006 | 0.115 ± 0.005 | 0.362 | 181.1 k bytes/s | `3373053292` |
+| 64 KB | Rust | 0.519 ± 0.005 | 0.125 ± 0.007 | 0.393 | 166.7 k bytes/s | `3373053292` |
+| 1 MB | k1 | 0.141 ± 0.005 | 0.071 ± 0.003 | 0.070 | 15.0 M bytes/s | `2058353098` |
+| 1 MB | Zig | 10.906 ± 0.030 † | 2.010 ± 0.968 | 8.895 | 117.9 k bytes/s | `2058353098` |
+| 1 MB | C++ | 6.565 ± 0.044 | 0.109 ± 0.005 | 6.456 | 162.4 k bytes/s | `2058353098` |
+| 1 MB | Rust | 6.345 ± 0.056 | 0.119 ± 0.009 | 6.226 | 168.4 k bytes/s | `2058353098` |
+| 8 MB | k1 | 0.623 ± 0.005 | 0.074 ± 0.006 | 0.549 | 15.3 M bytes/s | `1790965047` |
+| 8 MB | Zig | compile error | 1.413 ± 0.026 | - | - | - |
+| 8 MB | C++ | 55.677 ± 0.000 † | 0.107 ± 0.005 | 55.570 | 151.0 k bytes/s | `1790965047` |
+| 8 MB | Rust | 49.694 ± 0.000 † | 0.122 ± 0.008 | 49.573 | 169.2 k bytes/s | `1790965047` |
 
-K1 compile-time VM, as reported by `k1 --chatty` for the comptime variant:
+k1 compile-time VM, as reported by `k1 --chatty` for the comptime variant:
 
 | N | VM run (ms) | VM instructions | VM instr/s | typecheck (ms) | IR optimization (ms) | whole compile (ms) |
 |---|---|---|---|---|---|---|
-| 64 KB | 14.3 | 5.0 M | 348.7 M instr/s | 2.5 | 4.1 | 86 |
-| 1 MB | 224.2 | 78.7 M | 351.0 M instr/s | 3.2 | 4.1 | 295 |
-| 8 MB | 1716.1 | 629.2 M | 366.6 M instr/s | 2.5 | 3.9 | 1784 |
+| 64 KB | 4.9 | 3.0 M | 611.0 M instr/s | 3.6 | 0.4 | 62 |
+| 1 MB | 72.1 | 45.2 M | 627.0 M instr/s | 3.1 | 0.3 | 133 |
+| 8 MB | 565.3 | 360.9 M | 638.5 M instr/s | 3.1 | 0.3 | 624 |
 
 ## strbuild
 
-Format the integers 0..N in decimal with `,` separators into one string at compile time, then take its length and FNV-1a checksum; the runtime prints both. K1 uses `string-builder` and its `${}` formatter inside `#static`, Zig a fixed `[N * 8]u8` buffer and `std.fmt.formatIntBuf`, C++ a transient `constexpr std::string` with hand-written digit formatting (`std::to_string` is not constexpr), Rust a fixed `[u8; N * 8]` array with hand-written digits (no heap and no formatting machinery in const eval). Work = numbers formatted.
+Format the integers 0..N in decimal with `,` separators into one string at compile time, then take its length and FNV-1a checksum; the runtime prints both. k1 uses `string-builder` and its `${}` formatter inside `#static`, Zig a fixed `[N * 8]u8` buffer and hand-written digits (`std.fmt.printInt` costs about three times the comptime memory), C++ a transient `constexpr std::string` with hand-written digit formatting (`std::to_string` is not constexpr), Rust a fixed `[u8; N * 8]` array with hand-written digits (no heap and no formatting machinery in const eval). Work = numbers formatted.
 
 | N | language | comptime build (s) | runtime-control build (s) | comptime cost (s) | throughput | output |
 |---|---|---|---|---|---|---|
-| 10,000 | K1 | 0.108 ± 0.002 | 0.084 ± 0.001 | 0.024 | 421.3 k numbers/s | `48889 2155414189` |
-| 10,000 | Zig | 7.367 ± 0.071 | 0.750 ± 0.010 | 6.617 | 1.5 k numbers/s | `48889 2155414189` |
-| 10,000 | C++ | 1.215 ± 0.004 | 0.187 ± 0.010 | 1.028 | 9.7 k numbers/s | `48889 2155414189` |
-| 10,000 | Rust | 0.420 ± 0.009 | 0.126 ± 0.005 | 0.294 | 34.0 k numbers/s | `48889 2155414189` |
-| 100,000 | K1 | 0.322 ± 0.003 | 0.087 ± 0.002 | 0.236 | 424.0 k numbers/s | `588889 676220933` |
-| 100,000 | Zig | timed out (> 300 s) | 0.767 ± 0.010 | - | - | - |
-| 100,000 | C++ | 13.808 ± 0.135 | 0.182 ± 0.005 | 13.626 | 7.3 k numbers/s | `588889 676220933` |
-| 100,000 | Rust | 3.740 ± 0.020 | 0.120 ± 0.007 | 3.619 | 27.6 k numbers/s | `588889 676220933` |
-| 1,000,000 | K1 | 2.724 ± 0.018 | 0.091 ± 0.012 | 2.633 | 379.8 k numbers/s | `6888889 3396009285` |
-| 1,000,000 | Zig | not attempted | 0.763 ± 0.012 | - | - | - |
-| 1,000,000 | C++ | 178.802 ± 2.997 † | 0.444 ± 0.266 | 178.358 | 5.6 k numbers/s | `6888889 3396009285` |
-| 1,000,000 | Rust | 42.337 ± 0.557 | 0.267 ± 0.127 | 42.071 | 23.8 k numbers/s | `6888889 3396009285` |
+| 10,000 | k1 | 0.073 ± 0.006 | 0.068 ± 0.004 | 0.005 | 1.9 M numbers/s | `48889 2155414189` |
+| 10,000 | Zig | 1.642 ± 0.007 | 1.385 ± 0.040 | 0.257 | 39.0 k numbers/s | `48889 2155414189` |
+| 10,000 | C++ | 1.267 ± 0.004 | 0.154 ± 0.004 | 1.113 | 9.0 k numbers/s | `48889 2155414189` |
+| 10,000 | Rust | 0.421 ± 0.010 | 0.136 ± 0.002 | 0.284 | 35.2 k numbers/s | `48889 2155414189` |
+| 100,000 | k1 | 0.122 ± 0.004 | 0.068 ± 0.003 | 0.054 | 1.8 M numbers/s | `588889 676220933` |
+| 100,000 | Zig | 5.489 ± 0.102 | 1.343 ± 0.011 | 4.146 | 24.1 k numbers/s | `588889 676220933` |
+| 100,000 | C++ | 14.981 ± 0.272 † | 0.152 ± 0.005 | 14.829 | 6.7 k numbers/s | `588889 676220933` |
+| 100,000 | Rust | 3.744 ± 0.024 | 0.121 ± 0.006 | 3.623 | 27.6 k numbers/s | `588889 676220933` |
+| 1,000,000 | k1 | 0.627 ± 0.008 | 0.070 ± 0.002 | 0.557 | 1.8 M numbers/s | `6888889 3396009285` |
+| 1,000,000 | Zig | 52.568 ± 0.000 † | 1.564 ± 0.093 | 51.004 | 19.6 k numbers/s | `6888889 3396009285` |
+| 1,000,000 | C++ | 193.613 ± 0.000 † | 0.167 ± 0.008 | 193.446 | 5.2 k numbers/s | `6888889 3396009285` |
+| 1,000,000 | Rust | 40.587 ± 0.000 † | 0.121 ± 0.005 | 40.466 | 24.7 k numbers/s | `6888889 3396009285` |
 
-K1 compile-time VM, as reported by `k1 --chatty` for the comptime variant:
+k1 compile-time VM, as reported by `k1 --chatty` for the comptime variant:
 
 | N | VM run (ms) | VM instructions | VM instr/s | typecheck (ms) | IR optimization (ms) | whole compile (ms) |
 |---|---|---|---|---|---|---|
-| 10,000 | 21.7 | 6.7 M | 308.5 M instr/s | 3.1 | 3.9 | 92 |
-| 100,000 | 239.8 | 73.3 M | 305.7 M instr/s | 3.2 | 3.8 | 312 |
-| 1,000,000 | 2650.7 | 816.7 M | 308.1 M instr/s | 3.1 | 3.9 | 2728 |
+| 10,000 | 5.2 | 2.6 M | 498.1 M instr/s | 3.1 | 0.3 | 65 |
+| 100,000 | 53.1 | 27.3 M | 514.5 M instr/s | 3.1 | 0.3 | 110 |
+| 1,000,000 | 571.7 | 288.3 M | 504.3 M instr/s | 3.4 | 0.3 | 632 |
 
 ## reflect-serialize
 
-N generated struct types with 8 fields (a rotating mix of i32, u8, bool, string, i64, u16, u32, i8) and a JSON serializer derived per type: K1 `#meta` walking `types/schema` and emitting the writer code, Zig `@typeInfo` with `inline for`, C++ a template over a generator-written member list (clang 21 has no reflection, so this is the manual alternative), C++26 P2996 reflection (`nonstatic_data_members_of` + `template for`, no per-struct list) on the clang-p2996 fork, Rust `serde` derive through proc macros (cargo, dependencies prebuilt). Each program serializes one value per type and prints the total output length. N=0 is the baseline; per type = (build(N) - build(0)) / N.
+N generated struct types with 8 fields (a rotating mix of i32, u8, bool, string, i64, u16, u32, i8) and a JSON serializer derived per type: k1 `#meta` walking `types/schema` and emitting the writer code, Zig `@typeInfo` with `inline for`, C++ a generator-written `members<T>` specialization per struct whose `visit` calls a callback with each field name and value (clang 21 has no reflection, so this is the manual alternative; a class-template specialization rather than one `visit_members` overload per struct, which clang resolves against all N candidates at every call and so costs quadratic time: 96 s at N=4000 against 7 s), C++26 P2996 reflection (`nonstatic_data_members_of` + `template for`, no per-struct list) on the clang-p2996 fork, Rust `serde` derive through proc macros (cargo, dependencies prebuilt). Each program serializes one value per type and prints the total output length; the full build that produces it is not timed. Front end only (see Methodology): N=0 is the baseline; per type = (t(N) - t(0)) / N; the slope column is (t(N) - t(previous N)) / (N - previous N), so a slope that rises with N is a superlinear front end.
 
-| N types | language | build (s) | per type (ms) | output |
-|---|---|---|---|---|
-| 0 | K1 | 0.078 ± 0.003 | - | `0` |
-| 0 | Zig | 0.730 ± 0.008 | - | `0` |
-| 0 | C++ | 0.167 ± 0.006 | - | `0` |
-| 0 | C++26 (P2996) | 0.429 ± 0.013 | - | `0` |
-| 0 | Rust | 0.142 ± 0.003 | - | `0` |
-| 10 | K1 | 0.089 ± 0.003 | 1.10 | `703` |
-| 10 | Zig | 0.774 ± 0.015 | 4.46 | `703` |
-| 10 | C++ | 0.407 ± 0.022 | 23.98 | `703` |
-| 10 | C++26 (P2996) | 0.470 ± 0.013 | 4.09 | `703` |
-| 10 | Rust | 0.156 ± 0.005 | 1.42 | `703` |
-| 100 | K1 | 0.154 ± 0.012 | 0.76 | `7126` |
-| 100 | Zig | 1.028 ± 0.022 | 2.98 | `7126` |
-| 100 | C++ | 2.824 ± 0.171 | 26.56 | `7126` |
-| 100 | C++26 (P2996) | 0.873 ± 0.018 | 4.44 | `7126` |
-| 100 | Rust | 0.207 ± 0.004 | 0.65 | `7126` |
-| 500 | K1 | 1.290 ± 0.228 | 2.42 | `36079` |
-| 500 | Zig | 2.333 ± 0.019 | 3.21 | `36079` |
-| 500 | C++ | 16.334 ± 0.329 | 32.33 | `36079` |
-| 500 | C++26 (P2996) | 2.815 ± 0.018 | 4.77 | `36079` |
-| 500 | Rust | 0.581 ± 0.134 | 0.88 | `36079` |
+| N types | language | front end (s) | per type (ms) | slope from previous N (ms/type) | output |
+|---|---|---|---|---|---|
+| 0 | k1 | 0.021 ± 0.003 | - | - | `0` |
+| 0 | Zig | 0.196 ± 0.001 | - | - | `0` |
+| 0 | C++ | 0.111 ± 0.006 | - | - | `0` |
+| 0 | C++26 (P2996) | 0.306 ± 0.012 | - | - | `0` |
+| 0 | Rust | 0.076 ± 0.002 | - | - | `0` |
+| 100 | k1 | 0.028 ± 0.002 | 0.07 | 0.07 | `7126` |
+| 100 | Zig | 0.209 ± 0.006 | 0.12 | 0.12 | `7126` |
+| 100 | C++ | 0.249 ± 0.004 | 1.38 | 1.38 | `7126` |
+| 100 | C++26 (P2996) | 0.693 ± 0.037 | 3.87 | 3.87 | `7126` |
+| 100 | Rust | 0.222 ± 0.008 | 1.46 | 1.46 | `7126` |
+| 1000 | k1 | 0.105 ± 0.001 | 0.08 | 0.09 | `72270` |
+| 1000 | Zig | 0.296 ± 0.003 | 0.10 | 0.10 | `72270` |
+| 1000 | C++ | 1.466 ± 0.005 | 1.36 | 1.35 | `72270` |
+| 1000 | C++26 (P2996) | 3.962 ± 0.043 | 3.66 | 3.63 | `72270` |
+| 1000 | Rust | 1.404 ± 0.016 | 1.33 | 1.31 | `72270` |
+| 4000 | k1 | 0.336 ± 0.003 | 0.08 | 0.08 | `292418` |
+| 4000 | Zig | 0.592 ± 0.005 | 0.10 | 0.10 | `292418` |
+| 4000 | C++ | 5.604 ± 0.063 | 1.37 | 1.38 | `292418` |
+| 4000 | C++26 (P2996) | 14.883 ± 0.038 † | 3.64 | 3.64 | `292418` |
+| 4000 | Rust | 5.534 ± 0.033 | 1.36 | 1.38 | `292418` |
+| 10000 | k1 | 0.821 ± 0.010 | 0.08 | 0.08 | `732704` |
+| 10000 | Zig | 1.191 ± 0.014 | 0.10 | 0.10 | `732704` |
+| 10000 | C++ | 13.805 ± 0.147 † | 1.37 | 1.37 | `732704` |
+| 10000 | C++26 (P2996) | 36.122 ± 0.000 † | 3.58 | 3.54 | `732704` |
+| 10000 | Rust | 13.658 ± 0.049 † | 1.36 | 1.35 | `732704` |
 
-K1 `--chatty` rows for the comptime work of reflect-serialize (`meta` is the metaprogram expansion, `run` the VM time behind it):
+k1 `--chatty` rows for the timed front-end command (`meta` is the metaprogram expansion, `run` the VM time behind it, `lower` the lowering to k1 IR, `untracked` the time outside traced work, which is mostly writing the IR dump):
 
-| N types | meta (ms) | VM run (ms) | VM instructions | typecheck (ms) | IR optimization (ms) | codegen (ms) | LLVM passes (ms) | link (ms) | whole compile (ms) |
-|---|---|---|---|---|---|---|---|---|---|
-| 0 | 0.0 | 0.1 | 0.00 M | 2.6 | 3.7 | 1.9 | 3.6 | 40.0 | 67 |
-| 10 | 0.2 | 0.6 | 0.15 M | 2.5 | 6.9 | 3.1 | 8.6 | 43.3 | 78 |
-| 100 | 1.0 | 5.4 | 1.50 M | 3.3 | 23.6 | 29.7 | 66.4 | 43.6 | 142 |
-| 500 | 5.5 | 26.6 | 7.60 M | 4.4 | 121.8 | 114.3 | 553.0 | 421.9 | 1174 |
+| N types | meta (ms) | VM run (ms) | VM instructions | typecheck (ms) | lower (ms) | untracked (ms) | whole compile (ms) |
+|---|---|---|---|---|---|---|---|
+| 0 | 0.0 | 0.4 | 0.17 M | 3.0 | 0.7 | 1.8 | 11 |
+| 100 | 1.0 | 2.8 | 1.30 M | 3.1 | 1.4 | 4.5 | 18 |
+| 1000 | 9.5 | 24.7 | 11.00 M | 4.8 | 8.2 | 30.1 | 90 |
+| 4000 | 37.9 | 96.9 | 43.70 M | 9.4 | 29.9 | 115.7 | 324 |
+| 10000 | 95.3 | 244.9 | 109.00 M | 19.5 | 73.0 | 299.4 | 812 |
 
 ## Output verification
 
@@ -163,21 +182,9 @@ Every executable that was built printed the reference value for its benchmark an
 
 ## Limits hit
 
-### sieve N=1,000,000 Zig (comptime)
+### crc32 N=8,388,608 Zig (comptime)
 
-`zig build-exe -O Debug -target aarch64-macos --stack 67092480 --cache-dir /Users/knix/dev/k1/content/showcase/benchmarks/comptime/gen/sieve/1000000/zig/comptime/zc --global-cache-dir /Users/knix/dev/k1/content/showcase/benchmarks/comptime/gen/zig-global -femit-bin=/Users/knix/dev/k1/content/showcase/benchmarks/comptime/gen/sieve/1000000/zig/comptime/sieve /Users/knix/dev/k1/content/showcase/benchmarks/comptime/gen/sieve/1000000/zig/comptime/sieve.zig`
+`zig build-exe -O Debug --cache-dir /Users/knix/dev/k1/content/showcase/benchmarks/comptime/gen/crc32/8388608/zig/comptime/zc --global-cache-dir /Users/knix/dev/k1/content/showcase/benchmarks/comptime/gen/zig-global --stack 67092480 -femit-bin=/Users/knix/dev/k1/content/showcase/benchmarks/comptime/gen/crc32/8388608/zig/comptime/crc32 /Users/knix/dev/k1/content/showcase/benchmarks/comptime/gen/crc32/8388608/zig/comptime/crc32.zig`
 
-Exited with code -9 after 227 s with no diagnostic output.
-
-### crc32 N=1,048,576 Zig (comptime)
-
-`zig build-exe -O Debug -target aarch64-macos --stack 67092480 --cache-dir /Users/knix/dev/k1/content/showcase/benchmarks/comptime/gen/crc32/1048576/zig/comptime/zc --global-cache-dir /Users/knix/dev/k1/content/showcase/benchmarks/comptime/gen/zig-global -femit-bin=/Users/knix/dev/k1/content/showcase/benchmarks/comptime/gen/crc32/1048576/zig/comptime/crc32 /Users/knix/dev/k1/content/showcase/benchmarks/comptime/gen/crc32/1048576/zig/comptime/crc32.zig`
-
-Killed after 300 s.
-
-### strbuild N=100,000 Zig (comptime)
-
-`zig build-exe -O Debug -target aarch64-macos --stack 67092480 --cache-dir /Users/knix/dev/k1/content/showcase/benchmarks/comptime/gen/strbuild/100000/zig/comptime/zc --global-cache-dir /Users/knix/dev/k1/content/showcase/benchmarks/comptime/gen/zig-global -femit-bin=/Users/knix/dev/k1/content/showcase/benchmarks/comptime/gen/strbuild/100000/zig/comptime/strbuild /Users/knix/dev/k1/content/showcase/benchmarks/comptime/gen/strbuild/100000/zig/comptime/strbuild.zig`
-
-Killed after 300 s.
+Exited with code -11 after 65 s with no diagnostic output.
 

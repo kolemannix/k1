@@ -1,13 +1,13 @@
 const std = @import("std");
 
-fn writeJson(w: anytype, value: anytype) !void {
+fn writeJson(w: *std.Io.Writer, value: anytype) !void {
     switch (@typeInfo(@TypeOf(value))) {
         .@"struct" => |s| {
             try w.writeByte('{');
-            inline for (s.fields, 0..) |f, i| {
+            inline for (s.field_names, 0..) |name, i| {
                 if (i > 0) try w.writeByte(',');
-                try w.print("\"{s}\":", .{f.name});
-                try writeJson(w, @field(value, f.name));
+                try w.print("\"{s}\":", .{name});
+                try writeJson(w, @field(value, name));
             }
             try w.writeByte('}');
         },
@@ -18,9 +18,13 @@ fn writeJson(w: anytype, value: anytype) !void {
     }
 }
 
-pub fn main() !void {
-    const stdout = std.io.getStdOut().writer();
-    var counting = std.io.countingWriter(std.io.null_writer);
-    try serializeAll(counting.writer());
-    try stdout.print("{d}\n", .{counting.bytes_written});
+pub fn main(init: std.process.Init) !void {
+    var out_buf: [256]u8 = undefined;
+    var out = std.Io.File.stdout().writer(init.io, &out_buf);
+    const stdout = &out.interface;
+    var count_buf: [256]u8 = undefined;
+    var counting: std.Io.Writer.Discarding = .init(&count_buf);
+    try serializeAll(&counting.writer);
+    try stdout.print("{d}\n", .{counting.fullCount()});
+    try stdout.flush();
 }

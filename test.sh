@@ -29,6 +29,7 @@ fi
 export PATH="$(pwd)/tools/k1bindgen/.k1-out:$PATH"
 
 test_src() {
+    $k1 --no-cache check test_src/http_test
     target/$target_dir/k1_test $k1_test_filter
     $k1 --optimize --no-cache run test_src/suite1
     $k1 --debug --no-cache build test_src/suite1
@@ -36,6 +37,7 @@ test_src() {
     if [ -n "$wasmtime" ]; then
         $k1 --optimize --no-cache --target wasm64-wasi run test_src/suite1
     fi
+    k1bindgen_httpapp
 }
 
 refchess() {
@@ -76,7 +78,6 @@ lane() {
 lane unit cargo test --lib --features=llvm-sys/prefer-dynamic,lsp
 lane test_src test_src
 lane refchess refchess
-lane k1bindgen_httpapp k1bindgen_httpapp
 lane profiling $k1 --no-cache build perf/profiling
 lane logreport $k1 --no-cache run examples/logreport
 lane brotli $k1 --no-cache run examples/brotli

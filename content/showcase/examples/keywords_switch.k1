@@ -1,10 +1,14 @@
-$pre/keywords/define(k1-keyword, [
+use pre/keywords
+
+$keywords/define(tiny, ["if", "in", "is", "fn", "for"])
+
+$keywords/define(k1-keyword, [
   "fn", "let", "mut", "and", "or", "if", "else", "while", "loop", "ns", "intern",
   "for", "in", "ability", "impl", "is", "not", "builtin", "where", "context",
   "use", "require", "defer",
 ])
 
-$pre/keywords/define(cpp-keyword, [
+$keywords/define(cpp-keyword, [
   "alignas", "alignof", "and", "and_eq", "asm", "auto", "bitand", "bitor", "bool", "break",
   "case", "catch", "char", "char8_t", "char16_t", "char32_t", "class", "compl", "concept",
   "const", "consteval", "constexpr", "constinit", "const_cast", "continue", "co_await",
@@ -47,7 +51,8 @@ fn checked-probes[t: equals](words: span[string], misses: span[string], lookup: 
 }
 
 fn main(): i32 {
-  print(pre/keywords/generate("tiny", ["if", "in", "is", "fn", "for"]).text)
+  println("${tiny/lookup("for")} ${tiny/lookup("fun")}")
+  print(keywords/generate("tiny", tiny/words()).text)
   let misses: span[string] = ["", "f", "fnn", "le", "whil", "loops", "ability2", "context ", "self", "count", "clas", "const_", "reinterpret_casts"]
   for w in k1-keyword/words() {
     assert-equals(k1-keyword/lookup(w).!.enum-name(), "kw-$w")

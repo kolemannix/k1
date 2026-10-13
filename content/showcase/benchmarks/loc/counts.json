@@ -1,0 +1,156 @@
+{
+  "counted": "2026-10-12",
+  "tool": "scc version 3.5.0",
+  "rows": [
+    {
+      "name": "k1",
+      "what": "src/ (lexer, parser, typer, static VM, IR, LLVM backend, linker shims, LSP, server), tests excluded",
+      "langs": {
+        "Rust": {
+          "files": 59,
+          "code": 72125,
+          "comment": 2348,
+          "blank": 4891
+        },
+        "C++": {
+          "files": 2,
+          "code": 64,
+          "comment": 3,
+          "blank": 5
+        }
+      },
+      "version": "k1 0.1.0, working tree at acba9226",
+      "command": "scc --no-cocomo --exclude-dir vmtw --not-match '_test\\.rs$' src",
+      "cwd": "k1 repo",
+      "code": 72189
+    },
+    {
+      "name": "Zig",
+      "what": "src/ (the compiler with its own back ends and linkers), tests excluded",
+      "langs": {
+        "Zig": {
+          "files": 180,
+          "code": 494320,
+          "comment": 20802,
+          "blank": 28814
+        },
+        "C++": {
+          "files": 5,
+          "code": 2807,
+          "comment": 398,
+          "blank": 452
+        },
+        "C Header": {
+          "files": 1,
+          "code": 90,
+          "comment": 24,
+          "blank": 18
+        }
+      },
+      "version": "ziglang/zig tag 0.17.0 (7647ada)",
+      "command": "scc --no-cocomo --not-match 'test\\.zig$' src",
+      "cwd": "ziglang/zig checkout",
+      "code": 497217
+    },
+    {
+      "name": "Go",
+      "what": "src/cmd/compile (gc compiler with its own SSA backend; cmd/link and cmd/asm not included), tests excluded",
+      "langs": {
+        "Go": {
+          "files": 446,
+          "code": 527898,
+          "comment": 72035,
+          "blank": 18597
+        },
+        "SSA rewrite rules (.rules)": {
+          "files": 27,
+          "code": 19333,
+          "comment": 0,
+          "blank": 1310
+        }
+      },
+      "version": "go version go1.27.1 darwin/arm64",
+      "command": "scc --no-cocomo --exclude-dir testdata --not-match '_test\\.go$' src/cmd/compile",
+      "cwd": "$(go env GOROOT)",
+      "code": 547231
+    },
+    {
+      "name": "Rust",
+      "what": "compiler/ (rustc and its crates, including the C++ LLVM wrapper; code generation is LLVM, counted separately), tests excluded",
+      "langs": {
+        "Rust": {
+          "files": 1987,
+          "code": 627442,
+          "comment": 124758,
+          "blank": 74432
+        },
+        "C++": {
+          "files": 5,
+          "code": 3085,
+          "comment": 402,
+          "blank": 421
+        },
+        "C Header": {
+          "files": 2,
+          "code": 47,
+          "comment": 5,
+          "blank": 18
+        }
+      },
+      "version": "rust-lang/rust tag 1.98.1 (48a229c)",
+      "command": "scc --no-cocomo --exclude-dir tests --not-match 'tests?\\.rs$' compiler",
+      "cwd": "rust-lang/rust checkout",
+      "code": 630574
+    },
+    {
+      "name": "clang",
+      "what": "clang/lib + clang/include (C, C++ and Objective-C front end; code generation is LLVM, counted separately)",
+      "langs": {
+        "C Header": {
+          "files": 1372,
+          "code": 340611,
+          "comment": 163685,
+          "blank": 86743
+        },
+        "C++": {
+          "files": 1109,
+          "code": 935508,
+          "comment": 171346,
+          "blank": 151654
+        }
+      },
+      "version": "llvmorg-23.1.2 (85ac56026)",
+      "command": "scc --no-cocomo clang/lib clang/include",
+      "cwd": "llvm-project",
+      "code": 1276119
+    },
+    {
+      "name": "LLVM",
+      "what": "llvm/lib + llvm/include (the optimizer and code generator under k1, clang and rustc)",
+      "langs": {
+        "C Header": {
+          "files": 3153,
+          "code": 427871,
+          "comment": 188488,
+          "blank": 111669
+        },
+        "C++": {
+          "files": 3098,
+          "code": 1957516,
+          "comment": 384524,
+          "blank": 313227
+        },
+        "C": {
+          "files": 16,
+          "code": 9655,
+          "comment": 1214,
+          "blank": 819
+        }
+      },
+      "version": "llvmorg-23.1.2 (85ac56026)",
+      "command": "scc --no-cocomo llvm/lib llvm/include",
+      "cwd": "llvm-project",
+      "code": 2395042
+    }
+  ]
+}

@@ -2,7 +2,6 @@
 #include <cstdio>
 #include <string>
 #include <string_view>
-#include <tuple>
 #include <type_traits>
 
 void write_json(std::string& out, bool v) { out += v ? "true" : "false"; }
@@ -21,13 +20,21 @@ void write_json(std::string& out, T v) {
 }
 
 template <class T>
-    requires requires(const T& t) { members(t); }
+struct members;
+
+template <class T>
+    requires std::is_class_v<T>
 void write_json(std::string& out, const T& v) {
     out += '{';
-    std::apply([&](const auto&... m) {
-        size_t i = 0;
-        ((out += i++ ? ",\"" : "\"", out += m.first, out += "\":", write_json(out, v.*m.second)), ...);
-    }, members(v));
+    bool first = true;
+    members<T>::visit(v, [&](const char* name, const auto& m) {
+        if (!first) out += ',';
+        first = false;
+        out += '"';
+        out += name;
+        out += "\":";
+        write_json(out, m);
+    });
     out += '}';
 }
 

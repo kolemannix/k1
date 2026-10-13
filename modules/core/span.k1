@@ -139,13 +139,11 @@ impl[t] as-span[t = t] for span[t] {
 }
 
 impl[t] index[key = size, t = t] for span[t] {
-  fn(inline) index-ref(self, key: size): *t { self.buffer.index-ref(key) }
+  fn(inline) index-ref(self, key: size): *t { self.buffer.data.ref-at[t](checked-index(key, self.buffer.len)) }
 }
 
 impl[t] iterable[item = t, i = buffer-iterator[t]] for span[t] {
-  fn(inline) iterator(self): i {
-    buffer-iterator/from-buffer(self.inner-buffer())
-  }
+  fn(inline) iterator(self): i { .{ buf = self.buffer, pos = 0 } }
 }
 
 impl[t: print] print for span[t] {

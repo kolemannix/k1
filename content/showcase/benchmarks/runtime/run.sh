@@ -15,14 +15,10 @@ export DOTNET_ROOT
 export DOTNET_CLI_TELEMETRY_OPTOUT=1
 export DOTNET_NOLOGO=1
 
-ZIG_SYSROOT=
-for sdk in /Library/Developer/CommandLineTools/SDKs/MacOSX*.sdk; do
-  if grep -m1 '^targets:' "$sdk/usr/lib/libSystem.tbd" 2>/dev/null | grep -q 'arm64-macos'; then ZIG_SYSROOT=$sdk; break; fi
-done
-
 langs() {
   case $1 in
     hashmap) echo "k1 c rust go zig java java-prim csharp python" ;;
+    binary-trees) echo "k1 c c-bump rust go zig java csharp python" ;;
     *) echo "k1 c rust go zig java csharp python" ;;
   esac
 }
@@ -53,9 +49,10 @@ for bench in $BENCHES; do
   build_k1 "$bench" k1 --optimize
   build_k1 "$bench" k1-noopt ""
   clang -O2 -o "$BIN/$bench-c" "$ROOT/$bench/c/"*.c
+  if [ -d "$ROOT/$bench/c-bump" ]; then clang -O2 -o "$BIN/$bench-c-bump" "$ROOT/$bench/c-bump/"*.c; fi
   rustc --edition 2021 -C opt-level=3 -o "$BIN/$bench-rust" "$ROOT/$bench/rust/"*.rs
   (cd "$ROOT/$bench/go" && GOCACHE=$GEN/go-cache go build -o "$BIN/$bench-go" main.go)
-  zig build-exe -O ReleaseFast ${ZIG_SYSROOT:+--sysroot "$ZIG_SYSROOT"} \
+  zig build-exe -O ReleaseFast \
     --cache-dir "$GEN/zig-cache" --global-cache-dir "$GEN/zig-global-cache" \
     -femit-bin="$BIN/$bench-zig" "$ROOT/$bench/zig/"*.zig
   rm -f "$BIN/$bench-zig.o"
@@ -99,7 +96,7 @@ done
   echo "clang: $(clang --version | head -1)"
   echo "rustc: $(rustc --version)"
   echo "go: $(go version)"
-  echo "zig: $(zig version)${ZIG_SYSROOT:+ (--sysroot $ZIG_SYSROOT: the macOS 26 SDK libSystem.tbd lists no arm64-macos target, which zig 0.14 needs)}"
+  echo "zig: $(zig version)"
   echo "java: $(java -version 2>&1 | head -1 | tr -d '\r'), $(java -XX:+PrintFlagsFinal -version 2>/dev/null | awk '/ MaxHeapSize/ {printf "default max heap %d MB", $4 / 1024 / 1024}'), default GC $(java -XX:+PrintFlagsFinal -version 2>/dev/null | awk '/ UseG1GC/ {print ($4 == "true" ? "G1" : "not G1")}')"
   echo "dotnet: sdk $(dotnet --version), runtime $(dotnet --list-runtimes | awk '/^Microsoft.NETCore.App/ {print $2; exit}') at $DOTNET_ROOT"
   echo "python: $(python3 --version) at $(which python3)"

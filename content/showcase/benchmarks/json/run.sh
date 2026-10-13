@@ -3,10 +3,10 @@ set -euo pipefail
 cd "$(dirname "$0")"
 ROOT=$(cd ../../../.. && pwd)
 CORPUS=$ROOT/perf/json
-K1=${K1:-k1}
+K1=${k1:-k1}
 export K1_HOME=${K1_HOME:-$ROOT}
 mkdir -p gen
-$K1 --optimize --no-cache build k1/bench.k1
+$k1 --optimize --no-cache build k1/bench.k1
 cp k1/.k1-out/bench gen/json-k1
 SIMDJSON=https://raw.githubusercontent.com/simdjson/simdjson/master/singleheader
 [ -f gen/simdjson.h ] || curl -sLo gen/simdjson.h $SIMDJSON/simdjson.h

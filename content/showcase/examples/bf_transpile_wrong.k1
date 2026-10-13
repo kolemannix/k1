@@ -1,4 +1,6 @@
-$pre/bf/define(broken, "++[>+<-")
+use pre/bf
+
+$bf/define(broken, "++[>+<-")
 
 fn main(): i32 {
   print(broken())
@@ -66,7 +68,7 @@ fn transpile(name: string, program: string): code {
 }
 
 macro define(name: code, program: string) {
-  transpile(name.text(), program)
+  transpile(name.text, program)
 }
 
 }}

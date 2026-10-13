@@ -95,6 +95,8 @@
 </main>
 
 <script type="module">
+import { wasiImports } from '../wasi.js'
+
 const canvas = document.getElementById('canvas')
 const ctx = canvas.getContext('2d')
 const hud = document.getElementById('hud')
@@ -121,32 +123,7 @@ const state = {
 let wasm = null
 let stdout = ''
 
-const decoder = new TextDecoder()
-
-const wasi = {
-  proc_exit(code) { throw { k1exit: code } },
-  fd_write(fd, iovs, iovsLen, writtenPtr) {
-    const view = new DataView(wasm.memory.buffer)
-    let written = 0
-    for (let i = 0; i < iovsLen; i++) {
-      const buf = view.getUint32(iovs + i * 8, true)
-      const len = view.getUint32(iovs + i * 8 + 4, true)
-      stdout += decoder.decode(new Uint8Array(wasm.memory.buffer, buf, len))
-      written += len
-    }
-    view.setUint32(writtenPtr, written, true)
-    return 0
-  },
-  fd_read: () => 0,
-  fd_fdstat_get(fd, statPtr) { new Uint8Array(wasm.memory.buffer)[statPtr] = 0; return 0 },
-  environ_sizes_get(countPtr, sizePtr) {
-    const view = new DataView(wasm.memory.buffer)
-    view.setUint32(countPtr, 0, true)
-    view.setUint32(sizePtr, 0, true)
-    return 0
-  },
-  environ_get: () => 0,
-}
+const wasi = wasiImports(() => wasm.memory, (text) => { stdout += text })
 
 function ansiToHtml(text) {
   const escaped = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;')

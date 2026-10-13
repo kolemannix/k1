@@ -63,7 +63,9 @@ K1 language reference for agents: `docs/ai_docs/k1-syntax-basics.md` and
   (`src/bin/test_suite.rs`), `lsp` (`src/bin/lsp_main.rs`, needs
   `--features lsp`).
 - CLI (`k1 --help`, lexopt): `k1 <check|build|run|test|server|setup|clean>
-  [path] [flags] [-- program args]`, aliases `c b r t`; flags go anywhere.
+  [path] [flags] [-- program args]`, aliases `c b r t`; flags go anywhere;
+  `k1 parse <file>` lexes and parses one file alone and prints `<start> <len>
+  <class>` highlight tokens.
   Path is a file or a module dir. `-D name[=value]` reaches the primary's
   `fn build`. Useful flags: `--optimize`, `--debug`, `--no-std`, `--no-cache`,
   `--target <intel64-linux|arm64-macos|wasm64-wasi|intel64-bare|arm64-bare|
@@ -267,13 +269,15 @@ native and wasm), `brotli` (byte-identical to the C encoder), `httpapp`,
 `klib` (K1 library consumed from C), `freestanding_lib` (bare-metal library
 consumed from C, `just ts-freestanding`), `reload_test` (hot reload driver),
 `selfhost` (K1 lexer/parser in K1, `just slophost`), `postgres` (libpq
-binding demo, `run.sh`). `content/showcase/sections` quotes their source by
+binding demo). `content/showcase/sections` quotes their source by
 path and `content/showcase/check.sh` verifies the quotes.
 
 ## Everything Else
 
 - `docs/ai_docs/`: K1 language notes maintained for agents. `design/`: exploratory
-  notes, not always current. `content/`: writing about K1.
+  notes, not always current. `content/`: writing about K1. `site/`: the Hugo
+  site (`just site` serves it, `just site-build` = `site/build.sh` rebuilds the
+  wasm demo, benchmark data and pages, failing if the showcase check fails).
 - `perf/`: stress generators and `profiling`, the hyperfine target. `sandbox/`: scratch.
 - `builds/`: bundle/install scripts and Linux cross-build notes. `llvm/`: the
   pinned LLVM 23 build (`get_llvm.sh`).

@@ -2,12 +2,14 @@
 
 A reference UCI chess engine in K1: bitboards, magic sliding attacks, strictly
 legal move generation, and a plain alpha-beta search. It passes the standard
-perft suites and runs unchanged natively and as wasm64 under wasmtime.
+perft suites and runs unchanged natively, as wasm64 under wasmtime, and as a
+perft demo in the browser.
 
 ```bash
 just refchess        # perft + search suites, native
 just refchess-wasm   # the same suites under wasmtime
 just refchess-uci    # UCI on stdin
+just refchess-web    # wasm64 in the browser, then open http://localhost:8088/refchess/web/
 echo "go perft 6" | examples/refchess/.k1-out/refchess
 ```
 
@@ -21,6 +23,11 @@ echo "go perft 6" | examples/refchess/.k1-out/refchess
   with a transposition table, killers, MVV-LVA, quiescence and a check
   extension; material plus tapered piece-square tables.
 - `uci.k1`, `input.k1`: the protocol loop and a zero-copy line reader.
+- `web.k1`: the browser entry point, compiled only for the `-D web` build
+  (wasi, not test). It exports `k1_perft(depth)` and imports `host.progress`,
+  which it calls every 20,000 nodes with the running count and a snapshot of
+  the position being visited; `web/` is the page, a worker that runs the
+  engine off the main thread, and the shared `examples/wasi.js` shim.
 
 Besides the UCI commands, `d` prints the board, FEN, key and arena usage, and
 `go perft N` prints a divide in Stockfish's format (`autoperft.py` reads it).

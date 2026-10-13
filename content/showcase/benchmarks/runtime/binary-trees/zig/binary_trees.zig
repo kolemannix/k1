@@ -17,8 +17,10 @@ fn check(n: *const Node) i64 {
     return 1;
 }
 
-pub fn main() !void {
-    const stdout = std.io.getStdOut().writer();
+pub fn main(init: std.process.Init) !void {
+    var out_buf: [256]u8 = undefined;
+    var out = std.Io.File.stdout().writer(init.io, &out_buf);
+    const stdout = &out.interface;
     const max_depth: u32 = 20;
     const stretch = max_depth + 1;
     var short_lived = std.heap.ArenaAllocator.init(std.heap.page_allocator);
@@ -41,4 +43,5 @@ pub fn main() !void {
         try stdout.print("{d}\t trees of depth {d}\t check: {d}\n", .{ iterations, depth, total });
     }
     try stdout.print("long lived tree of depth {d}\t check: {d}\n", .{ max_depth, check(long_lived) });
+    try stdout.flush();
 }

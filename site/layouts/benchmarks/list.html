@@ -1,0 +1,14 @@
+{{ define "main" }}
+<main class="page"><div class="wrap">
+  <h1>{{ .Title }}</h1>
+  <div class="body">
+    {{ with .Content }}<div class="intro">{{ . }}</div>{{ end }}
+    {{ range .Pages.ByWeight }}
+    <section class="suite">
+      <h2><a href="{{ .RelPermalink }}">{{ .Title }}</a></h2>
+      {{ range .Params.charts }}{{ partial "chart.html" . }}{{ end }}
+    </section>
+    {{ end }}
+  </div>
+</div></main>
+{{ end }}

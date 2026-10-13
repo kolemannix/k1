@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+enum Status {
+  ACTIVE = 0;
+  SUSPENDED = 1;
+  DELETED = 2;
+}
+
+message User {
+  uint64 id = 1;
+  string name = 2;
+  double score = 3;
+  Status status = 4;
+}

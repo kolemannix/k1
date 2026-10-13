@@ -1,0 +1,72 @@
+use pre/proto
+
+type(alias) status = #type proto/enum("user.proto", "Status")
+type(alias) user = #type proto/message("user.proto", "User")
+
+fn label(s: status): string {
+  if s is { :active -> "live", :suspended -> "on hold", :deleted -> "gone" }
+}
+
+fn main(): i32 {
+  let u: user = .{ id = 7, name = "ada", score = 99.5, status = :suspended }
+  println("${u.id} ${u.name} ${u.score} ${u.status.enum-name()}=${u.status.value} ${label(u.status)}")
+  println("size ${types/size[user]} status ${types/size[status]}")
+  0
+}
+
+ns pre { ns proto {
+
+fn read(file: string): string {
+  files/read-to-string("${k1/module-dir()}/$file").!
+}
+
+fn statements(src: string, kind: string, name: string): list[string] {
+  let head = "$kind $name {"
+  require src.index-of-string(head) is :some at else crash("proto: no `$head`")
+  let rest = src.drop(at + head.len())
+  let body = rest.slice(0, rest.position('}').!)
+  let out: list[string] = []
+  for s in body.split-by-char(';') {
+    let t = s.trim-ascii-space()
+    if t.non-empty() out.push(t)
+  }
+  out
+}
+
+fn scalar(name: string): ?types/type-id {
+  if name is {
+    "int32" -> :some types/id[i32],
+    "int64" -> :some types/id[i64],
+    "uint32" -> :some types/id[u32],
+    "uint64" -> :some types/id[u64],
+    "float" -> :some types/id[f32],
+    "double" -> :some types/id[f64],
+    "bool" -> :some types/id[bool],
+    "string" -> :some types/id[string],
+    _ -> :none,
+  }
+}
+
+fn enum-of(src: string, name: string): types/type-id {
+  let variants: list[types/make-either.variants.t] = []
+  for s in statements(src, "enum", name) {
+    let parts = s.split-by-char(' ')
+    let value = i64/from-string(parts.[2]).!
+    variants.push(.{ name = parts.[0].to-ascii-lower(), payload = :none, tag = :some(types/int-value:i32(value.trunc[i32])) })
+  }
+  types/make-either(:some(types/id[i32]), variants.as-span())
+}
+
+fn message-of(src: string, name: string): types/type-id {
+  let fields: list[types/make-struct.fields.t] = []
+  for s in statements(src, "message", name) {
+    let parts = s.split-by-char(' ')
+    fields.push(.{ name = parts.[1], type = scalar(parts.[0]) ? enum-of(src, parts.[0]) })
+  }
+  types/make-struct(:struct, fields.as-span())
+}
+
+fn enum(file: string, name: string): types/type-id { enum-of(read(file), name) }
+fn message(file: string, name: string): types/type-id { message-of(read(file), name) }
+
+}}

@@ -1,10 +1,9 @@
-# Reflection: a type is a value you can look at
+# Reflection: type info in one call
 
 `types/schema[t]` returns an ordinary sum value describing `t`, taken apart
 with the same `if x is { ... }` as any other sum, at compile time or runtime.
 
 ```k1 path=modules/core/builtin.k1
-  type type-schema = either {
     char,
     bool,
     ptr,
@@ -15,7 +14,8 @@ with the same `if x is { ... }` as any other sum, at compile time or runtime.
       values: span[{
         name: string,
         value: int-value,
-      }]
+      }],
+      partial: bool,
     }),
     reference({ inner-type-id: type-id }),
     array({
@@ -58,6 +58,7 @@ with the same `if x is { ... }` as any other sum, at compile time or runtime.
     function-pointer({ function-type-id: type-id }),
     other(string)
   }
+
 ```
 
 Alongside it: `types/id[t]` (a `type-id` with `.name()`, `.schema()`,
@@ -114,7 +115,7 @@ at compile time, and the `code` it returns becomes the body for that `t`.
         _ -> crash("json: no encoding for ${types/name[t]}")
       }
       let generated = cb.build()
-      k1/emit-compiler-message(k1/location(), :info, "json/write[${types/name[t]}]\n${generated.text()}")
+      k1/emit-compiler-message(k1/location(), :info, "json/write[${types/name[t]}]\n${generated.text}")
       generated
     }
   }
@@ -123,29 +124,16 @@ at compile time, and the `code` it returns becomes the body for that `t`.
 None of these types mention JSON:
 
 ```k1
-type role = either { admin, member, guest }
 type contact = either { email(string), phone(string), unreachable }
-type person = {
-  name: string,
-  initial: char,
-  age: u32,
-  score: f64,
-  active: bool,
-  role: role,
-  nickname: ?string,
-  contacts: list[contact],
-  scores: array[i32, 3],
-}
+type person = { name: string, age: u32, nickname: ?string, contact: contact }
 ```
 
 ```k1
   println(json/to-string(ada))
-  println(json/to-string(ada | .{ nickname = :some "Ada", contacts = [] }))
 ```
 
 ```text
-{"name":"Ada \"Countess\" Lovelace","initial":"A","age":36,"score":99.5,"active":true,"role":"admin","nickname":null,"contacts":[{"email":"ada@example.com"},"unreachable"],"scores":[10,20,30]}
-{"name":"Ada \"Countess\" Lovelace","initial":"A","age":36,"score":99.5,"active":true,"role":"admin","nickname":"Ada","contacts":[],"scores":[10,20,30]}
+{"name":"Ada Lovelace","age":36,"nickname":null,"contact":{"email":"ada@example.com"}}
 ```
 
 The block logs what it generated, so compiling that call also prints, among others:
@@ -155,23 +143,16 @@ The block logs what it generated, so compiling that call also prints, among othe
 w.write-char('{')
 w.write("\"name\":")
 write(w, v.name)
-w.write(",\"initial\":")
-write(w, v.initial)
 w.write(",\"age\":")
 write(w, v.age)
-w.write(",\"score\":")
-write(w, v.score)
-w.write(",\"active\":")
-write(w, v.active)
-w.write(",\"role\":")
-write(w, v.role)
 w.write(",\"nickname\":")
 write(w, v.nickname)
-w.write(",\"contacts\":")
-write(w, v.contacts)
-w.write(",\"scores\":")
-write(w, v.scores)
+w.write(",\"contact\":")
+write(w, v.contact)
 w.write-char('}')
+
+[reflect_json.k1:65 info] json/write[opt[string]]
+if v is { :some x -> write(w, x), :none -> w.write("null") }
 
 [reflect_json.k1:65 info] json/write[contact]
 if v is {
@@ -179,9 +160,6 @@ if v is {
   :phone p -> { w.write("{\"phone\":"); write(w, p); w.write-char('}') },
   :unreachable -> w.write("\"unreachable\""),
 }
-
-[reflect_json.k1:65 info] json/write[opt[string]]
-if v is { :some x -> write(w, x), :none -> w.write("null") }
 ```
 
 Each field's `write` call instantiates the next type. No declaration is
@@ -201,7 +179,7 @@ resolved types.
 
 ## Derive without derive
 
-Same shape, printing K1 literal syntax. No `impl`, no annotation.
+Same shape, printing k1 literal syntax. No `impl`, no annotation.
 
 ```k1
 fn show[t](v: t): string {
@@ -360,20 +338,20 @@ String to enum: a macro that writes the `from-string` impl for any enum.
     cb.dedent()
     cb.line("}")
     let generated = cb.build()
-    k1/emit-compiler-message(k1/location(), :info, generated.text())
+    k1/emit-compiler-message(k1/location(), :info, generated.text)
     generated
   }
 ```
 
 ```k1
-$pre/derive-from-string[color]()
-$pre/derive-from-string[level]()
+$derive-from-string[color]()
+$derive-from-string[level]()
 ```
 
 For `level` it emits:
 
 ```text
-[reflect_enum.k1:40 info] impl from-string[e = string] for level {
+[reflect_enum.k1:42 info] impl from-string[e = string] for level {
   fn from-string(s: string): result[level, string] {
     if s == "debug" return :ok :debug
     if s == "info" return :ok :info
@@ -402,7 +380,7 @@ Both enums now parse like `u64` does:
 :err(expected one of [debug,info,warn,error], got 'fatal')
 ```
 
-P2996 needs `template for`, `^^E` and `[:e:]` splices for this. K1 has no
+P2996 needs `template for`, `^^E` and `[:e:]` splices for this. k1 has no
 splice operator: a variant name is a `string`, and `:${x.name}` is
 interpolation.
 
@@ -609,16 +587,14 @@ list[t]
 true false
 ```
 
-That query can gate a generic, via a predicate in the `pre` namespace:
+That query can gate a generic, via a predicate:
 
 ```k1
-ns pre {
   fn is-list[t](): bool { types/id[t].is-instance-of(types/id[list]) }
-}
 ```
 
 ```k1
-fn element-type[t: pred pre/is-list](): string { types/instance-info[t].!.args.[0].name() }
+fn element-type[t: pred is-list](): string { types/instance-info[t].!.args.[0].name() }
 ```
 
 `test-compile` returns the rejection as a string:
@@ -631,13 +607,13 @@ fn element-type[t: pred pre/is-list](): string { types/instance-info[t].!.args.[
 
 ```text
 string
-Predicate 'pre/is-list' failed on type i64. Therefore, cannot call function 'element-type' with given types: i64
+Predicate 'is-list' failed on type i64. Therefore, cannot call function 'element-type' with given types: i64
 ```
 
 Functions reflect too, down to parameter names:
 
 ```k1
-fn do-it(input: string, count: u32): bool { count > 0 and input.len() > 0 }
+fn do-it(input: string, count: u32): bool { count > 0 and input.non-empty() }
 ```
 
 ```k1
@@ -665,8 +641,8 @@ fn(input: string, count: u32) -> bool
 ## Elsewhere
 
 - C++26 P2996: `^^T`, `[: r :]` splices, `template for`, a consteval-only
-  `std::meta::info`. The closest design; K1's reflection value is a plain
+  `std::meta::info`. The closest design; k1's reflection value is a plain
   `either` and codegen is string interpolation.
-- Zig: `@typeInfo` is the same idea as `type-schema`. K1's `#meta` can also
+- Zig: `@typeInfo` is the same idea as `type-schema`. k1's `#meta` can also
   emit new declarations.
 - Rust: no reflection; proc macros see one item's tokens.

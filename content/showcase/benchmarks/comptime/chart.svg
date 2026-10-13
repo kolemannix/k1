@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 354" width="1080" height="354" style="max-width:100%;height:auto" font-family="var(--mono, 'Martian Mono', ui-monospace, Menlo, monospace)" font-size="12">
+<style>
+  .bg { fill: var(--p, #151920); }
+  .t1 { fill: var(--b, #FFFFFF); font-weight: 600; font-size: 13px; }
+  .t2 { fill: var(--m, #7E8794); font-size: 10.5px; }
+  .t3 { fill: var(--f, #E6E9EE); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .t4 { fill: var(--m, #7E8794); font-size: 11px; font-style: italic; }
+  text.muted { fill: var(--m, #7E8794); }
+  rect.k1 { fill: var(--s, #E6C070); }
+  rect.k1-dim { fill: var(--s, #E6C070); opacity: .45; }
+  rect.other { fill: var(--l2, #333944); }
+  rect.muted { fill: var(--l, #262B34); }
+  .ref { stroke: var(--m, #7E8794); stroke-width: 1; stroke-dasharray: 3 3; }
+</style>
+<rect class="bg" width="1080" height="354"/>
+<text class="t1" x="24" y="38">format 1M numbers</text>
+<text class="t2" x="24" y="54">compile-time cost in seconds</text>
+<text class="t3 k1" x="58" y="79" text-anchor="end">k1</text>
+<rect class="k1" x="68" y="68" width="1.5" height="14"/>
+<text class="t3" x="75.5" y="79">0.557 s</text>
+<text class="t3 other" x="58" y="101" text-anchor="end">Rust</text>
+<rect class="other" x="68" y="90" width="41.8" height="14"/>
+<text class="t3" x="115.8" y="101">40.47 s</text>
+<text class="t3 other" x="58" y="123" text-anchor="end">Zig</text>
+<rect class="other" x="68" y="112" width="52.7" height="14"/>
+<text class="t3" x="126.7" y="123">51.00 s</text>
+<text class="t3 other" x="58" y="145" text-anchor="end">C++</text>
+<rect class="other" x="68" y="134" width="200.0" height="14"/>
+<text class="t3" x="274.0" y="145">193.45 s</text>
+<text class="t1" x="376" y="38">sieve to 1M</text>
+<text class="t3 k1" x="410" y="65" text-anchor="end">k1</text>
+<rect class="k1" x="420" y="54" width="1.5" height="14"/>
+<text class="t3" x="427.5" y="65">0.060 s</text>
+<text class="t3 other" x="410" y="87" text-anchor="end">Rust</text>
+<rect class="other" x="420" y="76" width="22.4" height="14"/>
+<text class="t3" x="448.4" y="87">2.98 s</text>
+<text class="t3 other" x="410" y="109" text-anchor="end">C++</text>
+<rect class="other" x="420" y="98" width="50.2" height="14"/>
+<text class="t3" x="476.2" y="109">6.69 s</text>
+<text class="t3 other" x="410" y="131" text-anchor="end">Zig</text>
+<rect class="other" x="420" y="120" width="200.0" height="14"/>
+<text class="t3" x="626.0" y="131">26.65 s</text>
+<text class="t1" x="728" y="38">crc32 over 8 MB</text>
+<text class="t3 k1" x="762" y="65" text-anchor="end">k1</text>
+<rect class="k1" x="772" y="54" width="2.0" height="14"/>
+<text class="t3" x="780.0" y="65">0.549 s</text>
+<text class="t3 other" x="762" y="87" text-anchor="end">Rust</text>
+<rect class="other" x="772" y="76" width="178.4" height="14"/>
+<text class="t3" x="956.4" y="87">49.57 s</text>
+<text class="t3 other" x="762" y="109" text-anchor="end">C++</text>
+<rect class="other" x="772" y="98" width="200.0" height="14"/>
+<text class="t3" x="978.0" y="109">55.57 s</text>
+<text class="t3 other" x="762" y="131" text-anchor="end">Zig</text>
+<text class="t4" x="772" y="131">killed (SIGSEGV)</text>
+<text class="t1" x="24" y="190">reflection-generated serializer</text>
+<text class="t2" x="24" y="206">ms per type, 10,000 types, front end only</text>
+<text class="t3 k1" x="114" y="231" text-anchor="end">k1</text>
+<rect class="k1" x="124" y="220" width="3.2" height="14"/>
+<text class="t3" x="133.2" y="231">0.08 ms</text>
+<text class="t3 other" x="114" y="253" text-anchor="end">Zig</text>
+<rect class="other" x="124" y="242" width="4.0" height="14"/>
+<text class="t3" x="134.0" y="253">0.10 ms</text>
+<text class="t3 other" x="114" y="275" text-anchor="end">Rust</text>
+<rect class="other" x="124" y="264" width="54.6" height="14"/>
+<text class="t3" x="184.6" y="275">1.36 ms</text>
+<text class="t3 other" x="114" y="297" text-anchor="end">C++</text>
+<rect class="other" x="124" y="286" width="55.1" height="14"/>
+<text class="t3" x="185.1" y="297">1.37 ms</text>
+<text class="t3 other" x="114" y="319" text-anchor="end">C++26 P2996</text>
+<rect class="other" x="124" y="308" width="144.0" height="14"/>
+<text class="t3" x="274.0" y="319">3.58 ms</text>
+</svg>

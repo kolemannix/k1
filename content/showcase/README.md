@@ -1,6 +1,6 @@
-# K1 by example
+# k1 by example
 
-This site contains various examples and benchmark results designed to show what k1 is capable of.
+This directory contains various examples and benchmark results designed to show what k1 is capable of.
 
 This is not a tutorial, formal documentation, or a language walkthrough. It's more of a recorded test drive.
 
@@ -21,24 +21,23 @@ The examples are deliberately fun, provocative, and a little ridiculous, designe
    minimization, and a matcher whose states are match arms.
 7. [Generators](sections/07-generators.md): gperf as a macro, and a Brainfuck
    compiler checked against a literal type.
-8. [Types are values](sections/08-types.md): types synthesized from schemas,
+8. [Building types at compile time](sections/08-types.md): types synthesized from schemas,
    static parameters, predicate bounds, `never` and zero-sized types.
 9. [The runtime model](sections/09-model.md): abilities, closures that capture
    only what you name, context parameters, `.try` for C status codes, arenas,
    exhaustive matching.
 10. [Systems programming](sections/10-systems.md): SIMD, threads, atomics, FFI
-    without a bindings file, a K1 library called from C, hot reload, wasm and
+    without a bindings file, a k1 library called from C, hot reload, wasm and
     bare metal.
 
 ## Performance
 
 Every suite has an unattended `run.sh` that regenerates its `results.md`
-(machine, toolchains, methodology, numbers). `python3
-content/showcase/benchmarks/chart.py` redraws the graph from those;
-[run-info.json](benchmarks/run-info.json) records the compiler revision and
+(machine, toolchains, methodology, numbers). [run-info.json](benchmarks/run-info.json) records the compiler revision and
 binary hash.
 
-![Showcase benchmark results](benchmarks/benchmarks.svg)
+`python3 content/showcase/benchmarks/chart.py` redraws each suite's `chart.svg`
+from those, in the site's theme; the site inlines them above each results page.
 
 - [Runtime classics](benchmarks/runtime/results.md): binary-trees, hashmap,
   byte-scan. Whole-process timings include JVM/CLR startup; the report has
@@ -46,17 +45,17 @@ binary hash.
   language made.
 - [Compile times](benchmarks/compile-times/results.md): generated
   application-shaped programs at 10, 100 and 300 units, hello world, and
-  Brotli. K1 rebuilds core and std from source (`--no-cache`); cached rows are
+  Brotli. k1 rebuilds core and std from source (`--no-cache`); cached rows are
   separate.
 - [Compile-time execution](benchmarks/comptime/results.md): sieve, CRC32,
   formatting, and generated JSON serializers, against other languages'
   compile-time evaluators. Timeouts and failures stay in the graph.
-- [Brotli](benchmarks/brotli/results.md): K1 quality 0/1 encoders against the
+- [Brotli](benchmarks/brotli/results.md): k1 quality 0/1 encoders against the
   C encoder in one process, byte-identical output.
   ([earlier investigation](benchmarks/brotli.md))
-- [Integer to string](benchmarks/int-strings/lemire-reply.md): Daniel
-  Lemire's strings-per-second loop against clang's `std::to_string`, from the
-  naive `show()` to an inline `spill-string`.
+- [Integer to string](benchmarks/int-strings/): Daniel Lemire's
+  strings-per-second loop against clang's `std::to_string`; the journey from the
+  naive `show()` to `spill-string` is a [blog post](../../site/content/blog/417-million-strings-per-second-in-k1.md).
 
 Compiler time, emitted-program runtime and compile-time VM execution are
 separate measurements; a win in one says nothing about the others.

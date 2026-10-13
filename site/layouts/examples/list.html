@@ -1,0 +1,11 @@
+{{ define "main" }}
+<main class="page"><div class="wrap">
+  <h1>k1 by example</h1>
+  <div class="body"><p>A recorded test drive, not a tutorial. Every program here compiles and runs; the quotes are verified against the source at every site build.</p></div>
+  <ul class="posts">
+    {{ range sort .Pages ".File.BaseFileName" }}
+    <li><time>{{ .File.BaseFileName }}</time><div><a href="{{ .RelPermalink }}">{{ partial "h1.html" . }}</a></div></li>
+    {{ end }}
+  </ul>
+</div></main>
+{{ end }}

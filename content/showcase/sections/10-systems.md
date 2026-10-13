@@ -1,8 +1,8 @@
 # Systems programming
 
-K1 compiles to machine code through LLVM and speaks the C ABI. SIMD lanes are
+k1 compiles to machine code through LLVM and speaks the C ABI. SIMD lanes are
 a type, atomics are functions over ordinary memory, an `extern` is a binding,
-and a module's build step is K1 running in the compiler's VM. Then the same
+and a module's build step is k1 running in the compiler's VM. Then the same
 programs go to wasm and bare metal.
 
 ## A SIMD scanner generated at compile time
@@ -29,12 +29,12 @@ fn scan-all-simd(text: string): u64 {
 }
 ```
 
-`first-of` is a macro in `std/simd`, and its body is ordinary K1 writing K1
+`first-of` is a macro in `std/simd`, and its body is ordinary k1 writing k1
 source into a string builder:
 
 ```k1 path=modules/std/simd.k1
 macro first-of(name: code, needles: span[char]) {
-  code/from-string(first-of-impl(name.text(), needles))
+  code/from-string(first-of-impl(name.text, needles))
 }
 ```
 
@@ -85,7 +85,7 @@ The vector ops are compiler intrinsics, declared in core:
   fn(intern) to-mask[t, n: static size](v: vector[t, n]): u64
 ```
 
-`trailing-zeros` isn't even that. It's a raw LLVM intrinsic, declared in K1:
+`trailing-zeros` isn't even that. It's a raw LLVM intrinsic, declared in k1:
 
 ```k1 path=modules/core/core.k1
   fn(intern("llvm.cttz.i64")) _cttz(x: u64, zero-poison: bool): u64
@@ -95,7 +95,7 @@ The vector ops are compiler intrinsics, declared in core:
   }
 ```
 
-Any K1 file can do that. The VM emulates the common ones and runs vector ops
+Any k1 file can do that. The VM emulates the common ones and runs vector ops
 on its own memory, so the generated scanner runs at compile time too:
 
 ```k1
@@ -115,8 +115,8 @@ typechecking. My first draft said `3`:
 │  Expected value type static[i64, 3] but got value type static[u64, 4]
 ```
 
-No intrinsics header, no `#ifdef`, no second language: the generator is K1,
-the output is K1, and it runs natively, on wasm, and inside the compiler.
+No intrinsics header, no `#ifdef`, no second language: the generator is k1,
+the output is k1, and it runs natively, on wasm, and inside the compiler.
 
 `vector[u8, 16]` by hand is the same operations. Counting a byte, with a
 vector accumulator flushed before the `u8` lanes wrap:
@@ -196,7 +196,7 @@ let(mutable, tls) my-bumps: u64 = 0
 
 fn worker(s: *shared): u64 {
   for 0u64.until(N_ITERS) {
-    let _ = atomic/fetch-add(s.atomic-total.&, 1, :relaxed)
+    atomic/fetch-add(s.atomic-total.&, 1, :relaxed)
     my-bumps = my-bumps + 1
   }
   while not atomic/cmpxchg(s.lock.&, 0: u64, 1, :acquire, :relaxed).ok {}
@@ -233,15 +233,6 @@ thread 3 bumped its thread-local 100000 times
 atomic total: 400000
 locked total: 400000
 main's thread-local: 0
-```
-
-Orderings are literals, checked at the call site:
-
-```k1 path=test_src/suite1/atomics.k1
-  assert-equals[?string](
-    test-compile(atomic/load(x, :release)),
-    :some "atomic load cannot use `:release` ordering"
-  )
 ```
 
 `task` isn't built in. It's a few lines of `std/thread` over `thread/start`,
@@ -285,7 +276,7 @@ fn(extern("getpid")) getpid(): c-int
 fn(extern("qsort")) qsort(base: ptr, count: size, width: size, compare: *fn(ptr, ptr) -> c-int)
 ```
 
-A K1 function's address is a C function pointer:
+A k1 function's address is a C function pointer:
 
 ```k1
 fn compare-i32(a: ptr, b: ptr): c-int {
@@ -345,7 +336,7 @@ fn(extern("BrotliEncoderCompress"), lib("brotli")) encoder-compress(
 ```
 
 Big APIs get generated. `tools/k1bindgen` reads C headers through libclang
-and writes K1. Its libuv output:
+and writes k1. Its libuv output:
 
 ```k1 path=modules/uv/libuv.k1
 fn(extern("uv_default_loop")) default_loop(): optref[uv-loop]
@@ -357,7 +348,7 @@ fn(extern("uv_loop_close")) loop_close(
 ): i32
 ```
 
-`*t` is never null in K1, so a returned C pointer comes back as
+`*t` is never null in k1, so a returned C pointer comes back as
 `optref[uv-loop]`, one word you have to check. Every generated struct carries
 libclang's layout as a compile-time assertion, collected in one `#static`
 block at the end of the file that compiles under `k1 test`, so drift from the
@@ -371,15 +362,23 @@ type sockaddr_in = {
   sin_addr: in_addr,
   sin_zero: array[u8, 8],
 }
-...
+```
+
+```k1 path=modules/uv/net.k1
 #if k1/test #static {
-  ...
+  assert-layout[in_addr_t](4, 4, [])
+  assert-layout[in_port_t](2, 2, [])
+  assert-layout[sa_family_t](1, 1, [])
+  assert-layout[sockaddr](16, 1, [0, 1, 2, ])
+  assert-layout[in_addr](4, 4, [0, ])
   assert-layout[sockaddr_in](16, 4, [0, 1, 2, 4, 8, ])
-  ...
+  assert-layout[in6_addr](16, 4, [0, ])
+  assert-layout[sockaddr_in6](28, 4, [0, 1, 2, 4, 8, 24, ])
+  assert-layout[addrinfo](48, 8, [0, 4, 8, 12, 16, 24, 32, 40, ])
 }
 ```
 
-## Build steps are K1 running inside the compiler
+## Build steps are k1 running inside the compiler
 
 A module's `build.k1` is compiled on the host before any of the program.
 `fn module(b)` returns the manifest; `fn setup(ctx)` is an optional build
@@ -410,7 +409,7 @@ fn setup(ctx: k1/setup-ctx) {
 }
 ```
 
-`examples/brotli`, the K1 port of the encoder, needs the C encoder's static
+`examples/brotli`, the k1 port of the encoder, needs the C encoder's static
 tables. Its setup parses them out of the C sources and writes one of its own
 source files, `tables.k1`:
 
@@ -483,7 +482,7 @@ Rust's `build.rs` and Zig's `build.zig` are host-language too, but compiled to
 a separate binary and run as a process, with `rerun-if-changed` hints. This
 one runs in the compiler that's already running.
 
-## Exporting a K1 library to C
+## Exporting a k1 library to C
 
 Mark the module a library and mark what it exports. Everything else, the
 runtime's C helpers included, stays hidden.
@@ -531,7 +530,7 @@ extern int64_t klib_sum_to(int64_t n);
 extern int32_t klib_answer;
 ```
 
-`k1 build` writes a dylib and a fat static archive (the K1 object partially
+`k1 build` writes a dylib and a fat static archive (the k1 object partially
 linked with every static lib, k1rt included), and C links either one:
 
 ```text
@@ -552,7 +551,7 @@ sum=55
 answer=42
 ```
 
-`klib_sum_to` allocates in K1's arena from a C `main` that never initializes
+`klib_sum_to` allocates in k1's arena from a C `main` that never initializes
 any runtime.
 
 ## Hot reload
@@ -584,7 +583,7 @@ and it gets `load()`, `watch()` and `loaded-version()`:
 
 `k1 build` emits the namespace as its own dylib with a hash of its API, and
 calls into it go through per-function address slots. The runtime half is
-plain K1 in `std/reload`: `dlopen`, check the hash, resolve every symbol,
+plain k1 in `std/reload`: `dlopen`, check the hash, resolve every symbol,
 and only then patch the slots:
 
 ```k1 path=modules/std/reload.k1
@@ -747,4 +746,4 @@ long k1_platform_io_write(int fd, const void *buf, unsigned long n) {
 
 `just ts-freestanding` checks that symbol list, links with `ld.lld` against
 `libk1rt-nocrt.a`, and runs it in an alpine container, expecting `k1 sum: 100`
-from K1's `println`.
+from k1's `println`.

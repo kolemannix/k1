@@ -17,7 +17,7 @@ GOCACHE_COLD=$HERE/gen/gocache-cold
 ZIG_GLOBAL=$HERE/gen/zig-global
 ZIG_GLOBAL_COLD=$HERE/gen/zig-global-cold
 ZIG_LOCAL=$HERE/gen/zig-local
-ZIG="zig build-exe -target aarch64-macos --cache-dir $ZIG_LOCAL"
+ZIG="zig build-exe --cache-dir $ZIG_LOCAL"
 BRO_INC="-I$REPO/modules/cbrotli/vendor/enc -I$REPO/modules/cbrotli/vendor/include"
 BRO_SRC=""
 for f in compress_fragment.c compress_fragment_two_pass.c encode.c fast_log.c; do
@@ -33,7 +33,9 @@ done
   echo "rustc: $(rustc --version)"
   echo "go: $(go version)"
   echo "zig: $(zig version)"
+  echo "ocaml: $(ocamlopt -version), flambda $(ocamlopt -config-var flambda)"
   echo "javac: $(javac -version 2>&1)"
+  echo "kotlinc: $(kotlinc -version 2>&1 | sed 's/^info: //')"
   echo "dotnet: sdk $(dotnet --version)"
   echo "hyperfine: $(hyperfine --version)"
   echo "runs: $RUNS"
@@ -74,8 +76,10 @@ srcof() {
     rs) echo "$2.rs" ;;
     go|gocold) echo "$2.go" ;;
     zig|zigcold) echo "$2.zig" ;;
+    ml) echo "$2.ml" ;;
     cs) echo "$2.cs" ;;
     java) echo "$(dirname "$2")/$(basename "$2" | awk '{print toupper(substr($0, 1, 1)) substr($0, 2)}').java" ;;
+    kt) echo "$2.kt" ;;
   esac
 }
 
@@ -101,7 +105,11 @@ cmd() {
     zigcold-check) echo "$ZIG --global-cache-dir $ZIG_GLOBAL_COLD -fno-emit-bin $src" ;;
     zigcold-debug) echo "$ZIG --global-cache-dir $ZIG_GLOBAL_COLD -O Debug -femit-bin=${out}_zig $src" ;;
     zigcold-opt) echo "$ZIG --global-cache-dir $ZIG_GLOBAL_COLD -O ReleaseFast -femit-bin=${out}_zig $src" ;;
+    ml-check) echo "ocamlopt -stop-after typing $src" ;;
+    ml-debug) echo "ocamlopt -o ${out}_ml $src" ;;
+    ml-opt) echo "ocamlopt -O3 -o ${out}_ml $src" ;;
     java-debug) echo "javac -d ${out}_java $src" ;;
+    kt-debug) echo "env JAVA_OPTS=-XX:MaxRAMPercentage=25 kotlinc -d ${out}_kt $src" ;;
     cs-opt) echo "dotnet build -c Release ${out}.csproj" ;;
     *) return 1 ;;
   esac
@@ -116,6 +124,7 @@ prep() {
     zig) echo "./prep.sh rm $ZIG_LOCAL" ;;
     zigcold) echo "./prep.sh rm $ZIG_LOCAL $ZIG_GLOBAL_COLD" ;;
     java) echo "./prep.sh rm ${out}_java" ;;
+    kt) echo "./prep.sh rm ${out}_kt" ;;
     cs) echo "./prep.sh nonce $src" ;;
     *) echo "true" ;;
   esac
@@ -135,11 +144,11 @@ bench() {
 }
 
 python3 gen.py hello gen/hello
-bench "k1 c cpp rs go zig java cs gocold zigcold" hello gen/hello/hello
+bench "k1 c cpp rs go zig ml java kt cs gocold zigcold" hello gen/hello/hello
 
 for n in $SIZES; do
   python3 gen.py "$n" "gen/n$n"
-  bench "k1 c cpp cpp-hand-vec rs go zig java cs k1warm" "$n" "gen/n$n/stress"
+  bench "k1 c cpp cpp-hand-vec rs go zig ml java kt cs k1warm" "$n" "gen/n$n/stress"
 done
 
 big=${SIZES##* }

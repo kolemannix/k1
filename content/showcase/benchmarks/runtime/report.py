@@ -11,14 +11,15 @@ NATIVE = ["k1", "c", "rust", "go", "zig"]
 BENCHES = [
     (
         "binary-trees",
-        NATIVE + ["java", "csharp", "python"],
+        ["k1", "c", "c-bump", "rust", "go", "zig", "java", "csharp", "python"],
         "Benchmarks-game binary-trees, depth 20, single-threaded: a stretch tree of depth 21, a long-lived tree of depth 20, then for each depth 4..20 step 2 build and check 2^(24-depth) trees. Prints the standard output lines; every language prints identical text.",
         {
             "k1": "An explicit `*arena` parameter and `arena.push` for every node. The long-lived tree uses the ambient arena; short-lived trees use a private arena, reset after each tree. `reset()` zeroes the used region in bulk; allocations bump the cursor. Leaves are `node.0`, null children.",
             "c": "`malloc`/`free` per node, recursive `destroy`.",
+            "c-bump": "the k1 row's allocation strategy in C: a bump arena for the long-lived tree and a private one for the short-lived trees, reset after each tree, so this row measures the allocator choice and the `c` row measures what C programs usually do.",
             "rust": "`Option<Box<Node>>` per node, dropped recursively.",
             "go": "`&Node{}` per node, garbage collected (the collector runs on other cores, so user time exceeds wall time).",
-            "zig": "`std.heap.ArenaAllocator` over `page_allocator`, `reset(.retain_capacity)` after each tree: the arena is Zig's natural fast choice here, as it is K1's.",
+            "zig": "`std.heap.ArenaAllocator` over `page_allocator`, `reset(.retain_capacity)` after each tree: the arena is Zig's natural fast choice here, as it is k1's.",
             "java": "a plain `static final class Node` with `left`/`right` fields, `new Node()` per node, collected by G1 (the default GC). This is the benchmarks-game shape minus its per-depth thread pool, since every row here is single-threaded.",
             "csharp": "a `sealed class Node` with `Left`/`Right` fields, `new Node()` per node, collected by the default workstation GC.",
             "python": "nodes are `(left, right)` tuples and leaves are `(None, None)`, the benchmarks-game Python shape; reference counting frees each short-lived tree as soon as `check` returns. A `__slots__` class with an `__init__` is the more common way to write a node and took about five times as long in a side test (114 s).",
@@ -49,7 +50,7 @@ BENCHES = [
             "c": "(1)(2) `memchr` from libSystem (hand-written NEON). (3) three `memchr` calls per segment, one per delimiter, taking the nearest hit: with delimiters this sparse each segment is scanned several times over, but still at NEON speed. `strpbrk` over a NUL-terminated copy is the C-string idiom; it is a byte-at-a-time table loop and was an order of magnitude slower in a side test.",
             "rust": "(1) `<[u8]>::contains`, which std routes to `core::slice::memchr` (a SWAR word-at-a-time loop, no SIMD). (2)(3) `iter().position(..)`, a scalar loop; the `memchr` crate would give SIMD, no crates are used.",
             "go": "(1)(2) `bytes.IndexByte` (NEON assembly in the runtime). (3) `bytes.IndexAny`, a scalar loop over an ASCII bitset.",
-            "zig": "(1)(2) `std.mem.indexOfScalar`/`indexOfScalarPos`, a `@Vector` loop. (3) `std.mem.indexOfAnyPos`, a scalar nested loop.",
+            "zig": "(1)(2) `std.mem.findScalar`/`findScalarPos`, a `@Vector` loop. (3) `std.mem.findAnyPos`, a scalar nested loop.",
             "java": "hand-written `byte[]` loops for all three scans. Java's standard library has no memchr for byte arrays: `String.indexOf` is for text, `Arrays` has no search-for-value, and the Vector API is still an incubator module that needs `--add-modules jdk.incubator.vector`, so a plain loop is the honest idiom. HotSpot does not auto-vectorize a loop that exits early, so this is one byte per iteration. The fill writes 64-bit words through a little-endian `LongBuffer` view, matching the other ports.",
             "csharp": "(1)(2) `Span<byte>.IndexOf(byte)` and (3) `Span<byte>.IndexOfAny(byte, byte, byte)`. Both are idiomatic single calls and both are vectorized inside the runtime (128-bit NEON here), which is why this is the one managed row that keeps up with the native SIMD rows. The fill writes through `MemoryMarshal.Cast<byte, ulong>`.",
             "python": "a `bytearray`, filled through a `memoryview` cast to `Q` (native 64-bit words): 32 million interpreted xorshift steps, more than half of this row's time. (1) `0 in buf` and (2) `bytearray.find` run as C searches (memchr for a single byte), so they cost almost nothing next to the fill. (3) `re.compile(rb'[,:\"]').finditer`, the regex engine's character-set scan, a byte-at-a-time loop in C. Three `find` calls per segment, the C row's approach, was about 20 times faster on this scan in a side test, because the delimiters are sparse; the regex is what people write for a first-of-set search.",
@@ -57,7 +58,7 @@ BENCHES = [
     ),
 ]
 
-DISPLAY = {"java-prim": "java (primitive table)", "csharp": "c#"}
+DISPLAY = {"java-prim": "java (primitive table)", "csharp": "c#", "c-bump": "c (bump arena)"}
 
 
 def load(bench):
@@ -92,7 +93,7 @@ def steady(bench, tag):
 
 
 out = []
-out.append("# K1 runtime benchmarks\n")
+out.append("# k1 runtime benchmarks\n")
 out.append("Generated by `run.sh`; do not edit by hand.\n")
 out.append("```text\n" + env + "\n```\n")
 out.append("## Methodology\n")
@@ -117,7 +118,7 @@ out.append(
 out.append(
     "`peak RSS` is `maximum resident set size` from `/usr/bin/time -l` on one ordinary run (not the steady "
     "run). `binary` is the linked executable for the native rows (Rust and Go link their runtimes statically; "
-    "K1, C and Zig link only libSystem), the sum of the `.class` files for Java, the IL assembly "
+    "k1, C and Zig link only libSystem), the sum of the `.class` files for Java, the IL assembly "
     "(`bench.dll`) for C#, and the source file for Python, which CPython compiles to bytecode on every run. For "
     "the managed and Python rows that is the program only: the JVM, the .NET shared runtime and the Python "
     "interpreter are installed separately and are not counted, while every native row carries everything it "

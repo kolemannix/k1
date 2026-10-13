@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 524" width="1080" height="524" style="max-width:100%;height:auto" font-family="var(--mono, 'Martian Mono', ui-monospace, Menlo, monospace)" font-size="12">
+<style>
+  .bg { fill: var(--p, #151920); }
+  .t1 { fill: var(--b, #FFFFFF); font-weight: 600; font-size: 13px; }
+  .t2 { fill: var(--m, #7E8794); font-size: 10.5px; }
+  .t3 { fill: var(--f, #E6E9EE); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .t4 { fill: var(--m, #7E8794); font-size: 11px; font-style: italic; }
+  text.muted { fill: var(--m, #7E8794); }
+  rect.k1 { fill: var(--s, #E6C070); }
+  rect.k1-dim { fill: var(--s, #E6C070); opacity: .45; }
+  rect.other { fill: var(--l2, #333944); }
+  rect.muted { fill: var(--l, #262B34); }
+  .ref { stroke: var(--m, #7E8794); stroke-width: 1; stroke-dasharray: 3 3; }
+</style>
+<rect class="bg" width="1080" height="524"/>
+<text class="t1" x="24" y="38">integer to string, million strings per second</text>
+<text class="t2" x="24" y="54">buf[i &amp; 1023] = to_string(i) for i in 0..100M, best of 5, Apple M3 Max unless noted; higher is better</text>
+<text class="t3 muted" x="264" y="81" text-anchor="end">C++ std::to_string</text>
+<text class="t2" x="264" y="95" text-anchor="end">Lemire&#x27;s M4 Max</text>
+<rect class="muted" x="274" y="74" width="307.7" height="14"/>
+<text class="t3" x="587.7" y="85">183.8</text>
+<text class="t3 muted" x="264" y="117" text-anchor="end">Go strconv.Itoa</text>
+<text class="t2" x="264" y="131" text-anchor="end">Lemire&#x27;s M4 Max</text>
+<rect class="muted" x="274" y="110" width="141.1" height="14"/>
+<text class="t3" x="421.1" y="121">84.3</text>
+<text class="t3 muted" x="264" y="153" text-anchor="end">Bun String(i)</text>
+<text class="t2" x="264" y="167" text-anchor="end">Lemire&#x27;s M4 Max</text>
+<rect class="muted" x="274" y="146" width="114.7" height="14"/>
+<text class="t3" x="394.7" y="157">68.5</text>
+<text class="t3 muted" x="264" y="189" text-anchor="end">Rust to_string()</text>
+<text class="t2" x="264" y="203" text-anchor="end">Lemire&#x27;s M4 Max</text>
+<rect class="muted" x="274" y="182" width="106.5" height="14"/>
+<text class="t3" x="386.5" y="193">63.6</text>
+<text class="t3 muted" x="264" y="225" text-anchor="end">Python str(i)</text>
+<text class="t2" x="264" y="239" text-anchor="end">Lemire&#x27;s M4 Max</text>
+<rect class="muted" x="274" y="218" width="38.3" height="14"/>
+<text class="t3" x="318.3" y="229">22.9</text>
+<text class="t3 other" x="264" y="261" text-anchor="end">C++ std::to_string</text>
+<text class="t2" x="264" y="275" text-anchor="end">clang -O3, this machine</text>
+<rect class="other" x="274" y="254" width="267.9" height="14"/>
+<text class="t3" x="547.9" y="265">160.0</text>
+<text class="t3 k1" x="264" y="297" text-anchor="end">k1 show()</text>
+<text class="t2" x="264" y="311" text-anchor="end">naive formatter, growing builder</text>
+<rect class="k1" x="274" y="290" width="107.0" height="14"/>
+<text class="t3" x="387.0" y="301">63.9</text>
+<text class="t3 k1" x="264" y="333" text-anchor="end">k1 show()</text>
+<text class="t2" x="264" y="347" text-anchor="end">stack buffer</text>
+<rect class="k1" x="274" y="326" width="114.0" height="14"/>
+<text class="t3" x="394.0" y="337">68.1</text>
+<text class="t3 k1" x="264" y="369" text-anchor="end">k1 show()</text>
+<text class="t2" x="264" y="383" text-anchor="end">two digits per step</text>
+<rect class="k1" x="274" y="362" width="291.7" height="14"/>
+<text class="t3" x="571.7" y="373">174.2</text>
+<text class="t3 k1" x="264" y="405" text-anchor="end">k1 smolstr</text>
+<text class="t2" x="264" y="419" text-anchor="end">23 bytes inline, no spill (unfair)</text>
+<rect class="k1" x="274" y="398" width="683.6" height="14"/>
+<text class="t3" x="963.6" y="409">408.3</text>
+<text class="t3 k1" x="264" y="441" text-anchor="end">k1 spill-string[22]</text>
+<text class="t2" x="264" y="455" text-anchor="end">spill-list as either (fair)</text>
+<rect class="k1" x="274" y="434" width="666.2" height="14"/>
+<text class="t3" x="946.2" y="445">397.9</text>
+<text class="t3 k1" x="264" y="477" text-anchor="end">k1 spill-string[22]</text>
+<text class="t2" x="264" y="491" text-anchor="end">spill-list as hand-rolled union</text>
+<rect class="k1" x="274" y="470" width="698.0" height="14"/>
+<text class="t3" x="978.0" y="481">416.9</text>
+</svg>

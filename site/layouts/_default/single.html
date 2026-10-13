@@ -1,0 +1,7 @@
+{{ define "main" }}
+<main class="page"><div class="wrap">
+  <h1>{{ .Title }}</h1>
+  {{ if .Date.IsZero | not }}<p class="meta">{{ .Date.Format "January 2, 2006" }}</p>{{ end }}
+  <div class="body">{{ .Content }}</div>
+</div></main>
+{{ end }}

@@ -1,0 +1,16 @@
+- title: Programming is a wonder
+  body: "Placeholder. The human wonder of computing, and programming as an art worth protecting. Humans matter. not 'joy of programming'. See site/TODO.md."
+- title: Give the programmer power and control
+  body: k1 is designed around what you can do. Freedom, control and speed first, and the advanced features too, rather than punting on them, so your program can be exactly what you want it to be, not what the language wants it to be.
+- title: Compile fast
+  body: "Shortening the feedback cycle preserves flow and greatly increases joy, as well as literally temporally enabling more iterations. This results in better software that is fun to work on. There are a number of language design decisions in k1 that were explicitly made to enable and preserve very fast compilation, as well as years of painstaking attention to performance"
+- title: Your programs should be as fast as your computer is
+  body: A career on the JVM taught me to loathe inescapable costs. Newtypes, lambdas, even the almighty struct can all be free, and a language that boxes everything forces you to choose between the idiomatic thing and the fast thing. That choice is a mistake. You end up doing metaprogramming heroics for a zero-cost option in Scala, or managing your own memory in Java.
+- title: Metaprogramming should be the same as programming
+  body: "Metaprogramming is just writing functions that output source code. Everything you need to do it is a plain value: `types/info[t]` hands you any type's info as one, and a piece of code is one too. We are exceedingly good at expressing and solving our problems with programs. Our programming problems, and our build problems, deserve the same treatment, and the compiler runs it early."
+- title: Plain old data, zero is initialised, nothing runs behind your back
+  body: Bytes are bytes and zero is zero. No destructors, no hidden constructors, no spec that says a byte might not be eight bits or that null might not be zero. Data is decoupled from behaviour, so serialisation is free, program structure stays obvious, and you, not the runtime, are the one controlling the computer.
+- title: No forced abstractions, no forced costs
+  body: Pay for what you use, and use what you want. What you use costs as little as possible. This is Rust’s definition of zero-cost, and it holds up as a north star.
+- title: Abilities, not inheritance
+  body: "Abilities give you ad-hoc polymorphism: extend a type’s behaviour, or make it satisfy a protocol, painlessly and without a hierarchy. Typeclasses, if you know them; traits, if you know those. Just so good."

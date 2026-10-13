@@ -1,13 +1,12 @@
-# Types are values
+# Building types at compile time
 
-At compile time a type is just a value. `types/make-struct` and
+Compile-time k1 can make types. `types/make-struct` and
 `types/make-either` build new ones, and `#type <expr>` runs any expression in
-the compile-time VM and uses the type it returns. No template language, just K1.
+the compile-time VM and uses the type it returns. No template language, just k1.
 
 ## A struct from a schema string
 
-The parser is ordinary K1, in `ns pre` so it compiles before anything that
-needs it:
+The parser is ordinary k1:
 
 ```k1
   fn table(schema: string): types/type-id {
@@ -21,7 +20,7 @@ needs it:
 ```
 
 ```k1
-type(alias) user = #type pre/table("id: u64, name: string, score: f64, active: bool")
+type(alias) user = #type table("id: u64, name: string, score: f64, active: bool")
 ```
 
 ```k1
@@ -51,7 +50,6 @@ Swap the schema string for a `CREATE TABLE` and nothing changes but the parser.
 Sums work the same way. HTTP status codes, tags and all:
 
 ```k1
-ns pre {
   let STATUS_TABLE: span[{ name: string, code: u16 }] = [
     .{ name = "ok", code = 200 },
     .{ name = "created", code = 201 },
@@ -67,9 +65,10 @@ ns pre {
     }
     types/make-either(:some(types/id[u16]), variants.as-span())
   }
-}
+```
 
-type(alias) status = #type pre/status-enum()
+```k1
+type(alias) status = #type status-enum()
 ```
 
 ```k1
@@ -96,37 +95,79 @@ size 2 tag 500
 
 Two bytes, because the tag type is `u16`.
 
-Variants with payloads:
+## A struct and an enum from a `.proto` file
 
-```k1
-type(alias) event = #type types/make-either-default([
-  types/variant-data[u16]("connected"),
-  types/variant-data[string]("data"),
-  types/variant-empty("closed"),
-])
+The schema doesn't have to be a string literal. `user.proto` sits next to the
+program:
+
+```proto
+syntax = "proto3";
+
+enum Status {
+  ACTIVE = 0;
+  SUSPENDED = 1;
+  DELETED = 2;
+}
+
+message User {
+  uint64 id = 1;
+  string name = 2;
+  double score = 3;
+  Status status = 4;
+}
 ```
 
-Every sum also gets `.tag-enum`, the payload-less enum of its tags:
+`#type` runs in the compile-time VM, and the VM has `files`, so the parser
+reads it during the build:
 
 ```k1
-  let events: list[event] = [:connected 8080, :data "hello", :data "world", :closed]
-  let counts: array[u32, 3] = .0
-  for e in events {
-    let kind: event.tag-enum = if e is {
-      :connected _ -> :connected,
-      :data _ -> :data,
-      :closed -> :closed,
-    }
-    counts.[kind.value.widen[size]] = counts.[kind.value.widen[size]] + 1
-  }
-  println("counts ${counts}")
+type(alias) status = #type proto/enum("user.proto", "Status")
+type(alias) user = #type proto/message("user.proto", "User")
+```
+
+```k1
+  let u: user = .{ id = 7, name = "ada", score = 99.5, status = :suspended }
+  println("${u.id} ${u.name} ${u.score} ${u.status.enum-name()}=${u.status.value} ${label(u.status)}")
+  println("size ${types/size[user]} status ${types/size[status]}")
 ```
 
 ```text
-counts [1,2,1]
+7 ada 99.5 suspended=1 on hold
+size 36 status 4
 ```
 
-Exhaustiveness checking doesn't care where a type came from. Cut the table to
+The subset is one `message` of scalar or enum fields and one `enum`: no
+nesting, `repeated` or options. The parser reads the file relative to the
+module, splits a block into `;`-terminated statements, and a field is three
+words:
+
+```k1
+fn read(file: string): string {
+  files/read-to-string("${k1/module-dir()}/$file").!
+}
+```
+
+```k1
+fn message-of(src: string, name: string): types/type-id {
+  let fields: list[types/make-struct.fields.t] = []
+  for s in statements(src, "message", name) {
+    let parts = s.split-by-char(' ')
+    fields.push(.{ name = parts.[1], type = scalar(parts.[0]) ? enum-of(src, parts.[0]) })
+  }
+  types/make-struct(:struct, fields.as-span())
+}
+```
+
+`Status status = 4` builds the same either `status` is, so `label` matches
+the field exhaustively:
+
+```k1
+fn label(s: status): string {
+  if s is { :active -> "live", :suspended -> "on hold", :deleted -> "gone" }
+}
+```
+
+Exhaustiveness checking doesn't care where a type came from. Cut the status table to
 three rows and forget one:
 
 ```k1
@@ -140,9 +181,9 @@ fn classify(s: status): string {
 
 ```text
 ┌────────────────────────────────────────╴
-/Users/knix/dev/k1/content/showcase/examples/types_derive_variants_wrong.k1:20:5: error
+/Users/knix/dev/k1/content/showcase/examples/types_derive_variants_wrong.k1:22:5: error
 ├─────
-│   type(alias) status = #type pre/status-enum()
+│   type(alias) status = #type status-enum()
 │   
 │   fn classify(s: status): string {
 │ ->  if s is {
@@ -191,7 +232,6 @@ Anything else is a function from `type-id` to `type-id`. Here's every field
 wrapped in `opt`:
 
 ```k1
-ns pre {
   fn patch-of(t: types/type-id): types/type-id {
     require t.schema() is :struct .{ fields } else crash("patch-of needs a struct")
     let out: list[{ name: string, type: types/type-id }] = []
@@ -200,9 +240,10 @@ ns pre {
     }
     types/make-struct(:struct, out.as-span())
   }
-}
+```
 
-type(alias) user-patch = #type pre/patch-of(types/id[user])
+```k1
+type(alias) user-patch = #type patch-of(types/id[user])
 ```
 
 ```k1
@@ -297,7 +338,7 @@ Expected matrix[static[i64, 2]] but got matrix[static[i64, 3]]: Param 'n' is inc
 
 ```k1
   let total = 0
-  #for pre/squares(4) {
+  #for squares(4) {
     total = total + it
     println("unrolled step $it, total $total")
   }
@@ -339,7 +380,7 @@ A bound can be any function:
 ```
 
 ```k1
-type int-wrapper[t: pred pre/is-int] = { value: t }
+type int-wrapper[t: pred is-int] = { value: t }
 ```
 
 Plain old data, as a recursive walk over the schema:
@@ -361,13 +402,13 @@ Plain old data, as a recursive walk over the schema:
 Then `memcpy` and `memcmp` are safe:
 
 ```k1
-fn clone-pod[t: pred pre/is-pod](src: *t): *t {
+fn clone-pod[t: pred is-pod](src: *t): *t {
   let dst: *t = mem/tmp().alloc-layout(types/size[t], types/align[t]).ref()
   mem/copy(dst = dst.as[ptr], src = src.as[ptr], count = types/size[t])
   dst
 }
 
-fn same-bytes[t: pred pre/is-pod](a: *t, b: *t): bool {
+fn same-bytes[t: pred is-pod](a: *t, b: *t): bool {
   mem/equals(a.as[ptr], b.as[ptr], types/size[t])
 }
 
@@ -382,7 +423,7 @@ type shape = either { sphere({ center: vec3, radius: f32 }), box({ min: vec3, ma
   let s: shape = :sphere .{ center = .{ x = 1.0, y = 2.0, z = 3.0 }, radius = 0.5 }
   let copy = clone-pod(s.&)
   println("${same-bytes(s.&, copy)} ${copy.* is :sphere _}")
-  println("${pre/is-pod[shape]()} ${pre/is-pod[string]()} ${pre/is-pod[array[vec3, 4]]()} ${pre/is-pod[?*vec3]()}")
+  println("${is-pod[shape]()} ${is-pod[string]()} ${is-pod[array[vec3, 4]]()} ${is-pod[?*vec3]()}")
 ```
 
 ```text
@@ -405,7 +446,7 @@ fn main(): i32 {
 
 ```text
 ┌────────────────────────────────────────╴
-/Users/knix/dev/k1/content/showcase/examples/types_predicates_wrong.k1:22:10: error
+/Users/knix/dev/k1/content/showcase/examples/types_predicates_wrong.k1:24:10: error
 ├─────
 │   
 │   fn main(): i32 {
@@ -415,7 +456,7 @@ fn main(): i32 {
 │     0
 │   }
 ├─────
-│  Predicate 'pre/is-pod' failed on type user. Therefore, cannot call function 'clone-pod' with given types: user({ id: u64, name: string({ span: span[char]({ buffer: buffer[char]({ data: ptr, len: i64 }) }) }) })
+│  Predicate 'is-pod' failed on type user. Therefore, cannot call function 'clone-pod' with given types: user({ id: u64, name: string({ span: span[char]({ buffer: buffer[char]({ data: ptr, len: i64 }) }) }) })
 └────────────────────────────────────────╴
 Module types_predicates_wrong failed compiling with 1 errors
 ```

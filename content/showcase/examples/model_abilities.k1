@@ -23,6 +23,12 @@ impl shape for rect {
   fn describe(self: *rect): string { "${self.w}x${self.h} rect" }
 }
 
+type vec2 = { x: f64, y: f64 }
+
+impl add for vec2 {
+  fn add(self: vec2, rhs: vec2): vec2 { .{ x = self.x + rhs.x, y = self.y + rhs.y } }
+}
+
 fn bigger[t: shape](a: *t, b: *t): *t {
   if a.area() > b.area() a else b
 }
@@ -65,6 +71,9 @@ fn main(): i32 {
   println(r.describe())
   println(bigger(r.&, unit.&).describe())
   println(r.shout())
+
+  let v = vec2.{ x = 1.0, y = 2.0 } + vec2.{ x = 0.5, y = 0.25 }
+  println("${v.x} ${v.y}")
 
   let shapes: list[dyn[shape]] = [c.&.to-dyn(), r.&.to-dyn()]
   for s in shapes { println("${s.describe()} (${s.sides()} sides)") }

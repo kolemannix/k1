@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Measure compile-time execution across K1, Zig, C++ and Rust and write results.md. Optional arguments are regexes
+"""Measure compile-time execution across k1, Zig, C++ and Rust and write results.md. Optional arguments are regexes
 that must fully match "<bench>/<size>/<lang>" to restrict the cells measured;
 the other cells are kept from the previous gen/results.json."""
 import datetime
@@ -19,17 +19,17 @@ import gen
 ROOT = gen.ROOT
 GEN = gen.GEN
 TIMEOUT = 300
-SLOW = 60
+BUDGET = 45
 STACK_KB = 65520
 CONSTEXPR_STEPS = "2000000000"
-CXX26 = os.environ.get("CXX_P2996", "/private/tmp/claude-502/-Users-knix-dev-k1/32ab624d-47a3-49c6-b70e-100d66c086d9/scratchpad/clang-p2996/cxx")
+CXX26 = os.environ.get("CXX_P2996", str(ROOT.parents[3] / "llvm" / "clang-p2996" / "cxx"))
 HAVE_CXX26 = os.access(CXX26, os.X_OK)
 
 SIZES = {
     "sieve": [10_000, 100_000, 1_000_000],
     "crc32": [65_536, 1_048_576, 8_388_608],
     "strbuild": [10_000, 100_000, 1_000_000],
-    "reflect-serialize": [0, 10, 100, 500],
+    "reflect-serialize": [0, 100, 1000, 4000, 10000],
 }
 LANGS = {
     "sieve": ["k1", "zig", "cpp", "rust"],
@@ -37,7 +37,7 @@ LANGS = {
     "strbuild": ["k1", "zig", "cpp", "rust"],
     "reflect-serialize": ["k1", "zig", "cpp", *(["cpp26"] if HAVE_CXX26 else []), "rust"],
 }
-LANG_NAME = {"k1": "K1", "zig": "Zig", "cpp": "C++", "cpp26": "C++26 (P2996)", "rust": "Rust"}
+LANG_NAME = {"k1": "k1", "zig": "Zig", "cpp": "C++", "cpp26": "C++26 (P2996)", "rust": "Rust"}
 IR_ROWS = ("optimize", "reuse", "delete", "deduce", "promote", "inline")
 
 
@@ -83,34 +83,45 @@ def make_cell(bench, lang, size, comptime):
     reflect = bench == "reflect-serialize"
     name = "serialize" if reflect else bench
     cell = {"bench": bench, "lang": lang, "size": size, "comptime": comptime, "dir": d,
-            "prepare": None, "env": None, "chatty": None}
+            "prepare": None, "env": None, "chatty": None, "timed": None}
     if lang == "k1":
         cell["build"] = ["k1", "--no-cache", "build", str(f)]
-        cell["chatty"] = ["k1", "--no-cache", "--chatty", "build", str(f)]
+        if reflect:
+            cell["timed"] = ["k1", "--no-cache", "check", str(f)]
+        traced = cell["timed"] or cell["build"]
+        cell["chatty"] = [traced[0], "--chatty", *traced[1:]]
         cell["exe"] = d / ".k1-out" / name
     elif lang == "zig":
-        cell["build"] = ["zig", "build-exe", "-O", "Debug", "-target", "aarch64-macos", "--stack", str(STACK_KB * 1024),
-                         "--cache-dir", str(d / "zc"), "--global-cache-dir", str(GEN / "zig-global"),
-                         f"-femit-bin={d / name}", str(f)]
+        zig = ["zig", "build-exe", "-O", "Debug", "--cache-dir", str(d / "zc"),
+               "--global-cache-dir", str(GEN / "zig-global")]
+        cell["build"] = [*zig, "--stack", str(STACK_KB * 1024), f"-femit-bin={d / name}", str(f)]
+        if reflect:
+            cell["timed"] = [*zig, "-fno-emit-bin", str(f)]
         cell["prepare"] = f"rm -rf {d / 'zc'}"
         cell["exe"] = d / name
     elif lang == "cpp":
         steps = [] if reflect else [f"-fconstexpr-steps={CONSTEXPR_STEPS}"]
         cell["build"] = ["clang++", "-std=c++23", "-O0", *steps, str(f), "-o", str(d / name)]
+        if reflect:
+            cell["timed"] = ["clang++", "-std=c++23", "-fsyntax-only", str(f)]
         cell["exe"] = d / name
     elif lang == "cpp26":
         cell["build"] = [CXX26, "-O0", str(f), "-o", str(d / name)]
+        cell["timed"] = [CXX26, "-fsyntax-only", str(f)]
         cell["exe"] = d / name
     elif lang == "rust" and reflect:
         target = GEN / "cargo-target"
         cell["build"] = ["cargo", "build", "--manifest-path", str(f)]
-        cell["env"] = {"CARGO_TARGET_DIR": str(target)}
+        cell["timed"] = ["cargo", "check", "--manifest-path", str(f)]
+        cell["env"] = {"CARGO_TARGET_DIR": str(target), "CARGO_INCREMENTAL": "0"}
         cell["prepare"] = f"touch {d / 'src' / 'main.rs'}"
         cell["exe"] = target / "debug" / "reflect_serialize"
     elif lang == "rust":
         cfg = ["--cfg", "comptime"] if comptime else []
         cell["build"] = ["rustc", "-C", "opt-level=0", *cfg, str(f), "-o", str(d / name)]
         cell["exe"] = d / name
+    if cell["timed"] is None:
+        cell["timed"] = cell["build"]
     return cell
 
 
@@ -127,11 +138,11 @@ def run_prepare(cell):
             raise RuntimeError(f"prepare failed: {cell['prepare']}\n{err}")
 
 
-def feasibility(cell):
+def compile_once(cell, cmd):
     run_prepare(cell)
     start = time.monotonic()
     try:
-        code, out, err = run(cell["build"], cwd=cell["dir"], env=env_for(cell))
+        code, out, err = run(cmd, cwd=cell["dir"], env=env_for(cell))
     except subprocess.TimeoutExpired:
         return {"status": "timeout", "elapsed": time.monotonic() - start}
     elapsed = time.monotonic() - start
@@ -146,19 +157,19 @@ def run_exe(cell):
     return text if code == 0 else f"exit {code}: {text}"
 
 
-def hyperfine(cell, slow):
+def hyperfine(cell, elapsed):
     out = cell["dir"] / "hyperfine.json"
-    runs = ["--runs", "2"] if slow else ["--warmup", "1", "--min-runs", "5"]
-    cmd = ["hyperfine", "--export-json", str(out), *runs]
+    runs = max(1, min(5, int(BUDGET // max(elapsed, 0.001))))
+    cmd = ["hyperfine", "--export-json", str(out), "--warmup", "0", "--runs", str(runs)]
     if cell["prepare"]:
         cmd += ["--prepare", cell["prepare"]]
-    cmd.append(cmdline(cell["build"]))
+    cmd.append(cmdline(cell["timed"]))
     code, _, err = run(cmd, cwd=cell["dir"], env=env_for(cell), timeout=TIMEOUT * 8)
     if code != 0:
         raise RuntimeError(f"hyperfine failed: {cmdline(cmd)}\n{err}")
     res = json.loads(out.read_text())["results"][0]
     return {"mean": res["mean"], "stddev": res["stddev"] or 0.0, "min": res["min"], "max": res["max"],
-            "runs": len(res["times"]), "slow": slow}
+            "runs": len(res["times"]), "slow": runs < 5}
 
 
 def parse_count(text):
@@ -180,6 +191,9 @@ def chatty(cell):
             if m.group(1) == "run":
                 instrs = re.search(r"(\S+) instrs", m.group(4))
                 info["run"]["instrs"] = parse_count(instrs.group(1)) if instrs else 0
+        m = re.match(r"\s+untracked\s+([\d.]+)$", line)
+        if m:
+            info["untracked"] = {"count": 0, "ms": float(m.group(1))}
     return info
 
 
@@ -239,20 +253,25 @@ def expected(bench, size):
 def measure(bench, size, lang, comptime, timed_out):
     cell = make_cell(bench, lang, size, comptime)
     key = (bench, lang, comptime)
-    result = {"bench": bench, "size": size, "lang": lang, "comptime": comptime, "build": cmdline(cell["build"])}
+    result = {"bench": bench, "size": size, "lang": lang, "comptime": comptime,
+              "build": cmdline(cell["build"]), "timed": cmdline(cell["timed"])}
     if key in timed_out:
         result["status"] = "skipped"
         result["note"] = f"not attempted: N={timed_out[key]} already exceeded the {TIMEOUT} s limit"
         return result
-    feas = feasibility(cell)
-    result.update(feas)
-    if feas["status"] == "timeout":
+    once = compile_once(cell, cell["build"])
+    result.update(once)
+    if once["status"] == "ok":
+        result["output"] = run_exe(cell)
+        if cell["timed"] is not cell["build"]:
+            once = compile_once(cell, cell["timed"])
+            result.update(once)
+    if once["status"] == "timeout":
         timed_out[key] = size
         return result
-    if feas["status"] == "error":
+    if once["status"] == "error":
         return result
-    result["output"] = run_exe(cell)
-    result["timing"] = hyperfine(cell, feas["elapsed"] > SLOW)
+    result["timing"] = hyperfine(cell, once["elapsed"])
     if cell["chatty"]:
         result["chatty"] = chatty(cell)
     return result
@@ -334,24 +353,35 @@ def render(results, expectations, info, load):
         out.append(f"- {info[k]}")
     out.append("")
     out.append("## Methodology\n")
-    out.append(f"""- Every cell is a full compile to an executable, timed with `hyperfine --warmup 1 --min-runs 5`
-  (mean ± standard deviation in seconds). A cell whose first compile took more than {SLOW} s is
-  timed with `--runs 2` instead and marked †. A first compile that exceeds {TIMEOUT} s is a timeout;
+    out.append(f"""- Every cell first does a full compile to an executable, runs it and compares its output with a
+  Python reference. sieve, crc32 and strbuild time that full compile; reflect-serialize times a
+  front-end-only compile of the same source (no machine code, no link), because its work is
+  generating code from types and in a full build LLVM codegen and linking of the N serializers
+  take over 90% of the time. The untimed first compile is the warm-up; timing is then
+  `hyperfine --runs n` (mean ± standard deviation in seconds) with n = 5, reduced for slow cells
+  so that n runs fit in about {BUDGET} s, down to a single run; cells with fewer than 5 runs are
+  marked † and results.json records the count. A compile that exceeds {TIMEOUT} s is a timeout;
   larger sizes of that language are then not attempted.
-- Commands: K1 `k1 --no-cache build <file>`; Zig `zig build-exe -O Debug -target aarch64-macos`
-  with the local cache dir deleted before every run (the global cache keeps compiler_rt; the
-  explicit target works around Zig 0.14.0 failing to find libSystem on this macOS);
+- Full-build commands: k1 `k1 --no-cache build <file>`; Zig `zig build-exe -O Debug`
+  with the local cache dir deleted before every run (the global cache keeps compiler_rt);
   C++ `clang++ -std=c++23 -O0 -fconstexpr-steps={CONSTEXPR_STEPS}`; Rust `rustc -C opt-level=0`
   (`#![allow(long_running_const_eval)]` in the source, `--cfg comptime` selects the comptime variant);
-  Rust reflect `cargo build` with dependencies prebuilt and `src/main.rs` touched before every run;
+  Rust reflect `cargo build` with `CARGO_INCREMENTAL=0`, dependencies prebuilt and `src/main.rs` touched before every run;
   C++26 the Bloomberg clang-p2996 fork (`$CXX_P2996`, a wrapper baking
   in `-std=c++26 -freflection-latest -stdlib=libc++`) at `-O0`.
+- reflect-serialize front-end commands: k1 `k1 --no-cache check <file>` (typechecks every
+  requested generic instance, which runs the serializers' `#meta` and the VM; no IR is built); Zig `zig build-exe -O Debug -fno-emit-bin` with the local cache
+  dir deleted before every run (semantic analysis of everything reachable from `main`, including the
+  `inline for` expansions, no codegen); C++ and C++26 `-fsyntax-only` (parsing, semantic analysis and
+  template instantiation); Rust `cargo check` with `CARGO_INCREMENTAL=0`, dependencies prebuilt and
+  `src/main.rs` touched before every run (macro expansion, type checking, MIR building and borrow
+  checking, no codegen). Each cell's front-end command also ran once untimed to confirm it succeeds.
 - Compiles run in their own process group and a timeout kills the whole group, so no compiler
   outlives the harness.
-- Control: the same source with the work moved to runtime (K1 `#static` dropped, Zig `comptime`
+- Control: the same source with the work moved to runtime (k1 `#static` dropped, Zig `comptime`
   dropped, C++ `constexpr` dropped so clang cannot fold it, Rust the `const` item removed). The
   compile-time cost is the difference of the two means; throughput divides the benchmark's work
-  by that difference. K1 also reports what the compiler measures itself (`--chatty`): the
+  by that difference. k1 also reports what the compiler measures itself (`--chatty`): the
   time spent running bytecode in the compile-time VM and the number of VM instructions executed.
 - Every executable is run once (`ulimit -s {STACK_KB}`, and `--stack {STACK_KB * 1024}` for Zig whose
   linked-in main-thread stack size ignores the rlimit, so the runtime controls can hold their
@@ -388,7 +418,7 @@ def render(results, expectations, info, load):
                     if x and x["status"] in ("timeout", "error"):
                         limits.append(x)
         out.append("")
-        out.append("K1 compile-time VM, as reported by `k1 --chatty` for the comptime variant:\n")
+        out.append("k1 compile-time VM, as reported by `k1 --chatty` for the comptime variant:\n")
         out.append("| N | VM run (ms) | VM instructions | VM instr/s | typecheck (ms) | IR optimization (ms) | whole compile (ms) |")
         out.append("|---|---|---|---|---|---|---|")
         for size in SIZES[bench]:
@@ -404,37 +434,43 @@ def render(results, expectations, info, load):
     bench = "reflect-serialize"
     out.append(f"## {bench}\n")
     out.append(DESCRIPTIONS[bench] + "\n")
-    out.append("| N types | language | build (s) | per type (ms) | output |")
-    out.append("|---|---|---|---|---|")
-    for size in SIZES[bench]:
+    out.append("| N types | language | front end (s) | per type (ms) | slope from previous N (ms/type) | output |")
+    out.append("|---|---|---|---|---|---|")
+    sizes = SIZES[bench]
+    for i, size in enumerate(sizes):
         exp, _, _ = expectations[(bench, size)]
         for lang in LANGS[bench]:
             c = by.get((bench, size, lang, True))
             if c is None:
                 continue
-            base = by.get((bench, 0, lang, True))
             t = c.get("timing")
+            base = by.get((bench, 0, lang, True))
             bt = base.get("timing") if base else None
+            prev = by.get((bench, sizes[i - 1], lang, True)) if i > 0 else None
+            pt = prev.get("timing") if prev else None
             per = f"{(t['mean'] - bt['mean']) * 1000 / size:.2f}" if t and bt and size else "-"
+            slope = f"{(t['mean'] - pt['mean']) * 1000 / (size - sizes[i - 1]):.2f}" if t and pt and size else "-"
             output = f"`{c['output']}`" if c.get("output") is not None else "-"
             ok = "" if c.get("output") is None or c["output"] == exp else " **MISMATCH**"
             if ok:
                 mismatches.append((bench, size, lang, c["output"], exp))
-            out.append(f"| {size} | {LANG_NAME[lang]} | {fmt_time(t) if t else fmt_status(c)} | {per} | {output}{ok} |")
+            out.append(f"| {size} | {LANG_NAME[lang]} | {fmt_time(t) if t else fmt_status(c)} | {per} | {slope} | {output}{ok} |")
             if c["status"] in ("timeout", "error"):
                 limits.append(c)
     out.append("")
-    out.append("K1 `--chatty` rows for the comptime work of reflect-serialize (`meta` is the metaprogram expansion, `run` the VM time behind it):\n")
-    out.append("| N types | meta (ms) | VM run (ms) | VM instructions | typecheck (ms) | IR optimization (ms) | codegen (ms) | LLVM passes (ms) | link (ms) | whole compile (ms) |")
-    out.append("|---|---|---|---|---|---|---|---|---|---|")
-    for size in SIZES[bench]:
+    out.append("k1 `--chatty` rows for the timed front-end command (`meta` is the metaprogram expansion, `run` the VM time "
+               "behind it, `lower` the lowering to k1 IR, `untracked` the time outside traced work, which is mostly writing "
+               "the IR dump):\n")
+    out.append("| N types | meta (ms) | VM run (ms) | VM instructions | typecheck (ms) | lower (ms) | untracked (ms) | whole compile (ms) |")
+    out.append("|---|---|---|---|---|---|---|---|")
+    for size in sizes:
         c = by.get((bench, size, "k1", True))
         if not c or "chatty" not in c:
             continue
         ch = c["chatty"]
         g = lambda k: ch.get(k, {}).get("ms", 0)
         out.append(f"| {size} | {g('meta'):.1f} | {g('run'):.1f} | {ch.get('run', {}).get('instrs', 0) / 1e6:.2f} M | "
-                   f"{g('typecheck'):.1f} | {ir_ms(ch):.1f} | {g('codegen'):.1f} | {g('passes'):.1f} | {g('link'):.1f} | {ch.get('total_ms', 0)} |")
+                   f"{g('typecheck'):.1f} | {g('lower'):.1f} | {g('untracked'):.1f} | {ch.get('total_ms', 0)} |")
     out.append("")
     out.append("## Output verification\n")
     if mismatches:
@@ -450,6 +486,8 @@ def render(results, expectations, info, load):
         variant = "comptime" if x["comptime"] else "runtime control"
         out.append(f"### {x['bench']} N={x['size']:,} {LANG_NAME[x['lang']]} ({variant})\n")
         out.append(f"`{x['build']}`\n")
+        if x.get("timed", x["build"]) != x["build"]:
+            out.append(f"`{x['timed']}`\n")
         if x["status"] == "timeout":
             out.append(f"Killed after {TIMEOUT} s.\n")
         elif not x.get("stderr"):
@@ -463,23 +501,33 @@ def render(results, expectations, info, load):
 
 DESCRIPTIONS = {
     "sieve": "Sieve of Eratosthenes below N at compile time, collecting the primes into an array; the runtime prints the "
-             "count and the last prime. Work = outer iterations plus composite marks.",
+             "count and the last prime. Work = outer iterations plus composite marks. Zig keeps the composite flags "
+             "bit-packed in u64 words (what std::bitset would be) because a comptime array element read costs time "
+             "proportional to the array's length and indexing a local array by value copies it, which is what killed "
+             "the byte-array version at 1,000,000; the loops and marks are the same as the other languages.",
     "crc32": "Generate the CRC-32 table (polynomial 0xEDB88320), generate B pseudo-random bytes with xorshift32, "
-             "and checksum them, all at compile time; the runtime prints the checksum. Work = bytes.",
+             "and checksum them, all at compile time; the runtime prints the checksum. Work = bytes. The Zig buffer is "
+             "zero-initialised and the checksum loop indexes the array value rather than a slice: filling an "
+             "`undefined` comptime array is quadratic and element reads through a slice cost the array's length.",
     "strbuild": "Format the integers 0..N in decimal with `,` separators into one string at compile time, then take "
-                "its length and FNV-1a checksum; the runtime prints both. K1 uses `string-builder` and its `${}` "
-                "formatter inside `#static`, Zig a fixed `[N * 8]u8` buffer and `std.fmt.formatIntBuf`, C++ a transient "
+                "its length and FNV-1a checksum; the runtime prints both. k1 uses `string-builder` and its `${}` "
+                "formatter inside `#static`, Zig a fixed `[N * 8]u8` buffer and hand-written digits (`std.fmt.printInt` costs about three times the comptime memory), C++ a transient "
                 "`constexpr std::string` with hand-written digit formatting (`std::to_string` is not constexpr), Rust a "
                 "fixed `[u8; N * 8]` array with hand-written digits (no heap and no formatting machinery in const eval). "
                 "Work = numbers formatted.",
     "reflect-serialize": "N generated struct types with 8 fields (a rotating mix of i32, u8, bool, string, i64, u16, u32, "
-                         "i8) and a JSON serializer derived per type: K1 `#meta` walking `types/schema` and emitting the "
-                         "writer code, Zig `@typeInfo` with `inline for`, C++ a template over a generator-written member "
-                         "list (clang 21 has no reflection, so this is the manual alternative), C++26 P2996 reflection "
+                         "i8) and a JSON serializer derived per type: k1 `#meta` walking `types/schema` and emitting the "
+                         "writer code, Zig `@typeInfo` with `inline for`, C++ a generator-written `members<T>` "
+                         "specialization per struct whose `visit` calls a callback with each field name and value (clang 21 "
+                         "has no reflection, so this is the manual alternative; a class-template specialization rather than "
+                         "one `visit_members` overload per struct, which clang resolves against all N candidates at every "
+                         "call and so costs quadratic time: 96 s at N=4000 against 7 s), C++26 P2996 reflection "
                          "(`nonstatic_data_members_of` + `template for`, no per-struct list) on the clang-p2996 fork, "
-                         "Rust `serde` derive through "
-                         "proc macros (cargo, dependencies prebuilt). Each program serializes one value per type and prints the total output length. "
-                         "N=0 is the baseline; per type = (build(N) - build(0)) / N.",
+                         "Rust `serde` derive through proc macros (cargo, dependencies prebuilt). Each program serializes "
+                         "one value per type and prints the total output length; the full build that produces it is not "
+                         "timed. Front end only (see Methodology): N=0 is the baseline; per type = (t(N) - t(0)) / N; the "
+                         "slope column is (t(N) - t(previous N)) / (N - previous N), so a slope that rises with N is a "
+                         "superlinear front end.",
 }
 
 

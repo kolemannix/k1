@@ -37,7 +37,7 @@ ns for list {
 
   fn(inline) reserve-in[t, a: allocator](self: *list[t], alloc: a, count: size) {
     if self.cap() >= count return
-    self.buffer._grow-to[t, _](alloc, count)
+    self._grow(alloc, count)
   }
 
   fn(inline) reserve[t](self: *list[t], count: size) {
@@ -59,8 +59,9 @@ ns for list {
   // The possibly-uninitialized backing buffer of this list
   fn(inline) inner-buffer[t](self: list[t]): buffer[t] { self.buffer }
 
-  fn(inline) _grow[t, a: allocator](self: *list[t], alloc: a) {
-    self.buffer.&._grow-to(alloc, buffer/grown-cap(self.cap(), types/size[t]))
+  fn(inline) _grow[t, a: allocator](self: *list[t], alloc: a, new-cap: size) {
+    let data = buffer/_grow-raw(alloc, self.buffer.data, self.buffer.len, types/stride[t], types/align[t](), new-cap)
+    self.buffer = .{ data, len = new-cap }
   }
 
   fn(inline) cloned-in[t, a: allocator](self: list[t], alloc: a): list[t] {
@@ -72,25 +73,21 @@ ns for list {
   }
 
   fn(inline) push-in[t, a: allocator](self: *list[t], alloc: a, elem: t) {
-    if self.len == self.cap() self._grow(alloc)
-    self._push-within-capacity(elem)
+    if self.len == self.buffer.len self._grow(alloc, buffer/grown-cap(self.buffer.len, types/size[t]))
+    self.buffer.data.ref-at[t](self.len).* = elem
+    self.len = self.len + 1
   }
 
   fn(inline) push[t](self: *list[t], elem: t) {
-    if self.len == self.cap() self._grow(mem/current-arena())
-    self._push-within-capacity(elem)
-  }
-
-  fn(inline) _push-within-capacity[t](self: *list[t], elem: t) {
-    let start-length = self.len
-    self.len = start-length + 1
-    self.[start-length] = elem
+    if self.len == self.buffer.len self._grow(mem/current-arena(), buffer/grown-cap(self.buffer.len, types/size[t]))
+    self.buffer.data.ref-at[t](self.len).* = elem
+    self.len = self.len + 1
   }
 
   fn(inline) pop[t](self: *list[t]): ?t {
     if self.len == 0 return :none
     self.len = self.len - 1
-    :some self.buffer.[self.len]
+    :some self.buffer.data.ref-at[t](self.len).*
   }
 
   fn(inline) clear[t](self: *list[t]) {
@@ -257,14 +254,12 @@ impl[t] as-span[t = t] for *list[t] {
 
 impl[t] index[key = size, t = t] for list[t] {
   fn(inline) index-ref(self, key: size): *t {
-    self.buffer.index-unchecked(checked-index(key, self.len))
+    self.buffer.data.ref-at[t](checked-index(key, self.len))
   }
 }
 
 impl[t] iterable[item = t, i = buffer-iterator[t]] for list[t] {
-  fn(inline) iterator(self): i {
-    self.as-buffer().iterator()
-  }
+  fn(inline) iterator(self): i { .{ buf = .{ data = self.buffer.data, len = self.len }, pos = 0 } }
 }
 
 impl[t] iterable[item = t, i = buffer-iterator[t]] for *list[t] {

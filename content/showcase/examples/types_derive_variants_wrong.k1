@@ -1,3 +1,5 @@
+use pre/status-enum
+
 ns pre {
   let STATUS_TABLE: span[{ name: string, code: u16 }] = [
     .{ name = "ok", code = 200 },
@@ -14,7 +16,7 @@ ns pre {
   }
 }
 
-type(alias) status = #type pre/status-enum()
+type(alias) status = #type status-enum()
 
 fn classify(s: status): string {
   if s is {

@@ -1,3 +1,5 @@
+use pre/derive-from-string
+
 ns enums {
   fn names[t](): span[string] {
     #static {
@@ -37,7 +39,7 @@ ns pre {
     cb.dedent()
     cb.line("}")
     let generated = cb.build()
-    k1/emit-compiler-message(k1/location(), :info, generated.text())
+    k1/emit-compiler-message(k1/location(), :info, generated.text)
     generated
   }
 }
@@ -45,8 +47,8 @@ ns pre {
 type color = either { red, green, blue }
 type level = either(u8) { debug = 10, info = 20, warn = 30, error = 40 }
 
-$pre/derive-from-string[color]()
-$pre/derive-from-string[level]()
+$derive-from-string[color]()
+$derive-from-string[level]()
 
 fn main(): i32 {
   let c: color = :green

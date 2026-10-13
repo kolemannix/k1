@@ -7,7 +7,7 @@ same source, and the last two from the same `.wasm` file.
 ```bash
 just fractal        # native, ANSI truecolor half-blocks
 just fractal-wasi   # wasm64 under wasmtime, same output
-just fractal-web    # wasm64 in the browser, then open http://localhost:8088
+just fractal-web    # wasm64 in the browser, then open http://localhost:8088/fractal/
 ```
 
 ## What it shows

@@ -1,5 +1,0 @@
-fn f(): i64 {
-  let x = 1
-  "nope"
-}
-fn main(): i32 { f(); 0 }

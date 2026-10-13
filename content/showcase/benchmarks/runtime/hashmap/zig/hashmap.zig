@@ -12,7 +12,7 @@ const Rng = struct {
     }
 };
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     const n: u64 = 5_000_000;
     var m = std.AutoHashMap(u64, u64).init(std.heap.page_allocator);
     defer m.deinit();
@@ -33,5 +33,9 @@ pub fn main() !void {
             sum += v;
         }
     }
-    try std.io.getStdOut().writer().print("inserted: {d} found: {d} sum: {d}\n", .{ m.count(), found, sum });
+    var out_buf: [256]u8 = undefined;
+    var out = std.Io.File.stdout().writer(init.io, &out_buf);
+    const stdout = &out.interface;
+    try stdout.print("inserted: {d} found: {d} sum: {d}\n", .{ m.count(), found, sum });
+    try stdout.flush();
 }

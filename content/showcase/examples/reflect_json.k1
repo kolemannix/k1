@@ -62,42 +62,18 @@ ns json {
         _ -> crash("json: no encoding for ${types/name[t]}")
       }
       let generated = cb.build()
-      k1/emit-compiler-message(k1/location(), :info, "json/write[${types/name[t]}]\n${generated.text()}")
+      k1/emit-compiler-message(k1/location(), :info, "json/write[${types/name[t]}]\n${generated.text}")
       generated
     }
   }
 }
 
-type role = either { admin, member, guest }
 type contact = either { email(string), phone(string), unreachable }
-type person = {
-  name: string,
-  initial: char,
-  age: u32,
-  score: f64,
-  active: bool,
-  role: role,
-  nickname: ?string,
-  contacts: list[contact],
-  scores: array[i32, 3],
-}
+type person = { name: string, age: u32, nickname: ?string, contact: contact }
 
 fn main(): i32 {
-  let ada: person = .{
-    name = "Ada \"Countess\" Lovelace",
-    initial = 'A',
-    age = 36,
-    score = 99.5,
-    active = true,
-    role = :admin,
-    nickname = :none,
-    contacts = [:email("ada@example.com"), :unreachable],
-    scores = [10, 20, 30],
-  }
+  let ada: person = .{ name = "Ada Lovelace", age = 36, nickname = :none, contact = :email("ada@example.com") }
   println(json/to-string(ada))
-  println(json/to-string(ada | .{ nickname = :some "Ada", contacts = [] }))
-  println(json/to-string([1, 2, 3]))
-  println(json/to-string(ada.contacts.&))
   println(json/to-string(.{ nested = .{ deep = [.{ ok = true }] }, tab = "a\tb\n" }))
   0
 }

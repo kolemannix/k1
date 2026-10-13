@@ -1,3 +1,5 @@
+use pre/is-list
+
 ns pre {
   fn is-list[t](): bool { types/id[t].is-instance-of(types/id[list]) }
 }
@@ -18,7 +20,7 @@ fn describe[t](): string {
   }
 }
 
-fn element-type[t: pred pre/is-list](): string { types/instance-info[t].!.args.[0].name() }
+fn element-type[t: pred is-list](): string { types/instance-info[t].!.args.[0].name() }
 
 fn main(): i32 {
   println(describe[list[int]]())

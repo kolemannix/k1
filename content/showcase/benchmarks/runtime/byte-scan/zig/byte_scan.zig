@@ -34,7 +34,7 @@ fn fill(words: []u64, buf: []u8) void {
 fn countNewlines(data: []const u8) i64 {
     var count: i64 = 0;
     var from: usize = 0;
-    while (std.mem.indexOfScalarPos(u8, data, from, '\n')) |p| {
+    while (std.mem.findScalarPos(u8, data, from, '\n')) |p| {
         count += 1;
         from = p + 1;
     }
@@ -46,7 +46,7 @@ const Scan = struct { found: i64, index_sum: i64, which_sum: i64 };
 fn scanDelims(data: []const u8) Scan {
     var r = Scan{ .found = 0, .index_sum = 0, .which_sum = 0 };
     var from: usize = 0;
-    while (std.mem.indexOfAnyPos(u8, data, from, ",:\"")) |p| {
+    while (std.mem.findAnyPos(u8, data, from, ",:\"")) |p| {
         r.found += 1;
         r.index_sum += @intCast(p);
         r.which_sum += switch (data[p]) {
@@ -59,7 +59,7 @@ fn scanDelims(data: []const u8) Scan {
     return r;
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
     const words = try std.heap.page_allocator.alloc(u64, size / 8);
     defer std.heap.page_allocator.free(words);
     const buf = std.mem.sliceAsBytes(words);
@@ -71,12 +71,16 @@ pub fn main() !void {
     var which_sum: i64 = 0;
     var r: usize = 0;
     while (r < repeat) : (r += 1) {
-        if (std.mem.indexOfScalar(u8, buf, 0) != null) absent += 1;
+        if (std.mem.findScalar(u8, buf, 0) != null) absent += 1;
         newlines += countNewlines(buf);
         const s = scanDelims(buf);
         delims += s.found;
         index_sum += s.index_sum;
         which_sum += s.which_sum;
     }
-    try std.io.getStdOut().writer().print("absent: {d} newlines: {d} delims: {d} index-sum: {d} which-sum: {d}\n", .{ absent, newlines, delims, index_sum, which_sum });
+    var out_buf: [256]u8 = undefined;
+    var out = std.Io.File.stdout().writer(init.io, &out_buf);
+    const stdout = &out.interface;
+    try stdout.print("absent: {d} newlines: {d} delims: {d} index-sum: {d} which-sum: {d}\n", .{ absent, newlines, delims, index_sum, which_sum });
+    try stdout.flush();
 }

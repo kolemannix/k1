@@ -17,5 +17,8 @@ k1_lsp.log*
 llvm/build-llvm
 llvm/install-llvm
 llvm/llvm-project
+llvm/clang-p2996
 
 builds/k1-*/
+__pycache__/
+examples/refchess/refchess.wasm

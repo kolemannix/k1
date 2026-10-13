@@ -16,7 +16,7 @@ fn(extern("localtime")) localtime(t: *i64): ptr
 fn(extern("strftime")) strftime(s: ptr, max: size, format: *u8, tm: ptr): size
 ```
 
-Wrap them in plain K1:
+Wrap them in plain k1:
 
 ```k1
 fn hostname(): string {
@@ -137,7 +137,7 @@ fn setup(_ctx: k1/setup-ctx) {
 }
 ```
 
-On the K1 side, one stb function, tagged with the library it lives in:
+On the k1 side, one stb function, tagged with the library it lives in:
 
 ```k1
 type baked-char = { x0: u16, y0: u16, x1: u16, y1: u16, xoff: f32, yoff: f32, xadvance: f32 }
@@ -185,10 +185,10 @@ fn shade(v: u8): char {
 }
 
 fn print-glyph(c: char) {
-  let g = ATLAS.glyphs.[c.as-u8().widen[size] - FIRST_CHAR]
-  for y in g.y0.widen[size].until(g.y1.widen[size]) {
+  let g = ATLAS.glyphs.[c.as-u8().as-size() - FIRST_CHAR]
+  for y in g.y0.as-size().until(g.y1.as-size()) {
     let line = string-builder/new()
-    for x in g.x0.widen[size].until(g.x1.widen[size]) {
+    for x in g.x0.as-size().until(g.x1.as-size()) {
       line.write-byte(shade(ATLAS.pixels.[y * ATLAS_W + x]).as-u8())
     }
     println(line.build())

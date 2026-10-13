@@ -89,8 +89,8 @@ def reflect_source(lang, n):
             fields = " ".join(f"{t} f{k};" for k, t in enumerate(types))
             out.append(f"struct T{i} {{ {fields} }};")
             if lang == "cpp":
-                members = ", ".join(f'std::pair{{"f{k}", &T{i}::f{k}}}' for k in range(8))
-                out.append(f"constexpr auto members(const T{i}&) {{ return std::tuple{{{members}}}; }}")
+                visits = " ".join(f'f("f{k}", v.f{k});' for k in range(8))
+                out.append(f"template <> struct members<T{i}> {{ template <class F> static void visit(const T{i}& v, F&& f) {{ {visits} }} }};")
         elif lang == "rust":
             fields = ", ".join(f"f{k}: {t}" for k, t in enumerate(types))
             out.append("#[derive(Serialize)]")

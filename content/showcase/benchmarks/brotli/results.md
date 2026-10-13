@@ -10,11 +10,11 @@ Fresh run with the IR optimizer working tree; provenance: ../run-info.json.
 - k1: k1 0.1.0; cc: Apple clang version 21.0.0 (clang-2100.1.1.101)
 - load average at start: 7.17 6.46 6.47
 
-Each run checks byte identity with C and streaming round trips. K1 and C are interleaved per repetition; throughput is the median of seven rounds, with the best round in parentheses.
+Each run checks byte identity with C and streaming round trips. k1 and C are interleaved per repetition; throughput is the median of seven rounds, with the best round in parentheses.
 
 ### bench run 1
 
-| corpus | q | K1 MB/s (best) | C MB/s (best) | K1/C | bytes in -> out | reps x rounds |
+| corpus | q | k1 MB/s (best) | C MB/s (best) | k1/C | bytes in -> out | reps x rounds |
 |---|---|---|---|---|---|---|
 | cycle-251 | q0 | 8661.9 (8718.8) | 8960.1 (9020.2) | 0.967 | 100000 -> 344 | 3397 x 7 |
 | zeros-1mb | q0 | 4940.0 (5068.6) | 5196.6 (5350.7) | 0.951 | 1048576 -> 724 | 472 x 7 |
@@ -27,7 +27,7 @@ Each run checks byte identity with C and streaming round trips. K1 and C are int
 
 ### bench run 2
 
-| corpus | q | K1 MB/s (best) | C MB/s (best) | K1/C | bytes in -> out | reps x rounds |
+| corpus | q | k1 MB/s (best) | C MB/s (best) | k1/C | bytes in -> out | reps x rounds |
 |---|---|---|---|---|---|---|
 | cycle-251 | q0 | 8594.5 (8598.8) | 8917.2 (8962.3) | 0.964 | 100000 -> 344 | 4532 x 7 |
 | zeros-1mb | q0 | 4524.8 (4570.3) | 5263.3 (5306.9) | 0.860 | 1048576 -> 724 | 468 x 7 |
@@ -40,7 +40,7 @@ Each run checks byte identity with C and streaming round trips. K1 and C are int
 
 ### bench run 3
 
-| corpus | q | K1 MB/s (best) | C MB/s (best) | K1/C | bytes in -> out | reps x rounds |
+| corpus | q | k1 MB/s (best) | C MB/s (best) | k1/C | bytes in -> out | reps x rounds |
 |---|---|---|---|---|---|---|
 | cycle-251 | q0 | 8561.7 (8618.2) | 8906.9 (9008.3) | 0.961 | 100000 -> 344 | 5223 x 7 |
 | zeros-1mb | q0 | 4914.6 (4925.2) | 4864.2 (4886.1) | 1.010 | 1048576 -> 724 | 438 x 7 |

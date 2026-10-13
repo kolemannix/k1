@@ -1,0 +1,9 @@
+<header class="plate"><div class="wrap">
+  <a class="mark" href="/" aria-label="k1 home"><svg viewBox="0 0 165.61 187.79" role="img" aria-label="k1"><use href="#k1"/></svg></a>
+  <nav>
+    {{ $cur := . }}
+    {{ range .Site.Menus.main }}
+    <a href="{{ .URL }}"{{ if or ($cur.IsMenuCurrent "main" .) ($cur.HasMenuCurrent "main" .) }} aria-current="page"{{ end }}>{{ .Name }}</a>
+    {{ end }}
+  </nav>
+</div></header>

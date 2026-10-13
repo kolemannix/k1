@@ -1,23 +1,16 @@
-$pre/regex/define(ident, "[A-Za-z_][A-Za-z0-9_]*")
-$pre/regex/define(number, "[0-9]+([.][0-9]+)?")
-$pre/regex/define(email, "[a-z0-9._+-]+@[a-z0-9-]+([.][a-z0-9-]+)*[.][a-z][a-z]+")
+use pre/regex
 
-fn report(name: string, hit: bool, s: string) {
-  let verdict = if hit "match   " else "no match"
-  println("$name $verdict \"$s\"")
-}
+$regex/define(number, "[0-9]+([.][0-9]+)?")
+$regex/define(ident, "[A-Za-z_][A-Za-z0-9_]*")
 
 fn main(): i32 {
-  for s in ["foo_bar", "x9", "_", "9x", "", "a-b"] { report("ident ", ident(s), s) }
-  for s in ["42", "3.14", "0.0", "3.", ".5", "1e5"] { report("number", number(s), s) }
-  for s in ["a.b@c.io", "x+y@mail.example.org", "no-at.com", "a@b", "a@b.c"] { report("email ", email(s), s) }
-
-  let line = "total: 12.5 units, 3 left"
-  if number-find(line) is :some m {
-    println("first number in \"$line\": ${line.slice(m.start, m.end)} at ${m.start}..${m.end}")
+  for s in ["42", "3.14", "3.", ".5", "1e5"] { println("number(\"$s\") = ${number(s)}") }
+  let rest = "total: 12.5 units, 3 left"
+  while number-find(rest) is :some m {
+    println("found ${rest.slice(m.start, m.end)}")
+    rest = rest.drop(m.end)
   }
-  println("ident-find in \"  42abc\": ${ident-find("  42abc")}")
-  println("email-find in \"nothing here\": ${email-find("nothing here")}")
+  println("ident(\"foo_bar\") = ${ident("foo_bar")}")
   0
 }
 
@@ -285,8 +278,8 @@ fn emit(name: string, d: dfa): code {
 }
 
 macro define(name: code, pattern: string) {
-  let generated = emit(name.text(), compile(pattern))
-  k1/emit-compiler-message(k1/location(), :info, generated.text())
+  let generated = emit(name.text, compile(pattern))
+  k1/emit-compiler-message(k1/location(), :info, generated.text)
   generated
 }
 

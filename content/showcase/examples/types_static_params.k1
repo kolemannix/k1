@@ -1,3 +1,5 @@
+use pre/squares
+
 ns pre {
   fn squares(n: int): span[int] {
     let out: list[int] = []
@@ -49,7 +51,7 @@ fn main(): i32 {
   println(mismatch.!)
 
   let total = 0
-  #for pre/squares(4) {
+  #for squares(4) {
     total = total + it
     println("unrolled step $it, total $total")
   }

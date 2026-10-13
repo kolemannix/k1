@@ -1,3 +1,5 @@
+use pre/table
+
 ns pre {
   fn trim(s: string): string {
     let start = 0
@@ -28,7 +30,7 @@ ns pre {
   }
 }
 
-type(alias) user = #type pre/table("id: u64, name: string, score: f64, active: bool")
+type(alias) user = #type table("id: u64, name: string, score: f64, active: bool")
 
 fn main(): i32 {
   let u: user = .{ id = 7, name = "ada", score = 99.5, active = true }

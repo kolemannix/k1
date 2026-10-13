@@ -1,4 +1,6 @@
-$pre/regex/define(broken, "(ab|cd*")
+use pre/regex
+
+$regex/define(broken, "(ab|cd*")
 
 fn main(): i32 {
   println("${broken("ab")}")
@@ -269,8 +271,8 @@ fn emit(name: string, d: dfa): code {
 }
 
 macro define(name: code, pattern: string) {
-  let generated = emit(name.text(), compile(pattern))
-  k1/emit-compiler-message(k1/location(), :info, generated.text())
+  let generated = emit(name.text, compile(pattern))
+  k1/emit-compiler-message(k1/location(), :info, generated.text)
   generated
 }
 

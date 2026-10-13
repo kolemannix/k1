@@ -26,12 +26,12 @@ rm -f gen/bench-*.log
   echo "- k1: $(k1 --version); cc: $(cc --version | head -1)"
   echo "- load average at start: $(uptime | sed 's/.*load averages*: *//')"
   echo
-  echo "Each run checks byte identity with C and streaming round trips. K1 and C are interleaved per repetition; throughput is the median of seven rounds, with the best round in parentheses."
+  echo "Each run checks byte identity with C and streaming round trips. k1 and C are interleaved per repetition; throughput is the median of seven rounds, with the best round in parentheses."
   echo
   for run in $(seq "$runs"); do
     echo "### bench run $run"
     echo
-    echo "| corpus | q | K1 MB/s (best) | C MB/s (best) | K1/C | bytes in -> out | reps x rounds |"
+    echo "| corpus | q | k1 MB/s (best) | C MB/s (best) | k1/C | bytes in -> out | reps x rounds |"
     echo "|---|---|---|---|---|---|---|"
     (cd "$mod" && ./.k1-out/brotli bench) | tee "gen/bench-$run.log" | awk '
       /ratio/ {

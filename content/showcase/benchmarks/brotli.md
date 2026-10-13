@@ -1,6 +1,6 @@
-# Brotli q0/q1: the K1 port against google/brotli's C encoder
+# Brotli q0/q1: the k1 port against google/brotli's C encoder
 
-`examples/brotli` is a K1 port of the two fast brotli encoders, quality 0
+`examples/brotli` is a k1 port of the two fast brotli encoders, quality 0
 (`compress_fragment.c`, one pass, adaptive command code) and quality 1
 (`compress_fragment_two_pass.c`), plus the slice of `entropy_encode.c`,
 `brotli_bit_stream.c` and `encode.c`'s streaming path they need. Its output
@@ -16,16 +16,16 @@ from, what was changed to get there, and what is still in the way.
 
 - Apple M3 Max (`sysctl -n machdep.cpu.brand_string`), 14 cores (10 P + 4 E),
   38 GB, macOS Darwin 25.6.0.
-- K1 `k1 0.1.0`, built from this repo at the commit named in
+- k1 `k1 0.1.0`, built from this repo at the commit named in
   `brotli/results.md`. `--optimize` runs LLVM 21 at `O3`
   (`OptimizationLevel::Aggressive`) with the host CPU name and features
   (`TargetMachine::get_host_cpu_name()`, i.e. `-mcpu=native`), one codegen
-  unit per group of functions, ThinLTO across the K1 units.
+  unit per group of functions, ThinLTO across the k1 units.
 - C: `Apple clang version 21.0.0 (clang-2100.1.1.101)`, invoked as
   `cc -O2 -Ivendor/include -c` by `modules/cbrotli`'s setup step. No
   `-march`; Apple clang's default for arm64-apple-darwin is
   `-target-cpu apple-m1` (`cc -O2 -### -c x.c`). The resulting
-  `libbrotli.a` is linked into the K1 binary as an ordinary static library,
+  `libbrotli.a` is linked into the k1 binary as an ordinary static library,
   so it gets no LTO.
 
 Both sides therefore run in the same process, on the same input buffers,
@@ -33,7 +33,7 @@ timed by the same clock.
 
 ## What exactly is compared
 
-| | K1 encoder | C encoder |
+| | k1 encoder | C encoder |
 |---|---|---|
 | quality | 0 and 1 | `BROTLI_PARAM_QUALITY` 0 and 1 |
 | window | lgwin 18 (fixed; the fragment size is `1 << 18`) | `BROTLI_PARAM_LGWIN` 18 |
@@ -43,16 +43,16 @@ timed by the same clock.
 
 The C API has no reset, so an instance per stream is how it is used; the
 instance and its 128 KB (q0) / 512 KB (q1) hash table come from `malloc`
-inside the timed region. The K1 encoder allocates its arena, table and
+inside the timed region. The k1 encoder allocates its arena, table and
 storage once and `reset()` only reinitializes the stream header and the q0
 command prefix code. Both sides zero the hash table per fragment.
 
-Timing: `mach_absolute_time` around each call. One rep is one K1 stream
+Timing: `mach_absolute_time` around each call. One rep is one k1 stream
 immediately followed by one C stream of the same input, so both sides see
 the same machine state; a round is enough reps to take at least 200 ms; a
 run is 7 rounds and reports the median and the best round for each side.
-The `ratio` column is C time over K1 time from the median rounds, so above
-1 means K1 is faster. Corpora:
+The `ratio` column is C time over k1 time from the median rounds, so above
+1 means k1 is faster. Corpora:
 
 | corpus | bytes | what it exercises |
 |---|---|---|
@@ -66,7 +66,7 @@ is edited; each results record prints the size it used.
 
 Note on the numbers below: they were taken while other agents kept the
 machine at a load average of 6 to 30. Per-rep interleaving keeps the
-K1/C ratio stable under that load (three consecutive runs agree to about
+k1/C ratio stable under that load (three consecutive runs agree to about
 1%), but absolute MB/s should be reread from a `run.sh` pass on a quiet
 machine (`content/showcase/benchmarks/brotli/results.md`). On a quiet
 machine the median and best rounds agree within 2%; when a record shows
@@ -80,10 +80,10 @@ disturbed and the best column is the one to read.
 `examples/brotli` as it is now; both were built with `k1 --optimize
 --no-cache build` and run through the same harness, alternating the
 two binaries three times. Each MB/s figure is the median of the three
-runs' median rounds; K1/C is the median ratio. C is the same code in both
+runs' median rounds; k1/C is the median ratio. C is the same code in both
 binaries, so its column is the median over all six runs.
 
-| corpus | q | K1 before MB/s | K1 after MB/s | C MB/s | K1/C before | K1/C after | bytes in -> out |
+| corpus | q | k1 before MB/s | k1 after MB/s | C MB/s | k1/C before | k1/C after | bytes in -> out |
 |---|---|---|---|---|---|---|---|
 | cycle-251 | 0 | 9359 | 9335 | 8932 | 1.044 | 1.049 | 100000 -> 344 |
 | zeros-1mb | 0 | 5314 | 5096 | 4976 | 1.070 | 1.032 | 1048576 -> 724 |
@@ -102,9 +102,9 @@ a handful of long `find-match-length` calls and the block bookkeeping)
 and its before/after difference is inside that band. `random-300k` q0
 is a real loss and is discussed below.
 
-Unoptimized K1 (`k1 build`, LLVM `O0`, C side still `-O2`) for scale:
+Unoptimized k1 (`k1 build`, LLVM `O0`, C side still `-O2`) for scale:
 
-| corpus | q | K1 MB/s | K1/C |
+| corpus | q | k1 MB/s | k1/C |
 |---|---|---|---|
 | cycle-251 | 0 | 1322 | 0.148 |
 | zeros-1mb | 0 | 1135 | 0.221 |
@@ -132,7 +132,7 @@ The `restrict` on both pointers is what lets clang keep `*pos` in a
 register across the whole literal loop; the C literal loop is 13
 instructions with one store of `*pos` and no reload.
 
-K1 has no `restrict`. `bw` is a pointer whose address escapes into the
+k1 has no `restrict`. `bw` is a pointer whose address escapes into the
 Huffman-building calls, so after every store through `bw.storage` LLVM has
 to assume `bw.pos` may have changed and reloads it. Every `write-bits`
 became load-pos, load-storage, or, store, store-pos, and the next one
@@ -223,7 +223,7 @@ q0 ratio 0.971/0.978/0.983 to 1.000/1.001/1.007, q1 0.957/0.966/0.964 to
 The C marks every hot helper `BROTLI_INLINE` (`__always_inline__`):
 `Hash`, `IsMatch`, `FindMatchLengthWithLimit`, all the `Emit*` functions,
 `BrotliWriteBits`, and in the two-pass file `CreateCommands` itself. In
-the old K1 binary the q0 hot function still called `emit-insert-len`
+the old k1 binary the q0 hot function still called `emit-insert-len`
 (twice), `emit-copy-len` and `emit-copy-len-last-distance` out of line,
 each call passing three buffers and the writer pointer, and the two-pass
 scan called `emit-insert-len-2p`; `create-commands` was a separate
@@ -241,11 +241,11 @@ call, which is also where `fn(inline)` earns its keep.
 ### 3. Harness
 
 `main.k1`'s `bench` previously allocated a fresh zeroed output buffer from
-the arena for every C stream and a fresh `list` for every K1 stream, ran a
+the arena for every C stream and a fresh `list` for every k1 stream, ran a
 fixed 20 reps (0.25 ms of work on the 100 KB corpus), and timed the two
 sides in separate blocks. It now preallocates both outputs once, calibrates
 reps to 200 ms rounds, interleaves the two encoders per rep, and reports
-median and best of 7 rounds. The old numbers overstated K1 on the small
+median and best of 7 rounds. The old numbers overstated k1 on the small
 and incompressible corpora by 10-30% (the C side was paying for the arena
 allocation); the new ones are what the tables above show.
 
@@ -253,7 +253,7 @@ allocation); the new ones are what the tables above show.
 
 The two-pass encoder's minimum match length is 4 or 6 depending on the
 hash table size, and the C gets it for free as a constant because it
-bakes `table_bits` into ten `Impl##B` copies. The K1 port carried
+bakes `table_bits` into ten `Impl##B` copies. The k1 port carried
 `min-match` as a runtime argument, so `is-match-2p`, the hash functions
 and the table update all branched on it inside the scan loop (`cmp x7,
 #0x4; b.ne` twice per candidate). `create-commands[mm: static size]`
@@ -290,7 +290,7 @@ copies of the 6 KB q0 function did (next section).
 ## Compile time
 
 `hyperfine --warmup 1 --runs 5`, from `run.sh`, on the same loaded
-machine (each K1 build lexes, parses, typechecks and codegens the module
+machine (each k1 build lexes, parses, typechecks and codegens the module
 with `core` and `std` from source, links, and writes the executable; the
 `cc` line compiles the three C sources the port covers to object files
 and does not link):
@@ -307,7 +307,7 @@ is a full build, not a cache hit. The 7 s a first `k1 --optimize` build
 took at the start of this session was the machine, not the compiler: 10%
 CPU, the rest waiting.
 
-Lines of code: the K1 module is 2,020 lines of encoder (`bits.k1`,
+Lines of code: the k1 module is 2,020 lines of encoder (`bits.k1`,
 `encoder.k1`, `huffman.k1`, `twopass.k1`, `tables.k1`) plus the 207-line
 parity/bench harness and the 180-line manifest whose setup step
 regenerates `tables.k1` from the vendored C. The C it ports is
@@ -318,7 +318,7 @@ and `entropy_encode_static.h` (548, the static tables) they use.
 
 ## Where the remaining gap is
 
-After these changes K1 is at parity with `cc -O2` on the text corpus at
+After these changes k1 is at parity with `cc -O2` on the text corpus at
 both qualities and ahead on the synthetic ones, except `random-300k` q0
 (about 0.96). What is left, from the machine code:
 
@@ -363,7 +363,7 @@ in registers.
 The function has the same live values as the C's (the arena's five
 prefix-code arrays, the block bookkeeping, the writer, the scan state),
 so this is LLVM's register allocation on a 6 KB function, not extra work
-in the K1 source. It is also why every layout-changing experiment moved
+in the k1 source. It is also why every layout-changing experiment moved
 q0 by 2-4% in either direction. The by-value writer freed the stack slots
 that used to hold `pos`; the next win is getting these three out of the
 loop.
@@ -373,7 +373,7 @@ loop.
 uncompressed-metablock rewrite, the hash-table memset, and the per-block
 Huffman work: histogram, `sort-huffman-tree-items` on up to 256 symbols,
 tree build, `store-huffman-tree` over the 704-symbol command alphabet. In
-that sort the K1 comparator is a `some fn` parameter that compiles to an
+that sort the k1 comparator is a `some fn` parameter that compiles to an
 indirect `blr` per comparison, while clang inlines
 `SortHuffmanTreeItems` into each caller and then the comparator into it.
 Forcing the sort inline fixed the asm but did not measure as a win here
@@ -403,7 +403,7 @@ worked around in `examples/brotli`.
    turns into `noalias`, would let the pointer form perform.
 2. **`--emit-llvm` builds a different program.** With `--emit-llvm` the
    whole module is one codegen unit: the emitted `.ll` has 31 defines and
-   the binary 11 `brotli.` symbols, versus 33 K1 symbols and a separate
+   the binary 11 `brotli.` symbols, versus 33 k1 symbols and a separate
    `compress-fragment-impl` in the normal build. Reading the IR of the
    thing you are not running cost an hour here. Emitting the per-unit IR
    of the normal build, or a note in `--help`, would fix it.

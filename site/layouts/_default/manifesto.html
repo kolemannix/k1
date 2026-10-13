@@ -1,0 +1,17 @@
+{{ define "main" }}
+<main class="page"><div class="wrap">
+  <h1>A language of affordances,<br>not prohibitions</h1>
+  <div class="body" style="font-size:1.0625rem; color:var(--f)">{{ .Content }}</div>
+  <ol class="manif" style="margin-top:2rem; max-width:66ch">
+    {{ range $i, $t := hugo.Data.tenets }}
+    <li><span class="mn">{{ printf "%02d" (add $i 1) }}</span><div><div class="mt">{{ $t.title }}</div><p class="mp">{{ $t.body | markdownify }}</p></div></li>
+    {{ end }}
+  </ol>
+  <div class="body" style="margin-top:2.5rem">
+    <p><strong>One language: data, build, code, meta.</strong> Your data files are k1. Your build script is k1. Your program is k1. Your metaprograms are k1 functions that run early and return k1 source.</p>
+    <p><strong>You don’t choose C.</strong> It’s how you talk to your OS and to every library that matters. k1 is fanatically compatible with it, by default: structs, functions, calling convention, all of it. It plugs straight in.</p>
+    <p>Not memory-safe by default; safety is opt-in, through Fil-C. Not a Rust replacement; it is on a different axis. Not garbage-collected, though it could be.</p>
+  </div>
+  <p class="hero" style="padding:4rem 0 0; border:0"><span style="font-family:var(--mono); font-weight:600; font-size:clamp(1.5rem,4.2vw,2.75rem); letter-spacing:-.025em; color:var(--b)">You can just do things<span class="cursor" aria-hidden="true"></span></span></p>
+</div></main>
+{{ end }}

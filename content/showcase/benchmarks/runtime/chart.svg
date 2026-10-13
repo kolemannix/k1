@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 312" width="1080" height="312" style="max-width:100%;height:auto" font-family="var(--mono, 'Martian Mono', ui-monospace, Menlo, monospace)" font-size="12">
+<style>
+  .bg { fill: var(--p, #151920); }
+  .t1 { fill: var(--b, #FFFFFF); font-weight: 600; font-size: 13px; }
+  .t2 { fill: var(--m, #7E8794); font-size: 10.5px; }
+  .t3 { fill: var(--f, #E6E9EE); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .t4 { fill: var(--m, #7E8794); font-size: 11px; font-style: italic; }
+  text.muted { fill: var(--m, #7E8794); }
+  rect.k1 { fill: var(--s, #E6C070); }
+  rect.k1-dim { fill: var(--s, #E6C070); opacity: .45; }
+  rect.other { fill: var(--l2, #333944); }
+  rect.muted { fill: var(--l, #262B34); }
+  .ref { stroke: var(--m, #7E8794); stroke-width: 1; stroke-dasharray: 3 3; }
+</style>
+<rect class="bg" width="1080" height="312"/>
+<text class="t1" x="24" y="38">hashmap, 5M inserts + 5M lookups</text>
+<text class="t2" x="24" y="54">seconds, lower is better</text>
+<text class="t3 k1" x="162" y="79" text-anchor="end">k1</text>
+<rect class="k1" x="172" y="68" width="19.2" height="14"/>
+<text class="t3" x="197.2" y="79">0.170 s</text>
+<text class="t3 other" x="162" y="101" text-anchor="end">C</text>
+<rect class="other" x="172" y="90" width="29.1" height="14"/>
+<text class="t3" x="207.1" y="101">0.258 s</text>
+<text class="t3 other" x="162" y="123" text-anchor="end">Zig</text>
+<rect class="other" x="172" y="112" width="30.4" height="14"/>
+<text class="t3" x="208.4" y="123">0.270 s</text>
+<text class="t3 other" x="162" y="145" text-anchor="end">Rust</text>
+<rect class="other" x="172" y="134" width="34.9" height="14"/>
+<text class="t3" x="212.9" y="145">0.310 s</text>
+<text class="t3 other" x="162" y="167" text-anchor="end">Java (primitive)</text>
+<rect class="other" x="172" y="156" width="40.1" height="14"/>
+<text class="t3" x="218.1" y="167">0.356 s</text>
+<text class="t3 other" x="162" y="189" text-anchor="end">Go</text>
+<rect class="other" x="172" y="178" width="50.9" height="14"/>
+<text class="t3" x="228.9" y="189">0.451 s</text>
+<text class="t3 other" x="162" y="211" text-anchor="end">C#</text>
+<rect class="other" x="172" y="200" width="65.9" height="14"/>
+<text class="t3" x="243.9" y="211">0.584 s</text>
+<text class="t3 k1-dim" x="162" y="233" text-anchor="end">k1, no --optimize</text>
+<rect class="k1-dim" x="172" y="222" width="76.1" height="14"/>
+<text class="t3" x="254.1" y="233">0.675 s</text>
+<text class="t3 other" x="162" y="255" text-anchor="end">Java</text>
+<rect class="other" x="172" y="244" width="96.0" height="14"/>
+<text class="t3" x="274.0" y="255">0.851 s</text>
+<text class="t3 other" x="162" y="277" text-anchor="end">Python</text>
+<text class="t4" x="172" y="277">4.76 s, off the chart</text>
+<text class="t1" x="376" y="38">byte-scan, 256 MiB</text>
+<text class="t3 k1" x="514" y="65" text-anchor="end">k1</text>
+<rect class="k1" x="524" y="54" width="11.5" height="14"/>
+<text class="t3" x="541.5" y="65">0.213 s</text>
+<text class="t3 other" x="514" y="87" text-anchor="end">C#</text>
+<rect class="other" x="524" y="76" width="14.5" height="14"/>
+<text class="t3" x="544.5" y="87">0.269 s</text>
+<text class="t3 other" x="514" y="109" text-anchor="end">C</text>
+<rect class="other" x="524" y="98" width="19.7" height="14"/>
+<text class="t3" x="549.7" y="109">0.365 s</text>
+<text class="t3 other" x="514" y="131" text-anchor="end">Go</text>
+<rect class="other" x="524" y="120" width="42.3" height="14"/>
+<text class="t3" x="572.3" y="131">0.784 s</text>
+<text class="t3 other" x="514" y="153" text-anchor="end">Zig</text>
+<rect class="other" x="524" y="142" width="46.3" height="14"/>
+<text class="t3" x="576.3" y="153">0.858 s</text>
+<text class="t3 k1-dim" x="514" y="175" text-anchor="end">k1, no --optimize</text>
+<rect class="k1-dim" x="524" y="164" width="53.3" height="14"/>
+<text class="t3" x="583.3" y="175">0.987 s</text>
+<text class="t3 other" x="514" y="197" text-anchor="end">Rust</text>
+<rect class="other" x="524" y="186" width="79.3" height="14"/>
+<text class="t3" x="609.3" y="197">1.47 s</text>
+<text class="t3 other" x="514" y="219" text-anchor="end">Java</text>
+<rect class="other" x="524" y="208" width="96.0" height="14"/>
+<text class="t3" x="626.0" y="219">1.78 s</text>
+<text class="t3 other" x="514" y="241" text-anchor="end">Python</text>
+<text class="t4" x="524" y="241">12.84 s, off the chart</text>
+<text class="t1" x="728" y="38">binary-trees, depth 20</text>
+<text class="t3 other" x="866" y="65" text-anchor="end">C, bump arena</text>
+<rect class="other" x="876" y="54" width="3.6" height="14"/>
+<text class="t3" x="885.6" y="65">0.866 s</text>
+<text class="t3 other" x="866" y="87" text-anchor="end">Java</text>
+<rect class="other" x="876" y="76" width="3.7" height="14"/>
+<text class="t3" x="885.7" y="87">0.891 s</text>
+<text class="t3 k1" x="866" y="109" text-anchor="end">k1</text>
+<rect class="k1" x="876" y="98" width="3.8" height="14"/>
+<text class="t3" x="885.8" y="109">0.904 s</text>
+<text class="t3 k1-dim" x="866" y="131" text-anchor="end">k1, no --optimize</text>
+<rect class="k1-dim" x="876" y="120" width="5.5" height="14"/>
+<text class="t3" x="887.5" y="131">1.31 s</text>
+<text class="t3 other" x="866" y="153" text-anchor="end">Zig</text>
+<rect class="other" x="876" y="142" width="7.1" height="14"/>
+<text class="t3" x="889.1" y="153">1.70 s</text>
+<text class="t3 other" x="866" y="175" text-anchor="end">Go</text>
+<rect class="other" x="876" y="164" width="10.6" height="14"/>
+<text class="t3" x="892.6" y="175">2.55 s</text>
+<text class="t3 other" x="866" y="197" text-anchor="end">C</text>
+<rect class="other" x="876" y="186" width="21.1" height="14"/>
+<text class="t3" x="903.1" y="197">5.06 s</text>
+<text class="t3 other" x="866" y="219" text-anchor="end">C#</text>
+<rect class="other" x="876" y="208" width="22.9" height="14"/>
+<text class="t3" x="904.9" y="219">5.51 s</text>
+<text class="t3 other" x="866" y="241" text-anchor="end">Rust</text>
+<rect class="other" x="876" y="230" width="24.6" height="14"/>
+<text class="t3" x="906.6" y="241">5.91 s</text>
+<text class="t3 other" x="866" y="263" text-anchor="end">Python</text>
+<rect class="other" x="876" y="252" width="96.0" height="14"/>
+<text class="t3" x="978.0" y="263">23.09 s</text>
+</svg>

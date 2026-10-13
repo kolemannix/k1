@@ -2,10 +2,24 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "showcase",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["--prefix", "content/showcase", "run", "dev", "--", "--port", "5173"],
-      "port": 5173
+      "name": "site",
+      "runtimeExecutable": "just",
+      "runtimeArgs": [
+        "site"
+      ],
+      "port": 1313
+    },
+    {
+      "name": "refchess-web",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "-d",
+        "examples",
+        "8088"
+      ],
+      "port": 8088
     }
   ]
 }

@@ -41,8 +41,8 @@ fn main(): i32 {
   static-for[int]([1, 2, 3], println("unrolled $it"))
 
   let c = \next() * 2
-  println("chunk: `${c.chunks.[0].text}` sourced=${c.chunks.[0].source != 0}")
+  println("code: `${c.text}` spans=${c.spans.len()} sourced=${c.spans.[0].source != 0}")
   let wrapped: code = "let y = $c"
-  println("${wrapped.text()} in ${wrapped.chunks.len()} chunks")
+  println("${wrapped.text} with ${wrapped.spans.len()} spans")
   0
 }

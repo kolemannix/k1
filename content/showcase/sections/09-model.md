@@ -1,6 +1,6 @@
 # The runtime model
 
-Compile-time execution gets the headlines, but this is the half of K1 you
+Compile-time execution gets the headlines, but this is the half of k1 you
 touch on every line: abilities, closures, context parameters, errors, arenas,
 and pattern matching.
 
@@ -71,6 +71,26 @@ impl[t: shape] loud for t {
 ```text
 2.0x3.0 rect
 rect!
+```
+
+Operators are abilities. `+` is `add`, so implementing it is operator
+overloading:
+
+```k1
+type vec2 = { x: f64, y: f64 }
+
+impl add for vec2 {
+  fn add(self: vec2, rhs: vec2): vec2 { .{ x = self.x + rhs.x, y = self.y + rhs.y } }
+}
+```
+
+```k1
+  let v = vec2.{ x = 1.0, y = 2.0 } + vec2.{ x = 0.5, y = 0.25 }
+  println("${v.x} ${v.y}")
+```
+
+```text
+1.5 2.25
 ```
 
 Abilities take type parameters too. `[impl t]` means the impl picks `t`:
@@ -310,7 +330,7 @@ and `require ... else` exits early:
 
 ```k1
 fn parse-digits(s: string): result[u64, parse-error] {
-  require s.len() > 0 else { return :err :empty-input }
+  require s.non-empty() else { return :err :empty-input }
   let n: u64 = 0
   for c in s {
     require c.is-ascii-digit() else { return :err :bad-digit c }
@@ -378,7 +398,6 @@ Its error type is `rc` minus `ok`, computed from `rc`'s schema at compile
 time. Add a code to `rc` and `errno` follows:
 
 ```k1
-ns pre {
   fn errors-of(t: types/type-id, ok-name: string): types/type-id {
     require t.schema() is :enum .{ int-kind, values } else crash("errors-of needs an enum")
     let variants: list[types/make-either.variants.t] = []
@@ -387,9 +406,10 @@ ns pre {
     }
     types/make-either(:some(int-kind.type-id()), variants.as-span())
   }
-}
+```
 
-type errno = #type pre/errors-of(types/id[rc], "ok")
+```k1
+type errno = #type errors-of(types/id[rc], "ok")
 ```
 
 The tags agree, so crossing between the two is a `mem/bitcast`, and `.try` on
@@ -467,7 +487,7 @@ after reset: used=0
 
 Three requests, 240 bytes each, and the arena never grows.
 
-Every allocation in K1 is zeroed. The arena only pays for that where memory
+Every allocation in k1 is zeroed. The arena only pays for that where memory
 was actually used: `reset` zeroes what it handed out.
 
 ```k1
@@ -513,7 +533,7 @@ Long-lived data names its allocator with the `-in` variants:
 0
 ```
 
-Zig makes every allocation name its allocator. K1 makes the transient case
+Zig makes every allocation name its allocator. k1 makes the transient case
 free to write and the durable case explicit.
 
 ## Pattern matching

@@ -1,0 +1,6 @@
+{{- $inner := strings.TrimRight "\n" .Inner -}}
+{{- with index hugo.Data.highlight (sha1 $inner) -}}
+<pre><code class="k1">{{ . | safeHTML }}</code></pre>
+{{- else -}}
+<pre><code>{{ $inner }}</code></pre>
+{{- end -}}

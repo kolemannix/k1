@@ -1,27 +1,32 @@
 # Generators: a keyword recognizer and a Brainfuck compiler
 
-Two classic code generators. Each is a plain function in `pre` that builds a
+Two classic code generators. Each is a plain function that builds a
 `code` value, plus a one-line `macro` that hands it to the compiler with `$`.
 Since the generator is just a function, you can also call it at runtime and
 print what it emits.
 
 ## A gperf in 140 lines
 
-`gperf` takes a keyword list and spits out a C recognizer. This one is a K1
+`gperf` takes a keyword list and spits out a C recognizer. This one is a k1
 macro:
 
 ```k1
-$pre/keywords/define(k1-keyword, [
-  "fn", "let", "mut", "and", "or", "if", "else", "while", "loop", "ns", "intern",
-  "for", "in", "ability", "impl", "is", "not", "builtin", "where", "context",
-  "use", "require", "defer",
-])
+$keywords/define(tiny, ["if", "in", "is", "fn", "for"])
 ```
 
-Here's what it generates for five words:
+```k1
+  println("${tiny/lookup("for")} ${tiny/lookup("fun")}")
+```
+
+```text
+:some kw-for :none
+```
+
+The generator is a plain function, so the program can print `tiny`'s own
+expansion at runtime:
 
 ```k1
-  print(pre/keywords/generate("tiny", ["if", "in", "is", "fn", "for"]).text())
+  print(keywords/generate("tiny", tiny/words()).text)
 ```
 
 ```text
@@ -30,8 +35,8 @@ ns for tiny {
   fn lookup(s: string): ?tiny {
     let n = s.len()
     if n < 2 or n > 3 return :none
-    let kl = s.[n - 1].as-u8().widen[size]
-    let k0 = s.[0].as-u8().widen[size]
+    let kl = s.[n - 1].as-u8().as-size()
+    let k0 = s.[0].as-u8().as-size()
     let h = (n * 137 + kl * 59 + k0 * 125) & 15
     if h is {
       9 -> if s == "if" :some :kw-if else :none,
@@ -109,9 +114,9 @@ Emitting is a `code-builder` walk:
       cb.line("if n < $min-len or n > $max-len return :none")
       for p in ps {
         if p is {
-          :at i if i < min-len -> cb.line("let k$i = s.[$i].as-u8().widen[size]"),
-          :at i -> cb.line("let k$i: size = if n > $i s.[$i].as-u8().widen[size] else 0"),
-          :last -> cb.line("let kl = s.[n - 1].as-u8().widen[size]"),
+          :at i if i < min-len -> cb.line("let k$i = s.[$i].as-u8().as-size()"),
+          :at i -> cb.line("let k$i: size = if n > $i s.[$i].as-u8().as-size() else 0"),
+          :last -> cb.line("let kl = s.[n - 1].as-u8().as-size()"),
         }
       }
       cb.line("let h = (${terms.build()}) & ${h.slots - 1}")
@@ -137,6 +142,16 @@ Emitting is a `code-builder` walk:
   })
   cb.build()
 }
+```
+
+The benchmark defines k1's 23 keywords the same way, and C++'s 92:
+
+```k1
+$keywords/define(k1-keyword, [
+  "fn", "let", "mut", "and", "or", "if", "else", "while", "loop", "ns", "intern",
+  "for", "in", "ability", "impl", "is", "not", "builtin", "where", "context",
+  "use", "require", "defer",
+])
 ```
 
 LLVM turns the dense `if h is` into a jump table, so a `tiny` lookup is two
@@ -167,7 +182,7 @@ compiles it: `define` emits `fn hello(): string` with native `while` loops,
 and runs of `+`/`>` folded into single adds.
 
 ```k1
-$pre/bf/define(hello, "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++.")
+$bf/define(hello, "++++++++[>++++[>++>+++>+++>+<<<<-]>+>+>->>+[<]<-]>>.>---.+++++++..+++.>>.<-.<.+++.------.--------.>>+.>++.")
 ```
 
 Call it at compile time and at runtime:
@@ -190,7 +205,7 @@ is a type error.
 Here's what `++++++++[>++++++++<-]>+.` (it prints `A`) becomes:
 
 ```k1
-  print(pre/bf/transpile("letter-a", "++++++++[>++++++++<-]>+.").text())
+  print(bf/transpile("letter-a", "++++++++[>++++++++<-]>+.").text)
 ```
 
 ```text
@@ -271,19 +286,19 @@ fn transpile(name: string, program: string): code {
 }
 
 macro define(name: code, program: string) {
-  transpile(name.text(), program)
+  transpile(name.text, program)
 }
 ```
 
 So unbalanced brackets are a compile error:
 
 ```k1 path=content/showcase/examples/bf_transpile_wrong.k1
-$pre/bf/define(broken, "++[>+<-")
+$bf/define(broken, "++[>+<-")
 ```
 
 ```text
 ┌────────────────────────────────────────╴
-/Users/knix/dev/k1/content/showcase/examples/bf_transpile_wrong.k1:42:22: error
+/Users/knix/dev/k1/content/showcase/examples/bf_transpile_wrong.k1:44:22: error
 ├─────
 │           cb.block("while tape.[p] != 0", fn[cb, name, program, i, closed.&]. {
 │             closed.* = emit-body(cb, name, program, i)
@@ -295,18 +310,18 @@ $pre/bf/define(broken, "++[>+<-")
 ├─────
 │  bf `broken`: unmatched `[` at byte 2
 bc Execution Trace
-[00] core/platform/process/exit platform.k1:201
-[01] core/sys/exit builtin.k1:964
-[02] core/crash builtin.k1:1171
-[03] bf_transpile_wrong/pre/bf/emit-body bf_transpile_wrong.k1:42
-[04] bf_transpile_wrong/pre/bf/bf_transpile_wrong.pre.bf.transpile_lam_6684 bf_transpile_wrong.k1:62
-[05] core/code-builder/block code.k1:85
-[06] bf_transpile_wrong/pre/bf/transpile bf_transpile_wrong.k1:65
-[07] bf_transpile_wrong/pre/bf/define bf_transpile_wrong.k1:69
+[00] core/platform/process/exit platform.k1:286
+[01] core/sys/exit builtin.k1:981
+[02] core/crash builtin.k1:1189
+[03] bf_transpile_wrong/pre/bf/emit-body bf_transpile_wrong.k1:44
+[04] bf_transpile_wrong/pre/bf/bf_transpile_wrong.pre.bf.transpile_lam_7069 bf_transpile_wrong.k1:64
+[05] core/code-builder/block code.k1:156
+[06] bf_transpile_wrong/pre/bf/transpile bf_transpile_wrong.k1:67
+[07] bf_transpile_wrong/pre/bf/define bf_transpile_wrong.k1:71
 
 └────────────────────────────────────────╴
 Module bf_transpile_wrong failed compiling with 1 errors
 ```
 
-The trace stops at the macro body, not the `$pre/bf/define(broken, ...)`
+The trace stops at the macro body, not the `$bf/define(broken, ...)`
 line. That one could be sharper.

@@ -1,0 +1,102 @@
+{
+  "lines": 27730,
+  "typecheck": [
+    {
+      "name": "k1",
+      "ms": 29,
+      "k1": true,
+      "pct": 1.25
+    },
+    {
+      "name": "C",
+      "ms": 99,
+      "k1": false,
+      "pct": 4.27
+    },
+    {
+      "name": "Zig",
+      "ms": 273,
+      "k1": false,
+      "pct": 11.77
+    },
+    {
+      "name": "OCaml",
+      "ms": 434,
+      "k1": false,
+      "pct": 18.71
+    },
+    {
+      "name": "Rust",
+      "ms": 594,
+      "k1": false,
+      "pct": 25.61
+    },
+    {
+      "name": "C++",
+      "ms": 2319,
+      "k1": false,
+      "pct": 100.0
+    }
+  ],
+  "build": [
+    {
+      "name": "k1",
+      "ms": 129,
+      "k1": true,
+      "pct": 1.06
+    },
+    {
+      "name": "C",
+      "ms": 511,
+      "k1": false,
+      "pct": 4.18
+    },
+    {
+      "name": "Go",
+      "ms": 687,
+      "k1": false,
+      "pct": 5.63
+    },
+    {
+      "name": "Rust",
+      "ms": 962,
+      "k1": false,
+      "pct": 7.88
+    },
+    {
+      "name": "Java",
+      "ms": 1614,
+      "k1": false,
+      "pct": 13.22
+    },
+    {
+      "name": "OCaml",
+      "ms": 3102,
+      "k1": false,
+      "pct": 25.4
+    },
+    {
+      "name": "Zig",
+      "ms": 3158,
+      "k1": false,
+      "pct": 25.86
+    },
+    {
+      "name": "C++",
+      "ms": 4358,
+      "k1": false,
+      "pct": 35.69
+    },
+    {
+      "name": "Kotlin",
+      "ms": 12211,
+      "k1": false,
+      "pct": 100.0
+    }
+  ],
+  "stress": {
+    "lines": 1009036,
+    "ms": 509,
+    "lines_per_s": 1980935
+  }
+}

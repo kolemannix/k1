@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 224" width="1080" height="224" style="max-width:100%;height:auto" font-family="var(--mono, 'Martian Mono', ui-monospace, Menlo, monospace)" font-size="12">
+<style>
+  .bg { fill: var(--p, #151920); }
+  .t1 { fill: var(--b, #FFFFFF); font-weight: 600; font-size: 13px; }
+  .t2 { fill: var(--m, #7E8794); font-size: 10.5px; }
+  .t3 { fill: var(--f, #E6E9EE); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+  .t4 { fill: var(--m, #7E8794); font-size: 11px; font-style: italic; }
+  text.muted { fill: var(--m, #7E8794); }
+  rect.k1 { fill: var(--s, #E6C070); }
+  rect.k1-dim { fill: var(--s, #E6C070); opacity: .45; }
+  rect.other { fill: var(--l2, #333944); }
+  rect.muted { fill: var(--l, #262B34); }
+  .ref { stroke: var(--m, #7E8794); stroke-width: 1; stroke-dasharray: 3 3; }
+</style>
+<rect class="bg" width="1080" height="224"/>
+<text class="t1" x="24" y="38">lines of code in the compiler</text>
+<text class="t2" x="24" y="54">code lines by scc, no tests, no standard library; LLVM is the back end under k1, clang and rustc</text>
+<text class="t3 k1" x="66" y="79" text-anchor="end">k1</text>
+<rect class="k1" x="76" y="68" width="27.0" height="14"/>
+<text class="t3" x="109.0" y="79">72,189</text>
+<text class="t3 other" x="66" y="101" text-anchor="end">Zig</text>
+<rect class="other" x="76" y="90" width="186.0" height="14"/>
+<text class="t3" x="268.0" y="101">497,217</text>
+<text class="t3 other" x="66" y="123" text-anchor="end">Go</text>
+<rect class="other" x="76" y="112" width="204.7" height="14"/>
+<text class="t3" x="286.7" y="123">547,231</text>
+<text class="t3 other" x="66" y="145" text-anchor="end">Rust</text>
+<rect class="other" x="76" y="134" width="235.9" height="14"/>
+<text class="t3" x="317.9" y="145">630,574</text>
+<text class="t3 other" x="66" y="167" text-anchor="end">clang</text>
+<rect class="other" x="76" y="156" width="477.4" height="14"/>
+<text class="t3" x="559.4" y="167">1,276,119</text>
+<text class="t3 muted" x="66" y="189" text-anchor="end">LLVM</text>
+<rect class="muted" x="76" y="178" width="896.0" height="14"/>
+<text class="t3" x="978.0" y="189">2,395,042</text>
+</svg>

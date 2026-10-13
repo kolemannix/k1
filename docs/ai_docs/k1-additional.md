@@ -120,7 +120,7 @@ body (not intern/extern) and is rejected in reloadable namespaces; a cycle of
 `fn(cold)` marks a rarely-run fn; diverging fns are cold already. The IR
 inliner never inlines a cold fn, and LLVM gets the `cold` attribute.
 `fn(noinline)` keeps a fn out of line in both the IR inliner and LLVM. It
-belongs on the out-of-line half of a fast path (`buffer/_grow-to`,
+belongs on the out-of-line half of a fast path (`buffer/_grow-raw`,
 `arena/_alloc-in-new-chunk`, `map/_make-room`). It needs a body and cannot be combined with
 `inline`.
 

@@ -1,0 +1,34 @@
+{
+  "runtime": {
+    "script": "content/showcase/benchmarks/runtime/run.sh",
+    "results": "content/showcase/benchmarks/runtime/results.md",
+    "date": "2026-10-12"
+  },
+  "brotli": {
+    "script": "content/showcase/benchmarks/brotli/run.sh",
+    "results": "content/showcase/benchmarks/brotli/results.md",
+    "date": "2026-09-18"
+  },
+  "compile-times": {
+    "script": "content/showcase/benchmarks/compile-times/run.sh",
+    "results": "content/showcase/benchmarks/compile-times/results.md",
+    "date": "2026-10-13"
+  },
+  "comptime": {
+    "script": "content/showcase/benchmarks/comptime/run.sh",
+    "results": "content/showcase/benchmarks/comptime/results.md",
+    "date": "2026-10-12"
+  },
+  "json": {
+    "script": "content/showcase/benchmarks/json/run.sh",
+    "results": "content/showcase/benchmarks/json/results.md",
+    "date": "2026-10-02"
+  },
+  "int-strings": {
+    "script": "content/showcase/benchmarks/int-strings/run.sh"
+  },
+  "loc": {
+    "results": "content/showcase/benchmarks/loc/results.md",
+    "date": "2026-10-12"
+  }
+}

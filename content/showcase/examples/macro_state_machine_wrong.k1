@@ -1,5 +1,7 @@
-$pre/fsm/define(door, {
-  use pre/fsm/on
+use pre/fsm
+
+$fsm/define(door, {
+  use fsm/on
   [
     on("closed", "open",  "opened"),
     on("opened", "close", "closed"),
@@ -61,7 +63,7 @@ fn define-impl(name: string, table: span[transition]): code {
 }
 
 macro define(name: code, table: span[transition]) {
-  define-impl(name.text(), table)
+  define-impl(name.text, table)
 }
 
 }}

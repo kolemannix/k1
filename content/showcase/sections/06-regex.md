@@ -1,57 +1,35 @@
 # A regex engine that runs at compile time
 
-`$pre/regex/define(name, "pattern")` compiles a regex while your program
+`$regex/define(name, "pattern")` compiles a regex while your program
 compiles, and expands into three plain functions: `name-scan` (the DFA),
 `name(s): bool` (anchored match) and `name-find(s)` (leftmost-longest search).
-The engine is under 300 lines of ordinary K1 sitting in `ns pre`.
+The engine is under 300 lines of ordinary k1 further down the same file.
+
+One pattern, a number with an optional fraction:
 
 ```k1
-$pre/regex/define(ident, "[A-Za-z_][A-Za-z0-9_]*")
-$pre/regex/define(number, "[0-9]+([.][0-9]+)?")
-$pre/regex/define(email, "[a-z0-9._+-]+@[a-z0-9-]+([.][a-z0-9-]+)*[.][a-z][a-z]+")
+$regex/define(number, "[0-9]+([.][0-9]+)?")
 ```
+
+`number` is the anchored match, `number-find` the search:
 
 ```k1
-  for s in ["foo_bar", "x9", "_", "9x", "", "a-b"] { report("ident ", ident(s), s) }
-  for s in ["42", "3.14", "0.0", "3.", ".5", "1e5"] { report("number", number(s), s) }
-  for s in ["a.b@c.io", "x+y@mail.example.org", "no-at.com", "a@b", "a@b.c"] { report("email ", email(s), s) }
-```
-
-```text
-ident  match    "foo_bar"
-ident  match    "x9"
-ident  match    "_"
-ident  no match "9x"
-ident  no match ""
-ident  no match "a-b"
-number match    "42"
-number match    "3.14"
-number match    "0.0"
-number no match "3."
-number no match ".5"
-number no match "1e5"
-email  match    "a.b@c.io"
-email  match    "x+y@mail.example.org"
-email  no match "no-at.com"
-email  no match "a@b"
-email  no match "a@b.c"
-```
-
-Searching:
-
-```k1
-  let line = "total: 12.5 units, 3 left"
-  if number-find(line) is :some m {
-    println("first number in \"$line\": ${line.slice(m.start, m.end)} at ${m.start}..${m.end}")
+  for s in ["42", "3.14", "3.", ".5", "1e5"] { println("number(\"$s\") = ${number(s)}") }
+  let rest = "total: 12.5 units, 3 left"
+  while number-find(rest) is :some m {
+    println("found ${rest.slice(m.start, m.end)}")
+    rest = rest.drop(m.end)
   }
-  println("ident-find in \"  42abc\": ${ident-find("  42abc")}")
-  println("email-find in \"nothing here\": ${email-find("nothing here")}")
 ```
 
 ```text
-first number in "total: 12.5 units, 3 left": 12.5 at 7..11
-ident-find in "  42abc": :some .{ start = 4, end = 7 }
-email-find in "nothing here": :none
+number("42") = true
+number("3.14") = true
+number("3.") = false
+number(".5") = false
+number("1e5") = false
+found 12.5
+found 3
 ```
 
 ## What the macro emitted
@@ -59,7 +37,7 @@ email-find in "nothing here": :none
 The macro logs its expansion, so compiling prints this for `number`:
 
 ```text
-[regex_dfa.k1:289 info] fn number-scan(s: string): ?size {
+[regex_dfa.k1:282 info] fn number-scan(s: string): ?size {
   let state = 0
   let end: ?size = :none
   for c in s {
@@ -89,11 +67,15 @@ No 256-entry transition table. The state count is known at compile time, so
 the match arms *are* the automaton: 1 is the integer part, `.` moves to 2, 3
 is the fraction.
 
-The DFA is minimized, so `ident` is two states, not the eight that subset
-construction produces from its three ranges:
+The DFA is minimized. An identifier pattern has three character ranges, and
+subset construction turns them into eight states; `ident` ends up with two:
+
+```k1
+$regex/define(ident, "[A-Za-z_][A-Za-z0-9_]*")
+```
 
 ```text
-[regex_dfa.k1:289 info] fn ident-scan(s: string): ?size {
+[regex_dfa.k1:282 info] fn ident-scan(s: string): ?size {
   let state = 0
   let end: ?size = :none
   for c in s {
@@ -107,9 +89,6 @@ construction produces from its three ranges:
   end
 }
 ```
-
-With `--optimize`, the state dispatch in `email-scan` becomes a single LLVM
-`switch`.
 
 ## The engine
 
@@ -179,7 +158,7 @@ fn build(nfa: list[nstate], start: size, accept: size): dfa {
 }
 ```
 
-And the emitter just writes K1 source with `code-builder`. (`${name}-scan`
+And the emitter just writes k1 source with `code-builder`. (`${name}-scan`
 needs the braces: `$name-scan` is the kebab-case identifier `name-scan`.)
 
 ```k1
@@ -214,8 +193,8 @@ fn emit(name: string, d: dfa): code {
 }
 
 macro define(name: code, pattern: string) {
-  let generated = emit(name.text(), compile(pattern))
-  k1/emit-compiler-message(k1/location(), :info, generated.text())
+  let generated = emit(name.text, compile(pattern))
+  k1/emit-compiler-message(k1/location(), :info, generated.text)
   generated
 }
 ```
@@ -226,12 +205,12 @@ None of it is a comptime dialect. Same `list`, `?size`, `string-builder` and
 ## A malformed pattern
 
 ```k1
-$pre/regex/define(broken, "(ab|cd*")
+$regex/define(broken, "(ab|cd*")
 ```
 
 ```text
 ┌────────────────────────────────────────╴
-/Users/knix/dev/k1/content/showcase/examples/regex_dfa_wrong.k1:29:4: error
+/Users/knix/dev/k1/content/showcase/examples/regex_dfa_wrong.k1:31:4: error
 ├─────
 │     }
 │   
@@ -243,16 +222,16 @@ $pre/regex/define(broken, "(ab|cd*")
 ├─────
 │  regex `(ab|cd*` at offset 7: expected `)`
 bc Execution Trace
-[00] core/platform/process/exit platform.k1:201
-[01] core/sys/exit builtin.k1:964
-[02] core/crash builtin.k1:1171
-[03] regex_dfa_wrong/pre/regex/parser/fail regex_dfa_wrong.k1:29
-[04] regex_dfa_wrong/pre/regex/parser/atom regex_dfa_wrong.k1:92
-[05] regex_dfa_wrong/pre/regex/parser/repeat regex_dfa_wrong.k1:75
-[06] regex_dfa_wrong/pre/regex/parser/concat regex_dfa_wrong.k1:66
-[07] regex_dfa_wrong/pre/regex/parser/alt regex_dfa_wrong.k1:48
-[08] regex_dfa_wrong/pre/regex/compile regex_dfa_wrong.k1:192
-[09] regex_dfa_wrong/pre/regex/define regex_dfa_wrong.k1:272
+[00] core/platform/process/exit platform.k1:286
+[01] core/sys/exit builtin.k1:981
+[02] core/crash builtin.k1:1189
+[03] regex_dfa_wrong/pre/regex/parser/fail regex_dfa_wrong.k1:31
+[04] regex_dfa_wrong/pre/regex/parser/atom regex_dfa_wrong.k1:94
+[05] regex_dfa_wrong/pre/regex/parser/repeat regex_dfa_wrong.k1:77
+[06] regex_dfa_wrong/pre/regex/parser/concat regex_dfa_wrong.k1:67
+[07] regex_dfa_wrong/pre/regex/parser/alt regex_dfa_wrong.k1:50
+[08] regex_dfa_wrong/pre/regex/compile regex_dfa_wrong.k1:193
+[09] regex_dfa_wrong/pre/regex/define regex_dfa_wrong.k1:274
 
 └────────────────────────────────────────╴
 Module regex_dfa_wrong failed compiling with 1 errors

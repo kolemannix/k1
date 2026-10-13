@@ -1,0 +1,239 @@
+[
+  {
+    "title": "HTTP routes from a macro",
+    "section": "05-macros",
+    "blurb": "The app declares its routes once, as a token stream: method, name, path pattern, query struct. The macro reads the rows with a token cursor and emits a sum type with one variant per route, an allocation-free trie matcher that percent-decodes, and a printer back to a URL. Dispatch is a match on that type, and a mistake in a row is reported at the offending token in your file.",
+    "blocks": [
+      {
+        "label": "the routes",
+        "kind": "k1",
+        "code": "$http/routing/define(route, \\{\n  get    home         \"/\"\n  get    events       \"/events\"\n  get    counter      \"/counter/events\"\n  get    big-file     \"/static/big-file.json\"\n  get    starry       \"/app/starry-night\"\n  get    visits       \"/visits\" ?{ who: ?string }\n  post   login        \"/login\"\n  get    game-events  \"/game/{id: u64}/events\"\n  post   game-poke    \"/game/{id: u64}/poke\"\n  delete delete-game  \"/game/{id: u64}\"\n})"
+      },
+      {
+        "label": "the macro",
+        "kind": "k1",
+        "code": "macro define(base: code, rows: span[code-token]) {\n  let entries = parse-rows(rows).as-span()\n  validate(entries)\n\n  let cb-storage = code-builder/new()\n  let cb = cb-storage.&\n\n  cb.write-code(\"type $base = either { \")\n  for en in entries {\n    if it-index > 0 cb.write(\", \")\n    cb.write-token(en.name)\n    if payload-type(en) is :some ty {\n      cb.write(\"(\")\n      cb.write-code(ty)\n      cb.write(\")\")\n    }\n  }\n  cb.write(\" }\\n\")\n\n  cb.block(\"ns for $base\", fn[cb, base, entries]. emit-parse-fn(cb, base, entries))\n  emit-print-impl(cb, base, entries)\n\n  cb.build()\n}"
+      },
+      {
+        "label": "what comes out",
+        "kind": "k1",
+        "code": "  if route/parse-request(req.header) is {\n    :err e -> error-response(e),\n    :ok r -> if r is {\n      :home -> home-page(),\n      :events -> global-events(deps),\n      :counter -> counter-events(),\n      :game-events .{ id } -> game-events(deps, id),\n      :game-poke .{ id } -> game-poke(deps, id),\n      :big-file -> big-file(),\n      :starry -> response/html(\"todo\"),\n      :visits p -> visits(deps, req, p.who),\n      :login -> login(req),\n      :delete-game p -> response/html(\"todo ${p.id}\"),\n    }\n  }"
+      }
+    ]
+  },
+  {
+    "title": "JSON from reflection",
+    "section": "04-reflection",
+    "blurb": "json/to-string is library code with no compiler support. It reads the type's schema at compile time and generates a writer for exactly these fields, the nested sum and the optional included.",
+    "blocks": [
+      {
+        "label": "the type",
+        "kind": "k1",
+        "code": "type contact = either { email(string), phone(string), unreachable }\ntype person = { name: string, age: u32, nickname: ?string, contact: contact }"
+      },
+      {
+        "label": "to JSON",
+        "kind": "k1",
+        "code": "  println(json/to-string(ada))"
+      },
+      {
+        "label": "output",
+        "kind": "text",
+        "code": "{\"name\":\"Ada Lovelace\",\"age\":36,\"nickname\":null,\"contact\":{\"email\":\"ada@example.com\"}}"
+      }
+    ]
+  },
+  {
+    "title": "Abilities, not inheritance",
+    "section": "09-model",
+    "blurb": "Abilities are k1's typeclasses: ad-hoc polymorphism without a hierarchy. Implement one for a type you did not write, bound a generic on it, or implement it once for every type that has another. Operators are abilities too, so operator overloading is implementing add for your type. Dispatch is static unless you ask for dyn.",
+    "blocks": [
+      {
+        "label": "the ability",
+        "kind": "k1",
+        "code": "ability shape {\n  fn area(self: *self): f64\n  fn name(self: *self): string\n  fn sides(): int\n  fn describe(self: *self): string {\n    \"${self.name()} area=${self.area()} sides=${shape@(self)/sides()}\"\n  }\n}"
+      },
+      {
+        "label": "an impl",
+        "kind": "k1",
+        "code": "impl shape for circle {\n  fn area(self: *circle): f64 { 3.14159 * self.radius * self.radius }\n  fn name(_self: *circle): string { \"circle\" }\n  fn sides(): int { 0 }\n}\n\nimpl shape for rect {\n  fn area(self: *rect): f64 { self.w * self.h }\n  fn name(_self: *rect): string { \"rect\" }\n  fn sides(): int { 4 }\n  fn describe(self: *rect): string { \"${self.w}x${self.h} rect\" }\n}"
+      },
+      {
+        "label": "a bound and a blanket impl",
+        "kind": "k1",
+        "code": "fn bigger[t: shape](a: *t, b: *t): *t {\n  if a.area() > b.area() a else b\n}\n\nability loud {\n  fn shout(self: *self): string\n}\n\nimpl[t: shape] loud for t {\n  fn shout(self: *t): string { \"${self.name()}!\" }\n}"
+      },
+      {
+        "label": "operators are abilities",
+        "kind": "k1",
+        "code": "type vec2 = { x: f64, y: f64 }\n\nimpl add for vec2 {\n  fn add(self: vec2, rhs: vec2): vec2 { .{ x = self.x + rhs.x, y = self.y + rhs.y } }\n}"
+      },
+      {
+        "label": "use",
+        "kind": "k1",
+        "code": "  let v = vec2.{ x = 1.0, y = 2.0 } + vec2.{ x = 0.5, y = 0.25 }\n  println(\"${v.x} ${v.y}\")"
+      },
+      {
+        "label": "output",
+        "kind": "text",
+        "code": "1.5 2.25"
+      }
+    ]
+  },
+  {
+    "title": "Types from a .proto file",
+    "section": "08-types",
+    "blurb": "A .proto file is read at compile time, parsed by ordinary k1 running in the compile-time VM, and turned into a struct and an enum with types/make-struct and types/make-either. The subset is small, one message of scalar and enum fields and one enum, and the result is a real k1 type: exhaustive matching, layout, everything.",
+    "blocks": [
+      {
+        "label": "user.proto",
+        "kind": "proto",
+        "code": "syntax = \"proto3\";\n\nenum Status {\n  ACTIVE = 0;\n  SUSPENDED = 1;\n  DELETED = 2;\n}\n\nmessage User {\n  uint64 id = 1;\n  string name = 2;\n  double score = 3;\n  Status status = 4;\n}"
+      },
+      {
+        "label": "derive",
+        "kind": "k1",
+        "code": "type(alias) status = #type proto/enum(\"user.proto\", \"Status\")\ntype(alias) user = #type proto/message(\"user.proto\", \"User\")"
+      },
+      {
+        "label": "use",
+        "kind": "k1",
+        "code": "  let u: user = .{ id = 7, name = \"ada\", score = 99.5, status = :suspended }\n  println(\"${u.id} ${u.name} ${u.score} ${u.status.enum-name()}=${u.status.value} ${label(u.status)}\")\n  println(\"size ${types/size[user]} status ${types/size[status]}\")"
+      },
+      {
+        "label": "output",
+        "kind": "text",
+        "code": "7 ada 99.5 suspended=1 on hold\nsize 36 status 4"
+      }
+    ]
+  },
+  {
+    "title": "A keyword recognizer, generated",
+    "section": "07-generators",
+    "blurb": "gperf as a macro. Hand it the words and it searches for a perfect hash over character positions, then emits a sum type and a recognizer that is a few loads, a mask and a compare.",
+    "blocks": [
+      {
+        "label": "the words",
+        "kind": "k1",
+        "code": "$keywords/define(tiny, [\"if\", \"in\", \"is\", \"fn\", \"for\"])"
+      },
+      {
+        "label": "lookup",
+        "kind": "k1",
+        "code": "  println(\"${tiny/lookup(\"for\")} ${tiny/lookup(\"fun\")}\")"
+      },
+      {
+        "label": "output",
+        "kind": "text",
+        "code": ":some kw-for :none"
+      },
+      {
+        "label": "what it generated",
+        "kind": "text",
+        "code": "type tiny = either { kw-if, kw-in, kw-is, kw-fn, kw-for }\nns for tiny {\n  fn lookup(s: string): ?tiny {\n    let n = s.len()\n    if n < 2 or n > 3 return :none\n    let kl = s.[n - 1].as-u8().as-size()\n    let k0 = s.[0].as-u8().as-size()\n    let h = (n * 137 + kl * 59 + k0 * 125) & 15\n    if h is {\n      9 -> if s == \"if\" :some :kw-if else :none,\n      1 -> if s == \"in\" :some :kw-in else :none,\n      8 -> if s == \"is\" :some :kw-is else :none,\n      10 -> if s == \"fn\" :some :kw-fn else :none,\n      15 -> if s == \"for\" :some :kw-for else :none,\n      _ -> :none,\n    }\n  }\n  fn lookup-linear(s: string): ?tiny {\n    if s is {\n      \"if\" -> :some :kw-if,\n      \"in\" -> :some :kw-in,\n      \"is\" -> :some :kw-is,\n      \"fn\" -> :some :kw-fn,\n      \"for\" -> :some :kw-for,\n      _ -> :none,\n    }\n  }\n  fn words(): span[string] {\n    [\"if\", \"in\", \"is\", \"fn\", \"for\"]\n  }\n}\n#static {\n  assert(tiny/lookup(\"if\") is :some :kw-if)\n  assert(tiny/lookup(\"in\") is :some :kw-in)\n  assert(tiny/lookup(\"is\") is :some :kw-is)\n  assert(tiny/lookup(\"fn\") is :some :kw-fn)\n  assert(tiny/lookup(\"for\") is :some :kw-for)\n}"
+      }
+    ]
+  },
+  {
+    "title": "A regex engine that runs at compile time",
+    "section": "06-regex",
+    "blurb": "Parser, NFA, DFA and minimization are plain k1 that happens to run in the compiler. A define becomes a matcher whose states are match arms, plus a finder that returns match positions.",
+    "blocks": [
+      {
+        "label": "define",
+        "kind": "k1",
+        "code": "$regex/define(number, \"[0-9]+([.][0-9]+)?\")"
+      },
+      {
+        "label": "match and find",
+        "kind": "k1",
+        "code": "  for s in [\"42\", \"3.14\", \"3.\", \".5\", \"1e5\"] { println(\"number(\\\"$s\\\") = ${number(s)}\") }\n  let rest = \"total: 12.5 units, 3 left\"\n  while number-find(rest) is :some m {\n    println(\"found ${rest.slice(m.start, m.end)}\")\n    rest = rest.drop(m.end)\n  }"
+      },
+      {
+        "label": "output",
+        "kind": "text",
+        "code": "number(\"42\") = true\nnumber(\"3.14\") = true\nnumber(\"3.\") = false\nnumber(\".5\") = false\nnumber(\"1e5\") = false\nfound 12.5\nfound 3"
+      }
+    ]
+  },
+  {
+    "title": "A palette designed in OKLCH, shipped as bytes",
+    "section": "01-static",
+    "blurb": "The colour math runs early. Every swatch is an sRGB triple baked into the binary, and the CSS that names them is a string built at compile time.",
+    "blocks": [
+      {
+        "label": "the math",
+        "kind": "k1",
+        "code": "fn oklch(l: f32, c: f32, h: f32): srgb8 {\n  let rad: f32 = h * DEG-TO-RAD\n  let a: f32 = c * rad.cos()\n  let b: f32 = c * rad.sin()\n  let lp: f32 = l + 0.3963377774 * a + 0.2158037573 * b\n  let mp: f32 = l - 0.1055613458 * a - 0.0638541728 * b\n  let sp: f32 = l - 0.0894841775 * a - 1.2914855480 * b\n  let ll: f32 = lp * lp * lp\n  let mm: f32 = mp * mp * mp\n  let ss: f32 = sp * sp * sp\n  .{\n    r = srgb-from-linear( 4.0767416621 * ll - 3.3077115913 * mm + 0.2309699292 * ss),\n    g = srgb-from-linear(-1.2684380046 * ll + 2.6097574011 * mm - 0.3413193965 * ss),\n    b = srgb-from-linear(-0.0041960863 * ll - 0.7034186147 * mm + 1.7076147010 * ss),\n  }\n}"
+      },
+      {
+        "label": "the palette",
+        "kind": "k1",
+        "code": "let UI-HUE: f32 = 267.0\n\nlet BG: srgb8     = oklch(0.209, 0.0104, UI-HUE)\nlet PANEL: srgb8  = oklch(0.252, 0.0140, UI-HUE)\nlet HILITE: srgb8 = oklch(0.309, 0.0210, UI-HUE)\nlet EDGE: srgb8   = oklch(0.375, 0.0253, UI-HUE)\nlet GRAY: srgb8   = oklch(0.657, 0.0279, UI-HUE)\nlet FG: srgb8     = oklch(0.942, 0.0075, UI-HUE)\nlet BLUE: srgb8   = oklch(0.714, 0.1351, 264.5)\nlet GREEN: srgb8  = oklch(0.792, 0.1385, 130.3)\nlet ORANGE: srgb8 = oklch(0.782, 0.1063, 74.8)"
+      },
+      {
+        "label": "the CSS",
+        "kind": "k1",
+        "code": "let CSS: string = {\n  let sb = string-builder/new()\n  sb.writeln(\":root {\")\n  for SWATCHES { sb.writeln(\"  --${it.name}: ${hex(it.color)};\") }\n  sb.writeln(\"}\")\n  sb.build()\n}"
+      },
+      {
+        "label": "output",
+        "kind": "text",
+        "code": ":root {\n  --bg: #16181d;\n  --panel: #1f2229;\n  --hilite: #2b303b;\n  --edge: #3b414f;\n  --gray: #8a91a3;\n  --fg: #e9ecf1;\n  --blue: #78a0f7;\n  --green: #9dcd6a;\n  --orange: #e0ae67;\n}"
+      }
+    ]
+  },
+  {
+    "title": "Painless SIMD",
+    "section": "10-systems",
+    "blurb": "A macro generates a lane-wide scanner for a set of delimiters, the scan loop uses it like any function, and the same code runs under #static in the compile-time VM.",
+    "blocks": [
+      {
+        "label": "generate the scanner",
+        "kind": "k1",
+        "code": "$std/simd/first-of(delims, [',', ':', '\"'])"
+      },
+      {
+        "label": "use it",
+        "kind": "k1",
+        "code": "fn scan-all-simd(text: string): u64 {\n  let found: u64 = 0\n  let from: size = 0\n  loop {\n    let hit = delims/scan(text.span-bytes(), from)\n    if hit.index < 0 break\n    found = found + 1\n    from = hit.index + 1\n  }\n  found\n}"
+      },
+      {
+        "label": "at compile time too",
+        "kind": "k1",
+        "code": "  let static-hits: 4u64 = #static scan-all-simd(\"{\\\"key\\\": [1, 2]}\")\n  println(\"compile-time scan found ${static-hits.from-static()} delimiters\")"
+      },
+      {
+        "label": "output",
+        "kind": "text",
+        "code": "compile-time scan found 4 delimiters\nsimd width: 16 bytes; buffer: 8 MB\nscalar scan: 145794 found, 208 MB/s\nfirst-of scan: 145794 found, 1342 MB/s\nscalar count ',': 137380 found, 465 MB/s\nvector count ',': 137380 found, 3902 MB/s"
+      }
+    ]
+  },
+  {
+    "title": "C at compile time",
+    "section": "03-comptime-ffi",
+    "blurb": "Declare a C function and the compile-time VM can call it through libffi, so a build stamp is ordinary code run early.",
+    "blocks": [
+      {
+        "label": "declare",
+        "kind": "k1",
+        "code": "fn(extern(\"gethostname\")) gethostname(name: ptr, len: size): i32\nfn(extern(\"getpid\")) getpid(): i32\nfn(extern(\"time\")) c-time(tloc: ptr): i64\nfn(extern(\"localtime\")) localtime(t: *i64): ptr\nfn(extern(\"strftime\")) strftime(s: ptr, max: size, format: *u8, tm: ptr): size"
+      },
+      {
+        "label": "call them while compiling",
+        "kind": "k1",
+        "code": "let BUILD_HOST: string = hostname()\nlet BUILD_USER: string = env-or(\"USER\", \"nobody\")\nlet BUILD_TIME: string = local-time-string()\nlet BUILD_PID: i32 = getpid()\n\nfn main(): i32 {\n  println(\"built by $BUILD_USER@$BUILD_HOST at $BUILD_TIME\")\n  println(\"compiler pid $BUILD_PID, runtime pid ${getpid()}\")\n  0\n}"
+      },
+      {
+        "label": "output",
+        "kind": "text",
+        "code": "$ k1 run cffi_build_stamp.k1\nbuilt by knix@knix.local at 2026-09-17 17:04:16 EDT\ncompiler pid 3439, runtime pid 3446\n$ ./.k1-out/cffi_build_stamp\nbuilt by knix@knix.local at 2026-09-17 17:04:16 EDT\ncompiler pid 3439, runtime pid 3449\n$ ./.k1-out/cffi_build_stamp\nbuilt by knix@knix.local at 2026-09-17 17:04:16 EDT\ncompiler pid 3439, runtime pid 3450"
+      }
+    ]
+  },
+  {
+    "title": "dbx: SQLite in the k1 fold",
+    "placeholder": "Case study in progress. dbx pulls SQLite into the k1 fold at compile time: the dependency, the bindings and the schema, so tables become k1 types before the program runs."
+  }
+]

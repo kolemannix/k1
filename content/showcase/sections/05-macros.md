@@ -4,7 +4,7 @@ A `macro` is a compile-time function. A `code` parameter gets the caller's
 argument unevaluated: its source text and the span it came from. Any other
 parameter is evaluated at compile time into an ordinary value. The macro
 returns `code`, which is compiled in place of the call. Macro bodies run in
-the same VM as `#static`, in plain K1: lists, string builders, pattern
+the same VM as `#static`, in plain k1: lists, string builders, pattern
 matching and reflection all work.
 
 ## Arguments are code, parameters can be values
@@ -92,38 +92,39 @@ unrolled 2
 unrolled 3
 ```
 
-`\expr` quotes into a `code` value: a chunk of text plus its source span.
+`\expr` quotes into a `code` value: its text plus the source spans it came
+from.
 
 ```k1
   let c = \next() * 2
-  println("chunk: `${c.chunks.[0].text}` sourced=${c.chunks.[0].source != 0}")
+  println("code: `${c.text}` spans=${c.spans.len()} sourced=${c.spans.[0].source != 0}")
 ```
 
 ```text
-chunk: `next() * 2` sourced=true
+code: `next() * 2` spans=1 sourced=true
 ```
 
 A string literal in `code` position gets its own span, and a `$c` hole keeps
-`c`'s chunks as they are:
+`c`'s spans as they are:
 
 ```k1
   let wrapped: code = "let y = $c"
-  println("${wrapped.text()} in ${wrapped.chunks.len()} chunks")
+  println("${wrapped.text} with ${wrapped.spans.len()} spans")
 ```
 
 ```text
-let y = next() * 2 in 2 chunks
+let y = next() * 2 with 2 spans
 ```
 
-Only `.text()` flattens chunks into a string, so spans survive every step
-until the compiler consumes the result.
+`.text` is the flat string; the spans survive every step until the compiler
+consumes the result.
 
 ## Token macros: typechecked embedded HTML+k1 templating
 
-`code` arguments must parse as K1. `\{ ... }` only has to lex: a
+`code` arguments must parse as k1. `\{ ... }` only has to lex: a
 `span[code-token]` parameter gets the balanced group as tokens, each with its
 own span. `std/html` is a template language built on that, in a few hundred
-lines of K1:
+lines of k1:
 
 ```k1
 fn todo-item[w: writer](context out: w)(t: todo) {
@@ -137,7 +138,7 @@ fn todo-item[w: writer](context out: w)(t: todo) {
 
 Tags and text fold into constant writes at compile time. Holes like
 `{t.title}` are spliced back as `code`, typechecked in place, and HTML-escaped
-as they're written. `#for`, `#if` and `#{ ... }` drop into K1. `render` binds its builder as a
+as they're written. `#for`, `#if` and `#{ ... }` drop into k1. `render` binds its builder as a
 `writer` context, so a component is just a function writing into that context:
 
 ```k1
@@ -298,13 +299,14 @@ Both directions come from the one row, and the test round-trips them:
 ```k1 path=test_src/http_test/http_test.k1
   let g = route:grade-rate .{ who = "a b", plan-id = -3, item-id = 9, note = :some "x&y=1+z" }
   assert-equals(g.show(), "/cmd/grade-rate/a%20b?plan-id=-3&item-id=9&note=x%26y%3D1%2Bz")
-  assert(route/parse(:GET, g.show()) is :ok :grade-rate r and r.who == "a b" and r.plan-id == -3 and r.item-id == 9 and r.note is :some nt and nt == "x&y=1+z")
-  assert(route/parse(:GET, "/cmd/grade-rate/x?zz=1&note=a+b&item-id=2&&plan-id=1") is :ok :grade-rate r2 and r2.note is :some nn and nn == "a b")
-  assert(route/parse(:GET, "/cmd/grade-rate/x?item-id=2&plan-id=1") is :ok :grade-rate r3 and r3.note is :none)
+  assert-equals((route:grade-rate .{ who = "a/b", plan-id = 1, item-id = 2, note = :some "x y" }).show(), "/cmd/grade-rate/a%2Fb?plan-id=1&item-id=2&note=x+y")
+  assert(route-of(:GET, g.show()) is :ok :grade-rate r and r.who == "a b" and r.plan-id == -3 and r.item-id == 9 and r.note is :some nt and nt == "x&y=1+z")
+  assert(route-of(:GET, "/cmd/grade-rate/x?zz=1&note=a+b&item-id=2&&plan-id=1") is :ok :grade-rate r2 and r2.note is :some nn and nn == "a b")
+  assert(route-of(:GET, "/cmd/grade-rate/x?item-id=2&plan-id=1") is :ok :grade-rate r3 and r3.note is :none)
   assert-equals((route:grade-rate .{ who = "x", plan-id = 1, item-id = 2, note = :none }).show(), "/cmd/grade-rate/x?plan-id=1&item-id=2")
-  assert(route/parse(:GET, "/cmd/grade-rate/x?plan-id=1") is :err :missing-param m and m.name == "item-id")
-  assert(route/parse(:GET, "/cmd/grade-rate/x?plan-id=one&item-id=2") is :err :bad-param b and b.got == "one")
-  assert(route/parse(:GET, "/cmd/grade-rate/x?plan-id=1&item-id=2&plan-id=1") is :err :bad-param b2 and b2.name == "plan-id")
+  assert(route-of(:GET, "/cmd/grade-rate/x?plan-id=1") is :err :missing-param m and m.name == "item-id")
+  assert(route-of(:GET, "/cmd/grade-rate/x?plan-id=one&item-id=2") is :err :bad-param b and b.got == "one")
+  assert(route-of(:GET, "/cmd/grade-rate/x?plan-id=1&item-id=2&plan-id=1") is :err :bad-param b2 and b2.name == "plan-id")
 ```
 
 ## Errors point at your source, not the expansion
@@ -387,8 +389,8 @@ turns a transition table into two enums, a `step` method, and a `#static`
 test of the generated code:
 
 ```k1
-$pre/fsm/define(door, {
-  use pre/fsm/on
+$fsm/define(door, {
+  use fsm/on
   [
     on("closed", "open",   "opened"),
     on("opened", "close",  "closed"),
@@ -424,11 +426,9 @@ opened --close--> closed
 ```
 
 The table is a `span[transition]`, so that block is just evaluated at compile
-time. The emitter lives in `pre`, which compiles before the rest of the module:
+time. The emitter:
 
 ```k1
-ns pre { ns fsm {
-
 type transition = { from: string, event: string, to: string }
 
 fn on(from: string, event: string, to: string): transition { .{ from, event, to } }
@@ -470,7 +470,7 @@ fn define-impl(name: string, table: span[transition]): code {
 }
 
 macro define(name: code, table: span[transition]) {
-  define-impl(name.text(), table)
+  define-impl(name.text, table)
 }
 ```
 
@@ -504,8 +504,8 @@ An emitter bug fails the build, not a test. Drop the `unlock` row and
 `locked` becomes a dead end:
 
 ```k1
-$pre/fsm/define(door, {
-  use pre/fsm/on
+$fsm/define(door, {
+  use fsm/on
   [
     on("closed", "open",  "opened"),
     on("opened", "close", "closed"),
@@ -516,7 +516,7 @@ $pre/fsm/define(door, {
 
 ```text
 ┌────────────────────────────────────────╴
-/Users/knix/dev/k1/content/showcase/examples/macro_state_machine_wrong.k1:37:17: error
+/Users/knix/dev/k1/content/showcase/examples/macro_state_machine_wrong.k1:39:17: error
 ├─────
 │     for s in n.states {
 │       let exits = false
@@ -528,11 +528,11 @@ $pre/fsm/define(door, {
 ├─────
 │  fsm `door`: state `locked` has no outgoing transition
 bc Execution Trace
-[00] core/platform/process/exit platform.k1:201
-[01] core/sys/exit builtin.k1:964
-[02] core/crash builtin.k1:1171
-[03] macro_state_machine_wrong/pre/fsm/define-impl macro_state_machine_wrong.k1:37
-[04] macro_state_machine_wrong/pre/fsm/define macro_state_machine_wrong.k1:64
+[00] core/platform/process/exit platform.k1:286
+[01] core/sys/exit builtin.k1:981
+[02] core/crash builtin.k1:1189
+[03] macro_state_machine_wrong/pre/fsm/define-impl macro_state_machine_wrong.k1:39
+[04] macro_state_machine_wrong/pre/fsm/define macro_state_machine_wrong.k1:66
 
 └────────────────────────────────────────╴
 Module macro_state_machine_wrong failed compiling with 1 errors
@@ -573,7 +573,7 @@ compile-time `span[{ name: string, bits: size }]`:
 
 ```k1 path=modules/std/bitfield.k1
 macro define[int-type](type-name: code, members: span[{ name: string, bits: size}]) {
-  code/from-string(define-impl(types/id[int-type](), type-name.text(), members))
+  code/from-string(define-impl(types/id[int-type](), type-name.text, members))
 }
 macro b1(name: code) { `.{ name = "$name", bits = 1 }` }
 macro b8(name: code) { `bn("$name", 8)` }
