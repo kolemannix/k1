@@ -18,10 +18,10 @@ ZIG_GLOBAL=$HERE/gen/zig-global
 ZIG_GLOBAL_COLD=$HERE/gen/zig-global-cold
 ZIG_LOCAL=$HERE/gen/zig-local
 ZIG="zig build-exe --cache-dir $ZIG_LOCAL"
-BRO_INC="-I$REPO/modules/cbrotli/vendor/enc -I$REPO/modules/cbrotli/vendor/include"
+BRO_INC="-I$REPO/examples/brotli_parity/deps/cbrotli/vendor/enc -I$REPO/examples/brotli_parity/deps/cbrotli/vendor/include"
 BRO_SRC=""
 for f in compress_fragment.c compress_fragment_two_pass.c encode.c fast_log.c; do
-  BRO_SRC="$BRO_SRC $REPO/examples/brotli/vendor/$f"
+  BRO_SRC="$BRO_SRC $REPO/modules/brotli/vendor/$f"
 done
 
 {
@@ -160,7 +160,7 @@ for mode in $MODES; do
 done
 
 for mode in $MODES; do
-  hf "brotli-k1-$mode" true "k1 --no-cache $(k1mode "$mode") $REPO/examples/brotli"
+  hf "brotli-k1-$mode" true "k1 --no-cache $(k1mode "$mode") $REPO/examples/brotli_parity"
 done
 (
   cd gen/brotli-c
@@ -170,7 +170,7 @@ done
   done
 )
 last=${MODES##* }
-k1 --no-cache --chatty $(k1mode "$last") "$REPO/examples/brotli" 2> "$RES/k1-chatty-brotli-$last.txt" > /dev/null
+k1 --no-cache --chatty $(k1mode "$last") "$REPO/examples/brotli_parity" 2> "$RES/k1-chatty-brotli-$last.txt" > /dev/null
 for f in $BRO_SRC; do clang -M $BRO_INC "$f"; done | tr ' \\' '\n\n' | grep -E '\.(h|c)$' | sed "s|^$REPO/||" | grep -v '^/' | sort -u > "$RES/brotli-c-inputs.txt"
 
 echo "load-end: $(uptime | sed 's/.*load averages: //')" >> "$RES/versions.txt"

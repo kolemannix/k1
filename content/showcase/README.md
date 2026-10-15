@@ -50,8 +50,8 @@ from those, in the site's theme; the site inlines them above each results page.
 - [Compile-time execution](benchmarks/comptime/results.md): sieve, CRC32,
   formatting, and generated JSON serializers, against other languages'
   compile-time evaluators. Timeouts and failures stay in the graph.
-- [Brotli](benchmarks/brotli/results.md): k1 quality 0/1 encoders against the
-  C encoder in one process, byte-identical output.
+- [Brotli](benchmarks/brotli/results.md): the k1 encoder (`modules/brotli`, quality 0 to 11)
+  against the C encoder in one process, byte-identical output.
   ([earlier investigation](benchmarks/brotli.md))
 - [Integer to string](benchmarks/int-strings/): Daniel Lemire's
   strings-per-second loop against clang's `std::to_string`; the journey from the

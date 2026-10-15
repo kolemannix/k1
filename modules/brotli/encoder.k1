@@ -214,6 +214,11 @@ ns for encoder {
 
   fn new(): *encoder { new-in(mem/current-arena(), 0, 18) }
 
+  fn release(self: *encoder) {
+    self.heap.release()
+    self.scratch.release()
+  }
+
   fn reset(self: *encoder) {
     let header = encode-window-bits(if self.params.quality <= 1 self.params.lgwin.max(18) else self.params.lgwin)
     self.last-bytes = header.last-bytes

@@ -8,7 +8,7 @@
 // 0    4
 type fixlist[t, n: static size] = { data: array[t, n], used: u32 }
 ns for fixlist {
-  fn(inline) cap[t, n](_self: *fixlist[t, n]): size { core/meta/static-type-to-value[_, n]() }
+  fn(inline) cap[t, n: static size](_self: *fixlist[t, n]): size { n }
   fn(inline) len[t, n](self: *fixlist[t, n]): size { self.used.as-size() }
 
   fn zeroed[t, n](): fixlist[t, n] { .0 }

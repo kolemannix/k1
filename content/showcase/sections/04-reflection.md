@@ -294,13 +294,12 @@ type person = {
   }
 ```
 
-It is a compile-time value, and `#static(colors)` hands it back to
-compile-time code:
+It is a compile-time value, and compile-time code reads it directly:
 
 ```k1
   let colors = #static enums/names[color]
-  #static(colors) assert-equals(colors.len(), 3)
-  let first: "red" = #static(colors) colors.[0]
+  #static assert-equals(colors.len(), 3)
+  let first: "red" = #static colors.[0]
   println("$colors ${enums/names[level]} ${first.from-static()}")
 ```
 

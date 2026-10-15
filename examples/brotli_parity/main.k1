@@ -10,22 +10,32 @@ fn c-out-capacity(input-len: size): size {
 
 type run = { quality: size, lgwin: size }
 
-fn c-compress-into(input: span[u8], r: run, out: buffer[u8]): size {
+fn c-new-encoder(r: run): ptr {
   let st = cbrotli/encoder-create-instance(ptr/null, ptr/null, ptr/null)
-  defer cbrotli/encoder-destroy-instance(st)
   cbrotli/encoder-set-parameter(st, :quality, r.quality.unsigned().trunc[u32])
   cbrotli/encoder-set-parameter(st, :lgwin, r.lgwin.unsigned().trunc[u32])
+  st
+}
 
+fn c-stream(st: ptr, op: cbrotli/encoder-op, input: span[u8], out: buffer[u8], out-pos: *size) {
   let avail-in: size = input.len()
   let next-in: ptr = input.data-ptr()
-  let avail-out: size = out.len()
-  let next-out: ptr = out.data-ptr()
+  let avail-out: size = out.len() - out-pos.*
+  let next-out: ptr = out.data-ptr().add-bytes(out-pos.*)
   let total-out: size = 0
   let ok = cbrotli/encoder-compress-stream(
-    st, :finish, avail-in.&, next-in.&, avail-out.&, next-out.&, total-out.&)
+    st, op, avail-in.&, next-in.&, avail-out.&, next-out.&, total-out.&)
   if ok == 0 crash("BrotliEncoderCompressStream failed")
   if avail-in != 0 crash("C encoder did not consume all input")
-  out.len() - avail-out
+  out-pos.* = out.len() - avail-out
+}
+
+fn c-compress-into(input: span[u8], r: run, out: buffer[u8]): size {
+  let st = c-new-encoder(r)
+  defer cbrotli/encoder-destroy-instance(st)
+  let out-pos: size = 0
+  c-stream(st, :finish, input, out, out-pos.&)
+  out-pos
 }
 
 fn c-compress(input: span[u8], r: run): span[u8] {
@@ -34,8 +44,15 @@ fn c-compress(input: span[u8], r: run): span[u8] {
 }
 
 fn check-round-trip(name: string, input: span[u8], encoded: span[u8]) {
-  let decoded = cbrotli/decompress(encoded, input.len())
-  assert-equals(decoded.len(), input.len())
+  let mark = mem/current-arena().mark()
+  defer mem/current-arena().pop-to-mark(mark)
+  let decoded = if brotli/decompress(encoded) is {
+    :ok(b) -> b,
+    :err(e) -> crash("$name: decode failed: $e")
+  }
+  if decoded.len() != input.len() {
+    crash("$name: decoded ${decoded.len()} bytes, expected ${input.len()}")
+  }
   let i: size = 0
   while i < input.len() {
     if decoded.index-unchecked(i).* != input.[i] {
@@ -48,10 +65,11 @@ fn check-round-trip(name: string, input: span[u8], encoded: span[u8]) {
 fn check-input(name: string, input: span[u8], r: run) {
   let c-out = c-compress(input, r)
 
-  let e = encoder/new-in(mem/current-arena(), r.quality, r.lgwin)
+  let e = brotli/encoder/new-in(mem/current-arena(), r.quality, r.lgwin)
   let k1-out: list[u8] = list/empty()
   e.compress(input, k1-out.&)
 
+  check-round-trip(name, input, c-out)
   check-round-trip(name, input, k1-out.as-span())
 
   if k1-out.len() != c-out.len() {
@@ -68,18 +86,38 @@ fn check-input(name: string, input: span[u8], r: run) {
 }
 
 fn check-streaming(name: string, input: span[u8], r: run, chunk-size: size) {
-  let e = encoder/new-in(mem/current-arena(), r.quality, r.lgwin)
+  let chunks = input.len() / chunk-size + 1
+  let st = c-new-encoder(r)
+  defer cbrotli/encoder-destroy-instance(st)
+  let c-out = buffer/allocate[u8](c-out-capacity(input.len()) + 16 * chunks)
+  let c-pos: size = 0
+
+  let e = brotli/encoder/new-in(mem/current-arena(), r.quality, r.lgwin)
   let out: list[u8] = list/empty()
   let pos: size = 0
   while pos < input.len() {
     let n = chunk-size.min(input.len() - pos)
-    e.process(input.slice(pos, pos + n), out.&)
+    let chunk = input.slice(pos, pos + n)
+    e.process(chunk, out.&)
     e.flush(out.&)
+    c-stream(st, :flush, chunk, c-out, c-pos.&)
     pos = pos + n
   }
   e.finish(out.&)
+  c-stream(st, :finish, span/empty(), c-out, c-pos.&)
   check-round-trip(name, input, out.as-span())
-  println("$name q${r.quality} w${r.lgwin}: streaming ${input.len()} -> ${out.len()} bytes, round-trips")
+
+  if out.len() != c-pos {
+    crash("$name: streaming k1 ${out.len()} bytes != c $c-pos bytes")
+  }
+  let i: size = 0
+  while i < c-pos {
+    if out.[i] != c-out.[i] {
+      crash("$name: streaming byte $i differs: k1 ${out.[i]} c ${c-out.[i]}")
+    }
+    i = i + 1
+  }
+  println("$name q${r.quality} w${r.lgwin}: streaming ${input.len()} -> ${out.len()} bytes in $chunks chunks, byte-identical to C")
 }
 
 fn make-corpora(): list[{ name: string, data: span[u8] }] {
@@ -134,7 +172,7 @@ fn bench-one(name: string, input: span[u8], r: run) {
   use std/time
 
   let cap = c-out-capacity(input.len())
-  let e = encoder/new-in(mem/current-arena(), r.quality, r.lgwin)
+  let e = brotli/encoder/new-in(mem/current-arena(), r.quality, r.lgwin)
   let k1-out: list[u8] = list/with-capacity(cap)
   let c-out = buffer/allocate[u8](cap)
 
@@ -148,9 +186,11 @@ fn bench-one(name: string, input: span[u8], r: run) {
 
   let k1-times: list[u64] = list/empty()
   let c-times: list[u64] = list/empty()
+  let decode-times: list[u64] = list/empty()
   for 0.until(ROUNDS) {
     let k1-nanos: u64 = 0
     let c-nanos: u64 = 0
+    let decode-nanos: u64 = 0
     for 0.until(reps) {
       let k1-start = time/read-cpu-counter()
       e.reset()
@@ -158,12 +198,19 @@ fn bench-one(name: string, input: span[u8], r: run) {
       e.compress(input, k1-out.&)
       let c-start = time/read-cpu-counter()
       c-compress-into(input, r, c-out)
+      let decode-start = time/read-cpu-counter()
+      let mark = mem/current-arena().mark()
+      let decoded = brotli/decompress(k1-out.as-span()).!
       let end = time/read-cpu-counter()
+      assert-equals(decoded.len(), input.len())
+      mem/current-arena().pop-to-mark(mark)
       k1-nanos = k1-nanos + time/counter-to-nanos(c-start - k1-start)
-      c-nanos = c-nanos + time/counter-to-nanos(end - c-start)
+      c-nanos = c-nanos + time/counter-to-nanos(decode-start - c-start)
+      decode-nanos = decode-nanos + time/counter-to-nanos(end - decode-start)
     }
     k1-times.push(k1-nanos)
     c-times.push(c-nanos)
+    decode-times.push(decode-nanos)
   }
 
   let round-bytes = input.len() * reps
@@ -174,6 +221,8 @@ fn bench-one(name: string, input: span[u8], r: run) {
   write-mbps(sb.&, "c", c-times.&, round-bytes)
   sb.write(", ratio ")
   (c-times.[c-times.len() / 2].as[f64] / k1-times.[k1-times.len() / 2].as[f64]).format(sb.&, 3)
+  sb.write(", ")
+  write-mbps(sb.&, "k1 decode", decode-times.&, round-bytes)
   sb.write(", ${input.len()} -> $k1-bytes bytes, $reps reps x $ROUNDS rounds")
   println(sb.&.build())
 }
@@ -204,6 +253,7 @@ fn main(argc: u32, argv: ptr): i32 {
     }
     for c in corpora {
       if c.data.non-empty() {
+        check-streaming("${c.name}/333b-chunks", c.data, r, 333)
         check-streaming("${c.name}/64k-chunks", c.data, r, 1 << 16)
       }
     }

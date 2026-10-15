@@ -8,7 +8,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use k1::compiler::{
-    Command, CompileProgramError, CompileRequest, LspCompileOptions, Target, compile_program,
+    Command, CompileProgramError, CompileRequest, HostProgramMode, LspCompileOptions, Target,
+    compile_program,
 };
 use k1::lex::{self, Span};
 use k1::lsp_support::NameKind;
@@ -19,83 +20,33 @@ use k1::typer::*;
 use tower_lsp::jsonrpc::{Error, Result};
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
-const TOKEN_TYPES: [SemanticTokenType; 22] = [
-    SemanticTokenType::NAMESPACE,
+/// Order must match parse::SemanticTokenKind, which indexes this legend
+/// directly (`kind as u32`).
+const TOKEN_TYPES: [SemanticTokenType; 10] = [
     SemanticTokenType::TYPE,
-    SemanticTokenType::CLASS,
-    SemanticTokenType::ENUM,
-    SemanticTokenType::INTERFACE,
-    SemanticTokenType::STRUCT,
-    SemanticTokenType::TYPE_PARAMETER,
-    SemanticTokenType::PARAMETER,
     SemanticTokenType::VARIABLE,
     SemanticTokenType::PROPERTY,
     SemanticTokenType::ENUM_MEMBER,
-    SemanticTokenType::EVENT,
-    SemanticTokenType::FUNCTION,
-    SemanticTokenType::METHOD,
-    SemanticTokenType::MACRO,
-    SemanticTokenType::KEYWORD,
-    SemanticTokenType::MODIFIER,
-    SemanticTokenType::COMMENT,
     SemanticTokenType::STRING,
-    SemanticTokenType::NUMBER,
-    SemanticTokenType::REGEXP,
+    SemanticTokenType::KEYWORD,
+    SemanticTokenType::FUNCTION,
+    SemanticTokenType::NAMESPACE,
     SemanticTokenType::OPERATOR,
+    SemanticTokenType::COMMENT,
 ];
-#[repr(u32)]
-#[allow(unused)]
-enum TokenTypes {
-    Namespace = 0,
-    Type = 1,
-    Class = 2,
-    Enum = 3,
-    Interface = 4,
-    Struct = 5,
-    TypeParameter = 6,
-    Parameter = 7,
-    Variable = 8,
-    Property = 9,
-    EnumMember = 10,
-    Event = 11,
-    Function = 12,
-    Method = 13,
-    Macro = 14,
-    Keyword = 15,
-    Modifier = 16,
-    Comment = 17,
-    String = 18,
-    Number = 19,
-    Regexp = 20,
-    Operator = 21,
-}
 
+/// Order must match parse::SemanticToken's bit assignments.
 const TOKEN_MODIFIERS: [SemanticTokenModifier; 6] = [
     SemanticTokenModifier::DECLARATION,
     SemanticTokenModifier::DEFINITION,
     SemanticTokenModifier::READONLY,
     SemanticTokenModifier::STATIC,
     SemanticTokenModifier::MODIFICATION,
-    // Custom: code that runs at compile time ($, #meta, #static exprs).
-    // Legend order must match parse::SemanticToken's bit assignments.
+    // Custom: code that runs at compile time ($, #meta, #static exprs)
     SemanticTokenModifier::new("comptime"),
 ];
-#[allow(unused)]
-#[repr(u32)]
-enum TokenModifiers {
-    Declaration = 1 << 0, // nothing
-    Definition = 1 << 1,  // nothing
-    Readonly = 1 << 2,    // orange
-    Static = 1 << 3,      // nothing
-    Deprecated = 1 << 4,  // strikethrough
-    Abstract = 1 << 5,    // nothing
-    Async = 1 << 6,
-    Modification = 1 << 7,
-    Documentation = 1 << 8,
-    DefaultLibrary = 1 << 9,
-}
 
 fn span_to_range_in_ast(ast: &ParsedProgram, span: Span) -> Option<Range> {
     let source = ast.sources.source_by_span(span);
@@ -110,11 +61,6 @@ fn span_to_range_in_ast(ast: &ParsedProgram, span: Span) -> Option<Range> {
             character: source.local_from_global_offset(span.end()) - end_line.start_char,
         },
     })
-}
-
-fn span_id_to_range(k1: &TypedProgram, span_id: Span) -> Option<Range> {
-    let span = span_id;
-    span_to_range(k1, span)
 }
 
 fn span_to_range(k1: &TypedProgram, span: Span) -> Option<Range> {
@@ -137,26 +83,11 @@ fn error_to_diagnostic(
         MessageLevel::Info => DiagnosticSeverity::INFORMATION,
         MessageLevel::Hint => DiagnosticSeverity::HINT,
     };
-    match span_id_to_range(k1, span_id) {
-        None => {
-            error!("Failed span lookup for diagnostic: {}", &message);
-            None
-        }
-        Some(range) => {
-            let diagnostic = Diagnostic {
-                range,
-                severity: Some(severity),
-                code: None,
-                code_description: None,
-                source: None,
-                message,
-                related_information: None,
-                tags: None,
-                data: None,
-            };
-            Some((url, diagnostic))
-        }
-    }
+    let Some(range) = span_to_range(k1, span_id) else {
+        error!("Failed span lookup for diagnostic: {}", &message);
+        return None;
+    };
+    Some((url, Diagnostic { range, severity: Some(severity), message, ..Diagnostic::default() }))
 }
 
 fn source_to_uri(path: impl AsRef<Path>) -> Url {
@@ -178,6 +109,21 @@ fn uri_to_source<'ast>(ast: &'ast ParsedProgram, url: &Url) -> Option<&'ast Sour
         path == Path::new(source_path)
     });
     source.map(|s| s.1)
+}
+
+fn get_program_for_url<'k1>(k1: &'k1 mut TypedProgram, url: &Url) -> &'k1 mut TypedProgram {
+    let is_build_file =
+        Path::new(url.path()).file_name().is_some_and(|name| name == k1::plan::BUILD_FILE_NAME);
+    if !is_build_file || !matches!(k1.host_program, HostProgram::Built(_)) {
+        return k1;
+    }
+    let HostProgram::Built(host) = &mut k1.host_program else { unreachable!() };
+    host
+}
+
+fn get_host_program_inputs_hash(k1: &TypedProgram) -> Option<k1::snap::InputsHash> {
+    let HostProgram::Built(host) = &k1.host_program else { return None };
+    if host.error_count() == 0 { Some(k1.plan.get_inputs_hash()) } else { None }
 }
 
 fn candidate_to_item(candidate: k1::lsp_support::CompletionCandidate) -> CompletionItem {
@@ -203,10 +149,15 @@ fn candidate_to_item(candidate: k1::lsp_support::CompletionCandidate) -> Complet
     }
 }
 
+struct OpenSource {
+    ast: ParsedProgram,
+    dirty: bool,
+}
+
 struct Backend {
     client: Client,
     module: k1::server::SharedProgram,
-    open_sources: Mutex<HashMap<Url, ParsedProgram>>,
+    open_sources: Mutex<HashMap<Url, OpenSource>>,
     /// Canonical src_path of the program we compile (a module dir or single
     /// file), derived from the files the client opens and saves
     src_path: RwLock<Option<PathBuf>>,
@@ -290,6 +241,35 @@ async fn send_progress_task(
     }
 }
 
+fn collect_program_files_and_errors(
+    k1: &TypedProgram,
+    map: &mut HashMap<Url, Vec<Diagnostic>>,
+    spanless_errors: &mut Vec<String>,
+) {
+    for source in k1.ast.sources.iter() {
+        let path = k1.ast.idents.get_string(source.1.file_path);
+        map.entry(source_to_uri(path)).or_default();
+    }
+    for e in k1.ast.errors.iter() {
+        let message = format!("Parse Error: {}", e.message());
+        if let Some((url, diagnostic)) =
+            error_to_diagnostic(k1, message, MessageLevel::Error, e.span())
+        {
+            map.entry(url).or_default().push(diagnostic);
+        }
+    }
+    for m in k1.messages.borrow().iter() {
+        let message = k1.ident_str(m.message).to_string();
+        if m.span == Span::NONE {
+            if m.level == MessageLevel::Error {
+                spanless_errors.push(message);
+            }
+        } else if let Some((url, diagnostic)) = error_to_diagnostic(k1, message, m.level, m.span) {
+            map.entry(url).or_default().push(diagnostic);
+        }
+    }
+}
+
 impl Backend {
     fn new(client: Client) -> Backend {
         let module: k1::server::SharedProgram = Arc::new(Mutex::new(None));
@@ -341,12 +321,12 @@ impl Backend {
                 let open_sources = self.open_sources.lock().unwrap();
                 open_sources
                     .get(file_url)
-                    .and_then(|ast| content_at_line(ast, ast.sources.get_main()))
+                    .and_then(|open| content_at_line(&open.ast, open.ast.sources.get_main()))
             };
             let content_and_line = match content_and_line {
                 Some(found) => Some(found),
                 None => self
-                    .with_k1(|k1| {
+                    .with_k1_for_url(file_url, |k1| {
                         uri_to_source(&k1.ast, file_url)
                             .and_then(|source| content_at_line(&k1.ast, source))
                     })
@@ -363,12 +343,18 @@ impl Backend {
         let Ok(canonical_path) = k1::kpath::canonicalize_owned(file_url.path()) else {
             return Ok(None);
         };
-        let Some(root_path) = self.target_file_for_url(file_url) else { return Ok(None) };
-
-        let mut source_overrides = fxhash::FxHashMap::default();
-        source_overrides.insert(canonical_path, spliced);
-        let lsp_options =
-            LspCompileOptions { source_overrides, completion: true, progress_sink: None };
+        let mut source_overlay = self.construct_source_overlay();
+        source_overlay.insert(canonical_path, spliced);
+        let Some(root_path) = self.target_file_for_url(file_url, &source_overlay) else {
+            return Ok(None);
+        };
+        let host_inputs_hash = self.with_k1(|k1| get_host_program_inputs_hash(k1)).flatten();
+        let lsp_options = LspCompileOptions {
+            source_overlay,
+            completion: true,
+            progress_sink: None,
+            host_mode: HostProgramMode::Keep { inputs_hash: host_inputs_hash },
+        };
         let setting = self.build_setting.read().unwrap().clone();
 
         let my_generation = self.completion_generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -392,81 +378,70 @@ impl Backend {
     }
 
     fn with_k1<T>(&self, f: impl FnOnce(&mut TypedProgram) -> T) -> Option<T> {
-        let mut m_lock = self.module.lock().unwrap();
-        match &mut *m_lock {
-            None => None,
-            Some(k1) => Some(f(k1)),
-        }
+        self.module.lock().unwrap().as_deref_mut().map(f)
     }
 
-    fn all_file_urls(&self) -> Vec<Url> {
-        self.with_k1(|k1| {
-            k1.ast
-                .sources
-                .iter()
-                .map(|s| source_to_uri(k1.ast.idents.get_string(s.1.file_path)))
-                .collect()
-        })
-        .unwrap_or_default()
+    fn has_program(&self) -> bool {
+        self.module.lock().unwrap().is_some()
     }
 
-    fn list_all_errors(&self) -> Vec<(Url, Diagnostic)> {
-        let errors: Vec<(Url, Diagnostic)> = self
-            .with_k1(|k1| {
-                k1.ast
-                    .errors
-                    .iter()
-                    .filter_map(|e| {
-                        error_to_diagnostic(
-                            k1,
-                            format!("Parse Error: {}", e.message()),
-                            MessageLevel::Error,
-                            e.span(),
-                        )
-                    })
-                    .chain(k1.messages.borrow().iter().filter_map(|e| {
-                        error_to_diagnostic(
-                            k1,
-                            k1.ident_str(e.message).to_string(),
-                            e.level,
-                            e.span,
-                        )
-                    }))
-                    .collect()
-            })
-            .unwrap_or_default();
-        errors
+    fn with_k1_for_url<T>(&self, url: &Url, f: impl FnOnce(&mut TypedProgram) -> T) -> Option<T> {
+        self.with_k1(|k1| f(get_program_for_url(k1, url)))
     }
 
-    fn build_all_files_and_errors_map(&self) -> HashMap<Url, Vec<Diagnostic>> {
-        let all_files = self.all_file_urls();
-        let all_errors = self.list_all_errors();
+    fn make_host_program_mode(&self) -> HostProgramMode {
+        let inputs_hash = self.with_k1(|k1| get_host_program_inputs_hash(k1)).flatten();
+        HostProgramMode::Keep { inputs_hash }
+    }
+
+    fn build_all_files_and_errors_map(&self) -> (HashMap<Url, Vec<Diagnostic>>, Vec<String>) {
         let mut map: HashMap<Url, Vec<Diagnostic>> = HashMap::new();
-        for file in all_files {
-            map.insert(file, vec![]);
-        }
-
-        for (url, diagnostic) in all_errors {
-            map.entry(url).or_default().push(diagnostic);
-        }
-
-        map
+        let mut spanless_errors = vec![];
+        self.with_k1(|k1| {
+            collect_program_files_and_errors(k1, &mut map, &mut spanless_errors);
+            if let HostProgram::Built(host) = &k1.host_program {
+                collect_program_files_and_errors(host, &mut map, &mut spanless_errors);
+            }
+        });
+        (map, spanless_errors)
     }
 
-    fn target_file_for_url(&self, file_url: &Url) -> Option<PathBuf> {
-        let file_path = file_url.to_file_path().ok()?;
-        let in_program =
-            self.with_k1(|k1| uri_to_source(&k1.ast, file_url).is_some()).unwrap_or(false);
+    fn construct_source_overlay(&self) -> fxhash::FxHashMap<String, String> {
+        let open_sources = self.open_sources.lock().unwrap();
+        let mut overlay = fxhash::FxHashMap::default();
+        for (url, open) in open_sources.iter() {
+            // keep clean buffers out of the source overlay, because
+            // only compiles with an empty overlay are eligible for caching
+            if !open.dirty {
+                continue;
+            }
+            let Ok(file_path) = url.to_file_path() else { continue };
+            let Ok(path) = k1::kpath::canonicalize_owned(&file_path) else { continue };
+            let content = open.ast.sources.get_main().content(&open.ast.mem);
+            overlay.insert(path, content.to_string());
+        }
+        overlay
+    }
+
+    fn target_file_for_url(
+        &self,
+        file_url: &Url,
+        overlay: &fxhash::FxHashMap<String, String>,
+    ) -> Option<PathBuf> {
+        let file_path = k1::kpath::canonicalize_owned(file_url.to_file_path().ok()?).ok()?;
+        let in_program = self
+            .with_k1_for_url(file_url, |k1| uri_to_source(&k1.ast, file_url).is_some())
+            .unwrap_or(false);
         if in_program {
             if let Some(stored) = self.src_path.read().unwrap().clone() {
                 return Some(stored);
             }
         }
-        Some(k1::compiler::find_check_target_for_file(&file_path))
+        Some(k1::compiler::find_check_target_for_file(&file_path, overlay))
     }
 
     /// Point the program at `file_url`'s module if it isn't already covered,
-    /// then compile when the target changed, no program exists yet, or
+    /// then compile when the target changed, the file isn't in the program, or
     /// `force_compile` (saves). Publishes diagnostics after compiling.
     async fn ensure_target_and_compile(&self, file_url: &Url, force_compile: bool) {
         let my_generation = self.retarget_generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -475,7 +450,8 @@ impl Backend {
             // A newer open/save superseded this one while we waited
             return;
         }
-        let Some(target) = self.target_file_for_url(file_url) else {
+        let source_overlay = self.construct_source_overlay();
+        let Some(target) = self.target_file_for_url(file_url, &source_overlay) else {
             return;
         };
         let changed = {
@@ -484,20 +460,22 @@ impl Backend {
             *src_path = Some(target);
             changed
         };
-        let no_program = self.with_k1(|_| ()).is_none();
-        if !(changed || no_program || force_compile) {
+        let in_program = self
+            .with_k1_for_url(file_url, |k1| uri_to_source(&k1.ast, file_url).is_some())
+            .unwrap_or(false);
+        if !changed && in_program && !force_compile {
             return;
         }
-        self.compile().await;
+        self.compile(source_overlay).await;
         self.send_diagnostics().await;
     }
 
-    async fn compile(&self) -> u32 {
+    async fn compile(&self, source_overlay: fxhash::FxHashMap<String, String>) {
         let iteration_number = self.compile_iteration.load(Ordering::Relaxed);
         let src_path = self.src_path.read().unwrap().clone();
         let Some(src_path) = src_path else {
             info!("compile {}: no target yet", iteration_number);
-            return iteration_number;
+            return;
         };
         info!("compiling version {} target {}", iteration_number, src_path.display());
         let compile_start = std::time::Instant::now();
@@ -515,12 +493,33 @@ impl Backend {
         } else {
             None
         };
-        let lsp_options = LspCompileOptions { progress_sink, ..LspCompileOptions::default() };
+        let host_program_mode = self.make_host_program_mode();
+        let lsp_options = LspCompileOptions {
+            source_overlay,
+            progress_sink,
+            completion: false,
+            host_mode: host_program_mode,
+        };
         let setting = self.build_setting.read().unwrap().clone();
-        let compile_result =
-            tokio::task::spawn_blocking(move || compile_check(src_path, &setting, lsp_options))
-                .await
-                .expect("check compile panicked");
+        let compile_result = match tokio::task::spawn_blocking(move || {
+            compile_check(src_path, &setting, lsp_options)
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(join_error) => {
+                let message = match join_error.try_into_panic() {
+                    Ok(payload) => match payload.downcast::<String>() {
+                        Ok(message) => *message,
+                        Err(payload) => {
+                            payload.downcast_ref::<&str>().copied().unwrap_or("").to_string()
+                        }
+                    },
+                    Err(join_error) => join_error.to_string(),
+                };
+                Err(CompileProgramError::Build(format!("k1 compiler panicked: {message}")))
+            }
+        };
         let mut compiled_module = match compile_result {
             Ok(module) => {
                 info!(
@@ -540,20 +539,29 @@ impl Backend {
             }
             Err(CompileProgramError::Build(message)) => {
                 self.client.show_message(MessageType::ERROR, message).await;
-                return iteration_number;
+                return;
             }
         };
         compiled_module.trace.progress_sink = None;
 
         let mut module_lock = self.module.lock().unwrap();
+        if let HostProgram::Current = compiled_module.host_program {
+            compiled_module.host_program = HostProgram::Absent;
+            if let Some(previous) = module_lock.as_deref_mut()
+                && (HostProgramMode::Keep { inputs_hash: get_host_program_inputs_hash(previous) })
+                    == host_program_mode
+            {
+                compiled_module.host_program =
+                    std::mem::replace(&mut previous.host_program, HostProgram::Absent);
+            }
+        }
         *module_lock = Some(compiled_module);
-        let prev_iteration = self.compile_iteration.fetch_add(1, Ordering::Relaxed);
-        prev_iteration + 1
+        self.compile_iteration.fetch_add(1, Ordering::Relaxed);
     }
 
     async fn send_diagnostics(&self) {
         let version = self.compile_iteration.load(Ordering::Relaxed);
-        let errors_by_file = self.build_all_files_and_errors_map();
+        let (errors_by_file, spanless_errors) = self.build_all_files_and_errors_map();
         // Clear diagnostics for files that left the program (target switch)
         let stale = {
             let mut published = self.published_diagnostic_urls.lock().unwrap();
@@ -578,57 +586,9 @@ impl Backend {
         }
         // Errors with no source position (module resolution failures) can't
         // be diagnostics; show them so a dead compile is never silent
-        let spanless = self
-            .with_k1(|k1| {
-                let mut messages = vec![];
-                for m in k1.messages.borrow().iter() {
-                    if m.level == MessageLevel::Error && m.span == Span::NONE {
-                        messages.push(k1.ident_str(m.message).to_string());
-                    }
-                }
-                messages
-            })
-            .unwrap_or_default();
-        for message in spanless {
+        for message in spanless_errors {
             self.client.show_message(MessageType::ERROR, message).await;
         }
-    }
-
-    fn get_typer_errors(&self, file_url: &Url) -> Vec<K1Message> {
-        let module_lock = self.module.lock().unwrap();
-        let Some(k1) = &*module_lock else {
-            return vec![];
-        };
-        let Some(source) = uri_to_source(&k1.ast, file_url) else {
-            info!("Could not get source for {}", file_url.path());
-            return vec![];
-        };
-        let file_id = source.file_id;
-        let mut messages_in_file = Vec::new();
-        for m in k1.messages.borrow().iter() {
-            if !m.span.is_none() && k1.ast.sources.file_of(m.span.global_start) == file_id {
-                messages_in_file.push(m.clone());
-            }
-        }
-        messages_in_file
-    }
-
-    fn messages_to_diagnostics(&self, messages: &[K1Message]) -> Vec<Diagnostic> {
-        self.with_k1(|k1| {
-            messages
-                .iter()
-                .filter_map(|k1_message| {
-                    error_to_diagnostic(
-                        k1,
-                        k1.ident_str(k1_message.message).to_string(),
-                        k1_message.level,
-                        k1_message.span,
-                    )
-                    .map(|p| p.1)
-                })
-                .collect()
-        })
-        .unwrap_or_default()
     }
 }
 
@@ -730,29 +690,42 @@ impl LanguageServer for Backend {
         );
         for error in &ast.errors {
             if let Some(range) = span_to_range_in_ast(&ast, error.span()) {
-                let diagnostic = Diagnostic {
+                parse_diagnostics.push(Diagnostic {
                     range,
                     severity: Some(DiagnosticSeverity::ERROR),
-                    code: None,
-                    code_description: None,
                     source: Some(ast.name_str().to_string()),
                     message: error.message().to_string(),
-                    related_information: None,
-                    tags: None,
-                    data: None,
-                };
-                parse_diagnostics.push(diagnostic)
+                    ..Diagnostic::default()
+                })
             }
         }
 
         {
             let mut open_sources = self.open_sources.lock().unwrap();
-            open_sources.insert(file_url.clone(), ast);
+            open_sources.insert(file_url.clone(), OpenSource { ast, dirty: true });
         }
         let version = self.compile_iteration.load(Ordering::Relaxed);
 
-        let typer_errors = self.get_typer_errors(&file_url);
-        let mut all_file_diagnostics = self.messages_to_diagnostics(&typer_errors);
+        let mut all_file_diagnostics = self
+            .with_k1_for_url(&file_url, |k1| {
+                let mut diagnostics = vec![];
+                let Some(source) = uri_to_source(&k1.ast, &file_url) else {
+                    return diagnostics;
+                };
+                let file_id = source.file_id;
+                for m in k1.messages.borrow().iter() {
+                    if m.span.is_none() || k1.ast.sources.file_of(m.span.global_start) != file_id {
+                        continue;
+                    }
+                    let message = k1.ident_str(m.message).to_string();
+                    if let Some((_, diagnostic)) = error_to_diagnostic(k1, message, m.level, m.span)
+                    {
+                        diagnostics.push(diagnostic);
+                    }
+                }
+                diagnostics
+            })
+            .unwrap_or_default();
         all_file_diagnostics.extend(parse_diagnostics);
         self.client.publish_diagnostics(file_url, all_file_diagnostics, Some(version as i32)).await;
     }
@@ -761,55 +734,37 @@ impl LanguageServer for Backend {
         let start = std::time::Instant::now();
         let position = params.text_document_position_params;
         let file_url = position.text_document.uri;
-        let hover_line_index = position.position.line;
-        let hover_col = position.position.character;
-        let mut module = self.module.lock().unwrap();
-        let Some(k1) = &mut *module else {
-            warn!("Parsed but not typed");
-            return Ok(None);
-        };
-
-        info!("hover: {}:{}:{}", file_url.path(), hover_line_index, hover_col);
-        let Some(source) = uri_to_source(&k1.ast, &file_url) else {
-            info!("Could not get source for {}", file_url.path());
-            return Ok(None);
-        };
-        let file_id = source.file_id;
-        if let Some(entity) =
-            k1::lsp_support::find_entity_at_point(k1, file_id, hover_line_index, hover_col)
-        {
-            let hover_msg = k1::lsp_support::get_hover_message_for_entity(k1, entity);
-            return Ok(Some(Hover {
-                contents: HoverContents::Scalar(MarkedString::LanguageString(LanguageString {
-                    language: "txt".to_string(),
-                    value: hover_msg,
-                })),
-                range: None,
-            }));
-        }
-
-        let expr = k1::lsp_support::get_expr_at_point(k1, file_id, hover_line_index, hover_col);
-        let elapsed = start.elapsed();
-        info!("hover computed in {:.2?}", elapsed);
-        match expr {
-            None => Ok(None),
-            Some(hover_msg) => Ok(Some(Hover {
-                contents: HoverContents::Scalar(MarkedString::LanguageString(LanguageString {
-                    language: "txt".to_string(),
-                    value: hover_msg,
-                })),
-                range: None,
-            })),
-        }
+        let line = position.position.line;
+        let col = position.position.character;
+        info!("hover: {}:{}:{}", file_url.path(), line, col);
+        let hover = self
+            .with_k1_for_url(&file_url, |k1| {
+                let source = uri_to_source(&k1.ast, &file_url)?;
+                let file_id = source.file_id;
+                let message = match k1::lsp_support::find_entity_at_point(k1, file_id, line, col) {
+                    Some(entity) => Some(k1::lsp_support::get_hover_message_for_entity(k1, entity)),
+                    None => k1::lsp_support::get_expr_at_point(k1, file_id, line, col),
+                }?;
+                Some(Hover {
+                    contents: HoverContents::Scalar(MarkedString::LanguageString(LanguageString {
+                        language: "txt".to_string(),
+                        value: message,
+                    })),
+                    range: None,
+                })
+            })
+            .flatten();
+        info!("hover computed in {:.2?}", start.elapsed());
+        Ok(hover)
     }
 
     async fn workspace_diagnostic(
         &self,
-        params: WorkspaceDiagnosticParams,
+        _params: WorkspaceDiagnosticParams,
     ) -> Result<WorkspaceDiagnosticReportResult> {
-        let _ = params;
         info!("Got a workspace/diagnostic request");
-        let errors_by_file = self.build_all_files_and_errors_map();
+        // Spanless errors are surfaced by send_diagnostics as show_message
+        let (errors_by_file, _) = self.build_all_files_and_errors_map();
 
         let items = errors_by_file
             .into_iter()
@@ -835,48 +790,35 @@ impl LanguageServer for Backend {
         let file_url = params.text_document.uri;
         info!("semantic_tokens {}", file_url.path());
         let open_sources = self.open_sources.lock().unwrap();
-        let Some(ast_for_file) = open_sources.get(&file_url) else {
+        let Some(open) = open_sources.get(&file_url) else {
             info!("semantic_tokens: {} is not open", file_url.path());
             return Ok(None);
         };
+        let ast_for_file = &open.ast;
         let source = ast_for_file.sources.get_main();
         let file_tokens = source.semantic_tokens.as_slice(&ast_for_file.mem);
         let capacity = file_tokens.len() + source.trivia.len() as usize;
         let mut tokens: Vec<SemanticToken> = Vec::with_capacity(capacity);
         let mut spans_and_kinds = Vec::with_capacity(capacity);
+        const COMMENT: u32 = parse::SemanticTokenKind::Comment as u32;
         for semantic_token in file_tokens {
-            let token_type = match semantic_token.kind {
-                parse::SemanticTokenKind::Type => TokenTypes::Type,
-                parse::SemanticTokenKind::Variable => TokenTypes::Variable,
-                parse::SemanticTokenKind::Property => TokenTypes::Property,
-                parse::SemanticTokenKind::EnumMember => TokenTypes::EnumMember,
-                parse::SemanticTokenKind::String => TokenTypes::String,
-                parse::SemanticTokenKind::Keyword => TokenTypes::Keyword,
-                parse::SemanticTokenKind::Function => TokenTypes::Function,
-                parse::SemanticTokenKind::Namespace => TokenTypes::Namespace,
-                parse::SemanticTokenKind::Operator => TokenTypes::Operator,
-                parse::SemanticTokenKind::Comment => TokenTypes::Comment,
-            };
             spans_and_kinds.push((
                 semantic_token.span,
-                token_type as u32,
+                semantic_token.kind as u32,
                 semantic_token.mods as u32,
             ))
         }
         for entry in ast_for_file.mem.getn_lt(source.trivia) {
-            match entry.trivia.kind {
-                lex::TokenTriviaKind::LineComment => {
-                    let span = lex::Span {
-                        global_start: source.base + entry.trivia.start,
-                        len: entry.trivia.len,
-                    };
-                    spans_and_kinds.push((span, TokenTypes::Comment as u32, 0));
-                }
-                _ => {}
+            if let lex::TokenTriviaKind::LineComment = entry.trivia.kind {
+                let span = lex::Span {
+                    global_start: source.base + entry.trivia.start,
+                    len: entry.trivia.len,
+                };
+                spans_and_kinds.push((span, COMMENT, 0));
             }
         }
         spans_and_kinds.sort_unstable_by_key(|(span, token_type, _)| {
-            (span.global_start, *token_type != TokenTypes::Comment as u32)
+            (span.global_start, *token_type != COMMENT)
         });
         let mut comment_end = 0;
         let mut prev_line = 1;
@@ -885,7 +827,7 @@ impl LanguageServer for Backend {
             if span.global_start < comment_end {
                 continue;
             }
-            if token_type == TokenTypes::Comment as u32 {
+            if token_type == COMMENT {
                 comment_end = span.end()
             }
             let length = span.len;
@@ -908,20 +850,15 @@ impl LanguageServer for Backend {
             };
             tokens.push(token);
         }
-        info!(
-            "semantic_tokens: iterated {} tokens, returning {}",
-            file_tokens.len() + source.trivia.len() as usize,
-            tokens.len()
-        );
+        info!("semantic_tokens: iterated {} tokens, returning {}", capacity, tokens.len());
         Ok(Some(SemanticTokensResult::Tokens(SemanticTokens { result_id: None, data: tokens })))
     }
 
     async fn diagnostic(
         &self,
-        params: DocumentDiagnosticParams,
+        _params: DocumentDiagnosticParams,
     ) -> Result<DocumentDiagnosticReportResult> {
         info!("textDocument/diagnostic: returning unchanged for unsaved single-file diagnostics");
-        let _ = params;
         Ok(DocumentDiagnosticReportResult::Report(DocumentDiagnosticReport::Unchanged(
             RelatedUnchangedDocumentDiagnosticReport {
                 related_documents: None,
@@ -935,14 +872,14 @@ impl LanguageServer for Backend {
     async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
         let settings = params.settings.get("k1").unwrap_or(&params.settings);
         match self.set_build_setting(settings) {
-            Ok(true) if self.with_k1(|_| ()).is_some() => {}
+            Ok(true) if self.has_program() => {}
             Ok(_) => return,
             Err(e) => {
                 self.client.show_message(MessageType::ERROR, e).await;
                 return;
             }
         }
-        self.compile().await;
+        self.compile(self.construct_source_overlay()).await;
         self.send_diagnostics().await;
     }
 
@@ -951,7 +888,9 @@ impl LanguageServer for Backend {
         info!("handling did_open for document: {}", file_url.path());
         let (ast, _) =
             parse::parse_standalone(file_url.path().to_string(), &params.text_document.text);
-        self.open_sources.lock().unwrap().insert(file_url.clone(), ast);
+        // didOpen content is what the client read from disk, so not dirty
+        let open = OpenSource { ast, dirty: false };
+        self.open_sources.lock().unwrap().insert(file_url.clone(), open);
         self.ensure_target_and_compile(&file_url, false).await;
     }
 
@@ -962,6 +901,9 @@ impl LanguageServer for Backend {
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         info!("handling did_save for document: {}", params.text_document.uri.path());
+        if let Some(open) = self.open_sources.lock().unwrap().get_mut(&params.text_document.uri) {
+            open.dirty = false;
+        }
         self.ensure_target_and_compile(&params.text_document.uri, true).await;
     }
 
@@ -977,22 +919,22 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        let site = program.completion.as_ref().and_then(|cs| cs.site);
+        let k1 = get_program_for_url(&mut program, &file_url);
+        let site = k1.completion.as_ref().and_then(|cs| cs.site);
         let (candidates, is_incomplete) = match site {
-            Some(site) => (k1::lsp_support::collect_completions(&mut program, site), false),
+            Some(site) => (k1::lsp_support::collect_completions(k1, site), false),
             None => {
                 info!("completion: no site recorded, falling back to enclosing scope");
-                let fallback = self
-                    .with_k1(|k1| {
-                        let source = uri_to_source(&k1.ast, &file_url)?;
-                        let scope_id =
-                            k1::lsp_support::scope_at_point(k1, source.file_id, line, col)?;
+                // `k1` is the marker compile's program, which supersedes the
+                // shared one here
+                let fallback =
+                    uri_to_source(&k1.ast, &file_url).map(|s| s.file_id).and_then(|file_id| {
+                        let scope_id = k1::lsp_support::scope_at_point(k1, file_id, line, col)?;
                         Some(k1::lsp_support::collect_completions(
                             k1,
                             CompletionSite::Scope { scope_id },
                         ))
-                    })
-                    .flatten();
+                    });
                 (fallback.unwrap_or_default(), true)
             }
         };
@@ -1009,13 +951,14 @@ impl LanguageServer for Backend {
         let col = position.position.character;
         info!("signature_help: {}:{}:{}", file_url.path(), line, col);
 
-        let Some(program) = self.compile_with_marker(&file_url, line, col).await? else {
+        let Some(mut root_program) = self.compile_with_marker(&file_url, line, col).await? else {
             return Ok(None);
         };
-        let Some(site) = program.completion.as_ref().and_then(|cs| cs.site) else {
+        let k1 = get_program_for_url(&mut root_program, &file_url);
+        let Some(site) = k1.completion.as_ref().and_then(|cs| cs.site) else {
             return Ok(None);
         };
-        let Some(info) = k1::lsp_support::signature_help_info(&program, site) else {
+        let Some(info) = k1::lsp_support::signature_help_info(k1, site) else {
             return Ok(None);
         };
         let parameters = info
@@ -1044,39 +987,20 @@ impl LanguageServer for Backend {
     ) -> Result<Option<GotoDefinitionResponse>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-        let line = position.line;
-        let char = position.character;
-
-        let mut module = self.module.lock().unwrap();
-        let Some(k1) = &mut *module else {
-            error!("Parsed but not typed");
-            return Ok(None);
-        };
-
-        info!("goto_definition: {}:{}:{}", uri.path(), line + 1, char + 1);
-        let Some(requested_source) = uri_to_source(&k1.ast, &uri) else {
-            error!("Could not get source for {}", uri.path());
-            return Ok(None);
-        };
-        let file_id = requested_source.file_id;
-        let Some(entity) = k1::lsp_support::find_entity_at_point(k1, file_id, line, char) else {
-            info!("No entity at point");
-            return Ok(None);
-        };
-
-        let definition_span = k1::lsp_support::get_entity_definition_span(k1, entity.kind);
-        if definition_span == Span::NONE {
-            error!("definition span is nil");
-            return Ok(None);
-        }
-        let definition_source = k1.ast.sources.source_by_span(definition_span);
-        let Some(range) = span_to_range(k1, definition_span) else {
-            error!("Failed to convert span to range for goto_definition");
-            return Ok(None);
-        };
-        let definition_uri = source_to_uri(k1.ast.idents.get_string(definition_source.file_path));
-        info!("goto_definition response: {}, {:?}", definition_uri, range);
-        Ok(Some(GotoDefinitionResponse::Scalar(Location { uri: definition_uri, range })))
+        info!("goto_definition: {}:{}:{}", uri.path(), position.line + 1, position.character + 1);
+        let location = self
+            .with_k1_for_url(&uri, |k1| {
+                let entity =
+                    find_entity_at_point_for_url(k1, &uri, position.line, position.character)?;
+                let definition_span = k1::lsp_support::get_entity_definition_span(k1, entity.kind);
+                if definition_span == Span::NONE {
+                    error!("definition span is nil");
+                    return None;
+                }
+                location_from_resolved_span(k1, definition_span)
+            })
+            .flatten();
+        Ok(location.map(GotoDefinitionResponse::Scalar))
     }
 
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
@@ -1087,7 +1011,7 @@ impl LanguageServer for Backend {
         let char = position.character;
         let include_declaration = params.context.include_declaration;
 
-        self.with_k1(|k1| find_references(k1, &uri, line, char, include_declaration))
+        self.with_k1_for_url(&uri, |k1| find_references(k1, &uri, line, char, include_declaration))
             .unwrap_or(Ok(None))
     }
 
@@ -1109,11 +1033,7 @@ impl LanguageServer for Backend {
                     tags: None,
                     deprecated: None,
                     location,
-                    container_name: if symbol.container.is_empty() {
-                        None
-                    } else {
-                        Some(symbol.container)
-                    },
+                    container_name: Some(symbol.container).filter(|c| !c.is_empty()),
                 });
             }
             infos
@@ -1143,85 +1063,63 @@ fn find_references(
     include_declaration: bool,
 ) -> Result<Option<Vec<Location>>> {
     info!("references: {}:{}:{}", request_uri.path(), line + 1, char + 1);
-    let Some((_source, ls_entity)) = find_entity_and_source(k1, request_uri, line, char) else {
+    let Some(ls_entity) = find_entity_at_point_for_url(k1, request_uri, line, char) else {
         return Ok(None);
+    };
+
+    let defn_span = k1::lsp_support::get_entity_definition_span(k1, ls_entity.kind);
+    // Does `entity` refer to the same thing as `ls_entity`? None = no;
+    // Some(is_defn) = yes, and whether it is the definition itself
+    let same_target: Box<dyn Fn(&LsEntity) -> Option<bool> + '_> = match ls_entity.kind {
+        LsEntityKind::Function { function_id, .. } => {
+            let target = k1::lsp_support::get_function_generic_id(k1, function_id);
+            Box::new(move |entity| match entity.kind {
+                LsEntityKind::Function { function_id: fid, is_defn }
+                    if k1::lsp_support::get_function_generic_id(k1, fid) == target =>
+                {
+                    Some(is_defn)
+                }
+                _ => None,
+            })
+        }
+        LsEntityKind::Ability(ability_id) => {
+            let target = k1.abilities.get(ability_id).base_ability_id;
+            Box::new(move |entity| match entity.kind {
+                LsEntityKind::Ability(aid) if k1.abilities.get(aid).base_ability_id == target => {
+                    Some(entity.span == defn_span)
+                }
+                _ => None,
+            })
+        }
+        LsEntityKind::Variable { variable_id } => Box::new(move |entity| match entity.kind {
+            LsEntityKind::Variable { variable_id: vid } if vid == variable_id => {
+                Some(entity.span == defn_span)
+            }
+            _ => None,
+        }),
+        LsEntityKind::Namespace(_) | LsEntityKind::Type { .. } => return Ok(None),
+        // These will be really useful: a variant that is never constructed,
+        // a field that is never accessed...
+        LsEntityKind::Variant { .. } | LsEntityKind::StructField { .. } => return Ok(None),
     };
 
     // References are served by scanning ls_entities across all files: every
     // usage the typer sees emits an entity at its span; re-evaluated bodies
     // (generic specializations, macro arguments used twice) repeat spans
     let mut spans: Vec<Span> = Vec::new();
-    match ls_entity.kind {
-        LsEntityKind::Function { function_id, .. } => {
-            let target = k1::lsp_support::get_function_generic_id(k1, function_id);
-            for entities in k1.ls_entities.borrow().values() {
-                for entity in entities {
-                    let LsEntityKind::Function { function_id: fid, is_defn } = entity.kind else {
-                        continue;
-                    };
-                    if is_defn && !include_declaration {
-                        continue;
-                    }
-                    if k1::lsp_support::get_function_generic_id(k1, fid) != target {
-                        continue;
-                    }
-                    spans.push(entity.span);
-                }
+    for entities in k1.ls_entities.borrow().values() {
+        for entity in entities {
+            if let Some(is_defn) = same_target(entity)
+                && (include_declaration || !is_defn)
+            {
+                spans.push(entity.span);
             }
-        }
-        LsEntityKind::Ability(ability_id) => {
-            let target = k1.abilities.get(ability_id).base_ability_id;
-            let defn_span = k1::lsp_support::get_entity_definition_span(k1, ls_entity.kind);
-            for entities in k1.ls_entities.borrow().values() {
-                for entity in entities {
-                    let LsEntityKind::Ability(aid) = entity.kind else {
-                        continue;
-                    };
-                    if k1.abilities.get(aid).base_ability_id != target {
-                        continue;
-                    }
-                    if entity.span == defn_span && !include_declaration {
-                        continue;
-                    }
-                    spans.push(entity.span);
-                }
-            }
-        }
-        LsEntityKind::Variable { variable_id } => {
-            let defn_span = k1::lsp_support::get_entity_definition_span(k1, ls_entity.kind);
-            for entities in k1.ls_entities.borrow().values() {
-                for entity in entities {
-                    let LsEntityKind::Variable { variable_id: vid } = entity.kind else {
-                        continue;
-                    };
-                    if vid != variable_id {
-                        continue;
-                    }
-                    if entity.span == defn_span && !include_declaration {
-                        continue;
-                    }
-                    spans.push(entity.span);
-                }
-            }
-        }
-        LsEntityKind::Namespace(_) | LsEntityKind::Type { .. } => return Ok(None),
-        LsEntityKind::Variant { .. } => {
-            // This will be really useful; a variant that is never constructed...
-            return Ok(None);
-        }
-        LsEntityKind::StructField { .. } => {
-            // This will be really useful; a field that is never accessed...
-            return Ok(None);
         }
     }
     spans.sort_by_key(|span| (span.global_start, span.len));
     spans.dedup();
-    let mut locations = Vec::new();
-    for span in spans {
-        if let Some(location) = location_from_resolved_span(k1, span) {
-            locations.push(location);
-        }
-    }
+    let locations =
+        spans.into_iter().filter_map(|span| location_from_resolved_span(k1, span)).collect();
     Ok(Some(locations))
 }
 
@@ -1232,22 +1130,21 @@ fn location_from_resolved_span(k1: &TypedProgram, span: Span) -> Option<Location
     Some(Location { uri, range })
 }
 
-fn find_entity_and_source<'k1>(
-    k1: &'k1 TypedProgram,
+fn find_entity_at_point_for_url(
+    k1: &TypedProgram,
     uri: &Url,
     line: u32,
     char: u32,
-) -> Option<(&'k1 SourceFile, LsEntity)> {
+) -> Option<LsEntity> {
     let Some(source) = uri_to_source(&k1.ast, uri) else {
         error!("Could not get source for {}", uri.path());
         return None;
     };
-    let file_id = source.file_id;
-    let Some(entity) = k1::lsp_support::find_entity_at_point(k1, file_id, line, char) else {
+    let entity = k1::lsp_support::find_entity_at_point(k1, source.file_id, line, char);
+    if entity.is_none() {
         info!("No entity at point");
-        return None;
-    };
-    Some((source, entity))
+    }
+    entity
 }
 
 #[tokio::main]

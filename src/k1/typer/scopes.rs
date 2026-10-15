@@ -1014,13 +1014,20 @@ impl Scopes {
         }
     }
 
+    pub fn find_variable_binding(
+        &self,
+        scope_id: ScopeId,
+        ident: StringId,
+    ) -> Option<(VariableInScope, ScopeId)> {
+        self.walk_chain(scope_id, kinds::VARIABLES, |sid| self.find_variable_local(sid, ident))
+    }
+
     pub fn find_variable(
         &self,
         scope_id: ScopeId,
         ident: StringId,
     ) -> Option<(VariableId, ScopeId)> {
-        let (in_scope, found_scope) = self
-            .walk_chain(scope_id, kinds::VARIABLES, |sid| self.find_variable_local(sid, ident))?;
+        let (in_scope, found_scope) = self.find_variable_binding(scope_id, ident)?;
         match in_scope {
             VariableInScope::Defined(id) => Some((id, found_scope)),
             VariableInScope::Masked => None,

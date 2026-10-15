@@ -63,9 +63,9 @@ padding requirement (scalar tails as in `std/simd`). Both the AST impl and
 generated typed decoders are written against it:
 
 ```
-type reader = { input: span[u8], pos: size, depth: size, scratch: list[json] }
+type reader = { input: string, pos: size, depth: size, scratch: list[json] }
 ns for reader {
-  fn skip-ws, fn peek: u8
+  fn skip-ws, fn peek: char
   fn object-start/object-next-key: ?string/object-end, array-start/array-next/array-end
   fn read-string: string, read-i64/read-u64/read-f64, read-bool, read-null
   fn skip-value                      // unknown keys
@@ -102,7 +102,7 @@ against the field names; unknown keys `skip-value`.
 
 ```
 type error = { pos: size, kind: either {
-  unexpected-char(u8), unterminated-string, bad-escape, bad-number, depth,
+  unexpected-char(char), unterminated-string, bad-escape, bad-number, depth,
   invalid-utf8, missing-field(string), wrong-type(expected: string),
   unknown-variant(string), trailing } }
 ```

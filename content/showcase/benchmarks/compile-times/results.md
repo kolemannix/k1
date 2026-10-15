@@ -417,10 +417,10 @@ the LLVM backend.
 byte-identical to the C. k1 side: `k1 ... build examples/brotli` compiles
 the whole module (24 files, 17626 lines including the
 generated tables and the table generator in `module.k1`), plus core, std and
-the `cbrotli` bindings module it depends on for its parity checks, and links
+the parity driver's `cbrotli` C encoder bindings, and links
 an executable. C side: the four vendored files the port corresponds to
 (`examples/brotli/vendor/*.c`, 3588 lines) compiled with `-c`, no link;
-they pull in 50 project headers from `modules/cbrotli/vendor`
+they pull in 50 project headers from `examples/brotli_parity/deps/cbrotli/vendor`
 (7814 lines). Two C rows: one `clang` process compiling the four files in
 sequence, and four processes at once (`par-cc.sh`, what `make -j` does),
 since k1's build is parallel.

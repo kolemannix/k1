@@ -1,0 +1,854 @@
+use core/arena
+
+let HUFFMAN-TABLE-BITS: size = 8
+let HUFFMAN-MAX-CODE-LENGTH: size = 15
+let HUFFMAN-MAX-SIZE-26: size = 396
+let HUFFMAN-MAX-SIZE-258: size = 632
+let HUFFMAN-MAX-SIZE-272: size = 646
+let HUFFMAN-TABLE-SLACK: size = 376
+let REVERSE-BITS-LOWEST: size = 128
+let BLOCK-SIZE-CAP: size = 1 << 24
+let MAX-ALLOWED-DISTANCE: size = 0x7FFFFFFC
+let MIN-DICTIONARY-WORD-LENGTH: size = 4
+let MAX-DICTIONARY-WORD-LENGTH: size = 24
+let NUM-TRANSFORMS: size = 121
+let TRANSFORM-OMIT-LAST-9: size = 9
+let TRANSFORM-UPPERCASE-FIRST: size = 10
+let TRANSFORM-UPPERCASE-ALL: size = 11
+let TRANSFORM-OMIT-FIRST-1: size = 12
+let TRANSFORM-OMIT-FIRST-9: size = 20
+let WRITE-AHEAD-SLACK: size = 542
+let k-cell-pos: array[size, 11] = [0, 1, 0, 1, 8, 9, 2, 16, 10, 17, 18]
+
+type decode-error = either(u8) {
+  truncated, window-bits, exuberant-nibble, reserved, exuberant-meta-nibble,
+  simple-huffman-alphabet, simple-huffman-same, cl-space, huffman-space,
+  context-map-repeat, block-switch, transform, dictionary, distance, padding, block-length,
+}
+
+impl print for decode-error {
+  fn print-to[w: writer](self, w) {
+    w.write("brotli: ")
+    w.write(self.enum-name())
+  }
+}
+
+type huffman-group = { codes: ptr, htrees: buffer[ptr], alphabet-size: size }
+
+type decoder = {
+  br: bit-reader,
+  scratch: *arena,
+  out: list[u8],
+  pos: size,
+  window-bits: size,
+  max-backward-distance: size,
+  meta-block-remaining-len: size,
+  is-last-metablock: bool,
+  is-uncompressed: bool,
+  is-metadata: bool,
+  dist-rb: array[size, 4],
+  dist-rb-idx: size,
+  block-type-trees: ptr,
+  block-len-trees: ptr,
+  block-length: array[size, 3],
+  num-block-types: array[size, 3],
+  block-type-rb: array[size, 6],
+  distance-postfix-bits: size,
+  num-direct-distance-codes: size,
+  context-modes: buffer[u8],
+  context-map: buffer[u8],
+  dist-context-map: buffer[u8],
+  context-map-slice: ptr,
+  dist-context-map-slice: ptr,
+  trivial-literal-contexts: array[u32, 8],
+  trivial-literal-context: bool,
+  literal-htree: ptr,
+  htree-command: ptr,
+  dist-htree-index: size,
+  context-lookup: size,
+  literal-hgroup: huffman-group,
+  insert-copy-hgroup: huffman-group,
+  distance-hgroup: huffman-group,
+  distance-code: size,
+  distance-context: size,
+  copy-length: size,
+  cl-table: array[u32, 32],
+  symbol-lists: array[u16, 720],
+  next-symbol: array[size, 16],
+  code-length-code-lengths: array[u8, 18],
+  code-length-histo: array[u16, 16],
+  context-map-table: array[u32, HUFFMAN-MAX-SIZE-272],
+  dist-extra-bits: array[u8, 544],
+  dist-offset: array[u32, 544],
+}
+
+fn(inline) hc(bits: size, value: size): u32 { bits.trunc[u32] | (value.trunc[u32] << 16) }
+
+fn(inline) reverse-byte(key: size): size { k-reverse-bits.[key].as-size() }
+
+fn(inline) bit-length(x: size): size { (64u64 - x.unsigned().leading-zeros()).signed() }
+
+fn replicate-value(table: ptr, step: size, end: size, code: u32) {
+  let e = end
+  loop {
+    e = e - step
+    table.ref-at[u32](e).* = code
+    if e <= 0 break
+  }
+}
+
+fn build-code-lengths-huffman-table(d: *decoder) {
+  let sorted = array/zeroed[size, CODE_LENGTH_CODES]()
+  let offset = array/zeroed[size, 6]()
+  let symbol: size = -1
+  for bits in 1.until(6) {
+    symbol = symbol + d.code-length-histo.[bits].as-size()
+    offset.[bits] = symbol
+  }
+  offset.[0] = CODE_LENGTH_CODES - 1
+  symbol = CODE_LENGTH_CODES
+  while symbol != 0 {
+    symbol = symbol - 1
+    let len = d.code-length-code-lengths.[symbol].as-size()
+    sorted.[offset.[len]] = symbol
+    offset.[len] = offset.[len] - 1
+  }
+  let table-size: size = 32
+  if offset.[0] == 0 {
+    let code = hc(0, sorted.[0])
+    for key in 0.until(table-size) { d.cl-table.[key] = code }
+    return
+  }
+  let table = d.cl-table.&.as[ptr]
+  let key: size = 0
+  let key-step = REVERSE-BITS-LOWEST
+  symbol = 0
+  let step: size = 2
+  for bits in 1.until(6) {
+    for 0.until(d.code-length-histo.[bits].as-size()) {
+      let code = hc(bits, sorted.[symbol])
+      symbol = symbol + 1
+      replicate-value(table.ref-at[u32](reverse-byte(key)).as[ptr], step, table-size, code)
+      key = key + key-step
+    }
+    step = step << 1
+    key-step = key-step >> 1
+  }
+}
+
+fn build-huffman-table(d: *decoder, root-table: ptr, root-bits: size): size {
+  let max-length: size = -1
+  while d.symbol-lists.[max-length + 16] == 0xFFFF { max-length = max-length - 1 }
+  max-length = max-length + HUFFMAN-MAX-CODE-LENGTH + 1
+  let table-off: size = 0
+  let table-bits = root-bits
+  let table-size: size = 1 << table-bits.trunc[u32]
+  let total-size = table-size
+  if table-bits > max-length {
+    table-bits = max-length
+    table-size = 1 << table-bits.trunc[u32]
+  }
+  let key: size = 0
+  let key-step = REVERSE-BITS-LOWEST
+  let step: size = 2
+  for bits in 1.until(table-bits + 1) {
+    let symbol = bits - (HUFFMAN-MAX-CODE-LENGTH + 1)
+    for 0.until(d.code-length-histo.[bits].as-size()) {
+      symbol = d.symbol-lists.[symbol + 16].as-size()
+      replicate-value(root-table.ref-at[u32](reverse-byte(key)).as[ptr], step, table-size, hc(bits, symbol))
+      key = key + key-step
+    }
+    step = step << 1
+    key-step = key-step >> 1
+  }
+  while total-size != table-size {
+    mem/copy(root-table.ref-at[u32](table-size).as[ptr], root-table, table-size * types/size[u32])
+    table-size = table-size << 1
+  }
+  key-step = REVERSE-BITS-LOWEST >> (root-bits - 1).trunc[u32]
+  let sub-key = REVERSE-BITS-LOWEST << 1
+  let sub-key-step = REVERSE-BITS-LOWEST
+  step = 2
+  for len in (root-bits + 1).until(max-length + 1) {
+    let symbol = len - (HUFFMAN-MAX-CODE-LENGTH + 1)
+    while d.code-length-histo.[len] != 0 {
+      if sub-key == REVERSE-BITS-LOWEST << 1 {
+        table-off = table-off + table-size
+        let left: size = 1 << (len - root-bits).trunc[u32]
+        table-bits = len
+        while table-bits < HUFFMAN-MAX-CODE-LENGTH {
+          left = left - d.code-length-histo.[table-bits].as-size()
+          if left <= 0 break
+          table-bits = table-bits + 1
+          left = left << 1
+        }
+        table-bits = table-bits - root-bits
+        table-size = 1 << table-bits.trunc[u32]
+        total-size = total-size + table-size
+        sub-key = reverse-byte(key)
+        key = key + key-step
+        root-table.ref-at[u32](sub-key).* = hc(table-bits + root-bits, table-off - sub-key)
+        sub-key = 0
+      }
+      symbol = d.symbol-lists.[symbol + 16].as-size()
+      let table = root-table.ref-at[u32](table-off).as[ptr]
+      replicate-value(table.ref-at[u32](reverse-byte(sub-key)).as[ptr], step, table-size, hc(len - root-bits, symbol))
+      sub-key = sub-key + sub-key-step
+      d.code-length-histo.[len] = d.code-length-histo.[len] - 1
+    }
+    step = step << 1
+    sub-key-step = sub-key-step >> 1
+  }
+  total-size
+}
+
+fn build-simple-huffman-table(table: ptr, v: array[u16, 4], num-symbols: size): size {
+  let goal-size: size = 1 << HUFFMAN-TABLE-BITS.trunc[u32]
+  let table-size: size = 1
+  let v0 = v.[0].as-size()
+  let v1 = v.[1].as-size()
+  let v2 = v.[2].as-size()
+  let v3 = v.[3].as-size()
+  if num-symbols == 0 {
+    table.ref-at[u32](0).* = hc(0, v0)
+  } else if num-symbols == 1 {
+    let lo = v0.min(v1)
+    let hi = v0.max(v1)
+    table.ref-at[u32](0).* = hc(1, lo)
+    table.ref-at[u32](1).* = hc(1, hi)
+    table-size = 2
+  } else if num-symbols == 2 {
+    let lo = v1.min(v2)
+    let hi = v1.max(v2)
+    table.ref-at[u32](0).* = hc(1, v0)
+    table.ref-at[u32](2).* = hc(1, v0)
+    table.ref-at[u32](1).* = hc(2, lo)
+    table.ref-at[u32](3).* = hc(2, hi)
+    table-size = 4
+  } else if num-symbols == 3 {
+    let s = [v0, v1, v2, v3]
+    s.&.as-buffer().sort()
+    table.ref-at[u32](0).* = hc(2, s.[0])
+    table.ref-at[u32](2).* = hc(2, s.[1])
+    table.ref-at[u32](1).* = hc(2, s.[2])
+    table.ref-at[u32](3).* = hc(2, s.[3])
+    table-size = 4
+  } else {
+    let lo = v2.min(v3)
+    let hi = v2.max(v3)
+    table.ref-at[u32](0).* = hc(1, v0)
+    table.ref-at[u32](1).* = hc(2, v1)
+    table.ref-at[u32](2).* = hc(1, v0)
+    table.ref-at[u32](3).* = hc(3, lo)
+    table.ref-at[u32](4).* = hc(1, v0)
+    table.ref-at[u32](5).* = hc(2, v1)
+    table.ref-at[u32](6).* = hc(1, v0)
+    table.ref-at[u32](7).* = hc(3, hi)
+    table-size = 8
+  }
+  while table-size != goal-size {
+    mem/copy(table.ref-at[u32](table-size).as[ptr], table, table-size * types/size[u32])
+    table-size = table-size << 1
+  }
+  goal-size
+}
+
+fn read-var-len-u8(br: *bit-reader): size {
+  if br.read(1) == 0 return 0
+  let n = br.read(3)
+  if n == 0 return 1
+  (1 << n.trunc[u32]) + br.read(n)
+}
+
+fn read-block-length(br: *bit-reader, table: ptr): size {
+  let code = br.read-symbol(table)
+  k-block-length-offset.[code].as-size() + br.read(k-block-length-nbits.[code].as-size())
+}
+
+fn decode-meta-block-length(d: *decoder): result[empty, decode-error] {
+  let br = d.br.&
+  d.is-last-metablock = br.read(1) == 1
+  d.meta-block-remaining-len = 0
+  d.is-uncompressed = false
+  d.is-metadata = false
+  if d.is-last-metablock and br.read(1) == 1 return :ok
+  let nibbles-code = br.read(2)
+  if nibbles-code == 3 {
+    d.is-metadata = true
+    if br.read(1) != 0 return :err :reserved
+    let nbytes = br.read(2)
+    if nbytes == 0 return :ok
+    for i in 0.until(nbytes) {
+      let bits = br.read(8)
+      if i + 1 == nbytes and nbytes > 1 and bits == 0 return :err :exuberant-meta-nibble
+      d.meta-block-remaining-len = d.meta-block-remaining-len | (bits << (i * 8).trunc[u32])
+    }
+  } else {
+    let nibbles = nibbles-code + 4
+    for i in 0.until(nibbles) {
+      let bits = br.read(4)
+      if i + 1 == nibbles and nibbles > 4 and bits == 0 return :err :exuberant-nibble
+      d.meta-block-remaining-len = d.meta-block-remaining-len | (bits << (i * 4).trunc[u32])
+    }
+    if not d.is-last-metablock { d.is-uncompressed = br.read(1) == 1 }
+  }
+  d.meta-block-remaining-len = d.meta-block-remaining-len + 1
+  :ok
+}
+
+fn read-huffman-code(d: *decoder, alphabet-size: size, table: ptr): result[size, decode-error] {
+  let br = d.br.&
+  let prefix = br.read(2)
+  if prefix == 1 {
+    let num-symbols = br.read(2)
+    let max-bits = bit-length(alphabet-size - 1)
+    let symbols = array/zeroed[u16, 4]()
+    for i in 0.until(num-symbols + 1) {
+      let v = br.read(max-bits)
+      if v >= alphabet-size return :err :simple-huffman-alphabet
+      symbols.[i] = v.trunc[u16]
+    }
+    for i in 0.until(num-symbols) {
+      for k in (i + 1).until(num-symbols + 1) {
+        if symbols.[i] == symbols.[k] return :err :simple-huffman-same
+      }
+    }
+    if num-symbols == 3 { num-symbols = num-symbols + br.read(1) }
+    return :ok build-simple-huffman-table(table, symbols, num-symbols)
+  }
+
+  let cl-space: size = 32
+  let num-codes: size = 0
+  for i in 0.until(6) { d.code-length-histo.[i] = 0 }
+  for i in 0.until(CODE_LENGTH_CODES) { d.code-length-code-lengths.[i] = 0 }
+  for i in prefix.until(CODE_LENGTH_CODES) {
+    let idx = k-code-length-code-order.[i].as-size()
+    br.fill()
+    let ix = (br.val & 0xF).signed()
+    let v = k-code-length-prefix-value.[ix].as-size()
+    br.drop(k-code-length-prefix-length.[ix].as-size())
+    d.code-length-code-lengths.[idx] = v.trunc[u8]
+    if v != 0 {
+      cl-space = cl-space - (32 >> v.trunc[u32])
+      num-codes = num-codes + 1
+      d.code-length-histo.[v] = d.code-length-histo.[v] + 1
+      if cl-space <= 0 break
+    }
+  }
+  if not (num-codes == 1 or cl-space == 0) return :err :cl-space
+  build-code-lengths-huffman-table(d)
+
+  for i in 0.until(HUFFMAN-MAX-CODE-LENGTH + 1) {
+    d.code-length-histo.[i] = 0
+    d.next-symbol.[i] = i - (HUFFMAN-MAX-CODE-LENGTH + 1)
+    d.symbol-lists.[i] = 0xFFFF
+  }
+  let symbol: size = 0
+  let prev-code-len = INITIAL_REPEATED_CODE_LENGTH.as-size()
+  let repeat: size = 0
+  let repeat-code-len: size = 0
+  let space: size = 32768
+  while symbol < alphabet-size and space > 0 {
+    br.fill()
+    let p = d.cl-table.[(br.val & 31).signed()]
+    br.drop((p & 0xFF).as-size())
+    let code-len = (p >> 16).as-size()
+    if code-len < REPEAT_PREVIOUS_CODE_LENGTH {
+      repeat = 0
+      if code-len != 0 {
+        d.symbol-lists.[d.next-symbol.[code-len] + 16] = symbol.trunc[u16]
+        d.next-symbol.[code-len] = symbol
+        prev-code-len = code-len
+        space = space - (32768 >> code-len.trunc[u32])
+        d.code-length-histo.[code-len] = d.code-length-histo.[code-len] + 1
+      }
+      symbol = symbol + 1
+    } else {
+      let extra-bits: size = 3
+      let new-len: size = 0
+      if code-len == REPEAT_PREVIOUS_CODE_LENGTH {
+        new-len = prev-code-len
+        extra-bits = 2
+      }
+      let repeat-delta = br.peek(extra-bits).signed()
+      br.drop(extra-bits)
+      if repeat-code-len != new-len {
+        repeat = 0
+        repeat-code-len = new-len
+      }
+      let old-repeat = repeat
+      if repeat > 0 { repeat = (repeat - 2) << extra-bits.trunc[u32] }
+      repeat = repeat + repeat-delta + 3
+      let delta = repeat - old-repeat
+      if symbol + delta > alphabet-size {
+        symbol = alphabet-size
+        space = 0xFFFFF
+      } else if repeat-code-len != 0 {
+        let last = symbol + delta
+        let next = d.next-symbol.[repeat-code-len]
+        loop {
+          d.symbol-lists.[next + 16] = symbol.trunc[u16]
+          next = symbol
+          symbol = symbol + 1
+          if symbol == last break
+        }
+        d.next-symbol.[repeat-code-len] = next
+        space = space - (delta << (HUFFMAN-MAX-CODE-LENGTH - repeat-code-len).trunc[u32])
+        d.code-length-histo.[repeat-code-len] = (d.code-length-histo.[repeat-code-len].as-size() + delta).trunc[u16]
+      } else {
+        symbol = symbol + delta
+      }
+    }
+  }
+  if space != 0 return :err :huffman-space
+  :ok build-huffman-table(d, table, HUFFMAN-TABLE-BITS)
+}
+
+ns for huffman-group {
+  fn new(scratch: *arena, alphabet-size: size, ntrees: size): huffman-group {
+    .{
+      codes = buffer/allocate-in[u32, _](scratch, ntrees * (alphabet-size + HUFFMAN-TABLE-SLACK)).data-ptr(),
+      htrees = buffer/allocate-in[ptr, _](scratch, ntrees),
+      alphabet-size,
+    }
+  }
+
+  fn decode(self: *huffman-group, d: *decoder): result[empty, decode-error] {
+    let next = self.codes
+    for i in 0.until(self.htrees.len) {
+      let table-size = read-huffman-code(d, self.alphabet-size, next).try
+      self.htrees.[i] = next
+      next = next.ref-at[u32](table-size).as[ptr]
+    }
+    :ok
+  }
+}
+
+fn decode-context-map(d: *decoder, context-map: buffer[u8]): result[size, decode-error] {
+  let br = d.br.&
+  let size = context-map.len
+  let num-htrees = read-var-len-u8(br) + 1
+  if num-htrees <= 1 {
+    mem/set(context-map.data-ptr(), 0, size)
+    return :ok num-htrees
+  }
+  br.fill()
+  let bits = br.val & 31
+  let max-run-length-prefix: size = 0
+  if (bits & 1) != 0 {
+    max-run-length-prefix = (bits >> 1).signed() + 1
+    br.drop(5)
+  } else {
+    br.drop(1)
+  }
+  let table = d.context-map-table.&.as[ptr]
+  read-huffman-code(d, num-htrees + max-run-length-prefix, table).try
+  let i: size = 0
+  while i < size {
+    let code = br.read-symbol(table)
+    if code == 0 {
+      context-map.[i] = 0
+      i = i + 1
+    } else if code > max-run-length-prefix {
+      context-map.[i] = (code - max-run-length-prefix).trunc[u8]
+      i = i + 1
+    } else {
+      let reps = br.read(code) + (1 << code.trunc[u32])
+      if i + reps > size return :err :context-map-repeat
+      mem/set(context-map.data-ptr().add-bytes(i), 0, reps)
+      i = i + reps
+    }
+  }
+  if br.read(1) != 0 {
+    let mtf = array/zeroed[u8, 256]()
+    for k in 0.until(256) { mtf.[k] = k.trunc[u8] }
+    for k in 0.until(size) {
+      let index = context-map.[k].as-size()
+      let value = mtf.[index]
+      context-map.[k] = value
+      while index > 0 {
+        mtf.[index] = mtf.[index - 1]
+        index = index - 1
+      }
+      mtf.[0] = value
+    }
+  }
+  :ok num-htrees
+}
+
+fn decode-block-type-and-length(d: *decoder, tree-type: size): result[empty, decode-error] {
+  let max-block-type = d.num-block-types.[tree-type]
+  if max-block-type <= 1 return :err :block-switch
+  let br = d.br.&
+  let block-type = br.read-symbol(d.block-type-trees.ref-at[u32](tree-type * HUFFMAN-MAX-SIZE-258).as[ptr])
+  d.block-length.[tree-type] = read-block-length(br, d.block-len-trees.ref-at[u32](tree-type * HUFFMAN-MAX-SIZE-26).as[ptr])
+  let rb = tree-type * 2
+  if block-type == 1 {
+    block-type = d.block-type-rb.[rb + 1] + 1
+  } else if block-type == 0 {
+    block-type = d.block-type-rb.[rb]
+  } else {
+    block-type = block-type - 2
+  }
+  if block-type >= max-block-type { block-type = block-type - max-block-type }
+  d.block-type-rb.[rb] = d.block-type-rb.[rb + 1]
+  d.block-type-rb.[rb + 1] = block-type
+  :ok
+}
+
+fn prepare-literal-decoding(d: *decoder) {
+  let block-type = d.block-type-rb.[1]
+  d.context-map-slice = d.context-map.data-ptr().add-bytes(block-type << LITERAL-CONTEXT-BITS.trunc[u32])
+  d.trivial-literal-context = ((d.trivial-literal-contexts.[block-type >> 5] >> (block-type & 31).trunc[u32]) & 1) == 1
+  d.literal-htree = d.literal-hgroup.htrees.[d.context-map-slice.ref[u8].*.as-size()]
+  let mode: context-mode = enum/enum-from-value-unchecked(d.context-modes.[block-type] & 3)
+  d.context-lookup = context-lut(mode)
+}
+
+fn decode-literal-block-switch(d: *decoder): result[empty, decode-error] {
+  decode-block-type-and-length(d, 0).try
+  prepare-literal-decoding(d)
+  :ok
+}
+
+fn decode-command-block-switch(d: *decoder): result[empty, decode-error] {
+  decode-block-type-and-length(d, 1).try
+  d.htree-command = d.insert-copy-hgroup.htrees.[d.block-type-rb.[3]]
+  :ok
+}
+
+fn decode-distance-block-switch(d: *decoder): result[empty, decode-error] {
+  decode-block-type-and-length(d, 2).try
+  d.dist-context-map-slice = d.dist-context-map.data-ptr().add-bytes(d.block-type-rb.[5] << DISTANCE-CONTEXT-BITS.trunc[u32])
+  d.dist-htree-index = d.dist-context-map-slice.ref-at[u8](d.distance-context).*.as-size()
+  :ok
+}
+
+fn decode-compressed-header(d: *decoder): result[empty, decode-error] {
+  let br = d.br.&
+  for i in 0.until(3) {
+    d.num-block-types.[i] = read-var-len-u8(br) + 1
+    if d.num-block-types.[i] >= 2 {
+      read-huffman-code(d, d.num-block-types.[i] + 2, d.block-type-trees.ref-at[u32](i * HUFFMAN-MAX-SIZE-258).as[ptr]).try
+      let len-tree = d.block-len-trees.ref-at[u32](i * HUFFMAN-MAX-SIZE-26).as[ptr]
+      read-huffman-code(d, NUM-BLOCK-LEN-SYMBOLS, len-tree).try
+      d.block-length.[i] = read-block-length(br, len-tree)
+    }
+  }
+  let bits = br.read(6)
+  d.distance-postfix-bits = bits & 3
+  d.num-direct-distance-codes = (bits >> 2) << d.distance-postfix-bits.trunc[u32]
+  let num-literal-block-types = d.num-block-types.[0]
+  d.context-modes = buffer/allocate-in[u8, _](d.scratch, num-literal-block-types)
+  for i in 0.until(num-literal-block-types) { d.context-modes.[i] = br.read(2).trunc[u8] }
+
+  d.context-map = buffer/allocate-in[u8, _](d.scratch, num-literal-block-types << LITERAL-CONTEXT-BITS.trunc[u32])
+  let num-literal-htrees = decode-context-map(d, d.context-map).try
+  for i in 0.until(8) { d.trivial-literal-contexts.[i] = 0 }
+  for i in 0.until(num-literal-block-types) {
+    let offset = i << LITERAL-CONTEXT-BITS.trunc[u32]
+    let sample = d.context-map.[offset]
+    let error: u8 = 0
+    for j in 0.until(1 << LITERAL-CONTEXT-BITS.trunc[u32]) {
+      error = error | (d.context-map.[offset + j] ^ sample)
+    }
+    if error == 0 {
+      d.trivial-literal-contexts.[i >> 5] = d.trivial-literal-contexts.[i >> 5] | (1u32 << (i & 31).trunc[u32])
+    }
+  }
+
+  d.dist-context-map = buffer/allocate-in[u8, _](d.scratch, d.num-block-types.[2] << DISTANCE-CONTEXT-BITS.trunc[u32])
+  let num-dist-htrees = decode-context-map(d, d.dist-context-map).try
+  let dist-alphabet-size = distance-alphabet-size(d.distance-postfix-bits, d.num-direct-distance-codes, MAX-DISTANCE-BITS)
+  d.literal-hgroup = huffman-group/new(d.scratch, NUM-LITERAL-SYMBOLS, num-literal-htrees)
+  d.insert-copy-hgroup = huffman-group/new(d.scratch, NUM_COMMAND_SYMBOLS, d.num-block-types.[1])
+  d.distance-hgroup = huffman-group/new(d.scratch, dist-alphabet-size, num-dist-htrees)
+  d.literal-hgroup.decode(d).try
+  d.insert-copy-hgroup.decode(d).try
+  d.distance-hgroup.decode(d).try
+
+  prepare-literal-decoding(d)
+  d.dist-context-map-slice = d.dist-context-map.data-ptr()
+  d.htree-command = d.insert-copy-hgroup.htrees.[0]
+
+  let npostfix = d.distance-postfix-bits
+  let ndirect = d.num-direct-distance-codes
+  let postfix: size = 1 << npostfix.trunc[u32]
+  let dist-bits: size = 1
+  let half: size = 0
+  let i = NUM-DISTANCE-SHORT-CODES
+  for j in 0.until(ndirect) {
+    d.dist-extra-bits.[i] = 0
+    d.dist-offset.[i] = (j + 1).trunc[u32]
+    i = i + 1
+  }
+  while i < dist-alphabet-size {
+    let base = ndirect + ((((2 + half) << dist-bits.trunc[u32]) - 4) << npostfix.trunc[u32]) + 1
+    for j in 0.until(postfix) {
+      d.dist-extra-bits.[i] = dist-bits.trunc[u8]
+      d.dist-offset.[i] = (base + j).trunc[u32]
+      i = i + 1
+    }
+    dist-bits = dist-bits + half
+    half = half ^ 1
+  }
+  :ok
+}
+
+fn read-command(d: *decoder): size {
+  let br = d.br.&
+  let cmd-code = br.read-symbol(d.htree-command)
+  let cell-idx = cmd-code >> 6
+  let cell-pos = k-cell-pos.[cell-idx]
+  let copy-code = ((cell-pos << 3) & 0x18) + (cmd-code & 7)
+  let insert-code = (cell-pos & 0x18) + ((cmd-code >> 3) & 7)
+  let copy-len-offset = k-copy-base.[copy-code].as-size()
+  d.distance-code = if cell-idx >= 2 { -1 } else { 0 }
+  d.distance-context = if copy-len-offset > 4 { 3 } else { copy-len-offset - 2 }
+  d.dist-htree-index = d.dist-context-map-slice.ref-at[u8](d.distance-context).*.as-size()
+  let insert-length = k-ins-base.[insert-code].as-size() + br.read(k-ins-extra.[insert-code].as-size())
+  d.copy-length = copy-len-offset + br.read(k-copy-extra.[copy-code].as-size())
+  d.block-length.[1] = d.block-length.[1] - 1
+  insert-length
+}
+
+fn read-distance(d: *decoder) {
+  let br = d.br.&
+  let code = br.read-symbol(d.distance-hgroup.htrees.[d.dist-htree-index])
+  d.block-length.[2] = d.block-length.[2] - 1
+  d.distance-context = 0
+  if code >= NUM-DISTANCE-SHORT-CODES {
+    let bits = br.read(d.dist-extra-bits.[code].as-size())
+    d.distance-code = d.dist-offset.[code].as-size() + (bits << d.distance-postfix-bits.trunc[u32])
+    return
+  }
+  if code <= 3 {
+    d.distance-context = 1 >> code.trunc[u32]
+    d.distance-code = d.dist-rb.[(d.dist-rb-idx - (code - 3)) & 3]
+    d.dist-rb-idx = d.dist-rb-idx - d.distance-context
+    return
+  }
+  let index-delta: size = 3
+  let base = code - 10
+  if code < 10 {
+    base = code - 4
+  } else {
+    index-delta = 2
+  }
+  let delta = ((0x605142 >> (4 * base).trunc[u32]) & 0xF) - 3
+  d.distance-code = d.dist-rb.[(d.dist-rb-idx + index-delta) & 3] + delta
+  if d.distance-code <= 0 { d.distance-code = 0x7FFFFFFF }
+}
+
+fn to-upper-case(p: ptr): size {
+  let b0 = p.ref[u8].*
+  if b0 < 0xC0 {
+    if b0 >= 'a'.as-u8() and b0 <= 'z'.as-u8() { p.ref[u8].* = b0 ^ 32 }
+    return 1
+  }
+  if b0 < 0xE0 {
+    let p1 = p.ref-at[u8](1)
+    p1.* = p1.* ^ 32
+    return 2
+  }
+  let p2 = p.ref-at[u8](2)
+  p2.* = p2.* ^ 5
+  3
+}
+
+fn transform-dictionary-word(dst: ptr, word: ptr, len: size, transform-idx: size): size {
+  let t = k-transforms.[transform-idx]
+  let prefix = k-prefix-suffix-map.[(t & 0xFF).as-size()].as-size()
+  let kind = ((t >> 8) & 0xFF).as-size()
+  let suffix = k-prefix-suffix-map.[(t >> 16).as-size()].as-size()
+  let idx: size = 0
+  for k in 0.until(k-prefix-suffix.[prefix].as-size()) {
+    dst.ref-at[u8](idx).* = k-prefix-suffix.[prefix + 1 + k]
+    idx = idx + 1
+  }
+  let w = word
+  let n = len
+  if kind <= TRANSFORM-OMIT-LAST-9 {
+    n = n - kind
+  } else if kind >= TRANSFORM-OMIT-FIRST-1 and kind <= TRANSFORM-OMIT-FIRST-9 {
+    let skip = kind - (TRANSFORM-OMIT-FIRST-1 - 1)
+    w = w.add-bytes(skip)
+    n = n - skip
+  }
+  if n > 0 {
+    mem/copy(dst.add-bytes(idx), w, n)
+    idx = idx + n
+  }
+  if kind == TRANSFORM-UPPERCASE-FIRST {
+    let _ = to-upper-case(dst.add-bytes(idx - n))
+  } else if kind == TRANSFORM-UPPERCASE-ALL {
+    let p = dst.add-bytes(idx - n)
+    let remaining = n
+    while remaining > 0 {
+      let step = to-upper-case(p)
+      p = p.add-bytes(step)
+      remaining = remaining - step
+    }
+  }
+  for k in 0.until(k-prefix-suffix.[suffix].as-size()) {
+    dst.ref-at[u8](idx).* = k-prefix-suffix.[suffix + 1 + k]
+    idx = idx + 1
+  }
+  idx
+}
+
+fn process-commands(d: *decoder): result[empty, decode-error] {
+  let br = d.br.&
+  let rb = d.out.data-ptr()
+  let pos = d.pos
+  loop {
+    if d.block-length.[1] == 0 { decode-command-block-switch(d).try }
+    let insert-length = read-command(d)
+    if insert-length > d.meta-block-remaining-len return :err :block-length
+    d.meta-block-remaining-len = d.meta-block-remaining-len - insert-length
+    while insert-length > 0 {
+      if d.block-length.[0] == 0 { decode-literal-block-switch(d).try }
+      let n = insert-length.min(d.block-length.[0])
+      if d.trivial-literal-context {
+        let htree = d.literal-htree
+        for 0.until(n) {
+          rb.ref-at[u8](pos).* = br.read-symbol(htree).trunc[u8]
+          pos = pos + 1
+        }
+      } else {
+        let p1: u8 = if pos >= 1 rb.ref-at[u8](pos - 1).* else 0
+        let p2: u8 = if pos >= 2 rb.ref-at[u8](pos - 2).* else 0
+        for 0.until(n) {
+          let ctx = context-of(p1, p2, d.context-lookup)
+          let htree = d.literal-hgroup.htrees.[d.context-map-slice.ref-at[u8](ctx.as-size()).*.as-size()]
+          p2 = p1
+          p1 = br.read-symbol(htree).trunc[u8]
+          rb.ref-at[u8](pos).* = p1
+          pos = pos + 1
+        }
+      }
+      d.block-length.[0] = d.block-length.[0] - n
+      insert-length = insert-length - n
+    }
+    if d.meta-block-remaining-len <= 0 break
+
+    if d.distance-code >= 0 {
+      d.distance-context = if d.distance-code != 0 { 0 } else { 1 }
+      d.dist-rb-idx = d.dist-rb-idx - 1
+      d.distance-code = d.dist-rb.[d.dist-rb-idx & 3]
+    } else {
+      if d.block-length.[2] == 0 { decode-distance-block-switch(d).try }
+      read-distance(d)
+    }
+    let max-distance = pos.min(d.max-backward-distance)
+    let copy-length = d.copy-length
+    if d.distance-code > max-distance {
+      if d.distance-code > MAX-ALLOWED-DISTANCE return :err :distance
+      if copy-length < MIN-DICTIONARY-WORD-LENGTH or copy-length > MAX-DICTIONARY-WORD-LENGTH return :err :dictionary
+      let shift = k-dictionary-size-bits-by-length.[copy-length].as-size()
+      if shift == 0 return :err :dictionary
+      let address = d.distance-code - max-distance - 1
+      let word-idx = address & ((1 << shift.trunc[u32]) - 1)
+      let transform-idx = address >> shift.trunc[u32]
+      d.dist-rb-idx = d.dist-rb-idx + d.distance-context
+      if transform-idx >= NUM-TRANSFORMS return :err :transform
+      let word = dictionary-word(copy-length, word-idx)
+      let dst = rb.add-bytes(pos)
+      let len = copy-length
+      if transform-idx == 0 {
+        mem/copy(dst, word, copy-length)
+      } else {
+        len = transform-dictionary-word(dst, word, copy-length, transform-idx)
+        if len == 0 and d.distance-code <= 120 return :err :transform
+      }
+      pos = pos + len
+      d.meta-block-remaining-len = d.meta-block-remaining-len - len
+    } else {
+      if copy-length > d.meta-block-remaining-len return :err :block-length
+      let distance = d.distance-code
+      d.dist-rb.[d.dist-rb-idx & 3] = distance
+      d.dist-rb-idx = d.dist-rb-idx + 1
+      d.meta-block-remaining-len = d.meta-block-remaining-len - copy-length
+      let dst = rb.add-bytes(pos)
+      if distance >= copy-length {
+        mem/copy(dst, rb.add-bytes(pos - distance), copy-length)
+      } else {
+        mem/copy(dst, rb.add-bytes(pos - distance), distance)
+        let done = distance
+        while done < copy-length {
+          let n = done.min(copy-length - done)
+          mem/copy(dst.add-bytes(done), dst, n)
+          done = done + n
+        }
+      }
+      pos = pos + copy-length
+    }
+    if d.meta-block-remaining-len <= 0 break
+  }
+  d.pos = pos
+  :ok
+}
+
+fn decode-stream[a: allocator](d: *decoder, alloc: a): result[buffer[u8], decode-error] {
+  let br = d.br.&
+  d.window-bits = if br.read(1) == 0 16 else {
+    let n = br.read(3)
+    if n != 0 17 + n else {
+      let m = br.read(3)
+      if m == 1 return :err :window-bits
+      if m != 0 8 + m else 17
+    }
+  }
+  d.max-backward-distance = (1 << d.window-bits.trunc[u32]) - WINDOW-GAP
+  let trees = buffer/allocate-in[u32, _](d.scratch, 3 * (HUFFMAN-MAX-SIZE-258 + HUFFMAN-MAX-SIZE-26))
+  d.block-type-trees = trees.data-ptr()
+  d.block-len-trees = trees.index-unchecked(3 * HUFFMAN-MAX-SIZE-258).as[ptr]
+  d.dist-rb = [16, 15, 11, 4]
+  loop {
+    let mark = d.scratch.mark()
+    d.block-length = [BLOCK-SIZE-CAP, BLOCK-SIZE-CAP, BLOCK-SIZE-CAP]
+    d.num-block-types = [1, 1, 1]
+    d.block-type-rb = [1, 0, 1, 0, 1, 0]
+    d.dist-htree-index = 0
+    decode-meta-block-length(d).try
+    let remaining = d.meta-block-remaining-len
+    if d.is-metadata or d.is-uncompressed {
+      if not br.jump-to-byte-boundary() return :err :padding
+    }
+    if d.is-metadata {
+      if not br.skip-bytes(remaining) return :err :truncated
+    } else if remaining > 0 {
+      let needed = d.out.len + remaining + WRITE-AHEAD-SLACK
+      if needed > d.out.cap() { d.out.reserve-in(alloc, needed.max(d.out.cap() * 2)) }
+      d.pos = d.out.len
+      if d.is-uncompressed {
+        if not br.copy-bytes(d.out.data-ptr().add-bytes(d.pos), remaining) return :err :truncated
+        d.pos = d.pos + remaining
+      } else {
+        decode-compressed-header(d).try
+        process-commands(d).try
+        if d.meta-block-remaining-len < 0 return :err :block-length
+      }
+      d.out.len = d.pos
+    }
+    d.scratch.pop-to-mark(mark)
+    if d.is-last-metablock break
+  }
+  if not br.jump-to-byte-boundary() return :err :padding
+  :ok d.out.as-buffer()
+}
+
+fn decompress-in[a: allocator](alloc: a, encoded: span[u8]): result[buffer[u8], decode-error] {
+  let scratch = arena/init(1 << 20)
+  defer scratch.release()
+  let d: *decoder = scratch.alloc-t[decoder]()
+  d.br = bit-reader/new(encoded)
+  d.scratch = scratch
+  let decoded = decode-stream(d, alloc)
+  if d.br.bit-pos < 0 return :err :truncated
+  decoded
+}
+
+fn decompress(encoded: span[u8]): result[buffer[u8], decode-error] {
+  decompress-in(mem/current-arena(), encoded)
+}

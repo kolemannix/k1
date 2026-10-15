@@ -193,7 +193,6 @@ type static-expr = {
   base-expr: expr-id,
   kind: static-kind,
   compile-condition: ?expr-id,
-  parameter-names: list[ident-spanned],
   start-span: src-span,
   span: src-span,
 }

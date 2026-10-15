@@ -155,7 +155,7 @@ def chatty_frames(name):
 
 
 def brotli_loc():
-    k1_files = sorted((REPO / "examples" / "brotli").glob("*.k1"))
+    k1_files = sorted((REPO / "modules" / "brotli").glob("*.k1"))
     k1_lines = sum(p.read_text().count("\n") for p in k1_files)
     inputs = (RES / "brotli-c-inputs.txt").read_text().split()
     c_files = [f for f in inputs if f.endswith(".c")]
@@ -185,7 +185,7 @@ for mode, label in MODES:
 brotli = cells_table(
     "Program",
     MODE_COLS,
-    [("brotli-k1", "k1 `examples/brotli` (whole program, links)"), ("brotli-c", "C: 4 files, one `clang` process"), ("brotli-cpar", "C: 4 files, 4 `clang` processes in parallel")],
+    [("brotli-k1", "k1 `examples/brotli_parity` (whole program, links)"), ("brotli-c", "C: 4 files, one `clang` process"), ("brotli-cpar", "C: 4 files, 4 `clang` processes in parallel")],
     lambda key, mode: results.get(f"{key}-{mode}"),
 )
 
@@ -509,14 +509,14 @@ the LLVM backend.
 {chr(10).join(warm_tables)}
 
 
-`examples/brotli` is a k1 port of the brotli quality-0/1 encoders that is
-byte-identical to the C. k1 side: `k1 ... build examples/brotli` compiles
-the whole module ({len(k1_files)} files, {k1_lines} lines including the
-generated tables and the table generator in `module.k1`), plus core, std and
-the `cbrotli` bindings module it depends on for its parity checks, and links
-an executable. C side: the four vendored files the port corresponds to
-(`examples/brotli/vendor/*.c`, {c_lines} lines) compiled with `-c`, no link;
-they pull in {len(h_files)} project headers from `modules/cbrotli/vendor`
+`modules/brotli` is a k1 port of the brotli encoder, quality 0 through 11,
+byte-identical to the C. k1 side: `k1 ... build examples/brotli_parity`
+compiles the whole module ({len(k1_files)} files, {k1_lines} lines including
+the generated tables and the table generator in `build.k1`), plus core, std,
+the parity driver's `cbrotli` C encoder bindings, and the
+driver itself, and links an executable. C side: the four vendored files the port corresponds to
+(`modules/brotli/vendor/*.c`, {c_lines} lines) compiled with `-c`, no link;
+they pull in {len(h_files)} project headers from `examples/brotli_parity/deps/cbrotli/vendor`
 ({h_lines} lines). Two C rows: one `clang` process compiling the four files in
 sequence, and four processes at once (`par-cc.sh`, what `make -j` does),
 since k1's build is parallel.

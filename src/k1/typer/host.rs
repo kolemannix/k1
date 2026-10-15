@@ -63,9 +63,10 @@ pub fn plan_in_host(
     let host_plan =
         BuildPlan::trivial(host_strings, host_build, &ast.idents, &mut ast.tmp, k1_home, None);
     let host_lsp = LspCompileOptions {
-        source_overrides: lsp.source_overrides.clone(),
-        completion: false,
+        source_overlay: lsp.source_overlay.clone(),
+        completion: lsp.completion,
         progress_sink: None,
+        host_mode: crate::compiler::HostProgramMode::Discard,
     };
     let snapshot_count = host_plan.modules().len();
     let (mut h, sources) =
@@ -164,16 +165,16 @@ impl TypedProgram {
             deps: SV8::new(),
             params_expr_span: None,
         });
-        let overrides = &self.lsp.source_overrides;
+        let overlay = &self.lsp.source_overlay;
         let build_path = if is_dir {
             let tmp = self.get_tmp_unsafe();
-            crate::plan::build_file_path(&self.ast.idents, tmp, path, overrides)
+            crate::plan::build_file_path(&self.ast.idents, tmp, path, overlay)
         } else {
             None
         };
         let read = build_path.map(|build_path| {
             let build_path = self.ast.idents.get_string(build_path);
-            crate::compiler::spawn_module_sources_read(build_path, false, false, overrides)
+            crate::compiler::spawn_module_sources_read(build_path, false, false, overlay)
         });
         pending.push((index, read));
         index
@@ -757,7 +758,7 @@ impl TypedProgram {
         let ctx = EvalExprContext::make(Scopes::ROOT_SCOPE_ID)
             .with_expected_type(Some(schema_type))
             .with_static_ctx(Some(StaticExecContext { expected_return_type: Some(schema_type) }));
-        let value_id = self.execute_static_expr(parsed, ctx, &[])?;
+        let value_id = self.execute_static_expr(parsed, ctx)?;
         let value_type = self.get_static_value_type(value_id);
         if let Err(msg) = self.check_types(schema_type, value_type, Scopes::ROOT_SCOPE_ID) {
             kbail!(

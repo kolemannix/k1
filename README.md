@@ -70,7 +70,7 @@ just build-r
 just lsprelease
 ```
 
-The resulting binaries will be available under `./target/release`. You can install the binaries and the dependent `modules` to `~/.k1` via:
+The compiler lands in `./target/release` and the language server in `./target/lsp` (its own profile, so a compiler panic doesn't take the server down). You can install the binaries and the dependent `modules` to `~/.k1` via:
 
 ```bash
 just install

@@ -178,7 +178,6 @@ pub struct ParsedListLiteral {
 }
 
 #[derive(Clone, Copy)]
-#[repr(packed(4))]
 pub struct ParsedIntLiteral {
     pub magnitude: u64,
     pub is_negative: bool,
@@ -631,7 +630,6 @@ pub struct ParsedStaticExpr {
     pub base_expr: ParsedExprId,
     pub kind: ParsedStaticBlockKind,
     pub compile_condition: Option<ParsedExprId>,
-    pub parameter_names: AstSlice<IdentSpanned>,
     pub start_span: Span,
 }
 
@@ -2307,7 +2305,6 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                         base_expr: call_expr,
                         kind: ParsedStaticBlockKind::MacroCall,
                         compile_condition: condition,
-                        parameter_names: MSlice::empty(),
                         start_span,
                     }),
                     span,
@@ -2347,7 +2344,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
     }
 
     /// Parses a 'static expression' which is our main metaprogramming construct,
-    /// Begins with a #static(<params>) or #meta(<params>), and followed by any expression
+    /// Begins with #static or #meta, followed by any expression
     fn parse_static_expr(
         &mut self,
         hash_token: Token,
@@ -2366,19 +2363,9 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             _ => return Ok(None),
         };
         self.advance();
-        let (parameter_names_handle, base_expr) = self.parse_comptime(|p| {
+        let base_expr = self.parse_comptime(|p| {
             p.emit_semantic_token(maybe_directive, SemanticTokenKind::Keyword);
-            let mut parameter_names: AstList<IdentSpanned> = p.ast.mem.new_list(0);
-            if let Some(_open_token) = p.maybe_consume_no_whitespace(K::OpenParen) {
-                p.eat_delimited("params", &mut parameter_names, false, K::CloseParen, |p| {
-                    let (token, ident) = p.expect_ident()?;
-                    let span = p.tok_span(token);
-                    Ok(IdentSpanned { name: ident, span })
-                })?;
-            }
-            let parameter_names_handle = parameter_names.to_slice_trim(&mut p.ast.mem);
-            let base_expr = p.expect_expression()?;
-            Ok((parameter_names_handle, base_expr))
+            p.expect_expression()
         })?;
         let span = self.extend_tok_to_here(hash_token);
         let start_span = self.tok_span(hash_token);
@@ -2387,7 +2374,6 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                 base_expr,
                 kind,
                 compile_condition: condition,
-                parameter_names: parameter_names_handle,
                 start_span,
             }),
             span,

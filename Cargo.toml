@@ -85,6 +85,10 @@ split-debuginfo = "packed"
 panic = "abort"
 lto = "thin"
 
+[profile.lsp]
+inherits = "release"
+panic = "unwind"
+
 [lints.clippy]
 # Question mark can be very brittle over return type changes
 question_mark = "allow"

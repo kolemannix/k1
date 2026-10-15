@@ -6,7 +6,7 @@ type(alias) histogram-command = histogram[704]
 type(alias) histogram-distance = histogram[544]
 
 ns for histogram {
-  fn(inline) data-size[n](): size { core/meta/static-type-to-value[_, n]() }
+  fn(inline) data-size[n: static size](): size { n }
 
   fn(inline) data-buffer[n](self: *histogram[n]): buffer[u32] { self.data.&.as-buffer() }
 

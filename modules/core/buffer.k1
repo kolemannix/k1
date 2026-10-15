@@ -163,30 +163,29 @@ ns for buffer {
   }
 
   fn position-lanes[t: equals and bitwise, n: static size](base: ptr, len: size, needle: t): ?size {
-    let w: size = core/meta/static-type-to-value[_, n]()
     let i = 0: size
-    if len >= w {
+    if len >= n {
       let lanes = vector/splat[t, n](needle)
-      while i + 4 * w <= len {
+      while i + 4 * n <= len {
         let e0 = vector/load-unchecked[t, n](base.ref-at[t](i).as[ptr]).eq-lanes(lanes)
-        let e1 = vector/load-unchecked[t, n](base.ref-at[t](i + w).as[ptr]).eq-lanes(lanes)
-        let e2 = vector/load-unchecked[t, n](base.ref-at[t](i + 2 * w).as[ptr]).eq-lanes(lanes)
-        let e3 = vector/load-unchecked[t, n](base.ref-at[t](i + 3 * w).as[ptr]).eq-lanes(lanes)
+        let e1 = vector/load-unchecked[t, n](base.ref-at[t](i + n).as[ptr]).eq-lanes(lanes)
+        let e2 = vector/load-unchecked[t, n](base.ref-at[t](i + 2 * n).as[ptr]).eq-lanes(lanes)
+        let e3 = vector/load-unchecked[t, n](base.ref-at[t](i + 3 * n).as[ptr]).eq-lanes(lanes)
         if e0.bit-or(e1).bit-or(e2).bit-or(e3).any() {
           let l0 = e0.first-true-lane()
           if l0 >= 0 return :some (i + l0)
           let l1 = e1.first-true-lane()
-          if l1 >= 0 return :some (i + w + l1)
+          if l1 >= 0 return :some (i + n + l1)
           let l2 = e2.first-true-lane()
-          if l2 >= 0 return :some (i + 2 * w + l2)
-          return :some (i + 3 * w + e3.first-true-lane())
+          if l2 >= 0 return :some (i + 2 * n + l2)
+          return :some (i + 3 * n + e3.first-true-lane())
         }
-        i = i + 4 * w
+        i = i + 4 * n
       }
-      while i + w <= len {
+      while i + n <= len {
         let lane = vector/load-unchecked[t, n](base.ref-at[t](i).as[ptr]).eq-lanes(lanes).first-true-lane()
         if lane >= 0 return :some (i + lane)
-        i = i + w
+        i = i + n
       }
     }
     while i < len {

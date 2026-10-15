@@ -126,6 +126,7 @@ impl TypedProgram {
             ls_entities,
             completion: _,
             lsp: _,
+            host_program: _,
             inference_context_stack,
             inference_context_extras: _,
             pending_defers,
@@ -229,7 +230,7 @@ impl TypedProgram {
         mut reader: SnapReader,
         inputs_hash: crate::snap::InputsHash,
         // `config` and `lsp` come from the restoring session
-        // lets us preserve settings like chatty, cache, overrides, completion
+        // lets us preserve settings like chatty, cache, overlay, completion
         config: CompilerConfig,
         config_idents: &IdentPool,
         plan: crate::plan::BuildPlan,
@@ -359,7 +360,7 @@ impl TypedProgram {
     pub(crate) fn debug_snapshot_roundtrip(&mut self) {
         if self.megarepl.is_some()
             || self.lsp.completion
-            || !self.lsp.source_overrides.is_empty()
+            || !self.lsp.source_overlay.is_empty()
             || !self.ast.errors.is_empty()
         {
             return;

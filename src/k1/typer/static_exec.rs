@@ -153,15 +153,14 @@ impl TypedProgram {
         vm: &mut vm::Vm,
         parsed_expr: ParsedExprId,
         ctx: EvalExprContext,
-        input_parameters: &[(VariableId, StaticValueId)],
     ) -> K1Result<StaticValueId> {
-        let expr = self.typecheck_parsed_expr_for_exec(parsed_expr, ctx, input_parameters)?;
+        let expr = self.typecheck_parsed_expr_for_exec(parsed_expr, ctx)?;
 
         // Intercepts very simple expressions to avoid a VM execution
         if let Some(shortcut_value_id) = self.convert_trivial_static_block(expr) {
             return Ok(shortcut_value_id);
         }
-        self.compile_static_unit(parsed_expr, expr, input_parameters)?;
+        self.compile_static_unit(parsed_expr, expr)?;
         let execution_result = bc::exec::execute_compiled_expr(self, vm, expr, true);
 
         vm.reset(self.global_id_k1_arena);
@@ -175,7 +174,6 @@ impl TypedProgram {
         &mut self,
         parsed_expr: ParsedExprId,
         ctx: EvalExprContext,
-        input_parameters: &[(VariableId, StaticValueId)],
     ) -> K1Result<TypedExprId> {
         if let ParsedExpr::Static(_static) = self.ast.exprs.get(parsed_expr) {
             self.report_warn(
@@ -191,9 +189,9 @@ impl TypedProgram {
         let mut cur_scope = ctx.scope_id;
         let mut locals_to_mask = self.tmp.new_list(0);
 
-        // Mask every local up to and including the enclosing function scope, minus
-        // the input_parameters. Namespace scopes hold globals, which the VM can read.
-        // A better system would be just to run those expressions statically like we do for value macro args
+        // Mask every local up to and including the enclosing function scope, except those
+        // whose visible binding has a static value type: the block reads them as constants.
+        // Namespace scopes hold globals, which the VM can read.
         loop {
             let s = self.scopes.get_scope(cur_scope);
             let parent = s.parent;
@@ -201,11 +199,17 @@ impl TypedProgram {
                 break;
             }
 
-            for (name, vis, _) in self.scopes.iter_scope_variables(cur_scope) {
-                let Some(variable_id) = vis.variable_id() else {
+            for (name, _, _) in self.scopes.iter_scope_variables(cur_scope) {
+                let Some((visible, _)) = self.scopes.find_variable(ctx.scope_id, name) else {
                     continue;
                 };
-                if !input_parameters.iter().any(|(input_var_id, _)| *input_var_id == variable_id) {
+                let visible_type = self.variables.get(visible).type_id;
+                if !self
+                    .types
+                    .get(visible_type)
+                    .as_value_type()
+                    .is_some_and(|v| v.value_id.is_some())
+                {
                     locals_to_mask.push_grow(&mut self.tmp, name);
                 }
             }
@@ -231,10 +235,9 @@ impl TypedProgram {
         &mut self,
         parsed_expr: ParsedExprId,
         expr: TypedExprId,
-        input_parameters: &[(VariableId, StaticValueId)],
     ) -> K1Result<()> {
         let is_debug = self.ast.exprs.is_debug(parsed_expr);
-        ir::compile_top_level_expr(self, expr, input_parameters, is_debug)?;
+        ir::compile_top_level_expr(self, expr, is_debug)?;
         ir::optimize_unit(self, IrUnitId::Expr(expr))?;
         if is_debug {
             eprintln!(
@@ -249,11 +252,10 @@ impl TypedProgram {
         &mut self,
         parsed_expr: ParsedExprId,
         ctx: EvalExprContext,
-        input_parameters: &[(VariableId, StaticValueId)],
     ) -> K1Result<StaticValueId> {
         let span = self.ast.exprs.get_span(parsed_expr);
         self.do_with_vm(span, ctx.trace_flags(), |k1, vm| {
-            k1.execute_parsed_expr_with_vm(vm, parsed_expr, ctx, input_parameters)
+            k1.execute_parsed_expr_with_vm(vm, parsed_expr, ctx)
         })
     }
 
@@ -355,7 +357,6 @@ impl TypedProgram {
             ctx.with_expected_type(Some(BOOL_TYPE_ID)).with_static_ctx(Some(StaticExecContext {
                 expected_return_type: Some(BOOL_TYPE_ID),
             })),
-            &[],
         )?;
         let StaticValue::Bool(condition_bool) = self.static_values.get(vm_cond_result) else {
             let cond_span = self.ast.exprs.get_span(cond);
@@ -571,7 +572,7 @@ impl TypedProgram {
                 .with_static_ctx(Some(StaticExecContext {
                     expected_return_type: Some(expected_type_for_execution),
                 }));
-            self.execute_static_expr(value_expr_id, ctx, &[])?
+            self.execute_static_expr(value_expr_id, ctx)?
         };
         let static_value_type_id = self.get_static_value_type(static_value_id);
 
@@ -1154,64 +1155,12 @@ impl TypedProgram {
             ParsedStaticBlockKind::Metaprogram => self.builtin_types.code,
             ParsedStaticBlockKind::MacroCall => unreachable!(),
         };
-        let mut static_parameters: SV4<(VariableId, StaticValueId)> = smallvec![];
-        for param in self.ast.mem.getn(stat.parameter_names) {
-            let param_name = QIdent::naked(param.name, param.span);
-            let (variable_id, variable_expr) = self.eval_variable_named(param_name, ctx, false)?;
-            let Some(variable_id) = variable_id else {
-                kbail!(self, param.span, "Must be a plain variable");
-            };
-            let variable_type = self.exprs.get_type(variable_expr);
-
-            self.register_variable_usage(variable_id, param.span);
-            debug!(
-                "Variable {} will be passed in to static execution",
-                self.ident_str(self.variables.get(variable_id).name),
-            );
-            match self.types.get(variable_type) {
-                Type::StaticValue(svt) => {
-                    if let Some(value_id) = svt.value_id {
-                        static_parameters.push((variable_id, value_id));
-                    } else {
-                        kbail!(
-                            self,
-                            param.span,
-                            "Value type parameter `{}` is unresolved",
-                            param.name
-                        );
-                    }
-                }
-                Type::TypeParameter(tp) if tp.static_constraint.is_some() => {
-                    let static_type =
-                        self.types.get(tp.static_constraint.unwrap()).as_value_type().unwrap();
-                    let Some(value_id) = static_type.value_id else {
-                        kbail!(
-                            self,
-                            param.span,
-                            "Expected a statically-known, 'value' type for argument {}, got a value family",
-                            param.name,
-                        );
-                    };
-                    static_parameters.push((variable_id, value_id));
-                }
-                _ => {
-                    kbail!(
-                        self,
-                        param.span,
-                        "Expected a statically-known, 'value' type for argument {}, but got a {}",
-                        param.name,
-                        variable_type
-                    );
-                }
-            }
-        }
         let exec_ctx = ctx.with_expected_type(expected_type_for_execution).with_static_ctx(Some(
             StaticExecContext { expected_return_type: expected_type_for_execution },
         ));
         match kind {
             ParsedStaticBlockKind::Value => {
-                let vm_result =
-                    self.execute_static_expr(base_expr, exec_ctx, &static_parameters)?;
+                let vm_result = self.execute_static_expr(base_expr, exec_ctx)?;
                 let expr = self.add_static_value_expr(vm_result, span);
                 Ok(StaticExecutionResult::TypedExpr(expr))
             }
@@ -1219,12 +1168,8 @@ impl TypedProgram {
                 self.traced(TraceKind::Metaprogram, span.global_start, ctx.trace_flags(), |k1| {
                     let emitted = k1.do_with_vm(span, ctx.trace_flags(), |k1, vm| {
                         let result = (|| {
-                            let expr = k1.typecheck_parsed_expr_for_exec(
-                                base_expr,
-                                exec_ctx,
-                                &static_parameters,
-                            )?;
-                            k1.compile_static_unit(base_expr, expr, &static_parameters)?;
+                            let expr = k1.typecheck_parsed_expr_for_exec(base_expr, exec_ctx)?;
+                            k1.compile_static_unit(base_expr, expr)?;
                             let raw = bc::exec::execute_compiled_expr_raw(k1, vm, expr, true)?;
                             Self::read_emitted_code_raw(k1, &raw, span, is_definition)
                         })();
@@ -1598,7 +1543,6 @@ impl TypedProgram {
                     let value_id = self.execute_static_expr(
                         parsed_arg.value,
                         ctx.with_expected_type(Some(param.type_id)),
-                        &[],
                     )?;
                     let value_type = self.get_static_value_type(value_id);
                     if let Err(msg) = self.check_types(param.type_id, value_type, ctx.scope_id) {

@@ -825,7 +825,7 @@ impl TypedProgram {
             ParsedTypeExpr::ExecStatic(es) => {
                 let es = *es;
                 let expr_ctx = EvalExprContext::make(scope_id).with_is_static(true);
-                let resulting_value_id = self.execute_static_expr(es.body_expr, expr_ctx, &[])?;
+                let resulting_value_id = self.execute_static_expr(es.body_expr, expr_ctx)?;
                 let resulting_type_id = self.get_static_value_type(resulting_value_id);
                 match self.types.get(resulting_type_id) {
                     Type::Struct(_) if resulting_type_id == self.builtin_types.type_id() => {

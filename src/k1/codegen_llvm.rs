@@ -1925,13 +1925,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             ScalarType::F64 => ctx.f64_type().into(),
             ScalarType::Pointer => ptr.into(),
         };
-        let di_type = (!debug.line_tables_only).then(|| {
-            debug
-                .debug_builder
-                .create_basic_type(name, layout.size_bits(), encoding, 0)
-                .unwrap()
-                .as_type()
-        });
+        let di_type = if debug.line_tables_only {
+            None
+        } else {
+            Some(
+                debug
+                    .debug_builder
+                    .create_basic_type(name, layout.size_bits(), encoding, 0)
+                    .unwrap()
+                    .as_type(),
+            )
+        };
         LlvmScalarType {
             pt: PhysicalType::scalar(st),
             basic_type,
@@ -1989,14 +1993,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                                 self.codegen_type_name(agg.origin_type_id)
                             );
                         }
-                        let di_type = full_debug.then(|| {
-                            self.make_struct_debug_type(
+                        let di_type = if full_debug {
+                            Some(self.make_struct_debug_type(
                                 agg.origin_type_id,
                                 agg_layout,
                                 fields,
                                 cg_field_types,
-                            )
-                        });
+                            ))
+                        } else {
+                            None
+                        };
                         CgType::StructType(CgStructType {
                             pt,
                             struct_type,
@@ -2076,9 +2082,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     AggType::Opaque { size, align } => {
                         let layout = Layout { size, align };
                         let aligned_opaque_repr = self.codegen_opaque_repr(layout);
-                        let di_type = full_debug.then(|| {
-                            self.make_union_debug_type(agg.origin_type_id, agg_layout, &[])
-                        });
+                        let di_type = if full_debug {
+                            Some(self.make_union_debug_type(agg.origin_type_id, agg_layout, &[]))
+                        } else {
+                            None
+                        };
 
                         // For now, we'll call this a 'Union', its just our own type anyway,
                         // arguably it shouldn't even be a Sum since they share so much
@@ -2095,25 +2103,29 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             PhysicalTypeEnum::Empty => {
                 let struct_type = self.ctx.struct_type(&[], false);
-                let di_type = (!self.debug.line_tables_only).then(|| {
-                    self.debug
-                        .debug_builder
-                        .create_struct_type(
-                            self.debug.current_scope(),
-                            "empty",
-                            self.debug.current_file(),
-                            1,
-                            0,
-                            1,
-                            0,
-                            None,
-                            &[],
-                            0,
-                            None,
-                            "empty",
-                        )
-                        .as_type()
-                });
+                let di_type = if self.debug.line_tables_only {
+                    None
+                } else {
+                    Some(
+                        self.debug
+                            .debug_builder
+                            .create_struct_type(
+                                self.debug.current_scope(),
+                                "empty",
+                                self.debug.current_file(),
+                                1,
+                                0,
+                                1,
+                                0,
+                                None,
+                                &[],
+                                0,
+                                None,
+                                "empty",
+                            )
+                            .as_type(),
+                    )
+                };
                 CgType::StructType(CgStructType {
                     pt,
                     struct_type,
@@ -2261,9 +2273,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
         } else {
             let runs = self.get_type_range_runs(origin, st.width());
-            let range = (!runs.is_empty()).then(|| {
-                (self.ctx.get_kind_id("range"), self.make_range_metadata(st.width(), &runs))
-            });
+            let range = if runs.is_empty() {
+                None
+            } else {
+                Some((self.ctx.get_kind_id("range"), self.make_range_metadata(st.width(), &runs)))
+            };
             let range_attribute = match runs.as_slice() {
                 [(lo, hi)] => Some(self.make_range_attribute(st.width(), *lo, *hi)),
                 _ => None,

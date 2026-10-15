@@ -11,7 +11,8 @@ use crate::kmem::{self, MStr, Mem};
 use crate::lex::Span;
 use crate::parse::{IdentPool, Interner, StringId, write_source_location};
 use crate::typer::{
-    K1Message, K1Result, LibRefLinkType, Linkage, MemTmp, MessageLevel, NamespaceId, TypedProgram,
+    HostProgram, K1Message, K1Result, LibRefLinkType, Linkage, MemTmp, MessageLevel, NamespaceId,
+    TypedProgram,
 };
 use crate::{SV8, ir, kbail, kpath, typer};
 use anyhow::{Result, bail};
@@ -487,11 +488,21 @@ impl CompilerConfig {
 #[derive(Debug, Clone, Default)]
 pub struct LspCompileOptions {
     /// canonicalized path -> content to compile instead of the file on disk
-    pub source_overrides: fxhash::FxHashMap<String, String>,
+    pub source_overlay: fxhash::FxHashMap<String, String>,
     /// Arms completion-marker recording and parse-error tolerance; see
     /// TypedProgram::completion
     pub completion: bool,
     pub progress_sink: Option<crate::typer::trace::LiveProgressSink>,
+    pub host_mode: HostProgramMode,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum HostProgramMode {
+    #[default]
+    Discard,
+    Keep {
+        inputs_hash: Option<crate::snap::InputsHash>,
+    },
 }
 
 /// Type size assertion. The first argument is a type and the second argument is its expected size.
@@ -549,25 +560,33 @@ pub fn module_home_from_src_path(
     }
 }
 
-pub fn module_root_file(dir: &str) -> Option<PathBuf> {
-    let mut path_buf = PathBuf::from(dir);
-    path_buf.push("module.k1");
-    if path_buf.is_file() {
-        return Some(path_buf);
-    }
-    path_buf.pop();
-    path_buf.push(kpath::file_name(dir));
-    let stem_path = path_buf.with_extension("k1");
-    if stem_path.is_file() { Some(stem_path) } else { None }
+pub fn source_exists(path: &str, overlay: &fxhash::FxHashMap<String, String>) -> bool {
+    overlay.contains_key(path) || Path::new(path).is_file()
 }
 
-pub fn is_module_dir(dir: &str) -> bool {
-    Path::new(dir).join(crate::plan::BUILD_FILE_NAME).is_file() || module_root_file(dir).is_some()
+pub fn module_root_file(
+    dir: &str,
+    overlay: &fxhash::FxHashMap<String, String>,
+) -> Option<PathBuf> {
+    let module_file = Path::new(dir).join("module.k1");
+    let stem_file = Path::new(dir).join(kpath::file_name(dir)).with_extension("k1");
+    [module_file, stem_file]
+        .into_iter()
+        .find(|candidate| source_exists(candidate.to_str().unwrap(), overlay))
 }
 
-pub fn find_check_target_for_file(file: &Path) -> PathBuf {
-    let dir = file.parent().unwrap();
-    if is_module_dir(&dir.to_string_lossy()) { dir.to_owned() } else { file.to_owned() }
+pub fn is_module_dir(dir: &str, overlay: &fxhash::FxHashMap<String, String>) -> bool {
+    let build_file = Path::new(dir).join(crate::plan::BUILD_FILE_NAME);
+    source_exists(build_file.to_str().unwrap(), overlay)
+        || module_root_file(dir, overlay).is_some()
+}
+
+pub fn find_check_target_for_file(
+    file: &str,
+    overlay: &fxhash::FxHashMap<String, String>,
+) -> PathBuf {
+    let dir = kpath::parent(file);
+    PathBuf::from(if is_module_dir(dir, overlay) { dir } else { file })
 }
 
 pub struct SourceFile {
@@ -581,9 +600,9 @@ pub struct SourceFile {
 
 pub fn read_source(
     path: &str,
-    overrides: &fxhash::FxHashMap<String, String>,
+    overlay: &fxhash::FxHashMap<String, String>,
 ) -> Result<String, String> {
-    match overrides.get(path) {
+    match overlay.get(path) {
         Some(content) => Ok(content.clone()),
         None => fs::read_to_string(Path::new(path))
             .map_err(|e| format!("Failed to read source file {path}: {e}")),
@@ -599,12 +618,12 @@ enum SourceWork {
 
 fn read_and_lex_source_files(
     paths: Vec<String>,
-    overrides: &fxhash::FxHashMap<String, String>,
+    overlay: &fxhash::FxHashMap<String, String>,
     source_bytes: std::sync::mpsc::Sender<usize>,
 ) -> Result<Vec<SourceFile>, String> {
     let mut contents = Vec::with_capacity(paths.len());
     for path in &paths {
-        contents.push(read_source(path, overrides)?);
+        contents.push(read_source(path, overlay)?);
     }
     let file_count = contents.len();
     let mut largest_first = Vec::with_capacity(file_count);
@@ -685,36 +704,48 @@ fn read_and_lex_source_files(
     Ok(sources)
 }
 
-fn collect_module_source_paths(module_dir: &str, is_core: bool) -> Result<Vec<String>, String> {
+fn collect_module_source_paths(
+    module_dir: &str,
+    is_core: bool,
+    overlay: &fxhash::FxHashMap<String, String>,
+) -> Result<Vec<String>, String> {
+    let is_k1 = |path: &Path| path.extension().is_some_and(|ext| ext == "k1");
     let entries = fs::read_dir(Path::new(module_dir))
         .map_err(|e| format!("Failed to list module dir {module_dir}: {e}"))?;
-    let dir_name = kpath::file_name(module_dir);
-    let mut files = vec![];
-    let mut root: Option<(u8, usize)> = None;
+    let mut paths = vec![];
     for item in entries {
         let Ok(item) = item else {
             continue;
         };
         let path = item.path();
-        if !path.extension().is_some_and(|ext| ext == "k1") {
+        if !is_k1(&path) {
             continue;
         }
         let path_string = path
             .into_os_string()
             .into_string()
             .map_err(|s| format!("Source file name is not valid UTF-8: {}", s.to_string_lossy()))?;
+        paths.push(path_string);
+    }
+    for path in overlay.keys() {
+        if kpath::parent(path) == module_dir && is_k1(Path::new(path)) && !paths.contains(path) {
+            paths.push(path.clone());
+        }
+    }
+    let dir_name = kpath::file_name(module_dir);
+    let mut files = vec![];
+    let mut root: Option<(u8, usize)> = None;
+    for path_string in paths {
         let name = kpath::file_name(&path_string);
         if name == crate::plan::BUILD_FILE_NAME {
             continue;
         }
-        let rank = if is_core {
-            (name == "builtin.k1").then_some(0)
-        } else if name == "module.k1" {
-            Some(0)
-        } else if kpath::file_stem(name) == dir_name {
-            Some(1)
-        } else {
-            None
+        let rank = match (is_core, name) {
+            (true, "builtin.k1") => Some(0),
+            (true, _) => None,
+            (false, "module.k1") => Some(0),
+            (false, _) if kpath::file_stem(name) == dir_name => Some(1),
+            (false, _) => None,
         };
         if let Some(rank) = rank
             && root.is_none_or(|(best, _)| rank < best)
@@ -735,14 +766,18 @@ pub fn spawn_module_sources_read(
     path: &str,
     is_dir: bool,
     is_core: bool,
-    source_overrides: &fxhash::FxHashMap<String, String>,
+    source_overlay: &fxhash::FxHashMap<String, String>,
 ) -> ModuleSources {
-    let overrides = source_overrides.clone();
+    let overlay = source_overlay.clone();
     let path = path.to_string();
     let (source_bytes_tx, source_bytes) = std::sync::mpsc::channel();
     let read = move || {
-        let paths = if is_dir { collect_module_source_paths(&path, is_core)? } else { vec![path] };
-        read_and_lex_source_files(paths, &overrides, source_bytes_tx)
+        let paths = if is_dir {
+            collect_module_source_paths(&path, is_core, &overlay)?
+        } else {
+            vec![path]
+        };
+        read_and_lex_source_files(paths, &overlay, source_bytes_tx)
     };
     if crate::get_thread_limit() == 1 {
         return ModuleSources::Read(read());
@@ -1185,7 +1220,7 @@ fn write_idents_dump(p: &TypedProgram) {
 }
 
 enum Planned {
-    Plan(crate::plan::BuildPlan, Option<Box<TypedProgram>>),
+    Plan(crate::plan::BuildPlan, HostProgram),
     Setup(Box<TypedProgram>),
 }
 
@@ -1204,10 +1239,10 @@ fn plan_program(
     let k1_home = idents.get_string(config.k1_home);
     let is_setup = matches!(config.command, Command::Setup { .. });
     let has_build_file = is_dir
-        && crate::plan::build_file_path(idents, &mut ast.tmp, src_path, &lsp.source_overrides)
+        && crate::plan::build_file_path(idents, &mut ast.tmp, src_path, &lsp.source_overlay)
             .is_some();
     if !has_build_file && !is_setup {
-        if is_dir && !is_module_dir(src_path) {
+        if is_dir && !is_module_dir(src_path, &lsp.source_overlay) {
             return Err(CompileProgramError::Build(
                 "a module dir needs a build.k1, module.k1 or <dir>.k1".to_string(),
             ));
@@ -1223,7 +1258,7 @@ fn plan_program(
         );
         let plan =
             BuildPlan::trivial(strings, resolved, idents, &mut ast.tmp, k1_home, Some(primary));
-        return Ok(Planned::Plan(plan, None));
+        return Ok(Planned::Plan(plan, HostProgram::Absent));
     }
     let request_hash = request.hash(&strings, idents, &config);
     let plan_path =
@@ -1231,19 +1266,39 @@ fn plan_program(
     if !is_setup
         && config.tools.cache
         && let Some(plan) = BuildPlan::load(&plan_path, request_hash)
-        && plan.is_fresh(idents, &mut ast.tmp, k1_home, &lsp.source_overrides)
+        && plan.is_fresh(idents, &mut ast.tmp, k1_home, &lsp.source_overlay)
     {
-        return Ok(Planned::Plan(plan, None));
+        match lsp.host_mode {
+            HostProgramMode::Discard => return Ok(Planned::Plan(plan, HostProgram::Absent)),
+            HostProgramMode::Keep { inputs_hash: Some(held) }
+                if held == plan.get_inputs_hash() =>
+            {
+                return Ok(Planned::Plan(plan, HostProgram::Current));
+            }
+            HostProgramMode::Keep { .. } => {}
+        }
     }
-    let (plan, host) =
-        crate::typer::host::plan_in_host(config, idents, strings, request, lsp, module_name)?;
+    let planned =
+        crate::typer::host::plan_in_host(config, idents, strings, request, lsp, module_name);
+    let (plan, host) = match planned {
+        Ok(planned) => planned,
+        Err(CompileProgramError::TyperFailure(host))
+            if matches!(lsp.host_mode, HostProgramMode::Keep { .. }) && config.tools.cache =>
+        {
+            let Some(plan) = BuildPlan::load(&plan_path, request_hash) else {
+                return Err(CompileProgramError::TyperFailure(host));
+            };
+            return Ok(Planned::Plan(plan, HostProgram::Built(host)));
+        }
+        Err(e) => return Err(e),
+    };
     if is_setup {
         return Ok(Planned::Setup(host));
     }
-    if config.tools.cache && lsp.source_overrides.is_empty() {
+    if config.tools.cache && lsp.source_overlay.is_empty() {
         let _ = plan.store(&plan_path, request_hash);
     }
-    Ok(Planned::Plan(plan, Some(host)))
+    Ok(Planned::Plan(plan, HostProgram::Built(host)))
 }
 
 pub(crate) fn open_program(
@@ -1259,7 +1314,7 @@ pub(crate) fn open_program(
             plan.get(m.path),
             m.is_dir,
             index == 0,
-            &lsp.source_overrides,
+            &lsp.source_overlay,
         ));
     }
     let restored = if config.tools.cache {
@@ -1384,7 +1439,13 @@ pub fn compile_program(
     let mut ast = crate::parse::ParsedProgram::make();
     let idents = &ast.idents;
     let src_path = kpath::canonicalize_string_id(idents, &path)
-        .unwrap_or_else(|e| panic!("Failed to load source path: {e}"));
+        .map_err(|e| CompileProgramError::Build(e.to_string()))?;
+    let src_path_str = idents.get_string(src_path);
+    if !Path::new(src_path_str).exists() && !lsp.source_overlay.contains_key(src_path_str) {
+        return Err(CompileProgramError::Build(format!(
+            "No such file or directory: {src_path_str}"
+        )));
+    }
 
     let (is_dir, home_dir, module_name) = module_home_from_src_path(idents, src_path);
     ast.name_id = module_name;
@@ -1413,9 +1474,9 @@ pub fn compile_program(
     let _cwd = CwdGuard::enter(ast.idents.get_string(home_dir));
 
     let plan_start = crate::clock::Clock::new().raw();
-    let (plan, host) =
+    let (plan, host_program) =
         match plan_program(&mut ast, config, strings, &build, &lsp, is_dir, module_name)? {
-            Planned::Plan(plan, host) => (plan, host),
+            Planned::Plan(plan, host_program) => (plan, host_program),
             Planned::Setup(host) => return Ok(*host),
         };
     let plan_end = crate::clock::Clock::new().raw();
@@ -1424,13 +1485,18 @@ pub fn compile_program(
     let (mut k1, sources) = open_program(ast, config, plan, lsp, snapshot_count);
     k1.trace.clock_start = clock_start;
     if k1.trace.profiling_mode {
-        let kind = if host.is_some() { TraceKind::HostPlan } else { TraceKind::PlanCheck };
+        let kind = if matches!(host_program, HostProgram::Built(_)) {
+            TraceKind::HostPlan
+        } else {
+            TraceKind::PlanCheck
+        };
         k1.trace.record(kind, 0, None, plan_start, plan_end, 0, 0);
     }
 
     let loaded = k1.load_plan_modules(sources, snapshot_count);
-    if let Some(host) = host {
-        k1.adopt_messages(&host);
+    let keep_host_program = matches!(k1.lsp.host_mode, HostProgramMode::Keep { .. });
+    if !keep_host_program && let HostProgram::Built(host) = &host_program {
+        k1.adopt_messages(host);
     }
     match loaded {
         Err(e) => k1.report(e),
@@ -1438,6 +1504,9 @@ pub fn compile_program(
             #[cfg(debug_assertions)]
             k1.debug_snapshot_roundtrip();
         }
+    }
+    if keep_host_program {
+        k1.host_program = host_program;
     }
 
     k1.write_emitted_sources();
@@ -1448,7 +1517,11 @@ pub fn compile_program(
         write_idents_dump(&k1);
     }
 
-    let is_ok = k1.error_count() == 0;
+    let host_ok = match &k1.host_program {
+        HostProgram::Built(host) => host.error_count() == 0,
+        HostProgram::Absent | HostProgram::Current => true,
+    };
+    let is_ok = k1.error_count() == 0 && host_ok;
     if !is_ok {
         return Err(CompileProgramError::TyperFailure(Box::new(k1)));
     };

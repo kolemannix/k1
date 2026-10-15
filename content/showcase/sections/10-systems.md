@@ -323,7 +323,7 @@ taking structs, extern globals and thread-locals.
 
 A library other than libc is named once, on the namespace or per function:
 
-```k1 path=modules/cbrotli/cbrotli.k1
+```k1 path=examples/brotli_parity/deps/cbrotli/cbrotli.k1
 fn(extern("BrotliEncoderCompress"), lib("brotli")) encoder-compress(
   quality: c-int,
   lgwin: c-int,
@@ -382,9 +382,9 @@ type sockaddr_in = {
 
 A module's `build.k1` is compiled on the host before any of the program.
 `fn module(b)` returns the manifest; `fn setup(ctx)` is an optional build
-step. `modules/cbrotli` builds its vendored C:
+step. The parity driver's `cbrotli` dep builds its vendored C encoder:
 
-```k1 path=modules/cbrotli/build.k1
+```k1 path=examples/brotli_parity/deps/cbrotli/build.k1
 fn module(_b: k1/build-config): k1/module {
   let m = k1/module/new()
   m.lib("brotli", :static)
@@ -393,13 +393,13 @@ fn module(_b: k1/build-config): k1/module {
 }
 ```
 
-```k1 path=modules/cbrotli/build.k1
+```k1 path=examples/brotli_parity/deps/cbrotli/build.k1
 fn setup(ctx: k1/setup-ctx) {
   let minver = if (ctx.build.target is :arm64-macos) "-mmacosx-version-min=15.0.0" else ""
   let script = `
     set -e
     mkdir -p libs .k1-out/cbrotli
-    for f in vendor/common/*.c vendor/dec/*.c vendor/enc/*.c; do
+    for f in vendor/common/*.c vendor/enc/*.c; do
       o=".k1-out/cbrotli/$(echo "\$f" | sed 's|vendor/||; s|/|_|g; s|\\.c\$|.o|')"
       cc -O2 ${minver} -Ivendor/include -c "\$f" -o "\$o"
     done
@@ -409,25 +409,33 @@ fn setup(ctx: k1/setup-ctx) {
 }
 ```
 
-`examples/brotli`, the k1 port of the encoder, needs the C encoder's static
-tables. Its setup parses them out of the C sources and writes one of its own
+`modules/brotli`, the k1 port of the encoder and decoder, needs the C
+library's static tables. Its setup parses them out of the C sources and writes one of its own
 source files, `tables.k1`:
 
-```k1 path=examples/brotli/build.k1
+```k1 path=modules/brotli/build.k1
 fn module(_b: k1/build-config): k1/module {
   let m = k1/module/new()
-  m.executable()
-  m.dep("cbrotli")
   m.setup(["tables.k1"], ["vendor"])
   m
 }
 ```
 
-```k1 path=examples/brotli/build.k1
+```k1 path=modules/brotli/build.k1
     emit-int-table(w.&, dict-hash, "kStaticDictionaryHashWords", "k-dictionary-hash-words", "u16", 24)
     emit-int-table(w.&, dict-hash, "kStaticDictionaryHashLengths", "k-dictionary-hash-lengths", "u8", 32)
     emit-int-table(w.&, dict-lut, "kStaticDictionaryBuckets", "k-dict-lut-buckets", "u16", 24)
     emit-packed-table(w.&, dict-lut, "kStaticDictionaryWords", "k-dict-lut-words", "u32", 3,
+      [.{ index = 0, shift = 0 }, .{ index = 1, shift = 8 }, .{ index = 2, shift = 16 }], 16)
+    emit-int-table(w.&, dec, "kCodeLengthCodeOrder", "k-code-length-code-order", "u8", 18)
+    emit-int-table(w.&, dec, "kCodeLengthPrefixLength", "k-code-length-prefix-length", "u8", 16)
+    emit-int-table(w.&, dec, "kCodeLengthPrefixValue", "k-code-length-prefix-value", "u8", 16)
+    emit-int-table(w.&, huff, "kReverseBits", "k-reverse-bits", "u8", 16)
+    let prefix-suffix = string-values(transform, "kPrefixSuffix")
+    w.writeln("let k-prefix-suffix: array[u8, ${prefix-suffix.len()}] = [")
+    write-rows(w.&, prefix-suffix, 32)
+    emit-int-table(w.&, transform, "kPrefixSuffixMap", "k-prefix-suffix-map", "u16", 25)
+    emit-packed-table(w.&, transform, "kTransformsData", "k-transforms", "u32", 3,
       [.{ index = 0, shift = 0 }, .{ index = 1, shift = 8 }, .{ index = 2, shift = 16 }], 16)
 
     files/write-entire-file("tables.k1", w.build()).!
@@ -472,10 +480,10 @@ fails if a declared output is missing. Forcing it reruns the table
 extraction and rewrites `tables.k1` byte-identically in 40ms:
 
 ```text
-$ time k1 setup --force examples/brotli
-Setting up module 'brotli' (running fn setup in /Users/knix/dev/k1/examples/brotli/build.k1)...
-k1 setup --force examples/brotli 2>&1  0.03s user 0.00s system 0.04 total
-$ diff examples/brotli/tables.k1 tables_before.k1 && echo byte-identical
+$ time k1 setup --force modules/brotli
+Setting up module 'brotli' (running fn setup in /Users/knix/dev/k1/modules/brotli/build.k1)...
+k1 setup --force modules/brotli 2>&1  0.03s user 0.00s system 0.04 total
+$ diff modules/brotli/tables.k1 tables_before.k1 && echo byte-identical
 byte-identical
 ```
 

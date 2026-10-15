@@ -8,14 +8,12 @@ ns pre {
   }
 }
 
-fn add-static[i: static int](x: int): int {
-  core/meta/static-type-to-value[_, i]() + x
-}
+fn add-static[i: static int](x: int): int { i + x }
 
 type matrix[n: static size] = { rows: array[array[i64, n], n] }
 
 ns for matrix {
-  fn dim[n](_self: *matrix[n]): size { core/meta/static-type-to-value[_, n]() }
+  fn dim[n: static size](_self: *matrix[n]): size { n }
 
   fn identity[n: static size](): matrix[n] {
     let m: matrix[n] = .0

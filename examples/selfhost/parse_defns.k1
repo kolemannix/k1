@@ -683,7 +683,6 @@ ns for parser {
         base-expr = call-expr,
         kind = :macro-call,
         compile-condition = condition,
-        parameter-names = list/empty(),
         start-span = first.span(),
         span,
       }))

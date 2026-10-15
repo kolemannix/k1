@@ -90,7 +90,7 @@ fn backtrace_symbolizer_available() -> bool {
 fn get_test_expectation(test_file: &Path) -> TestExpectation {
     let mut path = test_file.canonicalize().unwrap();
     if path.is_dir() {
-        match k1::compiler::module_root_file(&path.to_string_lossy()) {
+        match k1::compiler::module_root_file(&path.to_string_lossy(), &Default::default()) {
             Some(root) => path = root,
             None => return TestExpectation::ExitCode { code: 0, message: None },
         }

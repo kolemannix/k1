@@ -130,11 +130,11 @@ impl TypedProgram {
         debug_assert_eq!(matrix.columns, query.len());
         debug_assert_eq!(matrix.columns, columns.len());
 
-        if matrix.columns == 0 {
-            return (matrix.rows == 0).then_some(MSlice::empty());
-        }
         if self.match_matrix_has_any_row(matrix) {
             return None;
+        }
+        if matrix.columns == 0 {
+            return Some(MSlice::empty());
         }
 
         let query_cells = self.tmp.getn(query);
@@ -1159,7 +1159,7 @@ impl TypedProgram {
             return Ok(phony);
         }
         let subject =
-            self.execute_static_expr(parsed_match.match_subject, ctx.with_no_expected_type(), &[])?;
+            self.execute_static_expr(parsed_match.match_subject, ctx.with_no_expected_type())?;
         let subject_span = self.ast.exprs.get_span(parsed_match.match_subject);
         let subject_type = self.get_static_value_type(subject);
 

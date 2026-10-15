@@ -80,7 +80,7 @@ lane test_src test_src
 lane refchess refchess
 lane profiling $k1 --no-cache build perf/profiling
 lane logreport $k1 --no-cache run examples/logreport
-lane brotli $k1 --no-cache run examples/brotli
+lane brotli $k1 --no-cache run examples/brotli_parity
 if [ "$(uname -s)" = Darwin ]; then
     lane gengame $k1 --no-cache build examples/gengame
 fi

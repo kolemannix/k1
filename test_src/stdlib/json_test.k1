@@ -11,7 +11,7 @@ fn accept(s: string) {
 }
 
 type role = either { admin, member, guest }
-type contact = either { email(string), phone(string), unreachable }
+type contact = either { unreachable, email(string), phone(string) }
 type person = {
   name: string,
   initial: char,
@@ -146,7 +146,7 @@ fn test-strict() {
   accept(ok-deep.build())
 
   let e = error-of("{\"a\":\n  1 x}")
-  assert(e.kind is :unexpected-char 120)
+  assert(e.kind is :unexpected-char 'x')
   assert-equals("$e", "unexpected 'x' at line 2, column 5")
   assert(error-of("[1] 2").kind is :trailing)
   assert(error-of("[1").kind is :unexpected-end)
@@ -182,7 +182,7 @@ fn test-typed() {
   assert(p.contacts.is-empty())
 
   assert(json/parse[person](`{"name":"n"}`) is :err e and e.kind is :missing-field "initial")
-  assert(json/parse[person](`{"name":5}`) is :err e and e.kind is :unexpected-char 53)
+  assert(json/parse[person](`{"name":5}`) is :err e and e.kind is :unexpected-char '5')
   assert(json/parse[person](`{"role":"king"}`) is :err e and e.kind is :unknown-variant "king")
   assert(json/parse[u8](`256`) is :err e and e.kind is :overflow)
   assert(json/parse[i8](`-129`) is :err e and e.kind is :overflow)

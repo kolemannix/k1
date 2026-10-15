@@ -3,7 +3,8 @@ set -e
 set -x
 
 TT=$1
-DST=$2
+LSP=$2
+DST=$3
 
 EXCLUDES=(
   --exclude '.k1-out'
@@ -27,7 +28,7 @@ make -C test_src/ffi_abi_test/libs clean build
 rm -rf $DST
 mkdir -p $DST
 cp $TT/k1 $DST/k1
-cp $TT/lsp $DST/k1lsp
+cp $LSP $DST/k1lsp
 cp $TT/k1_test $DST/k1_test
 cp tools/k1bindgen/.k1-out/k1bindgen $DST/k1bindgen
 

@@ -15,10 +15,18 @@ use crate::parse::{IdentPool, StringId};
 
 fn canonicalize_path(path: impl AsRef<Path>) -> anyhow::Result<PathBuf> {
     let path = path.as_ref();
-    let canonical = path
-        .canonicalize()
-        .map_err(|e| anyhow::anyhow!("Failed to resolve path '{}': {e}", path.display()))?;
-    Ok(canonical)
+    let fail = |e| anyhow::anyhow!("Failed to resolve path '{}': {e}", path.display());
+    match path.canonicalize() {
+        Ok(canonical) => Ok(canonical),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+                return Err(fail(e));
+            };
+            let parent = if parent.as_os_str().is_empty() { Path::new(".") } else { parent };
+            Ok(parent.canonicalize().map_err(fail)?.join(name))
+        }
+        Err(e) => Err(fail(e)),
+    }
 }
 
 pub fn canonicalize_owned(path: impl AsRef<Path>) -> anyhow::Result<String> {
@@ -215,5 +223,13 @@ mod test {
         assert_eq!(id1, id2);
         assert_eq!(idents.get_string(id1), joined);
         assert_eq!(tmp.cursor(), cursor_before, "join_id must reclaim its scratch bytes");
+    }
+
+    #[test]
+    fn missing_file_resolves_through_parent() {
+        let dir = std::env::temp_dir().canonicalize().unwrap();
+        let missing = dir.join("k1_kpath_missing_file.k1");
+        assert_eq!(canonicalize_path(&missing).unwrap(), missing);
+        assert!(canonicalize_path(dir.join("k1_kpath_missing_dir").join("x.k1")).is_err());
     }
 }

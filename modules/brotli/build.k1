@@ -1,7 +1,5 @@
 fn module(_b: k1/build-config): k1/module {
   let m = k1/module/new()
-  m.executable()
-  m.dep("cbrotli")
   m.setup(["tables.k1"], ["vendor"])
   m
 }
@@ -32,22 +30,28 @@ ns tablegen {
     else if decl == "BROTLI_ENC_NUM_HASH_BUCKETS" 32768
     else if decl == "BROTLI_ENC_STATIC_DICT_LUT_NUM_BUCKETS" 32768
     else if decl == "BROTLI_ENC_STATIC_DICT_LUT_NUM_ITEMS" 31705
+    else if decl == "BROTLI_CODE_LENGTH_CODES" 18
+    else if decl == "1 << BROTLI_REVERSE_BITS_MAX" 256
     else u64/from-string(decl).!.signed()
   }
 
+  fn transform-type(name: string): u64 {
+    if name == "IDENTITY" 0
+    else if name.starts-with("OMIT_LAST_") u64/from-string(name.drop(10)).!
+    else if name == "UPPERCASE_FIRST" 10
+    else if name == "UPPERCASE_ALL" 11
+    else if name.starts-with("OMIT_FIRST_") u64/from-string(name.drop(11)).! + 11
+    else if name == "SHIFT_FIRST" 21
+    else if name == "SHIFT_ALL" 22
+    else crash("unknown transform '$name'")
+  }
+
   fn parse-u64-c(token: string): u64 {
-    if token.starts-with("0x") {
+    if token.starts-with("BROTLI_TRANSFORM_") {
+      transform-type(token.drop(17))
+    } else if token.starts-with("0x") {
       let v: u64 = 0
-      let i: size = 2
-      while i < token.len() {
-        let c = token.[i]
-        let d: u64 = if c >= '0' and c <= '9' (c.u8() - '0'.u8()).widen[u64]
-          else if c >= 'a' and c <= 'f' (c.u8() - 'a'.u8()).widen[u64] + 10
-          else if c >= 'A' and c <= 'F' (c.u8() - 'A'.u8()).widen[u64] + 10
-          else crash("bad hex digit in '$token'")
-        v = (v << 4) | d
-        i = i + 1
-      }
+      for c in token.drop(2) { v = (v << 4) | c.to-ascii-hex-digit().!.widen[u64] }
       v
     } else {
       u64/from-string(token).!
@@ -70,7 +74,7 @@ ns tablegen {
     sb.build()
   }
 
-  fn parse-c-array(src: string, name: string, group: size): { tokens: list[string], declared: size } {
+  fn find-c-initializer(src: string, name: string): { decl: string, at: size } {
     let from: size = 0
     loop {
       require src.slice(from, src.len()).index-of-string(name) is :some rel else {
@@ -88,21 +92,79 @@ ns tablegen {
         if src.[j] == '=' {
           j = j + 1
           while is-space(src.[j]) { j = j + 1 }
-          if src.[j] == '{' {
-            require src.slice(j, src.len()).index-of-string("};") is :some end-rel else {
-              crash("unterminated initializer for $name")
-            }
-            let body = strip-comments-and-braces(src.slice(j + 1, j + end-rel))
-            let tokens: list[string] = list/empty()
-            for part in body.split-by-char(',') {
-              let t = trim(part)
-              if t.non-empty() tokens.push(t)
-            }
-            return .{ tokens, declared = declared-count(decl, tokens.len() / group) * group }
-          }
+          return .{ decl, at = j }
         }
       }
     }
+  }
+
+  fn parse-c-array(src: string, name: string, group: size): { tokens: list[string], declared: size } {
+    let init = find-c-initializer(src, name)
+    if src.[init.at] != '{' crash("expected { for $name")
+    require src.slice(init.at, src.len()).index-of-string("};") is :some end-rel else {
+      crash("unterminated initializer for $name")
+    }
+    let body = strip-comments-and-braces(src.slice(init.at + 1, init.at + end-rel))
+    let tokens: list[string] = list/empty()
+    for part in body.split-by-char(',') {
+      let t = trim(part)
+      if t.non-empty() tokens.push(t)
+    }
+    .{ tokens, declared = declared-count(init.decl, tokens.len() / group) * group }
+  }
+
+  fn is-octal-digit(c: char): bool { c >= '0' and c <= '7' }
+
+  fn string-values(src: string, name: string): list[u64] {
+    let init = find-c-initializer(src, name)
+    let values: list[u64] = list/empty()
+    let i = init.at
+    while src.[i] == '"' {
+      i = i + 1
+      while src.[i] != '"' {
+        let c = src.[i]
+        i = i + 1
+        if c != '\\' {
+          values.push(c.u8().widen[u64])
+        } else {
+          let e = src.[i]
+          i = i + 1
+          if is-octal-digit(e) {
+            let v = (e.u8() - '0'.u8()).widen[u64]
+            let digits: size = 1
+            while digits < 3 and is-octal-digit(src.[i]) {
+              v = v * 8 + (src.[i].u8() - '0'.u8()).widen[u64]
+              i = i + 1
+              digits = digits + 1
+            }
+            values.push(v)
+          } else if e == 'x' {
+            let v: u64 = 0
+            while src.[i].to-ascii-hex-digit() is :some d {
+              v = v * 16 + d.widen[u64]
+              i = i + 1
+            }
+            values.push(v)
+          } else {
+            values.push(if e is {
+              'n' -> 10, 't' -> 9, 'r' -> 13,
+              _ -> e.u8().widen[u64],
+            })
+          }
+        }
+      }
+      i = i + 1
+      loop {
+        while is-space(src.[i]) { i = i + 1 }
+        if src.[i] == '/' and src.[i + 1] == '*' {
+          require src.drop(i + 2).index-of-string("*/") is :some rel else crash("unterminated comment")
+          i = i + 2 + rel + 2
+        } else break
+      }
+    }
+    let declared = declared-count(init.decl, values.len())
+    while values.len() < declared { values.push(0) }
+    values
   }
 
   fn int-values(src: string, c-name: string, group: size): list[u64] {
@@ -195,6 +257,9 @@ ns tablegen {
     let dict = files/read-to-string("$VENDOR/dictionary_inc.h").!
     let dict-hash = files/read-to-string("$VENDOR/dictionary_hash_inc.h").!
     let dict-lut = files/read-to-string("$VENDOR/static_dict_lut_inc.h").!
+    let dec = files/read-to-string("$VENDOR/decode.c").!
+    let huff = files/read-to-string("$VENDOR/huffman.c").!
+    let transform = files/read-to-string("$VENDOR/transform.c").!
 
     let w = string-builder/new()
     w.writeln("// Static tables extracted by fn setup (build.k1) from this module's vendored")
@@ -232,6 +297,16 @@ ns tablegen {
     emit-int-table(w.&, dict-hash, "kStaticDictionaryHashLengths", "k-dictionary-hash-lengths", "u8", 32)
     emit-int-table(w.&, dict-lut, "kStaticDictionaryBuckets", "k-dict-lut-buckets", "u16", 24)
     emit-packed-table(w.&, dict-lut, "kStaticDictionaryWords", "k-dict-lut-words", "u32", 3,
+      [.{ index = 0, shift = 0 }, .{ index = 1, shift = 8 }, .{ index = 2, shift = 16 }], 16)
+    emit-int-table(w.&, dec, "kCodeLengthCodeOrder", "k-code-length-code-order", "u8", 18)
+    emit-int-table(w.&, dec, "kCodeLengthPrefixLength", "k-code-length-prefix-length", "u8", 16)
+    emit-int-table(w.&, dec, "kCodeLengthPrefixValue", "k-code-length-prefix-value", "u8", 16)
+    emit-int-table(w.&, huff, "kReverseBits", "k-reverse-bits", "u8", 16)
+    let prefix-suffix = string-values(transform, "kPrefixSuffix")
+    w.writeln("let k-prefix-suffix: array[u8, ${prefix-suffix.len()}] = [")
+    write-rows(w.&, prefix-suffix, 32)
+    emit-int-table(w.&, transform, "kPrefixSuffixMap", "k-prefix-suffix-map", "u16", 25)
+    emit-packed-table(w.&, transform, "kTransformsData", "k-transforms", "u32", 3,
       [.{ index = 0, shift = 0 }, .{ index = 1, shift = 8 }, .{ index = 2, shift = 16 }], 16)
 
     files/write-entire-file("tables.k1", w.build()).!

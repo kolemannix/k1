@@ -431,22 +431,12 @@ ns for parser {
       return :ok(:none)
     }
     self.advance()
-    let parameter-names = list/empty[ast/ident-spanned]()
-    if self.maybe-consume-no-ws(:open-paren) is :some _ {
-      self.eat-delimited("params", parameter-names.&, :comma, :close-paren, fn(p: *parser) {
-        if p.expect-ident() is {
-          :ok it -> :ok(.{ name = it.name, span = it.tok.span() }),
-          :err e -> :err(e),
-        }
-      }).try
-    }
     let base-expr = self.expect-expression().try
     let span = self.extend-tok-to-here(hash-token)
     :ok(:some(self.add-expr(:static-expr(.{
       base-expr,
       kind,
       compile-condition = condition,
-      parameter-names,
       start-span = hash-token.span(),
       span,
     }))))

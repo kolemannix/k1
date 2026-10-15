@@ -275,12 +275,10 @@ parameters, so there's no `patch[t]`, only `patch-of` per type.
 
 ## Static parameters and literal types
 
-A generic parameter can be a value:
+A generic parameter can be a value, and its name is that value:
 
 ```k1
-fn add-static[i: static int](x: int): int {
-  core/meta/static-type-to-value[_, i]() + x
-}
+fn add-static[i: static int](x: int): int { i + x }
 ```
 
 ```k1

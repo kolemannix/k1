@@ -236,16 +236,17 @@ impl<'a> UnitView<'a> {
     ) -> Option<BlockId> {
         let last = self.block(b).last?;
         match *self.inst(last) {
-            Inst::Jump(target) => (index == 0).then_some(target),
+            Inst::Jump(target) => [target].get(index).copied(),
             Inst::JumpIf { cond, cons, alt } => match (cond == Value::IsStatic, is_static) {
-                (true, Some(taken)) => (index == 0).then_some(if taken { cons } else { alt }),
+                (true, Some(taken)) => [if taken { cons } else { alt }].get(index).copied(),
                 _ => [cons, alt].get(index).copied(),
             },
             Inst::Switch { cases, default, .. } => {
                 let cases = self.switch_cases(cases);
                 match cases.get(index) {
                     Some(case) => Some(case.target),
-                    None => (index == cases.len()).then_some(default),
+                    None if index == cases.len() => Some(default),
+                    None => None,
                 }
             }
             _ => None,

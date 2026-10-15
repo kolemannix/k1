@@ -171,11 +171,10 @@ fn(inline) update-table-after-copy(
   }
 }
 
-fn(inline) create-commands[mm: static size](
+fn(inline) create-commands[min-match: static size](
   input: ptr, block-size: size, input-size: size, base-ip: ptr,
   table: buffer[i32], table-bits: size, sink: *cmd-sink,
 ) {
-  let min-match: size = core/meta/static-type-to-value[_, mm]()
   let ip = input
   let shift = (64 - table-bits).trunc[u32]
   let ip-end = input.add-bytes(block-size)

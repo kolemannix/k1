@@ -44,7 +44,6 @@ ns vector {
 
   // The 16 bytes ending k before the end of cur: prev's last k bytes, then cur's first 16-k
   fn shift-bytes[k: static size](prev: vector[u8, 16], cur: vector[u8, 16]): vector[u8, 16] {
-    let k: size = core/meta/static-type-to-value[_, k]()
     let iota = iota16()
     let from-cur = shuffle-bytes(cur, iota.sub(splat[u8, 16](k.trunc[u8])))
     let from-prev = shuffle-bytes(prev, iota.add(splat[u8, 16]((16 - k).trunc[u8])))
@@ -64,17 +63,14 @@ ns vector {
     .0
   }
 
-  fn(inline) lane-count[t, n: static size](_v: vector[t, n]): size {
-    core/meta/static-type-to-value[_, n]()
-  }
+  fn(inline) lane-count[t, n: static size](_v: vector[t, n]): size { n }
 
   fn(inline) size-bytes[t, n: static size](_v: vector[t, n]): size {
     types/size[vector[t, n]]
   }
 
   fn from-span[t, n: static size](s: span[t], start: size): vector[t, n] {
-    let lanes: size = core/meta/static-type-to-value[_, n]()
-    if start + lanes > s.len() {
+    if start + n > s.len() {
       crash("vector/from-span out of bounds")
     }
     load-unchecked[t, n](s.data-ptr().ref-at[t](start).as[ptr])

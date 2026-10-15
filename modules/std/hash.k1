@@ -589,15 +589,14 @@ type fixmap[k, v, n: static size] = {
 
 ns for fixmap {
 
-  fn(inline) _slots[k, v, n](_self: *fixmap[k, v, n]): size { core/meta/static-type-to-value[_, n]() }
+  fn(inline) _slots[k, v, n: static size](_self: *fixmap[k, v, n]): size { n }
 
-  fn new[k, v, n](): fixmap[k, v, n] {
-    let c: size = core/meta/static-type-to-value[_, n]()
-    if (c & (c - 1)) != 0 or c < map/MIRROR {
+  fn new[k, v, n: static size](): fixmap[k, v, n] {
+    if (n & (n - 1)) != 0 or n < map/MIRROR {
       crash("fixmap slot count must be a power of two, at least ${map/MIRROR}")
     }
     let m: fixmap[k, v, n] = .0
-    m.growth-left = (c - 1).trunc[u32]
+    m.growth-left = (n - 1).trunc[u32]
     m
   }
 

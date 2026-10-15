@@ -63,6 +63,7 @@ pub struct ProgramIr {
     opt_buf_callees: Vec<FunctionId>,
     opt_buf_inline: iropt::InlineState,
     opt_buf_promote: Option<Box<iropt::PromoteState>>,
+    //review clippy is complaining about this Vec<Box>
     opt_buf_local_uses: Vec<Box<iropt::LocalUses>>,
 }
 
@@ -1552,11 +1553,10 @@ fn compile_function_body_into(
 pub fn compile_top_level_expr(
     k1: &mut TypedProgram,
     expr: TypedExprId,
-    input_parameters: &[(VariableId, StaticValueId)],
     is_debug: bool,
 ) -> K1Result<()> {
     let frame = k1.trace_push_unit(TraceKind::IrLower, IrUnitId::Expr(expr), None);
-    let result = compile_top_level_expr_body(k1, expr, input_parameters, is_debug);
+    let result = compile_top_level_expr_body(k1, expr, is_debug);
     k1.trace_pop(frame);
     result
 }
@@ -1564,11 +1564,10 @@ pub fn compile_top_level_expr(
 fn compile_top_level_expr_body(
     k1: &mut TypedProgram,
     expr: TypedExprId,
-    input_parameters: &[(VariableId, StaticValueId)],
     is_debug: bool,
 ) -> K1Result<()> {
     let mut u = k1.ir.take_unit_buf();
-    let result = compile_top_level_expr_into(k1, &mut u, expr, input_parameters, is_debug);
+    let result = compile_top_level_expr_into(k1, &mut u, expr, is_debug);
     k1.ir.release_unit_buf(u);
     result
 }
@@ -1577,22 +1576,11 @@ fn compile_top_level_expr_into(
     k1: &mut TypedProgram,
     u: &mut UnitBuf,
     expr: TypedExprId,
-    input_parameters: &[(VariableId, StaticValueId)],
     is_debug: bool,
 ) -> K1Result<()> {
     let mut b = Builder::new(k1, u);
     let entry_block = b.push_block(BlockSourceKind::ExprToplevel);
     b.goto_block(entry_block);
-
-    for (variable_id, static_value_id) in input_parameters {
-        let variable = b.k1.variables.get(*variable_id);
-        let pt = b.get_physical_type(variable.type_id)?;
-        let value = compile_static_value(&mut b, *static_value_id, pt);
-        let indirect = !pt.is_agg() && matches!(value, Value::StaticValue { .. });
-        b.k1.ir
-            .b_variables
-            .insert(*variable_id, BuilderVariable { id: *variable_id, value, pt, indirect });
-    }
 
     let return_type_id = b.k1.exprs.get_type(expr);
     let (return_type, diverges) = b.get_function_return_type(return_type_id)?;
@@ -1686,11 +1674,13 @@ pub struct Builder<'k1> {
 
 impl<'k1> Builder<'k1> {
     fn new(k1: &'k1 mut TypedProgram, u: &'k1 mut UnitBuf) -> Self {
-        let local_uses = k1.optimize_ir().then(|| {
+        let local_uses = if k1.optimize_ir() {
             let mut local_uses = k1.ir.opt_buf_local_uses.pop().unwrap_or_default();
             local_uses.clear();
-            local_uses
-        });
+            Some(local_uses)
+        } else {
+            None
+        };
         Self {
             k1,
             u,
@@ -2537,7 +2527,11 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
             } else {
                 let call_id = add_call(b, ir_call);
                 let call_inst_id = b.push_inst_anon(Inst::Call { call_id });
-                (!callee_fn_type.diverges).then(|| sret_dst.unwrap_or(call_inst_id.as_value()))
+                if callee_fn_type.diverges {
+                    None
+                } else {
+                    Some(sret_dst.unwrap_or(call_inst_id.as_value()))
+                }
             };
             let Some(result) = result else {
                 return Ok(b.push_inst_anon(Inst::Unreachable).as_value());
@@ -3176,30 +3170,33 @@ fn compile_variable_to_address(
             }
         }
         None => {
-            let Some(var) = b.get_variable(variable_id) else {
-                let mut variables = String::new();
-                for (idx, bv) in b.k1.ir.b_variables.values().enumerate() {
-                    if idx > 0 {
-                        variables.push('\n');
-                    }
-                    write!(variables, "{} ", bv.id).unwrap();
-                    display_value(&mut variables, b.k1, &b.u.view(), bv.value).unwrap();
+            let (value, pt, indirect) = match b.get_variable(variable_id) {
+                Some(var) => (var.value, var.pt, var.indirect),
+                None => {
+                    let type_id = b.k1.variables.get(variable_id).type_id;
+                    let Some(value_id) =
+                        b.k1.types.get(type_id).as_value_type().and_then(|v| v.value_id)
+                    else {
+                        let mut variables = String::new();
+                        for (idx, bv) in b.k1.ir.b_variables.values().enumerate() {
+                            if idx > 0 {
+                                variables.push('\n');
+                            }
+                            write!(variables, "{} ", bv.id).unwrap();
+                            display_value(&mut variables, b.k1, &b.u.view(), bv.value).unwrap();
+                        }
+                        eprintln!("Variables are: {}", variables);
+                        b.k1.ice_span(b.cur_span, "Missing variable")
+                    };
+                    let pt = b.get_physical_type(type_id)?;
+                    let value = compile_static_value(b, value_id, pt);
+                    (value, pt, !pt.is_agg() && matches!(value, Value::StaticValue { .. }))
                 }
-                eprintln!("Variables are: {}", variables);
-                b.k1.ice_span(b.cur_span, "Missing variable")
             };
-            let var_value = var.value;
-            let var_indirect = var.indirect;
-            let is_constant = false;
-            if require_address && var.pt.is_scalar() && !var_indirect {
+            if require_address && pt.is_scalar() && !indirect {
                 b.k1.ice_span(b.cur_span, "Address required for a variable bound to a value")
             }
-            Ok(CompileVariableResult::Address {
-                addr: var_value,
-                pt: var.pt,
-                indirect: var_indirect,
-                constant: is_constant,
-            })
+            Ok(CompileVariableResult::Address { addr: value, pt, indirect, constant: false })
         }
     }
 }

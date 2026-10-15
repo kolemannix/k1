@@ -1,0 +1,7 @@
+fn module(_b: k1/build-config): k1/module {
+  let m = k1/module/new()
+  m.executable()
+  m.dep("brotli")
+  m.dep("cbrotli")
+  m
+}

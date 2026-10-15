@@ -800,7 +800,9 @@ pub fn promote_unit(
                                 base_addr: src_addr,
                                 offset,
                                 t: scalar_slot.t,
-                                unaligned: unaligned || align < t_align || offset % t_align != 0,
+                                unaligned: unaligned
+                                    || align < t_align
+                                    || !offset.is_multiple_of(t_align),
                                 is_used: false,
                             });
                         }

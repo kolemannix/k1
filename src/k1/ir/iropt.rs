@@ -136,7 +136,11 @@ fn inline_target(k1: &TypedProgram, u: &UnitView, inst: &Inst) -> Option<IrCall>
         return None;
     }
     let callee = get_compiled_unit(&k1.ir, IrUnitId::Function(function_id)).unwrap();
-    (callee.is_optimized && !callee.is_cold(k1) && callee.inst_count() < 20).then_some(call)
+    if callee.is_optimized && !callee.is_cold(k1) && callee.inst_count() < 20 {
+        Some(call)
+    } else {
+        None
+    }
 }
 
 fn has_inline_target(k1: &TypedProgram, u: &UnitView) -> bool {

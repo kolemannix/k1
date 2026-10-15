@@ -121,6 +121,17 @@ impl BuildPlan {
         self.modules().last().unwrap()
     }
 
+    pub fn get_inputs_hash(&self) -> InputsHash {
+        let mut hash = InputsHash(0);
+        for m in self.modules() {
+            hash = hash.add(&[
+                self.get(m.path).as_bytes(),
+                &m.build_file_hash.unwrap_or(0).to_le_bytes(),
+            ]);
+        }
+        hash
+    }
+
     pub fn is_executable(&self) -> bool {
         self.primary().kind == ModuleKind::Executable
     }
@@ -223,12 +234,12 @@ impl BuildPlan {
         idents: &IdentPool,
         tmp: &mut Mem<Tag>,
         k1_home: &str,
-        overrides: &fxhash::FxHashMap<String, String>,
+        overlay: &fxhash::FxHashMap<String, String>,
     ) -> bool {
         let primary_dir = self.module_dir(self.primary());
         for m in self.modules() {
             let dir = self.module_dir(m);
-            if m.is_dir && read_build_file_hash(idents, tmp, dir, overrides) != m.build_file_hash {
+            if m.is_dir && read_build_file_hash(idents, tmp, dir, overlay) != m.build_file_hash {
                 return false;
             }
             for dep in self.mem.getn(m.deps) {
@@ -263,12 +274,15 @@ pub fn build_file_path<Tag>(
     idents: &IdentPool,
     tmp: &mut Mem<Tag>,
     dir: &str,
-    overrides: &fxhash::FxHashMap<String, String>,
+    overlay: &fxhash::FxHashMap<String, String>,
 ) -> Option<StringId> {
     let mark = tmp.mark();
     let path = kpath::join_tmp(tmp, idents, dir, BUILD_FILE_NAME);
-    let exists = overrides.contains_key(path.as_str()) || Path::new(path.as_str()).is_file();
-    let id = exists.then(|| idents.intern(path.as_str()));
+    let id = if crate::compiler::source_exists(path.as_str(), overlay) {
+        Some(idents.intern(path.as_str()))
+    } else {
+        None
+    };
     tmp.reset_to(mark);
     id
 }
@@ -277,10 +291,10 @@ pub fn read_build_file_hash<Tag>(
     idents: &IdentPool,
     tmp: &mut Mem<Tag>,
     dir: &str,
-    overrides: &fxhash::FxHashMap<String, String>,
+    overlay: &fxhash::FxHashMap<String, String>,
 ) -> Option<u64> {
-    let path = build_file_path(idents, tmp, dir, overrides)?;
-    let content = crate::compiler::read_source(idents.get_string(path), overrides).ok()?;
+    let path = build_file_path(idents, tmp, dir, overlay)?;
+    let content = crate::compiler::read_source(idents.get_string(path), overlay).ok()?;
     Some(crate::compiler::content_hash64(content.as_bytes()))
 }
 

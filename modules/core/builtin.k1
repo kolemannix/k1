@@ -259,7 +259,6 @@ ns meta {
   // Can only be called by generated code
   fn(intern) get-static-value[t](id: u64): t
 
-  fn(intern) static-type-to-value[t, st: static t](): t
 
 }
 
@@ -1156,10 +1155,9 @@ impl[t, n: static size] as-span[t = t] for *array[t, n] {
 
 impl[t: print, n: static size] print for array[t, n] {
   fn print-to[w: writer](self: array[t, n], w): empty {
-    let count: size = core/meta/static-type-to-value[_, n]()
     w.write-char('[')
     let i: size = 0
-    while i < count {
+    while i < n {
       if i > 0 { w.write-char(',') }
       self.[i].print-to(w)
       i = i + 1

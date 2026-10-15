@@ -1,0 +1,39 @@
+use core/c-int
+
+type mode = either(u32, partial) { generic = 0, text = 1, font = 2 }
+
+type encoder-op = either(u32, partial) { process = 0, flush = 1, finish = 2, emit-metadata = 3 }
+
+type encoder-param = either(u32, partial) { mode = 0, quality = 1, lgwin = 2 }
+
+fn(extern("BrotliEncoderCompress"), lib("brotli")) encoder-compress(
+  quality: c-int,
+  lgwin: c-int,
+  mode,
+  input-size: size,
+  input: ptr,
+  encoded-size: *size,
+  encoded: ptr,
+): c-int
+
+fn(extern("BrotliEncoderMaxCompressedSize"), lib("brotli")) encoder-max-compressed-size(input-size: size): size
+
+fn(extern("BrotliEncoderCreateInstance"), lib("brotli")) encoder-create-instance(
+  alloc-func: ptr, free-func: ptr, opaque: ptr
+): ptr
+
+fn(extern("BrotliEncoderDestroyInstance"), lib("brotli")) encoder-destroy-instance(state: ptr)
+
+fn(extern("BrotliEncoderSetParameter"), lib("brotli")) encoder-set-parameter(
+  state: ptr, param: encoder-param, value: u32
+): c-int
+
+fn(extern("BrotliEncoderCompressStream"), lib("brotli")) encoder-compress-stream(
+  state: ptr,
+  op: encoder-op,
+  available-in: *size,
+  next-in: *ptr,
+  available-out: *size,
+  next-out: *ptr,
+  total-out: *size,
+): c-int

@@ -62,3 +62,97 @@ ns for bit-writer {
     self | .{ pos = new-pos }
   }
 }
+
+type bit-reader = { val: u64, bit-pos: size, next: ptr, avail: size }
+
+ns for bit-reader {
+  fn new(input: span[u8]): bit-reader {
+    .{ val = 0, bit-pos = 0, next = input.data-ptr(), avail = input.len() }
+  }
+
+  fn(inline) fill(self: *bit-reader) {
+    if self.bit-pos > 56 return
+    if self.avail >= 8 {
+      self.val = self.val | (load64-le(self.next) << self.bit-pos.trunc[u32])
+      let n = (63 - self.bit-pos) >> 3
+      self.next = self.next.add-bytes(n)
+      self.avail = self.avail - n
+      self.bit-pos = self.bit-pos | 56
+    } else {
+      while self.avail > 0 and self.bit-pos <= 56 {
+        self.val = self.val | (self.next.ref[u8].*.widen[u64] << self.bit-pos.trunc[u32])
+        self.bit-pos = self.bit-pos + 8
+        self.next = self.next.add-bytes(1)
+        self.avail = self.avail - 1
+      }
+    }
+  }
+
+  fn(inline) peek(self: *bit-reader, n-bits: size): u64 {
+    self.val & ((1u64 << n-bits.trunc[u32]) - 1)
+  }
+
+  fn(inline) drop(self: *bit-reader, n-bits: size) {
+    self.val = self.val >> n-bits.trunc[u32]
+    self.bit-pos = self.bit-pos - n-bits
+  }
+
+  fn(inline) read(self: *bit-reader, n-bits: size): size {
+    self.fill()
+    let v = self.peek(n-bits)
+    self.drop(n-bits)
+    v.signed()
+  }
+
+  fn(inline) read-symbol(self: *bit-reader, table: ptr): size {
+    self.fill()
+    let bits = self.val
+    let index = (bits & 0xFF).signed()
+    let e = table.ref-at[u32](index).*
+    let n = (e & 0xFF).as-size()
+    if n > 8 {
+      self.drop(8)
+      let sub = ((bits >> 8) & ((1u64 << (n - 8).trunc[u32]) - 1)).signed()
+      let e2 = table.ref-at[u32](index + (e >> 16).as-size() + sub).*
+      self.drop((e2 & 0xFF).as-size())
+      return (e2 >> 16).as-size()
+    }
+    self.drop(n)
+    (e >> 16).as-size()
+  }
+
+  fn jump-to-byte-boundary(self: *bit-reader): bool {
+    if self.bit-pos < 0 return false
+    let pad = self.bit-pos & 7
+    let bits = self.peek(pad)
+    self.drop(pad)
+    self.val = self.peek(self.bit-pos)
+    bits == 0
+  }
+
+  fn skip-bytes(self: *bit-reader, count: size): bool {
+    if self.bit-pos < 0 return false
+    let from-val = (self.bit-pos >> 3).min(count)
+    self.drop(from-val * 8)
+    let rest = count - from-val
+    if rest > self.avail return false
+    self.next = self.next.add-bytes(rest)
+    self.avail = self.avail - rest
+    true
+  }
+
+  fn copy-bytes(self: *bit-reader, dst: ptr, count: size): bool {
+    if self.bit-pos < 0 return false
+    let from-val = (self.bit-pos >> 3).min(count)
+    for k in 0.until(from-val) {
+      dst.ref-at[u8](k).* = (self.val >> (8 * k).trunc[u32]).trunc[u8]
+    }
+    self.drop(from-val * 8)
+    let rest = count - from-val
+    if rest > self.avail return false
+    mem/copy(dst.add-bytes(from-val), self.next, rest)
+    self.next = self.next.add-bytes(rest)
+    self.avail = self.avail - rest
+    true
+  }
+}

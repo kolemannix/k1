@@ -8,7 +8,7 @@ ns for spill-list {
 
   fn new[t, n](): spill-list[t, n] { .0 }
 
-  fn(inline) cap[t, n](_self: *spill-list[t, n]): size { core/meta/static-type-to-value[_, n]() }
+  fn(inline) cap[t, n: static size](_self: *spill-list[t, n]): size { n }
 
   fn(inline) is-spilled[t, n](self: *spill-list[t, n]): bool { self.inline.len == SPILLED }
 

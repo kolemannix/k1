@@ -12,7 +12,7 @@ type json = either {
 }
 
 ns for json {
-  fn get(self: json, key: string): ?json {
+  fn get(self, key: string): ?json {
     if self is :object members {
       for m in members { if m.key == key return :some m.value }
     }
@@ -29,7 +29,7 @@ type opts = {
 ns for opts {
   let default: opts = .{ key-case = :as-is, skip-none = false, renames = [] }
 
-  fn apply-key-case(self: opts, name: string): string {
+  fn apply-key-case(self, name: string): string {
     if self.key-case is :as-is { return name }
     let sb = string-builder/new()
     let upper = false
@@ -44,7 +44,7 @@ ns for opts {
     sb.build()
   }
 
-  fn get-field-key(self: opts, field: string): string {
+  fn get-field-key(self, field: string): string {
     for r in self.renames { if r.field == field return r.key }
     self.apply-key-case(field)
   }
@@ -54,7 +54,7 @@ ability json-write {
   fn write-json[w: writer, o: static opts](self, w)
 }
 
-fn write[t: json-write, w: writer](w: w, value: t) { value.write-json[_, opts/default](w) }
+fn write[t: json-write, w: writer](w, value: t) { value.write-json[_, opts/default](w) }
 
 fn to-string[t: json-write](value: t): string {
   let sb = string-builder/new()
@@ -74,26 +74,25 @@ fn to-string-pretty[t: json-write](value: t, indent: size): string {
   sb.build()
 }
 
-fn write-float[w: writer](w: w, f: f64) {
+fn write-float[w: writer](w, f: f64) {
   if f != f or f == f64/inf or f == f64/neg-inf w.write("null") else f.print-to(w)
 }
 
-fn write-string[w: writer](w: w, s: string) {
+fn write-string[w: writer](w, s: string) {
   w.write-char('"')
-  let bytes = s.span-bytes()
   let i: size = 0
   loop {
-    let next = internal/escape-position(bytes, i)
-    w.write-bytes(bytes.slice(i, next))
-    if next == bytes.len() break
-    internal/write-escape(w, bytes.[next])
+    let next = internal/escape-position(s, i)
+    w.write(s.slice(i, next))
+    if next == s.len() break
+    internal/write-escape(w, s.[next])
     i = next + 1
   }
   w.write-char('"')
 }
 
 impl json-write for json {
-  fn write-json[w: writer, o: static opts](self: json, w) {
+  fn write-json[w: writer, o: static opts](self, w) {
     if self is {
       :null -> w.write("null"),
       :bool b -> b.print-to(w),
@@ -124,62 +123,58 @@ impl json-write for json {
 }
 
 impl[t] json-write for t {
-  fn write-json[w: writer, o: static opts](self: t, w) {
-    #meta {
-      let o: opts = core/meta/static-type-to-value[_, o]()
-      internal/write-code(o, types/id[t])
-    }
+  fn write-json[w: writer, o: static opts](self, w) {
+    #meta internal/write-code(o, types/id[t])
   }
 }
 
-fn pretty[w: writer](w: w, compact: string, indent: size) {
-  let bytes = compact.span-bytes()
-  let len = bytes.len()
+fn pretty[w: writer](w, compact: string, indent: size) {
+  let len = compact.len()
   let depth: size = 0
   let i: size = 0
   while i < len {
-    let b = bytes.[i]
-    if b == 34 {
+    let c = compact.[i]
+    if c == '"' {
       let end = i + 1
       loop {
         if end >= len break
-        let c = bytes.[end]
-        end = end + (if c == 92 2 else 1)
-        if c == 34 break
+        let e = compact.[end]
+        end = end + (if e == '\\' 2 else 1)
+        if e == '"' break
       }
-      w.write-bytes(bytes.slice(i, end))
+      w.write(compact.slice(i, end))
       i = end
       continue
     }
     i = i + 1
-    if b == 123 or b == 91 {
-      let close: u8 = if b == 123 125 else 93
-      if i < len and bytes.[i] == close {
-        w.write-byte(b)
-        w.write-byte(close)
+    if c == '{' or c == '[' {
+      let close = if c == '{' '}' else ']'
+      if i < len and compact.[i] == close {
+        w.write-char(c)
+        w.write-char(close)
         i = i + 1
         continue
       }
       depth = depth + 1
-      w.write-byte(b)
+      w.write-char(c)
       internal/newline(w, depth, indent)
-    } else if b == 125 or b == 93 {
+    } else if c == '}' or c == ']' {
       depth = depth - 1
       internal/newline(w, depth, indent)
-      w.write-byte(b)
-    } else if b == 44 {
-      w.write-byte(b)
+      w.write-char(c)
+    } else if c == ',' {
+      w.write-char(c)
       internal/newline(w, depth, indent)
-    } else if b == 58 {
+    } else if c == ':' {
       w.write(": ")
     } else {
-      w.write-byte(b)
+      w.write-char(c)
     }
   }
 }
 
 type error-kind = either {
-  unexpected-char(u8),
+  unexpected-char(char),
   unexpected-end,
   control-char,
   bad-escape,
@@ -192,12 +187,12 @@ type error-kind = either {
   wrong-type(string),
   unknown-variant(string),
 }
-type error = { pos: size, kind: error-kind, input: span[u8] }
+type error = { pos: size, kind: error-kind, input: string }
 
 impl print for error {
   fn print-to[w: writer](self, w) {
     if self.kind is {
-      :unexpected-char b -> { w.write("unexpected '"); w.write-char(b.as-char()); w.write("'") },
+      :unexpected-char c -> { w.write("unexpected '"); w.write-char(c); w.write("'") },
       :unexpected-end -> w.write("unexpected end of input"),
       :control-char -> w.write("control character in string"),
       :bad-escape -> w.write("bad escape sequence"),
@@ -215,7 +210,7 @@ impl print for error {
     let i: size = 0
     let end = if self.pos < self.input.len() self.pos else self.input.len()
     while i < end {
-      if self.input.[i] == 10 { line = line + 1; col = 1 } else { col = col + 1 }
+      if self.input.[i] == '\n' { line = line + 1; col = 1 } else { col = col + 1 }
       i = i + 1
     }
     w.write(" at line ")
@@ -241,7 +236,7 @@ fn parse-with[t: json-read, o: static opts](input: string): result[t, error] {
 }
 
 type reader = {
-  input: span[u8],
+  input: string,
   pos: size,
   depth: size,
   max-depth: size,
@@ -253,7 +248,7 @@ type reader = {
 ns for reader {
   fn new(input: string): reader {
     .{
-      input = input.span-bytes(),
+      input,
       pos = 0,
       depth = 0,
       max-depth = 1024,
@@ -263,22 +258,22 @@ ns for reader {
     }
   }
 
-  fn(inline) at-end(self: *reader): bool { self.pos >= self.input.len() }
+  fn(inline) at-end(*self): bool { self.pos >= self.input.len() }
 
-  fn(inline) peek(self: *reader): u8 {
-    if self.pos < self.input.len() self.input.[self.pos] else 0
+  fn(inline) peek(*self): char {
+    if self.pos < self.input.len() self.input.[self.pos] else '\0'
   }
 
-  fn fail[t](self: *reader, kind: error-kind): result[t, error] {
+  fn fail[t](*self, kind: error-kind): result[t, error] {
     :err .{ pos = self.pos, kind, input = self.input }
   }
 
-  fn unexpected[t](self: *reader): result[t, error] {
+  fn unexpected[t](*self): result[t, error] {
     if self.at-end() self.fail(:unexpected-end) else self.fail(:unexpected-char self.peek())
   }
 
-  fn expect(self: *reader, b: u8): result[empty, error] {
-    if self.peek() == b {
+  fn expect(*self, c: char): result[empty, error] {
+    if self.peek() == c {
       self.pos = self.pos + 1
       :ok(.{})
     } else {
@@ -286,71 +281,72 @@ ns for reader {
     }
   }
 
-  fn skip-ws(self: *reader) {
+  fn skip-ws(*self) {
     let input = self.input
     let len = input.len()
     let base = input.data-ptr()
+    let spaces = ' '.as-u8().widen[u64] * 0x0101010101010101
     let pos = self.pos
     while pos < len {
-      let b = input.[pos]
-      if not (b == 32 or b == 10 or b == 13 or b == 9) { break }
+      let c = input.[pos]
+      if not (c == ' ' or c == '\n' or c == '\r' or c == '\t') { break }
       pos = pos + 1
-      while pos + 8 <= len and mem/read-unaligned[u64](base.add-bytes(pos)) == 0x2020202020202020 {
+      while pos + 8 <= len and mem/read-unaligned[u64](base.add-bytes(pos)) == spaces {
         pos = pos + 8
       }
     }
     self.pos = pos
   }
 
-  fn enter(self: *reader): result[empty, error] {
+  fn enter(*self): result[empty, error] {
     self.depth = self.depth + 1
     if self.depth > self.max-depth { return self.fail(:depth) }
     :ok(.{})
   }
 
-  fn array-start(self: *reader): result[empty, error] {
-    self.expect(91).try
+  fn array-start(*self): result[empty, error] {
+    self.expect('[').try
     self.enter()
   }
 
-  fn object-start(self: *reader): result[empty, error] {
-    self.expect(123).try
+  fn object-start(*self): result[empty, error] {
+    self.expect('{').try
     self.enter()
   }
 
-  fn next-item(self: *reader, first: bool): result[bool, error] {
+  fn next-item(*self, first: bool): result[bool, error] {
     self.skip-ws()
-    if self.peek() == 93 {
+    if self.peek() == ']' {
       self.pos = self.pos + 1
       self.depth = self.depth - 1
       return :ok false
     }
     if not first {
-      self.expect(44).try
+      self.expect(',').try
       self.skip-ws()
     }
     :ok true
   }
 
-  fn next-key(self: *reader, first: bool): result[?string, error] {
+  fn next-key(*self, first: bool): result[?string, error] {
     self.skip-ws()
-    if self.peek() == 125 {
+    if self.peek() == '}' {
       self.pos = self.pos + 1
       self.depth = self.depth - 1
       return :ok :none
     }
     if not first {
-      self.expect(44).try
+      self.expect(',').try
       self.skip-ws()
     }
     let key = self.read-string().try
     self.skip-ws()
-    self.expect(58).try
+    self.expect(':').try
     self.skip-ws()
     :ok :some key
   }
 
-  fn literal(self: *reader, text: string): result[empty, error] {
+  fn literal(*self, text: string): result[empty, error] {
     let n = text.len()
     if self.pos + n > self.input.len() { return self.unexpected() }
     let have = self.input.data-ptr().add-bytes(self.pos)
@@ -364,13 +360,13 @@ ns for reader {
     :ok(.{})
   }
 
-  fn read-null(self: *reader): result[empty, error] { self.literal("null") }
+  fn read-null(*self): result[empty, error] { self.literal("null") }
 
-  fn read-bool(self: *reader): result[bool, error] {
-    if self.peek() == 116 {
+  fn read-bool(*self): result[bool, error] {
+    if self.peek() == 't' {
       self.literal("true").try
       :ok true
-    } else if self.peek() == 102 {
+    } else if self.peek() == 'f' {
       self.literal("false").try
       :ok false
     } else {
@@ -378,8 +374,8 @@ ns for reader {
     }
   }
 
-  fn read-string(self: *reader): result[string, error] {
-    if self.peek() != 34 { return self.unexpected() }
+  fn read-string(*self): result[string, error] {
+    if self.peek() != '"' { return self.unexpected() }
     let input = self.input
     let len = input.len()
     let start = self.pos + 1
@@ -388,22 +384,22 @@ ns for reader {
       self.pos = len
       return self.fail(:unexpected-end)
     }
-    let b = input.[seg.stop]
-    if b == 34 {
-      let bytes = input.slice(start, seg.stop)
-      if seg.high and not utf8/is-valid(bytes) {
+    let c = input.[seg.stop]
+    if c == '"' {
+      let s = input.slice(start, seg.stop)
+      if seg.high and not utf8/is-valid(s.span-bytes()) {
         self.pos = start
         return self.fail(:invalid-utf8)
       }
       self.pos = seg.stop + 1
-      return :ok string/wrap-bytes(bytes)
+      return :ok s
     }
-    if b < 32 {
+    if c < ' ' {
       self.pos = seg.stop
       return self.fail(:control-char)
     }
     let sb = string-builder/new()
-    sb.write-bytes(input.slice(start, seg.stop))
+    sb.write(input.slice(start, seg.stop))
     let high = seg.high
     let i = seg.stop
     loop {
@@ -413,19 +409,19 @@ ns for reader {
       let e = input.[i]
       i = i + 1
       if e is {
-        34  -> sb.write-char('"'),
-        92  -> sb.write-char('\\'),
-        47  -> sb.write-char('/'),
-        98  -> sb.write-byte(8),
-        102 -> sb.write-byte(12),
-        110 -> sb.write-char('\n'),
-        114 -> sb.write-char('\r'),
-        116 -> sb.write-char('\t'),
-        117 -> {
+        '"'  -> sb.write-char('"'),
+        '\\' -> sb.write-char('\\'),
+        '/'  -> sb.write-char('/'),
+        'b'  -> sb.write-byte(8),
+        'f'  -> sb.write-byte(12),
+        'n'  -> sb.write-char('\n'),
+        'r'  -> sb.write-char('\r'),
+        't'  -> sb.write-char('\t'),
+        'u'  -> {
           let cp = self.read-hex4(i).try
           i = i + 4
           if cp >= 0xD800 and cp <= 0xDBFF {
-            if i + 6 > len or input.[i] != 92 or input.[i + 1] != 117 { return self.fail(:bad-escape) }
+            if i + 6 > len or input.[i] != '\\' or input.[i + 1] != 'u' { return self.fail(:bad-escape) }
             let low = self.read-hex4(i + 2).try
             if low < 0xDC00 or low > 0xDFFF { return self.fail(:bad-escape) }
             i = i + 6
@@ -438,18 +434,18 @@ ns for reader {
         _ -> return self.fail(:bad-escape)
       }
       let next = internal/string-stop(input, i)
-      sb.write-bytes(input.slice(i, next.stop))
+      sb.write(input.slice(i, next.stop))
       high = high or next.high
       if next.stop >= len {
         self.pos = len
         return self.fail(:unexpected-end)
       }
       let c = input.[next.stop]
-      if c == 34 {
+      if c == '"' {
         self.pos = next.stop + 1
         break
       }
-      if c < 32 {
+      if c < ' ' {
         self.pos = next.stop
         return self.fail(:control-char)
       }
@@ -463,45 +459,45 @@ ns for reader {
     :ok s
   }
 
-  fn read-hex4(self: *reader, at: size): result[u32, error] {
+  fn read-hex4(*self, at: size): result[u32, error] {
     if at + 4 > self.input.len() { return self.fail(:bad-escape) }
     let v: u32 = 0
     let j: size = 0
     while j < 4 {
-      require self.input.[at + j].as-char().to-ascii-hex-digit() is :some d else { return self.fail(:bad-escape) }
+      require self.input.[at + j].to-ascii-hex-digit() is :some d else { return self.fail(:bad-escape) }
       v = (v << 4) + d.widen[u32]
       j = j + 1
     }
     :ok v
   }
 
-  fn scan-number(self: *reader): result[{ end: size, is-int: bool, neg: bool }, error] {
+  fn scan-number(*self): result[{ end: size, is-int: bool, neg: bool }, error] {
     let input = self.input
     let len = input.len()
     let i = self.pos
-    let neg = i < len and input.[i] == 45
+    let neg = i < len and input.[i] == '-'
     if neg { i = i + 1 }
     if i >= len { self.pos = i; return self.fail(:unexpected-end) }
-    if input.[i] == 48 {
+    if input.[i] == '0' {
       i = i + 1
-    } else if internal/is-digit(input.[i]) {
+    } else if input.[i].is-ascii-digit() {
       i = internal/skip-digits(input, i)
     } else {
       self.pos = i
       return self.fail(:bad-number)
     }
     let is-int = true
-    if i < len and input.[i] == 46 {
+    if i < len and input.[i] == '.' {
       is-int = false
       i = i + 1
       let digits = internal/skip-digits(input, i)
       if digits == i { self.pos = i; return self.fail(:bad-number) }
       i = digits
     }
-    if i < len and (input.[i] == 101 or input.[i] == 69) {
+    if i < len and (input.[i] == 'e' or input.[i] == 'E') {
       is-int = false
       i = i + 1
-      if i < len and (input.[i] == 43 or input.[i] == 45) { i = i + 1 }
+      if i < len and (input.[i] == '+' or input.[i] == '-') { i = i + 1 }
       let digits = internal/skip-digits(input, i)
       if digits == i { self.pos = i; return self.fail(:bad-number) }
       i = digits
@@ -509,24 +505,26 @@ ns for reader {
     :ok .{ end = i, is-int, neg }
   }
 
-  fn digits-u64(self: *reader, start: size, end: size): ?u64 {
+  fn digits-u64(*self, start: size, end: size): ?u64 {
+    let cutoff = u64/max-value / 10
+    let last-digit = u64/max-value % 10
     let v: u64 = 0
     let i = start
     while i < end {
-      let d = (self.input.[i] - 48).widen[u64]
-      if v > 1844674407370955161 or (v == 1844674407370955161 and d > 5) { return :none }
+      let d = (self.input.[i].as-u8() - '0'.as-u8()).widen[u64]
+      if v > cutoff or (v == cutoff and d > last-digit) { return :none }
       v = v * 10 + d
       i = i + 1
     }
     :some v
   }
 
-  fn read-f64(self: *reader): result[f64, error] {
+  fn read-f64(*self): result[f64, error] {
     let n = self.scan-number().try
     self.read-f64-to(n.end)
   }
 
-  fn read-f64-to(self: *reader, end: size): result[f64, error] {
+  fn read-f64-to(*self, end: size): result[f64, error] {
     let out: f64 = uninit
     let r = core/ffc/parse_double(end - self.pos, self.input.data-ptr().add-bytes(self.pos), out.&)
     if r.outcome == core/ffc/FFC_OUTCOME_INVALID_INPUT { return self.fail(:bad-number) }
@@ -534,24 +532,18 @@ ns for reader {
     :ok out
   }
 
-  fn read-int(self: *reader, min: i64, max: i64): result[i64, error] {
+  fn read-int(*self, min: i64, max: i64): result[i64, error] {
     let n = self.scan-number().try
     if not n.is-int { return self.fail(:wrong-type "integer") }
     let start = if n.neg self.pos + 1 else self.pos
     require self.digits-u64(start, n.end) is :some digits else { return self.fail(:overflow) }
-    let v: i64 = if n.neg {
-      if digits > 9223372036854775808 { return self.fail(:overflow) }
-      if digits == 9223372036854775808 i64/min-value else digits.signed().negated()
-    } else {
-      if digits > 9223372036854775807 { return self.fail(:overflow) }
-      digits.signed()
-    }
+    require i64/from-magnitude(n.neg, digits) is :some v else { return self.fail(:overflow) }
     if v < min or v > max { return self.fail(:overflow) }
     self.pos = n.end
     :ok v
   }
 
-  fn read-u64(self: *reader): result[u64, error] {
+  fn read-u64(*self): result[u64, error] {
     let n = self.scan-number().try
     if not n.is-int { return self.fail(:wrong-type "integer") }
     let start = if n.neg self.pos + 1 else self.pos
@@ -561,45 +553,38 @@ ns for reader {
     :ok digits
   }
 
-  fn read-number(self: *reader): result[json, error] {
+  fn read-number(*self): result[json, error] {
     let n = self.scan-number().try
     if n.is-int {
       let start = if n.neg self.pos + 1 else self.pos
       if self.digits-u64(start, n.end) is :some digits {
-        if n.neg {
-          if digits <= 9223372036854775808 {
-            self.pos = n.end
-            let v: json = :int (if digits == 9223372036854775808 i64/min-value else digits.signed().negated())
-            return :ok v
-          }
-        } else if digits <= 9223372036854775807 {
+        if i64/from-magnitude(n.neg, digits) is :some v {
           self.pos = n.end
-          let v: json = :int digits.signed()
-          return :ok v
-        } else {
+          return :ok :int v
+        }
+        if not n.neg {
           self.pos = n.end
-          let v: json = :uint digits
-          return :ok v
+          return :ok :uint digits
         }
       }
     }
     :ok :float self.read-f64-to(n.end).try
   }
 
-  fn read-value(self: *reader): result[json, error] {
-    let b = self.peek()
-    if b is {
-      123 -> self.read-object(),
-      91 -> self.read-array(),
-      34 -> { :ok :str self.read-string().try },
-      116 -> { self.literal("true").try; :ok :bool true },
-      102 -> { self.literal("false").try; :ok :bool false },
-      110 -> { self.literal("null").try; :ok :null },
-      _ -> if b == 45 or internal/is-digit(b) self.read-number() else self.unexpected()
+  fn read-value(*self): result[json, error] {
+    let c = self.peek()
+    if c is {
+      '{' -> self.read-object(),
+      '[' -> self.read-array(),
+      '"' -> { :ok :str self.read-string().try },
+      't' -> { self.literal("true").try; :ok :bool true },
+      'f' -> { self.literal("false").try; :ok :bool false },
+      'n' -> { self.literal("null").try; :ok :null },
+      _ -> if c == '-' or c.is-ascii-digit() self.read-number() else self.unexpected()
     }
   }
 
-  fn read-array(self: *reader): result[json, error] {
+  fn read-array(*self): result[json, error] {
     self.array-start().try
     let mark = self.scratch.len
     let first = true
@@ -613,7 +598,7 @@ ns for reader {
     :ok :array items
   }
 
-  fn read-object(self: *reader): result[json, error] {
+  fn read-object(*self): result[json, error] {
     self.object-start().try
     let mark = self.members.len
     let first = true
@@ -628,10 +613,10 @@ ns for reader {
     :ok :object members
   }
 
-  fn skip-value(self: *reader): result[empty, error] {
-    let b = self.peek()
-    if b is {
-      123 -> {
+  fn skip-value(*self): result[empty, error] {
+    let c = self.peek()
+    if c is {
+      '{' -> {
         self.object-start().try
         let first = true
         loop {
@@ -641,7 +626,7 @@ ns for reader {
         }
         :ok(.{})
       },
-      91 -> {
+      '[' -> {
         self.array-start().try
         let first = true
         while self.next-item(first).try {
@@ -650,12 +635,12 @@ ns for reader {
         }
         :ok(.{})
       },
-      34 -> { self.read-string().try; :ok(.{}) },
-      116 -> self.literal("true"),
-      102 -> self.literal("false"),
-      110 -> self.literal("null"),
+      '"' -> { self.read-string().try; :ok(.{}) },
+      't' -> self.literal("true"),
+      'f' -> self.literal("false"),
+      'n' -> self.literal("null"),
       _ -> {
-        if not (b == 45 or internal/is-digit(b)) { return self.unexpected() }
+        if not (c == '-' or c.is-ascii-digit()) { return self.unexpected() }
         self.pos = self.scan-number().try.end
         :ok(.{})
       }
@@ -669,35 +654,30 @@ impl json-read for json {
 
 impl[t] json-read for t {
   fn read-json[o: static opts](r: *reader): result[t, error] {
-    #meta {
-      let o: opts = core/meta/static-type-to-value[_, o]()
-      internal/read-code(o, types/id[t])
-    }
+    #meta internal/read-code(o, types/id[t])
   }
 }
 
 ns internal {
-  fn write-escape[w: writer](w: w, b: u8) {
+  fn write-escape[w: writer](w, c: char) {
     w.write-char('\\')
-    if b is {
-      34  -> w.write-char('"'),
-      92  -> w.write-char('\\'),
-      10  -> w.write-char('n'),
-      13  -> w.write-char('r'),
-      9   -> w.write-char('t'),
-      8   -> w.write-char('b'),
-      12  -> w.write-char('f'),
-      _ -> {
-        w.write("u00")
-        w.write-char(u8/to-ascii-digit(b >> 4))
-        w.write-char(u8/to-ascii-digit(b.bit-and(0xF)))
+    if c is {
+      '"'  -> w.write-char('"'),
+      '\\' -> w.write-char('\\'),
+      '\n' -> w.write-char('n'),
+      '\r' -> w.write-char('r'),
+      '\t' -> w.write-char('t'),
+      _ -> if c.as-u8() is {
+        8  -> w.write-char('b'),
+        12 -> w.write-char('f'),
+        b  -> { w.write("u00"); b.write-hex(w, false) }
       }
     }
   }
 
-  fn escape-position(bytes: span[u8], from: size): size {
-    let len = bytes.len()
-    let base = bytes.data-ptr()
+  fn escape-position(s: string, from: size): size {
+    let len = s.len()
+    let base = s.data-ptr()
     let lanes: size = k1/simd-bytes
     let i = from
     if i + lanes <= len {
@@ -714,8 +694,8 @@ ns internal {
       }
     }
     while i < len {
-      let b = bytes.[i]
-      if b == 34 or b == 92 or b < 32 return i
+      let c = s.[i]
+      if c == '"' or c == '\\' or c < ' ' return i
       i = i + 1
     }
     len
@@ -780,39 +760,37 @@ ns internal {
     cb.line(`w.write-char(']')`)
   }
 
-  fn newline[w: writer](w: w, depth: size, indent: size) {
+  fn newline[w: writer](w, depth: size, indent: size) {
     w.write-char('\n')
     w.repeat(" ", depth * indent)
   }
 
-  fn(inline) is-digit(b: u8): bool { b >= 48 and b <= 57 }
-
-  fn skip-digits(bytes: span[u8], from: size): size {
-    let len = bytes.len()
+  fn skip-digits(s: string, from: size): size {
+    let len = s.len()
     let lanes: size = k1/simd-bytes
     let i = from
     if i + lanes <= len {
-      let chunk = vector/load-unchecked[u8, k1/simd-bytes](bytes.data-ptr().add-bytes(i))
-      let digits = chunk.sub(vector/splat[u8, k1/simd-bytes](48)).lt-lanes(vector/splat[u8, k1/simd-bytes](10))
+      let chunk = vector/load-unchecked[u8, k1/simd-bytes](s.data-ptr().add-bytes(i))
+      let digits = chunk.sub(vector/splat[u8, k1/simd-bytes]('0'.as-u8())).lt-lanes(vector/splat[u8, k1/simd-bytes](10))
       let all = u64/bitmask-low(lanes)
       let mask = digits.to-mask()
       if mask != all { return i + mask.bit-not().bit-and(all).trailing-zeros().signed() }
       i = i + lanes
     }
-    while i < len and is-digit(bytes.[i]) { i = i + 1 }
+    while i < len and s.[i].is-ascii-digit() { i = i + 1 }
     i
   }
 
-  fn string-stop(bytes: span[u8], from: size): { stop: size, high: bool } {
-    let len = bytes.len()
-    let base = bytes.data-ptr()
+  fn string-stop(s: string, from: size): { stop: size, high: bool } {
+    let len = s.len()
+    let base = s.data-ptr()
     let lanes: size = k1/simd-bytes
     let i = from
     let high = false
     if i + lanes <= len {
-      let quote = vector/splat[u8, k1/simd-bytes](34)
-      let slash = vector/splat[u8, k1/simd-bytes](92)
-      let space = vector/splat[u8, k1/simd-bytes](32)
+      let quote = vector/splat[u8, k1/simd-bytes]('"'.as-u8())
+      let slash = vector/splat[u8, k1/simd-bytes]('\\'.as-u8())
+      let space = vector/splat[u8, k1/simd-bytes](' '.as-u8())
       let seen = vector/splat[u8, k1/simd-bytes](0)
       while i + lanes <= len {
         let chunk = vector/load-unchecked[u8, k1/simd-bytes](base.add-bytes(i))
@@ -826,9 +804,9 @@ ns internal {
       high = seen.reduce-or() >= 0x80
     }
     while i < len {
-      let b = bytes.[i]
-      if b == 34 or b == 92 or b < 32 { return .{ stop = i, high } }
-      if b >= 0x80 { high = true }
+      let c = s.[i]
+      if c == '"' or c == '\\' or c < ' ' { return .{ stop = i, high } }
+      if not c.is-ascii() { high = true }
       i = i + 1
     }
     .{ stop = len, high }
@@ -846,24 +824,22 @@ ns internal {
   fn read-code(o: opts, id: types/type-id): code {
     let cb = code-builder/new()
     if id.is-instance-of(types/id[opt]) {
-      cb.line(`if r.peek() == 110 { r.read-null().try; :ok :none } else { :ok :some ${read-of(id.instance-info().!.args.[0])} }`)
+      cb.line(`if r.peek() == 'n' { r.read-null().try; :ok :none } else { :ok :some ${read-of(id.instance-info().!.args.[0])} }`)
     } else if id.is-instance-of(types/id[list]) {
       read-seq-code(cb.&, id.instance-info().!.args.[0])
       cb.line(`:ok items`)
     } else if id.is-instance-of(types/id[span]) {
       read-seq-code(cb.&, id.instance-info().!.args.[0])
       cb.line(`:ok items.as-span()`)
-    } else if id == types/id[u8] { cb.line(`:ok r.read-int(0, 255).try.trunc[u8]`) }
-    else if id == types/id[u16] { cb.line(`:ok r.read-int(0, 65535).try.trunc[u16]`) }
-    else if id == types/id[u32] { cb.line(`:ok r.read-int(0, 4294967295).try.trunc[u32]`) }
-    else if id == types/id[u64] { cb.line(`r.read-u64()`) }
-    else if id == types/id[i8] { cb.line(`:ok r.read-int(-128, 127).try.trunc[i8]`) }
-    else if id == types/id[i16] { cb.line(`:ok r.read-int(-32768, 32767).try.trunc[i16]`) }
-    else if id == types/id[i32] { cb.line(`:ok r.read-int(-2147483648, 2147483647).try.trunc[i32]`) }
-    else if id == types/id[i64] { cb.line(`r.read-int(i64/min-value, i64/max-value)`) }
-    else if id == types/id[f32] { cb.line(`:ok r.read-f64().try.trunc[f32]`) }
-    else if id == types/id[f64] { cb.line(`r.read-f64()`) }
-    else if id.schema() is {
+    } else if id.schema() is {
+      :int :u64 -> cb.line(`r.read-u64()`),
+      :int :i64 -> cb.line(`r.read-int(i64/min-value, i64/max-value)`),
+      :int k -> {
+        let t = k.enum-name()
+        cb.line(`:ok r.read-int($t/min-value, $t/max-value).try.trunc[$t]`)
+      },
+      :float :f32 -> cb.line(`:ok r.read-f64().try.trunc[f32]`),
+      :float :f64 -> cb.line(`r.read-f64()`),
       :bool -> cb.line(`r.read-bool()`),
       :string -> cb.line(`r.read-string()`),
       :char -> {
@@ -887,7 +863,7 @@ ns internal {
         cb.line(`else { r.fail(:unknown-variant s) }`)
       },
       :either .{ variants } -> {
-        cb.line(`if r.peek() == 34 {`)
+        cb.line(`if r.peek() == '"' {`)
         cb.line(`let s = r.read-string().try`)
         for v in variants {
           if v.payload is :none {
@@ -900,13 +876,15 @@ ns internal {
         cb.line(`r.object-start().try`)
         cb.line(`require r.next-key(true).try is :some key else { return r.fail(:wrong-type "variant") }`)
         cb.line(`let v: ${id.spell()} = uninit`)
+        let first = true
         for v in variants {
           if v.payload is :some p {
             let name = meta/str-lit(o.apply-key-case(v.name))
-            cb.line(`${if it-index == 0 "if" else "else if"} key == $name { v = :${v.name} (${read-of(p.type-id)}) }`)
+            cb.line(`${if first "if" else "else if"} key == $name { v = :${v.name} (${read-of(p.type-id)}) }`)
+            first = false
           }
         }
-        cb.line(`else { return r.fail(:unknown-variant key) }`)
+        cb.line(`${if first "" else "else "}{ return r.fail(:unknown-variant key) }`)
         cb.line(`if r.next-key(false).try is :some _ { return r.fail(:wrong-type "single-key variant object") }`)
         cb.line(`:ok v`)
         cb.line(`}`)

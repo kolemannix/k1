@@ -1985,7 +1985,6 @@ pub enum BuiltinTyperInline {
     CompilerSourceLocation,
     CompilerModuleDir,
     GetStaticValue,
-    StaticTypeToValue,
     TypeId,
     EnumEquals,
     Discard,
@@ -2000,7 +1999,6 @@ impl BuiltinTyperInline {
             BuiltinTyperInline::CompilerSourceLocation => "compiler_source_location",
             BuiltinTyperInline::CompilerModuleDir => "compiler_module_dir",
             BuiltinTyperInline::GetStaticValue => "get_static_value",
-            BuiltinTyperInline::StaticTypeToValue => "static_type_to_value",
             BuiltinTyperInline::TypeId => "type_id",
             BuiltinTyperInline::EnumEquals => "enum_equals",
             BuiltinTyperInline::Discard => "discard",
@@ -2846,6 +2844,7 @@ pub struct TypedProgram {
     pub completion: Option<CompletionState>,
     /// Per-session LSP compile options; never snapshotted
     pub lsp: compiler::LspCompileOptions,
+    pub host_program: HostProgram,
 
     inference_context_stack: Vec<InferenceContext>,
     inference_context_extras: Vec<InferenceContext>,
@@ -2902,6 +2901,12 @@ pub struct TypedProgram {
     pub restored_module_count: u32,
 }
 
+pub enum HostProgram {
+    Absent,
+    Current,
+    Built(Box<TypedProgram>),
+}
+
 // SAFETY: TypedProgram's raw pointers point into its own heap allocations
 // (kmem arenas, pools) or are process-wide dlopen handles; none of them are
 // tied to the thread that created them, so the value may move between
@@ -2928,13 +2933,17 @@ impl TypedProgram {
         plan: crate::plan::BuildPlan,
         mut lsp: compiler::LspCompileOptions,
     ) -> TypedProgram {
-        let progress_sink = lsp.progress_sink.take().or_else(|| {
-            (config.tools.chatty && std::io::stderr().is_terminal())
-                .then_some(trace::LiveProgressSink::Stderr)
-        });
-        let completion = lsp
-            .completion
-            .then(|| CompletionState { marker: ast.idents.intern(COMPLETION_MARKER), site: None });
+        let progress_sink = match lsp.progress_sink.take() {
+            None if config.tools.chatty && std::io::stderr().is_terminal() => {
+                Some(trace::LiveProgressSink::Stderr)
+            }
+            sink => sink,
+        };
+        let completion = if lsp.completion {
+            Some(CompletionState { marker: ast.idents.intern(COMPLETION_MARKER), site: None })
+        } else {
+            None
+        };
         let inputs_hash = snapshot::inputs_hash_from_settings(&ast.idents, &config, &plan);
 
         let type_idents = TypeIdents { tag: ast.idents.b.tag, payload: ast.idents.b.payload };
@@ -3033,6 +3042,7 @@ impl TypedProgram {
             ls_entities: RefCell::new(ls_entities),
             completion,
             lsp,
+            host_program: HostProgram::Absent,
             inference_context_stack: Vec::new(),
             inference_context_extras,
             pending_defers: Vec::new(),
@@ -3116,7 +3126,7 @@ impl TypedProgram {
         self.inputs_hash = module_hash;
         if index < snapshot_count
             && self.config.tools.cache
-            && self.lsp.source_overrides.is_empty()
+            && self.lsp.source_overlay.is_empty()
             && !self.lsp.completion
             && self.megarepl.is_none()
             && self.ast.errors.is_empty()
@@ -3235,7 +3245,7 @@ impl TypedProgram {
             Some(file_id) => file_id,
             None => {
                 let path_str = self.ast.idents.get_string(path);
-                let content = compiler::read_source(path_str, &self.lsp.source_overrides)
+                let content = compiler::read_source(path_str, &self.lsp.source_overlay)
                     .map_err(|e| self.make_error(self.ast.idents.intern(e), Span::NONE))?;
                 self.register_source(path, &content)
             }
@@ -5550,10 +5560,66 @@ impl TypedProgram {
                 }
             }
         }
+        let type_named = if variable_id.is_none() && !name.has_path() {
+            self.scopes.find_type(scope_id, name.name).map(|(type_id, _)| type_id)
+        } else {
+            None
+        };
+        if let Some(type_id) = type_named {
+            let static_type = match self.types.get(type_id) {
+                Type::StaticValue(svt) => Some(*svt),
+                Type::TypeParameter(tp) => {
+                    tp.static_constraint.map(|c| *self.types.get(c).as_value_type().unwrap())
+                }
+                _ => None,
+            };
+            if let Some(static_type) = static_type {
+                let expr = match static_type.value_id {
+                    Some(value_id) => self.add_static_constant_expr(value_id, variable_name_span),
+                    None if ctx.is_generic_pass() => {
+                        self.synth_phony(static_type.family_type_id, variable_name_span)
+                    }
+                    None => kbail!(
+                        self,
+                        variable_name_span,
+                        "Static type '{}' has no value here",
+                        name.name
+                    ),
+                };
+                self.emit_ls_entity(
+                    variable_name_span,
+                    LsEntityKind::Type { type_id, applied_type_id: None },
+                );
+                return Ok((None, expr));
+            }
+        }
         match variable_id {
             None => match self.find_function_namespaced(scope_id, &name)? {
                 None => {
-                    let msg = if !name.has_path() {
+                    let msg = if type_named
+                        .is_some_and(|t| self.types.get(t).as_type_parameter().is_some())
+                    {
+                        k1_format_user!(
+                            self,
+                            "Type parameter '{}' has no value; declare it '{}: static <type>' to use it as one",
+                            name.name,
+                            name.name
+                        )
+                    } else if !name.has_path()
+                        && self.scopes.find_variable_binding(scope_id, name.name).is_some_and(
+                            |(binding, found)| {
+                                matches!(binding, VariableInScope::Masked)
+                                    && self.scopes.get_scope(found).scope_type
+                                        == ScopeType::StaticBody
+                            },
+                        )
+                    {
+                        k1_format_user!(
+                            self,
+                            "'{}' is a runtime value; compile-time code reads only static values",
+                            name.name
+                        )
+                    } else if !name.has_path() {
                         k1_format_user!(self, "No value '{}' is visible here", name.name)
                     } else {
                         k1_format_user!(self, "value '{}' is not defined", &name)
@@ -8363,7 +8429,7 @@ impl TypedProgram {
             kbail!(self, span, "#for unrolls at compile time; it has no loop to label");
         }
         let iteree_value_id =
-            self.execute_static_expr(for_expr.iterable_expr, ctx.with_no_expected_type(), &[])?;
+            self.execute_static_expr(for_expr.iterable_expr, ctx.with_no_expected_type())?;
         let iteree_span = self.ast.exprs.get_span(for_expr.iterable_expr);
         let Some(element_count) = self.static_container_len(iteree_value_id) else {
             kbail!(
@@ -11841,7 +11907,7 @@ impl TypedProgram {
         if let Some(builtin) = self.get_callee_builtin(&call.callee) {
             match builtin {
                 Builtin::TyperInline(kind) => {
-                    return self.handle_inline_builtin(call, return_type, span, kind, ctx);
+                    return self.handle_inline_builtin(call, span, kind);
                 }
                 Builtin::Backend(BackendBuiltin::TypeInfo) => {
                     let type_id_arg = *self.mem.get_nth(call.args, 0);
@@ -11987,10 +12053,8 @@ impl TypedProgram {
     fn handle_inline_builtin(
         &mut self,
         call: Call,
-        return_type: TypeId,
         span: Span,
         intrinsic: BuiltinTyperInline,
-        _ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         match intrinsic {
             BuiltinTyperInline::GetStaticValue => {
@@ -12016,29 +12080,6 @@ impl TypedProgram {
                 };
                 let type_id = self.get_static_value_type(static_value_id);
                 Ok(self.exprs.add_static(static_value_id, type_id, false, span))
-            }
-            BuiltinTyperInline::StaticTypeToValue => {
-                // intern fn staticTypeToValue[T, ST: value T](): T
-                let value_type_arg = call.type_args.as_slice(&self.mem)[1];
-
-                let Type::StaticValue(value_type) = self.types.get(value_type_arg) else {
-                    kbail!(
-                        self,
-                        span,
-                        "Internal Error: 2nd type arg should be a value type: {}",
-                        value_type_arg
-                    );
-                };
-                if let Some(static_value_id) = value_type.value_id {
-                    Ok(self.add_static_constant_expr(static_value_id, span))
-                } else {
-                    // Since the static type has no value, we know this is generic code
-                    // and we just need to generate a term that typechecks, so a
-                    // unit casted to the generic static type. We should probably invent
-                    // a way to do this that doesn't require 2 nodes
-                    let filler_expr = self.synth_phony(return_type, span);
-                    Ok(filler_expr)
-                }
             }
             BuiltinTyperInline::CompilerSourceLocation => {
                 let source_location = self.synth_source_location(span);
@@ -13667,9 +13708,6 @@ impl TypedProgram {
                     "bake-static-value" => Some(Builtin::Ir(BuiltinIr::BakeStaticValue)),
                     "get-static-value" => {
                         Some(Builtin::TyperInline(BuiltinTyperInline::GetStaticValue))
-                    }
-                    "static-type-to-value" => {
-                        Some(Builtin::TyperInline(BuiltinTyperInline::StaticTypeToValue))
                     }
                     _ => None,
                 },

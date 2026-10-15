@@ -5,9 +5,9 @@
 (`compress_fragment_two_pass.c`), plus the slice of `entropy_encode.c`,
 `brotli_bit_stream.c` and `encode.c`'s streaming path they need. Its output
 is byte-identical to the C library's: the harness checks every corpus at
-both qualities against `modules/cbrotli` (the vendored google/brotli C tree)
-before it times anything, and also round-trips a chunked `process`/`flush`
-stream through the C decoder.
+both qualities against the vendored google/brotli C encoder
+(`examples/brotli_parity/deps/cbrotli`) before it times anything, and also
+round-trips a chunked `process`/`flush` stream through the k1 decoder.
 
 This page records how fast the port is relative to the C it was ported
 from, what was changed to get there, and what is still in the way.
@@ -22,7 +22,7 @@ from, what was changed to get there, and what is still in the way.
   (`TargetMachine::get_host_cpu_name()`, i.e. `-mcpu=native`), one codegen
   unit per group of functions, ThinLTO across the k1 units.
 - C: `Apple clang version 21.0.0 (clang-2100.1.1.101)`, invoked as
-  `cc -O2 -Ivendor/include -c` by `modules/cbrotli`'s setup step. No
+  `cc -O2 -Ivendor/include -c` by `examples/brotli_parity/deps/cbrotli`'s setup step. No
   `-march`; Apple clang's default for arm64-apple-darwin is
   `-target-cpu apple-m1` (`cc -O2 -### -c x.c`). The resulting
   `libbrotli.a` is linked into the k1 binary as an ordinary static library,

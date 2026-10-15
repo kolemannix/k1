@@ -195,7 +195,7 @@ fn from-string-line(cb: *code-builder, ty: types/type-id, src: string, name: str
 }
 
 fn parse-payload[t, n: static size](segs: span[string], u: std/url/url, pattern: string): result[t, route-error] {
-  #meta { payload-code(types/id[t], core/meta/static-type-to-value[_, n]()) }
+  #meta payload-code(types/id[t], n)
 }
 
 fn payload-code(payload-id: types/type-id, n: size): code {
@@ -245,7 +245,7 @@ fn payload-code(payload-id: types/type-id, n: size): code {
 }
 
 fn write-query[t, n: static size, w: writer](v: t, w: w) {
-  #meta { query-print-code(types/id[t], core/meta/static-type-to-value[_, n]()) }
+  #meta query-print-code(types/id[t], n)
 }
 
 fn query-print-code(payload-id: types/type-id, n: size): code {

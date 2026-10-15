@@ -100,7 +100,7 @@ lsp:
   just install-modules
 
 lsprelease:
-  cargo build --profile release --features lsp --features=llvm-sys/force-static --bin lsp
+  cargo build --profile lsp --features lsp --features=llvm-sys/force-static --bin lsp
 
 build-r:
   cargo build --release --bin k1  --features=llvm-sys/force-static
@@ -140,7 +140,7 @@ bundle:
   cargo build --profile release --bin k1_test
   make -C modules/core/libs build wasm nocrt
   K1_HOME={{justfile_directory()}} target/release/k1 --optimize build tools/k1bindgen
-  ./builds/bundle.sh target/release builds/{{bundle-name}}
+  ./builds/bundle.sh target/release target/lsp/lsp builds/{{bundle-name}}
 
 install: bundle
   tar -xzf builds/{{bundle-name}}.tar.gz -C builds

@@ -615,13 +615,18 @@ mod completion_tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("{test_name}.k1"));
         std::fs::write(&path, content).unwrap();
-        let mut source_overrides = fxhash::FxHashMap::default();
+        let mut source_overlay = fxhash::FxHashMap::default();
         if let Some(spliced) = spliced {
-            source_overrides.insert(crate::kpath::canonicalize_owned(&path).unwrap(), spliced);
+            source_overlay.insert(crate::kpath::canonicalize_owned(&path).unwrap(), spliced);
         }
         let mut request = CompileRequest::new(path, Command::Check, None).unwrap();
         request.tools.cache = false;
-        request.lsp = LspCompileOptions { source_overrides, completion: true, progress_sink: None };
+        request.lsp = LspCompileOptions {
+            source_overlay,
+            completion: true,
+            progress_sink: None,
+            host_mode: crate::compiler::HostProgramMode::Discard,
+        };
         match compile_program(request) {
             Ok(program) => Box::new(program),
             Err(CompileProgramError::TyperFailure(program)) => program,

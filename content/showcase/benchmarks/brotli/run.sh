@@ -2,8 +2,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 root=$(cd ../../../.. && pwd)
-mod="$root/examples/brotli"
-cenc="$root/modules/cbrotli/vendor/enc"
+mod="$root/examples/brotli_parity"
+cenc="$root/examples/brotli_parity/deps/cbrotli/vendor/enc"
 runs=${RUNS:-1}
 mkdir -p gen
 
@@ -44,10 +44,10 @@ rm -f gen/bench-*.log
     echo "### compile time"
     echo
     hyperfine --warmup 1 --runs 5 --export-markdown gen/compile.md \
-      -n "k1 --optimize build examples/brotli" "k1 --optimize --no-cache build $mod" \
-      -n "k1 build examples/brotli" "k1 --no-cache build $mod" \
+      -n "k1 --optimize build examples/brotli_parity" "k1 --optimize --no-cache build $mod" \
+      -n "k1 build examples/brotli_parity" "k1 --no-cache build $mod" \
       -n "cc -O2 -c compress_fragment.c compress_fragment_two_pass.c encode.c" \
-        "cd gen && cc -O2 -I$root/modules/cbrotli/vendor/include -c $cenc/compress_fragment.c $cenc/compress_fragment_two_pass.c $cenc/encode.c" \
+        "cd gen && cc -O2 -I$root/examples/brotli_parity/deps/cbrotli/vendor/include -c $cenc/compress_fragment.c $cenc/compress_fragment_two_pass.c $cenc/encode.c" \
       > gen/hyperfine.log 2>&1
     cat gen/compile.md
     rm -f gen/*.o

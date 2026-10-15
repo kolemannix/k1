@@ -2,8 +2,7 @@ fn(inline) spin(n: int): int {
   if n == 0 0 else spin(n - 1)
 }
 
-fn(inline) pick[mm: static int](x: int): int {
-  let min: int = core/meta/static-type-to-value[_, mm]()
+fn(inline) pick[min: static int](x: int): int {
   if min > 4 { x + 100 } else { spin(x) }
 }
 

@@ -199,17 +199,18 @@ See `test_src/suite1/ability_default_fns.k1`.
 
 ## Static Parameters And Literal Types
 
-Static values can participate in types and generic arguments:
+Static values can participate in types and generic arguments. A static type
+parameter's name is its value in expression position, `#meta` and `#static`
+included; a variable of the same name shadows it. `#meta` and `#static` read
+every local whose type is static; runtime locals are invisible there:
 
 ```rust
-fn add-static[i: static int](x: int): int {
-  let value: int = core/meta/static-type-to-value[_, i]()
-  value + x
-}
+fn add-static[i: static int](x: int): int { i + x }
 
 let three: static int = 3
 add-static[type-of(three)](3)
 add-static[3](3)
+let folded: int = #static three * 7
 ```
 
 Literal types also appear directly:
