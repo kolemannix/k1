@@ -72,12 +72,15 @@ enum TokenTypes {
     Operator = 21,
 }
 
-const TOKEN_MODIFIERS: [SemanticTokenModifier; 5] = [
+const TOKEN_MODIFIERS: [SemanticTokenModifier; 6] = [
     SemanticTokenModifier::DECLARATION,
     SemanticTokenModifier::DEFINITION,
     SemanticTokenModifier::READONLY,
     SemanticTokenModifier::STATIC,
     SemanticTokenModifier::MODIFICATION,
+    // Custom: code that runs at compile time ($, #meta, #static exprs).
+    // Legend order must match parse::SemanticToken's bit assignments.
+    SemanticTokenModifier::new("comptime"),
 ];
 #[allow(unused)]
 #[repr(u32)]

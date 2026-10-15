@@ -1572,6 +1572,7 @@ impl SemanticToken {
     pub const READONLY: u8 = 1 << 2;
     pub const STATIC: u8 = 1 << 3;
     pub const MODIFICATION: u8 = 1 << 4;
+    pub const COMPTIME: u8 = 1 << 5;
 }
 
 pub fn add_semantic_token(ast: &mut ParsedProgram, token: SemanticToken) {
@@ -2202,6 +2203,9 @@ pub struct Parser<'toks, 'module> {
     source_text: &'static str,
     string_buffer: String,
     scratch_defns: Vec<ParsedId>,
+    /// Nonzero while parsing code that executes at compile time; tokens
+    /// emitted in that state carry SemanticToken::COMPTIME.
+    comptime_depth: u32,
 }
 
 impl<'toks, 'ast> Parser<'toks, 'ast> {
@@ -2228,6 +2232,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             source_text,
             string_buffer: String::with_capacity(1024),
             scratch_defns: Vec::with_capacity(128),
+            comptime_depth: 0,
         }
     }
     pub fn parse_file_into_module(&mut self) {
@@ -2288,8 +2293,10 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                         self.error_expected("a macro name immediately following '$'", call_first)
                     );
                 }
-                self.emit_semantic_token(dollar, SemanticTokenKind::Operator);
-                let call_expr = self.expect_expression()?;
+                let call_expr = self.parse_comptime(|p| {
+                    p.emit_semantic_token(dollar, SemanticTokenKind::Operator);
+                    p.expect_expression()
+                })?;
                 if !matches!(self.ast.exprs.get(call_expr), ParsedExpr::Call(_)) {
                     return Err(self.error_expected("a macro call following '$'", call_first));
                 }
@@ -2359,17 +2366,20 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             _ => return Ok(None),
         };
         self.advance();
-        self.emit_semantic_token(maybe_directive, SemanticTokenKind::Keyword);
-        let mut parameter_names: AstList<IdentSpanned> = self.ast.mem.new_list(0);
-        if let Some(_open_token) = self.maybe_consume_no_whitespace(K::OpenParen) {
-            self.eat_delimited("params", &mut parameter_names, false, K::CloseParen, |p| {
-                let (token, ident) = p.expect_ident()?;
-                let span = p.tok_span(token);
-                Ok(IdentSpanned { name: ident, span })
-            })?;
-        }
-        let parameter_names_handle = parameter_names.to_slice_trim(&mut self.ast.mem);
-        let base_expr = self.expect_expression()?;
+        let (parameter_names_handle, base_expr) = self.parse_comptime(|p| {
+            p.emit_semantic_token(maybe_directive, SemanticTokenKind::Keyword);
+            let mut parameter_names: AstList<IdentSpanned> = p.ast.mem.new_list(0);
+            if let Some(_open_token) = p.maybe_consume_no_whitespace(K::OpenParen) {
+                p.eat_delimited("params", &mut parameter_names, false, K::CloseParen, |p| {
+                    let (token, ident) = p.expect_ident()?;
+                    let span = p.tok_span(token);
+                    Ok(IdentSpanned { name: ident, span })
+                })?;
+            }
+            let parameter_names_handle = parameter_names.to_slice_trim(&mut p.ast.mem);
+            let base_expr = p.expect_expression()?;
+            Ok((parameter_names_handle, base_expr))
+        })?;
         let span = self.extend_tok_to_here(hash_token);
         let start_span = self.tok_span(hash_token);
         Ok(Some(self.add_expression(
@@ -2870,14 +2880,28 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn emit_semantic_token_mods(&mut self, token: Token, kind: SemanticTokenKind, mods: u8) {
         if self.ast.collect_semantic_tokens {
             let span = self.tok_span(token);
+            let mods = mods | self.comptime_mod();
             add_semantic_token(self.ast, SemanticToken { span, kind, mods });
         }
     }
 
     fn emit_semantic_token_span(&mut self, span: Span, kind: SemanticTokenKind) {
         if self.ast.collect_semantic_tokens {
-            add_semantic_token(self.ast, SemanticToken { span, kind, mods: 0 });
+            let mods = self.comptime_mod();
+            add_semantic_token(self.ast, SemanticToken { span, kind, mods });
         }
+    }
+
+    fn comptime_mod(&self) -> u8 {
+        if self.comptime_depth > 0 { SemanticToken::COMPTIME } else { 0 }
+    }
+
+    /// Tokens emitted while `f` runs are marked as compile-time code.
+    fn parse_comptime<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        self.comptime_depth += 1;
+        let result = f(self);
+        self.comptime_depth -= 1;
+        result
     }
 
     fn semantic_token_count(&self) -> usize {
