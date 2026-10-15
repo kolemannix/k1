@@ -1,3 +1,4 @@
+#!/bin/sh
 set -e
 
 echo "Installing k1 binaries in ~/.k1"
@@ -14,5 +15,10 @@ if [ "$(uname)" = Darwin ]; then
   xattr -dr com.apple.quarantine ~/.k1
 fi
 
-echo "K1 installed at ~/.k1"
-echo "You should add ~/.k1/bin to your \$PATH"
+echo "k1 installed at ~/.k1"
+case ":$PATH:" in
+  *":$HOME/.k1/bin:"*) ;;
+  *)
+    echo "Add it to your PATH:"
+    echo '  export PATH="$HOME/.k1/bin:$PATH"' ;;
+esac

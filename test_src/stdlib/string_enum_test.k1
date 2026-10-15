@@ -1,0 +1,27 @@
+ns string_enum_test
+
+$std/string-enum/define(\{ flow = either { income, expense } })
+
+$std/string-enum/define(\{
+  status = either(u8) {
+    new = "New",
+    in-progress = "In Progress",
+    pending = "Pending Payment",
+  }
+})
+
+fn test() {
+  assert-equals[string](flow:income.to-value(), "income")
+  assert-equals[string](status:in-progress.to-value(), "In Progress")
+  assert-equals[string]("${status:pending}", "Pending Payment")
+  assert-equals[string](status:pending.enum-name(), "pending")
+  assert(flow/from-value("expense") is :some :expense)
+  assert(status/from-value("New") is :some :new)
+  assert(status/from-value("new") is :none)
+  assert-equals(status/members, [:new, :in-progress, :pending])
+  assert-equals(types/size[status], 1)
+  let parsed: result[flow, string] = from-string@(flow)/from-string("income")
+  assert(parsed is :ok :income)
+  let bad: result[status, string] = from-string@(status)/from-string("Done")
+  assert(bad is :err msg and msg == "`Done` is not a status; expected one of New, In Progress, Pending Payment")
+}

@@ -8,11 +8,13 @@ fn c-out-capacity(input-len: size): size {
   cbrotli/encoder-max-compressed-size(input-len) + 1024
 }
 
-fn c-compress-into(input: span[u8], quality: u32, out: buffer[u8]): size {
+type run = { quality: size, lgwin: size }
+
+fn c-compress-into(input: span[u8], r: run, out: buffer[u8]): size {
   let st = cbrotli/encoder-create-instance(ptr/null, ptr/null, ptr/null)
   defer cbrotli/encoder-destroy-instance(st)
-  cbrotli/encoder-set-parameter(st, :quality, quality)
-  cbrotli/encoder-set-parameter(st, :lgwin, 18)
+  cbrotli/encoder-set-parameter(st, :quality, r.quality.unsigned().trunc[u32])
+  cbrotli/encoder-set-parameter(st, :lgwin, r.lgwin.unsigned().trunc[u32])
 
   let avail-in: size = input.len()
   let next-in: ptr = input.data-ptr()
@@ -26,9 +28,9 @@ fn c-compress-into(input: span[u8], quality: u32, out: buffer[u8]): size {
   out.len() - avail-out
 }
 
-fn c-compress(input: span[u8], quality: u32): span[u8] {
+fn c-compress(input: span[u8], r: run): span[u8] {
   let out = buffer/allocate[u8](c-out-capacity(input.len()))
-  span/wrap-buffer(out.slice(0, c-compress-into(input, quality, out)))
+  span/wrap-buffer(out.slice(0, c-compress-into(input, r, out)))
 }
 
 fn check-round-trip(name: string, input: span[u8], encoded: span[u8]) {
@@ -43,10 +45,10 @@ fn check-round-trip(name: string, input: span[u8], encoded: span[u8]) {
   }
 }
 
-fn check-input(name: string, input: span[u8], quality: size) {
-  let c-out = c-compress(input, quality.unsigned().trunc[u32])
+fn check-input(name: string, input: span[u8], r: run) {
+  let c-out = c-compress(input, r)
 
-  let e = encoder/new-with-quality-in(mem/current-arena(), quality)
+  let e = encoder/new-in(mem/current-arena(), r.quality, r.lgwin)
   let k1-out: list[u8] = list/empty()
   e.compress(input, k1-out.&)
 
@@ -62,11 +64,11 @@ fn check-input(name: string, input: span[u8], quality: size) {
     }
     i = i + 1
   }
-  println("$name q$quality: ${input.len()} -> ${k1-out.len()} bytes, byte-identical to C")
+  println("$name q${r.quality} w${r.lgwin}: ${input.len()} -> ${k1-out.len()} bytes, byte-identical to C")
 }
 
-fn check-streaming(name: string, input: span[u8], quality: size, chunk-size: size) {
-  let e = encoder/new-with-quality-in(mem/current-arena(), quality)
+fn check-streaming(name: string, input: span[u8], r: run, chunk-size: size) {
+  let e = encoder/new-in(mem/current-arena(), r.quality, r.lgwin)
   let out: list[u8] = list/empty()
   let pos: size = 0
   while pos < input.len() {
@@ -77,7 +79,7 @@ fn check-streaming(name: string, input: span[u8], quality: size, chunk-size: siz
   }
   e.finish(out.&)
   check-round-trip(name, input, out.as-span())
-  println("$name q$quality: streaming ${input.len()} -> ${out.len()} bytes, round-trips")
+  println("$name q${r.quality} w${r.lgwin}: streaming ${input.len()} -> ${out.len()} bytes, round-trips")
 }
 
 fn make-corpora(): list[{ name: string, data: span[u8] }] {
@@ -128,19 +130,18 @@ fn write-mbps(sb: *string-builder, label: string, nanos: *list[u64], bytes: size
   sb.write(")")
 }
 
-fn bench-one(name: string, input: span[u8], quality: size) {
+fn bench-one(name: string, input: span[u8], r: run) {
   use std/time
 
   let cap = c-out-capacity(input.len())
-  let e = encoder/new-with-quality-in(mem/current-arena(), quality)
+  let e = encoder/new-in(mem/current-arena(), r.quality, r.lgwin)
   let k1-out: list[u8] = list/with-capacity(cap)
   let c-out = buffer/allocate[u8](cap)
-  let cq = quality.unsigned().trunc[u32]
 
   let warm-start = time/read-cpu-counter()
   e.compress(input, k1-out.&)
   let k1-bytes = k1-out.len()
-  let c-bytes = c-compress-into(input, cq, c-out)
+  let c-bytes = c-compress-into(input, r, c-out)
   assert-equals(k1-bytes, c-bytes)
   let warm-nanos = time/elapsed-nanos(warm-start)
   let reps = (ROUND-NANOS / warm-nanos.max(1)).max(1).signed()
@@ -156,7 +157,7 @@ fn bench-one(name: string, input: span[u8], quality: size) {
       k1-out.clear()
       e.compress(input, k1-out.&)
       let c-start = time/read-cpu-counter()
-      c-compress-into(input, cq, c-out)
+      c-compress-into(input, r, c-out)
       let end = time/read-cpu-counter()
       k1-nanos = k1-nanos + time/counter-to-nanos(c-start - k1-start)
       c-nanos = c-nanos + time/counter-to-nanos(end - c-start)
@@ -167,7 +168,7 @@ fn bench-one(name: string, input: span[u8], quality: size) {
 
   let round-bytes = input.len() * reps
   let sb = string-builder/new()
-  sb.write("$name q$quality: ")
+  sb.write("$name q${r.quality} w${r.lgwin}: ")
   write-mbps(sb.&, "k1", k1-times.&, round-bytes)
   sb.write(", ")
   write-mbps(sb.&, "c", c-times.&, round-bytes)
@@ -180,25 +181,42 @@ fn bench-one(name: string, input: span[u8], quality: size) {
 fn main(argc: u32, argv: ptr): i32 {
   let args = std/sys/parse-main-args(argc, argv)
   let corpora = make-corpora()
-  for q in [0: size, 1] {
+  let runs: list[run] = list/empty()
+  let rest: list[string] = list/empty()
+  let lgwin: size = 18
+  for i in 1.until(args.len()) {
+    if args.[i].starts-with("lgwin=") {
+      lgwin = u64/from-string(args.[i].drop(6)).!.signed()
+    } else if u64/from-string(args.[i]) is :ok q {
+      runs.push(.{ quality = q.signed(), lgwin })
+    } else {
+      rest.push(args.[i])
+    }
+  }
+  if runs.is-empty() {
+    for q in 0.until(12) { runs.push(.{ quality = q, lgwin = 18 }) }
+    for q in [5, 7, 9] { runs.push(.{ quality = q, lgwin = 16 }) }
+    runs.push(.{ quality = 6, lgwin = 22 })
+  }
+  for r in runs {
     for c in corpora {
-      check-input(c.name, c.data, q)
+      check-input(c.name, c.data, r)
     }
     for c in corpora {
       if c.data.non-empty() {
-        check-streaming("${c.name}/64k-chunks", c.data, q, 1 << 16)
+        check-streaming("${c.name}/64k-chunks", c.data, r, 1 << 16)
       }
     }
   }
-  println("all q0+q1 parity + round-trip checks passed")
+  println("all parity + round-trip checks passed")
 
-  if args.len() > 1 and args.[1] == "bench" {
-    let only = if args.len() > 2 args.[2] else ""
-    for q in [0: size, 1] {
+  if rest.len() > 0 and rest.[0] == "bench" {
+    let only = if rest.len() > 1 rest.[1] else ""
+    for r in runs {
       println("")
       for c in corpora {
         if c.data.len() >= 100000 and (only == "" or only == c.name) {
-          bench-one(c.name, c.data, q)
+          bench-one(c.name, c.data, r)
         }
       }
     }

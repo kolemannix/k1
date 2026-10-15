@@ -1,0 +1,17 @@
+    <article class="show" id="{{ .title | urlize }}">
+      <div class="say">
+        {{ if .placeholder }}<h3>{{ .title }}</h3><p class="prose">{{ .placeholder }}</p>
+        {{ else }}<h3><a href="/examples/{{ .section }}/{{ if .anchor }}#{{ .anchor }}{{ end }}">{{ .title }}</a></h3><p class="prose">{{ .blurb | markdownify }}</p>{{ end }}
+      </div>
+      {{ if .blocks }}<div class="code">
+        {{ range .blocks }}
+        <figure>
+          {{ if .alt }}<figcaption class="label"><button type="button" class="tog" aria-pressed="true">{{ .label }}</button><button type="button" class="tog" aria-pressed="false">{{ .alt.label }}</button></figcaption>
+          {{ partial "pre.html" . }}
+          {{ partial "pre.html" (merge .alt (dict "hidden" true)) }}
+          {{ else }}<figcaption class="label">{{ .label }}</figcaption>
+          {{ partial "pre.html" . }}{{ end }}
+        </figure>
+        {{ end }}
+      </div>{{ end }}
+    </article>

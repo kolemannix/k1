@@ -227,6 +227,20 @@ field is optional:
   get  grade-rate "/cmd/grade-rate/{who: string}" ?{ plan-id: int, item-id: u64, note: ?string }
 ```
 
+`route` is an `either` with one variant per row, carrying the path and
+query captures as a struct:
+
+```text
+type route = either {
+  home, events, counter, big-file, starry,
+  visits({ who: ?string }),
+  login,
+  game-events({ id: u64 }),
+  game-poke({ id: u64 }),
+  delete-game({ id: u64 }),
+}
+```
+
 Out come:
 
 - `type route`, one variant per row, with one payload struct for path and query
@@ -242,14 +256,14 @@ Out come:
 The macro reads the rows with a token cursor, then emits:
 
 ```k1 path=modules/http/routing.k1
-macro define(base: code, rows: span[code-token]) {
+macro define(name: code, rows: span[code-token]) {
   let entries = parse-rows(rows).as-span()
   validate(entries)
 
   let cb-storage = code-builder/new()
   let cb = cb-storage.&
 
-  cb.write-code("type $base = either { ")
+  cb.write-code("type $name = either { ")
   for en in entries {
     if it-index > 0 cb.write(", ")
     cb.write-token(en.name)
@@ -261,8 +275,8 @@ macro define(base: code, rows: span[code-token]) {
   }
   cb.write(" }\n")
 
-  cb.block("ns for $base", fn[cb, base, entries]. emit-parse-fn(cb, base, entries))
-  emit-print-impl(cb, base, entries)
+  cb.block("ns for $name", fn[cb, name, entries]. emit-parse-fn(cb, name, entries))
+  emit-print-impl(cb, name, entries)
 
   cb.build()
 }

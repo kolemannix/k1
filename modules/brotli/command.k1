@@ -1,0 +1,133 @@
+type context-mode = either(u8) { lsb6, msb6, utf8, signed }
+
+fn(inline) context-lut(mode: context-mode): size { mode.value.as-size() << 9 }
+
+fn(inline) context-of(p1: u8, p2: u8, lut: size): u8 {
+  k-context-lookup.[lut + p1.as-size()] | k-context-lookup.[lut + 256 + p2.as-size()]
+}
+
+fn get-insert-length-code(insertlen: size): u16 {
+  if insertlen < 6 {
+    insertlen.trunc[u16]
+  } else if insertlen < 130 {
+    let nbits = log2-floor-nonzero((insertlen - 2).unsigned()) - 1
+    ((nbits << 1) + ((insertlen - 2) >> nbits.trunc[u32]) + 2).trunc[u16]
+  } else if insertlen < 2114 {
+    (log2-floor-nonzero((insertlen - 66).unsigned()) + 10).trunc[u16]
+  } else if insertlen < 6210 {
+    21
+  } else if insertlen < 22594 {
+    22
+  } else {
+    23
+  }
+}
+
+fn get-copy-length-code(copylen: size): u16 {
+  if copylen < 10 {
+    (copylen - 2).trunc[u16]
+  } else if copylen < 134 {
+    let nbits = log2-floor-nonzero((copylen - 6).unsigned()) - 1
+    ((nbits << 1) + ((copylen - 6) >> nbits.trunc[u32]) + 4).trunc[u16]
+  } else if copylen < 2118 {
+    (log2-floor-nonzero((copylen - 70).unsigned()) + 12).trunc[u16]
+  } else {
+    23
+  }
+}
+
+fn combine-length-codes(inscode: u16, copycode: u16, use-last-distance: bool): u16 {
+  let bits64 = (copycode & 7) | ((inscode & 7) << 3)
+  if use-last-distance and inscode < 8 and copycode < 16 {
+    if copycode < 8 bits64 else bits64 | 64
+  } else {
+    let offset: u32 = ((copycode >> 3).widen[u32] + (inscode >> 3).widen[u32] * 3) * 2
+    offset = (offset << 5) + 0x40 + (((0x520D40: u32) >> offset) & 0xC0)
+    (offset | bits64.widen[u32]).trunc[u16]
+  }
+}
+
+fn(inline) get-length-code(insertlen: size, copylen: size, use-last-distance: bool): u16 {
+  combine-length-codes(get-insert-length-code(insertlen), get-copy-length-code(copylen), use-last-distance)
+}
+
+fn prefix-encode-copy-distance(distance-code: size, num-direct-codes: size, postfix-bits: size): { code: u16, extra-bits: u32 } {
+  if distance-code < NUM-DISTANCE-SHORT-CODES + num-direct-codes {
+    .{ code = distance-code.trunc[u16], extra-bits = 0 }
+  } else {
+    let dist = (1 << (postfix-bits + 2).trunc[u32]) + (distance-code - NUM-DISTANCE-SHORT-CODES - num-direct-codes)
+    let bucket = log2-floor-nonzero(dist.unsigned()) - 1
+    let postfix-mask = (1 << postfix-bits.trunc[u32]) - 1
+    let postfix = dist & postfix-mask
+    let prefix = (dist >> bucket.trunc[u32]) & 1
+    let offset = (2 + prefix) << bucket.trunc[u32]
+    let nbits = bucket - postfix-bits
+    .{
+      code = ((nbits << 10) | (NUM-DISTANCE-SHORT-CODES + num-direct-codes + ((2 * (nbits - 1) + prefix) << postfix-bits.trunc[u32]) + postfix)).trunc[u16],
+      extra-bits = ((dist - offset) >> postfix-bits.trunc[u32]).trunc[u32],
+    }
+  }
+}
+
+type command = {
+  insert-len: u32,
+  copy-len: u32,
+  dist-extra: u32,
+  cmd-prefix: u16,
+  dist-prefix: u16,
+}
+
+ns for command {
+  fn new(dist: *distance-params, insertlen: size, copylen: size, copylen-code-delta: i32, distance-code: size): command {
+    let delta = copylen-code-delta.trunc[u8].widen[u32]
+    let d = prefix-encode-copy-distance(distance-code, dist.num-direct-distance-codes, dist.distance-postfix-bits)
+    .{
+      insert-len = insertlen.trunc[u32],
+      copy-len = copylen.trunc[u32] | (delta << 25),
+      dist-extra = d.extra-bits,
+      cmd-prefix = get-length-code(insertlen, (copylen.trunc[i32] + copylen-code-delta).unsigned().as-size(), (d.code & 0x3FF) == 0),
+      dist-prefix = d.code,
+    }
+  }
+
+  fn new-insert(insertlen: size): command {
+    .{
+      insert-len = insertlen.trunc[u32],
+      copy-len = 4u32 << 25,
+      dist-extra = 0,
+      cmd-prefix = get-length-code(insertlen, 4, false),
+      dist-prefix = NUM-DISTANCE-SHORT-CODES.trunc[u16],
+    }
+  }
+
+  fn restore-distance-code(self: *command, dist: *distance-params): u32 {
+    let dcode = (self.dist-prefix & 0x3FF).widen[u32]
+    let ndirect = dist.num-direct-distance-codes.trunc[u32]
+    if dcode < 16 + ndirect {
+      dcode
+    } else {
+      let nbits = (self.dist-prefix >> 10).widen[u32]
+      let postfix-bits = dist.distance-postfix-bits.trunc[u32]
+      let postfix-mask = (1u32 << postfix-bits) - 1
+      let hcode = (dcode - ndirect - 16) >> postfix-bits
+      let lcode = (dcode - ndirect - 16) & postfix-mask
+      let offset: u32 = (((hcode & 1) + 2) << nbits) - 4
+      let r: u32 = ((offset + self.dist-extra) << postfix-bits) + lcode + ndirect + 16
+      r
+    }
+  }
+
+  fn(inline) distance-context(self: *command): u32 {
+    let r = self.cmd-prefix >> 6
+    let c = (self.cmd-prefix & 7).widen[u32]
+    if (r == 0 or r == 2 or r == 4 or r == 7) and c <= 2 c else 3
+  }
+
+  fn(inline) copy-length(self: *command): u32 { self.copy-len & 0x1FFFFFF }
+
+  fn(inline) copy-length-code(self: *command): u32 {
+    let modifier = self.copy-len >> 25
+    let delta = (modifier | ((modifier & 0x40) << 1)).trunc[i8].widen[i32]
+    ((self.copy-len & 0x1FFFFFF).signed() + delta).unsigned()
+  }
+}

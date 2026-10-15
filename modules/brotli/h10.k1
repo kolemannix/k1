@@ -1,0 +1,208 @@
+let H10-BUCKET-BITS: u32 = 17
+let H10-BUCKET-SIZE: size = 1 << 17
+let H10-MAX-TREE-SEARCH-DEPTH: size = 64
+let H10-MAX-TREE-COMP-LENGTH: size = 128
+let MAX-NUM-MATCHES-H10: size = 128
+
+type backward-match = { distance: u32, length-and-code: u32 }
+
+ns for backward-match {
+  fn(inline) new(dist: size, len: size): backward-match {
+    .{ distance = dist.trunc[u32], length-and-code = (len << 5).trunc[u32] }
+  }
+
+  fn(inline) new-dictionary(dist: size, len: size, len-code: size): backward-match {
+    .{ distance = dist.trunc[u32], length-and-code = ((len << 5) | (if len == len-code 0 else len-code)).trunc[u32] }
+  }
+
+  fn(inline) length(self: backward-match): size { (self.length-and-code >> 5).as-size() }
+
+  fn(inline) length-code(self: backward-match): size {
+    let code = (self.length-and-code & 31).as-size()
+    if code != 0 code else self.length()
+  }
+}
+
+type hasher-h10 = {
+  window-mask: size,
+  buckets: buffer[u32],
+  invalid-pos: u32,
+  forest: buffer[u32],
+}
+
+ns for hasher-h10 {
+  fn new(params: *encoder-params, one-shot: bool, input-size: size): hasher-h10 {
+    let num-nodes = 1 << params.lgwin.trunc[u32]
+    if one-shot and input-size < num-nodes { num-nodes = input-size }
+    let window-mask = (1 << params.lgwin.trunc[u32]) - 1
+    .{
+      window-mask,
+      buckets = buffer/allocate[u32](H10-BUCKET-SIZE),
+      invalid-pos = window-mask.trunc[u32].negated(),
+      forest = buffer/allocate[u32](2 * num-nodes),
+    }
+  }
+
+  fn prepare(self: *hasher-h10) {
+    self.buckets.fill(self.invalid-pos)
+  }
+
+  fn(inline) hash-bytes(data: ptr): size { hash32(data, H10-BUCKET-BITS) }
+
+  fn(inline) left-child-index(self: *hasher-h10, pos: size): size { 2 * (pos & self.window-mask) }
+
+  fn(inline) right-child-index(self: *hasher-h10, pos: size): size { 2 * (pos & self.window-mask) + 1 }
+
+  fn store-and-find-matches(
+    self: *hasher-h10, data: ptr, cur-ix: size, ring-buffer-mask: size, max-length: size,
+    max-backward: size, best-len: *size, matches: ?*list[backward-match],
+  ) {
+    let cur-ix-masked = cur-ix & ring-buffer-mask
+    let max-comp-len = max-length.min(H10-MAX-TREE-COMP-LENGTH)
+    let should-reroot-tree = max-length >= H10-MAX-TREE-COMP-LENGTH
+    let key = hash-bytes(data.add-bytes(cur-ix-masked))
+    let buckets = self.buckets
+    let forest = self.forest
+    let prev-ix = buckets.index-unchecked(key).*.as-size()
+    let node-left = self.left-child-index(cur-ix)
+    let node-right = self.right-child-index(cur-ix)
+    let best-len-left: size = 0
+    let best-len-right: size = 0
+    if should-reroot-tree {
+      buckets.index-unchecked(key).* = cur-ix.trunc[u32]
+    }
+    let depth-remaining = H10-MAX-TREE-SEARCH-DEPTH
+    loop {
+      let backward = cur-ix - prev-ix
+      let prev-ix-masked = prev-ix & ring-buffer-mask
+      if backward == 0 or backward.unsigned() > max-backward.unsigned() or depth-remaining == 0 {
+        if should-reroot-tree {
+          forest.index-unchecked(node-left).* = self.invalid-pos
+          forest.index-unchecked(node-right).* = self.invalid-pos
+        }
+        break
+      }
+      let cur-len = best-len-left.min(best-len-right)
+      let len = cur-len + find-match-length(
+        data.add-bytes(cur-ix-masked + cur-len), data.add-bytes(prev-ix-masked + cur-len), max-length - cur-len)
+      if matches is :some m and len > best-len.* {
+        best-len.* = len
+        m.push(backward-match/new(backward, len))
+      }
+      if len >= max-comp-len {
+        if should-reroot-tree {
+          forest.index-unchecked(node-left).* = forest.index-unchecked(self.left-child-index(prev-ix)).*
+          forest.index-unchecked(node-right).* = forest.index-unchecked(self.right-child-index(prev-ix)).*
+        }
+        break
+      }
+      if byte-at(data, cur-ix-masked + len) > byte-at(data, prev-ix-masked + len) {
+        best-len-left = len
+        if should-reroot-tree {
+          forest.index-unchecked(node-left).* = prev-ix.trunc[u32]
+        }
+        node-left = self.right-child-index(prev-ix)
+        prev-ix = forest.index-unchecked(node-left).*.as-size()
+      } else {
+        best-len-right = len
+        if should-reroot-tree {
+          forest.index-unchecked(node-right).* = prev-ix.trunc[u32]
+        }
+        node-right = self.left-child-index(prev-ix)
+        prev-ix = forest.index-unchecked(node-right).*.as-size()
+      }
+      depth-remaining = depth-remaining - 1
+    }
+  }
+
+  fn find-all-matches(
+    self: *hasher-h10, data: ptr, ring-buffer-mask: size, cur-ix: size, max-length: size,
+    max-backward: size, dictionary-distance: size, params: *encoder-params, matches: *list[backward-match],
+  ): size {
+    let orig-count = matches.len()
+    let cur-ix-masked = cur-ix & ring-buffer-mask
+    let best-len: size = 1
+    let short-match-max-backward: size = if params.quality != HQ-ZOPFLIFICATION-QUALITY 16 else 64
+    let stop = cur-ix - short-match-max-backward
+    if cur-ix < short-match-max-backward { stop = 0 }
+    let i = cur-ix - 1
+    while i > stop and best-len <= 2 {
+      let prev-ix = i
+      let backward = cur-ix - prev-ix
+      if backward > max-backward {
+        break
+      }
+      prev-ix = prev-ix & ring-buffer-mask
+      if byte-at(data, cur-ix-masked) != byte-at(data, prev-ix) or
+         byte-at(data, cur-ix-masked + 1) != byte-at(data, prev-ix + 1) {
+        i = i - 1
+        continue
+      }
+      let len = find-match-length(data.add-bytes(prev-ix), data.add-bytes(cur-ix-masked), max-length)
+      if len > best-len {
+        best-len = len
+        matches.push(backward-match/new(backward, len))
+      }
+      i = i - 1
+    }
+    if best-len < max-length {
+      self.store-and-find-matches(data, cur-ix, ring-buffer-mask, max-length, max-backward, best-len.&, :some matches)
+    }
+    let dict-matches-array = array/zeroed[u32, 38]()
+    let dict-matches = dict-matches-array.&.as-buffer()
+    dict-matches.fill(INVALID-MATCH)
+    let minlen = best-len + 1
+    if minlen < 4 { minlen = 4 }
+    if find-all-static-dictionary-matches(data.add-bytes(cur-ix-masked), minlen, max-length, dict-matches) {
+      let maxlen = MAX-STATIC-DICTIONARY-MATCH-LEN.min(max-length)
+      let l = minlen
+      while l <= maxlen {
+        let dict-id = dict-matches.index-unchecked(l).*
+        if dict-id < INVALID-MATCH {
+          let distance = dictionary-distance + (dict-id >> 5).as-size() + 1
+          if distance <= params.dist.max-distance {
+            matches.push(backward-match/new-dictionary(distance, l, (dict-id & 31).as-size()))
+          }
+        }
+        l = l + 1
+      }
+    }
+    matches.len() - orig-count
+  }
+
+  fn store(self: *hasher-h10, data: ptr, mask: size, ix: size) {
+    let max-backward = self.window-mask - WINDOW-GAP + 1
+    let best-len: size = 0
+    self.store-and-find-matches(data, ix, mask, H10-MAX-TREE-COMP-LENGTH, max-backward, best-len.&, :none)
+  }
+
+  fn store-range(self: *hasher-h10, data: ptr, mask: size, ix-start: size, ix-end: size) {
+    let i = ix-start
+    let j = ix-start
+    if ix-start + 63 <= ix-end {
+      i = ix-end - 63
+    }
+    if ix-start + 512 <= i {
+      while j < i {
+        self.store(data, mask, j)
+        j = j + 8
+      }
+    }
+    while i < ix-end {
+      self.store(data, mask, i)
+      i = i + 1
+    }
+  }
+
+  fn stitch-to-previous-block(self: *hasher-h10, num-bytes: size, position: size, ringbuffer: ptr, ringbuffer-mask: size) {
+    if num-bytes >= 4 - 1 and position >= H10-MAX-TREE-COMP-LENGTH {
+      let i-start = position - H10-MAX-TREE-COMP-LENGTH + 1
+      let i-end = position.min(i-start + num-bytes)
+      let best-len: size = 0
+      for i in i-start.until(i-end) {
+        let max-backward = self.window-mask - (WINDOW-GAP - 1).max(position - i)
+        self.store-and-find-matches(ringbuffer, i, ringbuffer-mask, H10-MAX-TREE-COMP-LENGTH, max-backward, best-len.&, :none)
+      }
+    }
+  }
+}

@@ -1,0 +1,444 @@
+let MAX-NUMBER-OF-HISTOGRAMS: size = 256
+let GREEDY-LITERAL-MIN-BLOCK-SIZE: size = 512
+let GREEDY-LITERAL-SPLIT-THRESHOLD: f64 = 400.0
+let GREEDY-COMMAND-MIN-BLOCK-SIZE: size = 1024
+let GREEDY-COMMAND-SPLIT-THRESHOLD: f64 = 500.0
+let GREEDY-DISTANCE-ALPHABET-SIZE: size = 64
+let GREEDY-DISTANCE-MIN-BLOCK-SIZE: size = 512
+let GREEDY-DISTANCE-SPLIT-THRESHOLD: f64 = 100.0
+
+fn recompute-distance-prefixes(cmds: buffer[command], orig-params: *distance-params, new-params: *distance-params) {
+  if orig-params.distance-postfix-bits == new-params.distance-postfix-bits
+    and orig-params.num-direct-distance-codes == new-params.num-direct-distance-codes {
+    return
+  }
+  for i in 0.until(cmds.len()) {
+    let cmd = cmds.index-unchecked(i)
+    if cmd.copy-length() != 0 and cmd.cmd-prefix >= 128 {
+      let d = prefix-encode-copy-distance(
+        cmd.restore-distance-code(orig-params).as-size(),
+        new-params.num-direct-distance-codes, new-params.distance-postfix-bits)
+      cmd.dist-prefix = d.code
+      cmd.dist-extra = d.extra-bits
+    }
+  }
+}
+
+fn compute-distance-cost(
+  cmds: buffer[command], orig-params: *distance-params, new-params: *distance-params, tmp: *histogram-distance,
+): ?f64 {
+  let equal-params = orig-params.distance-postfix-bits == new-params.distance-postfix-bits
+    and orig-params.num-direct-distance-codes == new-params.num-direct-distance-codes
+  let extra-bits = 0.0
+  tmp.clear()
+  for i in 0.until(cmds.len()) {
+    let cmd = cmds.index-unchecked(i)
+    if cmd.copy-length() != 0 and cmd.cmd-prefix >= 128 {
+      let dist-prefix: u16 = if equal-params cmd.dist-prefix else {
+        let distance = cmd.restore-distance-code(orig-params)
+        if distance.as-size() > new-params.max-distance {
+          return :none
+        }
+        prefix-encode-copy-distance(
+          distance.as-size(), new-params.num-direct-distance-codes, new-params.distance-postfix-bits).code
+      }
+      tmp.add((dist-prefix & 0x3FF).as-size())
+      extra-bits = extra-bits + (dist-prefix >> 10).as[f64]
+    }
+  }
+  :some(tmp.population-cost() + extra-bits)
+}
+
+fn build-meta-block(
+  ringbuffer: ptr, pos: size, mask: size, params: *encoder-params, prev-byte: u8, prev-byte2: u8,
+  cmds: buffer[command], literal-context-mode: context-mode, mb: *meta-block-split,
+) {
+  let ndirect-msb: size = 0
+  let check-orig = true
+  let best-dist-cost = F64-1E99
+  let orig-params = params.dist
+  let new-params = params.dist
+  let tmp = mem/alloc-t[histogram-distance]()
+
+  let npostfix: size = 0
+  while npostfix <= MAX-NPOSTFIX {
+    while ndirect-msb < 16 {
+      let ndirect = ndirect-msb << npostfix.trunc[u32]
+      new-params = init-distance-params(npostfix, ndirect)
+      if npostfix == orig-params.distance-postfix-bits and ndirect == orig-params.num-direct-distance-codes {
+        check-orig = false
+      }
+      require compute-distance-cost(cmds, orig-params.&, new-params.&, tmp) is :some dist-cost else break
+      if dist-cost > best-dist-cost break
+      best-dist-cost = dist-cost
+      params.dist = new-params
+      ndirect-msb = ndirect-msb + 1
+    }
+    if ndirect-msb > 0 { ndirect-msb = ndirect-msb - 1 }
+    ndirect-msb = ndirect-msb / 2
+    npostfix = npostfix + 1
+  }
+  if check-orig {
+    if compute-distance-cost(cmds, orig-params.&, orig-params.&, tmp) is :some dist-cost and dist-cost < best-dist-cost {
+      params.dist = orig-params
+    }
+  }
+  recompute-distance-prefixes(cmds, orig-params.&, params.dist.&)
+
+  split-block(cmds, ringbuffer, pos, mask, params, mb.literal-split.&, mb.command-split.&, mb.distance-split.&)
+
+  let literal-context-modes = buffer/allocate[context-mode](mb.literal-split.num-types)
+  literal-context-modes.fill(literal-context-mode)
+
+  let literal-histograms-size = mb.literal-split.num-types << LITERAL-CONTEXT-BITS.trunc[u32]
+  let literal-histograms = buffer/allocate[histogram-literal](literal-histograms-size)
+  clear-histograms(literal-histograms, literal-histograms-size)
+
+  let distance-histograms-size = mb.distance-split.num-types << DISTANCE-CONTEXT-BITS.trunc[u32]
+  let distance-histograms = buffer/allocate[histogram-distance](distance-histograms-size)
+  clear-histograms(distance-histograms, distance-histograms-size)
+
+  mb.command-histograms = list/wrap-buffer(buffer/allocate[histogram-command](mb.command-split.num-types))
+  clear-histograms(mb.command-histograms.as-buffer(), mb.command-histograms.len)
+
+  build-histograms-with-context(
+    cmds, mb.literal-split.&, mb.command-split.&, mb.distance-split.&, ringbuffer, pos, mask, prev-byte, prev-byte2,
+    :some literal-context-modes, literal-histograms, mb.command-histograms.as-buffer(), distance-histograms)
+
+  mb.literal-context-map = list/wrap-buffer(buffer/allocate[u32](mb.literal-split.num-types << LITERAL-CONTEXT-BITS.trunc[u32]))
+  mb.literal-histograms = list/wrap-buffer(buffer/allocate[histogram-literal](mb.literal-context-map.len))
+  mb.literal-histograms.len = cluster-histograms(
+    literal-histograms, MAX-NUMBER-OF-HISTOGRAMS, mb.literal-histograms.as-buffer(), mb.literal-context-map.as-buffer())
+
+  mb.distance-context-map = list/wrap-buffer(buffer/allocate[u32](mb.distance-split.num-types << DISTANCE-CONTEXT-BITS.trunc[u32]))
+  mb.distance-histograms = list/wrap-buffer(buffer/allocate[histogram-distance](mb.distance-context-map.len))
+  mb.distance-histograms.len = cluster-histograms(
+    distance-histograms, MAX-NUMBER-OF-HISTOGRAMS, mb.distance-histograms.as-buffer(), mb.distance-context-map.as-buffer())
+}
+
+type block-splitter[n: static size] = {
+  alphabet-size: size,
+  num-contexts: size,
+  max-block-types: size,
+  min-block-size: size,
+  split-threshold: f64,
+  num-blocks: size,
+  split: *block-split,
+  histograms: *list[histogram[n]],
+  combined-histo: buffer[histogram[n]],
+  target-block-size: size,
+  block-size: size,
+  curr-histogram-ix: size,
+  last-histogram-ix: array[size, 2],
+  last-entropy: array[f64, 26],
+  merge-last-count: size,
+}
+
+ns for block-splitter {
+  fn init[n: static size](
+    alphabet-size: size, num-contexts: size, min-block-size: size, split-threshold: f64, num-symbols: size,
+    split: *block-split, histograms: *list[histogram[n]],
+  ): *block-splitter[n] {
+    let max-num-blocks = num-symbols / min-block-size + 1
+    let self = mem/alloc-t[block-splitter[n]]()
+    self.alphabet-size = alphabet-size
+    self.num-contexts = num-contexts
+    self.max-block-types = MAX-NUMBER-OF-BLOCK-TYPES / num-contexts
+    self.min-block-size = min-block-size
+    self.split-threshold = split-threshold
+    self.split = split
+    self.histograms = histograms
+    self.combined-histo = buffer/allocate[histogram[n]](2 * num-contexts)
+    self.target-block-size = min-block-size
+    let max-num-types = max-num-blocks.min(self.max-block-types + 1)
+    split.types = list/wrap-buffer(buffer/allocate[u8](max-num-blocks))
+    split.lengths = list/wrap-buffer(buffer/allocate[u32](max-num-blocks))
+    split.num-blocks = max-num-blocks
+    histograms.* = list/wrap-buffer(buffer/allocate[histogram[n]](max-num-types * num-contexts))
+    clear-histograms(histograms.as-buffer(), num-contexts)
+    self
+  }
+
+  fn finish-block[n: static size](self: *block-splitter[n], is-final: bool) {
+    let split = self.split
+    let num-contexts = self.num-contexts
+    let histograms = self.histograms.as-buffer()
+    if self.block-size < self.min-block-size {
+      self.block-size = self.min-block-size
+    }
+    if self.num-blocks == 0 {
+      split.lengths.[0] = self.block-size.trunc[u32]
+      split.types.[0] = 0
+      for i in 0.until(num-contexts) {
+        self.last-entropy.[i] = bits-entropy(histograms.index-unchecked(i).data-buffer(), self.alphabet-size)
+        self.last-entropy.[num-contexts + i] = self.last-entropy.[i]
+      }
+      self.num-blocks = self.num-blocks + 1
+      split.num-types = split.num-types + 1
+      self.curr-histogram-ix = self.curr-histogram-ix + num-contexts
+      if self.curr-histogram-ix < histograms.len() {
+        clear-histograms(histograms.slice(self.curr-histogram-ix, histograms.len()), num-contexts)
+      }
+      self.block-size = 0
+    } else if self.block-size > 0 {
+      let entropy = array/zeroed[f64, 13]()
+      let combined-entropy = array/zeroed[f64, 26]()
+      let diff = array/zeroed[f64, 2]()
+      for i in 0.until(num-contexts) {
+        let curr-histo-ix = self.curr-histogram-ix + i
+        entropy.[i] = bits-entropy(histograms.index-unchecked(curr-histo-ix).data-buffer(), self.alphabet-size)
+        for j in 0.until(2) {
+          let jx = j * num-contexts + i
+          let last-histogram-ix = self.last-histogram-ix.[j] + i
+          let combined = self.combined-histo.index-unchecked(jx)
+          combined.* = histograms.index-unchecked(curr-histo-ix).*
+          combined.add-histogram(histograms.index-unchecked(last-histogram-ix))
+          combined-entropy.[jx] = bits-entropy(combined.data-buffer(), self.alphabet-size)
+          diff.[j] = diff.[j] + (combined-entropy.[jx] - entropy.[i] - self.last-entropy.[jx])
+        }
+      }
+
+      if split.num-types < self.max-block-types
+        and diff.[0] > self.split-threshold and diff.[1] > self.split-threshold {
+        split.lengths.[self.num-blocks] = self.block-size.trunc[u32]
+        split.types.[self.num-blocks] = split.num-types.trunc[u8]
+        self.last-histogram-ix.[1] = self.last-histogram-ix.[0]
+        self.last-histogram-ix.[0] = split.num-types * num-contexts
+        for i in 0.until(num-contexts) {
+          self.last-entropy.[num-contexts + i] = self.last-entropy.[i]
+          self.last-entropy.[i] = entropy.[i]
+        }
+        self.num-blocks = self.num-blocks + 1
+        split.num-types = split.num-types + 1
+        self.curr-histogram-ix = self.curr-histogram-ix + num-contexts
+        if self.curr-histogram-ix < histograms.len() {
+          clear-histograms(histograms.slice(self.curr-histogram-ix, histograms.len()), num-contexts)
+        }
+        self.block-size = 0
+        self.merge-last-count = 0
+        self.target-block-size = self.min-block-size
+      } else if diff.[1] < diff.[0] - 20.0 {
+        split.lengths.[self.num-blocks] = self.block-size.trunc[u32]
+        split.types.[self.num-blocks] = split.types.[self.num-blocks - 2]
+        let swapped = self.last-histogram-ix.[0]
+        self.last-histogram-ix.[0] = self.last-histogram-ix.[1]
+        self.last-histogram-ix.[1] = swapped
+        for i in 0.until(num-contexts) {
+          histograms.index-unchecked(self.last-histogram-ix.[0] + i).* = self.combined-histo.index-unchecked(num-contexts + i).*
+          self.last-entropy.[num-contexts + i] = self.last-entropy.[i]
+          self.last-entropy.[i] = combined-entropy.[num-contexts + i]
+          histograms.index-unchecked(self.curr-histogram-ix + i).clear()
+        }
+        self.num-blocks = self.num-blocks + 1
+        self.block-size = 0
+        self.merge-last-count = 0
+        self.target-block-size = self.min-block-size
+      } else {
+        split.lengths.[self.num-blocks - 1] = split.lengths.[self.num-blocks - 1] + self.block-size.trunc[u32]
+        for i in 0.until(num-contexts) {
+          histograms.index-unchecked(self.last-histogram-ix.[0] + i).* = self.combined-histo.index-unchecked(i).*
+          self.last-entropy.[i] = combined-entropy.[i]
+          if split.num-types == 1 {
+            self.last-entropy.[num-contexts + i] = self.last-entropy.[i]
+          }
+          histograms.index-unchecked(self.curr-histogram-ix + i).clear()
+        }
+        self.block-size = 0
+        self.merge-last-count = self.merge-last-count + 1
+        if self.merge-last-count > 1 {
+          self.target-block-size = self.target-block-size + self.min-block-size
+        }
+      }
+    }
+    if is-final {
+      self.histograms.len = split.num-types * num-contexts
+      split.num-blocks = self.num-blocks
+      split.types.len = self.num-blocks
+      split.lengths.len = self.num-blocks
+    }
+  }
+
+  fn(inline) add-symbol[n: static size](self: *block-splitter[n], symbol: size, ctx: size) {
+    self.histograms.as-buffer().index-unchecked(self.curr-histogram-ix + ctx).add(symbol)
+    self.block-size = self.block-size + 1
+    if self.block-size == self.target-block-size {
+      self.finish-block(false)
+    }
+  }
+}
+
+fn map-static-contexts(num-contexts: size, static-context-map: buffer[u32], mb: *meta-block-split) {
+  mb.literal-context-map = list/wrap-buffer(buffer/allocate[u32](mb.literal-split.num-types << LITERAL-CONTEXT-BITS.trunc[u32]))
+  for i in 0.until(mb.literal-split.num-types) {
+    let offset = (i * num-contexts).trunc[u32]
+    for j in 0.until(1 << LITERAL-CONTEXT-BITS.trunc[u32]) {
+      mb.literal-context-map.[(i << LITERAL-CONTEXT-BITS.trunc[u32]) + j] = offset + static-context-map.[j]
+    }
+  }
+}
+
+fn build-meta-block-greedy(
+  ringbuffer: ptr, start-pos: size, mask: size, prev-byte-in: u8, prev-byte2-in: u8, literal-context-lut: size,
+  num-contexts: size, static-context-map: ?buffer[u32], cmds: buffer[command], mb: *meta-block-split,
+) {
+  let pos = start-pos
+  let prev-byte = prev-byte-in
+  let prev-byte2 = prev-byte2-in
+  let num-literals: size = 0
+  for i in 0.until(cmds.len()) {
+    num-literals = num-literals + cmds.index-unchecked(i).insert-len.as-size()
+  }
+  let lit-blocks = block-splitter/init[256](
+    NUM-LITERAL-SYMBOLS, num-contexts, GREEDY-LITERAL-MIN-BLOCK-SIZE, GREEDY-LITERAL-SPLIT-THRESHOLD, num-literals,
+    mb.literal-split.&, mb.literal-histograms.&)
+  let cmd-blocks = block-splitter/init[704](
+    NUM_COMMAND_SYMBOLS, 1, GREEDY-COMMAND-MIN-BLOCK-SIZE, GREEDY-COMMAND-SPLIT-THRESHOLD, cmds.len(),
+    mb.command-split.&, mb.command-histograms.&)
+  let dist-blocks = block-splitter/init[544](
+    GREEDY-DISTANCE-ALPHABET-SIZE, 1, GREEDY-DISTANCE-MIN-BLOCK-SIZE, GREEDY-DISTANCE-SPLIT-THRESHOLD, cmds.len(),
+    mb.distance-split.&, mb.distance-histograms.&)
+
+  let ctx-map: buffer[u32] = if num-contexts == 1 buffer/empty() else static-context-map.!
+  for i in 0.until(cmds.len()) {
+    let cmd = cmds.index-unchecked(i)
+    cmd-blocks.add-symbol(cmd.cmd-prefix.as-size(), 0)
+    for 0.until(cmd.insert-len.as-size()) {
+      let literal = ringbuffer.add-bytes(pos & mask).ref[u8].*
+      let ctx: size = if num-contexts == 1 0 else {
+        ctx-map.index-unchecked(context-of(prev-byte, prev-byte2, literal-context-lut).as-size()).*.as-size()
+      }
+      lit-blocks.add-symbol(literal.as-size(), ctx)
+      prev-byte2 = prev-byte
+      prev-byte = literal
+      pos = pos + 1
+    }
+    let copy-len = cmd.copy-length().as-size()
+    pos = pos + copy-len
+    if copy-len != 0 {
+      prev-byte2 = ringbuffer.add-bytes((pos - 2) & mask).ref[u8].*
+      prev-byte = ringbuffer.add-bytes((pos - 1) & mask).ref[u8].*
+      if cmd.cmd-prefix >= 128 {
+        dist-blocks.add-symbol((cmd.dist-prefix & 0x3FF).as-size(), 0)
+      }
+    }
+  }
+
+  lit-blocks.finish-block(true)
+  cmd-blocks.finish-block(true)
+  dist-blocks.finish-block(true)
+
+  if num-contexts > 1 {
+    map-static-contexts(num-contexts, ctx-map, mb)
+  }
+}
+
+fn optimize-huffman-counts-for-rle(length-in: size, counts: buffer[u32], good-for-rle: buffer[u8]) {
+  let length = length-in
+  let nonzero-count: size = 0
+  let streak-limit: usize = 1240
+  for i in 0.until(length) {
+    if counts.index-unchecked(i).* != 0 {
+      nonzero-count = nonzero-count + 1
+    }
+  }
+  if nonzero-count < 16 return
+  while length != 0 and counts.index-unchecked(length - 1).* == 0 {
+    length = length - 1
+  }
+  if length == 0 return
+  let nonzeros: size = 0
+  let smallest-nonzero: u32 = 1 << 30
+  for i in 0.until(length) {
+    let c = counts.index-unchecked(i).*
+    if c != 0 {
+      nonzeros = nonzeros + 1
+      if smallest-nonzero > c {
+        smallest-nonzero = c
+      }
+    }
+  }
+  if nonzeros < 5 return
+  if smallest-nonzero < 4 {
+    let zeros = length - nonzeros
+    if zeros < 6 {
+      for i in 1.until(length - 1) {
+        if counts.[i - 1] != 0 and counts.[i] == 0 and counts.[i + 1] != 0 {
+          counts.[i] = 1
+        }
+      }
+    }
+  }
+  if nonzeros < 28 return
+
+  good-for-rle.slice(0, length).memset(0)
+  let symbol = counts.[0]
+  let step: size = 0
+  for i in 0.until(length + 1) {
+    if i == length or counts.[i] != symbol {
+      if (symbol == 0 and step >= 5) or (symbol != 0 and step >= 7) {
+        for k in 0.until(step) {
+          good-for-rle.[i - k - 1] = 1
+        }
+      }
+      step = 1
+      if i != length {
+        symbol = counts.[i]
+      }
+    } else {
+      step = step + 1
+    }
+  }
+
+  let stride: size = 0
+  let limit: usize = ((256: u32) * (counts.[0] + counts.[1] + counts.[2]) / 3 + 420).widen[u64]
+  let sum: size = 0
+  for i in 0.until(length + 1) {
+    if i == length or good-for-rle.[i] != 0 or (i != 0 and good-for-rle.[i - 1] != 0)
+      or ((256: u32) * counts.[i]).widen[u64] - limit + streak-limit >= streak-limit * 2 {
+      if stride >= 4 or (stride >= 3 and sum == 0) {
+        let count = (sum + stride / 2) / stride
+        if count == 0 {
+          count = 1
+        }
+        if sum == 0 {
+          count = 0
+        }
+        for k in 0.until(stride) {
+          counts.[i - k - 1] = count.trunc[u32]
+        }
+      }
+      stride = 0
+      sum = 0
+      if i < length - 2 {
+        limit = ((256: u32) * (counts.[i] + counts.[i + 1] + counts.[i + 2]) / 3 + 420).widen[u64]
+      } else if i < length {
+        limit = ((256: u32) * counts.[i]).widen[u64]
+      } else {
+        limit = 0
+      }
+    }
+    stride = stride + 1
+    if i != length {
+      sum = sum + counts.[i].as-size()
+      if stride >= 4 {
+        limit = ((sum * 256 + stride / 2) / stride).unsigned()
+      }
+      if stride == 4 {
+        limit = limit + 120
+      }
+    }
+  }
+}
+
+fn optimize-histograms(num-distance-codes: size, mb: *meta-block-split) {
+  let good-for-rle = buffer/allocate[u8](NUM_COMMAND_SYMBOLS)
+  for i in 0.until(mb.literal-histograms.len) {
+    optimize-huffman-counts-for-rle(NUM-LITERAL-SYMBOLS, mb.literal-histograms.as-buffer().index-unchecked(i).data-buffer(), good-for-rle)
+  }
+  for i in 0.until(mb.command-histograms.len) {
+    optimize-huffman-counts-for-rle(NUM_COMMAND_SYMBOLS, mb.command-histograms.as-buffer().index-unchecked(i).data-buffer(), good-for-rle)
+  }
+  for i in 0.until(mb.distance-histograms.len) {
+    optimize-huffman-counts-for-rle(num-distance-codes, mb.distance-histograms.as-buffer().index-unchecked(i).data-buffer(), good-for-rle)
+  }
+}

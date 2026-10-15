@@ -47,7 +47,5 @@ fn main(): i32 {
   let deep: ***bool = mem/new(mem/new(mem/new(true)))
   println(deep is true***)
 
-  require r is :ok n else { crash("unreachable") }
-  println("n = $n")
   0
 }

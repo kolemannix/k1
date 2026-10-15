@@ -25,6 +25,17 @@ fn test() {
   assert(reps.index-of-string("aBa") is :none)
   assert("hello".index-of-string("") is :some 0)
 
+  let hex-bytes: list[u8] = [0, 255, 65, 122]
+  assert(hex-bytes.as-span().to-hex() == "00ff417a")
+  assert("Az".to-hex() == "417a")
+  let hex-sb = string-builder/new()
+  hex-bytes.as-span().write-hex(hex-sb.&, upper = true)
+  assert(hex-sb.&.build() == "00FF417A")
+  assert(span/from-hex("00FF417a").! == hex-bytes.as-span())
+  assert(span/from-hex("").! == span/empty())
+  assert(span/from-hex("0") is :none)
+  assert(span/from-hex("0g") is :none)
+
   assert("".split-by-char('.') == [])
   assert("a...".split-by-char('.') == ["a", "", ""])
   assert("..".split-by-char('.') == ["", ""])

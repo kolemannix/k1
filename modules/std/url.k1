@@ -488,12 +488,9 @@ ns percent {
     :some(hi * 16 + lo)
   }
 
-  fn hex-digit(v: u8): char { "0123456789ABCDEF".[v.as-size()] }
-
   fn write-escape[w: writer](out: w, value: u8) {
     out.write-char('%')
-    out.write-char(hex-digit(value / 16))
-    out.write-char(hex-digit(value % 16))
+    value.write-hex(out, upper = true)
   }
 
   fn _decode(s: string, plus-is-space: bool): string {

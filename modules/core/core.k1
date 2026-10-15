@@ -523,6 +523,12 @@ ns for u8 {
   fn(inline) as-char(self: u8): char { mem/bitcast[u8, char](self) }
   fn(inline) signed(self: u8): i8 { mem/bitcast[u8, i8](self) }
   fn(inline) as-size(self: u8): size { self.widen[size] }
+
+  fn write-hex[w: writer](self: u8, w, upper: bool) {
+    let digits = if upper "0123456789ABCDEF" else "0123456789abcdef"
+    w.write-char(digits.[(self >> 4).as-size()])
+    w.write-char(digits.[(self & 15).as-size()])
+  }
 }
 
 ns for i8 {

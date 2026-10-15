@@ -1,0 +1,47 @@
+let MIN-UTF8-RATIO: f64 = 0.75
+
+fn parse-as-utf8(input: ptr, size: size): { symbol: i32, bytes-read: size } {
+  let b0 = byte-at(input, 0)
+  if (b0 & 0x80) == 0 {
+    let symbol = b0.widen[i32]
+    if symbol > 0 {
+      return .{ symbol, bytes-read = 1 }
+    }
+  }
+  if size > 1 and (b0 & 0xE0) == 0xC0 and (byte-at(input, 1) & 0xC0) == 0x80 {
+    let symbol = ((b0 & 0x1F).widen[i32] << 6) | (byte-at(input, 1) & 0x3F).widen[i32]
+    if symbol > 0x7F {
+      return .{ symbol, bytes-read = 2 }
+    }
+  }
+  if size > 2 and (b0 & 0xF0) == 0xE0 and (byte-at(input, 1) & 0xC0) == 0x80 and (byte-at(input, 2) & 0xC0) == 0x80 {
+    let symbol = ((b0 & 0x0F).widen[i32] << 12) |
+      ((byte-at(input, 1) & 0x3F).widen[i32] << 6) |
+      (byte-at(input, 2) & 0x3F).widen[i32]
+    if symbol > 0x7FF {
+      return .{ symbol, bytes-read = 3 }
+    }
+  }
+  if size > 3 and (b0 & 0xF8) == 0xF0 and (byte-at(input, 1) & 0xC0) == 0x80 and
+     (byte-at(input, 2) & 0xC0) == 0x80 and (byte-at(input, 3) & 0xC0) == 0x80 {
+    let symbol = ((b0 & 0x07).widen[i32] << 18) |
+      ((byte-at(input, 1) & 0x3F).widen[i32] << 12) |
+      ((byte-at(input, 2) & 0x3F).widen[i32] << 6) |
+      (byte-at(input, 3) & 0x3F).widen[i32]
+    if symbol > 0xFFFF and symbol <= 0x10FFFF {
+      return .{ symbol, bytes-read = 4 }
+    }
+  }
+  .{ symbol = (0x110000: i32) | b0.widen[i32], bytes-read = 1 }
+}
+
+fn is-mostly-utf8(data: ptr, pos: size, mask: size, length: size, min-fraction: f64): bool {
+  let size-utf8: size = 0
+  let i: size = 0
+  while i < length {
+    let r = parse-as-utf8(data.add-bytes((pos + i) & mask), length - i)
+    i = i + r.bytes-read
+    if r.symbol < 0x110000 { size-utf8 = size-utf8 + r.bytes-read }
+  }
+  size-utf8.as[f64] > min-fraction * length.as[f64]
+}

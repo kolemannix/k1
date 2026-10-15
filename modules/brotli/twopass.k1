@@ -36,12 +36,12 @@ ns for cmd-sink {
 }
 
 fn(inline) hash-2p(p: ptr, shift: u32, min-match: size): size {
-  let h = (load64-le(p) << ((8 - min-match).trunc[u32] * 8)) * HASH-MUL32
+  let h = (load64-le(p) << ((8 - min-match).trunc[u32] * 8)) * K-HASH-MUL32.widen[u64]
   (h >> shift).signed()
 }
 
 fn(inline) hash-2p-at-offset(v: u64, offset: u32, shift: u32, min-match: size): size {
-  let h = ((v >> (8 * offset)) << ((8 - min-match).trunc[u32] * 8)) * HASH-MUL32
+  let h = ((v >> (8 * offset)) << ((8 - min-match).trunc[u32] * 8)) * K-HASH-MUL32.widen[u64]
   (h >> shift).signed()
 }
 
@@ -370,25 +370,6 @@ fn store-commands(s: *two-pass-arena, sink: *cmd-sink, bw: bit-writer): bit-writ
     i = i + 1
   }
   bw
-}
-
-fn bits-entropy(population: buffer[u32], count: size): f64 {
-  let sum: size = 0
-  let retval = 0.0
-  let i: size = 0
-  while i < count {
-    let p = population.index-unchecked(i).*.as-size()
-    sum = sum + p
-    retval = retval - p.as[f64] * fast-log2(p)
-    i = i + 1
-  }
-  if sum != 0 {
-    retval = retval + sum.as[f64] * fast-log2(sum)
-  }
-  if retval < sum.as[f64] {
-    retval = sum.as[f64]
-  }
-  retval
 }
 
 fn should-compress-2p(s: *two-pass-arena, input: ptr, input-size: size, num-literals: size): bool {

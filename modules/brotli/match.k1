@@ -1,0 +1,59 @@
+let K-HASH-MUL32: u32 = 0x1E35A7BD
+let K-HASH-MUL64: u64 = 0x1FE35A7BD3579BD3
+let LITERAL-BYTE-SCORE: u32 = 135
+let DISTANCE-BIT-PENALTY: u32 = 30
+let SCORE-BASE: u32 = 1920
+let CUTOFF-TRANSFORMS-COUNT: size = 10
+let CUTOFF-TRANSFORMS: u64 = 0x071B520ADA2D3200
+let k-dictionary-size-bits-by-length: array[u8, 32] = [
+  0, 0, 0, 0, 10, 10, 11, 11, 10, 10, 10, 10, 10, 9, 9, 8,
+  7, 7, 8, 7, 7, 6, 6, 5, 5, 0, 0, 0, 0, 0, 0, 0,
+]
+let k-dictionary-offsets-by-length: array[u32, 32] = [
+  0, 0, 0, 0, 0, 4096, 9216, 21504, 35840, 44032, 53248, 63488, 74752, 87040, 93696, 100864,
+  104704, 106752, 108928, 113536, 115968, 118528, 119872, 121280, 122016, 122784, 122784, 122784, 122784, 122784, 122784, 122784,
+]
+
+fn(inline) hash32(p: ptr, bits: u32): size { ((load32-le(p) * K-HASH-MUL32) >> (32 - bits)).as-size() }
+
+fn(inline) dictionary-word(len: size, word-idx: size): ptr {
+  k-dictionary-data.&.as-buffer().data-ptr().add-bytes(k-dictionary-offsets-by-length.[len].as-size() + len * word-idx)
+}
+
+type hasher-search-result = { len: size, distance: size, score: u32, len-code-delta: i32 }
+
+type hasher-common = { dict-num-lookups: size, dict-num-matches: size, is-prepared: bool }
+
+fn prepare-distance-cache(distance-cache: buffer[i32], num-distances: size) {
+  if num-distances > 4 {
+    let last-distance = distance-cache.index-unchecked(0).*
+    distance-cache.index-unchecked(4).* = last-distance - 1
+    distance-cache.index-unchecked(5).* = last-distance + 1
+    distance-cache.index-unchecked(6).* = last-distance - 2
+    distance-cache.index-unchecked(7).* = last-distance + 2
+    distance-cache.index-unchecked(8).* = last-distance - 3
+    distance-cache.index-unchecked(9).* = last-distance + 3
+    if num-distances > 10 {
+      let next-last-distance = distance-cache.index-unchecked(1).*
+      distance-cache.index-unchecked(10).* = next-last-distance - 1
+      distance-cache.index-unchecked(11).* = next-last-distance + 1
+      distance-cache.index-unchecked(12).* = next-last-distance - 2
+      distance-cache.index-unchecked(13).* = next-last-distance + 2
+      distance-cache.index-unchecked(14).* = next-last-distance - 3
+      distance-cache.index-unchecked(15).* = next-last-distance + 3
+    }
+  }
+}
+
+fn(inline) backward-reference-score(copy-length: size, backward-reference-offset: size): u32 {
+  SCORE-BASE + LITERAL-BYTE-SCORE * copy-length.trunc[u32] -
+    DISTANCE-BIT-PENALTY * log2-floor-nonzero(backward-reference-offset.unsigned()).trunc[u32]
+}
+
+fn(inline) backward-reference-score-using-last-distance(copy-length: size): u32 {
+  LITERAL-BYTE-SCORE * copy-length.trunc[u32] + SCORE-BASE + 15
+}
+
+fn(inline) backward-reference-penalty-using-last-distance(distance-short-code: size): u32 {
+  39 + (((0x1CA10: u32) >> (distance-short-code & 0xE).trunc[u32]) & 0xE)
+}

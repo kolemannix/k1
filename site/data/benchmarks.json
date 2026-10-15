@@ -7,7 +7,7 @@
   "brotli": {
     "script": "content/showcase/benchmarks/brotli/run.sh",
     "results": "content/showcase/benchmarks/brotli/results.md",
-    "date": "2026-09-18"
+    "date": "2026-10-13"
   },
   "compile-times": {
     "script": "content/showcase/benchmarks/compile-times/run.sh",
@@ -29,6 +29,6 @@
   },
   "loc": {
     "results": "content/showcase/benchmarks/loc/results.md",
-    "date": "2026-10-12"
+    "date": "2026-10-13"
   }
 }

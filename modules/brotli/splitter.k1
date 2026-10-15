@@ -1,0 +1,408 @@
+let MAX-LITERAL-HISTOGRAMS: size = 100
+let MAX-COMMAND-HISTOGRAMS: size = 50
+let LITERAL-BLOCK-SWITCH-COST: f64 = 28.1
+let COMMAND-BLOCK-SWITCH-COST: f64 = 13.5
+let DISTANCE-BLOCK-SWITCH-COST: f64 = 14.6
+let LITERAL-STRIDE-LENGTH: size = 70
+let COMMAND-STRIDE-LENGTH: size = 40
+let DISTANCE-STRIDE-LENGTH: size = 40
+let SYMBOLS-PER-LITERAL-HISTOGRAM: size = 544
+let SYMBOLS-PER-COMMAND-HISTOGRAM: size = 530
+let SYMBOLS-PER-DISTANCE-HISTOGRAM: size = 544
+let MIN-LENGTH-FOR-BLOCK-SPLITTING: size = 128
+let ITER-MUL-FOR-REFINING: size = 2
+let MIN-ITERS-FOR-REFINING: size = 100
+let HISTOGRAMS-PER-BATCH: size = 64
+let CLUSTERS-PER-BATCH: size = 16
+let FIND-BLOCKS-PROLOGUE-LENGTH: size = 2000
+let FIND-BLOCKS-MULTIPLIER: f64 = mem/bitcast[u64, f64](0x3F02599ED7C6FBD3)
+let F64-1E99: f64 = mem/bitcast[u64, f64](0x547D42AEA2879F2E)
+let INVALID-BLOCK-ID: u16 = 256
+let INVALID-INDEX: u32 = 0xFFFFFFFF
+
+ability block-symbol { fn block-symbol(self): size }
+impl block-symbol for u8 { fn(inline) block-symbol(self: u8): size { self.as-size() } }
+impl block-symbol for u16 { fn(inline) block-symbol(self: u16): size { self.as-size() } }
+
+fn(inline) my-rand(seed: *u32): u32 {
+  seed.* = seed.* * 16807
+  seed.*
+}
+
+fn(inline) bit-cost(count: size): f64 { if count == 0 -2.0 else fast-log2(count) }
+
+fn clear-histograms[n: static size](histograms: buffer[histogram[n]], count: size) {
+  for i in 0.until(count) { histograms.index-unchecked(i).clear() }
+}
+
+fn add-symbols[n: static size, t: block-symbol](h: *histogram[n], data: buffer[t], pos: size, count: size) {
+  h.total-count = h.total-count + count
+  for i in 0.until(count) {
+    let v = data.index-unchecked(pos + i).*.block-symbol()
+    h.data.[v] = h.data.[v] + 1
+  }
+}
+
+fn init-entropy-codes[n: static size, t: block-symbol](
+  data: buffer[t], stride: size, num-histograms: size, histograms: buffer[histogram[n]],
+) {
+  let length = data.len()
+  let seed: u32 = 7
+  let block-length = length / num-histograms
+  clear-histograms(histograms, num-histograms)
+  for i in 0.until(num-histograms) {
+    let pos = length * i / num-histograms
+    if i != 0 {
+      pos = pos + my-rand(seed.&).as-size() % block-length
+    }
+    if pos + stride >= length {
+      pos = length - stride - 1
+    }
+    add-symbols(histograms.index-unchecked(i), data, pos, stride)
+  }
+}
+
+fn random-sample[n: static size, t: block-symbol](seed: *u32, data: buffer[t], stride: size, sample: *histogram[n]) {
+  let length = data.len()
+  let pos: size = 0
+  let count = stride
+  if count >= length {
+    count = length
+  } else {
+    pos = my-rand(seed).as-size() % (length - count + 1)
+  }
+  add-symbols(sample, data, pos, count)
+}
+
+fn refine-entropy-codes[n: static size, t: block-symbol](
+  data: buffer[t], stride: size, num-histograms: size, histograms: buffer[histogram[n]], tmp: *histogram[n],
+) {
+  let iters = ITER-MUL-FOR-REFINING * data.len() / stride + MIN-ITERS-FOR-REFINING
+  let seed: u32 = 7
+  iters = ((iters + num-histograms - 1) / num-histograms) * num-histograms
+  for iter in 0.until(iters) {
+    tmp.clear()
+    random-sample(seed.&, data, stride, tmp)
+    histograms.index-unchecked(iter % num-histograms).add-histogram(tmp)
+  }
+}
+
+fn find-blocks[n: static size, t: block-symbol](
+  data: buffer[t], block-switch-bitcost: f64, num-histograms: size, histograms: buffer[histogram[n]],
+  insert-cost: buffer[f64], cost: buffer[f64], switch-signal: buffer[u8], block-id: buffer[u8],
+): size {
+  let length = data.len()
+  let alphabet-size = histogram/data-size[n]()
+  let bitmap-len = (num-histograms + 7) >> 3
+  let num-blocks: size = 1
+  if num-histograms <= 1 {
+    for i in 0.until(length) { block-id.index-unchecked(i).* = 0 }
+    return 1
+  }
+  insert-cost.slice(0, alphabet-size * num-histograms).memset(0)
+  for i in 0.until(num-histograms) {
+    insert-cost.index-unchecked(i).* = fast-log2(histograms.index-unchecked(i).total-count.trunc[u32].as-size())
+  }
+  let i = alphabet-size
+  while i != 0 {
+    i = i - 1
+    for j in 0.until(num-histograms) {
+      insert-cost.index-unchecked(i * num-histograms + j).* =
+        insert-cost.index-unchecked(j).* - bit-cost(histograms.index-unchecked(j).data.[i].as-size())
+    }
+  }
+  cost.slice(0, num-histograms).memset(0)
+  switch-signal.slice(0, length * bitmap-len).memset(0)
+  for byte-ix in 0.until(length) {
+    let ix = byte-ix * bitmap-len
+    let symbol = data.index-unchecked(byte-ix).*.block-symbol()
+    let insert-cost-ix = symbol * num-histograms
+    let min-cost = F64-1E99
+    let block-switch-cost = block-switch-bitcost
+    for k in 0.until(num-histograms) {
+      let ck = cost.index-unchecked(k)
+      ck.* = ck.* + insert-cost.index-unchecked(insert-cost-ix + k).*
+      if ck.* < min-cost {
+        min-cost = ck.*
+        block-id.index-unchecked(byte-ix).* = k.trunc[u8]
+      }
+    }
+    if byte-ix < FIND-BLOCKS-PROLOGUE-LENGTH {
+      block-switch-cost = block-switch-cost * (0.77 + FIND-BLOCKS-MULTIPLIER * byte-ix.as[f64])
+    }
+    for k in 0.until(num-histograms) {
+      let ck = cost.index-unchecked(k)
+      ck.* = ck.* - min-cost
+      if ck.* >= block-switch-cost {
+        let mask = (1u32 << (k & 7).trunc[u32]).trunc[u8]
+        ck.* = block-switch-cost
+        let signal = switch-signal.index-unchecked(ix + (k >> 3))
+        signal.* = signal.* | mask
+      }
+    }
+  }
+  let byte-ix = length - 1
+  let ix = byte-ix * bitmap-len
+  let cur-id = block-id.index-unchecked(byte-ix).*
+  while byte-ix > 0 {
+    let mask = (1u32 << (cur-id & 7).widen[u32]).trunc[u8]
+    byte-ix = byte-ix - 1
+    ix = ix - bitmap-len
+    if (switch-signal.index-unchecked(ix + (cur-id >> 3).as-size()).* & mask) != 0 {
+      if cur-id != block-id.index-unchecked(byte-ix).* {
+        cur-id = block-id.index-unchecked(byte-ix).*
+        num-blocks = num-blocks + 1
+      }
+    }
+    block-id.index-unchecked(byte-ix).* = cur-id
+  }
+  num-blocks
+}
+
+fn remap-block-ids(block-ids: buffer[u8], new-id: buffer[u16], num-histograms: size): size {
+  let length = block-ids.len()
+  let next-id: u16 = 0
+  for i in 0.until(num-histograms) { new-id.index-unchecked(i).* = INVALID-BLOCK-ID }
+  for i in 0.until(length) {
+    let slot = new-id.index-unchecked(block-ids.index-unchecked(i).*.as-size())
+    if slot.* == INVALID-BLOCK-ID {
+      slot.* = next-id
+      next-id = next-id + 1
+    }
+  }
+  for i in 0.until(length) {
+    let id = block-ids.index-unchecked(i)
+    id.* = new-id.index-unchecked(id.*.as-size()).*.trunc[u8]
+  }
+  next-id.as-size()
+}
+
+fn build-block-histograms[n: static size, t: block-symbol](
+  data: buffer[t], block-ids: buffer[u8], num-histograms: size, histograms: buffer[histogram[n]],
+) {
+  clear-histograms(histograms, num-histograms)
+  for i in 0.until(data.len()) {
+    histograms.index-unchecked(block-ids.index-unchecked(i).*.as-size()).add(data.index-unchecked(i).*.block-symbol())
+  }
+}
+
+fn cluster-blocks[n: static size, t: block-symbol](data: buffer[t], num-blocks: size, block-ids: buffer[u8], split: *block-split) {
+  let length = data.len()
+  let histogram-symbols = buffer/allocate[u32](num-blocks)
+  let sizes = buffer/allocate[u32](HISTOGRAMS-PER-BATCH)
+  let new-clusters = buffer/allocate[u32](HISTOGRAMS-PER-BATCH)
+  let symbols = buffer/allocate[u32](HISTOGRAMS-PER-BATCH)
+  let remap = buffer/allocate[u32](HISTOGRAMS-PER-BATCH)
+  let block-lengths = buffer/allocate[u32](num-blocks)
+  let expected-num-clusters = CLUSTERS-PER-BATCH * (num-blocks + HISTOGRAMS-PER-BATCH - 1) / HISTOGRAMS-PER-BATCH
+  let all-histograms: list[histogram[n]] = list/with-capacity(expected-num-clusters)
+  let cluster-size: list[u32] = list/with-capacity(expected-num-clusters)
+  let num-clusters: size = 0
+  let histograms = buffer/allocate[histogram[n]](num-blocks.min(HISTOGRAMS-PER-BATCH))
+  let max-num-pairs = HISTOGRAMS-PER-BATCH * HISTOGRAMS-PER-BATCH / 2
+  let pairs = buffer/allocate[histogram-pair](max-num-pairs + 1)
+  let pos: size = 0
+  let tmp = buffer/allocate[histogram[n]](2)
+  let tmp0 = tmp.index-unchecked(0)
+  let tmp1 = tmp.index-unchecked(1)
+
+  let block-idx: size = 0
+  for i in 0.until(length) {
+    let bl = block-lengths.index-unchecked(block-idx)
+    bl.* = bl.* + 1
+    if i + 1 == length or block-ids.index-unchecked(i).* != block-ids.index-unchecked(i + 1).* {
+      block-idx = block-idx + 1
+    }
+  }
+
+  let batch: size = 0
+  while batch < num-blocks {
+    let num-to-combine = (num-blocks - batch).min(HISTOGRAMS-PER-BATCH)
+    for j in 0.until(num-to-combine) {
+      let block-length = block-lengths.index-unchecked(batch + j).*.as-size()
+      let h = histograms.index-unchecked(j)
+      h.clear()
+      for 0.until(block-length) {
+        h.add(data.index-unchecked(pos).*.block-symbol())
+        pos = pos + 1
+      }
+      h.bit-cost = h.population-cost()
+      new-clusters.index-unchecked(j).* = j.trunc[u32]
+      symbols.index-unchecked(j).* = j.trunc[u32]
+      sizes.index-unchecked(j).* = 1
+    }
+    let num-new-clusters = histogram-combine(
+      histograms, tmp0, sizes, symbols, new-clusters, pairs, num-to-combine, num-to-combine,
+      HISTOGRAMS-PER-BATCH, max-num-pairs)
+    let needed = all-histograms.len + num-new-clusters
+    if all-histograms.cap() < needed {
+      all-histograms.reserve(needed.max(all-histograms.cap() * 2))
+    }
+    for j in 0.until(num-new-clusters) {
+      let nc = new-clusters.index-unchecked(j).*.as-size()
+      all-histograms.buffer.index-unchecked(all-histograms.len).* = histograms.index-unchecked(nc).*
+      all-histograms.len = all-histograms.len + 1
+      cluster-size.push(sizes.index-unchecked(nc).*)
+      remap.index-unchecked(nc).* = j.trunc[u32]
+    }
+    for j in 0.until(num-to-combine) {
+      histogram-symbols.index-unchecked(batch + j).* =
+        num-clusters.trunc[u32] + remap.index-unchecked(symbols.index-unchecked(j).*.as-size()).*
+    }
+    num-clusters = num-clusters + num-new-clusters
+    batch = batch + HISTOGRAMS-PER-BATCH
+  }
+
+  max-num-pairs = (num-clusters * 64).min((num-clusters / 2) * num-clusters)
+  if pairs.len() < max-num-pairs + 1 {
+    pairs = buffer/allocate[histogram-pair](max-num-pairs + 1)
+  }
+  let clusters = buffer/allocate[u32](num-clusters)
+  for i in 0.until(num-clusters) { clusters.index-unchecked(i).* = i.trunc[u32] }
+  let num-final-clusters = histogram-combine(
+    all-histograms.as-buffer(), tmp0, cluster-size.as-buffer(), histogram-symbols, clusters, pairs,
+    num-clusters, num-blocks, MAX-NUMBER-OF-BLOCK-TYPES, max-num-pairs)
+
+  let new-index = buffer/allocate[u32](num-clusters)
+  for i in 0.until(num-clusters) { new-index.index-unchecked(i).* = INVALID-INDEX }
+  pos = 0
+  let next-index: u32 = 0
+  for i in 0.until(num-blocks) {
+    tmp0.clear()
+    for 0.until(block-lengths.index-unchecked(i).*.as-size()) {
+      tmp0.add(data.index-unchecked(pos).*.block-symbol())
+      pos = pos + 1
+    }
+    let best-out = if i == 0 histogram-symbols.index-unchecked(0).* else histogram-symbols.index-unchecked(i - 1).*
+    let best-bits = histogram-bit-cost-distance(tmp0, all-histograms.as-buffer().index-unchecked(best-out.as-size()), tmp1)
+    for j in 0.until(num-final-clusters) {
+      let cluster = clusters.index-unchecked(j).*
+      let cur-bits = histogram-bit-cost-distance(tmp0, all-histograms.as-buffer().index-unchecked(cluster.as-size()), tmp1)
+      if cur-bits < best-bits {
+        best-bits = cur-bits
+        best-out = cluster
+      }
+    }
+    histogram-symbols.index-unchecked(i).* = best-out
+    let slot = new-index.index-unchecked(best-out.as-size())
+    if slot.* == INVALID-INDEX {
+      slot.* = next-index
+      next-index = next-index + 1
+    }
+  }
+
+  split.types = list/with-capacity(num-blocks)
+  split.lengths = list/with-capacity(num-blocks)
+  let cur-length: u32 = 0
+  let max-type: u8 = 0
+  for i in 0.until(num-blocks) {
+    cur-length = cur-length + block-lengths.index-unchecked(i).*
+    if i + 1 == num-blocks or histogram-symbols.index-unchecked(i).* != histogram-symbols.index-unchecked(i + 1).* {
+      let id = new-index.index-unchecked(histogram-symbols.index-unchecked(i).*.as-size()).*.trunc[u8]
+      split.types.push(id)
+      split.lengths.push(cur-length)
+      max-type = max-type.max(id)
+      cur-length = 0
+    }
+  }
+  split.num-blocks = split.types.len()
+  split.num-types = max-type.as-size() + 1
+}
+
+fn split-byte-vector[n: static size, t: block-symbol](
+  data: buffer[t], symbols-per-histogram: size, max-histograms: size, sampling-stride-length: size,
+  block-switch-cost: f64, params: *encoder-params, split: *block-split,
+) {
+  let length = data.len()
+  let data-size = histogram/data-size[n]()
+  let num-histograms = length / symbols-per-histogram + 1
+  if num-histograms > max-histograms {
+    num-histograms = max-histograms
+  }
+  if length == 0 {
+    split.num-types = 1
+    return
+  }
+  if length < MIN-LENGTH-FOR-BLOCK-SPLITTING {
+    split.num-types = 1
+    split.types.push(0)
+    split.lengths.push(length.trunc[u32])
+    split.num-blocks = split.num-blocks + 1
+    return
+  }
+  let histograms = buffer/allocate[histogram[n]](num-histograms + 1)
+  let tmp = histograms.index-unchecked(num-histograms)
+  init-entropy-codes(data, sampling-stride-length, num-histograms, histograms)
+  refine-entropy-codes(data, sampling-stride-length, num-histograms, histograms, tmp)
+  let block-ids = buffer/allocate[u8](length)
+  let num-blocks: size = 0
+  let bitmaplen = (num-histograms + 7) >> 3
+  let insert-cost = buffer/allocate[f64](data-size * num-histograms)
+  let cost = buffer/allocate[f64](num-histograms)
+  let switch-signal = buffer/allocate[u8](length * bitmaplen)
+  let new-id = buffer/allocate[u16](num-histograms)
+  let iters: size = if params.quality < HQ-ZOPFLIFICATION-QUALITY 3 else 10
+  for 0.until(iters) {
+    num-blocks = find-blocks(data, block-switch-cost, num-histograms, histograms, insert-cost, cost, switch-signal, block-ids)
+    num-histograms = remap-block-ids(block-ids, new-id, num-histograms)
+    build-block-histograms(data, block-ids, num-histograms, histograms)
+  }
+  cluster-blocks[n, _](data, num-blocks, block-ids, split)
+}
+
+fn copy-literals-to-byte-array(cmds: buffer[command], data: ptr, offset: size, mask: size, literals: buffer[u8]) {
+  let pos: size = 0
+  let from-pos = offset & mask
+  for i in 0.until(cmds.len()) {
+    let cmd = cmds.index-unchecked(i)
+    let insert-len = cmd.insert-len.as-size()
+    if from-pos + insert-len > mask {
+      let head-size = mask + 1 - from-pos
+      mem/copy(literals.data-ptr().add-bytes(pos), data.add-bytes(from-pos), head-size)
+      from-pos = 0
+      pos = pos + head-size
+      insert-len = insert-len - head-size
+    }
+    if insert-len > 0 {
+      mem/copy(literals.data-ptr().add-bytes(pos), data.add-bytes(from-pos), insert-len)
+      pos = pos + insert-len
+    }
+    from-pos = (from-pos + insert-len + cmd.copy-length().as-size()) & mask
+  }
+}
+
+fn split-block(
+  cmds: buffer[command], data: ptr, pos: size, mask: size, params: *encoder-params,
+  literal-split: *block-split, insert-and-copy-split: *block-split, dist-split: *block-split,
+) {
+  let literals-count: size = 0
+  for i in 0.until(cmds.len()) {
+    literals-count = literals-count + cmds.index-unchecked(i).insert-len.as-size()
+  }
+  let literals = buffer/allocate[u8](literals-count)
+  copy-literals-to-byte-array(cmds, data, pos, mask, literals)
+  split-byte-vector[256, _](
+    literals, SYMBOLS-PER-LITERAL-HISTOGRAM, MAX-LITERAL-HISTOGRAMS, LITERAL-STRIDE-LENGTH,
+    LITERAL-BLOCK-SWITCH-COST, params, literal-split)
+
+  let insert-and-copy-codes = buffer/allocate[u16](cmds.len())
+  for i in 0.until(cmds.len()) {
+    insert-and-copy-codes.index-unchecked(i).* = cmds.index-unchecked(i).cmd-prefix
+  }
+  split-byte-vector[704, _](
+    insert-and-copy-codes, SYMBOLS-PER-COMMAND-HISTOGRAM, MAX-COMMAND-HISTOGRAMS, COMMAND-STRIDE-LENGTH,
+    COMMAND-BLOCK-SWITCH-COST, params, insert-and-copy-split)
+
+  let distance-prefixes = buffer/allocate[u16](cmds.len())
+  let j: size = 0
+  for i in 0.until(cmds.len()) {
+    let cmd = cmds.index-unchecked(i)
+    if cmd.copy-length() != 0 and cmd.cmd-prefix >= 128 {
+      distance-prefixes.index-unchecked(j).* = cmd.dist-prefix & 0x3FF
+      j = j + 1
+    }
+  }
+  split-byte-vector[544, _](
+    distance-prefixes.slice(0, j), SYMBOLS-PER-DISTANCE-HISTOGRAM, MAX-COMMAND-HISTOGRAMS, DISTANCE-STRIDE-LENGTH,
+    DISTANCE-BLOCK-SWITCH-COST, params, dist-split)
+}

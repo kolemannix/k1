@@ -1,0 +1,127 @@
+let LITERAL-COST-PROLOGUE-LENGTH: size = 2000
+let LITERAL-COST-MULTIPLIER: f64 = 0.35 / 2000.0
+
+fn(inline) utf8-position(last: size, c: size, clamp: size): size {
+  if c < 128 0
+  else if c >= 192 clamp.min(1)
+  else if last < 0xE0 0
+  else clamp.min(2)
+}
+
+fn decide-multi-byte-stats-level(pos: size, len: size, mask: size, data: ptr): size {
+  let counts = array/zeroed[size, 3]()
+  let max-utf8: size = 1
+  let last-c: size = 0
+  for i in 0.until(len) {
+    let c = byte-at(data, (pos + i) & mask).as-size()
+    let p = utf8-position(last-c, c, 2)
+    counts.[p] = counts.[p] + 1
+    last-c = c
+  }
+  if counts.[2] < 500 {
+    max-utf8 = 1
+  }
+  if counts.[1] + counts.[2] < 25 {
+    max-utf8 = 0
+  }
+  max-utf8
+}
+
+fn estimate-bit-costs-for-literals-utf8(pos: size, len: size, mask: size, data: ptr, histogram: buffer[size], cost: buffer[f32]) {
+  let max-utf8 = decide-multi-byte-stats-level(pos, len, mask, data)
+  let window-half: size = 495
+  let in-window = window-half.min(len)
+  let in-window-utf8 = array/zeroed[size, 3]()
+  histogram.slice(0, 3 * 256).memset(0)
+
+  {
+    let last-c: size = 0
+    let utf8-pos: size = 0
+    for i in 0.until(in-window) {
+      let c = byte-at(data, (pos + i) & mask).as-size()
+      let h = histogram.index-unchecked(256 * utf8-pos + c)
+      h.* = h.* + 1
+      in-window-utf8.[utf8-pos] = in-window-utf8.[utf8-pos] + 1
+      utf8-pos = utf8-position(last-c, c, max-utf8)
+      last-c = c
+    }
+  }
+
+  for i in 0.until(len) {
+    if i >= window-half {
+      let c: size = if i < window-half + 1 0 else byte-at(data, (pos + i - window-half - 1) & mask).as-size()
+      let last-c: size = if i < window-half + 2 0 else byte-at(data, (pos + i - window-half - 2) & mask).as-size()
+      let utf8-pos2 = utf8-position(last-c, c, max-utf8)
+      let h = histogram.index-unchecked(256 * utf8-pos2 + byte-at(data, (pos + i - window-half) & mask).as-size())
+      h.* = h.* - 1
+      in-window-utf8.[utf8-pos2] = in-window-utf8.[utf8-pos2] - 1
+    }
+    if i + window-half < len {
+      let c = byte-at(data, (pos + i + window-half - 1) & mask).as-size()
+      let last-c = byte-at(data, (pos + i + window-half - 2) & mask).as-size()
+      let utf8-pos2 = utf8-position(last-c, c, max-utf8)
+      let h = histogram.index-unchecked(256 * utf8-pos2 + byte-at(data, (pos + i + window-half) & mask).as-size())
+      h.* = h.* + 1
+      in-window-utf8.[utf8-pos2] = in-window-utf8.[utf8-pos2] + 1
+    }
+    {
+      let c: size = if i < 1 0 else byte-at(data, (pos + i - 1) & mask).as-size()
+      let last-c: size = if i < 2 0 else byte-at(data, (pos + i - 2) & mask).as-size()
+      let utf8-pos = utf8-position(last-c, c, max-utf8)
+      let masked-pos = (pos + i) & mask
+      let histo = histogram.index-unchecked(256 * utf8-pos + byte-at(data, masked-pos).as-size()).*
+      if histo == 0 {
+        histo = 1
+      }
+      let lit-cost = fast-log2(in-window-utf8.[utf8-pos]) - fast-log2(histo)
+      lit-cost = lit-cost + 0.02905
+      if lit-cost < 1.0 {
+        lit-cost = lit-cost * 0.5
+        lit-cost = lit-cost + 0.5
+      }
+      if i < LITERAL-COST-PROLOGUE-LENGTH {
+        lit-cost = lit-cost + (0.35 + LITERAL-COST-MULTIPLIER * i.as[f64])
+      }
+      cost.index-unchecked(i).* = lit-cost.trunc[f32]
+    }
+  }
+}
+
+fn estimate-bit-costs-for-literals(pos: size, len: size, mask: size, data: ptr, histogram: buffer[size], cost: buffer[f32]) {
+  if is-mostly-utf8(data, pos, mask, len, MIN-UTF8-RATIO) {
+    estimate-bit-costs-for-literals-utf8(pos, len, mask, data, histogram, cost)
+    return
+  }
+  let window-half: size = 2000
+  let in-window = window-half.min(len)
+  histogram.slice(0, 256).memset(0)
+
+  for i in 0.until(in-window) {
+    let h = histogram.index-unchecked(byte-at(data, (pos + i) & mask).as-size())
+    h.* = h.* + 1
+  }
+
+  for i in 0.until(len) {
+    if i >= window-half {
+      let h = histogram.index-unchecked(byte-at(data, (pos + i - window-half) & mask).as-size())
+      h.* = h.* - 1
+      in-window = in-window - 1
+    }
+    if i + window-half < len {
+      let h = histogram.index-unchecked(byte-at(data, (pos + i + window-half) & mask).as-size())
+      h.* = h.* + 1
+      in-window = in-window + 1
+    }
+    let histo = histogram.index-unchecked(byte-at(data, (pos + i) & mask).as-size()).*
+    if histo == 0 {
+      histo = 1
+    }
+    let lit-cost = fast-log2(in-window) - fast-log2(histo)
+    lit-cost = lit-cost + 0.029
+    if lit-cost < 1.0 {
+      lit-cost = lit-cost * 0.5
+      lit-cost = lit-cost + 0.5
+    }
+    cost.index-unchecked(i).* = lit-cost.trunc[f32]
+  }
+}

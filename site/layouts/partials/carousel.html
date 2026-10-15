@@ -1,0 +1,14 @@
+<section class="blk"><div class="wrap carousel">
+  <div class="hd">
+    <h2>{{ .title }}</h2>
+    <div class="nav">
+      <button class="prev" type="button" aria-label="Previous">&larr;</button>
+      <ol class="dots">{{ range $i, $c := .cards }}<li><button type="button" data-i="{{ $i }}" title="{{ $c.title }}" aria-label="{{ $c.title }}"></button></li>{{ end }}</ol>
+      <span class="pos">1 / {{ len .cards }}</span>
+      <button class="next" type="button" aria-label="Next">&rarr;</button>
+    </div>
+  </div>
+  <div class="track">
+    {{ range .cards }}{{ partial "show.html" . }}{{ end }}
+  </div>
+</div></section>

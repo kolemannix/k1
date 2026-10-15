@@ -1,0 +1,239 @@
+fn module(_b: k1/build-config): k1/module {
+  let m = k1/module/new()
+  m.executable()
+  m.dep("cbrotli")
+  m.setup(["tables.k1"], ["vendor"])
+  m
+}
+
+fn setup(_ctx: k1/setup-ctx) { tablegen/generate() }
+
+ns tablegen {
+  let VENDOR: string = "vendor"
+
+  fn is-space(c: char): bool {
+    c == ' ' or c == '\n' or c == '\r' or c == '\t'
+  }
+
+  fn trim(s: string): string {
+    let start: size = 0
+    let end = s.len()
+    while start < end and is-space(s.[start]) { start = start + 1 }
+    while end > start and is-space(s.[end - 1]) { end = end - 1 }
+    s.slice(start, end)
+  }
+
+  fn declared-count(decl: string, initializer-count: size): size {
+    if decl == "" initializer-count
+    else if decl == "BROTLI_NUM_COMMAND_SYMBOLS" 704
+    else if decl == "BROTLI_LOG2_TABLE_SIZE" 256
+    else if decl == "BROTLI_NUM_INS_COPY_CODES" 24
+    else if decl == "BROTLI_NUM_BLOCK_LEN_SYMBOLS" 26
+    else if decl == "BROTLI_ENC_NUM_HASH_BUCKETS" 32768
+    else if decl == "BROTLI_ENC_STATIC_DICT_LUT_NUM_BUCKETS" 32768
+    else if decl == "BROTLI_ENC_STATIC_DICT_LUT_NUM_ITEMS" 31705
+    else u64/from-string(decl).!.signed()
+  }
+
+  fn parse-u64-c(token: string): u64 {
+    if token.starts-with("0x") {
+      let v: u64 = 0
+      let i: size = 2
+      while i < token.len() {
+        let c = token.[i]
+        let d: u64 = if c >= '0' and c <= '9' (c.u8() - '0'.u8()).widen[u64]
+          else if c >= 'a' and c <= 'f' (c.u8() - 'a'.u8()).widen[u64] + 10
+          else if c >= 'A' and c <= 'F' (c.u8() - 'A'.u8()).widen[u64] + 10
+          else crash("bad hex digit in '$token'")
+        v = (v << 4) | d
+        i = i + 1
+      }
+      v
+    } else {
+      u64/from-string(token).!
+    }
+  }
+
+  fn strip-comments-and-braces(body: string): string {
+    let sb = string-builder/new()
+    let i: size = 0
+    while i < body.len() {
+      let c = body.[i]
+      if c == '/' and i + 1 < body.len() and body.[i + 1] == '*' {
+        require body.drop(i + 2).index-of-string("*/") is :some rel else crash("unterminated comment")
+        i = i + 2 + rel + 2
+      } else {
+        if c != '{' and c != '}' sb.write-char(c)
+        i = i + 1
+      }
+    }
+    sb.build()
+  }
+
+  fn parse-c-array(src: string, name: string, group: size): { tokens: list[string], declared: size } {
+    let from: size = 0
+    loop {
+      require src.slice(from, src.len()).index-of-string(name) is :some rel else {
+        crash("table $name not found")
+      }
+      let at = from + rel
+      from = at + name.len()
+      let i = from
+      if src.[i] == '[' {
+        require src.drop(i).position(']') is :some rel else crash("unterminated [ for $name")
+        let close = i + rel
+        let decl = trim(src.slice(i + 1, close))
+        let j = close + 1
+        while is-space(src.[j]) { j = j + 1 }
+        if src.[j] == '=' {
+          j = j + 1
+          while is-space(src.[j]) { j = j + 1 }
+          if src.[j] == '{' {
+            require src.slice(j, src.len()).index-of-string("};") is :some end-rel else {
+              crash("unterminated initializer for $name")
+            }
+            let body = strip-comments-and-braces(src.slice(j + 1, j + end-rel))
+            let tokens: list[string] = list/empty()
+            for part in body.split-by-char(',') {
+              let t = trim(part)
+              if t.non-empty() tokens.push(t)
+            }
+            return .{ tokens, declared = declared-count(decl, tokens.len() / group) * group }
+          }
+        }
+      }
+    }
+  }
+
+  fn int-values(src: string, c-name: string, group: size): list[u64] {
+    let parsed = parse-c-array(src, c-name, group)
+    let values: list[u64] = list/empty()
+    for t in parsed.tokens { values.push(parse-u64-c(t)) }
+    while values.len() < parsed.declared { values.push(0) }
+    values
+  }
+
+  fn write-rows(w: *string-builder, values: list[u64], per-line: size) {
+    let i: size = 0
+    while i < values.len() {
+      w.write("  ")
+      let row-end = (i + per-line).min(values.len())
+      while i < row-end {
+        w.write("${values.[i]},")
+        if i + 1 < row-end w.write(" ")
+        i = i + 1
+      }
+      w.writeln("")
+    }
+    w.writeln("]")
+    w.writeln("")
+  }
+
+  fn emit-int-table(
+    w: *string-builder, src: string, c-name: string,
+    k1-name: string, elem-type: string, per-line: size,
+  ) {
+    let values = int-values(src, c-name, 1)
+    w.writeln("let $k1-name: array[$elem-type, ${values.len()}] = [")
+    write-rows(w, values, per-line)
+  }
+
+  fn emit-packed-table(
+    w: *string-builder, src: string, c-name: string, k1-name: string, elem-type: string,
+    group: size, fields: span[{ index: size, shift: u32 }], per-line: size,
+  ) {
+    let values = int-values(src, c-name, group)
+    let count = values.len() / group
+    let packed: list[u64] = list/empty()
+    for g in 0.until(count) {
+      let v: u64 = 0
+      for f in fields { v = v | (values.[g * group + f.index] << f.shift) }
+      packed.push(v)
+    }
+    w.writeln("let $k1-name: array[$elem-type, $count] = [")
+    write-rows(w, packed, per-line)
+  }
+
+  fn emit-float-table(
+    w: *string-builder, src: string, c-name: string,
+    k1-name: string, per-line: size,
+  ) {
+    let parsed = parse-c-array(src, c-name, 1)
+    let values: list[f64] = list/empty()
+    for t in parsed.tokens {
+      let lit = if t.ends-with("f") t.drop-right(1) else t
+      values.push(f64/from-string(lit).!.trunc[f32].widen[f64])
+    }
+    assert-equals(values.len(), parsed.declared)
+
+    w.writeln("let $k1-name: array[f64, ${values.len()}] = [")
+    let i: size = 0
+    while i < values.len() {
+      w.write("  ")
+      let row-end = (i + per-line).min(values.len())
+      while i < row-end {
+        values.[i].format(w, 17)
+        w.write(",")
+        if i + 1 < row-end w.write(" ")
+        i = i + 1
+      }
+      w.writeln("")
+    }
+    w.writeln("]")
+    w.writeln("")
+  }
+
+  fn generate() {
+    let ees = files/read-to-string("$VENDOR/entropy_encode_static.h").!
+    let enc = files/read-to-string("$VENDOR/encode.c").!
+    let cf = files/read-to-string("$VENDOR/compress_fragment.c").!
+    let cf2 = files/read-to-string("$VENDOR/compress_fragment_two_pass.c").!
+    let fl = files/read-to-string("$VENDOR/fast_log.c").!
+    let cmd = files/read-to-string("$VENDOR/command.c").!
+    let consts = files/read-to-string("$VENDOR/constants.c").!
+    let ctx = files/read-to-string("$VENDOR/context.c").!
+    let dict = files/read-to-string("$VENDOR/dictionary_inc.h").!
+    let dict-hash = files/read-to-string("$VENDOR/dictionary_hash_inc.h").!
+    let dict-lut = files/read-to-string("$VENDOR/static_dict_lut_inc.h").!
+
+    let w = string-builder/new()
+    w.writeln("// Static tables extracted by fn setup (build.k1) from this module's vendored")
+    w.writeln("// google/brotli sources (vendor/).")
+    w.writeln("")
+    emit-int-table(w.&, ees, "kCodeLengthDepth", "k-code-length-depth", "u8", 18)
+    emit-int-table(w.&, ees, "kCodeLengthBits", "k-code-length-bits", "u32", 18)
+    emit-int-table(w.&, ees, "kZeroRepsDepth", "k-zero-reps-depth", "u32", 16)
+    emit-int-table(w.&, ees, "kZeroRepsBits", "k-zero-reps-bits", "u64", 8)
+    emit-int-table(w.&, ees, "kNonZeroRepsDepth", "k-non-zero-reps-depth", "u32", 16)
+    emit-int-table(w.&, ees, "kNonZeroRepsBits", "k-non-zero-reps-bits", "u64", 8)
+    emit-int-table(w.&, ees, "kStaticCommandCodeDepth", "k-static-command-code-depth", "u8", 32)
+    emit-int-table(w.&, ees, "kStaticCommandCodeBits", "k-static-command-code-bits", "u16", 16)
+    emit-int-table(w.&, ees, "kStaticDistanceCodeDepth", "k-static-distance-code-depth", "u8", 32)
+    emit-int-table(w.&, ees, "kStaticDistanceCodeBits", "k-static-distance-code-bits", "u16", 16)
+    emit-int-table(w.&, enc, "kDefaultCommandDepths", "k-default-command-depths", "u8", 16)
+    emit-int-table(w.&, enc, "kDefaultCommandBits", "k-default-command-bits", "u16", 16)
+    emit-int-table(w.&, enc, "kDefaultCommandCode", "k-default-command-code", "u8", 12)
+    emit-int-table(w.&, enc, "kStaticContextMapContinuation", "k-static-context-map-continuation", "u32", 16)
+    emit-int-table(w.&, enc, "kStaticContextMapSimpleUTF8", "k-static-context-map-simple-utf8", "u32", 16)
+    emit-int-table(w.&, enc, "kStaticContextMapComplexUTF8", "k-static-context-map-complex-utf8", "u32", 16)
+    emit-int-table(w.&, cf, "kCmdHistoSeed", "k-cmd-histo-seed", "u32", 24)
+    emit-int-table(w.&, cf2, "kNumExtraBits", "k-num-extra-bits", "u32", 16)
+    emit-int-table(w.&, cf2, "kInsertOffset", "k-insert-offset", "u32", 12)
+    emit-float-table(w.&, fl, "kBrotliLog2Table", "k-log2-table", 6)
+    emit-int-table(w.&, cmd, "kBrotliInsBase", "k-ins-base", "u32", 24)
+    emit-int-table(w.&, cmd, "kBrotliInsExtra", "k-ins-extra", "u32", 24)
+    emit-int-table(w.&, cmd, "kBrotliCopyBase", "k-copy-base", "u32", 24)
+    emit-int-table(w.&, cmd, "kBrotliCopyExtra", "k-copy-extra", "u32", 24)
+    emit-packed-table(w.&, consts, "_kBrotliPrefixCodeRanges", "k-block-length-offset", "u32", 2, [.{ index = 0, shift = 0 }], 26)
+    emit-packed-table(w.&, consts, "_kBrotliPrefixCodeRanges", "k-block-length-nbits", "u32", 2, [.{ index = 1, shift = 0 }], 26)
+    emit-int-table(w.&, ctx, "_kBrotliContextLookupTable", "k-context-lookup", "u8", 32)
+    emit-int-table(w.&, dict, "kBrotliDictionaryData", "k-dictionary-data", "u8", 32)
+    emit-int-table(w.&, dict-hash, "kStaticDictionaryHashWords", "k-dictionary-hash-words", "u16", 24)
+    emit-int-table(w.&, dict-hash, "kStaticDictionaryHashLengths", "k-dictionary-hash-lengths", "u8", 32)
+    emit-int-table(w.&, dict-lut, "kStaticDictionaryBuckets", "k-dict-lut-buckets", "u16", 24)
+    emit-packed-table(w.&, dict-lut, "kStaticDictionaryWords", "k-dict-lut-words", "u32", 3,
+      [.{ index = 0, shift = 0 }, .{ index = 1, shift = 8 }, .{ index = 2, shift = 16 }], 16)
+
+    files/write-entire-file("tables.k1", w.build()).!
+  }
+}

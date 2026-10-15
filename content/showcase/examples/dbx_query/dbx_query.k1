@@ -1,0 +1,26 @@
+let schema: dbx/schema = .{ scripts = [`
+  create table plan (
+    id      integer primary key,
+    name    text not null,
+    is_main integer not null,
+    note    text
+  ) strict;`] }
+$dbx/define-sql-macros(schema)
+
+type plan = { id: i64, name: string, is-main: bool, note: ?string }
+
+fn main(): i32 {
+  let c: dbx/conn = .0
+  let conn = c.&
+  conn.open(":memory:", busy-timeout-ms = 0).!
+  for schema.scripts { conn.exec-script(it).! }
+  let w = conn.as-writer()
+
+  update("insert into plan (name, is_main, note) values (${"Budget"}, ${true}, null)").run(w).!
+  update("insert into plan (name, is_main, note) values (${"What if"}, ${false}, ${"draft"})").run(w).!
+
+  let main-only = false
+  let plans = query[plan]("select id, name, is_main, note from plan where is_main or not $main-only order by id").list(w).!
+  for plans { println("${it.id} ${it.name} main=${it.is-main} note=${it.note}") }
+  0
+}

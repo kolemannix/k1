@@ -1,0 +1,21 @@
+let schema: dbx/schema = .{ scripts = [`
+  create table plan (
+    id      integer primary key,
+    name    text not null,
+    is_main integer not null,
+    note    text
+  ) strict;`] }
+$dbx/define-sql-macros(schema)
+
+type plan = { id: i64, name: string, is-main: bool, note: string }
+
+fn main(): i32 {
+  let c: dbx/conn = .0
+  let conn = c.&
+  conn.open(":memory:", busy-timeout-ms = 0).!
+  for schema.scripts { conn.exec-script(it).! }
+
+  println(query[plan]("select id, name, is_main, note from plan order by id").list(conn.as-reader()).!.len())
+  0
+}
+//errmsg: can be null

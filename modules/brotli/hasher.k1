@@ -1,0 +1,756 @@
+fn(inline) byte-at(data: ptr, i: size): u8 { data.add-bytes(i).ref[u8].* }
+
+fn test-static-dictionary-item(len: size, word-idx: size, data: ptr, max-length: size, max-backward: size, max-distance: size, out: *hasher-search-result): bool {
+  if len > max-length return false
+  let matchlen = find-match-length(data, dictionary-word(len, word-idx), len)
+  if matchlen + CUTOFF-TRANSFORMS-COUNT <= len or matchlen == 0 return false
+  let cut = len - matchlen
+  let transform-id = (cut << 2) + ((CUTOFF-TRANSFORMS >> (cut * 6).trunc[u32]) & 0x3F).signed()
+  let backward = max-backward + 1 + word-idx + (transform-id << k-dictionary-size-bits-by-length.[len].widen[u32])
+  if backward > max-distance return false
+  let score = backward-reference-score(matchlen, backward)
+  if score < out.score return false
+  out.len = matchlen
+  out.len-code-delta = len.trunc[i32] - matchlen.trunc[i32]
+  out.distance = backward
+  out.score = score
+  true
+}
+
+fn search-in-static-dictionary(common: *hasher-common, data: ptr, max-length: size, max-backward: size, max-distance: size, out: *hasher-search-result, shallow: bool) {
+  if common.dict-num-matches < (common.dict-num-lookups >> 7) return
+  let key = hash32(data, 14) << 1
+  let count = if shallow 1 else 2
+  for i in 0.until(count) {
+    common.dict-num-lookups = common.dict-num-lookups + 1
+    let len = k-dictionary-hash-lengths.[key]
+    if len != 0 {
+      let item-matches = test-static-dictionary-item(
+        len.as-size(), k-dictionary-hash-words.[key].as-size(), data, max-length, max-backward, max-distance, out)
+      if item-matches { common.dict-num-matches = common.dict-num-matches + 1 }
+    }
+    key = key + 1
+  }
+}
+
+type hasher-quickly = {
+  bucket-bits: u32,
+  bucket-sweep-bits: u32,
+  hash-len: u32,
+  use-dictionary: bool,
+  bucket-size: size,
+  bucket-mask: size,
+  bucket-sweep: size,
+  bucket-sweep-mask: size,
+  buckets: buffer[u32],
+}
+
+ns for hasher-quickly {
+  fn new(bucket-bits: u32, bucket-sweep-bits: u32, hash-len: u32, use-dictionary: bool): *hasher-quickly {
+    let bucket-size = 1 << bucket-bits
+    let bucket-sweep = 1 << bucket-sweep-bits
+    mem/new(.{
+      bucket-bits,
+      bucket-sweep-bits,
+      hash-len,
+      use-dictionary,
+      bucket-size,
+      bucket-mask = bucket-size - 1,
+      bucket-sweep,
+      bucket-sweep-mask = (bucket-sweep - 1) << 3,
+      buckets = buffer/allocate[u32](bucket-size),
+    })
+  }
+
+  fn(inline) hash-bytes(self: *hasher-quickly, data: ptr): size {
+    let h = (load64-le(data) << (64u32 - self.hash-len * 8)) * K-HASH-MUL64
+    (h >> (64u32 - self.bucket-bits)).trunc[u32].as-size()
+  }
+
+  fn prepare(self: *hasher-quickly, one-shot: bool, input-size: size, data: ptr) {
+    let buckets = self.buckets
+    let partial-prepare-threshold = self.bucket-size >> 5
+    if one-shot and input-size <= partial-prepare-threshold {
+      for i in 0.until(input-size) {
+        let key = self.hash-bytes(data.add-bytes(i))
+        if self.bucket-sweep == 1 {
+          buckets.index-unchecked(key).* = 0
+        } else {
+          for j in 0.until(self.bucket-sweep) {
+            buckets.index-unchecked((key + (j << 3)) & self.bucket-mask).* = 0
+          }
+        }
+      }
+    } else {
+      mem/set(buckets.data-ptr(), 0, self.bucket-size * 4)
+    }
+  }
+
+  fn(inline) store(self: *hasher-quickly, data: ptr, mask: size, ix: size) {
+    let key = self.hash-bytes(data.add-bytes(ix & mask))
+    if self.bucket-sweep == 1 {
+      self.buckets.index-unchecked(key).* = ix.trunc[u32]
+    } else {
+      let off = ix & self.bucket-sweep-mask
+      self.buckets.index-unchecked((key + off) & self.bucket-mask).* = ix.trunc[u32]
+    }
+  }
+
+  fn store-range(self: *hasher-quickly, data: ptr, mask: size, ix-start: size, ix-end: size) {
+    for i in ix-start.until(ix-end) { self.store(data, mask, i) }
+  }
+
+  fn stitch-to-previous-block(self: *hasher-quickly, num-bytes: size, position: size, ringbuffer: ptr, ringbuffer-mask: size) {
+    if num-bytes >= 7 and position >= 3 {
+      self.store(ringbuffer, ringbuffer-mask, position - 3)
+      self.store(ringbuffer, ringbuffer-mask, position - 2)
+      self.store(ringbuffer, ringbuffer-mask, position - 1)
+    }
+  }
+
+  fn find-longest-match(self: *hasher-quickly, common: *hasher-common, data: ptr, ring-buffer-mask: size, distance-cache: buffer[i32], cur-ix: size, max-length: size, max-backward: size, dictionary-distance: size, max-distance: size, out: *hasher-search-result) {
+    let buckets = self.buckets
+    let best-len-in = out.len
+    let cur-ix-masked = cur-ix & ring-buffer-mask
+    let compare-char = byte-at(data, cur-ix-masked + best-len-in)
+    let key = self.hash-bytes(data.add-bytes(cur-ix-masked))
+    let key-out: size = 0
+    let min-score = out.score
+    let best-score = out.score
+    let best-len = best-len-in
+    let cached-backward = distance-cache.index-unchecked(0).*.as-size()
+    let prev-ix = cur-ix - cached-backward
+    out.len-code-delta = 0
+    if prev-ix.unsigned() < cur-ix.unsigned() and cached-backward.unsigned() <= max-backward.unsigned() {
+      prev-ix = prev-ix & ring-buffer-mask
+      if compare-char == byte-at(data, prev-ix + best-len) {
+        let len = find-match-length(data.add-bytes(prev-ix), data.add-bytes(cur-ix-masked), max-length)
+        if len >= 4 {
+          let score = backward-reference-score-using-last-distance(len)
+          if best-score < score {
+            out.len = len
+            out.distance = cached-backward
+            out.score = score
+            if self.bucket-sweep == 1 {
+              buckets.index-unchecked(key).* = cur-ix.trunc[u32]
+              return
+            } else {
+              best-len = len
+              best-score = score
+              compare-char = byte-at(data, cur-ix-masked + len)
+            }
+          }
+        }
+      }
+    }
+    if self.bucket-sweep == 1 {
+      prev-ix = buckets.index-unchecked(key).*.as-size()
+      buckets.index-unchecked(key).* = cur-ix.trunc[u32]
+      let backward = cur-ix - prev-ix
+      prev-ix = prev-ix & ring-buffer-mask
+      if compare-char != byte-at(data, prev-ix + best-len-in) return
+      if backward == 0 or backward.unsigned() > max-backward.unsigned() return
+      let len = find-match-length(data.add-bytes(prev-ix), data.add-bytes(cur-ix-masked), max-length)
+      if len >= 4 {
+        let score = backward-reference-score(len, backward)
+        if best-score < score {
+          out.len = len
+          out.distance = backward
+          out.score = score
+          return
+        }
+      }
+    } else {
+      let keys = array/zeroed[size, 4]()
+      for i in 0.until(self.bucket-sweep) {
+        keys.[i] = (key + (i << 3)) & self.bucket-mask
+      }
+      key-out = keys.[(cur-ix & self.bucket-sweep-mask) >> 3]
+      for i in 0.until(self.bucket-sweep) {
+        prev-ix = buckets.index-unchecked(keys.[i]).*.as-size()
+        let backward = cur-ix - prev-ix
+        prev-ix = prev-ix & ring-buffer-mask
+        if compare-char != byte-at(data, prev-ix + best-len) continue
+        if backward == 0 or backward.unsigned() > max-backward.unsigned() continue
+        let len = find-match-length(data.add-bytes(prev-ix), data.add-bytes(cur-ix-masked), max-length)
+        if len >= 4 {
+          let score = backward-reference-score(len, backward)
+          if best-score < score {
+            best-len = len
+            out.len = len
+            compare-char = byte-at(data, cur-ix-masked + len)
+            best-score = score
+            out.score = score
+            out.distance = backward
+          }
+        }
+      }
+    }
+    if self.use-dictionary and min-score == out.score {
+      search-in-static-dictionary(common, data.add-bytes(cur-ix-masked), max-length, dictionary-distance, max-distance, out, true)
+    }
+    if self.bucket-sweep != 1 {
+      buckets.index-unchecked(key-out).* = cur-ix.trunc[u32]
+    }
+  }
+}
+
+type hasher-longest-match = {
+  bucket-size: size,
+  block-size: size,
+  hash-shift: u32,
+  block-mask: u32,
+  block-bits: u32,
+  num-last-distances-to-check: size,
+  num: buffer[u16],
+  buckets: buffer[u32],
+}
+
+ns for hasher-longest-match {
+  fn new(params: *hasher-params): *hasher-longest-match {
+    let bucket-size = 1 << params.bucket-bits.trunc[u32]
+    let block-size = 1 << params.block-bits.trunc[u32]
+    mem/new(.{
+      bucket-size,
+      block-size,
+      hash-shift = 32u32 - params.bucket-bits.trunc[u32],
+      block-mask = (block-size - 1).trunc[u32],
+      block-bits = params.block-bits.trunc[u32],
+      num-last-distances-to-check = params.num-last-distances-to-check,
+      num = buffer/allocate[u16](bucket-size),
+      buckets = buffer/allocate[u32](bucket-size * block-size),
+    })
+  }
+
+  fn(inline) hash-bytes(self: *hasher-longest-match, data: ptr): size {
+    ((load32-le(data) * K-HASH-MUL32) >> self.hash-shift).as-size()
+  }
+
+  fn prepare(self: *hasher-longest-match, one-shot: bool, input-size: size, data: ptr) {
+    let partial-prepare-threshold = self.bucket-size >> 6
+    if one-shot and input-size <= partial-prepare-threshold {
+      for i in 0.until(input-size) {
+        let key = self.hash-bytes(data.add-bytes(i))
+        self.num.index-unchecked(key).* = 0
+      }
+    } else {
+      mem/set(self.num.data-ptr(), 0, self.bucket-size * 2)
+    }
+  }
+
+  fn(inline) store(self: *hasher-longest-match, data: ptr, mask: size, ix: size) {
+    let key = self.hash-bytes(data.add-bytes(ix & mask))
+    let num = self.num.index-unchecked(key)
+    let minor-ix = (num.*.widen[u32] & self.block-mask).as-size()
+    let offset = minor-ix + (key << self.block-bits)
+    num.* = num.* + 1
+    self.buckets.index-unchecked(offset).* = ix.trunc[u32]
+  }
+
+  fn store-range(self: *hasher-longest-match, data: ptr, mask: size, ix-start: size, ix-end: size) {
+    for i in ix-start.until(ix-end) { self.store(data, mask, i) }
+  }
+
+  fn stitch-to-previous-block(self: *hasher-longest-match, num-bytes: size, position: size, ringbuffer: ptr, ringbuffer-mask: size) {
+    if num-bytes >= 3 and position >= 3 {
+      self.store(ringbuffer, ringbuffer-mask, position - 3)
+      self.store(ringbuffer, ringbuffer-mask, position - 2)
+      self.store(ringbuffer, ringbuffer-mask, position - 1)
+    }
+  }
+
+  fn prepare-distance-cache(self: *hasher-longest-match, distance-cache: buffer[i32]) {
+    brotli/prepare-distance-cache(distance-cache, self.num-last-distances-to-check)
+  }
+
+  fn find-longest-match(self: *hasher-longest-match, common: *hasher-common, data: ptr, ring-buffer-mask: size, distance-cache: buffer[i32], cur-ix: size, max-length: size, max-backward: size, dictionary-distance: size, max-distance: size, out: *hasher-search-result) {
+    let cur-ix-masked = cur-ix & ring-buffer-mask
+    let min-score = out.score
+    let best-score = out.score
+    let best-len = out.len
+    let key = self.hash-bytes(data.add-bytes(cur-ix-masked))
+    let bucket-base = key << self.block-bits
+    out.len = 0
+    out.len-code-delta = 0
+    for i in 0.until(self.num-last-distances-to-check) {
+      let backward = distance-cache.index-unchecked(i).*.as-size()
+      let prev-ix = cur-ix - backward
+      if prev-ix.unsigned() >= cur-ix.unsigned() continue
+      if backward.unsigned() > max-backward.unsigned() continue
+      prev-ix = prev-ix & ring-buffer-mask
+      if cur-ix-masked + best-len > ring-buffer-mask break
+      if prev-ix + best-len > ring-buffer-mask or
+        byte-at(data, cur-ix-masked + best-len) != byte-at(data, prev-ix + best-len) {
+        continue
+      }
+      let len = find-match-length(data.add-bytes(prev-ix), data.add-bytes(cur-ix-masked), max-length)
+      if len >= 3 or (len == 2 and i < 2) {
+        let score = backward-reference-score-using-last-distance(len)
+        if best-score < score {
+          if i != 0 { score = score - backward-reference-penalty-using-last-distance(i) }
+          if best-score < score {
+            best-score = score
+            best-len = len
+            out.len = best-len
+            out.distance = backward
+            out.score = best-score
+          }
+        }
+      }
+    }
+    if best-len < 3 { best-len = 3 }
+    let num = self.num.index-unchecked(key)
+    let count = num.*.as-size()
+    let down = if count > self.block-size count - self.block-size else 0
+    let i = count
+    while i > down {
+      i = i - 1
+      let prev-ix = self.buckets.index-unchecked(bucket-base + (i & self.block-mask.as-size())).*.as-size()
+      let backward = cur-ix - prev-ix
+      if backward.unsigned() > max-backward.unsigned() break
+      prev-ix = prev-ix & ring-buffer-mask
+      if cur-ix-masked + best-len > ring-buffer-mask break
+      if prev-ix + best-len > ring-buffer-mask or
+        load32-le(data.add-bytes(cur-ix-masked + best-len - 3)) != load32-le(data.add-bytes(prev-ix + best-len - 3)) {
+        continue
+      }
+      let len = find-match-length(data.add-bytes(prev-ix), data.add-bytes(cur-ix-masked), max-length)
+      if len >= 4 {
+        let score = backward-reference-score(len, backward)
+        if best-score < score {
+          best-score = score
+          best-len = len
+          out.len = best-len
+          out.distance = backward
+          out.score = best-score
+        }
+      }
+    }
+    self.buckets.index-unchecked(bucket-base + (num.*.widen[u32] & self.block-mask).as-size()).* = cur-ix.trunc[u32]
+    num.* = num.* + 1
+    if min-score == out.score {
+      search-in-static-dictionary(common, data.add-bytes(cur-ix-masked), max-length, dictionary-distance, max-distance, out, false)
+    }
+  }
+}
+
+type hasher-longest-match64 = {
+  bucket-size: size,
+  block-size: size,
+  hash-mul: u64,
+  block-mask: u32,
+  block-bits: u32,
+  num-last-distances-to-check: size,
+  num: buffer[u16],
+  buckets: buffer[u32],
+}
+
+ns for hasher-longest-match64 {
+  fn new(params: *hasher-params): *hasher-longest-match64 {
+    let bucket-size = 1 << params.bucket-bits.trunc[u32]
+    let block-size = 1 << params.block-bits.trunc[u32]
+    mem/new(.{
+      bucket-size,
+      block-size,
+      hash-mul = K-HASH-MUL64 << 24,
+      block-mask = (block-size - 1).trunc[u32],
+      block-bits = params.block-bits.trunc[u32],
+      num-last-distances-to-check = params.num-last-distances-to-check,
+      num = buffer/allocate[u16](bucket-size),
+      buckets = buffer/allocate[u32](bucket-size * block-size),
+    })
+  }
+
+  fn(inline) hash-bytes(self: *hasher-longest-match64, data: ptr): size {
+    ((load64-le(data) * self.hash-mul) >> 49).signed()
+  }
+
+  fn prepare(self: *hasher-longest-match64, one-shot: bool, input-size: size, data: ptr) {
+    let partial-prepare-threshold = self.bucket-size >> 6
+    if one-shot and input-size <= partial-prepare-threshold {
+      for i in 0.until(input-size) {
+        let key = self.hash-bytes(data.add-bytes(i))
+        self.num.index-unchecked(key).* = 0
+      }
+    } else {
+      mem/set(self.num.data-ptr(), 0, self.bucket-size * 2)
+    }
+  }
+
+  fn(inline) store(self: *hasher-longest-match64, data: ptr, mask: size, ix: size) {
+    let key = self.hash-bytes(data.add-bytes(ix & mask))
+    let num = self.num.index-unchecked(key)
+    let minor-ix = (num.*.widen[u32] & self.block-mask).as-size()
+    let offset = minor-ix + (key << self.block-bits)
+    num.* = num.* + 1
+    self.buckets.index-unchecked(offset).* = ix.trunc[u32]
+  }
+
+  fn store-range(self: *hasher-longest-match64, data: ptr, mask: size, ix-start: size, ix-end: size) {
+    for i in ix-start.until(ix-end) { self.store(data, mask, i) }
+  }
+
+  fn stitch-to-previous-block(self: *hasher-longest-match64, num-bytes: size, position: size, ringbuffer: ptr, ringbuffer-mask: size) {
+    if num-bytes >= 7 and position >= 3 {
+      self.store(ringbuffer, ringbuffer-mask, position - 3)
+      self.store(ringbuffer, ringbuffer-mask, position - 2)
+      self.store(ringbuffer, ringbuffer-mask, position - 1)
+    }
+  }
+
+  fn prepare-distance-cache(self: *hasher-longest-match64, distance-cache: buffer[i32]) {
+    brotli/prepare-distance-cache(distance-cache, self.num-last-distances-to-check)
+  }
+
+  fn find-longest-match(self: *hasher-longest-match64, common: *hasher-common, data: ptr, ring-buffer-mask: size, distance-cache: buffer[i32], cur-ix: size, max-length: size, max-backward: size, dictionary-distance: size, max-distance: size, out: *hasher-search-result) {
+    let cur-ix-masked = cur-ix & ring-buffer-mask
+    let min-score = out.score
+    let best-score = out.score
+    let best-len = out.len
+    let key = self.hash-bytes(data.add-bytes(cur-ix-masked))
+    let bucket-base = key << self.block-bits
+    out.len = 0
+    out.len-code-delta = 0
+    for i in 0.until(self.num-last-distances-to-check) {
+      let backward = distance-cache.index-unchecked(i).*.as-size()
+      let prev-ix = cur-ix - backward
+      if prev-ix.unsigned() >= cur-ix.unsigned() continue
+      if backward.unsigned() > max-backward.unsigned() continue
+      prev-ix = prev-ix & ring-buffer-mask
+      if cur-ix-masked + best-len > ring-buffer-mask break
+      if prev-ix + best-len > ring-buffer-mask or
+        byte-at(data, cur-ix-masked + best-len) != byte-at(data, prev-ix + best-len) {
+        continue
+      }
+      let len = find-match-length(data.add-bytes(prev-ix), data.add-bytes(cur-ix-masked), max-length)
+      if len >= 3 or (len == 2 and i < 2) {
+        let score = backward-reference-score-using-last-distance(len)
+        if best-score < score {
+          if i != 0 { score = score - backward-reference-penalty-using-last-distance(i) }
+          if best-score < score {
+            best-score = score
+            best-len = len
+            out.len = best-len
+            out.distance = backward
+            out.score = best-score
+          }
+        }
+      }
+    }
+    if best-len < 3 { best-len = 3 }
+    let num = self.num.index-unchecked(key)
+    let count = num.*.as-size()
+    let down = if count > self.block-size count - self.block-size else 0
+    let first4 = load32-le(data.add-bytes(cur-ix-masked))
+    let max-length-m4 = max-length - 4
+    let i = count
+    while i > down {
+      i = i - 1
+      let prev-ix = self.buckets.index-unchecked(bucket-base + (i & self.block-mask.as-size())).*.as-size()
+      let backward = cur-ix - prev-ix
+      if backward.unsigned() > max-backward.unsigned() break
+      prev-ix = prev-ix & ring-buffer-mask
+      if cur-ix-masked + best-len > ring-buffer-mask break
+      if prev-ix + best-len > ring-buffer-mask or
+        load32-le(data.add-bytes(cur-ix-masked + best-len - 3)) != load32-le(data.add-bytes(prev-ix + best-len - 3)) {
+        continue
+      }
+      let current4 = load32-le(data.add-bytes(prev-ix))
+      if first4 != current4 continue
+      let len = find-match-length(data.add-bytes(prev-ix + 4), data.add-bytes(cur-ix-masked + 4), max-length-m4) + 4
+      let score = backward-reference-score(len, backward)
+      if best-score < score {
+        best-score = score
+        best-len = len
+        out.len = best-len
+        out.distance = backward
+        out.score = best-score
+      }
+    }
+    self.buckets.index-unchecked(bucket-base + (num.*.widen[u32] & self.block-mask).as-size()).* = cur-ix.trunc[u32]
+    num.* = num.* + 1
+    if min-score == out.score {
+      search-in-static-dictionary(common, data.add-bytes(cur-ix-masked), max-length, dictionary-distance, max-distance, out, false)
+    }
+  }
+}
+
+type forgetful-chain-slot = { delta: u16, next: u16 }
+
+type hasher-forgetful-chain = {
+  bucket-bits: u32,
+  bucket-size: size,
+  num-banks: size,
+  bank-size: size,
+  num-last-distances-to-check: size,
+  max-hops: size,
+  free-slot-idx: buffer[u16],
+  addr: buffer[u32],
+  head: buffer[u16],
+  tiny-hash: buffer[u8],
+  banks: buffer[forgetful-chain-slot],
+}
+
+ns for hasher-forgetful-chain {
+  fn new(bucket-bits: u32, num-banks: size, bank-bits: u32, num-last-distances-to-check: size, quality: size): *hasher-forgetful-chain {
+    let bucket-size = 1 << bucket-bits
+    let bank-size = 1 << bank-bits
+    mem/new(.{
+      bucket-bits,
+      bucket-size,
+      num-banks,
+      bank-size,
+      num-last-distances-to-check,
+      max-hops = (if quality > 6 7 else 8) << (quality - 4).trunc[u32],
+      free-slot-idx = buffer/allocate[u16](num-banks),
+      addr = buffer/allocate[u32](bucket-size),
+      head = buffer/allocate[u16](bucket-size),
+      tiny-hash = buffer/allocate[u8](65536),
+      banks = buffer/allocate[forgetful-chain-slot](num-banks * bank-size),
+    })
+  }
+
+  fn(inline) hash-bytes(self: *hasher-forgetful-chain, data: ptr): size {
+    ((load32-le(data) * K-HASH-MUL32) >> (32u32 - self.bucket-bits)).as-size()
+  }
+
+  fn prepare(self: *hasher-forgetful-chain, one-shot: bool, input-size: size, data: ptr) {
+    let partial-prepare-threshold = self.bucket-size >> 6
+    if one-shot and input-size <= partial-prepare-threshold {
+      for i in 0.until(input-size) {
+        let bucket = self.hash-bytes(data.add-bytes(i))
+        self.addr.index-unchecked(bucket).* = 0xCCCCCCCC
+        self.head.index-unchecked(bucket).* = 0xCCCC
+      }
+    } else {
+      mem/set(self.addr.data-ptr(), 0xCC, self.bucket-size * 4)
+      mem/set(self.head.data-ptr(), 0, self.bucket-size * 2)
+    }
+    mem/set(self.tiny-hash.data-ptr(), 0, 65536)
+    mem/set(self.free-slot-idx.data-ptr(), 0, self.num-banks * 2)
+  }
+
+  fn(inline) store(self: *hasher-forgetful-chain, data: ptr, mask: size, ix: size) {
+    let key = self.hash-bytes(data.add-bytes(ix & mask))
+    let bank = key & (self.num-banks - 1)
+    let free-slot = self.free-slot-idx.index-unchecked(bank)
+    let idx = free-slot.*.as-size() & (self.bank-size - 1)
+    free-slot.* = free-slot.* + 1
+    let addr = self.addr.index-unchecked(key)
+    let delta = ix.unsigned() - addr.*.widen[u64]
+    self.tiny-hash.index-unchecked(ix.trunc[u16].as-size()).* = key.trunc[u8]
+    if delta > 0xFFFF { delta = 0xFFFF }
+    let slot = self.banks.index-unchecked(bank * self.bank-size + idx)
+    slot.delta = delta.trunc[u16]
+    slot.next = self.head.index-unchecked(key).*
+    addr.* = ix.trunc[u32]
+    self.head.index-unchecked(key).* = idx.trunc[u16]
+  }
+
+  fn store-range(self: *hasher-forgetful-chain, data: ptr, mask: size, ix-start: size, ix-end: size) {
+    for i in ix-start.until(ix-end) { self.store(data, mask, i) }
+  }
+
+  fn stitch-to-previous-block(self: *hasher-forgetful-chain, num-bytes: size, position: size, ringbuffer: ptr, ringbuffer-mask: size) {
+    if num-bytes >= 3 and position >= 3 {
+      self.store(ringbuffer, ringbuffer-mask, position - 3)
+      self.store(ringbuffer, ringbuffer-mask, position - 2)
+      self.store(ringbuffer, ringbuffer-mask, position - 1)
+    }
+  }
+
+  fn prepare-distance-cache(self: *hasher-forgetful-chain, distance-cache: buffer[i32]) {
+    brotli/prepare-distance-cache(distance-cache, self.num-last-distances-to-check)
+  }
+
+  fn find-longest-match(self: *hasher-forgetful-chain, common: *hasher-common, data: ptr, ring-buffer-mask: size, distance-cache: buffer[i32], cur-ix: size, max-length: size, max-backward: size, dictionary-distance: size, max-distance: size, out: *hasher-search-result) {
+    let cur-ix-masked = cur-ix & ring-buffer-mask
+    let min-score = out.score
+    let best-score = out.score
+    let best-len = out.len
+    let key = self.hash-bytes(data.add-bytes(cur-ix-masked))
+    let tiny-hash = key.trunc[u8]
+    out.len = 0
+    out.len-code-delta = 0
+    for i in 0.until(self.num-last-distances-to-check) {
+      let backward = distance-cache.index-unchecked(i).*.as-size()
+      let prev-ix = cur-ix - backward
+      if i > 0 and self.tiny-hash.index-unchecked(prev-ix.trunc[u16].as-size()).* != tiny-hash continue
+      if prev-ix.unsigned() >= cur-ix.unsigned() or backward.unsigned() > max-backward.unsigned() continue
+      prev-ix = prev-ix & ring-buffer-mask
+      let len = find-match-length(data.add-bytes(prev-ix), data.add-bytes(cur-ix-masked), max-length)
+      if len >= 2 {
+        let score = backward-reference-score-using-last-distance(len)
+        if best-score < score {
+          if i != 0 { score = score - backward-reference-penalty-using-last-distance(i) }
+          if best-score < score {
+            best-score = score
+            best-len = len
+            out.len = best-len
+            out.distance = backward
+            out.score = best-score
+          }
+        }
+      }
+    }
+    if best-len < 3 { best-len = 3 }
+    let bank-base = (key & (self.num-banks - 1)) * self.bank-size
+    let backward: u64 = 0
+    let hops = self.max-hops
+    let delta = cur-ix.unsigned() - self.addr.index-unchecked(key).*.widen[u64]
+    let slot = self.head.index-unchecked(key).*.as-size()
+    while hops > 0 {
+      hops = hops - 1
+      let last = slot
+      backward = backward + delta
+      if backward > max-backward.unsigned() break
+      let prev-ix = ((cur-ix.unsigned() - backward) & ring-buffer-mask.unsigned()).signed()
+      let node = self.banks.index-unchecked(bank-base + last)
+      slot = node.next.as-size()
+      delta = node.delta.widen[u64]
+      if cur-ix-masked + best-len > ring-buffer-mask or
+        prev-ix + best-len > ring-buffer-mask or
+        load32-le(data.add-bytes(cur-ix-masked + best-len - 3)) != load32-le(data.add-bytes(prev-ix + best-len - 3)) {
+        continue
+      }
+      let len = find-match-length(data.add-bytes(prev-ix), data.add-bytes(cur-ix-masked), max-length)
+      if len >= 4 {
+        let score = backward-reference-score(len, backward.signed())
+        if best-score < score {
+          best-score = score
+          best-len = len
+          out.len = best-len
+          out.distance = backward.signed()
+          out.score = best-score
+        }
+      }
+    }
+    self.store(data, ring-buffer-mask, cur-ix)
+    if out.score == min-score {
+      search-in-static-dictionary(common, data.add-bytes(cur-ix-masked), max-length, dictionary-distance, max-distance, out, false)
+    }
+  }
+}
+
+type hasher-impl = either {
+  quickly(*hasher-quickly),
+  longest-match(*hasher-longest-match),
+  longest-match64(*hasher-longest-match64),
+  forgetful-chain(*hasher-forgetful-chain),
+  binary-tree(*hasher-h10),
+}
+
+type hasher = {
+  kind: hasher-impl,
+  common: hasher-common,
+  params: hasher-params,
+}
+
+ns for hasher {
+  fn new(params: *encoder-params, one-shot: bool, input-size: size): *hasher {
+    let hp = params.hasher
+    let kind: hasher-impl = if hp.kind is {
+      2 -> :quickly(hasher-quickly/new(16, 0, 5, true)),
+      3 -> :quickly(hasher-quickly/new(16, 1, 5, false)),
+      4 -> :quickly(hasher-quickly/new(17, 2, 5, true)),
+      54 -> :quickly(hasher-quickly/new(20, 2, 7, false)),
+      5 -> :longest-match(hasher-longest-match/new(hp.&)),
+      6 -> :longest-match64(hasher-longest-match64/new(hp.&)),
+      40 -> :forgetful-chain(hasher-forgetful-chain/new(15, 1, 16, 4, params.quality)),
+      41 -> :forgetful-chain(hasher-forgetful-chain/new(15, 1, 16, 10, params.quality)),
+      42 -> :forgetful-chain(hasher-forgetful-chain/new(15, 512, 9, 16, params.quality)),
+      10 -> :binary-tree(mem/new(hasher-h10/new(params, one-shot, input-size))),
+      _ -> crash("unsupported hasher kind ${hp.kind}"),
+    }
+    mem/new(.{
+      kind,
+      common = .{ dict-num-lookups = 0, dict-num-matches = 0, is-prepared = false },
+      params = hp,
+    })
+  }
+
+  fn reset(self: *hasher) { self.common.is-prepared = false }
+
+  fn setup(self: *hasher, data: ptr, position: size, input-size: size, is-last: bool) {
+    let one-shot = position == 0 and is-last
+    if not self.common.is-prepared {
+      if self.kind is {
+        :quickly q -> q.prepare(one-shot, input-size, data),
+        :longest-match h -> h.prepare(one-shot, input-size, data),
+        :longest-match64 h -> h.prepare(one-shot, input-size, data),
+        :forgetful-chain h -> h.prepare(one-shot, input-size, data),
+        :binary-tree h -> h.prepare(),
+      }
+      self.common.is-prepared = true
+    }
+  }
+
+  fn init-or-stitch-to-previous-block(self: *hasher, data: ptr, mask: size, position: size, input-size: size, is-last: bool) {
+    self.setup(data, position, input-size, is-last)
+    if self.kind is {
+      :quickly q -> q.stitch-to-previous-block(input-size, position, data, mask),
+      :longest-match h -> h.stitch-to-previous-block(input-size, position, data, mask),
+      :longest-match64 h -> h.stitch-to-previous-block(input-size, position, data, mask),
+      :forgetful-chain h -> h.stitch-to-previous-block(input-size, position, data, mask),
+      :binary-tree h -> h.stitch-to-previous-block(input-size, position, data, mask),
+    }
+  }
+
+  fn(inline) hash-type-length(self: *hasher): size {
+    if self.kind is {
+      :quickly _ -> 8,
+      :longest-match _ -> 4,
+      :longest-match64 _ -> 8,
+      :forgetful-chain _ -> 4,
+      :binary-tree _ -> 4,
+    }
+  }
+
+  fn(inline) store-lookahead(self: *hasher): size {
+    if self.kind is {
+      :binary-tree _ -> H10-MAX-TREE-COMP-LENGTH + H10-MAX-TREE-SEARCH-DEPTH,
+      _ -> self.hash-type-length(),
+    }
+  }
+
+  fn find-longest-match(self: *hasher, data: ptr, ring-buffer-mask: size, distance-cache: buffer[i32], cur-ix: size, max-length: size, max-backward: size, dictionary-distance: size, max-distance: size, out: *hasher-search-result) {
+    let common = self.common.&
+    if self.kind is {
+      :quickly q -> q.find-longest-match(common, data, ring-buffer-mask, distance-cache, cur-ix, max-length, max-backward, dictionary-distance, max-distance, out),
+      :longest-match h -> h.find-longest-match(common, data, ring-buffer-mask, distance-cache, cur-ix, max-length, max-backward, dictionary-distance, max-distance, out),
+      :longest-match64 h -> h.find-longest-match(common, data, ring-buffer-mask, distance-cache, cur-ix, max-length, max-backward, dictionary-distance, max-distance, out),
+      :forgetful-chain h -> h.find-longest-match(common, data, ring-buffer-mask, distance-cache, cur-ix, max-length, max-backward, dictionary-distance, max-distance, out),
+      :binary-tree _ -> crash("binary-tree hasher only serves zopfli"),
+    }
+  }
+
+  fn store(self: *hasher, data: ptr, mask: size, ix: size) {
+    if self.kind is {
+      :quickly q -> q.store(data, mask, ix),
+      :longest-match h -> h.store(data, mask, ix),
+      :longest-match64 h -> h.store(data, mask, ix),
+      :forgetful-chain h -> h.store(data, mask, ix),
+      :binary-tree h -> h.store(data, mask, ix),
+    }
+  }
+
+  fn store-range(self: *hasher, data: ptr, mask: size, ix-start: size, ix-end: size) {
+    if self.kind is {
+      :quickly q -> q.store-range(data, mask, ix-start, ix-end),
+      :longest-match h -> h.store-range(data, mask, ix-start, ix-end),
+      :longest-match64 h -> h.store-range(data, mask, ix-start, ix-end),
+      :forgetful-chain h -> h.store-range(data, mask, ix-start, ix-end),
+      :binary-tree h -> h.store-range(data, mask, ix-start, ix-end),
+    }
+  }
+
+  fn prepare-distance-cache(self: *hasher, distance-cache: buffer[i32]) {
+    if self.kind is {
+      :quickly _ -> .{},
+      :longest-match h -> h.prepare-distance-cache(distance-cache),
+      :longest-match64 h -> h.prepare-distance-cache(distance-cache),
+      :forgetful-chain h -> h.prepare-distance-cache(distance-cache),
+      :binary-tree _ -> .{},
+    }
+  }
+}

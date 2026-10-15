@@ -30,4 +30,6 @@ fn test() {
   assert(unchecked is :c)
   assert(from-value-generic[u8, enum-abc](1) is :some :b)
   assert(from-value-generic[u8, enum-abc](3) is :none)
+  assert-equals(types/enum@(enum-abc)/members(), [:a, :b, :c])
+  assert-equals(types/enum@(custom-enum-tags)/members().[2].value, 12)
 }

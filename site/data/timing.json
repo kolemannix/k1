@@ -3,37 +3,37 @@
   "typecheck": [
     {
       "name": "k1",
-      "ms": 29,
+      "ms": 30,
       "k1": true,
-      "pct": 1.25
+      "pct": 1.17
     },
     {
       "name": "C",
-      "ms": 99,
+      "ms": 100,
       "k1": false,
-      "pct": 4.27
+      "pct": 3.91
     },
     {
       "name": "Zig",
-      "ms": 273,
+      "ms": 276,
       "k1": false,
-      "pct": 11.77
+      "pct": 10.8
     },
     {
       "name": "OCaml",
-      "ms": 434,
+      "ms": 442,
       "k1": false,
-      "pct": 18.71
+      "pct": 17.3
     },
     {
       "name": "Rust",
-      "ms": 594,
+      "ms": 611,
       "k1": false,
-      "pct": 25.61
+      "pct": 23.91
     },
     {
       "name": "C++",
-      "ms": 2319,
+      "ms": 2555,
       "k1": false,
       "pct": 100.0
     }
@@ -41,55 +41,55 @@
   "build": [
     {
       "name": "k1",
-      "ms": 129,
+      "ms": 160,
       "k1": true,
-      "pct": 1.06
-    },
-    {
-      "name": "C",
-      "ms": 511,
-      "k1": false,
-      "pct": 4.18
+      "pct": 1.33
     },
     {
       "name": "Go",
-      "ms": 687,
+      "ms": 706,
       "k1": false,
-      "pct": 5.63
+      "pct": 5.89
+    },
+    {
+      "name": "C",
+      "ms": 708,
+      "k1": false,
+      "pct": 5.9
     },
     {
       "name": "Rust",
-      "ms": 962,
+      "ms": 1329,
       "k1": false,
-      "pct": 7.88
+      "pct": 11.08
     },
     {
       "name": "Java",
-      "ms": 1614,
+      "ms": 1632,
       "k1": false,
-      "pct": 13.22
+      "pct": 13.61
     },
     {
       "name": "OCaml",
-      "ms": 3102,
+      "ms": 3225,
       "k1": false,
-      "pct": 25.4
+      "pct": 26.89
     },
     {
       "name": "Zig",
-      "ms": 3158,
+      "ms": 3248,
       "k1": false,
-      "pct": 25.86
+      "pct": 27.08
     },
     {
       "name": "C++",
-      "ms": 4358,
+      "ms": 6354,
       "k1": false,
-      "pct": 35.69
+      "pct": 52.99
     },
     {
       "name": "Kotlin",
-      "ms": 12211,
+      "ms": 11992,
       "k1": false,
       "pct": 100.0
     }

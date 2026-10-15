@@ -1,0 +1,238 @@
+[
+  {
+    "title": "Hello, world",
+    "section": "00-basics",
+    "anchor": "hello-world",
+    "blurb": "A program is a file with a `main`.",
+    "blocks": [
+      {
+        "label": "program",
+        "kind": "k1",
+        "code": "fn main() {\n  println(\"Hello, world\")\n}"
+      },
+      {
+        "label": "output",
+        "kind": "text",
+        "code": "Hello, world"
+      }
+    ]
+  },
+  {
+    "title": "Functions and variables",
+    "section": "00-basics",
+    "anchor": "functions-and-variables",
+    "blurb": "Arguments can be passed by name.",
+    "blocks": [
+      {
+        "label": "program",
+        "kind": "k1",
+        "code": "fn greeting(name: string, height-cm: int, formal: bool): string {\n  let title = if formal \"Dr. \" else \"\"\n  let inches = height-cm * 100 / 254\n  \"Hello, $title$name, you are ${inches / 12} ft ${inches % 12} in\"\n}\n\nfn main() {\n  let name = \"Dennis\"\n  let line = greeting(name, height-cm = 180, formal = false)\n  println(line)\n  println(greeting(\"Ada\", height-cm = 170, formal = true))\n}"
+      },
+      {
+        "label": "output",
+        "kind": "text",
+        "code": "Hello, Dennis, you are 5 ft 10 in\nHello, Dr. Ada, you are 5 ft 6 in"
+      }
+    ]
+  },
+  {
+    "title": "Lists and spans",
+    "section": "00-basics",
+    "anchor": "lists-and-spans",
+    "blurb": "A list owns its elements and grows. A span is a view of memory someone else owns, and a string is a span of chars, with UTF-8 as library code you call when you need it.",
+    "blocks": [
+      {
+        "label": "in core",
+        "kind": "k1",
+        "code": "type list[t] = { buffer: buffer[t], len: size }\ntype span[t] = { buffer: buffer[t] }\ntype string = { span: span[char] }"
+      },
+      {
+        "label": "program",
+        "kind": "k1",
+        "code": "fn main() {\n  let words = \"the quick brown fox\".split-by-char(' ')\n  let last-two = words.slice(2, 4)\n  println(last-two)\n  let lengths = words.map(fn w. w.len())\n  let long = words.filter(fn w. w.len() > 3)\n  println(\"$lengths $long ${lengths.sum()}\")\n  let s = \"hello world\"\n  println(s.slice(6, 11))\n}"
+      },
+      {
+        "label": "output",
+        "kind": "text",
+        "code": "[brown,fox]\n[3,5,5,3] [quick,brown] 16\nworld"
+      }
+    ]
+  },
+  {
+    "title": "Structs",
+    "section": "00-basics",
+    "anchor": "structs",
+    "blurb": "A `ns for` block gives a type its methods.",
+    "blocks": [
+      {
+        "label": "program",
+        "kind": "k1",
+        "code": "type point = { x: int, y: int }\n\nns for point {\n  fn shifted(self, dx: int, dy: int): point {\n    .{ x = self.x + dx, y = self.y + dy }\n  }\n}\n\nfn main() {\n  let p = point.{ x = 1, y = 2 }\n  println(p.shifted(dx = 10, dy = 10))\n}"
+      },
+      {
+        "label": "output",
+        "kind": "text",
+        "code": ".{ x = 11, y = 12 }"
+      }
+    ]
+  },
+  {
+    "title": "Either types",
+    "section": "00-basics",
+    "anchor": "either-types",
+    "blurb": "`either` is the sum type. A variant can carry a payload or just a tag, and `opt` and `result` are two of them.",
+    "blocks": [
+      {
+        "label": "in core",
+        "kind": "k1",
+        "code": "type opt[t] = either { none, some(t) }\ntype result[t, e] = either { ok(t), err(e) }"
+      },
+      {
+        "label": "program",
+        "kind": "k1",
+        "code": "type level = either { low = 1, mid = 5, high = 10 }\n\ntype shape = either {\n  circle(f64),\n  rect({ w: f64, h: f64 }),\n  dot,\n}\n\nfn area(s: shape): f64 {\n  if s is {\n    :circle r -> 3.14159 * r * r,\n    :rect .{ w, h } -> w * h,\n    :dot -> 0.0,\n  }\n}\n\nfn main() {\n  println(\"${level:high} is ${level:high.value}\")\n  println(area(:rect .{ w = 2.0, h = 3.0 }))\n}"
+      },
+      {
+        "label": "output",
+        "kind": "text",
+        "code": "high is 10\n6.0"
+      }
+    ]
+  },
+  {
+    "title": "Optionals and results",
+    "section": "00-basics",
+    "anchor": "optionals-and-results",
+    "blurb": "`?t` is sugar for `opt[t]`. `?` is the else operator, and `.try` gives you the value or returns the error, on anything that implements `try`.",
+    "blocks": [
+      {
+        "label": "program",
+        "kind": "k1",
+        "code": "fn find-even(xs: list[int]): ?int {\n  for x in xs { if x % 2 == 0 { return :some x } }\n  :none\n}\n\nfn doubled-even(xs: list[int]): ?int {\n  let x = find-even(xs).try\n  :some(x * 2)\n}\n\nfn parse-age(s: string): result[int, string] {\n  require int/from-string(s) is :ok n else { return :err \"not a number: $s\" }\n  if n < 0 :err \"negative\" else :ok n\n}\n\nfn main() {\n  println(doubled-even([1, 3, 4]))\n  println(doubled-even([1, 3]) ? -1)\n  println(parse-age(\"21\"))\n  println(parse-age(\"abc\"))\n}"
+      },
+      {
+        "label": "output",
+        "kind": "text",
+        "code": ":some 8\n-1\n:ok(21)\n:err(not a number: abc)"
+      }
+    ]
+  },
+  {
+    "title": "Control flow",
+    "section": "00-basics",
+    "anchor": "control-flow",
+    "blurb": "`if` is an expression, `loop` breaks with a value, and `require` binds a pattern for the rest of the block or leaves.",
+    "blocks": [
+      {
+        "label": "program",
+        "kind": "k1",
+        "code": "fn first-square-over(limit: int): int {\n  let i = 0\n  loop {\n    i = i + 1\n    if i * i > limit { break i * i }\n  }\n}\n\nfn describe-int(n: ?int): string {\n  require n is :some x and x > 0 else { return \"nothing positive\" }\n  let parity = if x % 2 == 0 \"even\" else \"odd\"\n  \"$x is $parity\"\n}\n\nfn main() {\n  println(describe-int(:some 7))\n  println(describe-int(:none))\n  println(first-square-over(50))\n}"
+      },
+      {
+        "label": "output",
+        "kind": "text",
+        "code": "7 is odd\nnothing positive\n64"
+      }
+    ]
+  },
+  {
+    "title": "Lambdas",
+    "section": "00-basics",
+    "anchor": "lambdas",
+    "blurb": "A lambda captures only what you list in brackets. The physical form of the function depends on what you need: inlined, a direct call, an indirect call, or a dynamic closure.",
+    "blocks": [
+      {
+        "label": "program",
+        "kind": "k1",
+        "code": "fn apply-twice(x: int, f: some fn int -> int): int {\n  f(f(x))\n}\n\nfn inc(x: int): int { x + 1 }\n\nfn main() {\n  println(apply-twice(1, inc))\n  println(apply-twice(1, fn x. x * 10))\n  let inc-ptr: *fn(int) -> int = inc.&\n  println(apply-twice(1, inc-ptr))\n\n  let step = 5\n  let total = 0\n  let add = fn[step, total.&](x: int) { total.* = total.* + x + step }\n  add(1)\n  add(2)\n  println(total)\n}"
+      },
+      {
+        "label": "output",
+        "kind": "text",
+        "code": "3\n100\n3\n13"
+      }
+    ]
+  },
+  {
+    "title": "Abilities",
+    "section": "00-basics",
+    "anchor": "abilities",
+    "blurb": "An ability is a set of functions a type can implement, sometimes called type classes or ad hoc polymorphism. It is the way to express a protocol without coupling your types to it. All of this compiles to plain function calls.",
+    "blocks": [
+      {
+        "label": "program",
+        "kind": "k1",
+        "code": "ability greet {\n  fn greet(self: *self): string\n}\n\ntype cat = { name: string }\ntype robot = { id: int }\n\nimpl greet for cat {\n  fn greet(self: *cat): string { \"meow, I am ${self.name}\" }\n}\n\nimpl greet for robot {\n  fn greet(self: *robot): string { \"unit ${self.id} online\" }\n}\n\nfn introduce[t: greet](x: *t) {\n  println(x.greet())\n}\n\nfn main() {\n  let c = cat.{ name = \"Ada\" }\n  introduce(c.&)\n  let r = robot.{ id = 7 }\n  introduce(r.&)\n}",
+        "alt": {
+          "label": "llvm ir",
+          "kind": "text",
+          "code": "$ content/showcase/ir.sh examples/basics_abilities.k1 'greet'\ndefine internal [2 x i64] @impl_41greet.greet_for_t7270(ptr %self)\ndefine internal [2 x i64] @impl_41greet.greet_for_t7274(ptr %self)\ndefine internal void @main() {\n  ...\n  %2 = call [2 x i64] @impl_41greet.greet_for_t7270(ptr %1)\n  ...\n  %3 = call [2 x i64] @impl_41greet.greet_for_t7274(ptr %0)\n  ...\n  ret void\n}"
+        }
+      },
+      {
+        "label": "output",
+        "kind": "text",
+        "code": "meow, I am Ada\nunit 7 online"
+      }
+    ]
+  },
+  {
+    "title": "Generics",
+    "section": "00-basics",
+    "anchor": "generics",
+    "blurb": "Type parameters go in square brackets, on types and on functions.",
+    "blocks": [
+      {
+        "label": "program",
+        "kind": "k1",
+        "code": "type pair[a, b] = { a, b }\n\nns for pair {\n  fn swap[a, b](self: pair[a, b]): pair[b, a] {\n    .{ a = self.b, b = self.a }\n  }\n}\n\nfn largest[t: comparable](xs: list[t]): t {\n  let best = xs.[0]\n  for x in xs { if x.compare(best) is :greater { best = x } }\n  best\n}\n\nfn main() {\n  let p: pair[int, string] = .{ a = 1, b = \"one\" }\n  println(p.swap())\n  println(largest([3, 9, 2]))\n  println(largest([\"pear\", \"apple\"]))\n}"
+      },
+      {
+        "label": "output",
+        "kind": "text",
+        "code": ".{ a = one, b = 1 }\n9\npear"
+      }
+    ]
+  },
+  {
+    "title": "References",
+    "section": "00-basics",
+    "anchor": "references",
+    "blurb": "References are taken with `.&` and followed with `.*`. Every `*t` points at something, so there is nothing to null-check.",
+    "blocks": [
+      {
+        "label": "program",
+        "kind": "k1",
+        "code": "fn bump(n: *int) {\n  n.* = n.* + 1\n}\n\nfn main() {\n  let x = 1\n  bump(x.&)\n  bump(x.&)\n  println(x)\n\n  let boxed: *int = mem/new(41)\n  bump(boxed)\n  println(boxed.*)\n}"
+      },
+      {
+        "label": "output",
+        "kind": "text",
+        "code": "3\n42"
+      }
+    ]
+  },
+  {
+    "title": "Early execution",
+    "section": "00-basics",
+    "anchor": "early-execution",
+    "blurb": "Globals are computed while compiling, `#static` runs any expression there, and only the results reach the binary.",
+    "blocks": [
+      {
+        "label": "program",
+        "kind": "k1",
+        "code": "fn fib(n: int): int {\n  if n < 2 n else fib(n - 1) + fib(n - 2)\n}\n\nlet ANSWER: int = fib(30) * fib(20) + 1\n\nfn main() {\n  println(ANSWER)\n  let table: list[int] = #static {\n    let xs: list[int] = []\n    for i in 0.until(10) { xs.push(fib(i)) }\n    println(\"built ${xs.len()} entries while compiling\")\n    xs\n  }\n  println(table)\n}",
+        "alt": {
+          "label": "llvm ir",
+          "kind": "text",
+          "code": "$ content/showcase/ir.sh examples/basics_early.k1 'format-uint|memcpy|10 x i64]' fib\n[basics_early.k1:12 info] built 10 entries while compiling\n$ grep -c 'fib' .k1-out/basics_early.ll\n0\ndefine internal void @main() {\n  ...\n  call void @core.format-uint(i64 1, i64 5628750601, i64 10)\n  ...\n  call void @llvm.memcpy(ptr %0, ptr @k1.static.2552, i64 24, i1 false)\n  ...\n  ret void\n}\n@k1.static.2552.elems = constant [10 x i64] [i64 0, i64 1, i64 1, i64 2, i64 3, i64 5, i64 8, i64 13, i64 21, i64 34], align 8"
+        }
+      },
+      {
+        "label": "output",
+        "kind": "text",
+        "code": "5628750601\n[0,1,1,2,3,5,8,13,21,34]"
+      }
+    ]
+  }
+]

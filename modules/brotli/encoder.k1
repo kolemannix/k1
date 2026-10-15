@@ -1,0 +1,592 @@
+use core/arena
+
+type encoder = {
+  params: encoder-params,
+  heap: *arena,
+  scratch: *arena,
+  one-pass: one-pass-arena,
+  two-pass: *two-pass-arena,
+  cmd-buf: buffer[u32],
+  lit-buf: buffer[u8],
+  table: buffer[i32],
+  storage: buffer[u8],
+  ringbuffer: ring-buffer,
+  hasher: ?*hasher,
+  commands: list[command],
+  num-literals: size,
+  last-insert-len: size,
+  input-pos: size,
+  last-flush-pos: size,
+  last-processed-pos: size,
+  dist-cache: array[i32, 16],
+  saved-dist-cache: array[i32, 4],
+  prev-byte: u8,
+  prev-byte2: u8,
+  last-bytes: u16,
+  last-bytes-bits: u8,
+  is-last-block-emitted: bool,
+  finished: bool,
+}
+
+fn wrap-position(position: size): u32 {
+  let result = position.trunc[u32]
+  let gb = position >> 30
+  if gb > 2 {
+    result = (result & ((1u32 << 30) - 1)) | ((((gb - 1) & 1).trunc[u32] + 1) << 30)
+  }
+  result
+}
+
+fn encode-window-bits(lgwin: size): { last-bytes: u16, last-bytes-bits: u8 } {
+  if lgwin == 16 .{ last-bytes = 0, last-bytes-bits = 1 }
+  else if lgwin == 17 .{ last-bytes = 1, last-bytes-bits = 7 }
+  else if lgwin > 17 .{ last-bytes = (((lgwin - 17) << 1) | 1).trunc[u16], last-bytes-bits = 4 }
+  else .{ last-bytes = (((lgwin - 8) << 4) | 1).trunc[u16], last-bytes-bits = 7 }
+}
+
+fn estimate-entropy(population: buffer[u32], count: size): f64 {
+  let total: size = 0
+  let result = 0.0
+  for i in 0.until(count) {
+    let p = population.index-unchecked(i).*
+    total = total + p.as-size()
+    result = result + p.as[f64] * fast-log2(p.as-size())
+  }
+  total.as[f64] * fast-log2(total) - result
+}
+
+type literal-context-choice = { num-literal-contexts: size, literal-context-map: ?buffer[u32] }
+
+fn choose-context-map(quality: size, bigram-histo: buffer[u32]): literal-context-choice {
+  let monogram-histo = array/zeroed[u32, 3]()
+  let two-prefix-histo = array/zeroed[u32, 6]()
+  for i in 0.until(9) {
+    monogram-histo.[i % 3] = monogram-histo.[i % 3] + bigram-histo.index-unchecked(i).*
+    two-prefix-histo.[i % 6] = two-prefix-histo.[i % 6] + bigram-histo.index-unchecked(i).*
+  }
+  let two-prefix = two-prefix-histo.&.as-buffer()
+  let entropy1 = estimate-entropy(monogram-histo.&.as-buffer(), 3)
+  let entropy2 = estimate-entropy(two-prefix, 3) + estimate-entropy(two-prefix.slice(3, 6), 3)
+  let entropy3 = 0.0
+  for i in 0.until(3) {
+    entropy3 = entropy3 + estimate-entropy(bigram-histo.slice(3 * i, 3 * i + 3), 3)
+  }
+  let total = monogram-histo.[0] + monogram-histo.[1] + monogram-histo.[2]
+  let entropy0 = 1.0 / total.as[f64]
+  entropy1 = entropy1 * entropy0
+  entropy2 = entropy2 * entropy0
+  entropy3 = entropy3 * entropy0
+  if quality < MIN-QUALITY-FOR-HQ-CONTEXT-MODELING {
+    entropy3 = entropy1 * 10.0
+  }
+  if entropy1 - entropy2 < 0.2 and entropy1 - entropy3 < 0.2 {
+    .{ num-literal-contexts = 1, literal-context-map = :none }
+  } else if entropy2 - entropy3 < 0.02 {
+    .{ num-literal-contexts = 2, literal-context-map = :some k-static-context-map-simple-utf8.&.as-buffer() }
+  } else {
+    .{ num-literal-contexts = 3, literal-context-map = :some k-static-context-map-continuation.&.as-buffer() }
+  }
+}
+
+fn should-use-complex-static-context-map(
+  input: ptr, start-pos: size, length: size, mask: size, size-hint: size,
+): ?literal-context-choice {
+  if size-hint < (1 << 20) return :none
+  let end-pos = start-pos + length
+  let arena = array/zeroed[u32, 448]()
+  let combined-histo = arena.&.as-buffer().slice(0, 32)
+  let context-histo = arena.&.as-buffer().slice(32, 448)
+  let total: u32 = 0
+  let utf8-lut = context-lut(:utf8)
+  let pos0 = start-pos
+  while pos0 + 64 <= end-pos {
+    let stride-end-pos = pos0 + 64
+    let prev2 = input.add-bytes(pos0 & mask).ref[u8].*
+    let prev1 = input.add-bytes((pos0 + 1) & mask).ref[u8].*
+    let pos = pos0 + 2
+    while pos < stride-end-pos {
+      let literal = input.add-bytes(pos & mask).ref[u8].*
+      let ctx = k-static-context-map-complex-utf8.[context-of(prev1, prev2, utf8-lut).as-size()].trunc[u8]
+      total = total + 1
+      let c = combined-histo.index-unchecked((literal >> 3).as-size())
+      c.* = c.* + 1
+      let h = context-histo.index-unchecked((ctx.as-size() << 5) + (literal >> 3).as-size())
+      h.* = h.* + 1
+      prev2 = prev1
+      prev1 = literal
+      pos = pos + 1
+    }
+    pos0 = pos0 + 4096
+  }
+  let entropy1 = estimate-entropy(combined-histo, 32)
+  let entropy2 = 0.0
+  for i in 0.until(MAX-STATIC-CONTEXTS) {
+    entropy2 = entropy2 + estimate-entropy(context-histo.slice(i << 5, (i << 5) + 32), 32)
+  }
+  let entropy0 = 1.0 / total.as[f64]
+  entropy1 = entropy1 * entropy0
+  entropy2 = entropy2 * entropy0
+  if entropy2 > 3.0 or entropy1 - entropy2 < 0.2 {
+    :none
+  } else {
+    :some .{ num-literal-contexts = MAX-STATIC-CONTEXTS, literal-context-map = :some k-static-context-map-complex-utf8.&.as-buffer() }
+  }
+}
+
+fn decide-over-literal-context-modeling(
+  input: ptr, start-pos: size, length: size, mask: size, quality: size, size-hint: size,
+): literal-context-choice {
+  if quality < MIN-QUALITY-FOR-CONTEXT-MODELING or length < 64 {
+    return .{ num-literal-contexts = 1, literal-context-map = :none }
+  }
+  if should-use-complex-static-context-map(input, start-pos, length, mask, size-hint) is :some choice {
+    return choice
+  }
+  let end-pos = start-pos + length
+  let bigram-prefix-histo = array/zeroed[u32, 9]()
+  let lut: array[size, 4] = [0, 0, 1, 2]
+  let pos0 = start-pos
+  while pos0 + 64 <= end-pos {
+    let stride-end-pos = pos0 + 64
+    let prev = lut.[(input.add-bytes(pos0 & mask).ref[u8].* >> 6).as-size()] * 3
+    let pos = pos0 + 1
+    while pos < stride-end-pos {
+      let literal = input.add-bytes(pos & mask).ref[u8].*
+      let idx = prev + lut.[(literal >> 6).as-size()]
+      bigram-prefix-histo.[idx] = bigram-prefix-histo.[idx] + 1
+      prev = lut.[(literal >> 6).as-size()] * 3
+      pos = pos + 1
+    }
+    pos0 = pos0 + 4096
+  }
+  choose-context-map(quality, bigram-prefix-histo.&.as-buffer())
+}
+
+fn should-compress(data: ptr, mask: size, last-flush-pos: size, bytes: size, num-literals: size, num-commands: size): bool {
+  if bytes <= 2 return false
+  if num-commands < (bytes >> 8) + 2 {
+    if num-literals.as[f64] > 0.99 * bytes.as[f64] {
+      let literal-histo = array/zeroed[u32, 256]()
+      let bit-cost-threshold = bytes.as[f64] * 7.92 * (1.0 / 13.0)
+      let t = (bytes + 13 - 1) / 13
+      let pos = last-flush-pos.trunc[u32]
+      for 0.until(t) {
+        let b = data.add-bytes(pos.as-size() & mask).ref[u8].*.as-size()
+        literal-histo.[b] = literal-histo.[b] + 1
+        pos = pos + 13
+      }
+      if bits-entropy(literal-histo.&.as-buffer(), 256) > bit-cost-threshold {
+        return false
+      }
+    }
+  }
+  true
+}
+
+fn choose-context-mode(params: *encoder-params, data: ptr, pos: size, mask: size, length: size): context-mode {
+  if params.quality >= MIN-QUALITY-FOR-HQ-BLOCK-SPLITTING and (not is-mostly-utf8(data, pos, mask, length, 0.75)) {
+    :signed
+  } else {
+    :utf8
+  }
+}
+
+ns for encoder {
+  fn new-in[a: allocator](alloc: a, quality: size, lgwin: size): *encoder {
+    let e: *encoder = alloc.alloc-t[encoder]()
+    e.params = encoder-params/new(quality, lgwin)
+    e.heap = arena/init(1 << 22)
+    e.scratch = arena/init(1 << 22)
+    if quality == 0 {
+      e.table = buffer/allocate-in[i32, _](alloc, MAX-TABLE-SIZE)
+    } else if quality == 1 {
+      e.table = buffer/allocate-in[i32, _](alloc, Q1-MAX-TABLE-SIZE)
+      e.two-pass = alloc.alloc-t[two-pass-arena]()
+      e.cmd-buf = buffer/allocate-in[u32, _](alloc, TWO-PASS-BLOCK-SIZE)
+      e.lit-buf = buffer/allocate-in[u8, _](alloc, TWO-PASS-BLOCK-SIZE)
+    }
+    if quality <= 1 {
+      e.storage = buffer/allocate-in[u8, _](alloc, 2 * e.params.input-block-size() + 503 + 8)
+    }
+    e.reset()
+    e
+  }
+
+  fn new(): *encoder { new-in(mem/current-arena(), 0, 18) }
+
+  fn reset(self: *encoder) {
+    let header = encode-window-bits(if self.params.quality <= 1 self.params.lgwin.max(18) else self.params.lgwin)
+    self.last-bytes = header.last-bytes
+    self.last-bytes-bits = header.last-bytes-bits
+    self.finished = false
+    if self.params.quality == 0 {
+      init-command-prefix-codes(self.one-pass.&)
+    }
+    if self.params.quality >= 2 {
+      self.heap.reset()
+      self.scratch.reset()
+      self.params.size-hint = 0
+      self.params.dist = init-distance-params(0, 0)
+      self.params.hasher = .0
+      self.ringbuffer = ring-buffer/setup(self.params.&)
+      self.hasher = :none
+      self.commands = .0
+      self.num-literals = 0
+      self.last-insert-len = 0
+      self.input-pos = 0
+      self.last-flush-pos = 0
+      self.last-processed-pos = 0
+      self.dist-cache = [4, 11, 15, 16, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+      self.saved-dist-cache = [4, 11, 15, 16]
+      self.prev-byte = 0
+      self.prev-byte2 = 0
+      self.is-last-block-emitted = false
+    }
+  }
+
+  fn hash-table-size(input-size: size, quality: size): size {
+    let max-table-size = if quality == 0 MAX-TABLE-SIZE else Q1-MAX-TABLE-SIZE
+    let htsize: size = 256
+    while htsize < max-table-size and htsize < input-size {
+      htsize = htsize << 1
+    }
+    if quality == 0 and (htsize & 0xAAAAA) == 0 {
+      htsize = htsize << 1
+    }
+    htsize
+  }
+
+  fn compress-block-fast(self: *encoder, input: ptr, len: size, is-last: bool, out: *list[u8]) {
+    let quality = self.params.quality
+    let table-size = hash-table-size(len, quality)
+    mem/set(dst = self.table.data-ptr(), value = 0, count = table-size * 4)
+
+    self.storage.index-unchecked(0).* = (self.last-bytes & 0xFF).trunc[u8]
+    self.storage.index-unchecked(1).* = (self.last-bytes >> 8).trunc[u8]
+    let bw: bit-writer = .{
+      storage = self.storage.data-ptr(),
+      pos = self.last-bytes-bits,
+    }
+    bw = if quality == 0 {
+      compress-fragment-fast(
+        self.one-pass.&, input, len, is-last,
+        self.table.slice(0, table-size), table-size, bw)
+    } else {
+      compress-fragment-two-pass(
+        self.two-pass, input, len, is-last, self.cmd-buf, self.lit-buf,
+        self.table.slice(0, table-size), table-size, bw)
+    }
+    self.emit-storage(bw, out)
+  }
+
+  fn emit-storage(self: *encoder, bw: bit-writer, out: *list[u8]) {
+    let out-bytes = bw.pos >> 3
+    out.append-span(span/wrap-raw[u8](bw.storage, out-bytes))
+    self.last-bytes = bw.storage.add-bytes(out-bytes).ref[u8].*.widen[u16]
+    self.last-bytes-bits = (bw.pos & 7).trunc[u8]
+  }
+
+  fn update-size-hint(self: *encoder, available-in: size) {
+    if self.params.size-hint == 0 {
+      let delta = self.input-pos - self.last-processed-pos
+      let limit: size = 1 << 30
+      self.params.size-hint = if delta >= limit or available-in >= limit or delta + available-in >= limit limit else delta + available-in
+    }
+  }
+
+  fn copy-input-to-ring-buffer(self: *encoder, input: ptr, input-size: size) {
+    self.ringbuffer.write(self.heap, input, input-size)
+    self.input-pos = self.input-pos + input-size
+    if self.ringbuffer.pos.as-size() <= self.ringbuffer.mask {
+      mem/set(self.ringbuffer.buffer.add-bytes(self.ringbuffer.pos.as-size()), 0, 7)
+    }
+  }
+
+  fn update-last-processed-pos(self: *encoder): bool {
+    let wrapped-last-processed-pos = wrap-position(self.last-processed-pos)
+    let wrapped-input-pos = wrap-position(self.input-pos)
+    self.last-processed-pos = self.input-pos
+    wrapped-input-pos < wrapped-last-processed-pos
+  }
+
+  fn extend-last-command(self: *encoder, bytes: *u32, wrapped-last-processed-pos: *u32) {
+    let last-command = self.commands.as-buffer().index-unchecked(self.commands.len() - 1)
+    let data = self.ringbuffer.buffer
+    let mask = self.ringbuffer.mask
+    let max-backward-distance = self.params.max-backward-limit()
+    let last-copy-len = (last-command.copy-len & 0x1FFFFFF).as-size()
+    let last-processed-pos = self.last-processed-pos - last-copy-len
+    let max-distance = last-processed-pos.min(max-backward-distance)
+    let cmd-dist: size = self.dist-cache.[0].widen[size]
+    let distance-code = last-command.restore-distance-code(self.params.dist.&).as-size()
+    if distance-code < NUM-DISTANCE-SHORT-CODES or distance-code - (NUM-DISTANCE-SHORT-CODES - 1) == cmd-dist {
+      if cmd-dist <= max-distance {
+        while bytes.* != 0
+          and data.add-bytes(wrapped-last-processed-pos.*.as-size() & mask).ref[u8].*
+            == data.add-bytes((wrapped-last-processed-pos.*.as-size() - cmd-dist) & mask).ref[u8].* {
+          last-command.copy-len = last-command.copy-len + 1
+          bytes.* = bytes.* - 1
+          wrapped-last-processed-pos.* = wrapped-last-processed-pos.* + 1
+        }
+      }
+      last-command.cmd-prefix = get-length-code(
+        last-command.insert-len.as-size(),
+        ((last-command.copy-len & 0x1FFFFFF).signed() + (last-command.copy-len >> 25).signed()).unsigned().as-size(),
+        (last-command.dist-prefix & 0x3FF) == 0)
+    }
+  }
+
+  fn write-meta-block-internal(
+    self: *encoder, data: ptr, mask: size, last-flush-pos: size, bytes: size, is-last: bool,
+    literal-context-mode: context-mode, bw: bit-writer,
+  ): bit-writer {
+    let params = self.params.&
+    let commands = self.commands.as-buffer()
+    if bytes == 0 {
+      return bw.write-bits(2, 3).align-to-byte()
+    }
+    if not should-compress(data, mask, last-flush-pos, bytes, self.num-literals, commands.len()) {
+      self.restore-dist-cache()
+      return store-uncompressed-meta-block(is-last, data, last-flush-pos, mask, bytes, bw)
+    }
+    let last-bytes = bw.storage.ref[u8].*.widen[u16] | (bw.storage.add-bytes(1).ref[u8].*.widen[u16] << 8)
+    let last-bytes-bits = bw.pos
+    let out = if params.quality <= MAX-QUALITY-FOR-STATIC-ENTROPY-CODES {
+      store-meta-block-fast(data, last-flush-pos, bytes, mask, is-last, params, commands, bw)
+    } else if params.quality < MIN-QUALITY-FOR-BLOCK-SPLIT {
+      store-meta-block-trivial(data, last-flush-pos, bytes, mask, is-last, params, commands, bw)
+    } else {
+      let block-params = self.params
+      let mb: meta-block-split = .0
+      if params.quality < MIN-QUALITY-FOR-HQ-BLOCK-SPLITTING {
+        let choice = decide-over-literal-context-modeling(
+          data, last-flush-pos, bytes, mask, params.quality, params.size-hint)
+        build-meta-block-greedy(
+          data, last-flush-pos, mask, self.prev-byte, self.prev-byte2, context-lut(literal-context-mode),
+          choice.num-literal-contexts, choice.literal-context-map, commands, mb.&)
+      } else {
+        build-meta-block(
+          data, last-flush-pos, mask, block-params.&, self.prev-byte, self.prev-byte2,
+          commands, literal-context-mode, mb.&)
+      }
+      if params.quality >= MIN-QUALITY-FOR-OPTIMIZE-HISTOGRAMS {
+        optimize-histograms(block-params.dist.alphabet-size-limit, mb.&)
+      }
+      store-meta-block(
+        data, last-flush-pos, bytes, mask, self.prev-byte, self.prev-byte2, is-last, block-params.&,
+        literal-context-mode, commands, mb.&, bw)
+    }
+    if bytes + 4 < (out.pos >> 3) {
+      self.restore-dist-cache()
+      out.storage.ref[u8].* = last-bytes.trunc[u8]
+      out.storage.add-bytes(1).ref[u8].* = (last-bytes >> 8).trunc[u8]
+      let rewound = out | .{ pos = last-bytes-bits }
+      return store-uncompressed-meta-block(is-last, data, last-flush-pos, mask, bytes, rewound)
+    }
+    out
+  }
+
+  fn restore-dist-cache(self: *encoder) {
+    for i in 0.until(4) { self.dist-cache.[i] = self.saved-dist-cache.[i] }
+  }
+
+  fn encode-data(self: *encoder, is-last: bool, force-flush: bool, out: *list[u8]) {
+    let delta = self.input-pos - self.last-processed-pos
+    let bytes = delta.trunc[u32]
+    let wrapped-last-processed-pos = wrap-position(self.last-processed-pos)
+    let data = self.ringbuffer.buffer
+    let mask = self.ringbuffer.mask
+    if delta == 0 {
+      if data is null {
+        if is-last {
+          self.last-bytes = self.last-bytes | (3u16 << self.last-bytes-bits.widen[u32])
+          self.last-bytes-bits = self.last-bytes-bits + 2
+          out.push(self.last-bytes.trunc[u8])
+          if self.last-bytes-bits > 8 out.push((self.last-bytes >> 8).trunc[u8])
+          self.last-bytes = 0
+          self.last-bytes-bits = 0
+        }
+        return
+      }
+      if (not is-last) and (not force-flush) return
+    }
+    if self.is-last-block-emitted crash("brotli encoder: data after the last block")
+    if is-last { self.is-last-block-emitted = true }
+    assert(delta <= self.params.input-block-size())
+
+    let params = self.params.&
+    let h = mem/with-arena(self.heap, {
+      if self.hasher is :some h { h } else {
+        params.choose-hasher()
+        let h = hasher/new(params, wrapped-last-processed-pos == 0 and is-last, bytes.as-size())
+        self.hasher = :some h
+        h
+      }
+    })
+    mem/with-arena(self.heap, h.init-or-stitch-to-previous-block(data, mask, wrapped-last-processed-pos.as-size(), bytes.as-size(), is-last))
+    let literal-context-mode = choose-context-mode(
+      params, data, wrap-position(self.last-flush-pos).as-size(), mask, self.input-pos - self.last-flush-pos)
+    if self.commands.non-empty() and self.last-insert-len == 0 {
+      self.extend-last-command(bytes.&, wrapped-last-processed-pos.&)
+    }
+    mem/with-arena(self.heap, {
+      let dist-cache = self.dist-cache.&.as-buffer()
+      if h.kind is :binary-tree tree {
+        if params.quality == ZOPFLIFICATION-QUALITY {
+          create-zopfli-backward-references(
+            bytes.as-size(), wrapped-last-processed-pos.as-size(), data, mask, params, tree,
+            dist-cache, self.last-insert-len.&, self.commands.&, self.num-literals.&)
+        } else {
+          create-hq-zopfli-backward-references(
+            bytes.as-size(), wrapped-last-processed-pos.as-size(), data, mask, params, tree,
+            dist-cache, self.last-insert-len.&, self.commands.&, self.num-literals.&)
+        }
+      } else {
+        create-backward-references(
+          bytes.as-size(), wrapped-last-processed-pos.as-size(), data, mask, params, h,
+          dist-cache, self.last-insert-len.&, self.commands.&, self.num-literals.&)
+      }
+    })
+    {
+      let max-length = params.max-metablock-size()
+      let max-literals = max-length / 8
+      let max-commands = max-length / 8
+      let processed-bytes = self.input-pos - self.last-flush-pos
+      let next-input-fits-metablock = processed-bytes + params.input-block-size() <= max-length
+      let should-flush = params.quality < MIN-QUALITY-FOR-BLOCK-SPLIT
+        and self.num-literals + self.commands.len() >= MAX-NUM-DELAYED-SYMBOLS
+      if (not is-last) and (not force-flush) and (not should-flush) and next-input-fits-metablock
+        and self.num-literals < max-literals and self.commands.len() < max-commands {
+        if self.update-last-processed-pos() { h.reset() }
+        return
+      }
+    }
+    if self.last-insert-len > 0 {
+      mem/with-arena(self.heap, self.commands.push(command/new-insert(self.last-insert-len)))
+      self.num-literals = self.num-literals + self.last-insert-len
+      self.last-insert-len = 0
+    }
+    if (not is-last) and self.input-pos == self.last-flush-pos return
+
+    let metablock-size = self.input-pos - self.last-flush-pos
+    let bw = mem/with-arena(self.scratch, {
+      let storage = buffer/allocate[u8](2 * metablock-size + 503 + 8)
+      storage.index-unchecked(0).* = self.last-bytes.trunc[u8]
+      storage.index-unchecked(1).* = (self.last-bytes >> 8).trunc[u8]
+      let bw: bit-writer = .{ storage = storage.data-ptr(), pos = self.last-bytes-bits }
+      self.write-meta-block-internal(data, mask, self.last-flush-pos, metablock-size, is-last, literal-context-mode, bw)
+    })
+    self.emit-storage(bw, out)
+    self.scratch.reset()
+    self.last-flush-pos = self.input-pos
+    if self.update-last-processed-pos() { h.reset() }
+    if self.last-flush-pos > 0 {
+      self.prev-byte = data.add-bytes((self.last-flush-pos.trunc[u32] - 1).as-size() & mask).ref[u8].*
+    }
+    if self.last-flush-pos > 1 {
+      self.prev-byte2 = data.add-bytes((self.last-flush-pos.trunc[u32] - 2).as-size() & mask).ref[u8].*
+    }
+    self.commands.clear()
+    self.num-literals = 0
+    for i in 0.until(4) { self.saved-dist-cache.[i] = self.dist-cache.[i] }
+  }
+
+  fn remaining-input-block-size(self: *encoder): size {
+    let delta = self.input-pos - self.last-processed-pos
+    let block-size = self.params.input-block-size()
+    if delta >= block-size 0 else block-size - delta
+  }
+
+  fn process(self: *encoder, input: span[u8], out: *list[u8]) {
+    if self.finished crash("brotli encoder: process after finish")
+    if self.params.quality <= 1 {
+      let block-size = self.params.input-block-size()
+      let pos: size = 0
+      while pos < input.len() {
+        let block = block-size.min(input.len() - pos)
+        self.compress-block-fast(input.data-ptr().add-bytes(pos), block, false, out)
+        pos = pos + block
+      }
+      return
+    }
+    let pos: size = 0
+    loop {
+      let remaining = self.remaining-input-block-size()
+      if remaining != 0 and pos < input.len() {
+        let n = remaining.min(input.len() - pos)
+        self.copy-input-to-ring-buffer(input.data-ptr().add-bytes(pos), n)
+        pos = pos + n
+        continue
+      }
+      if remaining == 0 {
+        self.update-size-hint(input.len() - pos)
+        self.encode-data(false, false, out)
+        continue
+      }
+      break
+    }
+  }
+
+  fn flush(self: *encoder, out: *list[u8]) {
+    if self.finished crash("brotli encoder: flush after finish")
+    if self.params.quality >= 2 {
+      self.update-size-hint(0)
+      self.encode-data(false, true, out)
+    }
+    if self.last-bytes-bits == 0 return
+    let seal = self.last-bytes.widen[u32] | (0x6u32 << self.last-bytes-bits.widen[u32])
+    let seal-bits = self.last-bytes-bits + 6
+    self.last-bytes = 0
+    self.last-bytes-bits = 0
+    let n = (seal-bits + 7) >> 3
+    let i: size = 0
+    while i < n {
+      out.push((seal >> (8 * i.trunc[u32])).trunc[u8])
+      i = i + 1
+    }
+  }
+
+  fn finish(self: *encoder, out: *list[u8]) {
+    if self.finished crash("brotli encoder: finish after finish")
+    if self.params.quality <= 1 {
+      self.compress-block-fast(ptr/null, 0, true, out)
+    } else {
+      self.update-size-hint(0)
+      self.encode-data(true, false, out)
+    }
+    self.finished = true
+  }
+
+  fn compress(self: *encoder, input: span[u8], out: *list[u8]) {
+    if self.finished crash("brotli encoder: compress after finish")
+    if self.params.quality <= 1 {
+      let block-size = self.params.input-block-size()
+      let pos: size = 0
+      loop {
+        let remaining = input.len() - pos
+        let block = block-size.min(remaining)
+        let is-last = remaining == block
+        self.compress-block-fast(input.data-ptr().add-bytes(pos), block, is-last, out)
+        pos = pos + block
+        if is-last break
+      }
+      self.finished = true
+      return
+    }
+    let pos: size = 0
+    loop {
+      let remaining = self.remaining-input-block-size()
+      if remaining != 0 and pos < input.len() {
+        let n = remaining.min(input.len() - pos)
+        self.copy-input-to-ring-buffer(input.data-ptr().add-bytes(pos), n)
+        pos = pos + n
+        continue
+      }
+      let is-last = pos == input.len()
+      self.update-size-hint(input.len() - pos)
+      self.encode-data(is-last, false, out)
+      if is-last break
+    }
+    self.finished = true
+  }
+}

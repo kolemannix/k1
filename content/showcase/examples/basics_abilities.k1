@@ -1,0 +1,25 @@
+ability greet {
+  fn greet(self: *self): string
+}
+
+type cat = { name: string }
+type robot = { id: int }
+
+impl greet for cat {
+  fn greet(self: *cat): string { "meow, I am ${self.name}" }
+}
+
+impl greet for robot {
+  fn greet(self: *robot): string { "unit ${self.id} online" }
+}
+
+fn introduce[t: greet](x: *t) {
+  println(x.greet())
+}
+
+fn main() {
+  let c = cat.{ name = "Ada" }
+  introduce(c.&)
+  let r = robot.{ id = 7 }
+  introduce(r.&)
+}

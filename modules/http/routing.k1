@@ -379,9 +379,9 @@ fn emit-node(cb: *code-builder, entries: span[entry], group: list[size], d: size
   }
 }
 
-fn emit-parse-fn(cb: *code-builder, base: code, entries: span[entry]) {
-  cb.line("fn parse-request(header: http/header): result[$base, http/routing/route-error] { parse(header.method, header.url) }")
-  cb.block("fn parse(method: http/llhttp/method, u: std/url/url): result[$base, http/routing/route-error]", fn[cb, entries]. {
+fn emit-parse-fn(cb: *code-builder, name: code, entries: span[entry]) {
+  cb.line("fn parse-request(header: http/header): result[$name, http/routing/route-error] { parse(header.method, header.url) }")
+  cb.block("fn parse(method: http/llhttp/method, u: std/url/url): result[$name, http/routing/route-error]", fn[cb, entries]. {
     cb.line(`let path = u.path()`)
     cb.line(`if not path.starts-with("/") { return :err :not-found }`)
     cb.line(`let segs = array/zeroed[string, 16]()`)
@@ -421,9 +421,9 @@ fn emit-url-arm(cb: *code-builder, en: entry) {
   }
 }
 
-fn emit-print-impl(cb: *code-builder, base: code, entries: span[entry]) {
-  cb.block("impl print for $base", fn[cb, base, entries]. {
-    cb.block("fn print-to[w: writer](self: $base, w)", fn[cb, entries]. {
+fn emit-print-impl(cb: *code-builder, name: code, entries: span[entry]) {
+  cb.block("impl print for $name", fn[cb, name, entries]. {
+    cb.block("fn print-to[w: writer](self: $name, w)", fn[cb, entries]. {
       cb.block("if self is", fn[cb, entries]. {
         for en in entries {
           let arm: code = if (payload-type(en) is :none) ":${en.name.text} ->" else ":${en.name.text} p ->"
@@ -434,14 +434,14 @@ fn emit-print-impl(cb: *code-builder, base: code, entries: span[entry]) {
   })
 }
 
-macro define(base: code, rows: span[code-token]) {
+macro define(name: code, rows: span[code-token]) {
   let entries = parse-rows(rows).as-span()
   validate(entries)
 
   let cb-storage = code-builder/new()
   let cb = cb-storage.&
 
-  cb.write-code("type $base = either { ")
+  cb.write-code("type $name = either { ")
   for en in entries {
     if it-index > 0 cb.write(", ")
     cb.write-token(en.name)
@@ -453,8 +453,8 @@ macro define(base: code, rows: span[code-token]) {
   }
   cb.write(" }\n")
 
-  cb.block("ns for $base", fn[cb, base, entries]. emit-parse-fn(cb, base, entries))
-  emit-print-impl(cb, base, entries)
+  cb.block("ns for $name", fn[cb, name, entries]. emit-parse-fn(cb, name, entries))
+  emit-print-impl(cb, name, entries)
 
   cb.build()
 }

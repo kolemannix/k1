@@ -3,8 +3,11 @@
 <main>
 <section class="hero"><div class="wrap hero-grid">
   <div>
-    <h1>A language designed around<br>what <em>you can</em> do</h1>
-    <p class="sub">k1 is an expressive language for systems and applications. native performance, unrivaled metaprogramming, best-in-class compile times, type-level programming, algebraic, machine-optimal rich data types with pattern matching, and ad-hoc polymorphism</p>
+    <h1>a <em>powerful</em> programming language</h1>
+    <p class="sub">k1 is designed to optimize for both the programmer and the computer without compromising on the needs of either.</p>
+    <p class="sub">The vision: semantically dense and compressed source code, compiled with haste, into an extremely efficient binary. How?</p>
+    <p class="sub"><a href="/benchmarks/">high performance</a>, best-in-class <a href="/benchmarks/#compile-times">compile times</a>, <a href="/examples/08-types/#a-struct-and-an-enum-from-a-proto-file">unrivaled metaprogramming</a>, <a href="/examples/04-reflection/">one-line reflection</a>, <a href="#one-require-five-bindings">machine-optimal algebraic data types with pattern matching</a>, <a href="/examples/10-systems/#a-simd-scanner-generated-at-compile-time">automatic portable SIMD</a>, <a href="#abilities-not-inheritance">ad-hoc polymorphism</a>, <a href="#http-routes-from-a-macro">extensible syntax</a>, <a href="/examples/08-types/#predicate-bounds">real generics</a>, <a href="/examples/10-systems/#build-steps-are-k1-running-inside-the-compiler">fully programmable builds</a>, powerful control flow (<a href="/examples/08-types/#never-and-zero-sized-types"><code>never</code> type</a>, <code>defer</code>), <a href="/examples/09-model/#arenas">precise and convenient memory management</a>, <a href="/examples/10-systems/#ffi-with-no-bindings-file">C in</a>, <a href="/examples/10-systems/#exporting-a-k1-library-to-c">C out</a>, and <a href="/examples/10-systems/#bare-metal">no runtime</a></p>
+    <p class="sub">I spent years building the language I wished existed, and I hope you like it.</p>
     <div class="btns"><a class="btn" href="/install/">Get k1</a><a class="btn o" href="/manifesto/">Read the manifesto</a></div>
   </div>
   <div class="demo">
@@ -13,8 +16,8 @@
 </div></section>
 
 <section class="blk"><div class="wrap">
-  <h2>Never wait on the compiler</h2>
-  <p class="prose">The same {{ $t.lines | lang.FormatNumber 0 }}-line program through each language's compiler: a typecheck on the left, a debug build on the right. At scale, k1 typechecks {{ $t.stress.lines_per_s | lang.FormatNumber 0 }} lines per second.</p>
+  <h2>k1 typechecks {{ $t.stress.lines_per_s | lang.FormatNumber 0 }} lines per second.</h2>
+  <p>how? data oriented design, first principles approaches, and giving a shit</p>
   <div class="panels">
     {{ range slice (dict "label" "typecheck" "rows" $t.typecheck) (dict "label" "debug build" "rows" $t.build) }}{{ $panel := . }}{{ with .rows }}
     <div class="bars">
@@ -25,54 +28,17 @@
     </div>
     {{ end }}{{ end }}
   </div>
+  <p class="prose"><a href="/benchmarks/#compile-times">the same</a> {{ $t.lines | lang.FormatNumber 0 }}-line program.</p>
 </div></section>
 
-<section class="blk"><div class="wrap">
-  <h2>What k1 can do</h2>
-  <div class="shows">
-    {{ range hugo.Data.carousel }}
-    <article class="show">
-      <div class="say">
-        {{ if .placeholder }}<h3>{{ .title }}</h3><p class="prose">{{ .placeholder }}</p>
-        {{ else }}<h3><a href="/examples/{{ .section }}/">{{ .title }}</a></h3><p class="prose">{{ .blurb }}</p>{{ end }}
-      </div>
-      {{ if .blocks }}<div class="code">
-        {{ range .blocks }}
-        <figure>
-          <figcaption class="label">{{ .label }}</figcaption>
-          {{ $code := .code }}
-          {{ if ne .kind "k1" }}<pre class="{{ if eq .kind "text" }}out{{ end }}"><code>{{ $code }}</code></pre>{{ else }}{{ with index hugo.Data.highlight (sha1 $code) }}<pre><code class="k1">{{ . | safeHTML }}</code></pre>{{ else }}<pre><code>{{ $code }}</code></pre>{{ end }}{{ end }}
-        </figure>
-        {{ end }}
-      </div>{{ end }}
-    </article>
-    {{ end }}
-  </div>
-</div></section>
+{{ partial "carousel.html" (dict "title" "Basics" "cards" hugo.Data.basics) }}
 
-<section class="blk"><div class="wrap">
-  <h2>Early execution</h2>
-  <p class="prose">Mark it <code>#static</code> and the compiler runs the code now, baking the result into the binary. Any k1 code can run at compile time. That is the whole of k1's metaprogramming, and it is how build steps disappear: dbx pulls SQLite into the k1 fold this way, the dependency, the bindings and the schema, so tables become k1 types before the program runs.</p>
-</div></section>
-
-<section class="blk"><div class="wrap">
-  <h2>Eight things k1 believes</h2>
-  <ul class="tenets">
-    <li>Programming is a wonder</li>
-    <li>Give the programmer power and control</li>
-    <li>Compile fast</li>
-    <li>Programs as fast as the computer</li>
-    <li>Metaprogramming is the same as programming</li>
-    <li>Plain old data, zero-initialised</li>
-    <li>No forced abstractions, no forced costs</li>
-    <li>Abilities, not inheritance</li>
-  </ul>
-  <p class="prose"><a href="/manifesto/" style="color:var(--s)">Read the manifesto →</a></p>
-</div></section>
+{{ partial "carousel.html" (dict "title" "Beyond the basics" "cards" hugo.Data.carousel) }}
 
 <section class="close"><div class="wrap">
   <h2>Here’s to your next great work</h2>
   <div class="btns"><a class="btn" href="/install/">Get k1</a><a class="btn o" href="/manifesto/">Read the manifesto</a></div>
 </div></section>
 </main>
+{{ with resources.Get "js/carousel.js" | minify | fingerprint }}<script src="{{ .RelPermalink }}" defer></script>{{ end }}
 {{ end }}

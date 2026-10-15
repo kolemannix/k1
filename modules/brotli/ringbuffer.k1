@@ -1,0 +1,68 @@
+let RB-SLACK: size = 7
+
+type ring-buffer = {
+  size: size,
+  mask: size,
+  tail-size: size,
+  total-size: size,
+  cur-size: size,
+  pos: u32,
+  data: buffer[u8],
+  buffer: ptr,
+}
+
+ns for ring-buffer {
+  fn setup(params: *encoder-params): ring-buffer {
+    let size = 1 << params.compute-rb-bits().trunc[u32]
+    let tail-size = 1 << params.lgblock.trunc[u32]
+    .{ size, mask = size - 1, tail-size, total-size = size + tail-size, cur-size = 0, pos = 0, data = .0, buffer = ptr/null }
+  }
+
+  fn init-buffer[a: allocator](self: *ring-buffer, alloc: a, buflen: size) {
+    let new-data = buffer/allocate-in[u8, _](alloc, 2 + buflen + RB-SLACK)
+    if self.data.non-empty() {
+      mem/copy(new-data.data-ptr(), self.data.data-ptr(), 2 + self.cur-size + RB-SLACK)
+    }
+    self.data = new-data
+    self.cur-size = buflen
+    self.buffer = new-data.data-ptr().add-bytes(2)
+    self.buffer.sub-bytes(2).ref[u8].* = 0
+    self.buffer.sub-bytes(1).ref[u8].* = 0
+    mem/set(self.buffer.add-bytes(self.cur-size), 0, RB-SLACK)
+  }
+
+  fn(inline) at(self: *ring-buffer, i: size): ptr { self.buffer.add-bytes(i) }
+
+  fn write[a: allocator](self: *ring-buffer, alloc: a, bytes: ptr, n: size) {
+    if self.pos == 0 and n < self.tail-size {
+      self.pos = n.trunc[u32]
+      self.init-buffer(alloc, n)
+      mem/copy(self.buffer, bytes, n)
+      return
+    }
+    if self.cur-size < self.total-size {
+      self.init-buffer(alloc, self.total-size)
+      self.at(self.size - 2).ref[u8].* = 0
+      self.at(self.size - 1).ref[u8].* = 0
+      self.at(self.size).ref[u8].* = 241
+    }
+    let masked-pos = self.pos.as-size() & self.mask
+    if masked-pos < self.tail-size {
+      mem/copy(self.at(self.size + masked-pos), bytes, n.min(self.tail-size - masked-pos))
+    }
+    if masked-pos + n <= self.size {
+      mem/copy(self.at(masked-pos), bytes, n)
+    } else {
+      mem/copy(self.at(masked-pos), bytes, n.min(self.total-size - masked-pos))
+      mem/copy(self.buffer, bytes.add-bytes(self.size - masked-pos), n - (self.size - masked-pos))
+    }
+    let not-first-lap = (self.pos & (1u32 << 31)) != 0
+    let rb-pos-mask = (1u32 << 31) - 1
+    self.buffer.sub-bytes(2).ref[u8].* = self.at(self.size - 2).ref[u8].*
+    self.buffer.sub-bytes(1).ref[u8].* = self.at(self.size - 1).ref[u8].*
+    self.pos = (self.pos & rb-pos-mask) + (n.trunc[u32] & rb-pos-mask)
+    if not-first-lap {
+      self.pos = self.pos | (1u32 << 31)
+    }
+  }
+}

@@ -1,8 +1,8 @@
 [
   {
-    "title": "HTTP routes from a macro",
+    "title": "A macro that implements an http routing dsl",
     "section": "05-macros",
-    "blurb": "The app declares its routes once, as a token stream: method, name, path pattern, query struct. The macro reads the rows with a token cursor and emits a sum type with one variant per route, an allocation-free trie matcher that percent-decodes, and a printer back to a URL. Dispatch is a match on that type, and a mistake in a row is reported at the offending token in your file.",
+    "blurb": "The macro is a plain function named `define` that receives a list of tokens, parses into endpoints, validates for uniqueness, generates a sum type representing each possible route, puts them in a trie, and generates a hand-written dispatcher",
     "blocks": [
       {
         "label": "the routes",
@@ -12,10 +12,15 @@
       {
         "label": "the macro",
         "kind": "k1",
-        "code": "macro define(base: code, rows: span[code-token]) {\n  let entries = parse-rows(rows).as-span()\n  validate(entries)\n\n  let cb-storage = code-builder/new()\n  let cb = cb-storage.&\n\n  cb.write-code(\"type $base = either { \")\n  for en in entries {\n    if it-index > 0 cb.write(\", \")\n    cb.write-token(en.name)\n    if payload-type(en) is :some ty {\n      cb.write(\"(\")\n      cb.write-code(ty)\n      cb.write(\")\")\n    }\n  }\n  cb.write(\" }\\n\")\n\n  cb.block(\"ns for $base\", fn[cb, base, entries]. emit-parse-fn(cb, base, entries))\n  emit-print-impl(cb, base, entries)\n\n  cb.build()\n}"
+        "code": "macro define(name: code, rows: span[code-token]) {\n  let entries = parse-rows(rows).as-span()\n  validate(entries)\n\n  let cb-storage = code-builder/new()\n  let cb = cb-storage.&\n\n  cb.write-code(\"type $name = either { \")\n  for en in entries {\n    if it-index > 0 cb.write(\", \")\n    cb.write-token(en.name)\n    if payload-type(en) is :some ty {\n      cb.write(\"(\")\n      cb.write-code(ty)\n      cb.write(\")\")\n    }\n  }\n  cb.write(\" }\\n\")\n\n  cb.block(\"ns for $name\", fn[cb, name, entries]. emit-parse-fn(cb, name, entries))\n  emit-print-impl(cb, name, entries)\n\n  cb.build()\n}"
       },
       {
         "label": "what comes out",
+        "kind": "text",
+        "code": "type route = either {\n  home, events, counter, big-file, starry,\n  visits({ who: ?string }),\n  login,\n  game-events({ id: u64 }),\n  game-poke({ id: u64 }),\n  delete-game({ id: u64 }),\n}"
+      },
+      {
+        "label": "use",
         "kind": "k1",
         "code": "  if route/parse-request(req.header) is {\n    :err e -> error-response(e),\n    :ok r -> if r is {\n      :home -> home-page(),\n      :events -> global-events(deps),\n      :counter -> counter-events(),\n      :game-events .{ id } -> game-events(deps, id),\n      :game-poke .{ id } -> game-poke(deps, id),\n      :big-file -> big-file(),\n      :starry -> response/html(\"todo\"),\n      :visits p -> visits(deps, req, p.who),\n      :login -> login(req),\n      :delete-game p -> response/html(\"todo ${p.id}\"),\n    }\n  }"
       }
@@ -24,7 +29,7 @@
   {
     "title": "JSON from reflection",
     "section": "04-reflection",
-    "blurb": "json/to-string is library code with no compiler support. It reads the type's schema at compile time and generates a writer for exactly these fields, the nested sum and the optional included.",
+    "blurb": "json/to-string reads the type's schema at compile time and generates a writer for exactly these fields.",
     "blocks": [
       {
         "label": "the type",
@@ -46,7 +51,7 @@
   {
     "title": "Abilities, not inheritance",
     "section": "09-model",
-    "blurb": "Abilities are k1's typeclasses: ad-hoc polymorphism without a hierarchy. Implement one for a type you did not write, bound a generic on it, or implement it once for every type that has another. Operators are abilities too, so operator overloading is implementing add for your type. Dispatch is static unless you ask for dyn.",
+    "blurb": "Typeclasses: implement one for a type you did not write, bound a generic on it, or implement it for every type that has another.",
     "blocks": [
       {
         "label": "the ability",
@@ -81,9 +86,31 @@
     ]
   },
   {
+    "title": "One require, five bindings",
+    "section": "09-model",
+    "blurb": "A struct pattern, a literal, a variant carrying a struct, an optional and two guards in one statement, and the names live on.",
+    "blocks": [
+      {
+        "label": "the request",
+        "kind": "k1",
+        "code": "type auth = either {\n  anonymous,\n  bearer(string),\n  basic({ user: string, pass: string }),\n}\ntype request = {\n  method: string,\n  path: string,\n  auth: auth,\n  body: ?string,\n}"
+      },
+      {
+        "label": "the handler",
+        "kind": "k1",
+        "code": "fn known(user: string, pass: string): bool {\n  user == \"ada\" and pass.len() >= 8\n}\n\nfn handle(r: request): string {\n  require r is .{\n      method = \"POST\",\n      path,\n      auth = :basic .{ user, pass },\n      body = :some body,\n    }\n    and path.starts-with(\"/api/\")\n    and known(user, pass)\n    else { return \"401 for ${r.method} ${r.path}\" }\n  \"${user} posted ${body.len()} bytes to $path\"\n}"
+      },
+      {
+        "label": "output",
+        "kind": "text",
+        "code": "ada posted 5 bytes to /api/notes\n401 for GET /api/notes\n401 for POST /api/notes\n401 for POST /login"
+      }
+    ]
+  },
+  {
     "title": "Types from a .proto file",
     "section": "08-types",
-    "blurb": "A .proto file is read at compile time, parsed by ordinary k1 running in the compile-time VM, and turned into a struct and an enum with types/make-struct and types/make-either. The subset is small, one message of scalar and enum fields and one enum, and the result is a real k1 type: exhaustive matching, layout, everything.",
+    "blurb": "A .proto file read and parsed at compile time becomes a real k1 struct and enum.",
     "blocks": [
       {
         "label": "user.proto",
@@ -110,7 +137,7 @@
   {
     "title": "A keyword recognizer, generated",
     "section": "07-generators",
-    "blurb": "gperf as a macro. Hand it the words and it searches for a perfect hash over character positions, then emits a sum type and a recognizer that is a few loads, a mask and a compare.",
+    "blurb": "gperf as a macro: hand it the words and get a perfect hash and a sum type back.",
     "blocks": [
       {
         "label": "the words",
@@ -137,7 +164,7 @@
   {
     "title": "A regex engine that runs at compile time",
     "section": "06-regex",
-    "blurb": "Parser, NFA, DFA and minimization are plain k1 that happens to run in the compiler. A define becomes a matcher whose states are match arms, plus a finder that returns match positions.",
+    "blurb": "Parser, NFA, DFA and minimization are plain k1 that happens to run in the compiler.",
     "blocks": [
       {
         "label": "define",
@@ -159,7 +186,7 @@
   {
     "title": "A palette designed in OKLCH, shipped as bytes",
     "section": "01-static",
-    "blurb": "The colour math runs early. Every swatch is an sRGB triple baked into the binary, and the CSS that names them is a string built at compile time.",
+    "blurb": "The colour math runs early, so every swatch is an sRGB triple baked into the binary.",
     "blocks": [
       {
         "label": "the math",
@@ -186,7 +213,7 @@
   {
     "title": "Painless SIMD",
     "section": "10-systems",
-    "blurb": "A macro generates a lane-wide scanner for a set of delimiters, the scan loop uses it like any function, and the same code runs under #static in the compile-time VM.",
+    "blurb": "A macro generates a lane-wide scanner, and the same code runs under #static in the compile-time VM.",
     "blocks": [
       {
         "label": "generate the scanner",
@@ -211,9 +238,31 @@
     ]
   },
   {
+    "title": "Hot reload a namespace",
+    "section": "10-systems",
+    "blurb": "Mark a namespace ns(reload), watch it, and every edit swaps in under the running process with its globals intact.",
+    "blocks": [
+      {
+        "label": "the namespace",
+        "kind": "k1",
+        "code": "ns(reload) handlers {\n  let(mutable) HITS: i64 = 0\n\n  fn handle-request(path: string): string {\n    HITS = HITS + 1\n    if (path == \"/\") \"200 <h1>hello</h1>\" else \"404 $path\"\n  }\n}"
+      },
+      {
+        "label": "watch and serve",
+        "kind": "k1",
+        "code": "fn main() {\n  handlers/watch().!\n  for path in [\"/\", \"/about\", \"/\"] {\n    println(\"${handlers/handle-request(path)}  hits=${handlers/HITS} v${handlers/loaded-version()}\")\n  }\n}"
+      },
+      {
+        "label": "output",
+        "kind": "text",
+        "code": "reload: sys_reload/handlers swapped to v1 (2 syms)\n200 <h1>hello</h1>  hits=1 v1\n404 /about  hits=2 v1\n200 <h1>hello</h1>  hits=3 v1"
+      }
+    ]
+  },
+  {
     "title": "C at compile time",
     "section": "03-comptime-ffi",
-    "blurb": "Declare a C function and the compile-time VM can call it through libffi, so a build stamp is ordinary code run early.",
+    "blurb": "Declare a C function and the compile-time VM calls it through libffi.",
     "blocks": [
       {
         "label": "declare",

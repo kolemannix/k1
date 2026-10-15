@@ -643,15 +643,57 @@ it:
 true
 ```
 
-`require` takes the same patterns, and its bindings live on:
+`require` takes the same patterns, and its bindings live on past it. One
+`require` can take a request apart: a struct pattern, a literal, a variant
+with a struct payload, an optional, and guards that call functions on what
+was just bound:
 
 ```k1
-  require r is :ok n else { crash("unreachable") }
-  println("n = $n")
+type auth = either {
+  anonymous,
+  bearer(string),
+  basic({ user: string, pass: string }),
+}
+type request = {
+  method: string,
+  path: string,
+  auth: auth,
+  body: ?string,
+}
+```
+
+```k1
+fn known(user: string, pass: string): bool {
+  user == "ada" and pass.len() >= 8
+}
+
+fn handle(r: request): string {
+  require r is .{
+      method = "POST",
+      path,
+      auth = :basic .{ user, pass },
+      body = :some body,
+    }
+    and path.starts-with("/api/")
+    and known(user, pass)
+    else { return "401 for ${r.method} ${r.path}" }
+  "${user} posted ${body.len()} bytes to $path"
+}
+```
+
+```k1
+  let ok: request = .{ method = "POST", path = "/api/notes", auth = :basic .{ user = "ada", pass = "difference engine" }, body = :some "hello" }
+  println(handle(ok))
+  println(handle(.{ method = "GET", path = "/api/notes", auth = :anonymous, body = :none }))
+  println(handle(.{ method = "POST", path = "/api/notes", auth = :basic .{ user = "ada", pass = "short" }, body = :some "hello" }))
+  println(handle(.{ method = "POST", path = "/login", auth = :bearer "t0k3n", body = :some "hello" }))
 ```
 
 ```text
-n = 42
+ada posted 5 bytes to /api/notes
+401 for GET /api/notes
+401 for POST /api/notes
+401 for POST /login
 ```
 
 Matches are exhaustive, and guards don't count as coverage:

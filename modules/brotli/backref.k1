@@ -1,0 +1,117 @@
+let MIN-SCORE: u32 = SCORE-BASE + 100
+let COST-DIFF-LAZY: u32 = 175
+
+fn compute-distance-code(distance: size, max-distance: size, dist-cache: buffer[i32]): size {
+  if distance <= max-distance {
+    let distance-plus-3 = distance + 3
+    let cache0 = dist-cache.index-unchecked(0).*.as-size()
+    let cache1 = dist-cache.index-unchecked(1).*.as-size()
+    let offset0 = (distance-plus-3 - cache0).unsigned()
+    let offset1 = (distance-plus-3 - cache1).unsigned()
+    if distance == cache0 {
+      return 0
+    } else if distance == cache1 {
+      return 1
+    } else if offset0 < 7 {
+      return (0x9750468 >> (offset0 * 4).trunc[u32]) & 0xF
+    } else if offset1 < 7 {
+      return (0xFDB1ACE >> (offset1 * 4).trunc[u32]) & 0xF
+    } else if distance == dist-cache.index-unchecked(2).*.as-size() {
+      return 2
+    } else if distance == dist-cache.index-unchecked(3).*.as-size() {
+      return 3
+    }
+  }
+  distance + NUM-DISTANCE-SHORT-CODES - 1
+}
+
+fn create-backward-references(num-bytes: size, position: size, ringbuffer: ptr, ringbuffer-mask: size, params: *encoder-params, hasher: *hasher, dist-cache: buffer[i32], last-insert-len: *size, commands: *list[command], num-literals: *size) {
+  let max-backward-limit = params.max-backward-limit()
+  let hash-type-length = hasher.hash-type-length()
+  let store-lookahead = hasher.store-lookahead()
+  let insert-length = last-insert-len.*
+  let pos = position
+  let pos-end = position + num-bytes
+  let store-end = if num-bytes >= store-lookahead position + num-bytes - store-lookahead + 1 else position
+  let random-heuristics-window-size = params.literal-spree-length-for-sparse-search()
+  let apply-random-heuristics = position + random-heuristics-window-size
+  let gap: size = 0
+  hasher.prepare-distance-cache(dist-cache)
+  while pos + hash-type-length < pos-end {
+    let max-length = pos-end - pos
+    let max-distance = pos.min(max-backward-limit)
+    let dictionary-start = pos.min(max-backward-limit)
+    let sr: hasher-search-result = .{ len = 0, len-code-delta = 0, distance = 0, score = MIN-SCORE }
+    hasher.find-longest-match(ringbuffer, ringbuffer-mask, dist-cache, pos, max-length, max-distance, dictionary-start + gap, params.dist.max-distance, sr.&)
+    if sr.score > MIN-SCORE {
+      let delayed-backward-references-in-row = 0
+      max-length = max-length - 1
+      loop {
+        let sr2: hasher-search-result = .{
+          len = if params.quality < MIN-QUALITY-FOR-EXTENSIVE-REFERENCE-SEARCH (sr.len - 1).min(max-length) else 0,
+          len-code-delta = 0,
+          distance = 0,
+          score = MIN-SCORE,
+        }
+        max-distance = (pos + 1).min(max-backward-limit)
+        dictionary-start = (pos + 1).min(max-backward-limit)
+        hasher.find-longest-match(ringbuffer, ringbuffer-mask, dist-cache, pos + 1, max-length, max-distance, dictionary-start + gap, params.dist.max-distance, sr2.&)
+        if sr2.score >= sr.score + COST-DIFF-LAZY {
+          pos = pos + 1
+          insert-length = insert-length + 1
+          sr = sr2
+          delayed-backward-references-in-row = delayed-backward-references-in-row + 1
+          if delayed-backward-references-in-row < 4 and pos + hash-type-length < pos-end {
+            max-length = max-length - 1
+            continue
+          }
+        }
+        break
+      }
+      apply-random-heuristics = pos + sr.len * 2 + random-heuristics-window-size
+      dictionary-start = pos.min(max-backward-limit)
+      let distance-code = compute-distance-code(sr.distance, dictionary-start + gap, dist-cache)
+      if sr.distance <= dictionary-start + gap and distance-code > 0 {
+        dist-cache.index-unchecked(3).* = dist-cache.index-unchecked(2).*
+        dist-cache.index-unchecked(2).* = dist-cache.index-unchecked(1).*
+        dist-cache.index-unchecked(1).* = dist-cache.index-unchecked(0).*
+        dist-cache.index-unchecked(0).* = sr.distance.trunc[i32]
+        hasher.prepare-distance-cache(dist-cache)
+      }
+      commands.push(command/new(params.dist.&, insert-length, sr.len, sr.len-code-delta, distance-code))
+      num-literals.* = num-literals.* + insert-length
+      insert-length = 0
+      let range-start = pos + 2
+      let range-end = (pos + sr.len).min(store-end)
+      if sr.distance < (sr.len >> 2) {
+        range-start = range-end.min(range-start.max(pos + sr.len - (sr.distance << 2)))
+      }
+      hasher.store-range(ringbuffer, ringbuffer-mask, range-start, range-end)
+      pos = pos + sr.len
+    } else {
+      insert-length = insert-length + 1
+      pos = pos + 1
+      if pos > apply-random-heuristics {
+        if pos > apply-random-heuristics + random-heuristics-window-size * 4 {
+          let margin = (store-lookahead - 1).max(4)
+          let pos-jump = (pos + 16).min(pos-end - margin)
+          while pos < pos-jump {
+            hasher.store(ringbuffer, ringbuffer-mask, pos)
+            insert-length = insert-length + 4
+            pos = pos + 4
+          }
+        } else {
+          let margin = (store-lookahead - 1).max(2)
+          let pos-jump = (pos + 8).min(pos-end - margin)
+          while pos < pos-jump {
+            hasher.store(ringbuffer, ringbuffer-mask, pos)
+            insert-length = insert-length + 2
+            pos = pos + 2
+          }
+        }
+      }
+    }
+  }
+  insert-length = insert-length + (pos-end - pos)
+  last-insert-len.* = insert-length
+}

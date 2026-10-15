@@ -541,6 +541,8 @@ fn show-result(result: parse-result[int]): string {
 
 Generated helpers such as `.as-ok()`, `.is-some()`, `.enum-name()`,
 `.sum-name()`, `.enum-value()`, and `.tag` show up throughout the tests.
+`types/enum@(t)/members()` is every member of enum `t` as a static span, built
+from the schema the first time it is called.
 
 See `test_src/suite1/enum_basic.k1`, `test_src/suite1/sum_basic.k1`,
 `test_src/suite1/match_references.k1`, and `test_src/suite1/matching_if.k1`.

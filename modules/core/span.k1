@@ -120,6 +120,29 @@ ns for span {
     wrap-buffer(buf)
   }
 
+  fn write-hex[w: writer](self: span[u8], w, upper: bool) {
+    for b in self { b.write-hex(w, upper) }
+  }
+
+  fn to-hex(self: span[u8]): string {
+    let sb = string-builder/with-capacity(self.len() * 2)
+    self.write-hex(sb.&, upper = false)
+    sb.&.take()
+  }
+
+  fn from-hex(s: string): ?span[u8] {
+    if s.len() % 2 != 0 return :none
+    let buf = buffer/allocate[u8](s.len() / 2)
+    let i: size = 0
+    while i < s.len() {
+      require s.[i].to-ascii-hex-digit() is :some hi else return :none
+      require s.[i + 1].to-ascii-hex-digit() is :some lo else return :none
+      buf.[i / 2] = hi * 16 + lo
+      i = i + 2
+    }
+    :some wrap-buffer(buf)
+  }
+
   fn as-char-span(self: span[byte]): span[char] {
     .{ buffer = self.buffer.as-char-buffer() }
   }

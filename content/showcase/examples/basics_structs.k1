@@ -1,0 +1,12 @@
+type point = { x: int, y: int }
+
+ns for point {
+  fn shifted(self, dx: int, dy: int): point {
+    .{ x = self.x + dx, y = self.y + dy }
+  }
+}
+
+fn main() {
+  let p = point.{ x = 1, y = 2 }
+  println(p.shifted(dx = 10, dy = 10))
+}

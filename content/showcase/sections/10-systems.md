@@ -424,10 +424,11 @@ fn module(_b: k1/build-config): k1/module {
 ```
 
 ```k1 path=examples/brotli/build.k1
-    emit-int-table(w.&, cf, "kCmdHistoSeed", "k-cmd-histo-seed", "u32", 0, 24)
-    emit-int-table(w.&, cf2, "kNumExtraBits", "k-num-extra-bits", "u32", 0, 16)
-    emit-int-table(w.&, cf2, "kInsertOffset", "k-insert-offset", "u32", 0, 12)
-    emit-float-table(w.&, fl, "kBrotliLog2Table", "k-log2-table", 6)
+    emit-int-table(w.&, dict-hash, "kStaticDictionaryHashWords", "k-dictionary-hash-words", "u16", 24)
+    emit-int-table(w.&, dict-hash, "kStaticDictionaryHashLengths", "k-dictionary-hash-lengths", "u8", 32)
+    emit-int-table(w.&, dict-lut, "kStaticDictionaryBuckets", "k-dict-lut-buckets", "u16", 24)
+    emit-packed-table(w.&, dict-lut, "kStaticDictionaryWords", "k-dict-lut-words", "u32", 3,
+      [.{ index = 0, shift = 0 }, .{ index = 1, shift = 8 }, .{ index = 2, shift = 16 }], 16)
 
     files/write-entire-file("tables.k1", w.build()).!
 ```
@@ -556,17 +557,39 @@ any runtime.
 
 ## Hot reload
 
-Mark a namespace `ns(reload)`:
+Mark a namespace `ns(reload)` and its functions and globals can be swapped
+under a live process:
 
-```k1 path=examples/reload_test/app/scene.k1
-ns(reload) scene {
-  let(mutable) speed: i64 = 10
-  fn greeting(): string { "one" }
-  fn helper(x: i64): i64 { x + 1 }
+```k1
+ns(reload) handlers {
+  let(mutable) HITS: i64 = 0
+
+  fn handle-request(path: string): string {
+    HITS = HITS + 1
+    if (path == "/") "200 <h1>hello</h1>" else "404 $path"
+  }
 }
 ```
 
-and it gets `load()`, `watch()` and `loaded-version()`:
+```k1
+fn main() {
+  handlers/watch().!
+  for path in ["/", "/about", "/"] {
+    println("${handlers/handle-request(path)}  hits=${handlers/HITS} v${handlers/loaded-version()}")
+  }
+}
+```
+
+```text
+reload: sys_reload/handlers swapped to v1 (2 syms)
+200 <h1>hello</h1>  hits=1 v1
+404 /about  hits=2 v1
+200 <h1>hello</h1>  hits=3 v1
+```
+
+Edit `handle-request`, run `k1 build`, and the next request runs the new
+body, with `HITS` intact. The namespace also gets `load()` for a reload on
+demand:
 
 ```k1 path=examples/reload_test/app/app.k1
     } else if line == "load" {

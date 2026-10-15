@@ -1,0 +1,711 @@
+let SYMBOL-BITS: u32 = 9
+let SYMBOL-MASK: u32 = 511
+
+fn block-length-prefix-code(len: u32): size {
+  let code: size = if len >= 177 { if len >= 753 20 else 14 } else { if len >= 41 7 else 0 }
+  while code < NUM-BLOCK-LEN-SYMBOLS - 1 and len >= k-block-length-offset.[code + 1] {
+    code = code + 1
+  }
+  code
+}
+
+fn get-block-length-prefix-code(len: u32): { code: size, n-extra: u32, extra: u32 } {
+  let code = block-length-prefix-code(len)
+  .{ code, n-extra = k-block-length-nbits.[code], extra = len - k-block-length-offset.[code] }
+}
+
+type block-type-code-calculator = { last-type: size, second-last-type: size }
+
+fn new-block-type-code-calculator(): block-type-code-calculator {
+  .{ last-type = 1, second-last-type = 0 }
+}
+
+fn next-block-type-code(calc: *block-type-code-calculator, kind: u8): size {
+  let t = kind.as-size()
+  let type-code: size = if t == calc.last-type + 1 { 1 } else if t == calc.second-last-type { 0 } else { t + 2 }
+  calc.second-last-type = calc.last-type
+  calc.last-type = t
+  type-code
+}
+
+fn encode-mlen(length: size): { bits: u64, num-bits: size, nibbles-bits: u64 } {
+  let lg: size = if length == 1 { 1 } else { log2-floor-nonzero((length - 1).unsigned()) + 1 }
+  let mnibbles = (if lg < 16 { 16 } else { lg + 3 }) / 4
+  .{ bits = (length - 1).unsigned(), num-bits = mnibbles * 4, nibbles-bits = (mnibbles - 4).unsigned() }
+}
+
+fn store-command-extra(cmd: *command, bw: bit-writer): bit-writer {
+  let copylen-code = cmd.copy-length-code()
+  let inscode = get-insert-length-code(cmd.insert-len.as-size()).as-size()
+  let copycode = get-copy-length-code(copylen-code.as-size()).as-size()
+  let insnumextra = k-ins-extra.[inscode]
+  let insextraval = (cmd.insert-len - k-ins-base.[inscode]).widen[u64]
+  let copyextraval = (copylen-code - k-copy-base.[copycode]).widen[u64]
+  let bits = (copyextraval << insnumextra) | insextraval
+  bw.write-bits(insnumextra.as-size() + k-copy-extra.[copycode].as-size(), bits)
+}
+
+type block-split-code = {
+  type-code-calculator: block-type-code-calculator,
+  type-depths: array[u8, 258],
+  type-bits: array[u16, 258],
+  length-depths: array[u8, 26],
+  length-bits: array[u16, 26],
+}
+
+fn store-var-len-uint8(n: size, bw: bit-writer): bit-writer {
+  if n == 0 {
+    bw.write-bits(1, 0)
+  } else {
+    let nbits = log2-floor-nonzero(n.unsigned())
+    bw.write-bits(1, 1).write-bits(3, nbits.unsigned()).write-bits(nbits, (n - (1 << nbits.trunc[u32])).unsigned())
+  }
+}
+
+fn store-compressed-meta-block-header(is-final-block: bool, length: size, bw: bit-writer): bit-writer {
+  let bw = bw.write-bits(1, if is-final-block 1 else 0)
+  if is-final-block { bw = bw.write-bits(1, 0) }
+  let m = encode-mlen(length)
+  bw = bw.write-bits(2, m.nibbles-bits).write-bits(m.num-bits, m.bits)
+  if not is-final-block { bw = bw.write-bits(1, 0) }
+  bw
+}
+
+fn store-uncompressed-meta-block-header(length: size, bw: bit-writer): bit-writer {
+  let m = encode-mlen(length)
+  bw.write-bits(1, 0).write-bits(2, m.nibbles-bits).write-bits(m.num-bits, m.bits).write-bits(1, 1)
+}
+
+fn store-simple-huffman-tree(
+  depths: buffer[u8], symbols: array[size, 4], num-symbols: size, max-bits: size, bw: bit-writer,
+): bit-writer {
+  let bw = bw.write-bits(2, 1).write-bits(2, (num-symbols - 1).unsigned())
+  let s = symbols
+  let i: size = 0
+  while i < num-symbols {
+    let j = i + 1
+    while j < num-symbols {
+      if depths.index-unchecked(s.[j]).* < depths.index-unchecked(s.[i]).* {
+        let tmp = s.[j]
+        s.[j] = s.[i]
+        s.[i] = tmp
+      }
+      j = j + 1
+    }
+    i = i + 1
+  }
+  i = 0
+  while i < num-symbols {
+    bw = bw.write-bits(max-bits, s.[i].unsigned())
+    i = i + 1
+  }
+  if num-symbols == 4 {
+    bw = bw.write-bits(1, if depths.index-unchecked(s.[0]).* == 1 1 else 0)
+  }
+  bw
+}
+
+fn build-and-store-huffman-tree(
+  histogram: buffer[u32], histogram-length: size, alphabet-size: size,
+  tree: buffer[huffman-tree], depth: buffer[u8], bits: buffer[u16], bw: bit-writer,
+): bit-writer {
+  let count: size = 0
+  let s4: array[size, 4] = [0, 0, 0, 0]
+  let i: size = 0
+  while i < histogram-length {
+    if histogram.index-unchecked(i).* != 0 {
+      if count < 4 {
+        s4.[count] = i
+      } else if count > 4 {
+        break
+      }
+      count = count + 1
+    }
+    i = i + 1
+  }
+  let max-bits: size = 0
+  let max-bits-counter = alphabet-size - 1
+  while max-bits-counter != 0 {
+    max-bits-counter = max-bits-counter >> 1
+    max-bits = max-bits + 1
+  }
+  if count <= 1 {
+    let bw = bw.write-bits(4, 1).write-bits(max-bits, s4.[0].unsigned())
+    depth.index-unchecked(s4.[0]).* = 0
+    bits.index-unchecked(s4.[0]).* = 0
+    return bw
+  }
+  mem/set(depth.data-ptr(), 0, histogram-length)
+  create-huffman-tree(histogram, histogram-length, 15, tree, depth)
+  convert-bit-depths-to-symbols(depth, histogram-length, bits)
+  if count <= 4 {
+    store-simple-huffman-tree(depth, s4, count, max-bits, bw)
+  } else {
+    store-huffman-tree(depth, histogram-length, tree, bw)
+  }
+}
+
+fn index-of-u8(v: buffer[u8], v-size: size, value: u8): size {
+  let i: size = 0
+  while i < v-size {
+    if v.index-unchecked(i).* == value return i
+    i = i + 1
+  }
+  i
+}
+
+fn move-to-front(v: buffer[u8], index: size) {
+  let value = v.index-unchecked(index).*
+  let i = index
+  while i != 0 {
+    v.index-unchecked(i).* = v.index-unchecked(i - 1).*
+    i = i - 1
+  }
+  v.index-unchecked(0).* = value
+}
+
+fn move-to-front-transform(v-in: buffer[u32], v-size: size, v-out: buffer[u32]) {
+  if v-size == 0 return
+  let mtf-arr = array/zeroed[u8, 256]()
+  let mtf = mtf-arr.&.as-buffer()
+  let max-value = v-in.index-unchecked(0).*
+  let i: size = 1
+  while i < v-size {
+    let x = v-in.index-unchecked(i).*
+    if x > max-value { max-value = x }
+    i = i + 1
+  }
+  i = 0
+  while i <= max-value.as-size() {
+    mtf.index-unchecked(i).* = i.trunc[u8]
+    i = i + 1
+  }
+  let mtf-size = max-value.as-size() + 1
+  i = 0
+  while i < v-size {
+    let index = index-of-u8(mtf, mtf-size, v-in.index-unchecked(i).*.trunc[u8])
+    v-out.index-unchecked(i).* = index.trunc[u32]
+    move-to-front(mtf, index)
+    i = i + 1
+  }
+}
+
+fn run-length-code-zeros(
+  in-size: size, v: buffer[u32], max-run-length-prefix: u32,
+): { out-size: size, max-run-length-prefix: u32 } {
+  let max-reps: u32 = 0
+  let i: size = 0
+  while i < in-size {
+    let reps: u32 = 0
+    while i < in-size and v.index-unchecked(i).* != 0 { i = i + 1 }
+    while i < in-size and v.index-unchecked(i).* == 0 {
+      reps = reps + 1
+      i = i + 1
+    }
+    max-reps = reps.max(max-reps)
+  }
+  let max-prefix: u32 = if max-reps > 0 { log2-floor-nonzero(max-reps.widen[u64]).trunc[u32] } else { 0 }
+  max-prefix = max-prefix.min(max-run-length-prefix)
+  let out-size: size = 0
+  i = 0
+  while i < in-size {
+    if v.index-unchecked(i).* != 0 {
+      v.index-unchecked(out-size).* = v.index-unchecked(i).* + max-prefix
+      i = i + 1
+      out-size = out-size + 1
+    } else {
+      let reps: u32 = 1
+      let k = i + 1
+      while k < in-size and v.index-unchecked(k).* == 0 {
+        reps = reps + 1
+        k = k + 1
+      }
+      i = i + reps.as-size()
+      while reps != 0 {
+        if reps < (2u32 << max-prefix) {
+          let run-length-prefix = log2-floor-nonzero(reps.widen[u64]).trunc[u32]
+          let extra-bits = reps - (1u32 << run-length-prefix)
+          v.index-unchecked(out-size).* = run-length-prefix + (extra-bits << SYMBOL-BITS)
+          out-size = out-size + 1
+          break
+        } else {
+          let extra-bits = (1u32 << max-prefix) - 1
+          v.index-unchecked(out-size).* = max-prefix + (extra-bits << SYMBOL-BITS)
+          reps = reps - ((2u32 << max-prefix) - 1)
+          out-size = out-size + 1
+        }
+      }
+    }
+  }
+  .{ out-size, max-run-length-prefix = max-prefix }
+}
+
+fn encode-context-map(
+  context-map: buffer[u32], num-clusters: size, tree: buffer[huffman-tree], bw: bit-writer,
+): bit-writer {
+  let bw = store-var-len-uint8(num-clusters - 1, bw)
+  if num-clusters == 1 return bw
+  let context-map-size = context-map.len()
+  let rle-symbols = buffer/allocate[u32](context-map-size)
+  move-to-front-transform(context-map, context-map-size, rle-symbols)
+  let rle = run-length-code-zeros(context-map-size, rle-symbols, 6)
+  let num-rle-symbols = rle.out-size
+  let max-run-length-prefix = rle.max-run-length-prefix
+  let histogram-arr = array/zeroed[u32, 272]()
+  let depths-arr = array/zeroed[u8, 272]()
+  let bits-arr = array/zeroed[u16, 272]()
+  let histogram = histogram-arr.&.as-buffer()
+  let depths = depths-arr.&.as-buffer()
+  let bits = bits-arr.&.as-buffer()
+  let i: size = 0
+  while i < num-rle-symbols {
+    let sym = (rle-symbols.index-unchecked(i).* & SYMBOL-MASK).as-size()
+    histogram.index-unchecked(sym).* = histogram.index-unchecked(sym).* + 1
+    i = i + 1
+  }
+  let use-rle = max-run-length-prefix > 0
+  bw = bw.write-bits(1, if use-rle 1 else 0)
+  if use-rle { bw = bw.write-bits(4, (max-run-length-prefix - 1).widen[u64]) }
+  let alphabet-size = num-clusters + max-run-length-prefix.as-size()
+  bw = build-and-store-huffman-tree(histogram, alphabet-size, alphabet-size, tree, depths, bits, bw)
+  i = 0
+  while i < num-rle-symbols {
+    let rle-symbol = rle-symbols.index-unchecked(i).* & SYMBOL-MASK
+    let extra-bits-val = rle-symbols.index-unchecked(i).* >> SYMBOL-BITS
+    let sym = rle-symbol.as-size()
+    bw = bw.write-bits(depths.index-unchecked(sym).*.as-size(), bits.index-unchecked(sym).*.widen[u64])
+    if rle-symbol > 0 and rle-symbol <= max-run-length-prefix {
+      bw = bw.write-bits(sym, extra-bits-val.widen[u64])
+    }
+    i = i + 1
+  }
+  bw.write-bits(1, 1)
+}
+
+fn store-block-switch(
+  code: *block-split-code, block-len: u32, block-type: u8, is-first-block: bool, bw: bit-writer,
+): bit-writer {
+  let typecode = next-block-type-code(code.type-code-calculator.&, block-type)
+  let bw = bw
+  if not is-first-block {
+    bw = bw.write-bits(code.type-depths.[typecode].as-size(), code.type-bits.[typecode].widen[u64])
+  }
+  let len = get-block-length-prefix-code(block-len)
+  bw.write-bits(code.length-depths.[len.code].as-size(), code.length-bits.[len.code].widen[u64])
+    .write-bits(len.n-extra.as-size(), len.extra.widen[u64])
+}
+
+fn build-and-store-block-split-code(
+  types: buffer[u8], lengths: buffer[u32], num-blocks: size, num-types: size,
+  tree: buffer[huffman-tree], code: *block-split-code, bw: bit-writer,
+): bit-writer {
+  let type-histo-arr = array/zeroed[u32, 258]()
+  let length-histo-arr = array/zeroed[u32, 26]()
+  let type-histo = type-histo-arr.&.as-buffer()
+  let length-histo = length-histo-arr.&.as-buffer()
+  let calc = new-block-type-code-calculator()
+  let i: size = 0
+  while i < num-blocks {
+    let type-code = next-block-type-code(calc.&, types.index-unchecked(i).*)
+    if i != 0 { type-histo.[type-code] = type-histo.[type-code] + 1 }
+    let length-code = block-length-prefix-code(lengths.index-unchecked(i).*)
+    length-histo.[length-code] = length-histo.[length-code] + 1
+    i = i + 1
+  }
+  let bw = store-var-len-uint8(num-types - 1, bw)
+  if num-types > 1 {
+    bw = build-and-store-huffman-tree(
+      type-histo, num-types + 2, num-types + 2, tree,
+      code.type-depths.&.as-buffer(), code.type-bits.&.as-buffer(), bw)
+    bw = build-and-store-huffman-tree(
+      length-histo, NUM-BLOCK-LEN-SYMBOLS, NUM-BLOCK-LEN-SYMBOLS, tree,
+      code.length-depths.&.as-buffer(), code.length-bits.&.as-buffer(), bw)
+    bw = store-block-switch(code, lengths.index-unchecked(0).*, types.index-unchecked(0).*, true, bw)
+  }
+  bw
+}
+
+fn store-trivial-context-map(num-types: size, context-bits: size, tree: buffer[huffman-tree], bw: bit-writer): bit-writer {
+  let bw = store-var-len-uint8(num-types - 1, bw)
+  if num-types > 1 {
+    let repeat-code = context-bits - 1
+    let repeat-bits = (1 << repeat-code.trunc[u32]) - 1
+    let alphabet-size = num-types + repeat-code
+    let histogram-arr = array/zeroed[u32, 272]()
+    let depths-arr = array/zeroed[u8, 272]()
+    let bits-arr = array/zeroed[u16, 272]()
+    let histogram = histogram-arr.&.as-buffer()
+    let depths = depths-arr.&.as-buffer()
+    let bits = bits-arr.&.as-buffer()
+    bw = bw.write-bits(1, 1).write-bits(4, (repeat-code - 1).unsigned())
+    histogram.index-unchecked(repeat-code).* = num-types.trunc[u32]
+    histogram.index-unchecked(0).* = 1
+    let i = context-bits
+    while i < alphabet-size {
+      histogram.index-unchecked(i).* = 1
+      i = i + 1
+    }
+    bw = build-and-store-huffman-tree(histogram, alphabet-size, alphabet-size, tree, depths, bits, bw)
+    i = 0
+    while i < num-types {
+      let code: size = if i == 0 { 0 } else { i + context-bits - 1 }
+      bw = bw.write-bits(depths.index-unchecked(code).*.as-size(), bits.index-unchecked(code).*.widen[u64])
+      bw = bw.write-bits(depths.index-unchecked(repeat-code).*.as-size(), bits.index-unchecked(repeat-code).*.widen[u64])
+      bw = bw.write-bits(repeat-code, repeat-bits.unsigned())
+      i = i + 1
+    }
+    bw = bw.write-bits(1, 1)
+  }
+  bw
+}
+
+type block-encoder = {
+  histogram-length: size,
+  num-block-types: size,
+  block-types: buffer[u8],
+  block-lengths: buffer[u32],
+  num-blocks: size,
+  block-split-code: block-split-code,
+  block-ix: size,
+  block-len: size,
+  entropy-ix: size,
+  depths: buffer[u8],
+  bits: buffer[u16],
+}
+
+ns for block-encoder {
+  fn new(histogram-length: size, split: *block-split): block-encoder {
+    let e: block-encoder = .0
+    e.histogram-length = histogram-length
+    e.num-block-types = split.num-types
+    e.block-types = split.types.as-buffer()
+    e.block-lengths = split.lengths.as-buffer()
+    e.num-blocks = split.num-blocks
+    e.block-split-code.type-code-calculator = new-block-type-code-calculator()
+    e.block-len = if split.num-blocks == 0 { 0 } else { split.lengths.[0].as-size() }
+    e
+  }
+
+  fn build-and-store-block-switch-entropy-codes(self: *block-encoder, tree: buffer[huffman-tree], bw: bit-writer): bit-writer {
+    build-and-store-block-split-code(
+      self.block-types, self.block-lengths, self.num-blocks, self.num-block-types,
+      tree, self.block-split-code.&, bw)
+  }
+
+  fn store-symbol(self: *block-encoder, symbol: size, bw: bit-writer): bit-writer {
+    let bw = bw
+    if self.block-len == 0 {
+      self.block-ix = self.block-ix + 1
+      let block-len = self.block-lengths.index-unchecked(self.block-ix).*
+      let block-type = self.block-types.index-unchecked(self.block-ix).*
+      self.block-len = block-len.as-size()
+      self.entropy-ix = block-type.as-size() * self.histogram-length
+      bw = store-block-switch(self.block-split-code.&, block-len, block-type, false, bw)
+    }
+    self.block-len = self.block-len - 1
+    let ix = self.entropy-ix + symbol
+    bw.write-bits(self.depths.index-unchecked(ix).*.as-size(), self.bits.index-unchecked(ix).*.widen[u64])
+  }
+
+  fn store-symbol-with-context(
+    self: *block-encoder, symbol: size, ctx: size, context-map: buffer[u32], context-bits: size, bw: bit-writer,
+  ): bit-writer {
+    let bw = bw
+    if self.block-len == 0 {
+      self.block-ix = self.block-ix + 1
+      let block-len = self.block-lengths.index-unchecked(self.block-ix).*
+      let block-type = self.block-types.index-unchecked(self.block-ix).*
+      self.block-len = block-len.as-size()
+      self.entropy-ix = block-type.as-size() << context-bits.trunc[u32]
+      bw = store-block-switch(self.block-split-code.&, block-len, block-type, false, bw)
+    }
+    self.block-len = self.block-len - 1
+    let histo-ix = context-map.index-unchecked(self.entropy-ix + ctx).*.as-size()
+    let ix = histo-ix * self.histogram-length + symbol
+    bw.write-bits(self.depths.index-unchecked(ix).*.as-size(), self.bits.index-unchecked(ix).*.widen[u64])
+  }
+
+  fn build-and-store-entropy-codes[n: static size](
+    self: *block-encoder, histograms: buffer[histogram[n]], alphabet-size: size,
+    tree: buffer[huffman-tree], bw: bit-writer,
+  ): bit-writer {
+    let table-size = histograms.len() * self.histogram-length
+    self.depths = buffer/allocate[u8](table-size)
+    self.bits = buffer/allocate[u16](table-size)
+    let bw = bw
+    for i in 0.until(histograms.len()) {
+      let ix = i * self.histogram-length
+      bw = build-and-store-huffman-tree(
+        histograms.index-unchecked(i).data-buffer(), self.histogram-length, alphabet-size,
+        tree, self.depths.drop(ix), self.bits.drop(ix), bw)
+    }
+    bw
+  }
+}
+
+fn jump-to-byte-boundary(bw: bit-writer): bit-writer {
+  let bw = bw.align-to-byte()
+  bw.storage.add-bytes(bw.pos >> 3).ref[u8].* = 0
+  bw
+}
+
+fn store-meta-block(
+  input: ptr, start-pos: size, length: size, mask: size, prev-byte: u8, prev-byte2: u8, is-last: bool,
+  params: *encoder-params, literal-context-mode: context-mode, commands: buffer[command],
+  mb: *meta-block-split, bw: bit-writer,
+): bit-writer {
+  let pos = start-pos
+  let p1 = prev-byte
+  let p2 = prev-byte2
+  let num-distance-symbols = params.dist.alphabet-size-max
+  let num-effective-distance-symbols = params.dist.alphabet-size-limit
+  let literal-context-lut = context-lut(literal-context-mode)
+  let dist = params.dist.&
+
+  let bw = store-compressed-meta-block-header(is-last, length, bw)
+
+  let tree = buffer/allocate[huffman-tree](MAX-HUFFMAN-TREE-SIZE)
+  let literal-enc = block-encoder/new(NUM-LITERAL-SYMBOLS, mb.literal-split.&)
+  let command-enc = block-encoder/new(NUM_COMMAND_SYMBOLS, mb.command-split.&)
+  let distance-enc = block-encoder/new(num-effective-distance-symbols, mb.distance-split.&)
+
+  bw = literal-enc.build-and-store-block-switch-entropy-codes(tree, bw)
+  bw = command-enc.build-and-store-block-switch-entropy-codes(tree, bw)
+  bw = distance-enc.build-and-store-block-switch-entropy-codes(tree, bw)
+
+  bw = bw.write-bits(2, dist.distance-postfix-bits.unsigned())
+  bw = bw.write-bits(4, (dist.num-direct-distance-codes >> dist.distance-postfix-bits.trunc[u32]).unsigned())
+  for 0.until(mb.literal-split.num-types) {
+    bw = bw.write-bits(2, literal-context-mode.value.widen[u64])
+  }
+
+  let literal-context-map = mb.literal-context-map.as-buffer()
+  let distance-context-map = mb.distance-context-map.as-buffer()
+  if literal-context-map.is-empty() {
+    bw = store-trivial-context-map(mb.literal-histograms.len(), LITERAL-CONTEXT-BITS, tree, bw)
+  } else {
+    bw = encode-context-map(literal-context-map, mb.literal-histograms.len(), tree, bw)
+  }
+  if distance-context-map.is-empty() {
+    bw = store-trivial-context-map(mb.distance-histograms.len(), DISTANCE-CONTEXT-BITS, tree, bw)
+  } else {
+    bw = encode-context-map(distance-context-map, mb.distance-histograms.len(), tree, bw)
+  }
+
+  bw = literal-enc.build-and-store-entropy-codes(mb.literal-histograms.as-buffer(), NUM-LITERAL-SYMBOLS, tree, bw)
+  bw = command-enc.build-and-store-entropy-codes(mb.command-histograms.as-buffer(), NUM_COMMAND_SYMBOLS, tree, bw)
+  bw = distance-enc.build-and-store-entropy-codes(mb.distance-histograms.as-buffer(), num-distance-symbols, tree, bw)
+
+  for i in 0.until(commands.len()) {
+    let cmd = commands.index-unchecked(i)
+    bw = command-enc.store-symbol(cmd.cmd-prefix.as-size(), bw)
+    bw = store-command-extra(cmd, bw)
+    if literal-context-map.is-empty() {
+      for 0.until(cmd.insert-len.as-size()) {
+        bw = literal-enc.store-symbol(input.add-bytes(pos & mask).ref[u8].*.as-size(), bw)
+        pos = pos + 1
+      }
+    } else {
+      for 0.until(cmd.insert-len.as-size()) {
+        let ctx = context-of(p1, p2, literal-context-lut).as-size()
+        let literal = input.add-bytes(pos & mask).ref[u8].*
+        bw = literal-enc.store-symbol-with-context(literal.as-size(), ctx, literal-context-map, LITERAL-CONTEXT-BITS, bw)
+        p2 = p1
+        p1 = literal
+        pos = pos + 1
+      }
+    }
+    let copy-len = cmd.copy-length().as-size()
+    pos = pos + copy-len
+    if copy-len != 0 {
+      p2 = input.add-bytes((pos - 2) & mask).ref[u8].*
+      p1 = input.add-bytes((pos - 1) & mask).ref[u8].*
+      if cmd.cmd-prefix >= 128 {
+        let dist-code = (cmd.dist-prefix & 0x3FF).as-size()
+        let distnumextra = (cmd.dist-prefix >> 10).as-size()
+        let distextra = cmd.dist-extra.widen[u64]
+        if distance-context-map.is-empty() {
+          bw = distance-enc.store-symbol(dist-code, bw)
+        } else {
+          let ctx = cmd.distance-context().as-size()
+          bw = distance-enc.store-symbol-with-context(dist-code, ctx, distance-context-map, DISTANCE-CONTEXT-BITS, bw)
+        }
+        bw = bw.write-bits(distnumextra, distextra)
+      }
+    }
+  }
+  if is-last { bw = jump-to-byte-boundary(bw) }
+  bw
+}
+
+fn build-histograms(
+  input: ptr, start-pos: size, mask: size, commands: buffer[command],
+  lit-histo: *histogram-literal, cmd-histo: *histogram-command, dist-histo: *histogram-distance,
+) {
+  let pos = start-pos
+  for i in 0.until(commands.len()) {
+    let cmd = commands.index-unchecked(i)
+    cmd-histo.add(cmd.cmd-prefix.as-size())
+    for 0.until(cmd.insert-len.as-size()) {
+      lit-histo.add(input.add-bytes(pos & mask).ref[u8].*.as-size())
+      pos = pos + 1
+    }
+    let copy-len = cmd.copy-length().as-size()
+    pos = pos + copy-len
+    if copy-len != 0 and cmd.cmd-prefix >= 128 {
+      dist-histo.add((cmd.dist-prefix & 0x3FF).as-size())
+    }
+  }
+}
+
+fn store-data-with-huffman-codes(
+  input: ptr, start-pos: size, mask: size, commands: buffer[command],
+  lit-depth: buffer[u8], lit-bits: buffer[u16],
+  cmd-depth: buffer[u8], cmd-bits: buffer[u16],
+  dist-depth: buffer[u8], dist-bits: buffer[u16],
+  bw: bit-writer,
+): bit-writer {
+  let bw = bw
+  let pos = start-pos
+  for i in 0.until(commands.len()) {
+    let cmd = commands.index-unchecked(i)
+    let cmd-code = cmd.cmd-prefix.as-size()
+    bw = bw.write-bits(cmd-depth.index-unchecked(cmd-code).*.as-size(), cmd-bits.index-unchecked(cmd-code).*.widen[u64])
+    bw = store-command-extra(cmd, bw)
+    for 0.until(cmd.insert-len.as-size()) {
+      let literal = input.add-bytes(pos & mask).ref[u8].*.as-size()
+      bw = bw.write-bits(lit-depth.index-unchecked(literal).*.as-size(), lit-bits.index-unchecked(literal).*.widen[u64])
+      pos = pos + 1
+    }
+    let copy-len = cmd.copy-length().as-size()
+    pos = pos + copy-len
+    if copy-len != 0 and cmd.cmd-prefix >= 128 {
+      let dist-code = (cmd.dist-prefix & 0x3FF).as-size()
+      let distnumextra = (cmd.dist-prefix >> 10).as-size()
+      bw = bw.write-bits(dist-depth.index-unchecked(dist-code).*.as-size(), dist-bits.index-unchecked(dist-code).*.widen[u64])
+      bw = bw.write-bits(distnumextra, cmd.dist-extra.widen[u64])
+    }
+  }
+  bw
+}
+
+fn store-meta-block-trivial(
+  input: ptr, start-pos: size, length: size, mask: size, is-last: bool,
+  params: *encoder-params, commands: buffer[command], bw: bit-writer,
+): bit-writer {
+  let num-distance-symbols = params.dist.alphabet-size-max
+  let bw = store-compressed-meta-block-header(is-last, length, bw)
+
+  let lit-histo: histogram-literal = .0
+  let cmd-histo: histogram-command = .0
+  let dist-histo: histogram-distance = .0
+  lit-histo.clear()
+  cmd-histo.clear()
+  dist-histo.clear()
+  build-histograms(input, start-pos, mask, commands, lit-histo.&, cmd-histo.&, dist-histo.&)
+
+  bw = bw.write-bits(13, 0)
+
+  let tree = buffer/allocate[huffman-tree](MAX-HUFFMAN-TREE-SIZE)
+  let lit-depth = buffer/allocate[u8](NUM-LITERAL-SYMBOLS)
+  let lit-bits = buffer/allocate[u16](NUM-LITERAL-SYMBOLS)
+  let cmd-depth = buffer/allocate[u8](NUM_COMMAND_SYMBOLS)
+  let cmd-bits = buffer/allocate[u16](NUM_COMMAND_SYMBOLS)
+  let dist-depth = buffer/allocate[u8](MAX-SIMPLE-DISTANCE-ALPHABET-SIZE)
+  let dist-bits = buffer/allocate[u16](MAX-SIMPLE-DISTANCE-ALPHABET-SIZE)
+  bw = build-and-store-huffman-tree(lit-histo.data-buffer(), NUM-LITERAL-SYMBOLS, NUM-LITERAL-SYMBOLS, tree, lit-depth, lit-bits, bw)
+  bw = build-and-store-huffman-tree(cmd-histo.data-buffer(), NUM_COMMAND_SYMBOLS, NUM_COMMAND_SYMBOLS, tree, cmd-depth, cmd-bits, bw)
+  bw = build-and-store-huffman-tree(dist-histo.data-buffer(), MAX-SIMPLE-DISTANCE-ALPHABET-SIZE, num-distance-symbols, tree, dist-depth, dist-bits, bw)
+  bw = store-data-with-huffman-codes(
+    input, start-pos, mask, commands,
+    lit-depth, lit-bits, cmd-depth, cmd-bits, dist-depth, dist-bits, bw)
+  if is-last { bw = jump-to-byte-boundary(bw) }
+  bw
+}
+
+fn store-static-command-huffman-tree(bw: bit-writer): bit-writer {
+  bw.write-bits(56, 0x0092624416307003).write-bits(3, 0)
+}
+
+fn store-static-distance-huffman-tree(bw: bit-writer): bit-writer {
+  bw.write-bits(28, 0x0369DC03)
+}
+
+fn store-meta-block-fast(
+  input: ptr, start-pos: size, length: size, mask: size, is-last: bool,
+  params: *encoder-params, commands: buffer[command], bw: bit-writer,
+): bit-writer {
+  let num-distance-symbols = params.dist.alphabet-size-max
+  let distance-alphabet-bits = log2-floor-nonzero((num-distance-symbols - 1).unsigned()) + 1
+  let bw = store-compressed-meta-block-header(is-last, length, bw)
+  bw = bw.write-bits(13, 0)
+
+  let tree = buffer/allocate[huffman-tree](MAX-HUFFMAN-TREE-SIZE)
+  let lit-depth = buffer/allocate[u8](NUM-LITERAL-SYMBOLS)
+  let lit-bits = buffer/allocate[u16](NUM-LITERAL-SYMBOLS)
+  if commands.len() <= 128 {
+    let histogram-arr = array/zeroed[u32, 256]()
+    let histogram = histogram-arr.&.as-buffer()
+    let pos = start-pos
+    let num-literals: size = 0
+    for i in 0.until(commands.len()) {
+      let cmd = commands.index-unchecked(i)
+      for 0.until(cmd.insert-len.as-size()) {
+        let b = input.add-bytes(pos & mask).ref[u8].*.as-size()
+        histogram.index-unchecked(b).* = histogram.index-unchecked(b).* + 1
+        pos = pos + 1
+      }
+      num-literals = num-literals + cmd.insert-len.as-size()
+      pos = pos + cmd.copy-length().as-size()
+    }
+    bw = build-and-store-huffman-tree-fast(tree, histogram, num-literals, 8, lit-depth, lit-bits, bw)
+    bw = store-static-command-huffman-tree(bw)
+    bw = store-static-distance-huffman-tree(bw)
+    bw = store-data-with-huffman-codes(
+      input, start-pos, mask, commands, lit-depth, lit-bits,
+      k-static-command-code-depth.&.as-buffer(), k-static-command-code-bits.&.as-buffer(),
+      k-static-distance-code-depth.&.as-buffer(), k-static-distance-code-bits.&.as-buffer(), bw)
+  } else {
+    let lit-histo: histogram-literal = .0
+    let cmd-histo: histogram-command = .0
+    let dist-histo: histogram-distance = .0
+    lit-histo.clear()
+    cmd-histo.clear()
+    dist-histo.clear()
+    build-histograms(input, start-pos, mask, commands, lit-histo.&, cmd-histo.&, dist-histo.&)
+    let cmd-depth = buffer/allocate[u8](NUM_COMMAND_SYMBOLS)
+    let cmd-bits = buffer/allocate[u16](NUM_COMMAND_SYMBOLS)
+    let dist-depth = buffer/allocate[u8](MAX-SIMPLE-DISTANCE-ALPHABET-SIZE)
+    let dist-bits = buffer/allocate[u16](MAX-SIMPLE-DISTANCE-ALPHABET-SIZE)
+    bw = build-and-store-huffman-tree-fast(tree, lit-histo.data-buffer(), lit-histo.total-count, 8, lit-depth, lit-bits, bw)
+    bw = build-and-store-huffman-tree-fast(tree, cmd-histo.data-buffer(), cmd-histo.total-count, 10, cmd-depth, cmd-bits, bw)
+    bw = build-and-store-huffman-tree-fast(tree, dist-histo.data-buffer(), dist-histo.total-count, distance-alphabet-bits, dist-depth, dist-bits, bw)
+    bw = store-data-with-huffman-codes(
+      input, start-pos, mask, commands,
+      lit-depth, lit-bits, cmd-depth, cmd-bits, dist-depth, dist-bits, bw)
+  }
+  if is-last { bw = jump-to-byte-boundary(bw) }
+  bw
+}
+
+fn store-uncompressed-meta-block(
+  is-final-block: bool, input: ptr, position: size, mask: size, len: size, bw: bit-writer,
+): bit-writer {
+  let masked-pos = position & mask
+  let remaining = len
+  let bw = jump-to-byte-boundary(store-uncompressed-meta-block-header(len, bw))
+  if masked-pos + remaining > mask + 1 {
+    let len1 = mask + 1 - masked-pos
+    mem/copy(bw.storage.add-bytes(bw.pos >> 3), input.add-bytes(masked-pos), len1)
+    bw.pos = bw.pos + (len1 << 3)
+    remaining = remaining - len1
+    masked-pos = 0
+  }
+  mem/copy(bw.storage.add-bytes(bw.pos >> 3), input.add-bytes(masked-pos), remaining)
+  bw.pos = bw.pos + (remaining << 3)
+  bw.storage.add-bytes(bw.pos >> 3).ref[u8].* = 0
+  if is-final-block {
+    bw = jump-to-byte-boundary(bw.write-bits(1, 1).write-bits(1, 1))
+  }
+  bw
+}

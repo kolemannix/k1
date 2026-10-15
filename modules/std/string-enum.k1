@@ -1,0 +1,77 @@
+ns string-enum
+
+type member = { name: code-token, value: string }
+
+macro define(decl: span[code-token]) {
+  if decl.is-empty() crash("string-enum/define: expected `name = either { variant, variant = \"value\", ... }`")
+  let rd = token-cursor/new(decl)
+  let name-tok = rd.expect-ident()
+  let name = name-tok.text
+  rd.expect("=")
+  let kw = rd.expect-ident()
+  if kw.text != "either" kw.fail("Expected `either`, got `${kw.text}`")
+  let tag-type: ?code-token = if rd.eat-if-text-eq("(") {
+    let t = rd.expect-ident()
+    rd.expect(")")
+    :some t
+  } else :none
+  rd.expect("{")
+  let members: list[member] = list/empty()
+  while not rd.eat-if-text-eq("}") {
+    let v = rd.expect-ident()
+    for members { if it.name.text == v.text v.fail("Duplicate variant `${v.text}`") }
+    if rd.peek-text-eq("(") rd.peek().fail("A string enum variant has no payload")
+    let value = if rd.eat-if-text-eq("=") {
+      let s = rd.eat()
+      if not (s.kind is :string) s.fail("Expected a string literal, got `${s.text}`")
+      let sb = string-builder/new()
+      for s.parts {
+        if it is {
+          :text t -> sb.write(t.value),
+          :hole _ -> s.fail("A string enum value cannot interpolate"),
+        }
+      }
+      sb.build()
+    } else v.text
+    for m in members { if m.value == value v.fail("Variant `${v.text}` repeats the value `$value` of `${m.name.text}`") }
+    members.push(.{ name = v, value })
+    if not rd.peek-text-eq("}") rd.expect(",")
+  }
+  if not rd.is-at-end() rd.peek().fail("Unexpected `${rd.peek().text}` after the string-enum declaration")
+  if members.is-empty() rd.toks.[rd.i - 1].fail("A string enum needs at least one variant")
+
+  let values = string-builder/new()
+  for members {
+    if it-index > 0 values.write(", ")
+    values.write(it.value)
+  }
+  let values-lit = meta/str-lit(values.build())
+
+  let cb-storage = code-builder/new()
+  let cb = cb-storage.&
+  cb.write("type ")
+  cb.write-token(name-tok)
+  cb.write(" = either")
+  if tag-type is :some t {
+    cb.write("(")
+    cb.write-token(t)
+    cb.write(")")
+  }
+  cb.write(" {\n")
+  for members {
+    cb.write-token(it.name)
+    cb.write(",\n")
+  }
+  cb.write("}\nns for $name {\n")
+  cb.write("fn to-value(self): string { if self is {\n")
+  for members { cb.write(":${it.name.text} -> ${meta/str-lit(it.value)},\n") }
+  cb.write("} }\nfn from-value(s: string): ?$name {\n")
+  for members {
+    cb.write("${if it-index == 0 "if" else "else if"} s == ${meta/str-lit(it.value)} :some :${it.name.text}\n")
+  }
+  cb.write("else :none\n}\nlet members: span[$name] = types/enum@($name)/members()\n}\n")
+  cb.write("impl print for $name { fn print-to[w: writer](self, w) { w.write(self.to-value()) } }\n")
+  cb.write("impl from-string[e = string] for $name {\n")
+  cb.write("fn from-string(s: string): result[$name, string] { if $name/from-value(s) is :some v :ok v else :err \"`\$s` is not a $name; expected one of \${$values-lit}\" }\n}\n")
+  cb.build()
+}

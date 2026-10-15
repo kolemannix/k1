@@ -54,12 +54,12 @@ refchess-wasm:
   make -C modules/core/libs wasm
   just run-frag --optimize --target wasm64-wasi test examples/refchess
 
-refchess-wasm:
+refchess-wasm-web:
   make -C modules/core/libs wasm
   just run-frag -D web build examples/refchess
   cp examples/refchess/.k1-out/refchess examples/refchess/refchess.wasm
 
-refchess-web: refchess-wasm
+refchess-web: refchess-wasm-web
   python3 -m http.server -d examples 8088
 
 refchess-uci:
@@ -80,7 +80,7 @@ watch dir:
   watchexec -w {{dir}} -e k1 -- target/debug/k1 build {{dir}}
 
 # The language site: hugo dev server, and the full build (wasm demo, benchmark data, showcase check, hugo)
-site: refchess-wasm
+site: refchess-wasm-web
   hugo server --source site --port 1313 --buildDrafts
 
 site-build:

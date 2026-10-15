@@ -1,0 +1,21 @@
+fn find-even(xs: list[int]): ?int {
+  for x in xs { if x % 2 == 0 { return :some x } }
+  :none
+}
+
+fn doubled-even(xs: list[int]): ?int {
+  let x = find-even(xs).try
+  :some(x * 2)
+}
+
+fn parse-age(s: string): result[int, string] {
+  require int/from-string(s) is :ok n else { return :err "not a number: $s" }
+  if n < 0 :err "negative" else :ok n
+}
+
+fn main() {
+  println(doubled-even([1, 3, 4]))
+  println(doubled-even([1, 3]) ? -1)
+  println(parse-age("21"))
+  println(parse-age("abc"))
+}

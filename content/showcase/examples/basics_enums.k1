@@ -1,0 +1,20 @@
+type level = either { low = 1, mid = 5, high = 10 }
+
+type shape = either {
+  circle(f64),
+  rect({ w: f64, h: f64 }),
+  dot,
+}
+
+fn area(s: shape): f64 {
+  if s is {
+    :circle r -> 3.14159 * r * r,
+    :rect .{ w, h } -> w * h,
+    :dot -> 0.0,
+  }
+}
+
+fn main() {
+  println("${level:high} is ${level:high.value}")
+  println(area(:rect .{ w = 2.0, h = 3.0 }))
+}

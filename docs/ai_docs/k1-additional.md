@@ -442,6 +442,15 @@ members with identical tags and payloads, `rounded()` bit-test predicates,
 `view-rounded(self: *shape): ?*shape-rounded` when the subtype's layout equals
 the parent's.
 
+`std/string-enum` is the smaller sibling for enums with a canonical string
+value: `$std/string-enum/define(\{ status = either(u8) { new = "New",
+in-progress = "In Progress", pending } })` (a bare variant's value is its name,
+the tag type is optional) emits the enum, `to-value(self): string`,
+`status/from-value(s): ?status`, `status/members: span[status]`, a `print` impl
+that writes the value, and `impl from-string[e = string]` whose error names the
+accepted values. Duplicate names or values and interpolated literals are
+expansion errors.
+
 See `test_src/suite1/test_macro.k1` and `test_src/stdlib/flag_sum_test.k1`.
 
 See `test_src/suite1/test_meta.k1` and `test_src/suite1/meta_defns.k1`.

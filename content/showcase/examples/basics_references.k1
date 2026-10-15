@@ -1,0 +1,14 @@
+fn bump(n: *int) {
+  n.* = n.* + 1
+}
+
+fn main() {
+  let x = 1
+  bump(x.&)
+  bump(x.&)
+  println(x)
+
+  let boxed: *int = mem/new(41)
+  bump(boxed)
+  println(boxed.*)
+}

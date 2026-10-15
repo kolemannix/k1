@@ -94,6 +94,15 @@ ns types {
     fn(intern) enum-name(self): string
     fn(intern) enum-from-value(value: v): ?self
     fn(intern) enum-from-value-unchecked(value: v): self
+
+    fn members(): span[self] {
+      #static {
+        require types/schema[self] is :enum .{ values } else crash("members: not an enum")
+        let out: list[self] = list/with-capacity(values.len())
+        for m in values { out.push(enum-from-value-unchecked(m.value.to[v]())) }
+        out.as-span()
+      }
+    }
   }
 
   ability sum[impl v] {

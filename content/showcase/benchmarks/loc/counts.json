@@ -1,5 +1,5 @@
 {
-  "counted": "2026-10-12",
+  "counted": "2026-10-13",
   "tool": "scc version 3.5.0",
   "rows": [
     {
@@ -19,10 +19,16 @@
           "blank": 5
         }
       },
-      "version": "k1 0.1.0, working tree at acba9226",
+      "version": "k1 0.1.0, working tree at 18199ac5",
       "command": "scc --no-cocomo --exclude-dir vmtw --not-match '_test\\.rs$' src",
       "cwd": "k1 repo",
-      "code": 72189
+      "full_code": 72204,
+      "code": 72204,
+      "frontend_langs": {
+        "Rust": 72140,
+        "C++": 64
+      },
+      "backend_excluded": "nothing: k1 has no machine back end of its own"
     },
     {
       "name": "Zig",
@@ -50,7 +56,14 @@
       "version": "ziglang/zig tag 0.17.0 (7647ada)",
       "command": "scc --no-cocomo --not-match 'test\\.zig$' src",
       "cwd": "ziglang/zig checkout",
-      "code": 497217
+      "full_code": 497217,
+      "code": 115358,
+      "frontend_langs": {
+        "Zig": 113707,
+        "C++": 1561,
+        "C Header": 90
+      },
+      "backend_excluded": "src/codegen/* except codegen/llvm (the x86_64, aarch64, arm, loongarch, mips, riscv64, s390x, sparc64, spirv, wasm and C back ends), src/link, register_manager.zig, zig_llvm-ar.cpp"
     },
     {
       "name": "Go",
@@ -72,7 +85,13 @@
       "version": "go version go1.27.1 darwin/arm64",
       "command": "scc --no-cocomo --exclude-dir testdata --not-match '_test\\.go$' src/cmd/compile",
       "cwd": "$(go env GOROOT)",
-      "code": 547231
+      "full_code": 547231,
+      "code": 286711,
+      "frontend_langs": {
+        "Go": 279103,
+        "SSA rewrite rules (.rules)": 7608
+      },
+      "backend_excluded": "internal/{amd64,arm,arm64,loong64,mips,mips64,ppc64,riscv64,s390x,wasm,x86}, and the per-architecture ssa/rewrite*.go and ssa/_gen/*.{go,rules}; the generic SSA passes and rules stay"
     },
     {
       "name": "Rust",
@@ -100,7 +119,14 @@
       "version": "rust-lang/rust tag 1.98.1 (48a229c)",
       "command": "scc --no-cocomo --exclude-dir tests --not-match 'tests?\\.rs$' compiler",
       "cwd": "rust-lang/rust checkout",
-      "code": 630574
+      "full_code": 630574,
+      "code": 585849,
+      "frontend_langs": {
+        "Rust": 582717,
+        "C++": 3085,
+        "C Header": 47
+      },
+      "backend_excluded": "rustc_codegen_cranelift and rustc_codegen_gcc; rustc_codegen_ssa and rustc_codegen_llvm stay, as k1's and clang's LLVM glue do"
     },
     {
       "name": "clang",
@@ -122,35 +148,13 @@
       "version": "llvmorg-23.1.2 (85ac56026)",
       "command": "scc --no-cocomo clang/lib clang/include",
       "cwd": "llvm-project",
-      "code": 1276119
-    },
-    {
-      "name": "LLVM",
-      "what": "llvm/lib + llvm/include (the optimizer and code generator under k1, clang and rustc)",
-      "langs": {
-        "C Header": {
-          "files": 3153,
-          "code": 427871,
-          "comment": 188488,
-          "blank": 111669
-        },
-        "C++": {
-          "files": 3098,
-          "code": 1957516,
-          "comment": 384524,
-          "blank": 313227
-        },
-        "C": {
-          "files": 16,
-          "code": 9655,
-          "comment": 1214,
-          "blank": 819
-        }
+      "full_code": 1276119,
+      "code": 1276119,
+      "frontend_langs": {
+        "C++": 935508,
+        "C Header": 340611
       },
-      "version": "llvmorg-23.1.2 (85ac56026)",
-      "command": "scc --no-cocomo llvm/lib llvm/include",
-      "cwd": "llvm-project",
-      "code": 2395042
+      "backend_excluded": "nothing: clang has no machine back end of its own"
     }
   ]
 }

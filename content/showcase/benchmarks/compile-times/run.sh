@@ -46,15 +46,18 @@ done
 cat "$RES/versions.txt"
 
 hf() {
-  local name=$1; shift
-  echo "== $name: ${*: -1}"
-  hyperfine -N --warmup 1 --min-runs "$RUNS" --export-json "$RES/$name.json" "$@" | grep -E 'Time|Range'
+  local name=$1 prep=$2 c=$3
+  echo "== $name: $c"
+  hyperfine -N --warmup 3 --min-runs "$RUNS" --export-json "$RES/$name.json" --prepare "$prep" "$c" | grep -E 'Time|Range'
+  $prep
+  /usr/bin/time -l $c > /dev/null 2> "$RES/$name.rss.txt" || true
+  grep 'maximum resident' "$RES/$name.rss.txt"
 }
 
 k1mode() {
   case $1 in
     check) echo "check" ;;
-    debug) echo "build" ;;
+    debug) echo "--debug build" ;;
     opt) echo "--optimize build" ;;
   esac
 }
@@ -62,7 +65,7 @@ k1mode() {
 cflag() {
   case $1 in
     check) echo "-fsyntax-only" ;;
-    debug) echo "-O0 -c" ;;
+    debug) echo "-g -O0 -c" ;;
     opt) echo "-O2 -c" ;;
   esac
 }
@@ -89,13 +92,13 @@ cmd() {
     k1-*) echo "k1 --no-cache $(k1mode "$2") $src" ;;
     k1warm-*) echo "k1 $(k1mode "$2") $src" ;;
     c-check) echo "clang -fsyntax-only $src" ;;
-    c-debug) echo "clang -O0 -o ${out}_c $src" ;;
+    c-debug) echo "clang -g -O0 -o ${out}_c $src" ;;
     c-opt) echo "clang -O2 -o ${out}_c $src" ;;
     cpp-check|cpp-hand-vec-check) echo "clang++ -std=c++20 -fsyntax-only $src" ;;
-    cpp-debug|cpp-hand-vec-debug) echo "clang++ -std=c++20 -O0 -o ${out}_$1 $src" ;;
+    cpp-debug|cpp-hand-vec-debug) echo "clang++ -std=c++20 -g -O0 -o ${out}_$1 $src" ;;
     cpp-opt|cpp-hand-vec-opt) echo "clang++ -std=c++20 -O2 -o ${out}_$1 $src" ;;
     rs-check) echo "rustc --edition 2021 --emit=metadata -o ${out}.rmeta $src" ;;
-    rs-debug) echo "rustc --edition 2021 -C opt-level=0 -o ${out}_rs $src" ;;
+    rs-debug) echo "rustc --edition 2021 -g -C opt-level=0 -o ${out}_rs $src" ;;
     rs-opt) echo "rustc --edition 2021 -C opt-level=3 -o ${out}_rs $src" ;;
     go-debug) echo "go build -o ${out}_go $src" ;;
     gocold-debug) echo "env GOCACHE=$GOCACHE_COLD go build -o ${out}_go $src" ;;
@@ -106,9 +109,9 @@ cmd() {
     zigcold-debug) echo "$ZIG --global-cache-dir $ZIG_GLOBAL_COLD -O Debug -femit-bin=${out}_zig $src" ;;
     zigcold-opt) echo "$ZIG --global-cache-dir $ZIG_GLOBAL_COLD -O ReleaseFast -femit-bin=${out}_zig $src" ;;
     ml-check) echo "ocamlopt -stop-after typing $src" ;;
-    ml-debug) echo "ocamlopt -o ${out}_ml $src" ;;
+    ml-debug) echo "ocamlopt -g -o ${out}_ml $src" ;;
     ml-opt) echo "ocamlopt -O3 -o ${out}_ml $src" ;;
-    java-debug) echo "javac -d ${out}_java $src" ;;
+    java-debug) echo "javac -g -d ${out}_java $src" ;;
     kt-debug) echo "env JAVA_OPTS=-XX:MaxRAMPercentage=25 kotlinc -d ${out}_kt $src" ;;
     cs-opt) echo "dotnet build -c Release ${out}.csproj" ;;
     *) return 1 ;;
@@ -138,7 +141,7 @@ bench() {
     for mode in $MODES; do
       local c
       c=$(cmd "$lang" "$mode" "$src" "$out") || continue
-      hf "$lang-$mode-$tag" --prepare "$(prep "$lang" "$src" "$out")" "$c"
+      hf "$lang-$mode-$tag" "$(prep "$lang" "$src" "$out")" "$c"
     done
   done
 }
@@ -157,13 +160,13 @@ for mode in $MODES; do
 done
 
 for mode in $MODES; do
-  hf "brotli-k1-$mode" --prepare true "k1 --no-cache $(k1mode "$mode") $REPO/examples/brotli"
+  hf "brotli-k1-$mode" true "k1 --no-cache $(k1mode "$mode") $REPO/examples/brotli"
 done
 (
   cd gen/brotli-c
   for mode in $MODES; do
-    hf "brotli-c-$mode" --prepare true "clang $(cflag "$mode") $BRO_INC $BRO_SRC"
-    hf "brotli-cpar-$mode" --prepare true "$HERE/par-cc.sh $(cflag "$mode")"
+    hf "brotli-c-$mode" true "clang $(cflag "$mode") $BRO_INC $BRO_SRC"
+    hf "brotli-cpar-$mode" true "$HERE/par-cc.sh $(cflag "$mode")"
   done
 )
 last=${MODES##* }

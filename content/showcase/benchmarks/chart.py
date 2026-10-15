@@ -105,19 +105,21 @@ def comptime():
 
 
 def brotli():
-    runs = {}
+    cells = {}
     for log in glob.glob(str(HERE / "brotli" / "gen" / "bench-*.log")):
         for line in open(log):
-            m = re.match(r"(\S+) (q\d): k1 ([\d.]+) MB/s .*?, c ([\d.]+) MB/s", line)
+            m = re.match(r"(\S+) (q\d+) w18: k1 ([\d.]+) MB/s .*?, c ([\d.]+) MB/s", line)
             if m:
-                runs.setdefault((m[1], m[2]), []).append((float(m[3]), float(m[4])))
-    rows = []
-    for corpus, q in [("typer.rs", "q0"), ("typer.rs", "q1"), ("cycle-251", "q0"), ("zeros-1mb", "q0"),
-                      ("random-300k", "q0"), ("random-300k", "q1")]:
-        pairs = runs[(corpus, q)]
-        rows.append(row(f"{corpus} {q}", sum(k / c for k, c in pairs) / len(pairs), "k1"))
-    return [panel("brotli encoder, k1 port vs C", rows, fmt=lambda v: f"{v:.2f}×",
-                  sub="k1 throughput as a fraction of C, per corpus; higher is better", ref=(1.0, "C"), sort=False)]
+                cells.setdefault((m[1], m[2]), []).append((float(m[3]), float(m[4])))
+    panels = []
+    for q, title in [("q1", "quality 1"), ("q5", "quality 5"), ("q9", "quality 9"), ("q11", "quality 11")]:
+        pairs = cells[("typer.rs", q)]
+        k1 = sum(k for k, _ in pairs) / len(pairs)
+        c = sum(c for _, c in pairs) / len(pairs)
+        panels.append(panel(f"brotli encoder, {title}", [row("k1 port", k1, "k1"), row("C", c)],
+                            fmt=lambda v: f"{v:,.1f} MB/s" if v >= 10 else f"{v:.1f} MB/s",
+                            sub="751 KB of Rust source; higher is better" if q == "q1" else None, higher=True, sort=False))
+    return panels
 
 
 def json_suite():
@@ -138,9 +140,9 @@ def json_suite():
 
 def loc():
     data = json.load(open(HERE / "loc" / "counts.json"))
-    rows = [row(r["name"], float(r["code"]), "muted" if r["name"] == "LLVM" else None) for r in data["rows"]]
-    return [panel("lines of code in the compiler", rows, fmt=lambda v: f"{int(v):,}",
-                  sub="code lines by scc, no tests, no standard library; LLVM is the back end under k1, clang and rustc")]
+    rows = [row(r["name"], float(r["code"])) for r in data["rows"]]
+    return [panel("compiler front end, lines of code", rows, fmt=lambda v: f"{int(v):,}",
+                  sub="code lines by scc; no tests, no standard library, no machine back ends or linkers")]
 
 
 JOURNEY = [
@@ -225,7 +227,7 @@ def draw_panel(x, y, pw, p):
 
 
 def draw(path, panels):
-    cols = min(3, len(panels))
+    cols = 4 if len(panels) == 4 else min(3, len(panels))
     pw = (W - PAD * (cols + 1)) // cols
     body, y = [], PAD
     for i in range(0, len(panels), cols):

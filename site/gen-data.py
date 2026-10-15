@@ -65,33 +65,54 @@ for suite in ["runtime", "brotli", "compile-times", "comptime", "json", "int-str
     provenance[suite] = entry
 (out / "benchmarks.json").write_text(json.dumps(provenance, indent=2) + "\n")
 
+BASICS = [
+  ("Hello, world", "fn main() {\n  println(\"Hello, world\")"),
+  ("Functions and variables", "fn greeting(name: string, height-cm: int, formal: bool): string {"),
+  ("Lists and spans", "fn main() {\n  let words = \"the quick brown fox\".split-by-char(' ')"),
+  ("Structs", "type point = { x: int, y: int }"),
+  ("Either types", "type level = either { low = 1, mid = 5, high = 10 }"),
+  ("Optionals and results", "fn find-even(xs: list[int]): ?int {"),
+  ("Control flow", "fn first-square-over(limit: int): int {"),
+  ("Lambdas", "fn apply-twice(x: int, f: some fn int -> int): int {"),
+  ("Abilities", "ability greet {", ["program", "~llvm ir", "output"]),
+  ("Generics", "type pair[a, b] = { a, b }"),
+  ("References", "fn bump(n: *int) {"),
+  ("Early execution", "fn fib(n: int): int {", ["program", "~llvm ir", "output"]),
+]
+
 CARDS = [
-  {"section": "05-macros", "title": "HTTP routes from a macro",
-   "blurb": "The app declares its routes once, as a token stream: method, name, path pattern, query struct. The macro reads the rows with a token cursor and emits a sum type with one variant per route, an allocation-free trie matcher that percent-decodes, and a printer back to a URL. Dispatch is a match on that type, and a mistake in a row is reported at the offending token in your file.",
-   "blocks": [("the routes", "$http/routing/define(route, \\{"), ("the macro", "macro define(base: code, rows: span[code-token]) {"), ("what comes out", "  if route/parse-request(req.header) is {", "path=examples/httpapp/app.k1", "  }")]},
+  {"section": "05-macros", "title": "A macro that implements an http routing dsl",
+   "blurb": "The macro is a plain function named `define` that receives a list of tokens, parses into endpoints, validates for uniqueness, generates a sum type representing each possible route, puts them in a trie, and generates a hand-written dispatcher",
+   "blocks": [("the routes", "$http/routing/define(route, \\{"), ("the macro", "macro define(name: code, rows: span[code-token]) {"), ("what comes out", "type route = either {", "text"), ("use", "  if route/parse-request(req.header) is {", "path=examples/httpapp/app.k1", "  }")]},
   {"section": "04-reflection", "title": "JSON from reflection",
-   "blurb": "json/to-string is library code with no compiler support. It reads the type's schema at compile time and generates a writer for exactly these fields, the nested sum and the optional included.",
+   "blurb": "json/to-string reads the type's schema at compile time and generates a writer for exactly these fields.",
    "blocks": [("the type", "type contact = either { email(string), phone(string), unreachable }"), ("to JSON", "  println(json/to-string(ada))"), ("output", "{\"name\":\"Ada Lovelace\"", "text")]},
   {"section": "09-model", "title": "Abilities, not inheritance",
-   "blurb": "Abilities are k1's typeclasses: ad-hoc polymorphism without a hierarchy. Implement one for a type you did not write, bound a generic on it, or implement it once for every type that has another. Operators are abilities too, so operator overloading is implementing add for your type. Dispatch is static unless you ask for dyn.",
+   "blurb": "Typeclasses: implement one for a type you did not write, bound a generic on it, or implement it for every type that has another.",
    "blocks": [("the ability", "ability shape {"), ("an impl", "impl shape for circle {"), ("a bound and a blanket impl", "fn bigger[t: shape](a: *t, b: *t): *t {"), ("operators are abilities", "type vec2 = { x: f64, y: f64 }"), ("use", "  let v = vec2.{ x = 1.0, y = 2.0 } + vec2.{ x = 0.5, y = 0.25 }"), ("output", "1.5 2.25", "text")]},
+  {"section": "09-model", "title": "One require, five bindings",
+   "blurb": "A struct pattern, a literal, a variant carrying a struct, an optional and two guards in one statement, and the names live on.",
+   "blocks": [("the request", "type auth = either {"), ("the handler", "fn known(user: string, pass: string): bool {"), ("output", "ada posted 5 bytes to /api/notes", "text")]},
   {"section": "08-types", "title": "Types from a .proto file",
-   "blurb": "A .proto file is read at compile time, parsed by ordinary k1 running in the compile-time VM, and turned into a struct and an enum with types/make-struct and types/make-either. The subset is small, one message of scalar and enum fields and one enum, and the result is a real k1 type: exhaustive matching, layout, everything.",
+   "blurb": "A .proto file read and parsed at compile time becomes a real k1 struct and enum.",
    "blocks": [("user.proto", "syntax = \"proto3\";", "proto"), ("derive", "type(alias) status = #type proto/enum(\"user.proto\", \"Status\")"), ("use", "  let u: user = .{ id = 7, name = \"ada\", score = 99.5, status = :suspe"), ("output", "7 ada 99.5 suspended=1 on hold", "text")]},
   {"section": "07-generators", "title": "A keyword recognizer, generated",
-   "blurb": "gperf as a macro. Hand it the words and it searches for a perfect hash over character positions, then emits a sum type and a recognizer that is a few loads, a mask and a compare.",
+   "blurb": "gperf as a macro: hand it the words and get a perfect hash and a sum type back.",
    "blocks": [("the words", "$keywords/define(tiny, [\"if\", \"in\", \"is\", \"fn\", \"for\"])"), ("lookup", "  println(\"${tiny/lookup(\"for\")} ${tiny/lookup(\"fun\")}\")"), ("output", ":some kw-for :none", "text"), ("what it generated", "type tiny = either { kw-if, kw-in, kw-is, kw-fn, kw-for }", "text")]},
   {"section": "06-regex", "title": "A regex engine that runs at compile time",
-   "blurb": "Parser, NFA, DFA and minimization are plain k1 that happens to run in the compiler. A define becomes a matcher whose states are match arms, plus a finder that returns match positions.",
+   "blurb": "Parser, NFA, DFA and minimization are plain k1 that happens to run in the compiler.",
    "blocks": [("define", "$regex/define(number, \"[0-9]+([.][0-9]+)?\")"), ("match and find", "  for s in [\"42\", \"3.14\", \"3.\", \".5\", \"1e5\"]"), ("output", "number(\"42\") = true", "text")]},
   {"section": "01-static", "title": "A palette designed in OKLCH, shipped as bytes",
-   "blurb": "The colour math runs early. Every swatch is an sRGB triple baked into the binary, and the CSS that names them is a string built at compile time.",
+   "blurb": "The colour math runs early, so every swatch is an sRGB triple baked into the binary.",
    "blocks": [("the math", "fn oklch(l: f32, c: f32, h: f32): srgb8 {"), ("the palette", "let UI-HUE: f32 = 267.0"), ("the CSS", "let CSS: string = {"), ("output", ":root {", "text")]},
   {"section": "10-systems", "title": "Painless SIMD",
-   "blurb": "A macro generates a lane-wide scanner for a set of delimiters, the scan loop uses it like any function, and the same code runs under #static in the compile-time VM.",
+   "blurb": "A macro generates a lane-wide scanner, and the same code runs under #static in the compile-time VM.",
    "blocks": [("generate the scanner", "$std/simd/first-of(delims, "), ("use it", "fn scan-all-simd(text: string): u64 {"), ("at compile time too", "  let static-hits: 4u64 = #static scan-all-simd("), ("output", "compile-time scan found 4 delimiters", "text")]},
+  {"section": "10-systems", "title": "Hot reload a namespace",
+   "blurb": "Mark a namespace ns(reload), watch it, and every edit swaps in under the running process with its globals intact.",
+   "blocks": [("the namespace", "ns(reload) handlers {"), ("watch and serve", "fn main() {\n  handlers/watch().!"), ("output", "reload: sys_reload/handlers swapped to v1 (2 syms)", "text")]},
   {"section": "03-comptime-ffi", "title": "C at compile time",
-   "blurb": "Declare a C function and the compile-time VM can call it through libffi, so a build stamp is ordinary code run early.",
+   "blurb": "Declare a C function and the compile-time VM calls it through libffi.",
    "blocks": [("declare", "fn(extern(\"gethostname\")) gethostname(name: ptr, len: size): i32"), ("call them while compiling", "let BUILD_HOST: string = hostname()"), ("output", "$ k1 run cffi_build_stamp.k1", "text")]},
   {"title": "dbx: SQLite in the k1 fold", "placeholder": "Case study in progress. dbx pulls SQLite into the k1 fold at compile time: the dependency, the bindings and the schema, so tables become k1 types before the program runs."},
 ]
@@ -118,6 +139,36 @@ for card in CARDS:
         need(block, f"{card['section']}: no {kind} block starting with {first!r}")
         shown.append({"label": label, "kind": kind, "code": block.rstrip("\n")})
     cards.append({"title": card["title"], "section": card["section"], "blurb": card["blurb"], "blocks": shown})
+
+basics_md = (repo / "content/showcase/sections/00-basics.md").read_text()
+basics = []
+for spec in BASICS:
+    title, first = spec[0], spec[1]
+    start = basics_md.index("## " + title + "\n")
+    chunk = basics_md[start:]
+    chunk = chunk[:chunk.index("\n## ")] if "\n## " in chunk else chunk
+    sentence = chunk.split("\n\n")[1]
+    blocks = []
+    for m in re.finditer(r"```(k1|text)( path=\S+)?\n(.*?)```", chunk, re.S):
+        kind, path, code = m.group(1), m.group(2), m.group(3).rstrip("\n")
+        if path and blocks and blocks[-1]["label"] == "in core":
+            blocks[-1]["code"] += "\n" + code
+            continue
+        blocks.append({"label": "in core" if path else ("program" if kind == "k1" else "output"), "kind": kind, "code": code})
+    if len(spec) > 2:
+        for block, label in zip([b for b in blocks if b["label"] != "in core"], spec[2]): block["label"] = label
+    folded = []
+    for b in blocks:
+        if b["label"].startswith("~"):
+            b["label"] = b["label"][1:]
+            folded[-1]["alt"] = b
+        else:
+            folded.append(b)
+    blocks = folded
+    program = next(b for b in blocks if b["label"] == "program")
+    need(program["code"].startswith(first), f"00-basics: {title} block does not start with {first!r}")
+    basics.append({"title": title, "section": "00-basics", "anchor": re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-"), "blurb": sentence, "blocks": blocks})
+(out / "basics.json").write_text(json.dumps(basics, indent=2) + "\n")
 (out / "carousel.json").write_text(json.dumps(cards, indent=2) + "\n")
 print(f"timing.json: {k1_lines} lines, typecheck {len(timing['typecheck'])} rows, build {len(timing['build'] or [])} rows, stress {stress_lines} lines {stress_ms} ms")
-print(f"carousel.json: {len(cards)} cards")
+print(f"carousel.json: {len(cards)} cards, basics.json: {len(basics)} cards")

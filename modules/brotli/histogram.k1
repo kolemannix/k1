@@ -1,0 +1,204 @@
+let F64-HUGE: f64 = mem/bitcast[u64, f64](0x7FF0000000000000)
+
+type histogram[n: static size] = { data: array[u32, n], total-count: size, bit-cost: f64 }
+type(alias) histogram-literal = histogram[256]
+type(alias) histogram-command = histogram[704]
+type(alias) histogram-distance = histogram[544]
+
+ns for histogram {
+  fn(inline) data-size[n](): size { core/meta/static-type-to-value[_, n]() }
+
+  fn(inline) data-buffer[n](self: *histogram[n]): buffer[u32] { self.data.&.as-buffer() }
+
+  fn clear[n](self: *histogram[n]) {
+    self.data.&.as-buffer().memset(0)
+    self.total-count = 0
+    self.bit-cost = F64-HUGE
+  }
+
+  fn(inline) add[n](self: *histogram[n], val: size) {
+    self.data.[val] = self.data.[val] + 1
+    self.total-count = self.total-count + 1
+  }
+
+  fn add-histogram[n](self: *histogram[n], v: *histogram[n]) {
+    self.total-count = self.total-count + v.total-count
+    for i in 0.until(data-size[n]()) {
+      self.data.[i] = self.data.[i] + v.data.[i]
+    }
+  }
+
+  fn population-cost[n](self: *histogram[n]): f64 {
+    let data-size = data-size[n]()
+    if self.total-count == 0 return 12.0
+    let count: size = 0
+    let s: array[size, 5] = [0, 0, 0, 0, 0]
+    for i in 0.until(data-size) {
+      if self.data.[i] > 0 {
+        s.[count] = i
+        count = count + 1
+        if count > 4 break
+      }
+    }
+    if count == 1 return 12.0
+    if count == 2 return 20.0 + self.total-count.as[f64]
+    if count == 3 {
+      let h0 = self.data.[s.[0]]
+      let h1 = self.data.[s.[1]]
+      let h2 = self.data.[s.[2]]
+      let hmax = h0.max(h1.max(h2))
+      return 28.0 + (2 * (h0 + h1 + h2) - hmax).as[f64]
+    }
+    if count == 4 {
+      let h: array[u32, 4] = [self.data.[s.[0]], self.data.[s.[1]], self.data.[s.[2]], self.data.[s.[3]]]
+      for i in 0.until(4) {
+        for j in (i + 1).until(4) {
+          if h.[j] > h.[i] {
+            let t = h.[i]
+            h.[i] = h.[j]
+            h.[j] = t
+          }
+        }
+      }
+      let h23 = h.[2] + h.[3]
+      let hmax = h23.max(h.[0])
+      return 37.0 + (3 * h23 + 2 * (h.[0] + h.[1]) - hmax).as[f64]
+    }
+    let bits = 0.0
+    let max-depth: size = 1
+    let depth-histo = array/zeroed[u32, 18]()
+    let log2total = fast-log2(self.total-count)
+    let i: size = 0
+    while i < data-size {
+      let c = self.data.[i]
+      if c > 0 {
+        let log2p = log2total - fast-log2(c.as-size())
+        let depth = (log2p + 0.5).as[size]
+        bits = bits + c.as[f64] * log2p
+        if depth > 15 { depth = 15 }
+        if depth > max-depth { max-depth = depth }
+        depth-histo.[depth] = depth-histo.[depth] + 1
+        i = i + 1
+      } else {
+        let reps: u32 = 1
+        let k = i + 1
+        while k < data-size and self.data.[k] == 0 {
+          reps = reps + 1
+          k = k + 1
+        }
+        i = i + reps.as-size()
+        if i == data-size break
+        if reps < 3 {
+          depth-histo.[0] = depth-histo.[0] + reps
+        } else {
+          reps = reps - 2
+          while reps > 0 {
+            depth-histo.[17] = depth-histo.[17] + 1
+            bits = bits + 3.0
+            reps = reps >> 3
+          }
+        }
+      }
+    }
+    bits = bits + (18 + 2 * max-depth).as[f64]
+    bits + bits-entropy(depth-histo.&.as-buffer(), 18)
+  }
+}
+
+fn shannon-entropy(population: buffer[u32], count: size, total: *size): f64 {
+  let sum: size = 0
+  let retval = 0.0
+  for i in 0.until(count) {
+    let p = population.index-unchecked(i).*.as-size()
+    sum = sum + p
+    retval = retval - p.as[f64] * fast-log2(p)
+  }
+  if sum != 0 { retval = retval + sum.as[f64] * fast-log2(sum) }
+  total.* = sum
+  retval
+}
+
+fn bits-entropy(population: buffer[u32], count: size): f64 {
+  let sum: size = 0
+  let retval = shannon-entropy(population, count, sum.&)
+  if retval < sum.as[f64] { retval = sum.as[f64] }
+  retval
+}
+
+type block-split = {
+  num-types: size,
+  num-blocks: size,
+  types: list[u8],
+  lengths: list[u32],
+}
+
+type block-split-iterator = { split: *block-split, idx: size, kind: size, length: size }
+
+ns for block-split-iterator {
+  fn new(split: *block-split): block-split-iterator {
+    .{ split, idx = 0, kind = 0, length = if split.lengths.non-empty() split.lengths.[0].as-size() else 0 }
+  }
+
+  fn(inline) next(self: *block-split-iterator) {
+    if self.length == 0 {
+      self.idx = self.idx + 1
+      self.kind = self.split.types.[self.idx].as-size()
+      self.length = self.split.lengths.[self.idx].as-size()
+    }
+    self.length = self.length - 1
+  }
+}
+
+fn build-histograms-with-context(
+  cmds: buffer[command], literal-split: *block-split, insert-and-copy-split: *block-split, dist-split: *block-split,
+  ringbuffer: ptr, start-pos: size, mask: size, prev-byte: u8, prev-byte2: u8, context-modes: ?buffer[context-mode],
+  literal-histograms: buffer[histogram-literal], insert-and-copy-histograms: buffer[histogram-command],
+  copy-dist-histograms: buffer[histogram-distance],
+) {
+  let pos = start-pos
+  let p1 = prev-byte
+  let p2 = prev-byte2
+  let literal-it = block-split-iterator/new(literal-split)
+  let insert-and-copy-it = block-split-iterator/new(insert-and-copy-split)
+  let dist-it = block-split-iterator/new(dist-split)
+  for i in 0.until(cmds.len()) {
+    let cmd = cmds.index-unchecked(i)
+    insert-and-copy-it.next()
+    insert-and-copy-histograms.index-unchecked(insert-and-copy-it.kind).add(cmd.cmd-prefix.as-size())
+    for 0.until(cmd.insert-len.as-size()) {
+      literal-it.next()
+      let ctx = literal-it.kind
+      if context-modes is :some modes {
+        let lut = context-lut(modes.index-unchecked(ctx).*)
+        ctx = (ctx << LITERAL-CONTEXT-BITS.trunc[u32]) + context-of(p1, p2, lut).as-size()
+      }
+      let lit = ringbuffer.add-bytes(pos & mask).ref[u8].*
+      literal-histograms.index-unchecked(ctx).add(lit.as-size())
+      p2 = p1
+      p1 = lit
+      pos = pos + 1
+    }
+    let copy-len = cmd.copy-length().as-size()
+    pos = pos + copy-len
+    if copy-len != 0 {
+      p2 = ringbuffer.add-bytes((pos - 2) & mask).ref[u8].*
+      p1 = ringbuffer.add-bytes((pos - 1) & mask).ref[u8].*
+      if cmd.cmd-prefix >= 128 {
+        dist-it.next()
+        let ctx = (dist-it.kind << DISTANCE-CONTEXT-BITS.trunc[u32]) + cmd.distance-context().as-size()
+        copy-dist-histograms.index-unchecked(ctx).add((cmd.dist-prefix & 0x3FF).as-size())
+      }
+    }
+  }
+}
+
+type meta-block-split = {
+  literal-split: block-split,
+  command-split: block-split,
+  distance-split: block-split,
+  literal-context-map: list[u32],
+  distance-context-map: list[u32],
+  literal-histograms: list[histogram-literal],
+  command-histograms: list[histogram-command],
+  distance-histograms: list[histogram-distance],
+}

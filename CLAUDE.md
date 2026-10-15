@@ -245,7 +245,7 @@ declaring `dep`/`dep-params`, `lib`, `library()`, `setup`, and an optional
   `Makefile` targets `build`, `wasm`, `nocrt`, `filc`.
 - `std/`: `--no-std` drops it. `posix.k1`/`libc.k1` raw bindings,
   `process.k1`, `thread.k1`, `time.k1`, `fd.k1`, `sys.k1`, `cliarg.k1`,
-  `hash.k1` (hash ability, `map`, `set`), `json.k1`, `url.k1`, `utf8.k1`, `bitfield.k1`,
+  `hash.k1` (hash ability, `map`, `set`), `crypto.k1` (sha256, hmac-sha256), `json.k1`, `url.k1`, `utf8.k1`, `bitfield.k1`,
   `math.k1`, `simd.k1`, `rc.k1`, `pool.k1` (fixed-capacity generational
   handle pool, nil slot at index 0), `spill-string.k1` (inline string that spills
   to the arena), `stream.k1`, `channel.k1`, `pubsub.k1`, `reload.k1` (dylib

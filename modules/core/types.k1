@@ -16,6 +16,22 @@ impl print for int-value {
    }
 }
 
+ns for int-value {
+  fn to[t](self: int-value): t {
+    #if types/schema[t] is {
+      :int :u8  -> self.as-u8().!,
+      :int :u16 -> self.as-u16().!,
+      :int :u32 -> self.as-u32().!,
+      :int :u64 -> self.as-u64().!,
+      :int :i8  -> self.as-i8().!,
+      :int :i16 -> self.as-i16().!,
+      :int :i32 -> self.as-i32().!,
+      :int :i64 -> self.as-i64().!,
+      _ -> crash("int-value.to: ${types/name[t]} is not an integer type"),
+    }
+  }
+}
+
 type any = {
   type-id,
   value: ptr

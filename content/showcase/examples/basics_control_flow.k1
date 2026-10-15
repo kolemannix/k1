@@ -1,0 +1,19 @@
+fn first-square-over(limit: int): int {
+  let i = 0
+  loop {
+    i = i + 1
+    if i * i > limit { break i * i }
+  }
+}
+
+fn describe-int(n: ?int): string {
+  require n is :some x and x > 0 else { return "nothing positive" }
+  let parity = if x % 2 == 0 "even" else "odd"
+  "$x is $parity"
+}
+
+fn main() {
+  println(describe-int(:some 7))
+  println(describe-int(:none))
+  println(first-square-over(50))
+}

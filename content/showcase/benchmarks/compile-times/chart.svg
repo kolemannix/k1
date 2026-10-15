@@ -15,54 +15,54 @@
 <rect class="bg" width="1080" height="246"/>
 <text class="t1" x="24" y="38">typecheck, 100 generated units</text>
 <text class="t2" x="24" y="54">seconds, lower is better</text>
-<text class="t3 k1" x="186" y="79" text-anchor="end">k1</text>
+<text class="t3 k1" x="186" y="79" text-anchor="end">k1, warm cache</text>
 <rect class="k1" x="196" y="68" width="1.5" height="14"/>
-<text class="t3" x="203.5" y="79">0.029 s</text>
-<text class="t3 k1" x="186" y="101" text-anchor="end">k1, warm cache</text>
-<rect class="k1" x="196" y="90" width="1.7" height="14"/>
-<text class="t3" x="203.7" y="101">0.056 s</text>
+<text class="t3" x="203.5" y="79">0.026 s</text>
+<text class="t3 k1" x="186" y="101" text-anchor="end">k1</text>
+<rect class="k1" x="196" y="90" width="1.5" height="14"/>
+<text class="t3" x="203.5" y="101">0.030 s</text>
 <text class="t3 other" x="186" y="123" text-anchor="end">C</text>
-<rect class="other" x="196" y="112" width="3.1" height="14"/>
-<text class="t3" x="205.1" y="123">0.099 s</text>
+<rect class="other" x="196" y="112" width="2.8" height="14"/>
+<text class="t3" x="204.8" y="123">0.100 s</text>
 <text class="t3 other" x="186" y="145" text-anchor="end">C++, hand-rolled vec</text>
 <rect class="other" x="196" y="134" width="6.1" height="14"/>
-<text class="t3" x="208.1" y="145">0.196 s</text>
+<text class="t3" x="208.1" y="145">0.217 s</text>
 <text class="t3 other" x="186" y="167" text-anchor="end">Zig</text>
-<rect class="other" x="196" y="156" width="8.5" height="14"/>
-<text class="t3" x="210.5" y="167">0.273 s</text>
+<rect class="other" x="196" y="156" width="7.8" height="14"/>
+<text class="t3" x="209.8" y="167">0.276 s</text>
 <text class="t3 other" x="186" y="189" text-anchor="end">Rust</text>
-<rect class="other" x="196" y="178" width="18.4" height="14"/>
-<text class="t3" x="220.4" y="189">0.594 s</text>
+<rect class="other" x="196" y="178" width="17.2" height="14"/>
+<text class="t3" x="219.2" y="189">0.611 s</text>
 <text class="t3 other" x="186" y="211" text-anchor="end">C++</text>
 <rect class="other" x="196" y="200" width="72.0" height="14"/>
-<text class="t3" x="274.0" y="211">2.32 s</text>
+<text class="t3" x="274.0" y="211">2.55 s</text>
 <text class="t1" x="376" y="38">typecheck, hello world</text>
 <text class="t3 k1" x="498" y="65" text-anchor="end">k1</text>
-<rect class="k1" x="508" y="54" width="7.5" height="14"/>
-<text class="t3" x="521.5" y="65">0.017 s</text>
+<rect class="k1" x="508" y="54" width="8.4" height="14"/>
+<text class="t3" x="522.4" y="65">0.018 s</text>
 <text class="t3 other" x="498" y="87" text-anchor="end">C</text>
-<rect class="other" x="508" y="76" width="9.7" height="14"/>
-<text class="t3" x="523.7" y="87">0.022 s</text>
+<rect class="other" x="508" y="76" width="10.7" height="14"/>
+<text class="t3" x="524.7" y="87">0.023 s</text>
 <text class="t3 other" x="498" y="109" text-anchor="end">C++</text>
-<rect class="other" x="508" y="98" width="10.1" height="14"/>
-<text class="t3" x="524.1" y="109">0.023 s</text>
+<rect class="other" x="508" y="98" width="10.9" height="14"/>
+<text class="t3" x="524.9" y="109">0.023 s</text>
 <text class="t3 other" x="498" y="131" text-anchor="end">Rust</text>
-<rect class="other" x="508" y="120" width="16.6" height="14"/>
-<text class="t3" x="530.6" y="131">0.038 s</text>
+<rect class="other" x="508" y="120" width="17.7" height="14"/>
+<text class="t3" x="531.7" y="131">0.038 s</text>
 <text class="t3 other" x="498" y="153" text-anchor="end">Zig</text>
-<rect class="other" x="508" y="142" width="82.1" height="14"/>
-<text class="t3" x="596.1" y="153">0.188 s</text>
+<rect class="other" x="508" y="142" width="89.2" height="14"/>
+<text class="t3" x="603.2" y="153">0.190 s</text>
 <text class="t3 other" x="498" y="175" text-anchor="end">Zig, cold cache</text>
 <rect class="other" x="508" y="164" width="112.0" height="14"/>
-<text class="t3" x="626.0" y="175">0.256 s</text>
+<text class="t3" x="626.0" y="175">0.238 s</text>
 <text class="t1" x="728" y="38">typecheck the brotli encoder</text>
 <text class="t3 k1" x="914" y="65" text-anchor="end">k1, whole program</text>
-<rect class="k1" x="924" y="54" width="12.7" height="14"/>
-<text class="t3" x="942.7" y="65">0.032 s</text>
+<rect class="k1" x="924" y="54" width="21.1" height="14"/>
+<text class="t3" x="951.1" y="65">0.058 s</text>
 <text class="t3 other" x="914" y="87" text-anchor="end">C, 4 clangs in parallel</text>
-<rect class="other" x="924" y="76" width="26.7" height="14"/>
-<text class="t3" x="956.7" y="87">0.068 s</text>
+<rect class="other" x="924" y="76" width="24.2" height="14"/>
+<text class="t3" x="954.2" y="87">0.066 s</text>
 <text class="t3 other" x="914" y="109" text-anchor="end">C, one clang</text>
 <rect class="other" x="924" y="98" width="48.0" height="14"/>
-<text class="t3" x="978.0" y="109">0.122 s</text>
+<text class="t3" x="978.0" y="109">0.132 s</text>
 </svg>

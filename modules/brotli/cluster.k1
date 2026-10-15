@@ -1,0 +1,246 @@
+type histogram-pair = { idx1: u32, idx2: u32, cost-combo: f64, cost-diff: f64 }
+
+fn(inline) histogram-pair-is-less(p1: *histogram-pair, p2: *histogram-pair): bool {
+  if p1.cost-diff != p2.cost-diff p1.cost-diff > p2.cost-diff
+  else (p1.idx2 - p1.idx1) > (p2.idx2 - p2.idx1)
+}
+
+fn(inline) cluster-cost-diff(size-a: size, size-b: size): f64 {
+  let size-c = size-a + size-b
+  size-a.as[f64] * fast-log2(size-a) + size-b.as[f64] * fast-log2(size-b) - size-c.as[f64] * fast-log2(size-c)
+}
+
+fn compare-and-push-to-queue[n: static size](
+  out: buffer[histogram[n]], tmp: *histogram[n], cluster-size: buffer[u32], idx1-in: u32, idx2-in: u32,
+  max-num-pairs: size, pairs: buffer[histogram-pair], num-pairs: *size,
+) {
+  let is-good-pair = false
+  let p: histogram-pair = .0
+  if idx1-in == idx2-in return
+  let idx1 = idx1-in
+  let idx2 = idx2-in
+  if idx2 < idx1 {
+    let t = idx2
+    idx2 = idx1
+    idx1 = t
+  }
+  p.idx1 = idx1
+  p.idx2 = idx2
+  let h1 = out.index-unchecked(idx1.as-size())
+  let h2 = out.index-unchecked(idx2.as-size())
+  p.cost-diff = 0.5 * cluster-cost-diff(
+    cluster-size.index-unchecked(idx1.as-size()).*.as-size(),
+    cluster-size.index-unchecked(idx2.as-size()).*.as-size())
+  p.cost-diff = p.cost-diff - h1.bit-cost
+  p.cost-diff = p.cost-diff - h2.bit-cost
+
+  if h1.total-count == 0 {
+    p.cost-combo = h2.bit-cost
+    is-good-pair = true
+  } else if h2.total-count == 0 {
+    p.cost-combo = h1.bit-cost
+    is-good-pair = true
+  } else {
+    let threshold = if num-pairs.* == 0 F64-1E99 else {
+      let top = pairs.index-unchecked(0).*.cost-diff
+      if 0.0 > top 0.0 else top
+    }
+    tmp.* = h1.*
+    tmp.add-histogram(h2)
+    let cost-combo = tmp.population-cost()
+    if cost-combo < threshold - p.cost-diff {
+      p.cost-combo = cost-combo
+      is-good-pair = true
+    }
+  }
+  if is-good-pair {
+    p.cost-diff = p.cost-diff + p.cost-combo
+    if num-pairs.* > 0 and histogram-pair-is-less(pairs.index-unchecked(0), p.&) {
+      if num-pairs.* < max-num-pairs {
+        pairs.index-unchecked(num-pairs.*).* = pairs.index-unchecked(0).*
+        num-pairs.* = num-pairs.* + 1
+      }
+      pairs.index-unchecked(0).* = p
+    } else if num-pairs.* < max-num-pairs {
+      pairs.index-unchecked(num-pairs.*).* = p
+      num-pairs.* = num-pairs.* + 1
+    }
+  }
+}
+
+fn histogram-combine[n: static size](
+  out: buffer[histogram[n]], tmp: *histogram[n], cluster-size: buffer[u32], symbols: buffer[u32], clusters: buffer[u32],
+  pairs: buffer[histogram-pair], num-clusters-in: size, symbols-size: size, max-clusters: size, max-num-pairs: size,
+): size {
+  let cost-diff-threshold = 0.0
+  let min-cluster-size: size = 1
+  let num-pairs: size = 0
+  let num-clusters = num-clusters-in
+
+  for idx1 in 0.until(num-clusters) {
+    for idx2 in (idx1 + 1).until(num-clusters) {
+      compare-and-push-to-queue(
+        out, tmp, cluster-size, clusters.index-unchecked(idx1).*, clusters.index-unchecked(idx2).*,
+        max-num-pairs, pairs, num-pairs.&)
+    }
+  }
+
+  while num-clusters > min-cluster-size {
+    if pairs.index-unchecked(0).*.cost-diff >= cost-diff-threshold {
+      cost-diff-threshold = F64-1E99
+      min-cluster-size = max-clusters
+      continue
+    }
+    let best-idx1 = pairs.index-unchecked(0).*.idx1
+    let best-idx2 = pairs.index-unchecked(0).*.idx2
+    let best = out.index-unchecked(best-idx1.as-size())
+    best.add-histogram(out.index-unchecked(best-idx2.as-size()))
+    best.bit-cost = pairs.index-unchecked(0).*.cost-combo
+    let cs1 = cluster-size.index-unchecked(best-idx1.as-size())
+    cs1.* = cs1.* + cluster-size.index-unchecked(best-idx2.as-size()).*
+    for i in 0.until(symbols-size) {
+      let s = symbols.index-unchecked(i)
+      if s.* == best-idx2 { s.* = best-idx1 }
+    }
+    for i in 0.until(num-clusters) {
+      if clusters.index-unchecked(i).* == best-idx2 {
+        mem/move(
+          clusters.index-unchecked(i).as[ptr], clusters.index-unchecked(i + 1).as[ptr],
+          (num-clusters - i - 1) * 4)
+        break
+      }
+    }
+    num-clusters = num-clusters - 1
+    let copy-to-idx: size = 0
+    for i in 0.until(num-pairs) {
+      let p = pairs.index-unchecked(i).*
+      if p.idx1 == best-idx1 or p.idx2 == best-idx1 or p.idx1 == best-idx2 or p.idx2 == best-idx2 {
+        continue
+      }
+      if histogram-pair-is-less(pairs.index-unchecked(0), p.&) {
+        let front = pairs.index-unchecked(0).*
+        pairs.index-unchecked(0).* = p
+        pairs.index-unchecked(copy-to-idx).* = front
+      } else {
+        pairs.index-unchecked(copy-to-idx).* = p
+      }
+      copy-to-idx = copy-to-idx + 1
+    }
+    num-pairs = copy-to-idx
+
+    for i in 0.until(num-clusters) {
+      compare-and-push-to-queue(
+        out, tmp, cluster-size, best-idx1, clusters.index-unchecked(i).*, max-num-pairs, pairs, num-pairs.&)
+    }
+  }
+  num-clusters
+}
+
+fn histogram-bit-cost-distance[n: static size](histogram: *histogram[n], candidate: *histogram[n], tmp: *histogram[n]): f64 {
+  if histogram.total-count == 0 {
+    0.0
+  } else {
+    tmp.* = histogram.*
+    tmp.add-histogram(candidate)
+    tmp.population-cost() - candidate.bit-cost
+  }
+}
+
+fn histogram-remap[n: static size](
+  input: buffer[histogram[n]], clusters: buffer[u32], num-clusters: size,
+  out: buffer[histogram[n]], tmp: *histogram[n], symbols: buffer[u32],
+) {
+  let in-size = input.len()
+  for i in 0.until(in-size) {
+    let best-out = if i == 0 symbols.index-unchecked(0).* else symbols.index-unchecked(i - 1).*
+    let best-bits = histogram-bit-cost-distance(input.index-unchecked(i), out.index-unchecked(best-out.as-size()), tmp)
+    for j in 0.until(num-clusters) {
+      let cluster = clusters.index-unchecked(j).*
+      let cur-bits = histogram-bit-cost-distance(input.index-unchecked(i), out.index-unchecked(cluster.as-size()), tmp)
+      if cur-bits < best-bits {
+        best-bits = cur-bits
+        best-out = cluster
+      }
+    }
+    symbols.index-unchecked(i).* = best-out
+  }
+  for i in 0.until(num-clusters) {
+    out.index-unchecked(clusters.index-unchecked(i).*.as-size()).clear()
+  }
+  for i in 0.until(in-size) {
+    out.index-unchecked(symbols.index-unchecked(i).*.as-size()).add-histogram(input.index-unchecked(i))
+  }
+}
+
+fn histogram-reindex[n: static size](out: buffer[histogram[n]], symbols: buffer[u32]): size {
+  let length = symbols.len()
+  let new-index = buffer/allocate[u32](length)
+  for i in 0.until(length) { new-index.index-unchecked(i).* = INVALID-INDEX }
+  let next-index: u32 = 0
+  for i in 0.until(length) {
+    let slot = new-index.index-unchecked(symbols.index-unchecked(i).*.as-size())
+    if slot.* == INVALID-INDEX {
+      slot.* = next-index
+      next-index = next-index + 1
+    }
+  }
+  let tmp = buffer/allocate[histogram[n]](next-index.as-size())
+  next-index = 0
+  for i in 0.until(length) {
+    let s = symbols.index-unchecked(i)
+    let ni = new-index.index-unchecked(s.*.as-size()).*
+    if ni == next-index {
+      tmp.index-unchecked(next-index.as-size()).* = out.index-unchecked(s.*.as-size()).*
+      next-index = next-index + 1
+    }
+    s.* = ni
+  }
+  for i in 0.until(next-index.as-size()) {
+    out.index-unchecked(i).* = tmp.index-unchecked(i).*
+  }
+  next-index.as-size()
+}
+
+fn cluster-histograms[n: static size](
+  input: buffer[histogram[n]], max-histograms: size, out: buffer[histogram[n]], histogram-symbols: buffer[u32],
+): size {
+  let in-size = input.len()
+  let cluster-size = buffer/allocate[u32](in-size)
+  let clusters = buffer/allocate[u32](in-size)
+  let num-clusters: size = 0
+  let max-input-histograms: size = 64
+  let pairs-capacity = max-input-histograms * max-input-histograms / 2
+  let pairs = buffer/allocate[histogram-pair](pairs-capacity + 1)
+  let tmp = buffer/allocate[histogram[n]](1).index-unchecked(0)
+
+  for i in 0.until(in-size) {
+    cluster-size.index-unchecked(i).* = 1
+  }
+  for i in 0.until(in-size) {
+    out.index-unchecked(i).* = input.index-unchecked(i).*
+    out.index-unchecked(i).bit-cost = input.index-unchecked(i).population-cost()
+    histogram-symbols.index-unchecked(i).* = i.trunc[u32]
+  }
+
+  let batch: size = 0
+  while batch < in-size {
+    let num-to-combine = (in-size - batch).min(max-input-histograms)
+    for j in 0.until(num-to-combine) {
+      clusters.index-unchecked(num-clusters + j).* = (batch + j).trunc[u32]
+    }
+    let num-new-clusters = histogram-combine(
+      out, tmp, cluster-size, histogram-symbols.slice(batch, in-size), clusters.slice(num-clusters, in-size),
+      pairs, num-to-combine, num-to-combine, max-histograms, pairs-capacity)
+    num-clusters = num-clusters + num-new-clusters
+    batch = batch + max-input-histograms
+  }
+
+  let max-num-pairs = (num-clusters * 64).min((num-clusters / 2) * num-clusters)
+  if pairs.len() < max-num-pairs + 1 {
+    pairs = buffer/allocate[histogram-pair](max-num-pairs + 1)
+  }
+  num-clusters = histogram-combine(
+    out, tmp, cluster-size, histogram-symbols, clusters, pairs, num-clusters, in-size, max-histograms, max-num-pairs)
+  histogram-remap(input, clusters, num-clusters, out, tmp, histogram-symbols)
+  histogram-reindex(out, histogram-symbols)
+}

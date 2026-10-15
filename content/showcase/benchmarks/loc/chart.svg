@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 224" width="1080" height="224" style="max-width:100%;height:auto" font-family="var(--mono, 'Martian Mono', ui-monospace, Menlo, monospace)" font-size="12">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 202" width="1080" height="202" style="max-width:100%;height:auto" font-family="var(--mono, 'Martian Mono', ui-monospace, Menlo, monospace)" font-size="12">
 <style>
   .bg { fill: var(--p, #151920); }
   .t1 { fill: var(--b, #FFFFFF); font-weight: 600; font-size: 13px; }
@@ -12,25 +12,22 @@
   rect.muted { fill: var(--l, #262B34); }
   .ref { stroke: var(--m, #7E8794); stroke-width: 1; stroke-dasharray: 3 3; }
 </style>
-<rect class="bg" width="1080" height="224"/>
-<text class="t1" x="24" y="38">lines of code in the compiler</text>
-<text class="t2" x="24" y="54">code lines by scc, no tests, no standard library; LLVM is the back end under k1, clang and rustc</text>
+<rect class="bg" width="1080" height="202"/>
+<text class="t1" x="24" y="38">compiler front end, lines of code</text>
+<text class="t2" x="24" y="54">code lines by scc; no tests, no standard library, no machine back ends or linkers</text>
 <text class="t3 k1" x="66" y="79" text-anchor="end">k1</text>
-<rect class="k1" x="76" y="68" width="27.0" height="14"/>
-<text class="t3" x="109.0" y="79">72,189</text>
+<rect class="k1" x="76" y="68" width="50.7" height="14"/>
+<text class="t3" x="132.7" y="79">72,204</text>
 <text class="t3 other" x="66" y="101" text-anchor="end">Zig</text>
-<rect class="other" x="76" y="90" width="186.0" height="14"/>
-<text class="t3" x="268.0" y="101">497,217</text>
+<rect class="other" x="76" y="90" width="81.0" height="14"/>
+<text class="t3" x="163.0" y="101">115,358</text>
 <text class="t3 other" x="66" y="123" text-anchor="end">Go</text>
-<rect class="other" x="76" y="112" width="204.7" height="14"/>
-<text class="t3" x="286.7" y="123">547,231</text>
+<rect class="other" x="76" y="112" width="201.3" height="14"/>
+<text class="t3" x="283.3" y="123">286,711</text>
 <text class="t3 other" x="66" y="145" text-anchor="end">Rust</text>
-<rect class="other" x="76" y="134" width="235.9" height="14"/>
-<text class="t3" x="317.9" y="145">630,574</text>
+<rect class="other" x="76" y="134" width="411.3" height="14"/>
+<text class="t3" x="493.3" y="145">585,849</text>
 <text class="t3 other" x="66" y="167" text-anchor="end">clang</text>
-<rect class="other" x="76" y="156" width="477.4" height="14"/>
-<text class="t3" x="559.4" y="167">1,276,119</text>
-<text class="t3 muted" x="66" y="189" text-anchor="end">LLVM</text>
-<rect class="muted" x="76" y="178" width="896.0" height="14"/>
-<text class="t3" x="978.0" y="189">2,395,042</text>
+<rect class="other" x="76" y="156" width="896.0" height="14"/>
+<text class="t3" x="978.0" y="167">1,276,119</text>
 </svg>

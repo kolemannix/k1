@@ -4,9 +4,11 @@
   <div class="body">
     {{ with .Content }}<div class="intro">{{ . }}</div>{{ end }}
     {{ range .Pages.ByWeight }}
-    <section class="suite">
-      <h2><a href="{{ .RelPermalink }}">{{ .Title }}</a></h2>
+    <section class="suite" id="{{ .File.ContentBaseName }}">
+      <h2>{{ .Title }}</h2>
       {{ range .Params.charts }}{{ partial "chart.html" . }}{{ end }}
+      {{ .Content }}
+      {{ partial "provenance.html" . }}
     </section>
     {{ end }}
   </div>

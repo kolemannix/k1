@@ -4,8 +4,6 @@ let MERGE-BLOCK-SIZE: size = 1 << 16
 let INPUT-MARGIN: size = 16
 let MIN-MATCH: size = 5
 let MAX-TABLE-SIZE: size = 1 << 15
-let FRAGMENT-SIZE: size = 1 << 18
-let HASH-MUL32: u64 = 0x1E35A7BD
 let MIN-RATIO: size = 980
 
 type one-pass-arena = {
@@ -23,11 +21,11 @@ type one-pass-arena = {
 }
 
 fn(inline) hash-bytes(p: ptr, shift: u32): size {
-  (((load64-le(p) << 24) * HASH-MUL32) >> shift).signed()
+  (((load64-le(p) << 24) * K-HASH-MUL32.widen[u64]) >> shift).signed()
 }
 
 fn(inline) hash-bytes-at-offset(v: u64, offset: u32, shift: u32): size {
-  ((((v >> (8 * offset)) << 24) * HASH-MUL32) >> shift).signed()
+  ((((v >> (8 * offset)) << 24) * K-HASH-MUL32.widen[u64]) >> shift).signed()
 }
 
 fn(inline) is-match(p1: ptr, p2: ptr): bool {
@@ -550,133 +548,4 @@ fn init-command-prefix-codes(s: *one-pass-arena) {
     i = i + 1
   }
   s.cmd-code-numbits = 448
-}
-
-type encoder = {
-  quality: size,
-  arena: one-pass-arena,
-  arena2: *two-pass-arena,
-  cmd-buf: buffer[u32],
-  lit-buf: buffer[u8],
-  table: buffer[i32],
-  storage: buffer[u8],
-  last-bytes: u16,
-  last-bytes-bits: u8,
-  finished: bool,
-}
-
-ns for encoder {
-  fn new-with-quality-in[a: allocator](alloc: a, quality: size): *encoder {
-    let e: *encoder = alloc.alloc-t[encoder]()
-    e.quality = quality
-    if quality == 0 {
-      e.table = buffer/allocate-in[i32, _](alloc, MAX-TABLE-SIZE)
-    } else if quality == 1 {
-      e.table = buffer/allocate-in[i32, _](alloc, Q1-MAX-TABLE-SIZE)
-      e.arena2 = alloc.alloc-t[two-pass-arena]()
-      e.cmd-buf = buffer/allocate-in[u32, _](alloc, TWO-PASS-BLOCK-SIZE)
-      e.lit-buf = buffer/allocate-in[u8, _](alloc, TWO-PASS-BLOCK-SIZE)
-    } else {
-      crash("brotli encoder: only qualities 0 and 1 are implemented")
-    }
-    e.storage = buffer/allocate-in[u8, _](alloc, 2 * FRAGMENT-SIZE + 503 + 8)
-    e.reset()
-    e
-  }
-
-  fn new-in[a: allocator](alloc: a): *encoder { new-with-quality-in(alloc, 0) }
-  fn new(): *encoder { new-in(mem/current-arena()) }
-  fn new-q1(): *encoder { new-with-quality-in(mem/current-arena(), 1) }
-
-  fn reset(self: *encoder) {
-    self.last-bytes = 3
-    self.last-bytes-bits = 4
-    self.finished = false
-    if self.quality == 0 {
-      init-command-prefix-codes(self.arena.&)
-    }
-  }
-
-  fn hash-table-size(input-size: size, quality: size): size {
-    let max-table-size = if quality == 0 MAX-TABLE-SIZE else Q1-MAX-TABLE-SIZE
-    let htsize: size = 256
-    while htsize < max-table-size and htsize < input-size {
-      htsize = htsize << 1
-    }
-    if quality == 0 and (htsize & 0xAAAAA) == 0 {
-      htsize = htsize << 1
-    }
-    htsize
-  }
-
-  fn compress-block(self: *encoder, input: ptr, len: size, is-last: bool, out: *list[u8]) {
-    let table-size = hash-table-size(len, self.quality)
-    mem/set(dst = self.table.data-ptr(), value = 0, count = table-size * 4)
-
-    self.storage.index-unchecked(0).* = (self.last-bytes & 0xFF).trunc[u8]
-    self.storage.index-unchecked(1).* = (self.last-bytes >> 8).trunc[u8]
-    let bw: bit-writer = .{
-      storage = self.storage.data-ptr(),
-      pos = self.last-bytes-bits,
-    }
-    bw = if self.quality == 0 {
-      compress-fragment-fast(
-        self.arena.&, input, len, is-last,
-        self.table.slice(0, table-size), table-size, bw)
-    } else {
-      compress-fragment-two-pass(
-        self.arena2, input, len, is-last, self.cmd-buf, self.lit-buf,
-        self.table.slice(0, table-size), table-size, bw)
-    }
-
-    let out-bytes = bw.pos >> 3
-    out.append-span(span/wrap-buffer(self.storage.slice(0, out-bytes)))
-    self.last-bytes = self.storage.index-unchecked(out-bytes).*.widen[u16]
-    self.last-bytes-bits = (bw.pos & 7).trunc[u8]
-  }
-
-  fn process(self: *encoder, input: span[u8], out: *list[u8]) {
-    if self.finished crash("brotli encoder: process after finish")
-    let pos: size = 0
-    while pos < input.len() {
-      let block = FRAGMENT-SIZE.min(input.len() - pos)
-      self.compress-block(input.data-ptr().add-bytes(pos), block, false, out)
-      pos = pos + block
-    }
-  }
-
-  fn flush(self: *encoder, out: *list[u8]) {
-    if self.finished crash("brotli encoder: flush after finish")
-    if self.last-bytes-bits == 0 return
-    let seal = self.last-bytes.widen[u32] | (0x6u32 << self.last-bytes-bits.widen[u32])
-    let seal-bits = self.last-bytes-bits + 6
-    self.last-bytes = 0
-    self.last-bytes-bits = 0
-    let n = (seal-bits + 7) >> 3
-    let i: size = 0
-    while i < n {
-      out.push((seal >> (8 * i.trunc[u32])).trunc[u8])
-      i = i + 1
-    }
-  }
-
-  fn finish(self: *encoder, out: *list[u8]) {
-    if self.finished crash("brotli encoder: finish after finish")
-    self.compress-block(ptr/null, 0, true, out)
-    self.finished = true
-  }
-
-  fn compress(self: *encoder, input: span[u8], out: *list[u8]) {
-    if self.finished crash("brotli encoder: compress after finish")
-    let pos: size = 0
-    loop {
-      let remaining = input.len() - pos
-      let block = FRAGMENT-SIZE.min(remaining)
-      let is-last = remaining == block
-      self.compress-block(input.data-ptr().add-bytes(pos), block, is-last, out)
-      pos = pos + block
-      if is-last break
-    }
-    self.finished = true
-  }
 }

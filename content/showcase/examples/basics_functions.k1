@@ -1,0 +1,12 @@
+fn greeting(name: string, height-cm: int, formal: bool): string {
+  let title = if formal "Dr. " else ""
+  let inches = height-cm * 100 / 254
+  "Hello, $title$name, you are ${inches / 12} ft ${inches % 12} in"
+}
+
+fn main() {
+  let name = "Dennis"
+  let line = greeting(name, height-cm = 180, formal = false)
+  println(line)
+  println(greeting("Ada", height-cm = 170, formal = true))
+}

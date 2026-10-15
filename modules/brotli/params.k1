@@ -1,0 +1,130 @@
+let NUM-LITERAL-SYMBOLS: size = 256
+let NUM-BLOCK-LEN-SYMBOLS: size = 26
+let MAX-NUMBER-OF-BLOCK-TYPES: size = 256
+let NUM-DISTANCE-SHORT-CODES: size = 16
+let MAX-NPOSTFIX: size = 3
+let MAX-DISTANCE-BITS: size = 24
+let LITERAL-CONTEXT-BITS: size = 6
+let DISTANCE-CONTEXT-BITS: size = 2
+let WINDOW-GAP: size = 16
+let MAX-SIMPLE-DISTANCE-ALPHABET-SIZE: size = 140
+let MAX-HUFFMAN-TREE-SIZE: size = 2 * NUM_COMMAND_SYMBOLS + 1
+let MAX-STATIC-CONTEXTS: size = 13
+let MAX-NUM-DELAYED-SYMBOLS: size = 0x2FFF
+let MIN-WINDOW-BITS: size = 10
+let MAX-WINDOW-BITS: size = 24
+let MAX-INPUT-BLOCK-BITS: size = 24
+let MAX-ZOPFLI-LEN-QUALITY-10: size = 150
+let MAX-ZOPFLI-LEN-QUALITY-11: size = 325
+
+let MAX-QUALITY-FOR-STATIC-ENTROPY-CODES: size = 2
+let MIN-QUALITY-FOR-BLOCK-SPLIT: size = 4
+let MIN-QUALITY-FOR-OPTIMIZE-HISTOGRAMS: size = 4
+let MIN-QUALITY-FOR-EXTENSIVE-REFERENCE-SEARCH: size = 5
+let MIN-QUALITY-FOR-CONTEXT-MODELING: size = 5
+let MIN-QUALITY-FOR-HQ-CONTEXT-MODELING: size = 7
+let MIN-QUALITY-FOR-HQ-BLOCK-SPLITTING: size = 10
+let ZOPFLIFICATION-QUALITY: size = 10
+let HQ-ZOPFLIFICATION-QUALITY: size = 11
+
+fn distance-alphabet-size(npostfix: size, ndirect: size, maxnbits: size): size {
+  NUM-DISTANCE-SHORT-CODES + ndirect + (maxnbits << (npostfix + 1).trunc[u32])
+}
+
+type distance-params = {
+  distance-postfix-bits: size,
+  num-direct-distance-codes: size,
+  alphabet-size-max: size,
+  alphabet-size-limit: size,
+  max-distance: size,
+}
+
+fn init-distance-params(npostfix: size, ndirect: size): distance-params {
+  let alphabet-size-max = distance-alphabet-size(npostfix, ndirect, MAX-DISTANCE-BITS)
+  let max-distance = ndirect + (1 << (MAX-DISTANCE-BITS + npostfix + 2).trunc[u32]) - (1 << (npostfix + 2).trunc[u32])
+  .{
+    distance-postfix-bits = npostfix,
+    num-direct-distance-codes = ndirect,
+    alphabet-size-max,
+    alphabet-size-limit = alphabet-size-max,
+    max-distance,
+  }
+}
+
+type hasher-params = {
+  kind: size,
+  bucket-bits: size,
+  block-bits: size,
+  num-last-distances-to-check: size,
+}
+
+type encoder-params = {
+  quality: size,
+  lgwin: size,
+  lgblock: size,
+  size-hint: size,
+  dist: distance-params,
+  hasher: hasher-params,
+}
+
+ns for encoder-params {
+  fn new(quality: size, lgwin: size): encoder-params {
+    let p: encoder-params = .{
+      quality = quality.max(0).min(11),
+      lgwin = lgwin.max(MIN-WINDOW-BITS).min(MAX-WINDOW-BITS),
+      lgblock = 0,
+      size-hint = 0,
+      dist = init-distance-params(0, 0),
+      hasher = .0,
+    }
+    p.lgblock = p.compute-lg-block()
+    p
+  }
+
+  fn compute-lg-block(self: *encoder-params): size {
+    if self.quality <= 1 self.lgwin
+    else if self.quality < MIN-QUALITY-FOR-BLOCK-SPLIT 14
+    else if self.quality >= 9 and self.lgwin > 16 self.lgwin.min(18)
+    else 16
+  }
+
+  fn(inline) compute-rb-bits(self: *encoder-params): size { 1 + self.lgwin.max(self.lgblock) }
+
+  fn(inline) max-metablock-size(self: *encoder-params): size {
+    1 << self.compute-rb-bits().min(MAX-INPUT-BLOCK-BITS).trunc[u32]
+  }
+
+  fn(inline) input-block-size(self: *encoder-params): size { 1 << self.lgblock.trunc[u32] }
+
+  fn(inline) max-backward-limit(self: *encoder-params): size { (1 << self.lgwin.trunc[u32]) - WINDOW-GAP }
+
+  fn(inline) literal-spree-length-for-sparse-search(self: *encoder-params): size {
+    if self.quality < 9 64 else 512
+  }
+
+  fn(inline) max-zopfli-len(self: *encoder-params): size {
+    if self.quality <= 10 MAX-ZOPFLI-LEN-QUALITY-10 else MAX-ZOPFLI-LEN-QUALITY-11
+  }
+
+  fn(inline) max-zopfli-candidates(self: *encoder-params): size { if self.quality <= 10 1 else 5 }
+
+  fn choose-hasher(self: *encoder-params) {
+    let q = self.quality
+    let h = self.hasher.&
+    if q > 9 {
+      h.kind = 10
+    } else if q == 4 and self.size-hint >= (1 << 20) {
+      h.kind = 54
+    } else if q < 5 {
+      h.kind = q
+    } else if self.lgwin <= 16 {
+      h.kind = if q < 7 40 else if q < 9 41 else 42
+    } else {
+      let large = self.size-hint >= (1 << 20) and self.lgwin >= 19
+      h.kind = if large 6 else 5
+      h.block-bits = q - 1
+      h.bucket-bits = if large or q >= 7 15 else 14
+      h.num-last-distances-to-check = if q < 7 4 else if q < 9 10 else 16
+    }
+  }
+}

@@ -1,0 +1,15 @@
+ns(reload) handlers {
+  let(mutable) HITS: i64 = 0
+
+  fn handle-request(path: string): string {
+    HITS = HITS + 1
+    if (path == "/") "200 <h1>hello</h1>" else "404 $path"
+  }
+}
+
+fn main() {
+  handlers/watch().!
+  for path in ["/", "/about", "/"] {
+    println("${handlers/handle-request(path)}  hits=${handlers/HITS} v${handlers/loaded-version()}")
+  }
+}

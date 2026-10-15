@@ -1,0 +1,19 @@
+fn apply-twice(x: int, f: some fn int -> int): int {
+  f(f(x))
+}
+
+fn inc(x: int): int { x + 1 }
+
+fn main() {
+  println(apply-twice(1, inc))
+  println(apply-twice(1, fn x. x * 10))
+  let inc-ptr: *fn(int) -> int = inc.&
+  println(apply-twice(1, inc-ptr))
+
+  let step = 5
+  let total = 0
+  let add = fn[step, total.&](x: int) { total.* = total.* + x + step }
+  add(1)
+  add(2)
+  println(total)
+}

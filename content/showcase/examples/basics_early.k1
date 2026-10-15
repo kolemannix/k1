@@ -1,0 +1,16 @@
+fn fib(n: int): int {
+  if n < 2 n else fib(n - 1) + fib(n - 2)
+}
+
+let ANSWER: int = fib(30) * fib(20) + 1
+
+fn main() {
+  println(ANSWER)
+  let table: list[int] = #static {
+    let xs: list[int] = []
+    for i in 0.until(10) { xs.push(fib(i)) }
+    println("built ${xs.len()} entries while compiling")
+    xs
+  }
+  println(table)
+}

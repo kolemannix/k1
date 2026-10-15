@@ -1,0 +1,20 @@
+type pair[a, b] = { a, b }
+
+ns for pair {
+  fn swap[a, b](self: pair[a, b]): pair[b, a] {
+    .{ a = self.b, b = self.a }
+  }
+}
+
+fn largest[t: comparable](xs: list[t]): t {
+  let best = xs.[0]
+  for x in xs { if x.compare(best) is :greater { best = x } }
+  best
+}
+
+fn main() {
+  let p: pair[int, string] = .{ a = 1, b = "one" }
+  println(p.swap())
+  println(largest([3, 9, 2]))
+  println(largest(["pear", "apple"]))
+}

@@ -1,0 +1,10 @@
+fn main() {
+  let words = "the quick brown fox".split-by-char(' ')
+  let last-two = words.slice(2, 4)
+  println(last-two)
+  let lengths = words.map(fn w. w.len())
+  let long = words.filter(fn w. w.len() > 3)
+  println("$lengths $long ${lengths.sum()}")
+  let s = "hello world"
+  println(s.slice(6, 11))
+}

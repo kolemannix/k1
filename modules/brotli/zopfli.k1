@@ -1,0 +1,660 @@
+let MAX-EFFECTIVE-DISTANCE-ALPHABET-SIZE: size = 544
+let LONG-COPY-QUICK-STEP: size = 16384
+let K-INFINITY: f32 = 1.7e38
+let K-DISTANCE-CACHE-INDEX: array[size, 16] = [0, 1, 2, 3, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1]
+let K-DISTANCE-CACHE-OFFSET: array[i32, 16] = [0, 0, 0, 0, -1, 1, -2, 2, -3, 3, -1, 1, -2, 2, -3, 3]
+
+type zopfli-node-u = union { cost: f32, next: u32, shortcut: u32 }
+
+type zopfli-node = {
+  length: u32,
+  distance: u32,
+  dcode-insert-length: u32,
+  u: zopfli-node-u,
+}
+
+ns for zopfli-node {
+  fn(inline) copy-length(self: *zopfli-node): u32 { self.length & 0x1FFFFFF }
+
+  fn(inline) length-code(self: *zopfli-node): u32 {
+    let modifier = self.length >> 25
+    self.copy-length() + 9 - modifier
+  }
+
+  fn(inline) copy-distance(self: *zopfli-node): u32 { self.distance }
+
+  fn(inline) distance-code(self: *zopfli-node): u32 {
+    let short-code = self.dcode-insert-length >> 27
+    if short-code == 0 self.copy-distance() + NUM-DISTANCE-SHORT-CODES.trunc[u32] - 1
+    else short-code - 1
+  }
+
+  fn(inline) command-length(self: *zopfli-node): u32 {
+    self.copy-length() + (self.dcode-insert-length & 0x7FFFFFF)
+  }
+}
+
+fn init-zopfli-nodes(nodes: buffer[zopfli-node]) {
+  nodes.fill(.{ length = 1, distance = 0, dcode-insert-length = 0, u = .{ cost = K-INFINITY } })
+}
+
+type zopfli-cost-model = {
+  cost-cmd: buffer[f32],
+  cost-dist: buffer[f32],
+  distance-histogram-size: size,
+  literal-costs: buffer[f32],
+  min-cost-cmd: f32,
+  num-bytes: size,
+  literal-histograms: buffer[size],
+  histogram-literal: buffer[u32],
+  histogram-cmd: buffer[u32],
+  histogram-dist: buffer[u32],
+  cost-literal: buffer[f32],
+}
+
+fn set-cost(histogram: buffer[u32], histogram-size: size, literal-histogram: bool, cost: buffer[f32]) {
+  let sum: size = 0
+  for i in 0.until(histogram-size) {
+    sum = sum + histogram.index-unchecked(i).*.as-size()
+  }
+  let log2sum = fast-log2(sum).trunc[f32]
+  let missing-symbol-sum = sum
+  if not literal-histogram {
+    for i in 0.until(histogram-size) {
+      if histogram.index-unchecked(i).* == 0 { missing-symbol-sum = missing-symbol-sum + 1 }
+    }
+  }
+  let missing-symbol-cost = fast-log2(missing-symbol-sum).trunc[f32] + 2.0
+  for i in 0.until(histogram-size) {
+    let h = histogram.index-unchecked(i).*
+    let c = cost.index-unchecked(i)
+    if h == 0 {
+      c.* = missing-symbol-cost
+      continue
+    }
+    c.* = log2sum - fast-log2(h.as-size()).trunc[f32]
+    if c.* < 1.0 { c.* = 1.0 }
+  }
+}
+
+ns for zopfli-cost-model {
+  fn new(dist: *distance-params, num-bytes: size): zopfli-cost-model {
+    .{
+      cost-cmd = buffer/allocate[f32](NUM_COMMAND_SYMBOLS),
+      cost-dist = buffer/allocate[f32](dist.alphabet-size-limit),
+      distance-histogram-size = dist.alphabet-size-limit,
+      literal-costs = buffer/allocate[f32](num-bytes + 2),
+      min-cost-cmd = 0.0,
+      num-bytes,
+      literal-histograms = buffer/allocate[size](3 * 256),
+      histogram-literal = buffer/allocate[u32](NUM-LITERAL-SYMBOLS),
+      histogram-cmd = buffer/allocate[u32](NUM_COMMAND_SYMBOLS),
+      histogram-dist = buffer/allocate[u32](MAX-EFFECTIVE-DISTANCE-ALPHABET-SIZE),
+      cost-literal = buffer/allocate[f32](NUM-LITERAL-SYMBOLS),
+    }
+  }
+
+  fn set-from-commands(
+    self: *zopfli-cost-model, position: size, ringbuffer: ptr, ringbuffer-mask: size,
+    commands: buffer[command], last-insert-len: size,
+  ) {
+    let pos = position - last-insert-len
+    let min-cost-cmd = K-INFINITY
+    let cost-cmd = self.cost-cmd
+
+    self.histogram-literal.memset(0)
+    self.histogram-cmd.memset(0)
+    self.histogram-dist.memset(0)
+
+    for i in 0.until(commands.len()) {
+      let cmd = commands.index-unchecked(i)
+      let inslength = cmd.insert-len.as-size()
+      let copylength = cmd.copy-length().as-size()
+      let distcode = (cmd.dist-prefix & 0x3FF).as-size()
+      let cmdcode = cmd.cmd-prefix.as-size()
+
+      let hc = self.histogram-cmd.index-unchecked(cmdcode)
+      hc.* = hc.* + 1
+      if cmdcode >= 128 {
+        let hd = self.histogram-dist.index-unchecked(distcode)
+        hd.* = hd.* + 1
+      }
+
+      for j in 0.until(inslength) {
+        let hl = self.histogram-literal.index-unchecked(byte-at(ringbuffer, (pos + j) & ringbuffer-mask).as-size())
+        hl.* = hl.* + 1
+      }
+
+      pos = pos + inslength + copylength
+    }
+
+    set-cost(self.histogram-literal, NUM-LITERAL-SYMBOLS, true, self.cost-literal)
+    set-cost(self.histogram-cmd, NUM_COMMAND_SYMBOLS, false, cost-cmd)
+    set-cost(self.histogram-dist, self.distance-histogram-size, false, self.cost-dist)
+
+    for i in 0.until(NUM_COMMAND_SYMBOLS) {
+      min-cost-cmd = min-cost-cmd.min(cost-cmd.index-unchecked(i).*)
+    }
+    self.min-cost-cmd = min-cost-cmd
+
+    {
+      let literal-costs = self.literal-costs
+      let literal-carry: f32 = 0.0
+      let num-bytes = self.num-bytes
+      literal-costs.index-unchecked(0).* = 0.0
+      for i in 0.until(num-bytes) {
+        literal-carry = literal-carry +
+          self.cost-literal.index-unchecked(byte-at(ringbuffer, (position + i) & ringbuffer-mask).as-size()).*
+        let prev = literal-costs.index-unchecked(i).*
+        let next = prev + literal-carry
+        literal-costs.index-unchecked(i + 1).* = next
+        literal-carry = literal-carry - (next - prev)
+      }
+    }
+  }
+
+  fn set-from-literal-costs(self: *zopfli-cost-model, position: size, ringbuffer: ptr, ringbuffer-mask: size) {
+    let literal-costs = self.literal-costs
+    let literal-carry: f32 = 0.0
+    let cost-dist = self.cost-dist
+    let cost-cmd = self.cost-cmd
+    let num-bytes = self.num-bytes
+    estimate-bit-costs-for-literals(
+      position, num-bytes, ringbuffer-mask, ringbuffer, self.literal-histograms,
+      literal-costs.slice(1, literal-costs.len()))
+    literal-costs.index-unchecked(0).* = 0.0
+    for i in 0.until(num-bytes) {
+      literal-carry = literal-carry + literal-costs.index-unchecked(i + 1).*
+      let prev = literal-costs.index-unchecked(i).*
+      let next = prev + literal-carry
+      literal-costs.index-unchecked(i + 1).* = next
+      literal-carry = literal-carry - (next - prev)
+    }
+    for i in 0.until(NUM_COMMAND_SYMBOLS) {
+      cost-cmd.index-unchecked(i).* = fast-log2(11 + i).trunc[f32]
+    }
+    for i in 0.until(self.distance-histogram-size) {
+      cost-dist.index-unchecked(i).* = fast-log2(20 + i).trunc[f32]
+    }
+    self.min-cost-cmd = fast-log2(11).trunc[f32]
+  }
+
+  fn(inline) command-cost(self: *zopfli-cost-model, cmdcode: u16): f32 {
+    self.cost-cmd.index-unchecked(cmdcode.as-size()).*
+  }
+
+  fn(inline) distance-cost(self: *zopfli-cost-model, distcode: size): f32 {
+    self.cost-dist.index-unchecked(distcode).*
+  }
+
+  fn(inline) literal-costs(self: *zopfli-cost-model, from: size, to: size): f32 {
+    self.literal-costs.index-unchecked(to).* - self.literal-costs.index-unchecked(from).*
+  }
+
+  fn(inline) min-cost-cmd(self: *zopfli-cost-model): f32 { self.min-cost-cmd }
+}
+
+fn(inline) update-zopfli-node(
+  nodes: buffer[zopfli-node], pos: size, start-pos: size, len: size, len-code: size,
+  dist: size, short-code: size, cost: f32,
+) {
+  let next = nodes.index-unchecked(pos + len)
+  next.length = (len | ((len + 9 - len-code) << 25)).trunc[u32]
+  next.distance = dist.trunc[u32]
+  next.dcode-insert-length = ((short-code << 27) | (pos - start-pos)).trunc[u32]
+  next.u.cost = cost
+}
+
+type pos-data = {
+  pos: size,
+  distance-cache: array[i32, 4],
+  costdiff: f32,
+  cost: f32,
+}
+
+type start-pos-queue = {
+  q: array[pos-data, 8],
+  idx: size,
+}
+
+ns for start-pos-queue {
+  fn new(): start-pos-queue { .{ q = .0, idx = 0 } }
+
+  fn(inline) size(self: *start-pos-queue): size { self.idx.min(8) }
+
+  fn push(self: *start-pos-queue, posdata: pos-data) {
+    let offset = self.idx.bit-not() & 7
+    self.idx = self.idx + 1
+    let len = self.size()
+    self.q.[offset] = posdata
+    for i in 1.until(len) {
+      let a = offset & 7
+      let b = (offset + 1) & 7
+      if self.q.[a].costdiff > self.q.[b].costdiff {
+        let t = self.q.[a]
+        self.q.[a] = self.q.[b]
+        self.q.[b] = t
+      }
+      offset = offset + 1
+    }
+  }
+
+  fn(inline) at(self: *start-pos-queue, k: size): *pos-data {
+    self.q.[(k - self.idx) & 7].&
+  }
+}
+
+fn compute-minimum-copy-length(start-cost: f32, nodes: buffer[zopfli-node], num-bytes: size, pos: size): size {
+  let min-cost = start-cost
+  let len: size = 2
+  let next-len-bucket: size = 4
+  let next-len-offset: size = 10
+  while pos + len <= num-bytes and nodes.index-unchecked(pos + len).u.cost <= min-cost {
+    len = len + 1
+    if len == next-len-offset {
+      min-cost = min-cost + 1.0
+      next-len-offset = next-len-offset + next-len-bucket
+      next-len-bucket = next-len-bucket * 2
+    }
+  }
+  len
+}
+
+fn compute-distance-shortcut(block-start: size, pos: size, max-backward-limit: size, gap: size, nodes: buffer[zopfli-node]): u32 {
+  let node = nodes.index-unchecked(pos)
+  let c-len = node.copy-length().as-size()
+  let i-len = (node.dcode-insert-length & 0x7FFFFFF).as-size()
+  let dist = node.copy-distance().as-size()
+  if pos == 0 {
+    0
+  } else if dist + c-len <= block-start + pos + gap and
+            dist <= max-backward-limit + gap and
+            node.distance-code() > 0 {
+    pos.trunc[u32]
+  } else {
+    nodes.index-unchecked(pos - c-len - i-len).u.shortcut
+  }
+}
+
+fn compute-distance-cache(pos: size, starting-dist-cache: buffer[i32], nodes: buffer[zopfli-node], dist-cache: buffer[i32]) {
+  let idx: size = 0
+  let p = nodes.index-unchecked(pos).u.shortcut.as-size()
+  while idx < 4 and p > 0 {
+    let node = nodes.index-unchecked(p)
+    let i-len = (node.dcode-insert-length & 0x7FFFFFF).as-size()
+    let c-len = node.copy-length().as-size()
+    let dist = node.copy-distance()
+    dist-cache.index-unchecked(idx).* = dist.signed()
+    idx = idx + 1
+    p = nodes.index-unchecked(p - c-len - i-len).u.shortcut.as-size()
+  }
+  let s: size = 0
+  while idx < 4 {
+    dist-cache.index-unchecked(idx).* = starting-dist-cache.index-unchecked(s).*
+    s = s + 1
+    idx = idx + 1
+  }
+}
+
+fn evaluate-node(
+  block-start: size, pos: size, max-backward-limit: size, gap: size, starting-dist-cache: buffer[i32],
+  model: *zopfli-cost-model, queue: *start-pos-queue, nodes: buffer[zopfli-node],
+) {
+  let node = nodes.index-unchecked(pos)
+  let node-cost = node.u.cost
+  node.u.shortcut = compute-distance-shortcut(block-start, pos, max-backward-limit, gap, nodes)
+  if node-cost <= model.literal-costs(0, pos) {
+    let posdata: pos-data = .{
+      pos,
+      distance-cache = .0,
+      cost = node-cost,
+      costdiff = node-cost - model.literal-costs(0, pos),
+    }
+    compute-distance-cache(pos, starting-dist-cache, nodes, posdata.distance-cache.&.as-buffer())
+    queue.push(posdata)
+  }
+}
+
+fn update-nodes(
+  num-bytes: size, block-start: size, pos: size, ringbuffer: ptr, ringbuffer-mask: size,
+  params: *encoder-params, max-backward-limit: size, starting-dist-cache: buffer[i32],
+  matches: buffer[backward-match], model: *zopfli-cost-model, queue: *start-pos-queue,
+  nodes: buffer[zopfli-node],
+): size {
+  let stream-offset: size = 0
+  let cur-ix = block-start + pos
+  let cur-ix-masked = cur-ix & ringbuffer-mask
+  let max-distance = cur-ix.min(max-backward-limit)
+  let dictionary-start = (cur-ix + stream-offset).min(max-backward-limit)
+  let max-len = num-bytes - pos
+  let max-zopfli-len = params.max-zopfli-len()
+  let max-iters = params.max-zopfli-candidates()
+  let result: size = 0
+  let gap: size = 0
+
+  evaluate-node(block-start + stream-offset, pos, max-backward-limit, gap, starting-dist-cache, model, queue, nodes)
+
+  let min-len = {
+    let posdata = queue.at(0)
+    let min-cost = posdata.cost + model.min-cost-cmd() + model.literal-costs(posdata.pos, pos)
+    compute-minimum-copy-length(min-cost, nodes, num-bytes, pos)
+  }
+
+  let k: size = 0
+  while k < max-iters and k < queue.size() {
+    let posdata = queue.at(k)
+    let start = posdata.pos
+    let inscode = get-insert-length-code(pos - start)
+    let start-costdiff = posdata.costdiff
+    let base-cost = start-costdiff + k-ins-extra.[inscode.as-size()].as[f32] + model.literal-costs(0, pos)
+
+    let best-len = min-len - 1
+    let j: size = 0
+    while j < NUM-DISTANCE-SHORT-CODES and best-len < max-len {
+      let idx = K-DISTANCE-CACHE-INDEX.[j]
+      let backward = (posdata.distance-cache.[idx] + K-DISTANCE-CACHE-OFFSET.[j]).widen[i64]
+      let prev-ix = cur-ix - backward
+      let len: size = 0
+      if cur-ix-masked + best-len > ringbuffer-mask {
+        break
+      }
+      let continuation = byte-at(ringbuffer, cur-ix-masked + best-len)
+      if backward > dictionary-start + gap {
+        j = j + 1
+        continue
+      }
+      if backward <= max-distance {
+        if prev-ix >= cur-ix {
+          j = j + 1
+          continue
+        }
+        prev-ix = prev-ix & ringbuffer-mask
+        if prev-ix + best-len > ringbuffer-mask or continuation != byte-at(ringbuffer, prev-ix + best-len) {
+          j = j + 1
+          continue
+        }
+        len = find-match-length(ringbuffer.add-bytes(prev-ix), ringbuffer.add-bytes(cur-ix-masked), max-len)
+      } else {
+        j = j + 1
+        continue
+      }
+      {
+        let dist-cost = base-cost + model.distance-cost(j)
+        let l = best-len + 1
+        while l <= len {
+          let copycode = get-copy-length-code(l)
+          let cmdcode = combine-length-codes(inscode, copycode, j == 0)
+          let cost = (if cmdcode < 128 base-cost else dist-cost) +
+            k-copy-extra.[copycode.as-size()].as[f32] + model.command-cost(cmdcode)
+          if cost < nodes.index-unchecked(pos + l).u.cost {
+            update-zopfli-node(nodes, pos, start, l, l, backward, j + 1, cost)
+            result = result.max(l)
+          }
+          best-len = l
+          l = l + 1
+        }
+      }
+      j = j + 1
+    }
+
+    if k >= 2 {
+      k = k + 1
+      continue
+    }
+
+    {
+      let len = min-len
+      for j2 in 0.until(matches.len()) {
+        let m = matches.index-unchecked(j2).*
+        let dist = m.distance.as-size()
+        let is-dictionary-match = dist > dictionary-start + gap
+        let dist-code = dist + NUM-DISTANCE-SHORT-CODES - 1
+        let d = prefix-encode-copy-distance(dist-code, params.dist.num-direct-distance-codes, params.dist.distance-postfix-bits)
+        let distnumextra = (d.code >> 10).widen[u32]
+        let dist-cost = base-cost + distnumextra.as[f32] + model.distance-cost((d.code & 0x3FF).as-size())
+
+        let max-match-len = m.length()
+        if len < max-match-len and (is-dictionary-match or max-match-len > max-zopfli-len) {
+          len = max-match-len
+        }
+        while len <= max-match-len {
+          let len-code = if is-dictionary-match m.length-code() else len
+          let copycode = get-copy-length-code(len-code)
+          let cmdcode = combine-length-codes(inscode, copycode, false)
+          let cost = dist-cost + k-copy-extra.[copycode.as-size()].as[f32] + model.command-cost(cmdcode)
+          if cost < nodes.index-unchecked(pos + len).u.cost {
+            update-zopfli-node(nodes, pos, start, len, len-code, dist, 0, cost)
+            result = result.max(len)
+          }
+          len = len + 1
+        }
+      }
+    }
+    k = k + 1
+  }
+  result
+}
+
+fn compute-shortest-path-from-nodes(num-bytes: size, nodes: buffer[zopfli-node]): size {
+  let index = num-bytes
+  let num-commands: size = 0
+  while (nodes.index-unchecked(index).dcode-insert-length & 0x7FFFFFF) == 0 and
+        nodes.index-unchecked(index).length == 1 {
+    index = index - 1
+  }
+  nodes.index-unchecked(index).u.next = 0xFFFFFFFF
+  while index != 0 {
+    let len = nodes.index-unchecked(index).command-length().as-size()
+    index = index - len
+    nodes.index-unchecked(index).u.next = len.trunc[u32]
+    num-commands = num-commands + 1
+  }
+  num-commands
+}
+
+fn zopfli-create-commands(
+  num-bytes: size, block-start: size, nodes: buffer[zopfli-node], dist-cache: buffer[i32],
+  last-insert-len: *size, params: *encoder-params, commands: *list[command], num-literals: *size,
+) {
+  let stream-offset: size = 0
+  let max-backward-limit = params.max-backward-limit()
+  let pos: size = 0
+  let offset = nodes.index-unchecked(0).u.next
+  let gap: size = 0
+  let i: size = 0
+  while offset != 0xFFFFFFFF {
+    let next = nodes.index-unchecked(pos + offset.as-size())
+    let copy-length = next.copy-length().as-size()
+    let insert-length = (next.dcode-insert-length & 0x7FFFFFF).as-size()
+    pos = pos + insert-length
+    offset = next.u.next
+    if i == 0 {
+      insert-length = insert-length + last-insert-len.*
+      last-insert-len.* = 0
+    }
+    {
+      let distance = next.copy-distance().as-size()
+      let len-code = next.length-code().as-size()
+      let dictionary-start = (block-start + pos + stream-offset).min(max-backward-limit)
+      let is-dictionary = distance > dictionary-start + gap
+      let dist-code = next.distance-code().as-size()
+      commands.push(command/new(
+        params.dist.&, insert-length, copy-length, (len-code.trunc[i32] - copy-length.trunc[i32]), dist-code))
+
+      if (not is-dictionary) and dist-code > 0 {
+        dist-cache.index-unchecked(3).* = dist-cache.index-unchecked(2).*
+        dist-cache.index-unchecked(2).* = dist-cache.index-unchecked(1).*
+        dist-cache.index-unchecked(1).* = dist-cache.index-unchecked(0).*
+        dist-cache.index-unchecked(0).* = distance.trunc[i32]
+      }
+    }
+
+    num-literals.* = num-literals.* + insert-length
+    pos = pos + copy-length
+    i = i + 1
+  }
+  last-insert-len.* = last-insert-len.* + (num-bytes - pos)
+}
+
+fn zopfli-iterate(
+  num-bytes: size, position: size, ringbuffer: ptr, ringbuffer-mask: size, params: *encoder-params,
+  gap: size, dist-cache: buffer[i32], model: *zopfli-cost-model, num-matches: buffer[u32],
+  matches: buffer[backward-match], nodes: buffer[zopfli-node],
+): size {
+  let stream-offset: size = 0
+  let max-backward-limit = params.max-backward-limit()
+  let max-zopfli-len = params.max-zopfli-len()
+  let queue = start-pos-queue/new()
+  let cur-match-pos: size = 0
+  nodes.index-unchecked(0).length = 0
+  nodes.index-unchecked(0).u.cost = 0.0
+  let i: size = 0
+  while i + 3 < num-bytes {
+    let n = num-matches.index-unchecked(i).*.as-size()
+    let skip = update-nodes(
+      num-bytes, position, i, ringbuffer, ringbuffer-mask, params, max-backward-limit, dist-cache,
+      matches.slice(cur-match-pos, cur-match-pos + n), model, queue.&, nodes)
+    if skip < LONG-COPY-QUICK-STEP { skip = 0 }
+    cur-match-pos = cur-match-pos + n
+    if n == 1 and matches.index-unchecked(cur-match-pos - 1).length() > max-zopfli-len {
+      skip = matches.index-unchecked(cur-match-pos - 1).length().max(skip)
+    }
+    if skip > 1 {
+      skip = skip - 1
+      while skip != 0 {
+        i = i + 1
+        if i + 3 >= num-bytes break
+        evaluate-node(position + stream-offset, i, max-backward-limit, gap, dist-cache, model, queue.&, nodes)
+        cur-match-pos = cur-match-pos + num-matches.index-unchecked(i).*.as-size()
+        skip = skip - 1
+      }
+    }
+    i = i + 1
+  }
+  compute-shortest-path-from-nodes(num-bytes, nodes)
+}
+
+fn zopfli-compute-shortest-path(
+  num-bytes: size, position: size, ringbuffer: ptr, ringbuffer-mask: size, params: *encoder-params,
+  dist-cache: buffer[i32], hasher: *hasher-h10, nodes: buffer[zopfli-node],
+): size {
+  let stream-offset: size = 0
+  let max-backward-limit = params.max-backward-limit()
+  let max-zopfli-len = params.max-zopfli-len()
+  let queue = start-pos-queue/new()
+  let matches: list[backward-match] = list/with-capacity(2 * (MAX-NUM-MATCHES-H10 + 64))
+  let store-end = if num-bytes >= H10-MAX-TREE-COMP-LENGTH position + num-bytes - H10-MAX-TREE-COMP-LENGTH + 1 else position
+  let gap: size = 0
+  let model = zopfli-cost-model/new(params.dist.&, num-bytes)
+  nodes.index-unchecked(0).length = 0
+  nodes.index-unchecked(0).u.cost = 0.0
+  model.set-from-literal-costs(position, ringbuffer, ringbuffer-mask)
+  let i: size = 0
+  while i + 4 - 1 < num-bytes {
+    let pos = position + i
+    let max-distance = pos.min(max-backward-limit)
+    let dictionary-start = (pos + stream-offset).min(max-backward-limit)
+    matches.clear()
+    let num-matches = hasher.find-all-matches(
+      ringbuffer, ringbuffer-mask, pos, num-bytes - i, max-distance, dictionary-start + gap, params, matches.&)
+    if num-matches > 0 and matches.[num-matches - 1].length() > max-zopfli-len {
+      let last = matches.[num-matches - 1]
+      matches.clear()
+      matches.push(last)
+      num-matches = 1
+    }
+    let skip = update-nodes(
+      num-bytes, position, i, ringbuffer, ringbuffer-mask, params, max-backward-limit, dist-cache,
+      matches.as-buffer(), model.&, queue.&, nodes)
+    if skip < LONG-COPY-QUICK-STEP { skip = 0 }
+    if num-matches == 1 and matches.[0].length() > max-zopfli-len {
+      skip = matches.[0].length().max(skip)
+    }
+    if skip > 1 {
+      hasher.store-range(ringbuffer, ringbuffer-mask, pos + 1, (pos + skip).min(store-end))
+      skip = skip - 1
+      while skip != 0 {
+        i = i + 1
+        if i + 4 - 1 >= num-bytes break
+        evaluate-node(position + stream-offset, i, max-backward-limit, gap, dist-cache, model.&, queue.&, nodes)
+        skip = skip - 1
+      }
+    }
+    i = i + 1
+  }
+  compute-shortest-path-from-nodes(num-bytes, nodes)
+}
+
+fn create-zopfli-backward-references(
+  num-bytes: size, position: size, ringbuffer: ptr, ringbuffer-mask: size, params: *encoder-params,
+  hasher: *hasher-h10, dist-cache: buffer[i32], last-insert-len: *size, commands: *list[command],
+  num-literals: *size,
+) {
+  let nodes = buffer/allocate[zopfli-node](num-bytes + 1)
+  init-zopfli-nodes(nodes)
+  zopfli-compute-shortest-path(num-bytes, position, ringbuffer, ringbuffer-mask, params, dist-cache, hasher, nodes)
+  zopfli-create-commands(num-bytes, position, nodes, dist-cache, last-insert-len, params, commands, num-literals)
+}
+
+fn create-hq-zopfli-backward-references(
+  num-bytes: size, position: size, ringbuffer: ptr, ringbuffer-mask: size, params: *encoder-params,
+  hasher: *hasher-h10, dist-cache: buffer[i32], last-insert-len: *size, commands: *list[command],
+  num-literals: *size,
+) {
+  let stream-offset: size = 0
+  let max-backward-limit = params.max-backward-limit()
+  let num-matches = buffer/allocate[u32](num-bytes)
+  let store-end = if num-bytes >= H10-MAX-TREE-COMP-LENGTH position + num-bytes - H10-MAX-TREE-COMP-LENGTH + 1 else position
+  let matches: list[backward-match] = list/with-capacity(4 * num-bytes)
+  let gap: size = 0
+  let i: size = 0
+  while i + 4 - 1 < num-bytes {
+    let pos = position + i
+    let max-distance = pos.min(max-backward-limit)
+    let dictionary-start = (pos + stream-offset).min(max-backward-limit)
+    let max-length = num-bytes - i
+    let cur-match-pos = matches.len()
+    let num-found-matches = hasher.find-all-matches(
+      ringbuffer, ringbuffer-mask, pos, max-length, max-distance, dictionary-start + gap, params, matches.&)
+    let cur-match-end = cur-match-pos + num-found-matches
+    num-matches.index-unchecked(i).* = num-found-matches.trunc[u32]
+    if num-found-matches > 0 {
+      let match-len = matches.[cur-match-end - 1].length()
+      if match-len > MAX-ZOPFLI-LEN-QUALITY-11 {
+        let skip = match-len - 1
+        matches.[cur-match-pos] = matches.[cur-match-end - 1]
+        matches.len = cur-match-pos + 1
+        num-matches.index-unchecked(i).* = 1
+        hasher.store-range(ringbuffer, ringbuffer-mask, pos + 1, (pos + match-len).min(store-end))
+        num-matches.slice(i + 1, i + 1 + skip).memset(0)
+        i = i + skip
+      }
+    }
+    i = i + 1
+  }
+  let orig-num-literals = num-literals.*
+  let orig-last-insert-len = last-insert-len.*
+  let orig-dist-cache = array/zeroed[i32, 4]()
+  for k in 0.until(4) { orig-dist-cache.[k] = dist-cache.index-unchecked(k).* }
+  let orig-num-commands = commands.len()
+  let nodes = buffer/allocate[zopfli-node](num-bytes + 1)
+  let model = zopfli-cost-model/new(params.dist.&, num-bytes)
+  for pass in 0.until(2) {
+    init-zopfli-nodes(nodes)
+    if pass == 0 {
+      model.set-from-literal-costs(position, ringbuffer, ringbuffer-mask)
+    } else {
+      model.set-from-commands(
+        position, ringbuffer, ringbuffer-mask,
+        commands.as-buffer().slice(orig-num-commands, commands.len()), orig-last-insert-len)
+    }
+    commands.len = orig-num-commands
+    num-literals.* = orig-num-literals
+    last-insert-len.* = orig-last-insert-len
+    for k in 0.until(4) { dist-cache.index-unchecked(k).* = orig-dist-cache.[k] }
+    zopfli-iterate(
+      num-bytes, position, ringbuffer, ringbuffer-mask, params, gap, dist-cache, model.&,
+      num-matches, matches.as-buffer(), nodes)
+    zopfli-create-commands(num-bytes, position, nodes, dist-cache, last-insert-len, params, commands, num-literals)
+  }
+}

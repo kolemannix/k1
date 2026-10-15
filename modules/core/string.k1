@@ -206,6 +206,8 @@ ns for string {
     wrap-buffer(clone-chars)
   }
 
+  fn to-hex(self: string): string { self.span-bytes().to-hex() }
+
   fn to-ascii-lower(self: string): string {
     let clone-chars: buffer[char] = self.span.buffer.cloned()
     for c in self {

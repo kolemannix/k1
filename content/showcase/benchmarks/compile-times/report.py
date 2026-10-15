@@ -29,6 +29,11 @@ def src_path(lang, n):
 results = {}
 for p in RES.glob("*.json"):
     results[p.stem] = json.load(open(p))["results"][0]
+rss = {}
+for p in RES.glob("*.rss.txt"):
+    for line in p.read_text().splitlines():
+        if "maximum resident set size" in line:
+            rss[p.name[: -len(".rss.txt")]] = int(line.split()[0])
 
 versions = {}
 for line in (RES / "versions.txt").read_text().splitlines():
@@ -40,7 +45,7 @@ MODES = [(m, MODE_LABELS[m]) for m in versions["modes"].split()]
 MODE_COLS = [(m, m) for m, _ in MODES]
 
 
-def lookup(lang, mode, tag):
+def cell_key(lang, mode, tag):
     if lang in ("go", "gocold", "kt"):
         mode = "debug"
     if lang == "java":
@@ -49,7 +54,17 @@ def lookup(lang, mode, tag):
         mode = "debug"
     if lang == "cs" and mode != "opt":
         return None
-    return results.get(f"{lang}-{mode}-{tag}")
+    return f"{lang}-{mode}-{tag}"
+
+
+def lookup(lang, mode, tag):
+    key = cell_key(lang, mode, tag)
+    return None if key is None else results.get(key)
+
+
+def mb(lang, mode, tag):
+    key = cell_key(lang, mode, tag)
+    return "—" if key is None or key not in rss else str(round(rss[key] / 1048576))
 
 
 def wall(r):
@@ -87,6 +102,19 @@ def cells_table(first, cols, rows, cell):
 
 def mode_table(mode, langs):
     return cells_table("Language", [(n, f"N={n}") for n in SIZES], langs, lambda lang, n: lookup(lang, mode, n))
+
+
+def rss_table(langs):
+    header = ["Language"]
+    cols = []
+    for m, label in MODES:
+        for n in SIZES:
+            header.append(f"{label} N={n}")
+            cols.append((m, n))
+    rows = []
+    for key, name in langs:
+        rows.append([name] + [mb(key, m, n) for m, n in cols])
+    return table(header, rows)
 
 
 def hello_table(first, langs):
@@ -142,6 +170,7 @@ k1_files, k1_lines, c_files, c_lines, h_files, h_lines = brotli_loc()
 synthetic = []
 for mode, label in MODES:
     synthetic.append(f"### {label}\n\n" + mode_table(mode, STRESS_LANGS))
+synthetic.append("### peak memory, MiB\n\n" + rss_table(STRESS_LANGS))
 
 hello = hello_table("Language", LANGS)
 cold = hello_table("Toolchain", [("k1", "k1 (`--no-cache`, same as above)"), ("gocold", "Go, empty GOCACHE"), ("zigcold", "Zig, empty global + local cache")])
@@ -177,9 +206,12 @@ hyperfine exports and text captures under `gen/results/`.
 - Toolchains: `{versions['k1']}`, `{versions['clang']}`, `{versions['rustc']}`,
   `{versions['go']}`, `zig {versions['zig']}`, `ocaml {versions['ocaml']}`, `{versions['javac']}`,
   `{versions['kotlinc']}`, `dotnet {versions['dotnet']}`, `{versions['hyperfine']}`
-- hyperfine: `-N --warmup 1 --min-runs {versions['runs']}`; cells are wall-clock
+- hyperfine: `-N --warmup 3 --min-runs {versions['runs']}`; cells are wall-clock
   mean ± σ in seconds with the fastest run in parentheses, and CPU time
-  (user + system, mean) in seconds. The CPU column matters: k1, rustc and Go
+  (user + system, mean) in seconds. Peak memory is the maximum resident set
+  size `/usr/bin/time -l` reports for one more run of the same command, after
+  the same prepare step; for a toolchain that forks (`go build`, `kotlinc`,
+  `dotnet build`) it is the largest single process. The CPU column matters: k1, rustc and Go
   compile on several cores by default, while clang, clang++ and zig work
   single-threaded on one translation unit. On a busy machine the parallel
   compilers lose the most wall time, and the fastest run is the least
@@ -328,28 +360,35 @@ Where a language forced a different shape:
 
 
 Everything is a single source file and a single toolchain invocation with
-default settings unless listed. Debug info is off everywhere.
+default settings unless listed. The debug build is no optimization plus full
+debug info (DWARF for the native compilers, local variable tables for the
+JVM ones), the mode an edit-debug loop runs; the typecheck and optimized
+builds carry no debug info. Go is the exception with one mode that both
+optimizes and emits DWARF.
 
 | Language | typecheck only | debug build | optimized build |
 |---|---|---|---|
-| k1 | `k1 --no-cache check f.k1` | `k1 --no-cache build f.k1` | `k1 --no-cache --optimize build f.k1` |
-| C | `clang -fsyntax-only f.c` | `clang -O0 -o out f.c` | `clang -O2 -o out f.c` |
-| C++ (both rows) | `clang++ -std=c++20 -fsyntax-only f.cpp` | `clang++ -std=c++20 -O0 -o out f.cpp` | `clang++ -std=c++20 -O2 -o out f.cpp` |
-| Rust | `rustc --edition 2021 --emit=metadata f.rs` | `rustc --edition 2021 -C opt-level=0 f.rs` | `rustc --edition 2021 -C opt-level=3 f.rs` |
+| k1 | `k1 --no-cache check f.k1` | `k1 --no-cache --debug build f.k1` | `k1 --no-cache --optimize build f.k1` |
+| C | `clang -fsyntax-only f.c` | `clang -g -O0 -o out f.c` | `clang -O2 -o out f.c` |
+| C++ (both rows) | `clang++ -std=c++20 -fsyntax-only f.cpp` | `clang++ -std=c++20 -g -O0 -o out f.cpp` | `clang++ -std=c++20 -O2 -o out f.cpp` |
+| Rust | `rustc --edition 2021 --emit=metadata f.rs` | `rustc --edition 2021 -g -C opt-level=0 f.rs` | `rustc --edition 2021 -C opt-level=3 f.rs` |
 | Go | `go build -o out f.go` (no separate check; `go vet` is not the compiler) | same | same (Go has no optimization level) |
 | Zig | `zig build-exe -fno-emit-bin f.zig` | `zig build-exe -O Debug f.zig` | `zig build-exe -O ReleaseFast f.zig` |
-| OCaml | `ocamlopt -stop-after typing f.ml` | `ocamlopt -o out f.ml` | `ocamlopt -O3 -o out f.ml` (`-O3` is inert without flambda) |
-| Java | `javac -d out Stress.java` | same | — (javac has no optimization level) |
+| OCaml | `ocamlopt -stop-after typing f.ml` | `ocamlopt -g -o out f.ml` | `ocamlopt -O3 -o out f.ml` (`-O3` is inert without flambda) |
+| Java | `javac -g -d out Stress.java` | same | — (javac has no optimization level) |
 | Kotlin | `JAVA_OPTS=-XX:MaxRAMPercentage=25 kotlinc -d out f.kt` (no typecheck-only mode) | same | same (kotlinc has no optimization level) |
 | C# | — | — | `dotnet build -c Release f.csproj` |
 
 - `rustc` is used bare, without cargo, so no cargo overhead is measured.
   `--edition 2021` because bare `rustc` defaults to 2015. rustc's defaults
   apply otherwise: 16 codegen units and parallel LLVM at both opt levels.
-- k1's plain `build` is not a pure `-O0`: each codegen unit runs `mem2reg`,
-  one `instcombine` iteration, `simplifycfg`, `globaldce` and `mergefunc`
-  (`Pipeline::Dev` in `src/k1/codegen_llvm.rs`; `--debug` would skip passes
-  but add debug info). `--optimize` is ThinLTO: `thinlto-pre-link<O3>` per
+- `k1 --debug` is the pure `-O0` row: no LLVM passes and full DWARF, the
+  same shape as `clang -g -O0`. k1's default `build` is the dev pipeline
+  instead: line tables only, and each codegen unit runs `mem2reg`, one
+  `instcombine` iteration, `simplifycfg`, `globaldce` and `mergefunc`
+  (`Pipeline::Dev` in `src/k1/codegen_llvm.rs`); it is a little faster than
+  `--debug` and is what the warm-cache rows below would normally run as.
+  `--optimize` is ThinLTO: `thinlto-pre-link<O3>` per
   unit, then LLVM's ThinLTO backend, so it is closer to
   `clang -O3 -flto=thin` than to the single-TU `-O2`/`opt-level=3`/
   `ReleaseFast` rows, none of which do LTO.
@@ -357,12 +396,13 @@ default settings unless listed. Debug info is off everywhere.
   also disables restoring core and std from k1's disk cache, so every
   k1 run re-parses and re-typechecks the whole standard library from source;
   the section "k1 with a warm library cache" shows the cost of that choice.
-- Zig gets `-target aarch64-macos`: 0.14.0's native detection resolves to
-  `macos.26.x`, which its linker cannot link against (undefined `_abort`,
-  `_getenv`, ...); the generic OS version links fine. Its global cache
-  (compiler_rt, std artifacts) is one directory under `gen/` that stays warm
-  across runs; its local cache (`--cache-dir`) is deleted before every run,
-  so the program itself is always compiled from scratch.
+- Zig's `-O Debug` already emits full DWARF, and that is most of its debug
+  build: `-O Debug -fstrip` compiles the N=100 program in about half the
+  time, where `-g` costs clang a third more on the same program. The default
+  backend on arm64-macos is LLVM at `-O0` followed by Zig's own linker. Its
+  global cache (compiler_rt, std artifacts) is one directory under `gen/`
+  that stays warm across runs; its local cache (`--cache-dir`) is deleted
+  before every run, so the program itself is always compiled from scratch.
 - `ocamlopt -stop-after typing` parses and typechecks and writes only the
   `.cmi` (`ocamlc -i` would typecheck too, but then print the inferred
   interface of the whole program). `ocamlopt` has no `-O0`/`-O2`: the stock
@@ -376,8 +416,10 @@ default settings unless listed. Debug info is off everywhere.
   text and runs the system assembler on it (`-dtimings` reports that
   `assemble` step as most of the build at these sizes), then `clang` for
   the link.
-- Go's GOCACHE is one directory under `gen/` that stays warm, so the runtime
-  and `os`/`fmt` are not rebuilt (Go 1.20+ builds the standard library into
+- `go build` optimizes and emits DWARF, with no switch for either in the
+  table (`-gcflags=all=-N -l` and `-ldflags=-w -s` exist, and the typical
+  Go user types neither). Go's GOCACHE is one directory under `gen/` that
+  stays warm, so the runtime and `os`/`fmt` are not rebuilt (Go 1.20+ builds the standard library into
   GOCACHE, which takes seconds), but the source gets a fresh nonce comment
   before every run and the previous binary is deleted, so the program is
   compiled and linked from scratch each time.
@@ -396,7 +438,8 @@ default settings unless listed. Debug info is off everywhere.
   lowerings for debugging and nothing in front of them, and no front-end-only
   option) and no optimization level (`-Xno-optimize` turns off the bytecode
   peephole cleanups that are on by default), so the one `kotlinc -d out f.kt`
-  measurement fills all three columns. Every run is a fresh JVM running the
+  measurement fills all three columns, and it always emits local variable
+  tables, what `javac -g` adds. Every run is a fresh JVM running the
   compiler: the `kotlinc` script runs `java` on `K2JVMCompiler` directly,
   with no daemon (the Kotlin compile daemon exists only behind the Gradle and
   Maven plugins and is never started here) and no cache, and the output

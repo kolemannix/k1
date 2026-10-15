@@ -1,0 +1,411 @@
+let MAX-STATIC-DICTIONARY-MATCH-LEN: size = 37
+let INVALID-MATCH: u32 = 0xFFFFFFF
+
+fn(inline) char-at(p: ptr, i: size): char { p.ref-at[u8](i).*.as-char() }
+
+fn(inline) add-match(distance: size, len: size, len-code: size, matches: buffer[u32]) {
+  let m = ((distance << 5) + len-code).trunc[u32]
+  let slot = matches.index-unchecked(len)
+  slot.* = slot.*.min(m)
+}
+
+fn(inline) dict-match-length(data: ptr, id: size, len: size, maxlen: size): size {
+  find-match-length(dictionary-word(len, id), data, len.min(maxlen))
+}
+
+fn is-dict-match(len: size, transform: size, idx: size, data: ptr, max-length: size): bool {
+  if len > max-length return false
+  let dict = dictionary-word(len, idx)
+  if transform == 0 {
+    find-match-length(dict, data, len) == len
+  } else if transform == 10 {
+    let d0 = byte-at(dict, 0)
+    d0 >= 97 and d0 <= 122 and (d0 ^ 32) == byte-at(data, 0) and
+      find-match-length(dict.add-bytes(1), data.add-bytes(1), len - 1) == len - 1
+  } else {
+    for i in 0.until(len) {
+      let d = byte-at(dict, i)
+      if d >= 97 and d <= 122 {
+        if (d ^ 32) != byte-at(data, i) return false
+      } else {
+        if d != byte-at(data, i) return false
+      }
+    }
+    true
+  }
+}
+
+fn find-all-static-dictionary-matches(data: ptr, min-length: size, max-length: size, matches: buffer[u32]): bool {
+  let has-found-match = false
+  {
+    let offset = k-dict-lut-buckets.[hash32(data, 15)].as-size()
+    let end = offset == 0
+    while not end {
+      let w = k-dict-lut-words.[offset]
+      offset = offset + 1
+      let l = (w & 0x1F).as-size()
+      let n = 1 << k-dictionary-size-bits-by-length.[l].widen[u32]
+      let id = (w >> 16).as-size()
+      let transform = ((w >> 8) & 0xFF).as-size()
+      end = (w & 0x80) != 0
+      if transform == 0 {
+        let matchlen = dict-match-length(data, id, l, max-length)
+        if matchlen == l {
+          add-match(id, l, l, matches)
+          has-found-match = true
+        }
+        if matchlen >= l - 1 {
+          add-match(id + 12 * n, l - 1, l, matches)
+          if l + 2 < max-length and
+            char-at(data, l - 1) == 'i' and char-at(data, l) == 'n' and
+            char-at(data, l + 1) == 'g' and char-at(data, l + 2) == ' ' {
+            add-match(id + 49 * n, l + 3, l, matches)
+          }
+          has-found-match = true
+        }
+        let minlen = min-length
+        if l > 9 { minlen = minlen.max(l - 9) }
+        let maxlen = matchlen.min(l - 2)
+        let len = minlen
+        while len <= maxlen {
+          let cut = l - len
+          let transform-id = (cut << 2) + ((CUTOFF-TRANSFORMS >> (cut * 6).trunc[u32]) & 0x3F).signed()
+          add-match(id + transform-id * n, len, l, matches)
+          has-found-match = true
+          len = len + 1
+        }
+        if matchlen < l or l + 6 >= max-length {
+          continue
+        }
+        let s = data.add-bytes(l)
+        if char-at(s, 0) == ' ' {
+          add-match(id + n, l + 1, l, matches)
+          if char-at(s, 1) == 'a' {
+            if char-at(s, 2) == ' ' {
+              add-match(id + 28 * n, l + 3, l, matches)
+            } else if char-at(s, 2) == 's' {
+              if char-at(s, 3) == ' ' { add-match(id + 46 * n, l + 4, l, matches) }
+            } else if char-at(s, 2) == 't' {
+              if char-at(s, 3) == ' ' { add-match(id + 60 * n, l + 4, l, matches) }
+            } else if char-at(s, 2) == 'n' {
+              if char-at(s, 3) == 'd' and char-at(s, 4) == ' ' {
+                add-match(id + 10 * n, l + 5, l, matches)
+              }
+            }
+          } else if char-at(s, 1) == 'b' {
+            if char-at(s, 2) == 'y' and char-at(s, 3) == ' ' {
+              add-match(id + 38 * n, l + 4, l, matches)
+            }
+          } else if char-at(s, 1) == 'i' {
+            if char-at(s, 2) == 'n' {
+              if char-at(s, 3) == ' ' { add-match(id + 16 * n, l + 4, l, matches) }
+            } else if char-at(s, 2) == 's' {
+              if char-at(s, 3) == ' ' { add-match(id + 47 * n, l + 4, l, matches) }
+            }
+          } else if char-at(s, 1) == 'f' {
+            if char-at(s, 2) == 'o' {
+              if char-at(s, 3) == 'r' and char-at(s, 4) == ' ' {
+                add-match(id + 25 * n, l + 5, l, matches)
+              }
+            } else if char-at(s, 2) == 'r' {
+              if char-at(s, 3) == 'o' and char-at(s, 4) == 'm' and char-at(s, 5) == ' ' {
+                add-match(id + 37 * n, l + 6, l, matches)
+              }
+            }
+          } else if char-at(s, 1) == 'o' {
+            if char-at(s, 2) == 'f' {
+              if char-at(s, 3) == ' ' { add-match(id + 8 * n, l + 4, l, matches) }
+            } else if char-at(s, 2) == 'n' {
+              if char-at(s, 3) == ' ' { add-match(id + 45 * n, l + 4, l, matches) }
+            }
+          } else if char-at(s, 1) == 'n' {
+            if char-at(s, 2) == 'o' and char-at(s, 3) == 't' and char-at(s, 4) == ' ' {
+              add-match(id + 80 * n, l + 5, l, matches)
+            }
+          } else if char-at(s, 1) == 't' {
+            if char-at(s, 2) == 'h' {
+              if char-at(s, 3) == 'e' {
+                if char-at(s, 4) == ' ' { add-match(id + 5 * n, l + 5, l, matches) }
+              } else if char-at(s, 3) == 'a' {
+                if char-at(s, 4) == 't' and char-at(s, 5) == ' ' {
+                  add-match(id + 29 * n, l + 6, l, matches)
+                }
+              }
+            } else if char-at(s, 2) == 'o' {
+              if char-at(s, 3) == ' ' { add-match(id + 17 * n, l + 4, l, matches) }
+            }
+          } else if char-at(s, 1) == 'w' {
+            if char-at(s, 2) == 'i' and char-at(s, 3) == 't' and char-at(s, 4) == 'h' and char-at(s, 5) == ' ' {
+              add-match(id + 35 * n, l + 6, l, matches)
+            }
+          }
+        } else if char-at(s, 0) == '"' {
+          add-match(id + 19 * n, l + 1, l, matches)
+          if char-at(s, 1) == '>' {
+            add-match(id + 21 * n, l + 2, l, matches)
+          }
+        } else if char-at(s, 0) == '.' {
+          add-match(id + 20 * n, l + 1, l, matches)
+          if char-at(s, 1) == ' ' {
+            add-match(id + 31 * n, l + 2, l, matches)
+            if char-at(s, 2) == 'T' and char-at(s, 3) == 'h' {
+              if char-at(s, 4) == 'e' {
+                if char-at(s, 5) == ' ' { add-match(id + 43 * n, l + 6, l, matches) }
+              } else if char-at(s, 4) == 'i' {
+                if char-at(s, 5) == 's' and char-at(s, 6) == ' ' {
+                  add-match(id + 75 * n, l + 7, l, matches)
+                }
+              }
+            }
+          }
+        } else if char-at(s, 0) == ',' {
+          add-match(id + 76 * n, l + 1, l, matches)
+          if char-at(s, 1) == ' ' {
+            add-match(id + 14 * n, l + 2, l, matches)
+          }
+        } else if char-at(s, 0) == '\n' {
+          add-match(id + 22 * n, l + 1, l, matches)
+          if char-at(s, 1) == '\t' {
+            add-match(id + 50 * n, l + 2, l, matches)
+          }
+        } else if char-at(s, 0) == ']' {
+          add-match(id + 24 * n, l + 1, l, matches)
+        } else if char-at(s, 0) == '\'' {
+          add-match(id + 36 * n, l + 1, l, matches)
+        } else if char-at(s, 0) == ':' {
+          add-match(id + 51 * n, l + 1, l, matches)
+        } else if char-at(s, 0) == '(' {
+          add-match(id + 57 * n, l + 1, l, matches)
+        } else if char-at(s, 0) == '=' {
+          if char-at(s, 1) == '"' {
+            add-match(id + 70 * n, l + 2, l, matches)
+          } else if char-at(s, 1) == '\'' {
+            add-match(id + 86 * n, l + 2, l, matches)
+          }
+        } else if char-at(s, 0) == 'a' {
+          if char-at(s, 1) == 'l' and char-at(s, 2) == ' ' {
+            add-match(id + 84 * n, l + 3, l, matches)
+          }
+        } else if char-at(s, 0) == 'e' {
+          if char-at(s, 1) == 'd' {
+            if char-at(s, 2) == ' ' { add-match(id + 53 * n, l + 3, l, matches) }
+          } else if char-at(s, 1) == 'r' {
+            if char-at(s, 2) == ' ' { add-match(id + 82 * n, l + 3, l, matches) }
+          } else if char-at(s, 1) == 's' {
+            if char-at(s, 2) == 't' and char-at(s, 3) == ' ' {
+              add-match(id + 95 * n, l + 4, l, matches)
+            }
+          }
+        } else if char-at(s, 0) == 'f' {
+          if char-at(s, 1) == 'u' and char-at(s, 2) == 'l' and char-at(s, 3) == ' ' {
+            add-match(id + 90 * n, l + 4, l, matches)
+          }
+        } else if char-at(s, 0) == 'i' {
+          if char-at(s, 1) == 'v' {
+            if char-at(s, 2) == 'e' and char-at(s, 3) == ' ' {
+              add-match(id + 92 * n, l + 4, l, matches)
+            }
+          } else if char-at(s, 1) == 'z' {
+            if char-at(s, 2) == 'e' and char-at(s, 3) == ' ' {
+              add-match(id + 100 * n, l + 4, l, matches)
+            }
+          }
+        } else if char-at(s, 0) == 'l' {
+          if char-at(s, 1) == 'e' {
+            if char-at(s, 2) == 's' and char-at(s, 3) == 's' and char-at(s, 4) == ' ' {
+              add-match(id + 93 * n, l + 5, l, matches)
+            }
+          } else if char-at(s, 1) == 'y' {
+            if char-at(s, 2) == ' ' { add-match(id + 61 * n, l + 3, l, matches) }
+          }
+        } else if char-at(s, 0) == 'o' {
+          if char-at(s, 1) == 'u' and char-at(s, 2) == 's' and char-at(s, 3) == ' ' {
+            add-match(id + 106 * n, l + 4, l, matches)
+          }
+        }
+      } else {
+        let is-all-caps = transform != 10
+        if not is-dict-match(l, transform, id, data, max-length) {
+          continue
+        }
+        add-match(id + (if is-all-caps 44 else 9) * n, l, l, matches)
+        has-found-match = true
+        if l + 1 >= max-length {
+          continue
+        }
+        let s = data.add-bytes(l)
+        if char-at(s, 0) == ' ' {
+          add-match(id + (if is-all-caps 68 else 4) * n, l + 1, l, matches)
+        } else if char-at(s, 0) == '"' {
+          add-match(id + (if is-all-caps 87 else 66) * n, l + 1, l, matches)
+          if char-at(s, 1) == '>' {
+            add-match(id + (if is-all-caps 97 else 69) * n, l + 2, l, matches)
+          }
+        } else if char-at(s, 0) == '.' {
+          add-match(id + (if is-all-caps 101 else 79) * n, l + 1, l, matches)
+          if char-at(s, 1) == ' ' {
+            add-match(id + (if is-all-caps 114 else 88) * n, l + 2, l, matches)
+          }
+        } else if char-at(s, 0) == ',' {
+          add-match(id + (if is-all-caps 112 else 99) * n, l + 1, l, matches)
+          if char-at(s, 1) == ' ' {
+            add-match(id + (if is-all-caps 107 else 58) * n, l + 2, l, matches)
+          }
+        } else if char-at(s, 0) == '\'' {
+          add-match(id + (if is-all-caps 94 else 74) * n, l + 1, l, matches)
+        } else if char-at(s, 0) == '(' {
+          add-match(id + (if is-all-caps 113 else 78) * n, l + 1, l, matches)
+        } else if char-at(s, 0) == '=' {
+          if char-at(s, 1) == '"' {
+            add-match(id + (if is-all-caps 105 else 104) * n, l + 2, l, matches)
+          } else if char-at(s, 1) == '\'' {
+            add-match(id + (if is-all-caps 116 else 108) * n, l + 2, l, matches)
+          }
+        }
+      }
+    }
+  }
+  if max-length >= 5 and (char-at(data, 0) == ' ' or char-at(data, 0) == '.') {
+    let is-space = char-at(data, 0) == ' '
+    let offset = k-dict-lut-buckets.[hash32(data.add-bytes(1), 15)].as-size()
+    let end = offset == 0
+    while not end {
+      let w = k-dict-lut-words.[offset]
+      offset = offset + 1
+      let l = (w & 0x1F).as-size()
+      let n = 1 << k-dictionary-size-bits-by-length.[l].widen[u32]
+      let id = (w >> 16).as-size()
+      let transform = ((w >> 8) & 0xFF).as-size()
+      end = (w & 0x80) != 0
+      if transform == 0 {
+        if not is-dict-match(l, transform, id, data.add-bytes(1), max-length - 1) {
+          continue
+        }
+        add-match(id + (if is-space 6 else 32) * n, l + 1, l, matches)
+        has-found-match = true
+        if l + 2 >= max-length {
+          continue
+        }
+        let s = data.add-bytes(l + 1)
+        if char-at(s, 0) == ' ' {
+          add-match(id + (if is-space 2 else 77) * n, l + 2, l, matches)
+        } else if char-at(s, 0) == '(' {
+          add-match(id + (if is-space 89 else 67) * n, l + 2, l, matches)
+        } else if is-space {
+          if char-at(s, 0) == ',' {
+            add-match(id + 103 * n, l + 2, l, matches)
+            if char-at(s, 1) == ' ' {
+              add-match(id + 33 * n, l + 3, l, matches)
+            }
+          } else if char-at(s, 0) == '.' {
+            add-match(id + 71 * n, l + 2, l, matches)
+            if char-at(s, 1) == ' ' {
+              add-match(id + 52 * n, l + 3, l, matches)
+            }
+          } else if char-at(s, 0) == '=' {
+            if char-at(s, 1) == '"' {
+              add-match(id + 81 * n, l + 3, l, matches)
+            } else if char-at(s, 1) == '\'' {
+              add-match(id + 98 * n, l + 3, l, matches)
+            }
+          }
+        }
+      } else if is-space {
+        let is-all-caps = transform != 10
+        if not is-dict-match(l, transform, id, data.add-bytes(1), max-length - 1) {
+          continue
+        }
+        add-match(id + (if is-all-caps 85 else 30) * n, l + 1, l, matches)
+        has-found-match = true
+        if l + 2 >= max-length {
+          continue
+        }
+        let s = data.add-bytes(l + 1)
+        if char-at(s, 0) == ' ' {
+          add-match(id + (if is-all-caps 83 else 15) * n, l + 2, l, matches)
+        } else if char-at(s, 0) == ',' {
+          if not is-all-caps {
+            add-match(id + 109 * n, l + 2, l, matches)
+          }
+          if char-at(s, 1) == ' ' {
+            add-match(id + (if is-all-caps 111 else 65) * n, l + 3, l, matches)
+          }
+        } else if char-at(s, 0) == '.' {
+          add-match(id + (if is-all-caps 115 else 96) * n, l + 2, l, matches)
+          if char-at(s, 1) == ' ' {
+            add-match(id + (if is-all-caps 117 else 91) * n, l + 3, l, matches)
+          }
+        } else if char-at(s, 0) == '=' {
+          if char-at(s, 1) == '"' {
+            add-match(id + (if is-all-caps 110 else 118) * n, l + 3, l, matches)
+          } else if char-at(s, 1) == '\'' {
+            add-match(id + (if is-all-caps 119 else 120) * n, l + 3, l, matches)
+          }
+        }
+      }
+    }
+  }
+  if max-length >= 6 {
+    if (char-at(data, 1) == ' ' and
+        (char-at(data, 0) == 'e' or char-at(data, 0) == 's' or char-at(data, 0) == ',')) or
+       (byte-at(data, 0) == 0xC2 and byte-at(data, 1) == 0xA0) {
+      let offset = k-dict-lut-buckets.[hash32(data.add-bytes(2), 15)].as-size()
+      let end = offset == 0
+      while not end {
+        let w = k-dict-lut-words.[offset]
+        offset = offset + 1
+        let l = (w & 0x1F).as-size()
+        let n = 1 << k-dictionary-size-bits-by-length.[l].widen[u32]
+        let id = (w >> 16).as-size()
+        let transform = ((w >> 8) & 0xFF).as-size()
+        end = (w & 0x80) != 0
+        if transform == 0 and is-dict-match(l, transform, id, data.add-bytes(2), max-length - 2) {
+          if byte-at(data, 0) == 0xC2 {
+            add-match(id + 102 * n, l + 2, l, matches)
+            has-found-match = true
+          } else if l + 2 < max-length and char-at(data, l + 2) == ' ' {
+            let t: size = if char-at(data, 0) == 'e' 18 else if char-at(data, 0) == 's' 7 else 13
+            add-match(id + t * n, l + 3, l, matches)
+            has-found-match = true
+          }
+        }
+      }
+    }
+  }
+  if max-length >= 9 {
+    if (char-at(data, 0) == ' ' and char-at(data, 1) == 't' and char-at(data, 2) == 'h' and
+        char-at(data, 3) == 'e' and char-at(data, 4) == ' ') or
+       (char-at(data, 0) == '.' and char-at(data, 1) == 'c' and char-at(data, 2) == 'o' and
+        char-at(data, 3) == 'm' and char-at(data, 4) == '/') {
+      let offset = k-dict-lut-buckets.[hash32(data.add-bytes(5), 15)].as-size()
+      let end = offset == 0
+      while not end {
+        let w = k-dict-lut-words.[offset]
+        offset = offset + 1
+        let l = (w & 0x1F).as-size()
+        let n = 1 << k-dictionary-size-bits-by-length.[l].widen[u32]
+        let id = (w >> 16).as-size()
+        let transform = ((w >> 8) & 0xFF).as-size()
+        end = (w & 0x80) != 0
+        if transform == 0 and is-dict-match(l, transform, id, data.add-bytes(5), max-length - 5) {
+          add-match(id + (if char-at(data, 0) == ' ' 41 else 72) * n, l + 5, l, matches)
+          has-found-match = true
+          if l + 5 < max-length {
+            let s = data.add-bytes(l + 5)
+            if char-at(data, 0) == ' ' {
+              if l + 8 < max-length and
+                 char-at(s, 0) == ' ' and char-at(s, 1) == 'o' and char-at(s, 2) == 'f' and char-at(s, 3) == ' ' {
+                add-match(id + 62 * n, l + 9, l, matches)
+                if l + 12 < max-length and
+                   char-at(s, 4) == 't' and char-at(s, 5) == 'h' and char-at(s, 6) == 'e' and char-at(s, 7) == ' ' {
+                  add-match(id + 73 * n, l + 13, l, matches)
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  has-found-match
+}
