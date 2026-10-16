@@ -282,7 +282,7 @@ pub(crate) struct BuiltinFunctions {
     pub bitwise_shr: QIdent,
     pub test_outcome: QIdent,
     pub test_outcome_failure: QIdent,
-    pub test_run: QIdent,
+    pub test_suite: QIdent,
 }
 
 /// Long strings get a sampled hash: O(1) instead of hashing megabytes of
@@ -747,9 +747,10 @@ impl IdentPool {
 
         let path_core_test = intern_path!(b.core, intern!("test"));
         let test_outcome = make_fn!(path_core_test, intern!("outcome"));
-        let test_run = make_fn!(path_core_test, intern!("run"));
         let path_core_test_outcome = intern_path!(b.core, intern!("test"), intern!("outcome"));
         let test_outcome_failure = make_fn!(path_core_test_outcome, intern!("failure"));
+        let path_core_k1_test = intern_path!(b.core, b.k1, intern!("test"));
+        let test_suite = make_fn!(path_core_k1_test, intern!("suite"));
 
         let f = BuiltinFunctions {
             list_with_capacity,
@@ -801,7 +802,7 @@ impl IdentPool {
             bitwise_shr,
             test_outcome,
             test_outcome_failure,
-            test_run,
+            test_suite,
         };
 
         Self { pool: std::cell::RefCell::new(pool), b, f }

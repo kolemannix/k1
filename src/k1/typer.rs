@@ -1,4 +1,3 @@
-//nocommit unreviewed
 // Copyright (c) 2026 knix
 // All rights reserved.
 
@@ -952,6 +951,7 @@ bitflags! {
         const NoInline = 1 << 9;
         const TestStatic = 1 << 10;
         const TestRuntime = 1 << 11;
+        const AddressBaked = 1 << 12;
     }
 }
 
@@ -1027,6 +1027,10 @@ impl TypedFunction {
 
     pub fn address_taken(&self) -> bool {
         self.flags.contains(TypedFunctionFlags::AddressTaken)
+    }
+
+    pub fn address_baked(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::AddressBaked)
     }
 
     pub fn is_test(&self) -> bool {
@@ -2912,7 +2916,7 @@ pub struct TypedProgram {
     /// diagnostic only, for --chatty and tests
     pub restored_module_count: u32,
 
-    pub test_main: Option<FunctionId>,
+    pub test_suite: Option<StaticValueId>,
     pub test_expected_failures: FxHashMap<FunctionId, StringId>,
     pub test_results: Vec<StaticTestResult>,
 }
@@ -3111,7 +3115,7 @@ impl TypedProgram {
             megarepl: None,
             inputs_hash,
             restored_module_count: 0,
-            test_main: None,
+            test_suite: None,
             test_expected_failures: FxHashMap::default(),
             test_results: Vec::new(),
         };
@@ -13707,6 +13711,7 @@ impl TypedProgram {
                     (Some("test"), "expect-failure") => {
                         Some(Builtin::TyperInline(BuiltinTyperInline::TestExpectFailure))
                     }
+                    (Some("test"), "suite") => Some(Builtin::Backend(BackendBuiltin::TestSuite)),
                     _ => None,
                 },
                 Some(_) => None,
@@ -17981,6 +17986,7 @@ impl TypedProgram {
             StaticValue::Char(_) => self.builtin_types.char(),
             StaticValue::Int(typed_integer_value) => typed_integer_value.get_type(),
             StaticValue::Enum(type_id, _) => *type_id,
+            StaticValue::FunctionPointer(type_id, _) => *type_id,
             StaticValue::Float(typed_float_value) => typed_float_value.get_type(),
             StaticValue::String(_) => self.builtin_types.string(),
             StaticValue::Zero(type_id) => *type_id,

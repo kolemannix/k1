@@ -27,296 +27,138 @@ Unless otherwise noted, post a patch in the chat session after every turn of cod
 
 # K1 Repo Guide
 
-K1 is a programming language: compile-time execution, typeclasses (abilities),
-metaprogramming, C-like layout and ABI. This repo is the Rust compiler, its
-compile-time VM, the LLVM backend, the language server, the K1 module library,
-and the K1 programs that exercise all of it.
+K1: compile-time execution, abilities (typeclasses), metaprogramming, C-like layout
+and ABI. This repo: the Rust compiler, its compile-time VM, LLVM backend, LSP, the
+K1 module library, and K1 programs exercising them. Names of files, `just --list`
+and `k1 --help` are self-describing; this guide covers what they don't say.
 
-K1 language reference for agents: `docs/ai_docs/k1-syntax-basics.md` and
-`docs/ai_docs/k1-additional.md`. `test_src/suite1` is the executable reference.
+Language reference: `docs/ai_docs/k1-syntax-basics.md`, then `k1-additional.md`.
+They are agent notes: fix a wrong line on sight, never report it or ask.
+`test_src/suite1` is the executable reference.
 
-## Rust Style
+## Rust style
+- No map/filter/collect chains, no `bool::then`/`then_some`: `for` loops into a
+  `let mut` accumulator, `if c { Some(x) } else { None }` or a match guard.
+  Scalar adapters (`any all find`, `zip enumerate rev` in a for header) are fine;
+  message/debug string building may chain.
+- Inline every single-call-site fn (Carmack style); each inlined section gets a
+  one-line `//` header, the one place comments belong.
+- Fns are named verb-first like their neighbours (`get_*`), never noun phrases.
+  Techniques by mechanism ("alloca value tracking"), never by paper author. K1-facing
+  names are chosen for K1 users, not to mirror Rust internals.
+- Clippy: keep `result_large_err` on; fix the site's shape.
 
-- No map/filter/collect iterator chains, no `bool::then`/`then_some`. Build
-  collections with `for .. in` loops and a `let mut` accumulator, and
-  conditional options with `if c { Some(x) } else { None }` or a match guard:
-  allocations and control flow stay explicit, loops survive edits better, and
-  `?` works inside them. Scalar adapters that don't build collections (`any`,
-  `all`, `find`, `zip`/`enumerate`/`rev` in a for-loop header) are fine.
-  Exception: string-building for messages (error reports, debug output) may
-  use map/collect chains.
-- Inline any function that has a single call site: long functions that read
-  top to bottom beat a web of one-use helpers (Carmack style). Each inlined
-  section gets a one-line `//` header, the one place comments belong.
+## Build and run
+- Cargo needs `LLVM_SYS_231_PREFIX=llvm/install-llvm` (in `~/.zshrc`, absent from
+  non-login shells) and `--features=llvm-sys/prefer-dynamic` for dev builds;
+  bundles use `llvm-sys/force-static`. Release is `panic = "abort"`; the `lsp`
+  profile unwinds so a compile panic becomes an editor message.
+- `[profile.dev] split-debuginfo = "packed"` stays: unpacked `.rcgu.o` files piled
+  up in `target/debug/deps` and Gatekeeper scans an unsigned exe's directory before
+  exec (93 s unit lane). If exec latency returns, count that directory's entries.
+- `K1_HOME` locates `modules/`; only `target/debug` binaries default it to the cwd.
+- `--features single-thread`: no threads; `--optimize` is whole-module O3, not ThinLTO.
+- `k1 <check|build|run|test|...> [path] [flags] [-- args | test filters]`: path is a
+  file or module dir, flags go anywhere, `-D name[=value]` reaches the primary's
+  `fn build`. `k1 parse <file>` prints highlight tokens. Output: `<module>/.k1-out/`.
+- `just ts1`: suite1 plain and `--optimize`, the fast check. `just a`:
+  `sandbox/sandbox.k1`. `just slophost`: the selfhost parser over every repo `.k1`. `cargo test --lib --features=llvm-sys/prefer-dynamic,lsp`:
+  Rust unit tests.
+- `just test` (`./test.sh`): every lane in parallel (one per module: same-module
+  runs share `.k1-out`), then fails on any `nocommit`. Run it bare and read the exit
+  code, never pipe it into `tail`; logs in `target/test-logs/<lane>.log`.
+  Prerequisites: `make -C modules/core/libs clean build`, `make -C
+  test_src/ffi_abi_test/libs clean build`; wasm/bare lanes need `make -C
+  modules/core/libs wasm` / `nocrt`.
 
-## Build And Run
+## Performance work
+When profiling, report findings and leads; change nothing unless asked or approved.
+- Time only `just build-profile` binaries. `just profile-*` run hyperfine;
+  stress100 compares against `perf/latest_stress.txt`; `perf/magic.k1` is the VM
+  benchmark. `stress100 --optimize` measures one SLP pathology, not the optimizer.
+- Ask both "are we doing work slowly" (samples: the Rust level) and "are we doing
+  stupid work" (`--dump-trace`, `--chatty`: the K1 view), and whether it needs doing.
+- Measure with and without `--no-cache` (cached runs guard snapshot/restore);
+  smaller compiler state means smaller snapshots, so inventory one for garbage now
+  and then.
+- A slow pass is a pipeline question: fuse into a walk that already happens,
+  defer substitutions to one apply, or stop emitting the garbage upstream. Hooks on
+  hot emission paths do O(operands) lookups only. Cheap lowering shortcuts
+  (`is_ssa_value` lets) stay even when a pass subsumes them.
+- `commit_unit` dominates IR overhead: a new forced commit, per-inst `IrUnit` array
+  or builder layout change needs an interleaved suite1/stress100 A/B.
 
-- Every cargo command needs `LLVM_SYS_231_PREFIX` (repo default:
-  `llvm/install-llvm`, set in `~/.zshrc`, not inherited by non-login shells)
-  and `--features=llvm-sys/prefer-dynamic` for dev builds. Release and LSP
-  bundles use `llvm-sys/force-static`. Release is `panic = "abort"`; the LSP
-  builds under the `lsp` profile (release with unwinding, `target/lsp/lsp`)
-  so a compile panic becomes an editor message instead of killing the server.
-- `K1_HOME` is where the compiler finds `modules/`. Debug binaries under
-  `target/debug` default it to the cwd; anything else (release, `profiling`
-  profile, worktrees) needs `K1_HOME=<repo root>` exported.
-- `--features single-thread` builds a compiler that spawns no threads:
-  `get_thread_limit()` (lib.rs) returns 1, every threaded site runs inline,
-  and `--optimize` uses whole-module O3 instead of ThinLTO.
-- Binaries: `k1` (`src/bin/compiler_main.rs`), `k1_test`
-  (`src/bin/test_suite.rs`), `lsp` (`src/bin/lsp_main.rs`, needs
-  `--features lsp`).
-- CLI (`k1 --help`, lexopt): `k1 <check|build|run|test|server|setup|clean>
-  [path] [flags] [-- program args | test filters]`, aliases `c b r t`; flags
-  go anywhere; `k1 test --skip-static` / `--skip-runtime` drop the VM run or
-  the test executable (`--skip-runtime` is check plus the VM run), arguments
-  after the path filter tests by substring;
-  `k1 parse <file>` lexes and parses one file alone and prints `<start> <len>
-  <class>` highlight tokens.
-  Path is a file or a module dir. `-D name[=value]` reaches the primary's
-  `fn build`. Useful flags: `--optimize`, `--debug`, `--no-std`, `--no-cache`,
-  `--target <intel64-linux|arm64-macos|wasm64-wasi|intel64-bare|arm64-bare|
-  wasm64-bare>`, `--emit-llvm`, `--dump-module`, `--dump-trace`, `--chatty`
-  (timing summary), `--filc`.
-- Output goes to `<module dir>/.k1-out/` (executable, `.ll`, dumps, disk cache
-  under `cache/`, setup stamps under `setup/`).
-
-## Commands
-
-- `just ts1`: build `k1`, run `test_src/suite1` plain and `--optimize`. The
-  fast correctness check.
-- `just test` = `./test.sh`: builds, then runs in parallel lanes (one per
-  module, since same-module runs share `.k1-out`): Rust unit tests, `k1_test`
-  over `test_src` (every case with `--emit-llvm`), suite1 under
-  optimize/debug and a `single-thread` build (`target/single-thread`), every
-  example project, klib C consumer, reload driver, wasm suite1 and refchess if
-  wasmtime exists, then fails on any `nocommit` marker. Each lane logs to
-  `target/test-logs/<lane>.log`; a failed lane's log is printed at the end.
-  Run it bare and check the exit code; do not pipe it into `tail`.
-- `cargo test --lib --features=llvm-sys/prefer-dynamic,lsp`: Rust unit tests
-  (parse, vm, kmem, layout, static values, bc, kpath, compiler, snapshot).
-- `just a`: run `sandbox/sandbox.k1`, the scratch program for reproducers.
-- `just slophost`: the selfhost parser over every `.k1` in the repo.
-- `just build-r` / `just lsprelease` / `just bundle` / `just install`: release
-  compiler, release LSP, platform tarball under `builds/`, install to `~/.k1`.
-- `just profile-suite1` / `just profile-stress` / `just profile-soa`:
-  hyperfine runs of the `profiling` cargo profile. `perf/gen_stress.py`
-  generates `perf/stress100`. Time only `just build-profile` binaries
-  (`target/profiling/k1`); debug-build timings are meaningless. Compare
-  stress100 against `perf/latest_stress.txt`, the `--chatty c` output
-  `just profile-stress` writes.
-- `just ts1-wasm`, `just fractal*`, `just ts-freestanding`: wasm64-wasi and
-  bare-metal lanes; need `make -C modules/core/libs wasm` / `nocrt`.
-- Native prerequisites for the full suite: `make -C modules/core/libs clean
-  build` and `make -C test_src/ffi_abi_test/libs clean build`.
-
-## Profiling
-When profiling the compiler or working on performance, we use the `profiling` cargo profile, 
-the cli flag --dump-trace, --chatty output, and of course actual process sampling.
-
-Samples are more likely to tell us if we've implemented something poorly at the Rust level, and the trace helps
-us understand the work in terms of the source program and the k1 language itself. 'Are we doing work slowly'
-and 'Are we doing stupid work' are 2 sides of the same coin. We always consider whether the work should even need to
-be done while considering making it get done faster.
-
-We check with and without the k1 cache (`--no-cache`). The cached version is really about making sure that snapshotting
-and snapshot restoration haven't regressed. Making the snapshot smaller by reducing compiler state is a key lever there as well.
-Occasionally we'll inventory **everything** that makes it into a snapshot and look for garbage.
-
-You report findings and possible leads, never make changes, unless explicitly asked or the change is approved.
-
-## Compiler Source Map (`src/k1/`)
-
-Pipeline: lex -> parse -> typer (typecheck + static execution) -> ir -> bc VM
-for compile-time execution, codegen_llvm for binaries.
-
-- `lib.rs`: crate root, `nz_u32_id!` id newtypes, `SV2/4/8` smallvec aliases,
-  `DepHash/DepEq`.
-- `compiler.rs`: `CompileRequest` (the compile API; the CLI in `compiler_main.rs`
-  builds one), `Command`, `ToolFlags`, `CompilerConfig`, `BuildConfig` (target,
-  cpu, features, flags; one resolver), `Target` = arch x platform enum, the
-  compile pipeline (plan, up-front source reads on reader threads, prefix
-  snapshot restore), setup stamps, linking through `src/lld_shim.cpp`,
-  running compiled programs, `static_assert_size`/`static_assert_niched`,
-  `compiler_test`.
-- `plan.rs`: `BuildPlan` (config + modules in dependency order, libs, link
-  args, setups, module params), dep lookup, the plan cache and its
-  freshness check. Strings are `StringId`s in the plan's own `Interner`.
-- `typer/host.rs`: the host world H that compiles every `build.k1` against
-  host core+std, runs `fn build`/`fn module`/`fn setup` in waves, and produces
-  the plan.
-- `kpath.rs`: paths are canonical UTF-8 strings interned in the ident pool;
-  `std::path` only at OS call sites.
-- `lex.rs`: positional lexer, `Token`, `Span` (global byte position + length),
-  trivia side table.
-- `parse.rs` + `parse/idents.rs`: parser, `ParsedProgram`, all `Parsed*` AST
-  pools, `IdentPool`/`StringId`, `ParsedExpr` variants.
-- `typer.rs`: `TypedProgram` (every pool: modules, functions, variables,
-  types, exprs, stmts, static values, scopes, namespaces, abilities, impls,
-  specialization caches), module-by-module typechecking passes, abilities,
-  calls, generics, macros. 18k lines; grep it rather than reading it.
-  - `typer/types.rs`: `Type`, `TypeId`, physical types and `Layout`.
-  - `typer/type_eval.rs`: type definitions and type expressions.
-  - `typer/infer.rs`: inference holes and type argument solving.
-  - `typer/scopes.rs`: `Scopes`, scope entries, use-resolution provenance.
-  - `typer/synth.rs`: synthesizing typed exprs for desugaring.
-  - `typer/pattern_match.rs`: match matrices and exhaustiveness.
-  - `typer/static_exec.rs` + `static_value.rs`: `#static` evaluation and the
-    `StaticValue` pool.
-  - `typer/reflect.rs`: `types/` reflection (type ids, schemas) crossing the
-    VM boundary.
-  - `typer/snapshot.rs`: `TypedProgram` <-> `snap` serialization, inputs hash.
-  - `typer/trace.rs` + `report.rs`: the compile work-stack trace, timing
-    summaries, diagnostics printing.
-  - `typer/dump.rs`: `--dump-module` text form. `typer/typed_int_value.rs`:
-    integer constants.
-  - `typer/megarepl.rs`: cells/widgets model behind `k1 server`.
-  - `typer/derive.rs`: `unimplemented!` stub.
-- `ir.rs` + `ir/iropt.rs`: typed exprs -> SSA `IrUnit`s per function, IR
-  optimization and inlining.
-  - `ir/unit.rs`: unit storage. Inst and block ids are unit-local indices;
-    passes edit a pooled `UnitBuf` (linked layout, preds, a pending
-    `ValueSubst` that passes resolve through), `commit_unit` applies the
-    substitution while compacting into layout order and stores it as arena
-    slices on the `Copy` `IrUnit`; every reader takes a `UnitView`. Call, phi, switch,
-    cmpxchg and vec-op payloads are per-unit arrays.
-  - `ir/fold.rs`: the builder's `push_value` folds constant scalar ops and
-    identities as they are emitted.
-  - `ir/iropt/promote.rs`: promotes allocas to SSA values keyed by
-    (alloca, offset, scalar type), through local copies, copy-ins and call
-    results. At lowering the `Builder` records each alloca access as it
-    emits (`LocalUses`) and `finalize_unit` promotes between unreachable-block
-    removal and block merging; after inlining it rescans only when an inlined call exposed a local.
-- `arith.rs`: integer and float op semantics shared by the bc VM and
-  `ir/fold.rs`; integer results are zero-extended to their width.
-- `bc.rs` + `bc/{lower,exec,disasm}.rs`: flat bytecode lowered from IR, the VM
-  that runs compile-time code, disassembler.
-- `vm.rs` + `vm/vm_ffi.rs`: VM memory model, `k1_types` mirrors of K1
-  runtime structs, libffi calls into native libs and dlsym'd externs.
-- `codegen_llvm.rs`: inkwell LLVM backend, parallel codegen units, ThinLTO
-  via `src/thinlto_shim.cpp`.
-- `snap.rs`: memory snapshot format for the disk cache and LSP restores. The
-  header carries `BUILD_ID`, which already invalidates every snapshot when
-  `src/` changes; `SNAP_MAGIC` needs no bump.
-- `kmem.rs`: the never-freed arena (`Mem`, `List`, `Dlist`, handles) most
-  compiler data lives in. `vpool.rs`/`vecpool.rs`: id-indexed pools.
-  `fixmap.rs`, `rawref.rs`, `unique_stack.rs`, `clock.rs`: small utilities.
-- `server.rs` + `server/`: `k1 server`, the megarepl web app (HTTP, SSE bus,
-  program browser, `/size` code-size treemap; `megarepl.css`, `size.js`).
-- `lsp_support.rs` + `src/bin/lsp_main.rs`: hover/goto/completion over
-  `ls_entities`, compiles the edited file's module as an editor request
-  (`req.editor`; the primary's `fn editor` settings land in `plan.editor`,
-  there are no client settings). The program
-  keeps H as `host_program` and `build.k1` requests and diagnostics go to it;
-  a compile reuses the held H while the cached plan's `host_inputs_hash`
-  matches, and when H fails it compiles against the last stored plan.
-  `test-on-save` runs the primary's tests in the VM after the typecheck
-  diagnostics publish.
-- Not compiled: `codegen_legacy.rs.old`, `vmtw/binop.rs` (`vmtw` is commented
-  out in `lib.rs`).
+## Compiler map (`src/k1/`)
+lex -> parse -> typer (typecheck + static execution) -> ir -> bc VM (compile time)
+or codegen_llvm (binaries).
+- `compiler.rs`: `CompileRequest` (the API the CLI builds), `BuildConfig`, `Target`,
+  the pipeline (plan, reader-thread source reads, prefix snapshot restore, setup
+  stamps, linking via `src/lld_shim.cpp`). `plan.rs`: `BuildPlan`, dep lookup, plan
+  cache. `typer/host.rs`: host world H compiles every `build.k1` against host
+  core+std and runs `fn build/module/setup` in waves.
+- `kpath.rs`: paths are canonical UTF-8 strings in the ident pool; `std::path`
+  only at OS calls.
+- Tokens carry `is_whitespace_preceded`/`is_newline_preceded` and parse rules key
+  on them (`is_kind_nonspaced`, adjacent call parens, quiet payloads,
+  `peek_is_sign`): read `parse.rs` before answering a parse question.
+  `examples/selfhost` mirrors these rules and changes in step.
+- `typer.rs` (18k lines; grep it): `TypedProgram`, every pool, the passes. Generic
+  calls evaluate each stashable arg once, stashed after unification, spliced after
+  `respecialize_aligned_args`; "evaluated only to learn types" is
+  `is_evaluating_for_inference(ctx)`, not `ctx.is_inference()`.
+- `ir/unit.rs`: unit-local ids; passes edit a pooled `UnitBuf` (linked layout,
+  preds, pending `ValueSubst`); `commit_unit` applies it while compacting into arena
+  slices on the `Copy` `IrUnit`; readers take a `UnitView`. `ir/fold.rs` folds as
+  `push_value` emits. `ir/iropt/promote.rs`: allocas to SSA keyed by (alloca,
+  offset, scalar type); the `Builder` records accesses (`LocalUses`) while
+  emitting, `finalize_unit` promotes between unreachable-block removal and block
+  merging, post-inline rescans only where inlining exposed a local.
+- `arith.rs`: op semantics shared by the VM and `fold`. `bc/`: bytecode and VM.
+  `vm/vm_ffi.rs`: libffi and dlsym'd externs. `perfect_hash.rs`: the runtime
+  `type-id.info()` table.
+- `snap.rs`: the header's `BUILD_ID` (git rev + dirty diff hash) invalidates every
+  snapshot on any compiler change; `SNAP_MAGIC` is a sentinel, never bump it, and
+  reorder pooled layouts and enum variants freely.
+- `kmem.rs`: the never-freed arena most compiler data lives in.
+- LSP (`lsp_support.rs`, `src/bin/lsp_main.rs`): compiles the edited file's module
+  as an editor request (`req.editor`; the primary's `fn editor` lands in
+  `plan.editor`; no client settings). Holds H as `host_program`, reuses it while
+  the cached plan's `host_inputs_hash` matches, falls back to the last stored plan
+  when H fails.
+- Dead: `codegen_legacy.rs.old`, `vmtw/`.
 
 ## Tests
+- `fn(test)` semantics: ai_docs basics. Static runs `vm.reset` between tests;
+  runtime roots `k1/test-main`, forking per test on posix.
+- `test_src/*.k1`: a last line `//errmsg: <substring>` expects that compile error;
+  otherwise `main` exits 0, or the file's tests pass. `test_src/<dir>/` are module
+  cases; `k1_test` runs top-level entries in parallel (`--serial`), no recursion.
+- New feature tests go in `suite1` (files named for what they check; `suite1.k1` is
+  an empty root); `modules/std` coverage in `stdlib`.
+- Test thoroughly while developing, then cut to the fewest lines that guard
+  regressions. No single-file case per crash or error path; don't recreate deleted
+  ones.
+- Rust unit tests sit beside their modules (`*_test.rs`); `compiler_test` sets its
+  own `K1_HOME`.
 
-- `fn(test)` marks a test: no params, return type implements
-  `core/test/outcome` (`empty`, `opt`, any `try`). `k1 test` collects the
-  primary module's tests and runs each one statically (in the VM, `vm.reset`
-  between) and at runtime (`k1/test-main` rooted instead of `main`, fork per
-  test on posix). `fn(test-runtime)`/`fn(test-static)` opt out of
-  one. `k1/test/expect-failure("needle")`, a literal in the test body, makes
-  the test pass only if it fails with `needle` in its output or ending.
-- `test_src/*.k1`: one-file cases. `//errmsg: <substring>` as the last line
-  expects that compile error; otherwise `main` must exit 0, or without a
-  `main` the file's tests must pass statically and at runtime.
-- `test_src/<dir>/`: module cases (`suite1`, `stdlib`, `ffi_abi_test`,
-  `dep_*_test`, `comptime_parity`, `http_test` for the http server, which binds an ephemeral port). `k1_test` runs every top-level file and dir in parallel (`--serial` for one at a time); it
-  does not recurse.
-- `test_src/suite1`: ~75 files of `fn(test)`s named for what they check,
-  most under a file-level `ns` (a file holding only tests may skip it). New
-  feature tests go here; `suite1.k1` is an empty root file.
-- `test_src/stdlib`: `modules/std` coverage, same pattern.
-- Rust unit tests live next to their modules as `*_test.rs` or
-  `mod *_test`; `compiler_test` sets its own `K1_HOME`.
-
-## Modules (`modules/`)
-
-A module is a dir with `build.k1`, `module.k1` or `<name>/<name>.k1`.
-`build.k1` is compiled on the host before the program: optional `fn build(req)`
-(primary only; returns the build config from `req.default`, `-D` options and
-`req.editor`), `fn editor(req)` (primary only, editor compiles; returns
-`k1/editor-settings`), `fn module(b)`
-declaring `dep`/`dep-params`, `lib`, `library()`, `setup`, and an optional
-`fn setup(ctx)` that runs (cwd = module dir) when its stamp in
-`.k1-out/setup/stamp` is stale. Deps resolve through `<primary>/deps/y`,
-`<dependent>/deps/y`, then `$K1_HOME/modules/y`.
-
-- `core/`: always loaded. `builtin.k1` (scalar aliases, `buffer`/`span`/
-  `list`/`string`/`opt`/`result`, `types`, `meta`, every core ability:
-  equals, writer, print, show, bitwise, arithmetic, comparable, try,
-  iterator/iterable, from-string, zero/one, index, as-buffer/as-span,
-  allocator), `core.k1` (asserts, io, files, sys, numeric printing),
-  `platform.k1` (memory/io dispatch to `impls/{posix,wasi,bare}`; the only
-  OS externs core has), `mem.k1`, `arena.k1`, `list.k1`, `buffer.k1`,
-  `span.k1`, `string.k1`, `string-builder.k1`, `fix-list.k1`,
-  `spill-list.k1`, `range.k1`, `opt.k1`, `result.k1`, `types.k1`, `meta.k1`,
-  `code.k1` (macro `code` values), `vector.k1` (SIMD), `atomic.k1`,
-  `bitwise.k1`, `ffc.h.k1` (fast float).
-- `core/libs/`: `k1rt.c` (freestanding-safe runtime), `k1rt_hosted.c`
-  (errno, backtraces: atos on macOS, vendored libbacktrace on Linux),
-  `Makefile` targets `build`, `wasm`, `nocrt`, `filc`.
-- `std/`: `--no-std` drops it. `posix.k1`/`libc.k1` raw bindings,
-  `process.k1`, `thread.k1`, `time.k1`, `fd.k1`, `sys.k1`, `cliarg.k1`,
-  `hash.k1` (hash ability, `map`, `set`), `crypto.k1` (sha256, hmac-sha256), `json.k1`, `url.k1`, `utf8.k1`, `bitfield.k1`,
-  `math.k1`, `simd.k1`, `rc.k1`, `pool.k1` (fixed-capacity generational
-  handle pool, nil slot at index 0), `spill-string.k1` (inline string that spills
-  to the arena), `stream.k1`, `channel.k1`, `pubsub.k1`, `reload.k1` (dylib
-  hot reload), `watch.k1` (kqueue/inotify).
-- `http/`: HTTP/1.1 server over libuv (llhttp parser, `server.k1` connection
-  loop with timeouts, graceful shutdown and the response writer,
-  `request.k1` form and cookie parsing over `std/url`, `routing.k1` comptime route tables,
-  `sse.k1` SSE and Datastar framing).
-- `brotli/`: brotli in K1. The encoder, quality 0 to 11, streaming
-  (`encoder` `process`/`flush`/`finish`), byte-identical to google/brotli;
-  the one-shot decoder (`decoder.k1`, `decompress`/`decompress-in`).
-  `tables.k1` is generated by its setup from the C sources under `vendor/`.
-- C wrapper modules: `uv/` (raw bindings in `uv/libuv`; `uv.k1` mutex/monitor/bus; `workers.k1` the worker pool the http server runs handlers on), `sdl3/`,
-  `stb/`, `freetype/`, `harfbuzz/`, `sqlite/` (the amalgamation).
-  Most vendor source under `vendor/`, build `libs/*.a` in `setup`,
-  and generate bindings with `k1bindgen` (`tools/k1bindgen`). Bindings live
-  in a namespace named after the C library, or `c` when that would collide
-  with the module name.
-
-## Examples (`examples/`)
-
-Real programs; `test.sh` builds or runs every one: `refchess` (chess engine,
-native and wasm), `brotli_parity` (`modules/brotli` against the C encoder in
-its `deps/cbrotli`, every quality, one-shot and flush-per-chunk, round-tripped
-through the K1 decoder, plus the throughput benchmark), `httpapp`,
-`logreport`, `gengame` (raylib), `fractal` (native + wasm + browser canvas),
-`klib` (K1 library consumed from C), `freestanding_lib` (bare-metal library
-consumed from C, `just ts-freestanding`), `reload_test` (hot reload driver),
-`selfhost` (K1 lexer/parser in K1, `just slophost`), `postgres` (libpq
-binding demo). `content/showcase/sections` quotes their source by
-path and `content/showcase/check.sh` verifies the quotes.
-
-## Everything Else
-
-- `docs/ai_docs/`: K1 language notes maintained for agents. `design/`: exploratory
-  notes, not always current. `content/`: writing about K1. `site/`: the Hugo
-  site (`just site` serves it, `just site-build` = `site/build.sh` rebuilds the
-  wasm demo, benchmark data and pages, failing if the showcase check fails).
-- `perf/`: stress generators and `profiling`, the hyperfine target. `sandbox/`: scratch.
-- `builds/`: bundle/install scripts and Linux cross-build notes. `llvm/`: the
-  pinned LLVM 23 build (`get_llvm.sh`).
-- `resources/c/`: C scratch files for checking ABI/codegen questions.
-- `tools/vscode-k1/`: the VS Code extension. `tools/k1bindgen/`: the C binding
-  generator (`k1 test tools/k1bindgen`; `test.sh` puts its `.k1-out` on PATH).
-
-## Generated And Noisy Files
-
-Ignore unless debugging emitted artifacts: `.k1-out/`, `target/`,
-`*_module_dump.txt`, `*idents_dump.txt`, `k1_lsp.log*`, `*.o *.a *.dylib`,
-`llvm/build-llvm llvm/install-llvm llvm/llvm-project`.
-
-```bash
-rg --glob '!.k1-out/**' --glob '!target/**' --glob '!llvm/**' ...
-```
+## Modules, examples, the rest
+- `modules/core` is always loaded; `platform.k1` holds core's only OS externs
+  (`impls/{posix,wasi,bare}`); `core/libs` is the C runtime (`k1rt.c`
+  freestanding-safe, `k1rt_hosted.c`). `--no-std` drops `std/`.
+- C wrapper modules (`uv`, `sdl3`, `stb`, `freetype`, `harfbuzz`, `sqlite`): vendor
+  source in `vendor/`, `setup` builds `libs/*.a` and runs `k1bindgen`
+  (`tools/k1bindgen`). Bindings live in a namespace named for the C library, or `c`
+  when that collides with the module.
+- Module layout gives affordances, not rules: differing use of `libs/`/`vendor/`
+  is fine. Structure only separates libraries (`deps/`) from a project's own
+  compile units; prefer one escape hatch over placement rules.
+- `examples/` are real programs `test.sh` builds or runs. `content/showcase/sections`
+  quotes their source by path; `content/showcase/check.sh` verifies the quotes.
+- `site/` (Hugo; `just site`, `just site-build`) and `check.sh` run `k1`/`k1_test`
+  from PATH (installed `~/.k1/bin`): prepend `target/debug` for unreleased compiler
+  changes.
+- `design/` is exploratory, not always current. `resources/c/`: C scratch for ABI
+  questions. `llvm/`: pinned LLVM 23 (`get_llvm.sh`).
+- Noise: `.k1-out/`, `target/`, `*_dump.txt`, `k1_lsp.log*`, `*.o *.a *.dylib`,
+  `llvm/{build-llvm,install-llvm,llvm-project}`.
+  `rg --glob '!.k1-out/**' --glob '!target/**' --glob '!llvm/**'`.

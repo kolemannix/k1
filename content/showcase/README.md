@@ -19,8 +19,8 @@ The examples are deliberately fun, provocative, and a little ridiculous, designe
    errors land on your source. State machines, bitfields, struct-of-arrays, HTML.
 6. [A regex engine at compile time](sections/06-regex.md): NFA, DFA,
    minimization, and a matcher whose states are match arms.
-7. [Generators](sections/07-generators.md): gperf as a macro, and a Brainfuck
-   compiler checked against a literal type.
+7. [Generators](sections/07-generators.md): a Brainfuck compiler checked against
+   a literal type.
 8. [Building types at compile time](sections/08-types.md): types synthesized from schemas,
    static parameters, predicate bounds, `never` and zero-sized types.
 9. [The runtime model](sections/09-model.md): abilities, closures that capture

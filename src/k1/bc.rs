@@ -369,6 +369,7 @@ pub fn builtin_from_tag(t: u8) -> crate::ir::BackendBuiltin {
     use crate::ir::BackendBuiltin as B;
     match t {
         x if x == B::TypeInfo as u8 => B::TypeInfo,
+        x if x == B::TestSuite as u8 => B::TestSuite,
         x if x == B::MakeStruct as u8 => B::MakeStruct,
         x if x == B::MakeEither as u8 => B::MakeEither,
         x if x == B::MakeReference as u8 => B::MakeReference,

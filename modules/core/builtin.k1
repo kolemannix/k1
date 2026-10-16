@@ -849,8 +849,11 @@ ns k1 {
     sys/exit(code)
   }
 
+  fn test-main(): i32 { core/test/run(test/suite()) }
+
   ns test {
     fn(builtin) expect-failure(needle: string)
+    fn(builtin) suite(): core/test/suite
   }
 
   fn(builtin) emit-compiler-message(

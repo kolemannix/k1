@@ -380,6 +380,56 @@ impl TypedProgram {
         }
     }
 
+    pub fn build_test_suite(&mut self, tests: &[TestCase]) -> K1Result<()> {
+        let Some(suite_fn) = self
+            .find_function_namespaced(self.scopes.core_scope_id, &self.ast.idents.f.test_suite)?
+        else {
+            self.ice("core is missing k1/test/suite", None)
+        };
+        let suite_type = self.get_function_type(suite_fn).return_type;
+        let suite_fields = self.types.get(suite_type).expect_struct().fields;
+        let cases_type = self.mem.getn(suite_fields)[1].type_id;
+        let (case_type, _) = self.get_as_container_instance(cases_type).unwrap();
+        let case_fields = self.types.get(case_type).expect_struct().fields;
+        let mut cases: Vec<StaticValueId> = Vec::with_capacity(tests.len());
+        for test in tests {
+            if !self.get_function(test.function_id).test_runs_runtime() {
+                continue;
+            }
+            let mut fields: SV4<StaticValueId> = smallvec![];
+            for field in self.mem.getn(case_fields).to_vec() {
+                let value = match self.ident_str(field.name) {
+                    "name" => self.static_values.add_string(test.name),
+                    "location" => self.static_source_location(test.span),
+                    "run-fn" => self.add_static_function_pointer(field.type_id, test.thunk_id),
+                    "expected-failure" => {
+                        let (variant_index, payload) = match test.expected_failure {
+                            Some(needle) => (
+                                OPT_SOME_VARIANT_INDEX,
+                                Some(self.static_values.add_string(needle)),
+                            ),
+                            None => (OPT_NONE_VARIANT_INDEX, None),
+                        };
+                        self.static_values.add(StaticValue::Sum(StaticSum {
+                            sum_type_id: field.type_id,
+                            variant_index: variant_index as u32,
+                            payload,
+                        }))
+                    }
+                    _ => self.ice_span(field.span, "unexpected core/test/test-case field"),
+                };
+                fields.push(value);
+            }
+            cases.push(self.static_values.add_struct_from_slice(case_type, &fields));
+        }
+        let cases =
+            self.add_static_container_from_ids(StaticContainerKind::Span, cases_type, &cases);
+        let module_name = self.static_values.add_string(self.primary_module().name);
+        self.test_suite =
+            Some(self.static_values.add_struct_from_slice(suite_type, &[module_name, cases]));
+        Ok(())
+    }
+
     pub(super) fn static_exec_prepare_function(
         k1: &mut TypedProgram,
         function_id: FunctionId,
@@ -780,6 +830,17 @@ impl TypedProgram {
             Type::Float(float_type) => Some(float_type.get_scalar_type()),
             _ => None,
         }
+    }
+
+    pub(crate) fn add_static_function_pointer(
+        &mut self,
+        type_id: TypeId,
+        function_id: FunctionId,
+    ) -> StaticValueId {
+        self.get_function_mut(function_id)
+            .flags
+            .insert(TypedFunctionFlags::AddressTaken | TypedFunctionFlags::AddressBaked);
+        self.static_values.add(StaticValue::FunctionPointer(type_id, function_id))
     }
 
     pub(crate) fn add_static_container_from_ids(

@@ -87,6 +87,7 @@ pub enum StaticValue {
     Float(TypedFloatValue),
     String(StringId),
     Enum(TypeId, TypedIntValue),
+    FunctionPointer(TypeId, FunctionId),
     Struct(StaticStruct),
     Sum(StaticSum),
     LinearContainer(StaticContainer),
@@ -105,6 +106,7 @@ impl StaticValue {
             StaticValue::Float(_) => "float",
             StaticValue::String(_) => "string",
             StaticValue::Enum(_, _) => "enum",
+            StaticValue::FunctionPointer(_, _) => "function pointer",
             StaticValue::Zero(_) => "zero",
             StaticValue::Struct(_) => "struct",
             StaticValue::Sum(_) => "sum",
@@ -192,6 +194,10 @@ impl DepHash<StaticValuePool> for StaticValue {
                 }
             }
             StaticValue::String(s) => s.hash(state),
+            StaticValue::FunctionPointer(type_id, function_id) => {
+                type_id.hash(state);
+                function_id.hash(state)
+            }
             StaticValue::Zero(type_id) => type_id.hash(state),
             StaticValue::Struct(s) => {
                 s.type_id.hash(state);
@@ -235,6 +241,9 @@ impl DepEq<StaticValuePool> for StaticValue {
             (StaticValue::Enum(ta, va), StaticValue::Enum(tb, vb)) => *ta == *tb && *va == *vb,
             (StaticValue::Float(a), StaticValue::Float(b)) => *a == *b,
             (StaticValue::String(a), StaticValue::String(b)) => *a == *b,
+            (StaticValue::FunctionPointer(ta, fa), StaticValue::FunctionPointer(tb, fb)) => {
+                *ta == *tb && *fa == *fb
+            }
             (StaticValue::Zero(t1), StaticValue::Zero(t2)) => *t1 == *t2,
             (StaticValue::Struct(a), StaticValue::Struct(b)) => {
                 a.type_id == b.type_id

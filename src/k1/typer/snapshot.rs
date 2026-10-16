@@ -151,7 +151,7 @@ impl TypedProgram {
             megarepl,
             inputs_hash: _,
             restored_module_count: _,
-            test_main: _,
+            test_suite: _,
             test_expected_failures,
             test_results: _,
         } = self;

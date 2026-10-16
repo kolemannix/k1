@@ -5,6 +5,8 @@ LLM-maintained K1 notes; fix wrong lines on sight. Read `k1-syntax-basics.md` fi
 ## Compile-time values
 - `#static e` runs `e` in the VM. Literal types: `let a: 42 = #static 40 + 2`,
   `'c'`, `3.14`, `"hi"`. `.from-static()` returns to a runtime value.
+- Baked values (`#static`, global initializers) may hold `*fn` pointers: a table
+  built at compile time links in every function it points to.
 - `fn f[i: static int](x: int)`, called `f[3](x)` or `f[type-of(three)](x)`
   (`let three: static int = 3`). A static param's name is its value in expressions;
   `#static`/`#meta` see only static-typed locals.
@@ -62,6 +64,8 @@ ns pre { macro make-point(name: code) { "type $name = { x: i32, y: i32 }" } }
 - Macro params: `code` gets the argument's source and span; `span[code-token]`
   gets it lexed; any other type is evaluated statically. Every param is annotated.
   Unused params don't warn. Macros are not values; self-recursive expansion errors.
+  Hygiene is emitting fully qualified names (`http/llhttp/method`), by design: no
+  definition-site resolution, and caller-side shadowing is not a caveat.
 - Expression macros expand at typecheck: define them in the same module or
   upstream. Definition-level `$`/`#meta` run early: the macro or fn lives in `ns pre`
   or upstream. Output may contain more `#meta`/`$` (expanded in order) or `macro`
@@ -102,8 +106,8 @@ ns pre { macro make-point(name: code) { "type $name = { x: i32, y: i32 }" } }
 `r.to-dyn[source[t = u8]]` from `*s` (no alloc), from a value it allocates first;
 `let d: dyn[...] = r.to-dyn()`. Dispatches defaults, overrides, by-value receivers
 (thunk), and self-free fns (no state passed). Excluded per fn: self outside the
-receiver, own type params, context params. No dispatchable fns = no dyn type. Fn
-pointers inside mean a dyn can't cross `#static` into a runtime constant.
+receiver, own type params, context params. No dispatchable fns = no dyn type. Its
+state pointer means a dyn can't cross `#static` into a runtime constant.
 
 ## Layout
 - `opaque[size, align]`. `union { a: u32, f: f32 }`: a literal sets at most one
@@ -111,8 +115,9 @@ pointers inside mean a dyn can't cross `#static` into a runtime constant.
   `.&` of a field warns. `types/assert-layout[t](size, align, [offsets])`.
 - `_struct_combine[a, b]`, `_struct_remove[t, { f: x }]`.
 - `let(returned) r: t = ...` names the return slot (RVO).
-- By-value aggregate params are not copied: they may alias caller-reachable storage
-  (`f(p.*, bump(p))` sees the bump). Only the sret slot never aliases an argument.
+- Settled: by-value aggregate params are not copied and may alias caller-reachable
+  storage (`f(p.*, bump(p))` sees the bump). Only the sret slot never aliases an
+  argument.
 
 ## Globals and fn modifiers
 - `let g = 1` immutable global; `let(mutable, tls, extern("sym")) ...`, at most one
@@ -181,4 +186,7 @@ pointers inside mean a dyn can't cross `#static` into a runtime constant.
   `resolve`, `path-segments`, `query-pairs`, `url/builder`, `url/percent`,
   `url/form`. `http/header.url` is parsed (400 if not).
 - SIMD (`core/vector.k1`): `eq-lanes lt-lanes gt-lanes to-mask shuffle-bytes`
-  (16 lanes, pshufb), `vector/shift-bytes[k](prev, cur)`.
+  (16 lanes, pshufb), `vector/shift-bytes[k](prev, cur)`. Library byte scans
+  vectorize: `index-of`/`position` first; a stop-at-any-of-N scan follows
+  `std/url` `find-stop` (`vector/splat` + `load-unchecked` over `k1/simd-bytes`
+  lanes, scalar tail); `json` `escape-position` ORs `eq-lanes`/`lt-lanes` classes.

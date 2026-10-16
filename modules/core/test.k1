@@ -25,21 +25,23 @@ ns test {
     expected-failure: ?string,
   }
 
+  type suite = { module-name: string, cases: span[test-case] }
+
   type tally = { passed: size, failed: size, skipped: size }
 
-  fn run(module-name: string, tests: span[test-case]): i32 {
+  fn run(suite: suite): i32 {
     let start = clock/counter()
     let tally = tally.0
     #if k1/platform is {
       :posix-macos or :posix-linux -> {
-        for tests { run-test-forked(it, tally.&) }
+        for suite.cases { run-test-forked(it, tally.&) }
       },
       :wasi or :bare -> {
-        for tests { run-test-in-process(it, tally.&) }
+        for suite.cases { run-test-in-process(it, tally.&) }
       }
     }
     let elapsed = clock/counter-to-nanos(clock/counter() - start)
-    println("$module-name test results: ${tally.passed} passed, ${tally.failed} failed, ${tally.skipped} skipped (${format-millis(elapsed)})")
+    println("${suite.module-name} test results: ${tally.passed} passed, ${tally.failed} failed, ${tally.skipped} skipped (${format-millis(elapsed)})")
     if tally.failed > 0 1 else 0
   }
 

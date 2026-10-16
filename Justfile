@@ -127,7 +127,7 @@ profile-soa: build-profile
 
 profile-magic: build-profile
   hyperfine --warmup 1 'K1_HOME=. target/profiling/k1 --no-cache c perf/magic.k1'
-  K1_HOME=. target/profiling/k1 --no-cache --chatty c perf/magic.k1 2>&1 | grep -E '^\s+run\s|ops:'
+  K1_HOME=. target/profiling/k1 --no-cache --chatty c perf/magic.k1 2> perf/latest_magic.txt
 
 valgrind-linux:
   git pull

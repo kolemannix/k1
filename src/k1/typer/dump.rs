@@ -1052,6 +1052,10 @@ impl TypedProgram {
                     write!(w, "\"{}\"", self.get_string(*s))
                 }
             }
+            StaticValue::FunctionPointer(_, function_id) => {
+                self.write_ident(w, self.get_function(*function_id).name)?;
+                w.write_str(".&")
+            }
             StaticValue::Zero(type_id) => {
                 if !pretty {
                     self.display_type_id_ext(w, *type_id, TypeDisplayMode::Name, visiting)?;

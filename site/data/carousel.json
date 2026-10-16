@@ -135,33 +135,6 @@
     ]
   },
   {
-    "title": "A keyword recognizer, generated",
-    "section": "07-generators",
-    "blurb": "gperf as a macro: hand it the words and get a perfect hash and a sum type back.",
-    "blocks": [
-      {
-        "label": "the words",
-        "kind": "k1",
-        "code": "$keywords/define(tiny, [\"if\", \"in\", \"is\", \"fn\", \"for\"])"
-      },
-      {
-        "label": "lookup",
-        "kind": "k1",
-        "code": "  println(\"${tiny/lookup(\"for\")} ${tiny/lookup(\"fun\")}\")"
-      },
-      {
-        "label": "output",
-        "kind": "text",
-        "code": ":some kw-for :none"
-      },
-      {
-        "label": "what it generated",
-        "kind": "text",
-        "code": "type tiny = either { kw-if, kw-in, kw-is, kw-fn, kw-for }\nns for tiny {\n  fn lookup(s: string): ?tiny {\n    let n = s.len()\n    if n < 2 or n > 3 return :none\n    let kl = s.[n - 1].as-u8().as-size()\n    let k0 = s.[0].as-u8().as-size()\n    let h = (n * 137 + kl * 59 + k0 * 125) & 15\n    if h is {\n      9 -> if s == \"if\" :some :kw-if else :none,\n      1 -> if s == \"in\" :some :kw-in else :none,\n      8 -> if s == \"is\" :some :kw-is else :none,\n      10 -> if s == \"fn\" :some :kw-fn else :none,\n      15 -> if s == \"for\" :some :kw-for else :none,\n      _ -> :none,\n    }\n  }\n  fn lookup-linear(s: string): ?tiny {\n    if s is {\n      \"if\" -> :some :kw-if,\n      \"in\" -> :some :kw-in,\n      \"is\" -> :some :kw-is,\n      \"fn\" -> :some :kw-fn,\n      \"for\" -> :some :kw-for,\n      _ -> :none,\n    }\n  }\n  fn words(): span[string] {\n    [\"if\", \"in\", \"is\", \"fn\", \"for\"]\n  }\n}\n#static {\n  assert(tiny/lookup(\"if\") is :some :kw-if)\n  assert(tiny/lookup(\"in\") is :some :kw-in)\n  assert(tiny/lookup(\"is\") is :some :kw-is)\n  assert(tiny/lookup(\"fn\") is :some :kw-fn)\n  assert(tiny/lookup(\"for\") is :some :kw-for)\n}"
-      }
-    ]
-  },
-  {
     "title": "A regex engine that runs at compile time",
     "section": "06-regex",
     "blurb": "Parser, NFA, DFA and minimization are plain k1 that happens to run in the compiler.",

@@ -416,6 +416,7 @@ impl InstId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BackendBuiltin {
     TypeInfo,
+    TestSuite,
     MakeStruct,
     MakeEither,
     MakeReference,
@@ -437,6 +438,7 @@ impl BackendBuiltin {
     pub fn kind_name(&self) -> &'static str {
         match self {
             BackendBuiltin::TypeInfo => "type_info",
+            BackendBuiltin::TestSuite => "test_suite",
             BackendBuiltin::MakeStruct => "make_struct",
             BackendBuiltin::MakeEither => "make_either",
             BackendBuiltin::MakeReference => "make_reference",
@@ -3074,6 +3076,7 @@ fn compile_static_value(b: &mut Builder, value_id: StaticValueId, pt: PhysicalTy
             let int_value = b.make_int_value(&int, IrComment::StaticEnum);
             int_value
         }
+        StaticValue::FunctionPointer(_, function_id) => Value::FunctionAddr(*function_id),
         StaticValue::Float(TypedFloatValue::F32(float)) => {
             Value::imm32(ScalarType::F32, float.to_bits())
         }
@@ -3138,7 +3141,7 @@ fn compile_variable_to_address(
                     Value::Inst(_) => Some(value),
                     Value::GlobalAddr { .. } => unreachable!(),
                     Value::StaticValue { .. } => None,
-                    Value::FunctionAddr(_) => unreachable!(),
+                    Value::FunctionAddr(_) => Some(value),
                     Value::FnParam { .. } => unreachable!(),
                     Value::IsStatic => unreachable!(),
                     Value::Data32 { .. } => Some(value),
@@ -4153,19 +4156,29 @@ pub struct ProgramRoots {
 }
 
 pub fn get_program_roots(k1: &TypedProgram) -> K1Result<ProgramRoots> {
+    let is_test = k1.test_suite.is_some();
     let mut exports: Vec<FunctionId> = vec![];
-    let main = if let Some(test_main) = k1.test_main {
-        Some(test_main)
+    let mut baked: Vec<FunctionId> = vec![];
+    for (function_id, function) in k1.function_iter() {
+        if function.linkage.is_exported() && !is_test {
+            exports.push(function_id);
+        }
+        if function.address_baked() {
+            baked.push(function_id);
+        }
+    }
+    let main = if is_test {
+        let test_main_ident = k1.ast.idents.intern("test-main");
+        let Some(test_main_id) = k1.scopes.find_function(k1.scopes.k1_scope_id, test_main_ident)
+        else {
+            kbail!(k1, Span::NONE, "Missing k1/test-main");
+        };
+        Some(test_main_id)
     } else {
         let mut any_exported_global = false;
         for global_id in k1.globals.iter_ids() {
             if k1.globals.get(global_id).linkage.is_exported() {
                 any_exported_global = true;
-            }
-        }
-        for (function_id, function) in k1.function_iter() {
-            if function.linkage.is_exported() {
-                exports.push(function_id);
             }
         }
         if k1.plan.is_executable() {
@@ -4196,10 +4209,11 @@ pub fn get_program_roots(k1: &TypedProgram) -> K1Result<ProgramRoots> {
     } else {
         None
     };
-    let mut functions: Vec<FunctionId> = Vec::with_capacity(exports.len() + 2);
+    let mut functions: Vec<FunctionId> = Vec::with_capacity(exports.len() + baked.len() + 2);
     functions.extend(main);
     functions.extend(program_exit);
     functions.append(&mut exports);
+    functions.append(&mut baked);
     Ok(ProgramRoots { main, program_exit, functions })
 }
 

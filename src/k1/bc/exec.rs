@@ -563,10 +563,6 @@ fn exec_loop<const COUNT_OPS: bool>(
                 let info = match k1.bc.functions.get(&function_id) {
                     Some(info) => *info,
                     None => {
-                        eprintln!(
-                            "[bc] UNEXPECTED: lazily lowering indirect-call target at runtime: {}",
-                            k1.function_id_to_string(function_id, false)
-                        );
                         vm.eval_span = k1.bc.span_for_pc(pc_u32!());
                         vmtry!(lower::get_or_lower_function(k1, function_id, vm.eval_span))
                     }
@@ -1035,6 +1031,12 @@ fn exec_builtin(
             };
             let info_vm_value = vm::static_value_to_vm_value(k1, *info_value_id, vm.eval_span);
             Ok(BuiltinOutcome::Value(info_vm_value))
+        }
+        BackendBuiltin::TestSuite => {
+            let Some(suite) = k1.test_suite else {
+                kbail!(k1, vm.eval_span, "k1/test/suite exists only in test builds");
+            };
+            Ok(BuiltinOutcome::Value(vm::static_value_to_vm_value(k1, suite, vm.eval_span)))
         }
         BackendBuiltin::MakeStruct => {
             let Some(record_kind) = RecordKind::from_tag(args[0].as_u8()) else {

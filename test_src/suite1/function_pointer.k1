@@ -78,3 +78,25 @@ fn(test) callables-in-struct-fields() {
   assert-equals(apply-through-field(fn x. x + 1), 11)
   assert-equals(apply-through-field(static-add-one), 11)
 }
+
+fn baked-double(x: int): int { x * 2 }
+fn baked-square(x: int): int { x * x }
+fn baked-triple(x: int): int { x * 3 }
+
+type baked-op = { name: string, run-fn: *fn(int) -> int }
+
+fn make-baked-ops(): span[baked-op] {
+  [.{ name = "double", run-fn = baked-double.& }, .{ name = "square", run-fn = baked-square.& }]
+}
+
+let baked-ops: span[baked-op] = make-baked-ops()
+let baked-tripler: *fn(int) -> int = baked-triple.&
+let baked-maybe: ?*fn(int) -> int = :some(baked-triple.&)
+
+fn(test) baked-fn-pointers() {
+  assert-equals((baked-ops.[0].run-fn)(5), 10)
+  assert-equals((baked-ops.[1].run-fn)(5), 25)
+  assert-equals(baked-tripler(2), 6)
+  require baked-maybe is :some f else crash("baked-maybe is none")
+  assert-equals(f(3), 9)
+}

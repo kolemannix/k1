@@ -1,0 +1,94 @@
+using k1 home: /Users/knix/dev/k1
+Wrote 2 emitted sources in 42.00ns
+	sources: 52 files 382kb + 2 emitted 6kb (2 unique, 6kb); line tables 48kb, trivia 8kb
+program magic took 1188ms (10409.80 line/s, 12369 lines)
+	53657 expressions
+	15402 statements
+	3527 functions
+	7484 types
+	    1109kb ast arena
+	    1047kb typed exprs
+	    1023kb parsed exprs
+	     864kb perm arena
+	     622kb scopes
+	     532kb trace frames
+	     509kb functions
+	     419kb typed expr spans
+	     368kb parsed type exprs
+	     360kb typed stmts
+	     337kb variables
+	     310kb calls
+	     233kb types
+	     209kb typed expr type ids
+	     202kb parsed functions
+	     184kb parsed stmts
+	     175kb type defn info
+	     116kb type variable counts
+	      73kb static values
+	      58kb type instance info
+	      58kb phys types
+	      25kb parsed patterns
+	    8845kb pools total
+	3301 idents
+	6805 emitted, 6252 committed, 6794 live, 11349 code words
+	kind                  count    excl ms speculative %
+	run                      38    1173.53     0%  464.4M instrs (0.00us/instr)
+	typecheck              3315       5.01     0%
+	parse                    57       1.93     0%
+	read                      3       1.53     0%
+	infer                  4625       1.32     0%
+	lower                   294       0.98     0%
+	pass types                3       0.66     0%
+	pass declarations         3       0.47     0%
+	bcgen                    66       0.31     0%
+	promote                 124       0.21     0%  105 allocas
+	static exec             259       0.19     0%
+	ferry                    75       0.18     0%
+	instantiate            1065       0.16     0%
+	pass bodies               3       0.13     0%
+	optimize                 38       0.13     0%  927 insts created
+	inline                   58       0.08     0%  140 inlines
+	module                    3       0.06     0%
+	pass namespaces           3       0.05     0%
+	specialize             1088       0.04     0%
+	plan check                1       0.03     0%
+	simplify                 58       0.03     0%  116 passes
+	global                  175       0.01     0%
+	pass uses                 3       0.01     0%
+	macro                     1       0.01     0%
+	meta                      1       0.00     0%
+	untracked                         1.15
+	top frames:
+	   1094.80ms (  1095ms incl) run expr magic.k1:116
+	     78.44ms (    78ms incl) run expr magic.k1:117
+	      1.34ms (     1ms incl) read core
+	      0.48ms (     1ms incl) pass types core
+	      0.30ms (     0ms incl) parse builtin.k1
+	      0.27ms (     0ms incl) pass declarations core
+	      0.21ms (     0ms incl) run expr html.k1:120
+	      0.19ms (     0ms incl) pass declarations std
+	      0.19ms (     0ms incl) read std
+	      0.18ms (     0ms incl) pass types std
+	top generics by specialization + body time:
+	      0.09ms    52 instances next for buffer-iterator['t]
+	      0.08ms    22 instances push
+	      0.07ms     4 instances seek for buffer-iterator['t]
+	      0.05ms     1 instances write-escaped
+	      0.05ms     2 instances position-lanes
+	      0.04ms    35 instances as-span for 'c
+	      0.04ms     1 instances pretty
+	      0.04ms    22 instances _grow
+	      0.04ms     1 instances at
+	      0.03ms     3 instances format-uint
+	top requesters of specializations (declaration + body time):
+	      0.77ms     0 declared by pass bodies std
+	      0.50ms     0 declared by pass bodies core
+	      0.14ms     0 declared by optimize expr core.k1:370
+	      0.04ms     0 declared by pass bodies magic
+	      0.01ms     0 declared by optimize expr crypto.k1:6
+	      0.01ms     0 declared by optimize expr magic.k1:116
+	      0.01ms     0 declared by optimize expr magic.k1:60
+	      0.01ms     0 declared by optimize expr crypto.k1:9
+	      0.01ms     1 declared by infer watch.k1:41
+	      0.00ms     0 declared by lower expr core.k1:370
+	  ops: mov 16% (74.3M), ptr_index 13% (59.3M), jump_if_uge 13% (58.5M), jump 6% (29.2M), iadd 6% (26.3M), shr_u 5% (25.1M), load.64 5% (23.6M), load_fp.64 5% (23.4M), imul 4% (19.5M), xor 3% (16.2M), jump_if_ult 3% (13.5M), jump_if_eq 3% (13.1M), load.32 3% (12.6M), jump_if_ne 3% (12.5M), store.64 3% (11.7M), cast 3% (11.7M), store.32 2% (11.5M), shl 1% (6.6M), and 1% (5.1M), other 2% (10.7M)

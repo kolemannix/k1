@@ -1522,7 +1522,7 @@ pub fn compile_program(
                 if tests.static_tests {
                     k1.run_static_tests(&cases);
                 }
-                if config.command.is_test() { k1.synth_test_main(&cases) } else { Ok(()) }
+                if config.command.is_test() { k1.build_test_suite(&cases) } else { Ok(()) }
             });
         if let Err(e) = tested {
             k1.report(e);

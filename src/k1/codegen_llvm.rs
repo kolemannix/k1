@@ -3521,6 +3521,19 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_unreachable().unwrap()
             }
 
+            BackendBuiltin::TestSuite => {
+                let Some(suite) = self.k1.test_suite else {
+                    cgbail!(Span::NONE, "k1/test/suite exists only in test builds");
+                };
+                let cg_fn = self.llvm_functions.get(&function_id).unwrap();
+                debug_assert!(cg_fn.function_type.is_sret);
+                let out_storage =
+                    cg_fn.function_value.get_param_iter().nth(0).unwrap().into_pointer_value();
+                let suite_cg_type = cg_fn.function_type.return_logical_cg_type;
+                let suite_value = self.codegen_static_value_canonical(suite)?;
+                self.store_k1_value(&suite_cg_type, out_storage, suite_value);
+                self.builder.build_return(None).unwrap()
+            }
             BackendBuiltin::TypeInfo => {
                 let cg_fn = self.llvm_functions.get(&function_id).unwrap();
                 debug_assert!(cg_fn.function_type.is_sret);
@@ -5307,6 +5320,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             StaticValue::Int(int_value) => self.codegen_int_value(*int_value),
             StaticValue::Enum(_, int_value) => self.codegen_int_value(*int_value),
+            StaticValue::FunctionPointer(_, function_id) => {
+                let function_value = self.declare_llvm_function(*function_id)?;
+                function_value.as_global_value().as_pointer_value().into()
+            }
             StaticValue::Float(float_value) => llvm_float_constant(self.ctx, *float_value).into(),
             StaticValue::String(string_id) => {
                 let string_global = self.codegen_string_id_to_global(*string_id).unwrap();
@@ -5647,6 +5664,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             | StaticValue::Char(_)
             | StaticValue::Int(_)
             | StaticValue::Enum(_, _)
+            | StaticValue::FunctionPointer(_, _)
             | StaticValue::Float(_) => {
                 self.codegen_static_value_as_const(static_value_id, 0, false)?
             }

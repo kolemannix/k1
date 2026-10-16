@@ -6,7 +6,9 @@ LLM-maintained K1 notes; fix wrong lines on sight. Companion: `k1-additional.md`
 
 ## Lexing and statements
 - kebab-case for every name (ns, fn, type, field, variant, local); SCREAMING_SNAKE
-  constants. Identifiers are ASCII letters, digits, `-`, `_`.
+  constants. Identifiers are ASCII letters, digits, `-`, `_`. Fn-pointer fields and
+  params end in `-fn` (`run-fn`); a callback that runs whether or not the work ran
+  is `finalize-fn`.
 - Newline ends a statement; `;` only separates statements on one line.
 - A line continues the previous expression only if it starts with a binary operator
   (`and or || == + ?`, comparisons...), `is`, `else`, or `.name` (leading-dot
@@ -25,7 +27,8 @@ LLM-maintained K1 notes; fix wrong lines on sight. Companion: `k1-additional.md`
   `< <= > >=`, `== !=`, `and`, `or`, `?`. Bitwise beats comparison:
   `a & b == c` is `(a & b) == c`. `and`/`or` short-circuit.
 - `==`/`!=` are the `equals` ability (`not-equals` defaults to `not equals`).
-- Ints: `+ - *` wrap, shift counts are mod width, `/ %` crash on 0 and MIN/-1.
+- Ints: `+ - *` wrap, shift counts are `u32` taken mod width, `/ %` crash on 0
+  and MIN/-1.
   Identical in the VM and native, every opt level; checked math is library code.
 - Literals: `0xff 0o755 0b1010 1_000 255u8 -3i8 10: u8 'c' '\n' "s" .{} .0`.
 

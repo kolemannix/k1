@@ -3,9 +3,6 @@
 
 ## [ ] asm
 
-## [ ] More IR analysis and opts
-- [ ] add lifetimes? (start/end for allocas, temps, inlined stuff)
-
 ## [x] token stream based macros
 
 ## [x] expr-level macros
@@ -18,13 +15,9 @@
 ## [x] Ability objects; dyn[<ability expr>]
 
 ## grab bag list mid2026
-- [x] replace fn(intern) with fn(builtin)
-- [x] add cpu feature string to k1/module
-- [x] convert the add_module train off of anyhow::error
+- [ ] IR alloca lifetimes
 - [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
-- [ ] compiler cli watch mode: watch the primary module's source dir (or single file). on change, compile from the snapshot right before starting primary module (keep it in memory?)
 - [ ] Generic aliases: `type(alias) pair[t] = { a: t, b: t }` (rejected with an error for now; an alias is transparent, so this is a type-level function)
-- [x] unaligned load/store for scalars
 - [ ] new lib type: :runtime; this is the ideal dependency kind for libclang in k1bindgen
 - [ ] `#[must_use]` equivalent
 - [ ] literal inference issue (a) `2 * d` vs `d * 2` differ — literal-lhs
@@ -40,6 +33,11 @@
       a codepoint iterator over string, lead-byte sequence length (examples/selfhost/lex.k1 has its own
       `utf8-lead-len`), codepoint count, encoded length of a codepoint, validation that reports the
       failing offset, lossy decode with U+FFFD, UTF-16 conversion
+- [ ] Linux verification
+- [x] replace fn(intern) with fn(builtin)
+- [x] add cpu feature string to k1/module
+- [x] convert the add_module train off of anyhow::error
+- [x] unaligned load/store for scalars
 - [x] parse_statement: same peek-dispatch conversion parse_definition got (expect_ variants, no conditional parse_* chain)
 - [x] zeroing after alloc should not be necessary; either buffer/zeroed or ensure all k1 allocations always zero, even arena push (does arena.reset() always clear, or is there a special path for 'alloc-no-ensure-zeroed?')
 - [x] 
@@ -56,7 +54,6 @@
 - [x] `ns(reload) foo { <functions in here go in a dylib> }`
 - [x] `fn main() { foo/load().! /* or foo/watch().! */; foo/my-fn(1,2,3) }`
 - [x] reloadable globals
-- [ ] Linux verification; `k1 b --watch`; multi-ns-per-dylib
 - [x] When converting a lambda to a dyn lambda, put its environment struct in the current allocator instead of on the stack
 - [x] block stmt typer error recovery; get more than 1 typer error per block
 - [x] fix `is {` syntax

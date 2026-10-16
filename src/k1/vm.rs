@@ -599,6 +599,7 @@ pub fn static_value_to_vm_value(
         StaticValue::Char(char_byte) => Value(*char_byte as u64),
         StaticValue::Int(iv) => Value(iv.to_zext_bits()),
         StaticValue::Enum(_, iv) => Value(iv.to_zext_bits()),
+        StaticValue::FunctionPointer(_, function_id) => Value(function_id.as_u32() as u64),
         StaticValue::Float(fv) => Value::float_value(*fv),
         StaticValue::String(string_id) => {
             let value = string_id_to_value(k1, *string_id);
@@ -633,6 +634,9 @@ pub fn store_static_value(
         StaticValue::Char(char_byte) => store_byte(dst, *char_byte),
         StaticValue::Int(int_value) => store_typed_int(dst, *int_value),
         StaticValue::Enum(_, int_value) => store_typed_int(dst, *int_value),
+        StaticValue::FunctionPointer(_, function_id) => {
+            store_scalar(ScalarType::Pointer, dst, Value(function_id.as_u32() as u64))
+        }
         StaticValue::Float(fv) => store_scalar(fv.get_scalar_type(), dst, Value::float_value(*fv)),
         StaticValue::String(string_id) => {
             let value = string_id_to_value(k1, *string_id);
@@ -1268,7 +1272,10 @@ pub fn vm_value_to_static_value(
             }))
         }
         Type::FunctionPointer(_) => {
-            kbail!(k1, span, "Cannot bake function pointers");
+            let Some(function_id) = FunctionId::from_u32(vm_value.bits() as u32) else {
+                kbail!(k1, span, "Cannot bake a null function pointer");
+            };
+            k1.add_static_function_pointer(type_id, function_id)
         }
         Type::Reference(_) => {
             kbail!(k1, span, "References cannot be statically baked");

@@ -170,74 +170,6 @@ impl TypedProgram {
         Ok(thunk_id)
     }
 
-    //nocommit unreviewed synth_test_main
-    pub fn synth_test_main(&mut self, tests: &[TestCase]) -> K1Result<()> {
-        let k1_scope = self.get_k1_scope_id();
-        let k1_ns = self.scopes.get_scope_owner(k1_scope).as_namespace().unwrap();
-        let fn_scope =
-            self.scopes.add_child_scope(k1_scope, ScopeType::FunctionScope, ScopeOwnerId::None);
-        let ctx = EvalExprContext::make(fn_scope);
-        let Some(run_id) =
-            self.find_function_namespaced(self.scopes.core_scope_id, &self.ast.idents.f.test_run)?
-        else {
-            self.ice("core is missing core/test/run", None)
-        };
-        let table_param = *self.mem.get_nth(self.get_function(run_id).params, 1);
-        let table_type = self.variables.get(table_param.variable_id).type_id;
-        let (case_type, table_kind) = self.get_as_container_instance(table_type).unwrap();
-        let case_fields = self.types.get(case_type).expect_struct().fields;
-        let mut cases: Vec<TypedExprId> = Vec::with_capacity(tests.len());
-        for test in tests {
-            if !self.get_function(test.function_id).test_runs_runtime() {
-                continue;
-            }
-            let mut fields = self.mem.new_list(case_fields.len());
-            for field in self.mem.getn(case_fields).to_vec() {
-                let value = match self.ident_str(field.name) {
-                    "name" => self.synth_string_literal(test.name, test.span),
-                    "location" => self.synth_source_location(test.span),
-                    "run-fn" => self.function_to_pointer(test.thunk_id, test.span),
-                    "expected-failure" => match test.expected_failure {
-                        Some(needle) => {
-                            let needle = self.synth_string_literal(needle, test.span);
-                            self.synth_optional_some(needle).0
-                        }
-                        None => self.synth_optional_none(self.builtin_types.string(), test.span),
-                    },
-                    _ => self.ice_span(field.span, "unexpected core/test/test-case field"),
-                };
-                let value = self.check_and_coerce_expr(field.type_id, value, fn_scope, false)?;
-                fields.push(StructLiteralField { name: field.name, expr: Some(value) });
-            }
-            let case = TypedExpr::Struct(StructLiteral { fields: fields.to_slice() });
-            cases.push(self.exprs.add(case, case_type, test.span));
-        }
-        let span = self.get_function_span(run_id);
-        let table = self.synth_container_literal(table_kind, case_type, &cases, ctx, span)?;
-        let module_name = self.synth_string_literal(self.primary_module().name, span);
-        let run = self.synth_static_call(run_id, &[module_name, table], I32_TYPE_ID, span);
-        let body = self.synth_return_only_block(fn_scope, run, span);
-        let main_type = self.add_type_anon(Type::Function(FunctionType {
-            physical_params: MSlice::empty(),
-            return_type: I32_TYPE_ID,
-            is_lambda: false,
-        }));
-        let run_parsed_id = self.get_function(run_id).parsed_id;
-        let main_id = self.add_function(TypedFunction::synthesized(
-            self.ast.idents.intern("test-main"),
-            fn_scope,
-            k1_ns,
-            MSlice::empty(),
-            body,
-            run_parsed_id,
-            main_type,
-            TypedFunctionKind::Standard,
-        ));
-        self.scopes.set_scope_owner_id(fn_scope, ScopeOwnerId::Function(main_id));
-        self.test_main = Some(main_id);
-        Ok(())
-    }
-
     pub(super) fn synth_container_literal(
         &mut self,
         list_kind: ContainerKind,
@@ -804,6 +736,11 @@ impl TypedProgram {
     }
 
     pub(super) fn synth_source_location(&mut self, span: Span) -> TypedExprId {
+        let value = self.static_source_location(span);
+        self.add_static_constant_expr(value, self.remap_span(span))
+    }
+
+    pub(super) fn static_source_location(&mut self, span: Span) -> StaticValueId {
         let span = self.remap_span(span);
         let source = self.ast.sources.source_by_span(span);
         let line_number =
@@ -813,11 +750,10 @@ impl TypedProgram {
         let line_value = self.static_values.add_int(TypedIntValue::U32(line_number));
         let span_value = self.static_values.add_int(TypedIntValue::U64(span.encoded_k1_u64()));
         let source_location_type_id = self.builtin_types.source_location.unwrap();
-        let value = self.static_values.add_struct_from_slice(
+        self.static_values.add_struct_from_slice(
             source_location_type_id,
             &[filename_value, line_value, span_value],
-        );
-        self.add_static_constant_expr(value, span)
+        )
     }
 
     pub(super) fn synth_module_dir(&mut self, span: Span) -> TypedExprId {
