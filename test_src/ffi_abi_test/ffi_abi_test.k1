@@ -137,7 +137,7 @@ ns(lib("foo")) foo {
   fn(extern("abi_tls_counter_get")) tls-counter-get(): i32
 }
 
-fn test-all() {
+fn(test) test-all() {
   assert-equals(
     foo/very_small(.{ x = 10 }, .{ x = 20 }),
     .{ x = 30 }
@@ -272,7 +272,7 @@ fn test-all() {
 
 }
 
-fn test-fn-ptr() {
+fn(test-runtime) test-fn-ptr() {
   // We don't run this one at compile-time because there is no actual function to pass.
   // FIXME: You can't pass a k1 function to a compiled library at comptime
   //        since the function pointer doesn't exist; we'd have to JIT the function.
@@ -323,7 +323,7 @@ fn assert-f4(v: vector[f32, 4], a: f32, b: f32, c: f32, d: f32) {
   assert-equals(v.get-lane(3), d)
 }
 
-fn test-vectors() {
+fn(test) test-vectors() {
   assert-f2(foo/v2-madd(f2(1.0, 2.0), f2(10.0, 20.0)), 12.0, 24.0)
 
   let v2i = foo/v2i-madd(vector/splat[i32, 2](3).with-lane(1, -4), vector/splat[i32, 2](100).with-lane(1, 200))
@@ -348,7 +348,7 @@ fn test-vectors() {
   assert-equals(h, 3238.0)
 }
 
-fn test-vector-registers() {
+fn(test-runtime) test-vector-registers() {
   assert-f4(foo/v4-madd(f4(1.0, 2.0, 3.0, 4.0), f4(10.0, 20.0, 30.0, 40.0)), 12.0, 24.0, 36.0, 48.0)
 
   let v4i = foo/v4i-madd(i4(1, -2, 3, -4), i4(100, 200, 300, 400))
@@ -363,7 +363,7 @@ fn test-vector-registers() {
   assert-f4(w.a, 4.0, 3.0, 2.0, 1.0)
 }
 
-fn test-vector-aggregates() {
+fn(test-runtime) test-vector-aggregates() {
   let s = foo/sv2-shuffle(.{ a = f4(1.0, 2.0, 3.0, 4.0), b = f4(10.0, 20.0, 30.0, 40.0) })
   assert-f4(s.a, 10.0, 20.0, 30.0, 40.0)
   assert-f4(s.b, 11.0, 22.0, 33.0, 44.0)
@@ -385,7 +385,11 @@ fn test-vector-aggregates() {
   assert-equals(b.get-lane(3), 4)
 }
 
-fn test-wide-vectors() {
+let ARM64: bool = #if k1/arch is { :arm64 -> true, :intel64 or :wasm64 -> false }
+
+#if ARM64 fn(test-static) test-vector-registers-in-vm() { test-vector-registers() }
+
+#if ARM64 fn(test) test-wide-vectors() {
   let v8 = foo/v8-madd(vector/splat[f32, 8](1.0).with-lane(7, 8.0), vector/splat[f32, 8](2.0))
   assert-equals(v8.get-lane(0), 4.0)
   assert-equals(v8.get-lane(6), 4.0)
@@ -397,12 +401,12 @@ fn test-wide-vectors() {
   assert-equals(w8.a.get-lane(7), 1.0)
 }
 
-fn test-globals-readonly() {
+fn(test) test-globals-readonly() {
   assert-equals(foo/readonly, 7)
   assert-equals(foo/renamed, 33)
 }
 
-fn test-globals() {
+fn(test-runtime) test-globals() {
   assert-equals(foo/counter, 100)
   assert-equals(foo/counter-get(), 100)
   foo/counter = foo/counter + 11
@@ -414,26 +418,4 @@ fn test-globals() {
   foo/tls-counter = foo/tls-counter + 3
   assert-equals(foo/tls-counter, 8)
   assert-equals(foo/tls-counter-get(), 8)
-}
-
-fn main(): i32 {
-  #static test-all()
-  test-all()
-  test-fn-ptr()
-  #static test-globals-readonly()
-  test-globals-readonly()
-  test-globals()
-  #static test-vectors()
-  test-vectors()
-  test-vector-registers()
-  test-vector-aggregates()
-  #if k1/arch is {
-    :arm64 -> {
-      #static test-vector-registers()
-      #static test-wide-vectors()
-      test-wide-vectors()
-    },
-    :intel64 or :wasm64 -> {}
-  }
-  0
 }

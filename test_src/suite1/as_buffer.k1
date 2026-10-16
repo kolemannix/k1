@@ -22,7 +22,7 @@ fn sweep-position[t: equals](fill: t, needle: t) {
   }
 }
 
-fn sweep-positions() {
+fn(test) sweep-positions() {
   sweep-position[u8](0, 1)
   sweep-position[i16](-1, 7)
   sweep-position[u32](0, 1)
@@ -62,7 +62,7 @@ fn sum-via-span[c: as-span[t = i64]](x: c): i64 {
   x.as-span().sum()
 }
 
-fn test() {
+fn(test) containers-as-buffer-and-as-span() {
   let xs: list[i64] = [1, 2, 3]
   assert-equals(xs.as-buffer().len, 3)
   assert-equals(sum-via-buffer(xs), 6)
@@ -93,7 +93,9 @@ fn test() {
   assert-equals(sl.&.len(), 0)
   sl.push-n([1, 2, 3, 4].as-span())
   assert-equals(sum-via-buffer(sl.&), 10)
+}
 
+fn(test) list-element-refs() {
   let rs: list[i64] = [1, 2, 3]
   rs.[1] = 20
   assert-equals(rs.[1], 20)
@@ -101,7 +103,9 @@ fn test() {
   assert-equals(rs.last-ref().!.*, 3)
   for r in rs.ref-iter() { r.* = r.* * 2 }
   assert(rs.as-span() == [2, 40, 6].as-span())
+}
 
+fn(test) search-and-first-diff() {
   let bytes: list[u8] = [1: u8, 2: u8, 3: u8, 4: u8]
   assert(bytes.position(3: u8) is :some 2)
   assert(bytes.contains(4: u8))
@@ -124,7 +128,9 @@ fn test() {
   wf.push(20)
   assert(wf.&.first-diff(wide.as-span()) is :some 2)
   assert(wf.&.position(20) is :some 1)
+}
 
+fn(test) position-and-seek-per-type() {
   check-position[u8](0, 1, 2)
   check-position[i8](-1, -2, -3)
   check-position[u16](0, 1000, 2000)
@@ -136,7 +142,9 @@ fn test() {
   check-position[char]('a', 'b', 'c')
   check-position[f32](0.0, 1.5, -2.5)
   check-position[string]("x", "y", "z")
+}
 
+fn(test) span-join() {
   let s1: span[i64] = [1, 2].as-span()
   let s2: span[i64] = [3].as-span()
   let sep: span[i64] = [0].as-span()

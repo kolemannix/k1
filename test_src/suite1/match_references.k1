@@ -1,6 +1,4 @@
-ns match_references
-
-fn test() {
+fn(test) ref-pattern-mutates-some-payload() {
   let x = some(5)
   let x = x.&
   while x is :some xx* {
@@ -10,12 +8,16 @@ fn test() {
     }
   }
   assert-equals(x.*, :some 0)
+}
 
+fn(test) ref-pattern-binds-struct-fields() {
   let point = .{ x = 5, y = 2 }
   if point.& is .{ x, y = 2 }* {
     assert-equals(x.*, 5)
   } else crash("")
+}
 
+fn(test) ref-pattern-matches-through-three-refs() {
   use core/mem/new
   let b: ***bool = new[**bool](new[*bool](new[bool](true)))
   if not b is true*** { crash("b was false!") }

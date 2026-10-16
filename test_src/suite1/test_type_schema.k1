@@ -30,7 +30,7 @@ fn copy-into[t](dst: buffer[t], src: span[t]): string {
 
 fn is-zero(x: int): bool { x == 0 }
 
-fn test() {
+fn(test) schema-branches-at-compile-time() {
   assert-equals(kind[f64](), "scalar")
   assert-equals(kind[point3[u8]](), "struct")
   assert-equals(kind[string](), "string")
@@ -41,7 +41,9 @@ fn test() {
   let names: buffer[string] = buffer/filled(2, "")
   assert-equals(copy-into(names, ["ada", "grace"]), "loop")
   assert-equals(names.as-span(), ["ada", "grace"])
+}
 
+fn(test) schema-and-instance-reflection() {
   assert(schema[i16] is :int :i16)
   assert(schema[f32] is :float :f32)
   assert-equals(schema[**bool].as-reference().!.inner-type-id, types/id[*bool])
@@ -85,7 +87,9 @@ fn test() {
   assert-equals(types/id[array[string, 0].element], types/id[string])
   assert-equals(types/name[array[i32, 10]], "array[i32, 10]")
   assert-equals(types/align[array[i32, 0]], 1)
+}
 
+fn(test) zero-safe-types() {
   assert(types/is-zero-safe[int]())
   assert(types/is-zero-safe[list[int]]())
   assert(types/is-zero-safe[?*int]())

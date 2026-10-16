@@ -31,7 +31,7 @@ fn get-nothin[a, b, t: as-pair[AA=a, BB=b]](_t: t) {
   .{}
 }
 
-fn test() {
+fn(test) overlapping-impls-resolve-by-call-types() {
   // Phase 1
   let my-pair: pair[int, bool] = .{ a = mem/new(10), b = some(true) }
   get-nothin(_t = my-pair)

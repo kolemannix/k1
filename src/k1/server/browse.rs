@@ -276,7 +276,7 @@ fn render_ns_main(k1: &TypedProgram, tree: &NsTree, ns_id: NamespaceId, path: &[
                                 GlobalInitialValue::Value(value_id) => span { " = " (k1.megarepl_static_value_to_string(value_id)) }
                                 GlobalInitialValue::Pending => span { "pending" }
                                 GlobalInitialValue::Failed(_) => span { "failed" }
-                                GlobalInitialValue::Uninit if global.is_external => span { "externally linked" }
+                                GlobalInitialValue::Uninit if global.linkage.is_external() => span { "externally linked" }
                                 GlobalInitialValue::Uninit => span { "repl-defined" }
                             }
                         }

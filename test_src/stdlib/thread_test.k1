@@ -11,10 +11,12 @@ fn sum-range(lo: u64, hi: u64): summary {
   .{ lo = lo, hi = hi, total = total }
 }
 
-fn test() {
+fn(test-runtime) join-returns-closure-result() {
   let base: u64 = 40
   assert-equals(task/spawn(fn[base]. base + 2).join(), 42)
+}
 
+fn(test-runtime) tasks-return-struct-results() {
   let tasks: list[task[summary]] = []
   for i in 0u64.until(4) {
     let lo = i * 1000
@@ -27,8 +29,15 @@ fn test() {
     total = total + s.total
   }
   assert-equals(total, 3999 * 4000 / 2)
+}
 
+fn(test-runtime) task-writes-through-captured-pointer() {
   let flag = false
   task/spawn(fn[flag.&]. { flag.* = true }).join()
   assert(flag)
+}
+
+fn(test-static) spawn-refuses-static() {
+  k1/test/expect-failure("threads are not supported in static execution")
+  task/spawn(fn. {}).join()
 }

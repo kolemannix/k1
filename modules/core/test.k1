@@ -1,0 +1,104 @@
+ns test {
+  use platform/clock
+  use platform/process
+
+  ability outcome {
+    fn failure(self): ?string
+  }
+
+  impl outcome for empty {
+    fn failure(_self: empty): ?string { :none }
+  }
+
+  impl[a] outcome for opt[a] {
+    fn failure(self): ?string { if self is :some _ :none else :some("returned none") }
+  }
+
+  impl[v, e: print, r: try[t = v, e = e]] outcome for r {
+    fn failure(self): ?string { if self.is-ok() :none else :some("${self.get-error()}") }
+  }
+
+  type test-case = {
+    name: string,
+    location: k1/source-location,
+    run-fn: *fn() -> ?string,
+    expected-failure: ?string,
+  }
+
+  type tally = { passed: size, failed: size, skipped: size }
+
+  fn run(module-name: string, tests: span[test-case]): i32 {
+    let start = clock/counter()
+    let tally = tally.0
+    #if k1/platform is {
+      :posix-macos or :posix-linux -> {
+        for tests { run-test-forked(it, tally.&) }
+      },
+      :wasi or :bare -> {
+        for tests { run-test-in-process(it, tally.&) }
+      }
+    }
+    let elapsed = clock/counter-to-nanos(clock/counter() - start)
+    println("$module-name test results: ${tally.passed} passed, ${tally.failed} failed, ${tally.skipped} skipped (${format-millis(elapsed)})")
+    if tally.failed > 0 1 else 0
+  }
+
+  fn format-millis(nanos: u64): string {
+    let tenths = nanos / 100_000
+    "${tenths / 10}.${tenths % 10}ms"
+  }
+
+  fn report(test: test-case, *tally, elapsed: u64, failure: ?string) {
+    if failure is :some reason {
+      tally.failed = tally.failed + 1
+      println("FAIL ${test.name} at ${test.location.filename}:${test.location.line} (${format-millis(elapsed)}): $reason")
+    } else {
+      tally.passed = tally.passed + 1
+      println("ok   ${test.name} (${format-millis(elapsed)})")
+    }
+  }
+
+  fn run-test-in-process(test: test-case, *tally) {
+    if test.expected-failure is :some _ {
+      tally.skipped = tally.skipped + 1
+      return
+    }
+    println("running ${test.name}")
+    let start = clock/counter()
+    let failure = (test.run-fn)()
+    report(test, tally, clock/counter-to-nanos(clock/counter() - start), failure)
+  }
+
+  fn run-test-forked(test: test-case, *tally) {
+    let output = platform/io/pipe().!
+    let start = clock/counter()
+    let pid = sys/fork(
+      child-fn = fn[test]. {
+        backtrace-on-crash = test.expected-failure.is-none()
+        if (test.run-fn)() is :some message { eprintln(message); 1 } else 0
+      },
+      stdin = :none,
+      stdout = :some(output.write),
+      stderr = :some(output.write),
+      extra-close = [output.read]
+    ).!
+    platform/io/close(output.write)
+    let captured = io/read-all(output.read.raw).!
+    platform/io/close(output.read)
+    let status = process/wait(pid).!
+    let ending =
+      if status.signal != 0 "killed by signal ${status.signal}"
+      else if status.exit-code != 0 "exited with code ${status.exit-code}"
+      else ""
+    let failure: ?string = if test.expected-failure is {
+      :none -> if ending.is-empty() :none else :some(ending),
+      :some needle -> {
+        if ending.is-empty() :some("expected a failure containing \"$needle\", but the test passed")
+        else if "$captured$ending".contains-string(needle) :none
+        else :some("expected a failure containing \"$needle\"")
+      }
+    }
+    report(test, tally, clock/counter-to-nanos(clock/counter() - start), failure)
+    if failure is :some _ print(captured)
+  }
+}

@@ -7,7 +7,7 @@ use std/url/form
 
 fn p(s: string): url/url { url/parse(s).! }
 
-fn test-parse() {
+fn(test) parse-components-and-errors() {
   let u = p("https://user:pw@Example.com:8080/a%20b/c?x=1&y=a+b#frag")
   assert(u.scheme() == :some "https")
   assert(u.authority() == :some "user:pw@Example.com:8080")
@@ -52,7 +52,7 @@ fn test-parse() {
   assert-equals(p("/x").show(), "/x")
 }
 
-fn test-resolve() {
+fn(test) resolve-rfc3986-references() {
   let base = p("http://a/b/c/d;p?q")
   for [
     "g:h", "g:h", "g", "http://a/b/c/g", "./g", "http://a/b/c/g", "g/", "http://a/b/c/g/",
@@ -69,7 +69,7 @@ fn test-resolve() {
   assert-equals(p("/a/b").resolve(p("../c?d")).text, "/c?d")
 }
 
-fn test-normalize() {
+fn(test) normalize-case-ports-and-escapes() {
   assert-equals(p("HTTP://User@Ex%41mple.COM:80/a/./b/../%7e%2fc?q=%7a%zz\"é#f\"g").normalized().text,
     "http://User@example.com/a/~%2Fc?q=z%25zz%22%C3%A9#f%22g")
   assert-equals(p("https://h:443").normalized().text, "https://h/")
@@ -77,7 +77,7 @@ fn test-normalize() {
   assert-equals(p("../a/./b").normalized().text, "../a/./b")
 }
 
-fn test-build() {
+fn(test) build-and-percent-encode() {
   let b = url/builder/new()
   b.scheme("https")
   b.host("example.com")
@@ -103,17 +103,9 @@ fn test-build() {
   assert-equals(form/decode("a+b%2B"), "a b+")
 }
 
-fn test-form() {
+fn(test) form-pairs-decode-fields() {
   let fields = form/pairs("a=1&long=x%20y&b=2&&c").to-list()
   assert-equals(fields.len(), 4)
   assert(pair/find(fields.as-span(), "long") == :some "x y")
   assert(pair/find(fields.as-span(), "c") == :some "")
-}
-
-fn test() {
-  test-parse()
-  test-resolve()
-  test-normalize()
-  test-build()
-  test-form()
 }

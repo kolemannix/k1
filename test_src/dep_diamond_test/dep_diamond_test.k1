@@ -1,7 +1,6 @@
-fn main(): i32 {
+fn(test) test() {
   assert(shared/base() == 21)
   assert(liba/value() == 20)
   assert(libb/value() == 22)
   assert(liba/value() + libb/value() == 2 * shared/base())
-  0
 }

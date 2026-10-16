@@ -16,7 +16,7 @@ type token-kind = either(u8) {
   fmt-spec,
 
   kw-fn, kw-let, kw-and, kw-or, kw-if, kw-else, kw-while, kw-loop,
-  kw-ns, kw-intern, kw-for, kw-in, kw-ability, kw-impl, kw-is, kw-not,
+  kw-ns, kw-for, kw-in, kw-ability, kw-impl, kw-is, kw-not,
   kw-builtin, kw-where, kw-context, kw-use, kw-require, kw-defer,
 
   slash,
@@ -79,7 +79,7 @@ ns for token-kind {
       :fmt-spec -> "<fmt spec>",
       :kw-fn -> "fn", :kw-let -> "let", :kw-and -> "and",
       :kw-or -> "or", :kw-if -> "if", :kw-else -> "else", :kw-while -> "while",
-      :kw-loop -> "loop", :kw-ns -> "ns", :kw-intern -> "intern", :kw-for -> "for",
+      :kw-loop -> "loop", :kw-ns -> "ns", :kw-for -> "for",
       :kw-in -> "in", :kw-ability -> "ability", :kw-impl -> "impl", :kw-is -> "is",
       :kw-not -> "not", :kw-builtin -> "builtin", :kw-where -> "where",
       :kw-context -> "context", :kw-use -> "use", :kw-require -> "require",
@@ -123,7 +123,6 @@ fn keyword-kind(text: string): ?token-kind {
   else if text == "while" :some(:kw-while)
   else if text == "loop" :some(:kw-loop)
   else if text == "ns" :some(:kw-ns)
-  else if text == "intern" :some(:kw-intern)
   else if text == "for" :some(:kw-for)
   else if text == "in" :some(:kw-in)
   else if text == "ability" :some(:kw-ability)
@@ -258,14 +257,17 @@ fn parse-fmt-spec(text: string): ?ast/fmt-spec {
   }
   let width = parse-u32(width-text).try
   if (width == 0) != (width-text.len() == 0) or (align is :some _ and width == 0) return :none
+  let group = width-end < text.len() and text.[width-end] == ','
+  if group and align is :some(:sign-zeros) return :none
+  let rest = if group width-end + 1 else width-end
   let precision: ?u32 = :none
-  if width-end < text.len() {
-    if text.[width-end] != '.' return :none
-    let precision-end = digits-end(text, width-end + 1)
-    if precision-end == width-end + 1 or precision-end != text.len() return :none
-    precision = :some(parse-u32(text.slice(width-end + 1, precision-end)).try)
+  if rest < text.len() {
+    if text.[rest] != '.' return :none
+    let precision-end = digits-end(text, rest + 1)
+    if precision-end == rest + 1 or precision-end != text.len() return :none
+    precision = :some(parse-u32(text.slice(rest + 1, precision-end)).try)
   }
-  :some(.{ fill, align, width, precision })
+  :some(.{ fill, align, width, group, precision })
 }
 
 type lex-error = { message: string, span: ast/src-span }

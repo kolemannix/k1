@@ -76,10 +76,33 @@ fn for-body(run: bool): i64 {
   42
 }
 
-fn test() {
+fn(test) call-arguments-run-before-never() {
   let crashy-args-error = test-compile(#static call-arguments())
   assert(crashy-args-error is :none)
+}
+
+fn(test) diverging-loops() {
   assert(for-body(false) == 42)
   assert(loop-without-break() == 3)
   assert(loop-labeled-inner() == 5)
+}
+
+fn single-never(b: bool): int {
+  let x: int = if not b crash("Uh oh!") else 0
+  let y: int = if b 0 else crash("Uh oh!")
+  x + y
+}
+
+fn both-never(b: bool): int {
+  let _x: int = if not b {
+    crash("Uh oh!")
+  } else {
+    crash("Ahh!")
+  }
+}
+
+fn(test) crashes-in-never-branches() {
+  k1/test/expect-failure("Uh oh!")
+  assert(single-never(true) == 0)
+  let _ = both-never(false)
 }

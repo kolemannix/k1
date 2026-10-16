@@ -18,31 +18,31 @@ ns atomic {
     }
   }
 
-  fn(intern) load[t](src: *t, ord: ordering): t
-  fn(intern) store[t](dst: *t, value: t, ord: ordering)
+  fn(builtin) load[t](src: *t, ord: ordering): t
+  fn(builtin) store[t](dst: *t, value: t, ord: ordering)
 
   // All rmw operations return the previous value
-  fn(intern) xchg[t](dst: *t, value: t, ord: ordering): t
-  fn(intern) fetch-add[t](dst: *t, value: t, ord: ordering): t
-  fn(intern) fetch-sub[t](dst: *t, value: t, ord: ordering): t
-  fn(intern) fetch-and[t](dst: *t, value: t, ord: ordering): t
-  fn(intern) fetch-or[t](dst: *t, value: t, ord: ordering): t
-  fn(intern) fetch-xor[t](dst: *t, value: t, ord: ordering): t
-  fn(intern) fetch-min[t](dst: *t, value: t, ord: ordering): t
-  fn(intern) fetch-max[t](dst: *t, value: t, ord: ordering): t
+  fn(builtin) xchg[t](dst: *t, value: t, ord: ordering): t
+  fn(builtin) fetch-add[t](dst: *t, value: t, ord: ordering): t
+  fn(builtin) fetch-sub[t](dst: *t, value: t, ord: ordering): t
+  fn(builtin) fetch-and[t](dst: *t, value: t, ord: ordering): t
+  fn(builtin) fetch-or[t](dst: *t, value: t, ord: ordering): t
+  fn(builtin) fetch-xor[t](dst: *t, value: t, ord: ordering): t
+  fn(builtin) fetch-min[t](dst: *t, value: t, ord: ordering): t
+  fn(builtin) fetch-max[t](dst: *t, value: t, ord: ordering): t
 
   type cmpxchg-result[t] = { prev: t, ok: bool }
 
   // `ok` distinguishes success from spurious failure for the weak variant;
   // `prev == expected` is not equivalent there
-  fn(intern) cmpxchg[t](
+  fn(builtin) cmpxchg[t](
     dst: *t,
     expected: t,
     desired: t,
     success: ordering,
     failure: ordering
   ): cmpxchg-result[t]
-  fn(intern) cmpxchg-weak[t](
+  fn(builtin) cmpxchg-weak[t](
     dst: *t,
     expected: t,
     desired: t,
@@ -50,7 +50,7 @@ ns atomic {
     failure: ordering
   ): cmpxchg-result[t]
 
-  fn(intern) fence(ord: ordering)
+  fn(builtin) fence(ord: ordering)
 
   // A plain wrapper over the operations; the type carries no compiler magic
   type cell[t] = { raw: t }

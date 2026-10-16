@@ -18,7 +18,7 @@ use crate::typer::types::{
     PhysicalTypeResult, RecordKind, ScalarType, Type, TypeId,
 };
 use crate::typer::{
-    ErrorKind, FunctionId, GlobalInitialValue, K1Message, K1Result, MessageLevel,
+    ErrorKind, FunctionId, GlobalInitialValue, K1Message, K1Result, Linkage, MessageLevel,
     StaticContainerKind, StaticStruct, StaticSum, StaticValue, StaticValueId, StaticValuePool,
     TypedFloatValue, TypedGlobalId, TypedIntValue, TypedProgram,
 };
@@ -226,9 +226,9 @@ pub struct VmFfiHandle {
 
 #[derive(Clone)]
 pub struct CompilerMessage {
-    level: MessageLevel,
-    message: StringId,
-    span: Span,
+    pub(crate) level: MessageLevel,
+    pub(crate) message: StringId,
+    pub(crate) span: Span,
 }
 
 /// A repl command issued by cell code during execution (`k1/repl/*`
@@ -517,14 +517,11 @@ pub(crate) fn resolve_global(
             );
         }
         GlobalInitialValue::Uninit => {
-            if global.is_external {
+            if let Linkage::External { module_id, lib_name, .. } = global.linkage {
                 let symbol = k1.global_link_symbol(&global);
-                let ns = k1.namespaces.get(k1.scopes.nearest_parent_namespace(global.parent_scope));
-                let handle = match (ns.lib_name, ns.owner_module) {
-                    (Some(lib_name), Some(module_id)) => {
-                        k1.get_dylib_handle(module_id, lib_name, vm.eval_span)?
-                    }
-                    _ => k1.vm_process_dlopen_handle,
+                let handle = match lib_name {
+                    Some(lib_name) => k1.get_dylib_handle(module_id, lib_name, vm.eval_span)?,
+                    None => k1.vm_process_dlopen_handle,
                 };
                 let name_cstr = std::ffi::CString::new(symbol.as_str()).unwrap();
                 let sym = unsafe { libc::dlsym(handle, name_cstr.as_ptr()) };

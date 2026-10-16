@@ -1,4 +1,4 @@
-#if k1/platform-wasi and not k1/test ns web {
+#if k1/platform-wasi ns web {
   use core/arena
 
   ns(lib("host")) host {

@@ -67,7 +67,10 @@ K1 language reference for agents: `docs/ai_docs/k1-syntax-basics.md` and
   (`src/bin/test_suite.rs`), `lsp` (`src/bin/lsp_main.rs`, needs
   `--features lsp`).
 - CLI (`k1 --help`, lexopt): `k1 <check|build|run|test|server|setup|clean>
-  [path] [flags] [-- program args]`, aliases `c b r t`; flags go anywhere;
+  [path] [flags] [-- program args | test filters]`, aliases `c b r t`; flags
+  go anywhere; `k1 test --skip-static` / `--skip-runtime` drop the VM run or
+  the test executable (`--skip-runtime` is check plus the VM run), arguments
+  after the path filter tests by substring;
   `k1 parse <file>` lexes and parses one file alone and prints `<start> <len>
   <class>` highlight tokens.
   Path is a file or a module dir. `-D name[=value]` reaches the primary's
@@ -201,27 +204,36 @@ for compile-time execution, codegen_llvm for binaries.
 - `server.rs` + `server/`: `k1 server`, the megarepl web app (HTTP, SSE bus,
   program browser, `/size` code-size treemap; `megarepl.css`, `size.js`).
 - `lsp_support.rs` + `src/bin/lsp_main.rs`: hover/goto/completion over
-  `ls_entities`, compiles the edited file's module with the client's
-  `k1.build` setting (`k1/build-config` fields plus `options`). The program
+  `ls_entities`, compiles the edited file's module as an editor request
+  (`req.editor`; the primary's `fn editor` settings land in `plan.editor`,
+  there are no client settings). The program
   keeps H as `host_program` and `build.k1` requests and diagnostics go to it;
   a compile reuses the held H while the cached plan's `host_inputs_hash`
   matches, and when H fails it compiles against the last stored plan.
+  `test-on-save` runs the primary's tests in the VM after the typecheck
+  diagnostics publish.
 - Not compiled: `codegen_legacy.rs.old`, `vmtw/binop.rs` (`vmtw` is commented
   out in `lib.rs`).
 
 ## Tests
 
-- `test_src/*.k1`: one-file cases. The last line declares the expectation:
-  `//errmsg: <substring>`, `//exitcode: <n> [stderr substring]`,
-  `//abortmsg: <substring>`, else exit 0.
+- `fn(test)` marks a test: no params, return type implements
+  `core/test/outcome` (`empty`, `opt`, any `try`). `k1 test` collects the
+  primary module's tests and runs each one statically (in the VM, `vm.reset`
+  between) and at runtime (`k1/test-main` rooted instead of `main`, fork per
+  test on posix). `fn(test-runtime)`/`fn(test-static)` opt out of
+  one. `k1/test/expect-failure("needle")`, a literal in the test body, makes
+  the test pass only if it fails with `needle` in its output or ending.
+- `test_src/*.k1`: one-file cases. `//errmsg: <substring>` as the last line
+  expects that compile error; otherwise `main` must exit 0, or without a
+  `main` the file's tests must pass statically and at runtime.
 - `test_src/<dir>/`: module cases (`suite1`, `stdlib`, `ffi_abi_test`,
   `dep_*_test`, `comptime_parity`, `http_test` for the http server, which binds an ephemeral port). `k1_test` runs every top-level file and dir in parallel (`--serial` for one at a time); it
   does not recurse.
-- `test_src/suite1`: ~75 files, each `ns foo` with `fn test()`, registered by
-  hand in `suite1.k1` (`low`, `moderate`, `core-lib`, `main`). Nearly every
-  test runs both natively and `#static` in the VM. New feature tests go here
-  and must be added to `suite1.k1`.
-- `test_src/stdlib`: `modules/std` coverage, same pattern in `stdlib.k1`.
+- `test_src/suite1`: ~75 files of `fn(test)`s named for what they check,
+  most under a file-level `ns` (a file holding only tests may skip it). New
+  feature tests go here; `suite1.k1` is an empty root file.
+- `test_src/stdlib`: `modules/std` coverage, same pattern.
 - Rust unit tests live next to their modules as `*_test.rs` or
   `mod *_test`; `compiler_test` sets its own `K1_HOME`.
 
@@ -229,7 +241,9 @@ for compile-time execution, codegen_llvm for binaries.
 
 A module is a dir with `build.k1`, `module.k1` or `<name>/<name>.k1`.
 `build.k1` is compiled on the host before the program: optional `fn build(req)`
-(primary only; edits `req.default`, reads `-D` options), `fn module(b)`
+(primary only; returns the build config from `req.default`, `-D` options and
+`req.editor`), `fn editor(req)` (primary only, editor compiles; returns
+`k1/editor-settings`), `fn module(b)`
 declaring `dep`/`dep-params`, `lib`, `library()`, `setup`, and an optional
 `fn setup(ctx)` that runs (cwd = module dir) when its stamp in
 `.k1-out/setup/stamp` is stale. Deps resolve through `<primary>/deps/y`,
@@ -240,7 +254,7 @@ declaring `dep`/`dep-params`, `lib`, `library()`, `setup`, and an optional
   equals, writer, print, show, bitwise, arithmetic, comparable, try,
   iterator/iterable, from-string, zero/one, index, as-buffer/as-span,
   allocator), `core.k1` (asserts, io, files, sys, numeric printing),
-  `platform.k1` (memory/io dispatch to `port/{posix,wasi,bare}`; the only
+  `platform.k1` (memory/io dispatch to `impls/{posix,wasi,bare}`; the only
   OS externs core has), `mem.k1`, `arena.k1`, `list.k1`, `buffer.k1`,
   `span.k1`, `string.k1`, `string-builder.k1`, `fix-list.k1`,
   `spill-list.k1`, `range.k1`, `opt.k1`, `result.k1`, `types.k1`, `meta.k1`,

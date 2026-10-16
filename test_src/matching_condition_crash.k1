@@ -1,4 +1,0 @@
-fn main(): i32 {
-  require crash("booo") else { crash("") }
-}
-//abortmsg: booo

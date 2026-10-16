@@ -1,9 +1,4 @@
-ns float_test
-
-fn test() {
-  constant-bits()
-  #static constant-bits()
-
+fn(test) float-casts-and-special-values() {
   assert-equals(-10.1.as[i32], -10)
   assert-equals((-100.0: f32).as[i8], -100)
   assert-equals((300.0: f32).as[u8], 255)
@@ -60,7 +55,7 @@ fn test() {
   }
 }
 
-fn constant-bits() {
+fn(test) float-constant-bits() {
   assert-equals(mem/bitcast[f64, u64](0.1), 0x3fb999999999999a)
   assert-equals(mem/bitcast[f32, u32](0.1: f32), 0x3dcccccd)
   assert-equals(mem/bitcast[f64, u64](-0.0), 0x8000000000000000)

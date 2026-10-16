@@ -6,10 +6,6 @@ use std/sys
 type args = { port: ?string, db: ?string }
 
 fn main(argc: u32, argv: ptr): i32 {
-  #if k1/test 0 else serve(argc, argv)
-}
-
-fn serve(argc: u32, argv: ptr): i32 {
   let args = if sys/parse-args-c[args](argc, argv) is {
     :ok a -> a,
     :err msg -> { eprintln(msg); eprintln(sys/gen-help-text[args]("k1 datastar demo server")); return 1 },

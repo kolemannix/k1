@@ -41,7 +41,7 @@ fn run(args: span[string]): i32 {
   }
 }
 
-fn test(): i32 {
+fn(test) test() {
   let src = `
 ns selfhost-embedded
 
@@ -102,9 +102,6 @@ fn use-point(): int {
   assert-equals(istr.parts.len(), 3)
   require istr.parts.[1] is :expr-part(mid) else { crash("expected expr part") }
   require interp.get-expr(mid.expr).* is :literal(:numeric(_)) else { crash("expected numeric hole") }
-
-  println("selfhost parser test ok")
-  0
 }
 
 fn first-fn-body-expr(p: *ast/program): ast/expr-id {
@@ -115,9 +112,5 @@ fn first-fn-body-expr(p: *ast/program): ast/expr-id {
 }
 
 fn main(argc: u32, argv: ptr): i32 {
-  #if k1/test {
-    test()
-  } else {
-    run(std/sys/parse-main-args(argc, argv))
-  }
+  run(std/sys/parse-main-args(argc, argv))
 }

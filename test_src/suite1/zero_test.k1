@@ -1,6 +1,6 @@
 ns zero_test
 
-fn test-bitcast() {
+fn(test) bitcast() {
   let s: string = "foo"
   let s-again: string = mem/bitcast(.{ inner = s })
   assert-equals(s, s-again)
@@ -43,7 +43,7 @@ fn tail-after-newline(bump: i32): zpoint {
   .0 | .{ z = base }
 }
 
-fn test-zero() {
+fn(test) zero-literals() {
   let filled: { a: int, b: bool, c: string } = .0 | .{ b = true }
   assert-equals(filled.a, 0)
   assert(filled.c == "")
@@ -95,7 +95,7 @@ fn zero-unaligned[n: static size]() {
   }
 }
 
-fn test-zero-sizes() {
+fn(test) zero-unaligned-sizes() {
   zero-unaligned[1]()
   zero-unaligned[7]()
   zero-unaligned[8]()

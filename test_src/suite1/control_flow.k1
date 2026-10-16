@@ -7,7 +7,7 @@ fn return-from-if(): int {
   0
 }
 
-fn test() {
+fn(test) if-without-else-yields-unit() {
   let x = 0
   let expr: {} = if true {
     x = 42
@@ -18,7 +18,9 @@ fn test() {
     crash("never happens")
   }
   assert(return-from-if() == 1)
+}
 
+fn(test) loop-break-values() {
   let three: int = loop {
     let _inner: int = if true {
       break 3
@@ -33,7 +35,9 @@ fn test() {
     break loop { break(10) }
   }
   assert-equals(nested, 10)
+}
 
+fn(test) break-exits-inner-for-only() {
   let pairs = list/empty[string]()
   for i in 0.until(3) {
     for j in 0.until(3) {
@@ -43,7 +47,9 @@ fn test() {
     pairs.push("o$i")
   }
   assert-equals(pairs.join(","), "00,o0,10,o1,20,o2")
+}
 
+fn(test) break-runs-iteration-defers() {
   let log = list/empty[string]()
   for i in 0.until(5) {
     defer log.push("d$i")
@@ -51,7 +57,9 @@ fn test() {
     log.push("b$i")
   }
   assert-equals(log.join(","), "b0,d0,b1,d1,d2")
+}
 
+fn(test) break-in-for-inside-valued-loop() {
   let n = 0
   let total: int = loop {
     for i in 0.until(10) {

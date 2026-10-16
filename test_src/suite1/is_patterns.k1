@@ -10,15 +10,19 @@ fn first-some(xs: span[?int]): int {
   -1
 }
 
-fn test() {
+fn(test) is-with-early-return() {
   assert-equals(early(:a), "early")
   assert-equals(early(:b), "late")
   assert-equals(first-some([:none, :some 7, :some 9]), 7)
+}
 
+fn(test) literal-patterns() {
   assert("hello" is "hello")
   assert(not "hello" is "world")
   assert(3.14 is 3.14)
+}
 
+fn(test) struct-patterns() {
   let foo = .{ x = 1, y = "asdf" }
   let else-ran = false
   if foo is .{ x = 200 } .{} else {
@@ -28,7 +32,9 @@ fn test() {
   if foo is .{ x = 1, y } {
     assert(y == "asdf")
   } else crash("")
+}
 
+fn(test) opt-patterns() {
   let opt: ?{ x: i64 } = :some(.{ x = 1 })
   if opt is :some(.{ x = 2 }) crash("")
 

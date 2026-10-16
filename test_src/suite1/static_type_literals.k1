@@ -9,7 +9,7 @@ fn join[i: static int](x: i, c: bool): int {
   v + m + l.len
 }
 
-fn test() {
+fn(test) literal-types-as-values() {
   let _hello2: "hello!" = #static {
     let bytes = [104u8]
     bytes.push(101)

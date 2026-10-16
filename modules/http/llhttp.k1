@@ -421,7 +421,7 @@ fn(extern("llhttp_set_lenient_header_value_relaxed")) set_lenient_header_value_r
   enabled: i32,
 ): {}
 
-#if k1/test #static {
+fn(test) c-layouts() {
   assert-layout[_internal](96, 8, [])
   assert-layout[_internal_s](96, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 73, 74, 75, 76, 78, 80, 81, 82, 84, 86, 88, ])
   assert-layout[errno](4, 4, [])

@@ -278,6 +278,7 @@ pub struct BuildRequest {
     pub command: Command,
     pub options: Vec<String>,
     pub host: Option<Target>,
+    pub editor: bool,
 }
 
 impl BuildRequest {
@@ -295,6 +296,7 @@ impl BuildRequest {
                 idents.get_string(config.k1_home).as_bytes(),
                 self.command.request_name().as_bytes(),
                 self.host.map_or("", |t| t.to_str()).as_bytes(),
+                &[self.editor as u8],
             ]),
         );
         for option in &self.options {
@@ -432,6 +434,13 @@ pub struct CompileRequest {
     pub tools: ToolFlags,
     pub k1_home: Option<String>,
     pub lsp: LspCompileOptions,
+    pub tests: TestRequest,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TestRequest {
+    pub static_tests: bool,
+    pub filter: Vec<String>,
 }
 
 impl CompileRequest {
@@ -449,10 +458,11 @@ impl CompileRequest {
         Ok(CompileRequest {
             path,
             strings,
-            build: BuildRequest { default, command, options: Vec::new(), host },
+            build: BuildRequest { default, command, options: Vec::new(), host, editor: false },
             tools: ToolFlags::default(),
             k1_home: None,
             lsp: LspCompileOptions::default(),
+            tests: TestRequest { static_tests: command.is_test(), filter: Vec::new() },
         })
     }
 }
@@ -564,10 +574,7 @@ pub fn source_exists(path: &str, overlay: &fxhash::FxHashMap<String, String>) ->
     overlay.contains_key(path) || Path::new(path).is_file()
 }
 
-pub fn module_root_file(
-    dir: &str,
-    overlay: &fxhash::FxHashMap<String, String>,
-) -> Option<PathBuf> {
+pub fn module_root_file(dir: &str, overlay: &fxhash::FxHashMap<String, String>) -> Option<PathBuf> {
     let module_file = Path::new(dir).join("module.k1");
     let stem_file = Path::new(dir).join(kpath::file_name(dir)).with_extension("k1");
     [module_file, stem_file]
@@ -577,8 +584,7 @@ pub fn module_root_file(
 
 pub fn is_module_dir(dir: &str, overlay: &fxhash::FxHashMap<String, String>) -> bool {
     let build_file = Path::new(dir).join(crate::plan::BUILD_FILE_NAME);
-    source_exists(build_file.to_str().unwrap(), overlay)
-        || module_root_file(dir, overlay).is_some()
+    source_exists(build_file.to_str().unwrap(), overlay) || module_root_file(dir, overlay).is_some()
 }
 
 pub fn find_check_target_for_file(
@@ -1270,9 +1276,7 @@ fn plan_program(
     {
         match lsp.host_mode {
             HostProgramMode::Discard => return Ok(Planned::Plan(plan, HostProgram::Absent)),
-            HostProgramMode::Keep { inputs_hash: Some(held) }
-                if held == plan.get_inputs_hash() =>
-            {
+            HostProgramMode::Keep { inputs_hash: Some(held) } if held == plan.get_inputs_hash() => {
                 return Ok(Planned::Plan(plan, HostProgram::Current));
             }
             HostProgramMode::Keep { .. } => {}
@@ -1407,7 +1411,7 @@ fn locate_k1_home(requested: Option<String>) -> std::result::Result<String, Stri
 pub fn compile_program(
     request: CompileRequest,
 ) -> std::result::Result<TypedProgram, CompileProgramError> {
-    let CompileRequest { path, strings, build, tools, k1_home, lsp } = request;
+    let CompileRequest { path, strings, build, tools, k1_home, lsp, tests } = request;
     #[cfg(feature = "profile")]
     let profiler_guard = if tools.profile {
         Some(
@@ -1511,6 +1515,20 @@ pub fn compile_program(
     if !is_ok {
         return Err(CompileProgramError::TyperFailure(Box::new(k1)));
     };
+    if config.command.is_test() || tests.static_tests {
+        let primary_id = k1.primary_module().id;
+        let tested =
+            k1.collect_selected_tests_for_module(primary_id, &tests.filter).and_then(|cases| {
+                if tests.static_tests {
+                    k1.run_static_tests(&cases);
+                }
+                if config.command.is_test() { k1.synth_test_main(&cases) } else { Ok(()) }
+            });
+        if let Err(e) = tested {
+            k1.report(e);
+            return Err(CompileProgramError::TyperFailure(Box::new(k1)));
+        }
+    }
     if tools.dump_ir && !config.command.codegens() {
         if let Err(e) = dump_checked_ir(&mut k1) {
             k1.report(e);
@@ -1810,14 +1828,14 @@ fn build_version_script_file_path(k1: &TypedProgram, module_name: &str) -> Strin
 pub fn write_library_export_files(k1: &TypedProgram, module_name: &str) -> Result<()> {
     let mut symbols: Vec<String> = vec![];
     for (_, function) in k1.function_iter() {
-        if let Linkage::Exported { fn_name } = function.linkage {
-            symbols.push(k1.ident_str(fn_name.unwrap_or(function.name)).to_string());
+        if let Linkage::Exported { link_name } = function.linkage {
+            symbols.push(k1.ident_str(link_name.unwrap_or(function.name)).to_string());
         }
     }
     for global_id in k1.globals.iter_ids() {
         let global = k1.globals.get(global_id);
-        if global.is_exported {
-            symbols.push(k1.ident_str(k1.variables.get(global.variable_id).name).to_string());
+        if global.linkage.is_exported() {
+            symbols.push(k1.global_link_symbol(global));
         }
     }
     symbols.sort();
@@ -2003,7 +2021,7 @@ pub fn codegen_module(ctx: &Context, k1: &mut TypedProgram) -> Result<()> {
 
     if k1.plan.is_executable() {
         if k1.plan.config.target.platform() == Platform::Bare {
-            bail!("bare targets emit objects only; there is no executable lane");
+            bail!("bare targets emit objects only, not executables");
         }
         let mut link_options: Vec<String> = vec![];
         if !reload_nss.is_empty() {
@@ -2040,6 +2058,36 @@ pub fn codegen_module(ctx: &Context, k1: &mut TypedProgram) -> Result<()> {
     }
 
     Ok(())
+}
+
+pub fn report_static_tests(k1: &TypedProgram) -> bool {
+    let mut failed = 0;
+    let mut total = std::time::Duration::ZERO;
+    for result in &k1.test_results {
+        total += result.elapsed;
+        let millis = result.elapsed.as_secs_f64() * 1000.0;
+        let name = k1.ident_str(result.name);
+        match result.failure {
+            None => println!("ok   {name} ({millis:.1}ms)"),
+            Some(failure) => {
+                failed += 1;
+                let (source, line) = k1.get_span_location(result.span);
+                println!(
+                    "FAIL {name} at {}:{} ({millis:.1}ms)\n{}",
+                    source.filename_str(&k1.ast.idents),
+                    line.line_number(),
+                    k1.ident_str(failure)
+                );
+            }
+        }
+    }
+    println!(
+        "{} static test results: {} passed, {failed} failed ({:.1}ms)",
+        k1.program_name(),
+        k1.test_results.len() - failed,
+        total.as_secs_f64() * 1000.0
+    );
+    failed == 0
 }
 
 pub fn report_trace(k1: &TypedProgram) {
@@ -2399,6 +2447,30 @@ mod compiler_test {
         assert_eq!(dep_edited.restored_module_count, 1, "an edited dep restores only core");
         assert_eq!(snapshot_count(&cache_dir), stored, "the dep's entry is replaced, not added");
 
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn crash_backtrace_is_symbolized() {
+        if cfg!(target_os = "macos") && !Path::new("/usr/bin/atos").exists() {
+            return;
+        }
+        set_home();
+        let dir = std::env::temp_dir().join(format!("k1_backtrace_test_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let app = dir.join("crasher.k1");
+        fs::write(&app, "fn main() { crash(\"boom\") }\n").unwrap();
+        let mut request = CompileRequest::new(app, Command::Build, None).unwrap();
+        request.tools.cache = false;
+        let mut k1 = program_of(compile_program(request));
+        let ctx = Context::create();
+        codegen_module(&ctx, &mut k1).unwrap();
+        let exe = kpath::join_pathbuf(&k1.ast.idents, k1.config.out_dir, "crasher");
+        let output = std::process::Command::new(exe).output().unwrap();
+        assert_eq!(output.status.signal(), Some(6));
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(stdout.contains("crasher.k1:"), "no symbolized frame in:\n{stdout}");
         let _ = fs::remove_dir_all(&dir);
     }
 

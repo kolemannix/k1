@@ -26,14 +26,14 @@ fn(noinline) copy-through(dst: *pair, src: *pair) {
   dst.b = dst.b + val(0)
 }
 
-fn(noinline) source-written-by-reading-call() {
+fn(test, noinline) source-written-by-reading-call() {
   let s: pair = .{ a = val(1), b = 2 }
   let t = s
   assert-equals(bump-then-read(t, s.&), 1)
   assert-equals(s.a, 101)
 }
 
-fn(noinline) source-written-after-copy() {
+fn(test, noinline) source-written-after-copy() {
   let s: pair = .{ a = val(1), b = 2 }
   let t = s
   s.a = 5
@@ -41,7 +41,7 @@ fn(noinline) source-written-after-copy() {
   assert-equals(s.a, 5)
 }
 
-fn(noinline) call-result-reads-destination() {
+fn(test, noinline) call-result-reads-destination() {
   let d: quad = .{ a = val(1), b = 2, c = 3, d = 4 }
   d = swapped(d)
   assert-equals(d.a, 2)
@@ -54,14 +54,14 @@ fn(noinline) call-result-reads-destination() {
   assert-equals(d.d, 4)
 }
 
-fn(noinline) literal-reads-destination() {
+fn(test, noinline) literal-reads-destination() {
   let x: pair = .{ a = val(1), b = 2 }
   x = .{ a = x.b, b = x.a }
   assert-equals(x.a, 2)
   assert-equals(x.b, 1)
 }
 
-fn(noinline) forwarded() {
+fn(test, noinline) forwarded() {
   let s: pair = .{ a = val(3), b = 4 }
   let t = s
   assert-equals(t.a + t.b, 7)
@@ -74,7 +74,7 @@ fn(noinline) forwarded() {
   assert-equals(u.a + u.b, 11)
 }
 
-fn(noinline) through-pointers() {
+fn(test, noinline) through-pointers() {
   let x: pair = .{ a = val(7), b = 8 }
   let y: pair = .{ a = 0, b = 0 }
   copy-through(y.&, x.&)
@@ -82,13 +82,4 @@ fn(noinline) through-pointers() {
   copy-through(x.&, x.&)
   assert-equals(x.a, 7)
   assert-equals(x.b, 8)
-}
-
-fn test() {
-  source-written-by-reading-call()
-  source-written-after-copy()
-  call-result-reads-destination()
-  literal-reads-destination()
-  forwarded()
-  through-pointers()
 }

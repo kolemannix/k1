@@ -593,8 +593,8 @@ impl TypedProgram {
         if function.linkage.is_external() {
             w.write_str("extern ")?;
         }
-        if function.linkage == Linkage::Intrinsic {
-            w.write_str("intern ")?;
+        if function.builtin_type.is_some() {
+            w.write_str("builtin ")?;
         }
 
         w.write_str("fn ")?;

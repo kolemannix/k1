@@ -14,7 +14,7 @@ fn describe(k: event-kind): string {
   }
 }
 
-fn casts() {
+fn(test) casts() {
   let n: u32 = 8192
   let unknown: event-kind = enum-from-value-unchecked(n)
   assert-equals(unknown.value, 8192)
@@ -24,7 +24,7 @@ fn casts() {
   assert(known is :key-down)
 }
 
-fn exhaustiveness() {
+fn(test) exhaustiveness() {
   let k: event-kind = :quit
   assert(test-compile(if k is { :quit -> 1, :key-down -> 2, :key-up -> 3 }) is :some _)
   assert(test-compile(if k is { :quit -> 1, _ -> 2 }) is :none)
@@ -32,7 +32,7 @@ fn exhaustiveness() {
   assert-equals[string](describe(enum-from-value-unchecked(5)), "other")
 }
 
-fn from-value() {
+fn(test) from-value() {
   let up: ?event-kind = enum-from-value(769)
   assert(up is :some :key-up)
   let other: ?event-kind = enum-from-value(8192)
@@ -40,7 +40,7 @@ fn from-value() {
   assert-equals(unknown.value, 8192)
 }
 
-fn names() {
+fn(test) names() {
   let known: event-kind = :key-up
   assert-equals[string](known.enum-name(), "key-up")
   assert-equals[string](known.show(), "key-up")
@@ -50,17 +50,9 @@ fn names() {
   assert-equals[string]("${unknown}", "event-kind(8192)")
 }
 
-fn schema() {
+fn(test) schema() {
   require types/schema[event-kind] is :enum .{ partial } else crash("event-kind is an enum")
   assert(partial)
   require types/schema[either(u32) { a, b }] is :enum .{ partial } else crash("an enum")
   assert(not partial)
-}
-
-fn test() {
-  casts()
-  exhaustiveness()
-  from-value()
-  names()
-  schema()
 }

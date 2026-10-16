@@ -1,32 +1,42 @@
 ns arith
 
-fn test() {
+fn(test) operators-and-precedence() {
   assert-equals(-1 % 2, -1)
   assert(42 & 15 == 10)
   assert(29 ^ 15 == 18)
   assert(2 & 1 < 1)
   assert(1 << 1 & 2 == 2)
   assert(-7 >> 1 == -4)
+}
 
+fn(test) integer-literal-forms() {
   assert-equals(-0x1F, -31)
   assert-equals(0b1010u8, 10)
   assert-equals(-1_0_0, -100)
   assert-equals(0xdead_beefu32, 3735928559u32)
   assert-equals(18446744073709551615u64, u64/max-value)
   assert-equals(-9223372036854775808i64, i64/min-value)
+}
 
+fn(test) widening-and-sign-casts() {
   assert-equals(-3i8.widen[i64], -3)
   assert-equals(-1i16.widen[i32].unsigned(), 0xFFFF_FFFF)
   assert(test-compile(-1i16.as[u32]).is-some())
+}
 
+fn(test) wrapping-negation() {
   assert-equals(-128i8.negated(), -128i8)
   assert-equals(1u8.negated(), 255u8)
   assert-equals(negate-generic(2.5), -2.5)
+}
 
+fn(test) scalar-min-max() {
   assert-equals((-3: i8).max(5), 5)
   assert-equals(0xFFFF_FFFF_FFFF_FFFFu64.min(1), 1)
   assert-equals(min-generic(7: u16, 2), 2)
+}
 
+fn(test) wrapping-ops-and-masked-shifts() {
   assert-equals(127i8 + 1, -128)
   assert-equals(-1i32 * i32/min-value, i32/min-value)
   assert-equals(1u64 << 65, 2)
@@ -36,20 +46,27 @@ fn test() {
   assert-equals(min64 >> 64, min64)
   assert-equals(min64 / -2, 0x4000_0000_0000_0000)
   assert-equals(min64 % -2, 0)
+}
 
-  assert-equals[?string](
-    test-compile( #static { 7u32 % 0 } ).map(fn(s) s.take(16)),
-    some("Division by zero")
-  )
-  assert-equals[?string](
-    test-compile( #static { let d = -1; let m = i64/min-value; m / d } ).map(fn(s) s.take(41)),
-    some("Integer division overflow: min-value / -1")
-  )
-
+fn(test) absolute-value() {
   assert-equals((-7: i32).abs(), 7)
+}
 
+fn(test) out-of-range-literals-rejected() {
   assert(test-compile({ let _x: u8 = 256; .{} }) is :some "Invalid u8: 256 does not fit")
   assert(test-compile(emit("99999999999999999999")).!.contains-string("Invalid decimal integer: too large for any integer type"))
+}
+
+fn(test) divides-by-zero() {
+  k1/test/expect-failure("Division by zero")
+  let d: i32 = 0
+  let _ = 10 / d
+}
+
+fn(test) overflows-division() {
+  k1/test/expect-failure("Integer division overflow: min-value / -1")
+  let d = -1i8
+  let _ = -128i8 % d
 }
 
 macro emit(s: string) { code/from-string(s) }

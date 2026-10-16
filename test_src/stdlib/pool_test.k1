@@ -2,7 +2,7 @@ ns pool_test
 
 use std/pool
 
-fn test() {
+fn(test) acquire-release-and-generations() {
   let p = pool/with-capacity[int](3)
   let a = p.acquire(1)
   let b = p.acquire(2)

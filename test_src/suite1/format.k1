@@ -18,7 +18,7 @@ fn places32(f: f32, places: i32): string {
   w.build()
 }
 
-fn test() {
+fn(test) interpolation() {
   let world = "Budapest"
   let get-world = fn[world]. world
   let w = string-builder/new()
@@ -27,14 +27,18 @@ fn test() {
   assert(test-compile("${}".fmt(1, 1)).is-some())
   assert(test-compile("$missing".fmt(.{x =1})).is-some())
   assert-equals("hello ${get-world()} ${yyyy}-$dd".fmt(.{yyyy =2021,dd =3}), "hello Budapest 2021-3")
+}
 
+fn(test) integer-bases() {
   assert-equals(to-base(1048576, 2), "100000000000000000000")
   assert-equals(to-base(u64/max-value, 16), "ffffffffffffffff")
   assert-equals(to-base(u64/max-value, 10), "18446744073709551615")
   assert-equals(to-base(10001, 10), "10001")
   assert-equals(u8/to-ascii-digit(35), 'z')
   assert-equals(u8/to-ascii-digit(61), 'Z')
+}
 
+fn(test) float-shortest-and-places() {
   assert-equals("${-0.0: f64}", "-0.0")
   assert-equals("${123456.789: f64}", "123456.789")
   assert-equals("${1.0 / 3.0}", "0.3333333333333333")
@@ -57,7 +61,9 @@ fn test() {
   assert-equals(places(-0.0, 3), "-0.000")
   assert-equals(places(f64/inf, 1), "inf")
   assert-equals(places32(0.1, 20), "0.10000000149011611938")
+}
 
+fn(test) format-specs() {
   let f = 3.14159
   let n: i32 = -42
   let s = "héllo"

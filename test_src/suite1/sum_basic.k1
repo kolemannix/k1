@@ -4,7 +4,7 @@ type maybe = either(i8) { a = -1, b(char) = 0, c(string) = 100 }
 type my-result[t, e] = either { ok(t), err(e) }
 type e = either(u8) { a = 4, b = 8, c(int) = 9 }
 
-fn test() {
+fn(test) sum-variants-and-tags() {
   let a: maybe = :a
   let b: maybe = :b 'x'
   let c: maybe = :c "hello, sums"

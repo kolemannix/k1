@@ -30,6 +30,7 @@ fn main() -> anyhow::Result<ExitCode> {
         }
     };
     let command = request.build.command;
+    let static_tests = request.tests.static_tests;
     let mut program = match compiler::compile_program(request) {
         Ok(program) => program,
         Err(CompileProgramError::TyperFailure(program)) => {
@@ -45,13 +46,15 @@ fn main() -> anyhow::Result<ExitCode> {
     if !command.codegens() || command == Command::Server {
         compiler::report_trace(&program);
     }
+    let static_ok = !static_tests || compiler::report_static_tests(&program);
     if !command.codegens() {
         // Setup runs as a module-load gate, so a successful compile means setup ran.
         // In release builds, just exit fast
+        let exit_code = if static_ok { 0 } else { 1 };
         if cfg!(debug_assertions) {
-            return Ok(ExitCode::SUCCESS);
+            return Ok(ExitCode::from(exit_code));
         } else {
-            std::process::exit(0)
+            std::process::exit(exit_code.into())
         }
     };
     if command == Command::Server {
@@ -59,9 +62,9 @@ fn main() -> anyhow::Result<ExitCode> {
         k1::server::serve(Arc::new(Mutex::new(Some(Box::new(program)))));
         return Ok(ExitCode::SUCCESS);
     }
-    if matches!(command, Command::Run | Command::Test) && !program.plan.is_executable() {
+    if command == Command::Run && !program.plan.is_executable() {
         eprintln!(
-            "{} is a library module; run/test require an executable module",
+            "{} is a library module; run requires an executable module",
             program.program_name()
         );
         return Ok(ExitCode::FAILURE);
@@ -97,7 +100,7 @@ fn main() -> anyhow::Result<ExitCode> {
                     true,
                     &[],
                 );
-                exit_code == Some(0)
+                static_ok && exit_code == Some(0)
             }
             Command::Server => unreachable!("server runs before codegen"),
             Command::Setup { .. } => unreachable!("setup exits after compile"),
@@ -149,7 +152,7 @@ fn usage() -> String {
     format!(
         "k1 {version}
 
-Usage: k1 <command> [path] [options] [-- program args]
+Usage: k1 <command> [path] [options] [-- program args | test filters]
 
   path is a file or a module dir (default: .)
 
@@ -158,7 +161,9 @@ Commands:
   build, b    Build the executable or library
   run, r      Build and run; later arguments go to the program (after -- if they
               start with -)
-  test, t     Build and run the test executable
+  test, t     Run the module's fn(test)s in the VM, then in the test executable;
+              later arguments filter by name substring (after -- if they start
+              with -)
   server      Serve the megarepl for the program
   setup       Run the module's setup if its stamp is stale
   clean       Delete the module's .k1-out
@@ -172,6 +177,10 @@ Build options (fn build sees these as req.default and req.options):
   --sanitize           Link AddressSanitizer and UndefinedBehaviorSanitizer
   --filc               Compile and link through Fil-C (intel64-linux, needs K1_FILC)
   -D <name[=value]>    Option for the primary module's fn build
+
+Test options:
+  --skip-static        Skip running the tests in the VM
+  --skip-runtime       Skip the test executable: check plus the VM run
 
 Tool options:
   --no-cache           Skip the disk cache
@@ -213,16 +222,27 @@ fn parse_cli() -> Result<Cli, lexopt::Error> {
     use lexopt::prelude::*;
     let mut parser = lexopt::Parser::from_env();
     let mut command = None;
+    let (mut skip_static, mut skip_runtime) = (false, false);
     let mut parse_only = false;
     let mut path = None;
-    let mut program_args = Vec::new();
+    let mut trailing = Vec::new();
     let mut target = None;
     let mut force = false;
     let (mut optimize, mut debug, mut no_std, mut sanitize, mut filc) =
         (false, false, false, false, false);
     let mut options = Vec::new();
     let mut tools = ToolFlags::default();
-    while let Some(arg) = parser.next()? {
+    loop {
+        if let Some(mut raw) = parser.try_raw_args()
+            && raw.peek().is_some_and(|arg| arg == "--")
+        {
+            raw.next();
+            for arg in raw {
+                trailing.push(arg.into_string().map_err(|_| "argument is not UTF-8")?);
+            }
+            break;
+        }
+        let Some(arg) = parser.next()? else { break };
         match arg {
             Long("target") => {
                 let name = parser.value()?.string()?;
@@ -247,6 +267,8 @@ fn parse_cli() -> Result<Cli, lexopt::Error> {
             Long("no-optimize-ir") => tools.optimize_ir = false,
             Long("profile") => tools.profile = true,
             Long("force") => force = true,
+            Long("skip-static") => skip_static = true,
+            Long("skip-runtime") => skip_runtime = true,
             Short('h') | Long("help") => {
                 print!("{}", usage());
                 std::process::exit(0);
@@ -264,7 +286,7 @@ fn parse_cli() -> Result<Cli, lexopt::Error> {
                 }
             }
             Value(value) if path.is_none() => path = Some(PathBuf::from(value)),
-            Value(value) if command == Some(Command::Run) => program_args.push(value.string()?),
+            Value(value) => trailing.push(value.string()?),
             _ => return Err(arg.unexpected()),
         }
     }
@@ -280,8 +302,26 @@ fn parse_cli() -> Result<Cli, lexopt::Error> {
         Some(_) if force => return Err("--force only applies to setup".into()),
         Some(command) => command,
     };
+    let (command, static_tests, filter, program_args) = match (command, skip_static, skip_runtime) {
+        (Command::Test, true, true) => {
+            return Err("--skip-static and --skip-runtime together skip every test".into());
+        }
+        (Command::Test, false, false) => (Command::Test, true, trailing, Vec::new()),
+        (Command::Test, false, true) => (Command::Check, true, trailing, Vec::new()),
+        (Command::Test, true, false) => (Command::Test, false, trailing, Vec::new()),
+        (_, true, _) | (_, _, true) => {
+            return Err("--skip-static and --skip-runtime only apply to test".into());
+        }
+        (Command::Run, ..) => (Command::Run, false, Vec::new(), trailing),
+        _ if !trailing.is_empty() => {
+            return Err(format!("unexpected argument {}", trailing[0]).into());
+        }
+        (command, ..) => (command, false, Vec::new(), Vec::new()),
+    };
     let path = path.unwrap_or_else(|| PathBuf::from("."));
     let mut request = CompileRequest::new(path, command, target)?;
+    request.tests.static_tests = static_tests;
+    request.tests.filter = filter;
     let build = &mut request.build.default;
     build.optimize = optimize;
     build.debug = debug;

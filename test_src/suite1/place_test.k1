@@ -8,7 +8,7 @@ ns for inner {
   fn me(*self): *inner { self }
 }
 
-fn test() {
+fn(test) refs-to-nested-places() {
   let outer: outer = .{ name = "hi", inner = .{ a = 11, b = 22 } }
   let outer-ref = outer.&
   let inner-ref = outer-ref.inner.&

@@ -33,7 +33,7 @@ fn route-of(method: http/llhttp/method, target: string): result[route, http/rout
   route/parse(method, url/parse(target).!)
 }
 
-fn test-routing() {
+fn(test) test-routing() {
   assert(route/parse-request(http/header/get("/game/42/poke")) is :err :bad-method _)
   assert((route:game-poke .{ id = 42 }).show() == "/game/42/poke")
   assert("${route:files .{ path = "a b/c" }}" == "/files/a%20b/c")
@@ -60,7 +60,7 @@ fn test-routing() {
   assert(route-of(:GET, "/cmd/grade-rate/x?plan-id=1&item-id=2&plan-id=1") is :err :bad-param b2 and b2.name == "plan-id")
 }
 
-fn test-parsers() {
+fn(test) test-parsers() {
   let c = cookie/parse("who=bob;junk ; x=a=b; enc=a%20b%3B; plus=a+b; empty=; raw=%zz")
   assert-equals(c.len(), 6)
   assert(pair/find(c.as-span(), "who") == :some "bob")
@@ -104,7 +104,7 @@ fn sse(src: byte-source, event-name: string, data-prefix: string): string {
   drain(src || sse-events(event-name, data-prefix))
 }
 
-fn test-encoders() {
+fn(test) test-encoders() {
   assert-equals(drain(source/from-printed(["0123456789abcdefg"]) || chunked), "11\r\n0123456789abcdefg\r\n0\r\n\r\n")
   assert-equals(drain(source/once(["".span-bytes()]) || chunked), "0\r\n\r\n")
 
@@ -331,7 +331,7 @@ fn phase2() {
   }, 100, 0)
 }
 
-fn test-server() {
+fn(test-runtime) test-server() {
   let config: server/config = .{
     host = "127.0.0.1", port = 0, accept-queue-len = 128, max-connections = 4, max-body-size = 1024,
     header-timeout-ms = 200, body-timeout-ms = 30000, write-timeout-ms = 30000,
@@ -393,7 +393,7 @@ fn set-flag(flag: *uv/monitor[bool]) {
   guard.unlock()
 }
 
-fn test-pool() {
+fn(test-runtime) test-pool() {
   let inline-only = worker-pool/start(target-free-count = 1, max-worker-count = 1, capacity = 8)
   assert-equals(task/spawn(inline-only, await-on-own-pool.&, inline-only).!.await(), 42)
   inline-only.close()
@@ -407,15 +407,4 @@ fn test-pool() {
   elastic.close()
   elastic.join()
   flag.destroy()
-}
-
-fn main(): i32 {
-  test-routing()
-  test-parsers()
-  test-encoders()
-  #static test-encoders()
-  test-pool()
-  test-server()
-  println("http_test passed")
-  0
 }

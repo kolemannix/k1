@@ -27,8 +27,7 @@ fn occurs-check-test[t](x: t): t {
   x
 }
 
-fn test() {
-
+fn(test) infers-type-args() {
   let x = identity(identity(11))
   assert(x == 11)
   let x = identity(12)

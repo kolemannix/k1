@@ -24,7 +24,7 @@ fn repeated(b: u8, n: size): list[u8] {
   out
 }
 
-fn test() {
+fn(test) sha256-known-vectors() {
   assert-equals(hex-of(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
   assert-equals(hex-of("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
   assert-equals(hex-of(NIST56), NIST56_HASH)
@@ -32,7 +32,9 @@ fn test() {
     hex-of("abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu"),
     "cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1",
   )
+}
 
+fn(test) sha256-incremental-update() {
   let bytes = NIST56.span-bytes()
   let h = crypto/sha256/new()
   h.&.update(bytes.take(3))
@@ -40,7 +42,9 @@ fn test() {
   h.&.update(bytes.drop(50))
   let d = h.&.finish()
   assert-equals(d.as-span().to-hex(), NIST56_HASH)
+}
 
+fn(test) hmac-sha256-known-vectors() {
   assert-equals(hmac-hex(repeated(0x0b, 20).as-span(), "Hi There"), "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7")
   assert-equals(hmac-hex("Jefe".span-bytes(), "what do ya want for nothing?"), "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843")
   assert-equals(

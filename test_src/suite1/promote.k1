@@ -117,7 +117,7 @@ fn(noinline) float-fields(n: i64): f64 {
   acc.x
 }
 
-fn test() {
+fn(test) aggregate-locals-keep-values() {
   assert-equals(fib-pairs(10), 55)
   assert-equals(option-payload(10), 27)
   assert-equals(swap-fields(), 21)

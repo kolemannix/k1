@@ -204,7 +204,6 @@ pub enum TokenKind {
     KeywordWhile,
     KeywordLoop,
     KeywordNs,
-    KeywordIntern,
     KeywordFor,
     KeywordIn,
     KeywordAbility,
@@ -418,7 +417,6 @@ const KW_ELSE: u64 = make_keyword_key(b"else");
 const KW_WHILE: u64 = make_keyword_key(b"while");
 const KW_LOOP: u64 = make_keyword_key(b"loop");
 const KW_NS: u64 = make_keyword_key(b"ns");
-const KW_INTERN: u64 = make_keyword_key(b"intern");
 const KW_FOR: u64 = make_keyword_key(b"for");
 const KW_IN: u64 = make_keyword_key(b"in");
 const KW_ABILITY: u64 = make_keyword_key(b"ability");
@@ -470,7 +468,6 @@ impl TokenKind {
             K::KeywordWhile => "while",
             K::KeywordLoop => "loop",
             K::KeywordNs => "ns",
-            K::KeywordIntern => "intern",
             K::KeywordFor => "for",
             K::KeywordIn => "in",
             K::KeywordAbility => "ability",
@@ -549,7 +546,6 @@ impl TokenKind {
             KW_WHILE => Some(K::KeywordWhile),
             KW_LOOP => Some(K::KeywordLoop),
             KW_NS => Some(K::KeywordNs),
-            KW_INTERN => Some(K::KeywordIntern),
             KW_FOR => Some(K::KeywordFor),
             KW_IN => Some(K::KeywordIn),
             KW_ABILITY => Some(K::KeywordAbility),

@@ -14,7 +14,7 @@ fn check-wire(w: wire) {
   assert-equals(w.c, 999u16)
 }
 
-fn test() {
+fn(test) layout-and-access() {
   #static types/assert-layout[wire](11, 1, [0, 1, 9])
   // inner: size 5, stride 8; packed fields advance by stride
   #static types/assert-layout[mixed](10, 1, [0, 1, 9])
@@ -27,7 +27,7 @@ fn test() {
     and fields.[2].name == "c" and fields.[2].offset == 9
     else crash("wire schema")
 
-  // literal construction + unaligned field reads, runtime lane
+  // literal construction + unaligned field reads
   let w: wire = .{ a = 7, b = 0xAABBCCDDEEFF1122, c = 999 }
   check-wire(w)
 
@@ -58,15 +58,6 @@ fn test() {
   arr.[0].c = 4
   assert-equals(arr.[0].c, 4u16)
   assert-equals(arr.[1].c, 999u16)
-
-  // comptime lane: same shapes evaluated in the VM
-  let vm-sum: u64 = #static {
-    let w: wire = .{ a = 1, b = 500, c = 30 }
-    let m: mixed = .{ tag = 1, inner = .{ x = 42, y = 2 }, tail = 3 }
-    m.inner.x = 100
-    w.b + w.a.widen[u64] + w.c.widen[u64] + m.inner.x.widen[u64]
-  }
-  assert-equals(vm-sum, 631u64)
 
   // baked static crosses the VM -> runtime border with packed offsets
   check-wire(WIRE_STATIC)

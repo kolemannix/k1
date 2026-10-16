@@ -34,13 +34,15 @@ fn tag-show[t: tagged and equals and show](context c: t)(): string {
   c.show()
 }
 
-fn test() {
+fn(test) writer-context-reaches-nested-calls() {
   let sb = string-builder/new()
   let(context(impl writer)) out: *string-builder = sb.&
   excited-greet("Ana")
   log-concrete(" plain")
   assert(sb.build() == "Hello, Ana! plain")
+}
 
+fn(test) tagged-context-explicit-and-shadowed() {
   let(context(impl tagged)) flag = true
   assert(tag-context() == 100)
   assert(tag-context(context 41)() == 42)

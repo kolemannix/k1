@@ -8,7 +8,7 @@ $define[u16](flags-auto,
    bn("foo", 8)]
 )
 
-fn test-bitfield() {
+fn(test) bitfield-setters-match-raw-bits() {
   let y: flags-auto = .{ bits = 0b1111_0000_1000_1101 }
   let x: flags-auto = flags-auto/zero.set-shielded(true).set-damaged(true).set-sector-id(17).set-foo(0b1111_0000)
   assert-equals(y.get-shielded(), x.get-shielded())

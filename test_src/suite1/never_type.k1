@@ -25,7 +25,7 @@ fn ref-payload-is-inhabited(r: result[int, *never]): int {
   if r is { :ok v -> v, :err _ -> -1 }
 }
 
-fn run() {
+fn(test) uninhabited-payloads() {
   assert-equals(try-into-fallible(), :ok 14)
   assert-equals(try-into-plain(), 14)
   assert-equals(infallible-nv() ? 0, 7)
@@ -45,9 +45,4 @@ fn run() {
   let names = if parse-all[never, string](["ada", "grace"]) is { :ok v -> v }
   assert-equals(names.len(), 2)
   assert(parse-all[string, u64](["1", "x"]) is :err _)
-}
-
-fn test() {
-  run()
-  #static run()
 }

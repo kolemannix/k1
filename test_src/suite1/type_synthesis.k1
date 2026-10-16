@@ -22,7 +22,7 @@ ns type_synthesis {
     types/make-either(:some(int-kind.type-id()), variants.as-span())
   }
 
-  fn test() {
+  fn(test) synthesized-types-match-declared() {
     let p: point = .{ x = 42, y = "hello" }
     assert-equals(p.x, 42)
     assert-equals(p.y, "hello")

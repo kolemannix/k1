@@ -81,12 +81,24 @@ pub struct BuildPlan {
     pub strings: Interner,
     pub mem: Mem<PlanMem>,
     pub config: BuildConfig,
+    pub editor: EditorSettings,
     pub modules: MSlice<PlannedModule, PlanMem>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct EditorSettings {
+    pub test_on_save: bool,
 }
 
 impl BuildPlan {
     pub fn new(strings: Interner, config: BuildConfig) -> BuildPlan {
-        BuildPlan { strings, mem: Mem::make(), config, modules: MSlice::empty() }
+        BuildPlan {
+            strings,
+            mem: Mem::make(),
+            config,
+            editor: EditorSettings::default(),
+            modules: MSlice::empty(),
+        }
     }
 
     pub fn trivial<Tag>(
@@ -211,6 +223,7 @@ impl BuildPlan {
         self.strings.snap(w);
         self.mem.snap(w);
         w.write_t(&self.config);
+        w.write_t(&self.editor);
         w.write_t(&self.modules);
         w.write_section("end");
     }
@@ -224,9 +237,10 @@ impl BuildPlan {
         let mut mem = Mem::make();
         mem.restore(&mut r);
         let config = r.read_t();
+        let editor = r.read_t();
         let modules = r.read_t();
         r.section("end");
-        Some(BuildPlan { strings, mem, config, modules })
+        Some(BuildPlan { strings, mem, config, editor, modules })
     }
 
     pub fn is_fresh<Tag>(

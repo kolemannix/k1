@@ -23,15 +23,19 @@ fn apply-through-field(f: some fn(int) -> int): int {
   (holder.held)(10)
 }
 
-fn test() {
+fn(test) reassign-fn-pointer-local() {
   let some-add-fn: *fn(int) -> int = static-add-one.&
   assert-equals(some-add-fn(10), 11)
   some-add-fn = static-add-two.&
   assert-equals(some-add-fn(20), 22)
+}
 
+fn(test) call-fn-pointer-field() {
   let has-fn: has-fn = .{ myfn = static-add-one.& }
   assert-equals((has-fn.myfn)(4), 5)
+}
 
+fn(test) fn-values-coerce-to-pointers() {
   let r = static-add-one
   assert-equals(types/size[type-of(r)], 0)
   assert-equals(r.&.as[ptr], static-add-one.&.as[ptr])
@@ -41,12 +45,16 @@ fn test() {
   assert-equals(literal-ptr(3), 9)
   assert-equals(takes-ptr(fn(x: int) x + 10, 1), 11)
   assert(test-compile( { let k = 1; let p: *fn(int) -> int = fn[k](x: int) x + k; p } ) is :some _)
+}
 
+fn(test) generic-and-native-fn-pointers() {
   let pf-int = pick-first[int].&
   assert(pf-int.as[ptr] != pick-first[bool].&.as[ptr])
   assert-equals(ref-pick[int]().as[ptr], pf-int.as[ptr])
   assert-equals((native-add-three.&)(4), 7)
+}
 
+fn(test) callee-evaluated-once() {
   let count = 0
   assert-equals((counted-add-one(count.&))(1), 2)
   let p = counted-add-one(count.&).&
@@ -54,7 +62,9 @@ fn test() {
   let d = counted-add-one(count.&).to-dyn()
   assert-equals(d(1), 2)
   assert-equals(count, 3)
+}
 
+fn(test) callables-in-struct-fields() {
   let base = 5
   let callables = .{
     lambda = fn[base](x: int) x + base,

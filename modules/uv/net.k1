@@ -47,7 +47,7 @@ type addrinfo = {
 }
 type FILE = opaque[152, 8]
 
-#if k1/test #static {
+fn(test) c-layouts() {
   assert-layout[in_addr_t](4, 4, [])
   assert-layout[in_port_t](2, 2, [])
   assert-layout[sa_family_t](1, 1, [])

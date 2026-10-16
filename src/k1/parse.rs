@@ -1171,6 +1171,19 @@ pub enum Inlining {
     Never,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum TestRuns {
+    Both,
+    Static,
+    Runtime,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParsedBuiltin {
+    ByName,
+    Llvm(StringId),
+}
+
 #[derive(Clone, Copy)]
 pub struct ParsedFunction {
     pub name: StringId,
@@ -1182,9 +1195,11 @@ pub struct ParsedFunction {
     pub span: Span,
     pub name_span: Span,
     pub linkage: Linkage,
+    pub builtin: Option<ParsedBuiltin>,
     pub is_native: bool,
     pub inlining: Inlining,
     pub is_cold: bool,
+    pub test: Option<TestRuns>,
     pub compiler_debug: bool,
     pub additional_where_constraints: AstSlice<ParsedTypeConstraint>,
     pub compile_condition: Option<ParsedExprId>,
@@ -1207,8 +1222,6 @@ pub struct ParsedMacro {
     pub id: ParsedMacroId,
     pub typer_state: typer::ParsedMacroDeclareOutcome,
 }
-
-impl ParsedFunction {}
 
 #[derive(Clone, Copy)]
 pub struct ParsedFnParam {
@@ -1248,11 +1261,9 @@ pub struct ParsedGlobal {
     pub name_span: Span,
     pub span: Span,
     pub id: ParsedGlobalId,
+    pub linkage: Linkage,
     pub is_thread_local: bool,
-    pub is_export: bool,
     pub is_mutable: bool,
-    pub is_external: bool,
-    pub link_name: Option<StringId>,
     pub compile_condition: Option<ParsedExprId>,
 
     pub typer_state: typer::ParsedGlobalDeclareOutcome,
@@ -4417,32 +4428,43 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     ) -> ParseResult<ParsedGlobalId> {
         let keyword_let_token = self.expect_kind(K::KeywordLet)?;
         let mut is_thread_local = false;
-        let mut is_export = false;
-        let mut is_external = false;
         let mut is_mutable = false;
-        let mut link_name = None;
+        let mut linkage = Linkage::Standard;
         if self.maybe_consume(K::OpenParen).is_some() {
             loop {
                 let ident = self.expect_kind(K::Ident)?;
-                let mut takes_link_name = false;
                 match self.token_chars(ident) {
                     "tls" => is_thread_local = true,
-                    "export" => is_export = true,
-                    "extern" => {
-                        is_external = true;
-                        takes_link_name = true;
-                    }
                     "mutable" => is_mutable = true,
+                    modifier @ ("extern" | "export") => {
+                        if linkage != Linkage::Standard {
+                            return Err(
+                                self.error_expected("a single extern or export modifier", ident)
+                            );
+                        }
+                        let link_name = if self.maybe_consume(K::OpenParen).is_some() {
+                            let symbol = self.expect_dq_ident()?;
+                            self.expect_kind(K::CloseParen)?;
+                            Some(symbol)
+                        } else {
+                            None
+                        };
+                        linkage = if modifier == "extern" {
+                            Linkage::External {
+                                module_id: self.module_id,
+                                lib_name: None,
+                                link_name,
+                            }
+                        } else {
+                            Linkage::Exported { link_name }
+                        };
+                    }
                     _ => {
                         return Err(self.error_expected(
                             "global modifier: tls, export, extern, or mutable",
                             ident,
                         ));
                     }
-                }
-                if takes_link_name && self.maybe_consume(K::OpenParen).is_some() {
-                    link_name = Some(self.expect_dq_ident()?);
-                    self.expect_kind(K::CloseParen)?;
                 }
                 if self.maybe_consume(K::Comma).is_none() {
                     break;
@@ -4452,14 +4474,18 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         }
         let name_token = self.expect_kind(K::Ident)?;
         let mut mods = SemanticToken::STATIC;
-        mods |= if is_external { SemanticToken::DECLARATION } else { SemanticToken::DEFINITION };
+        mods |= if linkage.is_external() {
+            SemanticToken::DECLARATION
+        } else {
+            SemanticToken::DEFINITION
+        };
         if !is_mutable {
             mods |= SemanticToken::READONLY;
         }
         self.emit_semantic_token_mods(name_token, SemanticTokenKind::Variable, mods);
         let _colon = self.expect_kind(K::Colon)?;
         let type_expr = self.expect_type_expression()?;
-        let value_expr = if is_external {
+        let value_expr = if linkage.is_external() {
             None
         } else {
             self.expect_kind(K::Equals)?;
@@ -4475,11 +4501,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             name_span,
             span,
             id: ParsedGlobalId::PENDING,
+            linkage,
             is_thread_local,
-            is_export,
             is_mutable,
-            is_external,
-            link_name,
             compile_condition,
 
             typer_state: typer::ParsedGlobalDeclareOutcome::Parsed,
@@ -4920,39 +4944,32 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         compiler_debug: bool,
     ) -> ParseResult<ParsedFunctionId> {
         let fn_keyword = self.expect_kind(K::KeywordFn)?;
-        let (linkage, is_native, inlining, is_cold) = if self.maybe_consume(K::OpenParen).is_some()
+        let (linkage, builtin, is_native, inlining, is_cold, test) = if self
+            .maybe_consume(K::OpenParen)
+            .is_some()
         {
             let mut linkage: Option<Linkage> = None;
+            let mut builtin: Option<ParsedBuiltin> = None;
             let mut lib_name: Option<StringId> = None;
             let mut lib_token: Option<Token> = None;
             let mut is_native = false;
             let mut inlining = Inlining::Auto;
             let mut is_cold = false;
+            let mut test: Option<TestRuns> = None;
             loop {
                 let modifier = self.peek();
-                if linkage.is_some() && modifier.kind != K::Ident {
-                    return Err(self
-                        .error_expected("a single intern, extern, or export modifier", modifier));
-                }
-                if modifier.kind == K::KeywordIntern {
-                    self.advance();
-                    linkage = Some(if self.peek_kind() == K::OpenParen {
-                        self.advance();
-                        let llvm_name = self.expect_dq_ident()?;
-                        self.expect_kind(K::CloseParen)?;
-                        Linkage::LlvmIntrinsic(llvm_name)
-                    } else {
-                        Linkage::Intrinsic
-                    });
-                } else if modifier.kind == K::Ident && self.token_chars(modifier) == "extern" {
-                    if linkage.is_some() {
+                let is_builtin = modifier.kind == K::KeywordBuiltin;
+                let is_extern = modifier.kind == K::Ident && self.token_chars(modifier) == "extern";
+                let is_export = modifier.kind == K::Ident && self.token_chars(modifier) == "export";
+                if is_builtin || is_extern || is_export {
+                    if linkage.is_some() || builtin.is_some() {
                         return Err(self.error_expected(
-                            "a single intern, extern, or export modifier",
+                            "a single builtin, extern, or export modifier",
                             modifier,
                         ));
                     }
                     self.advance();
-                    let fn_name = if self.peek_kind() == K::OpenParen {
+                    let symbol = if self.peek_kind() == K::OpenParen {
                         self.advance();
                         let symbol = self.expect_dq_ident()?;
                         self.expect_kind(K::CloseParen)?;
@@ -4960,28 +4977,20 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     } else {
                         None
                     };
-                    linkage = Some(Linkage::External {
-                        module_id: self.module_id,
-                        lib_name: None,
-                        fn_name,
-                    });
-                } else if modifier.kind == K::Ident && self.token_chars(modifier) == "export" {
-                    if linkage.is_some() {
-                        return Err(self.error_expected(
-                            "a single intern, extern, or export modifier",
-                            modifier,
-                        ));
-                    }
-                    self.advance();
-                    let fn_name = if self.peek_kind() == K::OpenParen {
-                        self.advance();
-                        let symbol = self.expect_dq_ident()?;
-                        self.expect_kind(K::CloseParen)?;
-                        Some(symbol)
+                    if is_builtin {
+                        builtin = Some(match symbol {
+                            Some(llvm_name) => ParsedBuiltin::Llvm(llvm_name),
+                            None => ParsedBuiltin::ByName,
+                        });
+                    } else if is_extern {
+                        linkage = Some(Linkage::External {
+                            module_id: self.module_id,
+                            lib_name: None,
+                            link_name: symbol,
+                        });
                     } else {
-                        None
-                    };
-                    linkage = Some(Linkage::Exported { fn_name });
+                        linkage = Some(Linkage::Exported { link_name: symbol });
+                    }
                 } else if modifier.kind == K::Ident && self.token_chars(modifier) == "lib" {
                     self.advance();
                     self.expect_kind(K::OpenParen)?;
@@ -5006,9 +5015,22 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 } else if modifier.kind == K::Ident && self.token_chars(modifier) == "cold" {
                     self.advance();
                     is_cold = true;
+                } else if modifier.kind == K::Ident
+                    && let Some(runs) = match self.token_chars(modifier) {
+                        "test" => Some(TestRuns::Both),
+                        "test-static" => Some(TestRuns::Static),
+                        "test-runtime" => Some(TestRuns::Runtime),
+                        _ => None,
+                    }
+                {
+                    if test.is_some() {
+                        return Err(self.error_expected("a single test modifier", modifier));
+                    }
+                    self.advance();
+                    test = Some(runs);
                 } else {
                     return Err(self.error_expected(
-                        "fn modifier: intern, extern, export, native, inline, noinline, cold, or lib",
+                        "fn modifier: builtin, extern, export, native, inline, noinline, cold, test, test-static, test-runtime, or lib",
                         modifier,
                     ));
                 }
@@ -5018,8 +5040,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             }
             self.expect_kind(K::CloseParen)?;
             let linkage = match (linkage, lib_name) {
-                (Some(Linkage::External { module_id, fn_name, .. }), lib_name) => {
-                    Linkage::External { module_id, lib_name, fn_name }
+                (Some(Linkage::External { module_id, link_name, .. }), lib_name) => {
+                    Linkage::External { module_id, lib_name, link_name }
                 }
                 (_, Some(_)) => {
                     return Err(self.error_expected(
@@ -5030,9 +5052,9 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 (Some(linkage), None) => linkage,
                 (None, None) => Linkage::Standard,
             };
-            (linkage, is_native, inlining, is_cold)
+            (linkage, builtin, is_native, inlining, is_cold, test)
         } else {
-            (Linkage::Standard, false, Inlining::Auto, false)
+            (Linkage::Standard, None, false, Inlining::Auto, false, None)
         };
         let (func_name, func_name_id) = self.expect_ident()?;
         self.emit_semantic_token(fn_keyword, SemanticTokenKind::Keyword);
@@ -5102,9 +5124,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             span,
             name_span,
             linkage,
+            builtin,
             is_native,
             inlining,
             is_cold,
+            test,
             compiler_debug,
             additional_where_constraints,
             compile_condition: condition,

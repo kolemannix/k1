@@ -48,10 +48,7 @@ fn choose[t](): string {
 fn call-pick-int(): int { pick[int]() }
 fn both-picks(): int { call-pick-int() + pick[int]() + pick[u8]() }
 
-fn test() {
-  use core/k1
-  assert-equals(k1/test, false)
-
+fn(test) if-in-fn-body() {
   let trip = false
   #if MY_VALUE_NEG {
     crash("does not happen")
@@ -62,7 +59,9 @@ fn test() {
 
   let comptime-check = #if false "foo" else "bar"
   assert(comptime-check == "bar")
+}
 
+fn(test) if-gated-declarations() {
   assert-equals(picked, 1)
 
   let c: chosen = 5
@@ -74,9 +73,14 @@ fn test() {
   assert-equals(w.yes(), 7)
 
   assert-equals(here(), 42)
+}
 
+fn(test) if-matches-platform() {
   let macos = #if k1/platform is { :posix-macos -> true, _ -> false }
   assert-equals(macos, k1/platform-macos)
+}
+
+fn(test) if-per-generic-instantiation() {
   assert-equals(choose[u8](), "red")
   assert-equals(choose[u64](), "green")
 

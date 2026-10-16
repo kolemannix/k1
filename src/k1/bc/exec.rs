@@ -159,21 +159,15 @@ pub fn execute_compiled_unit_raw(
     };
     k1.trace_pop(run_frame);
 
-    let exit_code = match exec_result {
-        Ok(exit_code) => exit_code,
-        Err(e) => return Err(with_bc_trace(k1, vm, e)),
+    let reported = if report_messages { vm::report_execution_messages(k1, vm, span) } else { None };
+    let exit_code = match (exec_result, reported) {
+        (_, Some(e)) | (Err(e), None) => return Err(with_bc_trace(k1, vm, e)),
+        (Ok(exit_code), None) => exit_code,
     };
-
-    if report_messages {
-        if let Some(e) = vm::report_execution_messages(k1, vm, span) {
-            return Err(with_bc_trace(k1, vm, e));
-        }
-    }
 
     vm.overall_return_addr = core::ptr::null_mut();
     if exit_code != 0 {
-        let e = kerr!(k1, span, "Static execution exited with code: {}", exit_code);
-        Err(with_bc_trace(k1, vm, e))
+        Err(kerr!(k1, span, "Static execution exited with code {}", exit_code))
     } else {
         Ok(RawUnitResult {
             ret_addr,
@@ -664,6 +658,7 @@ fn exec_loop<const COUNT_OPS: bool>(
                     "llvm.cttz.i64" => Value::u64(args[0].bits().trailing_zeros() as u64),
                     "llvm.ctlz.i64" => Value::u64(args[0].bits().leading_zeros() as u64),
                     "llvm.ctpop.i64" => Value::u64(args[0].bits().count_ones() as u64),
+                    "llvm.trap" => vmerr!("Static execution aborted"),
                     other => {
                         let other = other.to_string();
                         vmerr!(
@@ -691,10 +686,7 @@ fn exec_loop<const COUNT_OPS: bool>(
                 };
                 let outcome = vmtry!(exec_builtin(k1, vm, builtin, args));
                 match outcome {
-                    BuiltinOutcome::Exit(code) => {
-                        vm.bc_fault = Some((fp as u64, pc_u32!()));
-                        return Ok(code);
-                    }
+                    BuiltinOutcome::Exit(code) => return Ok(code),
                     BuiltinOutcome::Value(v) => {
                         if ret_pt.is_agg() {
                             let sret = unsafe { *(new_fp as *const u64).add(2) } as *mut u8;

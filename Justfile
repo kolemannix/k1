@@ -18,13 +18,13 @@ a:
 # fastest path to checking compiler correctness; suite1 covers most features.
 ts1:
   cargo build --features=llvm-sys/prefer-dynamic --bin k1
-  target/debug/k1            --no-cache run test_src/suite1
-  target/debug/k1 --optimize --no-cache run test_src/suite1
+  target/debug/k1            --no-cache test test_src/suite1
+  target/debug/k1 --optimize --no-cache test --skip-static test_src/suite1
 
 ts1-wasm:
   make -C modules/core/libs wasm
-  just run-frag --no-cache --target wasm64-wasi run test_src/suite1
-  just run-frag --optimize --no-cache --target wasm64-wasi run test_src/suite1
+  just run-frag --no-cache --target wasm64-wasi test --skip-static test_src/suite1
+  just run-frag --optimize --no-cache --target wasm64-wasi test --skip-static test_src/suite1
 
 # a simple one-shot ai-generated k1 parser
 slophost:
@@ -46,7 +46,7 @@ fractal-web:
   just run-frag -D web build examples/fractal
   python3 -m http.server -d examples 8088
 
-# The reference chess engine: perft and search suites natively and under wasmtime, then UCI on stdin
+# The reference chess engine: perft and search suites natively and under wasmtime
 refchess:
   just run-frag --optimize test examples/refchess
 
@@ -114,7 +114,7 @@ bench-json:
   K1=target/debug/k1 content/showcase/benchmarks/json/run.sh
 
 profile-suite1: build-profile
-  hyperfine --warmup 100 'K1_HOME=. target/profiling/k1 --no-cache c test_src/suite1'
+  hyperfine --warmup 100 'K1_HOME=. target/profiling/k1 --no-cache t --skip-runtime test_src/suite1'
 
 profile-stress: build-profile
   python3 perf/gen_stress.py 3600

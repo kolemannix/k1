@@ -16,7 +16,7 @@ use std/heap-bytes
 use std/heap-string
 use std/rc-byte-stream
 
-fn test-run-to-sum() {
+fn(test) span-source-runs-into-sum-sink() {
   let nums: span[int] = [1, 2, 3, 4, 5]
   let summer: sum-sink[int] = .{ total = 0 }
   assert-equals(source/run-to(source/from-span(nums, chunk-size = 2), summer.&), 15)
@@ -35,7 +35,7 @@ fn expect-one(p: pull[int]): int {
   }
 }
 
-fn test-channel() {
+fn(test) channel-bounds-wakes-and-fails() {
   let chan = channel/make[int](
     cap-weight = 3,
     weight-fn = fn(_x: int) 1,
@@ -72,7 +72,7 @@ fn test-channel() {
 let(mutable) drop-count: int = 0
 fn count-drop(_v: *int) { drop-count = drop-count + 1 }
 
-fn test-rc() {
+fn check-rc-retain-release() {
   let r = rc/new-with-drop(7, count-drop.&)
   let r2 = r.retain()
   assert-equals(r.get().*, 7)
@@ -92,7 +92,7 @@ fn test-rc() {
   s2.release()
 }
 
-fn test-rc-byte-stream() {
+fn check-rc-byte-stream() {
   let payloads: span[rc-bytes] = [heap-bytes/cloned("ab".span-bytes()).to-rc(), heap-bytes/cloned("cde".span-bytes()).to-rc()]
   let src = source/from-span(payloads, chunk-size = 1) || rc-byte-stream
   src.start(waker/noop())
@@ -110,7 +110,7 @@ impl mpsc-node for mpsc-test-node {
   fn mpsc-link(self: *mpsc-test-node): *optref[mpsc-test-node] { self.link.& }
 }
 
-fn test-mpsc() {
+fn(test) mpsc-takes-fifo-and-notifies-per-batch() {
   let q = mpsc/make[mpsc-test-node](.{ state = ptr/null, notify-fn = count-notify.& })
   let a: mpsc-test-node = .{ value = 1, link = null() }
   let b: mpsc-test-node = .{ value = 2, link = null() }
@@ -129,11 +129,8 @@ fn test-mpsc() {
   assert-equals(notify-count, 2)
 }
 
-fn test() {
-  test-run-to-sum()
-  test-channel()
-  test-rc()
-  test-rc-byte-stream()
-  test-mpsc()
+fn(test) rc-and-byte-stream-release-every-cell() {
+  check-rc-retain-release()
+  check-rc-byte-stream()
   assert-equals(rc/live-count(), 0)
 }

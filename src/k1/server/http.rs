@@ -48,19 +48,38 @@ fn open_tab_when_program_ready(k1: &SharedProgram, url: &str) {
     }
 }
 
-/// One thread per connection; the compiler is locked per request, so the
-/// long-lived /events connections never block it.
+/// Serve on the calling thread, opening a browser tab once the program is
+/// ready (the CLI `k1 server` path).
 pub fn serve(k1: SharedProgram) {
-    let Some((listener, port)) = bind_open_port() else {
-        eprintln!("megarepl server: no open port on 127.0.0.1 in 8080..8180");
-        return;
-    };
-    let url = format!("http://127.0.0.1:{port}");
-    eprintln!("k1 server running on {url}");
+    let Some((listener, url)) = bind_and_announce() else { return };
     {
         let k1 = k1.clone();
         std::thread::spawn(move || open_tab_when_program_ready(&k1, &url));
     }
+    accept_loop(k1, listener)
+}
+
+/// Spawn the accept loop on its own thread and return the server's url; no
+/// browser tab (the LSP path, which reports the url to the client instead).
+pub fn start(k1: SharedProgram) -> Option<String> {
+    let (listener, url) = bind_and_announce()?;
+    std::thread::spawn(move || accept_loop(k1, listener));
+    Some(url)
+}
+
+fn bind_and_announce() -> Option<(TcpListener, String)> {
+    let Some((listener, port)) = bind_open_port() else {
+        eprintln!("megarepl server: no open port on 127.0.0.1 in 8080..8180");
+        return None;
+    };
+    let url = format!("http://127.0.0.1:{port}");
+    eprintln!("k1 server running on {url}");
+    Some((listener, url))
+}
+
+/// One thread per connection; the compiler is locked per request, so the
+/// long-lived /events connections never block it.
+fn accept_loop(k1: SharedProgram, listener: TcpListener) {
     let bus = Arc::new(bus::EventBus::new());
     {
         let bus = bus.clone();

@@ -1,7 +1,7 @@
 ns match_fails
 
 type foo = { x: int, y: ?bool }
-fn useless() {
+fn(test) useless() {
   let foo: foo = .{ x = 1, y = :none }
   let result = test-compile(if foo is {
     .{ x, y = :some(true) } -> x,
@@ -16,7 +16,7 @@ type blub = { x: int, y: ?bool }
 
 type recursive-tree = either { leaf, node(*recursive-tree) }
 
-fn unhandled() {
+fn(test) unhandled() {
   let blub: blub = .{ x = 1, y = :none }
   let result = test-compile(if blub is {
     .{ x, y = :some(true) } -> x,
@@ -25,7 +25,7 @@ fn unhandled() {
   assert(result is :some(_))
 }
 
-fn recursive-unhandled() {
+fn(test) recursive-unhandled() {
   let tree: recursive-tree = :leaf
   let result = test-compile(if tree is {
     :leaf -> 0,
@@ -34,7 +34,7 @@ fn recursive-unhandled() {
   assert(result is :some(_))
 }
 
-fn recursive-useless() {
+fn(test) recursive-useless() {
   let tree: recursive-tree = :leaf
   let result = test-compile(if tree is {
     :leaf -> 0,
@@ -44,7 +44,7 @@ fn recursive-useless() {
   assert(result is :some(_))
 }
 
-fn correlated-fields-are-not-independent() {
+fn(test) correlated-fields-are-not-independent() {
   let pair = .{ a = false, b = false }
   let result = test-compile(if pair is {
     .{ a = false, b = false } -> 0,
@@ -53,20 +53,11 @@ fn correlated-fields-are-not-independent() {
   assert(result is :some(_))
 }
 
-fn guard-not-bool() {
+fn(test) guard-not-bool() {
   let x: int = 3
   let result = test-compile(if x is {
     y if y -> y,
     _ -> 0
   })
   assert(result is :some(_))
-}
-
-fn test() {
-  useless()
-  unhandled()
-  recursive-unhandled()
-  recursive-useless()
-  correlated-fields-are-not-independent()
-  guard-not-bool()
 }

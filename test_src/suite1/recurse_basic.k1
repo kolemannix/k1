@@ -30,12 +30,14 @@ fn recb(n: size): size {
   reca(n)
 }
 
-fn test() {
+fn(test) mutual-and-pointer-recursion() {
   let static-reca: size = #static reca(7)
   assert-equals(static-reca, 7)
   assert-equals(count(make(4)), 4)
   assert-equals(ecount(emake(10)), 10)
+}
 
+fn(test) recursive-sum-equality() {
   let a: expr = :many([:leaf(1), :many([:leaf(2)])])
   let b: expr = :many([:leaf(1), :many([:leaf(2)])])
   let c: expr = :many([:leaf(1), :many([:leaf(3)])])

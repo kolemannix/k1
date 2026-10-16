@@ -44,12 +44,21 @@ fn continue-index(): int {
   index-sum
 }
 
-fn test() {
+fn(test) continue-in-loop-with-break-value() {
   let static-loop: int = #static continue-loop()
   assert-equals(static-loop, 3)
   assert-equals(continue-loop(), 3)
+}
+
+fn(test) continue-in-nested-for() {
   assert-equals(continue-nested(), 23)
+}
+
+fn(test) continue-runs-defers() {
   assert-equals(continue-defers(), 3)
+}
+
+fn(test) continue-keeps-it-index() {
   assert-equals(continue-index(), 9)
   let static-index: int = #static continue-index()
   assert-equals(static-index, 9)

@@ -7,7 +7,7 @@ fn min-or(a: ?u32, b: u32): u32 {
   }
 }
 
-fn test() {
+fn(test) rhs-reads-assigned-place() {
   let v: ?u32 = :none
   v = :some(min-or(v, 2))
   assert(v is :some 2)

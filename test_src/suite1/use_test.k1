@@ -25,7 +25,7 @@ ns foo/deeper/deepest { fn get-two(): int { get-one() + 1 } }
 use foo/intalias
 type use-test = { i: intalias, v: foo/intalias }
 
-fn test() {
+fn(test) use-aliases-and-exposes() {
   assert(SEEKEND == std/libc/files/SEEK_END)
 
   use core/opt as optional

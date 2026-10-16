@@ -34,7 +34,7 @@ fn with-opts[t: json-write, o: static std/json/opts](value: t): string {
   sb.build()
 }
 
-fn test-write() {
+fn(test) write() {
   let ada: person = .{
     name = "Ada \"Countess\"",
     initial = 'A',
@@ -105,7 +105,7 @@ fn error-of(s: string): json/error {
   }
 }
 
-fn test-numbers() {
+fn(test) parse-numbers() {
   assert(parsed("123") is :int 123)
   assert(parsed("-0") is :int 0)
   assert(parsed("-9223372036854775808") is :int v and v == i64/min-value)
@@ -122,7 +122,7 @@ fn test-numbers() {
   }
 }
 
-fn test-strict() {
+fn(test) parse-strict() {
   for ["[1,]", "{\"a\":1,}", "{\"a\" 1}", "{\"a\":}", "[,1]", "{,}", "[1 2]", "{\"a\":1 \"b\":2}",
        "\"\\x\"", "\"\\u12\"", "\"\\ud800\"", "\"\\udc00\"", "\"\\ud800\\u0041\"", "\"abc", "[", "{\"a\"", "tru", "nul", "falsee",
        "{1:2}", "['a']", "", " ", "\"a\" \"b\""] {
@@ -152,7 +152,7 @@ fn test-strict() {
   assert(error-of("[1").kind is :unexpected-end)
 }
 
-fn test-unicode() {
+fn(test) parse-unicode() {
   assert(parsed(`"\ud83d\ude00"`) is :str "😀")
   assert(parsed(`"\u00e9"`) is :str "é")
   assert(parsed(`"\u0041\u20ac"`) is :str "A€")
@@ -162,7 +162,7 @@ fn test-unicode() {
   assert(parsed(long) is :str s and s.len() == 83 and s.[40] == '\n')
 }
 
-fn test-typed() {
+fn(test) parse-typed() {
   let text = `{"name":"Ada \"Countess\"","initial":"A","age":36,"score":99.5,"active":true,"role":"admin","nickname":null,"contacts":[{"email":"ada@example.com"},"unreachable"],"scores":[10,20,30],"home-city":"London"}`
   require json/parse[person](text) is :ok ada else { crash("typed parse failed") }
   assert-equals(ada.name, "Ada \"Countess\"")
@@ -209,14 +209,6 @@ fn test-typed() {
   assert(json/parse[{ a: list[?u8] }](`{"a":[1,null,3]}`) is :ok s and s.a.[1] is :none and s.a.[2] is :some 3)
   assert(json/parse[string](`"x"`) is :ok "x")
   assert(json/parse[char](`"x"`) is :ok 'x')
-}
-
-fn test() {
-  test-write()
-  test-numbers()
-  test-strict()
-  test-unicode()
-  test-typed()
 }
 
 let example-json: string =

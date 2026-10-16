@@ -115,7 +115,7 @@ fn to-json[t](t: t): string {
   s
 }
 
-fn test-to-json() {
+fn(test) json-from-schema() {
   assert-equals(to-json(true), "true")
   let json1 = to-json(.{ x = 1, y = 2, z = .{}, d = false })
   assert-equals(json1, `{"x":1,"y":2,"z":{},"d":false}`)
@@ -125,10 +125,8 @@ fn test-to-json() {
   .{}
 }
 
-
-fn test() {
+fn(test) meta-generated-code() {
   simple-increment()
-  test-to-json()
 
   let _x: my-meta-point = .{ x = 0, y = 42 }
   let _y: my-macro-point = .{ x = 1, y = 2 }

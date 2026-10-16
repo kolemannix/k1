@@ -1,6 +1,4 @@
-ns files_test
-
-fn test() {
+fn(test) files-dir-lifecycle-and-errors() {
   let dir = "/tmp/k1-files-test-${std/time/unix-nanos()}"
   files/make-dir(dir).!
   assert(files/make-dir(dir) is :err(e) and e.already-exists())

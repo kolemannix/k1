@@ -11,7 +11,7 @@ fn inspect[t](v: t): int {
   }
 }
 
-fn test() {
+fn(test) type-patterns-select-arm() {
   assert-equals(13,inspect(.{ x = 3, y = 10 }))
 
   assert-equals(2,inspect(#static "hello"))

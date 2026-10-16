@@ -61,7 +61,7 @@ impl TypedProgram {
             self.report(e)
         }
         let function = self.get_function(function_id);
-        let needs_body = matches!(function.linkage, Linkage::Standard | Linkage::Exported { .. });
+        let needs_body = function.builtin_type.is_none() && !function.linkage.is_external();
         match function.body_failure {
             Some(_) => {
                 kbail!(self, span, "Function '{}' failed to compile", function.name)
@@ -306,6 +306,80 @@ impl TypedProgram {
         })
     }
 
+    pub fn run_static_tests(&mut self, tests: &[TestCase]) {
+        for test in tests {
+            if !self.get_function(test.function_id).test_runs_static() {
+                continue;
+            }
+            let start = std::time::Instant::now();
+            let (result, output) = self.do_with_vm(test.span, 0, |k1, vm| {
+                vm.quiet_messages = true;
+                let result = Self::static_exec_prepare_function(k1, test.thunk_id, test.span)
+                    .and_then(|()| {
+                        bc::exec::execute_compiled_function(k1, vm, test.thunk_id, &[], false)
+                    });
+                vm.quiet_messages = false;
+                let mut output = String::new();
+                for message in vm.compiler_messages.drain(..) {
+                    output.push_str(k1.get_string(message.message));
+                    if message.level == MessageLevel::Error {
+                        let (source, line) = k1.get_span_location(message.span);
+                        let filename = source.filename_str(&k1.ast.idents);
+                        output.push_str(&format!(" at {filename}:{}\n", line.line_number()));
+                    }
+                }
+                vm.reset(k1.global_id_k1_arena);
+                (result, output)
+            });
+            let ending = match result {
+                Err(e) => Some(self.ident_str(e.message).to_string()),
+                Ok(value_id) => {
+                    let payload = self.static_values.get(value_id).as_sum().unwrap().payload;
+                    match payload {
+                        None => None,
+                        Some(message) => {
+                            let message = self.static_values.get(message).as_string().unwrap();
+                            Some(self.ident_str(message).to_string())
+                        }
+                    }
+                }
+            };
+            let mut haystack = output;
+            if !haystack.is_empty() && !haystack.ends_with('\n') {
+                haystack.push('\n');
+            }
+            let failure = match (test.expected_failure, ending) {
+                (None, None) => None,
+                (None, Some(ending)) => Some(format!("{haystack}{ending}")),
+                (Some(needle), None) => Some(format!(
+                    "expected a failure containing \"{}\", but the test passed",
+                    self.ident_str(needle)
+                )),
+                (Some(needle), Some(ending)) => {
+                    let needle = self.ident_str(needle);
+                    haystack.push_str(&ending);
+                    if haystack.contains(needle) {
+                        None
+                    } else {
+                        Some(format!(
+                            "expected a failure containing \"{needle}\"; got:\n{haystack}"
+                        ))
+                    }
+                }
+            };
+            let failure = match failure {
+                None => None,
+                Some(failure) => Some(self.ast.idents.intern(failure)),
+            };
+            self.test_results.push(StaticTestResult {
+                name: test.name,
+                span: test.span,
+                failure,
+                elapsed: start.elapsed(),
+            });
+        }
+    }
+
     pub(super) fn static_exec_prepare_function(
         k1: &mut TypedProgram,
         function_id: FunctionId,
@@ -393,7 +467,7 @@ impl TypedProgram {
         if parsed.is_thread_local {
             self.fail_if_reload_ns(owner_ns, parsed.span, "tls globals")?;
         }
-        if parsed.is_external || parsed.is_export {
+        if parsed.linkage != Linkage::Standard {
             self.fail_if_reload_ns(owner_ns, parsed.span, "extern and exported globals")?;
         }
         let type_id = self.eval_type_expr(parsed.type_expr, scope_id)?;
@@ -406,6 +480,7 @@ impl TypedProgram {
         }
 
         let reload_ns = if self.namespaces.get(owner_ns).reload { Some(owner_ns) } else { None };
+        let linkage = parsed.linkage.with_default_lib(self.namespaces.get(owner_ns).lib_name);
         let global_id = self.globals.next_id();
         let variable_id = self.variables.add(Variable {
             name: parsed.name,
@@ -425,9 +500,7 @@ impl TypedProgram {
                 span: parsed.span,
                 is_constant: !parsed.is_mutable,
                 is_tls: parsed.is_thread_local,
-                is_exported: parsed.is_export,
-                is_external: parsed.is_external,
-                link_name: parsed.link_name,
+                linkage,
                 ast_id: parsed_global_id,
                 parent_scope: scope_id,
                 reload_ns,
@@ -521,7 +594,7 @@ impl TypedProgram {
     pub(super) fn eval_global_body_inner(&mut self, global_id: TypedGlobalId) -> K1Result<()> {
         let typed_global = self.globals.get(global_id);
         let global_span = typed_global.span;
-        let is_external = typed_global.is_external;
+        let is_external = typed_global.linkage.is_external();
         let parsed_expr = typed_global.parsed_expr;
         let scope_id = typed_global.parent_scope;
         let declared_type = typed_global.type_id;
@@ -643,7 +716,6 @@ impl TypedProgram {
             kbail!(self, span, "Unknown builtin name: {name}");
         }
         let bool_value = match name {
-            "test" => self.config.command.is_test(),
             "no-std" => self.plan.config.no_std,
             "debug" => self.plan.config.debug,
             // The VM overrides this global's value during static execution

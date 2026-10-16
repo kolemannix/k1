@@ -24,7 +24,7 @@ fn big-struct-rvo(): { x: i64, y: i64, z: i64, foo: array[u64, 1024] } {
   v
 }
 
-fn test() {
+fn(test) sret-and-returned-lets() {
   let s = big-struct()
   assert-equals(s.z, 30)
   let s-rvo = big-struct-rvo()

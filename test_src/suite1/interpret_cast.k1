@@ -29,7 +29,7 @@ fn takes-u8ref(r: *u8): u64 { (r.*).widen[u64] }
 fn takes-u64(x: u64): u64 { x }
 fn takes-wrapper(w: *wrapper): u32 { (w.*).base.tag }
 
-fn test() {
+fn(test) reinterpret-scalar-pointers() {
   let u: u32 = 0x3F800000
   let uf: *f32 = u.&.as()
   assert-equals[f32](uf.*, 1.0)
@@ -38,12 +38,16 @@ fn test() {
   let ob: *bool = one.&.narrow()
   assert(ob.*)
   assert(test-compile(u.&.as[*f64]) is :some _)
+}
 
+fn(test) narrow-to-enum-pointer() {
   let n: u32 = 2
   assert(test-compile(n.&.as[*abc]) is :some _)
   let ea: *abc = n.&.narrow()
   assert(ea.* is :c)
+}
 
+fn(test) struct-prefix-views() {
   let bigv: big = .{ a = 11, b = 22, c = 33 }
   let view: *small = bigv.&.as()
   assert-equals((view.*).b, 22)
@@ -56,12 +60,16 @@ fn test() {
   assert-equals((plv.*).inner.x, 6)
   let pm: prefix-mid = .{ inner = .{ x = 8, y = 9 }, tail = 10 }
   assert(test-compile(pm.&.as[*prefix-mid-view]) is :some _)
+}
 
+fn(test) cast-struct-holding-refs() {
   let hb: holds-big-ref = .{ r = mem/new(.{ a = 1, b = 2, c = 3 }), tail = 4 }
   let hs: holds-small-ref = hb.as()
   assert-equals((hs.r.*).a, 1)
   assert-equals(hs.tail, 4)
+}
 
+fn(test) narrow-to-wrapper-and-fn-param() {
   let w: wrapper = .{ base = .{ tag = 7, len = 8 }, extra = 9 }
   let b: *base-part = w.&.as()
   assert(test-compile(b.as[*wrapper]) is :some _)
@@ -71,13 +79,17 @@ fn test() {
   assert(test-compile(f.as[fnp-takes-base]) is :some _)
   let g: fnp-takes-base = f.narrow()
   assert-equals(g(w.&.as()), 7)
+}
 
+fn(test) narrow-opaque-pointers() {
   let arr: array[u64, 2] = [1, 2]
   let opb: *op-big = arr.&.as[ptr].narrow()
   let ops: *op-small = opb.narrow()
   assert(test-compile(ops.narrow[*op-big]) is :some _)
   assert(test-compile(ops.narrow[*op-strict]) is :some _)
+}
 
+fn(test) fn-pointer-param-casts() {
   let fp: fnp-takes-ptr = takes-ptr.&
   let gp: fnp-takes-u8ref = fp.as()
   let v: u8 = 9

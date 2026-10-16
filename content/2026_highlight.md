@@ -68,7 +68,7 @@ took it a level lower still (see the bytecode VM below).
   allocation = TLS arena stack (`current-arena`/`with-arena`), four alloc
   builtins deleted, platform memory regions with arena chaining.
 - **Declaration modifier syntax (Aug 11)** — modifiers as keyword-call lists:
-  `let(mutable, tls)`, `fn(intern)`, `fn(extern("sym"), lib("pq"))`,
+  `let(mutable, tls)`, `fn(builtin)`, `fn(extern("sym"), lib("pq"))`,
   namespace-level `lib`.
 - **Pattern & control-flow niceties** — `type[T](pattern)` patterns (Jan),
   infallible-pattern detection in `require` with `else` elision (April),
@@ -83,7 +83,7 @@ took it a level lower still (see the bytecode VM below).
   language's own loop could be user-level code; it was retired on Sep 1
   when labelled loops made `for` a typer built-in again.
 - ★ **Compile-time SIMD metaprograms (July 26)** — `vector[t,n]` up to
-  512-bit, `intern("llvm.*")` intrinsic lane, `$simd` metaprograms, **52x
+  512-bit, `builtin("llvm.*")` intrinsic lane, `$simd` metaprograms, **52x
   speedup on string search**. That number is a tweet by itself.
 - ★ **Routing megaprogram (July 27)** — `$pre/routing`: define an HTTP route
   enum once, get parsing + reverse-URL generation, with compile-time

@@ -10,25 +10,25 @@ ns vector {
   let simd-lanes-32: size = (k1/simd-bytes) / 4
   let simd-lanes-64: size = (k1/simd-bytes) / 8
 
-  fn(intern) splat[t, n: static size](value: t): vector[t, n]
+  fn(builtin) splat[t, n: static size](value: t): vector[t, n]
 
-  fn(intern) load-unchecked[t, n: static size](src: ptr): vector[t, n]
-  fn(intern) store-unchecked[t, n: static size](v: vector[t, n], dst: ptr)
+  fn(builtin) load-unchecked[t, n: static size](src: ptr): vector[t, n]
+  fn(builtin) store-unchecked[t, n: static size](v: vector[t, n], dst: ptr)
 
-  fn(intern) get-lane[t, n: static size](v: vector[t, n], index: size): t
-  fn(intern) with-lane[t, n: static size](v: vector[t, n], index: size, value: t): vector[t, n]
+  fn(builtin) get-lane[t, n: static size](v: vector[t, n], index: size): t
+  fn(builtin) with-lane[t, n: static size](v: vector[t, n], index: size, value: t): vector[t, n]
 
   // Lane-wise compare: each lane is all-ones on equal, all-zeros otherwise.
-  fn(intern) eq-lanes[t, n: static size](a: vector[t, n], b: vector[t, n]): vector[t, n]
+  fn(builtin) eq-lanes[t, n: static size](a: vector[t, n], b: vector[t, n]): vector[t, n]
   // Lane-wise a < b; unsigned for unsigned elements, ordered for floats
-  fn(intern) lt-lanes[t, n: static size](a: vector[t, n], b: vector[t, n]): vector[t, n]
+  fn(builtin) lt-lanes[t, n: static size](a: vector[t, n], b: vector[t, n]): vector[t, n]
   fn(inline) gt-lanes[t, n: static size](a: vector[t, n], b: vector[t, n]): vector[t, n] {
     lt-lanes(b, a)
   }
 
   // Byte table lookup with pshufb semantics: a lane whose top bit is set
   // yields 0, any other lane yields table[idx & 15]
-  fn(intern) shuffle-bytes(table: vector[u8, 16], idx: vector[u8, 16]): vector[u8, 16]
+  fn(builtin) shuffle-bytes(table: vector[u8, 16], idx: vector[u8, 16]): vector[u8, 16]
 
   fn iota16(): vector[u8, 16] {
     #static {
@@ -51,10 +51,10 @@ ns vector {
   }
 
   // collapses lane MSBs into one bit per lane (movemask)
-  fn(intern) to-mask[t, n: static size](v: vector[t, n]): u64
+  fn(builtin) to-mask[t, n: static size](v: vector[t, n]): u64
 
   // The bitwise or of every lane; integer elements only
-  fn(intern) reduce-or[t, n: static size](v: vector[t, n]): t
+  fn(builtin) reduce-or[t, n: static size](v: vector[t, n]): t
 
   fn(inline) load-simd-bytes(ptr): vector[u8, k1/simd-bytes] { load-unchecked[u8, k1/simd-bytes](ptr) }
   fn(inline) load-word(ptr): u64 { load-unchecked[u8, 8](ptr).to-u64() }
@@ -102,17 +102,17 @@ ns vector {
   }
 }
 
-impl[t: add, n: static size] add for vector[t, n] { fn(intern) add(self, rhs: self): self }
-impl[t: sub, n: static size] sub for vector[t, n] { fn(intern) sub(self, rhs: self): self }
-impl[t: mul, n: static size] mul for vector[t, n] { fn(intern) mul(self, rhs: self): self }
+impl[t: add, n: static size] add for vector[t, n] { fn(builtin) add(self, rhs: self): self }
+impl[t: sub, n: static size] sub for vector[t, n] { fn(builtin) sub(self, rhs: self): self }
+impl[t: mul, n: static size] mul for vector[t, n] { fn(builtin) mul(self, rhs: self): self }
 
 impl[t: bitwise, n: static size] bitwise for vector[t, n] {
-  fn(intern) bit-not(self): self
-  fn(intern) bit-and(self, other: self): self
-  fn(intern) bit-or(self, other: self): self
-  fn(intern) xor(self, other: self): self
-  fn(intern) shift-left(self, count: u32): self
-  fn(intern) shift-right(self, count: u32): self
+  fn(builtin) bit-not(self): self
+  fn(builtin) bit-and(self, other: self): self
+  fn(builtin) bit-or(self, other: self): self
+  fn(builtin) xor(self, other: self): self
+  fn(builtin) shift-left(self, count: u32): self
+  fn(builtin) shift-right(self, count: u32): self
 }
 
 impl[t, n: static size] equals for vector[t, n] {

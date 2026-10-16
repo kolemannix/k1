@@ -107,13 +107,18 @@ impl TypedProgram {
 
     pub fn global_link_symbol(&self, global: &TypedGlobal) -> String {
         let variable = self.variables.get(global.variable_id);
-        if let Some(link_name) = global.link_name {
-            return self.ident_str(link_name).to_string();
+        match global.linkage {
+            Linkage::External { link_name: Some(link_name), .. }
+            | Linkage::Exported { link_name: Some(link_name) } => {
+                self.ident_str(link_name).to_string()
+            }
+            Linkage::External { link_name: None, .. } | Linkage::Exported { link_name: None } => {
+                self.ident_str(variable.name).to_string()
+            }
+            Linkage::Standard => {
+                self.make_qualified_name(variable.owner_scope, variable.name, None, "__", false)
+            }
         }
-        if global.is_exported || global.is_external {
-            return self.ident_str(variable.name).to_string();
-        }
-        self.make_qualified_name(variable.owner_scope, variable.name, None, "__", false)
     }
 
     // Errors and logging

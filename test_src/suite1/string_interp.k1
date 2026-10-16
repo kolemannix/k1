@@ -9,7 +9,7 @@ impl print for { name: string, weight: int } {
   }
 }
 
-fn test-raw-strings() {
+fn(test) raw-strings() {
   let s1 = `Hello,
 
   "world"`
@@ -20,7 +20,7 @@ fn test-raw-strings() {
 // delimiter is a block: leading newline dropped, indentation common to every
 // line (the closing delimiter's line included) stripped, whitespace-only last
 // line removed
-fn test-block-strings() {
+fn(test) block-strings() {
   let plain = `
     hello
       world
@@ -46,7 +46,7 @@ fn test-block-strings() {
   assert-equals(no-trailing-newline, "a\nb")
 }
 
-fn test-dollar-rules() {
+fn(test) dollar-rules() {
   let wide-world = "kebab"
   assert-equals("a $wide-world!", "a kebab!")
 
@@ -65,7 +65,7 @@ fn test-dollar-rules() {
   assert-equals("{ x: $x }", `{ x: 1 }`)
 }
 
-fn test() {
+fn(test) interpolated-expressions() {
   let user = .{ name = "Bob", weight = 199 }
   assert-equals("Hello, '$user'!", "Hello, 'Bob: 199'!")
 
@@ -77,8 +77,4 @@ fn test() {
 
   let nested = "${"String has ${10 + 10} in"} it"
   assert-equals(nested, "String has 20 in it")
-
-  test-dollar-rules()
-  test-raw-strings()
-  test-block-strings()
 }

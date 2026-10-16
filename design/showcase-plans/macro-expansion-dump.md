@@ -197,7 +197,7 @@ test_suite.rs:118, lsp_support.rs:610. No `CompilerConfig` field.
   Rewrite: `#debug` on the macro definition prints every expansion, `#debug` on a call expression prints that
   one, `--dump-emitted` writes all of them to `.k1-out/generated/`; keep the
   true half ("definition-level `#debug $call(...)` does not parse").
-- `ai_docs/k1-additional.md:310-314`: accurate about span remapping, silent
+- `docs/ai_docs/k1-additional.md`, first `code` bullet: accurate about span remapping, silent
   about when files exist and about the trail. Replace the last sentence: every
   diagnostic inside an expansion ends with `expanded from <call site>` lines;
   emitted files are written when a diagnostic lands in them or under

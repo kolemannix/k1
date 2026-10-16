@@ -18,7 +18,7 @@ let s1: string = {
 fn get-point(): { x: u8, y: u32, z: i64 } {
   .{ x = 1, y = 300, z = -222 }
 }
-fn test() {
+fn(test-runtime) static-values-at-runtime() {
   #static "Hello, Static"
 
   let point = #static {
@@ -69,15 +69,6 @@ fn test() {
     }
   }, 100)
 
-  assert-equals[?string](
-    test-compile( #static sys/exit(111) ).map(fn(s) s.take(38)),
-    some("Static execution exited with code: 111")
-  )
-  assert-equals[?string](
-    test-compile( #static crash("boom") ).map(fn(s) s.take(4)),
-    some("boom")
-  )
-
   #static bar(2)
 
   let span: span[int] = #static {
@@ -109,6 +100,16 @@ fn test() {
   assert-equals(size-of-param[u32](), 4)
 
   .{}
+}
+
+fn(test) exits() {
+  k1/test/expect-failure("exited with code 111")
+  sys/exit(111)
+}
+
+fn(test) crashes() {
+  k1/test/expect-failure("boom")
+  crash("boom")
 }
 
 type boxed[t] = { value: t }

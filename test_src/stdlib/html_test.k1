@@ -8,7 +8,7 @@ fn row[w: writer](context out: w)(it: item) {
   html/write(out, \{ <li data-n={it.n}>{it.name}</li> })
 }
 
-fn test-escaping() {
+fn(test) escaping() {
   let s = "<b> & \"q\" 'a'"
   assert-equals(html/render(\{ <p title={s}>{s}</p> }), "<p title=\"&lt;b&gt; &amp; &quot;q&quot; &#39;a&#39;\">&lt;b&gt; &amp; &quot;q&quot; &#39;a&#39;</p>")
   assert-equals(html/render(\{ <p>"a < b" & c</p> }), "<p>a &lt; b &amp; c</p>")
@@ -17,7 +17,7 @@ fn test-escaping() {
   assert-equals(html/render(\{ <style>{"a > b { }"}</style> }), "<style>a > b { }</style>")
 }
 
-fn test-whitespace() {
+fn(test) whitespace() {
   let got = html/render(\{
     <div>
       Hello, world!
@@ -28,7 +28,7 @@ fn test-whitespace() {
   assert-equals(got, "<div>Hello, world!<b>bold</b> and more text</div>")
 }
 
-fn test-attributes() {
+fn(test) attributes() {
   let x = 7
   assert-equals(html/render(\{ <input type="text" disabled data-on:click="@get('/x')"/> }), "<input type=\"text\" disabled data-on:click=\"@get(&#39;/x&#39;)\">")
   assert-equals(html/render(\{ <a href="/p/$x" class=big>go</a> }), "<a href=\"/p/7\" class=\"big\">go</a>")
@@ -40,7 +40,7 @@ fn test-attributes() {
   assert-equals(html/render(\{ <input checked={on} disabled={not on} aria-invalid={on} title={t} alt={n}/> }), "<input checked aria-invalid=\"true\" title=\"a&lt;b\">")
 }
 
-fn test-directives() {
+fn(test) directives() {
   let items: span[item] = [.{ name = "a", n = 1 }, .{ name = "b&", n = 2 }]
   let got = html/render(\{
     <ul>
@@ -53,12 +53,12 @@ fn test-directives() {
   assert-equals(html/render(\{}), "")
 }
 
-fn test-errors() {
+fn(test) mismatched-close-tag-error() {
   let mismatched: ?string = test-compile(html/render(\{ <div><p>hi</div> }))
   assert(mismatched.!.starts-with("</div> does not close <p>"))
 }
 
-fn test-dom() {
+fn(test) dom() {
   let items: span[item] = [.{ name = "a<b", n = 1 }, .{ name = "c", n = 2 }]
   let t: ?string = :none
   let n = h/div([h/class("card"), h/at("data-on:click", "@post('/x')"),
@@ -77,13 +77,4 @@ fn test-dom() {
   assert(n.show().starts-with("<div class=\"card\" data-on:click=\"@post(&#39;/x&#39;)\" id=\"x\">"))
   let baked: string = #static h/p([h/id("s"), :text "1 < 2"]).show()
   assert-equals(baked, "<p id=\"s\">1 &lt; 2</p>")
-}
-
-fn test() {
-  test-escaping()
-  test-whitespace()
-  test-attributes()
-  test-directives()
-  test-errors()
-  test-dom()
 }

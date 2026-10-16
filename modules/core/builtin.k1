@@ -68,7 +68,7 @@ ns types {
     zero-safe: bool,
   }
   ns for type-id {
-    fn(intern) info(self: type-id): type-info
+    fn(builtin) info(self: type-id): type-info
     fn name(self: type-id): string { self.info().name }
     fn schema(self: type-id): type-schema { self.info().schema }
     fn instance-info(self: type-id): ?instance-info { self.info().instance }
@@ -90,10 +90,10 @@ ns types {
   // Magically implemented for all enums
   // enum must have ability id 1
   ability enum[impl v] {
-    fn(intern) enum-value(self): v
-    fn(intern) enum-name(self): string
-    fn(intern) enum-from-value(value: v): ?self
-    fn(intern) enum-from-value-unchecked(value: v): self
+    fn(builtin) enum-value(self): v
+    fn(builtin) enum-name(self): string
+    fn(builtin) enum-from-value(value: v): ?self
+    fn(builtin) enum-from-value-unchecked(value: v): self
 
     fn members(): span[self] {
       #static {
@@ -106,8 +106,8 @@ ns types {
   }
 
   ability sum[impl v] {
-    fn(intern) sum-tag(self): v
-    fn(intern) sum-name(self): string
+    fn(builtin) sum-tag(self): v
+    fn(builtin) sum-name(self): string
   }
 
   // This implements equals for all enums, in userspace B-)
@@ -118,14 +118,14 @@ ns types {
   // }
 
   // The size, in bytes, of type t. Unlike c's sizeof, does not include end padding
-  fn(intern) size[t](): size
+  fn(builtin) size[t](): size
   // The stride, in bytes, of type t. includes end padding
-  fn(intern) stride[t](): size
+  fn(builtin) stride[t](): size
 
   // The alignment, in bytes, of type t. Always a power of two
-  fn(intern) align[t](): int
+  fn(builtin) align[t](): int
 
-  fn(intern) id[t](): type-id
+  fn(builtin) id[t](): type-id
 
   fn type-id-of-val[t](_t: t): type-id { id[t] }
   fn name[t](): string { id[t].info().name }
@@ -174,10 +174,10 @@ ns types {
 
   type record-kind = either { struct = 0, union = 1, packed = 2 }
 
-  fn(intern) make-struct(kind: record-kind, fields: span[{ name: string, type: type-id }]): type-id
+  fn(builtin) make-struct(kind: record-kind, fields: span[{ name: string, type: type-id }]): type-id
   fn field[t](name: string): make-struct.fields.t { .{ name, type = types/id[t] } }
 
-  fn(intern) make-either(
+  fn(builtin) make-either(
     tag-type: ?type-id,
     variants: span[{ name: string, payload: ?type-id, tag: ?int-value }]
   ): type-id
@@ -187,10 +187,10 @@ ns types {
   fn variant-empty(name: string):   make-either.variants.t { .{ name, payload = :none,             tag = :none } }
 
   // Mirrors source *: a function inner type makes a function pointer
-  fn(intern) make-reference(inner: type-id): type-id
-  fn(intern) make-array(element: type-id, size: int): type-id
-  fn(intern) make-fn(params: span[type-id], return-type: type-id): type-id
-  fn(intern) make-instance(parent: type-id, args: span[type-id]): type-id
+  fn(builtin) make-reference(inner: type-id): type-id
+  fn(builtin) make-array(element: type-id, size: int): type-id
+  fn(builtin) make-fn(params: span[type-id], return-type: type-id): type-id
+  fn(builtin) make-instance(parent: type-id, args: span[type-id]): type-id
 
   type type-schema = either {
     char,
@@ -254,10 +254,10 @@ ns meta {
 
   /////// Static value ferrying across the runtime/comptime border:
   /////// Likely marked internal eventually
-  fn(intern) bake-static-value[t](value: t): u64
+  fn(builtin) bake-static-value[t](value: t): u64
   // Must be provided an integer literal.
   // Can only be called by generated code
-  fn(intern) get-static-value[t](id: u64): t
+  fn(builtin) get-static-value[t](id: u64): t
 
 
 }
@@ -339,59 +339,59 @@ ability neg { fn negated(self): self }
 // we could default rhs and output to self, and also somehow use
 // that information while inferring... then maybe. But i don't want
 // to achieve it by doing "try the call with every impl" for performance reasons
-impl add for u8  {   fn(intern) add(self, rhs: self): self }
-impl add for u16 {   fn(intern) add(self, rhs: self): self }
-impl add for u32 {   fn(intern) add(self, rhs: self): self }
-impl add for u64 {   fn(intern) add(self, rhs: self): self }
-impl add for i8  {   fn(intern) add(self, rhs: self): self }
-impl add for i16 {   fn(intern) add(self, rhs: self): self }
-impl add for i32 {   fn(intern) add(self, rhs: self): self }
-impl add for i64 {   fn(intern) add(self, rhs: self): self }
+impl add for u8  {   fn(builtin) add(self, rhs: self): self }
+impl add for u16 {   fn(builtin) add(self, rhs: self): self }
+impl add for u32 {   fn(builtin) add(self, rhs: self): self }
+impl add for u64 {   fn(builtin) add(self, rhs: self): self }
+impl add for i8  {   fn(builtin) add(self, rhs: self): self }
+impl add for i16 {   fn(builtin) add(self, rhs: self): self }
+impl add for i32 {   fn(builtin) add(self, rhs: self): self }
+impl add for i64 {   fn(builtin) add(self, rhs: self): self }
 
-impl sub for u8  {   fn(intern) sub(self, rhs: self): self }
-impl sub for u16 {   fn(intern) sub(self, rhs: self): self }
-impl sub for u32 {   fn(intern) sub(self, rhs: self): self }
-impl sub for u64 {   fn(intern) sub(self, rhs: self): self }
-impl sub for i8  {   fn(intern) sub(self, rhs: self): self }
-impl sub for i16 {   fn(intern) sub(self, rhs: self): self }
-impl sub for i32 {   fn(intern) sub(self, rhs: self): self }
-impl sub for i64 {   fn(intern) sub(self, rhs: self): self }
+impl sub for u8  {   fn(builtin) sub(self, rhs: self): self }
+impl sub for u16 {   fn(builtin) sub(self, rhs: self): self }
+impl sub for u32 {   fn(builtin) sub(self, rhs: self): self }
+impl sub for u64 {   fn(builtin) sub(self, rhs: self): self }
+impl sub for i8  {   fn(builtin) sub(self, rhs: self): self }
+impl sub for i16 {   fn(builtin) sub(self, rhs: self): self }
+impl sub for i32 {   fn(builtin) sub(self, rhs: self): self }
+impl sub for i64 {   fn(builtin) sub(self, rhs: self): self }
 
-impl mul for u8    { fn(intern) mul(self, rhs: self): self }
-impl mul for u16   { fn(intern) mul(self, rhs: self): self }
-impl mul for u32   { fn(intern) mul(self, rhs: self): self }
-impl mul for u64   { fn(intern) mul(self, rhs: self): self }
-impl mul for i8    { fn(intern) mul(self, rhs: self): self }
-impl mul for i16   { fn(intern) mul(self, rhs: self): self }
-impl mul for i32   { fn(intern) mul(self, rhs: self): self }
-impl mul for i64   { fn(intern) mul(self, rhs: self): self }
+impl mul for u8    { fn(builtin) mul(self, rhs: self): self }
+impl mul for u16   { fn(builtin) mul(self, rhs: self): self }
+impl mul for u32   { fn(builtin) mul(self, rhs: self): self }
+impl mul for u64   { fn(builtin) mul(self, rhs: self): self }
+impl mul for i8    { fn(builtin) mul(self, rhs: self): self }
+impl mul for i16   { fn(builtin) mul(self, rhs: self): self }
+impl mul for i32   { fn(builtin) mul(self, rhs: self): self }
+impl mul for i64   { fn(builtin) mul(self, rhs: self): self }
 
-impl div for u8    { fn(intern) div(self, rhs: self): self }
-impl div for u16   { fn(intern) div(self, rhs: self): self }
-impl div for u32   { fn(intern) div(self, rhs: self): self }
-impl div for u64   { fn(intern) div(self, rhs: self): self }
-impl div for i8    { fn(intern) div(self, rhs: self): self }
-impl div for i16   { fn(intern) div(self, rhs: self): self }
-impl div for i32   { fn(intern) div(self, rhs: self): self }
-impl div for i64   { fn(intern) div(self, rhs: self): self }
+impl div for u8    { fn(builtin) div(self, rhs: self): self }
+impl div for u16   { fn(builtin) div(self, rhs: self): self }
+impl div for u32   { fn(builtin) div(self, rhs: self): self }
+impl div for u64   { fn(builtin) div(self, rhs: self): self }
+impl div for i8    { fn(builtin) div(self, rhs: self): self }
+impl div for i16   { fn(builtin) div(self, rhs: self): self }
+impl div for i32   { fn(builtin) div(self, rhs: self): self }
+impl div for i64   { fn(builtin) div(self, rhs: self): self }
 
-impl rem for u8    { fn(intern) rem(self, rhs: self): self }
-impl rem for u16   { fn(intern) rem(self, rhs: self): self }
-impl rem for u32   { fn(intern) rem(self, rhs: self): self }
-impl rem for u64   { fn(intern) rem(self, rhs: self): self }
-impl rem for i8    { fn(intern) rem(self, rhs: self): self }
-impl rem for i16   { fn(intern) rem(self, rhs: self): self }
-impl rem for i32   { fn(intern) rem(self, rhs: self): self }
-impl rem for i64   { fn(intern) rem(self, rhs: self): self }
+impl rem for u8    { fn(builtin) rem(self, rhs: self): self }
+impl rem for u16   { fn(builtin) rem(self, rhs: self): self }
+impl rem for u32   { fn(builtin) rem(self, rhs: self): self }
+impl rem for u64   { fn(builtin) rem(self, rhs: self): self }
+impl rem for i8    { fn(builtin) rem(self, rhs: self): self }
+impl rem for i16   { fn(builtin) rem(self, rhs: self): self }
+impl rem for i32   { fn(builtin) rem(self, rhs: self): self }
+impl rem for i64   { fn(builtin) rem(self, rhs: self): self }
 
-impl neg for u8    { fn(intern) negated(self): self }
-impl neg for u16   { fn(intern) negated(self): self }
-impl neg for u32   { fn(intern) negated(self): self }
-impl neg for u64   { fn(intern) negated(self): self }
-impl neg for i8    { fn(intern) negated(self): self }
-impl neg for i16   { fn(intern) negated(self): self }
-impl neg for i32   { fn(intern) negated(self): self }
-impl neg for i64   { fn(intern) negated(self): self }
+impl neg for u8    { fn(builtin) negated(self): self }
+impl neg for u16   { fn(builtin) negated(self): self }
+impl neg for u32   { fn(builtin) negated(self): self }
+impl neg for u64   { fn(builtin) negated(self): self }
+impl neg for i8    { fn(builtin) negated(self): self }
+impl neg for i16   { fn(builtin) negated(self): self }
+impl neg for i32   { fn(builtin) negated(self): self }
+impl neg for i64   { fn(builtin) negated(self): self }
 
 ability scalar-cmp {
   fn lt(self, other: self): bool
@@ -403,52 +403,52 @@ ability scalar-cmp {
 }
 
 impl scalar-cmp for u8 {
-  fn(intern) lt(self, other: self): bool
-  fn(intern) le(self, other: self): bool
-  fn(intern) gt(self, other: self): bool
-  fn(intern) ge(self, other: self): bool
+  fn(builtin) lt(self, other: self): bool
+  fn(builtin) le(self, other: self): bool
+  fn(builtin) gt(self, other: self): bool
+  fn(builtin) ge(self, other: self): bool
 }
 impl scalar-cmp for u16 {
-  fn(intern) lt(self, other: self): bool
-  fn(intern) le(self, other: self): bool
-  fn(intern) gt(self, other: self): bool
-  fn(intern) ge(self, other: self): bool
+  fn(builtin) lt(self, other: self): bool
+  fn(builtin) le(self, other: self): bool
+  fn(builtin) gt(self, other: self): bool
+  fn(builtin) ge(self, other: self): bool
 }
 impl scalar-cmp for u32 {
-  fn(intern) lt(self, other: self): bool
-  fn(intern) le(self, other: self): bool
-  fn(intern) gt(self, other: self): bool
-  fn(intern) ge(self, other: self): bool
+  fn(builtin) lt(self, other: self): bool
+  fn(builtin) le(self, other: self): bool
+  fn(builtin) gt(self, other: self): bool
+  fn(builtin) ge(self, other: self): bool
 }
 impl scalar-cmp for u64 {
-  fn(intern) lt(self, other: self): bool
-  fn(intern) le(self, other: self): bool
-  fn(intern) gt(self, other: self): bool
-  fn(intern) ge(self, other: self): bool
+  fn(builtin) lt(self, other: self): bool
+  fn(builtin) le(self, other: self): bool
+  fn(builtin) gt(self, other: self): bool
+  fn(builtin) ge(self, other: self): bool
 }
 impl scalar-cmp for i8 {
-  fn(intern) lt(self, other: self): bool
-  fn(intern) le(self, other: self): bool
-  fn(intern) gt(self, other: self): bool
-  fn(intern) ge(self, other: self): bool
+  fn(builtin) lt(self, other: self): bool
+  fn(builtin) le(self, other: self): bool
+  fn(builtin) gt(self, other: self): bool
+  fn(builtin) ge(self, other: self): bool
 }
 impl scalar-cmp for i16 {
-  fn(intern) lt(self, other: self): bool
-  fn(intern) le(self, other: self): bool
-  fn(intern) gt(self, other: self): bool
-  fn(intern) ge(self, other: self): bool
+  fn(builtin) lt(self, other: self): bool
+  fn(builtin) le(self, other: self): bool
+  fn(builtin) gt(self, other: self): bool
+  fn(builtin) ge(self, other: self): bool
 }
 impl scalar-cmp for i32 {
-  fn(intern) lt(self, other: self): bool
-  fn(intern) le(self, other: self): bool
-  fn(intern) gt(self, other: self): bool
-  fn(intern) ge(self, other: self): bool
+  fn(builtin) lt(self, other: self): bool
+  fn(builtin) le(self, other: self): bool
+  fn(builtin) gt(self, other: self): bool
+  fn(builtin) ge(self, other: self): bool
 }
 impl scalar-cmp for i64 {
-  fn(intern) lt(self, other: self): bool
-  fn(intern) le(self, other: self): bool
-  fn(intern) gt(self, other: self): bool
-  fn(intern) ge(self, other: self): bool
+  fn(builtin) lt(self, other: self): bool
+  fn(builtin) le(self, other: self): bool
+  fn(builtin) gt(self, other: self): bool
+  fn(builtin) ge(self, other: self): bool
 }
 
 impl scalar-cmp for ptr {
@@ -771,28 +771,28 @@ impl equals for {} {
 ns mem {
 
   // Does not handle overlaps; memcpy
-  fn(intern) copy-memcpy(
+  fn(builtin) copy-memcpy(
     dst: ptr,
     src: ptr,
     count: size
   )
   // Handles overlaps; memmove
-  fn(intern) move-memmove(
+  fn(builtin) move-memmove(
     dst: ptr,
     src: ptr,
     count: size
   )
-  fn(intern) set-memset(
+  fn(builtin) set-memset(
     dst: ptr,
     value: u8,
     count: size
   )
-  fn(intern) equals-memcmp(p1: ptr, p2: ptr, size: int): bool
+  fn(builtin) equals-memcmp(p1: ptr, p2: ptr, size: int): bool
 
-  fn(intern) bitcast[t, u](t: t): u
+  fn(builtin) bitcast[t, u](t: t): u
 
-  fn(intern) load-volatile[t](src: *t): t
-  fn(intern) store-volatile[t](dst: *t, value: t)
+  fn(builtin) load-volatile[t](src: *t): t
+  fn(builtin) store-volatile[t](dst: *t, value: t)
 
 }
 
@@ -808,7 +808,6 @@ ns k1 {
   // is-static is set to 'true' when executing K1 code statically, at compile-time
   let is-static: bool = builtin
 
-  let test: bool = builtin
   let no-std: bool = builtin
   let debug: bool = builtin
 
@@ -840,17 +839,21 @@ ns k1 {
   // The widest SIMD register the target supports;
   let simd-bytes: size = builtin
 
-  fn(intern) location(): source-location
+  fn(builtin) location(): source-location
 
-  fn(intern) module-dir(): string
+  fn(builtin) module-dir(): string
 
-  fn(intern) exit(code: i32): never
+  fn(builtin) exit(code: i32): never
 
   fn program-exit(code: i32): never {
     sys/exit(code)
   }
 
-  fn(intern) emit-compiler-message(
+  ns test {
+    fn(builtin) expect-failure(needle: string)
+  }
+
+  fn(builtin) emit-compiler-message(
     locn: k1/source-location,
     level: either(u8) { info, warn, error },
     msg: string
@@ -894,7 +897,10 @@ ns k1 {
     command: command,
     options: list[option],
     host: opt[target],
+    editor: bool,
   }
+
+  type editor-settings = { test-on-save: bool }
 
   type setup-ctx = { build: build-config }
 
@@ -974,7 +980,7 @@ ns k1 {
 
     // lets name it 'checkbox' not 'add-checkbox', immediate-mode style, since
     // the user's code is totally immediate mode style
-    fn(intern) checkbox(name: string, get: *fn() -> bool, set: *fn(bool) -> {})
+    fn(builtin) checkbox(name: string, get: *fn() -> bool, set: *fn(bool) -> {})
 
   }
 
@@ -987,6 +993,13 @@ ns sys {
   fn exit(code: i32): never {
     io/flush-stdout()
     platform/process/exit(code)
+  }
+
+  fn fork(child-fn: some fn() -> i32, stdin: ?platform/io/file-handle, stdout: ?platform/io/file-handle, stderr: ?platform/io/file-handle, extra-close: span[platform/io/file-handle]): result[i32, i32] {
+    io/flush-stdout()
+    let pid = platform/process/fork(stdin, stdout, stderr, extra-close).try
+    if pid == 0 exit(child-fn())
+    :ok pid
   }
 }
 
@@ -1009,7 +1022,7 @@ ns for ptr {
   // This is an intrinsic so that we can codegen a getelementptr
   // instruction in LLVM rather than a pointer cast.
   // But we _could_ do it in userland using size-of and arithmetic which is neat!
-  fn(intern) ref-at[t](self: ptr, index: size): *t
+  fn(builtin) ref-at[t](self: ptr, index: size): *t
 
   // ref-at compiles to gep, which preserves provenance
   fn(inline) add-bytes(self: ptr, offset: size): ptr {
@@ -1048,52 +1061,52 @@ ns for bool {
   fn(inline) from-u8(value: u8): bool { value != 0u8 }
 }
 
-impl neg for bool { fn(intern) negated(self: bool): bool }
+impl neg for bool { fn(builtin) negated(self: bool): bool }
 impl equals for bool {
-  fn(intern) equals(self: bool, other: bool): bool
-  fn(intern) not-equals(self: bool, other: bool): bool
+  fn(builtin) equals(self: bool, other: bool): bool
+  fn(builtin) not-equals(self: bool, other: bool): bool
 }
 
 impl equals for u8 {
-  fn(intern) equals(self: u8, other: u8): bool
-  fn(intern) not-equals(self: u8, other: u8): bool
+  fn(builtin) equals(self: u8, other: u8): bool
+  fn(builtin) not-equals(self: u8, other: u8): bool
 }
 impl equals for u16 {
-  fn(intern) equals(self: u16, other: u16): bool
-  fn(intern) not-equals(self: u16, other: u16): bool
+  fn(builtin) equals(self: u16, other: u16): bool
+  fn(builtin) not-equals(self: u16, other: u16): bool
 }
 impl equals for u32 {
-  fn(intern) equals(self: u32, other: u32): bool
-  fn(intern) not-equals(self: u32, other: u32): bool
+  fn(builtin) equals(self: u32, other: u32): bool
+  fn(builtin) not-equals(self: u32, other: u32): bool
 }
 impl equals for u64 {
-  fn(intern) equals(self: u64, other: u64): bool
-  fn(intern) not-equals(self: u64, other: u64): bool
+  fn(builtin) equals(self: u64, other: u64): bool
+  fn(builtin) not-equals(self: u64, other: u64): bool
 }
 
 impl equals for i8 {
-  fn(intern) equals(self: i8, other: i8): bool
-  fn(intern) not-equals(self: i8, other: i8): bool
+  fn(builtin) equals(self: i8, other: i8): bool
+  fn(builtin) not-equals(self: i8, other: i8): bool
 }
 impl equals for i16 {
-  fn(intern) equals(self: i16, other: i16): bool
-  fn(intern) not-equals(self: i16, other: i16): bool
+  fn(builtin) equals(self: i16, other: i16): bool
+  fn(builtin) not-equals(self: i16, other: i16): bool
 }
 impl equals for i32 {
-  fn(intern) equals(self: i32, other: i32): bool
-  fn(intern) not-equals(self: i32, other: i32): bool
+  fn(builtin) equals(self: i32, other: i32): bool
+  fn(builtin) not-equals(self: i32, other: i32): bool
 }
 impl equals for i64 {
-  fn(intern) equals(self: i64, other: i64): bool
-  fn(intern) not-equals(self: i64, other: i64): bool
+  fn(builtin) equals(self: i64, other: i64): bool
+  fn(builtin) not-equals(self: i64, other: i64): bool
 }
 
 impl equals for char {
-  fn(intern) equals(self: char, other: char): bool
-  fn(intern) not-equals(self: char, other: char): bool
+  fn(builtin) equals(self: char, other: char): bool
+  fn(builtin) not-equals(self: char, other: char): bool
 }
 
-fn(intern) discard[t](_t: t): empty
+fn(builtin) discard[t](_t: t): empty
 fn(cold) enum-unknown-name[v: print](type-name: string, value: v): string { "${type-name}(${value})" }
 fn phony[t](): t { crash("phony") }
 
@@ -1175,6 +1188,8 @@ fn assertdbg(context locn: k1/source-location)(value: bool) {
   else         { let _ = locn; let _ = value; .{} }
 }
 
+let(mutable) backtrace-on-crash: bool = true
+
 fn print-backtrace() {
   #if k1/platform is {
     :posix-macos or :posix-linux -> k1rt/_k1_print_backtrace(frame_count = 128),
@@ -1193,10 +1208,10 @@ fn crash(context locn: k1/source-location)(msg: string): never {
     sys/exit(1)
   } else if k1/is-static {
     k1/emit-compiler-message(locn, :error, msg)
-    sys/exit(111)
+    platform/process/abort()
   } else {
     io/flush-stdout()
-    print-backtrace()
+    if backtrace-on-crash print-backtrace()
 
     // We print this way to avoid calling our format code
     eprint(msg)

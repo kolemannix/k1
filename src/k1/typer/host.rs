@@ -136,6 +136,9 @@ impl TypedProgram {
             }
         }
 
+        if request.command.is_test() {
+            planner.entries[PRIMARY_MODULE_INDEX].module.kind = ModuleKind::Executable;
+        }
         let order = self.get_dependency_order(&planner)?;
         let force_primary = matches!(request.command, Command::Setup { force: true });
         self.run_setups(&planner, &order, build_value.unwrap(), force_primary)?;
@@ -290,6 +293,20 @@ impl TypedProgram {
             Err(message) => kbail!(self, span, "{}", message),
         };
         planner.plan.config = config;
+        if request.editor
+            && let Some(host) = planner.entries[PRIMARY_MODULE_INDEX].host
+            && let Some((fn_id, span)) = self.host_fn(
+                host,
+                self.ast.idents.b.editor,
+                request_type,
+                self.builtin_types.k1_editor_settings,
+                "fn editor(req: k1/build-request): k1/editor-settings",
+            )?
+        {
+            let request_value = self.encode_build_request(&planner.plan, request);
+            let settings = self.execute_static_function(fn_id, &[request_value], span)?;
+            planner.plan.editor.test_on_save = self.field_bool(settings, "test-on-save");
+        }
         Ok(self.encode_build_config(&planner.plan, &config))
     }
 
@@ -600,8 +617,14 @@ impl TypedProgram {
         let target_type = self.mem.getn(host_sum.variants)[OPT_SOME_VARIANT_INDEX].payload.unwrap();
         let host_target = request.host.map(|host| self.enum_named(target_type, host.to_str()));
         let host = synth::synth_static_option(&mut self.static_values, host_type, host_target);
-        let fields =
-            [("default", default), ("command", command), ("options", options), ("host", host)];
+        let editor = self.static_bool(request.editor);
+        let fields = [
+            ("default", default),
+            ("command", command),
+            ("options", options),
+            ("host", host),
+            ("editor", editor),
+        ];
         self.encode_struct(type_id, &fields)
     }
 

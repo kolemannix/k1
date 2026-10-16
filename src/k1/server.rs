@@ -5,7 +5,7 @@ mod size;
 pub mod sse;
 
 use http::Response;
-pub use http::serve;
+pub use http::{serve, start};
 use maud::html;
 
 use crate::typer::TypedProgram;

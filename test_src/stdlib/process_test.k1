@@ -8,14 +8,15 @@ fn write-line(child: *process/child, line: string) {
   fd/write-all(child.stdin-fd, "${line}\n".span-bytes()).!
 }
 
-fn test() {
-  // PATH lookup + argument passing; ok is the captured output
+fn(test) run-finds-path-and-captures-output() {
   assert-equals(process/run("echo", ["hello", "world"]).!, "hello world\n")
+}
 
-  // stdout and stderr are merged, in order
+fn(test) sh-merges-stdout-and-stderr-in-order() {
   assert-equals(process/sh("echo out; echo err 1>&2").!, "out\nerr\n")
+}
 
-  // A nonzero exit is the err, carrying the full status
+fn(test) nonzero-exit-is-err-with-status() {
   if process/sh("exit 3") is {
     :err :failed f -> {
       assert-equals(f.status.exit-code, 3)
@@ -23,33 +24,40 @@ fn test() {
     },
     _ -> crash("expected :err :failed")
   }
+}
 
-  // run-status keeps exit status as data
+fn(test) run-status-returns-exit-code() {
   let failed = process/run-status("/bin/sh", ["-c", "exit 3"], :capture).!
   assert-equals(failed.exit-code, 3)
   assert-equals(failed.signal, 0)
+}
 
-  // Death by signal
+fn(test) run-status-reports-death-by-signal() {
   let signaled = process/run-status("/bin/sh", ["-c", "kill -9 $$"], :capture).!
   assert-equals(signaled.exit-code, -1)
   assert-equals(signaled.signal, posix/SIGKILL)
   let usr1 = process/run-status("/bin/sh", ["-c", "kill -USR1 $$"], :capture).!
   assert-equals(usr1.signal, posix/SIGUSR1)
+}
 
-  // Spawn failure is the err for both flavors
+fn(test) spawn-failure-is-err() {
   assert(process/run("definitely-not-a-real-cmd-k1", []) is :err :spawn _)
   assert(process/run-status("definitely-not-a-real-cmd-k1", [], :capture) is :err :spawn _)
+}
 
-  // :drop discards output
+fn(test) drop-discards-output() {
   assert-equals(process/run-command("echo", ["ignored"], :drop).!, "")
+}
 
-  // :inherit streams to our stdout/stderr; nothing is captured
+fn(test) inherit-captures-nothing() {
   assert-equals(process/run-command("true", [], :inherit).!, "")
+}
 
-  // Output larger than the pipe buffer exercises the read loop
+fn(test) output-larger-than-pipe-buffer() {
   assert-equals(process/sh("head -c 131072 /dev/zero | tr '\\0' 'a'").!.len(), 131072)
+}
 
-  // Interactive child: lines flow both ways, EOF on close, clean reap
+fn(test) interactive-child-echoes-lines() {
   let cat = process/spawn("cat", []).!
   write-line(cat.&, "first")
   assert-equals(cat.stdout.read-line().!, "first")
@@ -59,16 +67,23 @@ fn test() {
   assert-equals(cat.stdout.read-line().!, "third")
   let cat-status = cat.wait().!
   assert-equals(cat-status.exit-code, 0)
+}
 
-  // read-line returns :none at EOF; a last line without a newline still arrives
+fn(test) read-line-yields-unterminated-last-line-then-none(): result[process/run-output, process/run-error] {
   let printer = process/spawn("/bin/sh", ["-c", "printf 'no-newline'"]).!
   assert-equals(printer.stdout.read-line().!, "no-newline")
   assert(printer.stdout.read-line() is :none)
-  printer.wait().!
+  printer.wait()
+}
 
-  // kill: the child dies by signal
+fn(test) kill-ends-child-by-signal() {
   let sleeper = process/spawn("sleep", ["100"]).!
   sleeper.kill()
   let sleeper-status = sleeper.wait().!
   assert-equals(sleeper-status.signal, posix/SIGKILL)
+}
+
+fn(test-static) fork-refuses-static(): result[i32, i32] {
+  k1/test/expect-failure("fork is not supported in static execution")
+  core/platform/process/fork(stdin = :none, stdout = :none, stderr = :none, extra-close = [])
 }

@@ -180,7 +180,7 @@ ns work {
   }
 }
 
-fn main(): i32 {
+fn(test-runtime) comptime-matches-runtime() {
   let a1: string = #static work/int-ops()
   same("int-ops", a1, work/int-ops())
   let a2: string = #static work/shift-ops()
@@ -202,10 +202,5 @@ fn main(): i32 {
   let a10: string = #static work/control-ops()
   same("control-ops", a10, work/control-ops())
 
-  if failures > 0 {
-    println("$failures comptime/runtime mismatches")
-    return 1
-  }
-  println("comptime and runtime agree on all 10 groups")
-  0
+  assert-msg("$failures comptime/runtime mismatches", failures == 0)
 }

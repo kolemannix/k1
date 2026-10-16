@@ -19,8 +19,6 @@ fn dead-arms(): int {
   a + b + c + pick[6](0) + tail-guard(true)
 }
 
-fn main(): i32 {
+fn(test) test() {
   assert-equals(dead-arms(), 127)
-  #static assert-equals(dead-arms(), 127)
-  0
 }

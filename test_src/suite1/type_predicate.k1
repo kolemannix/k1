@@ -15,7 +15,7 @@ type int-wrapper[t: pred pre/is-int] = { value: t }
 
 fn foo[t: pred pre/no-password](_t: t) {}
 
-fn test() {
+fn(test) pred-bounds-filter-type-args() {
   assert(test-compile(foo(.{ password = "Passw0rd!" })).is-some())
   foo(.{ assword = "Passw0rd!" })
   let _i: int-wrapper[u64] = .{ value = 42 }

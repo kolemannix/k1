@@ -129,7 +129,7 @@ type not-expr = { expr: expr-id, span: src-span }
 
 type fmt-align = either { left, right, center, sign-zeros }
 
-type fmt-spec = { fill: string, align: ?fmt-align, width: u32, precision: ?u32 }
+type fmt-spec = { fill: string, align: ?fmt-align, width: u32, group: bool, precision: ?u32 }
 
 type interp-part = either {
   str-part({ string: string-id, span: src-span }),
@@ -409,13 +409,15 @@ type fn-param = { name: string-id, type-expr: type-expr-id, span: src-span, is-c
 
 type linkage = either {
   standard,
-  external({ lib-name: ?string-id, fn-name: ?string-id }),
-  intrinsic,
-  llvm-intrinsic(string-id),
-  exported({ fn-name: ?string-id }),
+  external({ lib-name: ?string-id, link-name: ?string-id }),
+  exported({ link-name: ?string-id }),
 }
 
+type builtin-kind = either { by-name, llvm(string-id) }
+
 type inlining = either { auto, always, never }
+
+type test-runs = either { both, static, runtime }
 
 type function = {
   name: string-id,
@@ -427,9 +429,11 @@ type function = {
   span: src-span,
   name-span: src-span,
   linkage,
+  builtin-kind: ?builtin-kind,
   is-native: bool,
   inlining,
   is-cold: bool,
+  test: ?test-runs,
   compiler-debug: bool,
   where-constraints: list[type-constraint],
   compile-condition: ?expr-id,
@@ -453,11 +457,9 @@ type global = {
   value-expr: ?expr-id,
   name-span: src-span,
   span: src-span,
+  linkage,
   is-thread-local: bool,
-  is-export: bool,
   is-mutable: bool,
-  is-external: bool,
-  link-name: ?string-id,
   compile-condition: ?expr-id,
 }
 

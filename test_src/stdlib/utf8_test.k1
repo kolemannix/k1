@@ -32,7 +32,7 @@ fn scalar-valid-utf8(bytes: span[u8]): bool {
   true
 }
 
-fn test() {
+fn(test) is-valid-matches-scalar-on-random-bytes() {
   let seed: u64 = 0x9E3779B97F4A7C15
   let buf = list/empty[u8]()
   for 0.until(3000) {
@@ -52,6 +52,9 @@ fn test() {
       crash("utf8 mismatch, simd=${utf8/is-valid(bytes)}:${sb.build()}")
     }
   }
+}
+
+fn(test) is-valid-matches-scalar-on-edge-cases() {
   let edges: span[span[u8]] = [
     [0xE2, 0x82], [0xE2, 0x82, 0xAC], [0xF0, 0x9F, 0x98], [0xF0, 0x9F, 0x98, 0x80], [0xC0, 0x80], [0xED, 0xA0, 0x80],
     [0xF4, 0x90, 0x80, 0x80], [0xF4, 0x8F, 0xBF, 0xBF], [0x80], [0xC2], [0x61, 0xC3, 0xA9],

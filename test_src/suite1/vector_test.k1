@@ -2,7 +2,7 @@ ns vector_test
 
 let BAKED: vector[u8, 32] = vector/splat[u8, 32](9).with-lane(31, 4)
 
-fn test() {
+fn(test) vector-lane-ops() {
   assert-equals(types/align[vector[f32, 8]], 32)
   assert-equals(types/size[vector[u8, 2]], 2)
 

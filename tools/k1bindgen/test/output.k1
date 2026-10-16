@@ -88,7 +88,7 @@ let(extern("cinput_version")) version: u8
 let(extern("cinput_table")) table: array[i32, 4]
 let(extern("cinput_grid"), mutable) grid: array[array[i32, 3], 2]
 
-#if k1/test #static {
+fn(test) c-layouts() {
   assert-layout[i2](8, 4, [0, 4, ])
   assert-layout[Union1](8, 8, [])
   assert-layout[foo](104, 8, [0, 1, 8, 16, 24, 32, 36, 40, 48, 56, 64, 72, 80, 88, 96, 100, ])

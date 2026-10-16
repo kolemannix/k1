@@ -1,931 +1,184 @@
-Disclaimer: this file is written for and maintained by LLMs.
+LLM-maintained K1 notes; fix wrong lines on sight. Read `k1-syntax-basics.md` first.
 
-# K1 Additional Feature Map
+# K1 Advanced Surfaces
 
-This is a companion to `ai_docs/k1-syntax-basics.md`. It lists language surfaces
-that are exercised in `test_src` but are not yet fully explained in the basics
-guide. Use it as a scan checklist before editing K1 code or expanding the docs.
+## Compile-time values
+- `#static e` runs `e` in the VM. Literal types: `let a: 42 = #static 40 + 2`,
+  `'c'`, `3.14`, `"hi"`. `.from-static()` returns to a runtime value.
+- `fn f[i: static int](x: int)`, called `f[3](x)` or `f[type-of(three)](x)`
+  (`let three: static int = 3`). A static param's name is its value in expressions;
+  `#static`/`#meta` see only static-typed locals.
+- `#if c { } else { }` as statement or expression; `#for xs { }` unrolls.
+- `#type e` turns a `types/type-id` into a type.
 
-## Context Parameters
-
-K1 supports context parameter lists before ordinary parameters:
-
-```rust
-fn add-tracked(context hist: *list[string])(x: int, y: int): int {
-  hist.push("{x} + {y}")
-  x + y
-}
+## Context params
+```k1
+fn add-tracked(context hist: *list[string])(x: int, y: int): int
+add-tracked(context history)(1, 2)                    // explicit
+let(context) history: *list[string] = mem/new([])     // or implicit from scope
+fn greet[w: writer](context out: w)(name: string)
+let(context(impl writer)) out: *string-builder = sb.&  // ability-keyed
 ```
+- An ability-keyed var is the only kind that solves an ability-constrained param
+  during inference, and it is authoritative (conflict with other args is an error;
+  pass the context explicitly). Its declared type must implement the ability
+  itself, so ref-implemented writers need a ref binding. It also registers under
+  its concrete type. Several abilities: most keys hit wins; ties are ambiguous.
 
-Callers can pass context arguments explicitly:
+## Metaprogramming: `code`
+- `code = { text: string, spans: list[code-span{start, len, source: u64}] }`;
+  text without a span is sourceless. Errors in spanned bytes point at the original
+  source; sourceless ones stay in the generated file with a note naming the call.
+- A string literal (either quote, holes or not) whose expected type is `code`
+  elaborates as `code`: literal parts keep spans, `code` holes splice with spans,
+  other holes print sourceless. `.fmt` works too. Ascribe when nothing expects it:
+  `` `1 + 2`: code ``. A string *value* is a type error in `code` position; wrap it
+  with `code/from-string(s)` (no alloc). `code` has no `print`; `.text` is the escape.
+- Escapes resolve before emission: `\n` emits a newline; `\\n` emits an escape.
+  Emit `\$` for holes the generated code should interpolate. `meta/str-lit(s)`
+  quotes any string as a K1 literal.
+- `\ stmt` quotes a parsed statement as `code`; `\{ ... }` quotes a brace group
+  that only has to lex (text is the inside).
+- `code-builder` (one buffer, no per-part alloc): `cb.write(tmpl, ...)`/`writeln`,
+  `cb.write(s)` (sourceless), `write-code(c)`, `write-token(t)`,
+  `write-tokens(ts)` (restores spacing), `write-spanned(text, source)`, `line(c)`,
+  `block(h, fn[cb]. ...)`, `block-close(h, close, fn[cb]. ...)`,
+  `sep(items, ", ", fn[cb] x. ...)`, `indent`/`dedent`, `build()` (no copy).
+  Every `code`-typed template costs its own builder: in hot emitters prefer
+  `cb.writeln(...)` over `cb.line("...")`.
+- Emit conditions with explicit parens (`(not a) and b`).
+- No expansion dump exists. `#debug` on a macro definition prints the macro fn's
+  IR/bytecode; `#debug $call(...)` does not parse.
 
-```rust
-add-tracked(context history)(1, 2)
-```
-
-or bind them locally for implicit passing:
-
-```rust
-let(context) history: *list[string] = core/mem/new([])
-add-tracked(1, 2)
-```
-
-A context variable can also be declared by ability, so it satisfies generic
-context params constrained to that ability (the constraint's type param is
-inferred from the variable):
-
-```rust
-fn greet[w: writer](context out: w)(name: string) {
-  out.write("Hello, ")
-  out.write(name)
-}
-
-let sb = string-builder/new()
-let(context(impl writer)) out: *string-builder = sb.&
-greet("Joe") // writes into sb
-```
-
-The lookup key is the declared ability — a plain type-keyed context variable
-never matches an ability-constrained param during inference (though it still
-satisfies one whose type param was solved from other arguments). An
-ability-keyed variable, when found, is authoritative: it determines the type
-param, and disagreement with the call's other arguments is an error whose
-escape hatch is passing the context explicitly. The ability check is strict:
-the variable's declared type must implement the ability itself, so
-writer-style abilities implemented on references need a reference-typed
-binding, as above. Ability-keyed variables also register under their concrete
-type, so they satisfy concrete-typed context params too. A param constrained
-by several abilities picks the variable hit by the most ability keys; a tie is
-an ambiguity error.
-
-See `test_src/suite1/context_ability.k1`.
-
-## Module Manifests And FFI
-
-A module is a directory holding `build.k1`, `module.k1` or `<dir>.k1`; a single
-file compiles as a module too. Its build description lives in `<dir>/build.k1`,
-which is compiled on the host before the program and sees only core and std,
-never the module's own files. Every entry point in it is optional:
-
-- `fn build(req: k1/build-request): k1/build-config` runs for the primary only.
-  `req.default` is the config the CLI asked for, `req.options` holds `-D name`
-  and `-D name=value` flags, `req.host` is the host target. Absent, the build uses
-  `req.default`. `cpu` and `features` left `""` mean the target's default.
-- `fn module(b: k1/build-config): k1/module` returns the manifest; absent means a
-  library, or an executable for the primary.
-- `fn setup(ctx: k1/setup-ctx)` is the module's build step (below).
-
-`k1/platform` and friends describe the host inside `build.k1`; read the build's
-target from `b.target` or `ctx.build.target`. A library the compile-time VM
-loads is named with `k1/host-platform.dylib-ext()` (`dylib` or `so`).
-`k1/module-dir()` is the home dir of the module whose source contains the call
-(the dir itself for a module dir, the file's parent for a single-file program),
-resolved like `k1/location()`: text a macro splices in from its arguments
-counts as the caller's, template text as the macro's. Deps are named in the manifest with
-`m.dep("y")`. A module declares its parameters in its own `build.k1` with
-`let params: { field: type, .. } = k1/module-params(defaults)`; the annotation is
-the schema and `defaults` a literal typed against it. Only the primary configures
-them: `m.dep-params("y", .{ field = value })` in the primary's `build.k1` is
-merged over y's defaults as `defaults | literal`, so it may name a subset (a
-non-primary writing `dep-params` is an error, as is omitting both). The value is
-final after every manifest has run, so
-`fn setup` reads the global but `fn module` cannot. The same `let` is seeded into
-y's root namespace, so program code reads `params.field` inside y and
-`y/params.field` anywhere else; a library that needs a setting asserts it there
-with `#static`. A dep name resolves to the first existing dir of `<primary>/deps/y`,
-`<dependent>/deps/y`, `$K1_HOME/modules/y`; two dependents resolving `y` to
-different dirs is an error settled by adding `<primary>/deps/y`. The whole plan
-is cached under `.k1-out/cache/plan-*` and rebuilt when a `build.k1`, a dep
-lookup, or a setup stamp changes.
-
-Building a library primary (`m.library()`) produces both `.k1-out/lib<name>.{dylib|so}` and a fat `.k1-out/lib<name>.a` (a partial link
-of the K1 object with every static lib in the program, k1rt included); both
-artifacts expose only the exported symbols — everything else, k1rt's C helpers
-included, is hidden/localized. `k1 run`/`k1 test` reject library modules. The
-exported C ABI is declared per-fn with the `export`
-modifier — `fn(export)` exports under the fn's own name, `fn(export("sym"))`
-under an explicit symbol — plus `let(export)` globals. Exported fns must be
-concrete, non-ability fns with bodies; duplicate export symbols are an error.
-See `examples/klib`. FFI declarations use the `extern` fn modifier; its optional
-argument is the link symbol (defaults to the fn name). The providing library is
-declared once on the containing namespace with `ns(lib("foo"))` — whole-ns, any
-opening may declare it, disagreeing openings are an error — or per-fn with the
-`lib` modifier (`fn(extern("sym"), lib("foo"))`), which overrides the ns lib.
-
-`fn(inline)` forces inlining: the body is copied into every direct call site
-as the caller's IR is emitted, in every build mode and in the compile-time VM,
-so the fn only gets a standalone copy when its address is taken. It needs a
-body (not intern/extern) and is rejected in reloadable namespaces; a cycle of
-`fn(inline)` calls is an error, a cycle through a normal fn is fine.
-`fn(cold)` marks a rarely-run fn; diverging fns are cold already. The IR
-inliner never inlines a cold fn, and LLVM gets the `cold` attribute.
-`fn(noinline)` keeps a fn out of line in both the IR inliner and LLVM. It
-belongs on the out-of-line half of a fast path (`buffer/_grow-raw`,
-`arena/_alloc-in-new-chunk`, `map/_make-room`). It needs a body and cannot be combined with
-`inline`.
-
-A manifest may declare a setup step — `m.setup(outputs, inputs)` — paired with
-`fn setup(ctx: k1/setup-ctx)` in the same `build.k1`. When the declared outputs
-are stale (hashed together with the inputs, `build.k1`, the module params, and the target), the
-compiler runs `fn setup` on the host with cwd = the module dir, then stamps the
-outputs; a run that fails leaves no stamp, so it is retried on the next compile.
-Setups finish before any program source is read. See `modules/uv`,
-`modules/http`, `modules/sdl3`; `modules/sqlite` takes `compile-defines:
-span[string]`, extra `-D` flags for the amalgamation and bindgen (the session
-extension needs `SQLITE_ENABLE_SESSION` and `SQLITE_ENABLE_PREUPDATE_HOOK`).
-
-```rust
-// build.k1
-fn module(b: k1/build-config): k1/module {
-  let m = k1/module/new()
-  m.lib("foo", :static)
-  m.link-args(["-L/some/path"])
-  m
-}
-
-// foo.k1
-ns(lib("foo")) foo {
-  fn(extern("very_small")) very-small(x: very-small, y: very-small): very-small
-}
-```
-
-See `test_src/ffi_abi_test`.
-
-## Function Pointers
-
-Function pointer types are written with `*fn(...) -> ...`. A named function's
-address, `f.&`, is a function pointer: store it, reassign it, and call through
-it. A pointer held in a field is called as `(s.callback)(x)`; `s.callback(x)`
-looks for a method.
-
-```rust
-fn add-one(x: int): int { x + 1 }
-
-let f: *fn(int) -> int = add-one.&
-assert-equals(f(10), 11)
-
-type has-fn = { callback: *fn(x: int) -> int }
-```
-
-Null function pointers are represented via `ptr/null`.
-
-See `test_src/suite1/function_pointer.k1`.
-
-## Globals And Mutable Globals
-
-Top-level `let` declarations create globals. Add the `mutable` modifier for
-globals that can be assigned with `=` like any other place; immutable globals
-reject assignment. Modifiers go in a parenthesized list after `let`:
-`mutable`, `tls`, `export`, `extern`.
-
-```rust
-let answer: int = 42
-let(mutable) counter: int = 0
-let(mutable, tls) my-thread-local: i32 = 0
-
-counter = counter + 1
-```
-
-An `extern` global has no initializer; its storage comes from the linker. Like
-the `extern` fn modifier, its optional argument is the link symbol, defaulting
-to the declared name:
-
-```rust
-let(extern("abi_counter"), mutable) counter: i32
-let(extern) environ: ptr
-```
-
-See `test_src/suite1/ability_default_fns.k1`.
-
-## Static Parameters And Literal Types
-
-Static values can participate in types and generic arguments. A static type
-parameter's name is its value in expression position, `#meta` and `#static`
-included; a variable of the same name shadows it. `#meta` and `#static` read
-every local whose type is static; runtime locals are invisible there:
-
-```rust
-fn add-static[i: static int](x: int): int { i + x }
-
-let three: static int = 3
-add-static[type-of(three)](3)
-add-static[3](3)
-let folded: int = #static three * 7
-```
-
-Literal types also appear directly:
-
-```rust
-let c: 'c' = 'c'
-let pi: 3.14 = 3.14
-let hello: "hello" = "hello"
-```
-
-Static values can be converted back to runtime values with `.from-static()`.
-
-See `test_src/suite1/static_parameter.k1`,
-`test_src/suite1/static_type_literals.k1`, and
-`test_src/suite1/static_run.k1`.
-
-## Metaprogramming
-
-K1 supports source-generating metaprogramming with `#meta`. A metaprogram must
-yield `code` — text plus a table of source spans. The compiler compiles what
-the metaprogram returns in place of the invocation; errors inside compiled
-output whose bytes came from a `code` span point back at the original source.
-String templates in the `#meta` body elaborate as `code` (the expected type is
-`code`), so literal-returning metaprograms need no ceremony; a string *value*
-must be wrapped with `code/from-string`, which marks it as sourceless emitted
-text on purpose rather than by accident.
-
-```rust
-#meta "let n: u64 = 255"
-
-#meta {
-  let name = "point"
-  "type $name = { x: int, y: int }"
-}
-```
-
-A metaprogram's output may itself contain definition-level `#meta` or `$`
-invocations; they expand in place, in order. That is how a macro gets the
-schema of a type the caller wrote as tokens: stage one emits a call to a
-stage-two macro whose param is a `types/type-id`, built as `types/id[{ ...the
-tokens... }]`, and non-`code` macro params are statically evaluated at the
-call site. `content/showcase/examples/macro_record.k1` is the worked
-example.
-
-The `pre` namespace is compiled early for metaprogramming support:
-
-```rust
+## `#meta`, macros, `pre`
+```k1
+#meta "let n: u64 = 255"                 // definition-level; body yields code
 #meta pre/make-point("my-point")
-
-ns pre {
-  fn make-point(name: string): string {
-    "type $name = { x: int, y: int }"
-  }
-}
+macro debug(e: code) { #if build-debug "log/debug($e)" else "" }   // returns code implicitly
+debug(expensive())                        // expression call site
+$pre/make-point(my-point)                 // definition-level macro call; `$` adjacent to name
+ns pre { macro make-point(name: code) { "type $name = { x: i32, y: i32 }" } }
 ```
-
-Braces are plain characters in strings, so generated code reads like K1;
-interpolation holes are `$ident`/`${expr}`, and a generated string that should
-itself interpolate at runtime escapes its holes as `\$`. `code-writer` helpers
-also appear in metaprograms.
-
-### `code` and `code-builder`
-
-`core/code.k1` defines `code = { text: string, spans: list[code-span] }`: the
-emitted text plus a table of `code-span = { start, len, source }` entries
-naming which byte ranges came from where (`source` is a compiler span packed
-into a u64). Text with no entry is sourceless. `\ <stmt>` produces a `code`
-value whose single span covers the statement's source.
-
-A string template in `code`-expected position elaborates as `code`: each
-literal part is written with its own span, a `code` part in a hole is appended
-with its spans shifted, and every other part is printed as sourceless bytes.
-This applies to any string literal (double-quoted or backtick, holes or not)
-whose expected type is `code` — a macro body's return position, a `code`-typed
-let or parameter, and so on. Only literals elaborate; a string-typed *value* in
-`code` position is still a type error, since a literal carries its own spans
-while a value has none. `.fmt(values)` on a template works here too: with
-expected type `code` it yields `code`. When no context supplies the type,
-ascribe it: `` `1 + 2`: code `` or `"let w = ${}".fmt(42): code`. Escapes
-resolve before emission: `\n` in a template emits a newline into the generated
-source; write `\\n` to emit an escape the generated code will see.
-
-`code-builder` is the only way to build code, and everything appends into one
-text buffer with no per-part allocation: `cb.write(...)`/`cb.writeln(...)`
-templates write literal parts with their spans and holes as sourceless bytes,
-`cb.write(s)` with a string value is a plain sourceless write, `cb.write-code(c)`
-appends another `code` value, `cb.write-token(tok)` and `cb.write-tokens(span)`
-re-emit lexed tokens with their spans (`write-tokens` restores one space or
-newline per token's `spacing`), `cb.write-spanned(text, source)` is the
-primitive under all of them, and `cb.build()` yields the `code` without
-copying. `code/from-string(s)` wraps a string value as sourceless `code` and
-allocates nothing. Emit through one builder; a template whose expected type is
-`code` costs a builder of its own, so prefer `cb.writeln(...)` over
-`cb.line("...")` in hot emitters.
-
-Emitters that want indentation use `cb.line(c)` (indent + append + newline),
-`cb.block(header, fn[cb]. ...)` / `cb.block-close(header, close, fn[cb]. ...)`
-(braces + indentation around the body), `cb.sep(items, ", ", fn[cb] x. ...)`,
-and `cb.indent()`/`cb.dedent()` for manual runs. Nested blocks capture the
-builder at each level
-(`cb.block(h, fn[cb]. { ... cb.block-close(h2, c2, fn[cb]. ...) ... })`).
-No flag dumps a macro's expansion: `#debug` on the macro definition prints the
-macro function's own IR and bytecode, and definition-level `#debug $call(...)`
-does not parse. Write emitted conditions as raw template
-text with explicit parens — a binary operator directly after a `not` operand
-is a parse error; emit `(not a) and b`. `meta/str-lit(s)` escapes any string
-into a valid K1 literal, interpolation sigil included, so emitted literals
-need no character restrictions.
-
-`code` does not implement `print`: interpolating one into an ordinary string is
-an error, since it would drop the source info silently — `.text` is the
-explicit escape. There is no implicit conversion between `string` and `code` in
-either direction.
-
-## Macros
-
-A `macro` is a compile-time function whose call sites pass code by source: a
-param of type `code` receives the argument as source text plus its span, a param
-of any other type is statically evaluated, and the returned `code` is compiled
-in place of the call. Every macro param is annotated -- there is no bare-param
-shorthand; a bare param name is read as a type, like everywhere else. The return type is implicit, and is `code`, so a string template in
-return position elaborates as `code` with its spans intact. Callers write
-plain expressions:
-
-```rust
-macro debug(e: code) {
-  #if build-debug "log/debug($e)" else ""
-}
-
-macro repeat(n: int, body: code) {
-  let cb = code-builder/new()
-  for 0.until(n) {
-    cb.write-code(body)
-    cb.writeln("")
-  }
-  cb.build()
-}
-
-debug(expensive-report())   // expands to nothing when build-debug is off
-repeat(3, counter.incr())
-```
-
-Because arguments arrive as `code`, a type error inside the expansion points at
-the argument expression the caller wrote, not at the generated file. Error
-spans in emitted bytes not covered by any span (e.g. text from
-`code/from-string`) stay in the generated file, with a note naming the call the
-code was compiled in place of.
-
-At definition level, macros are invoked with the `$` sentinel — the callee must
-be a macro (`$` binds tightly: no whitespace before the name), and its output is
-compiled as definitions in place:
-
-```rust
-$pre/make-point(my-point)
-
-ns pre {
-  macro make-point(name: code) {
-    "type $name = { x: i32, y: i32 }"
-  }
-}
-```
-
-`\{ ... }` quotes a balanced brace group without parsing it: the contents only
-have to lex, so it carries syntax K1 has no grammar for. As a `code` value its
-text is the inside of the braces. A macro param of type `span[code-token]`
-receives its argument lexed (`\{ ... }` contents, or a plain expression's
-source): each `code-token = { kind, text, source, spacing, parts }` has its own
-span, `kind` is `ident` (keywords included), `number`, `string` (one token for
-the whole literal, interpolation holes included), `char` or `punct`, and
-`spacing` is `none`, `inline` or `newline` (always `none` on the first token).
-A `string` token's `parts` are its pieces in order: `:text { value, source }`
-for each non-empty literal segment, cooked as the compiler cooks string
-literals (escapes and block indentation resolved), and `:hole { tokens, spec,
-source }` for each `$name` or `${...}`, whose tokens carry their own spans and
-whose `spec` is the format spec after the `:` (`">3"` for `${x:>3}`, else
-empty). Other tokens have no parts.
-`cb.write-token(tok)` re-emits a token with its span, and `tok.fail(msg)` stops
-expansion with an error at that token in the caller's source. `std/html` is the
-worked example: `html/write(out, \{ <p class={c}>{text}</p> })` and
-`html/render(\{ ... })` check tag structure at compile time and splice holes
-as spanned code. A quoted literal in markup is read through its `parts`: cooked
-text folds into the static output and each `$x` hole splices like `{x}`. A
-braced attribute value dispatches on its type: a `bool` on a spec boolean
-attribute (`checked={on}`) emits the bare attribute or nothing,
-a `bool` elsewhere (`aria-invalid={bad}`) prints `"true"`/`"false"`, an `opt`
-omits the attribute on `:none`, anything else prints escaped. `render` binds
-its builder as a `writer` context, so `#{ write-row(it) }` composes helpers
-declared `fn write-row[w: writer](context out: w)(...)`.
-
-`std/html/dom` is the in-memory counterpart: `node = either { text, raw, attr,
-elem(*element), frag(span[node]) }`, one function per tag taking a single
-`span[node]` of modifiers (`:attr` entries become attributes, the rest
-children, scalatags style), `at(name, value)` with the same `opt`/`bool`
-dispatch as braced attribute values, `class`/`id`/`href`/`src`, and
-`each(items, f)`. `node` implements `print`, so `n.show()` serializes it, a
-`{n}` hole in `render` writes it unescaped, and `:raw(html/render(\{ ... }))`
-goes the other way. The tree is plain data: match `:elem e` and push onto
-`e.children`/`e.attrs`. Tag names collide with locals and the `div` ability,
-so alias the namespace: `use std/html/dom as h`, `h/div([h/class("x"), :text s])`.
-
-```rust
-macro sum(t: span[code-token]) {
-  let cb = code-builder/new()
-  for tok in t {
-    if tok.kind is :number cb.write-token(tok)
-    else if tok.text == "," cb.write(" + ")
-    else tok.fail("expected a number")
-  }
-  cb.build()
-}
-let six: int = sum(\{ 1, 2, 3 })
-```
-
-Macros expand when the call is typechecked, so a macro must be defined in the
-same module (any namespace) or an upstream module; a definition-level `$`
-invocation runs early, so its macro must live in the module's `pre` namespace or
-an upstream module. A definition-level macro may emit `macro` definitions into
-the invoking namespace, which is how a namespace binds a static argument once:
-`$pre/define-scaled(3)` emitting `` `macro scaled(x: code) { pre/scaled-code(x, $factor) }` ``
-(`test_src/suite1/test_meta.k1`). Self-recursive expansion is an error. Macros cannot be used
-as values, and unused macro params get no warning (conditionally ignoring an
-argument is the point of a debug macro).
-
-`std/flag-sum` is the definition-level worked example: `$std/flag-sum/define(\{ shape =
-either(u8, [rounded, even]) { circle({ radius: i32 }) = [rounded, even], ... } })`
-reads a sum declaration whose variants list boolean flags, packs flag `i` into
-tag bit `i` (variants with the same flag set get an ordinal above the flag
-bits), and emits the sum, a `shape-rounded` subtype per flag holding only its
-members with identical tags and payloads, `rounded()` bit-test predicates,
-`as-rounded(): ?shape-rounded`, `as-shape()` on the subtype, and
-`view-rounded(self: *shape): ?*shape-rounded` when the subtype's layout equals
-the parent's.
-
-`std/string-enum` is the smaller sibling for enums with a canonical string
-value: `$std/string-enum/define(\{ status = either(u8) { new = "New",
-in-progress = "In Progress", pending } })` (a bare variant's value is its name,
-the tag type is optional) emits the enum, `to-value(self): string`,
-`status/from-value(s): ?status`, `status/members: span[status]`, a `print` impl
-that writes the value, and `impl from-string[e = string]` whose error names the
-accepted values. Duplicate names or values and interpolated literals are
-expansion errors.
-
-See `test_src/suite1/test_macro.k1` and `test_src/stdlib/flag_sum_test.k1`.
-
-See `test_src/suite1/test_meta.k1` and `test_src/suite1/meta_defns.k1`.
-
-## Conditional Compilation
-
-`#if` conditionally includes or evaluates code at compile time. It can be used
-as a statement or expression, and supports `else`.
-
-```rust
-#if feature-enabled {
-  run-enabled-code()
-} else {
-  run-disabled-code()
-}
-
-let value = #if false "foo" else "bar"
-```
-
-See `test_src/suite1/condcomp.k1` and `test_src/suite1/static_run.k1`.
-
-## Type Reflection
-
-The `types` APIs expose type ids, names, layout, and schema information:
-
-```rust
-types/id[int]
-types/id[int].name()
-types/schema[array[i32, 10]]
-type-id.schema()
-types/size[string]
-types/stride[string]
-types/align[string]
-type-id.size()
-type-id.stride()
-type-id.align()
-```
-
-`types/size[t]`, `types/stride[t]` and `types/align[t]` fold to constants for a
-type named at the call site. The `type-id` methods read the same numbers from
-`type-id.info().layout` for an id held at runtime, such as a schema field's
-`type-id`. Types without a layout (never, zero-sized, abstract) report size 0,
-align 1.
-
-Function parameter and return member types can be addressed through type member
-paths:
-
-```rust
-types/id[do-it.return]()
-types/id[do-it.arg-name]()
-```
-
-Schemas are pattern matched as sums such as `:struct`, `:reference`, `:either`,
-`:array`, `:function`, and `:union`. Packed structs reflect as `:struct`; the
-packing shows up in the field offsets.
-
-A bare generic name is a type expression denoting the generic itself, the way a
-bare function name denotes its function type: `types/id[list]` is the id of
-`list[t]`, has no values, and is what an instance reports as its parent.
-`type-id.info()` carries `name`, `schema`, `instance: ?instance-info`, and
-`layout: { size, align }`; `.name()`, `.schema()`, `.instance-info()`,
-`.size()`, `.stride()`, and `.align()` read its fields.
-
-```rust
-types/id[list].name()                                        // "list[t]"
-types/instance-info[list[int]]                               // :some { parent = types/id[list], args = [types/id[int]] }
-types/instance-info[int]                                     // :none
-types/id[list[int]].is-instance-of(types/id[list])           // true
-```
-
-See `test_src/suite1/test_type_schema.k1`.
-
-## Type Synthesis
-
-`types/make-struct` and `types/make-either` build new types at comptime,
-mirroring the source type expressions. `make-struct` takes a
-`types/record-kind` (`:struct`, `:union`, or `:packed`); `make-either` picks
-scalar enum vs sum exactly like source `either` (no payloads anywhere means
-enum), infers the smallest viable tag type when `tag-type` is `:none`, and
-requires explicit tags to match the tag type. The helper constructors
-`types/field[t]`, `types/variant-data[t]`, `types/variant-empty`, and
-`types/make-either-default` cover the common shapes.
-
-```rust
-type(alias) point = #type types/make-struct(:struct, [
-  types/field[i64]("x"),
-  types/field[string]("y"),
-])
-
-type(alias) shape = #type types/make-either-default([
-  types/variant-data[i64]("circle"),
-  types/variant-empty("square"),
-])
-
-let flags = #static types/make-either(some(types/id[u32]), [
-  .{ name = "read", payload = :none, tag = :some(types/int-value:u32(1)) },
-])
-```
-
-`types/make-reference`, `types/make-array`, `types/make-fn`, and
-`types/make-instance` mirror `*t`, `array[t, N]`, `fn(...) -> t`, and `g[..]`.
-Like source `*`, `make-reference` of a function type yields a function pointer.
-
-```rust
-types/make-reference(types/id[point])                        // *point
-types/make-array(types/id[i64], 10)                          // array[i64, 10]
-types/make-fn([types/id[i64]], types/id[bool])               // fn(i64) -> bool
-types/make-reference(types/make-fn([], types/id[bool]))      // *fn() -> bool
-types/make-instance(types/id[list], [types/id[int]])         // list[int]
-```
-
-`.tag-enum` on a sum type derives the scalar enum of just its tags (this is
-how `types/int-kind` is defined from `types/int-value`). A variant the
-programmer named `tag-enum` shadows the accessor.
-
-```rust
-type shape = either { circle(i64), square }
-let k: shape.tag-enum = :square
-```
-
-See `test_src/suite1/type_synthesis.k1`.
-
-## Predicate Bounds And Richer Constraints
-
-Generic bounds can use abilities, `where` clauses, predicates, and compound
-constraints.
-
-```rust
-fn add[t](a: t, b: t): i32 where t: num, t: show {
-  a.num() + b.num()
-}
-
-fn is-int[t](): bool {
-  types/schema[t] is :int(_)
-}
-
-type int-wrapper[t: pred is-int] = { value: t }
-```
-
-Ability parameters can also be constrained by predicates:
-
-```rust
-ability to-scalar[out: pred is-scalar] {
-  fn to-scalar(self): out
-}
-```
-
-See `test_src/suite1/type_predicate.k1`.
-
-## Advanced Abilities
-
-The tests cover several ability features beyond the basics:
-
-- Default ability methods.
-- Impl methods overriding defaults.
-- `where` clauses on ability fns (`fn has(self, x: t): bool where t: equals`)
-  gate the fn per impl, default or override alike: an impl whose arguments
-  miss the constraint lacks the fn, and a generic impl's override body is
-  checked per instantiation. Impl methods do not restate the clause.
-- Blanket impls such as `impl[t: increment] incr-four for t`.
-- Ability parameters with named assignments like `as-pair[aa=a, bb=b]`.
-- Compound bounds such as `t: as-pair[aa=x, bb=y] and as-pair[aa=y, bb=x]`.
-- Multiple abilities exposing methods with the same name and different
-  signatures.
-
-See `test_src/suite1/ability_default_fns.k1`, `test_src/suite1/ability_where.k1`,
-`test_src/suite1/ability_complex.k1`,
-`test_src/suite1/ability_overload_ish.k1`, and
-`test_src/suite1/ability_generic.k1`.
-
-## Ability Objects (dyn)
-
-`dyn[ability[args...]]` erases an implementor to a dynamically-dispatched
-object: `{ state: ptr, one fn ptr per dispatchable ability function }`. All
-ability parameters must be bound in the type. Construction is always
-explicit — from `*s` it wraps the pointer; from a value it allocates in
-the ambient mode first:
-
-```rust
-let d = state.to-dyn[source[t = u8]]()      // from *s, no alloc
-let d: dyn[source[t = u8]] = state.to-dyn() // target from expected type
-let d = state.as[dyn[source[t = u8]]]()     // as-cast form
-let d = my-value.to-dyn[source[t = u8]]()   // value: mem/new then erase
-```
-
-Methods dispatch through the object (`d.pull()`), including ability default
-methods and impl overrides. Functions that mention self nowhere in their
-signature also dispatch (`d.kind()`); the object acts as a type witness and
-no state is passed. By-value receivers (`fn show(self)`) dispatch through a
-generated thunk that loads self from the state pointer, so `dyn[show]` and
-`dyn[allocator]` work. `dyn[source[t = t]]` may appear in generic signatures
-and specializes at instantiation. Functions that mention self outside the
-receiver, have their own type params, or take context params are excluded
-per-function from the object (they still dispatch statically on concrete
-types); an ability with no dispatchable functions cannot form a dyn type,
-and the error lists each function's reason. Dyn objects contain function pointers, so
-they cannot cross the `#static` boundary into runtime constants; comptime
-creation and dispatch inside `#static` works.
-
-See `test_src/suite1/ability_object.k1` and `modules/std/stream.k1`.
-
-## Opaque, Union, Uninit, Zeroed, And Bitcast
-
-Opaque types carry explicit size and alignment:
-
-```rust
-type blob = opaque[16, 4]
-```
-
-Unions use overlapping fields. A union literal sets at most one member;
-the rest are uninitialized, and `.{}` is fully uninitialized:
-
-```rust
-type bits = union { as-u32: u32, as-f32: f32 }
-let b: bits = .{ as-f32 = 1.0 }
-```
-
-Packed structs have no inter-field padding and alignment 1 (C
-`__attribute__((packed))`); fields sit at cumulative offsets and accesses
-handle the resulting unalignment. Taking a packed field's address with `.&`
-warns, since the reference loses the alignment guarantee:
-
-```rust
-type wire = packed { tag: u8, value: u64, crc: u16 }
-#static types/assert-layout[wire](11, 1, [0, 1, 9])
-```
-
-`let x: t = uninit` leaves a local uninitialized. `.0` (or `t.0`) is the zero
-value.
-`mem/bitcast` reinterprets bits between same-sized representations.
-
-See `test_src/suite1/union_basic.k1`, `test_src/suite1/packed_basic.k1`, and
-`test_src/suite1/zero_test.k1`.
-
-## Type-Level Struct Transforms
-
-The tests use structural type combinators:
-
-```rust
-type text = _struct_combine[{ text: string }, positioned]
-type user-view = _struct_remove[user, { password: string }]
-```
-
-See `test_src/suite1/struct_composition.k1`.
-
-## Pattern Matching Extras
-
-Beyond ordinary struct and sum patterns, tests use:
-
-- Literal patterns for ints, floats, strings, chars, booleans, and `.{}`.
-- Wildcard `_` and binding patterns.
-- Type patterns such as `type[int](x)` and `type[string](s)`.
-- `or` patterns in match arms.
-- Guards with `if`.
-- Reference-depth patterns such as `true***`.
-- Reference-through payload patterns such as `:some(value-ref)*`.
-
-See `test_src/suite1/is_patterns.k1`,
-`test_src/suite1/type_pattern.k1`,
-`test_src/suite1/matching_if.k1`, and
-`test_src/suite1/match_references.k1`.
-
-## Operators And Literals
-
-The basics guide does not yet enumerate operators. Tests cover:
-
-- Arithmetic: `+`, `-`, `*`, `/`, `%`.
-- Comparison: `==`, `!=`, `<`, `<=`, `>`, `>=`. `==` and `!=` resolve to the
-  `equals` ability's `equals` and `not-equals`; `not-equals` defaults to
-  `not self.equals(other)`, and the scalar impls are intern (one `icmp ne`).
-- Boolean: `not`, `and`, `or`, with short-circuiting.
-- Bitwise: `&`, `|`, `^`, `<<`, `>>`.
-
-Binary operator precedence (tightest first): `||` (pipe), then `* / %`,
-`+ -`, `<< >>`, `&`, `^`, `|`, `< <= > >=`, `== !=`, `and`, `or`, `?`.
-Bitwise binds above comparisons (Rust/Zig, not C): `a & b == c` is
-`(a & b) == c`.
-- Integer semantics are the same natively and in `#static`, optimized or not:
-  `+ - *` wrap (2's complement, no traps, no debug/release split), shift
-  counts are taken modulo the width (`1u64 << 64` is `1`), and `/ %` crash on
-  a zero divisor and on `min-value / -1`. Checked or trapping arithmetic is
-  library code, not a mode.
-- Hex (`0xff`), octal (`0o755`), binary (`0b1010`), and underscore numeric literals.
-- Integer suffixes such as `255u8`, `-128i8`, and `3u64`.
-
-See `test_src/suite1/arith.k1`.
-
-## Named Arguments
-
-Calls can provide arguments by name and out of order:
-
-```rust
-add(y = 2, x = 1)
-get-nothing(_t = pair)
-```
-
-See `test_src/suite1/arith.k1` and `test_src/suite1/ability_complex.k1`.
-
-## Namespace Behavior
-
-Namespaces can be reopened in multiple blocks, and `ns for type` extensions can
-be added from those blocks. Nested namespaces and aliases participate in normal
-scope resolution. `ns a/b { ... }` is `ns a { ns b { ... } }`.
-
-```rust
-ns foo { type bar = { value: int } }
-ns foo { fn make(): bar { .{ value = 1 } } }
-ns foo/inner { fn make-two(): bar { .{ value = 2 } } }
-```
-
-## Pointer And Address Syntax
-
-The guide covers field references, but tests also use:
-
-- `x.&` / `array.&` to take addresses.
-- `.0` for a null `ptr` or `optref[t]`.
-- `.as[ptr]` and `.as[*t]` for total pointer views (`*t` to `ptr`, `*t` to
-  `*u` when every `t` is a valid `u`); a claiming view (`ptr` to `*t`) is
-  `.ref[t]` or `.narrow`.
-- Addresses and integers convert by name, not `.as`: `ptr.to-int()` (i64),
-  `ptr.to-uint()` (u64), `ptr.to-size()`, and back with `i64.to-ptr()` /
-  `u64.to-ptr()`.
-- `.ref[t]` to assert a raw pointer as `*t` (`.ref-opt[t]` wraps it as
-  `optref[t]`, `.ref-at[t](i)` refs element `i`, compiled as gep).
-- `x is null` pattern-matches null on both `ptr` and `*t` — no fn call.
-  Parenthesize when the consequent is an enum literal:
-  `if (x is null) :none else ...`.
-- Multi-level references such as `***` in patterns.
-
-See `test_src/suite1/recurse_basic.k1` and
-`test_src/suite1/match_references.k1`.
-
-## String And Char Details
-
-Tests cover string and char escapes:
-
-```rust
-'\n'
-'\0'
-'\t'
-'\r'
-'\''
-'"'
-'\\'
-```
-
-String tests also cover `\n`, `\0`, `\t`, `\r`, `\"`, `\\`, and `\$`, plus
-nested interpolation and backtick strings.
-
-See `test_src/suite1/string_test.k1` and `test_src/suite1/string_interp.k1`.
-
-## RVO And Returned Locals
-
-`let(returned) name = ...` appears in RVO tests and looks like a dedicated
-return value optimization or return-slot feature.
-
-```rust
-let(returned) v: point = .0
-```
-
-See `test_src/suite1/rvo_test.k1`.
-
-## Parameter Passing And Aliasing
-
-A by-value aggregate parameter gets no private copy: it may alias storage the
-caller can still reach, because the compiler passes the caller's storage
-instead of copying it, whether the argument is a variable, a field, an element
-or a deref. A callee that writes through a pointer into that storage may see
-its parameter change, and a later argument's side effects are visible in an
-earlier aggregate argument: `f(p.*, bump(p))` sees the bumped value. The one
-alias the compiler never makes is the
-return slot (sret): the destination a call writes its result into never aliases
-any of that call's arguments.
-
-## Threads And Runtime Module Behavior
-
-Thread tests combine several runtime features:
-
-- Thread-local mutable globals via `let(mutable, tls)`.
-- `std/thread/start` and `std/thread/join` over raw `*fn(*t) -> ptr` entry
-  points.
-- `std/thread/task[t]`: `task/spawn(fn[x]. work(x))` runs a closure on a new
-  thread and `.join()` returns its `t`.
-- Arena-backed allocation for cross-thread values.
-
-See `test_src/stdlib/thread_test.k1`.
-
-## Atomics
-
-Atomics are operations, not types: `ns atomic` in `modules/core/atomic.k1`
-exposes intrinsics over ordinary memory through references.
-
-```
-let x = mem/new(41u64)
-atomic/fetch-add(x, 1, :seq-cst)      // returns the previous value
-atomic/load(x, :acquire)
-atomic/store(x, 10, :release)
-let r = atomic/cmpxchg(x, 10, 20, :seq-cst, :seq-cst)  // { prev, ok }
-atomic/fence(:seq-cst)
-```
-
-The full set: `load`, `store`, `xchg`, `fetch-add/sub/and/or/xor/min/max`,
-`cmpxchg`, `cmpxchg-weak`, `fence`. Element types are integer-sized scalars;
-the non-arithmetic ops also take `ptr`. Orderings
-(`:relaxed`/`:acquire`/`:release`/`:acq-rel`/`:seq-cst`) must be literals at
-the call site — to dispatch over a runtime ordering, match on it, as
-`atomic/cell[t]` (the plain-K1 wrapper type in the same file) does.
-
-See `test_src/suite1/atomics.k1`.
-
-## Files, hashing and time
-
-Core `files` returns `result[_, files/error]` (`{ code, path }`, prints as
-`` `path`: strerror ``, with `e.not-found()` and `e.already-exists()`):
-`read-to-string`, `write-entire-file`, `list-dir` (names, no `.`/`..`),
-`make-dir`, `link` (fails if the target exists), `rename`, `remove`,
-`remove-dir`; `exists` is a plain bool. `.!` crashes with the error. They run
-in `#static` too, so compile-time code can list a directory. posix only.
-
-`use std/hash` brings the `hash` ability and its namespace. `string` and
-`span[u8]` hash through `hash/bytes`, an FxHash-style word-at-a-time hash
-finished with `hash/fmix64`: fast, unseeded, not stable across versions.
-`hash/fnv1a(bytes)` is the stable one, for checksums and file formats.
-
-`std/time/unix-nanos()` and `unix-seconds()` read the wall clock;
-`read-cpu-counter()` with `elapsed-nanos`/`elapsed-ms` is the monotonic one.
-
-## JSON
-
-`std/json` encodes and decodes any type from its schema: `json/to-string(v)`,
-`json/write(w, v)` for any writer, `json/to-string-pretty(v, indent)`,
-`json/parse[t](text): result[t, json/error]`. The `json-write` and
-`json-read` abilities have blanket `#meta` impls generated from
-`types/schema`; a concrete `impl json-read for my-type` overrides one.
-Options are a static type argument naming a global:
-
-```rust
-let camel: json/opts = .{ key-case = :camel, skip-none = true, renames = [] }
-v.write-json[_, camel](w)
-json/parse-with[my-type, camel](text)
-```
-
-Mapping: struct -> object keyed by field name (unknown keys are skipped on
-read, a missing non-opt field is an error), `?t` -> null or the value, either
--> `"name"` or `{"name": payload}`, list/span/array -> array, enum -> its
-name, `*t` -> the inner value (read allocates in the ambient arena), char ->
-one-char string, non-finite floats -> null, ints range-checked on read.
-Decoded strings without escapes borrow the input. Errors carry `pos`, a
-`kind` enum, and print as `unexpected 'x' at line 2, column 5`.
-`use std/json/json` shadows the `json` namespace: import `std/json` and write
-`json/json` for the AST type (`null, bool, int, uint, float, str,
-array(span[json]), object(span[{ key, value }])`), `doc.get(key)` for lookup.
-Vector intrinsics: `lt-lanes`/`gt-lanes` and `shuffle-bytes` (16 lanes, pshufb
-semantics) join `eq-lanes`/`to-mask`; `vector/shift-bytes[k](prev, cur)` is
-built on them.
-
-## URLs
-
-`std/url` parses RFC 3986 URI references, origin-form request targets
-included: `url/parse(s): result[url/url, url/error]`. A `url` is its text plus
-`u32` component offsets, so `scheme()`, `authority()`, `userinfo()`, `host()`,
-`port()`, `path()`, `query()` and `fragment()` are zero-copy, still-encoded
-views, and parse borrows its input. Scheme, authority and percent-escapes in
-userinfo/host are strict; path, query and fragment take any visible byte (what
-browsers actually send), so `normalized()` is what yields strict RFC 3986 text
-(case, escapes, dot segments, default port). `base.resolve(ref)` is RFC 3986
-§5.2. `path-segments()` and `query-pairs()` iterate decoded values;
-`url/pair/find(pairs, name)` looks one up in any iterable of `url/pair`.
-`url/builder` writes each component through its encode set (`segment`,
-`query-pair` and `port` take data; `path`, `query`, `fragment` take URL text
-and keep valid escapes) and `build()` returns the `url`. `url/percent` has
-`decode` (malformed escapes pass through), `encode`/`write-encoded` with an
-`encode-set` (`unreserved`, `segment`, `path`, `query`, `userinfo`, `host`,
-`form`); `url/form` has `decode` (`+` is space) and `pairs(s)` for
-`application/x-www-form-urlencoded`. `http/header.url` is a
-parsed `url`; a target that doesn't parse is answered 400.
+- Macro params: `code` gets the argument's source and span; `span[code-token]`
+  gets it lexed; any other type is evaluated statically. Every param is annotated.
+  Unused params don't warn. Macros are not values; self-recursive expansion errors.
+- Expression macros expand at typecheck: define them in the same module or
+  upstream. Definition-level `$`/`#meta` run early: the macro or fn lives in `ns pre`
+  or upstream. Output may contain more `#meta`/`$` (expanded in order) or `macro`
+  defs (binds a static arg once per ns: `define-scaled` in `test_src/suite1/test_meta.k1`).
+- Passing a type the caller wrote as tokens: emit a call to a second macro taking
+  `types/id[{ ...tokens... }]` (`content/showcase/examples/macro_record.k1`).
+- `code-token = { kind: ident|number|string|char|punct, text, source, spacing:
+  none|inline|newline, parts }`; keywords are `ident`; a string literal is one
+  token whose `parts` are `:text { value (cooked), source }` and
+  `:hole { tokens, spec, source }`. `tok.fail(msg)` errors at the token.
+  `token-cursor` (`expect`, `expect-ident`, `eat-until-close`) walks them.
+- Worked examples: `std/html` (`html/write(out, \{ <p class={c}>{t}</p> })`,
+  `html/render(\{ ... })`; tag structure checked at compile time; braced attr
+  values: `bool` on boolean attrs emits bare/nothing, `opt` omits on `:none`;
+  `render` binds a `writer` context), `std/flag-sum`, `std/string-enum`
+  (`$std/string-enum/define(\{ status = either(u8) { new = "New", pending } })`
+  emits the enum, `to-value`, `from-value`, `members`, `print`, `from-string`).
+- `std/html/dom`: `node` tree, one fn per tag taking `span[node]` (`:attr` entries
+  are attributes). Tag names collide with locals and the `div` ability: `use
+  std/html/dom as h`.
+
+## Reflection and type synthesis
+- `types/id[t]` -> `type-id`: `.name() .schema() .instance-info() .size() .stride()
+  .align() .info()`. `types/size[t]`/`stride`/`align` fold to constants. No-layout
+  types (never, ZST, abstract) report size 0, align 1.
+- Schemas are sums: `:struct` (packed included; see offsets), `:reference`,
+  `:either`, `:array`, `:function`, `:union`, `:int(_)`, ...
+- A bare generic name is a type: `types/id[list]` is `list[t]`; instances report it
+  as parent (`types/instance-info[list[int]]`, `.is-instance-of(types/id[list])`).
+- Fn member types: `types/id[do-it.return]`, `types/id[do-it.arg-name]`.
+- Synthesis: `types/make-struct(:struct|:union|:packed, [types/field[i64]("x")])`,
+  `make-either(tag-type: ?type-id, variants)` / `make-either-default`
+  (`variant-data[t]("a")`, `variant-empty("b")`), `make-reference`, `make-array`,
+  `make-fn`, `make-instance`. Use with `type(alias) p = #type types/make-...`.
+
+## dyn
+`dyn[ability[params bound]]` = `{ state: ptr, fn ptr per dispatchable fn }`.
+`r.to-dyn[source[t = u8]]` from `*s` (no alloc), from a value it allocates first;
+`let d: dyn[...] = r.to-dyn()`. Dispatches defaults, overrides, by-value receivers
+(thunk), and self-free fns (no state passed). Excluded per fn: self outside the
+receiver, own type params, context params. No dispatchable fns = no dyn type. Fn
+pointers inside mean a dyn can't cross `#static` into a runtime constant.
+
+## Layout
+- `opaque[size, align]`. `union { a: u32, f: f32 }`: a literal sets at most one
+  member, `.{}` is fully uninit. `packed { tag: u8, v: u64 }`: align 1, no padding;
+  `.&` of a field warns. `types/assert-layout[t](size, align, [offsets])`.
+- `_struct_combine[a, b]`, `_struct_remove[t, { f: x }]`.
+- `let(returned) r: t = ...` names the return slot (RVO).
+- By-value aggregate params are not copied: they may alias caller-reachable storage
+  (`f(p.*, bump(p))` sees the bump). Only the sret slot never aliases an argument.
+
+## Globals and fn modifiers
+- `let g = 1` immutable global; `let(mutable, tls, extern("sym")) ...`, at most one
+  of `extern`/`export`, each with an optional symbol name. An `extern` global has no
+  initializer and takes its library from the enclosing `ns(lib("foo"))`.
+- `fn(inline)`: body copied at every direct call, all modes and the VM; needs a
+  body; inline-only cycles error; rejected in reloadable namespaces.
+  `fn(cold)` (diverging fns already are): never IR-inlined, LLVM `cold`.
+  `fn(noinline)`: the out-of-line half of a fast path.
+- `fn(extern)` / `fn(extern("sym"))` declares FFI; provider via `ns(lib("foo"))`
+  (whole ns, openings must agree) or `fn(extern, lib("foo"))`.
+- `fn(export)` / `fn(export("sym"))`: concrete, non-ability, with body; duplicate
+  symbols error.
+
+## Modules and build.k1
+- A module is a dir with `build.k1`, `module.k1` or `<dir>.k1`, or a single file.
+  `build.k1` compiles on the host against core+std only, never the module's files.
+  All entry points optional:
+  - `fn build(req: k1/build-request): k1/build-config`, primary only:
+    `req.default`, `req.options` (`-D name[=value]`), `req.host`, `req.editor`.
+    `cpu`/`features` `""` = target default.
+  - `fn editor(req): k1/editor-settings`, primary, editor compiles
+    (`test-on-save`).
+  - `fn module(b: k1/build-config): k1/module`: `m.dep("y")`, `m.lib("foo",
+    :static)`, `m.link-args([...])`, `m.library()`, `m.setup(outputs, inputs)`,
+    `m.dep-params("y", .{ ... })` (primary only).
+  - `fn setup(ctx: k1/setup-ctx)`: runs on the host, cwd = module dir, when
+    outputs are stale against inputs, `build.k1`, params and target; failure
+    leaves no stamp. All setups finish before program source is read.
+- Params: `let params: { f: t } = k1/module-params(defaults)` in the module's own
+  `build.k1`; the primary's `dep-params` literal is merged over defaults. Final
+  after all manifests run (readable in `fn setup`, not `fn module`). Program code
+  reads `params.f` inside the module, `y/params.f` elsewhere.
+- Deps resolve to the first of `<primary>/deps/y`, `<dependent>/deps/y`,
+  `$K1_HOME/modules/y`; two dirs for one name is an error fixed by
+  `<primary>/deps/y`. Plan cached in `.k1-out/cache/plan-*`.
+- Host facts: `b.target`, `ctx.build.target`, `k1/host-platform.dylib-ext()`.
+  `k1/module-dir()` is the dir of the module whose source holds the call (macro
+  argument text counts as the caller's).
+- A library primary emits `lib<name>.{dylib,so}` and a fat `lib<name>.a` exposing
+  only exports (`examples/klib`). `k1 run` rejects it; `k1 test` accepts it.
+
+## Concurrency
+- Atomics are ops on ordinary memory (`core/atomic.k1`): `load store xchg
+  fetch-add/sub/and/or/xor/min/max cmpxchg cmpxchg-weak fence`;
+  `cmpxchg` returns `{ prev, ok }`. Integer-sized scalars (`ptr` for non-arith).
+  Orderings (`:relaxed :acquire :release :acq-rel :seq-cst`) must be literals;
+  `atomic/cell[t]` matches over a runtime one.
+- `std/thread/task[t]`: `task/spawn(fn[x]. work(x)).join()`; raw
+  `thread/start`/`join` over `*fn(*t) -> ptr`.
+
+## Stdlib notes
+- `files` (core, posix, works in `#static`): `read-to-string write-entire-file
+  list-dir make-dir link rename remove remove-dir` return `result[_, files/error]`
+  (`not-found()`, `already-exists()`); `exists` is a bool.
+- `std/hash`: `hash/bytes` is fast, unseeded, unstable across versions;
+  `hash/fnv1a` is the stable one.
+- `std/time`: `unix-nanos()`, `unix-seconds()`; monotonic `read-cpu-counter()` +
+  `elapsed-nanos`/`elapsed-ms`.
+- `std/json`: `to-string`, `write(w, v)`, `to-string-pretty`, `parse[t]`; schema
+  blanket impls, a concrete `json-read`/`json-write` impl overrides. Options are a
+  static type arg naming a global: `json/parse-with[t, camel](s)`. Unescaped decoded
+  strings borrow the input. `use std/json/json` shadows the ns: write `json/json`.
+- `std/url`: `url/parse` borrows; accessors are zero-copy, still-encoded views;
+  path/query/fragment accept any visible byte, `normalized()` is strict RFC 3986;
+  `resolve`, `path-segments`, `query-pairs`, `url/builder`, `url/percent`,
+  `url/form`. `http/header.url` is parsed (400 if not).
+- SIMD (`core/vector.k1`): `eq-lanes lt-lanes gt-lanes to-mask shuffle-bytes`
+  (16 lanes, pshufb), `vector/shift-bytes[k](prev, cur)`.

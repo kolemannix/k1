@@ -17,19 +17,6 @@ ns fd {
     :ok
   }
 
-  fn read-all(fd: i32): result[string, string] {
-    let sb = string-builder/new()
-    let chunk = buffer/allocate[u8](4096)
-    loop {
-      let n = if core/platform/io/read(.{ raw = fd }, chunk.data, chunk.len).result() is {
-        :ok(n) -> n,
-        :err(e) -> return :err core/platform/error-string(e)
-      }
-      if n == 0 return :ok sb.build()
-      sb.write-bytes(span/wrap-buffer(chunk.slice(0, n)))
-    }
-  }
-
   // Buffered line reads: pending/consumed hold fd bytes between calls
   type reader = { fd: i32, pending: list[u8], consumed: size }
 

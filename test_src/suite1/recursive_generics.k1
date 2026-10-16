@@ -62,7 +62,7 @@ ns recursive_generics {
   type face-rec = { glyph: slot, num: int }
   type slot-rec = { owner: face, idx: int }
 
-  fn test() {
+  fn(test) generic-linked-lists() {
     let l = make(4)
     assert-equals(sum(l), 10)
     assert-equals(length[int](l), 4)
@@ -71,31 +71,41 @@ ns recursive_generics {
     let sa: *node[string] = mem/new(.{ value = "a", next = :some sb })
     assert-equals(length[string](:some sa), 2)
     assert-equals(sa.next.!.value, "b")
+  }
 
+  fn(test) generic-tree-through-pointers() {
     let tr: tree[int] = :branch .{
       l = mem/new(:leaf 1),
       r = mem/new(:branch .{ l = mem/new(:leaf 2), r = mem/new(:leaf 3) })
     }
     assert-equals(tree-sum(tr), 6)
+  }
 
+  fn(test) mutually-recursive-generics() {
     let a2: *mua[int] = mem/new(.{ value = 2, b = :none })
     let b1: *mub[int] = mem/new(.{ a = a2 })
     let a1: *mua[int] = mem/new(.{ value = 1, b = :some b1 })
     assert-equals(a1.b.!.a.value, 2)
+  }
 
+  fn(test) self-application-with-concrete-args() {
     let ci: *conc[int] = mem/new(.{ v = 5, link = :none })
     let cb: conc[bool] = .{ v = true, link = :some ci }
     assert-equals(cb.link.!.v, 5)
     let ci2: conc[int] = .{ v = 7, link = :some ci }
     assert-equals(ci2.link.!.v + ci2.v, 12)
     assert(cb.v)
+  }
 
+  fn(test) wrapper-before-self-referential-node() {
     let f2: *fwd-node[int] = mem/alloc-t()
     f2.* = .{ value = 2, next = f2 }
     let f1: *fwd-node[int] = mem/new(.{ value = 1, next = f2 })
     let w: fwd-wrapper[int] = .{ head = f1 }
     assert-equals(w.head.value + w.head.next.value, 3)
+  }
 
+  fn(test) generic-instance-in-pointer-cycle() {
     let qn: *node[int] = mem/new(.{ value = 9, next = :none })
     let ingress: *q[int] = mem/new(.{ head = qn })
     let bus0: *bus = mem/new(.{ ingress = ingress, subscribers = list/empty() })
@@ -103,12 +113,16 @@ ns recursive_generics {
     bus0.subscribers.push(sub0)
     assert-equals(sub0.bus.ingress.head.value, 9)
     assert-equals(bus0.subscribers.len(), 1)
+  }
 
+  fn(test) pointer-alias-to-record() {
     let l2: lnode = mem/alloc-t()
     l2.* = .{ next = l2, getter = lnode-value.&, value = 2 }
     let l1: lnode = mem/new(.{ next = l2, getter = lnode-value.&, value = 1 })
     assert-equals((l1.getter)(l1) + (l1.next.getter)(l1.next), 3)
+  }
 
+  fn(test) mutual-cycle-through-two-aliases() {
     let f: face = mem/alloc-t()
     f.num = 7
     let s: slot = mem/new(.{ owner = f, idx = 3 })

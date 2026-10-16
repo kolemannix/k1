@@ -10,7 +10,7 @@ $std/string-enum/define(\{
   }
 })
 
-fn test() {
+fn(test) generated-conversions-and-members() {
   assert-equals[string](flow:income.to-value(), "income")
   assert-equals[string](status:in-progress.to-value(), "In Progress")
   assert-equals[string]("${status:pending}", "Pending Payment")

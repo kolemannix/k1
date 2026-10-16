@@ -148,9 +148,9 @@ The benchmark defines k1's 23 keywords the same way, and C++'s 92:
 
 ```k1
 $keywords/define(k1-keyword, [
-  "fn", "let", "mut", "and", "or", "if", "else", "while", "loop", "ns", "intern",
-  "for", "in", "ability", "impl", "is", "not", "builtin", "where", "context",
-  "use", "require", "defer",
+  "fn", "let", "mut", "and", "or", "if", "else", "while", "loop", "ns", "for",
+  "in", "ability", "impl", "is", "not", "builtin", "where", "context", "use",
+  "require", "defer",
 ])
 ```
 

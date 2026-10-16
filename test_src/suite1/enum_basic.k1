@@ -12,14 +12,16 @@ fn get-enum-value[i, e: types/enum[v = i]](e: e): i {
 
 fn from-value-generic[i, e: types/enum[v = i]](value: i): ?e { enum-from-value(value) }
 
-fn test() {
+fn(test) values-and-names() {
   let c: enum-abc = :c
   assert-equals(c.value, 2)
   assert-equals(get-enum-value(c), 2)
   assert-equals[string](c.enum-name(), "c")
   assert-equals(custom-enum-tags:b.value, 11)
   assert-equals[string]("${custom-enum-tags:b} ${custom-enum-tags:c}", "b c")
+}
 
+fn(test) from-value-and-members() {
   let b: ?custom-enum-tags = enum-from-value(11)
   assert(b is :some :b)
   let missing: ?custom-enum-tags = enum-from-value(13)

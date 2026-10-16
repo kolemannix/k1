@@ -81,6 +81,16 @@ ns io {
     }
   }
 
+  fn read-all(file-no: i32): result[string, i32] {
+    let sb = string-builder/new()
+    let chunk = buffer/allocate[u8](4096)
+    loop {
+      let n = platform/io/read(.{ raw = file-no }, chunk.data, chunk.len).result().try
+      if n == 0 return :ok sb.build()
+      sb.write-bytes(span/wrap-buffer(chunk.slice(0, n)))
+    }
+  }
+
   fn flush-stdout() {
     if stdout-buf.non-empty() {
       write-all(1, stdout-buf.as-span().data-ptr(), stdout-buf.len())
@@ -654,19 +664,19 @@ ns for u64 {
     if n == 64 18446744073709551615: u64 else (1usize << n.trunc[u32]) - 1
   }
 
-  fn(intern("llvm.cttz.i64")) _cttz(x: u64, zero-poison: bool): u64
+  fn(builtin("llvm.cttz.i64")) _cttz(x: u64, zero-poison: bool): u64
 
   fn trailing-zeros(self: u64): u64 {
     _cttz(self, false)
   }
 
-  fn(intern("llvm.ctlz.i64")) _ctlz(x: u64, zero-poison: bool): u64
+  fn(builtin("llvm.ctlz.i64")) _ctlz(x: u64, zero-poison: bool): u64
 
   fn leading-zeros(self: u64): u64 {
     _ctlz(self, false)
   }
 
-  fn(intern("llvm.ctpop.i64")) _ctpop(x: u64): u64
+  fn(builtin("llvm.ctpop.i64")) _ctpop(x: u64): u64
 
   fn count-ones(self: u64): u64 {
     _ctpop(self)
@@ -758,12 +768,12 @@ ns for f32 {
 }
 
 impl equals for f32 {
-  fn(intern) equals(self: f32, other: f32): bool
-  fn(intern) not-equals(self: f32, other: f32): bool
+  fn(builtin) equals(self: f32, other: f32): bool
+  fn(builtin) not-equals(self: f32, other: f32): bool
 }
 impl equals for f64 {
-  fn(intern) equals(self: f64, other: f64): bool
-  fn(intern) not-equals(self: f64, other: f64): bool
+  fn(builtin) equals(self: f64, other: f64): bool
+  fn(builtin) not-equals(self: f64, other: f64): bool
 }
 
 impl from-string[e = string] for u64 {
@@ -776,35 +786,35 @@ impl from-string[e = string] for f64 {
   fn from-string(s: string): result[f64, string] { f64/from-string(s) }
 }
 
-impl add for f32 { fn(intern) add(self, other: self): self }
-impl add for f64 { fn(intern) add(self, other: self): self }
+impl add for f32 { fn(builtin) add(self, other: self): self }
+impl add for f64 { fn(builtin) add(self, other: self): self }
 
-impl sub for f32 { fn(intern) sub(self, other: self): self }
-impl sub for f64 { fn(intern) sub(self, other: self): self }
+impl sub for f32 { fn(builtin) sub(self, other: self): self }
+impl sub for f64 { fn(builtin) sub(self, other: self): self }
 
-impl mul for f32 { fn(intern) mul(self, other: self): self }
-impl mul for f64 { fn(intern) mul(self, other: self): self }
+impl mul for f32 { fn(builtin) mul(self, other: self): self }
+impl mul for f64 { fn(builtin) mul(self, other: self): self }
 
-impl div for f32 { fn(intern) div(self, other: self): self }
-impl div for f64 { fn(intern) div(self, other: self): self }
+impl div for f32 { fn(builtin) div(self, other: self): self }
+impl div for f64 { fn(builtin) div(self, other: self): self }
 
-impl rem for f32 { fn(intern) rem(self, other: self): self }
-impl rem for f64 { fn(intern) rem(self, other: self): self }
+impl rem for f32 { fn(builtin) rem(self, other: self): self }
+impl rem for f64 { fn(builtin) rem(self, other: self): self }
 
-impl neg for f32 { fn(intern) negated(self): self }
-impl neg for f64 { fn(intern) negated(self): self }
+impl neg for f32 { fn(builtin) negated(self): self }
+impl neg for f64 { fn(builtin) negated(self): self }
 
 impl scalar-cmp for f32 {
-  fn(intern) lt(self, other: self): bool
-  fn(intern) le(self, other: self): bool
-  fn(intern) gt(self, other: self): bool
-  fn(intern) ge(self, other: self): bool
+  fn(builtin) lt(self, other: self): bool
+  fn(builtin) le(self, other: self): bool
+  fn(builtin) gt(self, other: self): bool
+  fn(builtin) ge(self, other: self): bool
 }
 impl scalar-cmp for f64 {
-  fn(intern) lt(self, other: self): bool
-  fn(intern) le(self, other: self): bool
-  fn(intern) gt(self, other: self): bool
-  fn(intern) ge(self, other: self): bool
+  fn(builtin) lt(self, other: self): bool
+  fn(builtin) le(self, other: self): bool
+  fn(builtin) gt(self, other: self): bool
+  fn(builtin) ge(self, other: self): bool
 }
 
 // float compare is IEEE-754 totalOrder, so it stays a consistent total order

@@ -5,7 +5,7 @@ use std/set
 use std/fixmap
 use std/fixset
 
-fn test-basic() {
+fn(test) map-and-set-basics() {
   let m = map/new[string, int]()
   assert-equals("$m", "{}")
   assert(m.remove("x") is :none)
@@ -34,7 +34,7 @@ fn test-basic() {
   assert-equals(total, 4)
 }
 
-fn test-churn() {
+fn(test) map-churn() {
   let m = map/new[int, int]()
   let round = 0
   while round < 1000 {
@@ -48,7 +48,7 @@ fn test-churn() {
 
 type fixmap-holder = { pad: u64, m: fixmap[int, int, 16], tail: u64 }
 
-fn test-fixmap-basic() {
+fn(test) fixmap-basics() {
   let m = fixmap/new[string, int, 16]()
   assert-equals(m.cap(), 15)
   m.insert("b", 11)
@@ -65,7 +65,7 @@ fn test-fixmap-basic() {
   assert(m.get("b") is :none)
 }
 
-fn test-fixmap-full() {
+fn(test) fixmap-full() {
   let h: fixmap-holder = .{ pad = 1, m = fixmap/new(), tail = 2 }
   for i in 0.until(15) { assert(h.m.try-insert(i, i * 10) is :ok) }
   assert(h.m.is-full())
@@ -90,7 +90,7 @@ fn test-fixmap-full() {
   assert-equals(h.tail, 2)
 }
 
-fn test-fixmap-shift() {
+fn(test) fixmap-remove-in-scrambled-order() {
   let m = fixmap/new[int, int, 16]()
   for i in 0.until(15) { m.insert(i * 7919, i) }
   let removed = fixset/new[int, 16]()
@@ -108,7 +108,7 @@ fn test-fixmap-shift() {
   assert(m.is-empty())
 }
 
-fn test-fixset() {
+fn(test) fixset-basics() {
   let s = fixset/new[string, 16]()
   assert(s.try-add("a") is :ok true)
   assert(s.try-add("a") is :ok false)
@@ -122,7 +122,7 @@ fn test-fixset() {
   assert-equals(seen, 15)
 }
 
-fn test-shift() {
+fn(test) map-remove-in-scrambled-order() {
   let m = map/with-capacity[int, int](12)
   for i in 0.until(12) { m.insert(i * 7919, i) }
   assert-equals(m.capacity(), 16)
@@ -141,7 +141,7 @@ fn test-shift() {
   assert(m.is-empty())
 }
 
-fn test-tombstones() {
+fn(test) map-tombstones() {
   let m = map/with-capacity[int, int](14)
   assert-equals(m.capacity(), 16)
   let kept: list[int] = []
@@ -160,15 +160,4 @@ fn test-tombstones() {
     assert(m.get(round * 100 + 1) is :none)
   }
   assert(m.capacity() <= 64)
-}
-
-fn test() {
-  test-basic()
-  test-churn()
-  test-shift()
-  test-tombstones()
-  test-fixmap-basic()
-  test-fixmap-full()
-  test-fixmap-shift()
-  test-fixset()
 }

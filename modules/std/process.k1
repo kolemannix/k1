@@ -75,20 +75,20 @@ ns process {
   fn run-status(program: string, args: span[string], mode: output-mode): result[run-output, run-error] {
     let program-path = resolve-program(program).try
 
-    let pipe-read: i32 = -1
-    let child-out: i32 = if mode is {
-      :inherit -> -1,
+    let pipe-read: ?core/platform/io/file-handle = :none
+    let child-out: ?core/platform/io/file-handle = if mode is {
+      :inherit -> :none,
       :capture -> {
         let p = if core/platform/io/pipe() is {
           :some(p) -> p,
           :none -> return :err :spawn .{ program = program, message = "pipe failed" }
         }
-        pipe-read = p.read.raw
-        p.write.raw
+        pipe-read = :some(p.read)
+        :some(p.write)
       },
       :drop -> {
         if core/platform/io/open-to-write("/dev/null") is {
-          :ok(h) -> h.raw,
+          :ok(h) -> :some(h),
           :err(_) -> return :err :spawn .{ program = program, message = "open /dev/null failed" }
         }
       }
@@ -97,16 +97,16 @@ ns process {
     let spawned = core/platform/process/spawn(
       path = program-path,
       argv = full-argv(program, args),
-      fd0 = -1,
-      fd1 = child-out,
-      fd2 = child-out,
-      extra-close = [pipe-read]
+      stdin = :none,
+      stdout = child-out,
+      stderr = child-out,
+      extra-close = if pipe-read is :some r [r] else []
     )
-    if child-out >= 0 { core/platform/io/close(.{ raw = child-out }) }
+    if child-out is :some h { core/platform/io/close(h) }
     let pid = if spawned is {
       :ok(pid) -> pid,
       :err(code) -> {
-        if pipe-read >= 0 { core/platform/io/close(.{ raw = pipe-read }) }
+        if pipe-read is :some r { core/platform/io/close(r) }
         return :err :spawn .{
           program = program,
           message = "spawn failed: ${core/platform/error-string(code)}"
@@ -114,17 +114,20 @@ ns process {
       }
     }
 
-    let output = if mode is :capture {
+    let output = if pipe-read is :some r {
       mem/push-arena(mem/tmp())
-      let read-result = fd/read-all(pipe-read)
+      let read-result = core/io/read-all(r.raw)
       mem/pop-arena()
-      core/platform/io/close(.{ raw = pipe-read })
+      core/platform/io/close(r)
       if read-result is {
         :ok s -> s,
-        :err message -> {
+        :err code -> {
           // Reap before reporting so we never leave a zombie behind
           let _ = core/platform/process/wait(pid)
-          return :err :spawn .{ program = program, message = "pipe read failed: $message" }
+          return :err :spawn .{
+            program = program,
+            message = "pipe read failed: ${core/platform/error-string(code)}"
+          }
         },
       }
     } else ""
@@ -197,10 +200,10 @@ ns process {
     let spawned = core/platform/process/spawn(
       path = program-path,
       argv = full-argv(program, args),
-      fd0 = in-pipe.read.raw,
-      fd1 = out-pipe.write.raw,
-      fd2 = -1,
-      extra-close = [in-pipe.write.raw, out-pipe.read.raw]
+      stdin = :some(in-pipe.read),
+      stdout = :some(out-pipe.write),
+      stderr = :none,
+      extra-close = [in-pipe.write, out-pipe.read]
     )
     core/platform/io/close(in-pipe.read)
     core/platform/io/close(out-pipe.write)

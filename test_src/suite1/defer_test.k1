@@ -134,7 +134,7 @@ fn binder-test(fail-early: bool, fail-try: bool, sensor: *int): result[int, stri
   :ok v
 }
 
-fn test() {
+fn(test) defers-run-once-on-every-exit() {
   // We use an integer so that we can detect if a defer
   // runs too few or too many times!
   let sensor = 0
@@ -173,10 +173,6 @@ fn test() {
   lifo-return-test(sensor.&)
   assert-equals(sensor, 2)
 
-  assert-equals(lexical-test(), 2)
-  assert-equals(value-before-defers-test(), 1)
-  assert-equals(returned-var-test(), 99)
-
   sensor = 0
   loop-in-defer-test(sensor.&)
   assert-equals(sensor, 3)
@@ -192,4 +188,10 @@ fn test() {
   assert-equals(sensor, 2)
 
   .{}
+}
+
+fn(test) defer-bindings-and-return-values() {
+  assert-equals(lexical-test(), 2)
+  assert-equals(value-before-defers-test(), 1)
+  assert-equals(returned-var-test(), 99)
 }

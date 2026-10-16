@@ -344,6 +344,8 @@ impl TypedProgram {
                 self.builtin_types.k1_build_config = Some(type_id)
             } else if name == self.ast.idents.b.build_request {
                 self.builtin_types.k1_build_request = Some(type_id)
+            } else if name == self.ast.idents.b.editor_settings {
+                self.builtin_types.k1_editor_settings = Some(type_id)
             }
         }
 

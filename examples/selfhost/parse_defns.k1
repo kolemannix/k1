@@ -218,55 +218,41 @@ ns for parser {
   fn expect-function(self: *parser, condition: ?ast/expr-id, compiler-debug: bool): result[ast/function-id, perror] {
     let fn-keyword = self.expect-kind(:kw-fn).try
     let linkage: ast/linkage = :standard
-    let have-linkage = false
+    let builtin-kind: ?ast/builtin-kind = :none
     let lib-name: ?ast/string-id = :none
     let lib-token: ?token = :none
     let is-native = false
     let inlining: ast/inlining = :auto
     let is-cold = false
+    let test: ?ast/test-runs = :none
     if self.maybe-consume(:open-paren) is :some _ {
       loop {
         let modifier = self.peek()
-        if have-linkage and not modifier.kind.eq(:ident) {
-          return :err(error-expected("a single intern, extern, or export modifier", modifier))
-        }
-        if modifier.kind is :kw-intern {
+        let is-builtin = modifier.kind is :kw-builtin
+        let is-extern = modifier.kind is :ident and self.tok-chars(modifier) == "extern"
+        let is-export = modifier.kind is :ident and self.tok-chars(modifier) == "export"
+        if is-builtin or is-extern or is-export {
+          if (builtin-kind is :some _) or not (linkage is :standard) {
+            return :err(error-expected("a single builtin, extern, or export modifier", modifier))
+          }
           self.advance()
-          if self.peek().kind is :open-paren {
+          let symbol: ?ast/string-id = if self.peek().kind is :open-paren {
             self.advance()
-            let llvm-name = self.expect-dq-ident().try
+            let name = self.expect-dq-ident().try
             self.expect-kind(:close-paren).try
-            linkage = :llvm-intrinsic(llvm-name)
+            :some(name)
+          } else :none
+          if is-builtin {
+            let kind: ast/builtin-kind = if symbol is {
+              :some llvm-name -> :llvm(llvm-name),
+              :none -> :by-name,
+            }
+            builtin-kind = :some(kind)
+          } else if is-extern {
+            linkage = :external(.{ lib-name = :none, link-name = symbol })
           } else {
-            linkage = :intrinsic
+            linkage = :exported(.{ link-name = symbol })
           }
-          have-linkage = true
-        } else if modifier.kind is :ident and self.tok-chars(modifier) == "extern" {
-          if have-linkage {
-            return :err(error-expected("a single intern, extern, or export modifier", modifier))
-          }
-          self.advance()
-          let fn-name: ?ast/string-id = if self.peek().kind is :open-paren {
-            self.advance()
-            let symbol = self.expect-dq-ident().try
-            self.expect-kind(:close-paren).try
-            :some(symbol)
-          } else :none
-          linkage = :external(.{ lib-name = :none, fn-name })
-          have-linkage = true
-        } else if modifier.kind is :ident and self.tok-chars(modifier) == "export" {
-          if have-linkage {
-            return :err(error-expected("a single intern, extern, or export modifier", modifier))
-          }
-          self.advance()
-          let fn-name: ?ast/string-id = if self.peek().kind is :open-paren {
-            self.advance()
-            let symbol = self.expect-dq-ident().try
-            self.expect-kind(:close-paren).try
-            :some(symbol)
-          } else :none
-          linkage = :exported(.{ fn-name })
-          have-linkage = true
         } else if modifier.kind is :ident and self.tok-chars(modifier) == "lib" {
           self.advance()
           self.expect-kind(:open-paren).try
@@ -289,15 +275,20 @@ ns for parser {
         } else if modifier.kind is :ident and self.tok-chars(modifier) == "cold" {
           self.advance()
           is-cold = true
+        } else if modifier.kind is :ident and (self.tok-chars(modifier) == "test" or self.tok-chars(modifier) == "test-static" or self.tok-chars(modifier) == "test-runtime") {
+          if test is :some _ { return :err(error-expected("a single test modifier", modifier)) }
+          let runs: ast/test-runs = if self.tok-chars(modifier) == "test" :both else if self.tok-chars(modifier) == "test-static" :static else :runtime
+          self.advance()
+          test = :some(runs)
         } else {
-          return :err(error-expected("fn modifier: intern, extern, export, native, inline, noinline, cold, or lib", modifier))
+          return :err(error-expected("fn modifier: builtin, extern, export, native, inline, noinline, cold, test, test-static, test-runtime, or lib", modifier))
         }
         if self.maybe-consume(:comma) is :none { break }
       }
       self.expect-kind(:close-paren).try
       if lib-name is :some _ {
         if linkage is {
-          :external ext -> { linkage = :external(.{ lib-name, fn-name = ext.fn-name }) },
+          :external ext -> { linkage = :external(.{ lib-name, link-name = ext.link-name }) },
           _ -> return :err(error-expected("lib(..) requires the extern modifier", lib-token.!)),
         }
       }
@@ -346,9 +337,11 @@ ns for parser {
       span,
       name-span = fit.tok.span(),
       linkage,
+      builtin-kind,
       is-native,
       inlining,
       is-cold,
+      test,
       compiler-debug,
       where-constraints,
       compile-condition = condition,
@@ -400,28 +393,27 @@ ns for parser {
   fn expect-global(self: *parser, condition: ?ast/expr-id): result[ast/global-id, perror] {
     let keyword = self.expect-kind(:kw-let).try
     let is-thread-local = false
-    let is-export = false
-    let is-external = false
     let is-mutable = false
-    let link-name: ?ast/string-id = :none
+    let linkage: ast/linkage = :standard
     if self.maybe-consume(:open-paren) is :some _ {
       loop {
         let modifier = self.expect-kind(:ident).try
         let chars = self.tok-chars(modifier)
-        let takes-link-name = false
         if chars == "tls" { is-thread-local = true }
-        else if chars == "export" { is-export = true }
-        else if chars == "extern" {
-          is-external = true
-          takes-link-name = true
-        }
         else if chars == "mutable" { is-mutable = true }
+        else if chars == "extern" or chars == "export" {
+          if not (linkage is :standard) {
+            return :err(error-expected("a single extern or export modifier", modifier))
+          }
+          let link-name: ?ast/string-id = if self.maybe-consume(:open-paren) is :some _ {
+            let symbol = self.expect-dq-ident().try
+            self.expect-kind(:close-paren).try
+            :some(symbol)
+          } else :none
+          linkage = if chars == "extern" :external(.{ lib-name = :none, link-name }) else :exported(.{ link-name })
+        }
         else {
           return :err(error-expected("global modifier: tls, export, extern, or mutable", modifier))
-        }
-        if takes-link-name and self.maybe-consume(:open-paren) is :some _ {
-          link-name = :some(self.expect-dq-ident().try)
-          self.expect-kind(:close-paren).try
         }
         if self.maybe-consume(:comma) is :none { break }
       }
@@ -430,7 +422,7 @@ ns for parser {
     let name-token = self.expect-kind(:ident).try
     self.expect-kind(:colon).try
     let type-expr = self.expect-type-expression().try
-    let value-expr: ?ast/expr-id = if is-external { :none } else {
+    let value-expr: ?ast/expr-id = if linkage is :external _ { :none } else {
       self.expect-kind(:equals).try
       :some(self.expect-expression().try)
     }
@@ -441,11 +433,9 @@ ns for parser {
       value-expr,
       name-span = name-token.span(),
       span,
+      linkage,
       is-thread-local,
-      is-export,
       is-mutable,
-      is-external,
-      link-name,
       compile-condition = condition,
     }))
   }

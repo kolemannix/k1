@@ -1,6 +1,6 @@
 ns allocator_test
 
-fn test() {
+fn(test) push-and-new-in-place() {
   let a = core/arena/init-default()
 
   a.push(true)
@@ -13,16 +13,9 @@ fn test() {
 
   let p = mem/new-in-place[point](.{ x = 4, y = 5 })
   assert-equals(p.*, .{ x = 4, y = 5 })
-
-  mark-test()
-  ability-test()
-  chaining-test()
-  zeroing-test()
-  chunk-mark-test()
-  from-buffer-and-handle-test()
 }
 
-fn from-buffer-and-handle-test() {
+fn(test) fixed-buffer-arena-and-handles() {
   let storage: array[byte, 1024] = .0
   let bytes = storage.&.as-buffer()
   let a = core/arena/init-from-buffer(bytes.slice(3, bytes.len))
@@ -34,7 +27,7 @@ fn from-buffer-and-handle-test() {
   assert-equals(storage.[1023], 0)
 }
 
-fn chunk-mark-test() {
+fn(test) pop-to-mark-frees-extra-chunks() {
   let a = core/arena/init(256)
   let keep = a.push(7: u64)
   let m = a.mark()
@@ -69,7 +62,7 @@ fn assert-all-zero(b: buffer[u64]) {
   }
 }
 
-fn zeroing-test() {
+fn(test) reset-and-pop-zero-memory() {
   let a = core/arena/init(512)
   a.alloc-buffer[u64](16).fill(7)
   a.reset()
@@ -99,7 +92,7 @@ fn zeroing-test() {
   a.release()
 }
 
-fn chaining-test() {
+fn(test) growth-chains-chunks() {
   // Tiny first chunk so growth chains within a few pushes
   let a = core/arena/init(256)
   let first = a.push(1: u64)
@@ -127,7 +120,7 @@ fn generic-new[a: allocator](alloc: a, value: int): *int {
   alloc.new(value)
 }
 
-fn ability-test() {
+fn(test) allocator-ability-on-arena-and-heap() {
   let a = core/arena/init-default()
   let p = generic-new(a, 42)
   assert-equals(p.*, 42)
@@ -148,7 +141,7 @@ fn ability-test() {
   a.release()
 }
 
-fn mark-test() {
+fn(test) pop-to-mark-reuses-space() {
   let a = core/arena/init-default()
   let before = a.push(11)
   let m = a.mark()

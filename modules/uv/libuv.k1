@@ -1977,7 +1977,7 @@ fn(extern("uv_wtf8_to_utf16")) wtf8_to_utf16(
   utf16_len: usize,
 ): {}
 
-#if k1/test #static {
+fn(test) c-layouts() {
   assert-layout[buf](16, 8, [0, 8, ])
   assert-layout[file](4, 4, [])
   assert-layout[os_sock](4, 4, [])

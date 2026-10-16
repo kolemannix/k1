@@ -1,6 +1,4 @@
-ns atomics
-
-fn test() {
+fn(test) atomic-rmw-cmpxchg-and-cell() {
   let x = mem/new(41u64)
   assert-equals(atomic/fetch-add(x, 1, :seq-cst), 41)
   atomic/store(x, 10, :release)
@@ -11,15 +9,6 @@ fn test() {
   assert-equals(atomic/fetch-xor(x, 15, :seq-cst), 12)
   assert-equals(atomic/load(x, :seq-cst), 3)
   atomic/fence(:acquire)
-
-  let u = mem/new(10u8)
-  assert-equals(atomic/fetch-min(u, 3, :seq-cst), 10)
-  assert-equals(atomic/fetch-max(u, 200, :seq-cst), 3)
-  assert-equals(atomic/load(u, :relaxed), 200)
-  let i = mem/new(-5: i32)
-  assert-equals(atomic/fetch-max(i, 1, :seq-cst), -5)
-  assert-equals(atomic/fetch-min(i, -100, :seq-cst), 1)
-  assert-equals(atomic/load(i, :relaxed), -100)
 
   let hit = atomic/cmpxchg(x, 3, 100, :seq-cst, :seq-cst)
   assert(hit.ok)
@@ -34,11 +23,6 @@ fn test() {
   }
   assert-equals(atomic/load(x, :seq-cst), 50)
 
-  let a = mem/new(1u8)
-  let slot = mem/new(ptr/null)
-  assert(atomic/xchg(slot, a.as[ptr], :seq-cst).is-null())
-  assert(atomic/cmpxchg(slot, a.as[ptr], ptr/null, :seq-cst, :seq-cst).ok)
-
   use atomic/cell
   let c = mem/new(cell/new(5u32))
   let ord: atomic/ordering = :seq-cst
@@ -47,4 +31,22 @@ fn test() {
   assert-equals(c.load(:acquire), 20)
 
   assert(test-compile(atomic/load(x, ord)).is-some())
+}
+
+fn(test) atomic-fetch-min-max-signedness() {
+  let u = mem/new(10u8)
+  assert-equals(atomic/fetch-min(u, 3, :seq-cst), 10)
+  assert-equals(atomic/fetch-max(u, 200, :seq-cst), 3)
+  assert-equals(atomic/load(u, :relaxed), 200)
+  let i = mem/new(-5: i32)
+  assert-equals(atomic/fetch-max(i, 1, :seq-cst), -5)
+  assert-equals(atomic/fetch-min(i, -100, :seq-cst), 1)
+  assert-equals(atomic/load(i, :relaxed), -100)
+}
+
+fn(test) atomic-pointer-xchg-and-cmpxchg() {
+  let a = mem/new(1u8)
+  let slot = mem/new(ptr/null)
+  assert(atomic/xchg(slot, a.as[ptr], :seq-cst).is-null())
+  assert(atomic/cmpxchg(slot, a.as[ptr], ptr/null, :seq-cst, :seq-cst).ok)
 }

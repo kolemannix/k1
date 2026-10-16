@@ -67,9 +67,15 @@ fn diverging(c: bool): int {
   if c { return 1 } else { return 2 }
 }
 
-fn test() {
+fn(test) guard-after-wildcard-unreached() {
   assert-equals(guarded-tail(-5), 0)
+}
+
+fn(test) both-branches-return() {
   assert-equals(diverging(false), 2)
+}
+
+fn(test) fieldless-enum() {
   assert-equals(color-rank(:red), 0)
   assert-equals(color-rank(:blue), 4)
   assert-equals(color-rank(:gray), 9)
@@ -77,7 +83,9 @@ fn test() {
   assert-equals[string](color:white.show(), "white")
   assert(color:black == color:black)
   assert(color:black != color:white)
+}
 
+fn(test) payload-sum-with-guards() {
   assert-equals(area(:dot), 0)
   assert-equals(area(:circle 200), -1)
   assert-equals(area(:circle 2), 12)
@@ -94,14 +102,18 @@ fn test() {
   assert(c3 == c3)
   assert(c3 != c4)
   assert(c3 != shape:dot)
+}
 
+fn(test) int-arms-with-guards() {
   assert-equals(between(1, true), 11)
   assert-equals(between(1, false), 10)
   assert-equals(between(2, false), 20)
   assert-equals(between(3, true), 30)
   assert-equals(between(99, false), 500)
   assert-equals(between(4, false), 0)
+}
 
+fn(test) sparse-i64-arms() {
   assert-equals(sparse(1), 1)
   assert-equals(sparse(100), 2)
   assert-equals(sparse(100000), 3)
@@ -109,26 +121,36 @@ fn test() {
   assert-equals(sparse(-100000000000), 5)
   assert-equals(sparse(2), 0)
   assert-equals(sparse(255), 0)
+}
 
+fn(test) i8-extreme-arms() {
   assert-equals(small(-1), 1)
   assert-equals(small(-128), 2)
   assert-equals(small(127), 3)
   assert-equals(small(0), 4)
   assert-equals(small(5), 0)
+}
 
+fn(test) char-arms() {
   assert-equals(char-class('a'), 1)
   assert-equals(char-class('z'), 26)
   assert-equals(char-class(' '), 100)
   assert-equals(char-class('q'), 0)
+}
 
+fn(test) bool-arms() {
   assert-equals(flip(true), false)
   assert-equals(flip(false), true)
+}
 
+fn(test) explicit-tag-values() {
   assert-equals(tagged-rank(:a), 1)
   assert-equals(tagged-rank(:b), 2)
   assert-equals(tagged-rank(:c 77), 77)
   assert-equals[string](tagged:b.sum-name(), "b")
+}
 
+fn(test) ref-scrutinee() {
   let s: shape = :circle 9
   assert-equals(ref-match(s.&), 9)
   s = :dot

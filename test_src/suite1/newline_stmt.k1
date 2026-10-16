@@ -94,7 +94,7 @@ fn spaced-subtract(x: int): int {
   a + b
 }
 
-fn test() {
+fn(test) statement-boundaries() {
   assert-equals(guard(50), 50)
   assert-equals(guard(500), 100)
   assert-equals(pipe-chain(), 2)

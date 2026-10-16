@@ -14,7 +14,7 @@ fn assert-map-matches(input: list[u8]) {
   }
 }
 
-fn test-map() {
+fn(test) map-at-chunk-boundary-lengths() {
   // Boundary lengths around the 16-lane chunk size
   let lengths: span[size] = [0, 1, 15, 16, 17, 31, 32, 33]
   for len in lengths {
@@ -26,7 +26,7 @@ fn test-map() {
   }
 }
 
-fn test-reduce() {
+fn(test) reduce-sums-with-u8-wrapping() {
   let input = list/with-capacity[u8](33)
   let expected = 0: u8
   for 0.until(33) {
@@ -44,7 +44,7 @@ fn scan-str(s: string, from: size): { index: i64, which: i64 } {
   json-delims/scan(s.span-bytes(), from)
 }
 
-fn test-first-of() {
+fn(test) first-of-finds-earliest-delimiter() {
   let r1 = scan-str("{\"name\": \"a longer value here\"}", 0)
   assert-equals(r1.index, 1)
   assert-equals(r1.which, 2) // the '"'
@@ -89,10 +89,4 @@ fn test-first-of() {
   assert-equals(commas/scan("ab,cd,".span-bytes(), 3).index, 5)
   assert-equals(commas/scan("ab,cd,".span-bytes(), 6).which, -1)
   assert-equals(commas/scan("ab,cd,".span-bytes(), 60).index, -1)
-}
-
-fn test() {
-  test-map()
-  test-reduce()
-  test-first-of()
 }

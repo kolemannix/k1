@@ -1,8 +1,7 @@
-fn main(): i32 {
+fn(test) test() {
   assert(cfglib/backlog() == 500)
   assert(not cfglib/tls())
   assert(cfglib/setup-backlog() == 500)
   assert(consumer/effective() == 500)
   assert(not opts.verbose)
-  0
 }

@@ -31,11 +31,11 @@ export PATH="$(pwd)/tools/k1bindgen/.k1-out:$PATH"
 test_src() {
     $k1 --no-cache check test_src/http_test
     target/$target_dir/k1_test $k1_test_filter
-    $k1 --optimize --no-cache run test_src/suite1
-    $k1 --debug --no-cache build test_src/suite1
-    $k1_single_thread --optimize --no-cache run test_src/suite1
+    $k1 --optimize --no-cache test --skip-static test_src/suite1
+    $k1 --debug --no-cache test --skip-static test_src/suite1
+    $k1_single_thread --optimize --no-cache test test_src/suite1
     if [ -n "$wasmtime" ]; then
-        $k1 --optimize --no-cache --target wasm64-wasi run test_src/suite1
+        $k1 --optimize --no-cache --target wasm64-wasi test --skip-static test_src/suite1
     fi
     k1bindgen_httpapp
 }
@@ -52,8 +52,10 @@ k1bindgen_httpapp() {
     $k1 --no-cache test tools/k1bindgen
     rm -rf examples/httpapp/.k1-out/cache
     $k1 --no-cache build examples/httpapp
-    $k1 --no-cache test examples/httpapp
     $k1 build examples/httpapp
+    $k1 --no-cache test modules/uv
+    $k1 --no-cache test modules/http
+    $k1 --no-cache test modules/sqlite
 }
 
 fractal() {

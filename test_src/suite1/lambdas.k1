@@ -50,35 +50,45 @@ fn make-thunks(counter: *int): list[dyn[fn() -> empty]] {
   ]
 }
 
-fn test() {
+fn(test) closure-with-nested-lambda() {
   let closed-over: int = 3
   let add = fn[closed-over](x: int) {
     let add-one = fn(y: int) y + 1
     add-one(x) + closed-over + add-one(closed-over) + (if closed-over == 3 1 else 0)
   }
   assert-equals(add(3), 12)
+}
 
+fn(test) capture-pointer-mutates-local() {
   let counter = 3
   let my-inc = fn[counter.&]() { counter.* = counter.* + 1 }
   my-inc()
   my-inc()
   assert(counter == 5)
+}
 
+fn(test) nested-closures-capture() {
   let a = 10
   let outer = fn[a](x: int) {
     let inner = fn[a](y: int) a + y
     inner(x) + a
   }
   assert-equals(outer(5), 25)
+}
 
+fn(test) capture-snapshots-value() {
   let n = 1
   let get-n = fn[n]. n
   n = 2
   assert-equals(get-n(), 1)
+}
 
+fn(test) lambda-return-type() {
   let get-three = fn(-> int) { return 3 }
   assert(get-three() == 3)
+}
 
+fn(test) some-fn-params() {
   let static-add-one-var = static-add-one
   assert-equals(some-fn-param2(5, static-add-one, static-add-one-var), 12)
   assert-equals(some-fn-param2(5, static-add-one.&, static-add-two.&), 13)
@@ -91,7 +101,9 @@ fn test() {
   let c2 = 2
   assert-equals(some-fn-param2(5, fn[c1] x. x + 1 + c1.x, fn[c2] x. x + 2 + c2), 18)
   assert(some-fn-param-gen(true, fn b. not b, fn b. some(b)) == some(false))
+}
 
+fn(test) returned-dyn-closures() {
   let add5 = make-adder(5)
   let add7 = make-adder(7)
   assert-equals(add5(1), 6)
@@ -100,7 +112,9 @@ fn test() {
   let count = 0
   for thunk in make-thunks(count.&) { thunk() }
   assert-equals(count, 11)
+}
 
+fn(test) dyn-aggregate-args() {
   let svc: agg-svc = .{ x = 3, y = 4 }
   let s = svc.&
   let req: agg-arg = .{ a = 1, b = 0, c = 0, d = 0, e = 2 }
@@ -112,7 +126,9 @@ fn test() {
   let holder: agg-holder = .{ call = named, svc = s }
   assert-equals((holder.call)(req, holder.svc), 10)
   assert-equals(forward-agg(named)(req, s), 10)
+}
 
+fn(test) comptime-closures() {
   let r: int = #static { let a = 40; let f = fn[a](x: int) x + a; f(2) }
   assert-equals(r, 42)
   #static assert(test-compile(

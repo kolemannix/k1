@@ -133,6 +133,8 @@ pub(crate) struct BuiltinIdents {
     pub build_config: StringId,
     pub build_request: StringId,
     pub build: StringId,
+    pub editor_settings: StringId,
+    pub editor: StringId,
     pub root_module_name: StringId,
     pub core: StringId,
     pub std: StringId,
@@ -278,6 +280,9 @@ pub(crate) struct BuiltinFunctions {
     pub bitwise_xor: QIdent,
     pub bitwise_shl: QIdent,
     pub bitwise_shr: QIdent,
+    pub test_outcome: QIdent,
+    pub test_outcome_failure: QIdent,
+    pub test_run: QIdent,
 }
 
 /// Long strings get a sampled hash: O(1) instead of hashing megabytes of
@@ -556,6 +561,8 @@ impl IdentPool {
             build_config: intern!("build-config"),
             build_request: intern!("build-request"),
             build: intern!("build"),
+            editor_settings: intern!("editor-settings"),
+            editor: intern!("editor"),
             root_module_name: intern!("_root"),
             core: intern!("core"),
             std: intern!("std"),
@@ -738,6 +745,12 @@ impl IdentPool {
         let bitwise_shl = make_fn!(path_core_bitwise, intern!("shift-left"));
         let bitwise_shr = make_fn!(path_core_bitwise, intern!("shift-right"));
 
+        let path_core_test = intern_path!(b.core, intern!("test"));
+        let test_outcome = make_fn!(path_core_test, intern!("outcome"));
+        let test_run = make_fn!(path_core_test, intern!("run"));
+        let path_core_test_outcome = intern_path!(b.core, intern!("test"), intern!("outcome"));
+        let test_outcome_failure = make_fn!(path_core_test_outcome, intern!("failure"));
+
         let f = BuiltinFunctions {
             list_with_capacity,
             list_push,
@@ -786,6 +799,9 @@ impl IdentPool {
             bitwise_xor,
             bitwise_shl,
             bitwise_shr,
+            test_outcome,
+            test_outcome_failure,
+            test_run,
         };
 
         Self { pool: std::cell::RefCell::new(pool), b, f }

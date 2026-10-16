@@ -1,6 +1,4 @@
-ns labeled_loops
-
-fn break-outer-from-for() {
+fn(test) break-outer-from-for() {
   let count = 0
   let found-r = -1
   let found-c = -1
@@ -19,7 +17,7 @@ fn break-outer-from-for() {
   assert-equals(found-c, 3)
 }
 
-fn break-outer-with-value() {
+fn(test) break-outer-with-value() {
   let x: int = loop @search {
     let i = 0
     loop {
@@ -30,7 +28,7 @@ fn break-outer-with-value() {
   assert-equals(x, 70)
 }
 
-fn continue-outer-from-while() {
+fn(test) continue-outer-from-while() {
   let i = 0
   let visits = 0
   while @outer i < 5 {
@@ -47,7 +45,7 @@ fn continue-outer-from-while() {
   assert-equals(visits, 5)
 }
 
-fn break-outer-runs-defers() {
+fn(test) break-outer-runs-defers() {
   let log = list/empty[string]()
   loop @outer {
     defer log.push("outer")
@@ -60,7 +58,7 @@ fn break-outer-runs-defers() {
   assert-equals(log.join(","), "b0,d0,d1,outer")
 }
 
-fn inner-label-shadows() {
+fn(test) inner-label-shadows() {
   let n = 0
   loop @l {
     loop @l {
@@ -71,12 +69,4 @@ fn inner-label-shadows() {
     break
   }
   assert-equals(n, 11)
-}
-
-fn test() {
-  break-outer-from-for()
-  break-outer-with-value()
-  continue-outer-from-while()
-  break-outer-runs-defers()
-  inner-label-shadows()
 }

@@ -29,14 +29,14 @@ $std/flag-sum/define(\{
   }
 })
 
-fn test-shrunk-subtype-has-no-view() {
+fn(test) shrunk-subtype-has-no-view() {
   let t: packet = :tiny(9)
   assert-equals(t.as-small().!.as-packet().tag, t.tag)
   assert(types/size[packet-small] < types/size[packet])
   assert(test-compile(t.&.view-small()).is-some())
 }
 
-fn test-tags() {
+fn(test) tags() {
   assert-equals((shape:circle(.{ radius = 1 })).tag, 0b011)
   assert-equals((shape:oval(.{ rx = 1, ry = 2 })).tag, 0b001)
   assert-equals((shape:square(.{ len = 1 })).tag, 0b010)
@@ -52,7 +52,7 @@ fn test-tags() {
   assert-equals(tone:black.value, 0b100)
 }
 
-fn test-predicates() {
+fn(test) predicates() {
   let c: shape = :circle(.{ radius = 3 })
   let r: shape = :rect(.{ w = 2, h = 5 })
   let l: shape = :line(.{ len = 9 })
@@ -63,7 +63,7 @@ fn test-predicates() {
   assert((not tone:navy.bright()) and (not tone:navy.warm()))
 }
 
-fn test-narrow() {
+fn(test) narrow() {
   let c: shape = :circle(.{ radius = 3 })
   let r: shape = :rect(.{ w = 2, h = 5 })
   let rounded: shape-rounded = c.as-rounded().!
@@ -86,7 +86,7 @@ fn test-narrow() {
   assert(tone:red.as-warm().!.as-tone() is :red)
 }
 
-fn test-view() {
+fn(test) view() {
   let r: shape = :rect(.{ w = 2, h = 5 })
   let r-ref = r.&
   let even: *shape-even = r-ref.view-even().!
@@ -98,12 +98,4 @@ fn test-view() {
   let s: tone = :orange
   let warm: *tone-warm = s.&.view-warm().!
   assert(warm.* is :orange)
-}
-
-fn test() {
-  test-tags()
-  test-predicates()
-  test-narrow()
-  test-view()
-  test-shrunk-subtype-has-no-view()
 }

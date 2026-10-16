@@ -39,7 +39,7 @@ impl[t: increment] incr-four for t {
 }
 
 
-fn test() {
+fn(test) specialized-fn-overrides-default() {
   let i: i32 = 554
   assert-equals(i.inc(), 555)
   assert-equals(i.inc-twice(), 556)
@@ -47,11 +47,13 @@ fn test() {
   assert-equals(i.inc-four(), 558)
   assert-equals(i.inc-eight(), 562)
 
-  let u: u32 = 0
-  assert-equals(u.inc-twice(), 2)
-
   // Ensures that our specialized implementation is used over the default
   assert-equals(I32_SPEC_COUNTER, 6)
-  
+
   .{}
+}
+
+fn(test) default-fn-without-override() {
+  let u: u32 = 0
+  assert-equals(u.inc-twice(), 2)
 }

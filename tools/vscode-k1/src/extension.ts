@@ -135,9 +135,6 @@ function ensureClientForDocument(document: vscode.TextDocument): void {
     options: { cwd: root }
   };
   const clientOptions: LanguageClientOptions = {
-    initializationOptions: {
-      build: vscode.workspace.getConfiguration("k1").get<object>("build", {})
-    },
     documentSelector: [
       { language: "k1", scheme: "file", pattern: `${root}/**/*.k1` }
     ],
@@ -147,7 +144,6 @@ function ensureClientForDocument(document: vscode.TextDocument): void {
       index: 0
     },
     synchronize: {
-      configurationSection: "k1",
       fileEvents: vscode.workspace.createFileSystemWatcher(
         new vscode.RelativePattern(root, "**/*.k1")
       )

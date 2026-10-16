@@ -778,8 +778,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             // We don't own this; the dylib does
                             continue;
                         }
-                        let shared = !g.is_exported && !self.has_reloadable_fns && g.is_constant;
-                        if g.is_exported
+                        let shared =
+                            !g.linkage.is_exported() && !self.has_reloadable_fns && g.is_constant;
+                        if g.linkage.is_exported()
                             || self.has_reloadable_fns
                             || (self.multi_unit() && !shared)
                         {
@@ -1743,63 +1744,65 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
 
         let is_dylib = matches!(self.kind, CgKind::ReloadDylib(_));
-        let is_private = !global.is_exported && !self.has_reloadable_fns;
+        let is_private = !global.linkage.is_exported() && !self.has_reloadable_fns;
         let shared = is_private && global.is_constant;
         let defined_elsewhere = !shared && self.multi_unit() && !self.is_first_unit();
 
         // A reloadable dylib defines only the globals of its own ns; every other
         // global is a declaration bound to the host's copy at dlopen
-        let llvm_global = if global.is_external || (is_dylib && !owned_here) || defined_elsewhere {
-            let PhysicalTypeResult::Yes(global_pt) =
-                self.k1.get_physical_type_computed(global.type_id)
-            else {
-                cgbail!(global.span, "ICE: Not physical; reject this in typer");
-            };
-            let basic_type = self.codegen_type(global_pt);
-            let g = self.make_external_global(basic_type.rich_type(), &name, global.is_constant);
-            if global.is_tls && self.target_supports_tls() {
-                g.set_thread_local(true);
-                let mode = if defined_elsewhere && self.k1.plan.is_executable() {
-                    ThreadLocalMode::LocalExecTLSModel
-                } else {
-                    ThreadLocalMode::GeneralDynamicTLSModel
+        let llvm_global =
+            if global.linkage.is_external() || (is_dylib && !owned_here) || defined_elsewhere {
+                let PhysicalTypeResult::Yes(global_pt) =
+                    self.k1.get_physical_type_computed(global.type_id)
+                else {
+                    cgbail!(global.span, "ICE: Not physical; reject this in typer");
                 };
-                g.set_thread_local_mode(Some(mode));
-            }
-            if is_private && !global.is_external {
-                g.set_visibility(inkwell::GlobalVisibility::Hidden);
-            }
-            g
-        } else {
-            let initial_static_value_id = global.initial_value.as_value().unwrap();
-            let initializer_basic_value = self.codegen_static_value_as_const(
-                initial_static_value_id,
-                0,
-                !global.is_constant,
-            )?;
-
-            // With reloadable nses in play, every global is visible to dlopened dylibs
-            let llvm_linkage = if shared {
-                LlvmLinkage::LinkOnceODR
-            } else if !is_private || self.multi_unit() {
-                LlvmLinkage::External
+                let basic_type = self.codegen_type(global_pt);
+                let g =
+                    self.make_external_global(basic_type.rich_type(), &name, global.is_constant);
+                if global.is_tls && self.target_supports_tls() {
+                    g.set_thread_local(true);
+                    let mode = if defined_elsewhere && self.k1.plan.is_executable() {
+                        ThreadLocalMode::LocalExecTLSModel
+                    } else {
+                        ThreadLocalMode::GeneralDynamicTLSModel
+                    };
+                    g.set_thread_local_mode(Some(mode));
+                }
+                if is_private && !global.linkage.is_external() {
+                    g.set_visibility(inkwell::GlobalVisibility::Hidden);
+                }
+                g
             } else {
-                LlvmLinkage::Private
+                let initial_static_value_id = global.initial_value.as_value().unwrap();
+                let initializer_basic_value = self.codegen_static_value_as_const(
+                    initial_static_value_id,
+                    0,
+                    !global.is_constant,
+                )?;
+
+                // With reloadable nses in play, every global is visible to dlopened dylibs
+                let llvm_linkage = if shared {
+                    LlvmLinkage::LinkOnceODR
+                } else if !is_private || self.multi_unit() {
+                    LlvmLinkage::External
+                } else {
+                    LlvmLinkage::Private
+                };
+                let layout = self.k1.get_layout_computed(global.type_id).unwrap();
+                let g = self.make_global_from_value(
+                    initializer_basic_value,
+                    layout.align,
+                    &name,
+                    global.is_constant,
+                    llvm_linkage,
+                    global.is_tls,
+                );
+                if is_private && llvm_linkage != LlvmLinkage::Private {
+                    g.set_visibility(inkwell::GlobalVisibility::Hidden);
+                }
+                g
             };
-            let layout = self.k1.get_layout_computed(global.type_id).unwrap();
-            let g = self.make_global_from_value(
-                initializer_basic_value,
-                layout.align,
-                &name,
-                global.is_constant,
-                llvm_linkage,
-                global.is_tls,
-            );
-            if is_private && llvm_linkage != LlvmLinkage::Private {
-                g.set_visibility(inkwell::GlobalVisibility::Hidden);
-            }
-            g
-        };
 
         self.globals.insert(global_id, llvm_global);
         Ok(llvm_global)
@@ -3293,7 +3296,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
     }
 
-    /// Named-intrinsic calls (`intern("llvm.*")`) speak LLVM's type language:
+    /// Named-intrinsic calls (`builtin("llvm.*")`) speak LLVM's type language:
     /// bool <-> i1, vectors by value as <n x t>, other scalars as-is. The
     /// declared K1 signature is trusted; the LLVM verifier is the backstop.
     /// Constant bool args fold to constant i1, satisfying immarg parameters
@@ -3429,7 +3432,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         let instr = match builtin_type {
             BackendBuiltin::MemCopy | BackendBuiltin::MemMove => {
-                // fn(intern) copy(
+                // fn(builtin) copy(
                 //   dst: Pointer,
                 //   src: Pointer,
                 //   count: uword
@@ -3464,7 +3467,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_return(None).unwrap()
             }
             BackendBuiltin::MemSet => {
-                // fn(intern) set(dst: ptr, value: u8, count: int): unit
+                // fn(builtin) set(dst: ptr, value: u8, count: int): unit
                 let dst_arg = self.load_function_argument(function_id, 0);
                 let value_arg = self.load_function_argument(function_id, 1);
                 let count_arg = self.load_function_argument(function_id, 2);
@@ -3480,7 +3483,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_return(None).unwrap()
             }
             BackendBuiltin::MemEquals => {
-                // fn(intern) equals(p1: Pointer, p2: Pointer, size: uword): bool
+                // fn(builtin) equals(p1: Pointer, p2: Pointer, size: uword): bool
                 let p1_arg = self.load_function_argument(function_id, 0);
                 let p2_arg = self.load_function_argument(function_id, 1);
                 let size_arg = self.load_function_argument(function_id, 2);
@@ -3514,7 +3517,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.builder.build_return(Some(&bool_equal)).unwrap()
             }
             BackendBuiltin::Exit => {
-                // fn(intern) exit(code: i32): never
+                // fn(builtin) exit(code: i32): never
                 self.builder.build_unreachable().unwrap()
             }
 
@@ -4735,11 +4738,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
         let has_body = is_dylib_root || !typed_function_linkage.is_external();
         let is_definition = has_body && self.owned.contains(&function_id);
-        let is_private = !is_dylib_root
-            && matches!(
-                typed_function_linkage,
-                TyperLinkage::Standard | TyperLinkage::Intrinsic | TyperLinkage::LlvmIntrinsic(_)
-            );
+        let is_private = !is_dylib_root && typed_function_linkage == TyperLinkage::Standard;
         let llvm_linkage = if is_private && is_definition && !self.multi_unit() {
             LlvmLinkage::Internal
         } else {
@@ -4749,11 +4748,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             self.make_reloadable_function_symbol(function_id)
         } else {
             match typed_function.linkage {
-                TyperLinkage::External { fn_name: Some(link_name), .. }
-                | TyperLinkage::Exported { fn_name: Some(link_name) } => {
+                TyperLinkage::External { link_name: Some(link_name), .. }
+                | TyperLinkage::Exported { link_name: Some(link_name) } => {
                     self.k1.ident_str(link_name).to_string()
                 }
-                TyperLinkage::Exported { fn_name: None } => {
+                TyperLinkage::Exported { link_name: None } => {
                     self.k1.ident_str(typed_function.name).to_string()
                 }
                 _ => Cg::mangle(self.k1.function_symbol_name(function_id)),

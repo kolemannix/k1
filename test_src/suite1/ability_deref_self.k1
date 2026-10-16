@@ -34,7 +34,7 @@ impl as-span[t = i64] for inline {
   fn as-span(self): span[i64] { span/single(0 - self.data.[0]) }
 }
 
-fn test() {
+fn(test) ref-receiver-reaches-by-value-impls() {
   let b: box = .{ xs = [1, 2, 3] }
   let p = b.&
 
@@ -45,7 +45,9 @@ fn test() {
   let sum = 0
   for p { sum = sum + it }
   assert-equals(sum, 6)
+}
 
+fn(test) exact-ref-impl-beats-deref() {
   let i: inline = .{ data = [7, 8, 9] }
   assert-equals(i.&.as-span().len(), 3)
   assert-equals(i.&.[0], 7)

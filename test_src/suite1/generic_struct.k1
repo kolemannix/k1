@@ -18,19 +18,25 @@ ns for handle {
 fn make-handle[t](len: size): handle[t] { .{ raw = ptr/null, len } }
 fn takes-h64(_h: handle[u64]) {}
 
-fn test() {
+fn(test) generic-method-call() {
   let p: au-pair[int, bool] = .{ t = some(0), u = some(true) }
   assert(p.t[int, bool]().! == 0)
   assert(p.t().! == 0)
+}
 
+fn(test) infer-params-from-struct-literal() {
   takes-poly-au-pair(.{ t = some(42), u = opt:some true })
   takes-poly-au-pair[_, bool](.{ t = some(42), u = some(true) })
   assert(test-compile(takes-poly-au-pair[ptr, _](.{ t = some(42), u = some(true) })) is :some _)
+}
 
+fn(test) constrained-type-param() {
   let x: constrained-box[int, ?int] = .{ inner = some(4) }
   assert-equals(types/id[type-of(x).a], types/id[int])
   assert(test-compile(constrained-box[int, ?bool].{ inner = some(4) }) is :some _)
+}
 
+fn(test) phantom-type-param() {
   let h8: handle[u8] = make-handle[u8](3)
   let h64: handle[u64] = .0
   assert-equals(h8.elem-size(), 1)

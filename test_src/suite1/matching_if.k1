@@ -10,7 +10,7 @@ fn match-struct(v: { x: int, y: int }): ABC {
   }
 }
 
-fn test() {
+fn(test) opt-patterns-in-and-chains() {
   let foo = 3
   let x = some("foo")
   let y = some("bar")
@@ -26,16 +26,22 @@ fn test() {
       illegal_binding
     }
   ) is :some _)
+}
 
+fn(test) struct-patterns-in-and-chains() {
   let my-point = .{ x = 1, y = 2 }
   let struct-result = if my-point is .{ x = 1, y = yy } and my-point is .{ x = xx, y = 2 } {
     yy == 2 and xx == 1
   } else (false)
   assert(struct-result)
+}
 
+fn(test) partial-nested-pattern-misses() {
   let partial = some(.{ x = some(42), y = none[int]() })
   if partial is :some .{ x = :some x-val, y = :some y-val } crash("")
+}
 
+fn(test) nested-pattern-bindings() {
   let mixed = some(.{ outer = 1, inner = some(.{ value = 1 }) })
   let mixed-result = if mixed is :some .{ outer = o, inner = :some .{ value = v } } {
     o == v
@@ -44,12 +50,21 @@ fn test() {
   assert(test-compile({
     if mixed is :some(.{ outer = o, inner = :some(.{ value = o })}) .{} else .{}
   }).is-some())
+}
 
+fn(test) guarded-struct-arms() {
   assert(match-struct(.{ x = 11, y = 0 }) is :a)
   assert(match-struct(.{ x = 1, y = 3 }) is :b)
   assert(match-struct(.{ x = 0, y = 2 }) is :b)
   assert(match-struct(.{ x = 0, y = 0 }) is :c)
+}
 
+fn(test) require-binds-from-is() {
   require .{ x = 1 } is .{ x } and x == 1 and true is _ else crash("")
   assert(x == 1)
+}
+
+fn(test) crashes-in-require-condition() {
+  k1/test/expect-failure("booo")
+  require crash("booo") else { crash("") }
 }

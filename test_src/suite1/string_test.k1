@@ -1,11 +1,11 @@
-ns string_test
-
-fn test() {
+fn(test) string-escape-codes() {
   let s = "\n\0\t\r\"\\"
   let codes = list/from-mapping(s, fn c. c.u8())
   assert(codes == [10, 0, 9, 13, 34, 92])
   assert('\''.u8() == 39)
+}
 
+fn(test) string-char-and-substring-search() {
   let s37 = "abcdefghijklmnopqrstuvwxyz0123456789!"
   assert(s37.position('p') is :some 15)
   assert(s37.position('q') is :some 16)
@@ -24,7 +24,9 @@ fn test() {
   assert(reps.index-of-string("aQa") is :some 12)
   assert(reps.index-of-string("aBa") is :none)
   assert("hello".index-of-string("") is :some 0)
+}
 
+fn(test) hex-encode-and-decode() {
   let hex-bytes: list[u8] = [0, 255, 65, 122]
   assert(hex-bytes.as-span().to-hex() == "00ff417a")
   assert("Az".to-hex() == "417a")
@@ -35,12 +37,16 @@ fn test() {
   assert(span/from-hex("").! == span/empty())
   assert(span/from-hex("0") is :none)
   assert(span/from-hex("0g") is :none)
+}
 
+fn(test) string-split-by-char() {
   assert("".split-by-char('.') == [])
   assert("a...".split-by-char('.') == ["a", "", ""])
   assert("..".split-by-char('.') == ["", ""])
   assert-equals("aaaa.bbbb.cccc.dddd.eeee.ffff.gggg".split-by-char('.').len(), 7)
+}
 
+fn(test) numeric-from-string-bounds() {
   assert(u64/from-string("18446744073709551615").! == u64/max-value)
   assert(not u64/from-string("18446744073709551616").is-ok())
   assert(not u64/from-string("-1").is-ok())
@@ -49,7 +55,9 @@ fn test() {
   assert(not i64/from-string("9223372036854775808").is-ok())
   assert(not i64/from-string("-9223372036854775809").is-ok())
   assert(not f64/from-string("1.5x").is-ok())
+}
 
+fn(test) string-compare-and-sort() {
   assert("ab".compare("abc") is :less)
   assert("Z".compare("a") is :less)
   let words: list[string] = ["pear", "apple", "fig", "apple", ""]

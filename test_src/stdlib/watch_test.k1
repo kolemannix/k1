@@ -13,7 +13,7 @@ fn writer-thread(input: *writer-input): ptr {
   ptr/null
 }
 
-fn test() {
+fn(test-runtime) wait-reports-file-write() {
   let dir = "/tmp/k1-watch-test"
   let file = "${dir}/f.txt"
   process/sh("rm -rf ${dir} && mkdir -p ${dir}").!

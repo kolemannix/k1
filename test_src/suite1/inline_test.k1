@@ -73,7 +73,7 @@ fn(inline) count-up(n: int): int {
   acc
 }
 
-fn test() {
+fn(test) inlined-calls-preserve-semantics() {
   assert-equals(add3(1, 2, 3), 6)
   assert-equals(clamp(-5, 0, 10), 0)
   assert-equals(clamp(50, 0, 10), 10)

@@ -215,7 +215,7 @@
       "patterns": [
         {
           "name": "storage.modifier.k1",
-          "match": "(?<![\\p{L}\\p{N}_-])(?:mutable|tls|export|extern|context|returned|alias|lib|reload|intern|native|inline|noinline|cold|expose)(?![\\p{L}\\p{N}_-])"
+          "match": "(?<![\\p{L}\\p{N}_-])(?:mutable|tls|export|extern|context|returned|alias|lib|reload|native|inline|noinline|cold|expose)(?![\\p{L}\\p{N}_-])"
         },
         {
           "include": "#code"
@@ -250,7 +250,7 @@
       ]
     },
     "fn-declaration": {
-      "match": "(?<![\\p{L}\\p{N}_-])(fn)(?:\\(((?=\\s*(?:intern|extern|export|native|inline|noinline|cold|lib)(?![\\p{L}\\p{N}_-]))[^()]*(?:\\([^()]*\\)[^()]*)*)\\))?\\s+([\\p{L}_][\\p{L}\\p{N}_-]*)(?:\\[((?:[^\\[\\]]|\\[[^\\[\\]]*\\])*)\\])?(?=\\()",
+      "match": "(?<![\\p{L}\\p{N}_-])(fn)(?:\\(((?=\\s*(?:builtin|extern|export|native|inline|noinline|cold|lib)(?![\\p{L}\\p{N}_-]))[^()]*(?:\\([^()]*\\)[^()]*)*)\\))?\\s+([\\p{L}_][\\p{L}\\p{N}_-]*)(?:\\[((?:[^\\[\\]]|\\[[^\\[\\]]*\\])*)\\])?(?=\\()",
       "captures": {
         "1": {
           "name": "storage.type.function.k1"
@@ -437,7 +437,7 @@
         },
         {
           "name": "storage.modifier.k1",
-          "match": "(?<![\\p{L}\\p{N}_-])(?:context|intern)(?![\\p{L}\\p{N}_-])"
+          "match": "(?<![\\p{L}\\p{N}_-])(?:context)(?![\\p{L}\\p{N}_-])"
         },
         {
           "name": "keyword.other.k1",

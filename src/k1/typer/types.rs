@@ -1157,6 +1157,7 @@ pub struct BuiltinTypes {
     pub k1_setup_ctx: Option<TypeId>,
     pub k1_build_config: Option<TypeId>,
     pub k1_build_request: Option<TypeId>,
+    pub k1_editor_settings: Option<TypeId>,
     pub ordering: Option<TypeId>,
     pub types_layout: Option<TypeId>,
     pub types_type_schema: Option<TypeId>,

@@ -1,1092 +1,236 @@
-Disclaimer: this file is written for and maintained by LLMs.
+LLM-maintained K1 notes; fix wrong lines on sight. Companion: `k1-additional.md`
+(comptime, macros, reflection, modules/FFI, layout, stdlib). Executable reference:
+`test_src/suite1/*.k1`, one file per feature, named for it; newer tests win.
 
-# K1 Syntax And Basics
+# K1 Basics
 
-This guide is a practical map for reading and writing K1 in this repo. It is
-based on examples from `test_src`, which is currently the best executable
-language reference.
+## Lexing and statements
+- kebab-case for every name (ns, fn, type, field, variant, local); SCREAMING_SNAKE
+  constants. Identifiers are ASCII letters, digits, `-`, `_`.
+- Newline ends a statement; `;` only separates statements on one line.
+- A line continues the previous expression only if it starts with a binary operator
+  (`and or || == + ?`, comparisons...), `is`, `else`, or `.name` (leading-dot
+  chains). `-`, `(`, `[` and string literals start a new statement: leave the
+  operator at the end of the previous line instead. Juxtaposed string concat is
+  same-line only.
+- `f(x)` / `f[int]` call or apply type args only when adjacent: `if c (x)` is a
+  condition then `(x)`.
+- Payloads never cross a newline: `return`, `break`, `:variant` at EOL are bare.
+- No unary minus. `-5` is a literal. A `-` spaced before but not after is a sign:
+  `if c -1 else 1` yields -1, `x -1` is a parse error, `x - 1` subtracts. Negate
+  values with `x.negated()` (`neg`: wrapping on ints, sign flip on floats, `not` on bool).
+- `not` is bool-only and binds one postfix chain; a binary op right after its
+  operand is a parse error: `(not a) == b`, `not (a == b)`, `xs.contains(x).negated()`.
+- Precedence, tightest first: `||` (pipe), `* / %`, `+ -`, `<< >>`, `&`, `^`, `|`,
+  `< <= > >=`, `== !=`, `and`, `or`, `?`. Bitwise beats comparison:
+  `a & b == c` is `(a & b) == c`. `and`/`or` short-circuit.
+- `==`/`!=` are the `equals` ability (`not-equals` defaults to `not equals`).
+- Ints: `+ - *` wrap, shift counts are mod width, `/ %` crash on 0 and MIN/-1.
+  Identical in the VM and native, every opt level; checked math is library code.
+- Literals: `0xff 0o755 0b1010 1_000 255u8 -3i8 10: u8 'c' '\n' "s" .{} .0`.
 
-K1 is still moving. Prefer the patterns in newer tests when examples conflict.
-Use kebab-case for new K1 names: namespaces, functions, types, fields,
-variables, abilities, and methods.
-
-## File Shape
-
-A typical test file starts with a namespace, then declarations, then a `test`
-function:
-
-```rust
-ns example-test
-
-type point = { x: int, y: int }
-
-fn origin(): point {
-  .{ x = 0, y = 0 }
-}
-
-fn test() {
-  let p = origin()
-  assert-equals(p.x, 0)
-}
+## Files, namespaces, use
+```k1
+ns geom                          // whole file; or ns geom { ... }, reopenable anywhere
+ns a/b { }                       // = ns a { ns b { } }
+geom/area(r)  core/types/id[int] // paths use /
+use core/types/id                // also inside fn bodies
+use std/libc/files/SEEK_END as seek-end
+ns for point { fn len(self): int { self.x + self.y } }   // methods
 ```
-
-A whole-file namespace is declared on its own line:
-
-```rust
-ns format-test
-```
-
-or with block form:
-
-```rust
-ns lambdas {
-  fn test() {}
-}
-```
-
-Call across namespaces with `/`:
-
-```rust
-format-test/test()
-core/types/id[int]
-```
-
-See `test_src/suite1/suite1.k1`, `test_src/suite1/format.k1`, and
-`test_src/suite1/lambdas.k1`.
-
-## Naming
-
-K1 code uses kebab-case for everything: namespaces, functions, types, fields,
-and enum variants. Constants are SCREAMING_SNAKE. Identifiers are ASCII
-letters, digits, `-` and `_`; non-ASCII text is only allowed in strings and
-comments.
-
-```rust
-ns allocator-test
-
-type http-request = { status-code: int }
-
-fn parse-request(): http-request {
-  .{ status-code = 200 }
-}
-```
-
-Prefer short, concrete names in tests. A file named `range_test.k1` may still use
-`ns range-test` in new code.
+Inside `ns for t` and `impl` blocks `self` is a type name: `self`, `*self`, `self[t]`.
 
 ## Functions
-
-Functions use `fn`, typed parameters, and an optional return type after `:`.
-The final expression is the return value when there is no explicit `return`.
-
-```rust
-fn add-one(x: int): int {
-  x + 1
-}
-
-fn log-message(message: string) {
-  println(message)
-}
+```k1
+fn add(x: int, y: int): int { x + y }   // tail expr is the value; `return e`, bare `return` = unit
+fn first[t](xs: span[t]): t { xs.[0] }  // f[int, _](v): _ is inferred
+fn advance(*atlas-cursor, n: int)       // bare-type param: named `atlas-cursor`
+add(y = 2, x = 1)                       // named args, any order
 ```
-
-A parameter written as a bare type expression names itself after the type's
-base identifier, dropping `*`, `?`, type arguments and any namespace path:
-
-```rust
-fn advance(*atlas-cursor, n: int) {
-  atlas-cursor.x = atlas-cursor.x + n
-}
-
-fn emit(core/code) { ... }   // the parameter is named `code`
-```
-
-A name that cannot be derived that way -- an anonymous struct type, a function
-type, `some t` -- must be written `name: type`.
-
-Use `return value` for early returns; the payload is a full expression, and a
-bare `return` returns unit:
-
-```rust
-fn choose(flag: bool): int {
-  if flag {
-    return 1
-  }
-  0
-}
-```
-
-Generic parameters go in square brackets:
-
-```rust
-fn unwrap-box[T](b: box[box[T]]): T {
-  b.value.value
-}
-```
-
-Use `_` at call sites when a type argument should be inferred:
-
-```rust
-takes-poly-au-pair[int, _](value)
-```
-
-See `test_src/suite1/control_flow.k1` and
-`test_src/suite1/generic_struct.k1`.
-
-## Blocks, Statements, And Values
-
-Blocks are expressions. The last expression is the block value:
-
-```rust
-let answer = {
-  let base = 40
-  base + 2
-}
-```
-
-A line break ends a statement. `;` also ends one, for putting several
-statements on one line (`let a = 1; let b = 2`); it is never required at end
-of line.
-
-An expression continues across a line break when the next line starts with a
-token that could not begin a new statement: a binary operator (`and`, `or`,
-`||`, `==`, `+`, `?`, comparisons), `is`, `else`, or `.` followed by a name
-(leading-dot method chains):
-
-```rust
-let result = [1, 2, 3]
-  || map(fn x. x + 1)
-  || filter(fn x. x % 2 == 0)
-
-let n = "hello"
-  .len()
-  .unsigned()
-```
-
-Tokens that can begin a statement end the previous one instead, even where a
-binary reading exists: `-` (negative literal), `(`, `[`, and string literals.
-To continue with one of those, put the operator at the end of the previous
-line (`let x = a -` ... `b`). Juxtaposed string concatenation binds only on the
-same line. Call parens and type-arg brackets bind only when adjacent: `f(x)`
-and `f[int]` are calls, `if flag (x)` is a condition followed by `(x)`.
-Payloads never cross a line break: `return`, `break`, or a `:variant` at end
-of line is bare.
-
-A block with no meaningful value yields `.{}`, the empty/unit value (the unit
-*type* is spelled `{}`):
-
-```rust
-let result: {} = if true {
-  println("done")
-}
-assert(result == .{})
-```
-
-K1 code commonly ends test helpers with `.{}` when the intent is "return unit".
-An empty block `{}` is legal and yields `.{}` — fine as a no-op fn body
-(`fn stop(*self) {}`) or an empty loop body (`while spinning() {}`).
-
-## Variables And Mutation
-
-Use `let` for local bindings and `=` for assignment. Every local is
-assignable; there is no `mut` on a binding (`mutable` exists only as a global
-modifier, `let(mutable) g = 0`):
-
-```rust
-let count = 0
-count = count + 1
-```
-
-`=` assigns to any place, not just variables: struct fields, array elements,
-and dereferences are all valid destinations:
-
-```rust
-let item = .{ value = 41 }
-item.value = 42
-assert-equals(item.value, 42)
-```
-
-A bare variable on the left always means the variable itself: `r = v` rebinds
-`r`. To store through a reference, dereference it explicitly on the left-hand
-side with `.*`:
-
-```rust
-let counter = core/mem/new(0)
-counter.* = counter.* + 1
-assert-equals(counter.*, 1)
-```
-
-Use `.*` to read through a reference, and the postfix `.&` operator to take the
-address of a place when you need a reference to it.
-
-A `*t` is never null, aligned for `t`, and valid for `types/size[t]` bytes for
-as long as it is live; optimized builds speculate loads through it. Keeping a
-`*t` across the free of its memory (an arena reset, a list growing) is UB even
-if it is never read again. Use `optref[t]` for nullable references and `ptr` for
-raw addresses.
-
-Indexing is `.[key]`. `xs.[i]` is the element's place, so it reads, assigns,
-and takes addresses like any other place:
-
-```rust
-let xs = [10, 20, 30]
-xs.[1] = xs.[0] + xs.[2]
-let p = xs.[1].&
-```
-
-`a.[k]` means `a.index-ref(k).*`, a call to the one function of the `index`
-ability. Lists, buffers, spans, strings, fixlists, spill-lists, and maps
-implement it; arrays are intrinsic, so `arr.[i]` is the element itself and
-reads a by-value array as well as storing into one that is a place. A map
-lookup through `.[k]` crashes on a missing key; `map.get` is the optional
-lookup, `index-opt` the optional index. Implement `index` for `*t` when the
-elements live inline in `t`, so the returned reference points into real
-storage rather than into a copy. Implementing `as-span` does not imply
-`index`; a viewable type declares its own impl.
-
-A statement may drop its result silently unless the type implements `try`
-(`opt`, `result`); that gets a warning, and `let _ = expr` discards it
-explicitly. `let _` binds nothing and lowers to `core/discard`, a builtin with
-no call. It is also how a block's tail expression is turned into `empty`:
-
-```rust
-posix/madvise(base-ptr, len, advice = posix/MADV_SEQUENTIAL)
-let _ = m.remove("k")
-fn close(fd: i32) { let _ = c/close(fd) }
-```
-
-See `test_src/suite1/assign.k1`, `test_src/suite1/place_test.k1`, and
-`test_src/suite1/struct.k1`.
-
-## Core Types
-
-Common scalar types include:
-
-```rust
-bool
-char
-string
-int
-i8
-i32
-i64
-u8
-u32
-u64
-size
-f32
-f64
-```
-
-Integer literals can be annotated inline:
-
-```rust
-let byte = 10: u8
-let signed = -3i8
-```
-
-Type assertions use `:`; `.as[...]` casts int to float, float to int, and
-total pointer views (`*t` to `ptr`). Every other kind change is a named
-function: `ptr.to-size()` / `n.to-ptr()`, `c.as-u8()` on char, `b.as-u8()` on
-bool:
-
-```rust
-let three = 3: i32
-let f = three.as[f64]
-let raw = ptr-value.to-size()
-```
-
-Integer-to-integer (and float-to-float) conversions name their operation
-instead of using `as`; lossless widening is also implicit at coercion sites
-(arguments, declarations, returns):
-
-```rust
-let wide = narrow.widen[i64]      // lossless extend (same-sign, or unsigned -> signed)
-let low = big.trunc[u8]           // modular truncation; target sign is free
-let s = (x: u32).signed()         // same-width sign reinterpretation -> i32
-let u = (y: i64).unsigned()       // -> u64; size/usize flip the same way
-```
-
-Cross-sign widening composes the two steps, making zext vs sext explicit:
-`x.unsigned().widen[u64]` zero-extends, `x.widen[i64].unsigned()` sign-extends.
-
-## Structs
-
-`type name = ...` creates a nominal type with a unique identity. Currently,
-nominal types can be created for structs, enums, and opaque types:
-
-```rust
-type point = { x: int, y: int }
-
-let p: point = .{ x = 1, y = 2 }
-assert-equals(p.x, 1)
-```
-
-Struct *values* are marked by a leading `.{` and use `=` (`.{ x = 1 }`), while
-struct *types* use bare braces and `:` (`{ x: int }`): `:` always means "type"
-and `=` always means "value". The `.{` marker is what distinguishes a struct
-literal from a block — a bare `{` in expression position is always a block, so
-`{ cap }` is a block yielding `cap` and `.{ cap }` is the shorthand struct.
-Fields use the same `name = value` shape as named call arguments.
-
-`type(alias) name = ...` creates a plain alias for the type on the right-hand
-side. This is how to name an existing scalar or structural type without creating
-a new nominal identity:
-
-```rust
-type(alias) byte-count = u32
-type(alias) point-like = { x: int, y: int }
-```
-
-Anonymous struct types are common:
-
-```rust
-fn area(rect: { width: int, height: int }): int {
-  rect.width * rect.height
-}
-```
-
-Field shorthand is supported when a local has the same name:
-
-```rust
-let width = 50
-let rect = .{ width, height = 20 }
-```
-
-Struct *types* have the mirror-image shorthand: a field written as a bare type
-expression takes its name from the type, exactly as a function parameter does.
-
-```rust
-type glyph = { *atlas-cursor, ?parent, list[int], count: int }
-```
-
-Attach methods to a type with `ns for`:
-
-```rust
-type counter = { value: int }
-
-ns for counter {
-  fn inc(*self) {
-    self.value = self.value + 1
-  }
-}
-```
-
-Inside `ns for t` -- and inside an `impl` block -- `self` is bound as a type
-name, so `self`, `*self` and `self[t]` are the idiomatic way to spell the
-receiver.
-
-See `test_src/suite1/struct.k1` and
-`test_src/suite1/struct_composition.k1`.
-
-## Field Access
-
-`a.foo` always means "the field's value", whether `a` is a struct value or a
-reference to one; K1 dereferences through the base as needed. When the access
-chain denotes a place (it roots in a variable or a dereference), it can be
-assigned with `=` and its address taken with `.&`:
-
-```rust
-let p = .{ x = 1, y = 2 }
-let x: int = p.x
-p.x = 2
-
-let p-ref = p.&
-let x-value: int = p-ref.x
-let x-ref: *int = p-ref.x.&
-p-ref.y = 20
-```
-
-The same applies to array elements: `arr.[i]` yields the element value,
-`arr.[i] = value` stores into the element, and `arr.[i].&` takes its
-address. Sum patterns use trailing `*` to bind references to payload data; see
-the next section.
-
-See `test_src/suite1/assign.k1`, `test_src/suite1/place_test.k1`, and
-`test_src/suite1/struct.k1`.
-
-## Enums And Sums
-
-K1 uses `either` for payload-less enum-like types and payload-carrying sum
-types.
-
-Payload-less enums expose their scalar value through `.value` and through the
-`enum-value` ability method:
-
-```rust
-type color = either(u8) { red, green, blue }
-
-let c: color = :red
-assert(c is :red)
-assert-equals(color:green.value, 1)
-assert-equals(c.enum-value(), 0)
-```
-
-The `enum` ability (in the core prelude) also constructs from the scalar,
-resolving the impl from the expected type, including through `.!`:
-`enum-from-value` checks membership, and `enum-from-value-unchecked`
-reinterprets (an undeclared value is UB unless the enum is `partial`):
-
-```rust
-let c: ?color = enum/enum-from-value(2)
-let d: color = enum/enum-from-value(1).!
-let e: color = enum/enum-from-value-unchecked(1)
-```
-
-Enum tags may be explicit:
-
-```rust
+A bare-type param (or struct field) is named after the type's base ident, dropping
+`*`, `?`, type args and ns path (`core/code` -> `code`). Anonymous structs, fn types
+and `some t` need `name: t`.
+
+## Values, places, references
+- Blocks are expressions. Unit type `{}`, value `.{}`; `{}` as a body yields `.{}`.
+- `:` means type, `=` means value: struct type `{ x: int, *cursor }`, value
+  `.{ x = 1, y }` (shorthand from a local). Bare `{` in expr position is a block.
+  `base | .{ a = 2 }` copies `base` with fields replaced (base evaluates first).
+- `type p = ...` is nominal (struct, `either`, `opaque`); `type(alias) n = t` is not.
+- Bare sigil literals infer from the expected type; a type path written flush
+  before the sigil nominates: `.0`/`t.0` (zero), `.{ }`/`t.{ }`, `:v`/`t:v`/
+  `opt[int]:some 42` (type args go on the type, never after the variant).
+  `x: t` ascription is for non-path types. All allocation is zeroed.
+- `uninit` is not an expression: only a `let` initializer or struct-literal field
+  value.
+- Every local is assignable (`let`, no `mut`). `let(mutable)` is for globals.
+- `=` stores to any place: `a.f`, `a.[i]`, `r.*`. A bare var on the left rebinds it;
+  store through a reference with `r.* = v`. `.*` derefs, `.&` takes a place's address.
+  `a.f` auto-derefs; `p-ref.x.&` is `*int`.
+- `*t` is never null, aligned, dereferenceable while live; optimized builds
+  speculate loads. Holding one across its memory's free (arena reset, list growth)
+  is UB even if never read. Nullable: `optref[t]`. Raw: `ptr`.
+- `a.[k]` = `a.index-ref(k).*` (`index` ability), a place. Arrays are intrinsic.
+  Map `.[k]` crashes on a missing key: `map.get(k)` / `index-opt` are optional.
+  Implement `index` for `*t` when elements live inline in `t`. `as-span` does not
+  imply `index`.
+- Dropping a `try`-type result (`opt`, `result`) warns; `let _ = e` discards it
+  (and turns a tail expression into `empty`).
+
+## Scalars and conversions
+`bool char string int i8 i16 i32 i64 u8 u16 u32 u64 size f32 f64 ptr`.
+- `x.widen[i64]` lossless (implicit at arg/let/return coercions), `x.trunc[u8]`
+  modular, `.signed()`/`.unsigned()` same-width flip. zext:
+  `x.unsigned().widen[u64]`; sext: `x.widen[i64].unsigned()`.
+- `.as[t]`: int<->float, and total views behind references (`*t` -> `ptr`,
+  `*big` -> `*prefix-struct`). Claiming views (`*u8` -> `*bool`, `*u32` -> `*enum`,
+  `ptr` -> `*t`) are `.narrow()`. Both take the target from the expected type:
+  `let r: *f32 = u.&.as()`.
+- `c.as-u8()` (char), `b.as-u8()` (bool), `mem/bitcast[a, b](v)` same-size bits.
+- ptr: `to-int() to-uint() to-size()`, `n.to-ptr()`, `p.ref[t]` (null-checked in
+  debug and comptime), `p.ref-opt[t]`, `p.ref-at[t](i)` (gep), `ptr/null` or `.0`.
+  `p is null` is a pattern on `ptr` only (a type error on `*t`); parenthesize
+  before an enum-literal consequent: `if (p is null) :none else ...`. Never
+  `ptr/null.ref[t]`.
+
+## Enums and sums
+```k1
+type color = either(u8) { red, green, blue }        // tag type optional
 type status = either { ok = 10, missing = 20 }
-assert-equals(status:missing.value, 20)
+type res[t] = either { ok(t), err(string) }
+type ev = either(u32, partial) { quit = 256 }       // open C enum
+let c: color = :red; color:green; :ok(42); :ok 42
 ```
+- Quiet payload (`:ok 42`): same line, starting with an ident, literal, list,
+  nonempty struct literal or `:variant`; binds one postfix expr (`:ok f(x).y`);
+  binary ops take the whole variant (`:ok 1 == x` is `(:ok 1) == x`). Otherwise
+  parenthesize.
+- An `empty` payload may be elided: `:ok` constructs and matches `:ok(.{})`.
+- A value outside the declared tags is UB, zeroed memory included. `partial`
+  (payload-less only, tag type required; bindgen emits it) makes matches need `_`
+  and prints undeclared values as `ev(8192)`.
+- `.value` / `.enum-value()`, `.tag`, `.as-ok(): ?t`, `.enum-name()`, `.sum-name()`,
+  `enum/enum-from-value(v): ?e` (impl picked from the expected type),
+  `enum-from-value-unchecked`, `types/enum@(e)/members()`, `sum.tag-enum` (type of
+  the tags).
 
-An enum or sum holding a value outside its declared tags is undefined
-behavior, zeroed memory included. C enums are open, so interop enums are
-`partial` (k1bindgen emits it for every C enum): a match needs a `_` arm,
-`*u32` to `*event-kind` is a total `.as` view, and `enum-name`/print render
-an undeclared value as `event-kind(8192)`. Only payload-less eithers can be
-partial, and the tag type is required.
+## Optional, result
+`?t` with `:some x` / `:none` (or `some(x)`). `.!` unwraps or crashes, `o ? d`
+falls back, `.try` propagates through the `try` ability. `result[t, e]` is
+`:ok`/`:err`. Most special-looking syntax is an ability; look for it before
+assuming an intrinsic.
 
-```rust
-type event-kind = either(u32, partial) { quit = 256, key-down = 768 }
-if k is { :quit -> 1, :key-down -> 2, _ -> 3 }
+## Matching
+```k1
+if v is :some(x) and x > 0 { }           // `is` is a bool expr; binds at the top of an `and` chain, `or` breaks binding
+if p is { .{ x = 0, y } -> y, .{ x, y } if x == y -> x, :a or :b -> 1, _ -> 0 }   // exhaustive match expr
+require v is :some(x) else crash("none") // x in scope after; else must diverge
+if r is :ok(v)* { v.* = 100 }            // trailing * binds a payload reference when matching through *sum
 ```
+Patterns: literals (int, float, string, char, bool, `.{}`), `_`, bindings, struct,
+sum, `type[int](x)`, ref depth `true***`. `#if x is { ... }` typechecks only the
+chosen arm.
 
-See `test_src/suite1/enum_partial.k1`.
+## Loops and defer
+- `while c { }`; `loop { }` (`while true` is an error); `break v`, bare `break`,
+  `continue`. A `loop` without `break` is `never`.
+- `for x in xs { }` or `for xs { }` (element named `it`); `it-index` is always bound.
+- `0.until(10)` is the half-open `range[t]` (any `add + scalar-cmp + one` type).
+- Labels: `loop @find { for i in xs { if i > 10 break @find :some i } break :none }`;
+  `continue @l` too. `#for` unrolls and takes no label.
+- `defer e` runs on any scope exit (return, break, continue, `.try`), LIFO,
+  typechecked where written. The exit value is computed first, so a defer changes
+  it only through a `let(returned)` var. `defer r. if r is :err _ unlock()` binds
+  the returned value (fn top level only). A defer body cannot exit.
 
-Payload-carrying sums expose their active tag through `.tag`, and generated
-variant helpers such as `.as-ok()` return an optional payload:
+## Collections
+`array[t, n]`, `list[t]`, `buffer[t]`, `span[t]`, `fixlist[t, n]`, `spill-list[t, n]`,
+`std/hash` `map`/`set`. `[a, b]` literals build arrays and lists.
+- `wrap-*` constructors are zero-copy views (dangerous); `from-*` copy. `as-*`
+  views, `to-*` owned copies.
+- Bare ops allocate in the ambient arena (`mem/current-arena()`, TLS stack,
+  default tmp; scope with `mem/with-arena(a, expr)`). `-in` variants take any
+  `allocator` (`*arena`, `heap`) after self: `push-in`, `cloned-in`. Long-lived
+  data takes an explicit allocator.
+- Arenas: `reset`/`pop-to-mark` re-zero what they release (O(bytes used)), `free`
+  is a no-op. `arena/init(size)` chains regions; `init-from-buffer(zeroed bytes)`
+  is fixed and crashes when full. `arena/handle[t]`, `span-handle[t]`: u32 offsets
+  into the first region (`.0` is nil): `handle-from`, `push-handle`, `get(h)`.
+- `std/pool`: `pool[t]` fixed slots, `pool/handle[t]`, slot 0 a zeroed nil: `get`
+  on a dead handle returns nil (crashes if `t` holds `*t`), full `acquire` returns
+  `.0`; check `is-live`.
+- `x.non-empty()`, never `not x.is-empty()` or `x.len() > 0`.
+- Mutators take `*self` (`sort`, `reverse`); copies end `-ed` (`sorted`).
+- Shared ops are ability defaults: reads on `as-span` (`len first last slice take
+  drop starts-with chunks sorted index-of-span contains-span index-opt`),
+  mutation on `as-buffer` (`swap sort reverse fill first-ref ref-iter`;
+  `as-buffer` derives `as-span`). View types shadow them with shape-preserving
+  inherents (string ops return string). Each method name belongs to one ability.
+- Element search is `position`/`contains` (any iterable, SIMD for int/char/bool
+  contiguous data); subsequence search is `index-of-span`/`contains-span`.
 
-```rust
-type parse-result[T] = either { ok(T), err(string) }
-
-let result: parse-result[int] = :ok(42)
-assert-equals(result.tag, 0)
-
-if result is :ok(value) {
-  assert-equals(value, 42)
-} else {
-  crash("expected ok")
-}
-
-assert-equals(result.as-ok().!, 42)
+## Lambdas and fn values
+```k1
+fn(x: int) x + 1    fn x. x + 1    fn. { work() }
+fn[base, counter.&](x: int) { counter.* = counter.* + base + x }
 ```
+- Plain lambdas capture nothing (error). `[name]` copies at creation, `[name.&]`
+  captures the address (body sees a reference). Nested lambdas re-list captures.
+- Param types: `some fn int -> int` (specialized, default choice), `dyn[fn() -> {}]`
+  (dynamic object), `*fn(int) -> int` (raw pointer: `add-one.&`; null is `ptr/null`).
+- Any callable expr calls: `(s.callback)(x)` (`s.callback(x)` is a method lookup),
+  `(make-adder(2))(3)`. A named fn's value has the ZST `type-of(f)`.
+- `xs || map(fn x. x + 1) || filter(fn x. x % 2 == 0)` pipes.
 
-Payload parentheses are optional in both constructors and patterns — the
-'quiet' form. The payload must start on the same line, with an identifier,
-literal, list literal, nonempty struct literal (`.{ x = 1 }`), or another
-`:variant`; anything else (an operator, a lambda, an empty `.{}`, a line
-break) needs the parenthesized form, so a trailing variant never captures a
-following block or a bare unit:
-
-```rust
-let result: parse-result[int] = :ok 42
-
-if result is :ok value {
-  assert-equals(value, 42)
-}
-
-require result is :ok v else crash("expected ok")
+## Abilities
+```k1
+ability show-id { fn show-id(self): string }
+impl show-id for user { fn show-id(self): string { "user-${self.id}" } }
+impl[t: increment] incr-four for t { }                 // blanket
+fn f[t: print and equals](x: t)   fn g[t](a: t) where t: num, t: show
+t: as-pair[aa = x, bb = y]                             // named ability params
+print/print-to(v, w)   has-secret[a = int]@(foo)/secret()   // qualified / impl-selected
 ```
-
-A quiet payload binds one postfix expression: `:ok f(x).y` means
-`:ok(f(x).y)`, while binary operators apply to the whole variant:
-`:ok 1 == x` means `(:ok 1) == x`.
-
-A payload of type `empty` can be elided entirely: constructing `:ok` for a
-`result[empty, e]` means `:ok(.{})`, and the pattern `:ok` matches it (and
-counts as exhaustive coverage). Spelling the payload out (`:ok(.{})`,
-`:ok _`) remains valid. Variants with any other payload type still require
-it.
-
-When matching on a reference to a sum, plain patterns bind payload values; add
-trailing `*` to the pattern to bind a reference to the variant's data instead,
-then store through it with `.* =`:
-
-```rust
-let result: parse-result[int] = :ok 42
-let result-ref = result.&
-
-if result-ref is :ok(ok-ref)* {
-  ok-ref.* = 100
-} else {
-  crash("expected ok")
-}
-
-assert-equals(result-ref.as-ok().!, 100)
-```
-
-This works in every pattern position — `if`/`while`/`require` conditions and
-match arms:
-
-```rust
-if result-ref is {
-  :ok(value-ref)* -> { value-ref.* = value-ref.* + 1 },
-  :err(message-ref)* -> { crash(message-ref.*) }
-}
-```
-
-`if x is { arms }` is the match expression: exhaustive, and usable anywhere
-an expression is. `#if x is { arms }` is its static form: only the chosen
-arm is typechecked. `x is <pattern>` (a bool) is the two-arm degenerate case,
-and needs no `if`.
-
-```rust
-fn show-result(result: parse-result[int]): string {
-  if result is {
-    :ok(value) -> { "ok {value}" },
-    :err(message) -> { "err {message}" }
-  }
-}
-```
-
-Generated helpers such as `.as-ok()`, `.is-some()`, `.enum-name()`,
-`.sum-name()`, `.enum-value()`, and `.tag` show up throughout the tests.
-`types/enum@(t)/members()` is every member of enum `t` as a static span, built
-from the schema the first time it is called.
-
-See `test_src/suite1/enum_basic.k1`, `test_src/suite1/sum_basic.k1`,
-`test_src/suite1/match_references.k1`, and `test_src/suite1/matching_if.k1`.
-
-## Option And Result
-
-Optional values use `?T`, with `:some(value)` and `:none`:
-
-```rust
-let maybe-name: ?string = :some("k1")
-
-if maybe-name is :some(name) {
-  assert-equals(name, "k1")
-}
-```
-
-Examples may use either direct variants such as `:some(value)` or helper
-constructors such as `some(value)`. Use whichever is clearer in the surrounding
-code.
-
-The postfix `.!` unwraps an optional-like value when the code expects it to be
-present. It is good style when the invariant is clear:
-
-```rust
-assert-equals(maybe-name.!, "k1")
-```
-
-This syntax is user-accessible through abilities rather than hardcoded as a
-one-off builtin. That is true of most special-looking K1 syntax: prefer looking
-for the relevant ability before assuming a parser or compiler intrinsic.
-
-The `?` operator provides a fallback for optionals:
-
-```rust
-let value = maybe-int ? 42
-```
-
-Results are sums with `:ok` and `:err`. The `.try` form propagates errors
-through the active `try` ability:
-
-```rust
-fn run(): result[int, string] {
-  let value = can-fail().try
-  :ok(value + 1)
-}
-```
-
-## Conditionals And Pattern Matching
-
-`if` is an expression:
-
-```rust
-let n = if flag 1 else 2
-```
-
-Boolean negation is the `not` prefix. It binds tightly, to one postfix chain:
-`not user.is-admin()` negates the call result. A binary operator directly
-after the operand is a parse error, not a precedence choice — write
-`(not a) == b` or `not (a == b)`. At the end of a method chain, use
-`negated()` instead: `list.contains(x).negated()`.
-
-There is no unary minus. `-5` is a negative literal (the sign fuses with the
-number when nothing separates them). Mid-line, spacing decides: a `-` spaced
-before but not after is a sign and ends the expression, so `if flag -1 else 1`
-yields `-1` and `x -1` is a parse error; `x - 1` subtracts. Value negation is
-the `neg` ability's `negated()`: `x.negated()` is 2's complement wrapping on
-ints (signed and unsigned), a true sign-bit flip on floats, and `not` on bool.
-`not` itself stays bool-only.
-
-Use `is` for pattern checks and bindings:
-
-```rust
-if value is :some(x) and x > 0 {
-  assert(x > 0)
-} else {
-  assert(false)
-}
-```
-
-Struct patterns work in `if`, `require`, and match arms. Arms support `or`
-patterns, `if` guards, and a `_` default:
-
-```rust
-if point is {
-  .{ x = 0, y } -> y,
-  .{ x, y } if x == y -> x,
-  _ -> 0
-}
-```
-
-Matching `if` chains bind names only when `is` expressions live at the top level
-of an `and` chain. An `or` breaks that property.
-
-`require` checks a condition and runs an error block otherwise:
-
-```rust
-require value is :some(x) else {
-  crash("missing value")
-}
-assert(x > 0)
-```
-
-See `test_src/suite1/matching_if.k1`, `test_src/suite1/match_fails.k1`, and
-`test_src/suite1/match_references.k1`.
-
-## Loops
-
-`while` loops are statement-like and usually yield `.{}`:
-
-```rust
-while i < 10 {
-  i = i + 1
-}
-```
-
-`loop` is the infinite loop; `while true` is a compile error. `loop` can yield
-a value through `break value`; a bare `break` exits with unit, and a `loop`
-with no `break` has type `never`. `continue` skips to the next iteration (the
-condition check of a `while`, the next `iter.next()` of a `for`):
-
-```rust
-let found: int = loop {
-  break 42
-}
-```
-
-`@label` right after `loop`, `while`, or `for` names the loop; `break @label`
-and `continue @label` target it from any depth inside the same fn or lambda.
-A label may carry a value like a plain `break` (`break @find :some i`), and
-the label stays distinct from `:variant` payloads. Unlabeled `break` and
-`continue` still target the nearest loop. `#for` unrolls and cannot be labeled:
-
-```rust
-let r: ?int = loop @find {
-  for i in items {
-    if i > 10 break @find :some i
-  }
-  break :none
-}
-```
-
-`for` loops iterate over iterable values. The loop body can use `it` and
-`it-index`, or bind a name with `in`:
-
-```rust
-for values {
-  println("$it-index: $it")
-}
-```
-
-Numeric loops use ranges. `a.until(b)` (from the `rangeable` ability) builds the
-half-open `range[t]` value `[a, b)`, which iterates by an implied step of one.
-It works on any type with `add`, `scalar-cmp`, and `one` impls — all the
-integer types and floats:
-
-```rust
-for i in 0.until(10) {
-  println("$i")
-}
-```
-
-`defer` runs when leaving the current scope, including early returns, `break`,
-`continue` and `.try` propagation, last-declared first:
-
-```rust
-defer cleanup()
-```
-
-Names in a defer resolve where it is written, and it is typechecked once there.
-An exit computes its value before the defers run, so a defer cannot change the
-result, except by assigning a `let(returned)` variable. `return`, `break`,
-`continue` and `.try` cannot leave a defer body.
-
-`defer r. <expr>` binds the value the function is returning to `r`. It must be
-at the top level of a function body, and it runs on every function exit:
-
-```rust
-let guard = lock.lock()
-defer r. if r is :err _ guard.unlock()
-```
-
-See `test_src/suite1/control_flow.k1` and `test_src/suite1/defer_test.k1`.
-
-## Arrays, Buffers, Lists, And Spans
-
-Array, buffer, list, and span types are written with square brackets:
-
-```rust
-let fixed: array[bool, 3] = [false, true, true]
-let dynamic: list[bool] = [false, true, true]
-let view: span[bool] = dynamic.as-span()
-```
-
-Arrays have a compile-time length in their type. Buffers, lists, and spans are
-used heavily in the core library and the example programs.
-
-Common helpers include `.len()`, `.[index]`, `.[index] = value`,
-`.as-span()`, `.as-buffer()`, and `list/filled-in(...)`.
-
-Collection API naming follows a doctrine:
-
-- `wrap-*` constructors are zero-copy views over existing memory (the dangerous
-  ones, so they are explicitly named). `from-*` constructors make an owned copy.
-- `as-*` accessors return views; `to-*` methods return owned copies.
-- A bare operation allocates in the ambient current arena
-  (`mem/current-arena()`, a TLS stack defaulting to the tmp arena; scope one
-  with `mem/with-arena(a, expr)`). The `-in` variant takes an explicit
-  allocator as its first argument after self — any `allocator` impl: a
-  `*arena` or `heap` (e.g. `cloned`/`cloned-in`, `push`/`push-in`,
-  `reserve`/`reserve-in`). Long-lived data takes an explicit allocator;
-  transient data uses the ambient arena.
-- Every allocation is zeroed (zero is initialized). Arena `reset` and
-  `pop-to-mark` restore that by zeroing the bytes they release, so they cost
-  O(bytes used); arena `free` is a no-op.
-- `arena/init(size)` acquires its own region and chains when full;
-  `arena/init-from-buffer(bytes)` puts the header in caller memory, which must
-  be zeroed, and is fixed (exhaustion crashes); `release` frees only what the
-  arena acquired.
-- `arena/handle[t]` (`{offset: u32}`) and `arena/span-handle[t]`
-  (`{offset, len: u32}`) are relocatable references into an arena's first
-  region, measured from its header, so `.0` is nil/empty. Allocate as usual
-  and convert (`handle-from(*t)`, `handle-from-many(span)`), or use the
-  `*arena`-only `push-handle`, `push-many`, `alloc-many`; read
-  with `get(h): *t` and `get-many(h): buffer[t]`. Converting memory outside
-  the first region crashes; debug and `#static` builds check reads against
-  live memory.
-- `std/pool`: `pool[t]` holds fixed-capacity slots addressed by
-  `pool/handle[t]`. Slot 0 is a zeroed nil: `get` on a handle that isn't live
-  (released, `.0`, or garbage) returns nil, a full pool's `acquire` returns
-  `.0`; check `is-live` where it matters. When `t` is not zero-safe
-  (`types/is-zero-safe[t]()`, false for types holding `*t`), `get` on a
-  handle that isn't live crashes instead.
-- Every collection has `is-empty()` and `non-empty()`; write `x.non-empty()`,
-  never `not x.is-empty()` or `x.len() > 0`.
-- Mutators take `*self` and reuse the verb (`sort`, `reverse`); functional
-  variants get `-ed` (`sorted`, `reversed`).
-- Shared collection ops are ability defaults: reads and views on `as-span`
-  (`len`, `index-opt`, `first`, `last`, `slice`, `take`, `drop`,
-  `starts-with`, `ends-with`, `chunks`, `sorted`, `index-of-span`,
-  `contains-span`, `first-diff`), mutations and references on `as-buffer`
-  (`swap`, `sort`, `reverse`, `fill`, `first-ref`,
-  `last-ref`, `ref-iter`). Implementing `as-buffer` derives
-  `as-span` via a blanket impl. View defaults return `span[t]`; view types
-  shadow them with shape-preserving inherents (string ops return string,
-  buffer ops return buffer). Each method name belongs to exactly one ability;
-  inherent shadowing is the only sanctioned overlap.
-- Search by element is `position`/`contains` (`iterable` defaults over the
-  `iterator` hook `seek`, so they work on any iterable); search by
-  subsequence is `index-of-span`/`contains-span`. `buffer-iterator`, the
-  iterator of every contiguous collection, overrides `seek` and dispatches on
-  the element type: every int width, `char`, and `bool` take SIMD lanes,
-  everything else a scalar loop. `index-of-span` has the same split, SIMD
-  for byte-sized `t` only.
-
-See `test_src/suite1/array_test.k1` and `test_src/suite1/list_test.k1`.
-
-## Lambdas And Function Values
-
-Lambda forms include typed parameters:
-
-```rust
-let add-one = fn(x: int) x + 1
-```
-
-inferred parameters:
-
-```rust
-let add-one = fn x. x + 1
-```
-
-and nullary thunks:
-
-```rust
-let thunk = fn. { println("later") }
-```
-
-A plain `fn` lambda is non-capturing: referencing an enclosing local is a
-compile error. To capture, declare the captures in brackets after `fn` —
-the meta-parameter slot, where named functions put type parameters. A bare
-name copies the value into the closure's environment at creation; `name.&`
-stores the variable's address, and the body sees `name` as a reference to
-store through:
-
-```rust
-let base = 10
-let counter = 0
-let bump = fn[base, counter.&](x: int) {
-  counter.* = counter.* + base + x
-}
-```
-
-Captures bind like `let`s at closure entry, so a nested lambda captures an
-outer lambda's captures by naming them again in its own list.
-
-Function parameters can accept static function values, closure-like values, or
-dynamic function objects depending on the type. Prefer `some fn ...` for
-beginner-facing examples and ordinary function parameters; reach for
-`dyn[fn ...]` when you specifically need a dynamic function object:
-
-```rust
-fn apply(i: int, f: some fn int -> int): int {
-  f(i)
-}
-
-fn run-later(thunk: dyn[fn() -> {}]) {
-  thunk()
-}
-```
-
-Any expression of a callable type can be called: `(s.handler)(x)`,
-`(make-adder(2))(3)`, `(fn[n]. n * 2)()`. A named function's value has the
-zero-sized type `type-of(f)`; calling or taking `.&`/`.to-dyn()` of such a
-value still evaluates the expression that produced it.
-
-The pipe operator `||` passes a value through functions:
-
-```rust
-let result = [1,2,3]
-  || map(fn x. x + 1)
-  || filter(fn x. x % 2 == 0)
-```
-
-See `test_src/suite1/lambdas.k1`.
-
-## Abilities And Impls
-
-Abilities define behavior that types can implement:
-
-```rust
-ability printable-id {
-  fn printable-id(self): string
-}
-
-type user = { id: int }
-
-impl printable-id for user {
-  fn printable-id(self): string {
-    "user-${self.id}"
-  }
-}
-```
-
-Ability bounds go on type parameters:
-
-```rust
-fn show[T: print](value: T): string {
-  "${}".fmt(value)
-}
-```
-
-Qualified ability calls use `/`:
-
-```rust
-print/print-to(value, writer)
-```
-
-When multiple impls could apply, tests also use explicit ability/type selection:
-
-```rust
-some-ability@(some-type)/function-name()
-```
-
-See `test_src/suite1/ability.k1`, `test_src/suite1/ability_generic.k1`, and
-`test_src/suite1/ability_complex.k1`.
-
-## Imports
-
-Use `use` to bring functions, constants, types, or namespaces into scope:
-
-```rust
-use core/types/id
-use std/libc/files/SEEK_END as seek-end
-
-fn test() {
-  use core/string as str
-  let hello: str = "hello"
-}
-```
-
-Prefer local `use` statements when the alias is only needed in one function.
-
-See `test_src/suite1/use_test.k1`.
-
-## Compile-Time Execution
-
-`#static` evaluates an expression at compile time:
-
-```rust
-let answer: 42 = #static {
-  40 + 2
-}
-```
-
-Static values can carry literal types:
-
-```rust
-let greeting: "hello" = #static "hello"
-```
-
-`#if` conditionally includes code at compile time:
-
-```rust
-#if false {
-  crash("not compiled")
-}
-```
-
-See `test_src/suite1/static_run.k1`,
-`test_src/suite1/static_parameter.k1`, and
-`test_src/suite1/test_comptime.k1`.
-
-## Formatting And Strings
-
-String interpolation is supported inside string literals and formatting helpers.
-A hole is `$ident` for a bare identifier, or `${expr}` for any expression. The
-resulting string is allocated in the ambient arena, like any bare operation:
-
-```rust
-let name = "k1"
-assert-equals("hello $name", "hello k1")
-assert-equals("len ${name.len()}", "len 2")
-```
-
-`$ident` uses normal identifier rules, so it is greedy through kebab-case:
-`"$n-th"` reads the identifier `n-th`; write `"${n}-th"` to stop at `n`. A `$`
-followed by anything that cannot start an identifier is literal (`"$5.99"`), and
-`\$` escapes a `$` that would otherwise open a hole. Braces are ordinary
-characters in strings and need no escaping.
-
-A `${...}` hole takes a format spec after a colon, Python/Rust style:
-`${value:[[fill]align][0][width][,][.precision]}`. Align is `<`, `>` or `^`
-(default: right for integers and floats, left otherwise); fill is any one
-char. `0` pads with zeros after the sign and cannot combine with align or `,`.
-Width counts UTF-8 chars. `,` groups the integer digits of an int or float in
-threes (`${1234567:,}` is `1,234,567`). Precision needs the `print-precise` ability (floats: digits
-after the point; strings: max chars); ints reject it. Bare `${:spec}` holes take
-specs too. `${x: f64}` (space after the colon) stays a type ascription.
-
-```rust
-assert-equals("${3.14159:.2}", "3.14")
-assert-equals("${-42:06}", "-00042")
-assert-equals("${7:x>3}", "xx7")
-assert-equals("${"hi":*^6}", "**hi**")
-assert-equals("${:>4}".fmt(12), "  12")
-```
-
-Call `.write` on any value that implements the `writer` ability to write
-formatted text to it. The argument is the template, and an optional second
-argument supplies format values:
-
-```rust
-let w = string-builder/new()
-w.write("hello ${}", 42)
-w.write(" $name", .{ name = "k1" })
-```
-
-Use `.writeln` the same way when you want a trailing newline:
-
-```rust
-w.writeln("status: ${}", 200)
-```
-
-A non-template argument is a plain write — `w.write(some-string)` and
-`w.writeln(some-string)` are ordinary `writer` ability methods.
-
-To format a string template with values, call `.fmt(values)` on the literal —
-a string with holes, _format_ with these values:
-
-```rust
-let dated = "$yyyy-${mm}-$dd".fmt(.{ yyyy = 2026, mm = 6, dd = 25 })
-```
-
-Bare `${}` placeholders consume the value argument directly. Named placeholders
-such as `$name` read fields from the values struct. Interpolated expressions can
-also refer to locals in scope, and a template whose holes all resolve in scope
-needs no `.fmt` at all:
-
-```rust
-let place = "Budapest"
-assert-equals("hello $place", "hello Budapest")
-```
-
-`.write`/`.writeln` with a template argument and `.fmt` on a string template
-are special syntax hooks checked by the typer, but they still rely on normal K1
-abilities for the actual output. The templates must be literals so their parts
-are known at compile time; an inherent `write` method on a type, or a `write`
-from another ability on a non-writer type, resolves normally.
-
-Backtick strings may span lines and hold unescaped `"`:
-
-```rust
-let raw = `Hello,
-
-  "world"`
-```
-
-They are not raw: `$name`/`${expr}` interpolate and `\n`, `\t`, `\r`, `\\`, `\$`
-are escapes, exactly as in a double-quoted literal. Only `\"` is left alone,
-since a `"` needs no escaping here.
-
-A backtick literal whose content starts on the line after the opening backtick
-is a block: the leading newline is dropped, indentation common to every line is
-stripped — the closing backtick's line included, so its column decides how much
-indentation is incidental — and a whitespace-only last line is removed:
-
-```rust
-let block = `
-  let i = 1;
-  while i < args.len() {
-  `
-// == "let i = 1;\nwhile i < args.len() {\n"
-```
-
-See `test_src/suite1/format.k1` and
-`test_src/suite1/string_interp.k1`.
+- Default methods, overridable. `where` on an ability fn gates it per impl; impls
+  don't restate it. Overlapping impls resolve by which one makes the call typecheck.
+- `pred` bounds: `type w[t: pred is-int]`, `ability a[out: pred is-scalar]`; the
+  predicate fn must live in `ns pre` or a dependency. Impls are declared before
+  type bodies, so constrained generic fields find them; an impl for the type being
+  defined still can't satisfy that type's own constraints.
+
+## Strings and formatting
+- `"hi $name ${expr}"` interpolates into the ambient arena. `$ident` is greedy
+  through kebab (`"${n}-th"`); `$` before a non-ident is literal; `\$` escapes.
+  Braces are plain characters.
+- Spec: `${v:[[fill]align][0][width][,][.precision]}`; `${x: f64}` (space) is an
+  ascription. `${3.14159:.2}` "3.14", `${-42:06}` "-00042", `${7:x>3}` "xx7",
+  `${1234567:,}` "1,234,567". Precision needs `print-precise` (rejected on ints).
+- `"${}".fmt(42)` (bare hole takes the argument), `"$y-$m".fmt(.{ y = 2026, m = 6 })`
+  (named holes read its fields, else locals; all-local templates need no `.fmt`). `w.write("x ${}", 42)` / `w.writeln` on any `writer`; a non-template
+  argument is a plain write. Templates must be literals.
+- Backticks: multi-line, unescaped `"`, still interpolate and escape. Content
+  starting on the next line is a block: leading newline dropped, common indent
+  (closing backtick's line included) stripped, whitespace-only last line removed.
+- Escapes: `\n \0 \t \r \\ \" \$`, `'\''`.
 
 ## Tests
-
-Language regression tests live under `test_src`.
-
-Use this shape for a new positive test:
-
-```rust
-ns feature-test
-
-fn test() {
-  assert-equals(1 + 1, 2)
+```k1
+fn(test) adds() { assert-equals(1 + 1, 2) }
+fn(test) checks-bounds() {
+  k1/test/expect-failure("Index out of bounds: 44 >= 10")   // literal, direct statement of a test body
+  let xs: array[int, 10] = .0
+  let i = 44
+  let _ = xs.[i]
 }
 ```
-
-Then add it to `test_src/suite1/suite1.k1` if it belongs in suite1.
-
-Use `test-compile(...)` when a snippet should fail to compile:
-
-```rust
-assert(test-compile(bad-expression()).is-some())
-```
-
-Use `assert`, `assert-equals`, and `core/assert-not-equals` for expectations.
-
-## Open Questions For Idiom
-
-These are places where tests show behavior, but the preferred style or long-term
-design should be confirmed:
-
-- Should `#static` be introduced early as a core language feature, or kept in an
-  advanced guide?
+- `k1 test` collects every `fn(test)` in the primary module. No params; return
+  `core/test/outcome`: `empty`, `opt` (`:none` fails), any `try` (error fails).
+- Each runs statically in the VM and at runtime in a forked child.
+  `fn(test-runtime)` (FFI, threads, fork) / `fn(test-static)` opt out of one;
+  `--skip-static` / `--skip-runtime` for the run. `k1 test . name` filters by
+  qualified-name substring (`suite1/ns/name`).
+- `expect-failure` passes only if the test fails with the needle in its output or
+  exit rendering ("exited with code 3", "killed by signal 6"); in-process runtimes
+  (wasi, bare) skip it.
+- `test-compile(expr): ?string` is the compile error, if any. `assert`,
+  `assert-equals`, `assert-not-equals`.

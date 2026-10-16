@@ -1,6 +1,4 @@
-ns ordering_test
-
-fn tags-test() {
+fn(test) ordering-tag-values() {
   assert-equals(ordering:less.value, -1)
   assert-equals(ordering:equal.value, 0)
   assert-equals(ordering:greater.value, 1)
@@ -13,7 +11,7 @@ fn tags-test() {
   assert(g is :greater)
 }
 
-fn float-compare-test() {
+fn(test) float-compare-total-order() {
   assert((1.5: f64).compare(2.5) is :less)
   assert((2.5: f64).compare(2.5) is :equal)
   assert((2.5: f64).compare(1.5) is :greater)
@@ -40,9 +38,4 @@ fn float-compare-test() {
   assert((2.5: f32).compare(1.5) is :greater)
   let f32-neg-nan: f32 = mem/bitcast(0xFFC00000: u32)
   assert(f32-neg-nan.compare(-1.0) is :less)
-}
-
-fn test() {
-  tags-test()
-  float-compare-test()
 }

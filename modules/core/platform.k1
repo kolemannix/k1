@@ -5,7 +5,7 @@ ns platform {
 
   //////////////////////////////////
   // The surface: every fn dispatches the same way -- static execution runs on
-  // the posix host, otherwise the target platform's port serves the call
+  // the posix host, otherwise the target platform's impl serves the call
 
   ns memory {
 
@@ -16,29 +16,29 @@ ns platform {
     // [base, base+len) usable; first-committed pages arrive zeroed, and
     // re-committing preserves contents
     fn reserve(min-size: size): region {
-      if k1/is-static port/posix/reserve(min-size)
+      if k1/is-static impls/posix/reserve(min-size)
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/reserve(min-size),
-        :wasi -> port/wasi/reserve(min-size),
-        :bare -> port/bare/reserve(min-size)
+        :posix-macos or :posix-linux -> impls/posix/reserve(min-size),
+        :wasi -> impls/wasi/reserve(min-size),
+        :bare -> impls/bare/reserve(min-size)
       }
     }
 
     fn commit(base: ptr, len: size) {
-      if k1/is-static port/posix/commit(base, len)
+      if k1/is-static impls/posix/commit(base, len)
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/commit(base, len),
-        :wasi -> port/wasi/commit(base, len),
-        :bare -> port/bare/commit(base, len)
+        :posix-macos or :posix-linux -> impls/posix/commit(base, len),
+        :wasi -> impls/wasi/commit(base, len),
+        :bare -> impls/bare/commit(base, len)
       }
     }
 
     fn release(r: region) {
-      if k1/is-static port/posix/release(r)
+      if k1/is-static impls/posix/release(r)
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/release(r),
-        :wasi -> port/wasi/release(r),
-        :bare -> port/bare/release(r)
+        :posix-macos or :posix-linux -> impls/posix/release(r),
+        :wasi -> impls/wasi/release(r),
+        :bare -> impls/bare/release(r)
       }
     }
 
@@ -54,27 +54,27 @@ ns platform {
   // consumer on bare; wasi has no one to ask, so it gets the bump heap
   ns heap {
     fn alloc(size: size): ptr {
-      if k1/is-static port/posix/alloc(size)
+      if k1/is-static impls/posix/alloc(size)
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/alloc(size),
-        :wasi -> port/bump/alloc(size),
-        :bare -> port/bare/alloc(size)
+        :posix-macos or :posix-linux -> impls/posix/alloc(size),
+        :wasi -> impls/bump/alloc(size),
+        :bare -> impls/bare/alloc(size)
       }
     }
     fn realloc(old-ptr: ptr, new-size: size): ptr {
-      if k1/is-static port/posix/realloc(old-ptr, new-size)
+      if k1/is-static impls/posix/realloc(old-ptr, new-size)
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/realloc(old-ptr, new-size),
-        :wasi -> port/bump/realloc(old-ptr, new-size),
-        :bare -> port/bare/realloc(old-ptr, new-size)
+        :posix-macos or :posix-linux -> impls/posix/realloc(old-ptr, new-size),
+        :wasi -> impls/bump/realloc(old-ptr, new-size),
+        :bare -> impls/bare/realloc(old-ptr, new-size)
       }
     }
     fn free(p: ptr) {
-      if k1/is-static port/posix/free(p)
+      if k1/is-static impls/posix/free(p)
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/free(p),
-        :wasi -> port/bump/free(p),
-        :bare -> port/bare/free(p)
+        :posix-macos or :posix-linux -> impls/posix/free(p),
+        :wasi -> impls/bump/free(p),
+        :bare -> impls/bare/free(p)
       }
     }
   }
@@ -106,77 +106,77 @@ ns platform {
 
     fn write(file: file-handle, data: ptr, count: size): io-result {
       let n =
-        if k1/is-static port/posix/write(file.raw, data, count)
+        if k1/is-static impls/posix/write(file.raw, data, count)
         else #if k1/platform is {
-          :posix-macos or :posix-linux -> port/posix/write(file.raw, data, count),
-          :wasi -> port/wasi/write(file.raw, data, count),
-          :bare -> port/bare/write(file.raw, data, count)
+          :posix-macos or :posix-linux -> impls/posix/write(file.raw, data, count),
+          :wasi -> impls/wasi/write(file.raw, data, count),
+          :bare -> impls/bare/write(file.raw, data, count)
         }
       .{ raw = n }
     }
     // ok(0) with a nonzero count is end-of-file
     fn read(file: file-handle, buffer: ptr, count: size): io-result {
       let n =
-        if k1/is-static port/posix/read(file.raw, buffer, count)
+        if k1/is-static impls/posix/read(file.raw, buffer, count)
         else #if k1/platform is {
-          :posix-macos or :posix-linux -> port/posix/read(file.raw, buffer, count),
-          :wasi -> port/wasi/read(file.raw, buffer, count),
-          :bare -> port/bare/read(file.raw, buffer, count)
+          :posix-macos or :posix-linux -> impls/posix/read(file.raw, buffer, count),
+          :wasi -> impls/wasi/read(file.raw, buffer, count),
+          :bare -> impls/bare/read(file.raw, buffer, count)
         }
       .{ raw = n }
     }
     fn poll-readable(file: file-handle): bool {
-      if k1/is-static port/posix/poll-readable(file.raw)
+      if k1/is-static impls/posix/poll-readable(file.raw)
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/poll-readable(file.raw),
-        :wasi -> port/wasi/poll-readable(file.raw),
+        :posix-macos or :posix-linux -> impls/posix/poll-readable(file.raw),
+        :wasi -> impls/wasi/poll-readable(file.raw),
         :bare -> crash("poll-readable is not supported on this platform")
       }
     }
     fn is-tty(file: file-handle): bool {
-      if k1/is-static port/posix/is-tty(file.raw)
+      if k1/is-static impls/posix/is-tty(file.raw)
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/is-tty(file.raw),
-        :wasi -> port/wasi/is-tty(file.raw),
-        :bare -> port/bare/is-tty(file.raw)
+        :posix-macos or :posix-linux -> impls/posix/is-tty(file.raw),
+        :wasi -> impls/wasi/is-tty(file.raw),
+        :bare -> impls/bare/is-tty(file.raw)
       }
     }
     fn open-to-read(path: string): result[file-handle, i32] {
       let fd =
-        if k1/is-static port/posix/open-to-read(path)
+        if k1/is-static impls/posix/open-to-read(path)
         else #if k1/platform is {
-          :posix-macos or :posix-linux -> port/posix/open-to-read(path),
-          :wasi -> port/wasi/open-to-read(path),
-          :bare -> port/bare/open-to-read(path)
+          :posix-macos or :posix-linux -> impls/posix/open-to-read(path),
+          :wasi -> impls/wasi/open-to-read(path),
+          :bare -> impls/bare/open-to-read(path)
         }
       if fd < 0 :err(0 - fd) else :ok(.{ raw = fd })
     }
     fn open-to-write(path: string): result[file-handle, i32] {
       let fd =
-        if k1/is-static port/posix/open-to-write(path)
+        if k1/is-static impls/posix/open-to-write(path)
         else #if k1/platform is {
-          :posix-macos or :posix-linux -> port/posix/open-to-write(path),
-          :wasi -> port/wasi/open-to-write(path),
-          :bare -> port/bare/open-to-write(path)
+          :posix-macos or :posix-linux -> impls/posix/open-to-write(path),
+          :wasi -> impls/wasi/open-to-write(path),
+          :bare -> impls/bare/open-to-write(path)
         }
       if fd < 0 :err(0 - fd) else :ok(.{ raw = fd })
     }
     fn close(file: file-handle) {
-      if k1/is-static port/posix/close(file.raw)
+      if k1/is-static impls/posix/close(file.raw)
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/close(file.raw),
-        :wasi -> port/wasi/close(file.raw),
-        :bare -> port/bare/close(file.raw)
+        :posix-macos or :posix-linux -> impls/posix/close(file.raw),
+        :wasi -> impls/wasi/close(file.raw),
+        :bare -> impls/bare/close(file.raw)
       }
     }
     // none when the size is unknowable (a pipe, an unseekable stream)
     fn file-size(file: file-handle): ?size {
       let n =
-        if k1/is-static port/posix/file-size(file.raw)
+        if k1/is-static impls/posix/file-size(file.raw)
         else #if k1/platform is {
-          :posix-macos or :posix-linux -> port/posix/file-size(file.raw),
-          :wasi -> port/wasi/file-size(file.raw),
-          :bare -> port/bare/file-size(file.raw)
+          :posix-macos or :posix-linux -> impls/posix/file-size(file.raw),
+          :wasi -> impls/wasi/file-size(file.raw),
+          :bare -> impls/bare/file-size(file.raw)
         }
       if n < 0 :none else :some(n)
     }
@@ -185,9 +185,9 @@ ns platform {
 
     fn pipe(): ?pipe-ends {
       let fds =
-        if k1/is-static port/posix/pipe()
+        if k1/is-static impls/posix/pipe()
         else #if k1/platform is {
-          :posix-macos or :posix-linux -> port/posix/pipe(),
+          :posix-macos or :posix-linux -> impls/posix/pipe(),
           :wasi or :bare -> crash("pipes are not supported on this platform")
         }
       if fds.read < 0 :none
@@ -195,11 +195,11 @@ ns platform {
     }
 
     fn is-executable(path: string): bool {
-      if k1/is-static port/posix/is-executable(path)
+      if k1/is-static impls/posix/is-executable(path)
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/is-executable(path),
+        :posix-macos or :posix-linux -> impls/posix/is-executable(path),
         :wasi -> crash("file io is not supported on wasi"),
-        :bare -> port/bare/is-executable(path)
+        :bare -> impls/bare/is-executable(path)
       }
     }
 
@@ -211,36 +211,36 @@ ns platform {
     }
     fn make-dir(path: string): result[empty, i32] {
       status(
-        if k1/is-static port/posix/make-dir(path)
+        if k1/is-static impls/posix/make-dir(path)
         else #if k1/platform is {
-          :posix-macos or :posix-linux -> port/posix/make-dir(path),
+          :posix-macos or :posix-linux -> impls/posix/make-dir(path),
           :wasi or :bare -> crash("directories are not supported on this platform")
         }
       )
     }
     fn link(from: string, to: string): result[empty, i32] {
       status(
-        if k1/is-static port/posix/link(from, to)
+        if k1/is-static impls/posix/link(from, to)
         else #if k1/platform is {
-          :posix-macos or :posix-linux -> port/posix/link(from, to),
+          :posix-macos or :posix-linux -> impls/posix/link(from, to),
           :wasi or :bare -> crash("links are not supported on this platform")
         }
       )
     }
     fn rename(from: string, to: string): result[empty, i32] {
       status(
-        if k1/is-static port/posix/rename(from, to)
+        if k1/is-static impls/posix/rename(from, to)
         else #if k1/platform is {
-          :posix-macos or :posix-linux -> port/posix/rename(from, to),
+          :posix-macos or :posix-linux -> impls/posix/rename(from, to),
           :wasi or :bare -> crash("rename is not supported on this platform")
         }
       )
     }
     fn remove(path: string): result[empty, i32] {
       status(
-        if k1/is-static port/posix/remove(path)
+        if k1/is-static impls/posix/remove(path)
         else #if k1/platform is {
-          :posix-macos or :posix-linux -> port/posix/remove(path),
+          :posix-macos or :posix-linux -> impls/posix/remove(path),
           :wasi or :bare -> crash("remove is not supported on this platform")
         }
       )
@@ -248,9 +248,9 @@ ns platform {
 
     fn remove-dir(path: string): result[empty, i32] {
       status(
-        if k1/is-static port/posix/remove-dir(path)
+        if k1/is-static impls/posix/remove-dir(path)
         else #if k1/platform is {
-          :posix-macos or :posix-linux -> port/posix/remove-dir(path),
+          :posix-macos or :posix-linux -> impls/posix/remove-dir(path),
           :wasi or :bare -> crash("directories are not supported on this platform")
         }
       )
@@ -259,23 +259,23 @@ ns platform {
     type dir-handle = { raw: ptr }
 
     fn dir-open(path: string): result[dir-handle, i32] {
-      if k1/is-static port/posix/dir-open(path)
+      if k1/is-static impls/posix/dir-open(path)
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/dir-open(path),
+        :posix-macos or :posix-linux -> impls/posix/dir-open(path),
         :wasi or :bare -> crash("directories are not supported on this platform")
       }
     }
     fn dir-next(dir: dir-handle): ?string {
-      if k1/is-static port/posix/dir-next(dir.raw)
+      if k1/is-static impls/posix/dir-next(dir.raw)
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/dir-next(dir.raw),
+        :posix-macos or :posix-linux -> impls/posix/dir-next(dir.raw),
         :wasi or :bare -> crash("directories are not supported on this platform")
       }
     }
     fn dir-close(dir: dir-handle) {
-      if k1/is-static port/posix/dir-close(dir.raw)
+      if k1/is-static impls/posix/dir-close(dir.raw)
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/dir-close(dir.raw),
+        :posix-macos or :posix-linux -> impls/posix/dir-close(dir.raw),
         :wasi or :bare -> crash("directories are not supported on this platform")
       }
     }
@@ -285,43 +285,51 @@ ns platform {
     fn exit(code: i32): never {
       if k1/is-static k1/exit(code)
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/exit(code),
-        :wasi -> port/wasi/exit(code),
-        :bare -> port/bare/exit(code)
+        :posix-macos or :posix-linux -> impls/posix/exit(code),
+        :wasi -> impls/wasi/exit(code),
+        :bare -> impls/bare/exit(code)
       }
     }
+    fn(builtin("llvm.trap")) trap()
     fn abort(): never {
-      if k1/is-static port/posix/abort()
+      if k1/is-static { trap(); k1/exit(134) }
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/abort(),
-        :wasi -> port/wasi/abort(),
-        :bare -> port/bare/abort()
+        :posix-macos or :posix-linux -> impls/posix/abort(),
+        :wasi -> impls/wasi/abort(),
+        :bare -> impls/bare/abort()
       }
     }
 
     // signal == 0 means normal exit; killed by a signal means exit-code -1
     type wait-status = { exit-code: i32, signal: i32 }
 
-    // fd0/fd1/fd2 become the child's stdin/stdout/stderr (-1 inherits); the
-    // child closes every fd passed here and in extra-close. ok = pid, err = errno
-    fn spawn(path: string, argv: span[string], fd0: i32, fd1: i32, fd2: i32, extra-close: span[i32]): result[i32, i32] {
-      if k1/is-static port/posix/spawn(path, argv, fd0, fd1, fd2, extra-close)
+    // stdin/stdout/stderr replace the child's streams (:none inherits); the
+    // child closes them and every handle in extra-close. ok = pid, err = errno
+    fn spawn(path: string, argv: span[string], stdin: ?io/file-handle, stdout: ?io/file-handle, stderr: ?io/file-handle, extra-close: span[io/file-handle]): result[i32, i32] {
+      if k1/is-static impls/posix/spawn(path, argv, stdin, stdout, stderr, extra-close)
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/spawn(path, argv, fd0, fd1, fd2, extra-close),
+        :posix-macos or :posix-linux -> impls/posix/spawn(path, argv, stdin, stdout, stderr, extra-close),
+        :wasi or :bare -> crash("processes are not supported on this platform")
+      }
+    }
+    fn fork(stdin: ?io/file-handle, stdout: ?io/file-handle, stderr: ?io/file-handle, extra-close: span[io/file-handle]): result[i32, i32] {
+      if k1/is-static impls/posix/fork(stdin, stdout, stderr, extra-close)
+      else #if k1/platform is {
+        :posix-macos or :posix-linux -> impls/posix/fork(stdin, stdout, stderr, extra-close),
         :wasi or :bare -> crash("processes are not supported on this platform")
       }
     }
     fn wait(pid: i32): result[wait-status, i32] {
-      if k1/is-static port/posix/wait(pid)
+      if k1/is-static impls/posix/wait(pid)
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/wait(pid),
+        :posix-macos or :posix-linux -> impls/posix/wait(pid),
         :wasi or :bare -> crash("processes are not supported on this platform")
       }
     }
     fn kill(pid: i32) {
-      if k1/is-static port/posix/kill(pid)
+      if k1/is-static impls/posix/kill(pid)
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/kill(pid),
+        :posix-macos or :posix-linux -> impls/posix/kill(pid),
         :wasi or :bare -> crash("processes are not supported on this platform")
       }
     }
@@ -329,20 +337,20 @@ ns platform {
 
   ns env {
     fn get(name: string): ?string {
-      if k1/is-static port/posix/env-get(name)
+      if k1/is-static impls/posix/env-get(name)
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/env-get(name),
-        :wasi -> port/wasi/env-get(name),
-        :bare -> port/bare/env-get(name)
+        :posix-macos or :posix-linux -> impls/posix/env-get(name),
+        :wasi -> impls/wasi/env-get(name),
+        :bare -> impls/bare/env-get(name)
       }
     }
   }
 
   // Renders the errno-style codes carried by io-result and process errors
   fn error-string(code: i32): string {
-    if k1/is-static port/posix/error-string(code)
+    if k1/is-static impls/posix/error-string(code)
     else #if k1/platform is {
-      :posix-macos or :posix-linux -> port/posix/error-string(code),
+      :posix-macos or :posix-linux -> impls/posix/error-string(code),
       :wasi or :bare -> "error ${code}"
     }
   }
@@ -355,11 +363,11 @@ ns platform {
     // vocabulary crosses the boundary
     fn open(path: string): ?handle {
       let lib =
-        if k1/is-static port/posix/dylib-open(path)
+        if k1/is-static impls/posix/dylib-open(path)
         else #if k1/platform is {
-          :posix-macos or :posix-linux -> port/posix/dylib-open(path),
+          :posix-macos or :posix-linux -> impls/posix/dylib-open(path),
           :wasi -> crash("dylibs are not supported on wasi"),
-          :bare -> port/bare/dylib-open(path)
+          :bare -> impls/bare/dylib-open(path)
         }
       if lib.is-null() :none else :some(.{ raw = lib })
     }
@@ -367,43 +375,43 @@ ns platform {
     // The running program's own symbols
     fn open-self(): handle {
       let lib =
-        if k1/is-static port/posix/dylib-open-self()
+        if k1/is-static impls/posix/dylib-open-self()
         else #if k1/platform is {
-          :posix-macos or :posix-linux -> port/posix/dylib-open-self(),
+          :posix-macos or :posix-linux -> impls/posix/dylib-open-self(),
           :wasi -> crash("dylibs are not supported on wasi"),
-          :bare -> port/bare/dylib-open-self()
+          :bare -> impls/bare/dylib-open-self()
         }
       .{ raw = lib }
     }
 
     fn sym(lib: handle, name: string): ?ptr {
       let addr =
-        if k1/is-static port/posix/dylib-sym(lib.raw, name)
+        if k1/is-static impls/posix/dylib-sym(lib.raw, name)
         else #if k1/platform is {
-          :posix-macos or :posix-linux -> port/posix/dylib-sym(lib.raw, name),
+          :posix-macos or :posix-linux -> impls/posix/dylib-sym(lib.raw, name),
           :wasi -> crash("dylibs are not supported on wasi"),
-          :bare -> port/bare/dylib-sym(lib.raw, name)
+          :bare -> impls/bare/dylib-sym(lib.raw, name)
         }
       if addr.is-null() :none else :some(addr)
     }
 
     fn close(lib: handle) {
-      if k1/is-static port/posix/dylib-close(lib.raw)
+      if k1/is-static impls/posix/dylib-close(lib.raw)
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/dylib-close(lib.raw),
+        :posix-macos or :posix-linux -> impls/posix/dylib-close(lib.raw),
         :wasi -> crash("dylibs are not supported on wasi"),
-        :bare -> port/bare/dylib-close(lib.raw)
+        :bare -> impls/bare/dylib-close(lib.raw)
       }
     }
 
     // The message for the most recent failed open or sym, if the platform kept one
     fn error-message(): ?string {
       let e =
-        if k1/is-static port/posix/dylib-error()
+        if k1/is-static impls/posix/dylib-error()
         else #if k1/platform is {
-          :posix-macos or :posix-linux -> port/posix/dylib-error(),
+          :posix-macos or :posix-linux -> impls/posix/dylib-error(),
           :wasi -> crash("dylibs are not supported on wasi"),
-          :bare -> port/bare/dylib-error()
+          :bare -> impls/bare/dylib-error()
         }
       if e.is-null() :none else :some(string/wrap-c(e.get()))
     }
@@ -412,11 +420,11 @@ ns platform {
   ns random {
     // Cryptographically secure host entropy
     fn fill(dest: ptr, count: size) {
-      if k1/is-static port/posix/random-fill(dest, count)
+      if k1/is-static impls/posix/random-fill(dest, count)
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/random-fill(dest, count),
-        :wasi -> port/wasi/random-fill(dest, count),
-        :bare -> port/bare/random-fill(dest, count)
+        :posix-macos or :posix-linux -> impls/posix/random-fill(dest, count),
+        :wasi -> impls/wasi/random-fill(dest, count),
+        :bare -> impls/bare/random-fill(dest, count)
       }
     }
   }
@@ -425,25 +433,25 @@ ns platform {
   // counter-to-nanos gives it meaning
   ns clock {
     fn counter(): u64 {
-      if k1/is-static port/posix/counter()
+      if k1/is-static impls/posix/counter()
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/counter(),
-        :wasi -> port/wasi/counter(),
-        :bare -> port/bare/clock-nanos()
+        :posix-macos or :posix-linux -> impls/posix/counter(),
+        :wasi -> impls/wasi/counter(),
+        :bare -> impls/bare/clock-nanos()
       }
     }
     fn counter-to-nanos(counter: u64): u64 {
-      if k1/is-static port/posix/counter-to-nanos(counter)
+      if k1/is-static impls/posix/counter-to-nanos(counter)
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/counter-to-nanos(counter),
+        :posix-macos or :posix-linux -> impls/posix/counter-to-nanos(counter),
         :wasi or :bare -> counter
       }
     }
     fn wall-nanos(): u64 {
-      if k1/is-static port/posix/wall-nanos()
+      if k1/is-static impls/posix/wall-nanos()
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/wall-nanos(),
-        :wasi -> port/wasi/wall-nanos(),
+        :posix-macos or :posix-linux -> impls/posix/wall-nanos(),
+        :wasi -> impls/wasi/wall-nanos(),
         :bare -> crash("no wall clock on this platform")
       }
     }
@@ -458,36 +466,36 @@ ns platform {
 
     fn spawn(function: ptr, input: ptr): ?handle {
       let t =
-        if k1/is-static port/posix/thread-spawn(function, input)
+        if k1/is-static impls/posix/thread-spawn(function, input)
         else #if k1/platform is {
-          :posix-macos or :posix-linux -> port/posix/thread-spawn(function, input),
+          :posix-macos or :posix-linux -> impls/posix/thread-spawn(function, input),
           :wasi or :bare -> crash("threads are not supported on this platform")
         }
       if t.is-null() :none else :some(.{ raw = t })
     }
 
     fn join(t: handle): ptr {
-      if k1/is-static port/posix/thread-join(t.raw)
+      if k1/is-static impls/posix/thread-join(t.raw)
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/thread-join(t.raw),
+        :posix-macos or :posix-linux -> impls/posix/thread-join(t.raw),
         :wasi or :bare -> crash("threads are not supported on this platform")
       }
     }
 
     fn detach(t: handle) {
-      if k1/is-static port/posix/thread-detach(t.raw)
+      if k1/is-static impls/posix/thread-detach(t.raw)
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/thread-detach(t.raw),
+        :posix-macos or :posix-linux -> impls/posix/thread-detach(t.raw),
         :wasi or :bare -> crash("threads are not supported on this platform")
       }
     }
 
     fn sleep-ms(ms: u64) {
-      if k1/is-static port/posix/sleep-ms(ms)
+      if k1/is-static impls/posix/sleep-ms(ms)
       else #if k1/platform is {
-        :posix-macos or :posix-linux -> port/posix/sleep-ms(ms),
-        :wasi -> port/wasi/sleep-ms(ms),
-        :bare -> port/bare/sleep-ms(ms)
+        :posix-macos or :posix-linux -> impls/posix/sleep-ms(ms),
+        :wasi -> impls/wasi/sleep-ms(ms),
+        :bare -> impls/bare/sleep-ms(ms)
       }
     }
   }
@@ -496,7 +504,7 @@ ns platform {
   // The ports: one per platform, each implementing the surface above; only
   // the dispatchers may call them
 
-  ns port {
+  ns impls {
 
     // Heap for platforms without a host allocator: a grow-only bump over
     // memory/acquire with a size header per allocation; free is a no-op and
@@ -604,6 +612,8 @@ ns platform {
         let X_OK: c-int = 1
         fn(extern("access")) access(path: *u8, mode: c-int): c-int
         fn(extern("pipe")) pipe(fds: ptr): c-int
+        fn(extern("fork")) fork(): i32
+        fn(extern("dup2")) dup2(fd: c-int, fd2: c-int): c-int
         let SIGKILL: c-int = 9
         fn(extern("kill")) kill(pid: i32, sig: c-int): c-int
         fn(extern("waitpid")) waitpid(pid: i32, status: *i32, options: i32): i32
@@ -796,6 +806,7 @@ ns platform {
       }
 
       fn thread-spawn(function: ptr, input: ptr): ptr {
+        if k1/is-static crash("threads are not supported in static execution")
         let handle: ptr = ptr/null
         if c/pthread_create(handle.&.as[ptr], ptr/null, function, input) != 0 return ptr/null
         handle
@@ -837,7 +848,18 @@ ns platform {
         }
       }
 
-      fn spawn(path: string, argv: span[string], fd0: i32, fd1: i32, fd2: i32, extra-close: span[i32]): result[i32, i32] {
+      fn child-closes(stdin: ?io/file-handle, stdout: ?io/file-handle, stderr: ?io/file-handle, extra-close: span[io/file-handle]): list[i32] {
+        let fds = list/with-capacity[i32](extra-close.len() + 3)
+        for [stdin, stdout, stderr] {
+          if it is :some h and h.raw > 2 and not fds.as-span().contains(h.raw) { fds.push(h.raw) }
+        }
+        for extra-close {
+          if it.raw > 2 and not fds.as-span().contains(it.raw) { fds.push(it.raw) }
+        }
+        fds
+      }
+
+      fn spawn(path: string, argv: span[string], stdin: ?io/file-handle, stdout: ?io/file-handle, stderr: ?io/file-handle, extra-close: span[io/file-handle]): result[i32, i32] {
         // argv for exec-family calls: strings, then a null terminator, all in tmp
         mem/push-arena(mem/tmp())
         let cargv = list/with-capacity[ptr](argv.len() + 1)
@@ -851,26 +873,27 @@ ns platform {
         c/spawn-fa-init(fa)
         defer { c/spawn-fa-destroy(fa) }
 
-        if fd0 >= 0 { c/spawn-fa-adddup2(fa, fd0, 0) }
-        if fd1 >= 0 { c/spawn-fa-adddup2(fa, fd1, 1) }
-        if fd2 >= 0 { c/spawn-fa-adddup2(fa, fd2, 2) }
-        let closed = list/with-capacity[i32](extra-close.len() + 3)
-        for fd in [fd0, fd1, fd2] {
-          if fd >= 0 and not closed.as-span().contains(fd) {
-            c/spawn-fa-addclose(fa, fd)
-            closed.push(fd)
-          }
-        }
-        for fd in extra-close {
-          if fd >= 0 and not closed.as-span().contains(fd) {
-            c/spawn-fa-addclose(fa, fd)
-            closed.push(fd)
-          }
-        }
+        if stdin is :some h { c/spawn-fa-adddup2(fa, h.raw, 0) }
+        if stdout is :some h { c/spawn-fa-adddup2(fa, h.raw, 1) }
+        if stderr is :some h { c/spawn-fa-adddup2(fa, h.raw, 2) }
+        for child-closes(stdin, stdout, stderr, extra-close) { c/spawn-fa-addclose(fa, it) }
 
         let pid: i32 = 0
         let rc = c/posix_spawn(pid.&, path.to-c-tmp(), fa, ptr/null, cargv.data-ptr(), environ-ptr())
         if rc != 0 :err rc else :ok pid
+      }
+
+      fn fork(stdin: ?io/file-handle, stdout: ?io/file-handle, stderr: ?io/file-handle, extra-close: span[io/file-handle]): result[i32, i32] {
+        if k1/is-static crash("fork is not supported in static execution")
+        let closes = child-closes(stdin, stdout, stderr, extra-close)
+        let pid = c/fork()
+        if pid < 0 return :err errno-now()
+        if pid > 0 return :ok pid
+        if stdin is :some h { c/dup2(h.raw, 0) }
+        if stdout is :some h { c/dup2(h.raw, 1) }
+        if stderr is :some h { c/dup2(h.raw, 2) }
+        for closes { close(it) }
+        :ok 0
       }
 
       fn wait(pid: i32): result[process/wait-status, i32] {
@@ -913,7 +936,7 @@ ns platform {
 
       let PAGE-SIZE: size = 65536
 
-      fn(intern("llvm.wasm.memory.grow.i64")) memory-grow(mem: i32, delta-pages: i64): i64
+      fn(builtin("llvm.wasm.memory.grow.i64")) memory-grow(mem: i32, delta-pages: i64): i64
 
       // memory.grow can never shrink, so released regions form an intrusive
       // free list in their own first bytes: next at offset 0, len at offset 8
@@ -1120,8 +1143,6 @@ ns platform {
       fn(extern("k1_platform_thread_sleep_ms")) sleep-ms(ms: u64)
       fn(extern("k1_platform_file_is_executable")) is-executable-flag(path: *u8): i32
 
-      fn(intern("llvm.trap")) trap()
-
       fn reserve(min-size: size): memory/region {
         .{ base = reserve-bytes(min-size), len = min-size }
       }
@@ -1133,7 +1154,7 @@ ns platform {
       fn is-executable(path: string): bool { is-executable-flag(path.to-c-tmp()) == 1 }
       fn dylib-open(path: string): ptr { dylib-open-c(path.to-c-tmp()) }
       fn dylib-sym(lib: ptr, name: string): ptr { dylib-sym-c(lib, name.to-c-tmp()) }
-      fn abort(): never { trap(); k1/exit(134) }
+      fn abort(): never { process/trap(); k1/exit(134) }
       fn env-get(name: string): ?string {
         let v = getenv(name.to-c-tmp())
         if v.is-null() :none else :some(string/wrap-c(v.get()))

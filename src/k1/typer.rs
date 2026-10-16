@@ -1,3 +1,4 @@
+//nocommit unreviewed
 // Copyright (c) 2026 knix
 // All rights reserved.
 
@@ -59,9 +60,9 @@ use crate::lex::{self, Span, TokenKind};
 use crate::parse::{
     self, AstHandle, AstSlice, BinaryOpKind, FileId, ForExpr, IdentPool, IdentSpanned,
     InterpolatedStringPart, NamedTypeArg, NumericWidth, ParsedAbilityExpr, ParsedAbilityId,
-    ParsedAbilityImplId, ParsedBlock, ParsedBlockKind, ParsedBreak, ParsedCall, ParsedCallArg,
-    ParsedContinue, ParsedExpr, ParsedExprId, ParsedFunctionId, ParsedGlobalId, ParsedId,
-    ParsedIfExpr, ParsedIntLiteral, ParsedListLiteral, ParsedLiteral, ParsedLoopExpr,
+    ParsedAbilityImplId, ParsedBlock, ParsedBlockKind, ParsedBreak, ParsedBuiltin, ParsedCall,
+    ParsedCallArg, ParsedContinue, ParsedExpr, ParsedExprId, ParsedFunctionId, ParsedGlobalId,
+    ParsedId, ParsedIfExpr, ParsedIntLiteral, ParsedListLiteral, ParsedLiteral, ParsedLoopExpr,
     ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedProgram, ParsedStaticBlockKind,
     ParsedStaticExpr, ParsedStmt, ParsedStmtId, ParsedTypeConstraint, ParsedTypeConstraintExpr,
     ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId, ParsedTypeParam, ParsedUseId,
@@ -89,20 +90,20 @@ nz_u32_id!(TypedExprId);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Linkage {
     Standard,
-    External {
-        module_id: ModuleId,
-        lib_name: Option<StringId>,
-        fn_name: Option<StringId>,
-    },
-    Exported {
-        fn_name: Option<StringId>,
-    },
-    Intrinsic,
-    /// `intern("llvm.cttz.i64")`
-    LlvmIntrinsic(StringId),
+    External { module_id: ModuleId, lib_name: Option<StringId>, link_name: Option<StringId> },
+    Exported { link_name: Option<StringId> },
 }
 
 impl Linkage {
+    pub fn with_default_lib(self, default_lib: Option<StringId>) -> Linkage {
+        match self {
+            Linkage::External { module_id, lib_name: None, link_name } => {
+                Linkage::External { module_id, lib_name: default_lib, link_name }
+            }
+            other => other,
+        }
+    }
+
     pub fn is_external(&self) -> bool {
         matches!(self, Linkage::External { .. })
     }
@@ -949,6 +950,8 @@ bitflags! {
         const Inline = 1 << 7;
         const Cold = 1 << 8;
         const NoInline = 1 << 9;
+        const TestStatic = 1 << 10;
+        const TestRuntime = 1 << 11;
     }
 }
 
@@ -1024,6 +1027,16 @@ impl TypedFunction {
 
     pub fn address_taken(&self) -> bool {
         self.flags.contains(TypedFunctionFlags::AddressTaken)
+    }
+
+    pub fn is_test(&self) -> bool {
+        self.flags.intersects(TypedFunctionFlags::TestStatic | TypedFunctionFlags::TestRuntime)
+    }
+    pub fn test_runs_static(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::TestStatic)
+    }
+    pub fn test_runs_runtime(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::TestRuntime)
     }
 }
 
@@ -1723,9 +1736,7 @@ pub struct TypedGlobal {
     pub span: Span,
     pub is_constant: bool,
     pub is_tls: bool,
-    pub is_exported: bool,
-    pub is_external: bool,
-    pub link_name: Option<StringId>,
+    pub linkage: Linkage,
     pub ast_id: ParsedGlobalId,
     pub parent_scope: ScopeId,
     /// Set when the global is declared in an ns(reload)
@@ -1789,7 +1800,6 @@ pub struct Namespace {
     pub namespace_type: NamespaceKind,
     pub companion_type_id: Option<TypeId>,
     pub parent_id: Option<NamespaceId>,
-    pub owner_module: Option<ModuleId>,
     pub parsed_id: ParsedId,
     /// default library for extern fns in this namespace.
     /// re-opened ns: any opening may declare it; disagreeing openings are an error.
@@ -1988,6 +1998,7 @@ pub enum BuiltinTyperInline {
     TypeId,
     EnumEquals,
     Discard,
+    TestExpectFailure,
 }
 
 impl BuiltinTyperInline {
@@ -2002,6 +2013,7 @@ impl BuiltinTyperInline {
             BuiltinTyperInline::TypeId => "type_id",
             BuiltinTyperInline::EnumEquals => "enum_equals",
             BuiltinTyperInline::Discard => "discard",
+            BuiltinTyperInline::TestExpectFailure => "test_expect_failure",
         }
     }
 }
@@ -2166,7 +2178,7 @@ pub enum Builtin {
     TyperPhysicalFunction(BuiltinTyperFunction),
     /// The Backend will do this; current backends include: [llvm, vm]
     Backend(BackendBuiltin),
-    /// An LLVM intrinsic named verbatim by `intern("llvm.*")`
+    /// An LLVM intrinsic named verbatim by `builtin("llvm.*")`
     /// llvm calls it directly, the VM emulates it by name
     LlvmIntrinsic(StringId),
 }
@@ -2899,6 +2911,25 @@ pub struct TypedProgram {
 
     /// diagnostic only, for --chatty and tests
     pub restored_module_count: u32,
+
+    pub test_main: Option<FunctionId>,
+    pub test_expected_failures: FxHashMap<FunctionId, StringId>,
+    pub test_results: Vec<StaticTestResult>,
+}
+
+pub struct TestCase {
+    pub function_id: FunctionId,
+    pub thunk_id: FunctionId,
+    pub name: StringId,
+    pub span: Span,
+    pub expected_failure: Option<StringId>,
+}
+
+pub struct StaticTestResult {
+    pub name: StringId,
+    pub span: Span,
+    pub failure: Option<StringId>,
+    pub elapsed: std::time::Duration,
 }
 
 pub enum HostProgram {
@@ -2960,7 +2991,6 @@ impl TypedProgram {
             namespace_type: NamespaceKind::Root,
             companion_type_id: None,
             parent_id: None,
-            owner_module: None,
             parsed_id: ParsedId::Namespace(ParsedNamespaceId::ONE),
             lib_name: None,
             reload: false,
@@ -3081,6 +3111,9 @@ impl TypedProgram {
             megarepl: None,
             inputs_hash,
             restored_module_count: 0,
+            test_main: None,
+            test_expected_failures: FxHashMap::default(),
+            test_results: Vec::new(),
         };
 
         let empty_struct_id = k1.add_type_anon(Type::Struct(StructType::struc(MSlice::empty())));
@@ -3410,6 +3443,38 @@ impl TypedProgram {
 
     pub fn function_iter(&self) -> impl Iterator<Item = (FunctionId, &TypedFunction)> {
         self.functions.iter_with_ids()
+    }
+
+    pub fn collect_selected_tests_for_module(
+        &mut self,
+        module_id: ModuleId,
+        filter: &[String],
+    ) -> K1Result<Vec<TestCase>> {
+        let mut found: Vec<(FunctionId, Span)> = Vec::new();
+        for (function_id, function) in self.function_iter() {
+            if !function.is_test() {
+                continue;
+            }
+            let span =
+                self.ast.get_function(function.parsed_id.as_function_id().unwrap()).name_span;
+            if self.module_of_span(span) == module_id {
+                found.push((function_id, span));
+            }
+        }
+        let mut tests = Vec::with_capacity(found.len());
+        for (function_id, span) in found {
+            let function = self.get_function(function_id);
+            let ns_scope = self.namespaces.get_scope(function.namespace_id);
+            let name = self.make_qualified_name(ns_scope, function.name, None, "/", true);
+            if !filter.is_empty() && !filter.iter().any(|f| name.contains(f.as_str())) {
+                continue;
+            }
+            let thunk_id = self.synth_test_thunk(function_id, span)?;
+            let name = self.ast.idents.intern(name);
+            let expected_failure = self.test_expected_failures.get(&function_id).copied();
+            tests.push(TestCase { function_id, thunk_id, name, span, expected_failure });
+        }
+        Ok(tests)
     }
 
     pub fn get_function_span(&self, function_id: FunctionId) -> Span {
@@ -5640,14 +5705,11 @@ impl TypedProgram {
                             self.ast.idents.get_string(name.name),
                         );
                     }
-                    if matches!(
-                        self.get_function(fn_id).linkage,
-                        Linkage::Intrinsic | Linkage::LlvmIntrinsic(_)
-                    ) {
+                    if self.get_function(fn_id).builtin_type.is_some() {
                         kbail!(
                             self,
                             name.name_span,
-                            "Intrinsic '{}' has no address",
+                            "Builtin '{}' has no address",
                             self.ast.idents.get_string(name.name),
                         );
                     }
@@ -6738,107 +6800,7 @@ impl TypedProgram {
             };
         }
 
-        let mut list_lit_block =
-            self.new_block_builder(ctx.scope_id, ScopeType::LexicalBlock, span, 2 + element_count);
-        let list_lit_scope = list_lit_block.scope_id;
-        let list_lit_ctx = ctx.with_scope(list_lit_scope).with_no_expected_type();
-        let count_expr = self.synth_i64(element_count as i64, span);
-
-        let make_dest_coll = match list_kind {
-            ContainerKind::List => self.synth_typed_call_typed_args(
-                self.ast.idents.f.list_with_capacity.with_span(span),
-                &[element_type],
-                &[count_expr],
-                list_lit_ctx,
-                false,
-            )?,
-            ContainerKind::Buffer | ContainerKind::Span => self.synth_typed_call_typed_args(
-                self.ast.idents.f.buffer_allocate.with_span(span),
-                &[element_type],
-                &[count_expr],
-                list_lit_ctx,
-                false,
-            )?,
-            ContainerKind::Array(array_type_id) => {
-                let value_id = self.static_values.add(StaticValue::Zero(array_type_id));
-                self.exprs.add_static(value_id, array_type_id, false, span)
-            }
-        };
-        let needs_address_of = matches!(list_kind, ContainerKind::List);
-        let dest_coll_variable = self.synth_variable_defn(
-            self.ast.idents.b.list_lit,
-            make_dest_coll,
-            false,
-            list_lit_scope,
-            None,
-        );
-        let dest_coll_ref = self.synth_variable_ref(dest_coll_variable.variable_id);
-        let dest_coll_expr = if needs_address_of {
-            self.synth_address_of(dest_coll_ref, Span::NONE, true).unwrap()
-        } else {
-            dest_coll_ref
-        };
-
-        list_lit_block.statements.push(dest_coll_variable.defn_stmt);
-        for (index, element_value_expr) in elements.iter().enumerate() {
-            let index_expr = self.synth_i64(index as i64, span);
-            let element_place = match list_kind {
-                ContainerKind::List => {
-                    let push_call = self.synth_typed_call_typed_args(
-                        self.ast.idents.f.list_push.with_span(span),
-                        &[element_type],
-                        &[dest_coll_expr, *element_value_expr],
-                        list_lit_ctx,
-                        false,
-                    )?;
-                    let type_id = self.exprs.get_type(push_call);
-                    let push_stmt = self.stmts.add(TypedStmt::Expr(push_call, type_id));
-                    self.push_block_stmt_id(&mut list_lit_block, push_stmt);
-                    continue;
-                }
-                ContainerKind::Buffer | ContainerKind::Span => {
-                    let element_ref = self.synth_typed_call_typed_args(
-                        self.ast.idents.f.buffer_index_unchecked.with_span(span),
-                        &[element_type],
-                        &[dest_coll_expr, index_expr],
-                        list_lit_ctx,
-                        false,
-                    )?;
-                    self.exprs.add(
-                        TypedExpr::Deref(DerefExpr { target: element_ref }),
-                        element_type,
-                        span,
-                    )
-                }
-                ContainerKind::Array(_) => self.exprs.add(
-                    TypedExpr::ArrayGetElement(ArrayGetElement {
-                        base_array: dest_coll_expr,
-                        index: index_expr,
-                        packed: false,
-                    }),
-                    element_type,
-                    span,
-                ),
-            };
-            let store_stmt = self.add_assignment_stmt(element_place, *element_value_expr, span);
-            self.push_block_stmt_id(&mut list_lit_block, store_stmt);
-        }
-        let dest_coll_final = self.synth_variable_ref(dest_coll_variable.variable_id);
-        let final_expr = match list_kind {
-            ContainerKind::List | ContainerKind::Buffer | ContainerKind::Array(_) => {
-                dest_coll_final
-            }
-            ContainerKind::Span => self.synth_typed_call_typed_args(
-                self.ast.idents.f.span_wrapBuffer.with_span(span),
-                &[element_type],
-                &[dest_coll_final],
-                ctx.with_no_expected_type(),
-                false,
-            )?,
-        };
-        self.push_block_expr_id(&mut list_lit_block, final_expr);
-        let final_expr_type = self.exprs.get_type(final_expr);
-        Ok(self.exprs.add_block(list_lit_block, final_expr_type))
+        self.synth_container_literal(list_kind, element_type, elements.as_slice(), ctx, span)
     }
 
     fn eval_struct_anonymous(
@@ -10223,11 +10185,8 @@ impl TypedProgram {
                 self.ident_str(function_name)
             );
         }
-        if matches!(
-            self.get_function(generic_function_id).linkage,
-            Linkage::Intrinsic | Linkage::LlvmIntrinsic(_)
-        ) {
-            kbail!(self, span, "Intrinsic '{}' has no address", self.ident_str(function_name));
+        if self.get_function(generic_function_id).builtin_type.is_some() {
+            kbail!(self, span, "Builtin '{}' has no address", self.ident_str(function_name));
         }
         if type_params.is_empty() {
             kbail!(self, span, "'{}' takes no type arguments", self.ident_str(function_name));
@@ -10339,7 +10298,8 @@ impl TypedProgram {
         let function = self.get_function(function_id);
         match function.linkage {
             Linkage::Standard => {
-                if function.address_taken()
+                if function.builtin_type.is_some()
+                    || function.address_taken()
                     || function.abi_native()
                     || function.is_reloadable()
                     || self.get_main_function_id() == Some(function_id)
@@ -10349,10 +10309,7 @@ impl TypedProgram {
                     AbiMode::Internal
                 }
             }
-            Linkage::External { .. }
-            | Linkage::Exported { .. }
-            | Linkage::Intrinsic
-            | Linkage::LlvmIntrinsic(_) => AbiMode::Native,
+            Linkage::External { .. } | Linkage::Exported { .. } => AbiMode::Native,
         }
     }
 
@@ -11903,7 +11860,7 @@ impl TypedProgram {
         if let Some(builtin) = self.get_callee_builtin(&call.callee) {
             match builtin {
                 Builtin::TyperInline(kind) => {
-                    return self.handle_inline_builtin(call, span, kind);
+                    return self.handle_inline_builtin(call, span, kind, ctx);
                 }
                 Builtin::Backend(BackendBuiltin::TypeInfo) => {
                     let type_id_arg = *self.mem.get_nth(call.args, 0);
@@ -12051,6 +12008,7 @@ impl TypedProgram {
         call: Call,
         span: Span,
         intrinsic: BuiltinTyperInline,
+        ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         match intrinsic {
             BuiltinTyperInline::GetStaticValue => {
@@ -12131,6 +12089,31 @@ impl TypedProgram {
             BuiltinTyperInline::Discard => {
                 let value = *self.mem.get_nth(call.args, 0);
                 Ok(self.synth_discard(value))
+            }
+            BuiltinTyperInline::TestExpectFailure => {
+                let enclosing_test = match self.scopes.nearest_parent_function(ctx.scope_id) {
+                    Some(function_id)
+                        if self.scopes.nearest_parent_lambda(ctx.scope_id).is_none()
+                            && self.get_function(function_id).is_test() =>
+                    {
+                        function_id
+                    }
+                    _ => kbail!(self, span, "expect-failure belongs directly in a fn(test) body"),
+                };
+                let needle_expr = *self.mem.get_nth(call.args, 0);
+                let needle = match self.exprs.get(needle_expr) {
+                    TypedExpr::StaticValue(constant) => {
+                        self.static_values.get(constant.value_id).as_string()
+                    }
+                    _ => None,
+                };
+                let Some(needle) = needle else {
+                    kbail!(self, span, "expect-failure takes a string literal")
+                };
+                if self.test_expected_failures.insert(enclosing_test, needle).is_some() {
+                    kbail!(self, span, "A test expects at most one failure");
+                }
+                Ok(self.synth_empty_value(span))
             }
         }
     }
@@ -13707,19 +13690,23 @@ impl TypedProgram {
                     }
                     _ => None,
                 },
-                Some("k1") => match fn_name_str {
-                    "exit" => Some(Builtin::Backend(BackendBuiltin::Exit)),
-                    "emit-compiler-message" => {
+                Some("k1") => match (third, fn_name_str) {
+                    (None, "exit") => Some(Builtin::Backend(BackendBuiltin::Exit)),
+                    (None, "emit-compiler-message") => {
                         Some(Builtin::Backend(BackendBuiltin::CompilerMessage))
                     }
-                    "location" => {
+                    (None, "location") => {
                         Some(Builtin::TyperInline(BuiltinTyperInline::CompilerSourceLocation))
                     }
-                    "module-dir" => {
+                    (None, "module-dir") => {
                         Some(Builtin::TyperInline(BuiltinTyperInline::CompilerModuleDir))
                     }
-                    // k1/repl
-                    "checkbox" => Some(Builtin::Backend(BackendBuiltin::ReplCheckbox)),
+                    (Some("repl"), "checkbox") => {
+                        Some(Builtin::Backend(BackendBuiltin::ReplCheckbox))
+                    }
+                    (Some("test"), "expect-failure") => {
+                        Some(Builtin::TyperInline(BuiltinTyperInline::TestExpectFailure))
+                    }
                     _ => None,
                 },
                 Some(_) => None,
@@ -13728,7 +13715,7 @@ impl TypedProgram {
         match result {
             Some(result) => Ok(result),
             None => Err(format!(
-                "Could not resolve intrinsic function type for function {}/{} (ability: {})",
+                "Could not resolve builtin function type for function {}/{} (ability: {})",
                 self.tmp
                     .dlist_iter(namespace_chain)
                     .map(|i| self.ident_str(*i).to_string())
@@ -14842,11 +14829,11 @@ impl TypedProgram {
             self.emit_semantic_token(ast_fn.span, parse::SemanticTokenKind::Comment);
             return Ok(None);
         }
-        if is_reloadable && !matches!(ast_fn.linkage, Linkage::Standard) {
+        if is_reloadable && (ast_fn.linkage != Linkage::Standard || ast_fn.builtin.is_some()) {
             self.fail_if_reload_ns(
                 namespace_id,
                 ast_fn.signature_span,
-                "extern, export, and intrinsic fns",
+                "builtin, extern, and export fns",
             )?;
         }
 
@@ -15055,34 +15042,21 @@ impl TypedProgram {
             self.fail_if_reload_ns(namespace_id, ast_fn.signature_span, "generic fns")?;
         }
 
-        let linkage = match impl_info {
-            Some(info) if info.impl_kind == AbilityImplKind::BuiltinDerived && !info.is_default => {
-                Linkage::Intrinsic
-            }
-            _ => match ast_fn.linkage {
-                // Fill in the containing ns's lib(..) unless the fn declares its own lib
-                Linkage::External { module_id, lib_name: None, fn_name } => Linkage::External {
-                    module_id,
-                    lib_name: self.namespaces.get(namespace_id).lib_name,
-                    fn_name,
-                },
-                other => other,
-            },
-        };
-        if ast_fn.is_native && !matches!(linkage, Linkage::Standard) {
+        let is_builtin = ast_fn.builtin.is_some()
+            || matches!(impl_info, Some(info) if info.impl_kind == AbilityImplKind::BuiltinDerived && !info.is_default);
+        let linkage = ast_fn.linkage.with_default_lib(self.namespaces.get(namespace_id).lib_name);
+        if ast_fn.is_native && (is_builtin || linkage != Linkage::Standard) {
             kbail!(
                 self,
                 ast_fn.signature_span,
-                "'native' only on plain functions; intern, extern, and export govern their own ABI"
+                "'native' only on plain functions; builtin, extern, and export govern their own ABI"
             );
         }
-        if ast_fn.inlining != parse::Inlining::Auto
-            && !matches!(linkage, Linkage::Standard | Linkage::Exported { .. })
-        {
+        if ast_fn.inlining != parse::Inlining::Auto && (is_builtin || linkage.is_external()) {
             kbail!(
                 self,
                 ast_fn.signature_span,
-                "'inline' and 'noinline' govern a body; intern and extern functions have none"
+                "'inline' and 'noinline' govern a body; builtin and extern functions have none"
             );
         }
         if ast_fn.inlining == parse::Inlining::Always && is_reloadable {
@@ -15103,8 +15077,9 @@ impl TypedProgram {
                 kbail!(self, ast_fn.signature_span, "exported functions must have a body");
             }
         }
-        let intrinsic_type = match linkage {
-            Linkage::Intrinsic => {
+        let builtin_type = match ast_fn.builtin {
+            Some(ParsedBuiltin::Llvm(llvm_name)) => Some(Builtin::LlvmIntrinsic(llvm_name)),
+            _ if is_builtin => {
                 let namespace_chain = self.name_chain(namespace_id);
                 let resolved = self
                     .resolve_intrinsic_function_type(
@@ -15118,13 +15093,44 @@ impl TypedProgram {
                     })?;
                 Some(resolved)
             }
-            Linkage::LlvmIntrinsic(llvm_name) => Some(Builtin::LlvmIntrinsic(llvm_name)),
             _ => None,
         };
         let return_type = match ast_fn.ret_type {
             None => self.builtin_types.empty,
             Some(parsed_ret_type) => self.eval_type_expr(parsed_ret_type, fn_scope_id)?,
         };
+
+        if ast_fn.test.is_some() {
+            if is_builtin || linkage != Linkage::Standard {
+                kbail!(
+                    self,
+                    ast_fn.signature_span,
+                    "A test is a plain fn; builtin, extern, and export fns cannot be tests"
+                );
+            }
+            if ability_info.is_some() {
+                kbail!(self, ast_fn.signature_span, "Ability functions cannot be tests");
+            }
+            if !type_params.is_empty() || !fnlike_type_params.is_empty() {
+                kbail!(self, ast_fn.signature_span, "Tests cannot be generic");
+            }
+            if !params.is_empty() {
+                kbail!(self, ast_fn.signature_span, "Tests take no parameters");
+            }
+            let outcome = self.ast.idents.f.test_outcome;
+            let Some(outcome_ability_id) =
+                self.find_ability_namespaced(self.scopes.core_scope_id, &outcome)?
+            else {
+                self.ice_span(ast_fn.signature_span, "core is missing core/test/outcome")
+            };
+            self.expect_ability_impl(
+                return_type,
+                outcome_ability_id,
+                false,
+                fn_scope_id,
+                ast_fn.signature_span,
+            )?;
+        }
 
         let is_main_fn = ast_fn.name == self.ast.idents.b.main
             && self.get_executable_primary_module().map(|m| m.namespace_id) == Some(namespace_id);
@@ -15197,6 +15203,10 @@ impl TypedProgram {
         flags.set(TypedFunctionFlags::Inline, ast_fn.inlining == parse::Inlining::Always);
         flags.set(TypedFunctionFlags::NoInline, ast_fn.inlining == parse::Inlining::Never);
         flags.set(TypedFunctionFlags::Cold, ast_fn.is_cold);
+        if let Some(runs) = ast_fn.test {
+            flags.set(TypedFunctionFlags::TestStatic, runs != parse::TestRuns::Runtime);
+            flags.set(TypedFunctionFlags::TestRuntime, runs != parse::TestRuns::Static);
+        }
         let actual_function_id = self.add_function(TypedFunction {
             name: ast_fn.name,
             scope: fn_scope_id,
@@ -15206,7 +15216,7 @@ impl TypedProgram {
             fnlike_type_params: function_type_params_handle,
             ability_where_constraints: where_constraints_handle,
             body_block: None,
-            builtin_type: intrinsic_type,
+            builtin_type,
             linkage,
             specialization_info: None,
             parsed_id: parsed_function_id.into(),
@@ -15586,10 +15596,7 @@ impl TypedProgram {
 
         let body_block = if let Some(Builtin::TyperPhysicalFunction(kind)) = function.builtin_type {
             Some(self.generate_intrinsic_function_body(function_id, fn_scope_id, kind)?)
-        } else if matches!(
-            function.linkage,
-            Linkage::External { .. } | Linkage::Intrinsic | Linkage::LlvmIntrinsic(_)
-        ) {
+        } else if function.builtin_type.is_some() || function.linkage.is_external() {
             if parsed_body.is_some() {
                 kbail!(self, signature_span, "unexpected function implementation");
             }
@@ -16126,7 +16133,6 @@ impl TypedProgram {
                     namespace_type: NamespaceKind::Ability,
                     companion_type_id: None,
                     parent_id: Some(parent_namespace_id),
-                    owner_module: Some(self.module_in_progress.unwrap()),
                     parsed_id: ParsedId::Ability(parsed_ability_id),
                     lib_name: None,
                     reload: false,
@@ -17375,7 +17381,6 @@ impl TypedProgram {
             namespace_type,
             companion_type_id: None,
             parent_id: Some(parent_ns_id),
-            owner_module: Some(self.module_in_progress.unwrap()),
             parsed_id: ParsedId::Namespace(parsed_namespace_id),
             lib_name: ast_namespace.lib_name,
             reload: ast_namespace.reload,

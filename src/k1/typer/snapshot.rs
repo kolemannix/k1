@@ -151,6 +151,9 @@ impl TypedProgram {
             megarepl,
             inputs_hash: _,
             restored_module_count: _,
+            test_main: _,
+            test_expected_failures,
+            test_results: _,
         } = self;
         assert!(megarepl.is_none(), "cannot snapshot a megarepl session");
         assert!(inference_context_stack.is_empty(), "cannot snapshot mid-inference");
@@ -187,6 +190,7 @@ impl TypedProgram {
         write_map_snap(w, type_infos);
         scopes.snap(w);
         w.write_slice(&messages.borrow());
+        write_map_snap(w, test_expected_failures);
         w.sorted_entries(ls_entities.borrow().iter(), |w, (file_id, entities)| {
             w.write_t(file_id);
             w.write_slice(entities);
@@ -322,6 +326,7 @@ impl TypedProgram {
         let section =
             k1.trace_push(TraceKind::SnapRestoreSection, restore_section("namespaces"), 0);
         k1.messages = RefCell::new(r.read_vec());
+        k1.test_expected_failures = restore_map_snap(r);
         let mut ls_entities = FxHashMap::default();
         for _ in 0..r.read_len() {
             let file_id: FileId = r.read_t();

@@ -8,7 +8,7 @@ fn swap-big(t: big): big { .{ a = t.b, b = t.a, pad = t.pad } }
 fn swap-small(t: small): small { .{ a = t.b, b = t.a } }
 fn twice(t: big): big { swap-big(swap-big(t)) }
 
-fn test() {
+fn(test) rhs-reads-assigned-place() {
   let p: big = .{ a = 1, b = 2, pad = .0 }
   p = swap-big(p)
   assert-equals(p.a, 2)

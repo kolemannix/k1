@@ -1526,11 +1526,8 @@ fn compile_function_body_into(
         b.goto_block(entry_block);
         compile_block_stmts(&mut b, None, body_block)?;
     } else {
-        match f.linkage {
-            Linkage::Standard | Linkage::Exported { .. } => {
-                b.k1.ice_span(b.k1.get_function_span(function_id), "ir: function has no body")
-            }
-            Linkage::External { .. } | Linkage::Intrinsic | Linkage::LlvmIntrinsic(_) => {}
+        if f.builtin_type.is_none() && !f.linkage.is_external() {
+            b.k1.ice_span(b.k1.get_function_span(function_id), "ir: function has no body")
         }
     };
 
@@ -2367,11 +2364,11 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
             let callee: IrCallee;
             let mut environment_arg: Option<Value> = None;
 
-            if let Some(Linkage::External { lib_name, fn_name, .. }) = linkage {
+            if let Some(Linkage::External { lib_name, link_name, .. }) = linkage {
                 let function_id = maybe_function_id.unwrap();
-                let function_name = match fn_name {
+                let function_name = match link_name {
                     None => b.k1.get_function(function_id).name,
-                    Some(fn_name) => fn_name,
+                    Some(link_name) => link_name,
                 };
                 callee = IrCallee::Extern { library_name: lib_name, function_name, function_id };
             } else if let Some(builtin) = maybe_builtin {
@@ -4157,27 +4154,36 @@ pub struct ProgramRoots {
 
 pub fn get_program_roots(k1: &TypedProgram) -> K1Result<ProgramRoots> {
     let mut exports: Vec<FunctionId> = vec![];
-    let mut any_exported_global = false;
-    for global_id in k1.globals.iter_ids() {
-        if k1.globals.get(global_id).is_exported {
-            any_exported_global = true;
-        }
-    }
-    for (function_id, function) in k1.function_iter() {
-        if function.linkage.is_exported() {
-            exports.push(function_id);
-        }
-    }
-    let main = if k1.plan.is_executable() {
-        let Some(main_function_id) = k1.get_main_function_id() else {
-            kbail!(k1, Span::NONE, "Program {} has no main function", k1.program_name());
-        };
-        Some(main_function_id)
+    let main = if let Some(test_main) = k1.test_main {
+        Some(test_main)
     } else {
-        if exports.is_empty() && !any_exported_global {
-            kbail!(k1, Span::NONE, "Library {} exports no functions or globals", k1.program_name());
+        let mut any_exported_global = false;
+        for global_id in k1.globals.iter_ids() {
+            if k1.globals.get(global_id).linkage.is_exported() {
+                any_exported_global = true;
+            }
         }
-        None
+        for (function_id, function) in k1.function_iter() {
+            if function.linkage.is_exported() {
+                exports.push(function_id);
+            }
+        }
+        if k1.plan.is_executable() {
+            let Some(main_function_id) = k1.get_main_function_id() else {
+                kbail!(k1, Span::NONE, "Program {} has no main function", k1.program_name());
+            };
+            Some(main_function_id)
+        } else {
+            if exports.is_empty() && !any_exported_global {
+                kbail!(
+                    k1,
+                    Span::NONE,
+                    "Library {} exports no functions or globals",
+                    k1.program_name()
+                );
+            }
+            None
+        }
     };
     let program_exit = if main.is_some() {
         let program_exit_ident = k1.ast.idents.intern("program-exit");

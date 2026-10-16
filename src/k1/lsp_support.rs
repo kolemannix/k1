@@ -82,7 +82,11 @@ pub fn get_hover_message_for_entity(k1: &mut TypedProgram, entity: LsEntity) -> 
                 VariableKind::StackSynthetic => "Compiler-generated".to_string(),
                 VariableKind::Global(global_id) => {
                     let global = k1.globals.get(global_id);
-                    format!("Global const={}, export={}", global.is_constant, global.is_exported)
+                    format!(
+                        "Global const={}, export={}",
+                        global.is_constant,
+                        global.linkage.is_exported()
+                    )
                 }
             };
             let type_str = k1.type_id_to_string(v.type_id);
@@ -228,9 +232,9 @@ pub enum NameKind {
 }
 
 const KEYWORDS: &[&str] = &[
-    "fn", "let", "mut", "and", "or", "if", "else", "while", "loop", "ns", "intern", "for", "in",
-    "ability", "impl", "is", "not", "builtin", "where", "context", "use", "require", "defer",
-    "return", "break", "continue",
+    "fn", "let", "mut", "and", "or", "if", "else", "while", "loop", "ns", "for", "in", "ability",
+    "impl", "is", "not", "builtin", "where", "context", "use", "require", "defer", "return",
+    "break", "continue",
 ];
 
 pub fn collect_completions(

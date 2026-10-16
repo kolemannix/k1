@@ -47,7 +47,7 @@ impl mixed for mixed-impl {
   fn plain(*self): int { self.n }
 }
 
-fn test() {
+fn(test) dispatch-through-dyn() {
   let ones: *by-ones = mem/new(.{ current = 0 })
   let d1 = ones.to-dyn[counter[t = int]]
   assert-equals(d1.bump(), 1)
@@ -69,24 +69,33 @@ fn test() {
   let total = 0
   for c in counters { total = total + c.bump() }
   assert-equals(total, 3 + 10 + 20)
+}
 
+fn(test) dispatch-through-dyn-at-compile-time() {
   let r: int = #static {
     let state: *by-tens = mem/new(.{ current = 40 })
     let d = state.to-dyn[counter[t = int]]()
     d.bump() + d.bump() + d.kind().len()
   }
   assert-equals(r, 50 + 60 + 9)
+}
 
+fn(test) generic-fns-excluded-from-dyn() {
   let m: *mixed-impl = mem/new(.{ n = 7 })
   assert-equals(m.fancy(3), 3)
   assert-equals(m.to-dyn[mixed]().plain(), 7)
   #static assert(test-compile(
     { let m2: *mixed-impl = mem/new(.{ n = 1 }); let d2 = m2.to-dyn[mixed](); d2.fancy(3) }
   ).is-some())
+}
+
+fn(test) static-dyn-cannot-reach-runtime() {
   #static assert(test-compile(
     { let d: dyn[counter[t = int]] = #static { let o: *by-ones = mem/new(.{ current = 0 }); o.to-dyn() }; d }
   ).is-some())
+}
 
+fn(test) core-abilities-through-dyn() {
   let shown: *int = mem/new(42)
   assert-equals(shown.to-dyn[show]().show(), "42")
   let shown-static: string = #static { let s: *int = mem/new(7); s.to-dyn[show]().show() }
@@ -95,5 +104,8 @@ fn test() {
   let a: dyn[allocator] = h.to-dyn()
   let p = a.alloc(16, 8)
   a.free(p, 16, 8)
+}
+
+fn(test) self-typed-param-blocks-dyn() {
   assert(test-compile({ let d: ?dyn[equals] = :none; d }).!.contains-string("'equals': parameter 'other' mentions self"))
 }

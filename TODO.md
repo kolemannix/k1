@@ -18,7 +18,7 @@
 ## [x] Ability objects; dyn[<ability expr>]
 
 ## grab bag list mid2026
-- [ ] replace fn(intern) with fn(builtin)
+- [x] replace fn(intern) with fn(builtin)
 - [x] add cpu feature string to k1/module
 - [x] convert the add_module train off of anyhow::error
 - [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**

@@ -43,10 +43,16 @@ ns remote {
 
 fn greet-twice[t: remote/greet](x: t): string { "${x.greet()} ${x.greet()}" }
 
-fn test() {
+fn(test) codec-round-trip() {
   assert-equals[string]("asdf", codec/read("asdf".write()))
+}
+
+fn(test) qualified-call-picks-impl-by-self-type() {
   assert-equals(has-secret-gen[a = int]@(foo)/secret(), 10)
   assert-equals(has-secret-gen[a = int]@(bar)/secret(), 20)
   assert-equals(has-secret-int@(foo)/secret(), 30)
+}
+
+fn(test) generic-bound-on-nested-ns-ability() {
   assert-equals(greet-twice(7: u8), "hi 7 hi 7")
 }

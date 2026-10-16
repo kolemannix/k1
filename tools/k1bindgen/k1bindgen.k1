@@ -12,14 +12,10 @@ use std/set
 // - [x] Use derived cli arg parser
 // - [x] Embed sizeof / alignof / offsetof assertions
 // - [x] Support Unions
-fn main(argc: u32, argv: ptr): i32 { 
-  #if k1/test
-    test()
-  else {
-    let output = start(std/sys/parse-main-args(argc, argv))
-    if output is :err msg { eprintln("ERROR: $msg"); return 1 }
-    0
-  }
+fn main(argc: u32, argv: ptr): i32 {
+  let output = start(std/sys/parse-main-args(argc, argv))
+  if output is :err msg { eprintln("ERROR: $msg"); return 1 }
+  0
 }
 type dl-info = { fname: *u8, fbase: ptr, sname: ptr, saddr: ptr }
 fn(extern("dlsym")) dlsym(handle: ptr, symbol: *u8): ptr
@@ -235,7 +231,7 @@ fn start(args: span[string]): result[string, string] {
   }
   if layout-asserts.list.non-empty() {
     out.writeln("")
-    out.writeln("#if k1/test #static {")
+    out.writeln("fn(test) c-layouts() {")
     out.write(layout-asserts.take())
     out.writeln("}")
   }
@@ -294,7 +290,7 @@ type k1-type = either {
 
 let k1-keywords: span[string] = [
   "fn", "let", "and", "or", "if", "else", "while", "loop", "ns",
-  "intern", "for", "in", "ability", "impl", "not", "is", "builtin", "where",
+  "for", "in", "ability", "impl", "not", "is", "builtin", "where",
   "context", "use", "require", "defer",
 ]
 fn mangle-name(name: string): string {

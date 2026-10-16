@@ -29,13 +29,13 @@ macro debug(e: code) {
   #if false "println($e)" else ""
 }
 
-fn test-twice() {
+fn(test) twice-evaluates-arg-twice() {
   let x = twice(incr())
   assert-equals(x, 3)
   assert-equals(twice-counter, 2)
 }
 
-fn test-repeat() {
+fn(test) repeat-unrolls-body() {
   repeat(3, incr-repeat())
   assert-equals(repeat-counter, 3)
 }
@@ -44,23 +44,23 @@ macro widen-arg(n: i8) {
   "${n.unsigned().widen[u64]}"
 }
 
-fn test-signed-arg() {
+fn(test) signed-macro-arg() {
   let w: u64 = widen-arg(-1)
   assert-equals(w, 255)
 }
 
-fn test-debug-elided() {
+fn(test) debug-elided() {
   debug(crash("this must never run"))
 }
 
-fn test-code-value() {
+fn(test) code-literal-value() {
   let c = \incr()
   assert-equals(c.text, "incr()")
   assert-equals(c.spans.len(), 1)
   assert(c.spans.[0].source != 0)
 }
 
-fn test-code-fmt() {
+fn(test) code-fmt() {
   let c: code = "let w = ${}".fmt(42)
   assert-equals(c.text, "let w = 42")
   assert-equals(c.spans.len(), 1)
@@ -74,7 +74,7 @@ fn test-code-fmt() {
   assert-equals(e.text, "let p = 007")
 }
 
-fn test-code-builder() {
+fn(test) code-builder-spans() {
   let a = \1 + 2
   let cb = code-builder/new()
   cb.write("let z = $a; z * 2")
@@ -85,7 +85,7 @@ fn test-code-builder() {
   assert-equals(built.spans.[1].len, 5)
 }
 
-fn test-emitter() {
+fn(test) code-builder-emitters() {
   let cb-storage = code-builder/new()
   let cb = cb-storage.&
   // The nested block exercises transitive capture: the inner lambda captures
@@ -157,7 +157,7 @@ macro numbers(t: span[code-token]) {
   "0"
 }
 
-fn test-token-params() {
+fn(test) token-params() {
   let x = 4
   assert-equals(
     token-summary(\{ <a b="s ${x + 1}">'c'
@@ -177,24 +177,9 @@ fn test-token-params() {
   assert-equals(hole-sum(\{ "${x} and ${x * 2}" }), 12)
 }
 
-fn test-raw-group() {
+fn(test) raw-token-group() {
   let c = \{ any < tokens > here }
   assert-equals(c.text, "any < tokens > here")
   assert(c.spans.[0].source != 0)
   assert-equals((\{}).text, "")
-}
-
-fn test() {
-  test-twice()
-  test-repeat()
-  test-signed-arg()
-  test-debug-elided()
-  test-code-value()
-  test-code-fmt()
-  test-code-builder()
-  test-emitter()
-  test-token-params()
-  test-raw-group()
-
-  .{}
 }

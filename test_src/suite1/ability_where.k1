@@ -56,7 +56,7 @@ impl[t, c: wsource[t = t]] wview[t = t] for c {
   fn view-span(self): span[t] { span/single(self.the-item()) }
 }
 
-fn test() {
+fn(test) where-clauses-gate-default-fns() {
   let p: plain-box = .{ v = 5 }
   assert(p.the-item() == 5)
   assert(p.item-equals(5))

@@ -131,6 +131,228 @@ impl TypedProgram {
         self.finish_call(Call { callee, args, type_args }, span, ctx)
     }
 
+    pub(super) fn synth_test_thunk(
+        &mut self,
+        function_id: FunctionId,
+        span: Span,
+    ) -> K1Result<FunctionId> {
+        let test = *self.get_function(function_id);
+        let ns_scope = self.namespaces.get_scope(test.namespace_id);
+        let fn_scope =
+            self.scopes.add_child_scope(ns_scope, ScopeType::FunctionScope, ScopeOwnerId::None);
+        let test_return_type = self.types.get(test.type_id).as_function().unwrap().return_type;
+        let call = self.synth_static_call(function_id, &[], test_return_type, span);
+        let failure_call = self.synth_typed_call_typed_args(
+            self.ast.idents.f.test_outcome_failure.with_span(span),
+            &[],
+            &[call],
+            EvalExprContext::make(fn_scope),
+            false,
+        )?;
+        let body = self.synth_return_only_block(fn_scope, failure_call, span);
+        let thunk_type = self.add_type_anon(Type::Function(FunctionType {
+            physical_params: MSlice::empty(),
+            return_type: self.exprs.get_type(failure_call),
+            is_lambda: false,
+        }));
+        let thunk_name = self.ast.idents.intern("test-thunk");
+        let thunk_id = self.add_function(TypedFunction::synthesized(
+            thunk_name,
+            fn_scope,
+            test.namespace_id,
+            MSlice::empty(),
+            body,
+            test.parsed_id,
+            thunk_type,
+            TypedFunctionKind::Standard,
+        ));
+        self.scopes.set_scope_owner_id(fn_scope, ScopeOwnerId::Function(thunk_id));
+        Ok(thunk_id)
+    }
+
+    //nocommit unreviewed synth_test_main
+    pub fn synth_test_main(&mut self, tests: &[TestCase]) -> K1Result<()> {
+        let k1_scope = self.get_k1_scope_id();
+        let k1_ns = self.scopes.get_scope_owner(k1_scope).as_namespace().unwrap();
+        let fn_scope =
+            self.scopes.add_child_scope(k1_scope, ScopeType::FunctionScope, ScopeOwnerId::None);
+        let ctx = EvalExprContext::make(fn_scope);
+        let Some(run_id) =
+            self.find_function_namespaced(self.scopes.core_scope_id, &self.ast.idents.f.test_run)?
+        else {
+            self.ice("core is missing core/test/run", None)
+        };
+        let table_param = *self.mem.get_nth(self.get_function(run_id).params, 1);
+        let table_type = self.variables.get(table_param.variable_id).type_id;
+        let (case_type, table_kind) = self.get_as_container_instance(table_type).unwrap();
+        let case_fields = self.types.get(case_type).expect_struct().fields;
+        let mut cases: Vec<TypedExprId> = Vec::with_capacity(tests.len());
+        for test in tests {
+            if !self.get_function(test.function_id).test_runs_runtime() {
+                continue;
+            }
+            let mut fields = self.mem.new_list(case_fields.len());
+            for field in self.mem.getn(case_fields).to_vec() {
+                let value = match self.ident_str(field.name) {
+                    "name" => self.synth_string_literal(test.name, test.span),
+                    "location" => self.synth_source_location(test.span),
+                    "run-fn" => self.function_to_pointer(test.thunk_id, test.span),
+                    "expected-failure" => match test.expected_failure {
+                        Some(needle) => {
+                            let needle = self.synth_string_literal(needle, test.span);
+                            self.synth_optional_some(needle).0
+                        }
+                        None => self.synth_optional_none(self.builtin_types.string(), test.span),
+                    },
+                    _ => self.ice_span(field.span, "unexpected core/test/test-case field"),
+                };
+                let value = self.check_and_coerce_expr(field.type_id, value, fn_scope, false)?;
+                fields.push(StructLiteralField { name: field.name, expr: Some(value) });
+            }
+            let case = TypedExpr::Struct(StructLiteral { fields: fields.to_slice() });
+            cases.push(self.exprs.add(case, case_type, test.span));
+        }
+        let span = self.get_function_span(run_id);
+        let table = self.synth_container_literal(table_kind, case_type, &cases, ctx, span)?;
+        let module_name = self.synth_string_literal(self.primary_module().name, span);
+        let run = self.synth_static_call(run_id, &[module_name, table], I32_TYPE_ID, span);
+        let body = self.synth_return_only_block(fn_scope, run, span);
+        let main_type = self.add_type_anon(Type::Function(FunctionType {
+            physical_params: MSlice::empty(),
+            return_type: I32_TYPE_ID,
+            is_lambda: false,
+        }));
+        let run_parsed_id = self.get_function(run_id).parsed_id;
+        let main_id = self.add_function(TypedFunction::synthesized(
+            self.ast.idents.intern("test-main"),
+            fn_scope,
+            k1_ns,
+            MSlice::empty(),
+            body,
+            run_parsed_id,
+            main_type,
+            TypedFunctionKind::Standard,
+        ));
+        self.scopes.set_scope_owner_id(fn_scope, ScopeOwnerId::Function(main_id));
+        self.test_main = Some(main_id);
+        Ok(())
+    }
+
+    pub(super) fn synth_container_literal(
+        &mut self,
+        list_kind: ContainerKind,
+        element_type: TypeId,
+        elements: &[TypedExprId],
+        ctx: EvalExprContext,
+        span: Span,
+    ) -> K1Result<TypedExprId> {
+        let mut list_lit_block = self.new_block_builder(
+            ctx.scope_id,
+            ScopeType::LexicalBlock,
+            span,
+            2 + elements.len() as u32,
+        );
+        let list_lit_scope = list_lit_block.scope_id;
+        let list_lit_ctx = ctx.with_scope(list_lit_scope).with_no_expected_type();
+        let count_expr = self.synth_i64(elements.len() as i64, span);
+
+        let make_dest_coll = match list_kind {
+            ContainerKind::List => self.synth_typed_call_typed_args(
+                self.ast.idents.f.list_with_capacity.with_span(span),
+                &[element_type],
+                &[count_expr],
+                list_lit_ctx,
+                false,
+            )?,
+            ContainerKind::Buffer | ContainerKind::Span => self.synth_typed_call_typed_args(
+                self.ast.idents.f.buffer_allocate.with_span(span),
+                &[element_type],
+                &[count_expr],
+                list_lit_ctx,
+                false,
+            )?,
+            ContainerKind::Array(array_type_id) => {
+                let value_id = self.static_values.add(StaticValue::Zero(array_type_id));
+                self.exprs.add_static(value_id, array_type_id, false, span)
+            }
+        };
+        let needs_address_of = matches!(list_kind, ContainerKind::List);
+        let dest_coll_variable = self.synth_variable_defn(
+            self.ast.idents.b.list_lit,
+            make_dest_coll,
+            false,
+            list_lit_scope,
+            None,
+        );
+        let dest_coll_ref = self.synth_variable_ref(dest_coll_variable.variable_id);
+        let dest_coll_expr = if needs_address_of {
+            self.synth_address_of(dest_coll_ref, Span::NONE, true).unwrap()
+        } else {
+            dest_coll_ref
+        };
+
+        list_lit_block.statements.push(dest_coll_variable.defn_stmt);
+        for (index, element_value_expr) in elements.iter().enumerate() {
+            let index_expr = self.synth_i64(index as i64, span);
+            let element_place = match list_kind {
+                ContainerKind::List => {
+                    let push_call = self.synth_typed_call_typed_args(
+                        self.ast.idents.f.list_push.with_span(span),
+                        &[element_type],
+                        &[dest_coll_expr, *element_value_expr],
+                        list_lit_ctx,
+                        false,
+                    )?;
+                    let type_id = self.exprs.get_type(push_call);
+                    let push_stmt = self.stmts.add(TypedStmt::Expr(push_call, type_id));
+                    self.push_block_stmt_id(&mut list_lit_block, push_stmt);
+                    continue;
+                }
+                ContainerKind::Buffer | ContainerKind::Span => {
+                    let element_ref = self.synth_typed_call_typed_args(
+                        self.ast.idents.f.buffer_index_unchecked.with_span(span),
+                        &[element_type],
+                        &[dest_coll_expr, index_expr],
+                        list_lit_ctx,
+                        false,
+                    )?;
+                    self.exprs.add(
+                        TypedExpr::Deref(DerefExpr { target: element_ref }),
+                        element_type,
+                        span,
+                    )
+                }
+                ContainerKind::Array(_) => self.exprs.add(
+                    TypedExpr::ArrayGetElement(ArrayGetElement {
+                        base_array: dest_coll_expr,
+                        index: index_expr,
+                        packed: false,
+                    }),
+                    element_type,
+                    span,
+                ),
+            };
+            let store_stmt = self.add_assignment_stmt(element_place, *element_value_expr, span);
+            self.push_block_stmt_id(&mut list_lit_block, store_stmt);
+        }
+        let dest_coll_final = self.synth_variable_ref(dest_coll_variable.variable_id);
+        let final_expr = match list_kind {
+            ContainerKind::List | ContainerKind::Buffer | ContainerKind::Array(_) => {
+                dest_coll_final
+            }
+            ContainerKind::Span => self.synth_typed_call_typed_args(
+                self.ast.idents.f.span_wrapBuffer.with_span(span),
+                &[element_type],
+                &[dest_coll_final],
+                ctx.with_no_expected_type(),
+                false,
+            )?,
+        };
+        self.push_block_expr_id(&mut list_lit_block, final_expr);
+        let final_expr_type = self.exprs.get_type(final_expr);
+        Ok(self.exprs.add_block(list_lit_block, final_expr_type))
+    }
+
     pub(super) fn synth_static_call(
         &mut self,
         function_id: FunctionId,

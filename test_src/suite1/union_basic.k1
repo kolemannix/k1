@@ -6,7 +6,7 @@ type wide = union { small: u32, big: u64 }
 
 fn identity-u(u: u): u { u }
 
-fn test() {
+fn(test) union-fields-share-storage() {
   assert-equals(types/size[u], 4)
   assert-equals(types/size[wide], 8)
 

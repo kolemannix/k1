@@ -12,7 +12,7 @@ fn act-tag(o: odd): u64 {
   o.act.tag
 }
 
-fn test() {
+fn(test) odd-size-struct-in-list-keeps-tags() {
   let items: list[odd] = list/with-capacity(8)
   items.push(make(1, :wrap(:first(0))))
   items.push(make(2, :wrap(:third)))

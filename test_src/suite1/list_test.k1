@@ -5,7 +5,7 @@ impl comparable for sort-rec {
   fn compare(self, other: sort-rec): ordering { self.key.compare(other.key) }
 }
 
-fn test() {
+fn(test) push-grows-and-remove() {
   let xs = list/empty[int]()
   assert(xs.cap() == 0)
   for i in 0.until(101) { xs.push(i) }
@@ -14,7 +14,9 @@ fn test() {
   xs.remove(99)
   assert(xs.first() is :some 1)
   assert(xs.last() is :some 99)
+}
 
+fn(test) sorts-input-shapes() {
   let n = 40
   let descending = list/empty[int]()
   let organ-pipe = list/empty[int]()
@@ -31,7 +33,9 @@ fn test() {
       assert(values.[i - 1] <= values.[i])
     }
   }
+}
 
+fn(test) sort-is-stable() {
   let records = list/empty[sort-rec]()
   for i in 0.until(50) { records.push(.{ key = i % 7, ord = i }) }
   records.sort()
@@ -41,7 +45,9 @@ fn test() {
     assert(a.key <= b.key)
     if a.key == b.key { assert(a.ord < b.ord) }
   }
+}
 
+fn(test) filter-in-place-keeps-matches() {
   let values: list[int] = [1, 2, 3, 4, 5, 6]
   values.filter-in-place(fn v. v % 2 == 0)
   assert-equals(values.show(), "[2,4,6]")
@@ -49,11 +55,15 @@ fn test() {
   assert(values.is-empty())
   values.push(9)
   assert-equals(values.show(), "[9]")
+}
 
+fn(test) find-index-first-match() {
   let found: list[int] = [5, 8, 13]
   assert(found.find-index(fn v. v > 6) == :some 1)
   assert(found.find-index(fn v. v > 20) == :none)
+}
 
+fn(test) pop-until-empty() {
   let a = [1,2]
   assert(a.pop() == :some 2)
   assert(a.pop() == :some 1)

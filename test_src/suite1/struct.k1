@@ -7,7 +7,7 @@ ns for nom-point {
   fn sum(self): int { self.x + self.y }
 }
 
-fn test() {
+fn(test) pipe-overrides-fields() {
   let breaker = false
   let make-struct = fn[breaker.&]. { if breaker.* crash(""); breaker.* = true; .{ a = 1, b = true, c = "hello", d = .{ inside = 0 } } }
   let s: { a: int, b: bool, c: string, d: { inside: int } } = make-struct() | .{ a = 4, b = false, d = .{ inside = 1 } }
@@ -29,7 +29,9 @@ fn test() {
   let partial: { a: int, b: int } = .{ a = 7, b = 8 } | .{ b = uninit }
   assert-equals(partial.a, 7)
   assert(test-compile(1 | .{ a = 2 }).is-some())
+}
 
+fn(test) type-prefixed-literals() {
   assert-equals(nom-point.{ x = 3, y = 4 }.sum(), 7)
   let w = nom-wrap[int].{ inner = 4 }
   assert-equals(w.inner, 4)
@@ -39,7 +41,9 @@ fn test() {
   }
   assert-equals(multi.y, 10)
   assert(test-compile(nom-point.{ x = 1 }).is-some())
+}
 
+fn(test) structural-equality-and-show() {
   let a: { x: int, y: f32 } = .{ x = 10, y = 10.0 }
   let c: { x: int, y: f32 } = .{ x = 10, y = 10.0 }
   assert-equals(a, c)

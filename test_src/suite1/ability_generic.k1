@@ -64,10 +64,7 @@ ns ability_generic {
     heap.new(.{ value = :none, tag })
   }
 
-  fn test() {
-
-    let _btoc: char = (101: u8).to()
-
+  fn(test) expected-type-infers-ability-fn-type-args() {
     let b = make-box[int](42)
     assert(b.tag == 42)
     assert(b.value.is-none())
@@ -75,7 +72,9 @@ ns ability_generic {
     assert-equals(b2.value.get(), 5)
     heap.free-t(b)
     heap.free-t(b2)
+  }
 
+  fn(test) impl-chosen-by-rhs-type() {
     let x: i32 = 4
 
     let add32 = x.gadd(10: i32)
@@ -83,13 +82,18 @@ ns ability_generic {
 
     let add64 = x.gadd(12: i64)
     assert(add64 == 16: i64)
+  }
 
-    // Blanket Impls
+  fn(test) blanket-impl-on-generic-point() {
     let p: generic-point[i32] = .{ x = 1, y = 2 }
 
     let added: generic-point[i32] = p.gadd(p)
     assert-equals(added.x, 1i32 + 1)
     assert-equals(added.y, 2i32 + 2)
+  }
+
+  fn(test) blanket-to-from-and-wrap() {
+    let _btoc: char = (101: u8).to()
 
     assert-equals((3: i32).to(): string, "3")
     assert-equals(from/from(3: i32): string, "3")

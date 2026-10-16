@@ -20,9 +20,9 @@ fn lexer_class(kind: K) -> Option<&'static str> {
         StringDoneDq | StringDoneBt | StringOpenDq | StringOpenBt | FmtSpec => "string",
         Char => "char",
         KeywordFn | KeywordLet | KeywordAnd | KeywordOr | KeywordIf | KeywordElse
-        | KeywordWhile | KeywordLoop | KeywordNs | KeywordIntern | KeywordFor | KeywordIn
-        | KeywordAbility | KeywordImpl | KeywordIs | KeywordNot | KeywordBuiltin | KeywordWhere
-        | KeywordContext | KeywordUse | KeywordRequire | KeywordDefer => "kw",
+        | KeywordWhile | KeywordLoop | KeywordNs | KeywordFor | KeywordIn | KeywordAbility
+        | KeywordImpl | KeywordIs | KeywordNot | KeywordBuiltin | KeywordWhere | KeywordContext
+        | KeywordUse | KeywordRequire | KeywordDefer => "kw",
         OpenParen | CloseParen | OpenBracket | CloseBracket | OpenBrace | CloseBrace | Colon
         | Semicolon | Dot | Comma | Hash => "punct",
         _ => "op",

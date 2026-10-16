@@ -82,13 +82,13 @@ arm64-macos and wasm64, 32 on an AVX2 target, same macro.
 The vector ops are compiler intrinsics, declared in core:
 
 ```k1 path=modules/core/vector.k1
-  fn(intern) to-mask[t, n: static size](v: vector[t, n]): u64
+  fn(builtin) to-mask[t, n: static size](v: vector[t, n]): u64
 ```
 
 `trailing-zeros` isn't even that. It's a raw LLVM intrinsic, declared in k1:
 
 ```k1 path=modules/core/core.k1
-  fn(intern("llvm.cttz.i64")) _cttz(x: u64, zero-poison: bool): u64
+  fn(builtin("llvm.cttz.i64")) _cttz(x: u64, zero-poison: bool): u64
 
   fn trailing-zeros(self: u64): u64 {
     _cttz(self, false)
@@ -350,9 +350,9 @@ fn(extern("uv_loop_close")) loop_close(
 
 `*t` is never null in k1, so a returned C pointer comes back as
 `optref[uv-loop]`, one word you have to check. Every generated struct carries
-libclang's layout as a compile-time assertion, collected in one `#static`
-block at the end of the file that compiles under `k1 test`, so drift from the
-C definition fails the tests without costing every build:
+libclang's layout as an assertion, collected in one `fn(test)` at the end of
+the file that runs under `k1 test`, so drift from the C definition fails the
+tests without costing every build:
 
 ```k1 path=modules/uv/net.k1
 type sockaddr_in = {
@@ -365,7 +365,7 @@ type sockaddr_in = {
 ```
 
 ```k1 path=modules/uv/net.k1
-#if k1/test #static {
+fn(test) c-layouts() {
   assert-layout[in_addr_t](4, 4, [])
   assert-layout[in_port_t](2, 2, [])
   assert-layout[sa_family_t](1, 1, [])
@@ -672,12 +672,15 @@ scalar count ',': 137380 found, 1399 MB/s
 vector count ',': 137380 found, 25006 MB/s
 ```
 
-The whole language test suite runs this way in `test.sh`:
+The whole language test suite runs this way in `test.sh`, in process, since
+wasi has no fork; the tests that expect a crash are skipped:
 
 ```text
-$ k1 --optimize --no-cache --target wasm64-wasi run test_src/suite1
-[INFO  k1] run executable: suite1
-[suite1] All tests passed!
+$ k1 --optimize --no-cache --target wasm64-wasi test --skip-static test_src/suite1
+running suite1/zero_test/bitcast
+running suite1/zero_test/zero-literals
+running suite1/zero_test/zero-unaligned-sizes
+suite1 test results: 254 passed, 0 failed, 7 skipped (117.5ms)
 ```
 
 `examples/fractal` is one `.wasm` that renders to the terminal under wasmtime

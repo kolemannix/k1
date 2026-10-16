@@ -2720,7 +2720,7 @@ type fts5_api = {
   ) -> i32],
 }
 
-#if k1/test #static {
+fn(test) c-layouts() {
   assert-layout[sqlite_int64](8, 8, [])
   assert-layout[sqlite_uint64](8, 8, [])
   assert-layout[int64](8, 8, [])

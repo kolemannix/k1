@@ -5,7 +5,7 @@ type text = _struct_combine[{ text: string }, positioned]
 type user = { name: string, password: string }
 type user-view = _struct_remove[user, { password: string }]
 
-fn test() {
+fn(test) combine-and-remove-fields() {
   let t: text = .{ text = "hi", x = 1, y = 2 }
   assert(t is .{ text = "hi", y = 2 })
   assert-equals(types/size[text](), 32)

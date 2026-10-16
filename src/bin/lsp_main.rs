@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use k1::compiler::{
-    Command, CompileProgramError, CompileRequest, HostProgramMode, LspCompileOptions, Target,
+    Command, CompileProgramError, CompileRequest, HostProgramMode, LspCompileOptions,
     compile_program,
 };
 use k1::lex::{self, Span};
@@ -157,6 +157,8 @@ struct OpenSource {
 struct Backend {
     client: Client,
     module: k1::server::SharedProgram,
+    /// Url of the megarepl http server, reported to the client on `initialized`
+    server_url: Option<String>,
     open_sources: Mutex<HashMap<Url, OpenSource>>,
     /// Canonical src_path of the program we compile (a module dir or single
     /// file), derived from the files the client opens and saves
@@ -169,7 +171,6 @@ struct Backend {
     completion_compile_lock: tokio::sync::Mutex<()>,
     /// The client accepts `$/progress` (window.workDoneProgress)
     progress_supported: AtomicBool,
-    build_setting: RwLock<serde_json::Value>,
 }
 
 const PROGRESS_TICK: std::time::Duration = std::time::Duration::from_millis(100);
@@ -241,6 +242,25 @@ async fn send_progress_task(
     }
 }
 
+fn test_failure_diagnostic(
+    k1: &TypedProgram,
+    result: &k1::typer::StaticTestResult,
+) -> Option<(Url, Diagnostic)> {
+    let failure = result.failure?;
+    let message = format!("test {} failed: {}", k1.ident_str(result.name), k1.ident_str(failure));
+    error_to_diagnostic(k1, message, MessageLevel::Error, result.span)
+}
+
+fn files_and_errors_map(k1: &TypedProgram) -> (HashMap<Url, Vec<Diagnostic>>, Vec<String>) {
+    let mut map: HashMap<Url, Vec<Diagnostic>> = HashMap::new();
+    let mut spanless_errors = vec![];
+    collect_program_files_and_errors(k1, &mut map, &mut spanless_errors);
+    if let HostProgram::Built(host) = &k1.host_program {
+        collect_program_files_and_errors(host, &mut map, &mut spanless_errors);
+    }
+    (map, spanless_errors)
+}
+
 fn collect_program_files_and_errors(
     k1: &TypedProgram,
     map: &mut HashMap<Url, Vec<Diagnostic>>,
@@ -268,16 +288,21 @@ fn collect_program_files_and_errors(
             map.entry(url).or_default().push(diagnostic);
         }
     }
+    for result in &k1.test_results {
+        if let Some((url, diagnostic)) = test_failure_diagnostic(k1, result) {
+            map.entry(url).or_default().push(diagnostic);
+        }
+    }
 }
 
 impl Backend {
     fn new(client: Client) -> Backend {
         let module: k1::server::SharedProgram = Arc::new(Mutex::new(None));
-        let server_module = module.clone();
-        std::thread::spawn(move || k1::server::serve(server_module));
+        let server_url = k1::server::start(module.clone());
         Backend {
             client,
             module,
+            server_url,
             open_sources: Mutex::new(HashMap::new()),
             src_path: RwLock::new(None),
             published_diagnostic_urls: Mutex::new(HashSet::new()),
@@ -287,20 +312,7 @@ impl Backend {
             completion_generation: AtomicU32::new(0),
             completion_compile_lock: tokio::sync::Mutex::new(()),
             progress_supported: AtomicBool::new(false),
-            build_setting: RwLock::new(serde_json::Value::Null),
         }
-    }
-
-    fn set_build_setting(&self, settings: &serde_json::Value) -> std::result::Result<bool, String> {
-        let Some(setting) = settings.get("build") else {
-            return Ok(false);
-        };
-        let mut scratch = CompileRequest::new(PathBuf::new(), Command::Check, None)?;
-        apply_build_setting(&mut scratch, setting).map_err(|e| format!("k1.build: {e}"))?;
-        let mut current = self.build_setting.write().unwrap();
-        let changed = *current != *setting;
-        *current = setting.clone();
-        Ok(changed)
     }
 
     /// Insert the completion marker at the cursor, replacing whatever token is there, and run a check compile;
@@ -355,34 +367,27 @@ impl Backend {
             progress_sink: None,
             host_mode: HostProgramMode::Keep { inputs_hash: host_inputs_hash },
         };
-        let setting = self.build_setting.read().unwrap().clone();
-
         let my_generation = self.completion_generation.fetch_add(1, Ordering::SeqCst) + 1;
         let _compile_guard = self.completion_compile_lock.lock().await;
         if self.completion_generation.load(Ordering::SeqCst) != my_generation {
             return Err(Error::request_cancelled());
         }
-        let program = tokio::task::spawn_blocking(move || {
-            match compile_check(root_path, &setting, lsp_options) {
+        let program =
+            tokio::task::spawn_blocking(move || match compile_check(root_path, lsp_options) {
                 Ok(program) => Some(program),
                 Err(CompileProgramError::TyperFailure(program)) => Some(*program),
                 Err(CompileProgramError::Build(message)) => {
                     error!("{message}");
                     None
                 }
-            }
-        })
-        .await
-        .map_err(|_| Error::internal_error())?;
+            })
+            .await
+            .map_err(|_| Error::internal_error())?;
         Ok(program)
     }
 
     fn with_k1<T>(&self, f: impl FnOnce(&mut TypedProgram) -> T) -> Option<T> {
         self.module.lock().unwrap().as_deref_mut().map(f)
-    }
-
-    fn has_program(&self) -> bool {
-        self.module.lock().unwrap().is_some()
     }
 
     fn with_k1_for_url<T>(&self, url: &Url, f: impl FnOnce(&mut TypedProgram) -> T) -> Option<T> {
@@ -395,15 +400,7 @@ impl Backend {
     }
 
     fn build_all_files_and_errors_map(&self) -> (HashMap<Url, Vec<Diagnostic>>, Vec<String>) {
-        let mut map: HashMap<Url, Vec<Diagnostic>> = HashMap::new();
-        let mut spanless_errors = vec![];
-        self.with_k1(|k1| {
-            collect_program_files_and_errors(k1, &mut map, &mut spanless_errors);
-            if let HostProgram::Built(host) = &k1.host_program {
-                collect_program_files_and_errors(host, &mut map, &mut spanless_errors);
-            }
-        });
-        (map, spanless_errors)
+        self.with_k1(|k1| files_and_errors_map(k1)).unwrap_or_default()
     }
 
     fn construct_source_overlay(&self) -> fxhash::FxHashMap<String, String> {
@@ -500,26 +497,14 @@ impl Backend {
             completion: false,
             host_mode: host_program_mode,
         };
-        let setting = self.build_setting.read().unwrap().clone();
-        let compile_result = match tokio::task::spawn_blocking(move || {
-            compile_check(src_path, &setting, lsp_options)
-        })
-        .await
-        {
-            Ok(result) => result,
-            Err(join_error) => {
-                let message = match join_error.try_into_panic() {
-                    Ok(payload) => match payload.downcast::<String>() {
-                        Ok(message) => *message,
-                        Err(payload) => {
-                            payload.downcast_ref::<&str>().copied().unwrap_or("").to_string()
-                        }
-                    },
-                    Err(join_error) => join_error.to_string(),
-                };
-                Err(CompileProgramError::Build(format!("k1 compiler panicked: {message}")))
-            }
-        };
+        let compile_result =
+            match tokio::task::spawn_blocking(move || compile_check(src_path, lsp_options)).await {
+                Ok(result) => result,
+                Err(join_error) => Err(CompileProgramError::Build(format!(
+                    "k1 compiler panicked: {}",
+                    panic_message(join_error)
+                ))),
+            };
         let mut compiled_module = match compile_result {
             Ok(module) => {
                 info!(
@@ -544,10 +529,9 @@ impl Backend {
         };
         compiled_module.trace.progress_sink = None;
 
-        let mut module_lock = self.module.lock().unwrap();
         if let HostProgram::Current = compiled_module.host_program {
             compiled_module.host_program = HostProgram::Absent;
-            if let Some(previous) = module_lock.as_deref_mut()
+            if let Some(previous) = self.module.lock().unwrap().as_deref_mut()
                 && (HostProgramMode::Keep { inputs_hash: get_host_program_inputs_hash(previous) })
                     == host_program_mode
             {
@@ -555,13 +539,43 @@ impl Backend {
                     std::mem::replace(&mut previous.host_program, HostProgram::Absent);
             }
         }
-        *module_lock = Some(compiled_module);
+        if compiled_module.plan.editor.test_on_save && compiled_module.error_count() == 0 {
+            let (errors_by_file, spanless_errors) = files_and_errors_map(&compiled_module);
+            self.publish_files_and_errors(errors_by_file, spanless_errors).await;
+            let tested = tokio::task::spawn_blocking(move || {
+                let primary_id = compiled_module.primary_module().id;
+                match compiled_module.collect_selected_tests_for_module(primary_id, &[]) {
+                    Ok(tests) => compiled_module.run_static_tests(&tests),
+                    Err(e) => compiled_module.report(e),
+                }
+                compiled_module
+            })
+            .await;
+            compiled_module = match tested {
+                Ok(tested) => tested,
+                Err(join_error) => {
+                    let message =
+                        format!("k1 static tests panicked: {}", panic_message(join_error));
+                    self.client.show_message(MessageType::ERROR, message).await;
+                    return;
+                }
+            };
+        }
+        *self.module.lock().unwrap() = Some(compiled_module);
         self.compile_iteration.fetch_add(1, Ordering::Relaxed);
     }
 
     async fn send_diagnostics(&self) {
-        let version = self.compile_iteration.load(Ordering::Relaxed);
         let (errors_by_file, spanless_errors) = self.build_all_files_and_errors_map();
+        self.publish_files_and_errors(errors_by_file, spanless_errors).await;
+    }
+
+    async fn publish_files_and_errors(
+        &self,
+        errors_by_file: HashMap<Url, Vec<Diagnostic>>,
+        spanless_errors: Vec<String>,
+    ) {
+        let version = self.compile_iteration.load(Ordering::Relaxed);
         // Clear diagnostics for files that left the program (target switch)
         let stale = {
             let mut published = self.published_diagnostic_urls.lock().unwrap();
@@ -646,11 +660,6 @@ impl LanguageServer for Backend {
         let progress_supported =
             params.capabilities.window.as_ref().and_then(|w| w.work_done_progress).unwrap_or(false);
         self.progress_supported.store(progress_supported, Ordering::Relaxed);
-        if let Some(options) = &params.initialization_options
-            && let Err(e) = self.set_build_setting(options)
-        {
-            self.client.show_message(MessageType::ERROR, e).await;
-        }
         info!("Got initialize params: {params:#?}");
         Ok(res)
     }
@@ -659,8 +668,12 @@ impl LanguageServer for Backend {
         info!("K1 LSP initialized");
 
         self.send_diagnostics().await;
-        self.client.show_message(MessageType::INFO, "K1 lsp initialized!").await;
-        self.client.log_message(MessageType::INFO, "K1 server initialized!").await;
+        let message = match &self.server_url {
+            Some(url) => format!("K1 lsp initialized! megarepl at {url}"),
+            None => "K1 lsp initialized!".to_string(),
+        };
+        self.client.show_message(MessageType::INFO, &message).await;
+        self.client.log_message(MessageType::INFO, &message).await;
     }
 
     async fn shutdown(&self) -> Result<()> {
@@ -719,6 +732,13 @@ impl LanguageServer for Backend {
                     }
                     let message = k1.ident_str(m.message).to_string();
                     if let Some((_, diagnostic)) = error_to_diagnostic(k1, message, m.level, m.span)
+                    {
+                        diagnostics.push(diagnostic);
+                    }
+                }
+                for result in &k1.test_results {
+                    if k1.ast.sources.file_of(result.span.global_start) == file_id
+                        && let Some((_, diagnostic)) = test_failure_diagnostic(k1, result)
                     {
                         diagnostics.push(diagnostic);
                     }
@@ -867,20 +887,6 @@ impl LanguageServer for Backend {
                 },
             },
         )))
-    }
-
-    async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
-        let settings = params.settings.get("k1").unwrap_or(&params.settings);
-        match self.set_build_setting(settings) {
-            Ok(true) if self.has_program() => {}
-            Ok(_) => return,
-            Err(e) => {
-                self.client.show_message(MessageType::ERROR, e).await;
-                return;
-            }
-        }
-        self.compile(self.construct_source_overlay()).await;
-        self.send_diagnostics().await;
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
@@ -1068,7 +1074,9 @@ fn find_references(
     };
 
     match ls_entity.kind {
-        LsEntityKind::Function { .. } | LsEntityKind::Ability(_) | LsEntityKind::Variable { .. } => {}
+        LsEntityKind::Function { .. }
+        | LsEntityKind::Ability(_)
+        | LsEntityKind::Variable { .. } => {}
         LsEntityKind::Namespace(_) | LsEntityKind::Type { .. } => return Ok(None),
         // These will be really useful: a variant that is never constructed,
         // a field that is never accessed...
@@ -1156,53 +1164,22 @@ async fn main() {
 
 fn compile_check(
     file: PathBuf,
-    setting: &serde_json::Value,
     lsp: LspCompileOptions,
 ) -> std::result::Result<TypedProgram, CompileProgramError> {
     let mut request = CompileRequest::new(file, Command::Check, None)
         .map_err(|e| CompileProgramError::Build(e.to_string()))?;
     request.build.default.debug = true;
-    apply_build_setting(&mut request, setting).expect("k1.build is validated when set");
+    request.build.editor = true;
     request.lsp = lsp;
     compile_program(request)
 }
 
-fn apply_build_setting(
-    request: &mut CompileRequest,
-    setting: &serde_json::Value,
-) -> std::result::Result<(), String> {
-    use serde_json::Value;
-    let fields = match setting {
-        Value::Null => return Ok(()),
-        Value::Object(fields) => fields,
-        other => return Err(format!("expected an object, got {other}")),
-    };
-    let build = &mut request.build.default;
-    for (key, value) in fields {
-        match (key.as_str(), value) {
-            ("target", Value::String(name)) => match Target::parse(name) {
-                Some(target) => build.target = target,
-                None => return Err(format!("unknown target {name}")),
-            },
-            ("cpu", Value::String(cpu)) => build.cpu = request.strings.intern(cpu),
-            ("features", Value::String(features)) => {
-                build.features = request.strings.intern(features)
-            }
-            ("optimize", Value::Bool(b)) => build.optimize = *b,
-            ("debug", Value::Bool(b)) => build.debug = *b,
-            ("no-std", Value::Bool(b)) => build.no_std = *b,
-            ("sanitize", Value::Bool(b)) => build.sanitize = *b,
-            ("filc", Value::Bool(b)) => build.filc = *b,
-            ("options", Value::Array(items)) => {
-                for item in items {
-                    let Some(option) = item.as_str() else {
-                        return Err(format!("options holds strings, got {item}"));
-                    };
-                    request.build.options.push(option.to_string());
-                }
-            }
-            _ => return Err(format!("unexpected {key}: {value}")),
-        }
+fn panic_message(join_error: tokio::task::JoinError) -> String {
+    match join_error.try_into_panic() {
+        Ok(payload) => match payload.downcast::<String>() {
+            Ok(message) => *message,
+            Err(payload) => payload.downcast_ref::<&str>().copied().unwrap_or("").to_string(),
+        },
+        Err(join_error) => join_error.to_string(),
     }
-    Ok(())
 }
