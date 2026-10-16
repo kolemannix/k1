@@ -37,8 +37,8 @@ impl PerfectHash {
                 buckets[bucket_of(*key, bucket_bits)].push(index);
             }
             let mut order: Vec<usize> = Vec::with_capacity(bucket_count);
-            for bucket in 0..bucket_count {
-                if !buckets[bucket].is_empty() {
+            for (bucket, entries) in buckets.iter().enumerate() {
+                if !entries.is_empty() {
                     order.push(bucket);
                 }
             }

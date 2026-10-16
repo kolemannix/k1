@@ -1317,72 +1317,58 @@ pub(crate) fn open_program(
             &lsp.source_overlay,
         ));
     }
-    let restored = if config.tools.cache {
-        restore_longest_prefix(&ast, config, plan, &lsp, &mut sources, snapshot_count)
-    } else {
-        Err(plan)
-    };
-    let k1 = match restored {
-        Ok(k1) => k1,
-        Err(plan) => TypedProgram::new(ast, config, plan, lsp),
+    let k1 = 'restore: {
+        if config.tools.cache {
+            // Restore the longest module prefix that has a cache entry
+            let settings = typer::snapshot::inputs_hash_from_settings(&ast.idents, &config, &plan);
+            let mut hashes: SV8<crate::snap::InputsHash> = SV8::new();
+            let mut hash = settings;
+            for (index, module_sources) in sources.iter_mut().take(snapshot_count).enumerate() {
+                let Ok(files) = module_sources.wait() else { break };
+                hash = typer::snapshot::module_inputs_hash(hash, &plan, index, files);
+                hashes.push(hash);
+            }
+            let cache_dir = Path::new(ast.idents.get_string(config.cache_dir));
+            let clock = crate::clock::Clock::new();
+            for (index, hash) in hashes.iter().enumerate().rev() {
+                let load_start = clock.raw();
+                let path = crate::snap::cache_entry_path(cache_dir, index, settings);
+                let Some(bytes) = crate::snap::cache_load(&path) else { continue };
+                let load_end = clock.raw();
+                let reader = match crate::snap::SnapReader::new(&bytes, *hash) {
+                    Ok(reader) => reader,
+                    Err(e) => {
+                        if config.tools.chatty {
+                            eprintln!("ignoring cache entry: {e}");
+                        }
+                        continue;
+                    }
+                };
+                let mut restored = TypedProgram::restore(
+                    reader,
+                    *hash,
+                    config,
+                    &ast.idents,
+                    plan,
+                    lsp,
+                    (load_start, load_end),
+                );
+                let module_count = index as u32 + 1;
+                restored.restored_module_count = module_count;
+                let msg = format!(
+                    "restored {module_count} modules from cache ({:.1}mb)",
+                    bytes.len() as f64 / (1024.0 * 1024.0)
+                );
+                info!("{msg}");
+                if config.tools.chatty {
+                    eprintln!("{msg}");
+                }
+                break 'restore restored;
+            }
+        }
+        TypedProgram::new(ast, config, plan, lsp)
     };
     (k1, sources)
-}
-
-fn restore_longest_prefix(
-    ast: &crate::parse::ParsedProgram,
-    config: CompilerConfig,
-    plan: crate::plan::BuildPlan,
-    lsp: &LspCompileOptions,
-    sources: &mut [ModuleSources],
-    snapshot_count: usize,
-) -> std::result::Result<TypedProgram, crate::plan::BuildPlan> {
-    let settings = typer::snapshot::inputs_hash_from_settings(&ast.idents, &config, &plan);
-    let mut hashes: SV8<crate::snap::InputsHash> = SV8::new();
-    let mut hash = settings;
-    for (index, module_sources) in sources.iter_mut().take(snapshot_count).enumerate() {
-        let Ok(files) = module_sources.wait() else { break };
-        hash = typer::snapshot::module_inputs_hash(hash, &plan, index, files);
-        hashes.push(hash);
-    }
-    let cache_dir = Path::new(ast.idents.get_string(config.cache_dir));
-    let clock = crate::clock::Clock::new();
-    for (index, hash) in hashes.iter().enumerate().rev() {
-        let load_start = clock.raw();
-        let path = crate::snap::cache_entry_path(cache_dir, index, settings);
-        let Some(bytes) = crate::snap::cache_load(&path) else { continue };
-        let load_end = clock.raw();
-        let reader = match crate::snap::SnapReader::new(&bytes, *hash) {
-            Ok(reader) => reader,
-            Err(e) => {
-                if config.tools.chatty {
-                    eprintln!("ignoring cache entry: {e}");
-                }
-                continue;
-            }
-        };
-        let mut restored = TypedProgram::restore(
-            reader,
-            *hash,
-            config,
-            &ast.idents,
-            plan,
-            lsp.clone(),
-            (load_start, load_end),
-        );
-        let module_count = index as u32 + 1;
-        restored.restored_module_count = module_count;
-        let msg = format!(
-            "restored {module_count} modules from cache ({:.1}mb)",
-            bytes.len() as f64 / (1024.0 * 1024.0)
-        );
-        info!("{msg}");
-        if config.tools.chatty {
-            eprintln!("{msg}");
-        }
-        return Ok(restored);
-    }
-    Err(plan)
 }
 
 fn locate_k1_home(requested: Option<String>) -> std::result::Result<String, String> {

@@ -53,6 +53,7 @@ pub struct Mem<Tag = ()> {
     _marker: PhantomData<Tag>,
 }
 
+pub const MEM_RESERVED_BYTES: usize = crate::GIGABYTE;
 const ADVISE_MIN_BYTES: usize = 64 * crate::KILOBYTE;
 const ADVISE_MAX_BYTES: usize = crate::MEGABYTE;
 
@@ -410,7 +411,7 @@ impl<Tag> Mem<Tag> {
     pub fn make() -> Self {
         // Note(knix) If we never allow larger than a 4gb allocation, then we are safe to hand out 32-bit
         //            offsets instead of pointers, which could be big for some codebases
-        let mut mmap = memmap2::MmapMut::map_anon(crate::GIGABYTE).unwrap();
+        let mut mmap = memmap2::MmapMut::map_anon(MEM_RESERVED_BYTES).unwrap();
         mmap.advise(memmap2::Advice::Sequential).unwrap();
 
         // We waste the first 8 bytes every time, so that our handles can be niched

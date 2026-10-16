@@ -718,6 +718,75 @@ ns for particles {
 }
 ```
 
+## Two stages: tokens, then a checked type
+
+`define-soa` wants its struct as a type argument. A macro can take the fields
+as bare tokens and still reflect on a checked type: stage one re-spells the
+tokens as a type literal and calls stage two.
+
+```k1
+  macro define-record(name: code, fields: span[code-token]) {
+    let cb = code-builder/new()
+    cb.write("\$pre/define-record-typed($name, types/id[{ ")
+    cb.write-tokens(fields)
+    cb.write(" }])")
+    cb.build()
+  }
+```
+
+A macro parameter that isn't `code` is evaluated at the call site, so `id`
+arrives as the type the compiler built from those tokens. Stage two names it,
+bakes a `describe` string from its schema, and writes a `write-row` that
+prints a missing optional as `-`:
+
+```k1
+  macro define-record-typed(name: code, id: types/type-id) {
+    let fields = id.schema().as-struct().!.fields
+    let cb-storage = code-builder/new()
+    let cb = cb-storage.&
+    cb.line("type $name = #type types/type-id/make(${id.inner})")
+    cb.block("ns for $name", fn[cb, fields, name]. {
+      let parts = list/empty[string]()
+      for f in fields { parts.push("${f.name}: ${f.type-id.name()}") }
+      cb.line("fn describe(): string { ${meta/str-lit(string/join(parts, ", "))} }")
+      cb.block("fn write-row[w: writer](self: $name, w)", fn[cb, fields]. {
+        for f in fields {
+          cb.line(`w.write(${meta/str-lit("${if it-index == 0 "" else " "}${f.name}=")})`)
+          if f.type-id.is-instance-of(types/id[opt]) {
+            cb.line(`if self.${f.name} is :some v v.print-to(w) else w.write("-")`)
+          } else {
+            cb.line("self.${f.name}.print-to(w)")
+          }
+        }
+      })
+    })
+    cb.build()
+  }
+```
+
+Both live in `ns pre`, which compiles before the rest of the file, so a `$`
+line at the top can call them:
+
+```k1
+$pre/define-record(point, \{ x: int, label: string, note: ?string })
+```
+
+```k1
+  let p: point = .{ x = 1, label = "a", note = :none }
+  let sb = string-builder/new()
+  p.write-row(sb.&)
+  println(point/describe())
+  println(sb.build())
+```
+
+```text
+x: i64, label: string, note: opt[string]
+x=1 label=a note=-
+```
+
+`int` comes back as `i64`: the names come from the checked type, not the
+tokens.
+
 ## Small macros in the core library
 
 Macros aren't only for megaprograms. `mem/with-arena` is one only because the

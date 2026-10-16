@@ -19,8 +19,8 @@ use crate::typer::types::{
 };
 use crate::typer::{
     ErrorKind, FunctionId, GlobalInitialValue, K1Message, K1Result, MessageLevel,
-    StaticContainerKind, StaticRawContainer, StaticStruct, StaticSum, StaticValue, StaticValueId,
-    StaticValuePool, TypedFloatValue, TypedGlobalId, TypedIntValue, TypedProgram,
+    StaticContainerKind, StaticStruct, StaticSum, StaticValue, StaticValueId, StaticValuePool,
+    TypedFloatValue, TypedGlobalId, TypedIntValue, TypedProgram,
 };
 use crate::{
     ice_span, kbail, kerr,
@@ -547,35 +547,43 @@ pub(crate) fn resolve_global(
     };
 
     let layout = k1.get_pt_layout(t);
-    let dst = if is_constant {
-        k1.vm_shared_static_stack.push_layout_uninit(layout)
-    } else {
-        vm.static_stack.push_layout_uninit(layout)
-    };
-    let addr = Value::ptr(dst);
+    let mut target =
+        if is_constant { StaticStack::Shared } else { StaticStack::Vm(&mut vm.static_stack) };
+    let dst = push_static_layout(k1, &mut target, layout);
+    if let Some(initial_value_id) = initial_value_id
+        && !t.is_empty()
+    {
+        store_static_value(k1, &mut target, dst, initial_value_id);
+    }
 
+    let addr = Value::ptr(dst);
     if is_constant {
         k1.vm_global_constant_lookups.insert(global_id, addr);
     } else {
         vm.globals.insert(global_id, addr);
     }
-
-    if let Some(initial_value_id) = initial_value_id {
-        if !t.is_empty() {
-            debug!(
-                "shared global is: {}. the `t` of the instr is: {}",
-                k1.static_value_to_string(initial_value_id),
-                k1.pt_to_string(t)
-            );
-            if is_constant {
-                let shared_vm_value = static_value_to_vm_value(k1, initial_value_id, vm.eval_span);
-                store_value(k1, t, dst, shared_vm_value);
-            } else {
-                store_static_value(k1, dst, initial_value_id);
-            }
-        }
-    }
     Ok(addr)
+}
+
+pub const STATIC_CONSTANT_WRITE_MSG: &str =
+    "Write to static constant data; only `let(mutable)` globals are writable";
+
+#[inline(always)]
+pub fn is_static_constant(k1: &TypedProgram, addr: *const u8) -> bool {
+    let base = k1.vm_shared_static_stack.base_ptr();
+    addr.addr().wrapping_sub(base.addr()) < kmem::MEM_RESERVED_BYTES
+}
+
+pub enum StaticStack<'a> {
+    Shared,
+    Vm(&'a mut Stack),
+}
+
+fn push_static_layout(k1: &mut TypedProgram, target: &mut StaticStack, layout: Layout) -> *mut u8 {
+    match target {
+        StaticStack::Shared => k1.vm_shared_static_stack.push_layout_uninit(layout),
+        StaticStack::Vm(stack) => stack.push_layout_uninit(layout),
+    }
 }
 
 #[inline(always)]
@@ -600,48 +608,15 @@ pub fn static_value_to_vm_value(
             value
         }
         StaticValue::Zero(type_id) => static_zero_value(k1, *type_id, span),
-        StaticValue::Struct(static_struct) => {
-            let layout = k1.get_layout(static_struct.type_id).unwrap();
-            let struct_base = k1.vm_shared_static_stack.push_layout_uninit(layout);
-
-            store_static_value(k1, struct_base, static_value_id);
-
-            Value::ptr(struct_base)
-        }
-        StaticValue::Sum(sum) => {
-            let layout = k1.get_layout(sum.sum_type_id).unwrap();
-            let sum_base = k1.vm_shared_static_stack.push_layout_uninit(layout);
-
-            store_static_value(k1, sum_base, static_value_id);
-
-            Value::ptr(sum_base)
-        }
-        StaticValue::LinearContainer(container) => {
-            let container_type_id = container.type_id;
-            let element_type = k1.get_linear_container_element(container_type_id).unwrap();
-            let kind = container.kind;
-            let len = container.len();
-            let container_elements = container.elements;
-            let layout = k1.get_layout(element_type).unwrap();
-            // Inline containers (arrays, vectors) use their own layout so vectors
-            // get their natural alignment
-            let array_allocation_layout = match kind {
-                StaticContainerKind::Array | StaticContainerKind::Vector => {
-                    k1.get_layout(container_type_id).unwrap()
-                }
-                _ => layout.array_me(len),
-            };
-
-            let array_base_ptr =
-                k1.vm_shared_static_stack.push_layout_uninit(array_allocation_layout);
-
-            store_static_array_elements(k1, array_base_ptr, element_type, container_elements);
-            build_container_header_value(k1, kind, array_base_ptr, len)
-        }
-        StaticValue::RawContainer(raw) => {
-            let raw = *raw;
-            let data = raw_container_get_data_unaliased(k1, &raw);
-            build_container_header_value(k1, raw.kind, data, raw.len())
+        StaticValue::Struct(_)
+        | StaticValue::Sum(_)
+        | StaticValue::LinearContainer(_)
+        | StaticValue::RawContainer(_) => {
+            let layout = k1.get_layout(k1.get_static_value_type(static_value_id)).unwrap();
+            let mut target = StaticStack::Shared;
+            let dst = push_static_layout(k1, &mut target, layout);
+            store_static_value(k1, &mut target, dst, static_value_id);
+            Value::ptr(dst)
         }
     };
     k1.vm_static_value_lookups.insert(static_value_id, v);
@@ -649,7 +624,12 @@ pub fn static_value_to_vm_value(
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: StaticValueId) {
+pub fn store_static_value(
+    k1: &mut TypedProgram,
+    target: &mut StaticStack,
+    dst: *mut u8,
+    static_value_id: StaticValueId,
+) {
     match k1.static_values.get(static_value_id) {
         StaticValue::Empty(_) => {}
         StaticValue::Bool(bool_value) => store_byte(dst, *bool_value as u8),
@@ -675,7 +655,7 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
                 struct_layout.iter().zip(k1.static_values.mem.getn(struct_fields))
             {
                 let field_ptr = unsafe { dst.byte_add(field.offset as usize) };
-                store_static_value(k1, field_ptr, *field_value_id);
+                store_static_value(k1, target, field_ptr, *field_value_id);
             }
         }
         StaticValue::Sum(e) => {
@@ -690,7 +670,7 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
             if let Some(payload_value_id) = payload {
                 let payload_offset = sum_pt.payload_offset;
                 let payload_ptr = unsafe { dst.byte_add(payload_offset as usize) };
-                store_static_value(k1, payload_ptr, payload_value_id);
+                store_static_value(k1, target, payload_ptr, payload_value_id);
             };
         }
         StaticValue::LinearContainer(container) => {
@@ -698,72 +678,51 @@ pub fn store_static_value(k1: &mut TypedProgram, dst: *mut u8, static_value_id: 
             let kind = container.kind;
             let len = container.len();
             let container_elements = container.elements;
-            let layout = k1.get_layout(element_type).unwrap();
-            let array_allocation_layout = layout.array_me(len);
+            let array_layout = k1.get_layout(element_type).unwrap().array_me(len);
 
-            let array_base_ptr = match kind {
-                StaticContainerKind::Span
-                | StaticContainerKind::Buffer
-                | StaticContainerKind::List => {
-                    k1.vm_shared_static_stack.push_layout_uninit(array_allocation_layout)
+            match kind {
+                StaticContainerKind::Array | StaticContainerKind::Vector => {
+                    store_static_array_elements(k1, target, dst, element_type, container_elements)
                 }
-                StaticContainerKind::Array | StaticContainerKind::Vector => dst,
-            };
-
-            store_static_array_elements(k1, array_base_ptr, element_type, container_elements);
-            store_container_header(kind, dst, array_base_ptr, len)
+                StaticContainerKind::Span => {
+                    let mut shared = StaticStack::Shared;
+                    let data = push_static_layout(k1, &mut shared, array_layout);
+                    store_static_array_elements(
+                        k1,
+                        &mut shared,
+                        data,
+                        element_type,
+                        container_elements,
+                    );
+                    store_container_header(kind, dst, data, len)
+                }
+                StaticContainerKind::Buffer | StaticContainerKind::List => {
+                    let data = push_static_layout(k1, target, array_layout);
+                    store_static_array_elements(k1, target, data, element_type, container_elements);
+                    store_container_header(kind, dst, data, len)
+                }
+            }
         }
         StaticValue::RawContainer(raw) => {
             let raw = *raw;
+            let bytes = k1.static_values.mem.getn(raw.bytes);
+            let (bytes_ptr, bytes_len) = (bytes.as_ptr(), bytes.len());
             match raw.kind {
                 StaticContainerKind::Array | StaticContainerKind::Vector => {
-                    let bytes = k1.static_values.mem.getn(raw.bytes);
-                    memcopy(bytes.as_ptr(), dst, bytes.len())
+                    memcopy(bytes_ptr, dst, bytes_len)
                 }
-                _ => {
-                    let data = raw_container_get_data_unaliased(k1, &raw);
+                StaticContainerKind::Span => {
+                    store_container_header(raw.kind, dst, bytes_ptr.cast_mut(), raw.len())
+                }
+                StaticContainerKind::Buffer | StaticContainerKind::List => {
+                    let layout = raw.scalar.get_layout().array_me(raw.len());
+                    let data = push_static_layout(k1, target, layout);
+                    memcopy(bytes_ptr, data, bytes_len);
                     store_container_header(raw.kind, dst, data, raw.len())
                 }
             }
         }
     };
-}
-
-fn raw_container_get_data_unaliased(k1: &mut TypedProgram, raw: &StaticRawContainer) -> *mut u8 {
-    let bytes = k1.static_values.mem.getn(raw.bytes);
-    match raw.kind {
-        StaticContainerKind::Span | StaticContainerKind::Array | StaticContainerKind::Vector => {
-            bytes.as_ptr().cast_mut()
-        }
-        StaticContainerKind::Buffer | StaticContainerKind::List => {
-            let layout = raw.scalar.get_layout().array_me(raw.len());
-            let copy = k1.vm_shared_static_stack.push_layout_uninit(layout);
-            memcopy(bytes.as_ptr(), copy, bytes.len());
-            copy
-        }
-    }
-}
-
-fn build_container_header_value(
-    k1: &mut TypedProgram,
-    kind: StaticContainerKind,
-    data: *mut u8,
-    len: usize,
-) -> Value {
-    match kind {
-        StaticContainerKind::Array | StaticContainerKind::Vector => Value::ptr(data),
-        StaticContainerKind::Span | StaticContainerKind::Buffer => {
-            let header = k1_types::K1BufferLike { len: len as i64, data };
-            Value::ptr(k1.vm_shared_static_stack.push_t(header))
-        }
-        StaticContainerKind::List => {
-            let header = k1_types::K1List {
-                k1_buffer: k1_types::K1BufferLike { data, len: len as i64 },
-                len: len as i64,
-            };
-            Value::ptr(k1.vm_shared_static_stack.push_t(header))
-        }
-    }
 }
 
 fn store_container_header(kind: StaticContainerKind, dst: *mut u8, data: *mut u8, len: usize) {
@@ -785,6 +744,7 @@ fn store_container_header(kind: StaticContainerKind, dst: *mut u8, data: *mut u8
 
 fn store_static_array_elements(
     k1: &mut TypedProgram,
+    target: &mut StaticStack,
     dst: *mut u8,
     element_type: TypeId,
     elements: MSlice<StaticValueId, StaticValuePool>,
@@ -801,7 +761,7 @@ fn store_static_array_elements(
             k1.static_value_to_string(*elem_value_id),
             offset
         );
-        store_static_value(k1, elem_dst, *elem_value_id);
+        store_static_value(k1, target, elem_dst, *elem_value_id);
     }
 }
 
@@ -1145,8 +1105,6 @@ pub fn value_to_string_id(m: &mut TypedProgram, value: Value) -> Result<StringId
 ///
 /// Obviously not all types are supported; only things you can reasonably
 /// embed in a binary; raw pointers for example are out.
-///
-/// TODO: References are currently unsupported but should be chased and resolved.
 pub fn vm_value_to_static_value(
     k1: &mut TypedProgram,
     type_id: TypeId,
@@ -1316,12 +1274,7 @@ pub fn vm_value_to_static_value(
             kbail!(k1, span, "Cannot bake function pointers");
         }
         Type::Reference(_) => {
-            let addr = vm_value.as_ptr();
-            if addr.is_null() || addr.addr() == 0 {
-                k1.static_values.add(StaticValue::Zero(type_id))
-            } else {
-                kbail!(k1, span, "Cannot yet bake non-null references");
-            }
+            kbail!(k1, span, "References cannot be statically baked");
         }
         Type::Lambda(_) | Type::LambdaObject(_) | Type::AbilityObject(_) | Type::Opaque(_) => {
             kbail!(

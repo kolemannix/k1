@@ -1912,7 +1912,7 @@ impl TypedProgram {
         let base = base?;
         let count = size / base.base_size();
         if homogeneous
-            && size % base.base_size() == 0
+            && size.is_multiple_of(base.base_size())
             && count <= MAX_MEMBERS
             && slots == (1 << count) - 1
         {

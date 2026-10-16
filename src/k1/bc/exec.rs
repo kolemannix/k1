@@ -335,6 +335,13 @@ fn exec_loop<const COUNT_OPS: bool>(
             kbail!(k1, k1.bc.span_for_pc(pc_u32!()), $($args),*);
         }};
     }
+    macro_rules! check_writable {
+        ($addr:expr) => {
+            if vm::is_static_constant(k1, $addr) {
+                vmerr!("{}", vm::STATIC_CONSTANT_WRITE_MSG);
+            }
+        };
+    }
     // `?` with fault recording
     macro_rules! vmtry {
         ($e:expr) => {
@@ -403,6 +410,7 @@ fn exec_loop<const COUNT_OPS: bool>(
         ($h:ident, $t:ty, $opcode:path) => {{
             let addr = read_src!(operand!(0)).as_ptr().wrapping_byte_add(header_b($h) as usize);
             debug_assert!(!addr.is_null(), "store to null");
+            check_writable!(addr);
             let v = read_src!(operand!(1)).bits() as $t;
             unsafe { (addr as *mut $t).write_unaligned(v) };
             advance!($opcode);
@@ -705,6 +713,7 @@ fn exec_loop<const COUNT_OPS: bool>(
             }
             Opcode::RetStore => {
                 let addr = read_src!(operand!(0));
+                check_writable!(addr.as_ptr());
                 store_bits(header_a(h), addr.as_ptr(), ret_reg);
                 advance!(Opcode::RetStore);
             }
@@ -758,6 +767,7 @@ fn exec_loop<const COUNT_OPS: bool>(
             Opcode::AtomicStore => {
                 let ord = ir::AtomicOrderingIr::from_tag(header_b(h) as u8);
                 let addr = read_src!(operand!(0));
+                check_writable!(addr.as_ptr());
                 let v = read_src!(operand!(1));
                 vm::atomic_store_bits(header_a(h), addr.as_ptr(), v, ord);
                 advance!(Opcode::AtomicStore);
@@ -767,6 +777,7 @@ fn exec_loop<const COUNT_OPS: bool>(
                 let op = ir::AtomicRmwOpIr::from_tag((b >> 8) as u8);
                 let ord = ir::AtomicOrderingIr::from_tag((b & 0xff) as u8);
                 let addr = read_src!(operand!(1));
+                check_writable!(addr.as_ptr());
                 let operand = read_src!(operand!(2));
                 let prev = vm::atomic_rmw_bits(op, header_a(h), addr.as_ptr(), operand, ord);
                 write_slot!(operand!(0), prev);
@@ -780,6 +791,7 @@ fn exec_loop<const COUNT_OPS: bool>(
                 let weak = b >> 8 & 1 == 1;
                 let result_ptr = read_src!(operand!(0)).as_ptr();
                 let addr = read_src!(operand!(1));
+                check_writable!(addr.as_ptr());
                 let expected = read_src!(operand!(2));
                 let desired = read_src!(operand!(3));
                 let ok_offset = operand!(4) as usize;
@@ -806,6 +818,7 @@ fn exec_loop<const COUNT_OPS: bool>(
                 if cfg!(debug_assertions) && dst_ptr.is_null() {
                     vmerr!("Zero touching null pointer");
                 }
+                check_writable!(dst_ptr);
                 vm::memzero(dst_ptr, operand!(1) as usize);
                 advance!(Opcode::Zero);
             }
@@ -819,6 +832,7 @@ fn exec_loop<const COUNT_OPS: bool>(
                     if cfg!(debug_assertions) && (dst_ptr.is_null() || src_ptr.is_null()) {
                         vmerr!("Copy touching null pointer (size {})", size);
                     }
+                    check_writable!(dst_ptr);
                     vm::memmove(src_ptr, dst_ptr, size);
                 }
                 advance!(Opcode::Copy);
@@ -1083,6 +1097,9 @@ fn exec_builtin(
             let dst = args[0];
             let src = args[1];
             let count = args[2];
+            if vm::is_static_constant(k1, dst.as_ptr()) {
+                kbail!(k1, vm.eval_span, "{}", vm::STATIC_CONSTANT_WRITE_MSG);
+            }
             if builtin == BackendBuiltin::MemCopy {
                 vm::memcopy(src.as_ptr(), dst.as_ptr(), count.as_usize());
             } else {
@@ -1092,6 +1109,9 @@ fn exec_builtin(
         }
         BackendBuiltin::MemSet => {
             let dst = args[0];
+            if vm::is_static_constant(k1, dst.as_ptr()) {
+                kbail!(k1, vm.eval_span, "{}", vm::STATIC_CONSTANT_WRITE_MSG);
+            }
             let value = args[1].bits() as u8;
             let count = args[2];
             unsafe { std::ptr::write_bytes(dst.as_ptr(), value, count.as_usize()) };

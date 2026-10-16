@@ -1067,41 +1067,14 @@ fn find_references(
         return Ok(None);
     };
 
-    let defn_span = k1::lsp_support::get_entity_definition_span(k1, ls_entity.kind);
-    // Does `entity` refer to the same thing as `ls_entity`? None = no;
-    // Some(is_defn) = yes, and whether it is the definition itself
-    let same_target: Box<dyn Fn(&LsEntity) -> Option<bool> + '_> = match ls_entity.kind {
-        LsEntityKind::Function { function_id, .. } => {
-            let target = k1::lsp_support::get_function_generic_id(k1, function_id);
-            Box::new(move |entity| match entity.kind {
-                LsEntityKind::Function { function_id: fid, is_defn }
-                    if k1::lsp_support::get_function_generic_id(k1, fid) == target =>
-                {
-                    Some(is_defn)
-                }
-                _ => None,
-            })
-        }
-        LsEntityKind::Ability(ability_id) => {
-            let target = k1.abilities.get(ability_id).base_ability_id;
-            Box::new(move |entity| match entity.kind {
-                LsEntityKind::Ability(aid) if k1.abilities.get(aid).base_ability_id == target => {
-                    Some(entity.span == defn_span)
-                }
-                _ => None,
-            })
-        }
-        LsEntityKind::Variable { variable_id } => Box::new(move |entity| match entity.kind {
-            LsEntityKind::Variable { variable_id: vid } if vid == variable_id => {
-                Some(entity.span == defn_span)
-            }
-            _ => None,
-        }),
+    match ls_entity.kind {
+        LsEntityKind::Function { .. } | LsEntityKind::Ability(_) | LsEntityKind::Variable { .. } => {}
         LsEntityKind::Namespace(_) | LsEntityKind::Type { .. } => return Ok(None),
         // These will be really useful: a variant that is never constructed,
         // a field that is never accessed...
         LsEntityKind::Variant { .. } | LsEntityKind::StructField { .. } => return Ok(None),
-    };
+    }
+    let defn_span = k1::lsp_support::get_entity_definition_span(k1, ls_entity.kind);
 
     // References are served by scanning ls_entities across all files: every
     // usage the typer sees emits an entity at its span; re-evaluated bodies
@@ -1109,9 +1082,28 @@ fn find_references(
     let mut spans: Vec<Span> = Vec::new();
     for entities in k1.ls_entities.borrow().values() {
         for entity in entities {
-            if let Some(is_defn) = same_target(entity)
-                && (include_declaration || !is_defn)
-            {
+            let is_defn = match (ls_entity.kind, entity.kind) {
+                (
+                    LsEntityKind::Function { function_id: target, .. },
+                    LsEntityKind::Function { function_id, is_defn },
+                ) if k1::lsp_support::get_function_generic_id(k1, function_id)
+                    == k1::lsp_support::get_function_generic_id(k1, target) =>
+                {
+                    is_defn
+                }
+                (LsEntityKind::Ability(target), LsEntityKind::Ability(ability_id))
+                    if k1.abilities.get(ability_id).base_ability_id
+                        == k1.abilities.get(target).base_ability_id =>
+                {
+                    entity.span == defn_span
+                }
+                (
+                    LsEntityKind::Variable { variable_id: target },
+                    LsEntityKind::Variable { variable_id },
+                ) if variable_id == target => entity.span == defn_span,
+                _ => continue,
+            };
+            if include_declaration || !is_defn {
                 spans.push(entity.span);
             }
         }

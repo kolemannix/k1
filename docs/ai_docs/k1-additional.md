@@ -252,7 +252,8 @@ invocations; they expand in place, in order. That is how a macro gets the
 schema of a type the caller wrote as tokens: stage one emits a call to a
 stage-two macro whose param is a `types/type-id`, built as `types/id[{ ...the
 tokens... }]`, and non-`code` macro params are statically evaluated at the
-call site. `sandbox/sandbox.k1` is the worked example.
+call site. `content/showcase/examples/macro_record.k1` is the worked
+example.
 
 The `pre` namespace is compiled early for metaprogramming support:
 

@@ -37,12 +37,14 @@ K1 language reference for agents: `docs/ai_docs/k1-syntax-basics.md` and
 
 ## Rust Style
 
-- No map/filter/collect iterator chains. Build collections with `for .. in`
-  loops and a `let mut` accumulator: allocations and control flow stay explicit,
-  loops survive edits better, and `?` works inside them. Scalar adapters that
-  don't build collections (`any`, `all`, `find`, `zip`/`enumerate`/`rev` in a
-  for-loop header) are fine. Exception: string-building for messages (error
-  reports, debug output) may use map/collect chains.
+- No map/filter/collect iterator chains, no `bool::then`/`then_some`. Build
+  collections with `for .. in` loops and a `let mut` accumulator, and
+  conditional options with `if c { Some(x) } else { None }` or a match guard:
+  allocations and control flow stay explicit, loops survive edits better, and
+  `?` works inside them. Scalar adapters that don't build collections (`any`,
+  `all`, `find`, `zip`/`enumerate`/`rev` in a for-loop header) are fine.
+  Exception: string-building for messages (error reports, debug output) may
+  use map/collect chains.
 - Inline any function that has a single call site: long functions that read
   top to bottom beat a web of one-use helpers (Carmack style). Each inlined
   section gets a one-line `//` header, the one place comments belong.

@@ -63,8 +63,7 @@ pub struct ProgramIr {
     opt_buf_callees: Vec<FunctionId>,
     opt_buf_inline: iropt::InlineState,
     opt_buf_promote: Option<Box<iropt::PromoteState>>,
-    //review clippy is complaining about this Vec<Box>
-    opt_buf_local_uses: Vec<Box<iropt::LocalUses>>,
+    opt_buf_local_uses: Vec<iropt::LocalUses>,
 }
 
 static_assert_size!(IrComment, 1);
@@ -1669,7 +1668,7 @@ pub struct Builder<'k1> {
     cur_block: BlockId,
     cur_span: Span,
     entry_span: Span,
-    local_uses: Option<Box<iropt::LocalUses>>,
+    local_uses: Option<iropt::LocalUses>,
 }
 
 impl<'k1> Builder<'k1> {

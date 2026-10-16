@@ -1772,8 +1772,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             g
         } else {
             let initial_static_value_id = global.initial_value.as_value().unwrap();
-            let initializer_basic_value =
-                self.codegen_static_value_as_const(initial_static_value_id, 0)?;
+            let initializer_basic_value = self.codegen_static_value_as_const(
+                initial_static_value_id,
+                0,
+                !global.is_constant,
+            )?;
 
             // With reloadable nses in play, every global is visible to dlopened dylibs
             let llvm_linkage = if shared {
@@ -5283,8 +5286,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         &mut self,
         static_value_id: StaticValueId,
         depth: usize,
+        writable: bool,
     ) -> CgResult<BasicValueEnum<'ctx>> {
-        if let Some(basic) = self.static_values_basics.get(&static_value_id) {
+        if !writable && let Some(basic) = self.static_values_basics.get(&static_value_id) {
             return Ok(*basic);
         }
         debug!("codegen_static_value_as_const {}", self.k1.static_value_to_string(static_value_id));
@@ -5310,11 +5314,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 string_global.get_initializer().unwrap()
             }
             StaticValue::Zero(type_id) => {
-                let storage_type_id = match self.k1.types.get(*type_id) {
-                    Type::Reference(r) => r.inner_type,
-                    _ => *type_id,
-                };
-                let pt = self.k1.get_physical_type_computed(storage_type_id).unwrap();
+                let pt = self.k1.get_physical_type_computed(*type_id).unwrap();
                 let cg_type = self.codegen_type(pt);
                 let zero = cg_type.rich_type().const_zero();
                 zero.as_basic_value_enum()
@@ -5337,7 +5337,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             self.padding_type(padding).get_undef().as_basic_value_enum();
                         packed_values.push_grow(&mut self.tmp, padding_value);
                     }
-                    let value = self.codegen_static_value_as_const(*field, depth + 1)?;
+                    let value = self.codegen_static_value_as_const(*field, depth + 1, writable)?;
                     packed_values.push_grow(&mut self.tmp, value);
                     let field_size = self.k1.get_pt_layout(field_layout.field_t);
                     debug_assert_eq!(self.layout_per_llvm(&value.get_type()).size, field_size.size);
@@ -5399,7 +5399,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         }
 
                         let payload_value =
-                            self.codegen_static_value_as_const(payload, depth + 1)?;
+                            self.codegen_static_value_as_const(payload, depth + 1, writable)?;
                         packed_values.push(payload_value);
 
                         let payload_pt = variant_payload_pt.unwrap();
@@ -5425,8 +5425,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let cont = *cont;
                 let element_type = self.k1.get_linear_container_element(cont.type_id).unwrap();
                 let span_elements = self.k1.static_values.mem.getn(cont.elements);
-                let array_value =
-                    self.codegen_static_elements_array(element_type, span_elements, depth)?;
+                let elements_writable = writable && cont.kind != StaticContainerKind::Span;
+                let array_value = self.codegen_static_elements_array(
+                    element_type,
+                    span_elements,
+                    depth,
+                    elements_writable,
+                )?;
                 let element_align = self.k1.get_layout_computed(element_type).unwrap().align;
                 self.codegen_static_container(
                     static_value_id,
@@ -5435,6 +5440,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     cont.len(),
                     element_align,
                     array_value.as_basic_value_enum(),
+                    writable,
                 )
             }
             StaticValue::RawContainer(raw) => {
@@ -5447,10 +5453,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     raw.len(),
                     raw.scalar.get_layout().align,
                     array_value.as_basic_value_enum(),
+                    writable,
                 )
             }
         };
-        if depth == 0 {
+        if depth == 0 && !writable {
             self.static_values_basics.insert(static_value_id, result);
         }
         Ok(result)
@@ -5480,18 +5487,30 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         len: usize,
         element_align: u32,
         array_value: BasicValueEnum<'ctx>,
+        writable: bool,
     ) -> BasicValueEnum<'ctx> {
         match kind {
             StaticContainerKind::Array | StaticContainerKind::Vector => array_value,
             StaticContainerKind::Span | StaticContainerKind::Buffer | StaticContainerKind::List => {
-                let data_global = self.make_global_from_value(
-                    array_value,
-                    element_align,
-                    &format!("k1.static.{}.elems", static_value_id.as_u32()),
-                    true,
-                    LlvmLinkage::LinkOnceODR,
-                    false,
-                );
+                let data_global = if writable && kind != StaticContainerKind::Span {
+                    self.make_global_from_value(
+                        array_value,
+                        element_align,
+                        &format!("k1.static.{}.elems.mut", static_value_id.as_u32()),
+                        false,
+                        LlvmLinkage::Private,
+                        false,
+                    )
+                } else {
+                    self.make_global_from_value(
+                        array_value,
+                        element_align,
+                        &format!("k1.static.{}.elems", static_value_id.as_u32()),
+                        true,
+                        LlvmLinkage::LinkOnceODR,
+                        false,
+                    )
+                };
                 let data = data_global.as_pointer_value();
                 let len = len as u64;
                 let final_struct = match kind {
@@ -5520,6 +5539,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         element_type: TypeId,
         elements: &[StaticValueId],
         depth: usize,
+        writable: bool,
     ) -> CgResult<StructValue<'ctx>> {
         let element_layout = self.k1.get_layout_computed(element_type).unwrap();
         // Stride padding is a container concern, not part of Layout.size, so each
@@ -5529,7 +5549,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let mut packed_values = self.tmp.new_list(elements.len() as u32 * values_per_element);
 
         for elem in elements.iter() {
-            let elem_basic_value = self.codegen_static_value_as_const(*elem, depth + 1)?;
+            let elem_basic_value =
+                self.codegen_static_value_as_const(*elem, depth + 1, writable)?;
             packed_values.push(elem_basic_value);
 
             if end_padding > 0 {
@@ -5549,7 +5570,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         if let Some(global) = self.static_values_globals.get(&static_value_id) {
             return Ok(*global);
         };
-        let direct_value = self.codegen_static_value_as_const(static_value_id, 0)?;
+        let direct_value = self.codegen_static_value_as_const(static_value_id, 0, false)?;
         let type_id = self.k1.get_static_value_type(static_value_id);
         let layout = self.k1.get_layout_computed(type_id).unwrap();
         let global = self.make_global_from_value(
@@ -5627,7 +5648,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             | StaticValue::Char(_)
             | StaticValue::Int(_)
             | StaticValue::Enum(_, _)
-            | StaticValue::Float(_) => self.codegen_static_value_as_const(static_value_id, 0)?,
+            | StaticValue::Float(_) => {
+                self.codegen_static_value_as_const(static_value_id, 0, false)?
+            }
             StaticValue::String(string_id) => {
                 let string_global = self.codegen_string_id_to_global(*string_id).unwrap();
                 string_global.as_basic_value_enum()

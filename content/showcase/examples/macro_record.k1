@@ -1,0 +1,45 @@
+$pre/define-record(point, \{ x: int, label: string, note: ?string })
+
+ns pre {
+  macro define-record(name: code, fields: span[code-token]) {
+    let cb = code-builder/new()
+    cb.write("\$pre/define-record-typed($name, types/id[{ ")
+    cb.write-tokens(fields)
+    cb.write(" }])")
+    cb.build()
+  }
+
+  macro define-record-typed(name: code, id: types/type-id) {
+    let fields = id.schema().as-struct().!.fields
+    let cb-storage = code-builder/new()
+    let cb = cb-storage.&
+    cb.line("type $name = #type types/type-id/make(${id.inner})")
+    cb.block("ns for $name", fn[cb, fields, name]. {
+      let parts = list/empty[string]()
+      for f in fields { parts.push("${f.name}: ${f.type-id.name()}") }
+      cb.line("fn describe(): string { ${meta/str-lit(string/join(parts, ", "))} }")
+      cb.block("fn write-row[w: writer](self: $name, w)", fn[cb, fields]. {
+        for f in fields {
+          cb.line(`w.write(${meta/str-lit("${if it-index == 0 "" else " "}${f.name}=")})`)
+          if f.type-id.is-instance-of(types/id[opt]) {
+            cb.line(`if self.${f.name} is :some v v.print-to(w) else w.write("-")`)
+          } else {
+            cb.line("self.${f.name}.print-to(w)")
+          }
+        }
+      })
+    })
+    cb.build()
+  }
+}
+
+fn main(): i32 {
+  let p: point = .{ x = 1, label = "a", note = :none }
+  let sb = string-builder/new()
+  p.write-row(sb.&)
+  println(point/describe())
+  println(sb.build())
+  assert-equals(point/describe(), "x: i64, label: string, note: opt[string]")
+  assert-equals(sb.build(), "x=1 label=a note=-")
+  0
+}

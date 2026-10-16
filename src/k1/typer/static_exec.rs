@@ -725,7 +725,12 @@ impl TypedProgram {
                     self.static_values.mem.push_bytes_uninit(size * elements.len() as u32, align);
                 for (index, element) in elements.iter().enumerate() {
                     let element_dst = unsafe { dst.byte_add(index * size as usize) };
-                    vm::store_static_value(self, element_dst, *element);
+                    vm::store_static_value(
+                        self,
+                        &mut vm::StaticStack::Shared,
+                        element_dst,
+                        *element,
+                    );
                 }
                 self.static_values.add(StaticValue::RawContainer(StaticRawContainer {
                     bytes,
@@ -1621,7 +1626,7 @@ impl TypedProgram {
 
         let error_count_start = p.ast.errors.len();
         let r = f(&mut p);
-        let recovered = p.ast.errors.drain(error_count_start..).last();
+        let recovered = p.ast.errors.drain(error_count_start..).next_back();
         self.buffers.lexed = lexed;
         match (r, recovered) {
             (Err(e), _) | (Ok(_), Some(e)) => {

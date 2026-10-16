@@ -3096,16 +3096,12 @@ impl TypedProgram {
         snapshot_count: usize,
     ) -> K1Result<()> {
         let first = self.completed_module_count as usize;
-        let mut index = 0;
-        for module_sources in sources {
-            if index >= first {
-                let name = self.ast.idents.intern(self.plan.get(self.plan.module(index).name));
-                let frame = self.trace_push(TraceKind::ModuleCompile, name.as_u32(), 0);
-                let result = self.load_plan_module(index, name, module_sources, snapshot_count);
-                self.trace_pop(frame);
-                result?;
-            }
-            index += 1;
+        for (index, module_sources) in sources.into_iter().enumerate().skip(first) {
+            let name = self.ast.idents.intern(self.plan.get(self.plan.module(index).name));
+            let frame = self.trace_push(TraceKind::ModuleCompile, name.as_u32(), 0);
+            let result = self.load_plan_module(index, name, module_sources, snapshot_count);
+            self.trace_pop(frame);
+            result?;
         }
         Ok(())
     }

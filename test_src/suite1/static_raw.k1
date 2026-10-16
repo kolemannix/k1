@@ -33,6 +33,10 @@ let EMPTY: span[u16] = []
 let(mutable) BUF1: buffer[u8] = { let l = list/with-capacity[u8](2); l.push(1); l.push(2); l.buffer }
 let(mutable) BUF2: buffer[u8] = { let l = list/with-capacity[u8](2); l.push(1); l.push(2); l.buffer }
 
+let(mutable) NUMS: list[int] = [1, 2, 3]
+let(mutable) WORDS: list[string] = ["x", "y"]
+let CONST_NUMS: list[int] = [1, 2, 3]
+
 type flag = either { off, on }
 let FLAGS: span[flag] = [:on, :off, :on]
 
@@ -78,6 +82,17 @@ fn test() {
   }
   assert-equals(total, 33586)
 
+  NUMS.[0] = 42
+  NUMS.push(4)
+  WORDS.[1] = "z"
+  assert-equals(NUMS.[0], 42)
+  assert-equals(NUMS.[3], 4)
+  assert-equals(WORDS.[1], "z")
+  assert-equals[?string](
+    test-compile( #static { CONST_NUMS.[0] = 5 } ).map(fn(s) s.take(29)),
+    some("Write to static constant data")
+  )
+
   let baked1 = #static { let l = list/with-capacity[u32](2); l.push(5); l.push(6); l.as-span() }
   let baked2 = #static { let l = list/with-capacity[u32](2); l.push(5); l.push(6); l.as-span() }
   same-type(baked1, baked2)
@@ -90,5 +105,11 @@ fn test() {
     assert-equals(BYTES.[299], 43)
     assert-equals(ARR.[1], -20)
     assert-equals(FLOATS.[0], 1.5)
+    NUMS.[0] = 7
+    NUMS.push(8)
+    WORDS.[1] = "w"
+    assert-equals(NUMS.[0], 7)
+    assert-equals(NUMS.[3], 8)
+    assert-equals(WORDS.[1], "w")
   }
 }
