@@ -3,13 +3,13 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::SV8;
 use crate::compiler::{BuildConfig, SetupRequest};
-use crate::kmem::{MSlice, MStr, Mem};
+use crate::kmem::{MSlice, Mem};
 use crate::kpath;
 use crate::parse::{IdentPool, Interner, StringId};
 use crate::snap::{InputsHash, SnapReader, SnapWriter};
-use crate::typer::{LibRefLinkType, ModuleKind};
-use crate::{SV4, SV8};
+use crate::typer::{LibRefLinkType, ModuleId, ModuleKind};
 
 pub struct PlanMem;
 
@@ -22,10 +22,10 @@ pub struct PlannedLib {
 }
 
 #[derive(Clone, Copy)]
-pub struct PlanChunk {
+pub struct TextOrigin {
     pub start: u32,
     pub end: u32,
-    pub from: u32,
+    pub build_file: StringId,
     pub offset: u32,
     pub len: u32,
 }
@@ -33,7 +33,7 @@ pub struct PlanChunk {
 #[derive(Clone, Copy)]
 pub struct PlannedSource {
     pub text: StringId,
-    pub chunks: MSlice<PlanChunk, PlanMem>,
+    pub origins: MSlice<TextOrigin, PlanMem>,
 }
 
 #[derive(Clone, Copy)]
@@ -48,7 +48,8 @@ pub struct PlannedModule {
     pub path: StringId,
     pub is_dir: bool,
     pub kind: ModuleKind,
-    pub deps: MSlice<u32, PlanMem>,
+    pub owner: Option<ModuleId>,
+    pub deps: MSlice<ModuleId, PlanMem>,
     pub libs: MSlice<PlannedLib, PlanMem>,
     pub link_args: MSlice<StringId, PlanMem>,
     pub params: Option<PlannedSource>,
@@ -67,6 +68,7 @@ impl PlannedModule {
             path,
             is_dir: true,
             kind: ModuleKind::Library,
+            owner: None,
             deps: MSlice::empty(),
             libs: MSlice::empty(),
             link_args: MSlice::empty(),
@@ -83,6 +85,7 @@ pub struct BuildPlan {
     pub config: BuildConfig,
     pub editor: EditorSettings,
     pub modules: MSlice<PlannedModule, PlanMem>,
+    pub excludes: MSlice<StringId, PlanMem>,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -98,6 +101,7 @@ impl BuildPlan {
             config,
             editor: EditorSettings::default(),
             modules: MSlice::empty(),
+            excludes: MSlice::empty(),
         }
     }
 
@@ -125,21 +129,27 @@ impl BuildPlan {
         self.mem.getn(self.modules)
     }
 
-    pub fn module(&self, index: usize) -> &PlannedModule {
-        &self.modules()[index]
+    pub fn get_module(&self, id: ModuleId) -> Option<&PlannedModule> {
+        self.modules().get(id.as_u32() as usize - 1)
     }
 
     pub fn primary(&self) -> &PlannedModule {
         self.modules().last().unwrap()
     }
 
+    pub fn primary_id(&self) -> ModuleId {
+        ModuleId::from_u32(self.modules().len() as u32).unwrap()
+    }
+
+    pub fn excludes(&self) -> &[StringId] {
+        self.mem.getn(self.excludes)
+    }
+
     pub fn get_inputs_hash(&self) -> InputsHash {
         let mut hash = InputsHash(0);
         for m in self.modules() {
-            hash = hash.add(&[
-                self.get(m.path).as_bytes(),
-                &m.build_file_hash.unwrap_or(0).to_le_bytes(),
-            ]);
+            hash = hash
+                .add(&[self.get(m.path).as_bytes(), &m.build_file_hash.unwrap_or(0).to_le_bytes()]);
         }
         hash
     }
@@ -225,6 +235,7 @@ impl BuildPlan {
         w.write_t(&self.config);
         w.write_t(&self.editor);
         w.write_t(&self.modules);
+        w.write_t(&self.excludes);
         w.write_section("end");
     }
 
@@ -239,33 +250,24 @@ impl BuildPlan {
         let config = r.read_t();
         let editor = r.read_t();
         let modules = r.read_t();
+        let excludes = r.read_t();
         r.section("end");
-        Some(BuildPlan { strings, mem, config, editor, modules })
+        Some(BuildPlan { strings, mem, config, editor, modules, excludes })
     }
 
     pub fn is_fresh<Tag>(
         &self,
         idents: &IdentPool,
         tmp: &mut Mem<Tag>,
-        k1_home: &str,
         overlay: &fxhash::FxHashMap<String, String>,
     ) -> bool {
-        let primary_dir = self.module_dir(self.primary());
         for m in self.modules() {
             let dir = self.module_dir(m);
-            if m.is_dir && read_build_file_hash(idents, tmp, dir, overlay) != m.build_file_hash {
+            if !Path::new(dir).is_dir() {
                 return false;
             }
-            for dep in self.mem.getn(m.deps) {
-                let target = self.module(*dep as usize);
-                let mark = tmp.mark();
-                let resolved =
-                    resolve_dep(idents, tmp, primary_dir, dir, k1_home, self.get(target.name));
-                tmp.reset_to(mark);
-                match resolved {
-                    Ok(path) if idents.get_string(path) == self.get(target.path) => {}
-                    _ => return false,
-                }
+            if m.is_dir && read_build_file_hash(idents, tmp, dir, overlay) != m.build_file_hash {
+                return false;
             }
             if let Some(req) = self.setup_request(idents, m, false) {
                 let mark = tmp.mark();
@@ -310,28 +312,4 @@ pub fn read_build_file_hash<Tag>(
     let path = build_file_path(idents, tmp, dir, overlay)?;
     let content = crate::compiler::read_source(idents.get_string(path), overlay).ok()?;
     Some(crate::compiler::content_hash64(content.as_bytes()))
-}
-
-pub fn resolve_dep<Tag>(
-    idents: &IdentPool,
-    tmp: &mut Mem<Tag>,
-    primary_dir: &str,
-    dependent_dir: &str,
-    k1_home: &str,
-    name: &str,
-) -> Result<StringId, String> {
-    let mut candidates: SV4<MStr<Tag>> = SV4::new();
-    candidates.push(kpath::join_tmp(tmp, idents, primary_dir, ("deps", name)));
-    if dependent_dir != primary_dir {
-        candidates.push(kpath::join_tmp(tmp, idents, dependent_dir, ("deps", name)));
-    }
-    candidates.push(kpath::join_tmp(tmp, idents, k1_home, ("modules", name)));
-    for candidate in &candidates {
-        if Path::new(candidate.as_str()).is_dir() {
-            return kpath::canonicalize_string_id(idents, candidate.as_str())
-                .map_err(|e| format!("dependency '{name}' at {candidate}: {e}"));
-        }
-    }
-    let tried = candidates.iter().map(|c| c.as_str()).collect::<Vec<_>>().join(", ");
-    Err(format!("dependency '{name}' not found; tried {tried}"))
 }

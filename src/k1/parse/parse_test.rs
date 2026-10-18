@@ -23,7 +23,7 @@ fn set_up<'ast>(input: &str, ast: &'ast mut ParsedProgram) -> Parser<'static, 'a
     println!("{:#?}", lexed.kinds);
     let lexed: &'static Lexed = Box::leak(Box::new(lexed));
     let ns_id = init_module(module_name, ast);
-    Parser::make_for_file(module_id, module_name, ns_id, ast, lexed, file_id)
+    Parser::make_for_file(module_id, ns_id, ast, lexed, file_id)
 }
 
 fn test_single_expr(input: &str) -> Result<(ParsedProgram, ParsedExpr), ParseError> {

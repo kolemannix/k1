@@ -1,0 +1,13 @@
+let opts: { verbose: bool } = k1/module-params(.{ verbose = false })
+
+fn module(b: k1/build-config): k1/module {
+  .0 | .{
+    depend = ["./deps/consumer"],
+    configure = `.{ cfglib = .{ backlog = ${if b.optimize 500 else 250 * 2} } }`,
+    submodules = [
+      .{ dir = "store", depend = [] },
+      .{ dir = "web", depend = ["store", "consumer"] },
+    ],
+    ignore = ["attic"],
+  }
+}

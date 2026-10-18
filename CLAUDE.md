@@ -132,7 +132,8 @@ or codegen_llvm (binaries).
   runtime roots `k1/test-main`, forking per test on posix.
 - `test_src/*.k1`: a last line `//errmsg: <substring>` expects that compile error;
   otherwise `main` exits 0, or the file's tests pass. `test_src/<dir>/` are module
-  cases; `k1_test` runs top-level entries in parallel (`--serial`), no recursion.
+  cases, their `//errmsg` on `build.k1`; `k1_test` runs top-level entries in
+  parallel (`--serial`), no recursion.
 - New feature tests go in `suite1` (files named for what they check; `suite1.k1` is
   an empty root); `modules/std` coverage in `stdlib`.
 - Test thoroughly while developing, then cut to the fewest lines that guard
@@ -144,14 +145,14 @@ or codegen_llvm (binaries).
 ## Modules, examples, the rest
 - `modules/core` is always loaded; `platform.k1` holds core's only OS externs
   (`impls/{posix,wasi,bare}`); `core/libs` is the C runtime (`k1rt.c`
-  freestanding-safe, `k1rt_hosted.c`). `--no-std` drops `std/`.
+  freestanding-safe, `k1rt_hosted.c`). `b.no-std` in `fn build` drops `std/`.
 - C wrapper modules (`uv`, `sdl3`, `stb`, `freetype`, `harfbuzz`, `sqlite`): vendor
   source in `vendor/`, `setup` builds `libs/*.a` and runs `k1bindgen`
   (`tools/k1bindgen`). Bindings live in a namespace named for the C library, or `c`
   when that collides with the module.
-- Module layout gives affordances, not rules: differing use of `libs/`/`vendor/`
-  is fine. Structure only separates libraries (`deps/`) from a project's own
-  compile units; prefer one escape hatch over placement rules.
+- Module layout gives affordances, not rules: `build.k1` points at its library,
+  submodule and ignored folders, so differing use of `libs/`/`vendor/`/`deps/` is
+  fine; prefer one escape hatch over placement rules.
 - `examples/` are real programs `test.sh` builds or runs. `content/showcase/sections`
   quotes their source by path; `content/showcase/check.sh` verifies the quotes.
 - `site/` (Hugo; `just site`, `just site-build`) and `check.sh` run `k1`/`k1_test`

@@ -808,6 +808,7 @@ ns k1 {
   // is-static is set to 'true' when executing K1 code statically, at compile-time
   let is-static: bool = builtin
 
+  let test: bool = builtin
   let no-std: bool = builtin
   let debug: bool = builtin
 
@@ -869,20 +870,11 @@ ns k1 {
     msg: string
   )
 
-  type module-kind = either(u8) { library, executable }
-
   type link-kind = either(u8) { default, static, dynamic }
 
   type library-ref = {
     name: string,
     link-type: link-kind,
-  }
-
-  type dep-entry = { name: string, params-span: u64 }
-
-  type setup-decl = {
-    outputs: list[string],
-    inputs: list[string],
   }
 
   type target = either(u8) { intel64-linux, arm64-macos, wasm64-wasi, intel64-bare, arm64-bare, wasm64-bare }
@@ -915,63 +907,18 @@ ns k1 {
   type setup-ctx = { build: build-config }
 
   type module = {
-    kind: opt[module-kind],
-    deps: list[dep-entry],
-    libs: list[library-ref],
+    library: bool,
+    depend: list[string],
+    configure: code,
+    submodules: list[submodule],
+    ignore: list[string],
+    link: list[library-ref],
     link-args: list[string],
-    setup: opt[setup-decl],
+    setup-inputs: list[string],
+    setup-outputs: list[string],
   }
 
-  ns for module {
-    fn new(): module { .0 }
-
-    fn executable(self: *module) {
-      if self.kind.is-some() { crash("module kind set twice") }
-      self.kind = :some(:executable)
-    }
-
-    fn library(self: *module) {
-      if self.kind.is-some() { crash("module kind set twice") }
-      self.kind = :some(:library)
-    }
-
-    fn dep(self: *module, name: string) {
-      if name.is-empty() { crash("empty dep name") }
-      if not name.[0].is-ascii-lower() {
-        crash("invalid dep name '$name': dep names start with a lowercase ascii letter")
-      }
-      for name {
-        let ok = it.is-ascii-lower() or it.is-ascii-digit() or it == '-' or it == '_'
-        if not ok {
-          crash("invalid dep name '$name': dep names contain only lowercase ascii letters, digits, '-' and '_'")
-        }
-      }
-      for self.deps { if it.name == name { crash("duplicate dep '$name'") } }
-      self.deps.push(.{ name, params-span = 0 })
-    }
-
-    fn dep-params(self: *module, name: string, params-span: u64) {
-      self.dep(name)
-      self.deps.[self.deps.len() - 1].params-span = params-span
-    }
-
-    fn lib(self: *module, name: string, link-type: link-kind) {
-      self.libs.push(.{ name, link-type })
-    }
-
-    fn link-args(self: *module, args: span[string]) {
-      for args { self.link-args.push(it) }
-    }
-
-    fn setup(self: *module, outputs: span[string], inputs: span[string]) {
-      if self.setup.is-some() { crash("module setup declared twice") }
-      let o: list[string] = list/with-capacity(outputs.len())
-      for outputs { o.push(it) }
-      let i: list[string] = list/with-capacity(inputs.len())
-      for inputs { i.push(it) }
-      self.setup = :some(.{ outputs = o, inputs = i })
-    }
-  }
+  type submodule = { dir: string, depend: list[string] }
 
   ns repl {
     // we can't quite do this yet

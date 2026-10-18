@@ -1,10 +1,11 @@
 use std/process
 
-fn module(_b: k1/build-config): k1/module {
-  let m = k1/module/new()
-  m.lib("brotli", :static)
-  m.setup(["libs/libbrotli.a"], ["vendor"])
-  m
+fn module(): k1/module {
+  .0 | .{
+    link = [.{ name = "brotli", link-type = :static }],
+    setup-inputs = ["vendor"],
+    setup-outputs = ["libs/libbrotli.a"],
+  }
 }
 
 fn setup(ctx: k1/setup-ctx) {

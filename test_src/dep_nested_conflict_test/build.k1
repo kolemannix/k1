@@ -1,6 +1,5 @@
-fn module(_b: k1/build-config): k1/module {
-  let m = k1/module/new()
-  m.dep("a")
-  m.dep("b")
-  m
+fn module(): k1/module {
+  .0 | .{ depend = ["./deps/a", "./deps/b"] }
 }
+
+//errmsg: library 'y' resolves to two folders

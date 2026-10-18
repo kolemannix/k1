@@ -8,8 +8,6 @@ import {
   ServerOptions
 } from "vscode-languageclient/node";
 
-const ROOT_MARKERS = ["main.k1", "module.k1", "build.k1"];
-
 const clients = new Map<string, LanguageClient>();
 let missingServerReported = false;
 
@@ -78,7 +76,7 @@ function resolveServerPath(): { path?: string; searched: string[] } {
 function findProjectRoot(filePath: string): string {
   let dir = path.dirname(filePath);
   while (true) {
-    if (ROOT_MARKERS.some((marker) => fs.existsSync(path.join(dir, marker)))) {
+    if (fs.existsSync(path.join(dir, "build.k1"))) {
       return dir;
     }
     const parent = path.dirname(dir);

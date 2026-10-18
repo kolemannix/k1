@@ -4,11 +4,10 @@ This extension starts `k1lsp` and wires it to VS Code using LSP. Diagnostics, ho
 
 ## Project roots
 
-`k1lsp` compiles its root directory as one module, so the extension starts one
-server instance per k1 project rather than one per VS Code workspace. When a
-`.k1` file is opened, its project root is the nearest ancestor directory
-containing `main.k1`, `module.k1`, or `build.k1`, falling back to the file's
-own directory. The server runs with that root as its
+`k1lsp` compiles the module holding the edited file, so the extension starts
+one server instance per k1 project rather than one per VS Code workspace. When
+a `.k1` file is opened, its project root is the nearest ancestor directory
+containing `build.k1`, falling back to the file's own directory. The server runs with that root as its
 working directory.
 
 ## Server discovery order

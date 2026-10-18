@@ -1,7 +1,4 @@
-fn module(_b: k1/build-config): k1/module {
-  let m = k1/module/new()
-  m.executable()
-  m.dep("sqlite")
-  m.dep("dbx")
-  m
+fn module(): k1/module {
+  .0 | .{ depend = ["sqlite", "./deps/dbx"] }
 }
+//errmsg: can be null

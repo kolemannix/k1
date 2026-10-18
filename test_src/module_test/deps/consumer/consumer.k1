@@ -1,0 +1,3 @@
+fn backlog(): u32 { cfglib/backlog() }
+fn setup-backlog(): u32 { cfglib/setup-backlog() }
+fn tls(): bool { cfglib/tls() }

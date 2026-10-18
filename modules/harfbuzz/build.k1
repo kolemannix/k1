@@ -1,17 +1,18 @@
 use std/process
 
-fn module(_b: k1/build-config): k1/module {
-  let m = k1/module/new()
-  m.lib("harfbuzz", :dynamic)
-  m.setup(outputs = ["libs/libharfbuzz.dylib", "c.k1"], inputs = ["hb-all.h"])
-  m
+fn module(): k1/module {
+  .0 | .{
+    link = [.{ name = "harfbuzz", link-type = :dynamic }],
+    setup-inputs = ["hb-all.h"],
+    setup-outputs = ["libs/libharfbuzz.dylib", "c.k1"],
+  }
 }
 
 // Links the homebrew harfbuzz dylib and regenerates bindings from hb.h.
 // Shaping only (no hb-ft): glyph metrics come from the font tables, so this
 // module stays independent of the freetype module. Endgame is a vendored
 // single-file harfbuzz.cc static build.
-fn setup(ctx: k1/setup-ctx) {
+fn setup() {
   process/sh-verbose(`
     mkdir -p libs
     ln -sf "$(brew --prefix harfbuzz)/lib/libharfbuzz.dylib" libs/libharfbuzz.dylib

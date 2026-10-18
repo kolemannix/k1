@@ -163,6 +163,7 @@ struct Backend {
     /// Canonical src_path of the program we compile (a module dir or single
     /// file), derived from the files the client opens and saves
     src_path: RwLock<Option<PathBuf>>,
+    workspace_root: RwLock<Option<String>>,
     published_diagnostic_urls: Mutex<HashSet<Url>>,
     compile_iteration: AtomicU32,
     retarget_generation: AtomicU32,
@@ -305,6 +306,7 @@ impl Backend {
             server_url,
             open_sources: Mutex::new(HashMap::new()),
             src_path: RwLock::new(None),
+            workspace_root: RwLock::new(None),
             published_diagnostic_urls: Mutex::new(HashSet::new()),
             compile_iteration: AtomicU32::new(0),
             retarget_generation: AtomicU32::new(0),
@@ -434,7 +436,8 @@ impl Backend {
                 return Some(stored);
             }
         }
-        Some(k1::compiler::find_check_target_for_file(&file_path, overlay))
+        let root = self.workspace_root.read().unwrap().clone();
+        Some(k1::compiler::find_check_target_for_file(&file_path, root.as_deref(), overlay))
     }
 
     /// Point the program at `file_url`'s module if it isn't already covered,
@@ -451,6 +454,7 @@ impl Backend {
         let Some(target) = self.target_file_for_url(file_url, &source_overlay) else {
             return;
         };
+        let is_module_target = target.is_dir();
         let changed = {
             let mut src_path = self.src_path.write().unwrap();
             let changed = src_path.as_deref() != Some(target.as_path());
@@ -463,7 +467,22 @@ impl Backend {
         if !changed && in_program && !force_compile {
             return;
         }
-        self.compile(source_overlay).await;
+        self.compile(source_overlay.clone()).await;
+        let in_program = self
+            .with_k1_for_url(file_url, |k1| uri_to_source(&k1.ast, file_url).is_some())
+            .unwrap_or(false);
+        let is_build_file = Path::new(file_url.path())
+            .file_name()
+            .is_some_and(|name| name == k1::plan::BUILD_FILE_NAME);
+        if is_module_target
+            && !in_program
+            && !is_build_file
+            && let Ok(file_path) = file_url.to_file_path()
+            && let Ok(file_path) = k1::kpath::canonicalize_owned(file_path)
+        {
+            *self.src_path.write().unwrap() = Some(PathBuf::from(file_path));
+            self.compile(source_overlay).await;
+        }
         self.send_diagnostics().await;
     }
 
@@ -543,8 +562,7 @@ impl Backend {
             let (errors_by_file, spanless_errors) = files_and_errors_map(&compiled_module);
             self.publish_files_and_errors(errors_by_file, spanless_errors).await;
             let tested = tokio::task::spawn_blocking(move || {
-                let primary_id = compiled_module.primary_module().id;
-                match compiled_module.collect_selected_tests_for_module(primary_id, &[]) {
+                match compiled_module.collect_selected_tests(&[]) {
                     Ok(tests) => compiled_module.run_static_tests(&tests),
                     Err(e) => compiled_module.report(e),
                 }
@@ -659,6 +677,16 @@ impl LanguageServer for Backend {
             Some(ServerInfo { name: "k1lsp".to_string(), version: Some("ALPHA".to_string()) });
         let progress_supported =
             params.capabilities.window.as_ref().and_then(|w| w.work_done_progress).unwrap_or(false);
+        let root_url = match &params.workspace_folders {
+            Some(folders) if !folders.is_empty() => Some(folders[0].uri.clone()),
+            _ => params.root_uri.clone(),
+        };
+        if let Some(root_url) = root_url
+            && let Ok(root) = root_url.to_file_path()
+            && let Ok(root) = k1::kpath::canonicalize_owned(root)
+        {
+            *self.workspace_root.write().unwrap() = Some(root);
+        }
         self.progress_supported.store(progress_supported, Ordering::Relaxed);
         info!("Got initialize params: {params:#?}");
         Ok(res)

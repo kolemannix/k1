@@ -18,6 +18,7 @@ pub(crate) fn inputs_hash_from_settings(
         home_dir,
         k1_home,
         command,
+        test,
         out_dir,
         out_dir_generated: _,
         cache_dir: _,
@@ -34,7 +35,7 @@ pub(crate) fn inputs_hash_from_settings(
                 cache: _,
             },
     } = config;
-    let flags = [*optimize_ir, cfg!(feature = "lsp")].map(|b| b as u8);
+    let flags = [*optimize_ir, cfg!(feature = "lsp"), *test].map(|b| b as u8);
     let hash = crate::snap::InputsHash(0).add(&[
         idents.get_string(*src_path).as_bytes(),
         idents.get_string(*home_dir).as_bytes(),
@@ -52,10 +53,10 @@ pub(crate) fn module_inputs_hash(
     index: usize,
     files: &[crate::compiler::SourceFile],
 ) -> crate::snap::InputsHash {
-    let m = plan.module(index);
+    let m = &plan.modules()[index];
     let mut hash = prev.add(&[plan.get(m.name).as_bytes()]);
     for dep in plan.mem.getn(m.deps) {
-        hash = hash.add(&[&dep.to_le_bytes()]);
+        hash = hash.add(&[&dep.as_u32().to_le_bytes()]);
     }
     if let Some(p) = m.params {
         hash = hash.add(&[plan.get(p.text).as_bytes()]);

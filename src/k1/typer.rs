@@ -3134,7 +3134,7 @@ impl TypedProgram {
     ) -> K1Result<()> {
         let first = self.completed_module_count as usize;
         for (index, module_sources) in sources.into_iter().enumerate().skip(first) {
-            let name = self.ast.idents.intern(self.plan.get(self.plan.module(index).name));
+            let name = self.ast.idents.intern(self.plan.get(self.plan.modules()[index].name));
             let frame = self.trace_push(TraceKind::ModuleCompile, name.as_u32(), 0);
             let result = self.load_plan_module(index, name, module_sources, snapshot_count);
             self.trace_pop(frame);
@@ -3150,7 +3150,7 @@ impl TypedProgram {
         sources: compiler::ModuleSources,
         snapshot_count: usize,
     ) -> K1Result<()> {
-        let planned = *self.plan.module(index);
+        let planned = self.plan.modules()[index];
         let files = self.read_module_sources(name, sources)?;
         let module_hash = snapshot::module_inputs_hash(self.inputs_hash, &self.plan, index, &files);
         let home_dir = self.ast.idents.intern(self.plan.module_dir(&planned));
@@ -3225,29 +3225,117 @@ impl TypedProgram {
     ) -> K1Result<ModuleId> {
         let module_id = self.modules.next_id();
         self.modules.add_expected_id(Module::pending(module_id, name, home_dir), module_id);
-        let parsed_namespace_id = parse::init_module(name, &mut self.ast);
+        let planned = self.plan.get_module(module_id).copied();
+        let is_fixed = name == self.ast.idents.b.core || name == self.ast.idents.b.std;
+        let ns_name = match self.ident_str(name).rsplit_once('/') {
+            Some((_, short)) => self.ast.idents.intern(short),
+            None => name,
+        };
+        let reused =
+            if planned.is_some() { self.find_module_owner_namespace(module_id) } else { None };
+        let (parsed_namespace_id, typed_namespace_id) = match reused {
+            Some(namespace_id) => {
+                let ParsedId::Namespace(parsed) = self.namespaces.get(namespace_id).parsed_id
+                else {
+                    self.ice_span(Span::NONE, "module namespace without a parsed namespace")
+                };
+                (parsed, namespace_id)
+            }
+            None if is_fixed => {
+                let parsed = parse::init_module(ns_name, &mut self.ast);
+                self.module_in_progress = Some(module_id);
+                (parsed, self.declare_namespace(parsed, Scopes::ROOT_SCOPE_ID)?)
+            }
+            None => {
+                let parent = match planned.and_then(|m| m.owner) {
+                    None => ROOT_NAMESPACE_ID,
+                    Some(owner) => match self.find_module_owner_namespace(owner) {
+                        Some(namespace_id) => namespace_id,
+                        None => {
+                            let owner_name =
+                                self.plan.get(self.plan.get_module(owner).unwrap().name);
+                            let owner_name = self.ast.idents.intern(owner_name);
+                            let parsed_owner = parse::init_module(owner_name, &mut self.ast);
+                            self.add_module_namespace(parsed_owner, ROOT_NAMESPACE_ID)
+                        }
+                    },
+                };
+                let parsed = parse::init_module(ns_name, &mut self.ast);
+                (parsed, self.add_module_namespace(parsed, parent))
+            }
+        };
         self.modules.get_mut(module_id).parsed_namespace_id = parsed_namespace_id;
         let parse_frame = self.trace_push(TraceKind::Parse, name.as_u32(), 0);
         for file in files {
-            self.parse_module_source_file(module_id, name, parsed_namespace_id, file);
+            self.parse_module_source_file(module_id, parsed_namespace_id, file);
         }
         self.trace_pop(parse_frame);
 
         self.module_in_progress = Some(module_id);
-        let typed_namespace_id =
-            self.declare_namespace(parsed_namespace_id, Scopes::ROOT_SCOPE_ID)?;
         let scope_id = self.namespaces.get(typed_namespace_id).scope_id;
         let module = self.modules.get_mut(module_id);
         module.namespace_id = typed_namespace_id;
         module.namespace_scope_id = scope_id;
+        if let Some(planned) = planned
+            && !is_fixed
+        {
+            for dep in self.plan.mem.getn(planned.deps) {
+                let dep_namespace = self.modules.get(*dep).namespace_id;
+                let dep_name = self.namespaces.get(dep_namespace).name;
+                if !self.scopes.add_namespace_use(scope_id, dep_name, dep_namespace) {
+                    kbail!(
+                        self,
+                        Span::NONE,
+                        "module '{}' depends on two modules named '{}'",
+                        self.ident_str(name),
+                        self.ident_str(dep_name)
+                    );
+                }
+            }
+            let _ = self.scopes.add_namespace_use(scope_id, ns_name, typed_namespace_id);
+        }
         self.typecheck_module(module_id, parsed_namespace_id)?;
         self.completed_module_count += 1;
         self.compile_all_pending_ir(Span::NONE)?;
         Ok(module_id)
     }
 
-    pub fn get_planned_module(&self, module_id: ModuleId) -> Option<&crate::plan::PlannedModule> {
-        self.plan.modules().get(module_id.as_u32() as usize - 1)
+    fn find_module_owner_namespace(&self, owner: ModuleId) -> Option<NamespaceId> {
+        for id in 1..=self.completed_module_count {
+            let module_id = ModuleId::from_u32(id).unwrap();
+            if self.plan.get_module(module_id).is_some_and(|m| m.owner == Some(owner)) {
+                let module_namespace = self.modules.get(module_id).namespace_id;
+                return self.namespaces.get(module_namespace).parent_id;
+            }
+        }
+        None
+    }
+
+    fn add_module_namespace(
+        &mut self,
+        parsed_namespace_id: ParsedNamespaceId,
+        parent_id: NamespaceId,
+    ) -> NamespaceId {
+        let name = self.ast.namespaces.get(parsed_namespace_id).name;
+        let scope_id = self.scopes.add_child_scope(
+            Scopes::ROOT_SCOPE_ID,
+            ScopeType::Namespace,
+            ScopeOwnerId::None,
+        );
+        let namespace_id = self.namespaces.add(Namespace {
+            name,
+            scope_id,
+            namespace_type: NamespaceKind::User,
+            companion_type_id: None,
+            parent_id: Some(parent_id),
+            parsed_id: ParsedId::Namespace(parsed_namespace_id),
+            lib_name: None,
+            reload: false,
+        });
+        self.scopes.set_scope_owner_id(scope_id, ScopeOwnerId::Namespace(namespace_id));
+        self.ast.namespaces.get_mut(parsed_namespace_id).typer_state =
+            ParsedNamespaceDeclareOutcome::Declared(namespace_id);
+        namespace_id
     }
 
     pub fn optimize_ir(&self) -> bool {
@@ -3265,15 +3353,13 @@ impl TypedProgram {
         Path::new(self.get_string(self.config.cache_dir))
     }
 
-    fn get_span_in_build_file(&mut self, module: u32, offset: u32, len: u32) -> K1Result<Span> {
-        let module = *self.plan.module(module as usize);
-        let tmp = self.get_tmp_unsafe();
-        let path = kpath::join_id(
-            &self.ast.idents,
-            tmp,
-            self.plan.module_dir(&module),
-            crate::plan::BUILD_FILE_NAME,
-        );
+    fn get_span_in_build_file(
+        &mut self,
+        build_file: StringId,
+        offset: u32,
+        len: u32,
+    ) -> K1Result<Span> {
+        let path = self.ast.idents.intern(self.plan.get(build_file));
         let file_id = match self.ast.sources.find_by_path(path) {
             Some(file_id) => file_id,
             None => {
@@ -3341,27 +3427,19 @@ impl TypedProgram {
     fn parse_module_source_file(
         &mut self,
         module_id: ModuleId,
-        module_name: StringId,
         parsed_namespace_id: ParsedNamespaceId,
         file: compiler::SourceFile,
     ) -> FileId {
         let path = self.ast.idents.intern(&file.path);
         let filename = self.ast.idents.intern(kpath::file_name(&file.path));
         self.traced(TraceKind::Parse, filename.as_u32(), 0, |k1| {
-            k1.parse_module_source_file_body(
-                module_id,
-                module_name,
-                parsed_namespace_id,
-                file,
-                path,
-            )
+            k1.parse_module_source_file_body(module_id, parsed_namespace_id, file, path)
         })
     }
 
     fn parse_module_source_file_body(
         &mut self,
         module_id: ModuleId,
-        module_name: StringId,
         parsed_namespace_id: ParsedNamespaceId,
         mut file: compiler::SourceFile,
         path: StringId,
@@ -3381,7 +3459,6 @@ impl TypedProgram {
             Ok(()) => {
                 let mut parser = parse::Parser::make_for_file(
                     module_id,
-                    module_name,
                     parsed_namespace_id,
                     &mut self.ast,
                     &file.lexed,
@@ -3449,11 +3526,8 @@ impl TypedProgram {
         self.functions.iter_with_ids()
     }
 
-    pub fn collect_selected_tests_for_module(
-        &mut self,
-        module_id: ModuleId,
-        filter: &[String],
-    ) -> K1Result<Vec<TestCase>> {
+    pub fn collect_selected_tests(&mut self, filter: &[String]) -> K1Result<Vec<TestCase>> {
+        let primary_id = self.primary_module().id;
         let mut found: Vec<(FunctionId, Span)> = Vec::new();
         for (function_id, function) in self.function_iter() {
             if !function.is_test() {
@@ -3461,7 +3535,9 @@ impl TypedProgram {
             }
             let span =
                 self.ast.get_function(function.parsed_id.as_function_id().unwrap()).name_span;
-            if self.module_of_span(span) == module_id {
+            let module_id = self.module_of_span(span);
+            let owner = self.plan.get_module(module_id).and_then(|m| m.owner);
+            if module_id == primary_id || owner == Some(primary_id) {
                 found.push((function_id, span));
             }
         }
@@ -3533,10 +3609,6 @@ impl TypedProgram {
             return self.modules.get(id);
         }
         self.modules.iter().last().unwrap()
-    }
-
-    pub fn module_by_name(&self, name: StringId) -> Option<&Module> {
-        self.modules.iter().find(|m| m.name == name)
     }
 
     pub fn module_completed(&self, id: ModuleId) -> bool {
@@ -11538,30 +11610,6 @@ impl TypedProgram {
             }
         }
 
-        'dep_params: {
-            let Some(function_id) = callee.maybe_function_id() else { break 'dep_params };
-            let function = self.get_function(function_id);
-            if function.name != self.ast.idents.b.dep_params
-                || Some(function.namespace_id)
-                    != self.get_companion_namespace(self.builtin_types.k1_module.unwrap())
-            {
-                break 'dep_params;
-            }
-            let args = self.ast.mem.getn(fn_call.args);
-            if args.len() != 3 {
-                break 'dep_params;
-            }
-            let params_arg = args[2].value;
-            let params_span = self.ast.exprs.get_span(params_arg);
-            let ParsedExpr::Struct(_) = self.ast.exprs.get(params_arg) else {
-                kbail!(self, params_span, "dep params must be a struct literal");
-            };
-            let span_value_id =
-                self.static_values.add_int(TypedIntValue::U64(params_span.encoded_k1_u64()));
-            let span_expr = self.exprs.add_static(span_value_id, U64_TYPE_ID, false, params_span);
-            stashed_args.push((params_arg, span_expr));
-        }
-
         // Now that we have resolved to a function id, we need to specialize it if generic
         let callee_function_type_id = self.get_callee_function_type(&callee);
         let signature = self.get_callee_function_signature(&callee);
@@ -16311,7 +16359,7 @@ impl TypedProgram {
         if self.find_ability_namespaced(scope_id, name)?.is_some() {
             return Ok(true);
         }
-        Ok(!name.has_path() && self.scopes.find_pending_ability(scope_id, name.name).is_some())
+        Ok(self.find_pending_ability_namespaced(scope_id, name)?.is_some())
     }
 
     fn find_ability_or_declare(
@@ -16319,33 +16367,17 @@ impl TypedProgram {
         ability_name: &QIdent,
         scope_id: ScopeId,
     ) -> K1Result<AbilityId> {
-        let found_ability_id = self.find_ability_namespaced(scope_id, ability_name)?;
-        found_ability_id.map(Ok).unwrap_or({
-            match self.scopes.find_pending_ability(scope_id, ability_name.name) {
-                None => Err(kerr!(
-                    self,
-                    ability_name.name_span,
-                    "No ability '{}' is in scope",
-                    ability_name.name
-                )),
-                Some((pending_ability, ability_scope)) => {
-                    debug!(
-                        "Recursing into pending ability {} from {}",
-                        self.ident_str(ability_name.name),
-                        self.ast.get_span_content(ability_name.name_span)
-                    );
-                    match self.compile_ability_definition(pending_ability, ability_scope)? {
-                        Some(ability_id) => Ok(ability_id),
-                        None => Err(kerr!(
-                            self,
-                            ability_name.name_span,
-                            "No ability '{}' is in scope",
-                            ability_name.name
-                        )),
-                    }
-                }
-            }
-        })
+        if let Some(ability_id) = self.find_ability_namespaced(scope_id, ability_name)? {
+            return Ok(ability_id);
+        }
+        if let Some((pending_ability, ability_scope)) =
+            self.find_pending_ability_namespaced(scope_id, ability_name)?
+            && let Some(ability_id) =
+                self.compile_ability_definition(pending_ability, ability_scope)?
+        {
+            return Ok(ability_id);
+        }
+        Err(kerr!(self, ability_name.name_span, "No ability '{}' is in scope", ability_name.name))
     }
 
     fn declare_ability_impl(
@@ -17644,12 +17676,13 @@ impl TypedProgram {
         self.module_in_progress = Some(module_id);
         let is_core = module_id == MODULE_ID_CORE;
         let module_root_namespace_scope_id = self.modules.get(module_id).namespace_scope_id;
-        if let Some(params) = self.get_planned_module(module_id).and_then(|m| m.params) {
+        if let Some(params) = self.plan.get_module(module_id).and_then(|m| m.params) {
             // The module's params `let`, assembled by the host from build.k1 fragments
             let mut table: SV4<CodeChunkPos> = smallvec![];
-            for c in self.plan.mem.getn(params.chunks) {
-                let source = self.get_span_in_build_file(c.from, c.offset, c.len)?;
-                table.push(CodeChunkPos { start: c.start, end: c.end, source });
+            for origin in self.plan.mem.getn(params.origins) {
+                let source =
+                    self.get_span_in_build_file(origin.build_file, origin.offset, origin.len)?;
+                table.push(CodeChunkPos { start: origin.start, end: origin.end, source });
             }
             let span = table[0].source;
             let table = self.mem.pushn(&table);

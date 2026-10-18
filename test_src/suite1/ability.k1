@@ -36,6 +36,8 @@ impl has-secret-int for foo {
   fn secret(): int { 30 }
 }
 
+impl remote/greet for u16 { fn greet(self: u16): string { "yo $self" } }
+
 ns remote {
   ability greet { fn greet(self): string }
   impl greet for u8 { fn greet(self: u8): string { "hi $self" } }
@@ -55,4 +57,5 @@ fn(test) qualified-call-picks-impl-by-self-type() {
 
 fn(test) generic-bound-on-nested-ns-ability() {
   assert-equals(greet-twice(7: u8), "hi 7 hi 7")
+  assert-equals(greet-twice(8: u16), "yo 8 yo 8")
 }

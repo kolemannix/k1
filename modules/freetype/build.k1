@@ -1,15 +1,16 @@
 use std/process
 
-fn module(_b: k1/build-config): k1/module {
-  let m = k1/module/new()
-  m.lib("freetype", :dynamic)
-  m.setup(outputs = ["libs/libfreetype.dylib", "c.k1"], inputs = ["ft.h"])
-  m
+fn module(): k1/module {
+  .0 | .{
+    link = [.{ name = "freetype", link-type = :dynamic }],
+    setup-inputs = ["ft.h"],
+    setup-outputs = ["libs/libfreetype.dylib", "c.k1"],
+  }
 }
 
 // Links the homebrew freetype dylib and regenerates bindings from ft.h.
 // Endgame is a vendored static build (like sdl3); this gets the API stable first.
-fn setup(ctx: k1/setup-ctx) {
+fn setup() {
   process/sh-verbose(`
     mkdir -p libs
     ln -sf "$(brew --prefix freetype)/lib/libfreetype.dylib" libs/libfreetype.dylib

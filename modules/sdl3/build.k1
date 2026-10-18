@@ -1,8 +1,7 @@
 use std/process
 
 fn module(b: k1/build-config): k1/module {
-  let m = k1/module/new()
-  m.lib("sdl3", :static)
+  let link-args: list[string] = list/empty()
   if (b.target is :arm64-macos) {
     // SDL's own link list for this build config: Libs.private in the
     // setup-generated .k1-out/sdl3-build/sdl3.pc; re-check on vendor bumps
@@ -11,11 +10,16 @@ fn module(b: k1/build-config): k1/module {
       "ForceFeedback", "Carbon", "CoreAudio", "AudioToolbox", "AVFoundation",
       "Foundation", "GameController", "Metal", "QuartzCore", "CoreHaptics",
     ] {
-      m.link-args(["-framework", it])
+      link-args.push("-framework")
+      link-args.push(it)
     }
   }
-  m.setup(outputs = ["libs/libsdl3.a", "c.k1"], inputs = ["vendor"])
-  m
+  .0 | .{
+    link          = [.{ name = "sdl3", link-type = :static }],
+    link-args,
+    setup-inputs  = ["vendor"],
+    setup-outputs = ["libs/libsdl3.a", "c.k1"],
+  }
 }
 
 // Builds the vendored SDL release (3.4.14, from github.com/libsdl-org/SDL;

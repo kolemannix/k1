@@ -1,2 +1,1 @@
 fn main(): i32 { 0 }
-//errmsg: Only the primary configures module params

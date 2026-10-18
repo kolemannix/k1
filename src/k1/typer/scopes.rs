@@ -187,7 +187,7 @@ pub struct NsEntry {
     function: Option<(FunctionId, Provenance)>,
     namespace: Option<(NamespaceId, Provenance)>,
     ty: NsEntryTypeValue,
-    ability: NsEntryAbilityVAlue,
+    ability: NsEntryAbilityValue,
     global: NsEntryGlobalValue,
 }
 static_assert_size!(NsEntry, 40);
@@ -201,7 +201,7 @@ enum NsEntryTypeValue {
 }
 
 #[derive(Clone, Copy, Default)]
-enum NsEntryAbilityVAlue {
+enum NsEntryAbilityValue {
     #[default]
     None,
     Pending(ParsedAbilityId),
@@ -512,6 +512,16 @@ impl Scopes {
         self.bind_namespace(scope_id, ident, namespace_id, Provenance::Defined)
     }
 
+    #[must_use]
+    pub fn add_namespace_use(
+        &mut self,
+        scope_id: ScopeId,
+        ident: StringId,
+        namespace_id: NamespaceId,
+    ) -> bool {
+        self.bind_namespace(scope_id, ident, namespace_id, Provenance::Use)
+    }
+
     fn bind_namespace(
         &mut self,
         scope_id: ScopeId,
@@ -806,8 +816,8 @@ impl Scopes {
         let scope = self.get_scope(scope_id);
         match scope.ns_map {
             Some(m) => match self.ns_entry(m, name)?.ability {
-                NsEntryAbilityVAlue::Defined(a, p) => Some((a, p)),
-                NsEntryAbilityVAlue::None | NsEntryAbilityVAlue::Pending(_) => None,
+                NsEntryAbilityValue::Defined(a, p) => Some((a, p)),
+                NsEntryAbilityValue::None | NsEntryAbilityValue::Pending(_) => None,
             },
             None => self.entry_find(scope.entries, name.as_u32(), |e| match e.payload {
                 EntryPayload::Ability(a) => Some((a, e.provenance)),
@@ -837,9 +847,9 @@ impl Scopes {
             Some(m) => {
                 let entry = self.ns_entry_mut(m, ident);
                 match entry.ability {
-                    NsEntryAbilityVAlue::Defined(..) => false,
-                    NsEntryAbilityVAlue::None | NsEntryAbilityVAlue::Pending(_) => {
-                        entry.ability = NsEntryAbilityVAlue::Defined(ability_id, provenance);
+                    NsEntryAbilityValue::Defined(..) => false,
+                    NsEntryAbilityValue::None | NsEntryAbilityValue::Pending(_) => {
+                        entry.ability = NsEntryAbilityValue::Defined(ability_id, provenance);
                         true
                     }
                 }
@@ -876,12 +886,12 @@ impl Scopes {
             Some(m) => {
                 let entry = self.ns_entry_mut(m, ident);
                 match entry.ability {
-                    NsEntryAbilityVAlue::None => {
-                        entry.ability = NsEntryAbilityVAlue::Pending(parsed_defn_id);
+                    NsEntryAbilityValue::None => {
+                        entry.ability = NsEntryAbilityValue::Pending(parsed_defn_id);
                         true
                     }
-                    NsEntryAbilityVAlue::Pending(_) => false,
-                    NsEntryAbilityVAlue::Defined(..) => true,
+                    NsEntryAbilityValue::Pending(_) => false,
+                    NsEntryAbilityValue::Defined(..) => true,
                 }
             }
             None => {
@@ -918,18 +928,26 @@ impl Scopes {
         ident: StringId,
     ) -> Option<(ParsedAbilityId, ScopeId)> {
         self.walk_chain(scope_id, kinds::PENDING_ABILITIES, |sid| {
-            let scope = self.get_scope(sid);
-            match scope.ns_map {
-                Some(m) => match self.ns_entry(m, ident)?.ability {
-                    NsEntryAbilityVAlue::Pending(parsed_id) => Some(parsed_id),
-                    NsEntryAbilityVAlue::None | NsEntryAbilityVAlue::Defined(..) => None,
-                },
-                None => self.entry_find(scope.entries, ident.as_u32(), |e| match e.payload {
-                    EntryPayload::PendingAbility(id) => Some(id),
-                    _ => None,
-                }),
-            }
+            self.find_pending_ability_local(sid, ident)
         })
+    }
+
+    pub fn find_pending_ability_local(
+        &self,
+        scope_id: ScopeId,
+        ident: StringId,
+    ) -> Option<ParsedAbilityId> {
+        let scope = self.get_scope(scope_id);
+        match scope.ns_map {
+            Some(m) => match self.ns_entry(m, ident)?.ability {
+                NsEntryAbilityValue::Pending(parsed_id) => Some(parsed_id),
+                NsEntryAbilityValue::None | NsEntryAbilityValue::Defined(..) => None,
+            },
+            None => self.entry_find(scope.entries, ident.as_u32(), |e| match e.payload {
+                EntryPayload::PendingAbility(id) => Some(id),
+                _ => None,
+            }),
+        }
     }
 
     pub fn collect_ability_ids_bound_to_names(
@@ -1319,8 +1337,8 @@ impl Scopes {
                     NsEntryTypeValue::None | NsEntryTypeValue::Pending(_) => None,
                 };
                 let ability = match e.ability {
-                    NsEntryAbilityVAlue::Defined(a, p) => Some((ScopeMember::Ability(a), p)),
-                    NsEntryAbilityVAlue::None | NsEntryAbilityVAlue::Pending(_) => None,
+                    NsEntryAbilityValue::Defined(a, p) => Some((ScopeMember::Ability(a), p)),
+                    NsEntryAbilityValue::None | NsEntryAbilityValue::Pending(_) => None,
                 };
                 let global = match e.global {
                     NsEntryGlobalValue::Bound(v, p) => Some((ScopeMember::Variable(v), p)),
@@ -1620,6 +1638,22 @@ impl TypedProgram {
         } else {
             let scope_to_search = self.resolve_qident(scope_id, ability_name)?;
             Ok(self.scopes.find_ability_exposed(scope_to_search, ability_name.name))
+        }
+    }
+
+    pub fn find_pending_ability_namespaced(
+        &self,
+        scope_id: ScopeId,
+        ability_name: &QIdent,
+    ) -> K1Result<Option<(ParsedAbilityId, ScopeId)>> {
+        if !ability_name.has_path() {
+            Ok(self.scopes.find_pending_ability(scope_id, ability_name.name))
+        } else {
+            let scope_to_search = self.resolve_qident(scope_id, ability_name)?;
+            Ok(self
+                .scopes
+                .find_pending_ability_local(scope_to_search, ability_name.name)
+                .map(|id| (id, scope_to_search)))
         }
     }
 

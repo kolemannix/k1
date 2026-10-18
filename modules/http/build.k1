@@ -2,12 +2,13 @@ use std/process
 
 let params: { tlog: bool } = k1/module-params(.{ tlog = false })
 
-fn module(_b: k1/build-config): k1/module {
-  let m = k1/module/new()
-  m.dep("uv")
-  m.lib("llhttp", :static)
-  m.setup(outputs = ["libs/libllhttp.a", "llhttp.k1"], inputs = ["vendor"])
-  m
+fn module(): k1/module {
+  .0 | .{
+    depend        = ["uv"],
+    link          = [.{ name = "llhttp", link-type = :static }],
+    setup-inputs  = ["vendor"],
+    setup-outputs = ["libs/libllhttp.a", "llhttp.k1"],
+  }
 }
 
 // Compiles the vendored llhttp release C (v9.4.1, generated once from the

@@ -1,10 +1,8 @@
-fn module(_b: k1/build-config): k1/module {
-  let m = k1/module/new()
-  m.setup(["tables.k1"], ["vendor"])
-  m
+fn module(): k1/module {
+  .0 | .{ setup-inputs = ["vendor"], setup-outputs = ["tables.k1"] }
 }
 
-fn setup(_ctx: k1/setup-ctx) { tablegen/generate() }
+fn setup() { tablegen/generate() }
 
 ns tablegen {
   let VENDOR: string = "vendor"

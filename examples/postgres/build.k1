@@ -1,6 +1,6 @@
-fn module(_b: k1/build-config): k1/module {
-  let m = k1/module/new()
-  m.lib("pq", :default)
-  m.link-args(["-L/opt/homebrew/opt/libpq/lib", "-L/usr/local/opt/libpq/lib"])
-  m
+fn module(): k1/module {
+  .0 | .{
+    link = [.{ name = "pq", link-type = :default }],
+    link-args = ["-L/opt/homebrew/opt/libpq/lib", "-L/usr/local/opt/libpq/lib"],
+  }
 }

@@ -136,31 +136,49 @@ state pointer means a dyn can't cross `#static` into a runtime constant.
   symbols error.
 
 ## Modules and build.k1
-- A module is a dir with `build.k1`, `module.k1` or `<dir>.k1`, or a single file.
-  `build.k1` compiles on the host against core+std only, never the module's files.
-  All entry points optional:
+- A dir with `build.k1` (may be empty) is a module: every `.k1` under it, minus
+  folders it ignores, submodule and dependency folders, folders with their own
+  `build.k1`, and dot-folders. A lone file is a program; file names mean nothing.
+  `build.k1` compiles on the host against core+std only. All entry points are
+  optional and take their parameter only when they use it:
   - `fn build(req: k1/build-request): k1/build-config`, primary only:
     `req.default`, `req.options` (`-D name[=value]`), `req.host`, `req.editor`.
-    `cpu`/`features` `""` = target default.
+    `cpu`/`features` `""` = target default; `b.no-std = true` drops std.
   - `fn editor(req): k1/editor-settings`, primary, editor compiles
     (`test-on-save`).
-  - `fn module(b: k1/build-config): k1/module`: `m.dep("y")`, `m.lib("foo",
-    :static)`, `m.link-args([...])`, `m.library()`, `m.setup(outputs, inputs)`,
-    `m.dep-params("y", .{ ... })` (primary only).
-  - `fn setup(ctx: k1/setup-ctx)`: runs on the host, cwd = module dir, when
-    outputs are stale against inputs, `build.k1`, params and target; failure
-    leaves no stamp. All setups finish before program source is read.
-- Params: `let params: { f: t } = k1/module-params(defaults)` in the module's own
-  `build.k1`; the primary's `dep-params` literal is merged over defaults. Final
-  after all manifests run (readable in `fn setup`, not `fn module`). Program code
-  reads `params.f` inside the module, `y/params.f` elsewhere.
-- Deps resolve to the first of `<primary>/deps/y`, `<dependent>/deps/y`,
-  `$K1_HOME/modules/y`; two dirs for one name is an error fixed by
-  `<primary>/deps/y`. Plan cached in `.k1-out/cache/plan-*`.
+  - `fn module()` / `fn module(b: k1/build-config)` returns data (`k1/module` in
+    builtin.k1): `.0 | .{ library = true, depend = ["sqlite", "./deps/dbx"],
+    submodules = [.{ dir = "web", depend = ["store"] }], ignore = ["attic"],
+    link = [.{ name = "uv", link-type = :static }], link-args, setup-inputs,
+    setup-outputs, configure }`.
+  - `fn setup()` / `fn setup(ctx: k1/setup-ctx)` declares setup; runs on the
+    host, cwd = module dir, when `setup-outputs` are missing or stale against
+    `setup-inputs`, `build.k1`, params and target; failure leaves no stamp. All
+    setups finish before program source is read.
+- `depend`: `/`, `./`, `../` is a folder relative to that `build.k1`; a bare name
+  is the library the program chose by that name, else `$K1_HOME/modules/<name>`.
+  A library is named for its folder; one name with two folders errors. A module
+  sees core, std, its submodules and its own `depend`, never transitive deps, so
+  macro output naming a library needs the caller to depend on it.
+- A submodule is a folder of the module's own code compiled separately, keyed
+  `app/dir` and written `dir/...` in the owner. It sees core, std and its
+  `depend` (sibling submodules first, then libraries), never its owner; it has no
+  `build.k1`, no nesting, and `k1/module-dir()` is its own folder. `k1 test` runs
+  the program's and its submodules' tests; the CLI given a submodule folder works
+  on the owner.
+- Params: `let params: { f: t } = k1/module-params(defaults)` in a library's
+  `build.k1`. The program's `configure` is a backtick literal keyed by library
+  name (`.{ http = .{ tlog = ${b.optimize} } }`), each value merged over that
+  library's defaults; only the program configures. Final after all manifests
+  run (readable in `fn setup`, not `fn module`). Program code reads `params.f`
+  inside the module, `y/params.f` elsewhere.
+- Plan cached in `.k1-out/cache/plan-*`. The editor compiles the nearest
+  `build.k1` at or below the workspace root whose module holds the file, else the
+  file alone.
 - Host facts: `b.target`, `ctx.build.target`, `k1/host-platform.dylib-ext()`.
   `k1/module-dir()` is the dir of the module whose source holds the call (macro
   argument text counts as the caller's).
-- A library primary emits `lib<name>.{dylib,so}` and a fat `lib<name>.a` exposing
+- A `library = true` primary emits `lib<name>.{dylib,so}` and a fat `lib<name>.a` exposing
   only exports (`examples/klib`). `k1 run` rejects it; `k1 test` accepts it.
 
 ## Concurrency

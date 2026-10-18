@@ -52,7 +52,7 @@ fn parse_args() -> Result<TestSuiteArgs, lexopt::Error> {
 fn get_expected_error(test_file: &Path) -> Option<String> {
     let mut path = test_file.canonicalize().unwrap();
     if path.is_dir() {
-        path = k1::compiler::module_root_file(&path.to_string_lossy(), &Default::default())?;
+        path = path.join(k1::plan::BUILD_FILE_NAME);
     }
     let src = std::fs::read_to_string(path).expect("could not read source file for test {}");
     let last_line = src.lines().rev().find(|l| !l.is_empty())?;

@@ -226,8 +226,12 @@ fn(test) checks-bounds() {
   let _ = xs.[i]
 }
 ```
-- `k1 test` collects every `fn(test)` in the primary module. No params; return
-  `core/test/outcome`: `empty`, `opt` (`:none` fails), any `try` (error fails).
+- `k1 test` collects every `fn(test)` in the program and its submodules. No
+  params; return `core/test/outcome`: `empty`, `opt` (`:none` fails), any `try`
+  (error fails).
+- `k1/test` is true when the compile collects tests (`k1 test`, editor
+  test-on-save): `#if k1/test ns x-test { ... }` keeps tests and their helpers
+  out of other builds.
 - Each runs statically in the VM and at runtime in a forked child, up to
   `cpu-count` children at once, so fixed paths and ports collide; reported in order.
   `fn(test-runtime)` (FFI, threads, fork) / `fn(test-static)` opt out of one;

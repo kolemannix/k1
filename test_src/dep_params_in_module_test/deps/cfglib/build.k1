@@ -1,7 +1,5 @@
 let cfg: { backlog: u32 } = k1/module-params(.{ backlog = 128 })
 
-fn module(_b: k1/build-config): k1/module {
-  let m = k1/module/new()
-  if cfg.backlog > 0 { m.dep("std") }
-  m
+fn module(): k1/module {
+  .0 | .{ library = cfg.backlog > 0 }
 }

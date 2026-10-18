@@ -1,0 +1,5 @@
+fn twice-stored(): int { store/value() * 2 }
+
+fn backlog(): u32 { consumer/backlog() }
+
+fn(test) test-twice() { assert-equals(twice-stored(), 42) }

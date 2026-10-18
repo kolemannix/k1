@@ -1,8 +1,8 @@
-fn module(_b: k1/build-config): k1/module {
-  let m = k1/module/new()
-  m.lib("raylib", :static)
+fn module(): k1/module {
+  let link-args: list[string] = list/empty()
   for ["Cocoa", "OpenGL", "IOKit", "CoreAudio", "CoreVideo", "AudioToolbox"] {
-    m.link-args(["-framework", it])
+    link-args.push("-framework")
+    link-args.push(it)
   }
-  m
+  .0 | .{ link = [.{ name = "raylib", link-type = :static }], link-args }
 }

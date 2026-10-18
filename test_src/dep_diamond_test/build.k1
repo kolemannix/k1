@@ -1,6 +1,3 @@
-fn module(_b: k1/build-config): k1/module {
-  let m = k1/module/new()
-  m.dep("liba")
-  m.dep("libb")
-  m
+fn module(): k1/module {
+  .0 | .{ depend = ["./deps/liba", "./deps/libb", "./deps/shared"] }
 }

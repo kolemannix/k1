@@ -2,11 +2,12 @@ use std/process
 
 let params: { compile-defines: span[string] } = k1/module-params(.{ compile-defines = [] })
 
-fn module(_b: k1/build-config): k1/module {
-  let m = k1/module/new()
-  m.lib("sqlite3", :static)
-  m.setup(outputs = ["libs/libsqlite3.a", "libs/libsqlite3.${k1/host-platform.dylib-ext()}", "sqlite3.k1"], inputs = ["vendor"])
-  m
+fn module(): k1/module {
+  .0 | .{
+    link = [.{ name = "sqlite3", link-type = :static }],
+    setup-inputs = ["vendor"],
+    setup-outputs = ["libs/libsqlite3.a", "libs/libsqlite3.${k1/host-platform.dylib-ext()}", "sqlite3.k1"],
+  }
 }
 
 let defines: span[string] = [

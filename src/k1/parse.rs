@@ -2202,7 +2202,6 @@ pub fn init_module(module_name: StringId, ast: &mut ParsedProgram) -> ParsedName
 
 pub struct Parser<'toks, 'module> {
     pub module_id: ModuleId,
-    pub module_name: StringId,
     pub module_namespace_id: ParsedNamespaceId,
     pub ast: &'module mut ParsedProgram,
     tokens: TokenIter<'toks>,
@@ -2220,7 +2219,6 @@ pub struct Parser<'toks, 'module> {
 impl<'toks, 'ast> Parser<'toks, 'ast> {
     pub fn make_for_file(
         module_id: ModuleId,
-        module_name: StringId,
         module_namespace_id: ParsedNamespaceId,
         ast: &'ast mut ParsedProgram,
         lexed: &'toks Lexed,
@@ -2231,7 +2229,6 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         let source_text = source.content(&ast.mem);
         Parser {
             module_id,
-            module_name,
             module_namespace_id,
             ast,
             tokens: TokenIter::make(lexed),
@@ -6313,11 +6310,9 @@ pub fn parse_standalone(program_name: String, content: &str) -> (ParsedProgram, 
     }
 
     let module_id = ModuleId::from_u32(1).unwrap();
-    let module_name = program_name_id;
-    let module_ns_id = init_module(module_name, &mut ast);
+    let module_ns_id = init_module(program_name_id, &mut ast);
 
-    let mut parser =
-        Parser::make_for_file(module_id, module_name, module_ns_id, &mut ast, &lexed, file_id);
+    let mut parser = Parser::make_for_file(module_id, module_ns_id, &mut ast, &lexed, file_id);
     parser.parse_file_into_module();
     (ast, lexed)
 }

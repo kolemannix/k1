@@ -173,7 +173,6 @@ Build options (fn build sees these as req.default and req.options):
   --target <{targets}>
   --optimize
   --debug              Emit debug info
-  --no-std             Load core only
   --sanitize           Link AddressSanitizer and UndefinedBehaviorSanitizer
   --filc               Compile and link through Fil-C (intel64-linux, needs K1_FILC)
   -D <name[=value]>    Option for the primary module's fn build
@@ -228,8 +227,7 @@ fn parse_cli() -> Result<Cli, lexopt::Error> {
     let mut trailing = Vec::new();
     let mut target = None;
     let mut force = false;
-    let (mut optimize, mut debug, mut no_std, mut sanitize, mut filc) =
-        (false, false, false, false, false);
+    let (mut optimize, mut debug, mut sanitize, mut filc) = (false, false, false, false);
     let mut options = Vec::new();
     let mut tools = ToolFlags::default();
     loop {
@@ -253,7 +251,6 @@ fn parse_cli() -> Result<Cli, lexopt::Error> {
             }
             Long("optimize") => optimize = true,
             Long("debug") => debug = true,
-            Long("no-std") => no_std = true,
             Long("sanitize") => sanitize = true,
             Long("filc") => filc = true,
             Short('D') => options.push(parser.value()?.string()?),
@@ -325,7 +322,6 @@ fn parse_cli() -> Result<Cli, lexopt::Error> {
     let build = &mut request.build.default;
     build.optimize = optimize;
     build.debug = debug;
-    build.no_std = no_std;
     build.sanitize = sanitize;
     build.filc = filc;
     request.build.options = options;

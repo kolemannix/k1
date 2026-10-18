@@ -8,25 +8,36 @@ use crate::compiler::{
 };
 use crate::parse::Interner;
 use crate::plan::{
-    BUILD_FILE_NAME, BuildPlan, PlanChunk, PlanMem, PlannedLib, PlannedModule, PlannedSetup,
-    PlannedSource,
+    BUILD_FILE_NAME, BuildPlan, PlanMem, PlannedLib, PlannedModule, PlannedSetup, PlannedSource,
+    TextOrigin,
 };
+use crate::vm::k1_types::K1CodeSpan;
+use std::path::PathBuf;
 
 const PRIMARY_MODULE_INDEX: usize = 0;
 
 #[derive(Clone)]
-struct Entry {
+struct PlanEntry {
     module: PlannedModule,
     host: Option<ModuleId>,
     manifest_span: Span,
     resolved_by: usize,
-    deps: SV8<u32>,
-    params_expr_span: Option<Span>,
+    owner: Option<usize>,
+    deps: SV8<usize>,
+    ignore: SV8<StringId>,
+    configure_span: Option<Span>,
 }
 
 struct Planner {
     plan: BuildPlan,
-    entries: SV8<Entry>,
+    entries: SV8<PlanEntry>,
+    configure_requests: SV8<(StringId, Span, Span)>,
+}
+
+impl Planner {
+    fn find_library(&self, name: &str) -> Option<usize> {
+        self.entries.iter().position(|e| e.owner.is_none() && self.plan.get(e.module.name) == name)
+    }
 }
 
 type Pending = SV8<(usize, Option<ModuleSources>)>;
@@ -47,8 +58,11 @@ pub fn plan_in_host(
     primary_name: StringId,
 ) -> Result<(BuildPlan, Box<TypedProgram>), CompileProgramError> {
     let mut ast = ParsedProgram::make();
-    let host_config =
-        CompilerConfig { command: Command::Check, ..config.reintern(config_idents, &ast.idents) };
+    let host_config = CompilerConfig {
+        command: Command::Check,
+        test: false,
+        ..config.reintern(config_idents, &ast.idents)
+    };
     ast.name_id = ast.idents.intern(config_idents.get_string(primary_name));
     let k1_home = ast.idents.get_string(host_config.k1_home);
     let mut host_strings = Interner::make_small();
@@ -87,12 +101,12 @@ pub fn plan_in_host(
 
 impl TypedProgram {
     fn plan_build(&mut self, plan: BuildPlan, request: &BuildRequest) -> K1Result<BuildPlan> {
-        let mut planner = Planner { plan, entries: SV8::new() };
+        let mut planner = Planner { plan, entries: SV8::new(), configure_requests: SV8::new() };
         let src_path = self.ast.idents.get_string(self.config.src_path);
         let primary_name = self.ast.idents.get_string(self.ast.name_id);
         let mut pending: Pending = SV8::new();
         let is_dir = Path::new(src_path).is_dir();
-        self.reach(
+        self.queue_planned_module(
             &mut planner,
             primary_name,
             src_path,
@@ -100,6 +114,7 @@ impl TypedProgram {
             PRIMARY_MODULE_INDEX,
             &mut pending,
         );
+        planner.entries[PRIMARY_MODULE_INDEX].module.kind = ModuleKind::Executable;
 
         let mut build_value = None;
         let mut wave = 0;
@@ -111,8 +126,25 @@ impl TypedProgram {
             wave += 1;
         }
 
-        // Every manifest has run, so the primary's dep-params are known: evaluate
-        // each module's deferred k1/module-params global against them
+        // Every manifest has run, so every library the primary configures is known:
+        // evaluate each module's deferred k1/module-params global against them
+        for (name, name_span, value_span) in std::mem::take(&mut planner.configure_requests) {
+            let name = self.ast.idents.get_string(name);
+            let Some(index) =
+                planner.entries.iter().position(|e| planner.plan.get(e.module.name) == name)
+            else {
+                kbail!(
+                    self,
+                    name_span,
+                    "configure names '{}', which is not a library in this build",
+                    name
+                )
+            };
+            if planner.entries[index].configure_span.is_some() {
+                kbail!(self, name_span, "configure names '{}' twice", name)
+            }
+            planner.entries[index].configure_span = Some(value_span);
+        }
         self.module_params_phase = ModuleParamsPhase::HostSetup;
         for global_id in std::mem::take(&mut self.deferred_module_params) {
             let span = self.globals.get(global_id).span;
@@ -124,7 +156,7 @@ impl TypedProgram {
             planner.entries[index].module.params = Some(params);
         }
         for entry in &planner.entries {
-            if let Some(span) = entry.params_expr_span
+            if let Some(span) = entry.configure_span
                 && entry.module.params.is_none()
             {
                 kbail!(
@@ -142,10 +174,10 @@ impl TypedProgram {
         let order = self.get_dependency_order(&planner)?;
         let force_primary = matches!(request.command, Command::Setup { force: true });
         self.run_setups(&planner, &order, build_value.unwrap(), force_primary)?;
-        Ok(self.finish_plan(planner, &order))
+        Ok(self.order_plan_modules(planner, &order))
     }
 
-    fn reach(
+    fn queue_planned_module(
         &mut self,
         planner: &mut Planner,
         name: &str,
@@ -160,13 +192,15 @@ impl TypedProgram {
             planner.plan.strings.intern(path),
         );
         module.is_dir = is_dir;
-        planner.entries.push(Entry {
+        planner.entries.push(PlanEntry {
             module,
             host: None,
             manifest_span: Span::NONE,
             resolved_by,
+            owner: None,
             deps: SV8::new(),
-            params_expr_span: None,
+            ignore: SV8::new(),
+            configure_span: None,
         });
         let overlay = &self.lsp.source_overlay;
         let build_path = if is_dir {
@@ -177,7 +211,13 @@ impl TypedProgram {
         };
         let read = build_path.map(|build_path| {
             let build_path = self.ast.idents.get_string(build_path);
-            crate::compiler::spawn_module_sources_read(build_path, false, false, overlay)
+            crate::compiler::spawn_module_sources_read(
+                build_path,
+                false,
+                false,
+                Vec::new(),
+                overlay,
+            )
         });
         pending.push((index, read));
         index
@@ -210,43 +250,20 @@ impl TypedProgram {
 
         let mut next: Pending = SV8::new();
         for index in indices {
-            let deps = self.evaluate_manifest(planner, index, build_value)?;
-            for (dep_name, params_span) in deps {
-                let span = params_span.unwrap_or(planner.entries[index].manifest_span);
-                let Some(dep) =
-                    self.resolve_planned_dep(planner, index, dep_name, span, &mut next)?
-                else {
-                    if params_span.is_some() {
-                        kbail!(self, span, "Module '{}' accepts no parameters", dep_name);
-                    }
-                    continue;
-                };
-                if let Some(s) = params_span {
-                    if index != PRIMARY_MODULE_INDEX {
-                        kbail!(
-                            self,
-                            s,
-                            "Only the primary configures module params; '{}' cannot set params for '{}'",
-                            planner.plan.get(planner.entries[index].module.name),
-                            dep_name
-                        );
-                    }
-                    planner.entries[dep].params_expr_span = Some(s);
-                }
-                planner.entries[index].deps.push(dep as u32);
-            }
+            self.evaluate_manifest(planner, index, build_value, &mut next)?;
         }
         Ok(next)
     }
 
-    fn host_fn(
+    fn find_host_fn(
         &self,
         module: ModuleId,
         name: StringId,
         param_type: TypeId,
+        min_params: usize,
         return_type: Option<TypeId>,
         signature: &str,
-    ) -> K1Result<Option<(FunctionId, Span)>> {
+    ) -> K1Result<Option<(FunctionId, Span, usize)>> {
         let scope = self.modules.get(module).namespace_scope_id;
         let Some(fn_id) = self.scopes.find_function_local(scope, name) else { return Ok(None) };
         let function = self.get_function(fn_id);
@@ -254,13 +271,14 @@ impl TypedProgram {
         let fn_type = self.get_function_type(fn_id);
         let params = self.mem.getn(fn_type.logical_params());
         if !function.type_params.is_empty()
-            || params.len() != 1
-            || params[0].type_id != param_type
+            || params.len() < min_params
+            || params.len() > 1
+            || params.first().is_some_and(|p| p.type_id != param_type)
             || return_type.is_some_and(|t| fn_type.return_type != t)
         {
             kbail!(self, span, "expected {}", signature);
         }
-        Ok(Some((fn_id, span)))
+        Ok(Some((fn_id, span, params.len())))
     }
 
     fn configure(
@@ -271,10 +289,11 @@ impl TypedProgram {
         let config_type = self.builtin_types.k1_build_config.unwrap();
         let request_type = self.builtin_types.k1_build_request.unwrap();
         let build_fn = match planner.entries[PRIMARY_MODULE_INDEX].host {
-            Some(host) => self.host_fn(
+            Some(host) => self.find_host_fn(
                 host,
                 self.ast.idents.b.build,
                 request_type,
+                1,
                 Some(config_type),
                 "fn build(req: k1/build-request): k1/build-config",
             )?,
@@ -282,7 +301,7 @@ impl TypedProgram {
         };
         let (unresolved, span) = match build_fn {
             None => (request.default, Span::NONE),
-            Some((fn_id, span)) => {
+            Some((fn_id, span, _)) => {
                 let request_value = self.encode_build_request(&planner.plan, request);
                 let result = self.execute_static_function(fn_id, &[request_value], span)?;
                 (self.decode_build_config(result, &mut planner.plan, span)?, span)
@@ -295,10 +314,11 @@ impl TypedProgram {
         planner.plan.config = config;
         if request.editor
             && let Some(host) = planner.entries[PRIMARY_MODULE_INDEX].host
-            && let Some((fn_id, span)) = self.host_fn(
+            && let Some((fn_id, span, _)) = self.find_host_fn(
                 host,
                 self.ast.idents.b.editor,
                 request_type,
+                1,
                 self.builtin_types.k1_editor_settings,
                 "fn editor(req: k1/build-request): k1/editor-settings",
             )?
@@ -314,12 +334,11 @@ impl TypedProgram {
         &mut self,
         planner: &mut Planner,
         dependent: usize,
-        dep_name: StringId,
+        spec: &str,
         span: Span,
         pending: &mut Pending,
     ) -> K1Result<Option<usize>> {
-        let name = self.ast.idents.get_string(dep_name);
-        match name {
+        match spec {
             "core" => return Ok(None),
             "std" if planner.plan.config.no_std => {
                 kbail!(self, span, "module 'std' is excluded by no-std")
@@ -327,122 +346,231 @@ impl TypedProgram {
             "std" => return Ok(None),
             _ => {}
         }
-        if planner.plan.get(planner.entries[PRIMARY_MODULE_INDEX].module.name) == name {
-            return Ok(Some(PRIMARY_MODULE_INDEX));
-        }
-        let primary_dir = planner.plan.module_dir(&planner.entries[PRIMARY_MODULE_INDEX].module);
-        let dependent_dir = planner.plan.module_dir(&planner.entries[dependent].module);
-        let k1_home = self.ast.idents.get_string(self.config.k1_home);
-        let tmp = self.get_tmp_unsafe();
-        let mark = tmp.mark();
-        let resolved = crate::plan::resolve_dep(
-            &self.ast.idents,
-            tmp,
-            primary_dir,
-            dependent_dir,
-            k1_home,
-            name,
-        );
-        tmp.reset_to(mark);
-        let dir = match resolved {
-            Ok(dir) => self.ast.idents.get_string(dir),
-            Err(message) => kbail!(self, span, "{}", message),
-        };
-        for (index, existing) in planner.entries.iter().enumerate() {
-            if planner.plan.get(existing.module.name) != name {
-                continue;
-            }
-            let existing_dir = planner.plan.get(existing.module.path);
-            if existing_dir != dir {
-                kbail!(
-                    self,
-                    span,
-                    "module '{}' resolves to two dirs: {} (for '{}') and {} (for '{}'); add {}/deps/{} to pick one",
-                    name,
-                    existing_dir,
-                    planner.plan.get(planner.entries[existing.resolved_by].module.name),
-                    dir,
-                    planner.plan.get(planner.entries[dependent].module.name),
-                    primary_dir,
-                    name
-                );
-            }
+        let is_path = spec.starts_with('/') || spec.starts_with("./") || spec.starts_with("../");
+        if !is_path
+            && let Some(index) = planner.find_library(spec)
+            && index != PRIMARY_MODULE_INDEX
+            && planner.entries[index].resolved_by == PRIMARY_MODULE_INDEX
+        {
             return Ok(Some(index));
         }
-        Ok(Some(self.reach(planner, name, dir, true, dependent, pending)))
+        let dependent_dir = planner.plan.module_dir(&planner.entries[dependent].module);
+        let joined = if spec.starts_with('/') {
+            PathBuf::from(spec)
+        } else if is_path {
+            kpath::join_pathbuf(&self.ast.idents, dependent_dir, spec)
+        } else {
+            kpath::join_pathbuf(&self.ast.idents, self.config.k1_home, ("modules", spec))
+        };
+        if !joined.is_dir() {
+            kbail!(self, span, "dependency '{}' not found: no folder {}", spec, joined.display());
+        }
+        let dir = match kpath::canonicalize_string_id(&self.ast.idents, &joined) {
+            Ok(dir) => self.ast.idents.get_string(dir),
+            Err(e) => kbail!(self, span, "dependency '{}': {}", spec, e),
+        };
+        let name = kpath::file_name(dir);
+        let Some(index) = planner.find_library(name) else {
+            return Ok(Some(
+                self.queue_planned_module(planner, name, dir, true, dependent, pending),
+            ));
+        };
+        let existing = &planner.entries[index];
+        let existing_dir = planner.plan.get(existing.module.path);
+        let primary_chose = index != PRIMARY_MODULE_INDEX
+            && existing.resolved_by == PRIMARY_MODULE_INDEX
+            && dependent != PRIMARY_MODULE_INDEX;
+        if existing_dir == dir || primary_chose {
+            return Ok(Some(index));
+        }
+        kbail!(
+            self,
+            span,
+            "library '{}' resolves to two folders: {} (for '{}') and {} (for '{}')",
+            name,
+            existing_dir,
+            planner.plan.get(planner.entries[existing.resolved_by].module.name),
+            dir,
+            planner.plan.get(planner.entries[dependent].module.name)
+        )
     }
 
     fn evaluate_manifest(
         &mut self,
         planner: &mut Planner,
-        index: usize,
+        entry_index: usize,
         build_value: StaticValueId,
-    ) -> K1Result<SV8<(StringId, Option<Span>)>> {
-        let mut deps: SV8<(StringId, Option<Span>)> = SV8::new();
-        planner.entries[index].module.kind = if index == PRIMARY_MODULE_INDEX {
-            ModuleKind::Executable
-        } else {
-            ModuleKind::Library
-        };
-        let Some(host) = planner.entries[index].host else { return Ok(deps) };
+        pending: &mut Pending,
+    ) -> K1Result<()> {
+        let module = planner.entries[entry_index].module;
+        let Some(host) = planner.entries[entry_index].host else { return Ok(()) };
+        let host_scope = self.modules.get(host).namespace_scope_id;
+        let has_setup =
+            self.scopes.find_function_local(host_scope, self.ast.idents.b.setup).is_some();
         let module_type = self.builtin_types.k1_module.unwrap();
         let config_type = self.builtin_types.k1_build_config.unwrap();
-        let Some((fn_id, span)) = self.host_fn(
+        let Some((fn_id, span, param_count)) = self.find_host_fn(
             host,
             self.ast.idents.b.module,
             config_type,
+            0,
             Some(module_type),
-            "fn module(b: k1/build-config): k1/module",
+            "fn module(): k1/module or fn module(b: k1/build-config): k1/module",
         )?
         else {
-            return Ok(deps);
+            if has_setup {
+                planner.entries[entry_index].module.setup =
+                    Some(PlannedSetup { outputs: MSlice::empty(), inputs: MSlice::empty() });
+            }
+            return Ok(());
         };
-        planner.entries[index].manifest_span = span;
-        let manifest = self.execute_static_function(fn_id, &[build_value], span)?;
+        let manifest = self.execute_static_function(fn_id, &[build_value][..param_count], span)?;
+        let module_name = planner.plan.get(module.name);
+        let module_dir = planner.plan.module_dir(&module);
 
-        if let Some(kind) = self.field_opt(manifest, "kind") {
-            planner.entries[index].module.kind = match self.enum_name(kind) {
-                "executable" => ModuleKind::Executable,
-                _ => ModuleKind::Library,
-            };
-        }
-        if index != PRIMARY_MODULE_INDEX
-            && planner.entries[index].module.kind == ModuleKind::Executable
-        {
-            kbail!(
-                self,
-                span,
-                "Cannot compile a program with 2 executable modules. {}",
-                planner.plan.get(planner.entries[index].module.name)
-            );
-        }
-
-        let build_file_id = self.modules.get(host).files.as_slice(&self.mem)[0];
-        for dep in self.field_list(manifest, "deps") {
-            let name = self.ast.idents.intern(self.field_str(*dep, "name"));
-            let StaticValue::Int(TypedIntValue::U64(raw)) =
-                *self.static_values.get(self.static_field(*dep, "params-span"))
+        let mut deps: SV8<usize> = SV8::new();
+        for spec in self.field_list(manifest, "depend") {
+            let spec = self.static_str_of(*spec);
+            let Some(dep) = self.resolve_planned_dep(planner, entry_index, spec, span, pending)?
             else {
-                self.ice_span(span, "dep-entry params-span was not a u64");
+                continue;
             };
-            let params_span = match Span::from_encoded_k1_u64(raw) {
-                None => None,
-                Some(s) if !self.ast.sources.contains_span(s) => {
-                    kbail!(self, span, "invalid params span for dependency {}", name)
-                }
-                Some(s) if self.ast.sources.file_of(s.global_start) != build_file_id => kbail!(
+            if deps.contains(&dep) {
+                kbail!(self, span, "duplicate dependency '{}'", spec);
+            }
+            deps.push(dep);
+        }
+
+        let submodules = self.field_list(manifest, "submodules");
+        let first_submodule = planner.entries.len();
+        for submodule in submodules {
+            let dir_spec = self.field_str(*submodule, "dir");
+            let joined = kpath::join_pathbuf(&self.ast.idents, module_dir, dir_spec);
+            if !joined.is_dir() {
+                kbail!(
                     self,
-                    s,
-                    "dep params for '{}' must be written in the module's build.k1",
-                    name
-                ),
-                Some(s) => Some(s),
+                    span,
+                    "submodule '{}' not found: no folder {}",
+                    dir_spec,
+                    joined.display()
+                );
+            }
+            let dir = match kpath::canonicalize_string_id(&self.ast.idents, &joined) {
+                Ok(dir) => self.ast.idents.get_string(dir),
+                Err(e) => kbail!(self, span, "submodule '{}': {}", dir_spec, e),
             };
-            deps.push((name, params_span));
+            let tmp = self.get_tmp_unsafe();
+            if crate::plan::build_file_path(&self.ast.idents, tmp, dir, &self.lsp.source_overlay)
+                .is_some()
+            {
+                kbail!(self, span, "submodule folder {} has its own {}", dir, BUILD_FILE_NAME);
+            }
+            let short_name = kpath::file_name(dir);
+            for sibling in &planner.entries[first_submodule..] {
+                if kpath::file_name(planner.plan.get(sibling.module.path)) == short_name {
+                    kbail!(self, span, "submodule '{}' declared twice", short_name);
+                }
+            }
+            let name = planner.plan.strings.intern(&format!("{module_name}/{short_name}"));
+            planner.entries.push(PlanEntry {
+                module: PlannedModule::library(name, planner.plan.strings.intern(dir)),
+                host: None,
+                manifest_span: span,
+                resolved_by: entry_index,
+                owner: Some(entry_index),
+                deps: SV8::new(),
+                ignore: SV8::new(),
+                configure_span: None,
+            });
+        }
+        let siblings = first_submodule..first_submodule + submodules.len();
+        for (submodule_index, submodule) in siblings.clone().zip(submodules) {
+            let mut submodule_deps: SV8<usize> = SV8::new();
+            for spec in self.field_list(*submodule, "depend") {
+                let spec = self.static_str_of(*spec);
+                let sibling = siblings.clone().find(|s| {
+                    kpath::file_name(planner.plan.get(planner.entries[*s].module.path)) == spec
+                });
+                let dep = match sibling {
+                    Some(sibling) => sibling,
+                    None => {
+                        let Some(dep) =
+                            self.resolve_planned_dep(planner, entry_index, spec, span, pending)?
+                        else {
+                            continue;
+                        };
+                        dep
+                    }
+                };
+                if submodule_deps.contains(&dep) {
+                    kbail!(self, span, "duplicate dependency '{}'", spec);
+                }
+                submodule_deps.push(dep);
+            }
+            planner.entries[submodule_index].deps = submodule_deps;
+            deps.push(submodule_index);
+        }
+
+        let mut ignore: SV8<StringId> = SV8::new();
+        for path in self.field_list(manifest, "ignore") {
+            let path = self.static_str_of(*path);
+            let joined = kpath::join_pathbuf(&self.ast.idents, module_dir, path);
+            match kpath::canonicalize_string_id(&self.ast.idents, &joined) {
+                Ok(dir) => {
+                    ignore.push(planner.plan.strings.intern(self.ast.idents.get_string(dir)))
+                }
+                Err(e) => kbail!(self, span, "ignore '{}': {}", path, e),
+            }
+        }
+
+        let configure = self.static_field(manifest, "configure");
+        let text = self.field_str(configure, "text");
+        if !text.is_empty() {
+            if entry_index != PRIMARY_MODULE_INDEX {
+                kbail!(
+                    self,
+                    span,
+                    "Only the program configures libraries; '{}' sets configure",
+                    module_name
+                );
+            }
+            let mut code_spans: SV8<K1CodeSpan> = SV8::new();
+            for code_span in self.field_list(configure, "spans") {
+                code_spans.push(K1CodeSpan {
+                    start: self.field_int(*code_span, "start") as u32,
+                    len: self.field_int(*code_span, "len") as u32,
+                    source: self.field_int(*code_span, "source"),
+                });
+            }
+            let Some((content, table)) =
+                self.build_emitted_source(span, true, text, &code_spans)?
+            else {
+                self.ice_span(span, "configure text was empty")
+            };
+            let file_id = self.add_emitted_source(&content, table, span);
+            let ParseMetaprogramResult::Expr(parsed) =
+                self.parse_metaprogram_source(host, file_id, ParseAdHocKind::Expr)?
+            else {
+                self.ice_span(span, "configure parsed as definitions");
+            };
+            let ParsedExpr::Struct(fields) = self.ast.exprs.get(parsed) else {
+                kbail!(
+                    self,
+                    self.ast.exprs.get_span(parsed),
+                    "configure must be a struct literal keyed by library name"
+                );
+            };
+            for field in self.ast.mem.getn(fields.fields) {
+                let StructValueFieldKind::Expr(value) = field.value else {
+                    kbail!(self, field.span, "configure field '{}' needs a value", field.name);
+                };
+                let value_span = self.ast.exprs.get_span(value);
+                planner.configure_requests.push((field.name, field.span, value_span));
+            }
         }
 
         let mut libs: SV8<PlannedLib> = SV8::new();
-        for lib in self.field_list(manifest, "libs") {
+        for lib in self.field_list(manifest, "link") {
             let link_type = match self.enum_name(self.static_field(*lib, "link-type")) {
                 "static" => LibRefLinkType::Static,
                 "dynamic" => LibRefLinkType::Dynamic,
@@ -456,18 +584,33 @@ impl TypedProgram {
         let libs = planner.plan.mem.pushn(&libs);
         let link_args =
             self.plan_strings(&mut planner.plan, self.field_list(manifest, "link-args"));
-        let setup = match self.field_opt(manifest, "setup") {
-            None => None,
-            Some(setup) => Some(PlannedSetup {
-                outputs: self.plan_strings(&mut planner.plan, self.field_list(setup, "outputs")),
-                inputs: self.plan_strings(&mut planner.plan, self.field_list(setup, "inputs")),
-            }),
-        };
-        let module = &mut planner.entries[index].module;
-        module.libs = libs;
-        module.link_args = link_args;
-        module.setup = setup;
-        Ok(deps)
+        let outputs =
+            self.plan_strings(&mut planner.plan, self.field_list(manifest, "setup-outputs"));
+        let inputs =
+            self.plan_strings(&mut planner.plan, self.field_list(manifest, "setup-inputs"));
+        if !has_setup && !(outputs.is_empty() && inputs.is_empty()) {
+            kbail!(
+                self,
+                span,
+                "setup-inputs and setup-outputs need a fn setup in this {}",
+                BUILD_FILE_NAME
+            );
+        }
+        let is_library = self.field_bool(manifest, "library");
+
+        let entry = &mut planner.entries[entry_index];
+        entry.manifest_span = span;
+        entry.deps = deps;
+        entry.ignore = ignore;
+        if is_library {
+            entry.module.kind = ModuleKind::Library;
+        }
+        entry.module.libs = libs;
+        entry.module.link_args = link_args;
+        if has_setup {
+            entry.module.setup = Some(PlannedSetup { outputs, inputs });
+        }
+        Ok(())
     }
 
     fn plan_strings(
@@ -477,8 +620,7 @@ impl TypedProgram {
     ) -> MSlice<StringId, PlanMem> {
         let mut out: SV8<StringId> = SV8::new();
         for value in values {
-            let s = self.static_values.get(*value).as_string().unwrap();
-            out.push(plan.strings.intern(self.ast.idents.get_string(s)));
+            out.push(plan.strings.intern(self.static_str_of(*value)));
         }
         plan.mem.pushn(&out)
     }
@@ -493,8 +635,18 @@ impl TypedProgram {
     }
 
     fn field_str(&self, value: StaticValueId, name: &str) -> &'static str {
-        let s = self.static_values.get(self.static_field(value, name)).as_string().unwrap();
-        self.ast.idents.get_string(s)
+        self.static_str_of(self.static_field(value, name))
+    }
+
+    fn static_str_of(&self, value: StaticValueId) -> &'static str {
+        self.ast.idents.get_string(self.static_values.get(value).as_string().unwrap())
+    }
+
+    fn field_int(&self, value: StaticValueId, name: &str) -> u64 {
+        let StaticValue::Int(int) = *self.static_values.get(self.static_field(value, name)) else {
+            self.ice_span(Span::NONE, format!("static field '{name}' is not an integer"))
+        };
+        int.to_u64_bits()
     }
 
     fn field_bool(&self, value: StaticValueId, name: &str) -> bool {
@@ -504,10 +656,6 @@ impl TypedProgram {
     fn field_list(&self, value: StaticValueId, name: &str) -> &'static [StaticValueId] {
         let list = *self.static_values.get(self.static_field(value, name)).as_container().unwrap();
         self.static_values.mem.getn(list.elements)
-    }
-
-    fn field_opt(&self, value: StaticValueId, name: &str) -> Option<StaticValueId> {
-        self.static_values.get(self.static_field(value, name)).as_sum().unwrap().payload
     }
 
     fn field_type(&self, struct_type: TypeId, name: &str) -> TypeId {
@@ -660,7 +808,7 @@ impl TypedProgram {
         state[index] = Visit::InProgress;
         stack.push(index);
         for dep in &planner.entries[index].deps {
-            self.visit_module(planner, *dep as usize, state, stack, order)?;
+            self.visit_module(planner, *dep, state, stack, order)?;
         }
         stack.pop();
         state[index] = Visit::Done;
@@ -682,7 +830,18 @@ impl TypedProgram {
             else {
                 continue;
             };
-            let span = entry.manifest_span;
+            let setup_ctx_type = self.builtin_types.k1_setup_ctx.unwrap();
+            let Some((setup_fn, span, param_count)) = self.find_host_fn(
+                entry.host.unwrap(),
+                self.ast.idents.b.setup,
+                setup_ctx_type,
+                0,
+                None,
+                "fn setup() or fn setup(ctx: k1/setup-ctx)",
+            )?
+            else {
+                self.ice_span(entry.manifest_span, "setup planned without a fn setup")
+            };
             let frame = self.trace_push(TraceKind::SetupStamp, req.module_name.as_u32(), 0);
             let tmp = self.get_tmp_unsafe();
             let mark = tmp.mark();
@@ -691,21 +850,6 @@ impl TypedProgram {
             tmp.reset_to(mark);
             self.trace_pop(frame);
             let Some(started) = started? else { continue };
-            let setup_ctx_type = self.builtin_types.k1_setup_ctx.unwrap();
-            let Some((setup_fn, fn_span)) = self.host_fn(
-                entry.host.unwrap(),
-                self.ast.idents.b.setup,
-                setup_ctx_type,
-                None,
-                "fn setup(ctx: k1/setup-ctx)",
-            )?
-            else {
-                kbail!(
-                    self,
-                    span,
-                    "a module that declares setup needs a `fn setup` in its build.k1"
-                );
-            };
             self.trace_clear();
             eprintln!(
                 "Setting up module '{}' (running fn setup in {}/{})...",
@@ -715,7 +859,7 @@ impl TypedProgram {
             );
             let ctx_value = self.encode_struct(setup_ctx_type, &[("build", build_value)]);
             let frame = self.trace_push(TraceKind::SetupFn, req.module_name.as_u32(), 0);
-            let ran = self.execute_static_function(setup_fn, &[ctx_value], fn_span);
+            let ran = self.execute_static_function(setup_fn, &[ctx_value][..param_count], span);
             self.trace_pop(frame);
             ran?;
             let tmp = self.get_tmp_unsafe();
@@ -748,9 +892,9 @@ impl TypedProgram {
         let value_expr = global.parsed_expr.unwrap();
         let call_span = self.ast.exprs.get_span(value_expr);
         let args = self.ast.mem.getn(self.find_module_params_call_args(value_expr).unwrap());
-        let deps_provider_expr_span = planner.entries[index].params_expr_span;
+        let configure_span = planner.entries[index].configure_span;
         let defaults = match args {
-            [] if deps_provider_expr_span.is_none() => {
+            [] if configure_span.is_none() => {
                 kbail!(self, call_span, "Module '{}' requires parameters", module_name)
             }
             [] => None,
@@ -761,15 +905,15 @@ impl TypedProgram {
         };
 
         let mut expr = String::new();
-        let mut expr_plan_chunks: SV8<PlanChunk> = SV8::new();
+        let mut expr_origins: SV8<TextOrigin> = SV8::new();
         let mut emitted_chunks: SV4<CodeChunkPos> = SV4::new();
-        for span in [defaults, deps_provider_expr_span].into_iter().flatten() {
+        for span in [defaults, configure_span].into_iter().flatten() {
             if !expr.is_empty() {
                 expr.push_str(" | ");
             }
-            self.push_plan_chunk(planner, span, &mut expr, &mut expr_plan_chunks);
-            let c = expr_plan_chunks.last().unwrap();
-            emitted_chunks.push(CodeChunkPos { start: c.start, end: c.end, source: span });
+            let start = expr.len() as u32;
+            self.append_source_text(planner, span, &mut expr, &mut expr_origins);
+            emitted_chunks.push(CodeChunkPos { start, end: expr.len() as u32, source: span });
         }
         let emitted_chunks = self.mem.pushn(&emitted_chunks);
         let source_file_id = self.add_emitted_source(&expr, emitted_chunks, call_span);
@@ -800,76 +944,104 @@ impl TypedProgram {
         let name_start = parsed_global.name_span.global_start;
         let schema_end = self.ast.get_type_expr_span(parsed_global.type_expr).end();
         let mut text = String::from("let ");
-        let mut let_plan_chunks: SV8<PlanChunk> = SV8::new();
-        self.push_plan_chunk(
+        let mut let_origins: SV8<TextOrigin> = SV8::new();
+        self.append_source_text(
             planner,
             Span { global_start: name_start, len: schema_end - name_start },
             &mut text,
-            &mut let_plan_chunks,
+            &mut let_origins,
         );
         text.push_str(" = ");
         let shift = text.len() as u32;
-        for c in &expr_plan_chunks {
-            let_plan_chunks.push(PlanChunk { start: c.start + shift, end: c.end + shift, ..*c });
+        for o in &expr_origins {
+            let_origins.push(TextOrigin { start: o.start + shift, end: o.end + shift, ..*o });
         }
         text.push_str(&expr);
         text.push('\n');
-        let chunks = planner.plan.mem.pushn(&let_plan_chunks);
-        Ok(PlannedSource { text: planner.plan.strings.intern(&text), chunks })
+        let origins = planner.plan.mem.pushn(&let_origins);
+        Ok(PlannedSource { text: planner.plan.strings.intern(&text), origins })
     }
 
-    fn push_plan_chunk(
+    fn append_source_text(
         &self,
-        planner: &Planner,
+        planner: &mut Planner,
         span: Span,
         text: &mut String,
-        chunks: &mut SV8<PlanChunk>,
+        origins: &mut SV8<TextOrigin>,
     ) {
         let file_id = self.ast.sources.file_of(span.global_start);
         let source = self.ast.sources.get(file_id);
         let offset = source.local_from_global_offset(span.global_start);
-        let from = planner
-            .entries
-            .iter()
-            .position(|e| {
-                e.host.is_some_and(|h| self.modules.get(h).contains_file(&self.mem, file_id))
-            })
-            .unwrap() as u32;
         let start = text.len() as u32;
         text.push_str(
             &source.content(&self.ast.mem)[offset as usize..(offset + span.len) as usize],
         );
-        chunks.push(PlanChunk { start, end: text.len() as u32, from, offset, len: span.len });
+        let mut pieces: SV4<(u32, u32, Span)> = smallvec![(start, text.len() as u32, span)];
+        if let Some(emitted) = self.emitted_source_for_file(file_id) {
+            pieces.clear();
+            for entry in self.mem.getn(self.emitted_sources[emitted].entries) {
+                let from = entry.start.max(offset);
+                let to = entry.end.min(offset + span.len);
+                let skip = from.saturating_sub(entry.start);
+                if from >= to || skip >= entry.source.len {
+                    continue;
+                }
+                let len = (to - from).min(entry.source.len - skip);
+                let piece = Span { global_start: entry.source.global_start + skip, len };
+                pieces.push((start + from - offset, start + to - offset, piece));
+            }
+        }
+        for (piece_start, piece_end, piece) in pieces {
+            let piece_file = self.ast.sources.file_of(piece.global_start);
+            let in_build_file = planner.entries.iter().any(|e| {
+                e.host.is_some_and(|h| self.modules.get(h).contains_file(&self.mem, piece_file))
+            });
+            if !in_build_file {
+                continue;
+            }
+            let source = self.ast.sources.get(piece_file);
+            let build_file =
+                planner.plan.strings.intern(self.ast.idents.get_string(source.file_path));
+            origins.push(TextOrigin {
+                start: piece_start,
+                end: piece_end,
+                build_file,
+                offset: source.local_from_global_offset(piece.global_start),
+                len: piece.len,
+            });
+        }
     }
 
-    fn finish_plan(&mut self, mut planner: Planner, order: &[usize]) -> BuildPlan {
+    fn order_plan_modules(&mut self, mut planner: Planner, order: &[usize]) -> BuildPlan {
         let mut modules: SV8<PlannedModule> = SV8::new();
         let k1_home = self.ast.idents.get_string(self.config.k1_home);
         let tmp = self.get_tmp_unsafe();
         planner.plan.push_fixed_modules(&mut modules, &self.ast.idents, tmp, k1_home);
-        let mut position: SV8<u32> = smallvec![0; planner.entries.len()];
+        let mut ids: SV8<ModuleId> = smallvec![ModuleId::PENDING; planner.entries.len()];
         for (offset, &index) in order.iter().enumerate() {
-            position[index] = (modules.len() + offset) as u32;
+            ids[index] = ModuleId::from_u32((modules.len() + offset + 1) as u32).unwrap();
+        }
+        let mut excludes: SV8<StringId> = SV8::new();
+        for m in &modules {
+            excludes.push(m.path);
         }
         for &index in order {
             let entry = &planner.entries[index];
             let mut m = entry.module;
-            let mut deps: SV8<u32> = SV8::new();
+            let mut deps: SV8<ModuleId> = SV8::new();
             for dep in &entry.deps {
-                deps.push(position[*dep as usize]);
+                deps.push(ids[*dep]);
             }
             m.deps = planner.plan.mem.pushn(&deps);
-            if let Some(params) = m.params {
-                let mut chunks: SV8<PlanChunk> = SV8::new();
-                for c in planner.plan.mem.getn(params.chunks) {
-                    chunks.push(PlanChunk { from: position[c.from as usize], ..*c });
-                }
-                let chunks = planner.plan.mem.pushn(&chunks);
-                m.params = Some(PlannedSource { chunks, ..params });
+            m.owner = entry.owner.map(|owner| ids[owner]);
+            if m.is_dir {
+                excludes.push(m.path);
             }
+            excludes.extend_from_slice(&entry.ignore);
             modules.push(m);
         }
         planner.plan.modules = planner.plan.mem.pushn(&modules);
+        planner.plan.excludes = planner.plan.mem.pushn(&excludes);
         planner.plan
     }
 }

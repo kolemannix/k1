@@ -381,15 +381,16 @@ fn(test) c-layouts() {
 ## Build steps are k1 running inside the compiler
 
 A module's `build.k1` is compiled on the host before any of the program.
-`fn module(b)` returns the manifest; `fn setup(ctx)` is an optional build
-step. The parity driver's `cbrotli` dep builds its vendored C encoder:
+`fn module` returns the manifest, a plain value; `fn setup` is an optional
+build step. The parity driver's `cbrotli` dep builds its vendored C encoder:
 
 ```k1 path=examples/brotli_parity/deps/cbrotli/build.k1
-fn module(_b: k1/build-config): k1/module {
-  let m = k1/module/new()
-  m.lib("brotli", :static)
-  m.setup(["libs/libbrotli.a"], ["vendor"])
-  m
+fn module(): k1/module {
+  .0 | .{
+    link = [.{ name = "brotli", link-type = :static }],
+    setup-inputs = ["vendor"],
+    setup-outputs = ["libs/libbrotli.a"],
+  }
 }
 ```
 
@@ -414,10 +415,8 @@ library's static tables. Its setup parses them out of the C sources and writes o
 source files, `tables.k1`:
 
 ```k1 path=modules/brotli/build.k1
-fn module(_b: k1/build-config): k1/module {
-  let m = k1/module/new()
-  m.setup(["tables.k1"], ["vendor"])
-  m
+fn module(): k1/module {
+  .0 | .{ setup-inputs = ["vendor"], setup-outputs = ["tables.k1"] }
 }
 ```
 
@@ -445,19 +444,17 @@ fn module(_b: k1/build-config): k1/module {
 regenerate two of its own source files:
 
 ```k1 path=modules/uv/build.k1
-fn module(_b: k1/build-config): k1/module {
-  let m = k1/module/new()
-  m.lib("uv", :static)
-  m.setup(
-    ["libs/libuv.a", "libuv.k1", "net.k1"],
-    ["net.c", "uv_bindgen_prelude.k1.txt"]
-  )
-  m
+fn module(): k1/module {
+  .0 | .{
+    link = [.{ name = "uv", link-type = :static }],
+    setup-inputs = ["net.c", "uv_bindgen_prelude.k1.txt"],
+    setup-outputs = ["libs/libuv.a", "libuv.k1", "net.k1"],
+  }
 }
 ```
 
 Setups run in dependency order before any program source is read, since
-they produce that source. `m.setup(outputs, inputs)` declares the files, and
+they produce that source. `setup-outputs` and `setup-inputs` declare the files, and
 staleness is a content hash over all of them, recorded in a stamp:
 
 ```text
@@ -497,10 +494,8 @@ Mark the module a library and mark what it exports. Everything else, the
 runtime's C helpers included, stays hidden.
 
 ```k1 path=examples/klib/build.k1
-fn module(_b: k1/build-config): k1/module {
-  let m = k1/module/new()
-  m.library()
-  m
+fn module(): k1/module {
+  .0 | .{ library = true }
 }
 ```
 

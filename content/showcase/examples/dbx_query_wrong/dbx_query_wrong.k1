@@ -18,4 +18,3 @@ fn main(): i32 {
   println(query[plan]("select id, name, is_main, note from plan order by id").list(conn.as-reader()).!.len())
   0
 }
-//errmsg: can be null

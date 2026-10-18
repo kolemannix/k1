@@ -73,6 +73,7 @@ fn(test) if-gated-declarations() {
   assert-equals(w.yes(), 7)
 
   assert-equals(here(), 42)
+  assert(k1/test)
 }
 
 fn(test) if-matches-platform() {

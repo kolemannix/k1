@@ -474,6 +474,7 @@ pub struct CompilerConfig {
     pub home_dir: StringId,
     pub k1_home: StringId,
     pub command: Command,
+    pub test: bool,
     pub out_dir: StringId,
     pub out_dir_generated: StringId,
     pub cache_dir: StringId,
@@ -574,25 +575,35 @@ pub fn source_exists(path: &str, overlay: &fxhash::FxHashMap<String, String>) ->
     overlay.contains_key(path) || Path::new(path).is_file()
 }
 
-pub fn module_root_file(dir: &str, overlay: &fxhash::FxHashMap<String, String>) -> Option<PathBuf> {
-    let module_file = Path::new(dir).join("module.k1");
-    let stem_file = Path::new(dir).join(kpath::file_name(dir)).with_extension("k1");
-    [module_file, stem_file]
-        .into_iter()
-        .find(|candidate| source_exists(candidate.to_str().unwrap(), overlay))
+fn has_build_file(dir: &str, overlay: &fxhash::FxHashMap<String, String>) -> bool {
+    let build_file = Path::new(dir).join(crate::plan::BUILD_FILE_NAME);
+    source_exists(build_file.to_str().unwrap(), overlay)
 }
 
-pub fn is_module_dir(dir: &str, overlay: &fxhash::FxHashMap<String, String>) -> bool {
-    let build_file = Path::new(dir).join(crate::plan::BUILD_FILE_NAME);
-    source_exists(build_file.to_str().unwrap(), overlay) || module_root_file(dir, overlay).is_some()
+pub fn find_build_dir<'a>(
+    dir: &'a str,
+    root: Option<&str>,
+    overlay: &fxhash::FxHashMap<String, String>,
+) -> Option<&'a str> {
+    let mut dir = dir;
+    loop {
+        if has_build_file(dir, overlay) {
+            return Some(dir);
+        }
+        let parent = kpath::parent(dir);
+        if root == Some(dir) || parent == dir || parent.is_empty() {
+            return None;
+        }
+        dir = parent;
+    }
 }
 
 pub fn find_check_target_for_file(
     file: &str,
+    root: Option<&str>,
     overlay: &fxhash::FxHashMap<String, String>,
 ) -> PathBuf {
-    let dir = kpath::parent(file);
-    PathBuf::from(if is_module_dir(dir, overlay) { dir } else { file })
+    PathBuf::from(find_build_dir(kpath::parent(file), root, overlay).unwrap_or(file))
 }
 
 pub struct SourceFile {
@@ -713,57 +724,68 @@ fn read_and_lex_source_files(
 fn collect_module_source_paths(
     module_dir: &str,
     is_core: bool,
+    excludes: &[String],
     overlay: &fxhash::FxHashMap<String, String>,
 ) -> Result<Vec<String>, String> {
     let is_k1 = |path: &Path| path.extension().is_some_and(|ext| ext == "k1");
-    let entries = fs::read_dir(Path::new(module_dir))
-        .map_err(|e| format!("Failed to list module dir {module_dir}: {e}"))?;
-    let mut paths = vec![];
-    for item in entries {
-        let Ok(item) = item else {
-            continue;
-        };
-        let path = item.path();
-        if !is_k1(&path) {
-            continue;
+    let is_skipped_dir = |dir: &str| {
+        kpath::file_name(dir).starts_with('.')
+            || excludes.iter().any(|e| e == dir)
+            || has_build_file(dir, overlay)
+    };
+    let mut files = vec![];
+    let mut dirs = vec![module_dir.to_string()];
+    while let Some(dir) = dirs.pop() {
+        let entries = fs::read_dir(Path::new(&dir))
+            .map_err(|e| format!("Failed to list module dir {dir}: {e}"))?;
+        for item in entries {
+            let Ok(item) = item else {
+                continue;
+            };
+            let Ok(file_type) = item.file_type() else {
+                continue;
+            };
+            let path = item.path();
+            if !file_type.is_dir() && !is_k1(&path) {
+                continue;
+            }
+            let path_string = path.into_os_string().into_string().map_err(|s| {
+                format!("Source file name is not valid UTF-8: {}", s.to_string_lossy())
+            })?;
+            if file_type.is_dir() {
+                if !is_skipped_dir(&path_string) {
+                    dirs.push(path_string);
+                }
+            } else if dir != module_dir
+                || kpath::file_name(&path_string) != crate::plan::BUILD_FILE_NAME
+            {
+                files.push(path_string);
+            }
         }
-        let path_string = path
-            .into_os_string()
-            .into_string()
-            .map_err(|s| format!("Source file name is not valid UTF-8: {}", s.to_string_lossy()))?;
-        paths.push(path_string);
     }
     for path in overlay.keys() {
-        if kpath::parent(path) == module_dir && is_k1(Path::new(path)) && !paths.contains(path) {
-            paths.push(path.clone());
-        }
-    }
-    let dir_name = kpath::file_name(module_dir);
-    let mut files = vec![];
-    let mut root: Option<(u8, usize)> = None;
-    for path_string in paths {
-        let name = kpath::file_name(&path_string);
-        if name == crate::plan::BUILD_FILE_NAME {
+        if !is_k1(Path::new(path)) || files.contains(path) {
             continue;
         }
-        let rank = match (is_core, name) {
-            (true, "builtin.k1") => Some(0),
-            (true, _) => None,
-            (false, "module.k1") => Some(0),
-            (false, _) if kpath::file_stem(name) == dir_name => Some(1),
-            (false, _) => None,
+        let Some(rest) = path.strip_prefix(module_dir).and_then(|r| r.strip_prefix('/')) else {
+            continue;
         };
-        if let Some(rank) = rank
-            && root.is_none_or(|(best, _)| rank < best)
-        {
-            root = Some((rank, files.len()));
+        if rest == crate::plan::BUILD_FILE_NAME {
+            continue;
         }
-        files.push(path_string);
+        let mut dir = kpath::parent(path);
+        while dir.len() > module_dir.len() && !is_skipped_dir(dir) {
+            dir = kpath::parent(dir);
+        }
+        if dir.len() == module_dir.len() {
+            files.push(path.clone());
+        }
     }
-    let root_path = root.map(|(_, index)| files.swap_remove(index));
     files.sort();
-    if let Some(root_path) = root_path {
-        files.insert(0, root_path);
+    if is_core && let Some(builtin) = files.iter().position(|f| kpath::file_name(f) == "builtin.k1")
+    {
+        let builtin = files.remove(builtin);
+        files.insert(0, builtin);
     }
     Ok(files)
 }
@@ -772,6 +794,7 @@ pub fn spawn_module_sources_read(
     path: &str,
     is_dir: bool,
     is_core: bool,
+    excludes: Vec<String>,
     source_overlay: &fxhash::FxHashMap<String, String>,
 ) -> ModuleSources {
     let overlay = source_overlay.clone();
@@ -779,7 +802,7 @@ pub fn spawn_module_sources_read(
     let (source_bytes_tx, source_bytes) = std::sync::mpsc::channel();
     let read = move || {
         let paths = if is_dir {
-            collect_module_source_paths(&path, is_core, &overlay)?
+            collect_module_source_paths(&path, is_core, &excludes, &overlay)?
         } else {
             vec![path]
         };
@@ -1244,15 +1267,7 @@ fn plan_program(
     let src_path = idents.get_string(config.src_path);
     let k1_home = idents.get_string(config.k1_home);
     let is_setup = matches!(config.command, Command::Setup { .. });
-    let has_build_file = is_dir
-        && crate::plan::build_file_path(idents, &mut ast.tmp, src_path, &lsp.source_overlay)
-            .is_some();
-    if !has_build_file && !is_setup {
-        if is_dir && !is_module_dir(src_path, &lsp.source_overlay) {
-            return Err(CompileProgramError::Build(
-                "a module dir needs a build.k1, module.k1 or <dir>.k1".to_string(),
-            ));
-        }
+    if !is_dir && !is_setup {
         let resolved = request
             .default
             .resolve(&mut strings)
@@ -1272,7 +1287,7 @@ fn plan_program(
     if !is_setup
         && config.tools.cache
         && let Some(plan) = BuildPlan::load(&plan_path, request_hash)
-        && plan.is_fresh(idents, &mut ast.tmp, k1_home, &lsp.source_overlay)
+        && plan.is_fresh(idents, &mut ast.tmp, &lsp.source_overlay)
     {
         match lsp.host_mode {
             HostProgramMode::Discard => return Ok(Planned::Plan(plan, HostProgram::Absent)),
@@ -1312,12 +1327,17 @@ pub(crate) fn open_program(
     lsp: LspCompileOptions,
     snapshot_count: usize,
 ) -> (TypedProgram, Vec<ModuleSources>) {
+    let mut excludes: Vec<String> = Vec::with_capacity(plan.excludes().len());
+    for exclude in plan.excludes() {
+        excludes.push(plan.get(*exclude).to_string());
+    }
     let mut sources: Vec<ModuleSources> = Vec::with_capacity(plan.modules().len());
     for (index, m) in plan.modules().iter().enumerate() {
         sources.push(spawn_module_sources_read(
             plan.get(m.path),
             m.is_dir,
             index == 0,
+            excludes.clone(),
             &lsp.source_overlay,
         ));
     }
@@ -1428,14 +1448,29 @@ pub fn compile_program(
 
     let mut ast = crate::parse::ParsedProgram::make();
     let idents = &ast.idents;
-    let src_path = kpath::canonicalize_string_id(idents, &path)
+    let requested_path = kpath::canonicalize_string_id(idents, &path)
         .map_err(|e| CompileProgramError::Build(e.to_string()))?;
-    let src_path_str = idents.get_string(src_path);
-    if !Path::new(src_path_str).exists() && !lsp.source_overlay.contains_key(src_path_str) {
+    let requested_str = idents.get_string(requested_path);
+    if !Path::new(requested_str).exists() && !lsp.source_overlay.contains_key(requested_str) {
         return Err(CompileProgramError::Build(format!(
-            "No such file or directory: {src_path_str}"
+            "No such file or directory: {requested_str}"
         )));
     }
+    let is_submodule_dir =
+        Path::new(requested_str).is_dir() && !has_build_file(requested_str, &lsp.source_overlay);
+    let src_path = if is_submodule_dir {
+        match find_build_dir(requested_str, None, &lsp.source_overlay) {
+            Some(owner) => idents.intern(owner),
+            None => {
+                return Err(CompileProgramError::Build(format!(
+                    "{requested_str} has no {}",
+                    crate::plan::BUILD_FILE_NAME
+                )));
+            }
+        }
+    } else {
+        requested_path
+    };
 
     let (is_dir, home_dir, module_name) = module_home_from_src_path(idents, src_path);
     ast.name_id = module_name;
@@ -1455,6 +1490,7 @@ pub fn compile_program(
         home_dir,
         k1_home: k1_home_id,
         command: build.command,
+        test: build.command.is_test() || tests.static_tests,
         out_dir,
         out_dir_generated,
         cache_dir,
@@ -1470,7 +1506,23 @@ pub fn compile_program(
             Planned::Setup(host) => return Ok(*host),
         };
     let plan_end = crate::clock::Clock::new().raw();
+    if is_submodule_dir {
+        let primary = plan.primary_id();
+        let requested_str = ast.idents.get_string(requested_path);
+        let is_submodule = plan
+            .modules()
+            .iter()
+            .any(|m| m.owner == Some(primary) && plan.get(m.path) == requested_str);
+        if !is_submodule {
+            return Err(CompileProgramError::Build(format!(
+                "{requested_str} has no {} and is not a submodule of {}",
+                crate::plan::BUILD_FILE_NAME,
+                ast.idents.get_string(src_path)
+            )));
+        }
+    }
 
+    let config = CompilerConfig { test: config.test || plan.editor.test_on_save, ..config };
     let snapshot_count = plan.modules().len() - 1;
     let (mut k1, sources) = open_program(ast, config, plan, lsp, snapshot_count);
     k1.trace.clock_start = clock_start;
@@ -1516,14 +1568,12 @@ pub fn compile_program(
         return Err(CompileProgramError::TyperFailure(Box::new(k1)));
     };
     if config.command.is_test() || tests.static_tests {
-        let primary_id = k1.primary_module().id;
-        let tested =
-            k1.collect_selected_tests_for_module(primary_id, &tests.filter).and_then(|cases| {
-                if tests.static_tests {
-                    k1.run_static_tests(&cases);
-                }
-                if config.command.is_test() { k1.build_test_suite(&cases) } else { Ok(()) }
-            });
+        let tested = k1.collect_selected_tests(&tests.filter).and_then(|cases| {
+            if tests.static_tests {
+                k1.run_static_tests(&cases);
+            }
+            if config.command.is_test() { k1.build_test_suite(&cases) } else { Ok(()) }
+        });
         if let Err(e) = tested {
             k1.report(e);
             return Err(CompileProgramError::TyperFailure(Box::new(k1)));
@@ -2401,12 +2451,7 @@ mod compiler_test {
         fs::create_dir_all(&lib).unwrap();
         fs::write(
             app.join("build.k1"),
-            "fn module(_b: k1/build-config): k1/module { let m = k1/module/new(); m.executable(); m.dep(\"lib\"); m }\n",
-        )
-        .unwrap();
-        fs::write(
-            lib.join("build.k1"),
-            "fn module(_b: k1/build-config): k1/module { let m = k1/module/new(); m.library(); m }\n",
+            "fn module(): k1/module { .0 | .{ depend = [\"./deps/lib\"] } }\n",
         )
         .unwrap();
         fs::write(lib.join("lib.k1"), "fn one(): i32 { 1 }\n").unwrap();
@@ -2484,7 +2529,7 @@ mod compiler_test {
         fs::create_dir_all(&lib).unwrap();
         fs::write(lib.join("lib.k1"), "fn one(): i32 { 1 }\n").unwrap();
         fs::write(app.join("main.k1"), "fn main(): i32 { 0 }\n").unwrap();
-        let no_deps = "fn module(_b: k1/build-config): k1/module { k1/module/new() }\n";
+        let no_deps = "fn module(): k1/module { .0 }\n";
         fs::write(app.join("build.k1"), no_deps).unwrap();
 
         let cold = compile_program(check(&app)).ok().expect("cold compile must succeed");
@@ -2494,7 +2539,7 @@ mod compiler_test {
 
         fs::write(
             app.join("build.k1"),
-            "fn module(_b: k1/build-config): k1/module { let m = k1/module/new(); m.dep(\"lib\"); m }\n",
+            "fn module(): k1/module { .0 | .{ depend = [\"./deps/lib\"] } }\n",
         )
         .unwrap();
         let with_dep = compile_program(check(&app)).ok().expect("edited build.k1 must replan");

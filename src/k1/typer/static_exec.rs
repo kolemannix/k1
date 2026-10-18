@@ -766,6 +766,7 @@ impl TypedProgram {
             kbail!(self, span, "Unknown builtin name: {name}");
         }
         let bool_value = match name {
+            "test" => self.config.test,
             "no-std" => self.plan.config.no_std,
             "debug" => self.plan.config.debug,
             // The VM overrides this global's value during static execution
@@ -1750,7 +1751,6 @@ impl TypedProgram {
 
         let mut p = crate::parse::Parser::make_for_file(
             module.id,
-            module.name,
             parsed_namespace_id,
             &mut self.ast,
             &lexed,

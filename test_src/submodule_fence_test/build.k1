@@ -1,0 +1,8 @@
+fn module(): k1/module {
+  .0 | .{
+    depend = ["./deps/lib"],
+    submodules = [.{ dir = "sub", depend = [] }],
+  }
+}
+
+//errmsg: Namespace not found: lib

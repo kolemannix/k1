@@ -1,0 +1,3 @@
+fn value(): int { 21 }
+
+fn(test) test-value() { assert-equals(value(), 21) }

@@ -1,0 +1,12 @@
+fn(test) test-configure-reaches-indirect-library() {
+  assert-equals(consumer/backlog(), 500)
+  assert-equals(consumer/setup-backlog(), 500)
+  assert(not consumer/tls())
+  assert(not opts.verbose)
+}
+
+fn(test) test-submodules() {
+  assert-equals(store/value(), 21)
+  assert-equals(web/twice-stored(), 42)
+  assert-equals(web/backlog(), 500)
+}

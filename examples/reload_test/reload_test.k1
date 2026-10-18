@@ -84,6 +84,7 @@ fn main(argc: u32, argv: ptr): i32 {
     "${app-dir}/app.k1",
     files/read-to-string("${template-dir}/app.k1").!
   ).!
+  files/write-entire-file("${app-dir}/build.k1", "").!
 
   build-app(k1-exe, "one", false, 10, false)
   test-evaluation-order()

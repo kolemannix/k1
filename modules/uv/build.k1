@@ -1,13 +1,11 @@
 use std/process
 
-fn module(_b: k1/build-config): k1/module {
-  let m = k1/module/new()
-  m.lib("uv", :static)
-  m.setup(
-    ["libs/libuv.a", "libuv.k1", "net.k1"],
-    ["net.c", "uv_bindgen_prelude.k1.txt"]
-  )
-  m
+fn module(): k1/module {
+  .0 | .{
+    link = [.{ name = "uv", link-type = :static }],
+    setup-inputs = ["net.c", "uv_bindgen_prelude.k1.txt"],
+    setup-outputs = ["libs/libuv.a", "libuv.k1", "net.k1"],
+  }
 }
 
 // Builds the vendored libuv release (v1.52.1, from github.com/libuv/libuv;

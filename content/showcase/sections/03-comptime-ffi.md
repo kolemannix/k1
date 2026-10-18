@@ -118,17 +118,18 @@ The C side is the whole library in one translation unit:
 ```
 
 `build.k1` compiles it. `fn setup` runs on the host before the program
-compiles, and only when its inputs are newer than its outputs. The VM loads
+compiles, and reruns only when its inputs or outputs change. The VM loads
 the library, so the extension comes from `k1/host-platform`:
 
 ```k1 path=content/showcase/examples/cffi_font_atlas/build.k1
-fn module(_b: k1/build-config): k1/module {
-  let m = k1/module/new()
-  m.setup(outputs = ["libs/libatlas.${k1/host-platform.dylib-ext()}"], inputs = ["atlas.c"])
-  m
+fn module(): k1/module {
+  .0 | .{
+    setup-inputs = ["atlas.c"],
+    setup-outputs = ["libs/libatlas.${k1/host-platform.dylib-ext()}"],
+  }
 }
 
-fn setup(_ctx: k1/setup-ctx) {
+fn setup() {
   let _ = process/sh-verbose(`
     cd "${k1/module-dir()}"
     mkdir -p libs
@@ -246,7 +247,7 @@ Setting up module 'cffi_font_atlas' (running fn setup in /Users/knix/dev/k1/cont
 ```
 
 `lib("atlas")` would also tell the linker to link the library, but only if
-the manifest declared it with `m.lib(...)`. This one doesn't: stb is a
+the manifest listed it in `link`. This one doesn't: stb is a
 compile-time dependency only. The executable links nothing but libSystem,
 has no `stbtt_` or `dlopen` symbols, and the bitmap is a 32 KiB constant:
 
