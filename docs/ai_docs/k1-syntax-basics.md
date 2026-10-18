@@ -228,7 +228,8 @@ fn(test) checks-bounds() {
 ```
 - `k1 test` collects every `fn(test)` in the primary module. No params; return
   `core/test/outcome`: `empty`, `opt` (`:none` fails), any `try` (error fails).
-- Each runs statically in the VM and at runtime in a forked child.
+- Each runs statically in the VM and at runtime in a forked child, up to
+  `cpu-count` children at once, so fixed paths and ports collide; reported in order.
   `fn(test-runtime)` (FFI, threads, fork) / `fn(test-static)` opt out of one;
   `--skip-static` / `--skip-runtime` for the run. `k1 test . name` filters by
   qualified-name substring (`suite1/ns/name`).

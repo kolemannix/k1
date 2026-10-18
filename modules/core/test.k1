@@ -34,7 +34,19 @@ ns test {
     let tally = tally.0
     #if k1/platform is {
       :posix-macos or :posix-linux -> {
-        for suite.cases { run-test-forked(it, tally.&) }
+        let count = suite.cases.len()
+        let width = platform/thread/cpu-count().min(count)
+        let workers = list/with-capacity[worker](width)
+        for w in 0.until(width) { workers.push(start-worker(suite.cases, w, width)) }
+        for i in 0.until(count) {
+          let outcome = receive-outcome(workers.[i % width].results)
+          report(suite.cases.[i], tally.&, outcome.elapsed, outcome.failure)
+          if outcome.failure is :some _ print(outcome.captured)
+        }
+        for workers {
+          platform/io/close(it.results)
+          let _ = process/wait(it.pid).!
+        }
       },
       :wasi or :bare -> {
         for suite.cases { run-test-in-process(it, tally.&) }
@@ -71,22 +83,94 @@ ns test {
     report(test, tally, clock/counter-to-nanos(clock/counter() - start), failure)
   }
 
-  fn run-test-forked(test: test-case, *tally) {
+  type worker = { pid: i32, results: platform/io/file-handle }
+
+  type outcome = { elapsed: u64, failure: ?string, captured: string }
+
+  type outcome-header = { elapsed: u64, has-failure: bool, failure-len: size, captured-len: size }
+
+  fn start-worker(cases: span[test-case], first: size, stride: size): worker {
+    let results = platform/io/pipe().!
+    let pid = sys/fork(
+      child-fn = fn[cases, first, stride, results]. {
+        let i = first
+        while i < cases.len() {
+          send-outcome(results.write, run-forked(cases.[i], results.write))
+          i = i + stride
+        }
+        0
+      },
+      stdin = :none,
+      stdout = :none,
+      stderr = :none,
+      extra-close = [results.read]
+    ).!
+    platform/io/close(results.write)
+    .{ pid, results = results.read }
+  }
+
+  fn send-outcome(file: platform/io/file-handle, outcome: outcome) {
+    let failure = if outcome.failure is :some message message else ""
+    let captured = if outcome.failure.is-some() outcome.captured else ""
+    let header: outcome-header = .{
+      elapsed = outcome.elapsed,
+      has-failure = outcome.failure.is-some(),
+      failure-len = failure.len(),
+      captured-len = captured.len(),
+    }
+    io/write-all(file.raw, header.&.as[ptr], types/size[outcome-header])
+    io/write-all(file.raw, failure.span().data-ptr(), failure.len())
+    io/write-all(file.raw, captured.span().data-ptr(), captured.len())
+  }
+
+  fn receive-outcome(file: platform/io/file-handle): outcome {
+    let header: outcome-header = .0
+    read-exact(file, header.&.as[ptr], types/size[outcome-header])
+    let failure: ?string = if header.has-failure :some(read-string(file, header.failure-len)) else :none
+    .{ elapsed = header.elapsed, failure, captured = read-string(file, header.captured-len) }
+  }
+
+  fn read-string(file: platform/io/file-handle, len: size): string {
+    let bytes = buffer/allocate[u8](len)
+    read-exact(file, bytes.data, len)
+    string/wrap-byte-buffer(bytes)
+  }
+
+  fn read-exact(file: platform/io/file-handle, data: ptr, count: size) {
+    let done: size = 0
+    while done < count {
+      let n = platform/io/read(file, data.add-bytes(done), count - done).raw
+      if n <= 0 crash("test worker exited before reporting every test")
+      done = done + n
+    }
+  }
+
+  fn run-forked(test: test-case, results: platform/io/file-handle): outcome {
     let output = platform/io/pipe().!
+    let timing = platform/io/pipe().!
     let start = clock/counter()
     let pid = sys/fork(
-      child-fn = fn[test]. {
+      child-fn = fn[test, timing]. {
         backtrace-on-crash = test.expected-failure.is-none()
-        if (test.run-fn)() is :some message { eprintln(message); 1 } else 0
+        let start = clock/counter()
+        let failure = (test.run-fn)()
+        let elapsed = clock/counter-to-nanos(clock/counter() - start)
+        let _ = platform/io/write(timing.write, elapsed.&.as[ptr], 8)
+        if failure is :some message { eprintln(message); 1 } else 0
       },
       stdin = :none,
       stdout = :some(output.write),
       stderr = :some(output.write),
-      extra-close = [output.read]
+      extra-close = [output.read, timing.read, results]
     ).!
     platform/io/close(output.write)
+    platform/io/close(timing.write)
     let captured = io/read-all(output.read.raw).!
     platform/io/close(output.read)
+    let elapsed: u64 = 0
+    let measured = platform/io/read(timing.read, elapsed.&.as[ptr], 8)
+    platform/io/close(timing.read)
+    if measured.raw != 8 { elapsed = clock/counter-to-nanos(clock/counter() - start) }
     let status = process/wait(pid).!
     let ending =
       if status.signal != 0 "killed by signal ${status.signal}"
@@ -100,7 +184,6 @@ ns test {
         else :some("expected a failure containing \"$needle\"")
       }
     }
-    report(test, tally, clock/counter-to-nanos(clock/counter() - start), failure)
-    if failure is :some _ print(captured)
+    .{ elapsed, failure, captured }
   }
 }

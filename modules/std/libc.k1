@@ -20,10 +20,7 @@ ns libc {
   fn(extern("__error")) errno-location-macos(): ptr
   fn(extern("__errno_location")) errno-location-linux(): ptr
   fn errno(): c-int {
-    let loc =
-      if k1/is-static { #if k1/host-platform is { :posix-macos -> errno-location-macos(), :posix-linux or :wasi or :bare -> errno-location-linux() } }
-      else { #if k1/platform is { :posix-macos -> errno-location-macos(), :posix-linux or :wasi or :bare -> errno-location-linux() } }
-    loc.ref[c-int].*
+    k1/select-os(macos = fn. errno-location-macos(), linux = fn. errno-location-linux()).ref[c-int].*
   }
   let EINTR: c-int = 4
   fn(extern("strerror")) strerror(errno: c-int): *u8

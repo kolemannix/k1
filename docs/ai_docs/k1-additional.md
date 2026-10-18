@@ -11,6 +11,9 @@ LLM-maintained K1 notes; fix wrong lines on sight. Read `k1-syntax-basics.md` fi
   (`let three: static int = 3`). A static param's name is its value in expressions;
   `#static`/`#meta` see only static-typed locals.
 - `#if c { } else { }` as statement or expression; `#for xs { }` unrolls.
+- `#if k1/platform` is the target even in static code, which runs on
+  `k1/host-platform`. OS-specific code reachable from both uses
+  `k1/select-os(macos = fn. ..., linux = fn. ...)`: the unselected arm never links.
 - `#type e` turns a `types/type-id` into a type.
 
 ## Context params

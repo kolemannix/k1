@@ -817,6 +817,13 @@ ns k1 {
   let platform: platform = builtin
   // The platform the compiler runs on; static execution happens there, not on `platform`
   let host-platform: platform = builtin
+  fn select-os[t](macos: some fn() -> t, linux: some fn() -> t): t {
+    if is-static {
+      #if host-platform is { :posix-macos -> macos(), :posix-linux or :wasi or :bare -> linux() }
+    } else {
+      #if platform is { :posix-macos -> macos(), :posix-linux or :wasi or :bare -> linux() }
+    }
+  }
   let platform-macos: bool = #if platform is { :posix-macos -> true, :posix-linux or :wasi or :bare -> false }
   let platform-linux: bool = #if platform is { :posix-linux -> true, :posix-macos or :wasi or :bare -> false }
   let platform-wasi: bool = #if platform is { :wasi -> true, :posix-linux or :posix-macos or :bare -> false }

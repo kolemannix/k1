@@ -498,6 +498,14 @@ ns platform {
         :bare -> impls/bare/sleep-ms(ms)
       }
     }
+
+    fn cpu-count(): size {
+      if k1/is-static impls/posix/cpu-count()
+      else #if k1/platform is {
+        :posix-macos or :posix-linux -> impls/posix/cpu-count(),
+        :wasi or :bare -> 1
+      }
+    }
   }
 
   //////////////////////////////////
@@ -548,7 +556,6 @@ ns platform {
         let PROT_READ: c-int = 0x1
         let PROT_WRITE: c-int = 0x2
         let MAP_PRIVATE: c-int = 0x0002
-        let MAP_ANON: c-int = #if k1/platform is { :posix-macos -> 0x1000, :posix-linux or :wasi or :bare -> 0x20 }
         let MAP_FAILED: i64 = -1
         fn(extern("mmap")) mmap(addr: ptr, len: size, prot: i32, flags: c-int, fd: c-int, offset: size): ptr
         fn(extern("munmap")) munmap(addr: ptr, len: size): i32
@@ -590,7 +597,6 @@ ns platform {
         fn(extern("strerror")) strerror(code: c-int): *u8
 
         let RTLD_NOW: c-int = 0x2
-        let RTLD_LOCAL: c-int = #if k1/platform is { :posix-macos -> 0x4, :posix-linux or :wasi or :bare -> 0 }
         fn(extern("dlopen")) dlopen(path: optref[u8], mode: c-int): ptr
         fn(extern("dlsym")) dlsym(handle: ptr, symbol: *u8): ptr
         fn(extern("dlclose")) dlclose(handle: ptr): c-int
@@ -608,6 +614,7 @@ ns platform {
         fn(extern("pthread_create")) pthread_create(thread: ptr, attrs: ptr, start_routine: ptr, input: ptr): i32
         fn(extern("pthread_join")) pthread_join(thread: ptr, retval: ptr): i32
         fn(extern("pthread_detach")) pthread_detach(thread: ptr): i32
+        fn(extern("sysconf")) sysconf(name: c-int): i64
 
         let X_OK: c-int = 1
         fn(extern("access")) access(path: *u8, mode: c-int): c-int
@@ -632,17 +639,12 @@ ns platform {
       }
 
       fn errno-now(): c-int {
-        let loc =
-          if k1/is-static { #if k1/host-platform is { :posix-macos -> c/errno-location-macos(), :posix-linux or :wasi or :bare -> c/errno-location-linux() } }
-          else { #if k1/platform is { :posix-macos -> c/errno-location-macos(), :posix-linux or :wasi or :bare -> c/errno-location-linux() } }
-        loc.ref[c-int].*
+        k1/select-os(macos = fn. c/errno-location-macos(), linux = fn. c/errno-location-linux()).ref[c-int].*
       }
 
       fn reserve(min-size: size): memory/region {
-        // static execution mmaps on the host, so the anon flag is host-keyed there
-        let anon: c-int =
-          if k1/is-static { #if k1/host-platform is { :posix-macos -> 0x1000, :posix-linux or :wasi or :bare -> 0x20 } } else c/MAP_ANON
-        let private-anon = c/MAP_PRIVATE | anon
+        let map-anon: c-int = k1/select-os(macos = fn. 0x1000, linux = fn. 0x20)
+        let private-anon = c/MAP_PRIVATE | map-anon
         let addr = c/mmap(
           addr = ptr/null,
           len = min-size,
@@ -716,9 +718,7 @@ ns platform {
       }
       fn dir-next(dir: ptr): ?string {
         let entry = c/readdir(dir)
-        let name-offset: size =
-          if k1/is-static { #if k1/host-platform is { :posix-macos -> 21, :posix-linux or :wasi or :bare -> 19 } }
-          else { #if k1/platform is { :posix-macos -> 21, :posix-linux or :wasi or :bare -> 19 } }
+        let name-offset: size = k1/select-os(macos = fn. 21, linux = fn. 19)
         if entry.is-null() :none else :some(string/wrap-c(entry.add-bytes(name-offset).ref[u8]))
       }
       fn dir-close(dir: ptr) { let _ = c/closedir(dir) }
@@ -737,7 +737,10 @@ ns platform {
 
       fn error-string(code: i32): string { string/wrap-c(c/strerror(code)) }
 
-      fn dylib-open(path: string): ptr { c/dlopen(optref/make(path.to-c-tmp()), c/RTLD_NOW | c/RTLD_LOCAL) }
+      fn dylib-open(path: string): ptr {
+        let rtld-local: c-int = k1/select-os(macos = fn. 0x4, linux = fn. 0)
+        c/dlopen(optref/make(path.to-c-tmp()), c/RTLD_NOW | rtld-local)
+      }
       fn dylib-open-self(): ptr { c/dlopen(.0, c/RTLD_NOW) }
       fn dylib-sym(lib: ptr, name: string): ptr { c/dlsym(lib, name.to-c-tmp()) }
       fn dylib-close(lib: ptr) { let _ = c/dlclose(lib) }
@@ -776,33 +779,12 @@ ns platform {
         ts.tv_sec * 1_000_000_000 + ts.tv_nsec
       }
 
-      // static execution runs on the host, so host-keyed there, target-keyed otherwise
       fn counter(): u64 {
-        if k1/is-static {
-          #if k1/host-platform is {
-            :posix-macos -> c/mach_absolute_time(),
-            :posix-linux or :wasi or :bare -> monotonic-nanos()
-          }
-        } else {
-          #if k1/platform is {
-            :posix-macos -> c/mach_absolute_time(),
-            :posix-linux or :wasi or :bare -> monotonic-nanos()
-          }
-        }
+        k1/select-os(macos = fn. c/mach_absolute_time(), linux = fn. monotonic-nanos())
       }
 
       fn counter-to-nanos(counter: u64): u64 {
-        if k1/is-static {
-          #if k1/host-platform is {
-            :posix-macos -> mach-counter-to-nanos(counter),
-            :posix-linux or :wasi or :bare -> counter
-          }
-        } else {
-          #if k1/platform is {
-            :posix-macos -> mach-counter-to-nanos(counter),
-            :posix-linux or :wasi or :bare -> counter
-          }
-        }
+        k1/select-os(macos = fn[counter]. mach-counter-to-nanos(counter), linux = fn[counter]. counter)
       }
 
       fn thread-spawn(function: ptr, input: ptr): ptr {
@@ -823,6 +805,10 @@ ns platform {
         let req: c/timespec = .{ tv_sec = ms / 1000, tv_nsec = (ms % 1000) * 1000000 }
         let _ = c/nanosleep(req.&, ptr/null)
       }
+      fn cpu-count(): size {
+        let sc-nprocessors-onln: c-int = k1/select-os(macos = fn. 58, linux = fn. 84)
+        c/sysconf(sc-nprocessors-onln).max(1)
+      }
 
       fn pipe(): { read: i32, write: i32 } {
         let fds = array/zeroed[i32, 2]()
@@ -835,17 +821,7 @@ ns platform {
       }
 
       fn environ-ptr(): ptr {
-        if k1/is-static {
-          #if k1/host-platform is {
-            :posix-macos -> c/ns-get-environ().ref[ptr].*,
-            :posix-linux or :wasi or :bare -> c/environ
-          }
-        } else {
-          #if k1/platform is {
-            :posix-macos -> c/ns-get-environ().ref[ptr].*,
-            :posix-linux or :wasi or :bare -> c/environ
-          }
-        }
+        k1/select-os(macos = fn. c/ns-get-environ().ref[ptr].*, linux = fn. c/environ)
       }
 
       fn child-closes(stdin: ?io/file-handle, stdout: ?io/file-handle, stderr: ?io/file-handle, extra-close: span[io/file-handle]): list[i32] {
