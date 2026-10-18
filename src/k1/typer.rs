@@ -3232,7 +3232,7 @@ impl TypedProgram {
             None => name,
         };
         let reused =
-            if planned.is_some() { self.find_module_owner_namespace(module_id) } else { None };
+            if planned.is_some() { self.find_submodule_owner_namespace(module_id) } else { None };
         let (parsed_namespace_id, typed_namespace_id) = match reused {
             Some(namespace_id) => {
                 let ParsedId::Namespace(parsed) = self.namespaces.get(namespace_id).parsed_id
@@ -3247,16 +3247,19 @@ impl TypedProgram {
                 (parsed, self.declare_namespace(parsed, Scopes::ROOT_SCOPE_ID)?)
             }
             None => {
-                let parent = match planned.and_then(|m| m.owner) {
+                let parent = match planned.and_then(|m| m.submodule_owner) {
                     None => ROOT_NAMESPACE_ID,
-                    Some(owner) => match self.find_module_owner_namespace(owner) {
+                    Some(submodule_owner) => match self
+                        .find_submodule_owner_namespace(submodule_owner)
+                    {
                         Some(namespace_id) => namespace_id,
                         None => {
-                            let owner_name =
-                                self.plan.get(self.plan.get_module(owner).unwrap().name);
-                            let owner_name = self.ast.idents.intern(owner_name);
-                            let parsed_owner = parse::init_module(owner_name, &mut self.ast);
-                            self.add_module_namespace(parsed_owner, ROOT_NAMESPACE_ID)
+                            let submodule_owner_name =
+                                self.plan.get(self.plan.get_module(submodule_owner).unwrap().name);
+                            let submodule_owner_name = self.ast.idents.intern(submodule_owner_name);
+                            let parsed_submodule_owner =
+                                parse::init_module(submodule_owner_name, &mut self.ast);
+                            self.add_module_namespace(parsed_submodule_owner, ROOT_NAMESPACE_ID)
                         }
                     },
                 };
@@ -3300,10 +3303,14 @@ impl TypedProgram {
         Ok(module_id)
     }
 
-    fn find_module_owner_namespace(&self, owner: ModuleId) -> Option<NamespaceId> {
+    fn find_submodule_owner_namespace(&self, submodule_owner: ModuleId) -> Option<NamespaceId> {
         for id in 1..=self.completed_module_count {
             let module_id = ModuleId::from_u32(id).unwrap();
-            if self.plan.get_module(module_id).is_some_and(|m| m.owner == Some(owner)) {
+            if self
+                .plan
+                .get_module(module_id)
+                .is_some_and(|m| m.submodule_owner == Some(submodule_owner))
+            {
                 let module_namespace = self.modules.get(module_id).namespace_id;
                 return self.namespaces.get(module_namespace).parent_id;
             }
@@ -3536,8 +3543,8 @@ impl TypedProgram {
             let span =
                 self.ast.get_function(function.parsed_id.as_function_id().unwrap()).name_span;
             let module_id = self.module_of_span(span);
-            let owner = self.plan.get_module(module_id).and_then(|m| m.owner);
-            if module_id == primary_id || owner == Some(primary_id) {
+            let submodule_owner = self.plan.get_module(module_id).and_then(|m| m.submodule_owner);
+            if module_id == primary_id || submodule_owner == Some(primary_id) {
                 found.push((function_id, span));
             }
         }

@@ -31,9 +31,10 @@ pub struct TextOrigin {
 }
 
 #[derive(Clone, Copy)]
-pub struct PlannedSource {
+pub struct PlannedParams {
     pub text: StringId,
     pub origins: MSlice<TextOrigin, PlanMem>,
+    pub value_hash: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -48,11 +49,11 @@ pub struct PlannedModule {
     pub path: StringId,
     pub is_dir: bool,
     pub kind: ModuleKind,
-    pub owner: Option<ModuleId>,
+    pub submodule_owner: Option<ModuleId>,
     pub deps: MSlice<ModuleId, PlanMem>,
     pub libs: MSlice<PlannedLib, PlanMem>,
     pub link_args: MSlice<StringId, PlanMem>,
-    pub params: Option<PlannedSource>,
+    pub params: Option<PlannedParams>,
     pub setup: Option<PlannedSetup>,
     pub build_file_hash: Option<u64>,
 }
@@ -68,7 +69,7 @@ impl PlannedModule {
             path,
             is_dir: true,
             kind: ModuleKind::Library,
-            owner: None,
+            submodule_owner: None,
             deps: MSlice::empty(),
             libs: MSlice::empty(),
             link_args: MSlice::empty(),
@@ -208,7 +209,7 @@ impl BuildPlan {
         }
         let params_hash = match m.params {
             None => 0,
-            Some(p) => crate::compiler::content_hash64(self.get(p.text).as_bytes()),
+            Some(p) => p.value_hash,
         };
         Some(SetupRequest {
             module_dir: idents.intern(self.module_dir(m)),

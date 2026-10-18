@@ -81,6 +81,10 @@ required-features = ["lsp"]
 debug = "line-tables-only"
 split-debuginfo = "packed"
 
+[profile.dev-opt]
+inherits = "dev"
+opt-level = 1
+
 [profile.release]
 panic = "abort"
 lto = "thin"

@@ -3,10 +3,9 @@ set -ex
 export RUST_BACKTRACE=1
 export K1_HOME=$(pwd)
 
-profile=dev
-target_dir=debug
-k1=target/$target_dir/k1
-k1_single_thread=target/single-thread/$target_dir/k1
+profile=dev-opt
+k1=target/$profile/k1
+k1_single_thread=target/single-thread/$profile/k1
 k1_test_filter=$1
 wasmtime=$(command -v wasmtime || true)
 logs=target/test-logs
@@ -14,48 +13,52 @@ logs=target/test-logs
 rm -rf $logs
 mkdir -p $logs
 
+c_libs() {
+    make -C modules/core/libs clean build
+    make -C test_src/ffi_abi_test/libs clean build
+    if [ -n "$wasmtime" ]; then
+        make -C modules/core/libs wasm
+    fi
+}
+
 cargo build --features=llvm-sys/prefer-dynamic,single-thread --profile $profile --target-dir target/single-thread --bin k1 > $logs/single-thread-build.log 2>&1 &
 single_thread_build=$!
-cargo test --lib --no-run --features=llvm-sys/prefer-dynamic,lsp
-cargo check --features=llvm-sys/prefer-dynamic,lsp --bin lsp
+( set -e; c_libs ) > $logs/c-libs.log 2>&1 &
+c_libs_build=$!
 cargo build --features=llvm-sys/prefer-dynamic --profile $profile --bin k1_test --bin k1
 wait $single_thread_build || { cat $logs/single-thread-build.log; exit 1; }
+wait $c_libs_build || { cat $logs/c-libs.log; exit 1; }
 
-make -C modules/core/libs clean build
-make -C test_src/ffi_abi_test/libs clean build
-if [ -n "$wasmtime" ]; then
-    make -C modules/core/libs wasm
-fi
 export PATH="$(pwd)/tools/k1bindgen/.k1-out:$PATH"
+$k1 --no-cache build tools/k1bindgen
+
+unit() {
+    cargo test --lib --features=llvm-sys/prefer-dynamic,lsp
+    cargo check --features=llvm-sys/prefer-dynamic,lsp --bin lsp
+}
 
 test_src() {
-    $k1 --no-cache check test_src/http_test
-    target/$target_dir/k1_test $k1_test_filter
+    $k1 setup test_src/http_test
+    target/$profile/k1_test $k1_test_filter
     $k1 --optimize --no-cache test --skip-static test_src/suite1
     $k1 --debug --no-cache test --skip-static test_src/suite1
     $k1_single_thread --optimize --no-cache test test_src/suite1
     if [ -n "$wasmtime" ]; then
         $k1 --optimize --no-cache --target wasm64-wasi test --skip-static test_src/suite1
     fi
-    k1bindgen_httpapp
+}
+
+httpapp() {
+    rm -rf examples/httpapp/.k1-out/cache
+    $k1 --no-cache build examples/httpapp
+    $k1 build examples/httpapp
 }
 
 refchess() {
     $k1 --optimize --no-cache test examples/refchess
     if [ -n "$wasmtime" ]; then
-        $k1 --optimize --no-cache --target wasm64-wasi test examples/refchess
+        $k1 --optimize --no-cache --target wasm64-wasi test --skip-static examples/refchess
     fi
-}
-
-k1bindgen_httpapp() {
-    $k1 --no-cache build tools/k1bindgen
-    $k1 --no-cache test tools/k1bindgen
-    rm -rf examples/httpapp/.k1-out/cache
-    $k1 --no-cache build examples/httpapp
-    $k1 build examples/httpapp
-    $k1 --no-cache test modules/uv
-    $k1 --no-cache test modules/http
-    $k1 --no-cache test modules/sqlite
 }
 
 fractal() {
@@ -77,12 +80,17 @@ lane() {
     pids+=($!)
 }
 
-lane unit cargo test --lib --features=llvm-sys/prefer-dynamic,lsp
+lane unit unit
 lane test_src test_src
 lane refchess refchess
+lane k1bindgen $k1 --no-cache test tools/k1bindgen
+lane uv $k1 --no-cache test modules/uv
+lane http $k1 --no-cache test modules/http
+lane httpapp httpapp
+lane sqlite $k1 --no-cache test modules/sqlite
 lane profiling $k1 --no-cache build perf/profiling
 lane logreport $k1 --no-cache run examples/logreport
-lane brotli $k1 --no-cache run examples/brotli_parity
+lane brotli $k1 --optimize --no-cache run examples/brotli_parity
 if [ "$(uname -s)" = Darwin ]; then
     lane gengame $k1 --no-cache build examples/gengame
 fi

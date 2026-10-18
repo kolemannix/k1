@@ -8,7 +8,7 @@ use crate::compiler::{
 };
 use crate::parse::Interner;
 use crate::plan::{
-    BUILD_FILE_NAME, BuildPlan, PlanMem, PlannedLib, PlannedModule, PlannedSetup, PlannedSource,
+    BUILD_FILE_NAME, BuildPlan, PlanMem, PlannedLib, PlannedModule, PlannedParams, PlannedSetup,
     TextOrigin,
 };
 use crate::vm::k1_types::K1CodeSpan;
@@ -22,7 +22,7 @@ struct PlanEntry {
     host: Option<ModuleId>,
     manifest_span: Span,
     resolved_by: usize,
-    owner: Option<usize>,
+    submodule_owner: Option<usize>,
     deps: SV8<usize>,
     ignore: SV8<StringId>,
     configure_span: Option<Span>,
@@ -36,7 +36,9 @@ struct Planner {
 
 impl Planner {
     fn find_library(&self, name: &str) -> Option<usize> {
-        self.entries.iter().position(|e| e.owner.is_none() && self.plan.get(e.module.name) == name)
+        self.entries
+            .iter()
+            .position(|e| e.submodule_owner.is_none() && self.plan.get(e.module.name) == name)
     }
 }
 
@@ -197,7 +199,7 @@ impl TypedProgram {
             host: None,
             manifest_span: Span::NONE,
             resolved_by,
-            owner: None,
+            submodule_owner: None,
             deps: SV8::new(),
             ignore: SV8::new(),
             configure_span: None,
@@ -477,7 +479,7 @@ impl TypedProgram {
                 host: None,
                 manifest_span: span,
                 resolved_by: entry_index,
-                owner: Some(entry_index),
+                submodule_owner: Some(entry_index),
                 deps: SV8::new(),
                 ignore: SV8::new(),
                 configure_span: None,
@@ -877,7 +879,7 @@ impl TypedProgram {
         planner: &mut Planner,
         index: usize,
         global_id: TypedGlobalId,
-    ) -> K1Result<PlannedSource> {
+    ) -> K1Result<PlannedParams> {
         let global = *self.globals.get(global_id);
         let host = planner.entries[index].host.unwrap();
         let module_name = planner.plan.get(planner.entries[index].module.name);
@@ -937,6 +939,8 @@ impl TypedProgram {
             );
         }
         self.globals.get_mut(global_id).initial_value = GlobalInitialValue::Value(value_id);
+        let value_hash =
+            crate::compiler::content_hash64(self.static_value_to_string(value_id).as_bytes());
 
         // The value above serves fn setup in this host program; the program being built
         // shares nothing with it but the plan, so it gets the same `let` as source text
@@ -959,7 +963,7 @@ impl TypedProgram {
         text.push_str(&expr);
         text.push('\n');
         let origins = planner.plan.mem.pushn(&let_origins);
-        Ok(PlannedSource { text: planner.plan.strings.intern(&text), origins })
+        Ok(PlannedParams { text: planner.plan.strings.intern(&text), origins, value_hash })
     }
 
     fn append_source_text(
@@ -1033,7 +1037,7 @@ impl TypedProgram {
                 deps.push(ids[*dep]);
             }
             m.deps = planner.plan.mem.pushn(&deps);
-            m.owner = entry.owner.map(|owner| ids[owner]);
+            m.submodule_owner = entry.submodule_owner.map(|submodule_owner| ids[submodule_owner]);
             if m.is_dir {
                 excludes.push(m.path);
             }

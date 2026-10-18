@@ -1460,7 +1460,7 @@ pub fn compile_program(
         Path::new(requested_str).is_dir() && !has_build_file(requested_str, &lsp.source_overlay);
     let src_path = if is_submodule_dir {
         match find_build_dir(requested_str, None, &lsp.source_overlay) {
-            Some(owner) => idents.intern(owner),
+            Some(submodule_owner) => idents.intern(submodule_owner),
             None => {
                 return Err(CompileProgramError::Build(format!(
                     "{requested_str} has no {}",
@@ -1512,7 +1512,7 @@ pub fn compile_program(
         let is_submodule = plan
             .modules()
             .iter()
-            .any(|m| m.owner == Some(primary) && plan.get(m.path) == requested_str);
+            .any(|m| m.submodule_owner == Some(primary) && plan.get(m.path) == requested_str);
         if !is_submodule {
             return Err(CompileProgramError::Build(format!(
                 "{requested_str} has no {} and is not a submodule of {}",
