@@ -195,43 +195,42 @@ ns mem {
     }
   }
 
-
   fn(inline) eq-blocks-at(buffer1: ptr, buffer2: ptr, offset-a: size, offset-b: size): bool {
-    let lhs-a = vector/load-simd-bytes(buffer1.add-bytes(offset-a))
-    let rhs-a = vector/load-simd-bytes(buffer2.add-bytes(offset-a))
-    let lhs-b = vector/load-simd-bytes(buffer1.add-bytes(offset-b))
-    let rhs-b = vector/load-simd-bytes(buffer2.add-bytes(offset-b))
-    let a-eq = lhs-a.eq-lanes(rhs-a) 
-    let b-eq = lhs-b.eq-lanes(rhs-b)
-    let equal-lanes = a-eq & b-eq
-
-    equal-lanes.to-mask() == u64/bitmask-low(k1/simd-bytes)
+    let lhs-a = vector/load-unchecked[u8, 16](buffer1.add-bytes(offset-a))
+    let rhs-a = vector/load-unchecked[u8, 16](buffer2.add-bytes(offset-a))
+    let lhs-b = vector/load-unchecked[u8, 16](buffer1.add-bytes(offset-b))
+    let rhs-b = vector/load-unchecked[u8, 16](buffer2.add-bytes(offset-b))
+    (lhs-a.eq-lanes(rhs-a) & lhs-b.eq-lanes(rhs-b)).all()
   }
 
-  fn equals(p1: ptr, p2: ptr, len: size): bool {
+  fn(noinline) equals(p1: ptr, p2: ptr, len: size): bool {
     if k1/is-static return equals-memcmp(p1, p2, len)
-    let w: size = k1/simd-bytes
-    if len < 8 {
-      let i = 0: size
-      while i < len {
-        if p1.add-bytes(i).ref[u8].* != p2.add-bytes(i).ref[u8].* return false
-        i = i + 1
+    if len <= 16 {
+      if len >= 8 {
+        let t = len - 8
+        let head = read-unaligned[u64](p1) ^ read-unaligned[u64](p2)
+        let tail = read-unaligned[u64](p1.add-bytes(t)) ^ read-unaligned[u64](p2.add-bytes(t))
+        return (head | tail) == 0
       }
-      return true
+      if len >= 4 {
+        let t = len - 4
+        let head = read-unaligned[u32](p1) ^ read-unaligned[u32](p2)
+        let tail = read-unaligned[u32](p1.add-bytes(t)) ^ read-unaligned[u32](p2.add-bytes(t))
+        return (head | tail) == 0
+      }
+      if len == 0 return true
+      let a = read-unaligned[u8](p1) ^ read-unaligned[u8](p2)
+      let b = read-unaligned[u8](p1.add-bytes(len / 2)) ^ read-unaligned[u8](p2.add-bytes(len / 2))
+      let c = read-unaligned[u8](p1.add-bytes(len - 1)) ^ read-unaligned[u8](p2.add-bytes(len - 1))
+      return (a | b | c) == 0
     }
-    if len < w {
-      let t = len - 8
-      let head = vector/load-word(p1) == vector/load-word(p2)
-      let tail = vector/load-word(p1.add-bytes(t)) == vector/load-word(p2.add-bytes(t))
-      return head and tail
-    }
-    if len < 2 * w return eq-blocks-at(p1, p2, 0, len - w)
+    if len <= 32 return eq-blocks-at(p1, p2, 0, len - 16)
     let i = 0: size
-    while i + 2 * w <= len {
-      if not eq-blocks-at(p1, p2, i, i + w) return false
-      i = i + 2 * w
+    while i + 32 <= len {
+      if not eq-blocks-at(p1, p2, i, i + 16) return false
+      i = i + 32
     }
-    i == len or eq-blocks-at(p1, p2, len - 2 * w, len - w)
+    i == len or eq-blocks-at(p1, p2, len - 32, len - 16)
   }
 }
 
