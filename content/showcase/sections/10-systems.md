@@ -85,18 +85,21 @@ The vector ops are compiler intrinsics, declared in core:
   fn(builtin) to-mask[t, n: static size](v: vector[t, n]): u64
 ```
 
-`trailing-zeros` isn't even that. It's a raw LLVM intrinsic, declared in k1:
+So are the bit ops every integer type gets, `trailing-zeros` among them:
 
-```k1 path=modules/core/core.k1
-  fn(builtin("llvm.cttz.i64")) _cttz(x: u64, zero-poison: bool): u64
-
-  fn trailing-zeros(self: u64): u64 {
-    _cttz(self, false)
-  }
+```k1 path=modules/core/builtin.k1
+ability int-bits {
+  fn trailing-zeros(self): self
+  fn leading-zeros(self): self
+  fn count-ones(self): self
+  fn swap-bytes(self): self
+  fn rotate-left(self, count: u32): self
+  fn rotate-right(self, count: u32): self
+}
 ```
 
-Any k1 file can do that. The VM emulates the common ones and runs vector ops
-on its own memory, so the generated scanner runs at compile time too:
+The VM runs every one of them, vector ops on its own memory, so the generated
+scanner runs at compile time too:
 
 ```k1
   let static-hits: 4u64 = #static scan-all-simd("{\"key\": [1, 2]}")

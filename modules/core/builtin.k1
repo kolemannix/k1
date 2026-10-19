@@ -325,6 +325,15 @@ ability bitwise {
   fn shift-right(self, count: u32): self
 }
 
+ability int-bits {
+  fn trailing-zeros(self): self
+  fn leading-zeros(self): self
+  fn count-ones(self): self
+  fn swap-bytes(self): self
+  fn rotate-left(self, count: u32): self
+  fn rotate-right(self, count: u32): self
+}
+
 ability add { fn add(self, rhs: self): self }
 ability sub { fn sub(self, rhs: self): self }
 ability mul { fn mul(self, rhs: self): self }

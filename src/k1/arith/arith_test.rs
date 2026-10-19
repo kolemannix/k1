@@ -27,6 +27,16 @@ macro_rules! check_width {
                 assert_eq!(int_op(IntOp::MulHighU, width, a, b), Ok(canon(high_u)));
                 assert_eq!(int_op(IntOp::MulHighS, width, a, b), Ok(canon_i(high_s)));
                 assert_eq!(
+                    int_op(IntOp::RotateLeft, width, a, b),
+                    Ok(canon(ua.rotate_left(shift)))
+                );
+                assert_eq!(
+                    int_op(IntOp::RotateRight, width, a, b),
+                    Ok(canon(ua.rotate_right(shift)))
+                );
+                assert_eq!(int_cmp3(false, width, a, b), ua.cmp(&ub) as i8 as u8 as u64);
+                assert_eq!(int_cmp3(true, width, a, b), ia.cmp(&ib) as i8 as u8 as u64);
+                assert_eq!(
                     int_overflows(OverflowOp::Add, false, width, a, b),
                     ua.overflowing_add(ub).1
                 );
@@ -84,7 +94,12 @@ macro_rules! check_width {
                 assert_eq!(int_cmp(width, IntCmpPred::Slt, a, b), ia < ib);
                 assert_eq!(int_cmp(width, IntCmpPred::Eq, a, b), ua == ub);
             }
-            assert_eq!(bit_not(width, a), canon(!(a as $u)));
+            let ua = a as $u;
+            assert_eq!(int_unop(IntUnop::Not, width, a), canon(!ua));
+            assert_eq!(int_unop(IntUnop::Ctz, width, a), ua.trailing_zeros() as u64);
+            assert_eq!(int_unop(IntUnop::Clz, width, a), ua.leading_zeros() as u64);
+            assert_eq!(int_unop(IntUnop::Popcount, width, a), ua.count_ones() as u64);
+            assert_eq!(int_unop(IntUnop::Bswap, width, a), canon(ua.swap_bytes()));
             assert_eq!(int_trunc(width, a), canon(a as $u));
             assert_eq!(int_ext_s(width, 64, a), (a as $i) as i64 as u64);
         }
@@ -103,6 +118,6 @@ fn int_ops_match_native_typed_arithmetic() {
 fn results_are_zero_extended() {
     assert_eq!(int_op(IntOp::DivS, 8, 0xff, 1), Ok(0xff));
     assert_eq!(int_op(IntOp::ShrS, 16, 0x8000, 15), Ok(0xffff));
-    assert_eq!(bit_not(8, 0), 0xff);
+    assert_eq!(int_unop(IntUnop::Not, 8, 0), 0xff);
     assert_eq!(int_ext_s(8, 32, 0xfd), 0xffff_fffd);
 }

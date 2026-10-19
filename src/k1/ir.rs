@@ -1,6 +1,6 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
-use crate::arith::{FloatOp, FloatUnop, IntOp, OverflowOp};
+use crate::arith::{FloatOp, FloatUnop, IntOp, IntUnop, OverflowOp};
 use crate::kmem::List;
 use crate::parse::{self, NumericWidth, StringId};
 use crate::typer::scopes::ScopeId;
@@ -865,7 +865,8 @@ pub enum Inst {
     BoolNegate {
         v: Value,
     },
-    BitNot {
+    IntUnop {
+        op: IntUnop,
         v: Value,
         t: ScalarType,
     },
@@ -944,6 +945,12 @@ pub enum Inst {
         lhs: Value,
         rhs: Value,
         pred: IntCmpPred,
+        width: u8,
+    },
+    IntCmp3 {
+        signed: bool,
+        lhs: Value,
+        rhs: Value,
         width: u8,
     },
     FloatBinop {
@@ -1060,7 +1067,7 @@ pub fn visit_inst_values(u: &UnitView, inst: &Inst, f: &mut impl FnMut(Value)) {
             f(alt);
         }
         Inst::BoolNegate { v }
-        | Inst::BitNot { v, .. }
+        | Inst::IntUnop { v, .. }
         | Inst::FloatUnop { v, .. }
         | Inst::BitCast { v, .. }
         | Inst::IntTrunc { v, .. }
@@ -1079,6 +1086,7 @@ pub fn visit_inst_values(u: &UnitView, inst: &Inst, f: &mut impl FnMut(Value)) {
         Inst::IntBinop { lhs, rhs, .. }
         | Inst::IntOverflows { lhs, rhs, .. }
         | Inst::IntCmp { lhs, rhs, .. }
+        | Inst::IntCmp3 { lhs, rhs, .. }
         | Inst::FloatBinop { lhs, rhs, .. }
         | Inst::FloatCmp { lhs, rhs, .. } => {
             f(lhs);
@@ -1248,7 +1256,7 @@ pub fn get_inst_kind(u: &UnitView, inst_id: InstId) -> InstKind {
         Inst::Ret { .. } => InstKind::Terminator,
         Inst::Select { t, .. } => InstKind::scalar(t),
         Inst::BoolNegate { .. } => InstKind::BOOL,
-        Inst::BitNot { t, .. } => InstKind::scalar(t),
+        Inst::IntUnop { t, .. } => InstKind::scalar(t),
         Inst::BitCast { to, .. } => InstKind::Value(to),
         Inst::IntTrunc { to, .. } => InstKind::scalar(to),
         Inst::IntExtU { to, .. } => InstKind::scalar(to),
@@ -1266,6 +1274,7 @@ pub fn get_inst_kind(u: &UnitView, inst_id: InstId) -> InstKind {
         Inst::IntBinop { t, .. } => InstKind::scalar(t),
         Inst::IntOverflows { .. } => InstKind::BOOL,
         Inst::IntCmp { .. } => InstKind::BOOL,
+        Inst::IntCmp3 { .. } => InstKind::scalar(ScalarType::I8),
         Inst::FloatBinop { t, .. } => InstKind::scalar(t),
         Inst::FloatUnop { t, .. } => InstKind::scalar(t),
         Inst::FloatFma { t, .. } => InstKind::scalar(t),
@@ -3167,6 +3176,55 @@ fn compile_ir_builtin(
             let res = b.push_value(Inst::FloatBinop { op, lhs, rhs, t }, IrComment::None);
             Ok(store_scalar_if_dst(b, dst, res))
         }
+        BuiltinIr::IntUnop(op) => {
+            let t = callee_fn_type.return_type.expect_scalar();
+            let v = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
+            let res = b.push_value(Inst::IntUnop { op, v, t }, IrComment::None);
+            Ok(store_scalar_if_dst(b, dst, res))
+        }
+        BuiltinIr::Compare3 => {
+            let operand_type_id = call.type_args.as_slice(&b.k1.mem)[0];
+            let t = b.get_physical_type(operand_type_id)?.expect_scalar();
+            let width = t.width_bits();
+            let lhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
+            let rhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
+            let res = match b.k1.types.get(operand_type_id) {
+                Type::Float(_) => {
+                    let gt = b.push_value(
+                        Inst::FloatCmp { lhs, rhs, pred: FloatCmpPred::Gt, width },
+                        IrComment::None,
+                    );
+                    let lt = b.push_value(
+                        Inst::FloatCmp { lhs, rhs, pred: FloatCmpPred::Lt, width },
+                        IrComment::None,
+                    );
+                    let sub =
+                        Inst::IntBinop { op: IntOp::Sub, lhs: gt, rhs: lt, t: ScalarType::I8 };
+                    b.push_value(sub, IrComment::None)
+                }
+                Type::Pointer => {
+                    let lhs = b.push_value(
+                        Inst::PtrToWord { v: lhs, to: WORD_SIZED_INT },
+                        IrComment::None,
+                    );
+                    let rhs = b.push_value(
+                        Inst::PtrToWord { v: rhs, to: WORD_SIZED_INT },
+                        IrComment::None,
+                    );
+                    let width = WORD_SIZED_INT.width_bits();
+                    b.push_value(Inst::IntCmp3 { signed: false, lhs, rhs, width }, IrComment::None)
+                }
+                Type::Integer(int_type) => {
+                    let signed = int_type.is_signed();
+                    b.push_value(Inst::IntCmp3 { signed, lhs, rhs, width }, IrComment::None)
+                }
+                Type::Char => {
+                    b.push_value(Inst::IntCmp3 { signed: false, lhs, rhs, width }, IrComment::None)
+                }
+                _ => b_ice!(b, "compare-scalars on a non-scalar type"),
+            };
+            Ok(store_scalar_if_dst(b, dst, res))
+        }
         BuiltinIr::IntBinop(op) => {
             let t = callee_fn_type.return_type.expect_scalar();
             let lhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
@@ -3802,7 +3860,7 @@ fn compile_scalar_op(b: &mut Builder, scalar_op: ScalarOp, dst: Option<Value>) -
             return Ok(store_scalar_if_dst(b, dst, res));
         }
         (ScalarOpKind::BitNot, None) => {
-            let res = b.push_value(Inst::BitNot { v: lhs, t }, IrComment::None);
+            let res = b.push_value(Inst::IntUnop { op: IntUnop::Not, v: lhs, t }, IrComment::None);
             return Ok(store_scalar_if_dst(b, dst, res));
         }
         (ScalarOpKind::Bitwise(op), Some(rhs_expr)) => {
@@ -4534,10 +4592,10 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                         errors.push(format!("i{inst_id}: bool_negate src is not a bool"))
                     }
                 }
-                Inst::BitNot { v, .. } => {
+                Inst::IntUnop { op, v, .. } => {
                     let inst_type = get_value_kind(&u, v);
                     if !inst_type.is_int() {
-                        errors.push(format!("i{inst_id}: bit_not src is not an int"))
+                        errors.push(format!("i{inst_id}: {} src is not an int", op.name()))
                     }
                 }
                 Inst::BitCast { .. } => (),
@@ -4619,6 +4677,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                 Inst::IntBinop { .. } => (),
                 Inst::IntOverflows { .. } => (),
                 Inst::IntCmp { .. } => (),
+                Inst::IntCmp3 { .. } => (),
                 Inst::FloatBinop { .. } => (),
                 Inst::FloatUnop { op, v, .. } => {
                     let inst_type = get_value_kind(&u, v);
@@ -5166,8 +5225,8 @@ pub fn display_inst(
             write!(w, "bool not ")?;
             v(w, value)?;
         }
-        Inst::BitNot { v: value, .. } => {
-            write!(w, "bitnot ")?;
+        Inst::IntUnop { op, v: value, .. } => {
+            write!(w, "{} ", op.name())?;
             v(w, value)?;
         }
         Inst::BitCast { v: value, .. } => {
@@ -5228,6 +5287,12 @@ pub fn display_inst(
         }
         Inst::IntCmp { lhs, rhs, pred, .. } => {
             write!(w, "icmp {} ", pred)?;
+            v(w, lhs)?;
+            w.write_str(", ")?;
+            v(w, rhs)?;
+        }
+        Inst::IntCmp3 { signed, lhs, rhs, .. } => {
+            write!(w, "icmp3 {} ", if signed { "s" } else { "u" })?;
             v(w, lhs)?;
             w.write_str(", ")?;
             v(w, rhs)?;

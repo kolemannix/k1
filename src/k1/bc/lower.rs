@@ -1,7 +1,7 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
 
-use crate::arith::{FloatOp, IntOp};
+use crate::arith::{FloatOp, IntOp, IntUnop};
 use crate::debug;
 
 use crate::ir::{
@@ -1049,7 +1049,16 @@ fn emit_inst(
             ctx.push(alt);
         }
         Inst::BoolNegate { v } => unop!(Opcode::BoolNegate, 0, 0, v),
-        Inst::BitNot { v, t } => unop!(Opcode::BitNot, t.width_bits(), 0, v),
+        Inst::IntUnop { op, v, t } => {
+            let opcode = match op {
+                IntUnop::Not => Opcode::BitNot,
+                IntUnop::Ctz => Opcode::IntCtz,
+                IntUnop::Clz => Opcode::IntClz,
+                IntUnop::Popcount => Opcode::IntPopcount,
+                IntUnop::Bswap => Opcode::IntBswap,
+            };
+            unop!(opcode, t.width_bits(), 0, v)
+        }
         Inst::FloatUnop { op, v, t } => unop!(Opcode::FloatUnop, t.width_bits(), op as u16, v),
 
         Inst::IntTrunc { v, to } => cast!(CastKind::IntTrunc, 0, to.width_bits(), v),
@@ -1090,6 +1099,8 @@ fn emit_inst(
                 IntOp::ShrS => Opcode::ShrS,
                 IntOp::MulHighU => Opcode::IntMulHighU,
                 IntOp::MulHighS => Opcode::IntMulHighS,
+                IntOp::RotateLeft => Opcode::IntRotl,
+                IntOp::RotateRight => Opcode::IntRotr,
             };
             binop!(opcode, t.width_bits(), 0, lhs, rhs)
         }
@@ -1101,6 +1112,9 @@ fn emit_inst(
             if !ctx.fused_cmps.contains(inst_id) {
                 binop!(Opcode::IntCmp, width, pred as u16, lhs, rhs)
             }
+        }
+        Inst::IntCmp3 { signed, lhs, rhs, width } => {
+            binop!(Opcode::IntCmp3, width, signed as u16, lhs, rhs)
         }
         Inst::FloatBinop { op, lhs, rhs, t } => {
             binop!(Opcode::FloatBinop, t.width_bits(), op as u16, lhs, rhs)

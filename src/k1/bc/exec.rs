@@ -12,7 +12,7 @@
 
 use std::num::NonZeroU32;
 
-use crate::arith::{self, FloatOp, FloatUnop, IntOp, OverflowOp};
+use crate::arith::{self, FloatOp, FloatUnop, IntOp, IntUnop, OverflowOp};
 use crate::ir::{self, BackendBuiltin, IrUnitId};
 use crate::lex::Span;
 use crate::typer::trace::TraceKind;
@@ -360,6 +360,13 @@ fn exec_loop<const COUNT_OPS: bool>(
             advance!($opcode);
         }};
     }
+    macro_rules! int_unop {
+        ($h:ident, $op:expr, $opcode:path) => {{
+            let v = read_src!(operand!(1)).bits();
+            write_slot!(operand!(0), Value::u64(arith::int_unop($op, header_a($h), v)));
+            advance!($opcode);
+        }};
+    }
     macro_rules! check_instr_limit {
         () => {
             if instrs_run > STATIC_EXEC_INSTR_LIMIT {
@@ -629,22 +636,8 @@ fn exec_loop<const COUNT_OPS: bool>(
             }
             Opcode::CallLlvm => {
                 let fn_name = crate::parse::StringId::from_u32(operand!(0)).unwrap();
-                let _ret_pt = PhysicalType::from_u32(operand!(1));
-                let fp_delta = operand!(2) as usize;
-                let nargs = operand!(3) as usize;
                 vm.eval_span = k1.bc.span_for_pc(pc_u32!());
-
-                let new_fp = unsafe { fp.add(fp_delta) };
-                let args: &[Value] = unsafe {
-                    core::slice::from_raw_parts(
-                        new_fp.add(super::FRAME_HEADER_WORDS as usize * 8) as *const Value,
-                        nargs,
-                    )
-                };
-                let result = match k1.ident_str(fn_name) {
-                    "llvm.cttz.i64" => Value::u64(args[0].bits().trailing_zeros() as u64),
-                    "llvm.ctlz.i64" => Value::u64(args[0].bits().leading_zeros() as u64),
-                    "llvm.ctpop.i64" => Value::u64(args[0].bits().count_ones() as u64),
+                match k1.ident_str(fn_name) {
                     "llvm.trap" => vmerr!("Static execution aborted"),
                     other => {
                         let other = other.to_string();
@@ -653,9 +646,7 @@ fn exec_loop<const COUNT_OPS: bool>(
                             other
                         )
                     }
-                };
-                ret_reg = result;
-                advance!(Opcode::CallLlvm);
+                }
             }
             Opcode::CallBuiltin => {
                 let builtin = builtin_from_tag(header_a(h));
@@ -842,6 +833,15 @@ fn exec_loop<const COUNT_OPS: bool>(
             Opcode::IntRemS => int_binop!(h, IntOp::RemS, Opcode::IntRemS),
             Opcode::IntMulHighU => int_binop!(h, IntOp::MulHighU, Opcode::IntMulHighU),
             Opcode::IntMulHighS => int_binop!(h, IntOp::MulHighS, Opcode::IntMulHighS),
+            Opcode::IntRotl => int_binop!(h, IntOp::RotateLeft, Opcode::IntRotl),
+            Opcode::IntRotr => int_binop!(h, IntOp::RotateRight, Opcode::IntRotr),
+            Opcode::IntCmp3 => {
+                let lhs = read_src!(operand!(1)).bits();
+                let rhs = read_src!(operand!(2)).bits();
+                let order = arith::int_cmp3(header_b(h) != 0, header_a(h), lhs, rhs);
+                write_slot!(operand!(0), Value::u64(order));
+                advance!(Opcode::IntCmp3);
+            }
             Opcode::IntOverflows => {
                 let b = header_b(h);
                 let op = OverflowOp::from_u8(b as u8);
@@ -907,11 +907,11 @@ fn exec_loop<const COUNT_OPS: bool>(
                 write_slot!(operand!(0), Value::bool(!b));
                 advance!(Opcode::BoolNegate);
             }
-            Opcode::BitNot => {
-                let v = read_src!(operand!(1)).bits();
-                write_slot!(operand!(0), Value::u64(arith::bit_not(header_a(h), v)));
-                advance!(Opcode::BitNot);
-            }
+            Opcode::BitNot => int_unop!(h, IntUnop::Not, Opcode::BitNot),
+            Opcode::IntCtz => int_unop!(h, IntUnop::Ctz, Opcode::IntCtz),
+            Opcode::IntClz => int_unop!(h, IntUnop::Clz, Opcode::IntClz),
+            Opcode::IntPopcount => int_unop!(h, IntUnop::Popcount, Opcode::IntPopcount),
+            Opcode::IntBswap => int_unop!(h, IntUnop::Bswap, Opcode::IntBswap),
             Opcode::Cast => {
                 let kind = CastKind::from_u8(header_a(h));
                 let b = header_b(h);

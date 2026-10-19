@@ -10,6 +10,15 @@ impl bitwise for u8 {
   fn(builtin) shift-right(self: u8, other: u32): u8
 }
 
+impl int-bits for u8 {
+  fn(builtin) trailing-zeros(self): self
+  fn(builtin) leading-zeros(self): self
+  fn(builtin) count-ones(self): self
+  fn(builtin) swap-bytes(self): self
+  fn(builtin) rotate-left(self, count: u32): self
+  fn(builtin) rotate-right(self, count: u32): self
+}
+
 impl bitwise for u16 {
   fn(builtin) bit-not(self: u16): u16
   fn(builtin) bit-and(self: u16, other: u16): u16
@@ -17,6 +26,15 @@ impl bitwise for u16 {
   fn(builtin) xor(self: u16, other: u16): u16
   fn(builtin) shift-left(self: u16, count: u32): u16
   fn(builtin) shift-right(self: u16, count: u32): u16
+}
+
+impl int-bits for u16 {
+  fn(builtin) trailing-zeros(self): self
+  fn(builtin) leading-zeros(self): self
+  fn(builtin) count-ones(self): self
+  fn(builtin) swap-bytes(self): self
+  fn(builtin) rotate-left(self, count: u32): self
+  fn(builtin) rotate-right(self, count: u32): self
 }
 
 impl bitwise for u32 {
@@ -28,6 +46,15 @@ impl bitwise for u32 {
   fn(builtin) shift-right(self: u32, count: u32): u32
 }
 
+impl int-bits for u32 {
+  fn(builtin) trailing-zeros(self): self
+  fn(builtin) leading-zeros(self): self
+  fn(builtin) count-ones(self): self
+  fn(builtin) swap-bytes(self): self
+  fn(builtin) rotate-left(self, count: u32): self
+  fn(builtin) rotate-right(self, count: u32): self
+}
+
 impl bitwise for u64 {
   fn(builtin) bit-not(self: u64): u64
   fn(builtin) bit-and(self: u64, other: u64): u64
@@ -35,6 +62,15 @@ impl bitwise for u64 {
   fn(builtin) xor(self: u64, other: u64): u64
   fn(builtin) shift-left(self: u64, count: u32): u64
   fn(builtin) shift-right(self: u64, count: u32): u64
+}
+
+impl int-bits for u64 {
+  fn(builtin) trailing-zeros(self): self
+  fn(builtin) leading-zeros(self): self
+  fn(builtin) count-ones(self): self
+  fn(builtin) swap-bytes(self): self
+  fn(builtin) rotate-left(self, count: u32): self
+  fn(builtin) rotate-right(self, count: u32): self
 }
 
 impl bitwise for i8 {
@@ -46,6 +82,15 @@ impl bitwise for i8 {
   fn(builtin) shift-right(self: i8, count: u32): i8
 }
 
+impl int-bits for i8 {
+  fn(builtin) trailing-zeros(self): self
+  fn(builtin) leading-zeros(self): self
+  fn(builtin) count-ones(self): self
+  fn(builtin) swap-bytes(self): self
+  fn(builtin) rotate-left(self, count: u32): self
+  fn(builtin) rotate-right(self, count: u32): self
+}
+
 impl bitwise for i16 {
   fn(builtin) bit-not(self: i16): i16
   fn(builtin) bit-and(self: i16, other: i16): i16
@@ -53,6 +98,15 @@ impl bitwise for i16 {
   fn(builtin) xor(self: i16, other: i16): i16
   fn(builtin) shift-left(self: i16, count: u32): i16
   fn(builtin) shift-right(self: i16, count: u32): i16
+}
+
+impl int-bits for i16 {
+  fn(builtin) trailing-zeros(self): self
+  fn(builtin) leading-zeros(self): self
+  fn(builtin) count-ones(self): self
+  fn(builtin) swap-bytes(self): self
+  fn(builtin) rotate-left(self, count: u32): self
+  fn(builtin) rotate-right(self, count: u32): self
 }
 
 impl bitwise for i32 {
@@ -64,6 +118,15 @@ impl bitwise for i32 {
   fn(builtin) shift-right(self: i32, count: u32): i32
 }
 
+impl int-bits for i32 {
+  fn(builtin) trailing-zeros(self): self
+  fn(builtin) leading-zeros(self): self
+  fn(builtin) count-ones(self): self
+  fn(builtin) swap-bytes(self): self
+  fn(builtin) rotate-left(self, count: u32): self
+  fn(builtin) rotate-right(self, count: u32): self
+}
+
 impl bitwise for i64 {
   fn(builtin) bit-not(self: i64): i64
   fn(builtin) bit-and(self: i64, other: i64): i64
@@ -71,4 +134,13 @@ impl bitwise for i64 {
   fn(builtin) xor(self: i64, other: i64): i64
   fn(builtin) shift-left(self: i64, count: u32): i64
   fn(builtin) shift-right(self: i64, count: u32): i64
+}
+
+impl int-bits for i64 {
+  fn(builtin) trailing-zeros(self): self
+  fn(builtin) leading-zeros(self): self
+  fn(builtin) count-ones(self): self
+  fn(builtin) swap-bytes(self): self
+  fn(builtin) rotate-left(self, count: u32): self
+  fn(builtin) rotate-right(self, count: u32): self
 }

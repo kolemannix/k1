@@ -91,8 +91,11 @@ pub enum Opcode {
     IntRemS,
     IntMulHighU,
     IntMulHighS,
+    IntRotl,
+    IntRotr,
     IntOverflows,
     IntCmp, // B = IntCmpPred tag
+    IntCmp3,
     // Float ALU (A = width in bits)
     FloatBinop,
     FloatUnop,
@@ -105,9 +108,13 @@ pub enum Opcode {
     Shl,
     ShrU,
     ShrS,
-    // Unary (A = width in bits for BitNot)
+    // Unary (A = width in bits for the int ops)
     BoolNegate,
     BitNot,
+    IntCtz,
+    IntClz,
+    IntPopcount,
+    IntBswap,
     Cast, // A = CastKind, B = (from_bits << 8) | to_bits
     Select,
     // Metaprogramming
@@ -186,8 +193,11 @@ impl Opcode {
             | Opcode::IntRemS
             | Opcode::IntMulHighU
             | Opcode::IntMulHighS
+            | Opcode::IntRotl
+            | Opcode::IntRotr
             | Opcode::IntOverflows
             | Opcode::IntCmp
+            | Opcode::IntCmp3
             | Opcode::FloatBinop
             | Opcode::FloatCmp
             | Opcode::BitAnd
@@ -196,7 +206,13 @@ impl Opcode {
             | Opcode::Shl
             | Opcode::ShrU
             | Opcode::ShrS => 3, // [dst][lhs][rhs]
-            Opcode::BoolNegate | Opcode::BitNot | Opcode::FloatUnop => 2, // [dst][src]
+            Opcode::BoolNegate
+            | Opcode::BitNot
+            | Opcode::IntCtz
+            | Opcode::IntClz
+            | Opcode::IntPopcount
+            | Opcode::IntBswap
+            | Opcode::FloatUnop => 2, // [dst][src]
             Opcode::FloatFma => 4,
             Opcode::Cast => 2, // A = CastKind, B = from_bits << 8 | to_bits; [dst][src]
             Opcode::Select => 4,
@@ -309,8 +325,11 @@ impl Opcode {
             Opcode::IntRemS => "irem_s",
             Opcode::IntMulHighU => "imulh_u",
             Opcode::IntMulHighS => "imulh_s",
+            Opcode::IntRotl => "rotl",
+            Opcode::IntRotr => "rotr",
             Opcode::IntOverflows => "ioverflows",
             Opcode::IntCmp => "icmp",
+            Opcode::IntCmp3 => "icmp3",
             Opcode::FloatBinop => "fbinop",
             Opcode::FloatUnop => "funop",
             Opcode::FloatFma => "fma",
@@ -323,6 +342,10 @@ impl Opcode {
             Opcode::ShrS => "shr_s",
             Opcode::BoolNegate => "bool_neg",
             Opcode::BitNot => "bit_not",
+            Opcode::IntCtz => "ctz",
+            Opcode::IntClz => "clz",
+            Opcode::IntPopcount => "popcnt",
+            Opcode::IntBswap => "bswap",
             Opcode::Cast => "cast",
             Opcode::Select => "select",
             Opcode::BakeStaticValue => "bake_static",

@@ -19,24 +19,18 @@ ns for sha256 {
 
   fn new(): sha256 { .{ state = INIT, block = .0, block-len = 0, total-len = 0 } }
 
-  fn(inline) rotr(x: u32, n: u32): u32 { (x >> n) | (x << (32 - n)) }
-
   fn compress(state: *array[u32, 8], block: ptr) {
     let w: array[u32, 64] = uninit
     let i: size = 0
     while i < 16 {
-      let p = block.add-bytes(i * 4)
-      w.[i] = (p.ref-at[u8](0).*.widen[u32] << 24)
-            | (p.ref-at[u8](1).*.widen[u32] << 16)
-            | (p.ref-at[u8](2).*.widen[u32] << 8)
-            | p.ref-at[u8](3).*.widen[u32]
+      w.[i] = mem/read-unaligned[u32](block.add-bytes(i * 4)).swap-bytes()
       i = i + 1
     }
     while i < 64 {
       let x = w.[i - 15]
       let y = w.[i - 2]
-      let s0 = rotr(x, 7) ^ rotr(x, 18) ^ (x >> 3)
-      let s1 = rotr(y, 17) ^ rotr(y, 19) ^ (y >> 10)
+      let s0 = x.rotate-right(7) ^ x.rotate-right(18) ^ (x >> 3)
+      let s1 = y.rotate-right(17) ^ y.rotate-right(19) ^ (y >> 10)
       w.[i] = w.[i - 16] + s0 + w.[i - 7] + s1
       i = i + 1
     }
@@ -50,10 +44,10 @@ ns for sha256 {
     let h = state.[7]
     i = 0
     while i < 64 {
-      let s1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25)
+      let s1 = e.rotate-right(6) ^ e.rotate-right(11) ^ e.rotate-right(25)
       let ch = (e & f) ^ (e.bit-not() & g)
       let t1 = h + s1 + ch + K.[i] + w.[i]
-      let s0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22)
+      let s0 = a.rotate-right(2) ^ a.rotate-right(13) ^ a.rotate-right(22)
       let maj = (a & b) ^ (a & c) ^ (b & c)
       let t2 = s0 + maj
       h = g
@@ -115,22 +109,12 @@ ns for sha256 {
       self.block.[self.block-len] = 0
       self.block-len = self.block-len + 1
     }
-    let shift: u32 = 56
-    let i: size = 56
-    while i < 64 {
-      self.block.[i] = (bit-len >> shift).trunc[u8]
-      shift = shift - 8
-      i = i + 1
-    }
+    mem/write-unaligned(self.block.&.as[ptr].add-bytes(56), bit-len.swap-bytes())
     compress(self.state.&, self.block.&.as[ptr])
     let out: array[u8, 32] = uninit
-    i = 0
+    let i: size = 0
     while i < 8 {
-      let v = self.state.[i]
-      out.[i * 4] = (v >> 24).trunc[u8]
-      out.[i * 4 + 1] = (v >> 16).trunc[u8]
-      out.[i * 4 + 2] = (v >> 8).trunc[u8]
-      out.[i * 4 + 3] = v.trunc[u8]
+      mem/write-unaligned(out.&.as[ptr].add-bytes(i * 4), self.state.[i].swap-bytes())
       i = i + 1
     }
     out

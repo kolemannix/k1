@@ -36,7 +36,7 @@ use llvm_sys::debuginfo::LLVMDIBuilderInsertDeclareRecordAtEnd;
 
 use log::{debug, trace};
 
-use crate::arith::{FloatOp, FloatUnop, IntOp, OverflowOp};
+use crate::arith::{FloatOp, FloatUnop, IntOp, IntUnop, OverflowOp};
 use crate::compiler::{self};
 use crate::ir::{
     BackendBuiltin, BlockId, IdMap, Inst, InstId, IrCallee, PhysicalFunctionType, Value,
@@ -2932,6 +2932,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             .into_int_value()
     }
 
+    fn build_int_intrinsic(
+        &self,
+        name: &str,
+        overloads: &[BasicTypeEnum<'ctx>],
+        args: &[BasicMetadataValueEnum<'ctx>],
+    ) -> IntValue<'ctx> {
+        let function =
+            Intrinsic::find(name).unwrap().get_declaration(&self.llvm_module, overloads).unwrap();
+        self.build_call(function, args).try_as_basic_value().basic().unwrap().into_int_value()
+    }
+
     fn build_float_intrinsic(&self, name: &str, args: &[FloatValue<'ctx>]) -> FloatValue<'ctx> {
         let function = Intrinsic::find(name)
             .unwrap()
@@ -4425,10 +4436,31 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 inst_mappings.insert(inst_id, not_bool.as_basic_value_enum());
                 Ok(())
             }
-            Inst::BitNot { v, .. } => {
-                let input = self.resolve_value(inst_mappings, v)?.into_int_value();
-                let not_input = self.builder.build_not(input, "").unwrap();
-                inst_mappings.insert(inst_id, not_input.as_basic_value_enum());
+            Inst::IntUnop { op, v, .. } => {
+                let x = self.resolve_value(inst_mappings, v)?.into_int_value();
+                let int_type = x.get_type().as_basic_type_enum();
+                let zero_allowed = self.ctx.bool_type().const_zero();
+                let result = match op {
+                    IntUnop::Not => self.builder.build_not(x, "").unwrap(),
+                    IntUnop::Ctz => self.build_int_intrinsic(
+                        "llvm.cttz",
+                        &[int_type],
+                        &[x.into(), zero_allowed.into()],
+                    ),
+                    IntUnop::Clz => self.build_int_intrinsic(
+                        "llvm.ctlz",
+                        &[int_type],
+                        &[x.into(), zero_allowed.into()],
+                    ),
+                    IntUnop::Popcount => {
+                        self.build_int_intrinsic("llvm.ctpop", &[int_type], &[x.into()])
+                    }
+                    IntUnop::Bswap if x.get_type().get_bit_width() == 8 => x,
+                    IntUnop::Bswap => {
+                        self.build_int_intrinsic("llvm.bswap", &[int_type], &[x.into()])
+                    }
+                };
+                inst_mappings.insert(inst_id, result.as_basic_value_enum());
                 Ok(())
             }
             Inst::FloatUnop { op, v, .. } => {
@@ -4579,6 +4611,15 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         let count = self.build_shift_count(r, l);
                         self.builder.build_right_shift(l, count, op == IntOp::ShrS, "").unwrap()
                     }
+                    IntOp::RotateLeft | IntOp::RotateRight => {
+                        let count = self.cast_int_to_match(r, l, "rotate_count");
+                        let name = if op == IntOp::RotateLeft { "llvm.fshl" } else { "llvm.fshr" };
+                        self.build_int_intrinsic(
+                            name,
+                            &[l.get_type().as_basic_type_enum()],
+                            &[l.into(), l.into(), count.into()],
+                        )
+                    }
                     IntOp::MulHighU | IntOp::MulHighS => {
                         let signed = op == IntOp::MulHighS;
                         let narrow = l.get_type();
@@ -4620,6 +4661,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let flag = self.builder.build_extract_value(pair, 1, "").unwrap().into_int_value();
                 let bool_value = self.i1_to_bool(flag, "");
                 inst_mappings.insert(inst_id, bool_value.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::IntCmp3 { signed, lhs, rhs, .. } => {
+                let l = self.resolve_value(inst_mappings, lhs)?.into_int_value();
+                let r = self.resolve_value(inst_mappings, rhs)?.into_int_value();
+                let name = if signed { "llvm.scmp" } else { "llvm.ucmp" };
+                let overloads =
+                    [self.ctx.i8_type().as_basic_type_enum(), l.get_type().as_basic_type_enum()];
+                let order = self.build_int_intrinsic(name, &overloads, &[l.into(), r.into()]);
+                inst_mappings.insert(inst_id, order.as_basic_value_enum());
                 Ok(())
             }
             Inst::IntCmp { lhs, rhs, pred, .. } => {

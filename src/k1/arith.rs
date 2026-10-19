@@ -17,6 +17,8 @@ pub enum IntOp {
     ShrS,
     MulHighU,
     MulHighS,
+    RotateLeft,
+    RotateRight,
 }
 
 impl IntOp {
@@ -37,6 +39,30 @@ impl IntOp {
             IntOp::ShrS => "ashr",
             IntOp::MulHighU => "umulh",
             IntOp::MulHighS => "smulh",
+            IntOp::RotateLeft => "rotl",
+            IntOp::RotateRight => "rotr",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum IntUnop {
+    Not,
+    Ctz,
+    Clz,
+    Popcount,
+    Bswap,
+}
+
+impl IntUnop {
+    pub fn name(self) -> &'static str {
+        match self {
+            IntUnop::Not => "not",
+            IntUnop::Ctz => "ctz",
+            IntUnop::Clz => "clz",
+            IntUnop::Popcount => "popcnt",
+            IntUnop::Bswap => "bswap",
         }
     }
 }
@@ -183,8 +209,37 @@ pub fn int_op(op: IntOp, width: u8, lhs: u64, rhs: u64) -> Result<u64, IntOpErro
         IntOp::MulHighS => {
             ((sign_extend(width, l) as i128 * sign_extend(width, r) as i128) >> width) as u64
         }
+        IntOp::RotateLeft if shift == 0 => l,
+        IntOp::RotateLeft => (l << shift) | (l >> (width as u32 - shift)),
+        IntOp::RotateRight if shift == 0 => l,
+        IntOp::RotateRight => (l >> shift) | (l << (width as u32 - shift)),
     };
     Ok(bits & mask)
+}
+
+#[inline(always)]
+pub fn int_unop(op: IntUnop, width: u8, bits: u64) -> u64 {
+    let mask = width_mask(width);
+    let v = bits & mask;
+    match op {
+        IntUnop::Not => !v & mask,
+        IntUnop::Ctz if v == 0 => width as u64,
+        IntUnop::Ctz => v.trailing_zeros() as u64,
+        IntUnop::Clz => (v.leading_zeros() - (64 - width as u32)) as u64,
+        IntUnop::Popcount => v.count_ones() as u64,
+        IntUnop::Bswap => v.swap_bytes() >> (64 - width as u32),
+    }
+}
+
+#[inline(always)]
+pub fn int_cmp3(signed: bool, width: u8, lhs: u64, rhs: u64) -> u64 {
+    let order = if signed {
+        sign_extend(width, lhs).cmp(&sign_extend(width, rhs))
+    } else {
+        let mask = width_mask(width);
+        (lhs & mask).cmp(&(rhs & mask))
+    };
+    order as i8 as u8 as u64
 }
 
 #[inline(always)]
@@ -224,11 +279,6 @@ pub fn int_cmp(width: u8, pred: IntCmpPred, lhs: u64, rhs: u64) -> bool {
         IntCmpPred::Uge => l >= r,
         IntCmpPred::Ne => l != r,
     }
-}
-
-#[inline(always)]
-pub fn bit_not(width: u8, bits: u64) -> u64 {
-    !bits & width_mask(width)
 }
 
 #[inline(always)]

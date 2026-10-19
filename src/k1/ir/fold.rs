@@ -25,12 +25,15 @@ pub(super) fn fold_inst(u: &UnitView, inst: &Inst) -> Option<Simplified> {
             }
             let mask = arith::width_mask(width);
             let zero = Simplified::Const(t, 0);
-            let is_shift = matches!(op, IntOp::Shl | IntOp::ShrU | IntOp::ShrS);
+            let is_shift_or_rotate = matches!(
+                op,
+                IntOp::Shl | IntOp::ShrU | IntOp::ShrS | IntOp::RotateLeft | IntOp::RotateRight
+            );
             match (op, l, r) {
-                (_, _, Some(r)) if is_shift && (r as u32) & (width as u32 - 1) == 0 => {
+                (_, _, Some(r)) if is_shift_or_rotate && (r as u32) & (width as u32 - 1) == 0 => {
                     Some(Simplified::Value(lhs))
                 }
-                (_, Some(0), _) if is_shift => Some(zero),
+                (_, Some(0), _) if is_shift_or_rotate => Some(zero),
                 (IntOp::Add | IntOp::Or | IntOp::Xor, Some(0), _) => Some(Simplified::Value(rhs)),
                 (IntOp::Add | IntOp::Sub | IntOp::Or | IntOp::Xor, _, Some(0)) => {
                     Some(Simplified::Value(lhs))
@@ -51,6 +54,13 @@ pub(super) fn fold_inst(u: &UnitView, inst: &Inst) -> Option<Simplified> {
                 (IntOp::And | IntOp::Or, _, _) if lhs == rhs => Some(Simplified::Value(lhs)),
                 _ => None,
             }
+        }
+        Inst::IntCmp3 { signed, lhs, rhs, width } => {
+            if lhs == rhs {
+                return Some(Simplified::Const(ScalarType::I8, 0));
+            }
+            let order = arith::int_cmp3(signed, width, lhs.const_bits(u)?, rhs.const_bits(u)?);
+            Some(Simplified::Const(ScalarType::I8, order))
         }
         Inst::IntCmp { lhs, rhs, pred, width } => {
             if let (Some(l), Some(r)) = (lhs.const_bits(u), rhs.const_bits(u)) {
@@ -100,8 +110,8 @@ pub(super) fn fold_inst(u: &UnitView, inst: &Inst) -> Option<Simplified> {
         Inst::BoolNegate { v } => {
             Some(Simplified::Const(ScalarType::I8, (v.const_bits(u)? == 0) as u64))
         }
-        Inst::BitNot { v, t } => {
-            Some(Simplified::Const(t, arith::bit_not(t.width_bits(), v.const_bits(u)?)))
+        Inst::IntUnop { op, v, t } => {
+            Some(Simplified::Const(t, arith::int_unop(op, t.width_bits(), v.const_bits(u)?)))
         }
         Inst::IntTrunc { v, to } => {
             Some(Simplified::Const(to, arith::int_trunc(to.width_bits(), v.const_bits(u)?)))

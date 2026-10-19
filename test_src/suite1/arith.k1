@@ -73,6 +73,33 @@ fn(test) mul-high() {
   assert-equals(folded, 2)
 }
 
+fn(test) int-bits() {
+  assert-equals(fold_test/opaque(0u8).trailing-zeros(), 8)
+  assert-equals(fold_test/opaque(-128i8).trailing-zeros(), 7)
+  assert-equals(fold_test/opaque(0b1000u64).trailing-zeros(), 3)
+  assert-equals(fold_test/opaque(0u32).leading-zeros(), 32)
+  assert-equals(fold_test/opaque(0x00FFu16).leading-zeros(), 8)
+  assert-equals(fold_test/opaque(-1i64).leading-zeros(), 0)
+  assert-equals(fold_test/opaque(-1i8).count-ones(), 8)
+  assert-equals(fold_test/opaque(0xF0F0u64).count-ones(), 8)
+  assert-equals(fold_test/opaque(0xABu8).swap-bytes(), 0xAB)
+  assert-equals(fold_test/opaque(0x00FFi16).swap-bytes(), -256)
+  assert-equals(fold_test/opaque(0x1122_3344u32).swap-bytes(), 0x4433_2211)
+  assert-equals(fold_test/opaque(0x0102_0304_0506_0708u64).swap-bytes(), 0x0807_0605_0403_0201)
+  assert-equals(fold_test/opaque(0x81u8).rotate-left(1), 0x03)
+  assert-equals(fold_test/opaque(0x81u8).rotate-left(9), 0x03)
+  assert-equals(fold_test/opaque(-128i8).rotate-left(1), 1)
+  assert-equals(fold_test/opaque(0x8001u16).rotate-right(1), 0xC000)
+  assert-equals(fold_test/opaque(0x1234_5678i32).rotate-right(fold_test/opaque(0u32)), 0x1234_5678)
+  assert-equals(fold_test/opaque(1u64).rotate-right(1), 1u64 << 63)
+  assert-equals(0u16.trailing-zeros(), 16)
+  assert-equals(1u32.leading-zeros(), 31)
+  assert-equals(0x0F0Fi16.count-ones(), 8)
+  assert-equals(0x1234u16.swap-bytes(), 0x3412)
+  assert-equals(0x8000_0001u32.rotate-left(4), 0x18)
+  assert-equals(0x81u8.rotate-right(1), 0xC0)
+}
+
 fn(test) absolute-value() {
   assert-equals((-7: i32).abs(), 7)
 }

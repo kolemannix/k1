@@ -315,6 +315,8 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
         | Opcode::IntRemS
         | Opcode::IntMulHighU
         | Opcode::IntMulHighS
+        | Opcode::IntRotl
+        | Opcode::IntRotr
         | Opcode::IntOverflows
         | Opcode::BitAnd
         | Opcode::BitOr
@@ -323,6 +325,14 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
         | Opcode::ShrU
         | Opcode::ShrS => {
             write!(w, "{}.{} ", op.name(), a).unwrap();
+            write_dst(w, ops[0]);
+            write!(w, " <- ").unwrap();
+            write_src(w, k1, ops[1]);
+            write!(w, ", ").unwrap();
+            write_src(w, k1, ops[2]);
+        }
+        Opcode::IntCmp3 => {
+            write!(w, "icmp3.{}.{} ", if b != 0 { "s" } else { "u" }, a).unwrap();
             write_dst(w, ops[0]);
             write!(w, " <- ").unwrap();
             write_src(w, k1, ops[1]);
@@ -355,6 +365,12 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
         }
         Opcode::BoolNegate | Opcode::BitNot => {
             write!(w, "{} ", op.name()).unwrap();
+            write_dst(w, ops[0]);
+            write!(w, " <- ").unwrap();
+            write_src(w, k1, ops[1]);
+        }
+        Opcode::IntCtz | Opcode::IntClz | Opcode::IntPopcount | Opcode::IntBswap => {
+            write!(w, "{}.{} ", op.name(), a).unwrap();
             write_dst(w, ops[0]);
             write!(w, " <- ").unwrap();
             write_src(w, k1, ops[1]);

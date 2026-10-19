@@ -39,3 +39,20 @@ fn(test) float-compare-total-order() {
   let f32-neg-nan: f32 = mem/bitcast(0xFFC00000: u32)
   assert(f32-neg-nan.compare(-1.0) is :less)
 }
+
+fn(test) scalar-compare() {
+  assert(fold_test/opaque(-1i8).compare(1) is :less)
+  assert(fold_test/opaque(255u8).compare(1) is :greater)
+  assert(fold_test/opaque(i64/min-value).compare(i64/max-value) is :less)
+  assert(fold_test/opaque(u64/max-value).compare(0) is :greater)
+  assert(fold_test/opaque(7u16).compare(7) is :equal)
+  assert(fold_test/opaque('a').compare('b') is :less)
+  let bytes: span[u8] = [1, 2]
+  let p = bytes.data-ptr()
+  assert(fold_test/opaque(p.add-bytes(1)).compare(p) is :greater)
+  let nan: f64 = mem/bitcast(0x7FF8000000000000: u64)
+  assert(core/compare-scalars(fold_test/opaque(nan), 1.0) is :equal)
+  assert(core/compare-scalars(fold_test/opaque(1.5: f32), 2.5) is :less)
+  assert(core/compare-scalars(-1i32, 1) is :less)
+  assert(core/compare-scalars(200u8, 3) is :greater)
+}

@@ -501,13 +501,7 @@ impl[s, f] try[t = s, e = f] for result[s, f] {
   }
 }
 
-// Branchless three-way compare: (a > b) - (a < b) is exactly ordering's -1/0/1 tag.
-// LLVM recognizes this shape and lowers it to its scmp/ucmp intrinsics.
-fn(inline) compare-scalars[t: scalar-cmp](a: t, b: t): ordering {
-  let gt = a.gt(b).as-u8().signed()
-  let lt = a.lt(b).as-u8().signed()
-  mem/bitcast[i8, ordering](gt - lt)
-}
+fn(builtin) compare-scalars[t: scalar-cmp](a: t, b: t): ordering
 
 impl[t: scalar-cmp] comparable for t {
   fn(inline) compare(self: t, other: t): ordering { compare-scalars(self, other) }
@@ -659,25 +653,6 @@ ns for u64 {
     assert(n <= 64)
     if n == 64 18446744073709551615: u64 else (1usize << n.trunc[u32]) - 1
   }
-
-  fn(builtin("llvm.cttz.i64")) _cttz(x: u64, zero-poison: bool): u64
-
-  fn trailing-zeros(self: u64): u64 {
-    _cttz(self, false)
-  }
-
-  fn(builtin("llvm.ctlz.i64")) _ctlz(x: u64, zero-poison: bool): u64
-
-  fn leading-zeros(self: u64): u64 {
-    _ctlz(self, false)
-  }
-
-  fn(builtin("llvm.ctpop.i64")) _ctpop(x: u64): u64
-
-  fn count-ones(self: u64): u64 {
-    _ctpop(self)
-  }
-
 }
 
 ns(lib("k1rt")) k1rt {

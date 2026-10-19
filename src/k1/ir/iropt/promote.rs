@@ -427,7 +427,7 @@ impl LocalUses {
             | Inst::JumpIf { .. }
             | Inst::Switch { .. }
             | Inst::BoolNegate { .. }
-            | Inst::BitNot { .. }
+            | Inst::IntUnop { .. }
             | Inst::FloatUnop { .. }
             | Inst::FloatFma { .. }
             | Inst::IntTrunc { .. }
@@ -442,6 +442,7 @@ impl LocalUses {
             | Inst::IntToFloatUnsigned { .. }
             | Inst::IntToFloatSigned { .. }
             | Inst::IntBinop { .. }
+            | Inst::IntCmp3 { .. }
             | Inst::IntOverflows { .. }
             | Inst::FloatBinop { .. }
             | Inst::FloatCmp { .. } => {}

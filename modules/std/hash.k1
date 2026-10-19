@@ -29,7 +29,7 @@ ns hash {
   }
 
   fn(inline) mix-word(h: u64, w: u64): u64 {
-    (((h << 5) | (h >> 59)) ^ w) * 0x9E3779B97F4A7C15
+    (h.rotate-left(5) ^ w) * 0x9E3779B97F4A7C15
   }
 
   fn bytes(bytes: span[u8]): u64 {

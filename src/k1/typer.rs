@@ -19,7 +19,7 @@ pub(crate) mod type_eval;
 pub(crate) mod typed_int_value;
 pub(crate) mod types;
 
-use crate::arith::{FloatOp, FloatUnop, IntOp, OverflowOp};
+use crate::arith::{FloatOp, FloatUnop, IntOp, IntUnop, OverflowOp};
 use crate::ir::{AtomicOrderingIr, BackendBuiltin, IrUnitId};
 use crate::typer::megarepl::MegareplState;
 use crate::typer::trace::TraceKind;
@@ -143,18 +143,19 @@ pub const ABILITY_ID_PRINT: AbilityId = AbilityId(NonZeroU32::new(5).unwrap());
 pub const ABILITY_ID_PRINT_PRECISE: AbilityId = AbilityId(NonZeroU32::new(6).unwrap());
 pub const ABILITY_ID_SHOW: AbilityId = AbilityId(NonZeroU32::new(7).unwrap());
 pub const ABILITY_ID_BITWISE: AbilityId = AbilityId(NonZeroU32::new(8).unwrap());
-pub const ABILITY_ID_ADD: AbilityId = AbilityId(NonZeroU32::new(9).unwrap());
-pub const ABILITY_ID_SUB: AbilityId = AbilityId(NonZeroU32::new(10).unwrap());
-pub const ABILITY_ID_MUL: AbilityId = AbilityId(NonZeroU32::new(11).unwrap());
-pub const ABILITY_ID_DIV: AbilityId = AbilityId(NonZeroU32::new(12).unwrap());
-pub const ABILITY_ID_REM: AbilityId = AbilityId(NonZeroU32::new(13).unwrap());
-pub const ABILITY_ID_NEG: AbilityId = AbilityId(NonZeroU32::new(14).unwrap());
-pub const ABILITY_ID_OVERFLOW_ARITH: AbilityId = AbilityId(NonZeroU32::new(15).unwrap());
-pub const ABILITY_ID_SCALAR_CMP: AbilityId = AbilityId(NonZeroU32::new(16).unwrap());
-pub const ABILITY_ID_COMPARABLE: AbilityId = AbilityId(NonZeroU32::new(17).unwrap());
-pub const ABILITY_ID_TRY: AbilityId = AbilityId(NonZeroU32::new(18).unwrap());
-pub const ABILITY_ID_ITERATOR: AbilityId = AbilityId(NonZeroU32::new(19).unwrap());
-pub const ABILITY_ID_ITERABLE: AbilityId = AbilityId(NonZeroU32::new(20).unwrap());
+pub const ABILITY_ID_INT_BITS: AbilityId = AbilityId(NonZeroU32::new(9).unwrap());
+pub const ABILITY_ID_ADD: AbilityId = AbilityId(NonZeroU32::new(10).unwrap());
+pub const ABILITY_ID_SUB: AbilityId = AbilityId(NonZeroU32::new(11).unwrap());
+pub const ABILITY_ID_MUL: AbilityId = AbilityId(NonZeroU32::new(12).unwrap());
+pub const ABILITY_ID_DIV: AbilityId = AbilityId(NonZeroU32::new(13).unwrap());
+pub const ABILITY_ID_REM: AbilityId = AbilityId(NonZeroU32::new(14).unwrap());
+pub const ABILITY_ID_NEG: AbilityId = AbilityId(NonZeroU32::new(15).unwrap());
+pub const ABILITY_ID_OVERFLOW_ARITH: AbilityId = AbilityId(NonZeroU32::new(16).unwrap());
+pub const ABILITY_ID_SCALAR_CMP: AbilityId = AbilityId(NonZeroU32::new(17).unwrap());
+pub const ABILITY_ID_COMPARABLE: AbilityId = AbilityId(NonZeroU32::new(18).unwrap());
+pub const ABILITY_ID_TRY: AbilityId = AbilityId(NonZeroU32::new(19).unwrap());
+pub const ABILITY_ID_ITERATOR: AbilityId = AbilityId(NonZeroU32::new(20).unwrap());
+pub const ABILITY_ID_ITERABLE: AbilityId = AbilityId(NonZeroU32::new(21).unwrap());
 //rustfmt: on
 
 pub const FUNC_PARAM_IDEAL_COUNT: usize = 8;
@@ -2067,8 +2068,10 @@ pub enum BuiltinIr {
     FloatUnop(FloatUnop),
     FloatBinop(FloatOp),
     FloatFma,
+    IntUnop(IntUnop),
     IntBinop(IntOp),
     IntOverflow { op: OverflowOp, signed: bool },
+    Compare3,
     Bitcast,
     PointerIndex,
     VolatileLoad,
@@ -2155,7 +2158,9 @@ impl BuiltinIr {
             BuiltinIr::FloatUnop(op) => op.name(),
             BuiltinIr::FloatBinop(op) => op.name(),
             BuiltinIr::FloatFma => "fma",
+            BuiltinIr::IntUnop(_) => "int_unop",
             BuiltinIr::IntBinop(_) => "int_binop",
+            BuiltinIr::Compare3 => "compare3",
             BuiltinIr::IntOverflow { op, .. } => op.name(),
             BuiltinIr::Bitcast => "bitcast",
             BuiltinIr::PointerIndex => "pointer_index",
@@ -13686,6 +13691,15 @@ impl TypedProgram {
                     }
                     _ => None,
                 },
+                (ABILITY_ID_INT_BITS, bits_fn) if is_integer => match bits_fn {
+                    "trailing-zeros" => Some(Builtin::Ir(BuiltinIr::IntUnop(IntUnop::Ctz))),
+                    "leading-zeros" => Some(Builtin::Ir(BuiltinIr::IntUnop(IntUnop::Clz))),
+                    "count-ones" => Some(Builtin::Ir(BuiltinIr::IntUnop(IntUnop::Popcount))),
+                    "swap-bytes" => Some(Builtin::Ir(BuiltinIr::IntUnop(IntUnop::Bswap))),
+                    "rotate-left" => Some(Builtin::Ir(BuiltinIr::IntBinop(IntOp::RotateLeft))),
+                    "rotate-right" => Some(Builtin::Ir(BuiltinIr::IntBinop(IntOp::RotateRight))),
+                    _ => None,
+                },
                 (ABILITY_ID_OVERFLOW_ARITH, overflow_fn) if is_integer => {
                     let signed = t.unwrap().expect_integer().is_signed();
                     let op = match overflow_fn {
@@ -13727,6 +13741,7 @@ impl TypedProgram {
                 // _root
                 None => match fn_name_str {
                     "discard" => Some(Builtin::TyperInline(BuiltinTyperInline::Discard)),
+                    "compare-scalars" => Some(Builtin::Ir(BuiltinIr::Compare3)),
                     _ => None,
                 },
                 Some("mem") => match fn_name_str {
@@ -18167,6 +18182,7 @@ impl TypedProgram {
             core!("print"),
             core!("show"),
             core!("bitwise"),
+            core!("int-bits"),
             core!("comparable"),
             core!("try"),
             core!("from-string"),

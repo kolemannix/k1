@@ -940,7 +940,7 @@ fn map_refs(
         }
         Inst::Ret { v, .. }
         | Inst::BoolNegate { v }
-        | Inst::BitNot { v, .. }
+        | Inst::IntUnop { v, .. }
         | Inst::FloatUnop { v, .. }
         | Inst::BitCast { v, .. }
         | Inst::IntTrunc { v, .. }
@@ -960,6 +960,7 @@ fn map_refs(
         Inst::IntBinop { lhs, rhs, .. }
         | Inst::IntOverflows { lhs, rhs, .. }
         | Inst::IntCmp { lhs, rhs, .. }
+        | Inst::IntCmp3 { lhs, rhs, .. }
         | Inst::FloatBinop { lhs, rhs, .. }
         | Inst::FloatCmp { lhs, rhs, .. } => {
             value(lhs);
