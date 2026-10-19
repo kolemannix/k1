@@ -1,5 +1,5 @@
 use super::*;
-use crate::arith::{self, IntOp};
+use crate::arith;
 
 pub(super) enum Simplified {
     Const(ScalarType, u64),
@@ -8,9 +8,9 @@ pub(super) enum Simplified {
 
 pub(super) fn fold_inst(u: &UnitView, inst: &Inst) -> Option<Simplified> {
     match *inst {
-        Inst::IntOverflows { op, signed, lhs, rhs, t } => {
+        Inst::IntOverflows { op, lhs, rhs, t } => {
             let (l, r) = (lhs.const_bits(u)?, rhs.const_bits(u)?);
-            let b = arith::int_overflows(op, signed, t.width_bits(), l, r);
+            let b = arith::int_overflows(op, t.width_bits(), l, r);
             Some(Simplified::Const(ScalarType::I8, b as u64))
         }
         Inst::IntBinop { op, lhs, rhs, t } => {
@@ -55,11 +55,11 @@ pub(super) fn fold_inst(u: &UnitView, inst: &Inst) -> Option<Simplified> {
                 _ => None,
             }
         }
-        Inst::IntCmp3 { signed, lhs, rhs, width } => {
+        Inst::IntCmp3 { op, lhs, rhs, width } => {
             if lhs == rhs {
                 return Some(Simplified::Const(ScalarType::I8, 0));
             }
-            let order = arith::int_cmp3(signed, width, lhs.const_bits(u)?, rhs.const_bits(u)?);
+            let order = arith::int_cmp3(op, width, lhs.const_bits(u)?, rhs.const_bits(u)?);
             Some(Simplified::Const(ScalarType::I8, order))
         }
         Inst::IntCmp { lhs, rhs, pred, width } => {

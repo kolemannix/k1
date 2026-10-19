@@ -227,7 +227,7 @@ impl Opcode {
         }
     }
 
-    pub fn jump_if_icmp(pred: crate::ir::IntCmpPred) -> Opcode {
+    pub fn jump_if_icmp(pred: crate::arith::IntCmpPred) -> Opcode {
         Opcode::from_u8(Opcode::JumpIfEq as u8 + pred as u8)
     }
 
@@ -562,7 +562,7 @@ mod bc_test {
 
     #[test]
     fn pred_tags_roundtrip() {
-        use crate::ir::{FloatCmpPred, IntCmpPred};
+        use crate::arith::{FloatCmpPred, IntCmpPred};
         for p in [
             IntCmpPred::Eq,
             IntCmpPred::Slt,

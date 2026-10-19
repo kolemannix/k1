@@ -34,32 +34,14 @@ macro_rules! check_width {
                     int_op(IntOp::RotateRight, width, a, b),
                     Ok(canon(ua.rotate_right(shift)))
                 );
-                assert_eq!(int_cmp3(false, width, a, b), ua.cmp(&ub) as i8 as u8 as u64);
-                assert_eq!(int_cmp3(true, width, a, b), ia.cmp(&ib) as i8 as u8 as u64);
-                assert_eq!(
-                    int_overflows(OverflowOp::Add, false, width, a, b),
-                    ua.overflowing_add(ub).1
-                );
-                assert_eq!(
-                    int_overflows(OverflowOp::Sub, false, width, a, b),
-                    ua.overflowing_sub(ub).1
-                );
-                assert_eq!(
-                    int_overflows(OverflowOp::Mul, false, width, a, b),
-                    ua.overflowing_mul(ub).1
-                );
-                assert_eq!(
-                    int_overflows(OverflowOp::Add, true, width, a, b),
-                    ia.overflowing_add(ib).1
-                );
-                assert_eq!(
-                    int_overflows(OverflowOp::Sub, true, width, a, b),
-                    ia.overflowing_sub(ib).1
-                );
-                assert_eq!(
-                    int_overflows(OverflowOp::Mul, true, width, a, b),
-                    ia.overflowing_mul(ib).1
-                );
+                assert_eq!(int_cmp3(Cmp3Op::Ucmp, width, a, b), ua.cmp(&ub) as i8 as u8 as u64);
+                assert_eq!(int_cmp3(Cmp3Op::Scmp, width, a, b), ia.cmp(&ib) as i8 as u8 as u64);
+                assert_eq!(int_overflows(OverflowOp::AddU, width, a, b), ua.overflowing_add(ub).1);
+                assert_eq!(int_overflows(OverflowOp::SubU, width, a, b), ua.overflowing_sub(ub).1);
+                assert_eq!(int_overflows(OverflowOp::MulU, width, a, b), ua.overflowing_mul(ub).1);
+                assert_eq!(int_overflows(OverflowOp::AddS, width, a, b), ia.overflowing_add(ib).1);
+                assert_eq!(int_overflows(OverflowOp::SubS, width, a, b), ia.overflowing_sub(ib).1);
+                assert_eq!(int_overflows(OverflowOp::MulS, width, a, b), ia.overflowing_mul(ib).1);
                 match ub {
                     0 => {
                         assert_eq!(

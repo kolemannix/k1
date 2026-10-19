@@ -1,7 +1,7 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
 
-use crate::arith::{FloatOp, IntOp, IntUnop};
+use crate::arith::{FloatCmpPred, FloatOp, IntCmpPred, IntOp, IntUnop};
 use crate::debug;
 
 use crate::ir::{
@@ -757,16 +757,16 @@ fn emit_inst(
                             VecOpIr::EqLanes | VecOpIr::LtLanesS | VecOpIr::LtLanesU => {
                                 let (opcode, pred) = match (vop.op, is_float) {
                                     (VecOpIr::EqLanes, true) => {
-                                        (Opcode::FloatCmp, ir::FloatCmpPred::Eq as u16)
+                                        (Opcode::FloatCmp, FloatCmpPred::Eq as u16)
                                     }
                                     (VecOpIr::EqLanes, false) => {
-                                        (Opcode::IntCmp, ir::IntCmpPred::Eq as u16)
+                                        (Opcode::IntCmp, IntCmpPred::Eq as u16)
                                     }
-                                    (_, true) => (Opcode::FloatCmp, ir::FloatCmpPred::Lt as u16),
+                                    (_, true) => (Opcode::FloatCmp, FloatCmpPred::Lt as u16),
                                     (VecOpIr::LtLanesS, false) => {
-                                        (Opcode::IntCmp, ir::IntCmpPred::Slt as u16)
+                                        (Opcode::IntCmp, IntCmpPred::Slt as u16)
                                     }
-                                    _ => (Opcode::IntCmp, ir::IntCmpPred::Ult as u16),
+                                    _ => (Opcode::IntCmp, IntCmpPred::Ult as u16),
                                 };
                                 ctx.emit(opcode, elem_bits, pred);
                                 ctx.push(s0);
@@ -1104,17 +1104,16 @@ fn emit_inst(
             };
             binop!(opcode, t.width_bits(), 0, lhs, rhs)
         }
-        Inst::IntOverflows { op, signed, lhs, rhs, t } => {
-            let b = op as u16 | (signed as u16) << 8;
-            binop!(Opcode::IntOverflows, t.width_bits(), b, lhs, rhs)
+        Inst::IntOverflows { op, lhs, rhs, t } => {
+            binop!(Opcode::IntOverflows, t.width_bits(), op as u16, lhs, rhs)
         }
         Inst::IntCmp { lhs, rhs, pred, width } => {
             if !ctx.fused_cmps.contains(inst_id) {
                 binop!(Opcode::IntCmp, width, pred as u16, lhs, rhs)
             }
         }
-        Inst::IntCmp3 { signed, lhs, rhs, width } => {
-            binop!(Opcode::IntCmp3, width, signed as u16, lhs, rhs)
+        Inst::IntCmp3 { op, lhs, rhs, width } => {
+            binop!(Opcode::IntCmp3, width, op as u16, lhs, rhs)
         }
         Inst::FloatBinop { op, lhs, rhs, t } => {
             binop!(Opcode::FloatBinop, t.width_bits(), op as u16, lhs, rhs)
@@ -1386,7 +1385,7 @@ mod tests {
     use super::*;
     use crate::compiler::test_support::{compile_source, function_named};
     use crate::ir::{
-        BlockSourceKind, IntCmpPred, IrComment, IrRange, PhiCase, UnitBuf, commit_unit, data32_bits,
+        BlockSourceKind, IrComment, IrRange, PhiCase, UnitBuf, commit_unit, data32_bits,
     };
     use crate::typer::types::ScalarType;
 

@@ -342,6 +342,14 @@ impl scalar-cmp for char {
   fn(inline) ge(self, other: self): bool { (self.as-u8()).ge(other.as-u8()) }
 }
 
+impl comparable for char {
+  fn(inline) compare(self, other: self): ordering { self.as-u8().compare(other.as-u8()) }
+}
+
+impl comparable for ptr {
+  fn(inline) compare(self, other: self): ordering { self.to-uint().compare(other.to-uint()) }
+}
+
 impl[t: print] to-string for t {
   fn to-string(self): string {
     let bytes = spill-list/new[u8, 64]()
@@ -497,10 +505,12 @@ impl[s, f] try[t = s, e = f] for result[s, f] {
   }
 }
 
-fn(builtin) compare-scalars[t: scalar-cmp](a: t, b: t): ordering
-
 impl[t: scalar-cmp] comparable for t {
-  fn(inline) compare(self: t, other: t): ordering { compare-scalars(self, other) }
+  fn(inline) compare(self: t, other: t): ordering {
+    let gt = self.gt(other).as-u8().signed()
+    let lt = self.lt(other).as-u8().signed()
+    mem/bitcast[i8, ordering](gt - lt)
+  }
 }
 
 ns for u8 {
@@ -807,12 +817,12 @@ impl scalar-cmp for f64 {
 // :less than +0.0, and NaN compares :greater than +inf (-NaN :less than -inf).
 impl comparable for f32 {
   fn(inline) compare(self: f32, other: f32): ordering {
-    compare-scalars(self.total-order-key(), other.total-order-key())
+    self.total-order-key().compare(other.total-order-key())
   }
 }
 impl comparable for f64 {
   fn(inline) compare(self: f64, other: f64): ordering {
-    compare-scalars(self.total-order-key(), other.total-order-key())
+    self.total-order-key().compare(other.total-order-key())
   }
 }
 

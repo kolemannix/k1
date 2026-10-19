@@ -12,7 +12,7 @@
 
 use std::num::NonZeroU32;
 
-use crate::arith::{self, FloatOp, FloatUnop, IntOp, IntUnop, OverflowOp};
+use crate::arith::{self, Cmp3Op, FloatOp, FloatUnop, IntOp, IntUnop, OverflowOp};
 use crate::ir::{self, BackendBuiltin, IrUnitId};
 use crate::lex::Span;
 use crate::typer::trace::TraceKind;
@@ -500,16 +500,16 @@ fn exec_loop<const COUNT_OPS: bool>(
                 }
                 set_pc!(target);
             }
-            Opcode::JumpIfEq => jump_if_icmp!(h, ir::IntCmpPred::Eq),
-            Opcode::JumpIfSlt => jump_if_icmp!(h, ir::IntCmpPred::Slt),
-            Opcode::JumpIfSle => jump_if_icmp!(h, ir::IntCmpPred::Sle),
-            Opcode::JumpIfSgt => jump_if_icmp!(h, ir::IntCmpPred::Sgt),
-            Opcode::JumpIfSge => jump_if_icmp!(h, ir::IntCmpPred::Sge),
-            Opcode::JumpIfUlt => jump_if_icmp!(h, ir::IntCmpPred::Ult),
-            Opcode::JumpIfUle => jump_if_icmp!(h, ir::IntCmpPred::Ule),
-            Opcode::JumpIfUgt => jump_if_icmp!(h, ir::IntCmpPred::Ugt),
-            Opcode::JumpIfUge => jump_if_icmp!(h, ir::IntCmpPred::Uge),
-            Opcode::JumpIfNe => jump_if_icmp!(h, ir::IntCmpPred::Ne),
+            Opcode::JumpIfEq => jump_if_icmp!(h, arith::IntCmpPred::Eq),
+            Opcode::JumpIfSlt => jump_if_icmp!(h, arith::IntCmpPred::Slt),
+            Opcode::JumpIfSle => jump_if_icmp!(h, arith::IntCmpPred::Sle),
+            Opcode::JumpIfSgt => jump_if_icmp!(h, arith::IntCmpPred::Sgt),
+            Opcode::JumpIfSge => jump_if_icmp!(h, arith::IntCmpPred::Sge),
+            Opcode::JumpIfUlt => jump_if_icmp!(h, arith::IntCmpPred::Ult),
+            Opcode::JumpIfUle => jump_if_icmp!(h, arith::IntCmpPred::Ule),
+            Opcode::JumpIfUgt => jump_if_icmp!(h, arith::IntCmpPred::Ugt),
+            Opcode::JumpIfUge => jump_if_icmp!(h, arith::IntCmpPred::Uge),
+            Opcode::JumpIfNe => jump_if_icmp!(h, arith::IntCmpPred::Ne),
             Opcode::Unreachable => {
                 vmerr!("Reached unreachable instruction");
             }
@@ -838,22 +838,22 @@ fn exec_loop<const COUNT_OPS: bool>(
             Opcode::IntCmp3 => {
                 let lhs = read_src!(operand!(1)).bits();
                 let rhs = read_src!(operand!(2)).bits();
-                let order = arith::int_cmp3(header_b(h) != 0, header_a(h), lhs, rhs);
+                let op = Cmp3Op::from_u8(header_b(h) as u8);
+                let order = arith::int_cmp3(op, header_a(h), lhs, rhs);
                 write_slot!(operand!(0), Value::u64(order));
                 advance!(Opcode::IntCmp3);
             }
             Opcode::IntOverflows => {
-                let b = header_b(h);
-                let op = OverflowOp::from_u8(b as u8);
+                let op = OverflowOp::from_u8(header_b(h) as u8);
                 let lhs = read_src!(operand!(1)).bits();
                 let rhs = read_src!(operand!(2)).bits();
-                let o = arith::int_overflows(op, b >> 8 != 0, header_a(h), lhs, rhs);
+                let o = arith::int_overflows(op, header_a(h), lhs, rhs);
                 write_slot!(operand!(0), Value::bool(o));
                 advance!(Opcode::IntOverflows);
             }
             Opcode::IntCmp => {
                 let width = header_a(h);
-                let pred = ir::IntCmpPred::from_u8(header_b(h) as u8);
+                let pred = arith::IntCmpPred::from_u8(header_b(h) as u8);
                 let lhs = read_src!(operand!(1)).bits();
                 let rhs = read_src!(operand!(2)).bits();
                 write_slot!(operand!(0), Value::bool(arith::int_cmp(width, pred, lhs, rhs)));
@@ -881,7 +881,7 @@ fn exec_loop<const COUNT_OPS: bool>(
             }
             Opcode::FloatCmp => {
                 let width = header_a(h);
-                let pred = ir::FloatCmpPred::from_u8(header_b(h) as u8);
+                let pred = arith::FloatCmpPred::from_u8(header_b(h) as u8);
                 let lhs = read_src!(operand!(1)).bits();
                 let rhs = read_src!(operand!(2)).bits();
                 write_slot!(operand!(0), Value::bool(arith::float_cmp(width, pred, lhs, rhs)));

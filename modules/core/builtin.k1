@@ -530,6 +530,15 @@ ability comparable {
   fn compare(self, other: self): ordering
 }
 
+impl comparable for u8  { fn(builtin) compare(self, other: self): ordering }
+impl comparable for u16 { fn(builtin) compare(self, other: self): ordering }
+impl comparable for u32 { fn(builtin) compare(self, other: self): ordering }
+impl comparable for u64 { fn(builtin) compare(self, other: self): ordering }
+impl comparable for i8  { fn(builtin) compare(self, other: self): ordering }
+impl comparable for i16 { fn(builtin) compare(self, other: self): ordering }
+impl comparable for i32 { fn(builtin) compare(self, other: self): ordering }
+impl comparable for i64 { fn(builtin) compare(self, other: self): ordering }
+
 ability try[impl t, impl e] {
   fn error(e: e): self
   fn value(t: t): self

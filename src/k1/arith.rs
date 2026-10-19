@@ -1,5 +1,3 @@
-use crate::ir::{FloatCmpPred, IntCmpPred};
-
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum IntOp {
     Add,
@@ -70,22 +68,57 @@ impl IntUnop {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 #[repr(u8)]
 pub enum OverflowOp {
-    Add,
-    Sub,
-    Mul,
+    AddU,
+    AddS,
+    SubU,
+    SubS,
+    MulU,
+    MulS,
 }
 
 impl OverflowOp {
     pub fn from_u8(v: u8) -> OverflowOp {
-        debug_assert!(v <= OverflowOp::Mul as u8, "bad overflow op tag {v}");
+        debug_assert!(v <= OverflowOp::MulS as u8, "bad overflow op tag {v}");
         unsafe { core::mem::transmute::<u8, OverflowOp>(v) }
     }
 
     pub fn name(self) -> &'static str {
         match self {
-            OverflowOp::Add => "add_overflows",
-            OverflowOp::Sub => "sub_overflows",
-            OverflowOp::Mul => "mul_overflows",
+            OverflowOp::AddU => "uadd_overflows",
+            OverflowOp::AddS => "sadd_overflows",
+            OverflowOp::SubU => "usub_overflows",
+            OverflowOp::SubS => "ssub_overflows",
+            OverflowOp::MulU => "umul_overflows",
+            OverflowOp::MulS => "smul_overflows",
+        }
+    }
+
+    pub fn wrapping_op(self) -> IntOp {
+        match self {
+            OverflowOp::AddU | OverflowOp::AddS => IntOp::Add,
+            OverflowOp::SubU | OverflowOp::SubS => IntOp::Sub,
+            OverflowOp::MulU | OverflowOp::MulS => IntOp::Mul,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum Cmp3Op {
+    Ucmp,
+    Scmp,
+}
+
+impl Cmp3Op {
+    pub fn from_u8(v: u8) -> Cmp3Op {
+        debug_assert!(v <= Cmp3Op::Scmp as u8, "bad cmp3 op tag {v}");
+        unsafe { core::mem::transmute::<u8, Cmp3Op>(v) }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Cmp3Op::Ucmp => "ucmp",
+            Cmp3Op::Scmp => "scmp",
         }
     }
 }
@@ -165,6 +198,72 @@ impl FloatUnop {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum IntCmpPred {
+    Eq,
+    Slt,
+    Sle,
+    Sgt,
+    Sge,
+    Ult,
+    Ule,
+    Ugt,
+    Uge,
+    Ne,
+}
+
+impl IntCmpPred {
+    pub fn from_u8(v: u8) -> IntCmpPred {
+        debug_assert!(v <= IntCmpPred::Ne as u8, "bad int pred tag {v}");
+        unsafe { core::mem::transmute::<u8, IntCmpPred>(v) }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            IntCmpPred::Eq => "eq",
+            IntCmpPred::Slt => "slt",
+            IntCmpPred::Sle => "sle",
+            IntCmpPred::Sgt => "sgt",
+            IntCmpPred::Sge => "sge",
+            IntCmpPred::Ult => "ult",
+            IntCmpPred::Ule => "ule",
+            IntCmpPred::Ugt => "ugt",
+            IntCmpPred::Uge => "uge",
+            IntCmpPred::Ne => "ne",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum FloatCmpPred {
+    Eq,
+    Lt,
+    Le,
+    Gt,
+    Ge,
+    Ne,
+}
+
+impl FloatCmpPred {
+    pub fn from_u8(v: u8) -> FloatCmpPred {
+        debug_assert!(v <= FloatCmpPred::Ne as u8, "bad float pred tag {v}");
+        unsafe { core::mem::transmute::<u8, FloatCmpPred>(v) }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            FloatCmpPred::Eq => "oeq",
+            FloatCmpPred::Lt => "olt",
+            FloatCmpPred::Le => "ole",
+            FloatCmpPred::Gt => "ogt",
+            FloatCmpPred::Ge => "oge",
+            FloatCmpPred::Ne => "une",
+        }
+    }
+}
+
 #[inline(always)]
 pub const fn width_mask(width: u8) -> u64 {
     u64::MAX >> (64 - width as u32)
@@ -232,19 +331,21 @@ pub fn int_unop(op: IntUnop, width: u8, bits: u64) -> u64 {
 }
 
 #[inline(always)]
-pub fn int_cmp3(signed: bool, width: u8, lhs: u64, rhs: u64) -> u64 {
-    let order = if signed {
-        sign_extend(width, lhs).cmp(&sign_extend(width, rhs))
-    } else {
-        let mask = width_mask(width);
-        (lhs & mask).cmp(&(rhs & mask))
+pub fn int_cmp3(op: Cmp3Op, width: u8, lhs: u64, rhs: u64) -> u64 {
+    let order = match op {
+        Cmp3Op::Scmp => sign_extend(width, lhs).cmp(&sign_extend(width, rhs)),
+        Cmp3Op::Ucmp => {
+            let mask = width_mask(width);
+            (lhs & mask).cmp(&(rhs & mask))
+        }
     };
     order as i8 as u8 as u64
 }
 
 #[inline(always)]
-pub fn int_overflows(op: OverflowOp, signed: bool, width: u8, lhs: u64, rhs: u64) -> bool {
+pub fn int_overflows(op: OverflowOp, width: u8, lhs: u64, rhs: u64) -> bool {
     let mask = width_mask(width);
+    let signed = matches!(op, OverflowOp::AddS | OverflowOp::SubS | OverflowOp::MulS);
     let (l, r, min, max) = if signed {
         let half = 1i128 << (width - 1);
         (sign_extend(width, lhs) as i128, sign_extend(width, rhs) as i128, -half, half - 1)
@@ -252,9 +353,9 @@ pub fn int_overflows(op: OverflowOp, signed: bool, width: u8, lhs: u64, rhs: u64
         ((lhs & mask) as i128, (rhs & mask) as i128, 0, mask as i128)
     };
     let exact = match op {
-        OverflowOp::Add => Some(l + r),
-        OverflowOp::Sub => Some(l - r),
-        OverflowOp::Mul => l.checked_mul(r),
+        OverflowOp::AddU | OverflowOp::AddS => Some(l + r),
+        OverflowOp::SubU | OverflowOp::SubS => Some(l - r),
+        OverflowOp::MulU | OverflowOp::MulS => l.checked_mul(r),
     };
     match exact {
         Some(v) => v < min || v > max,

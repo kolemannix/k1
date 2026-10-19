@@ -1,6 +1,8 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
-use crate::arith::{FloatOp, FloatUnop, IntOp, IntUnop, OverflowOp};
+use crate::arith::{
+    Cmp3Op, FloatCmpPred, FloatOp, FloatUnop, IntCmpPred, IntOp, IntUnop, OverflowOp,
+};
 use crate::kmem::List;
 use crate::parse::{self, NumericWidth, StringId};
 use crate::typer::scopes::ScopeId;
@@ -936,7 +938,6 @@ pub enum Inst {
     },
     IntOverflows {
         op: OverflowOp,
-        signed: bool,
         lhs: Value,
         rhs: Value,
         t: ScalarType,
@@ -948,7 +949,7 @@ pub enum Inst {
         width: u8,
     },
     IntCmp3 {
-        signed: bool,
+        op: Cmp3Op,
         lhs: Value,
         rhs: Value,
         width: u8,
@@ -1109,78 +1110,6 @@ pub fn count_uses(u: &UnitView, out: &mut IdMap<InstId, u32>) {
 }
 
 static_assert_size!(Inst, 40);
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum IntCmpPred {
-    Eq,
-    Slt,
-    Sle,
-    Sgt,
-    Sge,
-    Ult,
-    Ule,
-    Ugt,
-    Uge,
-    Ne,
-}
-
-impl IntCmpPred {
-    pub fn from_u8(v: u8) -> IntCmpPred {
-        debug_assert!(v <= IntCmpPred::Ne as u8, "bad int pred tag {v}");
-        unsafe { core::mem::transmute::<u8, IntCmpPred>(v) }
-    }
-}
-
-impl std::fmt::Display for IntCmpPred {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            IntCmpPred::Eq => "eq",
-            IntCmpPred::Slt => "slt",
-            IntCmpPred::Sle => "sle",
-            IntCmpPred::Sgt => "sgt",
-            IntCmpPred::Sge => "sge",
-            IntCmpPred::Ult => "ult",
-            IntCmpPred::Ule => "ule",
-            IntCmpPred::Ugt => "ugt",
-            IntCmpPred::Uge => "uge",
-            IntCmpPred::Ne => "ne",
-        };
-        write!(f, "{}", s)
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum FloatCmpPred {
-    Eq,
-    Lt,
-    Le,
-    Gt,
-    Ge,
-    Ne,
-}
-
-impl FloatCmpPred {
-    pub fn from_u8(v: u8) -> FloatCmpPred {
-        debug_assert!(v <= FloatCmpPred::Ne as u8, "bad float pred tag {v}");
-        unsafe { core::mem::transmute::<u8, FloatCmpPred>(v) }
-    }
-}
-
-impl std::fmt::Display for FloatCmpPred {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            FloatCmpPred::Eq => "eq",
-            FloatCmpPred::Lt => "lt",
-            FloatCmpPred::Le => "le",
-            FloatCmpPred::Gt => "gt",
-            FloatCmpPred::Ge => "ge",
-            FloatCmpPred::Ne => "ne",
-        };
-        write!(f, "{}", s)
-    }
-}
 
 pub fn get_value_kind(u: &UnitView, value: Value) -> InstKind {
     match value {
@@ -3163,76 +3092,7 @@ fn compile_ir_builtin(
             Ok(stored)
         }
         BuiltinIr::Scalar(_) => b_ice!(b, "scalar op builtins are typed as ScalarOp, not calls"),
-        BuiltinIr::FloatUnop(op) => {
-            let t = callee_fn_type.return_type.expect_scalar();
-            let v = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
-            let res = b.push_value(Inst::FloatUnop { op, v, t }, IrComment::None);
-            Ok(store_scalar_if_dst(b, dst, res))
-        }
-        BuiltinIr::FloatBinop(op) => {
-            let t = callee_fn_type.return_type.expect_scalar();
-            let lhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
-            let rhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
-            let res = b.push_value(Inst::FloatBinop { op, lhs, rhs, t }, IrComment::None);
-            Ok(store_scalar_if_dst(b, dst, res))
-        }
-        BuiltinIr::IntUnop(op) => {
-            let t = callee_fn_type.return_type.expect_scalar();
-            let v = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
-            let res = b.push_value(Inst::IntUnop { op, v, t }, IrComment::None);
-            Ok(store_scalar_if_dst(b, dst, res))
-        }
-        BuiltinIr::Compare3 => {
-            let operand_type_id = call.type_args.as_slice(&b.k1.mem)[0];
-            let t = b.get_physical_type(operand_type_id)?.expect_scalar();
-            let width = t.width_bits();
-            let lhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
-            let rhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
-            let res = match b.k1.types.get(operand_type_id) {
-                Type::Float(_) => {
-                    let gt = b.push_value(
-                        Inst::FloatCmp { lhs, rhs, pred: FloatCmpPred::Gt, width },
-                        IrComment::None,
-                    );
-                    let lt = b.push_value(
-                        Inst::FloatCmp { lhs, rhs, pred: FloatCmpPred::Lt, width },
-                        IrComment::None,
-                    );
-                    let sub =
-                        Inst::IntBinop { op: IntOp::Sub, lhs: gt, rhs: lt, t: ScalarType::I8 };
-                    b.push_value(sub, IrComment::None)
-                }
-                Type::Pointer => {
-                    let lhs = b.push_value(
-                        Inst::PtrToWord { v: lhs, to: WORD_SIZED_INT },
-                        IrComment::None,
-                    );
-                    let rhs = b.push_value(
-                        Inst::PtrToWord { v: rhs, to: WORD_SIZED_INT },
-                        IrComment::None,
-                    );
-                    let width = WORD_SIZED_INT.width_bits();
-                    b.push_value(Inst::IntCmp3 { signed: false, lhs, rhs, width }, IrComment::None)
-                }
-                Type::Integer(int_type) => {
-                    let signed = int_type.is_signed();
-                    b.push_value(Inst::IntCmp3 { signed, lhs, rhs, width }, IrComment::None)
-                }
-                Type::Char => {
-                    b.push_value(Inst::IntCmp3 { signed: false, lhs, rhs, width }, IrComment::None)
-                }
-                _ => b_ice!(b, "compare-scalars on a non-scalar type"),
-            };
-            Ok(store_scalar_if_dst(b, dst, res))
-        }
-        BuiltinIr::IntBinop(op) => {
-            let t = callee_fn_type.return_type.expect_scalar();
-            let lhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
-            let rhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
-            let res = b.push_value(Inst::IntBinop { op, lhs, rhs, t }, IrComment::None);
-            Ok(store_scalar_if_dst(b, dst, res))
-        }
-        BuiltinIr::IntOverflow { op, signed } => {
+        BuiltinIr::IntOverflow(op) => {
             let ret_pt = callee_fn_type.return_type;
             let PhysicalTypeEnum::Agg(agg_id) = ret_pt.as_enum() else {
                 b_ice!(b, "overflow result must be an aggregate");
@@ -3240,15 +3100,9 @@ fn compile_ir_builtin(
             let t = b.k1.ir.mem.get_nth(callee_fn_type.params, 0).pt.expect_scalar();
             let lhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let rhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
-            let wrapped_op = match op {
-                OverflowOp::Add => IntOp::Add,
-                OverflowOp::Sub => IntOp::Sub,
-                OverflowOp::Mul => IntOp::Mul,
-            };
             let value =
-                b.push_value(Inst::IntBinop { op: wrapped_op, lhs, rhs, t }, IrComment::None);
-            let overflowed =
-                b.push_value(Inst::IntOverflows { op, signed, lhs, rhs, t }, IrComment::None);
+                b.push_value(Inst::IntBinop { op: op.wrapping_op(), lhs, rhs, t }, IrComment::None);
+            let overflowed = b.push_value(Inst::IntOverflows { op, lhs, rhs, t }, IrComment::None);
             let result = match dst {
                 None => b.push_alloca(ret_pt, IrComment::None).as_value(),
                 Some(dst) => dst,
@@ -3258,14 +3112,6 @@ fn compile_ir_builtin(
             let overflowed_addr = b.push_struct_offset(agg_id, result, 1, IrComment::None);
             b.push_store(overflowed_addr, overflowed, IrComment::None);
             Ok(result)
-        }
-        BuiltinIr::FloatFma => {
-            let t = callee_fn_type.return_type.expect_scalar();
-            let x = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
-            let y = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
-            let z = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 2))?;
-            let res = b.push_value(Inst::FloatFma { a: x, b: y, c: z, t }, IrComment::None);
-            Ok(store_scalar_if_dst(b, dst, res))
         }
         BuiltinIr::Bitcast => {
             let from_type_id = call.type_args.as_slice(&b.k1.mem)[0];
@@ -3844,116 +3690,31 @@ fn compile_cast(
 }
 
 fn compile_scalar_op(b: &mut Builder, scalar_op: ScalarOp, dst: Option<Value>) -> K1Result<Value> {
-    let lhs = compile_expr(b, None, scalar_op.lhs)?;
-    let lhs_type = b.k1.exprs.get_type(scalar_op.lhs);
+    let mut operands: SV4<Value> = smallvec::smallvec![];
+    for index in 0..scalar_op.operands.len() as usize {
+        let operand = *b.k1.mem.get_nth(scalar_op.operands, index);
+        operands.push(compile_expr(b, None, operand)?);
+    }
+    let lhs_type = b.k1.exprs.get_type(*b.k1.mem.get_nth(scalar_op.operands, 0));
     let t = b.get_physical_type(lhs_type)?.expect_scalar();
-    let op = match (scalar_op.kind, scalar_op.rhs) {
-        (ScalarOpKind::Negate, None) => {
-            let inst = match (b.k1.types.get(lhs_type), t) {
-                (Type::Bool, _) => Inst::BoolNegate { v: lhs },
-                (_, ScalarType::F32 | ScalarType::F64) => {
-                    Inst::FloatUnop { op: FloatUnop::Neg, v: lhs, t }
-                }
-                _ => Inst::IntBinop { op: IntOp::Sub, lhs: Value::zero(t), rhs: lhs, t },
-            };
-            let res = b.push_value(inst, IrComment::None);
-            return Ok(store_scalar_if_dst(b, dst, res));
+    let width = t.width_bits();
+    let lhs = operands[0];
+    let inst = match scalar_op.kind {
+        ScalarOpKind::IntBinop(op) => Inst::IntBinop { op, lhs, rhs: operands[1], t },
+        ScalarOpKind::IntUnop(op) => Inst::IntUnop { op, v: lhs, t },
+        ScalarOpKind::IntNegate => {
+            Inst::IntBinop { op: IntOp::Sub, lhs: Value::zero(t), rhs: lhs, t }
         }
-        (ScalarOpKind::BitNot, None) => {
-            let res = b.push_value(Inst::IntUnop { op: IntUnop::Not, v: lhs, t }, IrComment::None);
-            return Ok(store_scalar_if_dst(b, dst, res));
-        }
-        (ScalarOpKind::Bitwise(op), Some(rhs_expr)) => {
-            let rhs = compile_expr(b, None, rhs_expr)?;
-            let op = match op {
-                BitwiseBinopKind::And => IntOp::And,
-                BitwiseBinopKind::Or => IntOp::Or,
-                BitwiseBinopKind::Xor => IntOp::Xor,
-                BitwiseBinopKind::ShiftLeft => IntOp::Shl,
-                BitwiseBinopKind::UnsignedShiftRight => IntOp::ShrU,
-                BitwiseBinopKind::SignedShiftRight => IntOp::ShrS,
-            };
-            let res = b.push_value(Inst::IntBinop { op, lhs, rhs, t }, IrComment::None);
-            return Ok(store_scalar_if_dst(b, dst, res));
-        }
-        (ScalarOpKind::Arith(op), Some(_)) => op,
-        _ => b_ice!(b, "scalar op arity mismatch"),
-    };
-    let rhs = compile_expr(b, None, scalar_op.rhs.unwrap())?;
-    use ArithOpClass as Class;
-    use ArithOpOp as Op;
-    let lhs_width = t.width_bits();
-    let inst = match (op.op, op.class) {
-        (Op::Add, Class::SignedInt | Class::UnsignedInt) => {
-            Inst::IntBinop { op: IntOp::Add, lhs, rhs, t }
-        }
-        (Op::Sub, Class::SignedInt | Class::UnsignedInt) => {
-            Inst::IntBinop { op: IntOp::Sub, lhs, rhs, t }
-        }
-        (Op::Mul, Class::SignedInt | Class::UnsignedInt) => {
-            Inst::IntBinop { op: IntOp::Mul, lhs, rhs, t }
-        }
-        (Op::Div, Class::UnsignedInt) => Inst::IntBinop { op: IntOp::DivU, lhs, rhs, t },
-        (Op::Div, Class::SignedInt) => Inst::IntBinop { op: IntOp::DivS, lhs, rhs, t },
-        (Op::Rem, Class::UnsignedInt) => Inst::IntBinop { op: IntOp::RemU, lhs, rhs, t },
-        (Op::Rem, Class::SignedInt) => Inst::IntBinop { op: IntOp::RemS, lhs, rhs, t },
-        (Op::Equals, Class::SignedInt | Class::UnsignedInt) => {
-            Inst::IntCmp { lhs, rhs, pred: IntCmpPred::Eq, width: lhs_width }
-        }
-        (Op::NotEquals, Class::SignedInt | Class::UnsignedInt) => {
-            Inst::IntCmp { lhs, rhs, pred: IntCmpPred::Ne, width: lhs_width }
-        }
-        (Op::Lt, Class::UnsignedInt) => {
-            Inst::IntCmp { lhs, rhs, pred: IntCmpPred::Ult, width: lhs_width }
-        }
-        (Op::Lt, Class::SignedInt) => {
-            Inst::IntCmp { lhs, rhs, pred: IntCmpPred::Slt, width: lhs_width }
-        }
-        (Op::Le, Class::UnsignedInt) => {
-            Inst::IntCmp { lhs, rhs, pred: IntCmpPred::Ule, width: lhs_width }
-        }
-        (Op::Le, Class::SignedInt) => {
-            Inst::IntCmp { lhs, rhs, pred: IntCmpPred::Sle, width: lhs_width }
-        }
-        (Op::Gt, Class::UnsignedInt) => {
-            Inst::IntCmp { lhs, rhs, pred: IntCmpPred::Ugt, width: lhs_width }
-        }
-        (Op::Gt, Class::SignedInt) => {
-            Inst::IntCmp { lhs, rhs, pred: IntCmpPred::Sgt, width: lhs_width }
-        }
-        (Op::Ge, Class::UnsignedInt) => {
-            Inst::IntCmp { lhs, rhs, pred: IntCmpPred::Uge, width: lhs_width }
-        }
-        (Op::Ge, Class::SignedInt) => {
-            Inst::IntCmp { lhs, rhs, pred: IntCmpPred::Sge, width: lhs_width }
-        }
-        (Op::Add, Class::Float) => Inst::FloatBinop { op: FloatOp::Add, lhs, rhs, t },
-        (Op::Sub, Class::Float) => Inst::FloatBinop { op: FloatOp::Sub, lhs, rhs, t },
-        (Op::Mul, Class::Float) => Inst::FloatBinop { op: FloatOp::Mul, lhs, rhs, t },
-        (Op::Div, Class::Float) => Inst::FloatBinop { op: FloatOp::Div, lhs, rhs, t },
-        (Op::Rem, Class::Float) => Inst::FloatBinop { op: FloatOp::Rem, lhs, rhs, t },
-        (Op::Equals, Class::Float) => {
-            Inst::FloatCmp { lhs, rhs, pred: FloatCmpPred::Eq, width: lhs_width }
-        }
-        (Op::NotEquals, Class::Float) => {
-            Inst::FloatCmp { lhs, rhs, pred: FloatCmpPred::Ne, width: lhs_width }
-        }
-        (Op::Lt, Class::Float) => {
-            Inst::FloatCmp { lhs, rhs, pred: FloatCmpPred::Lt, width: lhs_width }
-        }
-        (Op::Le, Class::Float) => {
-            Inst::FloatCmp { lhs, rhs, pred: FloatCmpPred::Le, width: lhs_width }
-        }
-        (Op::Gt, Class::Float) => {
-            Inst::FloatCmp { lhs, rhs, pred: FloatCmpPred::Gt, width: lhs_width }
-        }
-        (Op::Ge, Class::Float) => {
-            Inst::FloatCmp { lhs, rhs, pred: FloatCmpPred::Ge, width: lhs_width }
-        }
+        ScalarOpKind::IntCmp(pred) => Inst::IntCmp { lhs, rhs: operands[1], pred, width },
+        ScalarOpKind::IntCmp3(op) => Inst::IntCmp3 { op, lhs, rhs: operands[1], width },
+        ScalarOpKind::BoolNegate => Inst::BoolNegate { v: lhs },
+        ScalarOpKind::FloatBinop(op) => Inst::FloatBinop { op, lhs, rhs: operands[1], t },
+        ScalarOpKind::FloatUnop(op) => Inst::FloatUnop { op, v: lhs, t },
+        ScalarOpKind::FloatCmp(pred) => Inst::FloatCmp { lhs, rhs: operands[1], pred, width },
+        ScalarOpKind::FloatFma => Inst::FloatFma { a: lhs, b: operands[1], c: operands[2], t },
     };
     let res = b.push_value(inst, IrComment::None);
-    let stored = store_scalar_if_dst(b, dst, res);
-    Ok(stored)
+    Ok(store_scalar_if_dst(b, dst, res))
 }
 
 fn load_value(
@@ -5279,20 +5040,20 @@ pub fn display_inst(
             v(w, value)?;
         }
         Inst::IntBinop { op, lhs, rhs, .. } => binop(w, op.name(), lhs, rhs, &v)?,
-        Inst::IntOverflows { op, signed, lhs, rhs, .. } => {
-            write!(w, "{}{} ", op.name(), if signed { " signed" } else { "" })?;
+        Inst::IntOverflows { op, lhs, rhs, .. } => {
+            write!(w, "{} ", op.name())?;
             v(w, lhs)?;
             w.write_str(", ")?;
             v(w, rhs)?;
         }
         Inst::IntCmp { lhs, rhs, pred, .. } => {
-            write!(w, "icmp {} ", pred)?;
+            write!(w, "icmp {} ", pred.name())?;
             v(w, lhs)?;
             w.write_str(", ")?;
             v(w, rhs)?;
         }
-        Inst::IntCmp3 { signed, lhs, rhs, .. } => {
-            write!(w, "icmp3 {} ", if signed { "s" } else { "u" })?;
+        Inst::IntCmp3 { op, lhs, rhs, .. } => {
+            write!(w, "{} ", op.name())?;
             v(w, lhs)?;
             w.write_str(", ")?;
             v(w, rhs)?;
@@ -5311,7 +5072,7 @@ pub fn display_inst(
             v(w, c)?;
         }
         Inst::FloatCmp { lhs, rhs, pred, .. } => {
-            write!(w, "fcmp {} ", pred)?;
+            write!(w, "fcmp {} ", pred.name())?;
             v(w, lhs)?;
             w.write_str(", ")?;
             v(w, rhs)?;

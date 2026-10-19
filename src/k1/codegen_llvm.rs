@@ -36,7 +36,9 @@ use llvm_sys::debuginfo::LLVMDIBuilderInsertDeclareRecordAtEnd;
 
 use log::{debug, trace};
 
-use crate::arith::{FloatOp, FloatUnop, IntOp, IntUnop, OverflowOp};
+use crate::arith::{
+    Cmp3Op, FloatCmpPred, FloatOp, FloatUnop, IntCmpPred, IntOp, IntUnop, OverflowOp,
+};
 use crate::compiler::{self};
 use crate::ir::{
     BackendBuiltin, BlockId, IdMap, Inst, InstId, IrCallee, PhysicalFunctionType, Value,
@@ -4637,16 +4639,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 inst_mappings.insert(inst_id, result.as_basic_value_enum());
                 Ok(())
             }
-            Inst::IntOverflows { op, signed, lhs, rhs, .. } => {
+            Inst::IntOverflows { op, lhs, rhs, .. } => {
                 let l = self.resolve_value(inst_mappings, lhs)?.into_int_value();
                 let r = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let name = match (op, signed) {
-                    (OverflowOp::Add, false) => "llvm.uadd.with.overflow",
-                    (OverflowOp::Add, true) => "llvm.sadd.with.overflow",
-                    (OverflowOp::Sub, false) => "llvm.usub.with.overflow",
-                    (OverflowOp::Sub, true) => "llvm.ssub.with.overflow",
-                    (OverflowOp::Mul, false) => "llvm.umul.with.overflow",
-                    (OverflowOp::Mul, true) => "llvm.smul.with.overflow",
+                let name = match op {
+                    OverflowOp::AddU => "llvm.uadd.with.overflow",
+                    OverflowOp::AddS => "llvm.sadd.with.overflow",
+                    OverflowOp::SubU => "llvm.usub.with.overflow",
+                    OverflowOp::SubS => "llvm.ssub.with.overflow",
+                    OverflowOp::MulU => "llvm.umul.with.overflow",
+                    OverflowOp::MulS => "llvm.smul.with.overflow",
                 };
                 let function = Intrinsic::find(name)
                     .unwrap()
@@ -4663,10 +4665,13 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 inst_mappings.insert(inst_id, bool_value.as_basic_value_enum());
                 Ok(())
             }
-            Inst::IntCmp3 { signed, lhs, rhs, .. } => {
+            Inst::IntCmp3 { op, lhs, rhs, .. } => {
                 let l = self.resolve_value(inst_mappings, lhs)?.into_int_value();
                 let r = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let name = if signed { "llvm.scmp" } else { "llvm.ucmp" };
+                let name = match op {
+                    Cmp3Op::Ucmp => "llvm.ucmp",
+                    Cmp3Op::Scmp => "llvm.scmp",
+                };
                 let overloads =
                     [self.ctx.i8_type().as_basic_type_enum(), l.get_type().as_basic_type_enum()];
                 let order = self.build_int_intrinsic(name, &overloads, &[l.into(), r.into()]);
@@ -4675,16 +4680,16 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             Inst::IntCmp { lhs, rhs, pred, .. } => {
                 let llvm_pred = match pred {
-                    ir::IntCmpPred::Eq => IntPredicate::EQ,
-                    ir::IntCmpPred::Slt => IntPredicate::SLT,
-                    ir::IntCmpPred::Sle => IntPredicate::SLE,
-                    ir::IntCmpPred::Sgt => IntPredicate::SGT,
-                    ir::IntCmpPred::Sge => IntPredicate::SGE,
-                    ir::IntCmpPred::Ult => IntPredicate::ULT,
-                    ir::IntCmpPred::Ule => IntPredicate::ULE,
-                    ir::IntCmpPred::Ugt => IntPredicate::UGT,
-                    ir::IntCmpPred::Uge => IntPredicate::UGE,
-                    ir::IntCmpPred::Ne => IntPredicate::NE,
+                    IntCmpPred::Eq => IntPredicate::EQ,
+                    IntCmpPred::Slt => IntPredicate::SLT,
+                    IntCmpPred::Sle => IntPredicate::SLE,
+                    IntCmpPred::Sgt => IntPredicate::SGT,
+                    IntCmpPred::Sge => IntPredicate::SGE,
+                    IntCmpPred::Ult => IntPredicate::ULT,
+                    IntCmpPred::Ule => IntPredicate::ULE,
+                    IntCmpPred::Ugt => IntPredicate::UGT,
+                    IntCmpPred::Uge => IntPredicate::UGE,
+                    IntCmpPred::Ne => IntPredicate::NE,
                 };
                 let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
                 let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
@@ -4711,12 +4716,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             Inst::FloatCmp { lhs, rhs, pred, .. } => {
                 let llvm_pred = match pred {
-                    ir::FloatCmpPred::Eq => FloatPredicate::OEQ,
-                    ir::FloatCmpPred::Lt => FloatPredicate::OLT,
-                    ir::FloatCmpPred::Le => FloatPredicate::OLE,
-                    ir::FloatCmpPred::Gt => FloatPredicate::OGT,
-                    ir::FloatCmpPred::Ge => FloatPredicate::OGE,
-                    ir::FloatCmpPred::Ne => FloatPredicate::UNE,
+                    FloatCmpPred::Eq => FloatPredicate::OEQ,
+                    FloatCmpPred::Lt => FloatPredicate::OLT,
+                    FloatCmpPred::Le => FloatPredicate::OLE,
+                    FloatCmpPred::Gt => FloatPredicate::OGT,
+                    FloatCmpPred::Ge => FloatPredicate::OGE,
+                    FloatCmpPred::Ne => FloatPredicate::UNE,
                 };
                 let lhs = self.resolve_value(inst_mappings, lhs)?.into_float_value();
                 let rhs = self.resolve_value(inst_mappings, rhs)?.into_float_value();

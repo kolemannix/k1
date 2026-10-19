@@ -6,7 +6,7 @@
 
 use std::fmt::Write;
 
-use crate::arith::{FloatOp, FloatUnop};
+use crate::arith::{Cmp3Op, FloatCmpPred, FloatOp, FloatUnop, IntCmpPred, OverflowOp};
 use crate::ir;
 use crate::typer::TypedProgram;
 
@@ -290,23 +290,12 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
             write_src(w, k1, ops[2]);
             write!(w, "*{}", ops[3]).unwrap();
         }
-        Opcode::IntCmp => {
-            write!(w, "icmp.{}.{} ", crate::ir::IntCmpPred::from_u8(b as u8), a).unwrap();
-            write_dst(w, ops[0]);
-            write!(w, " <- ").unwrap();
-            write_src(w, k1, ops[1]);
-            write!(w, ", ").unwrap();
-            write_src(w, k1, ops[2]);
-        }
-        Opcode::FloatCmp => {
-            write!(w, "fcmp.{}.{} ", crate::ir::FloatCmpPred::from_u8(b as u8), a).unwrap();
-            write_dst(w, ops[0]);
-            write!(w, " <- ").unwrap();
-            write_src(w, k1, ops[1]);
-            write!(w, ", ").unwrap();
-            write_src(w, k1, ops[2]);
-        }
-        Opcode::IntAdd
+        Opcode::IntCmp
+        | Opcode::FloatCmp
+        | Opcode::IntCmp3
+        | Opcode::IntOverflows
+        | Opcode::FloatBinop
+        | Opcode::IntAdd
         | Opcode::IntSub
         | Opcode::IntMul
         | Opcode::IntDivU
@@ -317,30 +306,22 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
         | Opcode::IntMulHighS
         | Opcode::IntRotl
         | Opcode::IntRotr
-        | Opcode::IntOverflows
         | Opcode::BitAnd
         | Opcode::BitOr
         | Opcode::BitXor
         | Opcode::Shl
         | Opcode::ShrU
         | Opcode::ShrS => {
-            write!(w, "{}.{} ", op.name(), a).unwrap();
-            write_dst(w, ops[0]);
-            write!(w, " <- ").unwrap();
-            write_src(w, k1, ops[1]);
-            write!(w, ", ").unwrap();
-            write_src(w, k1, ops[2]);
-        }
-        Opcode::IntCmp3 => {
-            write!(w, "icmp3.{}.{} ", if b != 0 { "s" } else { "u" }, a).unwrap();
-            write_dst(w, ops[0]);
-            write!(w, " <- ").unwrap();
-            write_src(w, k1, ops[1]);
-            write!(w, ", ").unwrap();
-            write_src(w, k1, ops[2]);
-        }
-        Opcode::FloatBinop => {
-            write!(w, "{}.{} ", FloatOp::from_u8(b as u8).name(), a).unwrap();
+            let tag = b as u8;
+            match op {
+                Opcode::IntCmp => write!(w, "icmp.{}.{} ", IntCmpPred::from_u8(tag).name(), a),
+                Opcode::FloatCmp => write!(w, "fcmp.{}.{} ", FloatCmpPred::from_u8(tag).name(), a),
+                Opcode::IntCmp3 => write!(w, "{}.{} ", Cmp3Op::from_u8(tag).name(), a),
+                Opcode::IntOverflows => write!(w, "{}.{} ", OverflowOp::from_u8(tag).name(), a),
+                Opcode::FloatBinop => write!(w, "{}.{} ", FloatOp::from_u8(tag).name(), a),
+                _ => write!(w, "{}.{} ", op.name(), a),
+            }
+            .unwrap();
             write_dst(w, ops[0]);
             write!(w, " <- ").unwrap();
             write_src(w, k1, ops[1]);

@@ -756,10 +756,11 @@ impl TypedProgram {
             }
             TypedExpr::ScalarOp(op) => {
                 write!(w, "{}(", op.kind.kind_name())?;
-                self.display_expr_id(op.lhs, w, indentation)?;
-                if let Some(rhs) = op.rhs {
-                    w.write_str(", ")?;
-                    self.display_expr_id(rhs, w, indentation)?;
+                for (index, operand) in self.mem.getn(op.operands).iter().enumerate() {
+                    if index > 0 {
+                        w.write_str(", ")?;
+                    }
+                    self.display_expr_id(*operand, w, indentation)?;
                 }
                 w.write_str(")")
             }

@@ -19,7 +19,9 @@ pub(crate) mod type_eval;
 pub(crate) mod typed_int_value;
 pub(crate) mod types;
 
-use crate::arith::{FloatOp, FloatUnop, IntOp, IntUnop, OverflowOp};
+use crate::arith::{
+    Cmp3Op, FloatCmpPred, FloatOp, FloatUnop, IntCmpPred, IntOp, IntUnop, OverflowOp,
+};
 use crate::ir::{AtomicOrderingIr, BackendBuiltin, IrUnitId};
 use crate::typer::megarepl::MegareplState;
 use crate::typer::trace::TraceKind;
@@ -1842,142 +1844,33 @@ impl Namespaces {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BitwiseBinopKind {
-    And,
-    Or,
-    Xor,
-    ShiftLeft,
-    SignedShiftRight,
-    UnsignedShiftRight,
-}
-
-impl BitwiseBinopKind {
-    pub fn kind_name(&self) -> &'static str {
-        match self {
-            BitwiseBinopKind::And => "bitwise_and",
-            BitwiseBinopKind::Or => "bitwise_or",
-            BitwiseBinopKind::Xor => "bitwise_xor",
-            BitwiseBinopKind::ShiftLeft => "bitwise_shift_left",
-            BitwiseBinopKind::SignedShiftRight => "bitwise_signed_shr",
-            BitwiseBinopKind::UnsignedShiftRight => "bitwise_unsigned_shl",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ArithOpClass {
-    Float,
-    UnsignedInt,
-    SignedInt,
-}
-
-impl ArithOpClass {
-    pub fn is_signed_int(self) -> bool {
-        matches!(self, ArithOpClass::SignedInt)
-    }
-    pub fn from_int_type(i: IntegerType) -> Self {
-        if i.is_signed() { ArithOpClass::SignedInt } else { ArithOpClass::UnsignedInt }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ArithOpOp {
-    Equals,
-    NotEquals,
-    Add,
-    Sub,
-    Mul,
-    Div,
-    Rem,
-    Lt,
-    Le,
-    Gt,
-    Ge,
-}
-
-impl ArithOpOp {
-    pub fn kind_name(&self) -> &'static str {
-        match self {
-            ArithOpOp::Equals => "eq",
-            ArithOpOp::NotEquals => "ne",
-            ArithOpOp::Add => "add",
-            ArithOpOp::Sub => "sub",
-            ArithOpOp::Mul => "mul",
-            ArithOpOp::Div => "div",
-            ArithOpOp::Rem => "rem",
-            ArithOpOp::Lt => "lt",
-            ArithOpOp::Le => "le",
-            ArithOpOp::Gt => "gt",
-            ArithOpOp::Ge => "ge",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ArithOpKind {
-    pub class: ArithOpClass,
-    pub op: ArithOpOp,
-}
-
-impl ArithOpKind {
-    pub fn kind_name(&self) -> &'static str {
-        match self.class {
-            ArithOpClass::Float => match self.op {
-                ArithOpOp::Equals => "float_eq",
-                ArithOpOp::NotEquals => "float_ne",
-                ArithOpOp::Add => "float_add",
-                ArithOpOp::Sub => "float_sub",
-                ArithOpOp::Mul => "float_mul",
-                ArithOpOp::Div => "float_div",
-                ArithOpOp::Rem => "float_rem",
-                ArithOpOp::Lt => "float_lt",
-                ArithOpOp::Le => "float_le",
-                ArithOpOp::Gt => "float_gt",
-                ArithOpOp::Ge => "float_ge",
-            },
-            ArithOpClass::UnsignedInt | ArithOpClass::SignedInt => match self.op {
-                ArithOpOp::Equals => "int_eq",
-                ArithOpOp::NotEquals => "int_ne",
-                ArithOpOp::Add => "int_add",
-                ArithOpOp::Sub => "int_sub",
-                ArithOpOp::Mul => "int_mul",
-                ArithOpOp::Div => "int_div",
-                ArithOpOp::Rem => "int_rem",
-                ArithOpOp::Lt => "int_lt",
-                ArithOpOp::Le => "int_le",
-                ArithOpOp::Gt => "int_gt",
-                ArithOpOp::Ge => "int_ge",
-            },
-        }
-    }
-
-    pub fn uint(op: ArithOpOp) -> Self {
-        ArithOpKind { class: ArithOpClass::UnsignedInt, op }
-    }
-    pub fn sint(op: ArithOpOp) -> Self {
-        ArithOpKind { class: ArithOpClass::SignedInt, op }
-    }
-    pub fn float(op: ArithOpOp) -> Self {
-        ArithOpKind { class: ArithOpClass::Float, op }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum ScalarOpKind {
-    Arith(ArithOpKind),
-    Bitwise(BitwiseBinopKind),
-    Negate,
-    BitNot,
+    IntBinop(IntOp),
+    IntUnop(IntUnop),
+    IntNegate,
+    IntCmp(IntCmpPred),
+    IntCmp3(Cmp3Op),
+    BoolNegate,
+    FloatBinop(FloatOp),
+    FloatUnop(FloatUnop),
+    FloatCmp(FloatCmpPred),
+    FloatFma,
 }
 
 impl ScalarOpKind {
     pub fn kind_name(&self) -> &'static str {
         match self {
-            ScalarOpKind::Arith(op) => op.kind_name(),
-            ScalarOpKind::Bitwise(op) => op.kind_name(),
-            ScalarOpKind::Negate => "negate",
-            ScalarOpKind::BitNot => "bit_not",
+            ScalarOpKind::IntBinop(op) => op.name(),
+            ScalarOpKind::IntUnop(op) => op.name(),
+            ScalarOpKind::IntNegate => "ineg",
+            ScalarOpKind::IntCmp(pred) => pred.name(),
+            ScalarOpKind::IntCmp3(op) => op.name(),
+            ScalarOpKind::BoolNegate => "bool_not",
+            ScalarOpKind::FloatBinop(op) => op.name(),
+            ScalarOpKind::FloatUnop(op) => op.name(),
+            ScalarOpKind::FloatCmp(pred) => pred.name(),
+            ScalarOpKind::FloatFma => "fma",
         }
     }
 }
@@ -1985,8 +1878,7 @@ impl ScalarOpKind {
 #[derive(Clone, Copy)]
 pub struct ScalarOp {
     pub kind: ScalarOpKind,
-    pub lhs: TypedExprId,
-    pub rhs: Option<TypedExprId>,
+    pub operands: PermSlice<TypedExprId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -2065,13 +1957,7 @@ pub enum BuiltinIr {
     Unreachable,
     BakeStaticValue,
     Scalar(ScalarOpKind),
-    FloatUnop(FloatUnop),
-    FloatBinop(FloatOp),
-    FloatFma,
-    IntUnop(IntUnop),
-    IntBinop(IntOp),
-    IntOverflow { op: OverflowOp, signed: bool },
-    Compare3,
+    IntOverflow(OverflowOp),
     Bitcast,
     PointerIndex,
     VolatileLoad,
@@ -2155,13 +2041,7 @@ impl BuiltinIr {
             BuiltinIr::Unreachable => "unreachable",
             BuiltinIr::BakeStaticValue => "bake_static_value",
             BuiltinIr::Scalar(kind) => kind.kind_name(),
-            BuiltinIr::FloatUnop(op) => op.name(),
-            BuiltinIr::FloatBinop(op) => op.name(),
-            BuiltinIr::FloatFma => "fma",
-            BuiltinIr::IntUnop(_) => "int_unop",
-            BuiltinIr::IntBinop(_) => "int_binop",
-            BuiltinIr::Compare3 => "compare3",
-            BuiltinIr::IntOverflow { op, .. } => op.name(),
+            BuiltinIr::IntOverflow(op) => op.name(),
             BuiltinIr::Bitcast => "bitcast",
             BuiltinIr::PointerIndex => "pointer_index",
             BuiltinIr::VolatileLoad => "volatile_load",
@@ -6470,7 +6350,10 @@ impl TypedProgram {
                 if self.exprs.get_type(base) == NEVER_TYPE_ID {
                     Ok(base)
                 } else {
-                    let op = ScalarOp { kind: ScalarOpKind::Negate, lhs: base, rhs: None };
+                    let op = ScalarOp {
+                        kind: ScalarOpKind::BoolNegate,
+                        operands: self.mem.pushn(&[base]),
+                    };
                     Ok(self.exprs.add(TypedExpr::ScalarOp(op), BOOL_TYPE_ID, span))
                 }
             }
@@ -8410,9 +8293,8 @@ impl TypedProgram {
             let index_value = self.synth_variable_ref(index_variable.variable_id);
             let add_operation = self.exprs.add(
                 TypedExpr::ScalarOp(ScalarOp {
-                    kind: ScalarOpKind::Arith(ArithOpKind::sint(ArithOpOp::Add)),
-                    lhs: index_value,
-                    rhs: Some(one_expr),
+                    kind: ScalarOpKind::IntBinop(IntOp::Add),
+                    operands: self.mem.pushn(&[index_value, one_expr]),
                 }),
                 I64_TYPE_ID,
                 iterable_span,
@@ -11967,8 +11849,7 @@ impl TypedProgram {
         span: Span,
     ) -> TypedExprId {
         if let Some(Builtin::Ir(BuiltinIr::Scalar(kind))) = self.get_callee_builtin(&call.callee) {
-            let args = self.mem.getn(call.args);
-            let op = ScalarOp { kind, lhs: args[0], rhs: args.get(1).copied() };
+            let op = ScalarOp { kind, operands: call.args };
             return self.exprs.add(TypedExpr::ScalarOp(op), return_type, span);
         }
         let call_id = self.calls.add(call);
@@ -13495,34 +13376,29 @@ impl TypedProgram {
         fn_name: StringId,
         namespace_chain: Dlist<StringId, MemTmp>,
         ability_id: Option<AbilityId>,
-        ability_impl_self_type: Option<TypeId>,
+        self_type: Option<TypeId>,
     ) -> Result<Builtin, String> {
         let fn_name_str = self.ast.idents.get_string(fn_name);
         let second =
             self.tmp.dlist_nth_data_opt(namespace_chain, 2).map(|node| self.ident_str(*node));
         let third =
             self.tmp.dlist_nth_data_opt(namespace_chain, 3).map(|node| self.ident_str(*node));
+        let t = self_type.map(|t| self.types.get(t));
+        let int_type = t.and_then(|t| t.as_integer());
+        let is_integer = int_type.is_some();
+        let signed = int_type.is_some_and(|i| i.is_signed());
+        let is_float = t.is_some_and(|t| t.as_float().is_some());
+        use ScalarOpKind as K;
+        macro_rules! mk_scalar {
+            ($e: expr) => {
+                Some(Builtin::Ir(BuiltinIr::Scalar($e)))
+            };
+        }
         let result = if let Some(ability_id) = ability_id {
-            if ability_impl_self_type
-                .is_some_and(|t| !self.get_type_variable_counts(t).is_inhabited)
-            {
+            if self_type.is_some_and(|t| !self.get_type_variable_counts(t).is_inhabited) {
                 return Ok(Builtin::Ir(BuiltinIr::Unreachable));
             }
             let base_ability_id = self.abilities.get(ability_id).base_ability_id;
-            use ArithOpKind as OpKind;
-            use ArithOpOp as Op;
-            macro_rules! mk_arith {
-                ($e: expr) => {
-                    Some(Builtin::Ir(BuiltinIr::Scalar(ScalarOpKind::Arith($e))))
-                };
-            }
-            macro_rules! mk_bitwise {
-                ($e: expr) => {
-                    Some(Builtin::Ir(BuiltinIr::Scalar(ScalarOpKind::Bitwise($e))))
-                };
-            }
-            let t = ability_impl_self_type.map(|t| self.types.get(t));
-            let is_integer = t.is_some_and(|t| t.as_integer().is_some());
             match (base_ability_id, fn_name_str) {
                 (ABILITY_ID_ENUM, "enum-value") => {
                     Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::EnumAbilityGetValue))
@@ -13545,23 +13421,27 @@ impl TypedProgram {
                     Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::SumAbilityGetName))
                 }
                 (ABILITY_ID_EQUALS, "equals" | "not-equals") => {
-                    let op = if fn_name_str == "equals" { Op::Equals } else { Op::NotEquals };
+                    let is_equals = fn_name_str == "equals";
                     match t {
-                        Some(Type::Char) | Some(Type::Bool) | Some(Type::Pointer) => {
-                            mk_arith!(OpKind::uint(op))
+                        Some(Type::Char | Type::Bool | Type::Integer(_)) => {
+                            mk_scalar!(K::IntCmp(if is_equals {
+                                IntCmpPred::Eq
+                            } else {
+                                IntCmpPred::Ne
+                            }))
                         }
-                        Some(Type::Integer(i)) => {
-                            let o = if i.is_signed() { OpKind::sint(op) } else { OpKind::uint(op) };
-                            mk_arith!(o)
-                        }
-                        Some(Type::Float(_)) => mk_arith!(OpKind::float(op)),
-                        Some(Type::Enum(_)) if op == Op::Equals => {
+                        Some(Type::Float(_)) => mk_scalar!(K::FloatCmp(if is_equals {
+                            FloatCmpPred::Eq
+                        } else {
+                            FloatCmpPred::Ne
+                        })),
+                        Some(Type::Enum(_)) if is_equals => {
                             Some(Builtin::TyperInline(BuiltinTyperInline::EnumEquals))
                         }
-                        Some(Type::Sum(_)) if op == Op::Equals => {
+                        Some(Type::Sum(_)) if is_equals => {
                             Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::SumEquals))
                         }
-                        Some(Type::Struct(_)) if op == Op::Equals => {
+                        Some(Type::Struct(_)) if is_equals => {
                             Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::StructEquals))
                         }
                         _ => None,
@@ -13579,29 +13459,17 @@ impl TypedProgram {
                     }
                     _ => None,
                 },
-                (ABILITY_ID_BITWISE, "bit-not") if is_integer => {
-                    Some(Builtin::Ir(BuiltinIr::Scalar(ScalarOpKind::BitNot)))
-                }
-                (ABILITY_ID_BITWISE, "bit-and") if is_integer => {
-                    mk_bitwise!(BitwiseBinopKind::And)
-                }
-                (ABILITY_ID_BITWISE, "bit-or") if is_integer => {
-                    mk_bitwise!(BitwiseBinopKind::Or)
-                }
-                (ABILITY_ID_BITWISE, "xor") if is_integer => {
-                    mk_bitwise!(BitwiseBinopKind::Xor)
-                }
-                (ABILITY_ID_BITWISE, "shift-left") if is_integer => {
-                    mk_bitwise!(BitwiseBinopKind::ShiftLeft)
-                }
-                (ABILITY_ID_BITWISE, "shift-right") if is_integer => {
-                    let int_type = t.unwrap().expect_integer();
-                    if int_type.is_signed() {
-                        mk_bitwise!(BitwiseBinopKind::SignedShiftRight)
-                    } else {
-                        mk_bitwise!(BitwiseBinopKind::UnsignedShiftRight)
+                (ABILITY_ID_BITWISE, bitwise_fn) if is_integer => match bitwise_fn {
+                    "bit-not" => mk_scalar!(K::IntUnop(IntUnop::Not)),
+                    "bit-and" => mk_scalar!(K::IntBinop(IntOp::And)),
+                    "bit-or" => mk_scalar!(K::IntBinop(IntOp::Or)),
+                    "xor" => mk_scalar!(K::IntBinop(IntOp::Xor)),
+                    "shift-left" => mk_scalar!(K::IntBinop(IntOp::Shl)),
+                    "shift-right" => {
+                        mk_scalar!(K::IntBinop(if signed { IntOp::ShrS } else { IntOp::ShrU }))
                     }
-                }
+                    _ => None,
+                },
                 (ABILITY_ID_BITWISE, bitwise_fn) if matches!(t, Some(Type::Vector(_))) => {
                     let op = match bitwise_fn {
                         "bit-not" => Some(VecOpKind::BitNot),
@@ -13615,247 +13483,218 @@ impl TypedProgram {
                     op.map(|op| Builtin::Ir(BuiltinIr::VectorOp(op)))
                 }
                 (ABILITY_ID_ADD, "add") => match t {
-                    Some(Type::Integer(i)) => {
-                        // Even though signedness is irrelevant here, we still set it properly
-                        // just in case it ever is, (for example if we want to make signed wrap UB
-                        // instead of wrapping)
-                        if i.is_signed() {
-                            mk_arith!(ArithOpKind::sint(Op::Add))
-                        } else {
-                            mk_arith!(ArithOpKind::uint(Op::Add))
-                        }
-                    }
-                    Some(Type::Float(_)) => {
-                        mk_arith!(ArithOpKind::float(Op::Add))
-                    }
+                    Some(Type::Integer(_)) => mk_scalar!(K::IntBinop(IntOp::Add)),
+                    Some(Type::Float(_)) => mk_scalar!(K::FloatBinop(FloatOp::Add)),
                     Some(Type::Vector(_)) => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Add))),
                     _ => None,
                 },
                 (ABILITY_ID_SUB, "sub") => match t {
-                    Some(Type::Integer(i)) => {
-                        if i.is_signed() {
-                            mk_arith!(ArithOpKind::sint(Op::Sub))
-                        } else {
-                            mk_arith!(ArithOpKind::uint(Op::Sub))
-                        }
-                    }
-                    Some(Type::Float(_)) => {
-                        mk_arith!(ArithOpKind::float(Op::Sub))
-                    }
+                    Some(Type::Integer(_)) => mk_scalar!(K::IntBinop(IntOp::Sub)),
+                    Some(Type::Float(_)) => mk_scalar!(K::FloatBinop(FloatOp::Sub)),
                     Some(Type::Vector(_)) => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Sub))),
                     _ => None,
                 },
                 (ABILITY_ID_MUL, "mul") => match t {
-                    Some(Type::Integer(i)) => {
-                        if i.is_signed() {
-                            mk_arith!(ArithOpKind::sint(Op::Mul))
-                        } else {
-                            mk_arith!(ArithOpKind::uint(Op::Mul))
-                        }
-                    }
-                    Some(Type::Float(_)) => {
-                        mk_arith!(ArithOpKind::float(Op::Mul))
-                    }
+                    Some(Type::Integer(_)) => mk_scalar!(K::IntBinop(IntOp::Mul)),
+                    Some(Type::Float(_)) => mk_scalar!(K::FloatBinop(FloatOp::Mul)),
                     Some(Type::Vector(_)) => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Mul))),
                     _ => None,
                 },
                 (ABILITY_ID_DIV, "div") => match t {
-                    Some(Type::Integer(i)) => {
-                        if i.is_signed() {
-                            mk_arith!(ArithOpKind::sint(Op::Div))
-                        } else {
-                            mk_arith!(ArithOpKind::uint(Op::Div))
-                        }
+                    Some(Type::Integer(_)) => {
+                        mk_scalar!(K::IntBinop(if signed { IntOp::DivS } else { IntOp::DivU }))
                     }
-                    Some(Type::Float(_)) => {
-                        mk_arith!(ArithOpKind::float(Op::Div))
-                    }
-                    _ => None,
-                },
-                (ABILITY_ID_NEG, "negated") => match t {
-                    Some(Type::Bool) | Some(Type::Integer(_)) | Some(Type::Float(_)) => {
-                        Some(Builtin::Ir(BuiltinIr::Scalar(ScalarOpKind::Negate)))
-                    }
+                    Some(Type::Float(_)) => mk_scalar!(K::FloatBinop(FloatOp::Div)),
                     _ => None,
                 },
                 (ABILITY_ID_REM, "rem") => match t {
-                    Some(Type::Integer(i)) => {
-                        if i.is_signed() {
-                            mk_arith!(ArithOpKind::sint(Op::Rem))
-                        } else {
-                            mk_arith!(ArithOpKind::uint(Op::Rem))
-                        }
+                    Some(Type::Integer(_)) => {
+                        mk_scalar!(K::IntBinop(if signed { IntOp::RemS } else { IntOp::RemU }))
                     }
-                    Some(Type::Float(_)) => {
-                        mk_arith!(ArithOpKind::float(Op::Rem))
-                    }
+                    Some(Type::Float(_)) => mk_scalar!(K::FloatBinop(FloatOp::Rem)),
+                    _ => None,
+                },
+                (ABILITY_ID_NEG, "negated") => match t {
+                    Some(Type::Bool) => mk_scalar!(K::BoolNegate),
+                    Some(Type::Integer(_)) => mk_scalar!(K::IntNegate),
+                    Some(Type::Float(_)) => mk_scalar!(K::FloatUnop(FloatUnop::Neg)),
                     _ => None,
                 },
                 (ABILITY_ID_INT_BITS, bits_fn) if is_integer => match bits_fn {
-                    "trailing-zeros" => Some(Builtin::Ir(BuiltinIr::IntUnop(IntUnop::Ctz))),
-                    "leading-zeros" => Some(Builtin::Ir(BuiltinIr::IntUnop(IntUnop::Clz))),
-                    "count-ones" => Some(Builtin::Ir(BuiltinIr::IntUnop(IntUnop::Popcount))),
-                    "swap-bytes" => Some(Builtin::Ir(BuiltinIr::IntUnop(IntUnop::Bswap))),
-                    "rotate-left" => Some(Builtin::Ir(BuiltinIr::IntBinop(IntOp::RotateLeft))),
-                    "rotate-right" => Some(Builtin::Ir(BuiltinIr::IntBinop(IntOp::RotateRight))),
+                    "trailing-zeros" => mk_scalar!(K::IntUnop(IntUnop::Ctz)),
+                    "leading-zeros" => mk_scalar!(K::IntUnop(IntUnop::Clz)),
+                    "count-ones" => mk_scalar!(K::IntUnop(IntUnop::Popcount)),
+                    "swap-bytes" => mk_scalar!(K::IntUnop(IntUnop::Bswap)),
+                    "rotate-left" => mk_scalar!(K::IntBinop(IntOp::RotateLeft)),
+                    "rotate-right" => mk_scalar!(K::IntBinop(IntOp::RotateRight)),
                     _ => None,
                 },
                 (ABILITY_ID_OVERFLOW_ARITH, overflow_fn) if is_integer => {
-                    let signed = t.unwrap().expect_integer().is_signed();
-                    let op = match overflow_fn {
-                        "add-overflow" => Some(OverflowOp::Add),
-                        "sub-overflow" => Some(OverflowOp::Sub),
-                        "mul-overflow" => Some(OverflowOp::Mul),
+                    let op = match (overflow_fn, signed) {
+                        ("add-overflow", false) => Some(OverflowOp::AddU),
+                        ("add-overflow", true) => Some(OverflowOp::AddS),
+                        ("sub-overflow", false) => Some(OverflowOp::SubU),
+                        ("sub-overflow", true) => Some(OverflowOp::SubS),
+                        ("mul-overflow", false) => Some(OverflowOp::MulU),
+                        ("mul-overflow", true) => Some(OverflowOp::MulS),
                         _ => None,
                     };
-                    op.map(|op| Builtin::Ir(BuiltinIr::IntOverflow { op, signed }))
+                    op.map(|op| Builtin::Ir(BuiltinIr::IntOverflow(op)))
                 }
-                (ABILITY_ID_SCALAR_CMP, _) => {
-                    let class = if let Some(Type::Integer(i)) = t {
-                        Some(ArithOpClass::from_int_type(*i))
-                    } else if let Some(Type::Float(_)) = t {
-                        Some(ArithOpClass::Float)
-                    } else {
-                        None
-                    };
-                    match (class, fn_name_str) {
-                        (None, _) => None,
-                        (Some(class), "lt") => mk_arith!(OpKind { class, op: Op::Lt }),
-                        (Some(class), "le") => mk_arith!(OpKind { class, op: Op::Le }),
-                        (Some(class), "gt") => mk_arith!(OpKind { class, op: Op::Gt }),
-                        (Some(class), "ge") => mk_arith!(OpKind { class, op: Op::Ge }),
-                        (Some(ArithOpClass::Float), "min") => {
-                            Some(Builtin::Ir(BuiltinIr::FloatBinop(FloatOp::Min)))
-                        }
-                        (Some(ArithOpClass::Float), "max") => {
-                            Some(Builtin::Ir(BuiltinIr::FloatBinop(FloatOp::Max)))
-                        }
-                        _ => None,
-                    }
+                (ABILITY_ID_SCALAR_CMP, cmp_fn) if is_integer => match (cmp_fn, signed) {
+                    ("lt", true) => mk_scalar!(K::IntCmp(IntCmpPred::Slt)),
+                    ("lt", false) => mk_scalar!(K::IntCmp(IntCmpPred::Ult)),
+                    ("le", true) => mk_scalar!(K::IntCmp(IntCmpPred::Sle)),
+                    ("le", false) => mk_scalar!(K::IntCmp(IntCmpPred::Ule)),
+                    ("gt", true) => mk_scalar!(K::IntCmp(IntCmpPred::Sgt)),
+                    ("gt", false) => mk_scalar!(K::IntCmp(IntCmpPred::Ugt)),
+                    ("ge", true) => mk_scalar!(K::IntCmp(IntCmpPred::Sge)),
+                    ("ge", false) => mk_scalar!(K::IntCmp(IntCmpPred::Uge)),
+                    _ => None,
+                },
+                (ABILITY_ID_SCALAR_CMP, cmp_fn) if is_float => match cmp_fn {
+                    "lt" => mk_scalar!(K::FloatCmp(FloatCmpPred::Lt)),
+                    "le" => mk_scalar!(K::FloatCmp(FloatCmpPred::Le)),
+                    "gt" => mk_scalar!(K::FloatCmp(FloatCmpPred::Gt)),
+                    "ge" => mk_scalar!(K::FloatCmp(FloatCmpPred::Ge)),
+                    "min" => mk_scalar!(K::FloatBinop(FloatOp::Min)),
+                    "max" => mk_scalar!(K::FloatBinop(FloatOp::Max)),
+                    _ => None,
+                },
+                (ABILITY_ID_COMPARABLE, "compare") if is_integer => {
+                    mk_scalar!(K::IntCmp3(if signed { Cmp3Op::Scmp } else { Cmp3Op::Ucmp }))
                 }
                 _ => None,
             }
         } else {
-            #[allow(clippy::match_single_binding)]
-            match second {
-                // _root
-                None => match fn_name_str {
-                    "discard" => Some(Builtin::TyperInline(BuiltinTyperInline::Discard)),
-                    "compare-scalars" => Some(Builtin::Ir(BuiltinIr::Compare3)),
-                    _ => None,
-                },
-                Some("mem") => match fn_name_str {
-                    "copy-memcpy" => Some(Builtin::Backend(BackendBuiltin::MemCopy)),
-                    "move-memmove" => Some(Builtin::Backend(BackendBuiltin::MemMove)),
-                    "set-memset" => Some(Builtin::Backend(BackendBuiltin::MemSet)),
-                    "equals-memcmp" => Some(Builtin::Backend(BackendBuiltin::MemEquals)),
-                    "bitcast" => Some(Builtin::Ir(BuiltinIr::Bitcast)),
-                    "load-volatile" => Some(Builtin::Ir(BuiltinIr::VolatileLoad)),
-                    "store-volatile" => Some(Builtin::Ir(BuiltinIr::VolatileStore)),
-                    _ => None,
-                },
-                Some("types") => match (third, fn_name_str) {
-                    (None, "id") => Some(Builtin::TyperInline(BuiltinTyperInline::TypeId)),
-                    (None, "size") => Some(Builtin::TyperInline(BuiltinTyperInline::TypeSize)),
-                    (None, "stride") => Some(Builtin::TyperInline(BuiltinTyperInline::TypeStride)),
-                    (None, "align") => Some(Builtin::TyperInline(BuiltinTyperInline::TypeAlign)),
-                    (Some("type-id"), "info") => Some(Builtin::Backend(BackendBuiltin::TypeInfo)),
-                    (None, "make-struct") => Some(Builtin::Backend(BackendBuiltin::MakeStruct)),
-                    (None, "make-either") => Some(Builtin::Backend(BackendBuiltin::MakeEither)),
-                    (None, "make-reference") => {
-                        Some(Builtin::Backend(BackendBuiltin::MakeReference))
-                    }
-                    (None, "make-array") => Some(Builtin::Backend(BackendBuiltin::MakeArray)),
-                    (None, "make-fn") => Some(Builtin::Backend(BackendBuiltin::MakeFn)),
-                    (None, "make-instance") => Some(Builtin::Backend(BackendBuiltin::MakeInstance)),
-                    _ => None,
-                },
-                Some("string") => None,
-                Some("list") => None,
-                Some("char") => None,
-                Some("ptr") => match fn_name_str {
-                    "ref-at" => Some(Builtin::Ir(BuiltinIr::PointerIndex)),
-                    _ => None,
-                },
-                Some(int_ns @ ("u64" | "i64")) => match fn_name_str {
-                    "mul-high" => Some(Builtin::Ir(BuiltinIr::IntBinop(if int_ns == "i64" {
+            match t {
+                Some(Type::Integer(_)) => match fn_name_str {
+                    "mul-high" => mk_scalar!(K::IntBinop(if signed {
                         IntOp::MulHighS
                     } else {
                         IntOp::MulHighU
-                    }))),
+                    })),
                     _ => None,
                 },
-                Some("f64" | "f32") => match fn_name_str {
-                    "sqrt" => Some(Builtin::Ir(BuiltinIr::FloatUnop(FloatUnop::Sqrt))),
-                    "floor" => Some(Builtin::Ir(BuiltinIr::FloatUnop(FloatUnop::Floor))),
-                    "ceil" => Some(Builtin::Ir(BuiltinIr::FloatUnop(FloatUnop::Ceil))),
-                    "round-to-zero" => {
-                        Some(Builtin::Ir(BuiltinIr::FloatUnop(FloatUnop::RoundToZero)))
-                    }
-                    "round-even" => Some(Builtin::Ir(BuiltinIr::FloatUnop(FloatUnop::RoundEven))),
-                    "fma" => Some(Builtin::Ir(BuiltinIr::FloatFma)),
+                Some(Type::Float(_)) => match fn_name_str {
+                    "sqrt" => mk_scalar!(K::FloatUnop(FloatUnop::Sqrt)),
+                    "floor" => mk_scalar!(K::FloatUnop(FloatUnop::Floor)),
+                    "ceil" => mk_scalar!(K::FloatUnop(FloatUnop::Ceil)),
+                    "round-to-zero" => mk_scalar!(K::FloatUnop(FloatUnop::RoundToZero)),
+                    "round-even" => mk_scalar!(K::FloatUnop(FloatUnop::RoundEven)),
+                    "fma" => mk_scalar!(K::FloatFma),
                     _ => None,
                 },
-                Some("vector") => match fn_name_str {
-                    "splat" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Splat))),
-                    "load-unchecked" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Load))),
-                    "store-unchecked" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Store))),
-                    "get-lane" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::GetLane))),
-                    "with-lane" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::WithLane))),
-                    "eq-lanes" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::EqLanes))),
-                    "lt-lanes" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::LtLanes))),
-                    "shuffle-bytes" => {
-                        Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::ShuffleBytes)))
-                    }
-                    "shuffle" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Shuffle))),
-                    "to-mask" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::ToMask))),
-                    "reduce-or" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::ReduceOr))),
+                Some(Type::Pointer) => match fn_name_str {
+                    "ref-at" => Some(Builtin::Ir(BuiltinIr::PointerIndex)),
                     _ => None,
                 },
-                Some("atomic") => match fn_name_str {
-                    "load" => Some(Builtin::Ir(BuiltinIr::AtomicLoad)),
-                    "store" => Some(Builtin::Ir(BuiltinIr::AtomicStore)),
-                    "xchg" => Some(Builtin::Ir(BuiltinIr::AtomicRmw(AtomicRmwOp::Xchg))),
-                    "fetch-add" => Some(Builtin::Ir(BuiltinIr::AtomicRmw(AtomicRmwOp::Add))),
-                    "fetch-sub" => Some(Builtin::Ir(BuiltinIr::AtomicRmw(AtomicRmwOp::Sub))),
-                    "fetch-and" => Some(Builtin::Ir(BuiltinIr::AtomicRmw(AtomicRmwOp::And))),
-                    "fetch-or" => Some(Builtin::Ir(BuiltinIr::AtomicRmw(AtomicRmwOp::Or))),
-                    "fetch-xor" => Some(Builtin::Ir(BuiltinIr::AtomicRmw(AtomicRmwOp::Xor))),
-                    "fetch-min" => Some(Builtin::Ir(BuiltinIr::AtomicRmw(AtomicRmwOp::Min))),
-                    "fetch-max" => Some(Builtin::Ir(BuiltinIr::AtomicRmw(AtomicRmwOp::Max))),
-                    "cmpxchg" => Some(Builtin::Ir(BuiltinIr::AtomicCmpxchg { weak: false })),
-                    "cmpxchg-weak" => Some(Builtin::Ir(BuiltinIr::AtomicCmpxchg { weak: true })),
-                    "fence" => Some(Builtin::Ir(BuiltinIr::AtomicFence)),
-                    _ => None,
+                _ => match second {
+                    None => match fn_name_str {
+                        "discard" => Some(Builtin::TyperInline(BuiltinTyperInline::Discard)),
+                        _ => None,
+                    },
+                    Some("mem") => match fn_name_str {
+                        "copy-memcpy" => Some(Builtin::Backend(BackendBuiltin::MemCopy)),
+                        "move-memmove" => Some(Builtin::Backend(BackendBuiltin::MemMove)),
+                        "set-memset" => Some(Builtin::Backend(BackendBuiltin::MemSet)),
+                        "equals-memcmp" => Some(Builtin::Backend(BackendBuiltin::MemEquals)),
+                        "bitcast" => Some(Builtin::Ir(BuiltinIr::Bitcast)),
+                        "load-volatile" => Some(Builtin::Ir(BuiltinIr::VolatileLoad)),
+                        "store-volatile" => Some(Builtin::Ir(BuiltinIr::VolatileStore)),
+                        _ => None,
+                    },
+                    Some("types") => match (third, fn_name_str) {
+                        (None, "id") => Some(Builtin::TyperInline(BuiltinTyperInline::TypeId)),
+                        (None, "size") => Some(Builtin::TyperInline(BuiltinTyperInline::TypeSize)),
+                        (None, "stride") => {
+                            Some(Builtin::TyperInline(BuiltinTyperInline::TypeStride))
+                        }
+                        (None, "align") => {
+                            Some(Builtin::TyperInline(BuiltinTyperInline::TypeAlign))
+                        }
+                        (Some("type-id"), "info") => {
+                            Some(Builtin::Backend(BackendBuiltin::TypeInfo))
+                        }
+                        (None, "make-struct") => Some(Builtin::Backend(BackendBuiltin::MakeStruct)),
+                        (None, "make-either") => Some(Builtin::Backend(BackendBuiltin::MakeEither)),
+                        (None, "make-reference") => {
+                            Some(Builtin::Backend(BackendBuiltin::MakeReference))
+                        }
+                        (None, "make-array") => Some(Builtin::Backend(BackendBuiltin::MakeArray)),
+                        (None, "make-fn") => Some(Builtin::Backend(BackendBuiltin::MakeFn)),
+                        (None, "make-instance") => {
+                            Some(Builtin::Backend(BackendBuiltin::MakeInstance))
+                        }
+                        _ => None,
+                    },
+                    Some("vector") => match fn_name_str {
+                        "splat" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Splat))),
+                        "load-unchecked" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Load))),
+                        "store-unchecked" => {
+                            Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Store)))
+                        }
+                        "get-lane" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::GetLane))),
+                        "with-lane" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::WithLane))),
+                        "eq-lanes" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::EqLanes))),
+                        "lt-lanes" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::LtLanes))),
+                        "shuffle-bytes" => {
+                            Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::ShuffleBytes)))
+                        }
+                        "shuffle" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Shuffle))),
+                        "to-mask" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::ToMask))),
+                        "reduce-or" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::ReduceOr))),
+                        _ => None,
+                    },
+                    Some("atomic") => match fn_name_str {
+                        "load" => Some(Builtin::Ir(BuiltinIr::AtomicLoad)),
+                        "store" => Some(Builtin::Ir(BuiltinIr::AtomicStore)),
+                        "xchg" => Some(Builtin::Ir(BuiltinIr::AtomicRmw(AtomicRmwOp::Xchg))),
+                        "fetch-add" => Some(Builtin::Ir(BuiltinIr::AtomicRmw(AtomicRmwOp::Add))),
+                        "fetch-sub" => Some(Builtin::Ir(BuiltinIr::AtomicRmw(AtomicRmwOp::Sub))),
+                        "fetch-and" => Some(Builtin::Ir(BuiltinIr::AtomicRmw(AtomicRmwOp::And))),
+                        "fetch-or" => Some(Builtin::Ir(BuiltinIr::AtomicRmw(AtomicRmwOp::Or))),
+                        "fetch-xor" => Some(Builtin::Ir(BuiltinIr::AtomicRmw(AtomicRmwOp::Xor))),
+                        "fetch-min" => Some(Builtin::Ir(BuiltinIr::AtomicRmw(AtomicRmwOp::Min))),
+                        "fetch-max" => Some(Builtin::Ir(BuiltinIr::AtomicRmw(AtomicRmwOp::Max))),
+                        "cmpxchg" => Some(Builtin::Ir(BuiltinIr::AtomicCmpxchg { weak: false })),
+                        "cmpxchg-weak" => {
+                            Some(Builtin::Ir(BuiltinIr::AtomicCmpxchg { weak: true }))
+                        }
+                        "fence" => Some(Builtin::Ir(BuiltinIr::AtomicFence)),
+                        _ => None,
+                    },
+                    Some("meta") => match fn_name_str {
+                        "bake-static-value" => Some(Builtin::Ir(BuiltinIr::BakeStaticValue)),
+                        "get-static-value" => {
+                            Some(Builtin::TyperInline(BuiltinTyperInline::GetStaticValue))
+                        }
+                        _ => None,
+                    },
+                    Some("k1") => match (third, fn_name_str) {
+                        (None, "exit") => Some(Builtin::Backend(BackendBuiltin::Exit)),
+                        (None, "emit-compiler-message") => {
+                            Some(Builtin::Backend(BackendBuiltin::CompilerMessage))
+                        }
+                        (None, "location") => {
+                            Some(Builtin::TyperInline(BuiltinTyperInline::CompilerSourceLocation))
+                        }
+                        (None, "module-dir") => {
+                            Some(Builtin::TyperInline(BuiltinTyperInline::CompilerModuleDir))
+                        }
+                        (Some("repl"), "checkbox") => {
+                            Some(Builtin::Backend(BackendBuiltin::ReplCheckbox))
+                        }
+                        (Some("test"), "expect-failure") => {
+                            Some(Builtin::TyperInline(BuiltinTyperInline::TestExpectFailure))
+                        }
+                        (Some("test"), "suite") => {
+                            Some(Builtin::Backend(BackendBuiltin::TestSuite))
+                        }
+                        _ => None,
+                    },
+                    Some(_) => None,
                 },
-                Some("meta") => match fn_name_str {
-                    "bake-static-value" => Some(Builtin::Ir(BuiltinIr::BakeStaticValue)),
-                    "get-static-value" => {
-                        Some(Builtin::TyperInline(BuiltinTyperInline::GetStaticValue))
-                    }
-                    _ => None,
-                },
-                Some("k1") => match (third, fn_name_str) {
-                    (None, "exit") => Some(Builtin::Backend(BackendBuiltin::Exit)),
-                    (None, "emit-compiler-message") => {
-                        Some(Builtin::Backend(BackendBuiltin::CompilerMessage))
-                    }
-                    (None, "location") => {
-                        Some(Builtin::TyperInline(BuiltinTyperInline::CompilerSourceLocation))
-                    }
-                    (None, "module-dir") => {
-                        Some(Builtin::TyperInline(BuiltinTyperInline::CompilerModuleDir))
-                    }
-                    (Some("repl"), "checkbox") => {
-                        Some(Builtin::Backend(BackendBuiltin::ReplCheckbox))
-                    }
-                    (Some("test"), "expect-failure") => {
-                        Some(Builtin::TyperInline(BuiltinTyperInline::TestExpectFailure))
-                    }
-                    (Some("test"), "suite") => Some(Builtin::Backend(BackendBuiltin::TestSuite)),
-                    _ => None,
-                },
-                Some(_) => None,
             }
         };
         match result {
@@ -15232,11 +15071,35 @@ impl TypedProgram {
                         ast_fn.name,
                         namespace_chain,
                         ability_id,
-                        impl_self_type,
+                        if ability_info.is_some() { impl_self_type } else { companion_type_id },
                     )
                     .map_err(|msg| {
                         kerr!(self, ast_fn.span, "Error typechecking function: {}", msg,)
                     })?;
+                if let Builtin::Ir(BuiltinIr::Scalar(kind)) = resolved {
+                    let arity = match kind {
+                        ScalarOpKind::IntUnop(_)
+                        | ScalarOpKind::IntNegate
+                        | ScalarOpKind::BoolNegate
+                        | ScalarOpKind::FloatUnop(_) => 1,
+                        ScalarOpKind::IntBinop(_)
+                        | ScalarOpKind::IntCmp(_)
+                        | ScalarOpKind::IntCmp3(_)
+                        | ScalarOpKind::FloatBinop(_)
+                        | ScalarOpKind::FloatCmp(_) => 2,
+                        ScalarOpKind::FloatFma => 3,
+                    };
+                    if param_count != arity {
+                        kbail!(
+                            self,
+                            ast_fn.signature_span,
+                            "builtin {} takes {} parameters, not {}",
+                            kind.kind_name(),
+                            arity,
+                            param_count
+                        );
+                    }
+                }
                 Some(resolved)
             }
             _ => None,
@@ -18069,8 +17932,19 @@ impl TypedProgram {
         {
             let ordering_enum = self.types.get(self.builtin_types.ordering.unwrap()).expect_enum();
             let info = self.get_defn_info(self.builtin_types.ordering.unwrap()).unwrap();
-            debug_assert!(ordering_enum.member_values.len() == 3);
             debug_assert!(info.name == self.ast.idents.b.ordering);
+            debug_assert!(ordering_enum.int_type == IntegerType::I8);
+            let members = self.mem.getn(ordering_enum.member_values);
+            let expected = [
+                ("less", std::cmp::Ordering::Less),
+                ("equal", std::cmp::Ordering::Equal),
+                ("greater", std::cmp::Ordering::Greater),
+            ];
+            debug_assert_eq!(members.len(), expected.len());
+            for (member, (name, order)) in members.iter().zip(expected) {
+                debug_assert_eq!(self.ident_str(member.name), name);
+                debug_assert_eq!(member.int_value, TypedIntValue::I8(order as i8));
+            }
         }
     }
 
