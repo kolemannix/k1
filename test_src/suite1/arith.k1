@@ -48,6 +48,31 @@ fn(test) wrapping-ops-and-masked-shifts() {
   assert-equals(min64 % -2, 0)
 }
 
+fn(test) overflow-reporting() {
+  let wrapped = fold_test/opaque(200u8).add-overflow(100)
+  assert-equals(wrapped.value, 44)
+  assert(wrapped.overflowed)
+  assert(not fold_test/opaque(-100i8).add-overflow(-28).overflowed)
+  assert(fold_test/opaque(-100i8).add-overflow(-29).overflowed)
+  assert(fold_test/opaque(0u32).sub-overflow(1).overflowed)
+  assert-equals(fold_test/opaque(i64/min-value).sub-checked(1), :none)
+  assert-equals(fold_test/opaque(100u8).add-checked(100), :some 200)
+  assert-equals(fold_test/opaque(0x1_0000_0000u64).mul-checked(0x1_0000_0000), :none)
+  assert-equals(fold_test/opaque(-0x8000_0000i64).mul-checked(0x1_0000_0000), :some i64/min-value)
+  assert-equals(fold_test/opaque(-1i16).mul-overflow(i16/min-value).value, i16/min-value)
+  let folded: bool = #static { 255u8.add-overflow(1).overflowed and 3u8.mul-checked(5) == :some 15 }
+  assert(folded)
+}
+
+fn(test) mul-high() {
+  assert-equals(fold_test/opaque(u64/max-value).mul-high(u64/max-value), u64/max-value - 1)
+  assert-equals(fold_test/opaque(0x1_0000_0000u64).mul-high(0x1_0000_0000), 1)
+  assert-equals(fold_test/opaque(-1).mul-high(5), -1)
+  assert-equals(fold_test/opaque(i64/min-value).mul-high(i64/min-value), 0x4000_0000_0000_0000)
+  let folded: u64 = #static 0xFFFF_FFFF_FFFF_FFFFu64.mul-high(3)
+  assert-equals(folded, 2)
+}
+
 fn(test) absolute-value() {
   assert-equals((-7: i32).abs(), 7)
 }

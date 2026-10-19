@@ -22,6 +22,34 @@ macro_rules! check_width {
                 assert_eq!(int_op(IntOp::Shl, width, a, b), Ok(canon(ua << shift)));
                 assert_eq!(int_op(IntOp::ShrU, width, a, b), Ok(canon(ua >> shift)));
                 assert_eq!(int_op(IntOp::ShrS, width, a, b), Ok(canon_i(ia >> shift)));
+                let high_u = ((ua as u128 * ub as u128) >> width) as $u;
+                let high_s = ((ia as i128 * ib as i128) >> width) as $i;
+                assert_eq!(int_op(IntOp::MulHighU, width, a, b), Ok(canon(high_u)));
+                assert_eq!(int_op(IntOp::MulHighS, width, a, b), Ok(canon_i(high_s)));
+                assert_eq!(
+                    int_overflows(OverflowOp::Add, false, width, a, b),
+                    ua.overflowing_add(ub).1
+                );
+                assert_eq!(
+                    int_overflows(OverflowOp::Sub, false, width, a, b),
+                    ua.overflowing_sub(ub).1
+                );
+                assert_eq!(
+                    int_overflows(OverflowOp::Mul, false, width, a, b),
+                    ua.overflowing_mul(ub).1
+                );
+                assert_eq!(
+                    int_overflows(OverflowOp::Add, true, width, a, b),
+                    ia.overflowing_add(ib).1
+                );
+                assert_eq!(
+                    int_overflows(OverflowOp::Sub, true, width, a, b),
+                    ia.overflowing_sub(ib).1
+                );
+                assert_eq!(
+                    int_overflows(OverflowOp::Mul, true, width, a, b),
+                    ia.overflowing_mul(ib).1
+                );
                 match ub {
                     0 => {
                         assert_eq!(

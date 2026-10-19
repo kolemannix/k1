@@ -89,13 +89,14 @@ pub enum Opcode {
     IntDivS,
     IntRemU,
     IntRemS,
+    IntMulHighU,
+    IntMulHighS,
+    IntOverflows,
     IntCmp, // B = IntCmpPred tag
     // Float ALU (A = width in bits)
-    FloatAdd,
-    FloatSub,
-    FloatMul,
-    FloatDiv,
-    FloatRem,
+    FloatBinop,
+    FloatUnop,
+    FloatFma,
     FloatCmp, // B = FloatCmpPred tag
     // Bit ALU (A = width in bits)
     BitAnd,
@@ -104,10 +105,9 @@ pub enum Opcode {
     Shl,
     ShrU,
     ShrS,
-    // Unary (A = width in bits for FloatNeg)
+    // Unary (A = width in bits for BitNot)
     BoolNegate,
     BitNot,
-    FloatNeg,
     Cast, // A = CastKind, B = (from_bits << 8) | to_bits
     Select,
     // Metaprogramming
@@ -184,12 +184,11 @@ impl Opcode {
             | Opcode::IntDivS
             | Opcode::IntRemU
             | Opcode::IntRemS
+            | Opcode::IntMulHighU
+            | Opcode::IntMulHighS
+            | Opcode::IntOverflows
             | Opcode::IntCmp
-            | Opcode::FloatAdd
-            | Opcode::FloatSub
-            | Opcode::FloatMul
-            | Opcode::FloatDiv
-            | Opcode::FloatRem
+            | Opcode::FloatBinop
             | Opcode::FloatCmp
             | Opcode::BitAnd
             | Opcode::BitOr
@@ -197,8 +196,9 @@ impl Opcode {
             | Opcode::Shl
             | Opcode::ShrU
             | Opcode::ShrS => 3, // [dst][lhs][rhs]
-            Opcode::BoolNegate | Opcode::BitNot | Opcode::FloatNeg => 2, // [dst][src]
-            Opcode::Cast => 2,      // A = CastKind, B = from_bits << 8 | to_bits; [dst][src]
+            Opcode::BoolNegate | Opcode::BitNot | Opcode::FloatUnop => 2, // [dst][src]
+            Opcode::FloatFma => 4,
+            Opcode::Cast => 2, // A = CastKind, B = from_bits << 8 | to_bits; [dst][src]
             Opcode::Select => 4,
             Opcode::BakeStaticValue => 3, // [dst][type_id][src]
             Opcode::AtomicLoad => 2,      // A = width in bits, B = ordering; [dst][addr src]
@@ -307,12 +307,13 @@ impl Opcode {
             Opcode::IntDivS => "idiv_s",
             Opcode::IntRemU => "irem_u",
             Opcode::IntRemS => "irem_s",
+            Opcode::IntMulHighU => "imulh_u",
+            Opcode::IntMulHighS => "imulh_s",
+            Opcode::IntOverflows => "ioverflows",
             Opcode::IntCmp => "icmp",
-            Opcode::FloatAdd => "fadd",
-            Opcode::FloatSub => "fsub",
-            Opcode::FloatMul => "fmul",
-            Opcode::FloatDiv => "fdiv",
-            Opcode::FloatRem => "frem",
+            Opcode::FloatBinop => "fbinop",
+            Opcode::FloatUnop => "funop",
+            Opcode::FloatFma => "fma",
             Opcode::FloatCmp => "fcmp",
             Opcode::BitAnd => "and",
             Opcode::BitOr => "or",
@@ -322,7 +323,6 @@ impl Opcode {
             Opcode::ShrS => "shr_s",
             Opcode::BoolNegate => "bool_neg",
             Opcode::BitNot => "bit_not",
-            Opcode::FloatNeg => "fneg",
             Opcode::Cast => "cast",
             Opcode::Select => "select",
             Opcode::BakeStaticValue => "bake_static",

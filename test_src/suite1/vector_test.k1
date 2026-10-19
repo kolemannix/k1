@@ -103,3 +103,18 @@ fn(test) vector-lane-ops() {
   assert-equals(shifted.get-lane(3), 0)
   assert-equals(shifted.get-lane(15), 12)
 }
+
+fn(test) vector-shuffle() {
+  let ints: span[i32] = [10, 11, 12, 13, 20, 21, 22, 23]
+  let a = vector/from-span[i32, 4](ints, 0)
+  let b = vector/from-span[i32, 4](ints, 4)
+  let picked = vector/shuffle(a, b, #static [3, 4, 0, 7])
+  assert-equals(picked.get-lane(0), 13)
+  assert-equals(picked.get-lane(1), 20)
+  assert-equals(picked.get-lane(2), 10)
+  assert-equals(picked.get-lane(3), 23)
+  assert-equals(vector/shuffle(a, b, .0).get-lane(3), 10)
+  let pair = vector/splat[f64, 2](1.5).with-lane(1, 2.5)
+  assert-equals(vector/shuffle(pair, pair, #static [1, 2]).get-lane(0), 2.5)
+  assert(test-compile(vector/shuffle(a, b, #static [0, 1, 2, 8])).!.contains-string("mask lane 3 is 8"))
+}

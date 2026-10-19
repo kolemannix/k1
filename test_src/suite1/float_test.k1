@@ -45,14 +45,42 @@ fn(test) float-casts-and-special-values() {
   let static-abs: f32 = #static { (-7.25: f32).abs() }
   assert-equals(static-abs, 7.25)
 
-  assert-equals(f64/nan.min(1.0), 1.0)
-  assert(1.0.min(f64/nan) != 1.0.min(f64/nan))
-
   if 42.0 is {
     41.0 -> crash("should not equal"),
     42.0 -> .{},
     f -> crash("should not fall through")
   }
+}
+
+fn(test) float-math() {
+  let neg-half = fold_test/opaque(-2.5)
+  assert-equals(fold_test/opaque(2.25).sqrt(), 1.5)
+  assert-equals(neg-half.floor(), -3.0)
+  assert-equals(neg-half.ceil(), -2.0)
+  assert-equals(neg-half.round-to-zero(), -2.0)
+  assert-equals(neg-half.round-even(), -2.0)
+  assert-equals(fold_test/opaque(3.5).round-even(), 4.0)
+  assert-equals(mem/bitcast[f64, u64](fold_test/opaque(-0.5).ceil()), 0x8000000000000000)
+  assert-equals((fold_test/opaque(-2.5): f32).floor(), -3.0)
+  let neg-sqrt = fold_test/opaque(-1.0).sqrt()
+  assert(neg-sqrt != neg-sqrt)
+
+  assert-equals(fold_test/opaque(0.1) * 10.0 - 1.0, 0.0)
+  assert-equals(mem/bitcast[f64, u64](fold_test/opaque(0.1).fma(10.0, -1.0)), 0x3C90000000000000)
+  assert-equals(mem/bitcast[f32, u32]((fold_test/opaque(0.1): f32).fma(10.0, -1.0)), 0x32800000)
+  assert-equals(mem/bitcast[f64, u64](fold_test/opaque(-1.0e-200).fma(1.0e-200, 0.0)), 0x8000000000000000)
+
+  assert-equals(fold_test/opaque(1.0).min(2.0), 1.0)
+  assert-equals((fold_test/opaque(1.0): f32).max(2.0), 2.0)
+  assert-equals(mem/bitcast[f64, u64](fold_test/opaque(0.0).min(-0.0)), 0x8000000000000000)
+  assert-equals(mem/bitcast[f64, u64](fold_test/opaque(-0.0).max(0.0)), 0)
+  let nan-min = fold_test/opaque(f64/nan).min(1.0)
+  let nan-max = fold_test/opaque(1.0).max(f64/nan)
+  assert(nan-min != nan-min)
+  assert(nan-max != nan-max)
+
+  let folded: f64 = #static { 2.25.sqrt() + 2.5.round-even() + 0.1.fma(10.0, -1.0) + 0.0.max(-0.0) }
+  assert-equals(folded, 3.5 + 0.1.fma(10.0, -1.0))
 }
 
 fn(test) float-constant-bits() {

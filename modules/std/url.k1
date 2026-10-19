@@ -146,15 +146,17 @@ fn parse(text: string): result[url, error] {
     }
     if host-end < end {
       if text.[host-end] != ':' return :err .{ pos = host-end, kind = :invalid-host }
-      let p: u32 = 0
+      let p: u16 = 0
       let k = host-end + 1
       while k < end {
         require text.[k].to-ascii-digit() is :some d else return :err .{ pos = k, kind = :invalid-port }
-        p = p * 10 + d.widen[u32]
-        if p > 65535 return :err .{ pos = k, kind = :invalid-port }
+        let tens = p.mul-overflow(10)
+        let next = tens.value.add-overflow(d.widen[u16])
+        if tens.overflowed or next.overflowed return :err .{ pos = k, kind = :invalid-port }
+        p = next.value
         k = k + 1
       }
-      if k > host-end + 1 { port-number = :some p.trunc[u16] }
+      if k > host-end + 1 { port-number = :some p }
     }
     i = end
   }

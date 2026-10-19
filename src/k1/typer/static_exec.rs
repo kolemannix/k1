@@ -920,21 +920,33 @@ impl TypedProgram {
         }
     }
 
+    pub(crate) fn get_static_container_element(
+        &self,
+        value_id: StaticValueId,
+        index: usize,
+    ) -> StaticValue {
+        match *self.static_values.get(value_id) {
+            StaticValue::LinearContainer(cont) => {
+                *self.static_values.get(*self.static_values.mem.get_nth(cont.elements, index))
+            }
+            StaticValue::RawContainer(raw) => self.decode_raw_element(&raw, index),
+            StaticValue::Zero(type_id) => {
+                StaticValue::Zero(self.get_linear_container_element(type_id).unwrap())
+            }
+            _ => unreachable!(),
+        }
+    }
+
     pub(crate) fn static_container_element(
         &mut self,
         value_id: StaticValueId,
         index: usize,
     ) -> StaticValueId {
-        match *self.static_values.get(value_id) {
-            StaticValue::LinearContainer(cont) => {
-                *self.static_values.mem.get_nth(cont.elements, index)
-            }
-            StaticValue::RawContainer(raw) => {
-                let element = self.decode_raw_element(&raw, index);
-                self.static_values.add(element)
-            }
-            _ => unreachable!(),
+        if let StaticValue::LinearContainer(cont) = *self.static_values.get(value_id) {
+            return *self.static_values.mem.get_nth(cont.elements, index);
         }
+        let element = self.get_static_container_element(value_id, index);
+        self.static_values.add(element)
     }
 
     /// A constant `code` value: one text with one source span covering it

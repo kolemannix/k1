@@ -506,17 +506,7 @@ ns for reader {
   }
 
   fn digits-u64(*self, start: size, end: size): ?u64 {
-    let cutoff = u64/max-value / 10
-    let last-digit = u64/max-value % 10
-    let v: u64 = 0
-    let i = start
-    while i < end {
-      let d = (self.input.[i].as-u8() - '0'.as-u8()).widen[u64]
-      if v > cutoff or (v == cutoff and d > last-digit) { return :none }
-      v = v * 10 + d
-      i = i + 1
-    }
-    :some v
+    u64/from-string(self.input.slice(start, end)).as-ok()
   }
 
   fn read-f64(*self): result[f64, error] {

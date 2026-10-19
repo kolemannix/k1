@@ -87,12 +87,17 @@ fn commit_renumbers_into_layout_order_and_drops_unlinked() {
     let sum = inst(
         &mut u,
         middle,
-        Inst::IntAdd { lhs: Value::FnParam { t, index: 0 }, rhs: byte(1), t: ScalarType::I64 },
+        Inst::IntBinop {
+            op: IntOp::Add,
+            lhs: Value::FnParam { t, index: 0 },
+            rhs: byte(1),
+            t: ScalarType::I64,
+        },
     );
     inst(&mut u, middle, Inst::Jump(exit));
     inst(&mut u, entry, Inst::Jump(middle));
     let front = u.new_inst(
-        Inst::IntSub { lhs: Value::Inst(sum), rhs: byte(2), t: ScalarType::I64 },
+        Inst::IntBinop { op: IntOp::Sub, lhs: Value::Inst(sum), rhs: byte(2), t: ScalarType::I64 },
         Span::NONE,
         IrComment::None,
     );
@@ -123,8 +128,8 @@ fn commit_renumbers_into_layout_order_and_drops_unlinked() {
     assert!(kinds == [BlockSourceKind::Entry, BlockSourceKind::LoopBody, BlockSourceKind::LoopEnd]);
     let at = |n: u32| *v.inst(iid(n));
     assert!(matches!(at(1), Inst::Jump(target) if target == bid(2)));
-    assert!(matches!(at(2), Inst::IntAdd { .. }));
-    let Inst::IntSub { lhs, .. } = at(3) else { panic!() };
+    assert!(matches!(at(2), Inst::IntBinop { op: IntOp::Add, .. }));
+    let Inst::IntBinop { op: IntOp::Sub, lhs, .. } = at(3) else { panic!() };
     assert!(lhs == Value::Inst(iid(2)));
     assert!(matches!(at(4), Inst::Jump(target) if target == bid(3)));
     let Inst::Ret { v: returned, .. } = at(5) else { panic!() };

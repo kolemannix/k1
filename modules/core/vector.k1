@@ -30,24 +30,17 @@ ns vector {
   // yields 0, any other lane yields table[idx & 15]
   fn(builtin) shuffle-bytes(table: vector[u8, 16], idx: vector[u8, 16]): vector[u8, 16]
 
-  fn iota16(): vector[u8, 16] {
-    #static {
-      let v = vector/zeroed[u8, 16]()
-      let i: size = 0
-      while i < 16 {
-        v = v.with-lane(i, i.trunc[u8])
-        i = i + 1
-      }
-      v
-    }
+  fn(builtin) shuffle[t, n: static size](a: vector[t, n], b: vector[t, n], mask: array[size, n]): vector[t, n]
+
+  fn window-mask[n: static size](start: size): array[size, n] {
+    let mask: array[size, n] = uninit
+    for i in 0.until(n) { mask.[i] = start + i }
+    mask
   }
 
   // The 16 bytes ending k before the end of cur: prev's last k bytes, then cur's first 16-k
   fn shift-bytes[k: static size](prev: vector[u8, 16], cur: vector[u8, 16]): vector[u8, 16] {
-    let iota = iota16()
-    let from-cur = shuffle-bytes(cur, iota.sub(splat[u8, 16](k.trunc[u8])))
-    let from-prev = shuffle-bytes(prev, iota.add(splat[u8, 16]((16 - k).trunc[u8])))
-    from-cur.bit-or(from-prev.bit-and(iota.lt-lanes(splat[u8, 16](k.trunc[u8]))))
+    shuffle(prev, cur, #static window-mask[16](16 - k))
   }
 
   // collapses lane MSBs into one bit per lane (movemask)

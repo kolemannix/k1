@@ -1,6 +1,7 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
 
+use crate::arith::{FloatOp, IntOp};
 use crate::debug;
 
 use crate::ir::{
@@ -777,19 +778,25 @@ fn emit_inst(
                                 ctx.push(s0);
                             }
                             _ => {
-                                let opcode = match (vop.op, is_float) {
-                                    (VecOpIr::Add, false) => Opcode::IntAdd,
-                                    (VecOpIr::Add, true) => Opcode::FloatAdd,
-                                    (VecOpIr::Sub, false) => Opcode::IntSub,
-                                    (VecOpIr::Sub, true) => Opcode::FloatSub,
-                                    (VecOpIr::Mul, false) => Opcode::IntMul,
-                                    (VecOpIr::Mul, true) => Opcode::FloatMul,
-                                    (VecOpIr::BitAnd, _) => Opcode::BitAnd,
-                                    (VecOpIr::BitOr, _) => Opcode::BitOr,
-                                    (VecOpIr::Xor, _) => Opcode::BitXor,
+                                let (opcode, b) = match (vop.op, is_float) {
+                                    (VecOpIr::Add, false) => (Opcode::IntAdd, 0),
+                                    (VecOpIr::Add, true) => {
+                                        (Opcode::FloatBinop, FloatOp::Add as u16)
+                                    }
+                                    (VecOpIr::Sub, false) => (Opcode::IntSub, 0),
+                                    (VecOpIr::Sub, true) => {
+                                        (Opcode::FloatBinop, FloatOp::Sub as u16)
+                                    }
+                                    (VecOpIr::Mul, false) => (Opcode::IntMul, 0),
+                                    (VecOpIr::Mul, true) => {
+                                        (Opcode::FloatBinop, FloatOp::Mul as u16)
+                                    }
+                                    (VecOpIr::BitAnd, _) => (Opcode::BitAnd, 0),
+                                    (VecOpIr::BitOr, _) => (Opcode::BitOr, 0),
+                                    (VecOpIr::Xor, _) => (Opcode::BitXor, 0),
                                     _ => unreachable!(),
                                 };
-                                ctx.emit(opcode, elem_bits, 0);
+                                ctx.emit(opcode, elem_bits, b);
                                 ctx.push(s0);
                                 ctx.push(s0);
                                 ctx.push(s1);
@@ -829,6 +836,24 @@ fn emit_inst(
                         ctx.push(s0);
                         ctx.push(count);
                         ctx.emit_store(elem_bits, dst_addr, dst_off + off, s0);
+                    }
+                }
+                VecOpIr::Shuffle { mask } => {
+                    let (lhs_addr, lhs_off) = resolve_addr(k1, ctx, vop.lhs);
+                    let (rhs_addr, rhs_off) = resolve_addr(k1, ctx, vop.rhs);
+                    let (dst_addr, dst_off) = resolve_addr(k1, ctx, vop.dst);
+                    let s0 = ctx.next_scratch();
+                    for lane in 0..vop.lanes as u16 {
+                        let index =
+                            k1.get_static_container_element(mask, lane as usize).as_size().unwrap()
+                                as u16;
+                        let (src_addr, src_off) = if index < vop.lanes as u16 {
+                            (lhs_addr, lhs_off + index * stride)
+                        } else {
+                            (rhs_addr, rhs_off + (index - vop.lanes as u16) * stride)
+                        };
+                        ctx.emit_load(elem_bits, s0, src_addr, src_off);
+                        ctx.emit_store(elem_bits, dst_addr, dst_off + lane * stride, s0);
                     }
                 }
                 VecOpIr::ShuffleBytes => {
@@ -1025,7 +1050,7 @@ fn emit_inst(
         }
         Inst::BoolNegate { v } => unop!(Opcode::BoolNegate, 0, 0, v),
         Inst::BitNot { v, t } => unop!(Opcode::BitNot, t.width_bits(), 0, v),
-        Inst::FloatNeg { v, t } => unop!(Opcode::FloatNeg, t.width_bits(), 0, v),
+        Inst::FloatUnop { op, v, t } => unop!(Opcode::FloatUnop, t.width_bits(), op as u16, v),
 
         Inst::IntTrunc { v, to } => cast!(CastKind::IntTrunc, 0, to.width_bits(), v),
         Inst::IntExtS { v, from, to } => {
@@ -1048,39 +1073,51 @@ fn emit_inst(
             cast!(kind, from.width_bits(), to.width_bits(), v)
         }
 
-        Inst::IntAdd { lhs, rhs, t } => binop!(Opcode::IntAdd, t.width_bits(), 0, lhs, rhs),
-        Inst::IntSub { lhs, rhs, t } => binop!(Opcode::IntSub, t.width_bits(), 0, lhs, rhs),
-        Inst::IntMul { lhs, rhs, t } => binop!(Opcode::IntMul, t.width_bits(), 0, lhs, rhs),
-        Inst::IntDivUnsigned { lhs, rhs, t } => {
-            binop!(Opcode::IntDivU, t.width_bits(), 0, lhs, rhs)
+        Inst::IntBinop { op, lhs, rhs, t } => {
+            let opcode = match op {
+                IntOp::Add => Opcode::IntAdd,
+                IntOp::Sub => Opcode::IntSub,
+                IntOp::Mul => Opcode::IntMul,
+                IntOp::DivU => Opcode::IntDivU,
+                IntOp::DivS => Opcode::IntDivS,
+                IntOp::RemU => Opcode::IntRemU,
+                IntOp::RemS => Opcode::IntRemS,
+                IntOp::And => Opcode::BitAnd,
+                IntOp::Or => Opcode::BitOr,
+                IntOp::Xor => Opcode::BitXor,
+                IntOp::Shl => Opcode::Shl,
+                IntOp::ShrU => Opcode::ShrU,
+                IntOp::ShrS => Opcode::ShrS,
+                IntOp::MulHighU => Opcode::IntMulHighU,
+                IntOp::MulHighS => Opcode::IntMulHighS,
+            };
+            binop!(opcode, t.width_bits(), 0, lhs, rhs)
         }
-        Inst::IntDivSigned { lhs, rhs, t } => binop!(Opcode::IntDivS, t.width_bits(), 0, lhs, rhs),
-        Inst::IntRemUnsigned { lhs, rhs, t } => {
-            binop!(Opcode::IntRemU, t.width_bits(), 0, lhs, rhs)
+        Inst::IntOverflows { op, signed, lhs, rhs, t } => {
+            let b = op as u16 | (signed as u16) << 8;
+            binop!(Opcode::IntOverflows, t.width_bits(), b, lhs, rhs)
         }
-        Inst::IntRemSigned { lhs, rhs, t } => binop!(Opcode::IntRemS, t.width_bits(), 0, lhs, rhs),
         Inst::IntCmp { lhs, rhs, pred, width } => {
             if !ctx.fused_cmps.contains(inst_id) {
                 binop!(Opcode::IntCmp, width, pred as u16, lhs, rhs)
             }
         }
-        Inst::FloatAdd { lhs, rhs, t } => binop!(Opcode::FloatAdd, t.width_bits(), 0, lhs, rhs),
-        Inst::FloatSub { lhs, rhs, t } => binop!(Opcode::FloatSub, t.width_bits(), 0, lhs, rhs),
-        Inst::FloatMul { lhs, rhs, t } => binop!(Opcode::FloatMul, t.width_bits(), 0, lhs, rhs),
-        Inst::FloatDiv { lhs, rhs, t } => binop!(Opcode::FloatDiv, t.width_bits(), 0, lhs, rhs),
-        Inst::FloatRem { lhs, rhs, t } => binop!(Opcode::FloatRem, t.width_bits(), 0, lhs, rhs),
+        Inst::FloatBinop { op, lhs, rhs, t } => {
+            binop!(Opcode::FloatBinop, t.width_bits(), op as u16, lhs, rhs)
+        }
+        Inst::FloatFma { a, b, c, t } => {
+            let a = resolve_lowered_value(k1, ctx, a);
+            let b = resolve_lowered_value(k1, ctx, b);
+            let c = resolve_lowered_value(k1, ctx, c);
+            let dst = ctx.bc_value_of(inst_id);
+            ctx.emit(Opcode::FloatFma, t.width_bits(), 0);
+            ctx.push(dst);
+            ctx.push(a);
+            ctx.push(b);
+            ctx.push(c);
+        }
         Inst::FloatCmp { lhs, rhs, pred, width } => {
             binop!(Opcode::FloatCmp, width, pred as u16, lhs, rhs)
-        }
-        Inst::BitAnd { lhs, rhs, t } => binop!(Opcode::BitAnd, t.width_bits(), 0, lhs, rhs),
-        Inst::BitOr { lhs, rhs, t } => binop!(Opcode::BitOr, t.width_bits(), 0, lhs, rhs),
-        Inst::BitXor { lhs, rhs, t } => binop!(Opcode::BitXor, t.width_bits(), 0, lhs, rhs),
-        Inst::BitShiftLeft { lhs, rhs, t } => binop!(Opcode::Shl, t.width_bits(), 0, lhs, rhs),
-        Inst::BitUnsignedShiftRight { lhs, rhs, t } => {
-            binop!(Opcode::ShrU, t.width_bits(), 0, lhs, rhs)
-        }
-        Inst::BitSignedShiftRight { lhs, rhs, t } => {
-            binop!(Opcode::ShrS, t.width_bits(), 0, lhs, rhs)
         }
 
         Inst::BakeStaticValue { type_id, value } => {
@@ -1385,7 +1422,12 @@ mod tests {
         let next = push(
             &mut u,
             body,
-            Inst::IntAdd { lhs: ir::Value::Inst(counter), rhs: u64_value(1), t: ScalarType::I64 },
+            Inst::IntBinop {
+                op: IntOp::Add,
+                lhs: ir::Value::Inst(counter),
+                rhs: u64_value(1),
+                t: ScalarType::I64,
+            },
         );
         let incomings = u.push_phi_cases(&[
             PhiCase { from: entry, value: u64_value(0) },
@@ -1408,12 +1450,18 @@ mod tests {
             let scaled = push(
                 &mut u,
                 exit,
-                Inst::IntMul { lhs: acc, rhs: u64_value(100), t: ScalarType::I64 },
+                Inst::IntBinop {
+                    op: IntOp::Mul,
+                    lhs: acc,
+                    rhs: u64_value(100),
+                    t: ScalarType::I64,
+                },
             );
             let summed = push(
                 &mut u,
                 exit,
-                Inst::IntAdd {
+                Inst::IntBinop {
+                    op: IntOp::Add,
                     lhs: ir::Value::Inst(scaled),
                     rhs: ir::Value::Inst(*phi),
                     t: ScalarType::I64,

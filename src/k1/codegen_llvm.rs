@@ -36,6 +36,7 @@ use llvm_sys::debuginfo::LLVMDIBuilderInsertDeclareRecordAtEnd;
 
 use log::{debug, trace};
 
+use crate::arith::{FloatOp, FloatUnop, IntOp, OverflowOp};
 use crate::compiler::{self};
 use crate::ir::{
     BackendBuiltin, BlockId, IdMap, Inst, InstId, IrCallee, PhysicalFunctionType, Value,
@@ -2931,6 +2932,22 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             .into_int_value()
     }
 
+    fn build_float_intrinsic(&self, name: &str, args: &[FloatValue<'ctx>]) -> FloatValue<'ctx> {
+        let function = Intrinsic::find(name)
+            .unwrap()
+            .get_declaration(&self.llvm_module, &[args[0].get_type().as_basic_type_enum()])
+            .unwrap();
+        let mut call_args: SV4<BasicMetadataValueEnum<'ctx>> = SV4::new();
+        for arg in args {
+            call_args.push((*arg).into());
+        }
+        self.build_call(function, &call_args)
+            .try_as_basic_value()
+            .basic()
+            .unwrap()
+            .into_float_value()
+    }
+
     fn emit_lifetime_marker(&self, start: bool, alloca: PointerValue<'ctx>) {
         let name = if start { "llvm.lifetime.start" } else { "llvm.lifetime.end" };
         let function = Intrinsic::find(name)
@@ -3901,6 +3918,22 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 self.vec_store(&vop, inst_mappings, result)?;
                 Ok(None)
             }
+            VecOpIr::Shuffle { mask } => {
+                let l = self.vec_load(&vop, inst_mappings, vop.lhs)?;
+                let r = self.vec_load(&vop, inst_mappings, vop.rhs)?;
+                let i32t = self.ctx.i32_type();
+                let mut lanes: Vec<IntValue<'ctx>> = Vec::with_capacity(vop.lanes as usize);
+                for lane in 0..vop.lanes as usize {
+                    let index = self.k1.get_static_container_element(mask, lane).as_size().unwrap();
+                    lanes.push(i32t.const_int(index as u64, false));
+                }
+                let result = self
+                    .builder
+                    .build_shuffle_vector(l, r, LlvmVectorType::const_vector(&lanes), "")
+                    .unwrap();
+                self.vec_store(&vop, inst_mappings, result)?;
+                Ok(None)
+            }
             VecOpIr::ShuffleBytes => {
                 let table = self.vec_load(&vop, inst_mappings, vop.lhs)?;
                 let idx = self.vec_load(&vop, inst_mappings, vop.rhs)?;
@@ -4398,10 +4431,25 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 inst_mappings.insert(inst_id, not_input.as_basic_value_enum());
                 Ok(())
             }
-            Inst::FloatNeg { v, .. } => {
+            Inst::FloatUnop { op, v, .. } => {
                 let input = self.resolve_value(inst_mappings, v)?.into_float_value();
-                let neg_input = self.builder.build_float_neg(input, "").unwrap();
-                inst_mappings.insert(inst_id, neg_input.as_basic_value_enum());
+                let result = match op {
+                    FloatUnop::Neg => self.builder.build_float_neg(input, "").unwrap(),
+                    FloatUnop::Sqrt => self.build_float_intrinsic("llvm.sqrt", &[input]),
+                    FloatUnop::Floor => self.build_float_intrinsic("llvm.floor", &[input]),
+                    FloatUnop::Ceil => self.build_float_intrinsic("llvm.ceil", &[input]),
+                    FloatUnop::RoundToZero => self.build_float_intrinsic("llvm.trunc", &[input]),
+                    FloatUnop::RoundEven => self.build_float_intrinsic("llvm.roundeven", &[input]),
+                };
+                inst_mappings.insert(inst_id, result.as_basic_value_enum());
+                Ok(())
+            }
+            Inst::FloatFma { a, b, c, .. } => {
+                let a = self.resolve_value(inst_mappings, a)?.into_float_value();
+                let b = self.resolve_value(inst_mappings, b)?.into_float_value();
+                let c = self.resolve_value(inst_mappings, c)?.into_float_value();
+                let result = self.build_float_intrinsic("llvm.fma", &[a, b, c]);
+                inst_mappings.insert(inst_id, result.as_basic_value_enum());
                 Ok(())
             }
             Inst::BitCast { v, to } => {
@@ -4509,53 +4557,69 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 inst_mappings.insert(inst_id, ptr_value.as_basic_value_enum());
                 Ok(())
             }
-            Inst::IntAdd { lhs, rhs, .. } => {
-                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let sum = self.builder.build_int_add(lhs_value, rhs_value, "").unwrap();
-                inst_mappings.insert(inst_id, sum.as_basic_value_enum());
+            Inst::IntBinop { op, lhs, rhs, .. } => {
+                let l = self.resolve_value(inst_mappings, lhs)?.into_int_value();
+                let r = self.resolve_value(inst_mappings, rhs)?.into_int_value();
+                let result = match op {
+                    IntOp::Add => self.builder.build_int_add(l, r, "").unwrap(),
+                    IntOp::Sub => self.builder.build_int_sub(l, r, "").unwrap(),
+                    IntOp::Mul => self.builder.build_int_mul(l, r, "").unwrap(),
+                    IntOp::DivU => self.build_checked_int_div(l, r, false, false)?,
+                    IntOp::DivS => self.build_checked_int_div(l, r, true, false)?,
+                    IntOp::RemU => self.build_checked_int_div(l, r, false, true)?,
+                    IntOp::RemS => self.build_checked_int_div(l, r, true, true)?,
+                    IntOp::And => self.builder.build_and(l, r, "").unwrap(),
+                    IntOp::Or => self.builder.build_or(l, r, "").unwrap(),
+                    IntOp::Xor => self.builder.build_xor(l, r, "").unwrap(),
+                    IntOp::Shl => {
+                        let count = self.build_shift_count(r, l);
+                        self.builder.build_left_shift(l, count, "").unwrap()
+                    }
+                    IntOp::ShrU | IntOp::ShrS => {
+                        let count = self.build_shift_count(r, l);
+                        self.builder.build_right_shift(l, count, op == IntOp::ShrS, "").unwrap()
+                    }
+                    IntOp::MulHighU | IntOp::MulHighS => {
+                        let signed = op == IntOp::MulHighS;
+                        let narrow = l.get_type();
+                        let width = narrow.get_bit_width();
+                        let wide = self.custom_width_int_type(width * 2);
+                        let l = self.builder.build_int_cast_sign_flag(l, wide, signed, "").unwrap();
+                        let r = self.builder.build_int_cast_sign_flag(r, wide, signed, "").unwrap();
+                        let product = self.builder.build_int_mul(l, r, "").unwrap();
+                        let shift = wide.const_int(width as u64, false);
+                        let high =
+                            self.builder.build_right_shift(product, shift, false, "").unwrap();
+                        self.builder.build_int_truncate(high, narrow, "").unwrap()
+                    }
+                };
+                inst_mappings.insert(inst_id, result.as_basic_value_enum());
                 Ok(())
             }
-            Inst::IntSub { lhs, rhs, .. } => {
-                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let diff = self.builder.build_int_sub(lhs_value, rhs_value, "").unwrap();
-                inst_mappings.insert(inst_id, diff.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::IntMul { lhs, rhs, .. } => {
-                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let prod = self.builder.build_int_mul(lhs_value, rhs_value, "").unwrap();
-                inst_mappings.insert(inst_id, prod.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::IntDivUnsigned { lhs, rhs, .. } => {
-                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let div = self.build_checked_int_div(lhs_value, rhs_value, false, false)?;
-                inst_mappings.insert(inst_id, div.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::IntDivSigned { lhs, rhs, .. } => {
-                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let div = self.build_checked_int_div(lhs_value, rhs_value, true, false)?;
-                inst_mappings.insert(inst_id, div.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::IntRemUnsigned { lhs, rhs, .. } => {
-                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let rem = self.build_checked_int_div(lhs_value, rhs_value, false, true)?;
-                inst_mappings.insert(inst_id, rem.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::IntRemSigned { lhs, rhs, .. } => {
-                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let rem = self.build_checked_int_div(lhs_value, rhs_value, true, true)?;
-                inst_mappings.insert(inst_id, rem.as_basic_value_enum());
+            Inst::IntOverflows { op, signed, lhs, rhs, .. } => {
+                let l = self.resolve_value(inst_mappings, lhs)?.into_int_value();
+                let r = self.resolve_value(inst_mappings, rhs)?.into_int_value();
+                let name = match (op, signed) {
+                    (OverflowOp::Add, false) => "llvm.uadd.with.overflow",
+                    (OverflowOp::Add, true) => "llvm.sadd.with.overflow",
+                    (OverflowOp::Sub, false) => "llvm.usub.with.overflow",
+                    (OverflowOp::Sub, true) => "llvm.ssub.with.overflow",
+                    (OverflowOp::Mul, false) => "llvm.umul.with.overflow",
+                    (OverflowOp::Mul, true) => "llvm.smul.with.overflow",
+                };
+                let function = Intrinsic::find(name)
+                    .unwrap()
+                    .get_declaration(&self.llvm_module, &[l.get_type().as_basic_type_enum()])
+                    .unwrap();
+                let pair = self
+                    .build_call(function, &[l.into(), r.into()])
+                    .try_as_basic_value()
+                    .basic()
+                    .unwrap()
+                    .into_struct_value();
+                let flag = self.builder.build_extract_value(pair, 1, "").unwrap().into_int_value();
+                let bool_value = self.i1_to_bool(flag, "");
+                inst_mappings.insert(inst_id, bool_value.as_basic_value_enum());
                 Ok(())
             }
             Inst::IntCmp { lhs, rhs, pred, .. } => {
@@ -4579,30 +4643,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 inst_mappings.insert(inst_id, bool_value.as_basic_value_enum());
                 Ok(())
             }
-            Inst::FloatAdd { lhs, rhs, .. }
-            | Inst::FloatSub { lhs, rhs, .. }
-            | Inst::FloatMul { lhs, rhs, .. }
-            | Inst::FloatDiv { lhs, rhs, .. }
-            | Inst::FloatRem { lhs, rhs, .. } => {
-                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_float_value();
-                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_float_value();
-                let result = match inst {
-                    Inst::FloatAdd { .. } => {
-                        self.builder.build_float_add(lhs_value, rhs_value, "").unwrap()
-                    }
-                    Inst::FloatSub { .. } => {
-                        self.builder.build_float_sub(lhs_value, rhs_value, "").unwrap()
-                    }
-                    Inst::FloatMul { .. } => {
-                        self.builder.build_float_mul(lhs_value, rhs_value, "").unwrap()
-                    }
-                    Inst::FloatDiv { .. } => {
-                        self.builder.build_float_div(lhs_value, rhs_value, "").unwrap()
-                    }
-                    Inst::FloatRem { .. } => {
-                        self.builder.build_float_rem(lhs_value, rhs_value, "").unwrap()
-                    }
-                    _ => unreachable!(),
+            Inst::FloatBinop { op, lhs, rhs, .. } => {
+                let l = self.resolve_value(inst_mappings, lhs)?.into_float_value();
+                let r = self.resolve_value(inst_mappings, rhs)?.into_float_value();
+                let result = match op {
+                    FloatOp::Add => self.builder.build_float_add(l, r, "").unwrap(),
+                    FloatOp::Sub => self.builder.build_float_sub(l, r, "").unwrap(),
+                    FloatOp::Mul => self.builder.build_float_mul(l, r, "").unwrap(),
+                    FloatOp::Div => self.builder.build_float_div(l, r, "").unwrap(),
+                    FloatOp::Rem => self.builder.build_float_rem(l, r, "").unwrap(),
+                    FloatOp::Min => self.build_float_intrinsic("llvm.minimum", &[l, r]),
+                    FloatOp::Max => self.build_float_intrinsic("llvm.maximum", &[l, r]),
                 };
                 inst_mappings.insert(inst_id, result.as_basic_value_enum());
                 Ok(())
@@ -4621,53 +4672,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let cmp = self.builder.build_float_compare(llvm_pred, lhs, rhs, "").unwrap();
                 let bool_value = self.i1_to_bool(cmp, "");
                 inst_mappings.insert(inst_id, bool_value.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::BitAnd { lhs, rhs, .. } => {
-                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let and = self.builder.build_and(lhs_value, rhs_value, "").unwrap();
-                inst_mappings.insert(inst_id, and.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::BitOr { lhs, rhs, .. } => {
-                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let or = self.builder.build_or(lhs_value, rhs_value, "").unwrap();
-                inst_mappings.insert(inst_id, or.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::BitXor { lhs, rhs, .. } => {
-                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let xor = self.builder.build_xor(lhs_value, rhs_value, "").unwrap();
-                inst_mappings.insert(inst_id, xor.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::BitShiftLeft { lhs, rhs, .. } => {
-                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let rhs_casted = self.build_shift_count(rhs_value, lhs_value);
-
-                let shl = self.builder.build_left_shift(lhs_value, rhs_casted, "").unwrap();
-                inst_mappings.insert(inst_id, shl.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::BitUnsignedShiftRight { lhs, rhs, .. } => {
-                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let rhs_casted = self.build_shift_count(rhs_value, lhs_value);
-                let lshr =
-                    self.builder.build_right_shift(lhs_value, rhs_casted, false, "").unwrap();
-                inst_mappings.insert(inst_id, lshr.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::BitSignedShiftRight { lhs, rhs, .. } => {
-                let lhs_value = self.resolve_value(inst_mappings, lhs)?.into_int_value();
-                let rhs_value = self.resolve_value(inst_mappings, rhs)?.into_int_value();
-                let rhs_casted = self.build_shift_count(rhs_value, lhs_value);
-                let ashr = self.builder.build_right_shift(lhs_value, rhs_casted, true, "").unwrap();
-                inst_mappings.insert(inst_id, ashr.as_basic_value_enum());
                 Ok(())
             }
             Inst::BakeStaticValue { .. } => Err(cgerr!(

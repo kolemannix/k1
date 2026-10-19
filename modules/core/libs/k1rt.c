@@ -196,4 +196,5 @@ __int128 __multi3(__int128 a, __int128 b) {
 }
 
 #include "musl/fmod.c"
+#include "musl/fma.c"
 #endif // end wasm

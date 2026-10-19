@@ -6,6 +6,7 @@
 
 use std::fmt::Write;
 
+use crate::arith::{FloatOp, FloatUnop};
 use crate::ir;
 use crate::typer::TypedProgram;
 
@@ -312,11 +313,9 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
         | Opcode::IntDivS
         | Opcode::IntRemU
         | Opcode::IntRemS
-        | Opcode::FloatAdd
-        | Opcode::FloatSub
-        | Opcode::FloatMul
-        | Opcode::FloatDiv
-        | Opcode::FloatRem
+        | Opcode::IntMulHighU
+        | Opcode::IntMulHighS
+        | Opcode::IntOverflows
         | Opcode::BitAnd
         | Opcode::BitOr
         | Opcode::BitXor
@@ -330,7 +329,31 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
             write!(w, ", ").unwrap();
             write_src(w, k1, ops[2]);
         }
-        Opcode::BoolNegate | Opcode::BitNot | Opcode::FloatNeg => {
+        Opcode::FloatBinop => {
+            write!(w, "{}.{} ", FloatOp::from_u8(b as u8).name(), a).unwrap();
+            write_dst(w, ops[0]);
+            write!(w, " <- ").unwrap();
+            write_src(w, k1, ops[1]);
+            write!(w, ", ").unwrap();
+            write_src(w, k1, ops[2]);
+        }
+        Opcode::FloatUnop => {
+            write!(w, "{}.{} ", FloatUnop::from_u8(b as u8).name(), a).unwrap();
+            write_dst(w, ops[0]);
+            write!(w, " <- ").unwrap();
+            write_src(w, k1, ops[1]);
+        }
+        Opcode::FloatFma => {
+            write!(w, "fma.{} ", a).unwrap();
+            write_dst(w, ops[0]);
+            write!(w, " <- ").unwrap();
+            write_src(w, k1, ops[1]);
+            write!(w, ", ").unwrap();
+            write_src(w, k1, ops[2]);
+            write!(w, ", ").unwrap();
+            write_src(w, k1, ops[3]);
+        }
+        Opcode::BoolNegate | Opcode::BitNot => {
             write!(w, "{} ", op.name()).unwrap();
             write_dst(w, ops[0]);
             write!(w, " <- ").unwrap();

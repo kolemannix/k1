@@ -1,5 +1,6 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
+use crate::arith::{FloatOp, FloatUnop, IntOp, OverflowOp};
 use crate::kmem::List;
 use crate::parse::{self, NumericWidth, StringId};
 use crate::typer::scopes::ScopeId;
@@ -587,6 +588,7 @@ pub enum VecOpIr {
     LtLanesS,
     LtLanesU,
     ShuffleBytes,
+    Shuffle { mask: StaticValueId },
     ToMask,
     ReduceOr,
 }
@@ -609,6 +611,7 @@ impl VecOpIr {
             VecOpIr::LtLanesS => "lt_lanes_s",
             VecOpIr::LtLanesU => "lt_lanes_u",
             VecOpIr::ShuffleBytes => "shuffle_bytes",
+            VecOpIr::Shuffle { .. } => "shuffle",
             VecOpIr::ToMask => "to_mask",
             VecOpIr::ReduceOr => "reduce_or",
         }
@@ -924,37 +927,15 @@ pub enum Inst {
     WordToPtr {
         v: Value,
     },
-    IntAdd {
+    IntBinop {
+        op: IntOp,
         lhs: Value,
         rhs: Value,
         t: ScalarType,
     },
-    IntSub {
-        lhs: Value,
-        rhs: Value,
-        t: ScalarType,
-    },
-    IntMul {
-        lhs: Value,
-        rhs: Value,
-        t: ScalarType,
-    },
-    IntDivUnsigned {
-        lhs: Value,
-        rhs: Value,
-        t: ScalarType,
-    },
-    IntDivSigned {
-        lhs: Value,
-        rhs: Value,
-        t: ScalarType,
-    },
-    IntRemUnsigned {
-        lhs: Value,
-        rhs: Value,
-        t: ScalarType,
-    },
-    IntRemSigned {
+    IntOverflows {
+        op: OverflowOp,
+        signed: bool,
         lhs: Value,
         rhs: Value,
         t: ScalarType,
@@ -965,33 +946,21 @@ pub enum Inst {
         pred: IntCmpPred,
         width: u8,
     },
-    FloatAdd {
+    FloatBinop {
+        op: FloatOp,
         lhs: Value,
         rhs: Value,
         t: ScalarType,
     },
-    FloatSub {
-        lhs: Value,
-        rhs: Value,
-        t: ScalarType,
-    },
-    FloatNeg {
+    FloatUnop {
+        op: FloatUnop,
         v: Value,
         t: ScalarType,
     },
-    FloatMul {
-        lhs: Value,
-        rhs: Value,
-        t: ScalarType,
-    },
-    FloatDiv {
-        lhs: Value,
-        rhs: Value,
-        t: ScalarType,
-    },
-    FloatRem {
-        lhs: Value,
-        rhs: Value,
+    FloatFma {
+        a: Value,
+        b: Value,
+        c: Value,
         t: ScalarType,
     },
     FloatCmp {
@@ -999,36 +968,6 @@ pub enum Inst {
         rhs: Value,
         pred: FloatCmpPred,
         width: u8,
-    },
-    BitAnd {
-        lhs: Value,
-        rhs: Value,
-        t: ScalarType,
-    },
-    BitOr {
-        lhs: Value,
-        rhs: Value,
-        t: ScalarType,
-    },
-    BitXor {
-        lhs: Value,
-        rhs: Value,
-        t: ScalarType,
-    },
-    BitShiftLeft {
-        lhs: Value,
-        rhs: Value,
-        t: ScalarType,
-    },
-    BitUnsignedShiftRight {
-        lhs: Value,
-        rhs: Value,
-        t: ScalarType,
-    },
-    BitSignedShiftRight {
-        lhs: Value,
-        rhs: Value,
-        t: ScalarType,
     },
 
     BakeStaticValue {
@@ -1115,14 +1054,14 @@ pub fn visit_inst_values(u: &UnitView, inst: &Inst, f: &mut impl FnMut(Value)) {
         }
         Inst::Ret { v, .. } => f(v),
         Inst::BakeStaticValue { value, .. } => f(value),
-        Inst::Select { cond, cons, alt, .. } => {
+        Inst::Select { cond, cons, alt, .. } | Inst::FloatFma { a: cond, b: cons, c: alt, .. } => {
             f(cond);
             f(cons);
             f(alt);
         }
         Inst::BoolNegate { v }
         | Inst::BitNot { v, .. }
-        | Inst::FloatNeg { v, .. }
+        | Inst::FloatUnop { v, .. }
         | Inst::BitCast { v, .. }
         | Inst::IntTrunc { v, .. }
         | Inst::IntExtU { v, .. }
@@ -1137,26 +1076,11 @@ pub fn visit_inst_values(u: &UnitView, inst: &Inst, f: &mut impl FnMut(Value)) {
         | Inst::IntToFloatSigned { v, .. }
         | Inst::PtrToWord { v, .. }
         | Inst::WordToPtr { v } => f(v),
-        Inst::IntAdd { lhs, rhs, .. }
-        | Inst::IntSub { lhs, rhs, .. }
-        | Inst::IntMul { lhs, rhs, .. }
-        | Inst::IntDivUnsigned { lhs, rhs, .. }
-        | Inst::IntDivSigned { lhs, rhs, .. }
-        | Inst::IntRemUnsigned { lhs, rhs, .. }
-        | Inst::IntRemSigned { lhs, rhs, .. }
+        Inst::IntBinop { lhs, rhs, .. }
+        | Inst::IntOverflows { lhs, rhs, .. }
         | Inst::IntCmp { lhs, rhs, .. }
-        | Inst::FloatAdd { lhs, rhs, .. }
-        | Inst::FloatSub { lhs, rhs, .. }
-        | Inst::FloatMul { lhs, rhs, .. }
-        | Inst::FloatDiv { lhs, rhs, .. }
-        | Inst::FloatRem { lhs, rhs, .. }
-        | Inst::FloatCmp { lhs, rhs, .. }
-        | Inst::BitAnd { lhs, rhs, .. }
-        | Inst::BitOr { lhs, rhs, .. }
-        | Inst::BitXor { lhs, rhs, .. }
-        | Inst::BitShiftLeft { lhs, rhs, .. }
-        | Inst::BitUnsignedShiftRight { lhs, rhs, .. }
-        | Inst::BitSignedShiftRight { lhs, rhs, .. } => {
+        | Inst::FloatBinop { lhs, rhs, .. }
+        | Inst::FloatCmp { lhs, rhs, .. } => {
             f(lhs);
             f(rhs);
         }
@@ -1339,27 +1263,13 @@ pub fn get_inst_kind(u: &UnitView, inst_id: InstId) -> InstKind {
         Inst::IntToFloatSigned { to, .. } => InstKind::scalar(to),
         Inst::PtrToWord { to, .. } => InstKind::scalar(to),
         Inst::WordToPtr { .. } => InstKind::PTR,
-        Inst::IntAdd { t, .. } => InstKind::scalar(t),
-        Inst::IntSub { t, .. } => InstKind::scalar(t),
-        Inst::IntMul { t, .. } => InstKind::scalar(t),
-        Inst::IntDivUnsigned { t, .. } => InstKind::scalar(t),
-        Inst::IntDivSigned { t, .. } => InstKind::scalar(t),
-        Inst::IntRemUnsigned { t, .. } => InstKind::scalar(t),
-        Inst::IntRemSigned { t, .. } => InstKind::scalar(t),
+        Inst::IntBinop { t, .. } => InstKind::scalar(t),
+        Inst::IntOverflows { .. } => InstKind::BOOL,
         Inst::IntCmp { .. } => InstKind::BOOL,
-        Inst::FloatAdd { t, .. } => InstKind::scalar(t),
-        Inst::FloatSub { t, .. } => InstKind::scalar(t),
-        Inst::FloatNeg { t, .. } => InstKind::scalar(t),
-        Inst::FloatMul { t, .. } => InstKind::scalar(t),
-        Inst::FloatDiv { t, .. } => InstKind::scalar(t),
-        Inst::FloatRem { t, .. } => InstKind::scalar(t),
+        Inst::FloatBinop { t, .. } => InstKind::scalar(t),
+        Inst::FloatUnop { t, .. } => InstKind::scalar(t),
+        Inst::FloatFma { t, .. } => InstKind::scalar(t),
         Inst::FloatCmp { .. } => InstKind::BOOL,
-        Inst::BitAnd { t, .. } => InstKind::scalar(t),
-        Inst::BitOr { t, .. } => InstKind::scalar(t),
-        Inst::BitXor { t, .. } => InstKind::scalar(t),
-        Inst::BitShiftLeft { t, .. } => InstKind::scalar(t),
-        Inst::BitUnsignedShiftRight { t, .. } => InstKind::scalar(t),
-        Inst::BitSignedShiftRight { t, .. } => InstKind::scalar(t),
         Inst::BakeStaticValue { .. } => InstKind::I64,
     }
 }
@@ -3244,6 +3154,61 @@ fn compile_ir_builtin(
             Ok(stored)
         }
         BuiltinIr::Scalar(_) => b_ice!(b, "scalar op builtins are typed as ScalarOp, not calls"),
+        BuiltinIr::FloatUnop(op) => {
+            let t = callee_fn_type.return_type.expect_scalar();
+            let v = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
+            let res = b.push_value(Inst::FloatUnop { op, v, t }, IrComment::None);
+            Ok(store_scalar_if_dst(b, dst, res))
+        }
+        BuiltinIr::FloatBinop(op) => {
+            let t = callee_fn_type.return_type.expect_scalar();
+            let lhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
+            let rhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
+            let res = b.push_value(Inst::FloatBinop { op, lhs, rhs, t }, IrComment::None);
+            Ok(store_scalar_if_dst(b, dst, res))
+        }
+        BuiltinIr::IntBinop(op) => {
+            let t = callee_fn_type.return_type.expect_scalar();
+            let lhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
+            let rhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
+            let res = b.push_value(Inst::IntBinop { op, lhs, rhs, t }, IrComment::None);
+            Ok(store_scalar_if_dst(b, dst, res))
+        }
+        BuiltinIr::IntOverflow { op, signed } => {
+            let ret_pt = callee_fn_type.return_type;
+            let PhysicalTypeEnum::Agg(agg_id) = ret_pt.as_enum() else {
+                b_ice!(b, "overflow result must be an aggregate");
+            };
+            let t = b.k1.ir.mem.get_nth(callee_fn_type.params, 0).pt.expect_scalar();
+            let lhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
+            let rhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
+            let wrapped_op = match op {
+                OverflowOp::Add => IntOp::Add,
+                OverflowOp::Sub => IntOp::Sub,
+                OverflowOp::Mul => IntOp::Mul,
+            };
+            let value =
+                b.push_value(Inst::IntBinop { op: wrapped_op, lhs, rhs, t }, IrComment::None);
+            let overflowed =
+                b.push_value(Inst::IntOverflows { op, signed, lhs, rhs, t }, IrComment::None);
+            let result = match dst {
+                None => b.push_alloca(ret_pt, IrComment::None).as_value(),
+                Some(dst) => dst,
+            };
+            let value_addr = b.push_struct_offset(agg_id, result, 0, IrComment::None);
+            b.push_store(value_addr, value, IrComment::None);
+            let overflowed_addr = b.push_struct_offset(agg_id, result, 1, IrComment::None);
+            b.push_store(overflowed_addr, overflowed, IrComment::None);
+            Ok(result)
+        }
+        BuiltinIr::FloatFma => {
+            let t = callee_fn_type.return_type.expect_scalar();
+            let x = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
+            let y = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
+            let z = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 2))?;
+            let res = b.push_value(Inst::FloatFma { a: x, b: y, c: z, t }, IrComment::None);
+            Ok(store_scalar_if_dst(b, dst, res))
+        }
         BuiltinIr::Bitcast => {
             let from_type_id = call.type_args.as_slice(&b.k1.mem)[0];
             let to_type_id = call.type_args.as_slice(&b.k1.mem)[1];
@@ -3551,6 +3516,24 @@ fn compile_vector_op(
             b.push_inst_anon(Inst::VecOp { id });
             Ok(locn)
         }
+        VecOpKind::Shuffle => {
+            let ret_pt = callee_fn_type.return_type;
+            let (elem, lanes) = vector_pt_parts(b, ret_pt)?;
+            let mask_expr = *b.k1.mem.get_nth(call.args, 2);
+            let TypedExpr::StaticValue(mask) = b.k1.exprs.get(mask_expr) else {
+                b_ice!(b, "vector/shuffle mask is not static after typecheck")
+            };
+            let op = VecOpIr::Shuffle { mask: mask.value_id };
+            let lhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
+            let rhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
+            let locn = match dst {
+                None => b.push_alloca(ret_pt, IrComment::VecBinopResult).as_value(),
+                Some(dst) => dst,
+            };
+            let id = b.u.add_vec_op(VecOpData { op, elem, lanes, dst: locn, lhs, rhs });
+            b.push_inst_anon(Inst::VecOp { id });
+            Ok(locn)
+        }
         VecOpKind::BitNot => {
             let ret_pt = callee_fn_type.return_type;
             let (elem, lanes) = vector_pt_parts(b, ret_pt)?;
@@ -3810,8 +3793,10 @@ fn compile_scalar_op(b: &mut Builder, scalar_op: ScalarOp, dst: Option<Value>) -
         (ScalarOpKind::Negate, None) => {
             let inst = match (b.k1.types.get(lhs_type), t) {
                 (Type::Bool, _) => Inst::BoolNegate { v: lhs },
-                (_, ScalarType::F32 | ScalarType::F64) => Inst::FloatNeg { v: lhs, t },
-                _ => Inst::IntSub { lhs: Value::zero(t), rhs: lhs, t },
+                (_, ScalarType::F32 | ScalarType::F64) => {
+                    Inst::FloatUnop { op: FloatUnop::Neg, v: lhs, t }
+                }
+                _ => Inst::IntBinop { op: IntOp::Sub, lhs: Value::zero(t), rhs: lhs, t },
             };
             let res = b.push_value(inst, IrComment::None);
             return Ok(store_scalar_if_dst(b, dst, res));
@@ -3822,15 +3807,15 @@ fn compile_scalar_op(b: &mut Builder, scalar_op: ScalarOp, dst: Option<Value>) -
         }
         (ScalarOpKind::Bitwise(op), Some(rhs_expr)) => {
             let rhs = compile_expr(b, None, rhs_expr)?;
-            let inst = match op {
-                BitwiseBinopKind::And => Inst::BitAnd { lhs, rhs, t },
-                BitwiseBinopKind::Or => Inst::BitOr { lhs, rhs, t },
-                BitwiseBinopKind::Xor => Inst::BitXor { lhs, rhs, t },
-                BitwiseBinopKind::ShiftLeft => Inst::BitShiftLeft { lhs, rhs, t },
-                BitwiseBinopKind::UnsignedShiftRight => Inst::BitUnsignedShiftRight { lhs, rhs, t },
-                BitwiseBinopKind::SignedShiftRight => Inst::BitSignedShiftRight { lhs, rhs, t },
+            let op = match op {
+                BitwiseBinopKind::And => IntOp::And,
+                BitwiseBinopKind::Or => IntOp::Or,
+                BitwiseBinopKind::Xor => IntOp::Xor,
+                BitwiseBinopKind::ShiftLeft => IntOp::Shl,
+                BitwiseBinopKind::UnsignedShiftRight => IntOp::ShrU,
+                BitwiseBinopKind::SignedShiftRight => IntOp::ShrS,
             };
-            let res = b.push_value(inst, IrComment::None);
+            let res = b.push_value(Inst::IntBinop { op, lhs, rhs, t }, IrComment::None);
             return Ok(store_scalar_if_dst(b, dst, res));
         }
         (ScalarOpKind::Arith(op), Some(_)) => op,
@@ -3841,13 +3826,19 @@ fn compile_scalar_op(b: &mut Builder, scalar_op: ScalarOp, dst: Option<Value>) -
     use ArithOpOp as Op;
     let lhs_width = t.width_bits();
     let inst = match (op.op, op.class) {
-        (Op::Add, Class::SignedInt | Class::UnsignedInt) => Inst::IntAdd { lhs, rhs, t },
-        (Op::Sub, Class::SignedInt | Class::UnsignedInt) => Inst::IntSub { lhs, rhs, t },
-        (Op::Mul, Class::SignedInt | Class::UnsignedInt) => Inst::IntMul { lhs, rhs, t },
-        (Op::Div, Class::UnsignedInt) => Inst::IntDivUnsigned { lhs, rhs, t },
-        (Op::Div, Class::SignedInt) => Inst::IntDivSigned { lhs, rhs, t },
-        (Op::Rem, Class::UnsignedInt) => Inst::IntRemUnsigned { lhs, rhs, t },
-        (Op::Rem, Class::SignedInt) => Inst::IntRemSigned { lhs, rhs, t },
+        (Op::Add, Class::SignedInt | Class::UnsignedInt) => {
+            Inst::IntBinop { op: IntOp::Add, lhs, rhs, t }
+        }
+        (Op::Sub, Class::SignedInt | Class::UnsignedInt) => {
+            Inst::IntBinop { op: IntOp::Sub, lhs, rhs, t }
+        }
+        (Op::Mul, Class::SignedInt | Class::UnsignedInt) => {
+            Inst::IntBinop { op: IntOp::Mul, lhs, rhs, t }
+        }
+        (Op::Div, Class::UnsignedInt) => Inst::IntBinop { op: IntOp::DivU, lhs, rhs, t },
+        (Op::Div, Class::SignedInt) => Inst::IntBinop { op: IntOp::DivS, lhs, rhs, t },
+        (Op::Rem, Class::UnsignedInt) => Inst::IntBinop { op: IntOp::RemU, lhs, rhs, t },
+        (Op::Rem, Class::SignedInt) => Inst::IntBinop { op: IntOp::RemS, lhs, rhs, t },
         (Op::Equals, Class::SignedInt | Class::UnsignedInt) => {
             Inst::IntCmp { lhs, rhs, pred: IntCmpPred::Eq, width: lhs_width }
         }
@@ -3878,11 +3869,11 @@ fn compile_scalar_op(b: &mut Builder, scalar_op: ScalarOp, dst: Option<Value>) -
         (Op::Ge, Class::SignedInt) => {
             Inst::IntCmp { lhs, rhs, pred: IntCmpPred::Sge, width: lhs_width }
         }
-        (Op::Add, Class::Float) => Inst::FloatAdd { lhs, rhs, t },
-        (Op::Sub, Class::Float) => Inst::FloatSub { lhs, rhs, t },
-        (Op::Mul, Class::Float) => Inst::FloatMul { lhs, rhs, t },
-        (Op::Div, Class::Float) => Inst::FloatDiv { lhs, rhs, t },
-        (Op::Rem, Class::Float) => Inst::FloatRem { lhs, rhs, t },
+        (Op::Add, Class::Float) => Inst::FloatBinop { op: FloatOp::Add, lhs, rhs, t },
+        (Op::Sub, Class::Float) => Inst::FloatBinop { op: FloatOp::Sub, lhs, rhs, t },
+        (Op::Mul, Class::Float) => Inst::FloatBinop { op: FloatOp::Mul, lhs, rhs, t },
+        (Op::Div, Class::Float) => Inst::FloatBinop { op: FloatOp::Div, lhs, rhs, t },
+        (Op::Rem, Class::Float) => Inst::FloatBinop { op: FloatOp::Rem, lhs, rhs, t },
         (Op::Equals, Class::Float) => {
             Inst::FloatCmp { lhs, rhs, pred: FloatCmpPred::Eq, width: lhs_width }
         }
@@ -4625,32 +4616,18 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                         errors.push(format!("i{inst_id}: word_to_ptr src is not a word-sized int"))
                     }
                 }
-                Inst::IntAdd { .. } => (),
-                Inst::IntSub { .. } => (),
-                Inst::IntMul { .. } => (),
-                Inst::IntDivUnsigned { .. } => (),
-                Inst::IntDivSigned { .. } => (),
-                Inst::IntRemUnsigned { .. } => (),
-                Inst::IntRemSigned { .. } => (),
+                Inst::IntBinop { .. } => (),
+                Inst::IntOverflows { .. } => (),
                 Inst::IntCmp { .. } => (),
-                Inst::FloatAdd { .. } => (),
-                Inst::FloatSub { .. } => (),
-                Inst::FloatNeg { v, .. } => {
+                Inst::FloatBinop { .. } => (),
+                Inst::FloatUnop { op, v, .. } => {
                     let inst_type = get_value_kind(&u, v);
                     if !inst_type.is_float() {
-                        errors.push(format!("i{inst_id}: fneg src is not a float"))
+                        errors.push(format!("i{inst_id}: {} src is not a float", op.name()))
                     }
                 }
-                Inst::FloatMul { .. } => (),
-                Inst::FloatDiv { .. } => (),
-                Inst::FloatRem { .. } => (),
+                Inst::FloatFma { .. } => (),
                 Inst::FloatCmp { .. } => (),
-                Inst::BitAnd { .. } => (),
-                Inst::BitOr { .. } => (),
-                Inst::BitXor { .. } => (),
-                Inst::BitShiftLeft { .. } => (),
-                Inst::BitUnsignedShiftRight { .. } => (),
-                Inst::BitSignedShiftRight { .. } => (),
                 Inst::BakeStaticValue { .. } => (),
             }
         }
@@ -5242,40 +5219,38 @@ pub fn display_inst(
             write!(w, "inttoptr ")?;
             v(w, value)?;
         }
-        Inst::IntAdd { lhs, rhs, .. } => binop(w, "add", lhs, rhs, &v)?,
-        Inst::IntSub { lhs, rhs, .. } => binop(w, "sub", lhs, rhs, &v)?,
-        Inst::IntMul { lhs, rhs, .. } => binop(w, "mul", lhs, rhs, &v)?,
-        Inst::IntDivUnsigned { lhs, rhs, .. } => binop(w, "udiv", lhs, rhs, &v)?,
-        Inst::IntDivSigned { lhs, rhs, .. } => binop(w, "sdiv", lhs, rhs, &v)?,
-        Inst::IntRemUnsigned { lhs, rhs, .. } => binop(w, "urem", lhs, rhs, &v)?,
-        Inst::IntRemSigned { lhs, rhs, .. } => binop(w, "srem", lhs, rhs, &v)?,
+        Inst::IntBinop { op, lhs, rhs, .. } => binop(w, op.name(), lhs, rhs, &v)?,
+        Inst::IntOverflows { op, signed, lhs, rhs, .. } => {
+            write!(w, "{}{} ", op.name(), if signed { " signed" } else { "" })?;
+            v(w, lhs)?;
+            w.write_str(", ")?;
+            v(w, rhs)?;
+        }
         Inst::IntCmp { lhs, rhs, pred, .. } => {
             write!(w, "icmp {} ", pred)?;
             v(w, lhs)?;
             w.write_str(", ")?;
             v(w, rhs)?;
         }
-        Inst::FloatAdd { lhs, rhs, .. } => binop(w, "fadd", lhs, rhs, &v)?,
-        Inst::FloatSub { lhs, rhs, .. } => binop(w, "fsub", lhs, rhs, &v)?,
-        Inst::FloatNeg { v: value, .. } => {
-            write!(w, "fneg ")?;
+        Inst::FloatBinop { op, lhs, rhs, .. } => binop(w, op.name(), lhs, rhs, &v)?,
+        Inst::FloatUnop { op, v: value, .. } => {
+            write!(w, "{} ", op.name())?;
             v(w, value)?;
         }
-        Inst::FloatMul { lhs, rhs, .. } => binop(w, "fmul", lhs, rhs, &v)?,
-        Inst::FloatDiv { lhs, rhs, .. } => binop(w, "fdiv", lhs, rhs, &v)?,
-        Inst::FloatRem { lhs, rhs, .. } => binop(w, "frem", lhs, rhs, &v)?,
+        Inst::FloatFma { a, b, c, .. } => {
+            write!(w, "fma ")?;
+            v(w, a)?;
+            w.write_str(", ")?;
+            v(w, b)?;
+            w.write_str(", ")?;
+            v(w, c)?;
+        }
         Inst::FloatCmp { lhs, rhs, pred, .. } => {
             write!(w, "fcmp {} ", pred)?;
             v(w, lhs)?;
             w.write_str(", ")?;
             v(w, rhs)?;
         }
-        Inst::BitAnd { lhs, rhs, .. } => binop(w, "and", lhs, rhs, &v)?,
-        Inst::BitOr { lhs, rhs, .. } => binop(w, "or", lhs, rhs, &v)?,
-        Inst::BitXor { lhs, rhs, .. } => binop(w, "xor", lhs, rhs, &v)?,
-        Inst::BitShiftLeft { lhs, rhs, .. } => binop(w, "shl", lhs, rhs, &v)?,
-        Inst::BitUnsignedShiftRight { lhs, rhs, .. } => binop(w, "lshr", lhs, rhs, &v)?,
-        Inst::BitSignedShiftRight { lhs, rhs, .. } => binop(w, "ashr", lhs, rhs, &v)?,
         Inst::BakeStaticValue { type_id, value } => {
             write!(w, "bake ")?;
             k1.display_type_id(w, type_id, dump::TypeDisplayMode::Name)?;

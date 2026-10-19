@@ -597,6 +597,7 @@ ns for i64 {
   let min-value: i64 = -0x8000000000000000
 
   fn(inline) unsigned(self: i64): u64 { mem/bitcast[i64, u64](self) }
+  fn(builtin) mul-high(self: i64, rhs: i64): i64
   fn(inline) to-ptr(self: i64): ptr { mem/bitcast[i64, ptr](self) }
 
   fn from-string(s: string): result[i64, string] {
@@ -634,18 +635,18 @@ ns for u64 {
   let max-value: u64 = 0xFFFFFFFFFFFFFFFF
 
   fn(inline) signed(self: u64): i64 { mem/bitcast(self) }
+  fn(builtin) mul-high(self: u64, rhs: u64): u64
   fn(inline) to-ptr(self: u64): ptr { mem/bitcast[u64, ptr](self) }
 
   fn from-string(s: string): result[u64, string] {
     if s.is-empty() return :err "empty string"
-    let cutoff = u64/max-value / 10
-    let last-digit = u64/max-value % 10
     let o: u64 = 0
     for c in s {
       require c.to-ascii-digit() is :some d else { return :err "not a digit" }
-      let d = d.widen[u64]
-      if o > cutoff or (o == cutoff and d > last-digit) return :err "u64 overflow"
-      o = o * 10 + d
+      let tens = o.mul-overflow(10)
+      let next = tens.value.add-overflow(d.widen[u64])
+      if tens.overflowed or next.overflowed return :err "u64 overflow"
+      o = next.value
     }
     :ok o
   }
@@ -710,6 +711,13 @@ ns for f64 {
     mem/bitcast[u64, f64](mem/bitcast[f64, u64](self).bit-and(0x7FFFFFFFFFFFFFFF))
   }
 
+  fn(builtin) sqrt(self: f64): f64
+  fn(builtin) floor(self: f64): f64
+  fn(builtin) ceil(self: f64): f64
+  fn(builtin) round-to-zero(self: f64): f64
+  fn(builtin) round-even(self: f64): f64
+  fn(builtin) fma(self: f64, b: f64, c: f64): f64
+
   fn format[w: writer](f: f64, w, places: i32) {
     let buf: array[u8, 512] = uninit
     float-impl/write-output(w, buf.as-span(), k1rt/snprintf_f64(buf.data-ptr(), 512, f, places), places)
@@ -760,6 +768,13 @@ ns for f32 {
   fn abs(self: f32): f32 {
     mem/bitcast[u32, f32](mem/bitcast[f32, u32](self).bit-and(0x7FFFFFFF))
   }
+
+  fn(builtin) sqrt(self: f32): f32
+  fn(builtin) floor(self: f32): f32
+  fn(builtin) ceil(self: f32): f32
+  fn(builtin) round-to-zero(self: f32): f32
+  fn(builtin) round-even(self: f32): f32
+  fn(builtin) fma(self: f32, b: f32, c: f32): f32
 }
 
 impl equals for f32 {
@@ -804,12 +819,16 @@ impl scalar-cmp for f32 {
   fn(builtin) le(self, other: self): bool
   fn(builtin) gt(self, other: self): bool
   fn(builtin) ge(self, other: self): bool
+  fn(builtin) min(self, other: self): self
+  fn(builtin) max(self, other: self): self
 }
 impl scalar-cmp for f64 {
   fn(builtin) lt(self, other: self): bool
   fn(builtin) le(self, other: self): bool
   fn(builtin) gt(self, other: self): bool
   fn(builtin) ge(self, other: self): bool
+  fn(builtin) min(self, other: self): self
+  fn(builtin) max(self, other: self): self
 }
 
 // float compare is IEEE-754 totalOrder, so it stays a consistent total order

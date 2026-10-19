@@ -933,7 +933,7 @@ fn map_refs(
                 block(&mut case.from);
             }
         }
-        Inst::Select { cond, cons, alt, .. } => {
+        Inst::Select { cond, cons, alt, .. } | Inst::FloatFma { a: cond, b: cons, c: alt, .. } => {
             value(cond);
             value(cons);
             value(alt);
@@ -941,7 +941,7 @@ fn map_refs(
         Inst::Ret { v, .. }
         | Inst::BoolNegate { v }
         | Inst::BitNot { v, .. }
-        | Inst::FloatNeg { v, .. }
+        | Inst::FloatUnop { v, .. }
         | Inst::BitCast { v, .. }
         | Inst::IntTrunc { v, .. }
         | Inst::IntExtU { v, .. }
@@ -957,26 +957,11 @@ fn map_refs(
         | Inst::PtrToWord { v, .. }
         | Inst::WordToPtr { v }
         | Inst::BakeStaticValue { value: v, .. } => value(v),
-        Inst::IntAdd { lhs, rhs, .. }
-        | Inst::IntSub { lhs, rhs, .. }
-        | Inst::IntMul { lhs, rhs, .. }
-        | Inst::IntDivUnsigned { lhs, rhs, .. }
-        | Inst::IntDivSigned { lhs, rhs, .. }
-        | Inst::IntRemUnsigned { lhs, rhs, .. }
-        | Inst::IntRemSigned { lhs, rhs, .. }
+        Inst::IntBinop { lhs, rhs, .. }
+        | Inst::IntOverflows { lhs, rhs, .. }
         | Inst::IntCmp { lhs, rhs, .. }
-        | Inst::FloatAdd { lhs, rhs, .. }
-        | Inst::FloatSub { lhs, rhs, .. }
-        | Inst::FloatMul { lhs, rhs, .. }
-        | Inst::FloatDiv { lhs, rhs, .. }
-        | Inst::FloatRem { lhs, rhs, .. }
-        | Inst::FloatCmp { lhs, rhs, .. }
-        | Inst::BitAnd { lhs, rhs, .. }
-        | Inst::BitOr { lhs, rhs, .. }
-        | Inst::BitXor { lhs, rhs, .. }
-        | Inst::BitShiftLeft { lhs, rhs, .. }
-        | Inst::BitUnsignedShiftRight { lhs, rhs, .. }
-        | Inst::BitSignedShiftRight { lhs, rhs, .. } => {
+        | Inst::FloatBinop { lhs, rhs, .. }
+        | Inst::FloatCmp { lhs, rhs, .. } => {
             value(lhs);
             value(rhs);
         }

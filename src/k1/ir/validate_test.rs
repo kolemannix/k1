@@ -37,7 +37,12 @@ fn self_loop(u: &mut UnitBuf, extra_case: Option<fn(BlockId, BlockId, BlockId) -
     let next = push(
         u,
         body,
-        Inst::IntAdd { lhs: Value::Inst(counter), rhs: u64_value(1), t: ScalarType::I64 },
+        Inst::IntBinop {
+            op: IntOp::Add,
+            lhs: Value::Inst(counter),
+            rhs: u64_value(1),
+            t: ScalarType::I64,
+        },
     );
     let mut cases = vec![PhiCase { from: entry, value: u64_value(0) }];
     match extra_case {
@@ -108,13 +113,23 @@ fn use_that_does_not_dominate_is_rejected() {
         let only_left = push(
             u,
             left,
-            Inst::IntAdd { lhs: u64_value(1), rhs: u64_value(2), t: ScalarType::I64 },
+            Inst::IntBinop {
+                op: IntOp::Add,
+                lhs: u64_value(1),
+                rhs: u64_value(2),
+                t: ScalarType::I64,
+            },
         );
         push(u, left, Inst::Jump(join));
         let only_right = push(
             u,
             right,
-            Inst::IntAdd { lhs: u64_value(3), rhs: u64_value(4), t: ScalarType::I64 },
+            Inst::IntBinop {
+                op: IntOp::Add,
+                lhs: u64_value(3),
+                rhs: u64_value(4),
+                t: ScalarType::I64,
+            },
         );
         push(u, right, Inst::Jump(join));
         let t = PhysicalType::scalar(ScalarType::I64);
@@ -126,7 +141,8 @@ fn use_that_does_not_dominate_is_rejected() {
         let sum = push(
             u,
             join,
-            Inst::IntAdd {
+            Inst::IntBinop {
+                op: IntOp::Add,
                 lhs: Value::Inst(only_left),
                 rhs: Value::Inst(joined),
                 t: ScalarType::I64,

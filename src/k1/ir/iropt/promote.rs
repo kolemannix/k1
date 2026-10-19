@@ -428,7 +428,8 @@ impl LocalUses {
             | Inst::Switch { .. }
             | Inst::BoolNegate { .. }
             | Inst::BitNot { .. }
-            | Inst::FloatNeg { .. }
+            | Inst::FloatUnop { .. }
+            | Inst::FloatFma { .. }
             | Inst::IntTrunc { .. }
             | Inst::IntExtU { .. }
             | Inst::IntExtS { .. }
@@ -440,25 +441,10 @@ impl LocalUses {
             | Inst::Float64ToIntSigned { .. }
             | Inst::IntToFloatUnsigned { .. }
             | Inst::IntToFloatSigned { .. }
-            | Inst::IntAdd { .. }
-            | Inst::IntSub { .. }
-            | Inst::IntMul { .. }
-            | Inst::IntDivUnsigned { .. }
-            | Inst::IntDivSigned { .. }
-            | Inst::IntRemUnsigned { .. }
-            | Inst::IntRemSigned { .. }
-            | Inst::FloatAdd { .. }
-            | Inst::FloatSub { .. }
-            | Inst::FloatMul { .. }
-            | Inst::FloatDiv { .. }
-            | Inst::FloatRem { .. }
-            | Inst::FloatCmp { .. }
-            | Inst::BitAnd { .. }
-            | Inst::BitOr { .. }
-            | Inst::BitXor { .. }
-            | Inst::BitShiftLeft { .. }
-            | Inst::BitUnsignedShiftRight { .. }
-            | Inst::BitSignedShiftRight { .. } => {}
+            | Inst::IntBinop { .. }
+            | Inst::IntOverflows { .. }
+            | Inst::FloatBinop { .. }
+            | Inst::FloatCmp { .. } => {}
             _ => visit_inst_values(&u.view(), inst, &mut |v| reject_value(self, v)),
         }
     }

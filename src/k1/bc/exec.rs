@@ -12,7 +12,7 @@
 
 use std::num::NonZeroU32;
 
-use crate::arith::{self, FloatOp, IntOp};
+use crate::arith::{self, FloatOp, FloatUnop, IntOp, OverflowOp};
 use crate::ir::{self, BackendBuiltin, IrUnitId};
 use crate::lex::Span;
 use crate::typer::trace::TraceKind;
@@ -357,15 +357,6 @@ fn exec_loop<const COUNT_OPS: bool>(
                 Ok(r) => write_slot!(operand!(0), Value::u64(r)),
                 Err(e) => vmerr!("{}", e.message()),
             }
-            advance!($opcode);
-        }};
-    }
-    macro_rules! float_binop {
-        ($h:ident, $op:expr, $opcode:path) => {{
-            let width = header_a($h);
-            let lhs = read_src!(operand!(1)).bits();
-            let rhs = read_src!(operand!(2)).bits();
-            write_slot!(operand!(0), Value::u64(arith::float_op($op, width, lhs, rhs)));
             advance!($opcode);
         }};
     }
@@ -849,6 +840,17 @@ fn exec_loop<const COUNT_OPS: bool>(
             Opcode::IntDivS => int_binop!(h, IntOp::DivS, Opcode::IntDivS),
             Opcode::IntRemU => int_binop!(h, IntOp::RemU, Opcode::IntRemU),
             Opcode::IntRemS => int_binop!(h, IntOp::RemS, Opcode::IntRemS),
+            Opcode::IntMulHighU => int_binop!(h, IntOp::MulHighU, Opcode::IntMulHighU),
+            Opcode::IntMulHighS => int_binop!(h, IntOp::MulHighS, Opcode::IntMulHighS),
+            Opcode::IntOverflows => {
+                let b = header_b(h);
+                let op = OverflowOp::from_u8(b as u8);
+                let lhs = read_src!(operand!(1)).bits();
+                let rhs = read_src!(operand!(2)).bits();
+                let o = arith::int_overflows(op, b >> 8 != 0, header_a(h), lhs, rhs);
+                write_slot!(operand!(0), Value::bool(o));
+                advance!(Opcode::IntOverflows);
+            }
             Opcode::IntCmp => {
                 let width = header_a(h);
                 let pred = ir::IntCmpPred::from_u8(header_b(h) as u8);
@@ -857,11 +859,26 @@ fn exec_loop<const COUNT_OPS: bool>(
                 write_slot!(operand!(0), Value::bool(arith::int_cmp(width, pred, lhs, rhs)));
                 advance!(Opcode::IntCmp);
             }
-            Opcode::FloatAdd => float_binop!(h, FloatOp::Add, Opcode::FloatAdd),
-            Opcode::FloatSub => float_binop!(h, FloatOp::Sub, Opcode::FloatSub),
-            Opcode::FloatMul => float_binop!(h, FloatOp::Mul, Opcode::FloatMul),
-            Opcode::FloatDiv => float_binop!(h, FloatOp::Div, Opcode::FloatDiv),
-            Opcode::FloatRem => float_binop!(h, FloatOp::Rem, Opcode::FloatRem),
+            Opcode::FloatBinop => {
+                let op = FloatOp::from_u8(header_b(h) as u8);
+                let lhs = read_src!(operand!(1)).bits();
+                let rhs = read_src!(operand!(2)).bits();
+                write_slot!(operand!(0), Value::u64(arith::float_op(op, header_a(h), lhs, rhs)));
+                advance!(Opcode::FloatBinop);
+            }
+            Opcode::FloatUnop => {
+                let op = FloatUnop::from_u8(header_b(h) as u8);
+                let v = read_src!(operand!(1)).bits();
+                write_slot!(operand!(0), Value::u64(arith::float_unop(op, header_a(h), v)));
+                advance!(Opcode::FloatUnop);
+            }
+            Opcode::FloatFma => {
+                let a = read_src!(operand!(1)).bits();
+                let b = read_src!(operand!(2)).bits();
+                let c = read_src!(operand!(3)).bits();
+                write_slot!(operand!(0), Value::u64(arith::float_fma(header_a(h), a, b, c)));
+                advance!(Opcode::FloatFma);
+            }
             Opcode::FloatCmp => {
                 let width = header_a(h);
                 let pred = ir::FloatCmpPred::from_u8(header_b(h) as u8);
@@ -894,11 +911,6 @@ fn exec_loop<const COUNT_OPS: bool>(
                 let v = read_src!(operand!(1)).bits();
                 write_slot!(operand!(0), Value::u64(arith::bit_not(header_a(h), v)));
                 advance!(Opcode::BitNot);
-            }
-            Opcode::FloatNeg => {
-                let v = read_src!(operand!(1)).bits();
-                write_slot!(operand!(0), Value::u64(arith::float_neg(header_a(h), v)));
-                advance!(Opcode::FloatNeg);
             }
             Opcode::Cast => {
                 let kind = CastKind::from_u8(header_a(h));

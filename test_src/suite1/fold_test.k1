@@ -1,6 +1,9 @@
 ns fold_test
 
-fn(noinline) opaque[t](x: t): t { x }
+fn opaque[t](x: t): t {
+  let v = x
+  mem/load-volatile(v.&)
+}
 
 fn(test) wrapping() {
   assert-equals(200u8 + 100u8, opaque(200u8) + opaque(100u8))

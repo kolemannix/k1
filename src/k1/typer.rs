@@ -19,6 +19,7 @@ pub(crate) mod type_eval;
 pub(crate) mod typed_int_value;
 pub(crate) mod types;
 
+use crate::arith::{FloatOp, FloatUnop, IntOp, OverflowOp};
 use crate::ir::{AtomicOrderingIr, BackendBuiltin, IrUnitId};
 use crate::typer::megarepl::MegareplState;
 use crate::typer::trace::TraceKind;
@@ -148,11 +149,12 @@ pub const ABILITY_ID_MUL: AbilityId = AbilityId(NonZeroU32::new(11).unwrap());
 pub const ABILITY_ID_DIV: AbilityId = AbilityId(NonZeroU32::new(12).unwrap());
 pub const ABILITY_ID_REM: AbilityId = AbilityId(NonZeroU32::new(13).unwrap());
 pub const ABILITY_ID_NEG: AbilityId = AbilityId(NonZeroU32::new(14).unwrap());
-pub const ABILITY_ID_SCALAR_CMP: AbilityId = AbilityId(NonZeroU32::new(15).unwrap());
-pub const ABILITY_ID_COMPARABLE: AbilityId = AbilityId(NonZeroU32::new(16).unwrap());
-pub const ABILITY_ID_TRY: AbilityId = AbilityId(NonZeroU32::new(17).unwrap());
-pub const ABILITY_ID_ITERATOR: AbilityId = AbilityId(NonZeroU32::new(18).unwrap());
-pub const ABILITY_ID_ITERABLE: AbilityId = AbilityId(NonZeroU32::new(19).unwrap());
+pub const ABILITY_ID_OVERFLOW_ARITH: AbilityId = AbilityId(NonZeroU32::new(15).unwrap());
+pub const ABILITY_ID_SCALAR_CMP: AbilityId = AbilityId(NonZeroU32::new(16).unwrap());
+pub const ABILITY_ID_COMPARABLE: AbilityId = AbilityId(NonZeroU32::new(17).unwrap());
+pub const ABILITY_ID_TRY: AbilityId = AbilityId(NonZeroU32::new(18).unwrap());
+pub const ABILITY_ID_ITERATOR: AbilityId = AbilityId(NonZeroU32::new(19).unwrap());
+pub const ABILITY_ID_ITERABLE: AbilityId = AbilityId(NonZeroU32::new(20).unwrap());
 //rustfmt: on
 
 pub const FUNC_PARAM_IDEAL_COUNT: usize = 8;
@@ -2062,6 +2064,11 @@ pub enum BuiltinIr {
     Unreachable,
     BakeStaticValue,
     Scalar(ScalarOpKind),
+    FloatUnop(FloatUnop),
+    FloatBinop(FloatOp),
+    FloatFma,
+    IntBinop(IntOp),
+    IntOverflow { op: OverflowOp, signed: bool },
     Bitcast,
     PointerIndex,
     VolatileLoad,
@@ -2094,6 +2101,7 @@ pub enum VecOpKind {
     EqLanes,
     LtLanes,
     ShuffleBytes,
+    Shuffle,
     ToMask,
     ReduceOr,
 }
@@ -2118,6 +2126,7 @@ impl VecOpKind {
             VecOpKind::EqLanes => "vector_eq_lanes",
             VecOpKind::LtLanes => "vector_lt_lanes",
             VecOpKind::ShuffleBytes => "vector_shuffle_bytes",
+            VecOpKind::Shuffle => "vector_shuffle",
             VecOpKind::ToMask => "vector_to_mask",
             VecOpKind::ReduceOr => "vector_reduce_or",
         }
@@ -2143,6 +2152,11 @@ impl BuiltinIr {
             BuiltinIr::Unreachable => "unreachable",
             BuiltinIr::BakeStaticValue => "bake_static_value",
             BuiltinIr::Scalar(kind) => kind.kind_name(),
+            BuiltinIr::FloatUnop(op) => op.name(),
+            BuiltinIr::FloatBinop(op) => op.name(),
+            BuiltinIr::FloatFma => "fma",
+            BuiltinIr::IntBinop(_) => "int_binop",
+            BuiltinIr::IntOverflow { op, .. } => op.name(),
             BuiltinIr::Bitcast => "bitcast",
             BuiltinIr::PointerIndex => "pointer_index",
             BuiltinIr::VolatileLoad => "volatile_load",
@@ -12182,7 +12196,7 @@ impl TypedProgram {
         call: &Call,
         span: Span,
         intrinsic: Builtin,
-        _ctx: EvalExprContext,
+        ctx: EvalExprContext,
     ) -> K1Result<()> {
         match intrinsic {
             Builtin::Ir(BuiltinIr::Bitcast) => {
@@ -12220,6 +12234,29 @@ impl TypedProgram {
                 | BuiltinIr::AtomicCmpxchg { .. }
                 | BuiltinIr::AtomicFence),
             ) => self.check_atomic_builtin(call, span, b),
+            Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Shuffle)) if !ctx.is_generic_pass() => {
+                let mask_expr = *self.mem.get_nth(call.args, 2);
+                let mask_span = self.exprs.get_span(mask_expr);
+                let TypedExpr::StaticValue(mask) = self.exprs.get(mask_expr) else {
+                    kbail!(self, mask_span, "vector/shuffle mask must be a static value")
+                };
+                let mask = mask.value_id;
+                let lanes = self.static_container_len(mask).unwrap_or(0);
+                for lane in 0..lanes {
+                    let index = self.get_static_container_element(mask, lane).as_size().unwrap();
+                    if index as u64 >= 2 * lanes as u64 {
+                        kbail!(
+                            self,
+                            mask_span,
+                            "vector/shuffle mask lane {} is {}, past the {} lanes of both inputs",
+                            lane,
+                            index,
+                            2 * lanes
+                        )
+                    }
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -13649,6 +13686,16 @@ impl TypedProgram {
                     }
                     _ => None,
                 },
+                (ABILITY_ID_OVERFLOW_ARITH, overflow_fn) if is_integer => {
+                    let signed = t.unwrap().expect_integer().is_signed();
+                    let op = match overflow_fn {
+                        "add-overflow" => Some(OverflowOp::Add),
+                        "sub-overflow" => Some(OverflowOp::Sub),
+                        "mul-overflow" => Some(OverflowOp::Mul),
+                        _ => None,
+                    };
+                    op.map(|op| Builtin::Ir(BuiltinIr::IntOverflow { op, signed }))
+                }
                 (ABILITY_ID_SCALAR_CMP, _) => {
                     let class = if let Some(Type::Integer(i)) = t {
                         Some(ArithOpClass::from_int_type(*i))
@@ -13657,15 +13704,19 @@ impl TypedProgram {
                     } else {
                         None
                     };
-                    match class {
-                        None => None,
-                        Some(class) => match fn_name_str {
-                            "lt" => mk_arith!(OpKind { class, op: Op::Lt }),
-                            "le" => mk_arith!(OpKind { class, op: Op::Le }),
-                            "gt" => mk_arith!(OpKind { class, op: Op::Gt }),
-                            "ge" => mk_arith!(OpKind { class, op: Op::Ge }),
-                            _ => None,
-                        },
+                    match (class, fn_name_str) {
+                        (None, _) => None,
+                        (Some(class), "lt") => mk_arith!(OpKind { class, op: Op::Lt }),
+                        (Some(class), "le") => mk_arith!(OpKind { class, op: Op::Le }),
+                        (Some(class), "gt") => mk_arith!(OpKind { class, op: Op::Gt }),
+                        (Some(class), "ge") => mk_arith!(OpKind { class, op: Op::Ge }),
+                        (Some(ArithOpClass::Float), "min") => {
+                            Some(Builtin::Ir(BuiltinIr::FloatBinop(FloatOp::Min)))
+                        }
+                        (Some(ArithOpClass::Float), "max") => {
+                            Some(Builtin::Ir(BuiltinIr::FloatBinop(FloatOp::Max)))
+                        }
+                        _ => None,
                     }
                 }
                 _ => None,
@@ -13711,6 +13762,25 @@ impl TypedProgram {
                     "ref-at" => Some(Builtin::Ir(BuiltinIr::PointerIndex)),
                     _ => None,
                 },
+                Some(int_ns @ ("u64" | "i64")) => match fn_name_str {
+                    "mul-high" => Some(Builtin::Ir(BuiltinIr::IntBinop(if int_ns == "i64" {
+                        IntOp::MulHighS
+                    } else {
+                        IntOp::MulHighU
+                    }))),
+                    _ => None,
+                },
+                Some("f64" | "f32") => match fn_name_str {
+                    "sqrt" => Some(Builtin::Ir(BuiltinIr::FloatUnop(FloatUnop::Sqrt))),
+                    "floor" => Some(Builtin::Ir(BuiltinIr::FloatUnop(FloatUnop::Floor))),
+                    "ceil" => Some(Builtin::Ir(BuiltinIr::FloatUnop(FloatUnop::Ceil))),
+                    "round-to-zero" => {
+                        Some(Builtin::Ir(BuiltinIr::FloatUnop(FloatUnop::RoundToZero)))
+                    }
+                    "round-even" => Some(Builtin::Ir(BuiltinIr::FloatUnop(FloatUnop::RoundEven))),
+                    "fma" => Some(Builtin::Ir(BuiltinIr::FloatFma)),
+                    _ => None,
+                },
                 Some("vector") => match fn_name_str {
                     "splat" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Splat))),
                     "load-unchecked" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Load))),
@@ -13722,6 +13792,7 @@ impl TypedProgram {
                     "shuffle-bytes" => {
                         Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::ShuffleBytes)))
                     }
+                    "shuffle" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Shuffle))),
                     "to-mask" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::ToMask))),
                     "reduce-or" => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::ReduceOr))),
                     _ => None,
@@ -18129,6 +18200,8 @@ impl TypedProgram {
             core!("div"),
             core!("rem"),
             core!("neg"),
+            core!("overflow-arith"),
+            core!("overflow-result"),
             core!("sys"),
             core!("files"),
             core!("scalar-cmp"),

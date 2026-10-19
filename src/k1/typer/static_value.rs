@@ -168,6 +168,7 @@ impl StaticValue {
     pub(crate) fn as_size(&self) -> Option<i64> {
         match self {
             StaticValue::Int(TypedIntValue::I64(size)) => Some(*size),
+            StaticValue::Zero(SIZE_TYPE_ID) => Some(0),
             _ => None,
         }
     }

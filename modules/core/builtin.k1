@@ -332,6 +332,27 @@ ability div { fn div(self, rhs: self): self }
 ability rem { fn rem(self, rhs: self): self }
 ability neg { fn negated(self): self }
 
+type overflow-result[t] = { value: t, overflowed: bool }
+
+ability overflow-arith {
+  fn add-overflow(self, rhs: self): overflow-result[self]
+  fn sub-overflow(self, rhs: self): overflow-result[self]
+  fn mul-overflow(self, rhs: self): overflow-result[self]
+
+  fn(inline) add-checked(self, rhs: self): ?self {
+    let r = self.add-overflow(rhs)
+    if r.overflowed :none else :some r.value
+  }
+  fn(inline) sub-checked(self, rhs: self): ?self {
+    let r = self.sub-overflow(rhs)
+    if r.overflowed :none else :some r.value
+  }
+  fn(inline) mul-checked(self, rhs: self): ?self {
+    let r = self.mul-overflow(rhs)
+    if r.overflowed :none else :some r.value
+  }
+}
+
 // This is a more simple notion of add
 // than Rust's std::ops::Add, generic over rhs and output.
 // Being able to assume a symmetric add gives us much better and simpler
@@ -392,6 +413,47 @@ impl neg for i8    { fn(builtin) negated(self): self }
 impl neg for i16   { fn(builtin) negated(self): self }
 impl neg for i32   { fn(builtin) negated(self): self }
 impl neg for i64   { fn(builtin) negated(self): self }
+
+impl overflow-arith for u8 {
+  fn(builtin) add-overflow(self, rhs: self): overflow-result[self]
+  fn(builtin) sub-overflow(self, rhs: self): overflow-result[self]
+  fn(builtin) mul-overflow(self, rhs: self): overflow-result[self]
+}
+impl overflow-arith for u16 {
+  fn(builtin) add-overflow(self, rhs: self): overflow-result[self]
+  fn(builtin) sub-overflow(self, rhs: self): overflow-result[self]
+  fn(builtin) mul-overflow(self, rhs: self): overflow-result[self]
+}
+impl overflow-arith for u32 {
+  fn(builtin) add-overflow(self, rhs: self): overflow-result[self]
+  fn(builtin) sub-overflow(self, rhs: self): overflow-result[self]
+  fn(builtin) mul-overflow(self, rhs: self): overflow-result[self]
+}
+impl overflow-arith for u64 {
+  fn(builtin) add-overflow(self, rhs: self): overflow-result[self]
+  fn(builtin) sub-overflow(self, rhs: self): overflow-result[self]
+  fn(builtin) mul-overflow(self, rhs: self): overflow-result[self]
+}
+impl overflow-arith for i8 {
+  fn(builtin) add-overflow(self, rhs: self): overflow-result[self]
+  fn(builtin) sub-overflow(self, rhs: self): overflow-result[self]
+  fn(builtin) mul-overflow(self, rhs: self): overflow-result[self]
+}
+impl overflow-arith for i16 {
+  fn(builtin) add-overflow(self, rhs: self): overflow-result[self]
+  fn(builtin) sub-overflow(self, rhs: self): overflow-result[self]
+  fn(builtin) mul-overflow(self, rhs: self): overflow-result[self]
+}
+impl overflow-arith for i32 {
+  fn(builtin) add-overflow(self, rhs: self): overflow-result[self]
+  fn(builtin) sub-overflow(self, rhs: self): overflow-result[self]
+  fn(builtin) mul-overflow(self, rhs: self): overflow-result[self]
+}
+impl overflow-arith for i64 {
+  fn(builtin) add-overflow(self, rhs: self): overflow-result[self]
+  fn(builtin) sub-overflow(self, rhs: self): overflow-result[self]
+  fn(builtin) mul-overflow(self, rhs: self): overflow-result[self]
+}
 
 ability scalar-cmp {
   fn lt(self, other: self): bool
