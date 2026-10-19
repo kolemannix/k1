@@ -1012,7 +1012,7 @@ impl TypedProgram {
             StaticValue::Char(c) => write!(w, "{}", *c as char),
             StaticValue::Int(i) => {
                 if pretty {
-                    if i.is_signed() {
+                    if i.get_integer_type().is_signed() {
                         write!(w, "{}", i.to_i64())?;
                     } else {
                         write!(w, "{}", i.to_u64_bits())?;

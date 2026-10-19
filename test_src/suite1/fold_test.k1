@@ -89,6 +89,11 @@ fn(test) casts() {
   let s: i8 = -3i8
   let sw: i64 = s.widen()
   assert-equals(sw, opaque(-3i8).widen())
+  let hb: u8 = opaque(200u8)
+  let coerced: i32 = hb
+  assert-equals(coerced, 200)
+  assert-equals(hb.widen[i32], 200)
+  assert-equals(200u8.widen[i32], 200)
   let t: u8 = 300u16.trunc()
   let ot: u8 = opaque(300u16).trunc()
   assert-equals(t, ot)

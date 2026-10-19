@@ -2398,8 +2398,8 @@ impl TypedProgram {
         PhysicalType::named(st, self.named_scalars.add(origin))
     }
 
-    pub fn is_named_scalar_signed(&self, id: NamedScalarId) -> bool {
-        match self.types.get(*self.named_scalars.get(id)) {
+    pub fn is_type_signed(&self, type_id: TypeId) -> bool {
+        match self.types.get(type_id) {
             Type::Integer(i) => i.is_signed(),
             Type::Enum(e) => e.int_type.is_signed(),
             Type::Sum(s) => s.tag_type.is_signed(),

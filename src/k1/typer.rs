@@ -1301,9 +1301,19 @@ impl Display for TypedFloatValue {
 
 #[derive(Debug, Clone, Copy)]
 pub enum IntegerCastDirection {
-    Extend,
+    SignExtend,
+    ZeroExtend,
     Truncate,
-    SignChange,
+}
+
+impl IntegerCastDirection {
+    pub fn from_widen(from: IntegerType, to: IntegerType) -> Option<IntegerCastDirection> {
+        match (from.is_signed(), to.is_signed()) {
+            (true, false) => None,
+            (true, true) => Some(IntegerCastDirection::SignExtend),
+            (false, _) => Some(IntegerCastDirection::ZeroExtend),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1325,7 +1335,9 @@ pub enum CastType {
 impl Display for CastType {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            CastType::IntegerCast(_dir) => write!(f, "intcast"),
+            CastType::IntegerCast(IntegerCastDirection::SignExtend) => write!(f, "sext"),
+            CastType::IntegerCast(IntegerCastDirection::ZeroExtend) => write!(f, "zext"),
+            CastType::IntegerCast(IntegerCastDirection::Truncate) => write!(f, "itrunc"),
             CastType::ReferenceToReference => write!(f, "reftoref"),
             CastType::PointerToReference => write!(f, "ptrtoref"),
             CastType::ReferenceToPointer => write!(f, "reftoptr"),
@@ -3735,46 +3747,17 @@ impl TypedProgram {
             if let Type::Integer(actual_int) = self.types.get(actual_type_id) {
                 return {
                     let needs_widen = expected_int.width() > actual_int.width();
-                    // Let's do auto widening when signedness doesnt change
-                    // And also unsigned -> signed widening
                     if needs_widen {
-                        match (expected_int.is_signed(), actual_int.is_signed()) {
-                            (true, true) => {
+                        match IntegerCastDirection::from_widen(*actual_int, *expected_int) {
+                            None => CheckExprTypeResult::Err("widen signed->unsigned".into()),
+                            Some(direction) => {
                                 let widened = self.synth_cast(
                                     expr,
                                     expected,
-                                    CastType::IntegerCast(IntegerCastDirection::Extend),
+                                    CastType::IntegerCast(direction),
                                     None,
                                 );
-                                CheckExprTypeResult::Coerce(widened, "widen signed")
-                            }
-                            (false, false) => {
-                                let widened = self.synth_cast(
-                                    expr,
-                                    expected,
-                                    CastType::IntegerCast(IntegerCastDirection::Extend),
-                                    None,
-                                );
-                                CheckExprTypeResult::Coerce(widened, "widen unsigned")
-                            }
-                            (false, true) => {
-                                // Could lose signedness if negative; no no
-                                CheckExprTypeResult::Err("widen signed->unsigned".into())
-                            }
-                            (true, false) => {
-                                let widened = self.synth_cast(
-                                    expr,
-                                    expected,
-                                    CastType::IntegerCast(IntegerCastDirection::Extend),
-                                    None,
-                                );
-                                let to_signed = self.synth_cast(
-                                    widened,
-                                    expected,
-                                    CastType::IntegerCast(IntegerCastDirection::SignChange),
-                                    None,
-                                );
-                                CheckExprTypeResult::Coerce(to_signed, "widen->unsigned->signed")
+                                CheckExprTypeResult::Coerce(widened, "widen")
                             }
                         }
                     } else {
@@ -7557,14 +7540,13 @@ impl TypedProgram {
                     span,
                     "Cannot use .as to convert between integer types; use widen(), trunc(), signed(), or unsigned()",
                 )),
-                Type::Float(_to_float_type) => match from_integer_type {
-                    IntegerType::U8 | IntegerType::U16 | IntegerType::U32 | IntegerType::U64 => {
+                Type::Float(_to_float_type) => {
+                    if from_integer_type.is_signed() {
+                        Ok(CastType::IntegerSignedToFloat)
+                    } else {
                         Ok(CastType::IntegerUnsignedToFloat)
                     }
-                    IntegerType::I8 | IntegerType::I16 | IntegerType::I32 | IntegerType::I64 => {
-                        Ok(CastType::IntegerSignedToFloat)
-                    }
-                },
+                }
                 _ => Err(kerr!(
                     self,
                     span,
@@ -7646,7 +7628,7 @@ impl TypedProgram {
                     if !widen {
                         kbail!(self, span, "not a truncation",);
                     }
-                    if from.is_signed() && !to.is_signed() {
+                    let Some(direction) = IntegerCastDirection::from_widen(from, to) else {
                         kbail!(
                             self,
                             span,
@@ -7656,22 +7638,8 @@ impl TypedProgram {
                             to,
                             to.sign_flipped()
                         );
-                    }
-                    if !from.is_signed() && to.is_signed() {
-                        let widened = self.synth_cast(
-                            base_expr,
-                            target_type,
-                            CastType::IntegerCast(IntegerCastDirection::Extend),
-                            Some(span),
-                        );
-                        return Ok(self.synth_cast(
-                            widened,
-                            target_type,
-                            CastType::IntegerCast(IntegerCastDirection::SignChange),
-                            Some(span),
-                        ));
-                    }
-                    CastType::IntegerCast(IntegerCastDirection::Extend)
+                    };
+                    CastType::IntegerCast(direction)
                 }
                 Ordering::Less => {
                     if widen {
@@ -13384,9 +13352,8 @@ impl TypedProgram {
         let third =
             self.tmp.dlist_nth_data_opt(namespace_chain, 3).map(|node| self.ident_str(*node));
         let t = self_type.map(|t| self.types.get(t));
-        let int_type = t.and_then(|t| t.as_integer());
-        let is_integer = int_type.is_some();
-        let signed = int_type.is_some_and(|i| i.is_signed());
+        let is_integer = t.is_some_and(|t| t.as_integer().is_some());
+        let signed = self_type.is_some_and(|t| self.is_type_signed(t));
         let is_float = t.is_some_and(|t| t.as_float().is_some());
         use ScalarOpKind as K;
         macro_rules! mk_scalar {

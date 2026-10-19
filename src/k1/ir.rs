@@ -3287,11 +3287,7 @@ fn compile_ir_builtin(
             let allow_pointer = op == Op::Xchg;
             let type_id = call.type_args.as_slice(&b.k1.mem)[0];
             let t = check_atomic_scalar_type(b, type_id, allow_pointer)?;
-            let signed = match b.k1.types.get(type_id) {
-                Type::Integer(i) => i.is_signed(),
-                Type::Enum(e) => e.int_type.is_signed(),
-                _ => false,
-            };
+            let signed = b.k1.is_type_signed(type_id);
             let op = match op {
                 Op::Xchg => AtomicRmwOpIr::Xchg,
                 Op::Add => AtomicRmwOpIr::Add,
@@ -3558,7 +3554,7 @@ fn callee_vector_elem_is_signed(b: &mut Builder, call: &Call) -> bool {
     let Type::Vector(vector) = b.k1.types.get(return_type) else {
         b.k1.ice_span(b.cur_span, "vector op must return a vector")
     };
-    b.k1.types.get(vector.element_type).as_integer().is_some_and(|i| i.is_signed())
+    b.k1.is_type_signed(vector.element_type)
 }
 
 fn vector_pt_parts(b: &mut Builder, pt: PhysicalType) -> K1Result<(ScalarType, u32)> {
@@ -3622,7 +3618,6 @@ fn compile_cast(
             Ok(Value::Empty)
         }
         CastType::ReferenceToReference
-        | CastType::IntegerCast(IntegerCastDirection::SignChange)
         | CastType::PointerToReference
         | CastType::ReferenceToPointer => {
             let base_noop = compile_expr(b, None, c.base_expr)?;
@@ -3631,21 +3626,19 @@ fn compile_cast(
                 store_rich_if_dst(b, dst, to_pt, base_noop, IrComment::FulfillCastDestination);
             Ok(stored)
         }
-        CastType::IntegerCast(IntegerCastDirection::Extend)
+        CastType::IntegerCast(IntegerCastDirection::SignExtend)
+        | CastType::IntegerCast(IntegerCastDirection::ZeroExtend)
         | CastType::IntegerCast(IntegerCastDirection::Truncate) => {
             let base = compile_expr(b, None, c.base_expr)?;
             let to_pt = b.get_physical_type(target_type_id)?;
             let to = to_pt.expect_scalar();
             let inst = match c.cast_type {
-                CastType::IntegerCast(IntegerCastDirection::Extend) => {
-                    let signed = b.k1.get_expr_type(c.base_expr).as_integer().unwrap().is_signed();
-                    if signed {
-                        let from_type_id = b.k1.exprs.get_type(c.base_expr);
-                        let from = b.get_physical_type(from_type_id)?.expect_scalar();
-                        Inst::IntExtS { from, v: base, to }
-                    } else {
-                        Inst::IntExtU { v: base, to }
-                    }
+                CastType::IntegerCast(IntegerCastDirection::SignExtend) => {
+                    let from = b.get_value_kind(base).expect_value().unwrap().expect_scalar();
+                    Inst::IntExtS { from, v: base, to }
+                }
+                CastType::IntegerCast(IntegerCastDirection::ZeroExtend) => {
+                    Inst::IntExtU { v: base, to }
                 }
                 CastType::IntegerCast(IntegerCastDirection::Truncate) => {
                     Inst::IntTrunc { v: base, to }

@@ -84,6 +84,7 @@ fn(test) vector-lane-ops() {
   assert-equals(iota.gt-lanes(eight).to-mask(), 0xFE00)
   let signed: span[i8] = [-2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]
   assert-equals(vector/from-span[i8, 16](signed, 0).lt-lanes(vector/splat[i8, 16](0)).to-mask(), 0b11)
+  assert-equals(vector/splat[ordering, 4](:less).lt-lanes(vector/splat[ordering, 4](:greater)).to-mask(), 0b1111)
   let floats: span[f32] = [1.0, 2.0, 3.0, 4.0]
   assert-equals(vector/from-span[f32, 4](floats, 0).lt-lanes(vector/splat[f32, 4](2.5)).to-mask(), 0b0011)
 

@@ -898,7 +898,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 None => i32_type.const_zero(),
                 Some(v) => {
                     let ret_type = self.k1.get_function_type(main_function_id).return_type;
-                    let signed = self.k1.types.get(ret_type).expect_integer().is_signed();
+                    let signed = self.k1.is_type_signed(ret_type);
                     self.builder
                         .build_int_cast_sign_flag(v.into_int_value(), i32_type, signed, "")
                         .unwrap()
@@ -1457,15 +1457,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn int_div_helper(
         &mut self,
         int_type: IntType<'ctx>,
-        signed: bool,
-        rem: bool,
+        op: IntOp,
     ) -> CgResult<FunctionValue<'ctx>> {
-        let name = format!(
-            "__k1_{}{}_i{}",
-            if signed { "s" } else { "u" },
-            if rem { "rem" } else { "div" },
-            int_type.get_bit_width()
-        );
+        let name = format!("__k1_{}_i{}", op.name(), int_type.get_bit_width());
         if let Some(f) = self.llvm_module.get_function(&name) {
             return Ok(f);
         }
@@ -1486,7 +1480,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             .builder
             .build_int_compare(IntPredicate::EQ, rhs, int_type.const_zero(), "div_zero")
             .unwrap();
-        let bad = if signed {
+        let bad = if matches!(op, IntOp::DivS | IntOp::RemS) {
             let min = int_type.const_int(1u64 << (int_type.get_bit_width() - 1), false);
             let is_neg_one = self
                 .builder
@@ -1508,11 +1502,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.builder.build_unreachable().unwrap();
 
         self.builder.position_at_end(ok_block);
-        let result = match (signed, rem) {
-            (false, false) => self.builder.build_int_unsigned_div(lhs, rhs, "").unwrap(),
-            (true, false) => self.builder.build_int_signed_div(lhs, rhs, "").unwrap(),
-            (false, true) => self.builder.build_int_unsigned_rem(lhs, rhs, "").unwrap(),
-            (true, true) => self.builder.build_int_signed_rem(lhs, rhs, "").unwrap(),
+        let result = match op {
+            IntOp::DivU => self.builder.build_int_unsigned_div(lhs, rhs, "").unwrap(),
+            IntOp::DivS => self.builder.build_int_signed_div(lhs, rhs, "").unwrap(),
+            IntOp::RemU => self.builder.build_int_unsigned_rem(lhs, rhs, "").unwrap(),
+            IntOp::RemS => self.builder.build_int_signed_rem(lhs, rhs, "").unwrap(),
+            _ => unreachable!("int_div_helper takes a div or rem op"),
         };
         self.builder.build_return(Some(&result)).unwrap();
 
@@ -1523,18 +1518,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             self.builder.set_current_debug_location(loc);
         }
         Ok(f)
-    }
-
-    fn build_checked_int_div(
-        &mut self,
-        lhs: IntValue<'ctx>,
-        rhs: IntValue<'ctx>,
-        signed: bool,
-        rem: bool,
-    ) -> CgResult<IntValue<'ctx>> {
-        let helper = self.int_div_helper(lhs.get_type(), signed, rem)?;
-        let call = self.build_call(helper, &[lhs.into(), rhs.into()]);
-        Ok(call.try_as_basic_value().basic().unwrap().into_int_value())
     }
 
     fn build_shift_count(&self, count: IntValue<'ctx>, subject: IntValue<'ctx>) -> IntValue<'ctx> {
@@ -2294,7 +2277,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             ([range, None], [range_attribute, None])
         };
         let native_abi_attribute = match st.width() {
-            NumericWidth::B8 | NumericWidth::B16 if self.k1.is_named_scalar_signed(id) => {
+            NumericWidth::B8 | NumericWidth::B16 if self.k1.is_type_signed(origin) => {
                 Some(self.make_enum_attribute("signext", 0))
             }
             NumericWidth::B8 | NumericWidth::B16 => Some(self.make_enum_attribute("zeroext", 0)),
@@ -2319,7 +2302,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn make_named_scalar_debug_type(&mut self, st: ScalarType, id: NamedScalarId) -> DIType<'ctx> {
         let origin = *self.k1.named_scalars.get(id);
-        let signed = self.k1.is_named_scalar_signed(id);
+        let signed = self.k1.is_type_signed(origin);
         let int_encoding = if signed { Self::DW_ATE_SIGNED } else { Self::DW_ATE_UNSIGNED };
         let layout = st.get_layout();
         let make_basic = |cg: &Self, name: &str, encoding: u32| {
@@ -4598,10 +4581,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     IntOp::Add => self.builder.build_int_add(l, r, "").unwrap(),
                     IntOp::Sub => self.builder.build_int_sub(l, r, "").unwrap(),
                     IntOp::Mul => self.builder.build_int_mul(l, r, "").unwrap(),
-                    IntOp::DivU => self.build_checked_int_div(l, r, false, false)?,
-                    IntOp::DivS => self.build_checked_int_div(l, r, true, false)?,
-                    IntOp::RemU => self.build_checked_int_div(l, r, false, true)?,
-                    IntOp::RemS => self.build_checked_int_div(l, r, true, true)?,
+                    IntOp::DivU | IntOp::DivS | IntOp::RemU | IntOp::RemS => {
+                        let helper = self.int_div_helper(l.get_type(), op)?;
+                        let call = self.build_call(helper, &[l.into(), r.into()]);
+                        call.try_as_basic_value().basic().unwrap().into_int_value()
+                    }
                     IntOp::And => self.builder.build_and(l, r, "").unwrap(),
                     IntOp::Or => self.builder.build_or(l, r, "").unwrap(),
                     IntOp::Xor => self.builder.build_xor(l, r, "").unwrap(),

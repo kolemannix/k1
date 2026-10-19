@@ -32,19 +32,6 @@ impl TypedIntValue {
         }
     }
 
-    pub fn zero(integer_type: IntegerType) -> Self {
-        match integer_type {
-            IntegerType::U8 => TypedIntValue::U8(0),
-            IntegerType::U16 => TypedIntValue::U16(0),
-            IntegerType::U32 => TypedIntValue::U32(0),
-            IntegerType::U64 => TypedIntValue::U64(0),
-            IntegerType::I8 => TypedIntValue::I8(0),
-            IntegerType::I16 => TypedIntValue::I16(0),
-            IntegerType::I32 => TypedIntValue::I32(0),
-            IntegerType::I64 => TypedIntValue::I64(0),
-        }
-    }
-
     pub fn is_zero(&self) -> bool {
         match self {
             TypedIntValue::U8(x) => *x == 0,
@@ -73,21 +60,6 @@ impl TypedIntValue {
 
     pub fn get_type(&self) -> TypeId {
         self.get_integer_type().type_id()
-    }
-
-    pub fn bit_not(&self) -> Self {
-        use std::ops::Not;
-
-        match *self {
-            TypedIntValue::U8(x) => TypedIntValue::U8(x.not()),
-            TypedIntValue::U16(x) => TypedIntValue::U16(x.not()),
-            TypedIntValue::U32(x) => TypedIntValue::U32(x.not()),
-            TypedIntValue::U64(x) => TypedIntValue::U64(x.not()),
-            TypedIntValue::I8(x) => TypedIntValue::I8(x.not()),
-            TypedIntValue::I16(x) => TypedIntValue::I16(x.not()),
-            TypedIntValue::I32(x) => TypedIntValue::I32(x.not()),
-            TypedIntValue::I64(x) => TypedIntValue::I64(x.not()),
-        }
     }
 
     pub fn from_u64_bits(integer_type: IntegerType, bits: u64) -> Self {
@@ -129,61 +101,6 @@ impl TypedIntValue {
         }
     }
 
-    // Used for truncation/extension in vm
-    pub fn to_u32(&self) -> u32 {
-        match self {
-            TypedIntValue::U8(v) => *v as u32,
-            TypedIntValue::U16(v) => *v as u32,
-            TypedIntValue::U32(v) => *v,
-            TypedIntValue::U64(v) => *v as u32,
-            TypedIntValue::I8(v) => *v as u32,
-            TypedIntValue::I16(v) => *v as u32,
-            TypedIntValue::I32(v) => *v as u32,
-            TypedIntValue::I64(v) => *v as u32,
-        }
-    }
-
-    // Used for truncation/extension in vm
-    pub fn to_u16(&self) -> u16 {
-        match self {
-            TypedIntValue::U8(v) => *v as u16,
-            TypedIntValue::U16(v) => *v,
-            TypedIntValue::U32(v) => *v as u16,
-            TypedIntValue::U64(v) => *v as u16,
-            TypedIntValue::I8(v) => *v as u16,
-            TypedIntValue::I16(v) => *v as u16,
-            TypedIntValue::I32(v) => *v as u16,
-            TypedIntValue::I64(v) => *v as u16,
-        }
-    }
-
-    // Used for truncation/extension in vm
-    pub fn to_u8(&self) -> u8 {
-        match self {
-            TypedIntValue::U8(v) => *v,
-            TypedIntValue::U16(v) => *v as u8,
-            TypedIntValue::U32(v) => *v as u8,
-            TypedIntValue::U64(v) => *v as u8,
-            TypedIntValue::I8(v) => *v as u8,
-            TypedIntValue::I16(v) => *v as u8,
-            TypedIntValue::I32(v) => *v as u8,
-            TypedIntValue::I64(v) => *v as u8,
-        }
-    }
-
-    pub fn to_i32(&self) -> i32 {
-        match self {
-            TypedIntValue::U8(v) => *v as i32,
-            TypedIntValue::U16(v) => *v as i32,
-            TypedIntValue::U32(v) => *v as i32,
-            TypedIntValue::U64(v) => *v as i32,
-            TypedIntValue::I8(v) => *v as i32,
-            TypedIntValue::I16(v) => *v as i32,
-            TypedIntValue::I32(v) => *v,
-            TypedIntValue::I64(v) => *v as i32,
-        }
-    }
-
     pub fn to_i64(&self) -> i64 {
         match self {
             TypedIntValue::U8(v) => *v as i64,
@@ -212,33 +129,6 @@ impl TypedIntValue {
 
     pub fn get_scalar_type(&self) -> ScalarType {
         self.get_integer_type().get_scalar_type()
-    }
-
-    pub fn is_signed(&self) -> bool {
-        match self {
-            TypedIntValue::I8(_)
-            | TypedIntValue::I16(_)
-            | TypedIntValue::I32(_)
-            | TypedIntValue::I64(_) => true,
-            TypedIntValue::U8(_)
-            | TypedIntValue::U16(_)
-            | TypedIntValue::U32(_)
-            | TypedIntValue::U64(_) => false,
-        }
-    }
-
-    pub fn expect_u64(&self) -> u64 {
-        match self {
-            TypedIntValue::U64(v) => *v,
-            _ => panic!("expect_u64 on int"),
-        }
-    }
-
-    pub fn as_u8(&self) -> Option<u8> {
-        match self {
-            TypedIntValue::U8(v) => Some(*v),
-            _ => None,
-        }
     }
 }
 
