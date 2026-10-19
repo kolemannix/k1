@@ -721,6 +721,16 @@ fn read_and_lex_source_files(
     Ok(sources)
 }
 
+pub(crate) fn is_skipped_module_dir(
+    dir: &str,
+    excludes: &[impl AsRef<str>],
+    overlay: &fxhash::FxHashMap<String, String>,
+) -> bool {
+    kpath::file_name(dir).starts_with('.')
+        || excludes.iter().any(|e| e.as_ref() == dir)
+        || has_build_file(dir, overlay)
+}
+
 fn collect_module_source_paths(
     module_dir: &str,
     is_core: bool,
@@ -728,11 +738,6 @@ fn collect_module_source_paths(
     overlay: &fxhash::FxHashMap<String, String>,
 ) -> Result<Vec<String>, String> {
     let is_k1 = |path: &Path| path.extension().is_some_and(|ext| ext == "k1");
-    let is_skipped_dir = |dir: &str| {
-        kpath::file_name(dir).starts_with('.')
-            || excludes.iter().any(|e| e == dir)
-            || has_build_file(dir, overlay)
-    };
     let mut files = vec![];
     let mut dirs = vec![module_dir.to_string()];
     while let Some(dir) = dirs.pop() {
@@ -753,7 +758,7 @@ fn collect_module_source_paths(
                 format!("Source file name is not valid UTF-8: {}", s.to_string_lossy())
             })?;
             if file_type.is_dir() {
-                if !is_skipped_dir(&path_string) {
+                if !is_skipped_module_dir(&path_string, excludes, overlay) {
                     dirs.push(path_string);
                 }
             } else if dir != module_dir
@@ -774,7 +779,7 @@ fn collect_module_source_paths(
             continue;
         }
         let mut dir = kpath::parent(path);
-        while dir.len() > module_dir.len() && !is_skipped_dir(dir) {
+        while dir.len() > module_dir.len() && !is_skipped_module_dir(dir, excludes, overlay) {
             dir = kpath::parent(dir);
         }
         if dir.len() == module_dir.len() {

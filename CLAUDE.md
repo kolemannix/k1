@@ -49,8 +49,8 @@ They are agent notes: fix a wrong line on sight, never report it or ask.
 - Clippy: keep `result_large_err` on; fix the site's shape.
 
 ## Build and run
-- Cargo needs `LLVM_SYS_231_PREFIX=llvm/install-llvm` (in `~/.zshrc`, absent from
-  non-login shells) and `--features=llvm-sys/prefer-dynamic` for dev builds;
+- Cargo needs `LLVM_SYS_231_PREFIX=$PWD/llvm/install-llvm`, absolute (in `~/.zshrc`,
+  absent from non-login shells) and `--features=llvm-sys/prefer-dynamic` for dev builds;
   bundles use `llvm-sys/force-static`. Release is `panic = "abort"`; the `lsp`
   profile unwinds so a compile panic becomes an editor message.
 - `[profile.dev] split-debuginfo = "packed"` stays: unpacked `.rcgu.o` files piled

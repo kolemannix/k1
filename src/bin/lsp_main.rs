@@ -486,13 +486,11 @@ impl Backend {
         overlay: &fxhash::FxHashMap<String, String>,
     ) -> Option<PathBuf> {
         let file_path = k1::kpath::canonicalize_owned(file_url.to_file_path().ok()?).ok()?;
-        let in_program = self
-            .with_k1_for_url(file_url, |k1| uri_to_source(&k1.ast, file_url).is_some())
+        let in_plan = self
+            .with_k1(|k1| k1.plan.find_owning_module(&file_path, overlay).is_some())
             .unwrap_or(false);
-        if in_program {
-            if let Some(stored) = self.src_path.read().unwrap().clone() {
-                return Some(stored);
-            }
+        if in_plan && let Some(stored) = self.src_path.read().unwrap().clone() {
+            return Some(stored);
         }
         let root = self.workspace_root.read().unwrap().clone();
         Some(k1::compiler::find_check_target_for_file(&file_path, root.as_deref(), overlay))
@@ -512,7 +510,6 @@ impl Backend {
         let Some(target) = self.target_file_for_url(file_url, &source_overlay) else {
             return;
         };
-        let is_module_target = target.is_dir();
         let changed = {
             let mut src_path = self.src_path.write().unwrap();
             let changed = src_path.as_deref() != Some(target.as_path());
@@ -525,29 +522,7 @@ impl Backend {
         if !changed && in_program && !force_compile {
             return;
         }
-        self.compile(source_overlay.clone()).await;
-        let in_program = self
-            .with_k1_for_url(file_url, |k1| uri_to_source(&k1.ast, file_url).is_some())
-            .unwrap_or(false);
-        let is_build_file = Path::new(file_url.path())
-            .file_name()
-            .is_some_and(|name| name == k1::plan::BUILD_FILE_NAME);
-        // A failing module stops the compile before later modules load, so a
-        // file can be missing because its module was never reached; checking it
-        // alone would only report its module's deps as unresolved
-        let reached_primary = self
-            .with_k1(|k1| k1.completed_module_count as usize + 1 >= k1.plan.modules().len())
-            .unwrap_or(true);
-        if is_module_target
-            && !in_program
-            && reached_primary
-            && !is_build_file
-            && let Ok(file_path) = file_url.to_file_path()
-            && let Ok(file_path) = k1::kpath::canonicalize_owned(file_path)
-        {
-            *self.src_path.write().unwrap() = Some(PathBuf::from(file_path));
-            self.compile(source_overlay).await;
-        }
+        self.compile(source_overlay).await;
         self.send_diagnostics().await;
         if self.semantic_tokens_refresh_supported.load(Ordering::Relaxed) {
             let client = self.client.clone();

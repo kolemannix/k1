@@ -146,6 +146,31 @@ impl BuildPlan {
         self.mem.getn(self.excludes)
     }
 
+    pub fn find_owning_module(
+        &self,
+        path: &str,
+        overlay: &fxhash::FxHashMap<String, String>,
+    ) -> Option<ModuleId> {
+        let mut excludes: Vec<&str> = Vec::with_capacity(self.excludes().len());
+        for exclude in self.excludes() {
+            excludes.push(self.get(*exclude));
+        }
+        let mut dir = kpath::parent(path);
+        loop {
+            for (index, m) in self.modules().iter().enumerate() {
+                let module_path = self.get(m.path);
+                if module_path == path || module_path == dir {
+                    return ModuleId::from_u32(index as u32 + 1);
+                }
+            }
+            let parent = kpath::parent(dir);
+            if parent == dir || crate::compiler::is_skipped_module_dir(dir, &excludes, overlay) {
+                return None;
+            }
+            dir = parent;
+        }
+    }
+
     pub fn get_inputs_hash(&self) -> InputsHash {
         let mut hash = InputsHash(0);
         for m in self.modules() {
