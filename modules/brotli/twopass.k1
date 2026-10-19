@@ -36,7 +36,7 @@ ns for cmd-sink {
 }
 
 fn(inline) hash-2p(p: ptr, shift: u32, min-match: size): size {
-  let h = (load64-le(p) << ((8 - min-match).trunc[u32] * 8)) * K-HASH-MUL32.widen[u64]
+  let h = (vector/load-word(p) << ((8 - min-match).trunc[u32] * 8)) * K-HASH-MUL32.widen[u64]
   (h >> shift).signed()
 }
 
@@ -148,7 +148,7 @@ fn(inline) update-table-after-copy(
 ): ptr {
   let pos = ip.diff(base-ip)
   if min-match == 4 {
-    let input-bytes = load64-le(ip.sub-bytes(3))
+    let input-bytes = vector/load-word(ip.sub-bytes(3))
     let cur-hash = hash-2p-at-offset(input-bytes, 3, shift, min-match)
     table.index-unchecked(hash-2p-at-offset(input-bytes, 0, shift, min-match)).* = (pos - 3).trunc[i32]
     table.index-unchecked(hash-2p-at-offset(input-bytes, 1, shift, min-match)).* = (pos - 2).trunc[i32]
@@ -157,11 +157,11 @@ fn(inline) update-table-after-copy(
     table.index-unchecked(cur-hash).* = pos.trunc[i32]
     candidate
   } else {
-    let input-bytes = load64-le(ip.sub-bytes(5))
+    let input-bytes = vector/load-word(ip.sub-bytes(5))
     table.index-unchecked(hash-2p-at-offset(input-bytes, 0, shift, min-match)).* = (pos - 5).trunc[i32]
     table.index-unchecked(hash-2p-at-offset(input-bytes, 1, shift, min-match)).* = (pos - 4).trunc[i32]
     table.index-unchecked(hash-2p-at-offset(input-bytes, 2, shift, min-match)).* = (pos - 3).trunc[i32]
-    let input-bytes2 = load64-le(ip.sub-bytes(2))
+    let input-bytes2 = vector/load-word(ip.sub-bytes(2))
     let cur-hash = hash-2p-at-offset(input-bytes2, 2, shift, min-match)
     table.index-unchecked(hash-2p-at-offset(input-bytes2, 0, shift, min-match)).* = (pos - 2).trunc[i32]
     table.index-unchecked(hash-2p-at-offset(input-bytes2, 1, shift, min-match)).* = (pos - 1).trunc[i32]

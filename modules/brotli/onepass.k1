@@ -21,7 +21,7 @@ type one-pass-arena = {
 }
 
 fn(inline) hash-bytes(p: ptr, shift: u32): size {
-  (((load64-le(p) << 24) * K-HASH-MUL32.widen[u64]) >> shift).signed()
+  (((vector/load-word(p) << 24) * K-HASH-MUL32.widen[u64]) >> shift).signed()
 }
 
 fn(inline) hash-bytes-at-offset(v: u64, offset: u32, shift: u32): size {
@@ -38,7 +38,7 @@ fn(inline) find-match-length(s1: ptr, s2: ptr, limit: size): size {
   let p2 = s2
   let lim = limit
   while lim >= 8 {
-    let x = load64-le(p2) ^ load64-le(p1)
+    let x = vector/load-word(p2) ^ vector/load-word(p1)
     if x != 0 {
       return p1.diff(s1) + (x.trailing-zeros() >> 3).signed()
     }
@@ -319,7 +319,7 @@ fn copy-u16(dst: buffer[u16], dst-off: size, src: buffer[u16], src-off: size, co
 }
 
 fn(inline) update-table-after-copy-1p(ip: ptr, base-ip: ptr, table: buffer[i32], shift: u32): ptr {
-  let input-bytes = load64-le(ip.sub-bytes(3))
+  let input-bytes = vector/load-word(ip.sub-bytes(3))
   let pos = ip.diff(base-ip)
   table.index-unchecked(hash-bytes-at-offset(input-bytes, 0, shift)).* = (pos - 3).trunc[i32]
   table.index-unchecked(hash-bytes-at-offset(input-bytes, 1, shift)).* = (pos - 2).trunc[i32]

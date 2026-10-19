@@ -48,7 +48,8 @@ fn(test) string-split-by-char() {
 
 fn(test) numeric-from-string-bounds() {
   assert(u64/from-string("18446744073709551615").! == u64/max-value)
-  assert(not u64/from-string("18446744073709551616").is-ok())
+  assert(u64/from-string("18446744073709551616") is :err "u64 overflow")
+  assert(u64/from-string("18446744073709551620") is :err "u64 overflow")
   assert(not u64/from-string("-1").is-ok())
   assert(not i64/from-string("-").is-ok())
   assert(i64/from-string("-9223372036854775808").! == i64/min-value)

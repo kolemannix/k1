@@ -63,7 +63,7 @@ ns for hasher-quickly {
   }
 
   fn(inline) hash-bytes(self: *hasher-quickly, data: ptr): size {
-    let h = (load64-le(data) << (64u32 - self.hash-len * 8)) * K-HASH-MUL64
+    let h = (vector/load-word(data) << (64u32 - self.hash-len * 8)) * K-HASH-MUL64
     (h >> (64u32 - self.bucket-bits)).trunc[u32].as-size()
   }
 
@@ -362,7 +362,7 @@ ns for hasher-longest-match64 {
   }
 
   fn(inline) hash-bytes(self: *hasher-longest-match64, data: ptr): size {
-    ((load64-le(data) * self.hash-mul) >> 49).signed()
+    ((vector/load-word(data) * self.hash-mul) >> 49).signed()
   }
 
   fn prepare(self: *hasher-longest-match64, one-shot: bool, input-size: size, data: ptr) {

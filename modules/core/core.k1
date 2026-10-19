@@ -638,25 +638,20 @@ ns for u64 {
 
   fn from-string(s: string): result[u64, string] {
     if s.is-empty() return :err "empty string"
+    let cutoff = u64/max-value / 10
+    let last-digit = u64/max-value % 10
     let o: u64 = 0
     for c in s {
       require c.to-ascii-digit() is :some d else { return :err "not a digit" }
       let d = d.widen[u64]
-      if o > (u64/max-value - d) / 10 return :err "u64 overflow"
+      if o > cutoff or (o == cutoff and d > last-digit) return :err "u64 overflow"
       o = o * 10 + d
     }
     :ok o
   }
 
   fn next-pow2(self: u64): u64 {
-    let v = self - 1
-    v = v | (v >> 1)
-    v = v | (v >> 2)
-    v = v | (v >> 4)
-    v = v | (v >> 8)
-    v = v | (v >> 16)
-    v = v | (v >> 32)
-    v + 1
+    if self <= 1 self else (u64/max-value >> (self - 1).leading-zeros().trunc[u32]) + 1
   }
 
   fn bitmask-low(n: size): u64 {

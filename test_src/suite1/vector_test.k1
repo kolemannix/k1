@@ -17,6 +17,8 @@ fn(test) vector-lane-ops() {
   let loaded = vector/from-span[u8, 16](bytes, 1)
   assert-equals(loaded.get-lane(0), 1)
   assert-equals(loaded.get-lane(15), 16)
+  assert-equals(vector/from-span[u8, 8](bytes, 1).to-u64(), 0x0807060504030201)
+  assert-equals(vector/splat[u16, 4](0xABCD).with-lane(3, 0x1234).to-u64(), 0x1234ABCDABCDABCD)
 
   let dst-list = list/filled(32, 0: u8)
   let dst-span = dst-list.as-span()
@@ -61,6 +63,11 @@ fn(test) vector-lane-ops() {
 
   assert-equals((0: u64).trailing-zeros(), 64)
   assert-equals((0xF0F0: u64).count-ones(), 8)
+  assert-equals((0: u64).next-pow2(), 0)
+  assert-equals((1: u64).next-pow2(), 1)
+  assert-equals((5: u64).next-pow2(), 8)
+  assert-equals((1u64 << 63).next-pow2(), 1u64 << 63)
+  assert-equals(((1u64 << 63) + 1).next-pow2(), 0)
   assert-equals(hits.first-true-lane(), 2)
   assert-equals(vector/zeroed[u8, 16]().first-true-lane(), -1)
 

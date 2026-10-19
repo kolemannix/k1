@@ -1,9 +1,5 @@
 use std/math/log2
 
-fn(inline) load64-le(p: ptr): u64 {
-  mem/bitcast[vector[u8, 8], u64](vector/load-unchecked[u8, 8](p))
-}
-
 fn(inline) load32-le(p: ptr): u32 {
   mem/bitcast[vector[u8, 4], u32](vector/load-unchecked[u8, 4](p))
 }
@@ -73,7 +69,7 @@ ns for bit-reader {
   fn(inline) fill(self: *bit-reader) {
     if self.bit-pos > 56 return
     if self.avail >= 8 {
-      self.val = self.val | (load64-le(self.next) << self.bit-pos.trunc[u32])
+      self.val = self.val | (vector/load-word(self.next) << self.bit-pos.trunc[u32])
       let n = (63 - self.bit-pos) >> 3
       self.next = self.next.add-bytes(n)
       self.avail = self.avail - n
