@@ -111,6 +111,62 @@ fn uri_to_source<'ast>(ast: &'ast ParsedProgram, url: &Url) -> Option<&'ast Sour
     source.map(|s| s.1)
 }
 
+fn get_semantic_tokens(ast: &ParsedProgram, source: &SourceFile) -> Vec<SemanticToken> {
+    let file_tokens = source.semantic_tokens.as_slice(&ast.mem);
+    let capacity = file_tokens.len() + source.trivia.len() as usize;
+    let mut tokens: Vec<SemanticToken> = Vec::with_capacity(capacity);
+    let mut spans_and_kinds = Vec::with_capacity(capacity);
+    const COMMENT: u32 = parse::SemanticTokenKind::Comment as u32;
+    for semantic_token in file_tokens {
+        spans_and_kinds.push((
+            semantic_token.span,
+            semantic_token.kind as u32,
+            semantic_token.mods as u32,
+        ))
+    }
+    for entry in ast.mem.getn_lt(source.trivia) {
+        if let lex::TokenTriviaKind::LineComment = entry.trivia.kind {
+            let span =
+                lex::Span { global_start: source.base + entry.trivia.start, len: entry.trivia.len };
+            spans_and_kinds.push((span, COMMENT, 0));
+        }
+    }
+    spans_and_kinds
+        .sort_unstable_by_key(|(span, token_type, _)| (span.global_start, *token_type != COMMENT));
+    let mut comment_end = 0;
+    let mut prev_line = 1;
+    let mut prev_start_col = 0;
+    for (span, token_type, bitflags) in spans_and_kinds {
+        if span.global_start < comment_end {
+            continue;
+        }
+        if token_type == COMMENT {
+            comment_end = span.end()
+        }
+        let length = span.len;
+        let Some(line) = source.get_line_for_span_start(&ast.mem, span) else {
+            continue;
+        };
+        let line_number = line.line_number();
+        let start_col = source.local_from_global_offset(span.global_start) - line.start_char;
+        let delta_line = line_number - prev_line;
+        let delta_start = if delta_line == 0 { start_col - prev_start_col } else { start_col };
+
+        prev_line = line_number;
+        prev_start_col = start_col;
+        let token = SemanticToken {
+            delta_line,
+            delta_start,
+            length,
+            token_type,
+            token_modifiers_bitset: bitflags,
+        };
+        tokens.push(token);
+    }
+    info!("semantic_tokens: iterated {} tokens, returning {}", capacity, tokens.len());
+    tokens
+}
+
 fn get_program_for_url<'k1>(k1: &'k1 mut TypedProgram, url: &Url) -> &'k1 mut TypedProgram {
     let is_build_file =
         Path::new(url.path()).file_name().is_some_and(|name| name == k1::plan::BUILD_FILE_NAME);
@@ -172,6 +228,7 @@ struct Backend {
     completion_compile_lock: tokio::sync::Mutex<()>,
     /// The client accepts `$/progress` (window.workDoneProgress)
     progress_supported: AtomicBool,
+    semantic_tokens_refresh_supported: AtomicBool,
 }
 
 const PROGRESS_TICK: std::time::Duration = std::time::Duration::from_millis(100);
@@ -314,6 +371,7 @@ impl Backend {
             completion_generation: AtomicU32::new(0),
             completion_compile_lock: tokio::sync::Mutex::new(()),
             progress_supported: AtomicBool::new(false),
+            semantic_tokens_refresh_supported: AtomicBool::new(false),
         }
     }
 
@@ -474,8 +532,15 @@ impl Backend {
         let is_build_file = Path::new(file_url.path())
             .file_name()
             .is_some_and(|name| name == k1::plan::BUILD_FILE_NAME);
+        // A failing module stops the compile before later modules load, so a
+        // file can be missing because its module was never reached; checking it
+        // alone would only report its module's deps as unresolved
+        let reached_primary = self
+            .with_k1(|k1| k1.completed_module_count as usize + 1 >= k1.plan.modules().len())
+            .unwrap_or(true);
         if is_module_target
             && !in_program
+            && reached_primary
             && !is_build_file
             && let Ok(file_path) = file_url.to_file_path()
             && let Ok(file_path) = k1::kpath::canonicalize_owned(file_path)
@@ -484,6 +549,14 @@ impl Backend {
             self.compile(source_overlay).await;
         }
         self.send_diagnostics().await;
+        if self.semantic_tokens_refresh_supported.load(Ordering::Relaxed) {
+            let client = self.client.clone();
+            tokio::spawn(async move {
+                if let Err(e) = client.semantic_tokens_refresh().await {
+                    error!("semantic tokens refresh: {e}");
+                }
+            });
+        }
     }
 
     async fn compile(&self, source_overlay: fxhash::FxHashMap<String, String>) {
@@ -677,6 +750,13 @@ impl LanguageServer for Backend {
             Some(ServerInfo { name: "k1lsp".to_string(), version: Some("ALPHA".to_string()) });
         let progress_supported =
             params.capabilities.window.as_ref().and_then(|w| w.work_done_progress).unwrap_or(false);
+        let semantic_tokens_refresh_supported = params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|w| w.semantic_tokens.as_ref())
+            .and_then(|s| s.refresh_support)
+            .unwrap_or(false);
         let root_url = match &params.workspace_folders {
             Some(folders) if !folders.is_empty() => Some(folders[0].uri.clone()),
             _ => params.root_uri.clone(),
@@ -688,6 +768,8 @@ impl LanguageServer for Backend {
             *self.workspace_root.write().unwrap() = Some(root);
         }
         self.progress_supported.store(progress_supported, Ordering::Relaxed);
+        self.semantic_tokens_refresh_supported
+            .store(semantic_tokens_refresh_supported, Ordering::Relaxed);
         info!("Got initialize params: {params:#?}");
         Ok(res)
     }
@@ -842,63 +924,21 @@ impl LanguageServer for Backend {
             info!("semantic_tokens: {} is not open", file_url.path());
             return Ok(None);
         };
-        let ast_for_file = &open.ast;
-        let source = ast_for_file.sources.get_main();
-        let file_tokens = source.semantic_tokens.as_slice(&ast_for_file.mem);
-        let capacity = file_tokens.len() + source.trivia.len() as usize;
-        let mut tokens: Vec<SemanticToken> = Vec::with_capacity(capacity);
-        let mut spans_and_kinds = Vec::with_capacity(capacity);
-        const COMMENT: u32 = parse::SemanticTokenKind::Comment as u32;
-        for semantic_token in file_tokens {
-            spans_and_kinds.push((
-                semantic_token.span,
-                semantic_token.kind as u32,
-                semantic_token.mods as u32,
-            ))
-        }
-        for entry in ast_for_file.mem.getn_lt(source.trivia) {
-            if let lex::TokenTriviaKind::LineComment = entry.trivia.kind {
-                let span = lex::Span {
-                    global_start: source.base + entry.trivia.start,
-                    len: entry.trivia.len,
-                };
-                spans_and_kinds.push((span, COMMENT, 0));
-            }
-        }
-        spans_and_kinds.sort_unstable_by_key(|(span, token_type, _)| {
-            (span.global_start, *token_type != COMMENT)
-        });
-        let mut comment_end = 0;
-        let mut prev_line = 1;
-        let mut prev_start_col = 0;
-        for (span, token_type, bitflags) in spans_and_kinds {
-            if span.global_start < comment_end {
-                continue;
-            }
-            if token_type == COMMENT {
-                comment_end = span.end()
-            }
-            let length = span.len;
-            let Some(line) = source.get_line_for_span_start(&ast_for_file.mem, span) else {
-                continue;
-            };
-            let line_number = line.line_number();
-            let start_col = source.local_from_global_offset(span.global_start) - line.start_char;
-            let delta_line = line_number - prev_line;
-            let delta_start = if delta_line == 0 { start_col - prev_start_col } else { start_col };
-
-            prev_line = line_number;
-            prev_start_col = start_col;
-            let token = SemanticToken {
-                delta_line,
-                delta_start,
-                length,
-                token_type,
-                token_modifiers_bitset: bitflags,
-            };
-            tokens.push(token);
-        }
-        info!("semantic_tokens: iterated {} tokens, returning {}", capacity, tokens.len());
+        let open_source = open.ast.sources.get_main();
+        let open_content = open_source.content(&open.ast.mem);
+        let compiled_tokens = self
+            .with_k1_for_url(&file_url, |k1| {
+                let source = uri_to_source(&k1.ast, &file_url)?;
+                if source.content(&k1.ast.mem) != open_content {
+                    return None;
+                }
+                Some(get_semantic_tokens(&k1.ast, source))
+            })
+            .flatten();
+        let tokens = match compiled_tokens {
+            Some(tokens) => tokens,
+            None => get_semantic_tokens(&open.ast, open_source),
+        };
         Ok(Some(SemanticTokensResult::Tokens(SemanticTokens { result_id: None, data: tokens })))
     }
 

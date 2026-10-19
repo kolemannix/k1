@@ -89,10 +89,11 @@ fn(test) test-parsers() {
   assert(plain.accepts-encoding("br"))
   assert(not plain.accepts-encoding("zstd"))
   assert(not plain.accepts-encoding("deflate"))
-  let moved = response/redirect(303, "/a?b=1", ["Set-Cookie: k=v"])
+  let moved = response/redirect(:see-other, "/a?b=1", ["Set-Cookie: k=v"])
   assert-equals(moved.extra-headers.[0], "Location: /a?b=1")
-  assert-equals(response/status-text(303), "See Other")
-  assert(not response/may-have-content(204))
+  assert-equals(moved.status.show(), "303 See Other")
+  assert(moved.status.may-have-content())
+  assert(not response/no-content().status.may-have-content())
 }
 
 fn drain(src: byte-source): string {
@@ -148,15 +149,15 @@ impl source[t = u8] for worker-woken {
 
 fn handle(req: http/request, bus: *pubsub/bus[span[u8]], pool: *worker-pool): http-response {
   let url = req.header.url.text
-  if url == "/hello" response/text(200, "hi")
-  else if url == "/slow" { libuv/sleep(300); response/text(200, "slow-done") }
-  else if url == "/len" response/text(200, "len ${req.body.len()} ${string/wrap-bytes(req.body)}")
-  else if url == "/stall" { libuv/sleep(2000); response/text(200, "stall-done") }
-  else if url == "/outlast" { libuv/sleep(2600); response/text(200, "outlast-done") }
+  if url == "/hello" response/text(:ok, "hi")
+  else if url == "/slow" { libuv/sleep(300); response/text(:ok, "slow-done") }
+  else if url == "/len" response/text(:ok, "len ${req.body.len()} ${string/wrap-bytes(req.body)}")
+  else if url == "/stall" { libuv/sleep(2000); response/text(:ok, "stall-done") }
+  else if url == "/outlast" { libuv/sleep(2600); response/text(:ok, "outlast-done") }
   else if url == "/events" datastar/patch-signals(bus.subscribe("t") || rc-byte-stream)
   else if url == "/worker-woken" {
     let src: *worker-woken = mem/new(.{ pool, waker = waker/noop(), state = uninit, sent = false })
-    .{ status = 200, content-type = "text/plain", extra-headers = [], body = :stream src.to-dyn[source[t = u8]] }
+    .{ status = :ok, content-type = "text/plain", extra-headers = [], body = :stream src.to-dyn[source[t = u8]] }
   }
   else response/not-found()
 }

@@ -2,20 +2,128 @@ use std/source
 use std/pipe
 use std/byte-source
 
+type status = either(u16) {
+  ok                              = 200,
+  created                         = 201,
+  accepted                        = 202,
+  non-authoritative-information   = 203,
+  no-content                      = 204,
+  reset-content                   = 205,
+  partial-content                 = 206,
+  multiple-choices                = 300,
+  moved-permanently               = 301,
+  found                           = 302,
+  see-other                       = 303,
+  not-modified                    = 304,
+  temporary-redirect              = 307,
+  permanent-redirect              = 308,
+  bad-request                     = 400,
+  unauthorized                    = 401,
+  payment-required                = 402,
+  forbidden                       = 403,
+  not-found                       = 404,
+  method-not-allowed              = 405,
+  not-acceptable                  = 406,
+  proxy-authentication-required   = 407,
+  request-timeout                 = 408,
+  conflict                        = 409,
+  gone                            = 410,
+  length-required                 = 411,
+  precondition-failed             = 412,
+  content-too-large               = 413,
+  uri-too-long                    = 414,
+  unsupported-media-type          = 415,
+  range-not-satisfiable           = 416,
+  expectation-failed              = 417,
+  misdirected-request             = 421,
+  unprocessable-content           = 422,
+  upgrade-required                = 426,
+  precondition-required           = 428,
+  too-many-requests               = 429,
+  request-header-fields-too-large = 431,
+  unavailable-for-legal-reasons   = 451,
+  internal-server-error           = 500,
+  not-implemented                 = 501,
+  bad-gateway                     = 502,
+  service-unavailable             = 503,
+  gateway-timeout                 = 504,
+  http-version-not-supported      = 505,
+}
+
+ns for status {
+  fn reason-phrase(self: status): string {
+    if self is {
+      :ok                              -> "OK",
+      :created                         -> "Created",
+      :accepted                        -> "Accepted",
+      :non-authoritative-information   -> "Non-Authoritative Information",
+      :no-content                      -> "No Content",
+      :reset-content                   -> "Reset Content",
+      :partial-content                 -> "Partial Content",
+      :multiple-choices                -> "Multiple Choices",
+      :moved-permanently               -> "Moved Permanently",
+      :found                           -> "Found",
+      :see-other                       -> "See Other",
+      :not-modified                    -> "Not Modified",
+      :temporary-redirect              -> "Temporary Redirect",
+      :permanent-redirect              -> "Permanent Redirect",
+      :bad-request                     -> "Bad Request",
+      :unauthorized                    -> "Unauthorized",
+      :payment-required                -> "Payment Required",
+      :forbidden                       -> "Forbidden",
+      :not-found                       -> "Not Found",
+      :method-not-allowed              -> "Method Not Allowed",
+      :not-acceptable                  -> "Not Acceptable",
+      :proxy-authentication-required   -> "Proxy Authentication Required",
+      :request-timeout                 -> "Request Timeout",
+      :conflict                        -> "Conflict",
+      :gone                            -> "Gone",
+      :length-required                 -> "Length Required",
+      :precondition-failed             -> "Precondition Failed",
+      :content-too-large               -> "Content Too Large",
+      :uri-too-long                    -> "URI Too Long",
+      :unsupported-media-type          -> "Unsupported Media Type",
+      :range-not-satisfiable           -> "Range Not Satisfiable",
+      :expectation-failed              -> "Expectation Failed",
+      :misdirected-request             -> "Misdirected Request",
+      :unprocessable-content           -> "Unprocessable Content",
+      :upgrade-required                -> "Upgrade Required",
+      :precondition-required           -> "Precondition Required",
+      :too-many-requests               -> "Too Many Requests",
+      :request-header-fields-too-large -> "Request Header Fields Too Large",
+      :unavailable-for-legal-reasons   -> "Unavailable For Legal Reasons",
+      :internal-server-error           -> "Internal Server Error",
+      :not-implemented                 -> "Not Implemented",
+      :bad-gateway                     -> "Bad Gateway",
+      :service-unavailable             -> "Service Unavailable",
+      :gateway-timeout                 -> "Gateway Timeout",
+      :http-version-not-supported      -> "HTTP Version Not Supported",
+    }
+  }
+
+  fn may-have-content(self: status): bool { self != :no-content and self != :not-modified }
+}
+
+impl print for status {
+  fn print-to[w: writer](self, w) {
+    w.write("${self.value} ${self.reason-phrase()}")
+  }
+}
+
 type http-response = {
   content-type: string,
   extra-headers: span[string],
   body: either { complete(span[span[u8]]), stream(byte-source) },
-  status: u16,
+  status: status,
 }
 
 ns response {
-  fn complete(status: u16, content-type: string, body: string): http-response {
+  fn complete(status: status, content-type: string, body: string): http-response {
     .{ content-type, extra-headers = [], body = :complete span/single(body.span-bytes()), status }
   }
-  fn html(body: string): http-response { complete(200, "text/html", body) }
-  fn not-found(): http-response { complete(404, "text/plain", "Not Found\n") }
-  fn text(status: u16, body: string): http-response { complete(status, "text/plain", body) }
+  fn html(body: string): http-response { complete(:ok, "text/html", body) }
+  fn not-found(): http-response { complete(:not-found, "text/plain", "Not Found\n") }
+  fn text(status: status, body: string): http-response { complete(status, "text/plain", body) }
   fn method-not-allowed(allowed: span[string]): http-response {
     let allow = string-builder/new()
     allow.write("Allow: ")
@@ -24,77 +132,21 @@ ns response {
       content-type = "text/plain",
       extra-headers = span/single(allow.build()),
       body = :complete span/single("Method Not Allowed\n".span-bytes()),
-      status = 405,
+      status = :method-not-allowed,
     }
   }
   fn stream(content-type: string, source: byte-source): http-response {
-    .{ content-type, extra-headers = [], body = :stream source, status = 200 }
+    .{ content-type, extra-headers = [], body = :stream source, status = :ok }
   }
   fn no-content(): http-response {
-    .0 | .{ status = 204 }
+    .{ content-type = "", extra-headers = [], body = :complete span/empty(), status = :no-content }
   }
-  fn redirect(status: u16, location: string, extra-headers: span[string]): http-response {
+  fn redirect(status: status, location: string, extra-headers: span[string]): http-response {
     let headers: list[string] = list/with-capacity(extra-headers.len() + 1)
     headers.push("Location: $location")
     headers.append-span(extra-headers)
     .{ content-type = "", extra-headers = headers.as-span(), body = :complete span/empty(), status }
   }
-
-  fn status-text(status: u16): string {
-    if status is {
-      100 -> "Continue",
-      101 -> "Switching Protocols",
-      103 -> "Early Hints",
-      200 -> "OK",
-      201 -> "Created",
-      202 -> "Accepted",
-      203 -> "Non-Authoritative Information",
-      204 -> "No Content",
-      205 -> "Reset Content",
-      206 -> "Partial Content",
-      300 -> "Multiple Choices",
-      301 -> "Moved Permanently",
-      302 -> "Found",
-      303 -> "See Other",
-      304 -> "Not Modified",
-      307 -> "Temporary Redirect",
-      308 -> "Permanent Redirect",
-      400 -> "Bad Request",
-      401 -> "Unauthorized",
-      402 -> "Payment Required",
-      403 -> "Forbidden",
-      404 -> "Not Found",
-      405 -> "Method Not Allowed",
-      406 -> "Not Acceptable",
-      407 -> "Proxy Authentication Required",
-      408 -> "Request Timeout",
-      409 -> "Conflict",
-      410 -> "Gone",
-      411 -> "Length Required",
-      412 -> "Precondition Failed",
-      413 -> "Content Too Large",
-      414 -> "URI Too Long",
-      415 -> "Unsupported Media Type",
-      416 -> "Range Not Satisfiable",
-      417 -> "Expectation Failed",
-      421 -> "Misdirected Request",
-      422 -> "Unprocessable Content",
-      426 -> "Upgrade Required",
-      428 -> "Precondition Required",
-      429 -> "Too Many Requests",
-      431 -> "Request Header Fields Too Large",
-      451 -> "Unavailable For Legal Reasons",
-      500 -> "Internal Server Error",
-      501 -> "Not Implemented",
-      502 -> "Bad Gateway",
-      503 -> "Service Unavailable",
-      504 -> "Gateway Timeout",
-      505 -> "HTTP Version Not Supported",
-      _ -> "",
-    }
-  }
-
-  fn may-have-content(status: u16): bool { status >= 200 and status != 204 and status != 304 }
 }
 
 // zero-copy chunked transfer framing

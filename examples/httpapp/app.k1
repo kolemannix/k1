@@ -111,21 +111,21 @@ fn handle(req: http/request, bus: *pubsub/bus[span[u8]]): http-response {
 fn visits(deps: *deps, req: http/request, who: ?string): http-response {
   let n = deps.db.record-visit(req.header.url.path())
   let name = who ? (pair/find(req.cookies(), "who") ? "stranger")
-  response/text(200, "hello $name, visit number $n\n")
+  response/text(:ok, "hello $name, visit number $n\n")
 }
 
 fn login(req: http/request): http-response {
   if req.form() is {
     :some fields -> if pair/find(fields, "who") is {
       :some who -> .{
-        status = 200,
+        status = :ok,
         content-type = "text/plain",
         extra-headers = span/single(cookie/set-header("who", who, cookie/attrs/default())),
         body = :complete span/single("logged in\n".span-bytes()),
       },
-      :none -> response/text(400, "missing who\n"),
+      :none -> response/text(:bad-request, "missing who\n"),
     },
-    :none -> response/text(415, "send a form\n"),
+    :none -> response/text(:unsupported-media-type, "send a form\n"),
   }
 }
 
@@ -142,7 +142,7 @@ fn game-events(deps: *deps, id: u64): http-response {
 
 fn game-poke(deps: *deps, id: u64): http-response {
   publish-text(deps.bus, game-topic(id), "poked\nover http")
-  response/text(200, "poked; events at ${route:game-events .{ id }}\n")
+  response/text(:ok, "poked; events at ${route:game-events .{ id }}\n")
 }
 
 // One SSE event per number, rendered into the ambient request arena
@@ -160,8 +160,8 @@ fn big-file(): http-response {
 fn error-response(e: routing/route-error): http-response {
   if e is {
     :not-found -> response/not-found(),
-    :bad-param b -> response/text(400, "Expected ${b.pattern}: `${b.got}` is not a valid ${b.ty} for ${b.name}\n"),
-    :missing-param m -> response/text(400, "Expected ${m.pattern}: missing query param ${m.name}\n"),
+    :bad-param b -> response/text(:bad-request, "Expected ${b.pattern}: `${b.got}` is not a valid ${b.ty} for ${b.name}\n"),
+    :missing-param m -> response/text(:bad-request, "Expected ${m.pattern}: missing query param ${m.name}\n"),
     :bad-method b -> response/method-not-allowed(b.allowed),
   }
 }

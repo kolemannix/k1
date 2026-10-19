@@ -53,7 +53,7 @@ fn sse-response(events: byte-source): http-response {
     content-type = "text/event-stream",
     extra-headers = ["Cache-Control: no-cache"],
     body = :stream events,
-    status = 200,
+    status = :ok,
   }
 }
 

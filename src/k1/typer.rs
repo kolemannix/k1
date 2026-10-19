@@ -17089,7 +17089,7 @@ impl TypedProgram {
                 if !added {
                     self.report(kerr!(
                         self,
-                        parsed_type_defn.span,
+                        parsed_type_defn.name_span,
                         "Type {} exists",
                         parsed_type_defn.name
                     ));

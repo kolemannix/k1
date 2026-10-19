@@ -29,5 +29,12 @@ ns for result {
       :err e -> :err e.show()
     }
   }
+
+  fn fold[t](self: result[t, t]): t {
+    if self is {
+      :ok t -> t,
+      :err t -> t
+    }
+  }
   
 }

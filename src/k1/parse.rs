@@ -1295,6 +1295,7 @@ pub struct ParsedTypeDefn {
     pub value_expr: ParsedTypeExprId,
     pub type_params: MSlice<ParsedTypeParam, ParsedProgram>,
     pub span: Span,
+    pub name_span: Span,
     pub id: ParsedTypeDefnId,
     pub flags: ParsedTypeDefnFlags,
     pub compile_condition: Option<ParsedExprId>,
@@ -1857,7 +1858,7 @@ impl ParsedProgram {
             ParsedId::Global(id) => self.get_global(id).span,
             ParsedId::Ability(id) => self.get_ability(id).name_span,
             ParsedId::AbilityImpl(id) => self.get_ability_impl(id).span,
-            ParsedId::TypeDefn(id) => self.get_type_defn(id).span,
+            ParsedId::TypeDefn(id) => self.get_type_defn(id).name_span,
             ParsedId::Expression(id) => self.exprs.get_span(id),
             ParsedId::TypeExpression(id) => self.get_type_expr_span(id),
             ParsedId::Pattern(id) => self.get_pattern_span(id),
@@ -5450,11 +5451,13 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             None => return Err(self.error_expected("Type expression", equals)),
         };
         let type_params_handle = type_params.to_slice_trim(&mut self.ast.mem);
-        let name_token_span = self.tok_span(name_token);
+        let span = self.extend_tok_to_here(keyword_type);
+        let name_span = self.tok_span(name_token);
         let type_defn_id = self.ast.add_type_defn(ParsedTypeDefn {
             name,
             value_expr: type_expr,
-            span: name_token_span,
+            span,
+            name_span,
             type_params: type_params_handle,
             id: ParsedTypeDefnId::PENDING, // The id is set by add_typedefn
             flags,

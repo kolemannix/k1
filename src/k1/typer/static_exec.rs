@@ -503,11 +503,7 @@ impl TypedProgram {
         if !self.execute_static_condition(parsed.compile_condition, scope_id) {
             self.ast.globals.get_mut(parsed_global_id).typer_state =
                 ParsedGlobalDeclareOutcome::IfDefedOut;
-            if self.ast.collect_semantic_tokens {
-                let kind = parse::SemanticTokenKind::Comment;
-                let token = parse::SemanticToken { span: parsed.span, kind, mods: 0 };
-                parse::add_semantic_token(&mut self.ast, token);
-            }
+            self.emit_semantic_token(parsed.span, parse::SemanticTokenKind::Comment);
             return Ok(None);
         }
         let owner_ns = match self.scopes.get_scope(scope_id).owner_id {

@@ -38,7 +38,7 @@ type parse-state = {
   on-header-complete: *fn(ptr, header) -> {},
   on-body-complete: *fn(ptr, span[u8]) -> {},
   max-body-size: size,
-  reject: ?u16,
+  reject: ?status,
   url: list[char],
   current-header-field: list[char],
   current-header-value: list[char],
@@ -156,7 +156,7 @@ fn on-header-value-complete(parser: *parser): i32 {
 fn on-headers-complete(parser: *parser): i32 {
   let state = parser.data()
   require url/parse(string/wrap-span(state.url.as-span())) is :ok url else {
-    state.reject = :some 400
+    state.reject = :some :bad-request
     return llhttp/errno:HPE_PAUSED.value.signed()
   }
 
@@ -173,7 +173,7 @@ fn on-headers-complete(parser: *parser): i32 {
   }
   (state.on-header-complete)(state.user-data, header)
   if content-length is :some n and n > state.max-body-size {
-    state.reject = :some 413
+    state.reject = :some :content-too-large
     return llhttp/errno:HPE_PAUSED.value.signed()
   }
   if content-length is :some n {
@@ -187,7 +187,7 @@ fn impl-on-body(parser: *parser, data: *u8, count: usize): i32 {
   let state = parser.data()
   let n = count.signed()
   if state.body.len + n > state.max-body-size {
-    state.reject = :some 413
+    state.reject = :some :content-too-large
     return llhttp/errno:HPE_PAUSED.value.signed()
   }
   // FIXME: streamed request bodies — hand chunks to the handler as they
@@ -239,12 +239,12 @@ fn parser-init[user-data](
   parser
 }
 
-type tick-result = either { ok, paused(size), reject(u16), fail(llhttp/errno) }
+type tick-result = either { ok, paused(size), reject(status), fail(llhttp/errno) }
 
 // Feed bytes to the parser. :paused means llhttp stopped at a message
 // boundary; its payload counts the bytes left unparsed, nonzero only when a
-// client pipelines requests. :reject carries the status to answer with: 400
-// for a request target that isn't a URL, 413 when the body passed max-body-size
+// client pipelines requests. :reject carries the status to answer with: `:bad-request`
+// for a request target that isn't a URL, `:content-too-large` when the body passed max-body-size
 fn tick(
   *parser,
   bytes: span[u8],

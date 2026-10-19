@@ -308,12 +308,12 @@ ns for connection {
     mem/push-arena(self.request-arena)
     defer { mem/pop-arena() }
     let out = string-builder/with-capacity(1024)
-    out.write("HTTP/1.1 ${resp.status} ${response/status-text(resp.status)}\r\n")
+    out.write("HTTP/1.1 ${resp.status}\r\n")
     if resp.content-type.non-empty() out.write("Content-Type: ${resp.content-type}\r\n")
     for h in resp.extra-headers { out.write("$h\r\n") }
     let body = if resp.body is {
       :complete segments -> {
-        if response/may-have-content(resp.status) {
+        if resp.status.may-have-content() {
           let total: size = 0
           for seg in segments { total = total + seg.len() }
           out.write("Content-Length: $total\r\n")
@@ -494,7 +494,7 @@ fn on-client-read(client: *libuv/stream, nread: size, buf: *libuv/buf) {
         connection.parsed-header = :some (h | .{ keep-alive = false })
       }
       connection.client().read-stop()
-      connection.begin-response(response/text(status, "${response/status-text(status)}\n"))
+      connection.begin-response(response/text(status, "${status.reason-phrase()}\n"))
     },
     :fail e -> {
       tprintln("http parse error ${e.enum-name()}; closing connection")
@@ -527,7 +527,7 @@ fn on-complete-http-body(connection: *connection, body: span[u8]) {
   require s.worker-pool.submit(work, run-handler.&) is :some job else {
     tprintln("conn${connection.serial-no} handler queue full; answering 503")
     connection.parsed-header = :some (connection.parsed-header.! | .{ keep-alive = false })
-    connection.begin-response(response/text(503, "Service Unavailable\n"))
+    connection.begin-response(response/text(:service-unavailable, "Service Unavailable\n"))
     return
   }
   connection.handler-job = job

@@ -10,15 +10,15 @@ impl TypedProgram {
         parsed_type_defn_id: ParsedTypeDefnId,
         namespace_scope_id: ScopeId,
     ) -> K1Result<TypeId> {
-        let parse::ParsedTypeDefn { span, name, typer_state, .. } =
+        let parse::ParsedTypeDefn { name_span, name, typer_state, .. } =
             *self.ast.get_type_defn(parsed_type_defn_id);
         match typer_state {
             ParsedTypeDefnDeclareOutcome::Defined(type_id) => return Ok(type_id),
             ParsedTypeDefnDeclareOutcome::Failed => {
-                return Err(kerr!(self, span, "Type {} has an invalid definition", name));
+                return Err(kerr!(self, name_span, "Type {} has an invalid definition", name));
             }
             ParsedTypeDefnDeclareOutcome::IfDefedOut => {
-                self.ice_span(span, "eval ifdefed-out type defn")
+                self.ice_span(name_span, "eval ifdefed-out type defn")
             }
             ParsedTypeDefnDeclareOutcome::Parsed => {}
         }
@@ -41,11 +41,11 @@ impl TypedProgram {
         debug!("eval_type_defn {}", self.ident_str(parsed_type_defn.name));
 
         if parsed_type_defn.name == self.ast.idents.b.some {
-            kbail!(self, parsed_type_defn.span, "'some' is not a valid type name");
+            kbail!(self, parsed_type_defn.name_span, "'some' is not a valid type name");
         }
 
         if is_alias && is_generic_defn {
-            kbail!(self, parsed_type_defn.span, "Alias types cannot have type parameters (yet)");
+            kbail!(self, parsed_type_defn.name_span, "Alias types cannot have type parameters (yet)");
         }
 
         let reserved_type_id = if !is_alias { Some(self.reserve_type_id()) } else { None };
@@ -146,7 +146,7 @@ impl TypedProgram {
                     _ => {
                         kbail!(
                             self,
-                            parsed_type_defn.span,
+                            parsed_type_defn.name_span,
                             "Unknown builtin type id: {}",
                             defn_type_id
                         );
@@ -175,7 +175,7 @@ impl TypedProgram {
                 if rhs_still_defining {
                     kbail!(
                         self,
-                        parsed_type_defn.span,
+                        parsed_type_defn.name_span,
                         "The right-hand side of a type definition cannot be a bare reference to a type that is still being defined; wrap it in a struct or either, or use an alias"
                     );
                 }
@@ -200,7 +200,7 @@ impl TypedProgram {
                     } else {
                         kbail!(
                             self,
-                            parsed_type_defn.span,
+                            parsed_type_defn.name_span,
                             "Non-alias type definition must be a struct or sum; not a '{}'. Perhaps you intended to create an alias `type(alias) <name> = <type>`",
                             rhs_type_id
                         );
@@ -211,7 +211,7 @@ impl TypedProgram {
                 _other => {
                     kbail!(
                         self,
-                        parsed_type_defn.span,
+                        parsed_type_defn.name_span,
                         "Non-alias type definition must be a struct or either or opaque or builtin; not a '{}'. Perhaps you meant to create an alias `type(alias) <name> = <type>`",
                         rhs_type_id
                     );
@@ -228,7 +228,7 @@ impl TypedProgram {
                 if companion_ns.namespace_type == NamespaceKind::TypeCompanion {
                     Some(ns_id)
                 } else {
-                    self.report_hint(parsed_type_defn.span, "matching namespace is not declared as type companion; use an `ns for {}` declaration");
+                    self.report_hint(parsed_type_defn.name_span, "matching namespace is not declared as type companion; use an `ns for {}` declaration");
                     None
                 }
             }
@@ -281,7 +281,7 @@ impl TypedProgram {
         let name = parsed_type_defn.name;
         let added = self.scopes.add_type(namespace_scope_id, name, type_id);
         if !added {
-            let span = parsed_type_defn.span;
+            let span = parsed_type_defn.name_span;
             self.report(kerr!(self, span, "Type {} exists", name));
         }
 
@@ -350,12 +350,12 @@ impl TypedProgram {
         }
 
         let Some(defn_stack_entry) = self.type_defn_context.stack.pop() else {
-            self.ice_span(parsed_type_defn.span, "No defn stack entry");
+            self.ice_span(parsed_type_defn.name_span, "No defn stack entry");
         };
         debug_assert_eq!(defn_stack_entry.parsed_id, parsed_type_defn_id);
         debug_assert_eq!(defn_stack_entry.reserved_type_id, reserved_type_id);
         if !is_alias {
-            self.type_defn_context.completed.push((type_id, parsed_type_defn.span));
+            self.type_defn_context.completed.push((type_id, parsed_type_defn.name_span));
         }
         if self.type_defn_context.stack.is_empty() {
             self.finish_type_defn_cluster()
