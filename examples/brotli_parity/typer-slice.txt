@@ -1,0 +1,3925 @@
+// Copyright (c) 2026 knix
+// All rights reserved.
+
+pub(crate) mod derive;
+pub(crate) mod dump;
+pub(crate) mod host;
+pub(crate) mod infer;
+pub(crate) mod megarepl;
+mod pattern_match;
+pub(crate) mod reflect;
+pub(crate) mod report;
+pub(crate) mod scopes;
+pub(crate) mod snapshot;
+pub(crate) mod static_exec;
+pub(crate) mod static_value;
+pub(crate) mod synth;
+pub mod trace;
+pub(crate) mod type_eval;
+pub(crate) mod typed_int_value;
+pub(crate) mod types;
+
+use crate::arith::{
+    Cmp3Op, FloatCmpPred, FloatOp, FloatUnop, IntCmpPred, IntOp, IntUnop, OverflowOp,
+};
+use crate::ir::{AtomicOrderingIr, BackendBuiltin, IrUnitId};
+use crate::typer::megarepl::MegareplState;
+use crate::typer::trace::TraceKind;
+use crate::{bc, clock, compiler, debug, ir, k1_format, k1_format_user, kbail, kerr, kwarn, vm};
+use bitflags::bitflags;
+use itertools::Itertools;
+pub use static_value::{
+    StaticContainer, StaticContainerKind, StaticRawContainer, StaticStruct, StaticSum, StaticValue,
+    StaticValueId, StaticValuePool,
+};
+use std::borrow::Cow;
+use std::cell::RefCell;
+use std::cmp::Ordering;
+use std::collections::VecDeque;
+use std::ffi::c_void;
+use std::fmt::Write;
+use std::fmt::{Display, Formatter};
+use std::io::IsTerminal;
+use std::num::NonZeroU32;
+use std::path::Path;
+use synth::synth_static_option;
+pub use typed_int_value::TypedIntValue;
+
+use crate::kmem::{Dlist, Handle, List, MList, MSS2, MSlice, MSpillSlice, MStr, Mem};
+use crate::{DepEq, DepHash, SV2, kmem};
+use ahash::HashMapExt;
+use colored::Colorize;
+use fxhash::FxHashMap;
+use log::error;
+use smallvec::{SmallVec, smallvec};
+
+use scopes::*;
+use types::*;
+
+use crate::compiler::CompilerConfig;
+use crate::kpath;
+use crate::lex::{self, Span, TokenKind};
+use crate::parse::{
+    self, AstHandle, AstSlice, BinaryOpKind, FileId, ForExpr, IdentPool, IdentSpanned,
+    InterpolatedStringPart, NamedTypeArg, NumericWidth, ParsedAbilityExpr, ParsedAbilityId,
+    ParsedAbilityImplId, ParsedBlock, ParsedBlockKind, ParsedBreak, ParsedBuiltin, ParsedCall,
+    ParsedCallArg, ParsedContinue, ParsedExpr, ParsedExprId, ParsedFunctionId, ParsedGlobalId,
+    ParsedId, ParsedIfExpr, ParsedIntLiteral, ParsedListLiteral, ParsedLiteral, ParsedLoopExpr,
+    ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedProgram, ParsedStaticBlockKind,
+    ParsedStaticExpr, ParsedStmt, ParsedStmtId, ParsedTypeConstraint, ParsedTypeConstraintExpr,
+    ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId, ParsedTypeParam, ParsedUseId,
+    ParsedVariable, ParsedVariant, ParsedWhileExpr, QIdent, StringId, StructValueFieldKind,
+};
+use crate::vpool::VPool;
+use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size};
+
+#[cfg(test)]
+mod layout_test;
+
+nz_u32_id!(FunctionId);
+nz_u32_id!(VariableId);
+
+nz_u32_id!(NamespaceId);
+pub const ROOT_NAMESPACE_ID: NamespaceId = NamespaceId(NonZeroU32::new(1).unwrap());
+
+nz_u32_id!(AbilityId);
+nz_u32_id!(AbilityImplId);
+
+nz_u32_id!(TypedGlobalId);
+nz_u32_id!(TypedStmtId);
+nz_u32_id!(TypedExprId);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Linkage {
+    Standard,
+    External { module_id: ModuleId, lib_name: Option<StringId>, link_name: Option<StringId> },
+    Exported { link_name: Option<StringId> },
+}
+
+impl Linkage {
+    pub fn with_default_lib(self, default_lib: Option<StringId>) -> Linkage {
+        match self {
+            Linkage::External { module_id, lib_name: None, link_name } => {
+                Linkage::External { module_id, lib_name: default_lib, link_name }
+            }
+            other => other,
+        }
+    }
+
+    pub fn is_external(&self) -> bool {
+        matches!(self, Linkage::External { .. })
+    }
+
+    pub fn is_exported(&self) -> bool {
+        matches!(self, Linkage::Exported { .. })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedAbilityFunctionRef {
+    pub function_name: StringId,
+    pub index: u32,
+    pub ability_id: AbilityId,
+    pub function_id: FunctionId,
+}
+impl_copy_if_small!(16, TypedAbilityFunctionRef);
+
+#[derive(Clone, Copy)]
+pub struct AbilityFnWhereConstraint {
+    pub target: TypeId,
+    pub signature: TypedAbilitySignature,
+    pub span: Span,
+}
+
+pub const GLOBAL_ID_COMPILER_CAPTURE_PRINTS: TypedGlobalId =
+    TypedGlobalId::from_nzu32(NonZeroU32::new(1).unwrap());
+pub const GLOBAL_ID_K1_IS_STATIC: TypedGlobalId =
+    TypedGlobalId::from_nzu32(NonZeroU32::new(2).unwrap());
+
+//rustfmt: off
+pub const ABILITY_ID_ENUM: AbilityId = AbilityId(NonZeroU32::new(1).unwrap());
+pub const ABILITY_ID_SUM: AbilityId = AbilityId(NonZeroU32::new(2).unwrap());
+pub const ABILITY_ID_EQUALS: AbilityId = AbilityId(NonZeroU32::new(3).unwrap());
+pub const ABILITY_ID_WRITER: AbilityId = AbilityId(NonZeroU32::new(4).unwrap());
+pub const ABILITY_ID_PRINT: AbilityId = AbilityId(NonZeroU32::new(5).unwrap());
+pub const ABILITY_ID_PRINT_PRECISE: AbilityId = AbilityId(NonZeroU32::new(6).unwrap());
+pub const ABILITY_ID_SHOW: AbilityId = AbilityId(NonZeroU32::new(7).unwrap());
+pub const ABILITY_ID_BITWISE: AbilityId = AbilityId(NonZeroU32::new(8).unwrap());
+pub const ABILITY_ID_INT_BITS: AbilityId = AbilityId(NonZeroU32::new(9).unwrap());
+pub const ABILITY_ID_ADD: AbilityId = AbilityId(NonZeroU32::new(10).unwrap());
+pub const ABILITY_ID_SUB: AbilityId = AbilityId(NonZeroU32::new(11).unwrap());
+pub const ABILITY_ID_MUL: AbilityId = AbilityId(NonZeroU32::new(12).unwrap());
+pub const ABILITY_ID_DIV: AbilityId = AbilityId(NonZeroU32::new(13).unwrap());
+pub const ABILITY_ID_REM: AbilityId = AbilityId(NonZeroU32::new(14).unwrap());
+pub const ABILITY_ID_NEG: AbilityId = AbilityId(NonZeroU32::new(15).unwrap());
+pub const ABILITY_ID_OVERFLOW_ARITH: AbilityId = AbilityId(NonZeroU32::new(16).unwrap());
+pub const ABILITY_ID_SCALAR_CMP: AbilityId = AbilityId(NonZeroU32::new(17).unwrap());
+pub const ABILITY_ID_COMPARABLE: AbilityId = AbilityId(NonZeroU32::new(18).unwrap());
+pub const ABILITY_ID_TRY: AbilityId = AbilityId(NonZeroU32::new(19).unwrap());
+pub const ABILITY_ID_ITERATOR: AbilityId = AbilityId(NonZeroU32::new(20).unwrap());
+pub const ABILITY_ID_ITERABLE: AbilityId = AbilityId(NonZeroU32::new(21).unwrap());
+//rustfmt: on
+
+pub const FUNC_PARAM_IDEAL_COUNT: usize = 8;
+pub const FUNC_TYPE_PARAM_IDEAL_COUNT: usize = 4;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TypeSubstitutionPair {
+    from: TypeId,
+    to: TypeId,
+}
+
+#[derive(Clone, Copy, Default)]
+struct SubstitutionFromKinds {
+    holes: bool,
+    params: bool,
+    holes_and_params: bool,
+    other: bool,
+}
+
+impl SubstitutionFromKinds {
+    fn no_from_occurs_in(&self, counts: &TypeInfo) -> bool {
+        let no_holes = counts.inference_hole_count == 0;
+        let no_params = counts.type_parameter_count == 0;
+        !self.other
+            && (!self.holes || no_holes)
+            && (!self.params || no_params)
+            && (!self.holes_and_params || no_holes || no_params)
+    }
+}
+
+// Allows syntax spair! { a -> b }
+#[macro_export]
+macro_rules! spair {
+    ($from:expr => $to:expr) => {
+        TypeSubstitutionPair { from: $from, to: $to }
+    };
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct InferenceInputPair {
+    arg: TypeOrParsedExpr,
+    param_type: TypeId,
+    allow_mismatch: bool,
+}
+
+/// One entry per instantiated type parameter of an inference context,
+/// indexed by its inference hole's index
+#[derive(Debug, Clone, Copy)]
+pub struct InferenceSlot {
+    /// The type parameter being solved, e.g. 'T'
+    pub param_type: TypeId,
+    /// The instantiated inference hole standing in for it, e.g. ''0'
+    pub hole_type: TypeId,
+    /// Current best solution; may still mention other holes while partial,
+    /// and may be overwritten by a later better binding
+    pub solution: Option<TypeId>,
+    /// True once solution first becomes hole-free; never unset
+    pub fully_solved: bool,
+}
+
+#[derive(Default)]
+pub struct InferenceContext {
+    pub origin_stack: Vec<Span>,
+    /// slot index == hole index
+    pub slots: Vec<InferenceSlot>,
+    /// Slot indices whose solution just became hole-free
+    pub newly_solved: Vec<u32>,
+}
+
+impl InferenceContext {
+    pub fn make() -> Self {
+        InferenceContext { origin_stack: Vec::new(), slots: Vec::new(), newly_solved: Vec::new() }
+    }
+
+    pub fn print_lengths(&self) {
+        eprintln!("s origin_stack {}", self.origin_stack.len());
+        eprintln!("s slots {}", self.slots.len());
+        eprintln!("s newly_solved {}", self.newly_solved.len());
+    }
+
+    pub fn reset(&mut self) {
+        self.origin_stack.clear();
+        self.slots.clear();
+        self.newly_solved.clear();
+    }
+}
+
+// For LSP / Tooling
+#[derive(Clone, Copy)]
+pub enum LsEntityKind {
+    Namespace(NamespaceId),
+    Function { function_id: FunctionId, is_defn: bool },
+    Ability(AbilityId),
+    Variable { variable_id: VariableId },
+    Type { type_id: TypeId, applied_type_id: Option<TypeId> },
+    Variant { type_id: TypeId, variant_index: u32 },
+    StructField { type_id: TypeId, field_index: u32 },
+}
+
+#[derive(Clone, Copy)]
+pub struct LsEntity {
+    pub kind: LsEntityKind,
+    pub span: lex::Span,
+}
+
+/// Spliced into the buffer at the cursor by the LSP so the file parses; the
+/// typer records the CompletionSite when it evaluates the marker ident
+pub const COMPLETION_MARKER: &str = "__k1_completion__";
+
+pub struct CompletionState {
+    pub marker: StringId,
+    pub site: Option<CompletionSite>,
+}
+
+/// Where in the program the completion cursor sits, and what completes there
+#[derive(Clone, Copy)]
+pub enum CompletionSite {
+    /// value.<cursor>
+    Member { raw_base_type_id: TypeId, base_type_id: TypeId, scope_id: ScopeId },
+    /// ns/path/<cursor>
+    Path { path_scope_id: ScopeId },
+    /// bare <cursor>
+    Scope { scope_id: ScopeId },
+    /// type:<cursor> or :<cursor>, in expressions and patterns
+    Variant { type_id: TypeId },
+    /// f(a, <cursor>): the cursor is a direct call argument; arg_index counts
+    /// parsed args, so it includes the receiver of a method call
+    CallArg { function_id: FunctionId, arg_index: u32, scope_id: ScopeId },
+    /// .{ a = 1, <cursor> } with an expected struct type; the parsed literal
+    /// says which fields are already present
+    StructField { type_id: TypeId, parsed_struct_id: ParsedExprId },
+}
+
+#[derive(Clone, Copy)]
+pub struct TypeDefnStackEntry {
+    pub parsed_id: ParsedTypeDefnId,
+    /// None for `type(alias)` defns: an alias is transparent, so it has no id of its own
+    /// until its rhs is evaluated; re-entrant references resolve by expanding the rhs
+    pub reserved_type_id: Option<TypeId>,
+}
+
+#[derive(Clone, Copy)]
+pub struct StaticExecContext {
+    /// If a `return` is used, what type is expected
+    /// This is needed because `return` usually looks at the
+    /// enclosing function, but for #static blocks it shouldn't
+    /// So this type can be different than the usual ctx.expected_type
+    expected_return_type: Option<TypeId>,
+}
+
+pub enum StaticExecutionResult {
+    TypedExpr(TypedExprId),
+    Definitions(AstSlice<ParsedId>),
+}
+
+pub enum ParseAdHocKind {
+    Expr,
+    Definitions,
+}
+
+pub enum ParseMetaprogramResult {
+    Expr(ParsedExprId),
+    Definitions(AstSlice<ParsedId>),
+}
+
+pub enum ParseReplSourceResult {
+    Stmts(List<ParsedStmtId, ParsedProgram>),
+    Defn(ParsedId),
+}
+
+bitflags! {
+    #[repr(transparent)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct EvalExprFlags: u16 {
+        const Inference = 1;
+        /// Indicates whether we are typechecking generic code
+        /// Most commonly, the body of a generic function
+        const GenericPass = 1 << 1;
+        /// Indicates that we are generating code
+        /// that the user shouldn't see or care about; should
+        /// pevent emission of language server entities, perhaps
+        /// some warnings, et. al
+        const Hidden = 1 << 3;
+        /// a.foo()
+        /// ^ We do automatic address-of coercion on
+        /// a.
+        const IsMethodReceiver = 1 << 4;
+        /// We are compiling code for compile-time (static) execution
+        const Static = 1 << 5;
+        /// The completion cursor is a direct argument of the enclosing call,
+        /// which records the CallArg site itself
+        const CompletionCursorOwnedByCall = 1 << 7;
+        const Speculative = 1 << 8;
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct EvalExprContext {
+    // Always required
+    scope_id: ScopeId,
+    // Always required
+    expected_type_id: Option<TypeId>,
+    /// Meaningful only when flags contains Static: the `return` type
+    /// expectation inside #static blocks
+    static_expected_return_type: Option<TypeId>,
+    // Each flag is almost always none, but that's good
+    flags: EvalExprFlags,
+}
+
+// small enough for reg passing
+static_assert_size!(EvalExprContext, 16);
+impl EvalExprContext {
+    #[inline(always)]
+    fn make(scope_id: ScopeId) -> EvalExprContext {
+        EvalExprContext {
+            scope_id,
+            expected_type_id: None,
+            static_expected_return_type: None,
+            flags: EvalExprFlags::empty(),
+        }
+    }
+
+    #[inline(always)]
+    pub fn is_static(&self) -> bool {
+        self.flags.contains(EvalExprFlags::Static)
+    }
+
+    #[inline(always)]
+    pub fn with_is_static(&self, is_static: bool) -> EvalExprContext {
+        let mut flags = self.flags;
+        flags.set(EvalExprFlags::Static, is_static);
+        EvalExprContext { flags, ..*self }
+    }
+
+    #[inline(always)]
+    pub fn with_expected_type(&self, expected_type_id: Option<TypeId>) -> EvalExprContext {
+        EvalExprContext { expected_type_id, ..*self }
+    }
+
+    #[inline(always)]
+    pub fn with_no_expected_type(&self) -> EvalExprContext {
+        EvalExprContext { expected_type_id: None, ..*self }
+    }
+
+    #[inline(always)]
+    pub fn with_static_ctx(&self, static_ctx: Option<StaticExecContext>) -> EvalExprContext {
+        let mut flags = self.flags;
+        flags.set(EvalExprFlags::Static, static_ctx.is_some());
+        EvalExprContext {
+            static_expected_return_type: static_ctx.and_then(|s| s.expected_return_type),
+            flags,
+            ..*self
+        }
+    }
+
+    #[inline(always)]
+    fn with_ccursor_owned_by_call(&self) -> EvalExprContext {
+        EvalExprContext { flags: self.flags | EvalExprFlags::CompletionCursorOwnedByCall, ..*self }
+    }
+
+    #[inline(always)]
+    fn is_marker_owned_by_call(&self) -> bool {
+        self.flags.contains(EvalExprFlags::CompletionCursorOwnedByCall)
+    }
+
+    #[inline(always)]
+    fn with_inference(&self) -> EvalExprContext {
+        let flags = self.flags | EvalExprFlags::Inference | EvalExprFlags::Speculative;
+        EvalExprContext { flags, ..*self }
+    }
+
+    #[inline(always)]
+    fn without_inference(&self) -> EvalExprContext {
+        EvalExprContext { flags: self.flags - EvalExprFlags::Inference, ..*self }
+    }
+
+    #[inline(always)]
+    fn is_inference(&self) -> bool {
+        self.flags.contains(EvalExprFlags::Inference)
+    }
+
+    #[inline(always)]
+    fn with_speculative(&self) -> EvalExprContext {
+        EvalExprContext { flags: self.flags | EvalExprFlags::Speculative, ..*self }
+    }
+
+    #[inline(always)]
+    fn is_speculative(&self) -> bool {
+        self.flags.contains(EvalExprFlags::Speculative)
+    }
+
+    #[inline(always)]
+    fn with_scope(&self, scope_id: ScopeId) -> EvalExprContext {
+        EvalExprContext { scope_id, ..*self }
+    }
+
+    #[inline(always)]
+    pub fn with_is_generic_pass(&self, is_generic_pass: bool) -> EvalExprContext {
+        let mut flags = self.flags;
+        flags.set(EvalExprFlags::GenericPass, is_generic_pass);
+        EvalExprContext { flags, ..*self }
+    }
+
+    #[inline(always)]
+    fn is_generic_pass(&self) -> bool {
+        self.flags.contains(EvalExprFlags::GenericPass)
+    }
+
+    #[inline(always)]
+    fn is_hidden_calls(&self) -> bool {
+        self.flags.contains(EvalExprFlags::Hidden)
+    }
+
+    #[inline(always)]
+    fn with_hidden_calls(&self, hidden: bool) -> EvalExprContext {
+        let mut flags = self.flags;
+        flags.set(EvalExprFlags::Hidden, hidden);
+        EvalExprContext { flags, ..*self }
+    }
+
+    #[inline(always)]
+    fn is_method_receiver(&self) -> bool {
+        self.flags.contains(EvalExprFlags::IsMethodReceiver)
+    }
+
+    #[inline(always)]
+    fn with_is_method_receiver(&self, is_method_receiver: bool) -> EvalExprContext {
+        let mut flags = self.flags;
+        flags.set(EvalExprFlags::IsMethodReceiver, is_method_receiver);
+        EvalExprContext { flags, ..*self }
+    }
+}
+
+/// How the target's bytes relate to the source's: the view covers exactly the source's bytes,
+/// reads a leading part of them, or claims bytes past the end of them
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ViewExtent {
+    Exact,
+    ReadsPrefix,
+    ReadsBeyond,
+}
+
+/// `total`: every bit pattern of the source is valid in the target; a non-total view makes
+/// a claim and must be spelled `.narrow`
+#[derive(Debug, Clone, Copy)]
+struct CastView {
+    total: bool,
+    extent: ViewExtent,
+}
+
+impl CastView {
+    const TOTAL: CastView = CastView { total: true, extent: ViewExtent::Exact };
+    const CLAIMS: CastView = CastView { total: false, extent: ViewExtent::Exact };
+}
+
+#[derive(Debug, Clone, Copy)]
+enum MaybeTypedExpr {
+    Parsed(ParsedExprId),
+    Typed(TypedExprId),
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TypeOrParsedExpr {
+    Type(TypeId),
+    Parsed(ParsedExprId),
+}
+
+#[derive(Clone)]
+pub struct AbilitySpec9nInfo {
+    generic_parent: AbilityId,
+    specialized_child: AbilityId,
+    arguments: TypeSliceId,
+}
+impl_copy_if_small!(12, AbilitySpec9nInfo);
+
+#[derive(Clone, Copy)]
+pub enum TypedAbilityKind {
+    Concrete,
+    Generic { specializations: PermList<AbilitySpec9nInfo> },
+    Specialized(AbilitySpec9nInfo),
+}
+
+impl TypedAbilityKind {
+    pub fn arguments(&self, k1: &TypedProgram) -> &'static [TypeId] {
+        match self {
+            TypedAbilityKind::Specialized(specialization) => {
+                k1.get_type_slice(specialization.arguments)
+            }
+            TypedAbilityKind::Concrete | TypedAbilityKind::Generic { .. } => &[],
+        }
+    }
+
+    pub fn specializations(&self) -> PermList<AbilitySpec9nInfo> {
+        match self {
+            TypedAbilityKind::Concrete => MList::empty(),
+            TypedAbilityKind::Generic { specializations } => *specializations,
+            TypedAbilityKind::Specialized(_) => MList::empty(),
+        }
+    }
+
+    pub fn is_specialized(&self) -> bool {
+        matches!(self, TypedAbilityKind::Specialized(_))
+    }
+
+    pub fn is_concrete(&self) -> bool {
+        matches!(self, TypedAbilityKind::Concrete)
+    }
+
+    pub fn is_generic(&self) -> bool {
+        matches!(self, TypedAbilityKind::Generic { .. })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TypedAbilityParam {
+    name: StringId,
+    type_variable_id: TypeId,
+    is_impl_param: bool,
+    #[allow(unused)]
+    span: Span,
+}
+impl_copy_if_small!(20, TypedAbilityParam);
+
+impl TypedAbilityParam {
+    fn is_ability_side_param(&self) -> bool {
+        !self.is_impl_param
+    }
+}
+
+#[derive(Clone, Copy)]
+/// An ability signature encompasses an ability's entire 'type' story:
+/// - Base type, generic type params, and impl-provided type params
+///```md
+///Example: Add[Rhs = Int]
+///                   ^ impl argument
+///             ^ ability argument
+///         ^
+///         Ability Id
+///```
+pub struct TypedAbilitySignature {
+    pub specialized_ability_id: AbilityId,
+    pub impl_arguments: TypeIdSlice,
+}
+
+pub(crate) struct ArgsAndParams {
+    args: TmpSlice<MaybeTypedExpr>,
+    params: TmpSlice<FnParamType>,
+}
+
+impl ArgsAndParams {
+    fn get(&self, index: usize, mem: &Mem<MemTmp>) -> (MaybeTypedExpr, FnParamType) {
+        (*mem.get_nth(self.args, index), *mem.get_nth(self.params, index))
+    }
+
+    fn iter(
+        &self,
+        mem: &Mem<MemTmp>,
+    ) -> impl Iterator<Item = (&'static MaybeTypedExpr, &'static FnParamType)> + 'static {
+        mem.getn_zip(self.args, self.params)
+    }
+
+    fn len(&self) -> u32 {
+        debug_assert!(self.args.len() == self.params.len());
+        self.args.len()
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct TypedAbility {
+    pub name: StringId,
+    pub base_ability_id: AbilityId,
+    pub self_type_id: TypeId,
+    pub parameters: PermSlice<TypedAbilityParam>,
+    pub functions: PermSlice<TypedAbilityFunctionRef>,
+    pub scope_id: ScopeId,
+    pub ast_id: ParsedAbilityId,
+    pub namespace_id: NamespaceId,
+    pub kind: TypedAbilityKind,
+}
+
+impl TypedAbility {
+    pub fn find_function_by_name(
+        &self,
+        mem: &Mem<TypedProgram>,
+        name: StringId,
+    ) -> Option<TypedAbilityFunctionRef> {
+        mem.getn(self.functions).iter().find(|f| f.function_name == name).copied()
+    }
+
+    pub fn parent_ability_id(&self) -> Option<AbilityId> {
+        match &self.kind {
+            TypedAbilityKind::Concrete => None,
+            TypedAbilityKind::Generic { .. } => None,
+            TypedAbilityKind::Specialized(specialization) => Some(specialization.generic_parent),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct TypedSumPattern {
+    pub sum_type_id: TypeId,
+    pub variant_name: StringId,
+    pub variant_index: u32,
+    pub payload: Option<TypedPatternId>,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy)]
+pub struct TypedEnumPattern {
+    pub enum_type_id: TypeId,
+    pub member_name: StringId,
+    pub index: u32,
+    pub int_value: TypedIntValue,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy)]
+pub struct TypedStructPatternField {
+    pub name: StringId,
+    pub pattern: TypedPatternId,
+    pub field_index: u32,
+    pub field_type_id: TypeId,
+}
+
+#[derive(Clone, Copy)]
+pub struct TypedStructPattern {
+    pub struct_type_id: TypeId,
+    pub fields: MSlice<TypedStructPatternField, TypedPatternPool>,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy)]
+pub struct VariablePattern {
+    pub name: StringId,
+    pub type_id: TypeId,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy)]
+pub struct TypedReferencePattern {
+    pub inner_pattern: TypedPatternId,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy)]
+/// This pattern kind is only useful when run at compile-time
+/// It can inspect the type of a value of a generic type, like T or Opt[T],
+/// and provide a typed, bound value of that type if the match succeeds. This
+/// lets you do statically known specializations within the same function body
+/// based on types
+pub struct TypePattern {
+    pub inner_pattern: TypedPatternId,
+    pub type_id: TypeId,
+    pub span: Span,
+}
+
+// <pattern> ::= <literal> | <variable> | <sum> | <struc>
+// <literal> ::= "(" ")" | "\"" <ident> "\"" | [0-9]+ | "'" [a-z] "'" | "None"
+// <variable> ::= <ident>
+// <ident> ::= [a-z]*
+// <sum> ::= "." <ident> ( "(" <pattern> ")" )?
+// <struc> ::= "{" ( <ident> ": " <pattern> ","? )* "}"
+// <type> ::= "type["<ty expr>"]("<pattern>")"
+
+type TypedPatternId = Handle<TypedPattern, TypedPatternPool>;
+
+pub struct TypedPatternPool {
+    mem: kmem::Mem<TypedPatternPool>,
+}
+
+impl TypedPatternPool {
+    pub fn make() -> TypedPatternPool {
+        Self { mem: Mem::make() }
+    }
+
+    pub fn get(&self, pattern_id: TypedPatternId) -> &TypedPattern {
+        self.mem.get(pattern_id)
+    }
+
+    pub fn get_slice<T>(&self, slice: MSlice<T, TypedPatternPool>) -> &'static [T] {
+        self.mem.getn(slice)
+    }
+
+    pub fn add(&mut self, pattern: TypedPattern) -> TypedPatternId {
+        self.mem.push_h(pattern)
+    }
+
+    pub fn get_pattern_bindings(
+        &self,
+        pattern_id: TypedPatternId,
+    ) -> SmallVec<[VariablePattern; 8]> {
+        let mut v = smallvec![];
+        self.get_pattern_bindings_rec(pattern_id, &mut v);
+        // This sorts by the Identifier id, not the name itself, but that's absolutely fine
+        v.sort_by_key(|vp| vp.name);
+        v
+    }
+    fn get_pattern_bindings_rec(
+        &self,
+        pattern_id: TypedPatternId,
+        bindings: &mut SmallVec<[VariablePattern; 8]>,
+    ) {
+        match self.mem.get(pattern_id) {
+            TypedPattern::LiteralChar(_, _) => (),
+            TypedPattern::LiteralInteger(_, _) => (),
+            TypedPattern::LiteralFloat(_, _) => (),
+            TypedPattern::LiteralBool(_, _) => (),
+            TypedPattern::LiteralString(_, _) => (),
+            TypedPattern::Enum(_) => (),
+            TypedPattern::Variable(variable_pattern) => bindings.push(*variable_pattern),
+            TypedPattern::Sum(sum_pattern) => {
+                if let Some(payload_pattern_id) = sum_pattern.payload.as_ref() {
+                    self.get_pattern_bindings_rec(*payload_pattern_id, bindings)
+                }
+            }
+            TypedPattern::Struct(struct_pattern) => {
+                for field_pattern in self.mem.getn(struct_pattern.fields).iter() {
+                    self.get_pattern_bindings_rec(field_pattern.pattern, bindings)
+                }
+            }
+            TypedPattern::Wildcard(_) => (),
+            TypedPattern::Reference(refer) => {
+                self.get_pattern_bindings_rec(refer.inner_pattern, bindings)
+            }
+            TypedPattern::PointerNull(_) => (),
+            TypedPattern::Type(t) => self.get_pattern_bindings_rec(t.inner_pattern, bindings),
+        }
+    }
+    pub fn pattern_never_useless(&self, pattern_id: TypedPatternId) -> bool {
+        match self.mem.get(pattern_id) {
+            TypedPattern::LiteralChar(_, _span) => true,
+            TypedPattern::LiteralInteger(_, _span) => true,
+            TypedPattern::LiteralFloat(_, _span) => true,
+            TypedPattern::LiteralString(_, _span) => true,
+            TypedPattern::LiteralBool(_, _span) => false,
+            TypedPattern::Variable(_variable_pattern) => false,
+            TypedPattern::Sum(typed_sum_pattern) => {
+                typed_sum_pattern.payload.as_ref().is_some_and(|p| self.pattern_never_useless(*p))
+            }
+            TypedPattern::Enum(_) => false,
+            TypedPattern::Struct(typed_struct_pattern) => self
+                .mem
+                .getn(typed_struct_pattern.fields)
+                .iter()
+                .any(|field_pattern| self.pattern_never_useless(field_pattern.pattern)),
+            TypedPattern::Wildcard(_span) => false,
+            TypedPattern::Reference(refer) => self.pattern_never_useless(refer.inner_pattern),
+            TypedPattern::PointerNull(_) => true,
+            TypedPattern::Type(_) => true,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum TypedPattern {
+    // Consider replacing with a single Literal using StaticValue
+    LiteralChar(u8, Span),
+    LiteralInteger(StaticValueId, Span),
+    LiteralFloat(StaticValueId, Span),
+    LiteralBool(bool, Span),
+    LiteralString(StringId, Span),
+    Variable(VariablePattern),
+    Sum(TypedSumPattern),
+    Enum(TypedEnumPattern),
+    Struct(TypedStructPattern),
+    Wildcard(Span),
+    Reference(TypedReferencePattern),
+    PointerNull(Span),
+    Type(TypePattern),
+}
+
+impl TypedPattern {
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            TypedPattern::LiteralChar(_, _) => "char",
+            TypedPattern::LiteralInteger(_, _) => "integer",
+            TypedPattern::LiteralFloat(_, _) => "float",
+            TypedPattern::LiteralBool(_, _) => "bool",
+            TypedPattern::LiteralString(_, _) => "string",
+            TypedPattern::Enum(_) => "enum",
+            TypedPattern::Variable(_) => "variable",
+            TypedPattern::Sum(_) => "variant",
+            TypedPattern::Struct(_) => "struct",
+            TypedPattern::Wildcard(_) => "_",
+            TypedPattern::Reference(_) => "reference",
+            TypedPattern::PointerNull(_) => "null ptr",
+            TypedPattern::Type(_) => "type pattern",
+        }
+    }
+    pub fn span(&self) -> Span {
+        match self {
+            TypedPattern::LiteralChar(_, span) => *span,
+            TypedPattern::LiteralInteger(_, span) => *span,
+            TypedPattern::LiteralFloat(_, span) => *span,
+            TypedPattern::LiteralBool(_, span) => *span,
+            TypedPattern::LiteralString(_, span) => *span,
+            TypedPattern::Enum(e) => e.span,
+            TypedPattern::Variable(variable_pattern) => variable_pattern.span,
+            TypedPattern::Sum(sum_pattern) => sum_pattern.span,
+            TypedPattern::Struct(struct_pattern) => struct_pattern.span,
+            TypedPattern::Wildcard(span) => *span,
+            TypedPattern::Reference(refer) => refer.span,
+            TypedPattern::PointerNull(span) => *span,
+            TypedPattern::Type(t) => t.span,
+        }
+    }
+}
+
+enum MatchingConditionResult {
+    NeverBlock(TypedExprId),
+    MatchingCondition(MatchingCondition),
+}
+
+pub struct BlockBuilder {
+    pub scope_id: ScopeId,
+    pub statements: List<TypedStmtId, TypedProgram>,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy)]
+pub struct TypedBlock {
+    pub scope_id: ScopeId,
+    pub statements: PermSlice<TypedStmtId>,
+}
+
+#[derive(Clone)]
+pub struct SpecializationInfo {
+    pub parent_function: FunctionId,
+    pub type_arguments: TypeSliceId,
+    pub fnlike_type_arguments: TypeSliceId,
+    pub specialized_function_id: FunctionId,
+    pub specialized_function_type: TypeId,
+}
+impl_copy_if_small!(20, SpecializationInfo);
+
+#[derive(Debug, Clone, Copy)]
+pub enum TypedFunctionKind {
+    Standard,
+    Lambda,
+    AbilityDefn(AbilityId),
+    AbilityImpl(AbilityId, TypeId),
+}
+impl TypedFunctionKind {
+    pub fn ability_id(&self) -> Option<AbilityId> {
+        match self {
+            TypedFunctionKind::Standard => None,
+            TypedFunctionKind::Lambda => None,
+            TypedFunctionKind::AbilityDefn(ability_id) => Some(*ability_id),
+            TypedFunctionKind::AbilityImpl(ability_id, _) => Some(*ability_id),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct FunctionSignature {
+    pub name: Option<StringId>,
+    pub function_type: TypeId,
+    pub type_params: TypeIdSlice,
+    pub fnlike_type_params: PermSlice<FnlikeTypeParam>,
+}
+impl_copy_if_small!(24, FunctionSignature);
+
+impl FunctionSignature {
+    pub fn make_no_generics(name: Option<StringId>, function_type: TypeId) -> FunctionSignature {
+        FunctionSignature {
+            name,
+            function_type,
+            type_params: MSlice::empty(),
+            fnlike_type_params: MSlice::empty(),
+        }
+    }
+
+    pub fn has_type_params(&self) -> bool {
+        !self.type_params.is_empty() || !self.fnlike_type_params.is_empty()
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct TypedFunctionParam {
+    pub variable_id: VariableId,
+    pub span: Span,
+}
+
+bitflags! {
+    #[repr(transparent)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    struct TypedFunctionFlags: u16 {
+        const CompilerDebug = 1;
+        const Concrete = 1 << 1;
+        const Macro = 1 << 2;
+        const Reloadable = 1 << 4;
+        const AbiNative = 1 << 5;
+        const AddressTaken = 1 << 6;
+        const Inline = 1 << 7;
+        const Cold = 1 << 8;
+        const NoInline = 1 << 9;
+        const TestStatic = 1 << 10;
+        const TestRuntime = 1 << 11;
+        const AddressBaked = 1 << 12;
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct TypedFunction {
+    pub name: StringId,
+    pub scope: ScopeId,
+    pub namespace_id: NamespaceId,
+    pub params: PermSlice<TypedFunctionParam>,
+    pub type_params: TypeIdSlice,
+    pub fnlike_type_params: PermSlice<FnlikeTypeParam>,
+    /// Constraints on self and ability params have to go here, since they aren't among the function's type params
+    pub ability_where_constraints: PermSlice<AbilityFnWhereConstraint>,
+    pub body_block: Option<TypedExprId>,
+    pub builtin_type: Option<Builtin>,
+    pub linkage: Linkage,
+    /// If I am specialization myself
+    pub specialization_info: Option<SpecializationInfo>,
+    pub parsed_id: ParsedId,
+    pub type_id: TypeId,
+    pub kind: TypedFunctionKind,
+    flags: TypedFunctionFlags,
+    /// If we've generated a 'dyn' copy of this function, we store its id
+    pub dyn_fn_id: Option<FunctionId>,
+    pub dyn_receiver_thunk_id: Option<FunctionId>,
+    /// 'let(returned)', RVO
+    pub returned_variable: Option<VariableId>,
+    pub body_failure: Option<K1Message>,
+}
+
+impl TypedFunction {
+    pub fn signature(&self) -> FunctionSignature {
+        FunctionSignature {
+            name: Some(self.name),
+            function_type: self.type_id,
+            type_params: self.type_params,
+            fnlike_type_params: self.fnlike_type_params,
+        }
+    }
+
+    pub fn is_generic(&self) -> bool {
+        matches!(self.kind, TypedFunctionKind::AbilityDefn(_)) || self.signature().has_type_params()
+    }
+
+    pub fn compiler_debug(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::CompilerDebug)
+    }
+
+    pub fn is_concrete(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::Concrete)
+    }
+
+    pub fn is_macro(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::Macro)
+    }
+
+    pub fn is_reloadable(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::Reloadable)
+    }
+    pub fn is_inline(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::Inline)
+    }
+    pub fn is_noinline(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::NoInline)
+    }
+    pub fn is_cold(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::Cold)
+    }
+
+    pub fn abi_native(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::AbiNative)
+    }
+
+    pub fn address_taken(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::AddressTaken)
+    }
+
+    pub fn address_baked(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::AddressBaked)
+    }
+
+    pub fn is_test(&self) -> bool {
+        self.flags.intersects(TypedFunctionFlags::TestStatic | TypedFunctionFlags::TestRuntime)
+    }
+    pub fn test_runs_static(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::TestStatic)
+    }
+    pub fn test_runs_runtime(&self) -> bool {
+        self.flags.contains(TypedFunctionFlags::TestRuntime)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+/// When a function takes a special type parameter, either a 'function_like'
+/// or a 'static'. This ties the type parameter to its value param, which
+/// is always a 1-1 relationship. As in:
+/// fn example(knownInt: static int, some thunk: () -> ())
+///            ^ existential type param 1, a static
+///                                  ^ existential type param 2, a function type param
+pub struct FnlikeTypeParam {
+    pub name: StringId,
+    pub type_id: TypeId,
+    pub value_param_index: u32,
+    pub span: Span,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NameAndType {
+    pub name: StringId,
+    pub type_id: TypeId,
+}
+
+pub type TypeIdSlice = MSlice<TypeId, TypedProgram>;
+
+pub type TypeArgs = MSS2<TypeId, TypedProgram>;
+
+nz_u32_id!(TypeSliceId);
+
+pub(crate) enum TypeUnificationResult {
+    Matching,
+    NoHoles,
+    NonMatching(&'static str),
+}
+
+#[derive(Clone)]
+pub struct VariableExpr {
+    pub variable_id: VariableId,
+}
+impl_copy_if_small!(4, VariableExpr);
+
+#[derive(Clone, Copy)]
+pub struct DerefExpr {
+    pub target: TypedExprId,
+}
+
+#[derive(Clone, Copy)]
+pub enum AddressOfKind {
+    StackVariable(VariableId),
+    GlobalVariable(VariableId),
+    ReferenceExpr,
+}
+
+#[derive(Clone, Copy)]
+pub struct AddressOfExpr {
+    pub target_expr: TypedExprId,
+    pub kind: AddressOfKind,
+}
+
+#[derive(Clone)]
+pub enum CallResolution {
+    OtherExpr(TypedExprId),
+    Call(Callee),
+    MethodCall { callee: Callee, receiver: TypedExprId },
+}
+
+#[derive(Clone)]
+pub enum Callee {
+    StaticFunction(FunctionId),
+    StaticLambda {
+        function_id: FunctionId,
+        lambda_value_expr: TypedExprId,
+        lambda_type_id: TypeId,
+    },
+    /// When we're doing generic code that is never going to physically need to exist
+    /// it's far cheaper and simpler to just say "Abstract call of this function type" than
+    /// to specialize a copy of a function over a bunch of type params
+    Abstract {
+        name: Option<StringId>,
+        function_type: TypeId,
+    },
+    AbstractGeneric {
+        signature: Handle<FunctionSignature, TypedProgram>,
+    },
+    Builtin {
+        function_id: FunctionId,
+        function_type: TypeId,
+    },
+    /// Must contain a LambdaObject
+    DynamicLambda(TypedExprId),
+    /// Dynamic dispatch through an ability object. object_expr is typed
+    /// Type::AbilityObject; slot_function_type is the Function type inside the
+    /// object's fn-ptr field (is_lambda, param 0 = state ptr); field_index is
+    /// the object struct field holding the fn ptr (state is field 0)
+    DynamicAbilityFn {
+        object_expr: TypedExprId,
+        field_index: u32,
+        slot_function_type: TypeId,
+    },
+    /// Must contain a Function pointer
+    DynamicFunction {
+        function_pointer_expr: TypedExprId,
+    },
+    /// Used by function type parameters
+    DynamicAbstract {
+        callee_expr: TypedExprId,
+        name: StringId,
+        function_type: TypeId,
+    },
+}
+impl_copy_if_small!(16, Callee);
+
+impl Callee {
+    pub fn make_static(function_id: FunctionId) -> Callee {
+        Callee::StaticFunction(function_id)
+    }
+
+    pub fn maybe_function_id(&self) -> Option<FunctionId> {
+        match self {
+            Callee::StaticFunction(function_id) => Some(*function_id),
+            Callee::StaticLambda { function_id, .. } => Some(*function_id),
+            Callee::Abstract { .. } => None,
+            Callee::AbstractGeneric { .. } => None,
+            Callee::Builtin { .. } => None,
+            Callee::DynamicLambda(_) => None,
+            Callee::DynamicAbilityFn { .. } => None,
+            Callee::DynamicFunction { .. } => None,
+            Callee::DynamicAbstract { .. } => None,
+        }
+    }
+}
+
+static_assert_size!(Call, 36);
+#[derive(Clone, Copy)]
+pub struct Call {
+    pub callee: Callee,
+    pub args: PermSlice<TypedExprId>,
+    /// type_args remain unerased for some intrinsics where we want codegen to see the types.
+    /// Specifically sizeOf[T], since there's no actual value to specialize on. kinda a hack would be
+    /// better to specialize anyway and inline? idk
+    pub type_args: TypeArgs,
+}
+
+#[derive(Clone, Copy)]
+pub struct StructLiteralField {
+    pub name: StringId,
+    // None means uninitialized
+    pub expr: Option<TypedExprId>,
+}
+
+#[derive(Clone, Copy)]
+pub struct StructLiteral {
+    pub fields: PermSlice<StructLiteralField>,
+}
+
+#[derive(Clone)]
+pub struct ArrayGetElement {
+    pub base_array: TypedExprId,
+    pub index: TypedExprId,
+    pub packed: bool,
+}
+impl_copy_if_small!(12, ArrayGetElement);
+
+#[derive(Clone, Copy)]
+pub struct FieldAccess {
+    pub base_struct: TypedExprId,
+    pub field_index: u32,
+    pub packed: bool,
+}
+
+#[derive(Clone)]
+pub struct TypedSumConstructor {
+    pub variant_index: u32,
+    pub payload: Option<TypedExprId>,
+}
+impl_copy_if_small!(16, TypedSumConstructor);
+
+#[derive(Clone)]
+pub struct GetSumPayload {
+    pub sum_expr: TypedExprId,
+    pub variant_index: u32,
+    pub packed: bool,
+}
+impl_copy_if_small!(12, GetSumPayload);
+
+#[derive(Clone)]
+pub struct GetSumTag {
+    pub sum_expr: TypedExprId,
+}
+impl_copy_if_small!(4, GetSumTag);
+
+#[derive(Clone, Copy)]
+pub struct EnumConstructor {
+    pub value_index: u32,
+}
+
+#[derive(Clone, Copy)]
+pub struct EnumGetValue {
+    pub enum_expr: TypedExprId,
+}
+
+#[derive(Clone, Copy)]
+pub struct TypedMatchArm {
+    pub case: Option<StaticValueId>,
+    pub condition: MatchingCondition,
+    pub consequent_expr: TypedExprId,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TypedFloatValue {
+    F32(f32),
+    F64(f64),
+}
+
+impl TypedFloatValue {
+    pub fn get_type(&self) -> TypeId {
+        match self {
+            TypedFloatValue::F32(_) => F32_TYPE_ID,
+            TypedFloatValue::F64(_) => F64_TYPE_ID,
+        }
+    }
+
+    pub fn get_scalar_type(&self) -> ScalarType {
+        match self {
+            TypedFloatValue::F32(_) => ScalarType::F32,
+            TypedFloatValue::F64(_) => ScalarType::F64,
+        }
+    }
+
+    pub fn get_width(&self) -> NumericWidth {
+        match self {
+            TypedFloatValue::F32(_) => NumericWidth::B32,
+            TypedFloatValue::F64(_) => NumericWidth::B64,
+        }
+    }
+
+    pub fn as_f64(&self) -> f64 {
+        match self {
+            TypedFloatValue::F32(v) => *v as f64,
+            TypedFloatValue::F64(v) => *v,
+        }
+    }
+}
+
+impl Display for TypedFloatValue {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TypedFloatValue::F32(v) => write!(f, "{}f32", v),
+            TypedFloatValue::F64(v) => write!(f, "{}f64", v),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum IntegerCastDirection {
+    SignExtend,
+    ZeroExtend,
+    Truncate,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum CastType {
+    IntegerCast(IntegerCastDirection),
+    FloatExtend,
+    FloatTruncate,
+    FloatToUnsignedInteger,
+    FloatToSignedInteger,
+    IntegerUnsignedToFloat,
+    IntegerSignedToFloat,
+    // NoOps
+    ReferenceToReference,
+    PointerToReference,
+    ReferenceToPointer,
+    Discard,
+}
+
+impl Display for CastType {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CastType::IntegerCast(_dir) => write!(f, "intcast"),
+            CastType::ReferenceToReference => write!(f, "reftoref"),
+            CastType::PointerToReference => write!(f, "ptrtoref"),
+            CastType::ReferenceToPointer => write!(f, "reftoptr"),
+            CastType::FloatExtend => write!(f, "fext"),
+            CastType::FloatTruncate => write!(f, "ftrunc"),
+            CastType::FloatToUnsignedInteger => write!(f, "ftouint"),
+            CastType::FloatToSignedInteger => write!(f, "ftosint"),
+            CastType::IntegerUnsignedToFloat => write!(f, "uinttof"),
+            CastType::IntegerSignedToFloat => write!(f, "sinttof"),
+            CastType::Discard => write!(f, "discard"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TypedCast {
+    pub cast_type: CastType,
+    pub base_expr: TypedExprId,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TypedReturn {
+    pub value: TypedExprId,
+    pub returned_variable: Option<VariableId>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum TrivialExit {
+    Fallthrough,
+    Break(ScopeId),
+    Continue(ScopeId),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TypedBreak {
+    pub value: TypedExprId,
+    pub loop_scope: ScopeId,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LambdaExpr {
+    pub lambda_type: TypeId,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FunctionPointerExpr {
+    pub function_id: FunctionId,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FunctionReferenceExpr {
+    pub function_id: FunctionId,
+}
+
+#[derive(Clone, Copy)]
+pub struct MatchingCondition {
+    pub instrs: PermSlice<MatchingConditionInstr>,
+}
+
+#[derive(Debug, Clone)]
+pub enum MatchingConditionInstr {
+    Binding { let_stmt: TypedStmtId },
+    Cond { value: TypedExprId },
+    IntEquals { subject: TypedExprId, value: StaticValueId },
+}
+
+impl MatchingConditionInstr {
+    pub fn cond(value: TypedExprId) -> Self {
+        MatchingConditionInstr::Cond { value }
+    }
+    pub fn binding(let_stmt: TypedStmtId) -> Self {
+        MatchingConditionInstr::Binding { let_stmt }
+    }
+}
+
+impl_copy_if_small!(12, MatchingConditionInstr);
+
+#[derive(Clone, Copy)]
+pub struct WhileLoop {
+    pub condition: MatchingCondition,
+    pub body: TypedExprId,
+}
+
+#[derive(Debug, Clone)]
+pub struct LoopExpr {
+    pub body_block: TypedExprId,
+}
+impl_copy_if_small!(4, LoopExpr);
+
+#[derive(Clone, Copy)]
+/// Invariant: The last arm's condition must always evaluate to 'true'
+pub struct TypedMatchExpr {
+    pub subject_defn: Option<TypedStmtId>,
+    pub scrutinee: Option<TypedExprId>,
+    pub arms: PermSlice<TypedMatchArm>,
+}
+
+#[derive(Clone, Copy)]
+pub struct StaticConstantExpr {
+    pub value_id: StaticValueId,
+    pub is_typed_as_static: bool,
+}
+
+nz_u32_id!(CallId);
+
+static_assert_size!(TypedExpr, 20);
+#[derive(Clone, Copy)]
+pub enum TypedExpr {
+    StaticValue(StaticConstantExpr),
+    Struct(StructLiteral),
+    // Current largest variant at 20 bytes
+    StructFieldAccess(FieldAccess),
+    ArrayGetElement(ArrayGetElement),
+    Variable(VariableExpr),
+    Deref(DerefExpr),
+    AddressOf(AddressOfExpr),
+    Block(TypedBlock),
+    Call {
+        call_id: CallId,
+    },
+    ScalarOp(ScalarOp),
+    /// In the past, we lowered match to an if/else chain. This proves not quite powerful enough
+    /// of a representation to do everything we want
+    /// Now we lower if/else to a match!
+    Match(TypedMatchExpr),
+    WhileLoop(WhileLoop),
+    LoopExpr(LoopExpr),
+    SumConstructor(TypedSumConstructor),
+    SumGetTag(GetSumTag),
+    SumGetPayload(GetSumPayload),
+    Enum(EnumConstructor),
+    EnumGetValue(EnumGetValue),
+    Cast(TypedCast),
+    /// Explicit returns are syntactically like function calls, but are their own instruction type
+    /// return(<expr>)
+    /// It has the expression type of 'never', but is bound by the return type of the nearest
+    /// enclosing function or lambda
+    Return(TypedReturn),
+    /// Breaks are syntactically like function calls, but are their own instruction type
+    /// break(<expr>)
+    /// It has the expression type of 'never', but influences the return type of the enclosing loop
+    Break(TypedBreak),
+    /// continue jumps to the top of the next iteration of the enclosing loop:
+    /// the condition check of a `while`, the body top of a `loop`
+    Continue {
+        loop_scope: ScopeId,
+    },
+    /// Creating a lambda results in a Lambda expr.
+    /// - A function is created
+    /// - An environment capture expr is created
+    /// - An expression is returned that is a struct value of its environment
+    Lambda(LambdaExpr),
+    FunctionPointer(FunctionPointerExpr),
+    FunctionReference(FunctionReferenceExpr),
+}
+
+impl From<VariableExpr> for TypedExpr {
+    fn from(value: VariableExpr) -> Self {
+        TypedExpr::Variable(value)
+    }
+}
+
+impl TypedExpr {
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            TypedExpr::Struct(_) => "struct",
+            TypedExpr::StructFieldAccess(_) => "struct_field_access",
+            TypedExpr::ArrayGetElement(_) => "array_get_element",
+            TypedExpr::Variable(_) => "variable",
+            TypedExpr::Deref(_) => "deref",
+            TypedExpr::AddressOf(_) => "addressof",
+            TypedExpr::Block(_) => "block",
+            TypedExpr::Call { .. } => "call",
+            TypedExpr::ScalarOp(_) => "scalar_op",
+            TypedExpr::Match(_) => "match",
+            TypedExpr::WhileLoop(_) => "while_loop",
+            TypedExpr::LoopExpr(_) => "loop",
+            TypedExpr::SumConstructor(_) => "sum_constructor",
+            TypedExpr::SumGetTag(_) => "sum_get_tag",
+            TypedExpr::SumGetPayload(_) => "sum_get_payload",
+            TypedExpr::Enum(_) => "enum_constructor",
+            TypedExpr::EnumGetValue(_) => "enum_get_value",
+            TypedExpr::Cast(_) => "cast",
+            TypedExpr::Return(_) => "return",
+            TypedExpr::Break(_) => "break",
+            TypedExpr::Continue { .. } => "continue",
+            TypedExpr::Lambda(_) => "lambda",
+            TypedExpr::FunctionPointer(_) => "function_pointer",
+            TypedExpr::FunctionReference(_) => "function_reference",
+            TypedExpr::StaticValue(_) => "static_value",
+        }
+    }
+
+    pub fn expect_variable(self) -> VariableExpr {
+        if let Self::Variable(v) = self { v } else { panic!("Expected variable expression") }
+    }
+}
+
+enum CheckExprTypeResult {
+    Ok,
+    Err(MStr<MemTmp>),
+    Coerce(TypedExprId, &'static str),
+}
+
+#[derive(Debug, Clone)]
+pub struct LetStmt {
+    pub variable_id: VariableId,
+    pub variable_type: TypeId,
+    pub initializer: Option<TypedExprId>,
+    pub span: Span,
+}
+impl_copy_if_small!(20, LetStmt);
+
+#[derive(Debug, Clone)]
+pub struct AssignmentStmt {
+    pub destination: TypedExprId,
+    pub value: TypedExprId,
+    pub span: Span,
+}
+impl_copy_if_small!(16, AssignmentStmt);
+
+#[derive(Clone, Copy)]
+pub struct TypedRequireStmt {
+    pub condition: MatchingCondition,
+    pub else_body: Option<TypedExprId>,
+    pub span: Span,
+}
+
+#[derive(Clone, Copy)]
+struct PendingDefer {
+    scope: ScopeId,
+    body: TypedExprId,
+    binder: Option<VariableId>,
+}
+
+/// How far up the scope tree a scope exit travels, for defer gathering:
+/// a `return` leaves every scope up to the function top, a `break` leaves
+/// every scope up to its enclosing loop.
+#[derive(Clone, Copy)]
+enum DeferExtent {
+    FunctionTop,
+    LoopScope(ScopeId),
+}
+
+static_assert_size!(TypedStmt, 24);
+#[derive(Clone, Copy)]
+pub enum TypedStmt {
+    Expr(TypedExprId, TypeId),
+    Let(LetStmt),
+    Assignment(AssignmentStmt),
+    Require(TypedRequireStmt),
+}
+
+impl TypedStmt {
+    pub fn as_let(&self) -> Option<&LetStmt> {
+        match self {
+            TypedStmt::Let(let_stmt) => Some(let_stmt),
+            _ => None,
+        }
+    }
+
+    fn as_expr(&self) -> Option<TypedExprId> {
+        match self {
+            TypedStmt::Expr(expr_id, _) => Some(*expr_id),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MessageLevel {
+    Hint,
+    Info,
+    Warn,
+    Error,
+}
+
+impl MessageLevel {
+    pub fn color(&self) -> colored::Color {
+        match self {
+            MessageLevel::Hint => colored::Color::BrightBlue,
+            MessageLevel::Info => colored::Color::Cyan,
+            MessageLevel::Warn => colored::Color::Yellow,
+            MessageLevel::Error => colored::Color::Red,
+        }
+    }
+    pub fn name_str(&self) -> &'static str {
+        match self {
+            MessageLevel::Hint => "hint",
+            MessageLevel::Info => "info",
+            MessageLevel::Warn => "warn",
+            MessageLevel::Error => "error",
+        }
+    }
+}
+
+impl Display for MessageLevel {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name_str())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorKind {
+    None,
+    ParseError,
+    TypeError,
+    Malformed,
+    Internal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct K1Message {
+    pub message: StringId,
+    pub span: Span,
+    pub error_kind: ErrorKind,
+    pub level: MessageLevel,
+}
+
+pub type K1Result<A> = Result<A, K1Message>;
+
+#[derive(Debug, Clone)]
+struct SynthedVariable {
+    pub variable_id: VariableId,
+    pub defn_stmt: TypedStmtId,
+}
+
+bitflags! {
+    #[repr(transparent)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct VariableFlags: u16 {
+        const Reassigned = 1;
+        const Context = 1 << 1;
+        const UserHidden = 1 << 2;
+        const Returned = 1 << 3;
+        const AddressTaken = 1 << 4;
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum VariableKind {
+    FnParam(FunctionId),
+    Stack,
+    StackSynthetic,
+    Global(TypedGlobalId),
+}
+
+#[derive(Clone, Copy)]
+pub struct Variable {
+    pub name: StringId,
+    pub type_id: TypeId,
+    pub owner_scope: ScopeId,
+    pub flags: VariableFlags,
+    pub usage_count: u32,
+    pub kind: VariableKind,
+    pub defn_span: Span,
+}
+
+impl Variable {
+    pub fn global_id(&self) -> Option<TypedGlobalId> {
+        match self.kind {
+            VariableKind::Global(global_id) => Some(global_id),
+            _ => None,
+        }
+    }
+
+    pub fn is_reassigned(&self) -> bool {
+        self.flags.contains(VariableFlags::Reassigned)
+    }
+    pub fn is_context(&self) -> bool {
+        self.flags.contains(VariableFlags::Context)
+    }
+    pub fn is_user_hidden(&self) -> bool {
+        self.flags.contains(VariableFlags::UserHidden)
+    }
+    pub fn is_returned(&self) -> bool {
+        self.flags.contains(VariableFlags::Returned)
+    }
+    pub fn is_address_taken(&self) -> bool {
+        self.flags.contains(VariableFlags::AddressTaken)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GlobalInitialValue {
+    /// The initializer has not been evaluated yet
+    Pending,
+    /// Evaluated: this global has no compile-time value. Currently this means an
+    /// external global, whose storage arrives at link time
+    Uninit,
+    /// Evaluated to a value
+    Value(StaticValueId),
+    Failed(K1Message),
+}
+
+impl GlobalInitialValue {
+    pub fn as_value(&self) -> Option<StaticValueId> {
+        match self {
+            GlobalInitialValue::Value(v) => Some(*v),
+            GlobalInitialValue::Pending
+            | GlobalInitialValue::Uninit
+            | GlobalInitialValue::Failed(_) => None,
+        }
+    }
+
+    pub fn is_pending(&self) -> bool {
+        matches!(self, GlobalInitialValue::Pending)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct TypedGlobal {
+    pub variable_id: VariableId,
+    pub parsed_expr: Option<ParsedExprId>,
+    pub initial_value: GlobalInitialValue,
+    pub type_id: TypeId,
+    pub span: Span,
+    pub is_constant: bool,
+    pub is_tls: bool,
+    pub linkage: Linkage,
+    pub ast_id: ParsedGlobalId,
+    pub parent_scope: ScopeId,
+    /// Set when the global is declared in an ns(reload)
+    pub reload_ns: Option<NamespaceId>,
+}
+
+impl TypedFunction {
+    pub fn synthesized(
+        name: StringId,
+        scope: ScopeId,
+        namespace_id: NamespaceId,
+        params: MSlice<TypedFunctionParam, TypedProgram>,
+        body_block: TypedExprId,
+        parsed_id: ParsedId,
+        type_id: TypeId,
+        kind: TypedFunctionKind,
+    ) -> TypedFunction {
+        TypedFunction {
+            name,
+            scope,
+            namespace_id,
+            params,
+            type_params: MSlice::empty(),
+            fnlike_type_params: MSlice::empty(),
+            ability_where_constraints: MSlice::empty(),
+            body_block: Some(body_block),
+            builtin_type: None,
+            linkage: Linkage::Standard,
+            specialization_info: None,
+            parsed_id,
+            type_id,
+            kind,
+            flags: TypedFunctionFlags::empty(),
+            dyn_fn_id: None,
+            dyn_receiver_thunk_id: None,
+            returned_variable: None,
+            body_failure: None,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum ModuleParamsPhase {
+    Program,
+    HostDiscovery,
+    HostSetup,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub enum NamespaceKind {
+    User,
+    TypeCompanion,
+    Ability,
+    Root,
+}
+
+#[derive(Clone, Copy)]
+pub struct Namespace {
+    pub name: StringId,
+    pub scope_id: ScopeId,
+    pub namespace_type: NamespaceKind,
+    pub companion_type_id: Option<TypeId>,
+    pub parent_id: Option<NamespaceId>,
+    pub parsed_id: ParsedId,
+    /// default library for extern fns in this namespace.
+    /// re-opened ns: any opening may declare it; disagreeing openings are an error.
+    pub lib_name: Option<StringId>,
+    /// Set when the function is declared in an ns(reload)
+    /// re-opened ns: any opening may declare it; all openings share it.
+    pub reload: bool,
+}
+
+pub struct Namespaces {
+    pub namespaces: VPool<Namespace, NamespaceId>,
+}
+
+impl Namespaces {
+    pub fn get(&self, id: NamespaceId) -> &Namespace {
+        self.namespaces.get(id)
+    }
+
+    pub fn get_mut(&mut self, id: NamespaceId) -> &mut Namespace {
+        self.namespaces.get_mut(id)
+    }
+
+    pub fn add(&mut self, namespace: Namespace) -> NamespaceId {
+        self.namespaces.add(namespace)
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, Namespace> {
+        self.namespaces.iter()
+    }
+
+    pub fn get_scope(&self, namespace_id: NamespaceId) -> ScopeId {
+        self.get(namespace_id).scope_id
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ScalarOpKind {
+    IntBinop(IntOp),
+    IntUnop(IntUnop),
+    IntNegate,
+    IntCmp(IntCmpPred),
+    IntCmp3(Cmp3Op),
+    BoolNegate,
+    FloatBinop(FloatOp),
+    FloatUnop(FloatUnop),
+    FloatCmp(FloatCmpPred),
+    FloatFma,
+}
+
+impl ScalarOpKind {
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            ScalarOpKind::IntBinop(op) => op.name(),
+            ScalarOpKind::IntUnop(op) => op.name(),
+            ScalarOpKind::IntNegate => "ineg",
+            ScalarOpKind::IntCmp(pred) => pred.name(),
+            ScalarOpKind::IntCmp3(op) => op.name(),
+            ScalarOpKind::BoolNegate => "bool_not",
+            ScalarOpKind::FloatBinop(op) => op.name(),
+            ScalarOpKind::FloatUnop(op) => op.name(),
+            ScalarOpKind::FloatCmp(pred) => pred.name(),
+            ScalarOpKind::FloatFma => "fma",
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct ScalarOp {
+    pub kind: ScalarOpKind,
+    pub operands: PermSlice<TypedExprId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BuiltinAbility {
+    Enum,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinTyperInline {
+    TypeSize,
+    TypeStride,
+    TypeAlign,
+    CompilerSourceLocation,
+    CompilerModuleDir,
+    GetStaticValue,
+    TypeId,
+    EnumEquals,
+    Discard,
+    TestExpectFailure,
+}
+
+impl BuiltinTyperInline {
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            BuiltinTyperInline::TypeSize => "type_size",
+            BuiltinTyperInline::TypeStride => "type_stride",
+            BuiltinTyperInline::TypeAlign => "type_align",
+            BuiltinTyperInline::CompilerSourceLocation => "compiler_source_location",
+            BuiltinTyperInline::CompilerModuleDir => "compiler_module_dir",
+            BuiltinTyperInline::GetStaticValue => "get_static_value",
+            BuiltinTyperInline::TypeId => "type_id",
+            BuiltinTyperInline::EnumEquals => "enum_equals",
+            BuiltinTyperInline::Discard => "discard",
+            BuiltinTyperInline::TestExpectFailure => "test_expect_failure",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinTyperFunction {
+    EnumAbilityGetValue,
+    EnumAbilityGetTagName,
+    EnumAbilityFromValue,
+    EnumAbilityFromValueUnchecked,
+    SumAbilityGetTag,
+    SumAbilityGetName,
+    SumEquals,
+    StructEquals,
+    StructPrintTo,
+    SumPrintTo,
+    EnumPrintTo,
+}
+
+impl BuiltinTyperFunction {
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            BuiltinTyperFunction::EnumAbilityGetValue => "enum_ability_get_value",
+            BuiltinTyperFunction::EnumAbilityGetTagName => "enum_ability_get_tag_name",
+            BuiltinTyperFunction::EnumAbilityFromValue => "enum_ability_from_value",
+            BuiltinTyperFunction::EnumAbilityFromValueUnchecked => {
+                "enum_ability_from_value_unchecked"
+            }
+            BuiltinTyperFunction::SumAbilityGetTag => "sum_ability_get_tag",
+            BuiltinTyperFunction::SumAbilityGetName => "sum_ability_get_name",
+            BuiltinTyperFunction::SumEquals => "sum_equals",
+            BuiltinTyperFunction::StructEquals => "struct_equals",
+            BuiltinTyperFunction::StructPrintTo => "struct_print_to",
+            BuiltinTyperFunction::SumPrintTo => "sum_print_to",
+            BuiltinTyperFunction::EnumPrintTo => "enum_print_to",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinIr {
+    Unreachable,
+    BakeStaticValue,
+    Scalar(ScalarOpKind),
+    IntOverflow(OverflowOp),
+    Bitcast,
+    PointerIndex,
+    VolatileLoad,
+    VolatileStore,
+    AtomicLoad,
+    AtomicStore,
+    AtomicRmw(AtomicRmwOp),
+    AtomicCmpxchg { weak: bool },
+    AtomicFence,
+    VectorOp(VecOpKind),
+}
+
+/// Signedness/float class of lane ops is resolved at IR lowering from the element type
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum VecOpKind {
+    Splat,
+    Load,
+    Store,
+    GetLane,
+    WithLane,
+    Add,
+    Sub,
+    Mul,
+    BitNot,
+    BitAnd,
+    BitOr,
+    Xor,
+    ShiftLeft,
+    ShiftRight,
+    EqLanes,
+    LtLanes,
+    ShuffleBytes,
+    Shuffle,
+    ToMask,
+    ReduceOr,
+}
+
+impl VecOpKind {
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            VecOpKind::Splat => "vector_splat",
+            VecOpKind::Load => "vector_load",
+            VecOpKind::Store => "vector_store",
+            VecOpKind::GetLane => "vector_get_lane",
+            VecOpKind::WithLane => "vector_with_lane",
+            VecOpKind::Add => "vector_add",
+            VecOpKind::Sub => "vector_sub",
+            VecOpKind::Mul => "vector_mul",
+            VecOpKind::BitNot => "vector_bit_not",
+            VecOpKind::BitAnd => "vector_bit_and",
+            VecOpKind::BitOr => "vector_bit_or",
+            VecOpKind::Xor => "vector_xor",
+            VecOpKind::ShiftLeft => "vector_shift_left",
+            VecOpKind::ShiftRight => "vector_shift_right",
+            VecOpKind::EqLanes => "vector_eq_lanes",
+            VecOpKind::LtLanes => "vector_lt_lanes",
+            VecOpKind::ShuffleBytes => "vector_shuffle_bytes",
+            VecOpKind::Shuffle => "vector_shuffle",
+            VecOpKind::ToMask => "vector_to_mask",
+            VecOpKind::ReduceOr => "vector_reduce_or",
+        }
+    }
+}
+
+/// Signedness of Min/Max is resolved at IR lowering from the element type
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum AtomicRmwOp {
+    Xchg,
+    Add,
+    Sub,
+    And,
+    Or,
+    Xor,
+    Min,
+    Max,
+}
+
+impl BuiltinIr {
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            BuiltinIr::Unreachable => "unreachable",
+            BuiltinIr::BakeStaticValue => "bake_static_value",
+            BuiltinIr::Scalar(kind) => kind.kind_name(),
+            BuiltinIr::IntOverflow(op) => op.name(),
+            BuiltinIr::Bitcast => "bitcast",
+            BuiltinIr::PointerIndex => "pointer_index",
+            BuiltinIr::VolatileLoad => "volatile_load",
+            BuiltinIr::VolatileStore => "volatile_store",
+            BuiltinIr::AtomicLoad => "atomic_load",
+            BuiltinIr::AtomicStore => "atomic_store",
+            BuiltinIr::AtomicRmw(op) => op.kind_name(),
+            BuiltinIr::AtomicCmpxchg { weak: false } => "atomic_cmpxchg",
+            BuiltinIr::AtomicCmpxchg { weak: true } => "atomic_cmpxchg_weak",
+            BuiltinIr::AtomicFence => "atomic_fence",
+            BuiltinIr::VectorOp(op) => op.kind_name(),
+        }
+    }
+}
+
+impl AtomicRmwOp {
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            AtomicRmwOp::Xchg => "atomic_xchg",
+            AtomicRmwOp::Add => "atomic_fetch_add",
+            AtomicRmwOp::Sub => "atomic_fetch_sub",
+            AtomicRmwOp::And => "atomic_fetch_and",
+            AtomicRmwOp::Or => "atomic_fetch_or",
+            AtomicRmwOp::Xor => "atomic_fetch_xor",
+            AtomicRmwOp::Min => "atomic_fetch_min",
+            AtomicRmwOp::Max => "atomic_fetch_max",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Builtin {
+    Ir(BuiltinIr),
+    /// The typer phase will dissolve this call into some other expression
+    TyperInline(BuiltinTyperInline),
+    /// The typer phase will provide the implementation of the function
+    TyperPhysicalFunction(BuiltinTyperFunction),
+    /// The Backend will do this; current backends include: [llvm, vm]
+    Backend(BackendBuiltin),
+    /// An LLVM intrinsic named verbatim by `builtin("llvm.*")`
+    /// llvm calls it directly, the VM emulates it by name
+    LlvmIntrinsic(StringId),
+}
+
+impl Builtin {
+    pub fn as_backend_builtin(&self) -> Option<BackendBuiltin> {
+        match self {
+            Builtin::Backend(k) => Some(*k),
+            _ => None,
+        }
+    }
+
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            Builtin::TyperInline(k) => k.kind_name(),
+            Builtin::TyperPhysicalFunction(f) => f.kind_name(),
+            Builtin::Backend(backend_builtin) => backend_builtin.kind_name(),
+            Builtin::Ir(kind) => kind.kind_name(),
+            Builtin::LlvmIntrinsic(_) => "llvm_intrinsic",
+        }
+    }
+}
+
+pub fn make_message(message: StringId, span: Span, level: MessageLevel) -> K1Message {
+    let error_kind = match level {
+        MessageLevel::Hint => ErrorKind::None,
+        MessageLevel::Info => ErrorKind::None,
+        MessageLevel::Warn => ErrorKind::None,
+        MessageLevel::Error => ErrorKind::Malformed,
+    };
+    K1Message { message, span, level, error_kind }
+}
+
+/// thanks heather
+#[macro_export]
+macro_rules! panic_at_disco {
+    ($($format_args:expr),*) => {
+        {
+            let s: String = format!($($format_args),*);
+            panic!("Panic!! at disco!!!: {}", s)
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! ice_span {
+    ($k1:expr, $span:expr, $($format_args:expr),* $(,)?) => {
+        {
+            let s: String = format!($($format_args),*);
+            $k1.ice_span($span, &s)
+        }
+    };
+}
+
+#[macro_export]
+macro_rules! format_ident {
+    ($self: ident, $($format_args:expr),* $(,)?) => {
+        {
+            let mut s = std::mem::take(&mut $self.buffers.name_builder);
+            s.write_fmt(format_args!($($format_args),*)).unwrap();
+            let ident = $self.ast.idents.intern(&s);
+            s.clear();
+            $self.buffers.name_builder = s;
+            ident
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! get_ident {
+    ($self:ident, $name:expr) => {
+        $self
+            .ast
+            .idents
+            .lookup($name)
+            .unwrap_or_else(|| panic!("Missing identifier '{}' in pool", $name))
+    };
+}
+
+fn make_fail_ast_id<A>(ast: &ParsedProgram, message: &str, parsed_id: ParsedId) -> K1Result<A> {
+    let span = ast.get_span_for_id(parsed_id);
+    let message = ast.idents.intern(message);
+    Err(make_message(message, span, MessageLevel::Error))
+}
+
+pub fn write_error(
+    w: &mut impl std::io::Write,
+    ast: &ParsedProgram,
+    message: impl AsRef<str>,
+    level: MessageLevel,
+    span: Span,
+    use_color: bool,
+) -> std::io::Result<()> {
+    parse::write_source_location(w, ast, span, level, 6, Some(message.as_ref()), use_color)?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AbilityImplKind {
+    /// A normal, concrete, typically user-code provided, ability implementation
+    Concrete,
+    /// A blanket implementation. It's essentially a runnable prototype
+    /// that can generate implementations when conditions are met
+    Blanket {
+        base_ability: AbilityId,
+        parsed_id: ParsedAbilityImplId,
+    },
+    /// An ability impl that was derived from a blanket implementation
+    DerivedFromBlanket {
+        blanket_impl_id: AbilityImplId,
+    },
+    /// A 'fake' implementation kind that is cheap to build;
+    /// since it never needs to be called; we skip generating functions
+    /// for it
+    TypeParamConstraint,
+    BuiltinDerived,
+}
+
+impl AbilityImplKind {
+    pub fn blanket_parent(&self) -> Option<AbilityId> {
+        match self {
+            AbilityImplKind::Blanket { base_ability: parent_ability, .. } => Some(*parent_ability),
+            _ => None,
+        }
+    }
+
+    pub fn is_blanket(&self) -> bool {
+        matches!(self, AbilityImplKind::Blanket { .. })
+    }
+
+    pub fn is_concrete(&self) -> bool {
+        matches!(self, AbilityImplKind::Concrete)
+    }
+
+    pub fn is_type_param_constraint(&self) -> bool {
+        matches!(self, AbilityImplKind::TypeParamConstraint)
+    }
+
+    pub fn is_builtin_derived(&self) -> bool {
+        matches!(self, AbilityImplKind::BuiltinDerived)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub enum AbilityImplFunction {
+    FunctionId(FunctionId),
+    Pending,
+    Abstract(FunctionSignature),
+    /// The function is not available in this particular impl for this ability for this type.
+    /// Currently only used when a default fn has constraints that aren't satisfied
+    Unavailable,
+}
+
+#[derive(Clone, Copy)]
+pub struct TypedAbilityImpl {
+    pub kind: AbilityImplKind,
+    /// If this is a blanket impl, these are the blanket-level type params
+    pub blanket_type_params: TypeIdSlice,
+    pub self_type_id: TypeId,
+    pub base_ability_id: AbilityId,
+    /// base ability id _with_ ability parameters applied
+    pub ability_id: AbilityId,
+    /// The values for the types that the implementation is responsible for providing.
+    /// Yes, they are already baked into the functions but are needed explicitly in order
+    /// to do constraint checking
+    pub impl_arguments: TypeIdSlice,
+    /// Invariant: These functions are ordered how they are defined in the ability, NOT how they appear in
+    /// the impl code
+    pub functions: PermSlice<AbilityImplFunction>,
+    pub substitutions: PermSlice<TypeSubstitutionPair>,
+    pub scope_id: ScopeId,
+    pub span: Span,
+    /// I need this so that I don't try to instantiate blanket implementations that fail
+    /// typechecking
+    pub compile_errors: PermList<K1Message>,
+}
+
+impl TypedAbilityImpl {
+    pub fn signature(&self) -> TypedAbilitySignature {
+        TypedAbilitySignature {
+            specialized_ability_id: self.ability_id,
+            impl_arguments: self.impl_arguments,
+        }
+    }
+}
+
+pub struct FunctionAbilityImplContextInfo {
+    pub self_type_id: TypeId,
+    pub impl_kind: AbilityImplKind,
+    pub is_default: bool,
+}
+
+// Passed to compile_function_declaration to inform
+// behavior
+pub struct FunctionAbilityContextInfo {
+    ability_id: AbilityId,
+    impl_info: Option<FunctionAbilityImplContextInfo>,
+}
+
+impl FunctionAbilityContextInfo {
+    pub fn ability_id_only(ability_id: AbilityId) -> Self {
+        FunctionAbilityContextInfo { ability_id, impl_info: None }
+    }
+
+    pub fn ability_impl(
+        ability_id: AbilityId,
+        self_type_id: TypeId,
+        impl_kind: AbilityImplKind,
+        is_default: bool,
+    ) -> Self {
+        FunctionAbilityContextInfo {
+            ability_id,
+            impl_info: Some(FunctionAbilityImplContextInfo { self_type_id, impl_kind, is_default }),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct EvalTypeExprContext {
+    /// `direct_*` locations mean top-level of the thing they describe
+    is_direct_function_parameter: bool,
+
+    /// `inside_*` locations mean anywhere inside of the thing they describe, including top-level
+    is_inside_type_definition_rhs: bool,
+    is_inside_static_type: bool,
+}
+impl_copy_if_small!(12, EvalTypeExprContext);
+
+impl EvalTypeExprContext {
+    /// If we descend into a type, we can categorically clear all `direct_`
+    /// fields, by definition
+    pub fn descended(&self) -> Self {
+        EvalTypeExprContext { is_direct_function_parameter: false, ..*self }
+    }
+
+    pub const EMPTY: Self = EvalTypeExprContext {
+        is_direct_function_parameter: false,
+        is_inside_type_definition_rhs: false,
+        is_inside_static_type: false,
+    };
+
+    pub const VARIABLE_BINDING: Self = EvalTypeExprContext {
+        is_direct_function_parameter: false,
+        is_inside_type_definition_rhs: false,
+        is_inside_static_type: false,
+    };
+}
+
+// Not using this yet but probably need to be
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Symbol {
+    pub namespace: NamespaceId,
+    pub identifier: StringId,
+}
+
+#[derive(Debug, Clone)]
+pub enum UseStatus {
+    Unresolved(ScopeId),
+    Resolved(SV4<UseableSymbol>),
+}
+
+impl UseStatus {
+    pub fn is_resolved(&self) -> bool {
+        match self {
+            UseStatus::Resolved(_) => true,
+            UseStatus::Unresolved(_) => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AbilityImplHandle {
+    pub base_ability_id: AbilityId,
+    pub specialized_ability_id: AbilityId,
+    pub full_impl_id: AbilityImplId,
+}
+
+/// How the receiver must be adjusted to reach the impl that was found for it
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelfAdjust {
+    None,
+    AddrOf,
+    Deref,
+}
+
+/// Allocations that we re-use
+pub struct TypedModuleBuffers {
+    name_builder: String,
+    lexed: lex::Lexed,
+}
+
+nz_u32_id!(ModuleId);
+
+pub const MODULE_ID_CORE: ModuleId = ModuleId::ONE;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ModuleKind {
+    Library,
+    Executable,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LibRefLinkType {
+    /// Will result in a normal linker flag passed to search by just logical name
+    Default,
+    /// Will result in an explicit filepath passed to linker at module's libs/
+    Static,
+    /// Will result in an explicit filepath passed to linker at module's libs/
+    Dynamic,
+}
+
+#[derive(Clone, Copy)]
+pub struct Module {
+    pub id: ModuleId,
+    pub name: StringId,
+    pub home_dir: StringId,
+    pub namespace_id: NamespaceId,
+    pub namespace_scope_id: ScopeId,
+    /// One entry per source file in compile order
+    pub files: PermList<FileId>,
+    /// The module's parsed root namespace
+    pub parsed_namespace_id: ParsedNamespaceId,
+}
+
+impl Module {
+    // Used to 'reserve' a spot for module so that parser can know its module id
+    pub fn pending(id: ModuleId, name: StringId, home_dir: StringId) -> Self {
+        Module {
+            id,
+            name,
+            home_dir,
+            namespace_id: NamespaceId::PENDING,
+            namespace_scope_id: ScopeId::PENDING,
+            files: MList::empty(),
+            parsed_namespace_id: ParsedNamespaceId::PENDING,
+        }
+    }
+
+    pub fn contains_file(&self, mem: &kmem::Mem<TypedProgram>, file_id: FileId) -> bool {
+        self.files.as_slice(mem).contains(&file_id)
+    }
+}
+
+pub struct MemTmp;
+type TmpList<T> = List<T, MemTmp>;
+type TmpSlice<T> = MSlice<T, MemTmp>;
+type PermSlice<T> = MSlice<T, TypedProgram>;
+type PermList<T> = MList<T, TypedProgram>;
+
+pub struct TypedExprPool {
+    // SoA pools
+    pub exprs: VPool<TypedExpr, TypedExprId>,
+    pub type_ids: VPool<TypeId, TypedExprId>,
+    pub spans: VPool<Span, TypedExprId>,
+}
+
+impl TypedExprPool {
+    pub fn make() -> Self {
+        TypedExprPool {
+            exprs: VPool::make("typed_exprs"),
+            type_ids: VPool::make("typed_expr_type_ids"),
+            spans: VPool::make("typed_expr_spans"),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.exprs.len()
+    }
+
+    pub fn add_return(
+        &mut self,
+        return_value: TypedExprId,
+        returned_variable: Option<VariableId>,
+        span: Span,
+    ) -> TypedExprId {
+        self.add(
+            TypedExpr::Return(TypedReturn { value: return_value, returned_variable }),
+            NEVER_TYPE_ID,
+            span,
+        )
+    }
+
+    pub fn add_block(&mut self, builder: BlockBuilder, type_id: TypeId) -> TypedExprId {
+        self.add(
+            TypedExpr::Block(TypedBlock {
+                scope_id: builder.scope_id,
+                statements: builder.statements.to_slice(),
+            }),
+            type_id,
+            builder.span,
+        )
+    }
+
+    pub fn add_static(
+        &mut self,
+        value_id: StaticValueId,
+        type_id: TypeId,
+        is_typed_as_static: bool,
+        span: Span,
+    ) -> TypedExprId {
+        self.add(
+            TypedExpr::StaticValue(StaticConstantExpr { value_id, is_typed_as_static }),
+            type_id,
+            span,
+        )
+    }
+
+    pub fn add(&mut self, expr: TypedExpr, type_id: TypeId, span: Span) -> TypedExprId {
+        let id = self.exprs.next_id();
+        let id0 = self.type_ids.add(type_id);
+        let id1 = self.spans.add(span);
+        let id2 = self.exprs.add(expr);
+        debug_assert_eq!(id, id0);
+        debug_assert_eq!(id, id1);
+        debug_assert_eq!(id, id2);
+        id
+    }
+
+    pub fn get(&self, id: TypedExprId) -> &TypedExpr {
+        self.exprs.get(id)
+    }
+
+    pub fn set_full(&mut self, id: TypedExprId, expr: TypedExpr, type_id: TypeId, span: Span) {
+        *self.exprs.get_mut(id) = expr;
+        *self.type_ids.get_mut(id) = type_id;
+        *self.spans.get_mut(id) = span;
+    }
+
+    pub fn get_full(&self, id: TypedExprId) -> (&TypedExpr, TypeId, Span) {
+        let expr = self.exprs.get(id);
+        let type_id = *self.type_ids.get(id);
+        let span = *self.spans.get(id);
+        (expr, type_id, span)
+    }
+
+    pub fn get_mut(&mut self, id: TypedExprId) -> &mut TypedExpr {
+        self.exprs.get_mut(id)
+    }
+
+    pub fn get_type(&self, id: TypedExprId) -> TypeId {
+        *self.type_ids.get(id)
+    }
+
+    pub fn get_span(&self, id: TypedExprId) -> Span {
+        *self.spans.get(id)
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct TypePendingDefinition {
+    pub scope_id: ScopeId,
+    pub parsed_id: ParsedTypeDefnId,
+}
+
+#[derive(Clone, Copy)]
+pub struct UsePendingResolution {
+    pub namespace_id: NamespaceId,
+    pub scope_id: ScopeId,
+    pub use_id: ParsedUseId,
+}
+
+#[derive(Clone, Copy)]
+pub struct PendingRecursiveInstance {
+    pub type_id: TypeId,
+    pub generic_parent: TypeId,
+    pub type_args: TypeSliceId,
+}
+
+#[derive(Clone, Default)]
+pub struct TypeDefnContext {
+    /// Each entry in this stack contains a set of type ids that are being defined
+    /// This is used not only to detect and generate recursive types, but also to
+    /// track when recursion has occurred so that we can check for proper layout indirection,
+    /// avoiding infinite types
+    pub stack: Vec<TypeDefnStackEntry>,
+
+    /// Includes co-recursive mentions, like Foo -> Bar -> Foo
+    pub recursive_mentions: Vec<TypeId>,
+
+    /// Reserved instance ids for recursive generic applications, e.g. the `node[t]` inside
+    /// node's own definition; filled by substitution once every defn in the cluster is complete
+    pub pending_instances: Vec<PendingRecursiveInstance>,
+
+    /// Defns completed in this cluster; finiteness-checked once pending instances are resolved
+    pub completed: Vec<(TypeId, Span)>,
+
+    /// Aliases whose rhs is being expanded to resolve a re-entrant reference; hitting one
+    /// again means the alias cycle contains no nominal type, which cannot terminate
+    pub expanding_aliases: Vec<ParsedTypeDefnId>,
+}
+impl TypeDefnContext {
+    fn reset(&mut self) {
+        self.stack.clear();
+        self.recursive_mentions.clear();
+        self.pending_instances.clear();
+        self.completed.clear();
+        self.expanding_aliases.clear();
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct CodeChunkPos {
+    start: u32,
+    end: u32,
+    source: Span,
+}
+
+#[derive(Clone, Copy)]
+pub struct FunctionSpecialization {
+    pub parent: FunctionId,
+    pub type_arguments: TypeSliceId,
+    pub fnlike_type_arguments: TypeSliceId,
+    pub function: FunctionId,
+}
+
+#[derive(Clone, Copy)]
+pub struct TypeSpecialization {
+    pub generic: TypeId,
+    pub args: TypeSliceId,
+    pub instance: TypeId,
+}
+
+#[derive(Clone, Copy)]
+pub struct EmittedSource {
+    pub file_id: FileId,
+    pub call_span: Span,
+    pub entries: MSlice<CodeChunkPos, TypedProgram>,
+    has_diagnostic: bool,
+}
+
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+pub struct NameInNamespace {
+    ns_id: NamespaceId,
+    name: StringId,
+}
+
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+pub struct TypeAbilityPair {
+    self_type_id: TypeId,
+    base_ability_id: AbilityId,
+}
+
+#[derive(Clone, Copy)]
+pub enum ParsedGlobalDeclareOutcome {
+    Parsed,
+    IfDefedOut,
+    Failed,
+    Declared(TypedGlobalId),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ParsedFunctionDeclareOutcome {
+    Parsed,
+    IfDefedOut,
+    Failed,
+    Declared(FunctionId),
+}
+
+#[derive(Clone, Copy)]
+pub enum ParsedTypeDefnDeclareOutcome {
+    Parsed,
+    IfDefedOut,
+    Failed,
+    Defined(TypeId),
+}
+
+#[derive(Clone, Copy)]
+pub enum ParsedNamespaceDeclareOutcome {
+    Parsed,
+    IfDefedOut,
+    Failed,
+    Declared(NamespaceId),
+}
+
+#[derive(Clone, Copy)]
+pub enum ParsedMacroDeclareOutcome {
+    Parsed,
+    IfDefedOut,
+    Failed,
+    Declared(FunctionId),
+}
+
+#[derive(Clone, Copy)]
+pub enum ParsedAbilityDeclareOutcome {
+    Parsed,
+    IfDefedOut,
+    Failed,
+    Declared(AbilityId),
+}
+
+#[derive(Clone, Copy)]
+pub enum ParsedAbilityImplDeclareOutcome {
+    Parsed,
+    IfDefedOut,
+    Failed,
+    Declared(AbilityImplId),
+}
+
+pub struct TypedProgram {
+    pub modules: VPool<Module, ModuleId>,
+    pub completed_module_count: u32,
+    pub config: CompilerConfig,
+    pub plan: crate::plan::BuildPlan,
+    pub ast: ParsedProgram,
+
+    pub functions: VPool<TypedFunction, FunctionId>,
+    /// (parent function, type args, fnlike type args) -> specialized function.
+    /// Rebuilt from `functions` on snapshot restore
+    function_specializations: hashbrown::HashTable<FunctionSpecialization>,
+
+    pub variables: VPool<Variable, VariableId>,
+
+    pub types: VPool<Type, TypeId>,
+    pub type_hashes: FxHashMap<u64, TypeId>,
+    /// Deduped interned slices of TypeIds: equal contents always yield the same
+    /// TypeSliceId, so ids serve as exact hash keys and compare in O(1)
+    pub type_slices: VPool<TypeIdSlice, TypeSliceId>,
+    /// Content index over `type_slices`; rebuilt on snapshot restore
+    type_slice_dedup: hashbrown::HashTable<TypeSliceId>,
+    pub type_variable_counts: VPool<TypeInfo, TypeId>,
+    pub type_instance_info: VPool<Option<GenericInstanceInfo>, TypeId>,
+    pub type_defn_info: VPool<Option<TypeDefnInfo>, TypeId>,
+    type_specializations: hashbrown::HashTable<TypeSpecialization>,
+    pub phys_types: VPool<Option<PhysicalTypeResult>, TypeId>,
+    /// InferenceHole type ids by hole index, for holes with no static constraint.
+    /// `add_type` hash-conses holes to one id per (index, static_type) anyway; this skips
+    /// the hash+probe on the common path. PENDING marks not-yet-created indices.
+    pub hole_type_cache: Vec<TypeId>,
+    pub builtin_types: BuiltinTypes,
+    pub agg_types: VPool<AggregateTypeRecord, AggregateTypeId>,
+    /// The origin type of each named scalar: the identity a scalar PhysicalType can carry
+    pub named_scalars: VPool<TypeId, NamedScalarId>,
+    /// Lambda types are big, they get extended storage
+    pub lambda_types: VPool<LambdaType, LambdaTypeId>,
+    pub type_idents: TypeIdents,
+
+    pub globals: VPool<TypedGlobal, TypedGlobalId>,
+    pub exprs: TypedExprPool,
+    pub calls: VPool<Call, CallId>,
+    pub stmts: VPool<TypedStmt, TypedStmtId>,
+    pub static_values: StaticValuePool,
+    pub type_infos: FxHashMap<TypeId, StaticValueId>,
+    pub scopes: Scopes,
+    pub messages: RefCell<Vec<K1Message>>,
+    pub namespaces: Namespaces,
+    pub abilities: VPool<TypedAbility, AbilityId>,
+    pub ability_impls: VPool<TypedAbilityImpl, AbilityImplId>,
+    /// Key is 'self' type
+    pub ability_impl_table: FxHashMap<TypeId, PermList<AbilityImplHandle>>,
+    pub ability_impl_table_by_ability: ahash::HashMap<TypeAbilityPair, PermList<AbilityImplHandle>>,
+    pub core_fns_by_name: ahash::HashMap<(AstHandle<AstSlice<IdentSpanned>>, StringId), FunctionId>,
+    /// Key is base ability id; the order per base is important; we want earlier
+    /// blanket impls to be more specific, and to be tried first
+    /// Once a blanket impl succeeds, its added to ability_impl_table
+    /// for that type
+    pub blanket_impls: FxHashMap<AbilityId, PermList<AbilityImplId>>,
+    pub function_name_to_ability_names: FxHashMap<StringId, PermList<StringId>>,
+    /// If a namespace is a companion for a generic type, we remember that type's
+    /// params here by name so we can re-use them; saves type pool and spec pool bloat
+    pub namespace_type_params: FxHashMap<NameInNamespace, TypeId>,
+
+    pub uses_pending_resolution: VecDeque<UsePendingResolution>,
+    pub types_pending_definition: Vec<TypePendingDefinition>,
+    pub functions_pending_body: Vec<FunctionId>,
+
+    exported_symbols: FxHashMap<StringId, Span>,
+
+    // Status and phases
+    module_in_progress: Option<ModuleId>,
+    pub module_params_phase: ModuleParamsPhase,
+    pub deferred_module_params: Vec<TypedGlobalId>,
+
+    pub ls_entities: RefCell<FxHashMap<FileId, Vec<LsEntity>>>,
+    pub completion: Option<CompletionState>,
+    /// Per-session LSP compile options; never snapshotted
+    pub lsp: compiler::LspCompileOptions,
+    pub host_program: HostProgram,
+
+    inference_context_stack: Vec<InferenceContext>,
+    inference_context_extras: Vec<InferenceContext>,
+    pending_defers: Vec<PendingDefer>,
+
+    type_defn_context: TypeDefnContext,
+
+    // reused memory
+    buffers: TypedModuleBuffers,
+
+    pub patterns: TypedPatternPool,
+
+    // `vm`: Can execute code statically; primary VM; gets 'rented out'
+    // from the TypedProgram to avoid borrow bullshit
+    pub vm: Box<Option<vm::Vm>>,
+
+    // Used to execute static code if it is first encountered
+    // while executing the surrounding code statically
+    // It should be run in its own environment; as it should
+    // not see any of the values from its calling environment, just
+    // like how comptime code can't see runtime values. Each level
+    // of static execution has the same relationship with its outer caller
+    pub vm_alts: Vec<vm::Vm>,
+
+    /// Every metaprogram-emitted source, in emission order
+    pub emitted_sources: Vec<EmittedSource>,
+    pub emitted_parse_cache: FxHashMap<(u64, Span), ParsedExprId>,
+
+    // For every static value, once evaluated, we store its runtime representation
+    // here; the data lives in vm_static_stack
+    pub vm_shared_static_stack: vm::Stack,
+    pub vm_global_constant_lookups: FxHashMap<TypedGlobalId, vm::Value>,
+    pub vm_static_value_lookups: FxHashMap<StaticValueId, vm::Value>,
+    pub vm_process_dlopen_handle: *mut std::ffi::c_void,
+
+    pub vm_dylib_handles: FxHashMap<(ModuleId, StringId), *mut std::ffi::c_void>,
+    pub vm_ffi_functions: FxHashMap<FunctionId, vm::VmFfiHandle>,
+
+    pub mem: kmem::Mem<TypedProgram>,
+    pub tmp: kmem::Mem<MemTmp>,
+
+    pub ir: ir::ProgramIr,
+    pub bc: crate::bc::BcProgram,
+
+    pub trace: trace::Trace,
+
+    pub global_id_k1_arena: Option<TypedGlobalId>,
+    pub megarepl: Option<MegareplState>,
+
+    /// Running hash of every compile input consumed so far: build, config, source files
+    pub inputs_hash: crate::snap::InputsHash,
+
+    /// diagnostic only, for --chatty and tests
+    pub restored_module_count: u32,
+
+    pub test_suite: Option<StaticValueId>,
+    pub test_expected_failures: FxHashMap<FunctionId, StringId>,
+    pub test_results: Vec<StaticTestResult>,
+}
+
+pub struct TestCase {
+    pub function_id: FunctionId,
+    pub thunk_id: FunctionId,
+    pub name: StringId,
+    pub span: Span,
+    pub expected_failure: Option<StringId>,
+}
+
+pub struct StaticTestResult {
+    pub name: StringId,
+    pub span: Span,
+    pub failure: Option<StringId>,
+    pub elapsed: std::time::Duration,
+}
+
+pub enum HostProgram {
+    Absent,
+    Current,
+    Built(Box<TypedProgram>),
+}
+
+// SAFETY: TypedProgram's raw pointers point into its own heap allocations
+// (kmem arenas, pools) or are process-wide dlopen handles; none of them are
+// tied to the thread that created them, so the value may move between
+// threads. Sync is deliberately not asserted: concurrent access still needs
+// external synchronization (e.g. the server's Mutex).
+unsafe impl Send for TypedProgram {}
+
+impl Drop for TypedProgram {
+    fn drop(&mut self) {
+        unsafe { libc::dlclose(self.vm_process_dlopen_handle) };
+        for (id, vm_dylib_handle) in self.vm_dylib_handles.iter() {
+            unsafe {
+                libc::dlclose(*vm_dylib_handle);
+            }
+            debug!("Closed dylib handle for module {:?} ident {:?}", id.0, id.1);
+        }
+    }
+}
+
+impl TypedProgram {
+    pub fn new(
+        ast: ParsedProgram,
+        config: CompilerConfig,
+        plan: crate::plan::BuildPlan,
+        mut lsp: compiler::LspCompileOptions,
+    ) -> TypedProgram {
+        let progress_sink = match lsp.progress_sink.take() {
+            None if config.tools.chatty && std::io::stderr().is_terminal() => {
+                Some(trace::LiveProgressSink::Stderr)
+            }
+            sink => sink,
+        };
+        let completion = if lsp.completion {
+            Some(CompletionState { marker: ast.idents.intern(COMPLETION_MARKER), site: None })
+        } else {
+            None
+        };
+        let inputs_hash = snapshot::inputs_hash_from_settings(&ast.idents, &config, &plan);
+
+        let type_idents = TypeIdents { tag: ast.idents.b.tag, payload: ast.idents.b.payload };
+        let mut agg_types = VPool::make("agg_types");
+        // Reserve the lower values so they dont conflict with scalars once packed
+        agg_types.skip_next_n_slots(PhysicalType::MIN_AGG_ID as usize);
+
+        let root_ident = ast.idents.b.root_module_name;
+        let mut scopes = Scopes::make();
+        let mut namespaces = Namespaces { namespaces: VPool::make_with_hint("namespaces", 1024) };
+        let root_namespace = Namespace {
+            name: root_ident,
+            scope_id: Scopes::ROOT_SCOPE_ID,
+            namespace_type: NamespaceKind::Root,
+            companion_type_id: None,
+            parent_id: None,
+            parsed_id: ParsedId::Namespace(ParsedNamespaceId::ONE),
+            lib_name: None,
+            reload: false,
+        };
+        let root_namespace_id = namespaces.add(root_namespace);
+        scopes
+            .set_scope_owner_id(Scopes::ROOT_SCOPE_ID, ScopeOwnerId::Namespace(root_namespace_id));
+
+        // Add _root ns to the root scope as well so users can use it
+        if !scopes.add_namespace(Scopes::ROOT_SCOPE_ID, root_ident, root_namespace_id) {
+            panic!("Root namespace was taken, hmmmm");
+        }
+        let clock = clock::Clock::new();
+
+        let mut vm_static_stack = vm::Stack::make();
+        let addr = vm_static_stack.push_t(true as u8);
+        let mut vm_global_constant_lookups = FxHashMap::new();
+        vm_global_constant_lookups.insert(GLOBAL_ID_K1_IS_STATIC, vm::Value::ptr(addr));
+        let process_dlopen_handle =
+            unsafe { libc::dlopen(core::ptr::null(), libc::RTLD_LAZY | libc::RTLD_NOLOAD) };
+        if process_dlopen_handle.is_null() {
+            panic!("Failed to get process dlopen handle");
+        }
+
+        let ls_entities = FxHashMap::new();
+
+        let mut inference_context_extras = Vec::with_capacity(4);
+        for _ in 0..4 {
+            inference_context_extras.push(InferenceContext::make());
+        }
+
+        let mut k1 = TypedProgram {
+            modules: VPool::make("modules"),
+            completed_module_count: 0,
+            config,
+            plan,
+            functions: VPool::make("typed_functions"),
+            function_specializations: hashbrown::HashTable::new(),
+            variables: VPool::make("typed_variables"),
+            types: VPool::make("types"),
+            type_hashes: FxHashMap::new(),
+            type_slices: VPool::make("type_slices"),
+            type_slice_dedup: hashbrown::HashTable::new(),
+            type_variable_counts: VPool::make("type_variable_counts"),
+            type_instance_info: VPool::make("instance_info"),
+            type_defn_info: VPool::make("type_defn_info"),
+            type_specializations: hashbrown::HashTable::new(),
+            phys_types: VPool::make("phys_types"),
+            hole_type_cache: Vec::new(),
+            builtin_types: BuiltinTypes::default(),
+            agg_types,
+            named_scalars: VPool::make("named_scalars"),
+            lambda_types: VPool::make("lambdas"),
+            type_idents,
+            globals: VPool::make("typed_globals"),
+            exprs: TypedExprPool::make(),
+            calls: VPool::make("typed_calls"),
+            stmts: VPool::make("typed_stmts"),
+            static_values: StaticValuePool::make(),
+            type_infos: FxHashMap::new(),
+            scopes,
+            messages: RefCell::new(vec![]),
+            namespaces,
+            abilities: VPool::make("abilities"),
+            ability_impls: VPool::make("ability_impls"),
+            ability_impl_table: FxHashMap::new(),
+            ability_impl_table_by_ability: ahash::HashMap::new(),
+            core_fns_by_name: ahash::HashMap::new(),
+            blanket_impls: FxHashMap::new(),
+            function_name_to_ability_names: FxHashMap::with_capacity(1024),
+            namespace_type_params: FxHashMap::new(),
+            uses_pending_resolution: VecDeque::new(),
+            types_pending_definition: Vec::new(),
+            functions_pending_body: Vec::new(),
+            ast,
+            module_in_progress: None,
+            module_params_phase: ModuleParamsPhase::Program,
+            deferred_module_params: Vec::new(),
+            ls_entities: RefCell::new(ls_entities),
+            completion,
+            lsp,
+            host_program: HostProgram::Absent,
+            inference_context_stack: Vec::new(),
+            inference_context_extras,
+            pending_defers: Vec::new(),
+            exported_symbols: FxHashMap::new(),
+            type_defn_context: TypeDefnContext::default(),
+            buffers: TypedModuleBuffers {
+                name_builder: String::new(),
+                lexed: lex::Lexed::default(),
+            },
+            patterns: TypedPatternPool::make(),
+            vm: Box::new(Some(vm::Vm::make())),
+            vm_alts: vec![
+                vm::Vm::make(),
+                vm::Vm::make(),
+                vm::Vm::make(),
+                vm::Vm::make(),
+                vm::Vm::make(),
+            ],
+            emitted_sources: Vec::new(),
+            emitted_parse_cache: FxHashMap::default(),
+            vm_shared_static_stack: vm_static_stack,
+            vm_global_constant_lookups,
+            vm_static_value_lookups: FxHashMap::default(),
+            vm_process_dlopen_handle: process_dlopen_handle,
+            vm_dylib_handles: FxHashMap::with_capacity(32),
+            vm_ffi_functions: FxHashMap::with_capacity(64),
+
+            mem: kmem::Mem::make(),
+            tmp: kmem::Mem::make(),
+
+            ir: ir::ProgramIr::make(),
+            bc: crate::bc::BcProgram::make(),
+
+            trace: trace::Trace::make(clock, progress_sink, config.tools.record_trace()),
+            global_id_k1_arena: None,
+            megarepl: None,
+            inputs_hash,
+            restored_module_count: 0,
+            test_suite: None,
+            test_expected_failures: FxHashMap::default(),
+            test_results: Vec::new(),
+        };
+
+        let empty_struct_id = k1.add_type_anon(Type::Struct(StructType::struc(MSlice::empty())));
+        k1.builtin_types.empty = empty_struct_id;
+        assert_eq!(empty_struct_id, EMPTY_TYPE_ID);
+
+        k1
+    }
+
+    pub fn load_plan_modules(
+        &mut self,
+        sources: Vec<compiler::ModuleSources>,
+        snapshot_count: usize,
+    ) -> K1Result<()> {
+        let first = self.completed_module_count as usize;
+        for (index, module_sources) in sources.into_iter().enumerate().skip(first) {
+            let name = self.ast.idents.intern(self.plan.get(self.plan.modules()[index].name));
+            let frame = self.trace_push(TraceKind::ModuleCompile, name.as_u32(), 0);
+            let result = self.load_plan_module(index, name, module_sources, snapshot_count);
+            self.trace_pop(frame);
+            result?;
+        }
+        Ok(())
+    }
+
+    fn load_plan_module(
+        &mut self,
+        index: usize,
+        name: StringId,
+        sources: compiler::ModuleSources,
+        snapshot_count: usize,
+    ) -> K1Result<()> {
+        let planned = self.plan.modules()[index];
+        let files = self.read_module_sources(name, sources)?;
+        let module_hash = snapshot::module_inputs_hash(self.inputs_hash, &self.plan, index, &files);
+        let home_dir = self.ast.idents.intern(self.plan.module_dir(&planned));
+        let module_id = self.compile_module(name, home_dir, files)?;
+        debug_assert_eq!(module_id.as_u32() as usize, index + 1);
+        self.inputs_hash = module_hash;
+        if index < snapshot_count
+            && self.config.tools.cache
+            && self.lsp.source_overlay.is_empty()
+            && !self.lsp.completion
+            && self.megarepl.is_none()
+            && self.ast.errors.is_empty()
+        {
+            let settings =
+                snapshot::inputs_hash_from_settings(&self.ast.idents, &self.config, &self.plan);
+            let path = crate::snap::cache_entry_path(self.cache_dir(), index, settings);
+            let frame = self.trace_push(TraceKind::SnapStore, module_id.as_u32(), 0);
+            let stored = crate::snap::cache_store_begin(&path, module_hash).and_then(|mut w| {
+                self.snap_into(&mut w);
+                crate::snap::cache_store_finish(&path, w)
+            });
+            self.trace_pop(frame);
+            if let Err(e) = stored {
+                let warning = self.make_warning(
+                    self.ast.idents.intern(format!("failed to store snapshot cache entry: {e}")),
+                    Span::NONE,
+                );
+                self.report(warning);
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) fn read_module_sources(
+        &mut self,
+        name: StringId,
+        sources: compiler::ModuleSources,
+    ) -> K1Result<Vec<compiler::SourceFile>> {
+        let frame = self.trace_push(TraceKind::ModuleRead, name.as_u32(), 0);
+        if let Some(source_bytes) = sources.wait_source_bytes() {
+            self.advise_for_source_bytes(source_bytes);
+        }
+        let files = sources.join();
+        self.trace_pop(frame);
+        files.map_err(|e| self.error_from_anyhow(anyhow::anyhow!(e), Span::NONE))
+    }
+
+    fn advise_for_source_bytes(&mut self, source_bytes: usize) {
+        self.exprs.exprs.advise_additional_bytes(3 * source_bytes);
+        self.ast.exprs.advise_additional_bytes(3 * source_bytes);
+        self.ast.mem.advise_additional_bytes(2 * source_bytes);
+        self.calls.advise_additional_bytes(2 * source_bytes);
+        self.mem.advise_additional_bytes(2 * source_bytes);
+        self.functions.advise_additional_bytes(source_bytes);
+        self.reserve_type_tables(source_bytes);
+        let mem = &self.mem;
+        let slices = &self.type_slices;
+        self.function_specializations.reserve(source_bytes / 128, |s| {
+            Self::function_specialization_hash(
+                s.parent,
+                mem.getn(*slices.get(s.type_arguments)),
+                mem.getn(*slices.get(s.fnlike_type_arguments)),
+            )
+        });
+    }
+
+    pub(crate) fn compile_module(
+        &mut self,
+        name: StringId,
+        home_dir: StringId,
+        files: Vec<compiler::SourceFile>,
+    ) -> K1Result<ModuleId> {
+        let module_id = self.modules.next_id();
+        self.modules.add_expected_id(Module::pending(module_id, name, home_dir), module_id);
+        let planned = self.plan.get_module(module_id).copied();
+        let is_fixed = name == self.ast.idents.b.core || name == self.ast.idents.b.std;
+        let ns_name = match self.ident_str(name).rsplit_once('/') {
+            Some((_, short)) => self.ast.idents.intern(short),
+            None => name,
+        };
+        let reused =
+            if planned.is_some() { self.find_submodule_owner_namespace(module_id) } else { None };
+        let (parsed_namespace_id, typed_namespace_id) = match reused {
+            Some(namespace_id) => {
+                let ParsedId::Namespace(parsed) = self.namespaces.get(namespace_id).parsed_id
+                else {
+                    self.ice_span(Span::NONE, "module namespace without a parsed namespace")
+                };
+                (parsed, namespace_id)
+            }
+            None if is_fixed => {
+                let parsed = parse::init_module(ns_name, &mut self.ast);
+                self.module_in_progress = Some(module_id);
+                (parsed, self.declare_namespace(parsed, Scopes::ROOT_SCOPE_ID)?)
+            }
+            None => {
+                let parent = match planned.and_then(|m| m.submodule_owner) {
+                    None => ROOT_NAMESPACE_ID,
+                    Some(submodule_owner) => match self
+                        .find_submodule_owner_namespace(submodule_owner)
+                    {
+                        Some(namespace_id) => namespace_id,
+                        None => {
+                            let submodule_owner_name =
+                                self.plan.get(self.plan.get_module(submodule_owner).unwrap().name);
+                            let submodule_owner_name = self.ast.idents.intern(submodule_owner_name);
+                            let parsed_submodule_owner =
+                                parse::init_module(submodule_owner_name, &mut self.ast);
+                            self.add_module_namespace(parsed_submodule_owner, ROOT_NAMESPACE_ID)
+                        }
+                    },
+                };
+                let parsed = parse::init_module(ns_name, &mut self.ast);
+                (parsed, self.add_module_namespace(parsed, parent))
+            }
+        };
+        self.modules.get_mut(module_id).parsed_namespace_id = parsed_namespace_id;
+        let parse_frame = self.trace_push(TraceKind::Parse, name.as_u32(), 0);
+        for file in files {
+            self.parse_module_source_file(module_id, parsed_namespace_id, file);
+        }
+        self.trace_pop(parse_frame);
+
+        self.module_in_progress = Some(module_id);
+        let scope_id = self.namespaces.get(typed_namespace_id).scope_id;
+        let module = self.modules.get_mut(module_id);
+        module.namespace_id = typed_namespace_id;
+        module.namespace_scope_id = scope_id;
+        if let Some(planned) = planned
+            && !is_fixed
+        {
+            for dep in self.plan.mem.getn(planned.deps) {
+                let dep_namespace = self.modules.get(*dep).namespace_id;
+                let dep_name = self.namespaces.get(dep_namespace).name;
+                if !self.scopes.add_namespace_use(scope_id, dep_name, dep_namespace) {
+                    kbail!(
+                        self,
+                        Span::NONE,
+                        "module '{}' depends on two modules named '{}'",
+                        self.ident_str(name),
+                        self.ident_str(dep_name)
+                    );
+                }
+            }
+            let _ = self.scopes.add_namespace_use(scope_id, ns_name, typed_namespace_id);
+        }
+        self.typecheck_module(module_id, parsed_namespace_id)?;
+        self.completed_module_count += 1;
+        self.compile_all_pending_ir(Span::NONE)?;
+        Ok(module_id)
+    }
+
+    fn find_submodule_owner_namespace(&self, submodule_owner: ModuleId) -> Option<NamespaceId> {
+        for id in 1..=self.completed_module_count {
+            let module_id = ModuleId::from_u32(id).unwrap();
+            if self
+                .plan
+                .get_module(module_id)
+                .is_some_and(|m| m.submodule_owner == Some(submodule_owner))
+            {
+                let module_namespace = self.modules.get(module_id).namespace_id;
+                return self.namespaces.get(module_namespace).parent_id;
+            }
+        }
+        None
+    }
+
+    fn add_module_namespace(
+        &mut self,
+        parsed_namespace_id: ParsedNamespaceId,
+        parent_id: NamespaceId,
+    ) -> NamespaceId {
+        let name = self.ast.namespaces.get(parsed_namespace_id).name;
+        let scope_id = self.scopes.add_child_scope(
+            Scopes::ROOT_SCOPE_ID,
+            ScopeType::Namespace,
+            ScopeOwnerId::None,
+        );
+        let namespace_id = self.namespaces.add(Namespace {
+            name,
+            scope_id,
+            namespace_type: NamespaceKind::User,
+            companion_type_id: None,
+            parent_id: Some(parent_id),
+            parsed_id: ParsedId::Namespace(parsed_namespace_id),
+            lib_name: None,
+            reload: false,
+        });
+        self.scopes.set_scope_owner_id(scope_id, ScopeOwnerId::Namespace(namespace_id));
+        self.ast.namespaces.get_mut(parsed_namespace_id).typer_state =
+            ParsedNamespaceDeclareOutcome::Declared(namespace_id);
+        namespace_id
+    }
+
+    pub fn optimize_ir(&self) -> bool {
+        self.config.tools.optimize_ir && !(self.config.command.codegens() && self.plan.config.debug)
+    }
+
+    pub fn host_platform(&self) -> compiler::Platform {
+        match compiler::detect_host_target() {
+            Some(host) => host.platform(),
+            None => self.plan.config.target.platform(),
+        }
+    }
+
+    pub(crate) fn cache_dir(&self) -> &Path {
+        Path::new(self.get_string(self.config.cache_dir))
+    }
+
+    fn get_span_in_build_file(
+        &mut self,
+        build_file: StringId,
+        offset: u32,
+        len: u32,
+    ) -> K1Result<Span> {
+        let path = self.ast.idents.intern(self.plan.get(build_file));
+        let file_id = match self.ast.sources.find_by_path(path) {
+            Some(file_id) => file_id,
+            None => {
+                let path_str = self.ast.idents.get_string(path);
+                let content = compiler::read_source(path_str, &self.lsp.source_overlay)
+                    .map_err(|e| self.make_error(self.ast.idents.intern(e), Span::NONE))?;
+                self.register_source(path, &content)
+            }
+        };
+        let base = self.ast.sources.get(file_id).base;
+        Ok(Span { global_start: base + offset, len })
+    }
+
+    fn register_source(&mut self, path: StringId, content: &str) -> FileId {
+        match self.ast.sources.find_by_path(path) {
+            Some(file_id) => file_id,
+            None => {
+                let source = parse::SourceFile::make(&mut self.ast.mem, path, content);
+                self.ast.sources.add_file(source)
+            }
+        }
+    }
+
+    fn append_emitted_definitions(
+        &mut self,
+        module_id: ModuleId,
+        ns: ParsedNamespaceId,
+        text: &str,
+        table: PermSlice<CodeChunkPos>,
+        span: Span,
+    ) -> K1Result<()> {
+        let file_id = self.add_emitted_source(text, table, span);
+        let ParseMetaprogramResult::Definitions(parsed) =
+            self.parse_metaprogram_source(module_id, file_id, ParseAdHocKind::Definitions)?
+        else {
+            self.ice_span(span, "emitted definitions parsed as an expression")
+        };
+        let mut defns = self.ast.namespaces.get(ns).definitions;
+        for defn in self.ast.mem.getn(parsed) {
+            defns.push_grow(&mut self.ast.mem, *defn);
+        }
+        self.ast.namespaces.get_mut(ns).definitions = defns;
+        Ok(())
+    }
+
+    pub fn adopt_messages(&mut self, from: &TypedProgram) {
+        for message in from.messages.borrow().iter() {
+            let span = if message.span == Span::NONE {
+                Span::NONE
+            } else {
+                let source = from.ast.sources.source_by_span(message.span);
+                let path = self.ast.idents.intern(from.ast.idents.get_string(source.file_path));
+                let file_id = self.register_source(path, source.content(&from.ast.mem));
+                let base = self.ast.sources.get(file_id).base;
+                Span {
+                    global_start: base + source.local_from_global_offset(message.span.global_start),
+                    len: message.span.len,
+                }
+            };
+            let text = self.ast.idents.intern(from.ast.idents.get_string(message.message));
+            self.report_ext(K1Message { message: text, span, ..*message }, true);
+        }
+    }
+
+    fn parse_module_source_file(
+        &mut self,
+        module_id: ModuleId,
+        parsed_namespace_id: ParsedNamespaceId,
+        file: compiler::SourceFile,
+    ) -> FileId {
+        let path = self.ast.idents.intern(&file.path);
+        let filename = self.ast.idents.intern(kpath::file_name(&file.path));
+        self.traced(TraceKind::Parse, filename.as_u32(), 0, |k1| {
+            k1.parse_module_source_file_body(module_id, parsed_namespace_id, file, path)
+        })
+    }
+
+    fn parse_module_source_file_body(
+        &mut self,
+        module_id: ModuleId,
+        parsed_namespace_id: ParsedNamespaceId,
+        mut file: compiler::SourceFile,
+        path: StringId,
+    ) -> FileId {
+        let source = parse::SourceFile::make_with_newlines(
+            &mut self.ast.mem,
+            path,
+            &file.content,
+            &file.newline_positions,
+        );
+        let file_id = self.ast.sources.add_file(source);
+        let lex_result = self.ast.register_lexed_file(file_id, &mut file.lexed);
+        self.modules.get_mut(module_id).files.push_grow(&mut self.mem, file_id);
+        let error_count_start = self.ast.errors.len();
+        match lex_result {
+            Err(e) => self.ast.errors.push(e),
+            Ok(()) => {
+                let mut parser = parse::Parser::make_for_file(
+                    module_id,
+                    parsed_namespace_id,
+                    &mut self.ast,
+                    &file.lexed,
+                    file_id,
+                );
+                parser.parse_file_into_module();
+            }
+        }
+        for e in &self.ast.errors[error_count_start..] {
+            parse::print_error(&self.ast, e);
+        }
+        file_id
+    }
+
+    /// Retrieve the current inference context
+    fn ictx(&self) -> &InferenceContext {
+        self.inference_context_stack.last().as_ref().unwrap()
+    }
+
+    /// Retrieve the current inference context
+    fn ictx_mut(&mut self) -> &mut InferenceContext {
+        self.inference_context_stack.last_mut().unwrap()
+    }
+
+    /// Skip the borrow checker, only when we must, to get access
+    /// to the tmp arena without exclusive access to the TypedProgram
+    #[allow(clippy::mut_from_ref)]
+    #[allow(invalid_reference_casting)]
+    pub(crate) fn get_tmp_unsafe(&self) -> &mut kmem::Mem<MemTmp> {
+        unsafe {
+            let ptr = &self.tmp as *const Mem<MemTmp>;
+            let ptr_mut: *mut Mem<MemTmp> = ptr.cast_mut();
+            &mut *ptr_mut
+        }
+    }
+
+    fn ictx_push(&mut self) {
+        debug!("pushing from {} extras", self.inference_context_extras.len());
+        let c = match self.inference_context_extras.pop() {
+            None => InferenceContext::make(),
+            Some(c) => c,
+        };
+        self.inference_context_stack.push(c);
+    }
+
+    fn ictx_pop(&mut self) {
+        debug!("popping off from {}", self.inference_context_stack.len());
+        let mut c = self.inference_context_stack.pop().unwrap();
+        c.reset();
+        self.inference_context_extras.push(c);
+    }
+
+    fn with_clean_inference<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
+        let saved = std::mem::take(&mut self.inference_context_stack);
+        let result = f(self);
+        debug_assert!(
+            self.inference_context_stack.is_empty(),
+            "inference context leaked from clean domain"
+        );
+        self.inference_context_stack = saved;
+        result
+    }
+
+    pub fn function_iter(&self) -> impl Iterator<Item = (FunctionId, &TypedFunction)> {
+        self.functions.iter_with_ids()
+    }
+
+    pub fn collect_selected_tests(&mut self, filter: &[String]) -> K1Result<Vec<TestCase>> {
+        let primary_id = self.primary_module().id;
+        let mut found: Vec<(FunctionId, Span)> = Vec::new();
+        for (function_id, function) in self.function_iter() {
+            if !function.is_test() {
+                continue;
+            }
+            let span =
+                self.ast.get_function(function.parsed_id.as_function_id().unwrap()).name_span;
+            let module_id = self.module_of_span(span);
+            let submodule_owner = self.plan.get_module(module_id).and_then(|m| m.submodule_owner);
+            if module_id == primary_id || submodule_owner == Some(primary_id) {
+                found.push((function_id, span));
+            }
+        }
+        let mut tests = Vec::with_capacity(found.len());
+        for (function_id, span) in found {
+            let function = self.get_function(function_id);
+            let ns_scope = self.namespaces.get_scope(function.namespace_id);
+            let name = self.make_qualified_name(ns_scope, function.name, None, "/", true);
+            if !filter.is_empty() && !filter.iter().any(|f| name.contains(f.as_str())) {
+                continue;
+            }
+            let thunk_id = self.synth_test_thunk(function_id, span)?;
+            let name = self.ast.idents.intern(name);
+            let expected_failure = self.test_expected_failures.get(&function_id).copied();
+            tests.push(TestCase { function_id, thunk_id, name, span, expected_failure });
+        }
+        Ok(tests)
+    }
+
+    pub fn get_function_span(&self, function_id: FunctionId) -> Span {
+        self.ast.get_span_for_id(self.functions.get(function_id).parsed_id)
+    }
+
+    pub fn program_name(&self) -> &str {
+        self.ast.name_str()
+    }
+
+    pub fn get_string(&self, string_id: StringId) -> &str {
+        self.ast.idents.get_string(string_id)
+    }
+
+    pub fn name_of_type(&self, type_id: TypeId) -> &str {
+        match self.get_defn_info(type_id) {
+            None => self.types.get(type_id).kind_name(),
+            Some(info) => self.ident_str(info.name),
+        }
+    }
+
+    pub fn ident_str(&self, id: StringId) -> &str {
+        self.ast.idents.get_string(id)
+    }
+
+    pub fn ident_str_opt(&self, id: Option<StringId>) -> &str {
+        match id {
+            Some(id) => self.ast.idents.get_string(id),
+            None => "<no name>",
+        }
+    }
+
+    pub fn build_ident_with(
+        &mut self,
+        mut f: impl FnMut(&mut TypedProgram, &mut String),
+    ) -> StringId {
+        let mut name_buffer = std::mem::take(&mut self.buffers.name_builder);
+        f(self, &mut name_buffer);
+        let new_name_ident = self.ast.idents.intern(&name_buffer);
+        name_buffer.clear();
+        self.buffers.name_builder = name_buffer;
+        new_name_ident
+    }
+
+    pub fn get_namespace_scope(&self, namespace_id: NamespaceId) -> &Scope {
+        let scope_id = self.namespaces.get_scope(namespace_id);
+        self.scopes.get_scope(scope_id)
+    }
+
+    pub fn primary_module(&self) -> &Module {
+        if let Some(id) = self.module_in_progress {
+            return self.modules.get(id);
+        }
+        self.modules.iter().last().unwrap()
+    }
+
+    pub fn module_completed(&self, id: ModuleId) -> bool {
+        id.as_u32() <= self.completed_module_count
+    }
+
+    pub fn primary_module_completed(&self) -> bool {
+        self.module_completed(self.primary_module().id)
+    }
+
+    // pub fn validate_exports(&mut self) -> K1Result<()> {
+    //     let mut symbols: FxHashMap<StringId, Span> = FxHashMap::default();
+    //     let mut duplicate: Option<(StringId, Span)> = None;
+    //     for (function_id, function) in self.function_iter() {
+    //         let Linkage::Exported { fn_name } = function.linkage else {
+    //             continue;
+    //         };
+    //         let symbol = fn_name.unwrap_or(function.name);
+    //         let span = self.get_function_span(function_id);
+    //         if symbols.insert(symbol, span).is_some() {
+    //             duplicate = Some((symbol, span));
+    //             break;
+    //         }
+    //     }
+    //     if duplicate.is_none() {
+    //         for global_id in self.globals.iter_ids() {
+    //             let global = self.globals.get(global_id);
+    //             if !global.is_exported {
+    //                 continue;
+    //             }
+    //             let symbol = self.variables.get(global.variable_id).name;
+    //             if symbols.insert(symbol, global.span).is_some() {
+    //                 duplicate = Some((symbol, global.span));
+    //                 break;
+    //             }
+    //         }
+    //     }
+    //     if let Some((symbol, span)) = duplicate {
+    //         let msg = kerr!(self, span, "Duplicate exported symbol '{}'", self.ident_str(symbol));
+    //         self.report(msg);
+    //         bail!("Duplicate exported symbol");
+    //     }
+    //     Ok(())
+    // }
+
+    fn get_executable_primary_module(&self) -> Option<&Module> {
+        if !self.plan.is_executable() {
+            return None;
+        }
+        self.modules.get_opt(ModuleId::from_u32(self.plan.modules().len() as u32)?)
+    }
+
+    pub fn get_main_function_id(&self) -> Option<FunctionId> {
+        let primary = self.get_executable_primary_module()?;
+        self.scopes.find_function_local(primary.namespace_scope_id, self.ast.idents.b.main)
+    }
+
+    fn add_match_expr(&mut self, m: TypedMatchExpr, type_id: TypeId, span: Span) -> TypedExprId {
+        if let Some(last) = self.mem.getn_mut(m.arms).last_mut() {
+            last.case = None;
+            let instrs = self.mem.getn(last.condition.instrs);
+            if instrs.iter().any(|i| !matches!(i, MatchingConditionInstr::Binding { .. })) {
+                let mut bindings = self.mem.new_list(instrs.len() as u32);
+                for instr in instrs {
+                    if matches!(instr, MatchingConditionInstr::Binding { .. }) {
+                        bindings.push(*instr);
+                    }
+                }
+                last.condition.instrs = bindings.to_slice();
+            }
+        }
+        self.exprs.add(TypedExpr::Match(m), type_id, span)
+    }
+
+    fn push_block_stmt_id(&self, block: &mut BlockBuilder, stmt: TypedStmtId) {
+        block.statements.push(stmt);
+    }
+
+    fn push_block_stmt(&mut self, block: &mut BlockBuilder, stmt: TypedStmt) {
+        let id = self.stmts.add(stmt);
+        block.statements.push(id);
+    }
+
+    fn push_block_expr_id(&mut self, block: &mut BlockBuilder, expr: TypedExprId) {
+        let ty = self.exprs.get_type(expr);
+        self.push_block_stmt(block, TypedStmt::Expr(expr, ty))
+    }
+
+    pub fn get_stmt_type(&self, stmt: TypedStmtId) -> TypeId {
+        match self.stmts.get(stmt) {
+            TypedStmt::Expr(_, ty) => *ty,
+            TypedStmt::Let(_) | TypedStmt::Assignment(_) | TypedStmt::Require(_) => {
+                self.builtin_types.empty
+            }
+        }
+    }
+
+    pub fn get_stmt_span(&self, stmt: TypedStmtId) -> Span {
+        match self.stmts.get(stmt) {
+            TypedStmt::Expr(e, _ty) => self.exprs.get_span(*e),
+            TypedStmt::Let(val_def) => val_def.span,
+            TypedStmt::Assignment(assgn) => assgn.span,
+            TypedStmt::Require(req) => req.span,
+        }
+    }
+
+    fn add_assignment_stmt(
+        &mut self,
+        destination: TypedExprId,
+        value: TypedExprId,
+        span: Span,
+    ) -> TypedStmtId {
+        if let TypedExpr::Variable(variable_expr) = *self.exprs.get(destination) {
+            let variable = self.variables.get_mut(variable_expr.variable_id);
+            if matches!(variable.kind, VariableKind::Stack | VariableKind::StackSynthetic) {
+                variable.flags.insert(VariableFlags::Reassigned);
+            }
+        }
+        self.stmts.add(TypedStmt::Assignment(AssignmentStmt { destination, value, span }))
+    }
+
+    fn add_expr_stmt(&mut self, expr: TypedExprId) -> TypedStmtId {
+        let type_id = self.exprs.get_type(expr);
+        self.stmts.add(TypedStmt::Expr(expr, type_id))
+    }
+
+    /// Resolves a type parameter to its meaning in `scope_id` via the id-keyed
+    /// substitution bindings; a miss means the parameter stands for itself
+    /// (the normal case inside its own generic context).
+    fn get_type_id_resolved(&self, type_id: TypeId, scope_id: ScopeId) -> TypeId {
+        match self.types.get(type_id) {
+            Type::TypeParameter(_) => match self.scopes.find_type_substitution(scope_id, type_id) {
+                None => type_id,
+                Some((to, _)) if to == type_id => type_id,
+                Some((to, _)) => self.get_type_id_resolved(to, scope_id),
+            },
+            _ => type_id,
+        }
+    }
+
+    /// Checks the type of `expr`. Will attempt to coerce expr to fulfill
+    /// the expected type in some known cases.
+    /// 1. Expected: static[T, <value>], Actual: T.
+    /// 2. ...
+    ///
+    /// Current coercion sites:
+    /// - Function arguments
+    /// - Variable declarations
+    /// - List literal elements
+    /// - Return expressions
+    /// - Last statement of a block
+    /// - Assignment rhs
+    fn check_expr_type(
+        &mut self,
+        expected: TypeId,
+        expr: TypedExprId,
+        scope_id: ScopeId,
+        allow_addr_of: bool,
+    ) -> CheckExprTypeResult {
+        let actual_type_id = self.exprs.get_type(expr);
+
+        let check_result = self.check_types(expected, actual_type_id, scope_id);
+        let Err(msg) = check_result else { return CheckExprTypeResult::Ok };
+
+        // Static lifting and erasing
+        match (self.types.get(expected), self.get_static_type_of_type(actual_type_id)) {
+            // If we failed typechecking, and passed a static, then see
+            // whether the type inside this static would pass muster under the 'expected type',
+            // If so, erase the static
+            (_, Some(actual_static))
+                if self.check_types(expected, actual_static.family_type_id, scope_id).is_ok() =>
+            {
+                let span = self.exprs.get_span(expr);
+                let materialized_value = self.materialize_static_value(
+                    actual_static.family_type_id,
+                    actual_static.value_id,
+                    span,
+                );
+                return CheckExprTypeResult::Coerce(materialized_value, "static_materialize");
+            }
+            // If we failed typechecking, and we expected a static, and we passed a non-static
+            // Try to lift it
+            (Type::StaticValue(expected_value_type), None) => {
+                if expected_value_type.family_type_id == actual_type_id {
+                    if let Ok(static_lifted) = self.attempt_static_lift(expr) {
+                        let static_lifted_type = self.exprs.get_type(static_lifted);
+                        return match self.check_types(expected, static_lifted_type, scope_id) {
+                            Err(msg) => CheckExprTypeResult::Err(k1_format_user!(
+                                self,
+                                "Static lift resulted in wrong value: {}",
+                                msg.as_str()
+                            )),
+                            Ok(_) => CheckExprTypeResult::Coerce(static_lifted, "static_lift"),
+                        };
+                    }
+                }
+            }
+            _ => {}
+        };
+
+        if let Type::Reference(_exp_ref) = self.types.get(expected) {
+            if let Type::Reference(_actual_ref) = self.types.get(actual_type_id) {
+            } else {
+                if allow_addr_of {
+                    // A reference is expected, and a reference is not provided
+                    // If the expr is a place, we can inject an address_of; the place
+                    // walk in synth_address_of decides
+                    let span = self.exprs.get_span(expr);
+                    if let Ok(expr) = self.synth_address_of(expr, span, false) {
+                        // self.report_hint(span, "coerce address of");
+                        return CheckExprTypeResult::Coerce(expr, "address_of");
+                    }
+                }
+            }
+        }
+
+        if let Type::Integer(expected_int) = self.types.get(expected) {
+            if let Type::Integer(actual_int) = self.types.get(actual_type_id) {
+                return {
+                    let needs_widen = expected_int.width() > actual_int.width();
+                    if needs_widen {
+                        match (expected_int.is_signed(), actual_int.is_signed()) {
+                            (false, true) => {
+                                CheckExprTypeResult::Err("widen signed->unsigned".into())
+                            }
+                            (_, from_signed) => {
+                                let direction = if from_signed {
+                                    IntegerCastDirection::SignExtend
+                                } else {
+                                    IntegerCastDirection::ZeroExtend
+                                };
+                                let widened = self.synth_cast(
+                                    expr,
+                                    expected,
+                                    CastType::IntegerCast(direction),
+                                    None,
+                                );
+                                CheckExprTypeResult::Coerce(widened, "widen")
+                            }
+                        }
+                    } else {
+                        // We never truncate automatically, or change signedness without extension
+                        CheckExprTypeResult::Err(msg)
+                    }
+                };
+            }
+        }
+
+        // Auto-deref: We only do this if the expected type is not a reference at all. Meaning,
+        // if your expected type is T*, and you pass a T**, you need to de-reference that yourself.
+        // This rule won't help you or do anything for nested references
+        let expected_resolved = self.types.get(self.get_type_id_resolved(expected, scope_id));
+        // If we don't expect a reference
+        if expected_resolved.as_reference().is_none() {
+            // And we don't expect a function-like type parameter (function pointers don't really work like references)
+            if let Type::FunctionTypeParameter(_tp) = expected_resolved {
+            } else {
+                // But you pass a reference
+                if let Some(_reference) = self.get_expr_type(expr).as_reference() {
+                    // We want this final check to benefit from coercion (which we are currrently implementing)
+                    let dereferenced = self.synth_dereference(expr);
+                    match self.check_expr_type(expected, dereferenced, scope_id, allow_addr_of) {
+                        CheckExprTypeResult::Ok => {
+                            return CheckExprTypeResult::Coerce(dereferenced, "deref");
+                        }
+                        CheckExprTypeResult::Err(_) => {}
+                        CheckExprTypeResult::Coerce(typed_expr_id, reason1) => {
+                            debug!("coercion rule {reason1} applied under deref");
+                            return CheckExprTypeResult::Coerce(typed_expr_id, reason1);
+                        }
+                    }
+                }
+            }
+        };
+
+        CheckExprTypeResult::Err(msg)
+    }
+
+    pub fn check_and_coerce_expr(
+        &mut self,
+        expected: TypeId,
+        expr: TypedExprId,
+        scope_id: ScopeId,
+        allow_addr_of: bool,
+    ) -> K1Result<TypedExprId> {
+        debug!(
+            "check_and_coerce `{}`, expected: {}",
+            self.expr_to_string(expr),
+            self.type_id_to_string(expected)
+        );
+        match self.check_expr_type(expected, expr, scope_id, allow_addr_of) {
+            CheckExprTypeResult::Err(msg) => {
+                let span = self.exprs.get_span(expr);
+                Err(K1Message {
+                    message: self.ast.idents.intern(msg),
+                    span,
+                    level: MessageLevel::Error,
+                    error_kind: ErrorKind::TypeError,
+                })
+            }
+            CheckExprTypeResult::Coerce(new_expr, rule_kind) => {
+                debug!(
+                    "Coerced with rule {rule_kind} {} -> {}",
+                    self.expr_to_string(expr),
+                    self.expr_to_string(new_expr)
+                );
+                Ok(new_expr)
+            }
+            CheckExprTypeResult::Ok => Ok(expr),
+        }
+    }
+
+    // Due to the fact that check_types may get called multiple times for
+    // a given expression, for example in many expression positions we'll
+    // attempt a coerce after typechecking fails. This means we have a scenario
+    // where we're formatting a big string (the typecheck error msg) in the
+    // happy path of successful compilation, so we need it to be held to the same
+    // standards of performance as the rest of compilation. So we build the string
+    // up in our arena, using our own machinery designed for zero-allocation, configurable, rich formatting
+    // That's why we return this `MStr` thing here (its essentially a raw string pointer; since it points into TypedProgram technically)
+    pub fn check_types(
+        &self,
+        expected: TypeId,
+        actual: TypeId,
+        scope_id: ScopeId,
+    ) -> Result<(), MStr<MemTmp>> {
+        debug!(
+            "typecheck: {} <: {}",
+            self.type_id_to_string(actual).blue(),
+            self.type_id_to_string(expected).blue(),
+        );
+        if expected == actual {
+            return Ok(());
+        }
+
+        if let (Some(spec1), Some(spec2)) =
+            (self.get_instance_info(expected), self.get_instance_info(actual))
+        {
+            return if spec1.generic_parent == spec2.generic_parent {
+                for (index, (exp_param, act_param)) in self
+                    .get_type_slice(spec1.type_args)
+                    .iter()
+                    .zip(self.get_type_slice(spec2.type_args).iter())
+                    .enumerate()
+                {
+                    debug!(
+                        "Comparing params {} and {} inside {}",
+                        self.type_id_to_string(*exp_param),
+                        self.type_id_to_string(*act_param),
+                        self.ident_str(self.get_defn_info(spec1.generic_parent).unwrap().name)
+                    );
+                    if let Err(msg) = self.check_types(*exp_param, *act_param, scope_id) {
+                        let generic = self.types.get(spec1.generic_parent).expect_generic();
+                        let param = *self.mem.get_nth(generic.params, index);
+                        let msg = k1_format_user!(
+                            self,
+                            "Expected {} but got {}: Param '{}' is incorrect: {}",
+                            expected,
+                            actual,
+                            self.get_type_parameter(param).name,
+                            msg.as_str(),
+                        );
+                        return Err(msg);
+                    }
+                }
+                Ok(())
+            } else {
+                Err(k1_format_user!(self, "Expected {}, but got {}", expected, actual))
+            };
+        }
+
+        let expected = self.get_type_id_resolved(expected, scope_id);
+        let actual = self.get_type_id_resolved(actual, scope_id);
+
+        if expected == actual {
+            return Ok(());
+        }
+
+        debug!(
+            "typecheck resolved: {} <: {}",
+            self.type_id_to_string(actual).blue(),
+            self.type_id_to_string(expected).blue(),
+        );
+
+        let expected = self.get_value_type_id_of_type(expected).unwrap_or(expected);
+        let actual = self.get_value_type_id_of_type(actual).unwrap_or(actual);
+
+        debug!(
+            "typecheck resolved: {} <: {}",
+            self.type_id_to_string(actual).blue(),
+            self.type_id_to_string(expected).blue(),
+        );
+
+        match (self.types.get(expected), self.types.get(actual)) {
+            (Type::InferenceHole(_hole), _any) => Ok(()),
+            (Type::Struct(s1), Type::Struct(s2)) => {
+                // If I expect a certain nominal type
+                // I won't accept an anonymous type
+                // Nor a nominal type of a different kind
+                // But I will accept the same nominal type,
+                // But if I expect an anonymous struct, the a named or anonymous one will do
+                // if it matches structurally
+                let expected_defn_info = self.get_defn_info(expected);
+                let actual_defn_info = self.get_defn_info(actual);
+                if let Some(expected_defn_info) = expected_defn_info {
+                    match actual_defn_info {
+                        None => {
+                            debug!("

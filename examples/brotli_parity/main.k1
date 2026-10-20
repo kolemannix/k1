@@ -228,8 +228,7 @@ fn bench-one(name: string, input: span[u8], r: run) {
 
 fn main(argc: u32, argv: ptr): i32 {
   let args = std/sys/parse-main-args(argc, argv)
-  let text = core/files/read-to-string("../../src/k1/typer.rs").!.span-bytes()
-  let corpora = make-corpora(text.take(128 * 1024))
+  let corpora = make-corpora(core/files/read-to-string("typer-slice.txt").!.span-bytes())
   let runs: list[run] = list/empty()
   let rest: list[string] = list/empty()
   let lgwin: size = 18
@@ -262,7 +261,7 @@ fn main(argc: u32, argv: ptr): i32 {
 
   if rest.len() > 0 and rest.[0] == "bench" {
     let only = if rest.len() > 1 rest.[1] else ""
-    let corpora = make-corpora(text)
+    let corpora = make-corpora(core/files/read-to-string("../../src/k1/typer.rs").!.span-bytes())
     for r in runs {
       println("")
       for c in corpora {
