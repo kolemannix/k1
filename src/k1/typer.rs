@@ -4329,7 +4329,9 @@ impl TypedProgram {
         let base_ability_id = imp.base_ability_id;
         let self_type_id = imp.self_type_id;
         let scope_id = imp.scope_id;
-        let functions = self.abilities.get(base_ability_id).functions;
+        let base_ability = self.abilities.get(base_ability_id);
+        let functions = base_ability.functions;
+        let ability_namespace_id = base_ability.namespace_id;
 
         let mut impl_functions = self.mem.new_list(functions.len());
         for ability_fn_ref in self.mem.getn(functions) {
@@ -4346,7 +4348,7 @@ impl TypedProgram {
                         AbilityImplKind::BuiltinDerived,
                         is_default,
                     )),
-                    ROOT_NAMESPACE_ID,
+                    ability_namespace_id,
                 )?
                 .expect("an ability impl cannot be conditionally compiled");
             let impl_fn = AbilityImplFunction::FunctionId(spec_fn_id);
@@ -14998,7 +15000,8 @@ impl TypedProgram {
         }
 
         let is_main_fn = ast_fn.name == self.ast.idents.b.main
-            && self.get_executable_primary_module().map(|m| m.namespace_id) == Some(namespace_id);
+            && self.get_executable_primary_module().map(|m| m.namespace_scope_id)
+                == Some(parent_scope_id);
         if is_main_fn {
             match param_types.len() {
                 0 => {}
@@ -15289,9 +15292,8 @@ impl TypedProgram {
         parent_scope_id: ScopeId,
     ) -> K1Result<Option<FunctionId>> {
         let ast_macro = self.ast.get_macro(parsed_macro_id);
-        if let Some(owner_ns) = self.scopes.get_scope_owner(parent_scope_id).as_namespace() {
-            self.fail_if_reload_ns(owner_ns, ast_macro.span, "macros")?;
-        }
+        let namespace_id = self.scopes.get_scope_owner(parent_scope_id).as_namespace().unwrap();
+        self.fail_if_reload_ns(namespace_id, ast_macro.span, "macros")?;
         let name = ast_macro.name;
         let name_span = ast_macro.name_span;
         let signature_span = ast_macro.signature_span;
@@ -15372,7 +15374,7 @@ impl TypedProgram {
         let actual_function_id = self.add_function(TypedFunction {
             name,
             scope: fn_scope_id,
-            namespace_id: self.scopes.nearest_parent_namespace(fn_scope_id),
+            namespace_id,
             params: param_variables_handle,
             type_params,
             fnlike_type_params: MSlice::empty(),
@@ -15981,6 +15983,7 @@ impl TypedProgram {
                     );
                 }
                 let ns_scope_id = existing.scope_id;
+                self.fail_if_reload_ns(existing_ns_id, parsed_ability.span, "ability definitions")?;
                 self.namespaces.get_mut(existing_ns_id).namespace_type = NamespaceKind::Ability;
                 (existing_ns_id, ns_scope_id)
             }
@@ -16218,9 +16221,8 @@ impl TypedProgram {
         if !self.execute_static_condition(parsed_ability_impl.compile_condition, scope_id) {
             return Ok(None);
         }
-        if let Some(owner_ns) = self.scopes.get_scope_owner(scope_id).as_namespace() {
-            self.fail_if_reload_ns(owner_ns, span, "ability impls")?;
-        }
+        let namespace_id = self.scopes.get_scope_owner(scope_id).as_namespace().unwrap();
+        self.fail_if_reload_ns(namespace_id, span, "ability impls")?;
         let ability_expr = self.ast.mem.get(parsed_ability_impl.ability_expr).clone();
         let parsed_impl_functions = parsed_ability_impl.functions;
 
@@ -16496,7 +16498,7 @@ impl TypedProgram {
                         kind,
                         is_default,
                     )),
-                    ROOT_NAMESPACE_ID,
+                    namespace_id,
                 )?
                 .expect("an ability impl cannot be conditionally compiled");
 

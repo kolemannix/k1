@@ -7,7 +7,6 @@ use maud::{Markup, PreEscaped, html};
 use serde_json::{Value, json};
 
 use crate::codegen_llvm::Cg;
-use crate::lex::Span;
 use crate::typer::{AbilityId, FunctionId, NamespaceId, TypedFunctionKind, TypedProgram};
 
 struct Node {
@@ -35,21 +34,6 @@ impl Node {
         }
         object
     }
-}
-
-/// Ability impl functions live in the ability's namespace; the treemap files
-/// them under the module that declares the impl, grouped by ability
-fn placement(k1: &TypedProgram, function_id: FunctionId) -> (NamespaceId, Option<AbilityId>) {
-    let function = k1.get_function(function_id);
-    let TypedFunctionKind::AbilityImpl(ability_id, _) = function.kind else {
-        return (function.namespace_id, None);
-    };
-    let span = k1.get_function_span(function_id);
-    if span == Span::NONE {
-        return (function.namespace_id, Some(ability_id));
-    }
-    let module = k1.modules.get(k1.module_of_span(span));
-    (module.namespace_id, Some(ability_id))
 }
 
 fn leaf(k1: &TypedProgram, function_id: FunctionId, name: String, kind: &'static str) -> Node {
@@ -93,16 +77,17 @@ fn build_tree(k1: &mut TypedProgram) -> Result<Node, String> {
     let mut specializations: FxHashMap<FunctionId, Vec<Node>> = FxHashMap::default();
     let mut generic_order: Vec<FunctionId> = Vec::new();
     let mut place = |k1: &TypedProgram, function_id: FunctionId, node: Node| {
-        let (ns_id, ability_id) = placement(k1, function_id);
-        match ability_id {
-            None => members.entry(ns_id).or_default().push(node),
-            Some(ability_id) => {
+        let function = k1.get_function(function_id);
+        let ns_id = function.namespace_id;
+        match function.kind {
+            TypedFunctionKind::AbilityImpl(ability_id, _) => {
                 let entry = ability_members.entry((ns_id, ability_id)).or_default();
                 if entry.is_empty() {
                     ability_order.push((ns_id, ability_id));
                 }
                 entry.push(node);
             }
+            _ => members.entry(ns_id).or_default().push(node),
         }
     };
     for function_id in reachable {
