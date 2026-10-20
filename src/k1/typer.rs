@@ -5361,11 +5361,7 @@ impl TypedProgram {
                 no_fnlike_args,
                 Some((imp.ability_id, imp.self_type_id)),
             );
-            self.add_specialized_function_scope(
-                specialized_function_id,
-                imp.scope_id,
-                self.mem.getn(imp.substitutions),
-            );
+            self.add_specialized_function_scope(specialized_function_id, imp.scope_id, &[]);
             AbilityImplFunction::FunctionId(specialized_function_id)
         };
         self.mem.getn_mut(imp.functions)[index as usize] = resolved;
