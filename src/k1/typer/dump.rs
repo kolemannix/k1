@@ -25,8 +25,8 @@ impl Display for TypedProgram {
         f.write_str("\n")?;
         self.dump_types(f)?;
         f.write_str("--- Namespaces ---\n")?;
-        for (id, namespace) in self.namespaces.iter().enumerate() {
-            write!(f, "ns {:02} ", id)?;
+        for (id, namespace) in self.namespaces.iter() {
+            write!(f, "ns {:02} ", id.as_u32())?;
             f.write_str(self.ident_str(namespace.name))?;
             f.write_str("\n")?;
         }
@@ -102,7 +102,7 @@ impl TypedProgram {
 
     pub fn display_scope(&self, scope_id: ScopeId, w: &mut impl Write) -> std::fmt::Result {
         let scope = self.scopes.get_scope(scope_id);
-        self.display_scope_name(w, scope_id)?;
+        self.write_namespace_path(w, self.scopes.nearest_parent_namespace(scope_id), "/", true);
         writeln!(w, ", scope type: {}", scope.scope_type.short_name())?;
 
         let mut first = true;
@@ -310,7 +310,12 @@ impl TypedProgram {
             }
             Type::TypeParameter(tv) => {
                 if mode == TypeDisplayMode::Expand {
-                    self.display_scope_name(w, tv.scope_id)?;
+                    self.write_namespace_path(
+                        w,
+                        self.scopes.nearest_parent_namespace(tv.scope_id),
+                        "/",
+                        true,
+                    );
                     w.write_str(".")?;
                     w.write_str("'")?;
                     self.write_ident(w, tv.name)?;

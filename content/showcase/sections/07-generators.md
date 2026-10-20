@@ -137,14 +137,13 @@ $bf/define(broken, "++[>+<-")
 ├─────
 │  bf `broken`: unmatched `[` at byte 2
 bc Execution Trace
-[00] core/platform/process/exit platform.k1:286
-[01] core/sys/exit builtin.k1:981
-[02] core/crash builtin.k1:1189
-[03] bf_transpile_wrong/pre/bf/emit-body bf_transpile_wrong.k1:44
-[04] bf_transpile_wrong/pre/bf/bf_transpile_wrong.pre.bf.transpile_lam_7069 bf_transpile_wrong.k1:64
-[05] core/code-builder/block code.k1:156
-[06] bf_transpile_wrong/pre/bf/transpile bf_transpile_wrong.k1:67
-[07] bf_transpile_wrong/pre/bf/define bf_transpile_wrong.k1:71
+[00] core/platform/process/abort platform.k1:295
+[01] core/crash builtin.k1:1241
+[02] bf_transpile_wrong/pre/bf/emit-body bf_transpile_wrong.k1:44
+[03] bf_transpile_wrong/pre/bf/transpile_lam_7582 bf_transpile_wrong.k1:64
+[04] core/code-builder/block code.k1:156
+[05] bf_transpile_wrong/pre/bf/transpile bf_transpile_wrong.k1:67
+[06] bf_transpile_wrong/pre/bf/define bf_transpile_wrong.k1:71
 
 └────────────────────────────────────────╴
 Module bf_transpile_wrong failed compiling with 1 errors

@@ -54,7 +54,7 @@ pub fn get_hover_message_for_entity(k1: &mut TypedProgram, entity: LsEntity) -> 
                 None => "None".to_string(),
                 Some(type_id) => format!("Companion Type: {}", k1.type_id_to_string(type_id)),
             };
-            let ns_name_qualified = k1.scope_id_to_string(ns.scope_id);
+            let ns_name_qualified = k1.namespace_id_to_string(ns_id);
             format!("ns {ns_name_qualified}. {companion_type}")
         }
         LsEntityKind::Function { function_id, is_defn } => {
@@ -67,7 +67,12 @@ pub fn get_hover_message_for_entity(k1: &mut TypedProgram, entity: LsEntity) -> 
         LsEntityKind::Ability(ability_id) => {
             let ability = k1.abilities.get(ability_id);
             let mut msg = "ability ".to_string();
-            k1.write_scope_path(&mut msg, k1.namespaces.get_scope(ability.namespace_id), "/", true);
+            k1.write_namespace_path(
+                &mut msg,
+                k1.scopes.nearest_parent_namespace(ability.scope_id),
+                "/",
+                true,
+            );
             for function_ref in k1.mem.getn(ability.functions) {
                 msg.push('\n');
                 msg.push_str(&k1.function_id_to_string(function_ref.function_id, false));
@@ -498,9 +503,9 @@ pub struct WorkspaceSymbol {
 
 pub fn collect_workspace_symbols(k1: &TypedProgram, query: &str) -> Vec<WorkspaceSymbol> {
     let mut symbols = vec![];
-    for ns in k1.namespaces.iter() {
+    for (ns_id, ns) in k1.namespaces.iter() {
         let mut container = String::new();
-        k1.write_scope_path(&mut container, ns.scope_id, "/", true);
+        k1.write_namespace_path(&mut container, ns_id, "/", true);
         let function_kind = match ns.namespace_type {
             NamespaceKind::TypeCompanion | NamespaceKind::Ability => NameKind::Method,
             NamespaceKind::User | NamespaceKind::Root => NameKind::Function,

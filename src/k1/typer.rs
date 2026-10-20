@@ -44,7 +44,7 @@ use std::path::Path;
 use synth::synth_static_option;
 pub use typed_int_value::TypedIntValue;
 
-use crate::kmem::{Dlist, Handle, List, MList, MSS2, MSlice, MSpillSlice, MStr, Mem};
+use crate::kmem::{Handle, List, MList, MSS2, MSlice, MSpillSlice, MStr, Mem};
 use crate::{DepEq, DepHash, SV2, kmem};
 use ahash::HashMapExt;
 use colored::Colorize;
@@ -621,7 +621,6 @@ pub struct TypedAbility {
     pub functions: PermSlice<TypedAbilityFunctionRef>,
     pub scope_id: ScopeId,
     pub ast_id: ParsedAbilityId,
-    pub namespace_id: NamespaceId,
     pub kind: TypedAbilityKind,
 }
 
@@ -951,7 +950,6 @@ bitflags! {
 pub struct TypedFunction {
     pub name: StringId,
     pub scope: ScopeId,
-    pub namespace_id: NamespaceId,
     pub params: PermSlice<TypedFunctionParam>,
     pub type_params: TypeIdSlice,
     pub fnlike_type_params: PermSlice<FnlikeTypeParam>,
@@ -1731,7 +1729,6 @@ pub struct TypedGlobal {
     pub is_tls: bool,
     pub linkage: Linkage,
     pub ast_id: ParsedGlobalId,
-    pub parent_scope: ScopeId,
     /// Set when the global is declared in an ns(reload)
     pub reload_ns: Option<NamespaceId>,
 }
@@ -1740,7 +1737,6 @@ impl TypedFunction {
     pub fn synthesized(
         name: StringId,
         scope: ScopeId,
-        namespace_id: NamespaceId,
         params: MSlice<TypedFunctionParam, TypedProgram>,
         body_block: TypedExprId,
         parsed_id: ParsedId,
@@ -1750,7 +1746,6 @@ impl TypedFunction {
         TypedFunction {
             name,
             scope,
-            namespace_id,
             params,
             type_params: MSlice::empty(),
             fnlike_type_params: MSlice::empty(),
@@ -1803,7 +1798,7 @@ pub struct Namespace {
 }
 
 pub struct Namespaces {
-    pub namespaces: VPool<Namespace, NamespaceId>,
+    namespaces: VPool<Namespace, NamespaceId>,
 }
 
 impl Namespaces {
@@ -1819,8 +1814,8 @@ impl Namespaces {
         self.namespaces.add(namespace)
     }
 
-    pub fn iter(&self) -> std::slice::Iter<'_, Namespace> {
-        self.namespaces.iter()
+    pub fn iter(&self) -> impl Iterator<Item = (NamespaceId, &Namespace)> {
+        self.namespaces.iter_with_ids()
     }
 
     pub fn get_scope(&self, namespace_id: NamespaceId) -> ScopeId {
@@ -2505,7 +2500,6 @@ pub struct TypePendingDefinition {
 
 #[derive(Clone, Copy)]
 pub struct UsePendingResolution {
-    pub namespace_id: NamespaceId,
     pub scope_id: ScopeId,
     pub use_id: ParsedUseId,
 }
@@ -3407,7 +3401,7 @@ impl TypedProgram {
             }
             let span =
                 self.ast.get_function(function.parsed_id.as_function_id().unwrap()).name_span;
-            let module_id = self.module_of_span(span);
+            let module_id = self.get_namespace_module(self.get_function_namespace(function_id));
             let submodule_owner = self.plan.get_module(module_id).and_then(|m| m.submodule_owner);
             if module_id == primary_id || submodule_owner == Some(primary_id) {
                 found.push((function_id, span));
@@ -3415,9 +3409,12 @@ impl TypedProgram {
         }
         let mut tests = Vec::with_capacity(found.len());
         for (function_id, span) in found {
-            let function = self.get_function(function_id);
-            let ns_scope = self.namespaces.get_scope(function.namespace_id);
-            let name = self.make_qualified_name(ns_scope, function.name, None, "/", true);
+            let name = self.make_qualified_name(
+                self.get_function_namespace(function_id),
+                self.get_function(function_id).name,
+                "/",
+                true,
+            );
             if !filter.is_empty() && !filter.iter().any(|f| name.contains(f.as_str())) {
                 continue;
             }
@@ -3852,7 +3849,7 @@ impl TypedProgram {
                         Some(actual_defn_info) => {
                             debug!("expected_defn_info some actual some");
                             if expected_defn_info.name == actual_defn_info.name
-                                && expected_defn_info.scope == actual_defn_info.scope
+                                && expected_defn_info.namespace_id == actual_defn_info.namespace_id
                             {
                                 // Same nominal type, we're good
                             } else {
@@ -4193,6 +4190,14 @@ impl TypedProgram {
         self.functions.get_mut(function_id)
     }
 
+    pub fn get_function_namespace(&self, function_id: FunctionId) -> NamespaceId {
+        let function = self.get_function(function_id);
+        match function.specialization_info {
+            Some(spec_info) => self.get_function_namespace(spec_info.parent_function),
+            None => self.scopes.nearest_parent_namespace(function.scope),
+        }
+    }
+
     pub fn get_function_type(&self, function_id: FunctionId) -> &FunctionType {
         self.types.get(self.get_function(function_id).type_id).as_function().unwrap()
     }
@@ -4294,9 +4299,7 @@ impl TypedProgram {
         let base_ability_id = imp.base_ability_id;
         let self_type_id = imp.self_type_id;
         let scope_id = imp.scope_id;
-        let base_ability = self.abilities.get(base_ability_id);
-        let functions = base_ability.functions;
-        let ability_namespace_id = base_ability.namespace_id;
+        let functions = self.abilities.get(base_ability_id).functions;
 
         let mut impl_functions = self.mem.new_list(functions.len());
         for ability_fn_ref in self.mem.getn(functions) {
@@ -4313,7 +4316,6 @@ impl TypedProgram {
                         AbilityImplKind::BuiltinDerived,
                         is_default,
                     )),
-                    ability_namespace_id,
                 )?
                 .expect("an ability impl cannot be conditionally compiled");
             let impl_fn = AbilityImplFunction::FunctionId(spec_fn_id);
@@ -5275,7 +5277,6 @@ impl TypedProgram {
             generic_base_ability_id,
             substituted_ability_args_handle,
             blanket_impl.span,
-            blanket_impl.scope_id,
         );
 
         let mut substituted_impl_arguments: List<TypeId, _> =
@@ -7254,8 +7255,6 @@ impl TypedProgram {
             self.scopes.nearest_parent_function(ctx.scope_id).map(|id| self.get_function(id).name);
 
         let name = self.build_ident_with(|k1, s| {
-            k1.write_scope_path(s, ctx.scope_id, ".", true);
-            s.push('.');
             if let Some(fn_name) = enclosing_fn_name {
                 s.push_str(k1.ident_str(fn_name));
             };
@@ -7286,7 +7285,6 @@ impl TypedProgram {
             self.add_function(TypedFunction::synthesized(
                 name,
                 lambda_scope_id,
-                self.scopes.nearest_parent_namespace(lambda_scope_id),
                 param_variables.to_slice(),
                 body_expr_id,
                 expr_id.into(),
@@ -7344,7 +7342,6 @@ impl TypedProgram {
         let actual_body_function_id = self.add_function(TypedFunction::synthesized(
             name,
             lambda_scope_id,
-            self.scopes.nearest_parent_namespace(lambda_scope_id),
             param_variables.to_slice(),
             body_expr_id,
             expr_id.into(),
@@ -11823,7 +11820,7 @@ impl TypedProgram {
                 let source_location = self.synth_source_location(span);
                 Ok(source_location)
             }
-            BuiltinTyperInline::CompilerModuleDir => Ok(self.synth_module_dir(span)),
+            BuiltinTyperInline::CompilerModuleDir => Ok(self.synth_module_dir(ctx.scope_id, span)),
             BuiltinTyperInline::TypeId => {
                 let type_id = call.type_args.as_slice(&self.mem)[0];
                 self.register_type_metainfo(type_id);
@@ -12055,7 +12052,6 @@ impl TypedProgram {
         &mut self,
         set: &[TypeSubstitutionPair],
         signature: TypedAbilitySignature,
-        scope_id: ScopeId,
         span: Span,
     ) -> TypedAbilitySignature {
         let specialized_ability = self.abilities.get(signature.specialized_ability_id);
@@ -12111,7 +12107,7 @@ impl TypedProgram {
         let ability_args_new_handle = self.intern_type_slice(ability_args_new.as_slice());
         let impl_args_new_handle = impl_args_new.to_slice();
         let specialized_base =
-            self.specialize_ability(base_ability_id, ability_args_new_handle, span, scope_id);
+            self.specialize_ability(base_ability_id, ability_args_new_handle, span);
         TypedAbilitySignature {
             specialized_ability_id: specialized_base,
             impl_arguments: impl_args_new_handle,
@@ -12399,7 +12395,6 @@ impl TypedProgram {
         let specialized_function_id = self.add_function(TypedFunction {
             name: parent_function.name,
             scope: ScopeId::PENDING,
-            namespace_id: parent_function.namespace_id,
             params: MSlice::empty(),
             type_params,
             fnlike_type_params,
@@ -13199,15 +13194,14 @@ impl TypedProgram {
     fn resolve_intrinsic_function_type(
         &self,
         fn_name: StringId,
-        namespace_chain: Dlist<StringId, MemTmp>,
+        namespace_id: NamespaceId,
         ability_id: Option<AbilityId>,
         self_type: Option<TypeId>,
     ) -> Result<Builtin, String> {
         let fn_name_str = self.ast.idents.get_string(fn_name);
-        let second =
-            self.tmp.dlist_nth_data_opt(namespace_chain, 2).map(|node| self.ident_str(*node));
-        let third =
-            self.tmp.dlist_nth_data_opt(namespace_chain, 3).map(|node| self.ident_str(*node));
+        let namespace_chain = self.get_namespace_chain(namespace_id);
+        let second = namespace_chain.get(2).map(|name| self.ident_str(*name));
+        let third = namespace_chain.get(3).map(|name| self.ident_str(*name));
         let t = self_type.map(|t| self.types.get(t));
         let is_integer = t.is_some_and(|t| t.as_integer().is_some());
         let signed = self_type.is_some_and(|t| self.is_type_signed(t));
@@ -13523,16 +13517,16 @@ impl TypedProgram {
         };
         match result {
             Some(result) => Ok(result),
-            None => Err(format!(
-                "Could not resolve builtin function type for function {}/{} (ability: {})",
-                self.tmp
-                    .dlist_iter(namespace_chain)
-                    .map(|i| self.ident_str(*i).to_string())
-                    .collect::<Vec<_>>()
-                    .join("/"),
-                fn_name_str,
-                ability_id.is_some()
-            )),
+            None => {
+                let mut path = String::new();
+                self.write_namespace_path(&mut path, namespace_id, "/", false);
+                Err(format!(
+                    "Could not resolve builtin function type for function {}/{} (ability: {})",
+                    path,
+                    fn_name_str,
+                    ability_id.is_some()
+                ))
+            }
         }
     }
 
@@ -13655,8 +13649,7 @@ impl TypedProgram {
 
         for c in self.mem.getn(constraints) {
             let target = self.substitute_in_type(c.target, &pairs);
-            let signature =
-                self.substitute_in_ability_signature(&pairs, c.signature, scope_id, span);
+            let signature = self.substitute_in_ability_signature(&pairs, c.signature, span);
             self.check_ability_constraint(
                 target,
                 signature,
@@ -13799,7 +13792,6 @@ impl TypedProgram {
                 let specialized_constraint_signature = self.substitute_in_ability_signature(
                     substitution_pairs,
                     original_signature,
-                    scope_id,
                     span,
                 );
                 debug!(
@@ -13942,7 +13934,6 @@ impl TypedProgram {
         ability_id: AbilityId,
         arguments: TypeSliceId,
         span: Span,
-        parent_scope_id: ScopeId,
     ) -> AbilityId {
         let ability = self.abilities.get(ability_id);
         if ability.kind.is_concrete() {
@@ -13952,7 +13943,7 @@ impl TypedProgram {
         let ability_ast_id = ability.ast_id;
         let ability_name = ability.name;
         let ability_parameters = ability.parameters;
-        let ability_namespace_id = ability.namespace_id;
+        let ability_ns_scope_id = self.scopes.get_scope(ability.scope_id).parent.unwrap();
         let specializations = self.abilities.get(generic_ability_id).kind.specializations();
         if self.get_type_slice(arguments).len() > ability_parameters.len() as usize {
             panic!("Passed too many arguments to specialize_ability; probably passed impl args");
@@ -13968,7 +13959,7 @@ impl TypedProgram {
         };
 
         let specialized_ability_scope = self.scopes.add_child_scope(
-            parent_scope_id,
+            ability_ns_scope_id,
             ScopeType::AbilityDefn,
             ScopeOwnerId::None,
         );
@@ -14027,9 +14018,12 @@ impl TypedProgram {
             functions: MSlice::empty(),
             scope_id: specialized_ability_scope,
             ast_id: ability_ast_id,
-            namespace_id: ability_namespace_id,
             kind: TypedAbilityKind::Specialized(spec_info),
         });
+        self.scopes.set_scope_owner_id(
+            specialized_ability_scope,
+            ScopeOwnerId::Ability(specialized_ability_id),
+        );
 
         let parsed_ability = self.ast.get_ability(ability_ast_id);
         let mut specialized_functions = self.mem.new_list(parsed_ability.functions.len());
@@ -14038,7 +14032,6 @@ impl TypedProgram {
                 *parsed_fn,
                 specialized_ability_scope,
                 Some(FunctionAbilityContextInfo::ability_id_only(specialized_ability_id)),
-                ability_namespace_id,
             );
             if let Err(e) = result {
                 self.ice("Failed while specializing ability", Some(&e))
@@ -14063,11 +14056,6 @@ impl TypedProgram {
             };
             specializations.push_grow(&mut self.mem, spec_info);
         }
-
-        self.scopes.set_scope_owner_id(
-            specialized_ability_scope,
-            ScopeOwnerId::Ability(specialized_ability_id),
-        );
 
         specialized_ability_id
     }
@@ -14116,8 +14104,7 @@ impl TypedProgram {
             self.check_ability_expr(ability_expr_id, scope_id, skip_impl_check)?;
         let span = self.ast.mem.get(ability_expr_id).span;
         let ability_arguments = self.intern_type_slice_handle(ability_arguments);
-        let new_ability_id =
-            self.specialize_ability(base_ability_id, ability_arguments, span, scope_id);
+        let new_ability_id = self.specialize_ability(base_ability_id, ability_arguments, span);
         Ok(TypedAbilitySignature { specialized_ability_id: new_ability_id, impl_arguments })
     }
 
@@ -14511,8 +14498,9 @@ impl TypedProgram {
                         thunk_id
                     } else {
                         // Thunk for a by-value receiver: load self from the state pointer
+                        let impl_fn_scope = self.get_function_scope(impl_fn_id);
                         let thunk_scope = self.scopes.add_child_scope(
-                            impl_fn.scope,
+                            impl_fn_scope,
                             ScopeType::FunctionScope,
                             ScopeOwnerId::None,
                         );
@@ -14575,7 +14563,6 @@ impl TypedProgram {
                         let actual_thunk_id = self.add_function(TypedFunction::synthesized(
                             name,
                             thunk_scope,
-                            impl_fn.namespace_id,
                             thunk_params.to_slice(),
                             body_block,
                             impl_fn.parsed_id,
@@ -14621,8 +14608,8 @@ impl TypedProgram {
         parsed_function_id: ParsedFunctionId,
         parent_scope_id: ScopeId,
         ability_info: Option<FunctionAbilityContextInfo>,
-        namespace_id: NamespaceId,
     ) -> K1Result<Option<FunctionId>> {
+        let namespace_id = self.scopes.nearest_parent_namespace(parent_scope_id);
         let namespace = self.namespaces.get(namespace_id);
         let is_reloadable = namespace.reload;
         let companion_type_id = namespace.companion_type_id;
@@ -14888,11 +14875,10 @@ impl TypedProgram {
         let builtin_type = match ast_fn.builtin {
             Some(ParsedBuiltin::Llvm(llvm_name)) => Some(Builtin::LlvmIntrinsic(llvm_name)),
             _ if is_builtin => {
-                let namespace_chain = self.name_chain(namespace_id);
                 let resolved = self
                     .resolve_intrinsic_function_type(
                         ast_fn.name,
-                        namespace_chain,
+                        namespace_id,
                         ability_id,
                         if ability_info.is_some() { impl_self_type } else { companion_type_id },
                     )
@@ -15043,7 +15029,6 @@ impl TypedProgram {
         let actual_function_id = self.add_function(TypedFunction {
             name: ast_fn.name,
             scope: fn_scope_id,
-            namespace_id,
             params: param_variables_handle,
             type_params,
             fnlike_type_params: function_type_params_handle,
@@ -15339,7 +15324,6 @@ impl TypedProgram {
         let actual_function_id = self.add_function(TypedFunction {
             name,
             scope: fn_scope_id,
-            namespace_id,
             params: param_variables_handle,
             type_params,
             fnlike_type_params: MSlice::empty(),
@@ -15933,8 +15917,7 @@ impl TypedProgram {
         //
         // In this case, the mechanism is just to 'adopt' the existing scope/ns and start putting our stuff inside it
 
-        let (namespace_id, ns_scope_id) = match self
-            .find_ns_child_by_name(parent_namespace_id, parsed_ability.name)
+        let ns_scope_id = match self.find_ns_child_by_name(parent_namespace_id, parsed_ability.name)
         {
             Some(existing_ns_id) => {
                 let existing = self.namespaces.get(existing_ns_id);
@@ -15950,7 +15933,7 @@ impl TypedProgram {
                 let ns_scope_id = existing.scope_id;
                 self.fail_if_reload_ns(existing_ns_id, parsed_ability.span, "ability definitions")?;
                 self.namespaces.get_mut(existing_ns_id).namespace_type = NamespaceKind::Ability;
-                (existing_ns_id, ns_scope_id)
+                ns_scope_id
             }
             None => {
                 let ns_scope_id =
@@ -15980,7 +15963,7 @@ impl TypedProgram {
                     self.scopes.replace_namespace(scope_id, parsed_ability.name, namespace_id);
                 }
                 self.scopes.set_scope_owner_id(ns_scope_id, ScopeOwnerId::Namespace(namespace_id));
-                (namespace_id, ns_scope_id)
+                ns_scope_id
             }
         };
 
@@ -16066,7 +16049,6 @@ impl TypedProgram {
             functions: MSlice::empty(),
             scope_id: ability_scope_id,
             ast_id: parsed_ability.id,
-            namespace_id,
             kind,
         };
         let ability_id = self.abilities.add(typed_ability);
@@ -16093,7 +16075,6 @@ impl TypedProgram {
                 *parsed_function_id,
                 ability_scope_id,
                 Some(FunctionAbilityContextInfo::ability_id_only(ability_id)),
-                namespace_id,
             )?
             else {
                 // Note: compile_function_declaration only returns None when conditional
@@ -16463,7 +16444,6 @@ impl TypedProgram {
                         kind,
                         is_default,
                     )),
-                    namespace_id,
                 )?
                 .expect("an ability impl cannot be conditionally compiled");
 
@@ -16750,7 +16730,7 @@ impl TypedProgram {
         };
         debug!(
             "Searching scope for useable symbol: {}, Functions:\n{:?}",
-            self.scope_name_to_string(scope_id_to_search),
+            self.namespace_id_to_string(self.scopes.nearest_parent_namespace(scope_id_to_search)),
             self.scopes.iter_scope_functions(scope_id_to_search).collect::<Vec<_>>()
         );
 
@@ -16784,7 +16764,8 @@ impl TypedProgram {
             found_symbols.push(UseableSymbolId::Global(variable_id))
         }
         if let Some(ability_id) = self.scopes.find_ability_exposed(scope_id_to_search, name.name) {
-            let namespace_id = self.abilities.get(ability_id).namespace_id;
+            let namespace_id =
+                self.scopes.nearest_parent_namespace(self.abilities.get(ability_id).scope_id);
             found_symbols.push(UseableSymbolId::Ability(ability_id, namespace_id))
         }
         if let Some(ns_id) = self.scopes.find_namespace_exposed(scope_id_to_search, name.name) {
@@ -16945,12 +16926,9 @@ impl TypedProgram {
                     }
                 }
                 ParsedId::Function(parsed_function_id) => {
-                    if let Err(e) = self.declare_function(
-                        parsed_function_id,
-                        namespace_scope_id,
-                        None,
-                        namespace_id,
-                    ) {
+                    if let Err(e) =
+                        self.declare_function(parsed_function_id, namespace_scope_id, None)
+                    {
                         self.report(e);
                     }
                 }
@@ -16983,7 +16961,7 @@ impl TypedProgram {
             return Ok(());
         }
         let ns_path_ident =
-            self.build_ident_with(|k1, s| k1.write_scope_path(s, ns_scope, "/", true));
+            self.build_ident_with(|k1, s| k1.write_namespace_path(s, namespace_id, "/", true));
         let b = self.ast.idents.b;
         self.declare_ns_reload_fn(namespace_id, load_ident, b.load_ns, ns_path_ident)?;
         self.declare_ns_reload_fn(namespace_id, b.load_async, b.load_ns_async, ns_path_ident)?;
@@ -17036,7 +17014,6 @@ impl TypedProgram {
         let actual_function_id = self.add_function(TypedFunction::synthesized(
             name,
             fn_scope,
-            namespace_id,
             MSlice::empty(),
             body_block,
             ParsedId::Namespace(ns_parsed_id),
@@ -17053,8 +17030,8 @@ impl TypedProgram {
         let mut sum = 0u128;
         let mut signature = String::with_capacity(256);
         let mut listing = String::new();
-        for (_, function) in self.function_iter() {
-            if function.is_reloadable() && function.namespace_id == ns_id {
+        for (function_id, function) in self.function_iter() {
+            if function.is_reloadable() && self.get_function_namespace(function_id) == ns_id {
                 let name = self.ident_str(function.name);
                 signature.clear();
                 self.display_type_id(
@@ -17293,7 +17270,6 @@ impl TypedProgram {
                             self.qident_to_string(&self.ast.uses.get(parsed_use_id).target)
                         );
                         self.uses_pending_resolution.push_back(UsePendingResolution {
-                            namespace_id,
                             scope_id: namespace_scope_id,
                             use_id: parsed_use_id,
                         })
@@ -17546,7 +17522,7 @@ impl TypedProgram {
         debug_assert_eq!(self.types.len(), self.type_variable_counts.len());
 
         let mut companion_errors: Vec<K1Message> = vec![];
-        for ns in self.namespaces.iter() {
+        for (_, ns) in self.namespaces.iter() {
             if ns.namespace_type == NamespaceKind::TypeCompanion && ns.companion_type_id.is_none() {
                 let span = self.ast.get_span_for_id(ns.parsed_id);
                 companion_errors.push(kerr!(

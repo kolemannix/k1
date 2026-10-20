@@ -49,7 +49,7 @@ use crate::parse::{FileId, NumericWidth, StringId};
 use crate::perfect_hash::{self, PerfectHash};
 use crate::typer::types::{
     AbiMode, AggType, AggregateTypeId, Layout, NamedScalarId, PhysicalType, PhysicalTypeEnum,
-    PhysicalTypeResult, RegisterClass, ScalarType, StructField, Type, TypeDefnInfo, TypeId,
+    PhysicalTypeResult, RegisterClass, ScalarType, StructField, Type, TypeId,
 };
 use crate::typer::{
     FunctionId, K1Result, Linkage as TyperLinkage, NamespaceId, StaticContainerKind,
@@ -716,7 +716,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             empty_struct: ctx.struct_type(&[], false),
         };
 
-        let has_reloadable_fns = k1.namespaces.iter().any(|ns| ns.reload);
+        let has_reloadable_fns = k1.namespaces.iter().any(|(_, ns)| ns.reload);
         let mut owned = FxHashSet::with_capacity(plan.functions.len());
         for f in &plan.functions {
             owned.insert(*f);
@@ -812,12 +812,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     // running host's descriptor hash and refuses a drifted api
                     let api_hash = self.k1.reload_hash_for_ns(ns_id);
                     let mut ns_path = String::with_capacity(64);
-                    self.k1.write_scope_path(
-                        &mut ns_path,
-                        self.k1.namespaces.get(ns_id).scope_id,
-                        "/",
-                        true,
-                    );
+                    self.k1.write_namespace_path(&mut ns_path, ns_id, "/", true);
                     let hash_global = self.llvm_module.add_global(
                         self.ctx.i64_type(),
                         None,
@@ -921,7 +916,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         roots: &mut Vec<FunctionId>,
     ) -> K1Result<Vec<FunctionId>> {
         let mut compiler_required_k1_fns = vec!["crash-div"];
-        if k1.namespaces.iter().any(|ns| ns.reload) {
+        if k1.namespaces.iter().any(|(_, ns)| ns.reload) {
             compiler_required_k1_fns.push("crash-unloaded-ns");
         }
         if !k1.type_infos.is_empty() {
@@ -941,7 +936,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     pub fn prepare_dylib(k1: &mut TypedProgram, ns_id: NamespaceId) -> K1Result<CodegenRoots> {
         let mut roots: Vec<FunctionId> = vec![];
         for (function_id, function) in k1.function_iter() {
-            if function.is_reloadable() && function.namespace_id == ns_id {
+            if function.is_reloadable() && k1.get_function_namespace(function_id) == ns_id {
                 roots.push(function_id);
             }
         }
@@ -1280,8 +1275,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Global(TypedGlobalId),
         }
         let mut reload_nss: Vec<NamespaceId> = vec![];
-        for ns_id in self.k1.namespaces.namespaces.iter_ids() {
-            if self.k1.namespaces.get(ns_id).reload {
+        for (ns_id, ns) in self.k1.namespaces.iter() {
+            if ns.reload {
                 reload_nss.push(ns_id);
             }
         }
@@ -1293,7 +1288,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         for ns_id in reload_nss {
             let mut entries: Vec<(String, Slot)> = vec![];
             for (function_id, function) in self.k1.function_iter() {
-                if function.is_reloadable() && function.namespace_id == ns_id {
+                if function.is_reloadable() && self.k1.get_function_namespace(function_id) == ns_id
+                {
                     entries.push((
                         self.make_reloadable_function_symbol(function_id),
                         Slot::Fn(function_id),
@@ -1313,7 +1309,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             let ns = self.k1.namespaces.get(ns_id);
             let ns_name = self.k1.ident_str(ns.name).to_string();
             let mut ns_path = String::with_capacity(64);
-            self.k1.write_scope_path(&mut ns_path, ns.scope_id, "/", true);
+            self.k1.write_namespace_path(&mut ns_path, ns_id, "/", true);
 
             let file_name_ptr =
                 self.cstring_constant(&format!("{program_name}.{ns_name}.{dylib_ext}"));
@@ -1369,7 +1365,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn make_reloadable_function_symbol(&self, function_id: FunctionId) -> String {
         let function = self.k1.get_function(function_id);
-        Cg::mangle(self.k1.make_qualified_name(function.scope, function.name, None, "/", true))
+        Cg::mangle(self.k1.make_qualified_name(
+            self.k1.get_function_namespace(function_id),
+            function.name,
+            "/",
+            true,
+        ))
     }
 
     fn is_reloadable_function(&self, function_id: FunctionId) -> bool {
@@ -1379,7 +1380,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
         match self.kind {
             CgKind::Host => true,
-            CgKind::ReloadDylib(ns_id) => function.namespace_id != ns_id,
+            CgKind::ReloadDylib(ns_id) => self.k1.get_function_namespace(function_id) != ns_id,
         }
     }
 
@@ -1406,9 +1407,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn make_reloadable_global_symbol(&self, global_id: TypedGlobalId) -> String {
         let variable = self.k1.variables.get(self.k1.globals.get(global_id).variable_id);
         Cg::mangle(self.k1.make_qualified_name(
-            variable.owner_scope,
+            self.k1.scopes.nearest_parent_namespace(variable.owner_scope),
             variable.name,
-            None,
             "/",
             true,
         ))
@@ -1627,8 +1627,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         let typed_fn = self.k1.get_function(function_id);
         let fn_name = self.k1.ident_str(typed_fn.name).to_string();
-        let ns_name =
-            self.k1.ident_str(self.k1.namespaces.get(typed_fn.namespace_id).name).to_string();
+        let ns_name = self
+            .k1
+            .ident_str(self.k1.namespaces.get(self.k1.get_function_namespace(function_id)).name)
+            .to_string();
         let function_span = self.k1.ast.get_span_for_id(typed_fn.parsed_id);
 
         let fn_addr_global = self.reload_fn_addr_global(function_id);
@@ -1863,27 +1865,17 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             .replace(" ", "_")
     }
 
-    fn write_type_name(
-        &self,
-        w: &mut impl std::fmt::Write,
-        type_id: TypeId,
-        defn_info: Option<TypeDefnInfo>,
-    ) {
-        // FIXME: Using this as typename is bad; consider a really big struct.
-        let name = self.k1.type_id_to_string(type_id);
-        let name = Cg::mangle(name);
-
-        match defn_info {
-            None => write!(w, "{}", name).unwrap(),
-            Some(info) => self.k1.write_qualified_name(w, info.scope, &name, None, ".", true),
-        };
-    }
-
     fn codegen_type_name(&self, type_id: TypeId) -> String {
-        let defn_info = self.k1.get_defn_info(type_id);
-        let mut s = String::with_capacity(64);
-        self.write_type_name(&mut s, type_id, defn_info);
-        s
+        // FIXME: Using this as typename is bad; consider a really big struct.
+        let name = Cg::mangle(self.k1.type_id_to_string(type_id));
+        match self.k1.get_defn_info(type_id) {
+            None => name,
+            Some(info) => {
+                let mut s = String::with_capacity(64);
+                self.k1.write_qualified_name(&mut s, info.namespace_id, &name, ".", true);
+                s
+            }
+        }
     }
 
     const DW_ATE_ADDRESS: u32 = 0x01;
@@ -4778,7 +4770,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let is_dylib_root = match self.kind {
             CgKind::Host => false,
             CgKind::ReloadDylib(ns_id) => {
-                typed_function.is_reloadable() && typed_function.namespace_id == ns_id
+                typed_function.is_reloadable()
+                    && self.k1.get_function_namespace(function_id) == ns_id
             }
         };
         let has_body = is_dylib_root || !typed_function_linkage.is_external();

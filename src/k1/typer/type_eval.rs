@@ -242,7 +242,11 @@ impl TypedProgram {
         } else {
             Some(TypeDefnInfo {
                 name: parsed_type_defn.name,
-                scope: namespace_scope_id,
+                namespace_id: self
+                    .scopes
+                    .get_scope_owner(namespace_scope_id)
+                    .as_namespace()
+                    .unwrap(),
                 companion_namespace: companion_namespace_id,
                 ast_id: ParsedId::TypeDefn(parsed_type_defn_id),
                 // Over-approximate: anything defined while the cluster has recursive mentions

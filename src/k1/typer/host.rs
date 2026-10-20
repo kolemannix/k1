@@ -149,10 +149,16 @@ impl TypedProgram {
         }
         self.module_params_phase = ModuleParamsPhase::HostSetup;
         for global_id in std::mem::take(&mut self.deferred_module_params) {
-            let span = self.globals.get(global_id).span;
-            let module_id = self.module_of_span(span);
-            let Some(index) = planner.entries.iter().position(|e| e.host == Some(module_id)) else {
-                self.ice_span(span, "module params global outside any planned module")
+            let global = self.globals.get(global_id);
+            let global_scope = self.variables.get(global.variable_id).owner_scope;
+            let Some(index) = planner.entries.iter().position(|e| {
+                e.host.is_some_and(|h| self.modules.get(h).namespace_scope_id == global_scope)
+            }) else {
+                kbail!(
+                    self,
+                    global.span,
+                    "k1/module-params must initialize a top-level global of build.k1"
+                )
             };
             let params = self.evaluate_module_params(&mut planner, index, global_id)?;
             planner.entries[index].module.params = Some(params);
@@ -882,14 +888,8 @@ impl TypedProgram {
     ) -> K1Result<PlannedParams> {
         let global = *self.globals.get(global_id);
         let host = planner.entries[index].host.unwrap();
+        let host_scope_id = self.modules.get(host).namespace_scope_id;
         let module_name = planner.plan.get(planner.entries[index].module.name);
-        if global.parent_scope != self.modules.get(host).namespace_scope_id {
-            kbail!(
-                self,
-                global.span,
-                "k1/module-params must initialize a top-level global of build.k1"
-            );
-        }
         let schema_type = global.type_id;
         let value_expr = global.parsed_expr.unwrap();
         let call_span = self.ast.exprs.get_span(value_expr);
@@ -924,12 +924,12 @@ impl TypedProgram {
         else {
             self.ice_span(call_span, "module params parsed as definitions");
         };
-        let ctx = EvalExprContext::make(Scopes::ROOT_SCOPE_ID)
+        let ctx = EvalExprContext::make(host_scope_id)
             .with_expected_type(Some(schema_type))
             .with_static_ctx(Some(StaticExecContext { expected_return_type: Some(schema_type) }));
         let value_id = self.execute_static_expr(parsed, ctx)?;
         let value_type = self.get_static_value_type(value_id);
-        if let Err(msg) = self.check_types(schema_type, value_type, Scopes::ROOT_SCOPE_ID) {
+        if let Err(msg) = self.check_types(schema_type, value_type, host_scope_id) {
             kbail!(
                 self,
                 call_span,

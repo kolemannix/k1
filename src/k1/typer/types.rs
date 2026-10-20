@@ -128,7 +128,7 @@ nz_u32_id!(TypeDefnId);
 // they're not small
 pub struct TypeDefnInfo {
     pub name: StringId,
-    pub scope: ScopeId,
+    pub namespace_id: NamespaceId,
     pub companion_namespace: Option<NamespaceId>,
     pub ast_id: ParsedId,
     pub recursive: bool,
@@ -138,7 +138,7 @@ impl_copy_if_small!(24, TypeDefnInfo);
 impl std::hash::Hash for TypeDefnInfo {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.name.hash(state);
-        self.scope.hash(state);
+        self.namespace_id.hash(state);
     }
 }
 

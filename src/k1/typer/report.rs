@@ -12,27 +12,31 @@ impl TypedProgram {
         (source, line)
     }
 
-    pub fn write_scope_path<W: std::fmt::Write + ?Sized>(
+    pub fn get_namespace_chain(&self, namespace_id: NamespaceId) -> SmallVec<[StringId; 8]> {
+        let mut chain: SmallVec<[StringId; 8]> = smallvec![];
+        let mut ns_id = namespace_id;
+        loop {
+            let namespace = self.namespaces.get(ns_id);
+            chain.push(namespace.name);
+            match namespace.parent_id {
+                Some(parent_id) => ns_id = parent_id,
+                None => break,
+            }
+        }
+        chain.reverse();
+        chain
+    }
+
+    pub fn write_namespace_path<W: std::fmt::Write + ?Sized>(
         &self,
         w: &mut W,
-        scope: ScopeId,
+        namespace_id: NamespaceId,
         delimiter: &str,
         skip_root: bool,
     ) {
-        let mut chain: SmallVec<[StringId; 8]> = smallvec![];
-        let mut ns_id = self.scopes.nearest_parent_namespace(scope);
-        loop {
-            let namespace = self.namespaces.get(ns_id);
-            let Some(parent_id) = namespace.parent_id else {
-                if !skip_root {
-                    chain.push(namespace.name);
-                }
-                break;
-            };
-            chain.push(namespace.name);
-            ns_id = parent_id;
-        }
-        for (i, name) in chain.iter().rev().enumerate() {
+        let chain = self.get_namespace_chain(namespace_id);
+        let start = if skip_root { 1 } else { 0 };
+        for (i, name) in chain[start..].iter().enumerate() {
             if i > 0 {
                 w.write_str(delimiter).unwrap();
             }
@@ -40,37 +44,37 @@ impl TypedProgram {
         }
     }
 
+    pub fn namespace_id_to_string(&self, namespace_id: NamespaceId) -> String {
+        let mut s = String::new();
+        self.write_namespace_path(&mut s, namespace_id, "/", true);
+        s
+    }
+
     pub fn write_qualified_name(
         &self,
         w: &mut impl std::fmt::Write,
-        scope: ScopeId,
+        namespace_id: NamespaceId,
         name: &str,
-        suffix_id: Option<usize>,
         delimiter: &str,
         skip_root: bool,
     ) {
-        self.write_scope_path(w, scope, delimiter, skip_root);
-        write!(w, "{delimiter}").unwrap();
-        write!(w, "{}", name).unwrap();
-        if let Some(suffix_id) = suffix_id {
-            write!(w, "_{suffix_id}").unwrap()
-        }
+        self.write_namespace_path(w, namespace_id, delimiter, skip_root);
+        w.write_str(delimiter).unwrap();
+        w.write_str(name).unwrap();
     }
 
     pub fn make_qualified_name(
         &self,
-        scope: ScopeId,
+        namespace_id: NamespaceId,
         name: StringId,
-        suffix_id: Option<usize>,
         delimiter: &str,
         skip_root: bool,
     ) -> String {
         let mut buf = String::with_capacity(64);
         self.write_qualified_name(
             &mut buf,
-            scope,
+            namespace_id,
             self.ident_str(name),
-            suffix_id,
             delimiter,
             skip_root,
         );
@@ -95,10 +99,10 @@ impl TypedProgram {
         }
     }
 
-    /// Scope path, derived name, and the function id: unique per function
+    /// Namespace path, derived name, and the function id: unique per function
     pub fn function_symbol_name(&self, function_id: FunctionId) -> String {
         let mut s = String::with_capacity(64);
-        self.write_scope_path(&mut s, self.get_function(function_id).scope, ".", true);
+        self.write_namespace_path(&mut s, self.get_function_namespace(function_id), ".", true);
         s.push('.');
         self.write_function_name(&mut s, function_id);
         write!(s, "_{}", function_id.as_u32()).unwrap();
@@ -115,9 +119,12 @@ impl TypedProgram {
             Linkage::External { link_name: None, .. } | Linkage::Exported { link_name: None } => {
                 self.ident_str(variable.name).to_string()
             }
-            Linkage::Standard => {
-                self.make_qualified_name(variable.owner_scope, variable.name, None, "__", false)
-            }
+            Linkage::Standard => self.make_qualified_name(
+                self.scopes.nearest_parent_namespace(variable.owner_scope),
+                variable.name,
+                "__",
+                false,
+            ),
         }
     }
 
@@ -187,15 +194,17 @@ impl TypedProgram {
         span
     }
 
-    pub fn module_of_span(&self, span: Span) -> ModuleId {
-        let span = self.remap_span(span);
-        let span_file = self.ast.sources.file_of(span.global_start);
-        for module in self.modules.iter() {
-            if module.contains_file(&self.mem, span_file) {
+    pub fn get_namespace_module(&self, namespace_id: NamespaceId) -> ModuleId {
+        let mut ns_id = namespace_id;
+        loop {
+            if let Some(module) = self.modules.iter().find(|m| m.namespace_id == ns_id) {
                 return module.id;
             }
+            match self.namespaces.get(ns_id).parent_id {
+                Some(parent_id) => ns_id = parent_id,
+                None => self.ice_span(Span::NONE, "namespace outside every module"),
+            }
         }
-        self.primary_module().id
     }
 
     /// Follows argument text back to the call it was written in; template

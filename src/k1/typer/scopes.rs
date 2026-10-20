@@ -7,7 +7,7 @@ use std::{fmt::Display, num::NonZeroU32};
 
 use crate::{
     kbail, kerr,
-    kmem::{Dlist, List, Mem},
+    kmem::{List, Mem},
     nz_u32_id,
     parse::{ParsedAbilityId, ParsedGlobalId, ParsedTypeDefnId, QIdent},
     static_assert_niched, static_assert_size,
@@ -1555,36 +1555,6 @@ impl TypedProgram {
         }
     }
 
-    /// Scopes don't store names; derive one from the owner, if any.
-    /// For pretty-printing and debugging only.
-    pub fn scope_owner_name(&self, scope_id: ScopeId) -> Option<StringId> {
-        match self.scopes.get_scope_owner(scope_id) {
-            ScopeOwnerId::None => None,
-            ScopeOwnerId::Namespace(ns_id) => Some(self.namespaces.get(ns_id).name),
-            ScopeOwnerId::Ability(ability_id) => self.abilities.get_opt(ability_id).map(|a| a.name),
-            // get_opt because owners can be assigned ids before the function
-            // itself is added to the pool
-            ScopeOwnerId::Function(function_id) | ScopeOwnerId::Lambda(_, function_id, _) => {
-                self.functions.get_opt(function_id).map(|f| f.name)
-            }
-        }
-    }
-
-    pub fn scope_name_to_string(&self, scope_id: ScopeId) -> String {
-        let mut name = String::new();
-        self.display_scope_name(&mut name, scope_id).unwrap();
-        name
-    }
-
-    pub fn display_scope_name<W: std::fmt::Write + ?Sized>(
-        &self,
-        name_buf: &mut W,
-        scope_id: ScopeId,
-    ) -> std::fmt::Result {
-        self.write_scope_path(name_buf, scope_id, "/", true);
-        Ok(())
-    }
-
     pub fn resolve_qident(&self, scope_id: ScopeId, qident: &QIdent) -> K1Result<ScopeId> {
         let mut ns_iter = self.ast.mem.getn(qident.path(&self.ast.mem)).iter();
 
@@ -1597,9 +1567,9 @@ impl TypedProgram {
             kbail!(
                 self,
                 first.span,
-                "Namespace not found: {} from scope: {}",
+                "Namespace not found: {} from namespace: {}",
                 first.name,
-                self.scope_name_to_string(cur_scope_id,)
+                self.namespace_id_to_string(self.scopes.nearest_parent_namespace(cur_scope_id))
             );
         };
         self.emit_ls_entity(first.span, LsEntityKind::Namespace(first_ns));
@@ -1611,11 +1581,10 @@ impl TypedProgram {
                     kerr!(
                         self,
                         ident.span,
-                        "Namespace not found: {} in scope: {}",
+                        "Namespace not found: {} in namespace: {}",
                         ident.name,
-                        format!(
-                            "{:?}",
-                            self.scope_owner_name(cur_scope_id).map(|n| self.ident_str(n))
+                        self.namespace_id_to_string(
+                            self.scopes.nearest_parent_namespace(cur_scope_id)
                         )
                     )
                 })?;
@@ -1689,21 +1658,6 @@ impl TypedProgram {
                 .find_pending_global_local(scope_to_search, name.name)
                 .map(|id| (id, scope_to_search)))
         }
-    }
-
-    pub fn name_chain(&self, id: NamespaceId) -> Dlist<StringId, MemTmp> {
-        let mut chain = Dlist::empty();
-        let mut id = id;
-        loop {
-            let namespace = self.namespaces.get(id);
-            self.get_tmp_unsafe().dlist_push_front(&mut chain, namespace.name);
-            if let Some(parent_id) = namespace.parent_id {
-                id = parent_id;
-            } else {
-                break;
-            }
-        }
-        chain
     }
 }
 

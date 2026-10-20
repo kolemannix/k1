@@ -137,7 +137,7 @@ impl TypedProgram {
         span: Span,
     ) -> K1Result<FunctionId> {
         let test = *self.get_function(function_id);
-        let ns_scope = self.namespaces.get_scope(test.namespace_id);
+        let ns_scope = self.namespaces.get_scope(self.get_function_namespace(function_id));
         let fn_scope =
             self.scopes.add_child_scope(ns_scope, ScopeType::FunctionScope, ScopeOwnerId::None);
         let test_return_type = self.types.get(test.type_id).as_function().unwrap().return_type;
@@ -159,7 +159,6 @@ impl TypedProgram {
         let thunk_id = self.add_function(TypedFunction::synthesized(
             thunk_name,
             fn_scope,
-            test.namespace_id,
             MSlice::empty(),
             body,
             test.parsed_id,
@@ -756,8 +755,8 @@ impl TypedProgram {
         )
     }
 
-    pub(super) fn synth_module_dir(&mut self, span: Span) -> TypedExprId {
-        let module_id = self.module_of_span(span);
+    pub(super) fn synth_module_dir(&mut self, scope_id: ScopeId, span: Span) -> TypedExprId {
+        let module_id = self.get_namespace_module(self.scopes.nearest_parent_namespace(scope_id));
         let dir_value = self.static_values.add_string(self.modules.get(module_id).home_dir);
         self.add_static_constant_expr(dir_value, span)
     }

@@ -176,8 +176,8 @@ state pointer means a dyn can't cross `#static` into a runtime constant.
   `build.k1` at or below the workspace root whose module holds the file, else the
   file alone.
 - Host facts: `b.target`, `ctx.build.target`, `k1/host-platform.dylib-ext()`.
-  `k1/module-dir()` is the dir of the module whose source holds the call (macro
-  argument text counts as the caller's).
+  `k1/module-dir()` is the dir of the module whose namespace compiles the call
+  (all macro output counts as the caller's).
 - A `library = true` primary emits `lib<name>.{dylib,so}` and a fat `lib<name>.a` exposing
   only exports (`examples/klib`). `k1 run` rejects it; `k1 test` accepts it.
 

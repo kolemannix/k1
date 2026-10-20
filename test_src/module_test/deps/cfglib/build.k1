@@ -1,4 +1,5 @@
-let cfg: { backlog: u32, tls: bool } = k1/module-params(.{ backlog = 128, tls = false })
+let cfg: { backlog: u32, tls: bool, dir: string } =
+  k1/module-params(.{ backlog = 128, tls = false, dir = k1/module-dir() })
 
 fn module(): k1/module {
   .0 | .{ setup-outputs = ["gen.k1"] }
@@ -6,5 +7,5 @@ fn module(): k1/module {
 
 fn setup(_ctx: k1/setup-ctx) {
   let text = "fn setup-backlog(): u32 { ${cfg.backlog} }\n"
-  core/files/write-entire-file("${k1/module-dir()}/gen.k1", text).!
+  core/files/write-entire-file("${cfg.dir}/gen.k1", text).!
 }

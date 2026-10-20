@@ -488,7 +488,6 @@ impl TypedProgram {
                 is_tls: false,
                 linkage: Linkage::Standard,
                 ast_id: ParsedGlobalId::PENDING,
-                parent_scope: repl_ns_scope,
                 reload_ns: None,
             },
             global_id,

@@ -4643,9 +4643,8 @@ pub fn display_unit_name(
             let function = k1.functions.get(function_id);
             k1.write_qualified_name(
                 w,
-                function.scope,
+                k1.get_function_namespace(function_id),
                 k1.ident_str(function.name),
-                None,
                 "/",
                 true,
             );

@@ -2025,8 +2025,8 @@ fn cg_error_to_message(k1: &TypedProgram, e: CgError) -> K1Message {
 pub fn codegen_module(ctx: &Context, k1: &mut TypedProgram) -> Result<()> {
     // Ns-driven, not fn-driven: a reload ns holding only globals still gets a dylib
     let mut reload_nss: Vec<NamespaceId> = vec![];
-    for ns_id in k1.namespaces.namespaces.iter_ids() {
-        if k1.namespaces.get(ns_id).reload {
+    for (ns_id, ns) in k1.namespaces.iter() {
+        if ns.reload {
             reload_nss.push(ns_id);
         }
     }

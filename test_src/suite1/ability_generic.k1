@@ -92,6 +92,23 @@ ns ability_generic {
     assert-equals(added.y, 2i32 + 2)
   }
 
+  ns sealed {
+    type token = { v: i64 }
+    ability conv[out] {
+      fn conv(self): out
+      fn tok(self): token
+    }
+  }
+  impl sealed/conv[out = i64] for i64 {
+    fn conv(self): i64 { self }
+    fn tok(self): sealed/token { sealed/token.{ v = self } }
+  }
+
+  fn(test) specialized-ability-resolves-names-where-defined() {
+    assert-equals(sealed/conv/tok(7: i64).v, 7)
+    assert-equals(sealed/conv/conv(7: i64), 7)
+  }
+
   fn(test) blanket-to-from-and-wrap() {
     let _btoc: char = (101: u8).to()
 

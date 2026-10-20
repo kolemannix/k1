@@ -467,12 +467,7 @@ impl TypedProgram {
         for constraint in &constraint_impls {
             let constraint_signature = self.ability_impls.get(constraint.full_impl_id).signature();
 
-            let sig = self.substitute_in_ability_signature(
-                &subst_set,
-                constraint_signature,
-                scope_id,
-                span,
-            );
+            let sig = self.substitute_in_ability_signature(&subst_set, constraint_signature, span);
             debug!(
                 "[infer {infer_depth}] trying to learn from sig: {}",
                 self.ability_signature_to_string(sig)

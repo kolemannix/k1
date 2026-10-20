@@ -20,7 +20,7 @@ pub struct NsTree {
 pub fn build_tree(k1: &TypedProgram) -> NsTree {
     let mut children: FxHashMap<NamespaceId, Vec<NamespaceId>> = FxHashMap::default();
     let mut root = None;
-    for (id, ns) in k1.namespaces.namespaces.iter_with_ids() {
+    for (id, ns) in k1.namespaces.iter() {
         match ns.parent_id {
             Some(parent) => children.entry(parent).or_default().push(id),
             None => root = Some(id),
@@ -38,8 +38,7 @@ pub fn build_tree(k1: &TypedProgram) -> NsTree {
 
 fn find_child(k1: &TypedProgram, parent: NamespaceId, name: StringId) -> Option<NamespaceId> {
     k1.namespaces
-        .namespaces
-        .iter_with_ids()
+        .iter()
         .find(|(_, ns)| ns.parent_id == Some(parent) && ns.name == name)
         .map(|(id, _)| id)
 }
@@ -64,7 +63,7 @@ fn ns_href(path: &[&str]) -> String {
 
 fn ns_canonical_href(k1: &TypedProgram, ns_id: NamespaceId) -> String {
     let mut path = String::new();
-    k1.write_scope_path(&mut path, k1.namespaces.get_scope(ns_id), "/", true);
+    k1.write_namespace_path(&mut path, ns_id, "/", true);
     if path.is_empty() { "/ns".to_string() } else { format!("/ns/{path}") }
 }
 

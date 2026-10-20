@@ -77,9 +77,8 @@ fn build_tree(k1: &mut TypedProgram) -> Result<Node, String> {
     let mut specializations: FxHashMap<FunctionId, Vec<Node>> = FxHashMap::default();
     let mut generic_order: Vec<FunctionId> = Vec::new();
     let mut place = |k1: &TypedProgram, function_id: FunctionId, node: Node| {
-        let function = k1.get_function(function_id);
-        let ns_id = function.namespace_id;
-        match function.kind {
+        let ns_id = k1.get_function_namespace(function_id);
+        match k1.get_function(function_id).kind {
             TypedFunctionKind::AbilityImpl(ability_id, _) => {
                 let entry = ability_members.entry((ns_id, ability_id)).or_default();
                 if entry.is_empty() {

@@ -548,7 +548,6 @@ impl TypedProgram {
                 is_tls: parsed.is_thread_local,
                 linkage,
                 ast_id: parsed_global_id,
-                parent_scope: scope_id,
                 reload_ns,
             },
             global_id,
@@ -642,9 +641,9 @@ impl TypedProgram {
         let global_span = typed_global.span;
         let is_external = typed_global.linkage.is_external();
         let parsed_expr = typed_global.parsed_expr;
-        let scope_id = typed_global.parent_scope;
         let declared_type = typed_global.type_id;
         let variable_id = typed_global.variable_id;
+        let scope_id = self.variables.get(variable_id).owner_scope;
         let value_expr_id = if is_external {
             match parsed_expr {
                 None => {
@@ -1454,7 +1453,8 @@ impl TypedProgram {
 
         let parse_kind =
             if is_definition { ParseAdHocKind::Definitions } else { ParseAdHocKind::Expr };
-        let module_id = self.module_of_span(span);
+        let module_id =
+            self.get_namespace_module(self.scopes.nearest_parent_namespace(ctx.scope_id));
         let parsed_metaprogram =
             self.traced(TraceKind::Parse, generated_path.as_u32(), 0, |k1| {
                 k1.parse_metaprogram_source(module_id, source_for_emission, parse_kind)
