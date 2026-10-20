@@ -402,13 +402,9 @@ impl IntegerType {
             IntegerType::U64 | IntegerType::I64 => ScalarType::I64,
         }
     }
-
-    pub fn get_pt(&self) -> PhysicalType {
-        PhysicalType::scalar(self.get_scalar_type())
-    }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum FloatType {
     F32 = 0,
     F64 = 1,
@@ -617,7 +613,7 @@ impl TypedProgram {
                 }
                 true
             }
-            (Type::Float(f1), Type::Float(f2)) => f1.width() == f2.width(),
+            (Type::Float(f1), Type::Float(f2)) => f1 == f2,
             (Type::Bool, Type::Bool) => true,
             (Type::Pointer, Type::Pointer) => true,
             (Type::Struct(s1), Type::Struct(s2)) => {
@@ -824,9 +820,7 @@ impl TypedProgram {
                 lt.function_type.hash(state);
                 lt.function_id.hash(state);
             }
-            Type::Float(ft) => {
-                ft.width().bits().hash(state);
-            }
+            Type::Float(ft) => discriminant(ft).hash(state),
             Type::Pointer => {}
             Type::Never => {}
             Type::LambdaObject(co) => {
@@ -1470,14 +1464,18 @@ impl PhysicalType {
         self.scalar_tag() != 0
     }
 
-    pub const fn is_int(self) -> bool {
-        let tag = self.scalar_tag();
-        tag >= ScalarType::I8 as u32 && tag <= ScalarType::I64 as u32
+    pub fn is_int(self) -> bool {
+        match self.as_scalar() {
+            Some(st) => st.is_int(),
+            None => false,
+        }
     }
 
-    pub const fn is_float(self) -> bool {
-        let tag = self.scalar_tag();
-        tag == ScalarType::F32 as u32 || tag == ScalarType::F64 as u32
+    pub fn is_float(self) -> bool {
+        match self.as_scalar() {
+            Some(st) => st.is_float(),
+            None => false,
+        }
     }
 
     pub fn is_empty(self) -> bool {
@@ -2427,12 +2425,7 @@ impl TypedProgram {
                 let st = se.int_type.get_scalar_type();
                 PhysicalTypeResult::Yes(self.make_named_scalar(st, type_id))
             }
-            Type::Float(FloatType::F32) => {
-                PhysicalTypeResult::Yes(PhysicalType::scalar(ScalarType::F32))
-            }
-            Type::Float(FloatType::F64) => {
-                PhysicalTypeResult::Yes(PhysicalType::scalar(ScalarType::F64))
-            }
+            Type::Float(f) => PhysicalTypeResult::Yes(PhysicalType::scalar(f.get_scalar_type())),
             Type::Reference(_) => {
                 PhysicalTypeResult::Yes(self.make_named_scalar(ScalarType::Pointer, type_id))
             }
@@ -2997,10 +2990,6 @@ impl TypedProgram {
         let mut s = String::new();
         self.display_pt(&mut s, t).unwrap();
         s
-    }
-
-    pub fn display_ptp(&self, w: &mut impl std::fmt::Write, ptp: PhysicalType) -> std::fmt::Result {
-        self.display_pt(w, ptp)
     }
 
     pub fn display_pt(&self, w: &mut impl std::fmt::Write, t: PhysicalType) -> std::fmt::Result {

@@ -6,13 +6,12 @@
 
 use std::fmt::Write;
 
-use crate::arith::{Cmp3Op, FloatCmpPred, FloatOp, FloatUnop, IntCmpPred, OverflowOp};
 use crate::ir;
 use crate::typer::TypedProgram;
 
 use super::{
-    CastKind, Opcode, VALUE_MASK_CONST_ID, VALUE_MASK_FRAME_OFFSET, builtin_from_tag, header_a,
-    header_b, header_op,
+    Opcode, VALUE_MASK_CONST_ID, VALUE_MASK_FRAME_OFFSET, builtin_from_tag, header_a, header_b,
+    header_op,
 };
 
 fn write_src(w: &mut String, k1: &TypedProgram, src: u32) {
@@ -290,11 +289,37 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
             write_src(w, k1, ops[2]);
             write!(w, "*{}", ops[3]).unwrap();
         }
-        Opcode::IntCmp
-        | Opcode::FloatCmp
-        | Opcode::IntCmp3
-        | Opcode::IntOverflows
-        | Opcode::FloatBinop
+        Opcode::IntAddOverflowsU
+        | Opcode::IntAddOverflowsS
+        | Opcode::IntSubOverflowsU
+        | Opcode::IntSubOverflowsS
+        | Opcode::IntMulOverflowsU
+        | Opcode::IntMulOverflowsS
+        | Opcode::IntEq
+        | Opcode::IntSlt
+        | Opcode::IntSle
+        | Opcode::IntSgt
+        | Opcode::IntSge
+        | Opcode::IntUlt
+        | Opcode::IntUle
+        | Opcode::IntUgt
+        | Opcode::IntUge
+        | Opcode::IntNe
+        | Opcode::IntUcmp
+        | Opcode::IntScmp
+        | Opcode::FloatAdd
+        | Opcode::FloatSub
+        | Opcode::FloatMul
+        | Opcode::FloatDiv
+        | Opcode::FloatRem
+        | Opcode::FloatMin
+        | Opcode::FloatMax
+        | Opcode::FloatEq
+        | Opcode::FloatLt
+        | Opcode::FloatLe
+        | Opcode::FloatGt
+        | Opcode::FloatGe
+        | Opcode::FloatNe
         | Opcode::IntAdd
         | Opcode::IntSub
         | Opcode::IntMul
@@ -312,27 +337,12 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
         | Opcode::Shl
         | Opcode::ShrU
         | Opcode::ShrS => {
-            let tag = b as u8;
-            match op {
-                Opcode::IntCmp => write!(w, "icmp.{}.{} ", IntCmpPred::from_u8(tag).name(), a),
-                Opcode::FloatCmp => write!(w, "fcmp.{}.{} ", FloatCmpPred::from_u8(tag).name(), a),
-                Opcode::IntCmp3 => write!(w, "{}.{} ", Cmp3Op::from_u8(tag).name(), a),
-                Opcode::IntOverflows => write!(w, "{}.{} ", OverflowOp::from_u8(tag).name(), a),
-                Opcode::FloatBinop => write!(w, "{}.{} ", FloatOp::from_u8(tag).name(), a),
-                _ => write!(w, "{}.{} ", op.name(), a),
-            }
-            .unwrap();
+            write!(w, "{}.{} ", op.name(), a).unwrap();
             write_dst(w, ops[0]);
             write!(w, " <- ").unwrap();
             write_src(w, k1, ops[1]);
             write!(w, ", ").unwrap();
             write_src(w, k1, ops[2]);
-        }
-        Opcode::FloatUnop => {
-            write!(w, "{}.{} ", FloatUnop::from_u8(b as u8).name(), a).unwrap();
-            write_dst(w, ops[0]);
-            write!(w, " <- ").unwrap();
-            write_src(w, k1, ops[1]);
         }
         Opcode::FloatFma => {
             write!(w, "fma.{} ", a).unwrap();
@@ -344,21 +354,41 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
             write!(w, ", ").unwrap();
             write_src(w, k1, ops[3]);
         }
-        Opcode::BoolNegate | Opcode::BitNot => {
+        Opcode::BoolNegate => {
             write!(w, "{} ", op.name()).unwrap();
             write_dst(w, ops[0]);
             write!(w, " <- ").unwrap();
             write_src(w, k1, ops[1]);
         }
-        Opcode::IntCtz | Opcode::IntClz | Opcode::IntPopcount | Opcode::IntBswap => {
+        Opcode::BitNot
+        | Opcode::IntCtz
+        | Opcode::IntClz
+        | Opcode::IntPopcount
+        | Opcode::IntBswap
+        | Opcode::FloatNeg
+        | Opcode::FloatSqrt
+        | Opcode::FloatFloor
+        | Opcode::FloatCeil
+        | Opcode::FloatRoundToZero
+        | Opcode::FloatRoundEven
+        | Opcode::IntTrunc
+        | Opcode::FloatTrunc
+        | Opcode::FloatExt
+        | Opcode::F32ToUInt
+        | Opcode::F32ToSInt
+        | Opcode::F64ToUInt
+        | Opcode::F64ToSInt
+        | Opcode::UIntToF32
+        | Opcode::UIntToF64
+        | Opcode::SIntToF32
+        | Opcode::SIntToF64 => {
             write!(w, "{}.{} ", op.name(), a).unwrap();
             write_dst(w, ops[0]);
             write!(w, " <- ").unwrap();
             write_src(w, k1, ops[1]);
         }
-        Opcode::Cast => {
-            let kind = CastKind::from_u8(a);
-            write!(w, "cast.{:?} ", kind).unwrap();
+        Opcode::IntExtS => {
+            write!(w, "{}.{}.{} ", op.name(), a, b).unwrap();
             write_dst(w, ops[0]);
             write!(w, " <- ").unwrap();
             write_src(w, k1, ops[1]);

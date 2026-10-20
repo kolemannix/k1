@@ -20,9 +20,8 @@ use crate::{ice_span, kbail, kerr, parse::StringId};
 /// Core FFI dispatch on already-resolved argument values; the bc VM has the
 /// args contiguous in its out-arg region.
 ///
-/// `ret_dst`: caller-provided storage for an aggregate return. When given,
-/// libffi writes the struct directly into it (the bc VM passes its sret
-/// pointer, so no temp buffer and no copy afterwards). Ignored for scalar
+/// `ret_dst`: the caller's storage for an aggregate return, which libffi
+/// writes directly (the bc VM passes its sret pointer); None for scalar
 /// returns, which land in a local word and go back by value.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_ffi_call_resolved(
@@ -97,26 +96,13 @@ pub(crate) fn handle_ffi_call_resolved(
     // Return storage:
     // - Scalar (and void): a local word. libffi widens sub-word integral
     //   returns to a full ffi_arg, so this must be >= 8 bytes; a u64 is both
-    //   big enough and aligned enough. The value goes back by-value (the bc
-    //   VM's ret_reg / the old VM's instruction slot)
-    // - Aggregate: the caller's destination when provided (bc sret; libffi
-    //   writes exactly rtype->size bytes, and k1 layouts match the C ABI),
-    //   otherwise a stack temp sized from the cif (old engine path; its
-    //   fulfill_return copies out of it).
+    //   big enough and aligned enough. The value goes back by-value
+    // - Aggregate: the caller's sret (libffi writes exactly rtype->size bytes,
+    //   and k1 layouts match the C ABI)
     let mut scalar_ret_word: u64 = 0;
-    let result_storage: *mut u8 = if return_pt.is_agg() {
-        match ret_dst {
-            Some(dst) => dst,
-            None => unsafe {
-                let ret_size = (*(ffi_handle.cif.rtype)).size;
-                let ret_align = (*(ffi_handle.cif.rtype)).alignment;
-                debug!("result space is {} {}", ret_size, ret_align);
-                vm.stack
-                    .push_layout_uninit(Layout { size: ret_size as u32, align: ret_align as u32 })
-            },
-        }
-    } else {
-        &mut scalar_ret_word as *mut u64 as *mut u8
+    let result_storage: *mut u8 = match ret_dst {
+        Some(dst) => dst,
+        None => &mut scalar_ret_word as *mut u64 as *mut u8,
     };
 
     unsafe {

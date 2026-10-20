@@ -1292,11 +1292,11 @@ impl Scopes {
     pub fn add_use_binding(
         &mut self,
         scope_id: ScopeId,
-        useable_symbol: &UseableSymbol,
+        useable_symbol: UseableSymbolId,
         name_to_use: StringId,
         provenance: Provenance,
     ) {
-        match useable_symbol.id {
+        match useable_symbol {
             UseableSymbolId::Function(function_id) => {
                 let _ = self.bind_function(scope_id, name_to_use, function_id, provenance);
             }
@@ -1730,13 +1730,6 @@ impl ScopeOwnerId {
             _ => None,
         }
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct UseableSymbol {
-    pub id: UseableSymbolId,
-    #[allow(unused)]
-    pub source_scope: ScopeId,
 }
 
 #[derive(Debug, Clone, Copy)]

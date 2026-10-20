@@ -836,10 +836,8 @@ impl TypedProgram {
         span: Span,
     ) -> MatchingCondition {
         let sum_type = self.types.get(self.exprs.get_type(sum_expr)).expect_sum();
-        let tag_type = sum_type.tag_type;
         let variant_tag = self.sum_variant_by_index(sum_type.variants, variant_index).tag_value;
-        let subject =
-            self.exprs.add(TypedExpr::SumGetTag(GetSumTag { sum_expr }), tag_type.type_id(), span);
+        let subject = self.synth_sum_get_tag(sum_expr, span);
         let value = self.static_values.add_int(variant_tag);
         MatchingCondition {
             instrs: self.mem.pushn(&[MatchingConditionInstr::IntEquals { subject, value }]),

@@ -54,6 +54,7 @@ fn(test) generic-and-native-fn-pointers() {
   assert-equals((native-add-three.&)(4), 7)
   assert(test-compile(add/add[u64].&).!.contains-string("Ability function 'add' has no address"))
   assert(test-compile(f64/sqrt.&).!.contains-string("Builtin 'sqrt' has no address"))
+  assert(test-compile(lambdas/some-fn-param1.&).!.contains-string("fn-like type parameters"))
 }
 
 fn(test) callee-evaluated-once() {

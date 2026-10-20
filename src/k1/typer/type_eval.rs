@@ -1670,8 +1670,6 @@ impl TypedProgram {
         Ok(Some(self.add_type_anon(Type::Vector(VectorType { element_type, size_type }))))
     }
 
-    /// Checks whatever is concrete; abstract element/lane-count parts are checked
-    /// again at instantiation sites (IR lowering re-validates for intrinsics)
     pub(super) fn validate_vector_parts(
         &self,
         element_type: TypeId,

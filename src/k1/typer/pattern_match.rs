@@ -468,13 +468,6 @@ impl TypedProgram {
         self.tmp.push_h(MatchWitness { type_id, kind, children })
     }
 
-    #[allow(unused)]
-    fn match_witness_to_string(&self, witness: MatchWitnessId) -> String {
-        let mut result = String::new();
-        self.display_match_witness(witness, &mut result).unwrap();
-        result
-    }
-
     pub(crate) fn display_match_witness<W: std::fmt::Write + ?Sized>(
         &self,
         witness_id: MatchWitnessId,

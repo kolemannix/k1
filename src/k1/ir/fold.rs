@@ -22,12 +22,11 @@ pub(super) fn fold_inst(u: &UnitView, inst: &Inst) -> Option<Simplified> {
             }
             let mask = arith::width_mask(width);
             let zero = Simplified::Const(t, 0);
-            let is_shift_or_rotate = op.takes_count();
             match (op, l, r) {
-                (_, _, Some(r)) if is_shift_or_rotate && (r as u32) & (width as u32 - 1) == 0 => {
+                (_, _, Some(r)) if op.takes_count() && (r as u32) & (width as u32 - 1) == 0 => {
                     Some(Simplified::Value(lhs))
                 }
-                (_, Some(0), _) if is_shift_or_rotate => Some(zero),
+                (_, Some(0), _) if op.takes_count() => Some(zero),
                 (IntOp::Add | IntOp::Or | IntOp::Xor, Some(0), _) => Some(Simplified::Value(rhs)),
                 (IntOp::Add | IntOp::Sub | IntOp::Or | IntOp::Xor, _, Some(0)) => {
                     Some(Simplified::Value(lhs))
@@ -58,7 +57,7 @@ pub(super) fn fold_inst(u: &UnitView, inst: &Inst) -> Option<Simplified> {
         }
         Inst::IntCmp { lhs, rhs, pred, width } => {
             if let (Some(l), Some(r)) = (lhs.const_bits(u), rhs.const_bits(u)) {
-                let b = arith::int_cmp(width, pred, l, r);
+                let b = arith::int_cmp(pred, width, l, r);
                 return Some(Simplified::Const(ScalarType::I8, b as u64));
             }
             if lhs != rhs {
@@ -79,7 +78,7 @@ pub(super) fn fold_inst(u: &UnitView, inst: &Inst) -> Option<Simplified> {
             Some(Simplified::Const(t, bits))
         }
         Inst::FloatCmp { lhs, rhs, pred, width } => {
-            let b = arith::float_cmp(width, pred, lhs.const_bits(u)?, rhs.const_bits(u)?);
+            let b = arith::float_cmp(pred, width, lhs.const_bits(u)?, rhs.const_bits(u)?);
             Some(Simplified::Const(ScalarType::I8, b as u64))
         }
         Inst::FloatUnop { op, v, t } => {

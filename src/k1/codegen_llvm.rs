@@ -3329,12 +3329,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             |c: &mut Self, type_id: TypeId| -> CgResult<BasicTypeEnum<'ctx>> {
                 match c.k1.types.get(type_id) {
                     Type::Bool => Ok(c.builtin_types.i1.as_basic_type_enum()),
-                    Type::Vector(_) => {
-                        let pt = c.k1.get_physical_type_computed(type_id).unwrap().expect_agg();
-                        let (elem, lanes) = c.k1.agg_types.get(pt).agg_type.expect_vector();
-                        Ok(c.vec_llvm_type(elem, lanes).as_basic_type_enum())
-                    }
-                    Type::Char | Type::Integer(_) | Type::Float(_) | Type::Pointer => {
+                    Type::Char
+                    | Type::Integer(_)
+                    | Type::Float(_)
+                    | Type::Pointer
+                    | Type::Vector(_) => {
                         let pt = c.k1.get_physical_type_computed(type_id).unwrap();
                         Ok(c.codegen_type(pt).rich_type())
                     }
@@ -3381,17 +3380,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Type::Bool => self.bool_to_i1(arg_value.into_int_value(), "").as_basic_value_enum(),
                 Type::Vector(_) => {
                     // Vector args arrive as addresses; pass by value
-                    let pt =
-                        self.k1.get_physical_type_computed(param_type_id).unwrap().expect_agg();
-                    let (elem, lanes) = self.k1.agg_types.get(pt).agg_type.expect_vector();
-                    let vec_type = self.vec_llvm_type(elem, lanes);
-                    let load = self
-                        .builder
-                        .build_load(vec_type, arg_value.into_pointer_value(), "")
-                        .unwrap();
-                    let align = elem.get_layout().stride() * lanes;
-                    load.as_instruction_value().unwrap().set_alignment(align).unwrap();
-                    load
+                    let pt = self.k1.get_physical_type_computed(param_type_id).unwrap();
+                    let cg_ty = self.codegen_type(pt);
+                    self.load_at_k1_align(cg_ty.rich_type(), arg_value.into_pointer_value(), &cg_ty)
                 }
                 _ => arg_value,
             };
@@ -3782,8 +3773,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
     }
 
-    fn vec_llvm_type(&mut self, elem: ScalarType, lanes: u32) -> LlvmVectorType<'ctx> {
-        match self.codegen_type(PhysicalType::scalar(elem)).rich_type() {
+    fn vec_llvm_type(&self, elem: ScalarType, lanes: u32) -> LlvmVectorType<'ctx> {
+        match self.scalar_basic_type(elem) {
             BasicTypeEnum::IntType(it) => it.vec_type(lanes),
             BasicTypeEnum::FloatType(ft) => ft.vec_type(lanes),
             other => panic!("Non-scalar vector element type: {other}"),
@@ -3818,7 +3809,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     fn vec_align(&self, vop: &ir::VecOpData) -> u32 {
-        vop.elem.get_layout().stride() * vop.lanes
+        vop.elem.get_layout().vector_me(vop.lanes as usize).align
     }
 
     /// Returns the scalar result for value-producing ops (to-mask), None otherwise
@@ -4142,9 +4133,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(())
             }
             Inst::AtomicLoad { t, src, ord } => {
-                let cg_ty = self.codegen_type(PhysicalType::scalar(t));
                 let src_ptr = self.resolve_value(inst_mappings, src)?.into_pointer_value();
-                let load = self.builder.build_load(cg_ty.rich_type(), src_ptr, "").unwrap();
+                let load = self.builder.build_load(self.scalar_basic_type(t), src_ptr, "").unwrap();
                 let instr = load.as_instruction_value().unwrap();
                 instr.set_alignment(t.get_layout().align).unwrap();
                 instr.set_atomic_ordering(Self::llvm_atomic_ordering(ord)).unwrap();
@@ -5326,8 +5316,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     fn codegen_int_value(&mut self, integer: TypedIntValue) -> BasicValueEnum<'ctx> {
-        let cg_ty = self.codegen_type(integer.get_integer_type().get_pt());
-        let llvm_int_ty = cg_ty.rich_type().into_int_type();
+        let llvm_int_ty = self.scalar_basic_type(integer.get_scalar_type()).into_int_type();
         llvm_int_ty.const_int(integer.to_u64_bits(), false).as_basic_value_enum()
     }
 
@@ -5517,7 +5506,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     fn codegen_raw_bytes_array(&mut self, raw: StaticRawContainer) -> ArrayValue<'ctx> {
-        let element_type = self.codegen_type(PhysicalType::scalar(raw.scalar)).rich_type();
+        let element_type = self.scalar_basic_type(raw.scalar);
         let bytes = self.k1.static_values.mem.getn(raw.bytes);
         if bytes.is_empty() {
             return element_type.array_type(0).const_zero();

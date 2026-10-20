@@ -72,9 +72,9 @@ macro_rules! check_width {
                         }
                     }
                 }
-                assert_eq!(int_cmp(width, IntCmpPred::Ult, a, b), ua < ub);
-                assert_eq!(int_cmp(width, IntCmpPred::Slt, a, b), ia < ib);
-                assert_eq!(int_cmp(width, IntCmpPred::Eq, a, b), ua == ub);
+                assert_eq!(int_cmp(IntCmpPred::Ult, width, a, b), ua < ub);
+                assert_eq!(int_cmp(IntCmpPred::Slt, width, a, b), ia < ib);
+                assert_eq!(int_cmp(IntCmpPred::Eq, width, a, b), ua == ub);
             }
             let ua = a as $u;
             assert_eq!(int_unop(IntUnop::Not, width, a), canon(!ua));

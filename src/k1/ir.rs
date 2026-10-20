@@ -1,10 +1,10 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
 use crate::arith::{
-    Cmp3Op, FloatCmpPred, FloatOp, FloatUnop, IntCmpPred, IntOp, IntUnop, OverflowOp,
+    self, Cmp3Op, FloatCmpPred, FloatOp, FloatUnop, IntCmpPred, IntOp, IntUnop, OverflowOp,
 };
 use crate::kmem::List;
-use crate::parse::{self, NumericWidth, StringId};
+use crate::parse::{self, StringId};
 use crate::typer::scopes::ScopeId;
 use crate::typer::static_value::StaticValueId;
 use crate::typer::trace::{FrameId, TraceKind};
@@ -691,10 +691,6 @@ pub struct SwitchCase {
     pub target: BlockId,
 }
 
-pub fn low_mask_from_u8(width: u8) -> u64 {
-    if width >= 64 { u64::MAX } else { (1u64 << width) - 1 }
-}
-
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Value {
     Inst(InstId),
@@ -1125,7 +1121,7 @@ pub fn get_value_kind(u: &UnitView, value: Value) -> InstKind {
 }
 
 pub fn switch_target(cases: &[SwitchCase], default: BlockId, width: u8, bits: u64) -> BlockId {
-    let bits = bits & low_mask_from_u8(width);
+    let bits = bits & arith::width_mask(width);
     for case in cases {
         if case.value == bits {
             return case.target;
@@ -1229,15 +1225,6 @@ impl InstKind {
 
     fn is_ptr(&self) -> bool {
         matches!(self, InstKind::Value(pt) if pt.is_ptr())
-    }
-    fn is_int(&self) -> bool {
-        matches!(self, InstKind::Value(pt) if pt.is_int())
-    }
-    fn is_i8(&self) -> bool {
-        matches!(self, InstKind::Value(pt) if pt.as_scalar() == Some(ScalarType::I8))
-    }
-    fn is_float(&self) -> bool {
-        matches!(self, InstKind::Value(pt) if pt.is_float())
     }
     fn is_aggregate(&self) -> bool {
         matches!(self, InstKind::Value(pt) if pt.is_agg())
@@ -3356,7 +3343,7 @@ fn compile_vector_op(
     use crate::typer::VecOpKind;
     match op {
         VecOpKind::Splat => {
-            let (elem, lanes) = vector_pt_parts(b, callee_fn_type.return_type)?;
+            let (elem, lanes) = vector_pt_parts(b, callee_fn_type.return_type);
             let value = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let locn = match dst {
                 None => {
@@ -3403,7 +3390,7 @@ fn compile_vector_op(
                 _ => unreachable!(),
             };
             let ret_pt = callee_fn_type.return_type;
-            let (elem, lanes) = vector_pt_parts(b, ret_pt)?;
+            let (elem, lanes) = vector_pt_parts(b, ret_pt);
             let lhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let rhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
             let locn = match dst {
@@ -3416,7 +3403,7 @@ fn compile_vector_op(
         }
         VecOpKind::Shuffle => {
             let ret_pt = callee_fn_type.return_type;
-            let (elem, lanes) = vector_pt_parts(b, ret_pt)?;
+            let (elem, lanes) = vector_pt_parts(b, ret_pt);
             let mask_expr = *b.k1.mem.get_nth(call.args, 2);
             let TypedExpr::StaticValue(mask) = b.k1.exprs.get(mask_expr) else {
                 b_ice!(b, "vector/shuffle mask is not static after typecheck")
@@ -3434,7 +3421,7 @@ fn compile_vector_op(
         }
         VecOpKind::BitNot => {
             let ret_pt = callee_fn_type.return_type;
-            let (elem, lanes) = vector_pt_parts(b, ret_pt)?;
+            let (elem, lanes) = vector_pt_parts(b, ret_pt);
             let lhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let locn = match dst {
                 None => b.push_alloca(ret_pt, IrComment::VecNotResult).as_value(),
@@ -3463,7 +3450,7 @@ fn compile_vector_op(
                 }
             };
             let ret_pt = callee_fn_type.return_type;
-            let (elem, lanes) = vector_pt_parts(b, ret_pt)?;
+            let (elem, lanes) = vector_pt_parts(b, ret_pt);
             let lhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let count = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
             let locn = match dst {
@@ -3476,7 +3463,7 @@ fn compile_vector_op(
         }
         VecOpKind::ToMask | VecOpKind::ReduceOr => {
             let vec_pt = b.k1.ir.mem.get_nth(callee_fn_type.params, 0).pt;
-            let (elem, lanes) = vector_pt_parts(b, vec_pt)?;
+            let (elem, lanes) = vector_pt_parts(b, vec_pt);
             let lhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let id = b.u.add_vec_op(VecOpData {
                 op: if op == VecOpKind::ToMask { VecOpIr::ToMask } else { VecOpIr::ReduceOr },
@@ -3491,7 +3478,6 @@ fn compile_vector_op(
         }
         VecOpKind::Load => {
             let ret_pt = callee_fn_type.return_type;
-            let _ = vector_pt_parts(b, ret_pt)?;
             let src = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let locn = match dst {
                 None => b.push_alloca(ret_pt, IrComment::VectorLoadResult).as_value(),
@@ -3502,7 +3488,6 @@ fn compile_vector_op(
         }
         VecOpKind::Store => {
             let vec_pt = b.k1.ir.mem.get_nth(callee_fn_type.params, 0).pt;
-            let _ = vector_pt_parts(b, vec_pt)?;
             let vec_value = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let dst_ptr = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
             b.push_copy_ext(dst_ptr, vec_value, vec_pt, true, false, IrComment::VectorStore);
@@ -3510,7 +3495,7 @@ fn compile_vector_op(
         }
         VecOpKind::GetLane => {
             let vec_pt = b.k1.ir.mem.get_nth(callee_fn_type.params, 0).pt;
-            let (elem, _) = vector_pt_parts(b, vec_pt)?;
+            let (elem, _) = vector_pt_parts(b, vec_pt);
             let base = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let element_index = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
             let offset = b.push_inst(
@@ -3523,7 +3508,7 @@ fn compile_vector_op(
         }
         VecOpKind::WithLane => {
             let ret_pt = callee_fn_type.return_type;
-            let (elem, _) = vector_pt_parts(b, ret_pt)?;
+            let (elem, _) = vector_pt_parts(b, ret_pt);
             let src_vec = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let element_index = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
             let value = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 2))?;
@@ -3555,24 +3540,8 @@ fn callee_vector_elem_is_signed(b: &mut Builder, call: &Call) -> bool {
     b.k1.is_type_signed(vector.element_type)
 }
 
-fn vector_pt_parts(b: &mut Builder, pt: PhysicalType) -> K1Result<(ScalarType, u32)> {
-    let PhysicalTypeEnum::Agg(agg_id) = pt.as_enum() else {
-        kbail!(
-            b.k1,
-            b.cur_span,
-            "vector intrinsic requires a concrete vector type; got {}",
-            b.k1.pt_to_string(pt)
-        );
-    };
-    match b.k1.agg_types.get(agg_id).agg_type {
-        AggType::Vector { element_pt, len } => Ok((element_pt.expect_scalar(), len)),
-        _ => Err(kerr!(
-            b.k1,
-            b.cur_span,
-            "vector intrinsic requires a vector type; got {}",
-            b.k1.pt_to_string(pt)
-        )),
-    }
+fn vector_pt_parts(b: &Builder, pt: PhysicalType) -> (ScalarType, u32) {
+    b.k1.agg_types.get(pt.expect_agg()).agg_type.expect_vector()
 }
 
 fn check_atomic_scalar_type(
@@ -3794,7 +3763,7 @@ fn get_static_value_int_bits_masked(k1: &TypedProgram, value_id: StaticValueId, 
             k1.static_value_to_string(value_id)
         ),
     };
-    bits & low_mask_from_u8(width)
+    bits & arith::width_mask(width)
 }
 
 fn compile_match_as_select(
@@ -4161,8 +4130,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     if !get_value_kind(&u, dst).is_storage() {
                         errors.push(format!("i{inst_id}: store dst is not a ptr"))
                     }
-                    if get_value_kind(&u, value).as_value().and_then(|pt| pt.as_scalar()) != Some(t)
-                    {
+                    if scalar_of(value) != Some(t) {
                         errors.push(format!("i{inst_id}: store value type is not the store type"))
                     }
                 }
@@ -4234,15 +4202,10 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     }
                 }
                 Inst::ArrayOffset { base, element_index, .. } => {
-                    let base_type = get_value_kind(&u, base);
-                    let index_type = get_value_kind(&u, element_index);
-                    if !base_type.is_storage() {
+                    if !get_value_kind(&u, base).is_storage() {
                         errors.push(format!("i{inst_id}: array_offset base is not a ptr"))
                     }
-
-                    if index_type.as_value().and_then(|t| t.as_scalar()).map(|st| st.width())
-                        != Some(NumericWidth::B64)
-                    {
+                    if !scalar_of(element_index).is_some_and(|st| st.is_word_int()) {
                         errors.push(format!(
                             "i{inst_id}: array_offset index type is not word-sized int",
                         ))
@@ -4279,7 +4242,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                         if !my_blocks_contains(&case.target) {
                             errors.push(format!("i{inst_id}: switch case to non-existent block"))
                         }
-                        if case.value & low_mask_from_u8(width) != case.value {
+                        if case.value & arith::width_mask(width) != case.value {
                             errors.push(format!("i{inst_id}: switch case value exceeds width"))
                         }
                         if cases[..index].iter().any(|c| c.value == case.value) {
@@ -4328,7 +4291,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     }
                 }
                 Inst::Select { cond, cons, alt, t } => {
-                    if !get_value_kind(&u, cond).is_i8() {
+                    if scalar_of(cond) != Some(ScalarType::I8) {
                         errors.push(format!("i{inst_id}: select cond is not i8"))
                     }
                     if scalar_of(cons) != Some(t) || scalar_of(alt) != Some(t) {
@@ -4336,21 +4299,25 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     }
                 }
                 Inst::BoolNegate { v } => {
-                    let inst_type = get_value_kind(&u, v);
-                    if !inst_type.is_i8() {
+                    if scalar_of(v) != Some(ScalarType::I8) {
                         errors.push(format!("i{inst_id}: bool_negate src is not a bool"))
                     }
                 }
-                Inst::IntUnop { op, v, .. } => {
-                    let inst_type = get_value_kind(&u, v);
-                    if !inst_type.is_int() {
-                        errors.push(format!("i{inst_id}: {} src is not an int", op.name()))
+                Inst::IntUnop { op, v, t } => {
+                    if !t.is_int() || scalar_of(v) != Some(t) {
+                        errors.push(format!("i{inst_id}: {} src is not {t}", op.name()))
                     }
                 }
                 Inst::BitCast { .. } => (),
-                Inst::IntTrunc { to, .. } => {
+                Inst::IntTrunc { v, to } => {
+                    let src = scalar_of(v);
+                    if !src.is_some_and(|st| st.is_int() && st.width_bits() > to.width_bits()) {
+                        errors.push(format!(
+                            "i{inst_id}: int_trunc src is not an int wider than {to}"
+                        ))
+                    }
                     if !to.is_int() {
-                        errors.push(format!("i{inst_id}: int trunc to non-int type"))
+                        errors.push(format!("i{inst_id}: int_trunc to is not int"))
                     }
                 }
                 Inst::IntExtU { v, to } => {
@@ -4375,9 +4342,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     }
                 }
                 Inst::FloatTrunc { v, to } => {
-                    let inst_type = get_value_kind(&u, v);
-                    if !(inst_type.as_value().and_then(|t| t.as_scalar()) == Some(ScalarType::F64))
-                    {
+                    if scalar_of(v) != Some(ScalarType::F64) {
                         errors.push(format!("i{inst_id}: float_trunc src is not f64"))
                     }
                     if to != ScalarType::F32 {
@@ -4385,9 +4350,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     }
                 }
                 Inst::FloatExt { v, to } => {
-                    let inst_type = get_value_kind(&u, v);
-                    if !(inst_type.as_value().and_then(|t| t.as_scalar()) == Some(ScalarType::F32))
-                    {
+                    if scalar_of(v) != Some(ScalarType::F32) {
                         errors.push(format!("i{inst_id}: float_ext src is not f32"))
                     }
                     if to != ScalarType::F64 {
@@ -4395,9 +4358,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     }
                 }
                 Inst::Float32ToIntUnsigned { v, to } | Inst::Float32ToIntSigned { v, to } => {
-                    let inst_type = get_value_kind(&u, v);
-                    if !(inst_type.as_value().and_then(|t| t.as_scalar()) == Some(ScalarType::F32))
-                    {
+                    if scalar_of(v) != Some(ScalarType::F32) {
                         errors.push(format!("i{inst_id}: float32_to_int src is not f32"))
                     }
                     if !to.is_int() {
@@ -4405,17 +4366,22 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     }
                 }
                 Inst::Float64ToIntUnsigned { v, to } | Inst::Float64ToIntSigned { v, to } => {
-                    let inst_type = get_value_kind(&u, v);
-                    if !(inst_type.as_value().and_then(|t| t.as_scalar()) == Some(ScalarType::F64))
-                    {
+                    if scalar_of(v) != Some(ScalarType::F64) {
                         errors.push(format!("i{inst_id}: float64_to_int src is not f64"))
                     }
                     if !to.is_int() {
                         errors.push(format!("i{inst_id}: float64_to_int to is not int"))
                     }
                 }
-                Inst::IntToFloatUnsigned { .. } => (),
-                Inst::IntToFloatSigned { .. } => (),
+                Inst::IntToFloatUnsigned { v, from, to }
+                | Inst::IntToFloatSigned { v, from, to } => {
+                    if !from.is_int() || scalar_of(v) != Some(from) {
+                        errors.push(format!("i{inst_id}: int_to_float src is not {from}"))
+                    }
+                    if !to.is_float() {
+                        errors.push(format!("i{inst_id}: int_to_float to is not float"))
+                    }
+                }
                 Inst::PtrToWord { v, to } => {
                     let inst_type = get_value_kind(&u, v);
                     if !inst_type.is_storage() {
@@ -4426,12 +4392,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     }
                 }
                 Inst::WordToPtr { v } => {
-                    let inst_type = get_value_kind(&u, v);
-                    if !inst_type
-                        .as_value()
-                        .and_then(|t| t.as_scalar())
-                        .is_some_and(|st| st.is_word_int())
-                    {
+                    if !scalar_of(v).is_some_and(|st| st.is_word_int()) {
                         errors.push(format!("i{inst_id}: word_to_ptr src is not a word-sized int"))
                     }
                 }
@@ -4468,10 +4429,9 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                         errors.push(format!("i{inst_id}: {} operands are not {t}", op.name()))
                     }
                 }
-                Inst::FloatUnop { op, v, .. } => {
-                    let inst_type = get_value_kind(&u, v);
-                    if !inst_type.is_float() {
-                        errors.push(format!("i{inst_id}: {} src is not a float", op.name()))
+                Inst::FloatUnop { op, v, t } => {
+                    if !t.is_float() || scalar_of(v) != Some(t) {
+                        errors.push(format!("i{inst_id}: {} src is not {t}", op.name()))
                     }
                 }
                 Inst::FloatFma { a, b, c, t } => {

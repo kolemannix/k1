@@ -813,9 +813,8 @@ fn check_atomic_align(width_bits: u8, ptr: *const u8) {
 }
 
 /// Dispatches over width to `std::sync::atomic` types viewed in place over the
-/// target memory; used by both the tree-walking and bytecode VMs. Width is all
-/// they need: signedness only matters to min/max, and that lives in the rmw op
-/// tag; pointers are just word-sized bits.
+/// target memory. Width is all they need: signedness only matters to min/max,
+/// and that lives in the rmw op tag; pointers are just word-sized bits.
 macro_rules! with_unsigned_atomic {
     ($width_bits:expr, $ptr:expr, |$a:ident, $uty:ident| $body:expr) => {{
         #[cfg(debug_assertions)]
@@ -1146,22 +1145,8 @@ pub fn vm_value_to_static_value(
             let Some(count) = k1.get_concrete_count_of_array(size_type) else {
                 kbail!(k1, span, "Cannot convert container of unknown size to static value");
             };
-            let count = count as usize;
-            if let Some(scalar) = k1.get_raw_scalar(element_type) {
-                k1.add_static_container_from_bytes(kind, type_id, scalar, vm_value.as_ptr(), count)
-            } else {
-                let PhysicalTypeResult::Yes(element_pt) = k1.get_physical_type(element_type) else {
-                    kbail!(k1, span, "Element type is not physical: {}", element_type);
-                };
-                let mut elements = Vec::with_capacity(count);
-                for index in 0..count {
-                    let elem_result = get_span_element(k1, vm_value.as_ptr(), element_pt, index);
-                    let elem_static =
-                        vm_value_to_static_value(k1, element_type, elem_result, span)?;
-                    elements.push(elem_static);
-                }
-                k1.add_static_container_from_ids(kind, type_id, &elements)
-            }
+            let data = vm_value.as_ptr();
+            container_to_static_value(k1, kind, type_id, element_type, data, count as usize, span)?
         }
         Type::Struct(struct_type) => {
             if type_id == k1.string_type_id() {
@@ -1190,26 +1175,15 @@ pub fn vm_value_to_static_value(
                             ContainerKind::Span => StaticContainerKind::Span,
                             ContainerKind::List => StaticContainerKind::List,
                         };
-                        let count = k1_span.len as usize;
-                        if let Some(scalar) = k1.get_raw_scalar(element_type) {
-                            k1.add_static_container_from_bytes(
-                                static_kind,
-                                type_id,
-                                scalar,
-                                k1_span.data,
-                                count,
-                            )
-                        } else {
-                            let element_pt = k1.get_physical_type(element_type).unwrap();
-                            let mut elements = Vec::with_capacity(count);
-                            for index in 0..count {
-                                let elem_vm = get_span_element(k1, k1_span.data, element_pt, index);
-                                let elem_static =
-                                    vm_value_to_static_value(k1, element_type, elem_vm, span)?;
-                                elements.push(elem_static);
-                            }
-                            k1.add_static_container_from_ids(static_kind, type_id, &elements)
-                        }
+                        container_to_static_value(
+                            k1,
+                            static_kind,
+                            type_id,
+                            element_type,
+                            k1_span.data,
+                            k1_span.len as usize,
+                            span,
+                        )?
                     }
                 }
             } else {
@@ -1338,6 +1312,29 @@ pub fn value_as_span(span_value: Value) -> k1_types::K1BufferLike {
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
+fn container_to_static_value(
+    k1: &mut TypedProgram,
+    kind: StaticContainerKind,
+    type_id: TypeId,
+    element_type: TypeId,
+    data: *const u8,
+    count: usize,
+    span: Span,
+) -> K1Result<StaticValueId> {
+    if let Some(scalar) = k1.get_raw_scalar(element_type) {
+        return Ok(k1.add_static_container_from_bytes(kind, type_id, scalar, data, count));
+    }
+    let PhysicalTypeResult::Yes(element_pt) = k1.get_physical_type(element_type) else {
+        kbail!(k1, span, "Element type is not physical: {}", element_type);
+    };
+    let mut elements = Vec::with_capacity(count);
+    for index in 0..count {
+        let elem_vm = get_span_element(k1, data, element_pt, index);
+        elements.push(vm_value_to_static_value(k1, element_type, elem_vm, span)?);
+    }
+    Ok(k1.add_static_container_from_ids(kind, type_id, &elements))
+}
+
 pub fn get_span_element(
     k1: &TypedProgram,
     data_ptr: *const u8,
@@ -1402,8 +1399,7 @@ pub(crate) unsafe fn slice_from_raw_parts_checked<'a, T>(
     unsafe { std::slice::from_raw_parts(data, len) }
 }
 
-/// The CompilerMessage builtin body, shared with the bc VM. Mirrors the
-/// inline arm in `exec_loop` (Inst::Call -> BackendBuiltin::CompilerMessage).
+/// The CompilerMessage builtin body
 pub(crate) fn builtin_compiler_message(
     k1: &mut TypedProgram,
     vm: &mut Vm,
@@ -1462,7 +1458,7 @@ fn write_compiler_message(k1: &TypedProgram, w: &mut String, message: &CompilerM
     .unwrap();
 }
 
-/// The ReplCheckbox builtin body, shared with the bc VM:
+/// The ReplCheckbox builtin body:
 /// `k1/repl/checkbox(name, get, set)`. Function-pointer args carry the
 /// FunctionId in their bits (same encoding CallIndirect uses).
 pub(crate) fn builtin_repl_checkbox(

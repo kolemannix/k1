@@ -1,7 +1,9 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
 
-use crate::arith::{FloatCmpPred, FloatOp, IntCmpPred, IntOp, IntUnop};
+use crate::arith::{
+    Cmp3Op, FloatCmpPred, FloatOp, FloatUnop, IntCmpPred, IntOp, IntUnop, OverflowOp,
+};
 use crate::debug;
 
 use crate::ir::{
@@ -15,8 +17,8 @@ use crate::typer::{FunctionId, K1Result, TypedExprId, TypedProgram};
 use crate::vm;
 
 use super::{
-    CastKind, FRAME_ALIGN, FRAME_HEADER_WORDS, Opcode, PENDING_PC, UnitInfo, UnitKind,
-    VALUE_MASK_CONST_ID, VALUE_MASK_FRAME_OFFSET, builtin_tag, header,
+    FRAME_ALIGN, FRAME_HEADER_WORDS, Opcode, PENDING_PC, UnitInfo, UnitKind, VALUE_MASK_CONST_ID,
+    VALUE_MASK_FRAME_OFFSET, builtin_tag, header,
 };
 
 pub fn get_or_lower_unit(
@@ -627,11 +629,11 @@ fn emit_inst(
     ctx.begin_inst();
 
     macro_rules! binop {
-        ($op:expr, $a:expr, $b:expr, $lhs:expr, $rhs:expr) => {{
+        ($op:expr, $a:expr, $lhs:expr, $rhs:expr) => {{
             let lhs = resolve_lowered_value(k1, ctx, $lhs);
             let rhs = resolve_lowered_value(k1, ctx, $rhs);
             let dst = ctx.bc_value_of(inst_id);
-            ctx.emit($op, $a, $b);
+            ctx.emit($op, $a, 0);
             ctx.push(dst);
             ctx.push(lhs);
             ctx.push(rhs);
@@ -645,13 +647,6 @@ fn emit_inst(
             ctx.emit($op, $a, $b);
             ctx.push(dst);
             ctx.push(src);
-        }};
-    }
-
-    macro_rules! cast {
-        ($kind:expr, $from:expr, $to:expr, $v:expr) => {{
-            let b: u16 = (($from as u16) << 8) | ($to as u16);
-            unop!(Opcode::Cast, $kind as u8, b, $v)
         }};
     }
 
@@ -755,20 +750,14 @@ fn emit_inst(
                         ctx.emit_load(elem_bits, s1, rhs_addr, rhs_off + off);
                         match vop.op {
                             VecOpIr::EqLanes | VecOpIr::LtLanesS | VecOpIr::LtLanesU => {
-                                let (opcode, pred) = match (vop.op, is_float) {
-                                    (VecOpIr::EqLanes, true) => {
-                                        (Opcode::FloatCmp, FloatCmpPred::Eq as u16)
-                                    }
-                                    (VecOpIr::EqLanes, false) => {
-                                        (Opcode::IntCmp, IntCmpPred::Eq as u16)
-                                    }
-                                    (_, true) => (Opcode::FloatCmp, FloatCmpPred::Lt as u16),
-                                    (VecOpIr::LtLanesS, false) => {
-                                        (Opcode::IntCmp, IntCmpPred::Slt as u16)
-                                    }
-                                    _ => (Opcode::IntCmp, IntCmpPred::Ult as u16),
+                                let opcode = match (vop.op, is_float) {
+                                    (VecOpIr::EqLanes, true) => Opcode::FloatEq,
+                                    (VecOpIr::EqLanes, false) => Opcode::IntEq,
+                                    (_, true) => Opcode::FloatLt,
+                                    (VecOpIr::LtLanesS, false) => Opcode::IntSlt,
+                                    _ => Opcode::IntUlt,
                                 };
-                                ctx.emit(opcode, elem_bits, pred);
+                                ctx.emit(opcode, elem_bits, 0);
                                 ctx.push(s0);
                                 ctx.push(s0);
                                 ctx.push(s1);
@@ -778,25 +767,19 @@ fn emit_inst(
                                 ctx.push(s0);
                             }
                             _ => {
-                                let (opcode, b) = match (vop.op, is_float) {
-                                    (VecOpIr::Add, false) => (Opcode::IntAdd, 0),
-                                    (VecOpIr::Add, true) => {
-                                        (Opcode::FloatBinop, FloatOp::Add as u16)
-                                    }
-                                    (VecOpIr::Sub, false) => (Opcode::IntSub, 0),
-                                    (VecOpIr::Sub, true) => {
-                                        (Opcode::FloatBinop, FloatOp::Sub as u16)
-                                    }
-                                    (VecOpIr::Mul, false) => (Opcode::IntMul, 0),
-                                    (VecOpIr::Mul, true) => {
-                                        (Opcode::FloatBinop, FloatOp::Mul as u16)
-                                    }
-                                    (VecOpIr::BitAnd, _) => (Opcode::BitAnd, 0),
-                                    (VecOpIr::BitOr, _) => (Opcode::BitOr, 0),
-                                    (VecOpIr::Xor, _) => (Opcode::BitXor, 0),
+                                let opcode = match (vop.op, is_float) {
+                                    (VecOpIr::Add, false) => Opcode::IntAdd,
+                                    (VecOpIr::Add, true) => Opcode::FloatAdd,
+                                    (VecOpIr::Sub, false) => Opcode::IntSub,
+                                    (VecOpIr::Sub, true) => Opcode::FloatSub,
+                                    (VecOpIr::Mul, false) => Opcode::IntMul,
+                                    (VecOpIr::Mul, true) => Opcode::FloatMul,
+                                    (VecOpIr::BitAnd, _) => Opcode::BitAnd,
+                                    (VecOpIr::BitOr, _) => Opcode::BitOr,
+                                    (VecOpIr::Xor, _) => Opcode::BitXor,
                                     _ => unreachable!(),
                                 };
-                                ctx.emit(opcode, elem_bits, b);
+                                ctx.emit(opcode, elem_bits, 0);
                                 ctx.push(s0);
                                 ctx.push(s0);
                                 ctx.push(s1);
@@ -992,7 +975,19 @@ fn emit_inst(
                     };
                     let lhs_lowered = resolve_lowered_value(k1, ctx, lhs);
                     let rhs_lowered = resolve_lowered_value(k1, ctx, rhs);
-                    ctx.emit(Opcode::jump_if_icmp(pred), width, 0);
+                    let opcode = match pred {
+                        IntCmpPred::Eq => Opcode::JumpIfEq,
+                        IntCmpPred::Slt => Opcode::JumpIfSlt,
+                        IntCmpPred::Sle => Opcode::JumpIfSle,
+                        IntCmpPred::Sgt => Opcode::JumpIfSgt,
+                        IntCmpPred::Sge => Opcode::JumpIfSge,
+                        IntCmpPred::Ult => Opcode::JumpIfUlt,
+                        IntCmpPred::Ule => Opcode::JumpIfUle,
+                        IntCmpPred::Ugt => Opcode::JumpIfUgt,
+                        IntCmpPred::Uge => Opcode::JumpIfUge,
+                        IntCmpPred::Ne => Opcode::JumpIfNe,
+                    };
+                    ctx.emit(opcode, width, 0);
                     ctx.push(lhs_lowered);
                     ctx.push(rhs_lowered);
                 }
@@ -1059,27 +1054,35 @@ fn emit_inst(
             };
             unop!(opcode, t.width_bits(), 0, v)
         }
-        Inst::FloatUnop { op, v, t } => unop!(Opcode::FloatUnop, t.width_bits(), op as u16, v),
-
-        Inst::IntTrunc { v, to } => cast!(CastKind::IntTrunc, 0, to.width_bits(), v),
-        Inst::IntExtS { v, from, to } => {
-            cast!(CastKind::IntExtS, from.width_bits(), to.width_bits(), v)
+        Inst::FloatUnop { op, v, t } => {
+            let opcode = match op {
+                FloatUnop::Neg => Opcode::FloatNeg,
+                FloatUnop::Sqrt => Opcode::FloatSqrt,
+                FloatUnop::Floor => Opcode::FloatFloor,
+                FloatUnop::Ceil => Opcode::FloatCeil,
+                FloatUnop::RoundToZero => Opcode::FloatRoundToZero,
+                FloatUnop::RoundEven => Opcode::FloatRoundEven,
+            };
+            unop!(opcode, t.width_bits(), 0, v)
         }
-        Inst::FloatTrunc { v, .. } => cast!(CastKind::FloatTrunc, 0, 0, v),
-        Inst::FloatExt { v, .. } => cast!(CastKind::FloatExt, 0, 0, v),
-        Inst::Float32ToIntUnsigned { v, to } => cast!(CastKind::F32ToUInt, 0, to.width_bits(), v),
-        Inst::Float32ToIntSigned { v, to } => cast!(CastKind::F32ToSInt, 0, to.width_bits(), v),
-        Inst::Float64ToIntUnsigned { v, to } => cast!(CastKind::F64ToUInt, 0, to.width_bits(), v),
-        Inst::Float64ToIntSigned { v, to } => cast!(CastKind::F64ToSInt, 0, to.width_bits(), v),
+
+        Inst::IntTrunc { v, to } => unop!(Opcode::IntTrunc, to.width_bits(), 0, v),
+        Inst::IntExtS { v, from, to } => {
+            unop!(Opcode::IntExtS, from.width_bits(), to.width_bits() as u16, v)
+        }
+        Inst::FloatTrunc { v, .. } => unop!(Opcode::FloatTrunc, 0, 0, v),
+        Inst::FloatExt { v, .. } => unop!(Opcode::FloatExt, 0, 0, v),
+        Inst::Float32ToIntUnsigned { v, to } => unop!(Opcode::F32ToUInt, to.width_bits(), 0, v),
+        Inst::Float32ToIntSigned { v, to } => unop!(Opcode::F32ToSInt, to.width_bits(), 0, v),
+        Inst::Float64ToIntUnsigned { v, to } => unop!(Opcode::F64ToUInt, to.width_bits(), 0, v),
+        Inst::Float64ToIntSigned { v, to } => unop!(Opcode::F64ToSInt, to.width_bits(), 0, v),
         Inst::IntToFloatUnsigned { v, from, to } => {
-            let kind =
-                if to == ScalarType::F32 { CastKind::UIntToF32 } else { CastKind::UIntToF64 };
-            cast!(kind, from.width_bits(), to.width_bits(), v)
+            let opcode = if to == ScalarType::F32 { Opcode::UIntToF32 } else { Opcode::UIntToF64 };
+            unop!(opcode, from.width_bits(), 0, v)
         }
         Inst::IntToFloatSigned { v, from, to } => {
-            let kind =
-                if to == ScalarType::F32 { CastKind::SIntToF32 } else { CastKind::SIntToF64 };
-            cast!(kind, from.width_bits(), to.width_bits(), v)
+            let opcode = if to == ScalarType::F32 { Opcode::SIntToF32 } else { Opcode::SIntToF64 };
+            unop!(opcode, from.width_bits(), 0, v)
         }
 
         Inst::IntBinop { op, lhs, rhs, t } => {
@@ -1102,21 +1105,54 @@ fn emit_inst(
                 IntOp::RotateLeft => Opcode::IntRotl,
                 IntOp::RotateRight => Opcode::IntRotr,
             };
-            binop!(opcode, t.width_bits(), 0, lhs, rhs)
+            binop!(opcode, t.width_bits(), lhs, rhs)
         }
         Inst::IntOverflows { op, lhs, rhs, t } => {
-            binop!(Opcode::IntOverflows, t.width_bits(), op as u16, lhs, rhs)
+            let opcode = match op {
+                OverflowOp::AddU => Opcode::IntAddOverflowsU,
+                OverflowOp::AddS => Opcode::IntAddOverflowsS,
+                OverflowOp::SubU => Opcode::IntSubOverflowsU,
+                OverflowOp::SubS => Opcode::IntSubOverflowsS,
+                OverflowOp::MulU => Opcode::IntMulOverflowsU,
+                OverflowOp::MulS => Opcode::IntMulOverflowsS,
+            };
+            binop!(opcode, t.width_bits(), lhs, rhs)
         }
         Inst::IntCmp { lhs, rhs, pred, width } => {
             if !ctx.fused_cmps.contains(inst_id) {
-                binop!(Opcode::IntCmp, width, pred as u16, lhs, rhs)
+                let opcode = match pred {
+                    IntCmpPred::Eq => Opcode::IntEq,
+                    IntCmpPred::Slt => Opcode::IntSlt,
+                    IntCmpPred::Sle => Opcode::IntSle,
+                    IntCmpPred::Sgt => Opcode::IntSgt,
+                    IntCmpPred::Sge => Opcode::IntSge,
+                    IntCmpPred::Ult => Opcode::IntUlt,
+                    IntCmpPred::Ule => Opcode::IntUle,
+                    IntCmpPred::Ugt => Opcode::IntUgt,
+                    IntCmpPred::Uge => Opcode::IntUge,
+                    IntCmpPred::Ne => Opcode::IntNe,
+                };
+                binop!(opcode, width, lhs, rhs)
             }
         }
         Inst::IntCmp3 { op, lhs, rhs, width } => {
-            binop!(Opcode::IntCmp3, width, op as u16, lhs, rhs)
+            let opcode = match op {
+                Cmp3Op::Ucmp => Opcode::IntUcmp,
+                Cmp3Op::Scmp => Opcode::IntScmp,
+            };
+            binop!(opcode, width, lhs, rhs)
         }
         Inst::FloatBinop { op, lhs, rhs, t } => {
-            binop!(Opcode::FloatBinop, t.width_bits(), op as u16, lhs, rhs)
+            let opcode = match op {
+                FloatOp::Add => Opcode::FloatAdd,
+                FloatOp::Sub => Opcode::FloatSub,
+                FloatOp::Mul => Opcode::FloatMul,
+                FloatOp::Div => Opcode::FloatDiv,
+                FloatOp::Rem => Opcode::FloatRem,
+                FloatOp::Min => Opcode::FloatMin,
+                FloatOp::Max => Opcode::FloatMax,
+            };
+            binop!(opcode, t.width_bits(), lhs, rhs)
         }
         Inst::FloatFma { a, b, c, t } => {
             let a = resolve_lowered_value(k1, ctx, a);
@@ -1130,7 +1166,15 @@ fn emit_inst(
             ctx.push(c);
         }
         Inst::FloatCmp { lhs, rhs, pred, width } => {
-            binop!(Opcode::FloatCmp, width, pred as u16, lhs, rhs)
+            let opcode = match pred {
+                FloatCmpPred::Eq => Opcode::FloatEq,
+                FloatCmpPred::Lt => Opcode::FloatLt,
+                FloatCmpPred::Le => Opcode::FloatLe,
+                FloatCmpPred::Gt => Opcode::FloatGt,
+                FloatCmpPred::Ge => Opcode::FloatGe,
+                FloatCmpPred::Ne => Opcode::FloatNe,
+            };
+            binop!(opcode, width, lhs, rhs)
         }
 
         Inst::BakeStaticValue { type_id, value } => {
@@ -1383,6 +1427,7 @@ fn emit_phi_copies(k1: &mut TypedProgram, ctx: &mut LowerCtx, from: BlockId, tar
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::arith::IntCmpPred;
     use crate::compiler::test_support::{compile_source, function_named};
     use crate::ir::{
         BlockSourceKind, IrComment, IrRange, PhiCase, UnitBuf, commit_unit, data32_bits,

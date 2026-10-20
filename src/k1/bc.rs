@@ -7,6 +7,7 @@ pub mod lower;
 
 use fxhash::FxHashMap;
 
+use crate::arith::{Cmp3Op, FloatOp, FloatUnop, IntOp, IntUnop, OverflowOp};
 use crate::ir::IrUnitId;
 use crate::lex::Span;
 use crate::typer::types::PhysicalType;
@@ -93,14 +94,45 @@ pub enum Opcode {
     IntMulHighS,
     IntRotl,
     IntRotr,
-    IntOverflows,
-    IntCmp, // B = IntCmpPred tag
-    IntCmp3,
+    IntAddOverflowsU,
+    IntAddOverflowsS,
+    IntSubOverflowsU,
+    IntSubOverflowsS,
+    IntMulOverflowsU,
+    IntMulOverflowsS,
+    IntEq,
+    IntSlt,
+    IntSle,
+    IntSgt,
+    IntSge,
+    IntUlt,
+    IntUle,
+    IntUgt,
+    IntUge,
+    IntNe,
+    IntUcmp,
+    IntScmp,
     // Float ALU (A = width in bits)
-    FloatBinop,
-    FloatUnop,
+    FloatAdd,
+    FloatSub,
+    FloatMul,
+    FloatDiv,
+    FloatRem,
+    FloatMin,
+    FloatMax,
+    FloatNeg,
+    FloatSqrt,
+    FloatFloor,
+    FloatCeil,
+    FloatRoundToZero,
+    FloatRoundEven,
     FloatFma,
-    FloatCmp, // B = FloatCmpPred tag
+    FloatEq,
+    FloatLt,
+    FloatLe,
+    FloatGt,
+    FloatGe,
+    FloatNe,
     // Bit ALU (A = width in bits)
     BitAnd,
     BitOr,
@@ -115,7 +147,18 @@ pub enum Opcode {
     IntClz,
     IntPopcount,
     IntBswap,
-    Cast, // A = CastKind, B = (from_bits << 8) | to_bits
+    IntTrunc,
+    IntExtS,
+    FloatTrunc,
+    FloatExt,
+    F32ToUInt,
+    F32ToSInt,
+    F64ToUInt,
+    F64ToSInt,
+    UIntToF32,
+    UIntToF64,
+    SIntToF32,
+    SIntToF64,
     Select,
     // Metaprogramming
     BakeStaticValue,
@@ -195,11 +238,37 @@ impl Opcode {
             | Opcode::IntMulHighS
             | Opcode::IntRotl
             | Opcode::IntRotr
-            | Opcode::IntOverflows
-            | Opcode::IntCmp
-            | Opcode::IntCmp3
-            | Opcode::FloatBinop
-            | Opcode::FloatCmp
+            | Opcode::IntAddOverflowsU
+            | Opcode::IntAddOverflowsS
+            | Opcode::IntSubOverflowsU
+            | Opcode::IntSubOverflowsS
+            | Opcode::IntMulOverflowsU
+            | Opcode::IntMulOverflowsS
+            | Opcode::IntEq
+            | Opcode::IntSlt
+            | Opcode::IntSle
+            | Opcode::IntSgt
+            | Opcode::IntSge
+            | Opcode::IntUlt
+            | Opcode::IntUle
+            | Opcode::IntUgt
+            | Opcode::IntUge
+            | Opcode::IntNe
+            | Opcode::IntUcmp
+            | Opcode::IntScmp
+            | Opcode::FloatAdd
+            | Opcode::FloatSub
+            | Opcode::FloatMul
+            | Opcode::FloatDiv
+            | Opcode::FloatRem
+            | Opcode::FloatMin
+            | Opcode::FloatMax
+            | Opcode::FloatEq
+            | Opcode::FloatLt
+            | Opcode::FloatLe
+            | Opcode::FloatGt
+            | Opcode::FloatGe
+            | Opcode::FloatNe
             | Opcode::BitAnd
             | Opcode::BitOr
             | Opcode::BitXor
@@ -212,9 +281,25 @@ impl Opcode {
             | Opcode::IntClz
             | Opcode::IntPopcount
             | Opcode::IntBswap
-            | Opcode::FloatUnop => 2, // [dst][src]
+            | Opcode::FloatNeg
+            | Opcode::FloatSqrt
+            | Opcode::FloatFloor
+            | Opcode::FloatCeil
+            | Opcode::FloatRoundToZero
+            | Opcode::FloatRoundEven => 2, // [dst][src]
             Opcode::FloatFma => 4,
-            Opcode::Cast => 2, // A = CastKind, B = from_bits << 8 | to_bits; [dst][src]
+            Opcode::IntTrunc
+            | Opcode::IntExtS
+            | Opcode::FloatTrunc
+            | Opcode::FloatExt
+            | Opcode::F32ToUInt
+            | Opcode::F32ToSInt
+            | Opcode::F64ToUInt
+            | Opcode::F64ToSInt
+            | Opcode::UIntToF32
+            | Opcode::UIntToF64
+            | Opcode::SIntToF32
+            | Opcode::SIntToF64 => 2,
             Opcode::Select => 4,
             Opcode::BakeStaticValue => 3, // [dst][type_id][src]
             Opcode::AtomicLoad => 2,      // A = width in bits, B = ordering; [dst][addr src]
@@ -225,10 +310,6 @@ impl Opcode {
             Opcode::AtomicCmpxchg => 5,
             Opcode::Fence => 0, // B = ordering
         }
-    }
-
-    pub fn jump_if_icmp(pred: crate::arith::IntCmpPred) -> Opcode {
-        Opcode::from_u8(Opcode::JumpIfEq as u8 + pred as u8)
     }
 
     pub fn load(width_bits: u8) -> Opcode {
@@ -316,37 +397,79 @@ impl Opcode {
             Opcode::Zero => "zero",
             Opcode::PtrAddImm => "ptr_add_imm",
             Opcode::PtrIndex => "ptr_index",
-            Opcode::IntAdd => "iadd",
-            Opcode::IntSub => "isub",
-            Opcode::IntMul => "imul",
-            Opcode::IntDivU => "idiv_u",
-            Opcode::IntDivS => "idiv_s",
-            Opcode::IntRemU => "irem_u",
-            Opcode::IntRemS => "irem_s",
-            Opcode::IntMulHighU => "imulh_u",
-            Opcode::IntMulHighS => "imulh_s",
-            Opcode::IntRotl => "rotl",
-            Opcode::IntRotr => "rotr",
-            Opcode::IntOverflows => "ioverflows",
-            Opcode::IntCmp => "icmp",
-            Opcode::IntCmp3 => "icmp3",
-            Opcode::FloatBinop => "fbinop",
-            Opcode::FloatUnop => "funop",
+            Opcode::IntAdd => IntOp::Add.name(),
+            Opcode::IntSub => IntOp::Sub.name(),
+            Opcode::IntMul => IntOp::Mul.name(),
+            Opcode::IntDivU => IntOp::DivU.name(),
+            Opcode::IntDivS => IntOp::DivS.name(),
+            Opcode::IntRemU => IntOp::RemU.name(),
+            Opcode::IntRemS => IntOp::RemS.name(),
+            Opcode::IntMulHighU => IntOp::MulHighU.name(),
+            Opcode::IntMulHighS => IntOp::MulHighS.name(),
+            Opcode::IntRotl => IntOp::RotateLeft.name(),
+            Opcode::IntRotr => IntOp::RotateRight.name(),
+            Opcode::IntAddOverflowsU => OverflowOp::AddU.name(),
+            Opcode::IntAddOverflowsS => OverflowOp::AddS.name(),
+            Opcode::IntSubOverflowsU => OverflowOp::SubU.name(),
+            Opcode::IntSubOverflowsS => OverflowOp::SubS.name(),
+            Opcode::IntMulOverflowsU => OverflowOp::MulU.name(),
+            Opcode::IntMulOverflowsS => OverflowOp::MulS.name(),
+            Opcode::IntEq => "icmp_eq",
+            Opcode::IntSlt => "icmp_slt",
+            Opcode::IntSle => "icmp_sle",
+            Opcode::IntSgt => "icmp_sgt",
+            Opcode::IntSge => "icmp_sge",
+            Opcode::IntUlt => "icmp_ult",
+            Opcode::IntUle => "icmp_ule",
+            Opcode::IntUgt => "icmp_ugt",
+            Opcode::IntUge => "icmp_uge",
+            Opcode::IntNe => "icmp_ne",
+            Opcode::IntUcmp => Cmp3Op::Ucmp.name(),
+            Opcode::IntScmp => Cmp3Op::Scmp.name(),
+            Opcode::FloatAdd => FloatOp::Add.name(),
+            Opcode::FloatSub => FloatOp::Sub.name(),
+            Opcode::FloatMul => FloatOp::Mul.name(),
+            Opcode::FloatDiv => FloatOp::Div.name(),
+            Opcode::FloatRem => FloatOp::Rem.name(),
+            Opcode::FloatMin => FloatOp::Min.name(),
+            Opcode::FloatMax => FloatOp::Max.name(),
+            Opcode::FloatNeg => FloatUnop::Neg.name(),
+            Opcode::FloatSqrt => FloatUnop::Sqrt.name(),
+            Opcode::FloatFloor => FloatUnop::Floor.name(),
+            Opcode::FloatCeil => FloatUnop::Ceil.name(),
+            Opcode::FloatRoundToZero => FloatUnop::RoundToZero.name(),
+            Opcode::FloatRoundEven => FloatUnop::RoundEven.name(),
             Opcode::FloatFma => "fma",
-            Opcode::FloatCmp => "fcmp",
-            Opcode::BitAnd => "and",
-            Opcode::BitOr => "or",
-            Opcode::BitXor => "xor",
-            Opcode::Shl => "shl",
-            Opcode::ShrU => "shr_u",
-            Opcode::ShrS => "shr_s",
+            Opcode::FloatEq => "fcmp_oeq",
+            Opcode::FloatLt => "fcmp_olt",
+            Opcode::FloatLe => "fcmp_ole",
+            Opcode::FloatGt => "fcmp_ogt",
+            Opcode::FloatGe => "fcmp_oge",
+            Opcode::FloatNe => "fcmp_une",
+            Opcode::BitAnd => IntOp::And.name(),
+            Opcode::BitOr => IntOp::Or.name(),
+            Opcode::BitXor => IntOp::Xor.name(),
+            Opcode::Shl => IntOp::Shl.name(),
+            Opcode::ShrU => IntOp::ShrU.name(),
+            Opcode::ShrS => IntOp::ShrS.name(),
             Opcode::BoolNegate => "bool_neg",
-            Opcode::BitNot => "bit_not",
-            Opcode::IntCtz => "ctz",
-            Opcode::IntClz => "clz",
-            Opcode::IntPopcount => "popcnt",
-            Opcode::IntBswap => "bswap",
-            Opcode::Cast => "cast",
+            Opcode::BitNot => IntUnop::Not.name(),
+            Opcode::IntCtz => IntUnop::Ctz.name(),
+            Opcode::IntClz => IntUnop::Clz.name(),
+            Opcode::IntPopcount => IntUnop::Popcount.name(),
+            Opcode::IntBswap => IntUnop::Bswap.name(),
+            Opcode::IntTrunc => "trunc",
+            Opcode::IntExtS => "sext",
+            Opcode::FloatTrunc => "ftrunc",
+            Opcode::FloatExt => "fext",
+            Opcode::F32ToUInt => "f32_to_uint",
+            Opcode::F32ToSInt => "f32_to_sint",
+            Opcode::F64ToUInt => "f64_to_uint",
+            Opcode::F64ToSInt => "f64_to_sint",
+            Opcode::UIntToF32 => "uint_to_f32",
+            Opcode::UIntToF64 => "uint_to_f64",
+            Opcode::SIntToF32 => "sint_to_f32",
+            Opcode::SIntToF64 => "sint_to_f64",
             Opcode::Select => "select",
             Opcode::BakeStaticValue => "bake_static",
             Opcode::AtomicLoad => "atomic_load",
@@ -355,32 +478,6 @@ impl Opcode {
             Opcode::AtomicCmpxchg => "atomic_cmpxchg",
             Opcode::Fence => "fence",
         }
-    }
-}
-
-/// Cast kinds for the `Cast` opcode. The `B` field of the header packs
-/// `(from_width_bits << 8) | to_width_bits`; not all kinds use both.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum CastKind {
-    IntTrunc = 0,
-    IntExtS,
-    FloatTrunc,
-    FloatExt,
-    F32ToUInt,
-    F32ToSInt,
-    F64ToUInt,
-    F64ToSInt,
-    UIntToF32,
-    UIntToF64,
-    SIntToF32,
-    SIntToF64,
-}
-
-impl CastKind {
-    pub fn from_u8(v: u8) -> CastKind {
-        debug_assert!(v <= CastKind::SIntToF64 as u8, "bad cast kind {v}");
-        unsafe { core::mem::transmute::<u8, CastKind>(v) }
     }
 }
 
@@ -539,8 +636,8 @@ mod bc_test {
 
     #[test]
     fn header_roundtrip() {
-        let h = header(Opcode::IntCmp, 32, 7);
-        assert_eq!(header_op(h), Opcode::IntCmp as u8);
+        let h = header(Opcode::IntEq, 32, 7);
+        assert_eq!(header_op(h), Opcode::IntEq as u8);
         assert_eq!(header_a(h), 32);
         assert_eq!(header_b(h), 7);
         let h2 = header(Opcode::BakeStaticValue, 255, u16::MAX);
@@ -557,35 +654,6 @@ mod bc_test {
             // Every opcode has a name and a fixed operand count
             assert!(!op.name().is_empty());
             assert!(op.operand_count() <= 6);
-        }
-    }
-
-    #[test]
-    fn pred_tags_roundtrip() {
-        use crate::arith::{FloatCmpPred, IntCmpPred};
-        for p in [
-            IntCmpPred::Eq,
-            IntCmpPred::Slt,
-            IntCmpPred::Sle,
-            IntCmpPred::Sgt,
-            IntCmpPred::Sge,
-            IntCmpPred::Ult,
-            IntCmpPred::Ule,
-            IntCmpPred::Ugt,
-            IntCmpPred::Uge,
-            IntCmpPred::Ne,
-        ] {
-            assert!(IntCmpPred::from_u8(p as u8) == p);
-        }
-        for p in [
-            FloatCmpPred::Eq,
-            FloatCmpPred::Lt,
-            FloatCmpPred::Le,
-            FloatCmpPred::Gt,
-            FloatCmpPred::Ge,
-            FloatCmpPred::Ne,
-        ] {
-            assert!(FloatCmpPred::from_u8(p as u8) == p);
         }
     }
 

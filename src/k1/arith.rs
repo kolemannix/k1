@@ -72,7 +72,6 @@ impl IntUnop {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[repr(u8)]
 pub enum OverflowOp {
     AddU,
     AddS,
@@ -83,11 +82,6 @@ pub enum OverflowOp {
 }
 
 impl OverflowOp {
-    pub fn from_u8(v: u8) -> OverflowOp {
-        debug_assert!(v <= OverflowOp::MulS as u8, "bad overflow op tag {v}");
-        unsafe { core::mem::transmute::<u8, OverflowOp>(v) }
-    }
-
     pub fn name(self) -> &'static str {
         match self {
             OverflowOp::AddU => "uadd_overflows",
@@ -109,18 +103,12 @@ impl OverflowOp {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[repr(u8)]
 pub enum Cmp3Op {
     Ucmp,
     Scmp,
 }
 
 impl Cmp3Op {
-    pub fn from_u8(v: u8) -> Cmp3Op {
-        debug_assert!(v <= Cmp3Op::Scmp as u8, "bad cmp3 op tag {v}");
-        unsafe { core::mem::transmute::<u8, Cmp3Op>(v) }
-    }
-
     pub fn name(self) -> &'static str {
         match self {
             Cmp3Op::Ucmp => "ucmp",
@@ -145,7 +133,6 @@ impl IntOpError {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[repr(u8)]
 pub enum FloatOp {
     Add,
     Sub,
@@ -157,11 +144,6 @@ pub enum FloatOp {
 }
 
 impl FloatOp {
-    pub fn from_u8(v: u8) -> FloatOp {
-        debug_assert!(v <= FloatOp::Max as u8, "bad float op tag {v}");
-        unsafe { core::mem::transmute::<u8, FloatOp>(v) }
-    }
-
     pub fn name(self) -> &'static str {
         match self {
             FloatOp::Add => "fadd",
@@ -176,7 +158,6 @@ impl FloatOp {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[repr(u8)]
 pub enum FloatUnop {
     Neg,
     Sqrt,
@@ -187,11 +168,6 @@ pub enum FloatUnop {
 }
 
 impl FloatUnop {
-    pub fn from_u8(v: u8) -> FloatUnop {
-        debug_assert!(v <= FloatUnop::RoundEven as u8, "bad float unop tag {v}");
-        unsafe { core::mem::transmute::<u8, FloatUnop>(v) }
-    }
-
     pub fn name(self) -> &'static str {
         match self {
             FloatUnop::Neg => "fneg",
@@ -205,7 +181,6 @@ impl FloatUnop {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
 pub enum IntCmpPred {
     Eq,
     Slt,
@@ -220,11 +195,6 @@ pub enum IntCmpPred {
 }
 
 impl IntCmpPred {
-    pub fn from_u8(v: u8) -> IntCmpPred {
-        debug_assert!(v <= IntCmpPred::Ne as u8, "bad int pred tag {v}");
-        unsafe { core::mem::transmute::<u8, IntCmpPred>(v) }
-    }
-
     pub fn name(self) -> &'static str {
         match self {
             IntCmpPred::Eq => "eq",
@@ -242,7 +212,6 @@ impl IntCmpPred {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
 pub enum FloatCmpPred {
     Eq,
     Lt,
@@ -253,11 +222,6 @@ pub enum FloatCmpPred {
 }
 
 impl FloatCmpPred {
-    pub fn from_u8(v: u8) -> FloatCmpPred {
-        debug_assert!(v <= FloatCmpPred::Ne as u8, "bad float pred tag {v}");
-        unsafe { core::mem::transmute::<u8, FloatCmpPred>(v) }
-    }
-
     pub fn name(self) -> &'static str {
         match self {
             FloatCmpPred::Eq => "oeq",
@@ -370,7 +334,7 @@ pub fn int_overflows(op: OverflowOp, width: u8, lhs: u64, rhs: u64) -> bool {
 }
 
 #[inline(always)]
-pub fn int_cmp(width: u8, pred: IntCmpPred, lhs: u64, rhs: u64) -> bool {
+pub fn int_cmp(pred: IntCmpPred, width: u8, lhs: u64, rhs: u64) -> bool {
     let shift = 64 - width as u32;
     let l = lhs << shift;
     let r = rhs << shift;
@@ -485,7 +449,7 @@ pub fn float_fma(width: u8, a: u64, b: u64, c: u64) -> u64 {
 }
 
 #[inline(always)]
-pub fn float_cmp(width: u8, pred: FloatCmpPred, lhs: u64, rhs: u64) -> bool {
+pub fn float_cmp(pred: FloatCmpPred, width: u8, lhs: u64, rhs: u64) -> bool {
     if width == 32 {
         let l = f32::from_bits(lhs as u32);
         let r = f32::from_bits(rhs as u32);

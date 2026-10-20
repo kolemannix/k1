@@ -231,12 +231,6 @@ impl InferenceContext {
         InferenceContext { origin_stack: Vec::new(), slots: Vec::new(), newly_solved: Vec::new() }
     }
 
-    pub fn print_lengths(&self) {
-        eprintln!("s origin_stack {}", self.origin_stack.len());
-        eprintln!("s slots {}", self.slots.len());
-        eprintln!("s newly_solved {}", self.newly_solved.len());
-    }
-
     pub fn reset(&mut self) {
         self.origin_stack.clear();
         self.slots.clear();
@@ -564,10 +558,6 @@ impl TypedAbilityKind {
     pub fn is_concrete(&self) -> bool {
         matches!(self, TypedAbilityKind::Concrete)
     }
-
-    pub fn is_generic(&self) -> bool {
-        matches!(self, TypedAbilityKind::Generic { .. })
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -575,8 +565,6 @@ pub struct TypedAbilityParam {
     name: StringId,
     type_variable_id: TypeId,
     is_impl_param: bool,
-    #[allow(unused)]
-    span: Span,
 }
 impl_copy_if_small!(20, TypedAbilityParam);
 
@@ -1271,13 +1259,6 @@ impl TypedFloatValue {
         }
     }
 
-    pub fn get_width(&self) -> NumericWidth {
-        match self {
-            TypedFloatValue::F32(_) => NumericWidth::B32,
-            TypedFloatValue::F64(_) => NumericWidth::B64,
-        }
-    }
-
     pub fn as_f64(&self) -> f64 {
         match self {
             TypedFloatValue::F32(v) => *v as f64,
@@ -1884,11 +1865,6 @@ pub struct ScalarOp {
     pub operands: PermSlice<TypedExprId>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BuiltinAbility {
-    Enum,
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum BuiltinTyperInline {
     TypeSize,
@@ -2325,25 +2301,12 @@ impl EvalTypeExprContext {
         is_inside_type_definition_rhs: false,
         is_inside_static_type: false,
     };
-
-    pub const VARIABLE_BINDING: Self = EvalTypeExprContext {
-        is_direct_function_parameter: false,
-        is_inside_type_definition_rhs: false,
-        is_inside_static_type: false,
-    };
-}
-
-// Not using this yet but probably need to be
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Symbol {
-    pub namespace: NamespaceId,
-    pub identifier: StringId,
 }
 
 #[derive(Debug, Clone)]
 pub enum UseStatus {
     Unresolved(ScopeId),
-    Resolved(SV4<UseableSymbol>),
+    Resolved(SV4<UseableSymbolId>),
 }
 
 impl UseStatus {
@@ -3506,11 +3469,6 @@ impl TypedProgram {
         name_buffer.clear();
         self.buffers.name_builder = name_buffer;
         new_name_ident
-    }
-
-    pub fn get_namespace_scope(&self, namespace_id: NamespaceId) -> &Scope {
-        let scope_id = self.namespaces.get_scope(namespace_id);
-        self.scopes.get_scope(scope_id)
     }
 
     pub fn primary_module(&self) -> &Module {
@@ -5775,15 +5733,15 @@ impl TypedProgram {
 
         // Optional fork case: sum.tag
         if field_access.field_name == self.ast.idents.b.tag {
-            if let Some(get_tag) = self.handle_sum_get_tag(base_agg_expr, span)? {
-                return Ok(get_tag);
+            if let Type::Sum(_) = self.get_expr_type(base_agg_expr) {
+                return Ok(self.synth_sum_get_tag(base_agg_expr, span));
             }
         }
 
         // Optional fork case: enum.value
         if field_access.field_name == self.ast.idents.b.value {
-            if let Some(get_value) = self.handle_enum_get_value(base_agg_expr, span)? {
-                return Ok(get_value);
+            if let Type::Enum(_) = self.get_expr_type(base_agg_expr) {
+                return Ok(self.synth_enum_get_value(base_agg_expr, span));
             }
         }
 
@@ -7610,21 +7568,23 @@ impl TypedProgram {
                     );
                 }
             },
-            (Operand::Float(from_size), Operand::Float(to_size)) => match to_size.cmp(&from_size) {
-                Ordering::Greater => {
-                    if !widen {
-                        kbail!(self, span, "not a truncation");
+            (Operand::Float(from_width), Operand::Float(to_width)) => {
+                match to_width.cmp(&from_width) {
+                    Ordering::Greater => {
+                        if !widen {
+                            kbail!(self, span, "not a truncation");
+                        }
+                        CastType::FloatExtend
                     }
-                    CastType::FloatExtend
-                }
-                Ordering::Less => {
-                    if widen {
-                        kbail!(self, span, "not a widen");
+                    Ordering::Less => {
+                        if widen {
+                            kbail!(self, span, "not a widen");
+                        }
+                        CastType::FloatTruncate
                     }
-                    CastType::FloatTruncate
+                    Ordering::Equal => unreachable!("equal-width floats are the same type"),
                 }
-                Ordering::Equal => unreachable!("equal-width floats are the same type"),
-            },
+            }
             _ => {
                 kbail!(
                     self,
@@ -8225,8 +8185,7 @@ impl TypedProgram {
         self.push_block_expr_id(&mut consequent_block, body_block);
 
         let next_is_some_base = self.synth_variable_ref(next_variable.variable_id);
-        let next_is_some_span = self.exprs.get_span(next_is_some_base);
-        let next_is_some = self.synth_sum_is_variant(next_is_some_base, 1, next_is_some_span);
+        let next_is_some = self.synth_sum_is_variant(next_is_some_base, 1, iterable_span);
         let empty_break = self.synth_empty_value(body_span);
         let break_expr = self.exprs.add(
             TypedExpr::Break(TypedBreak { value: empty_break, loop_scope: loop_scope_id }),
@@ -9639,13 +9598,6 @@ impl TypedProgram {
                                 "Cannot call to-dyn with a generic function; apply its type arguments first"
                             );
                         }
-                        if function.builtin_type.is_some() {
-                            kbail!(
-                                self,
-                                call_span,
-                                "Cannot get a pointer to an intrinsic operation. (If you need one, make a wrapper function)"
-                            );
-                        }
                         let lambda_object =
                             self.function_to_lambda_object(fr.function_id, call_span);
                         return Ok(CallResolution::OtherExpr(self.synth_discard_then(
@@ -10073,14 +10025,25 @@ impl TypedProgram {
                 self.ident_str(function.name)
             );
         }
-        if function.builtin_type.is_some() {
-            kbail!(self, span, "Builtin '{}' has no address", self.ident_str(function.name));
+        match function.builtin_type {
+            None | Some(Builtin::TyperPhysicalFunction(_)) => {}
+            Some(_) => {
+                kbail!(self, span, "Builtin '{}' has no address", self.ident_str(function.name))
+            }
         }
         if let TypedFunctionKind::AbilityDefn(_) = function.kind {
             kbail!(
                 self,
                 span,
                 "Ability function '{}' has no address",
+                self.ident_str(function.name)
+            );
+        }
+        if !function.fnlike_type_params.is_empty() {
+            kbail!(
+                self,
+                span,
+                "Cannot reference '{}': fn-like type parameters are only inferable from call arguments",
                 self.ident_str(function.name)
             );
         }
@@ -10098,18 +10061,9 @@ impl TypedProgram {
         let function = self.get_function(generic_function_id);
         let function_name = function.name;
         let type_params = function.type_params;
-        let fnlike_type_params = function.fnlike_type_params;
         let signature = function.signature();
         if type_params.is_empty() {
             kbail!(self, span, "'{}' takes no type arguments", self.ident_str(function_name));
-        }
-        if !fnlike_type_params.is_empty() {
-            kbail!(
-                self,
-                span,
-                "Cannot reference '{}': fn-like type parameters are only inferable from call arguments",
-                self.ident_str(function_name)
-            );
         }
         let type_args = call.type_args(&self.ast.mem);
         if type_params.len() != type_args.len() {
@@ -10553,36 +10507,6 @@ impl TypedProgram {
             ));
         }
         Ok(impl_function)
-    }
-
-    fn handle_enum_get_value(
-        &mut self,
-        base_expr_id: TypedExprId,
-        span: Span,
-    ) -> K1Result<Option<TypedExprId>> {
-        match self.get_expr_type(base_expr_id) {
-            Type::Enum(_) => Ok(Some(self.synth_enum_get_value(base_expr_id, span))),
-            _ => Ok(None),
-        }
-    }
-
-    fn handle_sum_get_tag(
-        &mut self,
-        base_expr_id: TypedExprId,
-        span: Span,
-    ) -> K1Result<Option<TypedExprId>> {
-        let sum_type = match self.get_expr_type(base_expr_id) {
-            Type::Sum(s) => s,
-            _ => return Ok(None),
-        };
-
-        let tag_type = sum_type.tag_type;
-
-        Ok(Some(self.exprs.add(
-            TypedExpr::SumGetTag(GetSumTag { sum_expr: base_expr_id }),
-            tag_type.type_id(),
-            span,
-        )))
     }
 
     fn handle_sum_as_variant_call(
@@ -12690,7 +12614,7 @@ impl TypedProgram {
                 for useable_symbol in &useable_symbols {
                     self.scopes.add_use_binding(
                         ctx.scope_id,
-                        useable_symbol,
+                        *useable_symbol,
                         parsed_use.alias.unwrap_or(parsed_use.target.name),
                         provenance,
                     );
@@ -12705,7 +12629,7 @@ impl TypedProgram {
                     Some(&type_expr) => Some(self.eval_type_expr_ext(
                         type_expr,
                         ctx.scope_id,
-                        EvalTypeExprContext::VARIABLE_BINDING,
+                        EvalTypeExprContext::EMPTY,
                     )?),
                 };
                 let maybe_return_type_from_function = if parsed_let.is_returned() {
@@ -16156,7 +16080,6 @@ impl TypedProgram {
                 name: ability_param.name,
                 type_variable_id: param_type_id,
                 is_impl_param: ability_param.is_impl_param,
-                span: ability_param.span,
             })
         }
         let has_ability_side_params = ability_params.iter().any(|p| p.is_ability_side_param());
@@ -16829,7 +16752,7 @@ impl TypedProgram {
         for symbol in &useable_symbols {
             self.scopes.add_use_binding(
                 scope_id,
-                symbol,
+                *symbol,
                 parsed_use.alias.unwrap_or(parsed_use.target.name),
                 provenance,
             );
@@ -16843,7 +16766,7 @@ impl TypedProgram {
         scope_id: ScopeId,
         name: &QIdent,
         fail_on_traverse_fail: bool,
-    ) -> K1Result<SV4<UseableSymbol>> {
+    ) -> K1Result<SV4<UseableSymbolId>> {
         if self.string_is_completion_marker(name.name, false) {
             self.record_qident_completion_site(scope_id, name);
             return Ok(smallvec![]);
@@ -16874,49 +16797,31 @@ impl TypedProgram {
         let mut found_symbols: SV4<_> = smallvec![];
         if let Some(function_id) = self.scopes.find_function_exposed(scope_id_to_search, name.name)
         {
-            found_symbols.push(UseableSymbol {
-                source_scope: scope_id_to_search,
-                id: UseableSymbolId::Function(function_id),
-            });
+            found_symbols.push(UseableSymbolId::Function(function_id));
         }
         if let Some(type_id) = self.scopes.find_type_exposed(scope_id_to_search, name.name) {
             let companion_namespace = self.get_companion_namespace(type_id);
-            found_symbols.push(UseableSymbol {
-                source_scope: scope_id_to_search,
-                id: UseableSymbolId::Type { type_id, companion_namespace },
-            })
+            found_symbols.push(UseableSymbolId::Type { type_id, companion_namespace })
         } else if let Some(pending_parsed_id) =
             self.scopes.find_pending_type_local(scope_id_to_search, name.name)
         {
             let type_id = self.eval_type_defn(pending_parsed_id, scope_id_to_search)?;
             let companion_namespace = self.get_companion_namespace(type_id);
-            found_symbols.push(UseableSymbol {
-                source_scope: scope_id_to_search,
-                id: UseableSymbolId::Type { type_id, companion_namespace },
-            })
+            found_symbols.push(UseableSymbolId::Type { type_id, companion_namespace })
         }
         if let Some(variable_id) = self
             .scopes
             .find_variable_exposed(scope_id_to_search, name.name)
             .and_then(|vis| vis.variable_id())
         {
-            found_symbols.push(UseableSymbol {
-                source_scope: scope_id_to_search,
-                id: UseableSymbolId::Global(variable_id),
-            })
+            found_symbols.push(UseableSymbolId::Global(variable_id))
         }
         if let Some(ability_id) = self.scopes.find_ability_exposed(scope_id_to_search, name.name) {
             let namespace_id = self.abilities.get(ability_id).namespace_id;
-            found_symbols.push(UseableSymbol {
-                source_scope: scope_id_to_search,
-                id: UseableSymbolId::Ability(ability_id, namespace_id),
-            })
+            found_symbols.push(UseableSymbolId::Ability(ability_id, namespace_id))
         }
         if let Some(ns_id) = self.scopes.find_namespace_exposed(scope_id_to_search, name.name) {
-            found_symbols.push(UseableSymbol {
-                source_scope: scope_id_to_search,
-                id: UseableSymbolId::Namespace(ns_id),
-            })
+            found_symbols.push(UseableSymbolId::Namespace(ns_id))
         }
         Ok(found_symbols)
     }
