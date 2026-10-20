@@ -4235,7 +4235,6 @@ impl TypedProgram {
         let base_scope_id = ability.scope_id;
         let ability_self_type = ability.self_type_id;
         let all_params = ability.parameters;
-        let ability_args = ability.kind.arguments(self);
         let scope_id =
             self.scopes.add_child_scope(base_scope_id, ScopeType::AbilityImpl, ScopeOwnerId::None);
 
@@ -4243,21 +4242,6 @@ impl TypedProgram {
         let _ = self.scopes.add_type(scope_id, self.ast.idents.b.self_, self_type_id);
         let _ = self.scopes.add_type_substitution(scope_id, ability_self_type, self_type_id);
 
-        // Add ability-side params
-        for (parent_ability_param, ability_arg) in self
-            .mem
-            .getn(all_params)
-            .iter()
-            .filter(|p| p.is_ability_side_param())
-            .zip(ability_args.iter())
-        {
-            let _ = self.scopes.add_type(scope_id, parent_ability_param.name, *ability_arg);
-            let _ = self.scopes.add_type_substitution(
-                scope_id,
-                parent_ability_param.type_variable_id,
-                *ability_arg,
-            );
-        }
         // Add impl params
         for (parent_impl_param, impl_arg) in self
             .mem
