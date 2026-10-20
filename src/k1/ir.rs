@@ -144,7 +144,6 @@ pub enum IrComment {
     BitcastAggToScalar,
     BitcastScalarToAggPlace,
     BitcastScalarToAggStore,
-    BoolToInt,
     BreakLoop,
     CallArgUnalignedCopy,
     ContinueLoop,
@@ -229,7 +228,6 @@ impl IrComment {
             IrComment::BitcastAggToScalar => "bitcast agg to scalar",
             IrComment::BitcastScalarToAggPlace => "bitcast scalar to agg place",
             IrComment::BitcastScalarToAggStore => "bitcast scalar to agg store",
-            IrComment::BoolToInt => "bool_to_int",
             IrComment::BreakLoop => "break loop",
             IrComment::CallArgUnalignedCopy => "call arg unaligned copy",
             IrComment::ContinueLoop => "continue loop",
@@ -3567,7 +3565,7 @@ fn vector_pt_parts(b: &mut Builder, pt: PhysicalType) -> K1Result<(ScalarType, u
         );
     };
     match b.k1.agg_types.get(agg_id).agg_type {
-        AggType::Vector { element_pt, len } => Ok((element_pt, len)),
+        AggType::Vector { element_pt, len } => Ok((element_pt.expect_scalar(), len)),
         _ => Err(kerr!(
             b.k1,
             b.cur_span,
@@ -3617,9 +3615,7 @@ fn compile_cast(
             compile_expr(b, None, c.base_expr)?;
             Ok(Value::Empty)
         }
-        CastType::ReferenceToReference
-        | CastType::PointerToReference
-        | CastType::ReferenceToPointer => {
+        CastType::Reinterpret => {
             let base_noop = compile_expr(b, None, c.base_expr)?;
             let to_pt = b.get_physical_type(target_type_id)?;
             let stored =
@@ -4128,6 +4124,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
             block_of[inst_id.as_u32() as usize - 1] = Some(block_id);
         }
     }
+    let scalar_of = |v| get_value_kind(&u, v).as_value().and_then(|pt| pt.as_scalar());
     let mut expected_id = 1;
     for block_id in u.block_ids() {
         let block = u.block(block_id);
@@ -4334,9 +4331,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                     if !get_value_kind(&u, cond).is_i8() {
                         errors.push(format!("i{inst_id}: select cond is not i8"))
                     }
-                    let arm_scalar =
-                        |v| get_value_kind(&u, v).as_value().and_then(|pt| pt.as_scalar());
-                    if arm_scalar(cons) != Some(t) || arm_scalar(alt) != Some(t) {
+                    if scalar_of(cons) != Some(t) || scalar_of(alt) != Some(t) {
                         errors.push(format!("i{inst_id}: select arm type mismatch"))
                     }
                 }
@@ -4358,13 +4353,25 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                         errors.push(format!("i{inst_id}: int trunc to non-int type"))
                     }
                 }
-                Inst::IntExtU { v, to } | Inst::IntExtS { v, to, .. } => {
-                    let inst_type = get_value_kind(&u, v);
-                    if !inst_type.is_int() {
-                        errors.push(format!("i{inst_id}: int_ext_u src is not an int"))
+                Inst::IntExtU { v, to } => {
+                    let src = scalar_of(v);
+                    if !src.is_some_and(|st| st.is_int() && st.width_bits() < to.width_bits()) {
+                        errors.push(format!(
+                            "i{inst_id}: int_ext_u src is not an int narrower than {to}"
+                        ))
                     }
                     if !to.is_int() {
                         errors.push(format!("i{inst_id}: int_ext_u to is not int"))
+                    }
+                }
+                Inst::IntExtS { v, from, to } => {
+                    if scalar_of(v) != Some(from) {
+                        errors.push(format!("i{inst_id}: int_ext_s src is not {from}"))
+                    }
+                    if !from.is_int() || !to.is_int() || from.width_bits() >= to.width_bits() {
+                        errors.push(format!(
+                            "i{inst_id}: int_ext_s from {from} to {to} does not widen"
+                        ))
                     }
                 }
                 Inst::FloatTrunc { v, to } => {
@@ -4428,19 +4435,64 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                         errors.push(format!("i{inst_id}: word_to_ptr src is not a word-sized int"))
                     }
                 }
-                Inst::IntBinop { .. } => (),
-                Inst::IntOverflows { .. } => (),
-                Inst::IntCmp { .. } => (),
-                Inst::IntCmp3 { .. } => (),
-                Inst::FloatBinop { .. } => (),
+                Inst::IntBinop { op, lhs, rhs, t } => {
+                    if !t.is_int() {
+                        errors.push(format!("i{inst_id}: {} on non-int {t}", op.name()))
+                    }
+                    if scalar_of(lhs) != Some(t) {
+                        errors.push(format!("i{inst_id}: {} lhs is not {t}", op.name()))
+                    }
+                    if op.takes_count() {
+                        if !scalar_of(rhs).is_some_and(|st| st.is_int()) {
+                            errors.push(format!("i{inst_id}: {} count is not an int", op.name()))
+                        }
+                    } else if scalar_of(rhs) != Some(t) {
+                        errors.push(format!("i{inst_id}: {} rhs is not {t}", op.name()))
+                    }
+                }
+                Inst::IntOverflows { op, lhs, rhs, t } => {
+                    if !t.is_int() || scalar_of(lhs) != Some(t) || scalar_of(rhs) != Some(t) {
+                        errors.push(format!("i{inst_id}: {} operands are not {t}", op.name()))
+                    }
+                }
+                Inst::IntCmp { lhs, rhs, width, .. } | Inst::IntCmp3 { lhs, rhs, width, .. } => {
+                    let l = scalar_of(lhs);
+                    if l != scalar_of(rhs) || !l.is_some_and(|st| st.width_bits() == width) {
+                        errors.push(format!(
+                            "i{inst_id}: int compare operands are not one i{width} type"
+                        ))
+                    }
+                }
+                Inst::FloatBinop { op, lhs, rhs, t } => {
+                    if !t.is_float() || scalar_of(lhs) != Some(t) || scalar_of(rhs) != Some(t) {
+                        errors.push(format!("i{inst_id}: {} operands are not {t}", op.name()))
+                    }
+                }
                 Inst::FloatUnop { op, v, .. } => {
                     let inst_type = get_value_kind(&u, v);
                     if !inst_type.is_float() {
                         errors.push(format!("i{inst_id}: {} src is not a float", op.name()))
                     }
                 }
-                Inst::FloatFma { .. } => (),
-                Inst::FloatCmp { .. } => (),
+                Inst::FloatFma { a, b, c, t } => {
+                    if !t.is_float()
+                        || scalar_of(a) != Some(t)
+                        || scalar_of(b) != Some(t)
+                        || scalar_of(c) != Some(t)
+                    {
+                        errors.push(format!("i{inst_id}: fma operands are not {t}"))
+                    }
+                }
+                Inst::FloatCmp { lhs, rhs, width, .. } => {
+                    let l = scalar_of(lhs);
+                    if l != scalar_of(rhs)
+                        || !l.is_some_and(|st| st.is_float() && st.width_bits() == width)
+                    {
+                        errors.push(format!(
+                            "i{inst_id}: float compare operands are not one f{width} type"
+                        ))
+                    }
+                }
                 Inst::BakeStaticValue { .. } => (),
             }
         }

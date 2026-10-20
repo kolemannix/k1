@@ -20,6 +20,13 @@ pub enum IntOp {
 }
 
 impl IntOp {
+    pub fn takes_count(self) -> bool {
+        matches!(
+            self,
+            IntOp::Shl | IntOp::ShrU | IntOp::ShrS | IntOp::RotateLeft | IntOp::RotateRight
+        )
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             IntOp::Add => "add",
@@ -44,7 +51,6 @@ impl IntOp {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[repr(u8)]
 pub enum IntUnop {
     Not,
     Ctz,

@@ -45,7 +45,11 @@ impl TypedProgram {
         }
 
         if is_alias && is_generic_defn {
-            kbail!(self, parsed_type_defn.name_span, "Alias types cannot have type parameters (yet)");
+            kbail!(
+                self,
+                parsed_type_defn.name_span,
+                "Alias types cannot have type parameters (yet)"
+            );
         }
 
         let reserved_type_id = if !is_alias { Some(self.reserve_type_id()) } else { None };
@@ -1677,7 +1681,7 @@ impl TypedProgram {
         let element_size = match self.types.get(element_type) {
             Type::Integer(it) => Some(it.width().bits() / 8),
             Type::Char => Some(1),
-            Type::Float(ft) => Some(ft.size().bits() / 8),
+            Type::Float(ft) => Some(ft.width().bits() / 8),
             Type::TypeParameter(_) | Type::InferenceHole(_) | Type::FunctionTypeParameter(_) => {
                 None
             }

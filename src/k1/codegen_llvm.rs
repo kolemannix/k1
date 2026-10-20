@@ -2026,8 +2026,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         })
                     }
                     AggType::Vector { element_pt, len } => {
-                        let element_type = self.codegen_type(PhysicalType::scalar(element_pt));
-                        let vector_type = self.vec_llvm_type(element_pt, len);
+                        let element_type = self.codegen_type(element_pt);
+                        let vector_type = self.vec_llvm_type(element_pt.expect_scalar(), len);
                         let vector_layout = self.k1.get_pt_layout(pt);
                         let di_type = element_type.debug_type().map(|element_di_type| {
                             self.debug
@@ -3329,11 +3329,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             |c: &mut Self, type_id: TypeId| -> CgResult<BasicTypeEnum<'ctx>> {
                 match c.k1.types.get(type_id) {
                     Type::Bool => Ok(c.builtin_types.i1.as_basic_type_enum()),
-                    Type::Vector(vt) => {
-                        let vt = *vt;
+                    Type::Vector(_) => {
                         let pt = c.k1.get_physical_type_computed(type_id).unwrap().expect_agg();
                         let (elem, lanes) = c.k1.agg_types.get(pt).agg_type.expect_vector();
-                        let _ = vt;
                         Ok(c.vec_llvm_type(elem, lanes).as_basic_type_enum())
                     }
                     Type::Char | Type::Integer(_) | Type::Float(_) | Type::Pointer => {
@@ -3830,7 +3828,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         vop: ir::VecOpData,
     ) -> CgResult<Option<BasicValueEnum<'ctx>>> {
         use ir::VecOpIr;
-        let is_float = matches!(vop.elem, ScalarType::F32 | ScalarType::F64);
+        let is_float = vop.elem.is_float();
         match vop.op {
             VecOpIr::Splat => {
                 let scalar = self.resolve_value(inst_mappings, vop.lhs)?;
@@ -5330,12 +5328,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     fn codegen_int_value(&mut self, integer: TypedIntValue) -> BasicValueEnum<'ctx> {
         let cg_ty = self.codegen_type(integer.get_integer_type().get_pt());
         let llvm_int_ty = cg_ty.rich_type().into_int_type();
-        let llvm_value = if integer.get_integer_type().is_signed() {
-            llvm_int_ty.const_int(integer.to_u64_bits(), true)
-        } else {
-            llvm_int_ty.const_int(integer.to_u64_bits(), false)
-        };
-        llvm_value.as_basic_value_enum()
+        llvm_int_ty.const_int(integer.to_u64_bits(), false).as_basic_value_enum()
     }
 
     fn codegen_static_value_as_const(

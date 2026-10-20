@@ -15,9 +15,6 @@ pub(super) fn fold_inst(u: &UnitView, inst: &Inst) -> Option<Simplified> {
         }
         Inst::IntBinop { op, lhs, rhs, t } => {
             let width = t.width_bits();
-            if t == ScalarType::Pointer {
-                return None;
-            }
             let l = lhs.const_bits(u);
             let r = rhs.const_bits(u);
             if let (Some(l), Some(r)) = (l, r) {
@@ -25,10 +22,7 @@ pub(super) fn fold_inst(u: &UnitView, inst: &Inst) -> Option<Simplified> {
             }
             let mask = arith::width_mask(width);
             let zero = Simplified::Const(t, 0);
-            let is_shift_or_rotate = matches!(
-                op,
-                IntOp::Shl | IntOp::ShrU | IntOp::ShrS | IntOp::RotateLeft | IntOp::RotateRight
-            );
+            let is_shift_or_rotate = op.takes_count();
             match (op, l, r) {
                 (_, _, Some(r)) if is_shift_or_rotate && (r as u32) & (width as u32 - 1) == 0 => {
                     Some(Simplified::Value(lhs))

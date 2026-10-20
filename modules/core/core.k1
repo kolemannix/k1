@@ -346,6 +346,13 @@ impl comparable for char {
   fn(inline) compare(self, other: self): ordering { self.as-u8().compare(other.as-u8()) }
 }
 
+impl scalar-cmp for ptr {
+  fn(inline) lt(self, other: self): bool { self.to-uint().lt(other.to-uint()) }
+  fn(inline) le(self, other: self): bool { self.to-uint().le(other.to-uint()) }
+  fn(inline) gt(self, other: self): bool { self.to-uint().gt(other.to-uint()) }
+  fn(inline) ge(self, other: self): bool { self.to-uint().ge(other.to-uint()) }
+}
+
 impl comparable for ptr {
   fn(inline) compare(self, other: self): ordering { self.to-uint().compare(other.to-uint()) }
 }

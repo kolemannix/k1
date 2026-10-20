@@ -833,17 +833,17 @@ impl TypedProgram {
         &mut self,
         sum_expr: TypedExprId,
         variant_index: u32,
-        span: Option<Span>,
-    ) -> K1Result<TypedExprId> {
+        span: Span,
+    ) -> MatchingCondition {
         let sum_type = self.types.get(self.exprs.get_type(sum_expr)).expect_sum();
         let tag_type = sum_type.tag_type;
         let variant_tag = self.sum_variant_by_index(sum_type.variants, variant_index).tag_value;
-        let span = span.unwrap_or(self.exprs.get_span(sum_expr));
-        let get_tag =
+        let subject =
             self.exprs.add(TypedExpr::SumGetTag(GetSumTag { sum_expr }), tag_type.type_id(), span);
-        let variant_tag_expr = self.synth_int(variant_tag, span);
-        let tag_equals = self.synth_equals_call_simple(get_tag, variant_tag_expr, span);
-        Ok(tag_equals)
+        let value = self.static_values.add_int(variant_tag);
+        MatchingCondition {
+            instrs: self.mem.pushn(&[MatchingConditionInstr::IntEquals { subject, value }]),
+        }
     }
 
     /// Produces a series of printTo calls to the given writer,

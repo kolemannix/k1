@@ -1147,7 +1147,7 @@ pub fn vm_value_to_static_value(
                 kbail!(k1, span, "Cannot convert container of unknown size to static value");
             };
             let count = count as usize;
-            if let Some(scalar) = k1.get_container_element_type_if_raw(element_type) {
+            if let Some(scalar) = k1.get_raw_scalar(element_type) {
                 k1.add_static_container_from_bytes(kind, type_id, scalar, vm_value.as_ptr(), count)
             } else {
                 let PhysicalTypeResult::Yes(element_pt) = k1.get_physical_type(element_type) else {
@@ -1191,7 +1191,7 @@ pub fn vm_value_to_static_value(
                             ContainerKind::List => StaticContainerKind::List,
                         };
                         let count = k1_span.len as usize;
-                        if let Some(scalar) = k1.get_container_element_type_if_raw(element_type) {
+                        if let Some(scalar) = k1.get_raw_scalar(element_type) {
                             k1.add_static_container_from_bytes(
                                 static_kind,
                                 type_id,

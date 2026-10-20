@@ -155,3 +155,29 @@ fn use_that_does_not_dominate_is_rejected() {
     assert!(error.contains("use of i2 which does not dominate it"), "{error}");
     assert!(!error.contains("phi incoming i4 does not dominate the end of b3"), "{error}");
 }
+
+#[test]
+fn scalar_operand_mismatches_are_rejected() {
+    let error = validate_handmade("validate_scalar_operands", |u| {
+        let entry = u.add_block(BlockSourceKind::Entry);
+        let byte = Value::Data32 { t: ScalarType::I8, data: 1 };
+        push(
+            u,
+            entry,
+            Inst::IntBinop { op: IntOp::Add, lhs: u64_value(1), rhs: byte, t: ScalarType::I64 },
+        );
+        push(
+            u,
+            entry,
+            Inst::IntBinop { op: IntOp::Shl, lhs: u64_value(1), rhs: byte, t: ScalarType::I64 },
+        );
+        push(u, entry, Inst::IntExtU { v: u64_value(1), to: ScalarType::I32 });
+        push(u, entry, Inst::IntExtS { v: byte, from: ScalarType::I16, to: ScalarType::I64 });
+        push(u, entry, Inst::Ret { v: u64_value(0), agg: false });
+    })
+    .unwrap_err();
+    assert!(error.contains("i1: add rhs is not i64"), "{error}");
+    assert!(!error.contains("i2:"), "{error}");
+    assert!(error.contains("i3: int_ext_u src is not an int narrower than i32"), "{error}");
+    assert!(error.contains("i4: int_ext_s src is not i16"), "{error}");
+}

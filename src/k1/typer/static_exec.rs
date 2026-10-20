@@ -816,19 +816,6 @@ impl TypedProgram {
         self.exprs.add_static(value_id, type_id, false, span)
     }
 
-    pub(crate) fn get_container_element_type_if_raw(
-        &self,
-        element_type_id: TypeId,
-    ) -> Option<ScalarType> {
-        match self.types.get(element_type_id) {
-            Type::Char | Type::Bool => Some(ScalarType::I8),
-            Type::Integer(int_type) => Some(int_type.get_scalar_type()),
-            Type::Enum(enum_type) => Some(enum_type.int_type.get_scalar_type()),
-            Type::Float(float_type) => Some(float_type.get_scalar_type()),
-            _ => None,
-        }
-    }
-
     pub(crate) fn add_static_function_pointer(
         &mut self,
         type_id: TypeId,
@@ -847,7 +834,7 @@ impl TypedProgram {
         elements: &[StaticValueId],
     ) -> StaticValueId {
         let element_type = self.get_linear_container_element(container_type_id).unwrap();
-        match self.get_container_element_type_if_raw(element_type) {
+        match self.get_raw_scalar(element_type) {
             Some(scalar) => {
                 let size = scalar.get_layout().size;
                 let align = self.get_layout(container_type_id).unwrap().align;

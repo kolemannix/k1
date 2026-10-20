@@ -725,7 +725,7 @@ fn emit_inst(
             let vop = *ctx.u.vec_op(id);
             let elem_bits = vop.elem.width_bits();
             let stride = vop.elem.get_layout().stride() as u16;
-            let is_float = matches!(vop.elem, ScalarType::F32 | ScalarType::F64);
+            let is_float = vop.elem.is_float();
             match vop.op {
                 VecOpIr::Splat => {
                     let (addr, base_off) = resolve_addr(k1, ctx, vop.dst);

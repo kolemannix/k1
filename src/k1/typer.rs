@@ -1,7 +1,6 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
 
-pub(crate) mod derive;
 pub(crate) mod dump;
 pub(crate) mod host;
 pub(crate) mod infer;
@@ -1183,9 +1182,6 @@ static_assert_size!(Call, 36);
 pub struct Call {
     pub callee: Callee,
     pub args: PermSlice<TypedExprId>,
-    /// type_args remain unerased for some intrinsics where we want codegen to see the types.
-    /// Specifically sizeOf[T], since there's no actual value to specialize on. kinda a hack would be
-    /// better to specialize anyway and inline? idk
     pub type_args: TypeArgs,
 }
 
@@ -1325,10 +1321,7 @@ pub enum CastType {
     FloatToSignedInteger,
     IntegerUnsignedToFloat,
     IntegerSignedToFloat,
-    // NoOps
-    ReferenceToReference,
-    PointerToReference,
-    ReferenceToPointer,
+    Reinterpret,
     Discard,
 }
 
@@ -1338,9 +1331,7 @@ impl Display for CastType {
             CastType::IntegerCast(IntegerCastDirection::SignExtend) => write!(f, "sext"),
             CastType::IntegerCast(IntegerCastDirection::ZeroExtend) => write!(f, "zext"),
             CastType::IntegerCast(IntegerCastDirection::Truncate) => write!(f, "itrunc"),
-            CastType::ReferenceToReference => write!(f, "reftoref"),
-            CastType::PointerToReference => write!(f, "ptrtoref"),
-            CastType::ReferenceToPointer => write!(f, "reftoptr"),
+            CastType::Reinterpret => write!(f, "reinterpret"),
             CastType::FloatExtend => write!(f, "fext"),
             CastType::FloatTruncate => write!(f, "ftrunc"),
             CastType::FloatToUnsignedInteger => write!(f, "ftouint"),
@@ -4397,8 +4388,6 @@ impl TypedProgram {
                         AbilityImplKind::BuiltinDerived,
                         is_default,
                     )),
-                    // Why root namespace?! Answer: the namespace is only used for companion type stuff, so
-                    // this isn't doing any harm
                     ROOT_NAMESPACE_ID,
                 )?
                 .expect("an ability impl cannot be conditionally compiled");
@@ -5653,28 +5642,13 @@ impl TypedProgram {
                     Err(self.make_error(self.ast.idents.intern(msg), name.name_span))
                 }
                 Some(fn_id) => {
-                    if self.get_function(fn_id).is_macro() {
-                        kbail!(
-                            self,
-                            name.name_span,
-                            "Macro '{}' cannot be used as a value",
-                            self.ast.idents.get_string(name.name),
-                        );
-                    }
+                    self.check_function_has_address(fn_id, name.name_span)?;
                     if !self.get_function(fn_id).type_params.is_empty() {
                         kbail!(
                             self,
                             name.name_span,
                             "'{}' is generic; provide its type parameters to reference a specialization: {}[type-a, type-b].&",
                             self.ast.idents.get_string(name.name),
-                            self.ast.idents.get_string(name.name),
-                        );
-                    }
-                    if self.get_function(fn_id).builtin_type.is_some() {
-                        kbail!(
-                            self,
-                            name.name_span,
-                            "Builtin '{}' has no address",
                             self.ast.idents.get_string(name.name),
                         );
                     }
@@ -5735,10 +5709,6 @@ impl TypedProgram {
     }
 
     pub fn get_expr_type(&self, expr_id: TypedExprId) -> &Type {
-        self.types.get(self.exprs.get_type(expr_id))
-    }
-
-    pub fn get_expr_type_no_follow_static(&self, expr_id: TypedExprId) -> &Type {
         self.types.get(self.exprs.get_type(expr_id))
     }
 
@@ -6244,25 +6214,6 @@ impl TypedProgram {
             reference_type.inner_type,
             span,
         ))
-    }
-
-    #[allow(unused)]
-    fn is_inside_companion_scope(
-        &self,
-        companion_namespace: Option<NamespaceId>,
-        scope_id: ScopeId,
-    ) -> bool {
-        if let Some(companion_namespace) = companion_namespace {
-            self.is_scope_inside_namespace(companion_namespace, scope_id)
-        } else {
-            false
-        }
-    }
-
-    #[allow(unused)]
-    fn is_scope_inside_namespace(&self, namespace_id: NamespaceId, scope_id: ScopeId) -> bool {
-        let ns_scope_id = self.namespaces.get_scope(namespace_id);
-        self.scopes.scope_has_ancestor(scope_id, ns_scope_id)
     }
 
     fn eval_expr(&mut self, expr_id: ParsedExprId, ctx: EvalExprContext) -> K1Result<TypedExprId> {
@@ -7289,7 +7240,7 @@ impl TypedProgram {
             let cast_env_param = self.synth_cast(
                 environment_param_access_expr,
                 environment_struct_reference_type,
-                CastType::PointerToReference,
+                CastType::Reinterpret,
                 None,
             );
             let environment_casted_variable = self.synth_variable_defn(
@@ -7573,7 +7524,7 @@ impl TypedProgram {
             _ => {
                 let view = self.check_interpret_cast(base_expr_type, target_type, span, 0)?;
                 if view.total {
-                    Ok(CastType::ReferenceToReference)
+                    Ok(CastType::Reinterpret)
                 } else {
                     Err(kerr!(
                         self,
@@ -7616,7 +7567,7 @@ impl TypedProgram {
         fn classify(t: &Type) -> Operand {
             match t {
                 Type::Integer(i) => Operand::Int(*i),
-                Type::Float(f) => Operand::Float(f.size()),
+                Type::Float(f) => Operand::Float(f.width()),
                 _ => Operand::Other,
             }
         }
@@ -7729,7 +7680,7 @@ impl TypedProgram {
             (Type::Integer(i1), Type::Integer(i2)) if i1.width() == i2.width() => {
                 succeed_if_indirect(self, CastView::TOTAL, from_type, to_type, span, depth)
             }
-            (Type::Integer(i), Type::Float(f)) if i.width() == f.size() => {
+            (Type::Integer(i), Type::Float(f)) if i.width() == f.width() => {
                 succeed_if_indirect(self, CastView::TOTAL, from_type, to_type, span, depth)
             }
             (Type::Float(f), Type::Integer(i)) if f.width() == i.width() => {
@@ -8065,12 +8016,7 @@ impl TypedProgram {
                 if view.total {
                     self.report(kwarn!(self, span, "This cast is total; use .as instead"));
                 }
-                Ok(self.synth_cast(
-                    base_expr,
-                    target_type,
-                    CastType::ReferenceToReference,
-                    Some(span),
-                ))
+                Ok(self.synth_cast(base_expr, target_type, CastType::Reinterpret, Some(span)))
             }
         }
     }
@@ -8279,7 +8225,8 @@ impl TypedProgram {
         self.push_block_expr_id(&mut consequent_block, body_block);
 
         let next_is_some_base = self.synth_variable_ref(next_variable.variable_id);
-        let next_is_some_call = self.synth_sum_is_variant(next_is_some_base, 1, None)?;
+        let next_is_some_span = self.exprs.get_span(next_is_some_base);
+        let next_is_some = self.synth_sum_is_variant(next_is_some_base, 1, next_is_some_span);
         let empty_break = self.synth_empty_value(body_span);
         let break_expr = self.exprs.add(
             TypedExpr::Break(TypedBreak { value: empty_break, loop_scope: loop_scope_id }),
@@ -8288,9 +8235,9 @@ impl TypedProgram {
         );
         let consequent_type = self.exprs.get_type(body_block);
         let consequent_block_id = self.exprs.add_block(consequent_block, consequent_type);
-        let if_next_loop_else_break_expr = self.synth_if_else(
+        let if_next_loop_else_break_expr = self.synth_matching_if_else(
             self.builtin_types.empty,
-            next_is_some_call,
+            next_is_some,
             consequent_block_id,
             break_expr,
             body_span,
@@ -10116,6 +10063,30 @@ impl TypedProgram {
         }
     }
 
+    fn check_function_has_address(&self, function_id: FunctionId, span: Span) -> K1Result<()> {
+        let function = self.get_function(function_id);
+        if function.is_macro() {
+            kbail!(
+                self,
+                span,
+                "Macro '{}' cannot be used as a value",
+                self.ident_str(function.name)
+            );
+        }
+        if function.builtin_type.is_some() {
+            kbail!(self, span, "Builtin '{}' has no address", self.ident_str(function.name));
+        }
+        if let TypedFunctionKind::AbilityDefn(_) = function.kind {
+            kbail!(
+                self,
+                span,
+                "Ability function '{}' has no address",
+                self.ident_str(function.name)
+            );
+        }
+        Ok(())
+    }
+
     fn compile_specialized_function_reference(
         &mut self,
         generic_function_id: FunctionId,
@@ -10123,23 +10094,12 @@ impl TypedProgram {
         span: Span,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
+        self.check_function_has_address(generic_function_id, span)?;
         let function = self.get_function(generic_function_id);
         let function_name = function.name;
-        let is_macro = function.is_macro();
         let type_params = function.type_params;
         let fnlike_type_params = function.fnlike_type_params;
         let signature = function.signature();
-        if is_macro {
-            kbail!(
-                self,
-                span,
-                "Macro '{}' cannot be used as a value",
-                self.ident_str(function_name)
-            );
-        }
-        if self.get_function(generic_function_id).builtin_type.is_some() {
-            kbail!(self, span, "Builtin '{}' has no address", self.ident_str(function_name));
-        }
         if type_params.is_empty() {
             kbail!(self, span, "'{}' takes no type arguments", self.ident_str(function_name));
         }
@@ -10354,7 +10314,7 @@ impl TypedProgram {
             EvalExprContext::make(scope_id),
             false,
         )?;
-        let env_ptr = self.synth_cast(env_ref, POINTER_TYPE_ID, CastType::ReferenceToPointer, None);
+        let env_ptr = self.synth_cast(env_ref, POINTER_TYPE_ID, CastType::Reinterpret, None);
 
         let fn_ptr_field = StructLiteralField {
             name: self.ast.idents.b.fn_ptr,
@@ -10675,7 +10635,7 @@ impl TypedProgram {
         let variant_index = variant.index;
         let sum_base_expr =
             if is_reference { self.synth_dereference(base_expr) } else { base_expr };
-        let condition = self.synth_sum_is_variant(sum_base_expr, variant_index, Some(span))?;
+        let condition = self.synth_sum_is_variant(sum_base_expr, variant_index, span);
         let payload_expr = self.exprs.add(
             TypedExpr::SumGetPayload(GetSumPayload {
                 sum_expr: sum_base_expr,
@@ -10696,7 +10656,13 @@ impl TypedProgram {
         let out_value_type = self.exprs.get_type(payload_referenced);
         let alternate = self.synth_optional_none(out_value_type, span);
         debug_assert_eq!(consequent_type_id, self.exprs.get_type(alternate));
-        Ok(Some(self.synth_if_else(consequent_type_id, condition, consequent, alternate, span)))
+        Ok(Some(self.synth_matching_if_else(
+            consequent_type_id,
+            condition,
+            consequent,
+            alternate,
+            span,
+        )))
     }
 
     fn eval_variant(
@@ -14629,8 +14595,7 @@ impl TypedProgram {
         let repr_fields = self.types.get(ao.struct_representation).expect_struct().fields;
         let repr_fields = self.mem.getn(repr_fields);
 
-        let state_expr =
-            self.synth_cast(base_expr, POINTER_TYPE_ID, CastType::ReferenceToPointer, None);
+        let state_expr = self.synth_cast(base_expr, POINTER_TYPE_ID, CastType::Reinterpret, None);
         let mut literal_fields = self.mem.new_list(repr_fields.len() as u32);
         literal_fields
             .push(StructLiteralField { name: self.ast.idents.b.state, expr: Some(state_expr) });
@@ -14693,7 +14658,7 @@ impl TypedProgram {
                                 let self_ref = self.synth_cast(
                                     variable_expr,
                                     self_ref_type,
-                                    CastType::PointerToReference,
+                                    CastType::Reinterpret,
                                     None,
                                 );
                                 self.synth_dereference(self_ref)
@@ -15690,7 +15655,7 @@ impl TypedProgram {
                     let cast = self.synth_cast(
                         value_expr,
                         enum_type_id,
-                        CastType::ReferenceToReference,
+                        CastType::Reinterpret,
                         Some(fn_span),
                     );
                     Ok(self.synth_optional_some(cast).0)
@@ -15728,12 +15693,7 @@ impl TypedProgram {
             BuiltinTyperFunction::EnumAbilityFromValueUnchecked => {
                 let value_param = *self.mem.get_nth(params, 0);
                 let value_expr = self.synth_variable_expr(value_param.variable_id, fn_span);
-                Ok(self.synth_cast(
-                    value_expr,
-                    return_type,
-                    CastType::ReferenceToReference,
-                    Some(fn_span),
-                ))
+                Ok(self.synth_cast(value_expr, return_type, CastType::Reinterpret, Some(fn_span)))
             }
             BuiltinTyperFunction::SumAbilityGetTag => {
                 let sum_param = *self.mem.get_nth(params, 0);
@@ -16613,8 +16573,6 @@ impl TypedProgram {
                         kind,
                         is_default,
                     )),
-                    // Why root namespace?! Answer: the namespace is only used for companion type stuff, so
-                    // this isn't doing any harm
                     ROOT_NAMESPACE_ID,
                 )?
                 .expect("an ability impl cannot be conditionally compiled");

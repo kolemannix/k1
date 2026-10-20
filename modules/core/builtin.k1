@@ -519,13 +519,6 @@ impl scalar-cmp for i64 {
   fn(builtin) ge(self, other: self): bool
 }
 
-impl scalar-cmp for ptr {
-  fn(inline) lt(self, other: self): bool { self.to-uint().lt(other.to-uint()) }
-  fn(inline) le(self, other: self): bool { self.to-uint().le(other.to-uint()) }
-  fn(inline) gt(self, other: self): bool { self.to-uint().gt(other.to-uint()) }
-  fn(inline) ge(self, other: self): bool { self.to-uint().ge(other.to-uint()) }
-}
-
 ability comparable {
   fn compare(self, other: self): ordering
 }

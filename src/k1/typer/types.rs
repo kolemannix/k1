@@ -428,15 +428,11 @@ impl FloatType {
         }
     }
 
-    pub fn size(&self) -> NumericWidth {
+    pub fn width(&self) -> NumericWidth {
         match self {
             FloatType::F32 => NumericWidth::B32,
             FloatType::F64 => NumericWidth::B64,
         }
-    }
-
-    pub fn width(&self) -> NumericWidth {
-        self.size()
     }
 }
 
@@ -621,7 +617,7 @@ impl TypedProgram {
                 }
                 true
             }
-            (Type::Float(f1), Type::Float(f2)) => f1.size() == f2.size(),
+            (Type::Float(f1), Type::Float(f2)) => f1.width() == f2.width(),
             (Type::Bool, Type::Bool) => true,
             (Type::Pointer, Type::Pointer) => true,
             (Type::Struct(s1), Type::Struct(s2)) => {
@@ -829,7 +825,7 @@ impl TypedProgram {
                 lt.function_id.hash(state);
             }
             Type::Float(ft) => {
-                ft.size().bits().hash(state);
+                ft.width().bits().hash(state);
             }
             Type::Pointer => {}
             Type::Never => {}
@@ -1348,6 +1344,10 @@ impl ScalarType {
         matches!(self, ScalarType::I8 | ScalarType::I16 | ScalarType::I32 | ScalarType::I64)
     }
 
+    pub fn is_float(&self) -> bool {
+        matches!(self, ScalarType::F32 | ScalarType::F64)
+    }
+
     pub fn get_layout(&self) -> Layout {
         Layout::from_scalar_bits(self.width_bits() as u32)
     }
@@ -1605,7 +1605,7 @@ pub struct UnionMember {
 pub enum AggType {
     Struct { fields: MSlice<StructField, TypedProgram>, packed: bool },
     Array { element_pt: PhysicalType, len: u32 },
-    Vector { element_pt: ScalarType, len: u32 },
+    Vector { element_pt: PhysicalType, len: u32 },
     Union { members: MSlice<UnionMember, TypedProgram> },
     Sum(SumPt),
     Opaque { size: u32, align: u32 },
@@ -1623,7 +1623,7 @@ impl AggType {
     #[track_caller]
     pub fn expect_vector(&self) -> (ScalarType, u32) {
         match self {
-            AggType::Vector { element_pt, len } => (*element_pt, *len),
+            AggType::Vector { element_pt, len } => (element_pt.expect_scalar(), *len),
             _ => panic!("Expected vector agg type"),
         }
     }
@@ -1841,7 +1841,9 @@ impl TypedProgram {
                         self.visit_pt_leaves(element_pt, offset + element_offset, visit)
                     }
                 }
-                AggType::Vector { element_pt, len } => visit(offset, element_pt, len),
+                AggType::Vector { element_pt, len } => {
+                    visit(offset, element_pt.expect_scalar(), len)
+                }
                 AggType::Union { members } => {
                     for m in self.mem.getn(members) {
                         self.visit_pt_leaves(m.ty, offset, visit)
@@ -1901,7 +1903,7 @@ impl TypedProgram {
                 base.lanes > 1 && leaf.base_size() == base_size
             };
             if !same_base
-                || (lanes == 1 && !matches!(st, ScalarType::F32 | ScalarType::F64))
+                || (lanes == 1 && !st.is_float())
                 || offset % base_size != 0
                 || offset / base_size >= MAX_MEMBERS
             {
@@ -1935,9 +1937,11 @@ impl TypedProgram {
         let agg_record = self.agg_types.get(agg_id);
         let size = agg_record.layout.size;
         let bare_vector = match agg_record.agg_type {
-            AggType::Vector { element_pt, len } => {
-                Some(HomogeneousAggregate { element: element_pt, lanes: len, count: 1 })
-            }
+            AggType::Vector { element_pt, len } => Some(HomogeneousAggregate {
+                element: element_pt.expect_scalar(),
+                lanes: len,
+                count: 1,
+            }),
             _ => None,
         };
         let homogeneous = self.get_pt_homogeneous_aggregate(pt);
@@ -2467,13 +2471,10 @@ impl TypedProgram {
                     None => PhysicalTypeResult::No,
                     Some(len) => match self.get_physical_type(vec.element_type) {
                         PhysicalTypeResult::Yes(element_pt) if element_pt.as_scalar().is_some() => {
-                            let element_scalar = element_pt.expect_scalar();
-                            let layout = element_scalar.get_layout().vector_me(len as usize);
+                            let layout =
+                                element_pt.expect_scalar().get_layout().vector_me(len as usize);
                             let record = AggregateTypeRecord {
-                                agg_type: AggType::Vector {
-                                    element_pt: element_scalar,
-                                    len: len as u32,
-                                },
+                                agg_type: AggType::Vector { element_pt, len: len as u32 },
                                 origin_type_id: type_id,
                                 layout,
                                 natural_align: layout.align,
@@ -2759,6 +2760,16 @@ impl TypedProgram {
         pt_result
     }
 
+    pub fn get_raw_scalar(&mut self, type_id: TypeId) -> Option<ScalarType> {
+        match self.get_physical_type(type_id) {
+            PhysicalTypeResult::Yes(pt) => match pt.as_scalar() {
+                Some(ScalarType::Pointer) => None,
+                scalar => scalar,
+            },
+            PhysicalTypeResult::No | PhysicalTypeResult::Infinite => None,
+        }
+    }
+
     pub fn get_physical_type_computed(&self, type_id: TypeId) -> PhysicalTypeResult {
         match self.phys_types.lookup(type_id) {
             Some(result) => result,
@@ -3024,7 +3035,9 @@ impl TypedProgram {
                     Ok(())
                 }
                 AggType::Vector { len, element_pt } => {
-                    write!(w, "<{} x {}>", element_pt, len)
+                    write!(w, "<")?;
+                    self.display_pt(w, element_pt)?;
+                    write!(w, " x {}>", len)
                 }
                 AggType::Union { members } => {
                     write!(w, "union {{ ")?;
