@@ -3272,7 +3272,6 @@ fn compile_ir_builtin(
             let allow_pointer = op == Op::Xchg;
             let type_id = call.type_args.as_slice(&b.k1.mem)[0];
             let t = check_atomic_scalar_type(b, type_id, allow_pointer)?;
-            let signed = b.k1.is_type_signed(type_id);
             let op = match op {
                 Op::Xchg => AtomicRmwOpIr::Xchg,
                 Op::Add => AtomicRmwOpIr::Add,
@@ -3280,10 +3279,15 @@ fn compile_ir_builtin(
                 Op::And => AtomicRmwOpIr::And,
                 Op::Or => AtomicRmwOpIr::Or,
                 Op::Xor => AtomicRmwOpIr::Xor,
-                Op::Min if signed => AtomicRmwOpIr::MinS,
-                Op::Min => AtomicRmwOpIr::MinU,
-                Op::Max if signed => AtomicRmwOpIr::MaxS,
-                Op::Max => AtomicRmwOpIr::MaxU,
+                Op::Min | Op::Max => {
+                    let signed = b.k1.types.get(type_id).expect_int_type().is_signed();
+                    match (op, signed) {
+                        (Op::Min, false) => AtomicRmwOpIr::MinU,
+                        (Op::Min, true) => AtomicRmwOpIr::MinS,
+                        (_, false) => AtomicRmwOpIr::MaxU,
+                        (_, true) => AtomicRmwOpIr::MaxS,
+                    }
+                }
             };
             let ord = b.k1.atomic_ordering_arg(&call, 2)?;
             let rmw_dst = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
@@ -3381,10 +3385,11 @@ fn compile_vector_op(
                 VecOpKind::EqLanes => VecOpIr::EqLanes,
                 VecOpKind::ShuffleBytes => VecOpIr::ShuffleBytes,
                 VecOpKind::LtLanes => {
-                    if callee_vector_elem_is_signed(b, call) {
-                        VecOpIr::LtLanesS
-                    } else {
-                        VecOpIr::LtLanesU
+                    let elem_type = get_callee_vector_elem_type(b, call);
+                    match b.k1.types.get(elem_type) {
+                        Type::Float(_) => VecOpIr::LtLanesU,
+                        elem if elem.expect_int_type().is_signed() => VecOpIr::LtLanesS,
+                        _ => VecOpIr::LtLanesU,
                     }
                 }
                 _ => unreachable!(),
@@ -3442,7 +3447,8 @@ fn compile_vector_op(
             let op = match op {
                 VecOpKind::ShiftLeft => VecOpIr::Shl,
                 _ => {
-                    if callee_vector_elem_is_signed(b, call) {
+                    let elem_type = get_callee_vector_elem_type(b, call);
+                    if b.k1.types.get(elem_type).expect_int_type().is_signed() {
                         VecOpIr::ShrS
                     } else {
                         VecOpIr::ShrU
@@ -3531,13 +3537,13 @@ fn compile_vector_op(
     }
 }
 
-fn callee_vector_elem_is_signed(b: &mut Builder, call: &Call) -> bool {
+fn get_callee_vector_elem_type(b: &mut Builder, call: &Call) -> TypeId {
     let function_type = b.k1.get_callee_function_type(&call.callee);
     let return_type = b.k1.types.get(function_type).as_function().unwrap().return_type;
     let Type::Vector(vector) = b.k1.types.get(return_type) else {
         b.k1.ice_span(b.cur_span, "vector op must return a vector")
     };
-    b.k1.is_type_signed(vector.element_type)
+    vector.element_type
 }
 
 fn vector_pt_parts(b: &Builder, pt: PhysicalType) -> (ScalarType, u32) {

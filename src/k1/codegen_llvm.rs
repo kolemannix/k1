@@ -48,8 +48,8 @@ use crate::lex::Span;
 use crate::parse::{FileId, NumericWidth, StringId};
 use crate::perfect_hash::{self, PerfectHash};
 use crate::typer::types::{
-    AbiMode, AggType, AggregateTypeId, Layout, NamedScalarId, PhysicalType, PhysicalTypeEnum,
-    PhysicalTypeResult, RegisterClass, ScalarType, StructField, Type, TypeId,
+    AbiMode, AggType, AggregateTypeId, IntegerType, Layout, NamedScalarId, PhysicalType,
+    PhysicalTypeEnum, PhysicalTypeResult, RegisterClass, ScalarType, StructField, Type, TypeId,
 };
 use crate::typer::{
     FunctionId, K1Result, Linkage as TyperLinkage, NamespaceId, StaticContainerKind,
@@ -893,7 +893,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 None => i32_type.const_zero(),
                 Some(v) => {
                     let ret_type = self.k1.get_function_type(main_function_id).return_type;
-                    let signed = self.k1.is_type_signed(ret_type);
+                    let signed = self.k1.types.get(ret_type).expect_int_type().is_signed();
                     self.builder
                         .build_int_cast_sign_flag(v.into_int_value(), i32_type, signed, "")
                         .unwrap()
@@ -1454,17 +1454,21 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         call
     }
 
-    fn int_div_helper(
+    fn build_div_check(
         &mut self,
-        int_type: IntType<'ctx>,
-        op: IntOp,
-    ) -> CgResult<FunctionValue<'ctx>> {
-        let name = format!("__k1_{}_i{}", op.name(), int_type.get_bit_width());
+        lhs: IntValue<'ctx>,
+        rhs: IntValue<'ctx>,
+        signed: bool,
+    ) -> CgResult<()> {
+        let int_type = lhs.get_type();
+        let op_name = if signed { "sdiv" } else { "udiv" };
+        let name = format!("__k1_check_{}_i{}", op_name, int_type.get_bit_width());
         if let Some(f) = self.llvm_module.get_function(&name) {
-            return Ok(f);
+            self.build_call(f, &[lhs.into(), rhs.into()]);
+            return Ok(());
         }
         let crash_fn = self.k1_ns_fn_value("crash-div")?;
-        let fn_type = int_type.fn_type(&[int_type.into(), int_type.into()], false);
+        let fn_type = self.ctx.void_type().fn_type(&[int_type.into(), int_type.into()], false);
         let f = self.llvm_module.add_function(&name, fn_type, Some(LlvmLinkage::Private));
         f.add_attribute(AttributeLoc::Function, self.make_enum_attribute("alwaysinline", 0));
         f.add_attribute(AttributeLoc::Function, self.make_enum_attribute("nounwind", 0));
@@ -1474,19 +1478,20 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
         let entry_block = self.ctx.append_basic_block(f, "entry");
         self.builder.position_at_end(entry_block);
-        let lhs = f.get_nth_param(0).unwrap().into_int_value();
-        let rhs = f.get_nth_param(1).unwrap().into_int_value();
+        let dividend = f.get_nth_param(0).unwrap().into_int_value();
+        let divisor = f.get_nth_param(1).unwrap().into_int_value();
         let is_zero = self
             .builder
-            .build_int_compare(IntPredicate::EQ, rhs, int_type.const_zero(), "div_zero")
+            .build_int_compare(IntPredicate::EQ, divisor, int_type.const_zero(), "div_zero")
             .unwrap();
-        let bad = if matches!(op, IntOp::DivS | IntOp::RemS) {
+        let bad = if signed {
             let min = int_type.const_int(1u64 << (int_type.get_bit_width() - 1), false);
             let is_neg_one = self
                 .builder
-                .build_int_compare(IntPredicate::EQ, rhs, int_type.const_all_ones(), "")
+                .build_int_compare(IntPredicate::EQ, divisor, int_type.const_all_ones(), "")
                 .unwrap();
-            let is_min = self.builder.build_int_compare(IntPredicate::EQ, lhs, min, "").unwrap();
+            let is_min =
+                self.builder.build_int_compare(IntPredicate::EQ, dividend, min, "").unwrap();
             let overflow = self.builder.build_and(is_neg_one, is_min, "div_overflow").unwrap();
             self.builder.build_or(is_zero, overflow, "div_bad").unwrap()
         } else {
@@ -1502,14 +1507,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.builder.build_unreachable().unwrap();
 
         self.builder.position_at_end(ok_block);
-        let result = match op {
-            IntOp::DivU => self.builder.build_int_unsigned_div(lhs, rhs, "").unwrap(),
-            IntOp::DivS => self.builder.build_int_signed_div(lhs, rhs, "").unwrap(),
-            IntOp::RemU => self.builder.build_int_unsigned_rem(lhs, rhs, "").unwrap(),
-            IntOp::RemS => self.builder.build_int_signed_rem(lhs, rhs, "").unwrap(),
-            _ => unreachable!("int_div_helper takes a div or rem op"),
-        };
-        self.builder.build_return(Some(&result)).unwrap();
+        self.builder.build_return(None).unwrap();
 
         if let Some(block) = saved_block {
             self.builder.position_at_end(block);
@@ -1517,7 +1515,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         if let Some(loc) = saved_loc {
             self.builder.set_current_debug_location(loc);
         }
-        Ok(f)
+        self.build_call(f, &[lhs.into(), rhs.into()]);
+        Ok(())
     }
 
     fn build_shift_count(&self, count: IntValue<'ctx>, subject: IntValue<'ctx>) -> IntValue<'ctx> {
@@ -2269,7 +2268,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             ([range, None], [range_attribute, None])
         };
         let native_abi_attribute = match st.width() {
-            NumericWidth::B8 | NumericWidth::B16 if self.k1.is_type_signed(origin) => {
+            NumericWidth::B8 | NumericWidth::B16
+                if self.k1.expect_named_scalar_int_type(id).is_signed() =>
+            {
                 Some(self.make_enum_attribute("signext", 0))
             }
             NumericWidth::B8 | NumericWidth::B16 => Some(self.make_enum_attribute("zeroext", 0)),
@@ -2294,26 +2295,27 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     fn make_named_scalar_debug_type(&mut self, st: ScalarType, id: NamedScalarId) -> DIType<'ctx> {
         let origin = *self.k1.named_scalars.get(id);
-        let signed = self.k1.is_type_signed(origin);
-        let int_encoding = if signed { Self::DW_ATE_SIGNED } else { Self::DW_ATE_UNSIGNED };
         let layout = st.get_layout();
         let make_basic = |cg: &Self, name: &str, encoding: u32| {
             cg.debug.debug_builder.create_basic_type(name, layout.size_bits(), encoding, 0).unwrap()
+        };
+        let make_int_basic = |cg: &Self, int_type: IntegerType| {
+            let encoding =
+                if int_type.is_signed() { Self::DW_ATE_SIGNED } else { Self::DW_ATE_UNSIGNED };
+            make_basic(cg, &int_type.to_string(), encoding)
         };
         let mut enumerators: SV8<DIEnumerator<'ctx>> = smallvec::smallvec![];
         let (name, int_type) = match *self.k1.types.get(origin) {
             Type::Bool => return make_basic(self, "bool", Self::DW_ATE_BOOLEAN).as_type(),
             Type::Char => return make_basic(self, "char", Self::DW_ATE_UNSIGNED_CHAR).as_type(),
-            Type::Integer(int_type) => {
-                return make_basic(self, &int_type.to_string(), int_encoding).as_type();
-            }
+            Type::Integer(int_type) => return make_int_basic(self, int_type).as_type(),
             Type::Reference(_) => return self.builtin_types.scalar(st).di_type.unwrap(),
             Type::Enum(e) => {
                 for member in self.k1.mem.getn(e.member_values) {
                     enumerators.push(self.debug.debug_builder.create_enumerator(
                         self.k1.ident_str(member.name),
                         member.int_value.to_u64_bits() as i64,
-                        !signed,
+                        !e.int_type.is_signed(),
                     ));
                 }
                 (self.codegen_type_name(origin), e.int_type)
@@ -2323,14 +2325,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     enumerators.push(self.debug.debug_builder.create_enumerator(
                         self.k1.ident_str(variant.name),
                         variant.tag_value.to_u64_bits() as i64,
-                        !signed,
+                        !sum.tag_type.is_signed(),
                     ));
                 }
                 (format!("{}.tag", self.codegen_type_name(origin)), sum.tag_type)
             }
             _ => self.k1.ice_span(Span::NONE, "named scalar origin is not a scalar type"),
         };
-        let inner = make_basic(self, &int_type.to_string(), int_encoding);
+        let inner = make_int_basic(self, int_type);
         let line_number = self.get_line_number(self.debug.current_span());
         self.debug
             .debug_builder
@@ -4561,10 +4563,21 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     IntOp::Add => self.builder.build_int_add(l, r, "").unwrap(),
                     IntOp::Sub => self.builder.build_int_sub(l, r, "").unwrap(),
                     IntOp::Mul => self.builder.build_int_mul(l, r, "").unwrap(),
-                    IntOp::DivU | IntOp::DivS | IntOp::RemU | IntOp::RemS => {
-                        let helper = self.int_div_helper(l.get_type(), op)?;
-                        let call = self.build_call(helper, &[l.into(), r.into()]);
-                        call.try_as_basic_value().basic().unwrap().into_int_value()
+                    IntOp::DivU => {
+                        self.build_div_check(l, r, false)?;
+                        self.builder.build_int_unsigned_div(l, r, "").unwrap()
+                    }
+                    IntOp::DivS => {
+                        self.build_div_check(l, r, true)?;
+                        self.builder.build_int_signed_div(l, r, "").unwrap()
+                    }
+                    IntOp::RemU => {
+                        self.build_div_check(l, r, false)?;
+                        self.builder.build_int_unsigned_rem(l, r, "").unwrap()
+                    }
+                    IntOp::RemS => {
+                        self.build_div_check(l, r, true)?;
+                        self.builder.build_int_signed_rem(l, r, "").unwrap()
                     }
                     IntOp::And => self.builder.build_and(l, r, "").unwrap(),
                     IntOp::Or => self.builder.build_or(l, r, "").unwrap(),

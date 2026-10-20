@@ -167,13 +167,15 @@ fn prep_ffi_cif(
 }
 
 fn scalar_to_ffi_type(k1: &TypedProgram, pt: PhysicalType) -> libffi::low::ffi_type {
-    let signed = pt.named_scalar().is_some_and(|id| k1.is_type_signed(*k1.named_scalars.get(id)));
     unsafe {
         match pt.expect_scalar() {
             ScalarType::F32 => types::float,
             ScalarType::F64 => types::double,
             ScalarType::Pointer => types::pointer,
-            st => match (st.width(), signed) {
+            st => match (
+                st.width(),
+                pt.named_scalar().is_some_and(|id| k1.expect_named_scalar_int_type(id).is_signed()),
+            ) {
                 (NumericWidth::B8, false) => types::uint8,
                 (NumericWidth::B16, false) => types::uint16,
                 (NumericWidth::B32, false) => types::uint32,

@@ -32,6 +32,7 @@ The coherence post-pass follows the erasure question on every change, once it wo
 
 Unless otherwise noted, post a patch in the chat session after every turn of code changes. If its huge, a patch of the highlights.
 
+Unless otherwise noted, you leave work uncommitted, I annotate the code with //review comments as we iterate
 
 # K1 Repo Guide
 

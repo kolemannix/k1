@@ -4224,7 +4224,7 @@ impl TypedProgram {
         id
     }
 
-    fn register_builtin_ability_impl_shell(
+    fn register_builtin_ability_impl(
         &mut self,
         self_type_id: TypeId,
         base_ability_id: AbilityId,
@@ -4238,9 +4238,10 @@ impl TypedProgram {
         let scope_id =
             self.scopes.add_child_scope(base_scope_id, ScopeType::AbilityImpl, ScopeOwnerId::None);
 
-        // Add self
         let _ = self.scopes.add_type(scope_id, self.ast.idents.b.self_, self_type_id);
         let _ = self.scopes.add_type_substitution(scope_id, ability_self_type, self_type_id);
+
+        debug_assert!(ability.kind.arguments(self).is_empty(), "expect a base ability id");
 
         // Add impl params
         for (parent_impl_param, impl_arg) in self
@@ -4791,12 +4792,8 @@ impl TypedProgram {
         impl_arguments: TypeIdSlice,
         span: Span,
     ) -> AbilityImplHandle {
-        let handle = self.register_builtin_ability_impl_shell(
-            self_type_id,
-            base_ability_id,
-            impl_arguments,
-            span,
-        );
+        let handle =
+            self.register_builtin_ability_impl(self_type_id, base_ability_id, impl_arguments, span);
         if let Err(e) = self.declare_builtin_ability_impl_functions(handle.full_impl_id) {
             ice_span!(
                 self,
@@ -4821,7 +4818,7 @@ impl TypedProgram {
         span: Span,
     ) -> Result<AbilityImplHandle, MStr<MemTmp>> {
         let first_impl_id = self.ability_impls.next_id();
-        let impl_handle = self.register_builtin_ability_impl_shell(
+        let impl_handle = self.register_builtin_ability_impl(
             self_type_id,
             target_base_ability_id,
             MSlice::empty(),
@@ -13183,8 +13180,10 @@ impl TypedProgram {
         let second = namespace_chain.get(2).map(|name| self.ident_str(*name));
         let third = namespace_chain.get(3).map(|name| self.ident_str(*name));
         let t = self_type.map(|t| self.types.get(t));
-        let is_integer = t.is_some_and(|t| t.as_integer().is_some());
-        let signed = self_type.is_some_and(|t| self.is_type_signed(t));
+        let int_type = match t {
+            Some(Type::Integer(int_type)) => Some(*int_type),
+            _ => None,
+        };
         let is_float = t.is_some_and(|t| t.as_float().is_some());
         use ScalarOpKind as K;
         macro_rules! mk_scalar {
@@ -13257,17 +13256,23 @@ impl TypedProgram {
                     }
                     _ => None,
                 },
-                (ABILITY_ID_BITWISE, bitwise_fn) if is_integer => match bitwise_fn {
-                    "bit-not" => mk_scalar!(K::IntUnop(IntUnop::Not)),
-                    "bit-and" => mk_scalar!(K::IntBinop(IntOp::And)),
-                    "bit-or" => mk_scalar!(K::IntBinop(IntOp::Or)),
-                    "xor" => mk_scalar!(K::IntBinop(IntOp::Xor)),
-                    "shift-left" => mk_scalar!(K::IntBinop(IntOp::Shl)),
-                    "shift-right" => {
-                        mk_scalar!(K::IntBinop(if signed { IntOp::ShrS } else { IntOp::ShrU }))
+                (ABILITY_ID_BITWISE, bitwise_fn) if let Some(int_type) = int_type => {
+                    match bitwise_fn {
+                        "bit-not" => mk_scalar!(K::IntUnop(IntUnop::Not)),
+                        "bit-and" => mk_scalar!(K::IntBinop(IntOp::And)),
+                        "bit-or" => mk_scalar!(K::IntBinop(IntOp::Or)),
+                        "xor" => mk_scalar!(K::IntBinop(IntOp::Xor)),
+                        "shift-left" => mk_scalar!(K::IntBinop(IntOp::Shl)),
+                        "shift-right" => {
+                            mk_scalar!(K::IntBinop(if int_type.is_signed() {
+                                IntOp::ShrS
+                            } else {
+                                IntOp::ShrU
+                            }))
+                        }
+                        _ => None,
                     }
-                    _ => None,
-                },
+                }
                 (ABILITY_ID_BITWISE, bitwise_fn) if matches!(t, Some(Type::Vector(_))) => {
                     let op = match bitwise_fn {
                         "bit-not" => Some(VecOpKind::BitNot),
@@ -13299,15 +13304,23 @@ impl TypedProgram {
                     _ => None,
                 },
                 (ABILITY_ID_DIV, "div") => match t {
-                    Some(Type::Integer(_)) => {
-                        mk_scalar!(K::IntBinop(if signed { IntOp::DivS } else { IntOp::DivU }))
+                    Some(Type::Integer(int_type)) => {
+                        mk_scalar!(K::IntBinop(if int_type.is_signed() {
+                            IntOp::DivS
+                        } else {
+                            IntOp::DivU
+                        }))
                     }
                     Some(Type::Float(_)) => mk_scalar!(K::FloatBinop(FloatOp::Div)),
                     _ => None,
                 },
                 (ABILITY_ID_REM, "rem") => match t {
-                    Some(Type::Integer(_)) => {
-                        mk_scalar!(K::IntBinop(if signed { IntOp::RemS } else { IntOp::RemU }))
+                    Some(Type::Integer(int_type)) => {
+                        mk_scalar!(K::IntBinop(if int_type.is_signed() {
+                            IntOp::RemS
+                        } else {
+                            IntOp::RemU
+                        }))
                     }
                     Some(Type::Float(_)) => mk_scalar!(K::FloatBinop(FloatOp::Rem)),
                     _ => None,
@@ -13318,7 +13331,7 @@ impl TypedProgram {
                     Some(Type::Float(_)) => mk_scalar!(K::FloatUnop(FloatUnop::Neg)),
                     _ => None,
                 },
-                (ABILITY_ID_INT_BITS, bits_fn) if is_integer => match bits_fn {
+                (ABILITY_ID_INT_BITS, bits_fn) if int_type.is_some() => match bits_fn {
                     "trailing-zeros" => mk_scalar!(K::IntUnop(IntUnop::Ctz)),
                     "leading-zeros" => mk_scalar!(K::IntUnop(IntUnop::Clz)),
                     "count-ones" => mk_scalar!(K::IntUnop(IntUnop::Popcount)),
@@ -13327,8 +13340,8 @@ impl TypedProgram {
                     "rotate-right" => mk_scalar!(K::IntBinop(IntOp::RotateRight)),
                     _ => None,
                 },
-                (ABILITY_ID_OVERFLOW_ARITH, overflow_fn) if is_integer => {
-                    let op = match (overflow_fn, signed) {
+                (ABILITY_ID_OVERFLOW_ARITH, overflow_fn) if let Some(int_type) = int_type => {
+                    let op = match (overflow_fn, int_type.is_signed()) {
                         ("add-overflow", false) => Some(OverflowOp::AddU),
                         ("add-overflow", true) => Some(OverflowOp::AddS),
                         ("sub-overflow", false) => Some(OverflowOp::SubU),
@@ -13339,17 +13352,19 @@ impl TypedProgram {
                     };
                     op.map(|op| Builtin::Ir(BuiltinIr::IntOverflow(op)))
                 }
-                (ABILITY_ID_SCALAR_CMP, cmp_fn) if is_integer => match (cmp_fn, signed) {
-                    ("lt", true) => mk_scalar!(K::IntCmp(IntCmpPred::Slt)),
-                    ("lt", false) => mk_scalar!(K::IntCmp(IntCmpPred::Ult)),
-                    ("le", true) => mk_scalar!(K::IntCmp(IntCmpPred::Sle)),
-                    ("le", false) => mk_scalar!(K::IntCmp(IntCmpPred::Ule)),
-                    ("gt", true) => mk_scalar!(K::IntCmp(IntCmpPred::Sgt)),
-                    ("gt", false) => mk_scalar!(K::IntCmp(IntCmpPred::Ugt)),
-                    ("ge", true) => mk_scalar!(K::IntCmp(IntCmpPred::Sge)),
-                    ("ge", false) => mk_scalar!(K::IntCmp(IntCmpPred::Uge)),
-                    _ => None,
-                },
+                (ABILITY_ID_SCALAR_CMP, cmp_fn) if let Some(int_type) = int_type => {
+                    match (cmp_fn, int_type.is_signed()) {
+                        ("lt", true) => mk_scalar!(K::IntCmp(IntCmpPred::Slt)),
+                        ("lt", false) => mk_scalar!(K::IntCmp(IntCmpPred::Ult)),
+                        ("le", true) => mk_scalar!(K::IntCmp(IntCmpPred::Sle)),
+                        ("le", false) => mk_scalar!(K::IntCmp(IntCmpPred::Ule)),
+                        ("gt", true) => mk_scalar!(K::IntCmp(IntCmpPred::Sgt)),
+                        ("gt", false) => mk_scalar!(K::IntCmp(IntCmpPred::Ugt)),
+                        ("ge", true) => mk_scalar!(K::IntCmp(IntCmpPred::Sge)),
+                        ("ge", false) => mk_scalar!(K::IntCmp(IntCmpPred::Uge)),
+                        _ => None,
+                    }
+                }
                 (ABILITY_ID_SCALAR_CMP, cmp_fn) if is_float => match cmp_fn {
                     "lt" => mk_scalar!(K::FloatCmp(FloatCmpPred::Lt)),
                     "le" => mk_scalar!(K::FloatCmp(FloatCmpPred::Le)),
@@ -13359,15 +13374,19 @@ impl TypedProgram {
                     "max" => mk_scalar!(K::FloatBinop(FloatOp::Max)),
                     _ => None,
                 },
-                (ABILITY_ID_COMPARABLE, "compare") if is_integer => {
-                    mk_scalar!(K::IntCmp3(if signed { Cmp3Op::Scmp } else { Cmp3Op::Ucmp }))
+                (ABILITY_ID_COMPARABLE, "compare") if let Some(int_type) = int_type => {
+                    mk_scalar!(K::IntCmp3(if int_type.is_signed() {
+                        Cmp3Op::Scmp
+                    } else {
+                        Cmp3Op::Ucmp
+                    }))
                 }
                 _ => None,
             }
         } else {
             match t {
-                Some(Type::Integer(_)) => match fn_name_str {
-                    "mul-high" => mk_scalar!(K::IntBinop(if signed {
+                Some(Type::Integer(int_type)) => match fn_name_str {
+                    "mul-high" => mk_scalar!(K::IntBinop(if int_type.is_signed() {
                         IntOp::MulHighS
                     } else {
                         IntOp::MulHighU

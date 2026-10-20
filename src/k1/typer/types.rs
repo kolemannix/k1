@@ -1000,10 +1000,12 @@ impl Type {
     }
 
     #[track_caller]
-    pub fn expect_integer(&self) -> IntegerType {
+    pub fn expect_int_type(&self) -> IntegerType {
         match self {
             Type::Integer(int) => *int,
-            _ => panic!("expect_integer called on: {}", self.kind_name()),
+            Type::Enum(e) => e.int_type,
+            Type::Char | Type::Bool => IntegerType::U8,
+            _ => panic!("expect_int_type called on: {}", self.kind_name()),
         }
     }
 
@@ -2400,12 +2402,10 @@ impl TypedProgram {
         PhysicalType::named(st, self.named_scalars.add(origin))
     }
 
-    pub fn is_type_signed(&self, type_id: TypeId) -> bool {
-        match self.types.get(type_id) {
-            Type::Integer(i) => i.is_signed(),
-            Type::Enum(e) => e.int_type.is_signed(),
-            Type::Sum(s) => s.tag_type.is_signed(),
-            _ => false,
+    pub fn expect_named_scalar_int_type(&self, id: NamedScalarId) -> IntegerType {
+        match self.types.get(*self.named_scalars.get(id)) {
+            Type::Sum(sum) => sum.tag_type,
+            t => t.expect_int_type(),
         }
     }
 
@@ -2414,15 +2414,8 @@ impl TypedProgram {
             return PhysicalTypeResult::No;
         }
         match self.types.get(type_id) {
-            Type::Char | Type::Bool => {
-                PhysicalTypeResult::Yes(self.make_named_scalar(ScalarType::I8, type_id))
-            }
-            Type::Integer(i) => {
-                let st = i.get_scalar_type();
-                PhysicalTypeResult::Yes(self.make_named_scalar(st, type_id))
-            }
-            Type::Enum(se) => {
-                let st = se.int_type.get_scalar_type();
+            t @ (Type::Char | Type::Bool | Type::Integer(_) | Type::Enum(_)) => {
+                let st = t.expect_int_type().get_scalar_type();
                 PhysicalTypeResult::Yes(self.make_named_scalar(st, type_id))
             }
             Type::Float(f) => PhysicalTypeResult::Yes(PhysicalType::scalar(f.get_scalar_type())),
