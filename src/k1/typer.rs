@@ -141,7 +141,7 @@ pub const ABILITY_ID_EQUALS: AbilityId = AbilityId(NonZeroU32::new(3).unwrap());
 pub const ABILITY_ID_WRITER: AbilityId = AbilityId(NonZeroU32::new(4).unwrap());
 pub const ABILITY_ID_PRINT: AbilityId = AbilityId(NonZeroU32::new(5).unwrap());
 pub const ABILITY_ID_PRINT_PRECISE: AbilityId = AbilityId(NonZeroU32::new(6).unwrap());
-pub const ABILITY_ID_SHOW: AbilityId = AbilityId(NonZeroU32::new(7).unwrap());
+pub const ABILITY_ID_TO_STRING: AbilityId = AbilityId(NonZeroU32::new(7).unwrap());
 pub const ABILITY_ID_BITWISE: AbilityId = AbilityId(NonZeroU32::new(8).unwrap());
 pub const ABILITY_ID_INT_BITS: AbilityId = AbilityId(NonZeroU32::new(9).unwrap());
 pub const ABILITY_ID_ADD: AbilityId = AbilityId(NonZeroU32::new(10).unwrap());
@@ -18180,7 +18180,7 @@ impl TypedProgram {
             core!("equals"),
             core!("writer"),
             core!("print"),
-            core!("show"),
+            core!("to-string"),
             core!("bitwise"),
             core!("int-bits"),
             core!("comparable"),

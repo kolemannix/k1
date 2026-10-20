@@ -639,7 +639,7 @@ pub struct ParsedCode {
 }
 
 /// When you need to refer to a specific ability implementation:
-/// `(Show @ int)/show()`
+/// `to-string@(int)/to-string()`
 #[derive(Clone, Copy)]
 pub struct ParsedQAbilityCall {
     pub ability_expr: AstHandle<ParsedAbilityExpr>,

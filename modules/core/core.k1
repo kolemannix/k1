@@ -24,7 +24,7 @@ fn(inline) identity[t](value: t): t { value }
 fn print[t: print](context locn: k1/source-location)(t) {
   // TODO: Instead of this hack, make write(Sink, span[byte]) the intrinsic.
   if k1/is-static and k1/capture-prints {
-    let s = t.show()
+    let s = t.to-string()
     k1/emit-compiler-message(locn, :info, s)
   } else {
     t.print-to(io/stdout)
@@ -37,7 +37,7 @@ fn println[t: print](context locn: k1/source-location)(t) {
 
 fn eprint[t: print](context locn: k1/source-location)(t) {
   if k1/is-static and k1/capture-prints {
-    let s = t.show()
+    let s = t.to-string()
     k1/emit-compiler-message(locn, :warn, s)
   } else {
     t.print-to(io/stderr)
@@ -272,10 +272,6 @@ fn assert-msg(context locn: k1/source-location)(msg: string, value: bool) {
 }
 
 ns for char {
-  fn to-string(self: char): string {
-    string/wrap-list([self])
-  }
-
   fn(inline) as-u8(self: char): u8 { mem/bitcast[char, u8](self) }
   fn(inline) u8(self: char): u8    { mem/bitcast[char, u8](self) }
   fn(inline) as-i8(self: char): i8 { mem/bitcast[char, i8](self) }
@@ -346,8 +342,8 @@ impl scalar-cmp for char {
   fn(inline) ge(self, other: self): bool { (self.as-u8()).ge(other.as-u8()) }
 }
 
-impl[t: print] show for t {
-  fn show(self): string {
+impl[t: print] to-string for t {
+  fn to-string(self): string {
     let bytes = spill-list/new[u8, 64]()
     self.print-to(bytes.&)
     string/wrap-bytes(bytes.as-span()).cloned()
@@ -361,11 +357,11 @@ impl print for bool {
     w.write(s)
   }
 }
-impl show for bool { fn show(self: bool): string { if self "true" else "false" } }
+impl to-string for bool { fn to-string(self: bool): string { if self "true" else "false" } }
 
 impl print for char { fn print-to[w: writer](self: char, w) { w.write-char(self) } }
-// Direct specialized 'show' impl to avoid going through a buffer
-impl show for char { fn show(self: char): string { self.to-string() } }
+// Direct specialized 'to-string' impl to avoid going through a buffer
+impl to-string for char { fn to-string(self: char): string { string/wrap-list([self]) } }
 
 let DECIMAL_PAIRS: array[u16, 100] = {
   let pairs: array[u16, 100] = uninit

@@ -307,12 +307,9 @@ ability print-precise {
 // or generic over w
 // ability inspect { fn inspect-to[w: writer](f: formatter[w], self) }
 
-// TODO: show does not belong in k1 long term because the name is too Haskelly, which is to say
-//       both erudite and pedestrian at the same time? Looking at you, 'Just'
-
 // prints self into the current default allocator
-ability show {
-  fn show(self): string
+ability to-string {
+  fn to-string(self): string
 }
 
 ability bitwise {

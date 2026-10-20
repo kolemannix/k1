@@ -23,10 +23,10 @@ ns for result {
     }
   }
 
-  fn show-err[t, e: print](self: result[t, e]): result[t, string] {
+  fn err-to-string[t, e: print](self: result[t, e]): result[t, string] {
     if self is {
       :ok t  -> :ok t,
-      :err e -> :err e.show()
+      :err e -> :err e.to-string()
     }
   }
 

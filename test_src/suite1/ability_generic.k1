@@ -20,7 +20,7 @@ ns ability_generic {
   ability g-add[rhs, impl output] {
     fn gadd(self, rhs: rhs): output
   }
-  impl[t: g-add[rhs = t, output = t] and show]
+  impl[t: g-add[rhs = t, output = t] and to-string]
     g-add[rhs = generic-point[t], output = generic-point[t]]
     for generic-point[t] {
       fn gadd(self: generic-point[t], other: generic-point[t]): generic-point[t] {
@@ -33,8 +33,8 @@ ns ability_generic {
   ability from[f] { fn from(t: f): self }
   ability to[to] { fn to(self): to }
 
-  impl[t: show] to[to = string] for t {
-    fn to(self): string { self.show() }
+  impl[t: to-string] to[to = string] for t {
+    fn to(self): string { self.to-string() }
   }
 
   impl[u, t: to[to = u]] from[f = t] for u {
@@ -42,10 +42,10 @@ ns ability_generic {
   }
 
   impl to[to = string] for i32 {
-    fn to(self): string { show/show[i32](self) }
+    fn to(self): string { to-string/to-string[i32](self) }
   }
   impl to[to = string] for i64 {
-    fn to(self): string { show/show[i64](self) }
+    fn to(self): string { to-string/to-string[i64](self) }
   }
   impl to[to = char] for byte {
     fn to(self): char { self.as-char() }

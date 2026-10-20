@@ -67,14 +67,14 @@ fn(test) dom() {
     :raw(html/render(\{ <b>raw</b> })),
   ])
   let want = "<div class=\"card\" data-on:click=\"@post(&#39;/x&#39;)\"><ul><li data-n=\"1\" checked>a&lt;b</li><li data-n=\"2\">c</li></ul><input disabled aria-invalid=\"false\"><b>raw</b></div>"
-  assert-equals(n.show(), want)
+  assert-equals(n.to-string(), want)
   assert-equals(html/render(\{ <section>{n}</section> }), "<section>$want</section>")
   if n is :elem e {
     e.children.push(:text "late")
     e.attrs.push(.{ name = "id", value = :text "x" })
   }
-  assert(n.show().ends-with("late</div>"))
-  assert(n.show().starts-with("<div class=\"card\" data-on:click=\"@post(&#39;/x&#39;)\" id=\"x\">"))
-  let baked: string = #static h/p([h/id("s"), :text "1 < 2"]).show()
+  assert(n.to-string().ends-with("late</div>"))
+  assert(n.to-string().starts-with("<div class=\"card\" data-on:click=\"@post(&#39;/x&#39;)\" id=\"x\">"))
+  let baked: string = #static h/p([h/id("s"), :text "1 < 2"]).to-string()
   assert-equals(baked, "<p id=\"s\">1 &lt; 2</p>")
 }

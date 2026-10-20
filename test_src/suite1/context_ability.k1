@@ -30,8 +30,8 @@ fn tag-both[t: tagged](context c: t)(value: t): int {
   c.tag() + value.tag()
 }
 
-fn tag-show[t: tagged and equals and show](context c: t)(): string {
-  c.show()
+fn tag-string[t: tagged and equals and to-string](context c: t)(): string {
+  c.to-string()
 }
 
 fn(test) writer-context-reaches-nested-calls() {
@@ -56,10 +56,10 @@ fn(test) tagged-context-explicit-and-shadowed() {
   assert(inner-result == 2)
 
   let all-result = {
-    let(context(impl tagged, equals, show)) all = 5
+    let(context(impl tagged, equals, to-string)) all = 5
     let partial-result = {
       let(context(impl tagged)) _partial = true
-      tag-show()
+      tag-string()
     }
     partial-result
   }

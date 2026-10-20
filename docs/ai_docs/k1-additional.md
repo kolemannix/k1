@@ -207,7 +207,8 @@ state pointer means a dyn can't cross `#static` into a runtime constant.
   `resolve`, `path-segments`, `query-pairs`, `url/builder`, `url/percent`,
   `url/form`. `http/header.url` is parsed (400 if not).
 - SIMD (`core/vector.k1`): `eq-lanes lt-lanes gt-lanes to-mask shuffle-bytes`
-  (16 lanes, pshufb), `vector/shift-bytes[k](prev, cur)`. Library byte scans
+  (16 lanes, pshufb), `vector/shuffle(a, b, mask)` (static lane indices into a
+  then b), `vector/shift-bytes[k](prev, cur)`. Library byte scans
   vectorize: `index-of`/`position` first; a stop-at-any-of-N scan follows
   `std/url` `find-stop` (`vector/splat` + `load-unchecked` over `k1/simd-bytes`
   lanes, scalar tail); `json` `escape-position` ORs `eq-lanes`/`lt-lanes` classes.

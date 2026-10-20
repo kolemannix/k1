@@ -14,7 +14,7 @@ fn(noinline) from-int(slots: *array[string, 1024], arenas: array[*arena, 2], n: 
     let end = (i + BLOCK).min(n)
     mem/with-arena(strings, {
       while i < end {
-        slots.[(i & 1023).signed()] = i.show()
+        slots.[(i & 1023).signed()] = i.to-string()
         i = i + 1
       }
     })
@@ -48,15 +48,15 @@ fn main(): i32 {
   for 0.until(RUNS) {
     best = best.min(timed(fn[slots, arenas]. from-int(slots, arenas, N)))
   }
-  assert-equals(slots.[((N - 1) & 1023).signed()], (N - 1).show())
-  report("k1 string show()", best)
+  assert-equals(slots.[((N - 1) & 1023).signed()], (N - 1).to-string())
+  report("k1 string to-string()", best)
 
   let spill-slots = mem/alloc-t[array[spill-string[22], 1024]]
   best = u64/max-value
   for 0.until(RUNS) {
     best = best.min(timed(fn[spill-slots]. from-int-spill(spill-slots, N)))
   }
-  assert-equals(spill-slots.[((N - 1) & 1023).signed()].&.as-string(), (N - 1).show())
+  assert-equals(spill-slots.[((N - 1) & 1023).signed()].&.as-string(), (N - 1).to-string())
   report("k1 spill-string[22] print-to", best)
   0
 }

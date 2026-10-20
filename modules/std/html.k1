@@ -77,9 +77,9 @@ ns dom {
       type[bool](b) -> if is-boolean-attr(name) {
         if b :attr .{ name, value = :present } else :frag span/empty()
       } else {
-        :attr .{ name, value = :text b.show() }
+        :attr .{ name, value = :text b.to-string() }
       },
-      _ -> :attr .{ name, value = :text value.show() },
+      _ -> :attr .{ name, value = :text value.to-string() },
     }
   }
 

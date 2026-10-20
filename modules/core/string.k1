@@ -234,8 +234,8 @@ impl from-string[e = never] for string {
   fn from-string(s: string): result[string, never] { :ok s }
 }
 
-impl show for string {
-  fn show(self: string): string { self }
+impl to-string for string {
+  fn to-string(self: string): string { self }
 }
 
 impl comparable for string {

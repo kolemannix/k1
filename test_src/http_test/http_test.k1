@@ -35,7 +35,7 @@ fn route-of(method: http/llhttp/method, target: string): result[route, http/rout
 
 fn(test) test-routing() {
   assert(route/parse-request(http/header/get("/game/42/poke")) is :err :bad-method _)
-  assert((route:game-poke .{ id = 42 }).show() == "/game/42/poke")
+  assert((route:game-poke .{ id = 42 }).to-string() == "/game/42/poke")
   assert("${route:files .{ path = "a b/c" }}" == "/files/a%20b/c")
 
   assert(route-of(:HEAD, "/events?foo=1") is :ok :events)
@@ -49,12 +49,12 @@ fn(test) test-routing() {
   assert(route-of(:OPTIONS, "*") is :err :not-found)
 
   let g = route:grade-rate .{ who = "a b", plan-id = -3, item-id = 9, note = :some "x&y=1+z" }
-  assert-equals(g.show(), "/cmd/grade-rate/a%20b?plan-id=-3&item-id=9&note=x%26y%3D1%2Bz")
-  assert-equals((route:grade-rate .{ who = "a/b", plan-id = 1, item-id = 2, note = :some "x y" }).show(), "/cmd/grade-rate/a%2Fb?plan-id=1&item-id=2&note=x+y")
-  assert(route-of(:GET, g.show()) is :ok :grade-rate r and r.who == "a b" and r.plan-id == -3 and r.item-id == 9 and r.note is :some nt and nt == "x&y=1+z")
+  assert-equals(g.to-string(), "/cmd/grade-rate/a%20b?plan-id=-3&item-id=9&note=x%26y%3D1%2Bz")
+  assert-equals((route:grade-rate .{ who = "a/b", plan-id = 1, item-id = 2, note = :some "x y" }).to-string(), "/cmd/grade-rate/a%2Fb?plan-id=1&item-id=2&note=x+y")
+  assert(route-of(:GET, g.to-string()) is :ok :grade-rate r and r.who == "a b" and r.plan-id == -3 and r.item-id == 9 and r.note is :some nt and nt == "x&y=1+z")
   assert(route-of(:GET, "/cmd/grade-rate/x?zz=1&note=a+b&item-id=2&&plan-id=1") is :ok :grade-rate r2 and r2.note is :some nn and nn == "a b")
   assert(route-of(:GET, "/cmd/grade-rate/x?item-id=2&plan-id=1") is :ok :grade-rate r3 and r3.note is :none)
-  assert-equals((route:grade-rate .{ who = "x", plan-id = 1, item-id = 2, note = :none }).show(), "/cmd/grade-rate/x?plan-id=1&item-id=2")
+  assert-equals((route:grade-rate .{ who = "x", plan-id = 1, item-id = 2, note = :none }).to-string(), "/cmd/grade-rate/x?plan-id=1&item-id=2")
   assert(route-of(:GET, "/cmd/grade-rate/x?plan-id=1") is :err :missing-param m and m.name == "item-id")
   assert(route-of(:GET, "/cmd/grade-rate/x?plan-id=one&item-id=2") is :err :bad-param b and b.got == "one")
   assert(route-of(:GET, "/cmd/grade-rate/x?plan-id=1&item-id=2&plan-id=1") is :err :bad-param b2 and b2.name == "plan-id")
@@ -91,7 +91,7 @@ fn(test) test-parsers() {
   assert(not plain.accepts-encoding("deflate"))
   let moved = response/redirect(:see-other, "/a?b=1", ["Set-Cookie: k=v"])
   assert-equals(moved.extra-headers.[0], "Location: /a?b=1")
-  assert-equals(moved.status.show(), "303 See Other")
+  assert-equals(moved.status.to-string(), "303 See Other")
   assert(moved.status.may-have-content())
   assert(not response/no-content().status.may-have-content())
 }

@@ -80,7 +80,7 @@ fn(test) fieldless-enum() {
   assert-equals(color-rank(:blue), 4)
   assert-equals(color-rank(:gray), 9)
   assert-equals[string](color:indigo.enum-name(), "indigo")
-  assert-equals[string](color:white.show(), "white")
+  assert-equals[string](color:white.to-string(), "white")
   assert(color:black == color:black)
   assert(color:black != color:white)
 }
@@ -98,7 +98,7 @@ fn(test) payload-sum-with-guards() {
   let c3: shape = :circle 3
   let c4: shape = :circle 4
   assert-equals[string](lx.sum-name(), "label")
-  assert-equals[string](c3.show(), ":circle 3")
+  assert-equals[string](c3.to-string(), ":circle 3")
   assert(c3 == c3)
   assert(c3 != c4)
   assert(c3 != shape:dot)

@@ -72,7 +72,7 @@ fn(test) interpolated-expressions() {
   let p = .{ outer = .{ inner = true } }
   assert-equals("${not p.outer.inner}", "false")
 
-  let with-braces = "${42.show()} + ${20} = ${(.{ value = 62}.value)}"
+  let with-braces = "${42.to-string()} + ${20} = ${(.{ value = 62}.value)}"
   assert-equals(with-braces, "42 + 20 = 62")
 
   let nested = "${"String has ${10 + 10} in"} it"

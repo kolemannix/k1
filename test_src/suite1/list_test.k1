@@ -50,11 +50,11 @@ fn(test) sort-is-stable() {
 fn(test) filter-in-place-keeps-matches() {
   let values: list[int] = [1, 2, 3, 4, 5, 6]
   values.filter-in-place(fn v. v % 2 == 0)
-  assert-equals(values.show(), "[2,4,6]")
+  assert-equals(values.to-string(), "[2,4,6]")
   values.filter-in-place(fn v. v > 100)
   assert(values.is-empty())
   values.push(9)
-  assert-equals(values.show(), "[9]")
+  assert-equals(values.to-string(), "[9]")
 }
 
 fn(test) find-index-first-match() {

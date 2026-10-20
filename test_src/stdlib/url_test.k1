@@ -49,7 +49,7 @@ fn(test) parse-components-and-errors() {
   assert(pair/find(p("/?a=1&b=x+y%26&&c").query-pairs(), "b") == :some "x y&")
   assert(pair/find(p("/?a=1&c").query-pairs(), "c") == :some "")
   assert(pair/find(p("/").query-pairs(), "a") is :none)
-  assert-equals(p("/x").show(), "/x")
+  assert-equals(p("/x").to-string(), "/x")
 }
 
 fn(test) resolve-rfc3986-references() {

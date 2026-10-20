@@ -190,7 +190,7 @@ fn[base, counter.&](x: int) { counter.* = counter.* + base + x }
 ability show-id { fn show-id(self): string }
 impl show-id for user { fn show-id(self): string { "user-${self.id}" } }
 impl[t: increment] incr-four for t { }                 // blanket
-fn f[t: print and equals](x: t)   fn g[t](a: t) where t: num, t: show
+fn f[t: print and equals](x: t)   fn g[t](a: t) where t: num, t: to-string
 t: as-pair[aa = x, bb = y]                             // named ability params
 print/print-to(v, w)   has-secret[a = int]@(foo)/secret()   // qualified / impl-selected
 ```

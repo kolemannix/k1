@@ -97,8 +97,8 @@ fn(test) static-dyn-cannot-reach-runtime() {
 
 fn(test) core-abilities-through-dyn() {
   let shown: *int = mem/new(42)
-  assert-equals(shown.to-dyn[show]().show(), "42")
-  let shown-static: string = #static { let s: *int = mem/new(7); s.to-dyn[show]().show() }
+  assert-equals(shown.to-dyn[to-string]().to-string(), "42")
+  let shown-static: string = #static { let s: *int = mem/new(7); s.to-dyn[to-string]().to-string() }
   assert-equals(shown-static, "7")
   let h: *heap = mem/new(.{})
   let a: dyn[allocator] = h.to-dyn()

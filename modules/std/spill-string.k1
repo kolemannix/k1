@@ -15,8 +15,6 @@ ns for spill-string {
     string/wrap-bytes(self.bytes.&.as-span())
   }
 
-  fn to-string[n](self: *spill-string[n]): string { self.as-string().cloned() }
-
   fn is-spilled[n](self: *spill-string[n]): bool { self.bytes.&.is-spilled() }
 
   fn clear[n](self: *spill-string[n]) { self.bytes.&.clear() }
@@ -39,6 +37,13 @@ impl[n: static size] print for spill-string[n] {
   fn print-to[w: writer](self: spill-string[n], w) {
     let s = self
     w.write-string(s.&.as-string())
+  }
+}
+
+impl[n: static size] to-string for spill-string[n] {
+  fn to-string(self: spill-string[n]): string {
+    let s = self
+    s.&.as-string().cloned()
   }
 }
 

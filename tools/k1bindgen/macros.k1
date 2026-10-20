@@ -128,7 +128,7 @@ fn transpile-literal(t: *macro-transpile, text: string): result[string, string] 
   if first == '"' return :err "string literal in expression"
   if first == '\'' {
     let v = parse-char-literal(text).try
-    return :ok (v.show())
+    return :ok (v.to-string())
   }
   if is-float-literal(text) return transpile-float-literal(t, text)
   let digits = strip-int-suffix(text)
@@ -148,7 +148,7 @@ fn transpile-literal(t: *macro-transpile, text: string): result[string, string] 
       if d >= 8 return :err "unsupported literal $text"
       value = value * 8 + d
     }
-    return :ok (value.show())
+    return :ok (value.to-string())
   }
   for c in digits { if not c.is-ascii-digit() { return :err "unsupported literal $text" } }
   :ok digits

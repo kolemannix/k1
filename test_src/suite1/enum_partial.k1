@@ -43,10 +43,10 @@ fn(test) from-value() {
 fn(test) names() {
   let known: event-kind = :key-up
   assert-equals[string](known.enum-name(), "key-up")
-  assert-equals[string](known.show(), "key-up")
+  assert-equals[string](known.to-string(), "key-up")
   let unknown: event-kind = enum-from-value-unchecked(8192)
   assert-equals[string](unknown.enum-name(), "event-kind(8192)")
-  assert-equals[string](unknown.show(), "event-kind(8192)")
+  assert-equals[string](unknown.to-string(), "event-kind(8192)")
   assert-equals[string]("${unknown}", "event-kind(8192)")
 }
 

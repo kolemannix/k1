@@ -43,9 +43,9 @@ fn(test) type-prefixed-literals() {
   assert(test-compile(nom-point.{ x = 1 }).is-some())
 }
 
-fn(test) structural-equality-and-show() {
+fn(test) structural-equality-and-to-string() {
   let a: { x: int, y: f32 } = .{ x = 10, y = 10.0 }
   let c: { x: int, y: f32 } = .{ x = 10, y = 10.0 }
   assert-equals(a, c)
-  assert-equals(a.show(), ".{ x = 10, y = 10.0 }")
+  assert-equals(a.to-string(), ".{ x = 10, y = 10.0 }")
 }

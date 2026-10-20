@@ -561,7 +561,7 @@ fn visit-enum(enum-root: CXCursor): { enum: k1-type:enum, error: ?string } {
       :EnumConstantDecl -> {
         let member-name = cursor-spelling
         let value-i64 = clang/getEnumConstantDeclValue(current)
-        let value: string = value-i64.show()
+        let value: string = value-i64.to-string()
         let dup = false
         for result.enum.members { if it.explicit-value == value { dup = true } }
         if not dup {
