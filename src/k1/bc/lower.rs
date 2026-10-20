@@ -743,7 +743,6 @@ fn emit_inst(
                     let (dst_addr, dst_off) = resolve_addr(k1, ctx, vop.dst);
                     let s0 = ctx.next_scratch();
                     let s1 = ctx.next_scratch();
-                    let zero = k1.bc.intern_const(0);
                     for lane in 0..vop.lanes as u16 {
                         let off = lane * stride;
                         ctx.emit_load(elem_bits, s0, lhs_addr, lhs_off + off);
@@ -761,9 +760,8 @@ fn emit_inst(
                                 ctx.push(s0);
                                 ctx.push(s0);
                                 ctx.push(s1);
-                                ctx.emit(Opcode::IntSub, elem_bits, 0);
+                                ctx.emit(Opcode::IntNeg, elem_bits, 0);
                                 ctx.push(s0);
-                                ctx.push(zero);
                                 ctx.push(s0);
                             }
                             _ => {
@@ -1047,6 +1045,7 @@ fn emit_inst(
         Inst::IntUnop { op, v, t } => {
             let opcode = match op {
                 IntUnop::Not => Opcode::BitNot,
+                IntUnop::Neg => Opcode::IntNeg,
                 IntUnop::Ctz => Opcode::IntCtz,
                 IntUnop::Clz => Opcode::IntClz,
                 IntUnop::Popcount => Opcode::IntPopcount,

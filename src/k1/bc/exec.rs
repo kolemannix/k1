@@ -959,6 +959,7 @@ fn exec_loop<const COUNT_OPS: bool>(
                 advance!(Opcode::BoolNegate);
             }
             Opcode::BitNot => int_unop!(h, IntUnop::Not, Opcode::BitNot),
+            Opcode::IntNeg => int_unop!(h, IntUnop::Neg, Opcode::IntNeg),
             Opcode::IntCtz => int_unop!(h, IntUnop::Ctz, Opcode::IntCtz),
             Opcode::IntClz => int_unop!(h, IntUnop::Clz, Opcode::IntClz),
             Opcode::IntPopcount => {

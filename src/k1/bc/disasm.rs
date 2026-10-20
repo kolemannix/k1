@@ -361,6 +361,7 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
             write_src(w, k1, ops[1]);
         }
         Opcode::BitNot
+        | Opcode::IntNeg
         | Opcode::IntCtz
         | Opcode::IntClz
         | Opcode::IntPopcount

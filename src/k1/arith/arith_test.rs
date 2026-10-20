@@ -78,6 +78,7 @@ macro_rules! check_width {
             }
             let ua = a as $u;
             assert_eq!(int_unop(IntUnop::Not, width, a), canon(!ua));
+            assert_eq!(int_unop(IntUnop::Neg, width, a), canon(ua.wrapping_neg()));
             assert_eq!(int_unop(IntUnop::Ctz, width, a), ua.trailing_zeros() as u64);
             assert_eq!(int_unop(IntUnop::Clz, width, a), ua.leading_zeros() as u64);
             assert_eq!(int_unop(IntUnop::Popcount, width, a), ua.count_ones() as u64);

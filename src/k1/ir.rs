@@ -3666,9 +3666,6 @@ fn compile_scalar_op(b: &mut Builder, scalar_op: ScalarOp, dst: Option<Value>) -
     let inst = match scalar_op.kind {
         ScalarOpKind::IntBinop(op) => Inst::IntBinop { op, lhs, rhs: operands[1], t },
         ScalarOpKind::IntUnop(op) => Inst::IntUnop { op, v: lhs, t },
-        ScalarOpKind::IntNegate => {
-            Inst::IntBinop { op: IntOp::Sub, lhs: Value::zero(t), rhs: lhs, t }
-        }
         ScalarOpKind::IntCmp(pred) => Inst::IntCmp { lhs, rhs: operands[1], pred, width },
         ScalarOpKind::IntCmp3(op) => Inst::IntCmp3 { op, lhs, rhs: operands[1], width },
         ScalarOpKind::BoolNegate => Inst::BoolNegate { v: lhs },

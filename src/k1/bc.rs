@@ -143,6 +143,7 @@ pub enum Opcode {
     // Unary (A = width in bits for the int ops)
     BoolNegate,
     BitNot,
+    IntNeg,
     IntCtz,
     IntClz,
     IntPopcount,
@@ -277,6 +278,7 @@ impl Opcode {
             | Opcode::ShrS => 3, // [dst][lhs][rhs]
             Opcode::BoolNegate
             | Opcode::BitNot
+            | Opcode::IntNeg
             | Opcode::IntCtz
             | Opcode::IntClz
             | Opcode::IntPopcount
@@ -454,6 +456,7 @@ impl Opcode {
             Opcode::ShrS => IntOp::ShrS.name(),
             Opcode::BoolNegate => "bool_neg",
             Opcode::BitNot => IntUnop::Not.name(),
+            Opcode::IntNeg => IntUnop::Neg.name(),
             Opcode::IntCtz => IntUnop::Ctz.name(),
             Opcode::IntClz => IntUnop::Clz.name(),
             Opcode::IntPopcount => IntUnop::Popcount.name(),

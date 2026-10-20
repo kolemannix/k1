@@ -4409,6 +4409,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let zero_allowed = self.ctx.bool_type().const_zero();
                 let result = match op {
                     IntUnop::Not => self.builder.build_not(x, "").unwrap(),
+                    IntUnop::Neg => self.builder.build_int_neg(x, "").unwrap(),
                     IntUnop::Ctz => self.build_int_intrinsic(
                         "llvm.cttz",
                         &[int_type],

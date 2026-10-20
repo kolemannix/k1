@@ -53,6 +53,7 @@ impl IntOp {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum IntUnop {
     Not,
+    Neg,
     Ctz,
     Clz,
     Popcount,
@@ -63,6 +64,7 @@ impl IntUnop {
     pub fn name(self) -> &'static str {
         match self {
             IntUnop::Not => "not",
+            IntUnop::Neg => "neg",
             IntUnop::Ctz => "ctz",
             IntUnop::Clz => "clz",
             IntUnop::Popcount => "popcnt",
@@ -292,6 +294,7 @@ pub fn int_unop(op: IntUnop, width: u8, bits: u64) -> u64 {
     let v = bits & mask;
     match op {
         IntUnop::Not => !v & mask,
+        IntUnop::Neg => v.wrapping_neg() & mask,
         IntUnop::Ctz if v == 0 => width as u64,
         IntUnop::Ctz => v.trailing_zeros() as u64,
         IntUnop::Clz => (v.leading_zeros() - (64 - width as u32)) as u64,

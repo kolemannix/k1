@@ -1827,7 +1827,6 @@ impl Namespaces {
 pub enum ScalarOpKind {
     IntBinop(IntOp),
     IntUnop(IntUnop),
-    IntNegate,
     IntCmp(IntCmpPred),
     IntCmp3(Cmp3Op),
     BoolNegate,
@@ -1842,7 +1841,6 @@ impl ScalarOpKind {
         match self {
             ScalarOpKind::IntBinop(op) => op.name(),
             ScalarOpKind::IntUnop(op) => op.name(),
-            ScalarOpKind::IntNegate => "ineg",
             ScalarOpKind::IntCmp(pred) => pred.name(),
             ScalarOpKind::IntCmp3(op) => op.name(),
             ScalarOpKind::BoolNegate => "bool_not",
@@ -13327,7 +13325,7 @@ impl TypedProgram {
                 },
                 (ABILITY_ID_NEG, "negated") => match t {
                     Some(Type::Bool) => mk_scalar!(K::BoolNegate),
-                    Some(Type::Integer(_)) => mk_scalar!(K::IntNegate),
+                    Some(Type::Integer(_)) => mk_scalar!(K::IntUnop(IntUnop::Neg)),
                     Some(Type::Float(_)) => mk_scalar!(K::FloatUnop(FloatUnop::Neg)),
                     _ => None,
                 },
@@ -14887,7 +14885,6 @@ impl TypedProgram {
                 if let Builtin::Ir(BuiltinIr::Scalar(kind)) = resolved {
                     let arity = match kind {
                         ScalarOpKind::IntUnop(_)
-                        | ScalarOpKind::IntNegate
                         | ScalarOpKind::BoolNegate
                         | ScalarOpKind::FloatUnop(_) => 1,
                         ScalarOpKind::IntBinop(_)
