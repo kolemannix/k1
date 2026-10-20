@@ -3486,41 +3486,6 @@ impl TypedProgram {
         self.module_completed(self.primary_module().id)
     }
 
-    // pub fn validate_exports(&mut self) -> K1Result<()> {
-    //     let mut symbols: FxHashMap<StringId, Span> = FxHashMap::default();
-    //     let mut duplicate: Option<(StringId, Span)> = None;
-    //     for (function_id, function) in self.function_iter() {
-    //         let Linkage::Exported { fn_name } = function.linkage else {
-    //             continue;
-    //         };
-    //         let symbol = fn_name.unwrap_or(function.name);
-    //         let span = self.get_function_span(function_id);
-    //         if symbols.insert(symbol, span).is_some() {
-    //             duplicate = Some((symbol, span));
-    //             break;
-    //         }
-    //     }
-    //     if duplicate.is_none() {
-    //         for global_id in self.globals.iter_ids() {
-    //             let global = self.globals.get(global_id);
-    //             if !global.is_exported {
-    //                 continue;
-    //             }
-    //             let symbol = self.variables.get(global.variable_id).name;
-    //             if symbols.insert(symbol, global.span).is_some() {
-    //                 duplicate = Some((symbol, global.span));
-    //                 break;
-    //             }
-    //         }
-    //     }
-    //     if let Some((symbol, span)) = duplicate {
-    //         let msg = kerr!(self, span, "Duplicate exported symbol '{}'", self.ident_str(symbol));
-    //         self.report(msg);
-    //         bail!("Duplicate exported symbol");
-    //     }
-    //     Ok(())
-    // }
-
     fn get_executable_primary_module(&self) -> Option<&Module> {
         if !self.plan.is_executable() {
             return None;
