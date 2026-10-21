@@ -1047,12 +1047,6 @@ nz_u32_id!(TypeSliceId);
 
 pub const EMPTY_TYPE_SLICE: TypeSliceId = TypeSliceId(NonZeroU32::new(1).unwrap());
 
-pub(crate) enum TypeUnificationResult {
-    Matching,
-    NoHoles,
-    NonMatching(&'static str),
-}
-
 #[derive(Clone)]
 pub struct VariableExpr {
     pub variable_id: VariableId,

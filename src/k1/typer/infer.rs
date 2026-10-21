@@ -191,6 +191,7 @@ impl TypedProgram {
 
         // Used for the error message, mainly
         let mut argument_types: SmallVec<[TypeId; 8]> = smallvec![];
+        let mut first_mismatch: Option<InferenceFailure> = None;
         // The heart of the inference process:
         // - For each pair of (<actual type> <expected type>), we 'pattern match' on the types
         //   and learn what we can about all of the type holes
@@ -284,22 +285,18 @@ impl TypedProgram {
                 self.type_id_to_string(argument_type),
                 self.type_id_to_string(expected_type_so_far),
             );
-            // unify_and_find_substitutions populates self.inferences_context.constraints
-            if let TypeUnificationResult::NonMatching(msg) =
+            if let Err(reason) =
                 self.unify_and_find_substitutions(argument_type, expected_type_so_far)
+                && !allow_mismatch
+                && first_mismatch.is_none()
             {
-                // allow_mismatch is used to avoid reporting a mismatch on the return type,
-                // before we're able to learn more about the rest of the inference. We get a better
-                // error message if we wait to report the mismatch until the end
-                if !allow_mismatch {
-                    return Err(InferenceFailure::Mismatch {
-                        expected: expected_type_so_far,
-                        actual: argument_type,
-                        reason: msg,
-                        span: argument_span,
-                    });
-                }
-            };
+                first_mismatch = Some(InferenceFailure::Mismatch {
+                    expected: expected_type_so_far,
+                    actual: argument_type,
+                    reason,
+                    span: argument_span,
+                });
+            }
 
             // After each pair is 'walked', we apply the constraints of any param that just
             // became fully solved. Solving one param can transitively solve others (including
@@ -357,6 +354,9 @@ impl TypedProgram {
             }
         }
         if !unsolved_params.is_empty() {
+            if let Some(mismatch) = first_mismatch {
+                return Err(mismatch);
+            }
             let mut solved_pairs: List<TypeSubstitutionPair, MemTmp> =
                 self.tmp.new_list(self.ictx().slots.len() as u32);
             for s in &self.ictx().slots {
@@ -464,15 +464,7 @@ impl TypedProgram {
             // TODO: This function should probably just report the findings, not apply new
             // substitutions, because there may be other things we need to do when we learn a type
             // like when we learn a static type param I think we may need to do more
-            match self.unify_and_find_substitutions(solution_static_type, static_type_subst) {
-                TypeUnificationResult::Matching => {
-                    debug!("[infer {infer_depth}] unify succeeded",);
-                }
-                TypeUnificationResult::NoHoles => {}
-                TypeUnificationResult::NonMatching(_) => {
-                    debug!("did not match; likely we'll fail later")
-                }
-            }
+            let _ = self.unify_and_find_substitutions(solution_static_type, static_type_subst);
             return Ok(());
         }
         let constraint_impls = self.get_constrained_ability_impls_for_type(type_param_id);
@@ -525,16 +517,8 @@ impl TypedProgram {
                             self.type_id_to_string(*constrained_type),
                             self.type_id_to_string(*found_impl_type)
                         );
-                        match self.unify_and_find_substitutions(*found_impl_type, *constrained_type)
-                        {
-                            TypeUnificationResult::Matching => {
-                                debug!("[infer {infer_depth}] unify succeeded",);
-                            }
-                            TypeUnificationResult::NoHoles => {}
-                            TypeUnificationResult::NonMatching(_) => {
-                                debug!("did not match; likely we'll fail later")
-                            }
-                        }
+                        let _ =
+                            self.unify_and_find_substitutions(*found_impl_type, *constrained_type);
                     }
                 }
                 Err(msg) => {
@@ -855,16 +839,7 @@ impl TypedProgram {
         &mut self,
         passed_type: TypeId,
         slot_type: TypeId,
-    ) -> TypeUnificationResult {
-        let result = self.unify_and_find_substitutions_rec(passed_type, slot_type);
-        result
-    }
-
-    pub(crate) fn unify_and_find_substitutions_rec(
-        &mut self,
-        passed_type: TypeId,
-        slot_type: TypeId,
-    ) -> TypeUnificationResult {
+    ) -> Result<(), &'static str> {
         // passed_type           slot_type          -> result
         //
         // int                    '0                 -> '0 := int
@@ -885,30 +860,21 @@ impl TypedProgram {
         let counts = self.type_variable_counts.get(slot_type);
         if counts.inference_hole_count == 0 {
             debug!("no type holes: {}", self.type_id_to_string(slot_type));
-            return TypeUnificationResult::NoHoles;
+            return Ok(());
         }
 
-        // This special case is removable, all tests pass, but I believe its currently
-        // a slight optimization, and would be more of one with more complex types
-        if let (Some(passed_info), Some(arg_info)) =
+        if let (Some(passed_info), Some(slot_info)) =
             (self.get_instance_info(passed_type), self.get_instance_info(slot_type))
         {
-            // expr: NewList[int] arg: NewList['0]
-            if passed_info.generic_parent == arg_info.generic_parent {
-                debug!(
-                    "comparing generic instances of {}",
-                    self.type_id_to_string(arg_info.generic_parent)
-                );
-                // We can directly 'solve' every appearance of a type param here
-                let passed_args = self.get_type_slice(passed_info.type_args);
-                let arg_args = self.get_type_slice(arg_info.type_args);
-                for (passed_type, arg_slot) in passed_args.iter().zip(arg_args) {
-                    self.unify_and_find_substitutions_rec(*passed_type, *arg_slot);
-                }
-            } else {
-                debug!("compared generic instances but they didn't match parent types");
+            if passed_info.generic_parent != slot_info.generic_parent {
+                return Err("Unrelated types");
             }
-            return TypeUnificationResult::Matching;
+            let passed_args = self.get_type_slice(passed_info.type_args);
+            let slot_args = self.get_type_slice(slot_info.type_args);
+            for (passed_arg, slot_arg) in passed_args.iter().zip(slot_args) {
+                self.unify_and_find_substitutions(*passed_arg, *slot_arg)?;
+            }
+            return Ok(());
         }
 
         let passed_type = match self.types.get(passed_type) {
@@ -932,20 +898,20 @@ impl TypedProgram {
         );
 
         match (self.types.get(passed_type), self.types.get(slot_type)) {
-            _ if passed_type == slot_type => TypeUnificationResult::Matching,
+            _ if passed_type == slot_type => Ok(()),
             (Type::InferenceHole(_passed_hole), _slot_type) => {
                 // Note: We may eventually need an 'occurs' check to prevent recursive
                 // substitutions; for now they don't seem to be occurring though, and it'll
                 // be obvious if they ever do
                 self.set_hole_solution(passed_type, slot_type);
-                TypeUnificationResult::Matching
+                Ok(())
             }
             (_passed_type, Type::InferenceHole(_slot_hole)) => {
                 // Note: We may eventually need an 'occurs' check to prevent recursive
                 // substitutions; for now they don't seem to be occurring though, and it'll
                 // be obvious if they ever do
                 self.set_hole_solution(slot_type, passed_type);
-                TypeUnificationResult::Matching
+                Ok(())
             }
             (Type::Reference(passed_ref), slot) => {
                 // For the purposes of inference, we ignore the difference between
@@ -954,24 +920,23 @@ impl TypedProgram {
                 match slot.as_reference() {
                     // This performs a single-layer deref.
                     // This improves error messages, and also allows us to infer correctly even when an auto-deref is needed
-                    None => self.unify_and_find_substitutions_rec(passed_ref.inner_type, slot_type),
+                    None => self.unify_and_find_substitutions(passed_ref.inner_type, slot_type),
 
                     // Here in infer/unify, we're really after capturing the programmer's intent as
                     // best as we can, and typechecking/coercion takes care of whether to ultimately
                     // let the code through, so we can be a little generous
-                    Some(slot_ref) => self.unify_and_find_substitutions_rec(
-                        passed_ref.inner_type,
-                        slot_ref.inner_type,
-                    ),
+                    Some(slot_ref) => self
+                        .unify_and_find_substitutions(passed_ref.inner_type, slot_ref.inner_type),
                 }
             }
-            (Type::FunctionPointer(fp), Type::Reference(slot_reference)) => self
-                .unify_and_find_substitutions_rec(fp.function_type_id, slot_reference.inner_type),
+            (Type::FunctionPointer(fp), Type::Reference(slot_reference)) => {
+                self.unify_and_find_substitutions(fp.function_type_id, slot_reference.inner_type)
+            }
             (passed, Type::Reference(slot_reference)) if passed.as_reference().is_none() => {
                 // We expect a reference and provide a non-reference
                 // Unify as if the address_of rule is applied, but only if the inner type would match
                 // Actually we have to just do it, because it could be a hole or a type variable
-                self.unify_and_find_substitutions_rec(passed_type, slot_reference.inner_type)
+                self.unify_and_find_substitutions(passed_type, slot_reference.inner_type)
             }
             (Type::Struct(passed_struct), Type::Struct(struc)) => {
                 // Structs must have all same field names in same order
@@ -980,16 +945,16 @@ impl TypedProgram {
                 let passed_fields = passed_struct.fields;
                 let fields = struc.fields;
                 if passed_fields.len() != fields.len() {
-                    return TypeUnificationResult::NonMatching("field count");
+                    return Err("field count");
                 }
                 for (idx, field) in self.mem.getn(fields).iter().enumerate() {
                     let passed_field = self.mem.get_nth(passed_fields, idx);
                     if field.name != passed_field.name {
-                        return TypeUnificationResult::NonMatching("field names");
+                        return Err("field names");
                     }
-                    self.unify_and_find_substitutions_rec(passed_field.type_id, field.type_id);
+                    self.unify_and_find_substitutions(passed_field.type_id, field.type_id)?;
                 }
-                TypeUnificationResult::Matching
+                Ok(())
             }
             (Type::Sum(passed_enum), Type::Sum(param_enum_type)) => {
                 // Enum example
@@ -1004,34 +969,33 @@ impl TypedProgram {
                 let passed_variants = passed_enum.variants;
                 let variants = param_enum_type.variants;
                 if passed_variants.len() != variants.len() {
-                    return TypeUnificationResult::NonMatching("variant count");
+                    return Err("variant count");
                 }
                 for (variant, passed_variant) in
                     self.mem.getn(variants).iter().zip(self.mem.getn(passed_variants))
                 {
                     if variant.name != passed_variant.name {
-                        return TypeUnificationResult::NonMatching("variant names");
+                        return Err("variant names");
                     }
                     if let Some(passed_payload) = passed_variant.payload {
                         if let Some(param_payload) = variant.payload {
-                            self.unify_and_find_substitutions_rec(passed_payload, param_payload);
+                            self.unify_and_find_substitutions(passed_payload, param_payload)?;
                         } else {
-                            return TypeUnificationResult::NonMatching("payloads");
+                            return Err("payloads");
                         }
                     }
                 }
 
-                TypeUnificationResult::Matching
+                Ok(())
             }
             (Type::Array(passed_array), Type::Array(slot_array))
             | (Type::Vector(passed_array), Type::Vector(slot_array)) => {
                 let (passed_array, slot_array) = (*passed_array, *slot_array);
-                self.unify_and_find_substitutions_rec(passed_array.size_type, slot_array.size_type);
-                self.unify_and_find_substitutions_rec(
+                self.unify_and_find_substitutions(passed_array.size_type, slot_array.size_type)?;
+                self.unify_and_find_substitutions(
                     passed_array.element_type,
                     slot_array.element_type,
-                );
-                TypeUnificationResult::Matching
+                )
             }
             (Type::Function(passed_fn), Type::Function(slot_fn)) => {
                 if passed_fn.logical_params().len() == slot_fn.logical_params().len() {
@@ -1043,69 +1007,58 @@ impl TypedProgram {
                         .iter()
                         .zip(self.mem.getn(slot_fn.logical_params()))
                     {
-                        self.unify_and_find_substitutions_rec(
+                        self.unify_and_find_substitutions(
                             passed_param.type_id,
                             slot_param.type_id,
-                        );
+                        )?;
                     }
-                    self.unify_and_find_substitutions_rec(
-                        passed_fn.return_type,
-                        slot_fn.return_type,
-                    )
+                    self.unify_and_find_substitutions(passed_fn.return_type, slot_fn.return_type)
                 } else {
-                    TypeUnificationResult::NonMatching(
-                        "Functions take a different number of arguments",
-                    )
+                    Err("Functions take a different number of arguments")
                 }
             }
             (Type::FunctionPointer(fp1), Type::FunctionPointer(fp2)) => {
-                self.unify_and_find_substitutions_rec(fp1.function_type_id, fp2.function_type_id)
+                self.unify_and_find_substitutions(fp1.function_type_id, fp2.function_type_id)
             }
             (passed, Type::FunctionTypeParameter(slot_function_type_param)) => {
                 if let Some(passed_function_type) =
                     self.extract_function_type_from_functionlike(passed)
                 {
-                    self.unify_and_find_substitutions_rec(
+                    self.unify_and_find_substitutions(
                         passed_function_type,
                         slot_function_type_param.function_type,
                     )
                 } else {
-                    TypeUnificationResult::NonMatching(
-                        "Expected a function type parameter; passed unrelated",
-                    )
+                    Err("Expected a function type parameter; passed unrelated")
                 }
             }
             (Type::Lambda(passed_lambda_id), Type::LambdaObject(slot_lambda_obj)) => {
                 let passed_lambda = self.lambda_types.get(*passed_lambda_id);
-                self.unify_and_find_substitutions_rec(
+                self.unify_and_find_substitutions(
                     passed_lambda.function_type,
                     slot_lambda_obj.function_type,
                 )
             }
             (Type::LambdaObject(passed_lambda), Type::LambdaObject(param_lambda)) => self
-                .unify_and_find_substitutions_rec(
+                .unify_and_find_substitutions(
                     passed_lambda.function_type,
                     param_lambda.function_type,
                 ),
             (Type::AbilityObject(passed_ao), Type::AbilityObject(slot_ao)) => {
-                let passed_args = self.get_type_slice(passed_ao.signature.impl_arguments);
-                let slot_args = self.get_type_slice(slot_ao.signature.impl_arguments);
                 if passed_ao.signature.specialized_ability_id
                     != slot_ao.signature.specialized_ability_id
-                    || passed_args.len() != slot_args.len()
                 {
-                    return TypeUnificationResult::NonMatching("Unrelated dyn ability types");
+                    return Err("Unrelated dyn ability types");
                 }
+                let passed_args = self.get_type_slice(passed_ao.signature.impl_arguments);
+                let slot_args = self.get_type_slice(slot_ao.signature.impl_arguments);
                 for (passed_arg, slot_arg) in passed_args.iter().zip(slot_args) {
-                    let result = self.unify_and_find_substitutions_rec(*passed_arg, *slot_arg);
-                    if let TypeUnificationResult::NonMatching(_) = result {
-                        return result;
-                    }
+                    self.unify_and_find_substitutions(*passed_arg, *slot_arg)?;
                 }
-                TypeUnificationResult::Matching
+                Ok(())
             }
             (Type::StaticValue(passed_value_type), Type::StaticValue(param_value_type)) => self
-                .unify_and_find_substitutions_rec(
+                .unify_and_find_substitutions(
                     passed_value_type.family_type_id,
                     param_value_type.family_type_id,
                 ),
@@ -1113,7 +1066,7 @@ impl TypedProgram {
                 // We infer 'through' statics, even though they'll fail typecheck without a cast.
                 // This improves error messages, as we essentially end up solving the user's intent,
                 // then telling them why their intent doesn't compile
-                self.unify_and_find_substitutions_rec(passed_static.family_type_id, slot_type)
+                self.unify_and_find_substitutions(passed_static.family_type_id, slot_type)
             }
             (_non_value_passed, Type::StaticValue(value_type_slot))
                 if value_type_slot.value_id.is_none() =>
@@ -1121,18 +1074,13 @@ impl TypedProgram {
                 // We infer 'through' value types, even though they'll fail typecheck without a cast.
                 // This improves error messages, as we essentially end up solving the user's intent,
                 // then telling them why their intent doesn't compile
-                self.unify_and_find_substitutions_rec(passed_type, value_type_slot.family_type_id)
-            }
-
-            // --------------- MISS CASES: we detect further explicit cases for better error message ---------------------
-            (passed_type, Type::Reference(_slot_t)) if passed_type.as_reference().is_none() => {
-                TypeUnificationResult::NonMatching("Consider passing a reference")
+                self.unify_and_find_substitutions(passed_type, value_type_slot.family_type_id)
             }
             _ => {
                 debug!("  -> Non-Matching");
                 // If you see 'Unrelated types', consider coming here and adding a case; its
                 // a little rude and sometimes not even true
-                TypeUnificationResult::NonMatching("Unrelated types")
+                Err("Unrelated types")
             }
         }
     }
