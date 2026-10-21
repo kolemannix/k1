@@ -856,7 +856,6 @@ impl TypedProgram {
         passed_type: TypeId,
         slot_type: TypeId,
     ) -> TypeUnificationResult {
-        // eprintln!("unify_and_find_substitutions slot {}", self.type_id_to_string(slot_type));
         let result = self.unify_and_find_substitutions_rec(passed_type, slot_type);
         result
     }
@@ -1024,24 +1023,14 @@ impl TypedProgram {
 
                 TypeUnificationResult::Matching
             }
-            (Type::Array(passed_array), Type::Array(slot_array)) => {
-                let passed_array_element_type = passed_array.element_type;
-                let slot_array_element_type = slot_array.element_type;
+            (Type::Array(passed_array), Type::Array(slot_array))
+            | (Type::Vector(passed_array), Type::Vector(slot_array)) => {
+                let (passed_array, slot_array) = (*passed_array, *slot_array);
                 self.unify_and_find_substitutions_rec(passed_array.size_type, slot_array.size_type);
                 self.unify_and_find_substitutions_rec(
-                    passed_array_element_type,
-                    slot_array_element_type,
+                    passed_array.element_type,
+                    slot_array.element_type,
                 );
-                TypeUnificationResult::Matching
-            }
-            (Type::Vector(passed_vector), Type::Vector(slot_vector)) => {
-                let passed_element_type = passed_vector.element_type;
-                let slot_element_type = slot_vector.element_type;
-                self.unify_and_find_substitutions_rec(
-                    passed_vector.size_type,
-                    slot_vector.size_type,
-                );
-                self.unify_and_find_substitutions_rec(passed_element_type, slot_element_type);
                 TypeUnificationResult::Matching
             }
             (Type::Function(passed_fn), Type::Function(slot_fn)) => {

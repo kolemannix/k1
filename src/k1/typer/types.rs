@@ -136,23 +136,16 @@ impl std::hash::Hash for TypeDefnInfo {
     }
 }
 
-#[derive(Clone, Copy, Hash, PartialEq, Eq)]
-pub enum RecordKind {
-    Struct,
-    Union,
-    Packed,
+crate::tag_enum! {
+    #[derive(Clone, Copy, Hash, PartialEq, Eq)]
+    pub enum RecordKind {
+        Struct,
+        Union,
+        Packed,
+    }
 }
 
 impl RecordKind {
-    pub fn from_tag(tag: u8) -> Option<RecordKind> {
-        match tag {
-            0 => Some(RecordKind::Struct),
-            1 => Some(RecordKind::Union),
-            2 => Some(RecordKind::Packed),
-            _ => None,
-        }
-    }
-
     pub fn kind_name(&self) -> &'static str {
         match self {
             RecordKind::Struct => "struct",
@@ -240,13 +233,6 @@ pub struct ArrayType {
 }
 impl_copy_if_small!(8, ArrayType);
 
-#[derive(Clone)]
-pub struct VectorType {
-    pub element_type: TypeId,
-    pub size_type: TypeId,
-}
-impl_copy_if_small!(8, VectorType);
-
 #[derive(Clone, Copy)]
 pub struct TypedSumVariant {
     pub name: StringId,
@@ -290,17 +276,18 @@ pub struct GenericType {
     pub inner: TypeId,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum IntegerType {
-    U8 = 0,
-    U16 = 1,
-    U32 = 2,
-    U64 = 3,
-    I8 = 4,
-    I16 = 5,
-    I32 = 6,
-    I64 = 7,
+crate::tag_enum! {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub enum IntegerType {
+        U8 = 0,
+        U16 = 1,
+        U32 = 2,
+        U64 = 3,
+        I8 = 4,
+        I16 = 5,
+        I32 = 6,
+        I64 = 7,
+    }
 }
 
 impl Display for IntegerType {
@@ -319,20 +306,6 @@ impl Display for IntegerType {
 }
 
 impl IntegerType {
-    pub fn from_int_kind_tag(tag: u8) -> Option<IntegerType> {
-        match tag {
-            x if x == Self::U8 as u8 => Some(Self::U8),
-            x if x == Self::U16 as u8 => Some(Self::U16),
-            x if x == Self::U32 as u8 => Some(Self::U32),
-            x if x == Self::U64 as u8 => Some(Self::U64),
-            x if x == Self::I8 as u8 => Some(Self::I8),
-            x if x == Self::I16 as u8 => Some(Self::I16),
-            x if x == Self::I32 as u8 => Some(Self::I32),
-            x if x == Self::I64 as u8 => Some(Self::I64),
-            _ => None,
-        }
-    }
-
     pub fn type_id(&self) -> TypeId {
         match self {
             Self::U8 => U8_TYPE_ID,
@@ -398,10 +371,12 @@ impl IntegerType {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum FloatType {
-    F32 = 0,
-    F64 = 1,
+crate::tag_enum! {
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub enum FloatType {
+        F32 = 0,
+        F64 = 1,
+    }
 }
 impl FloatType {
     pub fn get_scalar_type(&self) -> ScalarType {
@@ -541,7 +516,7 @@ pub enum Type {
     Enum(ScalarEnumType),
     Reference(ReferenceType),
     Array(ArrayType),
-    Vector(VectorType),
+    Vector(ArrayType),
     Struct(StructType),
     Sum(SumType),
     Opaque(OpaqueType),
@@ -621,11 +596,8 @@ impl TypedProgram {
                 true
             }
             (Type::Reference(r1), Type::Reference(r2)) => r1.inner_type == r2.inner_type,
-            (Type::Array(a1), Type::Array(a2)) => {
+            (Type::Array(a1), Type::Array(a2)) | (Type::Vector(a1), Type::Vector(a2)) => {
                 a1.element_type == a2.element_type && a1.size_type == a2.size_type
-            }
-            (Type::Vector(v1), Type::Vector(v2)) => {
-                v1.element_type == v2.element_type && v1.size_type == v2.size_type
             }
             (Type::TypeParameter(t1), Type::TypeParameter(t2)) => {
                 t1.name == t2.name && t1.scope_id == t2.scope_id
@@ -725,7 +697,7 @@ impl TypedProgram {
                 se.member_values.len().hash(state);
                 for m in mem.getn(se.member_values) {
                     m.name.hash(state);
-                    m.int_value.to_u64_bits().hash(state);
+                    m.int_value.to_zext_bits().hash(state);
                 }
             }
             Type::Bool => {}
@@ -761,7 +733,7 @@ impl TypedProgram {
                 for v in mem.getn(e.variants) {
                     v.name.hash(state);
                     v.payload.hash(state);
-                    v.tag_value.to_u64_bits().hash(state);
+                    v.tag_value.to_zext_bits().hash(state);
                 }
             }
             Type::Opaque(opaque) => {
@@ -799,13 +771,9 @@ impl TypedProgram {
                 svt.family_type_id.hash(state);
                 svt.value_id.hash(state)
             }
-            Type::Array(arr) => {
+            Type::Array(arr) | Type::Vector(arr) => {
                 arr.element_type.hash(state);
                 arr.size_type.hash(state);
-            }
-            Type::Vector(vec) => {
-                vec.element_type.hash(state);
-                vec.size_type.hash(state);
             }
         }
         state.finish()
@@ -1194,16 +1162,17 @@ impl BuiltinTypes {
     }
 }
 
-#[repr(u8)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ScalarType {
-    I8 = 1,
-    I16 = 2,
-    I32 = 3,
-    I64 = 4,
-    F32 = 5,
-    F64 = 6,
-    Pointer = 7,
+crate::tag_enum! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum ScalarType {
+        I8 = 1,
+        I16 = 2,
+        I32 = 3,
+        I64 = 4,
+        F32 = 5,
+        F64 = 6,
+        Pointer = 7,
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -1256,36 +1225,9 @@ impl RegisterClass {
 }
 
 impl ScalarType {
-    pub const ALL: [ScalarType; 7] = [
-        ScalarType::I8,
-        ScalarType::I16,
-        ScalarType::I32,
-        ScalarType::I64,
-        ScalarType::F32,
-        ScalarType::F64,
-        ScalarType::Pointer,
-    ];
-
     /// Position in `ALL`, for tables with one entry per scalar type
     pub const fn index(self) -> usize {
         self as usize - 1
-    }
-
-    pub const fn to_tag(self) -> u8 {
-        self as u8
-    }
-
-    pub const fn from_tag(tag: u32) -> Self {
-        match tag {
-            1 => Self::I8,
-            2 => Self::I16,
-            3 => Self::I32,
-            4 => Self::I64,
-            5 => Self::F32,
-            6 => Self::F64,
-            7 => Self::Pointer,
-            _ => panic!("Not a scalartype tag"),
-        }
     }
 
     pub fn is_word_int(&self) -> bool {
@@ -1379,10 +1321,7 @@ impl PhysicalType {
     }
 
     pub const fn as_scalar(self) -> Option<ScalarType> {
-        match self.scalar_tag() {
-            0 => None,
-            tag => Some(ScalarType::from_tag(tag)),
-        }
+        ScalarType::from_tag(self.scalar_tag() as u8)
     }
 
     pub const fn expect_scalar(&self) -> ScalarType {
@@ -1753,13 +1692,19 @@ impl TypedProgram {
 
     pub fn add_function_type(
         &mut self,
-        params: &[FnParamType],
+        logical_params: &[FnParamType],
         return_type: TypeId,
         is_lambda: bool,
     ) -> TypeId {
         self.add_type_with_storage(|mem| {
+            let mut physical_params = mem.new_list(logical_params.len() as u32 + is_lambda as u32);
+            if is_lambda {
+                physical_params
+                    .push(FnParamType { type_id: POINTER_TYPE_ID, kind: FnParamKind::Plain });
+            }
+            physical_params.extend(logical_params);
             Type::Function(FunctionType {
-                physical_params: mem.pushn(params),
+                physical_params: physical_params.to_slice(),
                 return_type,
                 is_lambda,
             })
@@ -2307,7 +2252,7 @@ impl TypedProgram {
                 result.is_inhabited = true;
                 result
             }
-            Type::Array(arr) => {
+            Type::Array(arr) | Type::Vector(arr) => {
                 // Arrays contain 2 types, the element type and the size type,
                 // which is usually a `static uword`, but can be a type parameter
                 let mut result = self
@@ -2319,10 +2264,6 @@ impl TypedProgram {
                     || self.get_type_as_i64(arr.size_type) == Some(0);
                 result
             }
-            Type::Vector(vec) => self
-                .type_variable_counts
-                .get(vec.element_type)
-                .add(self.type_variable_counts.get(vec.size_type)),
         }
     }
 
@@ -2792,8 +2733,7 @@ impl TypedProgram {
     /// or an inline-element array/vector
     pub fn get_linear_container_element(&self, type_id: TypeId) -> Option<TypeId> {
         match self.types.get(type_id) {
-            Type::Array(a) => Some(a.element_type),
-            Type::Vector(v) => Some(v.element_type),
+            Type::Array(a) | Type::Vector(a) => Some(a.element_type),
             _ => self.get_as_container_instance(type_id).map(|p| p.0),
         }
     }

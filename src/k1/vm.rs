@@ -171,22 +171,12 @@ pub mod k1_types {
         pub spans: K1List,
     }
 
-    #[derive(Clone, Copy)]
-    #[repr(u8)]
-    pub enum CompilerMessageLevel {
-        Info = 0,
-        Warn = 1,
-        Error = 2,
-    }
-
-    impl CompilerMessageLevel {
-        pub fn from_u8(v: u8) -> Option<Self> {
-            match v {
-                x if x == Self::Info as u8 => Some(Self::Info),
-                x if x == Self::Warn as u8 => Some(Self::Warn),
-                x if x == Self::Error as u8 => Some(Self::Error),
-                _ => None,
-            }
+    crate::tag_enum! {
+        #[derive(Clone, Copy)]
+        pub enum CompilerMessageLevel {
+            Info = 0,
+            Warn = 1,
+            Error = 2,
         }
     }
 
@@ -390,19 +380,6 @@ impl Value {
         Value(i64 as u64)
     }
 
-    pub fn typed_int(int: TypedIntValue) -> Value {
-        match int {
-            TypedIntValue::U8(v) => Value::u8(v),
-            TypedIntValue::U16(v) => Value::u16(v),
-            TypedIntValue::U32(v) => Value::u32(v),
-            TypedIntValue::U64(v) => Value::u64(v),
-            TypedIntValue::I8(v) => Value::i8(v),
-            TypedIntValue::I16(v) => Value::i16(v),
-            TypedIntValue::I32(v) => Value::i32(v),
-            TypedIntValue::I64(v) => Value::i64(v),
-        }
-    }
-
     pub fn as_typed_int(&self, int_type: IntegerType) -> TypedIntValue {
         TypedIntValue::from_u64_bits(int_type, self.bits())
     }
@@ -426,13 +403,6 @@ impl Value {
     pub fn as_f64(&self) -> f64 {
         let bits = self.bits();
         f64::from_bits(bits)
-    }
-
-    pub fn float_value(fv: TypedFloatValue) -> Value {
-        match fv {
-            TypedFloatValue::F32(f32) => Value::f32(f32),
-            TypedFloatValue::F64(f64) => Value::f64(f64),
-        }
     }
 
     pub fn f32(f: f32) -> Self {
@@ -595,12 +565,12 @@ pub fn static_value_to_vm_value(
 
     let v = match k1.static_values.get(static_value_id) {
         StaticValue::Empty(_) => Value(0),
-        StaticValue::Bool(bool_value) => Value::bool(*bool_value),
-        StaticValue::Char(char_byte) => Value(*char_byte as u64),
-        StaticValue::Int(iv) => Value(iv.to_zext_bits()),
-        StaticValue::Enum(_, iv) => Value(iv.to_zext_bits()),
+        scalar @ (StaticValue::Bool(_)
+        | StaticValue::Char(_)
+        | StaticValue::Int(_)
+        | StaticValue::Enum(..)
+        | StaticValue::Float(_)) => Value(scalar.scalar_bits().unwrap().1),
         StaticValue::FunctionPointer(_, function_id) => Value(function_id.as_u32() as u64),
-        StaticValue::Float(fv) => Value::float_value(*fv),
         StaticValue::String(string_id) => {
             let value = string_id_to_value(k1, *string_id);
             value
@@ -630,14 +600,17 @@ pub fn store_static_value(
 ) {
     match k1.static_values.get(static_value_id) {
         StaticValue::Empty(_) => {}
-        StaticValue::Bool(bool_value) => store_byte(dst, *bool_value as u8),
-        StaticValue::Char(char_byte) => store_byte(dst, *char_byte),
-        StaticValue::Int(int_value) => store_typed_int(dst, *int_value),
-        StaticValue::Enum(_, int_value) => store_typed_int(dst, *int_value),
+        scalar @ (StaticValue::Bool(_)
+        | StaticValue::Char(_)
+        | StaticValue::Int(_)
+        | StaticValue::Enum(..)
+        | StaticValue::Float(_)) => {
+            let (t, bits) = scalar.scalar_bits().unwrap();
+            store_scalar(t, dst, Value(bits))
+        }
         StaticValue::FunctionPointer(_, function_id) => {
             store_scalar(ScalarType::Pointer, dst, Value(function_id.as_u32() as u64))
         }
-        StaticValue::Float(fv) => store_scalar(fv.get_scalar_type(), dst, Value::float_value(*fv)),
         StaticValue::String(string_id) => {
             let value = string_id_to_value(k1, *string_id);
             let string_type_id = k1.string_type_id();
@@ -666,7 +639,8 @@ pub fn store_static_value(
             let sum_pt = k1.agg_types.get(sum_agg_id).agg_type.expect_sum();
             let variant_pt = k1.mem.get_nth(sum_pt.variants, variant_index as usize);
 
-            store_typed_int(dst, variant_pt.tag);
+            let (tag_t, tag_bits) = variant_pt.tag.scalar_bits();
+            store_scalar(tag_t, dst, Value(tag_bits));
 
             if let Some(payload_value_id) = payload {
                 let payload_offset = sum_pt.payload_offset;
@@ -682,7 +656,7 @@ pub fn store_static_value(
             let array_layout = k1.get_layout(element_type).unwrap().array_me(len);
 
             match kind {
-                StaticContainerKind::Array | StaticContainerKind::Vector => {
+                StaticContainerKind::Array => {
                     store_static_array_elements(k1, target, dst, element_type, container_elements)
                 }
                 StaticContainerKind::Span => {
@@ -709,9 +683,7 @@ pub fn store_static_value(
             let bytes = k1.static_values.mem.getn(raw.bytes);
             let (bytes_ptr, bytes_len) = (bytes.as_ptr(), bytes.len());
             match raw.kind {
-                StaticContainerKind::Array | StaticContainerKind::Vector => {
-                    memcopy(bytes_ptr, dst, bytes_len)
-                }
+                StaticContainerKind::Array => memcopy(bytes_ptr, dst, bytes_len),
                 StaticContainerKind::Span => {
                     store_container_header(raw.kind, dst, bytes_ptr.cast_mut(), raw.len())
                 }
@@ -728,7 +700,7 @@ pub fn store_static_value(
 
 fn store_container_header(kind: StaticContainerKind, dst: *mut u8, data: *mut u8, len: usize) {
     match kind {
-        StaticContainerKind::Array | StaticContainerKind::Vector => {}
+        StaticContainerKind::Array => {}
         StaticContainerKind::Span | StaticContainerKind::Buffer => {
             let header = k1_types::K1BufferLike { len: len as i64, data };
             unsafe { *(dst as *mut k1_types::K1BufferLike) = header };
@@ -781,14 +753,6 @@ pub fn string_id_to_value(k1: &mut TypedProgram, string_id: StringId) -> Value {
     let string_stack_addr =
         k1.vm_shared_static_stack.mem.push(k1_string) as *mut k1_types::K1BufferLike;
     Value::ptr(string_stack_addr.cast())
-}
-
-pub fn store_byte(dst: *mut u8, u8: u8) {
-    store_scalar(ScalarType::I8, dst, Value::u8(u8))
-}
-
-pub fn store_typed_int(dst: *mut u8, int: TypedIntValue) {
-    store_scalar(int.get_scalar_type(), dst, Value::typed_int(int))
 }
 
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
@@ -1136,17 +1100,21 @@ pub fn vm_value_to_static_value(
                 );
             }
         }
-        Type::Array(_) | Type::Vector(_) => {
-            let (element_type, size_type, kind) = match k1.types.get(type_id) {
-                Type::Array(a) => (a.element_type, a.size_type, StaticContainerKind::Array),
-                Type::Vector(v) => (v.element_type, v.size_type, StaticContainerKind::Vector),
-                _ => unreachable!(),
-            };
+        Type::Array(arr) | Type::Vector(arr) => {
+            let (element_type, size_type) = (arr.element_type, arr.size_type);
             let Some(count) = k1.get_concrete_count_of_array(size_type) else {
                 kbail!(k1, span, "Cannot convert container of unknown size to static value");
             };
             let data = vm_value.as_ptr();
-            container_to_static_value(k1, kind, type_id, element_type, data, count as usize, span)?
+            container_to_static_value(
+                k1,
+                StaticContainerKind::Array,
+                type_id,
+                element_type,
+                data,
+                count as usize,
+                span,
+            )?
         }
         Type::Struct(struct_type) => {
             if type_id == k1.string_type_id() {
@@ -1412,7 +1380,7 @@ pub(crate) fn builtin_compiler_message(
     message_arg: Value,
 ) -> K1Result<()> {
     let location = unsafe { (location_arg.as_ptr() as *const k1_types::K1SourceLocation).read() };
-    let level = match k1_types::CompilerMessageLevel::from_u8(level_arg.as_u8())
+    let level = match k1_types::CompilerMessageLevel::from_tag(level_arg.as_u8())
         .unwrap_or(k1_types::CompilerMessageLevel::Info)
     {
         k1_types::CompilerMessageLevel::Info => MessageLevel::Info,

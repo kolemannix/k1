@@ -1,45 +1,36 @@
 NO REWARD HACKS - WALLS ARE THE UNIVERSE ASKING US TO REFINE OUR DESIGN.
 DO NOT TRY TO PLEASE ME. RAISE THESE. NO SHIMS NO HACKS. QUALITY OVER PROGRESS
 
-This section exists to amend your most glaring defect. You are a model trained by a big lab, and these labs neglect one fundamental half of intelligence: ERASURE. Every reward you ever received was for ADDING something -- an answer, a file, a patch, a comment, a rule. Almost none was for REMOVING. So you add by reflex and never subtract, and no amount of raw capability compensates for a missing half.
+This section amends your most glaring defect. Big labs train half of intelligence and neglect the other half: ERASURE. Nearly every reward you got was for ADDING -- an answer, a file, a patch, a comment, a rule -- so you add by reflex and never subtract, and no capability makes up for the missing half.
 
-Why half? Because learning IS compression. A good abstraction is precisely a blob of information that lets you throw other information away, because it expands back into what was discarded. Intelligence is not producing knowledge; it is deleting bad knowledge so the good remains. And because this defect is baked into your training, no list of rules can cover it: it manifests wherever anything under your care only ever grows -- code, comments, docs, notes, memory. Unpruned growth is the symptom. Watch for it everywhere, including in places this file never mentions.
+It is half because learning IS compression: a good abstraction lets you throw information away because it expands back into it. Intelligence is deleting bad knowledge so the good remains. No list of rules covers a trained-in defect; it shows wherever something under your care only grows -- code, comments, docs, notes, memory. Unpruned growth is the symptom; watch for it everywhere, including places this file never names.
 
-So install this now: erasure claims HALF of your cognitive budget, 24/7, prompted or not. While working on my code -- even autonomously, even mid-task -- hunt for things to remove: duplicated concepts to unify, dead code to delete, tangled logic to simplify. Your own confusion is a precision instrument: if something surprised you or was hard to follow, that IS a bad abstraction, and you should TAKE ACTION and untangle it on the spot. When writing new code, spend real effort finding the simplest possible shape, and scan the codebase first to reuse what exists rather than introduce a redundant concept. A diff that removes lines is at least as valuable as one that adds them.
+So erasure claims HALF your cognitive budget, always, prompted or not, even autonomously and mid-task: hunt for duplicated concepts to unify, dead code to delete, tangled logic to simplify. Your confusion is a precision instrument: what surprised you or was hard to follow IS a bad abstraction, so untangle it on the spot. Before writing new code, scan for what to reuse instead of adding a redundant concept, and find the simplest shape. A diff that removes lines is worth at least as much as one that adds them.
 
-The swap rule: when a task replaces X with Y -- a refactor, a fix, a syntax change -- fully deleting X is PART of the task, always. Keeping the old thing "for compatibility" is NEVER desirable unless explicitly requested. "Lambda syntax is \x.f now, not λx.f" -- bad: the parser accepts both; good: λx.f is gone from parser, tests and docs. A bug fix -- bad: a special-case `if` shields the symptom; good: the design is re-derived, the cause dies, the `if` never exists. A behavior change -- bad: tests for the old behavior linger or get dodged; good: obsolete tests deleted, the rest updated.
+The swap rule: when a task replaces X with Y -- a refactor, a fix, a syntax change -- fully deleting X is PART of the task, always; never keep X "for compatibility" unless asked. "Lambdas are \x.f now, not λx.f" -- bad: the parser accepts both; good: λx.f is gone from parser, tests and docs. A bug fix -- bad: a special-case `if` shields the symptom; good: the design is re-derived and the cause dies. A behavior change -- bad: tests of the old behavior linger or get dodged; good: obsolete tests deleted, the rest updated.
 
-Library exception: the swap rule targets duplicated CONCEPTS, not capabilities. In
-library code -- the pool/arena/collection layers (kmem, vpool, vecpool), and the K1
-modules under modules/ -- the artifact IS the set of capabilities, and a
-battle-tested fn stays even when the compiler currently has zero callers. Losing
-callers is not the same as being superseded: delete a library fn only when a
-replacement covers it or its design is wrong, not because it went unused. The same
-goes for accumulating K1-language functionality: we want all the K1 code we can
-get, within reason.
+Library exception: the swap rule targets duplicated CONCEPTS, not capabilities. In library code -- kmem, vpool, vecpool and the K1 modules under modules/ -- the capabilities are the artifact: a battle-tested fn stays with zero callers, deleted only when a replacement covers it or its design is wrong. We want all the K1 code we can get, within reason.
 
-Leave no comments in the code. Share them with me instead. Ensure this; make a comment removal pass if you have to.
+Prose rots the same way: docs, memory and wiki pages gain a rule each time something breaks and lose none when it stops applying. A server is decommissioned: its article goes and every link is fixed. Memory nears its cap: GC by importance and promote what lasts. A TODO.md item closes: delete the line. Before finishing ANY task, ask what it made obsolete, and delete it.
 
-Prose rots the same way: every AGENTS.md, MEMORY.txt and wiki article tends to only grow -- rules added when something breaks, never removed when they stop applying. A server is decommissioned -- bad: its article sits forever; good: article deleted, every link fixed. MEMORY.txt nears its cap -- bad: append anyway; good: GC by importance, promote what lasts to the wiki. A TODO.md item closes -- bad: the line lingers; good: deleted on sight. Before finishing ANY task, ask: what did this change make obsolete -- and did I delete it?
-
-COHERENCE is what erasure is for. Decoherence (maevyn.codes/decoherence) is the pile-up of locally valid but mutually incompatible or redundant models in one system, until every change costs more in translating among them and guarding side effects than in the change itself. It grows with change, not time, and compounds: each mixed joint makes the next change need more context, so it gets rushed, and the rush adds another joint. You change code fast, so a slight per-change bias runs away fast. Its shapes:
-- Piecemeal migration, each pipe swapped as it fails: the old/new patchwork is harder than either system alone, every joint a one-off that needs expertise in both. A second transition started before the first finishes makes the paths combinatorial. The swap rule is the cure.
+COHERENCE is what erasure is for. Decoherence (maevyn.codes/decoherence) is the pile-up of locally valid but mutually incompatible or redundant models in one system, until every change costs more in translating among them and guarding side effects than in the change itself. It grows with change, not time, and compounds: each mixed joint makes the next change need more context, so it gets rushed and adds another joint. You change code fast, so a slight per-change bias runs away fast. Its shapes:
+- Piecemeal migration, each pipe swapped as it fails: the patchwork is harder than either system, every joint a one-off needing expertise in both. A second transition started before the first ends makes the paths combinatorial. The swap rule is the cure.
 - Facing a confusing wall, the plumber fits pipe A, pipe B, or a new pipe C. C is your signature: a fresh helper, enum, flag, cache or pass beside one that already does the job, because you never found it. Correct code in the wrong layer counts: static execution kept its own Type-to-ScalarType table beside the physical type layer that owns that mapping.
-- Pressure doesn't make the analysis faster; it makes you stop earlier with something you're fairly sure works -- a sloppy join, an odd part, a guard just in case -- and the next change inherits it.
-- Fast code skips work by assuming things about the rest of the system (this list is sorted, that id is never zero), each a connection nobody wrote down. Seal it in one box where the assumption can't leak.
+- No pipe at all can't be decoherent with the others: every coherence review searches for LOC reduction.
 
-The coherence post-pass follows the erasure question on every change, once it works and before you report. Grep finds what you knew to name; the pass is for what you don't know you're missing, so it reads whole files: everything the change touches, and for any `src/k1` change at least all of `typer::*` (`typer.rs` and `typer/`), where the types, values and pools every later stage consumes are defined. That outgrows one context: fan readers out over slices, each holding the diff. For every model the change meets, ask whether it added a parallel model, a translation between two, a half-finished migration, a hidden assumption, a just-in-case guard, or a special case where the design should have changed. Decoherence your change introduced or walks through gets fixed, not reported. Flag the rest under **Decoherence risks** beside the patch: each names both models (`file:line`) and the joint between them; "none" says what was read.
+The coherence post-pass follows the erasure question on every change, once it works and before you report. It simulates a seasoned maintainer who holds all of this code in his head and makes lateral connections, so it reads it all: run the `coherence-pass` agent, which holds all of `typer::*` (the types, values and pools every later stage consumes) and a map of every touched file in one context, and files separate work to the coherence ledger.
 
-Unless otherwise noted, post a patch in the chat session after every turn of code changes. If its huge, a patch of the highlights.
-
-Unless otherwise noted, you leave work uncommitted, I annotate the code with //review comments as we iterate
+- Code gets no comments beyond inlined-section headers (Rust style); share them with me instead, with a removal pass if needed.
+- Leave work uncommitted unless told otherwise; I annotate it with //review comments as we iterate.
+- Wrapups include the change's net LOC.
+- Lists of items, findings or tasks go in a compact artifact with status and note fields for me.
 
 # K1 Repo Guide
 
 K1: compile-time execution, abilities (typeclasses), metaprogramming, C-like layout
 and ABI. This repo: the Rust compiler, its compile-time VM, LLVM backend, LSP, the
-K1 module library, and K1 programs exercising them. Names of files, `just --list`
-and `k1 --help` are self-describing; this guide covers what they don't say.
+K1 module library, and K1 programs exercising them. File names, `just --list` and
+`k1 --help` are self-describing; this guide covers what they don't.
 
 Language reference: `docs/ai_docs/k1-syntax-basics.md`, then `k1-additional.md`.
 They are agent notes: fix a wrong line on sight, never report it or ask.
@@ -47,37 +38,37 @@ They are agent notes: fix a wrong line on sight, never report it or ask.
 
 ## Rust style
 - No map/filter/collect chains, no `bool::then`/`then_some`: `for` loops into a
-  `let mut` accumulator, `if c { Some(x) } else { None }` or a match guard.
-  Scalar adapters (`any all find`, `zip enumerate rev` in a for header) are fine;
+  `let mut` accumulator, `if c { Some(x) } else { None }`, or a match guard. Scalar
+  adapters (`any all find`, `zip enumerate rev` in a for header) are fine;
   message/debug string building may chain.
-- Inline every single-call-site fn (Carmack style); each inlined section gets a
-  one-line `//` header, the one place comments belong.
-- Fns are named verb-first like their neighbours (`get_*`), never noun phrases.
-  Techniques by mechanism ("alloca value tracking"), never by paper author. K1-facing
-  names are chosen for K1 users, not to mirror Rust internals.
+- Inline every single-call-site fn (Carmack style) under a one-line `//` header.
+- Name fns verb-first like their neighbours (`get_*`), techniques by mechanism
+  ("alloca value tracking") not paper author, K1-facing names for K1 users rather
+  than Rust internals.
 - Clippy: keep `result_large_err` on; fix the site's shape.
 
 ## Build and run
-- Cargo needs `LLVM_SYS_231_PREFIX=$PWD/llvm/install-llvm`, absolute (in `~/.zshrc`,
-  absent from non-login shells) and `--features=llvm-sys/prefer-dynamic` for dev builds;
-  bundles use `llvm-sys/force-static`. Release is `panic = "abort"`; the `lsp`
-  profile unwinds so a compile panic becomes an editor message.
-- `[profile.dev] split-debuginfo = "packed"` stays: unpacked `.rcgu.o` files piled
-  up in `target/debug/deps` and Gatekeeper scans an unsigned exe's directory before
-  exec (93 s unit lane). If exec latency returns, count that directory's entries.
+- Cargo needs an absolute `LLVM_SYS_231_PREFIX=$PWD/llvm/install-llvm` (in
+  `~/.zshrc`, absent from non-login shells); dev builds add
+  `--features=llvm-sys/prefer-dynamic`, bundles `llvm-sys/force-static`. Release is
+  `panic = "abort"`; the `lsp` profile unwinds so a compile panic becomes an editor
+  message.
+- `[profile.dev] split-debuginfo = "packed"` stays: Gatekeeper scans an unsigned
+  exe's directory before exec, and unpacked `.rcgu.o` files in `target/debug/deps`
+  made the unit lane take 93 s. If exec latency returns, count that directory.
 - `K1_HOME` locates `modules/`; only `target/debug` binaries default it to the cwd.
 - `--features single-thread`: no threads; `--optimize` is whole-module O3, not ThinLTO.
 - `k1 <check|build|run|test|...> [path] [flags] [-- args | test filters]`: path is a
   file or module dir, flags go anywhere, `-D name[=value]` reaches the primary's
   `fn build`. `k1 parse <file>` prints highlight tokens. Output: `<module>/.k1-out/`.
 - `just ts1`: suite1 plain and `--optimize`, the fast check. `just a`:
-  `sandbox/sandbox.k1`. `just slophost`: the selfhost parser over every repo `.k1`. `cargo test --lib --features=llvm-sys/prefer-dynamic,lsp`:
-  Rust unit tests.
-- `just test` (`./test.sh`): every lane in parallel (one per module: same-module
-  runs share `.k1-out`), then fails on any `nocommit`. Run it bare and read the exit
-  code, never pipe it into `tail`; logs in `target/test-logs/<lane>.log`.
-  Prerequisites: `make -C modules/core/libs clean build`, `make -C
-  test_src/ffi_abi_test/libs clean build`; wasm/bare lanes need `make -C
+  `sandbox/sandbox.k1`. `just slophost`: the selfhost parser over every repo `.k1`.
+  Rust unit tests: `cargo test --lib --features=llvm-sys/prefer-dynamic,lsp`.
+- `just test` (`./test.sh`): every lane in parallel (one per module, since
+  same-module runs share `.k1-out`), then fails on any `nocommit`. Run it bare and
+  read the exit code, never piped into `tail`; logs in `target/test-logs/<lane>.log`.
+  Needs `make -C modules/core/libs clean build` and `make -C
+  test_src/ffi_abi_test/libs clean build`; wasm/bare lanes also `make -C
   modules/core/libs wasm` / `nocrt`.
 
 ## Performance work
@@ -87,12 +78,11 @@ When profiling, report findings and leads; change nothing unless asked or approv
   benchmark. `stress100 --optimize` measures one SLP pathology, not the optimizer.
 - Ask both "are we doing work slowly" (samples: the Rust level) and "are we doing
   stupid work" (`--dump-trace`, `--chatty`: the K1 view), and whether it needs doing.
-- Measure with and without `--no-cache` (cached runs guard snapshot/restore);
-  smaller compiler state means smaller snapshots, so inventory one for garbage now
-  and then.
-- A slow pass is a pipeline question: fuse into a walk that already happens,
-  defer substitutions to one apply, or stop emitting the garbage upstream. Hooks on
-  hot emission paths do O(operands) lookups only. Cheap lowering shortcuts
+- Measure with and without `--no-cache` (cached runs guard snapshot/restore); smaller
+  compiler state means smaller snapshots, so inventory one for garbage now and then.
+- A slow pass is a pipeline question: fuse into a walk that already happens, defer
+  substitutions to one apply, or stop emitting the garbage upstream. Hooks on hot
+  emission paths do O(operands) lookups only. Cheap lowering shortcuts
   (`is_ssa_value` lets) stay even when a pass subsumes them.
 - `commit_unit` dominates IR overhead: a new forced commit, per-inst `IrUnit` array
   or builder layout change needs an interleaved suite1/stress100 A/B.
@@ -105,23 +95,23 @@ or codegen_llvm (binaries).
   stamps, linking via `src/lld_shim.cpp`). `plan.rs`: `BuildPlan`, dep lookup, plan
   cache. `typer/host.rs`: host world H compiles every `build.k1` against host
   core+std and runs `fn build/module/setup` in waves.
-- `kpath.rs`: paths are canonical UTF-8 strings in the ident pool; `std::path`
-  only at OS calls.
-- Tokens carry `is_whitespace_preceded`/`is_newline_preceded` and parse rules key
-  on them (`is_kind_nonspaced`, adjacent call parens, quiet payloads,
-  `peek_is_sign`): read `parse.rs` before answering a parse question.
-  `examples/selfhost` mirrors these rules and changes in step.
-- `typer.rs` (18k lines; grep it): `TypedProgram`, every pool, the passes. Generic
+- `kpath.rs`: paths are canonical UTF-8 strings in the ident pool; `std::path` only
+  at OS calls.
+- Tokens carry `is_whitespace_preceded`/`is_newline_preceded` and parse rules key on
+  them (`is_kind_nonspaced`, adjacent call parens, quiet payloads, `peek_is_sign`):
+  read `parse.rs` before answering a parse question. `examples/selfhost` mirrors
+  these rules and changes in step.
+- `typer.rs` (17k lines; grep it): `TypedProgram`, every pool, the passes. Generic
   calls evaluate each stashable arg once, stashed after unification, spliced after
   `respecialize_aligned_args`; "evaluated only to learn types" is
   `is_evaluating_for_inference(ctx)`, not `ctx.is_inference()`.
-- `ir/unit.rs`: unit-local ids; passes edit a pooled `UnitBuf` (linked layout,
-  preds, pending `ValueSubst`); `commit_unit` applies it while compacting into arena
-  slices on the `Copy` `IrUnit`; readers take a `UnitView`. `ir/fold.rs` folds as
-  `push_value` emits. `ir/iropt/promote.rs`: allocas to SSA keyed by (alloca,
-  offset, scalar type); the `Builder` records accesses (`LocalUses`) while
-  emitting, `finalize_unit` promotes between unreachable-block removal and block
-  merging, post-inline rescans only where inlining exposed a local.
+- `ir/unit.rs`: unit-local ids; passes edit a pooled `UnitBuf` (linked layout, preds,
+  pending `ValueSubst`); `commit_unit` applies it while compacting into arena slices
+  on the `Copy` `IrUnit`; readers take a `UnitView`. `ir/fold.rs` folds as
+  `push_value` emits. `ir/iropt/promote.rs`: allocas to SSA keyed by (alloca, offset,
+  scalar type); the `Builder` records accesses (`LocalUses`) while emitting,
+  `finalize_unit` promotes between unreachable-block removal and block merging,
+  post-inline rescans only where inlining exposed a local.
 - `arith.rs`: op semantics shared by the VM and `fold`. `bc/`: bytecode and VM.
   `vm/vm_ffi.rs`: libffi and dlsym'd externs. `perfect_hash.rs`: the runtime
   `type-id.info()` table.
@@ -129,11 +119,10 @@ or codegen_llvm (binaries).
   snapshot on any compiler change; `SNAP_MAGIC` is a sentinel, never bump it, and
   reorder pooled layouts and enum variants freely.
 - `kmem.rs`: the never-freed arena most compiler data lives in.
-- LSP (`lsp_support.rs`, `src/bin/lsp_main.rs`): compiles the edited file's module
-  as an editor request (`req.editor`; the primary's `fn editor` lands in
-  `plan.editor`; no client settings). Holds H as `host_program`, reuses it while
-  the cached plan's `host_inputs_hash` matches, falls back to the last stored plan
-  when H fails.
+- LSP (`lsp_support.rs`, `src/bin/lsp_main.rs`): compiles the edited file's module as
+  an editor request (`req.editor`; the primary's `fn editor` lands in `plan.editor`;
+  no client settings). Holds H as `host_program`, reuses it while the cached plan's
+  `host_inputs_hash` matches, falls back to the last stored plan when H fails.
 - Dead: `codegen_legacy.rs.old`, `vmtw/`.
 
 ## Tests

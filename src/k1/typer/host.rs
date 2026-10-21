@@ -652,7 +652,7 @@ impl TypedProgram {
         let StaticValue::Int(int) = *self.static_values.get(self.static_field(value, name)) else {
             self.ice_span(Span::NONE, format!("static field '{name}' is not an integer"))
         };
-        int.to_u64_bits()
+        int.to_zext_bits()
     }
 
     fn field_bool(&self, value: StaticValueId, name: &str) -> bool {
@@ -678,7 +678,7 @@ impl TypedProgram {
         self.ast.idents.get_string(member.name)
     }
 
-    fn enum_named(&mut self, enum_type: TypeId, name: &str) -> StaticValueId {
+    pub(super) fn enum_named(&mut self, enum_type: TypeId, name: &str) -> StaticValueId {
         let name_id = self.ast.idents.intern(name);
         let members = self.mem.getn(self.types.get(enum_type).expect_enum().member_values);
         let Some(member) = members.iter().find(|m| m.name == name_id) else {

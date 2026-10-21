@@ -45,13 +45,13 @@ fn recorded_preds_follow_terminators_with_duplicate_edges() {
         SwitchCase { value: 0, target: loop_block },
         SwitchCase { value: 1, target: loop_block },
     ]);
-    inst(&mut u, entry, Inst::Switch { value: byte(0), width: 8, cases, default: exit });
+    inst(&mut u, entry, Inst::Switch { value: byte(0), cases, default: exit });
     inst(
         &mut u,
         loop_block,
         Inst::JumpIf { cond: Value::zero(ScalarType::I8), cons: entry, alt: exit },
     );
-    inst(&mut u, exit, Inst::Ret { v: Value::Empty, agg: false });
+    inst(&mut u, exit, Inst::Ret { v: Value::Empty });
     inst(&mut u, dead, Inst::Jump(exit));
     assert_eq!(preds(&u, loop_block), [entry, entry]);
     assert_eq!(preds(&u, entry), [loop_block]);
@@ -82,8 +82,8 @@ fn commit_renumbers_into_layout_order_and_drops_unlinked() {
     let exit = u.add_block(BlockSourceKind::LoopEnd);
     let middle = u.insert_block_after(entry, BlockSourceKind::LoopBody);
     let t = PhysicalType::scalar(ScalarType::I64);
-    let ret = inst(&mut u, exit, Inst::Ret { v: Value::Empty, agg: false });
-    let dead = inst(&mut u, middle, Inst::Data(DataInst::I64(7)));
+    let ret = inst(&mut u, exit, Inst::Ret { v: Value::Empty });
+    let dead = inst(&mut u, middle, Inst::Data { t: ScalarType::I64, bits: 7 });
     let sum = inst(
         &mut u,
         middle,
@@ -103,7 +103,7 @@ fn commit_renumbers_into_layout_order_and_drops_unlinked() {
     );
     u.insert_inst_after(sum, front);
     u.remove_inst(dead);
-    *u.inst_mut(ret) = Inst::Ret { v: Value::Inst(front), agg: false };
+    *u.inst_mut(ret) = Inst::Ret { v: Value::Inst(front) };
 
     let mut unit = IrUnit::new(
         TypeId::PENDING,
@@ -168,8 +168,7 @@ fn cloned_phi_and_switch_payloads_are_owned_by_the_clone() {
     ]);
     let original = inst(&mut src, source, Inst::Phi { t, incomings });
     let cases = src.push_switch_cases(&[SwitchCase { value: 0, target: from }]);
-    let switch =
-        inst(&mut src, source, Inst::Switch { value: byte(0), width: 8, cases, default: dead });
+    let switch = inst(&mut src, source, Inst::Switch { value: byte(0), cases, default: dead });
     let mut clones = Vec::new();
     for target in [first, first, second] {
         let mut cloned = *src.inst(original);

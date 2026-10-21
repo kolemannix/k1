@@ -866,7 +866,7 @@ fn map_refs(
     block: &impl Fn(&mut BlockId),
 ) {
     match inst {
-        Inst::Data(_)
+        Inst::Data { .. }
         | Inst::ReloadGlobalAddr { .. }
         | Inst::Alloca { .. }
         | Inst::Fence { .. }
@@ -948,10 +948,8 @@ fn map_refs(
         | Inst::IntExtS { v, .. }
         | Inst::FloatTrunc { v, .. }
         | Inst::FloatExt { v, .. }
-        | Inst::Float32ToIntUnsigned { v, .. }
-        | Inst::Float64ToIntUnsigned { v, .. }
-        | Inst::Float32ToIntSigned { v, .. }
-        | Inst::Float64ToIntSigned { v, .. }
+        | Inst::FloatToIntUnsigned { v, .. }
+        | Inst::FloatToIntSigned { v, .. }
         | Inst::IntToFloatUnsigned { v, .. }
         | Inst::IntToFloatSigned { v, .. }
         | Inst::PtrToWord { v, .. }

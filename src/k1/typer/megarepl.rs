@@ -657,11 +657,7 @@ impl TypedProgram {
             }
         };
         let cell_expr = self.exprs.add_block(cell_block, type_id);
-        eprintln!("compiled megarepl block: \n{}", self.expr_to_string(cell_expr));
-
-        ir::compile_top_level_expr(self, cell_expr, false)?;
-        ir::validate_unit(self, IrUnitId::Expr(cell_expr))?;
-        ir::optimize_unit(self, IrUnitId::Expr(cell_expr))?;
+        self.compile_static_unit(cell_expr, false)?;
         Ok((cell_expr, output_globals))
     }
 

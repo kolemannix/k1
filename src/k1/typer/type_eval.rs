@@ -794,14 +794,18 @@ impl TypedProgram {
                 }
                 let inner =
                     self.eval_type_expr_ext(inner_type_expr_id, scope_id, context.descended())?;
-                if self.types.get(inner).as_function().is_none() {
+                let Some(&inner_fn) = self.types.get(inner).as_function() else {
                     kbail!(
                         self,
                         ty_app.span,
                         "Expected function type or ability signature for dyn"
                     );
-                }
-                let new_function_type = self.add_lambda_env_to_function_type(inner);
+                };
+                let new_function_type = self.add_function_type(
+                    self.mem.getn(inner_fn.logical_params()),
+                    inner_fn.return_type,
+                    true,
+                );
                 let lambda_object_type =
                     self.add_lambda_object(new_function_type, ty_app_id.into());
 
@@ -1734,7 +1738,7 @@ impl TypedProgram {
         let (element_type, size_type) =
             self.eval_sized_tyapp(ty_app, "Vector lane count", scope_id, context)?;
         self.validate_vector_parts(element_type, size_type, ty_app.span)?;
-        Ok(Some(self.add_type(Type::Vector(VectorType { element_type, size_type }))))
+        Ok(Some(self.add_type(Type::Vector(ArrayType { element_type, size_type }))))
     }
 
     pub(super) fn validate_vector_parts(
@@ -1984,7 +1988,7 @@ impl TypedProgram {
                 let mut any_new = false;
                 let is_lambda = fun_type.is_lambda;
                 let old_return_type = fun_type.return_type;
-                let old_params = fun_type.physical_params;
+                let old_params = fun_type.logical_params();
                 let new_return_type =
                     self.substitute_in_type_inner(old_return_type, substitution_pairs, from_kinds);
                 if new_return_type != old_return_type {
@@ -2069,34 +2073,18 @@ impl TypedProgram {
                     }
                 }
             }
-            Type::Array(arr) => {
+            typ @ (Type::Array(arr) | Type::Vector(arr)) => {
                 let arr = *arr;
-                let element_type = arr.element_type;
+                let make: fn(ArrayType) -> Type =
+                    if matches!(typ, Type::Vector(_)) { Type::Vector } else { Type::Array };
                 let new_element_type =
-                    self.substitute_in_type_inner(element_type, substitution_pairs, from_kinds);
+                    self.substitute_in_type_inner(arr.element_type, substitution_pairs, from_kinds);
                 let new_size_type =
                     self.substitute_in_type_inner(arr.size_type, substitution_pairs, from_kinds);
-                if new_element_type == element_type && new_size_type == arr.size_type {
-                    type_id // No change needed
-                } else {
-                    // Create new Array type with substituted element type
-                    let new_array_type = Type::Array(ArrayType {
-                        element_type: new_element_type,
-                        size_type: new_size_type,
-                    });
-                    self.add_type(new_array_type)
-                }
-            }
-            Type::Vector(vec) => {
-                let vec = *vec;
-                let new_element_type =
-                    self.substitute_in_type_inner(vec.element_type, substitution_pairs, from_kinds);
-                let new_size_type =
-                    self.substitute_in_type_inner(vec.size_type, substitution_pairs, from_kinds);
-                if new_element_type == vec.element_type && new_size_type == vec.size_type {
+                if new_element_type == arr.element_type && new_size_type == arr.size_type {
                     type_id
                 } else {
-                    self.add_type(Type::Vector(VectorType {
+                    self.add_type(make(ArrayType {
                         element_type: new_element_type,
                         size_type: new_size_type,
                     }))

@@ -190,9 +190,7 @@ pub enum IrComment {
     RvoStorage,
     SourceLet,
     SplatResult,
-    StaticEnum,
-    StaticFloat,
-    StaticInt,
+    StaticScalar,
     StoreLambdaEnvForCall,
     StoreScalarToDst,
     StoreStaticValueToDst,
@@ -274,9 +272,7 @@ impl IrComment {
             IrComment::RvoStorage => "rvo storage",
             IrComment::SourceLet => "source let",
             IrComment::SplatResult => "splat result",
-            IrComment::StaticEnum => "static enum",
-            IrComment::StaticFloat => "static float",
-            IrComment::StaticInt => "static int",
+            IrComment::StaticScalar => "static scalar",
             IrComment::StoreLambdaEnvForCall => "store lambda env for call",
             IrComment::StoreScalarToDst => "store scalar to dst",
             IrComment::StoreStaticValueToDst => "store static value to dst",
@@ -385,28 +381,6 @@ impl BlockSourceKind {
     }
 }
 
-#[derive(Clone, Copy)]
-pub enum DataInst {
-    I64(u64),
-    F64(f64),
-}
-
-impl DataInst {
-    pub fn bits(self) -> u64 {
-        match self {
-            DataInst::I64(v) => v,
-            DataInst::F64(f) => f.to_bits(),
-        }
-    }
-
-    pub fn scalar_type(self) -> ScalarType {
-        match self {
-            DataInst::I64(_) => ScalarType::I64,
-            DataInst::F64(_) => ScalarType::F64,
-        }
-    }
-}
-
 nz_u32_id!(InstId);
 impl InstId {
     fn as_value(&self) -> Value {
@@ -414,25 +388,27 @@ impl InstId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BackendBuiltin {
-    TypeInfo,
-    TestSuite,
-    MakeStruct,
-    MakeEither,
-    MakeReference,
-    MakeArray,
-    MakeFn,
-    MakeInstance,
+crate::tag_enum! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum BackendBuiltin {
+        TypeInfo,
+        TestSuite,
+        MakeStruct,
+        MakeEither,
+        MakeReference,
+        MakeArray,
+        MakeFn,
+        MakeInstance,
 
-    MemCopy,
-    MemMove,
-    MemSet,
-    MemEquals,
-    Exit,
+        MemCopy,
+        MemMove,
+        MemSet,
+        MemEquals,
+        Exit,
 
-    CompilerMessage,
-    ReplCheckbox,
+        CompilerMessage,
+        ReplCheckbox,
+    }
 }
 
 impl BackendBuiltin {
@@ -457,31 +433,18 @@ impl BackendBuiltin {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AtomicOrderingIr {
-    Relaxed,
-    Acquire,
-    Release,
-    AcqRel,
-    SeqCst,
+crate::tag_enum! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum AtomicOrderingIr {
+        Relaxed,
+        Acquire,
+        Release,
+        AcqRel,
+        SeqCst,
+    }
 }
 
 impl AtomicOrderingIr {
-    pub const fn to_tag(self) -> u8 {
-        self as u8
-    }
-
-    pub fn from_tag(tag: u8) -> AtomicOrderingIr {
-        match tag {
-            0 => AtomicOrderingIr::Relaxed,
-            1 => AtomicOrderingIr::Acquire,
-            2 => AtomicOrderingIr::Release,
-            3 => AtomicOrderingIr::AcqRel,
-            4 => AtomicOrderingIr::SeqCst,
-            _ => unreachable!("bad atomic ordering tag {tag}"),
-        }
-    }
-
     pub fn name(&self) -> &'static str {
         match self {
             AtomicOrderingIr::Relaxed => "relaxed",
@@ -493,41 +456,23 @@ impl AtomicOrderingIr {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AtomicRmwOpIr {
-    Xchg,
-    Add,
-    Sub,
-    And,
-    Or,
-    Xor,
-    MinS,
-    MaxS,
-    MinU,
-    MaxU,
+crate::tag_enum! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum AtomicRmwOpIr {
+        Xchg,
+        Add,
+        Sub,
+        And,
+        Or,
+        Xor,
+        MinS,
+        MaxS,
+        MinU,
+        MaxU,
+    }
 }
 
 impl AtomicRmwOpIr {
-    pub const fn to_tag(self) -> u8 {
-        self as u8
-    }
-
-    pub fn from_tag(tag: u8) -> AtomicRmwOpIr {
-        match tag {
-            0 => AtomicRmwOpIr::Xchg,
-            1 => AtomicRmwOpIr::Add,
-            2 => AtomicRmwOpIr::Sub,
-            3 => AtomicRmwOpIr::And,
-            4 => AtomicRmwOpIr::Or,
-            5 => AtomicRmwOpIr::Xor,
-            6 => AtomicRmwOpIr::MinS,
-            7 => AtomicRmwOpIr::MaxS,
-            8 => AtomicRmwOpIr::MinU,
-            9 => AtomicRmwOpIr::MaxU,
-            _ => unreachable!("bad atomic rmw op tag {tag}"),
-        }
-    }
-
     pub fn name(&self) -> &'static str {
         match self {
             AtomicRmwOpIr::Xchg => "xchg",
@@ -548,7 +493,6 @@ nz_u32_id!(AtomicCmpxchgId);
 
 #[derive(Clone, Copy)]
 pub struct AtomicCmpxchgData {
-    pub t: ScalarType,
     pub dst: Value,
     pub expected: Value,
     pub desired: Value,
@@ -717,7 +661,7 @@ impl Value {
         match self {
             Value::Data32 { t, data } => Some(data32_bits(t, data)),
             Value::Inst(id) => match *u.inst(id) {
-                Inst::Data(data) => Some(data.bits()),
+                Inst::Data { bits, .. } => Some(bits),
                 _ => None,
             },
             _ => None,
@@ -747,7 +691,10 @@ pub struct IrCall {
 
 #[derive(Clone, Copy)]
 pub enum Inst {
-    Data(DataInst),
+    Data {
+        t: ScalarType,
+        bits: u64,
+    },
     ReloadGlobalAddr {
         storage_pt: PhysicalType,
         id: TypedGlobalId,
@@ -762,7 +709,6 @@ pub enum Inst {
     Store {
         dst: Value,
         value: Value,
-        t: ScalarType,
         volatile: bool,
         unaligned: bool,
     },
@@ -780,7 +726,6 @@ pub enum Inst {
     AtomicStore {
         dst: Value,
         value: Value,
-        t: ScalarType,
         ord: AtomicOrderingIr,
     },
     AtomicRmw {
@@ -838,7 +783,6 @@ pub enum Inst {
     },
     Switch {
         value: Value,
-        width: u8,
         cases: IrRange<SwitchCase>,
         default: BlockId,
     },
@@ -849,7 +793,6 @@ pub enum Inst {
     },
     Ret {
         v: Value,
-        agg: bool,
     },
 
     Select {
@@ -880,7 +823,6 @@ pub enum Inst {
     },
     IntExtS {
         v: Value,
-        from: ScalarType,
         to: ScalarType,
     },
     FloatTrunc {
@@ -891,30 +833,20 @@ pub enum Inst {
         v: Value,
         to: ScalarType,
     },
-    Float32ToIntUnsigned {
+    FloatToIntUnsigned {
         v: Value,
         to: ScalarType,
     },
-    Float64ToIntUnsigned {
-        v: Value,
-        to: ScalarType,
-    },
-    Float32ToIntSigned {
-        v: Value,
-        to: ScalarType,
-    },
-    Float64ToIntSigned {
+    FloatToIntSigned {
         v: Value,
         to: ScalarType,
     },
     IntToFloatUnsigned {
         v: Value,
-        from: ScalarType,
         to: ScalarType,
     },
     IntToFloatSigned {
         v: Value,
-        from: ScalarType,
         to: ScalarType,
     },
     PtrToWord {
@@ -934,19 +866,16 @@ pub enum Inst {
         op: OverflowOp,
         lhs: Value,
         rhs: Value,
-        t: ScalarType,
     },
     IntCmp {
         lhs: Value,
         rhs: Value,
         pred: IntCmpPred,
-        width: u8,
     },
     IntCmp3 {
         op: Cmp3Op,
         lhs: Value,
         rhs: Value,
-        width: u8,
     },
     FloatBinop {
         op: FloatOp,
@@ -969,7 +898,6 @@ pub enum Inst {
         lhs: Value,
         rhs: Value,
         pred: FloatCmpPred,
-        width: u8,
     },
 
     BakeStaticValue {
@@ -997,7 +925,7 @@ impl Inst {
 
 pub fn visit_inst_values(u: &UnitView, inst: &Inst, f: &mut impl FnMut(Value)) {
     match *inst {
-        Inst::Data(_)
+        Inst::Data { .. }
         | Inst::ReloadGlobalAddr { .. }
         | Inst::Alloca { .. }
         | Inst::Fence { .. }
@@ -1070,10 +998,8 @@ pub fn visit_inst_values(u: &UnitView, inst: &Inst, f: &mut impl FnMut(Value)) {
         | Inst::IntExtS { v, .. }
         | Inst::FloatTrunc { v, .. }
         | Inst::FloatExt { v, .. }
-        | Inst::Float32ToIntUnsigned { v, .. }
-        | Inst::Float64ToIntUnsigned { v, .. }
-        | Inst::Float32ToIntSigned { v, .. }
-        | Inst::Float64ToIntSigned { v, .. }
+        | Inst::FloatToIntUnsigned { v, .. }
+        | Inst::FloatToIntSigned { v, .. }
         | Inst::IntToFloatUnsigned { v, .. }
         | Inst::IntToFloatSigned { v, .. }
         | Inst::PtrToWord { v, .. }
@@ -1153,7 +1079,7 @@ pub fn is_addr_unaligned(u: &UnitView, mut v: Value) -> bool {
 
 pub fn get_inst_kind(u: &UnitView, inst_id: InstId) -> InstKind {
     match *u.inst(inst_id) {
-        Inst::Data(data) => InstKind::scalar(data.scalar_type()),
+        Inst::Data { t, .. } => InstKind::scalar(t),
         Inst::Alloca { .. } | Inst::ReloadGlobalAddr { .. } => InstKind::PTR,
         Inst::Store { .. } => InstKind::Void,
         Inst::Load { t, .. } => InstKind::Value(t),
@@ -1186,10 +1112,8 @@ pub fn get_inst_kind(u: &UnitView, inst_id: InstId) -> InstKind {
         Inst::IntExtS { to, .. } => InstKind::scalar(to),
         Inst::FloatTrunc { to, .. } => InstKind::scalar(to),
         Inst::FloatExt { to, .. } => InstKind::scalar(to),
-        Inst::Float32ToIntUnsigned { to, .. } => InstKind::scalar(to),
-        Inst::Float32ToIntSigned { to, .. } => InstKind::scalar(to),
-        Inst::Float64ToIntUnsigned { to, .. } => InstKind::scalar(to),
-        Inst::Float64ToIntSigned { to, .. } => InstKind::scalar(to),
+        Inst::FloatToIntUnsigned { to, .. } => InstKind::scalar(to),
+        Inst::FloatToIntSigned { to, .. } => InstKind::scalar(to),
         Inst::IntToFloatUnsigned { to, .. } => InstKind::scalar(to),
         Inst::IntToFloatSigned { to, .. } => InstKind::scalar(to),
         Inst::PtrToWord { to, .. } => InstKind::scalar(to),
@@ -1663,16 +1587,16 @@ impl<'k1> Builder<'k1> {
     fn push_switch(
         &mut self,
         value: Value,
-        width: u8,
         cases: &[SwitchCase],
         default: BlockId,
         comment: IrComment,
     ) -> InstId {
         if let Some(bits) = self.known_bits(value) {
+            let width = self.get_value_kind(value).expect_scalar().width_bits();
             return self.push_jump(switch_target(cases, default, width, bits), comment);
         }
         let cases = self.u.push_switch_cases(cases);
-        self.push_inst(Inst::Switch { value, width, cases, default }, comment)
+        self.push_inst(Inst::Switch { value, cases, default }, comment)
     }
 
     fn is_live(&self, block_id: BlockId) -> bool {
@@ -1749,14 +1673,8 @@ impl<'k1> Builder<'k1> {
         volatile: bool,
         comment: IrComment,
     ) -> InstId {
-        let t = self.get_value_kind(value).expect_value().unwrap().expect_scalar();
         let unaligned = forced_unaligned || self.is_addr_unaligned(dst);
-        self.push_inst(Inst::Store { dst, value, t, volatile, unaligned }, comment)
-    }
-
-    fn make_int_value(&mut self, int_value: &TypedIntValue, comment: IrComment) -> Value {
-        let t = int_value.get_integer_type().get_scalar_type();
-        self.push_const(t, int_value.to_zext_bits(), comment)
+        self.push_inst(Inst::Store { dst, value, volatile, unaligned }, comment)
     }
 
     fn push_const(&mut self, t: ScalarType, bits: u64, comment: IrComment) -> Value {
@@ -1767,12 +1685,7 @@ impl<'k1> Builder<'k1> {
         if data32_bits(t, data32) == bits {
             return Value::imm32(t, data32);
         }
-        let data = match t {
-            ScalarType::I64 => DataInst::I64(bits),
-            ScalarType::F64 => DataInst::F64(f64::from_bits(bits)),
-            _ => panic!("{t:?} constant {bits:#x} has no encoding"),
-        };
-        self.push_inst(Inst::Data(data), comment).as_value()
+        self.push_inst(Inst::Data { t, bits }, comment).as_value()
     }
 
     fn push_value(&mut self, inst: Inst, comment: IrComment) -> Value {
@@ -2441,13 +2354,7 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
 
             let scrutinee = match match_expr.scrutinee {
                 None => None,
-                Some(scrutinee_expr) => {
-                    let value = compile_expr(b, None, scrutinee_expr)?;
-                    let scrutinee_type = b.k1.exprs.get_type(scrutinee_expr);
-                    let width =
-                        b.get_physical_type(scrutinee_type).unwrap().expect_scalar().width_bits();
-                    Some((value, width))
-                }
+                Some(scrutinee_expr) => Some(compile_expr(b, None, scrutinee_expr)?),
             };
 
             let mut entries = b.k1.tmp.new_list(arm_count as u32);
@@ -2487,14 +2394,17 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
                     while arms[run_end].case.is_some() {
                         run_end += 1;
                     }
-                    let (scrutinee_value, width) = scrutinee.unwrap();
+                    let scrutinee_value = scrutinee.unwrap();
                     let mut cases = b.k1.tmp.new_list((run_end - index) as u32);
                     for k in index..run_end {
                         let case = arms[k].case;
                         let seen = arms[index..k].iter().any(|a| a.case == case);
                         if !seen {
-                            let value =
-                                get_static_value_int_bits_masked(b.k1, case.unwrap(), width);
+                            let (_, value) =
+                                b.k1.static_values
+                                    .get(case.unwrap())
+                                    .scalar_bits()
+                                    .expect("switch case is a scalar");
                             cases.push(SwitchCase { value, target: arm_blocks[k] });
                         }
                         let next_same = arms[k + 1..run_end].iter().position(|a| a.case == case);
@@ -2508,7 +2418,6 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
                         b.goto_block(entries[index]);
                         b.push_switch(
                             scrutinee_value,
-                            width,
                             cases.as_slice(),
                             entries[run_end],
                             IrComment::MatchSwitch,
@@ -2697,8 +2606,8 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
 
             let tag_base = sum_base;
             let sum_variant = b.k1.mem.get_nth(variants, sum_c.variant_index as usize);
-            let tag_int_value = sum_variant.tag;
-            let int_imm = b.make_int_value(&tag_int_value, IrComment::SumTag);
+            let (tag_t, tag_bits) = sum_variant.tag.scalar_bits();
+            let int_imm = b.push_const(tag_t, tag_bits, IrComment::SumTag);
             b.push_store(tag_base, int_imm, IrComment::StoreSumLitTag);
 
             if let Some(payload_expr) = &sum_c.payload {
@@ -2734,7 +2643,8 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
         TypedExpr::Enum(e) => {
             let Type::Enum(enum_type) = b.k1.types.get(expr_type) else { unreachable!() };
             let value = b.k1.mem.get_nth(enum_type.member_values, e.value_index as usize);
-            let value = b.make_int_value(&value.int_value, IrComment::EnumInt);
+            let (t, bits) = value.int_value.scalar_bits();
+            let value = b.push_const(t, bits, IrComment::EnumInt);
             let stored = store_scalar_if_dst(b, dst, value);
             Ok(stored)
         }
@@ -2758,12 +2668,15 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
                 _ => None,
             };
             let value = compile_expr(b, dst, typed_return.value)?;
-            let is_agg_return = b.fn_type.return_type.is_agg();
 
             let returned_value = if return_pt.is_empty() { Value::Empty } else { value };
             let ret = b.push_inst(
-                Inst::Ret { v: returned_value, agg: is_agg_return },
-                if is_agg_return { IrComment::ReturnAggregateAtAddress } else { IrComment::None },
+                Inst::Ret { v: returned_value },
+                if return_pt.is_agg() {
+                    IrComment::ReturnAggregateAtAddress
+                } else {
+                    IrComment::None
+                },
             );
             Ok(ret.as_value())
         }
@@ -2907,31 +2820,15 @@ fn compile_zero(b: &mut Builder, type_id: TypeId, dst: Option<Value>) -> K1Resul
 fn compile_static_value(b: &mut Builder, value_id: StaticValueId, pt: PhysicalType) -> Value {
     match b.k1.static_values.get(value_id) {
         StaticValue::Empty(_) => Value::Empty,
-        StaticValue::Bool(bv) => Value::imm32(ScalarType::I8, *bv as u32),
-        StaticValue::Char(byte) => Value::imm32(ScalarType::I8, *byte as u32),
-        StaticValue::Int(int) => {
-            let int = *int;
-            let int_value = b.make_int_value(&int, IrComment::StaticInt);
-            int_value
-        }
-        StaticValue::Enum(_, int) => {
-            let int = *int;
-            let int_value = b.make_int_value(&int, IrComment::StaticEnum);
-            int_value
+        scalar @ (StaticValue::Bool(_)
+        | StaticValue::Char(_)
+        | StaticValue::Int(_)
+        | StaticValue::Enum(..)
+        | StaticValue::Float(_)) => {
+            let (t, bits) = scalar.scalar_bits().unwrap();
+            b.push_const(t, bits, IrComment::StaticScalar)
         }
         StaticValue::FunctionPointer(_, function_id) => Value::FunctionAddr(*function_id),
-        StaticValue::Float(TypedFloatValue::F32(float)) => {
-            Value::imm32(ScalarType::F32, float.to_bits())
-        }
-        StaticValue::Float(TypedFloatValue::F64(float)) => {
-            let float = *float;
-            let small = float as f32;
-            if !float.is_nan() && (small as f64).to_bits() == float.to_bits() {
-                Value::imm32(ScalarType::F64, small.to_bits())
-            } else {
-                b.push_inst(Inst::Data(DataInst::F64(float)), IrComment::StaticFloat).as_value()
-            }
-        }
         StaticValue::String(_)
         | StaticValue::Zero(_)
         | StaticValue::Struct(_)
@@ -3097,7 +2994,7 @@ fn compile_ir_builtin(
             let rhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
             let value =
                 b.push_value(Inst::IntBinop { op: op.wrapping_op(), lhs, rhs, t }, IrComment::None);
-            let overflowed = b.push_value(Inst::IntOverflows { op, lhs, rhs, t }, IrComment::None);
+            let overflowed = b.push_value(Inst::IntOverflows { op, lhs, rhs }, IrComment::None);
             let result = match dst {
                 None => b.push_alloca(ret_pt, IrComment::None).as_value(),
                 Some(dst) => dst,
@@ -3270,11 +3167,11 @@ fn compile_ir_builtin(
         }
         BuiltinIr::AtomicStore => {
             let type_id = b.k1.get_type_slice(call.type_args)[0];
-            let t = check_atomic_scalar_type(b, type_id, true)?;
+            check_atomic_scalar_type(b, type_id, true)?;
             let ord = b.k1.atomic_ordering_arg(&call, 2)?;
             let store_dst = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let value = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
-            b.push_inst_anon(Inst::AtomicStore { dst: store_dst, value, t, ord });
+            b.push_inst_anon(Inst::AtomicStore { dst: store_dst, value, ord });
             Ok(store_rich_if_dst(b, dst, PhysicalType::EMPTY, Value::Empty, IrComment::None))
         }
         BuiltinIr::AtomicRmw(op) => {
@@ -3307,7 +3204,7 @@ fn compile_ir_builtin(
         }
         BuiltinIr::AtomicCmpxchg { weak } => {
             let type_id = b.k1.get_type_slice(call.type_args)[0];
-            let t = check_atomic_scalar_type(b, type_id, true)?;
+            check_atomic_scalar_type(b, type_id, true)?;
             let success = b.k1.atomic_ordering_arg(&call, 3)?;
             let failure = b.k1.atomic_ordering_arg(&call, 4)?;
             let cas_dst = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
@@ -3325,7 +3222,6 @@ fn compile_ir_builtin(
                 Some(dst) => dst,
             };
             let id = b.u.add_cmpxchg(AtomicCmpxchgData {
-                t,
                 dst: cas_dst,
                 expected,
                 desired,
@@ -3615,8 +3511,7 @@ fn compile_cast(
             let to = to_pt.expect_scalar();
             let inst = match c.cast_type {
                 CastType::IntegerCast(IntegerCastDirection::SignExtend) => {
-                    let from = b.get_value_kind(base).expect_value().unwrap().expect_scalar();
-                    Inst::IntExtS { from, v: base, to }
+                    Inst::IntExtS { v: base, to }
                 }
                 CastType::IntegerCast(IntegerCastDirection::ZeroExtend) => {
                     Inst::IntExtU { v: base, to }
@@ -3637,23 +3532,14 @@ fn compile_cast(
         | CastType::IntegerUnsignedToFloat
         | CastType::IntegerSignedToFloat => {
             let base = compile_expr(b, None, c.base_expr)?;
-            let from = b.get_value_kind(base).expect_value().unwrap().expect_scalar();
             let to = b.get_physical_type(target_type_id)?.expect_scalar();
             let inst = match c.cast_type {
                 CastType::FloatExtend => Inst::FloatExt { v: base, to },
                 CastType::FloatTruncate => Inst::FloatTrunc { v: base, to },
-                CastType::FloatToUnsignedInteger => match from {
-                    ScalarType::F32 => Inst::Float32ToIntUnsigned { v: base, to },
-                    ScalarType::F64 => Inst::Float64ToIntUnsigned { v: base, to },
-                    _ => unreachable!(),
-                },
-                CastType::FloatToSignedInteger => match from {
-                    ScalarType::F32 => Inst::Float32ToIntSigned { v: base, to },
-                    ScalarType::F64 => Inst::Float64ToIntSigned { v: base, to },
-                    _ => unreachable!(),
-                },
-                CastType::IntegerUnsignedToFloat => Inst::IntToFloatUnsigned { v: base, from, to },
-                CastType::IntegerSignedToFloat => Inst::IntToFloatSigned { v: base, from, to },
+                CastType::FloatToUnsignedInteger => Inst::FloatToIntUnsigned { v: base, to },
+                CastType::FloatToSignedInteger => Inst::FloatToIntSigned { v: base, to },
+                CastType::IntegerUnsignedToFloat => Inst::IntToFloatUnsigned { v: base, to },
+                CastType::IntegerSignedToFloat => Inst::IntToFloatSigned { v: base, to },
                 _ => unreachable!(),
             };
             let inst = b.push_inst_anon(inst);
@@ -3671,17 +3557,16 @@ fn compile_scalar_op(b: &mut Builder, scalar_op: ScalarOp, dst: Option<Value>) -
     }
     let lhs_type = b.k1.exprs.get_type(*b.k1.mem.get_nth(scalar_op.operands, 0));
     let t = b.get_physical_type(lhs_type)?.expect_scalar();
-    let width = t.width_bits();
     let lhs = operands[0];
     let inst = match scalar_op.kind {
         ScalarOpKind::IntBinop(op) => Inst::IntBinop { op, lhs, rhs: operands[1], t },
         ScalarOpKind::IntUnop(op) => Inst::IntUnop { op, v: lhs, t },
-        ScalarOpKind::IntCmp(pred) => Inst::IntCmp { lhs, rhs: operands[1], pred, width },
-        ScalarOpKind::IntCmp3(op) => Inst::IntCmp3 { op, lhs, rhs: operands[1], width },
+        ScalarOpKind::IntCmp(pred) => Inst::IntCmp { lhs, rhs: operands[1], pred },
+        ScalarOpKind::IntCmp3(op) => Inst::IntCmp3 { op, lhs, rhs: operands[1] },
         ScalarOpKind::BoolNegate => Inst::BoolNegate { v: lhs },
         ScalarOpKind::FloatBinop(op) => Inst::FloatBinop { op, lhs, rhs: operands[1], t },
         ScalarOpKind::FloatUnop(op) => Inst::FloatUnop { op, v: lhs, t },
-        ScalarOpKind::FloatCmp(pred) => Inst::FloatCmp { lhs, rhs: operands[1], pred, width },
+        ScalarOpKind::FloatCmp(pred) => Inst::FloatCmp { lhs, rhs: operands[1], pred },
         ScalarOpKind::FloatFma => Inst::FloatFma { a: lhs, b: operands[1], c: operands[2], t },
     };
     let res = b.push_value(inst, IrComment::None);
@@ -3758,25 +3643,11 @@ fn compile_int_equals(
     let subject_value = compile_expr(b, None, subject)?;
     let subject_type = b.k1.exprs.get_type(subject);
     let pt = b.get_physical_type(subject_type)?;
-    let width = pt.expect_scalar().width_bits();
     let rhs = compile_static_value(b, value, pt);
     Ok(b.push_value(
-        Inst::IntCmp { lhs: subject_value, rhs, pred: IntCmpPred::Eq, width },
+        Inst::IntCmp { lhs: subject_value, rhs, pred: IntCmpPred::Eq },
         IrComment::MatchingCondCond,
     ))
-}
-
-fn get_static_value_int_bits_masked(k1: &TypedProgram, value_id: StaticValueId, width: u8) -> u64 {
-    let bits = match k1.static_values.get(value_id) {
-        StaticValue::Int(int) => int.to_u64_bits(),
-        StaticValue::Char(byte) => *byte as u64,
-        StaticValue::Bool(bv) => *bv as u64,
-        _ => panic!(
-            "switch case is not an int, char, or bool: {}",
-            k1.static_value_to_string(value_id)
-        ),
-    };
-    bits & arith::width_mask(width)
 }
 
 fn compile_match_as_select(
@@ -4137,14 +4008,14 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
             }
 
             match *inst {
-                Inst::Data(_) | Inst::ReloadGlobalAddr { .. } => (),
+                Inst::Data { .. } | Inst::ReloadGlobalAddr { .. } => (),
                 Inst::Alloca { .. } => (),
-                Inst::Store { dst, value, t, .. } => {
+                Inst::Store { dst, value, .. } => {
                     if !get_value_kind(&u, dst).is_storage() {
                         errors.push(format!("i{inst_id}: store dst is not a ptr"))
                     }
-                    if scalar_of(value) != Some(t) {
-                        errors.push(format!("i{inst_id}: store value type is not the store type"))
+                    if scalar_of(value).is_none() {
+                        errors.push(format!("i{inst_id}: store value is not a scalar"))
                     }
                 }
                 Inst::Load { src, .. } => {
@@ -4243,10 +4114,14 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                         errors.push(format!("i{inst_id}: jump to non-existent block"))
                     }
                 }
-                Inst::Switch { value, width, cases, default } => {
-                    if !get_value_kind(&u, value).is_value() {
-                        errors.push(format!("i{inst_id}: switch value is not a value"))
-                    }
+                Inst::Switch { value, cases, default } => {
+                    let mask = match scalar_of(value) {
+                        Some(st) => arith::width_mask(st.width_bits()),
+                        None => {
+                            errors.push(format!("i{inst_id}: switch value is not a scalar"));
+                            u64::MAX
+                        }
+                    };
                     if !my_blocks_contains(&default) {
                         errors.push(format!("i{inst_id}: switch default to non-existent block"))
                     }
@@ -4255,7 +4130,7 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                         if !my_blocks_contains(&case.target) {
                             errors.push(format!("i{inst_id}: switch case to non-existent block"))
                         }
-                        if case.value & arith::width_mask(width) != case.value {
+                        if case.value & mask != case.value {
                             errors.push(format!("i{inst_id}: switch case value exceeds width"))
                         }
                         if cases[..index].iter().any(|c| c.value == case.value) {
@@ -4333,25 +4208,15 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                         errors.push(format!("i{inst_id}: int_trunc to is not int"))
                     }
                 }
-                Inst::IntExtU { v, to } => {
+                Inst::IntExtU { v, to } | Inst::IntExtS { v, to } => {
                     let src = scalar_of(v);
                     if !src.is_some_and(|st| st.is_int() && st.width_bits() < to.width_bits()) {
                         errors.push(format!(
-                            "i{inst_id}: int_ext_u src is not an int narrower than {to}"
+                            "i{inst_id}: int_ext src is not an int narrower than {to}"
                         ))
                     }
                     if !to.is_int() {
-                        errors.push(format!("i{inst_id}: int_ext_u to is not int"))
-                    }
-                }
-                Inst::IntExtS { v, from, to } => {
-                    if scalar_of(v) != Some(from) {
-                        errors.push(format!("i{inst_id}: int_ext_s src is not {from}"))
-                    }
-                    if !from.is_int() || !to.is_int() || from.width_bits() >= to.width_bits() {
-                        errors.push(format!(
-                            "i{inst_id}: int_ext_s from {from} to {to} does not widen"
-                        ))
+                        errors.push(format!("i{inst_id}: int_ext to is not int"))
                     }
                 }
                 Inst::FloatTrunc { v, to } => {
@@ -4370,26 +4235,17 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                         errors.push(format!("i{inst_id}: float_ext to is not f64"))
                     }
                 }
-                Inst::Float32ToIntUnsigned { v, to } | Inst::Float32ToIntSigned { v, to } => {
-                    if scalar_of(v) != Some(ScalarType::F32) {
-                        errors.push(format!("i{inst_id}: float32_to_int src is not f32"))
+                Inst::FloatToIntUnsigned { v, to } | Inst::FloatToIntSigned { v, to } => {
+                    if !scalar_of(v).is_some_and(|st| st.is_float()) {
+                        errors.push(format!("i{inst_id}: float_to_int src is not float"))
                     }
                     if !to.is_int() {
-                        errors.push(format!("i{inst_id}: float32_to_int to is not int"))
+                        errors.push(format!("i{inst_id}: float_to_int to is not int"))
                     }
                 }
-                Inst::Float64ToIntUnsigned { v, to } | Inst::Float64ToIntSigned { v, to } => {
-                    if scalar_of(v) != Some(ScalarType::F64) {
-                        errors.push(format!("i{inst_id}: float64_to_int src is not f64"))
-                    }
-                    if !to.is_int() {
-                        errors.push(format!("i{inst_id}: float64_to_int to is not int"))
-                    }
-                }
-                Inst::IntToFloatUnsigned { v, from, to }
-                | Inst::IntToFloatSigned { v, from, to } => {
-                    if !from.is_int() || scalar_of(v) != Some(from) {
-                        errors.push(format!("i{inst_id}: int_to_float src is not {from}"))
+                Inst::IntToFloatUnsigned { v, to } | Inst::IntToFloatSigned { v, to } => {
+                    if !scalar_of(v).is_some_and(|st| st.is_int()) {
+                        errors.push(format!("i{inst_id}: int_to_float src is not int"))
                     }
                     if !to.is_float() {
                         errors.push(format!("i{inst_id}: int_to_float to is not float"))
@@ -4424,17 +4280,12 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                         errors.push(format!("i{inst_id}: {} rhs is not {t}", op.name()))
                     }
                 }
-                Inst::IntOverflows { op, lhs, rhs, t } => {
-                    if !t.is_int() || scalar_of(lhs) != Some(t) || scalar_of(rhs) != Some(t) {
-                        errors.push(format!("i{inst_id}: {} operands are not {t}", op.name()))
-                    }
-                }
-                Inst::IntCmp { lhs, rhs, width, .. } | Inst::IntCmp3 { lhs, rhs, width, .. } => {
+                Inst::IntOverflows { lhs, rhs, .. }
+                | Inst::IntCmp { lhs, rhs, .. }
+                | Inst::IntCmp3 { lhs, rhs, .. } => {
                     let l = scalar_of(lhs);
-                    if l != scalar_of(rhs) || !l.is_some_and(|st| st.width_bits() == width) {
-                        errors.push(format!(
-                            "i{inst_id}: int compare operands are not one i{width} type"
-                        ))
+                    if l != scalar_of(rhs) || !l.is_some_and(|st| st.is_int()) {
+                        errors.push(format!("i{inst_id}: operands are not one int type"))
                     }
                 }
                 Inst::FloatBinop { op, lhs, rhs, t } => {
@@ -4456,13 +4307,11 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                         errors.push(format!("i{inst_id}: fma operands are not {t}"))
                     }
                 }
-                Inst::FloatCmp { lhs, rhs, width, .. } => {
+                Inst::FloatCmp { lhs, rhs, .. } => {
                     let l = scalar_of(lhs);
-                    if l != scalar_of(rhs)
-                        || !l.is_some_and(|st| st.is_float() && st.width_bits() == width)
-                    {
+                    if l != scalar_of(rhs) || !l.is_some_and(|st| st.is_float()) {
                         errors.push(format!(
-                            "i{inst_id}: float compare operands are not one f{width} type"
+                            "i{inst_id}: float compare operands are not one float type"
                         ))
                     }
                 }
@@ -4788,9 +4637,9 @@ pub fn display_inst(
         if unaligned { w.write_str(", unaligned") } else { Ok(()) }
     };
     match *u.inst(inst_id) {
-        Inst::Data(imm) => {
+        Inst::Data { t, bits } => {
             write!(w, "imm ")?;
-            display_const_value(w, imm.scalar_type(), imm.bits())?;
+            display_const_value(w, t, bits)?;
         }
         Inst::ReloadGlobalAddr { storage_pt, id } => {
             write!(w, "reload_global_addr @g{} ", id.as_u32())?;
@@ -4804,13 +4653,11 @@ pub fn display_inst(
             k1.display_pt(w, t)?;
             write!(w, ", align {}", vm_layout.align)?;
         }
-        Inst::Store { dst, value, t, volatile, unaligned } => {
+        Inst::Store { dst, value, volatile, unaligned } => {
             if volatile {
                 w.write_str("volatile ")?;
             }
             write!(w, "store ")?;
-            display_scalar_type(w, t)?;
-            w.write_str(" ")?;
             v(w, value)?;
             w.write_str(" to ")?;
             v(w, dst)?;
@@ -4828,10 +4675,8 @@ pub fn display_inst(
             write!(w, "atomic load {} ", ord.name())?;
             v(w, src)?;
         }
-        Inst::AtomicStore { dst, value, t, ord } => {
+        Inst::AtomicStore { dst, value, ord } => {
             write!(w, "atomic store {} ", ord.name())?;
-            display_scalar_type(w, t)?;
-            w.write_str(" ")?;
             v(w, value)?;
             w.write_str(" to ")?;
             v(w, dst)?;
@@ -4851,8 +4696,7 @@ pub fn display_inst(
                 cas.success.name(),
                 cas.failure.name()
             )?;
-            display_scalar_type(w, cas.t)?;
-            w.write_str(" at ")?;
+            w.write_str("at ")?;
             v(w, cas.dst)?;
             w.write_str(", expected ")?;
             v(w, cas.expected)?;
@@ -4958,8 +4802,8 @@ pub fn display_inst(
             v(w, cond)?;
             write!(w, ", b{}, b{}", cons, alt)?;
         }
-        Inst::Switch { value, width, cases, default } => {
-            write!(w, "switch.{width} ")?;
+        Inst::Switch { value, cases, default } => {
+            write!(w, "switch ")?;
             v(w, value)?;
             w.write_str(" [")?;
             for (index, case) in u.switch_cases(cases).iter().enumerate() {
@@ -4984,11 +4828,8 @@ pub fn display_inst(
             }
             write!(w, "]")?;
         }
-        Inst::Ret { v: value, agg } => {
+        Inst::Ret { v: value } => {
             write!(w, "ret ")?;
-            if agg {
-                w.write_str("agg ")?;
-            }
             v(w, value)?;
         }
         Inst::Select { cond, cons, alt, .. } => {
@@ -5031,12 +4872,11 @@ pub fn display_inst(
             write!(w, "fext ")?;
             v(w, value)?;
         }
-        Inst::Float32ToIntUnsigned { v: value, .. }
-        | Inst::Float64ToIntUnsigned { v: value, .. } => {
+        Inst::FloatToIntUnsigned { v: value, .. } => {
             write!(w, "floattoint ")?;
             v(w, value)?;
         }
-        Inst::Float32ToIntSigned { v: value, .. } | Inst::Float64ToIntSigned { v: value, .. } => {
+        Inst::FloatToIntSigned { v: value, .. } => {
             write!(w, "floattoint signed ")?;
             v(w, value)?;
         }
@@ -5171,7 +5011,7 @@ pub fn display_value(
 ) -> std::fmt::Result {
     match value {
         Value::Inst(inst_id) => match *u.inst(inst_id) {
-            Inst::Data(imm) => display_const(w, imm.scalar_type(), imm.bits()),
+            Inst::Data { t, bits } => display_const(w, t, bits),
             _ => write!(w, "%{}", inst_id),
         },
         Value::GlobalAddr { id, .. } => write!(w, "@g{}", id.as_u32()),

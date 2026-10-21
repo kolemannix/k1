@@ -64,7 +64,7 @@ impl TypedProgram {
                 None
             } else {
                 let int_value = desc.tag.payload;
-                let Some(kind) = IntegerType::from_int_kind_tag(int_value.kind) else {
+                let Some(kind) = IntegerType::from_tag(int_value.kind) else {
                     kbail!(self, span, "make-either: bad int-value kind {}", int_value.kind as u32);
                 };
                 Some(TypedIntValue::from_u64_bits(kind, int_value.value_bits))
@@ -384,14 +384,19 @@ impl TypedProgram {
                 );
                 make_variant(self, self.ast.idents.b.reference, Some(payload_struct_id))
             }
-            Type::Array(array_type) => {
-                let array_type = *array_type;
-                let concrete_count = self.get_concrete_count_of_array(array_type.size_type);
-                let array_schema_payload_type_id =
-                    get_schema_variant(self, self.ast.idents.b.array).payload.unwrap();
-                // { elementTypeId: u64, size: size }
-                let element_type_id_value_id = self.add_type_id_value(array_type.element_type);
-                self.register_type_metainfo(array_type.element_type);
+            Type::Array(ArrayType { element_type, size_type })
+            | Type::Vector(ArrayType { element_type, size_type }) => {
+                let (element_type, size_type) = (*element_type, *size_type);
+                let variant_name = if matches!(typ, Type::Vector(_)) {
+                    self.ast.idents.b.vector
+                } else {
+                    self.ast.idents.b.array
+                };
+                let concrete_count = self.get_concrete_count_of_array(size_type);
+                let schema_payload_type_id =
+                    get_schema_variant(self, variant_name).payload.unwrap();
+                let element_type_id_value_id = self.add_type_id_value(element_type);
+                self.register_type_metainfo(element_type);
 
                 let maybe_concrete_size_value_id = match concrete_count {
                     None => None,
@@ -405,35 +410,10 @@ impl TypedProgram {
                 );
 
                 let payload_struct_id = self.static_values.add_struct_from_slice(
-                    array_schema_payload_type_id,
+                    schema_payload_type_id,
                     &[element_type_id_value_id, size_value_id],
                 );
-                make_variant(self, self.ast.idents.b.array, Some(payload_struct_id))
-            }
-            Type::Vector(vector_type) => {
-                let vector_type = *vector_type;
-                let concrete_count = self.get_concrete_count_of_array(vector_type.size_type);
-                let vector_schema_payload_type_id =
-                    get_schema_variant(self, self.ast.idents.b.vector).payload.unwrap();
-                let element_type_id_value_id = self.add_type_id_value(vector_type.element_type);
-                self.register_type_metainfo(vector_type.element_type);
-
-                let maybe_concrete_size_value_id = match concrete_count {
-                    None => None,
-                    Some(size) => Some(self.static_values.add_size(size)),
-                };
-                let option_size = self.synth_optional_type(SIZE_TYPE_ID);
-                let size_value_id = synth::synth_static_option(
-                    &mut self.static_values,
-                    option_size,
-                    maybe_concrete_size_value_id,
-                );
-
-                let payload_struct_id = self.static_values.add_struct_from_slice(
-                    vector_schema_payload_type_id,
-                    &[element_type_id_value_id, size_value_id],
-                );
-                make_variant(self, self.ast.idents.b.vector, Some(payload_struct_id))
+                make_variant(self, variant_name, Some(payload_struct_id))
             }
             Type::Sum(typed_sum) => {
                 let target_sum_variants = typed_sum.variants;
@@ -637,14 +617,14 @@ impl TypedProgram {
         int_kind_type_id: TypeId,
         integer_type: IntegerType,
     ) -> StaticValue {
-        StaticValue::Enum(int_kind_type_id, TypedIntValue::U8(integer_type as u8))
+        StaticValue::Enum(int_kind_type_id, TypedIntValue::U8(integer_type.to_tag()))
     }
 
     pub(super) fn make_float_kind(
         float_kind_type_id: TypeId,
         float_type: FloatType,
     ) -> StaticValue {
-        StaticValue::Enum(float_kind_type_id, TypedIntValue::U8(float_type as u8))
+        StaticValue::Enum(float_kind_type_id, TypedIntValue::U8(float_type.to_tag()))
     }
 
     pub(super) fn make_int_value(
@@ -653,16 +633,7 @@ impl TypedProgram {
         int_value_variants: &[TypedSumVariant],
         integer_value: TypedIntValue,
     ) -> StaticSum {
-        let variant = match integer_value {
-            TypedIntValue::U8(_) => int_value_variants[0],
-            TypedIntValue::U16(_) => int_value_variants[1],
-            TypedIntValue::U32(_) => int_value_variants[2],
-            TypedIntValue::U64(_) => int_value_variants[3],
-            TypedIntValue::I8(_) => int_value_variants[4],
-            TypedIntValue::I16(_) => int_value_variants[5],
-            TypedIntValue::I32(_) => int_value_variants[6],
-            TypedIntValue::I64(_) => int_value_variants[7],
-        };
+        let variant = int_value_variants[integer_value.get_integer_type().to_tag() as usize];
         StaticSum {
             sum_type_id: int_value_type_id,
             variant_index: variant.index,

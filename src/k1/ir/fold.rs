@@ -7,10 +7,11 @@ pub(super) enum Simplified {
 }
 
 pub(super) fn fold_inst(u: &UnitView, inst: &Inst) -> Option<Simplified> {
+    let width_of = |v| get_value_kind(u, v).expect_scalar().width_bits();
     match *inst {
-        Inst::IntOverflows { op, lhs, rhs, t } => {
+        Inst::IntOverflows { op, lhs, rhs } => {
             let (l, r) = (lhs.const_bits(u)?, rhs.const_bits(u)?);
-            let b = arith::int_overflows(op, t.width_bits(), l, r);
+            let b = arith::int_overflows(op, width_of(lhs), l, r);
             Some(Simplified::Const(ScalarType::I8, b as u64))
         }
         Inst::IntBinop { op, lhs, rhs, t } => {
@@ -48,16 +49,16 @@ pub(super) fn fold_inst(u: &UnitView, inst: &Inst) -> Option<Simplified> {
                 _ => None,
             }
         }
-        Inst::IntCmp3 { op, lhs, rhs, width } => {
+        Inst::IntCmp3 { op, lhs, rhs } => {
             if lhs == rhs {
                 return Some(Simplified::Const(ScalarType::I8, 0));
             }
-            let order = arith::int_cmp3(op, width, lhs.const_bits(u)?, rhs.const_bits(u)?);
+            let order = arith::int_cmp3(op, width_of(lhs), lhs.const_bits(u)?, rhs.const_bits(u)?);
             Some(Simplified::Const(ScalarType::I8, order))
         }
-        Inst::IntCmp { lhs, rhs, pred, width } => {
+        Inst::IntCmp { lhs, rhs, pred } => {
             if let (Some(l), Some(r)) = (lhs.const_bits(u), rhs.const_bits(u)) {
-                let b = arith::int_cmp(pred, width, l, r);
+                let b = arith::int_cmp(pred, width_of(lhs), l, r);
                 return Some(Simplified::Const(ScalarType::I8, b as u64));
             }
             if lhs != rhs {
@@ -77,8 +78,8 @@ pub(super) fn fold_inst(u: &UnitView, inst: &Inst) -> Option<Simplified> {
             let bits = arith::float_op(op, t.width_bits(), lhs.const_bits(u)?, rhs.const_bits(u)?);
             Some(Simplified::Const(t, bits))
         }
-        Inst::FloatCmp { lhs, rhs, pred, width } => {
-            let b = arith::float_cmp(pred, width, lhs.const_bits(u)?, rhs.const_bits(u)?);
+        Inst::FloatCmp { lhs, rhs, pred } => {
+            let b = arith::float_cmp(pred, width_of(lhs), lhs.const_bits(u)?, rhs.const_bits(u)?);
             Some(Simplified::Const(ScalarType::I8, b as u64))
         }
         Inst::FloatUnop { op, v, t } => {
@@ -116,8 +117,8 @@ pub(super) fn fold_inst(u: &UnitView, inst: &Inst) -> Option<Simplified> {
             }
             Some(Simplified::Const(to.as_scalar()?, v.const_bits(u)?))
         }
-        Inst::IntExtS { v, from, to } => {
-            let bits = arith::int_ext_s(from.width_bits(), to.width_bits(), v.const_bits(u)?);
+        Inst::IntExtS { v, to } => {
+            let bits = arith::int_ext_s(width_of(v), to.width_bits(), v.const_bits(u)?);
             Some(Simplified::Const(to, bits))
         }
         _ => None,

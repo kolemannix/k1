@@ -26,6 +26,10 @@ ts1-wasm:
   just run-frag --no-cache --target wasm64-wasi test --skip-static test_src/suite1
   just run-frag --optimize --no-cache --target wasm64-wasi test --skip-static test_src/suite1
 
+# compressed source view for agents: items, signatures, comments; fn bodies the diff touches in full
+map *paths:
+  python3 tools/codemap.py {{paths}}
+
 # a simple one-shot ai-generated k1 parser
 slophost:
   cargo build --features=llvm-sys/prefer-dynamic --bin k1

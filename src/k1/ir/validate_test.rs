@@ -54,15 +54,10 @@ fn self_loop(u: &mut UnitBuf, extra_case: Option<fn(BlockId, BlockId, BlockId) -
     let again = push(
         u,
         body,
-        Inst::IntCmp {
-            lhs: Value::Inst(next),
-            rhs: u64_value(10),
-            pred: IntCmpPred::Ult,
-            width: 64,
-        },
+        Inst::IntCmp { lhs: Value::Inst(next), rhs: u64_value(10), pred: IntCmpPred::Ult },
     );
     push(u, body, Inst::JumpIf { cond: Value::Inst(again), cons: body, alt: exit });
-    push(u, exit, Inst::Ret { v: Value::Inst(next), agg: false });
+    push(u, exit, Inst::Ret { v: Value::Inst(next) });
 }
 
 #[test]
@@ -96,7 +91,7 @@ fn entry_with_predecessor_is_rejected() {
         let entry = u.add_block(BlockSourceKind::Entry);
         let exit = u.add_block(BlockSourceKind::LoopEnd);
         push(u, entry, Inst::JumpIf { cond: Value::zero(ScalarType::I8), cons: entry, alt: exit });
-        push(u, exit, Inst::Ret { v: u64_value(0), agg: false });
+        push(u, exit, Inst::Ret { v: u64_value(0) });
     })
     .unwrap_err();
     assert!(error.contains("b1: entry block has predecessors"), "{error}");
@@ -148,7 +143,7 @@ fn use_that_does_not_dominate_is_rejected() {
                 t: ScalarType::I64,
             },
         );
-        push(u, join, Inst::Ret { v: Value::Inst(sum), agg: false });
+        push(u, join, Inst::Ret { v: Value::Inst(sum) });
     })
     .unwrap_err();
     assert!(error.contains("phi incoming i4 does not dominate the end of b2"), "{error}");
@@ -172,12 +167,10 @@ fn scalar_operand_mismatches_are_rejected() {
             Inst::IntBinop { op: IntOp::Shl, lhs: u64_value(1), rhs: byte, t: ScalarType::I64 },
         );
         push(u, entry, Inst::IntExtU { v: u64_value(1), to: ScalarType::I32 });
-        push(u, entry, Inst::IntExtS { v: byte, from: ScalarType::I16, to: ScalarType::I64 });
-        push(u, entry, Inst::Ret { v: u64_value(0), agg: false });
+        push(u, entry, Inst::Ret { v: u64_value(0) });
     })
     .unwrap_err();
     assert!(error.contains("i1: add rhs is not i64"), "{error}");
     assert!(!error.contains("i2:"), "{error}");
-    assert!(error.contains("i3: int_ext_u src is not an int narrower than i32"), "{error}");
-    assert!(error.contains("i4: int_ext_s src is not i16"), "{error}");
+    assert!(error.contains("i3: int_ext src is not an int narrower than i32"), "{error}");
 }

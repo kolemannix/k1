@@ -1246,17 +1246,17 @@ impl TypedFloatValue {
         }
     }
 
-    pub fn get_scalar_type(&self) -> ScalarType {
-        match self {
-            TypedFloatValue::F32(_) => ScalarType::F32,
-            TypedFloatValue::F64(_) => ScalarType::F64,
-        }
-    }
-
     pub fn as_f64(&self) -> f64 {
         match self {
             TypedFloatValue::F32(v) => *v as f64,
             TypedFloatValue::F64(v) => *v,
+        }
+    }
+
+    pub fn scalar_bits(&self) -> (ScalarType, u64) {
+        match self {
+            TypedFloatValue::F32(v) => (ScalarType::F32, v.to_bits() as u64),
+            TypedFloatValue::F64(v) => (ScalarType::F64, v.to_bits()),
         }
     }
 }
@@ -3926,7 +3926,13 @@ impl TypedProgram {
                     ))
                 }
             }
-            (Type::Array(expected_array), Type::Array(actual_array)) => {
+            (expected_type @ Type::Array(expected_array), Type::Array(actual_array))
+            | (expected_type @ Type::Vector(expected_array), Type::Vector(actual_array)) => {
+                let (kind, count) = if matches!(expected_type, Type::Vector(_)) {
+                    ("Vectors", "lane counts")
+                } else {
+                    ("Arrays", "size types")
+                };
                 let elem_check = self.check_types(
                     expected_array.element_type,
                     actual_array.element_type,
@@ -3935,25 +3941,9 @@ impl TypedProgram {
                 let size_check =
                     self.check_types(expected_array.size_type, actual_array.size_type, scope_id);
                 if let Err(msg) = elem_check {
-                    Err(k1_format_user!(self, "Arrays have different element types: {msg}"))
+                    Err(k1_format_user!(self, "{kind} have different element types: {msg}"))
                 } else if let Err(msg) = size_check {
-                    Err(k1_format_user!(self, "Arrays have different size types: {msg}"))
-                } else {
-                    Ok(())
-                }
-            }
-            (Type::Vector(expected_vector), Type::Vector(actual_vector)) => {
-                let elem_check = self.check_types(
-                    expected_vector.element_type,
-                    actual_vector.element_type,
-                    scope_id,
-                );
-                let size_check =
-                    self.check_types(expected_vector.size_type, actual_vector.size_type, scope_id);
-                if let Err(msg) = elem_check {
-                    Err(k1_format_user!(self, "Vectors have different element types: {msg}"))
-                } else if let Err(msg) = size_check {
-                    Err(k1_format_user!(self, "Vectors have different lane counts: {msg}"))
+                    Err(k1_format_user!(self, "{kind} have different {count}: {msg}"))
                 } else {
                     Ok(())
                 }
@@ -4052,11 +4042,7 @@ impl TypedProgram {
             (Type::Reference(pat), Type::Reference(cand)) => {
                 self.precheck_types(pat.inner_type, cand.inner_type, depth - 1)
             }
-            (Type::Array(pat), Type::Array(cand)) => {
-                self.precheck_types(pat.element_type, cand.element_type, depth - 1)
-                    && self.precheck_types(pat.size_type, cand.size_type, depth - 1)
-            }
-            (Type::Vector(pat), Type::Vector(cand)) => {
+            (Type::Array(pat), Type::Array(cand)) | (Type::Vector(pat), Type::Vector(cand)) => {
                 self.precheck_types(pat.element_type, cand.element_type, depth - 1)
                     && self.precheck_types(pat.size_type, cand.size_type, depth - 1)
             }
@@ -4339,10 +4325,6 @@ impl TypedProgram {
                 .join(", ")
         );
 
-        // let mut s = String::new();
-        // self.dump_blanket_impls(&mut s).unwrap();
-        // eprintln!("{s}");
-
         if let Some(blanket_impls_for_base) = self.blanket_impls.get(&target_base_ability_id) {
             for blanket_impl_id in blanket_impls_for_base.as_slice(&self.mem).iter().copied() {
                 let tmp_mark = self.tmp.mark();
@@ -4460,8 +4442,6 @@ impl TypedProgram {
                     impl_arguments,
                     span,
                 );
-                // eprintln!("\n----------------- IMPLEMENTED SUM\n");
-                // eprintln!("{}", self.ability_impl_to_string(impl_id, true));
                 return Ok((impl_handle, SelfAdjust::None));
             }
         }
@@ -4608,20 +4588,6 @@ impl TypedProgram {
                         )
                         .unwrap();
                     }
-                    let mut constraints_formatted = String::new();
-                    for (idx, maybe_type) in parameter_constraints.iter().enumerate() {
-                        if idx > 0 {
-                            constraints_formatted.push_str(", ");
-                        }
-                        match maybe_type {
-                            Some(t) => constraints_formatted.push_str(&self.type_id_to_string(*t)),
-                            None => constraints_formatted.push('_'),
-                        }
-                    }
-                    eprintln!(
-                        "Multiple matching implementations found for constraints {}:\n{}",
-                        constraints_formatted, impls_formatted
-                    );
                     Err(k1_format_user!(
                         self,
                         "Multiple matching implementations found:\n{}",
@@ -4898,7 +4864,7 @@ impl TypedProgram {
         for (arg_to_blanket, arg_to_target) in blanket_arguments.iter().zip(target_ability_args) {
             match arg_to_target {
                 None => {
-                    eprintln!("No arg for ability param; probably can't solve it")
+                    debug!("No arg for ability param; probably can't solve it")
                 }
                 Some(arg_to_target) => args_and_params.push(InferenceInputPair {
                     arg: TypeOrParsedExpr::Type(*arg_to_target),
@@ -5460,7 +5426,6 @@ impl TypedProgram {
             }
         }
 
-        //eprintln!("base_type_id is {}", self.type_id_to_string(base_type_id));
         match self.types.get(base_type_id) {
             Type::StaticValue(svt) => {
                 let Some(struct_type) = self.types.get(svt.family_type_id).as_struct() else {
@@ -6849,7 +6814,7 @@ impl TypedProgram {
             lambda_scope_id,
             ScopeLambdaInfo { expected_return_type, returned_variable: None },
         );
-        let mut typed_params: TmpList<FnParamType> = self.tmp.new_list(lambda_arguments.len() + 1);
+        let mut typed_params: TmpList<FnParamType> = self.tmp.new_list(lambda_arguments.len());
         let mut param_variables: TmpList<TypedFunctionParam> =
             self.tmp.new_list(lambda_arguments.len() + 1);
         for (index, arg) in self.ast.mem.getn(lambda_arguments).iter().enumerate() {
@@ -7065,7 +7030,6 @@ impl TypedProgram {
             self.warn_variable_usage_counts("Captured variable", *variable_id, *capture_span);
         }
 
-        typed_params.insert(0, FnParamType { type_id: POINTER_TYPE_ID, kind: FnParamKind::Plain });
         param_variables.insert(
             0,
             TypedFunctionParam { variable_id: environment_param_variable_id, span: body_span },
@@ -9882,8 +9846,12 @@ impl TypedProgram {
             new_variables.extend(self.mem.getn(new_function.params));
             new_function.params = new_variables.to_slice();
 
-            let new_function_type = self.add_lambda_env_to_function_type(new_function.type_id);
-            new_function.type_id = new_function_type;
+            let fn_type = *self.types.get(new_function.type_id).as_function().unwrap();
+            new_function.type_id = self.add_function_type(
+                self.mem.getn(fn_type.logical_params()),
+                fn_type.return_type,
+                true,
+            );
             let old_name = self.ident_str(new_function.name);
             new_function.name = self.ast.idents.intern(format!("{}__dyn", old_name));
             let actual_new_function_id = self.add_function(new_function);
@@ -9941,18 +9909,6 @@ impl TypedProgram {
             StructLiteralField { name: self.ast.idents.b.env_ptr, expr: Some(env_ptr) };
         let fields = self.mem.pushn(&[fn_ptr_field, env_ptr_field]);
         Ok(self.exprs.add(TypedExpr::Struct(StructLiteral { fields }), lambda_object_type_id, span))
-    }
-
-    fn add_lambda_env_to_function_type(&mut self, function_type_id: TypeId) -> TypeId {
-        let function_type = self.types.get(function_type_id).as_function().unwrap();
-        let return_type = function_type.return_type;
-        let physical_params = function_type.physical_params;
-        let mut new_params: TmpList<FnParamType> = self.tmp.new_list(physical_params.len() + 1);
-
-        new_params.push(FnParamType { type_id: POINTER_TYPE_ID, kind: FnParamKind::Plain });
-        new_params.extend(self.mem.getn(physical_params));
-
-        self.add_function_type(new_params.as_slice(), return_type, true)
     }
 
     /// After resolving to a particular root AbilityId + function index using just names,
@@ -12822,8 +12778,6 @@ impl TypedProgram {
             BlockBuilder { scope_id: block_scope, statements: stmts, span: block.span },
             last_expr_type,
         );
-        //eprintln!("  finished block with type:\n{}", self.expr_to_string_with_type(id));
-        //eprintln!("  last_expr_type was: {}", self.type_id_to_string(last_expr_type));
         Ok(id)
     }
 
@@ -13895,13 +13849,7 @@ impl TypedProgram {
         });
 
         let mut slot_params: TmpList<FnParamType> = self.tmp.new_list(physical_params.len());
-        let first_value_param = if has_receiver {
-            slot_params.push(FnParamType { type_id: POINTER_TYPE_ID, kind: FnParamKind::Plain });
-            1
-        } else {
-            0
-        };
-        for (index, param) in params.iter().enumerate().skip(first_value_param) {
+        for (index, param) in params.iter().enumerate().skip(has_receiver as usize) {
             let substituted = self.substitute_in_type(param.type_id, subst_pairs);
             if self.substitute_in_type(substituted, &self_probe) != substituted {
                 let name = self.get_declared_param_name(function_id, index);
@@ -14061,15 +14009,10 @@ impl TypedProgram {
                         self.scopes
                             .set_scope_owner_id(thunk_scope, ScopeOwnerId::Function(thunk_id));
                         let mut thunk_params = self.mem.new_list(impl_fn_params.len() as u32);
-                        let mut thunk_param_types: TmpList<FnParamType> =
-                            self.tmp.new_list(impl_fn_params.len() as u32);
                         let mut call_args: SV4<TypedExprId> = smallvec![];
                         for (index, param) in impl_fn_params.iter().enumerate() {
-                            let (param_type, kind) = if index == 0 {
-                                (POINTER_TYPE_ID, FnParamKind::Plain)
-                            } else {
-                                (param.type_id, param.kind)
-                            };
+                            let param_type =
+                                if index == 0 { POINTER_TYPE_ID } else { param.type_id };
                             let variable_id = self.variables.add(Variable {
                                 name: self.get_declared_param_name(impl_fn_id, index),
                                 type_id: param_type,
@@ -14080,7 +14023,6 @@ impl TypedProgram {
                                 defn_span: span,
                             });
                             thunk_params.push(TypedFunctionParam { variable_id, span });
-                            thunk_param_types.push(FnParamType { type_id: param_type, kind });
                             let variable_expr = self.synth_variable_expr(variable_id, span);
                             call_args.push(if index == 0 {
                                 let self_ref_type = self.add_reference_type(implementor_type);
@@ -14103,7 +14045,7 @@ impl TypedProgram {
                         );
                         let body_block = self.synth_return_only_block(thunk_scope, call, span);
                         let thunk_type = self.add_function_type(
-                            thunk_param_types.as_slice(),
+                            &impl_fn_params[1..],
                             impl_fn_type.return_type,
                             true,
                         );
@@ -15232,7 +15174,6 @@ impl TypedProgram {
                 let arms = self.mem.pushn(&[equals_arm, false_arm]);
                 let match_expr = TypedMatchExpr { subject_defn: None, scrutinee: None, arms };
                 let match_expr_id = self.add_match_expr(match_expr, BOOL_TYPE_ID, fn_span);
-                // eprintln!("STRUCT EQUALS\n{}", self.expr_to_string(match_expr_id));
                 Ok(match_expr_id)
             }
             BuiltinTyperFunction::StructPrintTo => {
@@ -15288,7 +15229,6 @@ impl TypedProgram {
                 self.push_block_expr_id(&mut block, write_cbrace);
 
                 let block_expr_id = self.exprs.add_block(block, EMPTY_TYPE_ID);
-                // eprintln!("STRUCT PRINT TO\n{}", self.expr_to_string(block_expr_id));
                 Ok(block_expr_id)
             }
             BuiltinTyperFunction::SumPrintTo => {

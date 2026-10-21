@@ -9,10 +9,7 @@ use std::fmt::Write;
 use crate::ir;
 use crate::typer::TypedProgram;
 
-use super::{
-    Opcode, VALUE_MASK_CONST_ID, VALUE_MASK_FRAME_OFFSET, builtin_from_tag, header_a, header_b,
-    header_op,
-};
+use super::{Opcode, VALUE_MASK_CONST_ID, VALUE_MASK_FRAME_OFFSET, header_a, header_b, header_op};
 
 fn write_src(w: &mut String, k1: &TypedProgram, src: u32) {
     if src & VALUE_MASK_CONST_ID != 0 {
@@ -65,7 +62,7 @@ pub fn disasm_range(k1: &TypedProgram, start: u32, end: u32) -> String {
 pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
     let code = &k1.bc.code;
     let h = code[pc];
-    let op = Opcode::from_u8(header_op(h));
+    let op = Opcode::from_tag(header_op(h)).unwrap();
     let a = header_a(h);
     let b = header_b(h);
     let n = op.operand_count_with(b);
@@ -144,7 +141,7 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
             write!(
                 w,
                 "call_builtin {} ret_pt={} fp+={} nargs={}",
-                builtin_from_tag(a).kind_name(),
+                ir::BackendBuiltin::from_tag(a).unwrap().kind_name(),
                 ops[0],
                 ops[1],
                 ops[2]
@@ -210,16 +207,26 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
             write_src(w, k1, ops[1]);
         }
         Opcode::AtomicLoad => {
-            write!(w, "atomic_load.{} {} ", a, ir::AtomicOrderingIr::from_tag(b as u8).name())
-                .unwrap();
+            write!(
+                w,
+                "atomic_load.{} {} ",
+                a,
+                ir::AtomicOrderingIr::from_tag(b as u8).unwrap().name()
+            )
+            .unwrap();
             write_dst(w, ops[0]);
             write!(w, " <- [").unwrap();
             write_src(w, k1, ops[1]);
             write!(w, "]").unwrap();
         }
         Opcode::AtomicStore => {
-            write!(w, "atomic_store.{} {} [", a, ir::AtomicOrderingIr::from_tag(b as u8).name())
-                .unwrap();
+            write!(
+                w,
+                "atomic_store.{} {} [",
+                a,
+                ir::AtomicOrderingIr::from_tag(b as u8).unwrap().name()
+            )
+            .unwrap();
             write_src(w, k1, ops[0]);
             write!(w, "] <- ").unwrap();
             write_src(w, k1, ops[1]);
@@ -228,9 +235,9 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
             write!(
                 w,
                 "atomic_{}.{} {} ",
-                ir::AtomicRmwOpIr::from_tag((b >> 8) as u8).name(),
+                ir::AtomicRmwOpIr::from_tag((b >> 8) as u8).unwrap().name(),
                 a,
-                ir::AtomicOrderingIr::from_tag((b & 0xff) as u8).name()
+                ir::AtomicOrderingIr::from_tag((b & 0xff) as u8).unwrap().name()
             )
             .unwrap();
             write_dst(w, ops[0]);
@@ -245,8 +252,8 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
                 "atomic_cmpxchg{}.{} {}/{} result [",
                 if b >> 8 & 1 == 1 { "_weak" } else { "" },
                 a,
-                ir::AtomicOrderingIr::from_tag((b & 0xf) as u8).name(),
-                ir::AtomicOrderingIr::from_tag((b >> 4 & 0xf) as u8).name()
+                ir::AtomicOrderingIr::from_tag((b & 0xf) as u8).unwrap().name(),
+                ir::AtomicOrderingIr::from_tag((b >> 4 & 0xf) as u8).unwrap().name()
             )
             .unwrap();
             write_src(w, k1, ops[0]);
@@ -259,7 +266,7 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
             write!(w, ", ok_offset={}", ops[4]).unwrap();
         }
         Opcode::Fence => {
-            write!(w, "fence {}", ir::AtomicOrderingIr::from_tag(b as u8).name()).unwrap();
+            write!(w, "fence {}", ir::AtomicOrderingIr::from_tag(b as u8).unwrap().name()).unwrap();
         }
         Opcode::Zero => {
             write!(w, "zero [").unwrap();

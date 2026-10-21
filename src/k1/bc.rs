@@ -29,156 +29,150 @@ pub const FRAME_ALIGN: u32 = 64;
 
 pub const PENDING_PC: u32 = u32::MAX;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum Opcode {
-    // Control
-    Halt = 0,
-    Enter,
-    Jump,
-    JumpIf,
-    JumpIfEq,
-    JumpIfSlt,
-    JumpIfSle,
-    JumpIfSgt,
-    JumpIfSge,
-    JumpIfUlt,
-    JumpIfUle,
-    JumpIfUgt,
-    JumpIfUge,
-    JumpIfNe,
-    /// A = width in bits, B = case count; cases sorted by value
-    Switch,
-    Unreachable,
-    Ret,
-    RetAgg,
-    Call,
-    CallIndirect,
-    CallExtern,
-    CallBuiltin,
-    CallLlvm,
-    RetGet,
-    RetStore,
-    // Memory / data
-    Mov,
-    LoadGlobal,
-    Load8,
-    Load16,
-    Load32,
-    Load64,
-    Store8,
-    Store16,
-    Store32,
-    Store64,
-    LoadFp8,
-    LoadFp16,
-    LoadFp32,
-    LoadFp64,
-    StoreFp8,
-    StoreFp16,
-    StoreFp32,
-    StoreFp64,
-    Copy,
-    Zero,
-    PtrAddImm,
-    PtrIndex,
-    // Int ALU (A = width in bits)
-    IntAdd,
-    IntSub,
-    IntMul,
-    IntDivU,
-    IntDivS,
-    IntRemU,
-    IntRemS,
-    IntMulHighU,
-    IntMulHighS,
-    IntRotl,
-    IntRotr,
-    IntAddOverflowsU,
-    IntAddOverflowsS,
-    IntSubOverflowsU,
-    IntSubOverflowsS,
-    IntMulOverflowsU,
-    IntMulOverflowsS,
-    IntEq,
-    IntSlt,
-    IntSle,
-    IntSgt,
-    IntSge,
-    IntUlt,
-    IntUle,
-    IntUgt,
-    IntUge,
-    IntNe,
-    IntUcmp,
-    IntScmp,
-    // Float ALU (A = width in bits)
-    FloatAdd,
-    FloatSub,
-    FloatMul,
-    FloatDiv,
-    FloatRem,
-    FloatMin,
-    FloatMax,
-    FloatNeg,
-    FloatSqrt,
-    FloatFloor,
-    FloatCeil,
-    FloatRoundToZero,
-    FloatRoundEven,
-    FloatFma,
-    FloatEq,
-    FloatLt,
-    FloatLe,
-    FloatGt,
-    FloatGe,
-    FloatNe,
-    // Bit ALU (A = width in bits)
-    BitAnd,
-    BitOr,
-    BitXor,
-    Shl,
-    ShrU,
-    ShrS,
-    // Unary (A = width in bits for the int ops)
-    BoolNegate,
-    BitNot,
-    IntNeg,
-    IntCtz,
-    IntClz,
-    IntPopcount,
-    IntBswap,
-    IntTrunc,
-    IntExtS,
-    FloatTrunc,
-    FloatExt,
-    F32ToUInt,
-    F32ToSInt,
-    F64ToUInt,
-    F64ToSInt,
-    UIntToF32,
-    UIntToF64,
-    SIntToF32,
-    SIntToF64,
-    Select,
-    // Metaprogramming
-    BakeStaticValue,
-    // Atomics (A = width in bits; B packs ordering / op, see operand_count comments)
-    AtomicLoad,
-    AtomicStore,
-    AtomicRmw,
-    AtomicCmpxchg,
-    Fence,
+crate::tag_enum! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Opcode {
+        // Control
+        Halt = 0,
+        Enter,
+        Jump,
+        JumpIf,
+        JumpIfEq,
+        JumpIfSlt,
+        JumpIfSle,
+        JumpIfSgt,
+        JumpIfSge,
+        JumpIfUlt,
+        JumpIfUle,
+        JumpIfUgt,
+        JumpIfUge,
+        JumpIfNe,
+        /// A = width in bits, B = case count; cases sorted by value
+        Switch,
+        Unreachable,
+        Ret,
+        RetAgg,
+        Call,
+        CallIndirect,
+        CallExtern,
+        CallBuiltin,
+        CallLlvm,
+        RetGet,
+        RetStore,
+        // Memory / data
+        Mov,
+        LoadGlobal,
+        Load8,
+        Load16,
+        Load32,
+        Load64,
+        Store8,
+        Store16,
+        Store32,
+        Store64,
+        LoadFp8,
+        LoadFp16,
+        LoadFp32,
+        LoadFp64,
+        StoreFp8,
+        StoreFp16,
+        StoreFp32,
+        StoreFp64,
+        Copy,
+        Zero,
+        PtrAddImm,
+        PtrIndex,
+        // Int ALU (A = width in bits)
+        IntAdd,
+        IntSub,
+        IntMul,
+        IntDivU,
+        IntDivS,
+        IntRemU,
+        IntRemS,
+        IntMulHighU,
+        IntMulHighS,
+        IntRotl,
+        IntRotr,
+        IntAddOverflowsU,
+        IntAddOverflowsS,
+        IntSubOverflowsU,
+        IntSubOverflowsS,
+        IntMulOverflowsU,
+        IntMulOverflowsS,
+        IntEq,
+        IntSlt,
+        IntSle,
+        IntSgt,
+        IntSge,
+        IntUlt,
+        IntUle,
+        IntUgt,
+        IntUge,
+        IntNe,
+        IntUcmp,
+        IntScmp,
+        // Float ALU (A = width in bits)
+        FloatAdd,
+        FloatSub,
+        FloatMul,
+        FloatDiv,
+        FloatRem,
+        FloatMin,
+        FloatMax,
+        FloatNeg,
+        FloatSqrt,
+        FloatFloor,
+        FloatCeil,
+        FloatRoundToZero,
+        FloatRoundEven,
+        FloatFma,
+        FloatEq,
+        FloatLt,
+        FloatLe,
+        FloatGt,
+        FloatGe,
+        FloatNe,
+        // Bit ALU (A = width in bits)
+        BitAnd,
+        BitOr,
+        BitXor,
+        Shl,
+        ShrU,
+        ShrS,
+        // Unary (A = width in bits for the int ops)
+        BoolNegate,
+        BitNot,
+        IntNeg,
+        IntCtz,
+        IntClz,
+        IntPopcount,
+        IntBswap,
+        IntTrunc,
+        IntExtS,
+        FloatTrunc,
+        FloatExt,
+        F32ToUInt,
+        F32ToSInt,
+        F64ToUInt,
+        F64ToSInt,
+        UIntToF32,
+        UIntToF64,
+        SIntToF32,
+        SIntToF64,
+        Select,
+        // Metaprogramming
+        BakeStaticValue,
+        // Atomics (A = width in bits; B packs ordering / op, see operand_count comments)
+        AtomicLoad,
+        AtomicStore,
+        AtomicRmw,
+        AtomicCmpxchg,
+        Fence,
+    }
 }
 
-pub const OPCODE_COUNT: u8 = Opcode::Fence as u8 + 1;
-
 impl Opcode {
-    pub fn from_u8(v: u8) -> Opcode {
-        debug_assert!(v < OPCODE_COUNT, "bad opcode {v}");
-        unsafe { core::mem::transmute::<u8, Opcode>(v) }
-    }
-
     /// Total operand words for an instruction with header B field `b`
     pub const fn operand_count_with(self, b: u16) -> usize {
         match self {
@@ -484,32 +478,6 @@ impl Opcode {
     }
 }
 
-pub fn builtin_tag(b: crate::ir::BackendBuiltin) -> u8 {
-    b as u8
-}
-
-pub fn builtin_from_tag(t: u8) -> crate::ir::BackendBuiltin {
-    use crate::ir::BackendBuiltin as B;
-    match t {
-        x if x == B::TypeInfo as u8 => B::TypeInfo,
-        x if x == B::TestSuite as u8 => B::TestSuite,
-        x if x == B::MakeStruct as u8 => B::MakeStruct,
-        x if x == B::MakeEither as u8 => B::MakeEither,
-        x if x == B::MakeReference as u8 => B::MakeReference,
-        x if x == B::MakeArray as u8 => B::MakeArray,
-        x if x == B::MakeFn as u8 => B::MakeFn,
-        x if x == B::MakeInstance as u8 => B::MakeInstance,
-        x if x == B::MemCopy as u8 => B::MemCopy,
-        x if x == B::MemMove as u8 => B::MemMove,
-        x if x == B::MemSet as u8 => B::MemSet,
-        x if x == B::MemEquals as u8 => B::MemEquals,
-        x if x == B::Exit as u8 => B::Exit,
-        x if x == B::CompilerMessage as u8 => B::CompilerMessage,
-        x if x == B::ReplCheckbox as u8 => B::ReplCheckbox,
-        _ => unreachable!("bad builtin tag"),
-    }
-}
-
 #[inline(always)]
 pub const fn header(op: Opcode, a: u8, b: u16) -> u32 {
     op as u32 | ((a as u32) << 8) | ((b as u32) << 16)
@@ -651,9 +619,7 @@ mod bc_test {
 
     #[test]
     fn opcode_tags_roundtrip() {
-        for i in 0..OPCODE_COUNT {
-            let op = Opcode::from_u8(i);
-            assert_eq!(op as u8, i);
+        for op in Opcode::ALL {
             // Every opcode has a name and a fixed operand count
             assert!(!op.name().is_empty());
             assert!(op.operand_count() <= 6);

@@ -53,8 +53,7 @@ use crate::typer::types::{
 };
 use crate::typer::{
     FunctionId, K1Result, Linkage as TyperLinkage, NamespaceId, StaticContainerKind,
-    StaticRawContainer, StaticValue, StaticValueId, TypedFloatValue, TypedGlobalId, TypedIntValue,
-    TypedProgram,
+    StaticRawContainer, StaticValue, StaticValueId, TypedGlobalId, TypedProgram,
 };
 use crate::{SV4, SV8, ir, kbail, kmem};
 
@@ -62,19 +61,32 @@ fn llvm_size_info(td: &TargetData, typ: &dyn AnyType) -> Layout {
     Layout { size: td.get_abi_size(typ) as u32, align: td.get_abi_alignment(typ) }
 }
 
-fn llvm_float_constant<'ctx>(ctx: &'ctx Context, value: TypedFloatValue) -> FloatValue<'ctx> {
-    let (bits, float_type) = match value {
-        TypedFloatValue::F32(v) => {
-            (ctx.i32_type().const_int(v.to_bits() as u64, false), ctx.f32_type())
+fn llvm_int_type(ctx: &Context, width_bits: u32) -> IntType<'_> {
+    ctx.custom_width_int_type(NonZeroU32::new(width_bits).unwrap()).unwrap()
+}
+
+fn llvm_scalar_constant<'ctx>(
+    ctx: &'ctx Context,
+    t: ScalarType,
+    bits: u64,
+) -> BasicValueEnum<'ctx> {
+    let int = llvm_int_type(ctx, t.width_bits() as u32).const_int(bits, false);
+    let float_type = match t {
+        ScalarType::F32 => ctx.f32_type(),
+        ScalarType::F64 => ctx.f64_type(),
+        ScalarType::I8 | ScalarType::I16 | ScalarType::I32 | ScalarType::I64 => return int.into(),
+        ScalarType::Pointer => {
+            assert_eq!(bits, 0, "non-zero Pointer constant in codegen_llvm");
+            return ctx.ptr_type(AddressSpace::default()).const_zero().into();
         }
-        TypedFloatValue::F64(v) => (ctx.i64_type().const_int(v.to_bits(), false), ctx.f64_type()),
     };
     unsafe {
         FloatValue::new(llvm_sys::core::LLVMConstBitCast(
-            bits.as_value_ref(),
+            int.as_value_ref(),
             float_type.as_type_ref(),
         ))
     }
+    .into()
 }
 
 /// llvm::CallingConv::Fast
@@ -260,12 +272,8 @@ impl<'ctx> CgType<'ctx> {
 }
 
 struct BuiltinTypes<'ctx> {
-    scalars: [LlvmScalarType<'ctx>; ScalarType::ALL.len()],
-    boolean: IntType<'ctx>,
-    true_value: IntValue<'ctx>,
-    false_value: IntValue<'ctx>,
+    scalars: [LlvmScalarType<'ctx>; ScalarType::COUNT],
     i1: IntType<'ctx>,
-    char: IntType<'ctx>,
     ptr: PointerType<'ctx>,
     ptr_sized_int: IntType<'ctx>,
     empty_struct: StructType<'ctx>,
@@ -682,7 +690,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         plan: UnitPlan,
     ) -> Self {
         let builder = ctx.create_builder();
-        let char_type = ctx.i8_type();
         let llvm_module = ctx.create_module(k1.program_name());
         llvm_module.set_source_file_name(k1.ast.sources.get_main().filename_str(&k1.ast.idents));
 
@@ -706,11 +713,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         });
         let builtin_types = BuiltinTypes {
             scalars,
-            boolean: ctx.i8_type(),
-            true_value: ctx.i8_type().const_int(1, false),
-            false_value: ctx.i8_type().const_int(0, false),
             i1: ctx.bool_type(),
-            char: char_type,
             ptr,
             ptr_sized_int: ctx.ptr_sized_int_type(&target_data, None),
             empty_struct: ctx.struct_type(&[], false),
@@ -1930,7 +1933,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     fn codegen_type(&mut self, pt: PhysicalType) -> CgType<'ctx> {
-        //eprintln!("codegen_type {}", self.k1.pt_to_string(pt));
         match pt.as_enum() {
             PhysicalTypeEnum::Scalar(st) => match pt.named_scalar() {
                 None => self.builtin_types.scalar(st).into(),
@@ -2206,7 +2208,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 expected_layout.align, expected_layout.size
             );
         }
-        let aligner_type = self.custom_width_int_type(expected_layout.align_bits());
+        let aligner_type = llvm_int_type(self.ctx, expected_layout.align_bits());
         let padding_bytes = expected_layout.size.saturating_sub(aligner_type.get_bit_width() / 8);
 
         let padding = self.padding_type(padding_bytes);
@@ -2313,7 +2315,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 for member in self.k1.mem.getn(e.member_values) {
                     enumerators.push(self.debug.debug_builder.create_enumerator(
                         self.k1.ident_str(member.name),
-                        member.int_value.to_u64_bits() as i64,
+                        member.int_value.to_i64(),
                         !e.int_type.is_signed(),
                     ));
                 }
@@ -2323,7 +2325,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 for variant in self.k1.mem.getn(sum.variants) {
                     enumerators.push(self.debug.debug_builder.create_enumerator(
                         self.k1.ident_str(variant.name),
-                        variant.tag_value.to_u64_bits() as i64,
+                        variant.tag_value.to_i64(),
                         !sum.tag_type.is_signed(),
                     ));
                 }
@@ -2357,14 +2359,14 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             Type::Enum(e) if !e.partial => {
                 for member in self.k1.mem.getn(e.member_values) {
-                    values.push(member.int_value.to_u64_bits());
+                    values.push(member.int_value.to_zext_bits());
                 }
             }
             Type::Sum(_) => {
                 let agg_id = self.k1.get_physical_type_computed(type_id).unwrap().expect_agg();
                 let sum = self.k1.agg_types.get(agg_id).agg_type.expect_sum();
                 for variant in self.k1.mem.getn(sum.variants) {
-                    values.push(variant.tag.to_u64_bits());
+                    values.push(variant.tag.to_zext_bits());
                 }
             }
             _ => return smallvec::smallvec![],
@@ -2373,7 +2375,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     fn make_range_metadata(&self, width: NumericWidth, runs: &[(u64, u64)]) -> MetadataValue<'ctx> {
-        let int_type = self.custom_width_int_type(width.bits() as u32);
+        let int_type = llvm_int_type(self.ctx, width.bits() as u32);
         let mut bounds: SV8<BasicMetadataValueEnum<'ctx>> = smallvec::smallvec![];
         for (lo, hi) in runs {
             bounds.push(int_type.const_int(*lo, false).into());
@@ -2408,10 +2410,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 upper.as_ptr(),
             ))
         }
-    }
-
-    fn custom_width_int_type(&self, width_bits: u32) -> IntType<'ctx> {
-        self.ctx.custom_width_int_type(NonZeroU32::new(width_bits).unwrap()).unwrap()
     }
 
     fn scalar_basic_type(&self, st: ScalarType) -> BasicTypeEnum<'ctx> {
@@ -2482,13 +2480,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             param_llvm_types.push(param_cg_type);
             let mapped_type = self.mapped_abi_type_param(param.pt, abi_mapping);
             function_final_params.push(mapped_type.into());
-
-            //eprintln!(
-            //    "abi mapping for {} is {:?}. Mapped type: {:?}",
-            //    param_cg_type.rich_type(),
-            //    abi_mapping,
-            //    mapped_type
-            //);
         }
 
         let fn_type = match physical_return_mapped_type {
@@ -2525,7 +2516,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
             AbiParamMapping::ScalarInRegister => self.pt_canon_type(pt),
             AbiParamMapping::StructInInteger { abi_width, .. } => {
-                let int_type = self.custom_width_int_type(abi_width).as_basic_type_enum();
+                let int_type = llvm_int_type(self.ctx, abi_width).as_basic_type_enum();
                 int_type
             }
             AbiParamMapping::StructAsPointer => self.builtin_types.ptr.as_basic_type_enum(),
@@ -2606,7 +2597,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     .builder
                     .build_int_truncate(
                         abi_value.into_int_value(),
-                        self.custom_width_int_type(active_width),
+                        llvm_int_type(self.ctx, active_width),
                         "",
                     )
                     .unwrap();
@@ -2886,30 +2877,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         }
     }
 
-    fn build_float_to_int_saturating(
-        &self,
-        input: FloatValue<'ctx>,
-        from: ScalarType,
-        to: ScalarType,
-        signed: bool,
-    ) -> IntValue<'ctx> {
-        let to_int_type = self.scalar_basic_type(to).into_int_type();
-        let op = if signed { "fptosi" } else { "fptoui" };
-        let name = format!("llvm.{}.sat.i{}.f{}", op, to.width_bits(), from.width_bits());
-        let function = match self.llvm_module.get_function(&name) {
-            Some(f) => f,
-            None => {
-                let fn_type = to_int_type.fn_type(&[self.scalar_basic_type(from).into()], false);
-                self.llvm_module.add_function(&name, fn_type, None)
-            }
-        };
-        self.build_call(function, &[input.into()])
-            .try_as_basic_value()
-            .basic()
-            .unwrap()
-            .into_int_value()
-    }
-
     fn build_int_intrinsic(
         &self,
         name: &str,
@@ -3032,7 +2999,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     fn i1_to_bool(&self, i1: IntValue<'ctx>, name: &str) -> IntValue<'ctx> {
-        self.builder.build_int_cast_sign_flag(i1, self.builtin_types.boolean, false, name).unwrap()
+        self.builder.build_int_cast_sign_flag(i1, self.ctx.i8_type(), false, name).unwrap()
     }
 
     fn build_k1_alloca(&mut self, ty: &CgType<'ctx>, name: &str) -> PointerValue<'ctx> {
@@ -3705,7 +3672,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         inst_mappings: &mut IdMap<InstId, BasicValueEnum<'ctx>>,
         value: ir::Value,
     ) -> CgResult<BasicValueEnum<'ctx>> {
-        //eprintln!("codegen_value {}", value);
         match value {
             ir::Value::Inst(inst_id) => match inst_mappings.get(inst_id) {
                 Some(v) => Ok(v),
@@ -3736,32 +3702,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 Ok(v)
             }
             ir::Value::Data32 { t, data } => {
-                let v: BasicValueEnum<'ctx> = match t {
-                    ScalarType::F32 => {
-                        llvm_float_constant(self.ctx, TypedFloatValue::F32(f32::from_bits(data)))
-                            .into()
-                    }
-                    ScalarType::F64 => llvm_float_constant(
-                        self.ctx,
-                        TypedFloatValue::F64(f32::from_bits(data) as f64),
-                    )
-                    .into(),
-                    ScalarType::Pointer => {
-                        if data == 0 {
-                            self.builtin_types.ptr.const_zero().into()
-                        } else {
-                            panic!("Got non-zero Pointer in codegen_llvm: {data}")
-                        }
-                    }
-                    _ => self
-                        .scalar_basic_type(t)
-                        .into_int_type()
-                        .const_int(ir::data32_bits(t, data), false)
-                        .into(),
-                };
-                Ok(v)
+                Ok(llvm_scalar_constant(self.ctx, t, ir::data32_bits(t, data)))
             }
-            ir::Value::IsStatic => Ok(self.builtin_types.false_value.into()),
+            ir::Value::IsStatic => Ok(llvm_scalar_constant(self.ctx, ScalarType::I8, 0)),
             ir::Value::Empty => Ok(self.builtin_types.empty_struct_value()),
         }
     }
@@ -3961,7 +3904,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                     _ => self.builder.build_int_compare(IntPredicate::ULT, l, r, "").unwrap(),
                 };
                 let elem_bits = vop.elem.get_layout().size_bits() as u32;
-                let int_lane_vec = self.custom_width_int_type(elem_bits).vec_type(vop.lanes);
+                let int_lane_vec = llvm_int_type(self.ctx, elem_bits).vec_type(vop.lanes);
                 let mask_lanes = self.builder.build_int_s_extend(cmp_i1, int_lane_vec, "").unwrap();
                 let result = if is_float {
                     let float_vec = self.vec_llvm_type(vop.elem, vop.lanes);
@@ -3991,7 +3934,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             VecOpIr::ToMask => {
                 let l = self.vec_load(&vop, inst_mappings, vop.lhs)?;
                 let elem_bits = vop.elem.get_layout().size_bits() as u32;
-                let int_lane_vec = self.custom_width_int_type(elem_bits).vec_type(vop.lanes);
+                let int_lane_vec = llvm_int_type(self.ctx, elem_bits).vec_type(vop.lanes);
                 let as_ints = if is_float {
                     self.builder.build_bit_cast(l, int_lane_vec, "").unwrap().into_vector_value()
                 } else {
@@ -4000,7 +3943,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let zero = int_lane_vec.const_zero();
                 let msbs =
                     self.builder.build_int_compare(IntPredicate::SLT, as_ints, zero, "").unwrap();
-                let mask_int_type = self.custom_width_int_type(vop.lanes);
+                let mask_int_type = llvm_int_type(self.ctx, vop.lanes);
                 let mask_small =
                     self.builder.build_bit_cast(msbs, mask_int_type, "").unwrap().into_int_value();
                 let mask =
@@ -4024,14 +3967,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         self.set_debug_location_from_span(span);
         let inst = *self.cur_unit.inst(inst_id);
         match inst {
-            Inst::Data(data_inst) => {
-                let value: BasicValueEnum<'ctx> = match data_inst {
-                    ir::DataInst::I64(bits) => self.ctx.i64_type().const_int(bits, false).into(),
-                    ir::DataInst::F64(f) => {
-                        llvm_float_constant(self.ctx, TypedFloatValue::F64(f)).into()
-                    }
-                };
-                inst_mappings.insert(inst_id, value.as_basic_value_enum());
+            Inst::Data { t, bits } => {
+                inst_mappings.insert(inst_id, llvm_scalar_constant(self.ctx, t, bits));
                 Ok(())
             }
             Inst::ReloadGlobalAddr { id, .. } => {
@@ -4097,7 +4034,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
                 Ok(())
             }
-            Inst::Store { t, dst, value, volatile, unaligned } => {
+            Inst::Store { dst, value, volatile, unaligned } => {
+                let t = ir::get_value_kind(&self.cur_unit, value).expect_scalar();
                 let align = self.claimed_align(PhysicalType::scalar(t), unaligned);
                 let dst_ptr = self.resolve_value(inst_mappings, dst)?.into_pointer_value();
                 let value = self.resolve_value(inst_mappings, value)?;
@@ -4134,7 +4072,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 inst_mappings.insert(inst_id, load);
                 Ok(())
             }
-            Inst::AtomicStore { dst, value, t, ord } => {
+            Inst::AtomicStore { dst, value, ord } => {
+                let t = ir::get_value_kind(&self.cur_unit, value).expect_scalar();
                 let dst_pointer = self.resolve_value(inst_mappings, dst)?.into_pointer_value();
                 let value = self.resolve_value(inst_mappings, value)?;
                 let store = self.builder.build_store(dst_pointer, value).unwrap();
@@ -4479,7 +4418,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 inst_mappings.insert(inst_id, trunc.as_basic_value_enum());
                 Ok(())
             }
-            Inst::IntExtU { v, to } | Inst::IntExtS { v, to, .. } => {
+            Inst::IntExtU { v, to } | Inst::IntExtS { v, to } => {
                 let input = self.resolve_value(inst_mappings, v)?.into_int_value();
                 let to_int_type = self.scalar_basic_type(to).into_int_type();
                 let signed = matches!(inst, ir::Inst::IntExtS { .. });
@@ -4502,29 +4441,19 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 inst_mappings.insert(inst_id, ext.as_basic_value_enum());
                 Ok(())
             }
-            Inst::Float32ToIntUnsigned { v, to } | Inst::Float64ToIntUnsigned { v, to } => {
-                let from = if matches!(inst, Inst::Float32ToIntUnsigned { .. }) {
-                    ScalarType::F32
-                } else {
-                    ScalarType::F64
-                };
+            Inst::FloatToIntUnsigned { v, to } | Inst::FloatToIntSigned { v, to } => {
                 let input = self.resolve_value(inst_mappings, v)?.into_float_value();
-                let int = self.build_float_to_int_saturating(input, from, to, false);
+                let name = if matches!(inst, Inst::FloatToIntSigned { .. }) {
+                    "llvm.fptosi.sat"
+                } else {
+                    "llvm.fptoui.sat"
+                };
+                let overloads = [self.scalar_basic_type(to), input.get_type().as_basic_type_enum()];
+                let int = self.build_int_intrinsic(name, &overloads, &[input.into()]);
                 inst_mappings.insert(inst_id, int.as_basic_value_enum());
                 Ok(())
             }
-            Inst::Float32ToIntSigned { v, to } | Inst::Float64ToIntSigned { v, to } => {
-                let from = if matches!(inst, Inst::Float32ToIntSigned { .. }) {
-                    ScalarType::F32
-                } else {
-                    ScalarType::F64
-                };
-                let input = self.resolve_value(inst_mappings, v)?.into_float_value();
-                let int = self.build_float_to_int_saturating(input, from, to, true);
-                inst_mappings.insert(inst_id, int.as_basic_value_enum());
-                Ok(())
-            }
-            Inst::IntToFloatUnsigned { v, from: _, to } => {
+            Inst::IntToFloatUnsigned { v, to } => {
                 let input = self.resolve_value(inst_mappings, v)?.into_int_value();
                 let to_float_type = self.scalar_basic_type(to).into_float_type();
                 let float =
@@ -4532,7 +4461,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 inst_mappings.insert(inst_id, float.as_basic_value_enum());
                 Ok(())
             }
-            Inst::IntToFloatSigned { v, from: _, to } => {
+            Inst::IntToFloatSigned { v, to } => {
                 let input = self.resolve_value(inst_mappings, v)?.into_int_value();
                 let to_float_type = self.scalar_basic_type(to).into_float_type();
                 let float =
@@ -4603,7 +4532,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         let signed = op == IntOp::MulHighS;
                         let narrow = l.get_type();
                         let width = narrow.get_bit_width();
-                        let wide = self.custom_width_int_type(width * 2);
+                        let wide = llvm_int_type(self.ctx, width * 2);
                         let l = self.builder.build_int_cast_sign_flag(l, wide, signed, "").unwrap();
                         let r = self.builder.build_int_cast_sign_flag(r, wide, signed, "").unwrap();
                         let product = self.builder.build_int_mul(l, r, "").unwrap();
@@ -5187,7 +5116,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
             self.set_debug_location_from_span(function_span);
             let ps = &mut self.llvm_functions.get_mut(&function_id).unwrap().param_values;
-            //eprintln!("pushing param value {}: {}", ps.len(), mapped_value);
             ps.push(mapped_value);
             if !self.debug.line_tables_only {
                 let typed_param = self.k1.mem.get_nth(typed_function_params, logical_param_index);
@@ -5321,11 +5249,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         result.reverse(); // reverse → RPO
     }
 
-    fn codegen_int_value(&mut self, integer: TypedIntValue) -> BasicValueEnum<'ctx> {
-        let llvm_int_ty = self.scalar_basic_type(integer.get_scalar_type()).into_int_type();
-        llvm_int_ty.const_int(integer.to_u64_bits(), false).as_basic_value_enum()
-    }
-
     fn codegen_static_value_as_const(
         &mut self,
         static_value_id: StaticValueId,
@@ -5343,20 +5266,18 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 // to keep the type system happy: empty array, empty struct, at least
                 self.builtin_types.empty_struct_value()
             }
-            StaticValue::Bool(b) => match b {
-                true => self.builtin_types.true_value.as_basic_value_enum(),
-                false => self.builtin_types.false_value.as_basic_value_enum(),
-            },
-            StaticValue::Char(byte) => {
-                self.builtin_types.char.const_int(*byte as u64, false).as_basic_value_enum()
+            scalar @ (StaticValue::Bool(_)
+            | StaticValue::Char(_)
+            | StaticValue::Int(_)
+            | StaticValue::Enum(..)
+            | StaticValue::Float(_)) => {
+                let (t, bits) = scalar.scalar_bits().unwrap();
+                llvm_scalar_constant(self.ctx, t, bits)
             }
-            StaticValue::Int(int_value) => self.codegen_int_value(*int_value),
-            StaticValue::Enum(_, int_value) => self.codegen_int_value(*int_value),
             StaticValue::FunctionPointer(_, function_id) => {
                 let function_value = self.declare_llvm_function(*function_id)?;
                 function_value.as_global_value().as_pointer_value().into()
             }
-            StaticValue::Float(float_value) => llvm_float_constant(self.ctx, *float_value).into(),
             StaticValue::String(string_id) => {
                 let string_global = self.codegen_string_id_to_global(*string_id).unwrap();
                 string_global.get_initializer().unwrap()
@@ -5423,8 +5344,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let variant_payload_pt = variant.payload;
                 let payload_offset = sum_pt.payload_offset;
 
-                let tag_llvm_value = self.codegen_int_value(variant_tag);
-                let tag_layout = variant_tag.get_scalar_type().get_layout();
+                let (tag_t, tag_bits) = variant_tag.scalar_bits();
+                let tag_llvm_value = llvm_scalar_constant(self.ctx, tag_t, tag_bits);
+                let tag_layout = tag_t.get_layout();
                 packed_values.push(tag_llvm_value);
                 match sum.payload {
                     None => {
@@ -5538,7 +5460,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         writable: bool,
     ) -> BasicValueEnum<'ctx> {
         match kind {
-            StaticContainerKind::Array | StaticContainerKind::Vector => array_value,
+            StaticContainerKind::Array => array_value,
             StaticContainerKind::Span | StaticContainerKind::Buffer | StaticContainerKind::List => {
                 let data_global = if writable && kind != StaticContainerKind::Span {
                     self.make_global_from_value(
@@ -5575,7 +5497,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         let buffer_struct = self.make_span_struct(container_type_id, len, data);
                         self.make_list_struct(container_type_id, buffer_struct, len)
                     }
-                    StaticContainerKind::Array | StaticContainerKind::Vector => unreachable!(),
+                    StaticContainerKind::Array => unreachable!(),
                 };
                 final_struct.as_basic_value_enum()
             }
@@ -5730,7 +5652,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let string_name = &format!("k1.string.{content_hash:032x}.bytes");
         let str_len = rust_str.len();
         let global_str_data = self.llvm_module.add_global(
-            self.builtin_types.char.array_type(str_len as u32),
+            self.ctx.i8_type().array_type(str_len as u32),
             None,
             string_name,
         );
@@ -6006,9 +5928,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
 fn collect_ranges_from_values(width: u32, values: &mut [u64]) -> SV4<(u64, u64)> {
     let modulus = 1u128 << width;
-    for v in values.iter_mut() {
-        *v = (*v as u128 % modulus) as u64;
-    }
     values.sort_unstable();
     let mut runs: SV4<(u128, u128)> = smallvec::smallvec![];
     for v in values.iter() {
@@ -6051,10 +5970,6 @@ mod tests {
         assert_eq!(collect_ranges_from_values(8, &mut [255, 0]).as_slice(), &[(255, 1)]);
         assert_eq!(collect_ranges_from_values(8, &mut [127, 128]).as_slice(), &[(127, 129)]);
         assert_eq!(collect_ranges_from_values(8, &mut [200, 5]).as_slice(), &[(200, 201), (5, 6)]);
-        assert_eq!(
-            collect_ranges_from_values(8, &mut [0xFFFF_FFFF_FFFF_FFFF]).as_slice(),
-            &[(255, 0)]
-        );
         let mut all: Vec<u64> = Vec::new();
         for v in 0..256 {
             all.push(v);
@@ -6067,12 +5982,9 @@ mod tests {
         );
     }
 
-    fn assert_float_bits(ctx: &Context, value: TypedFloatValue, expected: u64) {
-        let int_type = match value {
-            TypedFloatValue::F32(_) => ctx.i32_type(),
-            TypedFloatValue::F64(_) => ctx.i64_type(),
-        };
-        let constant = llvm_float_constant(ctx, value);
+    fn assert_float_bits(ctx: &Context, t: ScalarType, expected: u64) {
+        let int_type = llvm_int_type(ctx, t.width_bits() as u32);
+        let constant = llvm_scalar_constant(ctx, t, expected);
         let bits = unsafe {
             IntValue::new(llvm_sys::core::LLVMConstBitCast(
                 constant.as_value_ref(),
@@ -6098,7 +6010,7 @@ mod tests {
             0x7f80_1234,
             0xff80_1234,
         ] {
-            assert_float_bits(&ctx, TypedFloatValue::F32(f32::from_bits(bits)), bits as u64);
+            assert_float_bits(&ctx, ScalarType::F32, bits);
         }
     }
 
@@ -6118,7 +6030,7 @@ mod tests {
             0x7ff0_0000_0000_1234,
             0xfff0_0000_0000_1234,
         ] {
-            assert_float_bits(&ctx, TypedFloatValue::F64(f64::from_bits(bits)), bits);
+            assert_float_bits(&ctx, ScalarType::F64, bits);
         }
     }
 }

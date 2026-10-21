@@ -28,8 +28,7 @@ use crate::{kbail, kerr};
 
 use super::lower;
 use super::{
-    OPCODE_COUNT, Opcode, UnitKind, VALUE_MASK_CONST_ID, VALUE_MASK_FRAME_OFFSET, builtin_from_tag,
-    header_a, header_b, header_op,
+    Opcode, UnitKind, VALUE_MASK_CONST_ID, VALUE_MASK_FRAME_OFFSET, header_a, header_b, header_op,
 };
 
 const STATIC_EXEC_INSTR_LIMIT: i64 = 2_000_000_000;
@@ -263,7 +262,7 @@ fn exec_loop<const COUNT_OPS: bool>(
     let mut fp: *mut u8 = top_fp;
     let mut ret_reg: Value = Value::u64(0);
     let mut instrs_run = 0;
-    let mut op_counts = [0u64; OPCODE_COUNT as usize];
+    let mut op_counts = [0u64; Opcode::COUNT];
 
     // Callers wrap uses in `unsafe`; pointer arithmetic + deref together
     macro_rules! word_ptr {
@@ -483,7 +482,7 @@ fn exec_loop<const COUNT_OPS: bool>(
         debug_assert!((pc_u32!() as usize) < k1.bc.code.len(), "bc pc out of bounds");
         let h = unsafe { *pc };
         instrs_run += 1;
-        let op = Opcode::from_u8(header_op(h));
+        let op = unsafe { Opcode::from_tag(header_op(h)).unwrap_unchecked() };
         if COUNT_OPS {
             op_counts[op as usize] += 1;
         }
@@ -695,7 +694,7 @@ fn exec_loop<const COUNT_OPS: bool>(
                 }
             }
             Opcode::CallBuiltin => {
-                let builtin = builtin_from_tag(header_a(h));
+                let builtin = ir::BackendBuiltin::from_tag(header_a(h)).unwrap();
                 let ret_pt = PhysicalType::from_u32(operand!(0));
                 let fp_delta = operand!(1) as usize;
                 let nargs = operand!(2) as usize;
@@ -775,13 +774,13 @@ fn exec_loop<const COUNT_OPS: bool>(
             Opcode::StoreFp32 => store_fp_op!(u32, Opcode::StoreFp32),
             Opcode::StoreFp64 => store_fp_op!(u64, Opcode::StoreFp64),
             Opcode::AtomicLoad => {
-                let ord = ir::AtomicOrderingIr::from_tag(header_b(h) as u8);
+                let ord = ir::AtomicOrderingIr::from_tag(header_b(h) as u8).unwrap();
                 let addr = read_src!(operand!(1));
                 write_slot!(operand!(0), vm::atomic_load_bits(header_a(h), addr.as_ptr(), ord));
                 advance!(Opcode::AtomicLoad);
             }
             Opcode::AtomicStore => {
-                let ord = ir::AtomicOrderingIr::from_tag(header_b(h) as u8);
+                let ord = ir::AtomicOrderingIr::from_tag(header_b(h) as u8).unwrap();
                 let addr = read_src!(operand!(0));
                 check_writable!(addr.as_ptr());
                 let v = read_src!(operand!(1));
@@ -790,8 +789,8 @@ fn exec_loop<const COUNT_OPS: bool>(
             }
             Opcode::AtomicRmw => {
                 let b = header_b(h);
-                let op = ir::AtomicRmwOpIr::from_tag((b >> 8) as u8);
-                let ord = ir::AtomicOrderingIr::from_tag((b & 0xff) as u8);
+                let op = ir::AtomicRmwOpIr::from_tag((b >> 8) as u8).unwrap();
+                let ord = ir::AtomicOrderingIr::from_tag((b & 0xff) as u8).unwrap();
                 let addr = read_src!(operand!(1));
                 check_writable!(addr.as_ptr());
                 let operand = read_src!(operand!(2));
@@ -802,8 +801,8 @@ fn exec_loop<const COUNT_OPS: bool>(
             Opcode::AtomicCmpxchg => {
                 let width = header_a(h);
                 let b = header_b(h);
-                let success = ir::AtomicOrderingIr::from_tag((b & 0xf) as u8);
-                let failure = ir::AtomicOrderingIr::from_tag((b >> 4 & 0xf) as u8);
+                let success = ir::AtomicOrderingIr::from_tag((b & 0xf) as u8).unwrap();
+                let failure = ir::AtomicOrderingIr::from_tag((b >> 4 & 0xf) as u8).unwrap();
                 let weak = b >> 8 & 1 == 1;
                 let result_ptr = read_src!(operand!(0)).as_ptr();
                 let addr = read_src!(operand!(1));
@@ -825,7 +824,7 @@ fn exec_loop<const COUNT_OPS: bool>(
                 advance!(Opcode::AtomicCmpxchg);
             }
             Opcode::Fence => {
-                let ord = ir::AtomicOrderingIr::from_tag(header_b(h) as u8);
+                let ord = ir::AtomicOrderingIr::from_tag(header_b(h) as u8).unwrap();
                 std::sync::atomic::fence(vm::rust_atomic_ordering(ord));
                 advance!(Opcode::Fence);
             }

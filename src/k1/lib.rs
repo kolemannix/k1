@@ -180,6 +180,47 @@ macro_rules! impl_copy_if_small {
     };
 }
 
+#[macro_export]
+macro_rules! tag_enum {
+    (
+        $(#[$meta:meta])*
+        $vis:vis enum $name:ident {
+            $($(#[$vmeta:meta])* $variant:ident $(= $value:literal)?),+ $(,)?
+        }
+    ) => {
+        $(#[$meta])*
+        #[repr(u8)]
+        $vis enum $name {
+            $($(#[$vmeta])* $variant $(= $value)?),+
+        }
+
+        impl $name {
+            pub const COUNT: usize = [$(stringify!($variant)),+].len();
+            pub const ALL: [$name; $name::COUNT] = [$($name::$variant),+];
+
+            pub const fn to_tag(self) -> u8 {
+                self as u8
+            }
+
+            pub const fn from_tag(tag: u8) -> Option<$name> {
+                if tag.wrapping_sub($name::ALL[0] as u8) < $name::COUNT as u8 {
+                    Some(unsafe { std::mem::transmute::<u8, $name>(tag) })
+                } else {
+                    None
+                }
+            }
+        }
+
+        const _: () = {
+            let mut i = 0;
+            while i < $name::COUNT {
+                assert!($name::ALL[i] as u8 == $name::ALL[0] as u8 + i as u8);
+                i += 1;
+            }
+        };
+    };
+}
+
 // A hash function with dependencies on D
 pub trait DepHash<D> {
     fn dep_hash<H: std::hash::Hasher>(&self, dep: &D, state: &mut H);

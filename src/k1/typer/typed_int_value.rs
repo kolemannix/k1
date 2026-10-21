@@ -75,19 +75,6 @@ impl TypedIntValue {
         }
     }
 
-    pub fn to_u64_bits(&self) -> u64 {
-        match self {
-            TypedIntValue::U8(v) => *v as u64,
-            TypedIntValue::U16(v) => *v as u64,
-            TypedIntValue::U32(v) => *v as u64,
-            TypedIntValue::U64(v) => *v,
-            TypedIntValue::I8(v) => *v as u64,
-            TypedIntValue::I16(v) => *v as u64,
-            TypedIntValue::I32(v) => *v as u64,
-            TypedIntValue::I64(v) => *v as u64,
-        }
-    }
-
     pub fn to_zext_bits(&self) -> u64 {
         match self {
             TypedIntValue::U8(v) => *v as u64,
@@ -98,6 +85,19 @@ impl TypedIntValue {
             TypedIntValue::I16(v) => *v as u16 as u64,
             TypedIntValue::I32(v) => *v as u32 as u64,
             TypedIntValue::I64(v) => *v as u64,
+        }
+    }
+
+    pub fn to_i128(&self) -> i128 {
+        match self {
+            TypedIntValue::U8(v) => *v as i128,
+            TypedIntValue::U16(v) => *v as i128,
+            TypedIntValue::U32(v) => *v as i128,
+            TypedIntValue::U64(v) => *v as i128,
+            TypedIntValue::I8(v) => *v as i128,
+            TypedIntValue::I16(v) => *v as i128,
+            TypedIntValue::I32(v) => *v as i128,
+            TypedIntValue::I64(v) => *v as i128,
         }
     }
 
@@ -129,6 +129,10 @@ impl TypedIntValue {
 
     pub fn get_scalar_type(&self) -> ScalarType {
         self.get_integer_type().get_scalar_type()
+    }
+
+    pub fn scalar_bits(&self) -> (ScalarType, u64) {
+        (self.get_scalar_type(), self.to_zext_bits())
     }
 }
 
@@ -175,16 +179,7 @@ impl From<i8> for TypedIntValue {
 
 impl Display for TypedIntValue {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let (val, suffix): (i128, &str) = match *self {
-            TypedIntValue::U8(v) => (v as i128, "u8"),
-            TypedIntValue::U16(v) => (v as i128, "u16"),
-            TypedIntValue::U32(v) => (v as i128, "u32"),
-            TypedIntValue::U64(v) => (v as i128, "u64"),
-            TypedIntValue::I8(v) => (v as i128, "i8"),
-            TypedIntValue::I16(v) => (v as i128, "i16"),
-            TypedIntValue::I32(v) => (v as i128, "i32"),
-            TypedIntValue::I64(v) => (v as i128, "i64"),
-        };
+        let (val, suffix) = (self.to_i128(), self.get_integer_type());
         if f.width().is_none() && f.precision().is_none() {
             write!(f, "{val}{suffix}")
         } else {

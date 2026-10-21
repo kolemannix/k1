@@ -315,11 +315,12 @@ impl LocalUses {
                     _ => self.reject_address(address),
                 }
             }
-            Inst::Store { dst, value, t, volatile, .. } => {
+            Inst::Store { dst, value, volatile, .. } => {
                 let address = get_address(self, dst);
                 if volatile {
                     self.reject_address(address);
                 } else {
+                    let t = get_value_kind(&u.view(), value).expect_scalar();
                     self.add_access(address, id, block, || LocalAccessKind::Store(t, value));
                 }
                 reject_value(self, value);
@@ -422,7 +423,7 @@ impl LocalUses {
             | Inst::Unreachable
             | Inst::Fence { .. }
             | Inst::ReloadGlobalAddr { .. }
-            | Inst::Data(_)
+            | Inst::Data { .. }
             | Inst::Jump(_)
             | Inst::JumpIf { .. }
             | Inst::Switch { .. }
@@ -435,10 +436,8 @@ impl LocalUses {
             | Inst::IntExtS { .. }
             | Inst::FloatTrunc { .. }
             | Inst::FloatExt { .. }
-            | Inst::Float32ToIntUnsigned { .. }
-            | Inst::Float64ToIntUnsigned { .. }
-            | Inst::Float32ToIntSigned { .. }
-            | Inst::Float64ToIntSigned { .. }
+            | Inst::FloatToIntUnsigned { .. }
+            | Inst::FloatToIntSigned { .. }
             | Inst::IntToFloatUnsigned { .. }
             | Inst::IntToFloatSigned { .. }
             | Inst::IntBinop { .. }

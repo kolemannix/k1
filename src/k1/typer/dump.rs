@@ -259,7 +259,7 @@ impl TypedProgram {
                             w.write_str(", ")?;
                         }
                         self.write_ident(w, member.name)?;
-                        write!(w, "={}", member.int_value.to_u64_bits())?;
+                        write!(w, "={}", member.int_value.to_i128())?;
                     }
                 } else {
                     if let Some(defn_info) = defn_info {
@@ -357,7 +357,7 @@ impl TypedProgram {
                         self.display_type_id_ext(w, *payload, mode, visiting)?;
                         w.write_str(")")?;
                     }
-                    write!(w, "={}", v.tag_value.to_u64_bits())?;
+                    write!(w, "={}", v.tag_value.to_i128())?;
                 }
                 Ok(())
             }
@@ -509,8 +509,8 @@ impl TypedProgram {
                 w.write_str("]")?;
                 Ok(())
             }
-            Type::Array(array_type) => {
-                w.write_str("array[")?;
+            typ @ (Type::Array(array_type) | Type::Vector(array_type)) => {
+                w.write_str(if matches!(typ, Type::Vector(_)) { "vector[" } else { "array[" })?;
                 self.display_type_id_ext(w, array_type.element_type, mode, visiting)?;
                 w.write_str(", ")?;
                 let concrete_count = self.get_concrete_count_of_array(array_type.size_type);
@@ -518,18 +518,6 @@ impl TypedProgram {
                     write!(w, "{}", size)?;
                 } else {
                     self.display_type_id_ext(w, array_type.size_type, mode, visiting)?;
-                }
-                w.write_str("]")
-            }
-            Type::Vector(vector_type) => {
-                w.write_str("vector[")?;
-                self.display_type_id_ext(w, vector_type.element_type, mode, visiting)?;
-                w.write_str(", ")?;
-                let concrete_count = self.get_concrete_count_of_array(vector_type.size_type);
-                if let Some(size) = concrete_count {
-                    write!(w, "{}", size)?;
-                } else {
-                    self.display_type_id_ext(w, vector_type.size_type, mode, visiting)?;
                 }
                 w.write_str("]")
             }
@@ -1000,12 +988,7 @@ impl TypedProgram {
             StaticValue::Char(c) => write!(w, "{}", *c as char),
             StaticValue::Int(i) => {
                 if pretty {
-                    if i.get_integer_type().is_signed() {
-                        write!(w, "{}", i.to_i64())?;
-                    } else {
-                        write!(w, "{}", i.to_u64_bits())?;
-                    };
-                    Ok(())
+                    write!(w, "{}", i.to_i128())
                 } else {
                     write!(w, "{}", i)
                 }

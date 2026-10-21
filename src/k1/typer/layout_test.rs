@@ -144,6 +144,5 @@ fn named_scalar_encoding() {
 fn scalar_type_index_matches_all() {
     for (i, st) in ScalarType::ALL.iter().enumerate() {
         assert_eq!(st.index(), i);
-        assert_eq!(ScalarType::from_tag(st.to_tag() as u32), *st);
     }
 }

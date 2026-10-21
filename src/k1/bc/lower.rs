@@ -18,7 +18,7 @@ use crate::vm;
 
 use super::{
     FRAME_ALIGN, FRAME_HEADER_WORDS, Opcode, PENDING_PC, UnitInfo, UnitKind, VALUE_MASK_CONST_ID,
-    VALUE_MASK_FRAME_OFFSET, builtin_tag, header,
+    VALUE_MASK_FRAME_OFFSET, header,
 };
 
 pub fn get_or_lower_unit(
@@ -334,7 +334,7 @@ fn resolve_lowered_value(k1: &mut TypedProgram, ctx: &mut LowerCtx, value: ir::V
                 return bc_value;
             }
             match *ctx.u.inst(inst_id) {
-                Inst::Data(imm) => k1.bc.intern_const(imm.bits()),
+                Inst::Data { bits, .. } => k1.bc.intern_const(bits),
                 _ => k1.bc.intern_const(0),
             }
         }
@@ -412,7 +412,7 @@ fn lower_unit_with_ctx(
         for inst_id in u.block_insts(block_h) {
             let inst = *u.inst(inst_id);
             match inst {
-                Inst::Data(_) => {}
+                Inst::Data { .. } => {}
                 Inst::BitCast { v, .. }
                 | Inst::IntExtU { v, .. }
                 | Inst::PtrToWord { v, .. }
@@ -624,6 +624,8 @@ fn emit_inst(
     inst_id: InstId,
 ) -> K1Result<()> {
     let inst = *ctx.u.inst(inst_id);
+    let u = ctx.u;
+    let scalar_of = |v| ir::get_value_kind(&u, v).expect_scalar();
     let span = ctx.u.span(inst_id);
     ctx.record_span(span);
     ctx.begin_inst();
@@ -651,7 +653,7 @@ fn emit_inst(
     }
 
     match inst {
-        Inst::Data(_) => {}
+        Inst::Data { .. } => {}
         Inst::ReloadGlobalAddr { storage_pt, id } => {
             ctx.emit(Opcode::LoadGlobal, 0, 0);
             ctx.push(ctx.bc_value_of(inst_id));
@@ -664,10 +666,11 @@ fn emit_inst(
         | Inst::WordToPtr { .. } => {}
         Inst::Phi { .. } => {}
         Inst::Alloca { .. } => {}
-        Inst::Store { dst, value, t, volatile: _, unaligned: _ } => {
+        Inst::Store { dst, value, volatile: _, unaligned: _ } => {
+            let width = scalar_of(value).width_bits();
             let (addr, off) = resolve_addr(k1, ctx, dst);
             let value = resolve_lowered_value(k1, ctx, value);
-            ctx.emit_store(t.width_bits(), addr, off, value);
+            ctx.emit_store(width, addr, off, value);
         }
         Inst::Load { t, src, .. } => {
             let t = t.expect_scalar();
@@ -682,10 +685,11 @@ fn emit_inst(
             ctx.push(dst);
             ctx.push(addr);
         }
-        Inst::AtomicStore { dst, value, t, ord } => {
+        Inst::AtomicStore { dst, value, ord } => {
+            let width = scalar_of(value).width_bits();
             let addr = resolve_lowered_value(k1, ctx, dst);
             let val = resolve_lowered_value(k1, ctx, value);
-            ctx.emit(Opcode::AtomicStore, t.width_bits(), ord.to_tag() as u16);
+            ctx.emit(Opcode::AtomicStore, width, ord.to_tag() as u16);
             ctx.push(addr);
             ctx.push(val);
         }
@@ -708,7 +712,7 @@ fn emit_inst(
             let b = cas.success.to_tag() as u16
                 | (cas.failure.to_tag() as u16) << 4
                 | (cas.weak as u16) << 8;
-            ctx.emit(Opcode::AtomicCmpxchg, cas.t.width_bits(), b);
+            ctx.emit(Opcode::AtomicCmpxchg, scalar_of(cas.expected).width_bits(), b);
             ctx.push(result);
             ctx.push(addr);
             ctx.push(expected);
@@ -968,9 +972,10 @@ fn emit_inst(
         Inst::JumpIf { cond, cons, alt } => {
             match fused_cmp_of(ctx, cond) {
                 Some(cmp_id) => {
-                    let Inst::IntCmp { lhs, rhs, pred, width } = *ctx.u.inst(cmp_id) else {
+                    let Inst::IntCmp { lhs, rhs, pred } = *ctx.u.inst(cmp_id) else {
                         unreachable!("fused cmp is not an IntCmp")
                     };
+                    let width = scalar_of(lhs).width_bits();
                     let lhs_lowered = resolve_lowered_value(k1, ctx, lhs);
                     let rhs_lowered = resolve_lowered_value(k1, ctx, rhs);
                     let opcode = match pred {
@@ -998,7 +1003,8 @@ fn emit_inst(
             ctx.push_edge_target(block_id, cons);
             ctx.push_edge_target(block_id, alt);
         }
-        Inst::Switch { value, width, cases, default } => {
+        Inst::Switch { value, cases, default } => {
+            let width = scalar_of(value).width_bits();
             let src = resolve_lowered_value(k1, ctx, value);
             let mut sorted = ctx.u.switch_cases(cases).to_vec();
             sorted.sort_by_key(|case| case.value);
@@ -1015,7 +1021,7 @@ fn emit_inst(
         Inst::Unreachable => {
             ctx.emit(Opcode::Unreachable, 0, 0);
         }
-        Inst::Ret { v, agg: _ } => {
+        Inst::Ret { v } => {
             let ret_pt = ctx.ret_pt;
             if ret_pt.is_agg() {
                 let size = k1.get_pt_layout(ret_pt).size;
@@ -1066,22 +1072,28 @@ fn emit_inst(
         }
 
         Inst::IntTrunc { v, to } => unop!(Opcode::IntTrunc, to.width_bits(), 0, v),
-        Inst::IntExtS { v, from, to } => {
-            unop!(Opcode::IntExtS, from.width_bits(), to.width_bits() as u16, v)
+        Inst::IntExtS { v, to } => {
+            unop!(Opcode::IntExtS, scalar_of(v).width_bits(), to.width_bits() as u16, v)
         }
         Inst::FloatTrunc { v, .. } => unop!(Opcode::FloatTrunc, 0, 0, v),
         Inst::FloatExt { v, .. } => unop!(Opcode::FloatExt, 0, 0, v),
-        Inst::Float32ToIntUnsigned { v, to } => unop!(Opcode::F32ToUInt, to.width_bits(), 0, v),
-        Inst::Float32ToIntSigned { v, to } => unop!(Opcode::F32ToSInt, to.width_bits(), 0, v),
-        Inst::Float64ToIntUnsigned { v, to } => unop!(Opcode::F64ToUInt, to.width_bits(), 0, v),
-        Inst::Float64ToIntSigned { v, to } => unop!(Opcode::F64ToSInt, to.width_bits(), 0, v),
-        Inst::IntToFloatUnsigned { v, from, to } => {
-            let opcode = if to == ScalarType::F32 { Opcode::UIntToF32 } else { Opcode::UIntToF64 };
-            unop!(opcode, from.width_bits(), 0, v)
+        Inst::FloatToIntUnsigned { v, to } => {
+            let f32 = scalar_of(v) == ScalarType::F32;
+            let opcode = if f32 { Opcode::F32ToUInt } else { Opcode::F64ToUInt };
+            unop!(opcode, to.width_bits(), 0, v)
         }
-        Inst::IntToFloatSigned { v, from, to } => {
+        Inst::FloatToIntSigned { v, to } => {
+            let f32 = scalar_of(v) == ScalarType::F32;
+            let opcode = if f32 { Opcode::F32ToSInt } else { Opcode::F64ToSInt };
+            unop!(opcode, to.width_bits(), 0, v)
+        }
+        Inst::IntToFloatUnsigned { v, to } => {
+            let opcode = if to == ScalarType::F32 { Opcode::UIntToF32 } else { Opcode::UIntToF64 };
+            unop!(opcode, scalar_of(v).width_bits(), 0, v)
+        }
+        Inst::IntToFloatSigned { v, to } => {
             let opcode = if to == ScalarType::F32 { Opcode::SIntToF32 } else { Opcode::SIntToF64 };
-            unop!(opcode, from.width_bits(), 0, v)
+            unop!(opcode, scalar_of(v).width_bits(), 0, v)
         }
 
         Inst::IntBinop { op, lhs, rhs, t } => {
@@ -1106,7 +1118,7 @@ fn emit_inst(
             };
             binop!(opcode, t.width_bits(), lhs, rhs)
         }
-        Inst::IntOverflows { op, lhs, rhs, t } => {
+        Inst::IntOverflows { op, lhs, rhs } => {
             let opcode = match op {
                 OverflowOp::AddU => Opcode::IntAddOverflowsU,
                 OverflowOp::AddS => Opcode::IntAddOverflowsS,
@@ -1115,9 +1127,9 @@ fn emit_inst(
                 OverflowOp::MulU => Opcode::IntMulOverflowsU,
                 OverflowOp::MulS => Opcode::IntMulOverflowsS,
             };
-            binop!(opcode, t.width_bits(), lhs, rhs)
+            binop!(opcode, scalar_of(lhs).width_bits(), lhs, rhs)
         }
-        Inst::IntCmp { lhs, rhs, pred, width } => {
+        Inst::IntCmp { lhs, rhs, pred } => {
             if !ctx.fused_cmps.contains(inst_id) {
                 let opcode = match pred {
                     IntCmpPred::Eq => Opcode::IntEq,
@@ -1131,15 +1143,15 @@ fn emit_inst(
                     IntCmpPred::Uge => Opcode::IntUge,
                     IntCmpPred::Ne => Opcode::IntNe,
                 };
-                binop!(opcode, width, lhs, rhs)
+                binop!(opcode, scalar_of(lhs).width_bits(), lhs, rhs)
             }
         }
-        Inst::IntCmp3 { op, lhs, rhs, width } => {
+        Inst::IntCmp3 { op, lhs, rhs } => {
             let opcode = match op {
                 Cmp3Op::Ucmp => Opcode::IntUcmp,
                 Cmp3Op::Scmp => Opcode::IntScmp,
             };
-            binop!(opcode, width, lhs, rhs)
+            binop!(opcode, scalar_of(lhs).width_bits(), lhs, rhs)
         }
         Inst::FloatBinop { op, lhs, rhs, t } => {
             let opcode = match op {
@@ -1164,7 +1176,7 @@ fn emit_inst(
             ctx.push(b);
             ctx.push(c);
         }
-        Inst::FloatCmp { lhs, rhs, pred, width } => {
+        Inst::FloatCmp { lhs, rhs, pred } => {
             let opcode = match pred {
                 FloatCmpPred::Eq => Opcode::FloatEq,
                 FloatCmpPred::Lt => Opcode::FloatLt,
@@ -1173,7 +1185,7 @@ fn emit_inst(
                 FloatCmpPred::Ge => Opcode::FloatGe,
                 FloatCmpPred::Ne => Opcode::FloatNe,
             };
-            binop!(opcode, width, lhs, rhs)
+            binop!(opcode, scalar_of(lhs).width_bits(), lhs, rhs)
         }
 
         Inst::BakeStaticValue { type_id, value } => {
@@ -1303,7 +1315,7 @@ fn emit_call(
                 ctx.push(sret);
                 ctx.push(sret_lowered);
             }
-            ctx.emit(Opcode::CallBuiltin, builtin_tag(builtin), 0);
+            ctx.emit(Opcode::CallBuiltin, builtin.to_tag(), 0);
             ctx.push(ret_pt.to_u32());
             ctx.push(frame_bytes);
             ctx.push(nargs);
@@ -1498,7 +1510,6 @@ mod tests {
                 lhs: ir::Value::Inst(counter),
                 rhs: u64_value(trips),
                 pred: IntCmpPred::Ult,
-                width: 64,
             },
         );
         push(&mut u, body, Inst::JumpIf { cond: ir::Value::Inst(again), cons: header, alt: exit });
@@ -1526,7 +1537,7 @@ mod tests {
             );
             acc = ir::Value::Inst(summed);
         }
-        push(&mut u, exit, Inst::Ret { v: acc, agg: false });
+        push(&mut u, exit, Inst::Ret { v: acc });
         commit_unit(&mut k1.ir, &mut u, &mut unit);
         k1.ir.release_unit_buf(u);
         unit.is_optimized = true;

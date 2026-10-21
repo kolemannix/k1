@@ -30,15 +30,13 @@ pub const MAC_SDK_VERSION: &str = "15.0.0";
 pub const MAC_SDK_SYSROOT: &str = "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk";
 
 /// Who provides `ns platform`: a posix flavor, WASI, or `bare` -- the consumer
-/// of the emitted object provides the k1_platform_* symbols. Discriminants
-/// match core's `type platform` either tags
+/// of the emitted object provides the k1_platform_* symbols
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
 pub enum Platform {
-    PosixLinux = 0,
-    PosixMacos = 1,
-    Wasi = 2,
-    Bare = 3,
+    PosixLinux,
+    PosixMacos,
+    Wasi,
+    Bare,
 }
 
 impl Platform {
@@ -83,8 +81,17 @@ pub enum Arch {
     Wasm,
 }
 
+impl Arch {
+    pub fn to_str(&self) -> &'static str {
+        match self {
+            Arch::Intel => "intel64",
+            Arch::Arm => "arm64",
+            Arch::Wasm => "wasm64",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
 /// A target is an (arch, platform) pair; I just do a simple exhaustive enum of
 /// the pairs that are real rather than a 'target triple' type of struct where
 /// very few values of that type are actually valid. Bare targets emit objects

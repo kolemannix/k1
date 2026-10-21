@@ -537,7 +537,7 @@ impl TypedProgram {
             writeln!(out, "\trestored {} modules: {}", names.len(), names.join(", "))?;
         }
 
-        let kind_count = TraceKind::ALL.len();
+        let kind_count = TraceKind::COUNT;
         let mut counts = vec![0u64; kind_count];
         let mut exclusive = vec![0u64; kind_count];
         let mut speculative = vec![0u64; kind_count];
@@ -704,8 +704,8 @@ impl TypedProgram {
         if total_ops > 0 {
             let mut counts: Vec<(crate::bc::Opcode, i64)> =
                 Vec::with_capacity(trace.opcode_counts.len());
-            for (i, n) in trace.opcode_counts.iter().enumerate() {
-                counts.push((crate::bc::Opcode::from_u8(i as u8), *n));
+            for (op, n) in crate::bc::Opcode::ALL.into_iter().zip(&trace.opcode_counts) {
+                counts.push((op, *n));
             }
             counts.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
             let mut parts = Vec::with_capacity(counts.len());

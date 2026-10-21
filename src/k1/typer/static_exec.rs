@@ -160,7 +160,7 @@ impl TypedProgram {
         if let Some(shortcut_value_id) = self.convert_trivial_static_block(expr) {
             return Ok(shortcut_value_id);
         }
-        self.compile_static_unit(parsed_expr, expr)?;
+        self.compile_static_unit(expr, self.ast.exprs.is_debug(parsed_expr))?;
         let execution_result = bc::exec::execute_compiled_expr(self, vm, expr, true);
 
         vm.reset(self.global_id_k1_arena);
@@ -233,10 +233,9 @@ impl TypedProgram {
 
     pub(super) fn compile_static_unit(
         &mut self,
-        parsed_expr: ParsedExprId,
         expr: TypedExprId,
+        is_debug: bool,
     ) -> K1Result<()> {
-        let is_debug = self.ast.exprs.is_debug(parsed_expr);
         ir::compile_top_level_expr(self, expr, is_debug)?;
         ir::optimize_unit(self, IrUnitId::Expr(expr))?;
         if is_debug {
@@ -766,26 +765,13 @@ impl TypedProgram {
             "debug" => self.plan.config.debug,
             // The VM overrides this global's value during static execution
             "is-static" => false,
-            "platform" => {
-                let platform_tag = self.plan.config.target.platform() as u8;
-                let static_enum =
-                    StaticValue::Enum(expected_type_id, TypedIntValue::U8(platform_tag));
-                return Ok(self.static_values.add(static_enum));
-            }
-            "host-platform" => {
-                let host_platform = self.host_platform();
-                let static_enum =
-                    StaticValue::Enum(expected_type_id, TypedIntValue::U8(host_platform as u8));
-                return Ok(self.static_values.add(static_enum));
-            }
-            "arch" => {
-                let arch_tag = match self.plan.config.target.arch() {
-                    crate::compiler::Arch::Intel => 0,
-                    crate::compiler::Arch::Arm => 1,
-                    crate::compiler::Arch::Wasm => 2,
+            "platform" | "host-platform" | "arch" => {
+                let member = match name {
+                    "platform" => self.plan.config.target.platform().to_str(),
+                    "host-platform" => self.host_platform().to_str(),
+                    _ => self.plan.config.target.arch().to_str(),
                 };
-                let static_enum = StaticValue::Enum(expected_type_id, TypedIntValue::U8(arch_tag));
-                return Ok(self.static_values.add(static_enum));
+                return Ok(self.enum_named(expected_type_id, member));
             }
             "simd-bytes" => {
                 let width = self.plan.config.simd_bytes(&self.plan.strings) as i64;
@@ -1304,7 +1290,7 @@ impl TypedProgram {
                     let emitted = k1.do_with_vm(span, ctx.trace_flags(), |k1, vm| {
                         let result = (|| {
                             let expr = k1.typecheck_parsed_expr_for_exec(base_expr, exec_ctx)?;
-                            k1.compile_static_unit(base_expr, expr)?;
+                            k1.compile_static_unit(expr, k1.ast.exprs.is_debug(base_expr))?;
                             let raw = bc::exec::execute_compiled_expr_raw(k1, vm, expr, true)?;
                             Self::read_emitted_code_raw(k1, &raw, span, is_definition)
                         })();

@@ -24,7 +24,6 @@ pub enum StaticContainerKind {
     Span,
     Buffer,
     Array,
-    Vector,
     List,
 }
 
@@ -33,7 +32,6 @@ impl StaticContainerKind {
         match self {
             StaticContainerKind::Span => "span",
             StaticContainerKind::Array => "array",
-            StaticContainerKind::Vector => "vector",
             StaticContainerKind::Buffer => "buffer",
             StaticContainerKind::List => "list",
         }
@@ -112,6 +110,16 @@ impl StaticValue {
             StaticValue::Sum(_) => "sum",
             StaticValue::LinearContainer(c) => c.kind.name(),
             StaticValue::RawContainer(c) => c.kind.name(),
+        }
+    }
+
+    pub fn scalar_bits(&self) -> Option<(ScalarType, u64)> {
+        match self {
+            StaticValue::Bool(b) => Some((ScalarType::I8, *b as u64)),
+            StaticValue::Char(byte) => Some((ScalarType::I8, *byte as u64)),
+            StaticValue::Int(iv) | StaticValue::Enum(_, iv) => Some(iv.scalar_bits()),
+            StaticValue::Float(fv) => Some(fv.scalar_bits()),
+            _ => None,
         }
     }
 

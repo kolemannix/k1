@@ -337,9 +337,13 @@ fn inline_branch(b: &mut Builder, st: &mut InlineState, inst: Inst, comment: IrC
         Inst::JumpIf { cond, cons, alt } => {
             b.known_bool(st.mapped_value(cond)).map(|taken| if taken { cons } else { alt })
         }
-        Inst::Switch { value, width, cases, default } => b
-            .known_bits(st.mapped_value(value))
-            .map(|bits| switch_target(st.callee.switch_cases(cases), default, width, bits)),
+        Inst::Switch { value, cases, default } => {
+            let value = st.mapped_value(value);
+            b.known_bits(value).map(|bits| {
+                let width = b.get_value_kind(value).expect_scalar().width_bits();
+                switch_target(st.callee.switch_cases(cases), default, width, bits)
+            })
+        }
         _ => unreachable!("not a branch"),
     };
     if let Some(target) = known {
@@ -353,14 +357,14 @@ fn inline_branch(b: &mut Builder, st: &mut InlineState, inst: Inst, comment: IrC
             let alt = st.block(b.u, alt);
             b.push_jump_if(st.mapped_value(cond), cons, alt, comment);
         }
-        Inst::Switch { value, width, cases, default } => {
+        Inst::Switch { value, cases, default } => {
             let cases = st.callee.switch_cases(cases);
             let mut mapped = b.k1.tmp.new_list(cases.len() as u32);
             for case in cases {
                 mapped.push(SwitchCase { value: case.value, target: st.block(b.u, case.target) });
             }
             let default = st.block(b.u, default);
-            b.push_switch(st.mapped_value(value), width, mapped.as_slice(), default, comment);
+            b.push_switch(st.mapped_value(value), mapped.as_slice(), default, comment);
         }
         _ => unreachable!("not a branch"),
     }
