@@ -44,7 +44,7 @@ use std::path::Path;
 use synth::synth_static_option;
 pub use typed_int_value::TypedIntValue;
 
-use crate::kmem::{Handle, List, MList, MSS2, MSlice, MSpillSlice, MStr, Mem};
+use crate::kmem::{Handle, List, MList, MSlice, MSpillSlice, MStr, Mem};
 use crate::{DepEq, DepHash, SV2, kmem};
 use ahash::HashMapExt;
 use colored::Colorize;
@@ -575,7 +575,7 @@ impl TypedAbilityParam {
 #[derive(Clone, Copy, PartialEq)]
 pub struct TypedAbilitySignature {
     pub specialized_ability_id: AbilityId,
-    pub impl_arguments: TypeIdSlice,
+    pub impl_arguments: TypeSliceId,
 }
 
 #[derive(Clone, Copy)]
@@ -870,10 +870,8 @@ pub struct SpecializationInfo {
     pub parent_function: FunctionId,
     pub type_arguments: TypeSliceId,
     pub fnlike_type_arguments: TypeSliceId,
-    pub specialized_function_id: FunctionId,
-    pub specialized_function_type: TypeId,
 }
-impl_copy_if_small!(20, SpecializationInfo);
+impl_copy_if_small!(12, SpecializationInfo);
 
 #[derive(Debug, Clone, Copy)]
 pub enum TypedFunctionKind {
@@ -1045,9 +1043,9 @@ pub struct FnlikeTypeParam {
 
 pub type TypeIdSlice = MSlice<TypeId, TypedProgram>;
 
-pub type TypeArgs = MSS2<TypeId, TypedProgram>;
-
 nz_u32_id!(TypeSliceId);
+
+pub const EMPTY_TYPE_SLICE: TypeSliceId = TypeSliceId(NonZeroU32::new(1).unwrap());
 
 pub(crate) enum TypeUnificationResult {
     Matching,
@@ -1095,6 +1093,7 @@ enum CallResolution {
     },
     AbilityCall {
         callee: Callee,
+        signature: FunctionSignature,
         declaration: FunctionId,
         receiver: Option<TypedExprId>,
         type_args: TmpSlice<CallTypeArg>,
@@ -1116,9 +1115,6 @@ pub enum Callee {
     Abstract {
         name: Option<StringId>,
         function_type: TypeId,
-    },
-    AbstractGeneric {
-        signature: Handle<FunctionSignature, TypedProgram>,
     },
     Builtin {
         function_id: FunctionId,
@@ -1158,7 +1154,6 @@ impl Callee {
             Callee::StaticFunction(function_id) => Some(*function_id),
             Callee::StaticLambda { function_id, .. } => Some(*function_id),
             Callee::Abstract { .. } => None,
-            Callee::AbstractGeneric { .. } => None,
             Callee::Builtin { .. } => None,
             Callee::DynamicLambda(_) => None,
             Callee::DynamicAbilityFn { .. } => None,
@@ -1168,12 +1163,12 @@ impl Callee {
     }
 }
 
-static_assert_size!(Call, 36);
+static_assert_size!(Call, 28);
 #[derive(Clone, Copy)]
 pub struct Call {
     pub callee: Callee,
     pub args: PermSlice<TypedExprId>,
-    pub type_args: TypeArgs,
+    pub type_args: TypeSliceId,
 }
 
 #[derive(Clone, Copy)]
@@ -2152,6 +2147,7 @@ pub enum AbilityImplKind {
     /// An ability impl that was derived from a blanket implementation
     DerivedFromBlanket {
         blanket_impl_id: AbilityImplId,
+        blanket_type_args: TypeSliceId,
     },
     /// A 'fake' implementation kind that is cheap to build;
     /// since it never needs to be called; we skip generating functions
@@ -2198,7 +2194,7 @@ pub struct TypedAbilityImpl {
     /// The values for the types that the implementation is responsible for providing.
     /// Yes, they are already baked into the functions but are needed explicitly in order
     /// to do constraint checking
-    pub impl_arguments: TypeIdSlice,
+    pub impl_arguments: TypeSliceId,
     /// Invariant: These functions are ordered how they are defined in the ability, NOT how they appear in
     /// the impl code
     pub functions: PermSlice<Option<AbilityImplFunction>>,
@@ -2521,19 +2517,11 @@ impl TypeDefnContext {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct CodeChunkPos {
     start: u32,
     end: u32,
     source: Span,
-}
-
-#[derive(Clone, Copy)]
-pub struct FunctionSpecialization {
-    pub parent: FunctionId,
-    pub type_arguments: TypeSliceId,
-    pub fnlike_type_arguments: TypeSliceId,
-    pub function: FunctionId,
 }
 
 #[derive(Clone, Copy)]
@@ -2616,7 +2604,7 @@ pub struct TypedProgram {
     pub functions: VPool<TypedFunction, FunctionId>,
     /// (parent function, type args, fnlike type args) -> specialized function.
     /// Rebuilt from `functions` on snapshot restore
-    function_specializations: hashbrown::HashTable<FunctionSpecialization>,
+    function_specializations: hashbrown::HashTable<FunctionId>,
 
     pub variables: VPool<Variable, VariableId>,
 
@@ -2708,7 +2696,7 @@ pub struct TypedProgram {
 
     /// Every metaprogram-emitted source, in emission order
     pub emitted_sources: Vec<EmittedSource>,
-    pub emitted_parse_cache: FxHashMap<(u64, Span), ParsedExprId>,
+    pub emitted_parse_cache: hashbrown::HashTable<(u32, ParsedExprId)>,
 
     // For every static value, once evaluated, we store its runtime representation
     // here; the data lives in vm_static_stack
@@ -2916,7 +2904,7 @@ impl TypedProgram {
                 vm::Vm::make(),
             ],
             emitted_sources: Vec::new(),
-            emitted_parse_cache: FxHashMap::default(),
+            emitted_parse_cache: hashbrown::HashTable::new(),
             vm_shared_static_stack: vm_static_stack,
             vm_global_constant_lookups,
             vm_static_value_lookups: FxHashMap::default(),
@@ -2943,6 +2931,7 @@ impl TypedProgram {
         let empty_struct_id = k1.add_type(Type::Struct(StructType::struc(MSlice::empty())));
         k1.builtin_types.empty = empty_struct_id;
         assert_eq!(empty_struct_id, EMPTY_TYPE_ID);
+        assert_eq!(k1.intern_type_slice(&[]), EMPTY_TYPE_SLICE);
 
         k1
     }
@@ -3026,14 +3015,9 @@ impl TypedProgram {
         self.mem.advise_additional_bytes(2 * source_bytes);
         self.functions.advise_additional_bytes(source_bytes);
         self.reserve_type_tables(source_bytes);
-        let mem = &self.mem;
-        let slices = &self.type_slices;
-        self.function_specializations.reserve(source_bytes / 128, |s| {
-            Self::function_specialization_hash(
-                s.parent,
-                mem.getn(*slices.get(s.type_arguments)),
-                mem.getn(*slices.get(s.fnlike_type_arguments)),
-            )
+        let (functions, mem, type_slices) = (&self.functions, &self.mem, &self.type_slices);
+        self.function_specializations.reserve(source_bytes / 128, |&id| {
+            Self::hash_function_specialization(functions, mem, type_slices, id)
         });
     }
 
@@ -3215,7 +3199,7 @@ impl TypedProgram {
         module_id: ModuleId,
         ns: ParsedNamespaceId,
         text: &str,
-        table: PermSlice<CodeChunkPos>,
+        table: &[CodeChunkPos],
         span: Span,
     ) -> K1Result<()> {
         let file_id = self.add_emitted_source(text, table, span);
@@ -3459,16 +3443,15 @@ impl TypedProgram {
     fn add_match_expr(&mut self, m: TypedMatchExpr, type_id: TypeId, span: Span) -> TypedExprId {
         if let Some(last) = self.mem.getn_mut(m.arms).last_mut() {
             last.case = None;
-            let instrs = self.mem.getn(last.condition.instrs);
-            if instrs.iter().any(|i| !matches!(i, MatchingConditionInstr::Binding { .. })) {
-                let mut bindings = self.mem.new_list(instrs.len() as u32);
-                for instr in instrs {
-                    if matches!(instr, MatchingConditionInstr::Binding { .. }) {
-                        bindings.push(*instr);
-                    }
+            let instrs = self.mem.getn_mut(last.condition.instrs);
+            let mut binding_count = 0;
+            for index in 0..instrs.len() {
+                if let MatchingConditionInstr::Binding { .. } = instrs[index] {
+                    instrs[binding_count] = instrs[index];
+                    binding_count += 1;
                 }
-                last.condition.instrs = bindings.to_slice();
             }
+            last.condition.instrs = last.condition.instrs.take(binding_count);
         }
         self.exprs.add(TypedExpr::Match(m), type_id, span)
     }
@@ -4092,15 +4075,14 @@ impl TypedProgram {
     }
 
     fn add_function(&mut self, mut function: TypedFunction) -> FunctionId {
-        let id = self.functions.next_id();
-        if let Some(specialization_info) = &mut function.specialization_info {
-            specialization_info.specialized_function_id = id;
-            self.register_function_specialization(*specialization_info);
-        }
+        let is_specialization = function.specialization_info.is_some();
         let is_concrete = self.is_function_concrete(&function);
         let is_compiler_debug = function.compiler_debug();
         function.flags.set(TypedFunctionFlags::Concrete, is_concrete);
-        self.functions.add(function);
+        let id = self.functions.add(function);
+        if is_specialization {
+            self.register_function_specialization(id);
+        }
         if is_compiler_debug {
             eprintln!(
                 "is_function_concrete={is_concrete} for {}",
@@ -4156,7 +4138,7 @@ impl TypedProgram {
         &mut self,
         self_type_id: TypeId,
         base_ability_id: AbilityId,
-        impl_arguments: TypeIdSlice,
+        impl_arguments: TypeSliceId,
         span: Span,
     ) -> AbilityImplHandle {
         let base_scope_id = self.abilities.get(base_ability_id).scope_id;
@@ -4245,11 +4227,9 @@ impl TypedProgram {
             // We have to directly remove 'Self' from the type parameters of the signature
             // since it's the only one of the ability params that gets 'encoded' as a type
             // parameter to the function
-            let type_params_minus_self =
-                self.mem.pushn(self.get_ability_fn_own_type_params(generic_sig.type_params));
             let specialized_signature = FunctionSignature {
                 function_type: specialized_function_type,
-                type_params: type_params_minus_self,
+                type_params: Self::get_ability_fn_own_type_params(generic_sig.type_params),
                 ..generic_sig
             };
             debug!(
@@ -4367,12 +4347,15 @@ impl TypedProgram {
 
         if let Some(blanket_impls_for_base) = self.blanket_impls.get(&target_base_ability_id) {
             for blanket_impl_id in blanket_impls_for_base.as_slice(&self.mem).iter().copied() {
-                match self.try_apply_blanket_implementation(
+                let tmp_mark = self.tmp.mark();
+                let applied = self.try_apply_blanket_implementation(
                     blanket_impl_id,
                     self_type_id,
                     parameter_constraints,
                     span,
-                ) {
+                );
+                self.tmp.reset_to(tmp_mark);
+                match applied {
                     None => debug!("Blanket impl didn't work"),
                     Some(impl_handle) => return Ok((impl_handle, SelfAdjust::None)),
                 }
@@ -4404,12 +4387,15 @@ impl TypedProgram {
             }
             if let Some(blanket_impls_for_base) = self.blanket_impls.get(&target_base_ability_id) {
                 for blanket_impl_id in blanket_impls_for_base.as_slice(&self.mem).iter().copied() {
-                    if let Some(impl_handle) = self.try_apply_blanket_implementation(
+                    let tmp_mark = self.tmp.mark();
+                    let applied = self.try_apply_blanket_implementation(
                         blanket_impl_id,
                         adjusted_self_type_id,
                         parameter_constraints,
                         span,
-                    ) {
+                    );
+                    self.tmp.reset_to(tmp_mark);
+                    if let Some(impl_handle) = applied {
                         return Ok((impl_handle, adjust));
                     }
                 }
@@ -4444,7 +4430,7 @@ impl TypedProgram {
                 let impl_handle = self.generate_builtin_ability_impl(
                     self_type_id,
                     target_base_ability_id,
-                    MSlice::empty(),
+                    EMPTY_TYPE_SLICE,
                     span,
                 );
                 return Ok((impl_handle, SelfAdjust::None));
@@ -4455,7 +4441,7 @@ impl TypedProgram {
             if let Type::Enum(e) = self.types.get(self_type_id) {
                 // ability enum[impl v]
                 // Assign 'v' to the integer type of the enum!
-                let impl_arguments = self.mem.pushn(&[e.int_type.type_id()]);
+                let impl_arguments = self.intern_type_slice(&[e.int_type.type_id()]);
                 let impl_handle = self.generate_builtin_ability_impl(
                     self_type_id,
                     target_base_ability_id,
@@ -4469,7 +4455,7 @@ impl TypedProgram {
             if let Type::Sum(sum) = self.types.get(self_type_id) {
                 // ability sum[impl v]
                 // Assign 'v' to the integer type of the sum!
-                let impl_arguments = self.mem.pushn(&[sum.tag_type.type_id()]);
+                let impl_arguments = self.intern_type_slice(&[sum.tag_type.type_id()]);
                 let impl_handle = self.generate_builtin_ability_impl(
                     self_type_id,
                     target_base_ability_id,
@@ -4487,7 +4473,7 @@ impl TypedProgram {
                     let impl_handle = self.generate_builtin_ability_impl(
                         self_type_id,
                         target_base_ability_id,
-                        MSlice::empty(),
+                        EMPTY_TYPE_SLICE,
                         span,
                     );
                     return Ok((impl_handle, SelfAdjust::None));
@@ -4522,7 +4508,7 @@ impl TypedProgram {
                         let impl_handle = self.generate_builtin_ability_impl(
                             self_type_id,
                             target_base_ability_id,
-                            MSlice::empty(),
+                            EMPTY_TYPE_SLICE,
                             span,
                         );
                         return Ok((impl_handle, SelfAdjust::None));
@@ -4576,8 +4562,10 @@ impl TypedProgram {
                         "IMPL {:02} {} with args {}",
                         h.specialized_ability_id.0,
                         self.ident_str(self.abilities.get(h.specialized_ability_id).name),
-                        self.pretty_print_type_slice(
-                            self.ability_impls.get(h.full_impl_id).impl_arguments,
+                        self.pretty_print_types(
+                            self.get_type_slice(
+                                self.ability_impls.get(h.full_impl_id).impl_arguments
+                            ),
                             ", "
                         )
                     )
@@ -4650,7 +4638,7 @@ impl TypedProgram {
         &mut self,
         self_type_id: TypeId,
         base_ability_id: AbilityId,
-        impl_arguments: TypeIdSlice,
+        impl_arguments: TypeSliceId,
         span: Span,
     ) -> AbilityImplHandle {
         let handle =
@@ -4682,7 +4670,7 @@ impl TypedProgram {
         let impl_handle = self.register_builtin_ability_impl(
             self_type_id,
             target_base_ability_id,
-            MSlice::empty(),
+            EMPTY_TYPE_SLICE,
             span,
         );
         let ability_name = self.abilities.get(target_base_ability_id).name;
@@ -4817,7 +4805,7 @@ impl TypedProgram {
     fn impl_arg_named(
         &self,
         base_ability_id: AbilityId,
-        impl_arguments: TypeIdSlice,
+        impl_arguments: TypeSliceId,
         name: StringId,
     ) -> Option<TypeId> {
         let params = self.abilities.get(base_ability_id).parameters;
@@ -4825,7 +4813,7 @@ impl TypedProgram {
         for p in self.mem.getn(params) {
             if p.is_impl_param {
                 if p.name == name {
-                    return Some(*self.mem.get_nth(impl_arguments, index));
+                    return Some(self.get_type_slice(impl_arguments)[index]);
                 }
                 index += 1;
             }
@@ -4887,7 +4875,7 @@ impl TypedProgram {
             "Trying blanket impl {} with blanket arguments {}, impl arguments {}",
             self.ident_str(blanket_ability.name),
             self.pretty_print_types(blanket_arguments, ", "),
-            self.pretty_print_type_slice(blanket_impl.impl_arguments, ", "),
+            self.pretty_print_types(self.get_type_slice(blanket_impl.impl_arguments), ", "),
         );
 
         if blanket_arguments.len() != target_ability_args.len() {
@@ -4922,27 +4910,26 @@ impl TypedProgram {
             };
         }
 
-        let blanket_impl_type_params_handle =
-            self.ability_impls.get(blanket_impl_id).blanket_type_params;
+        let blanket_impl_type_params =
+            self.mem.getn(self.ability_impls.get(blanket_impl_id).blanket_type_params);
         let root_scope_id = self.scopes.root_scope_id();
-        let blanket_impl_type_params = self.mem.getn(blanket_impl_type_params_handle);
 
         let solutions_result = self.with_clean_inference(|k1| {
             k1.infer_types(
                 blanket_impl_type_params,
-                blanket_impl_type_params_handle,
+                blanket_impl_type_params,
                 &args_and_params,
                 span,
                 root_scope_id,
                 None,
             )
         });
-        let (solutions, _all_solutions) = match solutions_result {
+        let solutions = match solutions_result {
             Err(_) => {
                 debug!("Could not solve all blanket impl params");
                 return None;
             }
-            Ok(solutions) => solutions,
+            Ok((solutions, _all_solutions)) => self.tmp.getn(solutions),
         };
 
         // Before going to the trouble of checking constraints and instantiating the blanket
@@ -4951,7 +4938,7 @@ impl TypedProgram {
         // We now know A and B, so we know we'd get an AsPair[A, B] out.
         // See if that is even what is needed, which is in parameter_constraints.
         let solutions_as_pairs: SV4<TypeSubstitutionPair> =
-            self.zip_types_to_subst_pairs(blanket_impl_type_params, solutions.as_slice(&self.mem));
+            self.zip_types_to_subst_pairs(blanket_impl_type_params, solutions);
         let substituted_self =
             self.substitute_in_type(blanket_impl_self_type_id, &solutions_as_pairs);
         if let Err(msg) = self.check_types(substituted_self, self_type_id, root_scope_id) {
@@ -4996,7 +4983,7 @@ impl TypedProgram {
         &mut self,
         self_type_id: TypeId,
         blanket_impl_id: AbilityImplId,
-        solutions: TypeArgs,
+        solutions: &[TypeId],
     ) -> K1Result<AbilityImplHandle> {
         let blanket_impl = self.ability_impls.get(blanket_impl_id).clone();
 
@@ -5005,7 +4992,7 @@ impl TypedProgram {
             "instantiate_blanket_impl: impl {} for {} with {}",
             self.ident_str(self.abilities.get(generic_base_ability_id).name),
             self.type_id_to_string(self_type_id),
-            self.pretty_print_types(solutions.as_slice(&self.mem), ", ")
+            self.pretty_print_types(solutions, ", ")
         );
 
         let new_impl_scope = self.scopes.add_sibling_scope(
@@ -5029,11 +5016,8 @@ impl TypedProgram {
                 + impl_param_count as u32
                 + 2,
         );
-        for (param, solution) in self
-            .mem
-            .getn(blanket_impl.blanket_type_params)
-            .iter()
-            .zip(solutions.as_slice(&self.mem))
+        for (param, solution) in
+            self.mem.getn(blanket_impl.blanket_type_params).iter().zip(solutions)
         {
             pairs.push(TypeSubstitutionPair { from: *param, to: *solution });
         }
@@ -5059,11 +5043,10 @@ impl TypedProgram {
             blanket_impl.span,
         );
 
-        let mut substituted_impl_arguments: List<TypeId, _> =
-            self.mem.new_list(blanket_impl.impl_arguments.len());
-        for (blanket_impl_arg, impl_param) in self
-            .mem
-            .getn(blanket_impl.impl_arguments)
+        let blanket_impl_arguments = self.get_type_slice(blanket_impl.impl_arguments);
+        let mut substituted_impl_arguments: TmpList<TypeId> =
+            self.tmp.new_list(blanket_impl_arguments.len() as u32);
+        for (blanket_impl_arg, impl_param) in blanket_impl_arguments
             .iter()
             .zip(self.mem.getn(target_ability_impl_params).iter().filter(|p| p.is_impl_param))
         {
@@ -5081,16 +5064,19 @@ impl TypedProgram {
         pairs.push(TypeSubstitutionPair { from: blanket_ability_self, to: self_type_id });
         self.bind_substitutions(new_impl_scope, pairs.as_slice());
 
+        let substituted_impl_arguments =
+            self.intern_type_slice(substituted_impl_arguments.as_slice());
         let mut pending_functions = self.mem.new_list(blanket_impl.functions.len());
         pending_functions.fill_to_cap(None);
 
+        let blanket_type_args = self.intern_type_slice(solutions);
         let id = self.add_ability_impl(TypedAbilityImpl {
-            kind: AbilityImplKind::DerivedFromBlanket { blanket_impl_id },
+            kind: AbilityImplKind::DerivedFromBlanket { blanket_impl_id, blanket_type_args },
             blanket_type_params: MSlice::empty(),
             self_type_id,
             ability_id: concrete_ability_id,
             base_ability_id: generic_base_ability_id,
-            impl_arguments: substituted_impl_arguments.to_slice(),
+            impl_arguments: substituted_impl_arguments,
             functions: pending_functions.to_slice(),
             substitutions: pairs.to_slice(),
             scope_id: new_impl_scope,
@@ -5113,7 +5099,8 @@ impl TypedProgram {
         if let Some(function) = *self.mem.get_nth(imp.functions, index as usize) {
             return function;
         }
-        let AbilityImplKind::DerivedFromBlanket { blanket_impl_id } = imp.kind else {
+        let AbilityImplKind::DerivedFromBlanket { blanket_impl_id, blanket_type_args } = imp.kind
+        else {
             self.ice_span(imp.span, "pending function on a non-blanket-derived impl")
         };
         let blanket_functions = self.ability_impls.get(blanket_impl_id).functions;
@@ -5123,8 +5110,7 @@ impl TypedProgram {
             self.ice_span(imp.span, "blanket impl function is not a declared function")
         };
         let resolved = match self.check_ability_fn_where_constraints(
-            imp.ability_id,
-            imp.impl_arguments,
+            imp.signature(),
             imp.self_type_id,
             index,
             imp.scope_id,
@@ -5132,14 +5118,6 @@ impl TypedProgram {
         ) {
             Err(failure) => AbilityImplFunction::Unavailable(failure.message),
             Ok(()) => {
-                let blanket_param_count =
-                    self.ability_impls.get(blanket_impl_id).blanket_type_params.len() as usize;
-                let mut solutions: SV8<TypeId> = smallvec![];
-                for pair in &self.mem.getn(imp.substitutions)[..blanket_param_count] {
-                    solutions.push(pair.to);
-                }
-                let solutions_handle = self.intern_type_slice(&solutions);
-                let no_fnlike_args = self.intern_type_args(TypeArgs::empty());
                 let function_type = self.substitute_in_type(
                     self.get_function(blanket_function_id).type_id,
                     self.mem.getn(imp.substitutions),
@@ -5147,8 +5125,8 @@ impl TypedProgram {
                 let specialized_function_id = self.specialize_function(
                     blanket_function_id,
                     function_type,
-                    solutions_handle,
-                    no_fnlike_args,
+                    blanket_type_args,
+                    EMPTY_TYPE_SLICE,
                     Some((imp.ability_id, imp.self_type_id)),
                 );
                 self.add_specialized_function_scope(specialized_function_id, imp.scope_id, &[]);
@@ -6200,7 +6178,7 @@ impl TypedProgram {
                         self.ability_signature_to_string(signature)
                     );
                 };
-                let callee = self.resolve_ability_impl_fn_callee(
+                let (callee, impl_fn_signature) = self.resolve_ability_impl_fn_callee(
                     impl_handle.full_impl_id,
                     tafr.index,
                     ctx.scope_id,
@@ -6216,6 +6194,7 @@ impl TypedProgram {
                 )?;
                 let resolution = CallResolution::AbilityCall {
                     callee,
+                    signature: impl_fn_signature,
                     declaration: tafr.function_id,
                     receiver: None,
                     type_args,
@@ -6642,10 +6621,10 @@ impl TypedProgram {
                     )?;
                     debug!(
                         "I reverse-engineered these: {}",
-                        self.pretty_print_types(solutions.as_slice(&self.mem), ", ")
+                        self.pretty_print_types(self.tmp.getn(solutions), ", ")
                     );
-                    let instance = self
-                        .instantiate_generic_type(gi.generic_parent, solutions.as_slice(&self.mem));
+                    let instance =
+                        self.instantiate_generic_type(gi.generic_parent, self.tmp.getn(solutions));
                     let instance_fields = self.types.get(instance).expect_struct().fields;
                     let mut fields_match = true;
                     for (field, instance_field) in
@@ -6664,8 +6643,11 @@ impl TypedProgram {
             };
             match solved_instance {
                 Some(instance) => instance,
-                None => self.add_type_with_items(field_types.as_slice(), |fields| {
-                    Type::Struct(StructType { fields, record_kind: expected_struct.record_kind })
+                None => self.add_type_with_storage(|mem| {
+                    Type::Struct(StructType {
+                        fields: mem.pushn(field_types.as_slice()),
+                        record_kind: expected_struct.record_kind,
+                    })
                 }),
             }
         };
@@ -6814,9 +6796,10 @@ impl TypedProgram {
         // field of the environment struct. Resolving through eval_variable applies the
         // lambda-boundary check when this lambda is itself nested inside another one.
         let captures = self.ast.mem.getn(lambda_captures);
-        let mut capture_field_types: SV4<TypeId> = smallvec![];
-        let mut env_field_types = self.mem.new_list(lambda_captures.len());
-        let mut env_field_exprs = self.mem.new_list(lambda_captures.len());
+        let mut env_field_types: TmpList<StructTypeField> =
+            self.tmp.new_list(lambda_captures.len());
+        let mut env_field_exprs: TmpList<StructLiteralField> =
+            self.tmp.new_list(lambda_captures.len());
         for (index, capture) in captures.iter().enumerate() {
             if captures[..index].iter().any(|prior| prior.name == capture.name) {
                 kbail!(self, capture.span, "Duplicate capture '{}'", capture.name);
@@ -6854,7 +6837,6 @@ impl TypedProgram {
                 variable_expr
             };
             let field_type = self.exprs.get_type(field_expr);
-            capture_field_types.push(field_type);
             env_field_types.push(StructTypeField {
                 type_id: field_type,
                 name: capture.name,
@@ -6862,8 +6844,6 @@ impl TypedProgram {
             });
             env_field_exprs.push(StructLiteralField { name: capture.name, expr: Some(field_expr) });
         }
-        let env_fields_handle = env_field_types.to_slice();
-        let env_field_exprs_handle = env_field_exprs.to_slice();
 
         let lambda_scope_id =
             self.scopes.add_child_scope(ctx.scope_id, ScopeType::LambdaScope, ScopeOwnerId::None);
@@ -6871,8 +6851,9 @@ impl TypedProgram {
             lambda_scope_id,
             ScopeLambdaInfo { expected_return_type, returned_variable: None },
         );
-        let mut typed_params = self.mem.new_list(lambda_arguments.len() + 1);
-        let mut param_variables = self.mem.new_list(lambda_arguments.len() + 1);
+        let mut typed_params: TmpList<FnParamType> = self.tmp.new_list(lambda_arguments.len() + 1);
+        let mut param_variables: TmpList<TypedFunctionParam> =
+            self.tmp.new_list(lambda_arguments.len() + 1);
         for (index, arg) in self.ast.mem.getn(lambda_arguments).iter().enumerate() {
             let arg_type_id = match arg.ty {
                 Some(type_expr) => self.eval_type_expr(type_expr, ctx.scope_id)?,
@@ -6916,10 +6897,12 @@ impl TypedProgram {
         // are all in place before the body is evaluated, so capture references in the body
         // resolve as ordinary variables.
         let closure_setup: Option<ClosureSetup> = if is_closure {
-            let environment_struct_type =
-                self.add_type(Type::Struct(StructType::struc(env_fields_handle)));
+            let environment_struct_type = self.add_type_with_storage(|mem| {
+                Type::Struct(StructType::struc(mem.pushn(env_field_types.as_slice())))
+            });
+            let env_fields = self.mem.pushn(env_field_exprs.as_slice());
             let environment_struct = self.exprs.add(
-                TypedExpr::Struct(StructLiteral { fields: env_field_exprs_handle }),
+                TypedExpr::Struct(StructLiteral { fields: env_fields }),
                 environment_struct_type,
                 span,
             );
@@ -6960,7 +6943,7 @@ impl TypedProgram {
             prologue_stmts.push(environment_casted_variable.defn_stmt);
             let mut capture_bindings: SV4<(VariableId, Span)> = smallvec![];
             for (field_index, capture) in captures.iter().enumerate() {
-                let field_type = capture_field_types[field_index];
+                let field_type = env_field_types[field_index].type_id;
                 let env_variable_expr =
                     self.synth_variable_expr(environment_casted_variable.variable_id, capture.span);
                 let env_deref = self.synth_dereference(env_variable_expr);
@@ -7042,11 +7025,7 @@ impl TypedProgram {
 
         // No captures: this is just a regular function
         if !is_closure {
-            let function_type = self.add_type(Type::Function(FunctionType {
-                physical_params: typed_params.to_slice(),
-                return_type,
-                is_lambda: false,
-            }));
+            let function_type = self.add_function_type(typed_params.as_slice(), return_type, false);
 
             let body_function_id = self.functions.next_id();
             {
@@ -7060,10 +7039,11 @@ impl TypedProgram {
             for v in param_variables.iter() {
                 self.variables.get_mut(v.variable_id).kind = VariableKind::FnParam(body_function_id)
             }
+            let params = self.mem.pushn(param_variables.as_slice());
             self.add_function(TypedFunction::synthesized(
                 name,
                 lambda_scope_id,
-                param_variables.to_slice(),
+                params,
                 body_expr_id,
                 expr_id.into(),
                 function_type,
@@ -7110,16 +7090,13 @@ impl TypedProgram {
             self.variables.get_mut(v.variable_id).kind = VariableKind::FnParam(body_function_id)
         }
 
-        let function_type = self.add_type(Type::Function(FunctionType {
-            physical_params: typed_params.to_slice(),
-            return_type,
-            is_lambda: true,
-        }));
+        let function_type = self.add_function_type(typed_params.as_slice(), return_type, true);
 
+        let params = self.mem.pushn(param_variables.as_slice());
         let actual_body_function_id = self.add_function(TypedFunction::synthesized(
             name,
             lambda_scope_id,
-            param_variables.to_slice(),
+            params,
             body_expr_id,
             expr_id.into(),
             function_type,
@@ -8054,9 +8031,8 @@ impl TypedProgram {
                 if idx > 0 {
                     implemented.push('\n');
                 }
-                implemented.push_str(&self.ability_impl_signature_to_string(
-                    h.specialized_ability_id,
-                    self.ability_impls.get(h.full_impl_id).impl_arguments,
+                implemented.push_str(&self.ability_signature_to_string(
+                    self.ability_impls.get(h.full_impl_id).signature(),
                 ));
             }
             kerr!(
@@ -8187,7 +8163,7 @@ impl TypedProgram {
         debug!("matching condition: {}", self.ast.expr_id_to_string(condition));
         let mut all_patterns: SV4<(TypedPatternId, TypedExprId)> = smallvec![];
         let mut allow_bindings: bool = true;
-        let mut instrs: List<MatchingConditionInstr, _> = self.mem.new_list(2);
+        let mut instrs: SV8<MatchingConditionInstr> = smallvec![];
         let condition_span = self.ast.exprs.get_span(condition);
         // If there are no boolean conditions, we can check for infallibility
         let mut is_single_pattern_only = true;
@@ -8263,7 +8239,7 @@ impl TypedProgram {
             Ok(MatchingConditionResult::NeverBlock(never_block))
         } else {
             Ok(MatchingConditionResult::MatchingCondition(MatchingCondition {
-                instrs: instrs.to_slice_trim(&mut self.mem),
+                instrs: self.mem.pushn(&instrs),
             }))
         }
     }
@@ -8318,7 +8294,7 @@ impl TypedProgram {
         parsed_expr_id: ParsedExprId,
         allow_bindings: &mut bool,
         all_patterns: &mut SV4<(TypedPatternId, TypedExprId)>,
-        instrs: &mut List<MatchingConditionInstr, TypedProgram>,
+        instrs: &mut SV8<MatchingConditionInstr>,
         is_single_pattern_only: &mut bool,
         ctx: EvalExprContext,
     ) -> K1Result<()> {
@@ -8340,10 +8316,7 @@ impl TypedProgram {
                     ctx.scope_id,
                     *allow_bindings,
                 )?;
-                instrs.push_grow(
-                    &mut self.mem,
-                    MatchingConditionInstr::Binding { let_stmt: subject_var.defn_stmt },
-                );
+                instrs.push(MatchingConditionInstr::Binding { let_stmt: subject_var.defn_stmt });
                 self.compile_pattern_into_values(
                     pattern,
                     pattern_match::PatternTarget::Variable(subject_var.variable_id),
@@ -8396,7 +8369,7 @@ impl TypedProgram {
                 if let Err(msg) = self.check_types(BOOL_TYPE_ID, condition_type, ctx.scope_id) {
                     kbail!(self, span, "Expected boolean condition: {msg}");
                 };
-                instrs.push_grow(&mut self.mem, MatchingConditionInstr::cond(condition));
+                instrs.push(MatchingConditionInstr::cond(condition));
                 Ok(())
             }
         }
@@ -8619,7 +8592,7 @@ impl TypedProgram {
                 let call = Call {
                     callee: Callee::StaticFunction(function_id),
                     args: self.mem.pushn(&[lhs, rhs]),
-                    type_args: TypeArgs::empty(),
+                    type_args: EMPTY_TYPE_SLICE,
                 };
                 self.finish_call(call, Some(declaration), span, ctx)?
             }
@@ -8668,8 +8641,13 @@ impl TypedProgram {
                     e.message,
                 )
             })?;
-        let output_type =
-            *self.mem.get_nth(self.ability_impls.get(try_impl.full_impl_id).impl_arguments, 0);
+        let output_type = self
+            .impl_arg_named(
+                ABILITY_ID_TRY,
+                self.ability_impls.get(try_impl.full_impl_id).impl_arguments,
+                self.ast.idents.b.t,
+            )
+            .unwrap();
 
         let rhs = self.eval_expr(rhs, ctx.with_expected_type(Some(output_type)))?;
         let rhs_type = self.exprs.get_type(rhs);
@@ -8955,7 +8933,7 @@ impl TypedProgram {
 
     pub fn get_expr_trivial_exit(&self, expr: TypedExprId) -> Option<TrivialExit> {
         match self.exprs.get(expr) {
-            TypedExpr::StaticValue(s) if s.value_id == self.static_values.empty_id() => {
+            TypedExpr::StaticValue(s) if s.value_id == StaticValuePool::EMPTY => {
                 Some(TrivialExit::Fallthrough)
             }
             TypedExpr::Break(brk) => match self.get_expr_trivial_exit(brk.value) {
@@ -9525,10 +9503,13 @@ impl TypedProgram {
                     }
                     None => {
                         let subst_pairs = self.dyn_ability_subst_pairs(ao.signature);
-                        let reason = self
-                            .dyn_slot_fn_type(ability_self_type, &subst_pairs, fn_ref.function_id)
-                            .err()
-                            .unwrap_or_else(|| "unknown".to_string());
+                        let Err(reason) = self.dyn_slot_fn_type(
+                            ability_self_type,
+                            &subst_pairs,
+                            fn_ref.function_id,
+                        ) else {
+                            self.ice_span(call_span, "dyn-dispatchable slot missing from object")
+                        };
                         kbail!(
                             self,
                             call_span,
@@ -9775,13 +9756,13 @@ impl TypedProgram {
             EvalTypeExprContext::EMPTY,
             span,
         )?;
-        let type_args = TypeArgs::from_slice_in(self.mem.getn(typed_type_args), &mut self.mem);
+        let type_args = self.tmp.getn(typed_type_args);
 
         let cached_specialization =
-            self.find_function_specialization(generic_function_id, type_args, TypeArgs::empty());
+            self.find_function_specialization(generic_function_id, type_args, &[]);
         let specialized_function_type = match cached_specialization {
             Some(function_id) => self.get_function(function_id).type_id,
-            None => self.substitute_in_function_signature(type_args, TypeArgs::empty(), signature),
+            None => self.substitute_in_function_signature(type_args, &[], signature),
         };
         if self.get_type_variable_counts(specialized_function_type).is_abstract()
             || ctx.is_inference()
@@ -9804,7 +9785,7 @@ impl TypedProgram {
             Some(function_id) => function_id,
             None => self.add_function_specialization(
                 type_args,
-                TypeArgs::empty(),
+                &[],
                 generic_function_id,
                 specialized_function_type,
             ),
@@ -9918,15 +9899,7 @@ impl TypedProgram {
         let lambda_object_type_id =
             self.add_lambda_object(dyn_function.type_id, dyn_function.parsed_id);
 
-        let null_value_id = self.static_values.add(StaticValue::Zero(POINTER_TYPE_ID));
-        let null_ptr_expr = self.exprs.add(
-            TypedExpr::StaticValue(StaticConstantExpr {
-                value_id: null_value_id,
-                is_typed_as_static: false,
-            }),
-            POINTER_TYPE_ID,
-            call_span,
-        );
+        let null_ptr_expr = self.add_static_constant_expr(StaticValuePool::NULLPTR, call_span);
         let fn_ptr_field = StructLiteralField {
             name: self.ast.idents.b.fn_ptr,
             expr: Some(self.function_to_pointer(dyn_function_id, call_span)),
@@ -9978,17 +9951,12 @@ impl TypedProgram {
         let function_type = self.types.get(function_type_id).as_function().unwrap();
         let return_type = function_type.return_type;
         let physical_params = function_type.physical_params;
-        let empty_env_struct_type = EMPTY_TYPE_ID;
-        let empty_env_struct_ref = self.add_reference_type(empty_env_struct_type);
-        let mut new_params = self.mem.new_list(physical_params.len() + 1);
+        let mut new_params: TmpList<FnParamType> = self.tmp.new_list(physical_params.len() + 1);
 
-        new_params.push(FnParamType { type_id: empty_env_struct_ref, kind: FnParamKind::Plain });
+        new_params.push(FnParamType { type_id: POINTER_TYPE_ID, kind: FnParamKind::Plain });
         new_params.extend(self.mem.getn(physical_params));
 
-        let new_function_type =
-            FunctionType { physical_params: new_params.to_slice(), return_type, is_lambda: true };
-
-        self.add_type(Type::Function(new_function_type))
+        self.add_function_type(new_params.as_slice(), return_type, true)
     }
 
     /// After resolving to a particular root AbilityId + function index using just names,
@@ -10007,6 +9975,7 @@ impl TypedProgram {
     ) -> K1Result<CallResolution> {
         let ability_fn_sig = self.get_function(ability_function_ref.function_id).signature();
         let base_ability_id = ability_function_ref.ability_id;
+        let base_ability_name = self.abilities.get(base_ability_id).name;
         let ability_fn_type = *self.types.get(ability_fn_sig.function_type).as_function().unwrap();
         let ability_fn_return_type = ability_fn_type.return_type;
         let ability_params = self.abilities.get(base_ability_id).parameters;
@@ -10015,7 +9984,8 @@ impl TypedProgram {
         // The function's own type params (following the injected Self) participate in
         // inference too, so the expected return type and explicit type args can reach
         // value arguments; their final solutions come from the impl function call
-        let fn_own_type_params = self.get_ability_fn_own_type_params(ability_fn_sig.type_params);
+        let fn_own_type_params =
+            self.mem.getn(Self::get_ability_fn_own_type_params(ability_fn_sig.type_params));
 
         let mut all_type_params =
             self.tmp.new_list(ability_params.len() + 1 + fn_own_type_params.len() as u32);
@@ -10027,7 +9997,7 @@ impl TypedProgram {
             all_type_params.push(*tp);
         }
 
-        let self_only_type_params_handle = self.mem.pushn(&[ability_self_type_id]);
+        let self_only_type_params = [ability_self_type_id];
 
         let (call_type_args, bound_args) = self.bind_ability_call_args(
             ability_function_ref,
@@ -10056,14 +10026,14 @@ impl TypedProgram {
         );
 
         debug!("all ability params: {}", self.pretty_print_types(&all_type_params, ", "));
-        debug!("to solve: {}", self.pretty_print_type_slice(self_only_type_params_handle, ", "));
+        debug!("to solve: {}", self.pretty_print_types(&self_only_type_params, ", "));
 
         let excluded_args =
             aligned.get_fnlike_args(ability_fn_sig.fnlike_type_params, &mut self.tmp, &self.mem);
         let (self_solution, other_solved) = self
             .infer_types(
                 &all_type_params,
-                self_only_type_params_handle,
+                &self_only_type_params,
                 self.tmp.getn(inference_pairs),
                 call_span,
                 ctx.scope_id,
@@ -10082,7 +10052,7 @@ impl TypedProgram {
                 continue;
             }
             // other_solved is parallel to all_type_params: [Self, ...ability_params, ...]
-            let solution = other_solved.as_slice(&self.mem)[1 + index];
+            let solution = self.tmp.getn(other_solved)[1 + index];
 
             // If we've already solved for one of the params that appear in this ability signature,
             // we need to constrain our ability impl search with those solutions
@@ -10092,7 +10062,7 @@ impl TypedProgram {
                 Some(solution)
             });
         }
-        let solved_self = self_solution.as_slice(&self.mem)[0];
+        let solved_self = self.tmp.getn(self_solution)[0];
 
         let solved_self = self.get_type_family_type(solved_self);
         let (impl_handle, _) = self
@@ -10109,20 +10079,22 @@ impl TypedProgram {
                     self,
                     call_span,
                     "Call to {}/{} with self = {} does not work\n{}",
-                    &self.ability_impl_signature_to_string(base_ability_id, MSlice::empty()),
+                    base_ability_name,
                     fn_call.name.name,
                     solved_self,
                     msg,
                 )
             })?;
 
+        let (callee, signature) = self.resolve_ability_impl_fn_callee(
+            impl_handle.full_impl_id,
+            ability_function_ref.index,
+            ctx.scope_id,
+            call_span,
+        )?;
         Ok(CallResolution::AbilityCall {
-            callee: self.resolve_ability_impl_fn_callee(
-                impl_handle.full_impl_id,
-                ability_function_ref.index,
-                ctx.scope_id,
-                call_span,
-            )?,
+            callee,
+            signature,
             declaration: ability_function_ref.function_id,
             receiver: receiver_if_method,
             type_args: call_type_args,
@@ -10141,7 +10113,7 @@ impl TypedProgram {
     ) -> K1Result<(TmpSlice<CallTypeArg>, TmpSlice<Option<MaybeTypedExpr>>)> {
         let ability_fn_sig = self.get_function(ability_function_ref.function_id).signature();
         let call_type_args = self.eval_call_type_args(
-            self.get_ability_fn_own_type_params(ability_fn_sig.type_params),
+            self.mem.getn(Self::get_ability_fn_own_type_params(ability_fn_sig.type_params)),
             self.ast.mem.getn(fn_call.type_args(&self.ast.mem)),
             call_span,
             scope_id,
@@ -10357,14 +10329,13 @@ impl TypedProgram {
                 };
 
                 let mut stashed_payload: SV8<(ParsedExprId, TypedExprId)> = smallvec![];
-                let solved_type_params: TypeSliceId = match payload_if_needed {
+                let concrete_type = match payload_if_needed {
                     None => {
                         match ctx.expected_type_id.map(|t| (t, self.get_instance_info(t))) {
                             Some((expected_type, Some(spec_info))) => {
                                 // We're expecting a specific instance of a generic sum
                                 if spec_info.generic_parent == provided_type {
-                                    // Solved params
-                                    spec_info.type_args
+                                    expected_type
                                 } else {
                                     kbail!(
                                         self,
@@ -10398,14 +10369,10 @@ impl TypedProgram {
                             span,
                             ctx.scope_id,
                         )?;
-                        self.intern_type_args(solutions)
+                        self.instantiate_generic_type(provided_type, self.tmp.getn(solutions))
                     }
                 };
 
-                let concrete_type = self.instantiate_generic_type(
-                    provided_type,
-                    self.get_type_slice(solved_type_params),
-                );
                 let sum_constr = self.eval_sum_constructor(
                     concrete_type,
                     variant_name,
@@ -10680,32 +10647,18 @@ impl TypedProgram {
     }
 
     pub fn get_callee_function_signature(&self, callee: &Callee) -> FunctionSignature {
-        match callee {
-            Callee::StaticFunction(function_id) => self.get_function(*function_id).signature(),
-            Callee::StaticLambda { function_id, .. } => self.get_function(*function_id).signature(),
-            Callee::Abstract { name, function_type } => {
-                FunctionSignature::make_no_generics(*name, *function_type)
+        let name = match callee {
+            Callee::StaticFunction(function_id) | Callee::StaticLambda { function_id, .. } => {
+                return self.get_function(*function_id).signature();
             }
-            Callee::AbstractGeneric { signature } => *self.mem.get(*signature),
-            Callee::Builtin { function_id, function_type } => FunctionSignature::make_no_generics(
-                Some(self.get_function(*function_id).name),
-                *function_type,
-            ),
-            Callee::DynamicFunction { .. } => {
-                let function_type = self.get_callee_function_type(callee);
-                FunctionSignature::make_no_generics(None, function_type)
-            }
-            Callee::DynamicLambda(_) => {
-                let function_type = self.get_callee_function_type(callee);
-                FunctionSignature::make_no_generics(None, function_type)
-            }
-            Callee::DynamicAbilityFn { slot_function_type, .. } => {
-                FunctionSignature::make_no_generics(None, *slot_function_type)
-            }
-            Callee::DynamicAbstract { name, function_type, .. } => {
-                FunctionSignature::make_no_generics(Some(*name), *function_type)
-            }
-        }
+            Callee::Abstract { name, .. } => *name,
+            Callee::Builtin { function_id, .. } => Some(self.get_function(*function_id).name),
+            Callee::DynamicAbstract { name, .. } => Some(*name),
+            Callee::DynamicFunction { .. }
+            | Callee::DynamicLambda(_)
+            | Callee::DynamicAbilityFn { .. } => None,
+        };
+        FunctionSignature::make_no_generics(name, self.get_callee_function_type(callee))
     }
 
     fn resolve_ability_impl_fn_callee(
@@ -10714,32 +10667,32 @@ impl TypedProgram {
         fn_index: u32,
         scope_id: ScopeId,
         span: Span,
-    ) -> K1Result<Callee> {
+    ) -> K1Result<(Callee, FunctionSignature)> {
         let imp = *self.ability_impls.get(impl_id);
         let unavailable_reason = match self.get_ability_impl_function(impl_id, fn_index) {
             AbilityImplFunction::FunctionId(function_id) => {
-                return Ok(Callee::StaticFunction(function_id));
+                return Ok((
+                    Callee::StaticFunction(function_id),
+                    self.get_function(function_id).signature(),
+                ));
             }
             AbilityImplFunction::Unavailable(reason) => reason,
             AbilityImplFunction::Abstract(signature) => {
                 match self.check_ability_fn_where_constraints(
-                    imp.ability_id,
-                    imp.impl_arguments,
+                    imp.signature(),
                     imp.self_type_id,
                     fn_index,
                     scope_id,
                     span,
                 ) {
-                    Ok(()) if signature.has_type_params() => {
-                        return Ok(Callee::AbstractGeneric {
-                            signature: self.mem.push_h(signature),
-                        });
-                    }
                     Ok(()) => {
-                        return Ok(Callee::Abstract {
-                            name: signature.name,
-                            function_type: signature.function_type,
-                        });
+                        return Ok((
+                            Callee::Abstract {
+                                name: signature.name,
+                                function_type: signature.function_type,
+                            },
+                            signature,
+                        ));
                     }
                     Err(failure) => failure.message,
                 }
@@ -10751,7 +10704,7 @@ impl TypedProgram {
             self,
             span,
             "{}/{} is not available for {}: {}",
-            &self.ability_impl_signature_to_string(imp.ability_id, imp.impl_arguments),
+            &self.ability_signature_to_string(imp.signature()),
             ability_fn.function_name,
             imp.self_type_id,
             unavailable_reason,
@@ -10766,7 +10719,6 @@ impl TypedProgram {
             Callee::Abstract { function_type, .. } | Callee::Builtin { function_type, .. } => {
                 *function_type
             }
-            Callee::AbstractGeneric { signature } => self.mem.get(*signature).function_type,
             Callee::DynamicFunction { function_pointer_expr } => {
                 let function_pointer_type =
                     self.get_expr_type(*function_pointer_expr).as_function_pointer().unwrap();
@@ -10791,7 +10743,7 @@ impl TypedProgram {
             Callee::StaticFunction(function_id) | Callee::StaticLambda { function_id, .. } => {
                 self.get_function(*function_id).builtin_type
             }
-            Callee::Abstract { .. } | Callee::AbstractGeneric { .. } => None,
+            Callee::Abstract { .. } => None,
             Callee::Builtin { function_id, .. } => self.get_function(*function_id).builtin_type,
             Callee::DynamicFunction { .. } => None,
             Callee::DynamicLambda(_) => None,
@@ -10949,21 +10901,36 @@ impl TypedProgram {
             }
             Some(resolution) => resolution,
         };
-        let (callee, declaration, method_receiver, ability_call_type_args, bound_args) =
+        let (callee, signature, declaration, method_receiver, ability_call_type_args, bound_args) =
             match call_resolution {
                 CallResolution::OtherExpr(typed_expr_id) => {
                     self.record_call_arg_site(marker_arg_index, None, ctx.scope_id);
                     return Ok(typed_expr_id);
                 }
-                CallResolution::Call(callee) => {
-                    (callee, callee.maybe_function_id(), None, None, None)
-                }
-                CallResolution::MethodCall { callee, receiver } => {
-                    (callee, callee.maybe_function_id(), Some(receiver), None, None)
-                }
-                CallResolution::AbilityCall { callee, declaration, receiver, type_args, args } => {
-                    (callee, Some(declaration), receiver, Some(type_args), Some(args))
-                }
+                CallResolution::Call(callee) => (
+                    callee,
+                    self.get_callee_function_signature(&callee),
+                    callee.maybe_function_id(),
+                    None,
+                    None,
+                    None,
+                ),
+                CallResolution::MethodCall { callee, receiver } => (
+                    callee,
+                    self.get_callee_function_signature(&callee),
+                    callee.maybe_function_id(),
+                    Some(receiver),
+                    None,
+                    None,
+                ),
+                CallResolution::AbilityCall {
+                    callee,
+                    signature,
+                    declaration,
+                    receiver,
+                    type_args,
+                    args,
+                } => (callee, signature, Some(declaration), receiver, Some(type_args), Some(args)),
             };
         let passed_type_args = self.ast.mem.getn(fn_call.type_args(&self.ast.mem));
         self.record_call_arg_site(marker_arg_index, declaration, ctx.scope_id);
@@ -11007,12 +10974,10 @@ impl TypedProgram {
         }
 
         // Now that we have resolved to a function id, we need to specialize it if generic
-        let callee_function_type_id = self.get_callee_function_type(&callee);
-        let signature = self.get_callee_function_signature(&callee);
         debug!("Callee is: {}", self.function_signature_to_string(&signature, declaration));
         let is_generic = signature.has_type_params();
 
-        let original_function_type = self.types.get(callee_function_type_id).as_function().unwrap();
+        let original_function_type = self.types.get(signature.function_type).as_function().unwrap();
         let params = original_function_type.logical_params();
         let bound_args = match bound_args {
             Some(bound_args) => bound_args,
@@ -11087,7 +11052,7 @@ impl TypedProgram {
                     };
                     typechecked_args.push(checked_expr);
                 }
-                (callee, typechecked_args.to_slice(), TypeArgs::empty())
+                (callee, typechecked_args.to_slice(), EMPTY_TYPE_SLICE)
             }
             true => {
                 let original_args_and_params = self.align_args_with_params(
@@ -11102,7 +11067,7 @@ impl TypedProgram {
                 self.splice_stashed_args(original_args_and_params.args, &stashed_args);
 
                 // We infer the type arguments, or just use them if the user has supplied them
-                let type_args = match &known_args {
+                let type_args: &[TypeId] = match &known_args {
                     Some((type_args, _va)) if !type_args.is_empty() => {
                         if type_args.len() != signature.type_params.len() as usize {
                             ice_span!(
@@ -11113,7 +11078,7 @@ impl TypedProgram {
                                 type_args.len(),
                             )
                         }
-                        TypeArgs::from_slice_in(type_args, &mut self.mem)
+                        type_args
                     }
                     _ => {
                         let call_type_args = match ability_call_type_args {
@@ -11125,7 +11090,7 @@ impl TypedProgram {
                                 ctx.scope_id,
                             )?,
                         };
-                        self.infer_and_constrain_call_type_args(
+                        let type_args = self.infer_and_constrain_call_type_args(
                             fn_call,
                             self.tmp.getn(call_type_args),
                             span,
@@ -11133,7 +11098,8 @@ impl TypedProgram {
                             ctx,
                             &original_args_and_params,
                             &mut stashed_args,
-                        )?
+                        )?;
+                        self.tmp.getn(type_args)
                     }
                 };
 
@@ -11144,6 +11110,7 @@ impl TypedProgram {
                         &original_args_and_params,
                         ctx,
                     )?;
+                let fnlike_type_args = self.tmp.getn(fnlike_type_args);
 
                 // A repeat call at already-specialized type args reuses that
                 // specialization's type rather than re-substituting the signature
@@ -11164,7 +11131,10 @@ impl TypedProgram {
                 let is_abstract =
                     self.get_type_variable_counts(specialized_function_type).is_abstract();
 
-                let final_callee = if is_abstract || ctx.is_inference() {
+                let final_callee = if is_abstract
+                    || ctx.is_inference()
+                    || matches!(callee, Callee::Abstract { .. })
+                {
                     Callee::Abstract {
                         name: signature.name,
                         function_type: specialized_function_type,
@@ -11194,15 +11164,17 @@ impl TypedProgram {
                             };
                             Callee::StaticFunction(function_id)
                         }
-                        Callee::AbstractGeneric { .. } => Callee::Abstract {
-                            name: signature.name,
-                            function_type: specialized_function_type,
-                        },
                         _ => self.ice(
                             "Unexpected Callee type for a generic that required specialization",
                             None,
                         ),
                     }
+                };
+                let type_args = match final_callee {
+                    Callee::StaticFunction(function_id) => {
+                        self.get_function(function_id).specialization_info.unwrap().type_arguments
+                    }
+                    _ => self.intern_type_slice(type_args),
                 };
 
                 let specialized_fn_type =
@@ -11223,10 +11195,11 @@ impl TypedProgram {
 
                 // We've finished inference and all types are known; we now compile all the expressions
                 // again to generate code with no holes and fully concrete types.
-                let mut typechecked_args = self.mem.new_list(args_and_params.args.len());
-
                 // We can skip re-evaluating everything if we're just here to learn the return types
-                if !ctx.is_inference() {
+                let typechecked_args = if ctx.is_inference() {
+                    MSlice::empty()
+                } else {
+                    let mut typechecked_args = self.mem.new_list(args_and_params.args.len());
                     let aligned_params = self.mem.getn(args_and_params.params);
                     let receiver_index = FnParamType::get_context_param_count(aligned_params);
                     for (param_index, (maybe_typed_expr, param)) in
@@ -11271,9 +11244,10 @@ impl TypedProgram {
                         };
                         typechecked_args.push(expr);
                     }
-                }
+                    typechecked_args.to_slice()
+                };
 
-                (final_callee, typechecked_args.to_slice(), type_args)
+                (final_callee, typechecked_args, type_args)
             }
         };
         self.record_call_arg_site(marker_arg_index, declaration, ctx.scope_id);
@@ -11498,7 +11472,7 @@ impl TypedProgram {
             }
             BuiltinTyperInline::CompilerModuleDir => Ok(self.synth_module_dir(ctx.scope_id, span)),
             BuiltinTyperInline::TypeId => {
-                let type_id = call.type_args.as_slice(&self.mem)[0];
+                let type_id = self.get_type_slice(call.type_args)[0];
                 self.register_type_metainfo(type_id);
 
                 let type_id_expr = self.synth_type_id_literal(type_id, span);
@@ -11507,7 +11481,7 @@ impl TypedProgram {
             BuiltinTyperInline::TypeSize
             | BuiltinTyperInline::TypeStride
             | BuiltinTyperInline::TypeAlign => {
-                let type_id = call.type_args.as_slice(&self.mem)[0];
+                let type_id = self.get_type_slice(call.type_args)[0];
                 if !self.get_type_variable_counts(type_id).is_inhabited {
                     let v = match intrinsic {
                         BuiltinTyperInline::TypeAlign => 1,
@@ -11584,8 +11558,8 @@ impl TypedProgram {
     ) -> K1Result<()> {
         match intrinsic {
             Builtin::Ir(BuiltinIr::Bitcast) => {
-                let type_from = call.type_args.as_slice(&self.mem)[0];
-                let type_to = call.type_args.as_slice(&self.mem)[1];
+                let type_from = self.get_type_slice(call.type_args)[0];
+                let type_to = self.get_type_slice(call.type_args)[1];
                 let Some(layout_from) = self.get_layout(type_from) else {
                     kbail!(self, span, "Cannot bitcast from unsized type: {}", type_from)
                 };
@@ -11740,7 +11714,7 @@ impl TypedProgram {
             ability_args.push(new_arg);
         }
         let mut impl_args: SV4<TypeId> = smallvec![];
-        for arg in self.mem.getn(signature.impl_arguments) {
+        for arg in self.get_type_slice(signature.impl_arguments) {
             let new_arg = self.substitute_in_type(*arg, set);
             changed |= new_arg != *arg;
             impl_args.push(new_arg);
@@ -11751,7 +11725,7 @@ impl TypedProgram {
         let ability_args = self.intern_type_slice(&ability_args);
         TypedAbilitySignature {
             specialized_ability_id: self.specialize_ability(base_ability_id, ability_args, span),
-            impl_arguments: self.mem.pushn(&impl_args),
+            impl_arguments: self.intern_type_slice(&impl_args),
         }
     }
 
@@ -11792,14 +11766,14 @@ impl TypedProgram {
 
     fn substitute_in_function_signature(
         &mut self,
-        type_arguments: TypeArgs,
-        fnlike_type_arguments: TypeArgs,
+        type_arguments: &[TypeId],
+        fnlike_type_arguments: &[TypeId],
         generic_function_sig: FunctionSignature,
     ) -> TypeId {
         let mark = self.tmp.mark();
         let pairs = self.signature_substitution_pairs(
-            type_arguments.as_slice(&self.mem),
-            fnlike_type_arguments.as_slice(&self.mem),
+            type_arguments,
+            fnlike_type_arguments,
             generic_function_sig,
         );
         let substituted =
@@ -11841,69 +11815,79 @@ impl TypedProgram {
         subst_pairs.to_slice()
     }
 
-    fn function_specialization_hash(parent: FunctionId, args: &[TypeId], fnlike: &[TypeId]) -> u64 {
+    fn function_specialization_hash(
+        parent: FunctionId,
+        type_arguments: &[TypeId],
+        fnlike_type_arguments: &[TypeId],
+    ) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = fxhash::FxHasher::default();
         parent.hash(&mut h);
-        args.hash(&mut h);
-        fnlike.hash(&mut h);
+        type_arguments.hash(&mut h);
+        fnlike_type_arguments.hash(&mut h);
         h.finish()
+    }
+
+    fn hash_function_specialization(
+        functions: &VPool<TypedFunction, FunctionId>,
+        mem: &kmem::Mem<TypedProgram>,
+        type_slices: &VPool<TypeIdSlice, TypeSliceId>,
+        id: FunctionId,
+    ) -> u64 {
+        let info = functions.get(id).specialization_info.unwrap();
+        Self::function_specialization_hash(
+            info.parent_function,
+            mem.getn(*type_slices.get(info.type_arguments)),
+            mem.getn(*type_slices.get(info.fnlike_type_arguments)),
+        )
     }
 
     fn find_function_specialization(
         &self,
         generic_function_id: FunctionId,
-        type_arguments: TypeArgs,
-        fnlike_type_arguments: TypeArgs,
+        type_arguments: &[TypeId],
+        fnlike_type_arguments: &[TypeId],
     ) -> Option<FunctionId> {
-        let args = type_arguments.as_slice(&self.mem);
-        let fnlike = fnlike_type_arguments.as_slice(&self.mem);
-        let hash = Self::function_specialization_hash(generic_function_id, args, fnlike);
+        let hash = Self::function_specialization_hash(
+            generic_function_id,
+            type_arguments,
+            fnlike_type_arguments,
+        );
         self.function_specializations
-            .find(hash, |s| {
-                s.parent == generic_function_id
-                    && self.get_type_slice(s.type_arguments) == args
-                    && self.get_type_slice(s.fnlike_type_arguments) == fnlike
+            .find(hash, |&id| {
+                let info = self.functions.get(id).specialization_info.unwrap();
+                info.parent_function == generic_function_id
+                    && self.get_type_slice(info.type_arguments) == type_arguments
+                    && self.get_type_slice(info.fnlike_type_arguments) == fnlike_type_arguments
             })
-            .map(|s| s.function)
+            .copied()
     }
 
-    pub(crate) fn register_function_specialization(&mut self, info: SpecializationInfo) {
-        let entry = FunctionSpecialization {
-            parent: info.parent_function,
-            type_arguments: info.type_arguments,
-            fnlike_type_arguments: info.fnlike_type_arguments,
-            function: info.specialized_function_id,
-        };
-        let mem = &self.mem;
-        let slices = &self.type_slices;
-        let hash_one = |s: &FunctionSpecialization| {
-            Self::function_specialization_hash(
-                s.parent,
-                mem.getn(*slices.get(s.type_arguments)),
-                mem.getn(*slices.get(s.fnlike_type_arguments)),
+    pub(crate) fn register_function_specialization(&mut self, function_id: FunctionId) {
+        let info = self.functions.get(function_id).specialization_info.unwrap();
+        if self
+            .find_function_specialization(
+                info.parent_function,
+                self.get_type_slice(info.type_arguments),
+                self.get_type_slice(info.fnlike_type_arguments),
             )
-        };
-        let hash = hash_one(&entry);
-        let exists = self
-            .function_specializations
-            .find(hash, |s| {
-                s.parent == entry.parent
-                    && s.type_arguments == entry.type_arguments
-                    && s.fnlike_type_arguments == entry.fnlike_type_arguments
-            })
-            .is_some();
-        if !exists {
-            self.function_specializations.insert_unique(hash, entry, hash_one);
+            .is_none()
+        {
+            let (functions, mem, type_slices) = (&self.functions, &self.mem, &self.type_slices);
+            self.function_specializations.insert_unique(
+                Self::hash_function_specialization(functions, mem, type_slices, function_id),
+                function_id,
+                |&id| Self::hash_function_specialization(functions, mem, type_slices, id),
+            );
         }
     }
 
     fn specialize_function_declaration(
         &mut self,
         // 1 type argument per type parameter
-        type_arguments: TypeArgs,
+        type_arguments: &[TypeId],
         // 1 type argument per fnlike param
-        fnlike_type_arguments: TypeArgs,
+        fnlike_type_arguments: &[TypeId],
         generic_function_id: FunctionId,
     ) -> FunctionId {
         if let Some(specialized_function_id) = self.find_function_specialization(
@@ -11926,8 +11910,8 @@ impl TypedProgram {
 
     fn add_function_specialization(
         &mut self,
-        type_arguments: TypeArgs,
-        fnlike_type_arguments: TypeArgs,
+        type_arguments: &[TypeId],
+        fnlike_type_arguments: &[TypeId],
         generic_function_id: FunctionId,
         function_type: TypeId,
     ) -> FunctionId {
@@ -11941,10 +11925,10 @@ impl TypedProgram {
         );
         debug_assert_eq!(
             type_arguments.len(),
-            self.get_function(generic_function_id).type_params.len()
+            self.get_function(generic_function_id).type_params.len() as usize
         );
-        let type_arguments = self.intern_type_args(type_arguments);
-        let fnlike_type_arguments = self.intern_type_args(fnlike_type_arguments);
+        let type_arguments = self.intern_type_slice(type_arguments);
+        let fnlike_type_arguments = self.intern_type_slice(fnlike_type_arguments);
         self.specialize_function(
             generic_function_id,
             function_type,
@@ -12023,8 +12007,6 @@ impl TypedProgram {
             parent_function: parent_function_id,
             type_arguments,
             fnlike_type_arguments,
-            specialized_function_id: FunctionId::PENDING,
-            specialized_function_type: specialized_function_type_id,
         };
         let flags = parent_function.flags
             & (TypedFunctionFlags::CompilerDebug
@@ -13333,8 +13315,11 @@ impl TypedProgram {
         {
             pairs.push(spair! { base_param.type_variable_id => *ability_arg });
         }
-        for (impl_param, impl_arg) in
-            self.mem.getn(ability.parameters).iter().zip(self.mem.getn(signature.impl_arguments))
+        for (impl_param, impl_arg) in self
+            .mem
+            .getn(ability.parameters)
+            .iter()
+            .zip(self.get_type_slice(signature.impl_arguments))
         {
             pairs.push(spair! { impl_param.type_variable_id => *impl_arg });
         }
@@ -13343,25 +13328,22 @@ impl TypedProgram {
 
     fn check_ability_fn_where_constraints(
         &mut self,
-        specialized_ability_id: AbilityId,
-        impl_arguments: TypeIdSlice,
+        impl_signature: TypedAbilitySignature,
         impl_self_type: TypeId,
         fn_index: u32,
         scope_id: ScopeId,
         span: Span,
     ) -> K1Result<()> {
-        let decl_fn = *self
-            .mem
-            .get_nth(self.abilities.get(specialized_ability_id).functions, fn_index as usize);
+        let decl_fn = *self.mem.get_nth(
+            self.abilities.get(impl_signature.specialized_ability_id).functions,
+            fn_index as usize,
+        );
         let constraints = self.get_function(decl_fn.function_id).ability_where_constraints;
         if constraints.is_empty() {
             return Ok(());
         }
 
-        let pairs = self.get_ability_impl_subst_pairs(
-            TypedAbilitySignature { specialized_ability_id, impl_arguments },
-            impl_self_type,
-        );
+        let pairs = self.get_ability_impl_subst_pairs(impl_signature, impl_self_type);
 
         for c in self.mem.getn(constraints) {
             let target = self.substitute_in_type(c.target, &pairs);
@@ -13388,10 +13370,7 @@ impl TypedProgram {
         debug!(
             "Checking constraint {}: {}",
             self.type_id_to_string(target_type,),
-            self.ability_impl_signature_to_string(
-                signature.specialized_ability_id,
-                signature.impl_arguments
-            )
+            self.ability_signature_to_string(signature)
         );
         // We just can't allow ref self here since we don't have a good way to tell the function
         // call that it will work only if we coerce this argument, we only have types at this point.
@@ -13419,8 +13398,8 @@ impl TypedProgram {
             .mem
             .getn(impl_params)
             .iter()
-            .zip(self.mem.getn(signature.impl_arguments))
-            .zip(self.mem.getn(found_impl_arguments))
+            .zip(self.get_type_slice(signature.impl_arguments))
+            .zip(self.get_type_slice(found_impl_arguments))
         {
             if self.get_type_id_resolved(*constraint_arg, scope_id)
                 != self.get_type_id_resolved(*passed_arg, scope_id)
@@ -13521,11 +13500,8 @@ impl TypedProgram {
                         span,
                         scope_id,
                     )?;
-                    let specialized_function = self.specialize_function_declaration(
-                        TypeArgs::one(passed_type),
-                        TypeArgs::empty(),
-                        function_id,
-                    );
+                    let specialized_function =
+                        self.specialize_function_declaration(&[passed_type], &[], function_id);
                     self.require_function_body(specialized_function, span)?;
                     let predicate_result_static_value_id =
                         self.execute_static_function(specialized_function, &[], span)?;
@@ -13728,8 +13704,8 @@ impl TypedProgram {
             "type ",
         )?;
 
-        let mut ability_arguments: List<TypeId, _> = self.mem.new_list(ability_parameters.len());
-        let mut impl_arguments: List<TypeId, _> = self.mem.new_list(ability_parameters.len());
+        let mut ability_arguments: TmpList<TypeId> = self.tmp.new_list(ability_parameters.len());
+        let mut impl_arguments: TmpList<TypeId> = self.tmp.new_list(ability_parameters.len());
         let mut subst_pairs: SV8<TypeSubstitutionPair> = smallvec![];
         let is_lookup = match role {
             AbilityExprRole::Constraint => false,
@@ -13762,12 +13738,10 @@ impl TypedProgram {
         }
         self.check_type_args_constraints(&subst_pairs, span, scope_id)?;
 
-        let ability_arguments = self.intern_type_slice_handle(ability_arguments.to_slice());
+        let ability_arguments = self.intern_type_slice(ability_arguments.as_slice());
+        let impl_arguments = self.intern_type_slice(impl_arguments.as_slice());
         let specialized_ability_id = self.specialize_ability(ability_id, ability_arguments, span);
-        Ok(TypedAbilitySignature {
-            specialized_ability_id,
-            impl_arguments: impl_arguments.to_slice(),
-        })
+        Ok(TypedAbilitySignature { specialized_ability_id, impl_arguments })
     }
 
     /// True if every ability-side argument of this (possibly specialized) ability is a
@@ -13876,8 +13850,11 @@ impl TypedProgram {
     ) -> SV8<TypeSubstitutionPair> {
         let ability = self.abilities.get(signature.specialized_ability_id);
         let mut pairs: SV8<TypeSubstitutionPair> = smallvec![];
-        for (param, arg) in
-            self.mem.getn(ability.parameters).iter().zip(self.mem.getn(signature.impl_arguments))
+        for (param, arg) in self
+            .mem
+            .getn(ability.parameters)
+            .iter()
+            .zip(self.get_type_slice(signature.impl_arguments))
         {
             pairs.push(spair! { param.type_variable_id => *arg });
         }
@@ -13901,7 +13878,7 @@ impl TypedProgram {
         let function = self.get_function(function_id);
         let signature = function.signature();
         let function_type_id = function.type_id;
-        if !self.get_ability_fn_own_type_params(signature.type_params).is_empty() {
+        if !Self::get_ability_fn_own_type_params(signature.type_params).is_empty() {
             return Err("it has type parameters; call it on a concrete type instead".to_string());
         }
         let fn_type = self.types.get(function_type_id).as_function().unwrap();
@@ -13921,7 +13898,7 @@ impl TypedProgram {
                     .is_some_and(|r| r.inner_type == ability_self_type)
         });
 
-        let mut slot_params = self.mem.new_list(physical_params.len());
+        let mut slot_params: TmpList<FnParamType> = self.tmp.new_list(physical_params.len());
         let first_value_param = if has_receiver {
             slot_params.push(FnParamType { type_id: POINTER_TYPE_ID, kind: FnParamKind::Plain });
             1
@@ -13940,12 +13917,7 @@ impl TypedProgram {
         if self.substitute_in_type(substituted_return, &self_probe) != substituted_return {
             return Err("its return type mentions self".to_string());
         }
-        let slot_fn_type = self.add_type(Type::Function(FunctionType {
-            physical_params: slot_params.to_slice(),
-            return_type: substituted_return,
-            is_lambda: has_receiver,
-        }));
-        Ok(slot_fn_type)
+        Ok(self.add_function_type(slot_params.as_slice(), substituted_return, has_receiver))
     }
 
     fn try_eval_dyn_ability_type(
@@ -13988,7 +13960,7 @@ impl TypedProgram {
         }
 
         let subst_pairs = self.dyn_ability_subst_pairs(signature);
-        let mut fields = self.mem.new_list(ability_functions.len() + 1);
+        let mut fields: TmpList<StructTypeField> = self.tmp.new_list(ability_functions.len() + 1);
         fields.push(StructTypeField {
             name: self.ast.idents.b.state,
             type_id: POINTER_TYPE_ID,
@@ -14020,8 +13992,9 @@ impl TypedProgram {
                 excluded
             );
         }
-        let fields_handle = fields.to_slice();
-        let struct_representation = self.add_type(Type::Struct(StructType::struc(fields_handle)));
+        let struct_representation = self.add_type_with_storage(|mem| {
+            Type::Struct(StructType::struc(mem.pushn(fields.as_slice())))
+        });
         Ok(self
             .add_type(Type::AbilityObject(AbilityObjectType { signature, struct_representation })))
     }
@@ -14091,7 +14064,8 @@ impl TypedProgram {
                         self.scopes
                             .set_scope_owner_id(thunk_scope, ScopeOwnerId::Function(thunk_id));
                         let mut thunk_params = self.mem.new_list(impl_fn_params.len() as u32);
-                        let mut thunk_param_types = self.mem.new_list(impl_fn_params.len() as u32);
+                        let mut thunk_param_types: TmpList<FnParamType> =
+                            self.tmp.new_list(impl_fn_params.len() as u32);
                         let mut call_args: SV4<TypedExprId> = smallvec![];
                         for (index, param) in impl_fn_params.iter().enumerate() {
                             let (param_type, kind) = if index == 0 {
@@ -14131,11 +14105,11 @@ impl TypedProgram {
                             span,
                         );
                         let body_block = self.synth_return_only_block(thunk_scope, call, span);
-                        let thunk_type = self.add_type(Type::Function(FunctionType {
-                            physical_params: thunk_param_types.to_slice(),
-                            return_type: impl_fn_type.return_type,
-                            is_lambda: true,
-                        }));
+                        let thunk_type = self.add_function_type(
+                            thunk_param_types.as_slice(),
+                            impl_fn_type.return_type,
+                            true,
+                        );
                         let name = self.build_ident_with(|k1, s| {
                             write!(s, "{}__dyn_thunk", k1.ident_str(impl_fn.name)).unwrap()
                         });
@@ -14299,7 +14273,7 @@ impl TypedProgram {
 
         // Process parameters
         let param_count = ast_fn.params.len();
-        let mut param_types: List<FnParamType, _> = self.mem.new_list(param_count);
+        let mut param_types: TmpList<FnParamType> = self.tmp.new_list(param_count);
         let mut params = self.mem.new_list(param_count);
         for (idx, fn_param) in self.ast.mem.getn(ast_fn.params).iter().enumerate() {
             let param_type_context = EvalTypeExprContext {
@@ -14585,12 +14559,7 @@ impl TypedProgram {
             },
         };
 
-        let param_types_handle = param_types.to_slice();
-        let function_type_id = self.add_type(Type::Function(FunctionType {
-            physical_params: param_types_handle,
-            return_type,
-            is_lambda: false,
-        }));
+        let function_type_id = self.add_function_type(param_types.as_slice(), return_type, false);
 
         let function_type_params_handle = fnlike_type_params.to_slice_trim(&mut self.mem);
         let function_id = self.functions.next_id();
@@ -14698,7 +14667,7 @@ impl TypedProgram {
         }
         for type_parameter in self.ast.mem.getn(ast_type_params) {
             let mut ability_constraint_signatures = smallvec![];
-            let mut predicate_functions = self.mem.new_list(0);
+            let mut predicate_functions: SV4<QIdent> = smallvec![];
             let mut static_constraint: Option<TypeId> = None;
 
             for parsed_constraint in self.ast.mem.getn(type_parameter.constraints).iter().chain(
@@ -14719,7 +14688,7 @@ impl TypedProgram {
                         ability_constraint_signatures.push(ability_sig);
                     }
                     ParsedTypeConstraintExpr::Predicate(qident) => {
-                        predicate_functions.push_grow(&mut self.mem, *qident);
+                        predicate_functions.push(*qident);
                     }
                     ParsedTypeConstraintExpr::Static(static_expr) => {
                         let static_type = self.eval_type_expr(*static_expr, fn_scope_id)?;
@@ -14736,7 +14705,7 @@ impl TypedProgram {
                     }
                 };
             }
-            let predicate_functions_handle = predicate_functions.to_slice_trim(&mut self.mem);
+            let predicate_functions_handle = self.mem.pushn(&predicate_functions);
             let unconstrained = ability_constraint_signatures.is_empty()
                 && predicate_functions_handle.is_empty()
                 && static_constraint.is_none();
@@ -14778,8 +14747,8 @@ impl TypedProgram {
         Ok(type_params.to_slice())
     }
 
-    fn get_ability_fn_own_type_params(&self, type_params: TypeIdSlice) -> &'static [TypeId] {
-        &self.mem.getn(type_params)[1..]
+    fn get_ability_fn_own_type_params(type_params: TypeIdSlice) -> TypeIdSlice {
+        type_params.skip(1)
     }
 
     fn declare_macro(
@@ -14837,7 +14806,7 @@ impl TypedProgram {
         )?;
 
         let param_count = params_slice.len();
-        let mut param_types: List<FnParamType, _> = self.mem.new_list(param_count);
+        let mut param_types: TmpList<FnParamType> = self.tmp.new_list(param_count);
         let mut params = self.mem.new_list(param_count);
         for fn_param in self.ast.mem.getn(params_slice).iter() {
             let type_id = self.eval_type_expr(fn_param.type_expr, fn_scope_id)?;
@@ -14871,12 +14840,7 @@ impl TypedProgram {
             }
         }
 
-        let param_types_handle = param_types.to_slice();
-        let function_type_id = self.add_type(Type::Function(FunctionType {
-            physical_params: param_types_handle,
-            return_type: code_type,
-            is_lambda: false,
-        }));
+        let function_type_id = self.add_function_type(param_types.as_slice(), code_type, false);
 
         let function_id = self.functions.next_id();
         for v in params.iter() {
@@ -15550,7 +15514,7 @@ impl TypedProgram {
         let _ = self.scopes.add_type(ability_scope_id, self_ident_id, self_type_id);
         for ability_param in self.ast.mem.getn(parsed_ability.params) {
             let mut ability_constraint_signatures: SV4<TypedAbilitySignature> = smallvec![];
-            let mut predicate_functions = self.mem.new_list(0);
+            let mut predicate_functions: SV4<QIdent> = smallvec![];
             for constraint in self.ast.mem.getn(ability_param.constraints) {
                 match constraint {
                     ParsedTypeConstraintExpr::Ability(ability_expr) => {
@@ -15563,7 +15527,7 @@ impl TypedProgram {
                     }
                     ParsedTypeConstraintExpr::Static(_) => {}
                     ParsedTypeConstraintExpr::Predicate(qident) => {
-                        predicate_functions.push_grow(&mut self.mem, *qident);
+                        predicate_functions.push(*qident);
                     }
                 }
             }
@@ -15579,7 +15543,7 @@ impl TypedProgram {
                     Err(msg) => kbail!(self, ability_param.span, "{}", msg),
                 };
 
-            let predicate_functions_handle = predicate_functions.to_slice_trim(&mut self.mem);
+            let predicate_functions_handle = self.mem.pushn(&predicate_functions);
             let param_type_id = self.add_type_parameter(
                 TypeParameter {
                     name: ability_param.name,
@@ -15816,7 +15780,6 @@ impl TypedProgram {
             impl_scope_id,
         )?;
         let ability_id = ability_sig.specialized_ability_id;
-        let impl_arguments_handle = ability_sig.impl_arguments;
 
         // A blanket impl is applied by matching its Self type against a target
         // type, so its blanket-ness must come from the Self type: the only
@@ -15915,8 +15878,7 @@ impl TypedProgram {
 
             if matches!(kind, AbilityImplKind::Concrete)
                 && let Err(failure) = self.check_ability_fn_where_constraints(
-                    ability_id,
-                    impl_arguments_handle,
+                    ability_sig,
                     impl_self_type,
                     ability_function_ref.index,
                     impl_scope_id,
@@ -15956,7 +15918,7 @@ impl TypedProgram {
             // Self) mapped positionally to the impl function's
             let impl_function_span = self.ast.get_function(parsed_impl_function_id).name_span;
             let generic_own_type_params =
-                self.get_ability_fn_own_type_params(generic_fn_type_params);
+                self.mem.getn(Self::get_ability_fn_own_type_params(generic_fn_type_params));
             if generic_own_type_params.len() != impl_fn_type_params.len() as usize {
                 kbail!(
                     self,
@@ -16024,7 +15986,7 @@ impl TypedProgram {
             self_type_id: impl_self_type,
             ability_id,
             base_ability_id,
-            impl_arguments: impl_arguments_handle,
+            impl_arguments: ability_sig.impl_arguments,
             functions: typed_functions.to_slice(),
             substitutions: MSlice::empty(),
             scope_id: impl_scope_id,
@@ -16068,8 +16030,7 @@ impl TypedProgram {
             };
             if self
                 .check_ability_fn_where_constraints(
-                    ability_impl.ability_id,
-                    ability_impl.impl_arguments,
+                    ability_impl.signature(),
                     ability_impl.self_type_id,
                     index as u32,
                     ability_impl.scope_id,
@@ -16523,11 +16484,7 @@ impl TypedProgram {
             .map_err(|e| kerr!(self, span, "ns(reload) requires std/reload: {}", e.message))?;
         let return_type = self.exprs.get_type(body);
         let body_block = self.synth_return_only_block(fn_scope, body, span);
-        let function_type = self.add_type(Type::Function(FunctionType {
-            physical_params: MSlice::empty(),
-            return_type,
-            is_lambda: false,
-        }));
+        let function_type = self.add_function_type(&[], return_type, false);
         let actual_function_id = self.add_function(TypedFunction::synthesized(
             name,
             fn_scope,
@@ -16931,13 +16888,12 @@ impl TypedProgram {
                 table.push(CodeChunkPos { start: origin.start, end: origin.end, source });
             }
             let span = table[0].source;
-            let table = self.mem.pushn(&table);
             let text = self.plan.get(params.text);
             self.append_emitted_definitions(
                 module_id,
                 module_root_parsed_namespace,
                 text,
-                table,
+                &table,
                 span,
             )?;
         }
@@ -17055,20 +17011,6 @@ impl TypedProgram {
         }
 
         if is_core {
-            let fields = self.mem.pushn(&[
-                StructTypeField {
-                    name: self.ast.idents.b.fn_ptr,
-                    type_id: POINTER_TYPE_ID,
-                    span: Span::NONE,
-                },
-                StructTypeField {
-                    name: self.ast.idents.b.env_ptr,
-                    type_id: POINTER_TYPE_ID,
-                    span: Span::NONE,
-                },
-            ]);
-            let t = self.add_type(Type::Struct(StructType::struc(fields)));
-            self.builtin_types.dyn_lambda_obj = Some(t);
             self.builtin_types.code_token_span = Some(self.instantiate_generic_type(
                 self.builtin_types.span(),
                 &[self.builtin_types.code_token()],

@@ -696,11 +696,7 @@ impl TypedProgram {
             }
             // Unlike lambda objects, ability objects are interned by content:
             // every mention of dyn[a[x = t]] must be the same type
-            (Type::AbilityObject(ao1), Type::AbilityObject(ao2)) => {
-                ao1.signature.specialized_ability_id == ao2.signature.specialized_ability_id
-                    && self.mem.getn(ao1.signature.impl_arguments)
-                        == self.mem.getn(ao2.signature.impl_arguments)
-            }
+            (Type::AbilityObject(ao1), Type::AbilityObject(ao2)) => ao1.signature == ao2.signature,
             (Type::StaticValue(vt1), Type::StaticValue(vt2)) => {
                 vt1.family_type_id == vt2.family_type_id && vt1.value_id == vt2.value_id
             }
@@ -804,7 +800,7 @@ impl TypedProgram {
             }
             Type::AbilityObject(ao) => {
                 ao.signature.specialized_ability_id.hash(state);
-                mem.getn(ao.signature.impl_arguments).hash(state);
+                ao.signature.impl_arguments.hash(state);
             }
             Type::StaticValue(svt) => {
                 svt.family_type_id.hash(state);
@@ -1112,7 +1108,6 @@ pub struct BuiltinTypes {
     pub code_token: Option<TypeId>,
     pub code_token_span: Option<TypeId>,
     pub code_builder: Option<TypeId>,
-    pub dyn_lambda_obj: Option<TypeId>,
     pub source_location: Option<TypeId>,
     pub k1_module: Option<TypeId>,
     pub k1_setup_ctx: Option<TypeId>,
@@ -1146,7 +1141,6 @@ impl BuiltinTypes {
         debug_assert!(self.code_token.is_some());
         debug_assert!(self.code_token_span.is_some());
         debug_assert!(self.code_builder.is_some());
-        debug_assert!(self.dyn_lambda_obj.is_some());
         debug_assert!(self.k1_module.is_some());
         debug_assert!(self.types_layout.is_some());
         debug_assert!(self.types_type_schema.is_some());
@@ -1764,6 +1758,21 @@ impl TypedProgram {
         self.add_type(Type::Reference(ReferenceType { inner_type }))
     }
 
+    pub fn add_function_type(
+        &mut self,
+        params: &[FnParamType],
+        return_type: TypeId,
+        is_lambda: bool,
+    ) -> TypeId {
+        self.add_type_with_storage(|mem| {
+            Type::Function(FunctionType {
+                physical_params: mem.pushn(params),
+                return_type,
+                is_lambda,
+            })
+        })
+    }
+
     pub fn add_function_pointer_type(&mut self, function_type_id: TypeId) -> TypeId {
         self.add_type(Type::FunctionPointer(FunctionPointerType { function_type_id }))
     }
@@ -1940,16 +1949,12 @@ impl TypedProgram {
         }
     }
 
-    fn make_union_type(
-        &mut self,
-        origin_type_id: TypeId,
-        members: MSlice<UnionMember, TypedProgram>,
-    ) -> PhysicalType {
+    fn make_union_type(&mut self, origin_type_id: TypeId, members: &[UnionMember]) -> PhysicalType {
         let mut size = 0;
         let mut align = 1;
         let mut natural_align = 1;
         let mut misaligned_fields = false;
-        for m in self.mem.getn(members) {
+        for m in members {
             let layout = self.get_pt_layout(m.ty);
             if layout.size > size {
                 size = layout.size
@@ -1964,6 +1969,7 @@ impl TypedProgram {
         if size == 0 {
             PhysicalType::EMPTY
         } else {
+            let members = self.mem.pushn(members);
             let agg_id = self.agg_types.add(AggregateTypeRecord {
                 agg_type: AggType::Union { members },
                 origin_type_id,
@@ -1983,15 +1989,14 @@ impl TypedProgram {
         self.add_type(Type::StaticValue(StaticValueType { family_type_id, value_id }))
     }
 
-    pub fn add_type_with_items<T: Copy>(
+    pub fn add_type_with_storage(
         &mut self,
-        items: &[T],
-        make_type: impl FnOnce(MSlice<T, TypedProgram>) -> Type,
+        make_type: impl FnOnce(&mut kmem::Mem<TypedProgram>) -> Type,
     ) -> TypeId {
         let mark = self.mem.mark();
-        let handle = self.mem.pushn(items);
+        let ty = make_type(&mut self.mem);
         let type_count = self.types.len();
-        let type_id = self.add_type(make_type(handle));
+        let type_id = self.add_type(ty);
         if self.types.len() == type_count {
             self.mem.reset_to(mark);
         }
@@ -2118,12 +2123,8 @@ impl TypedProgram {
     pub const ABILITY_OBJECT_STATE_INDEX: usize = 0;
 
     pub fn add_lambda_object(&mut self, function_type_id: TypeId, parsed_id: ParsedId) -> TypeId {
-        // Unlike builtin_types.dyn_lam_obj, this contains the actual function type
-        // for typechecking calls
-        // The other one is just concerned with mapping to the right physical type.
-        // Which is just { ptr, ptr }
         let fn_ptr_type = self.add_function_pointer_type(function_type_id);
-        let fields = self.mem.pushn(&[
+        let fields = [
             StructTypeField {
                 name: self.ast.idents.b.fn_ptr,
                 type_id: fn_ptr_type,
@@ -2134,8 +2135,9 @@ impl TypedProgram {
                 type_id: POINTER_TYPE_ID,
                 span: Span::NONE,
             },
-        ]);
-        let struct_representation = self.add_type(Type::Struct(StructType::struc(fields)));
+        ];
+        let struct_representation =
+            self.add_type_with_storage(|mem| Type::Struct(StructType::struc(mem.pushn(&fields))));
         self.add_type(Type::LambdaObject(LambdaObjectType {
             function_type: function_type_id,
             parsed_id,
@@ -2287,7 +2289,7 @@ impl TypedProgram {
             // An ability object is generic if any of its impl arguments are:
             Type::AbilityObject(ao) => {
                 let mut result = EMPTY;
-                for arg in self.mem.getn(ao.signature.impl_arguments) {
+                for arg in self.get_type_slice(ao.signature.impl_arguments) {
                     result = result.add(self.type_variable_counts.get(*arg));
                 }
                 result.is_zero_safe = false;
@@ -2435,7 +2437,7 @@ impl TypedProgram {
                 RecordKind::Struct | RecordKind::Packed => {
                     let packed = s.record_kind == RecordKind::Packed;
                     let s_fields = s.fields;
-                    let mut fields = self.mem.new_list(s.fields.len());
+                    let mut fields = self.tmp.new_list(s.fields.len());
                     let mut layout = Layout::ZERO_SIZED;
                     let mut natural_align = 1;
                     let mut misaligned_fields = false;
@@ -2465,7 +2467,7 @@ impl TypedProgram {
                     if layout.size == 0 {
                         PhysicalTypeResult::Yes(PhysicalType::EMPTY)
                     } else {
-                        let fields_handle = fields.to_slice();
+                        let fields_handle = self.mem.pushn(fields.as_slice());
                         let agg_id = self.agg_types.add(AggregateTypeRecord {
                             agg_type: AggType::Struct { fields: fields_handle, packed },
                             origin_type_id: type_id,
@@ -2478,7 +2480,7 @@ impl TypedProgram {
                 }
                 RecordKind::Union => {
                     let u_fields = s.fields;
-                    let mut members = self.mem.new_list(u_fields.len());
+                    let mut members = self.tmp.new_list(u_fields.len());
                     for field in self.mem.getn(u_fields) {
                         match self.get_physical_type(field.type_id) {
                             PhysicalTypeResult::No => return PhysicalTypeResult::No,
@@ -2489,8 +2491,7 @@ impl TypedProgram {
                         }
                     }
 
-                    let members_handle = members.to_slice();
-                    let union = self.make_union_type(type_id, members_handle);
+                    let union = self.make_union_type(type_id, members.as_slice());
                     PhysicalTypeResult::Yes(union)
                 }
             },
@@ -2500,8 +2501,8 @@ impl TypedProgram {
                 let tag_scalar = e.tag_type.get_scalar_type();
                 let tag_layout = tag_scalar.get_layout();
 
-                let mut physical_variants = self.mem.new_list(variant_count);
-                let mut union_members = self.mem.new_list(variant_count);
+                let mut physical_variants = self.tmp.new_list(variant_count);
+                let mut union_members = self.tmp.new_list(variant_count);
 
                 let e = self.types.get(type_id).expect_sum();
 
@@ -2531,8 +2532,7 @@ impl TypedProgram {
                     }
                 }
 
-                let members_handle = union_members.to_slice();
-                let union_id = self.make_union_type(type_id, members_handle);
+                let union_id = self.make_union_type(type_id, union_members.as_slice());
                 let union_layout = self.get_pt_layout(union_id);
 
                 let tag_pt = self.make_named_scalar(tag_scalar, type_id);
@@ -2560,7 +2560,7 @@ impl TypedProgram {
                 let agg_sum = AggType::Sum(SumPt {
                     tag_pt,
                     struct_repr,
-                    variants: physical_variants.to_slice(),
+                    variants: self.mem.pushn(physical_variants.as_slice()),
                     payload_offset: union_offset,
                 });
                 let sum_agg_id = self.agg_types.add(AggregateTypeRecord {
@@ -2699,7 +2699,9 @@ impl TypedProgram {
         if let Some(result) = self.phys_types.lookup(type_id) {
             return result;
         }
+        let tmp_mark = self.tmp.mark();
         let pt_result = self.compute_physical_type(type_id);
+        self.tmp.reset_to(tmp_mark);
         self.phys_types.grow_and_set(type_id, Some(pt_result));
         pt_result
     }
@@ -2821,37 +2823,14 @@ impl TypedProgram {
 
     pub fn intern_type_slice(&mut self, ids: &[TypeId]) -> TypeSliceId {
         let hash = Self::type_slice_hash(ids);
-        if let Some(id) = self.find_type_slice(hash, ids) {
+        let (mem, slices) = (&self.mem, &self.type_slices);
+        if let Some(&id) = self.type_slice_dedup.find(hash, |&id| mem.getn(*slices.get(id)) == ids)
+        {
             return id;
         }
         let handle = self.mem.pushn(ids);
-        self.add_type_slice(hash, handle)
-    }
-
-    /// Interns an existing arena slice without recopying it
-    pub fn intern_type_slice_handle(&mut self, handle: TypeIdSlice) -> TypeSliceId {
-        let ids = self.mem.getn(handle);
-        let hash = Self::type_slice_hash(ids);
-        if let Some(id) = self.find_type_slice(hash, ids) {
-            return id;
-        }
-        self.add_type_slice(hash, handle)
-    }
-
-    pub fn intern_type_args(&mut self, args: TypeArgs) -> TypeSliceId {
-        self.intern_type_slice(args.as_slice(&self.mem))
-    }
-
-    fn find_type_slice(&self, hash: u64, ids: &[TypeId]) -> Option<TypeSliceId> {
-        let mem = &self.mem;
-        let slices = &self.type_slices;
-        self.type_slice_dedup.find(hash, |&id| mem.getn(*slices.get(id)) == ids).copied()
-    }
-
-    fn add_type_slice(&mut self, hash: u64, handle: TypeIdSlice) -> TypeSliceId {
         let id = self.type_slices.add(handle);
-        let mem = &self.mem;
-        let slices = &self.type_slices;
+        let (mem, slices) = (&self.mem, &self.type_slices);
         self.type_slice_dedup
             .insert_unique(hash, id, |&id| Self::type_slice_hash(mem.getn(*slices.get(id))));
         id
@@ -2869,10 +2848,19 @@ impl TypedProgram {
         h.finish()
     }
 
+    fn hash_specialization(
+        instances: &VPool<Option<GenericInstanceInfo>, TypeId>,
+        mem: &kmem::Mem<TypedProgram>,
+        type_slices: &VPool<TypeIdSlice, TypeSliceId>,
+        id: TypeId,
+    ) -> u64 {
+        let info = instances.get(id).unwrap();
+        Self::specialization_hash(info.generic_parent, mem.getn(*type_slices.get(info.type_args)))
+    }
+
     pub fn get_specialization(&self, generic: TypeId, args: &[TypeId]) -> Option<TypeId> {
-        let hash = Self::specialization_hash(generic, args);
         self.type_specializations
-            .find(hash, |&id| {
+            .find(Self::specialization_hash(generic, args), |&id| {
                 let info = self.type_instance_info.get(id).unwrap();
                 info.generic_parent == generic && self.get_type_slice(info.type_args) == args
             })
@@ -2880,12 +2868,13 @@ impl TypedProgram {
     }
 
     fn insert_specialization(&mut self, instance: TypeId) {
-        let (mem, slices, instances) = (&self.mem, &self.type_slices, &self.type_instance_info);
-        let hash_one = |&id: &TypeId| {
-            let info = instances.get(id).unwrap();
-            Self::specialization_hash(info.generic_parent, mem.getn(*slices.get(info.type_args)))
-        };
-        self.type_specializations.insert_unique(hash_one(&instance), instance, hash_one);
+        let (instances, mem, type_slices) =
+            (&self.type_instance_info, &self.mem, &self.type_slices);
+        self.type_specializations.insert_unique(
+            Self::hash_specialization(instances, mem, type_slices, instance),
+            instance,
+            |&id| Self::hash_specialization(instances, mem, type_slices, id),
+        );
     }
 
     pub(crate) fn reserve_type_tables(&mut self, source_bytes: usize) {
@@ -2899,8 +2888,7 @@ impl TypedProgram {
             .reserve(source_bytes / 400, |&id| Self::type_slice_hash(mem.getn(*slices.get(id))));
         let instances = &self.type_instance_info;
         self.type_specializations.reserve(source_bytes / 160, |&id| {
-            let info = instances.get(id).unwrap();
-            Self::specialization_hash(info.generic_parent, mem.getn(*slices.get(info.type_args)))
+            Self::hash_specialization(instances, mem, slices, id)
         });
     }
 

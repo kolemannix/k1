@@ -71,12 +71,12 @@ impl TypedProgram {
         // But in this case we still instantiate all the params as type holes, so that we can
         // detect inconsistencies, and so that we don't have to bind type variables to themselves
         // as a separate step
-        must_solve_params: TypeIdSlice,
+        must_solve_params: &[TypeId],
         inference_pairs: &[InferenceInputPair],
         span: Span,
         scope_id: ScopeId,
         stash: Option<InferArgStash>,
-    ) -> Result<(TypeArgs, TypeArgs), InferenceFailure> {
+    ) -> Result<(TmpSlice<TypeId>, TmpSlice<TypeId>), InferenceFailure> {
         if self.inference_context_stack.is_empty() {
             self.ictx_push();
         }
@@ -110,7 +110,7 @@ impl TypedProgram {
         stash: Option<(EvalExprContext, &mut SV8<(ParsedExprId, TypedExprId)>)>,
         span: Span,
         scope_id: ScopeId,
-    ) -> K1Result<TypeArgs> {
+    ) -> K1Result<TmpSlice<TypeId>> {
         let params = self.types.get(generic_type).expect_generic().params;
         let params_slice = self.mem.getn(params);
         let mut pairs: SV8<InferenceInputPair> = smallvec![];
@@ -128,10 +128,10 @@ impl TypedProgram {
             None => None,
         };
         let (solutions, _all_solutions) = self
-            .infer_types(params_slice, params, &pairs, span, scope_id, stash)
+            .infer_types(params_slice, params_slice, &pairs, span, scope_id, stash)
             .map_err(|f| self.render_inference_failure(f))?;
         let solution_pairs: SV4<TypeSubstitutionPair> =
-            self.zip_types_to_subst_pairs(params_slice, solutions.as_slice(&self.mem));
+            self.zip_types_to_subst_pairs(params_slice, self.tmp.getn(solutions));
         self.check_type_args_constraints(&solution_pairs, span, scope_id)?;
         Ok(solutions)
     }
@@ -164,12 +164,12 @@ impl TypedProgram {
     fn infer_types_inner(
         &mut self,
         all_type_params: &[TypeId],
-        must_solve_params: TypeIdSlice,
+        must_solve_params: &[TypeId],
         inference_pairs: &[InferenceInputPair],
         span: Span,
         scope_id: ScopeId,
         mut stash: Option<InferArgStash>,
-    ) -> Result<(TypeArgs, TypeArgs), InferenceFailure> {
+    ) -> Result<(TmpSlice<TypeId>, TmpSlice<TypeId>), InferenceFailure> {
         let infer_depth = self.ictx().origin_stack.len();
         let frame_start = self.ictx().slots.len() as u32;
         for (idx, param) in all_type_params.iter().enumerate() {
@@ -187,7 +187,7 @@ impl TypedProgram {
             });
         }
 
-        let slots_are_final = must_solve_params.len() as usize == all_type_params.len();
+        let slots_are_final = must_solve_params.len() == all_type_params.len();
 
         // Used for the error message, mainly
         let mut argument_types: SmallVec<[TypeId; 8]> = smallvec![];
@@ -333,9 +333,9 @@ impl TypedProgram {
             }
         }
 
-        let tmp_mark = self.tmp.mark();
-        let mut solutions: List<TypeId, MemTmp> = self.tmp.new_list(must_solve_params.len());
-        let mut unsolved_params: List<TypeId, MemTmp> = self.tmp.new_list(must_solve_params.len());
+        let mut solutions: List<TypeId, MemTmp> = self.tmp.new_list(must_solve_params.len() as u32);
+        let mut unsolved_params: List<TypeId, MemTmp> =
+            self.tmp.new_list(must_solve_params.len() as u32);
         // Parallel to all_type_params; TypeId::PENDING marks an unsolved param
         let mut all_solutions: List<TypeId, MemTmp> =
             self.tmp.new_list(all_type_params.len() as u32);
@@ -343,7 +343,7 @@ impl TypedProgram {
         for (idx, param) in all_type_params.iter().enumerate() {
             let slot = self.ictx().slots[frame_start as usize + idx];
             debug_assert_eq!(slot.param_type, *param);
-            let is_must_solve = self.mem.slice_contains(must_solve_params, param);
+            let is_must_solve = must_solve_params.contains(param);
             if let Some(solution) = slot.solution {
                 all_solutions.push(solution);
                 if is_must_solve {
@@ -377,10 +377,7 @@ impl TypedProgram {
             });
         }
         debug!("INFER DONE {}", self.pretty_print_types(solutions.as_slice(), ", "));
-        let solutions = TypeArgs::from_slice_in(solutions.as_slice(), &mut self.mem);
-        let all_solutions = TypeArgs::from_slice_in(all_solutions.as_slice(), &mut self.mem);
-        self.tmp.reset_to(tmp_mark);
-        Ok((solutions, all_solutions))
+        Ok((solutions.to_slice(), all_solutions.to_slice()))
     }
 
     pub(crate) fn render_inference_failure(&self, failure: InferenceFailure) -> K1Message {
@@ -517,10 +514,9 @@ impl TypedProgram {
                         .iter()
                         .zip(self.abilities.get(the_impl.ability_id).kind.arguments(self));
                     let impl_arg_iterator = self
-                        .mem
-                        .getn(sig.impl_arguments)
+                        .get_type_slice(sig.impl_arguments)
                         .iter()
-                        .zip(self.mem.getn(the_impl.impl_arguments));
+                        .zip(self.get_type_slice(the_impl.impl_arguments));
                     for (constrained_type, found_impl_type) in
                         ability_arg_iterator.chain(impl_arg_iterator)
                     {
@@ -569,7 +565,7 @@ impl TypedProgram {
         ctx: EvalExprContext,
         args_and_params: &ArgsAndParams,
         stashed_args: &mut SV8<(ParsedExprId, TypedExprId)>,
-    ) -> K1Result<TypeArgs> {
+    ) -> K1Result<TmpSlice<TypeId>> {
         debug!("infer_and_constrain_call_type_args");
         debug_assert!(generic_function_sig.has_type_params());
         let type_params = generic_function_sig.type_params;
@@ -580,7 +576,7 @@ impl TypedProgram {
             }
         }
         let solved_type_params = if passed_types.len() == type_params.len() as usize {
-            TypeArgs::from_slice_in(&passed_types, &mut self.mem)
+            self.tmp.pushn(&passed_types)
         } else {
             let return_type = self
                 .types
@@ -605,21 +601,22 @@ impl TypedProgram {
                 excluded_args: self.tmp.getn(excluded_args),
                 stashed: stashed_args,
             });
-            self.infer_types(
-                self.mem.getn(type_params),
-                type_params,
-                self.tmp.getn(inference_pairs),
-                call_span,
-                ctx.scope_id,
-                stash,
-            )
-            .map_err(|f| self.render_inference_failure(f))?
-            .0
+            let (solutions, _all_solutions) = self
+                .infer_types(
+                    self.mem.getn(type_params),
+                    self.mem.getn(type_params),
+                    self.tmp.getn(inference_pairs),
+                    call_span,
+                    ctx.scope_id,
+                    stash,
+                )
+                .map_err(|f| self.render_inference_failure(f))?;
+            solutions
         };
 
         let params_to_solutions_pairs: SV4<TypeSubstitutionPair> = self.zip_types_to_subst_pairs(
             self.mem.getn(type_params),
-            solved_type_params.as_slice(&self.mem),
+            self.tmp.getn(solved_type_params),
         );
         for (pair, call_type_arg) in params_to_solutions_pairs.iter().zip(call_type_args) {
             let span = match call_type_arg {
@@ -640,7 +637,7 @@ impl TypedProgram {
                     "{}. Therefore, cannot call function '{}' with given types: {}",
                     e.message,
                     fn_call.name.name,
-                    self.pretty_print_types(solved_type_params.as_slice(&self.mem), ", ")
+                    self.pretty_print_types(self.tmp.getn(solved_type_params), ", ")
                 )
             })?;
         }
@@ -694,24 +691,19 @@ impl TypedProgram {
     pub(crate) fn determine_fnlike_type_args_for_call(
         &mut self,
         original_function_sig: FunctionSignature,
-        type_args: TypeArgs,
+        type_args: &[TypeId],
         args_and_params: &ArgsAndParams,
         ctx: EvalExprContext,
-    ) -> K1Result<(TypeArgs, SV8<TypedExprId>)> {
+    ) -> K1Result<(TmpSlice<TypeId>, SV8<TypedExprId>)> {
         if original_function_sig.fnlike_type_params.is_empty() {
-            return Ok((TypeArgs::empty(), smallvec![]));
+            return Ok((MSlice::empty(), smallvec![]));
         }
 
         let mut fnlike_type_args: List<TypeId, MemTmp> =
             self.tmp.new_list(original_function_sig.fnlike_type_params.len());
         let mut fnlike_type_arg_values: SV8<TypedExprId> = smallvec![];
         let mut subst_pairs: SV8<TypeSubstitutionPair> = smallvec![];
-        for (param, arg) in self
-            .mem
-            .getn(original_function_sig.type_params)
-            .iter()
-            .zip(type_args.as_slice(&self.mem))
-        {
+        for (param, arg) in self.mem.getn(original_function_sig.type_params).iter().zip(type_args) {
             subst_pairs.push(TypeSubstitutionPair { from: *param, to: *arg });
         }
 
@@ -740,8 +732,7 @@ impl TypedProgram {
                 self.pretty_print_types(fnlike_type_args.as_slice(), ", ")
             );
         }
-        let fnlike_type_args = TypeArgs::from_slice_in(fnlike_type_args.as_slice(), &mut self.mem);
-        Ok((fnlike_type_args, fnlike_type_arg_values))
+        Ok((fnlike_type_args.to_slice(), fnlike_type_arg_values))
     }
 
     /// Record that inference hole `hole_type` must be `to`.
@@ -1108,8 +1099,8 @@ impl TypedProgram {
                     param_lambda.function_type,
                 ),
             (Type::AbilityObject(passed_ao), Type::AbilityObject(slot_ao)) => {
-                let passed_args = self.mem.getn(passed_ao.signature.impl_arguments);
-                let slot_args = self.mem.getn(slot_ao.signature.impl_arguments);
+                let passed_args = self.get_type_slice(passed_ao.signature.impl_arguments);
+                let slot_args = self.get_type_slice(slot_ao.signature.impl_arguments);
                 if passed_ao.signature.specialized_ability_id
                     != slot_ao.signature.specialized_ability_id
                     || passed_args.len() != slot_args.len()

@@ -2244,7 +2244,7 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
                         callee = IrCallee::Direct(*function_id);
                         environment_arg = Some(env_ptr);
                     }
-                    Callee::Abstract { .. } | Callee::AbstractGeneric { .. } => {
+                    Callee::Abstract { .. } => {
                         kbail!(b.k1, b.cur_span, "ir abstract callee");
                     }
                     Callee::Builtin { function_id, .. } => {
@@ -2257,7 +2257,7 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
                     }
                     Callee::DynamicLambda(dl) => {
                         let lambda_obj = compile_expr(b, None, *dl)?;
-                        let lam_obj_type_id = b.k1.builtin_types.dyn_lambda_obj.unwrap();
+                        let lam_obj_type_id = b.k1.exprs.get_type(*dl);
                         let lam_obj_pt = b.get_physical_type(lam_obj_type_id).unwrap().expect_agg();
                         let ptr_pt = PhysicalType::PTR;
                         let fn_ptr_addr = b.push_struct_offset(
@@ -3060,7 +3060,7 @@ fn compile_ir_builtin(
     match builtin {
         BuiltinIr::Unreachable => Ok(b.push_inst_anon(Inst::Unreachable).as_value()),
         BuiltinIr::BakeStaticValue => {
-            let type_id = call.type_args.as_slice(&b.k1.mem)[0];
+            let type_id = b.k1.get_type_slice(call.type_args)[0];
             let _physical_type = b.get_physical_type(type_id);
 
             let arg0 = *b.k1.mem.get_nth(call.args, 0);
@@ -3099,8 +3099,8 @@ fn compile_ir_builtin(
             Ok(result)
         }
         BuiltinIr::Bitcast => {
-            let from_type_id = call.type_args.as_slice(&b.k1.mem)[0];
-            let to_type_id = call.type_args.as_slice(&b.k1.mem)[1];
+            let type_args = b.k1.get_type_slice(call.type_args);
+            let (from_type_id, to_type_id) = (type_args[0], type_args[1]);
 
             let from_pt = b.get_physical_type(from_type_id)?;
             let to_pt = b.get_physical_type(to_type_id)?;
@@ -3202,7 +3202,7 @@ fn compile_ir_builtin(
             }
         }
         BuiltinIr::PointerIndex => {
-            let elem_type_id = call.type_args.as_slice(&b.k1.mem)[0];
+            let elem_type_id = b.k1.get_type_slice(call.type_args)[0];
             let elem_pt = b.get_physical_type(elem_type_id)?;
             let arg0 = *b.k1.mem.get_nth(call.args, 0);
             let base = compile_expr(b, None, arg0)?;
@@ -3216,7 +3216,7 @@ fn compile_ir_builtin(
             Ok(stored)
         }
         BuiltinIr::VolatileLoad => {
-            let load_type_id = call.type_args.as_slice(&b.k1.mem)[0];
+            let load_type_id = b.k1.get_type_slice(call.type_args)[0];
             let t = b.get_physical_type(load_type_id)?;
             if t.is_empty() {
                 return Ok(Value::Empty);
@@ -3237,7 +3237,7 @@ fn compile_ir_builtin(
             }
         }
         BuiltinIr::VolatileStore => {
-            let store_type_id = call.type_args.as_slice(&b.k1.mem)[0];
+            let store_type_id = b.k1.get_type_slice(call.type_args)[0];
             let t = b.get_physical_type(store_type_id)?;
             if !t.is_empty() {
                 let store_dst = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
@@ -3251,7 +3251,7 @@ fn compile_ir_builtin(
             Ok(store_rich_if_dst(b, dst, PhysicalType::EMPTY, Value::Empty, IrComment::None))
         }
         BuiltinIr::AtomicLoad => {
-            let type_id = call.type_args.as_slice(&b.k1.mem)[0];
+            let type_id = b.k1.get_type_slice(call.type_args)[0];
             let t = check_atomic_scalar_type(b, type_id, true)?;
             let ord = b.k1.atomic_ordering_arg(&call, 1)?;
             let src = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
@@ -3259,7 +3259,7 @@ fn compile_ir_builtin(
             Ok(store_scalar_if_dst(b, dst, inst.as_value()))
         }
         BuiltinIr::AtomicStore => {
-            let type_id = call.type_args.as_slice(&b.k1.mem)[0];
+            let type_id = b.k1.get_type_slice(call.type_args)[0];
             let t = check_atomic_scalar_type(b, type_id, true)?;
             let ord = b.k1.atomic_ordering_arg(&call, 2)?;
             let store_dst = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
@@ -3270,7 +3270,7 @@ fn compile_ir_builtin(
         BuiltinIr::AtomicRmw(op) => {
             use crate::typer::AtomicRmwOp as Op;
             let allow_pointer = op == Op::Xchg;
-            let type_id = call.type_args.as_slice(&b.k1.mem)[0];
+            let type_id = b.k1.get_type_slice(call.type_args)[0];
             let t = check_atomic_scalar_type(b, type_id, allow_pointer)?;
             let op = match op {
                 Op::Xchg => AtomicRmwOpIr::Xchg,
@@ -3296,7 +3296,7 @@ fn compile_ir_builtin(
             Ok(store_scalar_if_dst(b, dst, inst.as_value()))
         }
         BuiltinIr::AtomicCmpxchg { weak } => {
-            let type_id = call.type_args.as_slice(&b.k1.mem)[0];
+            let type_id = b.k1.get_type_slice(call.type_args)[0];
             let t = check_atomic_scalar_type(b, type_id, true)?;
             let success = b.k1.atomic_ordering_arg(&call, 3)?;
             let failure = b.k1.atomic_ordering_arg(&call, 4)?;

@@ -273,14 +273,10 @@ impl TypedProgram {
         k1.variables.restore(r);
         k1.types.restore(r);
         k1.type_slices.restore(r);
-        let mut infos = Vec::new();
-        for function in k1.functions.iter() {
-            if let Some(info) = function.specialization_info {
-                infos.push(info);
+        for id in k1.functions.iter_ids() {
+            if k1.functions.get(id).specialization_info.is_some() {
+                k1.register_function_specialization(id);
             }
-        }
-        for info in infos {
-            k1.register_function_specialization(info);
         }
         k1.type_variable_counts.restore(r);
         k1.type_instance_info.restore(r);
@@ -332,7 +328,6 @@ impl TypedProgram {
         k1.exported_symbols = restore_map_snap(r);
         k1.patterns.mem.restore(r);
         k1.emitted_sources = r.read_vec();
-        k1.emitted_parse_cache.clear();
         k1.trace_pop(section);
 
         let section = k1.trace_push(TraceKind::SnapRestoreSection, restore_section("ir"), 0);

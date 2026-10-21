@@ -552,7 +552,7 @@ impl TypedProgram {
             else {
                 self.ice_span(span, "configure text was empty")
             };
-            let file_id = self.add_emitted_source(&content, table, span);
+            let file_id = self.add_emitted_source(&content, self.tmp.getn(table), span);
             let ParseMetaprogramResult::Expr(parsed) =
                 self.parse_metaprogram_source(host, file_id, ParseAdHocKind::Expr)?
             else {
@@ -692,10 +692,6 @@ impl TypedProgram {
         self.static_values.add_string(id)
     }
 
-    fn static_bool(&self, b: bool) -> StaticValueId {
-        if b { self.static_values.true_id() } else { self.static_values.false_id() }
-    }
-
     fn encode_struct(
         &mut self,
         type_id: TypeId,
@@ -720,11 +716,11 @@ impl TypedProgram {
             ("target", self.enum_named(target_type, config.target.to_str())),
             ("cpu", self.static_str(plan.get(config.cpu))),
             ("features", self.static_str(plan.get(config.features))),
-            ("optimize", self.static_bool(config.optimize)),
-            ("debug", self.static_bool(config.debug)),
-            ("no-std", self.static_bool(config.no_std)),
-            ("sanitize", self.static_bool(config.sanitize)),
-            ("filc", self.static_bool(config.filc)),
+            ("optimize", StaticValuePool::get_bool_id(config.optimize)),
+            ("debug", StaticValuePool::get_bool_id(config.debug)),
+            ("no-std", StaticValuePool::get_bool_id(config.no_std)),
+            ("sanitize", StaticValuePool::get_bool_id(config.sanitize)),
+            ("filc", StaticValuePool::get_bool_id(config.filc)),
         ];
         self.encode_struct(type_id, &fields)
     }
@@ -771,7 +767,7 @@ impl TypedProgram {
         let target_type = self.mem.getn(host_sum.variants)[OPT_SOME_VARIANT_INDEX].payload.unwrap();
         let host_target = request.host.map(|host| self.enum_named(target_type, host.to_str()));
         let host = synth::synth_static_option(&mut self.static_values, host_type, host_target);
-        let editor = self.static_bool(request.editor);
+        let editor = StaticValuePool::get_bool_id(request.editor);
         let fields = [
             ("default", default),
             ("command", command),
@@ -915,8 +911,7 @@ impl TypedProgram {
             self.append_source_text(planner, span, &mut expr, &mut expr_origins);
             emitted_chunks.push(CodeChunkPos { start, end: expr.len() as u32, source: span });
         }
-        let emitted_chunks = self.mem.pushn(&emitted_chunks);
-        let source_file_id = self.add_emitted_source(&expr, emitted_chunks, call_span);
+        let source_file_id = self.add_emitted_source(&expr, &emitted_chunks, call_span);
         let ParseMetaprogramResult::Expr(parsed) =
             self.parse_metaprogram_source(host, source_file_id, ParseAdHocKind::Expr)?
         else {

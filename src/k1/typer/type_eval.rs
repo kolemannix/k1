@@ -90,7 +90,7 @@ impl TypedProgram {
                     Err(msg) => kbail!(self, type_param.span, "{}", msg),
                 };
             let mut ability_constraint_signatures: SV4<TypedAbilitySignature> = smallvec![];
-            let mut predicate_functions = self.mem.new_list(0);
+            let mut predicate_functions: SV4<QIdent> = smallvec![];
             for parsed_constraint in self.ast.mem.getn(type_param.constraints) {
                 match parsed_constraint {
                     ParsedTypeConstraintExpr::Ability(ability_expr) => {
@@ -102,12 +102,12 @@ impl TypedProgram {
                         ability_constraint_signatures.push(ability_sig);
                     }
                     ParsedTypeConstraintExpr::Predicate(qident) => {
-                        predicate_functions.push_grow(&mut self.mem, *qident);
+                        predicate_functions.push(*qident);
                     }
                     ParsedTypeConstraintExpr::Static(_) => {}
                 };
             }
-            let predicate_functions_handle = predicate_functions.to_slice_trim(&mut self.mem);
+            let predicate_functions_handle = self.mem.pushn(&predicate_functions);
             let type_variable_id = self.add_type_parameter(
                 TypeParameter {
                     name: type_param.name,
@@ -616,20 +616,14 @@ impl TypedProgram {
             }
             ParsedTypeExpr::Function(fun_type) => {
                 let fun_type = *fun_type;
-                let mut params: List<FnParamType, _> = self.mem.new_list(fun_type.params.len());
+                let mut params: TmpList<FnParamType> = self.tmp.new_list(fun_type.params.len());
 
                 for param in self.ast.mem.getn(fun_type.params) {
                     let type_id = self.eval_type_expr(*param, scope_id)?;
                     params.push(FnParamType { type_id, kind: FnParamKind::Plain });
                 }
                 let return_type = self.eval_type_expr(fun_type.return_type, scope_id)?;
-                let params_handle = params.to_slice();
-                let function_type_id = self.add_type(Type::Function(FunctionType {
-                    physical_params: params_handle,
-                    is_lambda: false,
-                    return_type,
-                }));
-                Ok(function_type_id)
+                Ok(self.add_function_type(params.as_slice(), return_type, false))
             }
             ParsedTypeExpr::TypeOf(tof) => {
                 let expr = self.eval_expr(tof.target_expr, EvalExprContext::make(scope_id))?;
@@ -751,9 +745,7 @@ impl TypedProgram {
             ParsedLiteral::Char(byte) => {
                 Ok((self.static_values.add(StaticValue::Char(byte)), CHAR_TYPE_ID))
             }
-            ParsedLiteral::Bool(b) => {
-                Ok((self.static_values.add(StaticValue::Bool(b)), BOOL_TYPE_ID))
-            }
+            ParsedLiteral::Bool(b) => Ok((StaticValuePool::get_bool_id(b), BOOL_TYPE_ID)),
             ParsedLiteral::String(s) => {
                 Ok((self.static_values.add(StaticValue::String(s)), self.builtin_types.string()))
             }
@@ -947,7 +939,7 @@ impl TypedProgram {
                         ty_app.span,
                     )?;
                     let instantiated_type_id =
-                        self.instantiate_generic_type(type_id, self.mem.getn(type_arguments_slice));
+                        self.instantiate_generic_type(type_id, self.tmp.getn(type_arguments_slice));
 
                     self.emit_ls_entity(
                         ty_app.name.name_span,
@@ -1401,7 +1393,7 @@ impl TypedProgram {
         scope_id: ScopeId,
         context: EvalTypeExprContext,
         span: Span,
-    ) -> K1Result<TypeIdSlice> {
+    ) -> K1Result<TmpSlice<TypeId>> {
         let type_params = self.mem.getn(params);
         let ordered_args = self.bind_type_args_to_params(
             type_params.len(),
@@ -1410,7 +1402,7 @@ impl TypedProgram {
             span,
         )?;
         let ordered_args = self.tmp.getn(ordered_args);
-        let mut type_arguments = self.mem.new_list(params.len());
+        let mut type_arguments: TmpList<TypeId> = self.tmp.new_list(params.len());
         for parsed_arg in ordered_args {
             let Some(parsed_arg_expr) = parsed_arg.type_expr else {
                 kbail!(self, parsed_arg.span, "Wildcard _ type not accepted here");
@@ -1421,7 +1413,7 @@ impl TypedProgram {
         }
         let type_arguments = type_arguments.to_slice();
         let subst_pairs: SV4<TypeSubstitutionPair> =
-            self.zip_types_to_subst_pairs(type_params, self.mem.getn(type_arguments));
+            self.zip_types_to_subst_pairs(type_params, self.tmp.getn(type_arguments));
         for (pair, parsed_arg) in subst_pairs.iter().zip(ordered_args) {
             self.check_type_constraints(
                 pair.from,
@@ -1611,8 +1603,9 @@ impl TypedProgram {
         record_kind: RecordKind,
     ) -> K1Result<TypeId> {
         self.check_unique_field_names(fields, |f| (f.name, f.span))?;
-        Ok(self
-            .add_type_with_items(fields, |fields| Type::Struct(StructType { fields, record_kind })))
+        Ok(self.add_type_with_storage(|mem| {
+            Type::Struct(StructType { fields: mem.pushn(fields), record_kind })
+        }))
     }
 
     pub(super) fn choose_either_tag_type(
@@ -1694,10 +1687,11 @@ impl TypedProgram {
             });
         }
         if has_payloads {
-            let variants = self.mem.pushn(typed_variants.as_slice());
-            return Ok(self.add_type(Type::Sum(SumType { variants, tag_type })));
+            return Ok(self.add_type_with_storage(|mem| {
+                Type::Sum(SumType { variants: mem.pushn(typed_variants.as_slice()), tag_type })
+            }));
         }
-        let mut member_values = self.mem.new_list(variants.len() as u32);
+        let mut member_values: TmpList<ScalarEnumValue> = self.tmp.new_list(variants.len() as u32);
         for v in typed_variants.iter() {
             member_values.push(ScalarEnumValue {
                 name: v.name,
@@ -1705,11 +1699,13 @@ impl TypedProgram {
                 name_span: v.name_span,
             });
         }
-        Ok(self.add_type(Type::Enum(ScalarEnumType {
-            member_values: member_values.to_slice(),
-            int_type: tag_type,
-            partial,
-        })))
+        Ok(self.add_type_with_storage(|mem| {
+            Type::Enum(ScalarEnumType {
+                member_values: mem.pushn(member_values.as_slice()),
+                int_type: tag_type,
+                partial,
+            })
+        }))
     }
 
     pub(super) fn handle_array_tyapp(
@@ -1901,8 +1897,11 @@ impl TypedProgram {
                     new_fields.push(new_field);
                 }
                 if any_change {
-                    self.add_type_with_items(new_fields.as_slice(), |fields| {
-                        Type::Struct(StructType { fields, record_kind })
+                    self.add_type_with_storage(|mem| {
+                        Type::Struct(StructType {
+                            fields: mem.pushn(new_fields.as_slice()),
+                            record_kind,
+                        })
                     })
                 } else {
                     type_id
@@ -1927,8 +1926,11 @@ impl TypedProgram {
                     new_variants.push(new_variant);
                 }
                 if any_changed {
-                    self.add_type_with_items(new_variants.as_slice(), |variants| {
-                        Type::Sum(SumType { variants, tag_type: original_tag_type })
+                    self.add_type_with_storage(|mem| {
+                        Type::Sum(SumType {
+                            variants: mem.pushn(new_variants.as_slice()),
+                            tag_type: original_tag_type,
+                        })
                     })
                 } else {
                     type_id
@@ -2001,13 +2003,7 @@ impl TypedProgram {
                     new_params.push(FnParamType { type_id: new_param_type, kind: param.kind });
                 }
                 if any_new {
-                    self.add_type_with_items(new_params.as_slice(), |physical_params| {
-                        Type::Function(FunctionType {
-                            physical_params,
-                            return_type: new_return_type,
-                            is_lambda,
-                        })
-                    })
+                    self.add_function_type(new_params.as_slice(), new_return_type, is_lambda)
                 } else {
                     type_id
                 }

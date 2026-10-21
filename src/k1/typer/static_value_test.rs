@@ -9,8 +9,8 @@ const BUILTIN_VALUE_COUNT: usize = 4;
 fn test_basic() {
     let mut system = StaticValuePool::make();
 
-    let s1 = system.add_struct(TypeId::from_u32(10).unwrap(), MSlice::empty());
-    let s2 = system.add_struct(TypeId::from_u32(10).unwrap(), MSlice::empty());
+    let s1 = system.add_struct_from_slice(TypeId::from_u32(10).unwrap(), &[]);
+    let s2 = system.add_struct_from_slice(TypeId::from_u32(10).unwrap(), &[]);
     assert_eq!(s1, s2);
     assert_eq!(system.pool.len(), BUILTIN_VALUE_COUNT + 1);
 
@@ -43,6 +43,9 @@ fn test_basic() {
     let null2 = system.add(StaticValue::Zero(POINTER_TYPE_ID));
 
     assert_eq!(null1, null2);
+    assert_eq!(null1, StaticValuePool::NULLPTR);
+    assert_eq!(true1, StaticValuePool::TRUE);
+    assert_eq!(system.add(StaticValue::Empty(EMPTY_TYPE_ID)), StaticValuePool::EMPTY);
 }
 
 #[test]
@@ -58,6 +61,13 @@ fn test_float() {
     assert_ne!(f1, f3, "f32 and f64 should be different");
     assert_ne!(f1, f4, "Different f32 values should be different");
     assert_eq!(system.pool.len(), BUILTIN_VALUE_COUNT + 3, "Should have 3 unique float values");
+
+    let zero = system.add(StaticValue::Float(TypedFloatValue::F64(0.0)));
+    let neg_zero = system.add(StaticValue::Float(TypedFloatValue::F64(-0.0)));
+    let nan1 = system.add(StaticValue::Float(TypedFloatValue::F64(f64::NAN)));
+    let nan2 = system.add(StaticValue::Float(TypedFloatValue::F64(f64::NAN)));
+    assert_ne!(zero, neg_zero, "-0.0 is its own value");
+    assert_eq!(nan1, nan2, "NaN with equal bits deduplicates");
 }
 
 const TYPE1: TypeId = TypeId::from_u32(1).unwrap();
@@ -122,42 +132,13 @@ fn test_span() {
     let elem2 = system.add(StaticValue::Int(TypedIntValue::I32(2)));
     let elem3 = system.add(StaticValue::Int(TypedIntValue::I32(1)));
 
-    let span1_items = system.mem.pushn(&[elem1, elem2]);
-    let span1 = system.add_span(TYPE1, span1_items);
-
-    let span2_items = system.mem.pushn(&[elem3, elem2]);
-    let span2 = system.add_span(TYPE1, span2_items);
-
-    let span3_items = system.mem.pushn(&[elem2, elem1]);
-    let span3 = system.add_span(TYPE1, span3_items);
+    let span1 = add_span(&mut system, TYPE1, &[elem1, elem2]);
+    let span2 = add_span(&mut system, TYPE1, &[elem3, elem2]);
+    let span3 = add_span(&mut system, TYPE1, &[elem2, elem1]);
 
     assert_eq!(elem1, elem3, "Elements should deduplicate first");
     assert_eq!(span1, span2, "spans with equivalent elements should deduplicate");
     assert_ne!(span1, span3, "spans with different element order should be different");
-}
-
-#[test]
-fn add_survives_hash_collision() {
-    // Two different values with equal hashes: Sum hashes payload *content*
-    // recursively but compares payload *ids*, so two Sums whose payloads are
-    // distinct ids with identical content collide
-    let mut system = StaticValuePool::make();
-
-    let payload_a = system.add(StaticValue::Int(TypedIntValue::I32(7)));
-    // A second id with identical content, bypassing dedup (as reserved ids do)
-    let payload_b = system.pool.add(StaticValue::Int(TypedIntValue::I32(7)));
-    assert_ne!(payload_a, payload_b);
-
-    let sum_a = StaticSum { sum_type_id: TYPE1, variant_index: 0, payload: Some(payload_a) };
-    let sum_b = StaticSum { sum_type_id: TYPE1, variant_index: 0, payload: Some(payload_b) };
-    assert_eq!(system.hash(&StaticValue::Sum(sum_a)), system.hash(&StaticValue::Sum(sum_b)));
-
-    let id_a = system.add(StaticValue::Sum(sum_a));
-    let id_b = system.add(StaticValue::Sum(sum_b));
-    assert_ne!(id_a, id_b, "dep_eq-different values must get different ids");
-
-    assert_eq!(system.add(StaticValue::Sum(sum_a)), id_a, "re-add of the first value");
-    assert_eq!(system.add(StaticValue::Sum(sum_b)), id_b, "re-add of the second value");
 }
 
 #[test]
@@ -173,8 +154,7 @@ fn test_recurse() {
         payload: Some(int_val),
     }));
 
-    let span_items = system.mem.pushn(&[enum_val, enum_val]);
-    let span_val = system.add_span(TYPE2, span_items);
+    let span_val = add_span(&mut system, TYPE2, &[enum_val, enum_val]);
 
     let struct_val1 = system.add_struct_from_slice(TYPE3, &[span_val]);
 
@@ -187,8 +167,8 @@ fn test_recurse() {
         payload: Some(int_val2),
     }));
 
-    let span2_items = system.mem.pushn(&[enum_val2, enum_val2]);
-    let span_val2 = system.add_span(TYPE2, span2_items);
+    let mem_before = system.mem.bytes_used();
+    let span_val2 = add_span(&mut system, TYPE2, &[enum_val2, enum_val2]);
 
     let struct_val2 = system.add_struct_from_slice(TYPE3, &[span_val2]);
 
@@ -196,9 +176,23 @@ fn test_recurse() {
     assert_eq!(enum_val, enum_val2, "Deep enum values should deduplicate");
     assert_eq!(span_val, span_val2, "Deep span values should deduplicate");
     assert_eq!(struct_val1, struct_val2, "Deep struct values should deduplicate");
+    assert_eq!(system.mem.bytes_used(), mem_before, "A dedup hit keeps no storage");
 
-    // 3 values are builtin
     assert_eq!(system.pool.len(), BUILTIN_VALUE_COUNT + 4);
+}
+
+fn add_span(
+    system: &mut StaticValuePool,
+    type_id: TypeId,
+    elements: &[StaticValueId],
+) -> StaticValueId {
+    system.add_with_storage(|mem| {
+        StaticValue::LinearContainer(StaticContainer {
+            type_id,
+            kind: StaticContainerKind::Span,
+            elements: mem.pushn(elements),
+        })
+    })
 }
 
 fn raw_u16_span(system: &mut StaticValuePool, type_id: TypeId, values: &[u16]) -> StaticValueId {
@@ -206,13 +200,14 @@ fn raw_u16_span(system: &mut StaticValuePool, type_id: TypeId, values: &[u16]) -
     for v in values {
         bytes.extend_from_slice(&v.to_ne_bytes());
     }
-    let bytes = system.mem.push_bytes_aligned(&bytes, 2);
-    system.add(StaticValue::RawContainer(StaticRawContainer {
-        bytes,
-        type_id,
-        kind: StaticContainerKind::Span,
-        scalar: ScalarType::I16,
-    }))
+    system.add_with_storage(|mem| {
+        StaticValue::RawContainer(StaticRawContainer {
+            bytes: mem.push_bytes_aligned(&bytes, 2),
+            type_id,
+            kind: StaticContainerKind::Span,
+            scalar: ScalarType::I16,
+        })
+    })
 }
 
 #[test]

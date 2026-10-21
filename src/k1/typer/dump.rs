@@ -474,7 +474,7 @@ impl TypedProgram {
                 let ability = self.abilities.get(ao.signature.specialized_ability_id);
                 w.write_str("dyn[")?;
                 self.write_ident(w, ability.name)?;
-                let args = self.mem.getn(ao.signature.impl_arguments);
+                let args = self.get_type_slice(ao.signature.impl_arguments);
                 if !args.is_empty() {
                     let base = self.abilities.get(ability.base_ability_id);
                     let mut impl_params =
@@ -761,7 +761,7 @@ impl TypedProgram {
                         let name = self.get_function(*function_id).name;
                         self.write_ident(w, name)?;
                     }
-                    Callee::Abstract { .. } | Callee::AbstractGeneric { .. } => {
+                    Callee::Abstract { .. } => {
                         w.write_str("abstract ")?;
                         let signature = self.get_callee_function_signature(&call.callee);
                         self.display_function_signature(w, &signature, None, None)?;
@@ -1245,10 +1245,9 @@ impl TypedProgram {
     pub fn display_ability_signature(
         &self,
         w: &mut impl Write,
-        ability_id: AbilityId,
-        impl_arguments: TypeIdSlice,
+        sig: TypedAbilitySignature,
     ) -> std::fmt::Result {
-        let ability = self.abilities.get(ability_id);
+        let ability = self.abilities.get(sig.specialized_ability_id);
         self.write_ident(w, ability.name)?;
         if ability.parameters.is_empty() && ability.kind.arguments(self).is_empty() {
             return Ok(());
@@ -1267,7 +1266,7 @@ impl TypedProgram {
             w.write_str(", ")?;
         }
         let mut impl_params = base_params.iter().filter(|p| !p.is_ability_side_param());
-        for arg in self.mem.getn(impl_arguments) {
+        for arg in self.get_type_slice(sig.impl_arguments) {
             w.write_str("impl ")?;
             if let Some(param) = impl_params.next() {
                 self.write_ident(w, param.name)?;
@@ -1282,18 +1281,7 @@ impl TypedProgram {
 
     pub fn ability_signature_to_string(&self, sig: TypedAbilitySignature) -> String {
         let mut s = String::new();
-        self.display_ability_signature(&mut s, sig.specialized_ability_id, sig.impl_arguments)
-            .unwrap();
-        s
-    }
-
-    pub fn ability_impl_signature_to_string(
-        &self,
-        ability_id: AbilityId,
-        impl_arguments: TypeIdSlice,
-    ) -> String {
-        let mut s = String::new();
-        self.display_ability_signature(&mut s, ability_id, impl_arguments).unwrap();
+        self.display_ability_signature(&mut s, sig).unwrap();
         s
     }
 
@@ -1312,7 +1300,7 @@ impl TypedProgram {
             AbilityImplKind::BuiltinDerived => "builtin_derived",
         };
         write!(w, "{kind_str:10} ")?;
-        self.display_ability_signature(w, i.ability_id, i.impl_arguments)?;
+        self.display_ability_signature(w, i.signature())?;
         write!(w, " for ")?;
         self.display_type_id(w, i.self_type_id, TypeDisplayMode::Name)?;
         if display_functions {
@@ -1364,10 +1352,6 @@ impl TypedProgram {
             first = false;
         }
         s
-    }
-
-    pub fn pretty_print_type_slice(&self, type_slice: TypeIdSlice, sep: &str) -> String {
-        self.pretty_print_types(self.mem.getn(type_slice), sep)
     }
 
     pub fn pretty_print_type_substitutions(

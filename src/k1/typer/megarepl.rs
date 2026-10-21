@@ -434,8 +434,7 @@ impl TypedProgram {
         let WidgetDataSource::Checkbox { set_fn, .. } = widget.data else {
             return;
         };
-        let static_bool =
-            if value { self.static_values.true_id() } else { self.static_values.false_id() };
+        let static_bool = StaticValuePool::get_bool_id(value);
         let result = self.megarepl_with_vm(|k1, vm| {
             bc::exec::execute_compiled_function(k1, vm, set_fn, &[static_bool], false)
         });

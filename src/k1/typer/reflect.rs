@@ -111,16 +111,12 @@ impl TypedProgram {
         return_type: TypeId,
         span: Span,
     ) -> K1Result<TypeId> {
-        let mut params: List<FnParamType, _> = self.mem.new_list(raw_param_types.len() as u32);
+        let mut params: TmpList<FnParamType> = self.tmp.new_list(raw_param_types.len() as u32);
         for raw in raw_param_types {
             let type_id = self.type_id_from_raw(*raw, span)?;
             params.push(FnParamType { type_id, kind: FnParamKind::Plain });
         }
-        let new_type_id = self.add_type(Type::Function(FunctionType {
-            physical_params: params.to_slice(),
-            is_lambda: false,
-            return_type,
-        }));
+        let new_type_id = self.add_function_type(params.as_slice(), return_type, false);
         self.register_type_metainfo(new_type_id);
         Ok(new_type_id)
     }
@@ -171,11 +167,8 @@ impl TypedProgram {
         let schema_value_id = self.build_type_schema(family_type_id);
         let instance_value_id = self.build_instance_info(family_type_id);
         let layout_value_id = self.build_layout(type_id);
-        let zero_safe_value_id = if self.get_type_variable_counts(type_id).is_zero_safe {
-            self.static_values.true_id()
-        } else {
-            self.static_values.false_id()
-        };
+        let zero_safe_value_id =
+            StaticValuePool::get_bool_id(self.get_type_variable_counts(type_id).is_zero_safe);
         let fields = self.static_values.mem.pushn(&[
             name_value_id,
             schema_value_id,
@@ -309,11 +302,7 @@ impl TypedProgram {
                     values_span_type_id,
                     member_values.as_slice(),
                 );
-                let partial_value_id = if partial {
-                    self.static_values.true_id()
-                } else {
-                    self.static_values.false_id()
-                };
+                let partial_value_id = StaticValuePool::get_bool_id(partial);
                 let payload_value_id = self.static_values.add_struct_from_slice(
                     enum_schema_payload_type_id,
                     &[int_type_value_id, variants_span_value_id, partial_value_id],
@@ -359,20 +348,10 @@ impl TypedProgram {
                         Some(struct_layout) => struct_layout[index].offset,
                     };
                     let offset_value_id = self.static_values.add_size(offset_u32 as i64);
-                    let field_struct_fields = self.static_values.mem.pushn(&[
-                        // name: string
-                        name_string_value_id,
-                        // typeId: u64
-                        type_id_value_id,
-                        // offset: size
-                        offset_value_id,
-                    ]);
-                    field_values.push(
-                        self.static_values.add_struct(
-                            struct_schema_field_item_struct_type_id,
-                            field_struct_fields,
-                        ),
-                    );
+                    field_values.push(self.static_values.add_struct_from_slice(
+                        struct_schema_field_item_struct_type_id,
+                        &[name_string_value_id, type_id_value_id, offset_value_id],
+                    ));
                 }
                 let span_value_id = self.add_static_container_from_ids(
                     StaticContainerKind::Span,

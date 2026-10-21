@@ -918,7 +918,7 @@ impl TypedProgram {
             .map(|parsed_case| parsed_case.patterns.len())
             .sum();
 
-        let mut typed_arms: List<TypedMatchArm, _> = self.mem.new_list(parsed_pattern_count + 1); // Add one for fallback arm
+        let mut typed_arms: TmpList<TypedMatchArm> = self.tmp.new_list(parsed_pattern_count + 1);
 
         let mut expected_arm_type_id = ctx.expected_type_id;
 
@@ -1008,7 +1008,7 @@ impl TypedProgram {
                         );
                         ctx.with_scope(arm_scope_id).with_no_expected_type()
                     };
-                    let mut instrs = self.mem.new_list(4);
+                    let mut instrs: SV8<MatchingConditionInstr> = smallvec![];
                     let case = self.compile_pattern_into_values(
                         pattern,
                         PatternTarget::Variable(match_subject_variable.variable_id),
@@ -1035,10 +1035,7 @@ impl TypedProgram {
                                 "Expected boolean condition: {msg}"
                             );
                         };
-                        instrs.push_grow(
-                            &mut self.mem,
-                            MatchingConditionInstr::cond(guard_condition_expr),
-                        );
+                        instrs.push(MatchingConditionInstr::cond(guard_condition_expr));
                     };
 
                     // Once we've evaluated the conditions, we can eval the consequent expression inside of it,
@@ -1073,18 +1070,15 @@ impl TypedProgram {
                         consequent_expr
                     };
 
-                    let match_arm = TypedMatchArm {
-                        case,
-                        condition: MatchingCondition {
-                            instrs: instrs.to_slice_trim(&mut self.mem),
-                        },
-                        consequent_expr,
-                    };
                     // An arm over an uninhabited variant can never match: it is
                     // typechecked but not lowered, so codegen never sees its
                     // impossible bindings
                     if !self.pattern_matches_uninhabited(pattern) {
-                        typed_arms.push(match_arm);
+                        typed_arms.push(TypedMatchArm {
+                            case,
+                            condition: MatchingCondition { instrs: self.mem.pushn(&instrs) },
+                            consequent_expr,
+                        });
                         if parsed_case.guard_condition_expr.is_none() {
                             last_unguarded_arm = Some(typed_arms.len() - 1);
                         }
@@ -1133,11 +1127,12 @@ impl TypedProgram {
                 if conseqent_type != NEVER_TYPE_ID { Some(conseqent_type) } else { None }
             })
             .unwrap_or(NEVER_TYPE_ID);
+        let arms = self.mem.pushn(typed_arms.as_slice());
         Ok(self.add_match_expr(
             TypedMatchExpr {
                 subject_defn: Some(match_subject_variable.defn_stmt),
                 scrutinee,
-                arms: typed_arms.to_slice(),
+                arms,
             },
             match_result_type,
             match_expr_span,
@@ -1365,7 +1360,7 @@ impl TypedProgram {
         &mut self,
         pattern_id: TypedPatternId,
         target: PatternTarget,
-        instrs: &mut List<MatchingConditionInstr, TypedProgram>,
+        instrs: &mut SV8<MatchingConditionInstr>,
         is_immediately_inside_reference_pattern: bool,
         hoist_case: bool,
         ctx: EvalExprContext,
@@ -1405,12 +1400,9 @@ impl TypedProgram {
                     });
                     let struct_field_variable =
                         self.synth_variable_defn_simple(var_name, final_field, ctx.scope_id);
-                    instrs.push_grow(
-                        &mut self.mem,
-                        MatchingConditionInstr::Binding {
-                            let_stmt: struct_field_variable.defn_stmt,
-                        },
-                    );
+                    instrs.push(MatchingConditionInstr::Binding {
+                        let_stmt: struct_field_variable.defn_stmt,
+                    });
                     self.compile_pattern_into_values(
                         pattern_field.pattern,
                         PatternTarget::Variable(struct_field_variable.variable_id),
@@ -1457,10 +1449,7 @@ impl TypedProgram {
                 let sum_base = self.synth_dereference_when(target_expr, is_referencing);
                 if !hoist_case {
                     let subject = self.synth_sum_get_tag(sum_base, sum_pattern.span);
-                    instrs.push_grow(
-                        &mut self.mem,
-                        MatchingConditionInstr::IntEquals { subject, value: case },
-                    );
+                    instrs.push(MatchingConditionInstr::IntEquals { subject, value: case });
                 }
 
                 if let Some((payload_pattern, payload_type_id)) = payload {
@@ -1484,10 +1473,9 @@ impl TypedProgram {
                         final_payload_expr,
                         ctx.scope_id,
                     );
-                    instrs.push_grow(
-                        &mut self.mem,
-                        MatchingConditionInstr::Binding { let_stmt: payload_variable.defn_stmt },
-                    );
+                    instrs.push(MatchingConditionInstr::Binding {
+                        let_stmt: payload_variable.defn_stmt,
+                    });
                     self.compile_pattern_into_values(
                         payload_pattern,
                         PatternTarget::Variable(payload_variable.variable_id),
@@ -1509,10 +1497,8 @@ impl TypedProgram {
                     ctx.scope_id,
                     variable_span,
                 );
-                instrs.push_grow(
-                    &mut self.mem,
-                    MatchingConditionInstr::Binding { let_stmt: binding_variable.defn_stmt },
-                );
+                instrs
+                    .push(MatchingConditionInstr::Binding { let_stmt: binding_variable.defn_stmt });
                 Ok(None)
             }
             TypedPattern::Wildcard(_span) => Ok(None),
@@ -1536,10 +1522,9 @@ impl TypedProgram {
             TypedPattern::PointerNull(span) => {
                 let span = *span;
                 let target_expr = self.materialize_pattern_target(target);
-                let ptr_null_expr =
-                    self.add_static_constant_expr(self.static_values.nullptr_id(), span);
+                let ptr_null_expr = self.add_static_constant_expr(StaticValuePool::NULLPTR, span);
                 let is_null_expr = self.synth_equals_call_simple(target_expr, ptr_null_expr, span);
-                instrs.push_grow(&mut self.mem, MatchingConditionInstr::cond(is_null_expr));
+                instrs.push(MatchingConditionInstr::cond(is_null_expr));
                 Ok(None)
             }
             TypedPattern::Type(pattern) => {
@@ -1556,7 +1541,7 @@ impl TypedProgram {
                     self.type_id_to_string(pattern.type_id)
                 );
                 let cond = self.synth_bool(pattern_did_match, pattern.span);
-                instrs.push_grow(&mut self.mem, MatchingConditionInstr::cond(cond));
+                instrs.push(MatchingConditionInstr::cond(cond));
                 let inner_target = if pattern_did_match {
                     // The variable is already of the correct type, so don't do anything at all
                     target
@@ -1584,7 +1569,7 @@ impl TypedProgram {
                     }
                     TypedPattern::LiteralInteger(int_value, _) => int_value,
                     TypedPattern::LiteralBool(bool_value, _) => {
-                        self.static_values.add(StaticValue::Bool(bool_value))
+                        StaticValuePool::get_bool_id(bool_value)
                     }
                     TypedPattern::LiteralFloat(_, _) | TypedPattern::LiteralString(_, _) => {
                         let target_expr = self.materialize_pattern_target(target);
@@ -1605,7 +1590,7 @@ impl TypedProgram {
                         let span = self.exprs.get_span(literal_expr);
                         let condition =
                             self.synth_equals_call_simple(target_expr, literal_expr, span);
-                        instrs.push_grow(&mut self.mem, MatchingConditionInstr::cond(condition));
+                        instrs.push(MatchingConditionInstr::cond(condition));
                         return Ok(None);
                     }
                     _ => {
@@ -1632,10 +1617,7 @@ impl TypedProgram {
                     TypedPattern::Enum(e) => self.synth_enum_get_value(target_expr, e.span),
                     _ => target_expr,
                 };
-                instrs.push_grow(
-                    &mut self.mem,
-                    MatchingConditionInstr::IntEquals { subject, value: case },
-                );
+                instrs.push(MatchingConditionInstr::IntEquals { subject, value: case });
                 Ok(None)
             }
         }

@@ -10,13 +10,12 @@ use super::*;
 
 impl TypedProgram {
     pub(super) fn synth_bool(&mut self, value: bool, span: Span) -> TypedExprId {
-        let value_id = self.static_values.add(StaticValue::Bool(value));
-        let expr_id = self.add_static_constant_expr(value_id, span);
+        let expr_id = self.add_static_constant_expr(StaticValuePool::get_bool_id(value), span);
         expr_id
     }
 
     pub(super) fn synth_empty_value(&mut self, span: Span) -> TypedExprId {
-        let value_id = self.static_values.empty_id();
+        let value_id = StaticValuePool::EMPTY;
         self.add_static_constant_expr(value_id, span)
     }
 
@@ -65,38 +64,25 @@ impl TypedProgram {
             .get(impl_handle.base_ability_id)
             .find_function_by_name(&self.mem, fn_name.name)
             .unwrap();
-        let (callee, type_args) = match self.resolve_ability_impl_fn_callee(
+        let (callee, signature) = self.resolve_ability_impl_fn_callee(
             impl_handle.full_impl_id,
             ability_fn.index,
             ctx.scope_id,
             span,
-        )? {
-            Callee::StaticFunction(function_id) => {
-                let signature = self.get_function(function_id).signature();
-                if !signature.has_type_params() {
-                    (Callee::StaticFunction(function_id), TypeArgs::empty())
-                } else if !ctx.is_inference()
+        )?;
+        let (callee, type_args) = match callee {
+            _ if !signature.has_type_params() => (callee, EMPTY_TYPE_SLICE),
+            Callee::StaticFunction(function_id)
+                if !ctx.is_inference()
                     && signature.fnlike_type_params.is_empty()
-                    && fn_type_args.len() == signature.type_params.len() as usize
-                {
-                    let type_args = TypeArgs::from_slice_in(fn_type_args, &mut self.mem);
-                    let specialized = self.specialize_function_declaration(
-                        type_args,
-                        TypeArgs::empty(),
-                        function_id,
-                    );
-                    (Callee::StaticFunction(specialized), type_args)
-                } else {
-                    return self.synth_typed_call_typed_args(
-                        fn_name.with_span(span),
-                        fn_type_args,
-                        args,
-                        ctx,
-                        false,
-                    );
-                }
+                    && fn_type_args.len() == signature.type_params.len() as usize =>
+            {
+                let specialized =
+                    self.specialize_function_declaration(fn_type_args, &[], function_id);
+                let type_args =
+                    self.get_function(specialized).specialization_info.unwrap().type_arguments;
+                (Callee::StaticFunction(specialized), type_args)
             }
-            callee @ Callee::Abstract { .. } => (callee, TypeArgs::empty()),
             _ => {
                 return self.synth_typed_call_typed_args(
                     fn_name.with_span(span),
@@ -148,11 +134,7 @@ impl TypedProgram {
             false,
         )?;
         let body = self.synth_return_only_block(fn_scope, failure_call, span);
-        let thunk_type = self.add_type(Type::Function(FunctionType {
-            physical_params: MSlice::empty(),
-            return_type: self.exprs.get_type(failure_call),
-            is_lambda: false,
-        }));
+        let thunk_type = self.add_function_type(&[], self.exprs.get_type(failure_call), false);
         let thunk_name = self.ast.idents.intern("test-thunk");
         let thunk_id = self.add_function(TypedFunction::synthesized(
             thunk_name,
@@ -292,7 +274,7 @@ impl TypedProgram {
         let call = Call {
             callee: Callee::StaticFunction(function_id),
             args: self.mem.pushn(args),
-            type_args: TypeArgs::empty(),
+            type_args: EMPTY_TYPE_SLICE,
         };
         self.add_call_expr(call, return_type, span)
     }
@@ -781,15 +763,18 @@ impl TypedProgram {
     /// body; this expression should never be executed; it should either be a call to
     /// crash, but transmuted to the expected type, or a special Unreachable node
     pub(super) fn synth_phony(&mut self, type_id: TypeId, span: Span) -> TypedExprId {
-        let type_args = TypeArgs::one(type_id);
         let phony_fn_id =
             self.scopes.find_function(self.scopes.core_scope_id, self.ast.idents.b.phony).unwrap();
         let specialized_phony_fn_id =
-            self.specialize_function_declaration(type_args, TypeArgs::empty(), phony_fn_id);
+            self.specialize_function_declaration(&[type_id], &[], phony_fn_id);
         let call = Call {
             callee: Callee::StaticFunction(specialized_phony_fn_id),
             args: MSlice::empty(),
-            type_args,
+            type_args: self
+                .get_function(specialized_phony_fn_id)
+                .specialization_info
+                .unwrap()
+                .type_arguments,
         };
         let call_id = self.calls.add(call);
         self.exprs.add(TypedExpr::Call { call_id }, type_id, span)

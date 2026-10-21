@@ -8,10 +8,10 @@ use http::Response;
 pub use http::{serve, start};
 use maud::html;
 
-use crate::typer::TypedProgram;
 use crate::typer::megarepl::{
     CellId, CellResult, MegareplCell, MegareplGlobal, MegareplWidget, WidgetDataSource,
 };
+use crate::typer::{StaticValuePool, TypedProgram};
 use std::fmt;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
@@ -110,7 +110,7 @@ fn render_output_panes(k1: &TypedProgram, cell: &MegareplCell) -> maud::Markup {
         CellResult::Expr { outputs, value, stdout, stderr } => {
             let mut values: Vec<String> =
                 outputs.iter().map(|v| k1.megarepl_static_value_to_string(*v)).collect();
-            if *value != k1.static_values.empty_id() {
+            if *value != StaticValuePool::EMPTY {
                 values.push(k1.megarepl_static_value_to_string(*value));
             }
             (values, false, stdout.as_str(), stderr.as_str())
@@ -355,7 +355,7 @@ fn render_data_section(k1: &TypedProgram) -> maud::Markup {
                                         (k1.type_id_to_string(k1.exprs.get_type(expr_id)))
                                     }
                                     td .data-value {
-                                        @if *value == k1.static_values.empty_id() { "—" }
+                                        @if *value == StaticValuePool::EMPTY { "—" }
                                         @else {
                                             div .data-clamp {
                                                 (k1.megarepl_static_value_to_string(*value))

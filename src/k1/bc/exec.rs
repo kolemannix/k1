@@ -20,7 +20,8 @@ use crate::lex::Span;
 use crate::typer::trace::TraceKind;
 use crate::typer::types::{PhysicalType, RecordKind, TypeId};
 use crate::typer::{
-    FunctionId, K1Message, K1Result, StaticValueId, TypedExprId, TypedGlobalId, TypedProgram,
+    FunctionId, K1Message, K1Result, StaticValue, StaticValueId, TypedExprId, TypedGlobalId,
+    TypedProgram,
 };
 use crate::vm::{self, Value, Vm, load_value, store_value};
 use crate::{kbail, kerr};
@@ -102,7 +103,7 @@ pub fn execute_compiled_unit(
 ) -> K1Result<StaticValueId> {
     let raw = execute_compiled_unit_raw(k1, vm, unit_id, arguments, span, report_messages)?;
     if !raw.returns_value {
-        return Ok(k1.static_values.add_empty_typed(raw.result_type_id));
+        return Ok(k1.static_values.add(StaticValue::Empty(raw.result_type_id)));
     }
     let frame = k1.trace_push(TraceKind::VmValueFerry, span.global_start, 0);
     let loaded = load_value(raw.ret_pt, raw.ret_addr);

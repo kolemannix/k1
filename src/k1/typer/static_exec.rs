@@ -793,7 +793,7 @@ impl TypedProgram {
             }
             s => kbail!(self, span, "Unknown builtin name: {s}"),
         };
-        Ok(self.static_values.add(StaticValue::Bool(bool_value)))
+        Ok(StaticValuePool::get_bool_id(bool_value))
     }
 
     pub(super) fn add_static_value_expr(
@@ -837,8 +837,8 @@ impl TypedProgram {
             Some(scalar) => {
                 let size = scalar.get_layout().size;
                 let align = self.get_layout(container_type_id).unwrap().align;
-                let (bytes, dst) =
-                    self.static_values.mem.push_bytes_uninit(size * elements.len() as u32, align);
+                let tmp_mark = self.tmp.mark();
+                let (bytes, dst) = self.tmp.push_bytes_uninit(size * elements.len() as u32, align);
                 for (index, element) in elements.iter().enumerate() {
                     let element_dst = unsafe { dst.byte_add(index * size as usize) };
                     vm::store_static_value(
@@ -848,21 +848,25 @@ impl TypedProgram {
                         *element,
                     );
                 }
-                self.static_values.add(StaticValue::RawContainer(StaticRawContainer {
-                    bytes,
-                    type_id: container_type_id,
-                    kind,
-                    scalar,
-                }))
+                let bytes = self.tmp.getn(bytes);
+                let container_id = self.static_values.add_with_storage(|mem| {
+                    StaticValue::RawContainer(StaticRawContainer {
+                        bytes: mem.push_bytes_aligned(bytes, align),
+                        type_id: container_type_id,
+                        kind,
+                        scalar,
+                    })
+                });
+                self.tmp.reset_to(tmp_mark);
+                container_id
             }
-            None => {
-                let elements = self.static_values.mem.pushn(elements);
-                self.static_values.add(StaticValue::LinearContainer(StaticContainer {
-                    elements,
+            None => self.static_values.add_with_storage(|mem| {
+                StaticValue::LinearContainer(StaticContainer {
+                    elements: mem.pushn(elements),
                     kind,
                     type_id: container_type_id,
-                }))
-            }
+                })
+            }),
         }
     }
 
@@ -876,18 +880,16 @@ impl TypedProgram {
     ) -> StaticValueId {
         let byte_len = scalar.get_layout().size as usize * count;
         let align = self.get_layout(container_type_id).unwrap().align;
-        let bytes = if byte_len == 0 {
-            MSlice::empty()
-        } else {
-            let src_bytes = unsafe { std::slice::from_raw_parts(src, byte_len) };
-            self.static_values.mem.push_bytes_aligned(src_bytes, align)
-        };
-        self.static_values.add(StaticValue::RawContainer(StaticRawContainer {
-            bytes,
-            type_id: container_type_id,
-            kind,
-            scalar,
-        }))
+        let src_bytes: &[u8] =
+            if byte_len == 0 { &[] } else { unsafe { std::slice::from_raw_parts(src, byte_len) } };
+        self.static_values.add_with_storage(|mem| {
+            StaticValue::RawContainer(StaticRawContainer {
+                bytes: mem.push_bytes_aligned(src_bytes, align),
+                type_id: container_type_id,
+                kind,
+                scalar,
+            })
+        })
     }
 
     pub(crate) fn decode_raw_element(&self, raw: &StaticRawContainer, index: usize) -> StaticValue {
@@ -1322,7 +1324,7 @@ impl TypedProgram {
         raw: &bc::exec::RawUnitResult,
         span: Span,
         is_definition: bool,
-    ) -> K1Result<Option<(String, PermSlice<CodeChunkPos>)>> {
+    ) -> K1Result<Option<(String, TmpSlice<CodeChunkPos>)>> {
         use crate::vm::k1_types::{K1Code, K1CodeSpan};
         if !raw.returns_value || Some(raw.result_type_id) != k1.builtin_types.code {
             kbail!(
@@ -1360,7 +1362,7 @@ impl TypedProgram {
         is_definition: bool,
         text: &str,
         spans: &[vm::k1_types::K1CodeSpan],
-    ) -> K1Result<Option<(String, PermSlice<CodeChunkPos>)>> {
+    ) -> K1Result<Option<(String, TmpSlice<CodeChunkPos>)>> {
         if text.is_empty() {
             return Ok(None);
         }
@@ -1381,7 +1383,7 @@ impl TypedProgram {
         }
         let base = content.len() as u32;
         content.push_str(text);
-        let mut table: List<CodeChunkPos, _> = self.mem.new_list(spans.len() as u32);
+        let mut table: TmpList<CodeChunkPos> = self.tmp.new_list(spans.len() as u32);
         for s in spans {
             if s.len == 0 {
                 continue;
@@ -1416,7 +1418,7 @@ impl TypedProgram {
     /// parses emitted source as a fresh file, then compiles it in place of the invocation
     pub(super) fn compile_emitted_code(
         &mut self,
-        emitted: Option<(String, PermSlice<CodeChunkPos>)>,
+        emitted: Option<(String, TmpSlice<CodeChunkPos>)>,
         span: Span,
         ctx: EvalExprContext,
         is_definition: bool,
@@ -1431,11 +1433,17 @@ impl TypedProgram {
         let content_hash = if is_definition {
             None
         } else {
-            use std::hash::{Hash, Hasher};
-            let mut h = ahash::AHasher::default();
-            content.hash(&mut h);
-            let hash = h.finish();
-            if let Some(&cached_root) = self.emitted_parse_cache.get(&(hash, span)) {
+            let hash = Self::hash_emitted_expr(&content, span);
+            let cached = self
+                .emitted_parse_cache
+                .find(hash, |&(emitted_index, _)| {
+                    let emitted = self.emitted_sources[emitted_index as usize];
+                    emitted.call_span == span
+                        && self.ast.sources.get(emitted.file_id).content(&self.ast.mem) == content
+                        && self.mem.getn(emitted.entries) == self.tmp.getn(table)
+                })
+                .copied();
+            if let Some((_, cached_root)) = cached {
                 let typed_metaprogram = self.eval_expr(cached_root, ctx)?;
                 return Ok(StaticExecutionResult::TypedExpr(typed_metaprogram));
             }
@@ -1448,7 +1456,8 @@ impl TypedProgram {
         //       filename and print the types at the top of the file; a
         //       'what are we compiling' stack would provide it
         debug!("Emitted source:\n---\n{content}\n---");
-        let source_for_emission = self.add_emitted_source(&content, table, span);
+        let source_for_emission = self.add_emitted_source(&content, self.tmp.getn(table), span);
+        let emitted_index = self.emitted_sources.len() as u32 - 1;
         let generated_path = self.ast.sources.get(source_for_emission).file_path;
 
         let parse_kind =
@@ -1462,7 +1471,19 @@ impl TypedProgram {
         match parsed_metaprogram {
             ParseMetaprogramResult::Expr(parsed_expr_id) => {
                 if let Some(hash) = content_hash {
-                    self.emitted_parse_cache.insert((hash, span), parsed_expr_id);
+                    let (sources, ast_mem) = (&self.ast.sources, &self.ast.mem);
+                    let emitted_sources = &self.emitted_sources;
+                    self.emitted_parse_cache.insert_unique(
+                        hash,
+                        (emitted_index, parsed_expr_id),
+                        |&(index, _)| {
+                            let emitted = emitted_sources[index as usize];
+                            Self::hash_emitted_expr(
+                                sources.get(emitted.file_id).content(ast_mem),
+                                emitted.call_span,
+                            )
+                        },
+                    );
                 }
                 let typed_metaprogram = self.eval_expr(parsed_expr_id, ctx)?;
                 debug!("Emitted compiled expr:\n{}", self.expr_to_string(typed_metaprogram));
@@ -1474,10 +1495,18 @@ impl TypedProgram {
         }
     }
 
+    fn hash_emitted_expr(content: &str, call_span: Span) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = ahash::AHasher::default();
+        content.hash(&mut h);
+        call_span.hash(&mut h);
+        h.finish()
+    }
+
     pub(super) fn add_emitted_source(
         &mut self,
         content: &str,
-        table: PermSlice<CodeChunkPos>,
+        table: &[CodeChunkPos],
         span: Span,
     ) -> FileId {
         let (source, line) = self.get_span_location(span);
@@ -1501,7 +1530,7 @@ impl TypedProgram {
         self.emitted_sources.push(EmittedSource {
             file_id,
             call_span: span,
-            entries: table,
+            entries: self.mem.pushn(table),
             has_diagnostic: false,
         });
         file_id
@@ -1617,9 +1646,11 @@ impl TypedProgram {
 
         // Specialize if needed
         let function_to_run = if is_generic {
-            let type_args = TypeArgs::from_slice_in(self.mem.getn(typed_type_args), &mut self.mem);
-            let spec_fn_id =
-                self.specialize_function_declaration(type_args, TypeArgs::empty(), function_id);
+            let spec_fn_id = self.specialize_function_declaration(
+                self.tmp.getn(typed_type_args),
+                &[],
+                function_id,
+            );
             if !self.get_function(spec_fn_id).is_concrete() {
                 return Ok(StaticExecutionResult::TypedExpr(
                     self.synth_deferred_static(ctx, span)?,
@@ -1709,7 +1740,7 @@ impl TypedProgram {
         static_args: &[StaticValueId],
         span: Span,
         is_definition: bool,
-    ) -> K1Result<Option<(String, PermSlice<CodeChunkPos>)>> {
+    ) -> K1Result<Option<(String, TmpSlice<CodeChunkPos>)>> {
         Self::static_exec_prepare_function(k1, function_id, span)?;
         let raw = bc::exec::execute_compiled_function_raw(k1, vm, function_id, static_args, true)?;
         Self::read_emitted_code_raw(k1, &raw, span, is_definition)

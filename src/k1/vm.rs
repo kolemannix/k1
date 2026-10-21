@@ -14,13 +14,13 @@ mod vm_test;
 
 use crate::ir;
 use crate::typer::types::{
-    ContainerKind, FloatType, IntegerType, Layout, POINTER_TYPE_ID, PhysicalType, PhysicalTypeEnum,
+    ContainerKind, FloatType, IntegerType, Layout, PhysicalType, PhysicalTypeEnum,
     PhysicalTypeResult, RecordKind, ScalarType, Type, TypeId,
 };
 use crate::typer::{
     ErrorKind, FunctionId, GlobalInitialValue, K1Message, K1Result, Linkage, MessageLevel,
-    StaticContainerKind, StaticStruct, StaticSum, StaticValue, StaticValueId, StaticValuePool,
-    TypedFloatValue, TypedGlobalId, TypedIntValue, TypedProgram,
+    StaticContainerKind, StaticSum, StaticValue, StaticValueId, StaticValuePool, TypedFloatValue,
+    TypedGlobalId, TypedIntValue, TypedProgram,
 };
 use crate::{
     ice_span, kbail, kerr,
@@ -1116,7 +1116,7 @@ pub fn vm_value_to_static_value(
         kbail!(k1, span, "Not a physical type, cannot bake to static: {}", type_id);
     };
     if pt.is_empty() {
-        return Ok(k1.static_values.add_empty_typed(type_id));
+        return Ok(k1.static_values.add(StaticValue::Empty(type_id)));
     }
     if let Some(scalar_value) = scalar_vm_value_to_static_value(k1, type_id, vm_value) {
         return Ok(k1.static_values.add(scalar_value));
@@ -1126,7 +1126,7 @@ pub fn vm_value_to_static_value(
         Type::Pointer => {
             let addr = vm_value.as_ptr();
             if addr.is_null() || addr.addr() == 0 {
-                k1.static_values.add(StaticValue::Zero(POINTER_TYPE_ID))
+                StaticValuePool::NULLPTR
             } else {
                 kbail!(
                     k1,
@@ -1189,10 +1189,11 @@ pub fn vm_value_to_static_value(
             } else {
                 let struct_ptr = vm_value.as_ptr();
                 let struct_type_fields = struct_type.fields;
-                let mut field_value_ids = k1.static_values.mem.new_list(struct_type.fields.len());
                 if struct_type.record_kind == RecordKind::Union {
                     kbail!(k1, span, "Cannot (yet) bake union value to static value")
                 } else {
+                    let tmp_mark = k1.tmp.mark();
+                    let mut field_value_ids = k1.tmp.new_list(struct_type_fields.len());
                     let struct_shape = k1.get_struct_layout(type_id);
                     for (physical_field, k1_field) in
                         struct_shape.iter().zip(k1.mem.getn(struct_type_fields))
@@ -1204,10 +1205,10 @@ pub fn vm_value_to_static_value(
                             vm_value_to_static_value(k1, k1_field.type_id, field_value, span)?;
                         field_value_ids.push(field_static_value_id)
                     }
-                    k1.static_values.add(StaticValue::Struct(StaticStruct {
-                        type_id,
-                        fields: field_value_ids.to_slice(),
-                    }))
+                    let struct_value_id =
+                        k1.static_values.add_struct_from_slice(type_id, field_value_ids.as_slice());
+                    k1.tmp.reset_to(tmp_mark);
+                    struct_value_id
                 }
             }
         }
@@ -1327,12 +1328,15 @@ fn container_to_static_value(
     let PhysicalTypeResult::Yes(element_pt) = k1.get_physical_type(element_type) else {
         kbail!(k1, span, "Element type is not physical: {}", element_type);
     };
-    let mut elements = Vec::with_capacity(count);
+    let tmp_mark = k1.tmp.mark();
+    let mut elements = k1.tmp.new_list(count as u32);
     for index in 0..count {
         let elem_vm = get_span_element(k1, data, element_pt, index);
         elements.push(vm_value_to_static_value(k1, element_type, elem_vm, span)?);
     }
-    Ok(k1.add_static_container_from_ids(kind, type_id, &elements))
+    let container_id = k1.add_static_container_from_ids(kind, type_id, elements.as_slice());
+    k1.tmp.reset_to(tmp_mark);
+    Ok(container_id)
 }
 
 pub fn get_span_element(
@@ -1506,7 +1510,7 @@ pub fn read_global_as_static(
     let span = vm.eval_span;
     let pt = match k1.get_physical_type(type_id) {
         PhysicalTypeResult::Yes(pt) => pt,
-        _ => return Ok(k1.static_values.empty_id()),
+        _ => return Ok(StaticValuePool::EMPTY),
     };
     let addr = resolve_global(k1, vm, global_id, pt)?;
     let loaded = load_value(pt, addr.as_ptr());

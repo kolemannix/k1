@@ -298,6 +298,15 @@ impl<T, Tag> MSlice<T, Tag> {
         }
     }
 
+    pub fn take(&self, n: usize) -> Self {
+        Self {
+            offset: self.offset,
+            count: self.count.min(n as u32),
+            _data: PhantomData,
+            _tag: PhantomData,
+        }
+    }
+
     const fn make(offset: NonZeroU32, count: u32) -> Self {
         Self { offset, count, _data: PhantomData, _tag: PhantomData }
     }
