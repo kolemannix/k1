@@ -2766,7 +2766,7 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
             b.k1.ir.units_pending_compile.push(function_id, requester);
             compile_expr(b, dst, env_struct)
         }
-        TypedExpr::FunctionReference(_) => {
+        TypedExpr::FunctionIdReference(_) => {
             let stored =
                 store_rich_if_dst(b, dst, PhysicalType::EMPTY, Value::Empty, IrComment::None);
             Ok(stored)

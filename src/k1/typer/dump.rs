@@ -40,9 +40,9 @@ impl Display for TypedProgram {
             }
         }
         f.write_str("--- Functions ---\n")?;
-        for (id, func) in self.function_iter() {
+        for (id, _) in self.function_iter() {
             write!(f, "fn {:02} ", id.0)?;
-            self.display_function(func, f, false)?;
+            self.display_function(id, f, false)?;
             f.write_str("\n")?;
         }
         f.write_str("--- Ability Impls ---\n")?;
@@ -127,9 +127,8 @@ impl TypedProgram {
                 w.write_str("\tFUNCTIONS\n")?;
                 first = false;
             }
-            let function = self.get_function(function_id);
             w.write_str("\t")?;
-            self.display_function(function, w, false)?;
+            self.display_function(function_id, w, false)?;
             w.write_str("\n")?;
         }
         let mut first = true;
@@ -426,17 +425,11 @@ impl TypedProgram {
             Type::Function(fun) => {
                 w.write_str("fn(")?;
                 for (idx, param) in self.mem.getn(fun.physical_params).iter().enumerate() {
-                    if param.kind == FnParamKind::LambdaEnv {
+                    if fun.is_lambda && idx == 0 {
                         w.write_str("(env)")?;
                     }
                     if param.kind == FnParamKind::Context {
                         w.write_str("(ctx)")?;
-                    }
-                    // Param names are not abi: a rename must not change the
-                    // structural signature
-                    if mode != TypeDisplayMode::Structural {
-                        self.write_ident(w, param.name)?;
-                        w.write_str(": ")?;
                     }
                     self.display_type_id_ext(w, param.type_id, mode, visiting)?;
                     let last = idx == fun.physical_params.len() as usize - 1;
@@ -452,10 +445,9 @@ impl TypedProgram {
                 self.display_type_id_ext(w, fp.function_type_id, mode, visiting)?;
                 Ok(())
             }
-            Type::FunctionReference(fr) => {
-                write!(w, "fnref(")?;
+            Type::FunctionIdReference(fr) => {
+                w.write_str("fn ")?;
                 self.write_ident(w, self.get_function(fr.function_id).name)?;
-                w.write_str(")")?;
                 Ok(())
             }
             Type::Lambda(lam_id) => {
@@ -577,18 +569,13 @@ impl TypedProgram {
         w.write_str(" }")
     }
 
-    pub fn function_to_string(&self, function: &TypedFunction, display_block: bool) -> String {
-        let mut string = String::new();
-        self.display_function(function, &mut string, display_block).unwrap();
-        string
-    }
-
     pub fn display_function(
         &self,
-        function: &TypedFunction,
+        function_id: FunctionId,
         w: &mut impl Write,
         display_block: bool,
     ) -> std::fmt::Result {
+        let function = self.get_function(function_id);
         if function.linkage.is_external() {
             w.write_str("extern ")?;
         }
@@ -604,7 +591,7 @@ impl TypedProgram {
             }
             None => {}
         }
-        self.display_function_signature(w, &sig, function.specialization_info)?;
+        self.display_function_signature(w, &sig, function.specialization_info, Some(function_id))?;
         if display_block {
             w.write_str(" ")?;
             if let Some(block) = &function.body_block {
@@ -777,12 +764,12 @@ impl TypedProgram {
                     Callee::Abstract { .. } | Callee::AbstractGeneric { .. } => {
                         w.write_str("abstract ")?;
                         let signature = self.get_callee_function_signature(&call.callee);
-                        self.display_function_signature(w, &signature, None)?;
+                        self.display_function_signature(w, &signature, None, None)?;
                     }
                     Callee::Builtin { .. } => {
                         w.write_str("builtin ")?;
                         let signature = self.get_callee_function_signature(&call.callee);
-                        self.display_function_signature(w, &signature, None)?;
+                        self.display_function_signature(w, &signature, None, None)?;
                     }
                     Callee::DynamicFunction { function_pointer_expr } => {
                         self.display_expr_id(*function_pointer_expr, w, indentation)?;
@@ -925,8 +912,11 @@ impl TypedProgram {
                 w.write_str("env=[")?;
                 self.display_type_id(w, lambda_type.env_type, TypeDisplayMode::Name).unwrap();
                 w.write_str("]")?;
-                for arg in self.mem.getn(fn_type.logical_params()) {
-                    self.write_ident(w, arg.name)?;
+                for (index, arg) in self.mem.getn(fn_type.logical_params()).iter().enumerate() {
+                    self.write_ident(
+                        w,
+                        self.get_declared_param_name(lambda_type.function_id, index),
+                    )?;
                     w.write_str(": ")?;
                     self.display_type_id(w, arg.type_id, TypeDisplayMode::Name)?;
                 }
@@ -941,7 +931,7 @@ impl TypedProgram {
                 self.write_ident(w, fun.name)?;
                 w.write_str(".&")
             }
-            TypedExpr::FunctionReference(fr) => {
+            TypedExpr::FunctionIdReference(fr) => {
                 let fun = self.get_function(fr.function_id);
                 self.write_ident(w, fun.name)
             }
@@ -1181,9 +1171,8 @@ impl TypedProgram {
     }
 
     pub fn function_id_to_string(&self, function_id: FunctionId, display_block: bool) -> String {
-        let func = self.get_function(function_id);
         let mut s = String::new();
-        self.display_function(func, &mut s, display_block).unwrap();
+        self.display_function(function_id, &mut s, display_block).unwrap();
         s
     }
 
@@ -1331,17 +1320,17 @@ impl TypedProgram {
             for ability_impl_fn in self.mem.getn(i.functions) {
                 w.write_str("\t\t")?;
                 match ability_impl_fn {
-                    AbilityImplFunction::FunctionId(ability_impl_fn) => {
-                        self.display_function(self.get_function(*ability_impl_fn), w, false)?
+                    Some(AbilityImplFunction::FunctionId(ability_impl_fn)) => {
+                        self.display_function(*ability_impl_fn, w, false)?
                     }
-                    AbilityImplFunction::Abstract(sig) => {
+                    Some(AbilityImplFunction::Abstract(sig)) => {
                         w.write_str("abstract ")?;
-                        self.display_function_signature(w, sig, None)?;
+                        self.display_function_signature(w, sig, None, None)?;
                     }
-                    AbilityImplFunction::Pending => {
+                    None => {
                         w.write_str("pending")?;
                     }
-                    AbilityImplFunction::Unavailable => {
+                    Some(AbilityImplFunction::Unavailable(_)) => {
                         w.write_str("unavailable")?;
                     }
                 };
@@ -1422,9 +1411,13 @@ impl TypedProgram {
         s
     }
 
-    pub fn function_signature_to_string(&self, fn_signature: &FunctionSignature) -> String {
+    pub fn function_signature_to_string(
+        &self,
+        fn_signature: &FunctionSignature,
+        declaration: Option<FunctionId>,
+    ) -> String {
         let mut s = String::new();
-        self.display_function_signature(&mut s, fn_signature, None).unwrap();
+        self.display_function_signature(&mut s, fn_signature, None, declaration).unwrap();
         s
     }
 
@@ -1433,6 +1426,7 @@ impl TypedProgram {
         w: &mut impl Write,
         signature: &FunctionSignature,
         specialization_info: Option<SpecializationInfo>,
+        declaration: Option<FunctionId>,
     ) -> std::fmt::Result {
         if let Some(name) = signature.name {
             self.write_ident(w, name)?;
@@ -1464,12 +1458,14 @@ impl TypedProgram {
         }
         w.write_char('(')?;
         let function_type = self.types.get(signature.function_type).as_function().unwrap();
-        for (idx, param) in self.mem.getn(function_type.physical_params).iter().enumerate() {
+        for (idx, param) in self.mem.getn(function_type.logical_params()).iter().enumerate() {
             if idx > 0 {
                 w.write_str(", ")?;
             }
-            self.write_ident(w, param.name)?;
-            w.write_str(": ")?;
+            if let Some(declaration) = declaration {
+                self.write_ident(w, self.get_declared_param_name(declaration, idx))?;
+                w.write_str(": ")?;
+            }
             self.display_type_id(w, param.type_id, TypeDisplayMode::Name)?;
         }
         w.write_str(")")?;

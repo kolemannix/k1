@@ -29,6 +29,7 @@ let(context(impl writer)) out: *string-builder = sb.&  // ability-keyed
   pass the context explicitly). Its declared type must implement the ability
   itself, so ref-implemented writers need a ref binding. It also registers under
   its concrete type. Several abilities: most keys hit wins; ties are ambiguous.
+- A context param can't be `some fn`: its type comes from its own arg.
 
 ## Metaprogramming: `code`
 - `code = { text: string, spans: list[code-span{start, len, source: u64}] }`;
@@ -98,7 +99,10 @@ ns pre { macro make-point(name: code) { "type $name = { x: i32, y: i32 }" } }
   `:either`, `:array`, `:function`, `:union`, `:int(_)`, ...
 - A bare generic name is a type: `types/id[list]` is `list[t]`; instances report it
   as parent (`types/instance-info[list[int]]`, `.is-instance-of(types/id[list])`).
-- Fn member types: `types/id[do-it.return]`, `types/id[do-it.arg-name]`.
+- Fn member types: a fn name in type position is its `type-of(do-it)`, displayed
+  `fn do-it` (schema `:named-function .{ function-type-id, param-names }`):
+  `do-it.return`, `do-it.arg-name`. A fn type has `.return` and positional
+  `.param-0` (spelling provisional).
 - Synthesis: `types/make-struct(:struct|:union|:packed, [types/field[i64]("x")])`,
   `make-either(tag-type: ?type-id, variants)` / `make-either-default`
   (`variant-data[t]("a")`, `variant-empty("b")`), `make-reference`, `make-array`,

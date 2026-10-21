@@ -30,7 +30,8 @@ impl TypedProgram {
         let rhs_type = self.exprs.get_type(rhs);
         debug_assert_eq!(ty, rhs_type);
         let equals_name = self.ast.idents.f.equals__equals.name;
-        let Some(equals_function_id) = self.direct_ability_fn(ty, ABILITY_ID_EQUALS, equals_name)
+        let Some((_, equals_function_id)) =
+            self.direct_ability_fn(ty, ABILITY_ID_EQUALS, equals_name)
         else {
             self.ice_span(span, "expected equals impl")
         };
@@ -64,9 +65,13 @@ impl TypedProgram {
             .get(impl_handle.base_ability_id)
             .find_function_by_name(&self.mem, fn_name.name)
             .unwrap();
-        let impl_fn = self.get_ability_impl_function(impl_handle.full_impl_id, ability_fn.index);
-        let (callee, type_args) = match impl_fn {
-            AbilityImplFunction::FunctionId(function_id) => {
+        let (callee, type_args) = match self.resolve_ability_impl_fn_callee(
+            impl_handle.full_impl_id,
+            ability_fn.index,
+            ctx.scope_id,
+            span,
+        )? {
+            Callee::StaticFunction(function_id) => {
                 let signature = self.get_function(function_id).signature();
                 if !signature.has_type_params() {
                     (Callee::StaticFunction(function_id), TypeArgs::empty())
@@ -91,15 +96,8 @@ impl TypedProgram {
                     );
                 }
             }
-            AbilityImplFunction::Abstract(function_sig) if !function_sig.has_type_params() => (
-                Callee::Abstract {
-                    name: function_sig.name,
-                    function_type: function_sig.function_type,
-                },
-                TypeArgs::empty(),
-            ),
-            AbilityImplFunction::Pending => unreachable!(),
-            AbilityImplFunction::Abstract(_) | AbilityImplFunction::Unavailable => {
+            callee @ Callee::Abstract { .. } => (callee, TypeArgs::empty()),
+            _ => {
                 return self.synth_typed_call_typed_args(
                     fn_name.with_span(span),
                     fn_type_args,
@@ -128,7 +126,7 @@ impl TypedProgram {
             )?);
         }
         let args = self.mem.pushn(&checked_args);
-        self.finish_call(Call { callee, args, type_args }, span, ctx)
+        self.finish_call(Call { callee, args, type_args }, Some(ability_fn.function_id), span, ctx)
     }
 
     pub(super) fn synth_test_thunk(
@@ -548,8 +546,9 @@ impl TypedProgram {
         is_method: bool,
     ) -> K1Result<TypedExprId> {
         let call = ParsedCall::without_type_args(name, MSlice::empty(), is_method);
-        let known_callee = if is_method { None } else { self.core_fn_callee(&name) };
-        self.eval_function_call(&call, name.name_span, Some((type_args, args)), ctx, known_callee)
+        let resolution =
+            if is_method { None } else { self.core_fn_callee(&name).map(CallResolution::Call) };
+        self.eval_function_call(&call, name.name_span, Some((type_args, args)), ctx, resolution)
     }
 
     fn core_fn_callee(&mut self, name: &QIdent) -> Option<Callee> {

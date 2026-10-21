@@ -59,6 +59,7 @@ impl[t, c: wsource[t = t]] wview[t = t] for c {
 fn(test) where-clauses-gate-default-fns() {
   let p: plain-box = .{ v = 5 }
   assert(p.the-item() == 5)
+  assert(test-compile(wsource[t = i64]@(plain-box)/item-tag(p)).!.contains-string("item-tag is not available for plain-box"))
   assert(p.item-equals(5))
   assert-equals(p.item-string(), "5")
   assert(p.item-matches(fn (x: i64) { x > 3 }))

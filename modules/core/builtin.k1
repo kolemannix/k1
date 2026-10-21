@@ -241,10 +241,11 @@ ns types {
     string,
     never,
     function({
-      params: span[{ name: string, type-id: type-id }],
+      params: span[type-id],
       return-type-id: type-id,
     }),
     function-pointer({ function-type-id: type-id }),
+    named-function({ function-type-id: type-id, param-names: span[string] }),
     other(string)
   }
 

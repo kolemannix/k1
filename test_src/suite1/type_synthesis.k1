@@ -125,8 +125,8 @@ ns type_synthesis {
     assert-equals(made-fn, types/id[fn(i64, string) -> bool])
     require made-fn.schema() is :function .{ params, return-type-id }
       and params.len() == 2
-      and params.[0].type-id == types/id[i64]
-      and params.[1].type-id == types/id[string]
+      and params.[0] == types/id[i64]
+      and params.[1] == types/id[string]
       and return-type-id == types/id[bool]
       else crash("fn schema mismatch")
 

@@ -24,12 +24,9 @@ pub(crate) struct InferArgStash<'a> {
     /// inference-mode results, which is exactly what the later argument walks of the
     /// same (discarded) call would produce
     pub ctx: EvalExprContext,
-    /// Pair index of the first value-argument pair; earlier pairs (explicitly passed
-    /// type args, the return-type pair) are never stashable
-    pub first_value_pair_index: u32,
-    /// Value-argument indices that must not be stashed; fnlike type params get their
+    /// Value arguments that must not be stashed; fnlike type params get their
     /// values from determine_fnlike_type_args_for_call instead of the argument pass
-    pub excluded_args: &'a [u32],
+    pub excluded_args: &'a [ParsedExprId],
     /// Output: each stashed argument keyed by its parsed expr, so consumers splice by
     /// identity rather than depending on argument alignment order
     pub stashed: &'a mut SV8<(ParsedExprId, TypedExprId)>,
@@ -125,12 +122,9 @@ impl TypedProgram {
                 allow_mismatch: true,
             });
         }
-        let first_value_pair_index = pairs.len() as u32;
         pairs.extend_from_slice(value_pairs);
         let stash = match stash {
-            Some((ctx, stashed)) => {
-                Some(InferArgStash { ctx, first_value_pair_index, excluded_args: &[], stashed })
-            }
+            Some((ctx, stashed)) => Some(InferArgStash { ctx, excluded_args: &[], stashed }),
             None => None,
         };
         let (solutions, _all_solutions) = self
@@ -228,10 +222,7 @@ impl TypedProgram {
                     let stash_ctx = match &stash {
                         Some(st)
                             if (expected_is_concrete || slots_are_final)
-                                && index as u32 >= st.first_value_pair_index
-                                && !st
-                                    .excluded_args
-                                    .contains(&(index as u32 - st.first_value_pair_index)) =>
+                                && !st.excluded_args.contains(parsed_expr) =>
                         {
                             Some(st.ctx)
                         }
@@ -597,28 +588,27 @@ impl TypedProgram {
                 .as_function()
                 .unwrap()
                 .return_type;
-            let (inference_pairs, first_value_pair_index) = self.get_call_inference_pairs(
+            let inference_pairs = self.get_call_inference_pairs(
                 self.mem.getn(type_params),
                 call_type_args,
                 ctx.expected_type_id,
                 return_type,
                 args_and_params,
             );
-            let mut excluded_args =
-                self.tmp.new_list(generic_function_sig.fnlike_type_params.len());
-            for ftp in self.mem.getn(generic_function_sig.fnlike_type_params) {
-                excluded_args.push(ftp.value_param_index);
-            }
+            let excluded_args = args_and_params.get_fnlike_args(
+                generic_function_sig.fnlike_type_params,
+                &mut self.tmp,
+                &self.mem,
+            );
             let stash = Some(InferArgStash {
                 ctx,
-                first_value_pair_index,
-                excluded_args: &excluded_args,
+                excluded_args: self.tmp.getn(excluded_args),
                 stashed: stashed_args,
             });
             self.infer_types(
                 self.mem.getn(type_params),
                 type_params,
-                &inference_pairs,
+                self.tmp.getn(inference_pairs),
                 call_span,
                 ctx.scope_id,
                 stash,
@@ -658,14 +648,15 @@ impl TypedProgram {
     }
 
     pub(crate) fn get_call_inference_pairs(
-        &self,
+        &mut self,
         type_params: &[TypeId],
         call_type_args: &[CallTypeArg],
         expected_type: Option<TypeId>,
         return_type: TypeId,
         args_and_params: &ArgsAndParams,
-    ) -> (SV8<InferenceInputPair>, u32) {
-        let mut pairs: SV8<InferenceInputPair> = smallvec![];
+    ) -> TmpSlice<InferenceInputPair> {
+        let mut pairs: TmpList<InferenceInputPair> =
+            self.tmp.new_list(type_params.len() as u32 + 1 + args_and_params.args.len());
         for (param, call_type_arg) in type_params.iter().zip(call_type_args) {
             if let CallTypeArg::Passed { type_id, .. } = call_type_arg {
                 pairs.push(InferenceInputPair {
@@ -682,11 +673,14 @@ impl TypedProgram {
                 allow_mismatch: true,
             });
         }
-        let first_value_pair_index = pairs.len() as u32;
-        for (arg, param) in args_and_params.iter(&self.tmp) {
+        let params = self.mem.getn(args_and_params.params);
+        for (arg, param) in self.tmp.getn(args_and_params.args).iter().zip(params) {
             let arg = match arg {
-                MaybeTypedExpr::Typed(expr) => TypeOrParsedExpr::Type(self.exprs.get_type(*expr)),
-                MaybeTypedExpr::Parsed(parsed_expr) => TypeOrParsedExpr::Parsed(*parsed_expr),
+                Some(MaybeTypedExpr::Typed(expr)) => {
+                    TypeOrParsedExpr::Type(self.exprs.get_type(*expr))
+                }
+                Some(MaybeTypedExpr::Parsed(parsed_expr)) => TypeOrParsedExpr::Parsed(*parsed_expr),
+                None => continue,
             };
             pairs.push(InferenceInputPair {
                 arg,
@@ -694,7 +688,7 @@ impl TypedProgram {
                 allow_mismatch: false,
             });
         }
-        (pairs, first_value_pair_index)
+        pairs.to_slice()
     }
 
     pub(crate) fn determine_fnlike_type_args_for_call(
@@ -722,8 +716,10 @@ impl TypedProgram {
         }
 
         for function_type_param in self.mem.getn(original_function_sig.fnlike_type_params) {
-            let (corresponding_arg, _) =
-                args_and_params.get(function_type_param.value_param_index as usize, &self.tmp);
+            let corresponding_arg = self
+                .tmp
+                .get_nth(args_and_params.args, function_type_param.value_param_index as usize)
+                .unwrap();
             let expected = self.substitute_in_type(function_type_param.type_id, &subst_pairs);
             let value = match corresponding_arg {
                 MaybeTypedExpr::Typed(typed) => {

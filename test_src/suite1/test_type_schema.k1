@@ -59,10 +59,15 @@ fn(test) schema-and-instance-reflection() {
   require schema[recursive-type] is :struct _ else crash("")
 
   let is-zero-ptr: *fn(int) -> bool = is-zero.&
+  assert-equals(types/id[type-of(is-zero-ptr)], types/id[type-of(is-zero.&)])
   require schema[type-of(is-zero-ptr)] is :function-pointer .{ function-type-id } else crash("")
   require function-type-id.schema() is :function .{ params, return-type-id } else crash("")
   assert(return-type-id.schema() is :bool)
-  assert-equals(params.[0].name, "x")
+  assert-equals(params.[0], types/id[int])
+  require schema[is-zero] is :named-function .{ function-type-id = named-fn-type, param-names }
+    and named-fn-type == function-type-id
+    and param-names.[0] == "x"
+    else crash("")
 
   require schema[union { a: int, b: f64 }]
     is :union .{ fields }
@@ -94,6 +99,7 @@ fn(test) zero-safe-types() {
   assert(types/is-zero-safe[list[int]]())
   assert(types/is-zero-safe[?*int]())
   assert(not types/is-zero-safe[*int]())
+  assert(types/is-zero-safe[is-zero]())
   assert(not types/is-zero-safe[{ a: int, b: *int }]())
   assert(not types/id[*int].info().zero-safe)
 }

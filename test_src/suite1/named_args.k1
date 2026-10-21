@@ -1,0 +1,29 @@
+ns named_args
+
+ability combine { fn combine(self, other: self): self }
+impl combine for i32 { fn combine(self, o: i32): i32 { self - o } }
+
+ability conv[t] { fn conv[u](self, x: u, flag: bool): t }
+type box = { n: int }
+impl conv[t = int] for box { fn conv[w](self, y: w, f: bool): int { if f self.n else 0 } }
+ns for box { fn scaled(self, by: int): int { self.n * by } }
+
+fn sub(a: int, b: int): int { a - b }
+
+fn(test) ability-call-args-bind-by-the-ability-names() {
+  let a: i32 = 10
+  assert-equals(combine/combine(other = 3, self = a), 7)
+  assert-equals(a.combine(other = 3), 7)
+  assert-equals(combine@(i32)/combine(other = 3, self = a), 7)
+  assert(test-compile(a.combine(o = 3)).!.contains-string("No parameter named o"))
+  let b: box = .{ n = 4 }
+  assert-equals(conv[t = int]@(box)/conv[u = bool](flag = true, x = false, self = b), 4)
+}
+
+fn(test) named-args-bind-their-param-unnamed-their-position() {
+  assert-equals(sub(b = 1, a = 3), 2)
+  assert(test-compile(sub(b = 1, 3)).!.contains-string("Duplicate argument for parameter b"))
+  let b: box = .{ n = 4 }
+  assert(test-compile(b.scaled(q = 2)).!.contains-string("No parameter named q"))
+  assert(test-compile(b.scaled(self = b)).!.contains-string("Duplicate argument for parameter self"))
+}

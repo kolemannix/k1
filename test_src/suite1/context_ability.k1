@@ -22,6 +22,8 @@ fn log-concrete(context out: *string-builder)(m: string) {
   out.write(m)
 }
 
+fn add-then[t: add](context c: t)(v: t, f: some fn t -> t): t { f(v + c) }
+
 fn tag-context[t: tagged](context c: t)(): int {
   c.tag()
 }
@@ -64,4 +66,9 @@ fn(test) tagged-context-explicit-and-shadowed() {
     partial-result
   }
   assert(all-result == "5")
+}
+
+fn(test) context-resolved-after-inference-before-fnlike() {
+  let(context) c: int = 5
+  assert-equals(add-then(1, fn x. x * 2), 12)
 }

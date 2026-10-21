@@ -52,10 +52,11 @@ with the same `if x is { ... }` as any other sum, at compile time or runtime.
     string,
     never,
     function({
-      params: span[{ name: string, type-id: type-id }],
+      params: span[type-id],
       return-type-id: type-id,
     }),
     function-pointer({ function-type-id: type-id }),
+    named-function({ function-type-id: type-id, param-names: span[string] }),
     other(string)
   }
 
@@ -609,7 +610,8 @@ string
 Predicate 'is-list' failed on type i64. Therefore, cannot call function 'element-type' with given types: i64
 ```
 
-Functions reflect too, down to parameter names:
+Functions reflect too. Parameter names belong to the declaration, so `do-it`
+names them and its function type does not:
 
 ```k1
 fn do-it(input: string, count: u32): bool { count > 0 and input.non-empty() }
@@ -618,8 +620,9 @@ fn do-it(input: string, count: u32): bool { count > 0 and input.non-empty() }
 ```k1
   println(types/id[do-it.return].name())
   println(types/id[do-it.input].name())
-  require types/schema[do-it] is :function .{ params, return-type-id } else crash("do-it is a function")
-  for p in params { println("  ${p.name}: ${p.type-id.name()}") }
+  require types/schema[do-it] is :named-function .{ function-type-id = do-it-type, param-names } else crash("do-it is a named function")
+  require do-it-type.schema() is :function .{ params, return-type-id } else crash("do-it has a function type")
+  for name in param-names { println("  ${name}: ${params.[it-index].name()}") }
   println("  -> ${return-type-id.name()}")
   #static assert(types/id[do-it.return] == types/id[bool])
 
@@ -634,7 +637,7 @@ string
   input: string
   count: u32
   -> bool
-fn(input: string, count: u32) -> bool
+fn(string, u32) -> bool
 ```
 
 ## Elsewhere

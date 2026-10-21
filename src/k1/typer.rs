@@ -160,9 +160,6 @@ pub const ABILITY_ID_ITERATOR: AbilityId = AbilityId(NonZeroU32::new(20).unwrap(
 pub const ABILITY_ID_ITERABLE: AbilityId = AbilityId(NonZeroU32::new(21).unwrap());
 //rustfmt: on
 
-pub const FUNC_PARAM_IDEAL_COUNT: usize = 8;
-pub const FUNC_TYPE_PARAM_IDEAL_COUNT: usize = 4;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TypeSubstitutionPair {
     from: TypeId,
@@ -589,25 +586,25 @@ enum AbilityExprRole {
 }
 
 pub(crate) struct ArgsAndParams {
-    args: TmpSlice<MaybeTypedExpr>,
-    params: TmpSlice<FnParamType>,
+    args: TmpSlice<Option<MaybeTypedExpr>>,
+    params: MSlice<FnParamType, TypedProgram>,
 }
 
 impl ArgsAndParams {
-    fn get(&self, index: usize, mem: &Mem<MemTmp>) -> (MaybeTypedExpr, FnParamType) {
-        (*mem.get_nth(self.args, index), *mem.get_nth(self.params, index))
-    }
-
-    fn iter(
+    fn get_fnlike_args(
         &self,
-        mem: &Mem<MemTmp>,
-    ) -> impl Iterator<Item = (&'static MaybeTypedExpr, &'static FnParamType)> + 'static {
-        mem.getn_zip(self.args, self.params)
-    }
-
-    fn len(&self) -> u32 {
-        debug_assert!(self.args.len() == self.params.len());
-        self.args.len()
+        fnlike_type_params: PermSlice<FnlikeTypeParam>,
+        tmp: &mut Mem<MemTmp>,
+        mem: &Mem<TypedProgram>,
+    ) -> TmpSlice<ParsedExprId> {
+        let args = tmp.getn(self.args);
+        let mut fnlike_args = tmp.new_list(fnlike_type_params.len());
+        for ftp in mem.getn(fnlike_type_params) {
+            if let Some(MaybeTypedExpr::Parsed(parsed)) = args[ftp.value_param_index as usize] {
+                fnlike_args.push(parsed);
+            }
+        }
+        fnlike_args.to_slice()
     }
 }
 
@@ -1089,11 +1086,20 @@ pub enum CallTypeArg {
 }
 
 #[derive(Clone)]
-pub enum CallResolution {
+enum CallResolution {
     OtherExpr(TypedExprId),
     Call(Callee),
-    MethodCall { callee: Callee, receiver: TypedExprId },
-    AbilityCall { callee: Callee, receiver: Option<TypedExprId>, type_args: SV4<CallTypeArg> },
+    MethodCall {
+        callee: Callee,
+        receiver: TypedExprId,
+    },
+    AbilityCall {
+        callee: Callee,
+        declaration: FunctionId,
+        receiver: Option<TypedExprId>,
+        type_args: TmpSlice<CallTypeArg>,
+        args: TmpSlice<Option<MaybeTypedExpr>>,
+    },
 }
 
 #[derive(Clone)]
@@ -1357,7 +1363,7 @@ pub struct FunctionPointerExpr {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct FunctionReferenceExpr {
+pub struct FunctionIdReferenceExpr {
     pub function_id: FunctionId,
 }
 
@@ -1460,7 +1466,7 @@ pub enum TypedExpr {
     /// - An expression is returned that is a struct value of its environment
     Lambda(LambdaExpr),
     FunctionPointer(FunctionPointerExpr),
-    FunctionReference(FunctionReferenceExpr),
+    FunctionIdReference(FunctionIdReferenceExpr),
 }
 
 impl From<VariableExpr> for TypedExpr {
@@ -1495,7 +1501,7 @@ impl TypedExpr {
             TypedExpr::Continue { .. } => "continue",
             TypedExpr::Lambda(_) => "lambda",
             TypedExpr::FunctionPointer(_) => "function_pointer",
-            TypedExpr::FunctionReference(_) => "function_reference",
+            TypedExpr::FunctionIdReference(_) => "function_id_reference",
             TypedExpr::StaticValue(_) => "static_value",
         }
     }
@@ -2108,20 +2114,6 @@ macro_rules! ice_span {
 }
 
 #[macro_export]
-macro_rules! format_ident {
-    ($self: ident, $($format_args:expr),* $(,)?) => {
-        {
-            let mut s = std::mem::take(&mut $self.buffers.name_builder);
-            s.write_fmt(format_args!($($format_args),*)).unwrap();
-            let ident = $self.ast.idents.intern(&s);
-            s.clear();
-            $self.buffers.name_builder = s;
-            ident
-        }
-    }
-}
-
-#[macro_export]
 macro_rules! get_ident {
     ($self:ident, $name:expr) => {
         $self
@@ -2189,11 +2181,9 @@ impl AbilityImplKind {
 #[derive(Clone, Copy)]
 pub enum AbilityImplFunction {
     FunctionId(FunctionId),
-    Pending,
     Abstract(FunctionSignature),
     /// The function is not available in this particular impl for this ability for this type.
-    /// Currently only used when a default fn has constraints that aren't satisfied
-    Unavailable,
+    Unavailable(StringId),
 }
 
 #[derive(Clone, Copy)]
@@ -2211,7 +2201,7 @@ pub struct TypedAbilityImpl {
     pub impl_arguments: TypeIdSlice,
     /// Invariant: These functions are ordered how they are defined in the ability, NOT how they appear in
     /// the impl code
-    pub functions: PermSlice<AbilityImplFunction>,
+    pub functions: PermSlice<Option<AbilityImplFunction>>,
     pub substitutions: PermSlice<TypeSubstitutionPair>,
     pub scope_id: ScopeId,
     pub span: Span,
@@ -3798,44 +3788,9 @@ impl TypedProgram {
         match (self.types.get(expected), self.types.get(actual)) {
             (Type::InferenceHole(_hole), _any) => Ok(()),
             (Type::Struct(s1), Type::Struct(s2)) => {
-                // If I expect a certain nominal type
-                // I won't accept an anonymous type
-                // Nor a nominal type of a different kind
-                // But I will accept the same nominal type,
-                // But if I expect an anonymous struct, the a named or anonymous one will do
-                // if it matches structurally
-                let expected_defn_info = self.get_defn_info(expected);
-                let actual_defn_info = self.get_defn_info(actual);
-                if let Some(expected_defn_info) = expected_defn_info {
-                    match actual_defn_info {
-                        None => {
-                            debug!("expected_defn_info some actual none");
-                            return Err(k1_format_user!(
-                                self,
-                                "Expected named struct {} but got anonymous struct {}",
-                                expected,
-                                actual
-                            ));
-                        }
-                        Some(actual_defn_info) => {
-                            debug!("expected_defn_info some actual some");
-                            if expected_defn_info.name == actual_defn_info.name
-                                && expected_defn_info.namespace_id == actual_defn_info.namespace_id
-                            {
-                                // Same nominal type, we're good
-                            } else {
-                                return Err(k1_format_user!(
-                                    self,
-                                    "Expected named struct {} but got named struct {}",
-                                    expected,
-                                    actual
-                                ));
-                            }
-                        }
-                    }
+                if self.get_defn_info(expected).is_some() {
+                    return Err(k1_format_user!(self, "Expected {} but got {}", expected, actual));
                 }
-
-                // Proceed to structural typecheck
                 if s1.record_kind != s2.record_kind {
                     return Err(k1_format_user!(
                         self,
@@ -3896,17 +3851,18 @@ impl TypedProgram {
                         msg
                     ))
                 } else {
-                    for (p1, p2) in self
+                    for (index, (p1, p2)) in self
                         .mem
                         .getn(f1.logical_params())
                         .iter()
                         .zip(self.mem.getn(f2.logical_params()).iter())
+                        .enumerate()
                     {
                         if let Err(msg) = self.check_types(p1.type_id, p2.type_id, scope_id) {
                             return Err(k1_format_user!(
                                 self,
                                 "Incorrect type for parameter '{}': {}",
-                                p1.name,
+                                self.get_positional_param_name(index),
                                 msg
                             ));
                         }
@@ -4033,7 +3989,7 @@ impl TypedProgram {
                     generic
                 ))
             }
-            (Type::FunctionPointer(_), Type::FunctionReference(_)) => Err(k1_format_user!(
+            (Type::FunctionPointer(_), Type::FunctionIdReference(_)) => Err(k1_format_user!(
                 self,
                 "Expected {} but got {}: use .& to take the function's address",
                 expected,
@@ -4045,7 +4001,7 @@ impl TypedProgram {
                 expected,
                 actual,
             )),
-            (Type::LambdaObject(_), Type::FunctionReference(_) | Type::Lambda(_)) => {
+            (Type::LambdaObject(_), Type::FunctionIdReference(_) | Type::Lambda(_)) => {
                 Err(k1_format_user!(
                     self,
                     "Expected {} but got {}: use .to-dyn() to make a dynamic function object",
@@ -4142,14 +4098,15 @@ impl TypedProgram {
             self.register_function_specialization(*specialization_info);
         }
         let is_concrete = self.is_function_concrete(&function);
-        if function.compiler_debug() {
-            eprintln!(
-                "is_function_concrete={is_concrete} for {}",
-                self.function_to_string(&function, false)
-            );
-        }
+        let is_compiler_debug = function.compiler_debug();
         function.flags.set(TypedFunctionFlags::Concrete, is_concrete);
         self.functions.add(function);
+        if is_compiler_debug {
+            eprintln!(
+                "is_function_concrete={is_concrete} for {}",
+                self.function_id_to_string(id, false)
+            );
+        }
         id
     }
 
@@ -4255,8 +4212,7 @@ impl TypedProgram {
                     )),
                 )?
                 .expect("an ability impl cannot be conditionally compiled");
-            let impl_fn = AbilityImplFunction::FunctionId(spec_fn_id);
-            impl_functions.push(impl_fn)
+            impl_functions.push(Some(AbilityImplFunction::FunctionId(spec_fn_id)))
         }
         self.ability_impls.get_mut(impl_id).functions = impl_functions.to_slice();
         Ok(())
@@ -4298,11 +4254,10 @@ impl TypedProgram {
             };
             debug!(
                 "specialized constraint ability function signature {}: {}",
-                self.function_signature_to_string(&generic_sig),
-                self.function_signature_to_string(&specialized_signature),
+                self.function_signature_to_string(&generic_sig, Some(f.function_id)),
+                self.function_signature_to_string(&specialized_signature, Some(f.function_id)),
             );
-            let impl_fn = AbilityImplFunction::Abstract(specialized_signature);
-            impl_functions.push(impl_fn)
+            impl_functions.push(Some(AbilityImplFunction::Abstract(specialized_signature)))
         }
         self.add_ability_impl(TypedAbilityImpl {
             kind: AbilityImplKind::TypeParamConstraint,
@@ -5127,9 +5082,7 @@ impl TypedProgram {
         self.bind_substitutions(new_impl_scope, pairs.as_slice());
 
         let mut pending_functions = self.mem.new_list(blanket_impl.functions.len());
-        for _ in 0..blanket_impl.functions.len() {
-            pending_functions.push(AbilityImplFunction::Pending);
-        }
+        pending_functions.fill_to_cap(None);
 
         let id = self.add_ability_impl(TypedAbilityImpl {
             kind: AbilityImplKind::DerivedFromBlanket { blanket_impl_id },
@@ -5157,55 +5110,52 @@ impl TypedProgram {
         index: u32,
     ) -> AbilityImplFunction {
         let imp = *self.ability_impls.get(impl_id);
-        let function = *self.mem.get_nth(imp.functions, index as usize);
-        let AbilityImplFunction::Pending = function else {
+        if let Some(function) = *self.mem.get_nth(imp.functions, index as usize) {
             return function;
-        };
+        }
         let AbilityImplKind::DerivedFromBlanket { blanket_impl_id } = imp.kind else {
             self.ice_span(imp.span, "pending function on a non-blanket-derived impl")
         };
         let blanket_functions = self.ability_impls.get(blanket_impl_id).functions;
-        let AbilityImplFunction::FunctionId(blanket_function_id) =
+        let Some(AbilityImplFunction::FunctionId(blanket_function_id)) =
             *self.mem.get_nth(blanket_functions, index as usize)
         else {
             self.ice_span(imp.span, "blanket impl function is not a declared function")
         };
-        let resolved = if self
-            .check_ability_fn_where_constraints(
-                imp.ability_id,
-                imp.impl_arguments,
-                imp.self_type_id,
-                index,
-                imp.scope_id,
-                imp.span,
-            )
-            .is_err()
-        {
-            AbilityImplFunction::Unavailable
-        } else {
-            let blanket_param_count =
-                self.ability_impls.get(blanket_impl_id).blanket_type_params.len() as usize;
-            let mut solutions: SV8<TypeId> = smallvec![];
-            for pair in &self.mem.getn(imp.substitutions)[..blanket_param_count] {
-                solutions.push(pair.to);
+        let resolved = match self.check_ability_fn_where_constraints(
+            imp.ability_id,
+            imp.impl_arguments,
+            imp.self_type_id,
+            index,
+            imp.scope_id,
+            imp.span,
+        ) {
+            Err(failure) => AbilityImplFunction::Unavailable(failure.message),
+            Ok(()) => {
+                let blanket_param_count =
+                    self.ability_impls.get(blanket_impl_id).blanket_type_params.len() as usize;
+                let mut solutions: SV8<TypeId> = smallvec![];
+                for pair in &self.mem.getn(imp.substitutions)[..blanket_param_count] {
+                    solutions.push(pair.to);
+                }
+                let solutions_handle = self.intern_type_slice(&solutions);
+                let no_fnlike_args = self.intern_type_args(TypeArgs::empty());
+                let function_type = self.substitute_in_type(
+                    self.get_function(blanket_function_id).type_id,
+                    self.mem.getn(imp.substitutions),
+                );
+                let specialized_function_id = self.specialize_function(
+                    blanket_function_id,
+                    function_type,
+                    solutions_handle,
+                    no_fnlike_args,
+                    Some((imp.ability_id, imp.self_type_id)),
+                );
+                self.add_specialized_function_scope(specialized_function_id, imp.scope_id, &[]);
+                AbilityImplFunction::FunctionId(specialized_function_id)
             }
-            let solutions_handle = self.intern_type_slice(&solutions);
-            let no_fnlike_args = self.intern_type_args(TypeArgs::empty());
-            let function_type = self.substitute_in_type(
-                self.get_function(blanket_function_id).type_id,
-                self.mem.getn(imp.substitutions),
-            );
-            let specialized_function_id = self.specialize_function(
-                blanket_function_id,
-                function_type,
-                solutions_handle,
-                no_fnlike_args,
-                Some((imp.ability_id, imp.self_type_id)),
-            );
-            self.add_specialized_function_scope(specialized_function_id, imp.scope_id, &[]);
-            AbilityImplFunction::FunctionId(specialized_function_id)
         };
-        self.mem.getn_mut(imp.functions)[index as usize] = resolved;
+        self.mem.getn_mut(imp.functions)[index as usize] = Some(resolved);
         resolved
     }
 
@@ -5399,7 +5349,7 @@ impl TypedProgram {
                             self.ast.idents.get_string(name.name),
                         );
                     }
-                    Ok((None, self.function_to_reference(fn_id, variable_name_span)))
+                    Ok((None, self.function_to_id_reference(fn_id, variable_name_span)))
                 }
             },
             Some((variable_id, variable_scope_id)) => {
@@ -5658,8 +5608,8 @@ impl TypedProgram {
                 && let Some(fn_id) = self.find_function_namespaced(ctx.scope_id, &call.name)?
             {
                 let reference =
-                    self.compile_specialized_function_reference(fn_id, &call, call_span, ctx)?;
-                return Ok(self.reference_to_pointer(reference, span, ctx.scope_id));
+                    self.compile_specialized_function_id_reference(fn_id, &call, call_span, ctx)?;
+                return Ok(self.function_id_reference_to_pointer(reference, span, ctx.scope_id));
             }
         }
         let expected_type = match ctx.expected_type_id {
@@ -5667,8 +5617,8 @@ impl TypedProgram {
             Some(t) => Some(self.get_type_id_dereferenced(t)),
         };
         let input = self.eval_expr(base_expr, ctx.with_expected_type(expected_type))?;
-        if self.types.get(self.exprs.get_type(input)).as_function_reference().is_some() {
-            return Ok(self.reference_to_pointer(input, span, ctx.scope_id));
+        if self.types.get(self.exprs.get_type(input)).as_function_id_reference().is_some() {
+            return Ok(self.function_id_reference_to_pointer(input, span, ctx.scope_id));
         }
         self.warn_packed_field_address_of(input, span);
         self.synth_address_of(input, span, false)
@@ -6234,7 +6184,6 @@ impl TypedProgram {
                     )
                     .map_err(|msg| kerr!(self, span, "{}", msg))?;
 
-                // Get the function id from it by name I guess
                 let call_ast_expr = *self.ast.exprs.get(qcall.call_expr).expect_call();
                 let call_span = self.ast.exprs.get_span(qcall.call_expr);
                 let call_name = call_ast_expr.name.name;
@@ -6251,10 +6200,28 @@ impl TypedProgram {
                         self.ability_signature_to_string(signature)
                     );
                 };
-                let impl_function =
-                    self.get_ability_impl_function(impl_handle.full_impl_id, tafr.index);
-                let callee = self.make_ability_impl_fn_callee(impl_function);
-                self.eval_function_call(&call_ast_expr, call_span, None, ctx, Some(callee))
+                let callee = self.resolve_ability_impl_fn_callee(
+                    impl_handle.full_impl_id,
+                    tafr.index,
+                    ctx.scope_id,
+                    span,
+                )?;
+                let (type_args, args) = self.bind_ability_call_args(
+                    tafr,
+                    &call_ast_expr,
+                    call_span,
+                    None,
+                    None,
+                    ctx.scope_id,
+                )?;
+                let resolution = CallResolution::AbilityCall {
+                    callee,
+                    declaration: tafr.function_id,
+                    receiver: None,
+                    type_args,
+                    args,
+                };
+                self.eval_function_call(&call_ast_expr, call_span, None, ctx, Some(resolution))
             }
             ParsedExpr::TypeHint(th) => {
                 let th = *th;
@@ -6812,7 +6779,6 @@ impl TypedProgram {
         struct ClosureSetup {
             environment_struct: TypedExprId,
             environment_struct_type: TypeId,
-            environment_param: FnParamType,
             environment_param_variable_id: VariableId,
             prologue_stmts: SV8<TypedStmtId>,
             capture_bindings: SV4<(VariableId, Span)>,
@@ -6906,7 +6872,7 @@ impl TypedProgram {
             ScopeLambdaInfo { expected_return_type, returned_variable: None },
         );
         let mut typed_params = self.mem.new_list(lambda_arguments.len() + 1);
-
+        let mut param_variables = self.mem.new_list(lambda_arguments.len() + 1);
         for (index, arg) in self.ast.mem.getn(lambda_arguments).iter().enumerate() {
             let arg_type_id = match arg.ty {
                 Some(type_expr) => self.eval_type_expr(type_expr, ctx.scope_id)?,
@@ -6932,29 +6898,18 @@ impl TypedProgram {
                     expected_ty.type_id
                 }
             };
-            typed_params.push(FnParamType {
+            typed_params.push(FnParamType { type_id: arg_type_id, kind: FnParamKind::Plain });
+            let variable_id = self.variables.add(Variable {
                 name: arg.binding,
                 type_id: arg_type_id,
-                kind: FnParamKind::Plain,
-            });
-        }
-
-        let mut param_variables = self.mem.new_list(lambda_arguments.len() + 1);
-
-        for (typed_arg, parsed_arg) in typed_params.iter().zip(self.ast.mem.getn(lambda_arguments))
-        {
-            let name = typed_arg.name;
-            let variable_id = self.variables.add(Variable {
-                name,
-                type_id: typed_arg.type_id,
                 owner_scope: lambda_scope_id,
                 kind: VariableKind::FnParam(FunctionId::PENDING),
                 flags: VariableFlags::empty(),
                 usage_count: 0,
-                defn_span: parsed_arg.span,
+                defn_span: arg.span,
             });
-            self.scopes.add_variable(lambda_scope_id, name, variable_id);
-            param_variables.push(TypedFunctionParam { variable_id, span: parsed_arg.span })
+            self.scopes.add_variable(lambda_scope_id, arg.binding, variable_id);
+            param_variables.push(TypedFunctionParam { variable_id, span: arg.span })
         }
 
         // For closures, the environment param, its casted alias, and one `let` per capture
@@ -6972,13 +6927,8 @@ impl TypedProgram {
                 self.add_reference_type(environment_struct_type);
 
             // We decay down to POINTER so that the function calls typecheck
-            let environment_param = FnParamType {
-                name: self.ast.idents.b.lambda_env_var_name,
-                type_id: POINTER_TYPE_ID,
-                kind: FnParamKind::LambdaEnv,
-            };
             let environment_param_variable_id = self.variables.add(Variable {
-                name: environment_param.name,
+                name: self.ast.idents.b.lambda_env_var_name,
                 type_id: POINTER_TYPE_ID,
                 owner_scope: lambda_scope_id,
                 kind: VariableKind::FnParam(FunctionId::PENDING),
@@ -7047,7 +6997,6 @@ impl TypedProgram {
             Some(ClosureSetup {
                 environment_struct,
                 environment_struct_type,
-                environment_param,
                 environment_param_variable_id,
                 prologue_stmts,
                 capture_bindings,
@@ -7124,13 +7073,12 @@ impl TypedProgram {
             {
                 return Ok(self.function_to_pointer(body_function_id, span));
             }
-            return Ok(self.function_to_reference(body_function_id, span));
+            return Ok(self.function_to_id_reference(body_function_id, span));
         }
 
         let ClosureSetup {
             environment_struct,
             environment_struct_type,
-            environment_param,
             environment_param_variable_id,
             prologue_stmts,
             capture_bindings,
@@ -7140,7 +7088,7 @@ impl TypedProgram {
             self.warn_variable_usage_counts("Captured variable", *variable_id, *capture_span);
         }
 
-        typed_params.insert(0, environment_param);
+        typed_params.insert(0, FnParamType { type_id: POINTER_TYPE_ID, kind: FnParamKind::Plain });
         param_variables.insert(
             0,
             TypedFunctionParam { variable_id: environment_param_variable_id, span: body_span },
@@ -8580,7 +8528,7 @@ impl TypedProgram {
         self_type: TypeId,
         ability_id: AbilityId,
         fn_name: StringId,
-    ) -> Option<FunctionId> {
+    ) -> Option<(FunctionId, FunctionId)> {
         let handles = self
             .ability_impl_table_by_ability
             .get(&TypeAbilityPair { self_type_id: self_type, base_ability_id: ability_id })?;
@@ -8589,9 +8537,10 @@ impl TypedProgram {
         let ability_fn =
             self.abilities.get(ability_id).find_function_by_name(&self.mem, fn_name)?;
         match self.get_ability_impl_function(impl_id, ability_fn.index) {
-            AbilityImplFunction::FunctionId(function_id) => Some(function_id),
-            AbilityImplFunction::Pending => unreachable!(),
-            AbilityImplFunction::Abstract(_) | AbilityImplFunction::Unavailable => None,
+            AbilityImplFunction::FunctionId(function_id) => {
+                Some((ability_fn.function_id, function_id))
+            }
+            AbilityImplFunction::Abstract(_) | AbilityImplFunction::Unavailable(_) => None,
         }
     }
 
@@ -8645,7 +8594,7 @@ impl TypedProgram {
         let lhs_type = self.exprs.get_type(lhs);
         let self_type = self.get_type_family_type(lhs_type);
         let result = match self.direct_ability_fn(self_type, ability_id, fn_name.name) {
-            Some(function_id) => {
+            Some((declaration, function_id)) => {
                 let lhs = self.check_and_coerce_expr(self_type, lhs, ctx.scope_id, false)?;
                 let fn_type = *self
                     .types
@@ -8672,7 +8621,7 @@ impl TypedProgram {
                     args: self.mem.pushn(&[lhs, rhs]),
                     type_args: TypeArgs::empty(),
                 };
-                self.finish_call(call, span, ctx)?
+                self.finish_call(call, Some(declaration), span, ctx)?
             }
             None => {
                 let lhs = match lhs_hint {
@@ -8810,12 +8759,13 @@ impl TypedProgram {
             Some((_, args)) if !args.is_empty() => {
                 Some(MaybeTypedExpr::Typed(*args.first().unwrap()))
             }
-            _ => match self.ast.mem.find(fn_call.args, |a| !a.is_explicit_context) {
+            _ => match fn_call.receiver_arg_index(&self.ast.mem) {
                 None => None,
-                Some(first) => {
-                    match stashed_args.iter().find(|(parsed, _)| *parsed == first.value) {
+                Some(receiver_arg_index) => {
+                    let receiver_arg = self.ast.mem.get_nth(fn_call.args, receiver_arg_index);
+                    match stashed_args.iter().find(|(parsed, _)| *parsed == receiver_arg.value) {
                         Some((_, typed)) => Some(MaybeTypedExpr::Typed(*typed)),
-                        None => Some(MaybeTypedExpr::Parsed(first.value)),
+                        None => Some(MaybeTypedExpr::Parsed(receiver_arg.value)),
                     }
                 }
             },
@@ -8846,7 +8796,7 @@ impl TypedProgram {
                             .get(function_ability_id)
                             .find_function_by_name(&self.mem, fn_call.name.name)
                             .unwrap();
-                        let (ability_impl_function, type_args) = self.solve_ability_call(
+                        self.solve_ability_call(
                             function_ability_index,
                             fn_call,
                             call_span,
@@ -8854,12 +8804,7 @@ impl TypedProgram {
                             known_args,
                             ctx,
                             stashed_args,
-                        )?;
-                        Ok(CallResolution::AbilityCall {
-                            callee: self.make_ability_impl_fn_callee(ability_impl_function),
-                            receiver: None,
-                            type_args,
-                        })
+                        )
                     } else {
                         Ok(CallResolution::Call(Callee::make_static(function_id)))
                     }
@@ -9379,7 +9324,7 @@ impl TypedProgram {
                 let base = self.eval_expr(base_arg.value, ctx.with_no_expected_type())?;
                 let base_type = self.exprs.get_type(base);
                 match *self.types.get(base_type) {
-                    Type::FunctionReference(fr) => {
+                    Type::FunctionIdReference(fr) => {
                         let function = self.get_function(fr.function_id);
                         if !function.is_concrete() {
                             kbail!(
@@ -9756,13 +9701,7 @@ impl TypedProgram {
                 ctx,
                 stashed_args,
             ) {
-                Ok((ability_impl_fn, type_args)) => {
-                    return Ok(CallResolution::AbilityCall {
-                        callee: self.make_ability_impl_fn_callee(ability_impl_fn),
-                        receiver: Some(base_expr),
-                        type_args,
-                    });
-                }
+                Ok(resolution) => return Ok(resolution),
                 Err(e) => {
                     stashed_args.clear();
                     errors.push(e);
@@ -9817,7 +9756,7 @@ impl TypedProgram {
         Ok(())
     }
 
-    fn compile_specialized_function_reference(
+    fn compile_specialized_function_id_reference(
         &mut self,
         generic_function_id: FunctionId,
         call: &ParsedCall,
@@ -9848,13 +9787,13 @@ impl TypedProgram {
             || ctx.is_inference()
         {
             let reference_type =
-                self.add_function_reference_type(generic_function_id, specialized_function_type);
+                self.add_function_id_reference_type(generic_function_id, specialized_function_type);
             self.emit_ls_entity(
                 call.name.name_span,
                 LsEntityKind::Function { function_id: generic_function_id, is_defn: false },
             );
             return Ok(self.exprs.add(
-                TypedExpr::FunctionReference(FunctionReferenceExpr {
+                TypedExpr::FunctionIdReference(FunctionIdReferenceExpr {
                     function_id: generic_function_id,
                 }),
                 reference_type,
@@ -9870,15 +9809,15 @@ impl TypedProgram {
                 specialized_function_type,
             ),
         };
-        Ok(self.function_to_reference(specialized_function_id, span))
+        Ok(self.function_to_id_reference(specialized_function_id, span))
     }
 
-    pub fn function_to_reference(&mut self, function_id: FunctionId, span: Span) -> TypedExprId {
+    pub fn function_to_id_reference(&mut self, function_id: FunctionId, span: Span) -> TypedExprId {
         let function_type = self.get_function(function_id).type_id;
-        let reference_type = self.add_function_reference_type(function_id, function_type);
+        let reference_type = self.add_function_id_reference_type(function_id, function_type);
         self.emit_ls_entity(span, LsEntityKind::Function { function_id, is_defn: false });
         self.exprs.add(
-            TypedExpr::FunctionReference(FunctionReferenceExpr { function_id }),
+            TypedExpr::FunctionIdReference(FunctionIdReferenceExpr { function_id }),
             reference_type,
             span,
         )
@@ -9889,13 +9828,13 @@ impl TypedProgram {
         self.make_function_pointer(function_id, function_type, span)
     }
 
-    fn reference_to_pointer(
+    fn function_id_reference_to_pointer(
         &mut self,
         reference: TypedExprId,
         span: Span,
         scope_id: ScopeId,
     ) -> TypedExprId {
-        let fr = self.types.get(self.exprs.get_type(reference)).as_function_reference().unwrap();
+        let fr = self.types.get(self.exprs.get_type(reference)).as_function_id_reference().unwrap();
         let pointer = self.make_function_pointer(fr.function_id, fr.function_type, span);
         self.synth_discard_then(reference, pointer, scope_id)
     }
@@ -10043,11 +9982,7 @@ impl TypedProgram {
         let empty_env_struct_ref = self.add_reference_type(empty_env_struct_type);
         let mut new_params = self.mem.new_list(physical_params.len() + 1);
 
-        new_params.push(FnParamType {
-            name: self.ast.idents.b.lambda_env_var_name,
-            type_id: empty_env_struct_ref,
-            kind: FnParamKind::LambdaEnv,
-        });
+        new_params.push(FnParamType { type_id: empty_env_struct_ref, kind: FnParamKind::Plain });
         new_params.extend(self.mem.getn(physical_params));
 
         let new_function_type =
@@ -10069,7 +10004,7 @@ impl TypedProgram {
         known_args: Option<&(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
         stashed_args: &mut SV8<(ParsedExprId, TypedExprId)>,
-    ) -> K1Result<(AbilityImplFunction, SV4<CallTypeArg>)> {
+    ) -> K1Result<CallResolution> {
         let ability_fn_sig = self.get_function(ability_function_ref.function_id).signature();
         let base_ability_id = ability_function_ref.ability_id;
         let ability_fn_type = *self.types.get(ability_fn_sig.function_type).as_function().unwrap();
@@ -10094,27 +10029,27 @@ impl TypedProgram {
 
         let self_only_type_params_handle = self.mem.pushn(&[ability_self_type_id]);
 
-        let aligned = self.align_call_arguments_with_parameters(
+        let (call_type_args, bound_args) = self.bind_ability_call_args(
+            ability_function_ref,
             fn_call,
             call_span,
-            &ability_fn_sig,
             receiver_if_method,
-            ability_fn_type.logical_params(),
             known_args.map(|ka| ka.1),
             ctx.scope_id,
+        )?;
+        let aligned = self.align_args_with_params(
+            bound_args,
+            fn_call,
+            call_span,
+            ability_fn_type.logical_params(),
+            Some(ability_function_ref.function_id),
+            ctx.scope_id,
             true,
-            false,
         )?;
         self.splice_stashed_args(aligned.args, stashed_args);
-        let call_type_args = self.eval_call_type_args(
+        let inference_pairs = self.get_call_inference_pairs(
             fn_own_type_params,
-            self.ast.mem.getn(fn_call.type_args(&self.ast.mem)),
-            call_span,
-            ctx.scope_id,
-        )?;
-        let (args_and_params, first_value_pair_index) = self.get_call_inference_pairs(
-            fn_own_type_params,
-            &call_type_args,
+            self.tmp.getn(call_type_args),
             ctx.expected_type_id,
             ability_fn_return_type,
             &aligned,
@@ -10123,21 +10058,18 @@ impl TypedProgram {
         debug!("all ability params: {}", self.pretty_print_types(&all_type_params, ", "));
         debug!("to solve: {}", self.pretty_print_type_slice(self_only_type_params_handle, ", "));
 
-        let mut excluded_args = self.tmp.new_list(ability_fn_sig.fnlike_type_params.len());
-        for ftp in self.mem.getn(ability_fn_sig.fnlike_type_params) {
-            excluded_args.push(ftp.value_param_index);
-        }
+        let excluded_args =
+            aligned.get_fnlike_args(ability_fn_sig.fnlike_type_params, &mut self.tmp, &self.mem);
         let (self_solution, other_solved) = self
             .infer_types(
                 &all_type_params,
                 self_only_type_params_handle,
-                &args_and_params,
+                self.tmp.getn(inference_pairs),
                 call_span,
                 ctx.scope_id,
                 Some(infer::InferArgStash {
                     ctx,
-                    first_value_pair_index,
-                    excluded_args: &excluded_args,
+                    excluded_args: self.tmp.getn(excluded_args),
                     stashed: stashed_args,
                 }),
             )
@@ -10184,46 +10116,46 @@ impl TypedProgram {
                 )
             })?;
 
-        let full_impl = *self.ability_impls.get(impl_handle.full_impl_id);
-        let impl_function =
-            self.get_ability_impl_function(impl_handle.full_impl_id, ability_function_ref.index);
-        // FunctionId: availability was decided when the function was resolved.
-        // Abstract (a type-param constraint pseudo-impl): the fn's where
-        // constraints are checked here, at the call, because not all of the
-        // param's constraints exist yet when the pseudo-impl is built.
-        // Unavailable carries no payload, so we re-run the check to name the
-        // failing constraint
-        if let AbilityImplFunction::Unavailable | AbilityImplFunction::Abstract(_) = impl_function {
-            if let Err(failure) = self.check_ability_fn_where_constraints(
-                full_impl.ability_id,
-                full_impl.impl_arguments,
-                full_impl.self_type_id,
+        Ok(CallResolution::AbilityCall {
+            callee: self.resolve_ability_impl_fn_callee(
+                impl_handle.full_impl_id,
                 ability_function_ref.index,
                 ctx.scope_id,
                 call_span,
-            ) {
-                return Err(kerr!(
-                    self,
-                    call_span,
-                    "{}/{} is not available for {}: {}",
-                    &self.ability_impl_signature_to_string(base_ability_id, MSlice::empty()),
-                    fn_call.name.name,
-                    solved_self,
-                    failure.message,
-                ));
-            }
-        }
-        if let AbilityImplFunction::Unavailable = impl_function {
-            return Err(kerr!(
-                self,
-                call_span,
-                "{}/{} is not available for {}: a where constraint on the function is not satisfied",
-                &self.ability_impl_signature_to_string(base_ability_id, MSlice::empty()),
-                fn_call.name.name,
-                solved_self,
-            ));
-        }
-        Ok((impl_function, call_type_args))
+            )?,
+            declaration: ability_function_ref.function_id,
+            receiver: receiver_if_method,
+            type_args: call_type_args,
+            args: bound_args,
+        })
+    }
+
+    fn bind_ability_call_args(
+        &mut self,
+        ability_function_ref: TypedAbilityFunctionRef,
+        fn_call: &ParsedCall,
+        call_span: Span,
+        receiver: Option<TypedExprId>,
+        known_args: Option<&[TypedExprId]>,
+        scope_id: ScopeId,
+    ) -> K1Result<(TmpSlice<CallTypeArg>, TmpSlice<Option<MaybeTypedExpr>>)> {
+        let ability_fn_sig = self.get_function(ability_function_ref.function_id).signature();
+        let call_type_args = self.eval_call_type_args(
+            self.get_ability_fn_own_type_params(ability_fn_sig.type_params),
+            self.ast.mem.getn(fn_call.type_args(&self.ast.mem)),
+            call_span,
+            scope_id,
+        )?;
+        let bound_args = self.bind_value_args_to_params(
+            fn_call,
+            call_span,
+            receiver,
+            self.get_function_type(ability_function_ref.function_id).logical_params(),
+            Some(ability_function_ref.function_id),
+            known_args,
+            false,
+        )?;
+        Ok((call_type_args, bound_args))
     }
 
     fn handle_sum_as_variant_call(
@@ -10488,136 +10420,122 @@ impl TypedProgram {
         }
     }
 
-    fn align_call_arguments_with_parameters(
+    fn bind_value_args_to_params(
         &mut self,
         fn_call: &ParsedCall,
         span: Span,
-        signature: &FunctionSignature,
-        // If a method call and we've already compiled the first argument
-        // this is it, we should use it instead of the fn_call's first arg
         method_receiver: Option<TypedExprId>,
         params: MSlice<FnParamType, TypedProgram>,
+        declaration: Option<FunctionId>,
         known_typed_args: Option<&[TypedExprId]>,
-        calling_scope: ScopeId,
-        tolerate_missing_context_args: bool,
-        skip_leading_receiver_arg: bool,
-    ) -> K1Result<ArgsAndParams> {
-        let fn_name = fn_call.name.name;
-        let args_slice = self.ast.mem.getn(fn_call.args);
-        let args_slice = if skip_leading_receiver_arg { &args_slice[1..] } else { args_slice };
-        let explicit_context_args = args_slice.iter().any(|a| a.is_explicit_context);
-        let named = args_slice.first().is_some_and(|arg| arg.name.is_some());
-        let mut final_args: TmpList<MaybeTypedExpr> = self.tmp.new_list(params.len());
-        let mut final_params: TmpList<FnParamType> = self.tmp.new_list(params.len());
-        let all_params = self.mem.getn(params);
-        if !explicit_context_args {
-            for context_param in all_params.iter().filter(|p| p.kind == FnParamKind::Context) {
-                let resolved = self.resolve_context_arg(
-                    context_param,
-                    context_param.type_id,
-                    calling_scope,
-                    fn_call,
-                    span,
-                    tolerate_missing_context_args,
-                )?;
-                if let Some(arg) = resolved {
-                    final_args.push(arg);
-                    final_params.push(*context_param);
-                }
-            }
-        }
-
-        let is_lambda = all_params.first().is_some_and(|p| p.kind == FnParamKind::LambdaEnv);
-        let params_slice = if is_lambda { &all_params[1..] } else { all_params };
-        let explicit_param_count =
-            params_slice.iter().filter(|p| p.kind != FnParamKind::Context).count();
-        let context_param_count = params_slice.len() - explicit_param_count;
-        let total_expected =
-            if explicit_context_args { params_slice.len() } else { explicit_param_count };
-        let actual_passed_args = args_slice;
-        let total_passed = match known_typed_args {
-            None => actual_passed_args.len(),
-            Some(pre_evaled_params) => pre_evaled_params.len(),
-        };
-
-        let expected_literal_params = params_slice
-            .iter()
-            // If the user opted to pass context params explicitly, then check all params
-            // If the user did not, then just check the non-context params, since the compiler is responsible
-            // for looking up context params
-            .filter(|p| explicit_context_args || p.kind != FnParamKind::Context);
-
-        if let Some(pre_evaled_params) = known_typed_args {
-            for (expr, param) in pre_evaled_params.iter().zip(expected_literal_params) {
-                final_args.push(MaybeTypedExpr::Typed(*expr));
-                final_params.push(*param)
-            }
+        skip_receiver_arg: bool,
+    ) -> K1Result<TmpSlice<Option<MaybeTypedExpr>>> {
+        let params = self.mem.getn(params);
+        let first_explicit_param = if fn_call.has_explicit_context_args(&self.ast.mem) {
+            0
         } else {
-            let first_non_context_param_index =
-                if explicit_context_args { context_param_count } else { 0 };
-            for (param_index, fn_param) in expected_literal_params.enumerate() {
-                // The first parameter that isn't an explicit `context` param is the method self
-                // param; if we've already compiled that term, use it here
-                if let Some(method_receiver) = method_receiver
-                    && param_index == first_non_context_param_index
-                {
-                    final_args.push(MaybeTypedExpr::Typed(method_receiver));
-                    final_params.push(*fn_param);
-                    continue;
-                }
-                let matching_argument = if named {
-                    let Some(name_match) =
-                        actual_passed_args.iter().find(|arg| arg.name == Some(fn_param.name))
-                    else {
-                        kbail!(
-                            self,
-                            span,
-                            "Missing named argument for parameter {}",
-                            fn_param.name
-                        );
-                    };
-                    if let Some(dupe) =
-                        final_params.iter().find(|param| param.name == name_match.name.unwrap())
-                    {
-                        let span = self.ast.exprs.get_span(name_match.value);
-                        kbail!(self, span, "Duplicate named argument: {}", dupe.name);
-                    };
-                    Some(name_match)
-                } else {
-                    actual_passed_args.get(param_index)
-                };
-                let Some(param) = matching_argument else {
+            FnParamType::get_context_param_count(params)
+        };
+        let parsed_args = self.ast.mem.getn(fn_call.args);
+        if declaration.is_none() {
+            for arg in parsed_args {
+                if arg.name.is_some() {
                     kbail!(
                         self,
-                        span,
-                        "Missing argument to {}: {}",
-                        self.ident_str(fn_name).blue(),
-                        self.ident_str(fn_param.name).red()
+                        self.ast.exprs.get_span(arg.value),
+                        "Named arguments require a declared function"
                     );
-                };
-                final_args.push(MaybeTypedExpr::Parsed(param.value));
-                final_params.push(*fn_param);
+                }
             }
         }
+        let receiver_arg_index = fn_call.receiver_arg_index(&self.ast.mem);
+        let skipped_arg_index = if skip_receiver_arg { receiver_arg_index } else { None };
+        let args_len = match known_typed_args {
+            Some(known_typed_args) => known_typed_args.len(),
+            None => parsed_args.len() - skipped_arg_index.is_some() as usize,
+        };
+        let mut bound_args: TmpList<Option<MaybeTypedExpr>> =
+            self.tmp.new_list(params.len() as u32);
+        bound_args.fill_to_cap(None);
+        self.place_args(
+            &mut bound_args.as_slice_mut()[first_explicit_param..],
+            args_len,
+            |position| match known_typed_args {
+                Some(known_typed_args) => (None, MaybeTypedExpr::Typed(known_typed_args[position])),
+                None => {
+                    let arg_index = match skipped_arg_index {
+                        Some(skipped) if position >= skipped => position + 1,
+                        _ => position,
+                    };
+                    let arg = parsed_args[arg_index];
+                    let value = match method_receiver {
+                        Some(receiver) if receiver_arg_index == Some(arg_index) => {
+                            MaybeTypedExpr::Typed(receiver)
+                        }
+                        _ => MaybeTypedExpr::Parsed(arg.value),
+                    };
+                    (arg.name, value)
+                }
+            },
+            |arg| match arg {
+                MaybeTypedExpr::Parsed(parsed) => self.ast.exprs.get_span(parsed),
+                MaybeTypedExpr::Typed(typed) => self.exprs.get_span(typed),
+            },
+            |position| self.get_param_name(declaration, first_explicit_param + position),
+            span,
+            "",
+        )?;
+        Ok(bound_args.to_slice())
+    }
 
-        // We accounted for every parameter; now we just need to ensure no extras were passed
-        if total_passed > total_expected {
-            kbail!(
-                self,
-                span,
-                "Too many arguments to {}: expected {}, got {}",
-                self.function_signature_to_string(signature),
-                total_expected,
-                total_passed
-            );
+    fn align_args_with_params(
+        &mut self,
+        bound_args: TmpSlice<Option<MaybeTypedExpr>>,
+        fn_call: &ParsedCall,
+        span: Span,
+        params: MSlice<FnParamType, TypedProgram>,
+        declaration: Option<FunctionId>,
+        calling_scope: ScopeId,
+        tolerate_missing_context_args: bool,
+    ) -> K1Result<ArgsAndParams> {
+        debug_assert_eq!(bound_args.len(), params.len());
+        let mut aligned_args: TmpList<Option<MaybeTypedExpr>> = self.tmp.new_list(params.len());
+        for (index, (param, bound_arg)) in
+            self.mem.getn(params).iter().zip(self.tmp.getn(bound_args)).enumerate()
+        {
+            aligned_args.push(match *bound_arg {
+                Some(arg) => Some(arg),
+                None if param.kind == FnParamKind::Context
+                    && !fn_call.has_explicit_context_args(&self.ast.mem) =>
+                {
+                    self.resolve_context_arg(
+                        param,
+                        declaration,
+                        index,
+                        param.type_id,
+                        calling_scope,
+                        fn_call,
+                        span,
+                        tolerate_missing_context_args,
+                    )?
+                }
+                None => kbail!(
+                    self,
+                    span,
+                    "Missing argument to {}: {}",
+                    self.ident_str(fn_call.name.name).blue(),
+                    self.ident_str(self.get_param_name(declaration, index)).red()
+                ),
+            });
         }
-
-        Ok(ArgsAndParams { args: final_args.to_slice(), params: final_params.to_slice() })
+        Ok(ArgsAndParams { args: aligned_args.to_slice(), params })
     }
 
     fn resolve_context_arg(
         &mut self,
         context_param: &FnParamType,
+        declaration: Option<FunctionId>,
+        param_index: usize,
         constraint_source_type: TypeId,
         calling_scope: ScopeId,
         fn_call: &ParsedCall,
@@ -10641,7 +10559,7 @@ impl TypedProgram {
                         "Context variable '{}' has type {}, but this call requires context parameter '{}' of type {}; pass the context argument explicitly",
                         found.name,
                         found.type_id,
-                        context_param.name,
+                        self.get_param_name(declaration, param_index),
                         context_param.type_id
                     );
                 }
@@ -10655,13 +10573,13 @@ impl TypedProgram {
                 calling_scope,
                 matching_context_variable,
                 found.owner_scope,
-                context_param.name,
+                found.name,
                 span,
             )
             .map_err(|mut e| {
                 e.message = self.ast.idents.intern(format!(
                     "This call needs context parameter '{}' from outside the lambda: {}",
-                    self.ident_str(context_param.name),
+                    self.ident_str(self.get_param_name(declaration, param_index)),
                     self.ident_str(e.message)
                 ));
                 e
@@ -10682,7 +10600,7 @@ impl TypedProgram {
                 self,
                 span,
                 "Missing context parameter '{}' of type {}",
-                context_param.name,
+                self.get_param_name(declaration, param_index),
                 context_param.type_id
             );
         } else {
@@ -10697,90 +10615,65 @@ impl TypedProgram {
     fn respecialize_aligned_args(
         &mut self,
         original: &ArgsAndParams,
-        generic_params: MSlice<FnParamType, TypedProgram>,
         specialized_params: MSlice<FnParamType, TypedProgram>,
+        declaration: Option<FunctionId>,
         fn_call: &ParsedCall,
         span: Span,
         calling_scope: ScopeId,
-        skip_leading_receiver_arg: bool,
     ) -> K1Result<ArgsAndParams> {
-        let args_slice = self.ast.mem.getn(fn_call.args);
-        let args_slice = if skip_leading_receiver_arg { &args_slice[1..] } else { args_slice };
-        let explicit_context_args = args_slice.iter().any(|a| a.is_explicit_context);
-        let generic = self.mem.getn(generic_params);
-        let specialized = self.mem.getn(specialized_params);
-        let orig_args = self.tmp.getn(original.args);
-        let orig_params = self.tmp.getn(original.params);
-        let mut final_args: TmpList<MaybeTypedExpr> = self.tmp.new_list(specialized.len() as u32);
-        let mut final_params: TmpList<FnParamType> = self.tmp.new_list(specialized.len() as u32);
-
-        if !explicit_context_args {
-            for (index, context_param) in
-                specialized.iter().enumerate().filter(|(_, p)| p.kind == FnParamKind::Context)
-            {
-                let generic_param = &generic[index];
-                debug_assert_eq!(generic_param.name, context_param.name);
-                let existing = orig_params.iter().position(|p| p.name == context_param.name);
-                let arg = match existing {
-                    Some(i) => {
-                        if generic_param.type_id != context_param.type_id
-                            && let MaybeTypedExpr::Typed(expr) = orig_args[i]
-                            && self.exprs.get_type(expr) != context_param.type_id
-                        {
-                            kbail!(
-                                self,
-                                span,
-                                "Context variable for parameter '{}' has type {}, but this call requires {}; pass the context argument explicitly",
-                                context_param.name,
-                                self.exprs.get_type(expr),
-                                context_param.type_id
-                            );
-                        }
-                        orig_args[i]
-                    }
-                    None => self
-                        .resolve_context_arg(
-                            context_param,
-                            generic_param.type_id,
-                            calling_scope,
-                            fn_call,
-                            span,
-                            false,
-                        )?
-                        .unwrap(),
-                };
-                final_args.push(arg);
-                final_params.push(*context_param);
-            }
+        let explicit_context_args = fn_call.has_explicit_context_args(&self.ast.mem);
+        let generic = self.mem.getn(original.params);
+        let mut final_args: TmpList<Option<MaybeTypedExpr>> =
+            self.tmp.new_list(specialized_params.len());
+        for (index, (param, original_arg)) in
+            self.mem.getn(specialized_params).iter().zip(self.tmp.getn(original.args)).enumerate()
+        {
+            let generic_param = &generic[index];
+            let arg = match *original_arg {
+                Some(MaybeTypedExpr::Typed(expr))
+                    if !explicit_context_args
+                        && param.kind == FnParamKind::Context
+                        && generic_param.type_id != param.type_id
+                        && self.exprs.get_type(expr) != param.type_id =>
+                {
+                    kbail!(
+                        self,
+                        span,
+                        "Context variable for parameter '{}' has type {}, but this call requires {}; pass the context argument explicitly",
+                        self.get_param_name(declaration, index),
+                        self.exprs.get_type(expr),
+                        param.type_id
+                    );
+                }
+                Some(arg) => Some(arg),
+                None => self.resolve_context_arg(
+                    param,
+                    declaration,
+                    index,
+                    generic_param.type_id,
+                    calling_scope,
+                    fn_call,
+                    span,
+                    false,
+                )?,
+            };
+            final_args.push(arg);
         }
-
-        for (arg, param) in orig_args.iter().zip(orig_params.iter()) {
-            if !explicit_context_args && param.kind == FnParamKind::Context {
-                continue;
-            }
-            let specialized_param = specialized
-                .iter()
-                .find(|p| p.name == param.name)
-                .expect("specialization preserves parameter names");
-            final_args.push(*arg);
-            final_params.push(*specialized_param);
-        }
-
-        Ok(ArgsAndParams { args: final_args.to_slice(), params: final_params.to_slice() })
+        Ok(ArgsAndParams { args: final_args.to_slice(), params: specialized_params })
     }
 
     fn splice_stashed_args(
         &mut self,
-        args: TmpSlice<MaybeTypedExpr>,
+        args: TmpSlice<Option<MaybeTypedExpr>>,
         stashed_args: &[(ParsedExprId, TypedExprId)],
     ) {
         if stashed_args.is_empty() {
             return;
         }
         for arg in self.tmp.getn_mut(args) {
-            if let MaybeTypedExpr::Parsed(p) = arg {
+            if let Some(MaybeTypedExpr::Parsed(p)) = arg {
                 if let Some((_, typed)) = stashed_args.iter().find(|(parsed, _)| parsed == p) {
-                    *arg = MaybeTypedExpr::Typed(*typed);
+                    *arg = Some(MaybeTypedExpr::Typed(*typed));
                 }
             }
         }
@@ -10815,19 +10708,54 @@ impl TypedProgram {
         }
     }
 
-    fn make_ability_impl_fn_callee(&mut self, ability_impl_fn: AbilityImplFunction) -> Callee {
-        match ability_impl_fn {
-            AbilityImplFunction::FunctionId(function_id) => Callee::StaticFunction(function_id),
-            AbilityImplFunction::Abstract(signature) if signature.has_type_params() => {
-                Callee::AbstractGeneric { signature: self.mem.push_h(signature) }
+    fn resolve_ability_impl_fn_callee(
+        &mut self,
+        impl_id: AbilityImplId,
+        fn_index: u32,
+        scope_id: ScopeId,
+        span: Span,
+    ) -> K1Result<Callee> {
+        let imp = *self.ability_impls.get(impl_id);
+        let unavailable_reason = match self.get_ability_impl_function(impl_id, fn_index) {
+            AbilityImplFunction::FunctionId(function_id) => {
+                return Ok(Callee::StaticFunction(function_id));
             }
+            AbilityImplFunction::Unavailable(reason) => reason,
             AbilityImplFunction::Abstract(signature) => {
-                Callee::Abstract { name: signature.name, function_type: signature.function_type }
+                match self.check_ability_fn_where_constraints(
+                    imp.ability_id,
+                    imp.impl_arguments,
+                    imp.self_type_id,
+                    fn_index,
+                    scope_id,
+                    span,
+                ) {
+                    Ok(()) if signature.has_type_params() => {
+                        return Ok(Callee::AbstractGeneric {
+                            signature: self.mem.push_h(signature),
+                        });
+                    }
+                    Ok(()) => {
+                        return Ok(Callee::Abstract {
+                            name: signature.name,
+                            function_type: signature.function_type,
+                        });
+                    }
+                    Err(failure) => failure.message,
+                }
             }
-            AbilityImplFunction::Pending | AbilityImplFunction::Unavailable => {
-                unreachable!("callers resolve availability before building a Callee")
-            }
-        }
+        };
+        let ability_fn =
+            *self.mem.get_nth(self.abilities.get(imp.ability_id).functions, fn_index as usize);
+        Err(kerr!(
+            self,
+            span,
+            "{}/{} is not available for {}: {}",
+            &self.ability_impl_signature_to_string(imp.ability_id, imp.impl_arguments),
+            ability_fn.function_name,
+            imp.self_type_id,
+            unavailable_reason,
+        ))
     }
 
     pub fn get_callee_function_type(&self, callee: &Callee) -> TypeId {
@@ -10916,11 +10844,11 @@ impl TypedProgram {
         span: Span,
         known_args: Option<(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
-        known_callee: Option<Callee>,
+        known_resolution: Option<CallResolution>,
     ) -> K1Result<TypedExprId> {
         let tmp_mark = self.tmp.mark();
         let result =
-            self.eval_function_call_inner(fn_call, span, known_args, ctx, known_callee, &[]);
+            self.eval_function_call_inner(fn_call, span, known_args, ctx, known_resolution, &[]);
         self.tmp.reset_to(tmp_mark);
         result
     }
@@ -10942,7 +10870,7 @@ impl TypedProgram {
                 lambda_type_id: value_type,
             },
             Type::LambdaObject(_) => Callee::DynamicLambda(value),
-            Type::FunctionReference(fr) => Callee::StaticFunction(fr.function_id),
+            Type::FunctionIdReference(fr) => Callee::StaticFunction(fr.function_id),
             Type::FunctionTypeParameter(ftp) => Callee::DynamicAbstract {
                 callee_expr: value,
                 name: ftp.name,
@@ -10951,19 +10879,19 @@ impl TypedProgram {
             Type::FunctionPointer(_) => Callee::DynamicFunction { function_pointer_expr: value },
             _ => kbail!(self, self.exprs.get_span(value), "Not callable: type is '{}'", value_type),
         };
-        let is_function_reference = matches!(callee, Callee::StaticFunction(_));
+        let is_function_id_reference = matches!(callee, Callee::StaticFunction(_));
         let tmp_mark = self.tmp.mark();
         let call = self.eval_function_call_inner(
             fn_call,
             span,
             known_args,
             ctx,
-            Some(callee),
+            Some(CallResolution::Call(callee)),
             pre_typed_args,
         );
         self.tmp.reset_to(tmp_mark);
         let call = call?;
-        if is_function_reference {
+        if is_function_id_reference {
             Ok(self.synth_discard_then(value, call, ctx.scope_id))
         } else {
             Ok(call)
@@ -10989,7 +10917,7 @@ impl TypedProgram {
         span: Span,
         known_args: Option<(&[TypeId], &[TypedExprId])>,
         ctx: EvalExprContext,
-        known_callee: Option<Callee>,
+        known_resolution: Option<CallResolution>,
         pre_typed_args: &[(ParsedExprId, TypedExprId)],
     ) -> K1Result<TypedExprId> {
         debug!("eval_function_call {}", self.qident_to_string(&fn_call.name));
@@ -11002,7 +10930,8 @@ impl TypedProgram {
         stashed_args.extend_from_slice(pre_typed_args);
         let marker_arg_index = self.find_completion_cursor_arg(fn_call);
         let ctx = if marker_arg_index.is_some() { ctx.with_ccursor_owned_by_call() } else { ctx };
-        let call_resolution = match known_callee {
+        let is_resolution_known = known_resolution.is_some();
+        let call_resolution = match known_resolution {
             None => {
                 match self.resolve_parsed_call(
                     fn_call,
@@ -11018,23 +10947,28 @@ impl TypedProgram {
                     }
                 }
             }
-            Some(callee) => CallResolution::Call(callee),
+            Some(resolution) => resolution,
         };
-        let (callee, method_receiver, ability_call_type_args) = match call_resolution {
-            CallResolution::OtherExpr(typed_expr_id) => {
-                self.record_call_arg_site(marker_arg_index, None, ctx.scope_id);
-                return Ok(typed_expr_id);
-            }
-            CallResolution::Call(callee) => (callee, None, None),
-            CallResolution::MethodCall { callee, receiver } => (callee, Some(receiver), None),
-            CallResolution::AbilityCall { callee, receiver, type_args } => {
-                (callee, receiver, Some(type_args))
-            }
-        };
+        let (callee, declaration, method_receiver, ability_call_type_args, bound_args) =
+            match call_resolution {
+                CallResolution::OtherExpr(typed_expr_id) => {
+                    self.record_call_arg_site(marker_arg_index, None, ctx.scope_id);
+                    return Ok(typed_expr_id);
+                }
+                CallResolution::Call(callee) => {
+                    (callee, callee.maybe_function_id(), None, None, None)
+                }
+                CallResolution::MethodCall { callee, receiver } => {
+                    (callee, callee.maybe_function_id(), Some(receiver), None, None)
+                }
+                CallResolution::AbilityCall { callee, declaration, receiver, type_args, args } => {
+                    (callee, Some(declaration), receiver, Some(type_args), Some(args))
+                }
+            };
         let passed_type_args = self.ast.mem.getn(fn_call.type_args(&self.ast.mem));
-        self.record_call_arg_site(marker_arg_index, callee.maybe_function_id(), ctx.scope_id);
-        let skip_leading_receiver_arg = matches!(callee, Callee::DynamicAbilityFn { .. });
-        let method_receiver = if skip_leading_receiver_arg { None } else { method_receiver };
+        self.record_call_arg_site(marker_arg_index, declaration, ctx.scope_id);
+        let skip_receiver_arg = matches!(callee, Callee::DynamicAbilityFn { .. });
+        let method_receiver = if skip_receiver_arg { None } else { method_receiver };
         let is_method = method_receiver.is_some();
 
         if let Some(function_id) = callee.maybe_function_id() {
@@ -11046,7 +10980,7 @@ impl TypedProgram {
             }
 
             if self.get_function(function_id).is_macro()
-                && known_callee.is_none()
+                && !is_resolution_known
                 && known_args.is_none()
             {
                 if method_receiver.is_some() {
@@ -11075,44 +11009,47 @@ impl TypedProgram {
         // Now that we have resolved to a function id, we need to specialize it if generic
         let callee_function_type_id = self.get_callee_function_type(&callee);
         let signature = self.get_callee_function_signature(&callee);
-        debug!("Callee is: {}", self.function_signature_to_string(&signature));
+        debug!("Callee is: {}", self.function_signature_to_string(&signature, declaration));
         let is_generic = signature.has_type_params();
 
         let original_function_type = self.types.get(callee_function_type_id).as_function().unwrap();
         let params = original_function_type.logical_params();
+        let bound_args = match bound_args {
+            Some(bound_args) => bound_args,
+            None => self.bind_value_args_to_params(
+                fn_call,
+                span,
+                method_receiver,
+                params,
+                declaration,
+                known_args.map(|(_known_types, known_args)| known_args),
+                skip_receiver_arg,
+            )?,
+        };
 
         let (callee, typechecked_arguments, type_args) = match is_generic {
             false => {
-                self.bind_type_args_to_params(&[], passed_type_args, span)?;
-                let args_and_params = self.align_call_arguments_with_parameters(
+                self.eval_call_type_args(&[], passed_type_args, span, ctx.scope_id)?;
+                let args_and_params = self.align_args_with_params(
+                    bound_args,
                     fn_call,
                     span,
-                    &signature,
-                    method_receiver,
                     params,
-                    known_args.map(|(_known_types, known_args)| known_args),
+                    declaration,
                     ctx.scope_id,
                     false,
-                    skip_leading_receiver_arg,
                 )?;
                 self.splice_stashed_args(args_and_params.args, &stashed_args);
-                let mut typechecked_args = self.mem.new_list(args_and_params.len());
-                // The receiver is the first non-context param; context params come first
-                // in the aligned args
-                let receiver_index = if is_method {
-                    self.tmp
-                        .getn(args_and_params.params)
-                        .iter()
-                        .position(|p| p.kind != FnParamKind::Context)
-                } else {
-                    None
-                };
-                for (index, (maybe_typed_expr, param)) in
-                    self.tmp.getn_zip(args_and_params.args, args_and_params.params).enumerate()
+                let mut typechecked_args = self.mem.new_list(args_and_params.args.len());
+                let aligned_params = self.mem.getn(args_and_params.params);
+                let receiver_index = FnParamType::get_context_param_count(aligned_params);
+                for (param_index, (maybe_typed_expr, param)) in
+                    self.tmp.getn(args_and_params.args).iter().zip(aligned_params).enumerate()
                 {
-                    let is_method_receiver = receiver_index == Some(index);
+                    let is_method_receiver = is_method && param_index == receiver_index;
                     let checked_expr = match *maybe_typed_expr {
-                        MaybeTypedExpr::Typed(typed) => match self.check_and_coerce_expr(
+                        None => self.ice_span(span, "Unresolved context argument"),
+                        Some(MaybeTypedExpr::Typed(typed)) => match self.check_and_coerce_expr(
                             param.type_id,
                             typed,
                             ctx.scope_id,
@@ -11126,11 +11063,11 @@ impl TypedProgram {
                                     "{}\nOccurred in pre-typed call parameter '{}.{}'",
                                     e.message,
                                     &fn_call.name,
-                                    param.name,
+                                    self.get_param_name(declaration, param_index),
                                 );
                             }
                         },
-                        MaybeTypedExpr::Parsed(parsed) => self
+                        Some(MaybeTypedExpr::Parsed(parsed)) => self
                             .eval_expr_with_coercion(
                                 parsed,
                                 ctx.with_expected_type(Some(param.type_id))
@@ -11144,7 +11081,7 @@ impl TypedProgram {
                                     "{}\nOccurred in call parameter '{}.{}'",
                                     err.message,
                                     &fn_call.name,
-                                    param.name,
+                                    self.get_param_name(declaration, param_index),
                                 )
                             })?,
                     };
@@ -11153,16 +11090,14 @@ impl TypedProgram {
                 (callee, typechecked_args.to_slice(), TypeArgs::empty())
             }
             true => {
-                let original_args_and_params = self.align_call_arguments_with_parameters(
+                let original_args_and_params = self.align_args_with_params(
+                    bound_args,
                     fn_call,
                     span,
-                    &signature,
-                    method_receiver,
                     params,
-                    known_args.map(|(_known_types, known_args)| known_args),
+                    declaration,
                     ctx.scope_id,
                     true,
-                    skip_leading_receiver_arg,
                 )?;
                 self.splice_stashed_args(original_args_and_params.args, &stashed_args);
 
@@ -11192,7 +11127,7 @@ impl TypedProgram {
                         };
                         self.infer_and_constrain_call_type_args(
                             fn_call,
-                            &call_type_args,
+                            self.tmp.getn(call_type_args),
                             span,
                             signature,
                             ctx,
@@ -11278,36 +11213,26 @@ impl TypedProgram {
                 // are resolved here for real, now that their types are concrete.
                 let args_and_params = self.respecialize_aligned_args(
                     &original_args_and_params,
-                    params,
                     specialized_params,
+                    declaration,
                     fn_call,
                     span,
                     ctx.scope_id,
-                    skip_leading_receiver_arg,
                 )?;
                 self.splice_stashed_args(args_and_params.args, &stashed_args);
 
                 // We've finished inference and all types are known; we now compile all the expressions
                 // again to generate code with no holes and fully concrete types.
-                let mut typechecked_args = self.mem.new_list(args_and_params.len());
+                let mut typechecked_args = self.mem.new_list(args_and_params.args.len());
 
                 // We can skip re-evaluating everything if we're just here to learn the return types
                 if !ctx.is_inference() {
-                    // The receiver is the first non-context param; context params come
-                    // first in the aligned args
-                    let receiver_index = if is_method {
-                        self.tmp
-                            .getn(args_and_params.params)
-                            .iter()
-                            .position(|p| p.kind != FnParamKind::Context)
-                    } else {
-                        None
-                    };
+                    let aligned_params = self.mem.getn(args_and_params.params);
+                    let receiver_index = FnParamType::get_context_param_count(aligned_params);
                     for (param_index, (maybe_typed_expr, param)) in
-                        self.tmp.getn_zip(args_and_params.args, args_and_params.params).enumerate()
+                        self.tmp.getn(args_and_params.args).iter().zip(aligned_params).enumerate()
                     {
-                        let is_method_receiver = receiver_index == Some(param_index);
-                        let allow_addr_of = is_method_receiver;
+                        let is_method_receiver = is_method && param_index == receiver_index;
                         // Is this parameter a fnlike type parameter? If so, we already have the
                         // typechecked value expression
                         let matching_ftp_index = self
@@ -11316,21 +11241,16 @@ impl TypedProgram {
                             .iter()
                             .position(|ftp| ftp.value_param_index as usize == param_index);
                         let expr = match matching_ftp_index {
-                            Some(ftp_index) => {
-                                let value = fnlike_type_arg_values[ftp_index];
-                                value
-                            }
+                            Some(ftp_index) => fnlike_type_arg_values[ftp_index],
                             None => match *maybe_typed_expr {
-                                MaybeTypedExpr::Typed(typed) => {
-                                    let checked_coerced = self.check_and_coerce_expr(
-                                        param.type_id,
-                                        typed,
-                                        ctx.scope_id,
-                                        allow_addr_of,
-                                    )?;
-                                    checked_coerced
-                                }
-                                MaybeTypedExpr::Parsed(parsed) => self
+                                None => self.ice_span(span, "Unresolved context argument"),
+                                Some(MaybeTypedExpr::Typed(typed)) => self.check_and_coerce_expr(
+                                    param.type_id,
+                                    typed,
+                                    ctx.scope_id,
+                                    is_method_receiver,
+                                )?,
+                                Some(MaybeTypedExpr::Parsed(parsed)) => self
                                     .eval_expr_with_coercion(
                                         parsed,
                                         ctx.with_expected_type(Some(param.type_id))
@@ -11342,7 +11262,7 @@ impl TypedProgram {
                                             self,
                                             err.span,
                                             "Error in parameter '{}' in call to '{}'\n{}",
-                                            param.name,
+                                            self.get_param_name(declaration, param_index),
                                             &fn_call.name,
                                             err.message
                                         )
@@ -11356,7 +11276,7 @@ impl TypedProgram {
                 (final_callee, typechecked_args.to_slice(), type_args)
             }
         };
-        self.record_call_arg_site(marker_arg_index, callee.maybe_function_id(), ctx.scope_id);
+        self.record_call_arg_site(marker_arg_index, declaration, ctx.scope_id);
 
         // If any arguments definitely crash, we aren't calling the function at all.
         // So let's not generate a `Call`, but rather just the arguments expressions that should be
@@ -11370,17 +11290,23 @@ impl TypedProgram {
             }
         }
 
-        self.finish_call(Call { callee, args: typechecked_arguments, type_args }, span, ctx)
+        self.finish_call(
+            Call { callee, args: typechecked_arguments, type_args },
+            declaration,
+            span,
+            ctx,
+        )
     }
 
     fn finish_call(
         &mut self,
         call: Call,
+        declaration: Option<FunctionId>,
         span: Span,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let callee_function_type = self.get_callee_function_type(&call.callee);
-        self.warn_large_arg_copies(call.args, callee_function_type);
+        self.warn_large_arg_copies(call.args, callee_function_type, declaration);
         let return_type = self.types.get(callee_function_type).as_function().unwrap().return_type;
 
         // Builtins that are handled by the typechecking phase are implemented here.
@@ -11440,7 +11366,12 @@ impl TypedProgram {
 
     const LARGE_ARG_COPY_BYTES: u32 = 1024;
 
-    fn warn_large_arg_copies(&mut self, args: PermSlice<TypedExprId>, function_type_id: TypeId) {
+    fn warn_large_arg_copies(
+        &mut self,
+        args: PermSlice<TypedExprId>,
+        function_type_id: TypeId,
+        declaration: Option<FunctionId>,
+    ) {
         let Type::Function(function_type) = self.types.get(function_type_id) else { return };
         let params = function_type.logical_params();
         if args.len() != params.len() {
@@ -11465,7 +11396,7 @@ impl TypedProgram {
                 span,
                 "Implicit copy of {} bytes: parameter '{}' takes {} by value; consider a reference parameter",
                 layout.size,
-                param.name,
+                self.get_param_name(declaration, i),
                 param.type_id
             ));
         }
@@ -11832,7 +11763,7 @@ impl TypedProgram {
         // A function-type-parameter, written 'some \A -> B'
         match typ {
             Type::FunctionPointer(fp) => Some(fp.function_type_id),
-            Type::FunctionReference(fr) => Some(fr.function_type),
+            Type::FunctionIdReference(fr) => Some(fr.function_type),
             Type::Lambda(lam_id) => Some(self.lambda_types.get(*lam_id).function_type),
             Type::LambdaObject(lambda_object) => Some(lambda_object.function_type),
             Type::FunctionTypeParameter(ftp) => Some(ftp.function_type),
@@ -12068,17 +11999,17 @@ impl TypedProgram {
         let (kind, type_params, fnlike_type_params) = match impl_for {
             None => (parent_function.kind, MSlice::empty(), MSlice::empty()),
             Some((ability_id, self_type_id)) => {
-                let physical_params = self
+                let logical_params = self
                     .types
                     .get(specialized_function_type_id)
                     .as_function()
                     .unwrap()
-                    .physical_params;
+                    .logical_params();
                 let mut fnlike_type_params =
                     self.mem.new_list(parent_function.fnlike_type_params.len());
                 for parent_param in self.mem.getn(parent_function.fnlike_type_params) {
                     let index = parent_param.value_param_index as usize;
-                    let type_id = self.mem.get_nth(physical_params, index).type_id;
+                    let type_id = self.mem.get_nth(logical_params, index).type_id;
                     fnlike_type_params.push(FnlikeTypeParam { type_id, ..*parent_param });
                 }
                 (
@@ -13785,11 +13716,17 @@ impl TypedProgram {
         let ability_self_type = ability.self_type_id;
 
         let parsed_args = self.ast.mem.getn(ability_expr.args);
-        let mut param_names: SV4<StringId> = smallvec![];
-        for param in self.mem.getn(ability_parameters) {
-            param_names.push(param.name);
-        }
-        let placed_args = self.place_type_args(&param_names, parsed_args, span)?;
+        let ability_params = self.mem.getn(ability_parameters);
+        let mut placed_args: SV8<Option<NamedTypeArg>> = smallvec![None; ability_params.len()];
+        self.place_args(
+            &mut placed_args,
+            parsed_args.len(),
+            |i| (parsed_args[i].name, parsed_args[i]),
+            |arg| arg.span,
+            |p| ability_params[p].name,
+            span,
+            "type ",
+        )?;
 
         let mut ability_arguments: List<TypeId, _> = self.mem.new_list(ability_parameters.len());
         let mut impl_arguments: List<TypeId, _> = self.mem.new_list(ability_parameters.len());
@@ -13805,7 +13742,7 @@ impl TypedProgram {
                 false
             }
         };
-        for (param, placed_arg) in self.mem.getn(ability_parameters).iter().zip(placed_args) {
+        for (param, placed_arg) in ability_params.iter().zip(placed_args) {
             let Some(arg) = placed_arg else {
                 if is_lookup && param.is_impl_param {
                     continue;
@@ -13985,20 +13922,17 @@ impl TypedProgram {
         });
 
         let mut slot_params = self.mem.new_list(physical_params.len());
-        let value_params = if has_receiver {
-            slot_params.push(FnParamType {
-                name: self.ast.idents.b.lambda_env_var_name,
-                type_id: POINTER_TYPE_ID,
-                kind: FnParamKind::LambdaEnv,
-            });
-            &params[1..]
+        let first_value_param = if has_receiver {
+            slot_params.push(FnParamType { type_id: POINTER_TYPE_ID, kind: FnParamKind::Plain });
+            1
         } else {
-            params
+            0
         };
-        for param in value_params {
+        for (index, param) in params.iter().enumerate().skip(first_value_param) {
             let substituted = self.substitute_in_type(param.type_id, subst_pairs);
             if self.substitute_in_type(substituted, &self_probe) != substituted {
-                return Err(format!("parameter '{}' mentions self", self.ident_str(param.name)));
+                let name = self.get_declared_param_name(function_id, index);
+                return Err(format!("parameter '{}' mentions self", self.ident_str(name)));
             }
             slot_params.push(FnParamType { type_id: substituted, ..*param });
         }
@@ -14161,12 +14095,12 @@ impl TypedProgram {
                         let mut call_args: SV4<TypedExprId> = smallvec![];
                         for (index, param) in impl_fn_params.iter().enumerate() {
                             let (param_type, kind) = if index == 0 {
-                                (POINTER_TYPE_ID, FnParamKind::LambdaEnv)
+                                (POINTER_TYPE_ID, FnParamKind::Plain)
                             } else {
                                 (param.type_id, param.kind)
                             };
                             let variable_id = self.variables.add(Variable {
-                                name: param.name,
+                                name: self.get_declared_param_name(impl_fn_id, index),
                                 type_id: param_type,
                                 owner_scope: thunk_scope,
                                 kind: VariableKind::FnParam(thunk_id),
@@ -14175,11 +14109,7 @@ impl TypedProgram {
                                 defn_span: span,
                             });
                             thunk_params.push(TypedFunctionParam { variable_id, span });
-                            thunk_param_types.push(FnParamType {
-                                name: param.name,
-                                type_id: param_type,
-                                kind,
-                            });
+                            thunk_param_types.push(FnParamType { type_id: param_type, kind });
                             let variable_expr = self.synth_variable_expr(variable_id, span);
                             call_args.push(if index == 0 {
                                 let self_ref_type = self.add_reference_type(implementor_type);
@@ -14226,8 +14156,7 @@ impl TypedProgram {
                     literal_fields
                         .push(StructLiteralField { name: field.name, expr: Some(fn_ptr_expr) });
                 }
-                AbilityImplFunction::Pending => unreachable!(),
-                AbilityImplFunction::Unavailable => {
+                AbilityImplFunction::Unavailable(_) => {
                     kbail!(
                         self,
                         span,
@@ -14379,12 +14308,20 @@ impl TypedProgram {
             };
             let type_id =
                 self.eval_type_expr_ext(fn_param.type_expr, fn_scope_id, param_type_context)?;
+            let is_context = fn_param.modifiers.is_context();
 
             // Handle 'existential' type parameters. These are value parameters that
             // introduce a type parameter 'for free' inline.
             // - `some ty` function type parameter, inject the type parameter into the
             match self.types.get(type_id) {
                 Type::FunctionTypeParameter(ftp) => {
+                    if is_context {
+                        kbail!(
+                            self,
+                            fn_param.span,
+                            "'some fn' parameters cannot be context parameters"
+                        );
+                    }
                     let name = ftp.name;
                     let span = ftp.span;
                     fnlike_type_params.push_grow(
@@ -14442,7 +14379,6 @@ impl TypedProgram {
                 };
             }
 
-            let is_context = fn_param.modifiers.is_context();
             let variable = Variable {
                 name: fn_param.name,
                 type_id,
@@ -14455,7 +14391,6 @@ impl TypedProgram {
 
             let variable_id = self.variables.add(variable);
             param_types.push(FnParamType {
-                name: fn_param.name,
                 type_id,
                 kind: if is_context { FnParamKind::Context } else { FnParamKind::Plain },
             });
@@ -14929,7 +14864,7 @@ impl TypedProgram {
                 kind: VariableKind::FnParam(FunctionId::PENDING),
                 defn_span: fn_param.span,
             });
-            param_types.push(FnParamType { name: fn_param.name, type_id, kind });
+            param_types.push(FnParamType { type_id, kind });
             params.push(TypedFunctionParam { variable_id, span: fn_param.span });
             if !self.scopes.add_variable(fn_scope_id, fn_param.name, variable_id) {
                 kbail!(self, fn_param.span, "Duplicate parameter name: {}", fn_param.name);
@@ -15979,18 +15914,16 @@ impl TypedProgram {
             };
 
             if matches!(kind, AbilityImplKind::Concrete)
-                && self
-                    .check_ability_fn_where_constraints(
-                        ability_id,
-                        impl_arguments_handle,
-                        impl_self_type,
-                        ability_function_ref.index,
-                        impl_scope_id,
-                        span,
-                    )
-                    .is_err()
+                && let Err(failure) = self.check_ability_fn_where_constraints(
+                    ability_id,
+                    impl_arguments_handle,
+                    impl_self_type,
+                    ability_function_ref.index,
+                    impl_scope_id,
+                    span,
+                )
             {
-                typed_functions.push(AbilityImplFunction::Unavailable);
+                typed_functions.push(Some(AbilityImplFunction::Unavailable(failure.message)));
                 continue;
             }
 
@@ -16044,9 +15977,25 @@ impl TypedProgram {
             }
             let substituted_root_type = self.substitute_in_type(generic_type, &sig_subst);
 
-            if let Err(msg) =
-                self.check_types(substituted_root_type, specialized_fn_type, spec_fn_scope)
+            let mut mismatch =
+                self.check_types(substituted_root_type, specialized_fn_type, spec_fn_scope).err();
+            let ability_params =
+                self.get_function_type(ability_function_ref.function_id).logical_params();
+            let impl_params = self.get_function_type(impl_function_id).logical_params();
+            for (index, (ability_param, impl_param)) in
+                self.mem.getn(ability_params).iter().zip(self.mem.getn(impl_params)).enumerate()
             {
+                let is_context = ability_param.kind == FnParamKind::Context;
+                if mismatch.is_none() && is_context != (impl_param.kind == FnParamKind::Context) {
+                    mismatch = Some(k1_format_user!(
+                        self,
+                        "Parameter '{}' must{} be a context parameter",
+                        self.get_declared_param_name(impl_function_id, index),
+                        if is_context { "" } else { " not" }
+                    ));
+                }
+            }
+            if let Some(msg) = mismatch {
                 kbail!(
                     self,
                     impl_function_span,
@@ -16065,7 +16014,7 @@ impl TypedProgram {
                 },
             );
 
-            typed_functions.push(AbilityImplFunction::FunctionId(impl_function_id));
+            typed_functions.push(Some(AbilityImplFunction::FunctionId(impl_function_id)));
         }
 
         let blanket_type_params_handle = blanket_type_params.to_slice();
@@ -16111,9 +16060,9 @@ impl TypedProgram {
 
         for (index, impl_fn) in self.mem.getn(ability_impl.functions).iter().enumerate() {
             let impl_fn = match *impl_fn {
-                AbilityImplFunction::FunctionId(impl_fn) => impl_fn,
-                AbilityImplFunction::Unavailable => continue,
-                AbilityImplFunction::Pending | AbilityImplFunction::Abstract(_) => {
+                Some(AbilityImplFunction::FunctionId(impl_fn)) => impl_fn,
+                Some(AbilityImplFunction::Unavailable(_)) => continue,
+                None | Some(AbilityImplFunction::Abstract(_)) => {
                     self.ice("Expected a declared impl function in eval_ability_impl", None);
                 }
             };
@@ -17475,18 +17424,32 @@ impl TypedProgram {
         }
     }
 
-    fn positional_param_name(&mut self, index: usize) -> StringId {
-        match index {
-            0 => self.ast.idents.b.param_0,
-            1 => self.ast.idents.b.param_1,
-            2 => self.ast.idents.b.param_2,
-            3 => self.ast.idents.b.param_3,
-            4 => self.ast.idents.b.param_4,
-            5 => self.ast.idents.b.param_5,
-            6 => self.ast.idents.b.param_6,
-            7 => self.ast.idents.b.param_7,
-            8 => self.ast.idents.b.param_8,
-            i => format_ident!(self, "param_{}", i),
+    pub fn get_positional_param_name(&self, index: usize) -> StringId {
+        self.ast.idents.intern(format!("param-{index}"))
+    }
+
+    pub fn get_declared_param_name(
+        &self,
+        function_id: FunctionId,
+        logical_index: usize,
+    ) -> StringId {
+        let mut declaration = self.get_function(function_id);
+        while let Some(spec_info) = declaration.specialization_info {
+            declaration = self.get_function(spec_info.parent_function);
+        }
+        let is_lambda = self.types.get(declaration.type_id).as_function().unwrap().is_lambda;
+        let param = self.mem.get_nth(declaration.params, logical_index + is_lambda as usize);
+        self.variables.get(param.variable_id).name
+    }
+
+    pub fn get_param_name(
+        &self,
+        declaration: Option<FunctionId>,
+        logical_index: usize,
+    ) -> StringId {
+        match declaration {
+            Some(function_id) => self.get_declared_param_name(function_id, logical_index),
+            None => self.get_positional_param_name(logical_index),
         }
     }
 }

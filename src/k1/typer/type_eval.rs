@@ -562,27 +562,31 @@ impl TypedProgram {
                         }
                         Ok(r.inner_type)
                     }
-                    Type::Function(fun) => {
-                        let member_name = self.ast.idents.get_string(acc.member_name);
-                        match member_name {
-                            "return" => Ok(fun.return_type),
-                            _other => {
-                                if let Some(param) = self
-                                    .mem
-                                    .getn(fun.logical_params())
-                                    .iter()
-                                    .find(|p| p.name == acc.member_name)
-                                {
-                                    Ok(param.type_id)
-                                } else {
-                                    return make_fail_ast_id(
-                                        &self.ast,
-                                        &format!("Function has no parameter named {}", member_name),
-                                        type_expr_id.into(),
-                                    );
-                                }
+                    Type::Function(_) | Type::FunctionIdReference(_) => {
+                        let (function_type_id, declaration) = match self.types.get(base_type) {
+                            Type::FunctionIdReference(fr) => {
+                                (fr.function_type, Some(fr.function_id))
+                            }
+                            _ => (base_type, None),
+                        };
+                        let fun = self.types.get(function_type_id).as_function().unwrap();
+                        if acc.member_name == self.ast.idents.b.return_ {
+                            return Ok(fun.return_type);
+                        }
+                        for (index, param) in self.mem.getn(fun.logical_params()).iter().enumerate()
+                        {
+                            if self.get_param_name(declaration, index) == acc.member_name {
+                                return Ok(param.type_id);
                             }
                         }
+                        make_fail_ast_id(
+                            &self.ast,
+                            &format!(
+                                "Function has no parameter named {}",
+                                self.ast.idents.get_string(acc.member_name)
+                            ),
+                            type_expr_id.into(),
+                        )
                     }
                     Type::Array(array_type) => {
                         let member_name = self.ast.idents.get_string(acc.member_name);
@@ -614,11 +618,9 @@ impl TypedProgram {
                 let fun_type = *fun_type;
                 let mut params: List<FnParamType, _> = self.mem.new_list(fun_type.params.len());
 
-                for (index, param) in self.ast.mem.getn(fun_type.params).iter().enumerate() {
+                for param in self.ast.mem.getn(fun_type.params) {
                     let type_id = self.eval_type_expr(*param, scope_id)?;
-
-                    let name = self.positional_param_name(index);
-                    params.push(FnParamType { type_id, name, kind: FnParamKind::Plain });
+                    params.push(FnParamType { type_id, kind: FnParamKind::Plain });
                 }
                 let return_type = self.eval_type_expr(fun_type.return_type, scope_id)?;
                 let params_handle = params.to_slice();
@@ -975,7 +977,10 @@ impl TypedProgram {
                 None => {
                     if ty_app.args.is_empty() {
                         match self.find_function_namespaced(scope_id, &ty_app.name)? {
-                            Some(function_id) => Ok(self.get_function(function_id).type_id),
+                            Some(function_id) => {
+                                let function_type = self.get_function(function_id).type_id;
+                                Ok(self.add_function_id_reference_type(function_id, function_type))
+                            }
                             None => match self
                                 .resolve_qident_to_constant_type(scope_id, &ty_app.name)?
                             {
@@ -1017,14 +1022,13 @@ impl TypedProgram {
                         .find(|e| e.parsed_id == pending_parsed_id)
                         .map(|e| e.reserved_type_id);
                     if let Some(reserved_entry) = stack_entry {
-                        let mut param_names: SV4<StringId> = smallvec![];
-                        for param in
-                            self.ast.mem.getn(self.ast.get_type_defn(pending_parsed_id).type_params)
-                        {
-                            param_names.push(param.name);
-                        }
+                        let type_params = self
+                            .ast
+                            .mem
+                            .getn(self.ast.get_type_defn(pending_parsed_id).type_params);
                         let ordered_args = self.bind_type_args_to_params(
-                            &param_names,
+                            type_params.len(),
+                            |_, p| type_params[p].name,
                             self.ast.mem.getn(ty_app.args),
                             ty_app.span,
                         )?;
@@ -1072,7 +1076,7 @@ impl TypedProgram {
                             // definition: the generic doesn't exist yet, so reserve the
                             // instance's id now; it is filled once the defn cluster completes
                             let mut type_arguments: SV4<TypeId> = smallvec![];
-                            for parsed_arg in &ordered_args {
+                            for parsed_arg in self.tmp.getn(ordered_args) {
                                 let Some(parsed_arg_expr) = parsed_arg.type_expr else {
                                     kbail!(
                                         self,
@@ -1281,61 +1285,80 @@ impl TypedProgram {
         }
     }
 
-    pub(super) fn place_type_args(
+    pub(super) fn place_args<A: Copy>(
         &self,
-        param_names: &[StringId],
-        parsed_args: &[NamedTypeArg],
+        placed: &mut [Option<A>],
+        args_len: usize,
+        get_arg: impl Fn(usize) -> (Option<StringId>, A),
+        get_arg_span: impl Fn(A) -> Span,
+        get_param_name: impl Fn(usize) -> StringId,
         span: Span,
-    ) -> K1Result<SV4<Option<NamedTypeArg>>> {
-        let mut placed: SV4<Option<NamedTypeArg>> = smallvec![None; param_names.len()];
-        for (index, parsed_arg) in parsed_args.iter().enumerate() {
-            let param_index = match parsed_arg.name {
-                None if index < param_names.len() => index,
+        arg_kind: &str,
+    ) -> K1Result<()> {
+        for arg_index in 0..args_len {
+            let (arg_name, arg) = get_arg(arg_index);
+            let param_index = match arg_name {
+                None if arg_index < placed.len() => arg_index,
                 None => kbail!(
                     self,
                     span,
-                    "Expected {} type arguments, got {}",
-                    param_names.len(),
-                    parsed_args.len()
+                    "Expected {} {}arguments, got {}",
+                    placed.len(),
+                    arg_kind,
+                    args_len
                 ),
-                Some(name) => match param_names.iter().position(|p| *p == name) {
+                Some(name) => match (0..placed.len()).find(|p| get_param_name(*p) == name) {
                     Some(param_index) => param_index,
-                    None => kbail!(self, parsed_arg.span, "No type parameter named {}", name),
+                    None => {
+                        kbail!(self, get_arg_span(arg), "No {}parameter named {}", arg_kind, name)
+                    }
                 },
             };
             if placed[param_index].is_some() {
                 kbail!(
                     self,
-                    parsed_arg.span,
-                    "Type parameter {} is given more than once",
-                    param_names[param_index]
+                    get_arg_span(arg),
+                    "Duplicate argument for {}parameter {}",
+                    arg_kind,
+                    get_param_name(param_index)
                 );
             }
-            placed[param_index] = Some(*parsed_arg);
+            placed[param_index] = Some(arg);
         }
-        Ok(placed)
+        Ok(())
     }
 
     pub(super) fn bind_type_args_to_params(
-        &self,
-        param_names: &[StringId],
+        &mut self,
+        params_len: usize,
+        get_param_name: impl Fn(&Self, usize) -> StringId,
         parsed_args: &[NamedTypeArg],
         span: Span,
-    ) -> K1Result<SV4<NamedTypeArg>> {
-        let mut ordered_args: SV4<NamedTypeArg> = smallvec![];
-        for placed_arg in self.place_type_args(param_names, parsed_args, span)? {
+    ) -> K1Result<TmpSlice<NamedTypeArg>> {
+        let mut placed: SV8<Option<NamedTypeArg>> = smallvec![None; params_len];
+        self.place_args(
+            &mut placed,
+            parsed_args.len(),
+            |i| (parsed_args[i].name, parsed_args[i]),
+            |arg| arg.span,
+            |p| get_param_name(self, p),
+            span,
+            "type ",
+        )?;
+        let mut ordered_args: TmpList<NamedTypeArg> = self.tmp.new_list(params_len as u32);
+        for placed_arg in placed {
             let Some(parsed_arg) = placed_arg else {
                 kbail!(
                     self,
                     span,
                     "Expected {} type arguments, got {}",
-                    param_names.len(),
+                    params_len,
                     parsed_args.len()
                 );
             };
             ordered_args.push(parsed_arg);
         }
-        Ok(ordered_args)
+        Ok(ordered_args.to_slice())
     }
 
     pub(super) fn eval_call_type_args(
@@ -1344,13 +1367,22 @@ impl TypedProgram {
         parsed_args: &[NamedTypeArg],
         span: Span,
         scope_id: ScopeId,
-    ) -> K1Result<SV4<CallTypeArg>> {
-        if parsed_args.is_empty() {
-            return Ok(smallvec![CallTypeArg::Inferred; type_params.len()]);
+    ) -> K1Result<TmpSlice<CallTypeArg>> {
+        if parsed_args.is_empty() && type_params.is_empty() {
+            return Ok(TmpSlice::empty());
         }
-        let param_names = self.get_type_param_names(type_params);
-        let mut call_type_args: SV4<CallTypeArg> = smallvec![];
-        for arg in self.bind_type_args_to_params(&param_names, parsed_args, span)? {
+        let mut call_type_args: TmpList<CallTypeArg> = self.tmp.new_list(type_params.len() as u32);
+        if parsed_args.is_empty() {
+            call_type_args.fill_to_cap(CallTypeArg::Inferred);
+            return Ok(call_type_args.to_slice());
+        }
+        let ordered_args = self.bind_type_args_to_params(
+            type_params.len(),
+            |k1, p| k1.get_type_parameter(type_params[p]).name,
+            parsed_args,
+            span,
+        )?;
+        for arg in self.tmp.getn(ordered_args) {
             call_type_args.push(match arg.type_expr {
                 None => CallTypeArg::Inferred,
                 Some(type_expr) => CallTypeArg::Passed {
@@ -1359,7 +1391,7 @@ impl TypedProgram {
                 },
             });
         }
-        Ok(call_type_args)
+        Ok(call_type_args.to_slice())
     }
 
     pub(super) fn check_type_args_against_params(
@@ -1370,10 +1402,16 @@ impl TypedProgram {
         context: EvalTypeExprContext,
         span: Span,
     ) -> K1Result<TypeIdSlice> {
-        let param_names = self.get_type_param_names(self.mem.getn(params));
-        let ordered_args = self.bind_type_args_to_params(&param_names, parsed_args, span)?;
+        let type_params = self.mem.getn(params);
+        let ordered_args = self.bind_type_args_to_params(
+            type_params.len(),
+            |k1, p| k1.get_type_parameter(type_params[p]).name,
+            parsed_args,
+            span,
+        )?;
+        let ordered_args = self.tmp.getn(ordered_args);
         let mut type_arguments = self.mem.new_list(params.len());
-        for parsed_arg in &ordered_args {
+        for parsed_arg in ordered_args {
             let Some(parsed_arg_expr) = parsed_arg.type_expr else {
                 kbail!(self, parsed_arg.span, "Wildcard _ type not accepted here");
             };
@@ -1383,8 +1421,8 @@ impl TypedProgram {
         }
         let type_arguments = type_arguments.to_slice();
         let subst_pairs: SV4<TypeSubstitutionPair> =
-            self.zip_types_to_subst_pairs(self.mem.getn(params), self.mem.getn(type_arguments));
-        for (pair, parsed_arg) in subst_pairs.iter().zip(&ordered_args) {
+            self.zip_types_to_subst_pairs(type_params, self.mem.getn(type_arguments));
+        for (pair, parsed_arg) in subst_pairs.iter().zip(ordered_args) {
             self.check_type_constraints(
                 pair.from,
                 pair.to,
@@ -1406,14 +1444,6 @@ impl TypedProgram {
             self.check_type_constraints(pair.from, pair.to, subst_pairs, scope_id, span)?;
         }
         Ok(())
-    }
-
-    pub(super) fn get_type_param_names(&self, params: &[TypeId]) -> SV4<StringId> {
-        let mut param_names: SV4<StringId> = smallvec![];
-        for param in params {
-            param_names.push(self.get_type_parameter(*param).name);
-        }
-        param_names
     }
 
     pub(super) fn resolve_qident_to_constant_type(
@@ -1919,12 +1949,12 @@ impl TypedProgram {
                 }
             }
             Type::TypeParameter(_type_param) => type_id,
-            Type::FunctionReference(fr) => {
+            Type::FunctionIdReference(fr) => {
                 let fr = *fr;
                 let new_fn_type =
                     self.substitute_in_type_inner(fr.function_type, substitution_pairs, from_kinds);
                 if new_fn_type != fr.function_type {
-                    self.add_function_reference_type(fr.function_id, new_fn_type)
+                    self.add_function_id_reference_type(fr.function_id, new_fn_type)
                 } else {
                     type_id
                 }
@@ -1968,9 +1998,7 @@ impl TypedProgram {
                     if new_param_type != param.type_id {
                         any_new = true;
                     }
-                    let new_param =
-                        FnParamType { name: param.name, type_id: new_param_type, kind: param.kind };
-                    new_params.push(new_param);
+                    new_params.push(FnParamType { type_id: new_param_type, kind: param.kind });
                 }
                 if any_new {
                     self.add_type_with_items(new_params.as_slice(), |physical_params| {

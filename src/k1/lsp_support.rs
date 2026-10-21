@@ -2,7 +2,7 @@ use crate::lex::{Span, is_ident_char};
 use crate::parse::{FileId, ParsedExpr, ParsedId, ParsedProgram, StringId};
 use crate::typer::dump::TypeDisplayMode;
 use crate::typer::scopes::{Provenance, ScopeId, ScopeMember, VariableInScope};
-use crate::typer::types::{FnParamKind, Type, TypeId};
+use crate::typer::types::{FnParamKind, FnParamType, Type, TypeId};
 use crate::{SV8, typer::*};
 use fxhash::FxHashSet;
 use smallvec::smallvec;
@@ -414,10 +414,14 @@ pub fn signature_help_info(k1: &TypedProgram, site: CompletionSite) -> Option<Si
     let Type::Function(ft) = k1.types.get(function.type_id) else { return None };
     let params: Vec<String> = k1
         .mem
-        .getn(ft.physical_params)
+        .getn(ft.logical_params())
         .iter()
-        .filter(|p| p.kind != FnParamKind::Context && p.kind != FnParamKind::LambdaEnv)
-        .map(|p| format!("{}: {}", k1.ident_str(p.name), k1.type_id_to_string(p.type_id)))
+        .enumerate()
+        .filter(|(_, p)| p.kind != FnParamKind::Context)
+        .map(|(index, p)| {
+            let name = k1.get_declared_param_name(function_id, index);
+            format!("{}: {}", k1.ident_str(name), k1.type_id_to_string(p.type_id))
+        })
         .collect();
     let label = format!(
         "fn {}({}): {}",
@@ -434,9 +438,8 @@ fn is_method_shaped(k1: &TypedProgram, function_id: FunctionId, base_type_id: Ty
         return true;
     }
     let Type::Function(ft) = k1.types.get(function.type_id) else { return false };
-    let Some(first) =
-        k1.mem.getn(ft.physical_params).iter().find(|p| p.kind != FnParamKind::Context)
-    else {
+    let params = k1.mem.getn(ft.logical_params());
+    let Some(first) = params.get(FnParamType::get_context_param_count(params)) else {
         return false;
     };
     first.type_id == base_type_id || k1.get_base_for_method(first.type_id) == base_type_id

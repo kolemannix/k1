@@ -679,7 +679,7 @@ fn handle_request(
         "functions" => {
             let functions: Vec<String> = k1
                 .function_iter()
-                .map(|(_, tf)| k1.function_signature_to_string(&tf.signature()))
+                .map(|(id, tf)| k1.function_signature_to_string(&tf.signature(), Some(id)))
                 .collect();
             Response::Text(functions.join("\n"))
         }

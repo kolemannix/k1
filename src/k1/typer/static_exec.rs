@@ -1639,15 +1639,18 @@ impl TypedProgram {
             .logical_params();
 
         let mut static_args: SV8<StaticValueId> = smallvec![];
-        for (param, arg) in self.mem.getn(fn_param_types).iter().zip(args.iter()) {
+        for (index, (param, arg)) in
+            self.mem.getn(fn_param_types).iter().zip(args.iter()).enumerate()
+        {
             let parsed_arg = *arg;
+            let param_name = self.get_declared_param_name(function_to_run, index);
             if let Some(passed_name) = parsed_arg.name {
-                if passed_name != param.name {
+                if passed_name != param_name {
                     kbail!(
                         self,
                         span,
                         "Macro argument name mismatch: expected {}, got {}",
-                        param.name,
+                        param_name,
                         passed_name,
                     );
                 }
@@ -1670,7 +1673,7 @@ impl TypedProgram {
                             self,
                             span,
                             "Macro argument '{}' type mismatch: {}",
-                            param.name,
+                            param_name,
                             msg,
                         );
                     }

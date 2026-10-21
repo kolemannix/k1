@@ -264,6 +264,14 @@ impl ParsedCall {
     pub fn type_args(&self, mem: &kmem::Mem<ParsedProgram>) -> AstSlice<NamedTypeArg> {
         mem.get_slice_h(self.type_args)
     }
+
+    pub fn has_explicit_context_args(&self, mem: &kmem::Mem<ParsedProgram>) -> bool {
+        mem.getn(self.args).iter().any(|a| a.is_explicit_context)
+    }
+
+    pub fn receiver_arg_index(&self, mem: &kmem::Mem<ParsedProgram>) -> Option<usize> {
+        mem.getn(self.args).iter().position(|a| !a.is_explicit_context)
+    }
 }
 
 /// 'Calling' an expression. Used for indirect calls or calls by pointer

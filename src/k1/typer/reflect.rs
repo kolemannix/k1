@@ -112,10 +112,9 @@ impl TypedProgram {
         span: Span,
     ) -> K1Result<TypeId> {
         let mut params: List<FnParamType, _> = self.mem.new_list(raw_param_types.len() as u32);
-        for (index, raw) in raw_param_types.iter().enumerate() {
+        for raw in raw_param_types {
             let type_id = self.type_id_from_raw(*raw, span)?;
-            let name = self.positional_param_name(index);
-            params.push(FnParamType { type_id, name, kind: FnParamKind::Plain });
+            params.push(FnParamType { type_id, kind: FnParamKind::Plain });
         }
         let new_type_id = self.add_type(Type::Function(FunctionType {
             physical_params: params.to_slice(),
@@ -553,40 +552,14 @@ impl TypedProgram {
                 let fn_type = *fn_type;
                 let function_schema_payload_type_id =
                     get_schema_variant(self, self.ast.idents.b.function).payload.unwrap();
-                //Function({
-                //  params: span[{ name: string, typeId: type-id }],
-                //  returnTypeId: type-id,
-                //}),
-                let function_schema_payload_struct =
-                    self.types.get(function_schema_payload_type_id).expect_struct();
-                let function_params_span_field =
-                    self.mem.get_nth(function_schema_payload_struct.fields, 0);
-                let function_params_span_type_id = function_params_span_field.type_id;
-                let function_param_struct_type_id =
-                    self.get_as_span_instance(function_params_span_type_id).unwrap();
+                let function_params_span_type_id =
+                    self.get_struct_field(function_schema_payload_type_id, 0).type_id;
 
                 let mut params_value_ids = self.tmp.new_list(fn_type.logical_params().len());
-                // Skipping lambda environment parameters;
-                // knowing what is a lambda is covered by the type
-                // kind the function appears within
-
                 for param in self.mem.getn(fn_type.logical_params()) {
                     self.register_type_metainfo(param.type_id);
-
-                    let param_name_value_id = self.static_values.add_string(param.name);
-                    let param_type_id_value_id = self.add_type_id_value(param.type_id);
-                    let param_struct_value_id = self.static_values.add_struct_from_slice(
-                        function_param_struct_type_id,
-                        &[
-                            // name: string
-                            param_name_value_id,
-                            // type-id: type-id
-                            param_type_id_value_id,
-                        ],
-                    );
-                    params_value_ids.push(param_struct_value_id)
+                    params_value_ids.push(self.add_type_id_value(param.type_id));
                 }
-
                 let params_span_value_id = self.add_static_container_from_ids(
                     StaticContainerKind::Span,
                     function_params_span_type_id,
@@ -598,14 +571,38 @@ impl TypedProgram {
 
                 let payload = self.static_values.add_struct_from_slice(
                     function_schema_payload_type_id,
-                    &[
-                        // params
-                        params_span_value_id,
-                        // returnTypeId
-                        return_type_id_value_id,
-                    ],
+                    &[params_span_value_id, return_type_id_value_id],
                 );
                 make_variant(self, self.ast.idents.b.function, Some(payload))
+            }
+            Type::FunctionIdReference(fr) => {
+                let fr = *fr;
+                let named_function_schema_payload_type_id =
+                    get_schema_variant(self, self.ast.idents.b.named_function).payload.unwrap();
+                let param_names_span_type_id =
+                    self.get_struct_field(named_function_schema_payload_type_id, 1).type_id;
+
+                self.register_type_metainfo(fr.function_type);
+                let function_type_id_value_id = self.add_type_id_value(fr.function_type);
+
+                let param_count =
+                    self.types.get(fr.function_type).as_function().unwrap().logical_params().len();
+                let mut param_name_value_ids = self.tmp.new_list(param_count);
+                for index in 0..param_count as usize {
+                    let name = self.get_declared_param_name(fr.function_id, index);
+                    param_name_value_ids.push(self.static_values.add_string(name));
+                }
+                let param_names_span_value_id = self.add_static_container_from_ids(
+                    StaticContainerKind::Span,
+                    param_names_span_type_id,
+                    param_name_value_ids.as_slice(),
+                );
+
+                let payload = self.static_values.add_struct_from_slice(
+                    named_function_schema_payload_type_id,
+                    &[function_type_id_value_id, param_names_span_value_id],
+                );
+                make_variant(self, self.ast.idents.b.named_function, Some(payload))
             }
             Type::FunctionPointer(fp) => {
                 let fp = *fp;
@@ -621,8 +618,7 @@ impl TypedProgram {
                 );
                 make_variant(self, self.ast.idents.b.function_pointer, Some(payload))
             }
-            Type::FunctionReference(_)
-            | Type::Lambda(_)
+            Type::Lambda(_)
             | Type::LambdaObject(_)
             | Type::AbilityObject(_)
             | Type::TypeParameter(_)

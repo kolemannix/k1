@@ -219,7 +219,7 @@ fn render_ns_main(k1: &TypedProgram, tree: &NsTree, ns_id: NamespaceId, path: &[
                         div .member-row {
                             span .member-kw { "fn" }
                             span .member-sig {
-                                (k1.function_signature_to_string(&k1.functions.get(*function_id).signature()))
+                                (k1.function_signature_to_string(&k1.functions.get(*function_id).signature(), Some(*function_id)))
                             }
                             @if let Some(loc) = k1.span_location(k1.get_function_span(*function_id)) {
                                 span .member-meta { (loc) }

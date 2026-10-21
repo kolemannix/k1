@@ -13,6 +13,10 @@ fn takes-ptr(f: *fn(int) -> int, x: int): int { f(x) }
 
 type has-fn = { myfn: *fn(not-x: int) -> int }
 
+fn scale(value: int, by: int): int { value * by }
+
+type(alias) int-and-bool = fn(int, bool) -> int
+
 fn counted-add-one(count: *int): type-of(static-add-one) {
   count.* = count.* + 1
   static-add-one
@@ -103,4 +107,16 @@ fn(test) baked-fn-pointers() {
   assert-equals(baked-tripler(2), 6)
   require baked-maybe is :some f else crash("baked-maybe is none")
   assert-equals(f(3), 9)
+}
+
+fn(test) param-names-belong-to-declarations() {
+  assert-equals(types/id[type-of(scale.&)], types/id[*fn(int, int) -> int])
+  assert-equals(scale(by = 3, value = 2), 6)
+  let lam = fn(x: int, y: int) x - y
+  assert-equals(lam(y = 1, x = 5), 4)
+  let p: *fn(left: int, right: int) -> int = scale.&
+  assert(test-compile(p(value = 2, by = 5)) is :some _)
+  assert(test-compile(p(param-0 = 2, param-1 = 5)) is :some _)
+  assert-equals(types/id[scale.by], types/id[int-and-bool.param-0])
+  assert-equals(types/id[int-and-bool.param-1], types/id[bool])
 }
