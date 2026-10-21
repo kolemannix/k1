@@ -1122,13 +1122,9 @@ pub enum Callee {
     },
     /// Must contain a LambdaObject
     DynamicLambda(TypedExprId),
-    /// Dynamic dispatch through an ability object. object_expr is typed
-    /// Type::AbilityObject; slot_function_type is the Function type inside the
-    /// object's fn-ptr field (is_lambda, param 0 = state ptr); field_index is
-    /// the object struct field holding the fn ptr (state is field 0)
     DynamicAbilityFn {
         object_expr: TypedExprId,
-        field_index: u32,
+        slot_index: u32,
         slot_function_type: TypeId,
     },
     /// Must contain a Function pointer
@@ -2928,7 +2924,9 @@ impl TypedProgram {
             test_results: Vec::new(),
         };
 
-        let empty_struct_id = k1.add_type(Type::Struct(StructType::struc(MSlice::empty())));
+        let empty_struct_id = k1
+            .add_struct_type(&[], RecordKind::Struct)
+            .unwrap_or_else(|e| k1.ice("empty struct", Some(&e)));
         k1.builtin_types.empty = empty_struct_id;
         assert_eq!(empty_struct_id, EMPTY_TYPE_ID);
         assert_eq!(k1.intern_type_slice(&[]), EMPTY_TYPE_SLICE);
@@ -6897,9 +6895,8 @@ impl TypedProgram {
         // are all in place before the body is evaluated, so capture references in the body
         // resolve as ordinary variables.
         let closure_setup: Option<ClosureSetup> = if is_closure {
-            let environment_struct_type = self.add_type_with_storage(|mem| {
-                Type::Struct(StructType::struc(mem.pushn(env_field_types.as_slice())))
-            });
+            let environment_struct_type =
+                self.add_struct_type(env_field_types.as_slice(), RecordKind::Struct)?;
             let env_fields = self.mem.pushn(env_field_exprs.as_slice());
             let environment_struct = self.exprs.add(
                 TypedExpr::Struct(StructLiteral { fields: env_fields }),
@@ -9480,22 +9477,21 @@ impl TypedProgram {
                 } else {
                     base_expr
                 };
-                let repr_fields = self.types.get(ao.struct_representation).expect_struct().fields;
-                let repr_fields = self.mem.getn(repr_fields);
-                match repr_fields[1..].iter().position(|f| f.name == call.name.name) {
-                    Some(position) => {
-                        let field_index = (position + 1) as u32;
-                        let slot_ptr_type = repr_fields[position + 1].type_id;
+                let table = self
+                    .get_struct_field(ao.struct_representation, Self::ABILITY_OBJECT_TABLE_INDEX)
+                    .type_id;
+                match self.get_struct_field_by_name(table, call.name.name) {
+                    Some((slot_index, slot)) => {
                         let slot_function_type = self
                             .types
-                            .get(slot_ptr_type)
+                            .get(slot.type_id)
                             .as_function_pointer()
                             .unwrap()
                             .function_type_id;
                         return Ok(CallResolution::MethodCall {
                             callee: Callee::DynamicAbilityFn {
                                 object_expr,
-                                field_index,
+                                slot_index: slot_index as u32,
                                 slot_function_type,
                             },
                             receiver: object_expr,
@@ -13960,18 +13956,13 @@ impl TypedProgram {
         }
 
         let subst_pairs = self.dyn_ability_subst_pairs(signature);
-        let mut fields: TmpList<StructTypeField> = self.tmp.new_list(ability_functions.len() + 1);
-        fields.push(StructTypeField {
-            name: self.ast.idents.b.state,
-            type_id: POINTER_TYPE_ID,
-            span,
-        });
+        let mut slots: TmpList<StructTypeField> = self.tmp.new_list(ability_functions.len());
         let mut excluded = String::new();
         for fn_ref in self.mem.getn(ability_functions) {
             match self.dyn_slot_fn_type(ability_self_type, &subst_pairs, fn_ref.function_id) {
                 Ok(slot_fn_type) => {
                     let slot_ptr_type = self.add_function_pointer_type(slot_fn_type);
-                    fields.push(StructTypeField {
+                    slots.push(StructTypeField {
                         name: fn_ref.function_name,
                         type_id: slot_ptr_type,
                         span,
@@ -13983,7 +13974,7 @@ impl TypedProgram {
                 }
             }
         }
-        if fields.len() == 1 {
+        if slots.is_empty() {
             kbail!(
                 self,
                 span,
@@ -13992,9 +13983,14 @@ impl TypedProgram {
                 excluded
             );
         }
-        let struct_representation = self.add_type_with_storage(|mem| {
-            Type::Struct(StructType::struc(mem.pushn(fields.as_slice())))
-        });
+        let table = self.add_struct_type(slots.as_slice(), RecordKind::Struct)?;
+        let struct_representation = self.add_struct_type(
+            &[
+                StructTypeField { name: self.ast.idents.b.table, type_id: table, span },
+                StructTypeField { name: self.ast.idents.b.state, type_id: POINTER_TYPE_ID, span },
+            ],
+            RecordKind::Struct,
+        )?;
         Ok(self
             .add_type(Type::AbilityObject(AbilityObjectType { signature, struct_representation })))
     }
@@ -14026,14 +14022,13 @@ impl TypedProgram {
             span,
         )?;
 
-        let repr_fields = self.types.get(ao.struct_representation).expect_struct().fields;
-        let repr_fields = self.mem.getn(repr_fields);
-
-        let state_expr = self.synth_cast(base_expr, POINTER_TYPE_ID, CastType::Reinterpret, None);
-        let mut literal_fields = self.mem.new_list(repr_fields.len() as u32);
-        literal_fields
-            .push(StructLiteralField { name: self.ast.idents.b.state, expr: Some(state_expr) });
-        for field in &repr_fields[1..] {
+        let table_type = self
+            .get_struct_field(ao.struct_representation, Self::ABILITY_OBJECT_TABLE_INDEX)
+            .type_id;
+        let table_fields = self.mem.getn(self.types.get(table_type).expect_struct().fields);
+        let mut slot_fields: TmpList<StructLiteralField> =
+            self.tmp.new_list(table_fields.len() as u32);
+        for field in table_fields {
             let fn_ref = self
                 .abilities
                 .get(ao.signature.specialized_ability_id)
@@ -14046,8 +14041,10 @@ impl TypedProgram {
                     let impl_fn = *self.get_function(impl_fn_id);
                     let impl_fn_type = *self.types.get(impl_fn.type_id).as_function().unwrap();
                     let impl_fn_params = self.mem.getn(impl_fn_type.physical_params);
-                    let by_value_receiver =
-                        impl_fn_params.first().is_some_and(|p| p.type_id == implementor_type);
+                    let slot = self.types.get(field.type_id).as_function_pointer().unwrap();
+                    let slot_fn = self.types.get(slot.function_type_id).as_function().unwrap();
+                    let by_value_receiver = slot_fn.is_lambda
+                        && impl_fn_params.first().is_some_and(|p| p.type_id == implementor_type);
                     let slot_fn_id = if !by_value_receiver {
                         impl_fn_id
                     } else if let Some(thunk_id) = impl_fn.dyn_receiver_thunk_id {
@@ -14127,7 +14124,7 @@ impl TypedProgram {
                         thunk_id
                     };
                     let fn_ptr_expr = self.function_to_pointer(slot_fn_id, span);
-                    literal_fields
+                    slot_fields
                         .push(StructLiteralField { name: field.name, expr: Some(fn_ptr_expr) });
                 }
                 AbilityImplFunction::Unavailable(_) => {
@@ -14147,12 +14144,17 @@ impl TypedProgram {
                 }
             }
         }
-        let fields_handle = literal_fields.to_slice();
-        Ok(self.exprs.add(
-            TypedExpr::Struct(StructLiteral { fields: fields_handle }),
-            target_dyn_type,
+        let table_expr = self.exprs.add(
+            TypedExpr::Struct(StructLiteral { fields: self.mem.pushn(slot_fields.as_slice()) }),
+            table_type,
             span,
-        ))
+        );
+        let state_expr = self.synth_cast(base_expr, POINTER_TYPE_ID, CastType::Reinterpret, None);
+        let fields = self.mem.pushn(&[
+            StructLiteralField { name: self.ast.idents.b.table, expr: Some(table_expr) },
+            StructLiteralField { name: self.ast.idents.b.state, expr: Some(state_expr) },
+        ]);
+        Ok(self.exprs.add(TypedExpr::Struct(StructLiteral { fields }), target_dyn_type, span))
     }
 
     fn declare_function(

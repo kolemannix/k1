@@ -2278,15 +2278,25 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
                         callee = IrCallee::Indirect(callee_fn_type, fn_ptr);
                         environment_arg = Some(env);
                     }
-                    Callee::DynamicAbilityFn { object_expr, field_index, slot_function_type } => {
+                    Callee::DynamicAbilityFn { object_expr, slot_index, slot_function_type } => {
                         let object = compile_expr(b, None, *object_expr)?;
                         let object_type_id = b.k1.exprs.get_type(*object_expr);
                         let object_pt = b.get_physical_type(object_type_id).unwrap().expect_agg();
                         let ptr_pt = PhysicalType::PTR;
-                        let fn_ptr_addr = b.push_struct_offset(
+                        let table_index = TypedProgram::ABILITY_OBJECT_TABLE_INDEX;
+                        let table_addr = b.push_struct_offset(
                             object_pt,
                             object,
-                            *field_index,
+                            table_index as u32,
+                            IrComment::None,
+                        );
+                        let object_fields = b.k1.get_agg_struct_layout(object_pt);
+                        let table_pt =
+                            b.k1.mem.get_nth(object_fields, table_index).field_t.expect_agg();
+                        let fn_ptr_addr = b.push_struct_offset(
+                            table_pt,
+                            table_addr,
+                            *slot_index,
                             IrComment::DynAbilityFnPtrOffset,
                         );
                         let fn_ptr = load_value(b, ptr_pt, fn_ptr_addr, false, IrComment::None);

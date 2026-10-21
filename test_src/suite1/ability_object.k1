@@ -47,6 +47,37 @@ impl mixed for mixed-impl {
   fn plain(*self): int { self.n }
 }
 
+ability named-like-object-fields {
+  fn state(*self): int
+  fn table(*self): int
+}
+
+type plain-cell = { n: int }
+impl named-like-object-fields for plain-cell {
+  fn state(*self): int { self.n }
+  fn table(*self): int { self.n * 2 }
+}
+
+fn(test) dyn-fns-named-like-object-fields() {
+  let c: *plain-cell = mem/new(.{ n = 21 })
+  let d = c.to-dyn[named-like-object-fields]()
+  assert-equals(d.state(), 21)
+  assert-equals(d.table(), 42)
+}
+
+ability int-taker {
+  fn plus-one(x: int): int
+}
+
+impl int-taker for int {
+  fn plus-one(x: int): int { x + 1 }
+}
+
+fn(test) receiverless-dyn-fn-taking-the-implementor-type() {
+  let p: *int = mem/new(41)
+  assert-equals(p.to-dyn[int-taker]().plus-one(9), 10)
+}
+
 fn(test) dispatch-through-dyn() {
   let ones: *by-ones = mem/new(.{ current = 0 })
   let d1 = ones.to-dyn[counter[t = int]]

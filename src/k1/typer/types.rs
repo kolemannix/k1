@@ -169,10 +169,6 @@ pub struct StructType {
 }
 
 impl StructType {
-    pub fn struc(fields: MSlice<StructTypeField, TypedProgram>) -> StructType {
-        StructType { fields, record_kind: RecordKind::Struct }
-    }
-
     pub fn find_field(
         &self,
         m: &kmem::Mem<TypedProgram>,
@@ -495,10 +491,7 @@ pub struct LambdaObjectType {
 
 /// `dyn[some-ability[args...]]`: an ability erased to an inline table.
 /// Ability-side arguments are baked into the specialized ability id;
-/// impl-side arguments are stored here. The runtime value is
-/// `struct_representation`: `{ state: ptr, <fn-name>: *fn(ptr, ...), .. }`
-/// with one field per dyn-dispatchable ability function, in ability
-/// declaration order.
+/// impl-side arguments are stored here.
 #[derive(Clone, Copy)]
 pub struct AbilityObjectType {
     pub signature: TypedAbilitySignature,
@@ -2119,8 +2112,8 @@ impl TypedProgram {
 
     pub const LAMBDA_OBJECT_FN_PTR_INDEX: usize = 0;
     pub const LAMBDA_OBJECT_ENV_PTR_INDEX: usize = 1;
-    /// Ability objects: field 0 is the state pointer; fn-ptr fields follow
-    pub const ABILITY_OBJECT_STATE_INDEX: usize = 0;
+    pub const ABILITY_OBJECT_TABLE_INDEX: usize = 0;
+    pub const ABILITY_OBJECT_STATE_INDEX: usize = 1;
 
     pub fn add_lambda_object(&mut self, function_type_id: TypeId, parsed_id: ParsedId) -> TypeId {
         let fn_ptr_type = self.add_function_pointer_type(function_type_id);
@@ -2136,8 +2129,9 @@ impl TypedProgram {
                 span: Span::NONE,
             },
         ];
-        let struct_representation =
-            self.add_type_with_storage(|mem| Type::Struct(StructType::struc(mem.pushn(&fields))));
+        let struct_representation = self
+            .add_struct_type(&fields, RecordKind::Struct)
+            .unwrap_or_else(|e| self.ice("lambda object fields", Some(&e)));
         self.add_type(Type::LambdaObject(LambdaObjectType {
             function_type: function_type_id,
             parsed_id,

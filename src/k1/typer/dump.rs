@@ -464,7 +464,6 @@ impl TypedProgram {
                 Ok(())
             }
             Type::AbilityObject(ao) if mode == TypeDisplayMode::Structural => {
-                // The runtime value is the table struct; the ability name is not abi
                 w.write_str("dyn(")?;
                 self.display_type_id_ext(w, ao.struct_representation, mode, visiting)?;
                 w.write_str(")")?;
@@ -777,9 +776,9 @@ impl TypedProgram {
                     Callee::DynamicLambda(callee_expr) => {
                         self.display_expr_id(*callee_expr, w, indentation)?;
                     }
-                    Callee::DynamicAbilityFn { object_expr, field_index, .. } => {
+                    Callee::DynamicAbilityFn { object_expr, slot_index, .. } => {
                         self.display_expr_id(*object_expr, w, indentation)?;
-                        write!(w, ".dyn[{}]", field_index)?;
+                        write!(w, ".dyn[{}]", slot_index)?;
                     }
                     Callee::DynamicAbstract { callee_expr, .. } => {
                         self.display_expr_id(*callee_expr, w, indentation)?;

@@ -109,7 +109,7 @@ ns pre { macro make-point(name: code) { "type $name = { x: i32, y: i32 }" } }
   `make-fn`, `make-instance`. Use with `type(alias) p = #type types/make-...`.
 
 ## dyn
-`dyn[ability[params bound]]` = `{ state: ptr, fn ptr per dispatchable fn }`.
+`dyn[ability[params bound]]` = `{ table: { fn ptr per dispatchable fn }, state: ptr }`.
 `r.to-dyn[source[t = u8]]` from `*s` (no alloc), from a value it allocates first;
 `let d: dyn[...] = r.to-dyn()`. Dispatches defaults, overrides, by-value receivers
 (thunk), and self-free fns (no state passed). Excluded per fn: self outside the
