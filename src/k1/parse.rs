@@ -279,7 +279,7 @@ pub struct ParsedLet {
     pub type_expr: Option<ParsedTypeExprId>,
     pub value: Option<ParsedExprId>,
     /// `let(context(impl <ability>, ..)) x`: abilities keying this context variable
-    pub context_abilities: AstSlice<AstHandle<ParsedAbilityExpr>>,
+    pub context_abilities: AstSlice<TypeApplication>,
     pub span: Span,
     flags: u8,
 }
@@ -642,7 +642,7 @@ pub struct ParsedCode {
 /// `to-string@(int)/to-string()`
 #[derive(Clone, Copy)]
 pub struct ParsedQAbilityCall {
-    pub ability_expr: AstHandle<ParsedAbilityExpr>,
+    pub ability_expr: AstHandle<TypeApplication>,
     pub self_name: ParsedTypeExprId,
     pub call_expr: ParsedExprId,
 }
@@ -1128,16 +1128,12 @@ impl ParsedTypeParam {}
 
 #[derive(Clone, Copy)]
 pub enum ParsedTypeConstraintExpr {
-    Ability(AstHandle<ParsedAbilityExpr>),
+    Ability(TypeApplication),
     Static(ParsedTypeExprId),
     Predicate(QIdent),
 }
 
 impl ParsedTypeConstraintExpr {
-    pub fn as_ability(&self) -> Option<AstHandle<ParsedAbilityExpr>> {
-        if let ParsedTypeConstraintExpr::Ability(ability) = self { Some(*ability) } else { None }
-    }
-
     pub fn single_static_constraint_or_fail(
         mem: &kmem::Mem<ParsedProgram>,
         constraints: MSlice<ParsedTypeConstraintExpr, ParsedProgram>,
@@ -1323,16 +1319,9 @@ pub struct ParsedAbility {
     pub typer_state: typer::ParsedAbilityDeclareOutcome,
 }
 
-#[derive(Clone)]
-pub struct ParsedAbilityExpr {
-    pub name: QIdent,
-    pub arguments: AstSlice<NamedTypeArg>,
-    pub span: Span,
-}
-
 #[derive(Clone, Copy)]
 pub struct ParsedAbilityImplementation {
-    pub ability_expr: AstHandle<ParsedAbilityExpr>,
+    pub ability_expr: TypeApplication,
     pub generic_impl_params: AstSlice<ParsedTypeParam>,
     pub self_type: ParsedTypeExprId,
     pub functions: AstSlice<ParsedFunctionId>,
@@ -4041,11 +4030,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                                 ));
                                 let call_expr_id = self.add_expression(call, span);
 
-                                let ability_type_arguments = first_type_args;
                                 let ab_expr_span = self.extend_to_here(namespaced_ident.name_span);
-                                let ability_expr_id = self.ast.mem.push_h(ParsedAbilityExpr {
+                                let ability_expr_id = self.ast.mem.push_h(TypeApplication {
                                     name: namespaced_ident,
-                                    arguments: ability_type_arguments,
+                                    args: first_type_args,
                                     span: ab_expr_span,
                                 });
                                 Ok(Some(self.add_expression(
@@ -4342,7 +4330,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let eaten_keyword = self.expect_kind(K::KeywordLet)?;
         self.emit_semantic_token(eaten_keyword, SemanticTokenKind::Keyword);
         let mut flags = 0u8;
-        let mut context_abilities: List<AstHandle<ParsedAbilityExpr>, _> = self.ast.mem.new_list(0);
+        let mut context_abilities: List<TypeApplication, _> = self.ast.mem.new_list(0);
         if self.maybe_consume(K::OpenParen).is_some() {
             loop {
                 let p = self.peek();
@@ -4359,10 +4347,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                                 &mut context_abilities,
                                 false,
                                 K::CloseParen,
-                                |p| {
-                                    let ability_expr = p.expect_ability_expr()?;
-                                    Ok(p.ast.mem.push_h(ability_expr))
-                                },
+                                |p| p.expect_ability_expr(),
                             )?;
                         }
                     }
@@ -5226,9 +5211,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let predicate_qident = self.expect_namespaced_ident()?;
             Ok(ParsedTypeConstraintExpr::Predicate(predicate_qident))
         } else {
-            let ability_expr = self.expect_ability_expr()?;
-            let id = self.ast.mem.push_h(ability_expr);
-            Ok(ParsedTypeConstraintExpr::Ability(id))
+            Ok(ParsedTypeConstraintExpr::Ability(self.expect_ability_expr()?))
         }
     }
 
@@ -5334,37 +5317,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(ability_id)
     }
 
-    fn expect_ability_type_argument(&mut self) -> ParseResult<NamedTypeArg> {
-        let name_token = self.expect_kind(K::Ident)?;
-        let name = self.make_ident(name_token);
-        self.expect_kind(K::Equals)?;
-        let peeked = self.peek();
-        let type_expr = if peeked.kind == K::Ident && self.token_chars(peeked) == "_" {
-            self.advance();
-            None
-        } else {
-            Some(self.expect_type_expression()?)
-        };
-        let span = self.extend_tok_to_here(name_token);
-        Ok(NamedTypeArg { name: Some(name), type_expr, span })
-    }
-
-    fn expect_ability_expr(&mut self) -> ParseResult<ParsedAbilityExpr> {
+    fn expect_ability_expr(&mut self) -> ParseResult<TypeApplication> {
         let name = self.expect_namespaced_ident()?;
-        let mut arguments: List<NamedTypeArg, _> = self.ast.mem.new_list(0);
-        let span = match self.eat_delimited_if_opener(
-            "Ability Arguments",
-            &mut arguments,
-            K::OpenBracket,
-            false,
-            K::CloseBracket,
-            Parser::expect_ability_type_argument,
-        )? {
-            None => name.name_span,
-            Some(args_span) => self.extend_span(name.name_span, args_span),
-        };
-        let arguments_handle = arguments.to_slice_trim(&mut self.ast.mem);
-        Ok(ParsedAbilityExpr { name, arguments: arguments_handle, span })
+        let args = self.parse_bracketed_type_args()?;
+        let span = self.extend_to_here(name.name_span);
+        Ok(TypeApplication { name, args, span })
     }
 
     fn expect_ability_impl(
@@ -5383,8 +5340,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             )?;
         }
 
-        let ability = self.expect_ability_expr()?;
-        let ability_expr_id = self.ast.mem.push_h(ability);
+        let ability_expr = self.expect_ability_expr()?;
         self.expect_kind(K::KeywordFor)?;
         let target_type = self.expect_type_expression()?;
 
@@ -5393,7 +5349,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
         let generic_impl_params = generic_impl_params.to_slice_trim(&mut self.ast.mem);
         let ability_impl_id = self.ast.add_ability_impl(ParsedAbilityImplementation {
-            ability_expr: ability_expr_id,
+            ability_expr,
             generic_impl_params,
             self_type: target_type,
             functions,
@@ -5957,7 +5913,7 @@ impl ParsedProgram {
             }
             ParsedExpr::QualifiedAbilityCall(qcall) => {
                 // Qualified ability call: foo/Ability@int/baz()
-                self.display_ability_expr(w, qcall.ability_expr)?;
+                self.display_type_application(w, self.mem.get(qcall.ability_expr))?;
                 w.write_char('@')?;
                 self.display_type_expr_id(qcall.self_name, w)?;
                 w.write_char('/')?;
@@ -6048,14 +6004,13 @@ impl ParsedProgram {
         self.display_ident(w, ns_id.name)
     }
 
-    fn display_ability_expr(
+    fn display_type_application(
         &self,
         w: &mut impl Write,
-        ability_expr_id: AstHandle<ParsedAbilityExpr>,
+        app: &TypeApplication,
     ) -> std::fmt::Result {
-        let e = self.mem.get(ability_expr_id);
-        self.display_qident(w, &e.name)?;
-        self.display_type_args(w, e.arguments)
+        self.display_qident(w, &app.name)?;
+        self.display_type_args(w, app.args)
     }
 
     pub fn display_pattern_expression_id(
@@ -6133,10 +6088,7 @@ impl ParsedProgram {
                 }
                 w.write_str(" }")
             }
-            ParsedTypeExpr::TypeApplication(tapp) => {
-                self.display_qident(w, &tapp.name)?;
-                self.display_type_args(w, tapp.args)
-            }
+            ParsedTypeExpr::TypeApplication(tapp) => self.display_type_application(w, tapp),
             ParsedTypeExpr::Optional(opt) => {
                 w.write_str("?")?;
                 self.display_type_expr_id(opt.base, w)?;

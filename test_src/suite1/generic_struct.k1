@@ -22,11 +22,16 @@ fn(test) generic-method-call() {
   let p: au-pair[int, bool] = .{ t = some(0), u = some(true) }
   assert(p.t[int, bool]().! == 0)
   assert(p.t().! == 0)
+  let q: au-pair[u = bool, t = int] = p
+  assert(q.t[u = bool, t = int]().! == 0)
+  assert(test-compile(q.t[v = bool, t = int]()).is-some())
+  assert(test-compile(q.t[t = bool, t = int]()).is-some())
 }
 
 fn(test) infer-params-from-struct-literal() {
   takes-poly-au-pair(.{ t = some(42), u = opt:some true })
   takes-poly-au-pair[_, bool](.{ t = some(42), u = some(true) })
+  takes-poly-au-pair[d = bool, c = _](.{ t = some(42), u = some(true) })
   assert(test-compile(takes-poly-au-pair[ptr, _](.{ t = some(42), u = some(true) })) is :some _)
 }
 
@@ -34,6 +39,18 @@ fn(test) constrained-type-param() {
   let x: constrained-box[int, ?int] = .{ inner = some(4) }
   assert-equals(types/id[type-of(x).a], types/id[int])
   assert(test-compile(constrained-box[int, ?bool].{ inner = some(4) }) is :some _)
+}
+
+type(alias) au-pair-alias = au-pair[int, bool]
+type au-pair-named = au-pair[int, bool]
+fn takes-au-pair-int-bool(_x: au-pair[int, bool]) {}
+
+fn(test) named-type-over-instance-is-nominal() {
+  let aliased: au-pair-alias = .{ t = some(1), u = some(true) }
+  let named: au-pair-named = .{ t = some(1), u = some(true) }
+  takes-au-pair-int-bool(aliased)
+  assert(test-compile(takes-au-pair-int-bool(named)) is :some _)
+  assert-equals(named.u.!, true)
 }
 
 fn(test) phantom-type-param() {

@@ -21,23 +21,17 @@ impl TypedProgram {
         raw_field_descs: &[vm::k1_types::K1MakeStructField],
         span: Span,
     ) -> K1Result<TypeId> {
-        let mut fields: List<StructTypeField, _> = self.mem.new_list(raw_field_descs.len() as u32);
+        let mut fields = self.tmp.new_list(raw_field_descs.len() as u32);
         for desc in raw_field_descs {
             let name_str = match unsafe { desc.name.to_str() } {
                 Ok(s) => s,
                 Err(msg) => kbail!(self, span, "make-struct field name: {}", msg),
             };
             let name = self.ast.idents.intern(name_str);
-            for prev in fields.as_slice() {
-                if prev.name == name {
-                    kbail!(self, span, "make-struct: duplicate field name '{}'", name_str);
-                }
-            }
             let type_id = self.type_id_from_raw(desc.type_id, span)?;
-            fields.push(StructTypeField { name, type_id, span: Span::NONE });
+            fields.push(StructTypeField { name, type_id, span });
         }
-        let new_type_id =
-            self.add_type_anon(Type::Struct(StructType { fields: fields.to_slice(), record_kind }));
+        let new_type_id = self.add_struct_type(fields.as_slice(), record_kind)?;
         self.register_type_metainfo(new_type_id);
         Ok(new_type_id)
     }
@@ -48,104 +42,36 @@ impl TypedProgram {
         raw_variant_descs: &[vm::k1_types::K1MakeEitherVariant],
         span: Span,
     ) -> K1Result<TypeId> {
-        let variant_count = raw_variant_descs.len() as u32;
-        let tag_type = match explicit_tag_type {
-            Some(raw) => {
-                let tag_type_id = self.type_id_from_raw(raw, span)?;
-                match self.types.get(tag_type_id) {
-                    Type::Integer(int_type) => *int_type,
-                    _ => {
-                        kbail!(
-                            self,
-                            span,
-                            "make-either: tag-type must be an integer type, got {}",
-                            tag_type_id
-                        );
-                    }
-                }
-            }
-            None => {
-                const U8_MAX_VARIANTS: u32 = u8::MAX as u32 + 1;
-                const MAX_VARIANTS: u32 = u16::MAX as u32 + 1;
-                match variant_count {
-                    c if c <= U8_MAX_VARIANTS => IntegerType::U8,
-                    c if c <= MAX_VARIANTS => IntegerType::U16,
-                    _ => {
-                        kbail!(self, span, "sum cannot have more than {MAX_VARIANTS} variants");
-                    }
-                }
-            }
+        let explicit_tag_type = match explicit_tag_type {
+            None => None,
+            Some(raw) => Some((self.type_id_from_raw(raw, span)?, span)),
         };
-
-        let mut has_payloads = false;
-        let mut variants: List<TypedSumVariant, _> = self.mem.new_list(variant_count);
-        let mut next_tag = tag_type.zero();
-        for (index, desc) in raw_variant_descs.iter().enumerate() {
+        let variant_count = raw_variant_descs.len() as u32;
+        let tag_type = self.choose_either_tag_type(explicit_tag_type, variant_count, span)?;
+        let mut variants = self.tmp.new_list(variant_count);
+        for desc in raw_variant_descs {
             let name_str = match unsafe { desc.name.to_str() } {
                 Ok(s) => s,
                 Err(msg) => kbail!(self, span, "make-either variant name: {}", msg),
             };
             let name = self.ast.idents.intern(name_str);
-            for prev in variants.as_slice() {
-                if prev.name == name {
-                    kbail!(self, span, "make-either: duplicate variant name '{}'", name_str);
-                }
-            }
             let payload = if desc.payload.tag == 0 {
                 None
             } else {
                 Some(self.type_id_from_raw(desc.payload.payload, span)?)
             };
-            let tag_value = if desc.tag.tag == 0 {
-                next_tag
+            let tag = if desc.tag.tag == 0 {
+                None
             } else {
                 let int_value = desc.tag.payload;
                 let Some(kind) = IntegerType::from_int_kind_tag(int_value.kind) else {
                     kbail!(self, span, "make-either: bad int-value kind {}", int_value.kind as u32);
                 };
-                if kind != tag_type {
-                    kbail!(
-                        self,
-                        span,
-                        "make-either: tag for '{}' is {}, but the tag type is {}",
-                        name_str,
-                        kind,
-                        tag_type
-                    );
-                }
-                TypedIntValue::from_u64_bits(kind, int_value.value_bits)
+                Some(TypedIntValue::from_u64_bits(kind, int_value.value_bits))
             };
-            if let Some(existing) = variants.iter().find(|v| v.tag_value == tag_value) {
-                kbail!(self, span, "Duplicate tag value: {}", existing.tag_value);
-            }
-            has_payloads |= payload.is_some();
-            next_tag = tag_value.incr();
-            variants.push(TypedSumVariant {
-                name,
-                index: index as u32,
-                payload,
-                tag_value,
-                name_span: Span::NONE,
-            });
+            variants.push(EitherVariantPart { name, name_span: span, payload, tag });
         }
-
-        let new_type_id = if has_payloads {
-            self.add_type_anon(Type::Sum(SumType { variants: variants.to_slice(), tag_type }))
-        } else {
-            let mut members: List<ScalarEnumValue, _> = self.mem.new_list(variant_count);
-            for v in variants.iter() {
-                members.push(ScalarEnumValue {
-                    name: v.name,
-                    int_value: v.tag_value,
-                    name_span: v.name_span,
-                });
-            }
-            self.add_type_anon(Type::Enum(ScalarEnumType {
-                member_values: members.to_slice(),
-                int_type: tag_type,
-                partial: false,
-            }))
-        };
+        let new_type_id = self.add_either_type(tag_type, variants.as_slice(), false, span)?;
         self.register_type_metainfo(new_type_id);
         Ok(new_type_id)
     }
@@ -170,11 +96,11 @@ impl TypedProgram {
             kbail!(self, span, "make-array: negative size {}", size);
         }
         let size_value_id = self.static_values.add_size(size);
-        let size_type = self.add_type_anon(Type::StaticValue(StaticValueType {
+        let size_type = self.add_type(Type::StaticValue(StaticValueType {
             family_type_id: I64_TYPE_ID,
             value_id: Some(size_value_id),
         }));
-        let new_type_id = self.add_type_anon(Type::Array(ArrayType { element_type, size_type }));
+        let new_type_id = self.add_type(Type::Array(ArrayType { element_type, size_type }));
         self.register_type_metainfo(new_type_id);
         Ok(new_type_id)
     }
@@ -191,7 +117,7 @@ impl TypedProgram {
             let name = self.positional_param_name(index);
             params.push(FnParamType { type_id, name, kind: FnParamKind::Plain });
         }
-        let new_type_id = self.add_type_anon(Type::Function(FunctionType {
+        let new_type_id = self.add_type(Type::Function(FunctionType {
             physical_params: params.to_slice(),
             is_lambda: false,
             return_type,
@@ -209,14 +135,14 @@ impl TypedProgram {
         let Some(generic) = self.types.get(parent).as_generic() else {
             kbail!(self, span, "make-instance: {} is not a generic type", parent);
         };
-        let param_count = generic.params.len();
-        if raw_args.len() != param_count as usize {
+        let params = generic.params;
+        if raw_args.len() != params.len() as usize {
             kbail!(
                 self,
                 span,
                 "make-instance: {} expects {} type arguments, got {}",
                 parent,
-                param_count,
+                params.len(),
                 raw_args.len()
             );
         }
@@ -224,6 +150,11 @@ impl TypedProgram {
         for raw in raw_args {
             args.push(self.type_id_from_raw(*raw, span)?);
         }
+        let subst_pairs: SV4<TypeSubstitutionPair> =
+            self.zip_types_to_subst_pairs(self.mem.getn(params), &args);
+        let defn_scope =
+            self.namespaces.get(self.get_defn_info(parent).unwrap().namespace_id).scope_id;
+        self.check_type_args_constraints(&subst_pairs, span, defn_scope)?;
         let new_type_id = self.instantiate_generic_type(parent, &args);
         self.register_type_metainfo(new_type_id);
         Ok(new_type_id)

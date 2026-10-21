@@ -19,6 +19,10 @@ fn(test) values-and-names() {
   assert-equals[string](c.enum-name(), "c")
   assert-equals(custom-enum-tags:b.value, 11)
   assert-equals[string]("${custom-enum-tags:b} ${custom-enum-tags:c}", "b c")
+  let ab: either { a, b } = :b
+  let _cd: either { c, d } = :c
+  let ab-again: either { a, b } = ab
+  assert(ab-again is :b)
 }
 
 fn(test) from-value-and-members() {

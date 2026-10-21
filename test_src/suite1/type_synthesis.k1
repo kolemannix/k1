@@ -148,6 +148,9 @@ ns type_synthesis {
     assert-equals(round-trip, types/id[list[point]])
     assert(test-compile(#static types/make-instance(types/id[list], [])).is-some())
     assert(test-compile(#static types/make-instance(types/id[i64], [types/id[i64]])).is-some())
+    assert(test-compile(#static types/make-either-default([])).is-some())
+    assert(test-compile(types/size[either { a(i64), a }]).is-some())
+    assert(test-compile(types/size[either(u8) { a = 1u16, b = 1 }]).is-some())
 
     .{}
   }

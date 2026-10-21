@@ -42,7 +42,7 @@ ns for parser {
   fn parse-let(self: *parser): result[?ast/let-stmt, perror] {
     require self.maybe-consume(:kw-let) is :some _ else { return :ok(:none) }
     let flags: u8 = 0
-    let context-abilities = list/empty[ast/ability-expr]()
+    let context-abilities = list/empty[ast/type-application]()
     if self.maybe-consume(:open-paren) is :some _ {
       loop {
         let p = self.peek()
@@ -163,32 +163,10 @@ ns for parser {
     }
   }
 
-  fn expect-ability-expr(self: *parser): result[ast/ability-expr, perror] {
+  fn expect-ability-expr(self: *parser): result[ast/type-application, perror] {
     let name = self.expect-namespaced-ident().try
-    let arguments = list/empty[ast/type-arg]()
-    let span-opt: ?ast/src-span = if self.maybe-consume(:open-bracket) is :some open-tok {
-      self.eat-delimited("Ability Arguments", arguments.&, :comma, :close-bracket, fn(p: *parser) p.expect-ability-type-argument()).try
-      :some(self.extend-tok-to-here(open-tok))
-    } else :none
-    let span = if span-opt is {
-      :some args-span -> name.name-span.thru(args-span),
-      :none -> name.name-span,
-    }
-    :ok(.{ name, arguments, span })
-  }
-
-  fn expect-ability-type-argument(self: *parser): result[ast/type-arg, perror] {
-    let nit = self.expect-ident().try
-    self.expect-kind(:equals).try
-    let peeked = self.peek()
-    let type-expr: ?ast/type-expr-id = if peeked.kind is :ident and self.tok-chars(peeked) == "_" {
-      self.advance()
-      :none
-    } else {
-      :some(self.expect-type-expression().try)
-    }
-    let span = self.extend-tok-to-here(nit.tok)
-    :ok(.{ name = :some(nit.name), type-expr, span })
+    let args = self.parse-bracketed-type-args().try.args
+    :ok(.{ name, args, span = self.extend-to-here(name.name-span) })
   }
 
   fn expect-fn-param(self: *parser, is-context: bool): result[ast/fn-param, perror] {

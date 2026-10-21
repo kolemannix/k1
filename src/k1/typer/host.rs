@@ -142,9 +142,6 @@ impl TypedProgram {
                     name
                 )
             };
-            if planner.entries[index].configure_span.is_some() {
-                kbail!(self, name_span, "configure names '{}' twice", name)
-            }
             planner.entries[index].configure_span = Some(value_span);
         }
         self.module_params_phase = ModuleParamsPhase::HostSetup;
@@ -561,14 +558,15 @@ impl TypedProgram {
             else {
                 self.ice_span(span, "configure parsed as definitions");
             };
-            let ParsedExpr::Struct(fields) = self.ast.exprs.get(parsed) else {
+            let ParsedExpr::Struct(_) = self.ast.exprs.get(parsed) else {
                 kbail!(
                     self,
                     self.ast.exprs.get_span(parsed),
                     "configure must be a struct literal keyed by library name"
                 );
             };
-            for field in self.ast.mem.getn(fields.fields) {
+            let configured = self.get_struct_literal(parsed)?;
+            for field in self.ast.mem.getn(configured.fields) {
                 let StructValueFieldKind::Expr(value) = field.value else {
                     kbail!(self, field.span, "configure field '{}' needs a value", field.name);
                 };

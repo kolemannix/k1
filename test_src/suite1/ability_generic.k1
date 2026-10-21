@@ -42,10 +42,10 @@ ns ability_generic {
   }
 
   impl to[to = string] for i32 {
-    fn to(self): string { to-string/to-string[i32](self) }
+    fn to(self): string { to-string/to-string(self) }
   }
   impl to[to = string] for i64 {
-    fn to(self): string { to-string/to-string[i64](self) }
+    fn to(self): string { to-string/to-string(self) }
   }
   impl to[to = char] for byte {
     fn to(self): char { self.as-char() }
@@ -74,8 +74,21 @@ ns ability_generic {
     heap.free-t(b2)
   }
 
+  ability echo { fn echo[t](self, x: t): t }
+  impl echo for bool { fn echo[u](self, x: u): u { x } }
+
+  fn(test) type-args-bind-to-the-ability-signature() {
+    assert-equals(true.echo[t = u8](3), 3)
+    assert(test-compile(true.echo[u = u8](3)).is-some())
+    assert(test-compile(to-string/to-string[bool](3: i32)).is-some())
+  }
+
+  type phantom-count[t] = { n: i32 }
+  fn read-u8-count(c: phantom-count[u8]): i32 { c.n }
+
   fn(test) impl-chosen-by-rhs-type() {
     let x: i32 = 4
+    assert(x.gadd(read-u8-count(.{ n = 1 })) == 5)
 
     let add32 = x.gadd(10: i32)
     assert(add32 == 14)
@@ -107,6 +120,18 @@ ns ability_generic {
   fn(test) specialized-ability-resolves-names-where-defined() {
     assert-equals(sealed/conv/tok(7: i64).v, 7)
     assert-equals(sealed/conv/conv(7: i64), 7)
+  }
+
+  ability same-as[impl o] { fn same-as(self, o: o): bool }
+  ability keyed[k, impl v: same-as[o = self]] { fn keyed-value(self, k: k): v }
+  type keyholder = { x: int }
+  impl same-as[o = keyholder] for int { fn same-as(self, o: keyholder): bool { self == o.x } }
+  impl keyed[bool, int] for keyholder { fn keyed-value(self, _k: bool): int { self.x } }
+
+  fn(test) impl-param-constraint-mentions-self() {
+    let h: keyholder = .{ x = 3 }
+    assert(h.keyed-value(true).same-as(h))
+    assert-equals(keyed[k = bool, v = int]@(keyholder)/keyed-value(h, true), 3)
   }
 
   fn(test) blanket-to-from-and-wrap() {

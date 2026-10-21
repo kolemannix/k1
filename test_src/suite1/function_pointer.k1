@@ -33,6 +33,7 @@ fn(test) reassign-fn-pointer-local() {
 fn(test) call-fn-pointer-field() {
   let has-fn: has-fn = .{ myfn = static-add-one.& }
   assert-equals((has-fn.myfn)(4), 5)
+  assert-equals(types/id[type-of(has-fn)], types/id[has-fn])
 }
 
 fn(test) fn-values-coerce-to-pointers() {

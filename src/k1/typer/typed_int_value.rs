@@ -45,16 +45,16 @@ impl TypedIntValue {
         }
     }
 
-    pub fn incr(&self) -> Self {
+    pub fn incr(&self) -> Option<Self> {
         match *self {
-            TypedIntValue::U8(x) => TypedIntValue::U8(x.saturating_add(1)),
-            TypedIntValue::U16(x) => TypedIntValue::U16(x.saturating_add(1)),
-            TypedIntValue::U32(x) => TypedIntValue::U32(x.saturating_add(1)),
-            TypedIntValue::U64(x) => TypedIntValue::U64(x.saturating_add(1)),
-            TypedIntValue::I8(x) => TypedIntValue::I8(x.saturating_add(1)),
-            TypedIntValue::I16(x) => TypedIntValue::I16(x.saturating_add(1)),
-            TypedIntValue::I32(x) => TypedIntValue::I32(x.saturating_add(1)),
-            TypedIntValue::I64(x) => TypedIntValue::I64(x.saturating_add(1)),
+            TypedIntValue::U8(x) => x.checked_add(1).map(TypedIntValue::U8),
+            TypedIntValue::U16(x) => x.checked_add(1).map(TypedIntValue::U16),
+            TypedIntValue::U32(x) => x.checked_add(1).map(TypedIntValue::U32),
+            TypedIntValue::U64(x) => x.checked_add(1).map(TypedIntValue::U64),
+            TypedIntValue::I8(x) => x.checked_add(1).map(TypedIntValue::I8),
+            TypedIntValue::I16(x) => x.checked_add(1).map(TypedIntValue::I16),
+            TypedIntValue::I32(x) => x.checked_add(1).map(TypedIntValue::I32),
+            TypedIntValue::I64(x) => x.checked_add(1).map(TypedIntValue::I64),
         }
     }
 

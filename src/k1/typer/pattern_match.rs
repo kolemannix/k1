@@ -801,6 +801,10 @@ impl TypedProgram {
                         target_type_id
                     )
                 })?;
+                self.check_unique_field_names(
+                    self.ast.mem.getn(struct_pattern.fields),
+                    |(name, pattern_id)| (*name, self.ast.get_pattern_span(*pattern_id)),
+                )?;
                 let mut fields = self.patterns.mem.new_list(struct_pattern.fields.len());
                 for (field_name, field_parsed_pattern_id) in
                     self.ast.mem.getn(struct_pattern.fields)

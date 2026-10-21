@@ -24,6 +24,7 @@ fn(test) sum-variants-and-tags() {
 
   let r: my-result[?int, string] = :ok :some 3
   assert(r is :ok(:some 3))
+  assert(test-compile(my-result[u8, string]:ok(300)).is-some())
   let _: my-result[int, string]:ok = 42
   assert(types/size[my-result[int, string]]() == 24)
 

@@ -150,7 +150,7 @@ impl TypedProgram {
             false,
         )?;
         let body = self.synth_return_only_block(fn_scope, failure_call, span);
-        let thunk_type = self.add_type_anon(Type::Function(FunctionType {
+        let thunk_type = self.add_type(Type::Function(FunctionType {
             physical_params: MSlice::empty(),
             return_type: self.exprs.get_type(failure_call),
             is_lambda: false,

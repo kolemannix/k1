@@ -302,7 +302,7 @@ fn mangle-name(name: string): string {
 
 fn write-named-type(context w: *string-builder, name-config)(name: string, k1-type, indent: size, pos: ref-pos) {
   w.write("${}: ", mangle-name(name))
-  write-k1-type[w](k1-type, indent, pos)
+  write-k1-type(k1-type, indent, pos)
 }
 
 type ref-pos = either { param, value }

@@ -1,7 +1,6 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
 
-use std::collections::hash_map::Entry;
 use std::fmt::{Display, Formatter};
 use std::hash::Hasher;
 
@@ -28,10 +27,6 @@ impl Layout {
 
     pub fn strided(&self) -> Layout {
         Layout { size: self.stride(), align: self.align }
-    }
-
-    pub fn from_scalar_bytes(bytes: u32) -> Layout {
-        Layout { size: bytes, align: bytes }
     }
 
     pub fn from_scalar_bits(bits: u32) -> Layout {
@@ -108,7 +103,7 @@ pub struct StructTypeField {
 }
 impl_copy_if_small!(16, StructTypeField);
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy)]
 pub struct GenericInstanceInfo {
     pub generic_parent: TypeId,
     pub type_args: TypeSliceId,
@@ -131,7 +126,6 @@ pub struct TypeDefnInfo {
     pub namespace_id: NamespaceId,
     pub companion_namespace: Option<NamespaceId>,
     pub ast_id: ParsedId,
-    pub recursive: bool,
 }
 impl_copy_if_small!(24, TypeDefnInfo);
 
@@ -267,6 +261,14 @@ pub struct TypedSumVariant {
 }
 
 #[derive(Clone, Copy)]
+pub struct EitherVariantPart {
+    pub name: StringId,
+    pub name_span: Span,
+    pub payload: Option<TypeId>,
+    pub tag: Option<TypedIntValue>,
+}
+
+#[derive(Clone, Copy)]
 pub struct SumType {
     pub variants: MSlice<TypedSumVariant, TypedProgram>,
     pub tag_type: IntegerType,
@@ -286,15 +288,11 @@ pub struct ScalarEnumType {
     pub partial: bool,
 }
 
-impl SumType {}
-
 #[derive(Clone, Copy)]
 pub struct GenericType {
     pub params: TypeIdSlice,
     pub inner: TypeId,
 }
-
-impl GenericType {}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
@@ -432,11 +430,6 @@ impl FloatType {
     }
 }
 
-// pub struct Spanned<T> {
-//     pub v: T,
-//     pub span: Span,
-// }
-
 #[derive(Clone, Copy)]
 pub struct FnParamType {
     pub type_id: TypeId,
@@ -504,8 +497,7 @@ pub struct LambdaObjectType {
 /// declaration order.
 #[derive(Clone, Copy)]
 pub struct AbilityObjectType {
-    pub specialized_ability_id: AbilityId,
-    pub impl_arguments: TypeIdSlice,
+    pub signature: TypedAbilitySignature,
     pub struct_representation: TypeId,
 }
 
@@ -586,12 +578,7 @@ impl TypedProgram {
         t2: &Type,
         defn1: Option<&TypeDefnInfo>,
         defn2: Option<&TypeDefnInfo>,
-        inst1: Option<&GenericInstanceInfo>,
-        inst2: Option<&GenericInstanceInfo>,
     ) -> bool {
-        if inst1 != inst2 {
-            return false;
-        }
         match (t1, t2) {
             (Type::Char, Type::Char) => true,
             (Type::Integer(int1), Type::Integer(int2)) => int1 == int2,
@@ -599,7 +586,9 @@ impl TypedProgram {
                 if defn1 != defn2 {
                     return false;
                 }
-                if se1.partial != se2.partial || se1.member_values.len() != se2.member_values.len()
+                if se1.partial != se2.partial
+                    || se1.int_type != se2.int_type
+                    || se1.member_values.len() != se2.member_values.len()
                 {
                     return false;
                 }
@@ -677,8 +666,6 @@ impl TypedProgram {
                 o1.size == o2.size && o1.align == o2.align
             }
             (Type::Never, Type::Never) => true,
-            // We never really want to de-dupe this type as its inherently unique
-            (Type::Generic(_g1), Type::Generic(_g2)) => false,
             (Type::Function(f1), Type::Function(f2)) => {
                 if f1.return_type == f2.return_type
                     && f1.physical_params.len() == f2.physical_params.len()
@@ -687,7 +674,9 @@ impl TypedProgram {
                         .getn(f1.physical_params)
                         .iter()
                         .zip(self.mem.getn(f2.physical_params))
-                        .all(|(p1, p2)| p1.type_id == p2.type_id && p1.kind == p2.kind)
+                        .all(|(p1, p2)| {
+                            p1.type_id == p2.type_id && p1.name == p2.name && p1.kind == p2.kind
+                        })
                 } else {
                     false
                 }
@@ -711,20 +700,16 @@ impl TypedProgram {
                         && lt1.parsed_id == lt2.parsed_id
                 }
             }
-            (Type::LambdaObject(_co1), Type::LambdaObject(_co2)) => false,
             // Unlike lambda objects, ability objects are interned by content:
             // every mention of dyn[a[x = t]] must be the same type
             (Type::AbilityObject(ao1), Type::AbilityObject(ao2)) => {
-                ao1.specialized_ability_id == ao2.specialized_ability_id
-                    && ao1.impl_arguments.len() == ao2.impl_arguments.len()
-                    && self
-                        .mem
-                        .getn(ao1.impl_arguments)
-                        .iter()
-                        .zip(self.mem.getn(ao2.impl_arguments))
-                        .all(|(a1, a2)| a1 == a2)
+                ao1.signature.specialized_ability_id == ao2.signature.specialized_ability_id
+                    && self.mem.getn(ao1.signature.impl_arguments)
+                        == self.mem.getn(ao2.signature.impl_arguments)
             }
-            (Type::StaticValue(vt1), Type::StaticValue(vt2)) => vt1.value_id == vt2.value_id,
+            (Type::StaticValue(vt1), Type::StaticValue(vt2)) => {
+                vt1.family_type_id == vt2.family_type_id && vt1.value_id == vt2.value_id
+            }
             (t1, t2) => {
                 if t1.kind_name() == t2.kind_name() {
                     panic!("Missing handling for kind in type_eq: {}", t1.kind_name())
@@ -735,33 +720,37 @@ impl TypedProgram {
     }
 
     fn hash_type(
-        &self,
+        mem: &kmem::Mem<TypedProgram>,
+        lambda_types: &VPool<LambdaType, LambdaTypeId>,
         typ: &Type,
         defn: Option<TypeDefnInfo>,
-        instance: Option<GenericInstanceInfo>,
     ) -> u64 {
         use std::hash::Hash;
-        use std::hash::Hasher;
         use std::mem::discriminant;
 
         let mut hasher = fxhash::FxHasher::default();
         let state = &mut hasher;
 
         discriminant(typ).hash(state);
-        instance.hash(state);
         match typ {
             Type::Char => {}
             Type::Integer(int) => discriminant(int).hash(state),
             Type::Enum(se) => {
                 defn.hash(state);
                 se.partial.hash(state);
+                discriminant(&se.int_type).hash(state);
+                se.member_values.len().hash(state);
+                for m in mem.getn(se.member_values) {
+                    m.name.hash(state);
+                    m.int_value.to_u64_bits().hash(state);
+                }
             }
             Type::Bool => {}
             Type::Struct(s) => {
                 defn.hash(state);
                 s.record_kind.hash(state);
                 s.fields.len().hash(state);
-                for f in self.mem.getn(s.fields) {
+                for f in mem.getn(s.fields) {
                     f.name.hash(state);
                     f.type_id.hash(state);
                 }
@@ -786,7 +775,7 @@ impl TypedProgram {
                 defn.hash(state);
                 discriminant(&e.tag_type).hash(state);
                 e.variants.len().hash(state);
-                for v in self.mem.getn(e.variants) {
+                for v in mem.getn(e.variants) {
                     v.name.hash(state);
                     v.payload.hash(state);
                     v.tag_value.to_u64_bits().hash(state);
@@ -797,13 +786,9 @@ impl TypedProgram {
                 opaque.size.hash(state);
                 opaque.align.hash(state);
             }
-            // Inherently unique as well
-            Type::Generic(_generic) => {
-                defn.hash(state);
-            }
             Type::Function(fun) => {
                 fun.return_type.hash(state);
-                for param in self.mem.getn(fun.physical_params) {
+                for param in mem.getn(fun.physical_params) {
                     param.type_id.hash(state);
                     param.name.hash(state);
                     param.kind.hash(state);
@@ -815,7 +800,7 @@ impl TypedProgram {
                 fr.function_type.hash(state);
             }
             Type::Lambda(lt_id) => {
-                let lt = self.lambda_types.get(*lt_id);
+                let lt = lambda_types.get(*lt_id);
                 lt.parsed_id.hash(state);
                 lt.function_type.hash(state);
                 lt.function_id.hash(state);
@@ -823,15 +808,12 @@ impl TypedProgram {
             Type::Float(ft) => discriminant(ft).hash(state),
             Type::Pointer => {}
             Type::Never => {}
-            Type::LambdaObject(co) => {
-                co.function_type.hash(state);
-                co.struct_representation.hash(state);
+            Type::Generic(_) | Type::LambdaObject(_) => {
+                unreachable!("{} is not deduped", typ.kind_name())
             }
             Type::AbilityObject(ao) => {
-                ao.specialized_ability_id.hash(state);
-                for arg in self.mem.getn(ao.impl_arguments) {
-                    arg.hash(state);
-                }
+                ao.signature.specialized_ability_id.hash(state);
+                mem.getn(ao.signature.impl_arguments).hash(state);
             }
             Type::StaticValue(svt) => {
                 svt.family_type_id.hash(state);
@@ -851,6 +833,10 @@ impl TypedProgram {
 }
 
 impl Type {
+    fn is_deduped(&self) -> bool {
+        !matches!(self, Type::Generic(_) | Type::LambdaObject(_))
+    }
+
     pub fn kind_name(&self) -> &'static str {
         match self {
             Type::Char => "char",
@@ -913,14 +899,6 @@ impl Type {
         match self {
             Type::StaticValue(v) => Some(v),
             _ => None,
-        }
-    }
-
-    #[track_caller]
-    pub fn expect_sum_mut(&mut self) -> &mut SumType {
-        match self {
-            Type::Sum(s) => s,
-            _ => panic!("expected sum type"),
         }
     }
 
@@ -1668,34 +1646,23 @@ pub struct TypeIdents {
 }
 
 impl TypedProgram {
-    pub fn add_type(
-        &mut self,
-        typ: Type,
-        defn_info: Option<TypeDefnInfo>,
-        instance_info: Option<GenericInstanceInfo>,
-    ) -> TypeId {
-        let hash = self.hash_type(&typ, defn_info, instance_info);
-        if let Entry::Occupied(entry) = self.type_hashes.entry(hash) {
-            let existing_id = *entry.get();
-            let existing = self.types.get(existing_id);
-            let existing_defn_info = self.type_defn_info.get(existing_id).as_ref();
-            let existing_instance_info = self.type_instance_info.get(existing_id).as_ref();
-            if self.type_eq(
-                &typ,
-                existing,
-                defn_info.as_ref(),
-                existing_defn_info,
-                instance_info.as_ref(),
-                existing_instance_info,
-            ) {
-                return existing_id;
+    pub fn add_type(&mut self, typ: Type) -> TypeId {
+        let hash = if typ.is_deduped() {
+            let hash = Self::hash_type(&self.mem, &self.lambda_types, &typ, None);
+            if let Some(existing) = self.find_type(hash, &typ, None) {
+                return existing;
             }
-        }
+            Some(hash)
+        } else {
+            None
+        };
 
         let type_id = self.types.add(typ);
-        self.type_hashes.insert(hash, type_id);
-        self.type_instance_info.add_expected_id(instance_info, type_id);
-        self.type_defn_info.add_expected_id(defn_info, type_id);
+        self.type_instance_info.add_expected_id(None, type_id);
+        self.type_defn_info.add_expected_id(None, type_id);
+        if let Some(hash) = hash {
+            self.insert_type_dedup(hash, type_id);
+        }
 
         let variable_counts = self.compute_type_info(type_id);
         self.type_variable_counts.add_expected_id(variable_counts, type_id);
@@ -1707,46 +1674,63 @@ impl TypedProgram {
         type_id
     }
 
-    pub fn set_type(
-        &mut self,
-        id: TypeId,
-        type_value: Type,
-        instance_info: Option<GenericInstanceInfo>,
-        defn_info: Option<TypeDefnInfo>,
-    ) {
-        let hash = self.hash_type(&type_value, defn_info, instance_info);
+    pub fn set_type(&mut self, id: TypeId, type_value: Type, defn_info: Option<TypeDefnInfo>) {
         *self.types.get_mut(id) = type_value;
-        self.type_hashes.insert(hash, id);
-
-        *self.type_instance_info.get_mut(id) = instance_info;
+        *self.type_defn_info.get_mut(id) = defn_info;
         let variable_counts = self.compute_type_info(id);
         *self.type_variable_counts.get_mut(id) = variable_counts;
-        if defn_info.is_some() {
-            *self.type_defn_info.get_mut(id) = defn_info;
-        }
+        self.index_type(id);
     }
 
-    pub fn next_type_id(&self) -> TypeId {
-        self.types.next_id()
+    fn find_type(&self, hash: u64, typ: &Type, defn_info: Option<&TypeDefnInfo>) -> Option<TypeId> {
+        self.type_dedup
+            .find(hash, |&id| {
+                self.type_eq(
+                    typ,
+                    self.types.get(id),
+                    defn_info,
+                    self.type_defn_info.get(id).as_ref(),
+                )
+            })
+            .copied()
     }
 
-    pub fn discard_type_if_last(&mut self, id: TypeId) -> bool {
-        if self.types.next_id() != id + 1u32 {
-            return false;
+    fn insert_type_dedup(&mut self, hash: u64, id: TypeId) {
+        let (mem, lambda_types) = (&self.mem, &self.lambda_types);
+        let (types, defns) = (&self.types, &self.type_defn_info);
+        self.type_dedup.insert_unique(hash, id, |&id| {
+            Self::hash_type(mem, lambda_types, types.get(id), *defns.get(id))
+        });
+    }
+
+    fn index_type(&mut self, id: TypeId) {
+        let typ = self.types.get(id);
+        if !typ.is_deduped() || self.type_instance_info.get(id).is_some() {
+            return;
         }
-        let hash = self.hash_type(
-            self.types.get(id),
-            *self.type_defn_info.get(id),
-            *self.type_instance_info.get(id),
-        );
-        if self.type_hashes.get(&hash) == Some(&id) {
-            self.type_hashes.remove(&hash);
+        let defn_info = self.type_defn_info.get(id);
+        let hash = Self::hash_type(&self.mem, &self.lambda_types, typ, *defn_info);
+        debug_assert!(self.find_type(hash, typ, defn_info.as_ref()).is_none());
+        self.insert_type_dedup(hash, id);
+    }
+
+    pub(crate) fn rebuild_type_indexes(&mut self) {
+        let mem = &self.mem;
+        let slices = &self.type_slices;
+        let hash_slice = |&id: &TypeSliceId| Self::type_slice_hash(mem.getn(*slices.get(id)));
+        self.type_slice_dedup = hashbrown::HashTable::with_capacity(slices.len());
+        for id in slices.iter_ids() {
+            self.type_slice_dedup.insert_unique(hash_slice(&id), id, hash_slice);
         }
-        self.type_defn_info.pop_expected(id);
-        self.types.pop_expected(id);
-        self.type_variable_counts.pop_expected(id);
-        self.type_instance_info.pop_expected(id);
-        true
+        self.type_dedup = hashbrown::HashTable::with_capacity(self.types.len());
+        self.type_specializations = hashbrown::HashTable::new();
+        for id in self.types.iter_ids() {
+            if self.type_instance_info.get(id).is_some() {
+                self.insert_specialization(id);
+            } else {
+                self.index_type(id);
+            }
+        }
     }
 
     /// The `Type` slot of a reserved id stays unset until `set_type`; instance info and
@@ -1778,7 +1762,7 @@ impl TypedProgram {
         *self.type_variable_counts.get_mut(id) = counts;
         *self.type_instance_info.get_mut(id) =
             Some(GenericInstanceInfo { generic_parent, type_args });
-        self.insert_specialization(generic_parent, type_args, id);
+        self.insert_specialization(id);
         id
     }
 
@@ -1786,11 +1770,11 @@ impl TypedProgram {
         if let Type::Function(_) = self.types.get(inner_type) {
             return self.add_function_pointer_type(inner_type);
         }
-        self.add_type_anon(Type::Reference(ReferenceType { inner_type }))
+        self.add_type(Type::Reference(ReferenceType { inner_type }))
     }
 
     pub fn add_function_pointer_type(&mut self, function_type_id: TypeId) -> TypeId {
-        self.add_type_anon(Type::FunctionPointer(FunctionPointerType { function_type_id }))
+        self.add_type(Type::FunctionPointer(FunctionPointerType { function_type_id }))
     }
 
     pub fn add_function_reference_type(
@@ -1798,10 +1782,7 @@ impl TypedProgram {
         function_id: FunctionId,
         function_type: TypeId,
     ) -> TypeId {
-        self.add_type_anon(Type::FunctionReference(FunctionReferenceType {
-            function_id,
-            function_type,
-        }))
+        self.add_type(Type::FunctionReference(FunctionReferenceType { function_id, function_type }))
     }
 
     pub fn get_pt_natural_align(&self, pt: PhysicalType) -> u32 {
@@ -2005,11 +1986,22 @@ impl TypedProgram {
         family_type_id: TypeId,
         value_id: Option<StaticValueId>,
     ) -> TypeId {
-        self.add_type_anon(Type::StaticValue(StaticValueType { family_type_id, value_id }))
+        self.add_type(Type::StaticValue(StaticValueType { family_type_id, value_id }))
     }
 
-    pub fn add_type_anon(&mut self, typ: Type) -> TypeId {
-        self.add_type(typ, None, None)
+    pub fn add_type_with_items<T: Copy>(
+        &mut self,
+        items: &[T],
+        make_type: impl FnOnce(MSlice<T, TypedProgram>) -> Type,
+    ) -> TypeId {
+        let mark = self.mem.mark();
+        let handle = self.mem.pushn(items);
+        let type_count = self.types.len();
+        let type_id = self.add_type(make_type(handle));
+        if self.types.len() == type_count {
+            self.mem.reset_to(mark);
+        }
+        type_id
     }
 
     pub fn get_inference_hole(&mut self, index: u32, static_type: Option<TypeId>) -> TypeId {
@@ -2020,8 +2012,7 @@ impl TypedProgram {
                 }
             }
         }
-        let type_id =
-            self.add_type_anon(Type::InferenceHole(InferenceHoleType { index, static_type }));
+        let type_id = self.add_type(Type::InferenceHole(InferenceHoleType { index, static_type }));
         if static_type.is_none() {
             let index = index as usize;
             if self.hole_type_cache.len() <= index {
@@ -2096,21 +2087,6 @@ impl TypedProgram {
         }
     }
 
-    pub fn get_type_variable_mut(&mut self, type_id: TypeId) -> &mut TypeParameter {
-        if let Type::TypeParameter(tv) = self.types.get_mut(type_id) {
-            tv
-        } else {
-            panic!("Expected type variable on type {}", type_id)
-        }
-    }
-
-    pub fn get_as_sum(&self, type_id: TypeId) -> Option<&SumType> {
-        match self.types.get(type_id) {
-            Type::Sum(e) => Some(e),
-            _ => None,
-        }
-    }
-
     pub fn get_instance_info(&self, type_id: TypeId) -> Option<&GenericInstanceInfo> {
         self.type_instance_info.get(type_id).as_ref()
     }
@@ -2138,7 +2114,7 @@ impl TypedProgram {
             function_id: body_function_id,
             environment_struct,
         });
-        let lambda_type_id = self.add_type_anon(Type::Lambda(lambda_type_id));
+        let lambda_type_id = self.add_type(Type::Lambda(lambda_type_id));
         lambda_type_id
     }
 
@@ -2165,8 +2141,8 @@ impl TypedProgram {
                 span: Span::NONE,
             },
         ]);
-        let struct_representation = self.add_type_anon(Type::Struct(StructType::struc(fields)));
-        self.add_type_anon(Type::LambdaObject(LambdaObjectType {
+        let struct_representation = self.add_type(Type::Struct(StructType::struc(fields)));
+        self.add_type(Type::LambdaObject(LambdaObjectType {
             function_type: function_type_id,
             parsed_id,
             struct_representation,
@@ -2177,13 +2153,6 @@ impl TypedProgram {
         match self.types.get(type_id) {
             Type::Reference(r) => r.inner_type,
             _ => type_id,
-        }
-    }
-
-    pub fn get_type_dereferenced(&self, type_id: TypeId) -> &Type {
-        match self.types.get(type_id) {
-            Type::Reference(r) => self.types.get(r.inner_type),
-            _ => self.types.get(type_id),
         }
     }
 
@@ -2329,7 +2298,7 @@ impl TypedProgram {
             // An ability object is generic if any of its impl arguments are:
             Type::AbilityObject(ao) => {
                 let mut result = EMPTY;
-                for arg in self.mem.getn(ao.impl_arguments) {
+                for arg in self.mem.getn(ao.signature.impl_arguments) {
                     result = result.add(self.type_variable_counts.get(*arg));
                 }
                 result.is_zero_safe = false;
@@ -2772,11 +2741,7 @@ impl TypedProgram {
     }
 
     pub fn compute_all_physical_types(&mut self) {
-        let mut type_ids: Vec<TypeId> = Vec::with_capacity(self.types.len());
         for type_id in self.types.iter_ids() {
-            type_ids.push(type_id);
-        }
-        for type_id in type_ids {
             self.get_physical_type(type_id);
         }
     }
@@ -2804,16 +2769,6 @@ impl TypedProgram {
         self.type_instance_info.get(type_id).as_ref().and_then(|spec_info| {
             if spec_info.generic_parent == self.builtin_types.list() {
                 Some(ListType { element_type: self.get_type_slice(spec_info.type_args)[0] })
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn get_as_buffer_instance(&self, type_id: TypeId) -> Option<TypeId> {
-        self.type_instance_info.get(type_id).as_ref().and_then(|spec_info| {
-            if spec_info.generic_parent == self.builtin_types.buffer() {
-                Some(self.get_type_slice(spec_info.type_args)[0])
             } else {
                 None
             }
@@ -2913,17 +2868,6 @@ impl TypedProgram {
         id
     }
 
-    pub(crate) fn rebuild_type_slice_dedup(&mut self) {
-        debug_assert!(self.type_slice_dedup.is_empty());
-        let mem = &self.mem;
-        let slices = &self.type_slices;
-        let hash_one = |&id: &TypeSliceId| Self::type_slice_hash(mem.getn(*slices.get(id)));
-        self.type_slice_dedup.reserve(self.type_slices.len(), hash_one);
-        for id in self.type_slices.iter_ids() {
-            self.type_slice_dedup.insert_unique(hash_one(&id), id, hash_one);
-        }
-    }
-
     pub fn get_type_slice(&self, id: TypeSliceId) -> &'static [TypeId] {
         self.mem.getn(*self.type_slices.get(id))
     }
@@ -2938,45 +2882,37 @@ impl TypedProgram {
 
     pub fn get_specialization(&self, generic: TypeId, args: &[TypeId]) -> Option<TypeId> {
         let hash = Self::specialization_hash(generic, args);
-        let mem = &self.mem;
-        let slices = &self.type_slices;
         self.type_specializations
-            .find(hash, |s| s.generic == generic && mem.getn(*slices.get(s.args)) == args)
-            .map(|s| s.instance)
+            .find(hash, |&id| {
+                let info = self.type_instance_info.get(id).unwrap();
+                info.generic_parent == generic && self.get_type_slice(info.type_args) == args
+            })
+            .copied()
     }
 
-    pub fn insert_specialization(&mut self, generic: TypeId, args: TypeSliceId, instance: TypeId) {
-        let mem = &self.mem;
-        let slices = &self.type_slices;
-        let hash_one = |s: &TypeSpecialization| {
-            Self::specialization_hash(s.generic, mem.getn(*slices.get(s.args)))
+    fn insert_specialization(&mut self, instance: TypeId) {
+        let (mem, slices, instances) = (&self.mem, &self.type_slices, &self.type_instance_info);
+        let hash_one = |&id: &TypeId| {
+            let info = instances.get(id).unwrap();
+            Self::specialization_hash(info.generic_parent, mem.getn(*slices.get(info.type_args)))
         };
-        let entry = TypeSpecialization { generic, args, instance };
-        self.type_specializations.insert_unique(hash_one(&entry), entry, hash_one);
+        self.type_specializations.insert_unique(hash_one(&instance), instance, hash_one);
     }
 
     pub(crate) fn reserve_type_tables(&mut self, source_bytes: usize) {
-        self.type_hashes.reserve(source_bytes / 48);
-        let mem = &self.mem;
+        let (mem, lambda_types) = (&self.mem, &self.lambda_types);
+        let (types, defns) = (&self.types, &self.type_defn_info);
+        self.type_dedup.reserve(source_bytes / 48, |&id| {
+            Self::hash_type(mem, lambda_types, types.get(id), *defns.get(id))
+        });
         let slices = &self.type_slices;
         self.type_slice_dedup
             .reserve(source_bytes / 400, |&id| Self::type_slice_hash(mem.getn(*slices.get(id))));
-        self.type_specializations.reserve(source_bytes / 160, |s| {
-            Self::specialization_hash(s.generic, mem.getn(*slices.get(s.args)))
+        let instances = &self.type_instance_info;
+        self.type_specializations.reserve(source_bytes / 160, |&id| {
+            let info = instances.get(id).unwrap();
+            Self::specialization_hash(info.generic_parent, mem.getn(*slices.get(info.type_args)))
         });
-    }
-
-    pub(crate) fn restore_type_specializations(&mut self, entries: Vec<TypeSpecialization>) {
-        debug_assert!(self.type_specializations.is_empty());
-        let mem = &self.mem;
-        let slices = &self.type_slices;
-        let hash_one = |s: &TypeSpecialization| {
-            Self::specialization_hash(s.generic, mem.getn(*slices.get(s.args)))
-        };
-        self.type_specializations.reserve(entries.len(), hash_one);
-        for s in entries {
-            self.type_specializations.insert_unique(hash_one(&s), s, hash_one);
-        }
     }
 
     pub fn pt_to_string(&self, t: PhysicalType) -> String {
@@ -3040,8 +2976,6 @@ impl TypedProgram {
         }
     }
 }
-
-// static mut MAX_VISITED: usize = 0;
 
 // Talks about the 4 kinds of contiguous 'collection' / 'container' types that
 // the compiler knows about

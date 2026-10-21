@@ -109,3 +109,13 @@ fn(test) core-abilities-through-dyn() {
 fn(test) self-typed-param-blocks-dyn() {
   assert(test-compile({ let d: ?dyn[equals] = :none; d }).!.contains-string("'equals': parameter 'other' mentions self"))
 }
+
+fn(test) ability-args-bind-like-type-args() {
+  let ones: *by-ones = mem/new(.{ current = 0 })
+  assert(test-compile(ones.to-dyn[counter[t = int, t = string]]).!.contains-string("Type parameter t is given more than once"))
+  assert(test-compile(ones.to-dyn[counter[n = int]]).!.contains-string("No type parameter named n"))
+  assert(test-compile(counter[t = int, t = int]@(by-ones)/bump(ones)).!.contains-string("given more than once"))
+  assert(test-compile(counter[int, t = int]@(by-ones)/bump(ones)).!.contains-string("given more than once"))
+  assert-equals(ones.to-dyn[counter[int]].bump(), 1)
+  assert-equals(counter[int]@(by-ones)/bump(ones), 2)
+}

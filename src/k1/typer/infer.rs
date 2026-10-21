@@ -105,12 +105,49 @@ impl TypedProgram {
         result
     }
 
+    pub(crate) fn infer_generic_type_args(
+        &mut self,
+        generic_type: TypeId,
+        expected: Option<TypeId>,
+        value_pairs: &[InferenceInputPair],
+        stash: Option<(EvalExprContext, &mut SV8<(ParsedExprId, TypedExprId)>)>,
+        span: Span,
+        scope_id: ScopeId,
+    ) -> K1Result<TypeArgs> {
+        let params = self.types.get(generic_type).expect_generic().params;
+        let params_slice = self.mem.getn(params);
+        let mut pairs: SV8<InferenceInputPair> = smallvec![];
+        if let Some(expected) = expected {
+            let self_instance = self.instantiate_generic_type(generic_type, params_slice);
+            pairs.push(InferenceInputPair {
+                arg: TypeOrParsedExpr::Type(expected),
+                param_type: self_instance,
+                allow_mismatch: true,
+            });
+        }
+        let first_value_pair_index = pairs.len() as u32;
+        pairs.extend_from_slice(value_pairs);
+        let stash = match stash {
+            Some((ctx, stashed)) => {
+                Some(InferArgStash { ctx, first_value_pair_index, excluded_args: &[], stashed })
+            }
+            None => None,
+        };
+        let (solutions, _all_solutions) = self
+            .infer_types(params_slice, params, &pairs, span, scope_id, stash)
+            .map_err(|f| self.render_inference_failure(f))?;
+        let solution_pairs: SV4<TypeSubstitutionPair> =
+            self.zip_types_to_subst_pairs(params_slice, solutions.as_slice(&self.mem));
+        self.check_type_args_constraints(&solution_pairs, span, scope_id)?;
+        Ok(solutions)
+    }
+
     pub(crate) fn is_evaluating_for_inference(&self, ctx: EvalExprContext) -> bool {
         ctx.is_inference()
             || ctx.expected_type_id.is_some_and(|expected| !self.is_type_free_of_holes(expected))
     }
 
-    fn is_type_free_of_holes(&self, type_id: TypeId) -> bool {
+    pub(crate) fn is_type_free_of_holes(&self, type_id: TypeId) -> bool {
         let counts = self.get_type_variable_counts(type_id);
         counts.inference_hole_count == 0 && counts.unresolved_static_count == 0
     }
@@ -535,6 +572,7 @@ impl TypedProgram {
     pub(crate) fn infer_and_constrain_call_type_args(
         &mut self,
         fn_call: &ParsedCall,
+        call_type_args: &[CallTypeArg],
         call_span: Span,
         generic_function_sig: FunctionSignature,
         ctx: EvalExprContext,
@@ -543,97 +581,29 @@ impl TypedProgram {
     ) -> K1Result<TypeArgs> {
         debug!("infer_and_constrain_call_type_args");
         debug_assert!(generic_function_sig.has_type_params());
-        let passed_type_args = fn_call.type_args(&self.ast.mem);
-        let passed_type_args_count = passed_type_args.len();
         let type_params = generic_function_sig.type_params;
-        // Fuse these two paths; where for a given type param,
-        // - X *if ALL PASSED, special case to skip inference altogether of course
-        if !passed_type_args.is_empty() && passed_type_args.len() != type_params.len() {
-            kbail!(
-                self,
-                call_span,
-                "Expected {} type arguments but got {}",
-                type_params.len(),
-                passed_type_args_count
-            );
+        let mut passed_types: SV4<TypeId> = smallvec![];
+        for call_type_arg in call_type_args {
+            if let CallTypeArg::Passed { type_id, .. } = call_type_arg {
+                passed_types.push(*type_id);
+            }
         }
-        let all_params_were_passed = passed_type_args.len() == type_params.len()
-            && self.ast.mem.getn(passed_type_args).iter().all(|nt| nt.type_expr.is_some());
-        debug!("all_passed={all_params_were_passed}");
-        let solved_type_params = if all_params_were_passed {
-            let mut evaled_params: List<TypeId, MemTmp> = self.tmp.new_list(passed_type_args.len());
-            for type_arg in self.ast.mem.getn(passed_type_args).iter() {
-                let passed_expr = type_arg.type_expr.unwrap(); // checked by all_passed
-                let passed_type = self.eval_type_expr(passed_expr, ctx.scope_id)?;
-                evaled_params.push(passed_type);
-            }
-            TypeArgs::from_slice_in(evaled_params.as_slice(), &mut self.mem)
+        let solved_type_params = if passed_types.len() == type_params.len() as usize {
+            TypeArgs::from_slice_in(&passed_types, &mut self.mem)
         } else {
-            let generic_function_type =
-                *self.types.get(generic_function_sig.function_type).as_function().unwrap();
-            let generic_function_return_type = generic_function_type.return_type;
-
-            let mut inference_pairs: SV8<_> = smallvec![];
-
-            // We add an inference pair for every type the user explicitly passed in
-            //
-            // We add these first so that they get applied first, and following conflicts are
-            // framed in terms of these being true; if users says T := Pointer, we later say
-            // "expected Pointer" when other params dont line up.
-            for (index, type_arg) in self.ast.mem.getn(passed_type_args).iter().enumerate() {
-                if let Some(passed_type_expr) = type_arg.type_expr {
-                    let matching_param = if let Some(passed_name) = type_arg.name {
-                        self.mem.find(type_params, |tp| {
-                            self.get_type_parameter(*tp).name == passed_name
-                        })
-                    } else {
-                        // Use position
-                        self.mem.get_nth_opt(type_params, index)
-                    };
-                    let passed_type = self.eval_type_expr(passed_type_expr, ctx.scope_id)?;
-                    if let Some(matching_param) = matching_param.copied() {
-                        debug!(
-                            "Adding a pair {} {}",
-                            self.type_id_to_string(matching_param),
-                            self.type_id_to_string(passed_type)
-                        );
-                        inference_pairs.push(InferenceInputPair {
-                            param_type: matching_param,
-                            arg: TypeOrParsedExpr::Type(passed_type),
-                            allow_mismatch: false,
-                        })
-                    } else {
-                        kbail!(self, call_span, "Unable to line up your type arguments");
-                    }
-                }
-            }
-
-            // We add an inference pair for the return type and expected type as the next most
-            // important
-            if let Some(expected) = ctx.expected_type_id {
-                // One Inference Pair for the return type
-                inference_pairs.push(InferenceInputPair {
-                    arg: TypeOrParsedExpr::Type(expected),
-                    param_type: generic_function_return_type,
-                    allow_mismatch: true,
-                });
-            }
-
-            let first_value_pair_index = inference_pairs.len() as u32;
-            for (expr, param) in args_and_params.iter(&self.tmp) {
-                let passed_type = match expr {
-                    MaybeTypedExpr::Parsed(expr_id) => TypeOrParsedExpr::Parsed(*expr_id),
-                    MaybeTypedExpr::Typed(expr) => {
-                        TypeOrParsedExpr::Type(self.exprs.get_type(*expr))
-                    }
-                };
-                inference_pairs.push(InferenceInputPair {
-                    arg: passed_type,
-                    param_type: param.type_id,
-                    allow_mismatch: false,
-                });
-            }
-
+            let return_type = self
+                .types
+                .get(generic_function_sig.function_type)
+                .as_function()
+                .unwrap()
+                .return_type;
+            let (inference_pairs, first_value_pair_index) = self.get_call_inference_pairs(
+                self.mem.getn(type_params),
+                call_type_args,
+                ctx.expected_type_id,
+                return_type,
+                args_and_params,
+            );
             let mut excluded_args =
                 self.tmp.new_list(generic_function_sig.fnlike_type_params.len());
             for ftp in self.mem.getn(generic_function_sig.fnlike_type_params) {
@@ -645,38 +615,33 @@ impl TypedProgram {
                 excluded_args: &excluded_args,
                 stashed: stashed_args,
             });
-
-            let (solutions, _all_solutions) = self
-                .infer_types(
-                    self.mem.getn(type_params),
-                    type_params,
-                    &inference_pairs,
-                    call_span,
-                    ctx.scope_id,
-                    stash,
-                )
-                .map_err(|f| {
-                    let e = self.render_inference_failure(f);
-                    e
-                })?;
-            solutions
+            self.infer_types(
+                self.mem.getn(type_params),
+                type_params,
+                &inference_pairs,
+                call_span,
+                ctx.scope_id,
+                stash,
+            )
+            .map_err(|f| self.render_inference_failure(f))?
+            .0
         };
 
-        // Enforce ability constraints
         let params_to_solutions_pairs: SV4<TypeSubstitutionPair> = self.zip_types_to_subst_pairs(
             self.mem.getn(type_params),
             solved_type_params.as_slice(&self.mem),
         );
-        for (solution, type_param) in
-            solved_type_params.as_slice(&self.mem).iter().zip(self.mem.getn(type_params).iter())
-        {
+        for (pair, call_type_arg) in params_to_solutions_pairs.iter().zip(call_type_args) {
+            let span = match call_type_arg {
+                CallTypeArg::Passed { span, .. } => *span,
+                CallTypeArg::Inferred => call_span,
+            };
             self.check_type_constraints(
-                self.get_type_parameter(*type_param).name,
-                *type_param,
-                *solution,
+                pair.from,
+                pair.to,
                 &params_to_solutions_pairs,
                 ctx.scope_id,
-                call_span,
+                span,
             )
             .map_err(|e| {
                 kerr!(
@@ -690,6 +655,46 @@ impl TypedProgram {
             })?;
         }
         Ok(solved_type_params)
+    }
+
+    pub(crate) fn get_call_inference_pairs(
+        &self,
+        type_params: &[TypeId],
+        call_type_args: &[CallTypeArg],
+        expected_type: Option<TypeId>,
+        return_type: TypeId,
+        args_and_params: &ArgsAndParams,
+    ) -> (SV8<InferenceInputPair>, u32) {
+        let mut pairs: SV8<InferenceInputPair> = smallvec![];
+        for (param, call_type_arg) in type_params.iter().zip(call_type_args) {
+            if let CallTypeArg::Passed { type_id, .. } = call_type_arg {
+                pairs.push(InferenceInputPair {
+                    arg: TypeOrParsedExpr::Type(*type_id),
+                    param_type: *param,
+                    allow_mismatch: false,
+                });
+            }
+        }
+        if let Some(expected) = expected_type {
+            pairs.push(InferenceInputPair {
+                arg: TypeOrParsedExpr::Type(expected),
+                param_type: return_type,
+                allow_mismatch: true,
+            });
+        }
+        let first_value_pair_index = pairs.len() as u32;
+        for (arg, param) in args_and_params.iter(&self.tmp) {
+            let arg = match arg {
+                MaybeTypedExpr::Typed(expr) => TypeOrParsedExpr::Type(self.exprs.get_type(*expr)),
+                MaybeTypedExpr::Parsed(parsed_expr) => TypeOrParsedExpr::Parsed(*parsed_expr),
+            };
+            pairs.push(InferenceInputPair {
+                arg,
+                param_type: param.type_id,
+                allow_mismatch: false,
+            });
+        }
+        (pairs, first_value_pair_index)
     }
 
     pub(crate) fn determine_fnlike_type_args_for_call(
@@ -1107,13 +1112,14 @@ impl TypedProgram {
                     param_lambda.function_type,
                 ),
             (Type::AbilityObject(passed_ao), Type::AbilityObject(slot_ao)) => {
-                if passed_ao.specialized_ability_id != slot_ao.specialized_ability_id
-                    || passed_ao.impl_arguments.len() != slot_ao.impl_arguments.len()
+                let passed_args = self.mem.getn(passed_ao.signature.impl_arguments);
+                let slot_args = self.mem.getn(slot_ao.signature.impl_arguments);
+                if passed_ao.signature.specialized_ability_id
+                    != slot_ao.signature.specialized_ability_id
+                    || passed_args.len() != slot_args.len()
                 {
                     return TypeUnificationResult::NonMatching("Unrelated dyn ability types");
                 }
-                let passed_args = self.mem.getn(passed_ao.impl_arguments);
-                let slot_args = self.mem.getn(slot_ao.impl_arguments);
                 for (passed_arg, slot_arg) in passed_args.iter().zip(slot_args) {
                     let result = self.unify_and_find_substitutions_rec(*passed_arg, *slot_arg);
                     if let TypeUnificationResult::NonMatching(_) = result {

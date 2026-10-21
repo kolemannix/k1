@@ -7,17 +7,31 @@ ns pre {
   fn is-int[t](): bool {
     types/schema[t] is :int _
   }
+
+  fn is-allocator[t: allocator](): bool { true }
 }
 
 ns type-predicate-test
 
 type int-wrapper[t: pred pre/is-int] = { value: t }
+type int-list[t: pred pre/is-int] = { value: t, next: ?*int-list[t] }
+type int-either[t: pred pre/is-int] = either { a(t), b }
+type alloc-box[t: pred pre/is-allocator] = { a: t }
+
+fn unwrap-int[u: pred pre/is-int](w: int-wrapper[u]): u { w.value }
 
 fn foo[t: pred pre/no-password](_t: t) {}
 
 fn(test) pred-bounds-filter-type-args() {
   assert(test-compile(foo(.{ password = "Passw0rd!" })).is-some())
   foo(.{ assword = "Passw0rd!" })
-  let _i: int-wrapper[u64] = .{ value = 42 }
+  let i: int-wrapper[u64] = .{ value = 42 }
+  let l: int-list[u64] = .{ value = unwrap-int(i), next = :none }
+  assert-equals(l.value, 42)
   assert(test-compile({ let _s: int-wrapper[string] = .{ value = "" }; .{} }).is-some())
+  assert(test-compile(#static types/make-instance(types/id[int-wrapper], [types/id[string]])).is-some())
+  assert(test-compile(int-either:a("x")).is-some())
+  assert(int-either:a(3) is :a(3))
+  let _b: alloc-box[heap] = .{ a = .{} }
+  assert(test-compile({ let _b: alloc-box[int] = .{ a = 1 }; .{} }).!.contains-string("does not implement required ability allocator"))
 }

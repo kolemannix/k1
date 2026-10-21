@@ -202,13 +202,16 @@ impl TypedProgram {
         s
     }
 
-    fn display_instance_info<W: fmt::Write + ?Sized>(
+    fn display_defn_name<W: fmt::Write + ?Sized>(
         &self,
         w: &mut W,
-        spec_info: &GenericInstanceInfo,
+        type_id: TypeId,
+        defn_info: TypeDefnInfo,
         mode: TypeDisplayMode,
         visited: &mut Vec<TypeId>,
     ) -> std::fmt::Result {
+        self.write_ident(w, defn_info.name)?;
+        let Some(spec_info) = self.get_instance_info(type_id) else { return Ok(()) };
         w.write_str("[")?;
         let type_args = self.get_type_slice(spec_info.type_args);
         for (index, t) in type_args.iter().enumerate() {
@@ -261,10 +264,7 @@ impl TypedProgram {
                     }
                 } else {
                     if let Some(defn_info) = defn_info {
-                        self.write_ident(w, defn_info.name)?;
-                        if let Some(spec_info) = self.get_instance_info(type_id) {
-                            self.display_instance_info(w, spec_info, mode, visiting)?;
-                        }
+                        self.display_defn_name(w, type_id, defn_info, mode, visiting)?;
                         if mode == TypeDisplayMode::Expand {
                             w.write_str("(")?;
                         }
@@ -294,10 +294,7 @@ impl TypedProgram {
             Type::Struct(struc) => {
                 match defn_info {
                     Some(defn_info) if mode != TypeDisplayMode::Structural => {
-                        self.write_ident(w, defn_info.name)?;
-                        if let Some(spec_info) = self.get_instance_info(type_id) {
-                            self.display_instance_info(w, spec_info, mode, visiting)?;
-                        }
+                        self.display_defn_name(w, type_id, defn_info, mode, visiting)?;
                         if mode == TypeDisplayMode::Expand {
                             w.write_str("(")?;
                             self.display_struct_fields(w, struc, mode, visiting)?;
@@ -367,10 +364,7 @@ impl TypedProgram {
             }
             Type::Sum(e) => {
                 if let Some(defn_info) = defn_info {
-                    self.write_ident(w, defn_info.name)?;
-                    if let Some(spec_info) = self.get_instance_info(type_id) {
-                        self.display_instance_info(w, spec_info, mode, visiting)?;
-                    }
+                    self.display_defn_name(w, type_id, defn_info, mode, visiting)?;
                     if mode == TypeDisplayMode::Expand {
                         w.write_str("(")?;
                     }
@@ -398,7 +392,7 @@ impl TypedProgram {
             }
             Type::Opaque(opaque) => match defn_info {
                 Some(defn_info) if mode != TypeDisplayMode::Structural => {
-                    self.write_ident(w, defn_info.name)?;
+                    self.display_defn_name(w, type_id, defn_info, mode, visiting)?;
                     if mode == TypeDisplayMode::Expand {
                         w.write_str("(")?;
                         write!(w, "opaque[{}, {}]", opaque.size, opaque.align)?;
@@ -485,10 +479,10 @@ impl TypedProgram {
                 Ok(())
             }
             Type::AbilityObject(ao) => {
-                let ability = self.abilities.get(ao.specialized_ability_id);
+                let ability = self.abilities.get(ao.signature.specialized_ability_id);
                 w.write_str("dyn[")?;
                 self.write_ident(w, ability.name)?;
-                let args = self.mem.getn(ao.impl_arguments);
+                let args = self.mem.getn(ao.signature.impl_arguments);
                 if !args.is_empty() {
                     let base = self.abilities.get(ability.base_ability_id);
                     let mut impl_params =
@@ -1323,7 +1317,7 @@ impl TypedProgram {
         let i = self.ability_impls.get(id);
         let kind_str = match i.kind {
             AbilityImplKind::Concrete => "concrete",
-            AbilityImplKind::Blanket { .. } => "blanket",
+            AbilityImplKind::Blanket => "blanket",
             AbilityImplKind::DerivedFromBlanket { .. } => "derived",
             AbilityImplKind::TypeParamConstraint => "constraint",
             AbilityImplKind::BuiltinDerived => "builtin_derived",

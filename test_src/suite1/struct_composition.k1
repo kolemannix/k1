@@ -1,7 +1,7 @@
 ns struct_composition
 
 type positioned = { x: int, y: int }
-type text = _struct_combine[{ text: string }, positioned]
+type text = _struct_combine[{ text: string, x: int }, positioned]
 type user = { name: string, password: string }
 type user-view = _struct_remove[user, { password: string }]
 

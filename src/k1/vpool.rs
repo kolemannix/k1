@@ -373,7 +373,7 @@ impl<T, Index: PoolIndex> VPool<T, Index> {
         self.data_inbounds().iter()
     }
 
-    pub fn iter_ids(&self) -> impl Iterator<Item = Index> {
+    pub fn iter_ids(&self) -> impl Iterator<Item = Index> + use<T, Index> {
         (0..self.len()).map(|i| Self::physical_index_to_id(i))
     }
 

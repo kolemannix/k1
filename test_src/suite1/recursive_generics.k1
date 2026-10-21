@@ -62,6 +62,9 @@ ns recursive_generics {
   type face-rec = { glyph: slot, num: int }
   type slot-rec = { owner: face, idx: int }
 
+  type pr[a, b] = { first: a, second: b }
+  type pr-node[t] = pr[t, ?*pr-node[t]]
+
   fn(test) generic-linked-lists() {
     let l = make(4)
     assert-equals(sum(l), 10)
@@ -120,6 +123,15 @@ ns recursive_generics {
     l2.* = .{ next = l2, getter = lnode-value.&, value = 2 }
     let l1: lnode = mem/new(.{ next = l2, getter = lnode-value.&, value = 1 })
     assert-equals((l1.getter)(l1) + (l1.next.getter)(l1.next), 3)
+  }
+
+  fn(test) recursive-generic-over-generic-instance() {
+    let n: *pr-node[int] = mem/new(.{ first = 1, second = :none })
+    let later: { q: bool, r: u16 } = .{ q = true, r = 3 }
+    let p: pr[int, ?*pr-node[int]] = .{ first = 2, second = :some n }
+    let m: pr-node[int] = .{ first = 3, second = :some n }
+    assert-equals(p.first + p.second.!.first + m.second.!.first, 4)
+    assert(later.q)
   }
 
   fn(test) mutual-cycle-through-two-aliases() {

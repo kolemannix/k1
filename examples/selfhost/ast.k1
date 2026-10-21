@@ -199,10 +199,8 @@ type static-expr = {
 
 type code-expr = { content: src-span, span: src-span }
 
-type ability-expr = { name: qident, arguments: list[type-arg], span: src-span }
-
 type qability-call = {
-  ability-expr,
+  ability-expr: type-application,
   self-type: type-expr-id,
   call-expr: expr-id,
   span: src-span,
@@ -378,7 +376,7 @@ type let-stmt = {
   name: string-id,
   type-expr: ?type-expr-id,
   value: ?expr-id,
-  context-abilities: list[ability-expr],
+  context-abilities: list[type-application],
   flags: u8,
   span: src-span,
 }
@@ -397,7 +395,7 @@ type stmt = either {
 }
 
 type type-constraint-expr = either {
-  ability-constraint(ability-expr),
+  ability-constraint(type-application),
   static-constraint(type-expr-id),
   predicate(qident),
 }
@@ -488,7 +486,7 @@ type ability-defn = {
 }
 
 type ability-impl = {
-  ability-expr,
+  ability-expr: type-application,
   generic-impl-params: list[type-param],
   self-type: type-expr-id,
   functions: list[function-id],

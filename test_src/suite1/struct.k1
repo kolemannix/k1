@@ -41,6 +41,9 @@ fn(test) type-prefixed-literals() {
   }
   assert-equals(multi.y, 10)
   assert(test-compile(nom-point.{ x = 1 }).is-some())
+  assert(test-compile(nom-point.{ x = 1, x = 2, y = 3 }).is-some())
+  assert(test-compile(.{ a = 1, a = 2 }).is-some())
+  assert(test-compile(nom-point.{ x = 1, y = 2 } is .{ x = 1, x = 2 }).is-some())
 }
 
 fn(test) structural-equality-and-to-string() {

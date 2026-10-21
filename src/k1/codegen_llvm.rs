@@ -774,9 +774,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         if first_unit {
             match self.kind {
                 CgKind::Host => {
-                    let global_ids: Vec<TypedGlobalId> = self.k1.globals.iter_ids().collect();
-                    for global_id in &global_ids {
-                        let g = self.k1.globals.get(*global_id);
+                    for global_id in self.k1.globals.iter_ids() {
+                        let g = self.k1.globals.get(global_id);
                         if g.reload_ns.is_some() {
                             // We don't own this; the dylib does
                             continue;
@@ -787,7 +786,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                             || self.has_reloadable_fns
                             || (self.multi_unit() && !shared)
                         {
-                            self.codegen_global(*global_id)?;
+                            self.codegen_global(global_id)?;
                         }
                     }
                     if self.has_reloadable_fns {
@@ -800,9 +799,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                         for function_id in reloadable {
                             self.reload_fn_addr_global(function_id);
                         }
-                        for global_id in &global_ids {
-                            if self.k1.globals.get(*global_id).reload_ns.is_some() {
-                                self.codegen_reload_global_addr_slot(*global_id);
+                        for global_id in self.k1.globals.iter_ids() {
+                            if self.k1.globals.get(global_id).reload_ns.is_some() {
+                                self.codegen_reload_global_addr_slot(global_id);
                             }
                         }
                     }

@@ -1593,26 +1593,12 @@ impl TypedProgram {
         let Some(parsed_macro_id) = function.parsed_id.as_macro_id() else {
             self.ice_span(span, "Macro function without a parsed macro")
         };
-        if function.type_params.len() as usize != type_args.len() {
-            kbail!(
-                self,
-                span,
-                "Takes {} type arguments; got {}",
-                function.type_params.len(),
-                type_args.len()
-            );
-        }
-
-        let type_expr_context = EvalTypeExprContext {
-            is_direct_function_parameter: true,
-            is_inside_type_definition_rhs: false,
-            is_inside_static_type: false,
-        };
-        let (typed_type_args, _subst_pairs) = self.check_type_args_against_params(
+        let typed_type_args = self.check_type_args_against_params(
             function_type_params,
             type_args,
             ctx.scope_id,
-            type_expr_context,
+            EvalTypeExprContext::EMPTY,
+            span,
         )?;
 
         let parsed_params = self.ast.get_macro(parsed_macro_id).params;

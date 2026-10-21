@@ -6,7 +6,6 @@ use super::*;
 
 static_assert_size!(K1Message, 16);
 static_assert_size!(AbilitySpec9nInfo, 12);
-static_assert_size!(NameInNamespace, 8);
 
 pub(crate) fn inputs_hash_from_settings(
     idents: &IdentPool,
@@ -86,13 +85,13 @@ impl TypedProgram {
             function_specializations: _,
             variables,
             types,
-            type_hashes,
+            type_dedup: _,
             type_slices,
             type_slice_dedup: _,
             type_variable_counts,
             type_instance_info,
             type_defn_info,
-            type_specializations,
+            type_specializations: _,
             phys_types,
             hole_type_cache: _,
             builtin_types,
@@ -116,7 +115,6 @@ impl TypedProgram {
             core_fns_by_name: _,
             blanket_impls,
             function_name_to_ability_names,
-            namespace_type_params,
             exported_symbols,
             uses_pending_resolution,
             types_pending_definition,
@@ -168,12 +166,10 @@ impl TypedProgram {
         functions.snap(w);
         variables.snap(w);
         types.snap(w);
-        write_map_snap(w, type_hashes);
         type_slices.snap(w);
         type_variable_counts.snap(w);
         type_instance_info.snap(w);
         type_defn_info.snap(w);
-        w.sorted_entries(type_specializations.iter(), |w, s| w.write_t(s));
         phys_types.snap(w);
         w.write_t(builtin_types);
         agg_types.snap(w);
@@ -203,7 +199,6 @@ impl TypedProgram {
         write_map_snap(w, ability_impl_table_by_ability);
         write_map_snap(w, blanket_impls);
         write_map_snap(w, function_name_to_ability_names);
-        write_map_snap(w, namespace_type_params);
         write_map_snap(w, exported_symbols);
 
         assert!(uses_pending_resolution.is_empty());
@@ -213,13 +208,13 @@ impl TypedProgram {
         assert!(deferred_module_params.is_empty());
         let TypeDefnContext {
             stack,
-            recursive_mentions,
+            has_recursive_mention,
             pending_instances,
             completed,
             expanding_aliases,
         } = type_defn_context;
         assert!(stack.is_empty());
-        assert!(recursive_mentions.is_empty());
+        assert!(!has_recursive_mention);
         assert!(pending_instances.is_empty());
         assert!(completed.is_empty());
         assert!(expanding_aliases.is_empty());
@@ -277,9 +272,7 @@ impl TypedProgram {
         let section = k1.trace_push(TraceKind::SnapRestoreSection, restore_section("types"), 0);
         k1.variables.restore(r);
         k1.types.restore(r);
-        k1.type_hashes = restore_map_snap(r);
         k1.type_slices.restore(r);
-        k1.rebuild_type_slice_dedup();
         let mut infos = Vec::new();
         for function in k1.functions.iter() {
             if let Some(info) = function.specialization_info {
@@ -292,17 +285,12 @@ impl TypedProgram {
         k1.type_variable_counts.restore(r);
         k1.type_instance_info.restore(r);
         k1.type_defn_info.restore(r);
-        let specialization_count = r.read_len();
-        let mut specializations = Vec::with_capacity(specialization_count);
-        for _ in 0..specialization_count {
-            specializations.push(r.read_t());
-        }
-        k1.restore_type_specializations(specializations);
         k1.phys_types.restore(r);
         k1.builtin_types = r.read_t();
         k1.agg_types.restore(r);
         k1.named_scalars.restore(r);
         k1.lambda_types.restore(r);
+        k1.rebuild_type_indexes();
         k1.type_idents = r.read_t();
         k1.trace_pop(section);
 
@@ -341,7 +329,6 @@ impl TypedProgram {
         k1.ability_impl_table_by_ability = restore_map_snap(r);
         k1.blanket_impls = restore_map_snap(r);
         k1.function_name_to_ability_names = restore_map_snap(r);
-        k1.namespace_type_params = restore_map_snap(r);
         k1.exported_symbols = restore_map_snap(r);
         k1.patterns.mem.restore(r);
         k1.emitted_sources = r.read_vec();

@@ -627,7 +627,7 @@ ns for parser {
         let call-id = self.add-expr(:call(.{ name = ast/qident/naked(cit.name, cit.tok.span()), type-args = call-type-args.args, args = call-args.args, span, is-method = false }))
         let ab-span = self.extend-to-here(namespaced.name-span)
         return :ok(self.add-expr(:qability-call(.{
-          ability-expr = .{ name = namespaced, arguments = first-type-args, span = ab-span },
+          ability-expr = .{ name = namespaced, args = first-type-args, span = ab-span },
           self-type = target-type,
           call-expr = call-id,
           span,

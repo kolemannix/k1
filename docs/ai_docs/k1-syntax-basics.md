@@ -16,7 +16,10 @@ LLM-maintained K1 notes; fix wrong lines on sight. Companion: `k1-additional.md`
   operator at the end of the previous line instead. Juxtaposed string concat is
   same-line only.
 - `f(x)` / `f[int]` call or apply type args only when adjacent: `if c (x)` is a
-  condition then `(x)`.
+  condition then `(x)`. A type arg may name its param, `pair[b = string, a = int]`;
+  an unnamed one binds by position, `_` leaves a call's param to inference. An
+  ability call's type args bind the ability fn's own params (not Self), by the
+  ability's names; an impl fn declares as many own type params, matched by position.
 - Payloads never cross a newline: `return`, `break`, `:variant` at EOL are bare.
 - No unary minus. `-5` is a literal. A `-` spaced before but not after is a sign:
   `if c -1 else 1` yields -1, `x -1` is a parse error, `x - 1` subtracts. Negate
@@ -59,7 +62,8 @@ and `some t` need `name: t`.
 - `:` means type, `=` means value: struct type `{ x: int, *cursor }`, value
   `.{ x = 1, y }` (shorthand from a local). Bare `{` in expr position is a block.
   `base | .{ a = 2 }` copies `base` with fields replaced (base evaluates first).
-- `type p = ...` is nominal (struct, `either`, `opaque`); `type(alias) n = t` is not.
+- `type p = ...` is nominal (struct, `either`, `opaque`, an instance like `pr[int, bool]`);
+  `type(alias) n = t` is not.
 - Bare sigil literals infer from the expected type; a type path written flush
   before the sigil nominates: `.0`/`t.0` (zero), `.{ }`/`t.{ }`, `:v`/`t:v`/
   `opt[int]:some 42` (type args go on the type, never after the variant).
@@ -191,13 +195,14 @@ ability show-id { fn show-id(self): string }
 impl show-id for user { fn show-id(self): string { "user-${self.id}" } }
 impl[t: increment] incr-four for t { }                 // blanket
 fn f[t: print and equals](x: t)   fn g[t](a: t) where t: num, t: to-string
-t: as-pair[aa = x, bb = y]                             // named ability params
+t: as-pair[x, bb = y]                                  // ability args bind like type args
 print/print-to(v, w)   has-secret[a = int]@(foo)/secret()   // qualified / impl-selected
 ```
 - Default methods, overridable. `where` on an ability fn gates it per impl; impls
   don't restate it. Overlapping impls resolve by which one makes the call typecheck.
 - `pred` bounds: `type w[t: pred is-int]`, `ability a[out: pred is-scalar]`; the
-  predicate fn must live in `ns pre` or a dependency. Impls are declared before
+  predicate fn must live in `ns pre` or a dependency, and its own constraints on its
+  type param must hold (an error, not `false`). Impls are declared before
   type bodies, so constrained generic fields find them; an impl for the type being
   defined still can't satisfy that type's own constraints.
 
