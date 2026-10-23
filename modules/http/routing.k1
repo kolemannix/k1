@@ -224,8 +224,7 @@ fn payload-code(payload-id: types/type-id, n: size): code {
   for f in fields {
     let k = it-index
     if k >= n {
-      if f.type-id.is-instance-of(types/id[opt]) {
-        let inner = f.type-id.instance-info().!.args.[0]
+      if f.type-id.elem-of[opt] is :some inner {
         cb.block-close(`let v$k: ${f.type-id.spell()} = if q$k is :some qv$k`, "} else :none", fn[cb, k, inner, f]. {
           from-string-line(cb, inner, "qv$k", f.name, "d$k")
           cb.line(":some d$k")
@@ -255,7 +254,7 @@ fn query-print-code(payload-id: types/type-id, n: size): code {
   for f in struct-fields(payload-id) {
     if it-index >= n {
       let lit = str-lit("${f.name}=")
-      if f.type-id.is-instance-of(types/id[opt]) {
+      if f.type-id.instance-of[opt] {
         cb.block(`if v.${f.name} is :some x`, fn[cb, lit]. {
           cb.line("w.write(sep)")
           cb.line("w.write($lit)")

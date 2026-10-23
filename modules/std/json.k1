@@ -693,9 +693,9 @@ ns internal {
 
   fn write-code(o: opts, id: types/type-id): code {
     let cb = code-builder/new()
-    if id.is-instance-of(types/id[opt]) {
+    if id.instance-of[opt] {
       cb.line(`if self is { :some x -> x.write-json[_, o](w), :none -> w.write("null") }`)
-    } else if id.is-instance-of(types/id[list]) or id.is-instance-of(types/id[span]) {
+    } else if id.instance-of[list] or id.instance-of[span] {
       write-seq-code(cb.&)
     } else if id.schema() is {
       :bool -> cb.line(`self.print-to(w)`),
@@ -709,7 +709,7 @@ ns internal {
       :struct .{ fields } -> {
         let flag = false
         if o.skip-none {
-          for f in fields { if f.type-id.is-instance-of(types/id[opt]) { flag = true } }
+          for f in fields { if f.type-id.instance-of[opt] { flag = true } }
         }
         cb.line(`w.write-char('{')`)
         if flag cb.line(`let first = true`)
@@ -718,7 +718,7 @@ ns internal {
           let write-key = if flag `if first { first = false } else { w.write-char(',') }; w.write($key)`
             else if it-index == 0 `w.write($key)`
             else `w.write-char(','); w.write($key)`
-          if flag and f.type-id.is-instance-of(types/id[opt]) {
+          if flag and f.type-id.instance-of[opt] {
             cb.line(`if self.${f.name} is :some x { $write-key; x.write-json[_, o](w) }`)
           } else {
             cb.line(`$write-key; self.${f.name}.write-json[_, o](w)`)
@@ -813,13 +813,13 @@ ns internal {
 
   fn read-code(o: opts, id: types/type-id): code {
     let cb = code-builder/new()
-    if id.is-instance-of(types/id[opt]) {
-      cb.line(`if r.peek() == 'n' { r.read-null().try; :ok :none } else { :ok :some ${read-of(id.instance-info().!.args.[0])} }`)
-    } else if id.is-instance-of(types/id[list]) {
-      read-seq-code(cb.&, id.instance-info().!.args.[0])
+    if id.elem-of[opt] is :some inner {
+      cb.line(`if r.peek() == 'n' { r.read-null().try; :ok :none } else { :ok :some ${read-of(inner)} }`)
+    } else if id.elem-of[list] is :some elem {
+      read-seq-code(cb.&, elem)
       cb.line(`:ok items`)
-    } else if id.is-instance-of(types/id[span]) {
-      read-seq-code(cb.&, id.instance-info().!.args.[0])
+    } else if id.elem-of[span] is :some elem {
+      read-seq-code(cb.&, elem)
       cb.line(`:ok items.as-span()`)
     } else if id.schema() is {
       :int :u64 -> cb.line(`r.read-u64()`),
@@ -841,7 +841,7 @@ ns internal {
         let n = size.!
         read-seq-code(cb.&, element-type-id)
         cb.line(`if items.len() != $n { return r.fail(:wrong-type "array of $n") }`)
-        cb.line(`:ok items.as-span().to-array[${element-type-id.spell()}, $n]()`)
+        cb.line(`:ok items.as-span().to-array[${element-type-id.spell()}, $n]`)
       },
       :reference .{ inner-type-id } -> cb.line(`:ok mem/new(${read-of(inner-type-id)})`),
       :enum .{ values } -> {
@@ -882,7 +882,7 @@ ns internal {
       :struct .{ fields } -> {
         cb.line(`r.object-start().try`)
         for f in fields {
-          if f.type-id.is-instance-of(types/id[opt]) {
+          if f.type-id.instance-of[opt] {
             cb.line(`let f$it-index: ${f.type-id.spell()} = :none`)
           } else {
             cb.line(`let f$it-index: ?${f.type-id.spell()} = :none`)
@@ -894,20 +894,20 @@ ns internal {
         cb.line(`first = false`)
         for f in fields {
           let key = meta/str-lit(o.get-field-key(f.name))
-          let assign = if f.type-id.is-instance-of(types/id[opt]) `f$it-index = ${read-of(f.type-id)}`
+          let assign = if f.type-id.instance-of[opt] `f$it-index = ${read-of(f.type-id)}`
             else `f$it-index = :some (${read-of(f.type-id)})`
           cb.line(`${if it-index == 0 "if" else "else if"} key == $key { $assign }`)
         }
         cb.line(`${if fields.len() == 0 "" else "else "}{ r.skip-value().try }`)
         cb.line(`}`)
         for f in fields {
-          if not f.type-id.is-instance-of(types/id[opt]) {
+          if not f.type-id.instance-of[opt] {
             cb.line(`require f$it-index is :some v$it-index else { return r.fail(:missing-field ${meta/str-lit(o.get-field-key(f.name))}) }`)
           }
         }
         cb.line(`:ok(.{`)
         for f in fields {
-          let v = if f.type-id.is-instance-of(types/id[opt]) `f$it-index` else `v$it-index`
+          let v = if f.type-id.instance-of[opt] `f$it-index` else `v$it-index`
           cb.line(`${f.name} = $v,`)
         }
         cb.line(`})`)

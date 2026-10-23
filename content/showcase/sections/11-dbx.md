@@ -26,11 +26,11 @@ type plan = { id: i64, name: string, is-main: bool, note: ?string }
 ```
 
 ```k1
-  update("insert into plan (name, is_main, note) values (${"Budget"}, ${true}, null)").run(w).!
-  update("insert into plan (name, is_main, note) values (${"What if"}, ${false}, ${"draft"})").run(w).!
+  update("-- insert-plan\ninsert into plan (name, is_main, note) values (${"Budget"}, ${true}, null)").run(w).!
+  update("-- insert-plan\ninsert into plan (name, is_main, note) values (${"What if"}, ${false}, ${"draft"})").run(w).!
 
   let main-only = false
-  let plans = query[plan]("select id, name, is_main, note from plan where is_main or not $main-only order by id").list(w).!
+  let plans = query[plan]("-- list-plans\nselect id, name, is_main, note from plan where is_main or not $main-only order by id").list(w).!
   for plans { println("${it.id} ${it.name} main=${it.is-main} note=${it.note}") }
 ```
 
@@ -54,13 +54,14 @@ type plan = { id: i64, name: string, is-main: bool, note: string }
 │     conn.open(":memory:", busy-timeout-ms = 0).!
 │     for schema.scripts { conn.exec-script(it).! }
 │   
-│ ->  println(query[plan]("select id, name, is_main, note from plan order by id").list(conn.as-reader()).!.len())
-│                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+│ ->  println(query[plan]("-- list-plans\nselect id, name, is_main, note from plan order by id").list(conn.as-reader()).!.len())
+│                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 │     0
 │   }
 ├─────
 │  dbx: column `note` (plan.note) can be null, and `plan.note` (string) can't hold null; make it an option
-  select id, name, is_main, note from plan order by id
+  -- list-plans
+select id, name, is_main, note from plan order by id
 ```
 
 [stub: how it works: the macro is ordinary k1 running in the compiler's VM, calling sqlite3_prepare through FFI on the schema image; `column_decltype`, `table_column_metadata`; no SQL parser of its own]

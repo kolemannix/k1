@@ -15,6 +15,6 @@ fn main(): i32 {
   conn.open(":memory:", busy-timeout-ms = 0).!
   for schema.scripts { conn.exec-script(it).! }
 
-  println(query[plan]("select id, name, is_main, note from plan order by id").list(conn.as-reader()).!.len())
+  println(query[plan]("-- list-plans\nselect id, name, is_main, note from plan order by id").list(conn.as-reader()).!.len())
   0
 }

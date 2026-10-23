@@ -22,6 +22,9 @@
 - [ ] Generic aliases: `type(alias) pair[t] = { a: t, b: t }` (rejected with an error for now; an alias is transparent, so this is a type-level function)
 - [ ] new lib type: :runtime; this is the ideal dependency kind for libclang in k1bindgen
 - [ ] `#[must_use]` equivalent
+- [ ] Bug: the unused-parameter warning ignores untaken `#if` arms. std/watch.k1 `add`/`wait`/`close`
+      warn `Parameter is never used` on every wasi/bare build (the refchess web demo included),
+      because their only uses sit in the posix arms
 - [ ] literal inference issue (a) `2 * d` vs `d * 2` differ — literal-lhs
       defaults i64 and widens the u32 rhs up, literal-rhs adopts u32 and wraps; (b) binary ops widen
       rhs into lhs type but have no least-upper-bound, so `u32 + i64` errors while `i64 + u32` works;

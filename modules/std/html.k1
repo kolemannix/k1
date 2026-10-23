@@ -71,7 +71,7 @@ ns dom {
   }
 
   fn at[t](name: string, value: t): node {
-    #if types/id[t].is-instance-of(types/id[opt]) {
+    #if types/id[t].instance-of[opt] {
       if value is :some v at(name, v) else :frag span/empty()
     } else if value is {
       type[bool](b) -> if is-boolean-attr(name) {
@@ -138,7 +138,7 @@ ns dom {
 }
 
 fn write-attr[w: writer, t](out: w, name: string, value: t, presence: bool) {
-  #if types/id[t].is-instance-of(types/id[opt]) {
+  #if types/id[t].instance-of[opt] {
     if value is :some v write-attr(out, name, v, presence)
   } else if value is {
     type[bool](b) -> if presence { if b out.write(" $name") } else { out.write(" $name=\"$b\"") },

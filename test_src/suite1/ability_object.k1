@@ -60,7 +60,7 @@ impl named-like-object-fields for plain-cell {
 
 fn(test) dyn-fns-named-like-object-fields() {
   let c: *plain-cell = mem/new(.{ n = 21 })
-  let d = c.to-dyn[named-like-object-fields]()
+  let d = c.to-dyn[named-like-object-fields]
   assert-equals(d.state(), 21)
   assert-equals(d.table(), 42)
 }
@@ -75,7 +75,7 @@ impl int-taker for int {
 
 fn(test) receiverless-dyn-fn-taking-the-implementor-type() {
   let p: *int = mem/new(41)
-  assert-equals(p.to-dyn[int-taker]().plus-one(9), 10)
+  assert-equals(p.to-dyn[int-taker].plus-one(9), 10)
 }
 
 fn(test) dispatch-through-dyn() {
@@ -105,7 +105,7 @@ fn(test) dispatch-through-dyn() {
 fn(test) dispatch-through-dyn-at-compile-time() {
   let r: int = #static {
     let state: *by-tens = mem/new(.{ current = 40 })
-    let d = state.to-dyn[counter[t = int]]()
+    let d = state.to-dyn[counter[t = int]]
     d.bump() + d.bump() + d.kind().len()
   }
   assert-equals(r, 50 + 60 + 9)
@@ -114,9 +114,9 @@ fn(test) dispatch-through-dyn-at-compile-time() {
 fn(test) generic-fns-excluded-from-dyn() {
   let m: *mixed-impl = mem/new(.{ n = 7 })
   assert-equals(m.fancy(3), 3)
-  assert-equals(m.to-dyn[mixed]().plain(), 7)
+  assert-equals(m.to-dyn[mixed].plain(), 7)
   #static assert(test-compile(
-    { let m2: *mixed-impl = mem/new(.{ n = 1 }); let d2 = m2.to-dyn[mixed](); d2.fancy(3) }
+    { let m2: *mixed-impl = mem/new(.{ n = 1 }); let d2 = m2.to-dyn[mixed]; d2.fancy(3) }
   ).is-some())
 }
 
@@ -128,8 +128,8 @@ fn(test) static-dyn-cannot-reach-runtime() {
 
 fn(test) core-abilities-through-dyn() {
   let shown: *int = mem/new(42)
-  assert-equals(shown.to-dyn[to-string]().to-string(), "42")
-  let shown-static: string = #static { let s: *int = mem/new(7); s.to-dyn[to-string]().to-string() }
+  assert-equals(shown.to-dyn[to-string].to-string(), "42")
+  let shown-static: string = #static { let s: *int = mem/new(7); s.to-dyn[to-string].to-string() }
   assert-equals(shown-static, "7")
   let h: *heap = mem/new(.{})
   let a: dyn[allocator] = h.to-dyn()

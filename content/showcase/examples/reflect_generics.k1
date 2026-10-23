@@ -1,7 +1,7 @@
 use pre/is-list
 
 ns pre {
-  fn is-list[t](): bool { types/id[t].is-instance-of(types/id[list]) }
+  fn is-list[t](): bool { types/id[t].instance-of[list] }
 }
 
 type pair[a, b] = { first: a, second: b }
@@ -20,7 +20,7 @@ fn describe[t](): string {
   }
 }
 
-fn element-type[t: pred is-list](): string { types/instance-info[t].!.args.[0].name() }
+fn element-type[t: pred is-list](): string { types/id[t].elem-of[list].!.name() }
 
 fn main(): i32 {
   println(describe[list[int]]())
@@ -29,7 +29,7 @@ fn main(): i32 {
   println(describe[int]())
   println(describe[*pair[int, int]]())
   println(types/id[list].name())
-  println("${types/id[list[int]].is-instance-of(types/id[list])} ${types/id[list[int]].is-instance-of(types/id[pair])}")
+  println("${types/id[list[int]].instance-of[list]} ${types/id[list[int]].instance-of[pair]}")
   println(element-type[list[string]]())
   let rejected = test-compile(element-type[int]())
   println(rejected.!)

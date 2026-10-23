@@ -42,7 +42,7 @@ for md in sorted(sections.glob("*.md")) + sorted((repo / "site/content").rglob("
 for card in json.loads((repo / "site/data/carousel.json").read_text()):
     for block in card.get("blocks", []):
         if block["kind"] == "k1":
-            blocks.append((block["code"].encode(), None, "carousel.json", False))
+            blocks.append((block["code"].encode(), repo / block["path"] if "path" in block else None, "carousel.json", False))
 
 out = {}
 partial = 0

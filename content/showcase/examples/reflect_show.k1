@@ -8,9 +8,9 @@ fn show-to[t, w: writer](w: w, v: t, depth: size) {
   #meta {
     let id = types/id[t]
     let cb = code-builder/new()
-    if id.is-instance-of(types/id[opt]) {
+    if id.instance-of[opt] {
       cb.line(`if v is { :some x -> show-to(w, x, depth), :none -> w.write("none") }`)
-    } else if id.is-instance-of(types/id[list]) or types/schema[t] is :array _ {
+    } else if id.instance-of[list] or types/schema[t] is :array _ {
       cb.line(`w.write("[")`)
       cb.line(`for v { if it-index > 0 { w.write(", ") }; show-to(w, it, depth) }`)
       cb.line(`w.write("]")`)

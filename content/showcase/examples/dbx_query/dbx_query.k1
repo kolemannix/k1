@@ -16,11 +16,11 @@ fn main(): i32 {
   for schema.scripts { conn.exec-script(it).! }
   let w = conn.as-writer()
 
-  update("insert into plan (name, is_main, note) values (${"Budget"}, ${true}, null)").run(w).!
-  update("insert into plan (name, is_main, note) values (${"What if"}, ${false}, ${"draft"})").run(w).!
+  update("-- insert-plan\ninsert into plan (name, is_main, note) values (${"Budget"}, ${true}, null)").run(w).!
+  update("-- insert-plan\ninsert into plan (name, is_main, note) values (${"What if"}, ${false}, ${"draft"})").run(w).!
 
   let main-only = false
-  let plans = query[plan]("select id, name, is_main, note from plan where is_main or not $main-only order by id").list(w).!
+  let plans = query[plan]("-- list-plans\nselect id, name, is_main, note from plan where is_main or not $main-only order by id").list(w).!
   for plans { println("${it.id} ${it.name} main=${it.is-main} note=${it.note}") }
   0
 }

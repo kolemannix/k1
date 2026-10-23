@@ -102,14 +102,14 @@ fn start(
   libuv/unref(s.on-loop-event.&.as-handle())
   let on-send: notify = .{
     state = s.as[ptr],
-    notify-fn = fn(state: ptr) uv/check(libuv/async_send(state.ref[server]().on-loop-event.&)).!,
+    notify-fn = fn(state: ptr) uv/check(libuv/async_send(state.ref[server].on-loop-event.&)).!,
   }
   s.handled = mpsc/make(on-send)
   s.woken = mpsc/make(on-send)
 
   uv/check(libuv/prepare_init(l, s.scratch-prepare.&)).!
   s.scratch-prepare.&.set-data(s)
-  uv/check(libuv/prepare_start(s.scratch-prepare.&, fn p. p.get-data[server]().scratch.reset())).!
+  uv/check(libuv/prepare_start(s.scratch-prepare.&, fn p. p.get-data[server].scratch.reset())).!
   libuv/unref(s.scratch-prepare.&.as-handle())
 
   if config.handle-signals {
@@ -122,7 +122,7 @@ fn start(
 fn install-signal(*self, handle: *libuv/signal, signum: i32) {
   uv/check(libuv/signal_init(self.uv-loop, handle)).!
   handle.set-data(self)
-  uv/check(libuv/signal_start(handle, fn(h, _signum) { h.get-data[server]().stop() }, signum)).!
+  uv/check(libuv/signal_start(handle, fn(h, _signum) { h.get-data[server].stop() }, signum)).!
 }
 
 fn run(*self) {
@@ -156,7 +156,7 @@ fn stop(*self) {
   uv/check(libuv/timer_init(self.uv-loop, self.drain-timer.&)).!
   self.drain-timer.&.set-data(self)
   self.drain-timer.&.start(fn t. {
-    let s = t.get-data[server]()
+    let s = t.get-data[server]
     tprintln("drain deadline passed; closing ${s.connections.len()} connections")
     for s.connections.& { s.connections.get(it).close() }
     libuv/close(t.as-handle(), fn _h. .{})
@@ -380,7 +380,7 @@ ns for connection {
 }
 
 fn on-write-complete(req: *libuv/write, status: i32) {
-  let connection = req.get-data[connection]()
+  let connection = req.get-data[connection]
   if connection.phase is :closing { return }
   if status != 0 {
     tprintln("response write failed: ${libuv/errno/from-i32(status).enum-name()}")
@@ -391,18 +391,18 @@ fn on-write-complete(req: *libuv/write, status: i32) {
 }
 
 fn on-wake(state: ptr) {
-  let connection = state.ref[connection]()
+  let connection = state.ref[connection]
   if not atomic/xchg(connection.wake-queued.&, true, :acq-rel) { connection.server.woken.&.send(connection) }
 }
 
 fn on-timeout(t: *libuv/timer) {
-  let conn = t.get-data[connection]()
+  let conn = t.get-data[connection]
   tprintln("conn${conn.serial-no} timed out")
   conn.close()
 }
 
 fn on-handle-closed(h: *libuv/handle) {
-  let conn = h.get-data[connection]()
+  let conn = h.get-data[connection]
   conn.pending-closes = conn.pending-closes - 1
   if conn.pending-closes == 0 { conn.release() }
 }
@@ -429,7 +429,7 @@ fn run-handler(work: *http-handler-work) {
 }
 
 fn run-loop-events(handle: *libuv/async) {
-  let s = handle.get-data[server]()
+  let s = handle.get-data[server]
   for work in s.handled.&.take() {
     s.end-await()
     let connection = work.connection
@@ -464,14 +464,14 @@ fn end-await(*self) {
 }
 
 fn alloc-read-buffer(handle: *libuv/handle, suggested-size: usize, buf: *libuv/buf) {
-  let connection = handle.get-data[connection]()
+  let connection = handle.get-data[connection]
   let target = connection.request-parser.data().body-read-target() ? connection.request-arena.alloc-buffer[u8](suggested-size.signed())
   buf.* = libuv/buf/wrap-buffer(target)
 }
 
 fn on-client-read(client: *libuv/stream, nread: size, buf: *libuv/buf) {
   if nread == 0 return
-  let connection = client.get-data[connection]()
+  let connection = client.get-data[connection]
   if nread < 0 {
     tprintln("conn${connection.serial-no} read ended: ${libuv/errno/from-i32(nread.trunc[i32]).enum-name()}")
     connection.close()
@@ -505,7 +505,7 @@ fn on-client-read(client: *libuv/stream, nread: size, buf: *libuv/buf) {
 
 fn on-hangup-read(client: *libuv/stream, nread: size, _buf: *libuv/buf) {
   if nread == 0 return
-  let connection = client.get-data[connection]()
+  let connection = client.get-data[connection]
   if nread > 0 tprintln("client sent $nread bytes during a streamed response; closing")
   connection.close()
 }
@@ -540,7 +540,7 @@ fn on-new-connection(listener: *libuv/stream, status: i32) {
     tprintln("new connection error: ${libuv/errno/from-i32(status)}")
     return
   }
-  let s = listener.as-handle().get-data[server]()
+  let s = listener.as-handle().get-data[server]
   if s.connections.is-full() {
     let client: *libuv/tcp = heap.alloc-t()
     uv/check(libuv/tcp_init(s.uv-loop, client)).!

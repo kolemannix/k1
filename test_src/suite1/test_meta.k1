@@ -16,6 +16,9 @@ $pre/make-point-macro(my-macro-point)
 $pre/make-point-twice(my-nested-point)
 $pre/define-scaled(3)
 
+// Static args see every source definition in the module, even ones below
+$pre/define-name-of(types/id[test_meta/forward-command])
+
 ns pre {
   let pi: f32 = 3.14
   fn make-point(name: string): code {
@@ -31,6 +34,9 @@ ns pre {
     `macro scaled(x: code) { pre/scaled-code(x, $factor) }`
   }
   fn scaled-code(x: code, factor: int): code { "($x * $factor)" }
+  macro define-name-of(t: types/type-id) {
+    "fn name-of-forward(): string { ${meta/str-lit(t.name())} }"
+  }
 }
 
 ns test_meta
@@ -55,8 +61,7 @@ use core/writer
 use types/type-schema
 
 fn _write-json-from-schema(code: *string-builder, name: string, type-id: types/type-id) {
-  if type-id.is-instance-of(types/id[list]) {
-    let elem = type-id.instance-info().!.args.[0]
+  if type-id.elem-of[list] is :some elem {
     code.writeln("w.write-char('[');")
     code.writeln(`for $name { if it-index > 0 { w.write(",") }`)
     _write-json-from-schema(code, "it", elem)
@@ -132,7 +137,11 @@ fn(test) meta-generated-code() {
   let _y: my-macro-point = .{ x = 1, y = 2 }
   let _z: my-nested-point = .{ x = 3, y = 4 }
   assert-equals(scaled(5), 15)
+  assert-equals(name-of-forward(), "forward-command")
   pre/pi
   
   .{}
 }
+
+type forward-command = either { go(forward-payload) }
+type forward-payload = { x: i32 }

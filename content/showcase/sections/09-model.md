@@ -147,8 +147,8 @@ fn drain[t](acc: dyn[accumulator[t = t]], items: list[t]): t {
 ```k1
   let sum: *summer = mem/new(.{ n = 0 })
   let join: *joiner = mem/new(.{ s = "" })
-  println(drain(sum.to-dyn[accumulator[t = int]](), [1, 2, 3]))
-  println(drain(join.to-dyn[accumulator[t = string]](), ["a", "b", "c"]))
+  println(drain(sum.to-dyn[accumulator[t = int]], [1, 2, 3]))
+  println(drain(join.to-dyn[accumulator[t = string]], ["a", "b", "c"]))
 ```
 
 ```text
@@ -525,7 +525,7 @@ Long-lived data names its allocator with the `-in` variants:
   durable.push-in(heap, 1)
   durable.push-in(heap, 2)
   println(durable)
-  println(heap.alloc-t[u64]().*)
+  println(heap.alloc-t[u64].*)
 ```
 
 ```text

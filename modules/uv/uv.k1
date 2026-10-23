@@ -182,13 +182,13 @@ ns bus {
   ): *pubsub/bus[t] {
     let async-handle = heap.alloc-t[libuv/async]
     let bus = pubsub/create[t](.{ state = async-handle.as[ptr], notify-fn = notify-async.& }, subscriber-cap-weight, weight-fn)
-    check(libuv/async_init(uv-loop, async-handle, fn handle. handle.get-data[pubsub/bus[t]]().dispatch())).!
+    check(libuv/async_init(uv-loop, async-handle, fn handle. handle.get-data[pubsub/bus[t]].dispatch())).!
     async-handle.set-data(bus)
     libuv/unref(async-handle.as-handle())
     bus
   }
 
   fn notify-async(state: ptr) {
-    check(libuv/async_send(state.ref[libuv/async]())).!
+    check(libuv/async_send(state.ref[libuv/async])).!
   }
 }

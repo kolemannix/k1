@@ -29,6 +29,6 @@ fn main(): i32 {
   durable.push-in(heap, 1)
   durable.push-in(heap, 2)
   println(durable)
-  println(heap.alloc-t[u64]().*)
+  println(heap.alloc-t[u64].*)
   0
 }

@@ -841,7 +841,7 @@ fn decode-stream[a: allocator](d: *decoder, alloc: a): result[buffer[u8], decode
 fn decompress-in[a: allocator](alloc: a, encoded: span[u8]): result[buffer[u8], decode-error] {
   let scratch = arena/init(1 << 20)
   defer scratch.release()
-  let d: *decoder = scratch.alloc-t[decoder]()
+  let d: *decoder = scratch.alloc-t[decoder]
   d.br = bit-reader/new(encoded)
   d.scratch = scratch
   let decoded = decode-stream(d, alloc)

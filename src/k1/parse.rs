@@ -515,7 +515,6 @@ pub struct ParsedVariable {
 pub struct FieldAccess {
     pub base: ParsedExprId,
     pub field_name: StringId,
-    pub type_args: AstSlice<NamedTypeArg>,
     pub field_name_span: Span,
 }
 
@@ -3517,8 +3516,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         } else {
             MSlice::empty()
         };
-        if self.peek().is_kind_nonspaced(K::OpenParen) {
-            let mut args = self.expect_fn_call_args()?;
+        let has_parens = self.peek().is_kind_nonspaced(K::OpenParen);
+        if has_parens || !type_args.is_empty() {
+            let mut args =
+                if has_parens { self.expect_fn_call_args()? } else { self.ast.mem.new_list(1) };
             let self_arg = result;
             let name = self.make_ident(target);
 
@@ -3543,7 +3544,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             );
             Ok(self.add_expression(ParsedExpr::Call(call), span))
         } else {
-            // a.b[int] <complete expression>
             if target.kind == K::Ident {
                 self.emit_semantic_token(target, SemanticTokenKind::Property);
             }
@@ -3555,7 +3555,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     base: result,
                     field_name: target_ident,
                     field_name_span,
-                    type_args,
                 }),
                 span,
             ))

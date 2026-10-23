@@ -1,7 +1,7 @@
 ---
 title: Benchmarks
 cascade:
-  - _target:
+  - target:
       kind: page
     build:
       render: never

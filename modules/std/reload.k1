@@ -171,7 +171,7 @@ ns reload {
   fn load-ns-async(ns-path: string): *pending-load {
     // zeroed memory is a valid pending-load: state 0, :no-descriptor with an
     // empty ns-path
-    let cell = heap.alloc-t[pending-load]()
+    let cell = heap.alloc-t[pending-load]
     thread/start-detached(load-ns-worker.&, heap.new(async-load.{ ns-path = ns-path, cell = cell }))
     cell
   }

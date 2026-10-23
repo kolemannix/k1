@@ -192,6 +192,8 @@ fn[base, counter.&](x: int) { counter.* = counter.* + base + x }
   and `some fn` values are positional.
 - Any callable expr calls: `(s.callback)(x)` (`s.callback(x)` is a method lookup),
   `(make-adder(2))(3)`. A named fn's value has the ZST `type-of(f)`.
+- `a.b[t]` is always a call; a call with only type args drops its parens:
+  `x.widen[i64]`, `id.instance-of[list]`.
 - `xs || map(fn x. x + 1) || filter(fn x. x % 2 == 0)` pipes.
 
 ## Abilities

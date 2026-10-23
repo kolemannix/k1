@@ -250,7 +250,7 @@ type task[t] = { thread: thread, result: *t }
 ns for task {
 
   fn spawn[t](body: some fn() -> t): task[t] {
-    let result = heap.alloc-t[t]()
+    let result = heap.alloc-t[t]
     let state = heap.new(task-state[type-of(body), t].{ body = body, result = result })
     let thread: thread = ptr/null
     start(thread.&, fn(s: *task-state[type-of(body), t] -> ptr) {

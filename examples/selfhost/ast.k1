@@ -154,7 +154,6 @@ type variable = { name: qident, span: src-span }
 type field-access = {
   base: expr-id,
   field-name: string-id,
-  type-args: list[type-arg],
   span: src-span,
 }
 

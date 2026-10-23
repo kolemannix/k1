@@ -4,7 +4,7 @@ set -euo pipefail
 
 # === Configuration ===
 LLVM_REPO="https://github.com/llvm/llvm-project.git"
-LLVM_TAG="llvmorg-21.1.7"
+LLVM_TAG="llvmorg-23.1.2"
 BUILD_DIR="$(pwd)/build-llvm"
 INSTALL_DIR="$(pwd)/install-llvm"
 SRC_DIR="$(pwd)/llvm-project"
@@ -18,6 +18,7 @@ GENERATOR="Unix Makefiles"
 
 if [ ! -d "${SRC_DIR}" ]; then
   git clone --depth 1 --branch "${LLVM_TAG}" "${LLVM_REPO}" "${SRC_DIR}"
+  git -C "${SRC_DIR}" apply "$(pwd)/slp-vectorizer-register-vf-limit.patch"
 fi
 
 mkdir -p "${BUILD_DIR}"

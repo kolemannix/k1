@@ -91,12 +91,13 @@ ns for parser {
         } else {
           list/empty()
         }
-        if self.peek().is-kind-nonspaced(:open-paren) {
-          let call-args = self.expect-fn-call-args().try
+        let has-parens = self.peek().is-kind-nonspaced(:open-paren)
+        if has-parens or not type-args.is-empty() {
+          let call-args: list[ast/call-arg] = if has-parens { self.expect-fn-call-args().try.args } else { list/empty() }
           let name = self.make-ident(target)
           let args = list/empty[ast/call-arg]()
           let inserted = false
-          for a in call-args.args {
+          for a in call-args {
             if (not inserted) and (not a.is-explicit-context) {
               args.push(.{ name = :none, value = result-id, is-explicit-context = false })
               inserted = true
@@ -117,7 +118,7 @@ ns for parser {
         } else {
           let field-name = self.make-ident(target)
           let span = self.extend-to-here(self.expr-span(result-id))
-          result-id = self.add-expr(:field-access(.{ base = result-id, field-name, type-args, span }))
+          result-id = self.add-expr(:field-access(.{ base = result-id, field-name, span }))
         }
       } else {
         break

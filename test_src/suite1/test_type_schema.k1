@@ -85,7 +85,9 @@ fn(test) schema-and-instance-reflection() {
   assert-equals(types/instance-info[result[int, string]].!.args.len(), 2)
   assert-equals(types/id[list].name(), "list[t]")
   assert-equals(types/id[list[int]].info().name, "list[i64]")
-  assert(not types/id[list[int]].is-instance-of(types/id[span]))
+  assert(not types/id[list[int]].instance-of[span])
+  assert(types/id[?int].elem-of[opt] is :some e and e == types/id[int])
+  assert(types/id[list[int]].elem-of[span] is :none)
   assert(test-compile(types/size[list]).is-some())
   assert(test-compile({ let _x: list = list/empty[int](); .{} }).is-some())
 

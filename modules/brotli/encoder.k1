@@ -193,7 +193,7 @@ fn choose-context-mode(params: *encoder-params, data: ptr, pos: size, mask: size
 
 ns for encoder {
   fn new-in[a: allocator](alloc: a, quality: size, lgwin: size): *encoder {
-    let e: *encoder = alloc.alloc-t[encoder]()
+    let e: *encoder = alloc.alloc-t[encoder]
     e.params = encoder-params/new(quality, lgwin)
     e.heap = arena/init(1 << 22)
     e.scratch = arena/init(1 << 22)
@@ -201,7 +201,7 @@ ns for encoder {
       e.table = buffer/allocate-in[i32, _](alloc, MAX-TABLE-SIZE)
     } else if quality == 1 {
       e.table = buffer/allocate-in[i32, _](alloc, Q1-MAX-TABLE-SIZE)
-      e.two-pass = alloc.alloc-t[two-pass-arena]()
+      e.two-pass = alloc.alloc-t[two-pass-arena]
       e.cmd-buf = buffer/allocate-in[u32, _](alloc, TWO-PASS-BLOCK-SIZE)
       e.lit-buf = buffer/allocate-in[u8, _](alloc, TWO-PASS-BLOCK-SIZE)
     }

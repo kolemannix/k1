@@ -8,6 +8,9 @@ disableKinds = ['taxonomy', 'term', 'rss']
 [markup.goldmark.renderer]
   unsafe = true
 
+[markup.goldmark.renderHooks.link]
+  useEmbedded = 'always'
+
 [permalinks]
   blog = '/blog/:slug/'
 

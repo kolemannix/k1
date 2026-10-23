@@ -130,7 +130,7 @@ for card in CARDS:
             start = next((i for i, l in enumerate(lines) if l.startswith(first)), None)
             need(start is not None, f"{path}: no line starting with {first!r}")
             stop = next((i for i in range(start + 1, len(lines)) if lines[i] == end), len(lines) - 1)
-            shown.append({"label": label, "kind": "k1", "code": "\n".join(lines[start:stop + 1])})
+            shown.append({"label": label, "kind": "k1", "code": "\n".join(lines[start:stop + 1]), "path": path})
             continue
         block = next((b for b in fences[kind] if b.startswith(first)), None)
         need(block, f"{card['section']}: no {kind} block starting with {first!r}")

@@ -46,9 +46,9 @@ fn(test) channel-bounds-wakes-and-fails() {
   assert(chan.push(30))
   assert(not chan.push(40))
 
-  let src = chan.to-dyn[source[t = int]]()
+  let src = chan.to-dyn[source[t = int]]
   let wakes = 0
-  src.start(.{ state = wakes.&.as[ptr], wake-fn = fn(p: ptr) { p.ref[int]().* = p.ref[int]().* + 1 } })
+  src.start(.{ state = wakes.&.as[ptr], wake-fn = fn(p: ptr) { p.ref[int].* = p.ref[int].* + 1 } })
   chan.flush()
   assert-equals(wakes, 1)
   chan.flush()

@@ -63,8 +63,9 @@ with the same `if x is { ... }` as any other sum, at compile time or runtime.
 ```
 
 Alongside it: `types/id[t]` (a `type-id` with `.name()`, `.schema()`,
-`.instance-info()`, `.size()`, `.stride()`, `.align()`, `.spell()`),
-`types/size`, `types/stride`, `types/align`, and `types/assert-layout`.
+`.instance-info()`, `.instance-of[p]`, `.elem-of[p]`, `.size()`, `.stride()`,
+`.align()`, `.spell()`), `types/size`, `types/stride`, `types/align`, and
+`types/assert-layout`.
 
 ## JSON for any type, generated per type
 
@@ -76,9 +77,9 @@ at compile time, and the `code` it returns becomes the body for that `t`.
     #meta {
       let id = types/id[t]
       let cb = code-builder/new()
-      if id.is-instance-of(types/id[opt]) {
+      if id.instance-of[opt] {
         cb.line(`if v is { :some x -> write(w, x), :none -> w.write("null") }`)
-      } else if id.is-instance-of(types/id[list]) or types/schema[t] is :array _ {
+      } else if id.instance-of[list] or types/schema[t] is :array _ {
         cb.line(`w.write-char('[')`)
         cb.line(`for v { if it-index > 0 { w.write-char(',') }; write(w, it) }`)
         cb.line(`w.write-char(']')`)
@@ -193,9 +194,9 @@ fn show-to[t, w: writer](w: w, v: t, depth: size) {
   #meta {
     let id = types/id[t]
     let cb = code-builder/new()
-    if id.is-instance-of(types/id[opt]) {
+    if id.instance-of[opt] {
       cb.line(`if v is { :some x -> show-to(w, x, depth), :none -> w.write("none") }`)
-    } else if id.is-instance-of(types/id[list]) or types/schema[t] is :array _ {
+    } else if id.instance-of[list] or types/schema[t] is :array _ {
       cb.line(`w.write("[")`)
       cb.line(`for v { if it-index > 0 { w.write(", ") }; show-to(w, it, depth) }`)
       cb.line(`w.write("]")`)
@@ -574,7 +575,7 @@ fn describe[t](): string {
   println(describe[int]())
   println(describe[*pair[int, int]]())
   println(types/id[list].name())
-  println("${types/id[list[int]].is-instance-of(types/id[list])} ${types/id[list[int]].is-instance-of(types/id[pair])}")
+  println("${types/id[list[int]].instance-of[list]} ${types/id[list[int]].instance-of[pair]}")
 ```
 
 ```text
@@ -590,11 +591,11 @@ true false
 That query can gate a generic, via a predicate:
 
 ```k1
-  fn is-list[t](): bool { types/id[t].is-instance-of(types/id[list]) }
+  fn is-list[t](): bool { types/id[t].instance-of[list] }
 ```
 
 ```k1
-fn element-type[t: pred is-list](): string { types/instance-info[t].!.args.[0].name() }
+fn element-type[t: pred is-list](): string { types/id[t].elem-of[list].!.name() }
 ```
 
 `test-compile` returns the rejection as a string:

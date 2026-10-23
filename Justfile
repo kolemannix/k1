@@ -85,7 +85,7 @@ watch dir:
 
 # The language site: hugo dev server, and the full build (wasm demo, benchmark data, showcase check, hugo)
 site: refchess-wasm-web
-  hugo server --source site --port 1313 --buildDrafts
+  hugo server --source site --port 1313 --buildDrafts --renderToMemory
 
 site-build:
   cargo build --features=llvm-sys/prefer-dynamic --bin k1

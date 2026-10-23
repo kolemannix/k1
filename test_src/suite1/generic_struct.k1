@@ -20,12 +20,12 @@ fn takes-h64(_h: handle[u64]) {}
 
 fn(test) generic-method-call() {
   let p: au-pair[int, bool] = .{ t = some(0), u = some(true) }
-  assert(p.t[int, bool]().! == 0)
+  assert(p.t[int, bool].! == 0)
   assert(p.t().! == 0)
   let q: au-pair[u = bool, t = int] = p
-  assert(q.t[u = bool, t = int]().! == 0)
-  assert(test-compile(q.t[v = bool, t = int]()).is-some())
-  assert(test-compile(q.t[t = bool, t = int]()).is-some())
+  assert(q.t[u = bool, t = int].! == 0)
+  assert(test-compile(q.t[v = bool, t = int]).is-some())
+  assert(test-compile(q.t[t = bool, t = int]).is-some())
 }
 
 fn(test) infer-params-from-struct-literal() {

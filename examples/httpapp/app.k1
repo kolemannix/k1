@@ -214,7 +214,7 @@ fn spawn-tick-publisher-thread(bus: *pubsub/bus[span[u8]]) {
   let thread-id: *libuv/thread = heap.alloc-t()
   uv/check(libuv/thread_create(thread-id, fn arg. {
     libuv/thread_setname("publisher\0".data-ref-byte())
-    let bus = arg.ref[pubsub/bus[span[u8]]]()
+    let bus = arg.ref[pubsub/bus[span[u8]]]
     loop {
       libuv/sleep(1000)
       // this thread's tmp arena holds the interpolated event data

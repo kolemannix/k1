@@ -22,7 +22,8 @@
       {
         "label": "use",
         "kind": "k1",
-        "code": "  if route/parse-request(req.header) is {\n    :err e -> error-response(e),\n    :ok r -> if r is {\n      :home -> home-page(),\n      :events -> global-events(deps),\n      :counter -> counter-events(),\n      :game-events .{ id } -> game-events(deps, id),\n      :game-poke .{ id } -> game-poke(deps, id),\n      :big-file -> big-file(),\n      :starry -> response/html(\"todo\"),\n      :visits p -> visits(deps, req, p.who),\n      :login -> login(req),\n      :delete-game p -> response/html(\"todo ${p.id}\"),\n    }\n  }"
+        "code": "  if route/parse-request(req.header) is {\n    :err e -> error-response(e),\n    :ok r -> if r is {\n      :home -> home-page(),\n      :events -> global-events(deps),\n      :counter -> counter-events(),\n      :game-events .{ id } -> game-events(deps, id),\n      :game-poke .{ id } -> game-poke(deps, id),\n      :big-file -> big-file(),\n      :starry -> response/html(\"todo\"),\n      :visits p -> visits(deps, req, p.who),\n      :login -> login(req),\n      :delete-game p -> response/html(\"todo ${p.id}\"),\n    }\n  }",
+        "path": "examples/httpapp/app.k1"
       }
     ]
   },

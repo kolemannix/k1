@@ -5351,23 +5351,6 @@ impl TypedProgram {
         span: Span,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
-        if !field_access.type_args.is_empty() {
-            // Treat it like a call; foo.<field_name>[u32]
-            let args = self.ast.mem.pushn(&[ParsedCallArg {
-                name: None,
-                value: field_access.base,
-                is_explicit_context: false,
-            }]);
-            let call = ParsedCall::make(
-                &mut self.ast.mem,
-                QIdent::naked(field_access.field_name, field_access.field_name_span),
-                field_access.type_args,
-                args,
-                true,
-            );
-            return self.eval_function_call(&call, span, None, ctx, None);
-        }
-
         // Special case: .* dereference operation
         if field_access.field_name == self.ast.idents.b.asterisk {
             return self.eval_dereference(field_access.base, ctx, span);
@@ -9283,7 +9266,7 @@ impl TypedProgram {
                     }
                     _ => {}
                 }
-                // Dyn ability erasure: `x.to-dyn[source[t = u8]]()`, or with the
+                // Dyn ability erasure: `x.to-dyn[source[t = u8]]`, or with the
                 // target coming from the expected type
                 let target_dyn_type: Option<TypeId> =
                     match self.ast.mem.get_nth_opt(call.type_args(&self.ast.mem), 0) {
@@ -16188,25 +16171,58 @@ impl TypedProgram {
         Ok(found_symbols)
     }
 
-    /// Registers a global, type, or ability as pending in its namespace's
-    /// scope; other kinds are untouched. Runs during the in-order namespace
-    /// declaration walk, so a defn's #if can force anything registered above
-    /// it. A false condition means no registration: the name never exists,
-    /// and an alternate defn of the same name doesn't collide.
-    fn register_pending_defn(&mut self, defn: ParsedId, namespace_id: NamespaceId) {
+    fn register_definitions(
+        &mut self,
+        defns: &[ParsedId],
+        parsed_namespace_id: ParsedNamespaceId,
+        skip_defns: &[ParsedId],
+    ) {
+        let ParsedNamespaceDeclareOutcome::Declared(namespace_id) =
+            self.ast.namespaces.get(parsed_namespace_id).typer_state
+        else {
+            return;
+        };
         let namespace_scope_id = self.namespaces.get(namespace_id).scope_id;
+        for &defn in defns {
+            self.register_definition(defn, namespace_scope_id, skip_defns, false);
+        }
+    }
+
+    /// Registers a global, type or ability as pending in its namespace's scope,
+    /// or declares a namespace and registers its definitions. Pass 1 registers
+    /// a module's unconditional definitions before running any definition-level
+    /// metaprogram, so their static args see them in any order, and a
+    /// metaprogram's output as it is emitted. An #if'd defn registers in order
+    /// (`in_order`), as the metaprogram walk reaches it, so its condition can
+    /// force anything above it. A false condition means no registration: the
+    /// name never exists, and an alternate defn of the same name doesn't collide.
+    fn register_definition(
+        &mut self,
+        defn: ParsedId,
+        namespace_scope_id: ScopeId,
+        skip_defns: &[ParsedId],
+        in_order: bool,
+    ) {
+        if skip_defns.contains(&defn) {
+            return;
+        }
         match defn {
             ParsedId::Global(global_id) => {
                 let parsed = self.ast.get_global(global_id);
                 let name = parsed.name;
                 let condition = parsed.compile_condition;
-                if !self.execute_static_condition(condition, namespace_scope_id) {
+                if condition.is_some() != in_order
+                    || !self.execute_static_condition(condition, namespace_scope_id)
+                {
                     return;
                 }
                 self.scopes.add_pending_global(namespace_scope_id, name, global_id);
             }
             ParsedId::TypeDefn(type_defn_id) => {
                 let parsed_type_defn = self.ast.get_type_defn(type_defn_id).clone();
+                if parsed_type_defn.compile_condition.is_some() != in_order {
+                    return;
+                }
                 if !self.execute_static_condition(
                     parsed_type_defn.compile_condition,
                     namespace_scope_id,
@@ -16242,7 +16258,9 @@ impl TypedProgram {
                 let name = parsed_ability_defn.name;
                 let span = parsed_ability_defn.span;
                 let condition = parsed_ability_defn.compile_condition;
-                if !self.execute_static_condition(condition, namespace_scope_id) {
+                if condition.is_some() != in_order
+                    || !self.execute_static_condition(condition, namespace_scope_id)
+                {
                     return;
                 }
                 let added = self.scopes.add_pending_ability_defn(
@@ -16253,6 +16271,25 @@ impl TypedProgram {
                 if !added {
                     self.report(kerr!(self, span, "Ability {} exists", name));
                 }
+            }
+            ParsedId::Namespace(child) => {
+                let condition = self.ast.namespaces.get(child).compile_condition;
+                if condition.is_some() != in_order {
+                    return;
+                }
+                if !self.execute_static_condition(condition, namespace_scope_id) {
+                    self.ast.namespaces.get_mut(child).typer_state =
+                        ParsedNamespaceDeclareOutcome::IfDefedOut;
+                    let ns_span = self.ast.namespaces.get(child).span;
+                    self.emit_semantic_token(ns_span, parse::SemanticTokenKind::Comment);
+                    return;
+                }
+                if let Err(e) = self.declare_namespace(child, namespace_scope_id) {
+                    self.report(e)
+                }
+                let child_defns =
+                    self.ast.namespaces.get(child).definitions.as_slice(&self.ast.mem);
+                self.register_definitions(child_defns, child, skip_defns)
             }
             _ => {}
         }
@@ -16695,18 +16732,17 @@ impl TypedProgram {
         }
     }
 
-    fn declare_namespaces_in_namespace(
+    fn run_definition_metaprograms(
         &mut self,
         parsed_namespace_id: ParsedNamespaceId,
         skip_defns: &[ParsedId],
     ) {
         let ast_namespace = self.ast.namespaces.get(parsed_namespace_id);
-        let ast_definitions = ast_namespace.definitions.as_slice(&self.ast.mem);
-
         let ParsedNamespaceDeclareOutcome::Declared(namespace_id) = ast_namespace.typer_state
         else {
-            self.ice_span(ast_namespace.span, "namespace is not declared")
+            return;
         };
+        let ast_definitions = ast_namespace.definitions.as_slice(&self.ast.mem);
         let namespace_scope_id = self.namespaces.get(namespace_id).scope_id;
 
         // new_defns will contain all of the namespace's original parsed definitions
@@ -16724,20 +16760,9 @@ impl TypedProgram {
             if skip_defns.contains(&defn) {
                 continue;
             }
+            self.register_definition(defn, namespace_scope_id, skip_defns, true);
             match defn {
-                ParsedId::Use(_) => {}
-                ParsedId::Global(_) | ParsedId::TypeDefn(_) | ParsedId::Ability(_) => {
-                    self.register_pending_defn(defn, namespace_id);
-                }
-                ParsedId::Namespace(namespace_id) => {
-                    if let Err(e) = self.declare_namespace_recursive(
-                        namespace_id,
-                        namespace_scope_id,
-                        skip_defns,
-                    ) {
-                        self.report(e)
-                    }
-                }
+                ParsedId::Namespace(ns) => self.run_definition_metaprograms(ns, skip_defns),
                 ParsedId::StaticDefn(static_expr_id) => {
                     let ParsedExpr::Static(s) = self.ast.exprs.get(static_expr_id) else {
                         unreachable!()
@@ -16770,7 +16795,9 @@ impl TypedProgram {
                             Ok(StaticExecutionResult::Definitions(defns)) => defns,
                             Ok(StaticExecutionResult::TypedExpr(_)) => unreachable!(),
                         };
-                    for &d in self.ast.mem.getn(newly_parsed_defns).iter().rev() {
+                    let emitted = self.ast.mem.getn(newly_parsed_defns);
+                    self.register_definitions(emitted, parsed_namespace_id, skip_defns);
+                    for &d in emitted.iter().rev() {
                         defn_stack.push_grow(&mut self.tmp, d);
                     }
                 }
@@ -16780,25 +16807,6 @@ impl TypedProgram {
 
         let ast_namespace = self.ast.namespaces.get_mut(parsed_namespace_id);
         ast_namespace.definitions = new_defns.to_mlist();
-    }
-
-    fn declare_namespace_recursive(
-        &mut self,
-        parsed_namespace_id: ParsedNamespaceId,
-        parent_scope: ScopeId,
-        skip_defns: &[ParsedId],
-    ) -> K1Result<Option<NamespaceId>> {
-        let condition = self.ast.namespaces.get(parsed_namespace_id).compile_condition;
-        if !self.execute_static_condition(condition, parent_scope) {
-            self.ast.namespaces.get_mut(parsed_namespace_id).typer_state =
-                ParsedNamespaceDeclareOutcome::IfDefedOut;
-            let ns_span = self.ast.namespaces.get(parsed_namespace_id).span;
-            self.emit_semantic_token(ns_span, parse::SemanticTokenKind::Comment);
-            return Ok(None);
-        }
-        let ns_id = self.declare_namespace(parsed_namespace_id, parent_scope)?;
-        self.declare_namespaces_in_namespace(parsed_namespace_id, skip_defns);
-        Ok(Some(ns_id))
     }
 
     fn emit_semantic_token(&mut self, span: Span, kind: parse::SemanticTokenKind) {
@@ -16906,7 +16914,14 @@ impl TypedProgram {
 
         debug!(">> Pass 1 declare namespaces and run global #meta programs");
         let pass = self.trace_push(TraceKind::PassNamespaces, module_id.as_u32(), 0);
-        self.declare_namespaces_in_namespace(module_root_parsed_namespace, skip_defns);
+        let root_defns = self
+            .ast
+            .namespaces
+            .get(module_root_parsed_namespace)
+            .definitions
+            .as_slice(&self.ast.mem);
+        self.register_definitions(root_defns, module_root_parsed_namespace, skip_defns);
+        self.run_definition_metaprograms(module_root_parsed_namespace, skip_defns);
         self.trace_pop(pass);
         check_for_errors!();
 

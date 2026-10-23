@@ -78,10 +78,17 @@ ns types {
       layout.size + ptr/get-align-offset(layout.size, layout.align)
     }
     fn align(self: type-id): size { self.info().layout.align }
-    fn is-instance-of(self: type-id, parent: type-id): bool {
+    fn(inline) is-instance-of(self: type-id, parent: type-id): bool {
       self.instance-info() is :some info and info.parent == parent
     }
-    fn make(inner: u64): type-id { .{ inner } }
+    fn(inline) instance-of[parent](self: type-id): bool {
+      self.is-instance-of(id[parent])
+    }
+    fn(inline) elem-of[parent](self: type-id): ?type-id {
+      require self.instance-info() is :some info and info.parent == id[parent] else return :none
+      :some info.args.[0]
+    }
+    fn(inline) make(inner: u64): type-id { .{ inner } }
     fn spell(self: type-id): string {
       `(#type type-id/make(${self.inner}))`
     }
@@ -99,7 +106,7 @@ ns types {
       #static {
         require types/schema[self] is :enum .{ values } else crash("members: not an enum")
         let out: list[self] = list/with-capacity(values.len())
-        for m in values { out.push(enum-from-value-unchecked(m.value.to[v]())) }
+        for m in values { out.push(enum-from-value-unchecked(m.value.to[v])) }
         out.as-span()
       }
     }
@@ -1154,7 +1161,7 @@ ns array {
   }
 
   fn allocate[t, n: static size, a: allocator](alloc: a): *array[t, n] {
-    alloc.alloc-t[array[t, n]]()
+    alloc.alloc-t[array[t, n]]
   }
 
   fn memset[t, n](array: *array[t, n], value: u8) where n: static size {

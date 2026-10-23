@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /llvm-build
-COPY llvm/get_llvm.sh .
+COPY llvm/get_llvm.sh llvm/slp-vectorizer-register-vf-limit.patch ./
 RUN chmod +x get_llvm.sh
 RUN ./get_llvm.sh
 

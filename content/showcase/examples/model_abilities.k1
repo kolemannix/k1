@@ -81,7 +81,7 @@ fn main(): i32 {
 
   let sum: *summer = mem/new(.{ n = 0 })
   let join: *joiner = mem/new(.{ s = "" })
-  println(drain(sum.to-dyn[accumulator[t = int]](), [1, 2, 3]))
-  println(drain(join.to-dyn[accumulator[t = string]](), ["a", "b", "c"]))
+  println(drain(sum.to-dyn[accumulator[t = int]], [1, 2, 3]))
+  println(drain(join.to-dyn[accumulator[t = string]], ["a", "b", "c"]))
   0
 }

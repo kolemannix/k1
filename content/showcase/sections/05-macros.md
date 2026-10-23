@@ -752,7 +752,7 @@ prints a missing optional as `-`:
       cb.block("fn write-row[w: writer](self: $name, w)", fn[cb, fields]. {
         for f in fields {
           cb.line(`w.write(${meta/str-lit("${if it-index == 0 "" else " "}${f.name}=")})`)
-          if f.type-id.is-instance-of(types/id[opt]) {
+          if f.type-id.instance-of[opt] {
             cb.line(`if self.${f.name} is :some v v.print-to(w) else w.write("-")`)
           } else {
             cb.line("self.${f.name}.print-to(w)")

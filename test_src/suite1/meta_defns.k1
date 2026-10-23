@@ -2,6 +2,7 @@ ns meta_defns
 
 #meta "let n: u64 = 255"
 #meta "let x: u64 = 256"
+#if n == 255 type meta-gated = { b: bool }
 
 #meta "fn is-pow2(x: u64): bool { (x - 1) || bitwise/bit-and(x) == 0 }"
 
@@ -31,6 +32,7 @@ ns meta_defns
 
 fn(test) items-from-meta-strings() {
   let frob: frob = .{ b = false }
+  let _gated: meta-gated = .{ b = true }
 
   assert-equals(frob.get-name(), "Joe")
   assert-equals(is-pow2(n), false)

@@ -247,7 +247,7 @@ fn release-job(guard: monitor-guard[worker-pool-shared], job: *job) {
 }
 
 fn worker-fn(arg: ptr) {
-  let w = arg.ref[worker]()
+  let w = arg.ref[worker]
   current-worker = optref/make(w)
   mem/set-tmp-arena(w.scratch)
   libuv/thread_setname("worker-${w.index}".to-c-tmp())

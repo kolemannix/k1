@@ -9,4 +9,4 @@ cp examples/refchess/.k1-out/refchess examples/refchess/refchess.wasm
 python3 site/gen-data.py
 python3 site/gen-highlight.py
 content/showcase/check.sh
-hugo --source site --minify "$@"
+hugo --source site --minify --cleanDestinationDir "$@"
