@@ -14,12 +14,11 @@ fn show-to[t, w: writer](w: w, v: t, depth: size) {
       cb.line(`w.write("[")`)
       cb.line(`for v { if it-index > 0 { w.write(", ") }; show-to(w, it, depth) }`)
       cb.line(`w.write("]")`)
+    } else if types/schema[t] is :string {
+      cb.line(`w.write(meta/str-lit(v))`)
+    } else if id.impl-of[print]() is :some i and i.kind != :compiler {
+      cb.line(`v.print-to(w)`)
     } else if types/schema[t] is {
-      :bool -> cb.line(`v.print-to(w)`),
-      :int _ -> cb.line(`v.print-to(w)`),
-      :float _ -> cb.line(`v.print-to(w)`),
-      :char -> cb.line(`v.print-to(w)`),
-      :string -> cb.line(`w.write(meta/str-lit(v))`),
       :reference _ -> cb.line(`w.write("&"); show-to(w, v.*, depth)`),
       :enum _ -> cb.line(`w.write-char(':'); w.write(v.enum-name())`),
       :struct .{ fields } -> {

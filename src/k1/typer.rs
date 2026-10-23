@@ -581,7 +581,7 @@ pub struct TypedAbilitySignature {
 #[derive(Clone, Copy)]
 enum AbilityExprRole {
     Constraint,
-    Lookup(TypeId),
+    Lookup,
     Implementation(TypeId),
 }
 
@@ -2134,8 +2134,8 @@ pub enum AbilityImplKind {
     /// A blanket implementation. It's essentially a runnable prototype
     /// that can generate implementations when conditions are met
     Blanket,
-    /// An ability impl that was derived from a blanket implementation
-    DerivedFromBlanket {
+    /// A blanket implementation applied to one Self type
+    BlanketInstance {
         blanket_impl_id: AbilityImplId,
         blanket_type_args: TypeSliceId,
     },
@@ -2143,7 +2143,7 @@ pub enum AbilityImplKind {
     /// since it never needs to be called; we skip generating functions
     /// for it
     TypeParamConstraint,
-    BuiltinDerived,
+    Builtin,
 }
 
 impl AbilityImplKind {
@@ -2159,8 +2159,8 @@ impl AbilityImplKind {
         matches!(self, AbilityImplKind::TypeParamConstraint)
     }
 
-    pub fn is_builtin_derived(&self) -> bool {
-        matches!(self, AbilityImplKind::BuiltinDerived)
+    pub fn is_builtin(&self) -> bool {
+        matches!(self, AbilityImplKind::Builtin)
     }
 }
 
@@ -4129,7 +4129,7 @@ impl TypedProgram {
         self.bind_substitutions(scope_id, &subst_pairs);
 
         let impl_id = self.add_ability_impl(TypedAbilityImpl {
-            kind: AbilityImplKind::BuiltinDerived,
+            kind: AbilityImplKind::Builtin,
             blanket_type_params: MSlice::empty(),
             self_type_id,
             base_ability_id,
@@ -4167,7 +4167,7 @@ impl TypedProgram {
                     Some(FunctionAbilityContextInfo::ability_impl(
                         base_ability_id,
                         self_type_id,
-                        AbilityImplKind::BuiltinDerived,
+                        AbilityImplKind::Builtin,
                         is_default,
                     )),
                 )?
@@ -4805,6 +4805,47 @@ impl TypedProgram {
         )
     }
 
+    fn find_or_generate_ability_impl_for_signature(
+        &mut self,
+        self_type_id: TypeId,
+        signature: TypedAbilitySignature,
+        allow_self_adjust: bool,
+        scope_id: ScopeId,
+        span: Span,
+    ) -> Result<(AbilityImplHandle, SelfAdjust), MStr<MemTmp>> {
+        let found = self.find_or_generate_specialized_ability_impl_for_type(
+            self_type_id,
+            signature.specialized_ability_id,
+            allow_self_adjust,
+            scope_id,
+            span,
+        )?;
+        let impl_params = self.abilities.get(signature.specialized_ability_id).parameters;
+        let found_args = self.ability_impls.get(found.0.full_impl_id).impl_arguments;
+        for ((param, &given), &found_arg) in self
+            .mem
+            .getn(impl_params)
+            .iter()
+            .zip(self.get_type_slice(signature.impl_arguments))
+            .zip(self.get_type_slice(found_args))
+        {
+            if given == param.type_variable_id {
+                continue;
+            }
+            if let Err(msg) = self.check_types(given, found_arg, scope_id) {
+                return Err(k1_format_user!(
+                    self,
+                    "Implementation has {} = {}, but context requires it to be {}: {}",
+                    param.name,
+                    found_arg,
+                    given,
+                    msg,
+                ));
+            }
+        }
+        Ok(found)
+    }
+
     pub fn try_apply_blanket_implementation(
         &mut self,
         blanket_impl_id: AbilityImplId,
@@ -5029,7 +5070,7 @@ impl TypedProgram {
 
         let blanket_type_args = self.intern_type_slice(solutions);
         let id = self.add_ability_impl(TypedAbilityImpl {
-            kind: AbilityImplKind::DerivedFromBlanket { blanket_impl_id, blanket_type_args },
+            kind: AbilityImplKind::BlanketInstance { blanket_impl_id, blanket_type_args },
             blanket_type_params: MSlice::empty(),
             self_type_id,
             ability_id: concrete_ability_id,
@@ -5057,9 +5098,9 @@ impl TypedProgram {
         if let Some(function) = *self.mem.get_nth(imp.functions, index as usize) {
             return function;
         }
-        let AbilityImplKind::DerivedFromBlanket { blanket_impl_id, blanket_type_args } = imp.kind
+        let AbilityImplKind::BlanketInstance { blanket_impl_id, blanket_type_args } = imp.kind
         else {
-            self.ice_span(imp.span, "pending function on a non-blanket-derived impl")
+            self.ice_span(imp.span, "pending function on an impl that is not a blanket instance")
         };
         let blanket_functions = self.ability_impls.get(blanket_impl_id).functions;
         let Some(AbilityImplFunction::FunctionId(blanket_function_id)) =
@@ -6089,17 +6130,11 @@ impl TypedProgram {
                 let self_type_id = self.eval_type_expr(qcall.self_name, ctx.scope_id)?;
                 let signature = self.eval_ability_expr(
                     *self.ast.mem.get(qcall.ability_expr),
-                    AbilityExprRole::Lookup(self_type_id),
+                    AbilityExprRole::Lookup,
                     ctx.scope_id,
                 )?;
                 let (impl_handle, _) = self
-                    .find_or_generate_specialized_ability_impl_for_type(
-                        self_type_id,
-                        signature.specialized_ability_id,
-                        true,
-                        ctx.scope_id,
-                        span,
-                    )
+                    .find_or_generate_ability_impl_for_signature(self_type_id, signature, true, ctx.scope_id, span)
                     .map_err(|msg| kerr!(self, span, "{}", msg))?;
 
                 let call_ast_expr = *self.ast.exprs.get(qcall.call_expr).expect_call();
@@ -9236,6 +9271,47 @@ impl TypedProgram {
 
         // Special cases of this syntax that aren't really method calls
         if let Some(base_arg) = first_arg {
+            if fn_name == self.ast.idents.b.impl_of
+                && let Some(type_arg) = self.ast.mem.get_nth_opt(call.type_args(&self.ast.mem), 0)
+            {
+                let ability_app = match type_arg.type_expr.map(|e| self.ast.type_exprs.get(e)) {
+                    Some(ParsedTypeExpr::TypeApplication(app)) => *app,
+                    _ => kbail!(self, type_arg.span, "impl-of takes an ability"),
+                };
+                if args.len() != 1 {
+                    kbail!(self, call_span, "impl-of takes no arguments");
+                }
+                let type_id_type = self.builtin_types.type_id();
+                let base =
+                    self.eval_expr(base_arg.value, ctx.with_expected_type(Some(type_id_type)))?;
+                let lookup =
+                    self.eval_ability_expr(ability_app, AbilityExprRole::Lookup, ctx.scope_id)?;
+                let ability_arg = self.synth_int(
+                    TypedIntValue::U32(lookup.specialized_ability_id.as_u32()),
+                    call_span,
+                );
+                let lookup_impl_args = self.get_type_slice(lookup.impl_arguments);
+                let mut impl_arg_value_ids = self.tmp.new_list(lookup_impl_args.len() as u32);
+                for impl_arg in lookup_impl_args {
+                    impl_arg_value_ids.push(self.add_type_id_value(*impl_arg));
+                }
+                let span_type_id =
+                    self.instantiate_generic_type(self.builtin_types.span(), &[type_id_type]);
+                let impl_args_value_id = self.add_static_container_from_ids(
+                    StaticContainerKind::Span,
+                    span_type_id,
+                    impl_arg_value_ids.as_slice(),
+                );
+                let impl_args = self.add_static_constant_expr(impl_args_value_id, call_span);
+                let impl_of_call = self.synth_typed_call_typed_args(
+                    self.ast.idents.f.types_type_id_impl_of.with_span(call_span),
+                    &[],
+                    &[base, ability_arg, impl_args],
+                    ctx,
+                    false,
+                )?;
+                return Ok(CallResolution::OtherExpr(impl_of_call));
+            }
             if fn_name == self.ast.idents.b.to_dyn {
                 let base = self.eval_expr(base_arg.value, ctx.with_no_expected_type())?;
                 let base_type = self.exprs.get_type(base);
@@ -12273,26 +12349,23 @@ impl TypedProgram {
                         }
                         // Key the variable by each ability it implements, without ref-self coercion
                         for &ability_expr in self.ast.mem.getn(parsed_let.context_abilities) {
-                            let ability_id = self
-                                .eval_ability_expr(
-                                    ability_expr,
-                                    AbilityExprRole::Lookup(variable_type),
-                                    ctx.scope_id,
-                                )?
-                                .specialized_ability_id;
-                            if let Err(msg) = self
-                                .find_or_generate_specialized_ability_impl_for_type(
-                                    variable_type,
-                                    ability_id,
-                                    false,
-                                    ctx.scope_id,
-                                    ability_expr.span,
-                                )
-                            {
+                            let signature = self.eval_ability_expr(
+                                ability_expr,
+                                AbilityExprRole::Lookup,
+                                ctx.scope_id,
+                            )?;
+                            let ability_id = signature.specialized_ability_id;
+                            if let Err(msg) = self.find_or_generate_ability_impl_for_signature(
+                                variable_type,
+                                signature,
+                                false,
+                                ctx.scope_id,
+                                ability_expr.span,
+                            ) {
                                 let reference_would = self
-                                    .find_or_generate_specialized_ability_impl_for_type(
+                                    .find_or_generate_ability_impl_for_signature(
                                         variable_type,
-                                        ability_id,
+                                        signature,
                                         true,
                                         ctx.scope_id,
                                         ability_expr.span,
@@ -13026,6 +13099,9 @@ impl TypedProgram {
                         (Some("type-id"), "info") => {
                             Some(Builtin::Backend(BackendBuiltin::TypeInfo))
                         }
+                        (Some("type-id"), "impl-of") => {
+                            Some(Builtin::Backend(BackendBuiltin::ImplOf))
+                        }
                         (None, "make-struct") => Some(Builtin::Backend(BackendBuiltin::MakeStruct)),
                         (None, "make-either") => Some(Builtin::Backend(BackendBuiltin::MakeEither)),
                         (None, "make-reference") => {
@@ -13275,14 +13351,8 @@ impl TypedProgram {
         );
         // We just can't allow ref self here since we don't have a good way to tell the function
         // call that it will work only if we coerce this argument, we only have types at this point.
-        let impl_handle = match self.find_or_generate_specialized_ability_impl_for_type(
-            target_type,
-            signature.specialized_ability_id,
-            false,
-            scope_id,
-            span,
-        ) {
-            Ok((impl_handle, _)) => impl_handle,
+        match self.find_or_generate_ability_impl_for_signature(target_type, signature, false, scope_id, span) {
+            Ok((impl_handle, _)) => Ok(impl_handle),
             Err(reason) => kbail!(
                 self,
                 span,
@@ -13292,33 +13362,7 @@ impl TypedProgram {
                 self.abilities.get(signature.specialized_ability_id).name,
                 reason
             ),
-        };
-        let impl_params = self.abilities.get(signature.specialized_ability_id).parameters;
-        let found_impl_arguments = self.ability_impls.get(impl_handle.full_impl_id).impl_arguments;
-        for ((impl_param, constraint_arg), passed_arg) in self
-            .mem
-            .getn(impl_params)
-            .iter()
-            .zip(self.get_type_slice(signature.impl_arguments))
-            .zip(self.get_type_slice(found_impl_arguments))
-        {
-            if self.get_type_id_resolved(*constraint_arg, scope_id)
-                != self.get_type_id_resolved(*passed_arg, scope_id)
-            {
-                kbail!(
-                    self,
-                    span,
-                    "Provided type {} = {} does implement required ability {}, but the implementation parameter {} is wrong: Expected type was {} but the actual implementation uses {}",
-                    name,
-                    target_type,
-                    self.abilities.get(signature.specialized_ability_id).name,
-                    impl_param.name,
-                    *constraint_arg,
-                    *passed_arg,
-                );
-            }
         }
-        Ok(impl_handle)
     }
 
     fn check_type_constraints(
@@ -13610,10 +13654,7 @@ impl TypedProgram {
         let mut subst_pairs: SV8<TypeSubstitutionPair> = smallvec![];
         let is_lookup = match role {
             AbilityExprRole::Constraint => false,
-            AbilityExprRole::Lookup(self_type) => {
-                subst_pairs.push(spair! { ability_self_type => self_type });
-                true
-            }
+            AbilityExprRole::Lookup => true,
             AbilityExprRole::Implementation(self_type) => {
                 subst_pairs.push(spair! { ability_self_type => self_type });
                 false
@@ -13622,6 +13663,7 @@ impl TypedProgram {
         for (param, placed_arg) in ability_params.iter().zip(placed_args) {
             let Some(arg) = placed_arg else {
                 if is_lookup && param.is_impl_param {
+                    impl_arguments.push(param.type_variable_id);
                     continue;
                 }
                 kbail!(self, span, "Missing argument for ability parameter {}", param.name);
@@ -13633,11 +13675,13 @@ impl TypedProgram {
             subst_pairs.push(spair! { param.type_variable_id => arg_type });
             if param.is_ability_side_param() {
                 ability_arguments.push(arg_type)
-            } else if !is_lookup {
+            } else {
                 impl_arguments.push(arg_type)
             }
         }
-        self.check_type_args_constraints(&subst_pairs, span, scope_id)?;
+        if !is_lookup {
+            self.check_type_args_constraints(&subst_pairs, span, scope_id)?;
+        }
 
         let ability_arguments = self.intern_type_slice(ability_arguments.as_slice());
         let impl_arguments = self.intern_type_slice(impl_arguments.as_slice());
@@ -14103,7 +14147,7 @@ impl TypedProgram {
             || impl_info.is_some_and(|ii| {
                 ii.is_default
                     || ii.impl_kind.is_type_param_constraint()
-                    || ii.impl_kind.is_builtin_derived()
+                    || ii.impl_kind.is_builtin()
             });
 
         let resolvable_by_name = !is_ability_impl && !ability_kind_is_specialized;
@@ -14131,7 +14175,7 @@ impl TypedProgram {
                 continue;
             }
             if let Some(ii) = impl_info {
-                if ii.is_default || ii.impl_kind.is_builtin_derived() {
+                if ii.is_default || ii.impl_kind.is_builtin() {
                     continue;
                 }
                 kbail!(
@@ -14292,7 +14336,7 @@ impl TypedProgram {
         }
 
         let is_builtin = ast_fn.builtin.is_some()
-            || matches!(impl_info, Some(info) if info.impl_kind == AbilityImplKind::BuiltinDerived && !info.is_default);
+            || matches!(impl_info, Some(info) if info.impl_kind.is_builtin() && !info.is_default);
         let linkage = ast_fn.linkage.with_default_lib(self.namespaces.get(namespace_id).lib_name);
         if ast_fn.is_native && (is_builtin || linkage != Linkage::Standard) {
             kbail!(

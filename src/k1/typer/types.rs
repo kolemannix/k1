@@ -1079,6 +1079,7 @@ pub struct BuiltinTypes {
     pub types_layout: Option<TypeId>,
     pub types_type_schema: Option<TypeId>,
     pub types_type_info: Option<TypeId>,
+    pub types_impl_info: Option<TypeId>,
     pub types_int_kind: Option<TypeId>,
     pub types_int_value: Option<TypeId>,
     pub types_float_kind: Option<TypeId>,
@@ -1106,6 +1107,7 @@ impl BuiltinTypes {
         debug_assert!(self.types_layout.is_some());
         debug_assert!(self.types_type_schema.is_some());
         debug_assert!(self.types_type_info.is_some());
+        debug_assert!(self.types_impl_info.is_some());
         debug_assert!(self.types_int_kind.is_some());
         debug_assert!(self.types_int_value.is_some());
         debug_assert!(self.types_float_kind.is_some());
@@ -1156,6 +1158,9 @@ impl BuiltinTypes {
     }
     pub fn type_info(&self) -> TypeId {
         self.types_type_info.expect("type-info builtin missing")
+    }
+    pub fn impl_info(&self) -> TypeId {
+        self.types_impl_info.expect("impl-info builtin missing")
     }
     pub fn types_layout(&self) -> TypeId {
         self.types_layout.expect("layout builtin missing")

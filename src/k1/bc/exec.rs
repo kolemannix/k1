@@ -1079,6 +1079,19 @@ fn exec_builtin(
             let info_vm_value = vm::static_value_to_vm_value(k1, *info_value_id, vm.eval_span);
             Ok(BuiltinOutcome::Value(info_vm_value))
         }
+        BackendBuiltin::ImplOf => {
+            let self_type_id = vm::value_to_type_id(k1, args[0], vm.eval_span)?;
+            let raw_ability_id = args[1].bits() as u32;
+            let raw_impl_args: &[vm::k1_types::TypeId] =
+                unsafe { vm::value_as_span(args[2]).to_slice() };
+            let impl_info_value_id =
+                k1.impl_of_raw(self_type_id, raw_ability_id, raw_impl_args, vm.eval_span)?;
+            Ok(BuiltinOutcome::Value(vm::static_value_to_vm_value(
+                k1,
+                impl_info_value_id,
+                vm.eval_span,
+            )))
+        }
         BackendBuiltin::TestSuite => {
             let Some(suite) = k1.test_suite else {
                 kbail!(k1, vm.eval_span, "k1/test/suite exists only in test builds");

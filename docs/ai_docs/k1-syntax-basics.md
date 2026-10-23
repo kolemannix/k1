@@ -205,6 +205,7 @@ fn f[t: print and equals](x: t)   fn g[t](a: t) where t: num, t: to-string
 t: as-pair[x, bb = y]                                  // ability args bind like type args
 print/print-to(v, w)   has-secret[a = int]@(foo)/secret()   // qualified / impl-selected
 ```
+- `a[..]@(t)` may omit impl params; one it gives must match the impl's.
 - Default methods, overridable. `where` on an ability fn gates it per impl; impls
   don't restate it. Overlapping impls resolve by which one makes the call typecheck.
 - `pred` bounds: `type w[t: pred is-int]`, `ability a[out: pred is-scalar]`; the

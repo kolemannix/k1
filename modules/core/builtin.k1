@@ -67,8 +67,11 @@ ns types {
     layout: layout,
     zero-safe: bool,
   }
+  type impl-kind = either { direct, blanket, compiler }
+  type impl-info = { kind: impl-kind, args: span[{ name: string, type-id }] }
   ns for type-id {
     fn(builtin) info(self: type-id): type-info
+    fn(builtin) impl-of(self: type-id, ability-id: u32, impl-args: span[type-id]): ?impl-info
     fn name(self: type-id): string { self.info().name }
     fn schema(self: type-id): type-schema { self.info().schema }
     fn instance-info(self: type-id): ?instance-info { self.info().instance }

@@ -3620,7 +3620,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             | BackendBuiltin::MakeReference
             | BackendBuiltin::MakeArray
             | BackendBuiltin::MakeFn
-            | BackendBuiltin::MakeInstance => self.builder.build_unreachable().unwrap(),
+            | BackendBuiltin::MakeInstance
+            | BackendBuiltin::ImplOf => self.builder.build_unreachable().unwrap(),
             BackendBuiltin::CompilerMessage => self.builder.build_return(None).unwrap(),
             BackendBuiltin::ReplCheckbox => self.builder.build_return(None).unwrap(),
         };

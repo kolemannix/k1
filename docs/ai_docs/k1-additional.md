@@ -100,6 +100,11 @@ ns pre { macro make-point(name: code) { "type $name = { x: i32, y: i32 }" } }
   types (never, ZST, abstract) report size 0, align 1.
 - Schemas are sums: `:struct` (packed included; see offsets), `:reference`,
   `:either`, `:array`, `:function`, `:union`, `:int(_)`, ...
+- `id.impl-of[iterable[item = int]]()` -> `?impl-info` `{ kind, args }`: what
+  `iterable@(t)` resolves to for exactly `t`, deriving or instantiating it.
+  `kind` is `:direct`, `:blanket` or `:compiler` (derived, no impl block); `args`
+  names each impl param's type; a given impl param must match. Runs only in the
+  VM: runtime code wraps it in `#static`.
 - A bare generic name is a type: `types/id[list]` is `list[t]`; instances report it
   as parent (`types/instance-info[list[int]]`, `.instance-of[list]`; `.elem-of[list]` is
   `:some` its first arg).

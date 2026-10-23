@@ -1277,9 +1277,9 @@ impl TypedProgram {
         let kind_str = match i.kind {
             AbilityImplKind::Concrete => "concrete",
             AbilityImplKind::Blanket => "blanket",
-            AbilityImplKind::DerivedFromBlanket { .. } => "derived",
+            AbilityImplKind::BlanketInstance { .. } => "blanket_instance",
             AbilityImplKind::TypeParamConstraint => "constraint",
-            AbilityImplKind::BuiltinDerived => "builtin_derived",
+            AbilityImplKind::Builtin => "builtin",
         };
         write!(w, "{kind_str:10} ")?;
         self.display_ability_signature(w, i.signature())?;

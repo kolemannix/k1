@@ -143,6 +143,8 @@ pub(crate) struct BuiltinIdents {
     pub optref: StringId,
     pub type_schema: StringId,
     pub type_info: StringId,
+    pub impl_info: StringId,
+    pub impl_of: StringId,
     pub int_kind: StringId,
     pub int_value: StringId,
     pub float_kind: StringId,
@@ -275,6 +277,7 @@ pub(crate) struct BuiltinFunctions {
     pub test_outcome: QIdent,
     pub test_outcome_failure: QIdent,
     pub test_suite: QIdent,
+    pub types_type_id_impl_of: QIdent,
 }
 
 /// Long strings get a sampled hash: O(1) instead of hashing megabytes of
@@ -563,6 +566,8 @@ impl IdentPool {
             optref: intern!("optref"),
             type_schema: intern!("type-schema"),
             type_info: intern!("type-info"),
+            impl_info: intern!("impl-info"),
+            impl_of: intern!("impl-of"),
             int_kind: intern!("int-kind"),
             int_value: intern!("int-value"),
             float_kind: intern!("float-kind"),
@@ -735,6 +740,7 @@ impl IdentPool {
         let test_outcome_failure = make_fn!(path_core_test_outcome, intern!("failure"));
         let path_core_k1_test = intern_path!(b.core, b.k1, intern!("test"));
         let test_suite = make_fn!(path_core_k1_test, intern!("suite"));
+        let types_type_id_impl_of = make_fn!(intern_path!(b.core, b.types, b.type_id), b.impl_of);
 
         let f = BuiltinFunctions {
             list_with_capacity,
@@ -787,6 +793,7 @@ impl IdentPool {
             test_outcome,
             test_outcome_failure,
             test_suite,
+            types_type_id_impl_of,
         };
 
         Self { pool: std::cell::RefCell::new(pool), b, f }

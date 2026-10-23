@@ -155,6 +155,96 @@ impl TypedProgram {
         Ok(new_type_id)
     }
 
+    pub fn impl_of_raw(
+        &mut self,
+        self_type_id: TypeId,
+        raw_ability_id: u32,
+        raw_impl_args: &[vm::k1_types::TypeId],
+        span: Span,
+    ) -> K1Result<StaticValueId> {
+        let ability_id_ok =
+            AbilityId::from_u32(raw_ability_id).filter(|id| self.abilities.get_opt(*id).is_some());
+        let Some(ability_id) = ability_id_ok else {
+            kbail!(self, span, "impl-of: unknown ability id {}", raw_ability_id);
+        };
+        let ability = self.abilities.get(ability_id);
+        if matches!(ability.kind, TypedAbilityKind::Generic { .. }) {
+            kbail!(self, span, "impl-of: {} needs its ability arguments", ability.name);
+        }
+        let scope_id = ability.scope_id;
+        let impl_params = ability.parameters;
+        if raw_impl_args.len() != impl_params.len() as usize {
+            kbail!(
+                self,
+                span,
+                "impl-of: {} has {} impl params, got {} args",
+                ability.name,
+                impl_params.len(),
+                raw_impl_args.len()
+            );
+        }
+        if self.get_type_variable_counts(self_type_id).is_abstract()
+            || self.types.get(self_type_id).as_generic().is_some()
+        {
+            kbail!(self, span, "impl-of needs a concrete type, got {}", self_type_id);
+        }
+        let mut impl_args = self.tmp.new_list(impl_params.len());
+        for raw in raw_impl_args {
+            impl_args.push(self.type_id_from_raw(*raw, span)?);
+        }
+        let signature = TypedAbilitySignature {
+            specialized_ability_id: ability_id,
+            impl_arguments: self.intern_type_slice(impl_args.as_slice()),
+        };
+
+        let impl_info_type_id = self.builtin_types.impl_info();
+        let opt_type_id = self.synth_optional_type(impl_info_type_id);
+        let Ok((impl_handle, _)) =
+            self.find_or_generate_ability_impl_for_signature(self_type_id, signature, false, scope_id, span)
+        else {
+            return Ok(synth_static_option(&mut self.static_values, opt_type_id, None));
+        };
+        let found = self.ability_impls.get(impl_handle.full_impl_id);
+        let found_impl_args = self.get_type_slice(found.impl_arguments);
+        let kind_index = match found.kind {
+            AbilityImplKind::Concrete => 0,
+            AbilityImplKind::BlanketInstance { .. } => 1,
+            AbilityImplKind::Builtin => 2,
+            AbilityImplKind::Blanket | AbilityImplKind::TypeParamConstraint => {
+                self.ice_span(span, format!("impl-of resolved to a {:?} impl", found.kind))
+            }
+        };
+
+        // kind: impl-kind
+        let kind_type_id = self.get_struct_field(impl_info_type_id, 0).type_id;
+        let kind_member = self.types.get(kind_type_id).expect_enum().member_values;
+        let kind_value = self.mem.get_nth(kind_member, kind_index).int_value;
+        let kind_value_id = self.static_values.add(StaticValue::Enum(kind_type_id, kind_value));
+
+        // args: span[{ name: string, type-id }]
+        let args_span_type_id = self.get_struct_field(impl_info_type_id, 1).type_id;
+        let arg_struct_type_id = self.get_as_span_instance(args_span_type_id).unwrap();
+        let mut arg_value_ids = self.tmp.new_list(found_impl_args.len() as u32);
+        for (param, &arg) in self.mem.getn(impl_params).iter().zip(found_impl_args) {
+            self.register_type_metainfo(arg);
+            let name_value_id = self.static_values.add_string(param.name);
+            let type_id_value_id = self.add_type_id_value(arg);
+            arg_value_ids.push(
+                self.static_values
+                    .add_struct_from_slice(arg_struct_type_id, &[name_value_id, type_id_value_id]),
+            );
+        }
+        let args_value_id = self.add_static_container_from_ids(
+            StaticContainerKind::Span,
+            args_span_type_id,
+            arg_value_ids.as_slice(),
+        );
+        let info_value_id = self
+            .static_values
+            .add_struct_from_slice(impl_info_type_id, &[kind_value_id, args_value_id]);
+        Ok(synth_static_option(&mut self.static_values, opt_type_id, Some(info_value_id)))
+    }
+
     pub(super) fn get_type_info(&mut self, type_id: TypeId) -> StaticValueId {
         if let Some(existing) = self.type_infos.get(&type_id) {
             return *existing;

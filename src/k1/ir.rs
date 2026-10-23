@@ -393,6 +393,7 @@ crate::tag_enum! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub enum BackendBuiltin {
         TypeInfo,
+        ImplOf,
         TestSuite,
         MakeStruct,
         MakeEither,
@@ -416,6 +417,7 @@ impl BackendBuiltin {
     pub fn kind_name(&self) -> &'static str {
         match self {
             BackendBuiltin::TypeInfo => "type_info",
+            BackendBuiltin::ImplOf => "impl_of",
             BackendBuiltin::TestSuite => "test_suite",
             BackendBuiltin::MakeStruct => "make_struct",
             BackendBuiltin::MakeEither => "make_either",

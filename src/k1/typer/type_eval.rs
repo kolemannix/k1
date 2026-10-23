@@ -313,6 +313,8 @@ impl TypedProgram {
                 self.builtin_types.types_type_schema = Some(type_id);
             } else if name == self.ast.idents.b.type_info {
                 self.builtin_types.types_type_info = Some(type_id);
+            } else if name == self.ast.idents.b.impl_info {
+                self.builtin_types.types_impl_info = Some(type_id);
             } else if name == self.ast.idents.b.int_kind {
                 self.builtin_types.types_int_kind = Some(type_id);
             } else if name == self.ast.idents.b.int_value {

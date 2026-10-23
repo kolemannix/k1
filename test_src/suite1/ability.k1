@@ -57,6 +57,7 @@ fn(test) qualified-call-picks-impl-by-self-type() {
   assert-equals(has-secret-gen[a = int]@(foo)/secret(), 10)
   assert-equals(has-secret-gen[a = int]@(bar)/secret(), 20)
   assert-equals(has-secret-int@(foo)/secret(), 30)
+  assert(test-compile(iterable[item = u8]@(list[int])/iterator(list/empty[int]())) is :some _)
 }
 
 fn(test) generic-bound-on-nested-ns-ability() {
@@ -68,4 +69,26 @@ fn(test) named-args-use-ability-declaration() {
   assert-equals(scaled@(int)/scaled(self = 3, by = 2), 6)
   assert-equals(scale-generic(4), 8)
   assert(test-compile(scaled@(int)/scaled(self = 3, factor = 2)) is :some _)
+}
+
+fn(test) impl-of-reports-resolution() {
+  #static {
+    assert(types/id[int].impl-of[print]() is :some i and i.kind == :direct)
+    assert(types/id[foo].impl-of[print]() is :some i and i.kind == :compiler)
+    require types/id[list[int]].impl-of[iterable]() is :some found and found.kind == :blanket
+      else crash("list iterable")
+    assert-equals(found.args.[0].name, "item")
+    assert-equals(found.args.[0].type-id, types/id[int])
+    assert-equals(found.args.[1].name, "i")
+    assert(types/id[*int].impl-of[add]() is :none)
+    assert(types/id[foo].impl-of[has-secret-gen[a = int]]() is :some _)
+    assert(types/id[foo].impl-of[has-secret-gen[a = bool]]() is :none)
+    assert(types/id[list[int]].impl-of[iterable[item = int]]() is :some _)
+    assert(types/id[list[int]].impl-of[iterable[item = u8]]() is :none)
+    let scalable = 0
+    for t in [types/id[int], types/id[string], types/id[foo]] {
+      if t.impl-of[scaled]() is :some _ { scalable = scalable + 1 }
+    }
+    assert-equals(scalable, 1)
+  }
 }
