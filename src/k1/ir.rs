@@ -42,6 +42,7 @@ pub struct IrDebugVariableInfo {
 
 nz_u32_id!(IrCallId);
 const WORD_SIZED_INT: ScalarType = ScalarType::I64;
+pub const EMPTY_PLACE_ADDR: u32 = Layout::ZERO_SIZED.align;
 pub struct ProgramIr {
     pub mem: kmem::Mem<ProgramIr>,
     units: VPool<IrUnit, IrUnitIndex>,
@@ -2063,8 +2064,8 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
         }
         TypedExpr::AddressOf(address_of) => {
             let (place, _frozen) = compile_expr_place(b, address_of.target_expr)?;
-
-            let stored = store_scalar_if_dst(b, dst, place);
+            let addr = get_place_address(place);
+            let stored = store_scalar_if_dst(b, dst, addr);
             Ok(stored)
         }
         TypedExpr::Deref(_) => {
@@ -2723,7 +2724,7 @@ fn compile_expr_place(b: &mut Builder, expr: TypedExprId) -> K1Result<(Value, bo
             let struct_pt = b.get_physical_type(struct_type)?;
             let (base_ptr, frozen) = compile_expr_place(b, field_access.base_struct)?;
             if struct_pt.is_empty() {
-                return Ok((Value::Empty, frozen));
+                return Ok((base_ptr, frozen));
             }
             let struct_pt_id = struct_pt.expect_agg();
             let field_ptr = b.push_struct_offset(
@@ -2737,9 +2738,13 @@ fn compile_expr_place(b: &mut Builder, expr: TypedExprId) -> K1Result<(Value, bo
         TypedExpr::ArrayGetElement(array_get) => {
             let (array_base, frozen) = compile_expr_place(b, array_get.base_array)?;
             let array_type = b.k1.exprs.get_type(array_get.base_array);
-            let array_agg_id = b.get_physical_type(array_type)?.expect_agg();
-            let (element_pt, _len) = b.k1.agg_types.get(array_agg_id).agg_type.expect_array();
+            let array_pt = b.get_physical_type(array_type)?;
             let index = compile_expr(b, None, array_get.index)?;
+            if array_pt.is_empty() {
+                return Ok((get_place_address(array_base), frozen));
+            }
+            let (element_pt, _len) =
+                b.k1.agg_types.get(array_pt.expect_agg()).agg_type.expect_array();
             let element_ptr = b.push_inst(
                 Inst::ArrayOffset { element_t: element_pt, base: array_base, element_index: index },
                 IrComment::ArrayGetOffsetPlace,
@@ -2790,6 +2795,13 @@ fn compile_expr_place(b: &mut Builder, expr: TypedExprId) -> K1Result<(Value, bo
             debug_assert!(b.get_value_kind(e).is_storage() || b.get_value_kind(e).is_empty());
             Ok((e, true))
         }
+    }
+}
+
+fn get_place_address(place: Value) -> Value {
+    match place {
+        Value::Empty => Value::imm32(ScalarType::Pointer, EMPTY_PLACE_ADDR),
+        place => place,
     }
 }
 

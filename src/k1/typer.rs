@@ -10188,6 +10188,13 @@ impl TypedProgram {
                 Some(_s) => Ok(()),
             },
             Type::Enum(_e) => Ok(()),
+            _ if parsed_variant.ty.is_none() && !self.is_type_free_of_holes(provided_type) => {
+                Err(kerr!(
+                    self,
+                    span,
+                    "Could not infer sum type from context; try supplying the name or providing a type ascription"
+                ))
+            }
             _ => Err(kerr!(self, span, "Not a sum or enum type: {}", provided_type)),
         }?;
 
@@ -10943,41 +10950,18 @@ impl TypedProgram {
                     let is_method_receiver = is_method && param_index == receiver_index;
                     let checked_expr = match *maybe_typed_expr {
                         None => self.ice_span(span, "Unresolved context argument"),
-                        Some(MaybeTypedExpr::Typed(typed)) => match self.check_and_coerce_expr(
+                        Some(MaybeTypedExpr::Typed(typed)) => self.check_and_coerce_expr(
                             param.type_id,
                             typed,
                             ctx.scope_id,
                             is_method_receiver,
-                        ) {
-                            Ok(checked_coerced) => checked_coerced,
-                            Err(e) => {
-                                kbail!(
-                                    self,
-                                    self.exprs.get_span(typed),
-                                    "{}\nOccurred in pre-typed call parameter '{}.{}'",
-                                    e.message,
-                                    &fn_call.name,
-                                    self.get_param_name(declaration, param_index),
-                                );
-                            }
-                        },
-                        Some(MaybeTypedExpr::Parsed(parsed)) => self
-                            .eval_expr_with_coercion(
-                                parsed,
-                                ctx.with_expected_type(Some(param.type_id))
-                                    .with_is_method_receiver(is_method_receiver),
-                                true,
-                            )
-                            .map_err(|err| {
-                                kerr!(
-                                    self,
-                                    err.span,
-                                    "{}\nOccurred in call parameter '{}.{}'",
-                                    err.message,
-                                    &fn_call.name,
-                                    self.get_param_name(declaration, param_index),
-                                )
-                            })?,
+                        )?,
+                        Some(MaybeTypedExpr::Parsed(parsed)) => self.eval_expr_with_coercion(
+                            parsed,
+                            ctx.with_expected_type(Some(param.type_id))
+                                .with_is_method_receiver(is_method_receiver),
+                            true,
+                        )?,
                     };
                     typechecked_args.push(checked_expr);
                 }
@@ -11158,17 +11142,7 @@ impl TypedProgram {
                                         ctx.with_expected_type(Some(param.type_id))
                                             .with_is_method_receiver(is_method_receiver),
                                         true,
-                                    )
-                                    .map_err(|err| {
-                                        kerr!(
-                                            self,
-                                            err.span,
-                                            "Error in parameter '{}' in call to '{}'\n{}",
-                                            self.get_param_name(declaration, param_index),
-                                            &fn_call.name,
-                                            err.message
-                                        )
-                                    })?,
+                                    )?,
                             },
                         };
                         typechecked_args.push(expr);

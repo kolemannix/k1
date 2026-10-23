@@ -9,6 +9,8 @@ fn next-index(i: int): int {
 
 type packed-holder = packed { tag: u8, values: array[u16, 3] }
 
+let UNITS: array[{}, 3] = [{}, {}, {}]
+
 fn takes-three(a: array[int, 3]) {
   assert-equals(a.[0] + a.[1] + a.[2], 6)
 }
@@ -40,13 +42,26 @@ fn(test) indexing-evaluates-index-once() {
   p.* = 44
   let ph: packed-holder = .{ tag = 1, values = [1, 2, 3] }
   ph.values.[next-index(1)] = 22
+  let units: array[{}, 3] = [{}, {}, {}]
+  units.[next-index(1)] = {}
   assert-equals(mk-arr().[next-index(2)], 9)
   assert-equals(at-three(mk-arr(), next-index(0)), 7)
-  assert-equals(INDEX_EVALS, 6)
+  assert-equals(INDEX_EVALS, 7)
   assert-equals(arr.[2] + arr.[3], 77)
   assert-equals(ph.values.[1], 22)
   assert(test-compile(arr.[4]).is-some())
   assert(test-compile(arr.[-1]).is-some())
+}
+
+fn(test) zero-sized-element-addresses() {
+  let units: array[{}, 3] = [{}, {}, {}]
+  let n = 0
+  for units.& { n = n + 1 }
+  #for UNITS { n = n + 1 }
+  assert-equals(n, 6)
+  assert(units.[1].&.as[ptr] == units.&.as[ptr])
+  let heap = array/allocate[{}, 3, _](mem/tmp())
+  assert(heap.[1].&.as[ptr] == heap.as[ptr])
 }
 
 fn(test) print-struct-with-array-field() {
@@ -59,5 +74,12 @@ fn(test) checks-bounds() {
   k1/test/expect-failure("Index out of bounds: 44 >= 10")
   let array: array[f32, 10] = .0
   let x = 44
+  let _ = array.[x]
+}
+
+fn(test) checks-bounds-of-zero-length() {
+  k1/test/expect-failure("Index out of bounds: 0 >= 0")
+  let array: array[int, 0] = []
+  let x = 0
   let _ = array.[x]
 }

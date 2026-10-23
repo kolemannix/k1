@@ -890,6 +890,14 @@ impl TypedProgram {
         match self.static_values.get(value_id) {
             StaticValue::LinearContainer(cont) => Some(cont.len()),
             StaticValue::RawContainer(raw) => Some(raw.len()),
+            StaticValue::Zero(type_id) | StaticValue::Empty(type_id) => {
+                match self.types.get(*type_id) {
+                    Type::Array(array) => {
+                        Some(self.get_concrete_count_of_array(array.size_type)? as usize)
+                    }
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }
@@ -906,6 +914,9 @@ impl TypedProgram {
             StaticValue::RawContainer(raw) => self.decode_raw_element(&raw, index),
             StaticValue::Zero(type_id) => {
                 StaticValue::Zero(self.get_linear_container_element(type_id).unwrap())
+            }
+            StaticValue::Empty(type_id) => {
+                StaticValue::Empty(self.get_linear_container_element(type_id).unwrap())
             }
             _ => unreachable!(),
         }

@@ -13,6 +13,8 @@ let ARR: array[i32, 4] = {
   a
 }
 
+let ZEROS: array[int, 3] = .0
+
 let FLOATS: span[f64] = {
   let l = list/with-capacity[f64](3)
   l.push(1.5)
@@ -84,7 +86,8 @@ fn(test) static-for-over-baked-span() {
   #for BYTES {
     total = total + it.widen[int]
   }
-  assert-equals(total, 33586)
+  #for ZEROS { total = total + it + 1 }
+  assert-equals(total, 33589)
 }
 
 fn(test) runtime-writes-to-mutable-globals() {

@@ -320,8 +320,7 @@ back as a string:
 ```
 
 ```text
-Error in parameter 'b' in call to 'mul'
-Expected matrix[static[i64, 2]] but got matrix[static[i64, 3]]: Param 'n' is incorrect: Different static values of same type family: 2 vs 3
+Expected *matrix[static[i64, 2]] but got *matrix[static[i64, 3]]
 ```
 
 `#for` runs its list in the VM and stamps out the body once per element:

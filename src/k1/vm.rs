@@ -1546,7 +1546,9 @@ const MIN_VALID_PTR_HEUR: usize = 0x10000; // 64 KiB
 #[track_caller]
 fn sanity_check_ptr(ptr: *const u8) {
     debug_assert!(
-        ptr.addr() == 0 || ptr.addr() >= MIN_VALID_PTR_HEUR,
+        ptr.addr() == 0
+            || ptr.addr() == ir::EMPTY_PLACE_ADDR as usize
+            || ptr.addr() >= MIN_VALID_PTR_HEUR,
         "Probably not a pointer: {}",
         ptr.addr()
     );

@@ -74,6 +74,7 @@ fn(test) schema-and-instance-reflection() {
     and fields.[1].name == "b"
     and fields.[1].offset == 0
     else crash("")
+  require schema[{ a: {}, b: {} }] is :struct .{ fields } and fields.[1].offset == 0 else crash("")
 
   require types/instance-info[list[int]] is :some .{ parent, args }
     and parent == types/id[list]

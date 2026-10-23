@@ -2330,13 +2330,17 @@ impl TypedProgram {
                         PhysicalTypeResult::Infinite => PhysicalTypeResult::No,
                         PhysicalTypeResult::Yes(element_pt) => {
                             let elem_layout = self.get_pt_layout(element_pt);
+                            let layout = elem_layout.array_me(len as usize);
+                            if layout.size == 0 {
+                                return PhysicalTypeResult::Yes(PhysicalType::EMPTY);
+                            }
                             let natural_align = self.get_pt_natural_align(element_pt);
                             let misaligned_fields = self.pt_has_misaligned_fields(element_pt)
                                 || (len > 1 && !elem_layout.stride().is_multiple_of(natural_align));
                             let record = AggregateTypeRecord {
                                 agg_type: AggType::Array { element_pt, len: len as u32 },
                                 origin_type_id: type_id,
-                                layout: elem_layout.array_me(len as usize),
+                                layout,
                                 natural_align,
                                 has_misaligned_fields: misaligned_fields,
                             };

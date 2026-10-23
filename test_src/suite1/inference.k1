@@ -66,6 +66,8 @@ fn(test) infers-type-args() {
   assert-equals(with-never, :none)
 
   assert-equals(get(:some 3), 3)
+  assert-equals(combine(:none, some(2)), :none)
+  assert(test-compile(identity(:some 3)).!.starts-with("Could not infer sum type"))
   assert-equals(identity-result(fn x. :ok(x + 1)), :ok 2)
 
   .{}

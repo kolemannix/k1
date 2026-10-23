@@ -76,8 +76,7 @@ fn llvm_scalar_constant<'ctx>(
         ScalarType::F64 => ctx.f64_type(),
         ScalarType::I8 | ScalarType::I16 | ScalarType::I32 | ScalarType::I64 => return int.into(),
         ScalarType::Pointer => {
-            assert_eq!(bits, 0, "non-zero Pointer constant in codegen_llvm");
-            return ctx.ptr_type(AddressSpace::default()).const_zero().into();
+            return int.const_to_pointer(ctx.ptr_type(AddressSpace::default())).into();
         }
     };
     unsafe {
@@ -931,6 +930,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             roots.push(id);
         }
         let reachable = ir::compile_reachable(k1, roots)?;
+        //nocommit I didn't know we did this; is this call necessary? Is it because codegens now
+        //only have a read-only typer? Walking **every** type is definitely going to be a bit
+        //wasteful
         k1.compute_all_physical_types();
         Ok(reachable)
     }

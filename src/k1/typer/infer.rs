@@ -33,10 +33,6 @@ pub(crate) struct InferArgStash<'a> {
 }
 
 pub(crate) enum InferenceFailure {
-    ArgEval {
-        error: K1Message,
-        expected_type: TypeId,
-    },
     Mismatch {
         expected: TypeId,
         actual: TypeId,
@@ -49,7 +45,7 @@ pub(crate) enum InferenceFailure {
         solutions: MSlice<TypeSubstitutionPair, MemTmp>,
         span: Span,
     },
-    Constraint(K1Message),
+    Error(K1Message),
 }
 
 impl TypedProgram {
@@ -190,7 +186,8 @@ impl TypedProgram {
         let slots_are_final = must_solve_params.len() == all_type_params.len();
 
         // Used for the error message, mainly
-        let mut argument_types: SmallVec<[TypeId; 8]> = smallvec![];
+        let mut arguments: SV8<(TypeId, TypeId)> = smallvec![];
+        let mut deferred_variant_errors: SV4<(K1Message, TypeId)> = smallvec![];
         let mut first_mismatch: Option<InferenceFailure> = None;
         // The heart of the inference process:
         // - For each pair of (<actual type> <expected type>), we 'pattern match' on the types
@@ -257,29 +254,19 @@ impl TypedProgram {
                             // re-evaluates it concretely and reports the real error if it
                             // is genuinely mis-written. But a failure against a concrete
                             // expected type is still a real error right now
-                            let should_skip = match self
-                                .ast
-                                .exprs
-                                .get(self.ast.exprs.skip_type_hint(*parsed_expr))
-                            {
-                                ParsedExpr::Lambda(_) | ParsedExpr::Variant(_) => {
-                                    !expected_is_concrete
+                            match self.ast.exprs.get(self.ast.exprs.skip_type_hint(*parsed_expr)) {
+                                ParsedExpr::Lambda(_) if !expected_is_concrete => continue,
+                                ParsedExpr::Variant(_) if !expected_is_concrete => {
+                                    deferred_variant_errors.push((e, *gen_param));
+                                    continue;
                                 }
-                                _ => false,
-                            };
-                            if should_skip {
-                                continue;
-                            } else {
-                                return Err(InferenceFailure::ArgEval {
-                                    error: e,
-                                    expected_type: expected_type_so_far,
-                                });
+                                _ => return Err(InferenceFailure::Error(e)),
                             }
                         }
                     }
                 }
             };
-            argument_types.push(argument_type);
+            arguments.push((argument_type, *gen_param));
             debug!(
                 "[infer {infer_depth}] unify {} =:= {}",
                 self.type_id_to_string(argument_type),
@@ -315,7 +302,7 @@ impl TypedProgram {
                     scope_id,
                     argument_span,
                 )
-                .map_err(InferenceFailure::Constraint)?;
+                .map_err(InferenceFailure::Error)?;
             }
 
             if let Some((parsed_expr, expr_id, arg_scope_id)) = stash_candidate {
@@ -357,6 +344,12 @@ impl TypedProgram {
             if let Some(mismatch) = first_mismatch {
                 return Err(mismatch);
             }
+            for (error, gen_param) in deferred_variant_errors {
+                let expected_type = self.get_expected_type_so_far(gen_param, frame_start);
+                if !self.is_type_free_of_holes(expected_type) {
+                    return Err(InferenceFailure::Error(error));
+                }
+            }
             let mut solved_pairs: List<TypeSubstitutionPair, MemTmp> =
                 self.tmp.new_list(self.ictx().slots.len() as u32);
             for s in &self.ictx().slots {
@@ -364,14 +357,9 @@ impl TypedProgram {
                     solved_pairs.push(spair! { s.param_type => sol });
                 }
             }
-            let mut arguments: List<(TypeId, TypeId), MemTmp> =
-                self.tmp.new_list(argument_types.len() as u32);
-            for (passed_type, pair) in argument_types.iter().zip(inference_pairs.iter()) {
-                arguments.push((*passed_type, pair.param_type));
-            }
             return Err(InferenceFailure::Unsolved {
                 params: unsolved_params.to_slice(),
-                arguments: arguments.to_slice(),
+                arguments: self.tmp.pushn(&arguments),
                 solutions: solved_pairs.to_slice(),
                 span,
             });
@@ -382,13 +370,6 @@ impl TypedProgram {
 
     pub(crate) fn render_inference_failure(&self, failure: InferenceFailure) -> K1Message {
         match failure {
-            InferenceFailure::ArgEval { error, expected_type } => kerr!(
-                self,
-                error.span,
-                "{}\nOccurred while trying to determine type of argument for inference using expected type: {}",
-                error.message,
-                expected_type
-            ),
             InferenceFailure::Mismatch { expected, actual, reason, span } => kerr!(
                 self,
                 span,
@@ -400,7 +381,7 @@ impl TypedProgram {
             InferenceFailure::Unsolved { params, arguments, solutions, span } => kerr!(
                 self,
                 span,
-                "Could not solve for {} given arguments:\n{}\nSolutions:{}",
+                "Could not solve for {} given arguments:\n{}\nSolutions: {}",
                 self.tmp
                     .getn(params)
                     .iter()
@@ -421,7 +402,7 @@ impl TypedProgram {
                     .join("\n"),
                 self.pretty_print_type_substitutions(self.tmp.getn(solutions), ", ")
             ),
-            InferenceFailure::Constraint(error) => error,
+            InferenceFailure::Error(error) => error,
         }
     }
 
