@@ -65,7 +65,9 @@ and `some t` need `name: t`.
   `.{ x = 1, y }` (shorthand from a local). Bare `{` in expr position is a block.
   `base | .{ a = 2 }` copies `base` with fields replaced (base evaluates first).
 - `type p = ...` is nominal (struct, `either`, `opaque`, an instance like `pr[int, bool]`);
-  `type(alias) n = t` is not.
+  `type(alias) n = t` is not. A nominal equals only itself. It passes as its
+  structural type by value (arg/let/return coercion), never behind `*t`, in type
+  args or fn params; structural to nominal is a literal typed by the nominal, or `.as`.
 - Bare sigil literals infer from the expected type; a type path written flush
   before the sigil nominates: `.0`/`t.0` (zero), `.{ }`/`t.{ }`, `:v`/`t:v`/
   `opt[int]:some 42` (type args go on the type, never after the variant).
@@ -91,9 +93,12 @@ and `some t` need `name: t`.
 - `x.widen[i64]` lossless (implicit at arg/let/return coercions), `x.trunc[u8]`
   modular, `.signed()`/`.unsigned()` same-width flip. zext:
   `x.unsigned().widen[u64]`; sext: `x.widen[i64].unsigned()`.
-- `.as[t]`: int<->float, and total views behind references (`*t` -> `ptr`,
-  `*big` -> `*prefix-struct`). Claiming views (`*u8` -> `*bool`, `*u32` -> `*enum`,
-  `ptr` -> `*t`) are `.narrow()`. Both take the target from the expected type:
+- `.as[t]`: int<->float, total views behind references (`*t` -> `ptr`,
+  `*big` -> `*prefix-struct`), and same-size structs, sums and enums by value
+  (nominal <-> structural, names ignored; struct fields pair by offset through
+  nested structs, sum variants by tag). Claiming views
+  (`*u8` -> `*bool`, `*u32` -> `*enum`, `ptr` -> `*t`, an enum to one missing some
+  of its tags) are `.narrow()`. Both take the target from the expected type:
   `let r: *f32 = u.&.as()`.
 - `c.as-u8()` (char), `b.as-u8()` (bool), `mem/bitcast[a, b](v)` same-size bits.
 - ptr: `to-int() to-uint() to-size()`, `n.to-ptr()`, `p.ref[t]` (null-checked in

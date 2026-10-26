@@ -785,6 +785,10 @@ impl Type {
         !matches!(self, Type::Generic(_) | Type::LambdaObject(_))
     }
 
+    pub fn is_nominal_kind(&self) -> bool {
+        matches!(self, Type::Struct(_) | Type::Sum(_) | Type::Enum(_) | Type::Opaque(_))
+    }
+
     pub fn kind_name(&self) -> &'static str {
         match self {
             Type::Char => "char",

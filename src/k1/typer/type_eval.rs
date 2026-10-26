@@ -192,32 +192,13 @@ impl TypedProgram {
 
         // not an alias, so only allow named struct or sum or builtin
         // TODO: revisit this? why can't we have nominal integer types?
-        if !is_alias && builtin_value.is_none() {
-            match self.types.get(rhs_type_id) {
-                Type::Char
-                | Type::Bool
-                | Type::Never
-                | Type::Pointer
-                | Type::Integer(_)
-                | Type::Float(_) => {
-                    kbail!(
-                        self,
-                        parsed_type_defn.name_span,
-                        "Non-alias type definition must be a struct or sum; not a '{}'. Perhaps you intended to create an alias `type(alias) <name> = <type>`",
-                        rhs_type_id
-                    );
-                }
-                // Allowed nominal types
-                Type::Struct(_) | Type::Sum(_) | Type::Enum(_) | Type::Opaque(_) => {}
-                _other => {
-                    kbail!(
-                        self,
-                        parsed_type_defn.name_span,
-                        "Non-alias type definition must be a struct or either or opaque or builtin; not a '{}'. Perhaps you meant to create an alias `type(alias) <name> = <type>`",
-                        rhs_type_id
-                    );
-                }
-            };
+        if !is_alias && builtin_value.is_none() && !self.types.get(rhs_type_id).is_nominal_kind() {
+            kbail!(
+                self,
+                parsed_type_defn.name_span,
+                "Non-alias type definition must be a struct, either or opaque; not a '{}'. Perhaps you meant to create an alias `type(alias) <name> = <type>`",
+                rhs_type_id
+            );
         }
 
         let found_namespace_id =

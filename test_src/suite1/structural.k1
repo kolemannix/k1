@@ -2,8 +2,11 @@ ns structural
 
 type handle = { index: size }
 type handle2 = { index: size }
+type tone = either(u8) { low, high }
 
-fn takes-structural(_s: { index: size}) {}
+fn takes-structural(s: { index: size }): size { s.index }
+fn takes-structural-ref(_s: *{ index: size }) {}
+fn takes-tone(t: either(u8) { low, high }): bool { t is :high }
 
 fn get-nominal(_h: handle): string { "mock" }
 
@@ -12,7 +15,9 @@ fn(test) structural-vs-nominal-args() {
   let h2: handle2 = .{ index = 10 }
 
   takes-structural(handle-anon)
-  assert(test-compile(takes-structural(h2)).is-none())
+  assert-equals(takes-structural(h2), 10)
+  assert(test-compile(takes-structural-ref(h2.&)).is-some())
+  assert(takes-tone(tone:high))
   get-nominal(.{ index = 10 })
   assert(test-compile(get-nominal(handle-anon)).is-some())
   assert(test-compile(get-nominal(h2)).is-some())

@@ -11,11 +11,14 @@ type prefix-last-view = { lead: u64, inner: inner-solo }
 type prefix-mid = { inner: inner-pair, tail: u64 }
 type prefix-mid-view = { inner: inner-solo, tail: u64 }
 type abc = either(u32) { a, b, c }
+type res = either { ok(u32), bad }
 type base-part = { tag: u32, len: u32 }
 type wrapper = { base: base-part, extra: u64 }
 type op-big = opaque[16, 8]
 type op-small = opaque[8, 8]
 type op-strict = opaque[8, 16]
+type plain-pair = { x: u32, y: u8 }
+type packed-pair = packed { x: u32, y: u8 }
 
 type(alias) fnp-takes-base = *fn(*base-part) -> u32
 type(alias) fnp-takes-wrapper = *fn(*wrapper) -> u32
@@ -59,7 +62,29 @@ fn(test) struct-prefix-views() {
   let plv: *prefix-last-view = pl.&.as()
   assert-equals((plv.*).inner.x, 6)
   let pm: prefix-mid = .{ inner = .{ x = 8, y = 9 }, tail = 10 }
-  assert(test-compile(pm.&.as[*prefix-mid-view]) is :some _)
+  let pmv: *prefix-mid-view = pm.&.as()
+  assert-equals((pmv.*).tail, 10)
+  let padded: { t: u8, inner: { a: u8, b: u64 } } = .{ t = 1, inner = .{ a = 7, b = 2 } }
+  assert(test-compile(padded.&.as[*{ t: u8, inner: { a: u8 } }]) is :some _)
+  let pp: plain-pair = .{ x = 1, y = 2 }
+  let ppv: *packed-pair = pp.&.as()
+  assert-equals((ppv.*).y, 2)
+  assert(test-compile(ppv.as[*plain-pair]) is :some _)
+}
+
+fn(test) sum-and-enum-views() {
+  let r: res = :ok 3
+  let ra: either { ok(u32), bad } = r.as()
+  assert(ra is :ok 3)
+  let o: ?inner-solo = :some .{ x = 4 }
+  let oa: ?{ x: u32 } = o.as()
+  assert-equals(oa.!.x, 4)
+  let e: abc = :b
+  let ea: either(u32) { a, b, c } = e.as()
+  assert(ea is :b)
+  assert(test-compile(e.as[either(u32) { a, b }]) is :some _)
+  let eab: either(u32) { a, b } = e.narrow()
+  assert(eab is :b)
 }
 
 fn(test) cast-struct-holding-refs() {
@@ -85,8 +110,8 @@ fn(test) narrow-opaque-pointers() {
   let arr: array[u64, 2] = [1, 2]
   let opb: *op-big = arr.&.as[ptr].narrow()
   let ops: *op-small = opb.narrow()
-  assert(test-compile(ops.narrow[*op-big]) is :some _)
-  assert(test-compile(ops.narrow[*op-strict]) is :some _)
+  assert(test-compile(ops.narrow[*op-big]) is :none)
+  assert(test-compile(ops.narrow[*op-strict]) is :none)
 }
 
 fn(test) fn-pointer-param-casts() {

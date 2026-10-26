@@ -602,9 +602,6 @@ It currently runs directly off the typed tree
 - [x] Fix context params when combined with generics
 - [x] string interpolation
 - [x] typeOf(<anyexpr>)
-- [x] Remove coercion from the language (only dereference is left)
-- [x] Rework Opaques
-  - [x] Just use structs with private fields
 - [x] Working with references push, specifically struct and either references
   - [x] A nice syntax for `referenceSet`
   - [x] New assignment operator, not `=` (`<-`)

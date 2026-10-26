@@ -482,28 +482,6 @@ impl EvalExprContext {
     }
 }
 
-/// How the target's bytes relate to the source's: the view covers exactly the source's bytes,
-/// reads a leading part of them, or claims bytes past the end of them
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ViewExtent {
-    Exact,
-    ReadsPrefix,
-    ReadsBeyond,
-}
-
-/// `total`: every bit pattern of the source is valid in the target; a non-total view makes
-/// a claim and must be spelled `.narrow`
-#[derive(Debug, Clone, Copy)]
-struct CastView {
-    total: bool,
-    extent: ViewExtent,
-}
-
-impl CastView {
-    const TOTAL: CastView = CastView { total: true, extent: ViewExtent::Exact };
-    const CLAIMS: CastView = CastView { total: false, extent: ViewExtent::Exact };
-}
-
 #[derive(Debug, Clone, Copy)]
 enum MaybeTypedExpr {
     Parsed(ParsedExprId),
@@ -3615,6 +3593,21 @@ impl TypedProgram {
             }
         }
 
+        // Nominal to structural by value
+        if self.get_defn_info(actual_type_id).is_some()
+            && self.get_defn_info(expected).is_none()
+            && self.type_variable_counts.get(expected).inference_hole_count == 0
+        {
+            let actual_structural_type = *self.types.get(actual_type_id);
+            if actual_structural_type.is_nominal_kind() {
+                let structural = self.add_type(actual_structural_type);
+                if self.check_types(expected, structural, scope_id).is_ok() {
+                    let cast = self.synth_cast(expr, expected, CastType::Reinterpret, None);
+                    return CheckExprTypeResult::Coerce(cast, "nominal_to_structural");
+                }
+            }
+        }
+
         // Auto-deref: We only do this if the expected type is not a reference at all. Meaning,
         // if your expected type is T*, and you pass a T**, you need to de-reference that yourself.
         // This rule won't help you or do anything for nested references
@@ -3768,10 +3761,14 @@ impl TypedProgram {
 
         match (self.types.get(expected), self.types.get(actual)) {
             (Type::InferenceHole(_), _) | (_, Type::InferenceHole(_)) => Ok(()),
+            (Type::Struct(_), Type::Struct(_)) | (Type::Sum(_), Type::Sum(_))
+                if !same_generic_instance
+                    && (self.get_defn_info(expected).is_some()
+                        || self.get_defn_info(actual).is_some()) =>
+            {
+                Err(k1_format_user!(self, "Expected {} but got {}", expected, actual))
+            }
             (Type::Struct(s1), Type::Struct(s2)) => {
-                if !same_generic_instance && self.get_defn_info(expected).is_some() {
-                    return Err(k1_format_user!(self, "Expected {} but got {}", expected, actual));
-                }
                 if s1.record_kind != s2.record_kind {
                     return Err(k1_format_user!(
                         self,
@@ -3816,9 +3813,7 @@ impl TypedProgram {
                 };
                 let variants1 = self.mem.getn(sum1.variants);
                 let variants2 = self.mem.getn(sum2.variants);
-                if (!same_generic_instance && self.get_defn_info(expected).is_some())
-                    || variants1.len() != variants2.len()
-                {
+                if variants1.len() != variants2.len() {
                     return mismatch();
                 }
                 for (v1, v2) in variants1.iter().zip(variants2) {
@@ -7215,8 +7210,7 @@ impl TypedProgram {
                 )),
             },
             _ => {
-                let view = self.check_interpret_cast(base_expr_type, target_type, span, 0)?;
-                if view.total {
+                if self.check_interpret_cast(base_expr_type, target_type, span, 0)? {
                     Ok(CastType::Reinterpret)
                 } else {
                     Err(kerr!(
@@ -7335,115 +7329,136 @@ impl TypedProgram {
         Ok(self.synth_cast(base_expr, target_type, cast_type, Some(span)))
     }
 
-    /// Checks if from_type can validly be viewed as to_type with zero operations applied.
-    /// `total` means every bit pattern of the source is valid in the target; otherwise the view
-    /// makes a claim about the source bits (only 0 and 1 for int to bool) and is spelled `.narrow`.
-    /// A non-Exact extent changes the size, so it is only meaningful behind a reference; depth
-    /// counts the references walked through and is used to reject non-exact extents at depth 0
     fn check_interpret_cast(
         &mut self,
         from_type: TypeId,
         to_type: TypeId,
         span: Span,
         depth: u32,
-    ) -> K1Result<CastView> {
-        #[inline(always)]
-        fn succeed_if_indirect(
-            k1: &TypedProgram,
-            view: CastView,
-            from_type: TypeId,
-            to_type: TypeId,
-            span: Span,
-            depth: u32,
-        ) -> K1Result<CastView> {
-            if depth > 0 {
-                Ok(view)
-            } else {
-                Err(kerr!(
-                    k1,
-                    span,
-                    "{} as {} is only meaningful behind a reference",
-                    from_type,
-                    to_type
-                ))
-            }
-        }
+    ) -> K1Result<bool> {
         if from_type == to_type {
-            return Ok(CastView::TOTAL);
+            return Ok(true);
         }
-        let view = match (self.types.get(from_type), self.types.get(to_type)) {
-            (Type::Integer(i1), Type::Integer(i2)) if i1.width() == i2.width() => {
-                succeed_if_indirect(self, CastView::TOTAL, from_type, to_type, span, depth)
-            }
-            (Type::Integer(i), Type::Float(f)) if i.width() == f.width() => {
-                succeed_if_indirect(self, CastView::TOTAL, from_type, to_type, span, depth)
-            }
-            (Type::Float(f), Type::Integer(i)) if f.width() == i.width() => {
-                succeed_if_indirect(self, CastView::TOTAL, from_type, to_type, span, depth)
-            }
-
-            (Type::Integer(i), Type::Enum(e)) if *i == e.int_type => {
-                let view = if e.partial { CastView::TOTAL } else { CastView::CLAIMS };
-                succeed_if_indirect(self, view, from_type, to_type, span, depth)
-            }
-            (Type::Enum(e), Type::Integer(i)) if *i == e.int_type => {
-                succeed_if_indirect(self, CastView::TOTAL, from_type, to_type, span, depth)
-            }
-
-            (Type::Bool, Type::Integer(i)) if i.width() == NumericWidth::B8 => {
-                succeed_if_indirect(self, CastView::TOTAL, from_type, to_type, span, depth)
-            }
-            (Type::Integer(i), Type::Bool) if i.width() == NumericWidth::B8 => {
-                succeed_if_indirect(self, CastView::CLAIMS, from_type, to_type, span, depth)
-            }
-            (Type::Integer(i), Type::Char) if i.width() == NumericWidth::B8 => {
-                succeed_if_indirect(self, CastView::TOTAL, from_type, to_type, span, depth)
-            }
-            (Type::Char, Type::Integer(i)) if i.width() == NumericWidth::B8 => {
-                succeed_if_indirect(self, CastView::TOTAL, from_type, to_type, span, depth)
-            }
-            (Type::Reference(_), Type::Pointer) => Ok(CastView::TOTAL),
-            (Type::Pointer, Type::Reference(_)) => Ok(CastView::CLAIMS),
-            (Type::Pointer, Type::FunctionPointer(_)) => Ok(CastView::CLAIMS),
+        let (PhysicalTypeResult::Yes(from_pt), PhysicalTypeResult::Yes(to_pt)) =
+            (self.get_physical_type(from_type), self.get_physical_type(to_type))
+        else {
+            kbail!(self, span, "cannot reinterpret from {} to {}", from_type, to_type)
+        };
+        let from_layout = self.get_pt_layout(from_pt);
+        let to_layout = self.get_pt_layout(to_pt);
+        let total = match (self.types.get(from_type), self.types.get(to_type)) {
+            (Type::Integer(a), Type::Integer(b)) if a.width() == b.width() => true,
+            (Type::Integer(i), Type::Float(f)) if i.width() == f.width() => true,
+            (Type::Float(f), Type::Integer(i)) if f.width() == i.width() => true,
+            (Type::Integer(i), Type::Enum(e)) if *i == e.int_type => e.partial,
+            (Type::Enum(e), Type::Integer(i)) if *i == e.int_type => true,
+            (Type::Bool | Type::Char, Type::Integer(i)) if i.width() == NumericWidth::B8 => true,
+            (Type::Integer(i), Type::Char) if i.width() == NumericWidth::B8 => true,
+            (Type::Integer(i), Type::Bool) if i.width() == NumericWidth::B8 => false,
+            (Type::Reference(_) | Type::FunctionPointer(_), Type::Pointer) => true,
+            (Type::Pointer, Type::Reference(_) | Type::FunctionPointer(_)) => false,
             (Type::Reference(from_r), Type::Reference(to_r)) => {
-                let inner =
-                    self.check_interpret_cast(from_r.inner_type, to_r.inner_type, span, depth + 1)?;
-                Ok(CastView { total: inner.total, extent: ViewExtent::Exact })
+                self.check_interpret_cast(from_r.inner_type, to_r.inner_type, span, depth + 1)?
             }
-            (Type::Struct(_), _) | (_, Type::Struct(_)) => {
-                self.check_struct_view(from_type, to_type, span, depth)
+            (Type::Struct(s), _) | (_, Type::Struct(s)) if s.record_kind != RecordKind::Union => {
+                let tmp_mark = self.tmp.mark();
+                let mut from_parts = self.tmp.new_list(8);
+                self.push_view_parts(from_type, 0, &mut from_parts);
+                let mut to_parts = self.tmp.new_list(8);
+                self.push_view_parts(to_type, 0, &mut to_parts);
+                let mut total = true;
+                for &(offset, to_part) in to_parts.as_slice() {
+                    if offset >= from_layout.size {
+                        continue;
+                    }
+                    let Some(&(_, from_part)) = from_parts.iter().find(|(o, _)| *o == offset)
+                    else {
+                        kbail!(
+                            self,
+                            span,
+                            "cannot view {} as {}: the {} at offset {} does not line up with a field of {}",
+                            from_type,
+                            to_type,
+                            to_part,
+                            offset,
+                            from_type
+                        )
+                    };
+                    match self.check_interpret_cast(from_part, to_part, span, depth) {
+                        Ok(part_total) => total = total && part_total,
+                        Err(e) => kbail!(
+                            self,
+                            span,
+                            "cannot view {} as {}: the {} at offset {} is incompatible: {}",
+                            from_type,
+                            to_type,
+                            to_part,
+                            offset,
+                            e.message
+                        ),
+                    }
+                }
+                self.tmp.reset_to(tmp_mark);
+                total
             }
-            (Type::Opaque(from_o), Type::Opaque(to_o)) => {
-                if to_o.size > from_o.size {
+            (Type::Opaque(_), Type::Opaque(_)) => false,
+            (Type::Sum(from_sum), Type::Sum(to_sum)) => {
+                let (from_sum, to_sum) = (*from_sum, *to_sum);
+                let same_tags = from_sum.tag_type == to_sum.tag_type
+                    && from_sum.variants.len() == to_sum.variants.len()
+                    && self
+                        .mem
+                        .getn_zip(from_sum.variants, to_sum.variants)
+                        .all(|(from_v, to_v)| from_v.tag_value == to_v.tag_value);
+                if !same_tags {
+                    kbail!(self, span, "cannot view {} as {}: the tags differ", from_type, to_type)
+                }
+                if from_layout != to_layout {
                     kbail!(
                         self,
                         span,
-                        "cannot view {} as {}: the target is larger ({} vs {} bytes)",
+                        "cannot view {} as {}: the layouts differ",
                         from_type,
-                        to_type,
-                        to_o.size,
-                        from_o.size
+                        to_type
                     )
                 }
-                if to_o.align > from_o.align {
-                    kbail!(
-                        self,
-                        span,
-                        "cannot view {} as {}: the target has stricter alignment ({} vs {})",
-                        from_type,
-                        to_type,
-                        to_o.align,
-                        from_o.align
-                    )
+                let mut total = true;
+                for (from_v, to_v) in self.mem.getn_zip(from_sum.variants, to_sum.variants) {
+                    let view = match (from_v.payload, to_v.payload) {
+                        (None, None) => continue,
+                        (Some(from_p), Some(to_p))
+                            if self.get_layout(from_p) == self.get_layout(to_p) =>
+                        {
+                            self.check_interpret_cast(from_p, to_p, span, depth)
+                        }
+                        (Some(_), Some(_)) => Err(kerr!(self, span, "they differ in size")),
+                        _ => Err(kerr!(self, span, "only one has a payload")),
+                    };
+                    match view {
+                        Ok(payload_total) => total = total && payload_total,
+                        Err(e) => kbail!(
+                            self,
+                            span,
+                            "cannot view {} as {}: the payloads of {} are incompatible: {}",
+                            from_type,
+                            to_type,
+                            from_v.name,
+                            e.message
+                        ),
+                    }
                 }
-                let extent = if to_o.size < from_o.size {
-                    ViewExtent::ReadsPrefix
-                } else {
-                    ViewExtent::Exact
-                };
-                Ok(CastView { total: false, extent })
+                total
             }
-            (Type::FunctionPointer(_), Type::Pointer) => Ok(CastView::TOTAL),
+            (Type::Enum(from_e), Type::Enum(to_e)) if from_e.int_type == to_e.int_type => {
+                let to_values = self.mem.getn(to_e.member_values);
+                to_e.partial
+                    || !from_e.partial
+                        && self
+                            .mem
+                            .getn(from_e.member_values)
+                            .iter()
+                            .all(|f| to_values.iter().any(|t| t.int_value == f.int_value))
+            }
             (Type::FunctionPointer(fp_from), Type::FunctionPointer(fp_to)) => {
                 let fn_type_from = *self.types.get(fp_from.function_type_id).as_function().unwrap();
                 let fn_type_to = *self.types.get(fp_to.function_type_id).as_function().unwrap();
@@ -7465,19 +7480,16 @@ impl TypedProgram {
                 {
                     // depth is 0 since these values are essentially being directly abi-converted
                     // consuming these values: to, from
-                    let param_view = self
-                        .check_interpret_cast(param_to.type_id, param_from.type_id, span, 0)
-                        .map_err(|err| {
-                            kerr!(
-                                self,
-                                span,
-                                "incompatible parameter type for cast: {}",
-                                err.message
-                            )
-                        })?;
-                    total = total && param_view.total;
+                    match self.check_interpret_cast(param_to.type_id, param_from.type_id, span, 0) {
+                        Ok(param_total) => total = total && param_total,
+                        Err(e) => kbail!(
+                            self,
+                            span,
+                            "incompatible parameter type for cast: {}",
+                            e.message
+                        ),
+                    }
                 }
-
                 // producing these values: from, to
                 match self.check_interpret_cast(
                     fn_type_from.return_type,
@@ -7485,207 +7497,53 @@ impl TypedProgram {
                     span,
                     0,
                 ) {
-                    Err(err) => {
-                        kbail!(
-                            self,
-                            span,
-                            "incompatible return types for function cast: {}",
-                            err.message
-                        )
-                    }
-                    Ok(ret_view) => {
-                        total = total && ret_view.total;
-                    }
-                }
-                Ok(CastView { total, extent: ViewExtent::Exact })
-            }
-            _ => Err(kerr!(self, span, "cannot reinterpret from {} to {}", from_type, to_type)),
-        }?;
-        if depth == 0 && view.extent != ViewExtent::Exact {
-            let how = match view.extent {
-                ViewExtent::ReadsPrefix => "reads a prefix of",
-                ViewExtent::ReadsBeyond => "extends past",
-                ViewExtent::Exact => unreachable!(),
-            };
-            kbail!(
-                self,
-                span,
-                "cannot view {} as {}: the view {} the source, so it is only meaningful behind a reference",
-                from_type,
-                to_type,
-                how
-            )
-        }
-        Ok(view)
-    }
-
-    /// The struct case of check_interpret_cast: pairwise fields when both sides are structs,
-    /// else one lazy step along the first-field chain (the types living at offset 0).
-    /// Descending into from's first field reads a prefix of from; wrapping from as to's first
-    /// field reads beyond it
-    fn check_struct_view(
-        &mut self,
-        from_type: TypeId,
-        to_type: TypeId,
-        span: Span,
-        depth: u32,
-    ) -> K1Result<CastView> {
-        fn struct_fields(
-            k1: &TypedProgram,
-            t: TypeId,
-        ) -> Option<MSlice<StructTypeField, TypedProgram>> {
-            match k1.types.get(t) {
-                Type::Struct(s) => Some(s.fields),
-                _ => None,
-            }
-        }
-        let from_fields = struct_fields(self, from_type);
-        let to_fields = struct_fields(self, to_type);
-
-        let pairing_err = match (from_fields, to_fields) {
-            (Some(ff), Some(tf)) => {
-                match self.check_struct_field_pairing(from_type, to_type, ff, tf, span, depth) {
-                    Ok(view) => return Ok(view),
-                    Err(e) => Some(e),
+                    Ok(ret_total) => total && ret_total,
+                    Err(e) => kbail!(
+                        self,
+                        span,
+                        "incompatible return types for function cast: {}",
+                        e.message
+                    ),
                 }
             }
-            _ => None,
+            _ => kbail!(self, span, "cannot reinterpret from {} to {}", from_type, to_type),
         };
-
-        let mut chain_err = None;
-        if let Some(ff) = from_fields {
-            let fields = self.mem.getn(ff);
-            if let Some(first) = fields.first() {
-                let single = fields.len() == 1;
-                match self.check_interpret_cast(first.type_id, to_type, span, depth) {
-                    Ok(inner) => match inner.extent {
-                        ViewExtent::Exact | ViewExtent::ReadsPrefix => {
-                            return Ok(CastView {
-                                total: inner.total,
-                                extent: ViewExtent::ReadsPrefix,
-                            });
-                        }
-                        ViewExtent::ReadsBeyond if single => {
-                            return Ok(CastView {
-                                total: inner.total,
-                                extent: ViewExtent::ReadsBeyond,
-                            });
-                        }
-                        ViewExtent::ReadsBeyond => {}
-                    },
-                    Err(e) => chain_err = Some(e),
-                }
-            }
+        if depth > 0 {
+            return Ok(total
+                && to_layout.size <= from_layout.size
+                && to_layout.align <= from_layout.align);
         }
-
-        if let Some(tf) = to_fields {
-            let fields = self.mem.getn(tf);
-            if let Some(first) = fields.first() {
-                let single = fields.len() == 1;
-                match self.check_interpret_cast(from_type, first.type_id, span, depth) {
-                    Ok(inner) => match inner.extent {
-                        ViewExtent::Exact | ViewExtent::ReadsBeyond => {
-                            return Ok(CastView {
-                                total: inner.total && single,
-                                extent: ViewExtent::ReadsBeyond,
-                            });
-                        }
-                        ViewExtent::ReadsPrefix => {}
-                    },
-                    Err(e) => {
-                        if chain_err.is_none() {
-                            chain_err = Some(e)
-                        }
-                    }
-                }
-            }
+        let is_number =
+            |t: &Type| matches!(t, Type::Integer(_) | Type::Float(_) | Type::Bool | Type::Char);
+        if from_layout.size != to_layout.size
+            || from_pt.is_scalar() != to_pt.is_scalar()
+            || is_number(self.types.get(from_type))
+            || is_number(self.types.get(to_type))
+        {
+            kbail!(self, span, "{} as {} is only meaningful behind a reference", from_type, to_type)
         }
-
-        match (pairing_err, chain_err) {
-            (Some(e), _) => Err(e),
-            (None, Some(e)) => {
-                Err(kerr!(self, span, "cannot view {} as {}: {}", from_type, to_type, e.message))
-            }
-            (None, None) => Err(kerr!(self, span, "cannot view {} as {}", from_type, to_type)),
-        }
+        Ok(total)
     }
 
-    fn check_struct_field_pairing(
+    fn push_view_parts(
         &mut self,
-        from_type: TypeId,
-        to_type: TypeId,
-        from_fields: MSlice<StructTypeField, TypedProgram>,
-        to_fields: MSlice<StructTypeField, TypedProgram>,
-        span: Span,
-        depth: u32,
-    ) -> K1Result<CastView> {
-        let from_fields = self.mem.getn(from_fields);
-        let to_fields = self.mem.getn(to_fields);
-        if to_fields.len() > from_fields.len() {
-            kbail!(
-                self,
-                span,
-                "cannot view {} as {}: the target has more fields ({} vs {})",
-                from_type,
-                to_type,
-                to_fields.len(),
-                from_fields.len()
-            )
-        }
-        let mut total = true;
-        let mut last_extent = ViewExtent::Exact;
-        for (index, to_field) in to_fields.iter().enumerate() {
-            let from_field = &from_fields[index];
-            let inner = match self.check_interpret_cast(
-                from_field.type_id,
-                to_field.type_id,
-                span,
-                depth,
-            ) {
-                Err(e) => kbail!(
-                    self,
-                    span,
-                    "cannot view {} as {}: field {} is incompatible: {}",
-                    from_type,
-                    to_type,
-                    from_field.name,
-                    e.message
-                ),
-                Ok(view) => view,
-            };
-            match inner.extent {
-                ViewExtent::Exact => {}
-                ViewExtent::ReadsPrefix => {
-                    if index != to_fields.len() - 1 {
-                        kbail!(
-                            self,
-                            span,
-                            "cannot view {} as {}: field {} is a prefix view, which shifts the offsets of the fields after it; only the final field can be a prefix",
-                            from_type,
-                            to_type,
-                            from_field.name
-                        )
-                    }
-                    last_extent = ViewExtent::ReadsPrefix;
+        type_id: TypeId,
+        offset: u32,
+        parts: &mut TmpList<(u32, TypeId)>,
+    ) {
+        match self.types.get(type_id) {
+            Type::Struct(s) if s.record_kind != RecordKind::Union => {
+                let fields = self.mem.getn(s.fields);
+                for (field, field_layout) in fields.iter().zip(self.get_struct_layout(type_id)) {
+                    self.push_view_parts(field.type_id, offset + field_layout.offset, parts)
                 }
-                ViewExtent::ReadsBeyond => kbail!(
-                    self,
-                    span,
-                    "cannot view {} as {}: field {} would extend past the source field",
-                    from_type,
-                    to_type,
-                    from_field.name
-                ),
             }
-            total = total && inner.total;
+            _ => {
+                if self.get_layout(type_id).is_some_and(|l| l.size > 0) {
+                    parts.push_grow(&mut self.tmp, (offset, type_id))
+                }
+            }
         }
-        let extent =
-            if to_fields.len() < from_fields.len() || last_extent == ViewExtent::ReadsPrefix {
-                ViewExtent::ReadsPrefix
-            } else {
-                ViewExtent::Exact
-            };
-        Ok(CastView { total, extent })
     }
 
     fn eval_cast_narrow(
@@ -7707,8 +7565,8 @@ impl TypedProgram {
                 target_type,
                 e.message,
             )),
-            Ok(view) => {
-                if view.total {
+            Ok(total) => {
+                if total {
                     self.report(kwarn!(self, span, "This cast is total; use .as instead"));
                 }
                 Ok(self.synth_cast(base_expr, target_type, CastType::Reinterpret, Some(span)))
