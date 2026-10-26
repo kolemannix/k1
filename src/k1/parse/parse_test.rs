@@ -263,18 +263,15 @@ fn core_only() -> Result<(), ParseError> {
 }
 
 #[test]
-fn macro_defn_compiler_debug() -> Result<(), ParseError> {
-    let src = r#"
-    #debug macro m1(a) { `{ $a }` }
-    macro m2(a) { `{ $a }` }
-    "#;
-    let ast = test_parse_input("macro_debug".to_string(), src)?;
-    let m1_name = ast.idents.intern("m1");
-    let m1 = ast.get_macro(ParsedMacroId::from_u32(1).unwrap());
-    let m2 = ast.get_macro(ParsedMacroId::from_u32(2).unwrap());
-    assert_eq!(m1.name, m1_name);
-    assert!(m1.compiler_debug);
-    assert!(!m2.compiler_debug);
+fn macro_call_compiler_debug() -> ParseResult<()> {
+    let mut ast = make_test_ast();
+    let mut parser = set_up("#debug $m1(a)\n$m2(a)", &mut ast);
+    let defns = parser.parse_definitions(K::Eof).as_slice(&ast.mem);
+    let [ParsedId::StaticDefn(m1), ParsedId::StaticDefn(m2)] = defns else {
+        panic!("expected two macro calls")
+    };
+    assert!(ast.exprs.is_debug(*m1));
+    assert!(!ast.exprs.is_debug(*m2));
     Ok(())
 }
 

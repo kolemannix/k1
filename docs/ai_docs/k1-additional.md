@@ -53,8 +53,11 @@ let(context(impl writer)) out: *string-builder = sb.&  // ability-keyed
   Every `code`-typed template costs its own builder: in hot emitters prefer
   `cb.writeln(...)` over `cb.line("...")`.
 - Emit conditions with explicit parens (`(not a) and b`).
-- No expansion dump exists. `#debug` on a macro definition prints the macro fn's
-  IR/bytecode; `#debug $call(...)` does not parse.
+- `#debug name(...)`, `#debug $name(...)` and `#debug #meta ...` write every
+  expansion made while evaluating the marked expression to `.k1-out/generated/`
+  and name each on stderr. An emitted file's header names the macro or `#meta`
+  block, the call site, the enclosing function with its type args, and the
+  macro's static args. `#debug macro` does not parse.
 
 ## `#meta`, macros, `pre`
 ```k1

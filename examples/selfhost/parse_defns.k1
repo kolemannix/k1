@@ -326,7 +326,7 @@ ns for parser {
     }))
   }
 
-  fn expect-macro-defn(self: *parser, condition: ?ast/expr-id, compiler-debug: bool): result[ast/macro-id, perror] {
+  fn expect-macro-defn(self: *parser, condition: ?ast/expr-id): result[ast/macro-id, perror] {
     let first = self.peek()
     let second = self.peek-at(1)
     let is-macro = first.kind is :ident and second.kind is :ident and self.tok-chars(first) == "macro"
@@ -363,7 +363,6 @@ ns for parser {
       signature-span,
       span,
       name-span = fit.tok.span(),
-      compiler-debug,
       compile-condition = condition,
     }))
   }
@@ -621,11 +620,9 @@ ns for parser {
       }
     }
     let first = self.peek()
-    if compiler-debug {
-      let supports-debug = first.kind is :kw-fn or (first.kind is :ident and self.tok-chars(first) == "macro")
-      if not supports-debug {
-        return :err(make-error("#debug is only supported on fn and macro definitions", first))
-      }
+    let supports-debug = first.kind is :kw-fn or first.kind is :dollar or (first.kind is :hash and self.tok-chars(self.peek-at(1)) == "meta")
+    if compiler-debug and not supports-debug {
+      return :err(make-error("#debug is only supported on fn definitions, $ macro calls and #meta", first))
     }
     if first.kind is :hash {
       self.advance()
@@ -669,7 +666,7 @@ ns for parser {
     if first.kind is :kw-impl { return :ok(:ability-impl(self.expect-ability-impl(condition).try)) }
     if first.kind is :ident {
       let chars = self.tok-chars(first)
-      if chars == "macro" { return :ok(:macro-defn(self.expect-macro-defn(condition, compiler-debug).try)) }
+      if chars == "macro" { return :ok(:macro-defn(self.expect-macro-defn(condition).try)) }
       if chars == "type" { return :ok(:type-defn(self.expect-type-defn(condition).try)) }
     }
     :err(self.error-expected-definition(condition is :some _))

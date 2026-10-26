@@ -444,7 +444,6 @@ type macro-defn = {
   signature-span: src-span,
   span: src-span,
   name-span: src-span,
-  compiler-debug: bool,
   compile-condition: ?expr-id,
 }
 

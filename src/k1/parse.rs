@@ -1220,7 +1220,6 @@ pub struct ParsedMacro {
     pub signature_span: Span,
     pub span: Span,
     pub name_span: Span,
-    pub compiler_debug: bool,
     pub compile_condition: Option<ParsedExprId>,
     pub id: ParsedMacroId,
     pub typer_state: typer::ParsedMacroDeclareOutcome,
@@ -1400,8 +1399,7 @@ impl ParsedExpressionPool {
     }
 
     pub fn is_debug(&self, id: ParsedExprId) -> bool {
-        cfg!(debug_assertions)
-            && self.debug_exprs.binary_search_by_key(&id_key(id), |e| id_key(*e)).is_ok()
+        self.debug_exprs.binary_search_by_key(&id_key(id), |e| id_key(*e)).is_ok()
     }
 
     pub fn add(&mut self, expression: ParsedExpr, span: Span) -> ParsedExprId {
@@ -2268,21 +2266,28 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
         };
 
         let first = self.peek();
-        if compiler_debug {
-            let supports_debug = first.kind == K::KeywordFn
-                || (first.kind == K::Ident && self.token_chars(first) == "macro");
-            if !supports_debug {
-                return Err(
-                    self.error("#debug is only supported on fn and macro definitions", first)
-                );
-            }
+        let supports_debug = match first.kind {
+            K::KeywordFn | K::Dollar => true,
+            K::Hash => self.token_chars(self.tokens.peek_n(1)) == "meta",
+            _ => false,
+        };
+        if compiler_debug && !supports_debug {
+            return Err(self.error(
+                "#debug is only supported on fn definitions, $ macro calls and #meta",
+                first,
+            ));
         }
         match first.kind {
             K::Hash => {
                 self.advance();
                 let directive = self.peek();
                 match self.parse_static_expr(first, directive, condition)? {
-                    Some(static_expr_id) => Ok(ParsedId::StaticDefn(static_expr_id)),
+                    Some(static_expr_id) => {
+                        if compiler_debug {
+                            self.ast.exprs.set_debug(static_expr_id);
+                        }
+                        Ok(ParsedId::StaticDefn(static_expr_id))
+                    }
                     None => Err(self
                         .error_expected("a static definition (e.g. #static or #meta)", directive)),
                 }
@@ -2314,6 +2319,9 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
                     }),
                     span,
                 );
+                if compiler_debug {
+                    self.ast.exprs.set_debug(expr_id);
+                }
                 Ok(ParsedId::StaticDefn(expr_id))
             }
             K::KeywordUse => {
@@ -2330,7 +2338,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             K::KeywordAbility => Ok(ParsedId::Ability(self.expect_ability_defn(condition)?)),
             K::KeywordImpl => Ok(ParsedId::AbilityImpl(self.expect_ability_impl(condition)?)),
             K::Ident => match self.token_chars(first) {
-                "macro" => Ok(ParsedId::Macro(self.expect_macro_defn(condition, compiler_debug)?)),
+                "macro" => Ok(ParsedId::Macro(self.expect_macro_defn(condition)?)),
                 "type" => Ok(ParsedId::TypeDefn(self.expect_type_defn(condition)?)),
                 _ => Err(self.error_expected_definition(condition.is_some())),
             },
@@ -5130,11 +5138,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     /// `macro name(params) { body }`. `macro` is a contextual keyword
-    fn expect_macro_defn(
-        &mut self,
-        condition: Option<ParsedExprId>,
-        compiler_debug: bool,
-    ) -> ParseResult<ParsedMacroId> {
+    fn expect_macro_defn(&mut self, condition: Option<ParsedExprId>) -> ParseResult<ParsedMacroId> {
         let (first, second) = self.peek_two();
         let is_macro_defn =
             first.kind == K::Ident && second.kind == K::Ident && self.token_chars(first) == "macro";
@@ -5186,7 +5190,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             signature_span,
             span,
             name_span,
-            compiler_debug,
             compile_condition: condition,
             id: ParsedMacroId::PENDING,
             typer_state: typer::ParsedMacroDeclareOutcome::Parsed,

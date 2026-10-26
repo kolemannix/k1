@@ -2519,7 +2519,7 @@ pub struct EmittedSource {
     pub file_id: FileId,
     pub call_span: Span,
     pub entries: MSlice<CodeChunkPos, TypedProgram>,
-    has_diagnostic: bool,
+    write_out: bool,
 }
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
@@ -5908,22 +5908,26 @@ impl TypedProgram {
 
     fn eval_expr(&mut self, expr_id: ParsedExprId, ctx: EvalExprContext) -> K1Result<TypedExprId> {
         let is_debug = self.ast.exprs.is_debug(expr_id);
-        let result_expr = self.eval_expr_inner(expr_id, ctx)?;
+        let first_emission = self.emitted_sources.len();
+        let result = self.eval_expr_inner(expr_id, ctx);
 
         if is_debug {
-            let expr_span = self.ast.exprs.get_span(expr_id);
-            self.report_hint(
-                expr_span,
-                k1_format_user!(
-                    self,
-                    "DEBUG COMPILE DONE\n\n{}\n  type hint: {}`\n{}`",
-                    self.ast.get_span_content(expr_span),
-                    self.type_id_to_string_opt(ctx.expected_type_id),
-                    self.expr_to_string_with_type(result_expr)
-                ),
-            );
+            self.write_out_emissions_from(first_emission);
+            if let Ok(result_expr) = result {
+                let expr_span = self.ast.exprs.get_span(expr_id);
+                self.report_hint(
+                    expr_span,
+                    k1_format_user!(
+                        self,
+                        "DEBUG COMPILE DONE\n\n{}\n  type hint: {}`\n{}`",
+                        self.ast.get_span_content(expr_span),
+                        self.type_id_to_string_opt(ctx.expected_type_id),
+                        self.expr_to_string_with_type(result_expr)
+                    ),
+                );
+            }
         };
-        Ok(result_expr)
+        result
     }
 
     fn eval_expr_inner(
@@ -14767,7 +14771,6 @@ impl TypedProgram {
         let signature_span = ast_macro.signature_span;
         let params_slice = ast_macro.params;
         let type_params_slice = ast_macro.type_params;
-        let compiler_debug = ast_macro.compiler_debug;
         let condition = ast_macro.compile_condition;
         if !self.execute_static_condition(condition, parent_scope_id) {
             return Ok(None);
@@ -14832,8 +14835,6 @@ impl TypedProgram {
             self.variables.get_mut(v.variable_id).kind = VariableKind::FnParam(function_id);
         }
         let param_variables_handle = params.to_slice();
-        let mut flags = TypedFunctionFlags::Macro;
-        flags.set(TypedFunctionFlags::CompilerDebug, compiler_debug);
         let actual_function_id = self.add_function(TypedFunction {
             name,
             scope: fn_scope_id,
@@ -14848,7 +14849,7 @@ impl TypedProgram {
             parsed_id: ParsedId::Macro(parsed_macro_id),
             kind: TypedFunctionKind::Standard,
             type_id: function_type_id,
-            flags,
+            flags: TypedFunctionFlags::Macro,
             dyn_fn_id: None,
             dyn_receiver_thunk_id: None,
             returned_variable: None,
@@ -16850,6 +16851,7 @@ impl TypedProgram {
                     let static_ctx = StaticExecContext { expected_return_type: Some(I32_TYPE_ID) };
                     let eval_expr_ctx =
                         EvalExprContext::make(namespace_scope_id).with_static_ctx(Some(static_ctx));
+                    let first_emission = self.emitted_sources.len();
                     let newly_parsed_defns =
                         match self.compile_static_or_meta(static_expr_id, s, true, eval_expr_ctx) {
                             Err(e) => {
@@ -16859,6 +16861,9 @@ impl TypedProgram {
                             Ok(StaticExecutionResult::Definitions(defns)) => defns,
                             Ok(StaticExecutionResult::TypedExpr(_)) => unreachable!(),
                         };
+                    if self.ast.exprs.is_debug(static_expr_id) {
+                        self.write_out_emissions_from(first_emission);
+                    }
                     let emitted = self.ast.mem.getn(newly_parsed_defns);
                     self.register_definitions(emitted, parsed_namespace_id, skip_defns);
                     for &d in emitted.iter().rev() {

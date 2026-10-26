@@ -547,8 +547,10 @@ impl TypedProgram {
                     source: self.field_int(*code_span, "source"),
                 });
             }
+            let mut content = String::new();
+            self.write_meta_emission_header(&mut content, "configure", span, None);
             let Some((content, table)) =
-                self.build_emitted_source(span, true, text, &code_spans)?
+                self.build_emitted_source(content, true, text, &code_spans)?
             else {
                 self.ice_span(span, "configure text was empty")
             };

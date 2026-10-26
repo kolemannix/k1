@@ -245,7 +245,7 @@ impl TypedProgram {
             self.emitted_source_for_file(self.ast.sources.file_of(e.span.global_start))
         {
             if e.level == MessageLevel::Error {
-                self.emitted_sources[table_index].has_diagnostic = true
+                self.emitted_sources[table_index].write_out = true
             }
         };
 
