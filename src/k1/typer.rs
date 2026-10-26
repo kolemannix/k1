@@ -3767,7 +3767,7 @@ impl TypedProgram {
         );
 
         match (self.types.get(expected), self.types.get(actual)) {
-            (Type::InferenceHole(_hole), _any) => Ok(()),
+            (Type::InferenceHole(_), _) | (_, Type::InferenceHole(_)) => Ok(()),
             (Type::Struct(s1), Type::Struct(s2)) => {
                 if !same_generic_instance && self.get_defn_info(expected).is_some() {
                     return Err(k1_format_user!(self, "Expected {} but got {}", expected, actual));
@@ -3846,32 +3846,32 @@ impl TypedProgram {
                     ));
                 }
                 if let Err(msg) = self.check_types(f1.return_type, f2.return_type, scope_id) {
-                    Err(k1_format_user!(
+                    return Err(k1_format_user!(
                         self,
                         "Wrong return type: expected {} but got {}: {}",
                         expected,
                         actual,
                         msg
-                    ))
-                } else {
-                    for (index, (p1, p2)) in self
-                        .mem
-                        .getn(f1.logical_params())
-                        .iter()
-                        .zip(self.mem.getn(f2.logical_params()).iter())
-                        .enumerate()
-                    {
-                        if let Err(msg) = self.check_types(p1.type_id, p2.type_id, scope_id) {
-                            return Err(k1_format_user!(
-                                self,
-                                "Incorrect type for parameter '{}': {}",
-                                self.get_positional_param_name(index),
-                                msg
-                            ));
-                        }
-                    }
-                    Ok(())
+                    ));
                 }
+                for (index, (p1, p2)) in self
+                    .mem
+                    .getn(f1.logical_params())
+                    .iter()
+                    .zip(self.mem.getn(f2.logical_params()).iter())
+                    .enumerate()
+                {
+                    if self.check_types(p2.type_id, p1.type_id, scope_id).is_err() {
+                        return Err(k1_format_user!(
+                            self,
+                            "Incorrect type for parameter '{}': expected {} but got {}",
+                            self.get_positional_param_name(index),
+                            p1.type_id,
+                            p2.type_id
+                        ));
+                    }
+                }
+                Ok(())
             }
             (Type::FunctionPointer(fp1), Type::FunctionPointer(fp2)) => {
                 self.check_types(fp1.function_type_id, fp2.function_type_id, scope_id).map_err(

@@ -6,6 +6,7 @@ fn static-add-two(x: int): int { x + 2 }
 fn pick-first[t](a: t, b: t): t { let _ = b; a }
 
 fn ref-pick[t](): *fn(a: t, b: t) -> t { pick-first[t].& }
+fn ptr-from[t](f: some fn() -> *fn(t) -> t): *fn(t) -> t { f() }
 
 fn(native) native-add-three(x: int): int { x + 3 }
 
@@ -50,6 +51,8 @@ fn(test) fn-values-coerce-to-pointers() {
   assert-equals(literal-ptr(3), 9)
   assert-equals(takes-ptr(fn(x: int) x + 10, 1), 11)
   assert(test-compile( { let k = 1; let p: *fn(int) -> int = fn[k](x: int) x + k; p } ) is :some _)
+  assert(test-compile({ let p: *fn(int) -> int = fn(_n: never) 1; p }) is :some _)
+  assert-equals((ptr-from(fn() static-add-one.&))(2), 3)
 }
 
 fn(test) generic-and-native-fn-pointers() {
