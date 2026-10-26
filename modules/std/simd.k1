@@ -1,8 +1,8 @@
 ns simd
 
-//   $simd/map(scale, u8, x, [c("k", 3)], x * k + x)
+//   $simd/map[u8](scale, x, [c("k", 3)], x * k + x)
 //     -> fn scale(dst: buffer[u8], src: span[u8])
-//   $simd/reduce(total, u8, a, b, a + b, 0)
+//   $simd/reduce[u8](total, a, b, a + b, 0)
 //     -> fn total(src: span[u8]): u8
 //   $simd/first-of(delims, [',', ':', '"'])
 //     -> ns delims { fn scan(data: span[u8], from: size): { index: i64, which: i64 } }
@@ -25,16 +25,15 @@ fn lanes-for(elem-name: string, elem-size: size): size {
 }
 
 fn map-impl(
-  name: string,
+  name: code,
   elem-name: string,
   elem-size: size,
-  binding: string,
+  binding: code,
   consts: span[{ name: string, value: i64 }],
-  body: string
-): string {
-  use meta/code-writer
+  body: code
+): code {
   let lanes = lanes-for(elem-name, elem-size)
-  let code = string-builder/new()
+  let code = code-builder/new()
   code.writeln("fn $name(dst: buffer[$elem-name], src: span[$elem-name]) {")
   code.writeln("  assert(dst.len == src.len())")
   code.writeln("  let len = src.len()")
@@ -64,28 +63,20 @@ fn map-impl(
 }
 
 macro map[t](name: code, binding: code, consts: span[{ name: string, value: i64 }], body: code) {
-  code/from-string(map-impl(
-    name.text,
-    types/name[t],
-    types/size[t],
-    binding.text,
-    consts,
-    body.text
-  ))
+  map-impl(name, types/name[t], types/size[t], binding, consts, body)
 }
 
 fn reduce-impl(
-  name: string,
+  name: code,
   elem-name: string,
   elem-size: size,
-  acc-binding: string,
-  item-binding: string,
-  body: string,
+  acc-binding: code,
+  item-binding: code,
+  body: code,
   identity: i64
-): string {
-  use meta/code-writer
+): code {
   let lanes = lanes-for(elem-name, elem-size)
-  let code = string-builder/new()
+  let code = code-builder/new()
   code.writeln("fn $name(src: span[$elem-name]): $elem-name {")
   code.writeln("  let len = src.len()")
   code.writeln("  let sbase = src.data-ptr()")
@@ -117,24 +108,15 @@ fn reduce-impl(
 }
 
 macro reduce[t](name: code, acc-binding: code, item-binding: code, body: code, identity: i64) {
-  code/from-string(reduce-impl(
-    name.text,
-    types/name[t],
-    types/size[t],
-    acc-binding.text,
-    item-binding.text,
-    body.text,
-    identity
-  ))
+  reduce-impl(name, types/name[t], types/size[t], acc-binding, item-binding, body, identity)
 }
 
-fn first-of-impl(name: string, needles: span[char]): string {
-  use meta/code-writer
+fn first-of-impl(name: code, needles: span[char]): code {
   if needles.len() == 0 crash("first-of needs at least one needle")
   if needles.len() > 8 crash("first-of supports at most 8 needles; got ${needles.len()}")
   let lanes = natural-bytes
   let last = needles.len() - 1
-  let code = string-builder/new()
+  let code = code-builder/new()
   code.writeln("ns $name {")
   code.writeln("  fn scan(data: span[u8], from: size): { index: i64, which: i64 } {")
   if last == 0 {
@@ -155,22 +137,19 @@ fn first-of-impl(name: string, needles: span[char]): string {
   for needles {
     code.writeln("      let e$it-index = chunk.eq-lanes(needle$it-index)")
   }
-  let any-lanes = string-builder/new()
-  let any-masks = string-builder/new()
+  code.write("      if e0")
   for needles {
-    if it-index > 0 {
-      any-lanes.write(".bit-or(e$it-index)")
-      any-masks.write(".bit-or(m$it-index)")
-    } else {
-      any-lanes.write("e0")
-      any-masks.write("m0")
-    }
+    if it-index > 0 code.write(".bit-or(e$it-index)")
   }
-  code.writeln("      if ${any-lanes.build()}.any() {")
+  code.writeln(".any() {")
   for needles {
     code.writeln("        let m$it-index = e$it-index.to-mask()")
   }
-  code.writeln("        let lane = ${any-masks.build()}.trailing-zeros()")
+  code.write("        let lane = m0")
+  for needles {
+    if it-index > 0 code.write(".bit-or(m$it-index)")
+  }
+  code.writeln(".trailing-zeros()")
   for needles {
     if it-index < last {
       code.writeln("        if m$it-index.shift-right(lane.trunc[u32]).bit-and(1) == 1 {")
@@ -196,5 +175,5 @@ fn first-of-impl(name: string, needles: span[char]): string {
 }
 
 macro first-of(name: code, needles: span[char]) {
-  code/from-string(first-of-impl(name.text, needles))
+  first-of-impl(name, needles)
 }

@@ -30,11 +30,11 @@ fn scan-all-simd(text: string): u64 {
 ```
 
 `first-of` is a macro in `std/simd`, and its body is ordinary k1 writing k1
-source into a string builder:
+source into a `code-builder`:
 
 ```k1 path=modules/std/simd.k1
 macro first-of(name: code, needles: span[char]) {
-  code/from-string(first-of-impl(name.text, needles))
+  first-of-impl(name, needles)
 }
 ```
 
@@ -47,22 +47,19 @@ needle per delimiter, OR them, and only on a hit decode the masks.
   for needles {
     code.writeln("      let e$it-index = chunk.eq-lanes(needle$it-index)")
   }
-  let any-lanes = string-builder/new()
-  let any-masks = string-builder/new()
+  code.write("      if e0")
   for needles {
-    if it-index > 0 {
-      any-lanes.write(".bit-or(e$it-index)")
-      any-masks.write(".bit-or(m$it-index)")
-    } else {
-      any-lanes.write("e0")
-      any-masks.write("m0")
-    }
+    if it-index > 0 code.write(".bit-or(e$it-index)")
   }
-  code.writeln("      if ${any-lanes.build()}.any() {")
+  code.writeln(".any() {")
   for needles {
     code.writeln("        let m$it-index = e$it-index.to-mask()")
   }
-  code.writeln("        let lane = ${any-masks.build()}.trailing-zeros()")
+  code.write("        let lane = m0")
+  for needles {
+    if it-index > 0 code.write(".bit-or(m$it-index)")
+  }
+  code.writeln(".trailing-zeros()")
   for needles {
     if it-index < last {
       code.writeln("        if m$it-index.shift-right(lane.trunc[u32]).bit-and(1) == 1 {")

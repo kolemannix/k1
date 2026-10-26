@@ -1,3 +1,7 @@
+// can't use list! the allocation will always point to a destroyed vm. Unless we let you clone into metascratch
+// but then what are we even doing
+let(metascratch) foo: { block-count: int, all-fns: fixlist[string] } 
 fn main(): i32 {
+
   0
 }

@@ -45,4 +45,6 @@ fn(test) uninhabited-payloads() {
   let names = if parse-all[never, string](["ada", "grace"]) is { :ok v -> v }
   assert-equals(names.len(), 2)
   assert(parse-all[string, u64](["1", "x"]) is :err _)
+  assert(test-compile({ let _: result[int, string] = infallible(); .{} }) is :some _)
+  let _: list[int] = list/empty[never]()
 }

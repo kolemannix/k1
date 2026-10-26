@@ -138,10 +138,10 @@ $bf/define(broken, "++[>+<-")
 │  bf `broken`: unmatched `[` at byte 2
 bc Execution Trace
 [00] core/platform/process/abort platform.k1:295
-[01] core/crash builtin.k1:1241
+[01] core/crash builtin.k1:1249
 [02] bf_transpile_wrong/pre/bf/emit-body bf_transpile_wrong.k1:44
-[03] bf_transpile_wrong/pre/bf/transpile_lam_7582 bf_transpile_wrong.k1:64
-[04] core/code-builder/block code.k1:156
+[03] bf_transpile_wrong/pre/bf/transpile_lam_7235 bf_transpile_wrong.k1:64
+[04] core/code-builder/block-close code.k1:160
 [05] bf_transpile_wrong/pre/bf/transpile bf_transpile_wrong.k1:67
 [06] bf_transpile_wrong/pre/bf/define bf_transpile_wrong.k1:71
 

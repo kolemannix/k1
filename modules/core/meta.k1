@@ -3,31 +3,6 @@
 
 ns meta {
 
-  ability code-writer {
-    fn var[t](self, name: string, value: t)
-
-    fn impl-print(self, type-name: string, body: string, indent: size) {
-      self.repeat("  ", indent)
-      self.writeln("impl print for $type-name {")
-
-      self.repeat("  ", indent + 1)
-      self.writeln("fn print-to[w: writer](self, w) {")
-      self.write(body)
-      self.repeat("  ", indent + 1)
-      self.writeln("}")
-
-      self.repeat("  ", indent)
-      self.writeln("}")
-    }
-  }
-  
-  impl[w: writer] code-writer for w {
-    fn var[t](self, name: string, value: t) {
-      let baked-var = meta/baked-variable[t](name, value)
-      self.write(baked-var)
-    }
-  }
-
   // Escapes into a valid K1 double-quoted string literal
   fn str-lit(s: string): string {
     let b = string-builder/new()

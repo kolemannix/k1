@@ -41,8 +41,6 @@ ns pre {
 
 ns test_meta
 
-use core/meta/code-writer
-
 fn simple-increment(): i32 {
   let x = 10
   #meta {

@@ -587,7 +587,7 @@ compile-time `span[{ name: string, bits: size }]`:
 
 ```k1 path=modules/std/bitfield.k1
 macro define[int-type](type-name: code, members: span[{ name: string, bits: size}]) {
-  code/from-string(define-impl(types/id[int-type](), type-name.text, members))
+  define-impl(types/id[int-type](), type-name, members)
 }
 macro b1(name: code) { `.{ name = "$name", bits = 1 }` }
 macro b8(name: code) { `bn("$name", 8)` }

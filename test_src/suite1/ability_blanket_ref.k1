@@ -4,9 +4,7 @@ ns ability_blanket_ref
 // thing. `greet` is provided by a blanket impl whose param is bounded by
 // `speak`, and `cheer` is a default method of `greet`. Resolving either for a
 // by-value thing must retry the bound against *thing, the same way the
-// top-level impl search does. This mirrors string-builder/code-writer, where
-// writer is implemented for *string-builder and impl-print is a default
-// method of code-writer's blanket impl (bitfield.k1 needed `code.&`).
+// top-level impl search does.
 
 ability speak {
   fn speak(self): string

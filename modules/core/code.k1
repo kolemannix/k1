@@ -148,14 +148,7 @@ ns for code-builder {
   }
 
   fn block(self: *code-builder, header: code, body: some fn() -> {}) {
-    self.pad()
-    self.write-code(header)
-    self.write(" {\n")
-    self.indent()
-    body()
-    self.dedent()
-    self.pad()
-    self.write("}\n")
+    self.block-close(header, "}", body)
   }
 
   fn block-close(self: *code-builder, header: code, close: string, body: some fn() -> {}) {

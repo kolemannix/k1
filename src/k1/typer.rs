@@ -3702,40 +3702,46 @@ impl TypedProgram {
             return Ok(());
         }
 
+        let mut same_generic_instance = false;
         if let (Some(spec1), Some(spec2)) =
             (self.get_instance_info(expected), self.get_instance_info(actual))
         {
-            return if spec1.generic_parent == spec2.generic_parent {
-                for (index, (exp_param, act_param)) in self
-                    .get_type_slice(spec1.type_args)
-                    .iter()
-                    .zip(self.get_type_slice(spec2.type_args).iter())
-                    .enumerate()
-                {
-                    debug!(
-                        "Comparing params {} and {} inside {}",
-                        self.type_id_to_string(*exp_param),
-                        self.type_id_to_string(*act_param),
-                        self.ident_str(self.get_defn_info(spec1.generic_parent).unwrap().name)
+            if spec1.generic_parent != spec2.generic_parent {
+                return Err(k1_format_user!(self, "Expected {}, but got {}", expected, actual));
+            }
+            let mut inhabitedness_differs = false;
+            for (index, (exp_param, act_param)) in self
+                .get_type_slice(spec1.type_args)
+                .iter()
+                .zip(self.get_type_slice(spec2.type_args).iter())
+                .enumerate()
+            {
+                debug!(
+                    "Comparing params {} and {} inside {}",
+                    self.type_id_to_string(*exp_param),
+                    self.type_id_to_string(*act_param),
+                    self.ident_str(self.get_defn_info(spec1.generic_parent).unwrap().name)
+                );
+                if let Err(msg) = self.check_types(*exp_param, *act_param, scope_id) {
+                    let generic = self.types.get(spec1.generic_parent).expect_generic();
+                    let param = *self.mem.get_nth(generic.params, index);
+                    let msg = k1_format_user!(
+                        self,
+                        "Expected {} but got {}: Param '{}' is incorrect: {}",
+                        expected,
+                        actual,
+                        self.get_type_parameter(param).name,
+                        msg.as_str(),
                     );
-                    if let Err(msg) = self.check_types(*exp_param, *act_param, scope_id) {
-                        let generic = self.types.get(spec1.generic_parent).expect_generic();
-                        let param = *self.mem.get_nth(generic.params, index);
-                        let msg = k1_format_user!(
-                            self,
-                            "Expected {} but got {}: Param '{}' is incorrect: {}",
-                            expected,
-                            actual,
-                            self.get_type_parameter(param).name,
-                            msg.as_str(),
-                        );
-                        return Err(msg);
-                    }
+                    return Err(msg);
                 }
-                Ok(())
-            } else {
-                Err(k1_format_user!(self, "Expected {}, but got {}", expected, actual))
-            };
+                inhabitedness_differs |=
+                    self.inhabitedness_differs(*exp_param, *act_param, scope_id);
+            }
+            if !inhabitedness_differs {
+                return Ok(());
+            }
+            same_generic_instance = true;
         }
 
         let expected = self.get_type_id_resolved(expected, scope_id);
@@ -3763,7 +3769,7 @@ impl TypedProgram {
         match (self.types.get(expected), self.types.get(actual)) {
             (Type::InferenceHole(_hole), _any) => Ok(()),
             (Type::Struct(s1), Type::Struct(s2)) => {
-                if self.get_defn_info(expected).is_some() {
+                if !same_generic_instance && self.get_defn_info(expected).is_some() {
                     return Err(k1_format_user!(self, "Expected {} but got {}", expected, actual));
                 }
                 if s1.record_kind != s2.record_kind {
@@ -3804,9 +3810,31 @@ impl TypedProgram {
             (Type::Reference(exp_ref), Type::Reference(act_ref)) => self
                 .check_types(exp_ref.inner_type, act_ref.inner_type, scope_id)
                 .map_err(|_| k1_format_user!(self, "Expected {} but got {}", expected, actual)),
-            (Type::Sum(_exp_sum), Type::Sum(_act_sum)) => {
-                // FIXME: We'll probably need a structural treatment for sums eventually
-                Err(k1_format_user!(self, "expected sum {} but got sum {}", expected, actual))
+            (Type::Sum(sum1), Type::Sum(sum2)) => {
+                let mismatch = || {
+                    Err(k1_format_user!(self, "expected sum {} but got sum {}", expected, actual))
+                };
+                let variants1 = self.mem.getn(sum1.variants);
+                let variants2 = self.mem.getn(sum2.variants);
+                if (!same_generic_instance && self.get_defn_info(expected).is_some())
+                    || variants1.len() != variants2.len()
+                {
+                    return mismatch();
+                }
+                for (v1, v2) in variants1.iter().zip(variants2) {
+                    let payloads_match = match (v1.payload, v2.payload) {
+                        (None, None) => true,
+                        (Some(p1), Some(p2)) => {
+                            self.check_types(p1, p2, scope_id).is_ok()
+                                && !self.inhabitedness_differs(p1, p2, scope_id)
+                        }
+                        _ => false,
+                    };
+                    if v1.name != v2.name || v1.tag_value != v2.tag_value || !payloads_match {
+                        return mismatch();
+                    }
+                }
+                Ok(())
             }
             (Type::Function(f1), Type::Function(f2)) => {
                 if f1.logical_params().len() != f2.logical_params().len() {
@@ -3976,6 +4004,12 @@ impl TypedProgram {
             }
             (_exp, _act) => Err(k1_format_user!(self, "Expected {} but got {}", expected, actual,)),
         }
+    }
+
+    fn inhabitedness_differs(&self, expected: TypeId, actual: TypeId, scope_id: ScopeId) -> bool {
+        let info = |t| self.get_type_variable_counts(self.get_type_id_resolved(t, scope_id));
+        info(expected).inference_hole_count == 0
+            && info(expected).is_inhabited != info(actual).is_inhabited
     }
 
     /// One-sided, incomplete shape compatibility: pattern-side type parameters are
@@ -6134,7 +6168,13 @@ impl TypedProgram {
                     ctx.scope_id,
                 )?;
                 let (impl_handle, _) = self
-                    .find_or_generate_ability_impl_for_signature(self_type_id, signature, true, ctx.scope_id, span)
+                    .find_or_generate_ability_impl_for_signature(
+                        self_type_id,
+                        signature,
+                        true,
+                        ctx.scope_id,
+                        span,
+                    )
                     .map_err(|msg| kerr!(self, span, "{}", msg))?;
 
                 let call_ast_expr = *self.ast.exprs.get(qcall.call_expr).expect_call();
@@ -13351,7 +13391,13 @@ impl TypedProgram {
         );
         // We just can't allow ref self here since we don't have a good way to tell the function
         // call that it will work only if we coerce this argument, we only have types at this point.
-        match self.find_or_generate_ability_impl_for_signature(target_type, signature, false, scope_id, span) {
+        match self.find_or_generate_ability_impl_for_signature(
+            target_type,
+            signature,
+            false,
+            scope_id,
+            span,
+        ) {
             Ok((impl_handle, _)) => Ok(impl_handle),
             Err(reason) => kbail!(
                 self,

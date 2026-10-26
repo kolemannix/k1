@@ -199,9 +199,13 @@ impl TypedProgram {
 
         let impl_info_type_id = self.builtin_types.impl_info();
         let opt_type_id = self.synth_optional_type(impl_info_type_id);
-        let Ok((impl_handle, _)) =
-            self.find_or_generate_ability_impl_for_signature(self_type_id, signature, false, scope_id, span)
-        else {
+        let Ok((impl_handle, _)) = self.find_or_generate_ability_impl_for_signature(
+            self_type_id,
+            signature,
+            false,
+            scope_id,
+            span,
+        ) else {
             return Ok(synth_static_option(&mut self.static_values, opt_type_id, None));
         };
         let found = self.ability_impls.get(impl_handle.full_impl_id);

@@ -147,16 +147,12 @@ fn b8(name: string): { name: string, bits: size } { bn(name = name, bits = 8) }
 Here comes a big wall of advanced metaprogramming code; but it may look strikingly like dumb string-building code to you.
 ```rust
 fn define[base](type-name: string, members: span[{ name: string, bits: size }]): string {
-  use meta/code-writer
-
   let base-type-id: u64 = types/type-id[base]()
   let base-schema = types/type-id-schema(base-type-id)
   let base-name = types/type-id-name(base-type-id)
   require base-schema is :int(int-kind) else { crash("Base should be an int; got {base-name}") }
   let total-bits = int-kind.bit-width()
 
-  // This is just a regular string-builder that gets some extra methods since we've
-  // brought the meta/code-writer ability into scope
   let code = string-builder/new()
 
   // This defines a named struct type with one field, which is a common newtype pattern
@@ -246,14 +242,16 @@ fn define[base](type-name: string, members: span[{ name: string, bits: size }]):
 
   writelnf(code, "}") // End ns
 
-  let print-body = string-builder/new()
+  writelnf(code, "impl print for {type-name} \{")
+  writelnf(code, "  fn print-to[w: writer](self, w) \{")
   for members {
     let get-name = "get-{it.name}"
     let last = it-index + 1 == members.len()
     let sep = if last "" else ","
-    writelnf(print-body, `    w.string("{it.name}=\{self.{get-name}()}{sep}");`)
+    writelnf(code, `    w.string("{it.name}=\{self.{get-name}()}{sep}");`)
   }
-  (&code).impl-print(type-name, print-body.build(), indent = 0)
+  writelnf(code, "  }")
+  writelnf(code, "}")
 
   code.build()
 }
