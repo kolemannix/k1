@@ -101,8 +101,8 @@ ns pre { macro make-point(name: code) { "type $name = { x: i32, y: i32 }" } }
 - `types/id[t]` -> `type-id`: `.name() .schema() .instance-info() .size() .stride()
   .align() .info()`. `types/size[t]`/`stride`/`align` fold to constants. No-layout
   types (never, ZST, abstract) report size 0, align 1.
-- Schemas are sums: `:struct` (packed included; see offsets), `:reference`,
-  `:either`, `:array`, `:function`, `:union`, `:int(_)`, ...
+- Schemas are sums: `:struct .{ fields, packed }`, `:union .{ fields }`,
+  `:reference`, `:either`, `:array`, `:function`, `:int(_)`, ...
 - `id.impl-of[iterable[item = int]]()` -> `?impl-info` `{ kind, args }`: what
   `iterable@(t)` resolves to for exactly `t`, deriving or instantiating it.
   `kind` is `:direct`, `:blanket` or `:compiler` (derived, no impl block); `args`
@@ -119,6 +119,7 @@ ns pre { macro make-point(name: code) { "type $name = { x: i32, y: i32 }" } }
   `make-either(tag-type: ?type-id, variants)` / `make-either-default`
   (`variant-data[t]("a")`, `variant-empty("b")`), `make-reference`, `make-array`,
   `make-fn`, `make-instance`. Use with `type(alias) p = #type types/make-...`.
+  `types/map-struct(id, fn t. ...)` remaps each field's type, keeping packed or union.
 
 ## dyn
 `dyn[ability[params bound]]` = `{ table: { fn ptr per dispatchable fn }, state: ptr }`.
@@ -214,10 +215,19 @@ state pointer means a dyn can't cross `#static` into a runtime constant.
   `hash/fnv1a` is the stable one.
 - `std/time`: `unix-nanos()`, `unix-seconds()`; monotonic `read-cpu-counter()` +
   `elapsed-nanos`/`elapsed-ms`.
+- `std/sys`: `fill-random(bytes: buffer[u8])` is host entropy, `random(upper-bound)`
+  an unbiased draw. `std/ulid`: `make()`, `is-valid`; `write-crockford-base32(w,
+  bits, digit-count)` writes the low 5-bit groups high first (at most 13).
+- `std/utf8`: `len()` stays bytes; `count-code-points` counts non-continuation
+  bytes (exact on valid UTF-8); `code-points(text)` iterates `u32`, one U+FFFD per
+  maximal invalid subpart (Unicode 3.9, as browsers decode).
 - `std/json`: `to-string`, `write(w, v)`, `to-string-pretty`, `parse[t]`; schema
   blanket impls, a concrete `json-read`/`json-write` impl overrides. Options are a
   static type arg naming a global: `json/parse-with[t, camel](s)`. Unescaped decoded
   strings borrow the input. `use std/json/json` shadows the ns: write `json/json`.
+  `to-value(v)`/`from-value[t](j)` convert through text (the one read/write path).
+  `a.merge(b)` is a deep merge: object members merge recursively, anything else is
+  `b`'s, `null` included (it composes patches; RFC 7396's apply would delete).
 - `std/url`: `url/parse` borrows; accessors are zero-copy, still-encoded views;
   path/query/fragment accept any visible byte, `normalized()` is strict RFC 3986;
   `resolve`, `path-segments`, `query-pairs`, `url/builder`, `url/percent`,

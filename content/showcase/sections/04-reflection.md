@@ -32,6 +32,7 @@ with the same `if x is { ... }` as any other sum, at compile time or runtime.
         type-id,
         offset: size
       }],
+      packed: bool,
     }),
     union({
       fields: span[{

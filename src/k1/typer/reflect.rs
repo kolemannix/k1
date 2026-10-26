@@ -408,15 +408,16 @@ impl TypedProgram {
             }
             Type::Struct(struct_type) => {
                 let record_kind = struct_type.record_kind;
+                let variant_name = match record_kind {
+                    RecordKind::Struct | RecordKind::Packed => self.ast.idents.b.struct_,
+                    RecordKind::Union => self.ast.idents.b.union,
+                };
+                // { fields: span[{ ... }], packed: bool } or { fields: span[{ ... }] }
                 let struct_schema_payload_type_id =
-                    get_schema_variant(self, self.ast.idents.b.struct_).payload.unwrap();
-                // { fields: span[{}] }
-                let struct_schema_payload_struct =
-                    self.types.get(struct_schema_payload_type_id).expect_struct();
-                // { fields: span[{ ... }] }
+                    get_schema_variant(self, variant_name).payload.unwrap();
                 let struct_type_fields = struct_type.fields;
                 let struct_schema_fields_span_type_id =
-                    self.mem.get_nth(struct_schema_payload_struct.fields, 0).type_id;
+                    self.get_struct_field(struct_schema_payload_type_id, 0).type_id;
                 let struct_schema_field_item_struct_type_id =
                     self.get_as_span_instance(struct_schema_fields_span_type_id).unwrap();
 
@@ -448,13 +449,15 @@ impl TypedProgram {
                     struct_schema_fields_span_type_id,
                     field_values.as_slice(),
                 );
+                let packed_value_id =
+                    StaticValuePool::get_bool_id(record_kind == RecordKind::Packed);
+                let payload_values: &[StaticValueId] = match record_kind {
+                    RecordKind::Struct | RecordKind::Packed => &[span_value_id, packed_value_id],
+                    RecordKind::Union => &[span_value_id],
+                };
                 let payload = self
                     .static_values
-                    .add_struct_from_slice(struct_schema_payload_type_id, &[span_value_id]);
-                let variant_name = match record_kind {
-                    RecordKind::Struct | RecordKind::Packed => self.ast.idents.b.struct_,
-                    RecordKind::Union => self.ast.idents.b.union,
-                };
+                    .add_struct_from_slice(struct_schema_payload_type_id, payload_values);
                 make_variant(self, variant_name, Some(payload))
             }
             Type::Reference(reference_type) => {

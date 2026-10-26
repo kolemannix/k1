@@ -35,6 +35,8 @@ ns type_synthesis {
     ])
     assert-equals(created, types/id[point])
     assert-equals(created, types/id[{ x: i64, y: string }])
+    let optional: types/type-id = #static types/map-struct(types/id[point], fn t. types/make-instance(types/id[opt], [t]))
+    assert-equals(optional, types/id[{ x: ?i64, y: ?string }])
 
     require types/id[point].schema() is :struct .{ fields }
       and fields.len() == 2
@@ -55,6 +57,10 @@ ns type_synthesis {
       .{ name = "b", type = types/id[u64] },
     ])
     assert-equals(made-packed, types/id[packed { a: u8, b: u64 }])
+    let mapped-union: types/type-id = #static types/map-struct(types/id[union { a: u32, b: f32 }], fn t. t)
+    assert-equals(mapped-union, made-union)
+    let mapped-packed: types/type-id = #static types/map-struct(types/id[packed { a: u8, b: u64 }], fn t. t)
+    assert-equals(mapped-packed, made-packed)
     assert-equals(types/size[packed { a: u8, b: u64 }], 9)
 
     let s: shape = :circle(5)

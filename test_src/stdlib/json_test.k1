@@ -211,6 +211,15 @@ fn(test) parse-typed() {
   assert(json/parse[char](`"x"`) is :ok 'x')
 }
 
+fn(test) merge-and-values() {
+  let merged = parsed(`{"w1":{"value":"x"},"n":1}`).merge(parsed(`{"w1":{"_message":null},"n":[2],"m":{}}`))
+  assert-equals(json/to-string(merged), `{"w1":{"value":"x","_message":null},"n":[2],"m":{}}`)
+  let v = json/to-value(.{ name = "n", tags = [1, 2] })
+  assert(v.get("tags").! is :array s and s.len() == 2)
+  assert(json/from-value[{ name: string, tags: list[int] }](v) is :ok back and back.tags == [1, 2])
+  assert(json/from-value[person](v) is :err e and e.kind is :missing-field "initial")
+}
+
 let example-json: string =
 `{
   "school": "Greenwood High",

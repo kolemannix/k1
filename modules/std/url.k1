@@ -377,7 +377,7 @@ ns for builder {
   }
 
   fn _check-path(self: *builder) {
-    if (not self.has-authority) and string/wrap-span(self.out.peek()).drop(self.path-start).starts-with("//") {
+    if (not self.has-authority) and self.out.peek().drop(self.path-start).starts-with("//") {
       crash("url/builder: a path without a host cannot start with `//`")
     }
   }

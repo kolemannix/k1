@@ -18,6 +18,44 @@ fn write-codepoint[w: writer](w: w, cp: u32) {
   }
 }
 
+fn count-code-points(text: string): size { core/fmt/char-count(text.span-bytes()) }
+
+type code-point-iterator = { bytes: span[u8], pos: size }
+
+fn code-points(text: string): code-point-iterator { .{ bytes = text.span-bytes(), pos = 0 } }
+
+impl iterator[item = u32] for code-point-iterator {
+  fn next(self: *self): ?u32 {
+    let n = self.bytes.len()
+    if self.pos >= n return :none
+    let lead = self.bytes.[self.pos]
+    self.pos = self.pos + 1
+    if lead < 0x80 return :some lead.widen[u32]
+    let need: u8 = 0
+    let lo: u8 = 0x80
+    let hi: u8 = 0xBF
+    if lead >= 0xC2 and lead <= 0xDF { need = 1 }
+    else if lead == 0xE0 { need = 2; lo = 0xA0 }
+    else if lead == 0xED { need = 2; hi = 0x9F }
+    else if lead >= 0xE1 and lead <= 0xEF { need = 2 }
+    else if lead == 0xF0 { need = 3; lo = 0x90 }
+    else if lead >= 0xF1 and lead <= 0xF3 { need = 3 }
+    else if lead == 0xF4 { need = 3; hi = 0x8F }
+    else return :some 0xFFFD
+    let cp: u32 = lead.bit-and(0x3F >> need).widen[u32]
+    for 0.until(need) {
+      if self.pos >= n return :some 0xFFFD
+      let b = self.bytes.[self.pos]
+      if b < lo or b > hi return :some 0xFFFD
+      cp = (cp << 6) + b.bit-and(0x3F).widen[u32]
+      self.pos = self.pos + 1
+      lo = 0x80
+      hi = 0xBF
+    }
+    :some cp
+  }
+}
+
 let TOO_SHORT: u8 = 1
 let TOO_LONG: u8 = 2
 let OVERLONG_3: u8 = 4

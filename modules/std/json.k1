@@ -18,6 +18,17 @@ ns for json {
     }
     :none
   }
+
+  fn merge(self, patch: json): json {
+    require self is :object members and patch is :object patched else return patch
+    let merged = list/from-span(members)
+    for p in patched {
+      if merged.find-index(fn[p](m) m.key == p.key) is :some i {
+        merged.[i].value = merged.[i].value.merge(p.value)
+      } else merged.push(p)
+    }
+    :object merged.as-span()
+  }
 }
 
 type opts = {
@@ -73,6 +84,8 @@ fn to-string-pretty[t: json-write](value: t, indent: size): string {
   pretty(sb.&, to-string(value), indent)
   sb.build()
 }
+
+fn to-value[t: json-write](value: t): json { parse[json](to-string(value)).! }
 
 fn write-float[w: writer](w, f: f64) {
   if f != f or f == f64/inf or f == f64/neg-inf w.write("null") else f.print-to(w)
@@ -234,6 +247,8 @@ fn parse-with[t: json-read, o: static opts](input: string): result[t, error] {
   if not r.at-end() { return r.fail(:trailing) }
   :ok value
 }
+
+fn from-value[t: json-read](value: json): result[t, error] { parse[t](to-string(value)) }
 
 type reader = {
   input: string,

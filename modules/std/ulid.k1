@@ -1,0 +1,33 @@
+ns ulid
+
+let crockford-digits: string = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+fn make(): string {
+  let out = string-builder/with-capacity(26)
+  write-crockford-base32(out.&, time/unix-nanos() / 1_000_000, 10)
+  let random: array[u8, 10] = .0
+  sys/fill-random(random.&.as-buffer())
+  for half in [0, 5] {
+    let bits: u64 = 0
+    for 0.until(5) { bits = (bits << 8) | random.[half + it].widen[u64] }
+    write-crockford-base32(out.&, bits, 8)
+  }
+  out.take()
+}
+
+fn is-valid(text: string): bool {
+  text.len() == 26 and text.[0] <= '7' and text.forall(fn c. crockford-digits.contains(c))
+}
+
+fn write-crockford-base32[w: writer](w, bits: u64, digit-count: size) {
+  if digit-count > 13 crash("write-crockford-base32: a u64 has 13 digits, not ${digit-count}")
+  let digits: array[u8, 13] = .0
+  let rest = bits
+  let i = digit-count
+  while i > 0 {
+    i = i - 1
+    digits.[i] = crockford-digits.span-bytes().[(rest & 31).signed()]
+    rest = rest >> 5
+  }
+  w.write-bytes(digits.&.as-span().take(digit-count))
+}

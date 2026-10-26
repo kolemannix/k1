@@ -50,6 +50,17 @@ fn assert-wrapper-type[wrapper, inner]() {
   if not equal crash("Expected ${types/name[inner]} but got ${field.type-id.name()}")
 }
 
+fn map-struct(type-id, map-type: some fn(type-id) -> type-id): type-id {
+  let source: { kind: record-kind, fields: type-schema:struct.fields } = if type-id.schema() is {
+    :struct s -> .{ kind = if s.packed :packed else :struct, fields = s.fields },
+    :union u -> .{ kind = :union, fields = u.fields },
+    _ -> crash("map-struct: ${type-id.name()} is not a struct"),
+  }
+  let fields: list[make-struct.fields.t] = list/with-capacity(source.fields.len())
+  for source.fields { fields.push(.{ name = it.name, type = map-type(it.type-id) }) }
+  make-struct(source.kind, fields.as-span())
+}
+
 fn type-eq[a, b](): bool { types/id[a] == types/id[b] }
 
 fn assert-layout[t](size: size, align: size, struct-fields: span[size]) {

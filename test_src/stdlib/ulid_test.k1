@@ -1,0 +1,28 @@
+ns ulid_test
+use std/ulid
+
+fn(test) make-gives-distinct-valid-ids() {
+  let first = ulid/make()
+  assert-equals(first.len(), 26)
+  assert(first != ulid/make())
+  assert(ulid/is-valid(first))
+}
+
+fn(test) is-valid-refuses-other-lengths-and-digits() {
+  assert(ulid/is-valid("01ARYZ6S41TSV4RRFFQ69G5FAV"))
+  assert(ulid/is-valid("7ZZZZZZZZZZZZZZZZZZZZZZZZZ"))
+  assert(not ulid/is-valid("8ZZZZZZZZZZZZZZZZZZZZZZZZZ"))
+  assert(not ulid/is-valid("01ARYZ6S41TSV4RRFFQ69G5FA"))
+  assert(not ulid/is-valid("01ARYZ6S41TSV4RRFFQ69G5FAI"))
+  assert(not ulid/is-valid("01aryz6s41tsv4rrffq69g5fav"))
+  assert(not ulid/is-valid("01ARYZ6S41TSV4\"</script>FA"))
+}
+
+fn(test) write-crockford-base32-matches-the-spec-example() {
+  let out = string-builder/new()
+  ulid/write-crockford-base32(out.&, 1469918176385, 10)
+  assert-equals(out.&.take(), "01ARYZ6S41")
+  ulid/write-crockford-base32(out.&, u64/max-value, 13)
+  ulid/write-crockford-base32(out.&, u64/max-value, 0)
+  assert-equals(out.&.take(), "FZZZZZZZZZZZZ")
+}

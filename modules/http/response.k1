@@ -112,6 +112,7 @@ impl print for status {
 
 type http-response = {
   content-type: string,
+  //review extra-headers always reads a bit off to me. Its just the headers, but not content-type...
   extra-headers: span[string],
   body: either { complete(span[span[u8]]), stream(byte-source) },
   status: status,
@@ -119,11 +120,12 @@ type http-response = {
 
 ns response {
   fn complete(status: status, content-type: string, body: string): http-response {
-    .{ content-type, extra-headers = [], body = :complete span/single(body.span-bytes()), status }
+    .{ content-type, extra-headers = .0, body = :complete span/single(body.span-bytes()), status }
   }
-  fn html(body: string): http-response { complete(:ok, "text/html", body) }
-  fn not-found(): http-response { complete(:not-found, "text/plain", "Not Found\n") }
-  fn text(status: status, body: string): http-response { complete(status, "text/plain", body) }
+  fn(inline) html(body: string): http-response { complete(:ok, "text/html", body) }
+  fn(inline) json(body: string): http-response { complete(:ok, "application/json", body) }
+  fn(inline) not-found(): http-response { complete(:not-found, "text/plain", "Not Found\n") }
+  fn(inline) text(status: status, body: string): http-response { complete(status, "text/plain", body) }
   fn method-not-allowed(allowed: span[string]): http-response {
     let allow = string-builder/new()
     allow.write("Allow: ")

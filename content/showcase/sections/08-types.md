@@ -233,12 +233,7 @@ wrapped in `opt`:
 
 ```k1
   fn patch-of(t: types/type-id): types/type-id {
-    require t.schema() is :struct .{ fields } else crash("patch-of needs a struct")
-    let out: list[{ name: string, type: types/type-id }] = []
-    for f in fields {
-      out.push(.{ name = f.name, type = types/make-instance(types/id[opt], [f.type-id]) })
-    }
-    types/make-struct(:struct, out.as-span())
+    types/map-struct(t, fn f. types/make-instance(types/id[opt], [f]))
   }
 ```
 

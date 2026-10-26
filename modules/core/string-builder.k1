@@ -10,16 +10,16 @@ ns for string-builder {
     self.list.clear()
   }
 
-  fn peek(self: *string-builder): span[char] {
-    self.list.as-span().as-char-span()
+  fn peek(self: *string-builder): string {
+    string/wrap-bytes(self.list.as-span())
   }
 
   fn build(self: *string-builder): string {
-    string/wrap-bytes(self.list.as-span()).cloned()
+    self.peek().cloned()
   }
 
   fn take(self: *string-builder): string {
-    let taken = string/wrap-bytes(self.list.as-span())
+    let taken = self.peek()
     self.list = list/empty()
     taken
   }

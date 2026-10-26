@@ -204,7 +204,7 @@ pub(crate) struct BuiltinIdents {
     pub packed: StringId,
     pub type_of: StringId,
     pub static_: StringId,
-    // type-schema variant names; must match types/type-schema in types.k1
+    // type-schema variant names; must match types/type-schema in builtin.k1
     pub char: StringId,
     pub bool: StringId,
     pub ptr: StringId,

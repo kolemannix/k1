@@ -2,8 +2,21 @@ ns fmt {
   fn(inline) is-char-start(b: u8): bool { b.bit-and(0xC0) != 0x80 }
 
   fn char-count(bytes: span[u8]): size {
+    let len = bytes.len()
+    let base = bytes.data-ptr()
+    let lanes: size = k1/simd-bytes
     let count: size = 0
-    for b in bytes {
+    let i: size = 0
+    if i + lanes <= len {
+      let high-bits = vector/splat[u8, k1/simd-bytes](0xC0)
+      let continuation = vector/splat[u8, k1/simd-bytes](0x80)
+      while i + lanes <= len {
+        let chunk = vector/load-unchecked[u8, k1/simd-bytes](base.add-bytes(i))
+        count = count + lanes - chunk.bit-and(high-bits).eq-lanes(continuation).to-mask().count-ones().signed()
+        i = i + lanes
+      }
+    }
+    for b in bytes.drop(i) {
       if is-char-start(b) { count = count + 1 }
     }
     count

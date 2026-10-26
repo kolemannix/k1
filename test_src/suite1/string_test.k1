@@ -32,6 +32,7 @@ fn(test) hex-encode-and-decode() {
   assert("Az".to-hex() == "417a")
   let hex-sb = string-builder/new()
   hex-bytes.as-span().write-hex(hex-sb.&, upper = true)
+  assert-equals("${hex-sb.&.peek()}", "00FF417A")
   assert(hex-sb.&.build() == "00FF417A")
   assert(span/from-hex("00FF417a").! == hex-bytes.as-span())
   assert(span/from-hex("").! == span/empty())

@@ -1,38 +1,13 @@
 ns utf8_test
 use std/utf8
 
-fn scalar-valid-utf8(bytes: span[u8]): bool {
-  let n = bytes.len()
-  let i: size = 0
-  while i < n {
-    let c = bytes.[i]
-    if c < 0x80 { i = i + 1; continue }
-    let need: size = 0
-    let lo: u8 = 0x80
-    let hi: u8 = 0xBF
-    if c >= 0xC2 and c <= 0xDF { need = 1 }
-    else if c == 0xE0 { need = 2; lo = 0xA0 }
-    else if (c >= 0xE1 and c <= 0xEC) or c == 0xEE or c == 0xEF { need = 2 }
-    else if c == 0xED { need = 2; hi = 0x9F }
-    else if c == 0xF0 { need = 3; lo = 0x90 }
-    else if c >= 0xF1 and c <= 0xF3 { need = 3 }
-    else if c == 0xF4 { need = 3; hi = 0x8F }
-    else { return false }
-    if i + need >= n { return false }
-    let second = bytes.[i + 1]
-    if second < lo or second > hi { return false }
-    let j: size = 2
-    while j <= need {
-      let t = bytes.[i + j]
-      if t < 0x80 or t > 0xBF { return false }
-      j = j + 1
-    }
-    i = i + need + 1
-  }
-  true
+fn decodes-losslessly(bytes: span[u8]): bool {
+  let encoded = string-builder/new()
+  for utf8/code-points(string/wrap-bytes(bytes)) { utf8/write-codepoint(encoded.&, it) }
+  encoded.&.peek() == string/wrap-bytes(bytes)
 }
 
-fn(test) is-valid-matches-scalar-on-random-bytes() {
+fn(test) is-valid-matches-decoder-on-random-bytes() {
   let seed: u64 = 0x9E3779B97F4A7C15
   let buf = list/empty[u8]()
   for 0.until(3000) {
@@ -46,7 +21,7 @@ fn(test) is-valid-matches-scalar-on-random-bytes() {
       buf.push(b)
     }
     let bytes = buf.as-span()
-    if utf8/is-valid(bytes) != scalar-valid-utf8(bytes) {
+    if utf8/is-valid(bytes) != decodes-losslessly(bytes) {
       let sb = string-builder/new()
       for bytes { sb.write(" "); core/format-uint(context sb.&)(it.widen[u64], 16) }
       crash("utf8 mismatch, simd=${utf8/is-valid(bytes)}:${sb.build()}")
@@ -54,7 +29,29 @@ fn(test) is-valid-matches-scalar-on-random-bytes() {
   }
 }
 
-fn(test) is-valid-matches-scalar-on-edge-cases() {
+fn(test) code-points-replace-each-maximal-invalid-subpart() {
+  assert-equals(utf8/count-code-points("aÄ€😀"), 4)
+  assert-equals(utf8/code-points("aÄ€😀").to-list(), [0x61, 0xC4, 0x20AC, 0x1F600])
+  let invalid: span[u8] = [0x61, 0xF1, 0x80, 0x80, 0xE1, 0x80, 0xC2, 0x62, 0x80, 0x63, 0x80, 0xBF, 0x64]
+  assert-equals(utf8/code-points(string/wrap-bytes(invalid)).to-list(), [0x61, 0xFFFD, 0xFFFD, 0xFFFD, 0x62, 0xFFFD, 0x63, 0xFFFD, 0xFFFD, 0x64])
+  let overlong: span[u8] = [0xC0, 0x80, 0xE0, 0x80, 0x80, 0xF0, 0x80, 0x80, 0x80]
+  assert-equals(utf8/code-points(string/wrap-bytes(overlong)).to-list(), list/filled[u32](9, 0xFFFD))
+}
+
+fn(test) count-code-points-across-vector-chunks() {
+  let text = string-builder/new()
+  for reps in 0.until(8) {
+    for ascii in 0.until(33) {
+      text.&.reset()
+      for 0.until(reps) { text.write("aÄ€😀") }
+      for 0.until(ascii) { text.write("x") }
+      assert-equals(utf8/count-code-points(text.&.peek()), 4 * reps + ascii)
+    }
+  }
+  assert-equals(utf8/count-code-points(string/wrap-bytes(list/filled[u8](40, 0x80).as-span())), 0)
+}
+
+fn(test) is-valid-matches-decoder-on-edge-cases() {
   let edges: span[span[u8]] = [
     [0xE2, 0x82], [0xE2, 0x82, 0xAC], [0xF0, 0x9F, 0x98], [0xF0, 0x9F, 0x98, 0x80], [0xC0, 0x80], [0xED, 0xA0, 0x80],
     [0xF4, 0x90, 0x80, 0x80], [0xF4, 0x8F, 0xBF, 0xBF], [0x80], [0xC2], [0x61, 0xC3, 0xA9],
@@ -63,5 +60,5 @@ fn(test) is-valid-matches-scalar-on-edge-cases() {
     [0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0xC3, 0xA9],
     [0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0x61, 0xE2, 0x82],
   ]
-  for edges { assert-equals(utf8/is-valid(it), scalar-valid-utf8(it)) }
+  for edges { assert-equals(utf8/is-valid(it), decodes-losslessly(it)) }
 }
