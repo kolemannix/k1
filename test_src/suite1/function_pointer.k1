@@ -35,6 +35,13 @@ fn(test) reassign-fn-pointer-local() {
   assert-equals(some-add-fn(20), 22)
 }
 
+fn(test) local-shadows-fn-in-call() {
+  let static-add-one = fn(x: int) x + 5
+  assert-equals(static-add-one(1), 6)
+  let o: ?int = :none
+  require o is :some(pick-first) else { assert-equals(pick-first(1, 2), 1); return }
+}
+
 fn(test) call-fn-pointer-field() {
   let has-fn: has-fn = .{ myfn = static-add-one.& }
   assert-equals((has-fn.myfn)(4), 5)

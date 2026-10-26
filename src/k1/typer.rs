@@ -2440,6 +2440,13 @@ pub struct TypePendingDefinition {
 }
 
 #[derive(Clone, Copy)]
+pub struct ImplPendingDeclaration {
+    pub scope_id: ScopeId,
+    pub parsed_id: ParsedAbilityImplId,
+    pub base_ability_id: Option<AbilityId>,
+}
+
+#[derive(Clone, Copy)]
 pub struct UsePendingResolution {
     pub scope_id: ScopeId,
     pub use_id: ParsedUseId,
@@ -2624,6 +2631,7 @@ pub struct TypedProgram {
 
     pub uses_pending_resolution: VecDeque<UsePendingResolution>,
     pub types_pending_definition: Vec<TypePendingDefinition>,
+    pub impls_pending_declaration: VecDeque<ImplPendingDeclaration>,
     pub functions_pending_body: Vec<FunctionId>,
 
     exported_symbols: FxHashMap<StringId, Span>,
@@ -2844,6 +2852,7 @@ impl TypedProgram {
             function_name_to_ability_names: FxHashMap::with_capacity(1024),
             uses_pending_resolution: VecDeque::new(),
             types_pending_definition: Vec::new(),
+            impls_pending_declaration: VecDeque::new(),
             functions_pending_body: Vec::new(),
             ast,
             module_in_progress: None,
@@ -4325,7 +4334,7 @@ impl TypedProgram {
         scope_id: ScopeId,
         span: Span,
     ) -> Result<(AbilityImplHandle, SelfAdjust), MStr<MemTmp>> {
-        // let mut attempts: SV4<String> = smallvec![];
+        self.declare_pending_impls_for(self_type_id, target_base_ability_id);
         if let Some(impl_handle) = self.find_unique_valid_ability_impl(
             self_type_id,
             target_base_ability_id,
@@ -4380,6 +4389,7 @@ impl TypedProgram {
             }
         };
         if let Some((adjusted_self_type_id, adjust)) = adjusted_self {
+            self.declare_pending_impls_for(adjusted_self_type_id, target_base_ability_id);
             if let Some(impl_handle) = self.find_unique_valid_ability_impl(
                 adjusted_self_type_id,
                 target_base_ability_id,
@@ -8377,6 +8387,7 @@ impl TypedProgram {
         ability_id: AbilityId,
         fn_name: StringId,
     ) -> Option<(FunctionId, FunctionId)> {
+        self.declare_pending_impls_for(self_type, ability_id);
         let handles = self
             .ability_impl_table_by_ability
             .get(&TypeAbilityPair { self_type_id: self_type, base_ability_id: ability_id })?;
@@ -8638,65 +8649,53 @@ impl TypedProgram {
                 stashed_args,
             ),
             false => {
-                if let Some(function_id) =
+                let binding = if fn_call.name.has_path() {
                     self.find_function_namespaced(ctx.scope_id, &fn_call.name)?
-                {
-                    if let Some(function_ability_id) =
-                        self.get_function(function_id).kind.ability_id()
-                    {
-                        let function_ability_index = self
-                            .abilities
-                            .get(function_ability_id)
-                            .find_function_by_name(&self.mem, fn_call.name.name)
-                            .unwrap();
-                        self.solve_ability_call(
-                            function_ability_index,
+                        .map(CallBinding::Function)
+                } else {
+                    self.scopes.find_call_binding(ctx.scope_id, fn_call.name.name)
+                };
+                match binding {
+                    None => {
+                        Err(kerr!(self, call_span, "Function not found: '{}'", fn_call.name.name))
+                    }
+                    Some(CallBinding::Value) => {
+                        let (_, value) = self.eval_variable_named(
+                            fn_call.name,
+                            ctx.with_no_expected_type(),
+                            false,
+                        )?;
+                        let call = self.eval_call_on_value(
+                            value,
                             fn_call,
                             call_span,
-                            None,
-                            known_args,
+                            known_args.copied(),
                             ctx,
                             stashed_args,
-                        )
-                    } else {
-                        Ok(CallResolution::Call(Callee::make_static(function_id)))
+                        )?;
+                        Ok(CallResolution::OtherExpr(call))
                     }
-                } else {
-                    // Function lookup failed, now we deal with lower priority 'callable' things
-                    // Such as lambda objects or function pointers
-                    macro_rules! fn_not_found {
-                        () => {
-                            Err(kerr!(
-                                self,
-                                call_span,
-                                "Function not found: '{}'",
-                                fn_call.name.name
-                            ))
-                        };
+                    Some(CallBinding::Function(function_id)) => {
+                        match self.get_function(function_id).kind.ability_id() {
+                            Some(function_ability_id) => {
+                                let function_ability_index = self
+                                    .abilities
+                                    .get(function_ability_id)
+                                    .find_function_by_name(&self.mem, fn_call.name.name)
+                                    .unwrap();
+                                self.solve_ability_call(
+                                    function_ability_index,
+                                    fn_call,
+                                    call_span,
+                                    None,
+                                    known_args,
+                                    ctx,
+                                    stashed_args,
+                                )
+                            }
+                            None => Ok(CallResolution::Call(Callee::make_static(function_id))),
+                        }
                     }
-                    if fn_call.name.has_path() {
-                        return fn_not_found!();
-                    }
-                    let Some((variable_id, _scope_id)) =
-                        self.scopes.find_variable(ctx.scope_id, fn_call.name.name)
-                    else {
-                        return fn_not_found!();
-                    };
-                    self.register_variable_usage(variable_id, fn_call.name.name_span);
-                    let value = self.exprs.add(
-                        TypedExpr::Variable(VariableExpr { variable_id }),
-                        self.variables.get(variable_id).type_id,
-                        fn_call.name.name_span,
-                    );
-                    let call = self.eval_call_on_value(
-                        value,
-                        fn_call,
-                        call_span,
-                        known_args.copied(),
-                        ctx,
-                        stashed_args,
-                    )?;
-                    Ok(CallResolution::OtherExpr(call))
                 }
             }
         }
@@ -9437,9 +9436,7 @@ impl TypedProgram {
             }
         }
 
-        if let Some(companion_ns) =
-            self.get_defn_info(base_for_method).and_then(|d| d.companion_namespace)
-        {
+        if let Some(companion_ns) = self.get_companion_namespace(base_for_method) {
             let companion_scope_id = self.namespaces.get_scope(companion_ns);
             debug!("companion scope {}", self.scope_id_to_string(companion_scope_id));
             debug!(
@@ -10474,7 +10471,7 @@ impl TypedProgram {
             self.register_variable_usage(matching_context_variable, fn_call.name.name_span);
             Ok(Some(MaybeTypedExpr::Typed(expr)))
         } else if context_param.type_id == self.builtin_types.source_location.unwrap() {
-            let expr = self.synth_source_location(span);
+            let expr = self.synth_source_location(span, calling_scope);
             Ok(Some(MaybeTypedExpr::Typed(expr)))
         } else if !tolerate_missing {
             kbail!(
@@ -11175,7 +11172,13 @@ impl TypedProgram {
 
                     // Avoid emitting the runtime switch if type-info is called directly with the
                     // result of type-id
-                    if let Some(type_id) = self.is_static_type_id_expr(type_id_arg) {
+                    let static_type_id = match self.exprs.get(type_id_arg) {
+                        TypedExpr::StaticValue(stat) => {
+                            self.get_type_id_from_value(self.static_values.get(stat.value_id))
+                        }
+                        _ => None,
+                    };
+                    if let Some(type_id) = static_type_id {
                         let info = self.get_type_info(type_id);
                         return Ok(self.add_static_constant_expr(info, span));
                     } else {
@@ -11202,21 +11205,6 @@ impl TypedProgram {
         }
         let call_id = self.calls.add(call);
         self.exprs.add(TypedExpr::Call { call_id }, return_type, span)
-    }
-
-    fn is_static_type_id_expr(&self, expr: TypedExprId) -> Option<TypeId> {
-        let TypedExpr::StaticValue(stat) = self.exprs.get(expr) else { return None };
-        let StaticValue::Struct(type_id_struct) = self.static_values.get(stat.value_id) else {
-            return None;
-        };
-        if type_id_struct.type_id != self.builtin_types.type_id() {
-            return None;
-        }
-        let inner = *self.static_values.mem.get_nth(type_id_struct.fields, 0);
-        let StaticValue::Int(TypedIntValue::U64(raw)) = self.static_values.get(inner) else {
-            return None;
-        };
-        TypeId::from_u32(*raw as u32)
     }
 
     const LARGE_ARG_COPY_BYTES: u32 = 1024;
@@ -11348,7 +11336,7 @@ impl TypedProgram {
                 Ok(self.exprs.add_static(static_value_id, type_id, false, span))
             }
             BuiltinTyperInline::CompilerSourceLocation => {
-                let source_location = self.synth_source_location(span);
+                let source_location = self.synth_source_location(span, ctx.scope_id);
                 Ok(source_location)
             }
             BuiltinTyperInline::CompilerModuleDir => Ok(self.synth_module_dir(ctx.scope_id, span)),
@@ -15846,6 +15834,71 @@ impl TypedProgram {
         Ok(Some(typed_impl_id))
     }
 
+    fn declare_pending_impl(&mut self, pending: ImplPendingDeclaration) {
+        let tmp_mark = self.tmp.mark();
+        if let Err(e) = self.declare_ability_impl(pending.parsed_id, pending.scope_id) {
+            self.report(e)
+        }
+        self.tmp.reset_to(tmp_mark);
+    }
+
+    fn declare_pending_impls_for(&mut self, self_type_id: TypeId, base_ability_id: AbilityId) {
+        let mut i = 0;
+        while i < self.impls_pending_declaration.len() {
+            let pending = self.impls_pending_declaration[i];
+            let parsed = self.ast.get_ability_impl(pending.parsed_id);
+            let (ability_name, self_type_expr, impl_params) =
+                (parsed.ability_expr.name, parsed.self_type, parsed.generic_impl_params);
+            let pending_base_ability_id = match pending.base_ability_id {
+                Some(id) => Some(id),
+                None => {
+                    let found = self.find_ability_namespaced(pending.scope_id, &ability_name);
+                    let base = match found {
+                        Ok(Some(ability_id)) => Some(self.abilities.get(ability_id).base_ability_id),
+                        _ => None,
+                    };
+                    self.impls_pending_declaration[i].base_ability_id = base;
+                    base
+                }
+            };
+            if pending_base_ability_id != Some(base_ability_id) {
+                i += 1;
+                continue;
+            }
+
+            // Self type head match, by scope lookup alone so nothing is forced
+            let head_may_match = match self.ast.type_exprs.get(self_type_expr) {
+                ParsedTypeExpr::TypeApplication(app)
+                    if app.name.has_path()
+                        || !self.ast.mem.getn(impl_params).iter().any(|p| p.name == app.name.name) =>
+                {
+                    match self.find_type_namespaced(pending.scope_id, &app.name) {
+                        Ok(Some((type_id, _))) => {
+                            type_id == self_type_id
+                                || matches!(
+                                    (self.get_defn_info(type_id), self.get_defn_info(self_type_id)),
+                                    (Some(a), Some(b)) if a.ast_id == b.ast_id
+                                )
+                        }
+                        Ok(None) => matches!(
+                            self.find_pending_type_namespaced(pending.scope_id, &app.name),
+                            Ok(Some((defn_id, _))) if self.ast.get_type_defn(defn_id).flags.is_alias()
+                        ),
+                        Err(_) => false,
+                    }
+                }
+                _ => true,
+            };
+            if !head_may_match {
+                i += 1;
+                continue;
+            }
+            self.impls_pending_declaration.remove(i);
+            self.declare_pending_impl(pending);
+            i = 0;
+        }
+    }
+
     fn compile_ability_impl_bodies(
         &mut self,
         parsed_ability_impl_id: ParsedAbilityImplId,
@@ -16111,7 +16164,7 @@ impl TypedProgram {
         }
     }
 
-    /// Registers a global, type or ability as pending in its namespace's scope,
+    /// Registers a global, type, ability or impl as pending in its namespace's scope,
     /// or declares a namespace and registers its definitions. Pass 1 registers
     /// a module's unconditional definitions before running any definition-level
     /// metaprogram, so their static args see them in any order, and a
@@ -16214,6 +16267,15 @@ impl TypedProgram {
                     self.ast.namespaces.get(child).definitions.as_slice(&self.ast.mem);
                 self.register_definitions(child_defns, child, skip_defns)
             }
+            ParsedId::AbilityImpl(parsed_id) => {
+                if !in_order {
+                    self.impls_pending_declaration.push_back(ImplPendingDeclaration {
+                        scope_id: namespace_scope_id,
+                        parsed_id,
+                        base_ability_id: None,
+                    });
+                }
+            }
             _ => {}
         }
     }
@@ -16250,11 +16312,6 @@ impl TypedProgram {
                     {
                         self.report(e)
                     };
-                }
-                ParsedId::AbilityImpl(ability_impl) => {
-                    if let Err(e) = self.declare_ability_impl(ability_impl, namespace_scope_id) {
-                        self.report(e)
-                    }
                 }
                 _ => {}
             }
@@ -16537,8 +16594,20 @@ impl TypedProgram {
             }
             self.scopes.replace_namespace(parent_scope_id, name, namespace_id);
         }
+        if namespace_type == NamespaceKind::TypeCompanion
+            && let Some(type_id) = self.scopes.find_type_local(parent_scope_id, name)
+            && self.get_companion_namespace(type_id) == Some(namespace_id)
+        {
+            self.attach_companion_namespace(namespace_id, type_id);
+        }
 
         Ok(namespace_id)
+    }
+
+    fn attach_companion_namespace(&mut self, namespace_id: NamespaceId, type_id: TypeId) {
+        self.namespaces.get_mut(namespace_id).companion_type_id = Some(type_id);
+        let companion_scope_id = self.namespaces.get(namespace_id).scope_id;
+        let _ = self.scopes.add_type(companion_scope_id, self.ast.idents.b.self_, type_id);
     }
 
     fn declare_namespace(
@@ -16865,6 +16934,9 @@ impl TypedProgram {
             self.drain_pending_type_defns();
         }
         self.declare_namespace_abilities(module_root_parsed_namespace, skip_defns);
+        while let Some(pending) = self.impls_pending_declaration.pop_front() {
+            self.declare_pending_impl(pending);
+        }
         self.drain_pending_type_defns();
         self.trace_pop(pass);
 

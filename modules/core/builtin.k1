@@ -882,7 +882,7 @@ ns mem {
 // Compiler builtins
 ns k1 {
 
-  type source-location = { filename: string, line: u32, span: u64 }
+  type source-location = { filename: string, line: u32, span: u64, function: string }
 
   // Need some way to mark this and is-static as comptime only
   let capture-prints: bool = true

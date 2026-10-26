@@ -17,7 +17,7 @@ type code-string-part = either {
 
 ns for code-token {
   fn fail(self, msg: string): never {
-    crash(context .{ filename = "", line = 0, span = self.source })(msg)
+    crash(context .{ filename = "", line = 0, span = self.source, function = "" })(msg)
   }
 }
 

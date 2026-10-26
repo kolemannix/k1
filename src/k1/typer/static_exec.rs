@@ -399,7 +399,7 @@ impl TypedProgram {
             for field in self.mem.getn(case_fields).to_vec() {
                 let value = match self.ident_str(field.name) {
                     "name" => self.static_values.add_string(test.name),
-                    "location" => self.static_source_location(test.span),
+                    "location" => self.static_source_location(test.span, Some(test.function_id)),
                     "run-fn" => self.add_static_function_pointer(field.type_id, test.thunk_id),
                     "expected-failure" => {
                         let (variant_index, payload) = match test.expected_failure {

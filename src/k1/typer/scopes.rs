@@ -586,6 +586,23 @@ impl Scopes {
             .map(|(v, _)| v)
     }
 
+    pub fn find_call_binding(&self, scope_id: ScopeId, ident: StringId) -> Option<CallBinding> {
+        let kind = kinds::FUNCTIONS | kinds::VARIABLES | kinds::PENDING_GLOBALS;
+        self.walk_chain(scope_id, kind, |sid| {
+            if let Some(function_id) = self.find_function_local(sid, ident) {
+                return Some(CallBinding::Function(function_id));
+            }
+            match self.find_variable_local(sid, ident) {
+                Some(VariableInScope::Masked) => Some(
+                    self.find_function(sid, ident).map_or(CallBinding::Value, CallBinding::Function),
+                ),
+                Some(VariableInScope::Defined(_)) => Some(CallBinding::Value),
+                None => self.find_pending_global_local(sid, ident).map(|_| CallBinding::Value),
+            }
+        })
+        .map(|(b, _)| b)
+    }
+
     pub fn find_function_local(&self, scope_id: ScopeId, ident: StringId) -> Option<FunctionId> {
         self.find_function_entry(scope_id, ident).map(|(f, _)| f)
     }
@@ -1713,6 +1730,12 @@ pub enum ScopeMember {
     Type(TypeId),
     Namespace(NamespaceId),
     Ability(AbilityId),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum CallBinding {
+    Function(FunctionId),
+    Value,
 }
 
 #[derive(Debug, Clone, Copy)]

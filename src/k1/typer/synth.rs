@@ -715,12 +715,17 @@ impl TypedProgram {
         self.synth_int(TypedIntValue::I64(value), span)
     }
 
-    pub(super) fn synth_source_location(&mut self, span: Span) -> TypedExprId {
-        let value = self.static_source_location(span);
+    pub(super) fn synth_source_location(&mut self, span: Span, scope_id: ScopeId) -> TypedExprId {
+        let function_id = self.scopes.nearest_parent_function(scope_id);
+        let value = self.static_source_location(span, function_id);
         self.add_static_constant_expr(value, self.remap_span(span))
     }
 
-    pub(super) fn static_source_location(&mut self, span: Span) -> StaticValueId {
+    pub(super) fn static_source_location(
+        &mut self,
+        span: Span,
+        function_id: Option<FunctionId>,
+    ) -> StaticValueId {
         let span = self.remap_span(span);
         let source = self.ast.sources.source_by_span(span);
         let line_number =
@@ -729,10 +734,20 @@ impl TypedProgram {
         let filename_value = self.static_values.add_string(filename_string_id);
         let line_value = self.static_values.add_int(TypedIntValue::U32(line_number));
         let span_value = self.static_values.add_int(TypedIntValue::U64(span.encoded_k1_u64()));
+        let function_name = match function_id {
+            None => String::new(),
+            Some(function_id) => self.make_qualified_name(
+                self.get_function_namespace(function_id),
+                self.get_function(function_id).name,
+                "/",
+                true,
+            ),
+        };
+        let function_value = self.static_values.add_string(self.ast.idents.intern(function_name));
         let source_location_type_id = self.builtin_types.source_location.unwrap();
         self.static_values.add_struct_from_slice(
             source_location_type_id,
-            &[filename_value, line_value, span_value],
+            &[filename_value, line_value, span_value, function_value],
         )
     }
 

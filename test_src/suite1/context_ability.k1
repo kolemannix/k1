@@ -72,3 +72,8 @@ fn(test) context-resolved-after-inference-before-fnlike() {
   let(context) c: int = 5
   assert-equals(add-then(1, fn x. x * 2), 12)
 }
+
+fn(test) location-names-enclosing-fn() {
+  let f = fn() k1/location().function
+  assert-equals(f(), "suite1/context_ability/location-names-enclosing-fn")
+}

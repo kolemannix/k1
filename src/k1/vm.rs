@@ -133,6 +133,7 @@ pub mod k1_types {
         pub filename: K1BufferLike,
         pub line: u32,
         pub span: u64,
+        pub function: K1BufferLike,
     }
 
     #[repr(C)]

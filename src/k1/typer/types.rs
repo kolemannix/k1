@@ -124,10 +124,9 @@ nz_u32_id!(TypeDefnId);
 pub struct TypeDefnInfo {
     pub name: StringId,
     pub namespace_id: NamespaceId,
-    pub companion_namespace: Option<NamespaceId>,
     pub ast_id: ParsedId,
 }
-impl_copy_if_small!(24, TypeDefnInfo);
+impl_copy_if_small!(16, TypeDefnInfo);
 
 impl std::hash::Hash for TypeDefnInfo {
     fn hash<H: Hasher>(&self, state: &mut H) {
@@ -2042,7 +2041,14 @@ impl TypedProgram {
     }
 
     pub fn get_companion_namespace(&self, type_id: TypeId) -> Option<NamespaceId> {
-        self.get_defn_info(type_id).and_then(|info| info.companion_namespace)
+        let info = self.get_defn_info(type_id)?;
+        let defn_scope_id = self.namespaces.get(info.namespace_id).scope_id;
+        let namespace_id = self.scopes.find_namespace_local(defn_scope_id, info.name)?;
+        if self.namespaces.get(namespace_id).namespace_type == NamespaceKind::TypeCompanion {
+            Some(namespace_id)
+        } else {
+            None
+        }
     }
 
     pub fn add_lambda(

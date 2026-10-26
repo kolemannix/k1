@@ -16,9 +16,6 @@ $pre/make-point-macro(my-macro-point)
 $pre/make-point-twice(my-nested-point)
 $pre/define-scaled(3)
 
-// Static args see every source definition in the module, even ones below
-$pre/define-name-of(types/id[test_meta/forward-command])
-
 ns pre {
   let pi: f32 = 3.14
   fn make-point(name: string): code {
@@ -34,12 +31,15 @@ ns pre {
     `macro scaled(x: code) { pre/scaled-code(x, $factor) }`
   }
   fn scaled-code(x: code, factor: int): code { "($x * $factor)" }
-  macro define-name-of(t: types/type-id) {
-    "fn name-of-forward(): string { ${meta/str-lit(t.name())} }"
+  macro define-name-of(t: types/type-id, tag: int) {
+    "ns for ${t.name()} { fn name-of(): string { ${meta/str-lit(t.name())} } fn tag-of(): int { $tag } }"
   }
 }
 
 ns test_meta
+
+// Static args see every source definition in the module, even ones below
+$pre/define-name-of(types/id[forward-command], tagged@(forward-command)/tag())
 
 fn simple-increment(): i32 {
   let x = 10
@@ -135,7 +135,8 @@ fn(test) meta-generated-code() {
   let _y: my-macro-point = .{ x = 1, y = 2 }
   let _z: my-nested-point = .{ x = 3, y = 4 }
   assert-equals(scaled(5), 15)
-  assert-equals(name-of-forward(), "forward-command")
+  assert-equals(forward-command/name-of(), "forward-command")
+  assert-equals(forward-command/tag-of(), 7)
   pre/pi
   
   .{}
@@ -143,3 +144,5 @@ fn(test) meta-generated-code() {
 
 type forward-command = either { go(forward-payload) }
 type forward-payload = { x: i32 }
+ability tagged { fn tag(): int }
+impl tagged for forward-command { fn tag(): int { 7 } }

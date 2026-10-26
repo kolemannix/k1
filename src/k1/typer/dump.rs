@@ -1034,6 +1034,11 @@ impl TypedProgram {
                 }
                 w.write_str(".0")
             }
+            StaticValue::Struct(_) if let Some(type_id) = self.get_type_id_from_value(value) => {
+                w.write_str("types/id[")?;
+                self.display_type_id_ext(w, type_id, TypeDisplayMode::Name, visiting)?;
+                w.write_str("]")
+            }
             StaticValue::Struct(static_struct) => {
                 w.write_str(".{ ")?;
                 let fields = self.types.get(static_struct.type_id).expect_struct().fields;

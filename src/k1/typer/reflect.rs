@@ -5,14 +5,17 @@ use super::*;
 
 impl TypedProgram {
     pub fn type_id_from_raw(&mut self, raw: vm::k1_types::TypeId, span: Span) -> K1Result<TypeId> {
-        let type_id_ok = u32::try_from(raw.inner)
-            .ok()
-            .and_then(TypeId::from_u32)
-            .filter(|id| self.types.get_opt(*id).is_some());
-        let Some(type_id) = type_id_ok else {
+        let Some(type_id) = self.get_type_id_from_u64(raw.inner) else {
             kbail!(self, span, "unknown type id {}", raw.inner);
         };
         Ok(type_id)
+    }
+
+    fn get_type_id_from_u64(&self, raw: u64) -> Option<TypeId> {
+        u32::try_from(raw)
+            .ok()
+            .and_then(TypeId::from_u32)
+            .filter(|id| self.types.get_opt(*id).is_some())
     }
 
     pub fn make_struct_raw(
@@ -704,6 +707,18 @@ impl TypedProgram {
     pub(crate) fn add_type_id_value(&mut self, type_id: TypeId) -> StaticValueId {
         let type_id_type_id = self.builtin_types.type_id();
         self.static_values.add_type_id_value(type_id_type_id, type_id)
+    }
+
+    pub(crate) fn get_type_id_from_value(&self, value: &StaticValue) -> Option<TypeId> {
+        let StaticValue::Struct(type_id_struct) = value else { return None };
+        if self.builtin_types.types_type_id != Some(type_id_struct.type_id) {
+            return None;
+        }
+        let inner = *self.static_values.mem.get_nth(type_id_struct.fields, 0);
+        let StaticValue::Int(TypedIntValue::U64(raw)) = self.static_values.get(inner) else {
+            return None;
+        };
+        self.get_type_id_from_u64(*raw)
     }
 
     pub(super) fn make_int_kind(

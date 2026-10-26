@@ -201,20 +201,6 @@ impl TypedProgram {
             );
         }
 
-        let found_namespace_id =
-            self.scopes.find_namespace_local(namespace_scope_id, parsed_type_defn.name);
-        let companion_namespace_id = match found_namespace_id {
-            None => None,
-            Some(ns_id) => {
-                let companion_ns = self.namespaces.get(ns_id);
-                if companion_ns.namespace_type == NamespaceKind::TypeCompanion {
-                    Some(ns_id)
-                } else {
-                    self.report_hint(parsed_type_defn.name_span, "matching namespace is not declared as type companion; use an `ns for {}` declaration");
-                    None
-                }
-            }
-        };
         let defn_info = if is_alias {
             None
         } else {
@@ -225,7 +211,6 @@ impl TypedProgram {
                     .get_scope_owner(namespace_scope_id)
                     .as_namespace()
                     .unwrap(),
-                companion_namespace: companion_namespace_id,
                 ast_id: ParsedId::TypeDefn(parsed_type_defn_id),
             })
         };
@@ -247,10 +232,8 @@ impl TypedProgram {
             reserved_type_id.unwrap()
         };
 
-        if let Some(companion_namespace_id) = companion_namespace_id {
-            self.namespaces.get_mut(companion_namespace_id).companion_type_id = Some(type_id);
-            let companion_scope_id = self.namespaces.get(companion_namespace_id).scope_id;
-            let _ = self.scopes.add_type(companion_scope_id, self.ast.idents.b.self_, type_id);
+        if !is_alias && let Some(companion_namespace_id) = self.get_companion_namespace(type_id) {
+            self.attach_companion_namespace(companion_namespace_id, type_id);
         }
         let name = parsed_type_defn.name;
         let added = self.scopes.add_type(namespace_scope_id, name, type_id);
@@ -681,23 +664,10 @@ impl TypedProgram {
                 let resulting_type_id = self.get_static_value_type(resulting_value_id);
                 match self.types.get(resulting_type_id) {
                     Type::Struct(_) if resulting_type_id == self.builtin_types.type_id() => {
-                        // The user's code returned a type-id struct. The value inside is a type id
-                        // and that's our result
-                        let struct_value =
-                            self.static_values.get(resulting_value_id).as_struct().unwrap();
-                        let first_field_id = self.static_values.get_slice(struct_value.fields)[0];
-                        let StaticValue::Int(TypedIntValue::U64(type_id_u64)) =
-                            self.static_values.get(first_field_id)
-                        else {
-                            kbail!(self, es.span, "[ice] type-id should contain a u64")
-                        };
-                        if *type_id_u64 == 0 {
-                            kbail!(self, es.span, "[ice] type-id should not be zero")
-                        }
-                        let type_id = TypeId::from_u32(*type_id_u64 as u32).unwrap();
-                        match self.types.get_opt(type_id) {
-                            None => kbail!(self, es.span, "Unknown type id: "),
-                            Some(_) => Ok(type_id),
+                        match self.get_type_id_from_value(self.static_values.get(resulting_value_id))
+                        {
+                            Some(type_id) => Ok(type_id),
+                            None => kbail!(self, es.span, "Unknown type id"),
                         }
                     }
                     Type::StaticValue(_svt) => {
