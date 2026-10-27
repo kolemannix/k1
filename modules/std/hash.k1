@@ -473,14 +473,11 @@ impl[k: print, v: print] print for map[k, v] {
   fn print-to[w: writer](self, w): empty {
     let m = self
     w.write-char('{')
-    let first = true
-    for kv in m {
-      if not first { w.write-string(", ") }
-      first = false
+    w.join-with(m.&, ", ", fn[w] kv. {
       kv.key.print-to(w)
       w.write-string(": ")
       kv.value.print-to(w)
-    }
+    })
     w.write-char('}')
   }
 }
@@ -569,12 +566,7 @@ impl[t: print] print for set[t] {
   fn print-to[w: writer](self, w): empty {
     let s = self
     w.write-char('{')
-    let first = true
-    for v in s {
-      if not first { w.write-string(", ") }
-      first = false
-      v.print-to(w)
-    }
+    w.join(s.&, ", ")
     w.write-char('}')
   }
 }
@@ -787,13 +779,9 @@ impl[t, n: static size] iterable[item = t, i = set-iterator[t]] for *fixset[t, n
 
 impl[t: print, n: static size] print for fixset[t, n] {
   fn print-to[w: writer](self, w): empty {
+    let s = self
     w.write-char('{')
-    let first = true
-    for v in self {
-      if not first { w.write-string(", ") }
-      first = false
-      v.print-to(w)
-    }
+    w.join(s.&, ", ")
     w.write-char('}')
   }
 }

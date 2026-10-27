@@ -492,13 +492,7 @@ impl[t] iterable[item = t, i = buffer-iterator[t]] for buffer[t] {
 impl[t: print] print for buffer[t] {
   fn print-to[w: writer](self, w): empty {
     w.write-char('[')
-    for self {
-      it.print-to(w)
-      let last = it-index == self.len - 1
-      if not last {
-        w.write-char(',')
-      }
-    }
+    w.join(self, ",")
     w.write-char(']')
   }
 }

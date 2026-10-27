@@ -112,12 +112,7 @@ impl[t, n: static size] equals for vector[t, n] {
 impl[t: print, n: static size] print for vector[t, n] {
   fn print-to[w: writer](self, w) {
     w.write("v[")
-    let i = 0: size
-    while i < self.lane-count() {
-      if i > 0 { w.write(", ") }
-      self.get-lane(i).print-to(w)
-      i = i + 1
-    }
+    w.join-with(0.until(self.lane-count()), ", ", fn[w, self] i. self.get-lane(i).print-to(w))
     w.write("]")
   }
 }

@@ -264,15 +264,14 @@ macro define(name: code, rows: span[code-token]) {
   let cb = cb-storage.&
 
   cb.write-code("type $name = either { ")
-  for en in entries {
-    if it-index > 0 cb.write(", ")
+  cb.join-with(entries, ", ", fn[cb] en. {
     cb.write-token(en.name)
     if payload-type(en) is :some ty {
       cb.write("(")
       cb.write-code(ty)
       cb.write(")")
     }
-  }
+  })
   cb.write(" }\n")
 
   cb.block("ns for $name", fn[cb, name, entries]. emit-parse-fn(cb, name, entries))

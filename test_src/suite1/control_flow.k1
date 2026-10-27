@@ -46,7 +46,7 @@ fn(test) break-exits-inner-for-only() {
     }
     pairs.push("o$i")
   }
-  assert-equals(pairs.join(","), "00,o0,10,o1,20,o2")
+  assert-equals(string/join(pairs, ","), "00,o0,10,o1,20,o2")
 }
 
 fn(test) break-runs-iteration-defers() {
@@ -56,7 +56,7 @@ fn(test) break-runs-iteration-defers() {
     if i == 2 break
     log.push("b$i")
   }
-  assert-equals(log.join(","), "b0,d0,b1,d1,d2")
+  assert-equals(string/join(log, ","), "b0,d0,b1,d1,d2")
 }
 
 fn(test) break-in-for-inside-valued-loop() {

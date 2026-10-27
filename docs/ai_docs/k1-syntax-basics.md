@@ -229,7 +229,9 @@ print/print-to(v, w)   has-secret[a = int]@(foo)/secret()   // qualified / impl-
   `${1234567:,}` "1,234,567". Precision needs `print-precise` (rejected on ints).
 - `"${}".fmt(42)` (bare hole takes the argument), `"$y-$m".fmt(.{ y = 2026, m = 6 })`
   (named holes read its fields, else locals; all-local templates need no `.fmt`). `w.write("x ${}", 42)` / `w.writeln` on any `writer`; a non-template
-  argument is a plain write. Templates must be literals.
+  argument is a plain write. Templates must be literals. `w.join(items, ", ")`
+  prints any iterable of `print` items with a separator; `w.join-with(items, sep,
+  fn[w] x. ...)` writes each item itself. Arrays join through `arr.&`.
 - Backticks: multi-line, unescaped `"`, still interpolate and escape. Content
   starting on the next line is a block: leading newline dropped, common indent
   (closing backtick's line included) stripped, whitespace-only last line removed.

@@ -30,7 +30,7 @@ impl TypedProgram {
         debug_assert_eq!(ty, rhs_type);
         let equals_name = self.ast.idents.f.equals__equals.name;
         let Some((_, equals_function_id)) =
-            self.direct_ability_fn(ty, ABILITY_ID_EQUALS, equals_name)
+            self.direct_ability_fn(ty, self.builtin_abilities.equals, equals_name)
         else {
             self.ice_span(span, "expected equals impl")
         };
@@ -559,10 +559,11 @@ impl TypedProgram {
         let writer_type_id = self.exprs.get_type(writer);
         let to_print_type = self.get_type_family_type(self.exprs.get_type(to_print));
         let (ability_id, fn_name) = match precision {
-            None => (ABILITY_ID_PRINT, self.ast.idents.f.core_print_print_to),
-            Some(_) => {
-                (ABILITY_ID_PRINT_PRECISE, self.ast.idents.f.core_print_precise_print_precise_to)
-            }
+            None => (self.builtin_abilities.print, self.ast.idents.f.core_print_print_to),
+            Some(_) => (
+                self.builtin_abilities.print_precise,
+                self.ast.idents.f.core_print_precise_print_precise_to,
+            ),
         };
         let (print_impl, self_adjust) =
             self.expect_ability_impl(to_print_type, ability_id, true, ctx.scope_id, span)?;

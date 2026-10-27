@@ -162,14 +162,6 @@ ns for code-builder {
     self.write(close)
     self.write-char('\n')
   }
-
-  fn sep[t, iter, i](self: *code-builder, items: i, separator: string, each: some fn t -> {})
-    where iter: iterator[item = t], i: iterable[item = t, i = iter] {
-    for x in items {
-      if it-index > 0 { self.write(separator) }
-      each(x)
-    }
-  }
 }
 
 impl writer for *code-builder {

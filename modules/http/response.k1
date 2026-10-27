@@ -129,7 +129,7 @@ ns response {
   fn method-not-allowed(allowed: span[string]): http-response {
     let allow = string-builder/new()
     allow.write("Allow: ")
-    for m in allowed { if it-index > 0 { allow.write(", ") }; allow.write(m) }
+    allow.join(allowed, ", ")
     .{
       content-type = "text/plain",
       extra-headers = span/single(allow.build()),

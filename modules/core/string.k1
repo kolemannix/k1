@@ -51,12 +51,10 @@ ns for string {
     wrap-buffer(copied)
   }
 
-  fn join[c: as-span[t = string]](items: c, separator: string): string {
+  fn join[t, iter, i](items: i, sep: string): string
+    where t: print, iter: iterator[item = t], i: iterable[item = t, i = iter] {
     let b = string-builder/new()
-    for s in items.as-span() {
-      if it-index > 0 { b.write(separator) }
-      b.write(s)
-    }
+    b.join(items, sep)
     b.build()
   }
 

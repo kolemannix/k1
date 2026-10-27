@@ -49,7 +49,7 @@ let(context(impl writer)) out: *string-builder = sb.&  // ability-keyed
   `cb.write(s)` (sourceless), `write-code(c)`, `write-token(t)`,
   `write-tokens(ts)` (restores spacing), `write-spanned(text, source)`, `line(c)`,
   `block(h, fn[cb]. ...)`, `block-close(h, close, fn[cb]. ...)`,
-  `sep(items, ", ", fn[cb] x. ...)`, `indent`/`dedent`, `build()` (no copy).
+  writer `join`/`join-with`, `indent`/`dedent`, `build()` (no copy).
   Every `code`-typed template costs its own builder: in hot emitters prefer
   `cb.writeln(...)` over `cb.line("...")`.
 - Emit conditions with explicit parens (`(not a) and b`).

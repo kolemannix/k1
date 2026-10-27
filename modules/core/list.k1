@@ -135,16 +135,6 @@ ns for list {
     input.as-buffer().sort()
   }
 
-  fn join[t: print](self: list[t], sep: string): string {
-    let b = string-builder/new()
-    for s in self {
-      s.print-to(b.&)
-      let is-last = it-index + 1 == self.len
-      if not is-last { b.write(sep) }
-    }
-    b.build()
-  }
-
   fn from-mapping[t, iter, iterable, u](input: iterable, f: some fn t -> u): list[u]
   where iter: iterator[item = t], iterable: iterable[item = t, i = iter]
   {
@@ -223,13 +213,7 @@ impl[t: equals] equals for list[t] {
 impl[t: print] print for list[t] {
   fn print-to[w: writer](self: list[t], w) {
     w.write-char('[')
-    for self {
-      it.print-to(w)
-      let last = it-index + 1 == self.len
-      if not last {
-        w.write(",")
-      }
-    }
+    w.join(self, ",")
     w.write-char(']')
   }
 }

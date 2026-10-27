@@ -338,15 +338,13 @@ fn write-k1-type(context w: *string-builder, name-config)(k1-type, indent: size,
     },
     :fn-type f -> {
       w.writeln("fn(")
-      for f.fn-type.params {
-        if it-index > 0 w.writeln("")
+      w.join-with(f.fn-type.params, ",\n", fn[w, name-config, indent] p. {
         w.repeat("  ", indent + 1)
-        if it.name is {
-          :none -> write-k1-type(it.type, indent + 1, :param),
-          :some name -> write-named-type(name, it.type, indent + 1, :param),
+        if p.name is {
+          :none -> write-k1-type(p.type, indent + 1, :param),
+          :some name -> write-named-type(name, p.type, indent + 1, :param),
         }
-        if it-index != f.fn-type.params.len() - 1 { w.write(",") }
-      }
+      })
 
       w.writeln("")
       w.repeat("  ", indent)

@@ -115,20 +115,16 @@ impl json-write for json {
       :str s -> write-string(w, s),
       :array items -> {
         w.write-char('[')
-        for items {
-          if it-index > 0 w.write-char(',')
-          it.write-json[o = o](w)
-        }
+        w.join-with(items, ",", fn[w] item. item.write-json[o = o](w))
         w.write-char(']')
       },
       :object members -> {
         w.write-char('{')
-        for members {
-          if it-index > 0 w.write-char(',')
-          write-string(w, it.key)
+        w.join-with(members, ",", fn[w] m. {
+          write-string(w, m.key)
           w.write-char(':')
-          it.value.write-json[o = o](w)
-        }
+          m.value.write-json[o = o](w)
+        })
         w.write-char('}')
       }
     }

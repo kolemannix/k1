@@ -104,11 +104,6 @@ fn(test) code-builder-emitters() {
   let built = cb2.build()
   assert-equals(built.text, "let y = 2\n")
   assert-equals(built.spans.len(), 1)
-
-  let cb3-storage = code-builder/new()
-  let cb3 = cb3-storage.&
-  cb3.sep(["a", "b", "c"], ", ", fn[cb3] s. cb3.write(s))
-  assert-equals(cb3.build().text, "a, b, c")
 }
 
 macro token-summary(t: span[code-token]) {

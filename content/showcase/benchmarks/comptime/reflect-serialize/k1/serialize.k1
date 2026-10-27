@@ -6,11 +6,10 @@ fn write-json-of(code: *string-builder, name: string, type-id: types/type-id) {
   if type-id.schema() is {
     :struct s -> {
       code.writeln("w.write-char('{');")
-      for f in s.fields {
-        if it-index > 0 code.writeln(`w.write(",");`)
+      code.join-with(s.fields, "w.write(\",\");\n", fn[code, name] f. {
         code.writeln(`w.write("\"${f.name}\":");`)
         write-json-of(code, `$name.${f.name}`, f.type-id)
-      }
+      })
       code.writeln("w.write-char('}');")
     },
     :bool -> code.writeln(`w.write(if $name "true": string else "false");`),

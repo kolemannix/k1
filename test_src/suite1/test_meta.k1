@@ -64,17 +64,16 @@ use types/type-schema
 fn _write-json-from-schema(code: *string-builder, name: string, type-id: types/type-id) {
   if type-id.elem-of[list] is :some elem {
     code.writeln("w.write-char('[');")
-    code.writeln(`for $name { if it-index > 0 { w.write(",") }`)
+    code.writeln(`w.join-with($name, ",", fn[w] it. {`)
     _write-json-from-schema(code, "it", elem)
-    code.writeln("}")
+    code.writeln("})")
     code.writeln("w.write-char(']');")
     return
   }
   if type-id.schema() is {
     :struct s -> {
       code.writeln("w.write-char('{');")
-      for f in s.fields {
-
+      code.join-with(s.fields, "w.write(\",\");\n", fn[code, name] f. {
         let field-let-name = `_$name${f.name}`
 
         code.write(
@@ -84,11 +83,7 @@ w.write("\"${f.name}\":");
        ) //" fix quote
 
         _write-json-from-schema(code, field-let-name, f.type-id)
-        let last = it-index == s.fields.len() - 1
-        if not last {
-          code.writeln(`w.write(",");`)
-        }
-      }
+      })
       code.writeln(`w.write-char('}');`)
     },
     :bool -> {

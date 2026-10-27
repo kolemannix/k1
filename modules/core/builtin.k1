@@ -98,7 +98,6 @@ ns types {
   }
 
   // Magically implemented for all enums
-  // enum must have ability id 1
   ability enum[impl v] {
     fn(builtin) enum-value(self): v
     fn(builtin) enum-name(self): string
@@ -303,6 +302,22 @@ ability writer {
     while i < n {
       self.write-string(value)
       i = i + 1
+    }
+  }
+
+  fn join[t, iter, i](self, items: i, sep: string)
+    where t: print, iter: iterator[item = t], i: iterable[item = t, i = iter] {
+    for x in items {
+      if it-index > 0 { self.write-string(sep) }
+      x.print-to(self)
+    }
+  }
+
+  fn join-with[t, iter, i](self, items: i, sep: string, each: some fn t -> {})
+    where iter: iterator[item = t], i: iterable[item = t, i = iter] {
+    for x in items {
+      if it-index > 0 { self.write-string(sep) }
+      each(x)
     }
   }
 }
@@ -639,10 +654,6 @@ ability iterable[impl item, impl i: iterator[item = item]] {
 impl[item, t: iterator[item = item]] iterable[item = item, i = t] for t {
   fn iterator(self): t { self }
 }
-
-// Every ability above this line, `enum` through `iterable`, has a
-// hard-coded id dependent on declaration order (typer.rs ABILITY_ID_*).
-// ------------------------------------------------------------------
 
 ability from-string[impl e] {
   fn from-string(s: string): result[self, e]
@@ -1207,13 +1218,9 @@ impl[t, n: static size] as-span[t = t] for *array[t, n] {
 
 impl[t: print, n: static size] print for array[t, n] {
   fn print-to[w: writer](self: array[t, n], w): empty {
+    let a = self
     w.write-char('[')
-    let i: size = 0
-    while i < n {
-      if i > 0 { w.write-char(',') }
-      self.[i].print-to(w)
-      i = i + 1
-    }
+    w.join(a.&, ",")
     w.write-char(']')
   }
 }

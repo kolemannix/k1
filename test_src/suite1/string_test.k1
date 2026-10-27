@@ -64,5 +64,15 @@ fn(test) string-compare-and-sort() {
   assert("Z".compare("a") is :less)
   let words: list[string] = ["pear", "apple", "fig", "apple", ""]
   words.sort()
-  assert-equals(words.join("|"), "|apple|apple|fig|pear")
+  assert-equals(string/join(words, "|"), "|apple|apple|fig|pear")
+}
+
+fn(test) writer-join() {
+  let sb = string-builder/new()
+  sb.join([1, 2, 3], ", ")
+  sb.write(";")
+  sb.join(list/empty[int](), ", ")
+  sb.join-with(["a", "b"], "/", fn[sb.&] s. { sb.write-char('<'); sb.write(s); sb.write-char('>') })
+  assert-equals(sb.build(), "1, 2, 3;<a>/<b>")
+  assert-equals(string/join(["x"], ", "), "x")
 }

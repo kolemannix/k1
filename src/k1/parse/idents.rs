@@ -169,6 +169,15 @@ pub(crate) struct BuiltinIdents {
     pub div: StringId,
     pub rem: StringId,
     pub scalar_cmp: StringId,
+    pub sum: StringId,
+    pub writer: StringId,
+    pub print: StringId,
+    pub print_precise: StringId,
+    pub int_bits: StringId,
+    pub neg: StringId,
+    pub overflow_arith: StringId,
+    pub test: StringId,
+    pub outcome: StringId,
     pub invoke: StringId,
     pub lt: StringId,
     pub le: StringId,
@@ -274,7 +283,6 @@ pub(crate) struct BuiltinFunctions {
     pub bitwise_xor: QIdent,
     pub bitwise_shl: QIdent,
     pub bitwise_shr: QIdent,
-    pub test_outcome: QIdent,
     pub test_outcome_failure: QIdent,
     pub test_suite: QIdent,
     pub types_type_id_impl_of: QIdent,
@@ -592,6 +600,15 @@ impl IdentPool {
             div: intern!("div"),
             rem: intern!("rem"),
             scalar_cmp: intern!("scalar-cmp"),
+            sum: intern!("sum"),
+            writer: intern!("writer"),
+            print: intern!("print"),
+            print_precise: intern!("print-precise"),
+            int_bits: intern!("int-bits"),
+            neg: intern!("neg"),
+            overflow_arith: intern!("overflow-arith"),
+            test: intern!("test"),
+            outcome: intern!("outcome"),
             invoke: intern!("invoke"),
             lt: intern!("lt"),
             le: intern!("le"),
@@ -668,9 +685,9 @@ impl IdentPool {
         let core_checked_index = make_fn!(path_core, intern!("checked-index"));
         let core_enum_unknown_name = make_fn!(path_core, intern!("enum-unknown-name"));
 
-        let path_core_print = intern_path!(b.core, intern!("print"));
+        let path_core_print = intern_path!(b.core, b.print);
         let core_print_print_to = make_fn!(path_core_print, intern!("print-to"));
-        let path_core_print_precise = intern_path!(b.core, intern!("print-precise"));
+        let path_core_print_precise = intern_path!(b.core, b.print_precise);
         let core_print_precise_print_precise_to =
             make_fn!(path_core_print_precise, intern!("print-precise-to"));
 
@@ -734,11 +751,9 @@ impl IdentPool {
         let bitwise_shl = make_fn!(path_core_bitwise, intern!("shift-left"));
         let bitwise_shr = make_fn!(path_core_bitwise, intern!("shift-right"));
 
-        let path_core_test = intern_path!(b.core, intern!("test"));
-        let test_outcome = make_fn!(path_core_test, intern!("outcome"));
-        let path_core_test_outcome = intern_path!(b.core, intern!("test"), intern!("outcome"));
+        let path_core_test_outcome = intern_path!(b.core, b.test, b.outcome);
         let test_outcome_failure = make_fn!(path_core_test_outcome, intern!("failure"));
-        let path_core_k1_test = intern_path!(b.core, b.k1, intern!("test"));
+        let path_core_k1_test = intern_path!(b.core, b.k1, b.test);
         let test_suite = make_fn!(path_core_k1_test, intern!("suite"));
         let types_type_id_impl_of = make_fn!(intern_path!(b.core, b.types, b.type_id), b.impl_of);
 
@@ -790,7 +805,6 @@ impl IdentPool {
             bitwise_xor,
             bitwise_shl,
             bitwise_shr,
-            test_outcome,
             test_outcome_failure,
             test_suite,
             types_type_id_impl_of,

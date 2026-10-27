@@ -136,29 +136,65 @@ pub const GLOBAL_ID_COMPILER_CAPTURE_PRINTS: TypedGlobalId =
 pub const GLOBAL_ID_K1_IS_STATIC: TypedGlobalId =
     TypedGlobalId::from_nzu32(NonZeroU32::new(2).unwrap());
 
-//rustfmt: off
-pub const ABILITY_ID_ENUM: AbilityId = AbilityId(NonZeroU32::new(1).unwrap());
-pub const ABILITY_ID_SUM: AbilityId = AbilityId(NonZeroU32::new(2).unwrap());
-pub const ABILITY_ID_EQUALS: AbilityId = AbilityId(NonZeroU32::new(3).unwrap());
-pub const ABILITY_ID_WRITER: AbilityId = AbilityId(NonZeroU32::new(4).unwrap());
-pub const ABILITY_ID_PRINT: AbilityId = AbilityId(NonZeroU32::new(5).unwrap());
-pub const ABILITY_ID_PRINT_PRECISE: AbilityId = AbilityId(NonZeroU32::new(6).unwrap());
-pub const ABILITY_ID_TO_STRING: AbilityId = AbilityId(NonZeroU32::new(7).unwrap());
-pub const ABILITY_ID_BITWISE: AbilityId = AbilityId(NonZeroU32::new(8).unwrap());
-pub const ABILITY_ID_INT_BITS: AbilityId = AbilityId(NonZeroU32::new(9).unwrap());
-pub const ABILITY_ID_ADD: AbilityId = AbilityId(NonZeroU32::new(10).unwrap());
-pub const ABILITY_ID_SUB: AbilityId = AbilityId(NonZeroU32::new(11).unwrap());
-pub const ABILITY_ID_MUL: AbilityId = AbilityId(NonZeroU32::new(12).unwrap());
-pub const ABILITY_ID_DIV: AbilityId = AbilityId(NonZeroU32::new(13).unwrap());
-pub const ABILITY_ID_REM: AbilityId = AbilityId(NonZeroU32::new(14).unwrap());
-pub const ABILITY_ID_NEG: AbilityId = AbilityId(NonZeroU32::new(15).unwrap());
-pub const ABILITY_ID_OVERFLOW_ARITH: AbilityId = AbilityId(NonZeroU32::new(16).unwrap());
-pub const ABILITY_ID_SCALAR_CMP: AbilityId = AbilityId(NonZeroU32::new(17).unwrap());
-pub const ABILITY_ID_COMPARABLE: AbilityId = AbilityId(NonZeroU32::new(18).unwrap());
-pub const ABILITY_ID_TRY: AbilityId = AbilityId(NonZeroU32::new(19).unwrap());
-pub const ABILITY_ID_ITERATOR: AbilityId = AbilityId(NonZeroU32::new(20).unwrap());
-pub const ABILITY_ID_ITERABLE: AbilityId = AbilityId(NonZeroU32::new(21).unwrap());
-//rustfmt: on
+#[derive(Default, Clone, Copy)]
+pub struct BuiltinAbilities {
+    pub enum_: AbilityId,
+    pub sum: AbilityId,
+    pub equals: AbilityId,
+    pub writer: AbilityId,
+    pub print: AbilityId,
+    pub print_precise: AbilityId,
+    pub bitwise: AbilityId,
+    pub int_bits: AbilityId,
+    pub add: AbilityId,
+    pub sub: AbilityId,
+    pub mul: AbilityId,
+    pub div: AbilityId,
+    pub rem: AbilityId,
+    pub neg: AbilityId,
+    pub overflow_arith: AbilityId,
+    pub scalar_cmp: AbilityId,
+    pub comparable: AbilityId,
+    pub try_: AbilityId,
+    pub iterator: AbilityId,
+    pub iterable: AbilityId,
+    pub test_outcome: AbilityId,
+}
+
+impl BuiltinAbilities {
+    fn slots<'a>(
+        &'a mut self,
+        idents: &IdentPool,
+        scopes: &Scopes,
+    ) -> [(ScopeId, StringId, &'a mut AbilityId); 21] {
+        let b = &idents.b;
+        let (core, types, test) =
+            (scopes.core_scope_id, scopes.types_scope_id, scopes.test_scope_id);
+        [
+            (types, b.enum_, &mut self.enum_),
+            (types, b.sum, &mut self.sum),
+            (core, b.equals, &mut self.equals),
+            (core, b.writer, &mut self.writer),
+            (core, b.print, &mut self.print),
+            (core, b.print_precise, &mut self.print_precise),
+            (core, b.bitwise, &mut self.bitwise),
+            (core, b.int_bits, &mut self.int_bits),
+            (core, b.add, &mut self.add),
+            (core, b.sub, &mut self.sub),
+            (core, b.mul, &mut self.mul),
+            (core, b.div, &mut self.div),
+            (core, b.rem, &mut self.rem),
+            (core, b.neg, &mut self.neg),
+            (core, b.overflow_arith, &mut self.overflow_arith),
+            (core, b.scalar_cmp, &mut self.scalar_cmp),
+            (core, b.comparable, &mut self.comparable),
+            (core, b.try_, &mut self.try_),
+            (core, b.iterator, &mut self.iterator),
+            (core, b.iterable, &mut self.iterable),
+            (test, b.outcome, &mut self.test_outcome),
+        ]
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TypeSubstitutionPair {
@@ -2585,6 +2621,7 @@ pub struct TypedProgram {
     /// the hash+probe on the common path. PENDING marks not-yet-created indices.
     pub hole_type_cache: Vec<TypeId>,
     pub builtin_types: BuiltinTypes,
+    pub builtin_abilities: BuiltinAbilities,
     pub agg_types: VPool<AggregateTypeRecord, AggregateTypeId>,
     /// The origin type of each named scalar: the identity a scalar PhysicalType can carry
     pub named_scalars: VPool<TypeId, NamedScalarId>,
@@ -2815,6 +2852,7 @@ impl TypedProgram {
             phys_types: VPool::make("phys_types"),
             hole_type_cache: Vec::new(),
             builtin_types: BuiltinTypes::default(),
+            builtin_abilities: BuiltinAbilities::default(),
             agg_types,
             named_scalars: VPool::make("named_scalars"),
             lambda_types: VPool::make("lambdas"),
@@ -4434,7 +4472,7 @@ impl TypedProgram {
             }
         }
         /////////////////// Special type-kind abilities
-        if target_base_ability_id == ABILITY_ID_ENUM {
+        if target_base_ability_id == self.builtin_abilities.enum_ {
             if let Type::Enum(e) = self.types.get(self_type_id) {
                 // ability enum[impl v]
                 // Assign 'v' to the integer type of the enum!
@@ -4448,7 +4486,7 @@ impl TypedProgram {
                 return Ok((impl_handle, SelfAdjust::None));
             }
         }
-        if target_base_ability_id == ABILITY_ID_SUM {
+        if target_base_ability_id == self.builtin_abilities.sum {
             if let Type::Sum(sum) = self.types.get(self_type_id) {
                 // ability sum[impl v]
                 // Assign 'v' to the integer type of the sum!
@@ -4462,7 +4500,7 @@ impl TypedProgram {
                 return Ok((impl_handle, SelfAdjust::None));
             }
         }
-        if target_base_ability_id == ABILITY_ID_EQUALS {
+        if target_base_ability_id == self.builtin_abilities.equals {
             match self.types.get(self_type_id) {
                 Type::Enum(_) => {
                     let impl_handle = self.generate_builtin_ability_impl(
@@ -4488,7 +4526,7 @@ impl TypedProgram {
             }
         }
 
-        if target_base_ability_id == ABILITY_ID_PRINT {
+        if target_base_ability_id == self.builtin_abilities.print {
             // No derived print for `code`: printing it as text would drop its
             // source spans silently
             let is_code = Some(self_type_id) == self.builtin_types.code;
@@ -5730,13 +5768,14 @@ impl TypedProgram {
         span: Span,
     ) -> K1Result<TypedExprId> {
         let scope_id = ctx.scope_id;
+        let try_ability = self.builtin_abilities.try_;
         let try_value_original_expr = self.eval_expr(operand, ctx.with_no_expected_type())?;
         let try_value_type = self.exprs.get_type(try_value_original_expr);
         let (value_try_impl, value_self_adjust) =
-            self.expect_ability_impl(try_value_type, ABILITY_ID_TRY, true, scope_id, span)?;
+            self.expect_ability_impl(try_value_type, try_ability, true, scope_id, span)?;
         let value_impl_args = self.ability_impls.get(value_try_impl.full_impl_id).impl_arguments;
         let error_type =
-            self.impl_arg_named(ABILITY_ID_TRY, value_impl_args, self.ast.idents.b.e).unwrap();
+            self.impl_arg_named(try_ability, value_impl_args, self.ast.idents.b.e).unwrap();
         if !self.get_type_variable_counts(error_type).is_inhabited {
             let try_value =
                 self.apply_self_adjust(try_value_original_expr, value_self_adjust, span)?;
@@ -5752,7 +5791,7 @@ impl TypedProgram {
         let block_return_type = self.get_return_type_for_scope(scope_id, span)?;
         let (block_try_impl, _) = self.expect_ability_impl(
                     block_return_type,
-                    ABILITY_ID_TRY,
+                    try_ability,
                     true,
                     scope_id,
                     span,
@@ -5765,7 +5804,7 @@ impl TypedProgram {
                     })?;
         let block_impl_args = self.ability_impls.get(block_try_impl.full_impl_id).impl_arguments;
         let block_error_type =
-            self.impl_arg_named(ABILITY_ID_TRY, block_impl_args, self.ast.idents.b.e).unwrap();
+            self.impl_arg_named(try_ability, block_impl_args, self.ast.idents.b.e).unwrap();
         if let Err(msg) = self.check_types(block_error_type, error_type, scope_id) {
             kbail!(
                 self,
@@ -5774,7 +5813,7 @@ impl TypedProgram {
             );
         };
         let value_success_type =
-            self.impl_arg_named(ABILITY_ID_TRY, value_impl_args, self.ast.idents.b.t).unwrap();
+            self.impl_arg_named(try_ability, value_impl_args, self.ast.idents.b.t).unwrap();
         let mut result_block = self.new_block_builder(scope_id, ScopeType::LexicalBlock, span, 2);
         let try_value_var = self.synth_variable_defn_simple(
             self.ast.idents.b.try_value,
@@ -5856,8 +5895,9 @@ impl TypedProgram {
         let operand_expr =
             self.eval_expr_inner(operand, ctx.with_expected_type(operand_expected_type))?;
         let operand_type = self.exprs.get_type(operand_expr);
+        let try_ability = self.builtin_abilities.try_;
         let (try_impl, self_adjust) =
-            self.expect_ability_impl(operand_type, ABILITY_ID_TRY, true, ctx.scope_id, span)?;
+            self.expect_ability_impl(operand_type, try_ability, true, ctx.scope_id, span)?;
         let operand_expr = self.apply_self_adjust(operand_expr, self_adjust, span)?;
         self.synth_ability_call(
             try_impl,
@@ -6808,6 +6848,7 @@ impl TypedProgram {
             self.tmp.new_list(lambda_captures.len());
         let mut env_field_exprs: TmpList<StructLiteralField> =
             self.tmp.new_list(lambda_captures.len());
+        let mut capture_sources: TmpList<VariableId> = self.tmp.new_list(lambda_captures.len());
         for (index, capture) in captures.iter().enumerate() {
             if captures[..index].iter().any(|prior| prior.name == capture.name) {
                 kbail!(self, capture.span, "Duplicate capture '{}'", capture.name);
@@ -6851,6 +6892,7 @@ impl TypedProgram {
                 span: capture.span,
             });
             env_field_exprs.push(StructLiteralField { name: capture.name, expr: Some(field_expr) });
+            capture_sources.push(variable_id);
         }
 
         let lambda_scope_id =
@@ -6964,12 +7006,14 @@ impl TypedProgram {
                     capture.span,
                 );
                 // The binding behaves exactly like a user-written `let <name> = env.<name>`
+                let source = capture_sources[field_index];
+                let is_context = !capture.by_ref && self.variables.get(source).is_context();
                 let variable_id = self.variables.add(Variable {
                     name: capture.name,
                     owner_scope: lambda_scope_id,
                     type_id: field_type,
                     kind: VariableKind::Stack,
-                    flags: VariableFlags::empty(),
+                    flags: if is_context { VariableFlags::Context } else { VariableFlags::empty() },
                     usage_count: 0,
                     defn_span: capture.span,
                 });
@@ -6979,7 +7023,22 @@ impl TypedProgram {
                     initializer: Some(field_access),
                     span: capture.span,
                 }));
-                self.scopes.add_variable(lambda_scope_id, capture.name, variable_id);
+                if is_context {
+                    self.scopes.add_context_variable(
+                        lambda_scope_id,
+                        capture.name,
+                        variable_id,
+                        field_type,
+                    );
+                    self.scopes.add_context_capture_abilities(
+                        ctx.scope_id,
+                        source,
+                        lambda_scope_id,
+                        variable_id,
+                    );
+                } else {
+                    self.scopes.add_variable(lambda_scope_id, capture.name, variable_id);
+                }
                 self.emit_ls_entity(capture.span, LsEntityKind::Variable { variable_id });
                 prologue_stmts.push(defn_stmt);
                 capture_bindings.push((variable_id, capture.span));
@@ -7594,7 +7653,7 @@ impl TypedProgram {
         // Project: Kill all this with the macro system
         let (target_is_iterator, self_adjust, target_impl) = match self.expect_ability_impl(
             iterable_type,
-            ABILITY_ID_ITERABLE,
+            self.builtin_abilities.iterable,
             true,
             ctx.scope_id,
             iterable_span,
@@ -7602,7 +7661,7 @@ impl TypedProgram {
             Err(_not_iterable) => {
                 match self.expect_ability_impl(
                     iterable_type,
-                    ABILITY_ID_ITERATOR,
+                    self.builtin_abilities.iterator,
                     true,
                     ctx.scope_id,
                     iterable_span,
@@ -7682,7 +7741,7 @@ impl TypedProgram {
             let iterator_type = self.variables.get(iterator_variable.variable_id).type_id;
             self.expect_ability_impl(
                 iterator_type,
-                ABILITY_ID_ITERATOR,
+                self.builtin_abilities.iterator,
                 false,
                 outer_for_expr_scope,
                 iterable_span,
@@ -8344,23 +8403,24 @@ impl TypedProgram {
     fn operator_ability_fn(&self, op_kind: BinaryOpKind) -> (QIdent, AbilityId) {
         use BinaryOpKind as K;
         let f = &self.ast.idents.f;
+        let a = self.builtin_abilities;
         match op_kind {
-            K::Equals => (f.equals__equals, ABILITY_ID_EQUALS),
-            K::NotEquals => (f.equals__not_equals, ABILITY_ID_EQUALS),
-            K::Add => (f.add__add, ABILITY_ID_ADD),
-            K::Subtract => (f.sub__sub, ABILITY_ID_SUB),
-            K::Multiply => (f.mul__mul, ABILITY_ID_MUL),
-            K::Divide => (f.div__div, ABILITY_ID_DIV),
-            K::Rem => (f.rem__rem, ABILITY_ID_REM),
-            K::Less => (f.ScalarCmp_lt, ABILITY_ID_SCALAR_CMP),
-            K::LessEqual => (f.ScalarCmp_le, ABILITY_ID_SCALAR_CMP),
-            K::Greater => (f.ScalarCmp_gt, ABILITY_ID_SCALAR_CMP),
-            K::GreaterEqual => (f.ScalarCmp_ge, ABILITY_ID_SCALAR_CMP),
-            K::BitAnd => (f.bitwise_and, ABILITY_ID_BITWISE),
-            K::BitOr => (f.bitwise_or, ABILITY_ID_BITWISE),
-            K::BitXor => (f.bitwise_xor, ABILITY_ID_BITWISE),
-            K::BitShiftLeft => (f.bitwise_shl, ABILITY_ID_BITWISE),
-            K::BitShiftRight => (f.bitwise_shr, ABILITY_ID_BITWISE),
+            K::Equals => (f.equals__equals, a.equals),
+            K::NotEquals => (f.equals__not_equals, a.equals),
+            K::Add => (f.add__add, a.add),
+            K::Subtract => (f.sub__sub, a.sub),
+            K::Multiply => (f.mul__mul, a.mul),
+            K::Divide => (f.div__div, a.div),
+            K::Rem => (f.rem__rem, a.rem),
+            K::Less => (f.ScalarCmp_lt, a.scalar_cmp),
+            K::LessEqual => (f.ScalarCmp_le, a.scalar_cmp),
+            K::Greater => (f.ScalarCmp_gt, a.scalar_cmp),
+            K::GreaterEqual => (f.ScalarCmp_ge, a.scalar_cmp),
+            K::BitAnd => (f.bitwise_and, a.bitwise),
+            K::BitOr => (f.bitwise_or, a.bitwise),
+            K::BitXor => (f.bitwise_xor, a.bitwise),
+            K::BitShiftLeft => (f.bitwise_shl, a.bitwise),
+            K::BitShiftRight => (f.bitwise_shr, a.bitwise),
             K::And | K::Or | K::Pipe | K::OptionalElse => unreachable!(),
         }
     }
@@ -8502,7 +8562,7 @@ impl TypedProgram {
         let lhs = self.eval_expr(lhs, ctx.with_no_expected_type())?;
         let lhs_type = self.exprs.get_type(lhs);
         let (try_impl, self_adjust) = self
-            .expect_ability_impl(lhs_type, ABILITY_ID_TRY, true, ctx.scope_id, span)
+            .expect_ability_impl(lhs_type, self.builtin_abilities.try_, true, ctx.scope_id, span)
             .map_err(|e| {
                 kerr!(
                     self,
@@ -8513,7 +8573,7 @@ impl TypedProgram {
             })?;
         let output_type = self
             .impl_arg_named(
-                ABILITY_ID_TRY,
+                self.builtin_abilities.try_,
                 self.ability_impls.get(try_impl.full_impl_id).impl_arguments,
                 self.ast.idents.b.t,
             )
@@ -9456,7 +9516,7 @@ impl TypedProgram {
             let writer_impl = if is_template {
                 self.expect_ability_impl(
                     base_expr_type,
-                    ABILITY_ID_WRITER,
+                    self.builtin_abilities.writer,
                     true,
                     ctx.scope_id,
                     call_span,
@@ -10437,9 +10497,9 @@ impl TypedProgram {
             )
             .map_err(|mut e| {
                 e.message = self.ast.idents.intern(format!(
-                    "This call needs context parameter '{}' from outside the lambda: {}",
+                    "This call needs context parameter '{}' from outside the lambda; capture it by value: `fn[{}]`",
                     self.ident_str(self.get_param_name(declaration, param_index)),
-                    self.ident_str(e.message)
+                    self.ident_str(found.name)
                 ));
                 e
             })?;
@@ -12592,7 +12652,7 @@ impl TypedProgram {
                     let implements_try = self
                         .find_or_generate_ability_impl_for_type(
                             expr_type,
-                            ABILITY_ID_TRY,
+                            self.builtin_abilities.try_,
                             &[],
                             true,
                             block_scope,
@@ -12732,29 +12792,30 @@ impl TypedProgram {
             if self_type.is_some_and(|t| !self.get_type_variable_counts(t).is_inhabited) {
                 return Ok(Builtin::Ir(BuiltinIr::Unreachable));
             }
-            let base_ability_id = self.abilities.get(ability_id).base_ability_id;
-            match (base_ability_id, fn_name_str) {
-                (ABILITY_ID_ENUM, "enum-value") => {
+            let b = self.builtin_abilities;
+            let base = self.abilities.get(ability_id).base_ability_id;
+            match fn_name_str {
+                "enum-value" if base == b.enum_ => {
                     Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::EnumAbilityGetValue))
                 }
-                (ABILITY_ID_ENUM, "enum-name") => Some(Builtin::TyperPhysicalFunction(
+                "enum-name" if base == b.enum_ => Some(Builtin::TyperPhysicalFunction(
                     BuiltinTyperFunction::EnumAbilityGetTagName,
                 )),
-                (ABILITY_ID_ENUM, "enum-from-value") => {
+                "enum-from-value" if base == b.enum_ => {
                     Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::EnumAbilityFromValue))
                 }
-                (ABILITY_ID_ENUM, "enum-from-value-unchecked") => {
+                "enum-from-value-unchecked" if base == b.enum_ => {
                     Some(Builtin::TyperPhysicalFunction(
                         BuiltinTyperFunction::EnumAbilityFromValueUnchecked,
                     ))
                 }
-                (ABILITY_ID_SUM, "sum-tag") => {
+                "sum-tag" if base == b.sum => {
                     Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::SumAbilityGetTag))
                 }
-                (ABILITY_ID_SUM, "sum-name") => {
+                "sum-name" if base == b.sum => {
                     Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::SumAbilityGetName))
                 }
-                (ABILITY_ID_EQUALS, "equals" | "not-equals") => {
+                "equals" | "not-equals" if base == b.equals => {
                     let is_equals = fn_name_str == "equals";
                     match t {
                         Some(Type::Char | Type::Bool | Type::Integer(_)) => {
@@ -12781,7 +12842,7 @@ impl TypedProgram {
                         _ => None,
                     }
                 }
-                (ABILITY_ID_PRINT, "print-to") => match t {
+                "print-to" if base == b.print => match t {
                     Some(Type::Struct(_)) => {
                         Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::StructPrintTo))
                     }
@@ -12793,7 +12854,10 @@ impl TypedProgram {
                     }
                     _ => None,
                 },
-                (ABILITY_ID_BITWISE, bitwise_fn) if let Some(int_type) = int_type => {
+                bitwise_fn
+                    if base == b.bitwise
+                        && let Some(int_type) = int_type =>
+                {
                     match bitwise_fn {
                         "bit-not" => mk_scalar!(K::IntUnop(IntUnop::Not)),
                         "bit-and" => mk_scalar!(K::IntBinop(IntOp::And)),
@@ -12810,7 +12874,7 @@ impl TypedProgram {
                         _ => None,
                     }
                 }
-                (ABILITY_ID_BITWISE, bitwise_fn) if matches!(t, Some(Type::Vector(_))) => {
+                bitwise_fn if base == b.bitwise && matches!(t, Some(Type::Vector(_))) => {
                     let op = match bitwise_fn {
                         "bit-not" => Some(VecOpKind::BitNot),
                         "bit-and" => Some(VecOpKind::BitAnd),
@@ -12822,25 +12886,25 @@ impl TypedProgram {
                     };
                     op.map(|op| Builtin::Ir(BuiltinIr::VectorOp(op)))
                 }
-                (ABILITY_ID_ADD, "add") => match t {
+                "add" if base == b.add => match t {
                     Some(Type::Integer(_)) => mk_scalar!(K::IntBinop(IntOp::Add)),
                     Some(Type::Float(_)) => mk_scalar!(K::FloatBinop(FloatOp::Add)),
                     Some(Type::Vector(_)) => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Add))),
                     _ => None,
                 },
-                (ABILITY_ID_SUB, "sub") => match t {
+                "sub" if base == b.sub => match t {
                     Some(Type::Integer(_)) => mk_scalar!(K::IntBinop(IntOp::Sub)),
                     Some(Type::Float(_)) => mk_scalar!(K::FloatBinop(FloatOp::Sub)),
                     Some(Type::Vector(_)) => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Sub))),
                     _ => None,
                 },
-                (ABILITY_ID_MUL, "mul") => match t {
+                "mul" if base == b.mul => match t {
                     Some(Type::Integer(_)) => mk_scalar!(K::IntBinop(IntOp::Mul)),
                     Some(Type::Float(_)) => mk_scalar!(K::FloatBinop(FloatOp::Mul)),
                     Some(Type::Vector(_)) => Some(Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Mul))),
                     _ => None,
                 },
-                (ABILITY_ID_DIV, "div") => match t {
+                "div" if base == b.div => match t {
                     Some(Type::Integer(int_type)) => {
                         mk_scalar!(K::IntBinop(if int_type.is_signed() {
                             IntOp::DivS
@@ -12851,7 +12915,7 @@ impl TypedProgram {
                     Some(Type::Float(_)) => mk_scalar!(K::FloatBinop(FloatOp::Div)),
                     _ => None,
                 },
-                (ABILITY_ID_REM, "rem") => match t {
+                "rem" if base == b.rem => match t {
                     Some(Type::Integer(int_type)) => {
                         mk_scalar!(K::IntBinop(if int_type.is_signed() {
                             IntOp::RemS
@@ -12862,13 +12926,13 @@ impl TypedProgram {
                     Some(Type::Float(_)) => mk_scalar!(K::FloatBinop(FloatOp::Rem)),
                     _ => None,
                 },
-                (ABILITY_ID_NEG, "negated") => match t {
+                "negated" if base == b.neg => match t {
                     Some(Type::Bool) => mk_scalar!(K::BoolNegate),
                     Some(Type::Integer(_)) => mk_scalar!(K::IntUnop(IntUnop::Neg)),
                     Some(Type::Float(_)) => mk_scalar!(K::FloatUnop(FloatUnop::Neg)),
                     _ => None,
                 },
-                (ABILITY_ID_INT_BITS, bits_fn) if int_type.is_some() => match bits_fn {
+                bits_fn if base == b.int_bits && int_type.is_some() => match bits_fn {
                     "trailing-zeros" => mk_scalar!(K::IntUnop(IntUnop::Ctz)),
                     "leading-zeros" => mk_scalar!(K::IntUnop(IntUnop::Clz)),
                     "count-ones" => mk_scalar!(K::IntUnop(IntUnop::Popcount)),
@@ -12877,7 +12941,10 @@ impl TypedProgram {
                     "rotate-right" => mk_scalar!(K::IntBinop(IntOp::RotateRight)),
                     _ => None,
                 },
-                (ABILITY_ID_OVERFLOW_ARITH, overflow_fn) if let Some(int_type) = int_type => {
+                overflow_fn
+                    if base == b.overflow_arith
+                        && let Some(int_type) = int_type =>
+                {
                     let op = match (overflow_fn, int_type.is_signed()) {
                         ("add-overflow", false) => Some(OverflowOp::AddU),
                         ("add-overflow", true) => Some(OverflowOp::AddS),
@@ -12889,7 +12956,10 @@ impl TypedProgram {
                     };
                     op.map(|op| Builtin::Ir(BuiltinIr::IntOverflow(op)))
                 }
-                (ABILITY_ID_SCALAR_CMP, cmp_fn) if let Some(int_type) = int_type => {
+                cmp_fn
+                    if base == b.scalar_cmp
+                        && let Some(int_type) = int_type =>
+                {
                     match (cmp_fn, int_type.is_signed()) {
                         ("lt", true) => mk_scalar!(K::IntCmp(IntCmpPred::Slt)),
                         ("lt", false) => mk_scalar!(K::IntCmp(IntCmpPred::Ult)),
@@ -12902,7 +12972,7 @@ impl TypedProgram {
                         _ => None,
                     }
                 }
-                (ABILITY_ID_SCALAR_CMP, cmp_fn) if is_float => match cmp_fn {
+                cmp_fn if base == b.scalar_cmp && is_float => match cmp_fn {
                     "lt" => mk_scalar!(K::FloatCmp(FloatCmpPred::Lt)),
                     "le" => mk_scalar!(K::FloatCmp(FloatCmpPred::Le)),
                     "gt" => mk_scalar!(K::FloatCmp(FloatCmpPred::Gt)),
@@ -12911,7 +12981,10 @@ impl TypedProgram {
                     "max" => mk_scalar!(K::FloatBinop(FloatOp::Max)),
                     _ => None,
                 },
-                (ABILITY_ID_COMPARABLE, "compare") if let Some(int_type) = int_type => {
+                "compare"
+                    if base == b.comparable
+                        && let Some(int_type) = int_type =>
+                {
                     mk_scalar!(K::IntCmp3(if int_type.is_signed() {
                         Cmp3Op::Scmp
                     } else {
@@ -14306,15 +14379,9 @@ impl TypedProgram {
             if !params.is_empty() {
                 kbail!(self, ast_fn.signature_span, "Tests take no parameters");
             }
-            let outcome = self.ast.idents.f.test_outcome;
-            let Some(outcome_ability_id) =
-                self.find_ability_namespaced(self.scopes.core_scope_id, &outcome)?
-            else {
-                self.ice_span(ast_fn.signature_span, "core is missing core/test/outcome")
-            };
             self.expect_ability_impl(
                 return_type,
-                outcome_ability_id,
+                self.builtin_abilities.test_outcome,
                 false,
                 fn_scope_id,
                 ast_fn.signature_span,
@@ -15392,6 +15459,13 @@ impl TypedProgram {
         };
         let ability_id = self.abilities.add(typed_ability);
         self.emit_ls_entity(parsed_ability.name_span, LsEntityKind::Ability(ability_id));
+
+        // Capture ability_ids of compiler-known abilities
+        for (scope, name, slot) in self.builtin_abilities.slots(&self.ast.idents, &self.scopes) {
+            if scope == scope_id && name == parsed_ability.name {
+                *slot = ability_id
+            }
+        }
         let added = self.scopes.add_ability(scope_id, parsed_ability.name, ability_id);
         if !added {
             kbail!(
@@ -16514,6 +16588,11 @@ impl TypedProgram {
         if is_types {
             self.scopes.types_scope_id = ns_scope_id;
         }
+        let is_test =
+            parent_scope_id == self.scopes.core_scope_id && name == self.ast.idents.b.test;
+        if is_test {
+            self.scopes.test_scope_id = ns_scope_id;
+        }
         let is_array =
             parent_scope_id == self.scopes.core_scope_id && name == self.ast.idents.b.array;
         if is_array {
@@ -16882,6 +16961,14 @@ impl TypedProgram {
                 &[self.builtin_types.code_token()],
             ));
             self.assert_builtin_types_correct();
+            let mut abilities = self.builtin_abilities;
+            for (_, name, slot) in abilities.slots(&self.ast.idents, &self.scopes) {
+                assert!(
+                    *slot != AbilityId::PENDING,
+                    "core is missing ability {}",
+                    self.ident_str(name)
+                );
+            }
         }
 
         self.resolve_pending_uses(true);
@@ -16910,12 +16997,6 @@ impl TypedProgram {
         for e in unresolved_use_errors {
             self.report(e)
         }
-
-        debug_assert!(self.abilities.get(ABILITY_ID_EQUALS).name == self.ast.idents.b.equals);
-        debug_assert!(self.abilities.get(ABILITY_ID_BITWISE).name == self.ast.idents.b.bitwise);
-        debug_assert!(
-            self.abilities.get(ABILITY_ID_COMPARABLE).name == self.ast.idents.b.comparable
-        );
 
         debug!(">> Pass 4 bodies (functions, globals, abilities, non-metaprogram statics)");
         let pass = self.trace_push(TraceKind::PassBodies, module_id.as_u32(), 0);
@@ -17203,7 +17284,7 @@ impl TypedProgram {
             QIdent::make(&mut self.ast.mem, core_scalarcmp, get_ident!(self, "max"), span),
             QIdent::make(&mut self.ast.mem, core_mem, get_ident!(self, "bitcast"), span),
             QIdent::make(&mut self.ast.mem, core_types, self.ast.idents.b.enum_, span),
-            QIdent::make(&mut self.ast.mem, core_types, get_ident!(self, "sum"), span),
+            QIdent::make(&mut self.ast.mem, core_types, self.ast.idents.b.sum, span),
             QIdent::make(&mut self.ast.mem, core_types, self.ast.idents.b.type_id, span),
             QIdent::make(&mut self.ast.mem, core_optref, self.ast.idents.b.null, span),
         ];

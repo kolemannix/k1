@@ -103,7 +103,7 @@ ns work {
 
     let words: list[string] = ["pear", "apple", "fig", "apple", ""]
     words.sort()
-    w.write("${words.join("|")};")
+    w.write("${string/join(words, "|")};")
 
     let grid: array[int, 4] = [4, 3, 2, 1]
     w.write("$grid;")
@@ -175,7 +175,7 @@ ns work {
       if i == 3 break
       log.push("b$i")
     }
-    w.write("${log.join(",")};")
+    w.write("${string/join(log, ",")};")
     w.build()
   }
 }

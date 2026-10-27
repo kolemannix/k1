@@ -24,6 +24,10 @@ fn log-concrete(context out: *string-builder)(m: string) {
 
 fn add-then[t: add](context c: t)(v: t, f: some fn t -> t): t { f(v + c) }
 
+fn greet-all[w: writer](context out: w)(names: span[string]) {
+  out.join-with(names, ", ", fn[out] n. greet(n))
+}
+
 fn tag-context[t: tagged](context c: t)(): int {
   c.tag()
 }
@@ -76,4 +80,15 @@ fn(test) context-resolved-after-inference-before-fnlike() {
 fn(test) location-names-enclosing-fn() {
   let f = fn() k1/location().function
   assert-equals(f(), "suite1/context_ability/location-names-enclosing-fn")
+}
+
+fn(test) lambda-captures-carry-context() {
+  let sb = string-builder/new()
+  let(context(impl writer)) out: *string-builder = sb.&
+  greet-all(["Ana", "Bo"])
+  let outer = fn[out]. { let inner = fn[out]. log-concrete("."); inner() }
+  outer()
+  assert-equals(sb.build(), "Hello, Ana, Hello, Bo.")
+  let by-ref = test-compile({ let f = fn[out.&]. log-concrete("x"); f() })
+  assert(by-ref is :some(e) and e.contains-string("capture it by value: `fn[out]`"))
 }

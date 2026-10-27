@@ -95,6 +95,7 @@ impl TypedProgram {
             phys_types,
             hole_type_cache: _,
             builtin_types,
+            builtin_abilities,
             agg_types,
             named_scalars,
             lambda_types,
@@ -195,6 +196,7 @@ impl TypedProgram {
         });
         namespaces.namespaces.snap(w);
         abilities.snap(w);
+        w.write_t(builtin_abilities);
         ability_impls.snap(w);
         write_map_snap(w, ability_impl_table);
         write_map_snap(w, ability_impl_table_by_ability);
@@ -322,6 +324,7 @@ impl TypedProgram {
         k1.ls_entities = RefCell::new(ls_entities);
         k1.namespaces.namespaces.restore(r);
         k1.abilities.restore(r);
+        k1.builtin_abilities = r.read_t();
         k1.ability_impls.restore(r);
         k1.ability_impl_table = restore_map_snap(r);
         k1.ability_impl_table_by_ability = restore_map_snap(r);

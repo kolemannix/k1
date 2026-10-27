@@ -41,10 +41,7 @@ macro define(decl: span[code-token]) {
   if members.is-empty() rd.toks.[rd.i - 1].fail("A string enum needs at least one variant")
 
   let values = string-builder/new()
-  for members {
-    if it-index > 0 values.write(", ")
-    values.write(it.value)
-  }
+  values.join-with(members, ", ", fn[values.&] m. values.write(m.value))
   let values-lit = meta/str-lit(values.build())
 
   let cb-storage = code-builder/new()

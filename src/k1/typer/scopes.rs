@@ -226,6 +226,7 @@ pub struct Scopes {
     pub k1_scope_id: ScopeId,
     pub mem_scope_id: ScopeId,
     pub types_scope_id: ScopeId,
+    pub test_scope_id: ScopeId,
     pub array_scope_id: ScopeId,
     pub vector_scope_id: ScopeId,
 }
@@ -247,6 +248,7 @@ impl Scopes {
             k1_scope_id,
             mem_scope_id,
             types_scope_id,
+            test_scope_id,
             array_scope_id,
             vector_scope_id,
         } = self;
@@ -264,6 +266,7 @@ impl Scopes {
             k1_scope_id,
             mem_scope_id,
             types_scope_id,
+            test_scope_id,
             array_scope_id,
             vector_scope_id,
         ] {
@@ -292,6 +295,7 @@ impl Scopes {
             k1_scope_id: r.read_t(),
             mem_scope_id: r.read_t(),
             types_scope_id: r.read_t(),
+            test_scope_id: r.read_t(),
             array_scope_id: r.read_t(),
             vector_scope_id: r.read_t(),
         }
@@ -309,6 +313,7 @@ impl Scopes {
             k1_scope_id: ScopeId::PENDING,
             mem_scope_id: ScopeId::PENDING,
             types_scope_id: ScopeId::PENDING,
+            test_scope_id: ScopeId::PENDING,
             array_scope_id: ScopeId::PENDING,
             vector_scope_id: ScopeId::PENDING,
         };
@@ -1271,6 +1276,40 @@ impl Scopes {
                 return None;
             }
             scope_id = scope.parent?;
+        }
+    }
+
+    pub fn add_context_capture_abilities(
+        &mut self,
+        capture_site: ScopeId,
+        source: VariableId,
+        lambda_scope: ScopeId,
+        binding: VariableId,
+    ) {
+        let mut scope_id = capture_site;
+        loop {
+            let scope = *self.get_scope(scope_id);
+            let mut cur =
+                if scope.kinds & kinds::CONTEXT_VARIABLES != 0 { scope.entries } else { None };
+            while let Some(id) = cur {
+                let entry = *self.entries.get(id);
+                cur = entry.prev_entry;
+                if let EntryPayload::ContextByAbility(ContextAbilityEntry::Unique(v)) =
+                    entry.payload
+                    && v == source
+                    && let Some(ability_id) = AbilityId::from_u32(entry.key)
+                    && let Some(ContextAbilityEntry::Unique(nearest)) =
+                        self.find_context_variable_by_ability(capture_site, ability_id)
+                    && nearest == source
+                {
+                    self.add_context_variable_by_ability(lambda_scope, ability_id, binding);
+                }
+            }
+            if scope.scope_type == ScopeType::Namespace {
+                return;
+            }
+            let Some(parent) = scope.parent else { return };
+            scope_id = parent;
         }
     }
 

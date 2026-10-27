@@ -157,11 +157,10 @@ fn params(e: entry): list[param] {
 fn path-type(e: entry): code {
   let cb = code-builder/new()
   cb.write("{ ")
-  for c in params(e) {
-    if it-index > 0 cb.write(", ")
+  cb.join-with(params(e), ", ", fn[cb.&] c. {
     cb.write("${c.name}: ")
     cb.write-code(c.ty)
-  }
+  })
   cb.write(" }")
   cb.build()
 }
@@ -439,15 +438,14 @@ macro define(name: code, rows: span[code-token]) {
   let cb = cb-storage.&
 
   cb.write-code("type $name = either { ")
-  for en in entries {
-    if it-index > 0 cb.write(", ")
+  cb.join-with(entries, ", ", fn[cb] en. {
     cb.write-token(en.name)
     if payload-type(en) is :some ty {
       cb.write("(")
       cb.write-code(ty)
       cb.write(")")
     }
-  }
+  })
   cb.write(" }\n")
 
   cb.block("ns for $name", fn[cb, name, entries]. emit-parse-fn(cb, name, entries))

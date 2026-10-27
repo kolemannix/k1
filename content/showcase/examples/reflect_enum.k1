@@ -13,10 +13,7 @@ ns enums {
       require types/schema[t] is :enum .{ int-kind, values } else crash("${types/name[t]} is not an enum")
       let sb = string-builder/new()
       sb.write("${types/name[t]} = either(${int-kind.enum-name()}) {")
-      for v in values {
-        if it-index > 0 sb.write(",")
-        sb.write(" ${v.name} = ${v.value}")
-      }
+      sb.join-with(values, ",", fn[sb.&] v. sb.write(" ${v.name} = ${v.value}"))
       sb.write(" }")
       sb.build()
     }

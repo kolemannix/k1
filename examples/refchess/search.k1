@@ -272,10 +272,8 @@ ns for searcher {
 
   fn pv-text(self: *searcher): string {
     let sb = string-builder/new()
-    for i in 0u32.until(self.pv-len.[0]) {
-      if i > 0 sb.write-char(' ')
-      sb.write(self.pv.[0].[i].to-uci())
-    }
+    let line = self.pv.[0]
+    sb.join-with(0u32.until(self.pv-len.[0]), " ", fn[sb.&, line] i. sb.write(line.[i].to-uci()))
     sb.build()
   }
 

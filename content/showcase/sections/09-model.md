@@ -464,7 +464,7 @@ errno 4
 fn render(id: int): string {
   let parts: list[string] = list/empty()
   for i in 0.until(3) { parts.push("item-${id}-${i}") }
-  parts.join(",")
+  string/join(parts, ",")
 }
 ```
 

@@ -193,13 +193,10 @@ fn home-page(): http-response {
 
 fn render-big-json(out: *string-builder, rows: size) {
   out.write("[")
-  let i: size = 0
-  while i < rows {
-    if i > 0 { out.write(",") }
+  out.join-with(0.until(rows), ",", fn[out] i. {
     let score = i * 7 % 1000
     out.write(`{"id": $i, "name": "row-$i", "flags": [true, false], "score": $score}`)
-    i = i + 1
-  }
+  })
   out.write("]")
 }
 
