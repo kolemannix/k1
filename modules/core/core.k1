@@ -166,7 +166,7 @@ ns files {
       :some(n) -> n,
       :none -> crash("cannot size `$path`")
     }
-    let buf = buffer/allocate-in[char, _](alloc, file-size-bytes)
+    let buf = buffer/allocate-in[t = char](alloc, file-size-bytes)
 
     let total: size = 0
     while total < buf.len() {

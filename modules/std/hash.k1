@@ -117,8 +117,8 @@ ns for map {
     .{
       count = 0,
       growth-left = _capacity-of(buckets),
-      ctrl = buffer/allocate-in[u8, _](alloc, buckets + MIRROR),
-      entries = buffer/allocate-in[{ key: k, value: v }, _](alloc, buckets),
+      ctrl = buffer/allocate-in[t = u8](alloc, buckets + MIRROR),
+      entries = buffer/allocate-in[t = { key: k, value: v }](alloc, buckets),
     }
   }
 
@@ -130,11 +130,11 @@ ns for map {
   }
 
   fn with-capacity-in[k, v, a: allocator](alloc: a, min-capacity: size): map[k, v] {
-    if min-capacity == 0 new() else _allocate[k, v, _](alloc, _buckets-for(min-capacity))
+    if min-capacity == 0 new() else _allocate[k = k, v = v](alloc, _buckets-for(min-capacity))
   }
 
   fn with-capacity[k, v](min-capacity: size): map[k, v] {
-    with-capacity-in[k, v, _](mem/current-arena(), min-capacity)
+    with-capacity-in[k = k, v = v](mem/current-arena(), min-capacity)
   }
 
   fn len[k, v](self: *map[k, v]): size { self.count }
@@ -201,7 +201,7 @@ ns for map {
 
   fn _resize[k, v, a: allocator](self: *map[k, v], alloc: a, buckets: size) where k: hash {
     let old = self.*
-    let fresh = _allocate[k, v, _](alloc, buckets)
+    let fresh = _allocate[k = k, v = v](alloc, buckets)
     for i in 0.until(old.entries.len) {
       if _is-full(old.ctrl.index-unchecked(i).*) {
         let e = old.entries.index-unchecked(i)
@@ -261,7 +261,7 @@ ns for map {
 
   fn(noinline) _make-room[k, v, a: allocator](self: *map[k, v], alloc: a, h: u64): size where k: hash {
     if self.entries.len == 0 {
-      self.* = _allocate[k, v, _](alloc, MIRROR)
+      self.* = _allocate[k = k, v = v](alloc, MIRROR)
     } else {
       let capacity = _capacity-of(self.entries.len)
       if self.count + 1 <= capacity >> 1 {
@@ -492,15 +492,15 @@ ns for set {
   fn new[t](): set[t] { .0 }
 
   fn with-capacity-in[t, a: allocator](alloc: a, min-capacity: size): set[t] {
-    .{ inner = map/with-capacity-in[t, empty, _](alloc, min-capacity) }
+    .{ inner = map/with-capacity-in[k = t, v = empty](alloc, min-capacity) }
   }
 
   fn with-capacity[t](min-capacity: size): set[t] {
-    with-capacity-in[t, _](mem/current-arena(), min-capacity)
+    with-capacity-in[t = t](mem/current-arena(), min-capacity)
   }
 
   fn from-span-in[t, a: allocator](alloc: a, values: span[t]): set[t] where t: hash, t: equals {
-    let s = with-capacity-in[t, _](alloc, values.len())
+    let s = with-capacity-in[t = t](alloc, values.len())
     for v in values {
       s.add-in(alloc, v)
     }
@@ -508,7 +508,7 @@ ns for set {
   }
 
   fn from-span[t](values: span[t]): set[t] where t: hash, t: equals {
-    from-span-in[t, _](mem/current-arena(), values)
+    from-span-in(mem/current-arena(), values)
   }
 
   fn len[t](self: *set[t]): size { self.inner.len() }

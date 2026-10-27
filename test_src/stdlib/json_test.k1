@@ -30,7 +30,7 @@ let snake-renamed: std/json/opts = .{ key-case = :snake, skip-none = false, rena
 
 fn with-opts[t: json-write, o: static std/json/opts](value: t): string {
   let sb = string-builder/new()
-  value.write-json[_, o](sb.&)
+  value.write-json[o = o](sb.&)
   sb.build()
 }
 
@@ -48,11 +48,11 @@ fn(test) write() {
     home-city = "London",
   }
   assert-equals(json/to-string(ada), `{"name":"Ada \"Countess\"","initial":"A","age":36,"score":99.5,"active":true,"role":"admin","nickname":null,"contacts":[{"email":"ada@example.com"},"unreachable"],"scores":[10,20,30],"home-city":"London"}`)
-  assert-equals(with-opts[_, camel-skip](ada), `{"name":"Ada \"Countess\"","initial":"A","age":36,"score":99.5,"active":true,"role":"admin","contacts":[{"email":"ada@example.com"},"unreachable"],"scores":[10,20,30],"homeCity":"London"}`)
+  assert-equals(with-opts[o = camel-skip](ada), `{"name":"Ada \"Countess\"","initial":"A","age":36,"score":99.5,"active":true,"role":"admin","contacts":[{"email":"ada@example.com"},"unreachable"],"scores":[10,20,30],"homeCity":"London"}`)
   let none: ?int = :none
   let one: ?int = :some 1
-  assert-equals(with-opts[_, camel-skip](.{ a = none, b = one, c = none }), `{"b":1}`)
-  assert-equals(with-opts[_, snake-renamed](.{ home-city = "x", zip-code = 1 }), `{"city":"x","zip_code":1}`)
+  assert-equals(with-opts[o = camel-skip](.{ a = none, b = one, c = none }), `{"b":1}`)
+  assert-equals(with-opts[o = snake-renamed](.{ home-city = "x", zip-code = 1 }), `{"city":"x","zip_code":1}`)
 
   let control = "a\tb\n".concat((1: u8).as-char().to-string()).concat("\"\\/")
   assert-equals(json/to-string(control), `"a\\tb\\n\\u0001\"\\\\/"`)

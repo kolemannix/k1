@@ -414,9 +414,7 @@ fn emit-url-arm(cb: *code-builder, en: entry) {
   if tail.non-empty() cb.line("w.write(${str-lit(tail)})")
   if en.query is :some _ {
     cb.pad()
-    cb.write("http/routing/write-query[")
-    cb.write-code(payload-type(en).!)
-    cb.write(", ${params(en).len()}, _](p, w)\n")
+    cb.write("http/routing/write-query[n = ${params(en).len()}](p, w)\n")
   }
 }
 

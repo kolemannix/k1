@@ -198,15 +198,15 @@ ns for encoder {
     e.heap = arena/init(1 << 22)
     e.scratch = arena/init(1 << 22)
     if quality == 0 {
-      e.table = buffer/allocate-in[i32, _](alloc, MAX-TABLE-SIZE)
+      e.table = buffer/allocate-in[t = i32](alloc, MAX-TABLE-SIZE)
     } else if quality == 1 {
-      e.table = buffer/allocate-in[i32, _](alloc, Q1-MAX-TABLE-SIZE)
+      e.table = buffer/allocate-in[t = i32](alloc, Q1-MAX-TABLE-SIZE)
       e.two-pass = alloc.alloc-t[two-pass-arena]
-      e.cmd-buf = buffer/allocate-in[u32, _](alloc, TWO-PASS-BLOCK-SIZE)
-      e.lit-buf = buffer/allocate-in[u8, _](alloc, TWO-PASS-BLOCK-SIZE)
+      e.cmd-buf = buffer/allocate-in[t = u32](alloc, TWO-PASS-BLOCK-SIZE)
+      e.lit-buf = buffer/allocate-in[t = u8](alloc, TWO-PASS-BLOCK-SIZE)
     }
     if quality <= 1 {
-      e.storage = buffer/allocate-in[u8, _](alloc, 2 * e.params.input-block-size() + 503 + 8)
+      e.storage = buffer/allocate-in[t = u8](alloc, 2 * e.params.input-block-size() + 503 + 8)
     }
     e.reset()
     e

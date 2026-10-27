@@ -43,7 +43,7 @@ ns fd {
           }
           i = i + 1
         }
-        let chunk = buffer/allocate-in[u8, _](mem/tmp(), 4096)
+        let chunk = buffer/allocate-in[t = u8](mem/tmp(), 4096)
         let n = if core/platform/io/read(.{ raw = self.fd }, chunk.data, chunk.len).result() is {
           :ok(n) -> n,
           :err(_) -> return :none

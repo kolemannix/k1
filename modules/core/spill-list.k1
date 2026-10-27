@@ -27,7 +27,7 @@ ns for spill-list {
 
   fn(noinline) _spill[t, n](self: *spill-list[t, n], needed: size) {
     let items = self.inline.items.&.as-buffer().slice(0, self.len())
-    let list = list/with-capacity-in[t, _](mem/current-arena(), needed.max(self.cap() * 2))
+    let list = list/with-capacity-in[t = t](mem/current-arena(), needed.max(self.cap() * 2))
     list.append-buffer(items)
     self.spilled = .{ marker = SPILLED, list }
   }

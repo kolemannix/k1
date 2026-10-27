@@ -19,7 +19,7 @@ ns for ring-buffer {
   }
 
   fn init-buffer[a: allocator](self: *ring-buffer, alloc: a, buflen: size) {
-    let new-data = buffer/allocate-in[u8, _](alloc, 2 + buflen + RB-SLACK)
+    let new-data = buffer/allocate-in[t = u8](alloc, 2 + buflen + RB-SLACK)
     if self.data.non-empty() {
       mem/copy(new-data.data-ptr(), self.data.data-ptr(), 2 + self.cur-size + RB-SLACK)
     }

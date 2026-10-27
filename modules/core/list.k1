@@ -32,7 +32,7 @@ ns for list {
   }
 
   fn(inline) with-capacity-in[t, a: allocator](alloc: a, cap: size): list[t] {
-    .{ len = 0, buffer = buffer/allocate-in[t, _](alloc, cap) }
+    .{ len = 0, buffer = buffer/allocate-in[t = t](alloc, cap) }
   }
 
   fn(inline) reserve-in[t, a: allocator](self: *list[t], alloc: a, count: size) {
@@ -41,7 +41,7 @@ ns for list {
   }
 
   fn(inline) reserve[t](self: *list[t], count: size) {
-    self.reserve-in[t, _](mem/current-arena(), count)
+    self.reserve-in(mem/current-arena(), count)
   }
 
   fn(inline) single[t](value: t): list[t] { filled[t](1, value) }
@@ -69,7 +69,7 @@ ns for list {
   }
 
   fn(inline) cloned[t](self: list[t]): list[t] {
-    self.cloned-in[t, _](mem/current-arena())
+    self.cloned-in(mem/current-arena())
   }
 
   fn(inline) push-in[t, a: allocator](self: *list[t], alloc: a, elem: t) {
@@ -112,7 +112,7 @@ ns for list {
   }
 
   fn(inline) append-buffer[t](self: *list[t], other: buffer[t]) {
-    self.append-buffer-in[t, _](mem/current-arena(), other)
+    self.append-buffer-in(mem/current-arena(), other)
   }
   fn append-buffer-in[t, a: allocator](self: *list[t], alloc: a, other: buffer[t]) {
     let needed = self.len + other.len

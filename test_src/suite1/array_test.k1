@@ -60,7 +60,7 @@ fn(test) zero-sized-element-addresses() {
   #for UNITS { n = n + 1 }
   assert-equals(n, 6)
   assert(units.[1].&.as[ptr] == units.&.as[ptr])
-  let heap = array/allocate[{}, 3, _](mem/tmp())
+  let heap = array/allocate[t = {}, n = 3](mem/tmp())
   assert(heap.[1].&.as[ptr] == heap.as[ptr])
 }
 

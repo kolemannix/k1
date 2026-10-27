@@ -56,13 +56,13 @@ ns for buffer {
   }
 
   fn(inline) filled-in[t, a: allocator](alloc: a, size: size, value: t): buffer[t] {
-    let buf: buffer[t] = allocate-in[t, _](alloc, size)
+    let buf: buffer[t] = allocate-in[t = t](alloc, size)
     buf.fill(value)
     buf
   }
 
   fn(inline) filled[t](size: size, value: t): buffer[t] {
-    buffer/filled-in[t, _](mem/current-arena(), size, value)
+    buffer/filled-in(mem/current-arena(), size, value)
   }
 
   fn(inline) _alloc-raw[a: allocator](alloc: a, stride: size, align: size, count: size): ptr {
@@ -74,7 +74,7 @@ ns for buffer {
   }
 
   fn(inline) allocate[t](count: size): buffer[t] {
-    allocate-in[t, _](mem/current-arena(), count)
+    allocate-in[t = t](mem/current-arena(), count)
   }
 
   ////////////////////////
@@ -85,13 +85,13 @@ ns for buffer {
   }
 
   fn(inline) _enlarged-clone-in[t, a: allocator](self: buffer[t], alloc: a, new-count: size): buffer[t] {
-    let new = allocate-in[t, _](alloc, new-count)
+    let new = allocate-in[t = t](alloc, new-count)
     buffer/copy(src = self, dst = new)
     new
   }
 
   fn(inline) _enlarged-clone[t](self: buffer[t], new-count: size): buffer[t] {
-    self._enlarged-clone-in[t, _](mem/current-arena(), new-count)
+    self._enlarged-clone-in(mem/current-arena(), new-count)
   }
 
   fn(inline) copy[t](src: buffer[t], dst: buffer[t]) {

@@ -1173,7 +1173,7 @@ ns array {
   }
 
   fn filled-in[t, n: static size, a: allocator](alloc: a, t: t, n: n): *array[t, n] {
-    let array-uninit = allocate[t, n, _](alloc)
+    let array-uninit = allocate[t = t, n = n](alloc)
     let i = 0
     while i < n.from-static() {
       array-uninit.[i] = t

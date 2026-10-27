@@ -19,7 +19,8 @@ LLM-maintained K1 notes; fix wrong lines on sight. Companion: `k1-additional.md`
   condition then `(x)`. Type and value args may name their param,
   `pair[b = string, a = int]`, `add(3, y = 2)`: a named arg binds the param it
   names, an unnamed one its position (a method's receiver is the first non-context
-  arg), each param once. `_` leaves a call's type param to inference. An ability
+  arg), each param once. `_` leaves a call's type param to inference; a call whose
+  type args are all named infers the params it omits (`f[cap = c]`). An ability
   call, including `ability@(t)/f(...)`, binds by the ability fn's names, its type
   args to the fn's own params (not Self); an impl fn declares as many own type
   params and the same context params, matched by position, so its names don't apply.
@@ -52,7 +53,7 @@ Inside `ns for t` and `impl` blocks `self` is a type name: `self`, `*self`, `sel
 ## Functions
 ```k1
 fn add(x: int, y: int): int { x + y }   // tail expr is the value; `return e`, bare `return` = unit
-fn first[t](xs: span[t]): t { xs.[0] }  // f[int, _](v): _ is inferred
+fn first[t](xs: span[t]): t { xs.[0] }
 fn advance(*atlas-cursor, n: int)       // bare-type param: named `atlas-cursor`
 ```
 A bare-type param (or struct field) is named after the type's base ident, dropping

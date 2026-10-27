@@ -78,7 +78,7 @@ fn start(
     woken = uninit,
     on-loop-event = uninit,
     awaited-events = 0,
-    connections = pool/with-capacity-in[connection, _](heap, config.max-connections),
+    connections = pool/with-capacity-in[t = connection](heap, config.max-connections),
     draining = false,
     conn-serial = 0,
   })

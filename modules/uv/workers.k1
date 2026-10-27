@@ -64,7 +64,7 @@ ns for worker-pool {
       shared = uninit,
     })
     pool.shared.init(.{
-      jobs = pool/with-capacity-in[job, _](arena, capacity),
+      jobs = pool/with-capacity-in[t = job](arena, capacity),
       ready = .0,
       worker-count = 0,
       blocked = 0,

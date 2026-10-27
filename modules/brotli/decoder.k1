@@ -407,8 +407,8 @@ fn read-huffman-code(d: *decoder, alphabet-size: size, table: ptr): result[size,
 ns for huffman-group {
   fn new(scratch: *arena, alphabet-size: size, ntrees: size): huffman-group {
     .{
-      codes = buffer/allocate-in[u32, _](scratch, ntrees * (alphabet-size + HUFFMAN-TABLE-SLACK)).data-ptr(),
-      htrees = buffer/allocate-in[ptr, _](scratch, ntrees),
+      codes = buffer/allocate-in[t = u32](scratch, ntrees * (alphabet-size + HUFFMAN-TABLE-SLACK)).data-ptr(),
+      htrees = buffer/allocate-in[t = ptr](scratch, ntrees),
       alphabet-size,
     }
   }
@@ -539,10 +539,10 @@ fn decode-compressed-header(d: *decoder): result[empty, decode-error] {
   d.distance-postfix-bits = bits & 3
   d.num-direct-distance-codes = (bits >> 2) << d.distance-postfix-bits.trunc[u32]
   let num-literal-block-types = d.num-block-types.[0]
-  d.context-modes = buffer/allocate-in[u8, _](d.scratch, num-literal-block-types)
+  d.context-modes = buffer/allocate-in[t = u8](d.scratch, num-literal-block-types)
   for i in 0.until(num-literal-block-types) { d.context-modes.[i] = br.read(2).trunc[u8] }
 
-  d.context-map = buffer/allocate-in[u8, _](d.scratch, num-literal-block-types << LITERAL-CONTEXT-BITS.trunc[u32])
+  d.context-map = buffer/allocate-in[t = u8](d.scratch, num-literal-block-types << LITERAL-CONTEXT-BITS.trunc[u32])
   let num-literal-htrees = decode-context-map(d, d.context-map).try
   for i in 0.until(8) { d.trivial-literal-contexts.[i] = 0 }
   for i in 0.until(num-literal-block-types) {
@@ -557,7 +557,7 @@ fn decode-compressed-header(d: *decoder): result[empty, decode-error] {
     }
   }
 
-  d.dist-context-map = buffer/allocate-in[u8, _](d.scratch, d.num-block-types.[2] << DISTANCE-CONTEXT-BITS.trunc[u32])
+  d.dist-context-map = buffer/allocate-in[t = u8](d.scratch, d.num-block-types.[2] << DISTANCE-CONTEXT-BITS.trunc[u32])
   let num-dist-htrees = decode-context-map(d, d.dist-context-map).try
   let dist-alphabet-size = distance-alphabet-size(d.distance-postfix-bits, d.num-direct-distance-codes, MAX-DISTANCE-BITS)
   d.literal-hgroup = huffman-group/new(d.scratch, NUM-LITERAL-SYMBOLS, num-literal-htrees)
@@ -800,7 +800,7 @@ fn decode-stream[a: allocator](d: *decoder, alloc: a): result[buffer[u8], decode
     }
   }
   d.max-backward-distance = (1 << d.window-bits.trunc[u32]) - WINDOW-GAP
-  let trees = buffer/allocate-in[u32, _](d.scratch, 3 * (HUFFMAN-MAX-SIZE-258 + HUFFMAN-MAX-SIZE-26))
+  let trees = buffer/allocate-in[t = u32](d.scratch, 3 * (HUFFMAN-MAX-SIZE-258 + HUFFMAN-MAX-SIZE-26))
   d.block-type-trees = trees.data-ptr()
   d.block-len-trees = trees.index-unchecked(3 * HUFFMAN-MAX-SIZE-258).as[ptr]
   d.dist-rb = [16, 15, 11, 4]

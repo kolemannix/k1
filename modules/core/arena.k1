@@ -155,7 +155,7 @@ ns for arena {
   }
 
   fn alloc-buffer[t](self: *arena, size): buffer[t] {
-    buffer/allocate-in[t, _](self, size)
+    buffer/allocate-in[t = t](self, size)
   }
 
   fn push-string(self: *arena, s: string): string {

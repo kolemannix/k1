@@ -1320,24 +1320,32 @@ impl TypedProgram {
         if parsed_args.is_empty() && type_params.is_empty() {
             return Ok(TmpSlice::empty());
         }
-        let mut call_type_args: TmpList<CallTypeArg> = self.tmp.new_list(type_params.len() as u32);
-        if parsed_args.is_empty() {
-            call_type_args.fill_to_cap(CallTypeArg::Inferred);
-            return Ok(call_type_args.to_slice());
-        }
-        let ordered_args = self.bind_type_args_to_params(
-            type_params.len(),
-            |k1, p| k1.get_type_parameter(type_params[p]).name,
-            parsed_args,
+        let mut placed: SV8<Option<NamedTypeArg>> = smallvec![None; type_params.len()];
+        self.place_args(
+            &mut placed,
+            parsed_args.len(),
+            |i| (parsed_args[i].name, parsed_args[i]),
+            |arg| arg.span,
+            |p| self.get_type_parameter(type_params[p]).name,
             span,
+            "type ",
         )?;
-        for arg in self.tmp.getn(ordered_args) {
-            call_type_args.push(match arg.type_expr {
-                None => CallTypeArg::Inferred,
-                Some(type_expr) => CallTypeArg::Passed {
-                    type_id: self.eval_type_expr(type_expr, scope_id)?,
-                    span: arg.span,
-                },
+        let infers_unplaced = parsed_args.iter().all(|arg| arg.name.is_some());
+        let mut call_type_args: TmpList<CallTypeArg> = self.tmp.new_list(type_params.len() as u32);
+        for placed_arg in placed {
+            call_type_args.push(match placed_arg {
+                None if infers_unplaced => CallTypeArg::Inferred,
+                None => kbail!(
+                    self,
+                    span,
+                    "Expected {} type arguments, got {}",
+                    type_params.len(),
+                    parsed_args.len()
+                ),
+                Some(NamedTypeArg { type_expr: None, .. }) => CallTypeArg::Inferred,
+                Some(NamedTypeArg { type_expr: Some(type_expr), span, .. }) => {
+                    CallTypeArg::Passed { type_id: self.eval_type_expr(type_expr, scope_id)?, span }
+                }
             });
         }
         Ok(call_type_args.to_slice())

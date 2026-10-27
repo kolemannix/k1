@@ -65,7 +65,7 @@ ability json-write {
   fn write-json[w: writer, o: static opts](self, w)
 }
 
-fn write[t: json-write, w: writer](w, value: t) { value.write-json[_, opts/default](w) }
+fn write[t: json-write, w: writer](w, value: t) { value.write-json[o = opts/default](w) }
 
 fn to-string[t: json-write](value: t): string {
   let sb = string-builder/new()
@@ -75,7 +75,7 @@ fn to-string[t: json-write](value: t): string {
 
 fn to-string-with[t: json-write, o: static opts](value: t): string {
   let sb = string-builder/new()
-  value.write-json[_, o](sb.&)
+  value.write-json[o = o](sb.&)
   sb.build()
 }
 
@@ -117,7 +117,7 @@ impl json-write for json {
         w.write-char('[')
         for items {
           if it-index > 0 w.write-char(',')
-          it.write-json[_, o](w)
+          it.write-json[o = o](w)
         }
         w.write-char(']')
       },
@@ -127,7 +127,7 @@ impl json-write for json {
           if it-index > 0 w.write-char(',')
           write-string(w, it.key)
           w.write-char(':')
-          it.value.write-json[_, o](w)
+          it.value.write-json[o = o](w)
         }
         w.write-char('}')
       }
@@ -709,7 +709,7 @@ ns internal {
   fn write-code(o: opts, id: types/type-id): code {
     let cb = code-builder/new()
     if id.instance-of[opt] {
-      cb.line(`if self is { :some x -> x.write-json[_, o](w), :none -> w.write("null") }`)
+      cb.line(`if self is { :some x -> x.write-json[o = o](w), :none -> w.write("null") }`)
     } else if id.instance-of[list] or id.instance-of[span] {
       write-seq-code(cb.&)
     } else if id.schema() is {
@@ -719,7 +719,7 @@ ns internal {
       :string -> cb.line(`write-string(w, self)`),
       :char -> cb.line(`write-string(w, self.to-string())`),
       :array _ -> write-seq-code(cb.&),
-      :reference _ -> cb.line(`self.*.write-json[_, o](w)`),
+      :reference _ -> cb.line(`self.*.write-json[o = o](w)`),
       :enum _ -> cb.line(`write-string(w, self.enum-name())`),
       :struct .{ fields } -> {
         let flag = false
@@ -734,9 +734,9 @@ ns internal {
             else if it-index == 0 `w.write($key)`
             else `w.write-char(','); w.write($key)`
           if flag and f.type-id.instance-of[opt] {
-            cb.line(`if self.${f.name} is :some x { $write-key; x.write-json[_, o](w) }`)
+            cb.line(`if self.${f.name} is :some x { $write-key; x.write-json[o = o](w) }`)
           } else {
-            cb.line(`$write-key; self.${f.name}.write-json[_, o](w)`)
+            cb.line(`$write-key; self.${f.name}.write-json[o = o](w)`)
           }
         }
         cb.line(`w.write-char('}')`)
@@ -747,7 +747,7 @@ ns internal {
           let name = meta/str-lit(`"${o.apply-key-case(v.name)}"`)
           if v.payload is :some _ {
             let key = meta/str-lit(`{"${o.apply-key-case(v.name)}":`)
-            cb.line(`:${v.name} p -> { w.write($key); p.write-json[_, o](w); w.write-char('}') },`)
+            cb.line(`:${v.name} p -> { w.write($key); p.write-json[o = o](w); w.write-char('}') },`)
           } else {
             cb.line(`:${v.name} -> w.write($name),`)
           }
@@ -761,7 +761,7 @@ ns internal {
 
   fn write-seq-code(cb: *code-builder) {
     cb.line(`w.write-char('[')`)
-    cb.line(`for self { if it-index > 0 w.write-char(','); it.write-json[_, o](w) }`)
+    cb.line(`for self { if it-index > 0 w.write-char(','); it.write-json[o = o](w) }`)
     cb.line(`w.write-char(']')`)
   }
 

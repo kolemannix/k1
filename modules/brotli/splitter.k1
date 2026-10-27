@@ -347,7 +347,7 @@ fn split-byte-vector[n: static size, t: block-symbol](
     num-histograms = remap-block-ids(block-ids, new-id, num-histograms)
     build-block-histograms(data, block-ids, num-histograms, histograms)
   }
-  cluster-blocks[n, _](data, num-blocks, block-ids, split)
+  cluster-blocks[n = n](data, num-blocks, block-ids, split)
 }
 
 fn copy-literals-to-byte-array(cmds: buffer[command], data: ptr, offset: size, mask: size, literals: buffer[u8]) {
@@ -381,7 +381,7 @@ fn split-block(
   }
   let literals = buffer/allocate[u8](literals-count)
   copy-literals-to-byte-array(cmds, data, pos, mask, literals)
-  split-byte-vector[256, _](
+  split-byte-vector[n = 256](
     literals, SYMBOLS-PER-LITERAL-HISTOGRAM, MAX-LITERAL-HISTOGRAMS, LITERAL-STRIDE-LENGTH,
     LITERAL-BLOCK-SWITCH-COST, params, literal-split)
 
@@ -389,7 +389,7 @@ fn split-block(
   for i in 0.until(cmds.len()) {
     insert-and-copy-codes.index-unchecked(i).* = cmds.index-unchecked(i).cmd-prefix
   }
-  split-byte-vector[704, _](
+  split-byte-vector[n = 704](
     insert-and-copy-codes, SYMBOLS-PER-COMMAND-HISTOGRAM, MAX-COMMAND-HISTOGRAMS, COMMAND-STRIDE-LENGTH,
     COMMAND-BLOCK-SWITCH-COST, params, insert-and-copy-split)
 
@@ -402,7 +402,7 @@ fn split-block(
       j = j + 1
     }
   }
-  split-byte-vector[544, _](
+  split-byte-vector[n = 544](
     distance-prefixes.slice(0, j), SYMBOLS-PER-DISTANCE-HISTOGRAM, MAX-COMMAND-HISTOGRAMS, DISTANCE-STRIDE-LENGTH,
     DISTANCE-BLOCK-SWITCH-COST, params, dist-split)
 }

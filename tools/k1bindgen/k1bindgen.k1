@@ -123,7 +123,7 @@ fn start(args: span[string]): result[string, string] {
   }
 
   let cursor: clang/CXCursor = clang/getTranslationUnitCursor(unit)
-  let parsed-renames = map/with-capacity-in[string, string, _](mem/tmp(), args.rename.len())
+  let parsed-renames = map/with-capacity-in[k = string, v = string](mem/tmp(), args.rename.len())
   for s in args.rename {
     let parts = s.split-by-char(':')
     if parts.len() != 2 eprintln("Bad rename: $s")
