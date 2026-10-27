@@ -77,10 +77,11 @@ ns pre { macro make-point(name: code) { "type $name = { x: i32, y: i32 }" } }
   upstream. Definition-level `$`/`#meta` run early: the macro or fn lives in `ns pre`
   or upstream. Their static args see the module's types, globals, abilities, impls
   and namespaces from any file in any order (an `#if`'d one only after it, but an
-  `#if`'d impl anywhere), and the output of the metaprograms above them; fns they call
-  come from `ns pre` or upstream. Output may contain more `#meta`/`$` (expanded in
-  order) or `macro` defs (binds a static arg once per ns: `define-scaled` in
-  `test_src/suite1/test_meta.k1`).
+  `#if`'d impl anywhere), and the output of the metaprograms above them. Looking up an
+  ability declares all its impls, so their headers name only types that exist by then
+  (emitted above the lookup). Fns they call come from `ns pre` or upstream. Output may
+  contain more `#meta`/`$` (expanded in order) or `macro` defs (binds a static arg
+  once per ns: `define-scaled` in `test_src/suite1/test_meta.k1`).
 - Passing a type the caller wrote as tokens: emit a call to a second macro taking
   `types/id[{ ...tokens... }]` (`content/showcase/examples/macro_record.k1`).
 - `code-token = { kind: ident|number|string|char|punct, text, source, spacing:

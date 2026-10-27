@@ -4334,7 +4334,7 @@ impl TypedProgram {
         scope_id: ScopeId,
         span: Span,
     ) -> Result<(AbilityImplHandle, SelfAdjust), MStr<MemTmp>> {
-        self.declare_pending_impls_for(self_type_id, target_base_ability_id);
+        self.drain_declare_pending_impls_of_ability(target_base_ability_id);
         if let Some(impl_handle) = self.find_unique_valid_ability_impl(
             self_type_id,
             target_base_ability_id,
@@ -4389,7 +4389,6 @@ impl TypedProgram {
             }
         };
         if let Some((adjusted_self_type_id, adjust)) = adjusted_self {
-            self.declare_pending_impls_for(adjusted_self_type_id, target_base_ability_id);
             if let Some(impl_handle) = self.find_unique_valid_ability_impl(
                 adjusted_self_type_id,
                 target_base_ability_id,
@@ -8387,7 +8386,7 @@ impl TypedProgram {
         ability_id: AbilityId,
         fn_name: StringId,
     ) -> Option<(FunctionId, FunctionId)> {
-        self.declare_pending_impls_for(self_type, ability_id);
+        self.drain_declare_pending_impls_of_ability(ability_id);
         let handles = self
             .ability_impl_table_by_ability
             .get(&TypeAbilityPair { self_type_id: self_type, base_ability_id: ability_id })?;
@@ -15842,54 +15841,20 @@ impl TypedProgram {
         self.tmp.reset_to(tmp_mark);
     }
 
-    fn declare_pending_impls_for(&mut self, self_type_id: TypeId, base_ability_id: AbilityId) {
+    fn drain_declare_pending_impls_of_ability(&mut self, base_ability_id: AbilityId) {
         let mut i = 0;
         while i < self.impls_pending_declaration.len() {
             let pending = self.impls_pending_declaration[i];
-            let parsed = self.ast.get_ability_impl(pending.parsed_id);
-            let (ability_name, self_type_expr, impl_params) =
-                (parsed.ability_expr.name, parsed.self_type, parsed.generic_impl_params);
-            let pending_base_ability_id = match pending.base_ability_id {
-                Some(id) => Some(id),
-                None => {
-                    let found = self.find_ability_namespaced(pending.scope_id, &ability_name);
-                    let base = match found {
-                        Ok(Some(ability_id)) => Some(self.abilities.get(ability_id).base_ability_id),
-                        _ => None,
-                    };
-                    self.impls_pending_declaration[i].base_ability_id = base;
-                    base
-                }
-            };
-            if pending_base_ability_id != Some(base_ability_id) {
-                i += 1;
-                continue;
-            }
-
-            // Self type head match, by scope lookup alone so nothing is forced
-            let head_may_match = match self.ast.type_exprs.get(self_type_expr) {
-                ParsedTypeExpr::TypeApplication(app)
-                    if app.name.has_path()
-                        || !self.ast.mem.getn(impl_params).iter().any(|p| p.name == app.name.name) =>
+            if pending.base_ability_id.is_none() {
+                let ability_name = self.ast.get_ability_impl(pending.parsed_id).ability_expr.name;
+                if let Ok(Some(ability_id)) =
+                    self.find_ability_namespaced(pending.scope_id, &ability_name)
                 {
-                    match self.find_type_namespaced(pending.scope_id, &app.name) {
-                        Ok(Some((type_id, _))) => {
-                            type_id == self_type_id
-                                || matches!(
-                                    (self.get_defn_info(type_id), self.get_defn_info(self_type_id)),
-                                    (Some(a), Some(b)) if a.ast_id == b.ast_id
-                                )
-                        }
-                        Ok(None) => matches!(
-                            self.find_pending_type_namespaced(pending.scope_id, &app.name),
-                            Ok(Some((defn_id, _))) if self.ast.get_type_defn(defn_id).flags.is_alias()
-                        ),
-                        Err(_) => false,
-                    }
+                    self.impls_pending_declaration[i].base_ability_id =
+                        Some(self.abilities.get(ability_id).base_ability_id);
                 }
-                _ => true,
-            };
-            if !head_may_match {
+            }
+            if self.impls_pending_declaration[i].base_ability_id != Some(base_ability_id) {
                 i += 1;
                 continue;
             }
