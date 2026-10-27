@@ -379,7 +379,7 @@ impl TypedProgram {
                     name: QIdent::naked(self.ast.idents.b.opt, opt.span),
                     args: self.ast.mem.pushn(&[NamedTypeArg {
                         name: None,
-                        type_expr: Some(opt.base),
+                        type_expr: opt.base,
                         span: opt.span,
                     }]),
                 };
@@ -664,7 +664,8 @@ impl TypedProgram {
                 let resulting_type_id = self.get_static_value_type(resulting_value_id);
                 match self.types.get(resulting_type_id) {
                     Type::Struct(_) if resulting_type_id == self.builtin_types.type_id() => {
-                        match self.get_type_id_from_value(self.static_values.get(resulting_value_id))
+                        match self
+                            .get_type_id_from_value(self.static_values.get(resulting_value_id))
                         {
                             Some(type_id) => Ok(type_id),
                             None => kbail!(self, es.span, "Unknown type id"),
@@ -734,10 +735,7 @@ impl TypedProgram {
                 if ty_app.args.len() != 1 {
                     kbail!(self, ty_app.span, "Expected 1 type parameter for dyn");
                 }
-                let Some(inner_type_expr_id) = self.ast.mem.get_nth(ty_app.args, 0).type_expr
-                else {
-                    kbail!(self, ty_app.span, "Wildcard type `_` not accepted here");
-                };
+                let inner_type_expr_id = self.ast.mem.get_nth(ty_app.args, 0).type_expr;
                 // dyn over an ability: the inner expr names an ability, which is not
                 // a type, so it must be intercepted before type evaluation
                 if let Some(object_type) =
@@ -769,14 +767,10 @@ impl TypedProgram {
                     kbail!(self, ty_app.span, "Expected 2 type parameters for _struct_combine");
                 }
                 let args = self.ast.mem.getn(ty_app.args);
-                let Some(arg1_expr) = args[0].type_expr else {
-                    kbail!(self, ty_app.span, "Wildcard type `_` not accepted here");
-                };
-                let Some(arg2_expr) = args[1].type_expr else {
-                    kbail!(self, ty_app.span, "Wildcard type `_` not accepted here");
-                };
-                let arg1 = self.eval_type_expr_ext(arg1_expr, scope_id, context.descended())?;
-                let arg2 = self.eval_type_expr_ext(arg2_expr, scope_id, context.descended())?;
+                let arg1 =
+                    self.eval_type_expr_ext(args[0].type_expr, scope_id, context.descended())?;
+                let arg2 =
+                    self.eval_type_expr_ext(args[1].type_expr, scope_id, context.descended())?;
 
                 let struct1 = *self
                     .types
@@ -824,14 +818,10 @@ impl TypedProgram {
                     kbail!(self, ty_app.span, "Expected 2 type parameters for _struct_remove");
                 }
                 let args = self.ast.mem.getn(ty_app.args);
-                let Some(arg1_expr) = args[0].type_expr else {
-                    kbail!(self, ty_app.span, "Wildcard type `_` not accepted here");
-                };
-                let Some(arg2_expr) = args[1].type_expr else {
-                    kbail!(self, ty_app.span, "Wildcard type `_` not accepted here");
-                };
-                let arg1 = self.eval_type_expr_ext(arg1_expr, scope_id, context.descended())?;
-                let arg2 = self.eval_type_expr_ext(arg2_expr, scope_id, context.descended())?;
+                let arg1 =
+                    self.eval_type_expr_ext(args[0].type_expr, scope_id, context.descended())?;
+                let arg2 =
+                    self.eval_type_expr_ext(args[1].type_expr, scope_id, context.descended())?;
 
                 let struct1 = self
                     .types
@@ -1026,15 +1016,8 @@ impl TypedProgram {
                             // instance's id now; it is filled once the defn cluster completes
                             let mut type_arguments: SV4<TypeId> = smallvec![];
                             for parsed_arg in self.tmp.getn(ordered_args) {
-                                let Some(parsed_arg_expr) = parsed_arg.type_expr else {
-                                    kbail!(
-                                        self,
-                                        parsed_arg.span,
-                                        "Wildcard _ type not accepted here"
-                                    );
-                                };
                                 let arg_type_id = self.eval_type_expr_ext(
-                                    parsed_arg_expr,
+                                    parsed_arg.type_expr,
                                     scope_id,
                                     context.descended(),
                                 )?;
@@ -1339,10 +1322,10 @@ impl TypedProgram {
                     type_params.len(),
                     parsed_args.len()
                 ),
-                Some(NamedTypeArg { type_expr: None, .. }) => CallTypeArg::Inferred,
-                Some(NamedTypeArg { type_expr: Some(type_expr), span, .. }) => {
-                    CallTypeArg::Passed { type_id: self.eval_type_expr(type_expr, scope_id)?, span }
-                }
+                Some(arg) => CallTypeArg::Passed {
+                    type_id: self.eval_type_expr(arg.type_expr, scope_id)?,
+                    span: arg.span,
+                },
             });
         }
         Ok(call_type_args.to_slice())
@@ -1366,11 +1349,8 @@ impl TypedProgram {
         let ordered_args = self.tmp.getn(ordered_args);
         let mut type_arguments: TmpList<TypeId> = self.tmp.new_list(params.len());
         for parsed_arg in ordered_args {
-            let Some(parsed_arg_expr) = parsed_arg.type_expr else {
-                kbail!(self, parsed_arg.span, "Wildcard _ type not accepted here");
-            };
             let arg_type_id =
-                self.eval_type_expr_ext(parsed_arg_expr, scope_id, context.descended())?;
+                self.eval_type_expr_ext(parsed_arg.type_expr, scope_id, context.descended())?;
             type_arguments.push(arg_type_id);
         }
         let type_arguments = type_arguments.to_slice();
@@ -1457,12 +1437,8 @@ impl TypedProgram {
                 ty_app.args.len()
             );
         }
-        let Some(size_expr) = self.ast.mem.get_nth(ty_app.args, 0).type_expr else {
-            kbail!(self, ty_app.span, "Wildcard _ type not accepted here");
-        };
-        let Some(align_expr) = self.ast.mem.get_nth(ty_app.args, 1).type_expr else {
-            kbail!(self, ty_app.span, "Wildcard _ type not accepted here");
-        };
+        let size_expr = self.ast.mem.get_nth(ty_app.args, 0).type_expr;
+        let align_expr = self.ast.mem.get_nth(ty_app.args, 1).type_expr;
         let ParsedTypeExpr::StaticLiteral(ParsedLiteral::Int(size_literal), size_span) =
             *self.ast.type_exprs.get(size_expr)
         else {
@@ -1522,14 +1498,16 @@ impl TypedProgram {
                 ty_app.args.len()
             );
         }
-        let Some(element_expr) = self.ast.mem.get_nth(ty_app.args, 0).type_expr else {
-            kbail!(self, ty_app.span, "Wildcard _ type not accepted here");
-        };
-        let Some(size_expr) = self.ast.mem.get_nth(ty_app.args, 1).type_expr else {
-            kbail!(self, ty_app.span, "Wildcard _ type not accepted here");
-        };
-        let element_type = self.eval_type_expr_ext(element_expr, scope_id, context.descended())?;
-        let size_type_id = self.eval_type_expr_ext(size_expr, scope_id, context.descended())?;
+        let element_type = self.eval_type_expr_ext(
+            self.ast.mem.get_nth(ty_app.args, 0).type_expr,
+            scope_id,
+            context.descended(),
+        )?;
+        let size_type_id = self.eval_type_expr_ext(
+            self.ast.mem.get_nth(ty_app.args, 1).type_expr,
+            scope_id,
+            context.descended(),
+        )?;
         let Some(static_type) = self.get_static_type_of_type(size_type_id) else {
             kbail!(self, ty_app.span, "{} must be a static type", what);
         };

@@ -79,7 +79,7 @@ ns for literal {
 }
 
 type call-arg = { name: ?string-id, value: expr-id, is-explicit-context: bool }
-type type-arg = { name: ?string-id, type-expr: ?type-expr-id, span: src-span }
+type type-arg = { name: ?string-id, type-expr: type-expr-id, span: src-span }
 
 type binary-op-kind = either(u8) {
   add, subtract, multiply, divide, rem,

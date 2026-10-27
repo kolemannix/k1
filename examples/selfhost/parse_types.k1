@@ -514,13 +514,7 @@ ns for parser {
       self.expect-kind(:equals).try
       :some(it.name)
     } else :none
-    let peeked = self.peek()
-    let type-expr: ?ast/type-expr-id = if peeked.kind is :ident and self.tok-chars(peeked) == "_" {
-      self.advance()
-      :none
-    } else {
-      :some(self.expect-type-expression().try)
-    }
+    let type-expr = self.expect-type-expression().try
     let span = self.extend-tok-to-here(one)
     :ok(.{ name, type-expr, span })
   }

@@ -871,7 +871,7 @@ ns mem {
   )
   fn(builtin) equals-memcmp(p1: ptr, p2: ptr, size: int): bool
 
-  fn(builtin) bitcast[t, u](t: t): u
+  fn(builtin) bitcast[from, to](value: from): to
 
   fn(builtin) load-volatile[t](src: *t): t
   fn(builtin) store-volatile[t](dst: *t, value: t)

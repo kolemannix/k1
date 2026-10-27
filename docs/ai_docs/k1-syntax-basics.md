@@ -19,11 +19,11 @@ LLM-maintained K1 notes; fix wrong lines on sight. Companion: `k1-additional.md`
   condition then `(x)`. Type and value args may name their param,
   `pair[b = string, a = int]`, `add(3, y = 2)`: a named arg binds the param it
   names, an unnamed one its position (a method's receiver is the first non-context
-  arg), each param once. `_` leaves a call's type param to inference; a call whose
-  type args are all named infers the params it omits (`f[cap = c]`). An ability
-  call, including `ability@(t)/f(...)`, binds by the ability fn's names, its type
-  args to the fn's own params (not Self); an impl fn declares as many own type
-  params and the same context params, matched by position, so its names don't apply.
+  arg), each param once. A call whose type args are all named infers the params
+  it omits (`f[cap = c]`). An ability call, including `ability@(t)/f(...)`, binds
+  by the ability fn's names, its type args to the fn's own params (not Self); an
+  impl fn declares as many own type params and the same context params, matched by
+  position, so its names don't apply.
 - Payloads never cross a newline: `return`, `break`, `:variant` at EOL are bare.
 - No unary minus. `-5` is a literal. A `-` spaced before but not after is a sign:
   `if c -1 else 1` yields -1, `x -1` is a parse error, `x - 1` subtracts. Negate

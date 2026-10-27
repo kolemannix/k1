@@ -216,16 +216,10 @@ impl ParsedCallArg {
 #[derive(Clone)]
 pub struct NamedTypeArg {
     pub name: Option<StringId>,
-    pub type_expr: Option<ParsedTypeExprId>,
+    pub type_expr: ParsedTypeExprId,
     pub span: Span,
 }
 impl_copy_if_small!(16, NamedTypeArg);
-
-impl NamedTypeArg {
-    pub fn unnamed(type_expr: ParsedTypeExprId, span: Span) -> NamedTypeArg {
-        NamedTypeArg { type_expr: Some(type_expr), name: None, span }
-    }
-}
 
 static_assert_size!(ParsedCall, 32);
 /// Calling a named function
@@ -3688,12 +3682,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             } else {
                 None
             };
-            let type_expr = if p.peek_kind() == K::Ident && p.token_chars(p.peek()) == "_" {
-                p.advance();
-                None
-            } else {
-                Some(p.expect_type_expression()?)
-            };
+            let type_expr = p.expect_type_expression()?;
             let span = p.extend_tok_to_here(one);
             Ok(NamedTypeArg { name, type_expr, span })
         })?;
@@ -5987,21 +5976,13 @@ impl ParsedProgram {
             if index > 0 {
                 w.write_str(", ")?;
             }
-            self.display_type_arg(w, *ta)?;
+            if let Some(name) = ta.name {
+                self.display_ident(w, name)?;
+                w.write_str(" = ")?;
+            }
+            self.display_type_expr_id(ta.type_expr, w)?;
         }
         w.write_str("]")
-    }
-
-    fn display_type_arg(&self, w: &mut impl Write, type_arg: NamedTypeArg) -> std::fmt::Result {
-        if let Some(name) = type_arg.name {
-            self.display_ident(w, name)?;
-            w.write_str(" = ")?;
-        }
-        match type_arg.type_expr {
-            None => w.write_str("_"),
-            Some(type_expr) => self.display_type_expr_id(type_expr, w),
-        }?;
-        Ok(())
     }
 
     fn display_qident(&self, w: &mut impl Write, ns_id: &QIdent) -> std::fmt::Result {

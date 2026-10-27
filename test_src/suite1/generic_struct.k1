@@ -30,11 +30,9 @@ fn(test) generic-method-call() {
 
 fn(test) infer-params-from-struct-literal() {
   takes-poly-au-pair(.{ t = some(42), u = opt:some true })
-  takes-poly-au-pair[_, bool](.{ t = some(42), u = some(true) })
   takes-poly-au-pair[d = bool](.{ t = some(42), u = some(true) })
   assert(test-compile(takes-poly-au-pair[d = ptr](.{ t = some(42), u = some(true) })) is :some _)
   assert(test-compile(takes-poly-au-pair[int](.{ t = some(42), u = some(true) })).!.contains-string("Expected 2 type arguments, got 1"))
-  assert(test-compile(takes-poly-au-pair[ptr, _](.{ t = some(42), u = some(true) })) is :some _)
 }
 
 fn(test) constrained-type-param() {

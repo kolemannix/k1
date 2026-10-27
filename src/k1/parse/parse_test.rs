@@ -231,13 +231,12 @@ fn type_parameter_multi() -> ParseResult<()> {
     };
     assert_eq!(app.args.len(), 2);
     let args = ast.mem.getn(app.args);
-    let ParsedTypeExpr::TypeApplication(inner_app) = ast.type_exprs.get(args[1].type_expr.unwrap())
-    else {
+    let ParsedTypeExpr::TypeApplication(inner_app) = ast.type_exprs.get(args[1].type_expr) else {
         panic!("Expected second param to be a type application");
     };
     let inner_args = ast.mem.getn(inner_app.args);
     assert!(matches!(
-        ast.type_exprs.get(inner_args[0].type_expr.unwrap()),
+        ast.type_exprs.get(inner_args[0].type_expr),
         ParsedTypeExpr::TypeApplication(_)
     ));
     Ok(())
@@ -340,7 +339,7 @@ fn generic_method_call_lhs_expr() -> Result<(), ParseError> {
     assert_eq!(fn_call.name.name, ast.idents.intern("getFn"));
     assert_eq!(call.name.name, ast.idents.intern("baz"));
     let type_args = ast.mem.getn(call.type_args(&ast.mem));
-    let type_arg = ast.type_exprs.get(type_args[0].type_expr.unwrap());
+    let type_arg = ast.type_exprs.get(type_args[0].type_expr);
     assert!(matches!(type_arg, ParsedTypeExpr::TypeApplication(_)));
     assert!(matches!(ast.exprs.get(args[1].value), ParsedExpr::Literal(_)));
     Ok(())

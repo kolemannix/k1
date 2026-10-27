@@ -9159,8 +9159,8 @@ impl TypedProgram {
             if fn_name == self.ast.idents.b.impl_of
                 && let Some(type_arg) = self.ast.mem.get_nth_opt(call.type_args(&self.ast.mem), 0)
             {
-                let ability_app = match type_arg.type_expr.map(|e| self.ast.type_exprs.get(e)) {
-                    Some(ParsedTypeExpr::TypeApplication(app)) => *app,
+                let ability_app = match self.ast.type_exprs.get(type_arg.type_expr) {
+                    ParsedTypeExpr::TypeApplication(app) => *app,
                     _ => kbail!(self, type_arg.span, "impl-of takes an ability"),
                 };
                 if args.len() != 1 {
@@ -9231,19 +9231,18 @@ impl TypedProgram {
                 // target coming from the expected type
                 let target_dyn_type: Option<TypeId> =
                     match self.ast.mem.get_nth_opt(call.type_args(&self.ast.mem), 0) {
-                        Some(type_arg) => match type_arg.type_expr {
-                            None => None,
-                            Some(type_expr) => {
-                                match self.try_eval_dyn_ability_type(type_expr, ctx.scope_id)? {
-                                    Some(t) => Some(t),
-                                    None => {
-                                        let evaled =
-                                            self.eval_type_expr(type_expr, ctx.scope_id)?;
-                                        self.types.get(evaled).as_ability_object().map(|_| evaled)
-                                    }
+                        Some(type_arg) => {
+                            match self
+                                .try_eval_dyn_ability_type(type_arg.type_expr, ctx.scope_id)?
+                            {
+                                Some(t) => Some(t),
+                                None => {
+                                    let evaled =
+                                        self.eval_type_expr(type_arg.type_expr, ctx.scope_id)?;
+                                    self.types.get(evaled).as_ability_object().map(|_| evaled)
                                 }
                             }
-                        },
+                        }
                         None => ctx
                             .expected_type_id
                             .filter(|et| self.types.get(*et).as_ability_object().is_some()),
@@ -9275,10 +9274,8 @@ impl TypedProgram {
                 || fn_name == self.ast.idents.b.narrow
             {
                 let dest_type = match self.ast.mem.get_nth_opt(call.type_args(&self.ast.mem), 0) {
-                    Some(NamedTypeArg { type_expr: Some(type_expr), .. }) => {
-                        self.eval_type_expr(*type_expr, ctx.scope_id)?
-                    }
-                    _ => match ctx.expected_type_id {
+                    Some(type_arg) => self.eval_type_expr(type_arg.type_expr, ctx.scope_id)?,
+                    None => match ctx.expected_type_id {
                         None => {
                             kbail!(
                                 self,
@@ -13548,10 +13545,7 @@ impl TypedProgram {
                 }
                 kbail!(self, span, "Missing argument for ability parameter {}", param.name);
             };
-            let Some(arg_type_expr) = arg.type_expr else {
-                kbail!(self, arg.span, "_ is not yet supported as an ability type argument");
-            };
-            let arg_type = self.eval_type_expr(arg_type_expr, scope_id)?;
+            let arg_type = self.eval_type_expr(arg.type_expr, scope_id)?;
             subst_pairs.push(spair! { param.type_variable_id => arg_type });
             if param.is_ability_side_param() {
                 ability_arguments.push(arg_type)
