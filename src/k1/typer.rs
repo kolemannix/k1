@@ -2239,21 +2239,6 @@ impl EvalTypeExprContext {
     };
 }
 
-#[derive(Debug, Clone)]
-pub enum UseStatus {
-    Unresolved(ScopeId),
-    Resolved(SV4<UseableSymbolId>),
-}
-
-impl UseStatus {
-    pub fn is_resolved(&self) -> bool {
-        match self {
-            UseStatus::Resolved(_) => true,
-            UseStatus::Unresolved(_) => false,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AbilityImplHandle {
     pub base_ability_id: AbilityId,
@@ -12053,7 +12038,7 @@ impl TypedProgram {
                 // These uses should always hit since we only do 1 pass inside function bodies, and
                 // at that point all symbols are resolvable
                 let useable_symbols =
-                    self.find_useable_symbols(ctx.scope_id, &parsed_use.target, true)?;
+                    self.find_useable_symbols(ctx.scope_id, &parsed_use.target, true, true)?;
                 if useable_symbols.is_empty() {
                     kbail!(
                         self,
@@ -15492,19 +15477,14 @@ impl TypedProgram {
         &mut self,
         parsed_id: ParsedAbilityImplId,
         scope_id: ScopeId,
-    ) -> K1Result<Option<AbilityImplId>> {
+    ) -> K1Result<AbilityImplId> {
         debug_assert!(matches!(
             self.ast.get_ability_impl(parsed_id).typer_state,
             ParsedAbilityImplDeclareOutcome::Parsed
         ));
         let result = self.declare_ability_impl_inner(parsed_id, scope_id);
         self.ast.ability_impls.get_mut(parsed_id).typer_state = match result {
-            Ok(Some(impl_id)) => ParsedAbilityImplDeclareOutcome::Declared(impl_id),
-            Ok(None) => {
-                let span = self.ast.get_ability_impl(parsed_id).span;
-                self.emit_semantic_token(span, parse::SemanticTokenKind::Comment);
-                ParsedAbilityImplDeclareOutcome::IfDefedOut
-            }
+            Ok(impl_id) => ParsedAbilityImplDeclareOutcome::Declared(impl_id),
             Err(_) => ParsedAbilityImplDeclareOutcome::Failed,
         };
         result
@@ -15514,12 +15494,9 @@ impl TypedProgram {
         &mut self,
         parsed_id: ParsedAbilityImplId,
         scope_id: ScopeId,
-    ) -> K1Result<Option<AbilityImplId>> {
+    ) -> K1Result<AbilityImplId> {
         let parsed_ability_impl = self.ast.get_ability_impl(parsed_id).clone();
         let span = parsed_ability_impl.span;
-        if !self.execute_static_condition(parsed_ability_impl.compile_condition, scope_id) {
-            return Ok(None);
-        }
         let namespace_id = self.scopes.get_scope_owner(scope_id).as_namespace().unwrap();
         self.fail_if_reload_ns(namespace_id, span, "ability impls")?;
         let parsed_impl_functions = parsed_ability_impl.functions;
@@ -15830,7 +15807,7 @@ impl TypedProgram {
                 .push_grow(&mut self.mem, typed_impl_id)
         }
 
-        Ok(Some(typed_impl_id))
+        Ok(typed_impl_id)
     }
 
     fn declare_pending_impl(&mut self, pending: ImplPendingDeclaration) {
@@ -16014,16 +15991,21 @@ impl TypedProgram {
         scope_id: ScopeId,
         parsed_use_id: ParsedUseId,
         fail_on_traverse_fail: bool,
+        force_pending_types: bool,
     ) -> bool {
         let parsed_use = *self.ast.uses.get(parsed_use_id);
-        let useable_symbols =
-            match self.find_useable_symbols(scope_id, &parsed_use.target, fail_on_traverse_fail) {
-                Err(e) => {
-                    self.report(e);
-                    return false;
-                }
-                Ok(sym) => sym,
-            };
+        let useable_symbols = match self.find_useable_symbols(
+            scope_id,
+            &parsed_use.target,
+            fail_on_traverse_fail,
+            force_pending_types,
+        ) {
+            Err(e) => {
+                self.report(e);
+                return false;
+            }
+            Ok(sym) => sym,
+        };
         debug!(
             "Usable symbols for {}: {:?}",
             self.qident_to_string(&parsed_use.target),
@@ -16051,6 +16033,7 @@ impl TypedProgram {
         scope_id: ScopeId,
         name: &QIdent,
         fail_on_traverse_fail: bool,
+        force_pending_types: bool,
     ) -> K1Result<SV4<UseableSymbolId>> {
         if self.string_is_completion_marker(name.name, false) {
             self.record_qident_completion_site(scope_id, name);
@@ -16090,6 +16073,9 @@ impl TypedProgram {
         } else if let Some(pending_parsed_id) =
             self.scopes.find_pending_type_local(scope_id_to_search, name.name)
         {
+            if !force_pending_types {
+                return Ok(smallvec![]);
+            }
             let type_id = self.eval_type_defn(pending_parsed_id, scope_id_to_search)?;
             let companion_namespace = self.get_companion_namespace(type_id);
             found_symbols.push(UseableSymbolId::Type { type_id, companion_namespace })
@@ -16129,7 +16115,7 @@ impl TypedProgram {
         }
     }
 
-    /// Registers a global, type, ability or impl as pending in its namespace's scope,
+    /// Registers a global, type, ability, impl or use as pending in its namespace's scope,
     /// or declares a namespace and registers its definitions. Pass 1 registers
     /// a module's unconditional definitions before running any definition-level
     /// metaprogram, so their static args see them in any order, and a
@@ -16233,12 +16219,28 @@ impl TypedProgram {
                 self.register_definitions(child_defns, child, skip_defns)
             }
             ParsedId::AbilityImpl(parsed_id) => {
-                if !in_order {
-                    self.impls_pending_declaration.push_back(ImplPendingDeclaration {
-                        scope_id: namespace_scope_id,
-                        parsed_id,
-                        base_ability_id: None,
-                    });
+                let parsed = self.ast.get_ability_impl(parsed_id);
+                let (condition, span) = (parsed.compile_condition, parsed.span);
+                if condition.is_some() != in_order {
+                    return;
+                }
+                if !self.execute_static_condition(condition, namespace_scope_id) {
+                    self.ast.ability_impls.get_mut(parsed_id).typer_state =
+                        ParsedAbilityImplDeclareOutcome::IfDefedOut;
+                    self.emit_semantic_token(span, parse::SemanticTokenKind::Comment);
+                    return;
+                }
+                self.impls_pending_declaration.push_back(ImplPendingDeclaration {
+                    scope_id: namespace_scope_id,
+                    parsed_id,
+                    base_ability_id: None,
+                });
+            }
+            ParsedId::Use(use_id) => {
+                if !in_order && !self.eval_use_definition(namespace_scope_id, use_id, false, false)
+                {
+                    self.uses_pending_resolution
+                        .push_back(UsePendingResolution { scope_id: namespace_scope_id, use_id });
                 }
             }
             _ => {}
@@ -16647,48 +16649,6 @@ impl TypedProgram {
         Ok(namespace_id)
     }
 
-    fn discover_uses_in_namespace(
-        &mut self,
-        parsed_namespace_id: ParsedNamespaceId,
-        skip_defns: &[ParsedId],
-        recurse: bool,
-        skip_self: bool,
-    ) {
-        let ParsedNamespaceDeclareOutcome::Declared(namespace_id) =
-            self.ast.namespaces.get(parsed_namespace_id).typer_state
-        else {
-            return;
-        };
-        let namespace_scope_id = self.namespaces.get(namespace_id).scope_id;
-        let ast_namespace = self.ast.namespaces.get(parsed_namespace_id);
-        let ast_definitions = ast_namespace.definitions.as_slice(&self.ast.mem);
-        for defn in ast_definitions {
-            if skip_defns.contains(defn) {
-                continue;
-            }
-            match *defn {
-                ParsedId::Use(parsed_use_id) => {
-                    if !skip_self {
-                        debug!(
-                            "discovering use {}",
-                            self.qident_to_string(&self.ast.uses.get(parsed_use_id).target)
-                        );
-                        self.uses_pending_resolution.push_back(UsePendingResolution {
-                            scope_id: namespace_scope_id,
-                            use_id: parsed_use_id,
-                        })
-                    }
-                }
-                ParsedId::Namespace(ns) => {
-                    if recurse {
-                        self.discover_uses_in_namespace(ns, skip_defns, true, false);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
     fn run_definition_metaprograms(
         &mut self,
         parsed_namespace_id: ParsedNamespaceId,
@@ -16835,12 +16795,17 @@ impl TypedProgram {
     /// Sweeps the pending queue to quiescence, so a use whose target is another
     /// use resolves regardless of declaration order; textual order only decides
     /// the winner when two uses claim the same name.
-    fn resolve_pending_uses(&mut self) {
+    fn resolve_pending_uses(&mut self, force_pending_types: bool) {
         loop {
             let before = self.uses_pending_resolution.len();
             let mut i = 0;
-            while let Some(use_pending) = self.uses_pending_resolution.get(i) {
-                if self.eval_use_definition(use_pending.scope_id, use_pending.use_id, false) {
+            while let Some(&use_pending) = self.uses_pending_resolution.get(i) {
+                if self.eval_use_definition(
+                    use_pending.scope_id,
+                    use_pending.use_id,
+                    false,
+                    force_pending_types,
+                ) {
                     self.uses_pending_resolution.remove(i);
                 } else {
                     i += 1;
@@ -16867,12 +16832,6 @@ impl TypedProgram {
             };
         }
 
-        debug!(">> Pass 0 discover and resolve uses");
-        let pass = self.trace_push(TraceKind::PassUses, module_id.as_u32(), 0);
-        self.discover_uses_in_namespace(module_root_parsed_namespace, skip_defns, false, false);
-        self.resolve_pending_uses();
-        self.trace_pop(pass);
-
         debug!(">> Pass 1 declare namespaces and run global #meta programs");
         let pass = self.trace_push(TraceKind::PassNamespaces, module_id.as_u32(), 0);
         let root_defns = self
@@ -16882,6 +16841,7 @@ impl TypedProgram {
             .definitions
             .as_slice(&self.ast.mem);
         self.register_definitions(root_defns, module_root_parsed_namespace, skip_defns);
+        self.resolve_pending_uses(false);
         self.run_definition_metaprograms(module_root_parsed_namespace, skip_defns);
         self.trace_pop(pass);
         check_for_errors!();
@@ -16889,14 +16849,11 @@ impl TypedProgram {
         // Pending Type declaration phase
         debug!(">> Pass 2 declare types, abilities and impls");
         let pass = self.trace_push(TraceKind::PassTypes, module_id.as_u32(), 0);
-        self.discover_uses_in_namespace(module_root_parsed_namespace, skip_defns, true, true);
-
         // If we resolve uses this early in core, we evaluate the builtin types out of the expected order
-        if !is_core {
-            self.resolve_pending_uses();
-        }
         if is_core {
             self.drain_pending_type_defns();
+        } else {
+            self.resolve_pending_uses(true);
         }
         self.declare_namespace_abilities(module_root_parsed_namespace, skip_defns);
         while let Some(pending) = self.impls_pending_declaration.pop_front() {
@@ -16933,10 +16890,10 @@ impl TypedProgram {
             self.assert_builtin_types_correct();
         }
 
-        self.resolve_pending_uses();
+        self.resolve_pending_uses(true);
 
         // Everything else declaration phase
-        debug!(">> Pass 4 declare rest of definitions (functions, globals)");
+        debug!(">> Pass 3 declare rest of definitions (functions, globals)");
         let pass = self.trace_push(TraceKind::PassDeclarations, module_id.as_u32(), 0);
         self.declare_namespace_definitions(module_root_parsed_namespace, skip_defns);
         self.trace_pop(pass);
@@ -16945,7 +16902,7 @@ impl TypedProgram {
             panic!("global_id_k1_arena was not set");
         }
 
-        self.resolve_pending_uses();
+        self.resolve_pending_uses(true);
         let mut unresolved_use_errors: Vec<K1Message> = vec![];
         for pending_use in self.uses_pending_resolution.iter() {
             let parsed_use = self.ast.uses.get(pending_use.use_id);
@@ -16966,7 +16923,7 @@ impl TypedProgram {
             self.abilities.get(ABILITY_ID_COMPARABLE).name == self.ast.idents.b.comparable
         );
 
-        debug!(">> Pass 5 bodies (functions, globals, abilities, non-metaprogram statics)");
+        debug!(">> Pass 4 bodies (functions, globals, abilities, non-metaprogram statics)");
         let pass = self.trace_push(TraceKind::PassBodies, module_id.as_u32(), 0);
         self.compile_ns_body(module_root_parsed_namespace, skip_defns);
         let mut i = 0;
@@ -17263,7 +17220,7 @@ impl TypedProgram {
                 exposed: false,
                 span,
             });
-            if !self.eval_use_definition(scope, use_id, true) {
+            if !self.eval_use_definition(scope, use_id, true, true) {
                 kbail!(self, span, "Failed to resolve a core use: {}", self.qident_to_string(&qid));
             }
         }

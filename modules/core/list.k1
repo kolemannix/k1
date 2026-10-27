@@ -32,7 +32,7 @@ ns for list {
   }
 
   fn(inline) with-capacity-in[t, a: allocator](alloc: a, cap: size): list[t] {
-    .{ len = 0, buffer = buffer/allocate-in[t = t](alloc, cap) }
+    .{ len = 0, buffer = buffer/allocate-in(alloc, cap) }
   }
 
   fn(inline) reserve-in[t, a: allocator](self: *list[t], alloc: a, count: size) {

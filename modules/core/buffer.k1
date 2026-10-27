@@ -56,7 +56,7 @@ ns for buffer {
   }
 
   fn(inline) filled-in[t, a: allocator](alloc: a, size: size, value: t): buffer[t] {
-    let buf: buffer[t] = allocate-in[t = t](alloc, size)
+    let buf: buffer[t] = allocate-in(alloc, size)
     buf.fill(value)
     buf
   }
@@ -74,7 +74,7 @@ ns for buffer {
   }
 
   fn(inline) allocate[t](count: size): buffer[t] {
-    allocate-in[t = t](mem/current-arena(), count)
+    allocate-in(mem/current-arena(), count)
   }
 
   ////////////////////////

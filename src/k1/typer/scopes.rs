@@ -594,7 +594,8 @@ impl Scopes {
             }
             match self.find_variable_local(sid, ident) {
                 Some(VariableInScope::Masked) => Some(
-                    self.find_function(sid, ident).map_or(CallBinding::Value, CallBinding::Function),
+                    self.find_function(sid, ident)
+                        .map_or(CallBinding::Value, CallBinding::Function),
                 ),
                 Some(VariableInScope::Defined(_)) => Some(CallBinding::Value),
                 None => self.find_pending_global_local(sid, ident).map(|_| CallBinding::Value),

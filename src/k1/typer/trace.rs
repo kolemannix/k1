@@ -25,7 +25,6 @@ crate::tag_enum! {
         SetupStamp,
         SetupFn,
         ModuleCompile,
-        PassUses,
         PassNamespaces,
         PassTypes,
         PassDeclarations,
@@ -72,7 +71,6 @@ impl TraceKind {
             TraceKind::SetupStamp => "setup stamp",
             TraceKind::SetupFn => "setup",
             TraceKind::ModuleCompile => "module",
-            TraceKind::PassUses => "pass uses",
             TraceKind::PassNamespaces => "pass namespaces",
             TraceKind::PassTypes => "pass types",
             TraceKind::PassDeclarations => "pass declarations",
@@ -122,7 +120,6 @@ impl TraceKind {
             | TraceKind::SetupStamp
             | TraceKind::SetupFn
             | TraceKind::ModuleCompile
-            | TraceKind::PassUses
             | TraceKind::PassNamespaces
             | TraceKind::PassTypes
             | TraceKind::PassDeclarations
@@ -166,7 +163,6 @@ impl TraceKind {
                 | TraceKind::SetupStamp
                 | TraceKind::SetupFn
                 | TraceKind::ModuleCompile
-                | TraceKind::PassUses
                 | TraceKind::PassNamespaces
                 | TraceKind::PassTypes
                 | TraceKind::PassDeclarations
@@ -198,7 +194,6 @@ impl TraceKind {
                 | TraceKind::SetupStamp
                 | TraceKind::SetupFn
                 | TraceKind::ModuleCompile
-                | TraceKind::PassUses
                 | TraceKind::PassNamespaces
                 | TraceKind::PassTypes
                 | TraceKind::PassDeclarations
@@ -230,15 +225,14 @@ impl TraceKind {
     /// Position among the typer passes, for the progress fraction
     pub fn pass_index(self) -> Option<u32> {
         match self {
-            TraceKind::PassUses => Some(0),
-            TraceKind::PassNamespaces => Some(1),
-            TraceKind::PassTypes => Some(2),
-            TraceKind::PassDeclarations => Some(3),
-            TraceKind::PassBodies => Some(4),
+            TraceKind::PassNamespaces => Some(0),
+            TraceKind::PassTypes => Some(1),
+            TraceKind::PassDeclarations => Some(2),
+            TraceKind::PassBodies => Some(3),
             _ => None,
         }
     }
-    pub const PASS_COUNT: u32 = 5;
+    pub const PASS_COUNT: u32 = 4;
 
     /// What `data_count` counts for this kind, if anything
     pub fn data_label(self) -> Option<&'static str> {

@@ -15,6 +15,8 @@
 $pre/make-point-macro(my-macro-point)
 $pre/make-point-twice(my-nested-point)
 $pre/define-scaled(3)
+#meta pre/emit-pi-use()
+#meta { let _ = emitted-pi; "" }
 
 ns pre {
   let pi: f32 = 3.14
@@ -31,6 +33,7 @@ ns pre {
     `macro scaled(x: code) { pre/scaled-code(x, $factor) }`
   }
   fn scaled-code(x: code, factor: int): code { "($x * $factor)" }
+  fn emit-pi-use(): code { "use pre/pi as emitted-pi" }
   macro define-name-of(t: types/type-id, tag: int) {
     "ns for ${t.name()} { fn name-of(): string { ${meta/str-lit(t.name())} } fn tag-of(): int { $tag } }"
   }
@@ -146,3 +149,5 @@ type forward-command = either { go(forward-payload) }
 type forward-payload = { x: i32 }
 ability tagged { fn tag(): int }
 impl tagged for forward-command { fn tag(): int { 7 } }
+#meta { "let tag-points: bool = true" }
+#if tag-points impl tagged for my-macro-point { fn tag(): int { 9 } }

@@ -1317,9 +1317,6 @@ impl TypedProgram {
         span: Span,
         scope_id: ScopeId,
     ) -> K1Result<TmpSlice<CallTypeArg>> {
-        if parsed_args.is_empty() && type_params.is_empty() {
-            return Ok(TmpSlice::empty());
-        }
         let mut placed: SV8<Option<NamedTypeArg>> = smallvec![None; type_params.len()];
         self.place_args(
             &mut placed,

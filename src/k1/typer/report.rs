@@ -377,7 +377,6 @@ impl TypedProgram {
             TraceKind::PlanCheck | TraceKind::HostPlan => self.program_name().to_string(),
             TraceKind::HostWave => format!("wave {key}"),
             TraceKind::SnapStore
-            | TraceKind::PassUses
             | TraceKind::PassNamespaces
             | TraceKind::PassTypes
             | TraceKind::PassDeclarations
