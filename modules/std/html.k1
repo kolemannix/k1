@@ -150,25 +150,24 @@ fn write-attr[w: writer, t](out: w, name: string, value: t, presence: bool) {
   }
 }
 
-macro write(out: code, markup: span[code-token]) {
-  emit(out, markup)
+macro write(markup: span[code-token]) {
+  emit(markup)
 }
 
 macro render(markup: span[code-token]) {
   let cb = code-builder/new()
   cb.line("let html-render-sb = string-builder/new()")
   cb.line("let(context(impl writer)) _html-render-out: *string-builder = html-render-sb.&")
-  cb.write-code(emit(\_html-render-out, markup))
+  cb.write-code(emit(markup))
   cb.line("html-render-sb.build()")
   cb.build()
 }
 
-fn emit(out: code, markup: span[code-token]): code {
+fn emit(markup: span[code-token]): code {
   let e: emitter = .{
     cur = token-cursor/new(markup),
     cb = code-builder/new(),
     pending = string-builder/new(),
-    out,
     after-text = false,
     lead = :as-written,
   }
@@ -182,7 +181,6 @@ type emitter = {
   cur: token-cursor,
   cb: code-builder,
   pending: string-builder,
-  out: code,
   after-text: bool,
   lead: either(u8) { as-written, trim, space },
 }
@@ -204,24 +202,15 @@ ns for emitter {
   fn flush(self: *emitter) {
     let s = self.pending.build()
     if s.len() == 0 return
-    self.cb.write-code(self.out)
-    self.cb.write(".write(${meta/str-lit(s)})\n")
+    self.cb.write("core/get-context-writer().write(${meta/str-lit(s)})\n")
     self.pending.reset()
   }
 
   fn dynamic(self: *emitter, value: span[code-token], raw: bool) {
     self.flush()
-    if raw self.cb.write("(") else {
-      self.cb.write("std/html/write-escaped(")
-      self.cb.write-code(self.out)
-      self.cb.write(", ")
-    }
+    self.cb.write(if raw "(" else "std/html/write-escaped(core/get-context-writer(), ")
     self.cb.write-tokens(value)
-    if raw {
-      self.cb.write(").print-to(")
-      self.cb.write-code(self.out)
-    }
-    self.cb.write(")\n")
+    self.cb.write(if raw ").print-to(core/get-context-writer())\n" else ")\n")
   }
 
   fn literal(self: *emitter, t: code-token, raw: bool) {
@@ -231,11 +220,7 @@ ns for emitter {
         :hole h -> {
           if h.spec.is-empty() { self.dynamic(h.tokens, raw); continue }
           self.flush()
-          if raw self.cb.write-code(self.out) else {
-            self.cb.write("std/html/escaping(")
-            self.cb.write-code(self.out)
-            self.cb.write(")")
-          }
+          self.cb.write(if raw "core/get-context-writer()" else "std/html/escaping(core/get-context-writer())")
           self.cb.write(".write(\"\${")
           self.cb.write-tokens(h.tokens)
           self.cb.write(":${h.spec}}\")\n")
@@ -439,9 +424,7 @@ ns for emitter {
     if v.text == "{" {
       let value = self.braced()
       self.flush()
-      self.cb.write("std/html/write-attr(")
-      self.cb.write-code(self.out)
-      self.cb.write(", ${meta/str-lit(name)}, ")
+      self.cb.write("std/html/write-attr(core/get-context-writer(), ${meta/str-lit(name)}, ")
       self.cb.write-tokens(value)
       self.cb.write(", presence = ${is-boolean-attr(name)})\n")
       return

@@ -48,6 +48,8 @@ fn eprintln(context locn: k1/source-location)(s: string) {
   eprint("\n")
 }
 
+fn(inline) get-context-writer[w: writer](context w)(): w { w }
+
 ns io {
   type out-stream = { file-no: i32 }
   let stdout: out-stream = .{ file-no = 1 }
@@ -392,7 +394,7 @@ fn(inline) _write-decimal-pair(digits: *array[u8, 64], at: size, pair: u64) {
   mem/write-unaligned(digits.as[ptr].add-bytes(dst), DECIMAL_PAIRS.[pair.signed()])
 }
 
-fn format-uint[w: writer](context w)(value: u64, base: u64) {
+fn format-uint[w: writer](w, value: u64, base: u64) {
   let digits: array[u8, 64] = uninit
   let start: size = 64
   let remaining = value
@@ -440,7 +442,7 @@ impl print for u32 {
 
 impl print for u64 {
   fn print-to[w: writer](self: u64, w) {
-    format-uint(context w)(self, base = 10)
+    format-uint(w, self, base = 10)
   }
 }
 
@@ -470,7 +472,7 @@ impl print for int {
     }
 
     let pos = if neg self.negated() else self
-    format-uint(context w)(pos.unsigned(), 10)
+    format-uint(w, pos.unsigned(), 10)
   }
 }
 
@@ -883,7 +885,7 @@ impl print-precise for f64 {
 impl print for ptr {
   fn print-to[w: writer](self: ptr, w) {
     w.write("0x")
-    format-uint(context w)(self.to-uint(), base = 16)
+    format-uint(w, self.to-uint(), base = 16)
   }
 }
 

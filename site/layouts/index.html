@@ -3,12 +3,12 @@
 <main>
 <section class="hero"><div class="wrap hero-grid">
   <div>
-    <h1>a <em>powerful</em> programming language</h1>
+    <h1>a <em>very good</em> programming language</h1>
     <p class="sub">optimized for both the programmer and the computer</p>
-    <p class="sub">semantically dense source code, compiled with haste, into efficient native code</p>
+    <p class="sub">semantically dense source code, compiled with haste into efficient native code</p>
     <p class="sub">I spent years building the language I wished existed, and I hope you like it.</p>
     <p class="sub"><a href="/benchmarks/">high performance</a>, best-in-class <a href="/benchmarks/#compile-times">compile times</a>, <a href="/examples/08-types/#a-struct-and-an-enum-from-a-proto-file">unrivaled metaprogramming</a>, <a href="/examples/04-reflection/">one-line reflection</a>, <a href="#one-require-five-bindings">machine-optimal algebraic data types with pattern matching</a>, <a href="/examples/10-systems/#a-simd-scanner-generated-at-compile-time">automatic portable SIMD</a>, <a href="#abilities-not-inheritance">ad-hoc polymorphism</a>, <a href="#a-macro-that-implements-an-http-routing-dsl">extensible syntax</a>, <a href="/examples/08-types/#predicate-bounds">real generics</a>, <a href="/examples/10-systems/#build-steps-are-k1-running-inside-the-compiler">fully programmable builds</a>, powerful control flow (<a href="/examples/08-types/#never-and-zero-sized-types"><code>never</code> type</a>, <code>defer</code>), <a href="/examples/09-model/#arenas">precise and convenient memory management</a>, <a href="/examples/10-systems/#ffi-with-no-bindings-file">C in</a>, <a href="/examples/10-systems/#exporting-a-k1-library-to-c">C out</a>, and <a href="/examples/10-systems/#bare-metal">no runtime</a></p>
-    <div class="btns"><a class="btn" href="/install/">Get k1</a><a class="btn o" href="/manifesto/">Read the manifesto</a></div>
+    <div class="btns"><a class="btn" href="/install/">Get k1</a><a class="btn o" href="/tenets/">Read the tenets</a></div>
   </div>
   <div class="demo">
     {{ partial "perft.html" . }}
@@ -17,7 +17,7 @@
 
 <section class="blk"><div class="wrap">
   <h2>k1 typechecks {{ $t.stress.lines_per_s | lang.FormatNumber 0 }} lines per second.</h2>
-  <p>how? data oriented design, first principles approaches, and giving a shit</p>
+  <p>how? data oriented design, first principles approaches, and care. I know where very memory allocation is in the 72,000 line compiler</p>
   <div class="panels">
     {{ range slice (dict "label" "typecheck" "rows" $t.typecheck) (dict "label" "debug build" "rows" $t.build) }}{{ $panel := . }}{{ with .rows }}
     <div class="bars">
@@ -36,7 +36,7 @@
 {{ partial "carousel.html" (dict "title" "Beyond the basics" "cards" hugo.Data.carousel) }}
 
 <section class="close"><div class="wrap">
-  <div class="btns"><a class="btn" href="/install/">Get k1</a><a class="btn o" href="/manifesto/">Read the manifesto</a></div>
+  <div class="btns"><a class="btn" href="/install/">Get k1</a><a class="btn o" href="/tenets/">Read the tenets</a></div>
 </div></section>
 </main>
 {{ with resources.Get "js/carousel.js" | minify | fingerprint }}<script src="{{ .RelPermalink }}" defer></script>{{ end }}

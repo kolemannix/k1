@@ -7,7 +7,7 @@ type opts = {
 }
 
 ns for opts {
-  let default: opts = .{ key-case = :as-is, skip-none = false, renames = [] }
+  let default: opts = .0
 
   fn apply-key-case(self, name: string): string {
     if self.key-case is :as-is { return name }

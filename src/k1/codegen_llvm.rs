@@ -4,8 +4,8 @@
 use std::num::NonZeroU32;
 use std::path::Path;
 
-use ahash::{HashMapExt, HashSetExt};
-use fxhash::{FxHashMap, FxHashSet};
+use ahash::HashMapExt;
+use fxhash::FxHashMap;
 use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
@@ -324,8 +324,9 @@ macro_rules! cgbail {
 
 pub struct UnitPlan {
     pub index: usize,
-    pub count: usize,
+    pub total_plans: usize,
     pub functions: Vec<FunctionId>,
+    pub local_copies: bool,
 }
 
 /// One codegen unit's clock ticks, recorded on its worker thread
@@ -376,7 +377,6 @@ pub struct Cg<'ctx, 'k1> {
     pub k1: &'k1 TypedProgram,
     kind: CgKind,
     plan: UnitPlan,
-    owned: FxHashSet<FunctionId>,
     has_reloadable_fns: bool,
     llvm_module: LlvmModule<'ctx>,
     llvm_machine: TargetMachine,
@@ -690,7 +690,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     ) -> Self {
         let builder = ctx.create_builder();
         let llvm_module = ctx.create_module(k1.program_name());
-        llvm_module.set_source_file_name(k1.ast.sources.get_main().filename_str(&k1.ast.idents));
+        let main_file = k1.ast.sources.get_main().filename_str(&k1.ast.idents);
+        llvm_module.set_source_file_name(&format!("{main_file}#{}", plan.index));
 
         let debug_context = Cg::init_debug(ctx, &llvm_module, k1);
 
@@ -719,17 +720,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
 
         let has_reloadable_fns = k1.namespaces.iter().any(|(_, ns)| ns.reload);
-        let mut owned = FxHashSet::with_capacity(plan.functions.len());
-        for f in &plan.functions {
-            owned.insert(*f);
-        }
 
         Cg {
             ctx,
             k1,
             kind,
             plan,
-            owned,
             has_reloadable_fns,
             llvm_module,
             llvm_machine: machine,
@@ -762,14 +758,28 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
     }
 
     fn multi_unit(&self) -> bool {
-        self.plan.count > 1
+        self.plan.total_plans > 1
+    }
+
+    fn should_make_local_function_copy(k1: &TypedProgram, function_id: FunctionId) -> bool {
+        const MAX_INSTRUCTIONS: u32 = 128;
+        let not_internal = k1.function_abi(function_id) != AbiMode::Internal;
+        let is_noinline = k1.get_function(function_id).is_noinline();
+        if not_internal || is_noinline {
+            return false;
+        }
+
+        match k1.ir.function_unit(function_id) {
+            Some(ir_unit) => !ir_unit.is_cold(k1) && ir_unit.inst_count() <= MAX_INSTRUCTIONS,
+            None => false,
+        }
     }
 
     fn is_first_unit(&self) -> bool {
         self.plan.index == 0
     }
 
-    pub fn codegen_program(&mut self, roots: &CodegenRoots) -> CgResult<()> {
+    pub fn codegen_program(&mut self, roots: &CodegenRoots) -> CgResult<usize> {
         let first_unit = self.is_first_unit();
         let plan_functions = self.plan.functions.clone();
 
@@ -856,8 +866,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
 
         let mut inst_mappings = IdMap::default();
+        let mut body_count = 0;
         while let Some(fn_id) = self.functions_pending_body_compilation.pop() {
             self.codegen_function_body(&mut inst_mappings, fn_id)?;
+            body_count += 1;
         }
 
         if let Some((main_function_id, function_value)) = main_function {
@@ -909,7 +921,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             self.emit_reload_descriptors();
         }
 
-        Ok(())
+        Ok(body_count)
     }
 
     fn prepare_roots(
@@ -956,40 +968,60 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
 
     pub fn plan_units(
         k1: &TypedProgram,
-        reachable: &[FunctionId],
+        reachable_fns: &[FunctionId],
         max_units: usize,
+        local_copies_enabled: bool,
     ) -> Vec<UnitPlan> {
         const MIN_UNIT_INSTRUCTIONS: u64 = 2 * 1024;
-        let size_of = |function_id: &FunctionId| -> u64 {
+        let size_of_fn = |function_id: &FunctionId| -> u64 {
             match k1.ir.function_unit(*function_id) {
                 Some(unit) => unit.inst_count() as u64 + 1,
                 None => 0,
             }
         };
+        let mut all_assignable_functions: Vec<FunctionId> = Vec::with_capacity(reachable_fns.len());
         let mut total: u64 = 0;
-        for function_id in reachable {
-            total += size_of(function_id);
+        let mut assignable_total_size: u64 = 0;
+        for function_id in reachable_fns {
+            let size = size_of_fn(function_id);
+            total += size;
+            if local_copies_enabled && Cg::should_make_local_function_copy(k1, *function_id) {
+                continue;
+            }
+            all_assignable_functions.push(*function_id);
+            assignable_total_size += size;
         }
-        let count = ((total / MIN_UNIT_INSTRUCTIONS) as usize).clamp(1, max_units.max(1));
-        let count_u64 = count as u64;
-        let mut by_id: Vec<FunctionId> = reachable.to_vec();
-        by_id.sort_by_key(|f| f.as_u32());
-        let mut chunks: Vec<Vec<FunctionId>> = Vec::with_capacity(count);
-        let mut functions: Vec<FunctionId> = Vec::with_capacity(reachable.len() / count + 1);
-        let mut cumulative: u64 = 0;
-        for function_id in &by_id {
-            functions.push(*function_id);
-            cumulative += size_of(function_id);
-            let boundary = (chunks.len() as u64 + 1) * total;
-            if chunks.len() + 1 < count && cumulative * count_u64 >= boundary {
-                chunks.push(std::mem::take(&mut functions));
+        let target_plan_count =
+            ((total / MIN_UNIT_INSTRUCTIONS) as usize).clamp(1, max_units.max(1));
+        let target_plan_count_u64 = target_plan_count as u64;
+        all_assignable_functions.sort_by_key(|f| f.as_u32());
+
+        let mut plan_functions: Vec<Vec<FunctionId>> = Vec::with_capacity(target_plan_count);
+        let mut plan_fns_scratch: Vec<FunctionId> =
+            Vec::with_capacity(all_assignable_functions.len() / target_plan_count + 1);
+        let mut cur_plan_size: u64 = 0;
+        for function_id in &all_assignable_functions {
+            plan_fns_scratch.push(*function_id);
+            cur_plan_size += size_of_fn(function_id);
+            let boundary = (plan_functions.len() as u64 + 1) * assignable_total_size;
+            let should_assign_chunk = plan_functions.len() + 1 < target_plan_count
+                && cur_plan_size * target_plan_count_u64 >= boundary;
+            if should_assign_chunk {
+                plan_functions.push(std::mem::take(&mut plan_fns_scratch));
             }
         }
-        chunks.push(functions);
-        let count = chunks.len();
-        let mut plans: Vec<UnitPlan> = Vec::with_capacity(count);
-        for (index, functions) in chunks.into_iter().enumerate() {
-            plans.push(UnitPlan { index, count, functions });
+        if !plan_fns_scratch.is_empty() {
+            plan_functions.push(plan_fns_scratch);
+        }
+        let final_count = plan_functions.len();
+        let mut plans: Vec<UnitPlan> = Vec::with_capacity(final_count);
+        for (index, functions) in plan_functions.into_iter().enumerate() {
+            plans.push(UnitPlan {
+                index,
+                total_plans: final_count,
+                functions,
+                local_copies: local_copies_enabled,
+            });
         }
         plans
     }
@@ -1066,7 +1098,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let index = plan.index;
                 let ctx = Context::create();
                 let mut cg = Cg::create(&ctx, shared.0, kind, plan);
-                cg.codegen_program(roots)?;
+                let fn_count = cg.codegen_program(roots)?;
                 let clock_generated = clock.raw();
                 cg.finalize_debug_info();
                 if cfg!(debug_assertions) {
@@ -1098,7 +1130,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 };
                 timings.lock().unwrap().push(UnitTiming {
                     index,
-                    fn_count: cg.owned.len(),
+                    fn_count,
                     clock_start,
                     clock_generated,
                     clock_passed,
@@ -4720,13 +4752,18 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             }
         };
         let has_body = is_dylib_root || !typed_function_linkage.is_external();
-        let is_definition = has_body && self.owned.contains(&function_id);
+        let make_local_copy =
+            self.plan.local_copies && Cg::should_make_local_function_copy(self.k1, function_id);
+        let is_owned =
+            self.plan.functions.binary_search_by_key(&function_id.as_u32(), |f| f.as_u32()).is_ok();
+        let should_define_here = has_body && (make_local_copy || is_owned);
         let is_private = !is_dylib_root && typed_function_linkage == TyperLinkage::Standard;
-        let llvm_linkage = if is_private && is_definition && !self.multi_unit() {
-            LlvmLinkage::Internal
-        } else {
-            LlvmLinkage::External
-        };
+        let llvm_linkage =
+            if is_private && should_define_here && (make_local_copy || !self.multi_unit()) {
+                LlvmLinkage::Internal
+            } else {
+                LlvmLinkage::External
+            };
         let llvm_name = if is_dylib_root {
             self.make_reloadable_function_symbol(function_id)
         } else {
@@ -4745,7 +4782,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let existing_declaration = match self.llvm_module.get_function(&llvm_name) {
             None => None,
             Some(existing) => {
-                if !is_definition {
+                if !should_define_here {
                     Some(existing)
                 } else {
                     cgbail!(
@@ -4788,7 +4825,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             function_span,
             llvm_function_type.return_logical_cg_type.debug_type(),
             &di_types,
-            is_definition,
+            should_define_here,
         )?;
         let is_sret = llvm_function_type.is_sret;
 
@@ -4826,7 +4863,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         if abi_mode == AbiMode::Internal {
             function_value.set_call_conventions(LLVM_CALL_CONV_FAST);
         }
-        if is_private && self.multi_unit() {
+        if is_private && llvm_linkage == LlvmLinkage::External {
             function_value.as_global_value().set_visibility(inkwell::GlobalVisibility::Hidden);
         }
         // K1 has no unwinding: no invoke, no landingpad, anywhere. Extern C
@@ -4924,7 +4961,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             function_value.add_attribute(AttributeLoc::Return, attr);
         }
 
-        if is_definition {
+        if should_define_here {
             self.functions_pending_body_compilation.push(function_id);
         }
 

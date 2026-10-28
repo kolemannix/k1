@@ -4,18 +4,41 @@ description: Install k1 with one line, or build it from source.
 ---
 
 ```bash
-curl -fsSL https://k1-lang.org/install.sh | sh
+curl -fsSL https://k1lang.org/install.sh | sh
 ```
 
-The script downloads the latest release for your machine (macOS on Apple silicon, or Linux on x86-64), installs the compiler, language server, and module library under `~/.k1`, and tells you what to add to your PATH. Set `K1_VERSION` to a release tag, like `v2026.09.01`, to install that release instead of the latest.
+The script downloads the latest release for your machine.
+
+Installs the compiler, language server, and module library under `~/.k1`, and tells you what to add to your PATH. Set `K1_VERSION` to a release tag, like `v2026.09.01`, to install that release instead of the latest.
+
+As of `v0.1.0`, here is approximately what you get:
+
+```sh
+├── bin
+│   ├── k1
+│   ├── k1_test
+│   ├── k1bindgen
+│   └── k1lsp
+├── modules
+│   ├── brotli
+│   ├── core
+│   ├── freetype
+│   ├── harfbuzz
+│   ├── http
+│   ├── sdl3
+│   ├── sqlite
+│   ├── stb
+│   ├── std
+│   └── uv
+```
 
 ```bash
 k1 run examples/refchess
 ```
 
-## From source
+## From source (not recommended for users)
 
-You need Rust, `just`, and a C toolchain.
+You'll need Rust, `just`, and a C toolchain.
 
 ```bash
 git clone https://github.com/kolemannix/k1.git

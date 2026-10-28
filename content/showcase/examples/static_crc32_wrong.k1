@@ -22,7 +22,7 @@ fn crc32(bytes: span[u8]): u32 {
 
 fn hex(v: u32): string {
   let sb = string-builder/new()
-  core/format-uint(context sb.&)(v.widen[u64], 16)
+  core/format-uint(sb.&, v.widen[u64], 16)
   sb.build()
 }
 

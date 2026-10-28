@@ -23,7 +23,7 @@ fn(test) is-valid-matches-decoder-on-random-bytes() {
     let bytes = buf.as-span()
     if utf8/is-valid(bytes) != decodes-losslessly(bytes) {
       let sb = string-builder/new()
-      for bytes { sb.write(" "); core/format-uint(context sb.&)(it.widen[u64], 16) }
+      for bytes { sb.write(" "); core/format-uint(sb.&, it.widen[u64], 16) }
       crash("utf8 mismatch, simd=${utf8/is-valid(bytes)}:${sb.build()}")
     }
   }

@@ -4,8 +4,8 @@ use std/html/dom as h
 
 type item = { name: string, n: int }
 
-fn row[w: writer](context out: w)(it: item) {
-  html/write(out, \{ <li data-n={it.n}>{it.name}</li> })
+fn row[w: writer](context w)(it: item) {
+  html/write(\{ <li data-n={it.n}>{it.name}</li> })
 }
 
 fn(test) escaping() {

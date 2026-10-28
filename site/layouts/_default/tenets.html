@@ -1,0 +1,11 @@
+{{ define "main" }}
+<main class="page"><div class="wrap">
+  <div class="body" style="font-size:1.0625rem; color:var(--f)">{{ .Content }}</div>
+  <ol class="tenet" style="margin-top:2rem; max-width:66ch">
+    {{ range $i, $t := hugo.Data.tenets }}
+    <li><span class="mn">{{ printf "%02d" (add $i 1) }}</span><div><div class="mt">{{ $t.title }}</div><p class="mp">{{ $t.body | markdownify }}</p></div></li>
+    {{ end }}
+  </ol>
+  <p class="hero" style="padding:4rem 0 0; border:0"><span style="font-family:var(--mono); font-weight:600; font-size:clamp(1.5rem,4.2vw,2.75rem); letter-spacing:-.025em; color:var(--b)">You can just do things<span class="cursor" aria-hidden="true"></span></span></p>
+</div></main>
+{{ end }}

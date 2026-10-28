@@ -1264,7 +1264,7 @@ fn crash(context locn: k1/source-location)(msg: string): never {
     eprint(" at ")
     eprint(locn.filename)
     eprint(":")
-    core/format-uint(context core/io/stderr)(locn.line.widen[u64], 10)
+    core/format-uint(core/io/stderr, locn.line.widen[u64], 10)
     eprint("\n")
 
     platform/process/abort()

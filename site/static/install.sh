@@ -8,7 +8,7 @@ main() {
     Darwin-arm64) bundle=k1-macos ;;
     Linux-x86_64) bundle=k1-linux-x86 ;;
     *)
-      echo "k1: no prebuilt bundle for $os $arch. Build from source: https://k1-lang.org/install/" >&2
+      echo "k1: no prebuilt bundle for $os $arch. Build from source: https://k1lang.org/install/" >&2
       exit 1 ;;
   esac
 

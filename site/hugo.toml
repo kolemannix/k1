@@ -1,4 +1,4 @@
-baseURL = 'https://k1-lang.org/'
+baseURL = 'https://k1lang.org/'
 title = 'k1'
 locale = 'en-us'
 enableRobotsTXT = true
@@ -63,8 +63,8 @@ disableKinds = ['taxonomy', 'term', 'rss']
   weight = 2
 
 [[menu.main]]
-  name = 'manifesto'
-  url = '/manifesto/'
+  name = 'tenets'
+  url = '/tenets/'
   weight = 3
 
 [[menu.main]]

@@ -2217,8 +2217,6 @@ fn write_unit_artifacts(
 ) -> Result<Vec<String>> {
     const MAX_UNITS: usize = 32;
     let out_dir = k1.ast.idents.get_string(k1.config.out_dir).to_string();
-    let plans = Cg::plan_units(k1, &roots.reachable, MAX_UNITS);
-    let unit_count = plans.len();
     // Under --filc, Fil-C's clang runs the whole optimization pipeline
     let optimize_ir = k1.plan.config.optimize && !k1.plan.config.filc;
     let pipeline = if optimize_ir {
@@ -2240,6 +2238,9 @@ fn write_unit_artifacts(
     } else {
         UnitOutput::Object(pipeline)
     };
+    let local_copies = matches!(output, UnitOutput::Bitcode(Pipeline::ThinLtoPreLink));
+    let plans = Cg::plan_units(k1, &roots.reachable, MAX_UNITS, local_copies);
+    let unit_count = plans.len();
 
     let codegen_frame = k1.trace_push(TraceKind::Codegen, unit_count as u32, 0);
     let generated = {

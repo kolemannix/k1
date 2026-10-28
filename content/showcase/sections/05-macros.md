@@ -127,8 +127,8 @@ own span. `std/html` is a template language built on that, in a few hundred
 lines of k1:
 
 ```k1
-fn todo-item[w: writer](context out: w)(t: todo) {
-  html/write(out, \{
+fn todo-item[w: writer](context w)(t: todo) {
+  html/write(\{
     <li class={if t.done "done" else "open"} data-on:click="@post('/toggle')">
       {t.title} #if t.done { <small>"(done)"</small> }
     </li>

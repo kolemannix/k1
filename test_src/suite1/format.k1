@@ -2,7 +2,7 @@ ns format-test
 
 fn to-base(value: u64, base: u64): string {
   let w = string-builder/new()
-  core/format-uint(context w.&)(value, base)
+  core/format-uint(w.&, value, base)
   w.build()
 }
 

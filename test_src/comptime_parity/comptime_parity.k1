@@ -82,7 +82,7 @@ ns work {
     }
     for base in [2: u64, 8, 10, 16, 36] {
       for value in [0: u64, 1, 41, 1048576, 0xFFFFFFFFFFFFFFFF] {
-        core/format-uint(context w.&)(value, base)
+        core/format-uint(w.&, value, base)
         w.write(",")
       }
       w.write(";")
