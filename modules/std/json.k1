@@ -488,9 +488,10 @@ impl codec/decoder for *text-decoder {
     :ok s
   }
 
-  fn(inline) begin-seq(self): result[empty, codec/error] {
+  fn(inline) begin-seq(self): result[size, codec/error] {
     self.expect('[').try
-    self.enter()
+    self.enter().try
+    :ok 0
   }
 
   fn(inline) begin-item(self, index: size): result[bool, codec/error] { self.begin-entry(']', index) }
@@ -590,10 +591,10 @@ impl codec/decoder for *tree-decoder {
     }
   }
   fn read-string(self): result[string, codec/error] { if self.next is :str s { :ok s } else self.error(:wrong-type "string") }
-  fn begin-seq(self): result[empty, codec/error] {
+  fn begin-seq(self): result[size, codec/error] {
     require self.next is :array items else { return self.error(:wrong-type "array") }
     self.seqs.push(items)
-    :ok(.{})
+    :ok items.len()
   }
   fn begin-item(self, index: size): result[bool, codec/error] {
     let items = self.seqs.[self.seqs.len - 1]

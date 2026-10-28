@@ -4,12 +4,23 @@ type maybe = either(i8) { a = -1, b(char) = 0, c(string) = 100 }
 type my-result[t, e] = either { ok(t), err(e) }
 type e = either(u8) { a = 4, b = 8, c(int) = 9 }
 
+ns for e {
+  fn as-c(self): int { if self is :c n { n + 1 } else 0 }
+}
+
+fn bump(n: *int): maybe {
+  n.* = n.* + 1
+  :b 'y'
+}
+
 fn(test) sum-variants-and-tags() {
   let a: maybe = :a
   let b: maybe = :b 'x'
   let c: maybe = :c "hello, sums"
   assert(b is :b 'x' or b is :a)
   assert(b.as-b().! == 'x')
+  let n = 0
+  assert(bump(n.&).as-b().! == 'y' and n == 1)
   assert(a != b)
   assert(c == (:c "hello, sums"): maybe)
   assert(c != (:c "goodbye"): maybe)
@@ -33,6 +44,7 @@ fn(test) sum-variants-and-tags() {
   assert-equals(ea.tag, 4)
   assert-equals(ec.tag, 9)
   assert-equals(ec.sum-name(), "c")
+  assert-equals(ec.as-c(), 43)
   assert-equals("$ea", ":a")
   assert-equals("$ec", ":c 42")
 }

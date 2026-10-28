@@ -442,7 +442,7 @@ fn is_method_shaped(k1: &TypedProgram, function_id: FunctionId, base_type_id: Ty
     let Some(first) = params.get(FnParamType::get_context_param_count(params)) else {
         return false;
     };
-    first.type_id == base_type_id || k1.get_base_for_method(first.type_id) == base_type_id
+    first.type_id == base_type_id || k1.get_type_id_dereferenced(first.type_id) == base_type_id
 }
 
 type Seen = FxHashSet<(StringId, NameKind)>;

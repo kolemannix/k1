@@ -393,6 +393,19 @@ impl TypedProgram {
         self.exprs.add(TypedExpr::SumGetTag(GetSumTag { sum_expr }), int_type.type_id(), span)
     }
 
+    pub(super) fn synth_sum_get_payload(
+        &mut self,
+        sum_expr: TypedExprId,
+        variant_index: u32,
+        span: Span,
+    ) -> TypedExprId {
+        let sum = self.types.get(self.exprs.get_type(sum_expr)).expect_sum();
+        let payload_type = self.sum_variant_by_index(sum.variants, variant_index).payload.unwrap();
+        let packed = self.is_place_in_packed(sum_expr);
+        let get_payload = GetSumPayload { sum_expr, variant_index, packed };
+        self.exprs.add(TypedExpr::SumGetPayload(get_payload), payload_type, span)
+    }
+
     pub(super) fn new_block_builder(
         &mut self,
         parent_scope: ScopeId,
@@ -833,14 +846,12 @@ impl TypedProgram {
         sum_expr: TypedExprId,
         variant_index: u32,
         span: Span,
-    ) -> MatchingCondition {
+    ) -> MatchingConditionInstr {
         let sum_type = self.types.get(self.exprs.get_type(sum_expr)).expect_sum();
         let variant_tag = self.sum_variant_by_index(sum_type.variants, variant_index).tag_value;
         let subject = self.synth_sum_get_tag(sum_expr, span);
         let value = self.static_values.add_int(variant_tag);
-        MatchingCondition {
-            instrs: self.mem.pushn(&[MatchingConditionInstr::IntEquals { subject, value }]),
-        }
+        MatchingConditionInstr::IntEquals { subject, value }
     }
 
     /// Produces a series of printTo calls to the given writer,

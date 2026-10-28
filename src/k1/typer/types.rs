@@ -2015,14 +2015,6 @@ impl TypedProgram {
         }
     }
 
-    pub fn get_base_for_method(&self, type_id: TypeId) -> TypeId {
-        // Follow references
-        match self.types.get(type_id) {
-            Type::Reference(r) => r.inner_type,
-            _ => type_id,
-        }
-    }
-
     #[track_caller]
     pub fn get_type_parameter(&self, type_id: TypeId) -> &TypeParameter {
         if let Type::TypeParameter(tv) = self.types.get(type_id) {

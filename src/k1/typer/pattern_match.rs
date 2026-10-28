@@ -1395,11 +1395,11 @@ impl TypedProgram {
                     } else {
                         get_struct_field
                     };
-                    let var_name = self.build_ident_with(|k1, s| {
-                        write!(s, "field_{}", k1.ident_str(pattern_field.name)).unwrap();
-                    });
-                    let struct_field_variable =
-                        self.synth_variable_defn_simple(var_name, final_field, ctx.scope_id);
+                    let struct_field_variable = self.synth_variable_defn_simple(
+                        pattern_field.name,
+                        final_field,
+                        ctx.scope_id,
+                    );
                     instrs.push(MatchingConditionInstr::Binding {
                         let_stmt: struct_field_variable.defn_stmt,
                     });
@@ -1422,23 +1422,23 @@ impl TypedProgram {
                     self.sum_variant_by_index(sum_type.variants, sum_pattern.variant_index);
                 let variant_name = variant.name;
                 let variant_index = variant.index;
-                let variant_payload = variant.payload;
+                let has_payload = variant.payload.is_some();
                 let case = self.static_values.add_int(variant.tag_value);
                 let payload = match sum_pattern.payload {
                     None => None,
                     Some(payload_pattern) => {
-                        let Some(payload_type_id) = variant_payload else {
+                        if !has_payload {
                             kbail!(
                                 self,
                                 sum_pattern.span,
                                 "Impossible pattern: Variant '{}' does not have data",
                                 variant_name
                             );
-                        };
+                        }
                         if self.is_wildcard_pattern(payload_pattern) {
                             None
                         } else {
-                            Some((payload_pattern, payload_type_id))
+                            Some(payload_pattern)
                         }
                     }
                 };
@@ -1452,16 +1452,9 @@ impl TypedProgram {
                     instrs.push(MatchingConditionInstr::IntEquals { subject, value: case });
                 }
 
-                if let Some((payload_pattern, payload_type_id)) = payload {
-                    let get_payload_expr = self.exprs.add(
-                        TypedExpr::SumGetPayload(GetSumPayload {
-                            sum_expr: sum_base,
-                            variant_index,
-                            packed: self.is_place_in_packed(sum_base),
-                        }),
-                        payload_type_id,
-                        sum_pattern.span,
-                    );
+                if let Some(payload_pattern) = payload {
+                    let get_payload_expr =
+                        self.synth_sum_get_payload(sum_base, variant_index, sum_pattern.span);
                     let final_payload_expr = if is_referencing {
                         // Infallible: when referencing, sum_base is a Deref
                         self.synth_address_of(get_payload_expr, Span::NONE, false).unwrap()
@@ -1573,11 +1566,10 @@ impl TypedProgram {
                     }
                     TypedPattern::LiteralFloat(_, _) | TypedPattern::LiteralString(_, _) => {
                         let target_expr = self.materialize_pattern_target(target);
-                        let target_expr = if is_immediately_inside_reference_pattern {
-                            self.synth_dereference(target_expr)
-                        } else {
-                            target_expr
-                        };
+                        let target_expr = self.synth_dereference_when(
+                            target_expr,
+                            is_immediately_inside_reference_pattern,
+                        );
                         let literal_expr = match literal_pat {
                             TypedPattern::LiteralFloat(float_value, span) => {
                                 self.add_static_constant_expr(float_value, span)
@@ -1608,11 +1600,8 @@ impl TypedProgram {
                 // function on the de-rereferenced target. Whereas structs, sums, even
                 // reference patterns do different and unique things when matching on
                 // references
-                let target_expr = if is_immediately_inside_reference_pattern {
-                    self.synth_dereference(target_expr)
-                } else {
-                    target_expr
-                };
+                let target_expr = self
+                    .synth_dereference_when(target_expr, is_immediately_inside_reference_pattern);
                 let subject = match literal_pat {
                     TypedPattern::Enum(e) => self.synth_enum_get_value(target_expr, e.span),
                     _ => target_expr,

@@ -232,6 +232,9 @@ state pointer means a dyn can't cross `#static` into a runtime constant.
   methods return `:wrong-type`) unless they derive from another: `read-int`/`read-uint`/
   `read-float` narrow `read-number`, `write-field-name` is `write-key`, `write-unit-variant`
   is `write-string`, and a variant is a name string or a one-entry map on both sides.
+  `begin-seq` returns a capacity hint, which the blanket decode preallocates: the element
+  count when the format has it, else 0. A backend reading untrusted counts caps all hints
+  of one decode by the input's byte count (msgpack's `capacity-budget`).
 - `std/json`: `to-string`, `write(w, v)`, `to-string-pretty`, `parse[t]`,
   `to-value`/`from-value` (the `json` tree, no text). Options are a static type arg
   naming a `codec/opts` global: `json/parse-with[t, camel](s)`. Unescaped decoded

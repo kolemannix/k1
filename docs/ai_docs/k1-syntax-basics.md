@@ -124,7 +124,8 @@ let c: color = :red; color:green; :ok(42); :ok 42
 - A value outside the declared tags is UB, zeroed memory included. `partial`
   (payload-less only, tag type required; bindgen emits it) makes matches need `_`
   and prints undeclared values as `ev(8192)`.
-- `.value` / `.enum-value()`, `.tag`, `.as-ok(): ?t`, `.enum-name()`, `.sum-name()`,
+- `.value` / `.enum-value()`, `.tag`, `.as-ok(): ?t` (any method of that name
+  wins), `.enum-name()`, `.sum-name()`,
   `enum/enum-from-value(v): ?e` (impl picked from the expected type),
   `enum-from-value-unchecked`, `types/enum@(e)/members()`, `sum.tag-enum` (type of
   the tags).

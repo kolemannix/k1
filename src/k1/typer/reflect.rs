@@ -260,7 +260,9 @@ impl TypedProgram {
         self.type_infos.insert(type_id, reserved_id);
 
         let family_type_id = self.get_type_family_type(type_id);
-        let name_value_id = self.build_type_name(type_id);
+        let name_value_id = self
+            .static_values
+            .add_string(self.ast.idents.intern(crate::k1_format_user!(self, "{}", type_id)));
         let schema_value_id = self.build_type_schema(family_type_id);
         let instance_value_id = self.build_instance_info(family_type_id);
         let layout_value_id = self.build_layout(type_id);
@@ -689,15 +691,6 @@ impl TypedProgram {
         };
 
         self.static_values.add(StaticValue::Sum(schema_static_sum))
-    }
-
-    fn build_type_name(&mut self, type_id: TypeId) -> StaticValueId {
-        let mut s = std::mem::take(&mut self.buffers.name_builder);
-        self.display_type_id(&mut s, type_id, dump::TypeDisplayMode::Name).unwrap();
-        let string_id = self.ast.idents.intern(&s);
-        s.clear();
-        self.buffers.name_builder = s;
-        self.static_values.add_string(string_id)
     }
 
     pub(crate) fn register_type_metainfo(&mut self, type_id: TypeId) {

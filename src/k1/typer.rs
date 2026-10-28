@@ -2293,7 +2293,6 @@ pub enum SelfAdjust {
 
 /// Allocations that we re-use
 pub struct TypedModuleBuffers {
-    name_builder: String,
     lexed: lex::Lexed,
 }
 
@@ -2891,10 +2890,7 @@ impl TypedProgram {
             pending_defers: Vec::new(),
             exported_symbols: FxHashMap::new(),
             type_defn_context: TypeDefnContext::default(),
-            buffers: TypedModuleBuffers {
-                name_builder: String::new(),
-                lexed: lex::Lexed::default(),
-            },
+            buffers: TypedModuleBuffers { lexed: lex::Lexed::default() },
             patterns: TypedPatternPool::make(),
             vm: Box::new(Some(vm::Vm::make())),
             vm_alts: vec![
@@ -3405,15 +3401,11 @@ impl TypedProgram {
     }
 
     pub fn build_ident_with(
-        &mut self,
-        mut f: impl FnMut(&mut TypedProgram, &mut String),
+        &self,
+        f: impl FnOnce(&TypedProgram, &mut dyn std::fmt::Write) -> std::fmt::Result,
     ) -> StringId {
-        let mut name_buffer = std::mem::take(&mut self.buffers.name_builder);
-        f(self, &mut name_buffer);
-        let new_name_ident = self.ast.idents.intern(&name_buffer);
-        name_buffer.clear();
-        self.buffers.name_builder = name_buffer;
-        new_name_ident
+        let name = self.get_tmp_unsafe().format_with(self, &(), |w, k1, _| f(k1, w));
+        self.ast.idents.intern(name)
     }
 
     pub fn primary_module(&self) -> &Module {
@@ -5499,13 +5491,9 @@ impl TypedProgram {
 
         let raw_base_expr = self.eval_expr(field_access.base, ctx.with_no_expected_type())?;
         let raw_base_expr_type = self.exprs.get_type(raw_base_expr);
-        let (base_agg_expr, base_type_id) = match self.types.get(raw_base_expr_type) {
-            Type::Reference(r) => {
-                let inner = r.inner_type;
-                (self.synth_dereference(raw_base_expr), inner)
-            }
-            _other => (raw_base_expr, raw_base_expr_type),
-        };
+        let base_type_id = self.get_type_id_dereferenced(raw_base_expr_type);
+        let base_agg_expr =
+            self.synth_dereference_when(raw_base_expr, base_type_id != raw_base_expr_type);
 
         if self.string_is_completion_marker(field_access.field_name, true) {
             self.set_completion_site(CompletionSite::Member {
@@ -7105,12 +7093,11 @@ impl TypedProgram {
         let enclosing_fn_name =
             self.scopes.nearest_parent_function(ctx.scope_id).map(|id| self.get_function(id).name);
 
-        let name = self.build_ident_with(|k1, s| {
+        let name = self.build_ident_with(|k1, w| {
             if let Some(fn_name) = enclosing_fn_name {
-                s.push_str(k1.ident_str(fn_name));
+                w.write_str(k1.ident_str(fn_name))?;
             };
-            s.push_str("_lam_");
-            write!(s, "{}", lambda_scope_id.as_u32()).unwrap();
+            write!(w, "_lam_{}", lambda_scope_id.as_u32())
         });
 
         // No captures: this is just a regular function
@@ -7719,11 +7706,9 @@ impl TypedProgram {
             Some(iterable_span),
         );
         let mut iterable_defn_stmt: Option<TypedStmtId> = None;
-        let coerced_iterable_expr = match self_adjust {
-            SelfAdjust::None => iterable_expr,
-            SelfAdjust::Deref => self.synth_dereference(iterable_expr),
-            SelfAdjust::AddrOf => match self.synth_address_of(iterable_expr, Span::NONE, true) {
-                Ok(addr) => addr,
+        let coerced_iterable_expr =
+            match self.apply_self_adjust(iterable_expr, self_adjust, Span::NONE) {
+                Ok(adjusted) => adjusted,
                 Err(_) => {
                     // The iterable is an rvalue (e.g. a call result); bind it to a
                     // synthetic variable so we have a place to point at
@@ -7738,8 +7723,7 @@ impl TypedProgram {
                     let iterable_ref = self.synth_variable_ref(iterable_variable.variable_id);
                     self.synth_address_of(iterable_ref, Span::NONE, true)?
                 }
-            },
-        };
+            };
         let iterator_initializer = if target_is_iterator {
             coerced_iterable_expr
         } else {
@@ -7805,20 +7789,8 @@ impl TypedProgram {
         );
         // The is-some check below guards this arm, so project the payload
         // directly; try/get-value's crash arm would survive as reachable code
-        let next_type = self.variables.get(next_variable.variable_id).type_id;
-        let next_sum_type = self.types.get(next_type).expect_sum();
-        let some_variant = self.sum_variant_by_index(next_sum_type.variants, 1);
-        let some_payload_type = some_variant.payload.unwrap();
         let next_payload_base = self.synth_variable_ref(next_variable.variable_id);
-        let next_get_payload = self.exprs.add(
-            TypedExpr::SumGetPayload(GetSumPayload {
-                sum_expr: next_payload_base,
-                variant_index: 1,
-                packed: false,
-            }),
-            some_payload_type,
-            iterable_span,
-        );
+        let next_get_payload = self.synth_sum_get_payload(next_payload_base, 1, iterable_span);
         let binding_variable = self.synth_variable_defn_visible(
             binding_ident,
             next_get_payload,
@@ -7856,6 +7828,7 @@ impl TypedProgram {
 
         let next_is_some_base = self.synth_variable_ref(next_variable.variable_id);
         let next_is_some = self.synth_sum_is_variant(next_is_some_base, 1, iterable_span);
+        let next_is_some = MatchingCondition { instrs: self.mem.pushn(&[next_is_some]) };
         let empty_break = self.synth_empty_value(body_span);
         let break_expr = self.exprs.add(
             TypedExpr::Break(TypedBreak { value: empty_break, loop_scope: loop_scope_id }),
@@ -9184,45 +9157,6 @@ impl TypedProgram {
         Ok(self.exprs.add(TypedExpr::ArrayGetElement(get_element), element_type, span))
     }
 
-    fn handle_array_method_call(
-        &mut self,
-        receiver: TypedExprId,
-        array_type_id: TypeId,
-        call: &ParsedCall,
-        span: Span,
-    ) -> K1Result<Option<CallResolution>> {
-        let array_type = self.types.get(array_type_id).as_array().unwrap();
-        let concrete_count = self.get_concrete_count_of_array(array_type.size_type);
-        match call.name.name {
-            n if n == self.ast.idents.b.len => {
-                let array_length = match concrete_count {
-                    None => {
-                        // We have some generic Array type like arr: Array[T, N] where N is a type
-                        // parameter
-                        // And someone called arr.len. The value does not matter as it will never
-                        // be seen at runtime, or even compile-time since we don't execute during
-                        // the generic pass. So we just provide a validly-typed value of type 'N'.
-                        self.synth_phony(array_type.size_type, span)
-                    }
-                    Some(size) => self.synth_i64(size, span),
-                };
-                Ok(Some(CallResolution::OtherExpr(array_length)))
-            }
-            _ => {
-                if let Some(method_id) =
-                    self.scopes.find_function_local(self.scopes.array_scope_id, call.name.name)
-                {
-                    Ok(Some(CallResolution::MethodCall {
-                        callee: Callee::make_static(method_id),
-                        receiver,
-                    }))
-                } else {
-                    Ok(None)
-                }
-            }
-        }
-    }
-
     fn resolve_parsed_function_call_method(
         &mut self,
         base_expr: MaybeTypedExpr,
@@ -9421,31 +9355,33 @@ impl TypedProgram {
             }
         };
 
-        // Handle the special case of the synthesized sum 'as-variant' methods
-        if let Some(sum_as_result) = self.handle_sum_as_variant_call(base_expr, call, call_span)? {
-            return Ok(CallResolution::OtherExpr(sum_as_result));
-        }
-
         let base_expr_type = self.exprs.get_type(base_expr);
-        let base_for_method = self.get_base_for_method(base_expr_type);
+        let base_for_method = self.get_type_id_dereferenced(base_expr_type);
+        let is_reference = base_for_method != base_expr_type;
 
-        if let Type::Array(_array_type) = self.types.get(base_for_method) {
-            if let Some(resolution) =
-                self.handle_array_method_call(base_expr, base_for_method, call, call_span)?
-            {
-                return Ok(resolution);
-            }
+        // Arrays and vectors: the builtin array len, then each kind's method scope
+        if fn_name == self.ast.idents.b.len
+            && let Type::Array(array_type) = self.types.get(base_for_method)
+        {
+            let size_type = array_type.size_type;
+            let array_length = match self.get_concrete_count_of_array(size_type) {
+                None => self.synth_phony(size_type, call_span),
+                Some(size) => self.synth_i64(size, call_span),
+            };
+            return Ok(CallResolution::OtherExpr(array_length));
         }
-
-        if let Type::Vector(_) = self.types.get(base_for_method) {
-            if let Some(method_id) =
-                self.scopes.find_function_local(self.scopes.vector_scope_id, call.name.name)
-            {
-                return Ok(CallResolution::MethodCall {
-                    callee: Callee::make_static(method_id),
-                    receiver: base_expr,
-                });
-            }
+        let builtin_method_scope = match self.types.get(base_for_method) {
+            Type::Array(_) => Some(self.scopes.array_scope_id),
+            Type::Vector(_) => Some(self.scopes.vector_scope_id),
+            _ => None,
+        };
+        if let Some(scope_id) = builtin_method_scope
+            && let Some(method_id) = self.scopes.find_function_local(scope_id, fn_name)
+        {
+            return Ok(CallResolution::MethodCall {
+                callee: Callee::make_static(method_id),
+                receiver: base_expr,
+            });
         }
 
         // Dynamic dispatch on ability objects: the method must be one of the
@@ -9454,16 +9390,12 @@ impl TypedProgram {
             let ao = *ao;
             let ability = self.abilities.get(ao.signature.specialized_ability_id);
             let ability_self_type = ability.self_type_id;
-            if let Some(fn_ref) = ability.find_function_by_name(&self.mem, call.name.name) {
-                let object_expr = if self.types.get(base_expr_type).as_reference().is_some() {
-                    self.synth_dereference(base_expr)
-                } else {
-                    base_expr
-                };
+            if let Some(fn_ref) = ability.find_function_by_name(&self.mem, fn_name) {
+                let object_expr = self.synth_dereference_when(base_expr, is_reference);
                 let table = self
                     .get_struct_field(ao.struct_representation, Self::ABILITY_OBJECT_TABLE_INDEX)
                     .type_id;
-                match self.get_struct_field_by_name(table, call.name.name) {
+                match self.get_struct_field_by_name(table, fn_name) {
                     Some((slot_index, slot)) => {
                         let slot_function_type = self
                             .types
@@ -9493,7 +9425,7 @@ impl TypedProgram {
                             self,
                             call_span,
                             "'{}' is not dyn-dispatchable: {}",
-                            call.name.name,
+                            fn_name,
                             reason
                         );
                     }
@@ -9551,18 +9483,13 @@ impl TypedProgram {
             };
             if let Some((_writer_impl, self_adjust)) = writer_impl {
                 let ctx_no_hint = ctx.with_no_expected_type();
-                let writer = match self_adjust {
-                    SelfAdjust::None => base_expr,
-                    SelfAdjust::Deref => self.synth_dereference(base_expr),
-                    SelfAdjust::AddrOf => {
-                        self.synth_address_of(base_expr, call_span, true).map_err(|e| {
-                            kerr!(self,
-                                call_span,
-                                "The receiver is not immediately a writer, but a reference to it is. So we tried to take its address, which is not allowed because it is not a place: {}",
-                                e.message)
-                        })?
-                    }
-                };
+                let writer =
+                    self.apply_self_adjust(base_expr, self_adjust, call_span).map_err(|e| {
+                        kerr!(self,
+                            call_span,
+                            "The receiver is not immediately a writer, but a reference to it is. So we tried to take its address, which is not allowed because it is not a place: {}",
+                            e.message)
+                    })?;
                 let template_span = self.ast.exprs.get_span(template_arg);
                 let newline_part = InterpolatedStringPart::String {
                     string_id: self.ast.idents.b.newline,
@@ -9602,80 +9529,113 @@ impl TypedProgram {
             }
         }
 
-        let Some(ability_names) = self.function_name_to_ability_names.get(&fn_name) else {
-            kbail!(
-                self,
-                call_span,
-                "Method '{}' does not exist on type '{}'",
-                call.name.name,
-                base_expr_type,
+        let mut first_error: Option<K1Message> = None;
+        if let Some(ability_names) = self.function_name_to_ability_names.get(&fn_name) {
+            let ability_names = ability_names.as_slice(&self.mem);
+            debug!(
+                "ability names with function name: {}",
+                ability_names.iter().map(|n| self.ident_str(*n)).join(", ")
             );
-        };
+            let mut ability_ids = self.tmp.new_list(0);
+            self.scopes.collect_ability_ids_bound_to_names(
+                ctx.scope_id,
+                ability_names,
+                &mut ability_ids,
+                &mut self.tmp,
+            );
+            let mut constrained_types: SV8<TypeId> = smallvec![base_expr_type];
+            if let Some(fn_id) = self.scopes.nearest_parent_function(ctx.scope_id) {
+                let function = self.get_function(fn_id);
+                let generic_id = match &function.specialization_info {
+                    Some(info) => info.parent_function,
+                    None => fn_id,
+                };
+                for type_param in self.mem.getn(self.get_function(generic_id).type_params) {
+                    constrained_types.push(*type_param);
+                }
+            }
+            for type_id in constrained_types {
+                for handle in self.get_constrained_ability_impls_for_type(type_id) {
+                    let base_ability_id =
+                        self.ability_impls.get(handle.full_impl_id).base_ability_id;
+                    if !ability_ids.as_slice().contains(&base_ability_id) {
+                        ability_ids.push_grow(&mut self.tmp, base_ability_id);
+                    }
+                }
+            }
+            for ability_id in ability_ids.as_slice() {
+                let Some(ability_function_ref) =
+                    self.abilities.get(*ability_id).find_function_by_name(&self.mem, fn_name)
+                else {
+                    continue;
+                };
+                match self.solve_ability_call(
+                    ability_function_ref,
+                    call,
+                    call_span,
+                    Some(base_expr),
+                    known_args,
+                    ctx,
+                    stashed_args,
+                ) {
+                    Ok(resolution) => return Ok(resolution),
+                    Err(e) => {
+                        stashed_args.clear();
+                        first_error.get_or_insert(e);
+                    }
+                }
+            }
+        }
 
-        let ability_names = ability_names.as_slice(&self.mem);
-        let mut errors: SV4<K1Message> = smallvec![];
-        debug!(
-            "ability names with function name: {}",
-            ability_names.iter().map(|n| self.ident_str(*n)).join(", ")
-        );
-        let mut ability_ids = self.tmp.new_list(0);
-        self.scopes.collect_ability_ids_bound_to_names(
-            ctx.scope_id,
-            ability_names,
-            &mut ability_ids,
-            &mut self.tmp,
-        );
-        let mut constrained_types: SV8<TypeId> = smallvec![base_expr_type];
-        if let Some(fn_id) = self.scopes.nearest_parent_function(ctx.scope_id) {
-            let function = self.get_function(fn_id);
-            let generic_id = match &function.specialization_info {
-                Some(info) => info.parent_function,
-                None => fn_id,
-            };
-            for type_param in self.mem.getn(self.get_function(generic_id).type_params) {
-                constrained_types.push(*type_param);
+        // Synthesized sum 'as-<variant>' accessors: the fallback once nothing else resolved
+        if call.args.len() == 1
+            && call.type_args(&self.ast.mem).is_empty()
+            && let Type::Sum(sum) = self.types.get(base_for_method)
+            && let Some(variant_name) = self.ident_str(fn_name).strip_prefix("as-")
+            && let Some(variant_name) = self.ast.idents.lookup(variant_name)
+            && let Some(variant) = self.sum_variant_by_name(sum.variants, variant_name)
+        {
+            if variant.payload.is_none() {
+                kbail!(self, call_span, "Variant '{}' has no data", variant.name);
             }
-        }
-        for type_id in constrained_types {
-            for handle in self.get_constrained_ability_impls_for_type(type_id) {
-                let base_ability_id = self.ability_impls.get(handle.full_impl_id).base_ability_id;
-                if !ability_ids.as_slice().contains(&base_ability_id) {
-                    ability_ids.push_grow(&mut self.tmp, base_ability_id);
-                }
-            }
-        }
-        for ability_id in ability_ids.as_slice() {
-            let Some(ability_function_ref) =
-                self.abilities.get(*ability_id).find_function_by_name(&self.mem, fn_name)
-            else {
-                continue;
+            let variant_index = variant.index;
+            let subject =
+                self.synth_variable_defn_simple(self.ast.idents.b.subject, base_expr, ctx.scope_id);
+            let subject_ref = self.synth_variable_ref(subject.variable_id);
+            let sum_expr = self.synth_dereference_when(subject_ref, is_reference);
+            let is_variant = self.synth_sum_is_variant(sum_expr, variant_index, call_span);
+            let condition = MatchingCondition {
+                instrs: self.mem.pushn(&[
+                    MatchingConditionInstr::Binding { let_stmt: subject.defn_stmt },
+                    is_variant,
+                ]),
             };
-            match self.solve_ability_call(
-                ability_function_ref,
-                call,
+            let payload_expr = self.synth_sum_get_payload(sum_expr, variant_index, call_span);
+            let payload = if is_reference {
+                self.synth_address_of(payload_expr, Span::NONE, false).unwrap()
+            } else {
+                payload_expr
+            };
+            let (consequent, result_type) = self.synth_optional_some(payload);
+            let alternate = self.synth_optional_none(self.exprs.get_type(payload), call_span);
+            return Ok(CallResolution::OtherExpr(self.synth_matching_if_else(
+                result_type,
+                condition,
+                consequent,
+                alternate,
                 call_span,
-                Some(base_expr),
-                known_args,
-                ctx,
-                stashed_args,
-            ) {
-                Ok(resolution) => return Ok(resolution),
-                Err(e) => {
-                    stashed_args.clear();
-                    errors.push(e);
-                }
-            }
+            )));
         }
-        if errors.is_empty() {
-            Err(kerr!(
+
+        match first_error {
+            Some(e) => Err(e),
+            None => Err(kerr!(
                 self,
                 call_span,
                 "Method '{}' does not exist on type: '{}'",
-                call.name.name,
+                fn_name,
                 base_expr_type,
-            ))
-        } else {
-            Err(errors.into_iter().next().unwrap())
+            )),
         }
     }
 
@@ -10097,86 +10057,6 @@ impl TypedProgram {
             false,
         )?;
         Ok((call_type_args, bound_args))
-    }
-
-    fn handle_sum_as_variant_call(
-        &mut self,
-        base_expr: TypedExprId,
-        fn_call: &ParsedCall,
-        span: Span,
-    ) -> K1Result<Option<TypedExprId>> {
-        let fn_name = self.ident_str(fn_call.name.name);
-        let preconditions = fn_name.starts_with("as")
-            && fn_call.type_args(&self.ast.mem).is_empty()
-            && fn_call.args.len() == 1;
-        if !preconditions {
-            return Ok(None);
-        }
-        let (e, is_reference) = match self.get_expr_type(base_expr) {
-            Type::Reference(r) => {
-                if let Type::Sum(e) = self.types.get(r.inner_type) {
-                    (e, true)
-                } else {
-                    return Ok(None);
-                }
-            }
-            Type::Sum(e) => (e, false),
-            _ => return Ok(None),
-        };
-        let variants = e.variants;
-        let mut s = std::mem::take(&mut self.buffers.name_builder);
-        let fn_name = self.ident_str(fn_call.name.name);
-        let Some(variant) = self.mem.getn(variants).iter().find(|v| {
-            s.push_str("as-");
-            let name = self.ident_str(v.name);
-            // let first_letter = name.chars().next().unwrap();
-            // let rest = name.chars().skip(1);
-            // s.push(first_letter.to_ascii_uppercase());
-            s.push_str(name);
-
-            let is_match = fn_name == s;
-            s.clear();
-            is_match
-        }) else {
-            self.buffers.name_builder = s;
-            return Ok(None);
-        };
-        self.buffers.name_builder = s;
-        let Some(payload_type_id) = variant.payload else {
-            // Note, we could return a Some(unit) here, but for now I'll just fail
-            kbail!(self, span, "Variant '{}' has no data", variant.name);
-        };
-        let variant_index = variant.index;
-        let sum_base_expr =
-            if is_reference { self.synth_dereference(base_expr) } else { base_expr };
-        let condition = self.synth_sum_is_variant(sum_base_expr, variant_index, span);
-        let payload_expr = self.exprs.add(
-            TypedExpr::SumGetPayload(GetSumPayload {
-                sum_expr: sum_base_expr,
-                variant_index,
-                packed: self.is_place_in_packed(sum_base_expr),
-            }),
-            payload_type_id,
-            span,
-        );
-        let payload_referenced = if is_reference {
-            // Infallible: when is_reference, sum_base_expr is a Deref
-            self.synth_address_of(payload_expr, Span::NONE, false).unwrap()
-        } else {
-            payload_expr
-        };
-        let (consequent, consequent_type_id) = self.synth_optional_some(payload_referenced);
-
-        let out_value_type = self.exprs.get_type(payload_referenced);
-        let alternate = self.synth_optional_none(out_value_type, span);
-        debug_assert_eq!(consequent_type_id, self.exprs.get_type(alternate));
-        Ok(Some(self.synth_matching_if_else(
-            consequent_type_id,
-            condition,
-            consequent,
-            alternate,
-            span,
-        )))
     }
 
     fn eval_variant(
@@ -14015,9 +13895,11 @@ impl TypedProgram {
                             impl_fn_type.return_type,
                             true,
                         );
-                        let name = self.build_ident_with(|k1, s| {
-                            write!(s, "{}__dyn_thunk", k1.ident_str(impl_fn.name)).unwrap()
-                        });
+                        let name = self.ast.idents.intern(k1_format_user!(
+                            self,
+                            "{}__dyn_thunk",
+                            impl_fn.name
+                        ));
                         let actual_thunk_id = self.add_function(TypedFunction::synthesized(
                             name,
                             thunk_scope,
@@ -15034,31 +14916,12 @@ impl TypedProgram {
                         subject: param_b_tag_expr,
                         value: case,
                     });
-                    match variant.payload {
-                        None => {}
-                        Some(payload_type_id) => {
-                            let payload_a = self.exprs.add(
-                                TypedExpr::SumGetPayload(GetSumPayload {
-                                    sum_expr: arg_a,
-                                    variant_index: variant.index,
-                                    packed: false,
-                                }),
-                                payload_type_id,
-                                fn_span,
-                            );
-                            let payload_b = self.exprs.add(
-                                TypedExpr::SumGetPayload(GetSumPayload {
-                                    sum_expr: arg_b,
-                                    variant_index: variant.index,
-                                    packed: false,
-                                }),
-                                payload_type_id,
-                                fn_span,
-                            );
-                            let payload_equals =
-                                self.synth_equals_call_simple(payload_a, payload_b, fn_span);
-                            conditions.push(MatchingConditionInstr::cond(payload_equals))
-                        }
+                    if variant.payload.is_some() {
+                        let payload_a = self.synth_sum_get_payload(arg_a, variant.index, fn_span);
+                        let payload_b = self.synth_sum_get_payload(arg_b, variant.index, fn_span);
+                        let payload_equals =
+                            self.synth_equals_call_simple(payload_a, payload_b, fn_span);
+                        conditions.push(MatchingConditionInstr::cond(payload_equals))
                     }
                     let conditions = conditions.to_slice();
                     arms.push(TypedMatchArm {
@@ -15220,20 +15083,13 @@ impl TypedProgram {
                     let label_expr = self.synth_string_literal_from_str(&label, fn_span);
                     let write_label = self.synth_print_call(label_expr, writer_expr, None, ctx)?;
                     self.push_block_expr_id(&mut block, write_label);
-                    if let Some(payload_type_id) = variant.payload {
+                    if variant.payload.is_some() {
                         let space_expr = self.synth_string_literal_from_str(" ", fn_span);
                         let write_space =
                             self.synth_print_call(space_expr, writer_expr, None, ctx)?;
                         self.push_block_expr_id(&mut block, write_space);
-                        let payload_expr = self.exprs.add(
-                            TypedExpr::SumGetPayload(GetSumPayload {
-                                sum_expr,
-                                variant_index: variant.index,
-                                packed: false,
-                            }),
-                            payload_type_id,
-                            fn_span,
-                        );
+                        let payload_expr =
+                            self.synth_sum_get_payload(sum_expr, variant.index, fn_span);
                         let write_payload =
                             self.synth_print_call(payload_expr, writer_expr, None, ctx)?;
                         self.push_block_expr_id(&mut block, write_payload);
@@ -16460,8 +16316,10 @@ impl TypedProgram {
         if self.scopes.find_function_local(ns_scope, load_ident).is_some() {
             return Ok(());
         }
-        let ns_path_ident =
-            self.build_ident_with(|k1, s| k1.write_namespace_path(s, namespace_id, "/", true));
+        let ns_path_ident = self.build_ident_with(|k1, w| {
+            k1.write_namespace_path(w, namespace_id, "/", true);
+            Ok(())
+        });
         let b = self.ast.idents.b;
         self.declare_ns_reload_fn(namespace_id, load_ident, b.load_ns, ns_path_ident)?;
         self.declare_ns_reload_fn(namespace_id, b.load_async, b.load_ns_async, ns_path_ident)?;

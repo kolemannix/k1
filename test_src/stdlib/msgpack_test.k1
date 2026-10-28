@@ -3,11 +3,12 @@ use std/msgpack
 use std/json
 use std/codec
 
+let suite: string = files/read-to-string("${k1/module-dir()}/msgpack-test-suite/msgpack-test-suite.json").!
+
 type contact = either { none, email(string) }
 type user = { name: string, age: u32, nick: ?string, contact: contact, scores: list[i64] }
 type tree = either { leaf, node(*tree) }
-
-fn hex(bytes: span[byte]): string { bytes.to-hex() }
+type forest = either { leaf, node(list[forest]) }
 
 fn repeat(s: string, n: size): string {
   let sb = string-builder/new()
@@ -15,18 +16,49 @@ fn repeat(s: string, n: size): string {
   sb.build()
 }
 
-fn(test) encodes-the-spec-formats() {
+fn reject-prefixes[t: codec/decode](bytes: span[byte]) {
+  for n in 0.until(bytes.len()) {
+    if not (msgpack/parse[t](bytes.take(n)) is :err e and e.kind is :unexpected-end) { crash("prefix ${bytes.take(n).to-hex()}") }
+  }
+}
+
+fn(test) passes-the-msgpack-test-suite() {
+  for group in json/parse[json/json](suite).!.as-object().! {
+    for c in group.value.as-array().! {
+      let encodings: list[string] = []
+      let expected: ?json/json = :none
+      for m in c.as-object().! {
+        if m.key is {
+          "msgpack" -> { for m.value.as-array().! { encodings.push(string/join(it.as-str().!.split-by-char('-'), "")) } },
+          "bignum" -> { expected = :some json/parse[json/json](m.value.as-str().!).! },
+          "binary" or "timestamp" or "ext" -> {},
+          _ -> { expected = :some m.value },
+        }
+      }
+      for hex in encodings {
+        let field = span/from-hex("81a178$hex").!
+        if msgpack/parse[{}](field) is :err e { crash("${group.key} skip $hex: $e") }
+        reject-prefixes[{}](field)
+        require expected is :some want else { continue }
+        let bytes = span/from-hex(hex).!
+        require msgpack/parse[json/json](bytes) is :ok got else { crash("${group.key} decode $hex") }
+        if not (if got is :float f json/from-value[f64](want) is :ok w and f == w else got == want) {
+          crash("${group.key} decode $hex: ${json/to-string(got)}")
+        }
+        reject-prefixes[json/json](bytes)
+      }
+      if expected is :some want {
+        let out = msgpack/to-bytes(want).to-hex()
+        if not encodings.contains(out) { crash("${group.key} encode ${json/to-string(want)}: $out") }
+      }
+    }
+  }
+}
+
+fn(test) encodes-records-and-long-headers() {
   let u: user = .{ name = "Ada", age = 36, nick = :none, contact = :email "a", scores = [1, -1, 300] }
-  assert-equals(hex(msgpack/to-bytes(u)), "85a46e616d65a3416461a361676524a46e69636bc0a7636f6e7461637481a5656d61696ca161a673636f7265739301ffcd012c")
-  assert-equals(hex(msgpack/to-bytes(-33)), "d0df")
-  assert-equals(hex(msgpack/to-bytes(-32768)), "d18000")
-  assert-equals(hex(msgpack/to-bytes(i64/min-value)), "d38000000000000000")
-  assert-equals(hex(msgpack/to-bytes(65536)), "ce00010000")
-  assert-equals(hex(msgpack/to-bytes(u64/max-value)), "cfffffffffffffffff")
-  assert-equals(hex(msgpack/to-bytes(1.5)), "cb3ff8000000000000")
-  assert-equals(hex(msgpack/to-bytes(repeat("x", 32)).take(2)), "d920")
-  assert-equals(hex(msgpack/to-bytes(repeat("x", 256)).take(3)), "da0100")
-  assert-equals(hex(msgpack/to-bytes(list/filled(16, true)).take(3)), "dc0010")
+  assert-equals(msgpack/to-bytes(u).to-hex(), "85a46e616d65a3416461a361676524a46e69636bc0a7636f6e7461637481a5656d61696ca161a673636f7265739301ffcd012c")
+  assert-equals(msgpack/to-bytes(repeat("x", 256)).take(3).to-hex(), "da0100")
 }
 
 fn(test) round-trips() {
@@ -35,11 +67,7 @@ fn(test) round-trips() {
   assert(back.nick is :some "ad" and back.contact is :none and back.scores == u.scores)
   assert(msgpack/parse[u64](msgpack/to-bytes(u64/max-value)) is :ok v and v == u64/max-value)
   assert(msgpack/parse[f32](msgpack/to-bytes(2.5: f32)) is :ok 2.5)
-  assert(msgpack/parse[string](span/from-hex("db0000000178").!) is :ok "x")
-  require msgpack/parse[json/json](msgpack/to-bytes(u)) is :ok tree else { crash("tree") }
-  assert-equals(json/to-string(tree), `{"name":"Ada","age":36,"nick":"ad","contact":"none","scores":[-9223372036854775808,-129,0,255,9223372036854775807]}`)
   assert(msgpack/parse[{ age: u8 }](msgpack/to-bytes(u)) is :ok a and a.age == 36)
-  assert(msgpack/parse[{ a: u8 }](span/from-hex("84a178c4020102a179d40105a17ac7010a0ba16101").!) is :ok r and r.a == 1)
 }
 
 fn(test) rejects-bad-input() {
@@ -47,7 +75,6 @@ fn(test) rejects-bad-input() {
   assert(msgpack/parse[{ name: string, age: u8 }](bytes) is :err e and e.kind is :overflow)
   assert(msgpack/parse[user](bytes) is :err e and "$e" == "missing field contact")
   assert(msgpack/parse[string](bytes.take(3)) is :err e and e.kind is :wrong-type "string")
-  assert(msgpack/parse[{ name: string, age: u32 }](bytes.take(bytes.len() - 1)) is :err e and e.kind is :unexpected-end)
   assert(msgpack/parse[int](msgpack/to-bytes([1, 2])) is :err e and e.kind is :wrong-type "number")
   assert(msgpack/parse[bool](span/from-hex("c3c3").!) is :err e and e.kind is :trailing)
   assert(msgpack/parse[string](span/from-hex("a1ff").!) is :err e and e.kind is :invalid-utf8)
@@ -57,4 +84,8 @@ fn(test) rejects-bad-input() {
   assert(msgpack/parse[{}](span/from-hex("81a162${deep}c0").!) is :err e and e.kind is :depth)
   let nodes = repeat("81a46e6f6465", codec/max-depth + 1)
   assert(msgpack/parse[tree](span/from-hex("${nodes}a46c656166").!) is :err e and e.kind is :depth)
+  let hostile = span/from-hex("${repeat("81a46e6f6465dcffff", 100)}${repeat("c0", 1000)}").!
+  let used = mem/current-arena().used-bytes()
+  assert(msgpack/parse[forest](hostile) is :err _)
+  assert(mem/current-arena().used-bytes() - used < 2 * hostile.len() * types/stride[forest])
 }
