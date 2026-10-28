@@ -77,6 +77,8 @@ type error-kind = either {
 type error-info = { kind: error-kind, location: ?{ pos: size, input: string } }
 type(alias) error = *error-info
 
+fn new-error(kind: error-kind, location: ?{ pos: size, input: string }): error { mem/new[error-info](.{ kind, location }) }
+
 impl print for error {
   fn print-to[w: writer](self, w) {
     if self.kind is {

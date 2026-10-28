@@ -278,7 +278,5 @@ impl codec/decoder for *decoder {
     :ok(.{})
   }
 
-  fn error[t](self, kind: codec/error-kind): result[t, codec/error] {
-    :err mem/new[codec/error-info](.{ kind, location = :none })
-  }
+  fn(inline) error[t](self, kind: codec/error-kind): result[t, codec/error] { :err codec/new-error(kind, :none) }
 }

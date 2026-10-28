@@ -210,11 +210,11 @@ ns for text-decoder {
     if self.pos < self.input.len() self.input.[self.pos] else '\0'
   }
 
-  fn unexpected[t](*self): result[t, codec/error] {
-    if self.at-end() self.error(:unexpected-end) else self.error(:unexpected-char self.peek())
+  fn(inline) unexpected[t](*self): result[t, codec/error] {
+    self.error(if self.at-end() :unexpected-end else :unexpected-char self.peek())
   }
 
-  fn expect(*self, c: char): result[empty, codec/error] {
+  fn(inline) expect(*self, c: char): result[empty, codec/error] {
     if self.peek() == c {
       self.pos = self.pos + 1
       :ok(.{})
@@ -529,8 +529,8 @@ impl codec/decoder for *text-decoder {
     :ok(.{})
   }
 
-  fn error[t](self, kind: codec/error-kind): result[t, codec/error] {
-    :err mem/new[codec/error-info](.{ kind, location = :some .{ pos = self.pos, input = self.input } })
+  fn(inline) error[t](self, kind: codec/error-kind): result[t, codec/error] {
+    :err codec/new-error(kind, :some .{ pos = self.pos, input = self.input })
   }
 }
 
@@ -613,7 +613,7 @@ impl codec/decoder for *tree-decoder {
     :ok :some members.[index].key
   }
   fn skip-value(_self: self): result[empty, codec/error] { :ok(.{}) }
-  fn error[t](self, kind: codec/error-kind): result[t, codec/error] { :err mem/new[codec/error-info](.{ kind, location = :none }) }
+  fn(inline) error[t](self, kind: codec/error-kind): result[t, codec/error] { :err codec/new-error(kind, :none) }
 }
 
 ns internal {
