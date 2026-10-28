@@ -20,8 +20,8 @@ fn best-nanos(iters: size, prep: some fn() -> {}, f: some fn() -> {}): u64 {
   best
 }
 
-fn report(name: string, bytes: size, nanos: u64) {
-  println("k1    ${name}: ${bytes.as[f64] / nanos.as[f64]} GB/s")
+fn report(corpus: string, phase: string, bytes: size, nanos: u64) {
+  println("k1    $corpus $phase: ${bytes.as[f64] / nanos.as[f64]} GB/s")
 }
 
 fn main(argc: u32, argv: ptr): i32 {
@@ -36,16 +36,16 @@ fn main(argc: u32, argv: ptr): i32 {
     let bytes = text.len()
     mem/push-arena(scratch)
     let reset = fn[scratch]. scratch.reset()
-    report("$it parse", bytes, best-nanos(iters, reset, fn[text]. {
+    report(it, "parse", bytes, best-nanos(iters, reset, fn[text]. {
       if json/parse[json/json](text) is :err e { crash("$e") }
     }))
     if it == "twitter" {
-      report("$it typed", bytes, best-nanos(iters, reset, fn[text]. {
+      report(it, "typed", bytes, best-nanos(iters, reset, fn[text]. {
         if json/parse[twitter](text) is :err e { crash("$e") }
       }))
     }
     if it == "canada" {
-      report("$it typed", bytes, best-nanos(iters, reset, fn[text]. {
+      report(it, "typed", bytes, best-nanos(iters, reset, fn[text]. {
         if json/parse[canada](text) is :err e { crash("$e") }
       }))
     }
@@ -53,7 +53,7 @@ fn main(argc: u32, argv: ptr): i32 {
     require json/parse[json/json](text) is :ok doc else { crash("parse") }
     let out-len = json/to-string(doc).len()
     let keep = scratch.mark()
-    report("$it write", out-len, best-nanos(iters, fn[scratch, keep]. scratch.pop-to-mark(keep), fn[doc]. {
+    report(it, "write", out-len, best-nanos(iters, fn[scratch, keep]. scratch.pop-to-mark(keep), fn[doc]. {
       sink = sink + json/to-string(doc).len()
     }))
     scratch.reset()

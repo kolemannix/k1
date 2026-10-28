@@ -1,6 +1,5 @@
 ns json_test
 use std/json
-use std/json/json-write
 
 fn reject(s: string) {
   if json/parse[json/json](s) is :ok(_) { crash("expected a parse failure for '$s'") }
@@ -25,14 +24,8 @@ type person = {
   home-city: string,
 }
 
-let camel-skip: std/json/opts = .{ key-case = :camel, skip-none = true, renames = [] }
-let snake-renamed: std/json/opts = .{ key-case = :snake, skip-none = false, renames = [.{ field = "home-city", key = "city" }] }
-
-fn with-opts[t: json-write, o: static std/json/opts](value: t): string {
-  let sb = string-builder/new()
-  value.write-json[o = o](sb.&)
-  sb.build()
-}
+let camel-skip: std/codec/opts = .{ key-case = :camel, skip-none = true, renames = [] }
+let snake-renamed: std/codec/opts = .{ key-case = :snake, skip-none = false, renames = [.{ field = "home-city", key = "city" }] }
 
 fn(test) write() {
   let ada: person = .{
@@ -48,11 +41,11 @@ fn(test) write() {
     home-city = "London",
   }
   assert-equals(json/to-string(ada), `{"name":"Ada \"Countess\"","initial":"A","age":36,"score":99.5,"active":true,"role":"admin","nickname":null,"contacts":[{"email":"ada@example.com"},"unreachable"],"scores":[10,20,30],"home-city":"London"}`)
-  assert-equals(with-opts[o = camel-skip](ada), `{"name":"Ada \"Countess\"","initial":"A","age":36,"score":99.5,"active":true,"role":"admin","contacts":[{"email":"ada@example.com"},"unreachable"],"scores":[10,20,30],"homeCity":"London"}`)
+  assert-equals(json/to-string-with[o = camel-skip](ada), `{"name":"Ada \"Countess\"","initial":"A","age":36,"score":99.5,"active":true,"role":"admin","contacts":[{"email":"ada@example.com"},"unreachable"],"scores":[10,20,30],"homeCity":"London"}`)
   let none: ?int = :none
   let one: ?int = :some 1
-  assert-equals(with-opts[o = camel-skip](.{ a = none, b = one, c = none }), `{"b":1}`)
-  assert-equals(with-opts[o = snake-renamed](.{ home-city = "x", zip-code = 1 }), `{"city":"x","zip_code":1}`)
+  assert-equals(json/to-string-with[o = camel-skip](.{ a = none, b = one, c = none }), `{"b":1}`)
+  assert-equals(json/to-string-with[o = snake-renamed](.{ home-city = "x", zip-code = 1 }), `{"city":"x","zip_code":1}`)
 
   let control = "a\tb\n".concat((1: u8).as-char().to-string()).concat("\"\\/")
   assert-equals(json/to-string(control), `"a\\tb\\n\\u0001\"\\\\/"`)
@@ -98,7 +91,7 @@ fn parsed(s: string): json/json {
   }
 }
 
-fn error-of(s: string): json/error {
+fn get-parse-error(s: string): std/codec/error {
   if json/parse[json/json](s) is {
     :ok _ -> crash("expected '$s' to fail"),
     :err e -> e,
@@ -129,27 +122,27 @@ fn(test) parse-strict() {
     reject(it)
   }
   let raw-control = "\"a".concat((9: u8).as-char().to-string()).concat("b\"")
-  assert(error-of(raw-control).kind is :control-char)
+  assert(get-parse-error(raw-control).kind is :control-char)
   let bad-utf8 = "\"a".concat((0xFF: u8).as-char().to-string()).concat("\"")
-  assert(error-of(bad-utf8).kind is :invalid-utf8)
+  assert(get-parse-error(bad-utf8).kind is :invalid-utf8)
   let overlong = "\"".concat((0xC0: u8).as-char().to-string()).concat((0x80: u8).as-char().to-string()).concat("\"")
-  assert(error-of(overlong).kind is :invalid-utf8)
+  assert(get-parse-error(overlong).kind is :invalid-utf8)
   let surrogate = "\"".concat((0xED: u8).as-char().to-string()).concat((0xA0: u8).as-char().to-string()).concat((0x80: u8).as-char().to-string()).concat("\"")
-  assert(error-of(surrogate).kind is :invalid-utf8)
+  assert(get-parse-error(surrogate).kind is :invalid-utf8)
   let deep = string-builder/new()
   deep.repeat("[", 1025)
   deep.repeat("]", 1025)
-  assert(error-of(deep.build()).kind is :depth)
+  assert(get-parse-error(deep.build()).kind is :depth)
   let ok-deep = string-builder/new()
   ok-deep.repeat("[", 1024)
   ok-deep.repeat("]", 1024)
   accept(ok-deep.build())
 
-  let e = error-of("{\"a\":\n  1 x}")
+  let e = get-parse-error("{\"a\":\n  1 x}")
   assert(e.kind is :unexpected-char 'x')
   assert-equals("$e", "unexpected 'x' at line 2, column 5")
-  assert(error-of("[1] 2").kind is :trailing)
-  assert(error-of("[1").kind is :unexpected-end)
+  assert(get-parse-error("[1] 2").kind is :trailing)
+  assert(get-parse-error("[1").kind is :unexpected-end)
 }
 
 fn(test) parse-unicode() {
@@ -174,6 +167,10 @@ fn(test) parse-typed() {
   assert(ada.contacts.[0] is :email "ada@example.com")
   assert-equals(ada.scores.[2], 30)
   assert-equals(json/to-string(ada), text)
+  let tree = json/to-value(ada)
+  assert-equals(json/to-string(tree), text)
+  require json/from-value[person](tree) is :ok back else { crash("from-value failed") }
+  assert-equals(json/to-string(back), text)
 
   let camel = ` { "name" : "n", "initial":"i", "age":1, "score":2, "active":false, "role":"guest", "nickname":"nick", "contacts":[], "scores":[1,2,3], "homeCity":"x", "extra": [1, {"q": null, "r": "s"}, "t"] } `
   require json/parse-with[person, camel-skip](camel) is :ok p else { crash("camel parse failed") }

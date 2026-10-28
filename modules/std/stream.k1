@@ -16,9 +16,9 @@ type(alias) byte-source = dyn[source[t = u8]]
 // `stop` (which must release everything the source owns).
 // Erase to a storable handle with `.to-dyn()`.
 ability source[impl t] {
-  fn start(_self: *self, _waker: waker) {}
+  fn start(self: *self, waker: waker) {}
   fn pull(self: *self): pull[t]
-  fn stop(_self: *self) {}
+  fn stop(self: *self) {}
 }
 
 // Consumes a stream chunk by chunk, then yields a single result value.
@@ -29,8 +29,8 @@ ability sink[impl t, impl out] {
 
 ability pipe[impl t, impl out] {
   fn map(self: *self, group: span[span[t]], out: *list[span[out]])
-  fn finish(_self: *self, _out: *list[span[out]]) {}
-  fn retire(_self: *self) {}
+  fn finish(self: *self, out: *list[span[out]]) {}
+  fn retire(self: *self) {}
 }
 
 // Constructors: `source/` is the place to look for ways to make a stream

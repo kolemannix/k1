@@ -574,7 +574,7 @@ ability try[impl t, impl e] {
 
 ability iterator[impl item] {
   fn next(self: *self): ?item
-  fn size-hint(_self: *self): { at-least: size, at-most: ?size } {
+  fn size-hint(self: *self): { at-least: size, at-most: ?size } {
     .{ at-least = 0, at-most = :none }
   }
   fn advance-by(self: *self, n: size) {

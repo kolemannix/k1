@@ -1,0 +1,359 @@
+ns codec
+
+type opts = {
+  key-case: either { as-is, camel, snake },
+  skip-none: bool,
+  renames: span[{ field: string, key: string }],
+}
+
+ns for opts {
+  let default: opts = .{ key-case = :as-is, skip-none = false, renames = [] }
+
+  fn apply-key-case(self, name: string): string {
+    if self.key-case is :as-is { return name }
+    let sb = string-builder/new()
+    let upper = false
+    for c in name {
+      if c == '-' {
+        if self.key-case is :snake { sb.write-char('_') } else { upper = true }
+      } else {
+        sb.write-char(if upper c.to-ascii-upper() else c)
+        upper = false
+      }
+    }
+    sb.build()
+  }
+
+  fn get-field-key(self, field: string): string {
+    for r in self.renames { if r.field == field return r.key }
+    self.apply-key-case(field)
+  }
+}
+
+type name-kind = either { field, unit-variant, variant }
+
+ability encoder {
+  fn encode-name(kind: name-kind, name: string, out: *string-builder) { out.write(name) }
+  fn write-null(self) { crash("codec: ${types/id[self].name()} has no write-null") }
+  fn write-bool(self, b: bool) { crash("codec: ${types/id[self].name()} has no write-bool") }
+  fn write-int(self, i: i64) { crash("codec: ${types/id[self].name()} has no write-int") }
+  fn write-uint(self, u: u64) { crash("codec: ${types/id[self].name()} has no write-uint") }
+  fn write-float(self, f: f64) { crash("codec: ${types/id[self].name()} has no write-float") }
+  fn write-string(self, s: string) { crash("codec: ${types/id[self].name()} has no write-string") }
+  fn begin-seq(self, len: size) { crash("codec: ${types/id[self].name()} has no begin-seq") }
+  fn begin-item(self, index: size) { crash("codec: ${types/id[self].name()} has no begin-item") }
+  fn end-seq(self) { crash("codec: ${types/id[self].name()} has no end-seq") }
+  fn begin-map(self, len: size) { crash("codec: ${types/id[self].name()} has no begin-map") }
+  fn write-field-name(self, index: size, name: string) { self.write-key(index, name) }
+  fn write-key(self, index: size, key: string) { crash("codec: ${types/id[self].name()} has no write-key") }
+  fn end-map(self) { crash("codec: ${types/id[self].name()} has no end-map") }
+  fn write-unit-variant(self, name: string) { self.write-string(name) }
+  fn begin-variant(self, name: string) { self.begin-map(1); self.write-field-name(0, name) }
+  fn end-variant(self) { self.end-map() }
+}
+
+ability encode {
+  fn encode[e: encoder, o: static opts](self, e)
+}
+
+impl[t] encode for t {
+  fn encode[e: encoder, o: static opts](self, e) { #meta internal/encode-code[e](o, types/id[t]) }
+}
+
+type error-kind = either {
+  unexpected-char(char),
+  unexpected-end,
+  control-char,
+  bad-escape,
+  invalid-utf8,
+  bad-number,
+  overflow,
+  depth,
+  trailing,
+  missing-field(string),
+  wrong-type(string),
+  unknown-variant(string),
+}
+type error-info = { kind: error-kind, location: ?{ pos: size, input: string } }
+type(alias) error = *error-info
+
+impl print for error {
+  fn print-to[w: writer](self, w) {
+    if self.kind is {
+      :unexpected-char c -> { w.write("unexpected '"); w.write-char(c); w.write("'") },
+      :unexpected-end -> w.write("unexpected end of input"),
+      :control-char -> w.write("control character in string"),
+      :bad-escape -> w.write("bad escape sequence"),
+      :invalid-utf8 -> w.write("invalid utf-8"),
+      :bad-number -> w.write("bad number"),
+      :overflow -> w.write("number out of range"),
+      :depth -> w.write("nesting too deep"),
+      :trailing -> w.write("trailing content after value"),
+      :missing-field f -> { w.write("missing field "); w.write(f) },
+      :wrong-type t -> { w.write("expected "); w.write(t) },
+      :unknown-variant v -> { w.write("unknown variant "); w.write(v) },
+    }
+    require self.location is :some location else { return }
+    let line: size = 1
+    let col: size = 1
+    let i: size = 0
+    let end = if location.pos < location.input.len() location.pos else location.input.len()
+    while i < end {
+      if location.input.[i] == '\n' { line = line + 1; col = 1 } else { col = col + 1 }
+      i = i + 1
+    }
+    w.write(" at line ")
+    line.print-to(w)
+    w.write(", column ")
+    col.print-to(w)
+  }
+}
+
+let max-depth: size = 1024
+
+type value-kind = either { null, bool, number, string, seq, map }
+type number = either { int(i64), uint(u64), float(f64) }
+
+ability decoder {
+  fn is-positional(): bool { false }
+  fn peek-kind(self): result[value-kind, error] { self.error(:wrong-type "value") }
+  fn read-null(self): result[empty, error] { self.error(:wrong-type "null") }
+  fn read-bool(self): result[bool, error] { self.error(:wrong-type "bool") }
+  fn read-int(self, min: i64, max: i64): result[i64, error] {
+    let i = if self.read-number().try is {
+      :int i -> i,
+      :uint u -> { if u > i64/max-value.unsigned() { return self.error(:overflow) }; u.signed() },
+      :float _ -> return self.error(:wrong-type "integer"),
+    }
+    if i < min or i > max self.error(:overflow) else :ok i
+  }
+  fn read-uint(self, max: u64): result[u64, error] {
+    let u = if self.read-number().try is {
+      :uint u -> u,
+      :int i -> { if i < 0 { return self.error(:overflow) }; i.unsigned() },
+      :float _ -> return self.error(:wrong-type "integer"),
+    }
+    if u > max self.error(:overflow) else :ok u
+  }
+  fn read-float(self): result[f64, error] {
+    if self.read-number().try is {
+      :int i -> :ok i.as[f64](),
+      :uint u -> :ok u.as[f64](),
+      :float f -> :ok f,
+    }
+  }
+  fn read-number(self): result[number, error] { self.error(:wrong-type "number") }
+  fn read-string(self): result[string, error] { self.error(:wrong-type "string") }
+  fn begin-seq(self): result[empty, error] { self.error(:wrong-type "sequence") }
+  fn begin-item(self, index: size): result[bool, error] { self.error(:wrong-type "sequence") }
+  fn begin-map(self): result[empty, error] { self.error(:wrong-type "map") }
+  fn read-key(self, index: size): result[?string, error] { self.error(:wrong-type "map") }
+  fn begin-variant(self): result[{ name: string, has-payload: bool }, error] {
+    if self.peek-kind().try is :string { return :ok .{ name = self.read-string().try, has-payload = false } }
+    self.begin-map().try
+    require self.read-key(0).try is :some name else { return self.error(:wrong-type "variant") }
+    :ok .{ name, has-payload = true }
+  }
+  fn end-variant(self): result[empty, error] {
+    if self.read-key(1).try is :some _ { return self.error(:wrong-type "single-key variant map") }
+    :ok(.{})
+  }
+  fn skip-value(self): result[empty, error] { self.error(:wrong-type "value") }
+  fn error[t](self, kind: error-kind): result[t, error]
+}
+
+ability decode {
+  fn decode[d: decoder, o: static opts](d): result[self, error]
+}
+
+impl[t] decode for t {
+  fn decode[d: decoder, o: static opts](d): result[t, error] { #meta internal/decode-code[d](o, types/id[t]) }
+}
+
+type shape = either {
+  bool,
+  char,
+  string,
+  int(types/int-kind),
+  float(types/float-kind),
+  opt(types/type-id),
+  seq({ elem: types/type-id, kind: either { list, span, array(int) } }),
+  reference(types/type-id),
+  struct(span[{ name: string, type-id: types/type-id, offset: size }]),
+  either(span[{ name: string, payload: ?types/type-id }]),
+}
+
+fn get-shape(id: types/type-id): shape {
+  if id.elem-of[opt] is :some inner return :opt inner
+  if id.elem-of[list] is :some elem return :seq .{ elem, kind = :list }
+  if id.elem-of[span] is :some elem return :seq .{ elem, kind = :span }
+  if id.schema() is {
+    :bool -> :bool,
+    :char -> :char,
+    :string -> :string,
+    :int k -> :int k,
+    :float k -> :float k,
+    :array .{ element-type-id, size } -> :seq .{ elem = element-type-id, kind = :array size.! },
+    :reference .{ inner-type-id } -> :reference inner-type-id,
+    :struct .{ fields } -> :struct fields,
+    :enum .{ values, partial = false } -> {
+      let variants: list[{ name: string, payload: ?types/type-id }] = list/with-capacity(values.len())
+      for values { variants.push(.{ name = it.name, payload = :none }) }
+      :either variants.as-span()
+    },
+    :either .{ variants } -> {
+      let out: list[{ name: string, payload: ?types/type-id }] = list/with-capacity(variants.len())
+      for variants { out.push(.{ name = it.name, payload = if it.payload is :some p :some p.type-id else :none }) }
+      :either out.as-span()
+    },
+    _ -> crash("codec: ${id.name()} has no data shape")
+  }
+}
+
+ns internal {
+  fn spell-name[e: encoder](kind: name-kind, name: string): string {
+    let sb = string-builder/new()
+    encoder@(e)/encode-name(kind, name, sb.&)
+    meta/str-lit(sb.build())
+  }
+
+  fn encode-code[e: encoder](o: opts, id: types/type-id): code {
+    let cb = code-builder/new()
+    if get-shape(id) is {
+      :bool -> cb.line(`e.write-bool(self)`),
+      :char -> cb.line(`e.write-string(self.to-string())`),
+      :string -> cb.line(`e.write-string(self)`),
+      :int k -> cb.line(if k is { :u8 or :u16 or :u32 or :u64 -> `e.write-uint(self)`, _ -> `e.write-int(self)` }),
+      :float k -> cb.line(if k is { :f32 -> `e.write-float(self.widen[f64])`, _ -> `e.write-float(self)` }),
+      :opt _ -> cb.line(`if self is { :some x -> x.encode[o = o](e), :none -> e.write-null() }`),
+      :seq _ -> cb.line(`e.begin-seq(self.len()); for self { e.begin-item(it-index); it.encode[o = o](e) }; e.end-seq()`),
+      :reference _ -> cb.line(`self.*.encode[o = o](e)`),
+      :struct fields -> {
+        let skips = false
+        if o.skip-none { for fields { if it.type-id.instance-of[opt] { skips = true } } }
+        if skips {
+          let len = string-builder/new()
+          let fixed: size = 0
+          for fields {
+            if it.type-id.instance-of[opt] len.write(" + (if self.${it.name} is :some _ 1 else 0)") else { fixed = fixed + 1 }
+          }
+          cb.line(`let n: size = 0`)
+          cb.line(`e.begin-map($fixed${len.build()})`)
+        } else {
+          cb.line(`e.begin-map(${fields.len()})`)
+        }
+        for f in fields {
+          let name = spell-name[e](:field, o.get-field-key(f.name))
+          if not skips {
+            cb.line(`e.write-field-name($it-index, $name); self.${f.name}.encode[o = o](e)`)
+          } else if f.type-id.instance-of[opt] {
+            cb.line(`if self.${f.name} is :some x { e.write-field-name(n, $name); x.encode[o = o](e); n = n + 1 }`)
+          } else {
+            cb.line(`e.write-field-name(n, $name); self.${f.name}.encode[o = o](e); n = n + 1`)
+          }
+        }
+        cb.line(`e.end-map()`)
+      },
+      :either variants -> {
+        cb.line("if self is {")
+        for v in variants {
+          let name = o.apply-key-case(v.name)
+          if v.payload is :some _ {
+            cb.line(`:${v.name} p -> { e.begin-variant(${spell-name[e](:variant, name)}); p.encode[o = o](e); e.end-variant() },`)
+          } else {
+            cb.line(`:${v.name} -> e.write-unit-variant(${spell-name[e](:unit-variant, name)}),`)
+          }
+        }
+        cb.line("}")
+      },
+    }
+    cb.build()
+  }
+
+  fn spell-decode(id: types/type-id): string { `decode@(${id.spell()})/decode[o = o](d).try` }
+
+  fn decode-code[d: decoder](o: opts, id: types/type-id): code {
+    let cb = code-builder/new()
+    if get-shape(id) is {
+      :bool -> cb.line(`d.read-bool()`),
+      :char -> {
+        cb.line(`let s = d.read-string().try`)
+        cb.line(`if s.len() != 1 { return d.error(:wrong-type "single character") }`)
+        cb.line(`:ok s.[0]`)
+      },
+      :string -> cb.line(`d.read-string()`),
+      :int k -> {
+        let t = k.enum-name()
+        if k is {
+          :u64 -> cb.line(`d.read-uint(u64/max-value)`),
+          :i64 -> cb.line(`d.read-int(i64/min-value, i64/max-value)`),
+          :u8 or :u16 or :u32 -> cb.line(`:ok d.read-uint($t/max-value).try.trunc[$t]`),
+          _ -> cb.line(`:ok d.read-int($t/min-value, $t/max-value).try.trunc[$t]`),
+        }
+      },
+      :float k -> cb.line(if k is { :f32 -> `:ok d.read-float().try.trunc[f32]`, _ -> `d.read-float()` }),
+      :opt inner -> cb.line(`if d.peek-kind().try is :null { d.read-null().try; :ok :none } else { :ok :some ${spell-decode(inner)} }`),
+      :seq .{ elem, kind } -> {
+        cb.line(`d.begin-seq().try`)
+        cb.line(`let items = list/empty[${elem.spell()}]()`)
+        cb.line(`while d.begin-item(items.len()).try { items.push(${spell-decode(elem)}) }`)
+        if kind is {
+          :list -> cb.line(`:ok items`),
+          :span -> cb.line(`:ok items.as-span()`),
+          :array n -> {
+            cb.line(`if items.len() != $n { return d.error(:wrong-type "array of $n") }`)
+            cb.line(`:ok items.as-span().to-array[${elem.spell()}, $n]`)
+          }
+        }
+      },
+      :reference inner -> cb.line(`:ok mem/new(${spell-decode(inner)})`),
+      :struct fields -> {
+        if decoder@(d)/is-positional() {
+          for f in fields { cb.line(`let v$it-index = ${spell-decode(f.type-id)}`) }
+        } else {
+          cb.line(`d.begin-map().try`)
+          for f in fields {
+            if f.type-id.instance-of[opt] {
+              cb.line(`let v$it-index: ${f.type-id.spell()} = :none`)
+            } else {
+              cb.line(`let f$it-index: ?${f.type-id.spell()} = :none`)
+            }
+          }
+          cb.line(`let n: size = 0`)
+          cb.line(`loop {`)
+          cb.line(`require d.read-key(n).try is :some key else { break }`)
+          cb.line(`n = n + 1`)
+          for f in fields {
+            let key = meta/str-lit(o.get-field-key(f.name))
+            let assign = if f.type-id.instance-of[opt] `v$it-index = ${spell-decode(f.type-id)}`
+              else `f$it-index = :some (${spell-decode(f.type-id)})`
+            cb.line(`${if it-index == 0 "if" else "else if"} key == $key { $assign }`)
+          }
+          cb.line(`${if fields.len() == 0 "" else "else "}{ d.skip-value().try }`)
+          cb.line(`}`)
+          for f in fields {
+            if not f.type-id.instance-of[opt] {
+              cb.line(`require f$it-index is :some v$it-index else { return d.error(:missing-field ${meta/str-lit(o.get-field-key(f.name))}) }`)
+            }
+          }
+        }
+        cb.line(`:ok(.{`)
+        for f in fields { cb.line(`${f.name} = v$it-index,`) }
+        cb.line(`})`)
+      },
+      :either variants -> {
+        cb.line(`let v = d.begin-variant().try`)
+        for v in variants {
+          let name = meta/str-lit(o.apply-key-case(v.name))
+          if v.payload is :some p {
+            cb.line(`if v.has-payload and v.name == $name { let p = ${spell-decode(p)}; d.end-variant().try; return :ok(:${v.name}(p)) }`)
+          } else {
+            cb.line(`if (not v.has-payload) and v.name == $name { return :ok :${v.name} }`)
+          }
+        }
+        cb.line(`d.error(:unknown-variant v.name)`)
+      },
+    }
+    cb.build()
+  }
+}

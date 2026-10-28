@@ -942,6 +942,7 @@ bitflags! {
         const CompilerDebug = 1;
         const Concrete = 1 << 1;
         const Macro = 1 << 2;
+        const AbilityDefault = 1 << 3;
         const Reloadable = 1 << 4;
         const AbiNative = 1 << 5;
         const AddressTaken = 1 << 6;
@@ -4173,6 +4174,20 @@ impl TypedProgram {
         id
     }
 
+    fn add_ability_bindings_scope(
+        &mut self,
+        base_ability_id: AbilityId,
+        pairs: &[TypeSubstitutionPair],
+    ) -> ScopeId {
+        let scope_id = self.scopes.add_child_scope(
+            self.abilities.get(base_ability_id).scope_id,
+            ScopeType::AbilityImpl,
+            ScopeOwnerId::None,
+        );
+        self.bind_substitutions(scope_id, pairs);
+        scope_id
+    }
+
     fn register_builtin_ability_impl(
         &mut self,
         self_type_id: TypeId,
@@ -4180,14 +4195,11 @@ impl TypedProgram {
         impl_arguments: TypeSliceId,
         span: Span,
     ) -> AbilityImplHandle {
-        let base_scope_id = self.abilities.get(base_ability_id).scope_id;
-        let scope_id =
-            self.scopes.add_child_scope(base_scope_id, ScopeType::AbilityImpl, ScopeOwnerId::None);
         let subst_pairs = self.get_ability_impl_subst_pairs(
             TypedAbilitySignature { specialized_ability_id: base_ability_id, impl_arguments },
             self_type_id,
         );
-        self.bind_substitutions(scope_id, &subst_pairs);
+        let scope_id = self.add_ability_bindings_scope(base_ability_id, &subst_pairs);
 
         let impl_id = self.add_ability_impl(TypedAbilityImpl {
             kind: AbilityImplKind::Builtin,
@@ -5189,7 +5201,19 @@ impl TypedProgram {
                     EMPTY_TYPE_SLICE,
                     Some((imp.ability_id, imp.self_type_id)),
                 );
-                self.add_specialized_function_scope(specialized_function_id, imp.scope_id, &[]);
+                let scope_parent = if self
+                    .get_function(blanket_function_id)
+                    .flags
+                    .contains(TypedFunctionFlags::AbilityDefault)
+                {
+                    self.add_ability_bindings_scope(
+                        imp.base_ability_id,
+                        self.mem.getn(imp.substitutions),
+                    )
+                } else {
+                    imp.scope_id
+                };
+                self.add_specialized_function_scope(specialized_function_id, scope_parent, &[]);
                 AbilityImplFunction::FunctionId(specialized_function_id)
             }
         };
@@ -14455,6 +14479,7 @@ impl TypedProgram {
         flags.set(TypedFunctionFlags::Inline, ast_fn.inlining == parse::Inlining::Always);
         flags.set(TypedFunctionFlags::NoInline, ast_fn.inlining == parse::Inlining::Never);
         flags.set(TypedFunctionFlags::Cold, ast_fn.is_cold);
+        flags.set(TypedFunctionFlags::AbilityDefault, impl_info.is_some_and(|ii| ii.is_default));
         if let Some(runs) = ast_fn.test {
             flags.set(TypedFunctionFlags::TestStatic, runs != parse::TestRuns::Runtime);
             flags.set(TypedFunctionFlags::TestRuntime, runs != parse::TestRuns::Static);
@@ -14844,6 +14869,7 @@ impl TypedProgram {
             if function.specialization_info.is_none()
                 && function.is_concrete()
                 && !function.is_macro()
+                && !function.flags.contains(TypedFunctionFlags::AbilityDefault)
             {
                 for param in self.mem.getn(function.params).iter() {
                     self.warn_variable_usage_counts("Parameter", param.variable_id, param.span);
@@ -15716,6 +15742,7 @@ impl TypedProgram {
         }
 
         let mut typed_functions = self.mem.new_list(ability.functions.len());
+        let mut default_scope_id: Option<ScopeId> = None;
         for ability_function_ref in self.mem.getn(ability.functions) {
             let matching_impl_function =
                 self.ast.mem.getn(parsed_impl_functions).iter().find_map(|&fn_id| {
@@ -15763,10 +15790,17 @@ impl TypedProgram {
                 continue;
             }
 
+            let declaring_scope_id = if is_default {
+                *default_scope_id.get_or_insert_with(|| {
+                    self.add_ability_bindings_scope(base_ability_id, &impl_subst_pairs)
+                })
+            } else {
+                impl_scope_id
+            };
             let impl_function_id = self
                 .declare_function(
                     parsed_impl_function_id,
-                    impl_scope_id,
+                    declaring_scope_id,
                     Some(FunctionAbilityContextInfo::ability_impl(
                         ability_id,
                         impl_self_type,

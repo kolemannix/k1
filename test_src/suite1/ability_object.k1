@@ -1,7 +1,7 @@
 ns ability_object
 
 ability counter[impl t] {
-  fn label(_self: *self): string { "counter" }
+  fn label(self: *self): string { "counter" }
   fn kind(): string { "counter-kind" }
   fn bump(*self): t
 }
@@ -39,7 +39,7 @@ fn erase-generic[s](state: *s): dyn[counter[t = int]] where s: counter[t = int] 
 
 ability mixed {
   fn plain(*self): int
-  fn fancy[x](_self: *self, x: x): x { x }
+  fn fancy[x](self: *self, x: x): x { x }
 }
 
 type mixed-impl = { n: int }

@@ -200,7 +200,7 @@ pub mod k1_types {
             } else {
                 unsafe {
                     let slice = self.to_slice();
-                    Ok(std::str::from_utf8(slice).unwrap())
+                    std::str::from_utf8(slice).map_err(|_| "it is not valid UTF-8")
                 }
             }
         }

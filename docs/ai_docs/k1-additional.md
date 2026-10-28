@@ -224,13 +224,22 @@ state pointer means a dyn can't cross `#static` into a runtime constant.
 - `std/utf8`: `len()` stays bytes; `count-code-points` counts non-continuation
   bytes (exact on valid UTF-8); `code-points(text)` iterates `u32`, one U+FFFD per
   maximal invalid subpart (Unicode 3.9, as browsers decode).
-- `std/json`: `to-string`, `write(w, v)`, `to-string-pretty`, `parse[t]`; schema
-  blanket impls, a concrete `json-read`/`json-write` impl overrides. Options are a
-  static type arg naming a global: `json/parse-with[t, camel](s)`. Unescaped decoded
+- `std/codec`: blanket `encode`/`decode` walk `codec/shape` and drive an
+  `encoder`/`decoder` backend (data-model events); a concrete `encode`/`decode` impl
+  overrides for every format. A backend's static `encode-name` pre-encodes field and
+  variant names at meta time; `is-positional()` decodes records in field order.
+  Unimplemented backend methods default to failing (encoder methods crash, decoder
+  methods return `:wrong-type`) unless they derive from another: `read-int`/`read-uint`/
+  `read-float` narrow `read-number`, `write-field-name` is `write-key`, `write-unit-variant`
+  is `write-string`, and a variant is a name string or a one-entry map on both sides.
+- `std/json`: `to-string`, `write(w, v)`, `to-string-pretty`, `parse[t]`,
+  `to-value`/`from-value` (the `json` tree, no text). Options are a static type arg
+  naming a `codec/opts` global: `json/parse-with[t, camel](s)`. Unescaped decoded
   strings borrow the input. `use std/json/json` shadows the ns: write `json/json`.
-  `to-value(v)`/`from-value[t](j)` convert through text (the one read/write path).
   `a.merge(b)` is a deep merge: object members merge recursively, anything else is
   `b`'s, `null` included (it composes patches; RFC 7396's apply would delete).
+- `std/msgpack`: `to-bytes`, `write(w, v)`, `parse[t](bytes)`; ints take the
+  smallest format, floats are float64, eithers are a name or a one-entry map.
 - `std/url`: `url/parse` borrows; accessors are zero-copy, still-encoded views;
   path/query/fragment accept any visible byte, `normalized()` is strict RFC 3986;
   `resolve`, `path-segments`, `query-pairs`, `url/builder`, `url/percent`,

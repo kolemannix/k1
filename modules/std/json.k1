@@ -1,4 +1,7 @@
 ns json
+use codec/encode
+use codec/encoder
+use codec/decoder
 
 type json = either {
   null,
@@ -31,61 +34,55 @@ ns for json {
   }
 }
 
-type opts = {
-  key-case: either { as-is, camel, snake },
-  skip-none: bool,
-  renames: span[{ field: string, key: string }],
-}
+type text-encoder[w] = { w: w }
 
-ns for opts {
-  let default: opts = .{ key-case = :as-is, skip-none = false, renames = [] }
-
-  fn apply-key-case(self, name: string): string {
-    if self.key-case is :as-is { return name }
-    let sb = string-builder/new()
-    let upper = false
-    for c in name {
-      if c == '-' {
-        if self.key-case is :snake { sb.write-char('_') } else { upper = true }
-      } else {
-        sb.write-char(if upper c.to-ascii-upper() else c)
-        upper = false
-      }
-    }
-    sb.build()
+impl[w: writer] codec/encoder for text-encoder[w] {
+  fn encode-name(kind: codec/name-kind, name: string, out: *string-builder) {
+    write-string(out, name)
+    if not (kind is :unit-variant) { out.write-char(':') }
   }
-
-  fn get-field-key(self, field: string): string {
-    for r in self.renames { if r.field == field return r.key }
-    self.apply-key-case(field)
+  fn write-null(self) { self.w.write("null") }
+  fn write-bool(self, b: bool) { b.print-to(self.w) }
+  fn write-int(self, i: i64) { i.print-to(self.w) }
+  fn write-uint(self, u: u64) { u.print-to(self.w) }
+  fn write-float(self, f: f64) { write-float(self.w, f) }
+  fn write-string(self, s: string) { write-string(self.w, s) }
+  fn begin-seq(self, _len: size) { self.w.write-char('[') }
+  fn begin-item(self, index: size) { if index > 0 self.w.write-char(',') }
+  fn end-seq(self) { self.w.write-char(']') }
+  fn begin-map(self, _len: size) { self.w.write-char('{') }
+  fn write-field-name(self, index: size, name: string) {
+    if index > 0 self.w.write-char(',')
+    self.w.write(name)
   }
+  fn write-key(self, index: size, key: string) {
+    if index > 0 self.w.write-char(',')
+    write-string(self.w, key)
+    self.w.write-char(':')
+  }
+  fn end-map(self) { self.w.write-char('}') }
+  fn write-unit-variant(self, name: string) { self.w.write(name) }
 }
 
-ability json-write {
-  fn write-json[w: writer, o: static opts](self, w)
+fn write[t: codec/encode, w: writer](w, value: t) {
+  let e: text-encoder[w] = .{ w }
+  value.encode[o = codec/opts/default](e)
 }
 
-fn write[t: json-write, w: writer](w, value: t) { value.write-json[o = opts/default](w) }
+fn to-string[t: codec/encode](value: t): string { to-string-with[o = codec/opts/default](value) }
 
-fn to-string[t: json-write](value: t): string {
+fn to-string-with[t: codec/encode, o: static codec/opts](value: t): string {
   let sb = string-builder/new()
-  write(sb.&, value)
+  let e: text-encoder[*string-builder] = .{ w = sb.& }
+  value.encode[o = o](e)
   sb.build()
 }
 
-fn to-string-with[t: json-write, o: static opts](value: t): string {
-  let sb = string-builder/new()
-  value.write-json[o = o](sb.&)
-  sb.build()
-}
-
-fn to-string-pretty[t: json-write](value: t, indent: size): string {
+fn to-string-pretty[t: codec/encode](value: t, indent: size): string {
   let sb = string-builder/new()
   pretty(sb.&, to-string(value), indent)
   sb.build()
 }
-
-fn to-value[t: json-write](value: t): json { parse[json](to-string(value)).! }
 
 fn write-float[w: writer](w, f: f64) {
   if f != f or f == f64/inf or f == f64/neg-inf w.write("null") else f.print-to(w)
@@ -104,36 +101,30 @@ fn write-string[w: writer](w, s: string) {
   w.write-char('"')
 }
 
-impl json-write for json {
-  fn write-json[w: writer, o: static opts](self, w) {
+impl codec/encode for json {
+  fn encode[e: codec/encoder, o: static codec/opts](self, e) {
     if self is {
-      :null -> w.write("null"),
-      :bool b -> b.print-to(w),
-      :int i -> i.print-to(w),
-      :uint u -> u.print-to(w),
-      :float f -> write-float(w, f),
-      :str s -> write-string(w, s),
-      :array items -> {
-        w.write-char('[')
-        w.join-with(items, ",", fn[w] item. item.write-json[o = o](w))
-        w.write-char(']')
-      },
+      :null -> e.write-null(),
+      :bool b -> e.write-bool(b),
+      :int i -> e.write-int(i),
+      :uint u -> e.write-uint(u),
+      :float f -> e.write-float(f),
+      :str s -> e.write-string(s),
+      :array items -> items.encode[o = o](e),
       :object members -> {
-        w.write-char('{')
-        w.join-with(members, ",", fn[w] m. {
-          write-string(w, m.key)
-          w.write-char(':')
-          m.value.write-json[o = o](w)
-        })
-        w.write-char('}')
+        e.begin-map(members.len())
+        for members { e.write-key(it-index, it.key); it.value.encode[o = o](e) }
+        e.end-map()
       }
     }
   }
 }
 
-impl[t] json-write for t {
-  fn write-json[w: writer, o: static opts](self, w) {
-    #meta internal/write-code(o, types/id[t])
+impl codec/decode for json {
+  fn decode[d: codec/decoder, o: static codec/opts](d): result[json, codec/error] {
+    let scratch: list[json] = list/empty()
+    let members: list[{ key: string, value: json }] = list/empty()
+    internal/decode-value(d, mem/current-arena(), scratch.&, members.&)
   }
 }
 
@@ -182,92 +173,36 @@ fn pretty[w: writer](w, compact: string, indent: size) {
   }
 }
 
-type error-kind = either {
-  unexpected-char(char),
-  unexpected-end,
-  control-char,
-  bad-escape,
-  invalid-utf8,
-  bad-number,
-  overflow,
-  depth,
-  trailing,
-  missing-field(string),
-  wrong-type(string),
-  unknown-variant(string),
-}
-type error = { pos: size, kind: error-kind, input: string }
+fn parse[t: codec/decode](input: string): result[t, codec/error] { parse-with[t, codec/opts/default](input) }
 
-impl print for error {
-  fn print-to[w: writer](self, w) {
-    if self.kind is {
-      :unexpected-char c -> { w.write("unexpected '"); w.write-char(c); w.write("'") },
-      :unexpected-end -> w.write("unexpected end of input"),
-      :control-char -> w.write("control character in string"),
-      :bad-escape -> w.write("bad escape sequence"),
-      :invalid-utf8 -> w.write("invalid utf-8"),
-      :bad-number -> w.write("bad number"),
-      :overflow -> w.write("number out of range"),
-      :depth -> w.write("nesting too deep"),
-      :trailing -> w.write("trailing content after value"),
-      :missing-field f -> { w.write("missing field "); w.write(f) },
-      :wrong-type t -> { w.write("expected "); w.write(t) },
-      :unknown-variant v -> { w.write("unknown variant "); w.write(v) },
-    }
-    let line: size = 1
-    let col: size = 1
-    let i: size = 0
-    let end = if self.pos < self.input.len() self.pos else self.input.len()
-    while i < end {
-      if self.input.[i] == '\n' { line = line + 1; col = 1 } else { col = col + 1 }
-      i = i + 1
-    }
-    w.write(" at line ")
-    line.print-to(w)
-    w.write(", column ")
-    col.print-to(w)
-  }
-}
-
-ability json-read {
-  fn read-json[o: static opts](r: *reader): result[self, error]
-}
-
-fn parse[t: json-read](input: string): result[t, error] { parse-with[t, opts/default](input) }
-
-fn parse-with[t: json-read, o: static opts](input: string): result[t, error] {
-  let r = reader/new(input)
+fn parse-with[t: codec/decode, o: static codec/opts](input: string): result[t, codec/error] {
+  let r = text-decoder/new(input)
   r.skip-ws()
-  let value = json-read@(t)/read-json[o](r.&).try
+  let value = codec/decode@(t)/decode[o = o](r.&).try
   r.skip-ws()
-  if not r.at-end() { return r.fail(:trailing) }
+  if not r.at-end() { return r.&.error(:trailing) }
   :ok value
 }
 
-fn from-value[t: json-read](value: json): result[t, error] { parse[t](to-string(value)) }
+fn to-value[t: codec/encode](value: t): json {
+  let e: tree-encoder = .{ frames = list/empty(), out = :null }
+  value.encode[o = codec/opts/default](e.&)
+  e.out
+}
 
-type reader = {
+fn from-value[t: codec/decode](value: json): result[t, codec/error] {
+  let d: tree-decoder = .{ next = value, seqs = list/empty(), maps = list/empty() }
+  codec/decode@(t)/decode[o = codec/opts/default](d.&)
+}
+
+type text-decoder = {
   input: string,
   pos: size,
   depth: size,
-  max-depth: size,
-  arena: *core/arena,
-  scratch: list[json],
-  members: list[{ key: string, value: json }],
 }
 
-ns for reader {
-  fn new(input: string): reader {
-    .{
-      input,
-      pos = 0,
-      depth = 0,
-      max-depth = 1024,
-      arena = mem/current-arena(),
-      scratch = list/empty(),
-      members = list/empty(),
-    }
-  }
+ns for text-decoder {
+  fn new(input: string): text-decoder { .{ input, pos = 0, depth = 0 } }
 
   fn(inline) at-end(*self): bool { self.pos >= self.input.len() }
 
@@ -275,15 +210,11 @@ ns for reader {
     if self.pos < self.input.len() self.input.[self.pos] else '\0'
   }
 
-  fn fail[t](*self, kind: error-kind): result[t, error] {
-    :err .{ pos = self.pos, kind, input = self.input }
+  fn unexpected[t](*self): result[t, codec/error] {
+    if self.at-end() self.error(:unexpected-end) else self.error(:unexpected-char self.peek())
   }
 
-  fn unexpected[t](*self): result[t, error] {
-    if self.at-end() self.fail(:unexpected-end) else self.fail(:unexpected-char self.peek())
-  }
-
-  fn expect(*self, c: char): result[empty, error] {
+  fn expect(*self, c: char): result[empty, codec/error] {
     if self.peek() == c {
       self.pos = self.pos + 1
       :ok(.{})
@@ -309,55 +240,27 @@ ns for reader {
     self.pos = pos
   }
 
-  fn enter(*self): result[empty, error] {
-    self.depth = self.depth + 1
-    if self.depth > self.max-depth { return self.fail(:depth) }
-    :ok(.{})
-  }
-
-  fn array-start(*self): result[empty, error] {
-    self.expect('[').try
-    self.enter()
-  }
-
-  fn object-start(*self): result[empty, error] {
-    self.expect('{').try
-    self.enter()
-  }
-
-  fn next-item(*self, first: bool): result[bool, error] {
+  fn(inline) begin-entry(*self, close: char, index: size): result[bool, codec/error] {
     self.skip-ws()
-    if self.peek() == ']' {
+    if self.peek() == close {
       self.pos = self.pos + 1
       self.depth = self.depth - 1
       return :ok false
     }
-    if not first {
+    if index > 0 {
       self.expect(',').try
       self.skip-ws()
     }
     :ok true
   }
 
-  fn next-key(*self, first: bool): result[?string, error] {
-    self.skip-ws()
-    if self.peek() == '}' {
-      self.pos = self.pos + 1
-      self.depth = self.depth - 1
-      return :ok :none
-    }
-    if not first {
-      self.expect(',').try
-      self.skip-ws()
-    }
-    let key = self.read-string().try
-    self.skip-ws()
-    self.expect(':').try
-    self.skip-ws()
-    :ok :some key
+  fn enter(*self): result[empty, codec/error] {
+    self.depth = self.depth + 1
+    if self.depth > codec/max-depth { return self.error(:depth) }
+    :ok(.{})
   }
 
-  fn literal(*self, text: string): result[empty, error] {
+  fn expect-literal(*self, text: string): result[empty, codec/error] {
     let n = text.len()
     if self.pos + n > self.input.len() { return self.unexpected() }
     let have = self.input.data-ptr().add-bytes(self.pos)
@@ -371,21 +274,136 @@ ns for reader {
     :ok(.{})
   }
 
-  fn read-null(*self): result[empty, error] { self.literal("null") }
+  fn read-hex4(*self, at: size): result[u32, codec/error] {
+    if at + 4 > self.input.len() { return self.error(:bad-escape) }
+    let v: u32 = 0
+    let j: size = 0
+    while j < 4 {
+      require self.input.[at + j].to-ascii-hex-digit() is :some d else { return self.error(:bad-escape) }
+      v = (v << 4) + d.widen[u32]
+      j = j + 1
+    }
+    :ok v
+  }
 
-  fn read-bool(*self): result[bool, error] {
+  fn scan-number(*self): result[{ end: size, is-int: bool, neg: bool }, codec/error] {
+    let input = self.input
+    let len = input.len()
+    let i = self.pos
+    let neg = i < len and input.[i] == '-'
+    if neg { i = i + 1 }
+    if i >= len { self.pos = i; return self.error(:unexpected-end) }
+    if input.[i] == '0' {
+      i = i + 1
+    } else if input.[i].is-ascii-digit() {
+      i = internal/skip-digits(input, i)
+    } else {
+      self.pos = i
+      return self.error(:bad-number)
+    }
+    let is-int = true
+    if i < len and input.[i] == '.' {
+      is-int = false
+      i = i + 1
+      let digits = internal/skip-digits(input, i)
+      if digits == i { self.pos = i; return self.error(:bad-number) }
+      i = digits
+    }
+    if i < len and (input.[i] == 'e' or input.[i] == 'E') {
+      is-int = false
+      i = i + 1
+      if i < len and (input.[i] == '+' or input.[i] == '-') { i = i + 1 }
+      let digits = internal/skip-digits(input, i)
+      if digits == i { self.pos = i; return self.error(:bad-number) }
+      i = digits
+    }
+    :ok .{ end = i, is-int, neg }
+  }
+
+  fn parse-magnitude(*self, n: { end: size, is-int: bool, neg: bool }): ?u64 {
+    let start = if n.neg self.pos + 1 else self.pos
+    u64/from-string(self.input.slice(start, n.end)).as-ok()
+  }
+
+  fn read-f64-to(*self, end: size): result[f64, codec/error] {
+    let out: f64 = uninit
+    let r = core/ffc/parse_double(end - self.pos, self.input.data-ptr().add-bytes(self.pos), out.&)
+    if r.outcome == core/ffc/FFC_OUTCOME_INVALID_INPUT { return self.error(:bad-number) }
+    self.pos = end
+    :ok out
+  }
+
+}
+
+impl codec/decoder for *text-decoder {
+  fn(inline) peek-kind(self): result[codec/value-kind, codec/error] {
+    let c = self.peek()
+    if c is {
+      '{' -> :ok :map,
+      '[' -> :ok :seq,
+      '"' -> :ok :string,
+      't' or 'f' -> :ok :bool,
+      'n' -> :ok :null,
+      _ -> if c == '-' or c.is-ascii-digit() :ok :number else self.unexpected()
+    }
+  }
+
+  fn read-null(self): result[empty, codec/error] { self.expect-literal("null") }
+
+  fn read-bool(self): result[bool, codec/error] {
     if self.peek() == 't' {
-      self.literal("true").try
+      self.expect-literal("true").try
       :ok true
     } else if self.peek() == 'f' {
-      self.literal("false").try
+      self.expect-literal("false").try
       :ok false
     } else {
       self.unexpected()
     }
   }
 
-  fn read-string(*self): result[string, error] {
+  fn read-int(self, min: i64, max: i64): result[i64, codec/error] {
+    let n = self.scan-number().try
+    if not n.is-int { return self.error(:wrong-type "integer") }
+    require self.parse-magnitude(n) is :some digits else { return self.error(:overflow) }
+    require i64/from-magnitude(n.neg, digits) is :some v else { return self.error(:overflow) }
+    if v < min or v > max { return self.error(:overflow) }
+    self.pos = n.end
+    :ok v
+  }
+
+  fn read-uint(self, max: u64): result[u64, codec/error] {
+    let n = self.scan-number().try
+    if not n.is-int { return self.error(:wrong-type "integer") }
+    require self.parse-magnitude(n) is :some digits else { return self.error(:overflow) }
+    if (n.neg and digits != 0) or digits > max { return self.error(:overflow) }
+    self.pos = n.end
+    :ok digits
+  }
+
+  fn read-float(self): result[f64, codec/error] {
+    let n = self.scan-number().try
+    self.read-f64-to(n.end)
+  }
+
+  fn(inline) read-number(self): result[codec/number, codec/error] {
+    let n = self.scan-number().try
+    if n.is-int {
+      if self.parse-magnitude(n) is :some digits {
+        if i64/from-magnitude(n.neg, digits) is :some v {
+          self.pos = n.end
+          return :ok :int v
+        }
+        if not n.neg {
+          self.pos = n.end
+          return :ok :uint digits
+        }
+      }
+    }
+    :ok :float self.read-f64-to(n.end).try
+  }
+
+  fn read-string(self): result[string, codec/error] {
     if self.peek() != '"' { return self.unexpected() }
     let input = self.input
     let len = input.len()
@@ -393,21 +411,21 @@ ns for reader {
     let seg = internal/string-stop(input, start)
     if seg.stop >= len {
       self.pos = len
-      return self.fail(:unexpected-end)
+      return self.error(:unexpected-end)
     }
     let c = input.[seg.stop]
     if c == '"' {
       let s = input.slice(start, seg.stop)
       if seg.high and not utf8/is-valid(s.span-bytes()) {
         self.pos = start
-        return self.fail(:invalid-utf8)
+        return self.error(:invalid-utf8)
       }
       self.pos = seg.stop + 1
       return :ok s
     }
     if c < ' ' {
       self.pos = seg.stop
-      return self.fail(:control-char)
+      return self.error(:control-char)
     }
     let sb = string-builder/new()
     sb.write(input.slice(start, seg.stop))
@@ -416,7 +434,7 @@ ns for reader {
     loop {
       self.pos = i
       i = i + 1
-      if i >= len { return self.fail(:unexpected-end) }
+      if i >= len { return self.error(:unexpected-end) }
       let e = input.[i]
       i = i + 1
       if e is {
@@ -432,24 +450,24 @@ ns for reader {
           let cp = self.read-hex4(i).try
           i = i + 4
           if cp >= 0xD800 and cp <= 0xDBFF {
-            if i + 6 > len or input.[i] != '\\' or input.[i + 1] != 'u' { return self.fail(:bad-escape) }
+            if i + 6 > len or input.[i] != '\\' or input.[i + 1] != 'u' { return self.error(:bad-escape) }
             let low = self.read-hex4(i + 2).try
-            if low < 0xDC00 or low > 0xDFFF { return self.fail(:bad-escape) }
+            if low < 0xDC00 or low > 0xDFFF { return self.error(:bad-escape) }
             i = i + 6
             cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00)
           } else if cp >= 0xDC00 and cp <= 0xDFFF {
-            return self.fail(:bad-escape)
+            return self.error(:bad-escape)
           }
           utf8/write-codepoint(sb.&, cp)
         },
-        _ -> return self.fail(:bad-escape)
+        _ -> return self.error(:bad-escape)
       }
       let next = internal/string-stop(input, i)
       sb.write(input.slice(i, next.stop))
       high = high or next.high
       if next.stop >= len {
         self.pos = len
-        return self.fail(:unexpected-end)
+        return self.error(:unexpected-end)
       }
       let c = input.[next.stop]
       if c == '"' {
@@ -458,208 +476,179 @@ ns for reader {
       }
       if c < ' ' {
         self.pos = next.stop
-        return self.fail(:control-char)
+        return self.error(:control-char)
       }
       i = next.stop
     }
     let s = sb.build()
     if high and not utf8/is-valid(s.span-bytes()) {
       self.pos = start
-      return self.fail(:invalid-utf8)
+      return self.error(:invalid-utf8)
     }
     :ok s
   }
 
-  fn read-hex4(*self, at: size): result[u32, error] {
-    if at + 4 > self.input.len() { return self.fail(:bad-escape) }
-    let v: u32 = 0
-    let j: size = 0
-    while j < 4 {
-      require self.input.[at + j].to-ascii-hex-digit() is :some d else { return self.fail(:bad-escape) }
-      v = (v << 4) + d.widen[u32]
-      j = j + 1
-    }
-    :ok v
+  fn(inline) begin-seq(self): result[empty, codec/error] {
+    self.expect('[').try
+    self.enter()
   }
 
-  fn scan-number(*self): result[{ end: size, is-int: bool, neg: bool }, error] {
-    let input = self.input
-    let len = input.len()
-    let i = self.pos
-    let neg = i < len and input.[i] == '-'
-    if neg { i = i + 1 }
-    if i >= len { self.pos = i; return self.fail(:unexpected-end) }
-    if input.[i] == '0' {
-      i = i + 1
-    } else if input.[i].is-ascii-digit() {
-      i = internal/skip-digits(input, i)
-    } else {
-      self.pos = i
-      return self.fail(:bad-number)
-    }
-    let is-int = true
-    if i < len and input.[i] == '.' {
-      is-int = false
-      i = i + 1
-      let digits = internal/skip-digits(input, i)
-      if digits == i { self.pos = i; return self.fail(:bad-number) }
-      i = digits
-    }
-    if i < len and (input.[i] == 'e' or input.[i] == 'E') {
-      is-int = false
-      i = i + 1
-      if i < len and (input.[i] == '+' or input.[i] == '-') { i = i + 1 }
-      let digits = internal/skip-digits(input, i)
-      if digits == i { self.pos = i; return self.fail(:bad-number) }
-      i = digits
-    }
-    :ok .{ end = i, is-int, neg }
+  fn(inline) begin-item(self, index: size): result[bool, codec/error] { self.begin-entry(']', index) }
+
+  fn begin-map(self): result[empty, codec/error] {
+    self.expect('{').try
+    self.enter()
   }
 
-  fn digits-u64(*self, start: size, end: size): ?u64 {
-    u64/from-string(self.input.slice(start, end)).as-ok()
+  fn read-key(self, index: size): result[?string, codec/error] {
+    if not self.begin-entry('}', index).try { return :ok :none }
+    let key = self.read-string().try
+    self.skip-ws()
+    self.expect(':').try
+    self.skip-ws()
+    :ok :some key
   }
 
-  fn read-f64(*self): result[f64, error] {
-    let n = self.scan-number().try
-    self.read-f64-to(n.end)
-  }
-
-  fn read-f64-to(*self, end: size): result[f64, error] {
-    let out: f64 = uninit
-    let r = core/ffc/parse_double(end - self.pos, self.input.data-ptr().add-bytes(self.pos), out.&)
-    if r.outcome == core/ffc/FFC_OUTCOME_INVALID_INPUT { return self.fail(:bad-number) }
-    self.pos = end
-    :ok out
-  }
-
-  fn read-int(*self, min: i64, max: i64): result[i64, error] {
-    let n = self.scan-number().try
-    if not n.is-int { return self.fail(:wrong-type "integer") }
-    let start = if n.neg self.pos + 1 else self.pos
-    require self.digits-u64(start, n.end) is :some digits else { return self.fail(:overflow) }
-    require i64/from-magnitude(n.neg, digits) is :some v else { return self.fail(:overflow) }
-    if v < min or v > max { return self.fail(:overflow) }
-    self.pos = n.end
-    :ok v
-  }
-
-  fn read-u64(*self): result[u64, error] {
-    let n = self.scan-number().try
-    if not n.is-int { return self.fail(:wrong-type "integer") }
-    let start = if n.neg self.pos + 1 else self.pos
-    require self.digits-u64(start, n.end) is :some digits else { return self.fail(:overflow) }
-    if n.neg and digits != 0 { return self.fail(:overflow) }
-    self.pos = n.end
-    :ok digits
-  }
-
-  fn read-number(*self): result[json, error] {
-    let n = self.scan-number().try
-    if n.is-int {
-      let start = if n.neg self.pos + 1 else self.pos
-      if self.digits-u64(start, n.end) is :some digits {
-        if i64/from-magnitude(n.neg, digits) is :some v {
-          self.pos = n.end
-          return :ok :int v
-        }
-        if not n.neg {
-          self.pos = n.end
-          return :ok :uint digits
-        }
-      }
-    }
-    :ok :float self.read-f64-to(n.end).try
-  }
-
-  fn read-value(*self): result[json, error] {
-    let c = self.peek()
-    if c is {
-      '{' -> self.read-object(),
-      '[' -> self.read-array(),
-      '"' -> { :ok :str self.read-string().try },
-      't' -> { self.literal("true").try; :ok :bool true },
-      'f' -> { self.literal("false").try; :ok :bool false },
-      'n' -> { self.literal("null").try; :ok :null },
-      _ -> if c == '-' or c.is-ascii-digit() self.read-number() else self.unexpected()
-    }
-  }
-
-  fn read-array(*self): result[json, error] {
-    self.array-start().try
-    let mark = self.scratch.len
-    let first = true
-    while self.next-item(first).try {
-      let v = self.read-value().try
-      self.scratch.push(v)
-      first = false
-    }
-    let items = self.arena.push-span(self.scratch.as-span().drop(mark)).as-span()
-    self.scratch.len = mark
-    :ok :array items
-  }
-
-  fn read-object(*self): result[json, error] {
-    self.object-start().try
-    let mark = self.members.len
-    let first = true
-    loop {
-      require self.next-key(first).try is :some key else { break }
-      first = false
-      let value = self.read-value().try
-      self.members.push(.{ key, value })
-    }
-    let members = self.arena.push-span(self.members.as-span().drop(mark)).as-span()
-    self.members.len = mark
-    :ok :object members
-  }
-
-  fn skip-value(*self): result[empty, error] {
-    let c = self.peek()
-    if c is {
-      '{' -> {
-        self.object-start().try
-        let first = true
-        loop {
-          require self.next-key(first).try is :some _ else { break }
-          first = false
-          self.skip-value().try
-        }
-        :ok(.{})
+  fn skip-value(self): result[empty, codec/error] {
+    if self.peek-kind().try is {
+      :map -> {
+        self.begin-map().try
+        let n: size = 0
+        while self.read-key(n).try is :some _ { self.skip-value().try; n = n + 1 }
       },
-      '[' -> {
-        self.array-start().try
-        let first = true
-        while self.next-item(first).try {
-          self.skip-value().try
-          first = false
-        }
-        :ok(.{})
+      :seq -> {
+        self.begin-seq().try
+        let n: size = 0
+        while self.begin-item(n).try { self.skip-value().try; n = n + 1 }
       },
-      '"' -> { self.read-string().try; :ok(.{}) },
-      't' -> self.literal("true"),
-      'f' -> self.literal("false"),
-      'n' -> self.literal("null"),
-      _ -> {
-        if not (c == '-' or c.is-ascii-digit()) { return self.unexpected() }
-        self.pos = self.scan-number().try.end
-        :ok(.{})
-      }
+      :string -> { let _ = self.read-string().try },
+      :bool -> { let _ = self.read-bool().try },
+      :null -> self.read-null().try,
+      :number -> { self.pos = self.scan-number().try.end },
     }
+    :ok(.{})
+  }
+
+  fn error[t](self, kind: codec/error-kind): result[t, codec/error] {
+    :err mem/new[codec/error-info](.{ kind, location = :some .{ pos = self.pos, input = self.input } })
   }
 }
 
-impl json-read for json {
-  fn read-json[o: static opts](r: *reader): result[json, error] { r.read-value() }
+type tree-encoder = {
+  frames: list[{ is-map: bool, key: string, items: list[json], members: list[{ key: string, value: json }] }],
+  out: json,
 }
 
-impl[t] json-read for t {
-  fn read-json[o: static opts](r: *reader): result[t, error] {
-    #meta internal/read-code(o, types/id[t])
+ns for tree-encoder {
+  fn emit(*self, value: json) {
+    if self.frames.len == 0 { self.out = value; return }
+    let f = self.frames.[self.frames.len - 1].&
+    if f.is-map f.members.push(.{ key = f.key, value }) else f.items.push(value)
   }
+
+  fn open(*self, is-map: bool) {
+    self.frames.push(.{ is-map, key = "", items = list/empty(), members = list/empty() })
+  }
+}
+
+impl codec/encoder for *tree-encoder {
+  fn write-null(self) { self.emit(:null) }
+  fn write-bool(self, b: bool) { self.emit(:bool b) }
+  fn write-int(self, i: i64) { self.emit(:int i) }
+  fn write-uint(self, u: u64) { self.emit(:uint u) }
+  fn write-float(self, f: f64) { self.emit(:float f) }
+  fn write-string(self, s: string) { self.emit(:str s) }
+  fn begin-seq(self, _len: size) { self.open(false) }
+  fn begin-item(_self: self, _index: size) {}
+  fn end-seq(self) { self.emit(:array self.frames.pop().!.items.as-span()) }
+  fn begin-map(self, _len: size) { self.open(true) }
+  fn write-key(self, _index: size, key: string) { self.frames.[self.frames.len - 1].key = key }
+  fn end-map(self) { self.emit(:object self.frames.pop().!.members.as-span()) }
+}
+
+type tree-decoder = { next: json, seqs: list[span[json]], maps: list[span[{ key: string, value: json }]] }
+
+impl codec/decoder for *tree-decoder {
+  fn peek-kind(self): result[codec/value-kind, codec/error] {
+    :ok(if self.next is {
+      :null -> :null,
+      :bool _ -> :bool,
+      :int _ or :uint _ or :float _ -> :number,
+      :str _ -> :string,
+      :array _ -> :seq,
+      :object _ -> :map,
+    })
+  }
+  fn read-null(self): result[empty, codec/error] { if self.next is :null { :ok(.{}) } else self.error(:wrong-type "null") }
+  fn read-bool(self): result[bool, codec/error] { if self.next is :bool b { :ok b } else self.error(:wrong-type "bool") }
+  fn read-number(self): result[codec/number, codec/error] {
+    if self.next is {
+      :int i -> :ok :int i,
+      :uint u -> :ok :uint u,
+      :float f -> :ok :float f,
+      _ -> self.error(:wrong-type "number")
+    }
+  }
+  fn read-string(self): result[string, codec/error] { if self.next is :str s { :ok s } else self.error(:wrong-type "string") }
+  fn begin-seq(self): result[empty, codec/error] {
+    require self.next is :array items else { return self.error(:wrong-type "array") }
+    self.seqs.push(items)
+    :ok(.{})
+  }
+  fn begin-item(self, index: size): result[bool, codec/error] {
+    let items = self.seqs.[self.seqs.len - 1]
+    if index == items.len() { let _ = self.seqs.pop(); return :ok false }
+    self.next = items.[index]
+    :ok true
+  }
+  fn begin-map(self): result[empty, codec/error] {
+    require self.next is :object members else { return self.error(:wrong-type "object") }
+    self.maps.push(members)
+    :ok(.{})
+  }
+  fn read-key(self, index: size): result[?string, codec/error] {
+    let members = self.maps.[self.maps.len - 1]
+    if index == members.len() { let _ = self.maps.pop(); return :ok :none }
+    self.next = members.[index].value
+    :ok :some members.[index].key
+  }
+  fn skip-value(_self: self): result[empty, codec/error] { :ok(.{}) }
+  fn error[t](self, kind: codec/error-kind): result[t, codec/error] { :err mem/new[codec/error-info](.{ kind, location = :none }) }
 }
 
 ns internal {
+  fn decode-value[d: codec/decoder](d, arena: *core/arena, scratch: *list[json], members: *list[{ key: string, value: json }]): result[json, codec/error] {
+    if d.peek-kind().try is {
+      :null -> { d.read-null().try; :ok :null },
+      :bool -> { :ok :bool d.read-bool().try },
+      :number -> if d.read-number().try is {
+        :int i -> :ok :int i,
+        :uint u -> :ok :uint u,
+        :float f -> :ok :float f,
+      },
+      :string -> { :ok :str d.read-string().try },
+      :seq -> {
+        d.begin-seq().try
+        let mark = scratch.len
+        while d.begin-item(scratch.len - mark).try { scratch.push(decode-value(d, arena, scratch, members).try) }
+        let items = arena.push-span(scratch.as-span().drop(mark)).as-span()
+        scratch.len = mark
+        :ok :array items
+      },
+      :map -> {
+        d.begin-map().try
+        let mark = members.len
+        loop {
+          require d.read-key(members.len - mark).try is :some key else { break }
+          members.push(.{ key, value = decode-value(d, arena, scratch, members).try })
+        }
+        let out = arena.push-span(members.as-span().drop(mark)).as-span()
+        members.len = mark
+        :ok :object out
+      }
+    }
+  }
+
   fn write-escape[w: writer](w, c: char) {
     w.write-char('\\')
     if c is {
@@ -700,65 +689,6 @@ ns internal {
       i = i + 1
     }
     len
-  }
-
-  fn write-code(o: opts, id: types/type-id): code {
-    let cb = code-builder/new()
-    if id.instance-of[opt] {
-      cb.line(`if self is { :some x -> x.write-json[o = o](w), :none -> w.write("null") }`)
-    } else if id.instance-of[list] or id.instance-of[span] {
-      write-seq-code(cb.&)
-    } else if id.schema() is {
-      :bool -> cb.line(`self.print-to(w)`),
-      :int _ -> cb.line(`self.print-to(w)`),
-      :float _ -> cb.line(if id == types/id[f32] `write-float(w, self.widen[f64])` else `write-float(w, self)`),
-      :string -> cb.line(`write-string(w, self)`),
-      :char -> cb.line(`write-string(w, self.to-string())`),
-      :array _ -> write-seq-code(cb.&),
-      :reference _ -> cb.line(`self.*.write-json[o = o](w)`),
-      :enum _ -> cb.line(`write-string(w, self.enum-name())`),
-      :struct .{ fields } -> {
-        let flag = false
-        if o.skip-none {
-          for f in fields { if f.type-id.instance-of[opt] { flag = true } }
-        }
-        cb.line(`w.write-char('{')`)
-        if flag cb.line(`let first = true`)
-        for f in fields {
-          let key = meta/str-lit(`"${o.get-field-key(f.name)}":`)
-          let write-key = if flag `if first { first = false } else { w.write-char(',') }; w.write($key)`
-            else if it-index == 0 `w.write($key)`
-            else `w.write-char(','); w.write($key)`
-          if flag and f.type-id.instance-of[opt] {
-            cb.line(`if self.${f.name} is :some x { $write-key; x.write-json[o = o](w) }`)
-          } else {
-            cb.line(`$write-key; self.${f.name}.write-json[o = o](w)`)
-          }
-        }
-        cb.line(`w.write-char('}')`)
-      },
-      :either .{ variants } -> {
-        cb.line("if self is {")
-        for v in variants {
-          let name = meta/str-lit(`"${o.apply-key-case(v.name)}"`)
-          if v.payload is :some _ {
-            let key = meta/str-lit(`{"${o.apply-key-case(v.name)}":`)
-            cb.line(`:${v.name} p -> { w.write($key); p.write-json[o = o](w); w.write-char('}') },`)
-          } else {
-            cb.line(`:${v.name} -> w.write($name),`)
-          }
-        }
-        cb.line("}")
-      },
-      _ -> crash("json: no encoding for ${id.name()}")
-    }
-    cb.build()
-  }
-
-  fn write-seq-code(cb: *code-builder) {
-    cb.line(`w.write-char('[')`)
-    cb.line(`for self { if it-index > 0 w.write-char(','); it.write-json[o = o](w) }`)
-    cb.line(`w.write-char(']')`)
   }
 
   fn newline[w: writer](w, depth: size, indent: size) {
@@ -811,120 +741,5 @@ ns internal {
       i = i + 1
     }
     .{ stop = len, high }
-  }
-
-  fn read-of(id: types/type-id): string { `json-read@(${id.spell()})/read-json[o](r).try` }
-
-  fn read-seq-code(cb: *code-builder, elem: types/type-id) {
-    cb.line(`r.array-start().try`)
-    cb.line(`let items = list/empty[${elem.spell()}]()`)
-    cb.line(`let first = true`)
-    cb.line(`while r.next-item(first).try { items.push(${read-of(elem)}); first = false }`)
-  }
-
-  fn read-code(o: opts, id: types/type-id): code {
-    let cb = code-builder/new()
-    if id.elem-of[opt] is :some inner {
-      cb.line(`if r.peek() == 'n' { r.read-null().try; :ok :none } else { :ok :some ${read-of(inner)} }`)
-    } else if id.elem-of[list] is :some elem {
-      read-seq-code(cb.&, elem)
-      cb.line(`:ok items`)
-    } else if id.elem-of[span] is :some elem {
-      read-seq-code(cb.&, elem)
-      cb.line(`:ok items.as-span()`)
-    } else if id.schema() is {
-      :int :u64 -> cb.line(`r.read-u64()`),
-      :int :i64 -> cb.line(`r.read-int(i64/min-value, i64/max-value)`),
-      :int k -> {
-        let t = k.enum-name()
-        cb.line(`:ok r.read-int($t/min-value, $t/max-value).try.trunc[$t]`)
-      },
-      :float :f32 -> cb.line(`:ok r.read-f64().try.trunc[f32]`),
-      :float :f64 -> cb.line(`r.read-f64()`),
-      :bool -> cb.line(`r.read-bool()`),
-      :string -> cb.line(`r.read-string()`),
-      :char -> {
-        cb.line(`let s = r.read-string().try`)
-        cb.line(`if s.len() != 1 { return r.fail(:wrong-type "single character") }`)
-        cb.line(`:ok s.[0]`)
-      },
-      :array .{ element-type-id, size } -> {
-        let n = size.!
-        read-seq-code(cb.&, element-type-id)
-        cb.line(`if items.len() != $n { return r.fail(:wrong-type "array of $n") }`)
-        cb.line(`:ok items.as-span().to-array[${element-type-id.spell()}, $n]`)
-      },
-      :reference .{ inner-type-id } -> cb.line(`:ok mem/new(${read-of(inner-type-id)})`),
-      :enum .{ values } -> {
-        cb.line(`let s = r.read-string().try`)
-        for v in values {
-          let name = meta/str-lit(o.apply-key-case(v.name))
-          cb.line(`${if it-index == 0 "if" else "else if"} s == $name { :ok :${v.name} }`)
-        }
-        cb.line(`else { r.fail(:unknown-variant s) }`)
-      },
-      :either .{ variants } -> {
-        cb.line(`if r.peek() == '"' {`)
-        cb.line(`let s = r.read-string().try`)
-        for v in variants {
-          if v.payload is :none {
-            let name = meta/str-lit(o.apply-key-case(v.name))
-            cb.line(`if s == $name { return :ok :${v.name} }`)
-          }
-        }
-        cb.line(`r.fail(:unknown-variant s)`)
-        cb.line(`} else {`)
-        cb.line(`r.object-start().try`)
-        cb.line(`require r.next-key(true).try is :some key else { return r.fail(:wrong-type "variant") }`)
-        cb.line(`let v: ${id.spell()} = uninit`)
-        let first = true
-        for v in variants {
-          if v.payload is :some p {
-            let name = meta/str-lit(o.apply-key-case(v.name))
-            cb.line(`${if first "if" else "else if"} key == $name { v = :${v.name} (${read-of(p.type-id)}) }`)
-            first = false
-          }
-        }
-        cb.line(`${if first "" else "else "}{ return r.fail(:unknown-variant key) }`)
-        cb.line(`if r.next-key(false).try is :some _ { return r.fail(:wrong-type "single-key variant object") }`)
-        cb.line(`:ok v`)
-        cb.line(`}`)
-      },
-      :struct .{ fields } -> {
-        cb.line(`r.object-start().try`)
-        for f in fields {
-          if f.type-id.instance-of[opt] {
-            cb.line(`let f$it-index: ${f.type-id.spell()} = :none`)
-          } else {
-            cb.line(`let f$it-index: ?${f.type-id.spell()} = :none`)
-          }
-        }
-        cb.line(`let first = true`)
-        cb.line(`loop {`)
-        cb.line(`require r.next-key(first).try is :some key else { break }`)
-        cb.line(`first = false`)
-        for f in fields {
-          let key = meta/str-lit(o.get-field-key(f.name))
-          let assign = if f.type-id.instance-of[opt] `f$it-index = ${read-of(f.type-id)}`
-            else `f$it-index = :some (${read-of(f.type-id)})`
-          cb.line(`${if it-index == 0 "if" else "else if"} key == $key { $assign }`)
-        }
-        cb.line(`${if fields.len() == 0 "" else "else "}{ r.skip-value().try }`)
-        cb.line(`}`)
-        for f in fields {
-          if not f.type-id.instance-of[opt] {
-            cb.line(`require f$it-index is :some v$it-index else { return r.fail(:missing-field ${meta/str-lit(o.get-field-key(f.name))}) }`)
-          }
-        }
-        cb.line(`:ok(.{`)
-        for f in fields {
-          let v = if f.type-id.instance-of[opt] `f$it-index` else `v$it-index`
-          cb.line(`${f.name} = $v,`)
-        }
-        cb.line(`})`)
-      },
-      _ -> crash("json: no decoding for ${id.name()}")
-    }
-    cb.build()
   }
 }

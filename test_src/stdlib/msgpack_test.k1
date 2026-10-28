@@ -1,0 +1,60 @@
+ns msgpack_test
+use std/msgpack
+use std/json
+use std/codec
+
+type contact = either { none, email(string) }
+type user = { name: string, age: u32, nick: ?string, contact: contact, scores: list[i64] }
+type tree = either { leaf, node(*tree) }
+
+fn hex(bytes: span[byte]): string { bytes.to-hex() }
+
+fn repeat(s: string, n: size): string {
+  let sb = string-builder/new()
+  sb.repeat(s, n)
+  sb.build()
+}
+
+fn(test) encodes-the-spec-formats() {
+  let u: user = .{ name = "Ada", age = 36, nick = :none, contact = :email "a", scores = [1, -1, 300] }
+  assert-equals(hex(msgpack/to-bytes(u)), "85a46e616d65a3416461a361676524a46e69636bc0a7636f6e7461637481a5656d61696ca161a673636f7265739301ffcd012c")
+  assert-equals(hex(msgpack/to-bytes(-33)), "d0df")
+  assert-equals(hex(msgpack/to-bytes(-32768)), "d18000")
+  assert-equals(hex(msgpack/to-bytes(i64/min-value)), "d38000000000000000")
+  assert-equals(hex(msgpack/to-bytes(65536)), "ce00010000")
+  assert-equals(hex(msgpack/to-bytes(u64/max-value)), "cfffffffffffffffff")
+  assert-equals(hex(msgpack/to-bytes(1.5)), "cb3ff8000000000000")
+  assert-equals(hex(msgpack/to-bytes(repeat("x", 32)).take(2)), "d920")
+  assert-equals(hex(msgpack/to-bytes(repeat("x", 256)).take(3)), "da0100")
+  assert-equals(hex(msgpack/to-bytes(list/filled(16, true)).take(3)), "dc0010")
+}
+
+fn(test) round-trips() {
+  let u: user = .{ name = "Ada", age = 36, nick = :some "ad", contact = :none, scores = [i64/min-value, -129, 0, 255, i64/max-value] }
+  require msgpack/parse[user](msgpack/to-bytes(u)) is :ok back else { crash("user") }
+  assert(back.nick is :some "ad" and back.contact is :none and back.scores == u.scores)
+  assert(msgpack/parse[u64](msgpack/to-bytes(u64/max-value)) is :ok v and v == u64/max-value)
+  assert(msgpack/parse[f32](msgpack/to-bytes(2.5: f32)) is :ok 2.5)
+  assert(msgpack/parse[string](span/from-hex("db0000000178").!) is :ok "x")
+  require msgpack/parse[json/json](msgpack/to-bytes(u)) is :ok tree else { crash("tree") }
+  assert-equals(json/to-string(tree), `{"name":"Ada","age":36,"nick":"ad","contact":"none","scores":[-9223372036854775808,-129,0,255,9223372036854775807]}`)
+  assert(msgpack/parse[{ age: u8 }](msgpack/to-bytes(u)) is :ok a and a.age == 36)
+  assert(msgpack/parse[{ a: u8 }](span/from-hex("84a178c4020102a179d40105a17ac7010a0ba16101").!) is :ok r and r.a == 1)
+}
+
+fn(test) rejects-bad-input() {
+  let bytes = msgpack/to-bytes(.{ name = "n", age = 300 })
+  assert(msgpack/parse[{ name: string, age: u8 }](bytes) is :err e and e.kind is :overflow)
+  assert(msgpack/parse[user](bytes) is :err e and "$e" == "missing field contact")
+  assert(msgpack/parse[string](bytes.take(3)) is :err e and e.kind is :wrong-type "string")
+  assert(msgpack/parse[{ name: string, age: u32 }](bytes.take(bytes.len() - 1)) is :err e and e.kind is :unexpected-end)
+  assert(msgpack/parse[int](msgpack/to-bytes([1, 2])) is :err e and e.kind is :wrong-type "number")
+  assert(msgpack/parse[bool](span/from-hex("c3c3").!) is :err e and e.kind is :trailing)
+  assert(msgpack/parse[string](span/from-hex("a1ff").!) is :err e and e.kind is :invalid-utf8)
+  assert(msgpack/parse[contact](span/from-hex("a3626f62").!) is :err e and e.kind is :unknown-variant "bob")
+  let deep = repeat("91", codec/max-depth + 1)
+  assert(msgpack/parse[json/json](span/from-hex("${deep}c0").!) is :err e and e.kind is :depth)
+  assert(msgpack/parse[{}](span/from-hex("81a162${deep}c0").!) is :err e and e.kind is :depth)
+  let nodes = repeat("81a46e6f6465", codec/max-depth + 1)
+  assert(msgpack/parse[tree](span/from-hex("${nodes}a46c656166").!) is :err e and e.kind is :depth)
+}

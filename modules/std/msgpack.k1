@@ -1,0 +1,284 @@
+ns msgpack
+use codec/encode
+use codec/encoder
+use codec/decoder
+
+ns tag {
+  let positive-fixint-max: u8 = 0x7f
+  let fixmap: u8 = 0x80
+  let fixarray: u8 = 0x90
+  let fixstr: u8 = 0xa0
+  let nil: u8 = 0xc0
+  let never-used: u8 = 0xc1
+  let bool-false: u8 = 0xc2
+  let bool-true: u8 = 0xc3
+  let bin8: u8 = 0xc4
+  let bin16: u8 = 0xc5
+  let bin32: u8 = 0xc6
+  let ext8: u8 = 0xc7
+  let ext16: u8 = 0xc8
+  let ext32: u8 = 0xc9
+  let float32: u8 = 0xca
+  let float64: u8 = 0xcb
+  let uint8: u8 = 0xcc
+  let uint16: u8 = 0xcd
+  let uint32: u8 = 0xce
+  let uint64: u8 = 0xcf
+  let int8: u8 = 0xd0
+  let int16: u8 = 0xd1
+  let int32: u8 = 0xd2
+  let int64: u8 = 0xd3
+  let fixext1: u8 = 0xd4
+  let fixext16: u8 = 0xd8
+  let str8: u8 = 0xd9
+  let str16: u8 = 0xda
+  let str32: u8 = 0xdb
+  let array16: u8 = 0xdc
+  let array32: u8 = 0xdd
+  let map16: u8 = 0xde
+  let map32: u8 = 0xdf
+  let negative-fixint: u8 = 0xe0
+}
+
+let byte-bits: u32 = 8
+let ext-type-size: size = types/size[i8]
+
+type header = { fix: ?{ tag: u8, count: size }, tag8: ?u8, tag16: u8, tag32: u8 }
+let str-header: header = .{ fix = :some .{ tag = tag/fixstr, count = 32 }, tag8 = :some tag/str8, tag16 = tag/str16, tag32 = tag/str32 }
+let array-header: header = .{ fix = :some .{ tag = tag/fixarray, count = 16 }, tag8 = :none, tag16 = tag/array16, tag32 = tag/array32 }
+let map-header: header = .{ fix = :some .{ tag = tag/fixmap, count = 16 }, tag8 = :none, tag16 = tag/map16, tag32 = tag/map32 }
+let bin-header: header = .{ fix = :none, tag8 = :some tag/bin8, tag16 = tag/bin16, tag32 = tag/bin32 }
+let ext-header: header = .{ fix = :none, tag8 = :some tag/ext8, tag16 = tag/ext16, tag32 = tag/ext32 }
+
+ns for header {
+  fn get-fix-length(self, b: u8): ?size {
+    require self.fix is :some f else { return :none }
+    let len = if b >= f.tag (b - f.tag).widen[u64].signed() else f.count
+    if len < f.count :some len else :none
+  }
+
+  fn get-length-size(self, b: u8): ?size {
+    if self.tag8 is :some t and b == t :some(types/size[u8])
+    else if b == self.tag16 :some(types/size[u16])
+    else if b == self.tag32 :some(types/size[u32])
+    else :none
+  }
+
+  fn is-tag(self, b: u8): bool { self.get-fix-length(b) is :some _ or self.get-length-size(b) is :some _ }
+}
+
+type encoder[w] = { w: w }
+
+ns for encoder {
+  fn write-be[w: writer](self: encoder[w], tag: u8, v: u64, bytes: size) {
+    self.w.write-byte(tag)
+    let shift = bytes.unsigned().trunc[u32] * byte-bits
+    while shift > 0 {
+      shift = shift - byte-bits
+      self.w.write-byte((v >> shift).trunc[u8])
+    }
+  }
+
+  fn write-header[w: writer](self: encoder[w], len: size, h: header) {
+    let n = len.unsigned()
+    if h.fix is :some f and len < f.count self.w.write-byte(f.tag | n.trunc[u8])
+    else if h.tag8 is :some t and n <= u8/max-value.widen[u64] self.write-be(t, n, types/size[u8])
+    else if n <= u16/max-value.widen[u64] self.write-be(h.tag16, n, types/size[u16])
+    else self.write-be(h.tag32, n, types/size[u32])
+  }
+}
+
+impl[w: writer] codec/encoder for encoder[w] {
+  fn write-null(self) { self.w.write-byte(tag/nil) }
+  fn write-bool(self, b: bool) { self.w.write-byte(if b tag/bool-true else tag/bool-false) }
+  fn write-int(self, i: i64) {
+    if i >= 0 self.write-uint(i.unsigned())
+    else if i >= tag/negative-fixint.signed().widen[i64] self.w.write-byte(i.trunc[i8].unsigned())
+    else if i >= i8/min-value.widen[i64] self.write-be(tag/int8, i.unsigned(), types/size[i8])
+    else if i >= i16/min-value.widen[i64] self.write-be(tag/int16, i.unsigned(), types/size[i16])
+    else if i >= i32/min-value.widen[i64] self.write-be(tag/int32, i.unsigned(), types/size[i32])
+    else self.write-be(tag/int64, i.unsigned(), types/size[i64])
+  }
+  fn write-uint(self, u: u64) {
+    if u <= tag/positive-fixint-max.widen[u64] self.w.write-byte(u.trunc[u8])
+    else if u <= u8/max-value.widen[u64] self.write-be(tag/uint8, u, types/size[u8])
+    else if u <= u16/max-value.widen[u64] self.write-be(tag/uint16, u, types/size[u16])
+    else if u <= u32/max-value.widen[u64] self.write-be(tag/uint32, u, types/size[u32])
+    else self.write-be(tag/uint64, u, types/size[u64])
+  }
+  fn write-float(self, f: f64) { self.write-be(tag/float64, mem/bitcast[f64, u64](f), types/size[f64]) }
+  fn write-string(self, s: string) {
+    self.write-header(s.len(), str-header)
+    self.w.write(s)
+  }
+  fn begin-seq(self, len: size) { self.write-header(len, array-header) }
+  fn begin-item(_self: self, _index: size) {}
+  fn end-seq(_self: self) {}
+  fn begin-map(self, len: size) { self.write-header(len, map-header) }
+  fn write-key(self, _index: size, key: string) { self.write-string(key) }
+  fn end-map(_self: self) {}
+}
+
+fn write[t: codec/encode, w: writer](w, value: t) {
+  let e: encoder[w] = .{ w }
+  value.encode[o = codec/opts/default](e)
+}
+
+fn to-bytes[t: codec/encode](value: t): span[byte] { to-bytes-with[o = codec/opts/default](value) }
+
+fn to-bytes-with[t: codec/encode, o: static codec/opts](value: t): span[byte] {
+  let out: list[byte] = list/empty()
+  let e: encoder[*list[byte]] = .{ w = out.& }
+  value.encode[o = o](e)
+  out.as-span()
+}
+
+fn parse[t: codec/decode](input: span[byte]): result[t, codec/error] { parse-with[t, codec/opts/default](input) }
+
+fn parse-with[t: codec/decode, o: static codec/opts](input: span[byte]): result[t, codec/error] {
+  let d: decoder = .{ input, pos = 0, counts = list/empty() }
+  let value = codec/decode@(t)/decode[o = o](d.&).try
+  if d.pos != input.len() { return d.&.error(:trailing) }
+  :ok value
+}
+
+type decoder = { input: span[byte], pos: size, counts: list[size] }
+
+ns for decoder {
+  fn peek-byte(*self): result[u8, codec/error] {
+    if self.pos >= self.input.len() { return self.error(:unexpected-end) }
+    :ok self.input.[self.pos]
+  }
+
+  fn read-byte(*self): result[u8, codec/error] {
+    let b = self.peek-byte().try
+    self.pos = self.pos + 1
+    :ok b
+  }
+
+  fn read-bytes(*self, n: size): result[span[byte], codec/error] {
+    if self.pos + n > self.input.len() { return self.error(:unexpected-end) }
+    let bytes = self.input.slice(self.pos, self.pos + n)
+    self.pos = self.pos + n
+    :ok bytes
+  }
+
+  fn read-be(*self, bytes: size): result[u64, codec/error] {
+    let v: u64 = 0
+    for self.read-bytes(bytes).try { v = (v << byte-bits) | it.widen[u64] }
+    :ok v
+  }
+
+  fn read-length(*self, b: u8, h: header): result[?size, codec/error] {
+    if h.get-fix-length(b) is :some len { return :ok :some len }
+    require h.get-length-size(b) is :some bytes else { return :ok :none }
+    :ok :some self.read-be(bytes).try.signed()
+  }
+
+  fn read-header(*self, h: header, what: string): result[size, codec/error] {
+    let b = self.read-byte().try
+    require self.read-length(b, h).try is :some len else { return self.error(:wrong-type what) }
+    :ok len
+  }
+
+  fn push-count(*self, count: size): result[empty, codec/error] {
+    if self.counts.len >= codec/max-depth { return self.error(:depth) }
+    self.counts.push(count)
+    :ok(.{})
+  }
+
+  fn next-entry(*self, index: size): bool {
+    if index < self.counts.[self.counts.len - 1] { return true }
+    let _ = self.counts.pop()
+    false
+  }
+}
+
+impl codec/decoder for *decoder {
+  fn peek-kind(self): result[codec/value-kind, codec/error] {
+    let b = self.peek-byte().try
+    if b <= tag/positive-fixint-max or b >= tag/negative-fixint or (b >= tag/float32 and b <= tag/int64) { return :ok :number }
+    if map-header.is-tag(b) { return :ok :map }
+    if array-header.is-tag(b) { return :ok :seq }
+    if str-header.is-tag(b) { return :ok :string }
+    if b == tag/nil { return :ok :null }
+    if b == tag/bool-false or b == tag/bool-true { return :ok :bool }
+    self.error(:wrong-type "value")
+  }
+
+  fn read-null(self): result[empty, codec/error] {
+    if self.read-byte().try != tag/nil { return self.error(:wrong-type "null") }
+    :ok(.{})
+  }
+
+  fn read-bool(self): result[bool, codec/error] {
+    let b = self.read-byte().try
+    if b != tag/bool-false and b != tag/bool-true { return self.error(:wrong-type "bool") }
+    :ok(b == tag/bool-true)
+  }
+
+  fn read-number(self): result[codec/number, codec/error] {
+    let b = self.read-byte().try
+    if b <= tag/positive-fixint-max { return :ok :int b.widen[u64].signed() }
+    if b >= tag/negative-fixint { return :ok :int b.signed().widen[i64] }
+    if b < tag/float32 or b > tag/int64 { return self.error(:wrong-type "number") }
+    if b == tag/float32 return :ok :float mem/bitcast[u32, f32](self.read-be(types/size[f32]).try.trunc[u32]).widen[f64]
+    if b == tag/float64 return :ok :float mem/bitcast[u64, f64](self.read-be(types/size[f64]).try)
+    if b == tag/uint8 return :ok :int self.read-be(types/size[u8]).try.signed()
+    if b == tag/uint16 return :ok :int self.read-be(types/size[u16]).try.signed()
+    if b == tag/uint32 return :ok :int self.read-be(types/size[u32]).try.signed()
+    if b == tag/uint64 {
+      let u = self.read-be(types/size[u64]).try
+      return if u > i64/max-value.unsigned() :ok :uint u else :ok :int u.signed()
+    }
+    if b == tag/int8 return :ok :int self.read-be(types/size[i8]).try.trunc[u8].signed().widen[i64]
+    if b == tag/int16 return :ok :int self.read-be(types/size[i16]).try.trunc[u16].signed().widen[i64]
+    if b == tag/int32 return :ok :int self.read-be(types/size[i32]).try.trunc[u32].signed().widen[i64]
+    :ok :int self.read-be(types/size[i64]).try.signed()
+  }
+
+  fn read-string(self): result[string, codec/error] {
+    let bytes = self.read-bytes(self.read-header(str-header, "string").try).try
+    if not utf8/is-valid(bytes) { return self.error(:invalid-utf8) }
+    :ok string/wrap-bytes(bytes)
+  }
+
+  fn begin-seq(self): result[empty, codec/error] { self.push-count(self.read-header(array-header, "array").try) }
+
+  fn begin-item(self, index: size): result[bool, codec/error] { :ok self.next-entry(index) }
+
+  fn begin-map(self): result[empty, codec/error] { self.push-count(self.read-header(map-header, "map").try) }
+
+  fn read-key(self, index: size): result[?string, codec/error] {
+    if not self.next-entry(index) { return :ok :none }
+    :ok :some self.read-string().try
+  }
+
+  fn skip-value(self): result[empty, codec/error] {
+    let b = self.read-byte().try
+    let items: ?size = if self.read-length(b, map-header).try is :some count :some(count * 2) else self.read-length(b, array-header).try
+    if items is :some count {
+      self.push-count(count).try
+      for 0.until(count) { self.skip-value().try }
+      let _ = self.counts.pop()
+    } else if self.read-length(b, str-header).try is :some len {
+      let _ = self.read-bytes(len).try
+    } else if self.read-length(b, bin-header).try is :some len {
+      let _ = self.read-bytes(len).try
+    } else if self.read-length(b, ext-header).try is :some len {
+      let _ = self.read-bytes(ext-type-size + len).try
+    } else if b >= tag/fixext1 and b <= tag/fixext16 {
+      let _ = self.read-bytes(ext-type-size + ((1: size) << (b - tag/fixext1).widen[u32])).try
+    } else if b == tag/never-used {
+      return self.error(:wrong-type "value")
+    } else if b != tag/nil and b != tag/bool-false and b != tag/bool-true {
+      self.pos = self.pos - 1
+      let _ = self.read-number().try
+    }
+    :ok(.{})
+  }
+
+  fn error[t](self, kind: codec/error-kind): result[t, codec/error] {
+    :err mem/new[codec/error-info](.{ kind, location = :none })
+  }
+}

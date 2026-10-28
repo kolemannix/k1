@@ -57,3 +57,19 @@ fn(test) default-fn-without-override() {
   let u: u32 = 0
   assert-equals(u.inc-twice(), 2)
 }
+
+ns shapes {
+  type corner = either { sharp, round }
+  fn get-base-corner(): corner { :round }
+  ability styled {
+    fn get-corner(self, scale: int): corner { get-base-corner() }
+  }
+}
+use shapes/styled
+impl shapes/styled for u32 {}
+ns other { impl[t] shapes/styled for list[t] {} }
+
+fn(test) default-fn-resolves-in-its-ability() {
+  assert((1: u32).get-corner(2) is :round)
+  assert([1].get-corner(2) is :round)
+}
