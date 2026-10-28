@@ -9,4 +9,7 @@ ns for point {
 fn main() {
   let p = point.{ x = 1, y = 2 }
   println(p.shifted(dx = 10, dy = 10))
+  let origin = point.0
+  let up = origin | .{ y = 5 }
+  println("$origin $up")
 }

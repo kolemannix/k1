@@ -65,20 +65,8 @@ for suite in ["runtime", "brotli", "compile-times", "comptime", "json", "int-str
     provenance[suite] = entry
 (out / "benchmarks.json").write_text(json.dumps(provenance, indent=2) + "\n")
 
-BASICS = [
-  ("Hello, world", "fn main() {\n  println(\"Hello, world\")"),
-  ("Functions and variables", "fn greeting(name: string, height-cm: int, formal: bool): string {"),
-  ("Lists and spans", "fn main() {\n  let words = \"the quick brown fox\".split-by-char(' ')"),
-  ("Structs", "type point = { x: int, y: int }"),
-  ("Either types", "type level = either { low = 1, mid = 5, high = 10 }"),
-  ("Optionals and results", "fn find-even(xs: list[int]): ?int {"),
-  ("Control flow", "fn first-square-over(limit: int): int {"),
-  ("Lambdas", "fn apply-twice(x: int, f: some fn int -> int): int {"),
-  ("Abilities", "ability greet {", ["program", "~llvm ir", "output"]),
-  ("Generics", "type pair[a, b] = { a, b }"),
-  ("References", "fn bump(n: *int) {"),
-  ("Early execution", "fn fib(n: int): int {", ["program", "~llvm ir", "output"]),
-]
+BASICS = ["Functions and variables", "list, span, and buffer", "Structs", "either", "Optionals and results", "Control flow",
+          "First-class functions and lambdas", "Abilities", "Generics", "References", "Early execution"]
 
 CARDS = [
   {"section": "05-macros", "title": "A macro that implements an http routing dsl",
@@ -139,21 +127,19 @@ for card in CARDS:
 
 basics_md = (repo / "content/showcase/sections/00-basics.md").read_text()
 basics = []
-for spec in BASICS:
-    title, first = spec[0], spec[1]
+for title in BASICS:
     start = basics_md.index("## " + title + "\n")
     chunk = basics_md[start:]
     chunk = chunk[:chunk.index("\n## ")] if "\n## " in chunk else chunk
-    sentence = chunk.split("\n\n")[1]
+    blurb = chunk[chunk.index("\n") + 1:chunk.index("```")].strip()
     blocks = []
     for m in re.finditer(r"```(k1|text)( path=\S+)?\n(.*?)```", chunk, re.S):
         kind, path, code = m.group(1), m.group(2), m.group(3).rstrip("\n")
         if path and blocks and blocks[-1]["label"] == "in core":
             blocks[-1]["code"] += "\n" + code
             continue
-        blocks.append({"label": "in core" if path else ("program" if kind == "k1" else "output"), "kind": kind, "code": code})
-    if len(spec) > 2:
-        for block, label in zip([b for b in blocks if b["label"] != "in core"], spec[2]): block["label"] = label
+        label = "in core" if path else "program" if kind == "k1" else "~llvm ir" if code.startswith("$ content/showcase/ir.sh") else "output"
+        blocks.append({"label": label, "kind": kind, "code": code})
     folded = []
     for b in blocks:
         if b["label"].startswith("~"):
@@ -162,9 +148,7 @@ for spec in BASICS:
         else:
             folded.append(b)
     blocks = folded
-    program = next(b for b in blocks if b["label"] == "program")
-    need(program["code"].startswith(first), f"00-basics: {title} block does not start with {first!r}")
-    basics.append({"title": title, "section": "00-basics", "anchor": re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-"), "blurb": sentence, "blocks": blocks})
+    basics.append({"title": title, "section": "00-basics", "anchor": re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-"), "blurb": blurb, "blocks": blocks})
 (out / "basics.json").write_text(json.dumps(basics, indent=2) + "\n")
 (out / "carousel.json").write_text(json.dumps(cards, indent=2) + "\n")
 print(f"timing.json: {k1_lines} lines, typecheck {len(timing['typecheck'])} rows, build {len(timing['build'] or [])} rows, stress {stress_lines} lines {stress_ms} ms")

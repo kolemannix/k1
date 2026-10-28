@@ -1,27 +1,9 @@
 [
   {
-    "title": "Hello, world",
-    "section": "00-basics",
-    "anchor": "hello-world",
-    "blurb": "A program is a file with a `main`.",
-    "blocks": [
-      {
-        "label": "program",
-        "kind": "k1",
-        "code": "fn main() {\n  println(\"Hello, world\")\n}"
-      },
-      {
-        "label": "output",
-        "kind": "text",
-        "code": "Hello, world"
-      }
-    ]
-  },
-  {
     "title": "Functions and variables",
     "section": "00-basics",
     "anchor": "functions-and-variables",
-    "blurb": "Arguments can be passed by name.",
+    "blurb": "",
     "blocks": [
       {
         "label": "program",
@@ -36,10 +18,10 @@
     ]
   },
   {
-    "title": "Lists and spans",
+    "title": "list, span, and buffer",
     "section": "00-basics",
-    "anchor": "lists-and-spans",
-    "blurb": "A list owns its elements and grows. A span is a view of memory someone else owns, and a string is a span of chars, with UTF-8 as library code you call when you need it.",
+    "anchor": "list-span-and-buffer",
+    "blurb": "Name a better duo than `ptr` and `len`, I'll wait. `list` in `k1` is the growable one (a dynamic array), backed by a `buffer`.\n\n`buffer[t]` is the raw construct that means 'this is memory that holds `t`s'. `span[t]` is your read-only, typically borrowed view of a buffer often called a slice, but I don't like how that implies cutting or partiality. Those closures disappear at runtime, by the way",
     "blocks": [
       {
         "label": "in core",
@@ -62,25 +44,25 @@
     "title": "Structs",
     "section": "00-basics",
     "anchor": "structs",
-    "blurb": "A `ns for` block gives a type its methods.",
+    "blurb": "Structs let us say 'and' at the type level. They're the basic building block of all data composition. `k1` has both named and anonymous structs, and understands their structure and lets you talk about it like typescript. More on that later",
     "blocks": [
       {
         "label": "program",
         "kind": "k1",
-        "code": "type point = { x: int, y: int }\n\nns for point {\n  fn shifted(self, dx: int, dy: int): point {\n    .{ x = self.x + dx, y = self.y + dy }\n  }\n}\n\nfn main() {\n  let p = point.{ x = 1, y = 2 }\n  println(p.shifted(dx = 10, dy = 10))\n}"
+        "code": "type point = { x: int, y: int }\n\nns for point {\n  fn shifted(self, dx: int, dy: int): point {\n    .{ x = self.x + dx, y = self.y + dy }\n  }\n}\n\nfn main() {\n  let p = point.{ x = 1, y = 2 }\n  println(p.shifted(dx = 10, dy = 10))\n  let origin = point.0\n  let up = origin | .{ y = 5 }\n  println(\"$origin $up\")\n}"
       },
       {
         "label": "output",
         "kind": "text",
-        "code": ".{ x = 11, y = 12 }"
+        "code": ".{ x = 11, y = 12 }\n.{ x = 0, y = 0 } .{ x = 0, y = 5 }"
       }
     ]
   },
   {
-    "title": "Either types",
+    "title": "either",
     "section": "00-basics",
-    "anchor": "either-types",
-    "blurb": "`either` is the sum type. A variant can carry a payload or just a tag, and `opt` and `result` are two of them.",
+    "anchor": "either",
+    "blurb": "`either`s let us say 'or' at the typelevel. Together with structs, we can 'and' and 'or' our way to extremely powerful constructs. This combination is often called \"Algebraic Data Types\". `k1` will construct a bare integer enum at runtime, or a tagged union, depending on whether any of your variants have payloads. Core types like `result` and `opt` will be familiar to Rust users, and are defined as simply as this. `?u8` is shorthand for `opt[u8]` and is a 2 byte struct at runtime",
     "blocks": [
       {
         "label": "in core",
@@ -103,7 +85,7 @@
     "title": "Optionals and results",
     "section": "00-basics",
     "anchor": "optionals-and-results",
-    "blurb": "`?t` is sugar for `opt[t]`. `?` is the else operator, and `.try` gives you the value or returns the error, on anything that implements `try`.",
+    "blurb": "",
     "blocks": [
       {
         "label": "program",
@@ -121,35 +103,35 @@
     "title": "Control flow",
     "section": "00-basics",
     "anchor": "control-flow",
-    "blurb": "`if` is an expression, `loop` breaks with a value, and `require` binds a pattern for the rest of the block or leaves.",
+    "blurb": "loops with value-breaks, a `never` type that models divergence, user-accessible `.try` for error returns, and my favorite, a _binding and matching_ early return construct, which can be chained, called `require`",
     "blocks": [
       {
         "label": "program",
         "kind": "k1",
-        "code": "fn first-square-over(limit: int): int {\n  let i = 0\n  loop {\n    i = i + 1\n    if i * i > limit { break i * i }\n  }\n}\n\nfn describe-int(n: ?int): string {\n  require n is :some x and x > 0 else { return \"nothing positive\" }\n  let parity = if x % 2 == 0 \"even\" else \"odd\"\n  \"$x is $parity\"\n}\n\nfn main() {\n  println(describe-int(:some 7))\n  println(describe-int(:none))\n  println(first-square-over(50))\n}"
+        "code": "fn first-square-over(limit: int): int {\n  let i = 0\n  loop {\n    i = i + 1\n    if i * i > limit { break i * i }\n  }\n}\n\nfn describe-int(n: ?int): string {\n  require n is :some x and x > 0 else { return \"nothing positive\" }\n  let parity = if x % 2 == 0 \"even\" else \"odd\"\n  \"$x is $parity\"\n}\n\nfn give-up(why: string): never {\n  crash(\"giving up: $why\")\n}\n\nfn half(n: int): ?int {\n  if n % 2 == 0 :some(n / 2) else :none\n}\n\nfn quarter(n: int): ?int {\n  let h = half(n).try\n  half(h)\n}\n\nfn main() {\n  println(describe-int(:some 7))\n  println(describe-int(:none))\n  let square = first-square-over(50)\n  let side = if square == 64 8 else give-up(\"$square is not 64\")\n  println(\"$square $side\")\n  println(\"${quarter(12)} ${quarter(6)}\")\n}"
       },
       {
         "label": "output",
         "kind": "text",
-        "code": "7 is odd\nnothing positive\n64"
+        "code": "7 is odd\nnothing positive\n64 8\n:some 3 :none"
       }
     ]
   },
   {
-    "title": "Lambdas",
+    "title": "First-class functions and lambdas",
     "section": "00-basics",
-    "anchor": "lambdas",
-    "blurb": "A lambda captures only what you list in brackets. The physical form of the function depends on what you need: inlined, a direct call, an indirect call, or a dynamic closure.",
+    "anchor": "first-class-functions-and-lambdas",
+    "blurb": "Lambdas compile to bare metal functions. `some fn int -> int`, shorthand for `some fn(int) -> int`, selects the physical representation for that function and specializes on it: a direct call for a named function or a lambda, an indirect call through a `*fn`, a dynamic call through a `dyn[fn]`.",
     "blocks": [
       {
         "label": "program",
         "kind": "k1",
-        "code": "fn apply-twice(x: int, f: some fn int -> int): int {\n  f(f(x))\n}\n\nfn inc(x: int): int { x + 1 }\n\nfn main() {\n  println(apply-twice(1, inc))\n  println(apply-twice(1, fn x. x * 10))\n  let inc-ptr: *fn(int) -> int = inc.&\n  println(apply-twice(1, inc-ptr))\n\n  let step = 5\n  let total = 0\n  let add = fn[step, total.&](x: int) { total.* = total.* + x + step }\n  add(1)\n  add(2)\n  println(total)\n}"
+        "code": "fn inc(x: int): int { x + 1 }\n\nfn main() {\n  let inc-ptr: *fn(int) -> int = inc.&\n  let step = 5\n  let add-step: dyn[fn(int) -> int] = (fn[step](x: int) x + step).to-dyn()\n  println(apply-twice(1, inc))\n  println(apply-twice(1, inc-ptr))\n  println(apply-twice(1, add-step))\n  println(apply-twice(1, fn x. x * 10))\n\n  let total = 0\n  let add = fn[step, total.&](x: int) { total.* = total.* + x + step }\n  add(1)\n  add(2)\n  println(total)\n}\n\nfn apply-twice(x: int, f: some fn int -> int): int {\n  f(f(x))\n}"
       },
       {
         "label": "output",
         "kind": "text",
-        "code": "3\n100\n3\n13"
+        "code": "3\n3\n11\n100\n13"
       }
     ]
   },
@@ -157,16 +139,16 @@
     "title": "Abilities",
     "section": "00-basics",
     "anchor": "abilities",
-    "blurb": "An ability is a set of functions a type can implement, sometimes called type classes or ad hoc polymorphism. It is the way to express a protocol without coupling your types to it. All of this compiles to plain function calls.",
+    "blurb": "k1 uses `ability` to model define and implement interfaces, and do all kinds of ad-hoc polymorphism, that leaves no runtime trace. `impl ours/greet for theirs/cat` is an independent 3rd party, neither the cat nor greet, teaching cat how to greet. This is an immensely powerful decoupling, contrast with inheritance-based implementation. An ability can have both ability-side and impl-side type parameters. `to[t]` is an ability-side parameter; a type can be `to` for as many `t`s as it can convert to; but `iterable[t]` is an impl-side parameter: a type can implement iterator _once_ and provide only one type that it iterates over. (similar to Rust traits' associated types)",
     "blocks": [
       {
         "label": "program",
         "kind": "k1",
-        "code": "ability greet {\n  fn greet(self: *self): string\n}\n\ntype cat = { name: string }\ntype robot = { id: int }\n\nimpl greet for cat {\n  fn greet(self: *cat): string { \"meow, I am ${self.name}\" }\n}\n\nimpl greet for robot {\n  fn greet(self: *robot): string { \"unit ${self.id} online\" }\n}\n\nfn introduce[t: greet](x: *t) {\n  println(x.greet())\n}\n\nfn main() {\n  let c = cat.{ name = \"Ada\" }\n  introduce(c.&)\n  let r = robot.{ id = 7 }\n  introduce(r.&)\n}",
+        "code": "ns ours {\n  ability greet {\n    fn greet(self: *self): string\n  }\n}\n\nns theirs {\n  type cat = { name: string }\n  type robot = { id: int }\n}\n\nimpl ours/greet for theirs/cat {\n  fn greet(self: *self): string { \"meow, I am ${self.name}\" }\n}\n\nimpl ours/greet for theirs/robot {\n  fn greet(self: *self): string { \"unit ${self.id} online\" }\n}\n\nfn introduce[t: ours/greet](x: *t) {\n  println(x.greet())\n}\n\nfn main() {\n  let c = theirs/cat.{ name = \"Ada\" }\n  introduce(c.&)\n  let r = theirs/robot.{ id = 7 }\n  introduce(r.&)\n}",
         "alt": {
           "label": "llvm ir",
           "kind": "text",
-          "code": "$ content/showcase/ir.sh examples/basics_abilities.k1 'greet'\ndefine internal [2 x i64] @impl_41greet.greet_for_t7270(ptr %self)\ndefine internal [2 x i64] @impl_41greet.greet_for_t7274(ptr %self)\ndefine internal void @main() {\n  ...\n  %2 = call [2 x i64] @impl_41greet.greet_for_t7270(ptr %1)\n  ...\n  %3 = call [2 x i64] @impl_41greet.greet_for_t7274(ptr %0)\n  ...\n  ret void\n}"
+          "code": "$ content/showcase/ir.sh examples/basics_abilities.k1 'greet'\ndefine internal [2 x i64] @impl_43greet.greet_for_t8156(ptr %self)\ndefine internal [2 x i64] @impl_43greet.greet_for_t8160(ptr %self)\ndefine internal void @main() {\n  ...\n  %2 = call [2 x i64] @impl_43greet.greet_for_t8156(ptr %1)\n  ...\n  %3 = call [2 x i64] @impl_43greet.greet_for_t8160(ptr %0)\n  ...\n  ret void\n}"
         }
       },
       {
@@ -180,7 +162,7 @@
     "title": "Generics",
     "section": "00-basics",
     "anchor": "generics",
-    "blurb": "Type parameters go in square brackets, on types and on functions.",
+    "blurb": "Types and functions can accept types as parameters; this is your standard parametric polymorphism ('inputs over shapes') that allows writing code we call 'generic'. This happens entirely at compile-time, and understands abilities as type-bounds.",
     "blocks": [
       {
         "label": "program",
@@ -198,17 +180,17 @@
     "title": "References",
     "section": "00-basics",
     "anchor": "references",
-    "blurb": "References are taken with `.&` and followed with `.*`. Every `*t` points at something, so there is nothing to null-check.",
+    "blurb": "These are really just pointers. They are nonnull, but it's not that hard to manufacture a null one; I'm not too interested in stopping you. The untyped one, your `void*`, is called `ptr`.",
     "blocks": [
       {
         "label": "program",
         "kind": "k1",
-        "code": "fn bump(n: *int) {\n  n.* = n.* + 1\n}\n\nfn main() {\n  let x = 1\n  bump(x.&)\n  bump(x.&)\n  println(x)\n\n  let boxed: *int = mem/new(41)\n  bump(boxed)\n  println(boxed.*)\n}"
+        "code": "fn bump(n: *int) {\n  n.* = n.* + 1\n}\n\ntype point = { x: int, y: int }\n\nfn main() {\n  let x = 1\n  bump(x.&)\n  bump(x.&)\n  println(x)\n\n  let boxed: *int = mem/new(41)\n  bump(boxed)\n  println(boxed.*)\n\n  let raw: ptr = boxed.as[ptr]\n  let back: *int = raw.ref[int]\n  println(back.*)\n\n  let p = point.{ x = 1, y = 2 }\n  let r = p.&\n  bump(r.y.&)\n  println(\"${r.x + r.y} $p\")\n}"
       },
       {
         "label": "output",
         "kind": "text",
-        "code": "3\n42"
+        "code": "3\n42\n42\n4 .{ x = 1, y = 3 }"
       }
     ]
   },
@@ -216,7 +198,7 @@
     "title": "Early execution",
     "section": "00-basics",
     "anchor": "early-execution",
-    "blurb": "Globals are computed while compiling, `#static` runs any expression there, and only the results reach the binary.",
+    "blurb": "`k1` can run any code at compile-time. It's really useful, really powerful, really fast, and really fun. Many more examples in Beyond",
     "blocks": [
       {
         "label": "program",

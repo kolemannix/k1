@@ -12,8 +12,24 @@ fn describe-int(n: ?int): string {
   "$x is $parity"
 }
 
+fn give-up(why: string): never {
+  crash("giving up: $why")
+}
+
+fn half(n: int): ?int {
+  if n % 2 == 0 :some(n / 2) else :none
+}
+
+fn quarter(n: int): ?int {
+  let h = half(n).try
+  half(h)
+}
+
 fn main() {
   println(describe-int(:some 7))
   println(describe-int(:none))
-  println(first-square-over(50))
+  let square = first-square-over(50)
+  let side = if square == 64 8 else give-up("$square is not 64")
+  println("$square $side")
+  println("${quarter(12)} ${quarter(6)}")
 }

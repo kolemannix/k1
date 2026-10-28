@@ -1,19 +1,21 @@
-fn apply-twice(x: int, f: some fn int -> int): int {
-  f(f(x))
-}
-
 fn inc(x: int): int { x + 1 }
 
 fn main() {
-  println(apply-twice(1, inc))
-  println(apply-twice(1, fn x. x * 10))
   let inc-ptr: *fn(int) -> int = inc.&
-  println(apply-twice(1, inc-ptr))
-
   let step = 5
+  let add-step: dyn[fn(int) -> int] = (fn[step](x: int) x + step).to-dyn()
+  println(apply-twice(1, inc))
+  println(apply-twice(1, inc-ptr))
+  println(apply-twice(1, add-step))
+  println(apply-twice(1, fn x. x * 10))
+
   let total = 0
   let add = fn[step, total.&](x: int) { total.* = total.* + x + step }
   add(1)
   add(2)
   println(total)
+}
+
+fn apply-twice(x: int, f: some fn int -> int): int {
+  f(f(x))
 }

@@ -2,6 +2,8 @@ fn bump(n: *int) {
   n.* = n.* + 1
 }
 
+type point = { x: int, y: int }
+
 fn main() {
   let x = 1
   bump(x.&)
@@ -11,4 +13,13 @@ fn main() {
   let boxed: *int = mem/new(41)
   bump(boxed)
   println(boxed.*)
+
+  let raw: ptr = boxed.as[ptr]
+  let back: *int = raw.ref[int]
+  println(back.*)
+
+  let p = point.{ x = 1, y = 2 }
+  let r = p.&
+  bump(r.y.&)
+  println("${r.x + r.y} $p")
 }

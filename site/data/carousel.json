@@ -12,7 +12,7 @@
       {
         "label": "the macro",
         "kind": "k1",
-        "code": "macro define(name: code, rows: span[code-token]) {\n  let entries = parse-rows(rows).as-span()\n  validate(entries)\n\n  let cb-storage = code-builder/new()\n  let cb = cb-storage.&\n\n  cb.write-code(\"type $name = either { \")\n  for en in entries {\n    if it-index > 0 cb.write(\", \")\n    cb.write-token(en.name)\n    if payload-type(en) is :some ty {\n      cb.write(\"(\")\n      cb.write-code(ty)\n      cb.write(\")\")\n    }\n  }\n  cb.write(\" }\\n\")\n\n  cb.block(\"ns for $name\", fn[cb, name, entries]. emit-parse-fn(cb, name, entries))\n  emit-print-impl(cb, name, entries)\n\n  cb.build()\n}"
+        "code": "macro define(name: code, rows: span[code-token]) {\n  let entries = parse-rows(rows).as-span()\n  validate(entries)\n\n  let cb-storage = code-builder/new()\n  let cb = cb-storage.&\n\n  cb.write-code(\"type $name = either { \")\n  cb.join-with(entries, \", \", fn[cb] en. {\n    cb.write-token(en.name)\n    if payload-type(en) is :some ty {\n      cb.write(\"(\")\n      cb.write-code(ty)\n      cb.write(\")\")\n    }\n  })\n  cb.write(\" }\\n\")\n\n  cb.block(\"ns for $name\", fn[cb, name, entries]. emit-parse-fn(cb, name, entries))\n  emit-print-impl(cb, name, entries)\n\n  cb.build()\n}"
       },
       {
         "label": "what comes out",

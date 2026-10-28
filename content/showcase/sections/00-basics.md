@@ -1,24 +1,8 @@
 # Language basics
 
-Twelve small programs. Each one runs as written.
-
-## Hello, world
-
-A program is a file with a `main`.
-
-```k1
-fn main() {
-  println("Hello, world")
-}
-```
-
-```text
-Hello, world
-```
+Eleven small programs. Each one runs as written.
 
 ## Functions and variables
-
-Arguments can be passed by name.
 
 ```k1
 fn greeting(name: string, height-cm: int, formal: bool): string {
@@ -40,9 +24,11 @@ Hello, Dennis, you are 5 ft 10 in
 Hello, Dr. Ada, you are 5 ft 6 in
 ```
 
-## Lists and spans
+## list, span, and buffer
 
-A list owns its elements and grows. A span is a view of memory someone else owns, and a string is a span of chars, with UTF-8 as library code you call when you need it.
+Name a better duo than `ptr` and `len`, I'll wait. `list` in `k1` is the growable one (a dynamic array), backed by a `buffer`.
+
+`buffer[t]` is the raw construct that means 'this is memory that holds `t`s'. `span[t]` is your read-only, typically borrowed view of a buffer often called a slice, but I don't like how that implies cutting or partiality. Those closures disappear at runtime, by the way
 
 ```k1 path=modules/core/builtin.k1
 type list[t] = { buffer: buffer[t], len: size }
@@ -77,7 +63,7 @@ world
 
 ## Structs
 
-A `ns for` block gives a type its methods.
+Structs let us say 'and' at the type level. They're the basic building block of all data composition. `k1` has both named and anonymous structs, and understands their structure and lets you talk about it like typescript. More on that later
 
 ```k1
 type point = { x: int, y: int }
@@ -91,16 +77,20 @@ ns for point {
 fn main() {
   let p = point.{ x = 1, y = 2 }
   println(p.shifted(dx = 10, dy = 10))
+  let origin = point.0
+  let up = origin | .{ y = 5 }
+  println("$origin $up")
 }
 ```
 
 ```text
 .{ x = 11, y = 12 }
+.{ x = 0, y = 0 } .{ x = 0, y = 5 }
 ```
 
-## Either types
+## either
 
-`either` is the sum type. A variant can carry a payload or just a tag, and `opt` and `result` are two of them.
+`either`s let us say 'or' at the typelevel. Together with structs, we can 'and' and 'or' our way to extremely powerful constructs. This combination is often called "Algebraic Data Types". `k1` will construct a bare integer enum at runtime, or a tagged union, depending on whether any of your variants have payloads. Core types like `result` and `opt` will be familiar to Rust users, and are defined as simply as this. `?u8` is shorthand for `opt[u8]` and is a 2 byte struct at runtime
 
 ```k1 path=modules/core/builtin.k1
 type opt[t] = either { none, some(t) }
@@ -140,8 +130,6 @@ high is 10
 
 ## Optionals and results
 
-`?t` is sugar for `opt[t]`. `?` is the else operator, and `.try` gives you the value or returns the error, on anything that implements `try`.
-
 ```k1
 fn find-even(xs: list[int]): ?int {
   for x in xs { if x % 2 == 0 { return :some x } }
@@ -175,7 +163,7 @@ fn main() {
 
 ## Control flow
 
-`if` is an expression, `loop` breaks with a value, and `require` binds a pattern for the rest of the block or leaves.
+loops with value-breaks, a `never` type that models divergence, user-accessible `.try` for error returns, and my favorite, a _binding and matching_ early return construct, which can be chained, called `require`
 
 ```k1
 fn first-square-over(limit: int): int {
@@ -192,93 +180,117 @@ fn describe-int(n: ?int): string {
   "$x is $parity"
 }
 
+fn give-up(why: string): never {
+  crash("giving up: $why")
+}
+
+fn half(n: int): ?int {
+  if n % 2 == 0 :some(n / 2) else :none
+}
+
+fn quarter(n: int): ?int {
+  let h = half(n).try
+  half(h)
+}
+
 fn main() {
   println(describe-int(:some 7))
   println(describe-int(:none))
-  println(first-square-over(50))
+  let square = first-square-over(50)
+  let side = if square == 64 8 else give-up("$square is not 64")
+  println("$square $side")
+  println("${quarter(12)} ${quarter(6)}")
 }
 ```
 
 ```text
 7 is odd
 nothing positive
-64
+64 8
+:some 3 :none
 ```
 
-## Lambdas
+## First-class functions and lambdas
 
-A lambda captures only what you list in brackets. The physical form of the function depends on what you need: inlined, a direct call, an indirect call, or a dynamic closure.
+Lambdas compile to bare metal functions. `some fn int -> int`, shorthand for `some fn(int) -> int`, selects the physical representation for each argument: a direct call for a named function or a lambda, an indirect call through a `*fn`, a dynamic call through a `dyn[fn]`.
 
 ```k1
-fn apply-twice(x: int, f: some fn int -> int): int {
-  f(f(x))
-}
-
 fn inc(x: int): int { x + 1 }
 
 fn main() {
-  println(apply-twice(1, inc))
-  println(apply-twice(1, fn x. x * 10))
   let inc-ptr: *fn(int) -> int = inc.&
-  println(apply-twice(1, inc-ptr))
-
   let step = 5
+  let add-step: dyn[fn(int) -> int] = (fn[step](x: int) x + step).to-dyn()
+  println(apply-twice(1, inc))
+  println(apply-twice(1, inc-ptr))
+  println(apply-twice(1, add-step))
+  println(apply-twice(1, fn x. x * 10))
+
   let total = 0
   let add = fn[step, total.&](x: int) { total.* = total.* + x + step }
   add(1)
   add(2)
   println(total)
 }
+
+fn apply-twice(x: int, f: some fn int -> int): int {
+  f(f(x))
+}
 ```
 
 ```text
 3
-100
 3
+11
+100
 13
 ```
 
 ## Abilities
 
-An ability is a set of functions a type can implement, sometimes called type classes or ad hoc polymorphism. It is the way to express a protocol without coupling your types to it. All of this compiles to plain function calls.
+k1 uses `ability` to model define and implement interfaces, and do all kinds of ad-hoc polymorphism, that leaves no runtime trace. `impl ours/greet for theirs/cat` is an independent 3rd party, neither the cat nor greet, teaching cat how to greet. This is an immensely powerful decoupling, contrast with inheritance-based implementation. An ability can have both ability-side and impl-side type parameters. `to[t]` is an ability-side parameter; a type can be `to` for as many `t`s as it can convert to; but `iterable[t]` is an impl-side parameter: a type can implement iterator _once_ and provide only one type that it iterates over. (similar to Rust traits' associated types)
 
 ```k1
-ability greet {
-  fn greet(self: *self): string
+ns ours {
+  ability greet {
+    fn greet(self: *self): string
+  }
 }
 
-type cat = { name: string }
-type robot = { id: int }
-
-impl greet for cat {
-  fn greet(self: *cat): string { "meow, I am ${self.name}" }
+ns theirs {
+  type cat = { name: string }
+  type robot = { id: int }
 }
 
-impl greet for robot {
-  fn greet(self: *robot): string { "unit ${self.id} online" }
+impl ours/greet for theirs/cat {
+  fn greet(self: *self): string { "meow, I am ${self.name}" }
 }
 
-fn introduce[t: greet](x: *t) {
+impl ours/greet for theirs/robot {
+  fn greet(self: *self): string { "unit ${self.id} online" }
+}
+
+fn introduce[t: ours/greet](x: *t) {
   println(x.greet())
 }
 
 fn main() {
-  let c = cat.{ name = "Ada" }
+  let c = theirs/cat.{ name = "Ada" }
   introduce(c.&)
-  let r = robot.{ id = 7 }
+  let r = theirs/robot.{ id = 7 }
   introduce(r.&)
 }
 ```
 
 ```text
 $ content/showcase/ir.sh examples/basics_abilities.k1 'greet'
-define internal [2 x i64] @impl_41greet.greet_for_t7270(ptr %self)
-define internal [2 x i64] @impl_41greet.greet_for_t7274(ptr %self)
+define internal [2 x i64] @impl_43greet.greet_for_t8156(ptr %self)
+define internal [2 x i64] @impl_43greet.greet_for_t8160(ptr %self)
 define internal void @main() {
   ...
-  %2 = call [2 x i64] @impl_41greet.greet_for_t7270(ptr %1)
+  %2 = call [2 x i64] @impl_43greet.greet_for_t8156(ptr %1)
   ...
-  %3 = call [2 x i64] @impl_41greet.greet_for_t7274(ptr %0)
+  %3 = call [2 x i64] @impl_43greet.greet_for_t8160(ptr %0)
   ...
   ret void
 }
@@ -291,7 +303,7 @@ unit 7 online
 
 ## Generics
 
-Type parameters go in square brackets, on types and on functions.
+Types and functions can accept types as parameters; this is your standard parametric polymorphism ('inputs over shapes') that allows writing code we call 'generic'. This happens entirely at compile-time, and understands abilities as type-bounds.
 
 ```k1
 type pair[a, b] = { a, b }
@@ -324,12 +336,14 @@ pear
 
 ## References
 
-References are taken with `.&` and followed with `.*`. Every `*t` points at something, so there is nothing to null-check.
+These are really just pointers. They are nonnull, but it's not that hard to manufacture a null one; I'm not too interested in stopping you. The untyped one, your `void*`, is called `ptr`.
 
 ```k1
 fn bump(n: *int) {
   n.* = n.* + 1
 }
+
+type point = { x: int, y: int }
 
 fn main() {
   let x = 1
@@ -340,17 +354,28 @@ fn main() {
   let boxed: *int = mem/new(41)
   bump(boxed)
   println(boxed.*)
+
+  let raw: ptr = boxed.as[ptr]
+  let back: *int = raw.ref[int]
+  println(back.*)
+
+  let p = point.{ x = 1, y = 2 }
+  let r = p.&
+  bump(r.y.&)
+  println("${r.x + r.y} $p")
 }
 ```
 
 ```text
 3
 42
+42
+4 .{ x = 1, y = 3 }
 ```
 
 ## Early execution
 
-Globals are computed while compiling, `#static` runs any expression there, and only the results reach the binary.
+`k1` can run any code at compile-time. It's really useful, really powerful, really fast, and really fun. Many more examples in Beyond
 
 ```k1
 fn fib(n: int): int {

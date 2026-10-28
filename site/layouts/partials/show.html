@@ -1,7 +1,7 @@
     <article class="show" id="{{ .title | urlize }}">
       <div class="say">
         {{ if .placeholder }}<h3>{{ .title }}</h3><p class="prose">{{ .placeholder }}</p>
-        {{ else }}<h3><a href="/examples/{{ .section }}/{{ if .anchor }}#{{ .anchor }}{{ end }}">{{ .title }}</a></h3><p class="prose">{{ .blurb | markdownify }}</p>{{ end }}
+        {{ else }}<h3><a href="/examples/{{ .section }}/{{ if .anchor }}#{{ .anchor }}{{ end }}">{{ .title }}</a></h3>{{ with .blurb }}{{ range split . "\n\n" }}<p class="prose">{{ . | markdownify }}</p>{{ end }}{{ end }}{{ end }}
       </div>
       {{ if .blocks }}<div class="code">
         {{ range .blocks }}
