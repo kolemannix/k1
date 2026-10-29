@@ -261,7 +261,7 @@ macro define(name: code, rows: span[code-token]) {
   validate(entries)
 
   let cb-storage = code-builder/new()
-  let cb = cb-storage.&
+  let(context) cb = cb-storage.&
 
   cb.write-code("type $name = either { ")
   cb.join-with(entries, ", ", fn[cb] en. {
@@ -274,8 +274,8 @@ macro define(name: code, rows: span[code-token]) {
   })
   cb.write(" }\n")
 
-  cb.block("ns for $name", fn[cb, name, entries]. emit-parse-fn(cb, name, entries))
-  emit-print-impl(cb, name, entries)
+  cb.block("ns for $name", fn[cb, name, entries]. emit-parse-fn(name, entries))
+  emit-print-impl(name, entries)
 
   cb.build()
 }

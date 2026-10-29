@@ -17,7 +17,7 @@
 
 <section class="blk"><div class="wrap">
   <h2>k1 typechecks {{ $t.stress.lines_per_s | lang.FormatNumber 0 }} lines per second.</h2>
-  <p>how? data oriented design, first principles approaches, and care. I know where very memory allocation is in the 72,000 line compiler</p>
+  <p>how? data oriented design, first principles approaches, and care. I know every memory allocation in the 72,000 line compiler</p>
   <div class="panels">
     {{ range slice (dict "label" "typecheck" "rows" $t.typecheck) (dict "label" "debug build" "rows" $t.build) }}{{ $panel := . }}{{ with .rows }}
     <div class="bars">
@@ -36,6 +36,7 @@
 {{ partial "carousel.html" (dict "title" "Beyond the basics" "cards" hugo.Data.carousel) }}
 
 <section class="close"><div class="wrap">
+    <p><em>k1</em> still has a long way to go. Considering joining me in making it even better and building software with it.</p>
   <div class="btns"><a class="btn" href="/install/">Get k1</a><a class="btn o" href="/tenets/">Read the tenets</a></div>
 </div></section>
 </main>

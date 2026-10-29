@@ -32,8 +32,8 @@ let(context(impl writer)) out: *string-builder = sb.&  // ability-keyed
 - A context param can't be `some fn`: its type comes from its own arg.
 - A context writer is a region's sink (html components, `html/render`, macro
   output, which reaches it as `core/get-context-writer()` instead of assuming the
-  caller's name); a writer a call writes to (`print-to`, `format-uint`, adapters)
-  is a plain param.
+  caller's name, the `code-builder` a generator's emit fns share as `context cb`);
+  a writer a call writes to (`print-to`, `format-uint`, adapters) is a plain param.
 
 ## Metaprogramming: `code`
 - `code = { text: string, spans: list[code-span{start, len, source: u64}] }`;

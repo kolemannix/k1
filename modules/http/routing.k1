@@ -185,7 +185,7 @@ fn struct-fields(id: types/type-id): span[{ name: string, type-id: types/type-id
   if id.schema().as-struct() is :some st st.fields else span/empty()
 }
 
-fn from-string-line(cb: *code-builder, ty: types/type-id, src: string, name: string, out: string) {
+fn from-string-line(context cb: *code-builder)(ty: types/type-id, src: string, name: string, out: string) {
   if ty == types/id[string] {
     cb.line("let $out = $src")
   } else {
@@ -200,9 +200,9 @@ fn parse-payload[t, n: static size](segs: span[string], u: std/url/url, pattern:
 fn payload-code(payload-id: types/type-id, n: size): code {
   let fields = struct-fields(payload-id)
   let cb-storage = code-builder/new()
-  let cb = cb-storage.&
+  let(context) cb = cb-storage.&
   for f in fields {
-    if it-index < n from-string-line(cb, f.type-id, "segs.[$it-index]", f.name, "v$it-index")
+    if it-index < n from-string-line(f.type-id, "segs.[$it-index]", f.name, "v$it-index")
   }
   if fields.len() > n {
     for f in fields {
@@ -225,12 +225,12 @@ fn payload-code(payload-id: types/type-id, n: size): code {
     if k >= n {
       if f.type-id.elem-of[opt] is :some inner {
         cb.block-close(`let v$k: ${f.type-id.spell()} = if q$k is :some qv$k`, "} else :none", fn[cb, k, inner, f]. {
-          from-string-line(cb, inner, "qv$k", f.name, "d$k")
+          from-string-line(inner, "qv$k", f.name, "d$k")
           cb.line(":some d$k")
         })
       } else {
         cb.line(`require q$k is :some qv$k else { return :err :missing-param .{ pattern, name = ${str-lit(f.name)} } }`)
-        from-string-line(cb, f.type-id, "qv$k", f.name, "v$k")
+        from-string-line(f.type-id, "qv$k", f.name, "v$k")
       }
     }
   }
@@ -271,7 +271,7 @@ fn query-print-code(payload-id: types/type-id, n: size): code {
   cb.build()
 }
 
-fn emit-leaf-body(cb: *code-builder, en: entry, d: size) {
+fn emit-leaf-body(context cb: *code-builder)(en: entry, d: size) {
   let srcs = list/empty[string]()
   for c in params(en) {
     srcs.push(if c.at is {
@@ -294,7 +294,7 @@ fn emit-leaf-body(cb: *code-builder, en: entry, d: size) {
   }
 }
 
-fn emit-leafs(cb: *code-builder, entries: span[entry], idxs: list[size], d: size) {
+fn emit-leafs(context cb: *code-builder)(entries: span[entry], idxs: list[size], d: size) {
   let head-present = {
     let found = false
     for gi in idxs { if entries.[gi].method == "head" { found = true } }
@@ -306,7 +306,7 @@ fn emit-leafs(cb: *code-builder, entries: span[entry], idxs: list[size], d: size
     if en.method == "get" and not head-present {
       cond = "$cond or method == http/llhttp/method:HEAD"
     }
-    cb.block("if $cond", fn[cb, entries, gi, d]. emit-leaf-body(cb, entries.[gi], d))
+    cb.block("if $cond", fn[cb, entries, gi, d]. emit-leaf-body(entries.[gi], d))
   }
   let first = entries.[idxs.[0]]
   let allowed = list/empty[string]()
@@ -314,7 +314,7 @@ fn emit-leafs(cb: *code-builder, entries: span[entry], idxs: list[size], d: size
   cb.line(`return :err :bad-method .{ pattern = ${str-lit(first.pattern)}, allowed = [${string/join(allowed, ", ")}] }`)
 }
 
-fn emit-seg-edges(cb: *code-builder, entries: span[entry], group: list[size], d: size, lit-texts: list[string], caps: list[size]) {
+fn emit-seg-edges(context cb: *code-builder)(entries: span[entry], group: list[size], d: size, lit-texts: list[string], caps: list[size]) {
   cb.line(`let sd$d = std/url/percent/decode(segs.[$d])`)
   for t in lit-texts {
     let sub = list/empty[size]()
@@ -322,14 +322,14 @@ fn emit-seg-edges(cb: *code-builder, entries: span[entry], group: list[size], d:
       let en = entries.[gi]
       if en.path.len() > d and en.path.[d] is :text lt and lt == t { sub.push(gi) }
     }
-    cb.block("if sd$d == ${str-lit(t)}", fn[cb, entries, sub, d]. emit-node(cb, entries, sub, d + 1))
+    cb.block("if sd$d == ${str-lit(t)}", fn[cb, entries, sub, d]. emit-node(entries, sub, d + 1))
   }
   if caps.non-empty() {
-    emit-node(cb, entries, caps, d + 1)
+    emit-node(entries, caps, d + 1)
   }
 }
 
-fn emit-node(cb: *code-builder, entries: span[entry], group: list[size], d: size) {
+fn emit-node(context cb: *code-builder)(entries: span[entry], group: list[size], d: size) {
   let exact = list/empty[size]()
   let rests = list/empty[size]()
   let caps = list/empty[size]()
@@ -365,19 +365,19 @@ fn emit-node(cb: *code-builder, entries: span[entry], group: list[size], d: size
   }
 
   if lit-texts.non-empty() or caps.non-empty() {
-    cb.block("if sp.more or sp.count > $d", fn[cb, entries, group, d, lit-texts, caps]. emit-seg-edges(cb, entries, group, d, lit-texts, caps))
+    cb.block("if sp.more or sp.count > $d", fn[cb, entries, group, d, lit-texts, caps]. emit-seg-edges(entries, group, d, lit-texts, caps))
   }
   if exact.non-empty() {
-    cb.block("if (not sp.more) and sp.count == $d", fn[cb, entries, exact, d]. emit-leafs(cb, entries, exact, d))
+    cb.block("if (not sp.more) and sp.count == $d", fn[cb, entries, exact, d]. emit-leafs(entries, exact, d))
   }
   if rests.non-empty() {
-    emit-leafs(cb, entries, rests, d)
+    emit-leafs(entries, rests, d)
   } else {
     cb.line("return :err :not-found")
   }
 }
 
-fn emit-parse-fn(cb: *code-builder, name: code, entries: span[entry]) {
+fn emit-parse-fn(context cb: *code-builder)(name: code, entries: span[entry]) {
   cb.line("fn parse-request(header: http/header): result[$name, http/routing/route-error] { parse(header.method, header.url) }")
   cb.block("fn parse(method: http/llhttp/method, u: std/url/url): result[$name, http/routing/route-error]", fn[cb, entries]. {
     cb.line(`let path = u.path()`)
@@ -386,11 +386,11 @@ fn emit-parse-fn(cb: *code-builder, name: code, entries: span[entry]) {
     cb.line(`let sp = http/routing/split-path(path, segs.&)`)
     let all = list/empty[size]()
     for en in entries { all.push(it-index) }
-    emit-node(cb, entries, all, 0)
+    emit-node(entries, all, 0)
   })
 }
 
-fn emit-url-arm(cb: *code-builder, en: entry) {
+fn emit-url-arm(context cb: *code-builder)(en: entry) {
   let lit = string-builder/new()
   if en.path.is-empty() lit.write("/")
   for s in en.path {
@@ -417,13 +417,13 @@ fn emit-url-arm(cb: *code-builder, en: entry) {
   }
 }
 
-fn emit-print-impl(cb: *code-builder, name: code, entries: span[entry]) {
+fn emit-print-impl(context cb: *code-builder)(name: code, entries: span[entry]) {
   cb.block("impl print for $name", fn[cb, name, entries]. {
     cb.block("fn print-to[w: writer](self: $name, w)", fn[cb, entries]. {
       cb.block("if self is", fn[cb, entries]. {
         for en in entries {
           let arm: code = if (payload-type(en) is :none) ":${en.name.text} ->" else ":${en.name.text} p ->"
-          cb.block-close(arm, "},", fn[cb, en]. emit-url-arm(cb, en))
+          cb.block-close(arm, "},", fn[cb, en]. emit-url-arm(en))
         }
       })
     })
@@ -435,7 +435,7 @@ macro define(name: code, rows: span[code-token]) {
   validate(entries)
 
   let cb-storage = code-builder/new()
-  let cb = cb-storage.&
+  let(context) cb = cb-storage.&
 
   cb.write-code("type $name = either { ")
   cb.join-with(entries, ", ", fn[cb] en. {
@@ -448,8 +448,8 @@ macro define(name: code, rows: span[code-token]) {
   })
   cb.write(" }\n")
 
-  cb.block("ns for $name", fn[cb, name, entries]. emit-parse-fn(cb, name, entries))
-  emit-print-impl(cb, name, entries)
+  cb.block("ns for $name", fn[cb, name, entries]. emit-parse-fn(name, entries))
+  emit-print-impl(name, entries)
 
   cb.build()
 }

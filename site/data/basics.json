@@ -8,7 +8,7 @@
       {
         "label": "program",
         "kind": "k1",
-        "code": "fn greeting(name: string, height-cm: int, formal: bool): string {\n  let title = if formal \"Dr. \" else \"\"\n  let inches = height-cm * 100 / 254\n  \"Hello, $title$name, you are ${inches / 12} ft ${inches % 12} in\"\n}\n\nfn main() {\n  let name = \"Dennis\"\n  let line = greeting(name, height-cm = 180, formal = false)\n  println(line)\n  println(greeting(\"Ada\", height-cm = 170, formal = true))\n}"
+        "code": "fn greeting(name: string, height-cm: int, formal: bool): string {\n  let title = if formal \"Dr. \" else \"\"\n  let inches = height-cm * 100 / 254\n  \"Hello, $title$name, you are ${inches / 12} ft ${inches % 12} in\"\n}\n\nfn main() {\n  let name = \"Dennis\"\n  println(greeting(name, height-cm = 180, formal = false))\n  println(greeting(\"Ada\", height-cm = 170, formal = true))\n}"
       },
       {
         "label": "output",
@@ -21,7 +21,7 @@
     "title": "list, span, and buffer",
     "section": "00-basics",
     "anchor": "list-span-and-buffer",
-    "blurb": "Name a better duo than `ptr` and `len`, I'll wait. `list` in `k1` is the growable one (a dynamic array), backed by a `buffer`.\n\n`buffer[t]` is the raw construct that means 'this is memory that holds `t`s'. `span[t]` is your read-only, typically borrowed view of a buffer often called a slice, but I don't like how that implies cutting or partiality. Those closures disappear at runtime, by the way",
+    "blurb": "Name a better duo than `ptr` and `len`, I'll wait. `list` in `k1` is [the growable one](https://www.youtube.com/watch?v=95M6V3mZgrI), backed by a `buffer`.\n\n`buffer[t]` is the raw construct that means 'this is memory that generally holds `t`s'.\n\n`span[t]` is your read-only, typically borrowed view of a buffer often called a slice, but I don't like how that implies cutting or partiality.\n\nThose closures disappear at runtime, by the way",
     "blocks": [
       {
         "label": "in core",
@@ -62,7 +62,7 @@
     "title": "either",
     "section": "00-basics",
     "anchor": "either",
-    "blurb": "`either`s let us say 'or' at the typelevel. Together with structs, we can 'and' and 'or' our way to extremely powerful constructs. This combination is often called \"Algebraic Data Types\". `k1` will construct a bare integer enum at runtime, or a tagged union, depending on whether any of your variants have payloads. Core types like `result` and `opt` will be familiar to Rust users, and are defined as simply as this. `?u8` is shorthand for `opt[u8]` and is a 2 byte struct at runtime",
+    "blurb": "While structs let us say 'and', eithers let us say 'or'. Together with structs, we can 'and' and 'or' our way to extremely powerful constructs. This combination is often called \"Algebraic Data Types\". `k1` will construct a bare integer enum at runtime, or a tagged union, depending on whether any of your variants have payloads. Core types like `result` and `opt` will be familiar to Rust users, and are defined as simply as this. `?u8` is shorthand for `opt[u8]` and is a 2 byte struct at runtime",
     "blocks": [
       {
         "label": "in core",

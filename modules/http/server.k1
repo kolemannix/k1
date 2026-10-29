@@ -4,14 +4,13 @@ use uv/libuv/uv-loop
 use uv/req
 use uv/handle
 use uv/stream
-use std/source
-use std/pull
-use std/byte-source
+use std/stream/source
+use std/stream/pull
+use std/stream/byte-source
 use std/pool
 use std/posix
 use std/mpsc
 use std/mpsc-node
-use std/notify
 use uv/worker-pool
 use uv/job
 
@@ -100,10 +99,7 @@ fn start(
   uv/check(libuv/async_init(l, s.on-loop-event.&, run-loop-events.&)).!
   s.on-loop-event.&.set-data(s)
   libuv/unref(s.on-loop-event.&.as-handle())
-  let on-send: notify = .{
-    state = s.as[ptr],
-    notify-fn = fn(state: ptr) uv/check(libuv/async_send(state.ref[server].on-loop-event.&)).!,
-  }
+  let on-send = uv/async-waker(s.on-loop-event.&)
   s.handled = mpsc/make(on-send)
   s.woken = mpsc/make(on-send)
 

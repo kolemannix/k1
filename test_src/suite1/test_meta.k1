@@ -100,7 +100,7 @@ w.write("\"${f.name}\":");
   }
 }
 
-fn write-json[t, w: writer](context w)(t: t) {
+fn write-json[t, w: writer](w: w, t: t) {
   #meta {
     let type-id = types/id[t]()
     let code = string-builder/new()
@@ -111,7 +111,7 @@ fn write-json[t, w: writer](context w)(t: t) {
 
 fn to-json[t](t: t): string {
   let w = list/empty[char]()
-  write-json(context w.&)(t)
+  write-json(w.&, t)
   let s = string/wrap-list(w)
   s
 }

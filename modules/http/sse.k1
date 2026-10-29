@@ -1,6 +1,6 @@
-use std/source
-use std/pipe
-use std/byte-source
+use std/stream/source
+use std/stream/pipe
+use std/stream/byte-source
 
 type sse-encoder = {
   event-line: span[u8],

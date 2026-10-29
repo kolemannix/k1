@@ -106,6 +106,9 @@ pub struct IrUnit {
 }
 
 impl IrUnit {
+    pub const INLINE_MAX_INSTS: u32 = 19;
+    pub const LOCAL_COPY_MAX_INSTS: u32 = 128;
+
     pub fn new(
         result_type_id: TypeId,
         unit_id: IrUnitId,
@@ -137,6 +140,16 @@ impl IrUnit {
     pub fn is_cold(&self, k1: &TypedProgram) -> bool {
         self.fn_type.diverges
             || matches!(self.unit_id, IrUnitId::Function(id) if k1.get_function(id).is_cold())
+    }
+
+    pub fn inline_size(&self, k1: &TypedProgram) -> Option<u32> {
+        let IrUnitId::Function(function_id) = self.unit_id else { return None };
+        let function = k1.get_function(function_id);
+        if self.is_cold(k1) || function.is_noinline() || function.is_reloadable() {
+            None
+        } else {
+            Some(self.inst_count())
+        }
     }
 
     pub fn view(&self, mem: &kmem::Mem<ProgramIr>) -> UnitView<'static> {

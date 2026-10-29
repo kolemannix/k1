@@ -1,19 +1,14 @@
 // Disclaimer: This is a temporary, ai-generated utility to test the compiler and push the http project forward
-type notify = { state: ptr, notify-fn: *fn(ptr) -> {} }
-ns for notify {
-  fn notify(self: notify) { (self.notify-fn)(self.state) }
-}
-
 ability mpsc-node {
   fn mpsc-link(self: *self): *optref[self]
 }
 
-type mpsc[t] = { head: ptr, on-send: notify }
+type mpsc[t] = { head: ptr, on-send: stream/waker }
 
 type mpsc-batch[t] = { at: optref[t] }
 
 ns for mpsc {
-  fn make[t](on-send: notify): mpsc[t] { .{ head = ptr/null, on-send } }
+  fn make[t](on-send: stream/waker): mpsc[t] { .{ head = ptr/null, on-send } }
 
   // Any thread
   fn send[t: mpsc-node](self: *mpsc[t], node: *t) {
@@ -24,7 +19,7 @@ ns for mpsc {
       if swap.ok { break }
       old = swap.prev
     }
-    if old is null { self.on-send.notify() }
+    if old is null { self.on-send.wake() }
   }
 
   // Consumer thread only
@@ -62,7 +57,7 @@ type channel[t] = {
   cap-weight: size,
   weight-fn: *fn(t) -> size,
   drop-fn: *fn(t) -> {},
-  ?waker,
+  ?stream/waker,
   pending-wake: bool,
   failure: ?string,
   closed: bool,
@@ -133,9 +128,9 @@ ns for channel {
   }
 }
 
-impl[t] source[t = t] for channel[t] {
-  fn start(self: *channel[t], waker: waker) { self.waker = :some waker }
-  fn pull(self: *channel[t]): pull[t] {
+impl[t] stream/source[t = t] for channel[t] {
+  fn start(self: *channel[t], waker: stream/waker) { self.waker = :some waker }
+  fn pull(self: *channel[t]): stream/pull[t] {
     if self.failure is :some message { return :fail message }
     if self.head == self.queue.len() { return :pending }
     let item = self.queue.[self.head]

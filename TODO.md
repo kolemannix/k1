@@ -3,8 +3,6 @@
 
 ## [ ] asm
 
-## [ ] in-source IR!!!
-
 ## [x] token stream based macros
 
 ## [x] expr-level macros
@@ -18,26 +16,14 @@
 
 ## grab bag list mid2026
 - [ ] IR alloca lifetimes
-- [ ] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
-- [ ] Generic aliases: `type(alias) pair[t] = { a: t, b: t }` (rejected with an error for now; an alias is transparent, so this is a type-level function)
+- [x] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
 - [ ] new lib type: :runtime; this is the ideal dependency kind for libclang in k1bindgen
-- [ ] `#[must_use]` equivalent
-- [ ] Bug: the unused-parameter warning ignores untaken `#if` arms. std/watch.k1 `add`/`wait`/`close`
-      warn `Parameter is never used` on every wasi/bare build (the refchess web demo included),
-      because their only uses sit in the posix arms
 - [ ] literal inference issue (a) `2 * d` vs `d * 2` differ — literal-lhs
       defaults i64 and widens the u32 rhs up, literal-rhs adopts u32 and wraps; (b) binary ops widen
       rhs into lhs type but have no least-upper-bound, so `u32 + i64` errors while `i64 + u32` works;
       (c) expected-type propagation into generic calls pins the type param before argument-driven
       inference, so `write-bits(depth.get-unchecked(i), ...)` fails where the two-line form widens fine
-- [ ] Default type arguments for abilities, or partially applied abilities (alias Unwrap[T] = Try[T, empty])
-        I think doing 'defaults' is relatively easy. You just hit consult the default on the unprovided path. For partially-applieds,
-        you need essentially some notion of an 'ability signature function', just like type aliases would need
-
-- [ ] std/utf8 has only `is-valid` and `write-codepoint`. Missing: decode one codepoint at an offset,
-      a codepoint iterator over string, lead-byte sequence length (examples/selfhost/lex.k1 has its own
-      `utf8-lead-len`), codepoint count, encoded length of a codepoint, validation that reports the
-      failing offset, lossy decode with U+FFFD, UTF-16 conversion
+- [x] std/utf8 with basics
 - [ ] Linux verification
 - [x] replace fn(intern) with fn(builtin)
 - [x] add cpu feature string to k1/module

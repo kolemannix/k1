@@ -18,7 +18,7 @@ fn uint-name-for-bits(bits: u64): string {
   if bits <= 8 "u8" else if bits <= 16 "u16" else if bits <= 32 "u32" else "u64"
 }
 
-fn write-variants(cb: *code-builder, tag-type: string, variants: span[variant], bit: u64) {
+fn write-variants(context cb: *code-builder)(tag-type: string, variants: span[variant], bit: u64) {
   cb.write(" = either($tag-type) {\n")
   for v in variants {
     if (v.mask & bit) != bit continue
@@ -33,7 +33,7 @@ fn write-variants(cb: *code-builder, tag-type: string, variants: span[variant], 
   cb.write("}\n")
 }
 
-fn write-arms(cb: *code-builder, variants: span[variant], bit: u64, open: string, close: string) {
+fn write-arms(context cb: *code-builder)(variants: span[variant], bit: u64, open: string, close: string) {
   for v in variants {
     if (v.mask & bit) != bit continue
     let p = if v.payload.is-some() "(p)" else ""
@@ -41,7 +41,7 @@ fn write-arms(cb: *code-builder, variants: span[variant], bit: u64, open: string
   }
 }
 
-fn write-predicate(cb: *code-builder, f: flag, field: string) {
+fn write-predicate(context cb: *code-builder)(f: flag, field: string) {
   cb.write("fn ${f.name}(self): bool { (self.$field & ${f.bit}) != 0 }\n")
 }
 
@@ -114,35 +114,35 @@ macro define(decl: span[code-token]) {
   let from-value = "core/types/enum/enum-from-value-unchecked(self.value)"
   let vs = variants.as-span()
   let cb-storage = code-builder/new()
-  let cb = cb-storage.&
+  let(context) cb = cb-storage.&
   cb.write("type ")
   cb.write-token(name-tok)
-  write-variants(cb, tag-type, vs, 0)
+  write-variants(tag-type, vs, 0)
   for f in flags {
     let has-member = false
     for v in vs { if (v.mask & f.bit) != 0 { has-member = true } }
     if not has-member continue
     let sub = "$name-${f.name}"
     cb.write("type $sub")
-    write-variants(cb, tag-type, vs, f.bit)
+    write-variants(tag-type, vs, f.bit)
     cb.write("ns for $sub {\n")
-    for g in flags { if g.bit != f.bit write-predicate(cb, g, field) }
+    for g in flags { if g.bit != f.bit write-predicate(g, field) }
     if is-enum cb.write("fn as-$name(self): $name { $from-value }\n") else {
       cb.write("fn as-$name(self): $name { if self is {\n")
-      write-arms(cb, vs, f.bit, "", "")
+      write-arms(vs, f.bit, "", "")
       cb.write("} }\n")
     }
     cb.write("}\nns for $name {\n")
     if is-enum cb.write("fn as-${f.name}(self): ?$sub { if self.${f.name}() :some($from-value) else :none }\n") else {
       cb.write("fn as-${f.name}(self): ?$sub { if self is {\n")
-      write-arms(cb, vs, f.bit, ":some(", ")")
+      write-arms(vs, f.bit, ":some(", ")")
       cb.write("_ -> :none,\n} }\n")
     }
     cb.write("}\n#if types/size[$sub] == types/size[$name] and types/align[$sub] == types/align[$name] ns for $name {\n")
     cb.write("fn view-${f.name}(self: *$name): ?*$sub { if self.${f.name}() :some(self.as[ptr].ref[$sub]) else :none }\n}\n")
   }
   cb.write("ns for $name {\n")
-  for f in flags { write-predicate(cb, f, field) }
+  for f in flags { write-predicate(f, field) }
   cb.write("}\n")
   cb.build()
 }

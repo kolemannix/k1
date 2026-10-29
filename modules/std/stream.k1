@@ -1,4 +1,5 @@
 // Pull-based chunk streams with async support via wakers
+ns stream
 
 type waker = { state: ptr, wake-fn: *fn(ptr) -> {} }
 ns for waker {

@@ -11,14 +11,14 @@ use http/datastar
 use std/url
 use std/url/pair
 use http/cookie
-use std/rc-byte-stream
-use std/source
-use std/collect-sink
-use std/byte-source
+use std/stream/rc-byte-stream
+use std/stream/source
+use std/stream/collect-sink
+use std/stream/byte-source
 use http/chunked
 use http/sse-events
-use std/waker
-use std/pull
+use std/stream/waker
+use std/stream/pull
 use uv/worker-pool
 use http/task
 

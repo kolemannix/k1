@@ -1216,7 +1216,7 @@ pub fn setup_is_current<Tag>(
 
 fn dump_checked_ir(k1: &mut TypedProgram) -> K1Result<()> {
     let roots = ir::get_program_roots(k1)?;
-    let reachable = ir::compile_reachable(k1, &roots.functions)?;
+    let (reachable, _) = ir::compile_reachable(k1, &roots.functions)?;
     if let Err(e) = ir::dump_program_ir(k1, &reachable) {
         kbail!(k1, Span::NONE, "Failed to write the ir dump: {e}");
     }
@@ -2238,14 +2238,16 @@ fn write_unit_artifacts(
     } else {
         UnitOutput::Object(pipeline)
     };
-    let local_copies = matches!(output, UnitOutput::Bitcode(Pipeline::ThinLtoPreLink));
-    let plans = Cg::plan_units(k1, &roots.reachable, MAX_UNITS, local_copies);
+    let local_copies_enabled = matches!(output, UnitOutput::Bitcode(Pipeline::ThinLtoPreLink));
+    let (plans, local_copies) =
+        Cg::plan_units(k1, &roots.reachable, MAX_UNITS, local_copies_enabled);
     let unit_count = plans.len();
 
     let codegen_frame = k1.trace_push(TraceKind::Codegen, unit_count as u32, 0);
     let generated = {
         let k1: &TypedProgram = k1;
-        Cg::codegen_units(k1, roots, plans, kind, output, object_path).map_err(|e| report_cg(k1, e))
+        Cg::codegen_units(k1, roots, plans, &local_copies, kind, output, object_path)
+            .map_err(|e| report_cg(k1, e))
     };
     if let Ok((_, timings)) = &generated {
         record_unit_timings(k1, codegen_frame, timings);

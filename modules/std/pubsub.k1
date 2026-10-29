@@ -38,7 +38,7 @@ ns pubsub {
   }
 
   fn create[t](
-    on-event: notify,
+    on-event: stream/waker,
     subscriber-cap-weight: size,
     weight-fn: *fn(rc[t]) -> size,
   ): *bus[t] {
@@ -62,7 +62,7 @@ ns pubsub {
 
     // Any thread: only allocates; the bus learns about the subscription when
     // the consumer start()s the stream on its own thread.
-    fn subscribe[t](self: *bus[t], topic: string): dyn[source[t = rc[t]]] {
+    fn subscribe[t](self: *bus[t], topic: string): dyn[stream/source[t = rc[t]]] {
       let chan = channel/make[rc[t]](
         cap-weight = self.subscriber-cap-weight,
         weight-fn = self.weight-fn,
@@ -111,13 +111,13 @@ ns pubsub {
     chan: *channel[rc[t]],
   }
 
-  impl[t] source[t = rc[t]] for subscription[t] {
-    fn pull(self: *subscription[t]): pull[rc[t]] {
-      source@(channel[rc[t]])/pull(self.chan)
+  impl[t] stream/source[t = rc[t]] for subscription[t] {
+    fn pull(self: *subscription[t]): stream/pull[rc[t]] {
+      stream/source@(channel[rc[t]])/pull(self.chan)
     }
 
-    fn start(self: *subscription[t], waker: waker) {
-      source@(channel[rc[t]])/start(self.chan, waker)
+    fn start(self: *subscription[t], waker: stream/waker) {
+      stream/source@(channel[rc[t]])/start(self.chan, waker)
       self.bus.subscribers.push-in(heap, self)
     }
 

@@ -174,6 +174,10 @@ macro locked(target: code, name: code, body: code) {
   }`
 }
 
+fn async-waker(handle: *libuv/async): std/stream/waker {
+  .{ state = handle.as[ptr], wake-fn = fn(state: ptr) check(libuv/async_send(state.ref[libuv/async])).! }
+}
+
 ns bus {
   fn create[t](
     uv-loop: *libuv/uv-loop,
@@ -181,14 +185,10 @@ ns bus {
     weight-fn: *fn(rc[t]) -> size,
   ): *pubsub/bus[t] {
     let async-handle = heap.alloc-t[libuv/async]
-    let bus = pubsub/create[t](.{ state = async-handle.as[ptr], notify-fn = notify-async.& }, subscriber-cap-weight, weight-fn)
+    let bus = pubsub/create[t](async-waker(async-handle), subscriber-cap-weight, weight-fn)
     check(libuv/async_init(uv-loop, async-handle, fn handle. handle.get-data[pubsub/bus[t]].dispatch())).!
     async-handle.set-data(bus)
     libuv/unref(async-handle.as-handle())
     bus
-  }
-
-  fn notify-async(state: ptr) {
-    check(libuv/async_send(state.ref[libuv/async])).!
   }
 }

@@ -18,7 +18,7 @@ fn write-json-of(code: *string-builder, name: string, type-id: types/type-id) {
   }
 }
 
-fn write-json[t, w: writer](context w)(t: t) {
+fn write-json[t, w: writer](w: w, t: t) {
   #meta {
     let code = string-builder/new()
     write-json-of(code.&, "t", types/id[t]())
@@ -28,7 +28,7 @@ fn write-json[t, w: writer](context w)(t: t) {
 
 fn to-json[t](t: t): string {
   let sb = string-builder/new()
-  write-json(context sb.&)(t)
+  write-json(sb.&, t)
   sb.build()
 }
 

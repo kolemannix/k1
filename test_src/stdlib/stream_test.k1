@@ -1,20 +1,19 @@
 ns stream_test
 
-use std/source
-use std/sink
-use std/pull
-use std/waker
-use std/sum-sink
+use std/stream/source
+use std/stream/sink
+use std/stream/pull
+use std/stream/waker
+use std/stream/sum-sink
 use std/channel
 use std/mpsc
 use std/mpsc-node
-use std/notify
 use std/rc
 use std/rc-bytes
 use std/owned
 use std/heap-bytes
 use std/heap-string
-use std/rc-byte-stream
+use std/stream/rc-byte-stream
 
 fn(test) span-source-runs-into-sum-sink() {
   let nums: span[int] = [1, 2, 3, 4, 5]
@@ -102,23 +101,23 @@ fn check-rc-byte-stream() {
   src.stop()
 }
 
-let(mutable) notify-count: int = 0
-fn count-notify(_p: ptr) { notify-count = notify-count + 1 }
+let(mutable) wake-count: int = 0
+fn count-wake(_p: ptr) { wake-count = wake-count + 1 }
 
 type mpsc-test-node = { value: int, link: optref[mpsc-test-node] }
 impl mpsc-node for mpsc-test-node {
   fn mpsc-link(self: *mpsc-test-node): *optref[mpsc-test-node] { self.link.& }
 }
 
-fn(test) mpsc-takes-fifo-and-notifies-per-batch() {
-  let q = mpsc/make[mpsc-test-node](.{ state = ptr/null, notify-fn = count-notify.& })
+fn(test) mpsc-takes-fifo-and-wakes-per-batch() {
+  let q = mpsc/make[mpsc-test-node](.{ state = ptr/null, wake-fn = count-wake.& })
   let a: mpsc-test-node = .{ value = 1, link = null() }
   let b: mpsc-test-node = .{ value = 2, link = null() }
   let c: mpsc-test-node = .{ value = 3, link = null() }
   q.&.send(a.&)
   q.&.send(b.&)
   q.&.send(c.&)
-  assert-equals(notify-count, 1)
+  assert-equals(wake-count, 1)
   let seen = list/empty[int]()
   for n in q.&.take() { seen.push(n.value) }
   assert-equals(seen, [1, 2, 3])
@@ -126,7 +125,7 @@ fn(test) mpsc-takes-fifo-and-notifies-per-batch() {
   for n in q.&.take() { seen.push(n.value) }
   assert(seen.is-empty())
   q.&.send(a.&)
-  assert-equals(notify-count, 2)
+  assert-equals(wake-count, 2)
 }
 
 fn(test) rc-and-byte-stream-release-every-cell() {

@@ -131,15 +131,10 @@ fn inline_target(k1: &TypedProgram, u: &UnitView, inst: &Inst) -> Option<IrCall>
     let Inst::Call { call_id } = *inst else { return None };
     let call = *u.call(call_id);
     let IrCallee::Direct(function_id) = call.callee else { return None };
-    let function = k1.functions.get(function_id);
-    if function.is_reloadable() || function.is_noinline() {
-        return None;
-    }
     let callee = get_compiled_unit(&k1.ir, IrUnitId::Function(function_id)).unwrap();
-    if callee.is_optimized && !callee.is_cold(k1) && callee.inst_count() < 20 {
-        Some(call)
-    } else {
-        None
+    match callee.inline_size(k1) {
+        Some(n) if callee.is_optimized && n <= IrUnit::INLINE_MAX_INSTS => Some(call),
+        _ => None,
     }
 }
 

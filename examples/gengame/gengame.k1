@@ -1,25 +1,3 @@
-// idea: sound — tiles as notes, reps = rhythm, shift = transposition (drift is a canon,
-// interference a phase pattern); space plays target melody then yours, hear the diff
-// before you see it; synth PCM into a raylib audio stream, render-layer only
-
-// idea: stochastic plants — a rule may carry variants and each expansion site picks
-// one by a visible per-level seed die ("weather"); fixed seed keeps expansion
-// deterministic so exact-match scoring still works, and rerolling the die shows the
-// same program growing a different individual — variation lives in the world, not
-// the program, which is the actual L-system lesson
-
-// Adding parameter-taking 'functions' to the seq world could be a great mechanic
-// - will teach parameterization and abstraction in a neat way
-
-// polished-game idea: always-on minimap of the max-growth target next to the growth scrub
-
-// Other game ideas:
-// Geometry; try to make a triangle where pythagorean doesnt hold; interactive visual
-//           bars / meters for each thing
-// Numbers:  Peano numbers first, build yourself up to integers written with digits
-// Algebra: each level proves or discovers an identity or rule, you can only use it
-//          once discovered
-
 use std/math/trig
 
 
@@ -96,8 +74,8 @@ let PANE-GAP: i32 = 14
 let PLANT-SCALE-MAX: f32 = 72.0
 let GROW-RATE: f32 = 2.2
 let PLAY-RATE: f32 = 1.0
-let PLAY-IDLE: f32 = 0.0 - 1.0
-let SEL-NONE: size = 0 - 1
+let PLAY-IDLE: f32 = -1.0
+let SEL-NONE: size = -1
 let ANIM-RATE: f32 = 1.15
 let ANIM-LIT: f32 = 0.55
 let ANIM-SPAN: f32 = 0.45
@@ -252,10 +230,7 @@ fn cur-level(context g: *game)(): level {
 }
 
 fn level-index(name: string): size {
-  for i in 0.until(LEVELS.len()) {
-    if LEVELS.[i].name == name { return i }
-  }
-  crash("no level named $name")
+  if LEVELS.find-index(fn[name] lv. lv.name == name) is :some(i) i else crash("no level named $name")
 }
 
 fn row-of(context g: *game)(i: u8): *list[token] {
@@ -302,13 +277,6 @@ fn level-recursive(lv: level): bool {
     or lv.target-b.contains('a') or lv.target-b.contains('b') or lv.target-b.contains('~')
 }
 
-fn sym-index(alpha: string, c: char): ?u8 {
-  for i in 0.until(alpha.len()) {
-    if alpha.[i] == c { return :some(i.trunc[u8]) }
-  }
-  :none
-}
-
 fn parse-text(world: world-kind, text: string): list[token] {
   let alpha = world-alphabet(world)
   let toks: list[token] = list/with-capacity(text.len())
@@ -328,7 +296,7 @@ fn parse-text(world: world-kind, text: string): list[token] {
         toks.push(:mir)
         i = i + 1
       }
-      else if sym-index(alpha, c) is :some(s) { toks.push(:sym(s)) }
+      else if alpha.position(c) is :some(s) { toks.push(:sym(s.trunc[u8])) }
       else if c == 'a' or c == 'b' {
         let d: u8 = if c == 'a' 0 else 1
         if i + 1 < text.len() and text.[i + 1] == '(' {
@@ -432,7 +400,7 @@ fn expand-toks(ctx: *expand-ctx, toks: span[token], self: span[token], self-d: u
       :sym(s) -> {
         assert(s.as-size() < ctx.nsyms)
         let v = ((s.as-size() + ctx.shift) % ctx.nsyms).trunc[u8]
-        let gv = if ndepth > 255 255u8 else ndepth.trunc[u8]
+        let gv = ndepth.min(255).trunc[u8]
         let sv = src-pack(row, base + i)
         if v.as-size() == ctx.pop-sym {
           if ctx.bdepth > floor {
@@ -756,14 +724,10 @@ fn turtle-walk(e: *expansion, angle-deg: f32, frontier: u8, unfurl: f32): turtle
 
 fn grow-bounds(b: *bounds, segs: *fixlist[seg, MAX-EXPAND]) {
   for s in segs {
-    if s.ax < b.minx { b.minx = s.ax }
-    if s.ax > b.maxx { b.maxx = s.ax }
-    if s.ay < b.miny { b.miny = s.ay }
-    if s.ay > b.maxy { b.maxy = s.ay }
-    if s.bx < b.minx { b.minx = s.bx }
-    if s.bx > b.maxx { b.maxx = s.bx }
-    if s.by < b.miny { b.miny = s.by }
-    if s.by > b.maxy { b.maxy = s.by }
+    b.minx = b.minx.min(s.ax).min(s.bx)
+    b.maxx = b.maxx.max(s.ax).max(s.bx)
+    b.miny = b.miny.min(s.ay).min(s.by)
+    b.maxy = b.maxy.max(s.ay).max(s.by)
   }
 }
 
@@ -785,9 +749,7 @@ fn build-palette(context g: *game)(): list[chip] {
     } else if c == '_' {
       chips.push(.{ x, y, act = :tok(:hole) })
     } else {
-      let s = sym-index(alpha, c)
-      assert(s.is-some())
-      chips.push(.{ x, y, act = :tok(:sym(s.!)) })
+      chips.push(.{ x, y, act = :tok(:sym(alpha.position(c).!.trunc[u8])) })
     }
     x = x + CHIP-W + 5
   }
@@ -1005,8 +967,8 @@ fn tap-chip(context g: *game)(row: *list[token], j: size) {
     return
   }
   if g.sel-live and g.sel-a >= 0 {
-    g.sel-a = if j < g.sel-anchor { j } else { g.sel-anchor }
-    g.sel-b = (if j > g.sel-anchor { j } else { g.sel-anchor }) + 1
+    g.sel-a = j.min(g.sel-anchor)
+    g.sel-b = j.max(g.sel-anchor) + 1
     g.sel-live = false
     return
   }
@@ -1212,8 +1174,7 @@ fn handle-input(context g: *game)() {
 }
 
 fn tick(context g: *game)() {
-  let dt = rl/get-frame-time()
-  if dt > 0.05 { dt = 0.05 }
+  let dt = rl/get-frame-time().min(0.05)
   let goal = g.preview-growth.as[f32]
   let step = dt * GROW-RATE
   let d = goal - g.grow-t
@@ -1278,7 +1239,7 @@ ns(reload) view {
   }
 
   fn draw-bead(col: rl/color, x: f32, cy: i32, w: f32, h: f32) {
-    let r = if w < h { w * 0.5 } else { h * 0.5 }
+    let r = w.min(h) * 0.5
     rl/draw-circle((x + r).as[i32], cy, r, col)
     if w > h {
       rl/draw-circle((x + w - r).as[i32], cy, r, col)
@@ -1409,7 +1370,7 @@ ns(reload) view {
   }
 
   fn strip-cells(e: *expansion, gv: gview, upto: size): f32 {
-    let n = if upto > e.syms.len() { e.syms.len() } else { upto }
+    let n = upto.min(e.syms.len())
     let t: f32 = 0.0
     for i in 0.until(n) { t = t + cell-weight(e.gens.[i], gv) }
     t
@@ -1500,10 +1461,9 @@ ns(reload) view {
     if growth-pos() is :some(p) { draw-growth(p.x, p.y, g.preview-growth, lv.growth) }
     let tn = strip-cells(target.&, gv, target.syms.len())
     let pn = strip-cells(player.&, gv, player.syms.len())
-    let nf = if tn > pn { tn } else { pn }
-    if nf < 1.0 { nf = 1.0 }
+    let nf = tn.max(pn).max(1.0)
     let fit: i32 = (W - 120) / nf.as[i32]
-    let cell: i32 = if fit > 44 44 else if fit < 4 4 else fit
+    let cell = fit.min(44).max(4)
     let x0: i32 = ((W.as[f32] - cell.as[f32] * nf) * 0.5).as[i32]
     let maxn = ((W - 60 - x0) / cell).as-size()
     let show-buds = g.preview-growth < lv.growth
@@ -1532,14 +1492,13 @@ ns(reload) view {
       text(label, 40, 456, 18, if g.active == 0 C_ACCENT else C_ACCENT-B)
       draw-strip(wb.&, 480, cell, x0, maxn, gv, show-buds, true, true)
       draw-playhead(wb.&, 480, cell, x0, gv)
-      let wn = strip-cells(wb.&, gv, if wb.syms.len() > maxn { maxn } else { wb.syms.len() }) * cell.as[f32]
+      let wn = strip-cells(wb.&, gv, wb.syms.len().min(maxn)) * cell.as[f32]
       rl/draw-rectangle(x0 + wn.as[i32] + 3, 480 + 6, 3, cell - 12, C_ACCENT)
     }
   }
 
   fn vine-color(gen: u8, full: f32, alpha: u8): rl/color {
-    let t = gen.as[f32] / (if full < 1.0 1.0 else full)
-    if t > 1.0 { t = 1.0 }
+    let t = (gen.as[f32] / full.max(1.0)).min(1.0)
     .{
       r = (C_VINE.r.as[f32] + (C_VINE-TIP.r.as[f32] - C_VINE.r.as[f32]) * t).as[i32].trunc[u8],
       g = (C_VINE.g.as[f32] + (C_VINE-TIP.g.as[f32] - C_VINE.g.as[f32]) * t).as[i32].trunc[u8],
@@ -1549,10 +1508,7 @@ ns(reload) view {
   }
 
   fn stem-thick(scale: f32): f32 {
-    let t = scale * 0.06
-    if t < 2.5 { t = 2.5 }
-    if t > 4.5 { t = 4.5 }
-    t
+    (scale * 0.06).max(2.5).min(4.5)
   }
 
   fn draw-segs-ghost(segs: *fixlist[seg, MAX-EXPAND], scale: f32, ox: f32, oy: f32, lit: size) {
@@ -1577,8 +1533,7 @@ ns(reload) view {
 
   fn draw-blooms(pts: *fixlist[bloom-pt, MAX-BUDS], scale: f32, ox: f32, oy: f32, col: rl/color) {
     for p in pts {
-      let r = p.r * scale
-      if r < 2.0 { r = 2.0 }
+      let r = (p.r * scale).max(2.0)
       rl/draw-circle((p.x * scale + ox).as[i32], (p.y * scale + oy).as[i32], r, col)
     }
   }
@@ -1591,7 +1546,7 @@ ns(reload) view {
     for m in marks {
       let bx = m.pos.x * scale + ox
       let by = m.pos.y * scale + oy
-      let tipscale: f32 = if scale < 20.0 { 20.0 } else { scale }
+      let tipscale = scale.max(20.0)
       rl/draw-line-ex(
         .{ x = bx, y = by },
         .{ x = bx + m.pos.ang.cos() * tipscale * 0.4, y = by + m.pos.ang.sin() * tipscale * 0.4 },
@@ -1603,7 +1558,7 @@ ns(reload) view {
   fn draw-cursor(p: turtle-pos, scale: f32, ox: f32, oy: f32) {
     let bx = p.x * scale + ox
     let by = p.y * scale + oy
-    let tipscale: f32 = if scale < 20.0 { 20.0 } else { scale }
+    let tipscale = scale.max(20.0)
     rl/draw-line-ex(
       .{ x = bx, y = by },
       .{ x = bx + p.ang.cos() * tipscale * 0.6, y = by + p.ang.sin() * tipscale * 0.6 },
@@ -1715,10 +1670,8 @@ ns(reload) view {
     if show-target { grow-bounds(b.&, tw.segs.&) }
     grow-bounds(b.&, pw.segs.&)
     grow-bounds(b.&, ww.segs.&)
-    let bw = b.maxx - b.minx
-    let bh = b.maxy - b.miny
-    if bw < 0.001 { bw = 0.001 }
-    if bh < 0.001 { bh = 0.001 }
+    let bw = (b.maxx - b.minx).max(0.001)
+    let bh = (b.maxy - b.miny).max(0.001)
     let sx = (pp.w - 60).as[f32] / bw
     let sy = (pp.h - 60).as[f32] / bh
     let scale = sx.min(sy)
@@ -1796,9 +1749,7 @@ ns(reload) view {
     let views: size = if g.active == 2 2 else 3
     let cw = (CANVAS-W - 80) / w.trunc[i32]
     let ch = ((CANVAS-H - 80) / views.trunc[i32] - 30) / rows.trunc[i32]
-    let cell = cw.min(ch)
-    if cell > 34 { cell = 34 }
-    if cell < 4 { cell = 4 }
+    let cell = cw.min(ch).min(34).max(4)
     let gw = cell * w.trunc[i32]
     let gh = cell * rows.trunc[i32]
     let x0 = CANVAS-X + (CANVAS-W - gw) / 2
@@ -1906,7 +1857,7 @@ fn self-test(context g: *game)() {
     for s in target {
       let c = alpha.[s.as-size()]
       if not uses-shift {
-        assert(sym-index(lv.syms, c).is-some())
+        assert(lv.syms.contains(c))
       }
     }
     if lv.world is :plant {

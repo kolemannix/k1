@@ -3873,7 +3873,10 @@ pub fn get_program_roots(k1: &TypedProgram) -> K1Result<ProgramRoots> {
     Ok(ProgramRoots { main, program_exit, functions })
 }
 
-pub fn compile_reachable(k1: &mut TypedProgram, roots: &[FunctionId]) -> K1Result<Vec<FunctionId>> {
+pub fn compile_reachable(
+    k1: &mut TypedProgram,
+    roots: &[FunctionId],
+) -> K1Result<(Vec<FunctionId>, IdMap<TypedGlobalId, ()>)> {
     for root in roots {
         let requester = k1.trace.top();
         k1.ir.units_pending_compile.push(*root, requester);
@@ -3882,27 +3885,10 @@ pub fn compile_reachable(k1: &mut TypedProgram, roots: &[FunctionId]) -> K1Resul
     for root in roots {
         optimize_unit(k1, IrUnitId::Function(*root))?;
     }
-    Ok(collect_reachable_functions(k1, roots))
-}
 
-fn collect_inst_function_refs(u: &UnitView, inst: &Inst, refs: &mut Vec<FunctionId>) {
-    if let Inst::Call { call_id } = inst {
-        match u.call(*call_id).callee {
-            IrCallee::Direct(id)
-            | IrCallee::Extern { function_id: id, .. }
-            | IrCallee::BackendBuiltin(id, _) => refs.push(id),
-            IrCallee::LlvmIntrinsic { .. } | IrCallee::Indirect(..) => {}
-        }
-    }
-    visit_inst_values(u, inst, &mut |v| {
-        if let Value::FunctionAddr(id) = v {
-            refs.push(id)
-        }
-    });
-}
-
-fn collect_reachable_functions(k1: &TypedProgram, roots: &[FunctionId]) -> Vec<FunctionId> {
+    // Walk reachable blocks for the functions and globals they reference
     let mut reachable: Vec<FunctionId> = Vec::with_capacity(1024);
+    let mut globals: IdMap<TypedGlobalId, ()> = IdMap::default();
     let mut seen: FxHashSet<FunctionId> = FxHashSet::with_capacity(1024);
     let mut worklist: Vec<FunctionId> = roots.to_vec();
     let mut seen_blocks: IdMap<BlockId, ()> = IdMap::default();
@@ -3925,14 +3911,27 @@ fn collect_reachable_functions(k1: &TypedProgram, roots: &[FunctionId]) -> Vec<F
             }
             seen_blocks.insert(block_id, ());
             for inst_id in u.block_insts(block_id) {
-                collect_inst_function_refs(&u, u.inst(inst_id), &mut worklist);
+                let inst = u.inst(inst_id);
+                if let Inst::Call { call_id } = inst {
+                    match u.call(*call_id).callee {
+                        IrCallee::Direct(id)
+                        | IrCallee::Extern { function_id: id, .. }
+                        | IrCallee::BackendBuiltin(id, _) => worklist.push(id),
+                        IrCallee::LlvmIntrinsic { .. } | IrCallee::Indirect(..) => {}
+                    }
+                }
+                visit_inst_values(&u, inst, &mut |v| match v {
+                    Value::FunctionAddr(id) => worklist.push(id),
+                    Value::GlobalAddr { id, .. } => globals.insert(id, ()),
+                    _ => {}
+                });
             }
             for succ in u.successors(block_id, Some(false)) {
                 block_worklist.push(succ);
             }
         }
     }
-    reachable
+    Ok((reachable, globals))
 }
 
 pub fn dump_program_ir(k1: &TypedProgram, reachable: &[FunctionId]) -> std::io::Result<()> {

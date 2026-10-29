@@ -1,4 +1,4 @@
-# The compile-time VM can call C
+# Rasterizing a font atlas at compile-time using stb_truetype
 
 Every top-level `let` runs at compile time, in the compiler's VM. The VM
 speaks the C ABI through libffi, so those initializers can call C.
