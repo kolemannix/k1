@@ -942,10 +942,11 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             roots.push(id);
         }
         let reachable = ir::compile_reachable(k1, roots)?;
-        //nocommit I didn't know we did this; is this call necessary? Is it because codegens now
-        //only have a read-only typer? Walking **every** type is definitely going to be a bit
-        //wasteful
-        k1.compute_all_physical_types();
+        // Codegen defines every global, referenced from IR or not (should we try to improve on
+        // that?)
+        for global_id in k1.globals.iter_ids() {
+            k1.get_physical_type(k1.globals.get(global_id).type_id);
+        }
         Ok(reachable)
     }
 
@@ -3345,11 +3346,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             param_types.push(intrinsic_param_type(self, p.type_id)?.into());
         }
         let return_type_id = fn_type.return_type;
-        let returns_empty = match self.k1.get_physical_type_computed(return_type_id) {
-            PhysicalTypeResult::Yes(pt) => pt.is_empty(),
-            _ => false,
+        let Some(ir_fn) = self.k1.ir.function_unit(function_id) else {
+            cgbail!(span, "Internal Compiler Error: missing ir for llvm intrinsic {}", name);
         };
-        let llvm_fn_type = if returns_empty {
+        let llvm_fn_type = if ir_fn.fn_type.return_type.is_empty() {
             self.ctx.void_type().fn_type(&param_types, false)
         } else {
             match self.k1.types.get(return_type_id) {

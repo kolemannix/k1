@@ -11311,9 +11311,8 @@ impl TypedProgram {
                             kbail!(self, span, "type {} has no size", type_id)
                         }
                     }
-                    PhysicalTypeResult::Infinite => Ok(self.synth_phony(SIZE_TYPE_ID, span)),
-                    PhysicalTypeResult::Yes(_) => {
-                        let layout = self.get_layout(type_id).unwrap();
+                    PhysicalTypeResult::Yes(pt) => {
+                        let layout = self.get_pt_layout(pt);
                         let value_bytes = match intrinsic {
                             BuiltinTyperInline::TypeSize => layout.size as u64,
                             BuiltinTyperInline::TypeStride => layout.stride() as u64,

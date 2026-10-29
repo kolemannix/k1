@@ -1321,7 +1321,7 @@ pub fn get_span_element(
 
 fn static_zero_value(k1: &mut TypedProgram, type_id: TypeId, span: Span) -> Value {
     match k1.get_physical_type(type_id) {
-        PhysicalTypeResult::No | PhysicalTypeResult::Infinite => {
+        PhysicalTypeResult::No => {
             ice_span!(
                 k1,
                 span,

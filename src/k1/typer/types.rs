@@ -1271,7 +1271,6 @@ impl ScalarType {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PhysicalTypeResult {
     No,
-    Infinite,
     Yes(PhysicalType),
 }
 
@@ -1279,7 +1278,6 @@ impl PhysicalTypeResult {
     pub fn unwrap(self) -> PhysicalType {
         match self {
             PhysicalTypeResult::No => panic!("Called unwrap on PhysicalTypeResult::No"),
-            PhysicalTypeResult::Infinite => panic!("Called unwrap on PhysicalTypeResult::Infinite"),
             PhysicalTypeResult::Yes(pt) => pt,
         }
     }
@@ -2334,7 +2332,6 @@ impl TypedProgram {
                     Some(0) => PhysicalTypeResult::Yes(PhysicalType::EMPTY),
                     Some(len) => match self.get_physical_type(array.element_type) {
                         PhysicalTypeResult::No => PhysicalTypeResult::No,
-                        PhysicalTypeResult::Infinite => PhysicalTypeResult::No,
                         PhysicalTypeResult::Yes(element_pt) => {
                             let elem_layout = self.get_pt_layout(element_pt);
                             let layout = elem_layout.array_me(len as usize);
@@ -2390,7 +2387,6 @@ impl TypedProgram {
                     for field in self.mem.getn(s_fields) {
                         match self.get_physical_type(field.type_id) {
                             PhysicalTypeResult::No => return PhysicalTypeResult::No,
-                            PhysicalTypeResult::Infinite => return PhysicalTypeResult::Infinite,
                             PhysicalTypeResult::Yes(field_pt) => {
                                 let field_layout = self.get_pt_layout(field_pt);
                                 let offset = if packed {
@@ -2430,7 +2426,6 @@ impl TypedProgram {
                     for field in self.mem.getn(u_fields) {
                         match self.get_physical_type(field.type_id) {
                             PhysicalTypeResult::No => return PhysicalTypeResult::No,
-                            PhysicalTypeResult::Infinite => return PhysicalTypeResult::Infinite,
                             PhysicalTypeResult::Yes(field_pt) => {
                                 members.push(UnionMember { name: field.name, ty: field_pt });
                             }
@@ -2459,11 +2454,6 @@ impl TypedProgram {
                         }
                         match self.get_physical_type(*payload) {
                             PhysicalTypeResult::No => return PhysicalTypeResult::No,
-                            PhysicalTypeResult::Infinite => {
-                                // We can never figure out a size large enough to hold all variants,
-                                // since one variant is infinitely sized
-                                return PhysicalTypeResult::No;
-                            }
                             PhysicalTypeResult::Yes(payload_pt) => {
                                 union_members.push(UnionMember { name: v.name, ty: payload_pt });
 
@@ -2557,7 +2547,6 @@ impl TypedProgram {
     ) -> PhysicalTypeResult {
         match self.get_physical_type(other) {
             PhysicalTypeResult::No => PhysicalTypeResult::No,
-            PhysicalTypeResult::Infinite => PhysicalTypeResult::Infinite,
             orig @ PhysicalTypeResult::Yes(other_pt) => match other_pt.as_enum() {
                 PhysicalTypeEnum::Empty => orig,
                 PhysicalTypeEnum::Scalar(_) => orig,
@@ -2658,7 +2647,7 @@ impl TypedProgram {
                 Some(ScalarType::Pointer) => None,
                 scalar => scalar,
             },
-            PhysicalTypeResult::No | PhysicalTypeResult::Infinite => None,
+            PhysicalTypeResult::No => None,
         }
     }
 
@@ -2672,32 +2661,20 @@ impl TypedProgram {
     pub fn get_layout_computed(&self, type_id: TypeId) -> Option<Layout> {
         match self.get_physical_type_computed(type_id) {
             PhysicalTypeResult::No => None,
-            PhysicalTypeResult::Infinite => None,
             PhysicalTypeResult::Yes(pt) => Some(self.get_pt_layout(pt)),
-        }
-    }
-
-    pub fn compute_all_physical_types(&mut self) {
-        for type_id in self.types.iter_ids() {
-            self.get_physical_type(type_id);
         }
     }
 
     pub fn get_layout_nonmut(&self, type_id: TypeId) -> Option<Layout> {
         match self.phys_types.lookup(type_id) {
-            Some(maybe_pt) => match maybe_pt {
-                PhysicalTypeResult::No => None,
-                PhysicalTypeResult::Infinite => None,
-                PhysicalTypeResult::Yes(pt) => Some(self.get_pt_layout(pt)),
-            },
-            None => None,
+            Some(PhysicalTypeResult::Yes(pt)) => Some(self.get_pt_layout(pt)),
+            Some(PhysicalTypeResult::No) | None => None,
         }
     }
 
     pub fn get_layout(&mut self, type_id: TypeId) -> Option<Layout> {
         match self.get_physical_type(type_id) {
             PhysicalTypeResult::No => None,
-            PhysicalTypeResult::Infinite => None,
             PhysicalTypeResult::Yes(pt) => Some(self.get_pt_layout(pt)),
         }
     }

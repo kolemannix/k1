@@ -25,6 +25,9 @@ fn ref-payload-is-inhabited(r: result[int, *never]): int {
   if r is { :ok v -> v, :err _ -> -1 }
 }
 
+fn(builtin("llvm.trap")) trap-never(): never
+let(mutable) trap-gate: bool = false
+
 fn(test) uninhabited-payloads() {
   assert-equals(try-into-fallible(), :ok 14)
   assert-equals(try-into-plain(), 14)
@@ -41,6 +44,7 @@ fn(test) uninhabited-payloads() {
   assert-equals(types/size[{ p: *never }], 8)
   assert-equals(types/size[result[int, never]], 16)
   assert-equals(ref-payload-is-inhabited(:ok 5), 5)
+  if trap-gate { trap-never() }
 
   let names = if parse-all[never, string](["ada", "grace"]) is { :ok v -> v }
   assert-equals(names.len(), 2)

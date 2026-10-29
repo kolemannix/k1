@@ -1718,22 +1718,12 @@ impl<'k1> Builder<'k1> {
         self.k1.ir.b_variables.get(&variable_id)
     }
 
-    fn get_physical_type_result(&mut self, type_id: TypeId) -> PhysicalTypeResult {
-        self.k1.get_physical_type(type_id)
-    }
-
     fn get_physical_type(&mut self, type_id: TypeId) -> K1Result<PhysicalType> {
-        match self.get_physical_type_result(type_id) {
+        match self.k1.get_physical_type(type_id) {
             PhysicalTypeResult::No => Err(kerr!(
                 self.k1,
                 self.cur_span,
                 "cannot lower this type to a physical type: {}",
-                self.k1.type_id_to_string_ext(type_id, dump::TypeDisplayMode::Expand)
-            )),
-            PhysicalTypeResult::Infinite => Err(kerr!(
-                self.k1,
-                self.cur_span,
-                "cannot lower this infinite type to a physical type: {}",
                 self.k1.type_id_to_string_ext(type_id, dump::TypeDisplayMode::Expand)
             )),
             PhysicalTypeResult::Yes(pt) => Ok(pt),
