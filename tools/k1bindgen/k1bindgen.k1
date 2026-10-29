@@ -7,7 +7,6 @@ use std/set
 
 // TODO:
 // - [x] Extract fn param names by traversing the children, not just cheating by only looking at its 'cx-type' like we are now
-// - [ ] Detect varargs and emit error
 // - [ ] support bitfields (track bitfield start/end; if possible emit a std/bitfield call
 // - [x] Use derived cli arg parser
 // - [x] Embed sizeof / alignof / offsetof assertions
@@ -18,8 +17,8 @@ fn main(argc: u32, argv: ptr): i32 {
   0
 }
 type dl-info = { fname: *u8, fbase: ptr, sname: ptr, saddr: ptr }
-fn(extern("dlsym")) dlsym(handle: ptr, symbol: *u8): ptr
-fn(extern("dladdr")) dladdr(addr: ptr, info: *dl-info): c-int
+fn(extern) dlsym(handle: ptr, symbol: *u8): ptr
+fn(extern) dladdr(addr: ptr, info: *dl-info): c-int
 
 fn dirname(path: string): string {
   let last: ?size = :none
@@ -804,6 +803,9 @@ fn map-fn-decl(cursor: CXCursor): { fn-type: fn-type, error: ?string } {
     visitor = visit-fn-param.&,
     client_data = result.&.as[ptr]
   )
+  if clang/isFunctionTypeVariadic(clang/getCursorType(cursor)) == 1 {
+    result.fn-type.params.push(.{ name = :some "varargs", type = :k1 "core/c-varargs" })
+  }
 
   result
 }
@@ -840,6 +842,9 @@ fn map-fn-type(cx-type: clang/CXType): fn-type {
     let arg-type = map-type-ext(arg-cx-type, :fn-param)
     let name: ?string = :none
     args.push(.{ name, type = arg-type })
+  }
+  if clang/isFunctionTypeVariadic(cx-type) == 1 {
+    args.push(.{ name = :none, type = :k1 "core/c-varargs" })
   }
 
   let ret-type = map-type(ret-type)

@@ -6,44 +6,47 @@ use libffi::{low::*, raw};
 
 use crate::compiler::Arch;
 use crate::ir::PhysicalFunctionType;
+use crate::kerr;
 use crate::lex::Span;
 use crate::parse::NumericWidth;
 use crate::typer::types::{
     AggType, HomogeneousAggregate, Layout, PhysicalType, PhysicalTypeEnum, RegisterClass,
     ScalarType,
 };
-use crate::typer::{FunctionId, K1Result, Linkage, TypedProgram};
+use crate::typer::{FunctionId, K1Result, TypedProgram};
 use crate::vm;
 use crate::vm::{Value, Vm};
-use crate::{ice_span, kbail, kerr, parse::StringId};
 
-/// Core FFI dispatch on already-resolved argument values; the bc VM has the
-/// args contiguous in its out-arg region.
-///
-/// `ret_dst`: the caller's storage for an aggregate return, which libffi
-/// writes directly (the bc VM passes its sret pointer); None for scalar
-/// returns, which land in a local word and go back by value.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_ffi_call_resolved(
     k1: &mut TypedProgram,
     vm: &mut Vm,
-    return_pt: PhysicalType,
-    args: &[Value],
-    lib_name: Option<StringId>,
-    fn_name: StringId,
     function_id: FunctionId,
-    ret_dst: Option<*mut u8>,
+    new_fp: *mut u8,
+    nargs: usize,
+    variadic_pts: &[u32],
 ) -> K1Result<Value> {
-    let nargs = args.len();
+    let words = new_fp as *mut u64;
+    let args: &[Value] = unsafe {
+        core::slice::from_raw_parts(
+            words.add(crate::bc::FRAME_HEADER_WORDS as usize) as *const Value,
+            nargs,
+        )
+    };
+    // Route libffi marshalling scratch above all live frames
+    unsafe {
+        vm.stack
+            .mem
+            .set_cursor(words.add(crate::bc::FRAME_HEADER_WORDS as usize + nargs) as *mut u8)
+    };
     let mut ffi_args_value_storage = vm.stack.mem.new_list(nargs as u32);
     let mut ffi_args_value_ptrs = vm.stack.mem.new_list(nargs as u32);
 
     let fn_type = k1.ir.function_unit(function_id).unwrap().fn_type;
-    let function_params = fn_type.params;
+    let function_params = k1.ir.mem.getn(fn_type.params);
 
-    for (vm_value, param) in args.iter().zip(k1.ir.mem.getn(function_params)) {
+    for (index, vm_value) in args.iter().enumerate() {
         // If aggregate, you already have the pointer that libffi wants
-        if param.pt.is_agg() {
+        if function_params.get(index).is_some_and(|param| param.pt.is_agg()) {
             ffi_args_value_ptrs.push(vm_value.as_ptr() as *mut c_void);
         } else {
             // If scalar, _get_ a pointer to it
@@ -57,28 +60,11 @@ pub(crate) fn handle_ffi_call_resolved(
 
     let mut ffi_handle = match k1.vm_ffi_functions.get(&function_id).copied() {
         None => {
-            let handle_for_search = match lib_name {
-                None => k1.vm_process_dlopen_handle,
-                Some(lib_name) => {
-                    let Linkage::External { module_id, .. } = k1.functions.get(function_id).linkage
-                    else {
-                        ice_span!(k1, vm.eval_span, "extern call to a non-external function");
-                    };
-                    k1.get_dylib_handle(module_id, lib_name, vm.eval_span)?
-                }
-            };
-
-            let name_cstr = std::ffi::CString::new(k1.ident_str(fn_name)).unwrap();
-            let fn_ptr: *mut c_void = unsafe { libc::dlsym(handle_for_search, name_cstr.as_ptr()) };
-            if fn_ptr.is_null() {
-                kbail!(k1, vm.eval_span, "Could not find extern function symbol: {}", fn_name);
-            }
+            let function = k1.functions.get(function_id);
+            let (linkage, name) = (function.linkage, function.name);
+            let function_pointer = k1.get_extern_symbol(linkage, name, vm.eval_span)?;
             let cif = prep_ffi_cif(k1, fn_type, vm.eval_span)?;
-            let handle = vm::VmFfiHandle {
-                library_handle: handle_for_search,
-                function_pointer: fn_ptr,
-                cif,
-            };
+            let handle = vm::VmFfiHandle { function_pointer, cif };
             k1.vm_ffi_functions.insert(function_id, handle);
             handle
         }
@@ -89,21 +75,46 @@ pub(crate) fn handle_ffi_call_resolved(
     };
 
     debug!("ffi args were: {:?}", ffi_args_value_storage.as_slice());
-    debug!("ffi args types were: {:?}", unsafe {
-        core::slice::from_raw_parts(ffi_handle.cif.arg_types, nargs)
-    });
 
     // Return storage:
     // - Scalar (and void): a local word. libffi widens sub-word integral
     //   returns to a full ffi_arg, so this must be >= 8 bytes; a u64 is both
     //   big enough and aligned enough. The value goes back by-value
-    // - Aggregate: the caller's sret (libffi writes exactly rtype->size bytes,
+    // - Aggregate: the frame's sret (libffi writes exactly rtype->size bytes,
     //   and k1 layouts match the C ABI)
+    let return_pt = fn_type.return_type;
     let mut scalar_ret_word: u64 = 0;
-    let result_storage: *mut u8 = match ret_dst {
-        Some(dst) => dst,
-        None => &mut scalar_ret_word as *mut u64 as *mut u8,
+    let result_storage: *mut u8 = if return_pt.is_agg() {
+        unsafe { *words.add(2) as *mut u8 }
+    } else {
+        &mut scalar_ret_word as *mut u64 as *mut u8
     };
+
+    // Variadic: the fixed params' cached types, then one scalar type per extra arg
+    if fn_type.is_variadic {
+        let fixed_count = function_params.len();
+        let mut variadic_types = vm.stack.mem.new_list(variadic_pts.len() as u32);
+        let mut arg_types = vm.stack.mem.new_list::<*mut ffi_type>(nargs as u32);
+        for index in 0..fixed_count {
+            arg_types.push(unsafe { *ffi_handle.cif.arg_types.add(index) });
+        }
+        for pt in variadic_pts {
+            variadic_types.push(scalar_to_ffi_type(k1, PhysicalType::from_u32(*pt)));
+            arg_types.push(variadic_types.last_mut().unwrap() as *mut ffi_type);
+        }
+        let rtype = ffi_handle.cif.rtype;
+        unsafe {
+            prep_cif_var(
+                &mut ffi_handle.cif,
+                ffi_abi_FFI_DEFAULT_ABI,
+                fixed_count,
+                nargs,
+                rtype,
+                arg_types.as_mut_ptr(),
+            )
+            .map_err(|e| kerr!(k1, vm.eval_span, "failed to set up ffi context: {e:?}"))?;
+        }
+    }
 
     unsafe {
         let args = ffi_args_value_ptrs.as_slice_mut().as_mut_ptr();
@@ -116,14 +127,12 @@ pub(crate) fn handle_ffi_call_resolved(
         );
     }
 
-    if return_pt.is_empty() {
-        debug!("ffi result is empty");
-        Ok(Value(0))
-    } else {
-        let result = vm::load_value(return_pt, result_storage.cast_const());
-        debug!("ffi result is: {}", result);
-        Ok(result)
+    if !return_pt.is_scalar() {
+        return Ok(Value(0));
     }
+    let result = vm::load_value(return_pt, result_storage.cast_const());
+    debug!("ffi result is: {}", result);
+    Ok(result)
 }
 
 fn prep_ffi_cif(

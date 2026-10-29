@@ -145,7 +145,11 @@ impl IrUnit {
     pub fn inline_size(&self, k1: &TypedProgram) -> Option<u32> {
         let IrUnitId::Function(function_id) = self.unit_id else { return None };
         let function = k1.get_function(function_id);
-        if self.is_cold(k1) || function.is_noinline() || function.is_reloadable() {
+        if self.is_cold(k1)
+            || function.is_noinline()
+            || function.is_reloadable()
+            || function.linkage.is_external()
+        {
             None
         } else {
             Some(self.inst_count())

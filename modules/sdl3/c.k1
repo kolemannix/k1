@@ -1455,6 +1455,7 @@ fn(extern("SDL_UCS4ToUTF8")) UCS4ToUTF8(
 fn(extern("SDL_sscanf")) sscanf(
   text: *u8,
   fmt: *u8,
+  varargs: core/c-varargs,
 ): i32
 fn(extern("SDL_vsscanf")) vsscanf(
   text: *u8,
@@ -1465,11 +1466,13 @@ fn(extern("SDL_snprintf")) snprintf(
   text: *u8,
   maxlen: usize,
   fmt: *u8,
+  varargs: core/c-varargs,
 ): i32
 fn(extern("SDL_swprintf")) swprintf(
   text: *i32,
   maxlen: usize,
   fmt: *i32,
+  varargs: core/c-varargs,
 ): i32
 fn(extern("SDL_vsnprintf")) vsnprintf(
   text: *u8,
@@ -1486,6 +1489,7 @@ fn(extern("SDL_vswprintf")) vswprintf(
 fn(extern("SDL_asprintf")) asprintf(
   strp: *optref[u8],
   fmt: *u8,
+  varargs: core/c-varargs,
 ): i32
 fn(extern("SDL_vasprintf")) vasprintf(
   strp: *optref[u8],
@@ -1897,6 +1901,7 @@ fn(extern("SDL_SwapFloat")) SwapFloat(
 ): f32
 fn(extern("SDL_SetError")) SetError(
   fmt: *u8,
+  varargs: core/c-varargs,
 ): bool
 fn(extern("SDL_SetErrorV")) SetErrorV(
   fmt: *u8,
@@ -2281,6 +2286,7 @@ fn(extern("SDL_WriteIO")) WriteIO(
 fn(extern("SDL_IOprintf")) IOprintf(
   context_c: *IOStream,
   fmt: *u8,
+  varargs: core/c-varargs,
 ): usize
 fn(extern("SDL_IOvprintf")) IOvprintf(
   context_c: *IOStream,
@@ -7815,39 +7821,48 @@ fn(extern("SDL_SetLogPriorityPrefix")) SetLogPriorityPrefix(
 ): bool
 fn(extern("SDL_Log")) Log(
   fmt: *u8,
+  varargs: core/c-varargs,
 ): {}
 fn(extern("SDL_LogTrace")) LogTrace(
   category: i32,
   fmt: *u8,
+  varargs: core/c-varargs,
 ): {}
 fn(extern("SDL_LogVerbose")) LogVerbose(
   category: i32,
   fmt: *u8,
+  varargs: core/c-varargs,
 ): {}
 fn(extern("SDL_LogDebug")) LogDebug(
   category: i32,
   fmt: *u8,
+  varargs: core/c-varargs,
 ): {}
 fn(extern("SDL_LogInfo")) LogInfo(
   category: i32,
   fmt: *u8,
+  varargs: core/c-varargs,
 ): {}
 fn(extern("SDL_LogWarn")) LogWarn(
   category: i32,
   fmt: *u8,
+  varargs: core/c-varargs,
 ): {}
 fn(extern("SDL_LogError")) LogError(
   category: i32,
   fmt: *u8,
+  varargs: core/c-varargs,
 ): {}
 fn(extern("SDL_LogCritical")) LogCritical(
   category: i32,
   fmt: *u8,
+  varargs: core/c-varargs,
 ): {}
 fn(extern("SDL_LogMessage")) LogMessage(
   category: i32,
   priority: LogPriority,
   fmt: *u8,
+  varargs: core/c-varargs,
 ): {}
 fn(extern("SDL_LogMessageV")) LogMessageV(
   category: i32,
@@ -8485,6 +8500,7 @@ fn(extern("SDL_RenderDebugTextFormat")) RenderDebugTextFormat(
   x: f32,
   y: f32,
   fmt: *u8,
+  varargs: core/c-varargs,
 ): bool
 fn(extern("SDL_SetDefaultTextureScaleMode")) SetDefaultTextureScaleMode(
   renderer: *Renderer,

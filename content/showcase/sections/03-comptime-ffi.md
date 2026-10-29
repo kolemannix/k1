@@ -9,11 +9,11 @@ Declare some libc functions. An extern with no `lib` is looked up with
 `dlsym` in the compiler process itself, so libc, libm and libSystem are free:
 
 ```k1
-fn(extern("gethostname")) gethostname(name: ptr, len: size): i32
-fn(extern("getpid")) getpid(): i32
+fn(extern) gethostname(name: ptr, len: size): i32
+fn(extern) getpid(): i32
 fn(extern("time")) c-time(tloc: ptr): i64
-fn(extern("localtime")) localtime(t: *i64): ptr
-fn(extern("strftime")) strftime(s: ptr, max: size, format: *u8, tm: ptr): size
+fn(extern) localtime(t: *i64): ptr
+fn(extern) strftime(s: ptr, max: size, format: *u8, tm: ptr): size
 ```
 
 Wrap them in plain k1:
@@ -82,7 +82,7 @@ Global initializers are already compile-time, so `#static` in one is
 redundant, and the compiler tells you:
 
 ```k1
-fn(extern("getpid")) getpid(): i32
+fn(extern) getpid(): i32
 
 let COMPILER_PID: i32 = #static getpid()
 ```
@@ -91,7 +91,7 @@ let COMPILER_PID: i32 = #static getpid()
 ┌────────────────────────────────────────╴
 /Users/knix/dev/k1/content/showcase/examples/cffi_redundant_static.k1:3:24: warning
 ├─────
-│   fn(extern("getpid")) getpid(): i32
+│   fn(extern) getpid(): i32
 │   
 │ ->let COMPILER_PID: i32 = #static getpid()
 │                           ^^^^^^^^^^^^^^^^

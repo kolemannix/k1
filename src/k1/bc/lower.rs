@@ -51,7 +51,7 @@ pub fn get_or_lower_function(
     let unit = *k1.ir.function_unit(function_id).unwrap();
     let sentinel_kind = if unit.function_builtin_kind.is_some() {
         Some(UnitKind::Builtin)
-    } else if unit.blocks.is_empty() {
+    } else if k1.functions.get(function_id).linkage.is_external() {
         Some(UnitKind::Extern)
     } else {
         None
@@ -1214,127 +1214,107 @@ fn emit_call(
     assert!(nargs <= u16::MAX as u32, "call with more than u16::MAX args");
     let frame_bytes = ctx.frame_bytes;
 
-    let resolve_sret = |k1: &mut TypedProgram, ctx: &mut LowerCtx| -> u32 {
-        if !is_agg {
-            return k1.bc.intern_const(0);
+    ctx.call_arg_values.clear();
+    for (k, arg) in args.iter().enumerate() {
+        ctx.begin_inst();
+        let mut arg_lowered = resolve_lowered_value(k1, ctx, *arg);
+        if arg_lowered == ctx.scratch0 || arg_lowered == ctx.scratch1 {
+            let park = ctx.out_arg_word(k as u32);
+            ctx.emit(Opcode::Mov, 0, 0);
+            ctx.push(park);
+            ctx.push(arg_lowered);
+            arg_lowered = park;
         }
+        ctx.call_arg_values.push(arg_lowered);
+    }
+    let mut sret_lowered = if is_agg {
         ctx.begin_inst();
         match call.dst {
             Some(dst) => resolve_lowered_value(k1, ctx, dst),
             None => ctx.bc_value_of(inst_id),
         }
+    } else {
+        k1.bc.intern_const(0)
     };
+    if sret_lowered == ctx.scratch0 || sret_lowered == ctx.scratch1 {
+        let park = ctx.out_sret_word();
+        ctx.emit(Opcode::Mov, 0, 0);
+        ctx.push(park);
+        ctx.push(sret_lowered);
+        sret_lowered = park;
+    }
 
-    match call.callee {
-        IrCallee::Direct(_) | IrCallee::Indirect(_, _) => {
-            ctx.call_arg_values.clear();
-            for (k, arg) in args.iter().enumerate() {
-                ctx.begin_inst();
-                let mut arg_lowered = resolve_lowered_value(k1, ctx, *arg);
-                if arg_lowered == ctx.scratch0 || arg_lowered == ctx.scratch1 {
-                    let park = ctx.out_arg_word(k as u32);
-                    ctx.emit(Opcode::Mov, 0, 0);
-                    ctx.push(park);
-                    ctx.push(arg_lowered);
-                    arg_lowered = park;
-                }
-                ctx.call_arg_values.push(arg_lowered);
-            }
-            let mut sret_lowered = resolve_sret(k1, ctx);
-            if sret_lowered == ctx.scratch0 || sret_lowered == ctx.scratch1 {
-                let park = ctx.out_sret_word();
-                ctx.emit(Opcode::Mov, 0, 0);
-                ctx.push(park);
-                ctx.push(sret_lowered);
-                sret_lowered = park;
-            }
-
-            match call.callee {
-                IrCallee::Direct(function_id) => {
-                    if k1.trace.stack_contains_key(TraceKind::Bcgen, function_id.as_u32()) {
-                        ctx.emit(Opcode::Call, 0, nargs as u16);
-                        let at = ctx.bc_out.len() as u32;
-                        ctx.push(PENDING_PC);
-                        ctx.operand_to_callee.push((at, function_id));
-                        ctx.push(frame_bytes);
-                    } else {
-                        let info = get_or_lower_function(k1, function_id, ctx.cur_span)?;
-                        if info.kind != UnitKind::Body {
-                            kbail!(
-                                k1,
-                                ctx.cur_span,
-                                "Direct call to bodyless ({}) function: {}",
-                                info.kind,
-                                k1.function_id_to_string(function_id, false)
-                            );
-                        }
-                        ctx.emit(Opcode::Call, 0, nargs as u16);
-                        ctx.push(info.code_start);
-                        ctx.push(frame_bytes);
-                    }
-                }
-                IrCallee::Indirect(_, fn_value) => {
-                    ctx.begin_inst();
-                    let fn_lowered = resolve_lowered_value(k1, ctx, fn_value);
-                    ctx.emit(Opcode::CallIndirect, 0, nargs as u16);
-                    ctx.push(fn_lowered);
+    let emit_call_indirect = |k1: &mut TypedProgram,
+                              ctx: &mut LowerCtx,
+                              fn_value: ir::Value,
+                              fixed_count: u32|
+     -> K1Result<u32> {
+        ctx.begin_inst();
+        let fn_lowered = resolve_lowered_value(k1, ctx, fn_value);
+        let variadic_count = nargs - fixed_count;
+        if variadic_count > u8::MAX as u32 {
+            kbail!(k1, ctx.cur_span, "Call with more than 255 c-varargs");
+        }
+        ctx.emit(Opcode::CallIndirect, variadic_count as u8, nargs as u16);
+        ctx.push(fn_lowered);
+        ctx.push(frame_bytes);
+        Ok(variadic_count)
+    };
+    let variadic_count = match call.callee {
+        IrCallee::Direct(function_id)
+            if k1.trace.stack_contains_key(TraceKind::Bcgen, function_id.as_u32()) =>
+        {
+            ctx.emit(Opcode::Call, 0, nargs as u16);
+            let at = ctx.bc_out.len() as u32;
+            ctx.push(PENDING_PC);
+            ctx.operand_to_callee.push((at, function_id));
+            ctx.push(frame_bytes);
+            0
+        }
+        IrCallee::Direct(function_id) => {
+            let info = get_or_lower_function(k1, function_id, ctx.cur_span)?;
+            match info.kind {
+                UnitKind::Body => {
+                    ctx.emit(Opcode::Call, 0, nargs as u16);
+                    ctx.push(info.code_start);
                     ctx.push(frame_bytes);
+                    0
                 }
-                _ => unreachable!(),
-            }
-            ctx.push(sret_lowered);
-            for i in 0..ctx.call_arg_values.len() {
-                let s = ctx.call_arg_values[i];
-                ctx.push(s);
+                UnitKind::Extern => {
+                    let fn_value = ir::Value::FunctionAddr(function_id);
+                    emit_call_indirect(k1, ctx, fn_value, info.param_count)?
+                }
+                UnitKind::Builtin => {
+                    unreachable!("backend builtins lower as BackendBuiltin")
+                }
             }
         }
-        IrCallee::Extern { library_name, function_name, function_id } => {
-            get_or_lower_function(k1, function_id, ctx.cur_span)?;
-            emit_arg_movs(k1, ctx, args);
-            if is_agg {
-                let sret_lowered = resolve_sret(k1, ctx);
-                let sret = ctx.out_sret_word();
-                ctx.emit(Opcode::Mov, 0, 0);
-                ctx.push(sret);
-                ctx.push(sret_lowered);
-            }
-            ctx.emit(Opcode::CallExtern, 0, 0);
-            ctx.push(function_id.as_u32());
-            ctx.push(library_name.map(|s| s.as_u32()).unwrap_or(0));
-            ctx.push(function_name.as_u32());
-            ctx.push(ret_pt.to_u32());
-            ctx.push(frame_bytes);
-            ctx.push(nargs);
+        IrCallee::Indirect(fn_type, fn_value) => {
+            emit_call_indirect(k1, ctx, fn_value, fn_type.params.len())?
         }
         IrCallee::BackendBuiltin(_, builtin) => {
-            emit_arg_movs(k1, ctx, args);
-            if is_agg {
-                let sret_lowered = resolve_sret(k1, ctx);
-                let sret = ctx.out_sret_word();
-                ctx.emit(Opcode::Mov, 0, 0);
-                ctx.push(sret);
-                ctx.push(sret_lowered);
-            }
-            ctx.emit(Opcode::CallBuiltin, builtin.to_tag(), 0);
+            ctx.emit(Opcode::CallBuiltin, builtin.to_tag(), nargs as u16);
             ctx.push(ret_pt.to_u32());
             ctx.push(frame_bytes);
-            ctx.push(nargs);
+            0
         }
         IrCallee::LlvmIntrinsic { name, .. } => {
-            emit_arg_movs(k1, ctx, args);
-            if is_agg {
-                let sret_lowered = resolve_sret(k1, ctx);
-                let sret = ctx.out_sret_word();
-                ctx.emit(Opcode::Mov, 0, 0);
-                ctx.push(sret);
-                ctx.push(sret_lowered);
-            }
             ctx.emit(Opcode::CallLlvm, 0, 0);
             ctx.push(name.as_u32());
-            ctx.push(ret_pt.to_u32());
-            ctx.push(frame_bytes);
-            ctx.push(nargs);
+            return Ok(());
         }
+    };
+    ctx.push(sret_lowered);
+    for i in 0..ctx.call_arg_values.len() {
+        let s = ctx.call_arg_values[i];
+        ctx.push(s);
+    }
+    // c-varargs: one physical type per extra arg, after the args
+    for arg in &args[(nargs - variadic_count) as usize..] {
+        let InstKind::Value(pt) = ir::get_value_kind(&ctx.u, *arg) else {
+            unreachable!("c-varargs arg without a value")
+        };
+        ctx.push(pt.to_u32());
     }
 
     if !ret_pt.is_empty() && !is_agg {
@@ -1354,17 +1334,6 @@ fn emit_call(
     }
 
     Ok(())
-}
-
-fn emit_arg_movs(k1: &mut TypedProgram, ctx: &mut LowerCtx, args: &[ir::Value]) {
-    for (k, arg) in args.iter().enumerate() {
-        ctx.begin_inst();
-        let src = resolve_lowered_value(k1, ctx, *arg);
-        let dst = ctx.out_arg_word(k as u32);
-        ctx.emit(Opcode::Mov, 0, 0);
-        ctx.push(dst);
-        ctx.push(src);
-    }
 }
 
 fn emit_phi_copies(k1: &mut TypedProgram, ctx: &mut LowerCtx, from: BlockId, target: BlockId) {

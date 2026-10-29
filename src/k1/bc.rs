@@ -54,7 +54,6 @@ crate::tag_enum! {
         RetAgg,
         Call,
         CallIndirect,
-        CallExtern,
         CallBuiltin,
         CallLlvm,
         RetGet,
@@ -173,10 +172,11 @@ crate::tag_enum! {
 }
 
 impl Opcode {
-    /// Total operand words for an instruction with header B field `b`
-    pub const fn operand_count_with(self, b: u16) -> usize {
+    /// Total operand words for an instruction with header fields `a` and `b`
+    pub const fn operand_count_with(self, a: u8, b: u16) -> usize {
         match self {
-            Opcode::Call | Opcode::CallIndirect => self.operand_count() + b as usize,
+            Opcode::Call | Opcode::CallBuiltin => self.operand_count() + b as usize,
+            Opcode::CallIndirect => self.operand_count() + b as usize + a as usize,
             Opcode::Switch => self.operand_count() + 3 * b as usize,
             _ => self.operand_count(),
         }
@@ -201,19 +201,16 @@ impl Opcode {
             | Opcode::JumpIfNe => 4, // [lhs src][rhs src][cons pc][alt pc]
             Opcode::Switch => 2, // [src][default pc] + B cases of [value lo][value hi][pc]
             Opcode::Unreachable => 0,
-            Opcode::Ret => 1,    // [src]
-            Opcode::RetAgg => 2, // [src][size]
-            // Call forms carry B = nargs additional arg-src operands beyond
-            // the base count here (see operand_count_with)
-            Opcode::Call => 3, // [target pc][fp_delta bytes][sret src] + args
-            Opcode::CallIndirect => 3, // [fn src][fp_delta][sret src] + args
-            Opcode::CallExtern => 6, // [function_id][lib_name(0=none)][fn_name][ret_pt][fp_delta][nargs]
-            Opcode::CallBuiltin => 3, // A = builtin tag; [ret_pt][fp_delta][nargs]
-            Opcode::CallLlvm => 4,   // [fn_name + 1][ret_pt][fp_delta][nargs]
-            Opcode::RetGet => 1,     // [dst]
-            Opcode::RetStore => 1,   // A = width in bits; [addr src]
-            Opcode::Mov => 2,        // [dst][src]
-            Opcode::LoadGlobal => 3, // [dst][global_id][storage_pt]
+            Opcode::Ret => 1,          // [src]
+            Opcode::RetAgg => 2,       // [src][size]
+            Opcode::Call => 3,         // [target pc][fp_delta bytes][sret src] + args
+            Opcode::CallIndirect => 3, // [fn src][fp_delta][sret src] + args + A variadic arg pts
+            Opcode::CallBuiltin => 3,  // A = builtin tag; [ret_pt][fp_delta][sret src] + args
+            Opcode::CallLlvm => 1,     // [fn_name]
+            Opcode::RetGet => 1,       // [dst]
+            Opcode::RetStore => 1,     // A = width in bits; [addr src]
+            Opcode::Mov => 2,          // [dst][src]
+            Opcode::LoadGlobal => 3,   // [dst][global_id][storage_pt]
             Opcode::Load8 | Opcode::Load16 | Opcode::Load32 | Opcode::Load64 => 2, // [dst][addr src]
             Opcode::Store8 | Opcode::Store16 | Opcode::Store32 | Opcode::Store64 => 2, // [addr src][val src]
             Opcode::LoadFp8 | Opcode::LoadFp16 | Opcode::LoadFp32 | Opcode::LoadFp64 => 2, // [dst][fp byte offset]
@@ -366,7 +363,6 @@ impl Opcode {
             Opcode::RetAgg => "ret_agg",
             Opcode::Call => "call",
             Opcode::CallIndirect => "call_indirect",
-            Opcode::CallExtern => "call_extern",
             Opcode::CallBuiltin => "call_builtin",
             Opcode::CallLlvm => "call_llvm",
             Opcode::RetGet => "ret_get",
@@ -502,7 +498,7 @@ pub const fn header_b(h: u32) -> u16 {
 pub enum UnitKind {
     /// Has a lowered body in the code stream
     Body,
-    /// Externally linked; callable only through `CallExtern`
+    /// Externally linked; called through libffi
     Extern,
     /// Backend builtin; callable only through `CallBuiltin`
     Builtin,

@@ -736,10 +736,12 @@ fn(extern("sqlite3_os_init")) os_init(): i32
 fn(extern("sqlite3_os_end")) os_end(): i32
 fn(extern("sqlite3_config")) config(
   p0: i32,
+  varargs: core/c-varargs,
 ): i32
 fn(extern("sqlite3_db_config")) db_config(
   p0: *db,
   op: i32,
+  varargs: core/c-varargs,
 ): i32
 type mem_methods = {
   xMalloc: optref[fn(
@@ -831,6 +833,7 @@ fn(extern("sqlite3_free_table")) free_table(
 ): {}
 fn(extern("sqlite3_mprintf")) mprintf(
   p0: *u8,
+  varargs: core/c-varargs,
 ): optref[u8]
 fn(extern("sqlite3_vmprintf")) vmprintf(
   p0: *u8,
@@ -840,6 +843,7 @@ fn(extern("sqlite3_snprintf")) snprintf(
   p0: i32,
   p1: *u8,
   p2: *u8,
+  varargs: core/c-varargs,
 ): optref[u8]
 fn(extern("sqlite3_vsnprintf")) vsnprintf(
   p0: i32,
@@ -2034,6 +2038,7 @@ fn(extern("sqlite3_file_control")) file_control(
 ): i32
 fn(extern("sqlite3_test_control")) test_control(
   op: i32,
+  varargs: core/c-varargs,
 ): i32
 fn(extern("sqlite3_keyword_count")) keyword_count(): i32
 fn(extern("sqlite3_keyword_name")) keyword_name(
@@ -2058,6 +2063,7 @@ fn(extern("sqlite3_str_free")) str_free(
 fn(extern("sqlite3_str_appendf")) str_appendf(
   p0: *str,
   zFormat: *u8,
+  varargs: core/c-varargs,
 ): {}
 fn(extern("sqlite3_str_vappendf")) str_vappendf(
   p0: *str,
@@ -2270,6 +2276,7 @@ fn(extern("sqlite3_strlike")) strlike(
 fn(extern("sqlite3_log")) log(
   iErrCode: i32,
   zFormat: *u8,
+  varargs: core/c-varargs,
 ): {}
 fn(extern("sqlite3_wal_hook")) wal_hook(
   p0: *db,
@@ -2299,6 +2306,7 @@ fn(extern("sqlite3_wal_checkpoint_v2")) wal_checkpoint_v2(
 fn(extern("sqlite3_vtab_config")) vtab_config(
   p0: *db,
   op: i32,
+  varargs: core/c-varargs,
 ): i32
 fn(extern("sqlite3_vtab_on_conflict")) vtab_on_conflict(
   p0: *db,

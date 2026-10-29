@@ -575,6 +575,7 @@ pub struct PhysicalFunctionParam {
 pub struct PhysicalFunctionType {
     pub return_type: PhysicalType,
     pub diverges: bool,
+    pub is_variadic: bool,
     pub params: MSlice<PhysicalFunctionParam, ProgramIr>,
 }
 
@@ -583,6 +584,7 @@ impl PhysicalFunctionType {
         PhysicalFunctionType {
             return_type: PhysicalType::EMPTY,
             diverges: false,
+            is_variadic: false,
             params: MSlice::empty(),
         }
     }
@@ -593,15 +595,7 @@ pub enum IrCallee {
     BackendBuiltin(FunctionId, BackendBuiltin),
     Direct(FunctionId),
     Indirect(PhysicalFunctionType, Value),
-    Extern {
-        library_name: Option<parse::StringId>,
-        function_name: parse::StringId,
-        function_id: FunctionId,
-    },
-    LlvmIntrinsic {
-        name: parse::StringId,
-        function_id: FunctionId,
-    },
+    LlvmIntrinsic { name: parse::StringId, function_id: FunctionId },
 }
 
 fn add_call(b: &mut Builder, call: IrCall) -> IrCallId {
@@ -618,7 +612,6 @@ impl IrCallee {
     fn known_function_id(&self) -> Option<FunctionId> {
         match self {
             IrCallee::Direct(fid) => Some(*fid),
-            IrCallee::Extern { function_id, .. } => Some(*function_id),
             IrCallee::LlvmIntrinsic { function_id, .. } => Some(*function_id),
             IrCallee::BackendBuiltin(fid, _) => Some(*fid),
             IrCallee::Indirect(..) => None,
@@ -1245,17 +1238,6 @@ fn compile_function_body_into(
     let f = b.k1.get_function(function_id);
     let function_type = b.k1.types.get(f.type_id).expect_function();
     let return_type_id = function_type.return_type;
-    if let Some(err) = f.body_failure {
-        return Err(K1Message {
-            message: b.k1.ast.idents.intern(format!(
-                "Cannot generate ir for function {}, which failed compilation",
-                b.k1.ident_str(f.name)
-            )),
-            span: err.span,
-            level: err.level,
-            error_kind: ErrorKind::Malformed,
-        });
-    }
     let intrinsic_type = f.builtin_type;
     let is_debug = f.compiler_debug();
     let fn_span = b.k1.ast.get_span_for_id(f.parsed_id);
@@ -1263,6 +1245,7 @@ fn compile_function_body_into(
     b.entry_span = fn_span;
 
     let fn_params = f.params;
+    let body_block = f.body_block;
     let phys_fn_type = b.get_unit_fn_type(f.type_id)?;
     b.fn_type = phys_fn_type;
     let mut non_empty_index = 0;
@@ -1282,16 +1265,11 @@ fn compile_function_body_into(
         b.k1.ir.b_variables.insert(builder_variable.id, builder_variable);
     }
 
-    let f = b.k1.get_function(function_id);
-    if let Some(body_block) = f.body_block {
+    if let Some(body_block) = body_block {
         let entry_block = b.push_block(BlockSourceKind::Entry);
         b.goto_block(entry_block);
         compile_block_stmts(&mut b, None, body_block)?;
-    } else {
-        if f.builtin_type.is_none() && !f.linkage.is_external() {
-            b.k1.ice_span(b.k1.get_function_span(function_id), "ir: function has no body")
-        }
-    };
+    }
 
     let unit_id = IrUnitId::Function(function_id);
     let maybe_backend_builtin = match intrinsic_type {
@@ -1343,7 +1321,7 @@ fn compile_top_level_expr_into(
     let return_type_id = b.k1.exprs.get_type(expr);
     let (return_type, diverges) = b.get_function_return_type(return_type_id)?;
     let params = MSlice::empty();
-    let phys_fn_type = PhysicalFunctionType { return_type, diverges, params };
+    let phys_fn_type = PhysicalFunctionType { return_type, diverges, is_variadic: false, params };
     b.fn_type = phys_fn_type;
 
     debug!("Compiling expr {}", b.k1.expr_to_string(expr));
@@ -1757,7 +1735,15 @@ impl<'k1> Builder<'k1> {
             }
             phys_params.push(PhysicalFunctionParam { original_index: Some(index as u16), pt })
         }
-        let fn_ty = PhysicalFunctionType { params: phys_params.to_slice(), diverges, return_type };
+        let last_param = self.k1.mem.getn(function_type.physical_params).last();
+        let is_variadic =
+            last_param.is_some_and(|p| Some(p.type_id) == self.k1.builtin_types.c_varargs);
+        let fn_ty = PhysicalFunctionType {
+            params: phys_params.to_slice(),
+            diverges,
+            is_variadic,
+            return_type,
+        };
 
         let index = self.k1.ir.unit_fn_type_store.add(fn_ty);
         self.k1.ir.unit_fn_types.grow_and_set(type_id, Some(index));
@@ -2094,25 +2080,15 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
             let callee_fn_type = b.get_unit_fn_type(function_type_id)?;
 
             let maybe_function_id = call.callee.maybe_function_id();
-            let (maybe_builtin, linkage) = match maybe_function_id {
-                None => (None, None),
-                Some(f_id) => {
-                    let f = b.k1.get_function(f_id);
-                    (f.builtin_type, Some(f.linkage))
-                }
+            let maybe_builtin = match maybe_function_id {
+                None => None,
+                Some(f_id) => b.k1.get_function(f_id).builtin_type,
             };
 
             let callee: IrCallee;
             let mut environment_arg: Option<Value> = None;
 
-            if let Some(Linkage::External { lib_name, link_name, .. }) = linkage {
-                let function_id = maybe_function_id.unwrap();
-                let function_name = match link_name {
-                    None => b.k1.get_function(function_id).name,
-                    Some(link_name) => link_name,
-                };
-                callee = IrCallee::Extern { library_name: lib_name, function_name, function_id };
-            } else if let Some(builtin) = maybe_builtin {
+            if let Some(builtin) = maybe_builtin {
                 match builtin {
                     Builtin::Ir(ir_builtin) => {
                         return compile_ir_builtin(b, call, ir_builtin, callee_fn_type, dst);
@@ -2239,7 +2215,30 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
             }
             let env_param_count = environment_arg.iter().count();
 
-            for (arg_index, arg) in b.k1.mem.getn(call.args).iter().enumerate() {
+            let call_args = b.k1.mem.getn(call.args);
+            for (arg_index, arg) in call_args.iter().enumerate() {
+                // c-varargs: each field of the struct is one variadic arg
+                if callee_fn_type.is_variadic && arg_index + 1 == call_args.len() {
+                    let arg_type = b.k1.exprs.get_type(*arg);
+                    let arg_pt = b.get_physical_type(arg_type)?;
+                    let PhysicalTypeEnum::Agg(agg_id) = arg_pt.as_enum() else {
+                        compile_expr(b, None, *arg)?;
+                        continue;
+                    };
+                    let (place, _frozen) = compile_expr_place(b, *arg)?;
+                    let fields = b.k1.mem.getn(b.k1.get_agg_struct_layout(agg_id));
+                    for (field_index, field) in fields.iter().enumerate() {
+                        let addr = b.push_struct_offset(
+                            agg_id,
+                            place,
+                            field_index as u32,
+                            IrComment::None,
+                        );
+                        let value = load_value(b, field.field_t, addr, false, IrComment::None);
+                        args.push_grow(&mut b.k1.tmp, value);
+                    }
+                    continue;
+                }
                 let param_index = (arg_index + env_param_count) as u16;
                 let phys_param =
                     b.k1.ir
@@ -2262,7 +2261,9 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
                     args.push(value);
                 }
             }
-            debug_assert_eq!(callee_fn_type.params.len(), args.len() as u32);
+            debug_assert!(
+                callee_fn_type.is_variadic || callee_fn_type.params.len() == args.len() as u32
+            );
             let args_handle = b.u.push_args(args.as_slice());
             let ret_type = callee_fn_type.return_type;
             let sret_dst = if ret_type.is_agg() { dst } else { None };
@@ -3914,9 +3915,7 @@ pub fn compile_reachable(
                 let inst = u.inst(inst_id);
                 if let Inst::Call { call_id } = inst {
                     match u.call(*call_id).callee {
-                        IrCallee::Direct(id)
-                        | IrCallee::Extern { function_id: id, .. }
-                        | IrCallee::BackendBuiltin(id, _) => worklist.push(id),
+                        IrCallee::Direct(id) | IrCallee::BackendBuiltin(id, _) => worklist.push(id),
                         IrCallee::LlvmIntrinsic { .. } | IrCallee::Indirect(..) => {}
                     }
                 }
@@ -4774,14 +4773,6 @@ pub fn display_inst(
                 }
                 IrCallee::LlvmIntrinsic { name, .. } => {
                     write!(w, "llvm {}", k1.ident_str(*name))?;
-                }
-                IrCallee::Extern { library_name, function_name, .. } => {
-                    write!(
-                        w,
-                        "extern {} {}",
-                        k1.ident_str_opt(*library_name),
-                        k1.ident_str(*function_name),
-                    )?;
                 }
             };
             w.write_str("(")?;

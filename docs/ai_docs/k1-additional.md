@@ -156,6 +156,11 @@ state pointer means a dyn can't cross `#static` into a runtime constant.
   `fn(noinline)`: the out-of-line half of a fast path.
 - `fn(extern)` / `fn(extern("sym"))` declares FFI; provider via `ns(lib("foo"))`
   (whole ns, openings must agree) or `fn(extern, lib("foo"))`.
+- A variadic C fn ends in `c-varargs` (`use core/c-varargs`), which is also legal last
+  in fn pointer types: `fcntl(fd: c-int, cmd: c-int, c-varargs): c-int`. The call
+  passes one struct whose fields are the extra args in order, `.{}` for none, each
+  already C-promoted (physically a 32/64-bit integer, f64 or pointer, so i32 enums
+  pass too): `fcntl(fd, F_SETFL, .{ flags })`.
 - `fn(export)` / `fn(export("sym"))`: concrete, non-ability, with body; duplicate
   symbols error.
 

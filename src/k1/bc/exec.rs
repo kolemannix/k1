@@ -477,6 +477,23 @@ fn exec_loop<const COUNT_OPS: bool>(
             set_pc!(ret_pc);
         }};
     }
+    // Callee frame: B arg srcs into words 3.., sret src into word 2; yields (new fp, next pc)
+    macro_rules! write_call_frame {
+        ($h:ident, $opcode:path) => {{
+            let fp_delta = operand!(1) as usize;
+            let new_fp = unsafe { fp.add(fp_delta) };
+            let words = new_fp as *mut u64;
+            for k in 0..header_b($h) as usize {
+                let v = read_src!(operand!(3 + k));
+                unsafe { words.add(3 + k).write(v.bits()) };
+            }
+            let sret = read_src!(operand!(2));
+            unsafe { words.add(2).write(sret.bits()) };
+            let next_pc =
+                pc_u32!() as usize + 1 + $opcode.operand_count_with(header_a($h), header_b($h));
+            (new_fp, next_pc)
+        }};
+    }
 
     loop {
         debug_assert!((pc_u32!() as usize) < k1.bc.code.len(), "bc pc out of bounds");
@@ -574,23 +591,14 @@ fn exec_loop<const COUNT_OPS: bool>(
             Opcode::Call => {
                 check_instr_limit!();
                 let target = operand!(0);
-                let fp_delta = operand!(1) as usize;
-                let nargs = header_b(h) as usize;
                 if target == super::PENDING_PC {
                     vmerr!("Function needs its own compiled ir while it is being compiled");
                 }
-                let new_fp = unsafe { fp.add(fp_delta) };
+                let (new_fp, ret_pc) = write_call_frame!(h, Opcode::Call);
                 let words = new_fp as *mut u64;
-                for k in 0..nargs {
-                    let v = read_src!(operand!(3 + k));
-                    unsafe { words.add(3 + k).write(v.bits()) };
-                }
-                let sret = read_src!(operand!(2));
-                let ret_pc = pc_u32!() as usize + 4 + nargs;
                 unsafe {
                     words.write(fp as u64);
                     words.add(1).write(ret_pc as u64);
-                    words.add(2).write(sret.bits());
                 }
                 fp = new_fp;
                 set_pc!(target);
@@ -598,7 +606,6 @@ fn exec_loop<const COUNT_OPS: bool>(
             Opcode::CallIndirect => {
                 check_instr_limit!();
                 let fn_value = read_src!(operand!(0));
-                let fp_delta = operand!(1) as usize;
                 let fid_u32 = fn_value.bits() as u32;
                 let Some(function_id) = FunctionId::from_u32(fid_u32) else {
                     vmerr!("Indirect call to null function pointer");
@@ -610,74 +617,40 @@ fn exec_loop<const COUNT_OPS: bool>(
                         vmtry!(lower::get_or_lower_function(k1, function_id, vm.eval_span))
                     }
                 };
-                if info.kind != UnitKind::Body {
+                if info.kind == UnitKind::Builtin {
                     vmerr!(
-                        "Indirect call to bodyless ({}) function: {}",
-                        info.kind,
+                        "Indirect call to builtin function: {}",
                         k1.function_id_to_string(function_id, false)
                     );
                 }
                 let nargs = header_b(h) as usize;
-                let new_fp = unsafe { fp.add(fp_delta) };
-                let words = new_fp as *mut u64;
-                for k in 0..nargs {
-                    let v = read_src!(operand!(3 + k));
-                    unsafe { words.add(3 + k).write(v.bits()) };
-                }
-                let sret = read_src!(operand!(2));
-                let ret_pc = pc_u32!() as usize + 4 + nargs;
-                unsafe {
-                    words.write(fp as u64);
-                    words.add(1).write(ret_pc as u64);
-                    words.add(2).write(sret.bits());
-                }
-                fp = new_fp;
-                set_pc!(info.code_start);
-            }
-            Opcode::CallExtern => {
-                let function_id = FunctionId::from_u32(operand!(0)).unwrap();
-                // StringIds are nonzero, so 0 means "none"
-                let lib_name = crate::parse::StringId::from_u32(operand!(1));
-                let fn_name = crate::parse::StringId::from_u32(operand!(2)).unwrap();
-                let ret_pt = PhysicalType::from_u32(operand!(3));
-                let fp_delta = operand!(4) as usize;
-                let nargs = operand!(5) as usize;
-                vm.eval_span = k1.bc.span_for_pc(pc_u32!());
-
-                let new_fp = unsafe { fp.add(fp_delta) };
-                let args: &[Value] = unsafe {
-                    core::slice::from_raw_parts(
-                        new_fp.add(super::FRAME_HEADER_WORDS as usize * 8) as *const Value,
+                let (new_fp, next_pc) = write_call_frame!(h, Opcode::CallIndirect);
+                if info.kind == UnitKind::Extern {
+                    vm.eval_span = k1.bc.span_for_pc(pc_u32!());
+                    let variadic_pts: &[u32] = unsafe {
+                        core::slice::from_raw_parts(
+                            pc.add(1 + Opcode::CallIndirect.operand_count() + nargs),
+                            header_a(h) as usize,
+                        )
+                    };
+                    ret_reg = vmtry!(vm::vm_ffi::handle_ffi_call_resolved(
+                        k1,
+                        vm,
+                        function_id,
+                        new_fp,
                         nargs,
-                    )
-                };
-                // Route libffi marshalling scratch above all live frames
-                unsafe {
-                    let scratch_start =
-                        new_fp.add(super::FRAME_HEADER_WORDS as usize * 8 + nargs * 8);
-                    vm.stack.mem.set_cursor(scratch_start);
-                }
-                // Aggregate returns: libffi writes straight into our sret
-                // Scalars come back in the value.
-                let ret_dst: Option<*mut u8> = if ret_pt.is_agg() {
-                    Some(unsafe { *(new_fp as *const u64).add(2) } as *mut u8)
+                        variadic_pts
+                    ));
+                    set_pc!(next_pc);
                 } else {
-                    None
-                };
-                let result = vmtry!(vm::vm_ffi::handle_ffi_call_resolved(
-                    k1,
-                    vm,
-                    ret_pt,
-                    args,
-                    lib_name,
-                    fn_name,
-                    function_id,
-                    ret_dst
-                ));
-                if !ret_pt.is_agg() {
-                    ret_reg = result;
+                    let words = new_fp as *mut u64;
+                    unsafe {
+                        words.write(fp as u64);
+                        words.add(1).write(next_pc as u64);
+                    }
+                    fp = new_fp;
+                    set_pc!(info.code_start);
                 }
-                advance!(Opcode::CallExtern);
             }
             Opcode::CallLlvm => {
                 let fn_name = crate::parse::StringId::from_u32(operand!(0)).unwrap();
@@ -696,15 +669,12 @@ fn exec_loop<const COUNT_OPS: bool>(
             Opcode::CallBuiltin => {
                 let builtin = ir::BackendBuiltin::from_tag(header_a(h)).unwrap();
                 let ret_pt = PhysicalType::from_u32(operand!(0));
-                let fp_delta = operand!(1) as usize;
-                let nargs = operand!(2) as usize;
                 vm.eval_span = k1.bc.span_for_pc(pc_u32!());
-
-                let new_fp = unsafe { fp.add(fp_delta) };
+                let (new_fp, next_pc) = write_call_frame!(h, Opcode::CallBuiltin);
                 let args: &[Value] = unsafe {
                     core::slice::from_raw_parts(
                         new_fp.add(super::FRAME_HEADER_WORDS as usize * 8) as *const Value,
-                        nargs,
+                        header_b(h) as usize,
                     )
                 };
                 let outcome = vmtry!(exec_builtin(k1, vm, builtin, args));
@@ -720,7 +690,7 @@ fn exec_loop<const COUNT_OPS: bool>(
                     }
                     BuiltinOutcome::Empty => {}
                 }
-                advance!(Opcode::CallBuiltin);
+                set_pc!(next_pc);
             }
             Opcode::RetGet => {
                 write_slot!(operand!(0), ret_reg);

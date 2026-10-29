@@ -2501,9 +2501,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             function_final_params.push(mapped_type.into());
         }
 
+        let is_variadic = phys_fn_type.is_variadic;
         let fn_type = match physical_return_mapped_type {
-            None => self.ctx.void_type().fn_type(&function_final_params, false),
-            Some(rt) => rt.fn_type(&function_final_params, false),
+            None => self.ctx.void_type().fn_type(&function_final_params, is_variadic),
+            Some(rt) => rt.fn_type(&function_final_params, is_variadic),
         };
 
         Ok(CgFunctionType {
@@ -3135,9 +3136,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Indirect(PointerValue<'ctx>),
         }
         let (llvm_callee, cg_fn_type) = match callee {
-            IrCallee::BackendBuiltin(function_id, _)
-            | IrCallee::Direct(function_id)
-            | IrCallee::Extern { function_id, .. } => {
+            IrCallee::BackendBuiltin(function_id, _) | IrCallee::Direct(function_id) => {
                 self.declare_llvm_function(function_id)?;
                 let fn_type = self.llvm_functions.get(&function_id).unwrap().function_type;
                 (CallKind::Direct(function_id), fn_type)
@@ -3160,7 +3159,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         };
 
         let mut args: List<BasicMetadataValueEnum<'ctx>, _> =
-            self.mem.new_list(cg_fn_type.llvm_function_type.count_param_types());
+            self.mem.new_list(cg_fn_type.is_sret as u32 + call_args.len());
 
         let sret_dst = if cg_fn_type.is_sret {
             match call_dst {
@@ -3186,6 +3185,10 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let mut caller_copies = self.tmp.new_list(0);
         for (index, arg_ir_value) in self.cur_unit.args(call_args).iter().enumerate() {
             let arg_value = self.resolve_value(inst_mappings, *arg_ir_value)?;
+            if index >= cg_fn_type.param_k1_types.len() as usize {
+                args.push(arg_value.into());
+                continue;
+            }
 
             let param_k1_ty = *self.mem.get_nth_lt(cg_fn_type.param_k1_types, index);
             let abi_mapping = *self.mem.get_nth_lt(cg_fn_type.param_abi_mappings, index);
@@ -4751,15 +4754,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
         let llvm_name = if is_dylib_root {
             self.make_reloadable_function_symbol(function_id)
         } else {
-            match typed_function.linkage {
-                TyperLinkage::External { link_name: Some(link_name), .. }
-                | TyperLinkage::Exported { link_name: Some(link_name) } => {
-                    self.k1.ident_str(link_name).to_string()
-                }
-                TyperLinkage::Exported { link_name: None } => {
-                    self.k1.ident_str(typed_function.name).to_string()
-                }
-                _ => Cg::mangle(self.k1.function_symbol_name(function_id)),
+            match typed_function.linkage.link_symbol(typed_function.name) {
+                Some(symbol) => self.k1.ident_str(symbol).to_string(),
+                None => Cg::mangle(self.k1.function_symbol_name(function_id)),
             }
         };
 

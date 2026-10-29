@@ -18,7 +18,7 @@ use crate::typer::types::{
     PhysicalTypeResult, RecordKind, ScalarType, Type, TypeId,
 };
 use crate::typer::{
-    ErrorKind, FunctionId, GlobalInitialValue, K1Message, K1Result, Linkage, MessageLevel,
+    ErrorKind, FunctionId, GlobalInitialValue, K1Message, K1Result, MessageLevel,
     StaticContainerKind, StaticSum, StaticValue, StaticValueId, StaticValuePool, TypedFloatValue,
     TypedGlobalId, TypedIntValue, TypedProgram,
 };
@@ -209,8 +209,6 @@ pub mod k1_types {
 
 #[derive(Debug, Clone, Copy)]
 pub struct VmFfiHandle {
-    #[allow(unused)]
-    library_handle: *mut c_void,
     function_pointer: *mut c_void,
     cif: libffi::raw::ffi_cif,
 }
@@ -488,22 +486,9 @@ pub(crate) fn resolve_global(
             );
         }
         GlobalInitialValue::Uninit => {
-            if let Linkage::External { module_id, lib_name, .. } = global.linkage {
-                let symbol = k1.global_link_symbol(&global);
-                let handle = match lib_name {
-                    Some(lib_name) => k1.get_dylib_handle(module_id, lib_name, vm.eval_span)?,
-                    None => k1.vm_process_dlopen_handle,
-                };
-                let name_cstr = std::ffi::CString::new(symbol.as_str()).unwrap();
-                let sym = unsafe { libc::dlsym(handle, name_cstr.as_ptr()) };
-                if sym.is_null() {
-                    kbail!(
-                        k1,
-                        vm.eval_span,
-                        "Could not resolve external global symbol '{}' at compile time",
-                        symbol
-                    );
-                }
+            if global.linkage.is_external() {
+                let name = k1.variables.get(global.variable_id).name;
+                let sym = k1.get_extern_symbol(global.linkage, name, vm.eval_span)?;
                 let addr = Value::ptr(sym as *const u8);
                 vm.globals.insert(global_id, addr);
                 return Ok(addr);

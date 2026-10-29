@@ -1,10 +1,10 @@
 use std/libc
 
-fn(extern("gethostname")) gethostname(name: ptr, len: size): i32
-fn(extern("getpid")) getpid(): i32
+fn(extern) gethostname(name: ptr, len: size): i32
+fn(extern) getpid(): i32
 fn(extern("time")) c-time(tloc: ptr): i64
-fn(extern("localtime")) localtime(t: *i64): ptr
-fn(extern("strftime")) strftime(s: ptr, max: size, format: *u8, tm: ptr): size
+fn(extern) localtime(t: *i64): ptr
+fn(extern) strftime(s: ptr, max: size, format: *u8, tm: ptr): size
 
 fn hostname(): string {
   let buf = buffer/allocate[u8](256)

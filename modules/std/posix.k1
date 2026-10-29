@@ -2,6 +2,7 @@ ns posix {
 
   use core/c-int
   use core/c-sizet
+  use core/c-varargs
 
   let stdin: i32  = 0
   let stdout: i32 = 1
@@ -14,14 +15,14 @@ ns posix {
   let O_TRUNC : c-int = #if k1/platform is { :posix-macos -> 0x0400, :posix-linux or :wasi or :bare -> 0x200 }
   let O_SEARCH: c-int = #if k1/platform is { :posix-macos -> 0x40100000, :posix-linux or :wasi or :bare -> 0x200000 }
   let O_EXEC  : c-int = #if k1/platform is { :posix-macos -> 0x40000000, :posix-linux or :wasi or :bare -> 0x200000 }
-  fn(extern("open")) open(path: *u8, oflag: c-int): c-int
-  fn(extern("read")) read(file-no: c-int, buffer: ptr, count: c-sizet): i64
-  fn(extern("write")) write(file-no: c-int, data: ptr, count: c-sizet): i64
-  fn(extern("isatty")) isatty(fd: c-int): c-int
+  fn(extern) open(path: *u8, oflag: c-int, c-varargs): c-int
+  fn(extern) read(file-no: c-int, buffer: ptr, count: c-sizet): i64
+  fn(extern) write(file-no: c-int, data: ptr, count: c-sizet): i64
+  fn(extern) isatty(fd: c-int): c-int
 
   let SEEK_SET: c-int = 0
   let SEEK_END: c-int = 2
-  fn(extern("lseek")) lseek(fd: c-int, offset: i64, whence: c-int): i64
+  fn(extern) lseek(fd: c-int, offset: i64, whence: c-int): i64
 
   let MAP_FILE   : c-int = 0x0000
   let MAP_SHARED : c-int = 0x0001
@@ -39,24 +40,24 @@ ns posix {
   // Pages may be executed.
   let PROT_EXEC: c-int = 0x4
   let MAP_FAILED: i64 = -1
-  fn(extern("mmap")) mmap(addr: ptr, len: size, prot: i32, flags: c-int, fd: c-int, offset: size): ptr
+  fn(extern) mmap(addr: ptr, len: size, prot: i32, flags: c-int, fd: c-int, offset: size): ptr
 
-  fn(extern("munmap")) munmap(addr: ptr, len: size): i32
+  fn(extern) munmap(addr: ptr, len: size): i32
 
   let MADV_SEQUENTIAL: i32 = 2
   fn(extern("posix_madvise")) madvise(addr: ptr, len: c-sizet, advice: c-int): c-int
 
-  fn(extern("backtrace")) backtrace(buffer: ptr, size: c-int)
+  fn(extern) backtrace(buffer: ptr, size: c-int)
 
   type timespec = { tv_sec: u64, tv_nsec: u64 }
   type(alias) clockid_t = c-int
   let CLOCK_MONOTONIC: clockid_t = 1
-  fn(extern("clock_gettime")) clock_gettime(clockid: clockid_t, tp: *timespec): c-int
-  fn(extern("nanosleep")) nanosleep(req: *timespec, rem: *timespec): c-int
+  fn(extern) clock_gettime(clockid: clockid_t, tp: *timespec): c-int
+  fn(extern) nanosleep(req: *timespec, rem: *timespec): c-int
 
-  fn(extern("fork")) fork(): i32
-  fn(extern("execve")) execve(path: *u8, argv: ptr, envp: ptr): i32
-  fn(extern("waitpid")) waitpid(pid: i32, status: *i32, options: i32): i32
+  fn(extern) fork(): i32
+  fn(extern) execve(path: *u8, argv: ptr, envp: ptr): i32
+  fn(extern) waitpid(pid: i32, status: *i32, options: i32): i32
   let SIGHUP : c-int = 1
   let SIGINT : c-int = 2
   let SIGKILL: c-int = 9
@@ -64,30 +65,30 @@ ns posix {
   let SIGTERM: c-int = 15
   let SIGUSR1: c-int = #if k1/platform is { :posix-macos -> 30, :posix-linux or :wasi or :bare -> 10 }
   let SIGUSR2: c-int = #if k1/platform is { :posix-macos -> 31, :posix-linux or :wasi or :bare -> 12 }
-  fn(extern("kill")) kill(pid: i32, sig: c-int): c-int
+  fn(extern) kill(pid: i32, sig: c-int): c-int
 
-  fn(extern("pipe")) pipe(fds: ptr): c-int
-  fn(extern("close")) close(fd: c-int): c-int
+  fn(extern) pipe(fds: ptr): c-int
+  fn(extern) close(fd: c-int): c-int
 
-  fn(extern("posix_spawn")) posix_spawn(pid: *i32, path: *u8, file-actions: ptr, attrp: ptr, argv: ptr, envp: ptr): c-int
-  fn(extern("posix_spawn_file_actions_init")) posix_spawn_file_actions_init(file-actions: ptr): c-int
-  fn(extern("posix_spawn_file_actions_destroy")) posix_spawn_file_actions_destroy(file-actions: ptr): c-int
-  fn(extern("posix_spawn_file_actions_adddup2")) posix_spawn_file_actions_adddup2(file-actions: ptr, fd: c-int, new-fd: c-int): c-int
-  fn(extern("posix_spawn_file_actions_addclose")) posix_spawn_file_actions_addclose(file-actions: ptr, fd: c-int): c-int
+  fn(extern) posix_spawn(pid: *i32, path: *u8, file-actions: ptr, attrp: ptr, argv: ptr, envp: ptr): c-int
+  fn(extern) posix_spawn_file_actions_init(file-actions: ptr): c-int
+  fn(extern) posix_spawn_file_actions_destroy(file-actions: ptr): c-int
+  fn(extern) posix_spawn_file_actions_adddup2(file-actions: ptr, fd: c-int, new-fd: c-int): c-int
+  fn(extern) posix_spawn_file_actions_addclose(file-actions: ptr, fd: c-int): c-int
 
   let RTLD_NOW: c-int = 0x2
   let RTLD_LOCAL: c-int = #if k1/platform is { :posix-macos -> 0x4, :posix-linux or :wasi or :bare -> 0 }
-  fn(extern("dlopen")) dlopen(path: optref[u8], mode: c-int): ptr
-  fn(extern("dlsym")) dlsym(handle: ptr, symbol: *u8): ptr
-  fn(extern("dlerror")) dlerror(): optref[u8]
+  fn(extern) dlopen(path: optref[u8], mode: c-int): ptr
+  fn(extern) dlsym(handle: ptr, symbol: *u8): ptr
+  fn(extern) dlerror(): optref[u8]
 
-  fn(extern("readlink")) readlink(path: *u8, buf: ptr, bufsize: c-sizet): i64
-  fn(extern("unlink")) unlink(path: *u8): c-int
+  fn(extern) readlink(path: *u8, buf: ptr, bufsize: c-sizet): i64
+  fn(extern) unlink(path: *u8): c-int
   let F_OK: c-int = 0
   let X_OK: c-int = 1
-  fn(extern("access")) access(path: *u8, mode: c-int): c-int
+  fn(extern) access(path: *u8, mode: c-int): c-int
 
-  fn(extern("_NSGetEnviron")) _NSGetEnviron(): ptr
+  fn(extern) _NSGetEnviron(): ptr
   let(extern) environ: ptr
   fn environ-ptr(): ptr {
     #if k1/platform is {

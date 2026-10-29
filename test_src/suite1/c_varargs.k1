@@ -1,0 +1,27 @@
+#if k1/platform-posix ns c_varargs {
+  use core/c-int
+  use core/c-sizet
+  use core/c-varargs
+
+  fn(extern) snprintf(s: *u8, n: c-sizet, format: *u8, c-varargs): c-int
+  fn(extern) fcntl(fd: c-int, cmd: c-int, c-varargs): c-int
+
+  fn format-mixed(): string {
+    let buf: array[u8, 64] = .0
+    let args = .{ a = -7i32, b = 1234567890123, c = 2.5, d = "hi".to-c-tmp(), e = 4000000000u32 }
+    let _ = snprintf(buf.&.as[ptr].ref[u8], 64, "%d|%lld|%.1f|%s|%u".to-c-tmp(), args)
+    string/from-c(buf.&.as[ptr].ref[u8])
+  }
+
+  fn(test) passes-struct-fields-as-varargs() {
+    assert-equals(format-mixed(), "-7|1234567890123|2.5|hi|4000000000")
+    assert(fcntl(0, 3, .{}) >= 0)
+    assert(test-compile(fcntl(0, 3, .{ flags = 1u8 })).is-some())
+  }
+
+  fn(test) calls-varargs-through-fn-pointer() {
+    let get-flags: *fn(c-int, c-int, c-varargs) -> c-int = fcntl.&
+    assert-equals(get-flags(0, 3, .{}), fcntl(0, 3, .{}))
+    assert(test-compile(get-flags.as[*fn(c-int, c-int, {}) -> c-int]).is-some())
+  }
+}

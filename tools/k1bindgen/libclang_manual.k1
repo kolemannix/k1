@@ -161,6 +161,8 @@ fn(extern("clang_getNumArgTypes")) getNumArgTypes(T: CXType): c-int
 
 fn(extern("clang_getArgType")) getArgType(T: CXType, i: u32): CXType 
 
+fn(extern("clang_isFunctionTypeVariadic")) isFunctionTypeVariadic(T: CXType): u32
+
 fn(extern("clang_Cursor_getArgument")) Cursor_getArgument(C: CXCursor, i: u32): CXCursor 
 
 fn(extern("clang_getTypedefDeclUnderlyingType")) getTypedefDeclUnderlyingType(C: CXCursor): CXType

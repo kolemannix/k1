@@ -2,7 +2,7 @@
   use core/arena
 
   ns(lib("host")) host {
-    fn(extern("progress")) progress(nodes: u64, board: u32, from: square, to: square)
+    fn(extern) progress(nodes: u64, board: u32, from: square, to: square)
   }
 
   let INTERVAL: u64 = 20000

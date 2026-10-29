@@ -1,4 +1,4 @@
-fn(extern("getpid")) getpid(): i32
+fn(extern) getpid(): i32
 
 let COMPILER_PID: i32 = #static getpid()
 

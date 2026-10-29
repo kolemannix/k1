@@ -271,9 +271,9 @@ function the new thread starts in.
 Three declarations, no header, no build step:
 
 ```k1
-fn(extern("strlen")) strlen(s: *u8): size
-fn(extern("getpid")) getpid(): c-int
-fn(extern("qsort")) qsort(base: ptr, count: size, width: size, compare: *fn(ptr, ptr) -> c-int)
+fn(extern) strlen(s: *u8): size
+fn(extern) getpid(): c-int
+fn(extern) qsort(base: ptr, count: size, width: size, compare: *fn(ptr, ptr) -> c-int)
 ```
 
 A k1 function's address is a C function pointer:
@@ -312,7 +312,7 @@ taking structs, extern globals and thread-locals.
 
 ```k1 path=test_src/ffi_abi_test/ffi_abi_test.k1
   type rgb3 = { r: u8, g: u8, b: u8 }
-  fn(extern("rgb3")) rgb3(a: rgb3, b: rgb3): rgb3
+  fn(extern) rgb3(a: rgb3, b: rgb3): rgb3
 ```
 
 ```k1 path=test_src/ffi_abi_test/ffi_abi_test.k1

@@ -3,17 +3,17 @@ ns libc {
   use core/c-int
   use core/c-long
 
-  fn(extern("exit")) exit(code: i32): never
-  fn(extern("abort")) abort(): never
+  fn(extern) exit(code: i32): never
+  fn(extern) abort(): never
 
-  fn(extern("memcmp")) memcmp(s1: ptr, s2: ptr, size: size): i32
-  fn(extern("malloc")) malloc(size: size): ptr
-  fn(extern("calloc")) calloc(count: int, size: size): ptr
-  fn(extern("free")) free(ptr: ptr)
-  fn(extern("realloc")) realloc(ptr: ptr, size: size): ptr
+  fn(extern) memcmp(s1: ptr, s2: ptr, size: size): i32
+  fn(extern) malloc(size: size): ptr
+  fn(extern) calloc(count: int, size: size): ptr
+  fn(extern) free(ptr: ptr)
+  fn(extern) realloc(ptr: ptr, size: size): ptr
 
-  fn(extern("strlen")) strlen(c-str: *u8): size
-  fn(extern("getenv")) getenv(name: *u8): optref[u8]
+  fn(extern) strlen(c-str: *u8): size
+  fn(extern) getenv(name: *u8): optref[u8]
 
   // errno is a libc thread-local reached through its address fn; there is
   // no plain symbol to bind
@@ -23,8 +23,8 @@ ns libc {
     k1/select-os(macos = fn. errno-location-macos(), linux = fn. errno-location-linux()).ref[c-int].*
   }
   let EINTR: c-int = 4
-  fn(extern("strerror")) strerror(errno: c-int): *u8
-  fn(extern("perror")) perror(msg: optref[u8])
+  fn(extern) strerror(errno: c-int): *u8
+  fn(extern) perror(msg: optref[u8])
   fn strerror-string(code: c-int): string {
     string/wrap-c(strerror(code))
   }
@@ -35,16 +35,16 @@ ns libc {
   ns files {
     let SEEK_END: i32 = 2
     let SEEK_SET: i32 = 0
-    fn(extern("fopen")) fopen(path: *u8, mode: *u8): ptr
-    fn(extern("fseek")) fseek(file-desc: ptr, offset: i64, whence: i32): i32
-    fn(extern("fread")) fread(buffer: ptr, size: size, num: size, stream: ptr): usize
-    fn(extern("fclose")) fclose(file-desc: ptr): c-int
-    fn(extern("ftell")) ftell(file-desc: ptr): c-long
-    fn(extern("fwrite")) fwrite(data-ptr: ptr, item-size: size, item-count: size, file-desc: ptr): usize
+    fn(extern) fopen(path: *u8, mode: *u8): ptr
+    fn(extern) fseek(file-desc: ptr, offset: i64, whence: i32): i32
+    fn(extern) fread(buffer: ptr, size: size, num: size, stream: ptr): usize
+    fn(extern) fclose(file-desc: ptr): c-int
+    fn(extern) ftell(file-desc: ptr): c-long
+    fn(extern) fwrite(data-ptr: ptr, item-size: size, item-count: size, file-desc: ptr): usize
   }
 
-  fn(extern("strtod")) strtod(nptr: *u8, endptr: *ptr): f64
-  fn(extern("strtof")) strtof(nptr: *u8, endptr: *ptr): f32
+  fn(extern) strtod(nptr: *u8, endptr: *ptr): f64
+  fn(extern) strtof(nptr: *u8, endptr: *ptr): f32
 
   ns math {
     fn(extern("expf")) exp_f32(f32): f32

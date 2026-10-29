@@ -113,6 +113,15 @@ impl Linkage {
     pub fn is_exported(&self) -> bool {
         matches!(self, Linkage::Exported { .. })
     }
+
+    pub fn link_symbol(self, name: StringId) -> Option<StringId> {
+        match self {
+            Linkage::Standard => None,
+            Linkage::External { link_name, .. } | Linkage::Exported { link_name } => {
+                Some(link_name.unwrap_or(name))
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -3391,13 +3400,6 @@ impl TypedProgram {
 
     pub fn ident_str(&self, id: StringId) -> &str {
         self.ast.idents.get_string(id)
-    }
-
-    pub fn ident_str_opt(&self, id: Option<StringId>) -> &str {
-        match id {
-            Some(id) => self.ast.idents.get_string(id),
-            None => "<no name>",
-        }
     }
 
     pub fn build_ident_with(
@@ -6954,6 +6956,7 @@ impl TypedProgram {
             self.scopes.add_variable(lambda_scope_id, arg.binding, variable_id);
             param_variables.push(TypedFunctionParam { variable_id, span: arg.span })
         }
+        self.check_c_varargs_params(typed_params.as_slice(), false, body_span)?;
 
         // For closures, the environment param, its casted alias, and one `let` per capture
         // are all in place before the body is evaluated, so capture references in the body
@@ -7542,6 +7545,16 @@ impl TypedProgram {
                 for (param_from, param_to) in
                     self.mem.getn_zip(fn_type_from.physical_params, fn_type_to.physical_params)
                 {
+                    let c_varargs = self.builtin_types.c_varargs;
+                    if (Some(param_from.type_id) == c_varargs)
+                        != (Some(param_to.type_id) == c_varargs)
+                    {
+                        kbail!(
+                            self,
+                            span,
+                            "incompatible parameter type for cast: only one is c-varargs"
+                        )
+                    }
                     // depth is 0 since these values are essentially being directly abi-converted
                     // consuming these values: to, from
                     match self.check_interpret_cast(param_to.type_id, param_from.type_id, span, 0) {
@@ -9228,6 +9241,13 @@ impl TypedProgram {
                                 "Cannot call to-dyn with a generic function; apply its type arguments first"
                             );
                         }
+                        if function.linkage.is_external() {
+                            kbail!(
+                                self,
+                                call_span,
+                                "Cannot call to-dyn with an extern function; it has no body"
+                            );
+                        }
                         let lambda_object =
                             self.function_to_lambda_object(fr.function_id, call_span);
                         return Ok(CallResolution::OtherExpr(self.synth_discard_then(
@@ -9822,6 +9842,7 @@ impl TypedProgram {
             });
             new_variables.extend(self.mem.getn(new_function.params));
             new_function.params = new_variables.to_slice();
+            new_function.linkage = Linkage::Standard;
 
             let fn_type = *self.types.get(new_function.type_id).as_function().unwrap();
             new_function.type_id = self.add_function_type(
@@ -10868,8 +10889,53 @@ impl TypedProgram {
                     self.tmp.getn(args_and_params.args).iter().zip(aligned_params).enumerate()
                 {
                     let is_method_receiver = is_method && param_index == receiver_index;
+                    let is_c_varargs = Some(param.type_id) == self.builtin_types.c_varargs;
                     let checked_expr = match *maybe_typed_expr {
                         None => self.ice_span(span, "Unresolved context argument"),
+                        // c-varargs: a struct of already-promoted C scalars
+                        Some(maybe_typed) if is_c_varargs => {
+                            let arg = match maybe_typed {
+                                MaybeTypedExpr::Typed(typed) => typed,
+                                MaybeTypedExpr::Parsed(parsed) => {
+                                    self.eval_expr(parsed, ctx.with_no_expected_type())?
+                                }
+                            };
+                            let arg_type = self.exprs.get_type(arg);
+                            let arg_span = self.exprs.get_span(arg);
+                            let fields = match self.types.get(arg_type) {
+                                Type::Struct(s) if s.record_kind != RecordKind::Union => s.fields,
+                                _ => kbail!(
+                                    self,
+                                    arg_span,
+                                    "A c-varargs argument is a struct of the values; got {}",
+                                    arg_type
+                                ),
+                            };
+                            for field in self.mem.getn(fields) {
+                                let scalar = match self.get_physical_type(field.type_id) {
+                                    PhysicalTypeResult::Yes(pt) => pt.as_scalar(),
+                                    PhysicalTypeResult::No => None,
+                                };
+                                if !matches!(
+                                    scalar,
+                                    Some(
+                                        ScalarType::I32
+                                            | ScalarType::I64
+                                            | ScalarType::F64
+                                            | ScalarType::Pointer
+                                    )
+                                ) {
+                                    kbail!(
+                                        self,
+                                        arg_span,
+                                        "c-varargs field '{}' has type {}; a variadic C argument is a 32- or 64-bit integer, an f64, or a pointer",
+                                        field.name,
+                                        field.type_id
+                                    );
+                                }
+                            }
+                            arg
+                        }
                         Some(MaybeTypedExpr::Typed(typed)) => self.check_and_coerce_expr(
                             param.type_id,
                             typed,
@@ -11093,6 +11159,25 @@ impl TypedProgram {
             span,
             ctx,
         )
+    }
+
+    fn check_c_varargs_params(
+        &self,
+        params: &[FnParamType],
+        allows_varargs: bool,
+        span: Span,
+    ) -> K1Result<()> {
+        let Some(c_varargs) = self.builtin_types.c_varargs else { return Ok(()) };
+        for (index, param) in params.iter().enumerate() {
+            if param.type_id == c_varargs && !(allows_varargs && index + 1 == params.len()) {
+                kbail!(
+                    self,
+                    span,
+                    "c-varargs is only the last parameter of an extern fn or a fn type"
+                );
+            }
+        }
+        Ok(())
     }
 
     fn finish_call(
@@ -14190,6 +14275,11 @@ impl TypedProgram {
         let is_builtin = ast_fn.builtin.is_some()
             || matches!(impl_info, Some(info) if info.impl_kind.is_builtin() && !info.is_default);
         let linkage = ast_fn.linkage.with_default_lib(self.namespaces.get(namespace_id).lib_name);
+        self.check_c_varargs_params(
+            param_types.as_slice(),
+            linkage.is_external(),
+            ast_fn.signature_span,
+        )?;
         if ast_fn.is_native && (is_builtin || linkage != Linkage::Standard) {
             kbail!(
                 self,

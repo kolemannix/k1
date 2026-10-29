@@ -29,7 +29,7 @@ fn write_dst(w: &mut String, dst: u32) {
     write!(w, "f[{}]", dst).unwrap();
 }
 
-/// [sret src][arg srcs...] tail shared by call and call_indirect
+/// [sret src][arg srcs...] tail shared by call, call_indirect and call_builtin
 fn write_call_tail(w: &mut String, k1: &TypedProgram, ops: &[u32]) {
     write!(w, " sret=").unwrap();
     write_src(w, k1, ops[2]);
@@ -65,7 +65,7 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
     let op = Opcode::from_tag(header_op(h)).unwrap();
     let a = header_a(h);
     let b = header_b(h);
-    let n = op.operand_count_with(b);
+    let n = op.operand_count_with(a, b);
     let ops: &[u32] = &code[pc + 1..pc + 1 + n];
 
     write!(w, "{:6} ", pc).unwrap();
@@ -127,37 +127,22 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
             write!(w, "call_indirect ").unwrap();
             write_src(w, k1, ops[0]);
             write!(w, " fp+={}", ops[1]).unwrap();
-            write_call_tail(w, k1, ops);
-        }
-        Opcode::CallExtern => {
-            write!(
-                w,
-                "call_extern fn#{} ret_pt={} fp+={} nargs={}",
-                ops[0], ops[3], ops[4], ops[5]
-            )
-            .unwrap();
+            write_call_tail(w, k1, &ops[..3 + b as usize]);
         }
         Opcode::CallBuiltin => {
             write!(
                 w,
-                "call_builtin {} ret_pt={} fp+={} nargs={}",
+                "call_builtin {} ret_pt={} fp+={}",
                 ir::BackendBuiltin::from_tag(a).unwrap().kind_name(),
                 ops[0],
-                ops[1],
-                ops[2]
+                ops[1]
             )
             .unwrap();
+            write_call_tail(w, k1, ops);
         }
         Opcode::CallLlvm => {
-            write!(
-                w,
-                "call_llvm {} ret_pt={} fp+={} nargs={}",
-                k1.ident_str(crate::parse::StringId::from_u32(ops[0]).unwrap()),
-                ops[1],
-                ops[2],
-                ops[3]
-            )
-            .unwrap();
+            let name = crate::parse::StringId::from_u32(ops[0]).unwrap();
+            write!(w, "call_llvm {}", k1.ident_str(name)).unwrap();
         }
         Opcode::RetGet => {
             write!(w, "ret_get ").unwrap();

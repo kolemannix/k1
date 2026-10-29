@@ -263,6 +263,8 @@ impl TypedProgram {
                 self.builtin_types.opt = Some(type_id);
             } else if name == b.ordering {
                 self.builtin_types.ordering = Some(type_id);
+            } else if name == b.c_varargs {
+                self.builtin_types.c_varargs = Some(type_id);
             } else if name == b.code {
                 self.builtin_types.code = Some(type_id);
             } else if name == b.code_span {
@@ -588,6 +590,7 @@ impl TypedProgram {
                     let type_id = self.eval_type_expr(*param, scope_id)?;
                     params.push(FnParamType { type_id, kind: FnParamKind::Plain });
                 }
+                self.check_c_varargs_params(params.as_slice(), true, fun_type.span)?;
                 let return_type = self.eval_type_expr(fun_type.return_type, scope_id)?;
                 Ok(self.add_function_type(params.as_slice(), return_type, false))
             }

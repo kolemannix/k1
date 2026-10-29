@@ -3,7 +3,7 @@ ns sys
 use core/c-int
 use core/c-sizet
 
-#if k1/platform-macos fn(extern("_NSGetExecutablePath")) _NSGetExecutablePath(buf: ptr, bufsize: ptr): c-int
+#if k1/platform-macos fn(extern) _NSGetExecutablePath(buf: ptr, bufsize: ptr): c-int
 
 fn exe-path(): string {
   #if k1/platform is {

@@ -25,8 +25,8 @@
   let NOTE_ATTRIB: u32 = 0x8
   let NOTE_RENAME: u32 = 0x20
 
-  fn(extern("kqueue")) kqueue(): c-int
-  fn(extern("kevent")) kevent(
+  fn(extern) kqueue(): c-int
+  fn(extern) kevent(
     kq: c-int,
     changelist: ptr,
     nchanges: c-int,
@@ -42,7 +42,7 @@
   }
 
   fn add(w: *watch/watcher, path: string): result[empty, string] {
-    let file-fd = posix/open(path.to-c-tmp(), O_EVTONLY)
+    let file-fd = posix/open(path.to-c-tmp(), O_EVTONLY, .{})
     if file-fd < 0 {
       return :err "watch/add open of $path failed: ${libc/errno-k1-string()}"
     }
@@ -112,8 +112,8 @@
   let IN_DELETE_SELF: u32 = 0x400
   let IN_MOVE_SELF: u32 = 0x800
 
-  fn(extern("inotify_init1")) inotify_init1(flags: c-int): c-int
-  fn(extern("inotify_add_watch")) inotify_add_watch(fd: c-int, path: *u8, mask: u32): c-int
+  fn(extern) inotify_init1(flags: c-int): c-int
+  fn(extern) inotify_add_watch(fd: c-int, path: *u8, mask: u32): c-int
 
   fn create(): result[watch/watcher, string] {
     let fd: i32 = inotify_init1(0)

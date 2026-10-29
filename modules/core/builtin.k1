@@ -46,6 +46,7 @@ type(alias) c-sizet  = u64
 type(alias) c-ssizet = i64
 type(alias) c-int    = i32
 type(alias) c-long   = i64
+type c-varargs = {}
 
 type ordering = either(i8) { less = -1, equal = 0, greater = 1 }
 

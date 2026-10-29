@@ -291,6 +291,7 @@ fn(extern("uv_loop_alive")) loop_alive(
 fn(extern("uv_loop_configure")) loop_configure(
   loop_c: *uv-loop,
   option: loop_option,
+  varargs: core/c-varargs,
 ): i32
 fn(extern("uv_loop_fork")) loop_fork(
   loop_c: *uv-loop,

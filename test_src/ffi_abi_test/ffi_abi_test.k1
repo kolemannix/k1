@@ -3,14 +3,14 @@ ns(lib("foo")) foo {
   type very-small = { x: u8 }
   impl print for very-small { fn print-to[w: writer](self: very-small, w) { w.write("${ {self.x} }") } }
   impl equals for very-small { fn equals(self: very-small, other: very-small): bool { self.x == other.x } }
-  fn(extern("very_small")) very_small(x: very-small, y: very-small): very-small
+  fn(extern) very_small(x: very-small, y: very-small): very-small
 
   type int-wrap = { inner: i32 }
   fn(extern("intWrap")) int-wrap(a: int-wrap, b: int-wrap): int-wrap
 
   // Odd-sized structs: 3 bytes (i24) and 6 bytes (i48) coercions
   type rgb3 = { r: u8, g: u8, b: u8 }
-  fn(extern("rgb3")) rgb3(a: rgb3, b: rgb3): rgb3
+  fn(extern) rgb3(a: rgb3, b: rgb3): rgb3
 
   type three-shorts = { a: i16, b: i16, c: i16 }
   fn(extern("three_shorts")) three-shorts(a: three-shorts, b: three-shorts): three-shorts
@@ -18,15 +18,15 @@ ns(lib("foo")) foo {
   fn(extern("takesRgb3Fn")) takes-rgb3-fn(f: *fn(x: rgb3) -> rgb3): rgb3
 
   type small = { r: u8, g: u8, b: u8, a: u8 }
-  fn(extern("small")) small(x: small, y: small): small
+  fn(extern) small(x: small, y: small): small
 
   type medium = { a: u64, b: u64 }
-  fn(extern("medium")) medium(a: medium, b: medium): medium
+  fn(extern) medium(a: medium, b: medium): medium
 
   type mixed-class-medium = { f1: f32, f2: f32, i3: array[i16, 4] }
 
   type large = { med1: medium, med2: medium }
-  fn(extern("large")) large(a: large, b: large): large
+  fn(extern) large(a: large, b: large): large
 
   type HFA2 = { x: f32, y: f32 }
   fn(extern("hfa2_add")) hfa2-add(a: HFA2, b: HFA2): HFA2

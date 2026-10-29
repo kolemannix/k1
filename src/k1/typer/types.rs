@@ -1079,6 +1079,7 @@ pub struct BuiltinTypes {
     pub k1_build_request: Option<TypeId>,
     pub k1_editor_settings: Option<TypeId>,
     pub ordering: Option<TypeId>,
+    pub c_varargs: Option<TypeId>,
     pub types_layout: Option<TypeId>,
     pub types_type_schema: Option<TypeId>,
     pub types_type_info: Option<TypeId>,
@@ -1116,6 +1117,7 @@ impl BuiltinTypes {
         debug_assert!(self.types_float_kind.is_some());
         debug_assert!(self.types_float_value.is_some());
         debug_assert!(self.types_type_id.is_some());
+        debug_assert!(self.c_varargs.is_some());
     }
     pub fn bool(&self) -> TypeId {
         self.bool.expect("bool builtin missing")

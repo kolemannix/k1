@@ -1,6 +1,8 @@
 ns lambdas
 
 fn static-add-one(x: int): int { x + 1 }
+fn(extern) abs(x: i32): i32
+fn(export("lambdas_add_three")) exported-add-three(x: int): int { x + 3 }
 fn static-add-two(x: int): int { x + 2 }
 
 fn some-fn-param1(i: int, f: some fn int -> int): int {
@@ -97,6 +99,8 @@ fn(test) some-fn-params() {
   assert-equals(forward-twice([1, 2, 3, 4], fn x. x % 2 == 0), 4)
   assert(test-compile( some-fn-param1(4, takes-string) ) is :some _)
   assert-equals(some-fn-param1(5, static-add-one.to-dyn()), 6)
+  assert-equals(some-fn-param1(5, exported-add-three.to-dyn()), 8)
+  assert(test-compile(abs.to-dyn()) is :some _)
   let c1 = .{ x = 3 }
   let c2 = 2
   assert-equals(some-fn-param2(5, fn[c1] x. x + 1 + c1.x, fn[c2] x. x + 2 + c2), 18)

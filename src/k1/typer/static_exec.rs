@@ -1816,6 +1816,28 @@ impl TypedProgram {
         })
     }
 
+    pub fn get_extern_symbol(
+        &mut self,
+        linkage: Linkage,
+        name: StringId,
+        span: Span,
+    ) -> K1Result<*mut std::ffi::c_void> {
+        let Linkage::External { module_id, lib_name, .. } = linkage else {
+            self.ice_span(span, "extern symbol lookup for a non-extern item")
+        };
+        let handle = match lib_name {
+            None => self.vm_process_dlopen_handle,
+            Some(lib_name) => self.get_dylib_handle(module_id, lib_name, span)?,
+        };
+        let symbol = linkage.link_symbol(name).unwrap();
+        let symbol_cstr = std::ffi::CString::new(self.ident_str(symbol)).unwrap();
+        let address = unsafe { libc::dlsym(handle, symbol_cstr.as_ptr()) };
+        if address.is_null() {
+            kbail!(self, span, "Could not find extern symbol '{}'", symbol);
+        }
+        Ok(address)
+    }
+
     pub fn get_dylib_handle(
         &mut self,
         module_id: ModuleId,

@@ -46,6 +46,9 @@ int cinput_sum(int lhs, unsigned int rhs) {
 
 int cinput_unnamed_param(int, unsigned int named, float loop);
 
+int cinput_format(char *out, const char *fmt, ...);
+typedef int (*cinput_logger)(int level, const char *fmt, ...);
+
 enum Color {
   Color_Red = 577,
   Color_Green = -10,

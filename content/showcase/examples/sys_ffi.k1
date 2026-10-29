@@ -1,8 +1,8 @@
 use core/c-int
 
-fn(extern("strlen")) strlen(s: *u8): size
-fn(extern("getpid")) getpid(): c-int
-fn(extern("qsort")) qsort(base: ptr, count: size, width: size, compare: *fn(ptr, ptr) -> c-int)
+fn(extern) strlen(s: *u8): size
+fn(extern) getpid(): c-int
+fn(extern) qsort(base: ptr, count: size, width: size, compare: *fn(ptr, ptr) -> c-int)
 
 fn compare-i32(a: ptr, b: ptr): c-int {
   let x = a.ref[i32].*

@@ -11,7 +11,7 @@ use crate::kmem::{self, MStr, Mem};
 use crate::lex::Span;
 use crate::parse::{IdentPool, Interner, StringId, write_source_location};
 use crate::typer::{
-    HostProgram, K1Message, K1Result, LibRefLinkType, Linkage, MemTmp, MessageLevel, NamespaceId,
+    HostProgram, K1Message, K1Result, LibRefLinkType, MemTmp, MessageLevel, NamespaceId,
     TypedProgram,
 };
 use crate::{SV8, ir, kbail, kpath, typer};
@@ -1890,8 +1890,9 @@ fn build_version_script_file_path(k1: &TypedProgram, module_name: &str) -> Strin
 pub fn write_library_export_files(k1: &TypedProgram, module_name: &str) -> Result<()> {
     let mut symbols: Vec<String> = vec![];
     for (_, function) in k1.function_iter() {
-        if let Linkage::Exported { link_name } = function.linkage {
-            symbols.push(k1.ident_str(link_name.unwrap_or(function.name)).to_string());
+        if function.linkage.is_exported() {
+            let symbol = function.linkage.link_symbol(function.name).unwrap();
+            symbols.push(k1.ident_str(symbol).to_string());
         }
     }
     for global_id in k1.globals.iter_ids() {

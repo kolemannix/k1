@@ -119,6 +119,7 @@ impl TypedProgram {
             let type_id = self.type_id_from_raw(*raw, span)?;
             params.push(FnParamType { type_id, kind: FnParamKind::Plain });
         }
+        self.check_c_varargs_params(params.as_slice(), true, span)?;
         let new_type_id = self.add_function_type(params.as_slice(), return_type, false);
         self.register_type_metainfo(new_type_id);
         Ok(new_type_id)

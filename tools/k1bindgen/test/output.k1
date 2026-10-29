@@ -64,6 +64,16 @@ fn(extern("cinput_unnamed_param")) unnamed_param(
   named: u32,
   loop_c: f32,
 ): i32
+fn(extern("cinput_format")) format(
+  out: *u8,
+  fmt: *u8,
+  varargs: core/c-varargs,
+): i32
+type(alias) logger = *fn(
+  i32,
+  *u8,
+  core/c-varargs
+) -> i32
 type Color = either(i32, partial) {
   Color_Red = 577,
   Color_Green = -10,
@@ -92,6 +102,7 @@ fn(test) c-layouts() {
   assert-layout[i2](8, 4, [0, 4, ])
   assert-layout[Union1](8, 8, [])
   assert-layout[foo](104, 8, [0, 1, 8, 16, 24, 32, 36, 40, 48, 56, 64, 72, 80, 88, 96, 100, ])
+  assert-layout[logger](8, 8, [])
   assert-layout[Color](4, 4, [])
   assert-layout[Size](4, 4, [])
   assert-layout[Packed](1, 1, [])
