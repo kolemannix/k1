@@ -347,6 +347,7 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     for stale in out_dir.glob("*.k1"):
         stale.unlink()
+    (out_dir / "build.k1").write_text("")
     per_file = -(-UNITS // len(FILES))
     total_lines = 0
     for f, name in enumerate(FILES):
