@@ -15,6 +15,12 @@ ability hash {
   fn hash(self): u64
 }
 
+ability view[out] {
+  fn view(self): out
+}
+
+impl[t] view[out = t] for t { fn(inline) view(self): t { self } }
+
 ns hash {
   // murmur3's 64-bit finalizer: full avalanche, cheap, and good enough
   // that low-quality inputs (sequential ints, FNV output) mask cleanly
@@ -167,7 +173,7 @@ ns for map {
     self.ctrl.index-unchecked(mirror).* = c
   }
 
-  fn _find[k, v](self: *map[k, v], key: k, h: u64): ?size where k: equals {
+  fn _find[k, v, q](self: *map[k, v], key: q, h: u64): ?size where k: view[out = q], q: equals {
     if self.count == 0 return :none
     let mask = self.entries.len - 1
     let h2 = _h2(h)
@@ -178,7 +184,7 @@ ns for map {
       let m = _match-h2(g, h2)
       while m != 0 {
         let idx = (pos + _lane(m)) & mask
-        if self.entries.index-unchecked(idx).key == key return :some idx
+        if view[out = q]@(k)/view(self.entries.index-unchecked(idx).key) == key return :some idx
         m = m & (m - 1)
       }
       if _match-empty(g) != 0 break :none
@@ -319,37 +325,26 @@ ns for map {
     self.entries.index-unchecked(idx).value.&
   }
 
-  // Body duplicated from get-or-insert-in: a some-fn param can neither be
-  // passed to another some-fn param nor captured by a wrapping lambda today
   fn get-or-insert[k, v](self: *map[k, v], key: k, make: some fn() -> v): *v
     where k: hash, k: equals {
-    let h = key.hash()
-    let idx = if self._find(key, h) is {
-      :some idx -> idx,
-      :none -> {
-        let idx = self._prepare-insert(mem/current-arena(), h)
-        self.entries.index-unchecked(idx).* = .{ key, value = make() }
-        idx
-      }
-    }
-    self.entries.index-unchecked(idx).value.&
+    self.get-or-insert-in(mem/current-arena(), key, make)
   }
 
-  fn get[k, v](self: *map[k, v], key: k): ?v where k: hash, k: equals {
+  fn get[k, v, q](self: *map[k, v], key: q): ?v where k: view[out = q], q: hash, q: equals {
     if self._find(key, key.hash()) is {
       :some idx -> :some self.entries.index-unchecked(idx).value,
       :none -> :none
     }
   }
 
-  fn get-ref[k, v](self: *map[k, v], key: k): ?(*v) where k: hash, k: equals {
+  fn get-ref[k, v, q](self: *map[k, v], key: q): ?(*v) where k: view[out = q], q: hash, q: equals {
     if self._find(key, key.hash()) is {
       :some idx -> :some self.entries.index-unchecked(idx).value.&,
       :none -> :none
     }
   }
 
-  fn contains[k, v](self: *map[k, v], key: k): bool where k: hash, k: equals {
+  fn contains[k, v, q](self: *map[k, v], key: q): bool where k: view[out = q], q: hash, q: equals {
     self._find(key, key.hash()).is-some()
   }
 
@@ -369,7 +364,7 @@ ns for map {
     self.count = self.count - 1
   }
 
-  fn remove[k, v](self: *map[k, v], key: k): ?v where k: hash, k: equals {
+  fn remove[k, v, q](self: *map[k, v], key: q): ?v where k: view[out = q], q: hash, q: equals {
     if self._find(key, key.hash()) is {
       :none -> :none,
       :some idx -> {
@@ -525,11 +520,11 @@ ns for set {
     self.add-in(mem/current-arena(), value)
   }
 
-  fn contains[t](self: *set[t], value: t): bool where t: hash, t: equals {
+  fn contains[t, q](self: *set[t], value: q): bool where t: view[out = q], q: hash, q: equals {
     self.inner.contains(value)
   }
 
-  fn remove[t](self: *set[t], value: t): bool where t: hash, t: equals {
+  fn remove[t, q](self: *set[t], value: q): bool where t: view[out = q], q: hash, q: equals {
     self.inner.remove(value).is-some()
   }
 
@@ -686,22 +681,22 @@ ns for fixmap {
     :some t.entries.index-unchecked(idx).value.&
   }
 
-  fn get[k, v, n](self: *fixmap[k, v, n], key: k): ?v where k: hash, k: equals {
+  fn get[k, v, n, q](self: *fixmap[k, v, n], key: q): ?v where k: view[out = q], q: hash, q: equals {
     let t = self._table()
     t.get(key)
   }
 
-  fn get-ref[k, v, n](self: *fixmap[k, v, n], key: k): ?(*v) where k: hash, k: equals {
+  fn get-ref[k, v, n, q](self: *fixmap[k, v, n], key: q): ?(*v) where k: view[out = q], q: hash, q: equals {
     let t = self._table()
     t.get-ref(key)
   }
 
-  fn contains[k, v, n](self: *fixmap[k, v, n], key: k): bool where k: hash, k: equals {
+  fn contains[k, v, n, q](self: *fixmap[k, v, n], key: q): bool where k: view[out = q], q: hash, q: equals {
     let t = self._table()
     t.contains(key)
   }
 
-  fn remove[k, v, n](self: *fixmap[k, v, n], key: k): ?v where k: hash, k: equals {
+  fn remove[k, v, n, q](self: *fixmap[k, v, n], key: q): ?v where k: view[out = q], q: hash, q: equals {
     let t = self._table()
     let evicted = t.remove(key)
     self._store(t)
@@ -761,11 +756,11 @@ ns for fixset {
     }
   }
 
-  fn contains[t, n](self: *fixset[t, n], value: t): bool where t: hash, t: equals {
+  fn contains[t, n, q](self: *fixset[t, n], value: q): bool where t: view[out = q], q: hash, q: equals {
     self.inner.contains(value)
   }
 
-  fn remove[t, n](self: *fixset[t, n], value: t): bool where t: hash, t: equals {
+  fn remove[t, n, q](self: *fixset[t, n], value: q): bool where t: view[out = q], q: hash, q: equals {
     self.inner.remove(value).is-some()
   }
 

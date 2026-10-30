@@ -49,6 +49,8 @@ use std/libc/files/SEEK_END as seek-end
 ns for point { fn len(self): int { self.x + self.y } }   // methods
 ```
 Inside `ns for t` and `impl` blocks `self` is a type name: `self`, `*self`, `self[t]`.
+A companion or ability fn is a method (`p.len()`) only when its first non-context
+param is named `self`; the rest are called by path (`point/origin()`, `try/value(x)`).
 
 ## Functions
 ```k1
@@ -116,6 +118,8 @@ type res[t] = either { ok(t), err(string) }
 type ev = either(u32, partial) { quit = 256 }       // open C enum
 let c: color = :red; color:green; :ok(42); :ok 42
 ```
+- A bare `:variant` takes its type from the expected type; without one, name it:
+  `color:green`, `opt:some x`, `opt[int]:none`.
 - Quiet payload (`:ok 42`): same line, starting with an ident, literal, list,
   nonempty struct literal or `:variant`; binds one postfix expr (`:ok f(x).y`);
   binary ops take the whole variant (`:ok 1 == x` is `(:ok 1) == x`). Otherwise
@@ -131,10 +135,9 @@ let c: color = :red; color:green; :ok(42); :ok 42
   the tags).
 
 ## Optional, result
-`?t` with `:some x` / `:none` (or `some(x)`). `.!` unwraps or crashes, `o ? d`
-falls back, `.try` propagates through the `try` ability. `result[t, e]` is
-`:ok`/`:err`. Most special-looking syntax is an ability; look for it before
-assuming an intrinsic.
+`?t` with `:some x` / `:none`. `.!` unwraps or crashes, `o ? d` falls back, `.try`
+propagates through the `try` ability. `result[t, e]` is `:ok`/`:err`. Most
+special-looking syntax is an ability; look for it before assuming an intrinsic.
 
 ## Matching
 ```k1
@@ -171,8 +174,8 @@ chosen arm.
 - Arenas: `reset`/`pop-to-mark` re-zero what they release (O(bytes used)), `free`
   is a no-op. `arena/init(size)` chains regions; `init-from-buffer(zeroed bytes)`
   is fixed and crashes when full, except `try-alloc-layout`/`try-push-span`/
-  `try-push-string`, which return `:none`. `arena/handle[t]`, `span-handle[t]`: u32 offsets
-  into the first region (`.0` is nil): `handle-from`, `push-handle`, `get(h)`.
+  `try-push-string`, which return `:err`. `arena/handle[t]`, `span-handle[t]`: u32
+  offsets into the first region (`.0` is nil): `handle-from`, `push-handle`, `get(h)`.
 - `std/pool`: `pool[t]` fixed slots, `pool/handle[t]`, slot 0 a zeroed nil: `get`
   on a dead handle returns nil (crashes if `t` holds `*t`), full `acquire` returns
   `.0`; check `is-live`.
@@ -185,6 +188,9 @@ chosen arm.
   inherents (string ops return string). Each method name belongs to one ability.
 - Element search is `position`/`contains` (any iterable, SIMD for int/char/bool
   contiguous data); subsequence search is `index-of-span`/`contains-span`.
+- `map`/`fixmap`/`set`/`fixset` lookups (`get get-ref contains remove`) take any
+  `q` the key type has `view[out = q]` for: itself, or `string` for `heap-string`.
+  Inserts take the key type.
 
 ## Lambdas and fn values
 ```k1
@@ -218,7 +224,10 @@ print/print-to(v, w)   has-secret[a = int]@(foo)/secret()   // qualified / impl-
 ```
 - `a[..]@(t)` may omit impl params; one it gives must match the impl's.
 - Default methods, overridable. `where` on an ability fn gates it per impl; impls
-  don't restate it. Overlapping impls resolve by which one makes the call typecheck.
+  don't restate it. Overlapping impls fit when they make the call typecheck; with
+  every ability arg known the first fit wins, concrete before blanket; with some
+  unknown, every fit must agree on them, else the call is ambiguous (inference
+  waits for the call's other args).
 - `pred` bounds: `type w[t: pred is-int]`, `ability a[out: pred is-scalar]`; the
   predicate fn must live in `ns pre` or a dependency, and its own constraints on its
   type param must hold (an error, not `false`). Impls are declared before

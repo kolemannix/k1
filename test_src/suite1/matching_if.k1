@@ -12,8 +12,8 @@ fn match-struct(v: { x: int, y: int }): ABC {
 
 fn(test) opt-patterns-in-and-chains() {
   let foo = 3
-  let x = some("foo")
-  let y = some("bar")
+  let x = opt:some "foo"
+  let y = opt:some "bar"
   let result = if x is :some v and y is :some "bar" and foo == 3 {
     v == "foo"
   } else (false)
@@ -37,12 +37,12 @@ fn(test) struct-patterns-in-and-chains() {
 }
 
 fn(test) partial-nested-pattern-misses() {
-  let partial = some(.{ x = some(42), y = none[int]() })
+  let partial = opt:some .{ x = opt:some 42, y = opt[int]:none }
   if partial is :some .{ x = :some x-val, y = :some y-val } crash("")
 }
 
 fn(test) nested-pattern-bindings() {
-  let mixed = some(.{ outer = 1, inner = some(.{ value = 1 }) })
+  let mixed = opt:some .{ outer = 1, inner = opt:some .{ value = 1 } }
   let mixed-result = if mixed is :some .{ outer = o, inner = :some .{ value = v } } {
     o == v
   } else (false)

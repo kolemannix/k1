@@ -61,7 +61,7 @@ fn(test-runtime) static-values-at-runtime() {
     let inced = [1,2,3,4,5].map(fn it. it+1)
     inced.last()
   }
-  assert-equals[?int](list-last, some(6))
+  assert-equals[?int](list-last, :some(6))
 
   assert-equals[int](#static loop {
     if 42 is {
@@ -80,7 +80,7 @@ fn(test-runtime) static-values-at-runtime() {
     let l = list/wrap-buffer(buffer/from-span(INT_SPAN))
     l.push(9)
     assert-equals(l.len, 6)
-    assert-equals(l.last(), some(9))
+    assert-equals(l.last(), :some(9))
   }
 
   let vov: span[span[int]] = #static [[1,2,3], [4,5,6]]

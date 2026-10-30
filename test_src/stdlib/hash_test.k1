@@ -4,6 +4,7 @@ use std/map
 use std/set
 use std/fixmap
 use std/fixset
+use std/heap-string
 
 fn(test) map-and-set-basics() {
   let m = map/new[string, int]()
@@ -32,6 +33,23 @@ fn(test) map-and-set-basics() {
   let total = 0
   for n in nums { total = total + n }
   assert-equals(total, 4)
+}
+
+fn(test) lookup-by-view() {
+  let m = map/new[heap-string, int]()
+  m.insert(heap-string/cloned("a"), 1)
+  assert-equals(m.get("a"), :some 1)
+  assert-equals(m.get(heap-string/cloned("a")), :some 1)
+  assert(m.contains("a"))
+  let f: fixmap[heap-string, int, 16] = fixmap/new()
+  f.insert(heap-string/cloned("b"), 2)
+  assert-equals(f.remove("b"), :some 2)
+  let s = set/new[heap-string]()
+  s.add(heap-string/cloned("c"))
+  assert(s.contains("c"))
+  let ids = map/new[u32, int]()
+  ids.insert(7, 1)
+  assert-equals(ids.get(7), :some 1)
 }
 
 fn(test) map-churn() {

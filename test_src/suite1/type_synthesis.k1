@@ -84,7 +84,7 @@ ns type_synthesis {
     assert-equals(made-enum, types/id[either { off, on }])
     require made-enum.schema() is :enum _ else crash("expected a scalar enum")
 
-    let flags: types/type-id = #static types/make-either(some(types/id[u32]), [
+    let flags: types/type-id = #static types/make-either(:some(types/id[u32]), [
       .{ name = "read",  payload = :none, tag = :some(types/int-value:u32(1)) },
       .{ name = "write", payload = :none, tag = :some(types/int-value:u32(2)) },
       .{ name = "exec",  payload = :none, tag = :none },

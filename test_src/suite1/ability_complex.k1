@@ -14,7 +14,7 @@ impl[a, b] as-pair[AA = a, BB = b] for pair[a, b] {
 // blanket impl that insanely swaps the pair for you
 impl[a, b] as-pair[AA = a, BB = b] for pair[b, a] {
   fn get-a(self: pair[b, a]): *a { mem/new(self.b.!) }
-  fn get-b(self: pair[b, a]): ?b { some(self.a.*) }
+  fn get-b(self: pair[b, a]): ?b { :some(self.a.*) }
 }
 
 fn unwrap-b[
@@ -33,12 +33,34 @@ fn get-nothin[a, b, t: as-pair[AA=a, BB=b]](_t: t) {
 
 fn(test) overlapping-impls-resolve-by-call-types() {
   // Phase 1
-  let my-pair: pair[int, bool] = .{ a = mem/new(10), b = some(true) }
-  get-nothin(_t = my-pair)
+  let my-pair: pair[int, bool] = .{ a = mem/new(10), b = :some(true) }
+  assert(test-compile(get-nothin(_t = my-pair)).!.contains-string("Could not solve for a, b"))
   let b = unwrap-b[int, bool, pair[int, bool]](my-pair)
   assert(b)
   let i = unwrap-b[bool, int, pair[int, bool]](my-pair)
   assert-equals(i, 10)
 
   .{}
+}
+
+type tag = { name: string }
+ability as-key[out] { fn as-key(self): out }
+impl[t] as-key[out = t] for t { fn as-key(self): t { self } }
+impl as-key[out = string] for tag { fn as-key(self): string { self.name } }
+
+type keyed[k: as-key[out = q], q] = { keys: list[k] }
+
+fn holds[k, q](keys: list[k], probe: q): bool where k: as-key[out = q], q: equals {
+  for e in keys { if as-key[out = q]@(k)/as-key(e) == probe return true }
+  false
+}
+
+fn(test) unsolved-ability-args-wait-for-the-call() {
+  let t: tag = .{ name = "a" }
+  let tagged: keyed[tag, string] = .{ keys = [t] }
+  let tags = tagged.keys
+  assert(holds(tags, "a"))
+  assert(holds(tags, t))
+  let ids: list[u32] = [1, 2]
+  assert(holds(ids, 2))
 }

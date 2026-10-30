@@ -470,50 +470,66 @@ impl TypedProgram {
                 "[infer {infer_depth}] trying to learn from sig: {}",
                 self.ability_signature_to_string(sig)
             );
-            match self.find_or_generate_specialized_ability_impl_for_type(
+
+            let specialized_ability = self.abilities.get(sig.specialized_ability_id);
+            let base_ability_id = specialized_ability.base_ability_id;
+            let mut ability_args: SV4<Option<TypeId>> = smallvec![];
+            for arg in specialized_ability.kind.arguments(self) {
+                ability_args.push(Some(*arg));
+            }
+            let impl_handle = match self.find_valid_ability_impl(
                 solution_type_id,
-                sig.specialized_ability_id,
-                false,
+                base_ability_id,
+                &ability_args,
                 scope_id,
                 span,
             ) {
-                Ok((impl_id, _)) => {
-                    let the_impl = self.ability_impls.get(impl_id.full_impl_id);
-                    let ability_arg_iterator = self
-                        .abilities
-                        .get(sig.specialized_ability_id)
-                        .kind
-                        .arguments(self)
-                        .iter()
-                        .zip(self.abilities.get(the_impl.ability_id).kind.arguments(self));
-                    let impl_arg_iterator = self
-                        .get_type_slice(sig.impl_arguments)
-                        .iter()
-                        .zip(self.get_type_slice(the_impl.impl_arguments));
-                    for (constrained_type, found_impl_type) in
-                        ability_arg_iterator.chain(impl_arg_iterator)
-                    {
-                        debug!(
-                            "[infer {infer_depth}] I will unify impl args {} and {}",
-                            self.type_id_to_string(*constrained_type),
-                            self.type_id_to_string(*found_impl_type)
-                        );
-                        let _ =
-                            self.unify_and_find_substitutions(*found_impl_type, *constrained_type);
-                    }
-                }
                 Err(msg) => {
-                    let signature = self.ability_impls.get(constraint.full_impl_id).signature();
-                    kbail!(
-                        self,
-                        span,
-                        "Could not satisfy ability constraint {} for given type {} = {} due to: {msg}",
-                        self.ability_signature_to_string(signature),
-                        type_param_id,
-                        solution_type_id
-                    );
+                    debug!("[infer {infer_depth}] deferring to the call's other args: {msg}");
+                    continue;
                 }
+                Ok(Some(impl_handle)) => impl_handle,
+                Ok(None) => match self.generate_builtin_ability_impl_for_type(
+                    solution_type_id,
+                    base_ability_id,
+                    scope_id,
+                    span,
+                ) {
+                    Ok(impl_handle) => impl_handle,
+                    Err(msg) => {
+                        let signature = self.ability_impls.get(constraint.full_impl_id).signature();
+                        kbail!(
+                            self,
+                            span,
+                            "Could not satisfy ability constraint {} for given type {} = {} due to: {msg}",
+                            self.ability_signature_to_string(signature),
+                            type_param_id,
+                            solution_type_id
+                        );
+                    }
+                },
             };
+            let the_impl = self.ability_impls.get(impl_handle.full_impl_id);
+            let ability_arg_iterator = self
+                .abilities
+                .get(sig.specialized_ability_id)
+                .kind
+                .arguments(self)
+                .iter()
+                .zip(self.abilities.get(the_impl.ability_id).kind.arguments(self));
+            let impl_arg_iterator = self
+                .get_type_slice(sig.impl_arguments)
+                .iter()
+                .zip(self.get_type_slice(the_impl.impl_arguments));
+            for (constrained_type, found_impl_type) in ability_arg_iterator.chain(impl_arg_iterator)
+            {
+                debug!(
+                    "[infer {infer_depth}] I will unify impl args {} and {}",
+                    self.type_id_to_string(*constrained_type),
+                    self.type_id_to_string(*found_impl_type)
+                );
+                let _ = self.unify_and_find_substitutions(*found_impl_type, *constrained_type);
+            }
         }
         Ok(())
     }

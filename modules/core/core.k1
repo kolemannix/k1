@@ -708,9 +708,9 @@ ns for f64 {
   fn(builtin) round-even(self: f64): f64
   fn(builtin) fma(self: f64, b: f64, c: f64): f64
 
-  fn format[w: writer](f: f64, w, places: i32) {
+  fn format[w: writer](self: f64, w, places: i32) {
     let buf: array[u8, 512] = uninit
-    float-impl/write-output(w, buf.as-span(), k1rt/snprintf_f64(buf.data-ptr(), 512, f, places), places)
+    float-impl/write-output(w, buf.as-span(), k1rt/snprintf_f64(buf.data-ptr(), 512, self, places), places)
   }
 
   fn from-string(s: string): result[f64, string] {
@@ -744,9 +744,9 @@ ns for f32 {
   let inf: f32 = builtin
   let neg-inf: f32 = builtin
 
-  fn format[w: writer](f: f32, w, places: i32) {
+  fn format[w: writer](self: f32, w, places: i32) {
     let buf: array[u8, 512] = uninit
-    float-impl/write-output(w, buf.as-span(), k1rt/snprintf_f32(buf.data-ptr(), 512, f, places), places)
+    float-impl/write-output(w, buf.as-span(), k1rt/snprintf_f32(buf.data-ptr(), 512, self, places), places)
   }
 
   // See f64/total-order-key
@@ -889,20 +889,20 @@ impl print for ptr {
   }
 }
 
-// A little abstraction over a reference that can be null
-// where you can pay a small cost (option construction)
-// to check it, but can still store it 'raw'
-// As opposed to storing the sum, which carries waste
+// An `optref[t]` is a reference to t that is allowed to be null
 type optref[t] = { inner: ptr }
 ns for optref {
   fn(inline) make[t](inner: *t): optref[t] { .{ inner = inner.as[ptr] } }
   fn(inline) null[t](): optref[t] { .{ inner = ptr/null } }
   fn(inline) get[t](self: optref[t]): *t { self.inner.ref[t] }
   fn deref[t](self: optref[t]): ?t {
-    if (self.inner is null) :none else :some(self.inner.ref[t].*)
+    if (self.inner is null) :none else :some self.get().*
   }
   fn as-opt[t](self: optref[t]): ?*t {
-    if (self.inner is null) :none else :some(self.inner.ref[t])
+    if (self.inner is null) :none else :some self.get()
+  }
+  fn or-err[t](self: optref[t]): result[*t, string] {
+    if (self.inner is null) :err "ref was null" else :ok self.get()
   }
   fn(inline) is-null[t](self: optref[t]): bool { self.inner is null }
 }

@@ -2,7 +2,7 @@ use crate::lex::{Span, is_ident_char};
 use crate::parse::{FileId, ParsedExpr, ParsedId, ParsedProgram, StringId};
 use crate::typer::dump::TypeDisplayMode;
 use crate::typer::scopes::{Provenance, ScopeId, ScopeMember, VariableInScope};
-use crate::typer::types::{FnParamKind, FnParamType, Type, TypeId};
+use crate::typer::types::{FnParamKind, Type};
 use crate::{SV8, typer::*};
 use fxhash::FxHashSet;
 use smallvec::smallvec;
@@ -264,7 +264,7 @@ pub fn collect_completions(
             if let Some(companion_ns) = k1.get_companion_namespace(base_type_id) {
                 let companion_scope = k1.namespaces.get(companion_ns).scope_id;
                 for (name, function_id, _) in k1.scopes.iter_scope_functions(companion_scope) {
-                    if is_method_shaped(k1, function_id, base_type_id) {
+                    if k1.get_function(function_id).is_method() {
                         seen_methods.insert(name);
                         items.push(CompletionCandidate {
                             label: k1.ident_str(name).to_string(),
@@ -291,7 +291,7 @@ pub fn collect_completions(
                         else {
                             continue;
                         };
-                        if is_method_shaped(k1, function_id, type_id)
+                        if k1.get_function(fn_ref.function_id).is_method()
                             && seen_methods.insert(fn_ref.function_name)
                         {
                             items.push(CompletionCandidate {
@@ -430,19 +430,6 @@ pub fn signature_help_info(k1: &TypedProgram, site: CompletionSite) -> Option<Si
         k1.type_id_to_string(ft.return_type)
     );
     Some(SignatureHelpInfo { label, params, active_param: arg_index })
-}
-
-fn is_method_shaped(k1: &TypedProgram, function_id: FunctionId, base_type_id: TypeId) -> bool {
-    let function = k1.get_function(function_id);
-    if function.is_generic() {
-        return true;
-    }
-    let Type::Function(ft) = k1.types.get(function.type_id) else { return false };
-    let params = k1.mem.getn(ft.logical_params());
-    let Some(first) = params.get(FnParamType::get_context_param_count(params)) else {
-        return false;
-    };
-    first.type_id == base_type_id || k1.get_type_id_dereferenced(first.type_id) == base_type_id
 }
 
 type Seen = FxHashSet<(StringId, NameKind)>;

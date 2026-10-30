@@ -150,7 +150,7 @@ fn(test) wide-struct-empty-pattern() {
 }
 
 fn(test) guard-with-wildcard() {
-  if some(42) is {
+  if opt:some 42 is {
     :some x if x == 42 -> .{},
     _ -> assert(false),
   }

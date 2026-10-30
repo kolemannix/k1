@@ -29,7 +29,7 @@ fn(test) use-aliases-and-exposes() {
   assert(SEEKEND == std/libc/files/SEEK_END)
 
   use core/opt as optional
-  let hello-opt: optional[string] = some("Hello")
+  let hello-opt: optional[string] = :some("Hello")
   assert(hello-opt.! == "Hello")
 
   assert(exposing/get-one-exposed() == 1)

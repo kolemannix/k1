@@ -124,10 +124,12 @@ ns for arena {
     }
   }
 
-  fn try-alloc-layout(self: *arena, size: size, align: size): ?ptr {
-    let cursor = self.cur-addr
-    if self.fixed and self.end-addr.diff(cursor) < size + _prefix-padding(cursor, align) return :none
-    :some self.alloc-layout(size, align)
+  fn(inline) _has-room(self: *arena, size: size, align: size): bool {
+    (not self.fixed) or self.end-addr.diff(self.cur-addr) >= size + _prefix-padding(self.cur-addr, align)
+  }
+
+  fn try-alloc-layout(self: *arena, size: size, align: size): result[ptr, empty] {
+    if self._has-room(size, align) :ok self.alloc-layout(size, align) else :err
   }
 
   fn(noinline) _alloc-in-new-chunk(self: *arena, size: size, align: size): ptr {
@@ -163,11 +165,8 @@ ns for arena {
     buffer
   }
 
-  fn try-push-span[t](self: *arena, ts: span[t]): ?buffer[t] {
-    require self.try-alloc-layout(ts.buffer.size-bytes(), types/align[t]) is :some base else return :none
-    let buffer: buffer[t] = buffer/wrap-raw[t](base, ts.len())
-    buffer/copy(src = ts.buffer, dst = buffer)
-    :some buffer
+  fn try-push-span[t](self: *arena, ts: span[t]): result[buffer[t], empty] {
+    if self._has-room(ts.buffer.size-bytes(), types/align[t]) :ok ts.buffer.cloned-in(self) else :err
   }
 
   fn alloc-buffer[t](self: *arena, size): buffer[t] {
@@ -179,9 +178,8 @@ ns for arena {
     string/wrap-buffer(data)
   }
 
-  fn try-push-string(self: *arena, s: string): ?string {
-    require self.try-push-span(s.span()) is :some data else return :none
-    :some string/wrap-buffer(data)
+  fn try-push-string(self: *arena, s: string): result[string, empty] {
+    if self._has-room(s.len(), 1) :ok s.cloned-in(self) else :err
   }
 
   fn alloc-list[t](self: *arena, cap: size): list[t] {

@@ -21,13 +21,13 @@ ns for matrix {
     m
   }
 
-  fn mul[n](a: *matrix[n], b: *matrix[n]): matrix[n] {
+  fn mul[n](self: *matrix[n], b: *matrix[n]): matrix[n] {
     let out: matrix[n] = .0
-    let n = a.dim()
+    let n = self.dim()
     for i in 0.until(n) {
       for j in 0.until(n) {
         let acc = 0
-        for k in 0.until(n) { acc = acc + a.rows.[i].[k] * b.rows.[k].[j] }
+        for k in 0.until(n) { acc = acc + self.rows.[i].[k] * b.rows.[k].[j] }
         out.rows.[i].[j] = acc
       }
     }

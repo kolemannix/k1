@@ -131,8 +131,8 @@ ns for list {
     self.append-buffer-in(alloc, other.inner-buffer())
   }
 
-  fn sort[t](input: *list[t]) where t: comparable {
-    input.as-buffer().sort()
+  fn sort[t](self: *list[t]) where t: comparable {
+    self.as-buffer().sort()
   }
 
   fn from-mapping[t, iter, iterable, u](input: iterable, f: some fn t -> u): list[u]

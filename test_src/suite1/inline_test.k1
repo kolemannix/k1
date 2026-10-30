@@ -16,9 +16,9 @@ fn(inline) bump() { hits = hits + 1 }
 
 fn(inline) first-over(xs: span[int], limit: int): opt[int] {
   for x in xs {
-    if x > limit return some(x)
+    if x > limit return :some(x)
   }
-  none()
+  :none
 }
 
 fn(inline) ident[t](x: t): t { x }
@@ -85,8 +85,8 @@ fn(test) inlined-calls-preserve-semantics() {
   bump()
   assert-equals(hits, 2)
   let xs = [1, 5, 9, 12]
-  assert-equals(first-over(xs.as-span(), 6), some(9))
-  assert-equals(first-over(xs.as-span(), 100), none())
+  assert-equals(first-over(xs.as-span(), 6), :some(9))
+  assert-equals(first-over(xs.as-span(), 100), :none)
   assert-equals(twice(21), 42)
   assert-equals(ident(3), 3)
   assert-equals(ident("s"), "s")

@@ -1,5 +1,5 @@
 fn(test) ref-pattern-mutates-some-payload() {
-  let x = some(5)
+  let x = opt:some 5
   let x = x.&
   while x is :some xx* {
     if xx.* == 0 break

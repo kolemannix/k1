@@ -19,7 +19,7 @@ fn some-fn-param-gen[t](t: t, f: some fn t -> t, g: some fn t -> ?t): ?t {
 
 fn takes-string(s: string): int { s.len() }
 
-fn forward-generic[t](t: t, f: some fn t -> t): t { some-fn-param-gen(t, f, fn x. some(x)).! }
+fn forward-generic[t](t: t, f: some fn t -> t): t { some-fn-param-gen(t, f, fn x. :some(x)).! }
 
 fn count-where[t](xs: list[t], f: some fn t -> bool): int {
   let n = 0
@@ -104,7 +104,7 @@ fn(test) some-fn-params() {
   let c1 = .{ x = 3 }
   let c2 = 2
   assert-equals(some-fn-param2(5, fn[c1] x. x + 1 + c1.x, fn[c2] x. x + 2 + c2), 18)
-  assert(some-fn-param-gen(true, fn b. not b, fn b. some(b)) == some(false))
+  assert(some-fn-param-gen(true, fn b. not b, fn b. :some(b)) == :some(false))
 }
 
 fn(test) returned-dyn-closures() {

@@ -23,8 +23,8 @@ fn(test) fixed-buffer-arena-and-handles() {
   let kid = a.push-handle(7)
   assert-equals(a.get(a.get-many(a.push-many([kid, kid])).[1]).*, 7)
   assert-equals(a.get-many(a.handle-from-many(span/empty[int]())).len, 0)
-  assert(a.try-alloc-layout(1024, 1) is :none)
-  assert(a.try-push-string("pooled") is :some "pooled")
+  assert(a.try-alloc-layout(1024, 1) is :err)
+  assert(a.try-push-string("pooled") is :ok "pooled")
   a.release()
   assert-equals(storage.[1023], 0)
 }
@@ -114,7 +114,7 @@ fn(test) growth-chains-chunks() {
   assert(a.extra-chunks.is-null())
   let after-reset = a.push(42: u64)
   assert-equals(after-reset.*, 42)
-  assert(a.try-alloc-layout(4096, 8) is :some _)
+  assert(a.try-alloc-layout(4096, 8) is :ok _)
 
   a.release()
 }

@@ -515,7 +515,7 @@ impl[t] iterator[item = *t] for buffer-ref-iterator[t] {
   }
   fn size-hint(self: *self): { at-least: size, at-most: ?size } {
     let rem = if self.pos < self.buf.len self.buf.len - self.pos else 0
-    .{ at-least = rem, at-most = some(rem) }
+    .{ at-least = rem, at-most = :some(rem) }
   }
   fn advance-by(self: *self, n: size): empty {
     self.pos = self.pos + n

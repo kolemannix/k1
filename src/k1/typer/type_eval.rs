@@ -77,6 +77,7 @@ impl TypedProgram {
 
         let mut type_params: List<TypeId, _> =
             self.mem.new_list(parsed_type_defn.type_params.len());
+        let mut pending_constraints: SV4<(TypeId, TypeApplication)> = smallvec![];
         for type_param in self.ast.mem.getn(parsed_type_defn.type_params).iter() {
             let maybe_static_constraint =
                 match ParsedTypeConstraintExpr::single_static_constraint_or_fail(
@@ -89,35 +90,20 @@ impl TypedProgram {
                     Ok(None) => None,
                     Err(msg) => kbail!(self, type_param.span, "{}", msg),
                 };
-            let mut ability_constraint_signatures: SV4<TypedAbilitySignature> = smallvec![];
             let mut predicate_functions: SV4<QIdent> = smallvec![];
             for parsed_constraint in self.ast.mem.getn(type_param.constraints) {
-                match parsed_constraint {
-                    ParsedTypeConstraintExpr::Ability(ability_expr) => {
-                        let ability_sig = self.eval_ability_expr(
-                            *ability_expr,
-                            AbilityExprRole::Constraint,
-                            defn_scope_id,
-                        )?;
-                        ability_constraint_signatures.push(ability_sig);
-                    }
-                    ParsedTypeConstraintExpr::Predicate(qident) => {
-                        predicate_functions.push(*qident);
-                    }
-                    ParsedTypeConstraintExpr::Static(_) => {}
-                };
+                if let ParsedTypeConstraintExpr::Predicate(qident) = parsed_constraint {
+                    predicate_functions.push(*qident);
+                }
             }
             let predicate_functions_handle = self.mem.pushn(&predicate_functions);
-            let type_variable_id = self.add_type_parameter(
-                TypeParameter {
-                    name: type_param.name,
-                    static_constraint: maybe_static_constraint,
-                    predicate_functions: predicate_functions_handle,
-                    scope_id: defn_scope_id,
-                    span: type_param.span,
-                },
-                ability_constraint_signatures,
-            );
+            let type_variable_id = self.add_type(Type::TypeParameter(TypeParameter {
+                name: type_param.name,
+                static_constraint: maybe_static_constraint,
+                predicate_functions: predicate_functions_handle,
+                scope_id: defn_scope_id,
+                span: type_param.span,
+            }));
             type_params.push(type_variable_id);
             let added = self.scopes.add_type(defn_scope_id, type_param.name, type_variable_id);
             if !added {
@@ -128,7 +114,13 @@ impl TypedProgram {
                     self.ident_str(type_param.name).blue()
                 );
             }
+            for parsed_constraint in self.ast.mem.getn(type_param.constraints) {
+                if let ParsedTypeConstraintExpr::Ability(ability_expr) = parsed_constraint {
+                    pending_constraints.push((type_variable_id, *ability_expr));
+                }
+            }
         }
+        self.add_type_parameter_ability_constraints(&pending_constraints, defn_scope_id)?;
         let type_params_handle = type_params.to_slice();
 
         // Actually compile the RHS

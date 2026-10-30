@@ -5,6 +5,7 @@ type nom-point = { x: int, y: int }
 type nom-wrap[t] = { inner: t }
 ns for nom-point {
   fn sum(self): int { self.x + self.y }
+  fn sum-of(p: nom-point): int { p.x + p.y }
 }
 
 fn(test) pipe-overrides-fields() {
@@ -44,6 +45,13 @@ fn(test) type-prefixed-literals() {
   assert(test-compile(nom-point.{ x = 1, x = 2, y = 3 }).is-some())
   assert(test-compile(.{ a = 1, a = 2 }).is-some())
   assert(test-compile(nom-point.{ x = 1, y = 2 } is .{ x = 1, x = 2 }).is-some())
+}
+
+fn(test) only-self-receivers-are-methods() {
+  let p = nom-point.{ x = 3, y = 4 }
+  assert-equals(nom-point/sum-of(p), 7)
+  assert(test-compile(p.sum-of()).is-some())
+  assert(test-compile(5.value()).is-some())
 }
 
 fn(test) structural-equality-and-to-string() {
