@@ -4362,8 +4362,8 @@ impl TypedProgram {
         // case that not just any implementation will do; but only one
         // that meets certain constraints. For example, we may need into[string], not just into[<whatever>]
         // For each ability parameter, the type it must conform to,
-        // or None for if we didn't solve for it, meaning anything is fine
-        parameter_constraints: &[Option<TypeId>],
+        // or PENDING if we didn't solve for it, meaning anything is fine
+        parameter_constraints: &[TypeId],
 
         allow_self_adjust: bool,
 
@@ -4557,7 +4557,7 @@ impl TypedProgram {
         &mut self,
         self_type_id: TypeId,
         target_base_ability_id: AbilityId,
-        parameter_constraints: &[Option<TypeId>],
+        parameter_constraints: &[TypeId],
         scope_id: ScopeId,
         span: Span,
     ) -> Result<Option<AbilityImplHandle>, MStr<MemTmp>> {
@@ -4598,7 +4598,8 @@ impl TypedProgram {
             let impl_args =
                 self.abilities.get(impl_handle.specialized_ability_id).kind.arguments(self);
             let fits = impl_args.iter().zip(parameter_constraints).all(|(impl_arg, constraint)| {
-                constraint.is_none_or(|c| self.check_types(c, *impl_arg, scope_id).is_ok())
+                *constraint == TypeId::PENDING
+                    || self.check_types(*constraint, *impl_arg, scope_id).is_ok()
             });
             if fits {
                 valid_impls.push(*impl_handle);
@@ -4607,7 +4608,7 @@ impl TypedProgram {
 
         let mut args_pinned = true;
         for constraint in parameter_constraints {
-            if !constraint.is_some_and(|t| self.is_type_free_of_holes(t)) {
+            if *constraint == TypeId::PENDING || !self.is_type_free_of_holes(*constraint) {
                 args_pinned = false;
             }
         }
@@ -4663,7 +4664,7 @@ impl TypedProgram {
             for (arg_to_blanket, arg_to_target) in
                 blanket_arguments.iter().zip(parameter_constraints)
             {
-                if let Some(arg_to_target) = arg_to_target {
+                if *arg_to_target != TypeId::PENDING {
                     args_and_params.push(InferenceInputPair {
                         arg: TypeOrParsedExpr::Type(*arg_to_target),
                         param_type: *arg_to_blanket,
@@ -4706,7 +4707,7 @@ impl TypedProgram {
             let mut args_fit = true;
             for (blanket_arg, required_arg) in blanket_arguments.iter().zip(parameter_constraints) {
                 let actual_value = self.substitute_in_type(*blanket_arg, &solutions_as_pairs);
-                if let Some(required_arg) = required_arg
+                if *required_arg != TypeId::PENDING
                     && let Err(msg) = self.check_types(*required_arg, actual_value, root_scope_id)
                 {
                     debug!(
@@ -5046,14 +5047,10 @@ impl TypedProgram {
         span: Span,
     ) -> Result<(AbilityImplHandle, SelfAdjust), MStr<MemTmp>> {
         let specialized_ability = self.abilities.get(signature.specialized_ability_id);
-        let mut parameter_constraints: SV4<Option<TypeId>> = smallvec![];
-        for arg in specialized_ability.kind.arguments(self) {
-            parameter_constraints.push(Some(*arg));
-        }
         let found = self.find_or_generate_ability_impl_for_type(
             self_type_id,
             specialized_ability.base_ability_id,
-            &parameter_constraints,
+            specialized_ability.kind.arguments(self),
             allow_self_adjust,
             scope_id,
             span,
@@ -9928,22 +9925,16 @@ impl TypedProgram {
             )
             .map_err(|f| self.render_inference_failure(f))?;
 
-        let mut parameter_constraints: List<Option<TypeId>, MemTmp> =
+        let mut parameter_constraints: List<TypeId, MemTmp> =
             self.tmp.new_list(ability_params.len());
         for (index, ab_param) in self.mem.getn(ability_params).iter().enumerate() {
             if ab_param.is_impl_param {
                 continue;
             }
             // other_solved is parallel to all_type_params: [Self, ...ability_params, ...]
-            let solution = self.tmp.getn(other_solved)[1 + index];
-
             // If we've already solved for one of the params that appear in this ability signature,
             // we need to constrain our ability impl search with those solutions
-            parameter_constraints.push(if solution == TypeId::PENDING {
-                None
-            } else {
-                Some(solution)
-            });
+            parameter_constraints.push(self.tmp.getn(other_solved)[1 + index]);
         }
         let solved_self = self.tmp.getn(self_solution)[0];
 

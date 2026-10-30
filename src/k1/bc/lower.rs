@@ -1208,7 +1208,7 @@ fn emit_call(
 ) -> K1Result<()> {
     let call = *ctx.u.call(call_id);
     let ret_pt = call.ret_type;
-    let is_agg = ret_pt.is_agg();
+    let is_sret = ret_pt.is_agg();
     let args: &[ir::Value] = ctx.u.args(call.args);
     let nargs = args.len() as u32;
     assert!(nargs <= u16::MAX as u32, "call with more than u16::MAX args");
@@ -1227,7 +1227,7 @@ fn emit_call(
         }
         ctx.call_arg_values.push(arg_lowered);
     }
-    let mut sret_lowered = if is_agg {
+    let mut sret_lowered = if is_sret {
         ctx.begin_inst();
         match call.dst {
             Some(dst) => resolve_lowered_value(k1, ctx, dst),
@@ -1247,11 +1247,11 @@ fn emit_call(
     let emit_call_indirect = |k1: &mut TypedProgram,
                               ctx: &mut LowerCtx,
                               fn_value: ir::Value,
-                              fixed_count: u32|
+                              fixed_arg_count: u32|
      -> K1Result<u32> {
         ctx.begin_inst();
         let fn_lowered = resolve_lowered_value(k1, ctx, fn_value);
-        let variadic_count = nargs - fixed_count;
+        let variadic_count = nargs - fixed_arg_count;
         if variadic_count > u8::MAX as u32 {
             kbail!(k1, ctx.cur_span, "Call with more than 255 c-varargs");
         }
@@ -1309,15 +1309,15 @@ fn emit_call(
         let s = ctx.call_arg_values[i];
         ctx.push(s);
     }
-    // c-varargs: one physical type per extra arg, after the args
-    for arg in &args[(nargs - variadic_count) as usize..] {
-        let InstKind::Value(pt) = ir::get_value_kind(&ctx.u, *arg) else {
+    let varargs_slice = &args[(nargs - variadic_count) as usize..];
+    for vararg in varargs_slice {
+        let InstKind::Value(pt) = ir::get_value_kind(&ctx.u, *vararg) else {
             unreachable!("c-varargs arg without a value")
         };
         ctx.push(pt.to_u32());
     }
 
-    if !ret_pt.is_empty() && !is_agg {
+    if !is_sret && !ret_pt.is_empty() {
         match call.dst {
             Some(dst) => {
                 ctx.begin_inst();

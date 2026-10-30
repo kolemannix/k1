@@ -473,14 +473,10 @@ impl TypedProgram {
 
             let specialized_ability = self.abilities.get(sig.specialized_ability_id);
             let base_ability_id = specialized_ability.base_ability_id;
-            let mut ability_args: SV4<Option<TypeId>> = smallvec![];
-            for arg in specialized_ability.kind.arguments(self) {
-                ability_args.push(Some(*arg));
-            }
             let impl_handle = match self.find_valid_ability_impl(
                 solution_type_id,
                 base_ability_id,
-                &ability_args,
+                specialized_ability.kind.arguments(self),
                 scope_id,
                 span,
             ) {
