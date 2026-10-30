@@ -189,8 +189,9 @@ chosen arm.
 - Element search is `position`/`contains` (any iterable, SIMD for int/char/bool
   contiguous data); subsequence search is `index-of-span`/`contains-span`.
 - `map`/`fixmap`/`set`/`fixset` lookups (`get get-ref contains remove`) take any
-  `q` the key type has `view[out = q]` for: itself, or `string` for `heap-string`.
-  Inserts take the key type.
+  `q` the key type has `view[out = q]` for: itself, or `string` for `heap-string`
+  and `spill-string`. `view` takes `*self`, so a view may point into the key's
+  inline storage. Inserts take the key type.
 
 ## Lambdas and fn values
 ```k1

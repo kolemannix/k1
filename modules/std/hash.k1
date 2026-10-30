@@ -16,10 +16,10 @@ ability hash {
 }
 
 ability view[out] {
-  fn view(self): out
+  fn view(self: *self): out
 }
 
-impl[t] view[out = t] for t { fn(inline) view(self): t { self } }
+impl[t] view[out = t] for t { fn(inline) view(self: *self): t { self.* } }
 
 ns hash {
   // murmur3's 64-bit finalizer: full avalanche, cheap, and good enough
@@ -184,7 +184,7 @@ ns for map {
       let m = _match-h2(g, h2)
       while m != 0 {
         let idx = (pos + _lane(m)) & mask
-        if view[out = q]@(k)/view(self.entries.index-unchecked(idx).key) == key return :some idx
+        if view[out = q]@(k)/view(self.entries.index-unchecked(idx).key.&) == key return :some idx
         m = m & (m - 1)
       }
       if _match-empty(g) != 0 break :none

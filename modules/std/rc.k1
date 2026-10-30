@@ -83,7 +83,7 @@ impl hash for heap-string {
 }
 
 impl view[out = string] for heap-string {
-  fn(inline) view(self): string { self.raw }
+  fn(inline) view(self: *self): string { self.raw }
 }
 
 // Refcounted byte payloads: the common currency for zero-copy fan-out.

@@ -5,6 +5,7 @@ use std/set
 use std/fixmap
 use std/fixset
 use std/heap-string
+use std/spill-string
 
 fn(test) map-and-set-basics() {
   let m = map/new[string, int]()
@@ -47,6 +48,9 @@ fn(test) lookup-by-view() {
   let s = set/new[heap-string]()
   s.add(heap-string/cloned("c"))
   assert(s.contains("c"))
+  let inline = map/new[spill-string[16], int]()
+  inline.insert(spill-string/from-string("d"), 3)
+  assert-equals(inline.get("d"), :some 3)
   let ids = map/new[u32, int]()
   ids.insert(7, 1)
   assert-equals(ids.get(7), :some 1)

@@ -61,3 +61,7 @@ impl[n: static size] hash for spill-string[n] {
     s.&.as-string().hash()
   }
 }
+
+impl[n: static size] view[out = string] for spill-string[n] {
+  fn(inline) view(self: *self): string { self.as-string() }
+}
