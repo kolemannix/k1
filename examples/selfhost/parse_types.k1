@@ -544,11 +544,12 @@ ns for parser {
         self.expect-kind(:comma).try
       }
     }
-    if has-open-paren {
-      self.expect-kind(:r-thin-arrow).try
+    let return-type: ?ast/type-expr-id = if has-open-paren and self.maybe-consume(:r-thin-arrow) is :none {
+      :none
+    } else {
+      :some(self.expect-type-expression().try)
     }
-    let return-type = self.expect-type-expression().try
-    let span = start.span().thru(self.program.get-type-expr-span(return-type))
+    let span = self.extend-tok-to-here(start)
     :ok(self.program.add-type-expr(:function-type(.{ params, return-type, span })))
   }
 

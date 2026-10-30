@@ -43,13 +43,13 @@ ns for fixlist {
     }
   }
 
-  fn try-push-n[t, n](self: *fixlist[t, n], values: span[t]): result[empty, empty] {
+  fn try-push-n[t, n](self: *fixlist[t, n], values: span[t]): result[span[t], empty] {
     let needed = self.len() + values.len()
     if needed <= self.cap() {
       let dst-slice = self.data.as-buffer().slice(start = self.len(), end = needed)
       buffer/copy(src = values.inner-buffer(), dst = dst-slice)
       self.used = needed.trunc[u32]
-      :ok
+      :ok span/wrap-buffer(dst-slice)
     } else {
       :err
     }

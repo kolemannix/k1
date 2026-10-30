@@ -3998,7 +3998,7 @@ impl TypedProgram {
                     if self.types.get(expected).as_generic().is_some() { expected } else { actual };
                 Err(k1_format_user!(
                     self,
-                    "Expected {} but got {}: {} is a generic; apply type arguments to name one of its types",
+                    "Expected {} but got {}: {} is a generic",
                     expected,
                     actual,
                     generic
@@ -4006,7 +4006,7 @@ impl TypedProgram {
             }
             (Type::FunctionPointer(_), Type::FunctionIdReference(_)) => Err(k1_format_user!(
                 self,
-                "Expected {} but got {}: use .& to take the function's address",
+                "Expected {} but got {}: .& will take the function's address",
                 expected,
                 actual,
             )),
@@ -4019,7 +4019,7 @@ impl TypedProgram {
             (Type::LambdaObject(_), Type::FunctionIdReference(_) | Type::Lambda(_)) => {
                 Err(k1_format_user!(
                     self,
-                    "Expected {} but got {}: use .to-dyn() to make a dynamic function object",
+                    "Expected {} but got {}: .to-dyn() can make a dynamic function object",
                     expected,
                     actual,
                 ))

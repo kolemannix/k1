@@ -56,7 +56,7 @@ type channel[t] = {
   queued-weight: size,
   cap-weight: size,
   weight-fn: *fn(t) -> size,
-  drop-fn: *fn(t) -> {},
+  drop-fn: *fn(t),
   ?stream/waker,
   pending-wake: bool,
   failure: ?string,
@@ -67,7 +67,7 @@ type channel[t] = {
 }
 
 ns for channel {
-  fn make[t](cap-weight: size, weight-fn: *fn(t) -> size, drop-fn: *fn(t) -> {}): *channel[t] {
+  fn make[t](cap-weight: size, weight-fn: *fn(t) -> size, drop-fn: *fn(t)): *channel[t] {
     heap.new(.{
       queue = list/empty[t](),
       head = 0,

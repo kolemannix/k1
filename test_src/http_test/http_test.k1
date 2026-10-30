@@ -177,17 +177,17 @@ type client = {
   elapsed-ms: u64,
   eof: bool,
   hang-up: bool,
-  on-eof: *fn(*client) -> {},
+  on-eof: *fn(*client),
 }
 
 ns for client {
-  fn start(port: u16, send: string, on-eof: *fn(*client) -> {}) { open(port, send, "", on-eof, hang-up = false) }
+  fn start(port: u16, send: string, on-eof: *fn(*client)) { open(port, send, "", on-eof, hang-up = false) }
 
-  fn start-split(port: u16, send: string, rest: string, on-eof: *fn(*client) -> {}) { open(port, send, rest, on-eof, hang-up = false) }
+  fn start-split(port: u16, send: string, rest: string, on-eof: *fn(*client)) { open(port, send, rest, on-eof, hang-up = false) }
 
   fn start-and-hang-up(port: u16, send: string) { open(port, send, "", fn _c. .{}, hang-up = true) }
 
-  fn open(port: u16, send: string, rest: string, on-eof: *fn(*client) -> {}, hang-up: bool) {
+  fn open(port: u16, send: string, rest: string, on-eof: *fn(*client), hang-up: bool) {
     let c: *client = heap.new(.{
       tcp = uninit, connect-req = uninit, write-req = uninit, rest-req = uninit, rest-timer = uninit, buf = uninit, read-buf = uninit,
       send, rest, received = list/empty(), started = libuv/now(libuv/default_loop().get()), elapsed-ms = 0, eof = false, hang-up, on-eof,

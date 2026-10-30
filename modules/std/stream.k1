@@ -1,7 +1,7 @@
 // Pull-based chunk streams with async support via wakers
 ns stream
 
-type waker = { state: ptr, wake-fn: *fn(ptr) -> {} }
+type waker = { state: ptr, wake-fn: *fn(ptr) }
 ns for waker {
   fn wake(self: waker) { (self.wake-fn)(self.state) }
   fn noop(): waker { .{ state = ptr/null, wake-fn = fn(_p: ptr) .{} } }

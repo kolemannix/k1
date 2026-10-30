@@ -35,8 +35,8 @@ ns for header {
 type parse-state = {
   user-data: ptr,
   *arena,
-  on-header-complete: *fn(ptr, header) -> {},
-  on-body-complete: *fn(ptr, span[u8]) -> {},
+  on-header-complete: *fn(ptr, header),
+  on-body-complete: *fn(ptr, span[u8]),
   max-body-size: size,
   reject: ?status,
   url: list[char],
@@ -47,7 +47,7 @@ type parse-state = {
   body-in-place: bool,
 }
 ns for parse-state {
-  fn empty[t](arena: *arena, user-data: *t, on-header-complete: *fn(ptr, header) -> {}, on-body-complete: *fn(ptr, span[u8]) -> {}, max-body-size: size): parse-state {
+  fn empty[t](arena: *arena, user-data: *t, on-header-complete: *fn(ptr, header), on-body-complete: *fn(ptr, span[u8]), max-body-size: size): parse-state {
     .{
       user-data = user-data.as[ptr],
       arena,
@@ -211,8 +211,8 @@ fn parser-init[user-data](
   state-arena: *arena,
   request-arena: *arena,
   *user-data,
-  on-header-complete: *fn(*user-data, header) -> {},
-  on-body-complete: *fn(*user-data, span[u8]) -> {},
+  on-header-complete: *fn(*user-data, header),
+  on-body-complete: *fn(*user-data, span[u8]),
   max-body-size: size,
 ): parser {
   let settings: llhttp/settings = uninit

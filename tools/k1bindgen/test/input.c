@@ -48,6 +48,7 @@ int cinput_unnamed_param(int, unsigned int named, float loop);
 
 int cinput_format(char *out, const char *fmt, ...);
 typedef int (*cinput_logger)(int level, const char *fmt, ...);
+typedef void (*cinput_on_done)(int code);
 
 enum Color {
   Color_Red = 577,

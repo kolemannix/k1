@@ -45,7 +45,7 @@ fn make-adder(n: int): dyn[fn(int) -> int] {
   (fn[n](x: int) x + n).to-dyn()
 }
 
-fn make-thunks(counter: *int): list[dyn[fn() -> empty]] {
+fn make-thunks(counter: *int): list[dyn[fn()]] {
   [
     (fn[counter]. { counter.* = counter.* + 1 }).to-dyn(),
     (fn[counter]. { counter.* = counter.* + 10 }).to-dyn(),

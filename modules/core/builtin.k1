@@ -1027,11 +1027,11 @@ ns k1 {
     // fn add-widget-slider[t: numeric](value: t, min: size, max: size)
 
     // OR what about this? Am i a genius or losing it
-    // fn add-slider[t](name: string, get: fn() -> u32, set: fn(u32) -> {})
+    // fn add-slider[t](name: string, get: fn() -> u32, set: fn(u32))
 
     // lets name it 'checkbox' not 'add-checkbox', immediate-mode style, since
     // the user's code is totally immediate mode style
-    fn(builtin) checkbox(name: string, get: *fn() -> bool, set: *fn(bool) -> {})
+    fn(builtin) checkbox(name: string, get: *fn() -> bool, set: *fn(bool))
 
   }
 

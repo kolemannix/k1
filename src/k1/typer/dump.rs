@@ -437,8 +437,12 @@ impl TypedProgram {
                         w.write_str(", ")?;
                     }
                 }
-                w.write_str(") -> ")?;
-                self.display_type_id_ext(w, fun.return_type, mode, visiting)
+                w.write_str(")")?;
+                if fun.return_type != self.builtin_types.empty {
+                    w.write_str(" -> ")?;
+                    self.display_type_id_ext(w, fun.return_type, mode, visiting)?;
+                }
+                Ok(())
             }
             Type::FunctionPointer(fp) => {
                 w.write_str("*")?;

@@ -29,7 +29,7 @@ fn(noinline) from-int-spill(slots: *array[spill-string[22], 1024], n: u64) {
   }
 }
 
-fn timed(run: some fn() -> {}): u64 {
+fn timed(run: some fn()): u64 {
   let start = time/read-cpu-counter()
   run()
   time/elapsed-nanos(start)

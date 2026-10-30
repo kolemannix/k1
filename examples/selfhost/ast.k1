@@ -338,7 +338,7 @@ type type-expr = either {
   reference({ base: type-expr-id, span: src-span }),
   sum-type(sum-type),
   member-access({ base: type-expr-id, kind: member-access-kind, member-name: string-id, span: src-span }),
-  function-type({ params: list[type-expr-id], return-type: type-expr-id, span: src-span }),
+  function-type({ params: list[type-expr-id], return-type: ?type-expr-id, span: src-span }),
   type-of({ target-expr: expr-id, span: src-span }),
   some-quant({ inner: type-expr-id, span: src-span }),
   static-type({ inner: type-expr-id, span: src-span }),

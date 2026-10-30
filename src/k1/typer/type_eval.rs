@@ -591,7 +591,10 @@ impl TypedProgram {
                     params.push(FnParamType { type_id, kind: FnParamKind::Plain });
                 }
                 self.check_c_varargs_params(params.as_slice(), true, fun_type.span)?;
-                let return_type = self.eval_type_expr(fun_type.return_type, scope_id)?;
+                let return_type = match fun_type.return_type {
+                    None => self.builtin_types.empty,
+                    Some(return_type) => self.eval_type_expr(return_type, scope_id)?,
+                };
                 Ok(self.add_function_type(params.as_slice(), return_type, false))
             }
             ParsedTypeExpr::TypeOf(tof) => {

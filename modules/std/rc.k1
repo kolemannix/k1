@@ -1,6 +1,6 @@
 // Disclaimer: This is a temporary, ai-generated utility to test the compiler and push the http project forward
 type rc[t] = { inner: *rc-inner[t] }
-type rc-inner[t] = { count: u64, drop-fn: ?*fn(*t) -> {}, value: t }
+type rc-inner[t] = { count: u64, drop-fn: ?*fn(*t), value: t }
 
 // Census of live rc cells; tests assert it returns to zero to catch a dropped
 // release. Not debug-gated: the test suite builds without k1/debug, and two
@@ -8,13 +8,13 @@ type rc-inner[t] = { count: u64, drop-fn: ?*fn(*t) -> {}, value: t }
 let(mutable) live-cells: u64 = 0
 
 ns for rc {
-  fn alloc[t](value: t, drop-fn: ?*fn(*t) -> {}): rc[t] {
+  fn alloc[t](value: t, drop-fn: ?*fn(*t)): rc[t] {
     atomic/fetch-add(live-cells.&, 1, :relaxed)
     .{ inner = heap.new(.{ count = 1, drop-fn, value }) }
   }
 
   fn new[t](value: t): rc[t] { alloc(value, :none) }
-  fn new-with-drop[t](value: t, drop: *fn(*t) -> {}): rc[t] { alloc(value, :some drop) }
+  fn new-with-drop[t](value: t, drop: *fn(*t)): rc[t] { alloc(value, :some drop) }
 
   fn live-count(): u64 { atomic/load(live-cells.&, :relaxed) }
 
@@ -76,6 +76,10 @@ impl owned[raw = string] for heap-string {
   fn adopt(value: string): heap-string { .{ raw = value } }
   fn raw(self: heap-string): string { self.raw }
   fn free(self: heap-string) { heap.free(self.raw.data-ptr(), self.raw.len(), 1) }
+}
+
+impl hash for heap-string {
+  fn hash(self): u64 { self.raw.hash() }
 }
 
 // Refcounted byte payloads: the common currency for zero-copy fan-out.

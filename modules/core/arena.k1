@@ -108,10 +108,13 @@ ns for arena {
   }
 
   let MIN_ALIGN: size = types/size[ptr]
+  fn(inline) _prefix-padding(cursor: ptr, align: size): size {
+    if align > MIN_ALIGN ptr/get-align-offset(cursor.to-size(), align) else 0
+  }
+
   fn(inline) alloc-layout(self: *arena, size: size, align: size): ptr {
     let cursor = self.cur-addr
-    let prefix-padding =
-      if align > MIN_ALIGN ptr/get-align-offset(cursor.to-size(), align) else 0
+    let prefix-padding = _prefix-padding(cursor, align)
     let raw-bump = size + prefix-padding
     if self.end-addr.diff(cursor) >= raw-bump {
       self.cur-addr = cursor.add-bytes(raw-bump + ptr/get-align-offset(raw-bump, MIN_ALIGN))
@@ -119,6 +122,12 @@ ns for arena {
     } else {
       self._alloc-in-new-chunk(size, align)
     }
+  }
+
+  fn try-alloc-layout(self: *arena, size: size, align: size): ?ptr {
+    let cursor = self.cur-addr
+    if self.fixed and self.end-addr.diff(cursor) < size + _prefix-padding(cursor, align) return :none
+    :some self.alloc-layout(size, align)
   }
 
   fn(noinline) _alloc-in-new-chunk(self: *arena, size: size, align: size): ptr {
@@ -154,6 +163,13 @@ ns for arena {
     buffer
   }
 
+  fn try-push-span[t](self: *arena, ts: span[t]): ?buffer[t] {
+    require self.try-alloc-layout(ts.buffer.size-bytes(), types/align[t]) is :some base else return :none
+    let buffer: buffer[t] = buffer/wrap-raw[t](base, ts.len())
+    buffer/copy(src = ts.buffer, dst = buffer)
+    :some buffer
+  }
+
   fn alloc-buffer[t](self: *arena, size): buffer[t] {
     buffer/allocate-in(self, size)
   }
@@ -161,6 +177,11 @@ ns for arena {
   fn push-string(self: *arena, s: string): string {
     let data: buffer[char] = self.push-span(s.span())
     string/wrap-buffer(data)
+  }
+
+  fn try-push-string(self: *arena, s: string): ?string {
+    require self.try-push-span(s.span()) is :some data else return :none
+    :some string/wrap-buffer(data)
   }
 
   fn alloc-list[t](self: *arena, cap: size): list[t] {

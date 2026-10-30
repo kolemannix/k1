@@ -347,8 +347,11 @@ fn write-k1-type(context w: *string-builder, name-config)(k1-type, indent: size,
 
       w.writeln("")
       w.repeat("  ", indent)
-      w.write(") -> ")
-      write-k1-type(f.fn-type.return-type, indent, :value)
+      w.write(")")
+      if not (f.fn-type.return-type is :k1 "{}") {
+        w.write(" -> ")
+        write-k1-type(f.fn-type.return-type, indent, :value)
+      }
     },
     :ref ref -> {
       if pos is {

@@ -170,7 +170,8 @@ chosen arm.
   data takes an explicit allocator.
 - Arenas: `reset`/`pop-to-mark` re-zero what they release (O(bytes used)), `free`
   is a no-op. `arena/init(size)` chains regions; `init-from-buffer(zeroed bytes)`
-  is fixed and crashes when full. `arena/handle[t]`, `span-handle[t]`: u32 offsets
+  is fixed and crashes when full, except `try-alloc-layout`/`try-push-span`/
+  `try-push-string`, which return `:none`. `arena/handle[t]`, `span-handle[t]`: u32 offsets
   into the first region (`.0` is nil): `handle-from`, `push-handle`, `get(h)`.
 - `std/pool`: `pool[t]` fixed slots, `pool/handle[t]`, slot 0 a zeroed nil: `get`
   on a dead handle returns nil (crashes if `t` holds `*t`), full `acquire` returns
@@ -192,8 +193,11 @@ fn[base, counter.&](x: int) { counter.* = counter.* + base + x }
 ```
 - Plain lambdas capture nothing (error). `[name]` copies at creation, `[name.&]`
   captures the address (body sees a reference). Nested lambdas re-list captures.
-- Param types: `some fn int -> int` (specialized, default choice), `dyn[fn() -> {}]`
+- Param types: `some fn int -> int` (specialized, default choice), `dyn[fn()]`
   (dynamic object), `*fn(int) -> int` (raw pointer: `add-one.&`; null is `ptr/null`).
+- A parenthesized fn type without `->` returns `{}`, as a decl without `: t` does:
+  `fn(db-error)` is `fn(db-error) -> {}`. The paren-less form ends its params at
+  the arrow, so it keeps it: `fn int -> {}`.
 - Param names belong to declarations, not fn types (`*fn(x: int)` is `*fn(int)`):
   named args need a declared fn, lambda or ability fn; calls through `*fn`, `dyn`
   and `some fn` values are positional.

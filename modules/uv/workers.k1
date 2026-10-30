@@ -4,7 +4,7 @@ use std/pool
 type job-state = either { backlogged, ready, running }
 
 type job = {
-  run-fn: *fn(ptr) -> {},
+  run-fn: *fn(ptr),
   data: ptr,
   group: *job-group,
   handle: pool/handle[job],
@@ -84,15 +84,15 @@ ns for worker-pool {
     })
   }
 
-  fn submit[t](*self, data: *t, run-fn: *fn(*t) -> {}): ?pool/handle[job] {
+  fn submit[t](*self, data: *t, run-fn: *fn(*t)): ?pool/handle[job] {
     self.submit-to-group(self.default-group.&, data, run-fn)
   }
 
-  fn submit-blocking[t](*self, data: *t, run-fn: *fn(*t) -> {}): ?pool/handle[job] {
+  fn submit-blocking[t](*self, data: *t, run-fn: *fn(*t)): ?pool/handle[job] {
     self.submit-to-group(self.blocking-group.&, data, run-fn)
   }
 
-  fn submit-to-group[t](*self, group: *job-group, data: *t, run-fn: *fn(*t) -> {}): ?pool/handle[job] {
+  fn submit-to-group[t](*self, group: *job-group, data: *t, run-fn: *fn(*t)): ?pool/handle[job] {
     let guard = self.shared.lock()
     if guard.value.pool-is-closing or guard.value.jobs.is-full() {
       guard.unlock()

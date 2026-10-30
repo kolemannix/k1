@@ -1055,7 +1055,7 @@ impl NumericWidth {
 #[derive(Debug, Clone, Copy)]
 pub struct ParsedFunctionType {
     pub params: AstSlice<ParsedTypeExprId>,
-    pub return_type: ParsedTypeExprId,
+    pub return_type: Option<ParsedTypeExprId>,
     pub span: Span,
 }
 
@@ -2861,10 +2861,6 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.ast.exprs.get_span(id)
     }
 
-    pub fn get_type_expression_span(&self, id: ParsedTypeExprId) -> Span {
-        self.ast.type_exprs.get(id).get_span()
-    }
-
     #[inline]
     fn emit_semantic_token(&mut self, token: Token, kind: SemanticTokenKind) {
         self.emit_semantic_token_mods(token, kind, 0)
@@ -3311,12 +3307,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 }
             }
         }
-        if open_paren {
-            self.expect_kind(K::RThinArrow)?;
-        }
-
-        let return_type = self.expect_type_expression()?;
-        let span = self.extend_tok_span(start, self.get_type_expression_span(return_type));
+        let return_type = if open_paren && self.maybe_consume(K::RThinArrow).is_none() {
+            None
+        } else {
+            Some(self.expect_type_expression()?)
+        };
+        let span = self.extend_tok_to_here(start);
         let function_type = ParsedFunctionType {
             params: params.to_slice_trim(&mut self.ast.mem),
             return_type,
@@ -6112,7 +6108,7 @@ impl ParsedProgram {
             }
             ParsedTypeExpr::Builtin(_builtin) => w.write_str("builtin"),
             ParsedTypeExpr::Function(fun) => {
-                w.write_char('\\')?;
+                w.write_str("fn(")?;
                 for (index, t) in self.mem.getn_lt(fun.params).iter().enumerate() {
                     self.display_type_expr_id(*t, w)?;
                     let last = index as u32 == fun.params.len() - 1;
@@ -6120,8 +6116,11 @@ impl ParsedProgram {
                         w.write_str(", ")?;
                     }
                 }
-                w.write_str(" -> ")?;
-                self.display_type_expr_id(fun.return_type, w)?;
+                w.write_str(")")?;
+                if let Some(return_type) = fun.return_type {
+                    w.write_str(" -> ")?;
+                    self.display_type_expr_id(return_type, w)?;
+                }
                 Ok(())
             }
             ParsedTypeExpr::TypeOf(tof) => {
