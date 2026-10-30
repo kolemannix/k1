@@ -1137,8 +1137,8 @@ fn find_references(
                 (
                     LsEntityKind::Function { function_id: target, .. },
                     LsEntityKind::Function { function_id, is_defn },
-                ) if k1::lsp_support::get_function_generic_id(k1, function_id)
-                    == k1::lsp_support::get_function_generic_id(k1, target) =>
+                ) if k1.get_generic_root_function_id(function_id)
+                    == k1.get_generic_root_function_id(target) =>
                 {
                     is_defn
                 }

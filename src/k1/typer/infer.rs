@@ -171,7 +171,7 @@ impl TypedProgram {
         for (idx, param) in all_type_params.iter().enumerate() {
             let hole_index = idx as u32 + frame_start;
 
-            let static_type = self.types.get(*param).as_tvar().unwrap().static_constraint;
+            let static_type = self.types.get(*param).as_type_parameter().unwrap().static_constraint;
 
             let type_hole = self.get_inference_hole(hole_index, static_type);
 
@@ -385,7 +385,7 @@ impl TypedProgram {
                 self.tmp
                     .getn(params)
                     .iter()
-                    .map(|p| self.ident_str(self.types.get(*p).as_tvar().unwrap().name))
+                    .map(|p| self.ident_str(self.types.get(*p).as_type_parameter().unwrap().name))
                     .collect::<Vec<_>>()
                     .join(", "),
                 self.tmp

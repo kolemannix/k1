@@ -2658,10 +2658,7 @@ pub struct TypedProgram {
     pub ability_impl_table: FxHashMap<TypeId, PermList<AbilityImplHandle>>,
     pub ability_impl_table_by_ability: ahash::HashMap<TypeAbilityPair, PermList<AbilityImplHandle>>,
     pub core_fns_by_name: ahash::HashMap<(AstHandle<AstSlice<IdentSpanned>>, StringId), FunctionId>,
-    /// Key is base ability id; the order per base is important; we want earlier
-    /// blanket impls to be more specific, and to be tried first
-    /// Once a blanket impl succeeds, its added to ability_impl_table
-    /// for that type
+    /// Key is base ability id; `for t` impls last, later modules first, then declaration order
     pub blanket_impls: FxHashMap<AbilityId, PermList<AbilityImplId>>,
     pub function_name_to_ability_names: FxHashMap<StringId, PermList<StringId>>,
 
@@ -3359,7 +3356,7 @@ impl TypedProgram {
             }
             let span =
                 self.ast.get_function(function.parsed_id.as_function_id().unwrap()).name_span;
-            let module_id = self.get_namespace_module(self.get_function_namespace(function_id));
+            let module_id = self.get_scope_module(function.scope);
             let submodule_owner = self.plan.get_module(module_id).and_then(|m| m.submodule_owner);
             if module_id == primary_id || submodule_owner == Some(primary_id) {
                 found.push((function_id, span));
@@ -4139,12 +4136,31 @@ impl TypedProgram {
         self.functions.get_mut(function_id)
     }
 
-    pub fn get_function_namespace(&self, function_id: FunctionId) -> NamespaceId {
-        let function = self.get_function(function_id);
-        match function.specialization_info {
-            Some(spec_info) => self.get_function_namespace(spec_info.parent_function),
-            None => self.scopes.nearest_parent_namespace(function.scope),
+    pub fn get_generic_root_function_id(&self, function_id: FunctionId) -> FunctionId {
+        let mut root_id = function_id;
+        while let Some(info) = self.get_function(root_id).specialization_info {
+            root_id = info.parent_function;
         }
+        root_id
+    }
+
+    pub fn get_function_namespace(&self, function_id: FunctionId) -> NamespaceId {
+        let root = self.get_function(self.get_generic_root_function_id(function_id));
+        self.scopes.nearest_parent_namespace(root.scope)
+    }
+
+    pub fn find_declared_ability_impl(
+        &self,
+        self_type_id: TypeId,
+        ability_id: AbilityId,
+    ) -> Option<AbilityImplId> {
+        let impls = self.ability_impl_table_by_ability.get(&TypeAbilityPair {
+            self_type_id,
+            base_ability_id: self.abilities.get(ability_id).base_ability_id,
+        })?;
+        let handle =
+            impls.as_slice(&self.mem).iter().find(|h| h.specialized_ability_id == ability_id)?;
+        Some(handle.full_impl_id)
     }
 
     pub fn get_function_type(&self, function_id: FunctionId) -> &FunctionType {
@@ -9492,13 +9508,16 @@ impl TypedProgram {
             );
             let mut constrained_types: SV8<TypeId> = smallvec![base_expr_type];
             if let Some(fn_id) = self.scopes.nearest_parent_function(ctx.scope_id) {
-                let function = self.get_function(fn_id);
-                let generic_id = match &function.specialization_info {
-                    Some(info) => info.parent_function,
-                    None => fn_id,
-                };
-                for type_param in self.mem.getn(self.get_function(generic_id).type_params) {
-                    constrained_types.push(*type_param);
+                let generic_function = self.get_function(self.get_generic_root_function_id(fn_id));
+                constrained_types.extend_from_slice(self.mem.getn(generic_function.type_params));
+                // A blanket impl's own params constrain its functions too
+                if let TypedFunctionKind::AbilityImpl(ability_id, impl_self_type) =
+                    generic_function.kind
+                    && let Some(impl_id) =
+                        self.find_declared_ability_impl(impl_self_type, ability_id)
+                {
+                    let blanket_type_params = self.ability_impls.get(impl_id).blanket_type_params;
+                    constrained_types.extend_from_slice(self.mem.getn(blanket_type_params));
                 }
             }
             for type_id in constrained_types {
@@ -15532,16 +15551,7 @@ impl TypedProgram {
         // Uniqueness of implementation:
         // We allow only one implementation per Ability (+ unique params set)
         // Check for existing implementation
-        let existing_impls = self.ability_impl_table_by_ability.get(&TypeAbilityPair {
-            self_type_id: impl_self_type,
-            base_ability_id: self.abilities.get(ability_id).base_ability_id,
-        });
-        if let Some(existing_impls) = existing_impls
-            && existing_impls
-                .as_slice(&self.mem)
-                .iter()
-                .any(|h| h.specialized_ability_id == ability_id)
-        {
+        if self.find_declared_ability_impl(impl_self_type, ability_id).is_some() {
             kbail!(
                 self,
                 span,
@@ -15735,11 +15745,24 @@ impl TypedProgram {
             compile_errors: MList::empty(),
         });
 
+        // Rank blanket impls: `for t` last, later modules first, then declaration order
         if kind.is_blanket() {
-            self.blanket_impls
-                .entry(base_ability_id)
-                .or_default()
-                .push_grow(&mut self.mem, typed_impl_id)
+            let get_rank = |k1: &Self, impl_id: AbilityImplId| {
+                let ability_impl = k1.ability_impls.get(impl_id);
+                let is_catch_all =
+                    k1.types.get(ability_impl.self_type_id).as_type_parameter().is_some();
+                let module_id = k1.get_scope_module(ability_impl.scope_id);
+                (is_catch_all, std::cmp::Reverse(module_id.as_u32()))
+            };
+            let rank = get_rank(self, typed_impl_id);
+            let mut ranked = self.blanket_impls.get(&base_ability_id).copied().unwrap_or_default();
+            let outranked =
+                ranked.as_slice(&self.mem).iter().position(|&id| get_rank(self, id) > rank);
+            ranked.push_grow(&mut self.mem, typed_impl_id);
+            if let Some(index) = outranked {
+                self.mem.getn_mut(ranked.to_mslice())[index..].rotate_right(1);
+            }
+            self.blanket_impls.insert(base_ability_id, ranked);
         }
 
         Ok(typed_impl_id)
@@ -17189,10 +17212,7 @@ impl TypedProgram {
         function_id: FunctionId,
         logical_index: usize,
     ) -> StringId {
-        let mut declaration = self.get_function(function_id);
-        while let Some(spec_info) = declaration.specialization_info {
-            declaration = self.get_function(spec_info.parent_function);
-        }
+        let declaration = self.get_function(self.get_generic_root_function_id(function_id));
         let is_lambda = self.types.get(declaration.type_id).as_function().unwrap().is_lambda;
         let param = self.mem.get_nth(declaration.params, logical_index + is_lambda as usize);
         self.variables.get(param.variable_id).name

@@ -188,8 +188,8 @@ impl TypedProgram {
         span
     }
 
-    pub fn get_namespace_module(&self, namespace_id: NamespaceId) -> ModuleId {
-        let mut ns_id = namespace_id;
+    pub fn get_scope_module(&self, scope_id: ScopeId) -> ModuleId {
+        let mut ns_id = self.scopes.nearest_parent_namespace(scope_id);
         loop {
             if let Some(module) = self.modules.iter().find(|m| m.namespace_id == ns_id) {
                 return module.id;

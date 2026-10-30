@@ -938,13 +938,6 @@ impl Type {
         }
     }
 
-    pub fn as_tvar(&self) -> Option<&TypeParameter> {
-        match self {
-            Type::TypeParameter(tvar) => Some(tvar),
-            _ => None,
-        }
-    }
-
     pub fn as_function(&self) -> Option<&FunctionType> {
         match self {
             Type::Function(f) => Some(f),

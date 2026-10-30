@@ -228,6 +228,9 @@ print/print-to(v, w)   has-secret[a = int]@(foo)/secret()   // qualified / impl-
   every ability arg known the first fit wins, concrete before blanket; with some
   unknown, every fit must agree on them, else the call is ambiguous (inference
   waits for the call's other args).
+- Blanket impls are tried `for t` last, later modules first (yours before std's),
+  then in declaration order. A type's first resolution is cached; a later
+  module's blanket won't change it.
 - `pred` bounds: `type w[t: pred is-int]`, `ability a[out: pred is-scalar]`; the
   predicate fn must live in `ns pre` or a dependency, and its own constraints on its
   type param must hold (an error, not `false`). Impls are declared before

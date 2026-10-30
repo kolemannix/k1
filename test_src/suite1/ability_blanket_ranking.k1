@@ -1,0 +1,29 @@
+ns ability_blanket_ranking
+
+ns voice {
+  ability speak { fn speak[w: writer](self, w) }
+  impl[t: print] speak for t {
+    fn speak[w: writer](self, w) { self.print-to(w) }
+  }
+}
+type loud[t] = { inner: t }
+impl[t: voice/speak] voice/speak for loud[t] {
+  fn speak[w: writer](self, w) {
+    w.write-string("!")
+    self.inner.speak(w)
+  }
+}
+impl[t: print] print for loud[t] {
+  fn print-to[w: writer](self, w) { self.inner.print-to(w) }
+}
+impl[t] print for list[loud[t]] {
+  fn print-to[w: writer](self, w) { w.write-string("louds") }
+}
+
+fn(test) blanket-impl-ranking() {
+  let l: loud[int] = .{ inner = 3 }
+  let sb = core/string-builder/new()
+  voice/speak/speak(l, sb.&)
+  assert-equals(sb.build(), "!3")
+  assert-equals(list/single(l).to-string(), "louds")
+}

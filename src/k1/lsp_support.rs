@@ -168,14 +168,6 @@ pub fn get_entity_definition_span(k1: &TypedProgram, entity_kind: LsEntityKind) 
     k1.remap_span(span)
 }
 
-pub fn get_function_generic_id(k1: &TypedProgram, function_id: FunctionId) -> FunctionId {
-    let function = k1.functions.get(function_id);
-    match function.specialization_info {
-        Some(info) => info.parent_function,
-        None => function_id,
-    }
-}
-
 /// Replace the identifier word containing `offset` with the completion marker
 /// (pure insertion when there is no word), so the buffer parses and the typer
 /// records the CompletionSite at the cursor

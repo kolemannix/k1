@@ -234,8 +234,8 @@ state pointer means a dyn can't cross `#static` into a runtime constant.
   bytes (exact on valid UTF-8); `code-points(text)` iterates `u32`, one U+FFFD per
   maximal invalid subpart (Unicode 3.9, as browsers decode).
 - `std/codec`: blanket `encode`/`decode` walk `codec/shape` and drive an
-  `encoder`/`decoder` backend (data-model events); a concrete `encode`/`decode` impl
-  overrides for every format. A backend's static `encode-name` pre-encodes field and
+  `encoder`/`decoder` backend (data-model events); a concrete or `for w[t]`
+  `encode`/`decode` impl overrides for every format. A backend's static `encode-name` pre-encodes field and
   variant names at meta time; `is-positional()` decodes records in field order.
   Unimplemented backend methods default to failing (encoder methods crash, decoder
   methods return `:wrong-type`) unless they derive from another: `read-int`/`read-uint`/

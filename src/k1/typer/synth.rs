@@ -766,7 +766,7 @@ impl TypedProgram {
     }
 
     pub(super) fn synth_module_dir(&mut self, scope_id: ScopeId, span: Span) -> TypedExprId {
-        let module_id = self.get_namespace_module(self.scopes.nearest_parent_namespace(scope_id));
+        let module_id = self.get_scope_module(scope_id);
         let dir_value = self.static_values.add_string(self.modules.get(module_id).home_dir);
         self.add_static_constant_expr(dir_value, span)
     }

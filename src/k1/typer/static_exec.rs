@@ -1476,8 +1476,7 @@ impl TypedProgram {
 
         let parse_kind =
             if is_definition { ParseAdHocKind::Definitions } else { ParseAdHocKind::Expr };
-        let module_id =
-            self.get_namespace_module(self.scopes.nearest_parent_namespace(ctx.scope_id));
+        let module_id = self.get_scope_module(ctx.scope_id);
         let parsed_metaprogram =
             self.traced(TraceKind::Parse, generated_path.as_u32(), 0, |k1| {
                 k1.parse_metaprogram_source(module_id, source_for_emission, parse_kind)
