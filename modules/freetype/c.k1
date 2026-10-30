@@ -127,67 +127,49 @@ let FREETYPE_MAJOR: i64 = 2
 let FREETYPE_MINOR: i64 = 14
 let FREETYPE_PATCH: i64 = 3
 type(alias) Int16 = i16
-#static assert-layout[Int16](2, 2, [])
 type(alias) UInt16 = u16
-#static assert-layout[UInt16](2, 2, [])
 type(alias) Int32 = i32
-#static assert-layout[Int32](4, 4, [])
 type(alias) UInt32 = u32
-#static assert-layout[UInt32](4, 4, [])
 type(alias) Fast = i32
-#static assert-layout[Fast](4, 4, [])
 type(alias) UFast = u32
-#static assert-layout[UFast](4, 4, [])
 type(alias) Int64 = i64
-#static assert-layout[Int64](8, 8, [])
 type(alias) UInt64 = u64
-#static assert-layout[UInt64](8, 8, [])
 type(alias) Memory = *MemoryRec_
-#static assert-layout[Memory](8, 8, [])
 type(alias) Alloc_Func = *fn(
   Memory,
   i64
 ) -> ptr
-#static assert-layout[Alloc_Func](8, 8, [])
 type(alias) Free_Func = *fn(
   Memory,
   ptr
-) -> {}
-#static assert-layout[Free_Func](8, 8, [])
+)
 type(alias) Realloc_Func = *fn(
   Memory,
   i64,
   i64,
   ptr
 ) -> ptr
-#static assert-layout[Realloc_Func](8, 8, [])
 type MemoryRec_ = {
   user: ptr,
   alloc: Alloc_Func,
   free: Free_Func,
   realloc: Realloc_Func,
 }
-#static assert-layout[MemoryRec_](32, 8, [0, 8, 16, 24, ])
 type(alias) Stream = *StreamRec_
-#static assert-layout[Stream](8, 8, [])
 type StreamDesc_ = union {
   value: i64,
   pointer: ptr,
 }
-#static assert-layout[StreamDesc_](8, 8, [])
 type(alias) StreamDesc = StreamDesc_
-#static assert-layout[StreamDesc](8, 8, [])
 type(alias) Stream_IoFunc = *fn(
   Stream,
   u64,
   *u8,
   u64
 ) -> u64
-#static assert-layout[Stream_IoFunc](8, 8, [])
 type(alias) Stream_CloseFunc = *fn(
   Stream
-) -> {}
-#static assert-layout[Stream_CloseFunc](8, 8, [])
+)
 type StreamRec_ = {
   base: optref[u8],
   size: u64,
@@ -200,27 +182,20 @@ type StreamRec_ = {
   cursor: optref[u8],
   limit: optref[u8],
 }
-#static assert-layout[StreamRec_](80, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, ])
 type(alias) StreamRec = StreamRec_
-#static assert-layout[StreamRec](80, 8, [])
 type(alias) Pos = i64
-#static assert-layout[Pos](8, 8, [])
 type Vector_ = {
   x: Pos,
   y: Pos,
 }
-#static assert-layout[Vector_](16, 8, [0, 8, ])
 type(alias) Vector = Vector_
-#static assert-layout[Vector](16, 8, [])
 type BBox_ = {
   xMin: Pos,
   yMin: Pos,
   xMax: Pos,
   yMax: Pos,
 }
-#static assert-layout[BBox_](32, 8, [0, 8, 16, 24, ])
 type(alias) BBox = BBox_
-#static assert-layout[BBox](32, 8, [])
 type Pixel_Mode_ = either(u32, partial) {
   PIXEL_MODE_NONE = 0,
   PIXEL_MODE_MONO = 1,
@@ -232,9 +207,7 @@ type Pixel_Mode_ = either(u32, partial) {
   PIXEL_MODE_BGRA = 7,
   PIXEL_MODE_MAX = 8,
 }
-#static assert-layout[Pixel_Mode_](4, 4, [])
 type(alias) Pixel_Mode = Pixel_Mode_
-#static assert-layout[Pixel_Mode](4, 4, [])
 type Bitmap_ = {
   rows: u32,
   width: u32,
@@ -245,9 +218,7 @@ type Bitmap_ = {
   palette_mode: u8,
   palette: ptr,
 }
-#static assert-layout[Bitmap_](40, 8, [0, 4, 8, 16, 24, 26, 27, 32, ])
 type(alias) Bitmap = Bitmap_
-#static assert-layout[Bitmap](40, 8, [])
 type Outline_ = {
   n_contours: u16,
   n_points: u16,
@@ -256,32 +227,26 @@ type Outline_ = {
   contours: optref[u16],
   flags: i32,
 }
-#static assert-layout[Outline_](40, 8, [0, 2, 8, 16, 24, 32, ])
 type(alias) Outline = Outline_
-#static assert-layout[Outline](40, 8, [])
 type(alias) Outline_MoveToFunc = *fn(
   *Vector,
   ptr
 ) -> i32
-#static assert-layout[Outline_MoveToFunc](8, 8, [])
 type(alias) Outline_LineToFunc = *fn(
   *Vector,
   ptr
 ) -> i32
-#static assert-layout[Outline_LineToFunc](8, 8, [])
 type(alias) Outline_ConicToFunc = *fn(
   *Vector,
   *Vector,
   ptr
 ) -> i32
-#static assert-layout[Outline_ConicToFunc](8, 8, [])
 type(alias) Outline_CubicToFunc = *fn(
   *Vector,
   *Vector,
   *Vector,
   ptr
 ) -> i32
-#static assert-layout[Outline_CubicToFunc](8, 8, [])
 type Outline_Funcs_ = {
   move_to: Outline_MoveToFunc,
   line_to: Outline_LineToFunc,
@@ -290,9 +255,7 @@ type Outline_Funcs_ = {
   shift: i32,
   delta: Pos,
 }
-#static assert-layout[Outline_Funcs_](48, 8, [0, 8, 16, 24, 32, 40, ])
 type(alias) Outline_Funcs = Outline_Funcs_
-#static assert-layout[Outline_Funcs](48, 8, [])
 type Glyph_Format_ = either(u32, partial) {
   GLYPH_FORMAT_NONE = 0,
   GLYPH_FORMAT_COMPOSITE = 1668246896,
@@ -301,36 +264,29 @@ type Glyph_Format_ = either(u32, partial) {
   GLYPH_FORMAT_PLOTTER = 1886154612,
   GLYPH_FORMAT_SVG = 1398163232,
 }
-#static assert-layout[Glyph_Format_](4, 4, [])
 type(alias) Glyph_Format = Glyph_Format_
-#static assert-layout[Glyph_Format](4, 4, [])
 type Span_ = {
   x: u16,
   len: u16,
   coverage: u8,
 }
-#static assert-layout[Span_](6, 2, [0, 2, 4, ])
 type(alias) Span = Span_
-#static assert-layout[Span](6, 2, [])
 type(alias) SpanFunc = *fn(
   i32,
   i32,
   *Span,
   ptr
-) -> {}
-#static assert-layout[SpanFunc](8, 8, [])
+)
 type(alias) Raster_BitTest_Func = *fn(
   i32,
   i32,
   ptr
 ) -> i32
-#static assert-layout[Raster_BitTest_Func](8, 8, [])
 type(alias) Raster_BitSet_Func = *fn(
   i32,
   i32,
   ptr
-) -> {}
-#static assert-layout[Raster_BitSet_Func](8, 8, [])
+)
 type Raster_Params_ = {
   target: optref[Bitmap],
   source: ptr,
@@ -342,38 +298,30 @@ type Raster_Params_ = {
   user: ptr,
   clip_box: BBox,
 }
-#static assert-layout[Raster_Params_](96, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, ])
 type(alias) Raster_Params = Raster_Params_
-#static assert-layout[Raster_Params](96, 8, [])
 type RasterRec_ = opaque[0, 1]
 type(alias) Raster = *RasterRec_
-#static assert-layout[Raster](8, 8, [])
 type(alias) Raster_NewFunc = *fn(
   ptr,
   *Raster
 ) -> i32
-#static assert-layout[Raster_NewFunc](8, 8, [])
 type(alias) Raster_DoneFunc = *fn(
   Raster
-) -> {}
-#static assert-layout[Raster_DoneFunc](8, 8, [])
+)
 type(alias) Raster_ResetFunc = *fn(
   Raster,
   *u8,
   u64
-) -> {}
-#static assert-layout[Raster_ResetFunc](8, 8, [])
+)
 type(alias) Raster_SetModeFunc = *fn(
   Raster,
   u64,
   ptr
 ) -> i32
-#static assert-layout[Raster_SetModeFunc](8, 8, [])
 type(alias) Raster_RenderFunc = *fn(
   Raster,
   *Raster_Params
 ) -> i32
-#static assert-layout[Raster_RenderFunc](8, 8, [])
 type Raster_Funcs_ = {
   glyph_format: Glyph_Format,
   raster_new: Raster_NewFunc,
@@ -382,104 +330,66 @@ type Raster_Funcs_ = {
   raster_render: Raster_RenderFunc,
   raster_done: Raster_DoneFunc,
 }
-#static assert-layout[Raster_Funcs_](48, 8, [0, 8, 16, 24, 32, 40, ])
 type(alias) Raster_Funcs = Raster_Funcs_
-#static assert-layout[Raster_Funcs](48, 8, [])
 type(alias) Bool = u8
-#static assert-layout[Bool](1, 1, [])
 type(alias) FWord = i16
-#static assert-layout[FWord](2, 2, [])
 type(alias) UFWord = u16
-#static assert-layout[UFWord](2, 2, [])
 type(alias) Char = i8
-#static assert-layout[Char](1, 1, [])
 type(alias) Byte = u8
-#static assert-layout[Byte](1, 1, [])
 type(alias) Bytes = *Byte
-#static assert-layout[Bytes](8, 8, [])
 type(alias) Tag = UInt32
-#static assert-layout[Tag](4, 4, [])
 type(alias) String = u8
-#static assert-layout[String](1, 1, [])
 type(alias) Short = i16
-#static assert-layout[Short](2, 2, [])
 type(alias) UShort = u16
-#static assert-layout[UShort](2, 2, [])
 type(alias) Int = i32
-#static assert-layout[Int](4, 4, [])
 type(alias) UInt = u32
-#static assert-layout[UInt](4, 4, [])
 type(alias) Long = i64
-#static assert-layout[Long](8, 8, [])
 type(alias) ULong = u64
-#static assert-layout[ULong](8, 8, [])
 type(alias) F2Dot14 = i16
-#static assert-layout[F2Dot14](2, 2, [])
 type(alias) F26Dot6 = i64
-#static assert-layout[F26Dot6](8, 8, [])
 type(alias) Fixed = i64
-#static assert-layout[Fixed](8, 8, [])
 type(alias) Error = i32
-#static assert-layout[Error](4, 4, [])
 type(alias) Pointer = ptr
-#static assert-layout[Pointer](8, 8, [])
 type(alias) Offset = usize
-#static assert-layout[Offset](8, 8, [])
 type(alias) PtrDist = size
-#static assert-layout[PtrDist](8, 8, [])
 type UnitVector_ = {
   x: F2Dot14,
   y: F2Dot14,
 }
-#static assert-layout[UnitVector_](4, 2, [0, 2, ])
 type(alias) UnitVector = UnitVector_
-#static assert-layout[UnitVector](4, 2, [])
 type Matrix_ = {
   xx: Fixed,
   xy: Fixed,
   yx: Fixed,
   yy: Fixed,
 }
-#static assert-layout[Matrix_](32, 8, [0, 8, 16, 24, ])
 type(alias) Matrix = Matrix_
-#static assert-layout[Matrix](32, 8, [])
 type Data_ = {
   pointer: optref[Byte],
   length: UInt,
 }
-#static assert-layout[Data_](16, 8, [0, 8, ])
 type(alias) Data = Data_
-#static assert-layout[Data](16, 8, [])
 type(alias) Generic_Finalizer = *fn(
   ptr
-) -> {}
-#static assert-layout[Generic_Finalizer](8, 8, [])
+)
 type Generic_ = {
   data: ptr,
   finalizer: Generic_Finalizer,
 }
-#static assert-layout[Generic_](16, 8, [0, 8, ])
 type(alias) Generic = Generic_
-#static assert-layout[Generic](16, 8, [])
 type(alias) ListNode = *ListNodeRec_
-#static assert-layout[ListNode](8, 8, [])
 type(alias) List = *ListRec_
-#static assert-layout[List](8, 8, [])
 type ListNodeRec_ = {
   prev: ListNode,
   next: ListNode,
   data: ptr,
 }
-#static assert-layout[ListNodeRec_](24, 8, [0, 8, 16, ])
 type(alias) ListNodeRec = ListNodeRec_
-#static assert-layout[ListNodeRec](24, 8, [])
 type ListRec_ = {
   head: ListNode,
   tail: ListNode,
 }
-#static assert-layout[ListRec_](16, 8, [0, 8, ])
 type(alias) ListRec = ListRec_
-#static assert-layout[ListRec](16, 8, [])
 fn(extern("FT_Error_String")) Error_String(
   error_code: Error,
 ): optref[u8]
@@ -493,9 +403,7 @@ type Glyph_Metrics_ = {
   vertBearingY: Pos,
   vertAdvance: Pos,
 }
-#static assert-layout[Glyph_Metrics_](64, 8, [0, 8, 16, 24, 32, 40, 48, 56, ])
 type(alias) Glyph_Metrics = Glyph_Metrics_
-#static assert-layout[Glyph_Metrics](64, 8, [])
 type Bitmap_Size_ = {
   height: Short,
   width: Short,
@@ -503,29 +411,19 @@ type Bitmap_Size_ = {
   x_ppem: Pos,
   y_ppem: Pos,
 }
-#static assert-layout[Bitmap_Size_](32, 8, [0, 2, 8, 16, 24, ])
 type(alias) Bitmap_Size = Bitmap_Size_
-#static assert-layout[Bitmap_Size](32, 8, [])
 type LibraryRec_ = opaque[0, 1]
 type(alias) Library = *LibraryRec_
-#static assert-layout[Library](8, 8, [])
 type ModuleRec_ = opaque[0, 1]
 type(alias) Module = *ModuleRec_
-#static assert-layout[Module](8, 8, [])
 type DriverRec_ = opaque[0, 1]
 type(alias) Driver = *DriverRec_
-#static assert-layout[Driver](8, 8, [])
 type RendererRec_ = opaque[0, 1]
 type(alias) Renderer = *RendererRec_
-#static assert-layout[Renderer](8, 8, [])
 type(alias) Face = *FaceRec_
-#static assert-layout[Face](8, 8, [])
 type(alias) Size = *SizeRec_
-#static assert-layout[Size](8, 8, [])
 type(alias) GlyphSlot = *GlyphSlotRec_
-#static assert-layout[GlyphSlot](8, 8, [])
 type(alias) CharMap = *CharMapRec_
-#static assert-layout[CharMap](8, 8, [])
 type Encoding_ = either(u32, partial) {
   ENCODING_NONE = 0,
   ENCODING_MS_SYMBOL = 1937337698,
@@ -542,21 +440,16 @@ type Encoding_ = either(u32, partial) {
   ENCODING_OLD_LATIN_2 = 1818326066,
   ENCODING_APPLE_ROMAN = 1634889070,
 }
-#static assert-layout[Encoding_](4, 4, [])
 type(alias) Encoding = Encoding_
-#static assert-layout[Encoding](4, 4, [])
 type CharMapRec_ = {
   face: Face,
   encoding: Encoding,
   platform_id: UShort,
   encoding_id: UShort,
 }
-#static assert-layout[CharMapRec_](16, 8, [0, 8, 12, 14, ])
 type(alias) CharMapRec = CharMapRec_
-#static assert-layout[CharMapRec](16, 8, [])
 type Face_InternalRec_ = opaque[0, 1]
 type(alias) Face_Internal = *Face_InternalRec_
-#static assert-layout[Face_Internal](8, 8, [])
 type FaceRec_ = {
   num_faces: Long,
   face_index: Long,
@@ -590,12 +483,9 @@ type FaceRec_ = {
   extensions: ptr,
   internal: Face_Internal,
 }
-#static assert-layout[FaceRec_](248, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 104, 136, 138, 140, 142, 144, 146, 148, 150, 152, 160, 168, 176, 184, 192, 200, 216, 232, 240, ])
 type(alias) FaceRec = FaceRec_
-#static assert-layout[FaceRec](248, 8, [])
 type Size_InternalRec_ = opaque[0, 1]
 type(alias) Size_Internal = *Size_InternalRec_
-#static assert-layout[Size_Internal](8, 8, [])
 type Size_Metrics_ = {
   x_ppem: UShort,
   y_ppem: UShort,
@@ -606,24 +496,18 @@ type Size_Metrics_ = {
   height: Pos,
   max_advance: Pos,
 }
-#static assert-layout[Size_Metrics_](56, 8, [0, 2, 8, 16, 24, 32, 40, 48, ])
 type(alias) Size_Metrics = Size_Metrics_
-#static assert-layout[Size_Metrics](56, 8, [])
 type SizeRec_ = {
   face: Face,
   generic: Generic,
   metrics: Size_Metrics,
   internal: Size_Internal,
 }
-#static assert-layout[SizeRec_](88, 8, [0, 8, 24, 80, ])
 type(alias) SizeRec = SizeRec_
-#static assert-layout[SizeRec](88, 8, [])
 type SubGlyphRec_ = opaque[0, 1]
 type(alias) SubGlyph = *SubGlyphRec_
-#static assert-layout[SubGlyph](8, 8, [])
 type Slot_InternalRec_ = opaque[0, 1]
 type(alias) Slot_Internal = *Slot_InternalRec_
-#static assert-layout[Slot_Internal](8, 8, [])
 type GlyphSlotRec_ = {
   library: Library,
   face: Face,
@@ -648,9 +532,7 @@ type GlyphSlotRec_ = {
   other: ptr,
   internal: Slot_Internal,
 }
-#static assert-layout[GlyphSlotRec_](304, 8, [0, 8, 16, 24, 32, 48, 112, 120, 128, 144, 152, 192, 196, 200, 240, 248, 256, 264, 272, 280, 288, 296, ])
 type(alias) GlyphSlotRec = GlyphSlotRec_
-#static assert-layout[GlyphSlotRec](304, 8, [])
 fn(extern("FT_Init_FreeType")) Init_FreeType(
   alibrary: *Library,
 ): Error
@@ -661,9 +543,7 @@ type Parameter_ = {
   tag: ULong,
   data: Pointer,
 }
-#static assert-layout[Parameter_](16, 8, [0, 8, ])
 type(alias) Parameter = Parameter_
-#static assert-layout[Parameter](16, 8, [])
 type Open_Args_ = {
   flags: UInt,
   memory_base: optref[Byte],
@@ -674,9 +554,7 @@ type Open_Args_ = {
   num_params: Int,
   params: optref[Parameter],
 }
-#static assert-layout[Open_Args_](64, 8, [0, 8, 16, 24, 32, 40, 48, 56, ])
 type(alias) Open_Args = Open_Args_
-#static assert-layout[Open_Args](64, 8, [])
 fn(extern("FT_New_Face")) New_Face(
   library: Library,
   filepathname: *u8,
@@ -722,9 +600,7 @@ type Size_Request_Type_ = either(u32, partial) {
   SIZE_REQUEST_TYPE_SCALES = 4,
   SIZE_REQUEST_TYPE_MAX = 5,
 }
-#static assert-layout[Size_Request_Type_](4, 4, [])
 type(alias) Size_Request_Type = Size_Request_Type_
-#static assert-layout[Size_Request_Type](4, 4, [])
 type Size_RequestRec_ = {
   type: Size_Request_Type,
   width: Long,
@@ -732,11 +608,8 @@ type Size_RequestRec_ = {
   horiResolution: UInt,
   vertResolution: UInt,
 }
-#static assert-layout[Size_RequestRec_](32, 8, [0, 8, 16, 24, 28, ])
 type(alias) Size_RequestRec = Size_RequestRec_
-#static assert-layout[Size_RequestRec](32, 8, [])
 type(alias) Size_Request = *Size_RequestRec_
-#static assert-layout[Size_Request](8, 8, [])
 fn(extern("FT_Request_Size")) Request_Size(
   face: Face,
   req: Size_Request,
@@ -767,12 +640,12 @@ fn(extern("FT_Set_Transform")) Set_Transform(
   face: Face,
   matrix: *Matrix,
   delta: *Vector,
-): {}
+)
 fn(extern("FT_Get_Transform")) Get_Transform(
   face: Face,
   matrix: *Matrix,
   delta: *Vector,
-): {}
+)
 type Render_Mode_ = either(u32, partial) {
   RENDER_MODE_NORMAL = 0,
   RENDER_MODE_LIGHT = 1,
@@ -782,9 +655,7 @@ type Render_Mode_ = either(u32, partial) {
   RENDER_MODE_SDF = 5,
   RENDER_MODE_MAX = 6,
 }
-#static assert-layout[Render_Mode_](4, 4, [])
 type(alias) Render_Mode = Render_Mode_
-#static assert-layout[Render_Mode](4, 4, [])
 fn(extern("FT_Render_Glyph")) Render_Glyph(
   slot: GlyphSlot,
   render_mode: Render_Mode,
@@ -794,9 +665,7 @@ type Kerning_Mode_ = either(u32, partial) {
   KERNING_UNFITTED = 1,
   KERNING_UNSCALED = 2,
 }
-#static assert-layout[Kerning_Mode_](4, 4, [])
 type(alias) Kerning_Mode = Kerning_Mode_
-#static assert-layout[Kerning_Mode](4, 4, [])
 fn(extern("FT_Get_Kerning")) Get_Kerning(
   face: Face,
   left_glyph: UInt,
@@ -910,13 +779,13 @@ fn(extern("FT_FloorFix")) FloorFix(
 fn(extern("FT_Vector_Transform")) Vector_Transform(
   vector: *Vector,
   matrix: *Matrix,
-): {}
+)
 fn(extern("FT_Library_Version")) Library_Version(
   library: Library,
   amajor: *Int,
   aminor: *Int,
   apatch: *Int,
-): {}
+)
 fn(extern("FT_Face_CheckTrueTypePatents")) Face_CheckTrueTypePatents(
   face: Face,
 ): Bool
@@ -945,12 +814,12 @@ fn(extern("FT_Outline_Check")) Outline_Check(
 fn(extern("FT_Outline_Get_CBox")) Outline_Get_CBox(
   outline: *Outline,
   acbox: *BBox,
-): {}
+)
 fn(extern("FT_Outline_Translate")) Outline_Translate(
   outline: *Outline,
   xOffset: Pos,
   yOffset: Pos,
-): {}
+)
 fn(extern("FT_Outline_Copy")) Outline_Copy(
   source: *Outline,
   target: *Outline,
@@ -958,7 +827,7 @@ fn(extern("FT_Outline_Copy")) Outline_Copy(
 fn(extern("FT_Outline_Transform")) Outline_Transform(
   outline: *Outline,
   matrix: *Matrix,
-): {}
+)
 fn(extern("FT_Outline_Embolden")) Outline_Embolden(
   outline: *Outline,
   strength: Pos,
@@ -970,7 +839,7 @@ fn(extern("FT_Outline_EmboldenXY")) Outline_EmboldenXY(
 ): Error
 fn(extern("FT_Outline_Reverse")) Outline_Reverse(
   outline: *Outline,
-): {}
+)
 fn(extern("FT_Outline_Get_Bitmap")) Outline_Get_Bitmap(
   library: Library,
   outline: *Outline,
@@ -986,9 +855,143 @@ type Orientation_ = either(u32, partial) {
   ORIENTATION_POSTSCRIPT = 1,
   ORIENTATION_NONE = 2,
 }
-#static assert-layout[Orientation_](4, 4, [])
 type(alias) Orientation = Orientation_
-#static assert-layout[Orientation](4, 4, [])
 fn(extern("FT_Outline_Get_Orientation")) Outline_Get_Orientation(
   outline: *Outline,
 ): Orientation
+
+fn(test) c-layouts() {
+  assert-layout[Int16](2, 2, [])
+  assert-layout[UInt16](2, 2, [])
+  assert-layout[Int32](4, 4, [])
+  assert-layout[UInt32](4, 4, [])
+  assert-layout[Fast](4, 4, [])
+  assert-layout[UFast](4, 4, [])
+  assert-layout[Int64](8, 8, [])
+  assert-layout[UInt64](8, 8, [])
+  assert-layout[Memory](8, 8, [])
+  assert-layout[Alloc_Func](8, 8, [])
+  assert-layout[Free_Func](8, 8, [])
+  assert-layout[Realloc_Func](8, 8, [])
+  assert-layout[MemoryRec_](32, 8, [0, 8, 16, 24, ])
+  assert-layout[Stream](8, 8, [])
+  assert-layout[StreamDesc_](8, 8, [])
+  assert-layout[StreamDesc](8, 8, [])
+  assert-layout[Stream_IoFunc](8, 8, [])
+  assert-layout[Stream_CloseFunc](8, 8, [])
+  assert-layout[StreamRec_](80, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, ])
+  assert-layout[StreamRec](80, 8, [])
+  assert-layout[Pos](8, 8, [])
+  assert-layout[Vector_](16, 8, [0, 8, ])
+  assert-layout[Vector](16, 8, [])
+  assert-layout[BBox_](32, 8, [0, 8, 16, 24, ])
+  assert-layout[BBox](32, 8, [])
+  assert-layout[Pixel_Mode_](4, 4, [])
+  assert-layout[Pixel_Mode](4, 4, [])
+  assert-layout[Bitmap_](40, 8, [0, 4, 8, 16, 24, 26, 27, 32, ])
+  assert-layout[Bitmap](40, 8, [])
+  assert-layout[Outline_](40, 8, [0, 2, 8, 16, 24, 32, ])
+  assert-layout[Outline](40, 8, [])
+  assert-layout[Outline_MoveToFunc](8, 8, [])
+  assert-layout[Outline_LineToFunc](8, 8, [])
+  assert-layout[Outline_ConicToFunc](8, 8, [])
+  assert-layout[Outline_CubicToFunc](8, 8, [])
+  assert-layout[Outline_Funcs_](48, 8, [0, 8, 16, 24, 32, 40, ])
+  assert-layout[Outline_Funcs](48, 8, [])
+  assert-layout[Glyph_Format_](4, 4, [])
+  assert-layout[Glyph_Format](4, 4, [])
+  assert-layout[Span_](6, 2, [0, 2, 4, ])
+  assert-layout[Span](6, 2, [])
+  assert-layout[SpanFunc](8, 8, [])
+  assert-layout[Raster_BitTest_Func](8, 8, [])
+  assert-layout[Raster_BitSet_Func](8, 8, [])
+  assert-layout[Raster_Params_](96, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, ])
+  assert-layout[Raster_Params](96, 8, [])
+  assert-layout[Raster](8, 8, [])
+  assert-layout[Raster_NewFunc](8, 8, [])
+  assert-layout[Raster_DoneFunc](8, 8, [])
+  assert-layout[Raster_ResetFunc](8, 8, [])
+  assert-layout[Raster_SetModeFunc](8, 8, [])
+  assert-layout[Raster_RenderFunc](8, 8, [])
+  assert-layout[Raster_Funcs_](48, 8, [0, 8, 16, 24, 32, 40, ])
+  assert-layout[Raster_Funcs](48, 8, [])
+  assert-layout[Bool](1, 1, [])
+  assert-layout[FWord](2, 2, [])
+  assert-layout[UFWord](2, 2, [])
+  assert-layout[Char](1, 1, [])
+  assert-layout[Byte](1, 1, [])
+  assert-layout[Bytes](8, 8, [])
+  assert-layout[Tag](4, 4, [])
+  assert-layout[String](1, 1, [])
+  assert-layout[Short](2, 2, [])
+  assert-layout[UShort](2, 2, [])
+  assert-layout[Int](4, 4, [])
+  assert-layout[UInt](4, 4, [])
+  assert-layout[Long](8, 8, [])
+  assert-layout[ULong](8, 8, [])
+  assert-layout[F2Dot14](2, 2, [])
+  assert-layout[F26Dot6](8, 8, [])
+  assert-layout[Fixed](8, 8, [])
+  assert-layout[Error](4, 4, [])
+  assert-layout[Pointer](8, 8, [])
+  assert-layout[Offset](8, 8, [])
+  assert-layout[PtrDist](8, 8, [])
+  assert-layout[UnitVector_](4, 2, [0, 2, ])
+  assert-layout[UnitVector](4, 2, [])
+  assert-layout[Matrix_](32, 8, [0, 8, 16, 24, ])
+  assert-layout[Matrix](32, 8, [])
+  assert-layout[Data_](16, 8, [0, 8, ])
+  assert-layout[Data](16, 8, [])
+  assert-layout[Generic_Finalizer](8, 8, [])
+  assert-layout[Generic_](16, 8, [0, 8, ])
+  assert-layout[Generic](16, 8, [])
+  assert-layout[ListNode](8, 8, [])
+  assert-layout[List](8, 8, [])
+  assert-layout[ListNodeRec_](24, 8, [0, 8, 16, ])
+  assert-layout[ListNodeRec](24, 8, [])
+  assert-layout[ListRec_](16, 8, [0, 8, ])
+  assert-layout[ListRec](16, 8, [])
+  assert-layout[Glyph_Metrics_](64, 8, [0, 8, 16, 24, 32, 40, 48, 56, ])
+  assert-layout[Glyph_Metrics](64, 8, [])
+  assert-layout[Bitmap_Size_](32, 8, [0, 2, 8, 16, 24, ])
+  assert-layout[Bitmap_Size](32, 8, [])
+  assert-layout[Library](8, 8, [])
+  assert-layout[Module](8, 8, [])
+  assert-layout[Driver](8, 8, [])
+  assert-layout[Renderer](8, 8, [])
+  assert-layout[Face](8, 8, [])
+  assert-layout[Size](8, 8, [])
+  assert-layout[GlyphSlot](8, 8, [])
+  assert-layout[CharMap](8, 8, [])
+  assert-layout[Encoding_](4, 4, [])
+  assert-layout[Encoding](4, 4, [])
+  assert-layout[CharMapRec_](16, 8, [0, 8, 12, 14, ])
+  assert-layout[CharMapRec](16, 8, [])
+  assert-layout[Face_Internal](8, 8, [])
+  assert-layout[FaceRec_](248, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 104, 136, 138, 140, 142, 144, 146, 148, 150, 152, 160, 168, 176, 184, 192, 200, 216, 232, 240, ])
+  assert-layout[FaceRec](248, 8, [])
+  assert-layout[Size_Internal](8, 8, [])
+  assert-layout[Size_Metrics_](56, 8, [0, 2, 8, 16, 24, 32, 40, 48, ])
+  assert-layout[Size_Metrics](56, 8, [])
+  assert-layout[SizeRec_](88, 8, [0, 8, 24, 80, ])
+  assert-layout[SizeRec](88, 8, [])
+  assert-layout[SubGlyph](8, 8, [])
+  assert-layout[Slot_Internal](8, 8, [])
+  assert-layout[GlyphSlotRec_](304, 8, [0, 8, 16, 24, 32, 48, 112, 120, 128, 144, 152, 192, 196, 200, 240, 248, 256, 264, 272, 280, 288, 296, ])
+  assert-layout[GlyphSlotRec](304, 8, [])
+  assert-layout[Parameter_](16, 8, [0, 8, ])
+  assert-layout[Parameter](16, 8, [])
+  assert-layout[Open_Args_](64, 8, [0, 8, 16, 24, 32, 40, 48, 56, ])
+  assert-layout[Open_Args](64, 8, [])
+  assert-layout[Size_Request_Type_](4, 4, [])
+  assert-layout[Size_Request_Type](4, 4, [])
+  assert-layout[Size_RequestRec_](32, 8, [0, 8, 16, 24, 28, ])
+  assert-layout[Size_RequestRec](32, 8, [])
+  assert-layout[Size_Request](8, 8, [])
+  assert-layout[Render_Mode_](4, 4, [])
+  assert-layout[Render_Mode](4, 4, [])
+  assert-layout[Kerning_Mode_](4, 4, [])
+  assert-layout[Kerning_Mode](4, 4, [])
+  assert-layout[Orientation_](4, 4, [])
+  assert-layout[Orientation](4, 4, [])
+}

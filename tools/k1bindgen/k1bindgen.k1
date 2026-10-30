@@ -207,9 +207,7 @@ fn start(args: span[string]): result[string, string] {
         },
         :function function -> {
           out.write(`fn(extern("$raw-name")) $name(`)
-          if function.fn-type.params.is-empty() {
-            out.write(`): `)
-          } else {
+          if not function.fn-type.params.is-empty() {
             out.writeln("")
             for function.fn-type.params {
               if it-index > 0 out.writeln("")
@@ -220,9 +218,12 @@ fn start(args: span[string]): result[string, string] {
               out.write(",")
             }
             out.writeln("")
-            out.write(`): `)
           }
-          write-k1-type(function.fn-type.return-type, indent = 0, pos = :value)
+          out.write(")")
+          if not (function.fn-type.return-type is :k1 "{}") {
+            out.write(": ")
+            write-k1-type(function.fn-type.return-type, indent = 0, pos = :value)
+          }
           out.write("\n")
         }
       }

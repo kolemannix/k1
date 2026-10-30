@@ -9806,9 +9806,8 @@ impl TypedProgram {
             self.get_function_mut(function_id).dyn_fn_id = Some(new_function_id);
             new_function_id
         };
-        let dyn_function = self.get_function(dyn_function_id);
         let lambda_object_type_id =
-            self.add_lambda_object(dyn_function.type_id, dyn_function.parsed_id);
+            self.add_lambda_object(self.get_function(dyn_function_id).type_id);
 
         let null_ptr_expr = self.add_static_constant_expr(StaticValuePool::NULLPTR, call_span);
         let fn_ptr_field = StructLiteralField {
@@ -9835,9 +9834,7 @@ impl TypedProgram {
         let span = self.exprs.get_span(lambda_expr);
         let lambda_type = self.lambda_types.get(lambda_type_id);
         let function_id = lambda_type.function_id;
-        let function_type = lambda_type.function_type;
-        let parsed_id = lambda_type.parsed_id;
-        let lambda_object_type_id = self.add_lambda_object(function_type, parsed_id);
+        let lambda_object_type_id = self.add_lambda_object(lambda_type.function_type);
 
         let env_ref = self.synth_typed_call_typed_args(
             self.ast.idents.f.mem_new.with_span(span),

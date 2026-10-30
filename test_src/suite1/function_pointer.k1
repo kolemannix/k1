@@ -138,5 +138,6 @@ type ticker = { tick: *fn(*int), runs: int }
 fn(test) unit-return-drops-the-arrow() {
   assert-equals(types/id[*fn(*int)], types/id[*fn(*int) -> {}])
   assert-equals(types/id[*fn(*fn()) -> int], types/id[*fn(*fn() -> {}) -> int])
+  assert-equals(types/id[dyn[fn()]], types/id[dyn[fn() -> {}]])
   assert-equals(types/id[type-of(bumper())], types/id[ticker.tick])
 }

@@ -54,7 +54,7 @@ type foo = {
 }
 fn(extern("myFunction")) myFunction(
   incompleteArray: *u8,
-): {}
+)
 fn(extern("cinput_sum")) sum(
   lhs: i32,
   rhs: u32,

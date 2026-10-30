@@ -7,18 +7,14 @@ let HB_FONT_NO_VAR_NAMED_INSTANCE: i64 = 0xFFFFFFFF
 let HB_BUFFER_REPLACEMENT_CODEPOINT_DEFAULT: i64 = 0xFFFD
 let HB_UNICODE_COMBINING_CLASS_CCC133: i64 = 133
 let HB_UNICODE_MAX_DECOMPOSITION_LEN: i64 = (18 + 1)
-let HB_VERSION_MAJOR: i64 = 13
-let HB_VERSION_MINOR: i64 = 2
-let HB_VERSION_MICRO: i64 = 1
-let HB_VERSION_STRING: string = "13.2.1"
+let HB_VERSION_MAJOR: i64 = 14
+let HB_VERSION_MINOR: i64 = 6
+let HB_VERSION_MICRO: i64 = 0
+let HB_VERSION_STRING: string = "14.6.0"
 type(alias) bool_t = i32
-#static assert-layout[bool_t](4, 4, [])
 type(alias) codepoint_t = u32
-#static assert-layout[codepoint_t](4, 4, [])
 type(alias) position_t = i32
-#static assert-layout[position_t](4, 4, [])
 type(alias) mask_t = u32
-#static assert-layout[mask_t](4, 4, [])
 type _hb_var_int_t = union {
   u32: u32,
   i32: i32,
@@ -27,9 +23,7 @@ type _hb_var_int_t = union {
   u8: array[u8, 4],
   i8: array[i8, 4],
 }
-#static assert-layout[_hb_var_int_t](4, 4, [])
 type(alias) var_int_t = _hb_var_int_t
-#static assert-layout[var_int_t](4, 4, [])
 type _hb_var_num_t = union {
   f: f32,
   u32: u32,
@@ -39,11 +33,8 @@ type _hb_var_num_t = union {
   u8: array[u8, 4],
   i8: array[i8, 4],
 }
-#static assert-layout[_hb_var_num_t](4, 4, [])
 type(alias) var_num_t = _hb_var_num_t
-#static assert-layout[var_num_t](4, 4, [])
 type(alias) tag_t = u32
-#static assert-layout[tag_t](4, 4, [])
 fn(extern("hb_tag_from_string")) tag_from_string(
   str: *u8,
   len: i32,
@@ -51,7 +42,7 @@ fn(extern("hb_tag_from_string")) tag_from_string(
 fn(extern("hb_tag_to_string")) tag_to_string(
   tag: tag_t,
   buf: *u8,
-): {}
+)
 type direction_t = either(u32, partial) {
   HB_DIRECTION_INVALID = 0,
   HB_DIRECTION_LTR = 4,
@@ -59,7 +50,6 @@ type direction_t = either(u32, partial) {
   HB_DIRECTION_TTB = 6,
   HB_DIRECTION_BTT = 7,
 }
-#static assert-layout[direction_t](4, 4, [])
 fn(extern("hb_direction_from_string")) direction_from_string(
   str: *u8,
   len: i32,
@@ -69,7 +59,6 @@ fn(extern("hb_direction_to_string")) direction_to_string(
 ): optref[u8]
 type language_impl_t = opaque[0, 1]
 type(alias) language_t = *language_impl_t
-#static assert-layout[language_t](8, 8, [])
 fn(extern("hb_language_from_string")) language_from_string(
   str: *u8,
   len: i32,
@@ -259,10 +248,12 @@ type script_t = either(u32, partial) {
   HB_SCRIPT_SIDETIC = 1399415924,
   HB_SCRIPT_TAI_YO = 1415674223,
   HB_SCRIPT_TOLONG_SIKI = 1416588403,
+  HB_SCRIPT_JURCHEN = 1249210979,
+  HB_SCRIPT_PROTO_CUNEIFORM = 1348695406,
+  HB_SCRIPT_SEAL = 1399153004,
   HB_SCRIPT_INVALID = 0,
   _HB_SCRIPT_MAX_VALUE = 2147483647,
 }
-#static assert-layout[script_t](4, 4, [])
 fn(extern("hb_script_from_iso15924_tag")) script_from_iso15924_tag(
   tag: tag_t,
 ): script_t
@@ -279,18 +270,15 @@ fn(extern("hb_script_get_horizontal_direction")) script_get_horizontal_direction
 type user_data_key_t = {
   unused: u8,
 }
-#static assert-layout[user_data_key_t](1, 1, [0, ])
 type(alias) destroy_func_t = *fn(
   ptr
-) -> {}
-#static assert-layout[destroy_func_t](8, 8, [])
+)
 type feature_t = {
   tag: tag_t,
   value: u32,
   start: u32,
   end: u32,
 }
-#static assert-layout[feature_t](16, 4, [0, 4, 8, 12, ])
 fn(extern("hb_feature_from_string")) feature_from_string(
   str: *u8,
   len: i32,
@@ -300,12 +288,11 @@ fn(extern("hb_feature_to_string")) feature_to_string(
   feature: *feature_t,
   buf: *u8,
   size: u32,
-): {}
+)
 type variation_t = {
   tag: tag_t,
   value: f32,
 }
-#static assert-layout[variation_t](8, 4, [0, 4, ])
 fn(extern("hb_variation_from_string")) variation_from_string(
   str: *u8,
   len: i32,
@@ -315,9 +302,8 @@ fn(extern("hb_variation_to_string")) variation_to_string(
   variation: *variation_t,
   buf: *u8,
   size: u32,
-): {}
+)
 type(alias) color_t = u32
-#static assert-layout[color_t](4, 4, [])
 fn(extern("hb_color_get_alpha")) color_get_alpha(
   color: color_t,
 ): u8
@@ -336,7 +322,6 @@ type glyph_extents_t = {
   width: position_t,
   height: position_t,
 }
-#static assert-layout[glyph_extents_t](16, 4, [0, 4, 8, 12, ])
 type font_t = opaque[0, 1]
 fn(extern("hb_malloc")) malloc(
   size: usize,
@@ -351,14 +336,13 @@ fn(extern("hb_realloc")) realloc(
 ): ptr
 fn(extern("hb_free")) free(
   ptr: ptr,
-): {}
+)
 type memory_mode_t = either(u32, partial) {
   HB_MEMORY_MODE_DUPLICATE = 0,
   HB_MEMORY_MODE_READONLY = 1,
   HB_MEMORY_MODE_WRITABLE = 2,
   HB_MEMORY_MODE_READONLY_MAY_MAKE_WRITABLE = 3,
 }
-#static assert-layout[memory_mode_t](4, 4, [])
 type blob_t = opaque[0, 1]
 fn(extern("hb_blob_create")) blob_create(
   data: *u8,
@@ -394,7 +378,7 @@ fn(extern("hb_blob_reference")) blob_reference(
 ): optref[blob_t]
 fn(extern("hb_blob_destroy")) blob_destroy(
   blob: *blob_t,
-): {}
+)
 fn(extern("hb_blob_set_user_data")) blob_set_user_data(
   blob: *blob_t,
   key: *user_data_key_t,
@@ -408,7 +392,7 @@ fn(extern("hb_blob_get_user_data")) blob_get_user_data(
 ): ptr
 fn(extern("hb_blob_make_immutable")) blob_make_immutable(
   blob: *blob_t,
-): {}
+)
 fn(extern("hb_blob_is_immutable")) blob_is_immutable(
   blob: *blob_t,
 ): bool_t
@@ -455,7 +439,6 @@ type unicode_general_category_t = either(u32, partial) {
   HB_UNICODE_GENERAL_CATEGORY_PARAGRAPH_SEPARATOR = 28,
   HB_UNICODE_GENERAL_CATEGORY_SPACE_SEPARATOR = 29,
 }
-#static assert-layout[unicode_general_category_t](4, 4, [])
 type unicode_combining_class_t = either(u32, partial) {
   HB_UNICODE_COMBINING_CLASS_NOT_REORDERED = 0,
   HB_UNICODE_COMBINING_CLASS_OVERLAY = 1,
@@ -515,7 +498,6 @@ type unicode_combining_class_t = either(u32, partial) {
   HB_UNICODE_COMBINING_CLASS_IOTA_SUBSCRIPT = 240,
   HB_UNICODE_COMBINING_CLASS_INVALID = 255,
 }
-#static assert-layout[unicode_combining_class_t](4, 4, [])
 type unicode_funcs_t = opaque[0, 1]
 fn(extern("hb_unicode_funcs_get_default")) unicode_funcs_get_default(): optref[unicode_funcs_t]
 fn(extern("hb_unicode_funcs_create")) unicode_funcs_create(
@@ -527,7 +509,7 @@ fn(extern("hb_unicode_funcs_reference")) unicode_funcs_reference(
 ): optref[unicode_funcs_t]
 fn(extern("hb_unicode_funcs_destroy")) unicode_funcs_destroy(
   ufuncs: *unicode_funcs_t,
-): {}
+)
 fn(extern("hb_unicode_funcs_set_user_data")) unicode_funcs_set_user_data(
   ufuncs: *unicode_funcs_t,
   key: *user_data_key_t,
@@ -541,7 +523,7 @@ fn(extern("hb_unicode_funcs_get_user_data")) unicode_funcs_get_user_data(
 ): ptr
 fn(extern("hb_unicode_funcs_make_immutable")) unicode_funcs_make_immutable(
   ufuncs: *unicode_funcs_t,
-): {}
+)
 fn(extern("hb_unicode_funcs_is_immutable")) unicode_funcs_is_immutable(
   ufuncs: *unicode_funcs_t,
 ): bool_t
@@ -553,25 +535,21 @@ type(alias) unicode_combining_class_func_t = *fn(
   codepoint_t,
   ptr
 ) -> unicode_combining_class_t
-#static assert-layout[unicode_combining_class_func_t](8, 8, [])
 type(alias) unicode_general_category_func_t = *fn(
   *unicode_funcs_t,
   codepoint_t,
   ptr
 ) -> unicode_general_category_t
-#static assert-layout[unicode_general_category_func_t](8, 8, [])
 type(alias) unicode_mirroring_func_t = *fn(
   *unicode_funcs_t,
   codepoint_t,
   ptr
 ) -> codepoint_t
-#static assert-layout[unicode_mirroring_func_t](8, 8, [])
 type(alias) unicode_script_func_t = *fn(
   *unicode_funcs_t,
   codepoint_t,
   ptr
 ) -> script_t
-#static assert-layout[unicode_script_func_t](8, 8, [])
 type(alias) unicode_compose_func_t = *fn(
   *unicode_funcs_t,
   codepoint_t,
@@ -579,7 +557,6 @@ type(alias) unicode_compose_func_t = *fn(
   *codepoint_t,
   ptr
 ) -> bool_t
-#static assert-layout[unicode_compose_func_t](8, 8, [])
 type(alias) unicode_decompose_func_t = *fn(
   *unicode_funcs_t,
   codepoint_t,
@@ -587,43 +564,42 @@ type(alias) unicode_decompose_func_t = *fn(
   *codepoint_t,
   ptr
 ) -> bool_t
-#static assert-layout[unicode_decompose_func_t](8, 8, [])
 fn(extern("hb_unicode_funcs_set_combining_class_func")) unicode_funcs_set_combining_class_func(
   ufuncs: *unicode_funcs_t,
   func: unicode_combining_class_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_unicode_funcs_set_general_category_func")) unicode_funcs_set_general_category_func(
   ufuncs: *unicode_funcs_t,
   func: unicode_general_category_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_unicode_funcs_set_mirroring_func")) unicode_funcs_set_mirroring_func(
   ufuncs: *unicode_funcs_t,
   func: unicode_mirroring_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_unicode_funcs_set_script_func")) unicode_funcs_set_script_func(
   ufuncs: *unicode_funcs_t,
   func: unicode_script_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_unicode_funcs_set_compose_func")) unicode_funcs_set_compose_func(
   ufuncs: *unicode_funcs_t,
   func: unicode_compose_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_unicode_funcs_set_decompose_func")) unicode_funcs_set_decompose_func(
   ufuncs: *unicode_funcs_t,
   func: unicode_decompose_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_unicode_combining_class")) unicode_combining_class(
   ufuncs: *unicode_funcs_t,
   unicode: codepoint_t,
@@ -660,7 +636,7 @@ fn(extern("hb_set_reference")) set_reference(
 ): optref[set_t]
 fn(extern("hb_set_destroy")) set_destroy(
   set: *set_t,
-): {}
+)
 fn(extern("hb_set_set_user_data")) set_set_user_data(
   set: *set_t,
   key: *user_data_key_t,
@@ -680,13 +656,13 @@ fn(extern("hb_set_copy")) set_copy(
 ): optref[set_t]
 fn(extern("hb_set_clear")) set_clear(
   set: *set_t,
-): {}
+)
 fn(extern("hb_set_is_empty")) set_is_empty(
   set: *set_t,
 ): bool_t
 fn(extern("hb_set_invert")) set_invert(
   set: *set_t,
-): {}
+)
 fn(extern("hb_set_is_inverted")) set_is_inverted(
   set: *set_t,
 ): bool_t
@@ -697,27 +673,31 @@ fn(extern("hb_set_has")) set_has(
 fn(extern("hb_set_add")) set_add(
   set: *set_t,
   codepoint: codepoint_t,
-): {}
+)
 fn(extern("hb_set_add_range")) set_add_range(
   set: *set_t,
   first: codepoint_t,
   last: codepoint_t,
-): {}
+)
 fn(extern("hb_set_add_sorted_array")) set_add_sorted_array(
   set: *set_t,
   sorted_codepoints: *codepoint_t,
   num_codepoints: u32,
-): {}
+)
 fn(extern("hb_set_del")) set_del(
   set: *set_t,
   codepoint: codepoint_t,
-): {}
+)
 fn(extern("hb_set_del_range")) set_del_range(
   set: *set_t,
   first: codepoint_t,
   last: codepoint_t,
-): {}
+)
 fn(extern("hb_set_is_equal")) set_is_equal(
+  set: *set_t,
+  other: *set_t,
+): bool_t
+fn(extern("hb_set_intersects")) set_intersects(
   set: *set_t,
   other: *set_t,
 ): bool_t
@@ -731,23 +711,23 @@ fn(extern("hb_set_is_subset")) set_is_subset(
 fn(extern("hb_set_set")) set_set(
   set: *set_t,
   other: *set_t,
-): {}
+)
 fn(extern("hb_set_union")) set_union(
   set: *set_t,
   other: *set_t,
-): {}
+)
 fn(extern("hb_set_intersect")) set_intersect(
   set: *set_t,
   other: *set_t,
-): {}
+)
 fn(extern("hb_set_subtract")) set_subtract(
   set: *set_t,
   other: *set_t,
-): {}
+)
 fn(extern("hb_set_symmetric_difference")) set_symmetric_difference(
   set: *set_t,
   other: *set_t,
-): {}
+)
 fn(extern("hb_set_get_population")) set_get_population(
   set: *set_t,
 ): u32
@@ -789,7 +769,7 @@ fn(extern("hb_map_reference")) map_reference(
 ): optref[map_t]
 fn(extern("hb_map_destroy")) map_destroy(
   map: *map_t,
-): {}
+)
 fn(extern("hb_map_set_user_data")) map_set_user_data(
   map: *map_t,
   key: *user_data_key_t,
@@ -809,7 +789,7 @@ fn(extern("hb_map_copy")) map_copy(
 ): optref[map_t]
 fn(extern("hb_map_clear")) map_clear(
   map: *map_t,
-): {}
+)
 fn(extern("hb_map_is_empty")) map_is_empty(
   map: *map_t,
 ): bool_t
@@ -827,7 +807,7 @@ fn(extern("hb_map_set")) map_set(
   map: *map_t,
   key: codepoint_t,
   value: codepoint_t,
-): {}
+)
 fn(extern("hb_map_get")) map_get(
   map: *map_t,
   key: codepoint_t,
@@ -835,7 +815,7 @@ fn(extern("hb_map_get")) map_get(
 fn(extern("hb_map_del")) map_del(
   map: *map_t,
   key: codepoint_t,
-): {}
+)
 fn(extern("hb_map_has")) map_has(
   map: *map_t,
   key: codepoint_t,
@@ -843,7 +823,7 @@ fn(extern("hb_map_has")) map_has(
 fn(extern("hb_map_update")) map_update(
   map: *map_t,
   other: *map_t,
-): {}
+)
 fn(extern("hb_map_next")) map_next(
   map: *map_t,
   idx: *i32,
@@ -853,11 +833,11 @@ fn(extern("hb_map_next")) map_next(
 fn(extern("hb_map_keys")) map_keys(
   map: *map_t,
   keys: *set_t,
-): {}
+)
 fn(extern("hb_map_values")) map_values(
   map: *map_t,
   values: *set_t,
-): {}
+)
 fn(extern("hb_face_count")) face_count(
   blob: *blob_t,
 ): u32
@@ -890,7 +870,6 @@ type(alias) reference_table_func_t = *fn(
   tag_t,
   ptr
 ) -> optref[blob_t]
-#static assert-layout[reference_table_func_t](8, 8, [])
 fn(extern("hb_face_create_for_tables")) face_create_for_tables(
   reference_table_func: reference_table_func_t,
   user_data: ptr,
@@ -902,7 +881,7 @@ fn(extern("hb_face_reference")) face_reference(
 ): optref[face_t]
 fn(extern("hb_face_destroy")) face_destroy(
   face: *face_t,
-): {}
+)
 fn(extern("hb_face_set_user_data")) face_set_user_data(
   face: *face_t,
   key: *user_data_key_t,
@@ -916,7 +895,7 @@ fn(extern("hb_face_get_user_data")) face_get_user_data(
 ): ptr
 fn(extern("hb_face_make_immutable")) face_make_immutable(
   face: *face_t,
-): {}
+)
 fn(extern("hb_face_is_immutable")) face_is_immutable(
   face: *face_t,
 ): bool_t
@@ -930,21 +909,21 @@ fn(extern("hb_face_reference_blob")) face_reference_blob(
 fn(extern("hb_face_set_index")) face_set_index(
   face: *face_t,
   index: u32,
-): {}
+)
 fn(extern("hb_face_get_index")) face_get_index(
   face: *face_t,
 ): u32
 fn(extern("hb_face_set_upem")) face_set_upem(
   face: *face_t,
   upem: u32,
-): {}
+)
 fn(extern("hb_face_get_upem")) face_get_upem(
   face: *face_t,
 ): u32
 fn(extern("hb_face_set_glyph_count")) face_set_glyph_count(
   face: *face_t,
   glyph_count: u32,
-): {}
+)
 fn(extern("hb_face_get_glyph_count")) face_get_glyph_count(
   face: *face_t,
 ): u32
@@ -955,13 +934,12 @@ type(alias) get_table_tags_func_t = *fn(
   *tag_t,
   ptr
 ) -> u32
-#static assert-layout[get_table_tags_func_t](8, 8, [])
 fn(extern("hb_face_set_get_table_tags_func")) face_set_get_table_tags_func(
   face: *face_t,
   func: get_table_tags_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_face_get_table_tags")) face_get_table_tags(
   face: *face_t,
   start_offset: u32,
@@ -971,21 +949,21 @@ fn(extern("hb_face_get_table_tags")) face_get_table_tags(
 fn(extern("hb_face_collect_unicodes")) face_collect_unicodes(
   face: *face_t,
   out: *set_t,
-): {}
+)
 fn(extern("hb_face_collect_nominal_glyph_mapping")) face_collect_nominal_glyph_mapping(
   face: *face_t,
   mapping: *map_t,
   unicodes: *set_t,
-): {}
+)
 fn(extern("hb_face_collect_variation_selectors")) face_collect_variation_selectors(
   face: *face_t,
   out: *set_t,
-): {}
+)
 fn(extern("hb_face_collect_variation_unicodes")) face_collect_variation_unicodes(
   face: *face_t,
   variation_selector: codepoint_t,
   out: *set_t,
-): {}
+)
 fn(extern("hb_face_builder_create")) face_builder_create(): optref[face_t]
 fn(extern("hb_face_builder_add_table")) face_builder_add_table(
   face: *face_t,
@@ -995,7 +973,7 @@ fn(extern("hb_face_builder_add_table")) face_builder_add_table(
 fn(extern("hb_face_builder_sort_tables")) face_builder_sort_tables(
   face: *face_t,
   tags: *tag_t,
-): {}
+)
 type draw_state_t = {
   path_open: bool_t,
   path_start_x: f32,
@@ -1010,7 +988,6 @@ type draw_state_t = {
   reserved6: var_num_t,
   reserved7: var_num_t,
 }
-#static assert-layout[draw_state_t](48, 4, [0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, ])
 type draw_funcs_t = opaque[0, 1]
 type(alias) draw_move_to_func_t = *fn(
   *draw_funcs_t,
@@ -1019,8 +996,7 @@ type(alias) draw_move_to_func_t = *fn(
   f32,
   f32,
   ptr
-) -> {}
-#static assert-layout[draw_move_to_func_t](8, 8, [])
+)
 type(alias) draw_line_to_func_t = *fn(
   *draw_funcs_t,
   ptr,
@@ -1028,8 +1004,7 @@ type(alias) draw_line_to_func_t = *fn(
   f32,
   f32,
   ptr
-) -> {}
-#static assert-layout[draw_line_to_func_t](8, 8, [])
+)
 type(alias) draw_quadratic_to_func_t = *fn(
   *draw_funcs_t,
   ptr,
@@ -1039,8 +1014,7 @@ type(alias) draw_quadratic_to_func_t = *fn(
   f32,
   f32,
   ptr
-) -> {}
-#static assert-layout[draw_quadratic_to_func_t](8, 8, [])
+)
 type(alias) draw_cubic_to_func_t = *fn(
   *draw_funcs_t,
   ptr,
@@ -1052,45 +1026,77 @@ type(alias) draw_cubic_to_func_t = *fn(
   f32,
   f32,
   ptr
-) -> {}
-#static assert-layout[draw_cubic_to_func_t](8, 8, [])
+)
 type(alias) draw_close_path_func_t = *fn(
   *draw_funcs_t,
   ptr,
   *draw_state_t,
   ptr
-) -> {}
-#static assert-layout[draw_close_path_func_t](8, 8, [])
+)
+type(alias) draw_set_budget_func_t = *fn(
+  *draw_funcs_t,
+  ptr,
+  i64,
+  ptr
+) -> bool_t
+type(alias) draw_get_budget_func_t = *fn(
+  *draw_funcs_t,
+  ptr,
+  ptr
+) -> i64
+type(alias) draw_get_budget_remaining_func_t = *fn(
+  *draw_funcs_t,
+  ptr,
+  ptr
+) -> optref[i64]
 fn(extern("hb_draw_funcs_set_move_to_func")) draw_funcs_set_move_to_func(
   dfuncs: *draw_funcs_t,
   func: draw_move_to_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_draw_funcs_set_line_to_func")) draw_funcs_set_line_to_func(
   dfuncs: *draw_funcs_t,
   func: draw_line_to_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_draw_funcs_set_quadratic_to_func")) draw_funcs_set_quadratic_to_func(
   dfuncs: *draw_funcs_t,
   func: draw_quadratic_to_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_draw_funcs_set_cubic_to_func")) draw_funcs_set_cubic_to_func(
   dfuncs: *draw_funcs_t,
   func: draw_cubic_to_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_draw_funcs_set_close_path_func")) draw_funcs_set_close_path_func(
   dfuncs: *draw_funcs_t,
   func: draw_close_path_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
+fn(extern("hb_draw_funcs_set_set_budget_func")) draw_funcs_set_set_budget_func(
+  dfuncs: *draw_funcs_t,
+  func: draw_set_budget_func_t,
+  user_data: ptr,
+  destroy: destroy_func_t,
+)
+fn(extern("hb_draw_funcs_set_get_budget_func")) draw_funcs_set_get_budget_func(
+  dfuncs: *draw_funcs_t,
+  func: draw_get_budget_func_t,
+  user_data: ptr,
+  destroy: destroy_func_t,
+)
+fn(extern("hb_draw_funcs_set_get_budget_remaining_func")) draw_funcs_set_get_budget_remaining_func(
+  dfuncs: *draw_funcs_t,
+  func: draw_get_budget_remaining_func_t,
+  user_data: ptr,
+  destroy: destroy_func_t,
+)
 fn(extern("hb_draw_funcs_create")) draw_funcs_create(): optref[draw_funcs_t]
 fn(extern("hb_draw_funcs_get_empty")) draw_funcs_get_empty(): optref[draw_funcs_t]
 fn(extern("hb_draw_funcs_reference")) draw_funcs_reference(
@@ -1098,7 +1104,7 @@ fn(extern("hb_draw_funcs_reference")) draw_funcs_reference(
 ): optref[draw_funcs_t]
 fn(extern("hb_draw_funcs_destroy")) draw_funcs_destroy(
   dfuncs: *draw_funcs_t,
-): {}
+)
 fn(extern("hb_draw_funcs_set_user_data")) draw_funcs_set_user_data(
   dfuncs: *draw_funcs_t,
   key: *user_data_key_t,
@@ -1112,24 +1118,37 @@ fn(extern("hb_draw_funcs_get_user_data")) draw_funcs_get_user_data(
 ): ptr
 fn(extern("hb_draw_funcs_make_immutable")) draw_funcs_make_immutable(
   dfuncs: *draw_funcs_t,
-): {}
+)
 fn(extern("hb_draw_funcs_is_immutable")) draw_funcs_is_immutable(
   dfuncs: *draw_funcs_t,
 ): bool_t
+fn(extern("hb_draw_set_budget")) draw_set_budget(
+  dfuncs: *draw_funcs_t,
+  draw_data: ptr,
+  budget: i64,
+): bool_t
+fn(extern("hb_draw_get_budget")) draw_get_budget(
+  dfuncs: *draw_funcs_t,
+  draw_data: ptr,
+): i64
+fn(extern("hb_draw_get_budget_remaining")) draw_get_budget_remaining(
+  dfuncs: *draw_funcs_t,
+  draw_data: ptr,
+): i64
 fn(extern("hb_draw_move_to")) draw_move_to(
   dfuncs: *draw_funcs_t,
   draw_data: ptr,
   st: *draw_state_t,
   to_x: f32,
   to_y: f32,
-): {}
+)
 fn(extern("hb_draw_line_to")) draw_line_to(
   dfuncs: *draw_funcs_t,
   draw_data: ptr,
   st: *draw_state_t,
   to_x: f32,
   to_y: f32,
-): {}
+)
 fn(extern("hb_draw_quadratic_to")) draw_quadratic_to(
   dfuncs: *draw_funcs_t,
   draw_data: ptr,
@@ -1138,7 +1157,7 @@ fn(extern("hb_draw_quadratic_to")) draw_quadratic_to(
   control_y: f32,
   to_x: f32,
   to_y: f32,
-): {}
+)
 fn(extern("hb_draw_cubic_to")) draw_cubic_to(
   dfuncs: *draw_funcs_t,
   draw_data: ptr,
@@ -1149,13 +1168,82 @@ fn(extern("hb_draw_cubic_to")) draw_cubic_to(
   control2_y: f32,
   to_x: f32,
   to_y: f32,
-): {}
+)
 fn(extern("hb_draw_close_path")) draw_close_path(
   dfuncs: *draw_funcs_t,
   draw_data: ptr,
   st: *draw_state_t,
-): {}
+)
+type draw_line_cap_t = either(u32, partial) {
+  HB_DRAW_LINE_CAP_BUTT = 0,
+  HB_DRAW_LINE_CAP_SQUARE = 1,
+}
+fn(extern("hb_draw_line")) draw_line(
+  dfuncs: *draw_funcs_t,
+  draw_data: ptr,
+  st: *draw_state_t,
+  x0: f32,
+  y0: f32,
+  w0: f32,
+  x1: f32,
+  y1: f32,
+  w1: f32,
+  cap: draw_line_cap_t,
+)
+fn(extern("hb_draw_rectangle")) draw_rectangle(
+  dfuncs: *draw_funcs_t,
+  draw_data: ptr,
+  st: *draw_state_t,
+  x: f32,
+  y: f32,
+  w: f32,
+  h: f32,
+  stroke_width: f32,
+)
+fn(extern("hb_draw_circle")) draw_circle(
+  dfuncs: *draw_funcs_t,
+  draw_data: ptr,
+  st: *draw_state_t,
+  cx: f32,
+  cy: f32,
+  r: f32,
+  stroke_width: f32,
+)
 type paint_funcs_t = opaque[0, 1]
+type(alias) paint_set_budget_func_t = *fn(
+  *paint_funcs_t,
+  ptr,
+  i64,
+  ptr
+) -> bool_t
+type(alias) paint_get_budget_func_t = *fn(
+  *paint_funcs_t,
+  ptr,
+  ptr
+) -> i64
+type(alias) paint_get_budget_remaining_func_t = *fn(
+  *paint_funcs_t,
+  ptr,
+  ptr
+) -> optref[i64]
+fn(extern("hb_paint_funcs_set_set_budget_func")) paint_funcs_set_set_budget_func(
+  funcs: *paint_funcs_t,
+  func: paint_set_budget_func_t,
+  user_data: ptr,
+  destroy: destroy_func_t,
+)
+fn(extern("hb_paint_funcs_set_get_budget_func")) paint_funcs_set_get_budget_func(
+  funcs: *paint_funcs_t,
+  func: paint_get_budget_func_t,
+  user_data: ptr,
+  destroy: destroy_func_t,
+)
+fn(extern("hb_paint_funcs_set_get_budget_remaining_func")) paint_funcs_set_get_budget_remaining_func(
+  funcs: *paint_funcs_t,
+  func: paint_get_budget_remaining_func_t,
+  user_data: ptr,
+  destroy: destroy_func_t,
+)
 fn(extern("hb_paint_funcs_create")) paint_funcs_create(): optref[paint_funcs_t]
 fn(extern("hb_paint_funcs_get_empty")) paint_funcs_get_empty(): optref[paint_funcs_t]
 fn(extern("hb_paint_funcs_reference")) paint_funcs_reference(
@@ -1163,7 +1251,7 @@ fn(extern("hb_paint_funcs_reference")) paint_funcs_reference(
 ): optref[paint_funcs_t]
 fn(extern("hb_paint_funcs_destroy")) paint_funcs_destroy(
   funcs: *paint_funcs_t,
-): {}
+)
 fn(extern("hb_paint_funcs_set_user_data")) paint_funcs_set_user_data(
   funcs: *paint_funcs_t,
   key: *user_data_key_t,
@@ -1177,10 +1265,23 @@ fn(extern("hb_paint_funcs_get_user_data")) paint_funcs_get_user_data(
 ): ptr
 fn(extern("hb_paint_funcs_make_immutable")) paint_funcs_make_immutable(
   funcs: *paint_funcs_t,
-): {}
+)
 fn(extern("hb_paint_funcs_is_immutable")) paint_funcs_is_immutable(
   funcs: *paint_funcs_t,
 ): bool_t
+fn(extern("hb_paint_set_budget")) paint_set_budget(
+  funcs: *paint_funcs_t,
+  paint_data: ptr,
+  budget: i64,
+): bool_t
+fn(extern("hb_paint_get_budget")) paint_get_budget(
+  funcs: *paint_funcs_t,
+  paint_data: ptr,
+): i64
+fn(extern("hb_paint_get_budget_remaining")) paint_get_budget_remaining(
+  funcs: *paint_funcs_t,
+  paint_data: ptr,
+): i64
 type(alias) paint_push_transform_func_t = *fn(
   *paint_funcs_t,
   ptr,
@@ -1191,14 +1292,12 @@ type(alias) paint_push_transform_func_t = *fn(
   f32,
   f32,
   ptr
-) -> {}
-#static assert-layout[paint_push_transform_func_t](8, 8, [])
+)
 type(alias) paint_pop_transform_func_t = *fn(
   *paint_funcs_t,
   ptr,
   ptr
-) -> {}
-#static assert-layout[paint_pop_transform_func_t](8, 8, [])
+)
 type(alias) paint_color_glyph_func_t = *fn(
   *paint_funcs_t,
   ptr,
@@ -1206,15 +1305,22 @@ type(alias) paint_color_glyph_func_t = *fn(
   *font_t,
   ptr
 ) -> bool_t
-#static assert-layout[paint_color_glyph_func_t](8, 8, [])
+type(alias) paint_fill_glyph_func_t = *fn(
+  *paint_funcs_t,
+  ptr,
+  codepoint_t,
+  *font_t,
+  bool_t,
+  color_t,
+  ptr
+)
 type(alias) paint_push_clip_glyph_func_t = *fn(
   *paint_funcs_t,
   ptr,
   codepoint_t,
   *font_t,
   ptr
-) -> {}
-#static assert-layout[paint_push_clip_glyph_func_t](8, 8, [])
+)
 type(alias) paint_push_clip_rectangle_func_t = *fn(
   *paint_funcs_t,
   ptr,
@@ -1223,22 +1329,30 @@ type(alias) paint_push_clip_rectangle_func_t = *fn(
   f32,
   f32,
   ptr
-) -> {}
-#static assert-layout[paint_push_clip_rectangle_func_t](8, 8, [])
+)
+type(alias) paint_push_clip_path_start_func_t = *fn(
+  *paint_funcs_t,
+  ptr,
+  *ptr,
+  ptr
+) -> optref[draw_funcs_t]
+type(alias) paint_push_clip_path_end_func_t = *fn(
+  *paint_funcs_t,
+  ptr,
+  ptr
+)
 type(alias) paint_pop_clip_func_t = *fn(
   *paint_funcs_t,
   ptr,
   ptr
-) -> {}
-#static assert-layout[paint_pop_clip_func_t](8, 8, [])
+)
 type(alias) paint_color_func_t = *fn(
   *paint_funcs_t,
   ptr,
   bool_t,
   color_t,
   ptr
-) -> {}
-#static assert-layout[paint_color_func_t](8, 8, [])
+)
 type(alias) paint_image_func_t = *fn(
   *paint_funcs_t,
   ptr,
@@ -1250,19 +1364,16 @@ type(alias) paint_image_func_t = *fn(
   *glyph_extents_t,
   ptr
 ) -> bool_t
-#static assert-layout[paint_image_func_t](8, 8, [])
 type color_stop_t = {
   offset: f32,
   is_foreground: bool_t,
   color: color_t,
 }
-#static assert-layout[color_stop_t](12, 4, [0, 4, 8, ])
 type paint_extend_t = either(u32, partial) {
   HB_PAINT_EXTEND_PAD = 0,
   HB_PAINT_EXTEND_REPEAT = 1,
   HB_PAINT_EXTEND_REFLECT = 2,
 }
-#static assert-layout[paint_extend_t](4, 4, [])
 type(alias) color_line_get_color_stops_func_t = *fn(
   *color_line_t,
   ptr,
@@ -1271,13 +1382,11 @@ type(alias) color_line_get_color_stops_func_t = *fn(
   *color_stop_t,
   ptr
 ) -> u32
-#static assert-layout[color_line_get_color_stops_func_t](8, 8, [])
 type(alias) color_line_get_extend_func_t = *fn(
   *color_line_t,
   ptr,
   ptr
 ) -> paint_extend_t
-#static assert-layout[color_line_get_extend_func_t](8, 8, [])
 type color_line_t = {
   data: ptr,
   get_color_stops: color_line_get_color_stops_func_t,
@@ -1293,7 +1402,6 @@ type color_line_t = {
   reserved7: ptr,
   reserved8: ptr,
 }
-#static assert-layout[color_line_t](104, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, ])
 fn(extern("hb_color_line_get_color_stops")) color_line_get_color_stops(
   color_line: *color_line_t,
   start: u32,
@@ -1314,8 +1422,7 @@ type(alias) paint_linear_gradient_func_t = *fn(
   f32,
   f32,
   ptr
-) -> {}
-#static assert-layout[paint_linear_gradient_func_t](8, 8, [])
+)
 type(alias) paint_radial_gradient_func_t = *fn(
   *paint_funcs_t,
   ptr,
@@ -1327,8 +1434,7 @@ type(alias) paint_radial_gradient_func_t = *fn(
   f32,
   f32,
   ptr
-) -> {}
-#static assert-layout[paint_radial_gradient_func_t](8, 8, [])
+)
 type(alias) paint_sweep_gradient_func_t = *fn(
   *paint_funcs_t,
   ptr,
@@ -1338,8 +1444,7 @@ type(alias) paint_sweep_gradient_func_t = *fn(
   f32,
   f32,
   ptr
-) -> {}
-#static assert-layout[paint_sweep_gradient_func_t](8, 8, [])
+)
 type paint_composite_mode_t = either(u32, partial) {
   HB_PAINT_COMPOSITE_MODE_CLEAR = 0,
   HB_PAINT_COMPOSITE_MODE_SRC = 1,
@@ -1370,20 +1475,23 @@ type paint_composite_mode_t = either(u32, partial) {
   HB_PAINT_COMPOSITE_MODE_HSL_COLOR = 26,
   HB_PAINT_COMPOSITE_MODE_HSL_LUMINOSITY = 27,
 }
-#static assert-layout[paint_composite_mode_t](4, 4, [])
 type(alias) paint_push_group_func_t = *fn(
   *paint_funcs_t,
   ptr,
   ptr
-) -> {}
-#static assert-layout[paint_push_group_func_t](8, 8, [])
+)
+type(alias) paint_push_group_for_func_t = *fn(
+  *paint_funcs_t,
+  ptr,
+  paint_composite_mode_t,
+  ptr
+)
 type(alias) paint_pop_group_func_t = *fn(
   *paint_funcs_t,
   ptr,
   paint_composite_mode_t,
   ptr
-) -> {}
-#static assert-layout[paint_pop_group_func_t](8, 8, [])
+)
 type(alias) paint_custom_palette_color_func_t = *fn(
   *paint_funcs_t,
   ptr,
@@ -1391,91 +1499,114 @@ type(alias) paint_custom_palette_color_func_t = *fn(
   *color_t,
   ptr
 ) -> bool_t
-#static assert-layout[paint_custom_palette_color_func_t](8, 8, [])
 fn(extern("hb_paint_funcs_set_push_transform_func")) paint_funcs_set_push_transform_func(
   funcs: *paint_funcs_t,
   func: paint_push_transform_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_paint_funcs_set_pop_transform_func")) paint_funcs_set_pop_transform_func(
   funcs: *paint_funcs_t,
   func: paint_pop_transform_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_paint_funcs_set_color_glyph_func")) paint_funcs_set_color_glyph_func(
   funcs: *paint_funcs_t,
   func: paint_color_glyph_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
+fn(extern("hb_paint_funcs_set_fill_glyph_func")) paint_funcs_set_fill_glyph_func(
+  funcs: *paint_funcs_t,
+  func: paint_fill_glyph_func_t,
+  user_data: ptr,
+  destroy: destroy_func_t,
+)
 fn(extern("hb_paint_funcs_set_push_clip_glyph_func")) paint_funcs_set_push_clip_glyph_func(
   funcs: *paint_funcs_t,
   func: paint_push_clip_glyph_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_paint_funcs_set_push_clip_rectangle_func")) paint_funcs_set_push_clip_rectangle_func(
   funcs: *paint_funcs_t,
   func: paint_push_clip_rectangle_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
+fn(extern("hb_paint_funcs_set_push_clip_path_start_func")) paint_funcs_set_push_clip_path_start_func(
+  funcs: *paint_funcs_t,
+  func: paint_push_clip_path_start_func_t,
+  user_data: ptr,
+  destroy: destroy_func_t,
+)
+fn(extern("hb_paint_funcs_set_push_clip_path_end_func")) paint_funcs_set_push_clip_path_end_func(
+  funcs: *paint_funcs_t,
+  func: paint_push_clip_path_end_func_t,
+  user_data: ptr,
+  destroy: destroy_func_t,
+)
 fn(extern("hb_paint_funcs_set_pop_clip_func")) paint_funcs_set_pop_clip_func(
   funcs: *paint_funcs_t,
   func: paint_pop_clip_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_paint_funcs_set_color_func")) paint_funcs_set_color_func(
   funcs: *paint_funcs_t,
   func: paint_color_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_paint_funcs_set_image_func")) paint_funcs_set_image_func(
   funcs: *paint_funcs_t,
   func: paint_image_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_paint_funcs_set_linear_gradient_func")) paint_funcs_set_linear_gradient_func(
   funcs: *paint_funcs_t,
   func: paint_linear_gradient_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_paint_funcs_set_radial_gradient_func")) paint_funcs_set_radial_gradient_func(
   funcs: *paint_funcs_t,
   func: paint_radial_gradient_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_paint_funcs_set_sweep_gradient_func")) paint_funcs_set_sweep_gradient_func(
   funcs: *paint_funcs_t,
   func: paint_sweep_gradient_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_paint_funcs_set_push_group_func")) paint_funcs_set_push_group_func(
   funcs: *paint_funcs_t,
   func: paint_push_group_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
+fn(extern("hb_paint_funcs_set_push_group_for_func")) paint_funcs_set_push_group_for_func(
+  funcs: *paint_funcs_t,
+  func: paint_push_group_for_func_t,
+  user_data: ptr,
+  destroy: destroy_func_t,
+)
 fn(extern("hb_paint_funcs_set_pop_group_func")) paint_funcs_set_pop_group_func(
   funcs: *paint_funcs_t,
   func: paint_pop_group_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_paint_funcs_set_custom_palette_color_func")) paint_funcs_set_custom_palette_color_func(
   funcs: *paint_funcs_t,
   func: paint_custom_palette_color_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_paint_push_transform")) paint_push_transform(
   funcs: *paint_funcs_t,
   paint_data: ptr,
@@ -1485,33 +1616,41 @@ fn(extern("hb_paint_push_transform")) paint_push_transform(
   yy: f32,
   dx: f32,
   dy: f32,
-): {}
+)
 fn(extern("hb_paint_push_font_transform")) paint_push_font_transform(
   funcs: *paint_funcs_t,
   paint_data: ptr,
   font: *font_t,
-): {}
+)
 fn(extern("hb_paint_push_inverse_font_transform")) paint_push_inverse_font_transform(
   funcs: *paint_funcs_t,
   paint_data: ptr,
   font: *font_t,
-): {}
+)
 fn(extern("hb_paint_pop_transform")) paint_pop_transform(
   funcs: *paint_funcs_t,
   paint_data: ptr,
-): {}
+)
 fn(extern("hb_paint_color_glyph")) paint_color_glyph(
   funcs: *paint_funcs_t,
   paint_data: ptr,
   glyph: codepoint_t,
   font: *font_t,
 ): bool_t
+fn(extern("hb_paint_fill_glyph")) paint_fill_glyph(
+  funcs: *paint_funcs_t,
+  paint_data: ptr,
+  glyph: codepoint_t,
+  font: *font_t,
+  is_foreground: bool_t,
+  color: color_t,
+)
 fn(extern("hb_paint_push_clip_glyph")) paint_push_clip_glyph(
   funcs: *paint_funcs_t,
   paint_data: ptr,
   glyph: codepoint_t,
   font: *font_t,
-): {}
+)
 fn(extern("hb_paint_push_clip_rectangle")) paint_push_clip_rectangle(
   funcs: *paint_funcs_t,
   paint_data: ptr,
@@ -1519,17 +1658,26 @@ fn(extern("hb_paint_push_clip_rectangle")) paint_push_clip_rectangle(
   ymin: f32,
   xmax: f32,
   ymax: f32,
-): {}
+)
+fn(extern("hb_paint_push_clip_path_start")) paint_push_clip_path_start(
+  funcs: *paint_funcs_t,
+  paint_data: ptr,
+  draw_data: *ptr,
+): optref[draw_funcs_t]
+fn(extern("hb_paint_push_clip_path_end")) paint_push_clip_path_end(
+  funcs: *paint_funcs_t,
+  paint_data: ptr,
+)
 fn(extern("hb_paint_pop_clip")) paint_pop_clip(
   funcs: *paint_funcs_t,
   paint_data: ptr,
-): {}
+)
 fn(extern("hb_paint_color")) paint_color(
   funcs: *paint_funcs_t,
   paint_data: ptr,
   is_foreground: bool_t,
   color: color_t,
-): {}
+)
 fn(extern("hb_paint_image")) paint_image(
   funcs: *paint_funcs_t,
   paint_data: ptr,
@@ -1539,7 +1687,7 @@ fn(extern("hb_paint_image")) paint_image(
   format: tag_t,
   slant: f32,
   extents: *glyph_extents_t,
-): {}
+)
 fn(extern("hb_paint_linear_gradient")) paint_linear_gradient(
   funcs: *paint_funcs_t,
   paint_data: ptr,
@@ -1550,7 +1698,7 @@ fn(extern("hb_paint_linear_gradient")) paint_linear_gradient(
   y1: f32,
   x2: f32,
   y2: f32,
-): {}
+)
 fn(extern("hb_paint_radial_gradient")) paint_radial_gradient(
   funcs: *paint_funcs_t,
   paint_data: ptr,
@@ -1561,7 +1709,7 @@ fn(extern("hb_paint_radial_gradient")) paint_radial_gradient(
   x1: f32,
   y1: f32,
   r1: f32,
-): {}
+)
 fn(extern("hb_paint_sweep_gradient")) paint_sweep_gradient(
   funcs: *paint_funcs_t,
   paint_data: ptr,
@@ -1570,22 +1718,61 @@ fn(extern("hb_paint_sweep_gradient")) paint_sweep_gradient(
   y0: f32,
   start_angle: f32,
   end_angle: f32,
-): {}
+)
 fn(extern("hb_paint_push_group")) paint_push_group(
   funcs: *paint_funcs_t,
   paint_data: ptr,
-): {}
+)
+fn(extern("hb_paint_push_group_for")) paint_push_group_for(
+  funcs: *paint_funcs_t,
+  paint_data: ptr,
+  mode: paint_composite_mode_t,
+)
 fn(extern("hb_paint_pop_group")) paint_pop_group(
   funcs: *paint_funcs_t,
   paint_data: ptr,
   mode: paint_composite_mode_t,
-): {}
+)
 fn(extern("hb_paint_custom_palette_color")) paint_custom_palette_color(
   funcs: *paint_funcs_t,
   paint_data: ptr,
   color_index: u32,
   color: *color_t,
 ): bool_t
+fn(extern("hb_paint_reduce_linear_anchors")) paint_reduce_linear_anchors(
+  x0: f32,
+  y0: f32,
+  x1: f32,
+  y1: f32,
+  x2: f32,
+  y2: f32,
+  xx0: *f32,
+  yy0: *f32,
+  xx1: *f32,
+  yy1: *f32,
+)
+fn(extern("hb_paint_normalize_color_line")) paint_normalize_color_line(
+  stops: *color_stop_t,
+  len: u32,
+  min: *f32,
+  max: *f32,
+)
+type(alias) paint_sweep_gradient_tile_func_t = *fn(
+  f32,
+  color_t,
+  f32,
+  color_t,
+  ptr
+)
+fn(extern("hb_paint_sweep_gradient_tiles")) paint_sweep_gradient_tiles(
+  stops: *color_stop_t,
+  n_stops: u32,
+  extend: paint_extend_t,
+  start_angle: f32,
+  end_angle: f32,
+  emit_patch: paint_sweep_gradient_tile_func_t,
+  user_data: ptr,
+)
 type font_funcs_t = opaque[0, 1]
 fn(extern("hb_font_funcs_create")) font_funcs_create(): optref[font_funcs_t]
 fn(extern("hb_font_funcs_get_empty")) font_funcs_get_empty(): optref[font_funcs_t]
@@ -1594,7 +1781,7 @@ fn(extern("hb_font_funcs_reference")) font_funcs_reference(
 ): optref[font_funcs_t]
 fn(extern("hb_font_funcs_destroy")) font_funcs_destroy(
   ffuncs: *font_funcs_t,
-): {}
+)
 fn(extern("hb_font_funcs_set_user_data")) font_funcs_set_user_data(
   ffuncs: *font_funcs_t,
   key: *user_data_key_t,
@@ -1608,7 +1795,7 @@ fn(extern("hb_font_funcs_get_user_data")) font_funcs_get_user_data(
 ): ptr
 fn(extern("hb_font_funcs_make_immutable")) font_funcs_make_immutable(
   ffuncs: *font_funcs_t,
-): {}
+)
 fn(extern("hb_font_funcs_is_immutable")) font_funcs_is_immutable(
   ffuncs: *font_funcs_t,
 ): bool_t
@@ -1626,18 +1813,14 @@ type font_extents_t = {
   reserved2: position_t,
   reserved1: position_t,
 }
-#static assert-layout[font_extents_t](48, 4, [0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, ])
 type(alias) font_get_font_extents_func_t = *fn(
   *font_t,
   ptr,
   *font_extents_t,
   ptr
 ) -> bool_t
-#static assert-layout[font_get_font_extents_func_t](8, 8, [])
 type(alias) font_get_font_h_extents_func_t = font_get_font_extents_func_t
-#static assert-layout[font_get_font_h_extents_func_t](8, 8, [])
 type(alias) font_get_font_v_extents_func_t = font_get_font_extents_func_t
-#static assert-layout[font_get_font_v_extents_func_t](8, 8, [])
 type(alias) font_get_nominal_glyph_func_t = *fn(
   *font_t,
   ptr,
@@ -1645,7 +1828,6 @@ type(alias) font_get_nominal_glyph_func_t = *fn(
   *codepoint_t,
   ptr
 ) -> bool_t
-#static assert-layout[font_get_nominal_glyph_func_t](8, 8, [])
 type(alias) font_get_variation_glyph_func_t = *fn(
   *font_t,
   ptr,
@@ -1654,7 +1836,6 @@ type(alias) font_get_variation_glyph_func_t = *fn(
   *codepoint_t,
   ptr
 ) -> bool_t
-#static assert-layout[font_get_variation_glyph_func_t](8, 8, [])
 type(alias) font_get_nominal_glyphs_func_t = *fn(
   *font_t,
   ptr,
@@ -1665,18 +1846,14 @@ type(alias) font_get_nominal_glyphs_func_t = *fn(
   u32,
   ptr
 ) -> u32
-#static assert-layout[font_get_nominal_glyphs_func_t](8, 8, [])
 type(alias) font_get_glyph_advance_func_t = *fn(
   *font_t,
   ptr,
   codepoint_t,
   ptr
 ) -> position_t
-#static assert-layout[font_get_glyph_advance_func_t](8, 8, [])
 type(alias) font_get_glyph_h_advance_func_t = font_get_glyph_advance_func_t
-#static assert-layout[font_get_glyph_h_advance_func_t](8, 8, [])
 type(alias) font_get_glyph_v_advance_func_t = font_get_glyph_advance_func_t
-#static assert-layout[font_get_glyph_v_advance_func_t](8, 8, [])
 type(alias) font_get_glyph_advances_func_t = *fn(
   *font_t,
   ptr,
@@ -1686,12 +1863,9 @@ type(alias) font_get_glyph_advances_func_t = *fn(
   *position_t,
   u32,
   ptr
-) -> {}
-#static assert-layout[font_get_glyph_advances_func_t](8, 8, [])
+)
 type(alias) font_get_glyph_h_advances_func_t = font_get_glyph_advances_func_t
-#static assert-layout[font_get_glyph_h_advances_func_t](8, 8, [])
 type(alias) font_get_glyph_v_advances_func_t = font_get_glyph_advances_func_t
-#static assert-layout[font_get_glyph_v_advances_func_t](8, 8, [])
 type(alias) font_get_glyph_origin_func_t = *fn(
   *font_t,
   ptr,
@@ -1700,11 +1874,8 @@ type(alias) font_get_glyph_origin_func_t = *fn(
   *position_t,
   ptr
 ) -> bool_t
-#static assert-layout[font_get_glyph_origin_func_t](8, 8, [])
 type(alias) font_get_glyph_h_origin_func_t = font_get_glyph_origin_func_t
-#static assert-layout[font_get_glyph_h_origin_func_t](8, 8, [])
 type(alias) font_get_glyph_v_origin_func_t = font_get_glyph_origin_func_t
-#static assert-layout[font_get_glyph_v_origin_func_t](8, 8, [])
 type(alias) font_get_glyph_origins_func_t = *fn(
   *font_t,
   ptr,
@@ -1717,11 +1888,8 @@ type(alias) font_get_glyph_origins_func_t = *fn(
   u32,
   ptr
 ) -> bool_t
-#static assert-layout[font_get_glyph_origins_func_t](8, 8, [])
 type(alias) font_get_glyph_h_origins_func_t = font_get_glyph_origins_func_t
-#static assert-layout[font_get_glyph_h_origins_func_t](8, 8, [])
 type(alias) font_get_glyph_v_origins_func_t = font_get_glyph_origins_func_t
-#static assert-layout[font_get_glyph_v_origins_func_t](8, 8, [])
 type(alias) font_get_glyph_kerning_func_t = *fn(
   *font_t,
   ptr,
@@ -1729,9 +1897,7 @@ type(alias) font_get_glyph_kerning_func_t = *fn(
   codepoint_t,
   ptr
 ) -> position_t
-#static assert-layout[font_get_glyph_kerning_func_t](8, 8, [])
 type(alias) font_get_glyph_h_kerning_func_t = font_get_glyph_kerning_func_t
-#static assert-layout[font_get_glyph_h_kerning_func_t](8, 8, [])
 type(alias) font_get_glyph_extents_func_t = *fn(
   *font_t,
   ptr,
@@ -1739,7 +1905,6 @@ type(alias) font_get_glyph_extents_func_t = *fn(
   *glyph_extents_t,
   ptr
 ) -> bool_t
-#static assert-layout[font_get_glyph_extents_func_t](8, 8, [])
 type(alias) font_get_glyph_contour_point_func_t = *fn(
   *font_t,
   ptr,
@@ -1749,7 +1914,6 @@ type(alias) font_get_glyph_contour_point_func_t = *fn(
   *position_t,
   ptr
 ) -> bool_t
-#static assert-layout[font_get_glyph_contour_point_func_t](8, 8, [])
 type(alias) font_get_glyph_name_func_t = *fn(
   *font_t,
   ptr,
@@ -1758,7 +1922,6 @@ type(alias) font_get_glyph_name_func_t = *fn(
   u32,
   ptr
 ) -> bool_t
-#static assert-layout[font_get_glyph_name_func_t](8, 8, [])
 type(alias) font_get_glyph_from_name_func_t = *fn(
   *font_t,
   ptr,
@@ -1767,7 +1930,6 @@ type(alias) font_get_glyph_from_name_func_t = *fn(
   *codepoint_t,
   ptr
 ) -> bool_t
-#static assert-layout[font_get_glyph_from_name_func_t](8, 8, [])
 type(alias) font_draw_glyph_or_fail_func_t = *fn(
   *font_t,
   ptr,
@@ -1776,7 +1938,6 @@ type(alias) font_draw_glyph_or_fail_func_t = *fn(
   ptr,
   ptr
 ) -> bool_t
-#static assert-layout[font_draw_glyph_or_fail_func_t](8, 8, [])
 type(alias) font_paint_glyph_or_fail_func_t = *fn(
   *font_t,
   ptr,
@@ -1787,127 +1948,126 @@ type(alias) font_paint_glyph_or_fail_func_t = *fn(
   color_t,
   ptr
 ) -> bool_t
-#static assert-layout[font_paint_glyph_or_fail_func_t](8, 8, [])
 fn(extern("hb_font_funcs_set_font_h_extents_func")) font_funcs_set_font_h_extents_func(
   ffuncs: *font_funcs_t,
   func: font_get_font_h_extents_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_funcs_set_font_v_extents_func")) font_funcs_set_font_v_extents_func(
   ffuncs: *font_funcs_t,
   func: font_get_font_v_extents_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_funcs_set_nominal_glyph_func")) font_funcs_set_nominal_glyph_func(
   ffuncs: *font_funcs_t,
   func: font_get_nominal_glyph_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_funcs_set_nominal_glyphs_func")) font_funcs_set_nominal_glyphs_func(
   ffuncs: *font_funcs_t,
   func: font_get_nominal_glyphs_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_funcs_set_variation_glyph_func")) font_funcs_set_variation_glyph_func(
   ffuncs: *font_funcs_t,
   func: font_get_variation_glyph_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_funcs_set_glyph_h_advance_func")) font_funcs_set_glyph_h_advance_func(
   ffuncs: *font_funcs_t,
   func: font_get_glyph_h_advance_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_funcs_set_glyph_v_advance_func")) font_funcs_set_glyph_v_advance_func(
   ffuncs: *font_funcs_t,
   func: font_get_glyph_v_advance_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_funcs_set_glyph_h_advances_func")) font_funcs_set_glyph_h_advances_func(
   ffuncs: *font_funcs_t,
   func: font_get_glyph_h_advances_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_funcs_set_glyph_v_advances_func")) font_funcs_set_glyph_v_advances_func(
   ffuncs: *font_funcs_t,
   func: font_get_glyph_v_advances_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_funcs_set_glyph_h_origin_func")) font_funcs_set_glyph_h_origin_func(
   ffuncs: *font_funcs_t,
   func: font_get_glyph_h_origin_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_funcs_set_glyph_v_origin_func")) font_funcs_set_glyph_v_origin_func(
   ffuncs: *font_funcs_t,
   func: font_get_glyph_v_origin_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_funcs_set_glyph_h_origins_func")) font_funcs_set_glyph_h_origins_func(
   ffuncs: *font_funcs_t,
   func: font_get_glyph_h_origins_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_funcs_set_glyph_v_origins_func")) font_funcs_set_glyph_v_origins_func(
   ffuncs: *font_funcs_t,
   func: font_get_glyph_v_origins_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_funcs_set_glyph_h_kerning_func")) font_funcs_set_glyph_h_kerning_func(
   ffuncs: *font_funcs_t,
   func: font_get_glyph_h_kerning_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_funcs_set_glyph_extents_func")) font_funcs_set_glyph_extents_func(
   ffuncs: *font_funcs_t,
   func: font_get_glyph_extents_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_funcs_set_glyph_contour_point_func")) font_funcs_set_glyph_contour_point_func(
   ffuncs: *font_funcs_t,
   func: font_get_glyph_contour_point_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_funcs_set_glyph_name_func")) font_funcs_set_glyph_name_func(
   ffuncs: *font_funcs_t,
   func: font_get_glyph_name_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_funcs_set_glyph_from_name_func")) font_funcs_set_glyph_from_name_func(
   ffuncs: *font_funcs_t,
   func: font_get_glyph_from_name_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_funcs_set_draw_glyph_or_fail_func")) font_funcs_set_draw_glyph_or_fail_func(
   ffuncs: *font_funcs_t,
   func: font_draw_glyph_or_fail_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_funcs_set_paint_glyph_or_fail_func")) font_funcs_set_paint_glyph_or_fail_func(
   ffuncs: *font_funcs_t,
   func: font_paint_glyph_or_fail_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_get_h_extents")) font_get_h_extents(
   font: *font_t,
   extents: *font_extents_t,
@@ -1950,7 +2110,7 @@ fn(extern("hb_font_get_glyph_h_advances")) font_get_glyph_h_advances(
   glyph_stride: u32,
   first_advance: *position_t,
   advance_stride: u32,
-): {}
+)
 fn(extern("hb_font_get_glyph_v_advances")) font_get_glyph_v_advances(
   font: *font_t,
   count: u32,
@@ -1958,7 +2118,7 @@ fn(extern("hb_font_get_glyph_v_advances")) font_get_glyph_v_advances(
   glyph_stride: u32,
   first_advance: *position_t,
   advance_stride: u32,
-): {}
+)
 fn(extern("hb_font_get_glyph_h_origin")) font_get_glyph_h_origin(
   font: *font_t,
   glyph: codepoint_t,
@@ -2044,14 +2204,14 @@ fn(extern("hb_font_get_extents_for_direction")) font_get_extents_for_direction(
   font: *font_t,
   direction: direction_t,
   extents: *font_extents_t,
-): {}
+)
 fn(extern("hb_font_get_glyph_advance_for_direction")) font_get_glyph_advance_for_direction(
   font: *font_t,
   glyph: codepoint_t,
   direction: direction_t,
   x: *position_t,
   y: *position_t,
-): {}
+)
 fn(extern("hb_font_get_glyph_advances_for_direction")) font_get_glyph_advances_for_direction(
   font: *font_t,
   direction: direction_t,
@@ -2060,28 +2220,28 @@ fn(extern("hb_font_get_glyph_advances_for_direction")) font_get_glyph_advances_f
   glyph_stride: u32,
   first_advance: *position_t,
   advance_stride: u32,
-): {}
+)
 fn(extern("hb_font_get_glyph_origin_for_direction")) font_get_glyph_origin_for_direction(
   font: *font_t,
   glyph: codepoint_t,
   direction: direction_t,
   x: *position_t,
   y: *position_t,
-): {}
+)
 fn(extern("hb_font_add_glyph_origin_for_direction")) font_add_glyph_origin_for_direction(
   font: *font_t,
   glyph: codepoint_t,
   direction: direction_t,
   x: *position_t,
   y: *position_t,
-): {}
+)
 fn(extern("hb_font_subtract_glyph_origin_for_direction")) font_subtract_glyph_origin_for_direction(
   font: *font_t,
   glyph: codepoint_t,
   direction: direction_t,
   x: *position_t,
   y: *position_t,
-): {}
+)
 fn(extern("hb_font_get_glyph_kerning_for_direction")) font_get_glyph_kerning_for_direction(
   font: *font_t,
   first_glyph: codepoint_t,
@@ -2089,7 +2249,7 @@ fn(extern("hb_font_get_glyph_kerning_for_direction")) font_get_glyph_kerning_for
   direction: direction_t,
   x: *position_t,
   y: *position_t,
-): {}
+)
 fn(extern("hb_font_get_glyph_extents_for_origin")) font_get_glyph_extents_for_origin(
   font: *font_t,
   glyph: codepoint_t,
@@ -2109,7 +2269,7 @@ fn(extern("hb_font_glyph_to_string")) font_glyph_to_string(
   glyph: codepoint_t,
   s: *u8,
   size: u32,
-): {}
+)
 fn(extern("hb_font_glyph_from_string")) font_glyph_from_string(
   font: *font_t,
   s: *u8,
@@ -2121,7 +2281,7 @@ fn(extern("hb_font_draw_glyph")) font_draw_glyph(
   glyph: codepoint_t,
   dfuncs: *draw_funcs_t,
   draw_data: ptr,
-): {}
+)
 fn(extern("hb_font_paint_glyph")) font_paint_glyph(
   font: *font_t,
   glyph: codepoint_t,
@@ -2129,7 +2289,7 @@ fn(extern("hb_font_paint_glyph")) font_paint_glyph(
   paint_data: ptr,
   palette_index: u32,
   foreground: color_t,
-): {}
+)
 fn(extern("hb_font_create")) font_create(
   face: *face_t,
 ): optref[font_t]
@@ -2142,7 +2302,7 @@ fn(extern("hb_font_reference")) font_reference(
 ): optref[font_t]
 fn(extern("hb_font_destroy")) font_destroy(
   font: *font_t,
-): {}
+)
 fn(extern("hb_font_set_user_data")) font_set_user_data(
   font: *font_t,
   key: *user_data_key_t,
@@ -2156,7 +2316,7 @@ fn(extern("hb_font_get_user_data")) font_get_user_data(
 ): ptr
 fn(extern("hb_font_make_immutable")) font_make_immutable(
   font: *font_t,
-): {}
+)
 fn(extern("hb_font_is_immutable")) font_is_immutable(
   font: *font_t,
 ): bool_t
@@ -2165,18 +2325,18 @@ fn(extern("hb_font_get_serial")) font_get_serial(
 ): u32
 fn(extern("hb_font_changed")) font_changed(
   font: *font_t,
-): {}
+)
 fn(extern("hb_font_set_parent")) font_set_parent(
   font: *font_t,
   parent: *font_t,
-): {}
+)
 fn(extern("hb_font_get_parent")) font_get_parent(
   font: *font_t,
 ): optref[font_t]
 fn(extern("hb_font_set_face")) font_set_face(
   font: *font_t,
   face: *face_t,
-): {}
+)
 fn(extern("hb_font_get_face")) font_get_face(
   font: *font_t,
 ): optref[face_t]
@@ -2185,12 +2345,12 @@ fn(extern("hb_font_set_funcs")) font_set_funcs(
   klass: *font_funcs_t,
   font_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_set_funcs_data")) font_set_funcs_data(
   font: *font_t,
   font_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_set_funcs_using")) font_set_funcs_using(
   font: *font_t,
   name: *u8,
@@ -2200,26 +2360,26 @@ fn(extern("hb_font_set_scale")) font_set_scale(
   font: *font_t,
   x_scale: i32,
   y_scale: i32,
-): {}
+)
 fn(extern("hb_font_get_scale")) font_get_scale(
   font: *font_t,
   x_scale: *i32,
   y_scale: *i32,
-): {}
+)
 fn(extern("hb_font_set_ppem")) font_set_ppem(
   font: *font_t,
   x_ppem: u32,
   y_ppem: u32,
-): {}
+)
 fn(extern("hb_font_get_ppem")) font_get_ppem(
   font: *font_t,
   x_ppem: *u32,
   y_ppem: *u32,
-): {}
+)
 fn(extern("hb_font_set_ptem")) font_set_ptem(
   font: *font_t,
   ptem: f32,
-): {}
+)
 fn(extern("hb_font_get_ptem")) font_get_ptem(
   font: *font_t,
 ): f32
@@ -2231,17 +2391,17 @@ fn(extern("hb_font_set_synthetic_bold")) font_set_synthetic_bold(
   x_embolden: f32,
   y_embolden: f32,
   in_place: bool_t,
-): {}
+)
 fn(extern("hb_font_get_synthetic_bold")) font_get_synthetic_bold(
   font: *font_t,
   x_embolden: *f32,
   y_embolden: *f32,
   in_place: *bool_t,
-): {}
+)
 fn(extern("hb_font_set_synthetic_slant")) font_set_synthetic_slant(
   font: *font_t,
   slant: f32,
-): {}
+)
 fn(extern("hb_font_get_synthetic_slant")) font_get_synthetic_slant(
   font: *font_t,
 ): f32
@@ -2249,17 +2409,17 @@ fn(extern("hb_font_set_variations")) font_set_variations(
   font: *font_t,
   variations: *variation_t,
   variations_length: u32,
-): {}
+)
 fn(extern("hb_font_set_variation")) font_set_variation(
   font: *font_t,
   tag: tag_t,
   value: f32,
-): {}
+)
 fn(extern("hb_font_set_var_coords_design")) font_set_var_coords_design(
   font: *font_t,
   coords: *f32,
   coords_length: u32,
-): {}
+)
 fn(extern("hb_font_get_var_coords_design")) font_get_var_coords_design(
   font: *font_t,
   length: *u32,
@@ -2268,7 +2428,7 @@ fn(extern("hb_font_set_var_coords_normalized")) font_set_var_coords_normalized(
   font: *font_t,
   coords: *i32,
   coords_length: u32,
-): {}
+)
 fn(extern("hb_font_get_var_coords_normalized")) font_get_var_coords_normalized(
   font: *font_t,
   length: *u32,
@@ -2276,7 +2436,7 @@ fn(extern("hb_font_get_var_coords_normalized")) font_get_var_coords_normalized(
 fn(extern("hb_font_set_var_named_instance")) font_set_var_named_instance(
   font: *font_t,
   instance_index: u32,
-): {}
+)
 fn(extern("hb_font_get_var_named_instance")) font_get_var_named_instance(
   font: *font_t,
 ): u32
@@ -2287,14 +2447,12 @@ type glyph_info_t = {
   var1: var_int_t,
   var2: var_int_t,
 }
-#static assert-layout[glyph_info_t](20, 4, [0, 4, 8, 12, 16, ])
 type glyph_flags_t = either(u32, partial) {
   HB_GLYPH_FLAG_UNSAFE_TO_BREAK = 1,
   HB_GLYPH_FLAG_UNSAFE_TO_CONCAT = 2,
   HB_GLYPH_FLAG_SAFE_TO_INSERT_TATWEEL = 4,
   HB_GLYPH_FLAG_DEFINED = 7,
 }
-#static assert-layout[glyph_flags_t](4, 4, [])
 fn(extern("hb_glyph_info_get_glyph_flags")) glyph_info_get_glyph_flags(
   info: *glyph_info_t,
 ): glyph_flags_t
@@ -2305,7 +2463,6 @@ type glyph_position_t = {
   y_offset: position_t,
   var: var_int_t,
 }
-#static assert-layout[glyph_position_t](20, 4, [0, 4, 8, 12, 16, ])
 type segment_properties_t = {
   direction: direction_t,
   script: script_t,
@@ -2313,7 +2470,6 @@ type segment_properties_t = {
   reserved1: ptr,
   reserved2: ptr,
 }
-#static assert-layout[segment_properties_t](32, 8, [0, 4, 8, 16, 24, ])
 fn(extern("hb_segment_properties_equal")) segment_properties_equal(
   a: *segment_properties_t,
   b: *segment_properties_t,
@@ -2324,7 +2480,7 @@ fn(extern("hb_segment_properties_hash")) segment_properties_hash(
 fn(extern("hb_segment_properties_overlay")) segment_properties_overlay(
   p: *segment_properties_t,
   src: *segment_properties_t,
-): {}
+)
 type buffer_t = opaque[0, 1]
 fn(extern("hb_buffer_create")) buffer_create(): optref[buffer_t]
 fn(extern("hb_buffer_create_similar")) buffer_create_similar(
@@ -2332,14 +2488,14 @@ fn(extern("hb_buffer_create_similar")) buffer_create_similar(
 ): optref[buffer_t]
 fn(extern("hb_buffer_reset")) buffer_reset(
   buffer: *buffer_t,
-): {}
+)
 fn(extern("hb_buffer_get_empty")) buffer_get_empty(): optref[buffer_t]
 fn(extern("hb_buffer_reference")) buffer_reference(
   buffer: *buffer_t,
 ): optref[buffer_t]
 fn(extern("hb_buffer_destroy")) buffer_destroy(
   buffer: *buffer_t,
-): {}
+)
 fn(extern("hb_buffer_set_user_data")) buffer_set_user_data(
   buffer: *buffer_t,
   key: *user_data_key_t,
@@ -2356,53 +2512,52 @@ type buffer_content_type_t = either(u32, partial) {
   HB_BUFFER_CONTENT_TYPE_UNICODE = 1,
   HB_BUFFER_CONTENT_TYPE_GLYPHS = 2,
 }
-#static assert-layout[buffer_content_type_t](4, 4, [])
 fn(extern("hb_buffer_set_content_type")) buffer_set_content_type(
   buffer: *buffer_t,
   content_type: buffer_content_type_t,
-): {}
+)
 fn(extern("hb_buffer_get_content_type")) buffer_get_content_type(
   buffer: *buffer_t,
 ): buffer_content_type_t
 fn(extern("hb_buffer_set_unicode_funcs")) buffer_set_unicode_funcs(
   buffer: *buffer_t,
   unicode_funcs: *unicode_funcs_t,
-): {}
+)
 fn(extern("hb_buffer_get_unicode_funcs")) buffer_get_unicode_funcs(
   buffer: *buffer_t,
 ): optref[unicode_funcs_t]
 fn(extern("hb_buffer_set_direction")) buffer_set_direction(
   buffer: *buffer_t,
   direction: direction_t,
-): {}
+)
 fn(extern("hb_buffer_get_direction")) buffer_get_direction(
   buffer: *buffer_t,
 ): direction_t
 fn(extern("hb_buffer_set_script")) buffer_set_script(
   buffer: *buffer_t,
   script: script_t,
-): {}
+)
 fn(extern("hb_buffer_get_script")) buffer_get_script(
   buffer: *buffer_t,
 ): script_t
 fn(extern("hb_buffer_set_language")) buffer_set_language(
   buffer: *buffer_t,
   language: language_t,
-): {}
+)
 fn(extern("hb_buffer_get_language")) buffer_get_language(
   buffer: *buffer_t,
 ): language_t
 fn(extern("hb_buffer_set_segment_properties")) buffer_set_segment_properties(
   buffer: *buffer_t,
   props: *segment_properties_t,
-): {}
+)
 fn(extern("hb_buffer_get_segment_properties")) buffer_get_segment_properties(
   buffer: *buffer_t,
   props: *segment_properties_t,
-): {}
+)
 fn(extern("hb_buffer_guess_segment_properties")) buffer_guess_segment_properties(
   buffer: *buffer_t,
-): {}
+)
 type buffer_flags_t = either(u32, partial) {
   HB_BUFFER_FLAG_DEFAULT = 0,
   HB_BUFFER_FLAG_BOT = 1,
@@ -2415,11 +2570,10 @@ type buffer_flags_t = either(u32, partial) {
   HB_BUFFER_FLAG_PRODUCE_SAFE_TO_INSERT_TATWEEL = 128,
   HB_BUFFER_FLAG_DEFINED = 255,
 }
-#static assert-layout[buffer_flags_t](4, 4, [])
 fn(extern("hb_buffer_set_flags")) buffer_set_flags(
   buffer: *buffer_t,
   flags: buffer_flags_t,
-): {}
+)
 fn(extern("hb_buffer_get_flags")) buffer_get_flags(
   buffer: *buffer_t,
 ): buffer_flags_t
@@ -2429,52 +2583,51 @@ type buffer_cluster_level_t = either(u32, partial) {
   HB_BUFFER_CLUSTER_LEVEL_CHARACTERS = 2,
   HB_BUFFER_CLUSTER_LEVEL_GRAPHEMES = 3,
 }
-#static assert-layout[buffer_cluster_level_t](4, 4, [])
 fn(extern("hb_buffer_set_cluster_level")) buffer_set_cluster_level(
   buffer: *buffer_t,
   cluster_level: buffer_cluster_level_t,
-): {}
+)
 fn(extern("hb_buffer_get_cluster_level")) buffer_get_cluster_level(
   buffer: *buffer_t,
 ): buffer_cluster_level_t
 fn(extern("hb_buffer_set_replacement_codepoint")) buffer_set_replacement_codepoint(
   buffer: *buffer_t,
   replacement: codepoint_t,
-): {}
+)
 fn(extern("hb_buffer_get_replacement_codepoint")) buffer_get_replacement_codepoint(
   buffer: *buffer_t,
 ): codepoint_t
 fn(extern("hb_buffer_set_invisible_glyph")) buffer_set_invisible_glyph(
   buffer: *buffer_t,
   invisible: codepoint_t,
-): {}
+)
 fn(extern("hb_buffer_get_invisible_glyph")) buffer_get_invisible_glyph(
   buffer: *buffer_t,
 ): codepoint_t
 fn(extern("hb_buffer_set_not_found_glyph")) buffer_set_not_found_glyph(
   buffer: *buffer_t,
   not_found: codepoint_t,
-): {}
+)
 fn(extern("hb_buffer_get_not_found_glyph")) buffer_get_not_found_glyph(
   buffer: *buffer_t,
 ): codepoint_t
 fn(extern("hb_buffer_set_not_found_variation_selector_glyph")) buffer_set_not_found_variation_selector_glyph(
   buffer: *buffer_t,
   not_found_variation_selector: codepoint_t,
-): {}
+)
 fn(extern("hb_buffer_get_not_found_variation_selector_glyph")) buffer_get_not_found_variation_selector_glyph(
   buffer: *buffer_t,
 ): codepoint_t
 fn(extern("hb_buffer_set_random_state")) buffer_set_random_state(
   buffer: *buffer_t,
   state: u32,
-): {}
+)
 fn(extern("hb_buffer_get_random_state")) buffer_get_random_state(
   buffer: *buffer_t,
 ): u32
 fn(extern("hb_buffer_clear_contents")) buffer_clear_contents(
   buffer: *buffer_t,
-): {}
+)
 fn(extern("hb_buffer_pre_allocate")) buffer_pre_allocate(
   buffer: *buffer_t,
   size: u32,
@@ -2484,61 +2637,61 @@ fn(extern("hb_buffer_allocation_successful")) buffer_allocation_successful(
 ): bool_t
 fn(extern("hb_buffer_reverse")) buffer_reverse(
   buffer: *buffer_t,
-): {}
+)
 fn(extern("hb_buffer_reverse_range")) buffer_reverse_range(
   buffer: *buffer_t,
   start: u32,
   end: u32,
-): {}
+)
 fn(extern("hb_buffer_reverse_clusters")) buffer_reverse_clusters(
   buffer: *buffer_t,
-): {}
+)
 fn(extern("hb_buffer_add")) buffer_add(
   buffer: *buffer_t,
   codepoint: codepoint_t,
   cluster: u32,
-): {}
+)
 fn(extern("hb_buffer_add_utf8")) buffer_add_utf8(
   buffer: *buffer_t,
   text: *u8,
   text_length: i32,
   item_offset: u32,
   item_length: i32,
-): {}
+)
 fn(extern("hb_buffer_add_utf16")) buffer_add_utf16(
   buffer: *buffer_t,
   text: *u16,
   text_length: i32,
   item_offset: u32,
   item_length: i32,
-): {}
+)
 fn(extern("hb_buffer_add_utf32")) buffer_add_utf32(
   buffer: *buffer_t,
   text: *u32,
   text_length: i32,
   item_offset: u32,
   item_length: i32,
-): {}
+)
 fn(extern("hb_buffer_add_latin1")) buffer_add_latin1(
   buffer: *buffer_t,
   text: *u8,
   text_length: i32,
   item_offset: u32,
   item_length: i32,
-): {}
+)
 fn(extern("hb_buffer_add_codepoints")) buffer_add_codepoints(
   buffer: *buffer_t,
   text: *codepoint_t,
   text_length: i32,
   item_offset: u32,
   item_length: i32,
-): {}
+)
 fn(extern("hb_buffer_append")) buffer_append(
   buffer: *buffer_t,
   source: *buffer_t,
   start: u32,
   end: u32,
-): {}
+)
 fn(extern("hb_buffer_set_length")) buffer_set_length(
   buffer: *buffer_t,
   length: u32,
@@ -2559,7 +2712,7 @@ fn(extern("hb_buffer_has_positions")) buffer_has_positions(
 ): bool_t
 fn(extern("hb_buffer_normalize_glyphs")) buffer_normalize_glyphs(
   buffer: *buffer_t,
-): {}
+)
 type buffer_serialize_flags_t = either(u32, partial) {
   HB_BUFFER_SERIALIZE_FLAG_DEFAULT = 0,
   HB_BUFFER_SERIALIZE_FLAG_NO_CLUSTERS = 1,
@@ -2570,13 +2723,11 @@ type buffer_serialize_flags_t = either(u32, partial) {
   HB_BUFFER_SERIALIZE_FLAG_NO_ADVANCES = 32,
   HB_BUFFER_SERIALIZE_FLAG_DEFINED = 63,
 }
-#static assert-layout[buffer_serialize_flags_t](4, 4, [])
 type buffer_serialize_format_t = either(u32, partial) {
   HB_BUFFER_SERIALIZE_FORMAT_TEXT = 1413830740,
   HB_BUFFER_SERIALIZE_FORMAT_JSON = 1246973774,
   HB_BUFFER_SERIALIZE_FORMAT_INVALID = 0,
 }
-#static assert-layout[buffer_serialize_format_t](4, 4, [])
 fn(extern("hb_buffer_serialize_format_from_string")) buffer_serialize_format_from_string(
   str: *u8,
   len: i32,
@@ -2643,7 +2794,6 @@ type buffer_diff_flags_t = either(u32, partial) {
   HB_BUFFER_DIFF_FLAG_GLYPH_FLAGS_MISMATCH = 64,
   HB_BUFFER_DIFF_FLAG_POSITION_MISMATCH = 128,
 }
-#static assert-layout[buffer_diff_flags_t](4, 4, [])
 fn(extern("hb_buffer_diff")) buffer_diff(
   buffer: *buffer_t,
   reference: *buffer_t,
@@ -2656,16 +2806,15 @@ type(alias) buffer_message_func_t = *fn(
   *u8,
   ptr
 ) -> bool_t
-#static assert-layout[buffer_message_func_t](8, 8, [])
 fn(extern("hb_buffer_set_message_func")) buffer_set_message_func(
   buffer: *buffer_t,
   func: buffer_message_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_buffer_changed")) buffer_changed(
   buffer: *buffer_t,
-): {}
+)
 type(alias) font_get_glyph_func_t = *fn(
   *font_t,
   ptr,
@@ -2674,25 +2823,23 @@ type(alias) font_get_glyph_func_t = *fn(
   *codepoint_t,
   ptr
 ) -> bool_t
-#static assert-layout[font_get_glyph_func_t](8, 8, [])
 fn(extern("hb_font_funcs_set_glyph_func")) font_funcs_set_glyph_func(
   ffuncs: *font_funcs_t,
   func: font_get_glyph_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 type(alias) unicode_eastasian_width_func_t = *fn(
   *unicode_funcs_t,
   codepoint_t,
   ptr
 ) -> u32
-#static assert-layout[unicode_eastasian_width_func_t](8, 8, [])
 fn(extern("hb_unicode_funcs_set_eastasian_width_func")) unicode_funcs_set_eastasian_width_func(
   ufuncs: *unicode_funcs_t,
   func: unicode_eastasian_width_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_unicode_eastasian_width")) unicode_eastasian_width(
   ufuncs: *unicode_funcs_t,
   unicode: codepoint_t,
@@ -2703,26 +2850,24 @@ type(alias) unicode_decompose_compatibility_func_t = *fn(
   *codepoint_t,
   ptr
 ) -> u32
-#static assert-layout[unicode_decompose_compatibility_func_t](8, 8, [])
 fn(extern("hb_unicode_funcs_set_decompose_compatibility_func")) unicode_funcs_set_decompose_compatibility_func(
   ufuncs: *unicode_funcs_t,
   func: unicode_decompose_compatibility_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_unicode_decompose_compatibility")) unicode_decompose_compatibility(
   ufuncs: *unicode_funcs_t,
   u: codepoint_t,
   decomposed: *codepoint_t,
 ): u32
 type(alias) font_get_glyph_v_kerning_func_t = font_get_glyph_kerning_func_t
-#static assert-layout[font_get_glyph_v_kerning_func_t](8, 8, [])
 fn(extern("hb_font_funcs_set_glyph_v_kerning_func")) font_funcs_set_glyph_v_kerning_func(
   ffuncs: *font_funcs_t,
   func: font_get_glyph_v_kerning_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_get_glyph_v_kerning")) font_get_glyph_v_kerning(
   font: *font_t,
   top_glyph: codepoint_t,
@@ -2735,8 +2880,7 @@ type(alias) font_get_glyph_shape_func_t = *fn(
   *draw_funcs_t,
   ptr,
   ptr
-) -> {}
-#static assert-layout[font_get_glyph_shape_func_t](8, 8, [])
+)
 type(alias) font_draw_glyph_func_t = *fn(
   *font_t,
   ptr,
@@ -2744,8 +2888,7 @@ type(alias) font_draw_glyph_func_t = *fn(
   *draw_funcs_t,
   ptr,
   ptr
-) -> {}
-#static assert-layout[font_draw_glyph_func_t](8, 8, [])
+)
 type(alias) font_paint_glyph_func_t = *fn(
   *font_t,
   ptr,
@@ -2756,37 +2899,36 @@ type(alias) font_paint_glyph_func_t = *fn(
   color_t,
   ptr
 ) -> bool_t
-#static assert-layout[font_paint_glyph_func_t](8, 8, [])
 fn(extern("hb_font_funcs_set_glyph_shape_func")) font_funcs_set_glyph_shape_func(
   ffuncs: *font_funcs_t,
   func: font_get_glyph_shape_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_funcs_set_draw_glyph_func")) font_funcs_set_draw_glyph_func(
   ffuncs: *font_funcs_t,
   func: font_draw_glyph_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_funcs_set_paint_glyph_func")) font_funcs_set_paint_glyph_func(
   ffuncs: *font_funcs_t,
   func: font_paint_glyph_func_t,
   user_data: ptr,
   destroy: destroy_func_t,
-): {}
+)
 fn(extern("hb_font_get_glyph_shape")) font_get_glyph_shape(
   font: *font_t,
   glyph: codepoint_t,
   dfuncs: *draw_funcs_t,
   draw_data: ptr,
-): {}
+)
 fn(extern("hb_shape")) shape(
   font: *font_t,
   buffer: *buffer_t,
   features: *feature_t,
   num_features: u32,
-): {}
+)
 fn(extern("hb_shape_full")) shape_full(
   font: *font_t,
   buffer: *buffer_t,
@@ -2834,7 +2976,7 @@ fn(extern("hb_shape_plan_reference")) shape_plan_reference(
 ): optref[shape_plan_t]
 fn(extern("hb_shape_plan_destroy")) shape_plan_destroy(
   shape_plan: *shape_plan_t,
-): {}
+)
 fn(extern("hb_shape_plan_set_user_data")) shape_plan_set_user_data(
   shape_plan: *shape_plan_t,
   key: *user_data_key_t,
@@ -2865,7 +3007,6 @@ type style_tag_t = either(u32, partial) {
   HB_STYLE_TAG_WEIGHT = 2003265652,
   _HB_STYLE_TAG_MAX_VALUE = 2147483647,
 }
-#static assert-layout[style_tag_t](4, 4, [])
 fn(extern("hb_style_get_value")) style_get_value(
   font: *font_t,
   style_tag: style_tag_t,
@@ -2874,10 +3015,126 @@ fn(extern("hb_version")) version(
   major: *u32,
   minor: *u32,
   micro: *u32,
-): {}
+)
 fn(extern("hb_version_string")) version_string(): optref[u8]
 fn(extern("hb_version_atleast")) version_atleast(
   major: u32,
   minor: u32,
   micro: u32,
 ): bool_t
+
+fn(test) c-layouts() {
+  assert-layout[bool_t](4, 4, [])
+  assert-layout[codepoint_t](4, 4, [])
+  assert-layout[position_t](4, 4, [])
+  assert-layout[mask_t](4, 4, [])
+  assert-layout[_hb_var_int_t](4, 4, [])
+  assert-layout[var_int_t](4, 4, [])
+  assert-layout[_hb_var_num_t](4, 4, [])
+  assert-layout[var_num_t](4, 4, [])
+  assert-layout[tag_t](4, 4, [])
+  assert-layout[direction_t](4, 4, [])
+  assert-layout[language_t](8, 8, [])
+  assert-layout[script_t](4, 4, [])
+  assert-layout[user_data_key_t](1, 1, [0, ])
+  assert-layout[destroy_func_t](8, 8, [])
+  assert-layout[feature_t](16, 4, [0, 4, 8, 12, ])
+  assert-layout[variation_t](8, 4, [0, 4, ])
+  assert-layout[color_t](4, 4, [])
+  assert-layout[glyph_extents_t](16, 4, [0, 4, 8, 12, ])
+  assert-layout[memory_mode_t](4, 4, [])
+  assert-layout[unicode_general_category_t](4, 4, [])
+  assert-layout[unicode_combining_class_t](4, 4, [])
+  assert-layout[unicode_combining_class_func_t](8, 8, [])
+  assert-layout[unicode_general_category_func_t](8, 8, [])
+  assert-layout[unicode_mirroring_func_t](8, 8, [])
+  assert-layout[unicode_script_func_t](8, 8, [])
+  assert-layout[unicode_compose_func_t](8, 8, [])
+  assert-layout[unicode_decompose_func_t](8, 8, [])
+  assert-layout[reference_table_func_t](8, 8, [])
+  assert-layout[get_table_tags_func_t](8, 8, [])
+  assert-layout[draw_state_t](48, 4, [0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, ])
+  assert-layout[draw_move_to_func_t](8, 8, [])
+  assert-layout[draw_line_to_func_t](8, 8, [])
+  assert-layout[draw_quadratic_to_func_t](8, 8, [])
+  assert-layout[draw_cubic_to_func_t](8, 8, [])
+  assert-layout[draw_close_path_func_t](8, 8, [])
+  assert-layout[draw_set_budget_func_t](8, 8, [])
+  assert-layout[draw_get_budget_func_t](8, 8, [])
+  assert-layout[draw_get_budget_remaining_func_t](8, 8, [])
+  assert-layout[draw_line_cap_t](4, 4, [])
+  assert-layout[paint_set_budget_func_t](8, 8, [])
+  assert-layout[paint_get_budget_func_t](8, 8, [])
+  assert-layout[paint_get_budget_remaining_func_t](8, 8, [])
+  assert-layout[paint_push_transform_func_t](8, 8, [])
+  assert-layout[paint_pop_transform_func_t](8, 8, [])
+  assert-layout[paint_color_glyph_func_t](8, 8, [])
+  assert-layout[paint_fill_glyph_func_t](8, 8, [])
+  assert-layout[paint_push_clip_glyph_func_t](8, 8, [])
+  assert-layout[paint_push_clip_rectangle_func_t](8, 8, [])
+  assert-layout[paint_push_clip_path_start_func_t](8, 8, [])
+  assert-layout[paint_push_clip_path_end_func_t](8, 8, [])
+  assert-layout[paint_pop_clip_func_t](8, 8, [])
+  assert-layout[paint_color_func_t](8, 8, [])
+  assert-layout[paint_image_func_t](8, 8, [])
+  assert-layout[color_stop_t](12, 4, [0, 4, 8, ])
+  assert-layout[paint_extend_t](4, 4, [])
+  assert-layout[color_line_get_color_stops_func_t](8, 8, [])
+  assert-layout[color_line_get_extend_func_t](8, 8, [])
+  assert-layout[color_line_t](104, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, ])
+  assert-layout[paint_linear_gradient_func_t](8, 8, [])
+  assert-layout[paint_radial_gradient_func_t](8, 8, [])
+  assert-layout[paint_sweep_gradient_func_t](8, 8, [])
+  assert-layout[paint_composite_mode_t](4, 4, [])
+  assert-layout[paint_push_group_func_t](8, 8, [])
+  assert-layout[paint_push_group_for_func_t](8, 8, [])
+  assert-layout[paint_pop_group_func_t](8, 8, [])
+  assert-layout[paint_custom_palette_color_func_t](8, 8, [])
+  assert-layout[paint_sweep_gradient_tile_func_t](8, 8, [])
+  assert-layout[font_extents_t](48, 4, [0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, ])
+  assert-layout[font_get_font_extents_func_t](8, 8, [])
+  assert-layout[font_get_font_h_extents_func_t](8, 8, [])
+  assert-layout[font_get_font_v_extents_func_t](8, 8, [])
+  assert-layout[font_get_nominal_glyph_func_t](8, 8, [])
+  assert-layout[font_get_variation_glyph_func_t](8, 8, [])
+  assert-layout[font_get_nominal_glyphs_func_t](8, 8, [])
+  assert-layout[font_get_glyph_advance_func_t](8, 8, [])
+  assert-layout[font_get_glyph_h_advance_func_t](8, 8, [])
+  assert-layout[font_get_glyph_v_advance_func_t](8, 8, [])
+  assert-layout[font_get_glyph_advances_func_t](8, 8, [])
+  assert-layout[font_get_glyph_h_advances_func_t](8, 8, [])
+  assert-layout[font_get_glyph_v_advances_func_t](8, 8, [])
+  assert-layout[font_get_glyph_origin_func_t](8, 8, [])
+  assert-layout[font_get_glyph_h_origin_func_t](8, 8, [])
+  assert-layout[font_get_glyph_v_origin_func_t](8, 8, [])
+  assert-layout[font_get_glyph_origins_func_t](8, 8, [])
+  assert-layout[font_get_glyph_h_origins_func_t](8, 8, [])
+  assert-layout[font_get_glyph_v_origins_func_t](8, 8, [])
+  assert-layout[font_get_glyph_kerning_func_t](8, 8, [])
+  assert-layout[font_get_glyph_h_kerning_func_t](8, 8, [])
+  assert-layout[font_get_glyph_extents_func_t](8, 8, [])
+  assert-layout[font_get_glyph_contour_point_func_t](8, 8, [])
+  assert-layout[font_get_glyph_name_func_t](8, 8, [])
+  assert-layout[font_get_glyph_from_name_func_t](8, 8, [])
+  assert-layout[font_draw_glyph_or_fail_func_t](8, 8, [])
+  assert-layout[font_paint_glyph_or_fail_func_t](8, 8, [])
+  assert-layout[glyph_info_t](20, 4, [0, 4, 8, 12, 16, ])
+  assert-layout[glyph_flags_t](4, 4, [])
+  assert-layout[glyph_position_t](20, 4, [0, 4, 8, 12, 16, ])
+  assert-layout[segment_properties_t](32, 8, [0, 4, 8, 16, 24, ])
+  assert-layout[buffer_content_type_t](4, 4, [])
+  assert-layout[buffer_flags_t](4, 4, [])
+  assert-layout[buffer_cluster_level_t](4, 4, [])
+  assert-layout[buffer_serialize_flags_t](4, 4, [])
+  assert-layout[buffer_serialize_format_t](4, 4, [])
+  assert-layout[buffer_diff_flags_t](4, 4, [])
+  assert-layout[buffer_message_func_t](8, 8, [])
+  assert-layout[font_get_glyph_func_t](8, 8, [])
+  assert-layout[unicode_eastasian_width_func_t](8, 8, [])
+  assert-layout[unicode_decompose_compatibility_func_t](8, 8, [])
+  assert-layout[font_get_glyph_v_kerning_func_t](8, 8, [])
+  assert-layout[font_get_glyph_shape_func_t](8, 8, [])
+  assert-layout[font_draw_glyph_func_t](8, 8, [])
+  assert-layout[font_paint_glyph_func_t](8, 8, [])
+  assert-layout[style_tag_t](4, 4, [])
+}

@@ -459,7 +459,6 @@ pub struct LambdaType {
 #[derive(Clone, Copy)]
 pub struct LambdaObjectType {
     pub function_type: TypeId,
-    pub parsed_id: ParsedId,
     pub struct_representation: TypeId,
 }
 
@@ -658,8 +657,11 @@ impl TypedProgram {
                         && lt1.parsed_id == lt2.parsed_id
                 }
             }
-            // Unlike lambda objects, ability objects are interned by content:
-            // every mention of dyn[a[x = t]] must be the same type
+            // dyn objects are interned by content: every mention of dyn[fn(t) -> u] or
+            // dyn[a[x = t]] must be the same type
+            (Type::LambdaObject(lo1), Type::LambdaObject(lo2)) => {
+                lo1.function_type == lo2.function_type
+            }
             (Type::AbilityObject(ao1), Type::AbilityObject(ao2)) => ao1.signature == ao2.signature,
             (Type::StaticValue(vt1), Type::StaticValue(vt2)) => {
                 vt1.family_type_id == vt2.family_type_id && vt1.value_id == vt2.value_id
@@ -759,9 +761,10 @@ impl TypedProgram {
             Type::Float(ft) => discriminant(ft).hash(state),
             Type::Pointer => {}
             Type::Never => {}
-            Type::Generic(_) | Type::LambdaObject(_) => {
+            Type::Generic(_) => {
                 unreachable!("{} is not deduped", typ.kind_name())
             }
+            Type::LambdaObject(lo) => lo.function_type.hash(state),
             Type::AbilityObject(ao) => {
                 ao.signature.specialized_ability_id.hash(state);
                 ao.signature.impl_arguments.hash(state);
@@ -781,7 +784,7 @@ impl TypedProgram {
 
 impl Type {
     fn is_deduped(&self) -> bool {
-        !matches!(self, Type::Generic(_) | Type::LambdaObject(_))
+        !matches!(self, Type::Generic(_))
     }
 
     pub fn is_nominal_kind(&self) -> bool {
@@ -2060,7 +2063,7 @@ impl TypedProgram {
     pub const ABILITY_OBJECT_TABLE_INDEX: usize = 0;
     pub const ABILITY_OBJECT_STATE_INDEX: usize = 1;
 
-    pub fn add_lambda_object(&mut self, function_type_id: TypeId, parsed_id: ParsedId) -> TypeId {
+    pub fn add_lambda_object(&mut self, function_type_id: TypeId) -> TypeId {
         let fn_ptr_type = self.add_function_pointer_type(function_type_id);
         let fields = [
             StructTypeField {
@@ -2079,7 +2082,6 @@ impl TypedProgram {
             .unwrap_or_else(|e| self.ice("lambda object fields", Some(&e)));
         self.add_type(Type::LambdaObject(LambdaObjectType {
             function_type: function_type_id,
-            parsed_id,
             struct_representation,
         }))
     }

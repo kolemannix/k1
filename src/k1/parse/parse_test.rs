@@ -417,6 +417,15 @@ fn type_hint_binop() -> ParseResult<()> {
 }
 
 #[test]
+fn type_hint_compound_round_trips() -> ParseResult<()> {
+    let ty = "{ cb: *fn(int), pick: either(u8, partial) { some(fn(int) -> bool), none = 4 } }";
+    let (ast, expr, _expr_id) = test_single_expr_with_id(&format!("x: {ty}"))?;
+    let ParsedExpr::TypeHint(th) = expr else { panic!("expected type hint") };
+    assert_eq!(ast.type_expr_to_string(th.ty), ty);
+    Ok(())
+}
+
+#[test]
 fn variants_no_payload() -> ParseResult<()> {
     let input = ":foo: t";
     let (ast, expr, _expr_id) = test_single_expr_with_id(input)?;

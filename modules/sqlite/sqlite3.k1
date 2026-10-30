@@ -620,7 +620,7 @@ type io_methods = {
   ) -> i32],
   xShmBarrier: optref[fn(
     *file
-  ) -> {}],
+  )],
   xShmUnmap: optref[fn(
     *file,
     i32
@@ -642,7 +642,7 @@ type api_routines = opaque[0, 1]
 type(alias) filename = *u8
 type(alias) syscall_ptr = *fn(
 
-) -> {}
+)
 type vfs = {
   iVersion: i32,
   szOsFile: i32,
@@ -682,18 +682,18 @@ type vfs = {
     *vfs,
     i32,
     *u8
-  ) -> {}],
+  )],
   xDlSym: optref[fn(
     *vfs,
     ptr,
     *u8
   ) -> optref[fn(
 
-  ) -> {}]],
+  )]],
   xDlClose: optref[fn(
     *vfs,
     ptr
-  ) -> {}],
+  )],
   xRandomness: optref[fn(
     *vfs,
     i32,
@@ -749,7 +749,7 @@ type mem_methods = {
   ) -> ptr],
   xFree: optref[fn(
     ptr
-  ) -> {}],
+  )],
   xRealloc: optref[fn(
     ptr,
     i32
@@ -765,7 +765,7 @@ type mem_methods = {
   ) -> i32],
   xShutdown: optref[fn(
     ptr
-  ) -> {}],
+  )],
   pAppData: ptr,
 }
 fn(extern("sqlite3_extended_result_codes")) extended_result_codes(
@@ -778,7 +778,7 @@ fn(extern("sqlite3_last_insert_rowid")) last_insert_rowid(
 fn(extern("sqlite3_set_last_insert_rowid")) set_last_insert_rowid(
   p0: *db,
   p1: int64,
-): {}
+)
 fn(extern("sqlite3_changes")) changes(
   p0: *db,
 ): i32
@@ -793,7 +793,7 @@ fn(extern("sqlite3_total_changes64")) total_changes64(
 ): int64
 fn(extern("sqlite3_interrupt")) interrupt(
   p0: *db,
-): {}
+)
 fn(extern("sqlite3_is_interrupted")) is_interrupted(
   p0: *db,
 ): i32
@@ -830,7 +830,7 @@ fn(extern("sqlite3_get_table")) get_table(
 ): i32
 fn(extern("sqlite3_free_table")) free_table(
   result: *optref[u8],
-): {}
+)
 fn(extern("sqlite3_mprintf")) mprintf(
   p0: *u8,
   varargs: core/c-varargs,
@@ -867,7 +867,7 @@ fn(extern("sqlite3_realloc64")) realloc64(
 ): ptr
 fn(extern("sqlite3_free")) free(
   p0: ptr,
-): {}
+)
 fn(extern("sqlite3_msize")) msize(
   p0: ptr,
 ): uint64
@@ -878,7 +878,7 @@ fn(extern("sqlite3_memory_highwater")) memory_highwater(
 fn(extern("sqlite3_randomness")) randomness(
   N: i32,
   P: ptr,
-): {}
+)
 fn(extern("sqlite3_set_authorizer")) set_authorizer(
   p0: *db,
   xAuth: *fn(
@@ -896,7 +896,7 @@ fn(extern("sqlite3_trace")) trace(
   xTrace: *fn(
     ptr,
     *u8
-  ) -> {},
+  ),
   p2: ptr,
 ): ptr
 fn(extern("sqlite3_profile")) profile(
@@ -905,7 +905,7 @@ fn(extern("sqlite3_profile")) profile(
     ptr,
     *u8,
     uint64
-  ) -> {},
+  ),
   p2: ptr,
 ): ptr
 fn(extern("sqlite3_trace_v2")) trace_v2(
@@ -926,7 +926,7 @@ fn(extern("sqlite3_progress_handler")) progress_handler(
     ptr
   ) -> i32,
   p3: ptr,
-): {}
+)
 fn(extern("sqlite3_open")) open(
   filename: *u8,
   ppDb: *optref[db],
@@ -980,7 +980,7 @@ fn(extern("sqlite3_create_filename")) create_filename(
 ): filename
 fn(extern("sqlite3_free_filename")) free_filename(
   p0: filename,
-): {}
+)
 fn(extern("sqlite3_errcode")) errcode(
   db: *db,
 ): i32
@@ -1082,7 +1082,7 @@ fn(extern("sqlite3_bind_blob")) bind_blob(
   n: i32,
   p4: *fn(
     ptr
-  ) -> {},
+  ),
 ): i32
 fn(extern("sqlite3_bind_blob64")) bind_blob64(
   p0: *stmt,
@@ -1091,7 +1091,7 @@ fn(extern("sqlite3_bind_blob64")) bind_blob64(
   p3: uint64,
   p4: *fn(
     ptr
-  ) -> {},
+  ),
 ): i32
 fn(extern("sqlite3_bind_double")) bind_double(
   p0: *stmt,
@@ -1119,7 +1119,7 @@ fn(extern("sqlite3_bind_text")) bind_text(
   p3: i32,
   p4: *fn(
     ptr
-  ) -> {},
+  ),
 ): i32
 fn(extern("sqlite3_bind_text16")) bind_text16(
   p0: *stmt,
@@ -1128,7 +1128,7 @@ fn(extern("sqlite3_bind_text16")) bind_text16(
   p3: i32,
   p4: *fn(
     ptr
-  ) -> {},
+  ),
 ): i32
 fn(extern("sqlite3_bind_text64")) bind_text64(
   p0: *stmt,
@@ -1137,7 +1137,7 @@ fn(extern("sqlite3_bind_text64")) bind_text64(
   p3: uint64,
   p4: *fn(
     ptr
-  ) -> {},
+  ),
   encoding: u8,
 ): i32
 fn(extern("sqlite3_bind_value")) bind_value(
@@ -1152,7 +1152,7 @@ fn(extern("sqlite3_bind_pointer")) bind_pointer(
   p3: *u8,
   p4: *fn(
     ptr
-  ) -> {},
+  ),
 ): i32
 fn(extern("sqlite3_bind_zeroblob")) bind_zeroblob(
   p0: *stmt,
@@ -1283,15 +1283,15 @@ fn(extern("sqlite3_create_function")) create_function(
     *context_c,
     i32,
     *optref[value]
-  ) -> {},
+  ),
   xStep: *fn(
     *context_c,
     i32,
     *optref[value]
-  ) -> {},
+  ),
   xFinal: *fn(
     *context_c
-  ) -> {},
+  ),
 ): i32
 fn(extern("sqlite3_create_function16")) create_function16(
   db: *db,
@@ -1303,15 +1303,15 @@ fn(extern("sqlite3_create_function16")) create_function16(
     *context_c,
     i32,
     *optref[value]
-  ) -> {},
+  ),
   xStep: *fn(
     *context_c,
     i32,
     *optref[value]
-  ) -> {},
+  ),
   xFinal: *fn(
     *context_c
-  ) -> {},
+  ),
 ): i32
 fn(extern("sqlite3_create_function_v2")) create_function_v2(
   db: *db,
@@ -1323,18 +1323,18 @@ fn(extern("sqlite3_create_function_v2")) create_function_v2(
     *context_c,
     i32,
     *optref[value]
-  ) -> {},
+  ),
   xStep: *fn(
     *context_c,
     i32,
     *optref[value]
-  ) -> {},
+  ),
   xFinal: *fn(
     *context_c
-  ) -> {},
+  ),
   xDestroy: *fn(
     ptr
-  ) -> {},
+  ),
 ): i32
 fn(extern("sqlite3_create_window_function")) create_window_function(
   db: *db,
@@ -1346,21 +1346,21 @@ fn(extern("sqlite3_create_window_function")) create_window_function(
     *context_c,
     i32,
     *optref[value]
-  ) -> {},
+  ),
   xFinal: *fn(
     *context_c
-  ) -> {},
+  ),
   xValue: *fn(
     *context_c
-  ) -> {},
+  ),
   xInverse: *fn(
     *context_c,
     i32,
     *optref[value]
-  ) -> {},
+  ),
   xDestroy: *fn(
     ptr
-  ) -> {},
+  ),
 ): i32
 fn(extern("sqlite3_value_blob")) value_blob(
   p0: *value,
@@ -1419,7 +1419,7 @@ fn(extern("sqlite3_value_dup")) value_dup(
 ): optref[value]
 fn(extern("sqlite3_value_free")) value_free(
   p0: *value,
-): {}
+)
 fn(extern("sqlite3_aggregate_context")) aggregate_context(
   p0: *context_c,
   nBytes: i32,
@@ -1440,8 +1440,8 @@ fn(extern("sqlite3_set_auxdata")) set_auxdata(
   p2: ptr,
   p3: *fn(
     ptr
-  ) -> {},
-): {}
+  ),
+)
 fn(extern("sqlite3_get_clientdata")) get_clientdata(
   p0: *db,
   p1: *u8,
@@ -1452,119 +1452,119 @@ fn(extern("sqlite3_set_clientdata")) set_clientdata(
   p2: ptr,
   p3: *fn(
     ptr
-  ) -> {},
+  ),
 ): i32
 type(alias) destructor_type = *fn(
   ptr
-) -> {}
+)
 fn(extern("sqlite3_result_blob")) result_blob(
   p0: *context_c,
   p1: ptr,
   p2: i32,
   p3: *fn(
     ptr
-  ) -> {},
-): {}
+  ),
+)
 fn(extern("sqlite3_result_blob64")) result_blob64(
   p0: *context_c,
   p1: ptr,
   p2: uint64,
   p3: *fn(
     ptr
-  ) -> {},
-): {}
+  ),
+)
 fn(extern("sqlite3_result_double")) result_double(
   p0: *context_c,
   p1: f64,
-): {}
+)
 fn(extern("sqlite3_result_error")) result_error(
   p0: *context_c,
   p1: *u8,
   p2: i32,
-): {}
+)
 fn(extern("sqlite3_result_error16")) result_error16(
   p0: *context_c,
   p1: ptr,
   p2: i32,
-): {}
+)
 fn(extern("sqlite3_result_error_toobig")) result_error_toobig(
   p0: *context_c,
-): {}
+)
 fn(extern("sqlite3_result_error_nomem")) result_error_nomem(
   p0: *context_c,
-): {}
+)
 fn(extern("sqlite3_result_error_code")) result_error_code(
   p0: *context_c,
   p1: i32,
-): {}
+)
 fn(extern("sqlite3_result_int")) result_int(
   p0: *context_c,
   p1: i32,
-): {}
+)
 fn(extern("sqlite3_result_int64")) result_int64(
   p0: *context_c,
   p1: int64,
-): {}
+)
 fn(extern("sqlite3_result_null")) result_null(
   p0: *context_c,
-): {}
+)
 fn(extern("sqlite3_result_text")) result_text(
   p0: *context_c,
   p1: *u8,
   p2: i32,
   p3: *fn(
     ptr
-  ) -> {},
-): {}
+  ),
+)
 fn(extern("sqlite3_result_text64")) result_text64(
   p0: *context_c,
   z: *u8,
   n: uint64,
   p3: *fn(
     ptr
-  ) -> {},
+  ),
   encoding: u8,
-): {}
+)
 fn(extern("sqlite3_result_text16")) result_text16(
   p0: *context_c,
   p1: ptr,
   p2: i32,
   p3: *fn(
     ptr
-  ) -> {},
-): {}
+  ),
+)
 fn(extern("sqlite3_result_text16le")) result_text16le(
   p0: *context_c,
   p1: ptr,
   p2: i32,
   p3: *fn(
     ptr
-  ) -> {},
-): {}
+  ),
+)
 fn(extern("sqlite3_result_text16be")) result_text16be(
   p0: *context_c,
   p1: ptr,
   p2: i32,
   p3: *fn(
     ptr
-  ) -> {},
-): {}
+  ),
+)
 fn(extern("sqlite3_result_value")) result_value(
   p0: *context_c,
   p1: *value,
-): {}
+)
 fn(extern("sqlite3_result_pointer")) result_pointer(
   p0: *context_c,
   p1: ptr,
   p2: *u8,
   p3: *fn(
     ptr
-  ) -> {},
-): {}
+  ),
+)
 fn(extern("sqlite3_result_zeroblob")) result_zeroblob(
   p0: *context_c,
   n: i32,
-): {}
+)
 fn(extern("sqlite3_result_zeroblob64")) result_zeroblob64(
   p0: *context_c,
   n: uint64,
@@ -1572,7 +1572,7 @@ fn(extern("sqlite3_result_zeroblob64")) result_zeroblob64(
 fn(extern("sqlite3_result_subtype")) result_subtype(
   p0: *context_c,
   p1: u32,
-): {}
+)
 fn(extern("sqlite3_create_collation")) create_collation(
   p0: *db,
   zName: *u8,
@@ -1600,7 +1600,7 @@ fn(extern("sqlite3_create_collation_v2")) create_collation_v2(
   ) -> i32,
   xDestroy: *fn(
     ptr
-  ) -> {},
+  ),
 ): i32
 fn(extern("sqlite3_create_collation16")) create_collation16(
   p0: *db,
@@ -1623,7 +1623,7 @@ fn(extern("sqlite3_collation_needed")) collation_needed(
     *db,
     i32,
     *u8
-  ) -> {},
+  ),
 ): i32
 fn(extern("sqlite3_collation_needed16")) collation_needed16(
   p0: *db,
@@ -1633,7 +1633,7 @@ fn(extern("sqlite3_collation_needed16")) collation_needed16(
     *db,
     i32,
     ptr
-  ) -> {},
+  ),
 ): i32
 fn(extern("sqlite3_sleep")) sleep(
   p0: i32,
@@ -1689,7 +1689,7 @@ fn(extern("sqlite3_rollback_hook")) rollback_hook(
   p0: *db,
   p1: *fn(
     ptr
-  ) -> {},
+  ),
   p2: ptr,
 ): ptr
 fn(extern("sqlite3_autovacuum_pages")) autovacuum_pages(
@@ -1704,7 +1704,7 @@ fn(extern("sqlite3_autovacuum_pages")) autovacuum_pages(
   p2: ptr,
   p3: *fn(
     ptr
-  ) -> {},
+  ),
 ): i32
 fn(extern("sqlite3_update_hook")) update_hook(
   p0: *db,
@@ -1714,7 +1714,7 @@ fn(extern("sqlite3_update_hook")) update_hook(
     *u8,
     *u8,
     int64
-  ) -> {},
+  ),
   p2: ptr,
 ): ptr
 fn(extern("sqlite3_enable_shared_cache")) enable_shared_cache(
@@ -1734,7 +1734,7 @@ fn(extern("sqlite3_hard_heap_limit64")) hard_heap_limit64(
 ): int64
 fn(extern("sqlite3_soft_heap_limit")) soft_heap_limit(
   N: i32,
-): {}
+)
 fn(extern("sqlite3_table_column_metadata")) table_column_metadata(
   db: *db,
   zDbName: *u8,
@@ -1749,14 +1749,14 @@ fn(extern("sqlite3_table_column_metadata")) table_column_metadata(
 fn(extern("sqlite3_auto_extension")) auto_extension(
   xEntryPoint: *fn(
 
-  ) -> {},
+  ),
 ): i32
 fn(extern("sqlite3_cancel_auto_extension")) cancel_auto_extension(
   xEntryPoint: *fn(
 
-  ) -> {},
+  ),
 ): i32
-fn(extern("sqlite3_reset_auto_extension")) reset_auto_extension(): {}
+fn(extern("sqlite3_reset_auto_extension")) reset_auto_extension()
 type module = {
   iVersion: i32,
   xCreate: optref[fn(
@@ -1840,7 +1840,7 @@ type module = {
       *context_c,
       i32,
       *optref[value]
-    ) -> {}],
+    )],
     *ptr
   ) -> i32],
   xRename: optref[fn(
@@ -1912,7 +1912,7 @@ fn(extern("sqlite3_create_module_v2")) create_module_v2(
   pClientData: ptr,
   xDestroy: *fn(
     ptr
-  ) -> {},
+  ),
 ): i32
 fn(extern("sqlite3_drop_modules")) drop_modules(
   db: *db,
@@ -1982,16 +1982,16 @@ fn(extern("sqlite3_mutex_alloc")) mutex_alloc(
 ): optref[mutex]
 fn(extern("sqlite3_mutex_free")) mutex_free(
   p0: *mutex,
-): {}
+)
 fn(extern("sqlite3_mutex_enter")) mutex_enter(
   p0: *mutex,
-): {}
+)
 fn(extern("sqlite3_mutex_try")) mutex_try(
   p0: *mutex,
 ): i32
 fn(extern("sqlite3_mutex_leave")) mutex_leave(
   p0: *mutex,
-): {}
+)
 type mutex_methods = {
   xMutexInit: optref[fn(
 
@@ -2004,16 +2004,16 @@ type mutex_methods = {
   ) -> optref[mutex]],
   xMutexFree: optref[fn(
     *mutex
-  ) -> {}],
+  )],
   xMutexEnter: optref[fn(
     *mutex
-  ) -> {}],
+  )],
   xMutexTry: optref[fn(
     *mutex
   ) -> i32],
   xMutexLeave: optref[fn(
     *mutex
-  ) -> {}],
+  )],
   xMutexHeld: optref[fn(
     *mutex
   ) -> i32],
@@ -2059,38 +2059,38 @@ fn(extern("sqlite3_str_finish")) str_finish(
 ): optref[u8]
 fn(extern("sqlite3_str_free")) str_free(
   p0: *str,
-): {}
+)
 fn(extern("sqlite3_str_appendf")) str_appendf(
   p0: *str,
   zFormat: *u8,
   varargs: core/c-varargs,
-): {}
+)
 fn(extern("sqlite3_str_vappendf")) str_vappendf(
   p0: *str,
   zFormat: *u8,
   p2: ptr,
-): {}
+)
 fn(extern("sqlite3_str_append")) str_append(
   p0: *str,
   zIn: *u8,
   N: i32,
-): {}
+)
 fn(extern("sqlite3_str_appendall")) str_appendall(
   p0: *str,
   zIn: *u8,
-): {}
+)
 fn(extern("sqlite3_str_appendchar")) str_appendchar(
   p0: *str,
   N: i32,
   C: u8,
-): {}
+)
 fn(extern("sqlite3_str_reset")) str_reset(
   p0: *str,
-): {}
+)
 fn(extern("sqlite3_str_truncate")) str_truncate(
   p0: *str,
   N: i32,
-): {}
+)
 fn(extern("sqlite3_str_errcode")) str_errcode(
   p0: *str,
 ): i32
@@ -2144,7 +2144,7 @@ type pcache_methods2 = {
   ) -> i32],
   xShutdown: optref[fn(
     ptr
-  ) -> {}],
+  )],
   xCreate: optref[fn(
     i32,
     i32,
@@ -2153,7 +2153,7 @@ type pcache_methods2 = {
   xCachesize: optref[fn(
     *pcache,
     i32
-  ) -> {}],
+  )],
   xPagecount: optref[fn(
     *pcache
   ) -> i32],
@@ -2166,23 +2166,23 @@ type pcache_methods2 = {
     *pcache,
     *pcache_page,
     i32
-  ) -> {}],
+  )],
   xRekey: optref[fn(
     *pcache,
     *pcache_page,
     u32,
     u32
-  ) -> {}],
+  )],
   xTruncate: optref[fn(
     *pcache,
     u32
-  ) -> {}],
+  )],
   xDestroy: optref[fn(
     *pcache
-  ) -> {}],
+  )],
   xShrink: optref[fn(
     *pcache
-  ) -> {}],
+  )],
 }
 type pcache_methods = {
   pArg: ptr,
@@ -2191,7 +2191,7 @@ type pcache_methods = {
   ) -> i32],
   xShutdown: optref[fn(
     ptr
-  ) -> {}],
+  )],
   xCreate: optref[fn(
     i32,
     i32
@@ -2199,7 +2199,7 @@ type pcache_methods = {
   xCachesize: optref[fn(
     *pcache,
     i32
-  ) -> {}],
+  )],
   xPagecount: optref[fn(
     *pcache
   ) -> i32],
@@ -2212,20 +2212,20 @@ type pcache_methods = {
     *pcache,
     ptr,
     i32
-  ) -> {}],
+  )],
   xRekey: optref[fn(
     *pcache,
     ptr,
     u32,
     u32
-  ) -> {}],
+  )],
   xTruncate: optref[fn(
     *pcache,
     u32
-  ) -> {}],
+  )],
   xDestroy: optref[fn(
     *pcache
-  ) -> {}],
+  )],
 }
 type backup = opaque[0, 1]
 fn(extern("sqlite3_backup_init")) backup_init(
@@ -2252,7 +2252,7 @@ fn(extern("sqlite3_unlock_notify")) unlock_notify(
   xNotify: *fn(
     *ptr,
     i32
-  ) -> {},
+  ),
   pNotifyArg: ptr,
 ): i32
 fn(extern("sqlite3_stricmp")) stricmp(
@@ -2277,7 +2277,7 @@ fn(extern("sqlite3_log")) log(
   iErrCode: i32,
   zFormat: *u8,
   varargs: core/c-varargs,
-): {}
+)
 fn(extern("sqlite3_wal_hook")) wal_hook(
   p0: *db,
   p1: *fn(
@@ -2354,7 +2354,7 @@ fn(extern("sqlite3_stmt_scanstatus_v2")) stmt_scanstatus_v2(
 ): i32
 fn(extern("sqlite3_stmt_scanstatus_reset")) stmt_scanstatus_reset(
   p0: *stmt,
-): {}
+)
 fn(extern("sqlite3_db_cacheflush")) db_cacheflush(
   p0: *db,
 ): i32
@@ -2376,7 +2376,7 @@ fn(extern("sqlite3_snapshot_open")) snapshot_open(
 ): i32
 fn(extern("sqlite3_snapshot_free")) snapshot_free(
   p0: *snapshot,
-): {}
+)
 fn(extern("sqlite3_snapshot_cmp")) snapshot_cmp(
   p1: *snapshot,
   p2: *snapshot,
@@ -2407,7 +2407,7 @@ fn(extern("sqlite3_carray_bind_v2")) carray_bind_v2(
   mFlags: i32,
   xDel: *fn(
     ptr
-  ) -> {},
+  ),
   pDel: ptr,
 ): i32
 fn(extern("sqlite3_carray_bind")) carray_bind(
@@ -2418,7 +2418,7 @@ fn(extern("sqlite3_carray_bind")) carray_bind(
   mFlags: i32,
   xDel: *fn(
     ptr
-  ) -> {},
+  ),
 ): i32
 type(alias) rtree_dbl = f64
 fn(extern("sqlite3_rtree_geometry_callback")) rtree_geometry_callback(
@@ -2439,7 +2439,7 @@ type rtree_geometry = {
   pUser: ptr,
   xDelUser: optref[fn(
     ptr
-  ) -> {}],
+  )],
 }
 fn(extern("sqlite3_rtree_query_callback")) rtree_query_callback(
   db: *db,
@@ -2450,7 +2450,7 @@ fn(extern("sqlite3_rtree_query_callback")) rtree_query_callback(
   pContext: ptr,
   xDestructor: *fn(
     ptr
-  ) -> {},
+  ),
 ): i32
 type rtree_query_info = {
   pContext: ptr,
@@ -2459,7 +2459,7 @@ type rtree_query_info = {
   pUser: ptr,
   xDelUser: optref[fn(
     ptr
-  ) -> {}],
+  )],
   aCoord: optref[rtree_dbl],
   anQueue: optref[u32],
   nCoord: i32,
@@ -2479,7 +2479,7 @@ type(alias) fts5_extension_function = *fn(
   *context_c,
   i32,
   *optref[value]
-) -> {}
+)
 type Fts5PhraseIter = {
   a: optref[u8],
   b: optref[u8],
@@ -2562,7 +2562,7 @@ type Fts5ExtensionApi = {
     ptr,
     *fn(
       ptr
-    ) -> {}
+    )
   ) -> i32],
   xGetAuxdata: optref[fn(
     *Fts5Context,
@@ -2580,7 +2580,7 @@ type Fts5ExtensionApi = {
     *Fts5PhraseIter,
     *i32,
     *i32
-  ) -> {}],
+  )],
   xPhraseFirstColumn: optref[fn(
     *Fts5Context,
     i32,
@@ -2591,7 +2591,7 @@ type Fts5ExtensionApi = {
     *Fts5Context,
     *Fts5PhraseIter,
     *i32
-  ) -> {}],
+  )],
   xQueryToken: optref[fn(
     *Fts5Context,
     i32,
@@ -2640,7 +2640,7 @@ type fts5_tokenizer_v2 = {
   ) -> i32],
   xDelete: optref[fn(
     *Fts5Tokenizer
-  ) -> {}],
+  )],
   xTokenize: optref[fn(
     *Fts5Tokenizer,
     ptr,
@@ -2668,7 +2668,7 @@ type fts5_tokenizer = {
   ) -> i32],
   xDelete: optref[fn(
     *Fts5Tokenizer
-  ) -> {}],
+  )],
   xTokenize: optref[fn(
     *Fts5Tokenizer,
     ptr,
@@ -2694,7 +2694,7 @@ type fts5_api = {
     *fts5_tokenizer,
     *fn(
       ptr
-    ) -> {}
+    )
   ) -> i32],
   xFindTokenizer: optref[fn(
     *fts5_api,
@@ -2709,7 +2709,7 @@ type fts5_api = {
     fts5_extension_function,
     *fn(
       ptr
-    ) -> {}
+    )
   ) -> i32],
   xCreateTokenizer_v2: optref[fn(
     *fts5_api,
@@ -2718,7 +2718,7 @@ type fts5_api = {
     *fts5_tokenizer_v2,
     *fn(
       ptr
-    ) -> {}
+    )
   ) -> i32],
   xFindTokenizer_v2: optref[fn(
     *fts5_api,

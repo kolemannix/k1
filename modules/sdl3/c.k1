@@ -988,32 +988,21 @@ let MAJOR_VERSION: i64 = 3
 let MINOR_VERSION: i64 = 4
 let MICRO_VERSION: i64 = 14
 type(alias) Sint8 = i8
-#static assert-layout[Sint8](1, 1, [])
 type(alias) Uint8 = u8
-#static assert-layout[Uint8](1, 1, [])
 type(alias) Sint16 = i16
-#static assert-layout[Sint16](2, 2, [])
 type(alias) Uint16 = u16
-#static assert-layout[Uint16](2, 2, [])
 type(alias) Sint32 = i32
-#static assert-layout[Sint32](4, 4, [])
 type(alias) Uint32 = u32
-#static assert-layout[Uint32](4, 4, [])
 type(alias) Sint64 = i64
-#static assert-layout[Sint64](8, 8, [])
 type(alias) Uint64 = u64
-#static assert-layout[Uint64](8, 8, [])
 type(alias) Time = Sint64
-#static assert-layout[Time](8, 8, [])
 type alignment_test = {
   a: Uint8,
   b: ptr,
 }
-#static assert-layout[alignment_test](16, 8, [0, 8, ])
 type DUMMY_ENUM = either(u32, partial) {
   DUMMY_ENUM_VALUE = 0,
 }
-#static assert-layout[DUMMY_ENUM](4, 4, [])
 fn(extern("SDL_malloc")) malloc(
   size: usize,
 ): ptr
@@ -1027,37 +1016,33 @@ fn(extern("SDL_realloc")) realloc(
 ): ptr
 fn(extern("SDL_free")) free(
   mem: ptr,
-): {}
+)
 type(alias) malloc_func = *fn(
   usize
 ) -> ptr
-#static assert-layout[malloc_func](8, 8, [])
 type(alias) calloc_func = *fn(
   usize,
   usize
 ) -> ptr
-#static assert-layout[calloc_func](8, 8, [])
 type(alias) realloc_func = *fn(
   ptr,
   usize
 ) -> ptr
-#static assert-layout[realloc_func](8, 8, [])
 type(alias) free_func = *fn(
   ptr
-) -> {}
-#static assert-layout[free_func](8, 8, [])
+)
 fn(extern("SDL_GetOriginalMemoryFunctions")) GetOriginalMemoryFunctions(
   malloc_func: *malloc_func,
   calloc_func: *calloc_func,
   realloc_func: *realloc_func,
   free_func: *free_func,
-): {}
+)
 fn(extern("SDL_GetMemoryFunctions")) GetMemoryFunctions(
   malloc_func: *malloc_func,
   calloc_func: *calloc_func,
   realloc_func: *realloc_func,
   free_func: *free_func,
-): {}
+)
 fn(extern("SDL_SetMemoryFunctions")) SetMemoryFunctions(
   malloc_func: malloc_func,
   calloc_func: calloc_func,
@@ -1070,7 +1055,7 @@ fn(extern("SDL_aligned_alloc")) aligned_alloc(
 ): ptr
 fn(extern("SDL_aligned_free")) aligned_free(
   mem: ptr,
-): {}
+)
 fn(extern("SDL_GetNumAllocations")) GetNumAllocations(): i32
 type Environment = opaque[0, 1]
 fn(extern("SDL_GetEnvironment")) GetEnvironment(): optref[Environment]
@@ -1096,7 +1081,7 @@ fn(extern("SDL_UnsetEnvironmentVariable")) UnsetEnvironmentVariable(
 ): bool
 fn(extern("SDL_DestroyEnvironment")) DestroyEnvironment(
   env: *Environment,
-): {}
+)
 fn(extern("SDL_getenv")) getenv(
   name: *u8,
 ): optref[u8]
@@ -1115,13 +1100,12 @@ type(alias) CompareCallback = *fn(
   ptr,
   ptr
 ) -> i32
-#static assert-layout[CompareCallback](8, 8, [])
 fn(extern("SDL_qsort")) qsort(
   base: ptr,
   nmemb: usize,
   size: usize,
   compare: CompareCallback,
-): {}
+)
 fn(extern("SDL_bsearch")) bsearch(
   key: ptr,
   base: ptr,
@@ -1134,14 +1118,13 @@ type(alias) CompareCallback_r = *fn(
   ptr,
   ptr
 ) -> i32
-#static assert-layout[CompareCallback_r](8, 8, [])
 fn(extern("SDL_qsort_r")) qsort_r(
   base: ptr,
   nmemb: usize,
   size: usize,
   compare: CompareCallback_r,
   userdata: ptr,
-): {}
+)
 fn(extern("SDL_bsearch_r")) bsearch_r(
   key: ptr,
   base: ptr,
@@ -1498,7 +1481,7 @@ fn(extern("SDL_vasprintf")) vasprintf(
 ): i32
 fn(extern("SDL_srand")) srand(
   seed: Uint64,
-): {}
+)
 fn(extern("SDL_rand")) rand(
   n: Sint32,
 ): Sint32
@@ -1672,7 +1655,6 @@ fn(extern("SDL_tanf")) tanf(
 ): f32
 type iconv_data_t = opaque[0, 1]
 type(alias) iconv_t = *iconv_data_t
-#static assert-layout[iconv_t](8, 8, [])
 fn(extern("SDL_iconv_open")) iconv_open(
   tocode: *u8,
   fromcode: *u8,
@@ -1715,8 +1697,7 @@ fn(extern("SDL_size_add_check_overflow_builtin")) size_add_check_overflow_builti
 ): bool
 type(alias) FunctionPointer = *fn(
 
-) -> {}
-#static assert-layout[FunctionPointer](8, 8, [])
+)
 type AssertState = either(u32, partial) {
   ASSERTION_RETRY = 0,
   ASSERTION_BREAK = 1,
@@ -1724,7 +1705,6 @@ type AssertState = either(u32, partial) {
   ASSERTION_IGNORE = 3,
   ASSERTION_ALWAYS_IGNORE = 4,
 }
-#static assert-layout[AssertState](4, 4, [])
 type AssertData = {
   always_ignore: bool,
   trigger_count: u32,
@@ -1734,7 +1714,6 @@ type AssertData = {
   function: optref[u8],
   next: optref[AssertData],
 }
-#static assert-layout[AssertData](48, 8, [0, 4, 8, 16, 24, 32, 40, ])
 fn(extern("SDL_ReportAssertion")) ReportAssertion(
   data: *AssertData,
   func: *u8,
@@ -1745,30 +1724,27 @@ type(alias) AssertionHandler = *fn(
   *AssertData,
   ptr
 ) -> AssertState
-#static assert-layout[AssertionHandler](8, 8, [])
 fn(extern("SDL_SetAssertionHandler")) SetAssertionHandler(
   handler: AssertionHandler,
   userdata: ptr,
-): {}
+)
 fn(extern("SDL_GetDefaultAssertionHandler")) GetDefaultAssertionHandler(): AssertionHandler
 fn(extern("SDL_GetAssertionHandler")) GetAssertionHandler(
   puserdata: *ptr,
 ): AssertionHandler
 fn(extern("SDL_GetAssertionReport")) GetAssertionReport(): optref[AssertData]
-fn(extern("SDL_ResetAssertionReport")) ResetAssertionReport(): {}
+fn(extern("SDL_ResetAssertionReport")) ResetAssertionReport()
 type AsyncIO = opaque[0, 1]
 type AsyncIOTaskType = either(u32, partial) {
   ASYNCIO_TASK_READ = 0,
   ASYNCIO_TASK_WRITE = 1,
   ASYNCIO_TASK_CLOSE = 2,
 }
-#static assert-layout[AsyncIOTaskType](4, 4, [])
 type AsyncIOResult = either(u32, partial) {
   ASYNCIO_COMPLETE = 0,
   ASYNCIO_FAILURE = 1,
   ASYNCIO_CANCELED = 2,
 }
-#static assert-layout[AsyncIOResult](4, 4, [])
 type AsyncIOOutcome = {
   asyncio: optref[AsyncIO],
   type: AsyncIOTaskType,
@@ -1779,7 +1755,6 @@ type AsyncIOOutcome = {
   bytes_transferred: Uint64,
   userdata: ptr,
 }
-#static assert-layout[AsyncIOOutcome](56, 8, [0, 8, 12, 16, 24, 32, 40, 48, ])
 type AsyncIOQueue = opaque[0, 1]
 fn(extern("SDL_AsyncIOFromFile")) AsyncIOFromFile(
   file: *u8,
@@ -1813,7 +1788,7 @@ fn(extern("SDL_CloseAsyncIO")) CloseAsyncIO(
 fn(extern("SDL_CreateAsyncIOQueue")) CreateAsyncIOQueue(): optref[AsyncIOQueue]
 fn(extern("SDL_DestroyAsyncIOQueue")) DestroyAsyncIOQueue(
   queue: *AsyncIOQueue,
-): {}
+)
 fn(extern("SDL_GetAsyncIOResult")) GetAsyncIOResult(
   queue: *AsyncIOQueue,
   outcome: *AsyncIOOutcome,
@@ -1825,29 +1800,27 @@ fn(extern("SDL_WaitAsyncIOResult")) WaitAsyncIOResult(
 ): bool
 fn(extern("SDL_SignalAsyncIOQueue")) SignalAsyncIOQueue(
   queue: *AsyncIOQueue,
-): {}
+)
 fn(extern("SDL_LoadFileAsync")) LoadFileAsync(
   file: *u8,
   queue: *AsyncIOQueue,
   userdata: ptr,
 ): bool
 type(alias) SpinLock = i32
-#static assert-layout[SpinLock](4, 4, [])
 fn(extern("SDL_TryLockSpinlock")) TryLockSpinlock(
   lock: *SpinLock,
 ): bool
 fn(extern("SDL_LockSpinlock")) LockSpinlock(
   lock: *SpinLock,
-): {}
+)
 fn(extern("SDL_UnlockSpinlock")) UnlockSpinlock(
   lock: *SpinLock,
-): {}
-fn(extern("SDL_MemoryBarrierReleaseFunction")) MemoryBarrierReleaseFunction(): {}
-fn(extern("SDL_MemoryBarrierAcquireFunction")) MemoryBarrierAcquireFunction(): {}
+)
+fn(extern("SDL_MemoryBarrierReleaseFunction")) MemoryBarrierReleaseFunction()
+fn(extern("SDL_MemoryBarrierAcquireFunction")) MemoryBarrierAcquireFunction()
 type AtomicInt = {
   value: i32,
 }
-#static assert-layout[AtomicInt](4, 4, [0, ])
 fn(extern("SDL_CompareAndSwapAtomicInt")) CompareAndSwapAtomicInt(
   a: *AtomicInt,
   oldval: i32,
@@ -1867,7 +1840,6 @@ fn(extern("SDL_AddAtomicInt")) AddAtomicInt(
 type AtomicU32 = {
   value: Uint32,
 }
-#static assert-layout[AtomicU32](4, 4, [0, ])
 fn(extern("SDL_CompareAndSwapAtomicU32")) CompareAndSwapAtomicU32(
   a: *AtomicU32,
   oldval: Uint32,
@@ -1911,7 +1883,6 @@ fn(extern("SDL_OutOfMemory")) OutOfMemory(): bool
 fn(extern("SDL_GetError")) GetError(): optref[u8]
 fn(extern("SDL_ClearError")) ClearError(): bool
 type(alias) PropertiesID = Uint32
-#static assert-layout[PropertiesID](4, 4, [])
 type PropertyType = either(u32, partial) {
   PROPERTY_TYPE_INVALID = 0,
   PROPERTY_TYPE_POINTER = 1,
@@ -1920,7 +1891,6 @@ type PropertyType = either(u32, partial) {
   PROPERTY_TYPE_FLOAT = 4,
   PROPERTY_TYPE_BOOLEAN = 5,
 }
-#static assert-layout[PropertyType](4, 4, [])
 fn(extern("SDL_GetGlobalProperties")) GetGlobalProperties(): PropertiesID
 fn(extern("SDL_CreateProperties")) CreateProperties(): PropertiesID
 fn(extern("SDL_CopyProperties")) CopyProperties(
@@ -1932,12 +1902,11 @@ fn(extern("SDL_LockProperties")) LockProperties(
 ): bool
 fn(extern("SDL_UnlockProperties")) UnlockProperties(
   props: PropertiesID,
-): {}
+)
 type(alias) CleanupPropertyCallback = *fn(
   ptr,
   ptr
-) -> {}
-#static assert-layout[CleanupPropertyCallback](8, 8, [])
+)
 fn(extern("SDL_SetPointerPropertyWithCleanup")) SetPointerPropertyWithCleanup(
   props: PropertiesID,
   name: *u8,
@@ -2011,8 +1980,7 @@ type(alias) EnumeratePropertiesCallback = *fn(
   ptr,
   PropertiesID,
   *u8
-) -> {}
-#static assert-layout[EnumeratePropertiesCallback](8, 8, [])
+)
 fn(extern("SDL_EnumerateProperties")) EnumerateProperties(
   props: PropertiesID,
   callback: EnumeratePropertiesCallback,
@@ -2020,30 +1988,25 @@ fn(extern("SDL_EnumerateProperties")) EnumerateProperties(
 ): bool
 fn(extern("SDL_DestroyProperties")) DestroyProperties(
   props: PropertiesID,
-): {}
+)
 type Thread = opaque[0, 1]
 type(alias) ThreadID = Uint64
-#static assert-layout[ThreadID](8, 8, [])
 type(alias) TLSID = AtomicInt
-#static assert-layout[TLSID](4, 4, [])
 type ThreadPriority = either(u32, partial) {
   THREAD_PRIORITY_LOW = 0,
   THREAD_PRIORITY_NORMAL = 1,
   THREAD_PRIORITY_HIGH = 2,
   THREAD_PRIORITY_TIME_CRITICAL = 3,
 }
-#static assert-layout[ThreadPriority](4, 4, [])
 type ThreadState = either(u32, partial) {
   THREAD_UNKNOWN = 0,
   THREAD_ALIVE = 1,
   THREAD_DETACHED = 2,
   THREAD_COMPLETE = 3,
 }
-#static assert-layout[ThreadState](4, 4, [])
 type(alias) ThreadFunction = *fn(
   ptr
 ) -> i32
-#static assert-layout[ThreadFunction](8, 8, [])
 fn(extern("SDL_CreateThreadRuntime")) CreateThreadRuntime(
   fn_c: ThreadFunction,
   name: *u8,
@@ -2069,48 +2032,47 @@ fn(extern("SDL_SetCurrentThreadPriority")) SetCurrentThreadPriority(
 fn(extern("SDL_WaitThread")) WaitThread(
   thread: *Thread,
   status: *i32,
-): {}
+)
 fn(extern("SDL_GetThreadState")) GetThreadState(
   thread: *Thread,
 ): ThreadState
 fn(extern("SDL_DetachThread")) DetachThread(
   thread: *Thread,
-): {}
+)
 fn(extern("SDL_GetTLS")) GetTLS(
   id: *TLSID,
 ): ptr
 type(alias) TLSDestructorCallback = *fn(
   ptr
-) -> {}
-#static assert-layout[TLSDestructorCallback](8, 8, [])
+)
 fn(extern("SDL_SetTLS")) SetTLS(
   id: *TLSID,
   value: ptr,
   destructor: TLSDestructorCallback,
 ): bool
-fn(extern("SDL_CleanupTLS")) CleanupTLS(): {}
+fn(extern("SDL_CleanupTLS")) CleanupTLS()
 type Mutex = opaque[0, 1]
 fn(extern("SDL_CreateMutex")) CreateMutex(): optref[Mutex]
 fn(extern("SDL_LockMutex")) LockMutex(
   mutex: *Mutex,
-): {}
+)
 fn(extern("SDL_TryLockMutex")) TryLockMutex(
   mutex: *Mutex,
 ): bool
 fn(extern("SDL_UnlockMutex")) UnlockMutex(
   mutex: *Mutex,
-): {}
+)
 fn(extern("SDL_DestroyMutex")) DestroyMutex(
   mutex: *Mutex,
-): {}
+)
 type RWLock = opaque[0, 1]
 fn(extern("SDL_CreateRWLock")) CreateRWLock(): optref[RWLock]
 fn(extern("SDL_LockRWLockForReading")) LockRWLockForReading(
   rwlock: *RWLock,
-): {}
+)
 fn(extern("SDL_LockRWLockForWriting")) LockRWLockForWriting(
   rwlock: *RWLock,
-): {}
+)
 fn(extern("SDL_TryLockRWLockForReading")) TryLockRWLockForReading(
   rwlock: *RWLock,
 ): bool
@@ -2119,20 +2081,20 @@ fn(extern("SDL_TryLockRWLockForWriting")) TryLockRWLockForWriting(
 ): bool
 fn(extern("SDL_UnlockRWLock")) UnlockRWLock(
   rwlock: *RWLock,
-): {}
+)
 fn(extern("SDL_DestroyRWLock")) DestroyRWLock(
   rwlock: *RWLock,
-): {}
+)
 type Semaphore = opaque[0, 1]
 fn(extern("SDL_CreateSemaphore")) CreateSemaphore(
   initial_value: Uint32,
 ): optref[Semaphore]
 fn(extern("SDL_DestroySemaphore")) DestroySemaphore(
   sem: *Semaphore,
-): {}
+)
 fn(extern("SDL_WaitSemaphore")) WaitSemaphore(
   sem: *Semaphore,
-): {}
+)
 fn(extern("SDL_TryWaitSemaphore")) TryWaitSemaphore(
   sem: *Semaphore,
 ): bool
@@ -2142,7 +2104,7 @@ fn(extern("SDL_WaitSemaphoreTimeout")) WaitSemaphoreTimeout(
 ): bool
 fn(extern("SDL_SignalSemaphore")) SignalSemaphore(
   sem: *Semaphore,
-): {}
+)
 fn(extern("SDL_GetSemaphoreValue")) GetSemaphoreValue(
   sem: *Semaphore,
 ): Uint32
@@ -2150,17 +2112,17 @@ type Condition = opaque[0, 1]
 fn(extern("SDL_CreateCondition")) CreateCondition(): optref[Condition]
 fn(extern("SDL_DestroyCondition")) DestroyCondition(
   cond: *Condition,
-): {}
+)
 fn(extern("SDL_SignalCondition")) SignalCondition(
   cond: *Condition,
-): {}
+)
 fn(extern("SDL_BroadcastCondition")) BroadcastCondition(
   cond: *Condition,
-): {}
+)
 fn(extern("SDL_WaitCondition")) WaitCondition(
   cond: *Condition,
   mutex: *Mutex,
-): {}
+)
 fn(extern("SDL_WaitConditionTimeout")) WaitConditionTimeout(
   cond: *Condition,
   mutex: *Mutex,
@@ -2172,13 +2134,11 @@ type InitStatus = either(u32, partial) {
   INIT_STATUS_INITIALIZED = 2,
   INIT_STATUS_UNINITIALIZING = 3,
 }
-#static assert-layout[InitStatus](4, 4, [])
 type InitState = {
   status: AtomicInt,
   thread: ThreadID,
   reserved: ptr,
 }
-#static assert-layout[InitState](24, 8, [0, 8, 16, ])
 fn(extern("SDL_ShouldInit")) ShouldInit(
   state: *InitState,
 ): bool
@@ -2188,7 +2148,7 @@ fn(extern("SDL_ShouldQuit")) ShouldQuit(
 fn(extern("SDL_SetInitialized")) SetInitialized(
   state: *InitState,
   initialized: bool,
-): {}
+)
 type IOStatus = either(u32, partial) {
   IO_STATUS_READY = 0,
   IO_STATUS_ERROR = 1,
@@ -2197,13 +2157,11 @@ type IOStatus = either(u32, partial) {
   IO_STATUS_READONLY = 4,
   IO_STATUS_WRITEONLY = 5,
 }
-#static assert-layout[IOStatus](4, 4, [])
 type IOWhence = either(u32, partial) {
   IO_SEEK_SET = 0,
   IO_SEEK_CUR = 1,
   IO_SEEK_END = 2,
 }
-#static assert-layout[IOWhence](4, 4, [])
 type IOStreamInterface = {
   version: Uint32,
   size: optref[fn(
@@ -2234,7 +2192,6 @@ type IOStreamInterface = {
     ptr
   ) -> bool],
 }
-#static assert-layout[IOStreamInterface](56, 8, [0, 8, 16, 24, 32, 40, 48, ])
 type IOStream = opaque[0, 1]
 fn(extern("SDL_IOFromFile")) IOFromFile(
   file: *u8,
@@ -2439,15 +2396,12 @@ type AudioFormat = either(u32, partial) {
   AUDIO_F32LE = 33056,
   AUDIO_F32BE = 37152,
 }
-#static assert-layout[AudioFormat](4, 4, [])
 type(alias) AudioDeviceID = Uint32
-#static assert-layout[AudioDeviceID](4, 4, [])
 type AudioSpec = {
   format: AudioFormat,
   channels: i32,
   freq: i32,
 }
-#static assert-layout[AudioSpec](12, 4, [0, 4, 8, ])
 type AudioStream = opaque[0, 1]
 fn(extern("SDL_GetNumAudioDrivers")) GetNumAudioDrivers(): i32
 fn(extern("SDL_GetAudioDriver")) GetAudioDriver(
@@ -2500,7 +2454,7 @@ fn(extern("SDL_SetAudioDeviceGain")) SetAudioDeviceGain(
 ): bool
 fn(extern("SDL_CloseAudioDevice")) CloseAudioDevice(
   devid: AudioDeviceID,
-): {}
+)
 fn(extern("SDL_BindAudioStreams")) BindAudioStreams(
   devid: AudioDeviceID,
   streams: *optref[AudioStream],
@@ -2513,10 +2467,10 @@ fn(extern("SDL_BindAudioStream")) BindAudioStream(
 fn(extern("SDL_UnbindAudioStreams")) UnbindAudioStreams(
   streams: *optref[AudioStream],
   num_streams: i32,
-): {}
+)
 fn(extern("SDL_UnbindAudioStream")) UnbindAudioStream(
   stream: *AudioStream,
-): {}
+)
 fn(extern("SDL_GetAudioStreamDevice")) GetAudioStreamDevice(
   stream: *AudioStream,
 ): AudioDeviceID
@@ -2578,8 +2532,7 @@ type(alias) AudioStreamDataCompleteCallback = *fn(
   ptr,
   ptr,
   i32
-) -> {}
-#static assert-layout[AudioStreamDataCompleteCallback](8, 8, [])
+)
 fn(extern("SDL_PutAudioStreamDataNoCopy")) PutAudioStreamDataNoCopy(
   stream: *AudioStream,
   buf: ptr,
@@ -2630,8 +2583,7 @@ type(alias) AudioStreamCallback = *fn(
   *AudioStream,
   i32,
   i32
-) -> {}
-#static assert-layout[AudioStreamCallback](8, 8, [])
+)
 fn(extern("SDL_SetAudioStreamGetCallback")) SetAudioStreamGetCallback(
   stream: *AudioStream,
   callback: AudioStreamCallback,
@@ -2644,7 +2596,7 @@ fn(extern("SDL_SetAudioStreamPutCallback")) SetAudioStreamPutCallback(
 ): bool
 fn(extern("SDL_DestroyAudioStream")) DestroyAudioStream(
   stream: *AudioStream,
-): {}
+)
 fn(extern("SDL_OpenAudioDeviceStream")) OpenAudioDeviceStream(
   devid: AudioDeviceID,
   spec: *AudioSpec,
@@ -2656,8 +2608,7 @@ type(alias) AudioPostmixCallback = *fn(
   *AudioSpec,
   *f32,
   i32
-) -> {}
-#static assert-layout[AudioPostmixCallback](8, 8, [])
+)
 fn(extern("SDL_SetAudioPostmixCallback")) SetAudioPostmixCallback(
   devid: AudioDeviceID,
   callback: AudioPostmixCallback,
@@ -2704,7 +2655,6 @@ fn(extern("SDL_HasExactlyOneBitSet32")) HasExactlyOneBitSet32(
   x: Uint32,
 ): bool
 type(alias) BlendMode = Uint32
-#static assert-layout[BlendMode](4, 4, [])
 type BlendOperation = either(u32, partial) {
   BLENDOPERATION_ADD = 1,
   BLENDOPERATION_SUBTRACT = 2,
@@ -2712,7 +2662,6 @@ type BlendOperation = either(u32, partial) {
   BLENDOPERATION_MINIMUM = 4,
   BLENDOPERATION_MAXIMUM = 5,
 }
-#static assert-layout[BlendOperation](4, 4, [])
 type BlendFactor = either(u32, partial) {
   BLENDFACTOR_ZERO = 1,
   BLENDFACTOR_ONE = 2,
@@ -2725,7 +2674,6 @@ type BlendFactor = either(u32, partial) {
   BLENDFACTOR_DST_ALPHA = 9,
   BLENDFACTOR_ONE_MINUS_DST_ALPHA = 10,
 }
-#static assert-layout[BlendFactor](4, 4, [])
 fn(extern("SDL_ComposeCustomBlendMode")) ComposeCustomBlendMode(
   srcColorFactor: BlendFactor,
   dstColorFactor: BlendFactor,
@@ -2749,13 +2697,11 @@ type PixelType = either(u32, partial) {
   PIXELTYPE_ARRAYF32 = 11,
   PIXELTYPE_INDEX2 = 12,
 }
-#static assert-layout[PixelType](4, 4, [])
 type BitmapOrder = either(u32, partial) {
   BITMAPORDER_NONE = 0,
   BITMAPORDER_4321 = 1,
   BITMAPORDER_1234 = 2,
 }
-#static assert-layout[BitmapOrder](4, 4, [])
 type PackedOrder = either(u32, partial) {
   PACKEDORDER_NONE = 0,
   PACKEDORDER_XRGB = 1,
@@ -2767,7 +2713,6 @@ type PackedOrder = either(u32, partial) {
   PACKEDORDER_ABGR = 7,
   PACKEDORDER_BGRA = 8,
 }
-#static assert-layout[PackedOrder](4, 4, [])
 type ArrayOrder = either(u32, partial) {
   ARRAYORDER_NONE = 0,
   ARRAYORDER_RGB = 1,
@@ -2777,7 +2722,6 @@ type ArrayOrder = either(u32, partial) {
   ARRAYORDER_BGRA = 5,
   ARRAYORDER_ABGR = 6,
 }
-#static assert-layout[ArrayOrder](4, 4, [])
 type PackedLayout = either(u32, partial) {
   PACKEDLAYOUT_NONE = 0,
   PACKEDLAYOUT_332 = 1,
@@ -2789,7 +2733,6 @@ type PackedLayout = either(u32, partial) {
   PACKEDLAYOUT_2101010 = 7,
   PACKEDLAYOUT_1010102 = 8,
 }
-#static assert-layout[PackedLayout](4, 4, [])
 type PixelFormat = either(u32, partial) {
   PIXELFORMAT_UNKNOWN = 0,
   PIXELFORMAT_INDEX1LSB = 286261504,
@@ -2857,19 +2800,16 @@ type PixelFormat = either(u32, partial) {
   PIXELFORMAT_EXTERNAL_OES = 542328143,
   PIXELFORMAT_MJPG = 1196444237,
 }
-#static assert-layout[PixelFormat](4, 4, [])
 type ColorType = either(u32, partial) {
   COLOR_TYPE_UNKNOWN = 0,
   COLOR_TYPE_RGB = 1,
   COLOR_TYPE_YCBCR = 2,
 }
-#static assert-layout[ColorType](4, 4, [])
 type ColorRange = either(u32, partial) {
   COLOR_RANGE_UNKNOWN = 0,
   COLOR_RANGE_LIMITED = 1,
   COLOR_RANGE_FULL = 2,
 }
-#static assert-layout[ColorRange](4, 4, [])
 type ColorPrimaries = either(u32, partial) {
   COLOR_PRIMARIES_UNKNOWN = 0,
   COLOR_PRIMARIES_BT709 = 1,
@@ -2886,7 +2826,6 @@ type ColorPrimaries = either(u32, partial) {
   COLOR_PRIMARIES_EBU3213 = 22,
   COLOR_PRIMARIES_CUSTOM = 31,
 }
-#static assert-layout[ColorPrimaries](4, 4, [])
 type TransferCharacteristics = either(u32, partial) {
   TRANSFER_CHARACTERISTICS_UNKNOWN = 0,
   TRANSFER_CHARACTERISTICS_BT709 = 1,
@@ -2908,7 +2847,6 @@ type TransferCharacteristics = either(u32, partial) {
   TRANSFER_CHARACTERISTICS_HLG = 18,
   TRANSFER_CHARACTERISTICS_CUSTOM = 31,
 }
-#static assert-layout[TransferCharacteristics](4, 4, [])
 type MatrixCoefficients = either(u32, partial) {
   MATRIX_COEFFICIENTS_IDENTITY = 0,
   MATRIX_COEFFICIENTS_BT709 = 1,
@@ -2926,14 +2864,12 @@ type MatrixCoefficients = either(u32, partial) {
   MATRIX_COEFFICIENTS_ICTCP = 14,
   MATRIX_COEFFICIENTS_CUSTOM = 31,
 }
-#static assert-layout[MatrixCoefficients](4, 4, [])
 type ChromaLocation = either(u32, partial) {
   CHROMA_LOCATION_NONE = 0,
   CHROMA_LOCATION_LEFT = 1,
   CHROMA_LOCATION_CENTER = 2,
   CHROMA_LOCATION_TOPLEFT = 3,
 }
-#static assert-layout[ChromaLocation](4, 4, [])
 type Colorspace = either(u32, partial) {
   COLORSPACE_UNKNOWN = 0,
   COLORSPACE_SRGB = 301991328,
@@ -2947,28 +2883,24 @@ type Colorspace = either(u32, partial) {
   COLORSPACE_BT2020_LIMITED = 554706441,
   COLORSPACE_BT2020_FULL = 571483657,
 }
-#static assert-layout[Colorspace](4, 4, [])
 type Color = {
   r: Uint8,
   g: Uint8,
   b: Uint8,
   a: Uint8,
 }
-#static assert-layout[Color](4, 1, [0, 1, 2, 3, ])
 type FColor = {
   r: f32,
   g: f32,
   b: f32,
   a: f32,
 }
-#static assert-layout[FColor](16, 4, [0, 4, 8, 12, ])
 type Palette = {
   ncolors: i32,
   colors: optref[Color],
   version: Uint32,
   refcount: i32,
 }
-#static assert-layout[Palette](24, 8, [0, 8, 16, 20, ])
 type PixelFormatDetails = {
   format: PixelFormat,
   bits_per_pixel: Uint8,
@@ -2987,7 +2919,6 @@ type PixelFormatDetails = {
   Bshift: Uint8,
   Ashift: Uint8,
 }
-#static assert-layout[PixelFormatDetails](32, 4, [0, 4, 5, 6, 8, 12, 16, 20, 24, 25, 26, 27, 28, 29, 30, 31, ])
 fn(extern("SDL_GetPixelFormatName")) GetPixelFormatName(
   format: PixelFormat,
 ): optref[u8]
@@ -3020,7 +2951,7 @@ fn(extern("SDL_SetPaletteColors")) SetPaletteColors(
 ): bool
 fn(extern("SDL_DestroyPalette")) DestroyPalette(
   palette: *Palette,
-): {}
+)
 fn(extern("SDL_MapRGB")) MapRGB(
   format: *PixelFormatDetails,
   palette: *Palette,
@@ -3043,7 +2974,7 @@ fn(extern("SDL_GetRGB")) GetRGB(
   r: *Uint8,
   g: *Uint8,
   b: *Uint8,
-): {}
+)
 fn(extern("SDL_GetRGBA")) GetRGBA(
   pixelvalue: Uint32,
   format: *PixelFormatDetails,
@@ -3052,35 +2983,31 @@ fn(extern("SDL_GetRGBA")) GetRGBA(
   g: *Uint8,
   b: *Uint8,
   a: *Uint8,
-): {}
+)
 type Point = {
   x: i32,
   y: i32,
 }
-#static assert-layout[Point](8, 4, [0, 4, ])
 type FPoint = {
   x: f32,
   y: f32,
 }
-#static assert-layout[FPoint](8, 4, [0, 4, ])
 type Rect = {
   x: i32,
   y: i32,
   w: i32,
   h: i32,
 }
-#static assert-layout[Rect](16, 4, [0, 4, 8, 12, ])
 type FRect = {
   x: f32,
   y: f32,
   w: f32,
   h: f32,
 }
-#static assert-layout[FRect](16, 4, [0, 4, 8, 12, ])
 fn(extern("SDL_RectToFRect")) RectToFRect(
   rect: *Rect,
   frect: *FRect,
-): {}
+)
 fn(extern("SDL_PointInRect")) PointInRect(
   p: *Point,
   r: *Rect,
@@ -3163,21 +3090,18 @@ fn(extern("SDL_GetRectAndLineIntersectionFloat")) GetRectAndLineIntersectionFloa
   Y2: *f32,
 ): bool
 type(alias) SurfaceFlags = Uint32
-#static assert-layout[SurfaceFlags](4, 4, [])
 type ScaleMode = either(i32, partial) {
   SCALEMODE_INVALID = -1,
   SCALEMODE_NEAREST = 0,
   SCALEMODE_LINEAR = 1,
   SCALEMODE_PIXELART = 2,
 }
-#static assert-layout[ScaleMode](4, 4, [])
 type FlipMode = either(u32, partial) {
   FLIP_NONE = 0,
   FLIP_HORIZONTAL = 1,
   FLIP_VERTICAL = 2,
   FLIP_HORIZONTAL_AND_VERTICAL = 3,
 }
-#static assert-layout[FlipMode](4, 4, [])
 type Surface = {
   flags: SurfaceFlags,
   format: PixelFormat,
@@ -3188,7 +3112,6 @@ type Surface = {
   refcount: i32,
   reserved: ptr,
 }
-#static assert-layout[Surface](48, 8, [0, 4, 8, 12, 16, 24, 32, 40, ])
 fn(extern("SDL_CreateSurface")) CreateSurface(
   width: i32,
   height: i32,
@@ -3203,7 +3126,7 @@ fn(extern("SDL_CreateSurfaceFrom")) CreateSurfaceFrom(
 ): optref[Surface]
 fn(extern("SDL_DestroySurface")) DestroySurface(
   surface: *Surface,
-): {}
+)
 fn(extern("SDL_GetSurfaceProperties")) GetSurfaceProperties(
   surface: *Surface,
 ): PropertiesID
@@ -3237,13 +3160,13 @@ fn(extern("SDL_GetSurfaceImages")) GetSurfaceImages(
 ): optref[optref[Surface]]
 fn(extern("SDL_RemoveSurfaceAlternateImages")) RemoveSurfaceAlternateImages(
   surface: *Surface,
-): {}
+)
 fn(extern("SDL_LockSurface")) LockSurface(
   surface: *Surface,
 ): bool
 fn(extern("SDL_UnlockSurface")) UnlockSurface(
   surface: *Surface,
-): {}
+)
 fn(extern("SDL_LoadSurface_IO")) LoadSurface_IO(
   src: *IOStream,
   closeio: bool,
@@ -3532,7 +3455,6 @@ fn(extern("SDL_WriteSurfacePixelFloat")) WriteSurfacePixelFloat(
   a: f32,
 ): bool
 type(alias) CameraID = Uint32
-#static assert-layout[CameraID](4, 4, [])
 type Camera = opaque[0, 1]
 type CameraSpec = {
   format: PixelFormat,
@@ -3542,19 +3464,16 @@ type CameraSpec = {
   framerate_numerator: i32,
   framerate_denominator: i32,
 }
-#static assert-layout[CameraSpec](24, 4, [0, 4, 8, 12, 16, 20, ])
 type CameraPosition = either(u32, partial) {
   CAMERA_POSITION_UNKNOWN = 0,
   CAMERA_POSITION_FRONT_FACING = 1,
   CAMERA_POSITION_BACK_FACING = 2,
 }
-#static assert-layout[CameraPosition](4, 4, [])
 type CameraPermissionState = either(i32, partial) {
   CAMERA_PERMISSION_STATE_DENIED = -1,
   CAMERA_PERMISSION_STATE_PENDING = 0,
   CAMERA_PERMISSION_STATE_APPROVED = 1,
 }
-#static assert-layout[CameraPermissionState](4, 4, [])
 fn(extern("SDL_GetNumCameraDrivers")) GetNumCameraDrivers(): i32
 fn(extern("SDL_GetCameraDriver")) GetCameraDriver(
   index: i32,
@@ -3597,10 +3516,10 @@ fn(extern("SDL_AcquireCameraFrame")) AcquireCameraFrame(
 fn(extern("SDL_ReleaseCameraFrame")) ReleaseCameraFrame(
   camera: *Camera,
   frame: *Surface,
-): {}
+)
 fn(extern("SDL_CloseCamera")) CloseCamera(
   camera: *Camera,
-): {}
+)
 fn(extern("SDL_SetClipboardText")) SetClipboardText(
   text: *u8,
 ): bool
@@ -3616,11 +3535,9 @@ type(alias) ClipboardDataCallback = *fn(
   *u8,
   *usize
 ) -> ptr
-#static assert-layout[ClipboardDataCallback](8, 8, [])
 type(alias) ClipboardCleanupCallback = *fn(
   ptr
-) -> {}
-#static assert-layout[ClipboardCleanupCallback](8, 8, [])
+)
 fn(extern("SDL_SetClipboardData")) SetClipboardData(
   callback: ClipboardDataCallback,
   cleanup: ClipboardCleanupCallback,
@@ -3659,15 +3576,12 @@ fn(extern("SDL_GetSystemRAM")) GetSystemRAM(): i32
 fn(extern("SDL_GetSIMDAlignment")) GetSIMDAlignment(): usize
 fn(extern("SDL_GetSystemPageSize")) GetSystemPageSize(): i32
 type(alias) DisplayID = Uint32
-#static assert-layout[DisplayID](4, 4, [])
 type(alias) WindowID = Uint32
-#static assert-layout[WindowID](4, 4, [])
 type SystemTheme = either(u32, partial) {
   SYSTEM_THEME_UNKNOWN = 0,
   SYSTEM_THEME_LIGHT = 1,
   SYSTEM_THEME_DARK = 2,
 }
-#static assert-layout[SystemTheme](4, 4, [])
 type DisplayModeData = opaque[0, 1]
 type DisplayMode = {
   displayID: DisplayID,
@@ -3680,7 +3594,6 @@ type DisplayMode = {
   refresh_rate_denominator: i32,
   internal: optref[DisplayModeData],
 }
-#static assert-layout[DisplayMode](40, 8, [0, 4, 8, 12, 16, 20, 24, 28, 32, ])
 type DisplayOrientation = either(u32, partial) {
   ORIENTATION_UNKNOWN = 0,
   ORIENTATION_LANDSCAPE = 1,
@@ -3688,16 +3601,13 @@ type DisplayOrientation = either(u32, partial) {
   ORIENTATION_PORTRAIT = 3,
   ORIENTATION_PORTRAIT_FLIPPED = 4,
 }
-#static assert-layout[DisplayOrientation](4, 4, [])
 type Window = opaque[0, 1]
 type(alias) WindowFlags = Uint64
-#static assert-layout[WindowFlags](8, 8, [])
 type FlashOperation = either(u32, partial) {
   FLASH_CANCEL = 0,
   FLASH_BRIEFLY = 1,
   FLASH_UNTIL_FOCUSED = 2,
 }
-#static assert-layout[FlashOperation](4, 4, [])
 type ProgressState = either(i32, partial) {
   PROGRESS_STATE_INVALID = -1,
   PROGRESS_STATE_NONE = 0,
@@ -3706,30 +3616,21 @@ type ProgressState = either(i32, partial) {
   PROGRESS_STATE_PAUSED = 3,
   PROGRESS_STATE_ERROR = 4,
 }
-#static assert-layout[ProgressState](4, 4, [])
 type GLContextState = opaque[0, 1]
 type(alias) GLContext = *GLContextState
-#static assert-layout[GLContext](8, 8, [])
 type(alias) EGLDisplay = ptr
-#static assert-layout[EGLDisplay](8, 8, [])
 type(alias) EGLConfig = ptr
-#static assert-layout[EGLConfig](8, 8, [])
 type(alias) EGLSurface = ptr
-#static assert-layout[EGLSurface](8, 8, [])
 type(alias) EGLAttrib = ptr
-#static assert-layout[EGLAttrib](8, 8, [])
 type(alias) EGLint = i32
-#static assert-layout[EGLint](4, 4, [])
 type(alias) EGLAttribArrayCallback = *fn(
   ptr
 ) -> optref[EGLAttrib]
-#static assert-layout[EGLAttribArrayCallback](8, 8, [])
 type(alias) EGLIntArrayCallback = *fn(
   ptr,
   EGLDisplay,
   EGLConfig
 ) -> optref[EGLint]
-#static assert-layout[EGLIntArrayCallback](8, 8, [])
 type GLAttr = either(u32, partial) {
   GL_RED_SIZE = 0,
   GL_GREEN_SIZE = 1,
@@ -3760,15 +3661,10 @@ type GLAttr = either(u32, partial) {
   GL_FLOATBUFFERS = 26,
   GL_EGL_PLATFORM = 27,
 }
-#static assert-layout[GLAttr](4, 4, [])
 type(alias) GLProfile = Uint32
-#static assert-layout[GLProfile](4, 4, [])
 type(alias) GLContextFlag = Uint32
-#static assert-layout[GLContextFlag](4, 4, [])
 type(alias) GLContextReleaseFlag = Uint32
-#static assert-layout[GLContextReleaseFlag](4, 4, [])
 type(alias) GLContextResetNotification = Uint32
-#static assert-layout[GLContextResetNotification](4, 4, [])
 fn(extern("SDL_GetNumVideoDrivers")) GetNumVideoDrivers(): i32
 fn(extern("SDL_GetVideoDriver")) GetVideoDriver(
   index: i32,
@@ -4085,13 +3981,11 @@ type HitTestResult = either(u32, partial) {
   HITTEST_RESIZE_BOTTOMLEFT = 8,
   HITTEST_RESIZE_LEFT = 9,
 }
-#static assert-layout[HitTestResult](4, 4, [])
 type(alias) HitTest = *fn(
   *Window,
   *Point,
   ptr
 ) -> HitTestResult
-#static assert-layout[HitTest](8, 8, [])
 fn(extern("SDL_SetWindowHitTest")) SetWindowHitTest(
   window: *Window,
   callback: HitTest,
@@ -4121,7 +4015,7 @@ fn(extern("SDL_GetWindowProgressValue")) GetWindowProgressValue(
 ): f32
 fn(extern("SDL_DestroyWindow")) DestroyWindow(
   window: *Window,
-): {}
+)
 fn(extern("SDL_ScreenSaverEnabled")) ScreenSaverEnabled(): bool
 fn(extern("SDL_EnableScreenSaver")) EnableScreenSaver(): bool
 fn(extern("SDL_DisableScreenSaver")) DisableScreenSaver(): bool
@@ -4134,11 +4028,11 @@ fn(extern("SDL_GL_GetProcAddress")) GL_GetProcAddress(
 fn(extern("SDL_EGL_GetProcAddress")) EGL_GetProcAddress(
   proc: *u8,
 ): FunctionPointer
-fn(extern("SDL_GL_UnloadLibrary")) GL_UnloadLibrary(): {}
+fn(extern("SDL_GL_UnloadLibrary")) GL_UnloadLibrary()
 fn(extern("SDL_GL_ExtensionSupported")) GL_ExtensionSupported(
   extension: *u8,
 ): bool
-fn(extern("SDL_GL_ResetAttributes")) GL_ResetAttributes(): {}
+fn(extern("SDL_GL_ResetAttributes")) GL_ResetAttributes()
 fn(extern("SDL_GL_SetAttribute")) GL_SetAttribute(
   attr: GLAttr,
   value: i32,
@@ -4166,7 +4060,7 @@ fn(extern("SDL_EGL_SetAttributeCallbacks")) EGL_SetAttributeCallbacks(
   surfaceAttribCallback: EGLIntArrayCallback,
   contextAttribCallback: EGLIntArrayCallback,
   userdata: ptr,
-): {}
+)
 fn(extern("SDL_GL_SetSwapInterval")) GL_SetSwapInterval(
   interval: i32,
 ): bool
@@ -4183,13 +4077,11 @@ type DialogFileFilter = {
   name: optref[u8],
   pattern: optref[u8],
 }
-#static assert-layout[DialogFileFilter](16, 8, [0, 8, ])
 type(alias) DialogFileCallback = *fn(
   ptr,
   *optref[u8],
   i32
-) -> {}
-#static assert-layout[DialogFileCallback](8, 8, [])
+)
 fn(extern("SDL_ShowOpenFileDialog")) ShowOpenFileDialog(
   callback: DialogFileCallback,
   userdata: ptr,
@@ -4198,7 +4090,7 @@ fn(extern("SDL_ShowOpenFileDialog")) ShowOpenFileDialog(
   nfilters: i32,
   default_location: *u8,
   allow_many: bool,
-): {}
+)
 fn(extern("SDL_ShowSaveFileDialog")) ShowSaveFileDialog(
   callback: DialogFileCallback,
   userdata: ptr,
@@ -4206,35 +4098,33 @@ fn(extern("SDL_ShowSaveFileDialog")) ShowSaveFileDialog(
   filters: *DialogFileFilter,
   nfilters: i32,
   default_location: *u8,
-): {}
+)
 fn(extern("SDL_ShowOpenFolderDialog")) ShowOpenFolderDialog(
   callback: DialogFileCallback,
   userdata: ptr,
   window: *Window,
   default_location: *u8,
   allow_many: bool,
-): {}
+)
 type FileDialogType = either(u32, partial) {
   FILEDIALOG_OPENFILE = 0,
   FILEDIALOG_SAVEFILE = 1,
   FILEDIALOG_OPENFOLDER = 2,
 }
-#static assert-layout[FileDialogType](4, 4, [])
 fn(extern("SDL_ShowFileDialogWithProperties")) ShowFileDialogWithProperties(
   type: FileDialogType,
   callback: DialogFileCallback,
   userdata: ptr,
   props: PropertiesID,
-): {}
+)
 type GUID = {
   data: array[Uint8, 16],
 }
-#static assert-layout[GUID](16, 1, [0, ])
 fn(extern("SDL_GUIDToString")) GUIDToString(
   guid: GUID,
   pszGUID: *u8,
   cbGUID: i32,
-): {}
+)
 fn(extern("SDL_StringToGUID")) StringToGUID(
   pchGUID: *u8,
 ): GUID
@@ -4246,14 +4136,12 @@ type PowerState = either(i32, partial) {
   POWERSTATE_CHARGING = 3,
   POWERSTATE_CHARGED = 4,
 }
-#static assert-layout[PowerState](4, 4, [])
 fn(extern("SDL_GetPowerInfo")) GetPowerInfo(
   seconds: *i32,
   percent: *i32,
 ): PowerState
 type Sensor = opaque[0, 1]
 type(alias) SensorID = Uint32
-#static assert-layout[SensorID](4, 4, [])
 type SensorType = either(i32, partial) {
   SENSOR_INVALID = -1,
   SENSOR_UNKNOWN = 0,
@@ -4265,7 +4153,6 @@ type SensorType = either(i32, partial) {
   SENSOR_GYRO_R = 6,
   SENSOR_COUNT = 7,
 }
-#static assert-layout[SensorType](4, 4, [])
 fn(extern("SDL_GetSensors")) GetSensors(
   count: *i32,
 ): optref[SensorID]
@@ -4306,11 +4193,10 @@ fn(extern("SDL_GetSensorData")) GetSensorData(
 ): bool
 fn(extern("SDL_CloseSensor")) CloseSensor(
   sensor: *Sensor,
-): {}
-fn(extern("SDL_UpdateSensors")) UpdateSensors(): {}
+)
+fn(extern("SDL_UpdateSensors")) UpdateSensors()
 type Joystick = opaque[0, 1]
 type(alias) JoystickID = Uint32
-#static assert-layout[JoystickID](4, 4, [])
 type JoystickType = either(u32, partial) {
   JOYSTICK_TYPE_UNKNOWN = 0,
   JOYSTICK_TYPE_GAMEPAD = 1,
@@ -4324,16 +4210,14 @@ type JoystickType = either(u32, partial) {
   JOYSTICK_TYPE_THROTTLE = 9,
   JOYSTICK_TYPE_COUNT = 10,
 }
-#static assert-layout[JoystickType](4, 4, [])
 type JoystickConnectionState = either(i32, partial) {
   JOYSTICK_CONNECTION_INVALID = -1,
   JOYSTICK_CONNECTION_UNKNOWN = 0,
   JOYSTICK_CONNECTION_WIRED = 1,
   JOYSTICK_CONNECTION_WIRELESS = 2,
 }
-#static assert-layout[JoystickConnectionState](4, 4, [])
-fn(extern("SDL_LockJoysticks")) LockJoysticks(): {}
-fn(extern("SDL_UnlockJoysticks")) UnlockJoysticks(): {}
+fn(extern("SDL_LockJoysticks")) LockJoysticks()
+fn(extern("SDL_UnlockJoysticks")) UnlockJoysticks()
 fn(extern("SDL_HasJoystick")) HasJoystick(): bool
 fn(extern("SDL_GetJoysticks")) GetJoysticks(
   count: *i32,
@@ -4375,12 +4259,10 @@ type VirtualJoystickTouchpadDesc = {
   nfingers: Uint16,
   padding: array[Uint16, 3],
 }
-#static assert-layout[VirtualJoystickTouchpadDesc](8, 2, [0, 2, ])
 type VirtualJoystickSensorDesc = {
   type: SensorType,
   rate: f32,
 }
-#static assert-layout[VirtualJoystickSensorDesc](8, 4, [0, 4, ])
 type VirtualJoystickDesc = {
   version: Uint32,
   type: Uint16,
@@ -4402,11 +4284,11 @@ type VirtualJoystickDesc = {
   userdata: ptr,
   Update: optref[fn(
     ptr
-  ) -> {}],
+  )],
   SetPlayerIndex: optref[fn(
     ptr,
     i32
-  ) -> {}],
+  )],
   Rumble: optref[fn(
     ptr,
     Uint16,
@@ -4434,9 +4316,8 @@ type VirtualJoystickDesc = {
   ) -> bool],
   Cleanup: optref[fn(
     ptr
-  ) -> {}],
+  )],
 }
-#static assert-layout[VirtualJoystickDesc](136, 8, [0, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 28, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, ])
 fn(extern("SDL_AttachVirtualJoystick")) AttachVirtualJoystick(
   desc: *VirtualJoystickDesc,
 ): JoystickID
@@ -4526,7 +4407,7 @@ fn(extern("SDL_GetJoystickGUIDInfo")) GetJoystickGUIDInfo(
   product: *Uint16,
   version: *Uint16,
   crc16: *Uint16,
-): {}
+)
 fn(extern("SDL_JoystickConnected")) JoystickConnected(
   joystick: *Joystick,
 ): bool
@@ -4547,9 +4428,9 @@ fn(extern("SDL_GetNumJoystickButtons")) GetNumJoystickButtons(
 ): i32
 fn(extern("SDL_SetJoystickEventsEnabled")) SetJoystickEventsEnabled(
   enabled: bool,
-): {}
+)
 fn(extern("SDL_JoystickEventsEnabled")) JoystickEventsEnabled(): bool
-fn(extern("SDL_UpdateJoysticks")) UpdateJoysticks(): {}
+fn(extern("SDL_UpdateJoysticks")) UpdateJoysticks()
 fn(extern("SDL_GetJoystickAxis")) GetJoystickAxis(
   joystick: *Joystick,
   axis: i32,
@@ -4598,7 +4479,7 @@ fn(extern("SDL_SendJoystickEffect")) SendJoystickEffect(
 ): bool
 fn(extern("SDL_CloseJoystick")) CloseJoystick(
   joystick: *Joystick,
-): {}
+)
 fn(extern("SDL_GetJoystickConnectionState")) GetJoystickConnectionState(
   joystick: *Joystick,
 ): JoystickConnectionState
@@ -4622,7 +4503,6 @@ type GamepadType = either(u32, partial) {
   GAMEPAD_TYPE_GAMECUBE = 11,
   GAMEPAD_TYPE_COUNT = 12,
 }
-#static assert-layout[GamepadType](4, 4, [])
 type GamepadButton = either(i32, partial) {
   GAMEPAD_BUTTON_INVALID = -1,
   GAMEPAD_BUTTON_SOUTH = 0,
@@ -4653,7 +4533,6 @@ type GamepadButton = either(i32, partial) {
   GAMEPAD_BUTTON_MISC6 = 25,
   GAMEPAD_BUTTON_COUNT = 26,
 }
-#static assert-layout[GamepadButton](4, 4, [])
 type GamepadButtonLabel = either(u32, partial) {
   GAMEPAD_BUTTON_LABEL_UNKNOWN = 0,
   GAMEPAD_BUTTON_LABEL_A = 1,
@@ -4665,7 +4544,6 @@ type GamepadButtonLabel = either(u32, partial) {
   GAMEPAD_BUTTON_LABEL_SQUARE = 7,
   GAMEPAD_BUTTON_LABEL_TRIANGLE = 8,
 }
-#static assert-layout[GamepadButtonLabel](4, 4, [])
 type GamepadAxis = either(i32, partial) {
   GAMEPAD_AXIS_INVALID = -1,
   GAMEPAD_AXIS_LEFTX = 0,
@@ -4676,14 +4554,12 @@ type GamepadAxis = either(i32, partial) {
   GAMEPAD_AXIS_RIGHT_TRIGGER = 5,
   GAMEPAD_AXIS_COUNT = 6,
 }
-#static assert-layout[GamepadAxis](4, 4, [])
 type GamepadBindingType = either(u32, partial) {
   GAMEPAD_BINDTYPE_NONE = 0,
   GAMEPAD_BINDTYPE_BUTTON = 1,
   GAMEPAD_BINDTYPE_AXIS = 2,
   GAMEPAD_BINDTYPE_HAT = 3,
 }
-#static assert-layout[GamepadBindingType](4, 4, [])
 type GamepadBinding = {
   input_type: GamepadBindingType,
   input: union {
@@ -4708,7 +4584,6 @@ type GamepadBinding = {
     },
   },
 }
-#static assert-layout[GamepadBinding](32, 4, [0, 4, 16, 20, ])
 fn(extern("SDL_AddGamepadMapping")) AddGamepadMapping(
   mapping: *u8,
 ): i32
@@ -4837,13 +4712,13 @@ fn(extern("SDL_GetGamepadJoystick")) GetGamepadJoystick(
 ): optref[Joystick]
 fn(extern("SDL_SetGamepadEventsEnabled")) SetGamepadEventsEnabled(
   enabled: bool,
-): {}
+)
 fn(extern("SDL_GamepadEventsEnabled")) GamepadEventsEnabled(): bool
 fn(extern("SDL_GetGamepadBindings")) GetGamepadBindings(
   gamepad: *Gamepad,
   count: *i32,
 ): optref[optref[GamepadBinding]]
-fn(extern("SDL_UpdateGamepads")) UpdateGamepads(): {}
+fn(extern("SDL_UpdateGamepads")) UpdateGamepads()
 fn(extern("SDL_GetGamepadTypeFromString")) GetGamepadTypeFromString(
   str: *u8,
 ): GamepadType
@@ -4950,7 +4825,7 @@ fn(extern("SDL_SendGamepadEffect")) SendGamepadEffect(
 ): bool
 fn(extern("SDL_CloseGamepad")) CloseGamepad(
   gamepad: *Gamepad,
-): {}
+)
 fn(extern("SDL_GetGamepadAppleSFSymbolsNameForButton")) GetGamepadAppleSFSymbolsNameForButton(
   gamepad: *Gamepad,
   button: GamepadButton,
@@ -5210,13 +5085,9 @@ type Scancode = either(u32, partial) {
   SCANCODE_RESERVED = 400,
   SCANCODE_COUNT = 512,
 }
-#static assert-layout[Scancode](4, 4, [])
 type(alias) Keycode = Uint32
-#static assert-layout[Keycode](4, 4, [])
 type(alias) Keymod = Uint16
-#static assert-layout[Keymod](2, 2, [])
 type(alias) KeyboardID = Uint32
-#static assert-layout[KeyboardID](4, 4, [])
 fn(extern("SDL_HasKeyboard")) HasKeyboard(): bool
 fn(extern("SDL_GetKeyboards")) GetKeyboards(
   count: *i32,
@@ -5228,11 +5099,11 @@ fn(extern("SDL_GetKeyboardFocus")) GetKeyboardFocus(): optref[Window]
 fn(extern("SDL_GetKeyboardState")) GetKeyboardState(
   numkeys: *i32,
 ): optref[bool]
-fn(extern("SDL_ResetKeyboard")) ResetKeyboard(): {}
+fn(extern("SDL_ResetKeyboard")) ResetKeyboard()
 fn(extern("SDL_GetModState")) GetModState(): Keymod
 fn(extern("SDL_SetModState")) SetModState(
   modstate: Keymod,
-): {}
+)
 fn(extern("SDL_GetKeyFromScancode")) GetKeyFromScancode(
   scancode: Scancode,
   modstate: Keymod,
@@ -5272,14 +5143,12 @@ type TextInputType = either(u32, partial) {
   TEXTINPUT_TYPE_NUMBER_PASSWORD_HIDDEN = 7,
   TEXTINPUT_TYPE_NUMBER_PASSWORD_VISIBLE = 8,
 }
-#static assert-layout[TextInputType](4, 4, [])
 type Capitalization = either(u32, partial) {
   CAPITALIZE_NONE = 0,
   CAPITALIZE_SENTENCES = 1,
   CAPITALIZE_WORDS = 2,
   CAPITALIZE_LETTERS = 3,
 }
-#static assert-layout[Capitalization](4, 4, [])
 fn(extern("SDL_StartTextInputWithProperties")) StartTextInputWithProperties(
   window: *Window,
   props: PropertiesID,
@@ -5308,7 +5177,6 @@ fn(extern("SDL_ScreenKeyboardShown")) ScreenKeyboardShown(
   window: *Window,
 ): bool
 type(alias) MouseID = Uint32
-#static assert-layout[MouseID](4, 4, [])
 type Cursor = opaque[0, 1]
 type SystemCursor = either(u32, partial) {
   SYSTEM_CURSOR_DEFAULT = 0,
@@ -5333,19 +5201,15 @@ type SystemCursor = either(u32, partial) {
   SYSTEM_CURSOR_W_RESIZE = 19,
   SYSTEM_CURSOR_COUNT = 20,
 }
-#static assert-layout[SystemCursor](4, 4, [])
 type MouseWheelDirection = either(u32, partial) {
   MOUSEWHEEL_NORMAL = 0,
   MOUSEWHEEL_FLIPPED = 1,
 }
-#static assert-layout[MouseWheelDirection](4, 4, [])
 type CursorFrameInfo = {
   surface: optref[Surface],
   duration: Uint32,
 }
-#static assert-layout[CursorFrameInfo](16, 8, [0, 8, ])
 type(alias) MouseButtonFlags = Uint32
-#static assert-layout[MouseButtonFlags](4, 4, [])
 type(alias) MouseMotionTransformCallback = *fn(
   ptr,
   Uint64,
@@ -5353,8 +5217,7 @@ type(alias) MouseMotionTransformCallback = *fn(
   MouseID,
   *f32,
   *f32
-) -> {}
-#static assert-layout[MouseMotionTransformCallback](8, 8, [])
+)
 fn(extern("SDL_HasMouse")) HasMouse(): bool
 fn(extern("SDL_GetMice")) GetMice(
   count: *i32,
@@ -5379,7 +5242,7 @@ fn(extern("SDL_WarpMouseInWindow")) WarpMouseInWindow(
   window: *Window,
   x: f32,
   y: f32,
-): {}
+)
 fn(extern("SDL_WarpMouseGlobal")) WarpMouseGlobal(
   x: f32,
   y: f32,
@@ -5427,28 +5290,24 @@ fn(extern("SDL_GetCursor")) GetCursor(): optref[Cursor]
 fn(extern("SDL_GetDefaultCursor")) GetDefaultCursor(): optref[Cursor]
 fn(extern("SDL_DestroyCursor")) DestroyCursor(
   cursor: *Cursor,
-): {}
+)
 fn(extern("SDL_ShowCursor")) ShowCursor(): bool
 fn(extern("SDL_HideCursor")) HideCursor(): bool
 fn(extern("SDL_CursorVisible")) CursorVisible(): bool
 type(alias) TouchID = Uint64
-#static assert-layout[TouchID](8, 8, [])
 type(alias) FingerID = Uint64
-#static assert-layout[FingerID](8, 8, [])
 type TouchDeviceType = either(i32, partial) {
   TOUCH_DEVICE_INVALID = -1,
   TOUCH_DEVICE_DIRECT = 0,
   TOUCH_DEVICE_INDIRECT_ABSOLUTE = 1,
   TOUCH_DEVICE_INDIRECT_RELATIVE = 2,
 }
-#static assert-layout[TouchDeviceType](4, 4, [])
 type Finger = {
   id: FingerID,
   x: f32,
   y: f32,
   pressure: f32,
 }
-#static assert-layout[Finger](24, 8, [0, 8, 12, 16, ])
 fn(extern("SDL_GetTouchDevices")) GetTouchDevices(
   count: *i32,
 ): optref[TouchID]
@@ -5463,9 +5322,7 @@ fn(extern("SDL_GetTouchFingers")) GetTouchFingers(
   count: *i32,
 ): optref[optref[Finger]]
 type(alias) PenID = Uint32
-#static assert-layout[PenID](4, 4, [])
 type(alias) PenInputFlags = Uint32
-#static assert-layout[PenInputFlags](4, 4, [])
 type PenAxis = either(u32, partial) {
   PEN_AXIS_PRESSURE = 0,
   PEN_AXIS_XTILT = 1,
@@ -5476,14 +5333,12 @@ type PenAxis = either(u32, partial) {
   PEN_AXIS_TANGENTIAL_PRESSURE = 6,
   PEN_AXIS_COUNT = 7,
 }
-#static assert-layout[PenAxis](4, 4, [])
 type PenDeviceType = either(i32, partial) {
   PEN_DEVICE_TYPE_INVALID = -1,
   PEN_DEVICE_TYPE_UNKNOWN = 0,
   PEN_DEVICE_TYPE_DIRECT = 1,
   PEN_DEVICE_TYPE_INDIRECT = 2,
 }
-#static assert-layout[PenDeviceType](4, 4, [])
 fn(extern("SDL_GetPenDeviceType")) GetPenDeviceType(
   instance_id: PenID,
 ): PenDeviceType
@@ -5609,13 +5464,11 @@ type EventType = either(u32, partial) {
   EVENT_LAST = 65535,
   EVENT_ENUM_PADDING = 2147483647,
 }
-#static assert-layout[EventType](4, 4, [])
 type CommonEvent = {
   type: Uint32,
   reserved: Uint32,
   timestamp: Uint64,
 }
-#static assert-layout[CommonEvent](16, 8, [0, 4, 8, ])
 type DisplayEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5624,7 +5477,6 @@ type DisplayEvent = {
   data1: Sint32,
   data2: Sint32,
 }
-#static assert-layout[DisplayEvent](32, 8, [0, 4, 8, 16, 20, 24, ])
 type WindowEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5633,14 +5485,12 @@ type WindowEvent = {
   data1: Sint32,
   data2: Sint32,
 }
-#static assert-layout[WindowEvent](32, 8, [0, 4, 8, 16, 20, 24, ])
 type KeyboardDeviceEvent = {
   type: EventType,
   reserved: Uint32,
   timestamp: Uint64,
   which: KeyboardID,
 }
-#static assert-layout[KeyboardDeviceEvent](24, 8, [0, 4, 8, 16, ])
 type KeyboardEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5654,7 +5504,6 @@ type KeyboardEvent = {
   down: bool,
   repeat: bool,
 }
-#static assert-layout[KeyboardEvent](40, 8, [0, 4, 8, 16, 20, 24, 28, 32, 34, 36, 37, ])
 type TextEditingEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5664,7 +5513,6 @@ type TextEditingEvent = {
   start: Sint32,
   length: Sint32,
 }
-#static assert-layout[TextEditingEvent](40, 8, [0, 4, 8, 16, 24, 32, 36, ])
 type TextEditingCandidatesEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5678,7 +5526,6 @@ type TextEditingCandidatesEvent = {
   padding2: Uint8,
   padding3: Uint8,
 }
-#static assert-layout[TextEditingCandidatesEvent](48, 8, [0, 4, 8, 16, 24, 32, 36, 40, 41, 42, 43, ])
 type TextInputEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5686,14 +5533,12 @@ type TextInputEvent = {
   windowID: WindowID,
   text: optref[u8],
 }
-#static assert-layout[TextInputEvent](32, 8, [0, 4, 8, 16, 24, ])
 type MouseDeviceEvent = {
   type: EventType,
   reserved: Uint32,
   timestamp: Uint64,
   which: MouseID,
 }
-#static assert-layout[MouseDeviceEvent](24, 8, [0, 4, 8, 16, ])
 type MouseMotionEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5706,7 +5551,6 @@ type MouseMotionEvent = {
   xrel: f32,
   yrel: f32,
 }
-#static assert-layout[MouseMotionEvent](48, 8, [0, 4, 8, 16, 20, 24, 28, 32, 36, 40, ])
 type MouseButtonEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5720,7 +5564,6 @@ type MouseButtonEvent = {
   x: f32,
   y: f32,
 }
-#static assert-layout[MouseButtonEvent](40, 8, [0, 4, 8, 16, 20, 24, 25, 26, 27, 28, 32, ])
 type MouseWheelEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5735,7 +5578,6 @@ type MouseWheelEvent = {
   integer_x: Sint32,
   integer_y: Sint32,
 }
-#static assert-layout[MouseWheelEvent](56, 8, [0, 4, 8, 16, 20, 24, 28, 32, 36, 40, 44, 48, ])
 type JoyAxisEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5748,7 +5590,6 @@ type JoyAxisEvent = {
   value: Sint16,
   padding4: Uint16,
 }
-#static assert-layout[JoyAxisEvent](32, 8, [0, 4, 8, 16, 20, 21, 22, 23, 24, 26, ])
 type JoyBallEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5761,7 +5602,6 @@ type JoyBallEvent = {
   xrel: Sint16,
   yrel: Sint16,
 }
-#static assert-layout[JoyBallEvent](32, 8, [0, 4, 8, 16, 20, 21, 22, 23, 24, 26, ])
 type JoyHatEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5772,7 +5612,6 @@ type JoyHatEvent = {
   padding1: Uint8,
   padding2: Uint8,
 }
-#static assert-layout[JoyHatEvent](24, 8, [0, 4, 8, 16, 20, 21, 22, 23, ])
 type JoyButtonEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5783,14 +5622,12 @@ type JoyButtonEvent = {
   padding1: Uint8,
   padding2: Uint8,
 }
-#static assert-layout[JoyButtonEvent](24, 8, [0, 4, 8, 16, 20, 21, 22, 23, ])
 type JoyDeviceEvent = {
   type: EventType,
   reserved: Uint32,
   timestamp: Uint64,
   which: JoystickID,
 }
-#static assert-layout[JoyDeviceEvent](24, 8, [0, 4, 8, 16, ])
 type JoyBatteryEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5799,7 +5636,6 @@ type JoyBatteryEvent = {
   state: PowerState,
   percent: i32,
 }
-#static assert-layout[JoyBatteryEvent](32, 8, [0, 4, 8, 16, 20, 24, ])
 type GamepadAxisEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5812,7 +5648,6 @@ type GamepadAxisEvent = {
   value: Sint16,
   padding4: Uint16,
 }
-#static assert-layout[GamepadAxisEvent](32, 8, [0, 4, 8, 16, 20, 21, 22, 23, 24, 26, ])
 type GamepadButtonEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5823,14 +5658,12 @@ type GamepadButtonEvent = {
   padding1: Uint8,
   padding2: Uint8,
 }
-#static assert-layout[GamepadButtonEvent](24, 8, [0, 4, 8, 16, 20, 21, 22, 23, ])
 type GamepadDeviceEvent = {
   type: EventType,
   reserved: Uint32,
   timestamp: Uint64,
   which: JoystickID,
 }
-#static assert-layout[GamepadDeviceEvent](24, 8, [0, 4, 8, 16, ])
 type GamepadTouchpadEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5842,7 +5675,6 @@ type GamepadTouchpadEvent = {
   y: f32,
   pressure: f32,
 }
-#static assert-layout[GamepadTouchpadEvent](40, 8, [0, 4, 8, 16, 20, 24, 28, 32, 36, ])
 type GamepadSensorEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5852,7 +5684,6 @@ type GamepadSensorEvent = {
   data: array[f32, 3],
   sensor_timestamp: Uint64,
 }
-#static assert-layout[GamepadSensorEvent](48, 8, [0, 4, 8, 16, 20, 24, 40, ])
 type AudioDeviceEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5863,21 +5694,18 @@ type AudioDeviceEvent = {
   padding2: Uint8,
   padding3: Uint8,
 }
-#static assert-layout[AudioDeviceEvent](24, 8, [0, 4, 8, 16, 20, 21, 22, 23, ])
 type CameraDeviceEvent = {
   type: EventType,
   reserved: Uint32,
   timestamp: Uint64,
   which: CameraID,
 }
-#static assert-layout[CameraDeviceEvent](24, 8, [0, 4, 8, 16, ])
 type RenderEvent = {
   type: EventType,
   reserved: Uint32,
   timestamp: Uint64,
   windowID: WindowID,
 }
-#static assert-layout[RenderEvent](24, 8, [0, 4, 8, 16, ])
 type TouchFingerEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5891,7 +5719,6 @@ type TouchFingerEvent = {
   pressure: f32,
   windowID: WindowID,
 }
-#static assert-layout[TouchFingerEvent](56, 8, [0, 4, 8, 16, 24, 32, 36, 40, 44, 48, 52, ])
 type PinchFingerEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5899,7 +5726,6 @@ type PinchFingerEvent = {
   scale: f32,
   windowID: WindowID,
 }
-#static assert-layout[PinchFingerEvent](24, 8, [0, 4, 8, 16, 20, ])
 type PenProximityEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5907,7 +5733,6 @@ type PenProximityEvent = {
   windowID: WindowID,
   which: PenID,
 }
-#static assert-layout[PenProximityEvent](24, 8, [0, 4, 8, 16, 20, ])
 type PenMotionEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5918,7 +5743,6 @@ type PenMotionEvent = {
   x: f32,
   y: f32,
 }
-#static assert-layout[PenMotionEvent](40, 8, [0, 4, 8, 16, 20, 24, 28, 32, ])
 type PenTouchEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5931,7 +5755,6 @@ type PenTouchEvent = {
   eraser: bool,
   down: bool,
 }
-#static assert-layout[PenTouchEvent](40, 8, [0, 4, 8, 16, 20, 24, 28, 32, 36, 37, ])
 type PenButtonEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5944,7 +5767,6 @@ type PenButtonEvent = {
   button: Uint8,
   down: bool,
 }
-#static assert-layout[PenButtonEvent](40, 8, [0, 4, 8, 16, 20, 24, 28, 32, 36, 37, ])
 type PenAxisEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5957,7 +5779,6 @@ type PenAxisEvent = {
   axis: PenAxis,
   value: f32,
 }
-#static assert-layout[PenAxisEvent](48, 8, [0, 4, 8, 16, 20, 24, 28, 32, 36, 40, ])
 type DropEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5968,7 +5789,6 @@ type DropEvent = {
   source: optref[u8],
   data: optref[u8],
 }
-#static assert-layout[DropEvent](48, 8, [0, 4, 8, 16, 20, 24, 32, 40, ])
 type ClipboardEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5977,7 +5797,6 @@ type ClipboardEvent = {
   num_mime_types: Sint32,
   mime_types: optref[optref[u8]],
 }
-#static assert-layout[ClipboardEvent](32, 8, [0, 4, 8, 16, 20, 24, ])
 type SensorEvent = {
   type: EventType,
   reserved: Uint32,
@@ -5986,13 +5805,11 @@ type SensorEvent = {
   data: array[f32, 6],
   sensor_timestamp: Uint64,
 }
-#static assert-layout[SensorEvent](56, 8, [0, 4, 8, 16, 20, 48, ])
 type QuitEvent = {
   type: EventType,
   reserved: Uint32,
   timestamp: Uint64,
 }
-#static assert-layout[QuitEvent](16, 8, [0, 4, 8, ])
 type UserEvent = {
   type: Uint32,
   reserved: Uint32,
@@ -6002,7 +5819,6 @@ type UserEvent = {
   data1: ptr,
   data2: ptr,
 }
-#static assert-layout[UserEvent](40, 8, [0, 4, 8, 16, 20, 24, 32, ])
 type Event = union {
   type: Uint32,
   common: CommonEvent,
@@ -6045,14 +5861,12 @@ type Event = union {
   clipboard: ClipboardEvent,
   padding: array[Uint8, 128],
 }
-#static assert-layout[Event](128, 8, [])
-fn(extern("SDL_PumpEvents")) PumpEvents(): {}
+fn(extern("SDL_PumpEvents")) PumpEvents()
 type EventAction = either(u32, partial) {
   ADDEVENT = 0,
   PEEKEVENT = 1,
   GETEVENT = 2,
 }
-#static assert-layout[EventAction](4, 4, [])
 fn(extern("SDL_PeepEvents")) PeepEvents(
   events: *Event,
   numevents: i32,
@@ -6069,11 +5883,11 @@ fn(extern("SDL_HasEvents")) HasEvents(
 ): bool
 fn(extern("SDL_FlushEvent")) FlushEvent(
   type: Uint32,
-): {}
+)
 fn(extern("SDL_FlushEvents")) FlushEvents(
   minType: Uint32,
   maxType: Uint32,
-): {}
+)
 fn(extern("SDL_PollEvent")) PollEvent(
   event: *Event,
 ): bool
@@ -6091,11 +5905,10 @@ type(alias) EventFilter = *fn(
   ptr,
   *Event
 ) -> bool
-#static assert-layout[EventFilter](8, 8, [])
 fn(extern("SDL_SetEventFilter")) SetEventFilter(
   filter: EventFilter,
   userdata: ptr,
-): {}
+)
 fn(extern("SDL_GetEventFilter")) GetEventFilter(
   filter: *EventFilter,
   userdata: *ptr,
@@ -6107,15 +5920,15 @@ fn(extern("SDL_AddEventWatch")) AddEventWatch(
 fn(extern("SDL_RemoveEventWatch")) RemoveEventWatch(
   filter: EventFilter,
   userdata: ptr,
-): {}
+)
 fn(extern("SDL_FilterEvents")) FilterEvents(
   filter: EventFilter,
   userdata: ptr,
-): {}
+)
 fn(extern("SDL_SetEventEnabled")) SetEventEnabled(
   type: Uint32,
   enabled: bool,
-): {}
+)
 fn(extern("SDL_EventEnabled")) EventEnabled(
   type: Uint32,
 ): bool
@@ -6149,7 +5962,6 @@ type Folder = either(u32, partial) {
   FOLDER_VIDEOS = 10,
   FOLDER_COUNT = 11,
 }
-#static assert-layout[Folder](4, 4, [])
 fn(extern("SDL_GetUserFolder")) GetUserFolder(
   folder: Folder,
 ): optref[u8]
@@ -6159,7 +5971,6 @@ type PathType = either(u32, partial) {
   PATHTYPE_DIRECTORY = 2,
   PATHTYPE_OTHER = 3,
 }
-#static assert-layout[PathType](4, 4, [])
 type PathInfo = {
   type: PathType,
   size: Uint64,
@@ -6167,9 +5978,7 @@ type PathInfo = {
   modify_time: Time,
   access_time: Time,
 }
-#static assert-layout[PathInfo](40, 8, [0, 8, 16, 24, 32, ])
 type(alias) GlobFlags = Uint32
-#static assert-layout[GlobFlags](4, 4, [])
 fn(extern("SDL_CreateDirectory")) CreateDirectory(
   path: *u8,
 ): bool
@@ -6178,13 +5987,11 @@ type EnumerationResult = either(u32, partial) {
   ENUM_SUCCESS = 1,
   ENUM_FAILURE = 2,
 }
-#static assert-layout[EnumerationResult](4, 4, [])
 type(alias) EnumerateDirectoryCallback = *fn(
   ptr,
   *u8,
   *u8
 ) -> EnumerationResult
-#static assert-layout[EnumerateDirectoryCallback](8, 8, [])
 fn(extern("SDL_EnumerateDirectory")) EnumerateDirectory(
   path: *u8,
   callback: EnumerateDirectoryCallback,
@@ -6232,25 +6039,21 @@ type GPUPrimitiveType = either(u32, partial) {
   GPU_PRIMITIVETYPE_LINESTRIP = 3,
   GPU_PRIMITIVETYPE_POINTLIST = 4,
 }
-#static assert-layout[GPUPrimitiveType](4, 4, [])
 type GPULoadOp = either(u32, partial) {
   GPU_LOADOP_LOAD = 0,
   GPU_LOADOP_CLEAR = 1,
   GPU_LOADOP_DONT_CARE = 2,
 }
-#static assert-layout[GPULoadOp](4, 4, [])
 type GPUStoreOp = either(u32, partial) {
   GPU_STOREOP_STORE = 0,
   GPU_STOREOP_DONT_CARE = 1,
   GPU_STOREOP_RESOLVE = 2,
   GPU_STOREOP_RESOLVE_AND_STORE = 3,
 }
-#static assert-layout[GPUStoreOp](4, 4, [])
 type GPUIndexElementSize = either(u32, partial) {
   GPU_INDEXELEMENTSIZE_16BIT = 0,
   GPU_INDEXELEMENTSIZE_32BIT = 1,
 }
-#static assert-layout[GPUIndexElementSize](4, 4, [])
 type GPUTextureFormat = either(u32, partial) {
   GPU_TEXTUREFORMAT_INVALID = 0,
   GPU_TEXTUREFORMAT_A8_UNORM = 1,
@@ -6358,9 +6161,7 @@ type GPUTextureFormat = either(u32, partial) {
   GPU_TEXTUREFORMAT_ASTC_12x10_FLOAT = 103,
   GPU_TEXTUREFORMAT_ASTC_12x12_FLOAT = 104,
 }
-#static assert-layout[GPUTextureFormat](4, 4, [])
 type(alias) GPUTextureUsageFlags = Uint32
-#static assert-layout[GPUTextureUsageFlags](4, 4, [])
 type GPUTextureType = either(u32, partial) {
   GPU_TEXTURETYPE_2D = 0,
   GPU_TEXTURETYPE_2D_ARRAY = 1,
@@ -6368,14 +6169,12 @@ type GPUTextureType = either(u32, partial) {
   GPU_TEXTURETYPE_CUBE = 3,
   GPU_TEXTURETYPE_CUBE_ARRAY = 4,
 }
-#static assert-layout[GPUTextureType](4, 4, [])
 type GPUSampleCount = either(u32, partial) {
   GPU_SAMPLECOUNT_1 = 0,
   GPU_SAMPLECOUNT_2 = 1,
   GPU_SAMPLECOUNT_4 = 2,
   GPU_SAMPLECOUNT_8 = 3,
 }
-#static assert-layout[GPUSampleCount](4, 4, [])
 type GPUCubeMapFace = either(u32, partial) {
   GPU_CUBEMAPFACE_POSITIVEX = 0,
   GPU_CUBEMAPFACE_NEGATIVEX = 1,
@@ -6384,21 +6183,16 @@ type GPUCubeMapFace = either(u32, partial) {
   GPU_CUBEMAPFACE_POSITIVEZ = 4,
   GPU_CUBEMAPFACE_NEGATIVEZ = 5,
 }
-#static assert-layout[GPUCubeMapFace](4, 4, [])
 type(alias) GPUBufferUsageFlags = Uint32
-#static assert-layout[GPUBufferUsageFlags](4, 4, [])
 type GPUTransferBufferUsage = either(u32, partial) {
   GPU_TRANSFERBUFFERUSAGE_UPLOAD = 0,
   GPU_TRANSFERBUFFERUSAGE_DOWNLOAD = 1,
 }
-#static assert-layout[GPUTransferBufferUsage](4, 4, [])
 type GPUShaderStage = either(u32, partial) {
   GPU_SHADERSTAGE_VERTEX = 0,
   GPU_SHADERSTAGE_FRAGMENT = 1,
 }
-#static assert-layout[GPUShaderStage](4, 4, [])
 type(alias) GPUShaderFormat = Uint32
-#static assert-layout[GPUShaderFormat](4, 4, [])
 type GPUVertexElementFormat = either(u32, partial) {
   GPU_VERTEXELEMENTFORMAT_INVALID = 0,
   GPU_VERTEXELEMENTFORMAT_INT = 1,
@@ -6432,28 +6226,23 @@ type GPUVertexElementFormat = either(u32, partial) {
   GPU_VERTEXELEMENTFORMAT_HALF2 = 29,
   GPU_VERTEXELEMENTFORMAT_HALF4 = 30,
 }
-#static assert-layout[GPUVertexElementFormat](4, 4, [])
 type GPUVertexInputRate = either(u32, partial) {
   GPU_VERTEXINPUTRATE_VERTEX = 0,
   GPU_VERTEXINPUTRATE_INSTANCE = 1,
 }
-#static assert-layout[GPUVertexInputRate](4, 4, [])
 type GPUFillMode = either(u32, partial) {
   GPU_FILLMODE_FILL = 0,
   GPU_FILLMODE_LINE = 1,
 }
-#static assert-layout[GPUFillMode](4, 4, [])
 type GPUCullMode = either(u32, partial) {
   GPU_CULLMODE_NONE = 0,
   GPU_CULLMODE_FRONT = 1,
   GPU_CULLMODE_BACK = 2,
 }
-#static assert-layout[GPUCullMode](4, 4, [])
 type GPUFrontFace = either(u32, partial) {
   GPU_FRONTFACE_COUNTER_CLOCKWISE = 0,
   GPU_FRONTFACE_CLOCKWISE = 1,
 }
-#static assert-layout[GPUFrontFace](4, 4, [])
 type GPUCompareOp = either(u32, partial) {
   GPU_COMPAREOP_INVALID = 0,
   GPU_COMPAREOP_NEVER = 1,
@@ -6465,7 +6254,6 @@ type GPUCompareOp = either(u32, partial) {
   GPU_COMPAREOP_GREATER_OR_EQUAL = 7,
   GPU_COMPAREOP_ALWAYS = 8,
 }
-#static assert-layout[GPUCompareOp](4, 4, [])
 type GPUStencilOp = either(u32, partial) {
   GPU_STENCILOP_INVALID = 0,
   GPU_STENCILOP_KEEP = 1,
@@ -6477,7 +6265,6 @@ type GPUStencilOp = either(u32, partial) {
   GPU_STENCILOP_INCREMENT_AND_WRAP = 7,
   GPU_STENCILOP_DECREMENT_AND_WRAP = 8,
 }
-#static assert-layout[GPUStencilOp](4, 4, [])
 type GPUBlendOp = either(u32, partial) {
   GPU_BLENDOP_INVALID = 0,
   GPU_BLENDOP_ADD = 1,
@@ -6486,7 +6273,6 @@ type GPUBlendOp = either(u32, partial) {
   GPU_BLENDOP_MIN = 4,
   GPU_BLENDOP_MAX = 5,
 }
-#static assert-layout[GPUBlendOp](4, 4, [])
 type GPUBlendFactor = either(u32, partial) {
   GPU_BLENDFACTOR_INVALID = 0,
   GPU_BLENDFACTOR_ZERO = 1,
@@ -6503,38 +6289,31 @@ type GPUBlendFactor = either(u32, partial) {
   GPU_BLENDFACTOR_ONE_MINUS_CONSTANT_COLOR = 12,
   GPU_BLENDFACTOR_SRC_ALPHA_SATURATE = 13,
 }
-#static assert-layout[GPUBlendFactor](4, 4, [])
 type(alias) GPUColorComponentFlags = Uint8
-#static assert-layout[GPUColorComponentFlags](1, 1, [])
 type GPUFilter = either(u32, partial) {
   GPU_FILTER_NEAREST = 0,
   GPU_FILTER_LINEAR = 1,
 }
-#static assert-layout[GPUFilter](4, 4, [])
 type GPUSamplerMipmapMode = either(u32, partial) {
   GPU_SAMPLERMIPMAPMODE_NEAREST = 0,
   GPU_SAMPLERMIPMAPMODE_LINEAR = 1,
 }
-#static assert-layout[GPUSamplerMipmapMode](4, 4, [])
 type GPUSamplerAddressMode = either(u32, partial) {
   GPU_SAMPLERADDRESSMODE_REPEAT = 0,
   GPU_SAMPLERADDRESSMODE_MIRRORED_REPEAT = 1,
   GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE = 2,
 }
-#static assert-layout[GPUSamplerAddressMode](4, 4, [])
 type GPUPresentMode = either(u32, partial) {
   GPU_PRESENTMODE_VSYNC = 0,
   GPU_PRESENTMODE_IMMEDIATE = 1,
   GPU_PRESENTMODE_MAILBOX = 2,
 }
-#static assert-layout[GPUPresentMode](4, 4, [])
 type GPUSwapchainComposition = either(u32, partial) {
   GPU_SWAPCHAINCOMPOSITION_SDR = 0,
   GPU_SWAPCHAINCOMPOSITION_SDR_LINEAR = 1,
   GPU_SWAPCHAINCOMPOSITION_HDR_EXTENDED_LINEAR = 2,
   GPU_SWAPCHAINCOMPOSITION_HDR10_ST2084 = 3,
 }
-#static assert-layout[GPUSwapchainComposition](4, 4, [])
 type GPUViewport = {
   x: f32,
   y: f32,
@@ -6543,19 +6322,16 @@ type GPUViewport = {
   min_depth: f32,
   max_depth: f32,
 }
-#static assert-layout[GPUViewport](24, 4, [0, 4, 8, 12, 16, 20, ])
 type GPUTextureTransferInfo = {
   transfer_buffer: optref[GPUTransferBuffer],
   offset: Uint32,
   pixels_per_row: Uint32,
   rows_per_layer: Uint32,
 }
-#static assert-layout[GPUTextureTransferInfo](24, 8, [0, 8, 12, 16, ])
 type GPUTransferBufferLocation = {
   transfer_buffer: optref[GPUTransferBuffer],
   offset: Uint32,
 }
-#static assert-layout[GPUTransferBufferLocation](16, 8, [0, 8, ])
 type GPUTextureLocation = {
   texture: optref[GPUTexture],
   mip_level: Uint32,
@@ -6564,7 +6340,6 @@ type GPUTextureLocation = {
   y: Uint32,
   z: Uint32,
 }
-#static assert-layout[GPUTextureLocation](32, 8, [0, 8, 12, 16, 20, 24, ])
 type GPUTextureRegion = {
   texture: optref[GPUTexture],
   mip_level: Uint32,
@@ -6576,7 +6351,6 @@ type GPUTextureRegion = {
   h: Uint32,
   d: Uint32,
 }
-#static assert-layout[GPUTextureRegion](40, 8, [0, 8, 12, 16, 20, 24, 28, 32, 36, ])
 type GPUBlitRegion = {
   texture: optref[GPUTexture],
   mip_level: Uint32,
@@ -6586,25 +6360,21 @@ type GPUBlitRegion = {
   w: Uint32,
   h: Uint32,
 }
-#static assert-layout[GPUBlitRegion](32, 8, [0, 8, 12, 16, 20, 24, 28, ])
 type GPUBufferLocation = {
   buffer: optref[GPUBuffer],
   offset: Uint32,
 }
-#static assert-layout[GPUBufferLocation](16, 8, [0, 8, ])
 type GPUBufferRegion = {
   buffer: optref[GPUBuffer],
   offset: Uint32,
   size: Uint32,
 }
-#static assert-layout[GPUBufferRegion](16, 8, [0, 8, 12, ])
 type GPUIndirectDrawCommand = {
   num_vertices: Uint32,
   num_instances: Uint32,
   first_vertex: Uint32,
   first_instance: Uint32,
 }
-#static assert-layout[GPUIndirectDrawCommand](16, 4, [0, 4, 8, 12, ])
 type GPUIndexedIndirectDrawCommand = {
   num_indices: Uint32,
   num_instances: Uint32,
@@ -6612,13 +6382,11 @@ type GPUIndexedIndirectDrawCommand = {
   vertex_offset: Sint32,
   first_instance: Uint32,
 }
-#static assert-layout[GPUIndexedIndirectDrawCommand](20, 4, [0, 4, 8, 12, 16, ])
 type GPUIndirectDispatchCommand = {
   groupcount_x: Uint32,
   groupcount_y: Uint32,
   groupcount_z: Uint32,
 }
-#static assert-layout[GPUIndirectDispatchCommand](12, 4, [0, 4, 8, ])
 type GPUSamplerCreateInfo = {
   min_filter: GPUFilter,
   mag_filter: GPUFilter,
@@ -6637,35 +6405,30 @@ type GPUSamplerCreateInfo = {
   padding2: Uint8,
   props: PropertiesID,
 }
-#static assert-layout[GPUSamplerCreateInfo](52, 4, [0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 45, 46, 47, 48, ])
 type GPUVertexBufferDescription = {
   slot: Uint32,
   pitch: Uint32,
   input_rate: GPUVertexInputRate,
   instance_step_rate: Uint32,
 }
-#static assert-layout[GPUVertexBufferDescription](16, 4, [0, 4, 8, 12, ])
 type GPUVertexAttribute = {
   location: Uint32,
   buffer_slot: Uint32,
   format: GPUVertexElementFormat,
   offset: Uint32,
 }
-#static assert-layout[GPUVertexAttribute](16, 4, [0, 4, 8, 12, ])
 type GPUVertexInputState = {
   vertex_buffer_descriptions: optref[GPUVertexBufferDescription],
   num_vertex_buffers: Uint32,
   vertex_attributes: optref[GPUVertexAttribute],
   num_vertex_attributes: Uint32,
 }
-#static assert-layout[GPUVertexInputState](32, 8, [0, 8, 16, 24, ])
 type GPUStencilOpState = {
   fail_op: GPUStencilOp,
   pass_op: GPUStencilOp,
   depth_fail_op: GPUStencilOp,
   compare_op: GPUCompareOp,
 }
-#static assert-layout[GPUStencilOpState](16, 4, [0, 4, 8, 12, ])
 type GPUColorTargetBlendState = {
   src_color_blendfactor: GPUBlendFactor,
   dst_color_blendfactor: GPUBlendFactor,
@@ -6679,7 +6442,6 @@ type GPUColorTargetBlendState = {
   padding1: Uint8,
   padding2: Uint8,
 }
-#static assert-layout[GPUColorTargetBlendState](32, 4, [0, 4, 8, 12, 16, 20, 24, 25, 26, 27, 28, ])
 type GPUShaderCreateInfo = {
   code_size: usize,
   code: optref[Uint8],
@@ -6692,7 +6454,6 @@ type GPUShaderCreateInfo = {
   num_uniform_buffers: Uint32,
   props: PropertiesID,
 }
-#static assert-layout[GPUShaderCreateInfo](56, 8, [0, 8, 16, 24, 28, 32, 36, 40, 44, 48, ])
 type GPUTextureCreateInfo = {
   type: GPUTextureType,
   format: GPUTextureFormat,
@@ -6704,19 +6465,16 @@ type GPUTextureCreateInfo = {
   sample_count: GPUSampleCount,
   props: PropertiesID,
 }
-#static assert-layout[GPUTextureCreateInfo](36, 4, [0, 4, 8, 12, 16, 20, 24, 28, 32, ])
 type GPUBufferCreateInfo = {
   usage: GPUBufferUsageFlags,
   size: Uint32,
   props: PropertiesID,
 }
-#static assert-layout[GPUBufferCreateInfo](12, 4, [0, 4, 8, ])
 type GPUTransferBufferCreateInfo = {
   usage: GPUTransferBufferUsage,
   size: Uint32,
   props: PropertiesID,
 }
-#static assert-layout[GPUTransferBufferCreateInfo](12, 4, [0, 4, 8, ])
 type GPURasterizerState = {
   fill_mode: GPUFillMode,
   cull_mode: GPUCullMode,
@@ -6729,7 +6487,6 @@ type GPURasterizerState = {
   padding1: Uint8,
   padding2: Uint8,
 }
-#static assert-layout[GPURasterizerState](28, 4, [0, 4, 8, 12, 16, 20, 24, 25, 26, 27, ])
 type GPUMultisampleState = {
   sample_count: GPUSampleCount,
   sample_mask: Uint32,
@@ -6738,7 +6495,6 @@ type GPUMultisampleState = {
   padding2: Uint8,
   padding3: Uint8,
 }
-#static assert-layout[GPUMultisampleState](12, 4, [0, 4, 8, 9, 10, 11, ])
 type GPUDepthStencilState = {
   compare_op: GPUCompareOp,
   back_stencil_state: GPUStencilOpState,
@@ -6752,12 +6508,10 @@ type GPUDepthStencilState = {
   padding2: Uint8,
   padding3: Uint8,
 }
-#static assert-layout[GPUDepthStencilState](44, 4, [0, 4, 20, 36, 37, 38, 39, 40, 41, 42, 43, ])
 type GPUColorTargetDescription = {
   format: GPUTextureFormat,
   blend_state: GPUColorTargetBlendState,
 }
-#static assert-layout[GPUColorTargetDescription](36, 4, [0, 4, ])
 type GPUGraphicsPipelineTargetInfo = {
   color_target_descriptions: optref[GPUColorTargetDescription],
   num_color_targets: Uint32,
@@ -6767,7 +6521,6 @@ type GPUGraphicsPipelineTargetInfo = {
   padding2: Uint8,
   padding3: Uint8,
 }
-#static assert-layout[GPUGraphicsPipelineTargetInfo](24, 8, [0, 8, 12, 16, 17, 18, 19, ])
 type GPUGraphicsPipelineCreateInfo = {
   vertex_shader: optref[GPUShader],
   fragment_shader: optref[GPUShader],
@@ -6779,7 +6532,6 @@ type GPUGraphicsPipelineCreateInfo = {
   target_info: GPUGraphicsPipelineTargetInfo,
   props: PropertiesID,
 }
-#static assert-layout[GPUGraphicsPipelineCreateInfo](168, 8, [0, 8, 16, 48, 52, 80, 92, 136, 160, ])
 type GPUComputePipelineCreateInfo = {
   code_size: usize,
   code: optref[Uint8],
@@ -6796,7 +6548,6 @@ type GPUComputePipelineCreateInfo = {
   threadcount_z: Uint32,
   props: PropertiesID,
 }
-#static assert-layout[GPUComputePipelineCreateInfo](72, 8, [0, 8, 16, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64, ])
 type GPUColorTargetInfo = {
   texture: optref[GPUTexture],
   mip_level: Uint32,
@@ -6812,7 +6563,6 @@ type GPUColorTargetInfo = {
   padding1: Uint8,
   padding2: Uint8,
 }
-#static assert-layout[GPUColorTargetInfo](64, 8, [0, 8, 12, 16, 32, 36, 40, 48, 52, 56, 57, 58, 59, ])
 type GPUDepthStencilTargetInfo = {
   texture: optref[GPUTexture],
   clear_depth: f32,
@@ -6825,7 +6575,6 @@ type GPUDepthStencilTargetInfo = {
   mip_level: Uint8,
   layer: Uint8,
 }
-#static assert-layout[GPUDepthStencilTargetInfo](32, 8, [0, 8, 12, 16, 20, 24, 28, 29, 30, 31, ])
 type GPUBlitInfo = {
   source: GPUBlitRegion,
   destination: GPUBlitRegion,
@@ -6838,17 +6587,14 @@ type GPUBlitInfo = {
   padding2: Uint8,
   padding3: Uint8,
 }
-#static assert-layout[GPUBlitInfo](96, 8, [0, 32, 64, 68, 84, 88, 92, 93, 94, 95, ])
 type GPUBufferBinding = {
   buffer: optref[GPUBuffer],
   offset: Uint32,
 }
-#static assert-layout[GPUBufferBinding](16, 8, [0, 8, ])
 type GPUTextureSamplerBinding = {
   texture: optref[GPUTexture],
   sampler: optref[GPUSampler],
 }
-#static assert-layout[GPUTextureSamplerBinding](16, 8, [0, 8, ])
 type GPUStorageBufferReadWriteBinding = {
   buffer: optref[GPUBuffer],
   cycle: bool,
@@ -6856,7 +6602,6 @@ type GPUStorageBufferReadWriteBinding = {
   padding2: Uint8,
   padding3: Uint8,
 }
-#static assert-layout[GPUStorageBufferReadWriteBinding](16, 8, [0, 8, 9, 10, 11, ])
 type GPUStorageTextureReadWriteBinding = {
   texture: optref[GPUTexture],
   mip_level: Uint32,
@@ -6866,7 +6611,6 @@ type GPUStorageTextureReadWriteBinding = {
   padding2: Uint8,
   padding3: Uint8,
 }
-#static assert-layout[GPUStorageTextureReadWriteBinding](24, 8, [0, 8, 12, 16, 17, 18, 19, ])
 fn(extern("SDL_GPUSupportsShaderFormats")) GPUSupportsShaderFormats(
   format_flags: GPUShaderFormat,
   name: *u8,
@@ -6891,10 +6635,9 @@ type GPUVulkanOptions = {
   instance_extension_count: Uint32,
   instance_extension_names: optref[optref[u8]],
 }
-#static assert-layout[GPUVulkanOptions](56, 8, [0, 8, 16, 24, 32, 40, 48, ])
 fn(extern("SDL_DestroyGPUDevice")) DestroyGPUDevice(
   device: *GPUDevice,
-): {}
+)
 fn(extern("SDL_GetNumGPUDrivers")) GetNumGPUDrivers(): i32
 fn(extern("SDL_GetGPUDriver")) GetGPUDriver(
   index: i32,
@@ -6940,51 +6683,51 @@ fn(extern("SDL_SetGPUBufferName")) SetGPUBufferName(
   device: *GPUDevice,
   buffer: *GPUBuffer,
   text: *u8,
-): {}
+)
 fn(extern("SDL_SetGPUTextureName")) SetGPUTextureName(
   device: *GPUDevice,
   texture: *GPUTexture,
   text: *u8,
-): {}
+)
 fn(extern("SDL_InsertGPUDebugLabel")) InsertGPUDebugLabel(
   command_buffer: *GPUCommandBuffer,
   text: *u8,
-): {}
+)
 fn(extern("SDL_PushGPUDebugGroup")) PushGPUDebugGroup(
   command_buffer: *GPUCommandBuffer,
   name: *u8,
-): {}
+)
 fn(extern("SDL_PopGPUDebugGroup")) PopGPUDebugGroup(
   command_buffer: *GPUCommandBuffer,
-): {}
+)
 fn(extern("SDL_ReleaseGPUTexture")) ReleaseGPUTexture(
   device: *GPUDevice,
   texture: *GPUTexture,
-): {}
+)
 fn(extern("SDL_ReleaseGPUSampler")) ReleaseGPUSampler(
   device: *GPUDevice,
   sampler: *GPUSampler,
-): {}
+)
 fn(extern("SDL_ReleaseGPUBuffer")) ReleaseGPUBuffer(
   device: *GPUDevice,
   buffer: *GPUBuffer,
-): {}
+)
 fn(extern("SDL_ReleaseGPUTransferBuffer")) ReleaseGPUTransferBuffer(
   device: *GPUDevice,
   transfer_buffer: *GPUTransferBuffer,
-): {}
+)
 fn(extern("SDL_ReleaseGPUComputePipeline")) ReleaseGPUComputePipeline(
   device: *GPUDevice,
   compute_pipeline: *GPUComputePipeline,
-): {}
+)
 fn(extern("SDL_ReleaseGPUShader")) ReleaseGPUShader(
   device: *GPUDevice,
   shader: *GPUShader,
-): {}
+)
 fn(extern("SDL_ReleaseGPUGraphicsPipeline")) ReleaseGPUGraphicsPipeline(
   device: *GPUDevice,
   graphics_pipeline: *GPUGraphicsPipeline,
-): {}
+)
 fn(extern("SDL_AcquireGPUCommandBuffer")) AcquireGPUCommandBuffer(
   device: *GPUDevice,
 ): optref[GPUCommandBuffer]
@@ -6993,19 +6736,19 @@ fn(extern("SDL_PushGPUVertexUniformData")) PushGPUVertexUniformData(
   slot_index: Uint32,
   data: ptr,
   length: Uint32,
-): {}
+)
 fn(extern("SDL_PushGPUFragmentUniformData")) PushGPUFragmentUniformData(
   command_buffer: *GPUCommandBuffer,
   slot_index: Uint32,
   data: ptr,
   length: Uint32,
-): {}
+)
 fn(extern("SDL_PushGPUComputeUniformData")) PushGPUComputeUniformData(
   command_buffer: *GPUCommandBuffer,
   slot_index: Uint32,
   data: ptr,
   length: Uint32,
-): {}
+)
 fn(extern("SDL_BeginGPURenderPass")) BeginGPURenderPass(
   command_buffer: *GPUCommandBuffer,
   color_target_infos: *GPUColorTargetInfo,
@@ -7015,70 +6758,70 @@ fn(extern("SDL_BeginGPURenderPass")) BeginGPURenderPass(
 fn(extern("SDL_BindGPUGraphicsPipeline")) BindGPUGraphicsPipeline(
   render_pass: *GPURenderPass,
   graphics_pipeline: *GPUGraphicsPipeline,
-): {}
+)
 fn(extern("SDL_SetGPUViewport")) SetGPUViewport(
   render_pass: *GPURenderPass,
   viewport: *GPUViewport,
-): {}
+)
 fn(extern("SDL_SetGPUScissor")) SetGPUScissor(
   render_pass: *GPURenderPass,
   scissor: *Rect,
-): {}
+)
 fn(extern("SDL_SetGPUBlendConstants")) SetGPUBlendConstants(
   render_pass: *GPURenderPass,
   blend_constants: FColor,
-): {}
+)
 fn(extern("SDL_SetGPUStencilReference")) SetGPUStencilReference(
   render_pass: *GPURenderPass,
   reference: Uint8,
-): {}
+)
 fn(extern("SDL_BindGPUVertexBuffers")) BindGPUVertexBuffers(
   render_pass: *GPURenderPass,
   first_slot: Uint32,
   bindings: *GPUBufferBinding,
   num_bindings: Uint32,
-): {}
+)
 fn(extern("SDL_BindGPUIndexBuffer")) BindGPUIndexBuffer(
   render_pass: *GPURenderPass,
   binding: *GPUBufferBinding,
   index_element_size: GPUIndexElementSize,
-): {}
+)
 fn(extern("SDL_BindGPUVertexSamplers")) BindGPUVertexSamplers(
   render_pass: *GPURenderPass,
   first_slot: Uint32,
   texture_sampler_bindings: *GPUTextureSamplerBinding,
   num_bindings: Uint32,
-): {}
+)
 fn(extern("SDL_BindGPUVertexStorageTextures")) BindGPUVertexStorageTextures(
   render_pass: *GPURenderPass,
   first_slot: Uint32,
   storage_textures: *optref[GPUTexture],
   num_bindings: Uint32,
-): {}
+)
 fn(extern("SDL_BindGPUVertexStorageBuffers")) BindGPUVertexStorageBuffers(
   render_pass: *GPURenderPass,
   first_slot: Uint32,
   storage_buffers: *optref[GPUBuffer],
   num_bindings: Uint32,
-): {}
+)
 fn(extern("SDL_BindGPUFragmentSamplers")) BindGPUFragmentSamplers(
   render_pass: *GPURenderPass,
   first_slot: Uint32,
   texture_sampler_bindings: *GPUTextureSamplerBinding,
   num_bindings: Uint32,
-): {}
+)
 fn(extern("SDL_BindGPUFragmentStorageTextures")) BindGPUFragmentStorageTextures(
   render_pass: *GPURenderPass,
   first_slot: Uint32,
   storage_textures: *optref[GPUTexture],
   num_bindings: Uint32,
-): {}
+)
 fn(extern("SDL_BindGPUFragmentStorageBuffers")) BindGPUFragmentStorageBuffers(
   render_pass: *GPURenderPass,
   first_slot: Uint32,
   storage_buffers: *optref[GPUBuffer],
   num_bindings: Uint32,
-): {}
+)
 fn(extern("SDL_DrawGPUIndexedPrimitives")) DrawGPUIndexedPrimitives(
   render_pass: *GPURenderPass,
   num_indices: Uint32,
@@ -7086,29 +6829,29 @@ fn(extern("SDL_DrawGPUIndexedPrimitives")) DrawGPUIndexedPrimitives(
   first_index: Uint32,
   vertex_offset: Sint32,
   first_instance: Uint32,
-): {}
+)
 fn(extern("SDL_DrawGPUPrimitives")) DrawGPUPrimitives(
   render_pass: *GPURenderPass,
   num_vertices: Uint32,
   num_instances: Uint32,
   first_vertex: Uint32,
   first_instance: Uint32,
-): {}
+)
 fn(extern("SDL_DrawGPUPrimitivesIndirect")) DrawGPUPrimitivesIndirect(
   render_pass: *GPURenderPass,
   buffer: *GPUBuffer,
   offset: Uint32,
   draw_count: Uint32,
-): {}
+)
 fn(extern("SDL_DrawGPUIndexedPrimitivesIndirect")) DrawGPUIndexedPrimitivesIndirect(
   render_pass: *GPURenderPass,
   buffer: *GPUBuffer,
   offset: Uint32,
   draw_count: Uint32,
-): {}
+)
 fn(extern("SDL_EndGPURenderPass")) EndGPURenderPass(
   render_pass: *GPURenderPass,
-): {}
+)
 fn(extern("SDL_BeginGPUComputePass")) BeginGPUComputePass(
   command_buffer: *GPUCommandBuffer,
   storage_texture_bindings: *GPUStorageTextureReadWriteBinding,
@@ -7119,39 +6862,39 @@ fn(extern("SDL_BeginGPUComputePass")) BeginGPUComputePass(
 fn(extern("SDL_BindGPUComputePipeline")) BindGPUComputePipeline(
   compute_pass: *GPUComputePass,
   compute_pipeline: *GPUComputePipeline,
-): {}
+)
 fn(extern("SDL_BindGPUComputeSamplers")) BindGPUComputeSamplers(
   compute_pass: *GPUComputePass,
   first_slot: Uint32,
   texture_sampler_bindings: *GPUTextureSamplerBinding,
   num_bindings: Uint32,
-): {}
+)
 fn(extern("SDL_BindGPUComputeStorageTextures")) BindGPUComputeStorageTextures(
   compute_pass: *GPUComputePass,
   first_slot: Uint32,
   storage_textures: *optref[GPUTexture],
   num_bindings: Uint32,
-): {}
+)
 fn(extern("SDL_BindGPUComputeStorageBuffers")) BindGPUComputeStorageBuffers(
   compute_pass: *GPUComputePass,
   first_slot: Uint32,
   storage_buffers: *optref[GPUBuffer],
   num_bindings: Uint32,
-): {}
+)
 fn(extern("SDL_DispatchGPUCompute")) DispatchGPUCompute(
   compute_pass: *GPUComputePass,
   groupcount_x: Uint32,
   groupcount_y: Uint32,
   groupcount_z: Uint32,
-): {}
+)
 fn(extern("SDL_DispatchGPUComputeIndirect")) DispatchGPUComputeIndirect(
   compute_pass: *GPUComputePass,
   buffer: *GPUBuffer,
   offset: Uint32,
-): {}
+)
 fn(extern("SDL_EndGPUComputePass")) EndGPUComputePass(
   compute_pass: *GPUComputePass,
-): {}
+)
 fn(extern("SDL_MapGPUTransferBuffer")) MapGPUTransferBuffer(
   device: *GPUDevice,
   transfer_buffer: *GPUTransferBuffer,
@@ -7160,7 +6903,7 @@ fn(extern("SDL_MapGPUTransferBuffer")) MapGPUTransferBuffer(
 fn(extern("SDL_UnmapGPUTransferBuffer")) UnmapGPUTransferBuffer(
   device: *GPUDevice,
   transfer_buffer: *GPUTransferBuffer,
-): {}
+)
 fn(extern("SDL_BeginGPUCopyPass")) BeginGPUCopyPass(
   command_buffer: *GPUCommandBuffer,
 ): optref[GPUCopyPass]
@@ -7169,13 +6912,13 @@ fn(extern("SDL_UploadToGPUTexture")) UploadToGPUTexture(
   source: *GPUTextureTransferInfo,
   destination: *GPUTextureRegion,
   cycle: bool,
-): {}
+)
 fn(extern("SDL_UploadToGPUBuffer")) UploadToGPUBuffer(
   copy_pass: *GPUCopyPass,
   source: *GPUTransferBufferLocation,
   destination: *GPUBufferRegion,
   cycle: bool,
-): {}
+)
 fn(extern("SDL_CopyGPUTextureToTexture")) CopyGPUTextureToTexture(
   copy_pass: *GPUCopyPass,
   source: *GPUTextureLocation,
@@ -7184,35 +6927,35 @@ fn(extern("SDL_CopyGPUTextureToTexture")) CopyGPUTextureToTexture(
   h: Uint32,
   d: Uint32,
   cycle: bool,
-): {}
+)
 fn(extern("SDL_CopyGPUBufferToBuffer")) CopyGPUBufferToBuffer(
   copy_pass: *GPUCopyPass,
   source: *GPUBufferLocation,
   destination: *GPUBufferLocation,
   size: Uint32,
   cycle: bool,
-): {}
+)
 fn(extern("SDL_DownloadFromGPUTexture")) DownloadFromGPUTexture(
   copy_pass: *GPUCopyPass,
   source: *GPUTextureRegion,
   destination: *GPUTextureTransferInfo,
-): {}
+)
 fn(extern("SDL_DownloadFromGPUBuffer")) DownloadFromGPUBuffer(
   copy_pass: *GPUCopyPass,
   source: *GPUBufferRegion,
   destination: *GPUTransferBufferLocation,
-): {}
+)
 fn(extern("SDL_EndGPUCopyPass")) EndGPUCopyPass(
   copy_pass: *GPUCopyPass,
-): {}
+)
 fn(extern("SDL_GenerateMipmapsForGPUTexture")) GenerateMipmapsForGPUTexture(
   command_buffer: *GPUCommandBuffer,
   texture: *GPUTexture,
-): {}
+)
 fn(extern("SDL_BlitGPUTexture")) BlitGPUTexture(
   command_buffer: *GPUCommandBuffer,
   info: *GPUBlitInfo,
-): {}
+)
 fn(extern("SDL_WindowSupportsGPUSwapchainComposition")) WindowSupportsGPUSwapchainComposition(
   device: *GPUDevice,
   window: *Window,
@@ -7230,7 +6973,7 @@ fn(extern("SDL_ClaimWindowForGPUDevice")) ClaimWindowForGPUDevice(
 fn(extern("SDL_ReleaseWindowFromGPUDevice")) ReleaseWindowFromGPUDevice(
   device: *GPUDevice,
   window: *Window,
-): {}
+)
 fn(extern("SDL_SetGPUSwapchainParameters")) SetGPUSwapchainParameters(
   device: *GPUDevice,
   window: *Window,
@@ -7288,7 +7031,7 @@ fn(extern("SDL_QueryGPUFence")) QueryGPUFence(
 fn(extern("SDL_ReleaseGPUFence")) ReleaseGPUFence(
   device: *GPUDevice,
   fence: *GPUFence,
-): {}
+)
 fn(extern("SDL_GPUTextureFormatTexelBlockSize")) GPUTextureFormatTexelBlockSize(
   format: GPUTextureFormat,
 ): Uint32
@@ -7317,16 +7060,12 @@ fn(extern("SDL_GetGPUTextureFormatFromPixelFormat")) GetGPUTextureFormatFromPixe
 ): GPUTextureFormat
 type Haptic = opaque[0, 1]
 type(alias) HapticEffectType = Uint16
-#static assert-layout[HapticEffectType](2, 2, [])
 type(alias) HapticDirectionType = Uint8
-#static assert-layout[HapticDirectionType](1, 1, [])
 type(alias) HapticEffectID = i32
-#static assert-layout[HapticEffectID](4, 4, [])
 type HapticDirection = {
   type: HapticDirectionType,
   dir: array[Sint32, 3],
 }
-#static assert-layout[HapticDirection](16, 4, [0, 4, ])
 type HapticConstant = {
   type: HapticEffectType,
   direction: HapticDirection,
@@ -7340,7 +7079,6 @@ type HapticConstant = {
   fade_length: Uint16,
   fade_level: Uint16,
 }
-#static assert-layout[HapticConstant](40, 4, [0, 4, 20, 24, 26, 28, 30, 32, 34, 36, 38, ])
 type HapticPeriodic = {
   type: HapticEffectType,
   direction: HapticDirection,
@@ -7357,7 +7095,6 @@ type HapticPeriodic = {
   fade_length: Uint16,
   fade_level: Uint16,
 }
-#static assert-layout[HapticPeriodic](48, 4, [0, 4, 20, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42, 44, ])
 type HapticCondition = {
   type: HapticEffectType,
   direction: HapticDirection,
@@ -7372,7 +7109,6 @@ type HapticCondition = {
   deadband: array[Uint16, 3],
   center: array[Sint16, 3],
 }
-#static assert-layout[HapticCondition](68, 4, [0, 4, 20, 24, 26, 28, 30, 36, 42, 48, 54, 60, ])
 type HapticRamp = {
   type: HapticEffectType,
   direction: HapticDirection,
@@ -7387,14 +7123,12 @@ type HapticRamp = {
   fade_length: Uint16,
   fade_level: Uint16,
 }
-#static assert-layout[HapticRamp](44, 4, [0, 4, 20, 24, 26, 28, 30, 32, 34, 36, 38, 40, ])
 type HapticLeftRight = {
   type: HapticEffectType,
   length: Uint32,
   large_magnitude: Uint16,
   small_magnitude: Uint16,
 }
-#static assert-layout[HapticLeftRight](12, 4, [0, 4, 8, 10, ])
 type HapticCustom = {
   type: HapticEffectType,
   direction: HapticDirection,
@@ -7411,7 +7145,6 @@ type HapticCustom = {
   fade_length: Uint16,
   fade_level: Uint16,
 }
-#static assert-layout[HapticCustom](56, 8, [0, 4, 20, 24, 26, 28, 30, 32, 34, 40, 48, 50, 52, 54, ])
 type HapticEffect = union {
   type: HapticEffectType,
   constant: HapticConstant,
@@ -7421,9 +7154,7 @@ type HapticEffect = union {
   leftright: HapticLeftRight,
   custom: HapticCustom,
 }
-#static assert-layout[HapticEffect](72, 8, [])
 type(alias) HapticID = Uint32
-#static assert-layout[HapticID](4, 4, [])
 fn(extern("SDL_GetHaptics")) GetHaptics(
   count: *i32,
 ): optref[HapticID]
@@ -7452,7 +7183,7 @@ fn(extern("SDL_OpenHapticFromJoystick")) OpenHapticFromJoystick(
 ): optref[Haptic]
 fn(extern("SDL_CloseHaptic")) CloseHaptic(
   haptic: *Haptic,
-): {}
+)
 fn(extern("SDL_GetMaxHapticEffects")) GetMaxHapticEffects(
   haptic: *Haptic,
 ): i32
@@ -7490,7 +7221,7 @@ fn(extern("SDL_StopHapticEffect")) StopHapticEffect(
 fn(extern("SDL_DestroyHapticEffect")) DestroyHapticEffect(
   haptic: *Haptic,
   effect: HapticEffectID,
-): {}
+)
 fn(extern("SDL_GetHapticEffectStatus")) GetHapticEffectStatus(
   haptic: *Haptic,
   effect: HapticEffectID,
@@ -7534,7 +7265,6 @@ type hid_bus_type = either(u32, partial) {
   HID_API_BUS_I2C = 3,
   HID_API_BUS_SPI = 4,
 }
-#static assert-layout[hid_bus_type](4, 4, [])
 type hid_device_info = {
   path: optref[u8],
   vendor_id: u16,
@@ -7552,7 +7282,6 @@ type hid_device_info = {
   bus_type: hid_bus_type,
   next: optref[hid_device_info],
 }
-#static assert-layout[hid_device_info](80, 8, [0, 8, 10, 16, 24, 32, 40, 48, 50, 52, 56, 60, 64, 68, 72, ])
 fn(extern("SDL_hid_init")) hid_init(): i32
 fn(extern("SDL_hid_exit")) hid_exit(): i32
 fn(extern("SDL_hid_device_change_count")) hid_device_change_count(): Uint32
@@ -7562,7 +7291,7 @@ fn(extern("SDL_hid_enumerate")) hid_enumerate(
 ): optref[hid_device_info]
 fn(extern("SDL_hid_free_enumeration")) hid_free_enumeration(
   devs: *hid_device_info,
-): {}
+)
 fn(extern("SDL_hid_open")) hid_open(
   vendor_id: u16,
   product_id: u16,
@@ -7643,13 +7372,12 @@ fn(extern("SDL_hid_get_report_descriptor")) hid_get_report_descriptor(
 ): i32
 fn(extern("SDL_hid_ble_scan")) hid_ble_scan(
   active: bool,
-): {}
+)
 type HintPriority = either(u32, partial) {
   HINT_DEFAULT = 0,
   HINT_NORMAL = 1,
   HINT_OVERRIDE = 2,
 }
-#static assert-layout[HintPriority](4, 4, [])
 fn(extern("SDL_SetHintWithPriority")) SetHintWithPriority(
   name: *u8,
   value: *u8,
@@ -7662,7 +7390,7 @@ fn(extern("SDL_SetHint")) SetHint(
 fn(extern("SDL_ResetHint")) ResetHint(
   name: *u8,
 ): bool
-fn(extern("SDL_ResetHints")) ResetHints(): {}
+fn(extern("SDL_ResetHints")) ResetHints()
 fn(extern("SDL_GetHint")) GetHint(
   name: *u8,
 ): optref[u8]
@@ -7675,8 +7403,7 @@ type(alias) HintCallback = *fn(
   *u8,
   *u8,
   *u8
-) -> {}
-#static assert-layout[HintCallback](8, 8, [])
+)
 fn(extern("SDL_AddHintCallback")) AddHintCallback(
   name: *u8,
   callback: HintCallback,
@@ -7686,35 +7413,29 @@ fn(extern("SDL_RemoveHintCallback")) RemoveHintCallback(
   name: *u8,
   callback: HintCallback,
   userdata: ptr,
-): {}
+)
 type(alias) InitFlags = Uint32
-#static assert-layout[InitFlags](4, 4, [])
 type AppResult = either(u32, partial) {
   APP_CONTINUE = 0,
   APP_SUCCESS = 1,
   APP_FAILURE = 2,
 }
-#static assert-layout[AppResult](4, 4, [])
 type(alias) AppInit_func = *fn(
   *ptr,
   i32,
   *optref[u8]
 ) -> AppResult
-#static assert-layout[AppInit_func](8, 8, [])
 type(alias) AppIterate_func = *fn(
   ptr
 ) -> AppResult
-#static assert-layout[AppIterate_func](8, 8, [])
 type(alias) AppEvent_func = *fn(
   ptr,
   *Event
 ) -> AppResult
-#static assert-layout[AppEvent_func](8, 8, [])
 type(alias) AppQuit_func = *fn(
   ptr,
   AppResult
-) -> {}
-#static assert-layout[AppQuit_func](8, 8, [])
+)
 fn(extern("SDL_Init")) Init(
   flags: InitFlags,
 ): bool
@@ -7723,16 +7444,15 @@ fn(extern("SDL_InitSubSystem")) InitSubSystem(
 ): bool
 fn(extern("SDL_QuitSubSystem")) QuitSubSystem(
   flags: InitFlags,
-): {}
+)
 fn(extern("SDL_WasInit")) WasInit(
   flags: InitFlags,
 ): InitFlags
-fn(extern("SDL_Quit")) Quit(): {}
+fn(extern("SDL_Quit")) Quit()
 fn(extern("SDL_IsMainThread")) IsMainThread(): bool
 type(alias) MainThreadCallback = *fn(
   ptr
-) -> {}
-#static assert-layout[MainThreadCallback](8, 8, [])
+)
 fn(extern("SDL_RunOnMainThread")) RunOnMainThread(
   callback: MainThreadCallback,
   userdata: ptr,
@@ -7760,12 +7480,11 @@ fn(extern("SDL_LoadFunction")) LoadFunction(
 ): FunctionPointer
 fn(extern("SDL_UnloadObject")) UnloadObject(
   handle: *SharedObject,
-): {}
+)
 type Locale = {
   language: optref[u8],
   country: optref[u8],
 }
-#static assert-layout[Locale](16, 8, [0, 8, ])
 fn(extern("SDL_GetPreferredLocales")) GetPreferredLocales(
   count: *i32,
 ): optref[optref[Locale]]
@@ -7791,7 +7510,6 @@ type LogCategory = either(u32, partial) {
   LOG_CATEGORY_RESERVED10 = 18,
   LOG_CATEGORY_CUSTOM = 19,
 }
-#static assert-layout[LogCategory](4, 4, [])
 type LogPriority = either(u32, partial) {
   LOG_PRIORITY_INVALID = 0,
   LOG_PRIORITY_TRACE = 1,
@@ -7803,18 +7521,17 @@ type LogPriority = either(u32, partial) {
   LOG_PRIORITY_CRITICAL = 7,
   LOG_PRIORITY_COUNT = 8,
 }
-#static assert-layout[LogPriority](4, 4, [])
 fn(extern("SDL_SetLogPriorities")) SetLogPriorities(
   priority: LogPriority,
-): {}
+)
 fn(extern("SDL_SetLogPriority")) SetLogPriority(
   category: i32,
   priority: LogPriority,
-): {}
+)
 fn(extern("SDL_GetLogPriority")) GetLogPriority(
   category: i32,
 ): LogPriority
-fn(extern("SDL_ResetLogPriorities")) ResetLogPriorities(): {}
+fn(extern("SDL_ResetLogPriorities")) ResetLogPriorities()
 fn(extern("SDL_SetLogPriorityPrefix")) SetLogPriorityPrefix(
   priority: LogPriority,
   prefix: *u8,
@@ -7822,86 +7539,81 @@ fn(extern("SDL_SetLogPriorityPrefix")) SetLogPriorityPrefix(
 fn(extern("SDL_Log")) Log(
   fmt: *u8,
   varargs: core/c-varargs,
-): {}
+)
 fn(extern("SDL_LogTrace")) LogTrace(
   category: i32,
   fmt: *u8,
   varargs: core/c-varargs,
-): {}
+)
 fn(extern("SDL_LogVerbose")) LogVerbose(
   category: i32,
   fmt: *u8,
   varargs: core/c-varargs,
-): {}
+)
 fn(extern("SDL_LogDebug")) LogDebug(
   category: i32,
   fmt: *u8,
   varargs: core/c-varargs,
-): {}
+)
 fn(extern("SDL_LogInfo")) LogInfo(
   category: i32,
   fmt: *u8,
   varargs: core/c-varargs,
-): {}
+)
 fn(extern("SDL_LogWarn")) LogWarn(
   category: i32,
   fmt: *u8,
   varargs: core/c-varargs,
-): {}
+)
 fn(extern("SDL_LogError")) LogError(
   category: i32,
   fmt: *u8,
   varargs: core/c-varargs,
-): {}
+)
 fn(extern("SDL_LogCritical")) LogCritical(
   category: i32,
   fmt: *u8,
   varargs: core/c-varargs,
-): {}
+)
 fn(extern("SDL_LogMessage")) LogMessage(
   category: i32,
   priority: LogPriority,
   fmt: *u8,
   varargs: core/c-varargs,
-): {}
+)
 fn(extern("SDL_LogMessageV")) LogMessageV(
   category: i32,
   priority: LogPriority,
   fmt: *u8,
   ap: ptr,
-): {}
+)
 type(alias) LogOutputFunction = *fn(
   ptr,
   i32,
   LogPriority,
   *u8
-) -> {}
-#static assert-layout[LogOutputFunction](8, 8, [])
+)
 fn(extern("SDL_GetDefaultLogOutputFunction")) GetDefaultLogOutputFunction(): LogOutputFunction
 fn(extern("SDL_GetLogOutputFunction")) GetLogOutputFunction(
   callback: *LogOutputFunction,
   userdata: *ptr,
-): {}
+)
 fn(extern("SDL_SetLogOutputFunction")) SetLogOutputFunction(
   callback: LogOutputFunction,
   userdata: ptr,
-): {}
+)
 type(alias) MessageBoxFlags = Uint32
-#static assert-layout[MessageBoxFlags](4, 4, [])
 type(alias) MessageBoxButtonFlags = Uint32
-#static assert-layout[MessageBoxButtonFlags](4, 4, [])
 type MessageBoxButtonData = {
   flags: MessageBoxButtonFlags,
   buttonID: i32,
   text: optref[u8],
 }
-#static assert-layout[MessageBoxButtonData](16, 8, [0, 4, 8, ])
 type MessageBoxColor = {
   r: Uint8,
   g: Uint8,
   b: Uint8,
 }
-#static assert-layout[MessageBoxColor](3, 1, [0, 1, 2, ])
 type MessageBoxColorType = either(u32, partial) {
   MESSAGEBOX_COLOR_BACKGROUND = 0,
   MESSAGEBOX_COLOR_TEXT = 1,
@@ -7910,11 +7622,9 @@ type MessageBoxColorType = either(u32, partial) {
   MESSAGEBOX_COLOR_BUTTON_SELECTED = 4,
   MESSAGEBOX_COLOR_COUNT = 5,
 }
-#static assert-layout[MessageBoxColorType](4, 4, [])
 type MessageBoxColorScheme = {
   colors: array[MessageBoxColor, 5],
 }
-#static assert-layout[MessageBoxColorScheme](15, 1, [0, ])
 type MessageBoxData = {
   flags: MessageBoxFlags,
   window: optref[Window],
@@ -7924,7 +7634,6 @@ type MessageBoxData = {
   buttons: optref[MessageBoxButtonData],
   colorScheme: optref[MessageBoxColorScheme],
 }
-#static assert-layout[MessageBoxData](56, 8, [0, 8, 16, 24, 32, 40, 48, ])
 fn(extern("SDL_ShowMessageBox")) ShowMessageBox(
   messageboxdata: *MessageBoxData,
   buttonid: *i32,
@@ -7936,13 +7645,12 @@ fn(extern("SDL_ShowSimpleMessageBox")) ShowSimpleMessageBox(
   window: *Window,
 ): bool
 type(alias) MetalView = ptr
-#static assert-layout[MetalView](8, 8, [])
 fn(extern("SDL_Metal_CreateView")) Metal_CreateView(
   window: *Window,
 ): MetalView
 fn(extern("SDL_Metal_DestroyView")) Metal_DestroyView(
   view: MetalView,
-): {}
+)
 fn(extern("SDL_Metal_GetLayer")) Metal_GetLayer(
   view: MetalView,
 ): ptr
@@ -7961,7 +7669,6 @@ type ProcessIO = either(u32, partial) {
   PROCESS_STDIO_APP = 2,
   PROCESS_STDIO_REDIRECT = 3,
 }
-#static assert-layout[ProcessIO](4, 4, [])
 fn(extern("SDL_CreateProcessWithProperties")) CreateProcessWithProperties(
   props: PropertiesID,
 ): optref[Process]
@@ -7990,26 +7697,23 @@ fn(extern("SDL_WaitProcess")) WaitProcess(
 ): bool
 fn(extern("SDL_DestroyProcess")) DestroyProcess(
   process: *Process,
-): {}
+)
 type Vertex = {
   position: FPoint,
   color: FColor,
   tex_coord: FPoint,
 }
-#static assert-layout[Vertex](32, 4, [0, 8, 24, ])
 type TextureAccess = either(u32, partial) {
   TEXTUREACCESS_STATIC = 0,
   TEXTUREACCESS_STREAMING = 1,
   TEXTUREACCESS_TARGET = 2,
 }
-#static assert-layout[TextureAccess](4, 4, [])
 type TextureAddressMode = either(i32, partial) {
   TEXTURE_ADDRESS_INVALID = -1,
   TEXTURE_ADDRESS_AUTO = 0,
   TEXTURE_ADDRESS_CLAMP = 1,
   TEXTURE_ADDRESS_WRAP = 2,
 }
-#static assert-layout[TextureAddressMode](4, 4, [])
 type RendererLogicalPresentation = either(u32, partial) {
   LOGICAL_PRESENTATION_DISABLED = 0,
   LOGICAL_PRESENTATION_STRETCH = 1,
@@ -8017,7 +7721,6 @@ type RendererLogicalPresentation = either(u32, partial) {
   LOGICAL_PRESENTATION_OVERSCAN = 3,
   LOGICAL_PRESENTATION_INTEGER_SCALE = 4,
 }
-#static assert-layout[RendererLogicalPresentation](4, 4, [])
 type Renderer = opaque[0, 1]
 type Texture = {
   format: PixelFormat,
@@ -8025,7 +7728,6 @@ type Texture = {
   h: i32,
   refcount: i32,
 }
-#static assert-layout[Texture](16, 4, [0, 4, 8, 12, ])
 fn(extern("SDL_GetNumRenderDrivers")) GetNumRenderDrivers(): i32
 fn(extern("SDL_GetRenderDriver")) GetRenderDriver(
   index: i32,
@@ -8203,7 +7905,7 @@ fn(extern("SDL_LockTextureToSurface")) LockTextureToSurface(
 ): bool
 fn(extern("SDL_UnlockTexture")) UnlockTexture(
   texture: *Texture,
-): {}
+)
 fn(extern("SDL_SetRenderTarget")) SetRenderTarget(
   renderer: *Renderer,
   texture: *Texture,
@@ -8462,10 +8164,10 @@ fn(extern("SDL_RenderPresent")) RenderPresent(
 ): bool
 fn(extern("SDL_DestroyTexture")) DestroyTexture(
   texture: *Texture,
-): {}
+)
 fn(extern("SDL_DestroyRenderer")) DestroyRenderer(
   renderer: *Renderer,
-): {}
+)
 fn(extern("SDL_FlushRenderer")) FlushRenderer(
   renderer: *Renderer,
 ): bool
@@ -8520,7 +8222,6 @@ type GPURenderStateCreateInfo = {
   storage_buffers: optref[optref[GPUBuffer]],
   props: PropertiesID,
 }
-#static assert-layout[GPURenderStateCreateInfo](64, 8, [0, 8, 16, 24, 32, 40, 48, 56, ])
 type GPURenderState = opaque[0, 1]
 fn(extern("SDL_CreateGPURenderState")) CreateGPURenderState(
   renderer: *Renderer,
@@ -8538,7 +8239,7 @@ fn(extern("SDL_SetGPURenderState")) SetGPURenderState(
 ): bool
 fn(extern("SDL_DestroyGPURenderState")) DestroyGPURenderState(
   state: *GPURenderState,
-): {}
+)
 type StorageInterface = {
   version: Uint32,
   close: optref[fn(
@@ -8592,7 +8293,6 @@ type StorageInterface = {
     ptr
   ) -> Uint64],
 }
-#static assert-layout[StorageInterface](96, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, ])
 type Storage = opaque[0, 1]
 fn(extern("SDL_OpenTitleStorage")) OpenTitleStorage(
   override: *u8,
@@ -8678,11 +8378,10 @@ type(alias) X11EventHook = *fn(
   ptr,
   *XEvent
 ) -> bool
-#static assert-layout[X11EventHook](8, 8, [])
 fn(extern("SDL_SetX11EventHook")) SetX11EventHook(
   callback: X11EventHook,
   userdata: ptr,
-): {}
+)
 fn(extern("SDL_IsTablet")) IsTablet(): bool
 fn(extern("SDL_IsTV")) IsTV(): bool
 type Sandbox = either(u32, partial) {
@@ -8692,14 +8391,13 @@ type Sandbox = either(u32, partial) {
   SANDBOX_SNAP = 3,
   SANDBOX_MACOS = 4,
 }
-#static assert-layout[Sandbox](4, 4, [])
 fn(extern("SDL_GetSandbox")) GetSandbox(): Sandbox
-fn(extern("SDL_OnApplicationWillTerminate")) OnApplicationWillTerminate(): {}
-fn(extern("SDL_OnApplicationDidReceiveMemoryWarning")) OnApplicationDidReceiveMemoryWarning(): {}
-fn(extern("SDL_OnApplicationWillEnterBackground")) OnApplicationWillEnterBackground(): {}
-fn(extern("SDL_OnApplicationDidEnterBackground")) OnApplicationDidEnterBackground(): {}
-fn(extern("SDL_OnApplicationWillEnterForeground")) OnApplicationWillEnterForeground(): {}
-fn(extern("SDL_OnApplicationDidEnterForeground")) OnApplicationDidEnterForeground(): {}
+fn(extern("SDL_OnApplicationWillTerminate")) OnApplicationWillTerminate()
+fn(extern("SDL_OnApplicationDidReceiveMemoryWarning")) OnApplicationDidReceiveMemoryWarning()
+fn(extern("SDL_OnApplicationWillEnterBackground")) OnApplicationWillEnterBackground()
+fn(extern("SDL_OnApplicationDidEnterBackground")) OnApplicationDidEnterBackground()
+fn(extern("SDL_OnApplicationWillEnterForeground")) OnApplicationWillEnterForeground()
+fn(extern("SDL_OnApplicationDidEnterForeground")) OnApplicationDidEnterForeground()
 type DateTime = {
   year: i32,
   month: i32,
@@ -8711,18 +8409,15 @@ type DateTime = {
   day_of_week: i32,
   utc_offset: i32,
 }
-#static assert-layout[DateTime](36, 4, [0, 4, 8, 12, 16, 20, 24, 28, 32, ])
 type DateFormat = either(u32, partial) {
   DATE_FORMAT_YYYYMMDD = 0,
   DATE_FORMAT_DDMMYYYY = 1,
   DATE_FORMAT_MMDDYYYY = 2,
 }
-#static assert-layout[DateFormat](4, 4, [])
 type TimeFormat = either(u32, partial) {
   TIME_FORMAT_24HR = 0,
   TIME_FORMAT_12HR = 1,
 }
-#static assert-layout[TimeFormat](4, 4, [])
 fn(extern("SDL_GetDateTimeLocalePreferences")) GetDateTimeLocalePreferences(
   dateFormat: *DateFormat,
   timeFormat: *TimeFormat,
@@ -8743,7 +8438,7 @@ fn(extern("SDL_TimeToWindows")) TimeToWindows(
   ticks: Time,
   dwLowDateTime: *Uint32,
   dwHighDateTime: *Uint32,
-): {}
+)
 fn(extern("SDL_TimeFromWindows")) TimeFromWindows(
   dwLowDateTime: Uint32,
   dwHighDateTime: Uint32,
@@ -8768,21 +8463,19 @@ fn(extern("SDL_GetPerformanceCounter")) GetPerformanceCounter(): Uint64
 fn(extern("SDL_GetPerformanceFrequency")) GetPerformanceFrequency(): Uint64
 fn(extern("SDL_Delay")) Delay(
   ms: Uint32,
-): {}
+)
 fn(extern("SDL_DelayNS")) DelayNS(
   ns_c: Uint64,
-): {}
+)
 fn(extern("SDL_DelayPrecise")) DelayPrecise(
   ns_c: Uint64,
-): {}
+)
 type(alias) TimerID = Uint32
-#static assert-layout[TimerID](4, 4, [])
 type(alias) TimerCallback = *fn(
   ptr,
   TimerID,
   Uint32
 ) -> Uint32
-#static assert-layout[TimerCallback](8, 8, [])
 fn(extern("SDL_AddTimer")) AddTimer(
   interval: Uint32,
   callback: TimerCallback,
@@ -8793,7 +8486,6 @@ type(alias) NSTimerCallback = *fn(
   TimerID,
   Uint64
 ) -> Uint64
-#static assert-layout[NSTimerCallback](8, 8, [])
 fn(extern("SDL_AddTimerNS")) AddTimerNS(
   interval: Uint64,
   callback: NSTimerCallback,
@@ -8806,12 +8498,10 @@ type Tray = opaque[0, 1]
 type TrayMenu = opaque[0, 1]
 type TrayEntry = opaque[0, 1]
 type(alias) TrayEntryFlags = Uint32
-#static assert-layout[TrayEntryFlags](4, 4, [])
 type(alias) TrayCallback = *fn(
   ptr,
   *TrayEntry
-) -> {}
-#static assert-layout[TrayCallback](8, 8, [])
+)
 fn(extern("SDL_CreateTray")) CreateTray(
   icon: *Surface,
   tooltip: *u8,
@@ -8819,11 +8509,11 @@ fn(extern("SDL_CreateTray")) CreateTray(
 fn(extern("SDL_SetTrayIcon")) SetTrayIcon(
   tray: *Tray,
   icon: *Surface,
-): {}
+)
 fn(extern("SDL_SetTrayTooltip")) SetTrayTooltip(
   tray: *Tray,
   tooltip: *u8,
-): {}
+)
 fn(extern("SDL_CreateTrayMenu")) CreateTrayMenu(
   tray: *Tray,
 ): optref[TrayMenu]
@@ -8842,7 +8532,7 @@ fn(extern("SDL_GetTrayEntries")) GetTrayEntries(
 ): optref[optref[TrayEntry]]
 fn(extern("SDL_RemoveTrayEntry")) RemoveTrayEntry(
   entry: *TrayEntry,
-): {}
+)
 fn(extern("SDL_InsertTrayEntryAt")) InsertTrayEntryAt(
   menu: *TrayMenu,
   pos: i32,
@@ -8852,21 +8542,21 @@ fn(extern("SDL_InsertTrayEntryAt")) InsertTrayEntryAt(
 fn(extern("SDL_SetTrayEntryLabel")) SetTrayEntryLabel(
   entry: *TrayEntry,
   label: *u8,
-): {}
+)
 fn(extern("SDL_GetTrayEntryLabel")) GetTrayEntryLabel(
   entry: *TrayEntry,
 ): optref[u8]
 fn(extern("SDL_SetTrayEntryChecked")) SetTrayEntryChecked(
   entry: *TrayEntry,
   checked: bool,
-): {}
+)
 fn(extern("SDL_GetTrayEntryChecked")) GetTrayEntryChecked(
   entry: *TrayEntry,
 ): bool
 fn(extern("SDL_SetTrayEntryEnabled")) SetTrayEntryEnabled(
   entry: *TrayEntry,
   enabled: bool,
-): {}
+)
 fn(extern("SDL_GetTrayEntryEnabled")) GetTrayEntryEnabled(
   entry: *TrayEntry,
 ): bool
@@ -8874,13 +8564,13 @@ fn(extern("SDL_SetTrayEntryCallback")) SetTrayEntryCallback(
   entry: *TrayEntry,
   callback: TrayCallback,
   userdata: ptr,
-): {}
+)
 fn(extern("SDL_ClickTrayEntry")) ClickTrayEntry(
   entry: *TrayEntry,
-): {}
+)
 fn(extern("SDL_DestroyTray")) DestroyTray(
   tray: *Tray,
-): {}
+)
 fn(extern("SDL_GetTrayEntryParent")) GetTrayEntryParent(
   entry: *TrayEntry,
 ): optref[TrayMenu]
@@ -8890,6 +8580,319 @@ fn(extern("SDL_GetTrayMenuParentEntry")) GetTrayMenuParentEntry(
 fn(extern("SDL_GetTrayMenuParentTray")) GetTrayMenuParentTray(
   menu: *TrayMenu,
 ): optref[Tray]
-fn(extern("SDL_UpdateTrays")) UpdateTrays(): {}
+fn(extern("SDL_UpdateTrays")) UpdateTrays()
 fn(extern("SDL_GetVersion")) GetVersion(): i32
 fn(extern("SDL_GetRevision")) GetRevision(): optref[u8]
+
+fn(test) c-layouts() {
+  assert-layout[Sint8](1, 1, [])
+  assert-layout[Uint8](1, 1, [])
+  assert-layout[Sint16](2, 2, [])
+  assert-layout[Uint16](2, 2, [])
+  assert-layout[Sint32](4, 4, [])
+  assert-layout[Uint32](4, 4, [])
+  assert-layout[Sint64](8, 8, [])
+  assert-layout[Uint64](8, 8, [])
+  assert-layout[Time](8, 8, [])
+  assert-layout[alignment_test](16, 8, [0, 8, ])
+  assert-layout[DUMMY_ENUM](4, 4, [])
+  assert-layout[malloc_func](8, 8, [])
+  assert-layout[calloc_func](8, 8, [])
+  assert-layout[realloc_func](8, 8, [])
+  assert-layout[free_func](8, 8, [])
+  assert-layout[CompareCallback](8, 8, [])
+  assert-layout[CompareCallback_r](8, 8, [])
+  assert-layout[iconv_t](8, 8, [])
+  assert-layout[FunctionPointer](8, 8, [])
+  assert-layout[AssertState](4, 4, [])
+  assert-layout[AssertData](48, 8, [0, 4, 8, 16, 24, 32, 40, ])
+  assert-layout[AssertionHandler](8, 8, [])
+  assert-layout[AsyncIOTaskType](4, 4, [])
+  assert-layout[AsyncIOResult](4, 4, [])
+  assert-layout[AsyncIOOutcome](56, 8, [0, 8, 12, 16, 24, 32, 40, 48, ])
+  assert-layout[SpinLock](4, 4, [])
+  assert-layout[AtomicInt](4, 4, [0, ])
+  assert-layout[AtomicU32](4, 4, [0, ])
+  assert-layout[PropertiesID](4, 4, [])
+  assert-layout[PropertyType](4, 4, [])
+  assert-layout[CleanupPropertyCallback](8, 8, [])
+  assert-layout[EnumeratePropertiesCallback](8, 8, [])
+  assert-layout[ThreadID](8, 8, [])
+  assert-layout[TLSID](4, 4, [])
+  assert-layout[ThreadPriority](4, 4, [])
+  assert-layout[ThreadState](4, 4, [])
+  assert-layout[ThreadFunction](8, 8, [])
+  assert-layout[TLSDestructorCallback](8, 8, [])
+  assert-layout[InitStatus](4, 4, [])
+  assert-layout[InitState](24, 8, [0, 8, 16, ])
+  assert-layout[IOStatus](4, 4, [])
+  assert-layout[IOWhence](4, 4, [])
+  assert-layout[IOStreamInterface](56, 8, [0, 8, 16, 24, 32, 40, 48, ])
+  assert-layout[AudioFormat](4, 4, [])
+  assert-layout[AudioDeviceID](4, 4, [])
+  assert-layout[AudioSpec](12, 4, [0, 4, 8, ])
+  assert-layout[AudioStreamDataCompleteCallback](8, 8, [])
+  assert-layout[AudioStreamCallback](8, 8, [])
+  assert-layout[AudioPostmixCallback](8, 8, [])
+  assert-layout[BlendMode](4, 4, [])
+  assert-layout[BlendOperation](4, 4, [])
+  assert-layout[BlendFactor](4, 4, [])
+  assert-layout[PixelType](4, 4, [])
+  assert-layout[BitmapOrder](4, 4, [])
+  assert-layout[PackedOrder](4, 4, [])
+  assert-layout[ArrayOrder](4, 4, [])
+  assert-layout[PackedLayout](4, 4, [])
+  assert-layout[PixelFormat](4, 4, [])
+  assert-layout[ColorType](4, 4, [])
+  assert-layout[ColorRange](4, 4, [])
+  assert-layout[ColorPrimaries](4, 4, [])
+  assert-layout[TransferCharacteristics](4, 4, [])
+  assert-layout[MatrixCoefficients](4, 4, [])
+  assert-layout[ChromaLocation](4, 4, [])
+  assert-layout[Colorspace](4, 4, [])
+  assert-layout[Color](4, 1, [0, 1, 2, 3, ])
+  assert-layout[FColor](16, 4, [0, 4, 8, 12, ])
+  assert-layout[Palette](24, 8, [0, 8, 16, 20, ])
+  assert-layout[PixelFormatDetails](32, 4, [0, 4, 5, 6, 8, 12, 16, 20, 24, 25, 26, 27, 28, 29, 30, 31, ])
+  assert-layout[Point](8, 4, [0, 4, ])
+  assert-layout[FPoint](8, 4, [0, 4, ])
+  assert-layout[Rect](16, 4, [0, 4, 8, 12, ])
+  assert-layout[FRect](16, 4, [0, 4, 8, 12, ])
+  assert-layout[SurfaceFlags](4, 4, [])
+  assert-layout[ScaleMode](4, 4, [])
+  assert-layout[FlipMode](4, 4, [])
+  assert-layout[Surface](48, 8, [0, 4, 8, 12, 16, 24, 32, 40, ])
+  assert-layout[CameraID](4, 4, [])
+  assert-layout[CameraSpec](24, 4, [0, 4, 8, 12, 16, 20, ])
+  assert-layout[CameraPosition](4, 4, [])
+  assert-layout[CameraPermissionState](4, 4, [])
+  assert-layout[ClipboardDataCallback](8, 8, [])
+  assert-layout[ClipboardCleanupCallback](8, 8, [])
+  assert-layout[DisplayID](4, 4, [])
+  assert-layout[WindowID](4, 4, [])
+  assert-layout[SystemTheme](4, 4, [])
+  assert-layout[DisplayMode](40, 8, [0, 4, 8, 12, 16, 20, 24, 28, 32, ])
+  assert-layout[DisplayOrientation](4, 4, [])
+  assert-layout[WindowFlags](8, 8, [])
+  assert-layout[FlashOperation](4, 4, [])
+  assert-layout[ProgressState](4, 4, [])
+  assert-layout[GLContext](8, 8, [])
+  assert-layout[EGLDisplay](8, 8, [])
+  assert-layout[EGLConfig](8, 8, [])
+  assert-layout[EGLSurface](8, 8, [])
+  assert-layout[EGLAttrib](8, 8, [])
+  assert-layout[EGLint](4, 4, [])
+  assert-layout[EGLAttribArrayCallback](8, 8, [])
+  assert-layout[EGLIntArrayCallback](8, 8, [])
+  assert-layout[GLAttr](4, 4, [])
+  assert-layout[GLProfile](4, 4, [])
+  assert-layout[GLContextFlag](4, 4, [])
+  assert-layout[GLContextReleaseFlag](4, 4, [])
+  assert-layout[GLContextResetNotification](4, 4, [])
+  assert-layout[HitTestResult](4, 4, [])
+  assert-layout[HitTest](8, 8, [])
+  assert-layout[DialogFileFilter](16, 8, [0, 8, ])
+  assert-layout[DialogFileCallback](8, 8, [])
+  assert-layout[FileDialogType](4, 4, [])
+  assert-layout[GUID](16, 1, [0, ])
+  assert-layout[PowerState](4, 4, [])
+  assert-layout[SensorID](4, 4, [])
+  assert-layout[SensorType](4, 4, [])
+  assert-layout[JoystickID](4, 4, [])
+  assert-layout[JoystickType](4, 4, [])
+  assert-layout[JoystickConnectionState](4, 4, [])
+  assert-layout[VirtualJoystickTouchpadDesc](8, 2, [0, 2, ])
+  assert-layout[VirtualJoystickSensorDesc](8, 4, [0, 4, ])
+  assert-layout[VirtualJoystickDesc](136, 8, [0, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24, 28, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, ])
+  assert-layout[GamepadType](4, 4, [])
+  assert-layout[GamepadButton](4, 4, [])
+  assert-layout[GamepadButtonLabel](4, 4, [])
+  assert-layout[GamepadAxis](4, 4, [])
+  assert-layout[GamepadBindingType](4, 4, [])
+  assert-layout[GamepadBinding](32, 4, [0, 4, 16, 20, ])
+  assert-layout[Scancode](4, 4, [])
+  assert-layout[Keycode](4, 4, [])
+  assert-layout[Keymod](2, 2, [])
+  assert-layout[KeyboardID](4, 4, [])
+  assert-layout[TextInputType](4, 4, [])
+  assert-layout[Capitalization](4, 4, [])
+  assert-layout[MouseID](4, 4, [])
+  assert-layout[SystemCursor](4, 4, [])
+  assert-layout[MouseWheelDirection](4, 4, [])
+  assert-layout[CursorFrameInfo](16, 8, [0, 8, ])
+  assert-layout[MouseButtonFlags](4, 4, [])
+  assert-layout[MouseMotionTransformCallback](8, 8, [])
+  assert-layout[TouchID](8, 8, [])
+  assert-layout[FingerID](8, 8, [])
+  assert-layout[TouchDeviceType](4, 4, [])
+  assert-layout[Finger](24, 8, [0, 8, 12, 16, ])
+  assert-layout[PenID](4, 4, [])
+  assert-layout[PenInputFlags](4, 4, [])
+  assert-layout[PenAxis](4, 4, [])
+  assert-layout[PenDeviceType](4, 4, [])
+  assert-layout[EventType](4, 4, [])
+  assert-layout[CommonEvent](16, 8, [0, 4, 8, ])
+  assert-layout[DisplayEvent](32, 8, [0, 4, 8, 16, 20, 24, ])
+  assert-layout[WindowEvent](32, 8, [0, 4, 8, 16, 20, 24, ])
+  assert-layout[KeyboardDeviceEvent](24, 8, [0, 4, 8, 16, ])
+  assert-layout[KeyboardEvent](40, 8, [0, 4, 8, 16, 20, 24, 28, 32, 34, 36, 37, ])
+  assert-layout[TextEditingEvent](40, 8, [0, 4, 8, 16, 24, 32, 36, ])
+  assert-layout[TextEditingCandidatesEvent](48, 8, [0, 4, 8, 16, 24, 32, 36, 40, 41, 42, 43, ])
+  assert-layout[TextInputEvent](32, 8, [0, 4, 8, 16, 24, ])
+  assert-layout[MouseDeviceEvent](24, 8, [0, 4, 8, 16, ])
+  assert-layout[MouseMotionEvent](48, 8, [0, 4, 8, 16, 20, 24, 28, 32, 36, 40, ])
+  assert-layout[MouseButtonEvent](40, 8, [0, 4, 8, 16, 20, 24, 25, 26, 27, 28, 32, ])
+  assert-layout[MouseWheelEvent](56, 8, [0, 4, 8, 16, 20, 24, 28, 32, 36, 40, 44, 48, ])
+  assert-layout[JoyAxisEvent](32, 8, [0, 4, 8, 16, 20, 21, 22, 23, 24, 26, ])
+  assert-layout[JoyBallEvent](32, 8, [0, 4, 8, 16, 20, 21, 22, 23, 24, 26, ])
+  assert-layout[JoyHatEvent](24, 8, [0, 4, 8, 16, 20, 21, 22, 23, ])
+  assert-layout[JoyButtonEvent](24, 8, [0, 4, 8, 16, 20, 21, 22, 23, ])
+  assert-layout[JoyDeviceEvent](24, 8, [0, 4, 8, 16, ])
+  assert-layout[JoyBatteryEvent](32, 8, [0, 4, 8, 16, 20, 24, ])
+  assert-layout[GamepadAxisEvent](32, 8, [0, 4, 8, 16, 20, 21, 22, 23, 24, 26, ])
+  assert-layout[GamepadButtonEvent](24, 8, [0, 4, 8, 16, 20, 21, 22, 23, ])
+  assert-layout[GamepadDeviceEvent](24, 8, [0, 4, 8, 16, ])
+  assert-layout[GamepadTouchpadEvent](40, 8, [0, 4, 8, 16, 20, 24, 28, 32, 36, ])
+  assert-layout[GamepadSensorEvent](48, 8, [0, 4, 8, 16, 20, 24, 40, ])
+  assert-layout[AudioDeviceEvent](24, 8, [0, 4, 8, 16, 20, 21, 22, 23, ])
+  assert-layout[CameraDeviceEvent](24, 8, [0, 4, 8, 16, ])
+  assert-layout[RenderEvent](24, 8, [0, 4, 8, 16, ])
+  assert-layout[TouchFingerEvent](56, 8, [0, 4, 8, 16, 24, 32, 36, 40, 44, 48, 52, ])
+  assert-layout[PinchFingerEvent](24, 8, [0, 4, 8, 16, 20, ])
+  assert-layout[PenProximityEvent](24, 8, [0, 4, 8, 16, 20, ])
+  assert-layout[PenMotionEvent](40, 8, [0, 4, 8, 16, 20, 24, 28, 32, ])
+  assert-layout[PenTouchEvent](40, 8, [0, 4, 8, 16, 20, 24, 28, 32, 36, 37, ])
+  assert-layout[PenButtonEvent](40, 8, [0, 4, 8, 16, 20, 24, 28, 32, 36, 37, ])
+  assert-layout[PenAxisEvent](48, 8, [0, 4, 8, 16, 20, 24, 28, 32, 36, 40, ])
+  assert-layout[DropEvent](48, 8, [0, 4, 8, 16, 20, 24, 32, 40, ])
+  assert-layout[ClipboardEvent](32, 8, [0, 4, 8, 16, 20, 24, ])
+  assert-layout[SensorEvent](56, 8, [0, 4, 8, 16, 20, 48, ])
+  assert-layout[QuitEvent](16, 8, [0, 4, 8, ])
+  assert-layout[UserEvent](40, 8, [0, 4, 8, 16, 20, 24, 32, ])
+  assert-layout[Event](128, 8, [])
+  assert-layout[EventAction](4, 4, [])
+  assert-layout[EventFilter](8, 8, [])
+  assert-layout[Folder](4, 4, [])
+  assert-layout[PathType](4, 4, [])
+  assert-layout[PathInfo](40, 8, [0, 8, 16, 24, 32, ])
+  assert-layout[GlobFlags](4, 4, [])
+  assert-layout[EnumerationResult](4, 4, [])
+  assert-layout[EnumerateDirectoryCallback](8, 8, [])
+  assert-layout[GPUPrimitiveType](4, 4, [])
+  assert-layout[GPULoadOp](4, 4, [])
+  assert-layout[GPUStoreOp](4, 4, [])
+  assert-layout[GPUIndexElementSize](4, 4, [])
+  assert-layout[GPUTextureFormat](4, 4, [])
+  assert-layout[GPUTextureUsageFlags](4, 4, [])
+  assert-layout[GPUTextureType](4, 4, [])
+  assert-layout[GPUSampleCount](4, 4, [])
+  assert-layout[GPUCubeMapFace](4, 4, [])
+  assert-layout[GPUBufferUsageFlags](4, 4, [])
+  assert-layout[GPUTransferBufferUsage](4, 4, [])
+  assert-layout[GPUShaderStage](4, 4, [])
+  assert-layout[GPUShaderFormat](4, 4, [])
+  assert-layout[GPUVertexElementFormat](4, 4, [])
+  assert-layout[GPUVertexInputRate](4, 4, [])
+  assert-layout[GPUFillMode](4, 4, [])
+  assert-layout[GPUCullMode](4, 4, [])
+  assert-layout[GPUFrontFace](4, 4, [])
+  assert-layout[GPUCompareOp](4, 4, [])
+  assert-layout[GPUStencilOp](4, 4, [])
+  assert-layout[GPUBlendOp](4, 4, [])
+  assert-layout[GPUBlendFactor](4, 4, [])
+  assert-layout[GPUColorComponentFlags](1, 1, [])
+  assert-layout[GPUFilter](4, 4, [])
+  assert-layout[GPUSamplerMipmapMode](4, 4, [])
+  assert-layout[GPUSamplerAddressMode](4, 4, [])
+  assert-layout[GPUPresentMode](4, 4, [])
+  assert-layout[GPUSwapchainComposition](4, 4, [])
+  assert-layout[GPUViewport](24, 4, [0, 4, 8, 12, 16, 20, ])
+  assert-layout[GPUTextureTransferInfo](24, 8, [0, 8, 12, 16, ])
+  assert-layout[GPUTransferBufferLocation](16, 8, [0, 8, ])
+  assert-layout[GPUTextureLocation](32, 8, [0, 8, 12, 16, 20, 24, ])
+  assert-layout[GPUTextureRegion](40, 8, [0, 8, 12, 16, 20, 24, 28, 32, 36, ])
+  assert-layout[GPUBlitRegion](32, 8, [0, 8, 12, 16, 20, 24, 28, ])
+  assert-layout[GPUBufferLocation](16, 8, [0, 8, ])
+  assert-layout[GPUBufferRegion](16, 8, [0, 8, 12, ])
+  assert-layout[GPUIndirectDrawCommand](16, 4, [0, 4, 8, 12, ])
+  assert-layout[GPUIndexedIndirectDrawCommand](20, 4, [0, 4, 8, 12, 16, ])
+  assert-layout[GPUIndirectDispatchCommand](12, 4, [0, 4, 8, ])
+  assert-layout[GPUSamplerCreateInfo](52, 4, [0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 45, 46, 47, 48, ])
+  assert-layout[GPUVertexBufferDescription](16, 4, [0, 4, 8, 12, ])
+  assert-layout[GPUVertexAttribute](16, 4, [0, 4, 8, 12, ])
+  assert-layout[GPUVertexInputState](32, 8, [0, 8, 16, 24, ])
+  assert-layout[GPUStencilOpState](16, 4, [0, 4, 8, 12, ])
+  assert-layout[GPUColorTargetBlendState](32, 4, [0, 4, 8, 12, 16, 20, 24, 25, 26, 27, 28, ])
+  assert-layout[GPUShaderCreateInfo](56, 8, [0, 8, 16, 24, 28, 32, 36, 40, 44, 48, ])
+  assert-layout[GPUTextureCreateInfo](36, 4, [0, 4, 8, 12, 16, 20, 24, 28, 32, ])
+  assert-layout[GPUBufferCreateInfo](12, 4, [0, 4, 8, ])
+  assert-layout[GPUTransferBufferCreateInfo](12, 4, [0, 4, 8, ])
+  assert-layout[GPURasterizerState](28, 4, [0, 4, 8, 12, 16, 20, 24, 25, 26, 27, ])
+  assert-layout[GPUMultisampleState](12, 4, [0, 4, 8, 9, 10, 11, ])
+  assert-layout[GPUDepthStencilState](44, 4, [0, 4, 20, 36, 37, 38, 39, 40, 41, 42, 43, ])
+  assert-layout[GPUColorTargetDescription](36, 4, [0, 4, ])
+  assert-layout[GPUGraphicsPipelineTargetInfo](24, 8, [0, 8, 12, 16, 17, 18, 19, ])
+  assert-layout[GPUGraphicsPipelineCreateInfo](168, 8, [0, 8, 16, 48, 52, 80, 92, 136, 160, ])
+  assert-layout[GPUComputePipelineCreateInfo](72, 8, [0, 8, 16, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64, ])
+  assert-layout[GPUColorTargetInfo](64, 8, [0, 8, 12, 16, 32, 36, 40, 48, 52, 56, 57, 58, 59, ])
+  assert-layout[GPUDepthStencilTargetInfo](32, 8, [0, 8, 12, 16, 20, 24, 28, 29, 30, 31, ])
+  assert-layout[GPUBlitInfo](96, 8, [0, 32, 64, 68, 84, 88, 92, 93, 94, 95, ])
+  assert-layout[GPUBufferBinding](16, 8, [0, 8, ])
+  assert-layout[GPUTextureSamplerBinding](16, 8, [0, 8, ])
+  assert-layout[GPUStorageBufferReadWriteBinding](16, 8, [0, 8, 9, 10, 11, ])
+  assert-layout[GPUStorageTextureReadWriteBinding](24, 8, [0, 8, 12, 16, 17, 18, 19, ])
+  assert-layout[GPUVulkanOptions](56, 8, [0, 8, 16, 24, 32, 40, 48, ])
+  assert-layout[HapticEffectType](2, 2, [])
+  assert-layout[HapticDirectionType](1, 1, [])
+  assert-layout[HapticEffectID](4, 4, [])
+  assert-layout[HapticDirection](16, 4, [0, 4, ])
+  assert-layout[HapticConstant](40, 4, [0, 4, 20, 24, 26, 28, 30, 32, 34, 36, 38, ])
+  assert-layout[HapticPeriodic](48, 4, [0, 4, 20, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42, 44, ])
+  assert-layout[HapticCondition](68, 4, [0, 4, 20, 24, 26, 28, 30, 36, 42, 48, 54, 60, ])
+  assert-layout[HapticRamp](44, 4, [0, 4, 20, 24, 26, 28, 30, 32, 34, 36, 38, 40, ])
+  assert-layout[HapticLeftRight](12, 4, [0, 4, 8, 10, ])
+  assert-layout[HapticCustom](56, 8, [0, 4, 20, 24, 26, 28, 30, 32, 34, 40, 48, 50, 52, 54, ])
+  assert-layout[HapticEffect](72, 8, [])
+  assert-layout[HapticID](4, 4, [])
+  assert-layout[hid_bus_type](4, 4, [])
+  assert-layout[hid_device_info](80, 8, [0, 8, 10, 16, 24, 32, 40, 48, 50, 52, 56, 60, 64, 68, 72, ])
+  assert-layout[HintPriority](4, 4, [])
+  assert-layout[HintCallback](8, 8, [])
+  assert-layout[InitFlags](4, 4, [])
+  assert-layout[AppResult](4, 4, [])
+  assert-layout[AppInit_func](8, 8, [])
+  assert-layout[AppIterate_func](8, 8, [])
+  assert-layout[AppEvent_func](8, 8, [])
+  assert-layout[AppQuit_func](8, 8, [])
+  assert-layout[MainThreadCallback](8, 8, [])
+  assert-layout[Locale](16, 8, [0, 8, ])
+  assert-layout[LogCategory](4, 4, [])
+  assert-layout[LogPriority](4, 4, [])
+  assert-layout[LogOutputFunction](8, 8, [])
+  assert-layout[MessageBoxFlags](4, 4, [])
+  assert-layout[MessageBoxButtonFlags](4, 4, [])
+  assert-layout[MessageBoxButtonData](16, 8, [0, 4, 8, ])
+  assert-layout[MessageBoxColor](3, 1, [0, 1, 2, ])
+  assert-layout[MessageBoxColorType](4, 4, [])
+  assert-layout[MessageBoxColorScheme](15, 1, [0, ])
+  assert-layout[MessageBoxData](56, 8, [0, 8, 16, 24, 32, 40, 48, ])
+  assert-layout[MetalView](8, 8, [])
+  assert-layout[ProcessIO](4, 4, [])
+  assert-layout[Vertex](32, 4, [0, 8, 24, ])
+  assert-layout[TextureAccess](4, 4, [])
+  assert-layout[TextureAddressMode](4, 4, [])
+  assert-layout[RendererLogicalPresentation](4, 4, [])
+  assert-layout[Texture](16, 4, [0, 4, 8, 12, ])
+  assert-layout[GPURenderStateCreateInfo](64, 8, [0, 8, 16, 24, 32, 40, 48, 56, ])
+  assert-layout[StorageInterface](96, 8, [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, ])
+  assert-layout[X11EventHook](8, 8, [])
+  assert-layout[Sandbox](4, 4, [])
+  assert-layout[DateTime](36, 4, [0, 4, 8, 12, 16, 20, 24, 28, 32, ])
+  assert-layout[DateFormat](4, 4, [])
+  assert-layout[TimeFormat](4, 4, [])
+  assert-layout[TimerID](4, 4, [])
+  assert-layout[TimerCallback](8, 8, [])
+  assert-layout[NSTimerCallback](8, 8, [])
+  assert-layout[TrayEntryFlags](4, 4, [])
+  assert-layout[TrayCallback](8, 8, [])
+}

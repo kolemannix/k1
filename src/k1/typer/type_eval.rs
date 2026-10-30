@@ -755,10 +755,7 @@ impl TypedProgram {
                     inner_fn.return_type,
                     true,
                 );
-                let lambda_object_type =
-                    self.add_lambda_object(new_function_type, ty_app_id.into());
-
-                Ok(Some(lambda_object_type))
+                Ok(Some(self.add_lambda_object(new_function_type)))
             }
             "_struct_combine" => {
                 if ty_app.args.len() != 2 {
@@ -1964,11 +1961,10 @@ impl TypedProgram {
             }
             Type::LambdaObject(lam_obj) => {
                 let fn_type = lam_obj.function_type;
-                let parsed_id = lam_obj.parsed_id;
                 let new_fn_type =
                     self.substitute_in_type_inner(fn_type, substitution_pairs, from_kinds);
                 if new_fn_type != fn_type {
-                    self.add_lambda_object(new_fn_type, parsed_id)
+                    self.add_lambda_object(new_fn_type)
                 } else {
                     type_id
                 }

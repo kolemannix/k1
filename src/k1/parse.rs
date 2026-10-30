@@ -6067,11 +6067,13 @@ impl ParsedProgram {
                     ParsedRecordKind::Packed => w.write_str("packed ")?,
                 }
                 w.write_str("{ ")?;
-                for field in self.mem.getn(struct_type.fields).iter() {
+                for (index, field) in self.mem.getn(struct_type.fields).iter().enumerate() {
+                    if index > 0 {
+                        w.write_str(", ")?;
+                    }
                     self.display_ident(w, field.name)?;
                     w.write_str(": ")?;
-                    self.display_type_expr_id(ty_expr_id, w)?;
-                    w.write_str(", ")?;
+                    self.display_type_expr_id(field.type_expr, w)?;
                 }
                 w.write_str(" }")
             }
@@ -6087,16 +6089,32 @@ impl ParsedProgram {
                 Ok(())
             }
             ParsedTypeExpr::Sum(e) => {
-                w.write_str("either ")?;
-                for variant in self.mem.getn(e.variants) {
+                w.write_str("either")?;
+                if let Some(tag_type) = e.tag_type {
+                    w.write_str("(")?;
+                    self.display_type_expr_id(tag_type, w)?;
+                    if e.partial {
+                        w.write_str(", partial")?;
+                    }
+                    w.write_str(")")?;
+                }
+                w.write_str(" { ")?;
+                for (index, variant) in self.mem.getn(e.variants).iter().enumerate() {
+                    if index > 0 {
+                        w.write_str(", ")?;
+                    }
                     self.display_ident(w, variant.tag_name)?;
                     if let Some(payload) = &variant.payload {
                         w.write_str("(")?;
                         self.display_type_expr_id(*payload, w)?;
                         w.write_str(")")?;
                     }
+                    if let Some(value) = variant.explicit_value {
+                        w.write_str(" = ")?;
+                        self.display_literal(w, &ParsedLiteral::Int(value))?;
+                    }
                 }
-                Ok(())
+                w.write_str(" }")
             }
             ParsedTypeExpr::MemberAccess(acc) => {
                 self.display_type_expr_id(acc.base, w)?;
@@ -6124,7 +6142,7 @@ impl ParsedProgram {
                 Ok(())
             }
             ParsedTypeExpr::TypeOf(tof) => {
-                w.write_str("typeOf(")?;
+                w.write_str("type-of(")?;
                 self.display_expr_id(w, tof.target_expr)?;
                 w.write_str(")")?;
                 Ok(())

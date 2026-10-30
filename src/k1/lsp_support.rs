@@ -415,12 +415,11 @@ pub fn signature_help_info(k1: &TypedProgram, site: CompletionSite) -> Option<Si
             format!("{}: {}", k1.ident_str(name), k1.type_id_to_string(p.type_id))
         })
         .collect();
-    let label = format!(
-        "fn {}({}): {}",
-        k1.ident_str(function.name),
-        params.join(", "),
-        k1.type_id_to_string(ft.return_type)
-    );
+    let mut label = format!("fn {}({})", k1.ident_str(function.name), params.join(", "));
+    if ft.return_type != k1.builtin_types.empty {
+        label.push_str(": ");
+        label.push_str(&k1.type_id_to_string(ft.return_type));
+    }
     Some(SignatureHelpInfo { label, params, active_param: arg_index })
 }
 

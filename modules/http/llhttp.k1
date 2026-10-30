@@ -300,13 +300,13 @@ fn(extern("llhttp_init")) init(
   parser: *t,
   type: type,
   settings: *settings,
-): {}
+)
 fn(extern("llhttp_alloc")) alloc(
   type: type,
 ): optref[t]
 fn(extern("llhttp_free")) free(
   parser: *t,
-): {}
+)
 fn(extern("llhttp_get_type")) get_type(
   parser: *t,
 ): u8
@@ -327,10 +327,10 @@ fn(extern("llhttp_get_upgrade")) get_upgrade(
 ): u8
 fn(extern("llhttp_reset")) reset(
   parser: *t,
-): {}
+)
 fn(extern("llhttp_settings_init")) settings_init(
   settings: *settings,
-): {}
+)
 fn(extern("llhttp_execute")) execute(
   parser: *t,
   data: *u8,
@@ -347,13 +347,13 @@ fn(extern("llhttp_should_keep_alive")) should_keep_alive(
 ): i32
 fn(extern("llhttp_pause")) pause(
   parser: *t,
-): {}
+)
 fn(extern("llhttp_resume")) resume(
   parser: *t,
-): {}
+)
 fn(extern("llhttp_resume_after_upgrade")) resume_after_upgrade(
   parser: *t,
-): {}
+)
 fn(extern("llhttp_get_errno")) get_errno(
   parser: *t,
 ): errno
@@ -363,7 +363,7 @@ fn(extern("llhttp_get_error_reason")) get_error_reason(
 fn(extern("llhttp_set_error_reason")) set_error_reason(
   parser: *t,
   reason: *u8,
-): {}
+)
 fn(extern("llhttp_get_error_pos")) get_error_pos(
   parser: *t,
 ): optref[u8]
@@ -379,47 +379,47 @@ fn(extern("llhttp_status_name")) status_name(
 fn(extern("llhttp_set_lenient_headers")) set_lenient_headers(
   parser: *t,
   enabled: i32,
-): {}
+)
 fn(extern("llhttp_set_lenient_chunked_length")) set_lenient_chunked_length(
   parser: *t,
   enabled: i32,
-): {}
+)
 fn(extern("llhttp_set_lenient_keep_alive")) set_lenient_keep_alive(
   parser: *t,
   enabled: i32,
-): {}
+)
 fn(extern("llhttp_set_lenient_transfer_encoding")) set_lenient_transfer_encoding(
   parser: *t,
   enabled: i32,
-): {}
+)
 fn(extern("llhttp_set_lenient_version")) set_lenient_version(
   parser: *t,
   enabled: i32,
-): {}
+)
 fn(extern("llhttp_set_lenient_data_after_close")) set_lenient_data_after_close(
   parser: *t,
   enabled: i32,
-): {}
+)
 fn(extern("llhttp_set_lenient_optional_lf_after_cr")) set_lenient_optional_lf_after_cr(
   parser: *t,
   enabled: i32,
-): {}
+)
 fn(extern("llhttp_set_lenient_optional_cr_before_lf")) set_lenient_optional_cr_before_lf(
   parser: *t,
   enabled: i32,
-): {}
+)
 fn(extern("llhttp_set_lenient_optional_crlf_after_chunk")) set_lenient_optional_crlf_after_chunk(
   parser: *t,
   enabled: i32,
-): {}
+)
 fn(extern("llhttp_set_lenient_spaces_after_chunk_size")) set_lenient_spaces_after_chunk_size(
   parser: *t,
   enabled: i32,
-): {}
+)
 fn(extern("llhttp_set_lenient_header_value_relaxed")) set_lenient_header_value_relaxed(
   parser: *t,
   enabled: i32,
-): {}
+)
 
 fn(test) c-layouts() {
   assert-layout[_internal](96, 8, [])

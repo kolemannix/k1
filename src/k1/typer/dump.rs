@@ -426,6 +426,9 @@ impl TypedProgram {
                 w.write_str("fn(")?;
                 for (idx, param) in self.mem.getn(fun.physical_params).iter().enumerate() {
                     if fun.is_lambda && idx == 0 {
+                        if mode == TypeDisplayMode::Name {
+                            continue;
+                        }
                         w.write_str("(env)")?;
                     }
                     if param.kind == FnParamKind::Context {
@@ -462,10 +465,9 @@ impl TypedProgram {
                 Ok(())
             }
             Type::LambdaObject(lambda_object) => {
-                w.write_str("lambda_object(")?;
-                self.display_type_id_ext(w, lambda_object.struct_representation, mode, visiting)?;
-                w.write_str(")")?;
-                Ok(())
+                w.write_str("dyn[")?;
+                self.display_type_id_ext(w, lambda_object.function_type, mode, visiting)?;
+                w.write_str("]")
             }
             Type::AbilityObject(ao) if mode == TypeDisplayMode::Structural => {
                 w.write_str("dyn(")?;
@@ -1444,8 +1446,10 @@ impl TypedProgram {
             self.display_type_id(w, param.type_id, TypeDisplayMode::Name)?;
         }
         w.write_str(")")?;
-        w.write_str(": ")?;
-        self.display_type_id(w, function_type.return_type, TypeDisplayMode::Name)?;
+        if function_type.return_type != self.builtin_types.empty {
+            w.write_str(": ")?;
+            self.display_type_id(w, function_type.return_type, TypeDisplayMode::Name)?;
+        }
         Ok(())
     }
 
