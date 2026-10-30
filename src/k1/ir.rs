@@ -1510,11 +1510,14 @@ impl<'k1> Builder<'k1> {
 
     fn push_struct_offset(
         &mut self,
-        struct_agg_id: AggregateTypeId,
+        struct_pt: PhysicalType,
         base: Value,
         field_index: u32,
         comment: IrComment,
     ) -> Value {
+        let PhysicalTypeEnum::Agg(struct_agg_id) = struct_pt.as_enum() else {
+            return base;
+        };
         let agg_type = self.k1.agg_types.get(struct_agg_id).agg_type;
         if matches!(agg_type, AggType::Union { .. }) {
             return base;
@@ -1524,7 +1527,7 @@ impl<'k1> Builder<'k1> {
         if field_index == 0 && unaligned == base_unaligned {
             return base;
         }
-        let Some(offset) = self.k1.get_struct_field_offset(struct_agg_id, field_index) else {
+        let Some(offset) = self.k1.get_struct_field_offset(struct_pt, field_index) else {
             b_ice!(self, "Failed getting offset for field")
         };
         self.push_inst(
@@ -1975,10 +1978,16 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
         TypedExpr::Struct(struct_literal) => {
             let struct_type_id = expr_type;
             let struct_pt = b.get_physical_type(struct_type_id)?;
-            if struct_pt.is_empty() {
-                return Ok(Value::Empty);
+            match struct_pt.as_enum() {
+                PhysicalTypeEnum::Empty => return Ok(Value::Empty),
+                PhysicalTypeEnum::Scalar(st) => {
+                    return match b.k1.mem.get_nth(struct_literal.fields, 0).expr {
+                        Some(expr) => compile_expr(b, dst, expr),
+                        None => Ok(dst.unwrap_or(Value::zero(st))),
+                    };
+                }
+                PhysicalTypeEnum::Agg(_) => {}
             }
-            let struct_agg_id = struct_pt.expect_agg();
             let struct_base = match dst {
                 Some(dst) => dst,
                 None => b.push_alloca(struct_pt, IrComment::StructLiteral).as_value(),
@@ -1988,7 +1997,7 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
                     None => {}
                     Some(expr) => {
                         let struct_offset = b.push_struct_offset(
-                            struct_agg_id,
+                            struct_pt,
                             struct_base,
                             field_index as u32,
                             IrComment::StructLitFieldPtr,
@@ -1999,7 +2008,11 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
             }
             Ok(struct_base)
         }
-        TypedExpr::StructFieldAccess(_) => {
+        TypedExpr::StructFieldAccess(field_access) => {
+            let struct_type = b.k1.exprs.get_type(field_access.base_struct);
+            if b.get_physical_type(struct_type)?.is_scalar() {
+                return compile_expr(b, dst, field_access.base_struct);
+            }
             let (field_ptr, frozen) = compile_expr_place(b, expr)?;
             let result_type = b.get_physical_type(expr_type)?;
             let needs_copy = !frozen;
@@ -2140,7 +2153,7 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
                     Callee::DynamicLambda(dl) => {
                         let lambda_obj = compile_expr(b, None, *dl)?;
                         let lam_obj_type_id = b.k1.exprs.get_type(*dl);
-                        let lam_obj_pt = b.get_physical_type(lam_obj_type_id).unwrap().expect_agg();
+                        let lam_obj_pt = b.get_physical_type(lam_obj_type_id).unwrap();
                         let ptr_pt = PhysicalType::PTR;
                         let fn_ptr_addr = b.push_struct_offset(
                             lam_obj_pt,
@@ -2163,7 +2176,7 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
                     Callee::DynamicAbilityFn { object_expr, slot_index, slot_function_type } => {
                         let object = compile_expr(b, None, *object_expr)?;
                         let object_type_id = b.k1.exprs.get_type(*object_expr);
-                        let object_pt = b.get_physical_type(object_type_id).unwrap().expect_agg();
+                        let object_pt = b.get_physical_type(object_type_id).unwrap();
                         let ptr_pt = PhysicalType::PTR;
                         let table_index = TypedProgram::ABILITY_OBJECT_TABLE_INDEX;
                         let table_addr = b.push_struct_offset(
@@ -2172,9 +2185,8 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
                             table_index as u32,
                             IrComment::None,
                         );
-                        let object_fields = b.k1.get_agg_struct_layout(object_pt);
-                        let table_pt =
-                            b.k1.mem.get_nth(object_fields, table_index).field_t.expect_agg();
+                        let object_fields = b.k1.get_agg_struct_layout(object_pt.expect_agg());
+                        let table_pt = b.k1.mem.get_nth(object_fields, table_index).field_t;
                         let fn_ptr_addr = b.push_struct_offset(
                             table_pt,
                             table_addr,
@@ -2221,21 +2233,29 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
                 if callee_fn_type.is_variadic && arg_index + 1 == call_args.len() {
                     let arg_type = b.k1.exprs.get_type(*arg);
                     let arg_pt = b.get_physical_type(arg_type)?;
-                    let PhysicalTypeEnum::Agg(agg_id) = arg_pt.as_enum() else {
-                        compile_expr(b, None, *arg)?;
-                        continue;
-                    };
-                    let (place, _frozen) = compile_expr_place(b, *arg)?;
-                    let fields = b.k1.mem.getn(b.k1.get_agg_struct_layout(agg_id));
-                    for (field_index, field) in fields.iter().enumerate() {
-                        let addr = b.push_struct_offset(
-                            agg_id,
-                            place,
-                            field_index as u32,
-                            IrComment::None,
-                        );
-                        let value = load_value(b, field.field_t, addr, false, IrComment::None);
-                        args.push_grow(&mut b.k1.tmp, value);
+                    match arg_pt.as_enum() {
+                        PhysicalTypeEnum::Empty => {
+                            compile_expr(b, None, *arg)?;
+                        }
+                        PhysicalTypeEnum::Scalar(_) => {
+                            let value = compile_expr(b, None, *arg)?;
+                            args.push_grow(&mut b.k1.tmp, value);
+                        }
+                        PhysicalTypeEnum::Agg(agg_id) => {
+                            let (place, _frozen) = compile_expr_place(b, *arg)?;
+                            let fields = b.k1.mem.getn(b.k1.get_agg_struct_layout(agg_id));
+                            for (field_index, field) in fields.iter().enumerate() {
+                                let addr = b.push_struct_offset(
+                                    arg_pt,
+                                    place,
+                                    field_index as u32,
+                                    IrComment::None,
+                                );
+                                let value =
+                                    load_value(b, field.field_t, addr, false, IrComment::None);
+                                args.push_grow(&mut b.k1.tmp, value);
+                            }
+                        }
                     }
                     continue;
                 }
@@ -2592,7 +2612,7 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
             let sum_agg_id = sum_pt.expect_agg();
             let sum_pt_agg = b.k1.agg_types.get(sum_agg_id).agg_type.expect_sum();
             let variants = sum_pt_agg.variants;
-            let sum_struct_repr = sum_pt_agg.struct_repr;
+            let sum_struct_repr = PhysicalType::agg(sum_pt_agg.struct_repr);
             let sum_base = match dst {
                 Some(dst) => dst,
                 None => b.push_alloca(sum_pt, IrComment::SumLiteralStorage).as_value(),
@@ -2716,12 +2736,8 @@ fn compile_expr_place(b: &mut Builder, expr: TypedExprId) -> K1Result<(Value, bo
             let struct_type = b.k1.exprs.get_type(field_access.base_struct);
             let struct_pt = b.get_physical_type(struct_type)?;
             let (base_ptr, frozen) = compile_expr_place(b, field_access.base_struct)?;
-            if struct_pt.is_empty() {
-                return Ok((base_ptr, frozen));
-            }
-            let struct_pt_id = struct_pt.expect_agg();
             let field_ptr = b.push_struct_offset(
-                struct_pt_id,
+                struct_pt,
                 base_ptr,
                 field_access.field_index,
                 IrComment::StructAccessPlace,
@@ -2775,7 +2791,7 @@ fn compile_expr_place(b: &mut Builder, expr: TypedExprId) -> K1Result<(Value, bo
             let sum_type_id = b.k1.exprs.get_type(sum_get_payload.sum_expr);
             let sum_agg_id = b.k1.get_physical_type(sum_type_id).unwrap().expect_agg();
             let sum_pt = b.k1.agg_types.get(sum_agg_id).agg_type.expect_sum();
-            let sum_struct_repr = sum_pt.struct_repr;
+            let sum_struct_repr = PhysicalType::agg(sum_pt.struct_repr);
             let payload_offset =
                 b.push_struct_offset(sum_struct_repr, sum_base, 1, IrComment::SumPayloadOffset);
             Ok((payload_offset, frozen))
@@ -2834,6 +2850,10 @@ fn compile_static_value(b: &mut Builder, value_id: StaticValueId, pt: PhysicalTy
             b.push_const(t, bits, IrComment::StaticScalar)
         }
         StaticValue::FunctionPointer(_, function_id) => Value::FunctionAddr(*function_id),
+        StaticValue::Struct(s) if pt.is_scalar() => {
+            let field = *b.k1.static_values.mem.get_nth(s.fields, 0);
+            compile_static_value(b, field, pt)
+        }
         StaticValue::String(_)
         | StaticValue::Zero(_)
         | StaticValue::Struct(_)
@@ -2991,9 +3011,6 @@ fn compile_ir_builtin(
         BuiltinIr::Scalar(_) => b_ice!(b, "scalar op builtins are typed as ScalarOp, not calls"),
         BuiltinIr::IntOverflow(op) => {
             let ret_pt = callee_fn_type.return_type;
-            let PhysicalTypeEnum::Agg(agg_id) = ret_pt.as_enum() else {
-                b_ice!(b, "overflow result must be an aggregate");
-            };
             let t = b.k1.ir.mem.get_nth(callee_fn_type.params, 0).pt.expect_scalar();
             let lhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 0))?;
             let rhs = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
@@ -3004,9 +3021,9 @@ fn compile_ir_builtin(
                 None => b.push_alloca(ret_pt, IrComment::None).as_value(),
                 Some(dst) => dst,
             };
-            let value_addr = b.push_struct_offset(agg_id, result, 0, IrComment::None);
+            let value_addr = b.push_struct_offset(ret_pt, result, 0, IrComment::None);
             b.push_store(value_addr, value, IrComment::None);
-            let overflowed_addr = b.push_struct_offset(agg_id, result, 1, IrComment::None);
+            let overflowed_addr = b.push_struct_offset(ret_pt, result, 1, IrComment::None);
             b.push_store(overflowed_addr, overflowed, IrComment::None);
             Ok(result)
         }
@@ -3216,10 +3233,7 @@ fn compile_ir_builtin(
             let expected = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 1))?;
             let desired = compile_expr(b, None, *b.k1.mem.get_nth(call.args, 2))?;
             let ret_pt = callee_fn_type.return_type;
-            let PhysicalTypeEnum::Agg(agg_id) = ret_pt.as_enum() else {
-                b_ice!(b, "cmpxchg return type must be an aggregate");
-            };
-            let Some(ok_vm_offset) = b.k1.get_struct_field_offset(agg_id, 1) else {
+            let Some(ok_vm_offset) = b.k1.get_struct_field_offset(ret_pt, 1) else {
                 b_ice!(b, "cmpxchg result missing ok field");
             };
             let result = match dst {

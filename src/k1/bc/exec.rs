@@ -1036,9 +1036,8 @@ fn exec_builtin(
     builtin: BackendBuiltin,
     args: &[Value],
 ) -> K1Result<BuiltinOutcome> {
-    fn type_id_outcome(k1: &mut TypedProgram, vm: &Vm, type_id: TypeId) -> BuiltinOutcome {
-        let type_id_value_id = k1.add_type_id_value(type_id);
-        BuiltinOutcome::Value(vm::static_value_to_vm_value(k1, type_id_value_id, vm.eval_span))
+    fn type_id_outcome(type_id: TypeId) -> BuiltinOutcome {
+        BuiltinOutcome::Value(Value::u64(type_id.as_u32() as u64))
     }
     match builtin {
         BackendBuiltin::TypeInfo => {
@@ -1080,7 +1079,7 @@ fn exec_builtin(
             let field_descs: &[vm::k1_types::K1MakeStructField] =
                 unsafe { vm::value_as_span(args[1]).to_slice() };
             let new_type_id = k1.make_struct_raw(record_kind, field_descs, vm.eval_span)?;
-            Ok(type_id_outcome(k1, vm, new_type_id))
+            Ok(type_id_outcome(new_type_id))
         }
         BackendBuiltin::MakeEither => {
             let tag_type_opt =
@@ -1090,32 +1089,32 @@ fn exec_builtin(
             let variant_descs: &[vm::k1_types::K1MakeEitherVariant] =
                 unsafe { vm::value_as_span(args[1]).to_slice() };
             let new_type_id = k1.make_either_raw(explicit_tag_type, variant_descs, vm.eval_span)?;
-            Ok(type_id_outcome(k1, vm, new_type_id))
+            Ok(type_id_outcome(new_type_id))
         }
         BackendBuiltin::MakeReference => {
             let inner = vm::value_to_type_id(k1, args[0], vm.eval_span)?;
             let new_type_id = k1.make_reference_raw(inner);
-            Ok(type_id_outcome(k1, vm, new_type_id))
+            Ok(type_id_outcome(new_type_id))
         }
         BackendBuiltin::MakeArray => {
             let element_type = vm::value_to_type_id(k1, args[0], vm.eval_span)?;
             let size = args[1].bits() as i64;
             let new_type_id = k1.make_array_raw(element_type, size, vm.eval_span)?;
-            Ok(type_id_outcome(k1, vm, new_type_id))
+            Ok(type_id_outcome(new_type_id))
         }
         BackendBuiltin::MakeFn => {
             let raw_param_types: &[vm::k1_types::TypeId] =
                 unsafe { vm::value_as_span(args[0]).to_slice() };
             let return_type = vm::value_to_type_id(k1, args[1], vm.eval_span)?;
             let new_type_id = k1.make_fn_raw(raw_param_types, return_type, vm.eval_span)?;
-            Ok(type_id_outcome(k1, vm, new_type_id))
+            Ok(type_id_outcome(new_type_id))
         }
         BackendBuiltin::MakeInstance => {
             let parent = vm::value_to_type_id(k1, args[0], vm.eval_span)?;
             let raw_args: &[vm::k1_types::TypeId] =
                 unsafe { vm::value_as_span(args[1]).to_slice() };
             let new_type_id = k1.make_generic_instance_raw(parent, raw_args, vm.eval_span)?;
-            Ok(type_id_outcome(k1, vm, new_type_id))
+            Ok(type_id_outcome(new_type_id))
         }
         BackendBuiltin::MemCopy | BackendBuiltin::MemMove => {
             let dst = args[0];

@@ -3493,11 +3493,10 @@ impl TypedProgram {
         value: TypedExprId,
         span: Span,
     ) -> TypedStmtId {
-        if let TypedExpr::Variable(variable_expr) = *self.exprs.get(destination) {
-            let variable = self.variables.get_mut(variable_expr.variable_id);
-            if matches!(variable.kind, VariableKind::Stack | VariableKind::StackSynthetic) {
-                variable.flags.insert(VariableFlags::Reassigned);
-            }
+        if let Ok(AddressOfKind::StackVariable(variable_id)) =
+            self.check_place_for_address_of(destination, true, span)
+        {
+            self.variables.get_mut(variable_id).flags.insert(VariableFlags::Reassigned);
         }
         self.stmts.add(TypedStmt::Assignment(AssignmentStmt { destination, value, span }))
     }
@@ -7552,8 +7551,11 @@ impl TypedProgram {
         match self.types.get(type_id) {
             Type::Struct(s) if s.record_kind != RecordKind::Union => {
                 let fields = self.mem.getn(s.fields);
-                for (field, field_layout) in fields.iter().zip(self.get_struct_layout(type_id)) {
-                    self.push_view_parts(field.type_id, offset + field_layout.offset, parts)
+                let struct_pt = self.get_physical_type(type_id).unwrap();
+                for (index, field) in fields.iter().enumerate() {
+                    let field_offset =
+                        self.get_struct_field_offset(struct_pt, index as u32).unwrap();
+                    self.push_view_parts(field.type_id, offset + field_offset, parts)
                 }
             }
             _ => {

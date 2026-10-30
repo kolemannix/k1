@@ -1,0 +1,45 @@
+ns scalar_struct
+
+type cents = { v: i64 }
+type wallet = { c: cents }
+type entry = { c: cents, n: int }
+
+fn read(c: cents): i64 { c.v }
+fn is-null-ref(o: optref[u8]): bool { o.is-null() }
+fn make(v: i64): wallet { .{ c = .{ v } } }
+fn baked(): cents { #static { let c: cents = .{ v = 40 }; c.v = c.v + 2; c } }
+let RESULT_ARGS: span[types/type-id] = types/instance-info[result[int, string]].!.args
+
+fn(test) one-scalar-structs-are-their-scalar() {
+  assert-equals(read(.{ v = 3 }), 3)
+  assert-equals(make(5).c.v, 5)
+
+  let c: cents = .{ v = uninit }
+  c.v = 6
+  let r = c.v.&
+  r.* = r.* + 1
+  assert-equals(c.v, 7)
+
+  let w = make(8)
+  w.c.v = w.c.v * 2
+  assert-equals(read(w.c), 16)
+
+  let e: entry = .{ c = .{ v = 9 }, n = 1 }
+  let er = e.c.v.&
+  er.* = 10
+  assert-equals(e.c.v + e.n, 11)
+
+  assert-equals(baked().v, 42)
+  let n = 0
+  #for RESULT_ARGS { n = n + 1 }
+  assert-equals(n, 2)
+  assert-equals(c.as[{ v: i64 }].v, 7)
+
+  let x: u8 = 3
+  let o: optref[u8] = x.&.as()
+  assert(not is-null-ref(x.&.as()))
+  let back: *u8 = o.narrow()
+  assert-equals(back.*, 3)
+  assert(test-compile(o.as[*u8]).is-some())
+  assert(test-compile(#static { let b: int = 3; let f = fn[b](x: int) x + b; [f, f] }).is-some())
+}

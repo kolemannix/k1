@@ -427,11 +427,7 @@ impl TypedProgram {
                 let struct_schema_field_item_struct_type_id =
                     self.get_as_span_instance(struct_schema_fields_span_type_id).unwrap();
 
-                // for offsets
-                let struct_layout = match record_kind {
-                    RecordKind::Struct | RecordKind::Packed => self.get_struct_layout(type_id),
-                    RecordKind::Union => &[],
-                };
+                let struct_pt = self.get_physical_type(type_id).unwrap();
                 // { name: string), typeId: u64, offset: size }
                 let mut field_values = self.tmp.new_list(struct_type_fields.len());
                 for (index, f) in self.mem.getn(struct_type_fields).iter().enumerate() {
@@ -442,8 +438,7 @@ impl TypedProgram {
                     self.register_type_metainfo(f.type_id);
 
                     let type_id_value_id = self.add_type_id_value(f.type_id);
-                    let offset_u32 =
-                        if struct_layout.is_empty() { 0 } else { struct_layout[index].offset };
+                    let offset_u32 = self.get_struct_field_offset(struct_pt, index as u32).unwrap();
                     let offset_value_id = self.static_values.add_size(offset_u32 as i64);
                     field_values.push(self.static_values.add_struct_from_slice(
                         struct_schema_field_item_struct_type_id,

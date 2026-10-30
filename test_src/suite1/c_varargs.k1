@@ -15,6 +15,9 @@
 
   fn(test) passes-struct-fields-as-varargs() {
     assert-equals(format-mixed(), "-7|1234567890123|2.5|hi|4000000000")
+    let one: array[u8, 8] = .0
+    let _ = snprintf(one.&.as[ptr].ref[u8], 8, "%d".to-c-tmp(), .{ a = 42i32 })
+    assert-equals(string/from-c(one.&.as[ptr].ref[u8]), "42")
     assert(fcntl(0, 3, .{}) >= 0)
     assert(test-compile(fcntl(0, 3, .{ flags = 1u8 })).is-some())
   }

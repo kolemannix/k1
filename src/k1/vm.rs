@@ -39,8 +39,7 @@ macro_rules! vm_ice {
 }
 
 pub fn value_to_type_id(k1: &mut TypedProgram, value: Value, span: Span) -> K1Result<TypeId> {
-    let raw = unsafe { (value.as_ptr() as *const k1_types::TypeId).read() };
-    k1.type_id_from_raw(raw, span)
+    k1.type_id_from_raw(k1_types::TypeId { inner: value.bits() }, span)
 }
 
 /// Bit-for-bit mappings of K1 types
@@ -549,7 +548,12 @@ pub fn static_value_to_vm_value(
         return *v;
     };
 
-    let v = match k1.static_values.get(static_value_id) {
+    let static_value = *k1.static_values.get(static_value_id);
+    let v = match static_value {
+        StaticValue::Struct(s) if k1.get_physical_type(s.type_id).unwrap().is_scalar() => {
+            let field = *k1.static_values.mem.get_nth(s.fields, 0);
+            static_value_to_vm_value(k1, field, span)
+        }
         StaticValue::Empty(_) => Value(0),
         scalar @ (StaticValue::Bool(_)
         | StaticValue::Char(_)
@@ -558,10 +562,10 @@ pub fn static_value_to_vm_value(
         | StaticValue::Float(_)) => Value(scalar.scalar_bits().unwrap().1),
         StaticValue::FunctionPointer(_, function_id) => Value(function_id.as_u32() as u64),
         StaticValue::String(string_id) => {
-            let value = string_id_to_value(k1, *string_id);
+            let value = string_id_to_value(k1, string_id);
             value
         }
-        StaticValue::Zero(type_id) => static_zero_value(k1, *type_id, span),
+        StaticValue::Zero(type_id) => static_zero_value(k1, type_id, span),
         StaticValue::Struct(_)
         | StaticValue::Sum(_)
         | StaticValue::LinearContainer(_)
@@ -609,12 +613,13 @@ pub fn store_static_value(
         }
         StaticValue::Struct(static_struct) => {
             let struct_fields = static_struct.fields;
-            let struct_layout = k1.get_struct_layout(static_struct.type_id);
+            let struct_pt = k1.get_physical_type(static_struct.type_id).unwrap();
 
-            for (field, field_value_id) in
-                struct_layout.iter().zip(k1.static_values.mem.getn(struct_fields))
+            for (index, field_value_id) in
+                k1.static_values.mem.getn(struct_fields).iter().enumerate()
             {
-                let field_ptr = unsafe { dst.byte_add(field.offset as usize) };
+                let field_offset = k1.get_struct_field_offset(struct_pt, index as u32).unwrap();
+                let field_ptr = unsafe { dst.byte_add(field_offset as usize) };
                 store_static_value(k1, target, field_ptr, *field_value_id);
             }
         }
@@ -1140,6 +1145,10 @@ pub fn vm_value_to_static_value(
                         )?
                     }
                 }
+            } else if pt.is_scalar() {
+                let field_type = k1.mem.get_nth(struct_type.fields, 0).type_id;
+                let field_value_id = vm_value_to_static_value(k1, field_type, vm_value, span)?;
+                k1.static_values.add_struct_from_slice(type_id, &[field_value_id])
             } else {
                 let struct_ptr = vm_value.as_ptr();
                 let struct_type_fields = struct_type.fields;

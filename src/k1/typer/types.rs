@@ -1264,6 +1264,10 @@ impl ScalarType {
     pub fn width_bits(&self) -> u8 {
         self.width().bits()
     }
+
+    pub fn is_abi_extended(&self) -> bool {
+        matches!(self.width(), NumericWidth::B8 | NumericWidth::B16)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2405,6 +2409,11 @@ impl TypedProgram {
                     }
                     if layout.size == 0 {
                         PhysicalTypeResult::Yes(PhysicalType::EMPTY)
+                    } else if let [field] = fields.as_slice()
+                        && !packed
+                        && field.field_t.as_scalar().is_some_and(|st| !st.is_abi_extended())
+                    {
+                        PhysicalTypeResult::Yes(field.field_t)
                     } else {
                         let fields_handle = self.mem.pushn(fields.as_slice());
                         let agg_id = self.agg_types.add(AggregateTypeRecord {
@@ -2558,13 +2567,16 @@ impl TypedProgram {
     }
 
     // Works for enum variants too
-    pub fn get_struct_field_offset(
-        &self,
-        agg_id: AggregateTypeId,
-        field_index: u32,
-    ) -> Option<u32> {
+    pub fn get_struct_field_offset(&self, pt: PhysicalType, field_index: u32) -> Option<u32> {
+        let agg_id = match pt.as_enum() {
+            PhysicalTypeEnum::Empty => return Some(0),
+            PhysicalTypeEnum::Scalar(_) => return if field_index == 0 { Some(0) } else { None },
+            PhysicalTypeEnum::Agg(agg_id) => agg_id,
+        };
         match self.agg_types.get(agg_id).agg_type {
-            AggType::Sum(e) => self.get_struct_field_offset(e.struct_repr, field_index),
+            AggType::Sum(e) => {
+                self.get_struct_field_offset(PhysicalType::agg(e.struct_repr), field_index)
+            }
             AggType::Struct { fields, .. } => {
                 if field_index < fields.len() {
                     let field_type = self.mem.get_nth(fields, field_index as usize);
@@ -2573,9 +2585,9 @@ impl TypedProgram {
                     None
                 }
             }
+            AggType::Union { .. } => Some(0),
             AggType::Array { .. } => None,
             AggType::Vector { .. } => None,
-            AggType::Union { .. } => None,
             AggType::Opaque { .. } => None,
         }
     }
@@ -2640,6 +2652,11 @@ impl TypedProgram {
 
     pub fn get_raw_scalar(&mut self, type_id: TypeId) -> Option<ScalarType> {
         match self.get_physical_type(type_id) {
+            PhysicalTypeResult::Yes(_)
+                if matches!(self.types.get(type_id), Type::Struct(_) | Type::Lambda(_)) =>
+            {
+                None
+            }
             PhysicalTypeResult::Yes(pt) => match pt.as_scalar() {
                 Some(ScalarType::Pointer) => None,
                 scalar => scalar,

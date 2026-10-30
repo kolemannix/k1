@@ -2287,14 +2287,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             };
             ([range, None], [range_attribute, None])
         };
-        let native_abi_attribute = match st.width() {
-            NumericWidth::B8 | NumericWidth::B16
-                if self.k1.expect_named_scalar_int_type(id).is_signed() =>
-            {
-                Some(self.make_enum_attribute("signext", 0))
-            }
-            NumericWidth::B8 | NumericWidth::B16 => Some(self.make_enum_attribute("zeroext", 0)),
-            NumericWidth::B32 | NumericWidth::B64 => None,
+        let native_abi_attribute = if !st.is_abi_extended() {
+            None
+        } else if self.k1.expect_named_scalar_int_type(id).is_signed() {
+            Some(self.make_enum_attribute("signext", 0))
+        } else {
+            Some(self.make_enum_attribute("zeroext", 0))
         };
         let di_type = if self.debug.line_tables_only {
             None
@@ -3522,12 +3520,7 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 debug_assert!(cg_fn.function_type.is_sret);
                 let out_storage =
                     cg_fn.function_value.get_param_iter().nth(0).unwrap().into_pointer_value();
-                let type_id_ptr = self.load_function_argument(function_id, 0).into_pointer_value();
-                let type_id_arg = self
-                    .builder
-                    .build_load(self.ctx.i64_type(), type_id_ptr, "")
-                    .unwrap()
-                    .into_int_value();
+                let type_id_arg = self.load_function_argument(function_id, 0).into_int_value();
                 let cg_fn = self.llvm_functions.get(&function_id).unwrap();
                 let type_info_cg_type = cg_fn.function_type.return_logical_cg_type;
                 let i32_type = self.ctx.i32_type();
@@ -5356,6 +5349,12 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 let cg_type = self.codegen_type(pt);
                 let zero = cg_type.rich_type().const_zero();
                 zero.as_basic_value_enum()
+            }
+            StaticValue::Struct(s)
+                if self.k1.get_physical_type_computed(s.type_id).unwrap().is_scalar() =>
+            {
+                let field = *self.k1.static_values.mem.get_nth(s.fields, 0);
+                self.codegen_static_value_as_const(field, writable)?
             }
             StaticValue::Struct(s) => {
                 debug_assert!(!s.fields.is_empty());
