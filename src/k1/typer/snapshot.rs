@@ -117,7 +117,6 @@ impl TypedProgram {
             blanket_impls,
             function_name_to_ability_names,
             exported_symbols,
-            uses_pending_resolution,
             types_pending_definition,
             impls_pending_declaration,
             functions_pending_body,
@@ -204,7 +203,6 @@ impl TypedProgram {
         write_map_snap(w, function_name_to_ability_names);
         write_map_snap(w, exported_symbols);
 
-        assert!(uses_pending_resolution.is_empty());
         assert!(types_pending_definition.is_empty());
         assert!(impls_pending_declaration.is_empty());
         assert!(functions_pending_body.is_empty());

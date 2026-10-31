@@ -699,7 +699,12 @@ impl TypedProgram {
                         reload: false,
                     });
                     self.scopes.set_scope_owner_id(ns_scope_id, ScopeOwnerId::Namespace(ns_id));
-                    let added = self.scopes.add_namespace(module_ns_scope, name, ns_id);
+                    let added = self.scopes.add_namespace(
+                        module_ns_scope,
+                        name,
+                        ns_scope_id,
+                        Provenance::Defined,
+                    );
                     debug_assert!(added, "megarepl ns name was free; we just checked");
                     (ns_id, ns_scope_id, parsed_namespace_id)
                 }

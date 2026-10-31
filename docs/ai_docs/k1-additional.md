@@ -82,8 +82,7 @@ ns pre { macro make-point(name: code) { "type $name = { x: i32, y: i32 }" } }
   or upstream. Their static args see the module's types, globals, abilities, impls
   and namespaces from any file in any order (an `#if`'d one only after it), and the
   output of the metaprograms above them. Looking up an ability declares all its impls,
-  so their headers name only types that exist by then (emitted above the lookup), and
-  a module-local type by its path: a `use` of one binds after metaprograms run. Fns
+  so their headers name only types that exist by then (emitted above the lookup). Fns
   they call come from `ns pre` or upstream. Output may contain more `#meta`/`$`
   (expanded in order) or `macro` defs (binds a static arg once per ns: `define-scaled`
   in `test_src/suite1/test_meta.k1`).

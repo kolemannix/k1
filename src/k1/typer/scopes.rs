@@ -3,25 +3,27 @@
 
 use fxhash::FxHashMap;
 
-use std::{fmt::Display, num::NonZeroU32};
+use std::{cell::Cell, fmt::Display, num::NonZeroU32};
 
 use crate::{
     kbail, kerr,
     kmem::{List, Mem},
     nz_u32_id,
-    parse::{ParsedAbilityId, ParsedGlobalId, ParsedTypeDefnId, QIdent},
+    parse::{IdentSpanned, ParsedAbilityId, ParsedGlobalId, ParsedTypeDefnId, ParsedUseId, QIdent},
     static_assert_niched, static_assert_size,
     typer::{
-        AbilityId, FunctionId, K1Result, LoopType, LsEntityKind, MemTmp, NamespaceId, StringId,
-        TypeId, TypedProgram, VariableId,
+        AbilityId, FunctionId, K1Message, K1Result, LoopType, LsEntityKind, MemTmp, NamespaceId,
+        StringId, TypeId, TypedProgram, VariableId,
     },
-    vpool::VPool,
+    vpool::{SliceHandle, VPool},
 };
 
 nz_u32_id!(ScopeId);
 static_assert_niched!(ScopeId);
 nz_u32_id!(ScopeEntryId);
 nz_u32_id!(NsMapId);
+nz_u32_id!(UseTargetId);
+nz_u32_id!(UseIdentId);
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum ScopeType {
@@ -135,6 +137,7 @@ pub mod kinds {
     pub const TYPE_PARAM_SUBSTS: u16 = 1 << 7;
     pub const PENDING_GLOBALS: u16 = 1 << 8;
     pub const VARIABLES: u16 = 1 << 9;
+    pub const USES: u16 = 1 << 10;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -172,7 +175,7 @@ enum EntryPayload {
     Variable(VariableInScope),
     Function(FunctionId),
     Type(TypeId),
-    Namespace(NamespaceId),
+    Namespace(ScopeId),
     Ability(AbilityId),
     PendingType(ParsedTypeDefnId),
     PendingAbility(ParsedAbilityId),
@@ -180,24 +183,73 @@ enum EntryPayload {
     ContextByType(VariableId),
     ContextByAbility(ContextAbilityEntry),
     TypeSubst(TypeId),
+    Use(UseTargetId),
+}
+
+impl EntryPayload {
+    fn kind(self) -> u16 {
+        match self {
+            EntryPayload::Variable(_) => kinds::VARIABLES,
+            EntryPayload::Function(_) => kinds::FUNCTIONS,
+            EntryPayload::Type(_) => kinds::TYPES,
+            EntryPayload::Namespace(_) => kinds::NAMESPACES,
+            EntryPayload::Ability(_) => kinds::ABILITIES,
+            EntryPayload::PendingType(_) => kinds::PENDING_TYPES,
+            EntryPayload::PendingAbility(_) => kinds::PENDING_ABILITIES,
+            EntryPayload::PendingGlobal(_) => kinds::PENDING_GLOBALS,
+            EntryPayload::ContextByType(_) | EntryPayload::ContextByAbility(_) => {
+                kinds::CONTEXT_VARIABLES
+            }
+            EntryPayload::TypeSubst(_) => kinds::TYPE_PARAM_SUBSTS,
+            EntryPayload::Use(_) => kinds::USES,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Default)]
 pub struct NsEntry {
-    function: Option<(FunctionId, Provenance)>,
-    namespace: Option<(NamespaceId, Provenance)>,
+    function: Option<FunctionId>,
+    namespace: Option<(ScopeId, Provenance)>,
     ty: NsEntryTypeValue,
     ability: NsEntryAbilityValue,
     global: NsEntryGlobalValue,
+    uses: Option<ScopeEntryId>,
 }
 static_assert_size!(NsEntry, 40);
+
+#[derive(Clone, Copy)]
+struct UseTarget {
+    use_id: ParsedUseId,
+    path: SliceHandle<UseIdentId>,
+    name: StringId,
+}
+
+#[derive(Clone, Copy, Default)]
+struct UseCache {
+    epoch: u32,
+    version: u32,
+    scope_id: Option<ScopeId>,
+    entry: Option<NsEntry>,
+}
+
+#[derive(Clone, Copy)]
+struct Following<'a> {
+    target: UseTargetId,
+    outer: Option<&'a Following<'a>>,
+}
+
+impl Following<'_> {
+    fn contains(&self, target: UseTargetId) -> bool {
+        self.target == target || self.outer.is_some_and(|outer| outer.contains(target))
+    }
+}
 
 #[derive(Clone, Copy, Default)]
 enum NsEntryTypeValue {
     #[default]
     None,
     Pending(ParsedTypeDefnId),
-    Defined(TypeId, Provenance),
+    Defined(TypeId),
 }
 
 #[derive(Clone, Copy, Default)]
@@ -205,7 +257,7 @@ enum NsEntryAbilityValue {
     #[default]
     None,
     Pending(ParsedAbilityId),
-    Defined(AbilityId, Provenance),
+    Defined(AbilityId),
 }
 
 #[derive(Clone, Copy, Default)]
@@ -213,13 +265,17 @@ enum NsEntryGlobalValue {
     #[default]
     None,
     Pending(ParsedGlobalId),
-    Bound(VariableInScope, Provenance),
+    Bound(VariableInScope),
 }
 
 pub struct Scopes {
     pub scopes: VPool<Scope, ScopeId>,
     entries: VPool<ScopeEntry, ScopeEntryId>,
     ns_maps: VPool<FxHashMap<StringId, NsEntry>, NsMapId>,
+    use_targets: VPool<UseTarget, UseTargetId>,
+    use_idents: VPool<StringId, UseIdentId>,
+    use_caches: VPool<Cell<UseCache>, UseTargetId>,
+    namespace_epoch: u32,
     pub lambda_info: FxHashMap<ScopeId, ScopeLambdaInfo>,
     pub loop_info: FxHashMap<ScopeId, ScopeLoopInfo>,
     pub core_scope_id: ScopeId,
@@ -233,7 +289,11 @@ pub struct Scopes {
 
 impl Scopes {
     pub fn bytes_used(&self) -> usize {
-        self.scopes.bytes_used() + self.entries.bytes_used() + self.ns_maps.bytes_used()
+        self.scopes.bytes_used()
+            + self.entries.bytes_used()
+            + self.ns_maps.bytes_used()
+            + self.use_targets.bytes_used()
+            + self.use_idents.bytes_used()
     }
 
     pub fn snap(&self, w: &mut crate::snap::SnapWriter) {
@@ -242,6 +302,10 @@ impl Scopes {
             scopes,
             entries,
             ns_maps,
+            use_targets,
+            use_idents,
+            use_caches: _,
+            namespace_epoch: _,
             lambda_info,
             loop_info,
             core_scope_id,
@@ -259,6 +323,8 @@ impl Scopes {
         for map in ns_maps.iter() {
             write_map_snap(w, map);
         }
+        use_targets.snap(w);
+        use_idents.snap(w);
         write_map_snap(w, lambda_info);
         write_map_snap(w, loop_info);
         for id in [
@@ -285,10 +351,22 @@ impl Scopes {
         for _ in 0..r.read_len() {
             ns_maps.add(restore_map_snap(r));
         }
+        let mut use_targets = VPool::make("scope_use_targets");
+        use_targets.restore(r);
+        let mut use_idents = VPool::make("scope_use_idents");
+        use_idents.restore(r);
+        let mut use_caches = VPool::make("scope_use_caches");
+        for _ in 0..use_targets.len() {
+            use_caches.add(Cell::default());
+        }
         Scopes {
             scopes,
             entries,
             ns_maps,
+            use_targets,
+            use_idents,
+            use_caches,
+            namespace_epoch: 1,
             lambda_info: restore_map_snap(r),
             loop_info: restore_map_snap(r),
             core_scope_id: r.read_t(),
@@ -307,6 +385,10 @@ impl Scopes {
             scopes: VPool::make("scopes"),
             entries: VPool::make("scope_entries"),
             ns_maps: VPool::make("scope_ns_maps"),
+            use_targets: VPool::make("scope_use_targets"),
+            use_idents: VPool::make("scope_use_idents"),
+            use_caches: VPool::make("scope_use_caches"),
+            namespace_epoch: 1,
             lambda_info: FxHashMap::default(),
             loop_info: FxHashMap::default(),
             core_scope_id: ScopeId::PENDING,
@@ -361,6 +443,7 @@ impl Scopes {
             owner_id,
             entries: None,
             ns_map,
+            version: 0,
         });
         if scope_type == ScopeType::LambdaScope {
             self.scopes.get_mut(id).nearest_lambda = Some(id);
@@ -389,10 +472,6 @@ impl Scopes {
 
     pub fn get_scope(&self, id: ScopeId) -> &Scope {
         self.scopes.get(id)
-    }
-
-    pub fn get_root_scope(&self) -> &Scope {
-        self.get_scope(self.root_scope_id())
     }
 
     pub fn get_scope_mut(&mut self, id: ScopeId) -> &mut Scope {
@@ -432,13 +511,97 @@ impl Scopes {
         key: u32,
         payload: EntryPayload,
         provenance: Provenance,
-        kind: u16,
     ) {
         let head = self.get_scope(scope_id).entries;
         let id = self.entries.add(ScopeEntry { key, prev_entry: head, provenance, payload });
         let scope = self.get_scope_mut(scope_id);
         scope.entries = Some(id);
-        scope.kinds |= kind;
+        scope.kinds |= payload.kind();
+    }
+
+    fn entry_bind(
+        &mut self,
+        scope_id: ScopeId,
+        key: u32,
+        payload: EntryPayload,
+        provenance: Provenance,
+    ) -> bool {
+        let kind = std::mem::discriminant(&payload);
+        let head = self.get_scope(scope_id).entries;
+        let free = self
+            .entry_find(head, key, |e| {
+                if std::mem::discriminant(&e.payload) == kind { Some(()) } else { None }
+            })
+            .is_none();
+        if free || matches!(payload, EntryPayload::Variable(_)) {
+            self.entry_push(scope_id, key, payload, provenance);
+        }
+        free
+    }
+
+    fn bind(
+        &mut self,
+        scope_id: ScopeId,
+        name: StringId,
+        payload: EntryPayload,
+        provenance: Provenance,
+    ) -> bool {
+        let bound = match self.get_scope(scope_id).ns_map {
+            Some(_) => {
+                let entry = self.ns_entry_mut(scope_id, name);
+                match payload {
+                    EntryPayload::Variable(vis) => {
+                        let free = !matches!(entry.global, NsEntryGlobalValue::Bound(_));
+                        entry.global = NsEntryGlobalValue::Bound(vis);
+                        free
+                    }
+                    EntryPayload::Function(f) if entry.function.is_none() => {
+                        entry.function = Some(f);
+                        true
+                    }
+                    EntryPayload::Namespace(ns_scope_id) if entry.namespace.is_none() => {
+                        entry.namespace = Some((ns_scope_id, provenance));
+                        true
+                    }
+                    EntryPayload::Type(t) if !matches!(entry.ty, NsEntryTypeValue::Defined(_)) => {
+                        entry.ty = NsEntryTypeValue::Defined(t);
+                        true
+                    }
+                    EntryPayload::PendingType(p) if matches!(entry.ty, NsEntryTypeValue::None) => {
+                        entry.ty = NsEntryTypeValue::Pending(p);
+                        true
+                    }
+                    EntryPayload::PendingType(_) => {
+                        matches!(entry.ty, NsEntryTypeValue::Defined(_))
+                    }
+                    EntryPayload::Ability(a)
+                        if !matches!(entry.ability, NsEntryAbilityValue::Defined(_)) =>
+                    {
+                        entry.ability = NsEntryAbilityValue::Defined(a);
+                        true
+                    }
+                    EntryPayload::PendingAbility(p)
+                        if matches!(entry.ability, NsEntryAbilityValue::None) =>
+                    {
+                        entry.ability = NsEntryAbilityValue::Pending(p);
+                        true
+                    }
+                    EntryPayload::PendingAbility(_) => {
+                        matches!(entry.ability, NsEntryAbilityValue::Defined(_))
+                    }
+                    EntryPayload::PendingGlobal(p)
+                        if matches!(entry.global, NsEntryGlobalValue::None) =>
+                    {
+                        entry.global = NsEntryGlobalValue::Pending(p);
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            None => self.entry_bind(scope_id, name.as_u32(), payload, provenance),
+        };
+        self.get_scope_mut(scope_id).kinds |= payload.kind();
+        bound
     }
 
     fn scope_entries(&self, head: Option<ScopeEntryId>) -> impl Iterator<Item = ScopeEntry> + '_ {
@@ -450,7 +613,10 @@ impl Scopes {
         self.ns_maps.get(map_id).get(&name)
     }
 
-    fn ns_entry_mut(&mut self, map_id: NsMapId, name: StringId) -> &mut NsEntry {
+    fn ns_entry_mut(&mut self, scope_id: ScopeId, name: StringId) -> &mut NsEntry {
+        let scope = self.scopes.get_mut(scope_id);
+        scope.version += 1;
+        let map_id = scope.ns_map.unwrap();
         self.ns_maps.get_mut(map_id).entry(name).or_default()
     }
 
@@ -461,8 +627,9 @@ impl Scopes {
         &self,
         scope_id: ScopeId,
         kind: u16,
-        f: impl Fn(ScopeId) -> Option<V>,
+        mut f: impl FnMut(ScopeId) -> Option<V>,
     ) -> Option<(V, ScopeId)> {
+        let kind = kind | kinds::USES;
         let mut scope_id = scope_id;
         loop {
             let scope = self.get_scope(scope_id);
@@ -475,21 +642,152 @@ impl Scopes {
         }
     }
 
-    pub fn find_namespace(&self, scope: ScopeId, ident: StringId) -> Option<NamespaceId> {
-        self.walk_chain(scope, kinds::NAMESPACES, |sid| self.find_namespace_local(sid, ident))
-            .map(|(v, _)| v)
+    fn find_entry<V>(
+        &self,
+        scope_id: ScopeId,
+        name: StringId,
+        following: Option<&Following>,
+        slot: fn(&NsEntry) -> Option<(V, Provenance)>,
+        payload: fn(&ScopeEntry) -> Option<(V, Provenance)>,
+    ) -> Option<(V, Provenance, ScopeId)> {
+        let scope = self.get_scope(scope_id);
+        let head = match scope.ns_map {
+            Some(m) => {
+                let entry = self.ns_entry(m, name)?;
+                if let Some((v, p)) = slot(entry) {
+                    return Some((v, p, scope_id));
+                }
+                entry.uses
+            }
+            None => scope.entries,
+        };
+        self.find_chain_entry(scope_id, name, head, following, slot, payload)
+    }
+
+    #[inline]
+    fn find_chain_entry<V>(
+        &self,
+        scope_id: ScopeId,
+        name: StringId,
+        head: Option<ScopeEntryId>,
+        following: Option<&Following>,
+        slot: fn(&NsEntry) -> Option<(V, Provenance)>,
+        payload: fn(&ScopeEntry) -> Option<(V, Provenance)>,
+    ) -> Option<(V, Provenance, ScopeId)> {
+        self.entry_find(head, name.as_u32(), |e| match e.payload {
+            EntryPayload::Use(target_id) => self
+                .follow_use(scope_id, target_id, following, slot, payload)
+                .map(|(v, _, found)| (v, e.provenance, found)),
+            _ => payload(e).map(|(v, p)| (v, p, scope_id)),
+        })
+    }
+
+    fn follow_use<V>(
+        &self,
+        scope_id: ScopeId,
+        target_id: UseTargetId,
+        following: Option<&Following>,
+        slot: fn(&NsEntry) -> Option<(V, Provenance)>,
+        payload: fn(&ScopeEntry) -> Option<(V, Provenance)>,
+    ) -> Option<(V, Provenance, ScopeId)> {
+        if following.is_some_and(|f| f.contains(target_id)) {
+            return None;
+        }
+        let target = self.use_targets.get(target_id);
+        let top_level = following.is_none();
+        let following = Following { target: target_id, outer: following };
+        let cell = self.use_caches.get(target_id);
+        let mut cached = cell.get();
+        let current = top_level
+            && cached.epoch == self.namespace_epoch
+            && cached.scope_id.is_none_or(|t| self.get_scope(t).version == cached.version);
+        if !current {
+            let path = self.use_idents.get_slice(target.path).iter().copied();
+            let target_scope =
+                self.find_path_scope(scope_id, path, Some(&following), |_, _| {}).ok();
+            cached = UseCache { epoch: self.namespace_epoch, ..UseCache::default() };
+            if let Some(target_scope) = target_scope {
+                let scope = self.get_scope(target_scope);
+                cached.scope_id = Some(target_scope);
+                cached.version = scope.version;
+                cached.entry = scope
+                    .ns_map
+                    .map(|m| self.ns_entry(m, target.name).copied().unwrap_or_default());
+            }
+            if top_level {
+                cell.set(cached);
+            }
+        }
+        let target_scope = cached.scope_id?;
+        let found = match cached.entry {
+            Some(ns_entry) => match slot(&ns_entry) {
+                Some((v, p)) => Some((v, p, target_scope)),
+                None => self.find_chain_entry(
+                    target_scope,
+                    target.name,
+                    ns_entry.uses,
+                    Some(&following),
+                    slot,
+                    payload,
+                ),
+            },
+            None => self.find_entry(target_scope, target.name, Some(&following), slot, payload),
+        };
+        found.filter(|(_, p, _)| p.is_exposed())
+    }
+
+    fn find_path_scope(
+        &self,
+        scope_id: ScopeId,
+        path: impl Iterator<Item = StringId>,
+        following: Option<&Following>,
+        mut on_segment: impl FnMut(usize, ScopeId),
+    ) -> Result<ScopeId, (usize, ScopeId)> {
+        let mut cur_scope_id = scope_id;
+        for (index, segment) in path.enumerate() {
+            let found = if index == 0 {
+                self.walk_chain(cur_scope_id, kinds::NAMESPACES, |sid| {
+                    self.find_namespace_scope_entry(sid, segment, following)
+                })
+                .map(|((ns_scope_id, _), _)| ns_scope_id)
+            } else {
+                exposed(self.find_namespace_scope_entry(cur_scope_id, segment, following))
+            };
+            let Some(found) = found else { return Err((index, cur_scope_id)) };
+            on_segment(index, found);
+            cur_scope_id = found;
+        }
+        Ok(cur_scope_id)
+    }
+
+    pub fn add_use(
+        &mut self,
+        scope_id: ScopeId,
+        name: StringId,
+        use_id: ParsedUseId,
+        path: impl Iterator<Item = StringId>,
+        target_name: StringId,
+        provenance: Provenance,
+    ) {
+        let path = self.use_idents.add_slice_from_iter(path);
+        let target_id = self.use_targets.add(UseTarget { use_id, path, name: target_name });
+        self.use_caches.add(Cell::default());
+        self.namespace_epoch += 1;
+        let payload = EntryPayload::Use(target_id);
+        match self.get_scope(scope_id).ns_map {
+            Some(_) => {
+                let prev_entry = self.ns_entry_mut(scope_id, name).uses;
+                let entry = ScopeEntry { key: name.as_u32(), prev_entry, provenance, payload };
+                let id = self.entries.add(entry);
+                self.ns_entry_mut(scope_id, name).uses = Some(id);
+                self.get_scope_mut(scope_id).kinds |= kinds::USES;
+            }
+            None => self.entry_push(scope_id, name.as_u32(), payload, provenance),
+        }
     }
 
     pub fn find_namespace_local(&self, scope_id: ScopeId, ident: StringId) -> Option<NamespaceId> {
         self.find_namespace_entry(scope_id, ident).map(|(ns, _)| ns)
-    }
-
-    pub fn find_namespace_exposed(
-        &self,
-        scope_id: ScopeId,
-        ident: StringId,
-    ) -> Option<NamespaceId> {
-        exposed(self.find_namespace_entry(scope_id, ident))
     }
 
     pub fn find_namespace_entry(
@@ -497,14 +795,27 @@ impl Scopes {
         scope_id: ScopeId,
         ident: StringId,
     ) -> Option<(NamespaceId, Provenance)> {
-        let scope = self.get_scope(scope_id);
-        match scope.ns_map {
-            Some(m) => self.ns_entry(m, ident)?.namespace,
-            None => self.entry_find(scope.entries, ident.as_u32(), |e| match e.payload {
-                EntryPayload::Namespace(ns) => Some((ns, e.provenance)),
+        self.find_namespace_scope_entry(scope_id, ident, None)
+            .map(|(ns_scope_id, p)| (self.nearest_parent_namespace(ns_scope_id), p))
+    }
+
+    fn find_namespace_scope_entry(
+        &self,
+        scope_id: ScopeId,
+        ident: StringId,
+        following: Option<&Following>,
+    ) -> Option<(ScopeId, Provenance)> {
+        self.find_entry(
+            scope_id,
+            ident,
+            following,
+            |e| e.namespace,
+            |e| match e.payload {
+                EntryPayload::Namespace(ns_scope_id) => Some((ns_scope_id, e.provenance)),
                 _ => None,
-            }),
-        }
+            },
+        )
+        .map(|(ns_scope_id, p, _)| (ns_scope_id, p))
     }
 
     #[must_use]
@@ -512,78 +823,27 @@ impl Scopes {
         &mut self,
         scope_id: ScopeId,
         ident: StringId,
-        namespace_id: NamespaceId,
-    ) -> bool {
-        self.bind_namespace(scope_id, ident, namespace_id, Provenance::Defined)
-    }
-
-    #[must_use]
-    pub fn add_namespace_use(
-        &mut self,
-        scope_id: ScopeId,
-        ident: StringId,
-        namespace_id: NamespaceId,
-    ) -> bool {
-        self.bind_namespace(scope_id, ident, namespace_id, Provenance::Use)
-    }
-
-    fn bind_namespace(
-        &mut self,
-        scope_id: ScopeId,
-        ident: StringId,
-        namespace_id: NamespaceId,
+        ns_scope_id: ScopeId,
         provenance: Provenance,
     ) -> bool {
-        let added = match self.get_scope(scope_id).ns_map {
-            Some(m) => {
-                let entry = self.ns_entry_mut(m, ident);
-                if entry.namespace.is_some() {
-                    false
-                } else {
-                    entry.namespace = Some((namespace_id, provenance));
-                    true
-                }
-            }
-            None => {
-                if self.find_namespace_local(scope_id, ident).is_some() {
-                    false
-                } else {
-                    self.entry_push(
-                        scope_id,
-                        ident.as_u32(),
-                        EntryPayload::Namespace(namespace_id),
-                        provenance,
-                        kinds::NAMESPACES,
-                    );
-                    true
-                }
-            }
-        };
-        if added {
-            self.get_scope_mut(scope_id).kinds |= kinds::NAMESPACES;
-        }
-        added
+        self.namespace_epoch += 1;
+        self.bind(scope_id, ident, EntryPayload::Namespace(ns_scope_id), provenance)
     }
 
-    pub fn replace_namespace(
-        &mut self,
-        scope_id: ScopeId,
-        ident: StringId,
-        namespace_id: NamespaceId,
-    ) {
+    pub fn replace_namespace(&mut self, scope_id: ScopeId, ident: StringId, ns_scope_id: ScopeId) {
+        self.namespace_epoch += 1;
         match self.get_scope(scope_id).ns_map {
-            Some(m) => {
-                self.ns_entry_mut(m, ident).namespace = Some((namespace_id, Provenance::Defined));
+            Some(_) => {
+                self.ns_entry_mut(scope_id, ident).namespace =
+                    Some((ns_scope_id, Provenance::Defined))
             }
             None => self.entry_push(
                 scope_id,
                 ident.as_u32(),
-                EntryPayload::Namespace(namespace_id),
+                EntryPayload::Namespace(ns_scope_id),
                 Provenance::Defined,
-                kinds::NAMESPACES,
             ),
         }
-        self.get_scope_mut(scope_id).kinds |= kinds::NAMESPACES;
     }
 
     pub fn find_function(&self, scope: ScopeId, ident: StringId) -> Option<FunctionId> {
@@ -594,17 +854,34 @@ impl Scopes {
     pub fn find_call_binding(&self, scope_id: ScopeId, ident: StringId) -> Option<CallBinding> {
         let kind = kinds::FUNCTIONS | kinds::VARIABLES | kinds::PENDING_GLOBALS;
         self.walk_chain(scope_id, kind, |sid| {
-            if let Some(function_id) = self.find_function_local(sid, ident) {
-                return Some(CallBinding::Function(function_id));
-            }
-            match self.find_variable_local(sid, ident) {
-                Some(VariableInScope::Masked) => Some(
-                    self.find_function(sid, ident)
-                        .map_or(CallBinding::Value, CallBinding::Function),
-                ),
-                Some(VariableInScope::Defined(_)) => Some(CallBinding::Value),
-                None => self.find_pending_global_local(sid, ident).map(|_| CallBinding::Value),
-            }
+            let (binding, _, _) = self.find_entry(
+                sid,
+                ident,
+                None,
+                |e| match (e.function, e.global) {
+                    (Some(f), _) => Some((Some(CallBinding::Function(f)), Provenance::Defined)),
+                    (None, NsEntryGlobalValue::Bound(VariableInScope::Masked)) => {
+                        Some((None, Provenance::Defined))
+                    }
+                    (None, NsEntryGlobalValue::Bound(_) | NsEntryGlobalValue::Pending(_)) => {
+                        Some((Some(CallBinding::Value), Provenance::Defined))
+                    }
+                    (None, NsEntryGlobalValue::None) => None,
+                },
+                |e| match e.payload {
+                    EntryPayload::Function(f) => {
+                        Some((Some(CallBinding::Function(f)), e.provenance))
+                    }
+                    EntryPayload::Variable(VariableInScope::Masked) => Some((None, e.provenance)),
+                    EntryPayload::Variable(_) | EntryPayload::PendingGlobal(_) => {
+                        Some((Some(CallBinding::Value), e.provenance))
+                    }
+                    _ => None,
+                },
+            )?;
+            Some(binding.unwrap_or_else(|| {
+                self.find_function(sid, ident).map_or(CallBinding::Value, CallBinding::Function)
+            }))
         })
         .map(|(b, _)| b)
     }
@@ -622,62 +899,27 @@ impl Scopes {
         scope_id: ScopeId,
         ident: StringId,
     ) -> Option<(FunctionId, Provenance)> {
-        let scope = self.get_scope(scope_id);
-        match scope.ns_map {
-            Some(m) => self.ns_entry(m, ident)?.function,
-            None => self.entry_find(scope.entries, ident.as_u32(), |e| match e.payload {
+        self.find_entry(
+            scope_id,
+            ident,
+            None,
+            |e| e.function.map(|f| (f, Provenance::Defined)),
+            |e| match e.payload {
                 EntryPayload::Function(f) => Some((f, e.provenance)),
                 _ => None,
-            }),
-        }
+            },
+        )
+        .map(|(f, p, _)| (f, p))
     }
 
     #[must_use]
     pub fn add_function(
         &mut self,
         scope_id: ScopeId,
-        identifier: StringId,
-        function_id: FunctionId,
-    ) -> bool {
-        self.bind_function(scope_id, identifier, function_id, Provenance::Defined)
-    }
-
-    fn bind_function(
-        &mut self,
-        scope_id: ScopeId,
         ident: StringId,
         function_id: FunctionId,
-        provenance: Provenance,
     ) -> bool {
-        let added = match self.get_scope(scope_id).ns_map {
-            Some(m) => {
-                let entry = self.ns_entry_mut(m, ident);
-                if entry.function.is_some() {
-                    false
-                } else {
-                    entry.function = Some((function_id, provenance));
-                    true
-                }
-            }
-            None => {
-                if self.find_function_local(scope_id, ident).is_some() {
-                    false
-                } else {
-                    self.entry_push(
-                        scope_id,
-                        ident.as_u32(),
-                        EntryPayload::Function(function_id),
-                        provenance,
-                        kinds::FUNCTIONS,
-                    );
-                    true
-                }
-            }
-        };
-        if added {
-            self.get_scope_mut(scope_id).kinds |= kinds::FUNCTIONS;
-        }
-        added
+        self.bind(scope_id, ident, EntryPayload::Function(function_id), Provenance::Defined)
     }
 
     pub fn find_type(&self, scope_id: ScopeId, ident: StringId) -> Option<(TypeId, ScopeId)> {
@@ -693,61 +935,25 @@ impl Scopes {
     }
 
     fn find_type_entry(&self, scope_id: ScopeId, ident: StringId) -> Option<(TypeId, Provenance)> {
-        let scope = self.get_scope(scope_id);
-        match scope.ns_map {
-            Some(m) => match self.ns_entry(m, ident)?.ty {
-                NsEntryTypeValue::Defined(t, p) => Some((t, p)),
+        self.find_entry(
+            scope_id,
+            ident,
+            None,
+            |e| match e.ty {
+                NsEntryTypeValue::Defined(t) => Some((t, Provenance::Defined)),
                 NsEntryTypeValue::None | NsEntryTypeValue::Pending(_) => None,
             },
-            None => self.entry_find(scope.entries, ident.as_u32(), |e| match e.payload {
+            |e| match e.payload {
                 EntryPayload::Type(t) => Some((t, e.provenance)),
                 _ => None,
-            }),
-        }
+            },
+        )
+        .map(|(t, p, _)| (t, p))
     }
 
     #[must_use]
     pub fn add_type(&mut self, scope_id: ScopeId, ident: StringId, ty: TypeId) -> bool {
-        self.bind_type(scope_id, ident, ty, Provenance::Defined)
-    }
-
-    fn bind_type(
-        &mut self,
-        scope_id: ScopeId,
-        ident: StringId,
-        ty: TypeId,
-        provenance: Provenance,
-    ) -> bool {
-        let added = match self.get_scope(scope_id).ns_map {
-            Some(m) => {
-                let entry = self.ns_entry_mut(m, ident);
-                match entry.ty {
-                    NsEntryTypeValue::Defined(..) => false,
-                    NsEntryTypeValue::None | NsEntryTypeValue::Pending(_) => {
-                        entry.ty = NsEntryTypeValue::Defined(ty, provenance);
-                        true
-                    }
-                }
-            }
-            None => {
-                if self.find_type_local(scope_id, ident).is_some() {
-                    false
-                } else {
-                    self.entry_push(
-                        scope_id,
-                        ident.as_u32(),
-                        EntryPayload::Type(ty),
-                        provenance,
-                        kinds::TYPES,
-                    );
-                    true
-                }
-            }
-        };
-        if added {
-            self.get_scope_mut(scope_id).kinds |= kinds::TYPES;
-        }
-        added
+        self.bind(scope_id, ident, EntryPayload::Type(ty), Provenance::Defined)
     }
 
     #[must_use]
@@ -757,37 +963,7 @@ impl Scopes {
         name: StringId,
         parsed_id: ParsedTypeDefnId,
     ) -> bool {
-        let added = match self.get_scope(scope_id).ns_map {
-            Some(m) => {
-                let entry = self.ns_entry_mut(m, name);
-                match entry.ty {
-                    NsEntryTypeValue::None => {
-                        entry.ty = NsEntryTypeValue::Pending(parsed_id);
-                        true
-                    }
-                    NsEntryTypeValue::Pending(_) => false,
-                    NsEntryTypeValue::Defined(..) => true,
-                }
-            }
-            None => {
-                if self.find_pending_type_local(scope_id, name).is_some() {
-                    false
-                } else {
-                    self.entry_push(
-                        scope_id,
-                        name.as_u32(),
-                        EntryPayload::PendingType(parsed_id),
-                        Provenance::Defined,
-                        kinds::PENDING_TYPES,
-                    );
-                    true
-                }
-            }
-        };
-        if added {
-            self.get_scope_mut(scope_id).kinds |= kinds::PENDING_TYPES;
-        }
-        added
+        self.bind(scope_id, name, EntryPayload::PendingType(parsed_id), Provenance::Defined)
     }
 
     pub fn find_pending_type(
@@ -798,24 +974,28 @@ impl Scopes {
         self.walk_chain(scope_id, kinds::PENDING_TYPES, |sid| {
             self.find_pending_type_local(sid, name)
         })
+        .map(|((pending, _), _)| pending)
     }
 
     pub fn find_pending_type_local(
         &self,
         scope_id: ScopeId,
         name: StringId,
-    ) -> Option<ParsedTypeDefnId> {
-        let scope = self.get_scope(scope_id);
-        match scope.ns_map {
-            Some(m) => match self.ns_entry(m, name)?.ty {
-                NsEntryTypeValue::Pending(parsed_id) => Some(parsed_id),
+    ) -> Option<((ParsedTypeDefnId, ScopeId), Provenance)> {
+        self.find_entry(
+            scope_id,
+            name,
+            None,
+            |e| match e.ty {
+                NsEntryTypeValue::Pending(parsed_id) => Some((parsed_id, Provenance::Defined)),
                 NsEntryTypeValue::None | NsEntryTypeValue::Defined(..) => None,
             },
-            None => self.entry_find(scope.entries, name.as_u32(), |e| match e.payload {
-                EntryPayload::PendingType(parsed_id) => Some(parsed_id),
+            |e| match e.payload {
+                EntryPayload::PendingType(parsed_id) => Some((parsed_id, e.provenance)),
                 _ => None,
-            }),
-        }
+            },
+        )
+        .map(|(parsed_id, p, defn_scope_id)| ((parsed_id, defn_scope_id), p))
     }
 
     pub fn find_ability(&self, scope_id: ScopeId, name: StringId) -> Option<AbilityId> {
@@ -836,17 +1016,20 @@ impl Scopes {
         scope_id: ScopeId,
         name: StringId,
     ) -> Option<(AbilityId, Provenance)> {
-        let scope = self.get_scope(scope_id);
-        match scope.ns_map {
-            Some(m) => match self.ns_entry(m, name)?.ability {
-                NsEntryAbilityValue::Defined(a, p) => Some((a, p)),
+        self.find_entry(
+            scope_id,
+            name,
+            None,
+            |e| match e.ability {
+                NsEntryAbilityValue::Defined(a) => Some((a, Provenance::Defined)),
                 NsEntryAbilityValue::None | NsEntryAbilityValue::Pending(_) => None,
             },
-            None => self.entry_find(scope.entries, name.as_u32(), |e| match e.payload {
+            |e| match e.payload {
                 EntryPayload::Ability(a) => Some((a, e.provenance)),
                 _ => None,
-            }),
-        }
+            },
+        )
+        .map(|(a, p, _)| (a, p))
     }
 
     #[must_use]
@@ -856,46 +1039,7 @@ impl Scopes {
         ident: StringId,
         ability_id: AbilityId,
     ) -> bool {
-        self.bind_ability(scope_id, ident, ability_id, Provenance::Defined)
-    }
-
-    fn bind_ability(
-        &mut self,
-        scope_id: ScopeId,
-        ident: StringId,
-        ability_id: AbilityId,
-        provenance: Provenance,
-    ) -> bool {
-        let added = match self.get_scope(scope_id).ns_map {
-            Some(m) => {
-                let entry = self.ns_entry_mut(m, ident);
-                match entry.ability {
-                    NsEntryAbilityValue::Defined(..) => false,
-                    NsEntryAbilityValue::None | NsEntryAbilityValue::Pending(_) => {
-                        entry.ability = NsEntryAbilityValue::Defined(ability_id, provenance);
-                        true
-                    }
-                }
-            }
-            None => {
-                if self.find_ability_local(scope_id, ident).is_some() {
-                    false
-                } else {
-                    self.entry_push(
-                        scope_id,
-                        ident.as_u32(),
-                        EntryPayload::Ability(ability_id),
-                        provenance,
-                        kinds::ABILITIES,
-                    );
-                    true
-                }
-            }
-        };
-        if added {
-            self.get_scope_mut(scope_id).kinds |= kinds::ABILITIES;
-        }
-        added
+        self.bind(scope_id, ident, EntryPayload::Ability(ability_id), Provenance::Defined)
     }
 
     #[must_use]
@@ -905,44 +1049,12 @@ impl Scopes {
         ident: StringId,
         parsed_defn_id: ParsedAbilityId,
     ) -> bool {
-        let added = match self.get_scope(scope_id).ns_map {
-            Some(m) => {
-                let entry = self.ns_entry_mut(m, ident);
-                match entry.ability {
-                    NsEntryAbilityValue::None => {
-                        entry.ability = NsEntryAbilityValue::Pending(parsed_defn_id);
-                        true
-                    }
-                    NsEntryAbilityValue::Pending(_) => false,
-                    NsEntryAbilityValue::Defined(..) => true,
-                }
-            }
-            None => {
-                let existing =
-                    self.entry_find(self.get_scope(scope_id).entries, ident.as_u32(), |e| match e
-                        .payload
-                    {
-                        EntryPayload::PendingAbility(id) => Some(id),
-                        _ => None,
-                    });
-                if existing.is_some() {
-                    false
-                } else {
-                    self.entry_push(
-                        scope_id,
-                        ident.as_u32(),
-                        EntryPayload::PendingAbility(parsed_defn_id),
-                        Provenance::Defined,
-                        kinds::PENDING_ABILITIES,
-                    );
-                    true
-                }
-            }
-        };
-        if added {
-            self.get_scope_mut(scope_id).kinds |= kinds::PENDING_ABILITIES;
-        }
-        added
+        self.bind(
+            scope_id,
+            ident,
+            EntryPayload::PendingAbility(parsed_defn_id),
+            Provenance::Defined,
+        )
     }
 
     pub fn find_pending_ability(
@@ -953,24 +1065,28 @@ impl Scopes {
         self.walk_chain(scope_id, kinds::PENDING_ABILITIES, |sid| {
             self.find_pending_ability_local(sid, ident)
         })
+        .map(|((pending, _), _)| pending)
     }
 
     pub fn find_pending_ability_local(
         &self,
         scope_id: ScopeId,
         ident: StringId,
-    ) -> Option<ParsedAbilityId> {
-        let scope = self.get_scope(scope_id);
-        match scope.ns_map {
-            Some(m) => match self.ns_entry(m, ident)?.ability {
-                NsEntryAbilityValue::Pending(parsed_id) => Some(parsed_id),
+    ) -> Option<((ParsedAbilityId, ScopeId), Provenance)> {
+        self.find_entry(
+            scope_id,
+            ident,
+            None,
+            |e| match e.ability {
+                NsEntryAbilityValue::Pending(parsed_id) => Some((parsed_id, Provenance::Defined)),
                 NsEntryAbilityValue::None | NsEntryAbilityValue::Defined(..) => None,
             },
-            None => self.entry_find(scope.entries, ident.as_u32(), |e| match e.payload {
-                EntryPayload::PendingAbility(id) => Some(id),
+            |e| match e.payload {
+                EntryPayload::PendingAbility(id) => Some((id, e.provenance)),
                 _ => None,
-            }),
-        }
+            },
+        )
+        .map(|(parsed_id, p, defn_scope_id)| ((parsed_id, defn_scope_id), p))
     }
 
     pub fn collect_ability_ids_bound_to_names(
@@ -980,23 +1096,16 @@ impl Scopes {
         ability_ids: &mut List<AbilityId, MemTmp>,
         mem: &mut Mem<MemTmp>,
     ) {
-        let mut scope_id = scope_id;
-        loop {
-            let scope = self.get_scope(scope_id);
-            if scope.kinds & kinds::ABILITIES != 0 {
-                for name in names {
-                    if let Some(found) = self.find_ability_local(scope_id, *name)
-                        && !ability_ids.contains(&found)
-                    {
-                        ability_ids.push_grow(mem, found);
-                    }
+        self.walk_chain(scope_id, kinds::ABILITIES, |sid| -> Option<()> {
+            for name in names {
+                if let Some(found) = self.find_ability_local(sid, *name)
+                    && !ability_ids.contains(&found)
+                {
+                    ability_ids.push_grow(mem, found);
                 }
             }
-            match scope.parent {
-                Some(parent) => scope_id = parent,
-                None => return,
-            }
-        }
+            None
+        });
     }
 
     pub fn add_pending_global(
@@ -1005,26 +1114,7 @@ impl Scopes {
         name: StringId,
         parsed_id: ParsedGlobalId,
     ) {
-        match self.get_scope(scope_id).ns_map {
-            Some(m) => {
-                let entry = self.ns_entry_mut(m, name);
-                if matches!(entry.global, NsEntryGlobalValue::None) {
-                    entry.global = NsEntryGlobalValue::Pending(parsed_id);
-                }
-            }
-            None => {
-                if self.find_pending_global_local(scope_id, name).is_none() {
-                    self.entry_push(
-                        scope_id,
-                        name.as_u32(),
-                        EntryPayload::PendingGlobal(parsed_id),
-                        Provenance::Defined,
-                        kinds::PENDING_GLOBALS,
-                    );
-                }
-            }
-        }
-        self.get_scope_mut(scope_id).kinds |= kinds::PENDING_GLOBALS;
+        self.bind(scope_id, name, EntryPayload::PendingGlobal(parsed_id), Provenance::Defined);
     }
 
     pub fn find_pending_global(
@@ -1035,24 +1125,28 @@ impl Scopes {
         self.walk_chain(scope_id, kinds::PENDING_GLOBALS, |sid| {
             self.find_pending_global_local(sid, name)
         })
+        .map(|((pending, _), _)| pending)
     }
 
     pub fn find_pending_global_local(
         &self,
         scope_id: ScopeId,
         name: StringId,
-    ) -> Option<ParsedGlobalId> {
-        let scope = self.get_scope(scope_id);
-        match scope.ns_map {
-            Some(m) => match self.ns_entry(m, name)?.global {
-                NsEntryGlobalValue::Pending(parsed_id) => Some(parsed_id),
+    ) -> Option<((ParsedGlobalId, ScopeId), Provenance)> {
+        self.find_entry(
+            scope_id,
+            name,
+            None,
+            |e| match e.global {
+                NsEntryGlobalValue::Pending(parsed_id) => Some((parsed_id, Provenance::Defined)),
                 NsEntryGlobalValue::None | NsEntryGlobalValue::Bound(..) => None,
             },
-            None => self.entry_find(scope.entries, name.as_u32(), |e| match e.payload {
-                EntryPayload::PendingGlobal(id) => Some(id),
+            |e| match e.payload {
+                EntryPayload::PendingGlobal(id) => Some((id, e.provenance)),
                 _ => None,
-            }),
-        }
+            },
+        )
+        .map(|(parsed_id, p, defn_scope_id)| ((parsed_id, defn_scope_id), p))
     }
 
     pub fn find_variable_binding(
@@ -1096,17 +1190,20 @@ impl Scopes {
         scope_id: ScopeId,
         ident: StringId,
     ) -> Option<(VariableInScope, Provenance)> {
-        let scope = self.get_scope(scope_id);
-        match scope.ns_map {
-            Some(m) => match self.ns_entry(m, ident)?.global {
-                NsEntryGlobalValue::Bound(vis, p) => Some((vis, p)),
+        self.find_entry(
+            scope_id,
+            ident,
+            None,
+            |e| match e.global {
+                NsEntryGlobalValue::Bound(vis) => Some((vis, Provenance::Defined)),
                 NsEntryGlobalValue::None | NsEntryGlobalValue::Pending(_) => None,
             },
-            None => self.entry_find(scope.entries, ident.as_u32(), |e| match e.payload {
+            |e| match e.payload {
                 EntryPayload::Variable(vis) => Some((vis, e.provenance)),
                 _ => None,
-            }),
-        }
+            },
+        )
+        .map(|(vis, p, _)| (vis, p))
     }
 
     pub fn add_variable(
@@ -1115,48 +1212,13 @@ impl Scopes {
         ident: StringId,
         variable_id: VariableId,
     ) -> bool {
-        self.bind_variable(
-            scope_id,
-            ident,
-            VariableInScope::Defined(variable_id),
-            Provenance::Defined,
-        )
+        let payload = EntryPayload::Variable(VariableInScope::Defined(variable_id));
+        self.bind(scope_id, ident, payload, Provenance::Defined)
     }
 
     pub fn mask_variable(&mut self, scope_id: ScopeId, ident: StringId) {
-        let _ = self.bind_variable(scope_id, ident, VariableInScope::Masked, Provenance::Defined);
-    }
-
-    /// Always binds (shadowing is a new entry over the old); returns whether
-    /// the name was previously unbound in this scope
-    fn bind_variable(
-        &mut self,
-        scope_id: ScopeId,
-        ident: StringId,
-        vis: VariableInScope,
-        provenance: Provenance,
-    ) -> bool {
-        let was_unbound = match self.get_scope(scope_id).ns_map {
-            Some(m) => {
-                let entry = self.ns_entry_mut(m, ident);
-                let unbound = !matches!(entry.global, NsEntryGlobalValue::Bound(..));
-                entry.global = NsEntryGlobalValue::Bound(vis, provenance);
-                unbound
-            }
-            None => {
-                let unbound = self.find_variable_local(scope_id, ident).is_none();
-                self.entry_push(
-                    scope_id,
-                    ident.as_u32(),
-                    EntryPayload::Variable(vis),
-                    provenance,
-                    kinds::VARIABLES,
-                );
-                unbound
-            }
-        };
-        self.get_scope_mut(scope_id).kinds |= kinds::VARIABLES;
-        was_unbound
+        let payload = EntryPayload::Variable(VariableInScope::Masked);
+        self.bind(scope_id, ident, payload, Provenance::Defined);
     }
 
     pub fn add_context_variable(
@@ -1166,22 +1228,10 @@ impl Scopes {
         variable_id: VariableId,
         type_id: TypeId,
     ) -> bool {
-        let occupied = self
-            .entry_find(self.get_scope(scope_id).entries, type_id.as_u32(), |e| match e.payload {
-                EntryPayload::ContextByType(v) => Some(v),
-                _ => None,
-            })
-            .is_some();
-        if occupied {
+        let payload = EntryPayload::ContextByType(variable_id);
+        if !self.entry_bind(scope_id, type_id.as_u32(), payload, Provenance::Defined) {
             return false;
         }
-        self.entry_push(
-            scope_id,
-            type_id.as_u32(),
-            EntryPayload::ContextByType(variable_id),
-            Provenance::Defined,
-            kinds::CONTEXT_VARIABLES,
-        );
         self.add_variable(scope_id, ident, variable_id);
         true
     }
@@ -1223,25 +1273,8 @@ impl Scopes {
         ability_id: AbilityId,
         variable_id: VariableId,
     ) -> bool {
-        let occupied = self
-            .entry_find(self.get_scope(scope_id).entries, ability_id.as_u32(), |e| {
-                match e.payload {
-                    EntryPayload::ContextByAbility(e) => Some(e),
-                    _ => None,
-                }
-            })
-            .is_some();
-        if occupied {
-            return false;
-        }
-        self.entry_push(
-            scope_id,
-            ability_id.as_u32(),
-            EntryPayload::ContextByAbility(ContextAbilityEntry::Unique(variable_id)),
-            Provenance::Defined,
-            kinds::CONTEXT_VARIABLES,
-        );
-        true
+        let payload = EntryPayload::ContextByAbility(ContextAbilityEntry::Unique(variable_id));
+        self.entry_bind(scope_id, ability_id.as_u32(), payload, Provenance::Defined)
     }
 
     pub fn poison_context_ability_key(&mut self, scope_id: ScopeId, ability_id: AbilityId) {
@@ -1250,7 +1283,6 @@ impl Scopes {
             ability_id.as_u32(),
             EntryPayload::ContextByAbility(ContextAbilityEntry::Ambiguous),
             Provenance::Defined,
-            kinds::CONTEXT_VARIABLES,
         );
     }
 
@@ -1314,23 +1346,7 @@ impl Scopes {
     }
 
     pub fn add_type_substitution(&mut self, scope_id: ScopeId, from: TypeId, to: TypeId) -> bool {
-        let occupied = self
-            .entry_find(self.get_scope(scope_id).entries, from.as_u32(), |e| match e.payload {
-                EntryPayload::TypeSubst(t) => Some(t),
-                _ => None,
-            })
-            .is_some();
-        if occupied {
-            return false;
-        }
-        self.entry_push(
-            scope_id,
-            from.as_u32(),
-            EntryPayload::TypeSubst(to),
-            Provenance::Defined,
-            kinds::TYPE_PARAM_SUBSTS,
-        );
-        true
+        self.entry_bind(scope_id, from.as_u32(), EntryPayload::TypeSubst(to), Provenance::Defined)
     }
 
     pub fn find_type_substitution(
@@ -1346,81 +1362,58 @@ impl Scopes {
         })
     }
 
-    pub fn add_use_binding(
-        &mut self,
-        scope_id: ScopeId,
-        useable_symbol: UseableSymbolId,
-        name_to_use: StringId,
-        provenance: Provenance,
-    ) {
-        match useable_symbol {
-            UseableSymbolId::Function(function_id) => {
-                let _ = self.bind_function(scope_id, name_to_use, function_id, provenance);
-            }
-            UseableSymbolId::Global(variable_id) => {
-                let _ = self.bind_variable(
-                    scope_id,
-                    name_to_use,
-                    VariableInScope::Defined(variable_id),
-                    provenance,
-                );
-            }
-            UseableSymbolId::Type { type_id, companion_namespace } => {
-                let _ = self.bind_type(scope_id, name_to_use, type_id, provenance);
-                if let Some(companion_namespace) = companion_namespace {
-                    let _ =
-                        self.bind_namespace(scope_id, name_to_use, companion_namespace, provenance);
-                }
-            }
-            UseableSymbolId::Namespace(ns_id) => {
-                let _ = self.bind_namespace(scope_id, name_to_use, ns_id, provenance);
-            }
-            UseableSymbolId::Ability(ability_id, namespace_id) => {
-                let _ = self.bind_ability(scope_id, name_to_use, ability_id, provenance);
-                let _ = self.bind_namespace(scope_id, name_to_use, namespace_id, provenance);
-            }
-        }
-    }
-
     pub fn iter_scope_members(
         &self,
         scope_id: ScopeId,
     ) -> impl Iterator<Item = (StringId, ScopeMember, Provenance)> + '_ {
         let scope = self.get_scope(scope_id);
         let map = scope.ns_map.map(|m| {
-            self.ns_maps.get(m).iter().flat_map(|(name, e)| {
-                let ty = match e.ty {
-                    NsEntryTypeValue::Defined(t, p) => Some((ScopeMember::Type(t), p)),
-                    NsEntryTypeValue::None | NsEntryTypeValue::Pending(_) => None,
-                };
-                let ability = match e.ability {
-                    NsEntryAbilityValue::Defined(a, p) => Some((ScopeMember::Ability(a), p)),
-                    NsEntryAbilityValue::None | NsEntryAbilityValue::Pending(_) => None,
-                };
-                let global = match e.global {
-                    NsEntryGlobalValue::Bound(v, p) => Some((ScopeMember::Variable(v), p)),
-                    NsEntryGlobalValue::None | NsEntryGlobalValue::Pending(_) => None,
-                };
-                let function = e.function.map(|(f, p)| (ScopeMember::Function(f), p));
-                let namespace = e.namespace.map(|(ns, p)| (ScopeMember::Namespace(ns), p));
-                [global, function, ty, namespace, ability]
+            self.ns_maps.get(m).keys().flat_map(move |name| {
+                self.find_members(scope_id, *name)
                     .into_iter()
                     .flatten()
                     .map(move |(member, p)| (*name, member, p))
             })
         });
-        let list = self.scope_entries(scope.entries).filter_map(|e| {
+        let list = self.scope_entries(scope.entries).flat_map(move |e| {
+            let name = StringId::from_u32(e.key).unwrap();
             let member = match e.payload {
-                EntryPayload::Variable(v) => ScopeMember::Variable(v),
-                EntryPayload::Function(f) => ScopeMember::Function(f),
-                EntryPayload::Type(t) => ScopeMember::Type(t),
-                EntryPayload::Namespace(ns) => ScopeMember::Namespace(ns),
-                EntryPayload::Ability(a) => ScopeMember::Ability(a),
-                _ => return None,
+                EntryPayload::Variable(v) => Some(ScopeMember::Variable(v)),
+                EntryPayload::Function(f) => Some(ScopeMember::Function(f)),
+                EntryPayload::Type(t) => Some(ScopeMember::Type(t)),
+                EntryPayload::Namespace(ns_scope_id) => {
+                    Some(ScopeMember::Namespace(self.nearest_parent_namespace(ns_scope_id)))
+                }
+                EntryPayload::Ability(a) => Some(ScopeMember::Ability(a)),
+                _ => None,
             };
-            Some((StringId::from_u32(e.key).unwrap(), member, e.provenance))
+            let used = match e.payload {
+                EntryPayload::Use(_) => self.find_members(scope_id, name),
+                _ => [None; 5],
+            };
+            let used = used.into_iter().flatten().filter(|(_, p)| *p != Provenance::Defined);
+            member
+                .map(|member| (member, e.provenance))
+                .into_iter()
+                .chain(used)
+                .map(move |(member, p)| (name, member, p))
         });
         map.into_iter().flatten().chain(list)
+    }
+
+    fn find_members(
+        &self,
+        scope_id: ScopeId,
+        name: StringId,
+    ) -> [Option<(ScopeMember, Provenance)>; 5] {
+        [
+            self.find_variable_entry(scope_id, name).map(|(v, p)| (ScopeMember::Variable(v), p)),
+            self.find_function_entry(scope_id, name).map(|(f, p)| (ScopeMember::Function(f), p)),
+            self.find_type_entry(scope_id, name).map(|(t, p)| (ScopeMember::Type(t), p)),
+            self.find_namespace_entry(scope_id, name)
+                .map(|(ns, p)| (ScopeMember::Namespace(ns), p)),
+            self.find_ability_entry(scope_id, name).map(|(a, p)| (ScopeMember::Ability(a), p)),
+        ]
     }
 
     pub fn iter_scope_variables(
@@ -1613,43 +1606,111 @@ impl TypedProgram {
     }
 
     pub fn resolve_qident(&self, scope_id: ScopeId, qident: &QIdent) -> K1Result<ScopeId> {
-        let mut ns_iter = self.ast.mem.getn(qident.path(&self.ast.mem)).iter();
+        let path = self.ast.mem.getn(qident.path(&self.ast.mem));
+        self.scopes
+            .find_path_scope(scope_id, path.iter().map(|ident| ident.name), None, |index, found| {
+                self.emit_path_segment(path[index], found)
+            })
+            .map_err(|miss| self.make_path_miss_error(path, miss))
+    }
 
-        let mut cur_scope_id = scope_id;
-        let Some(first) = ns_iter.next() else {
-            return Ok(cur_scope_id);
-        };
-        // First lookup is special and recursive because it's in the current scope
-        let Some(first_ns) = self.scopes.find_namespace(cur_scope_id, first.name) else {
-            kbail!(
-                self,
-                first.span,
-                "Namespace not found: {} from namespace: {}",
-                first.name,
-                self.namespace_id_to_string(self.scopes.nearest_parent_namespace(cur_scope_id))
-            );
-        };
-        self.emit_ls_entity(first.span, LsEntityKind::Namespace(first_ns));
-        cur_scope_id = self.namespaces.get(first_ns).scope_id;
+    pub fn bind_use(&mut self, scope_id: ScopeId, use_id: ParsedUseId) {
+        let parsed_use = *self.ast.uses.get(use_id);
+        let provenance = if parsed_use.exposed { Provenance::UseExposed } else { Provenance::Use };
+        let path = self.ast.mem.getn(parsed_use.target.path(&self.ast.mem));
+        self.scopes.add_use(
+            scope_id,
+            parsed_use.alias.unwrap_or(parsed_use.target.name),
+            use_id,
+            path.iter().map(|ident| ident.name),
+            parsed_use.target.name,
+            provenance,
+        );
+    }
 
-        for ident in ns_iter {
-            let namespace_id =
-                self.scopes.find_namespace_exposed(cur_scope_id, ident.name).ok_or_else(|| {
-                    kerr!(
-                        self,
-                        ident.span,
-                        "Namespace not found: {} in namespace: {}",
-                        ident.name,
-                        self.namespace_id_to_string(
-                            self.scopes.nearest_parent_namespace(cur_scope_id)
-                        )
-                    )
-                })?;
-            let namespace = self.namespaces.get(namespace_id);
-            self.emit_ls_entity(ident.span, LsEntityKind::Namespace(namespace_id));
-            cur_scope_id = namespace.scope_id;
+    pub fn check_use(&mut self, scope_id: ScopeId, use_id: ParsedUseId) -> K1Result<()> {
+        let parsed_use = *self.ast.uses.get(use_id);
+        let target = parsed_use.target;
+        if self.string_is_completion_marker(target.name, false) {
+            self.record_qident_completion_site(scope_id, &target);
+            return Ok(());
         }
-        Ok(cur_scope_id)
+        let path = self.ast.mem.getn(target.path(&self.ast.mem));
+        let name = parsed_use.alias.unwrap_or(target.name);
+        // Resolve the use's path without following the use itself
+        let scopes = &self.scopes;
+        let scope = scopes.get_scope(scope_id);
+        let head = match scope.ns_map {
+            Some(m) => scopes.ns_entry(m, name).and_then(|e| e.uses),
+            None => scope.entries,
+        };
+        let target_id = scopes
+            .entry_find(head, name.as_u32(), |e| match e.payload {
+                EntryPayload::Use(t) if scopes.use_targets.get(t).use_id == use_id => Some(t),
+                _ => None,
+            })
+            .unwrap();
+        let following = Following { target: target_id, outer: None };
+        let segments = path.iter().map(|ident| ident.name);
+        let target_scope_id = scopes
+            .find_path_scope(scope_id, segments, Some(&following), |index, found| {
+                self.emit_path_segment(path[index], found)
+            })
+            .map_err(|miss| self.make_path_miss_error(path, miss))?;
+        let names_something = scopes
+            .find_entry(
+                target_scope_id,
+                target.name,
+                Some(&following),
+                |e| {
+                    let defined = e.function.is_some()
+                        || !matches!(e.ty, NsEntryTypeValue::None)
+                        || !matches!(e.ability, NsEntryAbilityValue::None)
+                        || !matches!(e.global, NsEntryGlobalValue::None);
+                    if defined {
+                        Some(((), Provenance::Defined))
+                    } else {
+                        e.namespace.filter(|(_, p)| p.is_exposed()).map(|(_, p)| ((), p))
+                    }
+                },
+                |e| match e.payload {
+                    EntryPayload::Variable(_)
+                    | EntryPayload::Function(_)
+                    | EntryPayload::Type(_)
+                    | EntryPayload::Namespace(_)
+                    | EntryPayload::Ability(_)
+                    | EntryPayload::PendingType(_)
+                    | EntryPayload::PendingAbility(_)
+                    | EntryPayload::PendingGlobal(_) => Some(((), e.provenance)),
+                    _ => None,
+                },
+            )
+            .is_some_and(|(_, p, _)| p.is_exposed());
+        if !names_something {
+            kbail!(self, target.name_span, "Unresolved use of {}", target.name);
+        }
+        Ok(())
+    }
+
+    fn emit_path_segment(&self, segment: IdentSpanned, ns_scope_id: ScopeId) {
+        let namespace_id = self.scopes.nearest_parent_namespace(ns_scope_id);
+        self.emit_ls_entity(segment.span, LsEntityKind::Namespace(namespace_id));
+    }
+
+    fn make_path_miss_error(
+        &self,
+        path: &[IdentSpanned],
+        (index, scope_id): (usize, ScopeId),
+    ) -> K1Message {
+        let from_or_in = if index == 0 { "from" } else { "in" };
+        kerr!(
+            self,
+            path[index].span,
+            "Namespace not found: {} {} namespace: {}",
+            path[index].name,
+            from_or_in,
+            self.namespace_id_to_string(self.scopes.nearest_parent_namespace(scope_id))
+        )
     }
 
     pub fn find_ability_namespaced(
@@ -1676,10 +1737,7 @@ impl TypedProgram {
             Ok(self.scopes.find_pending_ability(scope_id, ability_name.name))
         } else {
             let scope_to_search = self.resolve_qident(scope_id, ability_name)?;
-            Ok(self
-                .scopes
-                .find_pending_ability_local(scope_to_search, ability_name.name)
-                .map(|id| (id, scope_to_search)))
+            Ok(exposed(self.scopes.find_pending_ability_local(scope_to_search, ability_name.name)))
         }
     }
 
@@ -1694,10 +1752,7 @@ impl TypedProgram {
             Ok(self.scopes.find_pending_type(scope_id, type_name.name))
         } else {
             let scope_to_search = self.resolve_qident(scope_id, type_name)?;
-            Ok(self
-                .scopes
-                .find_pending_type_local(scope_to_search, type_name.name)
-                .map(|parsed_id| (parsed_id, scope_to_search)))
+            Ok(exposed(self.scopes.find_pending_type_local(scope_to_search, type_name.name)))
         }
     }
 
@@ -1710,10 +1765,7 @@ impl TypedProgram {
             Ok(self.scopes.find_pending_global(scope_id, name.name))
         } else {
             let scope_to_search = self.resolve_qident(scope_id, name)?;
-            Ok(self
-                .scopes
-                .find_pending_global_local(scope_to_search, name.name)
-                .map(|id| (id, scope_to_search)))
+            Ok(exposed(self.scopes.find_pending_global_local(scope_to_search, name.name)))
         }
     }
 }
@@ -1728,36 +1780,9 @@ pub enum ScopeOwnerId {
     Lambda(TypeId, FunctionId, ScopeId),
 }
 impl ScopeOwnerId {
-    pub fn expect_ability(&self) -> AbilityId {
-        match self {
-            ScopeOwnerId::Ability(a) => *a,
-            _ => panic!("Expected ability scope owner"),
-        }
-    }
-
     pub fn as_namespace(&self) -> Option<NamespaceId> {
         match self {
             ScopeOwnerId::Namespace(ns_id) => Some(*ns_id),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum UseableSymbolId {
-    Function(FunctionId),
-    Global(VariableId),
-    Type { type_id: TypeId, companion_namespace: Option<NamespaceId> },
-    Namespace(NamespaceId),
-    Ability(AbilityId, NamespaceId),
-}
-
-impl UseableSymbolId {
-    pub fn namespace_id(&self) -> Option<NamespaceId> {
-        match self {
-            UseableSymbolId::Type { companion_namespace, .. } => *companion_namespace,
-            UseableSymbolId::Namespace(ns_id) => Some(*ns_id),
-            UseableSymbolId::Ability(_, ns_id) => Some(*ns_id),
             _ => None,
         }
     }
@@ -1784,15 +1809,6 @@ pub enum VariableInScope {
     Defined(VariableId),
 }
 
-impl VariableInScope {
-    pub fn variable_id(&self) -> Option<VariableId> {
-        match self {
-            VariableInScope::Masked => None,
-            VariableInScope::Defined(v) => Some(*v),
-        }
-    }
-}
-
 #[derive(Clone, Copy)]
 pub struct Scope {
     pub parent: Option<ScopeId>,
@@ -1805,8 +1821,9 @@ pub struct Scope {
     pub owner_id: ScopeOwnerId,
     entries: Option<ScopeEntryId>,
     ns_map: Option<NsMapId>,
+    version: u32,
 }
-static_assert_size!(Scope, 36);
+static_assert_size!(Scope, 40);
 
 impl Scope {
     pub fn clear_nearest_lambda(&mut self) {

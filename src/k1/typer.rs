@@ -66,9 +66,8 @@ use crate::parse::{
     ParsedIfExpr, ParsedIntLiteral, ParsedListLiteral, ParsedLiteral, ParsedLoopExpr,
     ParsedNamespaceId, ParsedPattern, ParsedPatternId, ParsedProgram, ParsedStaticBlockKind,
     ParsedStaticExpr, ParsedStmt, ParsedStmtId, ParsedTypeConstraint, ParsedTypeConstraintExpr,
-    ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId, ParsedTypeParam, ParsedUseId,
-    ParsedVariable, ParsedVariant, ParsedWhileExpr, QIdent, StringId, StructValueFieldKind,
-    TypeApplication,
+    ParsedTypeDefnId, ParsedTypeExpr, ParsedTypeExprId, ParsedTypeParam, ParsedVariable,
+    ParsedVariant, ParsedWhileExpr, QIdent, StringId, StructValueFieldKind, TypeApplication,
 };
 use crate::vpool::VPool;
 use crate::{SV4, SV8, impl_copy_if_small, nz_u32_id, static_assert_size};
@@ -2482,12 +2481,6 @@ pub struct ImplPendingDeclaration {
 }
 
 #[derive(Clone, Copy)]
-pub struct UsePendingResolution {
-    pub scope_id: ScopeId,
-    pub use_id: ParsedUseId,
-}
-
-#[derive(Clone, Copy)]
 pub struct PendingRecursiveInstance {
     pub type_id: TypeId,
     pub generic_parent: TypeId,
@@ -2662,7 +2655,6 @@ pub struct TypedProgram {
     pub blanket_impls: FxHashMap<AbilityId, PermList<AbilityImplId>>,
     pub function_name_to_ability_names: FxHashMap<StringId, PermList<StringId>>,
 
-    pub uses_pending_resolution: Vec<UsePendingResolution>,
     pub types_pending_definition: Vec<TypePendingDefinition>,
     pub impls_pending_declaration: VecDeque<ImplPendingDeclaration>,
     pub functions_pending_body: Vec<FunctionId>,
@@ -2822,7 +2814,12 @@ impl TypedProgram {
             .set_scope_owner_id(Scopes::ROOT_SCOPE_ID, ScopeOwnerId::Namespace(root_namespace_id));
 
         // Add _root ns to the root scope as well so users can use it
-        if !scopes.add_namespace(Scopes::ROOT_SCOPE_ID, root_ident, root_namespace_id) {
+        if !scopes.add_namespace(
+            Scopes::ROOT_SCOPE_ID,
+            root_ident,
+            Scopes::ROOT_SCOPE_ID,
+            Provenance::Defined,
+        ) {
             panic!("Root namespace was taken, hmmmm");
         }
         let clock = clock::Clock::new();
@@ -2884,7 +2881,6 @@ impl TypedProgram {
             core_fns_by_name: ahash::HashMap::new(),
             blanket_impls: FxHashMap::new(),
             function_name_to_ability_names: FxHashMap::with_capacity(1024),
-            uses_pending_resolution: Vec::new(),
             types_pending_definition: Vec::new(),
             impls_pending_declaration: VecDeque::new(),
             functions_pending_body: Vec::new(),
@@ -3097,9 +3093,14 @@ impl TypedProgram {
             && !is_fixed
         {
             for dep in self.plan.mem.getn(planned.deps) {
-                let dep_namespace = self.modules.get(*dep).namespace_id;
-                let dep_name = self.namespaces.get(dep_namespace).name;
-                if !self.scopes.add_namespace_use(scope_id, dep_name, dep_namespace) {
+                let dep_namespace = self.namespaces.get(self.modules.get(*dep).namespace_id);
+                let dep_name = dep_namespace.name;
+                if !self.scopes.add_namespace(
+                    scope_id,
+                    dep_name,
+                    dep_namespace.scope_id,
+                    Provenance::Use,
+                ) {
                     kbail!(
                         self,
                         Span::NONE,
@@ -3109,7 +3110,7 @@ impl TypedProgram {
                     );
                 }
             }
-            let _ = self.scopes.add_namespace_use(scope_id, ns_name, typed_namespace_id);
+            let _ = self.scopes.add_namespace(scope_id, ns_name, scope_id, Provenance::Use);
         }
         self.typecheck_module(module_id, parsed_namespace_id)?;
         self.completed_module_count += 1;
@@ -12050,29 +12051,9 @@ impl TypedProgram {
     ) -> K1Result<Option<TypedStmtId>> {
         match self.ast.stmts.get(stmt) {
             ParsedStmt::Use(use_stmt) => {
-                let parsed_use = *self.ast.uses.get(use_stmt.use_id);
-                // These uses should always hit since we only do 1 pass inside function bodies, and
-                // at that point all symbols are resolvable
-                let useable_symbols =
-                    self.find_useable_symbols(ctx.scope_id, &parsed_use.target, true, true)?;
-                if useable_symbols.is_empty() {
-                    kbail!(
-                        self,
-                        parsed_use.target.name_span,
-                        "Could not find {}",
-                        parsed_use.target.name
-                    );
-                };
-                let provenance =
-                    if parsed_use.exposed { Provenance::UseExposed } else { Provenance::Use };
-                for useable_symbol in &useable_symbols {
-                    self.scopes.add_use_binding(
-                        ctx.scope_id,
-                        *useable_symbol,
-                        parsed_use.alias.unwrap_or(parsed_use.target.name),
-                        provenance,
-                    );
-                }
+                let use_id = use_stmt.use_id;
+                self.bind_use(ctx.scope_id, use_id);
+                self.check_use(ctx.scope_id, use_id)?;
                 Ok(None)
             }
             ParsedStmt::Let(parsed_let) => {
@@ -15292,7 +15273,13 @@ impl TypedProgram {
                     reload: false,
                 };
                 let namespace_id = self.namespaces.add(ability_namespace);
-                if !self.scopes.add_namespace(scope_id, parsed_ability.name, namespace_id) {
+                self.scopes.set_scope_owner_id(ns_scope_id, ScopeOwnerId::Namespace(namespace_id));
+                if !self.scopes.add_namespace(
+                    scope_id,
+                    parsed_ability.name,
+                    ns_scope_id,
+                    Provenance::Defined,
+                ) {
                     let occupant =
                         self.scopes.find_namespace_local(scope_id, parsed_ability.name).unwrap();
                     if self.namespaces.get(occupant).parent_id == Some(parent_namespace_id) {
@@ -15303,9 +15290,8 @@ impl TypedProgram {
                             parsed_ability.name
                         );
                     }
-                    self.scopes.replace_namespace(scope_id, parsed_ability.name, namespace_id);
+                    self.scopes.replace_namespace(scope_id, parsed_ability.name, ns_scope_id);
                 }
-                self.scopes.set_scope_owner_id(ns_scope_id, ScopeOwnerId::Namespace(namespace_id));
                 ns_scope_id
             }
         };
@@ -15884,8 +15870,10 @@ impl TypedProgram {
     ) {
         self.tmp.reset(false);
         match parsed_defn_id {
-            ParsedId::Use(_) => {
-                // Uses are all resolved by now
+            ParsedId::Use(use_id) => {
+                if let Err(e) = self.check_use(scope_id, use_id) {
+                    self.report(e);
+                }
             }
             ParsedId::Namespace(namespace) => {
                 self.compile_ns_body(namespace, skip_defns);
@@ -15970,119 +15958,6 @@ impl TypedProgram {
                 panic!("Was asked to eval definition of a non-definition ast node {}", other_id)
             }
         }
-    }
-
-    #[must_use]
-    fn eval_use_definition(
-        &mut self,
-        scope_id: ScopeId,
-        parsed_use_id: ParsedUseId,
-        fail_on_traverse_fail: bool,
-        force_pending_types: bool,
-    ) -> bool {
-        let parsed_use = *self.ast.uses.get(parsed_use_id);
-        let useable_symbols = match self.find_useable_symbols(
-            scope_id,
-            &parsed_use.target,
-            fail_on_traverse_fail,
-            force_pending_types,
-        ) {
-            Err(e) => {
-                self.report(e);
-                return false;
-            }
-            Ok(sym) => sym,
-        };
-        debug!(
-            "Usable symbols for {}: {:?}",
-            self.qident_to_string(&parsed_use.target),
-            &useable_symbols
-        );
-        if useable_symbols.is_empty() {
-            debug!("Inserting unresolved use of {}", self.qident_to_string(&parsed_use.target));
-            return false;
-        }
-        let provenance = if parsed_use.exposed { Provenance::UseExposed } else { Provenance::Use };
-        for symbol in &useable_symbols {
-            self.scopes.add_use_binding(
-                scope_id,
-                *symbol,
-                parsed_use.alias.unwrap_or(parsed_use.target.name),
-                provenance,
-            );
-            debug!("Inserting resolved use of {:?}", symbol);
-        }
-        true
-    }
-
-    fn find_useable_symbols(
-        &mut self,
-        scope_id: ScopeId,
-        name: &QIdent,
-        fail_on_traverse_fail: bool,
-        force_pending_types: bool,
-    ) -> K1Result<SV4<UseableSymbolId>> {
-        if self.string_is_completion_marker(name.name, false) {
-            self.record_qident_completion_site(scope_id, name);
-            return Ok(smallvec![]);
-        }
-        let scope_id_to_search = match self.resolve_qident(scope_id, name) {
-            Err(e) => {
-                if fail_on_traverse_fail {
-                    return Err(e);
-                } else {
-                    return Ok(smallvec![]);
-                }
-            }
-            Ok(s) => s,
-        };
-        debug!(
-            "Searching scope for useable symbol: {}, Functions:\n{:?}",
-            self.namespace_id_to_string(self.scopes.nearest_parent_namespace(scope_id_to_search)),
-            self.scopes.iter_scope_functions(scope_id_to_search).collect::<Vec<_>>()
-        );
-
-        // TODO(MODULES): Validate modules cannot use something from a module they don't depend on
-        // even if its in the program
-        //
-        // But that wouldn't really be a 'use' thing because you can use
-        // stuff without 'use'ing it, so actually it needs to happen everywhere
-        // we resolve namespaced identifiers :O
-
-        let mut found_symbols: SV4<_> = smallvec![];
-        if let Some(function_id) = self.scopes.find_function_exposed(scope_id_to_search, name.name)
-        {
-            found_symbols.push(UseableSymbolId::Function(function_id));
-        }
-        if let Some(type_id) = self.scopes.find_type_exposed(scope_id_to_search, name.name) {
-            let companion_namespace = self.get_companion_namespace(type_id);
-            found_symbols.push(UseableSymbolId::Type { type_id, companion_namespace })
-        } else if let Some(pending_parsed_id) =
-            self.scopes.find_pending_type_local(scope_id_to_search, name.name)
-        {
-            if !force_pending_types {
-                return Ok(smallvec![]);
-            }
-            let type_id = self.eval_type_defn(pending_parsed_id, scope_id_to_search)?;
-            let companion_namespace = self.get_companion_namespace(type_id);
-            found_symbols.push(UseableSymbolId::Type { type_id, companion_namespace })
-        }
-        if let Some(variable_id) = self
-            .scopes
-            .find_variable_exposed(scope_id_to_search, name.name)
-            .and_then(|vis| vis.variable_id())
-        {
-            found_symbols.push(UseableSymbolId::Global(variable_id))
-        }
-        if let Some(ability_id) = self.scopes.find_ability_exposed(scope_id_to_search, name.name) {
-            let namespace_id =
-                self.scopes.nearest_parent_namespace(self.abilities.get(ability_id).scope_id);
-            found_symbols.push(UseableSymbolId::Ability(ability_id, namespace_id))
-        }
-        if let Some(ns_id) = self.scopes.find_namespace_exposed(scope_id_to_search, name.name) {
-            found_symbols.push(UseableSymbolId::Namespace(ns_id))
-        }
-        Ok(found_symbols)
     }
 
     fn register_definitions(
@@ -16224,10 +16099,8 @@ impl TypedProgram {
                 });
             }
             ParsedId::Use(use_id) => {
-                if !in_order && !self.eval_use_definition(namespace_scope_id, use_id, false, false)
-                {
-                    self.uses_pending_resolution
-                        .push(UsePendingResolution { scope_id: namespace_scope_id, use_id });
+                if !in_order {
+                    self.bind_use(namespace_scope_id, use_id);
                 }
             }
             _ => {}
@@ -16543,7 +16416,7 @@ impl TypedProgram {
         let namespace_id = self.namespaces.add(namespace);
         self.scopes.set_scope_owner_id(ns_scope_id, ScopeOwnerId::Namespace(namespace_id));
 
-        if !self.scopes.add_namespace(parent_scope_id, name, namespace_id) {
+        if !self.scopes.add_namespace(parent_scope_id, name, ns_scope_id, Provenance::Defined) {
             let occupant = self.scopes.find_namespace_local(parent_scope_id, name).unwrap();
             if self.namespaces.get(occupant).parent_id == Some(parent_ns_id) {
                 kbail!(
@@ -16553,7 +16426,7 @@ impl TypedProgram {
                     self.ident_str(name).blue()
                 );
             }
-            self.scopes.replace_namespace(parent_scope_id, name, namespace_id);
+            self.scopes.replace_namespace(parent_scope_id, name, ns_scope_id);
         }
         if namespace_type == NamespaceKind::TypeCompanion
             && let Some(type_id) = self.scopes.find_type_local(parent_scope_id, name)
@@ -16599,8 +16472,8 @@ impl TypedProgram {
         self.fail_if_reload_ns(parent_ns, ast_namespace.span, "nested namespaces")?;
 
         // Extension is a namespace-tree question, not a name-resolution one: the
-        // scope map also holds use-aliases (e.g. the core prelude), which a local
-        // declaration shadows via create_namespace instead
+        // scope map also holds use-aliases, which a local declaration shadows via
+        // create_namespace instead
         let namespace_id = if let Some(existing) =
             self.find_ns_child_by_name(parent_ns, ast_namespace.name)
         {
@@ -16786,33 +16659,6 @@ impl TypedProgram {
         Ok(())
     }
 
-    /// Sweeps the pending queue to quiescence, so a use whose target is another
-    /// use resolves regardless of declaration order; textual order only decides
-    /// the winner when two uses claim the same name.
-    fn resolve_pending_uses(&mut self, force_pending_types: bool) {
-        loop {
-            let before = self.uses_pending_resolution.len();
-            let mut kept = 0;
-            let mut i = 0;
-            while let Some(&use_pending) = self.uses_pending_resolution.get(i) {
-                i += 1;
-                if !self.eval_use_definition(
-                    use_pending.scope_id,
-                    use_pending.use_id,
-                    false,
-                    force_pending_types,
-                ) {
-                    self.uses_pending_resolution[kept] = use_pending;
-                    kept += 1;
-                }
-            }
-            self.uses_pending_resolution.truncate(kept);
-            if self.uses_pending_resolution.len() == before {
-                return;
-            }
-        }
-    }
-
     fn run_all_phases_on_ns(
         &mut self,
         module_root_parsed_namespace: ParsedNamespaceId,
@@ -16837,7 +16683,6 @@ impl TypedProgram {
             .definitions
             .as_slice(&self.ast.mem);
         self.register_definitions(root_defns, module_root_parsed_namespace, skip_defns);
-        self.resolve_pending_uses(false);
         self.run_definition_metaprograms(module_root_parsed_namespace, skip_defns);
         self.trace_pop(pass);
         check_for_errors!();
@@ -16845,11 +16690,8 @@ impl TypedProgram {
         // Pending Type declaration phase
         debug!(">> Pass 2 declare types, abilities and impls");
         let pass = self.trace_push(TraceKind::PassTypes, module_id.as_u32(), 0);
-        // If we resolve uses this early in core, we evaluate the builtin types out of the expected order
         if is_core {
             self.drain_pending_type_defns();
-        } else {
-            self.resolve_pending_uses(true);
         }
         self.declare_namespace_abilities(module_root_parsed_namespace, skip_defns);
         while let Some(pending) = self.impls_pending_declaration.pop_front() {
@@ -16894,8 +16736,6 @@ impl TypedProgram {
             }
         }
 
-        self.resolve_pending_uses(true);
-
         // Everything else declaration phase
         debug!(">> Pass 3 declare rest of definitions (functions, globals)");
         let pass = self.trace_push(TraceKind::PassDeclarations, module_id.as_u32(), 0);
@@ -16904,21 +16744,6 @@ impl TypedProgram {
         check_for_errors!();
         if self.global_id_k1_arena.is_none() {
             panic!("global_id_k1_arena was not set");
-        }
-
-        self.resolve_pending_uses(true);
-        let mut unresolved_use_errors: Vec<K1Message> = vec![];
-        for pending_use in self.uses_pending_resolution.iter() {
-            let parsed_use = self.ast.uses.get(pending_use.use_id);
-            unresolved_use_errors.push(kerr!(
-                self,
-                parsed_use.span,
-                "Unresolved use of {}",
-                parsed_use.target.name
-            ));
-        }
-        for e in unresolved_use_errors {
-            self.report(e)
         }
 
         debug!(">> Pass 4 bodies (functions, globals, abilities, non-metaprogram statics)");
@@ -17216,9 +17041,8 @@ impl TypedProgram {
                 exposed: false,
                 span,
             });
-            if !self.eval_use_definition(scope, use_id, true, true) {
-                kbail!(self, span, "Failed to resolve a core use: {}", self.qident_to_string(&qid));
-            }
+            self.bind_use(scope, use_id);
+            self.check_use(scope, use_id)?;
         }
         Ok(())
     }
