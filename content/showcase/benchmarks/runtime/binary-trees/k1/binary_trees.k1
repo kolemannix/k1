@@ -4,7 +4,7 @@ type node = { left: optref[node], right: optref[node] }
 
 fn make(a: *arena, depth: i64): *node {
   if depth == 0 a.push(node.0)
-  else a.push(node.{ left = optref/make(make(a, depth - 1)), right = optref/make(make(a, depth - 1)) })
+  else a.push(node.{ left = make(a, depth - 1).as(), right = make(a, depth - 1).as() })
 }
 
 fn check(n: *node): i64 {

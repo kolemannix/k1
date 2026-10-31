@@ -388,7 +388,7 @@ impl TypedProgram {
         let suite_type = self.get_function_type(suite_fn).return_type;
         let suite_fields = self.types.get(suite_type).expect_struct().fields;
         let cases_type = self.mem.getn(suite_fields)[1].type_id;
-        let (case_type, _) = self.get_as_container_instance(cases_type).unwrap();
+        let case_type = self.get_instance_arg(cases_type, self.builtin_types.span()).unwrap();
         let case_fields = self.types.get(case_type).expect_struct().fields;
         let mut cases: Vec<StaticValueId> = Vec::with_capacity(tests.len());
         for test in tests {

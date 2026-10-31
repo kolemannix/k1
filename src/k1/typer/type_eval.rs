@@ -253,6 +253,8 @@ impl TypedProgram {
                 self.builtin_types.list = Some(type_id);
             } else if name == b.opt {
                 self.builtin_types.opt = Some(type_id);
+            } else if name == b.optref {
+                self.builtin_types.optref = Some(type_id);
             } else if name == b.ordering {
                 self.builtin_types.ordering = Some(type_id);
             } else if name == b.c_varargs {

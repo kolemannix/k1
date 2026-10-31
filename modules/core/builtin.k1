@@ -1064,7 +1064,7 @@ ns for ptr {
     mem/bitcast[ptr, *t](self)
   }
 
-  fn(inline) ref-opt[t](self: ptr): optref[t] { .{ inner = self } }
+  fn(inline) opt[t](self: ptr): optref[t] { .{ inner = self } }
 
   fn(inline) to-int(self: ptr): i64 { mem/bitcast[ptr, i64](self) }
   fn(inline) to-uint(self: ptr): u64 { mem/bitcast[ptr, u64](self) }

@@ -5,7 +5,7 @@ type c-token = { kind: clang/CXTokenKind, text: string }
 
 fn macro-body-tokens(unit: clang/CXTranslationUnit, cursor: clang/CXCursor): list[c-token] {
   let extent = clang/getCursorExtent(cursor)
-  let toks-ptr: *clang/CXToken = ptr/null.narrow()
+  let toks-ptr: optref[clang/CXToken] = null()
   let count: u32 = 0
   clang/tokenize(unit, extent, toks-ptr.&, count.&)
   let body: list[c-token] = list/with-capacity(count.as-size())

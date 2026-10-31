@@ -741,7 +741,7 @@ ns platform {
 
       fn dylib-open(path: string): ptr {
         let rtld-local: c-int = k1/select-os(macos = fn. 0x4, linux = fn. 0)
-        c/dlopen(optref/make(path.to-c-tmp()), c/RTLD_NOW | rtld-local)
+        c/dlopen(path.to-c-tmp().as(), c/RTLD_NOW | rtld-local)
       }
       fn dylib-open-self(): ptr { c/dlopen(.0, c/RTLD_NOW) }
       fn dylib-sym(lib: ptr, name: string): ptr { c/dlsym(lib, name.to-c-tmp()) }

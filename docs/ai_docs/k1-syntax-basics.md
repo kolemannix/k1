@@ -97,15 +97,16 @@ and `some t` need `name: t`.
   modular, `.signed()`/`.unsigned()` same-width flip. zext:
   `x.unsigned().widen[u64]`; sext: `x.widen[i64].unsigned()`.
 - `.as[t]`: int<->float, total views behind references (`*t` -> `ptr`,
-  `*big` -> `*prefix-struct`), and same-size structs, sums and enums by value
-  (nominal <-> structural, names ignored; struct fields pair by offset through
-  nested structs, sum variants by tag). Claiming views
-  (`*u8` -> `*bool`, `*u32` -> `*enum`, `ptr` -> `*t`, an enum to one missing some
-  of its tags) are `.narrow()`. Both take the target from the expected type:
+  `*t` -> `optref[t]`, `*big` -> `*prefix-struct`), and same-size structs, sums and
+  enums by value (nominal <-> structural, names ignored; struct fields pair by offset
+  through nested structs, sum variants by tag). `optref[t]` views as a nullable `*t`,
+  its pointee checked. Claiming views (`*u8` -> `*bool`, `*u32` -> `*enum`, `ptr` ->
+  `*t` or `optref[t]`, `optref[t]` -> `*t`, an enum to one missing some of its tags)
+  are `.narrow()`. Both take the target from the expected type:
   `let r: *f32 = u.&.as()`.
 - `c.as-u8()` (char), `b.as-u8()` (bool), `mem/bitcast[a, b](v)` same-size bits.
 - ptr: `to-int() to-uint() to-size()`, `n.to-ptr()`, `p.ref[t]` (null-checked in
-  debug and comptime), `p.ref-opt[t]`, `p.ref-at[t](i)` (gep), `ptr/null` or `.0`.
+  debug and comptime), `p.opt[t]`, `p.ref-at[t](i)` (gep), `ptr/null` or `.0`.
   `p is null` is a pattern on `ptr` only (a type error on `*t`); parenthesize
   before an enum-literal consequent: `if (p is null) :none else ...`. Never
   `ptr/null.ref[t]`.

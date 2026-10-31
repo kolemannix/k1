@@ -31,7 +31,7 @@ ns for mpsc {
       let link = node.mpsc-link()
       n = link.inner
       link.* = ordered
-      ordered = optref/make(node)
+      ordered = node.as()
     }
     .{ at = ordered }
   }

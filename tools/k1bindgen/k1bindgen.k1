@@ -107,7 +107,7 @@ fn start(args: span[string]): result[string, string] {
     source_filename = args.in-path.to-c(),
     command_line_args = clang-args-c-strs.data-ptr(),
     command_line_args_len = clang-args-c-strs.len().trunc[i32],
-    ptr/null.narrow(), 0,
+    null(), 0,
     clang/tu-flag/DetailedPreprocessingRecord.bit-or(clang/tu-flag/SkipFunctionBodies), unit.&
   )
   if err != 0 {
@@ -180,7 +180,7 @@ fn start(args: span[string]): result[string, string] {
           }
           if not skip {
             out.write("type${if typedef.alias "(alias) " else " "}$name = ")
-            write-k1-type(typedef.type, indent = 0, pos = :param)
+            write-k1-type(typedef.type, indent = 0)
             out.write("\n")
             let is-opaque = typedef.type is :opaque _
             if (not is-opaque) and it.error is :none { write-layout-assertion(layout-asserts.&, name, typedef.type, it.layout) }
@@ -190,7 +190,7 @@ fn start(args: span[string]): result[string, string] {
           out.write("let ")
           out.write(name)
           out.write(": ")
-          write-k1-type(constant.type, indent = 0, pos = :value)
+          write-k1-type(constant.type, indent = 0)
           out.write(" = ")
           out.write(constant.value)
           out.writeln("")
@@ -202,7 +202,7 @@ fn start(args: span[string]): result[string, string] {
           out.write(") ")
           out.write(name)
           out.write(": ")
-          write-k1-type(global.type, indent = 0, pos = :value)
+          write-k1-type(global.type, indent = 0)
           out.writeln("")
         },
         :function function -> {
@@ -214,7 +214,7 @@ fn start(args: span[string]): result[string, string] {
               out.write("  ")
               out.write(if it.name is :some(name) mangle-name(name) else "p$it-index")
               out.write(": ")
-              write-k1-type(it.type, indent = 1, pos = :param)
+              write-k1-type(it.type, indent = 1)
               out.write(",")
             }
             out.writeln("")
@@ -222,7 +222,7 @@ fn start(args: span[string]): result[string, string] {
           out.write(")")
           if not (function.fn-type.return-type is :k1 "{}") {
             out.write(": ")
-            write-k1-type(function.fn-type.return-type, indent = 0, pos = :value)
+            write-k1-type(function.fn-type.return-type, indent = 0)
           }
           out.write("\n")
         }
@@ -300,14 +300,12 @@ fn mangle-name(name: string): string {
   name
 }
 
-fn write-named-type(context w: *string-builder, name-config)(name: string, k1-type, indent: size, pos: ref-pos) {
+fn write-named-type(context w: *string-builder, name-config)(name: string, k1-type, indent: size) {
   w.write("${}: ", mangle-name(name))
-  write-k1-type(k1-type, indent, pos)
+  write-k1-type(k1-type, indent)
 }
 
-type ref-pos = either { param, value }
-
-fn write-k1-type(context w: *string-builder, name-config)(k1-type, indent: size, pos: ref-pos) {
+fn write-k1-type(context w: *string-builder, name-config)(k1-type, indent: size) {
   if k1-type is {
     :error-c msg -> w.write("ERROR: $msg"),
     :k1 s -> w.write(s),
@@ -321,7 +319,7 @@ fn write-k1-type(context w: *string-builder, name-config)(k1-type, indent: size,
       if s.fields.non-empty() w.writeln("")
       for s.fields {
         w.repeat("  ", indent + 1)
-        write-named-type(it.name, it.type, indent + 1, :value)
+        write-named-type(it.name, it.type, indent + 1)
         w.writeln(",")
       }
       w.repeat("  ", indent)
@@ -341,8 +339,8 @@ fn write-k1-type(context w: *string-builder, name-config)(k1-type, indent: size,
       w.join-with(f.fn-type.params, ",\n", fn[w, name-config, indent] p. {
         w.repeat("  ", indent + 1)
         if p.name is {
-          :none -> write-k1-type(p.type, indent + 1, :param),
-          :some name -> write-named-type(name, p.type, indent + 1, :param),
+          :none -> write-k1-type(p.type, indent + 1),
+          :some name -> write-named-type(name, p.type, indent + 1),
         }
       })
 
@@ -351,25 +349,22 @@ fn write-k1-type(context w: *string-builder, name-config)(k1-type, indent: size,
       w.write(")")
       if not (f.fn-type.return-type is :k1 "{}") {
         w.write(" -> ")
-        write-k1-type(f.fn-type.return-type, indent, :value)
+        write-k1-type(f.fn-type.return-type, indent)
       }
     },
     :ref ref -> {
-      if pos is {
-        :param -> {
-          w.write("*")
-          write-k1-type(ref.inner, indent, :value)
-        },
-        :value -> {
-          w.write("optref[")
-          write-k1-type(ref.inner, indent, :value)
-          w.write("]")
-        }
+      if ref.inner.* is :fn-type _ {
+        w.write("*")
+        write-k1-type(ref.inner, indent)
+      } else {
+        w.write("optref[")
+        write-k1-type(ref.inner, indent)
+        w.write("]")
       }
     },
     :array a -> {
       w.write("array[")
-      write-k1-type(a.elem-type, indent, :value)
+      write-k1-type(a.elem-type, indent)
       w.write(", ")
       a.size.print-to(w)
       w.write("]")
@@ -592,7 +587,7 @@ fn get-location(cursor: CXCursor): { location: clang/CXSourceLocation, filename:
   }
   let file: clang/CXFile = uninit
   let line: u32 = uninit
-  clang/getFileLocation(location, file.&, line.&, ptr/null.narrow(), ptr/null.narrow())
+  clang/getFileLocation(location, file.&.as(), line.&.as(), null(), null())
   // Compiler-predefined macros have no file
   let filename = if file.is-null() "" else clang/getFileName(file).to-string()
   .{ location, filename, line }

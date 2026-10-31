@@ -892,7 +892,6 @@ impl print for ptr {
 // An `optref[t]` is a reference to t that is allowed to be null
 type optref[t] = { inner: ptr }
 ns for optref {
-  fn(inline) make[t](inner: *t): optref[t] { .{ inner = inner.as[ptr] } }
   fn(inline) null[t](): optref[t] { .{ inner = ptr/null } }
   fn(inline) get[t](self: optref[t]): *t { self.inner.ref[t] }
   fn deref[t](self: optref[t]): ?t {

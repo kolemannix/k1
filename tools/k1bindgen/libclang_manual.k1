@@ -63,7 +63,7 @@ fn(extern("clang_parseTranslationUnit2")) parseTranslationUnit2(
   source_filename: *u8,
   command_line_args: ptr,
   command_line_args_len: c-int,
-  unsaved_files: *CXUnsavedFile,
+  unsaved_files: optref[CXUnsavedFile],
   unsaved_files_len: c-unsigned,
   options: CXTranslationUnit_Flags,
   out_TU: *CXTranslationUnit
@@ -211,10 +211,10 @@ type(alias) CXFile = ptr
 
 fn(extern("clang_getFileLocation")) getFileLocation(
   location: CXSourceLocation,
-  file: *CXFile,
-  line: *u32,
-  column: *u32,
-  offset: *u32
+  file: optref[CXFile],
+  line: optref[u32],
+  column: optref[u32],
+  offset: optref[u32]
 )
 
 fn(extern("clang_Type_getAlignOf")) Type_getAlignOf(T: CXType): i64
@@ -270,7 +270,7 @@ type CXToken = {
 fn(extern("clang_tokenize")) tokenize(
   TU: CXTranslationUnit,
   Range: CXSourceRange,
-  out_Tokens: **CXToken,
+  out_Tokens: *optref[CXToken],
   out_NumTokens: *c-unsigned
 )
 
@@ -278,7 +278,7 @@ fn(extern("clang_getTokenKind")) getTokenKind(Token: CXToken): CXTokenKind
 
 fn(extern("clang_getTokenSpelling")) getTokenSpelling(TU: CXTranslationUnit, Token: CXToken): CXString
 
-fn(extern("clang_disposeTokens")) disposeTokens(TU: CXTranslationUnit, Tokens: *CXToken, NumTokens: c-unsigned)
+fn(extern("clang_disposeTokens")) disposeTokens(TU: CXTranslationUnit, Tokens: optref[CXToken], NumTokens: c-unsigned)
 
 type CXCursorKind = either(c-unsigned, partial) {
   // Declarations

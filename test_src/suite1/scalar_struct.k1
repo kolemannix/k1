@@ -5,7 +5,6 @@ type wallet = { c: cents }
 type entry = { c: cents, n: int }
 
 fn read(c: cents): i64 { c.v }
-fn is-null-ref(o: optref[u8]): bool { o.is-null() }
 fn make(v: i64): wallet { .{ c = .{ v } } }
 fn baked(): cents { #static { let c: cents = .{ v = 40 }; c.v = c.v + 2; c } }
 let RESULT_ARGS: span[types/type-id] = types/instance-info[result[int, string]].!.args
@@ -35,11 +34,5 @@ fn(test) one-scalar-structs-are-their-scalar() {
   assert-equals(n, 2)
   assert-equals(c.as[{ v: i64 }].v, 7)
 
-  let x: u8 = 3
-  let o: optref[u8] = x.&.as()
-  assert(not is-null-ref(x.&.as()))
-  let back: *u8 = o.narrow()
-  assert-equals(back.*, 3)
-  assert(test-compile(o.as[*u8]).is-some())
   assert(test-compile(#static { let b: int = 3; let f = fn[b](x: int) x + b; [f, f] }).is-some())
 }

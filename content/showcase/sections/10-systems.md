@@ -341,15 +341,16 @@ and writes k1. Its libuv output:
 ```k1 path=modules/uv/libuv.k1
 fn(extern("uv_default_loop")) default_loop(): optref[uv-loop]
 fn(extern("uv_loop_init")) loop_init(
-  loop_c: *uv-loop,
+  loop_c: optref[uv-loop],
 ): i32
 fn(extern("uv_loop_close")) loop_close(
-  loop_c: *uv-loop,
+  loop_c: optref[uv-loop],
 ): i32
 ```
 
-`*t` is never null in k1, so a returned C pointer comes back as
-`optref[uv-loop]`, one word you have to check. Every generated struct carries
+`*t` is never null in k1 and a C header doesn't say which pointers can be, so
+every C pointer is an `optref`. A k1 `*uv-loop` goes in with `.as()`; one coming
+back is one word you have to check. Every generated struct carries
 libclang's layout as an assertion, collected in one `fn(test)` at the end of
 the file that runs under `k1 test`, so drift from the C definition fails the
 tests without costing every build:

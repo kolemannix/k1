@@ -231,7 +231,8 @@ impl TypedProgram {
 
         // args: span[{ name: string, type-id }]
         let args_span_type_id = self.get_struct_field(impl_info_type_id, 1).type_id;
-        let arg_struct_type_id = self.get_as_span_instance(args_span_type_id).unwrap();
+        let arg_struct_type_id =
+            self.get_instance_arg(args_span_type_id, self.builtin_types.span()).unwrap();
         let mut arg_value_ids = self.tmp.new_list(found_impl_args.len() as u32);
         for (param, &arg) in self.mem.getn(impl_params).iter().zip(found_impl_args) {
             self.register_type_metainfo(arg);
@@ -298,7 +299,8 @@ impl TypedProgram {
         let Some(info) = self.get_instance_info(type_id).copied() else {
             return synth_static_option(&mut self.static_values, instance_opt_type_id, None);
         };
-        let instance_info_type_id = self.get_as_opt_instance(instance_opt_type_id).unwrap();
+        let instance_info_type_id =
+            self.get_instance_arg(instance_opt_type_id, self.builtin_types.opt()).unwrap();
         let args_span_type_id = self.get_struct_field(instance_info_type_id, 1).type_id;
 
         self.register_type_metainfo(info.generic_parent);
@@ -363,7 +365,8 @@ impl TypedProgram {
                     get_schema_variant(self, self.ast.idents.b.enum_).payload.unwrap();
                 let values_span_type_id =
                     self.get_struct_field(enum_schema_payload_type_id, 1).type_id;
-                let value_struct_type_id = self.get_as_span_instance(values_span_type_id).unwrap();
+                let value_struct_type_id =
+                    self.get_instance_arg(values_span_type_id, self.builtin_types.span()).unwrap();
                 let int_type = enum_type.int_type;
                 let partial = enum_type.partial;
                 let int_type_value_id =
@@ -424,8 +427,9 @@ impl TypedProgram {
                 let struct_type_fields = struct_type.fields;
                 let struct_schema_fields_span_type_id =
                     self.get_struct_field(struct_schema_payload_type_id, 0).type_id;
-                let struct_schema_field_item_struct_type_id =
-                    self.get_as_span_instance(struct_schema_fields_span_type_id).unwrap();
+                let struct_schema_field_item_struct_type_id = self
+                    .get_instance_arg(struct_schema_fields_span_type_id, self.builtin_types.span())
+                    .unwrap();
 
                 let struct_pt = self.get_physical_type(type_id).unwrap();
                 // { name: string), typeId: u64, offset: size }
@@ -515,8 +519,9 @@ impl TypedProgram {
                     get_schema_variant(self, self.ast.idents.b.either).payload.unwrap();
                 let variants_span_type_id =
                     self.get_struct_field(either_payload_type_id, 2).type_id;
-                let variant_struct_type_id =
-                    self.get_as_span_instance(variants_span_type_id).unwrap();
+                let variant_struct_type_id = self
+                    .get_instance_arg(variants_span_type_id, self.builtin_types.span())
+                    .unwrap();
                 let tag_type = typed_sum.tag_type;
                 let tag_type_value_id =
                     self.static_values.add(TypedProgram::make_int_kind(int_kind_type_id, tag_type));
@@ -542,8 +547,9 @@ impl TypedProgram {
 
                     let payload_info_opt_type_id =
                         self.get_struct_field(variant_struct_type_id, 2).type_id;
-                    let payload_info_struct_id =
-                        self.get_as_opt_instance(payload_info_opt_type_id).unwrap();
+                    let payload_info_struct_id = self
+                        .get_instance_arg(payload_info_opt_type_id, self.builtin_types.opt())
+                        .unwrap();
 
                     let payload_info_value_id = match variant.payload {
                         None => synth_static_option(

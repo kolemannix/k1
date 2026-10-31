@@ -2662,7 +2662,7 @@ pub struct TypedProgram {
     pub blanket_impls: FxHashMap<AbilityId, PermList<AbilityImplId>>,
     pub function_name_to_ability_names: FxHashMap<StringId, PermList<StringId>>,
 
-    pub uses_pending_resolution: VecDeque<UsePendingResolution>,
+    pub uses_pending_resolution: Vec<UsePendingResolution>,
     pub types_pending_definition: Vec<TypePendingDefinition>,
     pub impls_pending_declaration: VecDeque<ImplPendingDeclaration>,
     pub functions_pending_body: Vec<FunctionId>,
@@ -2884,7 +2884,7 @@ impl TypedProgram {
             core_fns_by_name: ahash::HashMap::new(),
             blanket_impls: FxHashMap::new(),
             function_name_to_ability_names: FxHashMap::with_capacity(1024),
-            uses_pending_resolution: VecDeque::new(),
+            uses_pending_resolution: Vec::new(),
             types_pending_definition: Vec::new(),
             impls_pending_declaration: VecDeque::new(),
             functions_pending_body: Vec::new(),
@@ -7346,6 +7346,27 @@ impl TypedProgram {
         if from_type == to_type {
             return Ok(true);
         }
+        // optref[t] views as a nullable *t
+        let from_optref = self.get_instance_arg(from_type, self.builtin_types.optref());
+        let to_optref = self.get_instance_arg(to_type, self.builtin_types.optref());
+        let is_pointer =
+            |t: &Type| matches!(t, Type::Reference(_) | Type::FunctionPointer(_) | Type::Pointer);
+        if (from_optref.is_some() || to_optref.is_some())
+            && (from_optref.is_some() || is_pointer(self.types.get(from_type)))
+            && (to_optref.is_some() || is_pointer(self.types.get(to_type)))
+        {
+            let drops_null =
+                from_optref.is_some() && matches!(self.types.get(to_type), Type::Reference(_));
+            let from_ref = match from_optref {
+                Some(inner) => self.add_reference_type(inner),
+                None => from_type,
+            };
+            let to_ref = match to_optref {
+                Some(inner) => self.add_reference_type(inner),
+                None => to_type,
+            };
+            return Ok(self.check_interpret_cast(from_ref, to_ref, span, depth)? && !drops_null);
+        }
         let (PhysicalTypeResult::Yes(from_pt), PhysicalTypeResult::Yes(to_pt)) =
             (self.get_physical_type(from_type), self.get_physical_type(to_type))
         else {
@@ -7367,7 +7388,7 @@ impl TypedProgram {
             (Type::Reference(from_r), Type::Reference(to_r)) => {
                 self.check_interpret_cast(from_r.inner_type, to_r.inner_type, span, depth + 1)?
             }
-            (Type::Struct(s), _) | (_, Type::Struct(s)) if s.record_kind != RecordKind::Union => {
+            _ if self.is_view_aggregate(from_type) || self.is_view_aggregate(to_type) => {
                 let tmp_mark = self.tmp.mark();
                 let mut from_parts = self.tmp.new_list(8);
                 self.push_view_parts(from_type, 0, &mut from_parts);
@@ -7542,6 +7563,11 @@ impl TypedProgram {
         Ok(total)
     }
 
+    fn is_view_aggregate(&self, type_id: TypeId) -> bool {
+        matches!(self.types.get(type_id), Type::Struct(s) if s.record_kind != RecordKind::Union)
+            && self.get_instance_arg(type_id, self.builtin_types.optref()).is_none()
+    }
+
     fn push_view_parts(
         &mut self,
         type_id: TypeId,
@@ -7549,7 +7575,7 @@ impl TypedProgram {
         parts: &mut TmpList<(u32, TypeId)>,
     ) {
         match self.types.get(type_id) {
-            Type::Struct(s) if s.record_kind != RecordKind::Union => {
+            Type::Struct(s) if self.is_view_aggregate(type_id) => {
                 let fields = self.mem.getn(s.fields);
                 let struct_pt = self.get_physical_type(type_id).unwrap();
                 for (index, field) in fields.iter().enumerate() {
@@ -11130,7 +11156,6 @@ impl TypedProgram {
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let callee_function_type = self.get_callee_function_type(&call.callee);
-        self.warn_large_arg_copies(call.args, callee_function_type, declaration);
         let return_type = self.types.get(callee_function_type).as_function().unwrap().return_type;
 
         // Builtins that are handled by the typechecking phase are implemented here.
@@ -11138,6 +11163,9 @@ impl TypedProgram {
             match builtin {
                 Builtin::TyperInline(kind) => {
                     return self.handle_inline_builtin(call, span, kind, ctx);
+                }
+                Builtin::Ir(BuiltinIr::Scalar(_)) => {
+                    return Ok(self.add_call_expr(call, return_type, span));
                 }
                 Builtin::Backend(BackendBuiltin::TypeInfo) => {
                     let type_id_arg = *self.mem.get_nth(call.args, 0);
@@ -11162,6 +11190,7 @@ impl TypedProgram {
             }
         }
 
+        self.warn_large_arg_copies(call.args, callee_function_type, declaration);
         Ok(self.add_call_expr(call, return_type, span))
     }
 
@@ -14865,7 +14894,8 @@ impl TypedProgram {
             BuiltinTyperFunction::EnumAbilityFromValue => {
                 let value_param = *self.mem.get_nth(params, 0);
                 let value_expr = self.synth_variable_expr(value_param.variable_id, fn_span);
-                let enum_type_id = self.get_as_opt_instance(return_type).unwrap();
+                let enum_type_id =
+                    self.get_instance_arg(return_type, self.builtin_types.opt()).unwrap();
                 let enum_type = *self.types.get(enum_type_id).expect_enum();
                 if enum_type.partial {
                     let cast = self.synth_cast(
@@ -16197,7 +16227,7 @@ impl TypedProgram {
                 if !in_order && !self.eval_use_definition(namespace_scope_id, use_id, false, false)
                 {
                     self.uses_pending_resolution
-                        .push_back(UsePendingResolution { scope_id: namespace_scope_id, use_id });
+                        .push(UsePendingResolution { scope_id: namespace_scope_id, use_id });
                 }
             }
             _ => {}
@@ -16762,19 +16792,21 @@ impl TypedProgram {
     fn resolve_pending_uses(&mut self, force_pending_types: bool) {
         loop {
             let before = self.uses_pending_resolution.len();
+            let mut kept = 0;
             let mut i = 0;
             while let Some(&use_pending) = self.uses_pending_resolution.get(i) {
-                if self.eval_use_definition(
+                i += 1;
+                if !self.eval_use_definition(
                     use_pending.scope_id,
                     use_pending.use_id,
                     false,
                     force_pending_types,
                 ) {
-                    self.uses_pending_resolution.remove(i);
-                } else {
-                    i += 1;
+                    self.uses_pending_resolution[kept] = use_pending;
+                    kept += 1;
                 }
             }
+            self.uses_pending_resolution.truncate(kept);
             if self.uses_pending_resolution.len() == before {
                 return;
             }

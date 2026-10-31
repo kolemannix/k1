@@ -29,12 +29,12 @@ type _internal_s = {
   settings: ptr,
 }
 fn(extern("llhttp__internal_init")) _internal_init(
-  s: *_internal,
+  s: optref[_internal],
 ): i32
 fn(extern("llhttp__internal_execute")) _internal_execute(
-  s: *_internal,
-  p: *u8,
-  endp: *u8,
+  s: optref[_internal],
+  p: optref[u8],
+  endp: optref[u8],
 ): i32
 type errno = either(u32, partial) {
   HPE_OK = 0,
@@ -262,12 +262,12 @@ type status = either(u32, partial) {
 type(alias) t = _internal
 type(alias) settings = settings_s
 type(alias) data_cb = *fn(
-  *t,
-  *u8,
+  optref[t],
+  optref[u8],
   usize
 ) -> i32
 type(alias) cb = *fn(
-  *t
+  optref[t]
 ) -> i32
 type settings_s = {
   on_message_begin: cb,
@@ -297,75 +297,75 @@ type settings_s = {
   on_reset: cb,
 }
 fn(extern("llhttp_init")) init(
-  parser: *t,
+  parser: optref[t],
   type: type,
-  settings: *settings,
+  settings: optref[settings],
 )
 fn(extern("llhttp_alloc")) alloc(
   type: type,
 ): optref[t]
 fn(extern("llhttp_free")) free(
-  parser: *t,
+  parser: optref[t],
 )
 fn(extern("llhttp_get_type")) get_type(
-  parser: *t,
+  parser: optref[t],
 ): u8
 fn(extern("llhttp_get_http_major")) get_http_major(
-  parser: *t,
+  parser: optref[t],
 ): u8
 fn(extern("llhttp_get_http_minor")) get_http_minor(
-  parser: *t,
+  parser: optref[t],
 ): u8
 fn(extern("llhttp_get_method")) get_method(
-  parser: *t,
+  parser: optref[t],
 ): u8
 fn(extern("llhttp_get_status_code")) get_status_code(
-  parser: *t,
+  parser: optref[t],
 ): i32
 fn(extern("llhttp_get_upgrade")) get_upgrade(
-  parser: *t,
+  parser: optref[t],
 ): u8
 fn(extern("llhttp_reset")) reset(
-  parser: *t,
+  parser: optref[t],
 )
 fn(extern("llhttp_settings_init")) settings_init(
-  settings: *settings,
+  settings: optref[settings],
 )
 fn(extern("llhttp_execute")) execute(
-  parser: *t,
-  data: *u8,
+  parser: optref[t],
+  data: optref[u8],
   len: usize,
 ): errno
 fn(extern("llhttp_finish")) finish(
-  parser: *t,
+  parser: optref[t],
 ): errno
 fn(extern("llhttp_message_needs_eof")) message_needs_eof(
-  parser: *t,
+  parser: optref[t],
 ): i32
 fn(extern("llhttp_should_keep_alive")) should_keep_alive(
-  parser: *t,
+  parser: optref[t],
 ): i32
 fn(extern("llhttp_pause")) pause(
-  parser: *t,
+  parser: optref[t],
 )
 fn(extern("llhttp_resume")) resume(
-  parser: *t,
+  parser: optref[t],
 )
 fn(extern("llhttp_resume_after_upgrade")) resume_after_upgrade(
-  parser: *t,
+  parser: optref[t],
 )
 fn(extern("llhttp_get_errno")) get_errno(
-  parser: *t,
+  parser: optref[t],
 ): errno
 fn(extern("llhttp_get_error_reason")) get_error_reason(
-  parser: *t,
+  parser: optref[t],
 ): optref[u8]
 fn(extern("llhttp_set_error_reason")) set_error_reason(
-  parser: *t,
-  reason: *u8,
+  parser: optref[t],
+  reason: optref[u8],
 )
 fn(extern("llhttp_get_error_pos")) get_error_pos(
-  parser: *t,
+  parser: optref[t],
 ): optref[u8]
 fn(extern("llhttp_errno_name")) errno_name(
   err: errno,
@@ -377,47 +377,47 @@ fn(extern("llhttp_status_name")) status_name(
   status: status,
 ): optref[u8]
 fn(extern("llhttp_set_lenient_headers")) set_lenient_headers(
-  parser: *t,
+  parser: optref[t],
   enabled: i32,
 )
 fn(extern("llhttp_set_lenient_chunked_length")) set_lenient_chunked_length(
-  parser: *t,
+  parser: optref[t],
   enabled: i32,
 )
 fn(extern("llhttp_set_lenient_keep_alive")) set_lenient_keep_alive(
-  parser: *t,
+  parser: optref[t],
   enabled: i32,
 )
 fn(extern("llhttp_set_lenient_transfer_encoding")) set_lenient_transfer_encoding(
-  parser: *t,
+  parser: optref[t],
   enabled: i32,
 )
 fn(extern("llhttp_set_lenient_version")) set_lenient_version(
-  parser: *t,
+  parser: optref[t],
   enabled: i32,
 )
 fn(extern("llhttp_set_lenient_data_after_close")) set_lenient_data_after_close(
-  parser: *t,
+  parser: optref[t],
   enabled: i32,
 )
 fn(extern("llhttp_set_lenient_optional_lf_after_cr")) set_lenient_optional_lf_after_cr(
-  parser: *t,
+  parser: optref[t],
   enabled: i32,
 )
 fn(extern("llhttp_set_lenient_optional_cr_before_lf")) set_lenient_optional_cr_before_lf(
-  parser: *t,
+  parser: optref[t],
   enabled: i32,
 )
 fn(extern("llhttp_set_lenient_optional_crlf_after_chunk")) set_lenient_optional_crlf_after_chunk(
-  parser: *t,
+  parser: optref[t],
   enabled: i32,
 )
 fn(extern("llhttp_set_lenient_spaces_after_chunk_size")) set_lenient_spaces_after_chunk_size(
-  parser: *t,
+  parser: optref[t],
   enabled: i32,
 )
 fn(extern("llhttp_set_lenient_header_value_relaxed")) set_lenient_header_value_relaxed(
-  parser: *t,
+  parser: optref[t],
   enabled: i32,
 )
 

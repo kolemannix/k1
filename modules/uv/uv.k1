@@ -3,8 +3,8 @@ use std/rc
 
 ability handle {
   fn as-handle(self: *self): *libuv/handle
-  fn set-data[t](self: *self, data: *t) { libuv/handle_set_data(self.as-handle(), data.as[ptr]) }
-  fn get-data[t](self: *self): *t { libuv/handle_get_data(self.as-handle()).narrow[*t] }
+  fn set-data[t](self: *self, data: *t) { libuv/handle_set_data(self.as-handle().as(), data.as[ptr]) }
+  fn get-data[t](self: *self): *t { libuv/handle_get_data(self.as-handle().as()).narrow[*t] }
 }
 
 impl handle for libuv/handle { fn as-handle(self: *self): *libuv/handle { self } }
@@ -17,8 +17,8 @@ impl handle for libuv/stream { fn as-handle(self: *self): *libuv/handle { self.n
 
 ability req {
   fn as-req(self: *self): *libuv/req
-  fn set-data[t](self: *self, data: *t) { libuv/req_set_data(self.as-req(), data.as[ptr]) }
-  fn get-data[t](self: *self): *t { libuv/req_get_data(self.as-req()).narrow[*t] }
+  fn set-data[t](self: *self, data: *t) { libuv/req_set_data(self.as-req().as(), data.as[ptr]) }
+  fn get-data[t](self: *self): *t { libuv/req_get_data(self.as-req().as()).narrow[*t] }
 }
 
 impl req for libuv/fs { fn as-req(self: *self): *libuv/req { self.narrow() } }
@@ -29,11 +29,11 @@ impl req for libuv/connect { fn as-req(self: *self): *libuv/req { self.narrow() 
 ability stream {
   fn as-stream(self: *self): *libuv/stream
   fn read-start(self: *self, alloc-cb: libuv/alloc_cb, read-cb: libuv/read_cb): result[empty, libuv/errno] {
-    check(libuv/read_start(self.as-stream(), alloc-cb, read-cb))
+    check(libuv/read_start(self.as-stream().as(), alloc-cb, read-cb))
   }
-  fn read-stop(self: *self) { check(libuv/read_stop(self.as-stream())).! }
+  fn read-stop(self: *self) { check(libuv/read_stop(self.as-stream().as())).! }
   fn write(self: *self, req: *libuv/write, bufs: span[span[u8]], cb: libuv/write_cb): result[empty, libuv/errno] {
-    check(libuv/write(req, self.as-stream(), bufs.data-ptr().narrow[*libuv/buf], bufs.len().trunc[u32], cb))
+    check(libuv/write(req.as(), self.as-stream().as(), bufs.data-ptr().opt(), bufs.len().trunc[u32], cb))
   }
 }
 
@@ -47,7 +47,7 @@ ns libuv {
     }
 
     fn wrap-buffer(buffer: buffer[u8]): buf {
-      buf_init(mem/bitcast[ptr, *u8](buffer.data), buffer.len.trunc[u32])
+      buf_init(buffer.data.opt(), buffer.len.trunc[u32])
     }
 
     fn wrap-span(span: span[u8]): buf {
@@ -56,8 +56,8 @@ ns libuv {
   }
 
   ns for timer {
-    fn start(self: *timer, cb: timer_cb, timeout-ms: u64, repeat-ms: u64) { check(timer_start(self, cb, timeout-ms, repeat-ms)).! }
-    fn stop(self: *timer) { check(timer_stop(self)).! }
+    fn start(self: *timer, cb: timer_cb, timeout-ms: u64, repeat-ms: u64) { check(timer_start(self.as(), cb, timeout-ms, repeat-ms)).! }
+    fn stop(self: *timer) { check(timer_stop(self.as())).! }
   }
 
   ns for errno {
@@ -109,34 +109,34 @@ type guard[t] = { raw: *libuv/mutex, value: *t }
 ns for mutex {
   fn init[t](self: *self[t], value: t) {
     self.value = value
-    check(libuv/mutex_init(self.raw.&)).!
+    check(libuv/mutex_init(self.raw.&.as())).!
   }
   fn init-recursive[t](self: *self[t], value: t) {
     self.value = value
-    check(libuv/mutex_init_recursive(self.raw.&)).!
+    check(libuv/mutex_init_recursive(self.raw.&.as())).!
   }
-  fn destroy-lock[t](self: *self[t]) { libuv/mutex_destroy(self.raw.&) }
+  fn destroy-lock[t](self: *self[t]) { libuv/mutex_destroy(self.raw.&.as()) }
   fn lock[t](self: *self[t]): guard[t] {
-    libuv/mutex_lock(self.raw.&)
+    libuv/mutex_lock(self.raw.&.as())
     .{ raw = self.raw.&, value = self.value.& }
   }
   fn try-lock[t](self: *self[t]): ?guard[t] {
-    if libuv/mutex_trylock(self.raw.&) != 0 return :none
+    if libuv/mutex_trylock(self.raw.&.as()) != 0 return :none
     :some .{ raw = self.raw.&, value = self.value.& }
   }
 }
 
 ns for guard {
-  fn unlock[t](self: self[t]) { libuv/mutex_unlock(self.raw) }
+  fn unlock[t](self: self[t]) { libuv/mutex_unlock(self.raw.as()) }
 }
 
 type cond = { raw: libuv/cond }
 
 ns for cond {
-  fn init(self: *self) { check(libuv/cond_init(self.raw.&)).! }
-  fn destroy(self: *self) { libuv/cond_destroy(self.raw.&) }
-  fn signal(self: *self) { libuv/cond_signal(self.raw.&) }
-  fn broadcast(self: *self) { libuv/cond_broadcast(self.raw.&) }
+  fn init(self: *self) { check(libuv/cond_init(self.raw.&.as())).! }
+  fn destroy(self: *self) { libuv/cond_destroy(self.raw.&.as()) }
+  fn signal(self: *self) { libuv/cond_signal(self.raw.&.as()) }
+  fn broadcast(self: *self) { libuv/cond_broadcast(self.raw.&.as()) }
 }
 
 type monitor[t] = { mutex: mutex[t], cond: cond }
@@ -159,10 +159,10 @@ ns for monitor {
 }
 
 ns for monitor-guard {
-  fn wait[t](self: self[t]) { libuv/cond_wait(self.cond.raw.&, self.raw) }
+  fn wait[t](self: self[t]) { libuv/cond_wait(self.cond.raw.&.as(), self.raw.as()) }
   fn signal[t](self: self[t]) { self.cond.signal() }
   fn broadcast[t](self: self[t]) { self.cond.broadcast() }
-  fn unlock[t](self: self[t]) { libuv/mutex_unlock(self.raw) }
+  fn unlock[t](self: self[t]) { libuv/mutex_unlock(self.raw.as()) }
 }
 
 macro locked(target: code, name: code, body: code) {
@@ -175,7 +175,7 @@ macro locked(target: code, name: code, body: code) {
 }
 
 fn async-waker(handle: *libuv/async): std/stream/waker {
-  .{ state = handle.as[ptr], wake-fn = fn(state: ptr) check(libuv/async_send(state.ref[libuv/async])).! }
+  .{ state = handle.as[ptr], wake-fn = fn(state: ptr) check(libuv/async_send(state.opt())).! }
 }
 
 ns bus {
@@ -186,9 +186,9 @@ ns bus {
   ): *pubsub/bus[t] {
     let async-handle = heap.alloc-t[libuv/async]
     let bus = pubsub/create[t](async-waker(async-handle), subscriber-cap-weight, weight-fn)
-    check(libuv/async_init(uv-loop, async-handle, fn handle. handle.get-data[pubsub/bus[t]].dispatch())).!
+    check(libuv/async_init(uv-loop.as(), async-handle.as(), fn handle. handle.get().get-data[pubsub/bus[t]].dispatch())).!
     async-handle.set-data(bus)
-    libuv/unref(async-handle.as-handle())
+    libuv/unref(async-handle.as-handle().as())
     bus
   }
 }

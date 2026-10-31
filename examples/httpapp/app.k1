@@ -30,40 +30,39 @@ type db = { conn: *sqlite3/db }
 ns for db {
   fn open(path: string): db {
     let conn: optref[sqlite3/db] = null()
-    let open-status = sqlite3/open(path.to-c(), conn.&)
+    let open-status = sqlite3/open(path.to-c().as(), conn.&.as())
     if open-status != 0 crash("sqlite open failed for $path: $open-status")
     let db: db = .{ conn = conn.get() }
-    sqlite3/busy_timeout(db.conn, 2000)
+    sqlite3/busy_timeout(db.conn.as(), 2000)
     db.run("create table if not exists visits(id integer primary key, path text not null, at text not null default current_timestamp)", "")
     db
   }
 
   fn fail(self: db, what: string): never {
-    crash("sqlite $what failed: ${string/wrap-c(sqlite3/errmsg(self.conn).get())}")
+    crash("sqlite $what failed: ${string/wrap-c(sqlite3/errmsg(self.conn.as()).get())}")
   }
 
   fn prepare(self: db, sql: string): *sqlite3/stmt {
     let stmt: optref[sqlite3/stmt] = null()
-    let tail: optref[u8] = null()
-    if sqlite3/prepare_v2(self.conn, sql.to-c(), -1, stmt.&, tail.&) != 0 { self.fail("prepare") }
+    if sqlite3/prepare_v2(self.conn.as(), sql.to-c().as(), -1, stmt.&.as(), null()) != 0 { self.fail("prepare") }
     stmt.get()
   }
 
   fn run(self: db, sql: string, text: string) {
     let stmt = self.prepare(sql)
     if text.non-empty() {
-      sqlite3/bind_text(stmt, 1, text.data-ref-byte(), text.len().trunc[i32], fn(_p: ptr) .{})
+      sqlite3/bind_text(stmt.as(), 1, text.data-ref-byte().as(), text.len().trunc[i32], fn(_p: ptr) .{})
     }
-    let step-status = sqlite3/step(stmt)
-    sqlite3/finalize(stmt)
+    let step-status = sqlite3/step(stmt.as())
+    sqlite3/finalize(stmt.as())
     if step-status != sqlite3/DONE.trunc[i32] { self.fail("step") }
   }
 
   fn count(self: db, sql: string): i64 {
     let stmt = self.prepare(sql)
-    if sqlite3/step(stmt) != sqlite3/ROW.trunc[i32] { self.fail("step") }
-    let n = sqlite3/column_int64(stmt, 0)
-    sqlite3/finalize(stmt)
+    if sqlite3/step(stmt.as()) != sqlite3/ROW.trunc[i32] { self.fail("step") }
+    let n = sqlite3/column_int64(stmt.as(), 0)
+    sqlite3/finalize(stmt.as())
     n
   }
 
@@ -209,8 +208,8 @@ fn publish-text(bus: *pubsub/bus[span[u8]], topic: string, data: string) {
 let(mutable) game-tick: u64 = 0
 fn spawn-tick-publisher-thread(bus: *pubsub/bus[span[u8]]) {
   let thread-id: *libuv/thread = heap.alloc-t()
-  uv/check(libuv/thread_create(thread-id, fn arg. {
-    libuv/thread_setname("publisher\0".data-ref-byte())
+  uv/check(libuv/thread_create(thread-id.as(), fn arg. {
+    libuv/thread_setname("publisher\0".data-ref-byte().as())
     let bus = arg.ref[pubsub/bus[span[u8]]]
     loop {
       libuv/sleep(1000)

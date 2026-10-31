@@ -156,7 +156,7 @@ ns for worker-pool {
     let exited = guard.value.exited
     guard.unlock()
     while exited.as-opt() is :some w {
-      check(libuv/thread_join(w.thread.&)).!
+      check(libuv/thread_join(w.thread.&.as())).!
       w.scratch.release()
       exited = w.next
     }
@@ -198,7 +198,7 @@ fn add-workers(pool: *worker-pool, guard: monitor-guard[worker-pool-shared]) {
     s.worker-count = s.worker-count + 1
     let w = if s.exited.as-opt() is :some w {
       s.exited = w.next
-      check(libuv/thread_join(w.thread.&)).!
+      check(libuv/thread_join(w.thread.&.as())).!
       w
     } else {
       let scratch = core/arena/init(8 * core/arena/mb)
@@ -207,7 +207,7 @@ fn add-workers(pool: *worker-pool, guard: monitor-guard[worker-pool-shared]) {
       s.created-worker-count = index + 1
       pool.arena.push[worker](.{ pool, index, thread = uninit, scratch, is-blocked = false, next = null() })
     }
-    check(libuv/thread_create(w.thread.&, worker-fn.&, w.as[ptr])).!
+    check(libuv/thread_create(w.thread.&.as(), worker-fn.&, w.as[ptr])).!
   }
 }
 
@@ -248,9 +248,9 @@ fn release-job(guard: monitor-guard[worker-pool-shared], job: *job) {
 
 fn worker-fn(arg: ptr) {
   let w = arg.ref[worker]
-  current-worker = optref/make(w)
+  current-worker = w.as()
   mem/set-tmp-arena(w.scratch)
-  libuv/thread_setname("worker-${w.index}".to-c-tmp())
+  libuv/thread_setname("worker-${w.index}".to-c-tmp().as())
   let pool = w.pool
   loop {
     w.scratch.reset()
@@ -264,7 +264,7 @@ fn worker-fn(arg: ptr) {
     require maybe-job is :some job else {
       s.worker-count = s.worker-count - 1
       w.next = s.exited
-      s.exited = optref/make(w)
+      s.exited = w.as()
       if s.worker-count == 0 { guard.broadcast() }
       guard.unlock()
       return
@@ -277,8 +277,8 @@ type job-queue = { head: optref[job], tail: optref[job] }
 ns for job-queue {
   fn push(self: *job-queue, job: *job) {
     job.next = null()
-    if self.tail.as-opt() is :some tail { tail.next = optref/make(job) } else { self.head = optref/make(job) }
-    self.tail = optref/make(job)
+    if self.tail.as-opt() is :some tail { tail.next = job.as() } else { self.head = job.as() }
+    self.tail = job.as()
   }
 
   fn pop(self: *job-queue): ?*job {

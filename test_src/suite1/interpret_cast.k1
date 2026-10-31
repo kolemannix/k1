@@ -31,6 +31,7 @@ fn takes-ptr(p: ptr): u64 { p.to-uint() }
 fn takes-u8ref(r: *u8): u64 { (r.*).widen[u64] }
 fn takes-u64(x: u64): u64 { x }
 fn takes-wrapper(w: *wrapper): u32 { (w.*).base.tag }
+fn is-null-ref(o: optref[small]): bool { o.is-null() }
 
 fn(test) reinterpret-scalar-pointers() {
   let u: u32 = 0x3F800000
@@ -125,4 +126,27 @@ fn(test) fn-pointer-param-casts() {
   assert-equals(h(v.&.as[ptr]), 9)
   let fu: fnp-takes-u64 = takes-u64.&
   assert(test-compile(fu.narrow[fnp-takes-f64]) is :some _)
+}
+
+fn(test) optref-views() {
+  let bigv: big = .{ a = 1, b = 2, c = 3 }
+  assert(not is-null-ref(bigv.&.as()))
+  let o: optref[small] = bigv.&.as()
+  let back: *small = o.narrow()
+  assert-equals((back.*).b, 2)
+  assert(test-compile(o.as[*small]) is :some _)
+  let smallv: small = .{ a = 1, b = 2 }
+  assert(test-compile(smallv.&.as[optref[big]]) is :some _)
+  let p: ptr = o.as()
+  assert(test-compile(p.as[optref[small]]) is :some _)
+  let h: { r: optref[big] } = .{ r = bigv.&.as() }
+  let hs: { r: optref[small] } = h.as()
+  assert-equals((hs.r.get().*).a, 1)
+  assert(test-compile(hs.as[{ r: optref[big] }]) is :some _)
+  let r: optref[small] = hs.as()
+  assert(not r.is-null())
+  let of: optref[fn(u64) -> u64] = takes-u64.&.as()
+  let f: fnp-takes-u64 = of.as()
+  assert-equals(f(4), 4)
+  assert(test-compile(takes-ptr.&.as[optref[fn(u64) -> u64]]) is :some _)
 }

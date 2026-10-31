@@ -192,11 +192,6 @@ pub const F32_TYPE_ID: TypeId = TypeId(NonZeroU32::new(14).unwrap());
 pub const F64_TYPE_ID: TypeId = TypeId(NonZeroU32::new(15).unwrap());
 
 #[derive(Clone)]
-pub struct ListType {
-    pub element_type: TypeId,
-}
-
-#[derive(Clone)]
 pub struct TypeParameter {
     pub name: StringId,
     pub static_constraint: Option<TypeId>,
@@ -1063,6 +1058,7 @@ pub struct BuiltinTypes {
     pub list: Option<TypeId>,
     pub string: Option<TypeId>,
     pub opt: Option<TypeId>,
+    pub optref: Option<TypeId>,
     pub code: Option<TypeId>,
     pub code_span: Option<TypeId>,
     pub code_token: Option<TypeId>,
@@ -1098,6 +1094,7 @@ impl BuiltinTypes {
         debug_assert!(self.list.is_some());
         debug_assert!(self.string.is_some());
         debug_assert!(self.opt.is_some());
+        debug_assert!(self.optref.is_some());
         debug_assert!(self.code.is_some());
         debug_assert!(self.code_span.is_some());
         debug_assert!(self.code_token.is_some());
@@ -1138,6 +1135,9 @@ impl BuiltinTypes {
     }
     pub fn opt(&self) -> TypeId {
         self.opt.expect("opt builtin missing")
+    }
+    pub fn optref(&self) -> TypeId {
+        self.optref.expect("optref builtin missing")
     }
     pub fn code(&self) -> TypeId {
         self.code.expect("code builtin missing")
@@ -2693,26 +2693,6 @@ impl TypedProgram {
         }
     }
 
-    pub fn get_as_list_instance(&self, type_id: TypeId) -> Option<ListType> {
-        self.type_instance_info.get(type_id).as_ref().and_then(|spec_info| {
-            if spec_info.generic_parent == self.builtin_types.list() {
-                Some(ListType { element_type: self.get_type_slice(spec_info.type_args)[0] })
-            } else {
-                None
-            }
-        })
-    }
-
-    pub fn get_as_span_instance(&self, type_id: TypeId) -> Option<TypeId> {
-        self.type_instance_info.get(type_id).as_ref().and_then(|spec_info| {
-            if spec_info.generic_parent == self.builtin_types.span() {
-                Some(self.get_type_slice(spec_info.type_args)[0])
-            } else {
-                None
-            }
-        })
-    }
-
     pub fn get_as_container_instance(&self, type_id: TypeId) -> Option<(TypeId, ContainerKind)> {
         if let Some(info) = self.get_instance_info(type_id) {
             if info.generic_parent == self.builtin_types.list() {
@@ -2740,14 +2720,13 @@ impl TypedProgram {
         }
     }
 
-    pub fn get_as_opt_instance(&self, type_id: TypeId) -> Option<TypeId> {
-        self.type_instance_info.get(type_id).as_ref().and_then(|spec_info| {
-            if spec_info.generic_parent == self.builtin_types.opt() {
-                Some(self.get_type_slice(spec_info.type_args)[0])
-            } else {
-                None
+    pub fn get_instance_arg(&self, type_id: TypeId, generic_parent: TypeId) -> Option<TypeId> {
+        match self.get_instance_info(type_id) {
+            Some(info) if info.generic_parent == generic_parent => {
+                Some(self.get_type_slice(info.type_args)[0])
             }
-        })
+            _ => None,
+        }
     }
 
     fn type_slice_hash(ids: &[TypeId]) -> u64 {

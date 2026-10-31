@@ -53,7 +53,7 @@ type foo = {
   _muh_floats: array[f32, 0],
 }
 fn(extern("myFunction")) myFunction(
-  incompleteArray: *u8,
+  incompleteArray: optref[u8],
 )
 fn(extern("cinput_sum")) sum(
   lhs: i32,
@@ -65,13 +65,13 @@ fn(extern("cinput_unnamed_param")) unnamed_param(
   loop_c: f32,
 ): i32
 fn(extern("cinput_format")) format(
-  out: *u8,
-  fmt: *u8,
+  out: optref[u8],
+  fmt: optref[u8],
   varargs: core/c-varargs,
 ): i32
 type(alias) logger = *fn(
   i32,
-  *u8,
+  optref[u8],
   core/c-varargs
 ) -> i32
 type(alias) on_done = *fn(

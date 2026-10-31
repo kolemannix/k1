@@ -134,7 +134,7 @@ type(alias) Fast = i32
 type(alias) UFast = u32
 type(alias) Int64 = i64
 type(alias) UInt64 = u64
-type(alias) Memory = *MemoryRec_
+type(alias) Memory = optref[MemoryRec_]
 type(alias) Alloc_Func = *fn(
   Memory,
   i64
@@ -155,7 +155,7 @@ type MemoryRec_ = {
   free: Free_Func,
   realloc: Realloc_Func,
 }
-type(alias) Stream = *StreamRec_
+type(alias) Stream = optref[StreamRec_]
 type StreamDesc_ = union {
   value: i64,
   pointer: ptr,
@@ -164,7 +164,7 @@ type(alias) StreamDesc = StreamDesc_
 type(alias) Stream_IoFunc = *fn(
   Stream,
   u64,
-  *u8,
+  optref[u8],
   u64
 ) -> u64
 type(alias) Stream_CloseFunc = *fn(
@@ -229,22 +229,22 @@ type Outline_ = {
 }
 type(alias) Outline = Outline_
 type(alias) Outline_MoveToFunc = *fn(
-  *Vector,
+  optref[Vector],
   ptr
 ) -> i32
 type(alias) Outline_LineToFunc = *fn(
-  *Vector,
+  optref[Vector],
   ptr
 ) -> i32
 type(alias) Outline_ConicToFunc = *fn(
-  *Vector,
-  *Vector,
+  optref[Vector],
+  optref[Vector],
   ptr
 ) -> i32
 type(alias) Outline_CubicToFunc = *fn(
-  *Vector,
-  *Vector,
-  *Vector,
+  optref[Vector],
+  optref[Vector],
+  optref[Vector],
   ptr
 ) -> i32
 type Outline_Funcs_ = {
@@ -274,7 +274,7 @@ type(alias) Span = Span_
 type(alias) SpanFunc = *fn(
   i32,
   i32,
-  *Span,
+  optref[Span],
   ptr
 )
 type(alias) Raster_BitTest_Func = *fn(
@@ -300,17 +300,17 @@ type Raster_Params_ = {
 }
 type(alias) Raster_Params = Raster_Params_
 type RasterRec_ = opaque[0, 1]
-type(alias) Raster = *RasterRec_
+type(alias) Raster = optref[RasterRec_]
 type(alias) Raster_NewFunc = *fn(
   ptr,
-  *Raster
+  optref[Raster]
 ) -> i32
 type(alias) Raster_DoneFunc = *fn(
   Raster
 )
 type(alias) Raster_ResetFunc = *fn(
   Raster,
-  *u8,
+  optref[u8],
   u64
 )
 type(alias) Raster_SetModeFunc = *fn(
@@ -320,7 +320,7 @@ type(alias) Raster_SetModeFunc = *fn(
 ) -> i32
 type(alias) Raster_RenderFunc = *fn(
   Raster,
-  *Raster_Params
+  optref[Raster_Params]
 ) -> i32
 type Raster_Funcs_ = {
   glyph_format: Glyph_Format,
@@ -336,7 +336,7 @@ type(alias) FWord = i16
 type(alias) UFWord = u16
 type(alias) Char = i8
 type(alias) Byte = u8
-type(alias) Bytes = *Byte
+type(alias) Bytes = optref[Byte]
 type(alias) Tag = UInt32
 type(alias) String = u8
 type(alias) Short = i16
@@ -377,8 +377,8 @@ type Generic_ = {
   finalizer: Generic_Finalizer,
 }
 type(alias) Generic = Generic_
-type(alias) ListNode = *ListNodeRec_
-type(alias) List = *ListRec_
+type(alias) ListNode = optref[ListNodeRec_]
+type(alias) List = optref[ListRec_]
 type ListNodeRec_ = {
   prev: ListNode,
   next: ListNode,
@@ -413,17 +413,17 @@ type Bitmap_Size_ = {
 }
 type(alias) Bitmap_Size = Bitmap_Size_
 type LibraryRec_ = opaque[0, 1]
-type(alias) Library = *LibraryRec_
+type(alias) Library = optref[LibraryRec_]
 type ModuleRec_ = opaque[0, 1]
-type(alias) Module = *ModuleRec_
+type(alias) Module = optref[ModuleRec_]
 type DriverRec_ = opaque[0, 1]
-type(alias) Driver = *DriverRec_
+type(alias) Driver = optref[DriverRec_]
 type RendererRec_ = opaque[0, 1]
-type(alias) Renderer = *RendererRec_
-type(alias) Face = *FaceRec_
-type(alias) Size = *SizeRec_
-type(alias) GlyphSlot = *GlyphSlotRec_
-type(alias) CharMap = *CharMapRec_
+type(alias) Renderer = optref[RendererRec_]
+type(alias) Face = optref[FaceRec_]
+type(alias) Size = optref[SizeRec_]
+type(alias) GlyphSlot = optref[GlyphSlotRec_]
+type(alias) CharMap = optref[CharMapRec_]
 type Encoding_ = either(u32, partial) {
   ENCODING_NONE = 0,
   ENCODING_MS_SYMBOL = 1937337698,
@@ -449,7 +449,7 @@ type CharMapRec_ = {
 }
 type(alias) CharMapRec = CharMapRec_
 type Face_InternalRec_ = opaque[0, 1]
-type(alias) Face_Internal = *Face_InternalRec_
+type(alias) Face_Internal = optref[Face_InternalRec_]
 type FaceRec_ = {
   num_faces: Long,
   face_index: Long,
@@ -485,7 +485,7 @@ type FaceRec_ = {
 }
 type(alias) FaceRec = FaceRec_
 type Size_InternalRec_ = opaque[0, 1]
-type(alias) Size_Internal = *Size_InternalRec_
+type(alias) Size_Internal = optref[Size_InternalRec_]
 type Size_Metrics_ = {
   x_ppem: UShort,
   y_ppem: UShort,
@@ -505,9 +505,9 @@ type SizeRec_ = {
 }
 type(alias) SizeRec = SizeRec_
 type SubGlyphRec_ = opaque[0, 1]
-type(alias) SubGlyph = *SubGlyphRec_
+type(alias) SubGlyph = optref[SubGlyphRec_]
 type Slot_InternalRec_ = opaque[0, 1]
-type(alias) Slot_Internal = *Slot_InternalRec_
+type(alias) Slot_Internal = optref[Slot_InternalRec_]
 type GlyphSlotRec_ = {
   library: Library,
   face: Face,
@@ -534,7 +534,7 @@ type GlyphSlotRec_ = {
 }
 type(alias) GlyphSlotRec = GlyphSlotRec_
 fn(extern("FT_Init_FreeType")) Init_FreeType(
-  alibrary: *Library,
+  alibrary: optref[Library],
 ): Error
 fn(extern("FT_Done_FreeType")) Done_FreeType(
   library: Library,
@@ -557,30 +557,30 @@ type Open_Args_ = {
 type(alias) Open_Args = Open_Args_
 fn(extern("FT_New_Face")) New_Face(
   library: Library,
-  filepathname: *u8,
+  filepathname: optref[u8],
   face_index: Long,
-  aface: *Face,
+  aface: optref[Face],
 ): Error
 fn(extern("FT_New_Memory_Face")) New_Memory_Face(
   library: Library,
-  file_base: *Byte,
+  file_base: optref[Byte],
   file_size: Long,
   face_index: Long,
-  aface: *Face,
+  aface: optref[Face],
 ): Error
 fn(extern("FT_Open_Face")) Open_Face(
   library: Library,
-  args: *Open_Args,
+  args: optref[Open_Args],
   face_index: Long,
-  aface: *Face,
+  aface: optref[Face],
 ): Error
 fn(extern("FT_Attach_File")) Attach_File(
   face: Face,
-  filepathname: *u8,
+  filepathname: optref[u8],
 ): Error
 fn(extern("FT_Attach_Stream")) Attach_Stream(
   face: Face,
-  parameters: *Open_Args,
+  parameters: optref[Open_Args],
 ): Error
 fn(extern("FT_Reference_Face")) Reference_Face(
   face: Face,
@@ -609,7 +609,7 @@ type Size_RequestRec_ = {
   vertResolution: UInt,
 }
 type(alias) Size_RequestRec = Size_RequestRec_
-type(alias) Size_Request = *Size_RequestRec_
+type(alias) Size_Request = optref[Size_RequestRec_]
 fn(extern("FT_Request_Size")) Request_Size(
   face: Face,
   req: Size_Request,
@@ -638,13 +638,13 @@ fn(extern("FT_Load_Char")) Load_Char(
 ): Error
 fn(extern("FT_Set_Transform")) Set_Transform(
   face: Face,
-  matrix: *Matrix,
-  delta: *Vector,
+  matrix: optref[Matrix],
+  delta: optref[Vector],
 )
 fn(extern("FT_Get_Transform")) Get_Transform(
   face: Face,
-  matrix: *Matrix,
-  delta: *Vector,
+  matrix: optref[Matrix],
+  delta: optref[Vector],
 )
 type Render_Mode_ = either(u32, partial) {
   RENDER_MODE_NORMAL = 0,
@@ -671,13 +671,13 @@ fn(extern("FT_Get_Kerning")) Get_Kerning(
   left_glyph: UInt,
   right_glyph: UInt,
   kern_mode: UInt,
-  akerning: *Vector,
+  akerning: optref[Vector],
 ): Error
 fn(extern("FT_Get_Track_Kerning")) Get_Track_Kerning(
   face: Face,
   point_size: Fixed,
   degree: Int,
-  akerning: *Fixed,
+  akerning: optref[Fixed],
 ): Error
 fn(extern("FT_Select_Charmap")) Select_Charmap(
   face: Face,
@@ -696,21 +696,21 @@ fn(extern("FT_Get_Char_Index")) Get_Char_Index(
 ): UInt
 fn(extern("FT_Get_First_Char")) Get_First_Char(
   face: Face,
-  agindex: *UInt,
+  agindex: optref[UInt],
 ): ULong
 fn(extern("FT_Get_Next_Char")) Get_Next_Char(
   face: Face,
   char_code: ULong,
-  agindex: *UInt,
+  agindex: optref[UInt],
 ): ULong
 fn(extern("FT_Face_Properties")) Face_Properties(
   face: Face,
   num_properties: UInt,
-  properties: *Parameter,
+  properties: optref[Parameter],
 ): Error
 fn(extern("FT_Get_Name_Index")) Get_Name_Index(
   face: Face,
-  glyph_name: *String,
+  glyph_name: optref[String],
 ): UInt
 fn(extern("FT_Get_Glyph_Name")) Get_Glyph_Name(
   face: Face,
@@ -724,11 +724,11 @@ fn(extern("FT_Get_Postscript_Name")) Get_Postscript_Name(
 fn(extern("FT_Get_SubGlyph_Info")) Get_SubGlyph_Info(
   glyph: GlyphSlot,
   sub_index: UInt,
-  p_index: *Int,
-  p_flags: *UInt,
-  p_arg1: *Int,
-  p_arg2: *Int,
-  p_transform: *Matrix,
+  p_index: optref[Int],
+  p_flags: optref[UInt],
+  p_arg1: optref[Int],
+  p_arg2: optref[Int],
+  p_transform: optref[Matrix],
 ): Error
 fn(extern("FT_Get_FSType_Flags")) Get_FSType_Flags(
   face: Face,
@@ -777,14 +777,14 @@ fn(extern("FT_FloorFix")) FloorFix(
   a: Fixed,
 ): Fixed
 fn(extern("FT_Vector_Transform")) Vector_Transform(
-  vector: *Vector,
-  matrix: *Matrix,
+  vector: optref[Vector],
+  matrix: optref[Matrix],
 )
 fn(extern("FT_Library_Version")) Library_Version(
   library: Library,
-  amajor: *Int,
-  aminor: *Int,
-  apatch: *Int,
+  amajor: optref[Int],
+  aminor: optref[Int],
+  apatch: optref[Int],
 )
 fn(extern("FT_Face_CheckTrueTypePatents")) Face_CheckTrueTypePatents(
   face: Face,
@@ -794,61 +794,61 @@ fn(extern("FT_Face_SetUnpatentedHinting")) Face_SetUnpatentedHinting(
   value: Bool,
 ): Bool
 fn(extern("FT_Outline_Decompose")) Outline_Decompose(
-  outline: *Outline,
-  func_interface: *Outline_Funcs,
+  outline: optref[Outline],
+  func_interface: optref[Outline_Funcs],
   user: ptr,
 ): Error
 fn(extern("FT_Outline_New")) Outline_New(
   library: Library,
   numPoints: UInt,
   numContours: Int,
-  anoutline: *Outline,
+  anoutline: optref[Outline],
 ): Error
 fn(extern("FT_Outline_Done")) Outline_Done(
   library: Library,
-  outline: *Outline,
+  outline: optref[Outline],
 ): Error
 fn(extern("FT_Outline_Check")) Outline_Check(
-  outline: *Outline,
+  outline: optref[Outline],
 ): Error
 fn(extern("FT_Outline_Get_CBox")) Outline_Get_CBox(
-  outline: *Outline,
-  acbox: *BBox,
+  outline: optref[Outline],
+  acbox: optref[BBox],
 )
 fn(extern("FT_Outline_Translate")) Outline_Translate(
-  outline: *Outline,
+  outline: optref[Outline],
   xOffset: Pos,
   yOffset: Pos,
 )
 fn(extern("FT_Outline_Copy")) Outline_Copy(
-  source: *Outline,
-  target: *Outline,
+  source: optref[Outline],
+  target: optref[Outline],
 ): Error
 fn(extern("FT_Outline_Transform")) Outline_Transform(
-  outline: *Outline,
-  matrix: *Matrix,
+  outline: optref[Outline],
+  matrix: optref[Matrix],
 )
 fn(extern("FT_Outline_Embolden")) Outline_Embolden(
-  outline: *Outline,
+  outline: optref[Outline],
   strength: Pos,
 ): Error
 fn(extern("FT_Outline_EmboldenXY")) Outline_EmboldenXY(
-  outline: *Outline,
+  outline: optref[Outline],
   xstrength: Pos,
   ystrength: Pos,
 ): Error
 fn(extern("FT_Outline_Reverse")) Outline_Reverse(
-  outline: *Outline,
+  outline: optref[Outline],
 )
 fn(extern("FT_Outline_Get_Bitmap")) Outline_Get_Bitmap(
   library: Library,
-  outline: *Outline,
-  abitmap: *Bitmap,
+  outline: optref[Outline],
+  abitmap: optref[Bitmap],
 ): Error
 fn(extern("FT_Outline_Render")) Outline_Render(
   library: Library,
-  outline: *Outline,
-  params: *Raster_Params,
+  outline: optref[Outline],
+  params: optref[Raster_Params],
 ): Error
 type Orientation_ = either(u32, partial) {
   ORIENTATION_TRUETYPE = 0,
@@ -857,7 +857,7 @@ type Orientation_ = either(u32, partial) {
 }
 type(alias) Orientation = Orientation_
 fn(extern("FT_Outline_Get_Orientation")) Outline_Get_Orientation(
-  outline: *Outline,
+  outline: optref[Outline],
 ): Orientation
 
 fn(test) c-layouts() {

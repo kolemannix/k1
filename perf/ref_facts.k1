@@ -6,7 +6,7 @@ fn(inline) value-or-zero(r: optref[cell]): int { if r.is-null() 0 else r.get().v
 
 fn(noinline) sum-optrefs(cells: span[*cell], start: int): int {
   let sum = start
-  for c in cells { sum = sum + value-or-zero(optref/make(c)) }
+  for c in cells { sum = sum + value-or-zero(c.as()) }
   sum
 }
 
