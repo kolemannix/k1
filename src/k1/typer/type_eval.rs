@@ -1264,9 +1264,10 @@ impl TypedProgram {
         parsed_args: &[NamedTypeArg],
         span: Span,
     ) -> K1Result<TmpSlice<NamedTypeArg>> {
-        let mut placed: SV8<Option<NamedTypeArg>> = smallvec![None; params_len];
+        let mut placed: TmpList<Option<NamedTypeArg>> = self.tmp.new_list(params_len as u32);
+        placed.fill_to_cap(None);
         self.place_args(
-            &mut placed,
+            placed.as_slice_mut(),
             parsed_args.len(),
             |i| (parsed_args[i].name, parsed_args[i]),
             |arg| arg.span,
@@ -1275,8 +1276,8 @@ impl TypedProgram {
             "type ",
         )?;
         let mut ordered_args: TmpList<NamedTypeArg> = self.tmp.new_list(params_len as u32);
-        for placed_arg in placed {
-            let Some(parsed_arg) = placed_arg else {
+        for placed_arg in placed.as_slice() {
+            let Some(parsed_arg) = *placed_arg else {
                 kbail!(
                     self,
                     span,
@@ -1297,9 +1298,13 @@ impl TypedProgram {
         span: Span,
         scope_id: ScopeId,
     ) -> K1Result<TmpSlice<CallTypeArg>> {
-        let mut placed: SV8<Option<NamedTypeArg>> = smallvec![None; type_params.len()];
+        if parsed_args.is_empty() {
+            return Ok(MSlice::empty());
+        }
+        let mut placed_args: TmpList<Option<NamedTypeArg>> = self.tmp.new_list(type_params.len() as u32);
+        placed_args.fill_to_cap(None);
         self.place_args(
-            &mut placed,
+            placed_args.as_slice_mut(),
             parsed_args.len(),
             |i| (parsed_args[i].name, parsed_args[i]),
             |arg| arg.span,
@@ -1307,11 +1312,11 @@ impl TypedProgram {
             span,
             "type ",
         )?;
-        let infers_unplaced = parsed_args.iter().all(|arg| arg.name.is_some());
-        let mut call_type_args: TmpList<CallTypeArg> = self.tmp.new_list(type_params.len() as u32);
-        for placed_arg in placed {
-            call_type_args.push(match placed_arg {
-                None if infers_unplaced => CallTypeArg::Inferred,
+        let all_named = parsed_args.iter().all(|arg| arg.name.is_some());
+        let mut call_type_args: TmpList<CallTypeArg> = self.tmp.new_list(parsed_args.len() as u32);
+        for (param_index, placed_arg) in placed_args.as_slice().iter().enumerate() {
+            match *placed_arg {
+                None if all_named => {}
                 None => kbail!(
                     self,
                     span,
@@ -1319,11 +1324,12 @@ impl TypedProgram {
                     type_params.len(),
                     parsed_args.len()
                 ),
-                Some(arg) => CallTypeArg::Passed {
+                Some(arg) => call_type_args.push(CallTypeArg {
+                    param_index: param_index as u32,
                     type_id: self.eval_type_expr(arg.type_expr, scope_id)?,
                     span: arg.span,
-                },
-            });
+                }),
+            }
         }
         Ok(call_type_args.to_slice())
     }

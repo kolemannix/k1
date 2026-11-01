@@ -546,14 +546,12 @@ impl TypedProgram {
         debug!("infer_and_constrain_call_type_args");
         debug_assert!(generic_function_sig.has_type_params());
         let type_params = generic_function_sig.type_params;
-        let mut passed_types: SV4<TypeId> = smallvec![];
-        for call_type_arg in call_type_args {
-            if let CallTypeArg::Passed { type_id, .. } = call_type_arg {
-                passed_types.push(*type_id);
+        let solved_type_params = if call_type_args.len() == type_params.len() as usize {
+            let mut passed_types: TmpList<TypeId> = self.tmp.new_list(type_params.len());
+            for call_type_arg in call_type_args {
+                passed_types.push(call_type_arg.type_id);
             }
-        }
-        let solved_type_params = if passed_types.len() == type_params.len() as usize {
-            self.tmp.pushn(&passed_types)
+            passed_types.to_slice()
         } else {
             let return_type = self
                 .types
@@ -595,10 +593,10 @@ impl TypedProgram {
             self.mem.getn(type_params),
             self.tmp.getn(solved_type_params),
         );
-        for (pair, call_type_arg) in params_to_solutions_pairs.iter().zip(call_type_args) {
-            let span = match call_type_arg {
-                CallTypeArg::Passed { span, .. } => *span,
-                CallTypeArg::Inferred => call_span,
+        for (index, pair) in params_to_solutions_pairs.iter().enumerate() {
+            let span = match call_type_args.iter().find(|arg| arg.param_index == index as u32) {
+                Some(call_type_arg) => call_type_arg.span,
+                None => call_span,
             };
             self.check_type_constraints(
                 pair.from,
@@ -631,14 +629,12 @@ impl TypedProgram {
     ) -> TmpSlice<InferenceInputPair> {
         let mut pairs: TmpList<InferenceInputPair> =
             self.tmp.new_list(type_params.len() as u32 + 1 + args_and_params.args.len());
-        for (param, call_type_arg) in type_params.iter().zip(call_type_args) {
-            if let CallTypeArg::Passed { type_id, .. } = call_type_arg {
-                pairs.push(InferenceInputPair {
-                    arg: TypeOrParsedExpr::Type(*type_id),
-                    param_type: *param,
-                    allow_mismatch: false,
-                });
-            }
+        for call_type_arg in call_type_args {
+            pairs.push(InferenceInputPair {
+                arg: TypeOrParsedExpr::Type(call_type_arg.type_id),
+                param_type: type_params[call_type_arg.param_index as usize],
+                allow_mismatch: false,
+            });
         }
         if let Some(expected) = expected_type {
             pairs.push(InferenceInputPair {

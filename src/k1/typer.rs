@@ -1100,9 +1100,10 @@ pub struct AddressOfExpr {
 }
 
 #[derive(Clone, Copy)]
-pub enum CallTypeArg {
-    Passed { type_id: TypeId, span: Span },
-    Inferred,
+pub struct CallTypeArg {
+    pub param_index: u32,
+    pub type_id: TypeId,
+    pub span: Span,
 }
 
 #[derive(Clone)]
@@ -10838,9 +10839,17 @@ impl TypedProgram {
             )?,
         };
 
+        let call_type_args = match ability_call_type_args {
+            Some(type_args) => type_args,
+            None => self.eval_call_type_args(
+                self.mem.getn(signature.type_params),
+                passed_type_args,
+                span,
+                ctx.scope_id,
+            )?,
+        };
         let (callee, typechecked_arguments, type_args) = match is_generic {
             false => {
-                self.eval_call_type_args(&[], passed_type_args, span, ctx.scope_id)?;
                 let args_and_params = self.align_args_with_params(
                     bound_args,
                     fn_call,
@@ -10949,15 +10958,6 @@ impl TypedProgram {
                         type_args
                     }
                     _ => {
-                        let call_type_args = match ability_call_type_args {
-                            Some(type_args) => type_args,
-                            None => self.eval_call_type_args(
-                                self.mem.getn(signature.type_params),
-                                passed_type_args,
-                                span,
-                                ctx.scope_id,
-                            )?,
-                        };
                         let type_args = self.infer_and_constrain_call_type_args(
                             fn_call,
                             self.tmp.getn(call_type_args),
@@ -12589,16 +12589,16 @@ impl TypedProgram {
                     _ => None,
                 };
                 if let Some(expr_type) = expr_type {
-                    let implements_try = self
-                        .find_or_generate_ability_impl_for_type(
+                    let implements_try = matches!(
+                        self.find_valid_ability_impl(
                             expr_type,
                             self.builtin_abilities.try_,
                             &[],
-                            true,
                             block_scope,
                             stmt_span,
-                        )
-                        .is_ok();
+                        ),
+                        Ok(Some(_))
+                    );
                     if implements_try {
                         self.report(kwarn!(
                             self,
@@ -13525,9 +13525,11 @@ impl TypedProgram {
 
         let parsed_args = self.ast.mem.getn(ability_expr.args);
         let ability_params = self.mem.getn(ability_parameters);
-        let mut placed_args: SV8<Option<NamedTypeArg>> = smallvec![None; ability_params.len()];
+        let mut placed_args: TmpList<Option<NamedTypeArg>> =
+            self.tmp.new_list(ability_params.len() as u32);
+        placed_args.fill_to_cap(None);
         self.place_args(
-            &mut placed_args,
+            placed_args.as_slice_mut(),
             parsed_args.len(),
             |i| (parsed_args[i].name, parsed_args[i]),
             |arg| arg.span,
@@ -13547,8 +13549,8 @@ impl TypedProgram {
                 false
             }
         };
-        for (param, placed_arg) in ability_params.iter().zip(placed_args) {
-            let Some(arg) = placed_arg else {
+        for (param, placed_arg) in ability_params.iter().zip(placed_args.as_slice()) {
+            let Some(arg) = *placed_arg else {
                 if is_lookup && param.is_impl_param {
                     impl_arguments.push(param.type_variable_id);
                     continue;
