@@ -5748,7 +5748,7 @@ impl TypedProgram {
         let (block_try_impl, _) = self.expect_ability_impl(
                     block_return_type,
                     try_ability,
-                    true,
+                    false,
                     scope_id,
                     span,
                 ).map_err(|mut e| {
