@@ -1524,9 +1524,10 @@ impl TypedProgram {
     ) -> FileId {
         let (source, line) = self.get_span_location(span);
         let line_number = line.line_number();
+        let column = source.local_from_global_offset(span.global_start) - line.start_char;
         let stem = source.filename_str(&self.ast.idents).strip_suffix(".k1").unwrap();
-        let serial = self.emitted_sources.len() + 1;
-        let generated_filename = k1_format!(self, &(), "meta_{stem}_{line_number}_{serial}.k1");
+        let hash = xxhash_rust::xxh3::xxh3_64_with_seed(content.as_bytes(), column as u64) as u32;
+        let generated_filename = k1_format!(self, &(), "meta_{stem}_{line_number}_{hash:08x}.k1");
         let generated_path = kpath::join_id(
             &self.ast.idents,
             &mut self.tmp,
@@ -1557,22 +1558,47 @@ impl TypedProgram {
         }
     }
 
-    /// Emitted sources accumulate in the sources pool during typechecking; this
-    /// writes them out for inspection in one pass, off the expansion path
-    pub fn write_emitted_sources(&self) {
+    pub fn write_emitted_sources(&self, write_all: bool) {
+        use std::os::unix::fs::OpenOptionsExt;
         let start = std::time::Instant::now();
+        let mut current: fxhash::FxHashSet<&str> = fxhash::FxHashSet::default();
+        let mut written = 0usize;
         for emitted in &self.emitted_sources {
-            if emitted.write_out {
-                let source = self.ast.sources.get(emitted.file_id);
-                let path = self.ast.idents.get_string(source.file_path);
-                if let Err(e) = std::fs::write(Path::new(path), source.content(&self.ast.mem)) {
-                    eprintln!("Failed to write out generated metaprogram at {path}. {e}");
+            let source = self.ast.sources.get(emitted.file_id);
+            let path = self.ast.idents.get_string(source.file_path);
+            current.insert(kpath::file_name(path));
+            if !write_all && !emitted.write_out {
+                continue;
+            }
+            let content = source.content(&self.ast.mem);
+            if std::fs::metadata(Path::new(path)).is_ok_and(|m| m.len() == content.len() as u64) {
+                continue;
+            }
+            let _ = std::fs::remove_file(Path::new(path));
+            let result = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o444)
+                .open(Path::new(path))
+                .and_then(|mut file| std::io::Write::write_all(&mut file, content.as_bytes()));
+            match result {
+                Ok(()) => written += 1,
+                Err(e) => eprintln!("Failed to write out generated metaprogram at {path}. {e}"),
+            }
+        }
+        let mut swept = 0usize;
+        let dir = Path::new(self.ident_str(self.config.out_dir_generated));
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let is_current = entry.file_name().to_str().is_some_and(|n| current.contains(n));
+                if !is_current && std::fs::remove_file(entry.path()).is_ok() {
+                    swept += 1;
                 }
             }
         }
         if self.config.tools.chatty {
             let elapsed = start.elapsed();
-            eprintln!("Wrote {} emitted sources in {:.2?}", self.emitted_sources.len(), elapsed);
+            eprintln!("Wrote {written} emitted sources, swept {swept} stale in {elapsed:.2?}");
             let mut real_files = 0usize;
             let mut real_bytes = 0usize;
             let mut emitted_bytes = 0usize;

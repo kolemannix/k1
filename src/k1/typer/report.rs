@@ -201,22 +201,17 @@ impl TypedProgram {
         }
     }
 
-    /// Follows argument text back to the call it was written in; template
-    /// text and glue land outside the call span and yield None
-    pub fn remap_call_arg_span(&self, mut span: Span) -> Option<Span> {
+    pub fn remap_call_arg_span(&self, mut span: Span) -> Span {
         for _ in 0..16 {
-            if self.emitted_source_for_file(self.ast.sources.file_of(span.global_start)).is_none() {
-                return Some(span);
-            }
-            let (remapped, table) = self.remap_span_hop(span)?;
+            let Some((remapped, table)) = self.remap_span_hop(span) else { break };
             if remapped.global_start < table.call_span.global_start
                 || remapped.end() > table.call_span.end()
             {
-                return None;
+                break;
             }
             span = remapped;
         }
-        None
+        span
     }
 
     pub fn report_ext(&mut self, e: K1Message, no_print: bool) {

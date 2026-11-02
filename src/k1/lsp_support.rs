@@ -165,7 +165,7 @@ pub fn get_entity_definition_span(k1: &TypedProgram, entity_kind: LsEntityKind) 
             }
         },
     };
-    k1.remap_span(span)
+    k1.remap_call_arg_span(span)
 }
 
 /// Replace the identifier word containing `offset` with the completion marker
@@ -193,7 +193,7 @@ pub fn splice_completion_marker(content: &str, mut offset: usize) -> String {
 pub fn scope_at_point(k1: &TypedProgram, file_id: FileId, line: u32, col: u32) -> Option<ScopeId> {
     let mut best: Option<(ScopeId, u32)> = None;
     for (expr_id, expr_span) in k1.exprs.spans.iter_with_ids() {
-        let Some(span) = k1.remap_call_arg_span(*expr_span) else { continue };
+        let span = k1.remap_call_arg_span(*expr_span);
         if !is_point_in_span(&k1.ast, file_id, line, col, span) {
             continue;
         }
@@ -545,7 +545,7 @@ pub fn get_expr_at_point(
 ) -> Option<String> {
     let mut matching_exprs: SV8<_> = smallvec![];
     for (expr_id, expr_span) in k1.exprs.spans.iter_with_ids() {
-        let Some(span) = k1.remap_call_arg_span(*expr_span) else { continue };
+        let span = k1.remap_call_arg_span(*expr_span);
         if is_point_in_span(&k1.ast, file, line_index, char_index, span) {
             matching_exprs.push((expr_id, span.len));
         }
@@ -605,15 +605,17 @@ mod completion_tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join(format!("{test_name}.k1"));
         std::fs::write(&path, content).unwrap();
+        let completion = spliced.is_some();
         let mut source_overlay = fxhash::FxHashMap::default();
         if let Some(spliced) = spliced {
             source_overlay.insert(crate::kpath::canonicalize_owned(&path).unwrap(), spliced);
         }
         let mut request = CompileRequest::new(path, Command::Check, None).unwrap();
         request.tools.cache = false;
+        request.build.editor = true;
         request.lsp = LspCompileOptions {
             source_overlay,
-            completion: true,
+            completion,
             progress_sink: None,
             host_mode: crate::compiler::HostProgramMode::Discard,
         };
@@ -1086,6 +1088,35 @@ fn use-it(): int { my-ns/go() }
             source.local_from_global_offset(definition.global_start) - defn_line.start_char,
             col
         );
+
+        let go = entity_at(&k1, "goto_defn_macro", DEFN_MACRO_SRC, "go() }").expect("entity at go");
+        let go_definition = get_entity_definition_span(&k1, go.kind);
+        assert_eq!(k1.ast.sources.get_span_content(&k1.ast.mem, go_definition), "go");
+        let generated = k1.ast.sources.source_by_span(go_definition);
+        let generated_path = k1.ast.idents.get_string(generated.file_path).to_string();
+        let on_disk = std::fs::read_to_string(&generated_path).unwrap();
+        assert_eq!(on_disk, generated.content(&k1.ast.mem));
+        let go_line = generated.get_line_for_span_start(&k1.ast.mem, go_definition).unwrap();
+        let go_col =
+            generated.local_from_global_offset(go_definition.global_start) - go_line.start_char;
+        let inside = find_entity_at_point(&k1, generated.file_id, go_line.line_index, go_col)
+            .expect("entity inside the generated file");
+        assert_eq!(get_entity_definition_span(&k1, inside.kind), go_definition);
+
+        let list_generated = || {
+            let mut names = vec![];
+            for entry in std::fs::read_dir(crate::kpath::parent(&generated_path)).unwrap() {
+                names.push(entry.unwrap().file_name());
+            }
+            names.sort();
+            names
+        };
+        let before = list_generated();
+        compile_check("goto_defn_macro", DEFN_MACRO_SRC, None);
+        assert_eq!(list_generated(), before);
+        compile_check("goto_defn_macro", &DEFN_MACRO_SRC.replace("{ 7 }", "{ 8 }"), None);
+        assert!(!std::path::Path::new(&generated_path).exists());
+        assert_eq!(list_generated().len(), before.len());
     }
 
     const HOVER_DEFN_SRC: &str = r#"

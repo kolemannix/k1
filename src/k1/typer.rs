@@ -17051,12 +17051,15 @@ impl TypedProgram {
 
     fn emit_ls_entity(&self, span: Span, kind: LsEntityKind) {
         if cfg!(feature = "lsp") {
-            let Some(span) = self.remap_call_arg_span(span) else { return };
+            let call_span = self.remap_call_arg_span(span);
+            let spans: &[Span] = if call_span == span { &[span] } else { &[span, call_span] };
             let mut ls_entities = self.ls_entities.borrow_mut();
-            let file_id = self.ast.sources.file_of(span.global_start);
-            let entities_entry = ls_entities.entry(file_id);
-            let entities = entities_entry.or_insert_with(|| Vec::with_capacity(128));
-            entities.push(LsEntity { kind, span });
+            for &span in spans {
+                let file_id = self.ast.sources.file_of(span.global_start);
+                let entities_entry = ls_entities.entry(file_id);
+                let entities = entities_entry.or_insert_with(|| Vec::with_capacity(128));
+                entities.push(LsEntity { kind, span });
+            }
         }
     }
 

@@ -1488,7 +1488,8 @@ pub fn compile_program(
     ast.name_id = module_name;
 
     let out_dir = kpath::join_id(&ast.idents, &mut ast.mem, home_dir, ".k1-out");
-    let out_dir_generated = kpath::join_id(&ast.idents, &mut ast.mem, out_dir, "generated");
+    let out_dir_generated =
+        kpath::join_id(&ast.idents, &mut ast.mem, out_dir, ("generated", module_name));
     let cache_dir = kpath::join_id(&ast.idents, &mut ast.mem, out_dir, crate::snap::CACHE_DIR_NAME);
     std::fs::create_dir_all(Path::new(ast.idents.get_string(out_dir_generated))).unwrap();
 
@@ -1563,7 +1564,9 @@ pub fn compile_program(
         k1.host_program = host_program;
     }
 
-    k1.write_emitted_sources();
+    if !k1.lsp.completion {
+        k1.write_emitted_sources(build.editor);
+    }
     if tools.dump_module {
         write_program_dump(&k1);
     }

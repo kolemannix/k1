@@ -486,10 +486,13 @@ impl Backend {
         overlay: &fxhash::FxHashMap<String, String>,
     ) -> Option<PathBuf> {
         let file_path = k1::kpath::canonicalize_owned(file_url.to_file_path().ok()?).ok()?;
-        let in_plan = self
-            .with_k1(|k1| k1.plan.find_owning_module(&file_path, overlay).is_some())
+        let covered = self
+            .with_k1(|k1| {
+                k1.plan.find_owning_module(&file_path, overlay).is_some()
+                    || uri_to_source(&k1.ast, file_url).is_some()
+            })
             .unwrap_or(false);
-        if in_plan && let Some(stored) = self.src_path.read().unwrap().clone() {
+        if covered && let Some(stored) = self.src_path.read().unwrap().clone() {
             return Some(stored);
         }
         let root = self.workspace_root.read().unwrap().clone();
@@ -1133,6 +1136,7 @@ fn find_references(
     let mut spans: Vec<Span> = Vec::new();
     for entities in k1.ls_entities.borrow().values() {
         for entity in entities {
+            let span = k1.remap_call_arg_span(entity.span);
             let is_defn = match (ls_entity.kind, entity.kind) {
                 (
                     LsEntityKind::Function { function_id: target, .. },
@@ -1146,16 +1150,16 @@ fn find_references(
                     if k1.abilities.get(ability_id).base_ability_id
                         == k1.abilities.get(target).base_ability_id =>
                 {
-                    entity.span == defn_span
+                    span == defn_span
                 }
                 (
                     LsEntityKind::Variable { variable_id: target },
                     LsEntityKind::Variable { variable_id },
-                ) if variable_id == target => entity.span == defn_span,
+                ) if variable_id == target => span == defn_span,
                 _ => continue,
             };
             if include_declaration || !is_defn {
-                spans.push(entity.span);
+                spans.push(span);
             }
         }
     }

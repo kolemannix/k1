@@ -123,6 +123,9 @@ or codegen_llvm (binaries).
   an editor request (`req.editor`; the primary's `fn editor` lands in `plan.editor`;
   no client settings). Holds H as `host_program`, reuses it while the cached plan's
   `host_inputs_hash` matches, falls back to the last stored plan when H fails.
+  Editor compiles write every emission to `.k1-out/generated/<module>` (others only
+  `#debug` and errored ones); names are content-addressed, and each compile sweeps
+  the rest.
 - Dead: `codegen_legacy.rs.old`, `vmtw/`.
 
 ## Tests
