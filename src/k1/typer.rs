@@ -2699,6 +2699,7 @@ pub struct TypedProgram {
     /// Every metaprogram-emitted source, in emission order
     pub emitted_sources: Vec<EmittedSource>,
     pub emitted_parse_cache: hashbrown::HashTable<(u32, ParsedExprId)>,
+    pub debug_emissions: Option<Vec<u32>>,
 
     // For every static value, once evaluated, we store its runtime representation
     // here; the data lives in vm_static_stack
@@ -2910,6 +2911,7 @@ impl TypedProgram {
             ],
             emitted_sources: Vec::new(),
             emitted_parse_cache: hashbrown::HashTable::new(),
+            debug_emissions: None,
             vm_shared_static_stack: vm_static_stack,
             vm_global_constant_lookups,
             vm_static_value_lookups: FxHashMap::default(),
@@ -3591,7 +3593,6 @@ impl TypedProgram {
                     // walk in synth_address_of decides
                     let span = self.exprs.get_span(expr);
                     if let Ok(expr) = self.synth_address_of(expr, span, false) {
-                        // self.report_hint(span, "coerce address of");
                         return CheckExprTypeResult::Coerce(expr, "address_of");
                     }
                 }
@@ -5892,26 +5893,19 @@ impl TypedProgram {
     }
 
     fn eval_expr(&mut self, expr_id: ParsedExprId, ctx: EvalExprContext) -> K1Result<TypedExprId> {
-        let is_debug = self.ast.exprs.is_debug(expr_id);
-        let first_emission = self.emitted_sources.len();
-        let result = self.eval_expr_inner(expr_id, ctx);
-
-        if is_debug {
-            self.write_out_emissions_from(first_emission);
-            if let Ok(result_expr) = result {
-                let expr_span = self.ast.exprs.get_span(expr_id);
-                self.report_hint(
-                    expr_span,
-                    k1_format_user!(
-                        self,
-                        "DEBUG COMPILE DONE\n\n{}\n  type hint: {}`\n{}`",
-                        self.ast.get_span_content(expr_span),
-                        self.type_id_to_string_opt(ctx.expected_type_id),
-                        self.expr_to_string_with_type(result_expr)
-                    ),
-                );
-            }
-        };
+        if !self.ast.exprs.is_debug(expr_id) {
+            return self.eval_expr_inner(expr_id, ctx);
+        }
+        let (result, emissions) =
+            self.collect_debug_emissions(|k1| k1.eval_expr_inner(expr_id, ctx));
+        if !ctx.is_speculative() {
+            let typed = match result {
+                Ok(result_expr) => Some((result_expr, ctx.expected_type_id)),
+                Err(_) => None,
+            };
+            let span = self.ast.exprs.get_span(expr_id);
+            self.report_debug_compile(span, &emissions, result.is_ok(), typed);
+        }
         result
     }
 
@@ -16572,19 +16566,24 @@ impl TypedProgram {
                     let static_ctx = StaticExecContext { expected_return_type: Some(I32_TYPE_ID) };
                     let eval_expr_ctx =
                         EvalExprContext::make(namespace_scope_id).with_static_ctx(Some(static_ctx));
-                    let first_emission = self.emitted_sources.len();
-                    let newly_parsed_defns =
-                        match self.compile_static_or_meta(static_expr_id, s, true, eval_expr_ctx) {
-                            Err(e) => {
-                                self.report(e);
-                                MSlice::empty()
-                            }
-                            Ok(StaticExecutionResult::Definitions(defns)) => defns,
-                            Ok(StaticExecutionResult::TypedExpr(_)) => unreachable!(),
-                        };
-                    if self.ast.exprs.is_debug(static_expr_id) {
-                        self.write_out_emissions_from(first_emission);
-                    }
+                    let result = if self.ast.exprs.is_debug(static_expr_id) {
+                        let (result, emissions) = self.collect_debug_emissions(|k1| {
+                            k1.compile_static_or_meta(static_expr_id, s, true, eval_expr_ctx)
+                        });
+                        let span = self.ast.exprs.get_span(static_expr_id);
+                        self.report_debug_compile(span, &emissions, result.is_ok(), None);
+                        result
+                    } else {
+                        self.compile_static_or_meta(static_expr_id, s, true, eval_expr_ctx)
+                    };
+                    let newly_parsed_defns = match result {
+                        Err(e) => {
+                            self.report(e);
+                            MSlice::empty()
+                        }
+                        Ok(StaticExecutionResult::Definitions(defns)) => defns,
+                        Ok(StaticExecutionResult::TypedExpr(_)) => unreachable!(),
+                    };
                     let emitted = self.ast.mem.getn(newly_parsed_defns);
                     self.register_definitions(emitted, parsed_namespace_id, skip_defns);
                     for &d in emitted.iter().rev() {

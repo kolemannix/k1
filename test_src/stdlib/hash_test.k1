@@ -66,6 +66,9 @@ fn(test) map-churn() {
   }
   assert-equals(m.len(), 0)
   assert(m.capacity() <= 16)
+  let it = m.&.iterator()
+  assert(it.next() is :none)
+  assert-equals(it.pos, 0)
 }
 
 type fixmap-holder = { pad: u64, m: fixmap[int, int, 16], tail: u64 }
@@ -88,7 +91,7 @@ fn(test) fixmap-basics() {
 }
 
 fn(test) fixmap-full() {
-  let h: fixmap-holder = .{ pad = 1, m = fixmap/new(), tail = 2 }
+  let h: fixmap-holder = .{ pad = 1, m = .0, tail = 2 }
   for i in 0.until(15) { assert(h.m.try-insert(i, i * 10) is :ok) }
   assert(h.m.is-full())
   assert(h.m.try-insert(99, 1) is :err)

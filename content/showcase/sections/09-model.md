@@ -720,7 +720,7 @@ fn classify(s: shape): string {
 │       :square _ -> "square",
 ├─────
 │  Non-exhaustive match; this pattern is not covered:
-- :circle(_)
+│  - :circle(_)
 └────────────────────────────────────────╴
 Module model_matching_wrong failed compiling with 1 errors
 ```

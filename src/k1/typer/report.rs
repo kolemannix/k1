@@ -238,15 +238,9 @@ impl TypedProgram {
             }
         };
 
-        let skip_print = no_print || {
-            if e.level != MessageLevel::Error {
-                // Don't print warnings when errors are present
-                let has_errors = self.error_count() > 0;
-                has_errors
-            } else {
-                false
-            }
-        };
+        let skip_print = no_print
+            || (matches!(e.level, MessageLevel::Hint | MessageLevel::Warn)
+                && self.error_count() > 0);
 
         if !skip_print {
             self.trace_clear();
@@ -272,17 +266,6 @@ impl TypedProgram {
             level: MessageLevel::Warn,
             error_kind: ErrorKind::None,
         });
-    }
-
-    pub fn log_hint(&self, span: Span, message: impl AsRef<str>) {
-        let use_color = std::io::stderr().is_terminal();
-        let hint = K1Message {
-            message: self.ast.idents.intern(message),
-            span,
-            level: MessageLevel::Hint,
-            error_kind: ErrorKind::None,
-        };
-        self.write_error(&mut std::io::stderr(), &hint, use_color).unwrap();
     }
 
     pub fn write_error(

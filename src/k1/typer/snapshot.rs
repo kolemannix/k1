@@ -80,6 +80,7 @@ impl TypedProgram {
             config: _,
             plan: _,
             emitted_parse_cache: _,
+            debug_emissions: _,
             ast,
             functions,
             function_specializations: _,

@@ -152,13 +152,12 @@ ns for string {
     else                               .{ ptr = self.concat-char-in(allocator, '\0').data-ptr(), len = self.len() }
   }
 
-  // The scan is unbounded, so past the scalar head every load is w-aligned:
-  // an aligned load cannot cross a page, so it cannot fault before the NUL.
-  // The VM checks loads against allocation bounds, not pages, so static
-  // execution stays scalar
+  fn as-non-empty(self: string): ?string { if self.is-empty() :none else :some self }
+
   fn c-string-len(c-string: *u8): size {
     let start = c-string.as[ptr]
     if k1/is-static {
+      //nocommit would it be better and faster to just call strlen from static?
       let n = 0: size
       while start.add-bytes(n).ref[u8].* != 0u8 {
         n = n + 1

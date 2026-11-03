@@ -1962,7 +1962,9 @@ pub fn write_source_location(
         writeln!(w, "┌────────────────────────────────────────╴")?;
         writeln!(w, "{level_name}")?;
         if let Some(msg) = message {
-            writeln!(w, "│  {msg}")?;
+            for msg_line in msg.lines() {
+                writeln!(w, "│  {msg_line}")?;
+            }
         }
         writeln!(w, "└────────────────────────────────────────╴")?;
         return Ok(());
@@ -2009,7 +2011,9 @@ pub fn write_source_location(
         writeln!(w, "└─────")?;
     }
     if let Some(msg) = message {
-        writeln!(w, "│  {msg}")?;
+        for msg_line in msg.lines() {
+            writeln!(w, "│  {msg_line}")?;
+        }
         writeln!(w, "└────────────────────────────────────────╴")?;
     }
     Ok(())

@@ -59,7 +59,9 @@ let(context(impl writer)) out: *string-builder = sb.&  // ability-keyed
 - Emit conditions with explicit parens (`(not a) and b`).
 - `#debug name(...)`, `#debug $name(...)` and `#debug #meta ...` write every
   expansion made while evaluating the marked expression to `.k1-out/generated/`
-  and name each on stderr. An emitted file's header names the macro or `#meta`
+  and name each in an info diagnostic at the call, with the typed result for
+  an expression; speculative inference evals report nothing.
+  An emitted file's header names the macro or `#meta`
   block, the call site, the enclosing function with its type args, and the
   macro's static args. `#debug macro` does not parse.
 

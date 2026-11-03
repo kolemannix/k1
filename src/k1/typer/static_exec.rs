@@ -1461,7 +1461,10 @@ impl TypedProgram {
                         && self.mem.getn(emitted.entries) == self.tmp.getn(table)
                 })
                 .copied();
-            if let Some((_, cached_root)) = cached {
+            if let Some((emitted_index, cached_root)) = cached {
+                if let Some(log) = &mut self.debug_emissions {
+                    log.push(emitted_index)
+                }
                 let typed_metaprogram = self.eval_expr(cached_root, ctx)?;
                 return Ok(StaticExecutionResult::TypedExpr(typed_metaprogram));
             }
@@ -1541,6 +1544,9 @@ impl TypedProgram {
             self.emitted_sources.last().is_none_or(|e| e.file_id < file_id),
             "emitted_sources must stay sorted by file_id for binary search"
         );
+        if let Some(log) = &mut self.debug_emissions {
+            log.push(self.emitted_sources.len() as u32)
+        }
         self.emitted_sources.push(EmittedSource {
             file_id,
             call_span: span,
@@ -1550,12 +1556,46 @@ impl TypedProgram {
         file_id
     }
 
-    pub(super) fn write_out_emissions_from(&mut self, first: usize) {
-        for emitted in &mut self.emitted_sources[first..] {
+    pub(super) fn collect_debug_emissions<T>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> T,
+    ) -> (T, Vec<u32>) {
+        let outer = self.debug_emissions.replace(Vec::new());
+        let result = f(self);
+        let emissions = std::mem::replace(&mut self.debug_emissions, outer).unwrap_or_default();
+        if let Some(outer) = &mut self.debug_emissions {
+            outer.extend_from_slice(&emissions)
+        }
+        (result, emissions)
+    }
+
+    pub(super) fn report_debug_compile(
+        &mut self,
+        span: Span,
+        emissions: &[u32],
+        is_ok: bool,
+        typed: Option<(TypedExprId, Option<TypeId>)>,
+    ) {
+        let mut message =
+            String::from(if is_ok { "DEBUG COMPILE DONE" } else { "DEBUG COMPILE FAILED" });
+        for (i, &index) in emissions.iter().enumerate() {
+            if emissions[..i].contains(&index) {
+                continue;
+            }
+            let emitted = &mut self.emitted_sources[index as usize];
             emitted.write_out = true;
             let path = self.ast.sources.get(emitted.file_id).file_path;
-            eprintln!("#debug emission: {}", self.ast.idents.get_string(path));
+            message.push_str("\nemitted: ");
+            message.push_str(self.ast.idents.get_string(path));
         }
+        if let Some((expr, expected_type)) = typed {
+            message.push_str("\ntype hint: ");
+            message.push_str(&self.type_id_to_string_opt(expected_type));
+            message.push('\n');
+            message.push_str(&self.expr_to_string_with_type(expr));
+        }
+        let message = self.ast.idents.intern(message);
+        self.report(make_message(message, span, MessageLevel::Info));
     }
 
     pub fn write_emitted_sources(&self, write_all: bool) {

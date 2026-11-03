@@ -540,13 +540,12 @@ $fsm/define(door, {
 │     let cb-storage = code-builder/new()
 ├─────
 │  fsm `door`: state `locked` has no outgoing transition
-bc Execution Trace
-[00] core/platform/process/exit platform.k1:286
-[01] core/sys/exit builtin.k1:981
-[02] core/crash builtin.k1:1189
-[03] macro_state_machine_wrong/pre/fsm/define-impl macro_state_machine_wrong.k1:39
-[04] macro_state_machine_wrong/pre/fsm/define macro_state_machine_wrong.k1:66
-
+│  bc Execution Trace
+│  [00] core/platform/process/exit platform.k1:286
+│  [01] core/sys/exit builtin.k1:981
+│  [02] core/crash builtin.k1:1189
+│  [03] macro_state_machine_wrong/pre/fsm/define-impl macro_state_machine_wrong.k1:39
+│  [04] macro_state_machine_wrong/pre/fsm/define macro_state_machine_wrong.k1:66
 └────────────────────────────────────────╴
 Module macro_state_machine_wrong failed compiling with 1 errors
 ```

@@ -408,44 +408,20 @@ type map-iterator[k, v] = {
   remaining: size,
 }
 
-ns for map-iterator {
-  fn _next-live[k, v](self: *map-iterator[k, v], from: size): size {
-    let i = from
+impl[k, v] iterator[item = { key: k, value: v }] for map-iterator[k, v] {
+  fn next(self: *self): ?item {
+    if self.remaining == 0 return :none
+    let i = self.pos
     while i < self.entries.len and not map/_is-full(self.ctrl.index-unchecked(i).*) {
       i = i + 1
     }
-    i
-  }
-}
-
-impl[k, v] iterator[item = { key: k, value: v }] for map-iterator[k, v] {
-  fn next(self: *self): ?item {
-    let i = self._next-live(self.pos)
-    if i < self.entries.len {
-      self.pos = i + 1
-      self.remaining = self.remaining - 1
-      :some self.entries.index-unchecked(i).*
-    } else {
-      self.pos = i
-      :none
-    }
+    if i == self.entries.len return :none
+    self.pos = i + 1
+    self.remaining = self.remaining - 1
+    :some self.entries.index-unchecked(i).*
   }
   fn size-hint(self: *self): { at-least: size, at-most: ?size } {
     .{ at-least = self.remaining, at-most = :some self.remaining }
-  }
-  fn advance-by(self: *self, n: size): empty {
-    let advanced = 0
-    while advanced < n {
-      let i = self._next-live(self.pos)
-      if i < self.entries.len {
-        self.pos = i + 1
-        self.remaining = self.remaining - 1
-        advanced = advanced + 1
-      } else {
-        self.pos = i
-        return
-      }
-    }
   }
 }
 
@@ -546,9 +522,6 @@ impl[t] iterator[item = t] for set-iterator[t] {
   fn size-hint(self: *self): { at-least: size, at-most: ?size } {
     self.inner.size-hint()
   }
-  fn advance-by(self: *self, n: size): empty {
-    self.inner.advance-by(n)
-  }
 }
 
 impl[t] iterable[item = t, i = set-iterator[t]] for *set[t] {
@@ -568,7 +541,7 @@ impl[t: print] print for set[t] {
 
 type fixmap[k, v, n: static size] = {
   count: u32,
-  growth-left: u32,
+  used: u32,
   ctrl: array[u8, n],
   mirror: array[u8, 16],
   slots: array[{ key: k, value: v }, n],
@@ -582,9 +555,7 @@ ns for fixmap {
     if (n & (n - 1)) != 0 or n < map/MIRROR {
       crash("fixmap slot count must be a power of two, at least ${map/MIRROR}")
     }
-    let m: fixmap[k, v, n] = .0
-    m.growth-left = (n - 1).trunc[u32]
-    m
+    .0
   }
 
   fn(inline) cap[k, v, n](self: *fixmap[k, v, n]): size { self._slots() - 1 }
@@ -597,13 +568,13 @@ ns for fixmap {
     self.ctrl.memset(0)
     self.mirror.memset(0)
     self.count = 0
-    self.growth-left = self.cap().trunc[u32]
+    self.used = 0
   }
 
   fn(inline) _table[k, v, n](self: *fixmap[k, v, n]): map[k, v] {
     .{
       count = self.count.as-size(),
-      growth-left = self.growth-left.as-size(),
+      growth-left = self.cap() - self.used.as-size(),
       ctrl = .{ data = self.ctrl.data-ptr(), len = self._slots() + map/MIRROR },
       entries = self.slots.as-buffer(),
     }
@@ -611,7 +582,7 @@ ns for fixmap {
 
   fn(inline) _store[k, v, n](self: *fixmap[k, v, n], t: map[k, v]) {
     self.count = t.count.trunc[u32]
-    self.growth-left = t.growth-left.trunc[u32]
+    self.used = (self.cap() - t.growth-left).trunc[u32]
   }
 
   fn(noinline) _make-room[k, v, n](self: *fixmap[k, v, n], h: u64): size where k: hash {

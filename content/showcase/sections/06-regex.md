@@ -221,18 +221,17 @@ $regex/define(broken, "(ab|cd*")
 │   
 ├─────
 │  regex `(ab|cd*` at offset 7: expected `)`
-bc Execution Trace
-[00] core/platform/process/exit platform.k1:286
-[01] core/sys/exit builtin.k1:981
-[02] core/crash builtin.k1:1189
-[03] regex_dfa_wrong/pre/regex/parser/fail regex_dfa_wrong.k1:31
-[04] regex_dfa_wrong/pre/regex/parser/atom regex_dfa_wrong.k1:94
-[05] regex_dfa_wrong/pre/regex/parser/repeat regex_dfa_wrong.k1:77
-[06] regex_dfa_wrong/pre/regex/parser/concat regex_dfa_wrong.k1:67
-[07] regex_dfa_wrong/pre/regex/parser/alt regex_dfa_wrong.k1:50
-[08] regex_dfa_wrong/pre/regex/compile regex_dfa_wrong.k1:193
-[09] regex_dfa_wrong/pre/regex/define regex_dfa_wrong.k1:274
-
+│  bc Execution Trace
+│  [00] core/platform/process/exit platform.k1:286
+│  [01] core/sys/exit builtin.k1:981
+│  [02] core/crash builtin.k1:1189
+│  [03] regex_dfa_wrong/pre/regex/parser/fail regex_dfa_wrong.k1:31
+│  [04] regex_dfa_wrong/pre/regex/parser/atom regex_dfa_wrong.k1:94
+│  [05] regex_dfa_wrong/pre/regex/parser/repeat regex_dfa_wrong.k1:77
+│  [06] regex_dfa_wrong/pre/regex/parser/concat regex_dfa_wrong.k1:67
+│  [07] regex_dfa_wrong/pre/regex/parser/alt regex_dfa_wrong.k1:50
+│  [08] regex_dfa_wrong/pre/regex/compile regex_dfa_wrong.k1:193
+│  [09] regex_dfa_wrong/pre/regex/define regex_dfa_wrong.k1:274
 └────────────────────────────────────────╴
 Module regex_dfa_wrong failed compiling with 1 errors
 ```

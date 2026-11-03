@@ -60,8 +60,8 @@ type plan = { id: i64, name: string, is-main: bool, note: string }
 │   }
 ├─────
 │  dbx: column `note` (plan.note) can be null, and `plan.note` (string) can't hold null; make it an option
-  -- list-plans
-select id, name, is_main, note from plan order by id
+│    -- list-plans
+│  select id, name, is_main, note from plan order by id
 ```
 
 [stub: how it works: the macro is ordinary k1 running in the compiler's VM, calling sqlite3_prepare through FFI on the schema image; `column_decltype`, `table_column_metadata`; no SQL parser of its own]

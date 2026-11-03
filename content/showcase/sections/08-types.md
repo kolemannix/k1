@@ -192,7 +192,7 @@ fn classify(s: status): string {
 │       :not-found -> "client error",
 ├─────
 │  Non-exhaustive match; this pattern is not covered:
-- :teapot
+│  - :teapot
 └────────────────────────────────────────╴
 Module types_derive_variants_wrong failed compiling with 1 errors
 ```
