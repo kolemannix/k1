@@ -51,7 +51,7 @@ fn assert-wrapper-type[wrapper, inner]() {
 }
 
 ns for type-id {
-  fn struct-parts(self): { kind: record-kind, fields: type-schema:struct.fields } {
+  fn struct-parts(context locn: k1/source-location)(self): { kind: record-kind, fields: type-schema:struct.fields } {
     if self.schema() is {
       :struct s -> .{ kind = if s.packed :packed else :struct, fields = s.fields },
       :union u -> .{ kind = :union, fields = u.fields },
@@ -59,28 +59,28 @@ ns for type-id {
     }
   }
 
-  fn map-struct(self, map-type: some fn(type-id) -> type-id): type-id {
+  fn map-struct(context locn: k1/source-location)(self, map-type: some fn(type-id) -> type-id): type-id {
     let source = self.struct-parts()
     let fields: list[make-struct.fields.t] = list/with-capacity(source.fields.len())
     for source.fields { fields.push(.{ name = it.name, type = map-type(it.type-id) }) }
     make-struct(source.kind, fields.as-span())
   }
 
-  fn remove-fields(self, names: span[string]): type-id {
+  fn remove-fields(context locn: k1/source-location)(self, names: span[string]): type-id {
     let source = self.struct-parts()
     for name in names {
-      if not source.fields.exists(fn[name] f. f.name == name) crash("remove-fields: ${self.name()} has no field $name")
+      if not source.fields.exists(fn[name] f. f.name == name) crash("${self.name()} has no field $name")
     }
     let fields: list[make-struct.fields.t] = list/with-capacity(source.fields.len())
     for source.fields { if not names.contains(it.name) fields.push(.{ name = it.name, type = it.type-id }) }
     make-struct(source.kind, fields.as-span())
   }
 
-  fn combine-structs(self, other: type-id): type-id {
+  fn combine-structs(context locn: k1/source-location)(self, other: type-id): type-id {
     let a = self.struct-parts()
     let b = other.struct-parts()
     if a.kind != b.kind {
-      crash("combine-structs: ${self.name()} is a ${a.kind.enum-name()}, ${other.name()} is a ${b.kind.enum-name()}")
+      crash("${self.name()} is a ${a.kind.enum-name()}, ${other.name()} is a ${b.kind.enum-name()}")
     }
     let fields: list[make-struct.fields.t] = list/with-capacity(a.fields.len() + b.fields.len())
     for a.fields { fields.push(.{ name = it.name, type = it.type-id }) }
@@ -88,7 +88,7 @@ ns for type-id {
       if a.fields.find(fn[f] af. af.name == f.name) is {
         :none -> fields.push(.{ name = f.name, type = f.type-id }),
         :some af -> if af.type-id != f.type-id {
-          crash("combine-structs: field ${f.name} is ${af.type-id.name()} in ${self.name()}, ${f.type-id.name()} in ${other.name()}")
+          crash("field ${f.name} is ${af.type-id.name()} in ${self.name()}, ${f.type-id.name()} in ${other.name()}")
         },
       }
     }
@@ -96,8 +96,8 @@ ns for type-id {
   }
 }
 
-fn remove-fields[t](names: span[string]): type-id { id[t].remove-fields(names) }
-fn combine-structs[a, b](): type-id { id[a].combine-structs(id[b]) }
+fn remove-fields[t](context locn: k1/source-location)(names: span[string]): type-id { id[t].remove-fields(names) }
+fn combine-structs[a, b](context locn: k1/source-location)(): type-id { id[a].combine-structs(id[b]) }
 
 fn type-eq[a, b](): bool { types/id[a] == types/id[b] }
 

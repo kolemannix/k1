@@ -1,6 +1,7 @@
 // Copyright (c) 2026 knix
 // All rights reserved.
 
+use super::static_exec::EmissionOrigin;
 use super::*;
 use crate::compiler::{
     BuildConfig, BuildRequest, Command, CompileProgramError, CompilerConfig, LspCompileOptions,
@@ -548,7 +549,7 @@ impl TypedProgram {
                 });
             }
             let mut content = String::new();
-            self.write_meta_emission_header(&mut content, "configure", span, None);
+            self.write_meta_emission_header(&mut content, EmissionOrigin::Configure, span, None);
             let Some((content, table)) =
                 self.build_emitted_source(content, true, text, &code_spans)?
             else {

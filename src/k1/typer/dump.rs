@@ -74,24 +74,33 @@ impl TypedProgram {
 
     /// The generic's label plus the instance's type arguments
     pub fn specialization_label(&self, function_id: FunctionId) -> String {
+        let mut s = String::new();
+        self.display_specialization_label(&mut s, function_id).unwrap();
+        s
+    }
+
+    pub fn display_specialization_label<W: Write + ?Sized>(
+        &self,
+        w: &mut W,
+        function_id: FunctionId,
+    ) -> std::fmt::Result {
         let function = self.get_function(function_id);
         let Some(info) = function.specialization_info.as_ref() else {
-            return self.function_label(function_id);
+            return w.write_str(&self.function_label(function_id));
         };
-        let mut label = self.function_label(info.parent_function);
-        let mut args: Vec<String> = Vec::new();
-        for type_id in self.get_type_slice(info.type_arguments) {
-            args.push(self.type_id_to_string(*type_id));
+        w.write_str(&self.function_label(info.parent_function))?;
+        let mut separator = "[";
+        for args in [info.type_arguments, info.fnlike_type_arguments] {
+            for type_id in self.get_type_slice(args) {
+                w.write_str(separator)?;
+                separator = ", ";
+                self.display_type_id(w, *type_id, TypeDisplayMode::Name)?;
+            }
         }
-        for type_id in self.get_type_slice(info.fnlike_type_arguments) {
-            args.push(self.type_id_to_string(*type_id));
+        if separator == ", " {
+            w.write_str("]")?;
         }
-        if !args.is_empty() {
-            label.push('[');
-            label.push_str(&args.join(", "));
-            label.push(']');
-        }
-        label
+        Ok(())
     }
 
     pub fn scope_id_to_string(&self, scope_id: ScopeId) -> String {
