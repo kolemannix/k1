@@ -199,13 +199,14 @@ Module types_derive_variants_wrong failed compiling with 1 errors
 
 ## Struct transforms
 
-Two are built in:
+A struct transform is a function from `type-id` to `type-id`. `remove-fields`
+drops fields by name and `combine-structs` merges two structs:
 
 ```k1
 type user = { id: u64, name: string, password: string, email: string }
-type user-view = _struct_remove[user, { password: string }]
+type user-view = #type types/remove-fields[user](["password"])
 type audited = { created: u64, updated: u64 }
-type user-row = _struct_combine[user, audited]
+type user-row = #type types/combine-structs[user, audited]()
 ```
 
 ```k1
@@ -228,12 +229,11 @@ fn view(u: user): user-view {
 ada created 100
 ```
 
-Anything else is a function from `type-id` to `type-id`. Here's every field
-wrapped in `opt`:
+`map-struct` rewrites each field's type. Here's every field wrapped in `opt`:
 
 ```k1
   fn patch-of(t: types/type-id): types/type-id {
-    types/map-struct(t, fn f. types/make-instance(types/id[opt], [f]))
+    t.map-struct(fn f. types/make-instance(types/id[opt], [f]))
   }
 ```
 

@@ -1,5 +1,5 @@
 Carousel / tour pages
-- type-level programming: struct combine and struct remove, rewritten as types/struct-remove[s1](["field-names"])
+- type-level programming: struct transforms as compile-time functions, types/remove-fields[user](["password"]) and types/combine-structs[a, b]()
 - native hot-reload
 - simd-accelerated standard colllections and string
 - frictionless algebraic data modeling (anonymous sums and products, no ceremony collections `list[ast]`)

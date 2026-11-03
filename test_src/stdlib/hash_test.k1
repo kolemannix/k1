@@ -65,7 +65,7 @@ fn(test) map-churn() {
     round = round + 1
   }
   assert-equals(m.len(), 0)
-  assert(m.capacity() <= 16)
+  assert(m.cap() <= 14)
   let it = m.&.iterator()
   assert(it.next() is :none)
   assert-equals(it.pos, 0)
@@ -150,7 +150,7 @@ fn(test) fixset-basics() {
 fn(test) map-remove-in-scrambled-order() {
   let m = map/with-capacity[int, int](12)
   for i in 0.until(12) { m.insert(i * 7919, i) }
-  assert-equals(m.capacity(), 16)
+  assert-equals(m.cap(), 14)
   let removed = set/new[int]()
   for i in 0.until(12) {
     let victim = (i * 7) % 12
@@ -168,7 +168,7 @@ fn(test) map-remove-in-scrambled-order() {
 
 fn(test) map-tombstones() {
   let m = map/with-capacity[int, int](14)
-  assert-equals(m.capacity(), 16)
+  assert-equals(m.cap(), 14)
   let kept: list[int] = []
   for round in 0.until(200) {
     for i in 0.until(10) {
@@ -184,5 +184,5 @@ fn(test) map-tombstones() {
     for key in kept { assert-equals(m.get(key), :some (key * 2)) }
     assert(m.get(round * 100 + 1) is :none)
   }
-  assert(m.capacity() <= 64)
+  assert(m.cap() <= 56)
 }

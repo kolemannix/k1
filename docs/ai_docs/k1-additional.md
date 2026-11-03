@@ -127,7 +127,11 @@ ns pre { macro make-point(name: code) { "type $name = { x: i32, y: i32 }" } }
   `make-either(tag-type: ?type-id, variants)` / `make-either-default`
   (`variant-data[t]("a")`, `variant-empty("b")`), `make-reference`, `make-array`,
   `make-fn`, `make-instance`. Use with `type(alias) p = #type types/make-...`.
-  `types/map-struct(id, fn t. ...)` remaps each field's type, keeping packed or union.
+  On a struct, packed or union `id`, keeping its kind: `id.map-struct(fn t. ...)`
+  remaps each field's type, `id.remove-fields(["a"])` drops fields (an absent name
+  crashes), `id.combine-structs(b)` appends b's fields (kinds must match, a shared
+  name must agree in type). Type-param forms: `types/remove-fields[t](names)`,
+  `types/combine-structs[a, b]()`.
 
 ## dyn
 `dyn[ability[params bound]]` = `{ table: { fn ptr per dispatchable fn }, state: ptr }`.
@@ -141,7 +145,6 @@ state pointer means a dyn can't cross `#static` into a runtime constant.
 - `opaque[size, align]`. `union { a: u32, f: f32 }`: a literal sets at most one
   member, `.{}` is fully uninit. `packed { tag: u8, v: u64 }`: align 1, no padding;
   `.&` of a field warns. `types/assert-layout[t](size, align, [offsets])`.
-- `_struct_combine[a, b]`, `_struct_remove[t, { f: x }]`.
 - `let(returned) r: t = ...` names the return slot (RVO).
 - Settled: by-value aggregate params are not copied and may alias caller-reachable
   storage (`f(p.*, bump(p))` sees the bump). Only the sret slot never aliases an

@@ -2106,17 +2106,6 @@ pub fn make_message(message: StringId, span: Span, level: MessageLevel) -> K1Mes
     K1Message { message, span, level, error_kind }
 }
 
-/// thanks heather
-#[macro_export]
-macro_rules! panic_at_disco {
-    ($($format_args:expr),*) => {
-        {
-            let s: String = format!($($format_args),*);
-            panic!("Panic!! at disco!!!: {}", s)
-        }
-    };
-}
-
 #[macro_export]
 macro_rules! ice_span {
     ($k1:expr, $span:expr, $($format_args:expr),* $(,)?) => {

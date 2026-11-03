@@ -1,42 +1,31 @@
 // Represents an inline, 'pushable' contiguous collection of Ts, with a fixed capacity.
-// Storage is inline!
-//  
-// For example, a fixlist[byte, 10] is 14 bytes long, and looks like:
-// +--------+------+
-// |10 items|used  |
-// +--------+------+
-// 0    4
-type fixlist[t, n: static size] = { data: array[t, n], used: u32 }
+type fixlist[t, n: static size] = { len: u32, data: array[t, n] }
 ns for fixlist {
   fn(inline) cap[t, n: static size](_self: *fixlist[t, n]): size { n }
-  fn(inline) len[t, n](self: *fixlist[t, n]): size { self.used.as-size() }
+  fn(inline) len[t, n](self: *fixlist[t, n]): size { self.len.as-size() }
 
   fn zeroed[t, n](): fixlist[t, n] { .0 }
 
   fn uninit[t, n](): core/fixlist[t, n] {
-    .{ used = 0, data = uninit }
+    .{ len = 0, data = uninit }
   }
 
   fn clear[t, n](self: *fixlist[t, n]): empty {
-    self.used = 0
+    self.len = 0
   }
 
   fn push[t, n](self: *fixlist[t, n], value: t): empty {
-    let used: size = self.len()
-    if used < self.cap() {
-      self.data.[used] = value
-      self.used = used.trunc[u32] + 1
-    } else {
+    if self.try-push(value) is :err {
       let typename = types/name[type-of(self).value]
-      crash("$typename cannot fulfill push. ${used + 1} > ${self.cap()}")
+      crash("$typename cannot fulfill push. ${self.len() + 1} > ${self.cap()}")
     }
   }
 
   fn try-push[t, n](self: *fixlist[t, n], value: t): result[empty, empty] {
-    let used: size = self.len()
-    if used < self.cap() {
-      self.data.[used] = value
-      self.used = used.trunc[u32] + 1
+    let len = self.len()
+    if len < self.cap() {
+      self.data.[len] = value
+      self.len = len.trunc[u32] + 1
       :ok
     } else {
       :err
@@ -48,7 +37,7 @@ ns for fixlist {
     if needed <= self.cap() {
       let dst-slice = self.data.as-buffer().slice(start = self.len(), end = needed)
       buffer/copy(src = values.inner-buffer(), dst = dst-slice)
-      self.used = needed.trunc[u32]
+      self.len = needed.trunc[u32]
       :ok span/wrap-buffer(dst-slice)
     } else {
       :err
@@ -56,18 +45,16 @@ ns for fixlist {
   }
 
   fn push-n[t, n](self: *fixlist[t, n], values: span[t]): empty {
-    let result = self.try-push-n[t, n](values)
-    if result is :err { crash("fixlist out of space") }
+    if self.try-push-n(values) is :err {
+      let typename = types/name[type-of(self).value]
+      crash("$typename cannot fulfill push-n. ${self.len() + values.len()} > ${self.cap()}")
+    }
   }
 
   fn pop[t, n](self: *fixlist[t, n]): ?t {
-    if self.last() is {
-       :some t -> {
-         self.used = self.used - 1
-         :some t
-       },
-       :none -> :none
-    }
+    if self.len == 0 return :none
+    self.len = self.len - 1
+    :some self.data.[self.len()]
   }
 
 }

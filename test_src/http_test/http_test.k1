@@ -41,6 +41,7 @@ fn(test) test-routing() {
   assert(route-of(:HEAD, "/events?foo=1") is :ok :events)
   assert(route-of(:GET, "http://h/%65vents") is :ok :events)
   assert(route-of(:GET, "/files/a%20b/c") is :ok :files f and f.path == "a b/c")
+  assert(route-of(:GET, "/files/1/2/3/4/5/6/7/8/9/10/11/12/13/14/15/16/17") is :ok :files deep and deep.path == "1/2/3/4/5/6/7/8/9/10/11/12/13/14/15/16/17")
   assert(route-of(:POST, "/game/42/poke/") is :ok :game-poke p and p.id == 42)
   assert(route-of(:GET, "/game/42/poke") is :err :bad-method _)
   assert(route-of(:POST, "/game/18446744073709551617/poke") is :err :bad-param _)

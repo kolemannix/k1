@@ -30,7 +30,7 @@ cover.
   context parameters, named arguments, `fn(inline)`, `fn(extern)`.
 - Type-level expressions: `t.field`, `t:variant` for a payload type,
   `t.tag-enum`, `*t.value`, `type-of(f).return` and `.params`,
-  `array[t, n].element`, `type(alias)`, `_struct_combine`/`_struct_remove`.
+  `array[t, n].element`, `type(alias)`.
 - References and places: `.&`, `.*`, `*t` never null, `optref[t]`, `ptr`,
   assignment through places, `.[i].&`, patterns that bind references
   (`:ok(v)*`, `true***`), RVO and `let(returned)`.

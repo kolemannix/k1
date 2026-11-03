@@ -90,7 +90,7 @@ impl hash for bool {
 
 type map[k, v] = {
   count: size,
-  growth-left: size,
+  used: size,
   ctrl: buffer[u8],
   entries: buffer[{ key: k, value: v }],
 }
@@ -122,7 +122,7 @@ ns for map {
   fn _allocate[k, v, a: allocator](alloc: a, buckets: size): map[k, v] {
     .{
       count = 0,
-      growth-left = _capacity-of(buckets),
+      used = 0,
       ctrl = buffer/allocate-in[t = u8](alloc, buckets + MIRROR),
       entries = buffer/allocate-in[t = { key: k, value: v }](alloc, buckets),
     }
@@ -148,7 +148,7 @@ ns for map {
   fn is-empty[k, v](self: *map[k, v]): bool { self.count == 0 }
   fn non-empty[k, v](self: *map[k, v]): bool { self.count != 0 }
 
-  fn capacity[k, v](self: *map[k, v]): size { self.entries.len }
+  fn(inline) cap[k, v](self: *map[k, v]): size { _capacity-of(self.entries.len) }
 
   fn(inline) _group[k, v](self: *map[k, v], pos: size): vector[u8, GROUP] {
     vector/load-unchecked[u8, GROUP](self.ctrl.data-ptr().ref-at[u8](pos).as[ptr])
@@ -218,12 +218,12 @@ ns for map {
       }
     }
     fresh.count = old.count
-    fresh.growth-left = _capacity-of(buckets) - old.count
+    fresh.used = old.count
     self.* = fresh
     old._free(alloc)
   }
 
-  fn _rehash-in-place[k, v](self: *map[k, v], capacity: size) where k: hash {
+  fn _rehash-in-place[k, v](self: *map[k, v]) where k: hash {
     let buckets = self.entries.len
     let mask = buckets - 1
     for i in 0.until(buckets) {
@@ -256,11 +256,11 @@ ns for map {
       }
       i = i + 1
     }
-    self.growth-left = capacity - self.count
+    self.used = self.count
   }
 
   fn(inline) _claim[k, v](self: *map[k, v], idx: size, h: u64) {
-    if self.ctrl.index-unchecked(idx).* == EMPTY { self.growth-left = self.growth-left - 1 }
+    if self.ctrl.index-unchecked(idx).* == EMPTY { self.used = self.used + 1 }
     self._set-ctrl(idx, _h2(h))
     self.count = self.count + 1
   }
@@ -269,9 +269,8 @@ ns for map {
     if self.entries.len == 0 {
       self.* = _allocate(alloc, MIRROR)
     } else {
-      let capacity = _capacity-of(self.entries.len)
-      if self.count + 1 <= capacity >> 1 {
-        self._rehash-in-place(capacity)
+      if self.count + 1 <= self.cap() >> 1 {
+        self._rehash-in-place()
       } else {
         self._resize(alloc, self.entries.len * 2)
       }
@@ -284,7 +283,7 @@ ns for map {
       self._make-room(alloc, h)
     } else {
       let idx = self._find-insert-slot(h)
-      if self.ctrl.index-unchecked(idx).* == EMPTY and self.growth-left == 0 {
+      if self.ctrl.index-unchecked(idx).* == EMPTY and self.used == self.cap() {
         self._make-room(alloc, h)
       } else {
         idx
@@ -359,7 +358,7 @@ ns for map {
       self._set-ctrl(idx, DELETED)
     } else {
       self._set-ctrl(idx, EMPTY)
-      self.growth-left = self.growth-left + 1
+      self.used = self.used - 1
     }
     self.count = self.count - 1
   }
@@ -378,14 +377,14 @@ ns for map {
   fn clear[k, v](self: *map[k, v]) {
     self.ctrl.memset(0)
     self.count = 0
-    self.growth-left = _capacity-of(self.entries.len)
+    self.used = 0
   }
 
   fn dump[k, v](self: *map[k, v]) where k: print, v: print {
     let count = self.count
-    let growth-left = self.growth-left
+    let used = self.used
     let buckets = self.entries.len
-    println("count: $count, growth-left: $growth-left, buckets: $buckets")
+    println("count: $count, used: $used, buckets: $buckets")
     for c in self.ctrl.take(buckets) {
       print("  bucket $it-index: ")
       if c == EMPTY { println("empty") }
@@ -574,7 +573,7 @@ ns for fixmap {
   fn(inline) _table[k, v, n](self: *fixmap[k, v, n]): map[k, v] {
     .{
       count = self.count.as-size(),
-      growth-left = self.cap() - self.used.as-size(),
+      used = self.used.as-size(),
       ctrl = .{ data = self.ctrl.data-ptr(), len = self._slots() + map/MIRROR },
       entries = self.slots.as-buffer(),
     }
@@ -582,19 +581,19 @@ ns for fixmap {
 
   fn(inline) _store[k, v, n](self: *fixmap[k, v, n], t: map[k, v]) {
     self.count = t.count.trunc[u32]
-    self.used = (self.cap() - t.growth-left).trunc[u32]
+    self.used = t.used.trunc[u32]
   }
 
   fn(noinline) _make-room[k, v, n](self: *fixmap[k, v, n], h: u64): size where k: hash {
     let t = self._table()
-    t._rehash-in-place(self.cap())
+    t._rehash-in-place()
     self._store(t)
     t._find-insert-slot(h)
   }
 
   fn(inline) _claim-slot[k, v, n](self: *fixmap[k, v, n], t: *map[k, v], h: u64): ?size where k: hash {
     let idx = t._find-insert-slot(h)
-    if t.ctrl.index-unchecked(idx).* == map/EMPTY and t.growth-left == 0 {
+    if t.ctrl.index-unchecked(idx).* == map/EMPTY and t.used == self.cap() {
       if t.count == self.cap() return :none
       idx = self._make-room(h)
       t.* = self._table()

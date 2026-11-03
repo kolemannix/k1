@@ -1,5 +1,5 @@
 type spill-list[t, n: static size] = union {
-  inline: { len: u32, items: array[t, n] },
+  inline: fixlist[t, n],
   spilled: { marker: u32, list: list[t] },
 }
 
@@ -17,16 +17,16 @@ ns for spill-list {
     if self.is-spilled() {
       self.spilled.list.clear()
     } else {
-      self.inline.len = 0
+      self.inline.clear()
     }
   }
 
   fn(inline) len[t, n](self: *spill-list[t, n]): size {
-    if self.is-spilled() self.spilled.list.len else self.inline.len.as-size()
+    if self.is-spilled() self.spilled.list.len else self.inline.len()
   }
 
   fn(noinline) _spill[t, n](self: *spill-list[t, n], needed: size) {
-    let items = self.inline.items.&.as-buffer().slice(0, self.len())
+    let items = self.inline.&.as-buffer()
     let list = list/with-capacity-in[t = t](mem/current-arena(), needed.max(self.cap() * 2))
     list.append-buffer(items)
     self.spilled = .{ marker = SPILLED, list }
@@ -35,31 +35,18 @@ ns for spill-list {
   fn push[t, n](self: *spill-list[t, n], t: t) {
     if self.is-spilled() {
       self.spilled.list.push(t)
-    } else {
-      let len = self.len()
-      if len < self.cap() {
-        self.inline.items.[len] = t
-        self.inline.len = self.inline.len + 1
-      } else {
-        self._spill(len + 1)
-        self.spilled.list.push(t)
-      }
+    } else if self.inline.try-push(t) is :err {
+      self._spill(self.cap() + 1)
+      self.spilled.list.push(t)
     }
   }
 
   fn push-n[t, n](self: *spill-list[t, n], ts: span[t]) {
     if self.is-spilled() {
       self.spilled.list.append-span(ts)
-    } else {
-      let len = self.len()
-      let needed = len + ts.len()
-      if needed <= self.cap() {
-        buffer/copy(src = ts.inner-buffer(), dst = self.inline.items.&.as-buffer().slice(len, needed))
-        self.inline.len = needed.trunc[u32]
-      } else {
-        self._spill(needed)
-        self.spilled.list.append-span(ts)
-      }
+    } else if self.inline.try-push-n(ts) is :err {
+      self._spill(self.len() + ts.len())
+      self.spilled.list.append-span(ts)
     }
   }
 
@@ -72,7 +59,7 @@ ns for spill-list {
 impl[t, n: static size] as-buffer[t = t] for *spill-list[t, n] {
   fn as-buffer(self): buffer[t] {
     if self.is-spilled() self.spilled.list.as-buffer()
-    else self.inline.items.&.as-buffer().slice(0, self.len())
+    else self.inline.&.as-buffer()
   }
 }
 
@@ -83,19 +70,15 @@ impl[t, n: static size] index[key = size, t = t] for *spill-list[t, n] {
 impl[t, n: static size] as-span[t = t] for *spill-list[t, n] {
   fn as-span(self): span[t] {
     if self.is-spilled() self.spilled.list.as-span()
-    else self.inline.items.&.as-span().slice(0, self.len())
+    else self.inline.&.as-span()
   }
 }
 
 impl[t, n: static size] print for spill-list[t, n] {
   fn print-to[w: writer](self, w) {
-    if self.inline.len == spill-list/SPILLED {
-      w.write("spilled ")
-      self.spilled.list.len.print-to(w)
-    } else {
-      w.write("inline ")
-      self.inline.len.print-to(w)
-    }
+    let s = self
+    w.write(if s.&.is-spilled() "spilled " else "inline ")
+    s.&.len().print-to(w)
   }
 }
 

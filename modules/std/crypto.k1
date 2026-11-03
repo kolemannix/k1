@@ -1,6 +1,6 @@
 ns crypto
 
-type sha256 = { state: array[u32, 8], block: array[u8, 64], block-len: size, total-len: u64 }
+type sha256 = { state: array[u32, 8], block: fixlist[u8, 64], total-len: u64 }
 
 ns for sha256 {
   let INIT: array[u32, 8] = [
@@ -17,7 +17,7 @@ ns for sha256 {
     0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
   ]
 
-  fn new(): sha256 { .{ state = INIT, block = .0, block-len = 0, total-len = 0 } }
+  fn new(): sha256 { .{ state = INIT, block = .0, total-len = 0 } }
 
   fn compress(state: *array[u32, 8], block: ptr) {
     let w: array[u32, 64] = uninit
@@ -73,44 +73,32 @@ ns for sha256 {
   fn update(self: *self, data: span[u8]) {
     self.total-len = self.total-len + data.len().unsigned()
     let rest = data
-    if self.block-len > 0 {
-      let room = 64 - self.block-len
-      let take = if rest.len() < room rest.len() else room
-      buffer/copy(src = rest.take(take).inner-buffer(), dst = self.block.&.as-buffer().slice(self.block-len, self.block-len + take))
-      self.block-len = self.block-len + take
+    if self.block.&.non-empty() {
+      let take = rest.len().min(64 - self.block.len())
+      self.block.push-n(rest.take(take))
       rest = rest.drop(take)
-      if self.block-len < 64 return
-      compress(self.state.&, self.block.&.as[ptr])
-      self.block-len = 0
+      if self.block.len() < 64 return
+      compress(self.state.&, self.block.data.&.as[ptr])
+      self.block.clear()
     }
     while rest.len() >= 64 {
       compress(self.state.&, rest.data-ptr())
       rest = rest.drop(64)
     }
-    if rest.non-empty() {
-      buffer/copy(src = rest.inner-buffer(), dst = self.block.&.as-buffer().slice(0, rest.len()))
-      self.block-len = rest.len()
-    }
+    self.block.push-n(rest)
   }
 
   fn finish(self: *self): array[u8, 32] {
     let bit-len = self.total-len * 8
-    self.block.[self.block-len] = 0x80
-    self.block-len = self.block-len + 1
-    if self.block-len > 56 {
-      while self.block-len < 64 {
-        self.block.[self.block-len] = 0
-        self.block-len = self.block-len + 1
-      }
-      compress(self.state.&, self.block.&.as[ptr])
-      self.block-len = 0
+    self.block.push(0x80)
+    if self.block.len() > 56 {
+      while self.block.len() < 64 { self.block.push(0) }
+      compress(self.state.&, self.block.data.&.as[ptr])
+      self.block.clear()
     }
-    while self.block-len < 56 {
-      self.block.[self.block-len] = 0
-      self.block-len = self.block-len + 1
-    }
-    mem/write-unaligned(self.block.&.as[ptr].add-bytes(56), bit-len.swap-bytes())
-    compress(self.state.&, self.block.&.as[ptr])
+    while self.block.len() < 64 { self.block.push(0) }
+    mem/write-unaligned(self.block.data.&.as[ptr].add-bytes(56), bit-len.swap-bytes())
+    compress(self.state.&, self.block.data.&.as[ptr])
     let out: array[u8, 32] = uninit
     let i: size = 0
     while i < 8 {

@@ -12,6 +12,7 @@ fn module(): k1/module {
 
 let defines: span[string] = [
   "SQLITE_DQS=0",
+  "SQLITE_ENABLE_CARRAY",
   "SQLITE_ENABLE_COLUMN_METADATA",
   "SQLITE_DEFAULT_MEMSTATUS=0",
   "SQLITE_DEFAULT_WAL_SYNCHRONOUS=1",

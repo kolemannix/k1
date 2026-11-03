@@ -30,7 +30,7 @@ ns for pool {
     with-capacity-in[t, *core/arena](mem/current-arena(), capacity)
   }
 
-  fn capacity[t](self: *pool[t]): size { self.values.len - 1 }
+  fn cap[t](self: *pool[t]): size { self.values.len - 1 }
 
   fn len[t](self: *pool[t]): size { self.live.as-size() }
 
@@ -39,7 +39,7 @@ ns for pool {
   fn non-empty[t](self: *pool[t]): bool { self.live != 0 }
 
   fn is-full[t](self: *pool[t]): bool {
-    self.first-free == 0 and self.last-touched.as-size() == self.capacity()
+    self.first-free == 0 and self.last-touched.as-size() == self.cap()
   }
 
   fn(inline) is-live[t](self: *pool[t], handle: handle[t]): bool {
@@ -74,7 +74,7 @@ ns for pool {
       self.first-free = self.next-free.[index.as-size()]
       if self.first-free == 0 { self.last-free = 0 }
     } else {
-      if self.last-touched.as-size() == self.capacity() return .0
+      if self.last-touched.as-size() == self.cap() return .0
       self.last-touched = self.last-touched + 1
       index = self.last-touched
     }

@@ -1,13 +1,13 @@
 use pre/patch-of
 
 type user = { id: u64, name: string, password: string, email: string }
-type user-view = _struct_remove[user, { password: string }]
+type user-view = #type types/remove-fields[user](["password"])
 type audited = { created: u64, updated: u64 }
-type user-row = _struct_combine[user, audited]
+type user-row = #type types/combine-structs[user, audited]()
 
 ns pre {
   fn patch-of(t: types/type-id): types/type-id {
-    types/map-struct(t, fn f. types/make-instance(types/id[opt], [f]))
+    t.map-struct(fn f. types/make-instance(types/id[opt], [f]))
   }
 }
 

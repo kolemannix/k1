@@ -2,7 +2,6 @@
 // All rights reserved.
 
 use super::*;
-use crate::panic_at_disco;
 
 impl TypedProgram {
     pub(super) fn eval_type_defn(
@@ -361,11 +360,36 @@ impl TypedProgram {
             }
             ParsedTypeExpr::TypeApplication(ty_app) => {
                 let ty_app = *ty_app;
-                let type_op_result =
-                    self.detect_and_eval_type_operator(type_expr_id, scope_id, context)?;
-                match type_op_result {
-                    None => self.eval_type_application(ty_app, scope_id, context),
-                    Some(type_op_result) => Ok(type_op_result),
+                if ty_app.name.name != self.ast.idents.b.dyn_ || ty_app.name.has_path() {
+                    self.eval_type_application(ty_app, scope_id, context)
+                } else {
+                    // dyn
+                    if ty_app.args.len() != 1 {
+                        kbail!(self, ty_app.span, "Expected 1 type parameter for dyn");
+                    }
+                    let inner_type_expr_id = self.ast.mem.get_nth(ty_app.args, 0).type_expr;
+                    // dyn over an ability: the inner expr names an ability, which is not
+                    // a type, so it must be intercepted before type evaluation
+                    if let Some(object_type) =
+                        self.try_eval_dyn_ability_type(inner_type_expr_id, scope_id)?
+                    {
+                        return Ok(object_type);
+                    }
+                    let inner =
+                        self.eval_type_expr_ext(inner_type_expr_id, scope_id, context.descended())?;
+                    let Some(&inner_fn) = self.types.get(inner).as_function() else {
+                        kbail!(
+                            self,
+                            ty_app.span,
+                            "Expected function type or ability signature for dyn"
+                        );
+                    };
+                    let new_function_type = self.add_function_type(
+                        self.mem.getn(inner_fn.logical_params()),
+                        inner_fn.return_type,
+                        true,
+                    );
+                    Ok(self.add_lambda_object(new_function_type))
                 }
             }
             ParsedTypeExpr::Optional(opt) => {
@@ -713,143 +737,6 @@ impl TypedProgram {
                 let type_id = float_value.get_type();
                 Ok((self.static_values.add(StaticValue::Float(float_value)), type_id))
             }
-        }
-    }
-
-    /// Temporary home for our type operators until I decide on syntax
-    pub(super) fn detect_and_eval_type_operator(
-        &mut self,
-        ty_app_id: ParsedTypeExprId,
-        scope_id: ScopeId,
-        context: EvalTypeExprContext,
-    ) -> K1Result<Option<TypeId>> {
-        let ParsedTypeExpr::TypeApplication(ty_app) = self.ast.type_exprs.get(ty_app_id) else {
-            panic_at_disco!("Expected TypeApplication")
-        };
-        if ty_app.name.has_path() {
-            return Ok(None);
-        }
-        let ty_app = *ty_app;
-        match self.ident_str(ty_app.name.name) {
-            "dyn" => {
-                if ty_app.args.len() != 1 {
-                    kbail!(self, ty_app.span, "Expected 1 type parameter for dyn");
-                }
-                let inner_type_expr_id = self.ast.mem.get_nth(ty_app.args, 0).type_expr;
-                // dyn over an ability: the inner expr names an ability, which is not
-                // a type, so it must be intercepted before type evaluation
-                if let Some(object_type) =
-                    self.try_eval_dyn_ability_type(inner_type_expr_id, scope_id)?
-                {
-                    return Ok(Some(object_type));
-                }
-                let inner =
-                    self.eval_type_expr_ext(inner_type_expr_id, scope_id, context.descended())?;
-                let Some(&inner_fn) = self.types.get(inner).as_function() else {
-                    kbail!(
-                        self,
-                        ty_app.span,
-                        "Expected function type or ability signature for dyn"
-                    );
-                };
-                let new_function_type = self.add_function_type(
-                    self.mem.getn(inner_fn.logical_params()),
-                    inner_fn.return_type,
-                    true,
-                );
-                Ok(Some(self.add_lambda_object(new_function_type)))
-            }
-            "_struct_combine" => {
-                if ty_app.args.len() != 2 {
-                    kbail!(self, ty_app.span, "Expected 2 type parameters for _struct_combine");
-                }
-                let args = self.ast.mem.getn(ty_app.args);
-                let arg1 =
-                    self.eval_type_expr_ext(args[0].type_expr, scope_id, context.descended())?;
-                let arg2 =
-                    self.eval_type_expr_ext(args[1].type_expr, scope_id, context.descended())?;
-
-                let struct1 = *self
-                    .types
-                    .get(arg1)
-                    .as_struct()
-                    .ok_or_else(|| kerr!(self, ty_app.span, "Expected struct"))?;
-                let struct2 = *self
-                    .types
-                    .get(arg2)
-                    .as_struct()
-                    .ok_or_else(|| kerr!(self, ty_app.span, "Expected struct"))?;
-                let record_kind = struct1.record_kind;
-                if struct2.record_kind != record_kind {
-                    kbail!(
-                        self,
-                        ty_app.span,
-                        "Cannot combine a {} and a {}",
-                        struct1.record_kind.kind_name(),
-                        struct2.record_kind.kind_name(),
-                    );
-                }
-
-                let mut combined_fields =
-                    self.tmp.new_list(struct1.fields.len() + struct2.fields.len());
-                combined_fields.extend(self.mem.getn(struct1.fields));
-                for field in self.mem.getn(struct2.fields).iter() {
-                    let collision = combined_fields.iter().find(|f| f.name == field.name).copied();
-                    match collision {
-                        None => combined_fields.push(*field),
-                        Some(collision) if collision.type_id == field.type_id => {}
-                        Some(_) => {
-                            kbail!(
-                                self,
-                                ty_app.span,
-                                "Field '{}' has conflicting types in the two structs",
-                                self.ident_str(field.name).blue()
-                            );
-                        }
-                    }
-                }
-                Ok(Some(self.add_struct_type(combined_fields.as_slice(), record_kind)?))
-            }
-            "_struct_remove" => {
-                if ty_app.args.len() != 2 {
-                    kbail!(self, ty_app.span, "Expected 2 type parameters for _struct_remove");
-                }
-                let args = self.ast.mem.getn(ty_app.args);
-                let arg1 =
-                    self.eval_type_expr_ext(args[0].type_expr, scope_id, context.descended())?;
-                let arg2 =
-                    self.eval_type_expr_ext(args[1].type_expr, scope_id, context.descended())?;
-
-                let struct1 = self
-                    .types
-                    .get(arg1)
-                    .as_struct()
-                    .ok_or_else(|| kerr!(self, ty_app.span, "Expected struct"))?;
-                let struct2 = self
-                    .types
-                    .get(arg2)
-                    .as_struct()
-                    .ok_or_else(|| kerr!(self, ty_app.span, "Expected struct"))?;
-                let record_kind = struct1.record_kind;
-                if struct2.record_kind != record_kind {
-                    kbail!(
-                        self,
-                        ty_app.span,
-                        "Cannot combine a {} and a {}",
-                        struct1.record_kind.kind_name(),
-                        struct2.record_kind.kind_name(),
-                    );
-                }
-                let struct2_fields = self.mem.getn(struct2.fields);
-                let mut new_fields = self.tmp.new_list(struct1.fields.len());
-                for field in self.mem.getn(struct1.fields) {
-                    if !struct2_fields.iter().any(|f| f.name == field.name) {
-                        new_fields.push(*field);
-                    }
-                }
-                Ok(Some(self.add_struct_type(new_fields.as_slice(), record_kind)?))
-            }
-            _ => Ok(None),
         }
     }
 
@@ -1421,7 +1308,7 @@ impl TypedProgram {
         &mut self,
         ty_app: &parse::TypeApplication,
     ) -> K1Result<Option<TypeId>> {
-        if self.ident_str(ty_app.name.name) != "opaque" {
+        if ty_app.name.name != self.ast.idents.b.opaque {
             return Ok(None);
         }
         if ty_app.name.has_path() {

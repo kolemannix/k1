@@ -106,10 +106,10 @@ ns io {
       write-all(1, bytes.data-ptr(), bytes.len())
       return
     }
-    if stdout-buf.len() + bytes.len() > stdout-buf.cap() {
+    if stdout-buf.try-push-n(bytes) is :err {
       flush-stdout()
+      stdout-buf.push-n(bytes)
     }
-    stdout-buf.push-n(bytes)
     if stdout-buffering-mode() is :line and bytes.contains(10) {
       flush-stdout()
     }
@@ -118,8 +118,10 @@ ns io {
   impl writer for out-stream {
     fn write-byte(self, value: u8) {
       if self.file-no == 1 {
-        if stdout-buf.len() == stdout-buf.cap() flush-stdout()
-        stdout-buf.push(value)
+        if stdout-buf.try-push(value) is :err {
+          flush-stdout()
+          stdout-buf.push(value)
+        }
         if value == 10 and (stdout-buffering-mode() is :line) flush-stdout()
       } else {
         let value_spot = value

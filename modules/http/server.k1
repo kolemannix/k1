@@ -544,7 +544,7 @@ fn on-new-connection(listener: optref[libuv/stream], status: i32) {
     if uv/check(libuv/accept(listener, client.as-stream().as())) is :err e {
       tprintln("accept error while rejecting: $e")
     } else {
-      tprintln("at ${s.connections.capacity()} connections; rejecting")
+      tprintln("at ${s.connections.cap()} connections; rejecting")
       let response = "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
       let buf = libuv/buf/wrap-span(response.span-bytes())
       let written = libuv/try_write(client.as-stream().as(), buf.&.as(), 1)
