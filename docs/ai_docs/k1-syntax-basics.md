@@ -277,6 +277,8 @@ fn(test) checks-bounds() {
   `fn(test-runtime)` (FFI, threads, fork) / `fn(test-static)` opt out of one;
   `--skip-static` / `--skip-runtime` for the run. `k1 test . name` filters by
   qualified-name substring (`suite1/ns/name`).
+- The runtime runner lives in std, so `k1 test` on a no-std module runs statically
+  only (`--skip-static` is an error there).
 - `expect-failure` passes only if the test fails with the needle in its output or
   exit rendering ("exited with code 3", "killed by signal 6"); in-process runtimes
   (wasi, bare) skip it.

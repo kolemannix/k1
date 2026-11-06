@@ -29,7 +29,6 @@ fn main() -> anyhow::Result<ExitCode> {
             return Ok(ExitCode::FAILURE);
         }
     };
-    let command = request.build.command;
     let static_tests = request.tests.static_tests;
     let mut program = match compiler::compile_program(request) {
         Ok(program) => program,
@@ -43,6 +42,7 @@ fn main() -> anyhow::Result<ExitCode> {
             return Ok(ExitCode::FAILURE);
         }
     };
+    let command = program.config.command;
     if !command.codegens() || command == Command::Server {
         compiler::report_trace(&program);
     }

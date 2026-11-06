@@ -17,7 +17,7 @@ fn main(): i32 {
 ns pre { ns proto {
 
 fn read(file: string): string {
-  files/read-to-string("${k1/module-dir()}/$file").!
+  std/files/read-to-string("${k1/module-dir()}/$file").!
 }
 
 fn statements(src: string, kind: string, name: string): list[string] {

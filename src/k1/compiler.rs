@@ -1535,7 +1535,20 @@ pub fn compile_program(
         }
     }
 
-    let config = CompilerConfig { test: config.test || plan.editor.test_on_save, ..config };
+    // The runtime test runner lives in std, so a no-std module can only run static tests
+    let command = if config.command.is_test() && plan.config.no_std {
+        if !tests.static_tests {
+            return Err(CompileProgramError::Build(format!(
+                "{} is no-std: it has no runtime test runner, so --skip-static leaves nothing to run",
+                ast.idents.get_string(src_path)
+            )));
+        }
+        Command::Check
+    } else {
+        config.command
+    };
+    let config =
+        CompilerConfig { command, test: config.test || plan.editor.test_on_save, ..config };
     let snapshot_count = plan.modules().len() - 1;
     let (mut k1, sources) = open_program(ast, config, plan, lsp, snapshot_count);
     k1.trace.clock_start = clock_start;

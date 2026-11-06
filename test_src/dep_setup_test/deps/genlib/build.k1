@@ -3,5 +3,5 @@ fn module(): k1/module {
 }
 
 fn setup() {
-  core/files/write-entire-file("${k1/module-dir()}/gen.k1", "fn gen-value(): int { 42 }\n").!
+  std/files/write-entire-file("${k1/module-dir()}/gen.k1", "fn gen-value(): int { 42 }\n").!
 }

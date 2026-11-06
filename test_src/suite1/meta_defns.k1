@@ -28,7 +28,7 @@ ns meta_defns
   }`
 }
 
-#meta core/meta/define-soa[{ x: u32, y: u32, z: u8 }]("point3-list")
+#meta types/define-soa[{ x: u32, y: u32, z: u8 }]("point3-list")
 
 fn(test) items-from-meta-strings() {
   let frob: frob = .{ b = false }

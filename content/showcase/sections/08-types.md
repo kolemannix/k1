@@ -143,7 +143,7 @@ words:
 
 ```k1
 fn read(file: string): string {
-  files/read-to-string("${k1/module-dir()}/$file").!
+  std/files/read-to-string("${k1/module-dir()}/$file").!
 }
 ```
 

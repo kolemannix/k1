@@ -1,7 +1,6 @@
 ns sys
 
 use core/c-int
-use core/c-sizet
 
 #if k1/platform-macos fn(extern) _NSGetExecutablePath(buf: ptr, bufsize: ptr): c-int
 
@@ -27,7 +26,44 @@ fn exe-path(): string {
   }
 }
 
-fn fill-random(bytes: buffer[u8]) { core/platform/random/fill(bytes.data, bytes.len) }
+fn exit(code: i32): never { k1/program-exit(code) }
+
+fn env(name: string): ?string {
+  if k1/is-static posix/port/env-get(name)
+  else #if k1/platform is {
+    :posix-macos or :posix-linux -> posix/port/env-get(name),
+    :wasi -> wasi/env-get(name),
+    :bare -> bare/env-get(name)
+  }
+}
+
+// The k1 installation root: the K1_HOME env var when set (dev workflows point
+// it at a repo checkout), otherwise the installed location ~/.k1
+fn k1-home(): string {
+  if env("K1_HOME") is {
+    :some h -> h,
+    :none -> "${env("HOME").!}/.k1",
+  }
+}
+
+// Renders the errno-style codes carried by io-result and process errors
+fn error-string(code: i32): string {
+  if k1/is-static libc/strerror-string(code)
+  else #if k1/platform is {
+    :posix-macos or :posix-linux -> libc/strerror-string(code),
+    :wasi or :bare -> "error ${code}"
+  }
+}
+
+// Cryptographically secure host entropy
+fn fill-random(bytes: buffer[u8]) {
+  if k1/is-static posix/port/random-fill(bytes.data, bytes.len)
+  else #if k1/platform is {
+    :posix-macos or :posix-linux -> posix/port/random-fill(bytes.data, bytes.len),
+    :wasi -> wasi/random-fill(bytes.data, bytes.len),
+    :bare -> bare/random-fill(bytes.data, bytes.len)
+  }
+}
 
 // Unbiased bounded draw: reject below 2^32 mod upper-bound, arc4random_uniform's rule
 fn random(upper-bound: u32): u32 {

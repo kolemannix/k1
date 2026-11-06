@@ -1,0 +1,61 @@
+ns dylib {
+
+  type handle = { raw: ptr }
+
+  // Loads private and isolated (posix: RTLD_NOW | RTLD_LOCAL); no flag
+  // vocabulary crosses the boundary
+  fn open(path: string): ?handle {
+    let lib =
+      if k1/is-static posix/port/dylib-open(path)
+      else #if k1/platform is {
+        :posix-macos or :posix-linux -> posix/port/dylib-open(path),
+        :wasi -> crash("dylibs are not supported on wasi"),
+        :bare -> bare/dylib-open(path)
+      }
+    if lib.is-null() :none else :some(.{ raw = lib })
+  }
+
+  // The running program's own symbols
+  fn open-self(): handle {
+    let lib =
+      if k1/is-static posix/port/dylib-open-self()
+      else #if k1/platform is {
+        :posix-macos or :posix-linux -> posix/port/dylib-open-self(),
+        :wasi -> crash("dylibs are not supported on wasi"),
+        :bare -> bare/dylib-open-self()
+      }
+    .{ raw = lib }
+  }
+
+  fn sym(lib: handle, name: string): ?ptr {
+    let addr =
+      if k1/is-static posix/port/dylib-sym(lib.raw, name)
+      else #if k1/platform is {
+        :posix-macos or :posix-linux -> posix/port/dylib-sym(lib.raw, name),
+        :wasi -> crash("dylibs are not supported on wasi"),
+        :bare -> bare/dylib-sym(lib.raw, name)
+      }
+    if addr.is-null() :none else :some(addr)
+  }
+
+  fn close(lib: handle) {
+    if k1/is-static posix/port/dylib-close(lib.raw)
+    else #if k1/platform is {
+      :posix-macos or :posix-linux -> posix/port/dylib-close(lib.raw),
+      :wasi -> crash("dylibs are not supported on wasi"),
+      :bare -> bare/dylib-close(lib.raw)
+    }
+  }
+
+  // The message for the most recent failed open or sym, if the platform kept one
+  fn error-message(): ?string {
+    let e =
+      if k1/is-static posix/dlerror()
+      else #if k1/platform is {
+        :posix-macos or :posix-linux -> posix/dlerror(),
+        :wasi -> crash("dylibs are not supported on wasi"),
+        :bare -> bare/dylib-error()
+      }
+    if e.is-null() :none else :some(string/wrap-c(e.get()))
+  }
+}

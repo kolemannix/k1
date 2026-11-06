@@ -444,10 +444,9 @@ let MUTED: srgb8  = oklch(0.500, 0.0279, UI-HUE)
 ├─────
 │  muted on panel contrast is 2.6472688, need 4.5
 │  bc Execution Trace
-│  [00] core/platform/process/exit platform.k1:201
-│  [01] core/sys/exit builtin.k1:964
-│  [02] core/crash builtin.k1:1171
-│  [03] expr palette_contrast_fail.k1:82 palette_contrast_fail.k1:84
+│  [00] core/platform/process/abort platform.k1:137
+│  [01] core/crash builtin.k1:1237
+│  [02] expr palette_contrast_fail.k1:82 palette_contrast_fail.k1:84
 └────────────────────────────────────────╴
 Module palette_contrast_fail failed compiling with 1 errors
 ```

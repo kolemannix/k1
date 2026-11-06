@@ -1,4 +1,4 @@
-use core/meta/define-soa
+use types/define-soa
 #meta define-soa[{ x: u32, y: u32, z: u8 }]("Point3List10")
 #meta define-soa[{ x: u32, y: u32, z: u8 }]("Point3List11")
 #meta define-soa[{ x: u32, y: u32, z: u8 }]("Point3List2")

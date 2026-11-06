@@ -244,9 +244,12 @@ state pointer means a dyn can't cross `#static` into a runtime constant.
   `thread/start`/`join` over `*fn(*t) -> ptr`.
 
 ## Stdlib notes
-- `files` (core, posix, works in `#static`): `read-to-string write-entire-file
+- `std/files` (posix, works in `#static`): `read-to-string write-entire-file
   list-dir make-dir link rename remove remove-dir` return `result[_, files/error]`
   (`not-found()`, `already-exists()`); `exists` is a bool.
+- `std/fd`: `read read-all write-all open-to-read open-to-write close file-size pipe
+  poll-readable` and `reader` over `core/platform/io/file-handle`; single `write`
+  stays in `core/platform/io`.
 - `std/hash`: `hash/bytes` is fast, unseeded, unstable across versions;
   `hash/fnv1a` is the stable one.
 - `std/time`: `unix-nanos()`, `unix-seconds()`; monotonic `read-cpu-counter()` +

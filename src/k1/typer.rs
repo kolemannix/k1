@@ -16914,8 +16914,6 @@ impl TypedProgram {
             core!("neg"),
             core!("overflow-arith"),
             core!("overflow-result"),
-            core!("sys"),
-            core!("files"),
             core!("scalar-cmp"),
             core!("string-builder"),
             core!("code"),

@@ -745,7 +745,6 @@ impl TypedProgram {
         }
         let bool_value = match name {
             "test" => self.config.test,
-            "no-std" => self.plan.config.no_std,
             "debug" => self.plan.config.debug,
             // The VM overrides this global's value during static execution
             "is-static" => false,

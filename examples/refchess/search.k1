@@ -299,7 +299,7 @@ ns for searcher {
       if (not self.limits.infinite) and score.abs() > MATE_BOUND and (MATE - score.abs()).unsigned() <= depth break
     }
     while self.limits.infinite and not self.stopped {
-      core/platform/thread/sleep-ms(5)
+      std/thread/sleep-ms(5)
       self.poll()
     }
     self.pv.[0].[0]

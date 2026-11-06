@@ -617,7 +617,7 @@ and only then patch the slots:
     let entries = span/wrap-raw[entry](descriptor.entries, descriptor.entry-count.signed())
     let addrs = list/with-capacity[ptr](entries.len())
     for e in entries {
-      let addr = if core/platform/dylib/sym(handle, string/wrap-c(e.symbol)) is {
+      let addr = if dylib/sym(handle, string/wrap-c(e.symbol)) is {
         :some(a) -> a,
         :none -> return :err :symbol-missing .{
           symbol = heap-string/cloned(string/wrap-c(e.symbol)),

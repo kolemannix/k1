@@ -13,7 +13,7 @@ ns for input {
   }
 
   fn has-line(self: *input): bool {
-    self.line-end().is-some() or ((not self.eof) and io/poll-readable(self.file))
+    self.line-end().is-some() or ((not self.eof) and std/fd/poll-readable(self.file))
   }
 
   fn peek-line(self: *input): ?string {
@@ -28,7 +28,7 @@ ns for input {
       self.start = 0
       self.end = pending
       if self.end == self.buf.len crash("input line longer than ${self.buf.len} bytes")
-      let n = if io/read(self.file, self.buf.data-ptr().add-bytes(self.end), self.buf.len - self.end).result() is {
+      let n = if std/fd/read(self.file, self.buf.data-ptr().add-bytes(self.end), self.buf.len - self.end).result() is {
         :ok n -> n,
         :err _ -> 0
       }

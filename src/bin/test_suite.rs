@@ -169,6 +169,9 @@ fn test_file<P: AsRef<Path>>(ctx: &Context, k1_home: &str, path: P) -> Result<()
     if !static_failures.is_empty() {
         bail!("{name} static tests:\n{static_failures}");
     }
+    if !test_program.config.command.is_test() {
+        return Ok(());
+    }
     compiler::codegen_module(ctx, &mut test_program)?;
     let output = run_output(&test_program, &format!("{name}_test"))?;
     if !output.status.success() {

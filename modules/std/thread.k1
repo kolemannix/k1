@@ -2,12 +2,17 @@ ns thread
 
 type(alias) thread = ptr
 
+// No arms for wasi or bare: TLS lowers to plain globals there, so running a
+// second thread is unsound by construction
 fn start[t](handle: *thread, function: *fn(*t) -> ptr, input: *t) {
-  let h = if core/platform/thread/spawn(function.as[ptr], input.as[ptr]) is {
-    :some h -> h,
-    :none -> crash("thread spawn failed")
-  }
-  handle.* = h.raw
+  let spawned =
+    if k1/is-static posix/port/thread-spawn(function.as[ptr], input.as[ptr])
+    else #if k1/platform is {
+      :posix-macos or :posix-linux -> posix/port/thread-spawn(function.as[ptr], input.as[ptr]),
+      :wasi or :bare -> crash("threads are not supported on this platform")
+    }
+  if spawned.is-null() crash("thread spawn failed")
+  handle.* = spawned
 }
 
 // Fire-and-forget: no join handle, the thread's resources release on exit.
@@ -16,7 +21,7 @@ fn start[t](handle: *thread, function: *fn(*t) -> ptr, input: *t) {
 fn start-detached[t](function: *fn(*t) -> ptr, input: *t) {
   let handle: thread = ptr/null
   start(handle.&, function, input)
-  core/platform/thread/detach(.{ raw = handle })
+  detach(handle)
 }
 
 type task-state[f, t] = { body: f, result: *t }
@@ -38,7 +43,7 @@ ns for task {
   }
 
   fn join[t](self: task[t]): t {
-    core/platform/thread/join(.{ raw = self.thread })
+    thread/join(self.thread)
     let value = self.result.*
     heap.free-t(self.result)
     value
@@ -47,7 +52,20 @@ ns for task {
 }
 
 fn sleep-ms(ms: u64) {
-  core/platform/thread/sleep-ms(ms)
+  if k1/is-static posix/port/sleep-ms(ms)
+  else #if k1/platform is {
+    :posix-macos or :posix-linux -> posix/port/sleep-ms(ms),
+    :wasi -> wasi/sleep-ms(ms),
+    :bare -> bare/sleep-ms(ms)
+  }
+}
+
+fn cpu-count(): size {
+  if k1/is-static posix/port/cpu-count()
+  else #if k1/platform is {
+    :posix-macos or :posix-linux -> posix/port/cpu-count(),
+    :wasi or :bare -> 1
+  }
 }
 
 type sleep-poll-mutex = { state: u64 }
@@ -68,6 +86,18 @@ ns for sleep-poll-mutex {
 
 }
 
-fn join(thread: thread, retval: *ptr) {
-  retval.* = core/platform/thread/join(.{ raw = thread })
+fn join(thread: thread): ptr {
+  if k1/is-static posix/port/thread-join(thread)
+  else #if k1/platform is {
+    :posix-macos or :posix-linux -> posix/port/thread-join(thread),
+    :wasi or :bare -> crash("threads are not supported on this platform")
+  }
+}
+
+fn detach(thread: thread) {
+  if k1/is-static posix/port/thread-detach(thread)
+  else #if k1/platform is {
+    :posix-macos or :posix-linux -> posix/port/thread-detach(thread),
+    :wasi or :bare -> crash("threads are not supported on this platform")
+  }
 }

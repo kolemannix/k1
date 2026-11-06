@@ -1,3 +1,4 @@
+use std/files
 use clang/CXIndex
 use clang/CXTranslationUnit
 use clang/CXCursor
@@ -156,7 +157,7 @@ fn start(args: span[string]): result[string, string] {
   out.writeln("")
   out.writeln("use types/assert-layout")
   if args.prelude-file is :some prelude-file {
-    let prelude-string = core/files/read-to-string(prelude-file).!
+    let prelude-string = files/read-to-string(prelude-file).!
     out.writeln("// contents of $prelude-file")
     out.write(prelude-string)
     out.writeln("// end contents of $prelude-file")
@@ -239,7 +240,7 @@ fn start(args: span[string]): result[string, string] {
   let s = out.build()
   if state.out-path is {
     :none -> { print(s) },
-    :some path -> { core/files/write-entire-file(out-path = path, contents = s).! }
+    :some path -> { files/write-entire-file(out-path = path, contents = s).! }
   }
   :ok s
 }

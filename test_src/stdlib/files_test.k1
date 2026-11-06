@@ -1,3 +1,4 @@
+use std/files
 fn(test) files-dir-lifecycle-and-errors() {
   let dir = "/tmp/k1-files-test-${std/time/unix-nanos()}"
   files/make-dir(dir).!

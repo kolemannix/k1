@@ -1,18 +1,34 @@
 ns time {
+  // The raw counter is the cheapest monotonic read the platform has; only
+  // counter-to-nanos gives it meaning
   fn read-cpu-counter(): u64 {
-    core/platform/clock/counter()
+    if k1/is-static posix/port/counter()
+    else #if k1/platform is {
+      :posix-macos or :posix-linux -> posix/port/counter(),
+      :wasi -> wasi/counter(),
+      :bare -> bare/clock-nanos()
+    }
   }
   fn counter-to-nanos(counter: u64): u64 {
-    core/platform/clock/counter-to-nanos(counter)
+    if k1/is-static posix/port/counter-to-nanos(counter)
+    else #if k1/platform is {
+      :posix-macos or :posix-linux -> posix/port/counter-to-nanos(counter),
+      :wasi or :bare -> counter
+    }
   }
   fn elapsed-nanos(counter: u64): u64 {
-    counter-to-nanos(core/platform/clock/counter() - counter)
+    counter-to-nanos(read-cpu-counter() - counter)
   }
   fn elapsed-ms(counter: u64): u64 {
     elapsed-nanos(counter) / 1_000_000
   }
   fn unix-nanos(): u64 {
-    core/platform/clock/wall-nanos()
+    if k1/is-static posix/port/wall-nanos()
+    else #if k1/platform is {
+      :posix-macos or :posix-linux -> posix/port/wall-nanos(),
+      :wasi -> wasi/wall-nanos(),
+      :bare -> crash("no wall clock on this platform")
+    }
   }
   fn unix-seconds(): u64 {
     unix-nanos() / 1_000_000_000

@@ -61,5 +61,5 @@ fixed-size: a mark/pop stack must never chain into a new chunk.
 
 Input lines are views into the fixed `session` buffer: reading a command
 allocates nothing, and a search can check stdin for `stop` without
-blocking (`core/platform/io/poll-readable`, `poll(2)` natively and
+blocking (`std/fd/poll-readable`, `poll(2)` natively and
 `poll_oneoff` on WASI).

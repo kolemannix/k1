@@ -1,0 +1,168 @@
+// `k1 test`'s runtime root; static test runs don't use it
+ns test-runner {
+  use core/test/suite
+  use core/test/test-case
+  use core/platform/io/file-handle
+
+  fn main(): i32 { run(k1/test/suite()) }
+
+  type tally = { passed: size, failed: size, skipped: size }
+
+  fn run(suite: suite): i32 {
+    let start = time/read-cpu-counter()
+    let tally = tally.0
+    #if k1/platform is {
+      :posix-macos or :posix-linux -> {
+        let count = suite.cases.len()
+        let width = thread/cpu-count().min(count)
+        let workers = list/with-capacity[worker](width)
+        for w in 0.until(width) { workers.push(start-worker(suite.cases, w, width)) }
+        for i in 0.until(count) {
+          let outcome = receive-outcome(workers.[i % width].results)
+          report(suite.cases.[i], tally.&, outcome.elapsed, outcome.failure)
+          if outcome.failure is :some _ print(outcome.captured)
+        }
+        for workers {
+          fd/close(it.results)
+          let _ = process/wait(it.pid).!
+        }
+      },
+      :wasi or :bare -> {
+        for suite.cases { run-test-in-process(it, tally.&) }
+      }
+    }
+    let elapsed = time/elapsed-nanos(start)
+    println("${suite.module-name} test results: ${tally.passed} passed, ${tally.failed} failed, ${tally.skipped} skipped (${format-millis(elapsed)})")
+    if tally.failed > 0 1 else 0
+  }
+
+  fn format-millis(nanos: u64): string {
+    let tenths = nanos / 100_000
+    "${tenths / 10}.${tenths % 10}ms"
+  }
+
+  fn report(test: test-case, *tally, elapsed: u64, failure: ?string) {
+    if failure is :some reason {
+      tally.failed = tally.failed + 1
+      println("FAIL ${test.name} at ${test.location.filename}:${test.location.line} (${format-millis(elapsed)}): $reason")
+    } else {
+      tally.passed = tally.passed + 1
+      println("ok   ${test.name} (${format-millis(elapsed)})")
+    }
+  }
+
+  fn run-test-in-process(test: test-case, *tally) {
+    if test.expected-failure is :some _ {
+      tally.skipped = tally.skipped + 1
+      return
+    }
+    println("running ${test.name}")
+    let start = time/read-cpu-counter()
+    let failure = (test.run-fn)()
+    report(test, tally, time/elapsed-nanos(start), failure)
+  }
+
+  type worker = { pid: i32, results: file-handle }
+
+  type outcome = { elapsed: u64, failure: ?string, captured: string }
+
+  type outcome-header = { elapsed: u64, has-failure: bool, failure-len: size, captured-len: size }
+
+  fn start-worker(cases: span[test-case], first: size, stride: size): worker {
+    let results = fd/pipe().!
+    let pid = process/fork(
+      child-fn = fn[cases, first, stride, results]. {
+        let i = first
+        while i < cases.len() {
+          send-outcome(results.write, run-forked(cases.[i], results.write))
+          i = i + stride
+        }
+        0
+      },
+      stdin = :none,
+      stdout = :none,
+      stderr = :none,
+      extra-close = [results.read]
+    ).!
+    fd/close(results.write)
+    .{ pid, results = results.read }
+  }
+
+  fn send-outcome(file: file-handle, outcome: outcome) {
+    let failure = if outcome.failure is :some message message else ""
+    let captured = if outcome.failure.is-some() outcome.captured else ""
+    let header: outcome-header = .{
+      elapsed = outcome.elapsed,
+      has-failure = outcome.failure.is-some(),
+      failure-len = failure.len(),
+      captured-len = captured.len(),
+    }
+    core/io/write-all(file.raw, header.&.as[ptr], types/size[outcome-header])
+    core/io/write-all(file.raw, failure.span().data-ptr(), failure.len())
+    core/io/write-all(file.raw, captured.span().data-ptr(), captured.len())
+  }
+
+  fn receive-outcome(file: file-handle): outcome {
+    let header: outcome-header = .0
+    read-exact(file, header.&.as[ptr], types/size[outcome-header])
+    let failure: ?string = if header.has-failure :some(read-string(file, header.failure-len)) else :none
+    .{ elapsed = header.elapsed, failure, captured = read-string(file, header.captured-len) }
+  }
+
+  fn read-string(file: file-handle, len: size): string {
+    let bytes = buffer/allocate[u8](len)
+    read-exact(file, bytes.data, len)
+    string/wrap-byte-buffer(bytes)
+  }
+
+  fn read-exact(file: file-handle, data: ptr, count: size) {
+    let done: size = 0
+    while done < count {
+      let n = fd/read(file, data.add-bytes(done), count - done).raw
+      if n <= 0 crash("test worker exited before reporting every test")
+      done = done + n
+    }
+  }
+
+  fn run-forked(test: test-case, results: file-handle): outcome {
+    let output = fd/pipe().!
+    let timing = fd/pipe().!
+    let start = time/read-cpu-counter()
+    let pid = process/fork(
+      child-fn = fn[test, timing]. {
+        core/backtrace-on-crash = test.expected-failure.is-none()
+        let start = time/read-cpu-counter()
+        let failure = (test.run-fn)()
+        let elapsed = time/elapsed-nanos(start)
+        let _ = core/platform/io/write(timing.write, elapsed.&.as[ptr], 8)
+        if failure is :some message { eprintln(message); 1 } else 0
+      },
+      stdin = :none,
+      stdout = :some(output.write),
+      stderr = :some(output.write),
+      extra-close = [output.read, timing.read, results]
+    ).!
+    fd/close(output.write)
+    fd/close(timing.write)
+    let captured = fd/read-all(output.read).!
+    fd/close(output.read)
+    let elapsed: u64 = 0
+    let measured = fd/read(timing.read, elapsed.&.as[ptr], 8)
+    fd/close(timing.read)
+    if measured.raw != 8 { elapsed = time/elapsed-nanos(start) }
+    let status = process/wait(pid).!
+    let ending =
+      if status.signal != 0 "killed by signal ${status.signal}"
+      else if status.exit-code != 0 "exited with code ${status.exit-code}"
+      else ""
+    let failure: ?string = if test.expected-failure is {
+      :none -> if ending.is-empty() :none else :some(ending),
+      :some needle -> {
+        if ending.is-empty() :some("expected a failure containing \"$needle\", but the test passed")
+        else if "$captured$ending".contains-string(needle) :none
+        else :some("expected a failure containing \"$needle\"")
+      }
+    }
+    .{ elapsed, failure, captured }
+  }
+}

@@ -3,7 +3,7 @@ use std/msgpack
 use std/json
 use std/codec
 
-let suite: string = files/read-to-string("${k1/module-dir()}/msgpack-test-suite/msgpack-test-suite.json").!
+let suite: string = std/files/read-to-string("${k1/module-dir()}/msgpack-test-suite/msgpack-test-suite.json").!
 
 type contact = either { none, email(string) }
 type user = { name: string, age: u32, nick: ?string, contact: contact, scores: list[i64] }

@@ -391,7 +391,6 @@ It currently runs directly off the typed tree
   - [x] ASSERT FAILED: true != true at core.k1:23
 - [x] Real type inference
   - [x] True inference variables, instantiate function types, unification and consistency checks, aka make it work
-  - [x] Make 'crash' work in no-std
   - [x] Make it pretty (de-coupled inference hole from type variable)
   - [x] Move enum constructor onto new inference infra
   - [x] Move ability resolution onto new inference infra

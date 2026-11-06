@@ -1,5 +1,5 @@
 fn module(): k1/module {
-  let llvm-prefix = core/sys/env("LLVM_SYS_231_PREFIX") ?
+  let llvm-prefix = std/sys/env("LLVM_SYS_231_PREFIX") ?
     crash("k1bindgen needs LLVM_SYS_231_PREFIX set to an LLVM install prefix")
   let llvm-path = "$llvm-prefix/lib"
   .0 | .{

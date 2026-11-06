@@ -104,7 +104,7 @@ fn(test-runtime) static-values-at-runtime() {
 
 fn(test) exits() {
   k1/test/expect-failure("exited with code 111")
-  sys/exit(111)
+  std/sys/exit(111)
 }
 
 fn(test) crashes() {

@@ -5,7 +5,7 @@ use std/posix
 use std/process
 
 fn write-line(child: *process/child, line: string) {
-  fd/write-all(child.stdin-fd, "${line}\n".span-bytes()).!
+  fd/write-all(child.stdin, "${line}\n".span-bytes()).!
 }
 
 fn(test) run-finds-path-and-captures-output() {
@@ -37,7 +37,7 @@ fn(test) run-status-reports-death-by-signal() {
   assert-equals(signaled.exit-code, -1)
   assert-equals(signaled.signal, posix/SIGKILL)
   let usr1 = process/run-status("/bin/sh", ["-c", "kill -USR1 $$"], :capture).!
-  assert-equals(usr1.signal, posix/SIGUSR1)
+  assert-equals(usr1.signal, posix/SIGUSR1())
 }
 
 fn(test) spawn-failure-is-err() {
@@ -85,5 +85,5 @@ fn(test) kill-ends-child-by-signal() {
 
 fn(test-static) fork-refuses-static(): result[i32, i32] {
   k1/test/expect-failure("fork is not supported in static execution")
-  core/platform/process/fork(stdin = :none, stdout = :none, stderr = :none, extra-close = [])
+  process/fork(child-fn = fn. 0, stdin = :none, stdout = :none, stderr = :none, extra-close = [])
 }

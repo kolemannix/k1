@@ -1,0 +1,28 @@
+// The std half of the k1_platform_* extern contract at core/platform/impls/bare
+ns bare {
+  fn(extern("k1_platform_io_read")) read(file-no: i32, buffer: ptr, count: size): i64
+  fn(extern("k1_platform_file_open_read")) open-read-c(path: *u8): i32
+  fn(extern("k1_platform_file_open_write")) open-write-c(path: *u8): i32
+  fn(extern("k1_platform_file_close")) close(fd: i32)
+  fn(extern("k1_platform_file_size")) file-size(fd: i32): i64
+  fn(extern("k1_platform_env_get")) getenv(name: *u8): optref[u8]
+  fn(extern("k1_platform_dylib_open")) dylib-open-c(path: *u8): ptr
+  fn(extern("k1_platform_dylib_open_self")) dylib-open-self(): ptr
+  fn(extern("k1_platform_dylib_sym")) dylib-sym-c(lib: ptr, name: *u8): ptr
+  fn(extern("k1_platform_dylib_close")) dylib-close(lib: ptr)
+  fn(extern("k1_platform_dylib_error")) dylib-error(): optref[u8]
+  fn(extern("k1_platform_random_fill")) random-fill(dest: ptr, count: size)
+  fn(extern("k1_platform_clock_nanos")) clock-nanos(): u64
+  fn(extern("k1_platform_thread_sleep_ms")) sleep-ms(ms: u64)
+  fn(extern("k1_platform_file_is_executable")) is-executable-flag(path: *u8): i32
+
+  fn open-to-read(path: string): i32 { open-read-c(path.to-c-tmp()) }
+  fn open-to-write(path: string): i32 { open-write-c(path.to-c-tmp()) }
+  fn is-executable(path: string): bool { is-executable-flag(path.to-c-tmp()) == 1 }
+  fn dylib-open(path: string): ptr { dylib-open-c(path.to-c-tmp()) }
+  fn dylib-sym(lib: ptr, name: string): ptr { dylib-sym-c(lib, name.to-c-tmp()) }
+  fn env-get(name: string): ?string {
+    let v = getenv(name.to-c-tmp())
+    if v.is-null() :none else :some(string/wrap-c(v.get()))
+  }
+}

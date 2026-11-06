@@ -48,8 +48,8 @@ ns reload {
   // The host's descriptor for a reloadable ns, or :none if the program has no
   // such ns; the pointee is host-static and lives forever
   fn find-descriptor(ns-path: string): ?*descriptor {
-    let self-lib = core/platform/dylib/open-self()
-    if core/platform/dylib/sym(self-lib, "__k1_reload_ns_${ns-path}") is {
+    let self-lib = dylib/open-self()
+    if dylib/sym(self-lib, "__k1_reload_ns_${ns-path}") is {
       :some(raw) -> :some(raw.ref[descriptor]),
       :none -> :none
     }
@@ -79,12 +79,12 @@ ns reload {
     let n = atomic/fetch-add(load-count.&, 1, :seq-cst)
     let temp-path = "${dylib-path}.load-${n}"
     files/write-entire-file(temp-path, files/read-to-string(dylib-path).!).!
-    let maybe-handle = core/platform/dylib/open(temp-path)
-    posix/unlink(temp-path.to-c-tmp())
+    let maybe-handle = dylib/open(temp-path)
+    let _ = files/remove(temp-path)
     let handle = if maybe-handle is {
       :some(h) -> h,
       :none -> {
-        let message = if core/platform/dylib/error-message() is {
+        let message = if dylib/error-message() is {
           :some(m) -> m,
           :none -> "unknown dlopen failure"
         }
@@ -96,7 +96,7 @@ ns reload {
     }
 
     let dylib_hash_symbol = "__k1_reload_hash_${ns-path}"
-    let hash-raw = if core/platform/dylib/sym(handle, dylib_hash_symbol) is {
+    let hash-raw = if dylib/sym(handle, dylib_hash_symbol) is {
       :some(raw) -> raw,
       :none -> return :err :symbol-missing .{
         symbol = heap-string/cloned(dylib_hash_symbol),
@@ -111,7 +111,7 @@ ns reload {
     let entries = span/wrap-raw[entry](descriptor.entries, descriptor.entry-count.signed())
     let addrs = list/with-capacity[ptr](entries.len())
     for e in entries {
-      let addr = if core/platform/dylib/sym(handle, string/wrap-c(e.symbol)) is {
+      let addr = if dylib/sym(handle, string/wrap-c(e.symbol)) is {
         :some(a) -> a,
         :none -> return :err :symbol-missing .{
           symbol = heap-string/cloned(string/wrap-c(e.symbol)),

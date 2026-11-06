@@ -541,11 +541,10 @@ $fsm/define(door, {
 ├─────
 │  fsm `door`: state `locked` has no outgoing transition
 │  bc Execution Trace
-│  [00] core/platform/process/exit platform.k1:286
-│  [01] core/sys/exit builtin.k1:981
-│  [02] core/crash builtin.k1:1189
-│  [03] macro_state_machine_wrong/pre/fsm/define-impl macro_state_machine_wrong.k1:39
-│  [04] macro_state_machine_wrong/pre/fsm/define macro_state_machine_wrong.k1:66
+│  [00] core/platform/process/abort platform.k1:137
+│  [01] core/crash builtin.k1:1237
+│  [02] macro_state_machine_wrong/pre/fsm/define-impl macro_state_machine_wrong.k1:39
+│  [03] macro_state_machine_wrong/pre/fsm/define macro_state_machine_wrong.k1:66
 └────────────────────────────────────────╴
 Module macro_state_machine_wrong failed compiling with 1 errors
 ```
@@ -660,12 +659,12 @@ ns for ship {
   }
 ```
 
-`core/meta/define-soa` isn't even a macro: it's a plain function returning
+`types/define-soa` isn't even a macro: it's a plain function returning
 `code`, run with `#meta` at definition level. Hand it a struct type, get a
 struct-of-arrays:
 
 ```k1
-#meta core/meta/define-soa[{ x: f32, y: f32, mass: f32 }]("particles")
+#meta types/define-soa[{ x: f32, y: f32, mass: f32 }]("particles")
 ```
 
 ```k1

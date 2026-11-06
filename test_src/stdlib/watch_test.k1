@@ -1,4 +1,5 @@
 ns watch_test
+use std/files
 
 use std/watch
 

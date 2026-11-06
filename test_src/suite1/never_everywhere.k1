@@ -1,4 +1,5 @@
 ns never_everywhere
+use std/sys
 
 fn takes-four(_a: empty, _b: empty, _c: empty, _d: empty) {.{}}
 fn call-arguments(): never { 
@@ -7,13 +8,13 @@ fn call-arguments(): never {
   let counter = { let tmp = 0; tmp.& }
   let incr = fn[counter]() { counter.* = counter.* + 1 }
   // This should get compiled to:
-  // { incr(); incr(), incr(), { if i.* == 3 core/sys/exit(0) else crash("i wasnt incremented") } }
+  // { incr(); incr(), incr(), { if i.* == 3 sys/exit(0) else crash("i wasnt incremented") } }
   // no 'call' is even emitted
   takes-four(
     _a = incr(),
     _b = incr(),
     _c = incr(),
-    _d = { if counter.* == 3 core/sys/exit(0) else crash("counter wasnt incremented") }
+    _d = { if counter.* == 3 sys/exit(0) else crash("counter wasnt incremented") }
   )
 }
 fn let-rhs(): empty { let _x = crash("let-rhs") }
@@ -35,7 +36,7 @@ fn in-return(): never {
     :none
   )
 
-  core/sys/exit(0)
+  sys/exit(0)
 }
 fn in-break(): never { 
   #static assert-equals[?string](
@@ -44,7 +45,7 @@ fn in-break(): never {
     ),
     :some "break is dead since returned expression is divergent; consider removing the 'break'"
   )
-  core/sys/exit(0)
+  sys/exit(0)
 }
 
 fn loop-without-break(): i64 {

@@ -543,12 +543,11 @@ The VM's stack trace leads back to `main`:
 ├─────
 │  ASSERT FAILED: 8 != 5
 │  bc Execution Trace
-│  [00] core/platform/process/exit platform.k1:201
-│  [01] core/sys/exit builtin.k1:964
-│  [02] core/crash builtin.k1:1171
-│  [03] core/assert-equals core.k1:8
-│  [04] core/types/assert-layout types.k1:43
-│  [05] expr reflect_layout_fail.k1:4 reflect_layout_fail.k1:4
+│  [00] core/platform/process/abort platform.k1:137
+│  [01] core/crash builtin.k1:1237
+│  [02] core/assert-equals core.k1:8
+│  [03] core/types/assert-layout types.k1:113
+│  [04] expr reflect_layout_fail.k1:4 reflect_layout_fail.k1:4
 └────────────────────────────────────────╴
 Module reflect_layout_fail failed compiling with 1 errors
 ```

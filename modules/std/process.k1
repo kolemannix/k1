@@ -2,6 +2,47 @@
 // needs of build() and scripting as first consumers
 
 ns process {
+  use core/platform/io/file-handle
+
+  // signal == 0 means normal exit; killed by a signal means exit-code -1
+  type wait-status = { exit-code: i32, signal: i32 }
+
+  // The program at this exact path: stdin/stdout/stderr replace the child's
+  // streams (:none inherits); the child closes them and every handle in
+  // extra-close. ok = pid, err = errno
+  fn spawn-path(path: string, argv: span[string], stdin: ?file-handle, stdout: ?file-handle, stderr: ?file-handle, extra-close: span[file-handle]): result[i32, i32] {
+    if k1/is-static posix/port/spawn(path, argv, stdin, stdout, stderr, extra-close)
+    else #if k1/platform is {
+      :posix-macos or :posix-linux -> posix/port/spawn(path, argv, stdin, stdout, stderr, extra-close),
+      :wasi or :bare -> crash("processes are not supported on this platform")
+    }
+  }
+  fn fork(child-fn: some fn() -> i32, stdin: ?file-handle, stdout: ?file-handle, stderr: ?file-handle, extra-close: span[file-handle]): result[i32, i32] {
+    core/io/flush-stdout()
+    let forked =
+      if k1/is-static posix/port/fork(stdin, stdout, stderr, extra-close)
+      else #if k1/platform is {
+        :posix-macos or :posix-linux -> posix/port/fork(stdin, stdout, stderr, extra-close),
+        :wasi or :bare -> crash("processes are not supported on this platform")
+      }
+    let pid = forked.try
+    if pid == 0 sys/exit(child-fn())
+    :ok pid
+  }
+  fn wait(pid: i32): result[wait-status, i32] {
+    if k1/is-static posix/port/wait(pid)
+    else #if k1/platform is {
+      :posix-macos or :posix-linux -> posix/port/wait(pid),
+      :wasi or :bare -> crash("processes are not supported on this platform")
+    }
+  }
+  fn kill(pid: i32) {
+    if k1/is-static posix/port/kill(pid)
+    else #if k1/platform is {
+      :posix-macos or :posix-linux -> posix/port/kill(pid),
+      :wasi or :bare -> crash("processes are not supported on this platform")
+    }
+  }
 
   // :inherit streams the child's stdout/stderr to ours (output is empty)
   type output-mode = either { drop, capture, inherit }
@@ -40,15 +81,15 @@ ns process {
   // 127. Resolving here is the only portable way to tell those apart.
   fn resolve-program(program: string): result[string, run-error] {
     if program.contains('/') {
-      return if core/platform/io/is-executable(program) :ok program
+      return if files/is-executable(program) :ok program
              else :err :spawn .{ program = program, message = "not executable" }
     }
-    require core/sys/env("PATH") is :some path else {
+    require sys/env("PATH") is :some path else {
       return :err :spawn .{ program = program, message = "PATH is unset" }
     }
     for dir in path.split-by-char(':') {
       let candidate = if dir.is-empty() "./$program" else "$dir/$program"
-      if core/platform/io/is-executable(candidate) return :ok candidate
+      if files/is-executable(candidate) return :ok candidate
     }
     :err :spawn .{ program = program, message = "command not found" }
   }
@@ -61,11 +102,11 @@ ns process {
   }
 
   fn reap(pid: i32, program: string): result[run-output, run-error] {
-    if core/platform/process/wait(pid) is {
+    if wait(pid) is {
       :ok(s) -> :ok .{ exit-code = s.exit-code, signal = s.signal, output = "" },
       :err(code) -> :err :spawn .{
         program = program,
-        message = "waitpid failed: ${core/platform/error-string(code)}"
+        message = "waitpid failed: ${sys/error-string(code)}"
       }
     }
   }
@@ -75,11 +116,11 @@ ns process {
   fn run-status(program: string, args: span[string], mode: output-mode): result[run-output, run-error] {
     let program-path = resolve-program(program).try
 
-    let pipe-read: ?core/platform/io/file-handle = :none
-    let child-out: ?core/platform/io/file-handle = if mode is {
+    let pipe-read: ?file-handle = :none
+    let child-out: ?file-handle = if mode is {
       :inherit -> :none,
       :capture -> {
-        let p = if core/platform/io/pipe() is {
+        let p = if fd/pipe() is {
           :some(p) -> p,
           :none -> return :err :spawn .{ program = program, message = "pipe failed" }
         }
@@ -87,14 +128,14 @@ ns process {
         :some(p.write)
       },
       :drop -> {
-        if core/platform/io/open-to-write("/dev/null") is {
+        if fd/open-to-write("/dev/null") is {
           :ok(h) -> :some(h),
           :err(_) -> return :err :spawn .{ program = program, message = "open /dev/null failed" }
         }
       }
     }
 
-    let spawned = core/platform/process/spawn(
+    let spawned = spawn-path(
       path = program-path,
       argv = full-argv(program, args),
       stdin = :none,
@@ -102,31 +143,31 @@ ns process {
       stderr = child-out,
       extra-close = if pipe-read is :some r [r] else []
     )
-    if child-out is :some h { core/platform/io/close(h) }
+    if child-out is :some h { fd/close(h) }
     let pid = if spawned is {
       :ok(pid) -> pid,
       :err(code) -> {
-        if pipe-read is :some r { core/platform/io/close(r) }
+        if pipe-read is :some r { fd/close(r) }
         return :err :spawn .{
           program = program,
-          message = "spawn failed: ${core/platform/error-string(code)}"
+          message = "spawn failed: ${sys/error-string(code)}"
         }
       }
     }
 
     let output = if pipe-read is :some r {
       mem/push-arena(mem/tmp())
-      let read-result = core/io/read-all(r.raw)
+      let read-result = fd/read-all(r)
       mem/pop-arena()
-      core/platform/io/close(r)
+      fd/close(r)
       if read-result is {
         :ok s -> s,
         :err code -> {
           // Reap before reporting so we never leave a zombie behind
-          let _ = core/platform/process/wait(pid)
+          let _ = wait(pid)
           return :err :spawn .{
             program = program,
-            message = "pipe read failed: ${core/platform/error-string(code)}"
+            message = "pipe read failed: ${sys/error-string(code)}"
           }
         },
       }
@@ -168,13 +209,13 @@ ns process {
   }
 
   // A long-lived interactive child: stdin and stdout piped, stderr inherited.
-  // Talk to it through the raw fds: fd/write-all(child.stdin-fd, ..) and
+  // Talk to it through its handles: fd/write-all(child.stdin, ..) and
   // child.stdout.read-line(); protocol shaping (lines, framing) is the
   // caller's business.
   type child = {
     program: string,
     pid: i32,
-    stdin-fd: i32,
+    stdin: file-handle,
     stdout: fd/reader,
   }
 
@@ -184,20 +225,20 @@ ns process {
     let program-path = resolve-program(program).try
 
     // in: parent writes, child reads; out: child writes, parent reads
-    let in-pipe = if core/platform/io/pipe() is {
+    let in-pipe = if fd/pipe() is {
       :some(p) -> p,
       :none -> return :err :spawn .{ program = program, message = "pipe failed" }
     }
-    let out-pipe = if core/platform/io/pipe() is {
+    let out-pipe = if fd/pipe() is {
       :some(p) -> p,
       :none -> {
-        core/platform/io/close(in-pipe.read)
-        core/platform/io/close(in-pipe.write)
+        fd/close(in-pipe.read)
+        fd/close(in-pipe.write)
         return :err :spawn .{ program = program, message = "pipe failed" }
       }
     }
 
-    let spawned = core/platform/process/spawn(
+    let spawned = spawn-path(
       path = program-path,
       argv = full-argv(program, args),
       stdin = :some(in-pipe.read),
@@ -205,35 +246,35 @@ ns process {
       stderr = :none,
       extra-close = [in-pipe.write, out-pipe.read]
     )
-    core/platform/io/close(in-pipe.read)
-    core/platform/io/close(out-pipe.write)
+    fd/close(in-pipe.read)
+    fd/close(out-pipe.write)
     let pid = if spawned is {
       :ok(pid) -> pid,
       :err(code) -> {
-        core/platform/io/close(in-pipe.write)
-        core/platform/io/close(out-pipe.read)
+        fd/close(in-pipe.write)
+        fd/close(out-pipe.read)
         return :err :spawn .{
           program = program,
-          message = "spawn failed: ${core/platform/error-string(code)}"
+          message = "spawn failed: ${sys/error-string(code)}"
         }
       }
     }
     :ok .{
       program = program,
       pid = pid,
-      stdin-fd = in-pipe.write.raw,
-      stdout = fd/reader/new(out-pipe.read.raw),
+      stdin = in-pipe.write,
+      stdout = fd/reader/new(out-pipe.read),
     }
   }
 
   fn child-close-pipes(child: *child) {
-    if child.stdin-fd >= 0 {
-      core/platform/io/close(.{ raw = child.stdin-fd })
-      child.stdin-fd = -1
+    if child.stdin.raw >= 0 {
+      fd/close(child.stdin)
+      child.stdin = .{ raw = -1 }
     }
-    if child.stdout.fd >= 0 {
-      core/platform/io/close(.{ raw = child.stdout.fd })
-      child.stdout.fd = -1
+    if child.stdout.file.raw >= 0 {
+      fd/close(child.stdout.file)
+      child.stdout.file = .{ raw = -1 }
     }
   }
 
@@ -246,7 +287,7 @@ ns process {
     }
 
     fn kill(self: *child) {
-      core/platform/process/kill(self.pid)
+      process/kill(self.pid)
     }
 
   }

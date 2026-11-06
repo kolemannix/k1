@@ -130,7 +130,8 @@ or codegen_llvm (binaries).
 
 ## Tests
 - `fn(test)` semantics: ai_docs basics. Static runs `vm.reset` between tests;
-  runtime roots `k1/test-main`, forking per test on posix.
+  runtime roots `std/test-runner/main`, forking per test on posix; a no-std module
+  runs static tests only.
 - `test_src/*.k1`: a last line `//errmsg: <substring>` expects that compile error;
   otherwise `main` exits 0, or the file's tests pass. `test_src/<dir>/` are module
   cases, their `//errmsg` on `build.k1`; `k1_test` runs top-level entries in
@@ -144,9 +145,13 @@ or codegen_llvm (binaries).
   own `K1_HOME`.
 
 ## Modules, examples, the rest
-- `modules/core` is always loaded; `platform.k1` holds core's only OS externs
-  (`impls/{posix,wasi,bare}`); `core/libs` is the C runtime (`k1rt.c`
-  freestanding-safe, `k1rt_hosted.c`). `b.no-std` in `fn build` drops `std/`.
+- `modules/core` is always loaded; `platform.k1` holds the OS calls core itself
+  needs (memory, heap, write, is-tty, exit, abort; `impls/{posix,wasi,bare}`);
+  `core/libs` is the C runtime (`k1rt.c` freestanding-safe, `k1rt_hosted.c`).
+  `b.no-std` in `fn build` drops `std/`, and with it every other OS call.
+- `modules/std` OS modules (`fd files sys process thread time dylib`) dispatch like
+  platform.k1 does, to `std/posix`'s `port` (`posix/*` are raw bindings), `std/wasi`
+  and `std/bare`.
 - C wrapper modules (`uv`, `sdl3`, `stb`, `freetype`, `harfbuzz`, `sqlite`): vendor
   source in `vendor/`, `setup` builds `libs/*.a` and runs `k1bindgen`
   (`tools/k1bindgen`). Bindings live in a namespace named for the C library, or `c`

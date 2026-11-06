@@ -3820,12 +3820,13 @@ pub fn get_program_roots(k1: &TypedProgram) -> K1Result<ProgramRoots> {
         }
     }
     let main = if is_test {
-        let test_main_ident = k1.ast.idents.intern("test-main");
-        let Some(test_main_id) = k1.scopes.find_function(k1.scopes.k1_scope_id, test_main_ident)
+        let runner_main = k1.ast.idents.f.test_runner_main;
+        let Some(runner_main_id) =
+            k1.find_function_namespaced(k1.scopes.root_scope_id(), &runner_main)?
         else {
-            kbail!(k1, Span::NONE, "Missing k1/test-main");
+            kbail!(k1, Span::NONE, "Missing std/test-runner/main");
         };
-        Some(test_main_id)
+        Some(runner_main_id)
     } else {
         let mut any_exported_global = false;
         for global_id in k1.globals.iter_ids() {

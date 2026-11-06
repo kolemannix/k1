@@ -1,29 +1,116 @@
 ns fd {
+  use core/platform/io/file-handle
+  use core/platform/io/io-result
+
+  // ok(0) with a nonzero count is end-of-file
+  fn read(file: file-handle, buffer: ptr, count: size): io-result {
+    let n =
+      if k1/is-static posix/port/read(file.raw, buffer, count)
+      else #if k1/platform is {
+        :posix-macos or :posix-linux -> posix/port/read(file.raw, buffer, count),
+        :wasi -> wasi/read(file.raw, buffer, count),
+        :bare -> bare/read(file.raw, buffer, count)
+      }
+    .{ raw = n }
+  }
+
+  fn read-all(file: file-handle): result[string, i32] {
+    let sb = string-builder/new()
+    let chunk = buffer/allocate[u8](4096)
+    loop {
+      let n = read(file, chunk.data, chunk.len).result().try
+      if n == 0 return :ok sb.build()
+      sb.write-bytes(span/wrap-buffer(chunk.slice(0, n)))
+    }
+  }
+
+  fn poll-readable(file: file-handle): bool {
+    if k1/is-static posix/port/poll-readable(file.raw)
+    else #if k1/platform is {
+      :posix-macos or :posix-linux -> posix/port/poll-readable(file.raw),
+      :wasi -> wasi/poll-readable(file.raw),
+      :bare -> crash("poll-readable is not supported on this platform")
+    }
+  }
+
+  fn open-to-read(path: string): result[file-handle, i32] {
+    let fd =
+      if k1/is-static posix/port/open-to-read(path)
+      else #if k1/platform is {
+        :posix-macos or :posix-linux -> posix/port/open-to-read(path),
+        :wasi -> crash("file io is not supported on wasi"),
+        :bare -> bare/open-to-read(path)
+      }
+    if fd < 0 :err(0 - fd) else :ok(.{ raw = fd })
+  }
+
+  fn open-to-write(path: string): result[file-handle, i32] {
+    let fd =
+      if k1/is-static posix/port/open-to-write(path)
+      else #if k1/platform is {
+        :posix-macos or :posix-linux -> posix/port/open-to-write(path),
+        :wasi -> crash("file io is not supported on wasi"),
+        :bare -> bare/open-to-write(path)
+      }
+    if fd < 0 :err(0 - fd) else :ok(.{ raw = fd })
+  }
+
+  fn close(file: file-handle) {
+    if k1/is-static posix/port/close(file.raw)
+    else #if k1/platform is {
+      :posix-macos or :posix-linux -> posix/port/close(file.raw),
+      :wasi -> crash("file io is not supported on wasi"),
+      :bare -> bare/close(file.raw)
+    }
+  }
+
+  // none when the size is unknowable (a pipe, an unseekable stream)
+  fn file-size(file: file-handle): ?size {
+    let n =
+      if k1/is-static posix/port/file-size(file.raw)
+      else #if k1/platform is {
+        :posix-macos or :posix-linux -> posix/port/file-size(file.raw),
+        :wasi -> crash("file io is not supported on wasi"),
+        :bare -> bare/file-size(file.raw)
+      }
+    if n < 0 :none else :some(n)
+  }
+
+  type pipe-ends = { read: file-handle, write: file-handle }
+
+  fn pipe(): ?pipe-ends {
+    let fds =
+      if k1/is-static posix/port/pipe()
+      else #if k1/platform is {
+        :posix-macos or :posix-linux -> posix/port/pipe(),
+        :wasi or :bare -> crash("pipes are not supported on this platform")
+      }
+    if fds.read < 0 :none
+    else :some(.{ read = .{ raw = fds.read }, write = .{ raw = fds.write } })
+  }
 
   // Loops until every byte is written
-  fn write-all(fd: i32, bytes: span[u8]): result[empty, string] {
+  fn write-all(file: file-handle, bytes: span[u8]): result[empty, i32] {
     let written: size = 0
     while written < bytes.len() {
-      let n = if core/platform/io/write(
-        file = .{ raw = fd },
+      let n = core/platform/io/write(
+        file = file,
         data = bytes.data-ptr().add-bytes(written),
         count = bytes.len() - written
-      ).result() is {
-        :ok(n) -> n,
-        :err(e) -> return :err core/platform/error-string(e)
-      }
+      ).try
+      if n == 0 crash("write made no progress")
       written = written + n
     }
     :ok
   }
 
-  // Buffered line reads: pending/consumed hold fd bytes between calls
-  type reader = { fd: i32, pending: list[u8], consumed: size }
+  // Buffered line reads: pending/consumed hold file bytes between calls
+  type reader = { file: file-handle, pending: list[u8], consumed: size }
 
   ns for reader {
 
-    fn new(fd: i32): reader {
-      .{ fd = fd, pending = list/empty[u8](), consumed = 0 }
+    fn new(file: file-handle): reader {
+      .{ file, pending = list/empty[u8](), consumed = 0 }
     }
 
     // Blocking; :none only at EOF with nothing buffered. The last line before
@@ -44,7 +131,7 @@ ns fd {
           i = i + 1
         }
         let chunk = buffer/allocate-in[t = u8](mem/tmp(), 4096)
-        let n = if core/platform/io/read(.{ raw = self.fd }, chunk.data, chunk.len).result() is {
+        let n = if read(self.file, chunk.data, chunk.len).result() is {
           :ok(n) -> n,
           :err(_) -> return :none
         }

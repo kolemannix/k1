@@ -1,4 +1,4 @@
-#meta core/meta/define-soa[{ x: f32, y: f32, mass: f32 }]("particles")
+#meta types/define-soa[{ x: f32, y: f32, mass: f32 }]("particles")
 
 fn main(): i32 {
   let ps = particles/empty()

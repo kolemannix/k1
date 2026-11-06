@@ -288,6 +288,7 @@ pub(crate) struct BuiltinFunctions {
     pub bitwise_shr: QIdent,
     pub test_outcome_failure: QIdent,
     pub test_suite: QIdent,
+    pub test_runner_main: QIdent,
     pub types_type_id_impl_of: QIdent,
 }
 
@@ -761,6 +762,7 @@ impl IdentPool {
         let test_outcome_failure = make_fn!(path_core_test_outcome, intern!("failure"));
         let path_core_k1_test = intern_path!(b.core, b.k1, b.test);
         let test_suite = make_fn!(path_core_k1_test, intern!("suite"));
+        let test_runner_main = make_fn!(intern_path!(b.std, intern!("test-runner")), b.main);
         let types_type_id_impl_of = make_fn!(intern_path!(b.core, b.types, b.type_id), b.impl_of);
 
         let f = BuiltinFunctions {
@@ -813,6 +815,7 @@ impl IdentPool {
             bitwise_shr,
             test_outcome_failure,
             test_suite,
+            test_runner_main,
             types_type_id_impl_of,
         };
 
