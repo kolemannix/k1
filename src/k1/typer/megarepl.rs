@@ -148,7 +148,7 @@ impl TypedProgram {
         let name = self.variables.get(variable_id).name;
         matches!(
             self.scopes.find_variable_local(ns_scope, name),
-            Some(VariableInScope::Defined(found)) if found == variable_id
+            Some(found) if found == variable_id
         )
     }
 
@@ -448,11 +448,7 @@ impl TypedProgram {
 
     pub fn megarepl_resolve_binding(&self, name: StringId) -> Option<&MegareplGlobal> {
         let mr = self.megarepl.as_ref().unwrap();
-        let Some(VariableInScope::Defined(variable_id)) =
-            self.scopes.find_variable_local(mr.ns_scope, name)
-        else {
-            return None;
-        };
+        let variable_id = self.scopes.find_variable_local(mr.ns_scope, name)?;
         let VariableKind::Global(global_id) = self.variables.get(variable_id).kind else {
             return None;
         };
@@ -554,9 +550,7 @@ impl TypedProgram {
                     let existing_global = match self.scopes.find_variable_local(repl_ns_scope, name)
                     {
                         // A changed type will shadow
-                        Some(VariableInScope::Defined(variable_id))
-                            if self.variables.get(variable_id).type_id == type_id =>
-                        {
+                        Some(variable_id) if self.variables.get(variable_id).type_id == type_id => {
                             Some(variable_id)
                         }
                         _ => None,

@@ -675,7 +675,7 @@ fn main(): i32 {
   ps.push(.{ x = 3.0, y = 4.0, mass = 1.5 })
   ps.push(.{ x = 5.0, y = 6.0, mass = 2.0 })
   let total = 0.0: f32
-  for m in ps.ARR_mass { total = total + m }
+  for m in ps.mass { total = total + m }
   let p = ps.row(1)
   println("row 1 = (${p.x}, ${p.y}) mass ${p.mass}; total mass $total")
   0
@@ -686,59 +686,43 @@ fn main(): i32 {
 row 1 = (3.0, 4.0) mass 1.5; total mass 4.0
 ```
 
-`type-id.spell()` writes a type as `#type` over its id, so emitted code means
-the same type in any scope:
+The column struct comes from `map-struct`, which swaps each field's type for a
+`list` of it. `type-id.spell()` writes a type as `#type` over its id, so emitted
+code means the same type in any scope:
 
 ```text
-type particles = {
-  ARR_x: list[(#type type-id/make(14))],
-  ARR_y: list[(#type type-id/make(14))],
-  ARR_mass: list[(#type type-id/make(14))],
-}
+type particles = (#type type-id/make(8741))
 ns for particles {
-  fn row(self: particles, index: size): (#type type-id/make(7162)) {
-    let(returned) ret: (#type type-id/make(7162)) = .0;
-    ret.x = self.ARR_x.[index];
-    ret.y = self.ARR_y.[index];
-    ret.mass = self.ARR_mass.[index];
-    ret
-  }
-  fn empty(): particles { .{
-    ARR_x = list/empty(),
-    ARR_y = list/empty(),
-    ARR_mass = list/empty(),
+  fn row(self: particles, index: size): (#type type-id/make(8736)) { .{
+    x = self.x.[index],
+    y = self.y.[index],
+    mass = self.mass.[index],
   } }
-  fn push(self: *particles, value: (#type type-id/make(7162))) {
-    self.ARR_x.push(value.x);
-    self.ARR_y.push(value.y);
-    self.ARR_mass.push(value.mass);
+  fn empty(): particles { .0 }
+  fn push(self: *particles, value: (#type type-id/make(8736))) {
+    self.x.push(value.x)
+    self.y.push(value.y)
+    self.mass.push(value.mass)
   }
 }
 ```
 
-## Two stages: tokens, then a checked type
+## Tokens, then a checked type
 
 `define-soa` wants its struct as a type argument. A macro can take the fields
-as bare tokens and still reflect on a checked type: stage one re-spells the
-tokens as a type literal and calls stage two.
+as bare tokens and still reflect on a checked type: it re-spells the tokens as
+a type literal and hands them to `meta/eval`, which evaluates code at
+the call site while the macro runs, so `id` is the type the compiler built from
+those tokens. The macro names it, bakes a `describe` string from its schema,
+and writes a `write-row` that prints a missing optional as `-`:
 
 ```k1
-  macro define-record(name: code, fields: span[code-token]) {
-    let cb = code-builder/new()
-    cb.write("\$pre/define-record-typed($name, types/id[{ ")
-    cb.write-tokens(fields)
-    cb.write(" }])")
-    cb.build()
-  }
-```
-
-A macro parameter that isn't `code` is evaluated at the call site, so `id`
-arrives as the type the compiler built from those tokens. Stage two names it,
-bakes a `describe` string from its schema, and writes a `write-row` that
-prints a missing optional as `-`:
-
-```k1
-  macro define-record-typed(name: code, id: types/type-id) {
+  macro define-record(name: code, field-tokens: span[code-token]) {
+    let type-expr = code-builder/new()
+    type-expr.write("types/id[{ ")
+    type-expr.write-tokens(field-tokens)
+    type-expr.write(" }]")
+    let id = meta/eval[types/type-id](type-expr.build())
     let fields = id.schema().as-struct().!.fields
     let cb-storage = code-builder/new()
     let cb = cb-storage.&
@@ -762,8 +746,8 @@ prints a missing optional as `-`:
   }
 ```
 
-Both live in `ns pre`, which compiles before the rest of the file, so a `$`
-line at the top can call them:
+It lives in `ns pre`, which compiles before the rest of the file, so a `$`
+line at the top can call it:
 
 ```k1
 $pre/define-record(point, \{ x: int, label: string, note: ?string })

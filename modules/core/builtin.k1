@@ -137,7 +137,6 @@ ns types {
 
   fn(builtin) id[t](): type-id
 
-  fn type-id-of-val[t](_t: t): type-id { id[t] }
   fn name[t](): string { id[t].info().name }
 
   fn type-name-of-val[t](_t: t): string { name[t] }
@@ -270,6 +269,10 @@ ns meta {
   // Must be provided an integer literal.
   // Can only be called by generated code
   fn(builtin) get-static-value[t](id: u64): t
+
+  fn(builtin) eval[t](expr: code): t
+
+  fn(builtin) try-eval[t](expr: code): result[t, string]
 
 
 }

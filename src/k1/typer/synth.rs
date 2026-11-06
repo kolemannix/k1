@@ -809,14 +809,6 @@ impl TypedProgram {
         self.exprs.add(TypedExpr::Call { call_id }, type_id, span)
     }
 
-    pub(super) fn synth_phony_expected_type(
-        &mut self,
-        expected_type: Option<TypeId>,
-        span: Span,
-    ) -> TypedExprId {
-        self.synth_phony(expected_type.unwrap_or(self.builtin_types.empty), span)
-    }
-
     pub(super) fn synth_field_access(
         &mut self,
         struct_expr: TypedExprId,

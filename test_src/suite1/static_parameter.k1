@@ -1,5 +1,7 @@
 ns static_parameter
 
+fn signature-reads-static-param[n: static int, m: static type-of(n)](x: type-of(n)) {}
+
 fn add-static[i: static int](x: int): int { i + x }
 
 fn scaled[i: static int](x: i): int { #static x * 2 + 1 }

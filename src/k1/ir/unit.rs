@@ -970,8 +970,7 @@ fn map_refs(
         | Inst::IntToFloatUnsigned { v, .. }
         | Inst::IntToFloatSigned { v, .. }
         | Inst::PtrToWord { v, .. }
-        | Inst::WordToPtr { v }
-        | Inst::BakeStaticValue { value: v, .. } => value(v),
+        | Inst::WordToPtr { v } => value(v),
         Inst::IntBinop { lhs, rhs, .. }
         | Inst::IntOverflows { lhs, rhs, .. }
         | Inst::IntCmp { lhs, rhs, .. }

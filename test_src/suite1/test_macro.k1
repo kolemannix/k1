@@ -119,19 +119,19 @@ macro string-parts(t: span[code-token]) {
   for t.[0].parts {
     if it is {
       :text p -> sb.write("[${p.value}]"),
-      :hole h -> sb.write("{${h.tokens.len()}${h.spec}}"),
+      :expr e -> sb.write("{${e.tokens.len()}${e.spec}}"),
     }
   }
   "${meta/str-lit(sb.build())}"
 }
 
-macro hole-sum(t: span[code-token]) {
+macro expr-sum(t: span[code-token]) {
   let cb = code-builder/new()
   cb.write("0")
   for t.[0].parts {
-    if it is :hole h {
+    if it is :expr e {
       cb.write(" + ")
-      cb.write-tokens(h.tokens)
+      cb.write-tokens(e.tokens)
     }
   }
   cb.build()
@@ -169,7 +169,7 @@ fn(test) token-params() {
   assert(fail.!.starts-with("expected a number, got `three`"))
   assert-equals(string-parts(\{ "a\t${x + 1:>2} b $x" }), "[a\t]{3>2}[ b ]{1}")
   assert(test-compile(string-parts(\{ "${x:zz}" })).!.starts-with("Invalid format spec"))
-  assert-equals(hole-sum(\{ "${x} and ${x * 2}" }), 12)
+  assert-equals(expr-sum(\{ "${x} and ${x * 2}" }), 12)
 }
 
 fn(test) raw-token-group() {
@@ -177,4 +177,136 @@ fn(test) raw-token-group() {
   assert-equals(c.text, "any < tokens > here")
   assert(c.spans.[0].source != 0)
   assert-equals((\{}).text, "")
+}
+
+type eval-point = { x: int, y: int }
+fn make-eval-point(): eval-point { .{ x = 1, y = 2 } }
+let eval-values: span[int] = [1, 2, 3]
+ns eval-globals { let answer: int = 5 }
+fn read-eval(): int { meta/eval[int]("1") }
+fn reads-context(context p: eval-point)(): int { p.x }
+fn crash-int(): int { crash("the operand ran") }
+
+macro eval-plus-one(e: code) { "${meta/eval[int](e) + 1}" }
+macro eval-by-expected(e: code) { let v: int = meta/eval(e); "${v + 1}" }
+macro eval-point-sum(e: code) { let p = meta/eval[eval-point](e); "${p.x + p.y}" }
+macro eval-len(e: code) { "${meta/eval[span[int]](e).len()}" }
+macro eval-nested(e: code) { "${meta/eval[int]("eval-plus-one($e)")}" }
+macro expr-type-name(e: code) { "${meta/str-lit(meta/type-of(e).name())}" }
+macro fold-or-run(e: code) { if meta/try-eval[int](e) is :ok v "${v + 1}" else "$e + 1" }
+macro why-not-static(e: code) { if meta/try-eval[int](e) is :err m "${meta/str-lit(m)}" else `""` }
+macro why-not-parsed() { if meta/try-eval[int]("1 +") is :err _ "true" else "false" }
+
+fn generic-expr-name[t](x: t): string { let name: string = expr-type-name(x); name }
+macro discarded() { "{}" }
+macro return-value(value: code) { "return $value" }
+fn generic-discards[t](x: t, c: bool): t {
+  discarded()
+  let _ = discarded()
+  defer discarded()
+  if c { discarded() }
+  if not c { return x } else { discarded() }
+  if c is { true -> discarded(), false -> discarded() }
+  for _item in eval-values { discarded() }
+  require c else return-value(x)
+  x
+}
+fn count-fields[t](): int {
+  let count = fn() {
+    let n = 0
+    #for types/id[t].schema().as-struct().!.fields { n = n + 1 }
+    n
+  }
+  count()
+}
+fn static-body-runs-in-generic[t](x: t): int {
+  let n: #type { #if true types/id[int] else types/id[string] } = 1
+  n
+}
+
+macro baked-int() { "${meta/baked-value-expr[int](42)}" }
+macro baked-point() { "${meta/baked-value-expr[eval-point](.{ x = 1, y = 2 })}" }
+macro baked-empty() { "${meta/baked-value-expr[empty]({})}" }
+
+fn(test) baked-values-read-back() {
+  let n: int = baked-int()
+  assert-equals(n, 42)
+  let p: eval-point = baked-point()
+  assert-equals(p.x + p.y, 3)
+  let _: empty = baked-empty()
+}
+
+fn(test) eval-reads() {
+  assert-equals(eval-plus-one(40 + 1), 42)
+  assert-equals(eval-by-expected(40 + 1), 42)
+  assert-equals(eval-point-sum(make-eval-point()), 3)
+  assert-equals(eval-len(eval-values), 3)
+  assert-equals(eval-nested(40), 41)
+  let from-meta: int = #meta "${meta/eval[int]("20 + 1") * 2}"
+  assert-equals(from-meta, 42)
+}
+
+fn(test) eval-errors() {
+  let n = 1
+  assert(test-compile(eval-plus-one(n)).!.starts-with("'n' is a runtime value"))
+  assert-equals(n, 1)
+  assert(test-compile(eval-plus-one("x")).!.starts-with("Static type mismatch"))
+  assert(test-compile(#static read-eval()).!.starts-with("meta/eval runs only under"))
+  assert-equals(eval-plus-one({ if true { return 5 }; 6 }), 6)
+  assert(test-compile(eval-plus-one({ if true { return "x" }; 6 })).!.starts-with("Expected i64"))
+}
+
+fn(test) try-eval-reports-without-failing() {
+  let n = 40
+  assert-equals(fold-or-run(40 + 1), 42)
+  assert-equals(fold-or-run(n), 41)
+  assert(why-not-static(n).starts-with("'n' is a runtime value"))
+  assert(why-not-static("x").starts-with("Static type mismatch"))
+  assert(why-not-static(nope).starts-with("No value 'nope'"))
+  assert(why-not-static(crash-int()).starts-with("the operand ran"))
+  assert(why-not-static(type-of({ nope })).starts-with("No value 'nope'"))
+  assert(why-not-static({ let x: #type { nope } = 1; x }).starts-with("No value 'nope'"))
+  assert-equals(why-not-static(1), "")
+  assert(why-not-parsed())
+}
+
+fn(test) macro-exprs-get-runtime-types() {
+  let n = 1
+  let s = "x"
+  assert-equals(expr-type-name(n), "i64")
+  assert-equals(expr-type-name(s), "string")
+  assert-equals(expr-type-name(s.len()), "i64")
+  assert-equals(expr-type-name(crash-int()), "i64")
+  assert-equals(generic-expr-name(1), "i64")
+  assert-equals(generic-expr-name("x"), "string")
+  assert-equals(generic-discards(1, true), 1)
+  assert-equals(count-fields[eval-point](), 2)
+  assert-equals(static-body-runs-in-generic("x"), 1)
+  assert(test-compile(expr-type-name(nope)).!.starts-with("No value 'nope'"))
+  let through-static: string = #static expr-type-name(n)
+  assert-equals(through-static, "i64")
+  assert(test-compile(#static meta/type-of("1")).!.starts-with("meta/eval runs only under"))
+}
+
+fn(test) static-code-reads-only-static-values() {
+  let n = 1
+  assert(test-compile(#static n).!.starts-with("'n' is a runtime value"))
+  assert(test-compile(#static { let f = fn[n]() { n }; f() }).!.starts-with("'n' is a runtime value"))
+  {
+    let(context) p: eval-point = .{ x = 1, y = 2 }
+    assert(test-compile(#static reads-context()).!.starts-with("'p' is a runtime value"))
+    let crash-int = p.x
+    assert(test-compile(#static crash-int()).!.starts-with("'crash-int' is a runtime value"))
+    assert-equals(crash-int, 1)
+  }
+  let own-local: int = #static { let x = 1; x + 1 }
+  assert-equals(own-local, 2)
+  assert(#if type-of(n) == types/id[int] true else false)
+  let n-type: static types/type-id = type-of(n)
+  assert(#if n-type == types/id[int] true else false)
+  assert-equals(type-of(crash-int()), types/id[int])
+  use eval-globals/answer
+  let read-through-use: int = #static answer
+  assert-equals(read-through-use, 5)
+  assert-equals(n, 1)
 }

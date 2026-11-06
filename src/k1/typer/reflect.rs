@@ -235,7 +235,6 @@ impl TypedProgram {
             self.get_instance_arg(args_span_type_id, self.builtin_types.span()).unwrap();
         let mut arg_value_ids = self.tmp.new_list(found_impl_args.len() as u32);
         for (param, &arg) in self.mem.getn(impl_params).iter().zip(found_impl_args) {
-            self.register_type_metainfo(arg);
             let name_value_id = self.static_values.add_string(param.name);
             let type_id_value_id = self.add_type_id_value(arg);
             arg_value_ids.push(
@@ -303,7 +302,6 @@ impl TypedProgram {
             self.get_instance_arg(instance_opt_type_id, self.builtin_types.opt()).unwrap();
         let args_span_type_id = self.get_struct_field(instance_info_type_id, 1).type_id;
 
-        self.register_type_metainfo(info.generic_parent);
         let parent_value_id = self.add_type_id_value(info.generic_parent);
 
         let mut type_args: SV4<TypeId> = smallvec![];
@@ -312,7 +310,6 @@ impl TypedProgram {
         }
         let mut arg_value_ids = self.tmp.new_list(type_args.len() as u32);
         for arg in type_args {
-            self.register_type_metainfo(arg);
             arg_value_ids.push(self.add_type_id_value(arg));
         }
         let args_span_value_id = self.add_static_container_from_ids(
@@ -431,18 +428,19 @@ impl TypedProgram {
                     .get_instance_arg(struct_schema_fields_span_type_id, self.builtin_types.span())
                     .unwrap();
 
-                let struct_pt = self.get_physical_type(type_id).unwrap();
+                let struct_pt = self.get_physical_type(type_id);
                 // { name: string), typeId: u64, offset: size }
                 let mut field_values = self.tmp.new_list(struct_type_fields.len());
                 for (index, f) in self.mem.getn(struct_type_fields).iter().enumerate() {
                     let name_string_value_id = self.static_values.add_string(f.name);
 
-                    // We need to ensure that any and all typeIds that we share with the user
-                    // are available at runtime, by calling these functions at least once.
-                    self.register_type_metainfo(f.type_id);
-
                     let type_id_value_id = self.add_type_id_value(f.type_id);
-                    let offset_u32 = self.get_struct_field_offset(struct_pt, index as u32).unwrap();
+                    let offset_u32 = match struct_pt {
+                        PhysicalTypeResult::Yes(pt) => {
+                            self.get_struct_field_offset(pt, index as u32).unwrap()
+                        }
+                        PhysicalTypeResult::No => 0,
+                    };
                     let offset_value_id = self.static_values.add_size(offset_u32 as i64);
                     field_values.push(self.static_values.add_struct_from_slice(
                         struct_schema_field_item_struct_type_id,
@@ -472,10 +470,6 @@ impl TypedProgram {
                 // { innerTypeId: type-id, mutable: bool }
                 let inner_type_id_value_id = self.add_type_id_value(reference_type.inner_type);
 
-                // We need to ensure that any and all typeIds that we share with the user
-                // are available at runtime, by calling these functions at least once.
-                self.register_type_metainfo(reference_type.inner_type);
-
                 let payload_struct_id = self.static_values.add_struct_from_slice(
                     reference_schema_payload_type_id,
                     &[inner_type_id_value_id],
@@ -494,7 +488,6 @@ impl TypedProgram {
                 let schema_payload_type_id =
                     get_schema_variant(self, variant_name).payload.unwrap();
                 let element_type_id_value_id = self.add_type_id_value(element_type);
-                self.register_type_metainfo(element_type);
 
                 let maybe_concrete_size_value_id = match concrete_count {
                     None => None,
@@ -525,9 +518,12 @@ impl TypedProgram {
                 let tag_type = typed_sum.tag_type;
                 let tag_type_value_id =
                     self.static_values.add(TypedProgram::make_int_kind(int_kind_type_id, tag_type));
-                let sum_agg_id = self.get_physical_type(type_id).unwrap().expect_agg();
-                let sum_pt = self.agg_types.get(sum_agg_id).agg_type.expect_sum();
-                let payload_offset = sum_pt.payload_offset;
+                let payload_offset = match self.get_physical_type(type_id) {
+                    PhysicalTypeResult::Yes(pt) => {
+                        self.agg_types.get(pt.expect_agg()).agg_type.expect_sum().payload_offset
+                    }
+                    PhysicalTypeResult::No => 0,
+                };
                 let payload_offset_value_id =
                     self.static_values.add_size(to_k1_size_usize(payload_offset as usize));
                 let mut variant_values = self.tmp.new_list(target_sum_variants.len());
@@ -559,9 +555,6 @@ impl TypedProgram {
                         ),
                         Some(payload_type_id) => {
                             let type_id_value_id = self.add_type_id_value(payload_type_id);
-                            // We need to ensure that any and all typeIds that we share with the user
-                            // are available at runtime, by calling these functions at least once.
-                            self.register_type_metainfo(payload_type_id);
 
                             let payload_info_struct_id = self
                                 .static_values
@@ -616,7 +609,6 @@ impl TypedProgram {
 
                 let mut params_value_ids = self.tmp.new_list(fn_type.logical_params().len());
                 for param in self.mem.getn(fn_type.logical_params()) {
-                    self.register_type_metainfo(param.type_id);
                     params_value_ids.push(self.add_type_id_value(param.type_id));
                 }
                 let params_span_value_id = self.add_static_container_from_ids(
@@ -625,7 +617,6 @@ impl TypedProgram {
                     params_value_ids.as_slice(),
                 );
 
-                self.register_type_metainfo(fn_type.return_type);
                 let return_type_id_value_id = self.add_type_id_value(fn_type.return_type);
 
                 let payload = self.static_values.add_struct_from_slice(
@@ -641,7 +632,6 @@ impl TypedProgram {
                 let param_names_span_type_id =
                     self.get_struct_field(named_function_schema_payload_type_id, 1).type_id;
 
-                self.register_type_metainfo(fr.function_type);
                 let function_type_id_value_id = self.add_type_id_value(fr.function_type);
 
                 let param_count =
@@ -669,7 +659,6 @@ impl TypedProgram {
                     get_schema_variant(self, self.ast.idents.b.function_pointer).payload.unwrap();
 
                 let function_type_id_value_id = self.add_type_id_value(fp.function_type_id);
-                self.register_type_metainfo(fp.function_type_id);
 
                 let payload = self.static_values.add_struct_from_slice(
                     function_pointer_schema_payload_type_id,
@@ -700,6 +689,7 @@ impl TypedProgram {
     }
 
     pub(crate) fn add_type_id_value(&mut self, type_id: TypeId) -> StaticValueId {
+        self.register_type_metainfo(type_id);
         let type_id_type_id = self.builtin_types.type_id();
         self.static_values.add_type_id_value(type_id_type_id, type_id)
     }

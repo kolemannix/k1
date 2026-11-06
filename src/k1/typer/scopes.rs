@@ -172,7 +172,7 @@ static_assert_size!(ScopeEntry, 20);
 
 #[derive(Clone, Copy)]
 enum EntryPayload {
-    Variable(VariableInScope),
+    Variable(VariableId),
     Function(FunctionId),
     Type(TypeId),
     Namespace(ScopeId),
@@ -265,7 +265,7 @@ enum NsEntryGlobalValue {
     #[default]
     None,
     Pending(ParsedGlobalId),
-    Bound(VariableInScope),
+    Bound(VariableId),
 }
 
 pub struct Scopes {
@@ -859,29 +859,21 @@ impl Scopes {
                 ident,
                 None,
                 |e| match (e.function, e.global) {
-                    (Some(f), _) => Some((Some(CallBinding::Function(f)), Provenance::Defined)),
-                    (None, NsEntryGlobalValue::Bound(VariableInScope::Masked)) => {
-                        Some((None, Provenance::Defined))
-                    }
+                    (Some(f), _) => Some((CallBinding::Function(f), Provenance::Defined)),
                     (None, NsEntryGlobalValue::Bound(_) | NsEntryGlobalValue::Pending(_)) => {
-                        Some((Some(CallBinding::Value), Provenance::Defined))
+                        Some((CallBinding::Value, Provenance::Defined))
                     }
                     (None, NsEntryGlobalValue::None) => None,
                 },
                 |e| match e.payload {
-                    EntryPayload::Function(f) => {
-                        Some((Some(CallBinding::Function(f)), e.provenance))
-                    }
-                    EntryPayload::Variable(VariableInScope::Masked) => Some((None, e.provenance)),
+                    EntryPayload::Function(f) => Some((CallBinding::Function(f), e.provenance)),
                     EntryPayload::Variable(_) | EntryPayload::PendingGlobal(_) => {
-                        Some((Some(CallBinding::Value), e.provenance))
+                        Some((CallBinding::Value, e.provenance))
                     }
                     _ => None,
                 },
             )?;
-            Some(binding.unwrap_or_else(|| {
-                self.find_function(sid, ident).map_or(CallBinding::Value, CallBinding::Function)
-            }))
+            Some(binding)
         })
         .map(|(b, _)| b)
     }
@@ -1149,39 +1141,16 @@ impl Scopes {
         .map(|(parsed_id, p, defn_scope_id)| ((parsed_id, defn_scope_id), p))
     }
 
-    pub fn find_variable_binding(
-        &self,
-        scope_id: ScopeId,
-        ident: StringId,
-    ) -> Option<(VariableInScope, ScopeId)> {
+    pub fn find_variable(&self, scope_id: ScopeId, ident: StringId) -> Option<VariableId> {
         self.walk_chain(scope_id, kinds::VARIABLES, |sid| self.find_variable_local(sid, ident))
+            .map(|(v, _)| v)
     }
 
-    pub fn find_variable(
-        &self,
-        scope_id: ScopeId,
-        ident: StringId,
-    ) -> Option<(VariableId, ScopeId)> {
-        let (in_scope, found_scope) = self.find_variable_binding(scope_id, ident)?;
-        match in_scope {
-            VariableInScope::Defined(id) => Some((id, found_scope)),
-            VariableInScope::Masked => None,
-        }
-    }
-
-    pub fn find_variable_local(
-        &self,
-        scope_id: ScopeId,
-        ident: StringId,
-    ) -> Option<VariableInScope> {
+    pub fn find_variable_local(&self, scope_id: ScopeId, ident: StringId) -> Option<VariableId> {
         self.find_variable_entry(scope_id, ident).map(|(vis, _)| vis)
     }
 
-    pub fn find_variable_exposed(
-        &self,
-        scope_id: ScopeId,
-        ident: StringId,
-    ) -> Option<VariableInScope> {
+    pub fn find_variable_exposed(&self, scope_id: ScopeId, ident: StringId) -> Option<VariableId> {
         exposed(self.find_variable_entry(scope_id, ident))
     }
 
@@ -1189,7 +1158,7 @@ impl Scopes {
         &self,
         scope_id: ScopeId,
         ident: StringId,
-    ) -> Option<(VariableInScope, Provenance)> {
+    ) -> Option<(VariableId, Provenance)> {
         self.find_entry(
             scope_id,
             ident,
@@ -1212,13 +1181,8 @@ impl Scopes {
         ident: StringId,
         variable_id: VariableId,
     ) -> bool {
-        let payload = EntryPayload::Variable(VariableInScope::Defined(variable_id));
+        let payload = EntryPayload::Variable(variable_id);
         self.bind(scope_id, ident, payload, Provenance::Defined)
-    }
-
-    pub fn mask_variable(&mut self, scope_id: ScopeId, ident: StringId) {
-        let payload = EntryPayload::Variable(VariableInScope::Masked);
-        self.bind(scope_id, ident, payload, Provenance::Defined);
     }
 
     pub fn add_context_variable(
@@ -1419,7 +1383,7 @@ impl Scopes {
     pub fn iter_scope_variables(
         &self,
         scope_id: ScopeId,
-    ) -> impl Iterator<Item = (StringId, VariableInScope, Provenance)> + '_ {
+    ) -> impl Iterator<Item = (StringId, VariableId, Provenance)> + '_ {
         self.iter_scope_members(scope_id).filter_map(|(name, member, p)| match member {
             ScopeMember::Variable(v) => Some((name, v, p)),
             _ => None,
@@ -1454,20 +1418,6 @@ impl Scopes {
             ScopeMember::Namespace(ns) => Some((name, ns, p)),
             _ => None,
         })
-    }
-
-    pub fn scope_has_ancestor(&self, scope_id: ScopeId, ancestor: ScopeId) -> bool {
-        let scope = self.get_scope(scope_id);
-        match scope.parent {
-            Some(parent) => {
-                if parent == ancestor {
-                    true
-                } else {
-                    self.scope_has_ancestor(parent, ancestor)
-                }
-            }
-            None => false,
-        }
     }
 
     pub fn nearest_parent_namespace(&self, scope_id: ScopeId) -> NamespaceId {
@@ -1556,18 +1506,14 @@ impl TypedProgram {
         &self,
         scope: ScopeId,
         name: &QIdent,
-    ) -> K1Result<Option<(VariableId, ScopeId)>> {
+    ) -> K1Result<Option<VariableId>> {
         // Unqualified mentions are implicitly recursive searches
         // But qualified mentions imply that the targeted symbol lives directly at the given path!
         if !name.has_path() {
             Ok(self.scopes.find_variable(scope, name.name))
         } else {
             let scope_to_search = self.resolve_qident(scope, name)?;
-            match self.scopes.find_variable_exposed(scope_to_search, name.name) {
-                None => Ok(None),
-                Some(VariableInScope::Defined(id)) => Ok(Some((id, scope_to_search))),
-                Some(VariableInScope::Masked) => Ok(None),
-            }
+            Ok(self.scopes.find_variable_exposed(scope_to_search, name.name))
         }
     }
 
@@ -1776,6 +1722,7 @@ pub enum ScopeOwnerId {
     None,
     Ability(AbilityId),
     Function(FunctionId),
+    GenericSignature,
     Namespace(NamespaceId),
     Lambda(TypeId, FunctionId, ScopeId),
 }
@@ -1790,7 +1737,7 @@ impl ScopeOwnerId {
 
 #[derive(Debug, Clone, Copy)]
 pub enum ScopeMember {
-    Variable(VariableInScope),
+    Variable(VariableId),
     Function(FunctionId),
     Type(TypeId),
     Namespace(NamespaceId),
@@ -1801,12 +1748,6 @@ pub enum ScopeMember {
 pub enum CallBinding {
     Function(FunctionId),
     Value,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum VariableInScope {
-    Masked,
-    Defined(VariableId),
 }
 
 #[derive(Clone, Copy)]

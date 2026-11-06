@@ -1,7 +1,7 @@
 use crate::lex::{Span, is_ident_char};
 use crate::parse::{FileId, ParsedExpr, ParsedId, ParsedProgram, StringId};
 use crate::typer::dump::TypeDisplayMode;
-use crate::typer::scopes::{Provenance, ScopeId, ScopeMember, VariableInScope};
+use crate::typer::scopes::{Provenance, ScopeId, ScopeMember};
 use crate::typer::types::{FnParamKind, Type};
 use crate::{SV8, typer::*};
 use fxhash::FxHashSet;
@@ -456,8 +456,7 @@ fn collect_completion_candidates_in_scope_immediate(
             continue;
         }
         let detail = match member {
-            ScopeMember::Variable(VariableInScope::Masked) => continue,
-            ScopeMember::Variable(VariableInScope::Defined(variable_id)) => {
+            ScopeMember::Variable(variable_id) => {
                 k1.type_id_to_string(k1.variables.get(variable_id).type_id)
             }
             ScopeMember::Function(function_id) => k1.function_id_to_string(function_id, false),
@@ -510,7 +509,7 @@ pub fn collect_workspace_symbols(k1: &TypedProgram, query: &str) -> Vec<Workspac
                 {
                     (NameKind::Type, defn(LsEntityKind::Type { type_id, applied_type_id: None }))
                 }
-                ScopeMember::Variable(VariableInScope::Defined(variable_id)) => {
+                ScopeMember::Variable(variable_id) => {
                     (NameKind::Variable, defn(LsEntityKind::Variable { variable_id }))
                 }
                 ScopeMember::Ability(ability_id) => {

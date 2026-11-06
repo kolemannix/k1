@@ -5,7 +5,7 @@ use fxhash::FxHashMap;
 use maud::{Markup, html};
 
 use crate::parse::StringId;
-use crate::typer::scopes::{Provenance, ScopeMember, VariableInScope};
+use crate::typer::scopes::{Provenance, ScopeMember};
 use crate::typer::types::TypeId;
 use crate::typer::{
     AbilityId, FunctionId, GlobalInitialValue, NamespaceId, NamespaceKind, TypedProgram, VariableId,
@@ -156,11 +156,11 @@ fn render_ns_main(k1: &TypedProgram, tree: &NsTree, ns_id: NamespaceId, path: &[
             ScopeMember::Function(function_id) => functions.push((name, function_id)),
             ScopeMember::Type(type_id) => types.push((name, type_id)),
             ScopeMember::Ability(ability_id) => abilities.push((name, ability_id)),
-            ScopeMember::Variable(VariableInScope::Defined(vid)) => globals.push((name, vid)),
+            ScopeMember::Variable(vid) => globals.push((name, vid)),
             ScopeMember::Namespace(used_ns_id) if prov == Provenance::UseExposed => {
                 used_namespaces.push((name, used_ns_id))
             }
-            ScopeMember::Variable(VariableInScope::Masked) | ScopeMember::Namespace(_) => {}
+            ScopeMember::Namespace(_) => {}
         }
     }
     functions.sort_by(|a, b| k1.ident_str(a.0).cmp(k1.ident_str(b.0)));

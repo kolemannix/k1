@@ -615,7 +615,7 @@ pub enum ParsedStaticBlockKind {
     /// or codecs
     Metaprogram,
     /// Kind: MacroCall. `$name(args)` at definition level. The base expr must be
-    /// a call whose callee resolves to a macro; the expansion is compiled as
+    /// a call whose callee resolves to a macro; its emitted code is compiled as
     /// definitions in place
     MacroCall,
 }

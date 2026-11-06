@@ -240,6 +240,7 @@ pub struct Vm {
     pub(crate) overall_return_addr: *mut u8,
     /// (fp, pc) at the point of a bc execution error, for bc stack traces
     pub(crate) bc_fault: Option<(u64, u32)>,
+    pub(crate) meta_call_site: Option<(crate::typer::EvalExprContext, Span)>,
 }
 
 impl Vm {
@@ -258,6 +259,7 @@ impl Vm {
         self.repl_commands.clear();
         self.overall_return_addr = core::ptr::null_mut();
         self.bc_fault = None;
+        self.meta_call_site = None;
 
         if let Some(arena_ptr) = arena_ptr_to_preserve {
             debug!("Preserving core/mem/arena allocation at {:p}", arena_ptr);
@@ -291,6 +293,7 @@ impl Vm {
             repl_commands: vec![],
             quiet_messages: false,
             bc_fault: None,
+            meta_call_site: None,
         }
     }
 }

@@ -410,6 +410,9 @@ crate::tag_enum! {
 
         CompilerMessage,
         ReplCheckbox,
+        Eval,
+        TryEval,
+        BakeStaticValue,
     }
 }
 
@@ -432,6 +435,9 @@ impl BackendBuiltin {
             BackendBuiltin::Exit => "exit",
             BackendBuiltin::CompilerMessage => "compiler_message",
             BackendBuiltin::ReplCheckbox => "repl_checkbox",
+            BackendBuiltin::Eval => "eval",
+            BackendBuiltin::TryEval => "try_eval",
+            BackendBuiltin::BakeStaticValue => "bake_static_value",
         }
     }
 }
@@ -896,10 +902,6 @@ pub enum Inst {
         pred: FloatCmpPred,
     },
 
-    BakeStaticValue {
-        type_id: TypeId,
-        value: Value,
-    },
 }
 
 impl Inst {
@@ -979,7 +981,6 @@ pub fn visit_inst_values(u: &UnitView, inst: &Inst, f: &mut impl FnMut(Value)) {
             }
         }
         Inst::Ret { v, .. } => f(v),
-        Inst::BakeStaticValue { value, .. } => f(value),
         Inst::Select { cond, cons, alt, .. } | Inst::FloatFma { a: cond, b: cons, c: alt, .. } => {
             f(cond);
             f(cons);
@@ -1122,7 +1123,6 @@ pub fn get_inst_kind(u: &UnitView, inst_id: InstId) -> InstKind {
         Inst::FloatUnop { t, .. } => InstKind::scalar(t),
         Inst::FloatFma { t, .. } => InstKind::scalar(t),
         Inst::FloatCmp { .. } => InstKind::BOOL,
-        Inst::BakeStaticValue { .. } => InstKind::I64,
     }
 }
 
@@ -2938,9 +2938,7 @@ fn compile_variable_to_address(
                 Some(var) => (var.value, var.pt, var.indirect),
                 None => {
                     let type_id = b.k1.variables.get(variable_id).type_id;
-                    let Some(value_id) =
-                        b.k1.types.get(type_id).as_value_type().and_then(|v| v.value_id)
-                    else {
+                    let Some(value_id) = b.k1.get_value_from_value_type(type_id) else {
                         let mut variables = String::new();
                         for (idx, bv) in b.k1.ir.b_variables.values().enumerate() {
                             if idx > 0 {
@@ -2991,23 +2989,6 @@ fn compile_ir_builtin(
 ) -> K1Result<Value> {
     match builtin {
         BuiltinIr::Unreachable => Ok(b.push_inst_anon(Inst::Unreachable).as_value()),
-        BuiltinIr::BakeStaticValue => {
-            let type_id = b.k1.get_type_slice(call.type_args)[0];
-            let _physical_type = b.get_physical_type(type_id);
-
-            let arg0 = *b.k1.mem.get_nth(call.args, 0);
-            let value = compile_expr(b, None, arg0)?;
-            let bake = b.push_inst_anon(Inst::BakeStaticValue { type_id, value });
-
-            let stored = store_rich_if_dst(
-                b,
-                dst,
-                callee_fn_type.return_type,
-                bake.as_value(),
-                IrComment::None,
-            );
-            Ok(stored)
-        }
         BuiltinIr::Scalar(_) => b_ice!(b, "scalar op builtins are typed as ScalarOp, not calls"),
         BuiltinIr::IntOverflow(op) => {
             let ret_pt = callee_fn_type.return_type;
@@ -4331,7 +4312,6 @@ pub fn validate_unit(k1: &TypedProgram, unit_id: IrUnitId) -> K1Result<()> {
                         ))
                     }
                 }
-                Inst::BakeStaticValue { .. } => (),
             }
         }
     }
@@ -4941,12 +4921,6 @@ pub fn display_inst(
             v(w, lhs)?;
             w.write_str(", ")?;
             v(w, rhs)?;
-        }
-        Inst::BakeStaticValue { type_id, value } => {
-            write!(w, "bake ")?;
-            k1.display_type_id(w, type_id, dump::TypeDisplayMode::Name)?;
-            w.write_str(" ")?;
-            v(w, value)?;
         }
     };
     Ok(())

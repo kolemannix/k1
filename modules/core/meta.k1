@@ -20,6 +20,8 @@ ns meta {
     b.build()
   }
 
+  fn type-of(expr: code): types/type-id { eval("type-of($expr)") }
+
   fn baked-value-expr[t](value: t): string {
     let value-id = bake-static-value[t](value)
     `core/meta/get-static-value($value-id)`
@@ -31,50 +33,25 @@ ns meta {
     `let $name: ${type-id.spell()} = $baked-value-expr;\n`
   }
 
-  // Note: If we had an ability for "growable collection", we could implement it.
-  //       len, row, empty, (push)
-  fn define-soa[t](name: string): code {
-    let struct-type-id = types/id[t]
-    let tt = struct-type-id.spell()
-    require struct-type-id.schema() is :struct .{ fields } else
-      crash("Its called a STRUCT of arrays for a reason")
+  fn define-soa[t](context locn: k1/source-location)(name: string): code {
+    let row-id = types/id[t]
+    require row-id.struct-parts() is .{ kind = :struct, fields } else crash("define-soa needs a plain struct")
     if fields.is-empty() crash("Input struct must have at least one field")
+    let row = row-id.spell()
+    let columns = row-id.map-struct(fn elem. types/make-instance(types/id[list], [elem]))
 
-    let code = string-builder/new()
-    code.writeln("type $name = {")
-    for f in fields {
-      code.writeln("  ARR_${f.name}: list[${f.type-id.spell()}],")
-    }
-    code.writeln("}")
-
-    // begin ns
-    code.writeln(`ns for $name {`)
-
-    // begin fn row
-    code.writeln(`  fn row(self: $name, index: size): $tt {`)
-    code.writeln(`    let(returned) ret: $tt = .0;`)
-    for f in fields {
-      code.writeln(`    ret.${f.name} = self.ARR_${f.name}.[index];`)
-    }
-    code.writeln(`    ret`)
-    code.writeln(`  }`) // end fn row
-
-    // begin fn empty
-    code.writeln(`  fn empty(): $name { .{`)
-    for f in fields {
-      code.writeln(`    ARR_${f.name} = list/empty(),`)
-    }
-    code.writeln(`  } }`) // end fn empty
-
-    // begin fn push
-    code.writeln(`  fn push(self: *$name, value: $tt) {`)
-    for f in fields {
-      code.writeln(`    self.ARR_${f.name}.push(value.${f.name});`)
-    }
-    code.writeln(`  }`) // end fn push
-
-    code.writeln(`}`) // end ns
-    code/from-string(code.build())
-  } 
+    let cb = code-builder/new()
+    cb.writeln("type $name = ${columns.spell()}")
+    cb.writeln("ns for $name {")
+    cb.writeln("  fn row(self: $name, index: size): $row { .{")
+    for f in fields { cb.writeln("    ${f.name} = self.${f.name}.[index],") }
+    cb.writeln("  } }")
+    cb.writeln("  fn empty(): $name { .0 }")
+    cb.writeln("  fn push(self: *$name, value: $row) {")
+    for f in fields { cb.writeln("    self.${f.name}.push(value.${f.name})") }
+    cb.writeln("  }")
+    cb.writeln("}")
+    cb.build()
+  }
 
 }

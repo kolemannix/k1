@@ -549,18 +549,19 @@ impl TypedProgram {
                 });
             }
             let mut content = String::new();
-            self.write_meta_emission_header(&mut content, EmissionOrigin::Configure, span, None);
+            self.write_meta_emission_header(
+                &mut content,
+                EmissionOrigin::Label("configure"),
+                span,
+                None,
+            );
             let Some((content, table)) =
                 self.build_emitted_source(content, true, text, &code_spans)?
             else {
                 self.ice_span(span, "configure text was empty")
             };
             let file_id = self.add_emitted_source(&content, self.tmp.getn(table), span);
-            let ParseMetaprogramResult::Expr(parsed) =
-                self.parse_metaprogram_source(host, file_id, ParseAdHocKind::Expr)?
-            else {
-                self.ice_span(span, "configure parsed as definitions");
-            };
+            let parsed = self.with_parser(host, file_id, |p| p.expect_expression())?;
             let ParsedExpr::Struct(_) = self.ast.exprs.get(parsed) else {
                 kbail!(
                     self,
@@ -915,14 +916,8 @@ impl TypedProgram {
             emitted_chunks.push(CodeChunkPos { start, end: expr.len() as u32, source: span });
         }
         let source_file_id = self.add_emitted_source(&expr, &emitted_chunks, call_span);
-        let ParseMetaprogramResult::Expr(parsed) =
-            self.parse_metaprogram_source(host, source_file_id, ParseAdHocKind::Expr)?
-        else {
-            self.ice_span(call_span, "module params parsed as definitions");
-        };
-        let ctx = EvalExprContext::make(host_scope_id)
-            .with_expected_type(Some(schema_type))
-            .with_static_ctx(Some(StaticExecContext { expected_return_type: Some(schema_type) }));
+        let parsed = self.with_parser(host, source_file_id, |p| p.expect_expression())?;
+        let ctx = EvalExprContext::make(host_scope_id).with_expected_type(Some(schema_type));
         let value_id = self.execute_static_expr(parsed, ctx)?;
         let value_type = self.get_static_value_type(value_id);
         if let Err(msg) = self.check_types(schema_type, value_type, host_scope_id) {

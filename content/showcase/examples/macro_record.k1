@@ -1,15 +1,12 @@
 $pre/define-record(point, \{ x: int, label: string, note: ?string })
 
 ns pre {
-  macro define-record(name: code, fields: span[code-token]) {
-    let cb = code-builder/new()
-    cb.write("\$pre/define-record-typed($name, types/id[{ ")
-    cb.write-tokens(fields)
-    cb.write(" }])")
-    cb.build()
-  }
-
-  macro define-record-typed(name: code, id: types/type-id) {
+  macro define-record(name: code, field-tokens: span[code-token]) {
+    let type-expr = code-builder/new()
+    type-expr.write("types/id[{ ")
+    type-expr.write-tokens(field-tokens)
+    type-expr.write(" }]")
+    let id = meta/eval[types/type-id](type-expr.build())
     let fields = id.schema().as-struct().!.fields
     let cb-storage = code-builder/new()
     let cb = cb-storage.&

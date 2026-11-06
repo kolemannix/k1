@@ -59,7 +59,7 @@ fn(test) schema-and-instance-reflection() {
   require schema[recursive-type] is :struct _ else crash("")
 
   let is-zero-ptr: *fn(int) -> bool = is-zero.&
-  assert-equals(types/id[type-of(is-zero-ptr)], types/id[type-of(is-zero.&)])
+  assert-equals(type-of(is-zero-ptr), type-of(is-zero.&))
   require schema[type-of(is-zero-ptr)] is :function-pointer .{ function-type-id } else crash("")
   require function-type-id.schema() is :function .{ params, return-type-id } else crash("")
   assert(return-type-id.schema() is :bool)

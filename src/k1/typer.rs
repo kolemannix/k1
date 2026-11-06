@@ -334,27 +334,8 @@ pub struct TypeDefnStackEntry {
     pub reserved_type_id: Option<TypeId>,
 }
 
-#[derive(Clone, Copy)]
-pub struct StaticExecContext {
-    /// If a `return` is used, what type is expected
-    /// This is needed because `return` usually looks at the
-    /// enclosing function, but for #static blocks it shouldn't
-    /// So this type can be different than the usual ctx.expected_type
-    expected_return_type: Option<TypeId>,
-}
-
 pub enum StaticExecutionResult {
     TypedExpr(TypedExprId),
-    Definitions(AstSlice<ParsedId>),
-}
-
-pub enum ParseAdHocKind {
-    Expr,
-    Definitions,
-}
-
-pub enum ParseMetaprogramResult {
-    Expr(ParsedExprId),
     Definitions(AstSlice<ParsedId>),
 }
 
@@ -368,9 +349,6 @@ bitflags! {
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct EvalExprFlags: u16 {
         const Inference = 1;
-        /// Indicates whether we are typechecking generic code
-        /// Most commonly, the body of a generic function
-        const GenericPass = 1 << 1;
         /// Indicates that we are generating code
         /// that the user shouldn't see or care about; should
         /// pevent emission of language server entities, perhaps
@@ -386,6 +364,7 @@ bitflags! {
         /// which records the CallArg site itself
         const CompletionCursorOwnedByCall = 1 << 7;
         const Speculative = 1 << 8;
+        const Discarded = 1 << 9;
     }
 }
 
@@ -398,7 +377,6 @@ pub struct EvalExprContext {
     /// Meaningful only when flags contains Static: the `return` type
     /// expectation inside #static blocks
     static_expected_return_type: Option<TypeId>,
-    // Each flag is almost always none, but that's good
     flags: EvalExprFlags,
 }
 
@@ -421,31 +399,27 @@ impl EvalExprContext {
     }
 
     #[inline(always)]
-    pub fn with_is_static(&self, is_static: bool) -> EvalExprContext {
-        let mut flags = self.flags;
-        flags.set(EvalExprFlags::Static, is_static);
-        EvalExprContext { flags, ..*self }
-    }
-
-    #[inline(always)]
     pub fn with_expected_type(&self, expected_type_id: Option<TypeId>) -> EvalExprContext {
-        EvalExprContext { expected_type_id, ..*self }
+        EvalExprContext { expected_type_id, flags: self.flags - EvalExprFlags::Discarded, ..*self }
     }
 
     #[inline(always)]
     pub fn with_no_expected_type(&self) -> EvalExprContext {
-        EvalExprContext { expected_type_id: None, ..*self }
+        self.with_expected_type(None)
     }
 
     #[inline(always)]
-    pub fn with_static_ctx(&self, static_ctx: Option<StaticExecContext>) -> EvalExprContext {
-        let mut flags = self.flags;
-        flags.set(EvalExprFlags::Static, static_ctx.is_some());
+    fn with_discarded(&self) -> EvalExprContext {
         EvalExprContext {
-            static_expected_return_type: static_ctx.and_then(|s| s.expected_return_type),
-            flags,
+            expected_type_id: None,
+            flags: self.flags | EvalExprFlags::Discarded,
             ..*self
         }
+    }
+
+    #[inline(always)]
+    pub fn is_discarded(&self) -> bool {
+        self.flags.contains(EvalExprFlags::Discarded)
     }
 
     #[inline(always)]
@@ -462,11 +436,6 @@ impl EvalExprContext {
     fn with_inference(&self) -> EvalExprContext {
         let flags = self.flags | EvalExprFlags::Inference | EvalExprFlags::Speculative;
         EvalExprContext { flags, ..*self }
-    }
-
-    #[inline(always)]
-    fn without_inference(&self) -> EvalExprContext {
-        EvalExprContext { flags: self.flags - EvalExprFlags::Inference, ..*self }
     }
 
     #[inline(always)]
@@ -487,18 +456,6 @@ impl EvalExprContext {
     #[inline(always)]
     fn with_scope(&self, scope_id: ScopeId) -> EvalExprContext {
         EvalExprContext { scope_id, ..*self }
-    }
-
-    #[inline(always)]
-    pub fn with_is_generic_pass(&self, is_generic_pass: bool) -> EvalExprContext {
-        let mut flags = self.flags;
-        flags.set(EvalExprFlags::GenericPass, is_generic_pass);
-        EvalExprContext { flags, ..*self }
-    }
-
-    #[inline(always)]
-    fn is_generic_pass(&self) -> bool {
-        self.flags.contains(EvalExprFlags::GenericPass)
     }
 
     #[inline(always)]
@@ -1946,7 +1903,6 @@ impl BuiltinTyperFunction {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum BuiltinIr {
     Unreachable,
-    BakeStaticValue,
     Scalar(ScalarOpKind),
     IntOverflow(OverflowOp),
     Bitcast,
@@ -2030,7 +1986,6 @@ impl BuiltinIr {
     pub fn kind_name(&self) -> &'static str {
         match self {
             BuiltinIr::Unreachable => "unreachable",
-            BuiltinIr::BakeStaticValue => "bake_static_value",
             BuiltinIr::Scalar(kind) => kind.kind_name(),
             BuiltinIr::IntOverflow(op) => op.name(),
             BuiltinIr::Bitcast => "bitcast",
@@ -2252,31 +2207,6 @@ impl FunctionAbilityContextInfo {
             impl_info: Some(FunctionAbilityImplContextInfo { self_type_id, impl_kind, is_default }),
         }
     }
-}
-
-#[derive(Debug, Clone)]
-struct EvalTypeExprContext {
-    /// `direct_*` locations mean top-level of the thing they describe
-    is_direct_function_parameter: bool,
-
-    /// `inside_*` locations mean anywhere inside of the thing they describe, including top-level
-    is_inside_type_definition_rhs: bool,
-    is_inside_static_type: bool,
-}
-impl_copy_if_small!(12, EvalTypeExprContext);
-
-impl EvalTypeExprContext {
-    /// If we descend into a type, we can categorically clear all `direct_`
-    /// fields, by definition
-    pub fn descended(&self) -> Self {
-        EvalTypeExprContext { is_direct_function_parameter: false, ..*self }
-    }
-
-    pub const EMPTY: Self = EvalTypeExprContext {
-        is_direct_function_parameter: false,
-        is_inside_type_definition_rhs: false,
-        is_inside_static_type: false,
-    };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3206,11 +3136,10 @@ impl TypedProgram {
         span: Span,
     ) -> K1Result<()> {
         let file_id = self.add_emitted_source(text, table, span);
-        let ParseMetaprogramResult::Definitions(parsed) =
-            self.parse_metaprogram_source(module_id, file_id, ParseAdHocKind::Definitions)?
-        else {
-            self.ice_span(span, "emitted definitions parsed as an expression")
-        };
+        let parsed = self.with_parser(module_id, file_id, |p| {
+            let defns = p.parse_definitions(TokenKind::Eof).to_mslice();
+            Ok(defns)
+        })?;
         let mut defns = self.ast.namespaces.get(ns).definitions;
         for defn in self.ast.mem.getn(parsed) {
             defns.push_grow(&mut self.ast.mem, *defn);
@@ -3219,7 +3148,7 @@ impl TypedProgram {
         Ok(())
     }
 
-    pub fn adopt_messages(&mut self, from: &TypedProgram) {
+    pub fn adopt_program_messages(&mut self, from: &TypedProgram) {
         for message in from.messages.borrow().iter() {
             let span = if message.span == Span::NONE {
                 Span::NONE
@@ -5276,7 +5205,7 @@ impl TypedProgram {
             if let Some(static_type) = static_type {
                 let expr = match static_type.value_id {
                     Some(value_id) => self.add_static_constant_expr(value_id, variable_name_span),
-                    None if ctx.is_generic_pass() => {
+                    None if self.is_generic_pass(ctx.scope_id) => {
                         self.synth_phony(static_type.family_type_id, variable_name_span)
                     }
                     None => kbail!(
@@ -5301,22 +5230,8 @@ impl TypedProgram {
                     {
                         k1_format_user!(
                             self,
-                            "Type parameter '{}' has no value; declare it '{}: static <type>' to use it as one",
+                            "Type parameter '{}' needs a static bound '{}: static <type>' to be used as a value",
                             name.name,
-                            name.name
-                        )
-                    } else if !name.has_path()
-                        && self.scopes.find_variable_binding(scope_id, name.name).is_some_and(
-                            |(binding, found)| {
-                                matches!(binding, VariableInScope::Masked)
-                                    && self.scopes.get_scope(found).scope_type
-                                        == ScopeType::StaticBody
-                            },
-                        )
-                    {
-                        k1_format_user!(
-                            self,
-                            "'{}' is a runtime value; compile-time code reads only static values",
                             name.name
                         )
                     } else if !name.has_path() {
@@ -5340,14 +5255,8 @@ impl TypedProgram {
                     Ok((None, self.function_to_id_reference(fn_id, variable_name_span)))
                 }
             },
-            Some((variable_id, variable_scope_id)) => {
-                self.check_lambda_capture_valid(
-                    scope_id,
-                    variable_id,
-                    variable_scope_id,
-                    name.name,
-                    variable_name_span,
-                )?;
+            Some(variable_id) => {
+                self.check_variable_read(variable_id, variable_name_span, ctx, None)?;
                 let v = self.variables.get(variable_id);
                 let expr = self.exprs.add(
                     TypedExpr::Variable(VariableExpr { variable_id }),
@@ -5363,27 +5272,51 @@ impl TypedProgram {
         }
     }
 
-    fn check_lambda_capture_valid(
+    fn check_variable_read(
         &self,
-        use_scope: ScopeId,
         variable_id: VariableId,
-        variable_scope_id: ScopeId,
-        name: StringId,
         span: Span,
+        ctx: EvalExprContext,
+        context_param_name: Option<StringId>,
     ) -> K1Result<()> {
-        let Some(lambda_scope_id) = self.scopes.nearest_parent_lambda(use_scope) else {
+        if !ctx.is_static() && self.scopes.nearest_parent_lambda(ctx.scope_id).is_none() {
             return Ok(());
-        };
-        let variable_is_above_lambda =
-            self.scopes.scope_has_ancestor(lambda_scope_id, variable_scope_id);
-        let variable_is_global = self.variables.get(variable_id).global_id().is_some();
-        if variable_is_above_lambda && !variable_is_global {
-            let name = self.ident_str(name);
-            kbail!(
-                self,
-                span,
-                "Lambda does not capture '{name}'. Declare it in the capture list: `fn[{name}]` copies its value, `fn[{name}.&]` captures its address",
-            );
+        }
+        let v = self.variables.get(variable_id);
+        if v.global_id().is_some() {
+            return Ok(());
+        }
+        let name = self.ident_str(v.name);
+        let mut scope_id = ctx.scope_id;
+        while scope_id != v.owner_scope {
+            let scope = self.scopes.get_scope(scope_id);
+            match scope.scope_type {
+                ScopeType::StaticBody
+                    if ctx.is_static()
+                        && self.get_value_from_value_type(v.type_id).is_none() =>
+                {
+                    kbail!(
+                        self,
+                        span,
+                        "'{name}' is a runtime value; compile-time code reads only static values"
+                    );
+                }
+                ScopeType::LambdaScope => match context_param_name {
+                    None => kbail!(
+                        self,
+                        span,
+                        "Lambda does not capture '{name}'. `fn[{name}]` copies its value, `fn[{name}.&]` captures its address"
+                    ),
+                    Some(param_name) => kbail!(
+                        self,
+                        span,
+                        "This call needs context parameter '{}' from outside the lambda; `fn[{name}]` captures it by value",
+                        self.ident_str(param_name)
+                    ),
+                },
+                _ => {}
+            }
+            scope_id = scope.parent.unwrap();
         }
         Ok(())
     }
@@ -5887,7 +5820,7 @@ impl TypedProgram {
         }
         let (result, emissions) =
             self.collect_debug_emissions(|k1| k1.eval_expr_inner(expr_id, ctx));
-        if !ctx.is_speculative() {
+        if !ctx.is_inference() {
             let typed = match result {
                 Ok(result_expr) => Some((result_expr, ctx.expected_type_id)),
                 Err(_) => None,
@@ -6171,14 +6104,8 @@ impl TypedProgram {
                     ctx.scope_id,
                     span,
                 )?;
-                let (type_args, args) = self.bind_ability_call_args(
-                    tafr,
-                    &call_ast_expr,
-                    call_span,
-                    None,
-                    None,
-                    ctx.scope_id,
-                )?;
+                let (type_args, args) =
+                    self.bind_ability_call_args(tafr, &call_ast_expr, call_span, None, None, ctx)?;
                 let resolution = CallResolution::AbilityCall {
                     callee,
                     signature: impl_fn_signature,
@@ -6673,7 +6600,8 @@ impl TypedProgram {
             ctx
         };
 
-        let condition_or_block = self.eval_matching_condition(while_expr.cond, None, cond_ctx)?;
+        let condition_or_block =
+            self.eval_matching_condition(while_expr.cond, None, cond_ctx.with_no_expected_type())?;
         let condition = match condition_or_block {
             MatchingConditionResult::MatchingCondition(mc) => mc,
             MatchingConditionResult::NeverBlock(never_block) => return Ok(never_block),
@@ -6693,8 +6621,11 @@ impl TypedProgram {
             },
         );
 
-        let body_block =
-            self.eval_block(&parsed_block, ctx.with_scope(body_block_scope_id), false)?;
+        let body_block = self.eval_block(
+            &parsed_block,
+            ctx.with_scope(body_block_scope_id).with_discarded(),
+            false,
+        )?;
 
         let loop_type = self.builtin_types.empty;
 
@@ -6722,12 +6653,9 @@ impl TypedProgram {
             },
         );
 
-        // Expected type is handled by loop info above, its needed by 'break's but notably we do not
-        // want to require the loop's block to return a type other than Unit, so we pass None.
-        let expected_expression_type_for_block = None;
         let body_block = self.eval_block(
             &loop_expr.body.clone(),
-            ctx.with_scope(body_scope).with_expected_type(expected_expression_type_for_block),
+            ctx.with_scope(body_scope).with_discarded(),
             false,
         )?;
 
@@ -7766,7 +7694,7 @@ impl TypedProgram {
         );
         let body_block = self.eval_block(
             &for_expr.body_block,
-            ctx.with_scope(consequent_block.scope_id).with_no_expected_type(),
+            ctx.with_scope(consequent_block.scope_id).with_discarded(),
             false,
         )?;
 
@@ -7853,6 +7781,9 @@ impl TypedProgram {
     ) -> K1Result<TypedExprId> {
         if for_expr.label.is_some() {
             kbail!(self, span, "#for unrolls at compile time; it has no loop to label");
+        }
+        if self.is_generic_pass(ctx.scope_id) {
+            return self.synth_deferred_static(ctx.with_discarded(), span);
         }
         let iteree_value_id =
             self.execute_static_expr(for_expr.iterable_expr, ctx.with_no_expected_type())?;
@@ -7944,8 +7875,8 @@ impl TypedProgram {
         span: Span,
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
-        if let Some(phony) = self.synth_phony_if_generic_pass(ctx, span) {
-            return Ok(phony);
+        if self.is_generic_pass(ctx.scope_id) {
+            return self.synth_deferred_static(ctx, span);
         }
         if self.execute_static_bool(if_expr.cond, ctx)? {
             self.eval_expr(if_expr.cons, ctx)
@@ -7987,8 +7918,7 @@ impl TypedProgram {
             MatchingConditionResult::NeverBlock(never_block) => return Ok(never_block),
         };
 
-        let cons_ctx =
-            if if_expr.alt.is_none() { cond_ctx.with_no_expected_type() } else { cond_ctx };
+        let cons_ctx = if if_expr.alt.is_none() { cond_ctx.with_discarded() } else { cond_ctx };
         let consequent = self.eval_expr(if_expr.cons, cons_ctx)?;
         let consequent_original_type = self.exprs.get_type(consequent);
 
@@ -8012,8 +7942,9 @@ impl TypedProgram {
         let cons_never = consequent_type == NEVER_TYPE_ID;
 
         let alternate = if let Some(parsed_alt) = if_expr.alt {
-            let type_hint = if cons_never { ctx.expected_type_id } else { Some(consequent_type) };
-            self.eval_expr(parsed_alt, ctx.with_expected_type(type_hint))?
+            let alt_ctx =
+                if cons_never { ctx } else { ctx.with_expected_type(Some(consequent_type)) };
+            self.eval_expr(parsed_alt, alt_ctx)?
         } else {
             self.synth_empty_value(span)
         };
@@ -9055,6 +8986,13 @@ impl TypedProgram {
                     Ok(_expr) => self.synth_optional_none(self.builtin_types.string(), call_span),
                 };
                 Ok(Some(expr))
+            } else if n == self.ast.idents.b.type_of {
+                if fn_call.args.len() != 1 {
+                    kbail!(self, call_span, "type-of takes one argument");
+                }
+                let arg = self.ast.mem.get_nth(fn_call.args, 0);
+                let type_id = self.eval_type_of_operand(arg.value, ctx.scope_id)?;
+                Ok(Some(self.synth_type_id_literal(type_id, call_span)))
             } else {
                 Ok(None)
             }
@@ -9672,7 +9610,6 @@ impl TypedProgram {
             type_params,
             self.ast.mem.getn(type_args),
             ctx.scope_id,
-            EvalTypeExprContext::EMPTY,
             span,
         )?;
         let type_args = self.tmp.getn(typed_type_args);
@@ -9914,7 +9851,7 @@ impl TypedProgram {
             call_span,
             receiver_if_method,
             known_args.map(|ka| ka.1),
-            ctx.scope_id,
+            ctx,
         )?;
         let aligned = self.align_args_with_params(
             bound_args,
@@ -9922,7 +9859,7 @@ impl TypedProgram {
             call_span,
             ability_fn_type.logical_params(),
             Some(ability_function_ref.function_id),
-            ctx.scope_id,
+            ctx,
             true,
         )?;
         self.splice_stashed_args(aligned.args, stashed_args);
@@ -10012,14 +9949,14 @@ impl TypedProgram {
         call_span: Span,
         receiver: Option<TypedExprId>,
         known_args: Option<&[TypedExprId]>,
-        scope_id: ScopeId,
+        ctx: EvalExprContext,
     ) -> K1Result<(TmpSlice<CallTypeArg>, TmpSlice<Option<MaybeTypedExpr>>)> {
         let ability_fn_sig = self.get_function(ability_function_ref.function_id).signature();
         let call_type_args = self.eval_call_type_args(
             self.mem.getn(Self::get_ability_fn_own_type_params(ability_fn_sig.type_params)),
             self.ast.mem.getn(fn_call.type_args(&self.ast.mem)),
             call_span,
-            scope_id,
+            ctx.scope_id,
         )?;
         let bound_args = self.bind_value_args_to_params(
             fn_call,
@@ -10292,7 +10229,7 @@ impl TypedProgram {
         span: Span,
         params: MSlice<FnParamType, TypedProgram>,
         declaration: Option<FunctionId>,
-        calling_scope: ScopeId,
+        ctx: EvalExprContext,
         tolerate_missing_context_args: bool,
     ) -> K1Result<ArgsAndParams> {
         debug_assert_eq!(bound_args.len(), params.len());
@@ -10310,7 +10247,7 @@ impl TypedProgram {
                         declaration,
                         index,
                         param.type_id,
-                        calling_scope,
+                        ctx,
                         fn_call,
                         span,
                         tolerate_missing_context_args,
@@ -10334,13 +10271,13 @@ impl TypedProgram {
         declaration: Option<FunctionId>,
         param_index: usize,
         constraint_source_type: TypeId,
-        calling_scope: ScopeId,
+        ctx: EvalExprContext,
         fn_call: &ParsedCall,
         span: Span,
         tolerate_missing: bool,
     ) -> K1Result<Option<MaybeTypedExpr>> {
         let ability_match = self.find_context_variable_by_ability_constraints(
-            calling_scope,
+            ctx.scope_id,
             constraint_source_type,
             span,
         )?;
@@ -10362,25 +10299,11 @@ impl TypedProgram {
                 }
                 Some(v)
             }
-            None => self.scopes.find_context_variable_by_type(calling_scope, context_param.type_id),
+            None => self.scopes.find_context_variable_by_type(ctx.scope_id, context_param.type_id),
         };
         if let Some(matching_context_variable) = matching_context_variable {
-            let found = self.variables.get(matching_context_variable);
-            self.check_lambda_capture_valid(
-                calling_scope,
-                matching_context_variable,
-                found.owner_scope,
-                found.name,
-                span,
-            )
-            .map_err(|mut e| {
-                e.message = self.ast.idents.intern(format!(
-                    "This call needs context parameter '{}' from outside the lambda; capture it by value: `fn[{}]`",
-                    self.ident_str(self.get_param_name(declaration, param_index)),
-                    self.ident_str(found.name)
-                ));
-                e
-            })?;
+            let param_name = self.get_param_name(declaration, param_index);
+            self.check_variable_read(matching_context_variable, span, ctx, Some(param_name))?;
             let found = self.variables.get(matching_context_variable);
             let expr = self.exprs.add(
                 TypedExpr::Variable(VariableExpr { variable_id: matching_context_variable }),
@@ -10390,7 +10313,7 @@ impl TypedProgram {
             self.register_variable_usage(matching_context_variable, fn_call.name.name_span);
             Ok(Some(MaybeTypedExpr::Typed(expr)))
         } else if context_param.type_id == self.builtin_types.source_location.unwrap() {
-            let expr = self.synth_source_location(span, calling_scope);
+            let expr = self.synth_source_location(span, ctx.scope_id);
             Ok(Some(MaybeTypedExpr::Typed(expr)))
         } else if !tolerate_missing {
             kbail!(
@@ -10416,7 +10339,7 @@ impl TypedProgram {
         declaration: Option<FunctionId>,
         fn_call: &ParsedCall,
         span: Span,
-        calling_scope: ScopeId,
+        ctx: EvalExprContext,
     ) -> K1Result<ArgsAndParams> {
         let explicit_context_args = fn_call.has_explicit_context_args(&self.ast.mem);
         let generic = self.mem.getn(original.params);
@@ -10448,7 +10371,7 @@ impl TypedProgram {
                     declaration,
                     index,
                     generic_param.type_id,
-                    calling_scope,
+                    ctx,
                     fn_call,
                     span,
                     false,
@@ -10839,7 +10762,7 @@ impl TypedProgram {
                     span,
                     params,
                     declaration,
-                    ctx.scope_id,
+                    ctx,
                     false,
                 )?;
                 self.splice_stashed_args(args_and_params.args, &stashed_args);
@@ -10921,7 +10844,7 @@ impl TypedProgram {
                     span,
                     params,
                     declaration,
-                    ctx.scope_id,
+                    ctx,
                     true,
                 )?;
                 self.splice_stashed_args(original_args_and_params.args, &stashed_args);
@@ -11040,7 +10963,7 @@ impl TypedProgram {
                     declaration,
                     fn_call,
                     span,
-                    ctx.scope_id,
+                    ctx,
                 )?;
                 self.splice_stashed_args(args_and_params.args, &stashed_args);
 
@@ -11327,10 +11250,7 @@ impl TypedProgram {
             BuiltinTyperInline::CompilerModuleDir => Ok(self.synth_module_dir(ctx.scope_id, span)),
             BuiltinTyperInline::TypeId => {
                 let type_id = self.get_type_slice(call.type_args)[0];
-                self.register_type_metainfo(type_id);
-
-                let type_id_expr = self.synth_type_id_literal(type_id, span);
-                Ok(type_id_expr)
+                Ok(self.synth_type_id_literal(type_id, span))
             }
             BuiltinTyperInline::TypeSize
             | BuiltinTyperInline::TypeStride
@@ -11445,7 +11365,9 @@ impl TypedProgram {
                 | BuiltinIr::AtomicCmpxchg { .. }
                 | BuiltinIr::AtomicFence),
             ) => self.check_atomic_builtin(call, span, b),
-            Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Shuffle)) if !ctx.is_generic_pass() => {
+            Builtin::Ir(BuiltinIr::VectorOp(VecOpKind::Shuffle))
+                if !self.is_generic_pass(ctx.scope_id) =>
+            {
                 let mask_expr = *self.mem.get_nth(call.args, 2);
                 let mask_span = self.exprs.get_span(mask_expr);
                 let TypedExpr::StaticValue(mask) = self.exprs.get(mask_expr) else {
@@ -12004,6 +11926,11 @@ impl TypedProgram {
         if function.is_generic() {
             return false;
         }
+        if let TypedFunctionKind::AbilityImpl(_, self_type_id) = function.kind
+            && self.type_variable_counts.get(self_type_id).is_abstract()
+        {
+            return false;
+        }
         // If we specialized on something generic, but we don't accept or return it in our
         // signature, we won't catch it by checking the signature!
         // Example: fn typeOnly[T: static u32](): unit
@@ -12044,11 +11971,7 @@ impl TypedProgram {
                 let parsed_let = *parsed_let;
                 let annotated_type = match parsed_let.type_expr.as_ref() {
                     None => None,
-                    Some(&type_expr) => Some(self.eval_type_expr_ext(
-                        type_expr,
-                        ctx.scope_id,
-                        EvalTypeExprContext::EMPTY,
-                    )?),
+                    Some(&type_expr) => Some(self.eval_type_expr(type_expr, ctx.scope_id)?),
                 };
                 let maybe_return_type_from_function = if parsed_let.is_returned() {
                     let scope_type = self.scopes.get_scope(ctx.scope_id).scope_type;
@@ -12084,14 +12007,18 @@ impl TypedProgram {
 
                 let expected_rhs_type = provided_type;
 
+                let is_discard = parsed_let.name == self.ast.idents.b.underscore
+                    && !parsed_let.is_context()
+                    && !parsed_let.is_returned();
+                let value_ctx = if is_discard && expected_rhs_type.is_none() {
+                    ctx.with_discarded()
+                } else {
+                    ctx.with_expected_type(expected_rhs_type)
+                };
                 let mut value_error = None;
                 let value_expr = match parsed_let.value {
                     None => None,
-                    Some(value) => match self.eval_expr_with_coercion(
-                        value,
-                        ctx.with_expected_type(expected_rhs_type),
-                        true,
-                    ) {
+                    Some(value) => match self.eval_expr_with_coercion(value, value_ctx, true) {
                         Ok(value_expr) => Some(value_expr),
                         Err(err) if provided_type.is_some() => {
                             value_error = Some(err);
@@ -12110,10 +12037,7 @@ impl TypedProgram {
                     let never_expr = value_expr.unwrap();
                     let never_stmt = self.stmts.add(TypedStmt::Expr(never_expr, NEVER_TYPE_ID));
                     Ok(Some(never_stmt))
-                } else if parsed_let.name == self.ast.idents.b.underscore
-                    && !parsed_let.is_context()
-                    && !parsed_let.is_returned()
-                {
+                } else if is_discard {
                     if let Some(err) = value_error {
                         return Err(err);
                     }
@@ -12275,7 +12199,20 @@ impl TypedProgram {
                 let skip_message = has_else;
                 let mut nonexhaustive_msg = None;
 
-                // No need to build an expensive error message that we won't show
+                let else_result = match require.else_body {
+                    None => None,
+                    Some(else_body) => {
+                        let else_scope = self.scopes.add_child_scope(
+                            ctx.scope_id,
+                            ScopeType::LexicalBlock,
+                            ScopeOwnerId::None,
+                        );
+                        let else_ctx =
+                            ctx.with_scope(else_scope).with_expected_type(Some(NEVER_TYPE_ID));
+                        Some(self.eval_expr(else_body, else_ctx))
+                    }
+                };
+
                 let condition = match self.eval_matching_condition(
                     require.condition_expr,
                     Some((skip_message, &mut nonexhaustive_msg)),
@@ -12304,38 +12241,20 @@ impl TypedProgram {
                     );
                 }
 
-                let else_scope = self.scopes.add_child_scope(
-                    ctx.scope_id,
-                    ScopeType::LexicalBlock,
-                    ScopeOwnerId::None,
-                );
-
-                // Make the binding variables unavailable in the else scope
-                for instr in self.mem.getn(condition.instrs) {
-                    if let MatchingConditionInstr::Binding { let_stmt } = instr {
-                        let stmt = self.stmts.get(*let_stmt).as_let().unwrap();
-                        let variable = self.variables.get(stmt.variable_id);
-
-                        if !variable.is_user_hidden() {
-                            self.scopes.mask_variable(else_scope, variable.name);
+                let else_body = match else_result {
+                    None => None,
+                    Some(else_result) => {
+                        let else_body = else_result?;
+                        if self.exprs.get_type(else_body) != NEVER_TYPE_ID {
+                            let else_span = self.exprs.get_span(else_body);
+                            kbail!(
+                                self,
+                                else_span,
+                                "else branch must diverge; try returning or exiting"
+                            );
                         }
+                        Some(else_body)
                     }
-                }
-
-                let else_body = if let Some(require_else_body) = require.else_body {
-                    let else_body =
-                        self.eval_expr(require_else_body, ctx.with_scope(else_scope))?;
-                    if self.exprs.get_type(else_body) != NEVER_TYPE_ID {
-                        let else_span = self.exprs.get_span(else_body);
-                        kbail!(
-                            self,
-                            else_span,
-                            "else branch must diverge; try returning or exiting"
-                        );
-                    }
-                    Some(else_body)
-                } else {
-                    None
                 };
 
                 let id = self.stmts.add(TypedStmt::Require(TypedRequireStmt {
@@ -12458,8 +12377,8 @@ impl TypedProgram {
                         Some(variable_id)
                     }
                 };
-                let body = self
-                    .eval_expr(defer.expr, ctx.with_scope(defer_scope).with_no_expected_type())?;
+                let body =
+                    self.eval_expr(defer.expr, ctx.with_scope(defer_scope).with_discarded())?;
                 if let Some(variable_id) = binder {
                     let name_span = self.variables.get(variable_id).defn_span;
                     self.warn_variable_usage_counts("Defer binding", variable_id, name_span);
@@ -12534,13 +12453,13 @@ impl TypedProgram {
                 );
             }
             let is_last = index + 1 == block.stmts.len() as usize;
-            let expected_type = if is_last { ctx.expected_type_id } else { None };
+            let stmt_ctx = if is_last { ctx } else { ctx.with_discarded() };
+            let expected_type = stmt_ctx.expected_type_id;
 
             let coerce = expected_type.is_some();
             debug!("eval_stmt {index} with type {}", self.type_id_to_string_opt(expected_type));
             let tmp_mark = self.tmp.mark();
-            let stmt_result =
-                self.eval_stmt(*stmt, ctx.with_expected_type(expected_type), coerce, index);
+            let stmt_result = self.eval_stmt(*stmt, stmt_ctx, coerce, index);
             self.tmp.reset_to(tmp_mark);
             let stmt_id = match stmt_result {
                 Ok(Some(stmt_id)) => stmt_id,
@@ -13018,7 +12937,11 @@ impl TypedProgram {
                         _ => None,
                     },
                     Some("meta") => match fn_name_str {
-                        "bake-static-value" => Some(Builtin::Ir(BuiltinIr::BakeStaticValue)),
+                        "bake-static-value" => {
+                            Some(Builtin::Backend(BackendBuiltin::BakeStaticValue))
+                        }
+                        "eval" => Some(Builtin::Backend(BackendBuiltin::Eval)),
+                        "try-eval" => Some(Builtin::Backend(BackendBuiltin::TryEval)),
                         "get-static-value" => {
                             Some(Builtin::TyperInline(BuiltinTyperInline::GetStaticValue))
                         }
@@ -13749,7 +13672,7 @@ impl TypedProgram {
         let ability_functions = ability.functions;
 
         for arg in ability.kind.arguments(self) {
-            if self.get_type_variable_counts(*arg).type_parameter_count > 0 {
+            if self.get_type_variable_counts(*arg).is_abstract() {
                 kbail!(
                     self,
                     span,
@@ -14079,19 +14002,10 @@ impl TypedProgram {
         let mut params = self.mem.new_list(param_count);
         let mut is_method = false;
         for (idx, fn_param) in self.ast.mem.getn(ast_fn.params).iter().enumerate() {
-            let param_type_context = EvalTypeExprContext {
-                is_direct_function_parameter: true,
-                ..EvalTypeExprContext::EMPTY
-            };
-            let type_id =
-                self.eval_type_expr_ext(fn_param.type_expr, fn_scope_id, param_type_context)?;
             let is_context = fn_param.modifiers.is_context();
-
-            // Handle 'existential' type parameters. These are value parameters that
-            // introduce a type parameter 'for free' inline.
-            // - `some ty` function type parameter, inject the type parameter into the
-            match self.types.get(type_id) {
-                Type::FunctionTypeParameter(ftp) => {
+            let type_id = match self.ast.type_exprs.get(fn_param.type_expr) {
+                // `some fn`: a function type parameter of this one param
+                ParsedTypeExpr::SomeQuant(quant) => {
                     if is_context {
                         kbail!(
                             self,
@@ -14099,17 +14013,27 @@ impl TypedProgram {
                             "'some fn' parameters cannot be context parameters"
                         );
                     }
-                    let name = ftp.name;
-                    let span = ftp.span;
+                    let parse::SomeQuantifier { inner_type_expr, span } = *quant;
+                    let function_type = self.eval_type_expr(inner_type_expr, fn_scope_id)?;
+                    let Type::Function(_) = self.types.get(function_type) else {
+                        kbail!(self, span, "Expected a function type following 'some'");
+                    };
+                    let name = self.tmp.format_str(format_args!("some_fn_{}", fn_param.type_expr));
+                    let name = self.ast.idents.intern(name.as_str());
+                    let type_id = self.add_function_type_parameter(FunctionTypeParameter {
+                        name,
+                        scope_id: fn_scope_id,
+                        span,
+                        function_type,
+                    });
                     fnlike_type_params.push_grow(
                         &mut self.mem,
                         FnlikeTypeParam { name, type_id, value_param_index: idx as u32, span },
                     );
-                    // There's actually no way to refer to these types by name,
-                    // so we don't need to add a name to the scope
+                    type_id
                 }
-                _ => {}
-            }
+                _ => self.eval_type_expr(fn_param.type_expr, fn_scope_id)?,
+            };
 
             // Receiver: a fn is a method when its first non-context param is named self
             if !is_context
@@ -14470,6 +14394,9 @@ impl TypedProgram {
         companion_type_id: Option<TypeId>,
         namespace_id: Option<NamespaceId>,
     ) -> K1Result<TypeIdSlice> {
+        if ability_id.is_some() || !ast_type_params.is_empty() {
+            self.scopes.set_scope_owner_id(fn_scope_id, ScopeOwnerId::GenericSignature);
+        }
         // Instantiate type arguments.
         let mut type_params: List<TypeId, _> = self.mem.new_list(ast_type_params.len() + 1);
 
@@ -14626,13 +14553,6 @@ impl TypedProgram {
             } else {
                 FnParamKind::Plain
             };
-            if let Type::FunctionTypeParameter(_ftp) = self.types.get(type_id) {
-                kbail!(
-                    self,
-                    fn_param.span,
-                    "'some fn' parameters are not allowed in macro parameters"
-                );
-            }
             let variable_id = self.variables.add(Variable {
                 name: fn_param.name,
                 type_id,
@@ -14759,9 +14679,7 @@ impl TypedProgram {
             let ParsedExpr::Block(parsed_block) = *self.ast.exprs.get(parsed_body) else {
                 kbail!(self, signature_span, "[bug] function bodies must be blocks");
             };
-            let ctx = EvalExprContext::make(fn_scope_id)
-                .with_expected_type(Some(return_type))
-                .with_is_generic_pass(!function.is_concrete());
+            let ctx = EvalExprContext::make(fn_scope_id).with_expected_type(Some(return_type));
             let block = self.with_clean_inference(|k1| k1.eval_block(&parsed_block, ctx, true))?;
             if let Err(msg) = self.check_types(return_type, self.exprs.get_type(block), fn_scope_id)
             {
@@ -15473,8 +15391,15 @@ impl TypedProgram {
         self.fail_if_reload_ns(namespace_id, span, "ability impls")?;
         let parsed_impl_functions = parsed_ability_impl.functions;
 
+        let kind = if parsed_ability_impl.generic_impl_params.is_empty() {
+            AbilityImplKind::Concrete
+        } else {
+            AbilityImplKind::Blanket
+        };
+        let impl_scope_owner =
+            if kind.is_blanket() { ScopeOwnerId::GenericSignature } else { ScopeOwnerId::None };
         let impl_scope_id =
-            self.scopes.add_child_scope(scope_id, ScopeType::AbilityImpl, ScopeOwnerId::None);
+            self.scopes.add_child_scope(scope_id, ScopeType::AbilityImpl, impl_scope_owner);
 
         let mut blanket_type_params: List<TypeId, _> =
             self.mem.new_list(parsed_ability_impl.generic_impl_params.len());
@@ -15568,11 +15493,6 @@ impl TypedProgram {
         self.bind_substitutions(impl_scope_id, &impl_subst_pairs);
 
         let base_ability_id = ability.base_ability_id;
-        let kind = if parsed_ability_impl.generic_impl_params.is_empty() {
-            AbilityImplKind::Concrete
-        } else {
-            AbilityImplKind::Blanket
-        };
 
         // Report extra functions first
         for &parsed_fn in self.ast.mem.getn(parsed_impl_functions) {
@@ -15635,7 +15555,10 @@ impl TypedProgram {
 
             let declaring_scope_id = if is_default {
                 *default_scope_id.get_or_insert_with(|| {
-                    self.add_ability_bindings_scope(base_ability_id, &impl_subst_pairs)
+                    let default_scope_id =
+                        self.add_ability_bindings_scope(base_ability_id, &impl_subst_pairs);
+                    self.scopes.set_scope_owner_id(default_scope_id, impl_scope_owner);
+                    default_scope_id
                 })
             } else {
                 impl_scope_id
@@ -15928,9 +15851,7 @@ impl TypedProgram {
                         self.execute_static_condition(s.compile_condition, scope_id);
 
                     if should_compile {
-                        let static_ctx = StaticExecContext { expected_return_type: None };
-                        let eval_expr_ctx =
-                            EvalExprContext::make(scope_id).with_static_ctx(Some(static_ctx));
+                        let eval_expr_ctx = EvalExprContext::make(scope_id);
                         if let Err(e) =
                             self.compile_static_or_meta(static_expr_id, s, true, eval_expr_ctx)
                         {
@@ -16552,9 +16473,7 @@ impl TypedProgram {
                     // We simply run the program, getting a `code` (basically a string),
                     // parse it as definitions, then we load those definitions
                     // injecting them into the AST, as if they appeared right here.
-                    let static_ctx = StaticExecContext { expected_return_type: Some(I32_TYPE_ID) };
-                    let eval_expr_ctx =
-                        EvalExprContext::make(namespace_scope_id).with_static_ctx(Some(static_ctx));
+                    let eval_expr_ctx = EvalExprContext::make(namespace_scope_id);
                     let result = if self.ast.exprs.is_debug(static_expr_id) {
                         let (result, emissions) = self.collect_debug_emissions(|k1| {
                             k1.compile_static_or_meta(static_expr_id, s, true, eval_expr_ctx)

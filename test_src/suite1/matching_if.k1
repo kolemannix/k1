@@ -64,6 +64,12 @@ fn(test) require-binds-from-is() {
   assert(x == 1)
 }
 
+fn(test) require-else-reads-the-outer-name() {
+  let o: ?int = :none
+  require o is :some o else { assert(o is :none); return }
+  assert-equals(o, 0)
+}
+
 fn(test) crashes-in-require-condition() {
   k1/test/expect-failure("booo")
   require crash("booo") else { crash("") }

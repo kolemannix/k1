@@ -160,8 +160,6 @@ crate::tag_enum! {
         SIntToF32,
         SIntToF64,
         Select,
-        // Metaprogramming
-        BakeStaticValue,
         // Atomics (A = width in bits; B packs ordering / op, see operand_count comments)
         AtomicLoad,
         AtomicStore,
@@ -205,7 +203,7 @@ impl Opcode {
             Opcode::RetAgg => 2,       // [src][size]
             Opcode::Call => 3,         // [target pc][fp_delta bytes][sret src] + args
             Opcode::CallIndirect => 3, // [fn src][fp_delta][sret src] + args + A variadic arg pts
-            Opcode::CallBuiltin => 3,  // A = builtin tag; [ret_pt][fp_delta][sret src] + args
+            Opcode::CallBuiltin => 3,  // A = builtin tag; [function id][fp_delta][sret src] + args
             Opcode::CallLlvm => 1,     // [fn_name]
             Opcode::RetGet => 1,       // [dst]
             Opcode::RetStore => 1,     // A = width in bits; [addr src]
@@ -294,7 +292,6 @@ impl Opcode {
             | Opcode::SIntToF32
             | Opcode::SIntToF64 => 2,
             Opcode::Select => 4,
-            Opcode::BakeStaticValue => 3, // [dst][type_id][src]
             Opcode::AtomicLoad => 2,      // A = width in bits, B = ordering; [dst][addr src]
             Opcode::AtomicStore => 2,     // A = width in bits, B = ordering; [addr src][val src]
             Opcode::AtomicRmw => 3, // A = width in bits, B = op << 8 | ordering; [dst][addr src][operand src]
@@ -464,7 +461,6 @@ impl Opcode {
             Opcode::SIntToF32 => "sint_to_f32",
             Opcode::SIntToF64 => "sint_to_f64",
             Opcode::Select => "select",
-            Opcode::BakeStaticValue => "bake_static",
             Opcode::AtomicLoad => "atomic_load",
             Opcode::AtomicStore => "atomic_store",
             Opcode::AtomicRmw => "atomic_rmw",
@@ -607,8 +603,8 @@ mod bc_test {
         assert_eq!(header_op(h), Opcode::IntEq as u8);
         assert_eq!(header_a(h), 32);
         assert_eq!(header_b(h), 7);
-        let h2 = header(Opcode::BakeStaticValue, 255, u16::MAX);
-        assert_eq!(header_op(h2), Opcode::BakeStaticValue as u8);
+        let h2 = header(Opcode::Select, 255, u16::MAX);
+        assert_eq!(header_op(h2), Opcode::Select as u8);
         assert_eq!(header_a(h2), 255);
         assert_eq!(header_b(h2), u16::MAX);
     }

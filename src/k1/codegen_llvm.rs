@@ -3134,6 +3134,22 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             Indirect(PointerValue<'ctx>),
         }
         let (llvm_callee, cg_fn_type) = match callee {
+            IrCallee::BackendBuiltin(
+                function_id,
+                BackendBuiltin::MakeStruct
+                | BackendBuiltin::MakeEither
+                | BackendBuiltin::MakeReference
+                | BackendBuiltin::MakeArray
+                | BackendBuiltin::MakeFn
+                | BackendBuiltin::MakeInstance
+                | BackendBuiltin::Eval
+                | BackendBuiltin::TryEval
+                | BackendBuiltin::BakeStaticValue
+                | BackendBuiltin::ImplOf,
+            ) => {
+                let name = self.k1.ident_str(self.k1.get_function(function_id).name);
+                cgbail!(span, "{name} is only available to compile-time code");
+            }
             IrCallee::BackendBuiltin(function_id, _) | IrCallee::Direct(function_id) => {
                 self.declare_llvm_function(function_id)?;
                 let fn_type = self.llvm_functions.get(&function_id).unwrap().function_type;
@@ -3633,6 +3649,9 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             | BackendBuiltin::MakeArray
             | BackendBuiltin::MakeFn
             | BackendBuiltin::MakeInstance
+            | BackendBuiltin::Eval
+            | BackendBuiltin::TryEval
+            | BackendBuiltin::BakeStaticValue
             | BackendBuiltin::ImplOf => self.builder.build_unreachable().unwrap(),
             BackendBuiltin::CompilerMessage => self.builder.build_return(None).unwrap(),
             BackendBuiltin::ReplCheckbox => self.builder.build_return(None).unwrap(),
@@ -4651,10 +4670,6 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 inst_mappings.insert(inst_id, bool_value.as_basic_value_enum());
                 Ok(())
             }
-            Inst::BakeStaticValue { .. } => Err(cgerr!(
-                self.debug.current_span(),
-                "BakeStaticValue is only available to compile-time code"
-            )),
         }
     }
 

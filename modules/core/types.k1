@@ -51,6 +51,11 @@ fn assert-wrapper-type[wrapper, inner]() {
 }
 
 ns for type-id {
+
+  fn make-opt(self): type-id {
+    make-instance(types/id[opt], [self])
+  }
+
   fn struct-parts(context locn: k1/source-location)(self): { kind: record-kind, fields: type-schema:struct.fields } {
     if self.schema() is {
       :struct s -> .{ kind = if s.packed :packed else :struct, fields = s.fields },

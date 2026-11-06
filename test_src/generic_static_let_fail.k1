@@ -8,4 +8,4 @@ fn main(): i32 {
   println("${make-box[i64](2).value}")
   0
 }
-//errmsg: unknown in generic code; annotate the binding
+//errmsg: unknown in generic code; it needs an expected type

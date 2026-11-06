@@ -1042,11 +1042,17 @@ impl TypedProgram {
                     // since the bindings are now available
                     let consequent_result = self.eval_expr_with_coercion(
                         parsed_case.expression,
-                        pattern_eval_ctx.with_expected_type(expected_arm_type_id),
+                        EvalExprContext {
+                            expected_type_id: expected_arm_type_id,
+                            ..ctx.with_scope(pattern_eval_ctx.scope_id)
+                        },
                         true,
                     );
                     let consequent_expr = match consequent_result {
                         Err(err) => {
+                            if ctx.is_speculative() {
+                                return Err(err);
+                            }
                             self.report(err);
                             first_error = Some(err);
                             continue;
@@ -1147,8 +1153,8 @@ impl TypedProgram {
         let ParsedExpr::Match(parsed_match) = self.ast.exprs.get(match_expr_id) else { panic!() };
         let parsed_match = *parsed_match;
         let span = self.ast.exprs.get_span(match_expr_id);
-        if let Some(phony) = self.synth_phony_if_generic_pass(ctx, span) {
-            return Ok(phony);
+        if self.is_generic_pass(ctx.scope_id) {
+            return self.synth_deferred_static(ctx, span);
         }
         let subject =
             self.execute_static_expr(parsed_match.match_subject, ctx.with_no_expected_type())?;

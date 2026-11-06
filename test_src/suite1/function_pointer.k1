@@ -45,7 +45,7 @@ fn(test) local-shadows-fn-in-call() {
 fn(test) call-fn-pointer-field() {
   let has-fn: has-fn = .{ myfn = static-add-one.& }
   assert-equals((has-fn.myfn)(4), 5)
-  assert-equals(types/id[type-of(has-fn)], types/id[has-fn])
+  assert-equals(type-of(has-fn), types/id[has-fn])
 }
 
 fn(test) fn-values-coerce-to-pointers() {
@@ -120,7 +120,7 @@ fn(test) baked-fn-pointers() {
 }
 
 fn(test) param-names-belong-to-declarations() {
-  assert-equals(types/id[type-of(scale.&)], types/id[*fn(int, int) -> int])
+  assert-equals(type-of(scale.&), types/id[*fn(int, int) -> int])
   assert-equals(scale(by = 3, value = 2), 6)
   let lam = fn(x: int, y: int) x - y
   assert-equals(lam(y = 1, x = 5), 4)
@@ -139,5 +139,5 @@ fn(test) unit-return-drops-the-arrow() {
   assert-equals(types/id[*fn(*int)], types/id[*fn(*int) -> {}])
   assert-equals(types/id[*fn(*fn()) -> int], types/id[*fn(*fn() -> {}) -> int])
   assert-equals(types/id[dyn[fn()]], types/id[dyn[fn() -> {}]])
-  assert-equals(types/id[type-of(bumper())], types/id[ticker.tick])
+  assert-equals(type-of(bumper()), types/id[ticker.tick])
 }

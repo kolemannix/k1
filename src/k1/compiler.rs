@@ -1551,7 +1551,7 @@ pub fn compile_program(
     let loaded = k1.load_plan_modules(sources, snapshot_count);
     let keep_host_program = matches!(k1.lsp.host_mode, HostProgramMode::Keep { .. });
     if !keep_host_program && let HostProgram::Built(host) = &host_program {
-        k1.adopt_messages(host);
+        k1.adopt_program_messages(host);
     }
     match loaded {
         Err(e) => k1.report(e),

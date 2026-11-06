@@ -90,5 +90,5 @@ fn(test) lambda-captures-carry-context() {
   outer()
   assert-equals(sb.build(), "Hello, Ana, Hello, Bo.")
   let by-ref = test-compile({ let f = fn[out.&]. log-concrete("x"); f() })
-  assert(by-ref is :some(e) and e.contains-string("capture it by value: `fn[out]`"))
+  assert(by-ref is :some(e) and e.contains-string("`fn[out]` captures it by value"))
 }

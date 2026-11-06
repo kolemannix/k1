@@ -132,7 +132,7 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
         Opcode::CallBuiltin => {
             write!(
                 w,
-                "call_builtin {} ret_pt={} fp+={}",
+                "call_builtin {} fn={} fp+={}",
                 ir::BackendBuiltin::from_tag(a).unwrap().kind_name(),
                 ops[0],
                 ops[1]
@@ -395,12 +395,6 @@ pub fn disasm_one(k1: &TypedProgram, w: &mut String, pc: usize) -> usize {
             write_src(w, k1, ops[2]);
             write!(w, " : ").unwrap();
             write_src(w, k1, ops[3]);
-        }
-        Opcode::BakeStaticValue => {
-            write!(w, "bake_static ").unwrap();
-            write_dst(w, ops[0]);
-            write!(w, " <- type#{} ", ops[1]).unwrap();
-            write_src(w, k1, ops[2]);
         }
     }
     pc + 1 + n

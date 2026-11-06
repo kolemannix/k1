@@ -115,19 +115,14 @@ impl TypedProgram {
         writeln!(w, ", scope type: {}", scope.scope_type.short_name())?;
 
         let mut first = true;
-        for (id, variable_in_scope, _) in self.scopes.iter_scope_variables(scope_id) {
+        for (id, variable_id, _) in self.scopes.iter_scope_variables(scope_id) {
             if first {
                 w.write_str("\tVARS\n")?;
                 first = false;
             }
             write!(w, "\t{} -> ", self.ident_str(id))?;
-            match variable_in_scope {
-                VariableInScope::Masked => w.write_str("masked")?,
-                VariableInScope::Defined(variable_id) => {
-                    let variable = self.variables.get(variable_id);
-                    self.display_variable(variable, w)?;
-                }
-            }
+            let variable = self.variables.get(variable_id);
+            self.display_variable(variable, w)?;
             w.write_str("\n")?;
         }
         let mut first = true;

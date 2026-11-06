@@ -8,8 +8,7 @@ LLM-maintained K1 notes; fix wrong lines on sight. Read `k1-syntax-basics.md` fi
 - Baked values (`#static`, global initializers) may hold `*fn` pointers: a table
   built at compile time links in every function it points to.
 - `fn f[i: static int](x: int)`, called `f[3](x)` or `f[type-of(three)](x)`
-  (`let three: static int = 3`). A static param's name is its value in expressions;
-  `#static`/`#meta` see only static-typed locals.
+  (`let three: static int = 3`). A static param's name is its value in expressions.
 - `#if c { } else { }` as statement or expression; `#for xs { }` unrolls.
 - `#if k1/platform` is the target even in static code, which runs on
   `k1/host-platform`. OS-specific code reachable from both uses
@@ -88,12 +87,31 @@ ns pre { macro make-point(name: code) { "type $name = { x: i32, y: i32 }" } }
   they call come from `ns pre` or upstream. Output may contain more `#meta`/`$`
   (expanded in order) or `macro` defs (binds a static arg once per ns: `define-scaled`
   in `test_src/suite1/test_meta.k1`).
-- Passing a type the caller wrote as tokens: emit a call to a second macro taking
-  `types/id[{ ...tokens... }]` (`content/showcase/examples/macro_record.k1`).
+- `meta/eval[t](expr: code): t` evaluates code at the call site while the macro
+  runs, `t` written or taken from the expected type: a static arg asked for mid-run,
+  in the macro or a fn it calls, by `#static`'s rules.
+  `meta/try-eval[t](expr: code): result[t, string]` is the same, with any failure as
+  `:err`: fold what's known, emit a runtime call otherwise. `meta/type-of(expr: code)`
+  is `meta/eval("type-of($expr)")`, a `types/type-id`, and `expr` may name a runtime
+  local since the operand never runs: ask with these, answer with emission. Other
+  compile-time code gets an error. They have no runtime form: a call in runtime code
+  is a compile error. An argument that is a type takes a type param, `macro m[t]()`
+  with `types/id[t]`, and no eval; tokens that only form a type inside the macro:
+  `content/showcase/examples/macro_record.k1`.
+- Compile-time code reads only static values: in `#static`, `#if` and static args a
+  runtime local from outside the body is an error ("'n' is a runtime value"), but not
+  globals, static lets or the body's own locals. `type-of(x)` is x's type in type
+  position and its `types/type-id` in expression position; either way x is only
+  typechecked, never run, so it reads runtime locals: `#if type-of(n) == types/id[int]`.
+- Macros, `#static`, `#meta`, `#if` and static match never run in the generic pass: the
+  result takes its expected type. With none, a discarded one (a statement, `let _`, `defer`, or
+  the body of `while`, `for`, `loop` or a no-else `if`) is `{}`, and any other use is an
+  error, so a variable holding one needs a type (`let s: stmt[t] = query[t](...)`). The
+  code is checked once per specialization.
 - `code-token = { kind: ident|number|string|char|punct, text, source, spacing:
   none|inline|newline, parts }`; keywords are `ident`; a string literal is one
   token whose `parts` are `:text { value (cooked), source }` and
-  `:hole { tokens, spec, source }`. `tok.fail(msg)` errors at the token.
+  `:expr { tokens, spec, source }`. `tok.fail(msg)` errors at the token.
   `token-cursor` (`expect`, `expect-ident`, `eat-until-close`) walks them.
 - Worked examples: `std/html` (`html/write(\{ <p class={c}>{t}</p> })` writes to
   the context writer, `html/render(\{ ... })` binds one and returns the string;
@@ -131,7 +149,9 @@ ns pre { macro make-point(name: code) { "type $name = { x: i32, y: i32 }" } }
   remaps each field's type, `id.remove-fields(["a"])` drops fields (an absent name
   crashes), `id.combine-structs(b)` appends b's fields (kinds must match, a shared
   name must agree in type). Type-param forms: `types/remove-fields[t](names)`,
-  `types/combine-structs[a, b]()`.
+  `types/combine-structs[a, b]()`. A generic type's `#type` runs once at definition:
+  `type c[t] = #type types/id[{ a: t }].map-struct(...)` substitutes per instance, but
+  a bare param (`types/id[t].map-struct(...)`) has no fields yet and crashes.
 
 ## dyn
 `dyn[ability[params bound]]` = `{ table: { fn ptr per dispatchable fn }, state: ptr }`.

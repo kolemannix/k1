@@ -56,12 +56,6 @@ impl TypedProgram {
             .stack
             .push(TypeDefnStackEntry { parsed_id: parsed_type_defn_id, reserved_type_id });
 
-        let type_eval_context = EvalTypeExprContext {
-            is_inside_type_definition_rhs: !parsed_type_defn.flags.is_alias(),
-            is_direct_function_parameter: false,
-            is_inside_static_type: false,
-        };
-
         // No need to create a scope for non-generic type definitions
         let defn_scope_id = if is_generic_defn {
             let defn_scope_id = self.scopes.add_child_scope(
@@ -154,11 +148,17 @@ impl TypedProgram {
                 (defn_type_id, Some(type_value))
             }
             _ => {
-                let rhs_type_id = self.eval_type_expr_ext(
-                    parsed_type_defn.value_expr,
-                    defn_scope_id,
-                    type_eval_context,
-                )?;
+                let rhs_type_id =
+                    self.eval_type_expr(parsed_type_defn.value_expr, defn_scope_id)?;
+                if !is_alias
+                    && self.get_type_variable_counts(rhs_type_id).unresolved_static_count > 0
+                {
+                    kbail!(
+                        self,
+                        parsed_type_defn.name_span,
+                        "Static type cannot appear in type definitions"
+                    );
+                }
                 let rhs_is_reserved = self
                     .type_defn_context
                     .stack
@@ -317,24 +317,21 @@ impl TypedProgram {
         Ok(type_id)
     }
 
+    pub(super) fn eval_type_of_operand(
+        &mut self,
+        operand: ParsedExprId,
+        scope_id: ScopeId,
+    ) -> K1Result<TypeId> {
+        let expr = self.eval_expr(operand, EvalExprContext::make(scope_id).with_speculative())?;
+        Ok(self.exprs.get_type(expr))
+    }
+
     pub(super) fn eval_type_expr(
         &mut self,
         type_expr_id: ParsedTypeExprId,
         scope_id: ScopeId,
     ) -> K1Result<TypeId> {
-        self.eval_type_expr_ext(type_expr_id, scope_id, EvalTypeExprContext::EMPTY)
-    }
-
-    pub(super) fn eval_type_expr_ext(
-        &mut self,
-        type_expr_id: ParsedTypeExprId,
-        scope_id: ScopeId,
-        // The context is mostly about 'where we are' - where this type expression is located -
-        // with respect to the source language. Is this a type definition? A function parameter
-        // type? Are we immediately inside a function parameter?
-        context: EvalTypeExprContext,
-    ) -> K1Result<TypeId> {
-        let base = match self.ast.type_exprs.get(type_expr_id) {
+        match self.ast.type_exprs.get(type_expr_id) {
             ParsedTypeExpr::Builtin(_) => unreachable!(),
             ParsedTypeExpr::Struct(struct_defn) => {
                 let struct_defn = *struct_defn;
@@ -345,11 +342,7 @@ impl TypedProgram {
                 };
                 let mut fields = self.tmp.new_list(struct_defn.fields.len());
                 for ast_field in self.ast.mem.getn(struct_defn.fields) {
-                    let ty = self.eval_type_expr_ext(
-                        ast_field.type_expr,
-                        scope_id,
-                        context.descended(),
-                    )?;
+                    let ty = self.eval_type_expr(ast_field.type_expr, scope_id)?;
                     fields.push(StructTypeField {
                         name: ast_field.name,
                         type_id: ty,
@@ -361,7 +354,7 @@ impl TypedProgram {
             ParsedTypeExpr::TypeApplication(ty_app) => {
                 let ty_app = *ty_app;
                 if ty_app.name.name != self.ast.idents.b.dyn_ || ty_app.name.has_path() {
-                    self.eval_type_application(ty_app, scope_id, context)
+                    self.eval_type_application(ty_app, scope_id)
                 } else {
                     // dyn
                     if ty_app.args.len() != 1 {
@@ -375,8 +368,7 @@ impl TypedProgram {
                     {
                         return Ok(object_type);
                     }
-                    let inner =
-                        self.eval_type_expr_ext(inner_type_expr_id, scope_id, context.descended())?;
+                    let inner = self.eval_type_expr(inner_type_expr_id, scope_id)?;
                     let Some(&inner_fn) = self.types.get(inner).as_function() else {
                         kbail!(
                             self,
@@ -403,10 +395,10 @@ impl TypedProgram {
                         span: opt.span,
                     }]),
                 };
-                self.eval_type_application(opt_app, scope_id, EvalTypeExprContext::EMPTY)
+                self.eval_type_application(opt_app, scope_id)
             }
             ParsedTypeExpr::Reference(r) => {
-                let inner_ty = self.eval_type_expr_ext(r.base, scope_id, context.descended())?;
+                let inner_ty = self.eval_type_expr(r.base, scope_id)?;
                 Ok(self.add_reference_type(inner_ty))
             }
             ParsedTypeExpr::Sum(sum) => {
@@ -424,11 +416,9 @@ impl TypedProgram {
                 for v in self.ast.mem.getn(sum.variants) {
                     let payload = match v.payload {
                         None => None,
-                        Some(payload_type_expr) => Some(self.eval_type_expr_ext(
-                            payload_type_expr,
-                            scope_id,
-                            context.descended(),
-                        )?),
+                        Some(payload_type_expr) => {
+                            Some(self.eval_type_expr(payload_type_expr, scope_id)?)
+                        }
                     };
                     let tag = match v.explicit_value {
                         None => None,
@@ -450,7 +440,7 @@ impl TypedProgram {
             ParsedTypeExpr::MemberAccess(acc) => {
                 let is_dot = matches!(acc.member_kind, parse::TypeMemberAccessKind::Dot);
                 let acc = *acc;
-                let base_type = self.eval_type_expr_ext(acc.base, scope_id, context.descended())?;
+                let base_type = self.eval_type_expr(acc.base, scope_id)?;
                 if let Some(spec_info) = self.get_instance_info(base_type) {
                     let generic = self.types.get(spec_info.generic_parent).expect_generic();
                     if let Some(matching_type_var_pos) = self
@@ -615,62 +605,23 @@ impl TypedProgram {
                 };
                 Ok(self.add_function_type(params.as_slice(), return_type, false))
             }
-            ParsedTypeExpr::TypeOf(tof) => {
-                let expr = self.eval_expr(tof.target_expr, EvalExprContext::make(scope_id))?;
-                let ty = self.exprs.get_type(expr);
-                Ok(ty)
-            }
+            ParsedTypeExpr::TypeOf(tof) => self.eval_type_of_operand(tof.target_expr, scope_id),
             ParsedTypeExpr::SomeQuant(quant) => {
-                if !context.is_direct_function_parameter {
-                    kbail!(
-                        self,
-                        quant.span,
-                        "some quantifier is only allowed in function parameters"
-                    );
-                }
-                let span = quant.span;
-                let inner = self.eval_type_expr(quant.inner_type_expr, scope_id)?;
-                let Type::Function(_function_type) = self.types.get(inner) else {
-                    kbail!(self, span, "Expected a function type following 'some'");
-                };
-                let name = self.ast.idents.intern(format!("some_fn_{}", type_expr_id));
-                let function_type_variable =
-                    self.add_function_type_parameter(FunctionTypeParameter {
-                        name,
-                        scope_id,
-                        span,
-                        function_type: inner,
-                    });
-                Ok(function_type_variable)
+                kbail!(self, quant.span, "some quantifier is only allowed in function parameters");
             }
             ParsedTypeExpr::Static(parsed_static) => {
-                if context.is_inside_static_type {
+                let parsed_static = *parsed_static;
+                let inner_type_id =
+                    self.eval_type_expr(parsed_static.family_type_expr, scope_id)?;
+                if self.get_value_type_id_of_type(inner_type_id).is_some()
+                    || self.get_type_variable_counts(inner_type_id).unresolved_static_count > 0
+                {
                     kbail!(
                         self,
                         parsed_static.span,
                         "Static type cannot appear inside static type"
                     );
                 }
-                if context.is_inside_type_definition_rhs {
-                    kbail!(
-                        self,
-                        parsed_static.span,
-                        "Static type cannot appear in type definitions"
-                    );
-                }
-                let parsed_static = *parsed_static;
-                let inner_type_id = self.eval_type_expr_ext(
-                    parsed_static.family_type_expr,
-                    scope_id,
-                    EvalTypeExprContext { is_inside_static_type: true, ..context },
-                )?;
-                if let Type::StaticValue(_) = self.types.get(inner_type_id) {
-                    kbail!(
-                        self,
-                        parsed_static.span,
-                        "Value type cannot be nested inside another value type"
-                    );
-                };
                 let value_type = StaticValueType { family_type_id: inner_type_id, value_id: None };
                 let static_type_id = self.add_type(Type::StaticValue(value_type));
                 Ok(static_type_id)
@@ -683,7 +634,7 @@ impl TypedProgram {
             }
             ParsedTypeExpr::ExecStatic(es) => {
                 let es = *es;
-                let expr_ctx = EvalExprContext::make(scope_id).with_is_static(true);
+                let expr_ctx = EvalExprContext::make(scope_id).with_speculative();
                 let resulting_value_id = self.execute_static_expr(es.body_expr, expr_ctx)?;
                 let resulting_type_id = self.get_static_value_type(resulting_value_id);
                 match self.types.get(resulting_type_id) {
@@ -710,8 +661,7 @@ impl TypedProgram {
                     }
                 }
             }
-        }?;
-        Ok(base)
+        }
     }
 
     pub(super) fn literal_to_static_value_and_type(
@@ -744,7 +694,6 @@ impl TypedProgram {
         &mut self,
         ty_app: parse::TypeApplication,
         scope_id: ScopeId,
-        context: EvalTypeExprContext,
     ) -> K1Result<TypeId> {
         if self.string_is_completion_marker(ty_app.name.name, false) {
             self.record_qident_completion_site(scope_id, &ty_app.name);
@@ -766,7 +715,6 @@ impl TypedProgram {
                         g_params,
                         self.ast.mem.getn(ty_app.args),
                         scope_id,
-                        context,
                         ty_app.span,
                     )?;
                     let instantiated_type_id =
@@ -820,11 +768,11 @@ impl TypedProgram {
                         if let Some(opaque_type_id) = self.handle_opaque_tyapp(&ty_app)? {
                             Ok(opaque_type_id)
                         } else if let Some(vector_type_id) =
-                            self.handle_vector_tyapp(&ty_app, scope_id, context)?
+                            self.handle_vector_tyapp(&ty_app, scope_id)?
                         {
                             Ok(vector_type_id)
                         } else if let Some(array_type_id) =
-                            self.handle_array_tyapp(&ty_app, scope_id, context)?
+                            self.handle_array_tyapp(&ty_app, scope_id)?
                         {
                             Ok(array_type_id)
                         } else {
@@ -871,11 +819,7 @@ impl TypedProgram {
                             }
                             let alias_rhs = self.ast.get_type_defn(pending_parsed_id).value_expr;
                             self.type_defn_context.expanding_aliases.push(pending_parsed_id);
-                            let rhs_result = self.eval_type_expr_ext(
-                                alias_rhs,
-                                pending_scope_id,
-                                EvalTypeExprContext::EMPTY,
-                            );
+                            let rhs_result = self.eval_type_expr(alias_rhs, pending_scope_id);
                             self.type_defn_context.expanding_aliases.pop();
                             let type_id = rhs_result?;
                             self.emit_ls_entity(
@@ -900,11 +844,8 @@ impl TypedProgram {
                             // instance's id now; it is filled once the defn cluster completes
                             let mut type_arguments: SV4<TypeId> = smallvec![];
                             for parsed_arg in self.tmp.getn(ordered_args) {
-                                let arg_type_id = self.eval_type_expr_ext(
-                                    parsed_arg.type_expr,
-                                    scope_id,
-                                    context.descended(),
-                                )?;
+                                let arg_type_id =
+                                    self.eval_type_expr(parsed_arg.type_expr, scope_id)?;
                                 if self.recursive_arg_violates_uniformity(arg_type_id) {
                                     kbail!(
                                         self,
@@ -937,7 +878,7 @@ impl TypedProgram {
                         );
 
                         let _result = self.eval_type_defn(pending_parsed_id, pending_scope_id)?;
-                        self.eval_type_application(ty_app, scope_id, context)
+                        self.eval_type_application(ty_app, scope_id)
                     }
                 }
             },
@@ -1226,7 +1167,6 @@ impl TypedProgram {
         params: TypeIdSlice,
         parsed_args: &[NamedTypeArg],
         scope_id: ScopeId,
-        context: EvalTypeExprContext,
         span: Span,
     ) -> K1Result<TmpSlice<TypeId>> {
         let type_params = self.mem.getn(params);
@@ -1239,8 +1179,7 @@ impl TypedProgram {
         let ordered_args = self.tmp.getn(ordered_args);
         let mut type_arguments: TmpList<TypeId> = self.tmp.new_list(params.len());
         for parsed_arg in ordered_args {
-            let arg_type_id =
-                self.eval_type_expr_ext(parsed_arg.type_expr, scope_id, context.descended())?;
+            let arg_type_id = self.eval_type_expr(parsed_arg.type_expr, scope_id)?;
             type_arguments.push(arg_type_id);
         }
         let type_arguments = type_arguments.to_slice();
@@ -1276,7 +1215,7 @@ impl TypedProgram {
         name: &QIdent,
     ) -> K1Result<Option<TypeId>> {
         let global_id = match self.find_variable_namespaced(scope_id, name)? {
-            Some((variable_id, _scope)) => match self.variables.get(variable_id).global_id() {
+            Some(variable_id) => match self.variables.get(variable_id).global_id() {
                 Some(global_id) => global_id,
                 None => return Ok(None),
             },
@@ -1368,7 +1307,6 @@ impl TypedProgram {
         ty_app: &parse::TypeApplication,
         what: &str,
         scope_id: ScopeId,
-        context: EvalTypeExprContext,
     ) -> K1Result<(TypeId, TypeId)> {
         if ty_app.name.has_path() {
             kbail!(
@@ -1388,16 +1326,10 @@ impl TypedProgram {
                 ty_app.args.len()
             );
         }
-        let element_type = self.eval_type_expr_ext(
-            self.ast.mem.get_nth(ty_app.args, 0).type_expr,
-            scope_id,
-            context.descended(),
-        )?;
-        let size_type_id = self.eval_type_expr_ext(
-            self.ast.mem.get_nth(ty_app.args, 1).type_expr,
-            scope_id,
-            context.descended(),
-        )?;
+        let element_type =
+            self.eval_type_expr(self.ast.mem.get_nth(ty_app.args, 0).type_expr, scope_id)?;
+        let size_type_id =
+            self.eval_type_expr(self.ast.mem.get_nth(ty_app.args, 1).type_expr, scope_id)?;
         let Some(static_type) = self.get_static_type_of_type(size_type_id) else {
             kbail!(self, ty_app.span, "{} must be a static type", what);
         };
@@ -1542,13 +1474,11 @@ impl TypedProgram {
         &mut self,
         ty_app: &parse::TypeApplication,
         scope_id: ScopeId,
-        context: EvalTypeExprContext,
     ) -> K1Result<Option<TypeId>> {
         if ty_app.name.name != self.ast.idents.b.array {
             return Ok(None);
         }
-        let (element_type, size_type) =
-            self.eval_sized_tyapp(ty_app, "array size", scope_id, context)?;
+        let (element_type, size_type) = self.eval_sized_tyapp(ty_app, "array size", scope_id)?;
         Ok(Some(self.add_type(Type::Array(ArrayType { element_type, size_type }))))
     }
 
@@ -1556,13 +1486,12 @@ impl TypedProgram {
         &mut self,
         ty_app: &parse::TypeApplication,
         scope_id: ScopeId,
-        context: EvalTypeExprContext,
     ) -> K1Result<Option<TypeId>> {
         if ty_app.name.name != self.ast.idents.b.vector {
             return Ok(None);
         }
         let (element_type, size_type) =
-            self.eval_sized_tyapp(ty_app, "Vector lane count", scope_id, context)?;
+            self.eval_sized_tyapp(ty_app, "Vector lane count", scope_id)?;
         self.validate_vector_parts(element_type, size_type, ty_app.span)?;
         Ok(Some(self.add_type(Type::Vector(ArrayType { element_type, size_type }))))
     }

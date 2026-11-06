@@ -217,13 +217,13 @@ ns for emitter {
     for t.parts {
       if it is {
         :text p -> self.text(if raw p.value else escape(p.value)),
-        :hole h -> {
-          if h.spec.is-empty() { self.dynamic(h.tokens, raw); continue }
+        :expr e -> {
+          if e.spec.is-empty() { self.dynamic(e.tokens, raw); continue }
           self.flush()
           self.cb.write(if raw "core/get-context-writer()" else "std/html/escaping(core/get-context-writer())")
           self.cb.write(".write(\"\${")
-          self.cb.write-tokens(h.tokens)
-          self.cb.write(":${h.spec}}\")\n")
+          self.cb.write-tokens(e.tokens)
+          self.cb.write(":${e.spec}}\")\n")
         },
       }
     }

@@ -98,7 +98,7 @@ ns pubsub {
       // synchronously and detach its subscription from subscribers, so never
       // wake while iterating that list. One flush per subscriber also
       // coalesces multi-event batches.
-      let to-flush = mem/with-arena(mem/tmp(), self.subscribers.cloned())
+      let to-flush: list[*subscription[t]] = mem/with-arena(mem/tmp(), self.subscribers.cloned())
       for sub in to-flush { sub.chan.flush() }
     }
   }

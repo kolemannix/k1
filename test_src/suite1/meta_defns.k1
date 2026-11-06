@@ -48,4 +48,5 @@ fn(test) generated-soa-list() {
   assert-equals(p.x, 5)
   assert-equals(p.y, 10)
   assert-equals(p.z, 15)
+  assert-equals(ps.y.[0], 10)
 }

@@ -28,7 +28,7 @@ macro define(decl: span[code-token]) {
       for s.parts {
         if it is {
           :text t -> sb.write(t.value),
-          :hole _ -> s.fail("A string enum value cannot interpolate"),
+          :expr _ -> s.fail("A string enum value cannot interpolate"),
         }
       }
       sb.build()

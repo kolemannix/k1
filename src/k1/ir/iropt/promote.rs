@@ -410,7 +410,6 @@ impl LocalUses {
             | Inst::BitCast { v, .. }
             | Inst::PtrToWord { v, .. }
             | Inst::WordToPtr { v }
-            | Inst::BakeStaticValue { value: v, .. }
             | Inst::AtomicLoad { src: v, .. } => reject_value(self, v),
             Inst::IntCmp { lhs, rhs, .. }
             | Inst::AtomicStore { dst: lhs, value: rhs, .. }

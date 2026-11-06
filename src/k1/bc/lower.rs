@@ -1188,14 +1188,6 @@ fn emit_inst(
             binop!(opcode, scalar_of(lhs).width_bits(), lhs, rhs)
         }
 
-        Inst::BakeStaticValue { type_id, value } => {
-            let value_lowered = resolve_lowered_value(k1, ctx, value);
-            let dst = ctx.bc_value_of(inst_id);
-            ctx.emit(Opcode::BakeStaticValue, 0, 0);
-            ctx.push(dst);
-            ctx.push(type_id.as_u32());
-            ctx.push(value_lowered);
-        }
     }
     Ok(())
 }
@@ -1292,9 +1284,9 @@ fn emit_call(
         IrCallee::Indirect(fn_type, fn_value) => {
             emit_call_indirect(k1, ctx, fn_value, fn_type.params.len())?
         }
-        IrCallee::BackendBuiltin(_, builtin) => {
+        IrCallee::BackendBuiltin(function_id, builtin) => {
             ctx.emit(Opcode::CallBuiltin, builtin.to_tag(), nargs as u16);
-            ctx.push(ret_pt.to_u32());
+            ctx.push(function_id.as_u32());
             ctx.push(frame_bytes);
             0
         }

@@ -10,7 +10,6 @@
 //! the new frame's header; returns read it back. `code[0]` is `Halt`, so
 //! popping the top frame (return_pc 0) lands there and ends execution.
 
-use std::num::NonZeroU32;
 
 use crate::arith::{
     self, Cmp3Op, FloatCmpPred, FloatOp, FloatUnop, IntCmpPred, IntOp, IntUnop, OverflowOp,
@@ -20,7 +19,7 @@ use crate::lex::Span;
 use crate::typer::trace::TraceKind;
 use crate::typer::types::{PhysicalType, RecordKind, TypeId};
 use crate::typer::{
-    FunctionId, K1Message, K1Result, StaticValue, StaticValueId, TypedExprId, TypedGlobalId,
+    FunctionId, K1Message, K1Result, StaticSum, StaticValue, StaticValueId, TypedExprId, TypedGlobalId,
     TypedProgram,
 };
 use crate::vm::{self, Value, Vm, load_value, store_value};
@@ -668,7 +667,7 @@ fn exec_loop<const COUNT_OPS: bool>(
             }
             Opcode::CallBuiltin => {
                 let builtin = ir::BackendBuiltin::from_tag(header_a(h)).unwrap();
-                let ret_pt = PhysicalType::from_u32(operand!(0));
+                let function_id = FunctionId::from_u32(operand!(0)).unwrap();
                 vm.eval_span = k1.bc.span_for_pc(pc_u32!());
                 let (new_fp, next_pc) = write_call_frame!(h, Opcode::CallBuiltin);
                 let args: &[Value] = unsafe {
@@ -677,15 +676,17 @@ fn exec_loop<const COUNT_OPS: bool>(
                         header_b(h) as usize,
                     )
                 };
-                let outcome = vmtry!(exec_builtin(k1, vm, builtin, args));
+                let outcome = vmtry!(exec_builtin(k1, vm, builtin, function_id, args));
                 match outcome {
                     BuiltinOutcome::Exit(code) => return Ok(code),
                     BuiltinOutcome::Value(v) => {
-                        if ret_pt.is_agg() {
-                            let sret = unsafe { *(new_fp as *const u64).add(2) } as *mut u8;
-                            store_value(k1, ret_pt, sret, v);
-                        } else {
+                        let sret = unsafe { *(new_fp as *const u64).add(2) } as *mut u8;
+                        if sret.is_null() {
                             ret_reg = v;
+                        } else {
+                            let return_type = k1.get_function_type(function_id).return_type;
+                            let ret_pt = k1.get_physical_type(return_type).unwrap();
+                            store_value(k1, ret_pt, sret, v);
                         }
                     }
                     BuiltinOutcome::Empty => {}
@@ -997,16 +998,6 @@ fn exec_loop<const COUNT_OPS: bool>(
                 write_slot!(operand!(0), Value::f64(v as f64));
                 advance!(Opcode::SIntToF64);
             }
-            Opcode::BakeStaticValue => {
-                let dst = operand!(0);
-                let type_id = TypeId::from_nzu32(NonZeroU32::new(operand!(1)).unwrap());
-                let input = read_src!(operand!(2));
-                vm.eval_span = k1.bc.span_for_pc(pc_u32!());
-                let value_id =
-                    vmtry!(vm::vm_value_to_static_value(k1, type_id, input, vm.eval_span));
-                write_slot!(dst, Value::u64(value_id.as_u32() as u64));
-                advance!(Opcode::BakeStaticValue);
-            }
         }
     }
 }
@@ -1034,10 +1025,15 @@ fn exec_builtin(
     k1: &mut TypedProgram,
     vm: &mut Vm,
     builtin: BackendBuiltin,
+    function_id: FunctionId,
     args: &[Value],
 ) -> K1Result<BuiltinOutcome> {
     fn type_id_outcome(type_id: TypeId) -> BuiltinOutcome {
         BuiltinOutcome::Value(Value::u64(type_id.as_u32() as u64))
+    }
+    fn get_type_arg(k1: &TypedProgram, function_id: FunctionId) -> TypeId {
+        let type_args = k1.get_function(function_id).specialization_info.unwrap().type_arguments;
+        k1.get_type_slice(type_args)[0]
     }
     match builtin {
         BackendBuiltin::TypeInfo => {
@@ -1060,6 +1056,34 @@ fn exec_builtin(
                 impl_info_value_id,
                 vm.eval_span,
             )))
+        }
+        BackendBuiltin::Eval | BackendBuiltin::TryEval => {
+            let Some((ctx, span)) = vm.meta_call_site else {
+                kbail!(k1, vm.eval_span, "meta/eval runs only under a macro or #meta");
+            };
+            let code = unsafe { *(args[0].as_ptr() as *const vm::k1_types::K1Code) };
+            let value_type = get_type_arg(k1, function_id);
+            let value_id = if builtin == BackendBuiltin::Eval {
+                k1.builtin_meta_eval(code, value_type, span, ctx)?
+            } else {
+                let (variant_index, payload) =
+                    match k1.builtin_meta_eval(code, value_type, span, ctx) {
+                        Ok(value_id) => (0, value_id),
+                        Err(e) => (1, k1.static_values.add_string(e.message)),
+                    };
+                k1.static_values.add(StaticValue::Sum(StaticSum {
+                    sum_type_id: k1.get_function_type(function_id).return_type,
+                    variant_index,
+                    payload: Some(payload),
+                }))
+            };
+            Ok(BuiltinOutcome::Value(vm::static_value_to_vm_value(k1, value_id, vm.eval_span)))
+        }
+        BackendBuiltin::BakeStaticValue => {
+            let type_id = get_type_arg(k1, function_id);
+            let value = if args.is_empty() { Value::u64(0) } else { args[0] };
+            let value_id = vm::vm_value_to_static_value(k1, type_id, value, vm.eval_span)?;
+            Ok(BuiltinOutcome::Value(Value::u64(value_id.as_u32() as u64)))
         }
         BackendBuiltin::TestSuite => {
             let Some(suite) = k1.test_suite else {
