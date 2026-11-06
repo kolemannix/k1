@@ -1843,7 +1843,6 @@ pub enum BuiltinTyperInline {
     CompilerModuleDir,
     GetStaticValue,
     TypeId,
-    EnumEquals,
     Discard,
     TestExpectFailure,
 }
@@ -1858,7 +1857,6 @@ impl BuiltinTyperInline {
             BuiltinTyperInline::CompilerModuleDir => "compiler_module_dir",
             BuiltinTyperInline::GetStaticValue => "get_static_value",
             BuiltinTyperInline::TypeId => "type_id",
-            BuiltinTyperInline::EnumEquals => "enum_equals",
             BuiltinTyperInline::Discard => "discard",
             BuiltinTyperInline::TestExpectFailure => "test_expect_failure",
         }
@@ -11283,13 +11281,6 @@ impl TypedProgram {
                     }
                 }
             }
-            BuiltinTyperInline::EnumEquals => {
-                let arg_a = *self.mem.get_nth(call.args, 0);
-                let arg_b = *self.mem.get_nth(call.args, 1);
-                let int_value_a = self.synth_enum_get_value(arg_a, span);
-                let int_value_b = self.synth_enum_get_value(arg_b, span);
-                Ok(self.synth_equals_call_simple(int_value_a, int_value_b, span))
-            }
             BuiltinTyperInline::Discard => {
                 let value = *self.mem.get_nth(call.args, 0);
                 Ok(self.synth_discard(value))
@@ -12660,7 +12651,7 @@ impl TypedProgram {
                 "equals" | "not-equals" if base == b.equals => {
                     let is_equals = fn_name_str == "equals";
                     match t {
-                        Some(Type::Char | Type::Bool | Type::Integer(_)) => {
+                        Some(Type::Char | Type::Bool | Type::Integer(_) | Type::Enum(_)) => {
                             mk_scalar!(K::IntCmp(if is_equals {
                                 IntCmpPred::Eq
                             } else {
@@ -12672,9 +12663,6 @@ impl TypedProgram {
                         } else {
                             FloatCmpPred::Ne
                         })),
-                        Some(Type::Enum(_)) if is_equals => {
-                            Some(Builtin::TyperInline(BuiltinTyperInline::EnumEquals))
-                        }
                         Some(Type::Sum(_)) if is_equals => {
                             Some(Builtin::TyperPhysicalFunction(BuiltinTyperFunction::SumEquals))
                         }
