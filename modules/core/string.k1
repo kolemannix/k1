@@ -155,29 +155,19 @@ ns for string {
   fn as-non-empty(self: string): ?string { if self.is-empty() :none else :some self }
 
   fn c-string-len(c-string: *u8): size {
+    if k1/is-static return mem/strlen(c-string)
     let start = c-string.as[ptr]
-    if k1/is-static {
-      //nocommit would it be better and faster to just call strlen from static?
-      let n = 0: size
-      while start.add-bytes(n).ref[u8].* != 0u8 {
-        n = n + 1
-      }
-      n
-    } else {
-      let w: size = k1/simd-bytes
-      let p = start
-      while p.to-size() & (w - 1) != 0 {
-        if p.ref[u8].* == 0u8 return p.diff(start)
-        p = p.add-bytes(1)
-      }
-      let zeros = vector/splat[u8, k1/simd-bytes](0u8)
-      let lane = -1: i64
-      while lane < 0 {
-        let chunk = vector/load-unchecked[u8, k1/simd-bytes](p)
-        lane = chunk.eq-lanes(zeros).first-true-lane()
-        if lane < 0 { p = p.add-bytes(w) }
-      }
-      p.diff(start) + lane
+    let w: size = k1/simd-bytes
+    let p = start
+    while p.to-size() & (w - 1) != 0 {
+      if p.ref[u8].* == 0u8 return p.diff(start)
+      p = p.add-bytes(1)
+    }
+    let zeros = vector/splat[u8, k1/simd-bytes](0u8)
+    loop {
+      let lane = vector/load-unchecked[u8, k1/simd-bytes](p).eq-lanes(zeros).first-true-lane()
+      if lane >= 0 return p.diff(start) + lane
+      p = p.add-bytes(w)
     }
   }
 

@@ -203,6 +203,8 @@ ns mem {
     (lhs-a.eq-lanes(rhs-a) & lhs-b.eq-lanes(rhs-b)).all()
   }
 
+  fn(extern) strlen(c-str: *u8): size
+
   fn(noinline) equals(p1: ptr, p2: ptr, len: size): bool {
     if k1/is-static return equals-memcmp(p1, p2, len)
     if len <= 16 {
