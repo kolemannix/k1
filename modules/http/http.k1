@@ -20,22 +20,14 @@ type request-head = {
 }
 
 ns for request-head {
-  fn new(method: llhttp/method, url: url/url): request-head {
-    .{
-      url,
-      headers = list/empty(),
-      method,
-      keep-alive = true,
-      content-length = :none,
-    }
-  }
+  fn new(method: llhttp/method, url: url/url): request-head { .0 | .{ url, method, keep-alive = true } }
   fn find-header(self: request-head, name: string): ?string { header-field/find(self.headers.as-span(), name) }
 
   fn accepts-encoding(self: request-head, coding: string): bool {
     require self.find-header("Accept-Encoding") is :some value else return false
     for value.split-by-char-iter(',') {
       let params = it.split-by-char-iter(';')
-      if not (params.&.next() ? "").trim-ascii-space().equals-ignore-ascii-case(coding) continue
+      if not (params.next() ? "").trim-ascii-space().equals-ignore-ascii-case(coding) continue
       for p in params {
         let param = p.trim-ascii-space()
         if param.starts-with-ignore-ascii-case("q=") {
@@ -105,13 +97,14 @@ ns for part-collector {
   }
 }
 
-// a fully parsed request
 type request = {
   head: request-head,
   body: span[u8],
 }
 
 ns for request {
+  fn new(method: llhttp/method, url: url/url): request { .0 | .{ head = request-head/new(method, url) } }
+
   fn accepts-encoding(self: request, coding: string): bool { self.head.accepts-encoding(coding) }
   fn cookies(self: request): span[pair] { self.head.cookies() }
   fn cookie(self: request, name: string): ?string { self.head.cookie(name) }

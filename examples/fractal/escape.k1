@@ -76,9 +76,9 @@ fn escape-time[s: escape-set](set: s, point: complex, max-iter: i32): f64 {
 let LOG2_E_TIMES_2: f64 = 2.8853900817779268
 
 fn log2(x: f64): f64 {
-  let bits = mem/bitcast[f64, u64](x)
+  let bits = bitcast[f64, u64](x)
   let exponent = bits.shift-right(52).bit-and(0x7FF).signed() - 1023
-  let mantissa = mem/bitcast[u64, f64](
+  let mantissa = bitcast[u64, f64](
     bits.bit-and(0x000FFFFFFFFFFFFF).bit-or(0x3FF0000000000000)
   )
   let s = (mantissa - 1.0) / (mantissa + 1.0)

@@ -412,16 +412,16 @@ time. Add a code to `rc` and `errno` follows:
 type errno = #type errors-of(types/id[rc], "ok")
 ```
 
-The tags agree, so crossing between the two is a `mem/bitcast`, and `.try` on
+The tags agree, so crossing between the two is a `bitcast`, and `.try` on
 an `rc` is one compare against zero:
 
 ```k1
 impl try[t = empty, e = errno] for rc {
-  fn error(e: errno): rc { mem/bitcast(e) }
+  fn error(e: errno): rc { bitcast(e) }
   fn value(_t: empty): rc { :ok }
   fn is-ok(self): bool { self is :ok }
-  fn get-error(self): errno { mem/bitcast(self) }
-  fn get-value(_self: self): empty { .{} }
+  fn get-error(context _locn: k1/source-location)(self): errno { bitcast(self) }
+  fn get-value(context _locn: k1/source-location)(_self: self): empty { .{} }
 }
 
 fn c-open(path: string): rc {

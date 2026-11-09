@@ -46,12 +46,12 @@ ns for engine {
         println("uciok")
       },
       "isready" -> println("readyok"),
-      "ucinewgame" -> self.tt.&.clear(),
+      "ucinewgame" -> self.tt.clear(),
       "position" -> self.set-position(args),
       "go" -> self.go(args),
       "setoption" -> self.set-option(args),
       "d" -> {
-        println(self.root.&.diagram())
+        println(self.root.diagram())
         println(self.memory-report())
       },
       "quit" -> return false,
@@ -90,7 +90,7 @@ ns for engine {
       let found = gen-moves(self.root.&, :all).find(fn[text] m. m.to-uci() == text)
       ply.pop-to-mark(mark)
       require found is :some m else return println("info string illegal move: $text")
-      self.root.&.make(m)
+      self.root.make(m)
       self.keys.push-in(self.game, self.root.key)
     }
   }
@@ -102,7 +102,7 @@ ns for engine {
     let value = string/join(args.drop(value-at + 1), " ")
     if name.to-ascii-upper() == "HASH" {
       require u64/from-string(value) is :ok mb else return println("info string bad Hash value: $value")
-      self.tt.&.release()
+      self.tt.release()
       self.tt = transposition-table/new(mb.signed().max(1).min(MAX_HASH_MB))
     } else {
       println("info string unknown option: $name")
@@ -148,7 +148,7 @@ ns for engine {
     }
 
     let s = searcher/new(self.ply, self.game, self.tt.&, self.keys.&, :some self.input.&, lim)
-    let best = s.&.run(self.root.&)
+    let best = s.run(self.root.&)
     println("bestmove ${if best.bits == move/NONE.bits "0000" else best.to-uci()}")
   }
 }
@@ -157,7 +157,7 @@ fn uci-loop(): i32 {
   let engine = engine/new()
   loop {
     require engine.input.next-line() is :some line else break
-    let keep-going = mem/with-arena(engine.command, engine.&.handle(line))
+    let keep-going = mem/with-arena(engine.command, engine.handle(line))
     engine.command.reset()
     core/io/flush-stdout()
     if not keep-going break

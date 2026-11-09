@@ -101,10 +101,10 @@ ns type_synthesis {
     assert-equals(types/int-kind:i8.type-id(), types/id[i8])
     assert-equals(types/name[status-err], "status-err")
     assert-equals(types/size[status-err], 2)
-    let gone: status-err = mem/bitcast(status:gone)
+    let gone: status-err = bitcast(status:gone)
     require gone is :gone else crash("status-err bitcast")
     assert-equals(gone.enum-value(), -2)
-    let back: status = mem/bitcast(status-err:busy)
+    let back: status = bitcast(status-err:busy)
     require back is :busy else crash("status bitcast")
 
     assert-equals(types/id[shape.tag-enum], types/id[either { circle, square }])

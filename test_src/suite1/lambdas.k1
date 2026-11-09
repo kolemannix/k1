@@ -45,6 +45,8 @@ fn make-adder(n: int): dyn[fn(int) -> int] {
   (fn[n](x: int) x + n).to-dyn()
 }
 
+fn erase-int-fn(f: some fn(int) -> int): dyn[fn(int) -> int] { f.to-dyn() }
+
 fn make-thunks(counter: *int): list[dyn[fn()]] {
   [
     (fn[counter]. { counter.* = counter.* + 1 }).to-dyn(),
@@ -100,7 +102,7 @@ fn(test) some-fn-params() {
   assert(test-compile( some-fn-param1(4, takes-string) ) is :some _)
   assert-equals(some-fn-param1(5, static-add-one.to-dyn()), 6)
   assert-equals(some-fn-param1(5, exported-add-three.to-dyn()), 8)
-  assert(test-compile(abs.to-dyn()) is :some _)
+  assert-equals(abs.to-dyn()(-3), 3)
   let c1 = .{ x = 3 }
   let c2 = 2
   assert-equals(some-fn-param2(5, fn[c1] x. x + 1 + c1.x, fn[c2] x. x + 2 + c2), 18)
@@ -116,6 +118,16 @@ fn(test) returned-dyn-closures() {
   assert-equals(type-of(add5), dyn-int-int)
   assert-equals(type-of(static-add-one.to-dyn()), dyn-int-int)
   assert-equals(type-of((fn(x: int) x).to-dyn()), dyn-int-int)
+  let factor = 2
+  assert-equals(erase-int-fn(fn[factor](x: int) x * factor)(4), 8)
+  assert-equals(erase-int-fn(static-add-one)(4), 5)
+  assert-equals(erase-int-fn(add5)(4), 9)
+  assert-equals(erase-int-fn(static-add-one.&)(4), 5)
+  let inferred: dyn[fn(int) -> int] = (fn(x) x * 3).to-dyn()
+  assert-equals(inferred(4), 12)
+  let named = (fn(x) x * 5).to-dyn[fn(int) -> int]()
+  assert-equals(named(4), 20)
+  assert(test-compile(static-add-one.to-dyn[fn(u8) -> u8]()).!.contains-string("Cannot erase"))
 
   let count = 0
   for thunk in make-thunks(count.&) { thunk() }

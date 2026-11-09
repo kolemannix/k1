@@ -24,7 +24,7 @@ ns fd {
         :ok(0) -> return :ok(string/wrap-list(contents)),
         :ok(n) -> { contents.len = contents.len + n },
         :err(code) -> {
-          alloc.free(contents.data-ptr(), contents.cap(), 1)
+          contents.inner-buffer().free-in(alloc)
           return :err(code)
         },
       }

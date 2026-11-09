@@ -3,9 +3,9 @@ fn(test) ordering-tag-values() {
   assert-equals(ordering:equal.value, 0)
   assert-equals(ordering:greater.value, 1)
 
-  let l: ordering = mem/bitcast(-1: i8)
-  let e: ordering = mem/bitcast(0: i8)
-  let g: ordering = mem/bitcast(1: i8)
+  let l: ordering = bitcast(-1: i8)
+  let e: ordering = bitcast(0: i8)
+  let g: ordering = bitcast(1: i8)
   assert(l is :less)
   assert(e is :equal)
   assert(g is :greater)
@@ -17,11 +17,11 @@ fn(test) float-compare-total-order() {
   assert((2.5: f64).compare(1.5) is :greater)
   assert((-1.0: f64).compare(1.0) is :less)
 
-  let pos-nan:  f64 = mem/bitcast(0x7FF8000000000000: u64)
-  let neg-nan:  f64 = mem/bitcast(0xFFF8000000000000: u64)
-  let pos-inf:  f64 = mem/bitcast(0x7FF0000000000000: u64)
-  let neg-inf:  f64 = mem/bitcast(0xFFF0000000000000: u64)
-  let neg-zero: f64 = mem/bitcast(0x8000000000000000: u64)
+  let pos-nan:  f64 = bitcast(0x7FF8000000000000: u64)
+  let neg-nan:  f64 = bitcast(0xFFF8000000000000: u64)
+  let pos-inf:  f64 = bitcast(0x7FF0000000000000: u64)
+  let neg-inf:  f64 = bitcast(0xFFF0000000000000: u64)
+  let neg-zero: f64 = bitcast(0x8000000000000000: u64)
 
   assert(neg-nan.compare(neg-inf) is :less)
   assert(neg-inf.compare(neg-zero) is :less)
@@ -36,7 +36,7 @@ fn(test) float-compare-total-order() {
   assert((1.5: f32).compare(2.5) is :less)
   assert((2.5: f32).compare(2.5) is :equal)
   assert((2.5: f32).compare(1.5) is :greater)
-  let f32-neg-nan: f32 = mem/bitcast(0xFFC00000: u32)
+  let f32-neg-nan: f32 = bitcast(0xFFC00000: u32)
   assert(f32-neg-nan.compare(-1.0) is :less)
 }
 

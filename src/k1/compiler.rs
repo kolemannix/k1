@@ -1548,7 +1548,7 @@ pub fn compile_program(
         config.command
     };
     let config =
-        CompilerConfig { command, test: config.test || plan.editor.test_on_save, ..config };
+        CompilerConfig { command, test: config.test || plan.editor.test_on_check, ..config };
     let snapshot_count = plan.modules().len() - 1;
     let (mut k1, sources) = open_program(ast, config, plan, lsp, snapshot_count);
     k1.trace.clock_start = clock_start;

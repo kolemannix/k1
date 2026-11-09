@@ -73,7 +73,7 @@ ns for sha256 {
   fn update(self: *self, data: span[u8]) {
     self.total-len = self.total-len + data.len().unsigned()
     let rest = data
-    if self.block.&.non-empty() {
+    if self.block.non-empty() {
       let take = rest.len().min(64 - self.block.len())
       self.block.push-n(rest.take(take))
       rest = rest.drop(take)
@@ -110,8 +110,8 @@ ns for sha256 {
 
   fn hash(data: span[u8]): array[u8, 32] {
     let h = new()
-    h.&.update(data)
-    h.&.finish()
+    h.update(data)
+    h.finish()
   }
 }
 
@@ -135,23 +135,23 @@ ns for hmac-sha256 {
       i = i + 1
     }
     let inner = sha256/new()
-    inner.&.update(ikey.&.as-span())
+    inner.update(ikey.&.as-span())
     .{ inner, okey }
   }
 
-  fn update(self: *self, data: span[u8]) { self.inner.&.update(data) }
+  fn update(self: *self, data: span[u8]) { self.inner.update(data) }
 
   fn finish(self: *self): array[u8, 32] {
-    let inner-digest = self.inner.&.finish()
+    let inner-digest = self.inner.finish()
     let outer = sha256/new()
-    outer.&.update(self.okey.&.as-span())
-    outer.&.update(inner-digest.&.as-span())
-    outer.&.finish()
+    outer.update(self.okey.&.as-span())
+    outer.update(inner-digest.&.as-span())
+    outer.finish()
   }
 
   fn hash(key: span[u8], data: span[u8]): array[u8, 32] {
     let h = new(key)
-    h.&.update(data)
-    h.&.finish()
+    h.update(data)
+    h.finish()
   }
 }

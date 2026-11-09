@@ -1,0 +1,9 @@
+fn module(): k1/module {
+  .0 | .{
+    depend = ["http", "http-client"]
+  }
+}
+
+fn editor(_req: k1/build-request): k1/editor-settings {
+  .{ test-on-check = true }
+}

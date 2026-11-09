@@ -33,7 +33,7 @@ fn(test) shrunk-subtype-has-no-view() {
   let t: packet = :tiny(9)
   assert-equals(t.as-small().!.as-packet().tag, t.tag)
   assert(types/size[packet-small] < types/size[packet])
-  assert(test-compile(t.&.view-small()).is-some())
+  assert(test-compile(t.view-small()).is-some())
 }
 
 fn(test) tags() {
@@ -96,6 +96,6 @@ fn(test) view() {
   assert(r is :rect(p) and p.w == 7)
 
   let s: tone = :orange
-  let warm: *tone-warm = s.&.view-warm().!
+  let warm: *tone-warm = s.view-warm().!
   assert(warm.* is :orange)
 }

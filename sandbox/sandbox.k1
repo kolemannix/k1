@@ -1,12 +1,50 @@
 // can't use list! the allocation will always point to a destroyed vm. Unless we let you clone into metascratch
 // but then what are we even doing
-let(metascratch) foo: { db: *sqlite3, block-count: int, all-fns: fixlist[string] } 
+// let(metascratch) foo: { db: *sqlite3, block-count: int, all-fns: fixlist[string] } 
+//
+// fn(metaend) close-db() {
+//   sqlite3/close(foo.db)
+// }
 
-fn(metaend) close-db() {
-  sqlite3/close(foo.db)
-}
+type post = { userId: int, id: int, title: string, body: string }
 
 fn main(): i32 {
+  let config = http-client/config/default()
+  let client = http-client/client/new(config).!
 
+  let url = std/url/parse("https://jsonplaceholder.typicode.com/posts").!
+
+  let result = client.fetch(http/request/new(:GET, url))
+
+  let data = result.!
+  let bytes: span[u8] = data.body
+
+  let posts = std/json/parse[span[post]](string/wrap-bytes(bytes)).!
+  let titles = posts.map(fn p. p.title)
+  println(titles)
+  println(titles.len())
+
+  use std/stream
+  use std/stream/source
+  let streamed = client.stream(http/request/new(:GET, url)).!
+  let collected = stream/collect-sink/new[u8]
+  let streamed-bytes = stream/run-to(streamed.body.to-dyn(), collected.&)
+  let streamed-posts = std/json/parse[span[post]](string/wrap-bytes(streamed-bytes)).!
+
+  let counter = 0
+  let printer = stream/each-sink/new[post]((fn[counter.&](p: post) {
+    counter.* = counter + 1
+    println("${p.id}: ${p.title} $counter")
+  }).to-dyn())
+
+  stream/run-to(source/from-span(streamed-posts, 10), printer.&)
+
+  println("end")
   0
+}
+
+fn(test-runtime) asdf() {
+  main()
+
+  {}
 }

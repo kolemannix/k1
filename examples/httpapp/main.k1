@@ -16,6 +16,7 @@ fn main(argc: u32, argv: ptr): i32 {
   let config = server/config/default() | .{ host = "0.0.0.0", port, max-body-size = 16 * 1024 * 1024 }
   let bus = uv/bus/create[span[u8]](
     libuv/default_loop().get(),
+    subscriber-cap-count = 1024,
     subscriber-cap-weight = 1048576,
     weight-fn = fn(payload: rc-bytes) payload.bytes().len(),
   )

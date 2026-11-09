@@ -137,10 +137,10 @@ fn assert-msg(context locn: k1/source-location)(msg: string, value: bool) {
 }
 
 ns for char {
-  fn(inline) as-u8(self: char): u8 { mem/bitcast[char, u8](self) }
-  fn(inline) u8(self: char): u8    { mem/bitcast[char, u8](self) }
-  fn(inline) as-i8(self: char): i8 { mem/bitcast[char, i8](self) }
-  fn(inline) as-byte(self: char): u8 { mem/bitcast[char, u8](self) }
+  fn(inline) as-u8(self: char): u8 { bitcast[char, u8](self) }
+  fn(inline) u8(self: char): u8    { bitcast[char, u8](self) }
+  fn(inline) as-i8(self: char): i8 { bitcast[char, i8](self) }
+  fn(inline) as-byte(self: char): u8 { bitcast[char, u8](self) }
 
   // mask to convert ASCII letters to uppercase
   let ASCII_CASE_MASK: u8 = 0b0010_0000
@@ -344,13 +344,13 @@ impl[s, f: print] try[t = s, e = f] for result[s, f] {
   fn(inline) value(t: t): self    { :ok t }
 
   fn(inline) is-ok(self): bool { self is :ok _ }
-  fn get-value(self): t  {
+  fn get-value(context locn: k1/source-location)(self): t {
     if self is {
       :ok s -> s,
       :err e -> crash("get-value() on :err: $e")
     }
   }
-  fn get-error(self): e {
+  fn get-error(context locn: k1/source-location)(self): e {
     if self is {
       :ok _ -> crash("get-error() on :ok"),
       :err e -> e
@@ -363,13 +363,13 @@ impl[s, f] try[t = s, e = f] for result[s, f] {
   fn(inline) value(t: t): self    { :ok t }
 
   fn(inline) is-ok(self): bool { self is :ok _ }
-  fn get-value(self): t  {
+  fn get-value(context locn: k1/source-location)(self): t {
     if self is {
       :ok s -> s,
       :err e -> crash("get-value() on :err")
     }
   }
-  fn get-error(self): e {
+  fn get-error(context locn: k1/source-location)(self): e {
     if self is {
       :ok _ -> crash("get-error() on :ok"),
       :err e -> e
@@ -381,7 +381,7 @@ impl[t: scalar-cmp] comparable for t {
   fn(inline) compare(self: t, other: t): ordering {
     let gt = self.gt(other).as-u8().signed()
     let lt = self.lt(other).as-u8().signed()
-    mem/bitcast[i8, ordering](gt - lt)
+    bitcast[i8, ordering](gt - lt)
   }
 }
 
@@ -405,8 +405,8 @@ ns for u8 {
   let min-value: u8 = 0x00
   let max-value: u8 = 0xFF
 
-  fn(inline) as-char(self: u8): char { mem/bitcast[u8, char](self) }
-  fn(inline) signed(self: u8): i8 { mem/bitcast[u8, i8](self) }
+  fn(inline) as-char(self: u8): char { bitcast[u8, char](self) }
+  fn(inline) signed(self: u8): i8 { bitcast[u8, i8](self) }
   fn(inline) as-size(self: u8): size { self.widen[size] }
 
   fn write-hex[w: writer](self: u8, w, upper: bool) {
@@ -420,7 +420,7 @@ ns for i8 {
   let max-value: i8 = 0x7F
   let min-value: i8 = -0x80
 
-  fn(inline) unsigned(self: i8): u8 { mem/bitcast[i8, u8](self) }
+  fn(inline) unsigned(self: i8): u8 { bitcast[i8, u8](self) }
   fn(inline) as-size(self: i8): size { self.widen[size] }
 }
 
@@ -428,7 +428,7 @@ ns for u16 {
   let min-value: u16 = 0x0000
   let max-value: u16 = 0xFFFF
 
-  fn(inline) signed(self: u16): i16 { mem/bitcast[u16, i16](self) }
+  fn(inline) signed(self: u16): i16 { bitcast[u16, i16](self) }
   fn(inline) as-size(self: u16): size { self.widen[size] }
 }
 
@@ -436,7 +436,7 @@ ns for i16 {
   let max-value: i16 = 0x7FFF
   let min-value: i16 = -0x8000
 
-  fn(inline) unsigned(self: i16): u16 { mem/bitcast[i16, u16](self) }
+  fn(inline) unsigned(self: i16): u16 { bitcast[i16, u16](self) }
   fn(inline) as-size(self: i16): size { self.widen[size] }
 }
 
@@ -445,7 +445,7 @@ ns for u32 {
   let max-value: u32 = 0xFFFFFFFF
 
   fn(inline) as-bool(self: u32): bool { self != 0 }
-  fn(inline) signed(self: u32): i32 { mem/bitcast(self) }
+  fn(inline) signed(self: u32): i32 { bitcast(self) }
 
   fn(inline) as-size(self: u32): size { self.widen[u64].signed() }
 }
@@ -455,7 +455,7 @@ ns for i32 {
   let min-value: i32 = -0x80000000
 
   fn(inline) as-bool(self: i32): bool { self != 0 }
-  fn(inline) unsigned(self: i32): u32 { mem/bitcast(self) }
+  fn(inline) unsigned(self: i32): u32 { bitcast(self) }
   fn(inline) as-size(self: i32): size { self.widen[size] }
 
   fn abs(self: i32): i32 {
@@ -468,9 +468,9 @@ ns for i64 {
   let max-value: i64 = 0x7FFFFFFFFFFFFFFF
   let min-value: i64 = -0x8000000000000000
 
-  fn(inline) unsigned(self: i64): u64 { mem/bitcast[i64, u64](self) }
+  fn(inline) unsigned(self: i64): u64 { bitcast[i64, u64](self) }
   fn(builtin) mul-high(self: i64, rhs: i64): i64
-  fn(inline) to-ptr(self: i64): ptr { mem/bitcast[i64, ptr](self) }
+  fn(inline) to-ptr(self: i64): ptr { bitcast[i64, ptr](self) }
 
   fn from-string(s: string): result[i64, string] {
     if s.is-empty() return :err "empty string"
@@ -506,9 +506,9 @@ ns for u64 {
   let min-value: u64 = 0
   let max-value: u64 = 0xFFFFFFFFFFFFFFFF
 
-  fn(inline) signed(self: u64): i64 { mem/bitcast(self) }
+  fn(inline) signed(self: u64): i64 { bitcast(self) }
   fn(builtin) mul-high(self: u64, rhs: u64): u64
-  fn(inline) to-ptr(self: u64): ptr { mem/bitcast[u64, ptr](self) }
+  fn(inline) to-ptr(self: u64): ptr { bitcast[u64, ptr](self) }
 
   fn from-string(s: string): result[u64, string] {
     if s.is-empty() return :err "empty string"
@@ -560,7 +560,7 @@ ns for f64 {
   let neg-inf: f64 = builtin
 
   fn abs(self: f64): f64 {
-    mem/bitcast[u64, f64](mem/bitcast[f64, u64](self).bit-and(0x7FFFFFFFFFFFFFFF))
+    bitcast[u64, f64](bitcast[f64, u64](self).bit-and(0x7FFFFFFFFFFFFFFF))
   }
 
   fn(builtin) sqrt(self: f64): f64
@@ -596,7 +596,7 @@ ns for f64 {
   // Maps to an i64 key whose integer order is IEEE-754 totalOrder:
   // -NaN < -inf < ... < -0.0 < +0.0 < ... < +inf < +NaN
   fn total-order-key(self: f64): i64 {
-    let bits = mem/bitcast[f64, i64](self)
+    let bits = bitcast[f64, i64](self)
     bits.xor(((bits >> 63).unsigned() >> 1).signed())
   }
 }
@@ -613,12 +613,12 @@ ns for f32 {
 
   // See f64/total-order-key
   fn total-order-key(self: f32): i32 {
-    let bits = mem/bitcast[f32, i32](self)
+    let bits = bitcast[f32, i32](self)
     bits.xor(((bits >> 31).unsigned() >> 1).signed())
   }
 
   fn abs(self: f32): f32 {
-    mem/bitcast[u32, f32](mem/bitcast[f32, u32](self).bit-and(0x7FFFFFFF))
+    bitcast[u32, f32](bitcast[f32, u32](self).bit-and(0x7FFFFFFF))
   }
 
   fn(builtin) sqrt(self: f32): f32

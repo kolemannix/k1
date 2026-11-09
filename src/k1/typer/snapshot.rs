@@ -107,6 +107,7 @@ impl TypedProgram {
             stmts,
             static_values,
             type_infos,
+            dyn_thunks,
             scopes,
             messages,
             namespaces,
@@ -187,6 +188,7 @@ impl TypedProgram {
         stmts.snap(w);
         static_values.snap(w);
         write_map_snap(w, type_infos);
+        write_map_snap(w, dyn_thunks);
         scopes.snap(w);
         w.write_slice(&messages.borrow());
         write_map_snap(w, test_expected_failures);
@@ -305,6 +307,7 @@ impl TypedProgram {
         k1.stmts.restore(r);
         k1.static_values.restore(r);
         k1.type_infos = restore_map_snap(r);
+        k1.dyn_thunks = restore_map_snap(r);
         k1.trace_pop(section);
 
         let section = k1.trace_push(TraceKind::SnapRestoreSection, restore_section("scopes"), 0);

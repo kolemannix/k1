@@ -99,8 +99,8 @@ ns platform {
       fn error(e: i32): io-result { .{ raw = e.widen[i64].negated() } }
       fn value(t: size): io-result { .{ raw = t } }
       fn is-ok(self): bool { self.raw >= 0 }
-      fn get-error(self): i32 { self.raw.negated().trunc[i32] }
-      fn get-value(self): size { self.raw }
+      fn get-error(context _locn: k1/source-location)(self): i32 { self.raw.negated().trunc[i32] }
+      fn get-value(context _locn: k1/source-location)(self): size { self.raw }
     }
 
     fn write(file: file-handle, data: ptr, count: size): io-result {

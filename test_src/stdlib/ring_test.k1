@@ -1,0 +1,27 @@
+ns ring_test
+
+use std/ring
+
+fn(test) wraps-removes-and-rejects() {
+  let r = ring/init[int](3)
+  r.push(1)
+  r.push(2)
+  r.push(3)
+  assert(r.try-push(4) is :err)
+  assert(r.pop-front() is :some 1)
+  assert(r.pop-front() is :some 2)
+  r.push(4)
+  r.push(5)
+  assert(r.is-full())
+  r.remove(1)
+  r.push(6)
+  let seen = list/empty[int]()
+  for r { seen.push(it) }
+  assert-equals(seen, [3, 5, 6])
+  assert-equals(r.[2], 6)
+  r.clear()
+  assert(r.pop-front() is :none)
+
+  let zero = ring/init[int](0)
+  assert(zero.try-push(1) is :err)
+}

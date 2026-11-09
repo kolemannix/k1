@@ -938,9 +938,6 @@ pub struct TypedFunction {
     pub type_id: TypeId,
     pub kind: TypedFunctionKind,
     flags: TypedFunctionFlags,
-    /// If we've generated a 'dyn' copy of this function, we store its id
-    pub dyn_fn_id: Option<FunctionId>,
-    pub dyn_receiver_thunk_id: Option<FunctionId>,
     /// 'let(returned)', RVO
     pub returned_variable: Option<VariableId>,
     pub body_failure: Option<K1Message>,
@@ -1061,6 +1058,13 @@ pub struct CallTypeArg {
     pub param_index: u32,
     pub type_id: TypeId,
     pub span: Span,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DynThunkCallee {
+    Function(FunctionId),
+    EnvReceiver(FunctionId, TypeId),
+    EnvPointer(TypeId),
 }
 
 #[derive(Clone)]
@@ -1734,8 +1738,6 @@ impl TypedFunction {
             type_id,
             kind,
             flags: TypedFunctionFlags::empty(),
-            dyn_fn_id: None,
-            dyn_receiver_thunk_id: None,
             returned_variable: None,
             body_failure: None,
         }
@@ -2560,6 +2562,7 @@ pub struct TypedProgram {
     pub stmts: VPool<TypedStmt, TypedStmtId>,
     pub static_values: StaticValuePool,
     pub type_infos: FxHashMap<TypeId, StaticValueId>,
+    pub dyn_thunks: FxHashMap<DynThunkCallee, FunctionId>,
     pub scopes: Scopes,
     pub messages: RefCell<Vec<K1Message>>,
     pub namespaces: Namespaces,
@@ -2790,6 +2793,7 @@ impl TypedProgram {
             stmts: VPool::make("typed_stmts"),
             static_values: StaticValuePool::make(),
             type_infos: FxHashMap::new(),
+            dyn_thunks: FxHashMap::new(),
             scopes,
             messages: RefCell::new(vec![]),
             namespaces,
@@ -9119,9 +9123,52 @@ impl TypedProgram {
                 return Ok(CallResolution::OtherExpr(impl_of_call));
             }
             if fn_name == self.ast.idents.b.to_dyn {
-                let base = self.eval_expr(base_arg.value, ctx.with_no_expected_type())?;
+                let explicit_target = match self
+                    .ast
+                    .mem
+                    .get_nth_opt(call.type_args(&self.ast.mem), 0)
+                {
+                    None => None,
+                    Some(type_arg) => {
+                        match self.try_eval_dyn_ability_type(type_arg.type_expr, ctx.scope_id)? {
+                            Some(t) => Some(t),
+                            None => {
+                                let evaled =
+                                    self.eval_type_expr(type_arg.type_expr, ctx.scope_id)?;
+                                match self.types.get(evaled) {
+                                    Type::AbilityObject(_) | Type::LambdaObject(_) => Some(evaled),
+                                    Type::Function(_) => Some(self.add_lambda_object(evaled)),
+                                    _ => kbail!(
+                                        self,
+                                        type_arg.span,
+                                        "to-dyn takes an ability or a function type, not {}",
+                                        evaled
+                                    ),
+                                }
+                            }
+                        }
+                    }
+                };
+                let target_dyn_type = match explicit_target {
+                    Some(t) => Some(t),
+                    None => ctx
+                        .expected_type_id
+                        .filter(|et| self.types.get(*et).as_ability_object().is_some()),
+                };
+                let base_expected_type = match explicit_target.or(ctx.expected_type_id) {
+                    Some(t)
+                        if self
+                            .extract_function_type_from_functionlike(self.types.get(t))
+                            .is_some() =>
+                    {
+                        Some(t)
+                    }
+                    _ => None,
+                };
+                let base =
+                    self.eval_expr(base_arg.value, ctx.with_expected_type(base_expected_type))?;
                 let base_type = self.exprs.get_type(base);
-                match *self.types.get(base_type) {
+                let erased = match *self.types.get(base_type) {
                     Type::FunctionIdReference(fr) => {
                         let function = self.get_function(fr.function_id);
                         if !function.is_concrete() {
@@ -9131,70 +9178,68 @@ impl TypedProgram {
                                 "Cannot call to-dyn with a generic function; apply its type arguments first"
                             );
                         }
-                        if function.linkage.is_external() {
-                            kbail!(
-                                self,
-                                call_span,
-                                "Cannot call to-dyn with an extern function; it has no body"
-                            );
-                        }
                         let lambda_object =
                             self.function_to_lambda_object(fr.function_id, call_span);
-                        return Ok(CallResolution::OtherExpr(self.synth_discard_then(
-                            base,
-                            lambda_object,
-                            ctx.scope_id,
-                        )));
+                        Some(self.synth_discard_then(base, lambda_object, ctx.scope_id))
                     }
                     Type::Lambda(lambda_type_id) => {
-                        return Ok(CallResolution::OtherExpr(self.lambda_to_lambda_object(
-                            base,
-                            lambda_type_id,
-                            ctx.scope_id,
-                        )?));
+                        Some(self.lambda_to_lambda_object(base, lambda_type_id, ctx.scope_id)?)
                     }
-                    _ => {}
-                }
-                // Dyn ability erasure: `x.to-dyn[source[t = u8]]`, or with the
-                // target coming from the expected type
-                let target_dyn_type: Option<TypeId> =
-                    match self.ast.mem.get_nth_opt(call.type_args(&self.ast.mem), 0) {
-                        Some(type_arg) => {
-                            match self
-                                .try_eval_dyn_ability_type(type_arg.type_expr, ctx.scope_id)?
-                            {
-                                Some(t) => Some(t),
-                                None => {
-                                    let evaled =
-                                        self.eval_type_expr(type_arg.type_expr, ctx.scope_id)?;
-                                    self.types.get(evaled).as_ability_object().map(|_| evaled)
-                                }
-                            }
+                    Type::LambdaObject(_) => Some(base),
+                    Type::FunctionPointer(fp) => {
+                        let dyn_type = self.add_lambda_object(fp.function_type_id);
+                        let thunk_id = self.get_dyn_thunk(
+                            DynThunkCallee::EnvPointer(base_type),
+                            self.types.get(dyn_type).as_lambda_object().unwrap().function_type,
+                            base_arg.value.into(),
+                            call_span,
+                        );
+                        let env_ptr =
+                            self.synth_cast(base, POINTER_TYPE_ID, CastType::Reinterpret, None);
+                        Some(self.synth_lambda_object(thunk_id, env_ptr, dyn_type, call_span))
+                    }
+                    Type::FunctionTypeParameter(ftp) => {
+                        let dyn_type = self.add_lambda_object(ftp.function_type);
+                        Some(self.synth_phony(dyn_type, call_span))
+                    }
+                    Type::AbilityObject(_) if target_dyn_type.is_none_or(|t| t == base_type) => {
+                        Some(base)
+                    }
+                    _ => match target_dyn_type {
+                        Some(target_dyn_type)
+                            if self.types.get(target_dyn_type).as_ability_object().is_some() =>
+                        {
+                            let base_ref = if self.types.get(base_type).as_reference().is_some() {
+                                base
+                            } else {
+                                // Value form: allocate in the ambient mode, like a closure env
+                                self.synth_typed_call_typed_args(
+                                    self.ast.idents.f.mem_new.with_span(call_span),
+                                    &[base_type],
+                                    &[base],
+                                    ctx.with_no_expected_type(),
+                                    false,
+                                )?
+                            };
+                            let result = self.ability_impl_to_dyn_object(
+                                base_ref,
+                                target_dyn_type,
+                                ctx.scope_id,
+                                call_span,
+                            )?;
+                            Some(result)
                         }
-                        None => ctx
-                            .expected_type_id
-                            .filter(|et| self.types.get(*et).as_ability_object().is_some()),
-                    };
-                if let Some(target_dyn_type) = target_dyn_type {
-                    let base_ref = if self.types.get(base_type).as_reference().is_some() {
-                        base
-                    } else {
-                        // Value form: allocate in the ambient mode, like a closure env
-                        self.synth_typed_call_typed_args(
-                            self.ast.idents.f.mem_new.with_span(call_span),
-                            &[base_type],
-                            &[base],
-                            ctx.with_no_expected_type(),
-                            false,
-                        )?
-                    };
-                    let result = self.ability_impl_to_dyn_object(
-                        base_ref,
-                        target_dyn_type,
-                        ctx.scope_id,
-                        call_span,
-                    )?;
-                    return Ok(CallResolution::OtherExpr(result));
+                        _ => None,
+                    },
+                };
+                if let Some(erased) = erased {
+                    let erased_type = self.exprs.get_type(erased);
+                    if let Some(target) = explicit_target
+                        && target != erased_type
+                    {
+                        kbail!(self, call_span, "Cannot erase {} to {}", base_type, target);
+                    }
+                    return Ok(CallResolution::OtherExpr(erased));
                 }
             } else if fn_name == self.ast.idents.b.as_
                 || fn_name == self.ast.idents.b.widen
@@ -9714,63 +9759,123 @@ impl TypedProgram {
         call_span: Span,
     ) -> TypedExprId {
         let function = self.get_function(function_id);
-        let function_defn_span = self.ast.get_span_for_id(function.parsed_id);
-        let dyn_function_id = if let Some(dyn_fn_id) = function.dyn_fn_id {
-            dyn_fn_id
-        } else {
-            self.get_function_scope(function_id);
-            let mut new_function = *self.get_function(function_id);
-            let new_function_id = self.functions.next_id();
-
-            let empty_env_variable = self.variables.add(Variable {
-                name: self.ast.idents.b.lambda_env_var_name,
-                type_id: POINTER_TYPE_ID,
-                // Wrong scope, and its not actually added, but we know its not used
-                owner_scope: new_function.scope,
-                kind: VariableKind::FnParam(new_function_id),
-                flags: VariableFlags::empty(),
-                usage_count: 0,
-                defn_span: function_defn_span,
-            });
-            let mut new_variables = self.mem.new_list(new_function.params.len() + 1);
-            new_variables.push(TypedFunctionParam {
-                variable_id: empty_env_variable,
-                span: function_defn_span,
-            });
-            new_variables.extend(self.mem.getn(new_function.params));
-            new_function.params = new_variables.to_slice();
-            new_function.linkage = Linkage::Standard;
-
-            let fn_type = *self.types.get(new_function.type_id).as_function().unwrap();
-            new_function.type_id = self.add_function_type(
-                self.mem.getn(fn_type.logical_params()),
-                fn_type.return_type,
-                true,
-            );
-            let old_name = self.ident_str(new_function.name);
-            new_function.name = self.ast.idents.intern(format!("{}__dyn", old_name));
-            let actual_new_function_id = self.add_function(new_function);
-            debug_assert_eq!(actual_new_function_id, new_function_id);
-            self.get_function_mut(function_id).dyn_fn_id = Some(new_function_id);
-            new_function_id
-        };
-        let lambda_object_type_id =
-            self.add_lambda_object(self.get_function(dyn_function_id).type_id);
-
-        let null_ptr_expr = self.add_static_constant_expr(StaticValuePool::NULLPTR, call_span);
-        let fn_ptr_field = StructLiteralField {
-            name: self.ast.idents.b.fn_ptr,
-            expr: Some(self.function_to_pointer(dyn_function_id, call_span)),
-        };
-        let env_ptr_field =
-            StructLiteralField { name: self.ast.idents.b.env_ptr, expr: Some(null_ptr_expr) };
-        let fields = self.mem.pushn(&[fn_ptr_field, env_ptr_field]);
-        let lambda_object_struct_literal = self.exprs.add(
-            TypedExpr::Struct(StructLiteral { fields }),
-            lambda_object_type_id,
+        let parsed_id = function.parsed_id;
+        let lambda_object_type_id = self.add_lambda_object(function.type_id);
+        let dyn_function_id = self.get_dyn_thunk(
+            DynThunkCallee::Function(function_id),
+            self.types.get(lambda_object_type_id).as_lambda_object().unwrap().function_type,
+            parsed_id,
             call_span,
         );
-        lambda_object_struct_literal
+        let null_ptr_expr = self.add_static_constant_expr(StaticValuePool::NULLPTR, call_span);
+        self.synth_lambda_object(dyn_function_id, null_ptr_expr, lambda_object_type_id, call_span)
+    }
+
+    fn synth_lambda_object(
+        &mut self,
+        function_id: FunctionId,
+        env_ptr: TypedExprId,
+        lambda_object_type_id: TypeId,
+        span: Span,
+    ) -> TypedExprId {
+        let fn_ptr_field = StructLiteralField {
+            name: self.ast.idents.b.fn_ptr,
+            expr: Some(self.function_to_pointer(function_id, span)),
+        };
+        let env_ptr_field =
+            StructLiteralField { name: self.ast.idents.b.env_ptr, expr: Some(env_ptr) };
+        let fields = self.mem.pushn(&[fn_ptr_field, env_ptr_field]);
+        self.exprs.add(TypedExpr::Struct(StructLiteral { fields }), lambda_object_type_id, span)
+    }
+
+    fn get_dyn_thunk(
+        &mut self,
+        callee: DynThunkCallee,
+        thunk_type: TypeId,
+        parsed_id: ParsedId,
+        span: Span,
+    ) -> FunctionId {
+        if let Some(thunk_id) = self.dyn_thunks.get(&callee) {
+            return *thunk_id;
+        }
+        let (name, parent_scope) = match callee {
+            DynThunkCallee::Function(function_id) | DynThunkCallee::EnvReceiver(function_id, _) => {
+                let function_name = self.get_function(function_id).name;
+                let name =
+                    self.ast.idents.intern(k1_format_user!(self, "{}__dyn_thunk", function_name));
+                (name, self.get_function_scope(function_id))
+            }
+            DynThunkCallee::EnvPointer(_) => {
+                (self.ast.idents.intern("fn_pointer__dyn_thunk"), self.scopes.core_scope_id)
+            }
+        };
+        let function_type = *self.types.get(thunk_type).as_function().unwrap();
+        let logical_params = self.mem.getn(function_type.logical_params());
+        let return_type = function_type.return_type;
+        let thunk_scope =
+            self.scopes.add_child_scope(parent_scope, ScopeType::FunctionScope, ScopeOwnerId::None);
+        let thunk_id = self.functions.next_id();
+        self.scopes.set_scope_owner_id(thunk_scope, ScopeOwnerId::Function(thunk_id));
+        let tmp_mark = self.tmp.mark();
+        let mut thunk_params = self.mem.new_list(logical_params.len() as u32 + 1);
+        let mut call_args: TmpList<TypedExprId> =
+            self.tmp.new_list(logical_params.len() as u32 + 1);
+        for index in 0..logical_params.len() + 1 {
+            let (param_name, type_id) = if index == 0 {
+                (self.ast.idents.b.lambda_env_var_name, POINTER_TYPE_ID)
+            } else {
+                (self.get_positional_param_name(index - 1), logical_params[index - 1].type_id)
+            };
+            let variable_id = self.variables.add(Variable {
+                name: param_name,
+                type_id,
+                owner_scope: thunk_scope,
+                kind: VariableKind::FnParam(thunk_id),
+                flags: VariableFlags::empty(),
+                usage_count: 0,
+                defn_span: span,
+            });
+            thunk_params.push(TypedFunctionParam { variable_id, span });
+            if index > 0 {
+                call_args.push(self.synth_variable_expr(variable_id, span));
+            } else if let DynThunkCallee::EnvReceiver(_, implementor_type) = callee {
+                let env = self.synth_variable_expr(variable_id, span);
+                let self_ref_type = self.add_reference_type(implementor_type);
+                let self_ref = self.synth_cast(env, self_ref_type, CastType::Reinterpret, None);
+                call_args.push(self.synth_dereference(self_ref));
+            }
+        }
+        let call = match callee {
+            DynThunkCallee::Function(function_id) | DynThunkCallee::EnvReceiver(function_id, _) => {
+                self.synth_static_call(function_id, call_args.as_slice(), return_type, span)
+            }
+            DynThunkCallee::EnvPointer(function_pointer_type) => {
+                let env_variable = self.mem.get_nth(thunk_params.to_slice(), 0).variable_id;
+                let env = self.synth_variable_expr(env_variable, span);
+                let function_pointer_expr =
+                    self.synth_cast(env, function_pointer_type, CastType::Reinterpret, None);
+                let call = Call {
+                    callee: Callee::DynamicFunction { function_pointer_expr },
+                    args: self.mem.pushn(call_args.as_slice()),
+                    type_args: EMPTY_TYPE_SLICE,
+                };
+                self.add_call_expr(call, return_type, span)
+            }
+        };
+        self.tmp.reset_to(tmp_mark);
+        let body_block = self.synth_return_only_block(thunk_scope, call, span);
+        let actual_thunk_id = self.add_function(TypedFunction::synthesized(
+            name,
+            thunk_scope,
+            thunk_params.to_slice(),
+            body_block,
+            parsed_id,
+            thunk_type,
+            TypedFunctionKind::Standard,
+        ));
+        debug_assert_eq!(actual_thunk_id, thunk_id);
+        self.dyn_thunks.insert(callee, thunk_id);
+        thunk_id
     }
 
     pub fn lambda_to_lambda_object(
@@ -9792,15 +9897,7 @@ impl TypedProgram {
             false,
         )?;
         let env_ptr = self.synth_cast(env_ref, POINTER_TYPE_ID, CastType::Reinterpret, None);
-
-        let fn_ptr_field = StructLiteralField {
-            name: self.ast.idents.b.fn_ptr,
-            expr: Some(self.function_to_pointer(function_id, span)),
-        };
-        let env_ptr_field =
-            StructLiteralField { name: self.ast.idents.b.env_ptr, expr: Some(env_ptr) };
-        let fields = self.mem.pushn(&[fn_ptr_field, env_ptr_field]);
-        Ok(self.exprs.add(TypedExpr::Struct(StructLiteral { fields }), lambda_object_type_id, span))
+        Ok(self.synth_lambda_object(function_id, env_ptr, lambda_object_type_id, span))
     }
 
     /// After resolving to a particular root AbilityId + function index using just names,
@@ -10246,7 +10343,7 @@ impl TypedProgram {
                         index,
                         param.type_id,
                         ctx,
-                        fn_call,
+                        fn_call.name.name_span,
                         span,
                         tolerate_missing_context_args,
                     )?
@@ -10270,7 +10367,7 @@ impl TypedProgram {
         param_index: usize,
         constraint_source_type: TypeId,
         ctx: EvalExprContext,
-        fn_call: &ParsedCall,
+        usage_span: Span,
         span: Span,
         tolerate_missing: bool,
     ) -> K1Result<Option<MaybeTypedExpr>> {
@@ -10308,7 +10405,7 @@ impl TypedProgram {
                 found.type_id,
                 span,
             );
-            self.register_variable_usage(matching_context_variable, fn_call.name.name_span);
+            self.register_variable_usage(matching_context_variable, usage_span);
             Ok(Some(MaybeTypedExpr::Typed(expr)))
         } else if context_param.type_id == self.builtin_types.source_location.unwrap() {
             let expr = self.synth_source_location(span, ctx.scope_id);
@@ -10370,7 +10467,7 @@ impl TypedProgram {
                     index,
                     generic_param.type_id,
                     ctx,
-                    fn_call,
+                    fn_call.name.name_span,
                     span,
                     false,
                 )?,
@@ -11796,8 +11893,6 @@ impl TypedProgram {
             type_id: specialized_function_type_id,
             kind,
             flags,
-            dyn_fn_id: None,
-            dyn_receiver_thunk_id: None,
             returned_variable: None,
             body_failure: None,
         });
@@ -12849,6 +12944,7 @@ impl TypedProgram {
                 _ => match second {
                     None => match fn_name_str {
                         "discard" => Some(Builtin::TyperInline(BuiltinTyperInline::Discard)),
+                        "bitcast" => Some(Builtin::Ir(BuiltinIr::Bitcast)),
                         _ => None,
                     },
                     Some("mem") => match fn_name_str {
@@ -12856,7 +12952,6 @@ impl TypedProgram {
                         "move-memmove" => Some(Builtin::Backend(BackendBuiltin::MemMove)),
                         "set-memset" => Some(Builtin::Backend(BackendBuiltin::MemSet)),
                         "equals-memcmp" => Some(Builtin::Backend(BackendBuiltin::MemEquals)),
-                        "bitcast" => Some(Builtin::Ir(BuiltinIr::Bitcast)),
                         "load-volatile" => Some(Builtin::Ir(BuiltinIr::VolatileLoad)),
                         "store-volatile" => Some(Builtin::Ir(BuiltinIr::VolatileStore)),
                         _ => None,
@@ -13762,77 +13857,14 @@ impl TypedProgram {
                         && impl_fn_params.first().is_some_and(|p| p.type_id == implementor_type);
                     let slot_fn_id = if !by_value_receiver {
                         impl_fn_id
-                    } else if let Some(thunk_id) = impl_fn.dyn_receiver_thunk_id {
-                        thunk_id
                     } else {
-                        // Thunk for a by-value receiver: load self from the state pointer
-                        let impl_fn_scope = self.get_function_scope(impl_fn_id);
-                        let thunk_scope = self.scopes.add_child_scope(
-                            impl_fn_scope,
-                            ScopeType::FunctionScope,
-                            ScopeOwnerId::None,
-                        );
-                        let thunk_id = self.functions.next_id();
-                        self.scopes
-                            .set_scope_owner_id(thunk_scope, ScopeOwnerId::Function(thunk_id));
-                        let mut thunk_params = self.mem.new_list(impl_fn_params.len() as u32);
-                        let mut call_args: SV4<TypedExprId> = smallvec![];
-                        for (index, param) in impl_fn_params.iter().enumerate() {
-                            let param_type =
-                                if index == 0 { POINTER_TYPE_ID } else { param.type_id };
-                            let variable_id = self.variables.add(Variable {
-                                name: self.get_declared_param_name(impl_fn_id, index),
-                                type_id: param_type,
-                                owner_scope: thunk_scope,
-                                kind: VariableKind::FnParam(thunk_id),
-                                flags: VariableFlags::empty(),
-                                usage_count: 0,
-                                defn_span: span,
-                            });
-                            thunk_params.push(TypedFunctionParam { variable_id, span });
-                            let variable_expr = self.synth_variable_expr(variable_id, span);
-                            call_args.push(if index == 0 {
-                                let self_ref_type = self.add_reference_type(implementor_type);
-                                let self_ref = self.synth_cast(
-                                    variable_expr,
-                                    self_ref_type,
-                                    CastType::Reinterpret,
-                                    None,
-                                );
-                                self.synth_dereference(self_ref)
-                            } else {
-                                variable_expr
-                            });
-                        }
-                        let call = self.synth_static_call(
-                            impl_fn_id,
-                            &call_args,
-                            impl_fn_type.return_type,
-                            span,
-                        );
-                        let body_block = self.synth_return_only_block(thunk_scope, call, span);
-                        let thunk_type = self.add_function_type(
-                            &impl_fn_params[1..],
-                            impl_fn_type.return_type,
-                            true,
-                        );
-                        let name = self.ast.idents.intern(k1_format_user!(
-                            self,
-                            "{}__dyn_thunk",
-                            impl_fn.name
-                        ));
-                        let actual_thunk_id = self.add_function(TypedFunction::synthesized(
-                            name,
-                            thunk_scope,
-                            thunk_params.to_slice(),
-                            body_block,
+                        let slot_type = slot.function_type_id;
+                        self.get_dyn_thunk(
+                            DynThunkCallee::EnvReceiver(impl_fn_id, implementor_type),
+                            slot_type,
                             impl_fn.parsed_id,
-                            thunk_type,
-                            TypedFunctionKind::Standard,
-                        ));
-                        debug_assert_eq!(actual_thunk_id, thunk_id);
-                        self.get_function_mut(impl_fn_id).dyn_receiver_thunk_id = Some(thunk_id);
-                        thunk_id
+                            span,
+                        )
                     };
                     let fn_ptr_expr = self.function_to_pointer(slot_fn_id, span);
                     slot_fields
@@ -14319,8 +14351,6 @@ impl TypedProgram {
             kind,
             type_id: function_type_id,
             flags,
-            dyn_fn_id: None,
-            dyn_receiver_thunk_id: None,
             returned_variable: None,
             body_failure: None,
         });
@@ -14579,8 +14609,6 @@ impl TypedProgram {
             kind: TypedFunctionKind::Standard,
             type_id: function_type_id,
             flags: TypedFunctionFlags::Macro,
-            dyn_fn_id: None,
-            dyn_receiver_thunk_id: None,
             returned_variable: None,
             body_failure: None,
         });
@@ -16831,7 +16859,6 @@ impl TypedProgram {
         }
 
         let core_ns = intern_path!(self.ast.idents.b.core);
-        let core_mem = intern_path!(self.ast.idents.b.core, self.ast.idents.b.mem);
         let core_types = intern_path!(self.ast.idents.b.core, self.ast.idents.b.types);
         let core_optref = intern_path!(self.ast.idents.b.core, self.ast.idents.b.optref);
         let core_scalarcmp = intern_path!(self.ast.idents.b.core, self.ast.idents.b.scalar_cmp);
@@ -16923,7 +16950,7 @@ impl TypedProgram {
             core!("optref"),
             QIdent::make(&mut self.ast.mem, core_scalarcmp, get_ident!(self, "min"), span),
             QIdent::make(&mut self.ast.mem, core_scalarcmp, get_ident!(self, "max"), span),
-            QIdent::make(&mut self.ast.mem, core_mem, get_ident!(self, "bitcast"), span),
+            core!("bitcast"),
             QIdent::make(&mut self.ast.mem, core_types, self.ast.idents.b.enum_, span),
             QIdent::make(&mut self.ast.mem, core_types, self.ast.idents.b.sum, span),
             QIdent::make(&mut self.ast.mem, core_types, self.ast.idents.b.type_id, span),

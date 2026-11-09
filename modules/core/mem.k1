@@ -34,9 +34,9 @@ ns mem {
 
   type _unaligned[t] = packed { value: t }
 
-  fn(inline) read-unaligned[t](src: ptr): t { mem/bitcast[ptr, *_unaligned[t]](src).value }
+  fn(inline) read-unaligned[t](src: ptr): t { bitcast[ptr, *_unaligned[t]](src).value }
 
-  fn(inline) write-unaligned[t](dst: ptr, value: t) { mem/bitcast[ptr, *_unaligned[t]](dst).value = value }
+  fn(inline) write-unaligned[t](dst: ptr, value: t) { bitcast[ptr, *_unaligned[t]](dst).value = value }
 
   fn(inline) copy(dst: ptr, src: ptr, count: size) {
     if k1/is-static {

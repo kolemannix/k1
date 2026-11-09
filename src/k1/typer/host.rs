@@ -331,7 +331,7 @@ impl TypedProgram {
         {
             let request_value = self.encode_build_request(&planner.plan, request);
             let settings = self.execute_static_function(fn_id, &[request_value], span)?;
-            planner.plan.editor.test_on_save = self.field_bool(settings, "test-on-save");
+            planner.plan.editor.test_on_check = self.field_bool(settings, "test-on-check");
         }
         Ok(self.encode_build_config(&planner.plan, &config))
     }
@@ -832,7 +832,10 @@ impl TypedProgram {
         for &index in order {
             let entry = &planner.entries[index];
             let force = force_primary && index == PRIMARY_MODULE_INDEX;
-            let Some(req) = planner.plan.setup_request(&self.ast.idents, &entry.module, force)
+            let overlay = &self.lsp.source_overlay;
+            let tmp = self.get_tmp_unsafe();
+            let Some(req) =
+                planner.plan.setup_request(&self.ast.idents, tmp, &entry.module, overlay, force)
             else {
                 continue;
             };

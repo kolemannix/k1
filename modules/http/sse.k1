@@ -118,7 +118,7 @@ impl pipe[t = u8, out = sse-event] for sse-decoder {
         let is-cr = b == '\r'.as-u8()
         let is-lf = b == '\n'.as-u8()
         if not (is-lf and self.is-after-cr) {
-          if is-cr or is-lf self.end-line() else self.current-line.push(mem/bitcast(b))
+          if is-cr or is-lf self.end-line() else self.current-line.push(bitcast(b))
         }
         self.is-after-cr = is-cr
       }

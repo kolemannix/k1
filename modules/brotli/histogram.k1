@@ -1,4 +1,4 @@
-let F64-HUGE: f64 = mem/bitcast[u64, f64](0x7FF0000000000000)
+let F64-HUGE: f64 = bitcast[u64, f64](0x7FF0000000000000)
 
 type histogram[n: static size] = { data: array[u32, n], total-count: size, bit-cost: f64 }
 type(alias) histogram-literal = histogram[256]

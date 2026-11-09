@@ -129,10 +129,8 @@ ns for map {
   }
 
   fn _free[k, v, a: allocator](self: *map[k, v], alloc: a) {
-    if self.entries.non-empty() {
-      alloc.free(self.ctrl.data-ptr(), self.ctrl.size-bytes(), 1)
-      alloc.free(self.entries.data-ptr(), self.entries.size-bytes(), core/types/align[{ key: k, value: v }]())
-    }
+    self.ctrl.free-in(alloc)
+    self.entries.free-in(alloc)
   }
 
   fn with-capacity-in[k, v, a: allocator](alloc: a, min-capacity: size): map[k, v] {

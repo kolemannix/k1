@@ -181,11 +181,12 @@ fn async-waker(handle: *libuv/async): std/stream/waker {
 ns bus {
   fn create[t](
     uv-loop: *libuv/uv-loop,
+    subscriber-cap-count: size,
     subscriber-cap-weight: size,
     weight-fn: *fn(rc[t]) -> size,
   ): *pubsub/bus[t] {
     let async-handle = heap.alloc-t[libuv/async]
-    let bus = pubsub/create[t](async-waker(async-handle), subscriber-cap-weight, weight-fn)
+    let bus = pubsub/create[t](async-waker(async-handle), subscriber-cap-count, subscriber-cap-weight, weight-fn)
     check(libuv/async_init(uv-loop.as(), async-handle.as(), fn handle. handle.get().get-data[pubsub/bus[t]].dispatch())).!
     async-handle.set-data(bus)
     libuv/unref(async-handle.as-handle().as())

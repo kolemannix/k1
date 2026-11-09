@@ -1,11 +1,11 @@
 use std/math/log2
 
 fn(inline) load32-le(p: ptr): u32 {
-  mem/bitcast[vector[u8, 4], u32](vector/load-unchecked[u8, 4](p))
+  bitcast[vector[u8, 4], u32](vector/load-unchecked[u8, 4](p))
 }
 
 fn(inline) store64-le(p: ptr, v: u64) {
-  vector/store-unchecked[u8, 8](mem/bitcast[u64, vector[u8, 8]](v), p)
+  vector/store-unchecked[u8, 8](bitcast[u64, vector[u8, 8]](v), p)
 }
 
 fn(inline) log2-floor-nonzero(n: u64): size {

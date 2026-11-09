@@ -59,14 +59,14 @@ fn(test) test() {
   let tt = transposition-table/new(1)
   for c in SEARCH_SUITE {
     game.reset()
-    tt.&.clear()
+    tt.clear()
     let pos = position/from-fen(c.fen).!
     let keys: list[u64] = list/with-capacity-in(game, 8)
     keys.push-in(game, pos.key)
     let lim = limits/NONE
     lim.depth = c.depth
     let s = searcher/new(ply, game, tt.&, keys.&, :none, lim)
-    let best = s.&.run(pos.&)
+    let best = s.run(pos.&)
     let got = if best.bits == move/NONE.bits "0000" else best.to-uci()
     let ok = got == c.best
     if not ok { failures = failures + 1 }
@@ -80,7 +80,7 @@ fn(test) test() {
 fn check-fen-roundtrip(context ply: *arena)(pos: *position, depth: u32) {
   let fen = pos.to-fen()
   let parsed = position/from-fen(fen).!
-  assert-equals(parsed.&.to-fen(), fen)
+  assert-equals(parsed.to-fen(), fen)
   assert-equals(parsed.key, pos.key)
   if depth == 0 return
   let mark = ply.mark()

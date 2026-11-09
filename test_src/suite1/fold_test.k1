@@ -101,13 +101,13 @@ fn(test) casts() {
 
 fn(test) bitcasts() {
   let x = opaque(42)
-  assert-equals(mem/bitcast[int, int](x), 42)
-  assert-equals(mem/bitcast[f64, u64](1.5), mem/bitcast[f64, u64](opaque(1.5)))
-  assert-equals(mem/bitcast[u8, i8](255u8), opaque(-1i8))
+  assert-equals(bitcast[int, int](x), 42)
+  assert-equals(bitcast[f64, u64](1.5), bitcast[f64, u64](opaque(1.5)))
+  assert-equals(bitcast[u8, i8](255u8), opaque(-1i8))
   let p = x.&.as[ptr]
   assert-equals(p.to-int(), opaque(p).to-int())
   assert-equals(p.to-int().to-ptr(), p)
-  assert(mem/bitcast[u64, ptr](0).is-null())
+  assert(bitcast[u64, ptr](0).is-null())
 }
 
 fn(test) identities() {

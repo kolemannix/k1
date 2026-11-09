@@ -20,7 +20,7 @@ cover.
 
 - Casting and conversions: `: t` assertions, `.as[f64]` int/float, `.widen`,
   `.trunc`, `.signed()`/`.unsigned()`, the implicit lossless widening at
-  coercion sites, `ptr.to-size()`/`to-ptr()`, `enum-from-value`, `mem/bitcast`.
+  coercion sites, `ptr.to-size()`/`to-ptr()`, `enum-from-value`, `bitcast`.
 - Abilities and ability constraints: default bodies, `ability@(self)/f()`,
   bounds on type params, blanket impls, `impl[t: a] b for t`, ability type
   params with `[impl t]`, `where t: a and b`, qualified calls `a/f(x)`,

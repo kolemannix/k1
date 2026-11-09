@@ -4,7 +4,7 @@ use std/utf8
 fn decodes-losslessly(bytes: span[u8]): bool {
   let encoded = string-builder/new()
   for utf8/code-points(string/wrap-bytes(bytes)) { utf8/write-codepoint(encoded.&, it) }
-  encoded.&.peek() == string/wrap-bytes(bytes)
+  encoded.peek() == string/wrap-bytes(bytes)
 }
 
 fn(test) is-valid-matches-decoder-on-random-bytes() {
@@ -42,10 +42,10 @@ fn(test) count-code-points-across-vector-chunks() {
   let text = string-builder/new()
   for reps in 0.until(8) {
     for ascii in 0.until(33) {
-      text.&.reset()
+      text.reset()
       for 0.until(reps) { text.write("aÄ€😀") }
       for 0.until(ascii) { text.write("x") }
-      assert-equals(utf8/count-code-points(text.&.peek()), 4 * reps + ascii)
+      assert-equals(utf8/count-code-points(text.peek()), 4 * reps + ascii)
     }
   }
   assert-equals(utf8/count-code-points(string/wrap-bytes(list/filled[u8](40, 0x80).as-span())), 0)

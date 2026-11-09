@@ -18,7 +18,7 @@ fn identity-nested[t](t: t): t {
 // the same param TypeIds, so constraint fixup must prefer the innermost frame
 fn first-u[t, iter: iterator[item = t], i: iterable[item = t, i = iter], u](c: i, _extra: u): ?t {
   let it = c.iterator()
-  it.&.next()
+  it.next()
 }
 
 ability tagged[c] { fn tag(self): c }

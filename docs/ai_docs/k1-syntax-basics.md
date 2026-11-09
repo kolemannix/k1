@@ -104,7 +104,7 @@ and `some t` need `name: t`.
   `*t` or `optref[t]`, `optref[t]` -> `*t`, an enum to one missing some of its tags)
   are `.narrow()`. Both take the target from the expected type:
   `let r: *f32 = u.&.as()`.
-- `c.as-u8()` (char), `b.as-u8()` (bool), `mem/bitcast[a, b](v)` same-size bits.
+- `c.as-u8()` (char), `b.as-u8()` (bool), `bitcast[a, b](v)` same-size bits.
 - ptr: `to-int() to-uint() to-size()`, `n.to-ptr()`, `p.ref[t]` (null-checked in
   debug and comptime), `p.opt[t]`, `p.ref-at[t](i)` (gep), `ptr/null` or `.0`.
   `p is null` is a pattern on `ptr` only (a type error on `*t`); parenthesize
@@ -270,7 +270,7 @@ fn(test) checks-bounds() {
   params; return `core/test/outcome`: `empty`, `opt` (`:none` fails), any `try`
   (error fails).
 - `k1/test` is true when the compile collects tests (`k1 test`, editor
-  test-on-save): `#if k1/test ns x-test { ... }` keeps tests and their helpers
+  test-on-check): `#if k1/test ns x-test { ... }` keeps tests and their helpers
   out of other builds.
 - Each runs statically in the VM and at runtime in a forked child, up to
   `cpu-count` children at once, so fixed paths and ports collide; reported in order.

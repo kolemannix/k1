@@ -2,13 +2,11 @@ use std/fd
 use std/net
 use std/stream/pull
 use std/stream/source
+use std/ring
 use std/sys
 use std/thread/sleep-poll-mutex
 use std/time
 use std/url
-
-let CLIENT-OWNED-FIELDS: span[string] = ["Host", "Content-Length", "Transfer-Encoding", "Connection"]
-let CREDENTIAL-FIELDS: span[string] = ["Authorization", "Cookie", "Proxy-Authorization"]
 
 type config = {
   trust: tls/trust,
@@ -87,6 +85,88 @@ ns for error {
   fn from-errno(code: i32): error { if net/is-timeout(code) :timeout else :transport(code) }
 }
 
+type client = {
+  config: config,
+  tls-config: *tls/config,
+  lock: sleep-poll-mutex,
+  idle: ring[*client/connection],
+  open-bodies: atomic/cell[u32],
+}
+
+ns for client {
+
+fn new(config: config): result[*client, error] {
+  let tls-config = tls/config/new(config.trust, "http/1.1").map-err(error/from-tls).try
+  let idle = ring/init-in[*connection, heap](heap, config.max-idle-total.widen[size])
+  :ok heap.new(.{ config, tls-config, lock = sleep-poll-mutex/new(), idle, open-bodies = .0 })
+}
+
+fn close(self: *client) {
+  let open = self.open-bodies.load(:acquire)
+  if open > 0 crash("http-client: close with $open response bodies neither read to the end nor stopped")
+  for self.idle { it.close() }
+  self.idle.free-in(heap)
+  self.tls-config.free()
+  heap.free-t(self)
+}
+
+fn fetch(self: *client, request: http/request): result[response, error] { self.stream(request).try.read-all() }
+
+fn stream(self: *client, request: http/request): result[stream-response, error] {
+  // Validate the request headers
+  for h in request.head.headers {
+    if h.name.is-empty() or h.name.exists(fn c. not (c.is-ascii-letter() or c.is-ascii-digit() or "!#$%&'*+-.^_`|~".contains(c))) {
+      return :err(:invalid-request("bad header name `${h.name}`"))
+    }
+    if h.value.exists(fn c. c.as-u8() < 0x20 and c != '\t' or c.as-u8() == 0x7f) {
+      return :err(:invalid-request("control character in header `${h.name}`"))
+    }
+    let owned-fields: span[string] = ["Host", "Content-Length", "Transfer-Encoding", "Connection"]
+    if owned-fields.exists(fn[h] owned. h.name.equals-ignore-ascii-case(owned)) {
+      return :err(:invalid-request("`${h.name}` is set by the HTTP client"))
+    }
+  }
+
+  let current = request
+  let target = target/from-url(current.head.url).try
+  let redirect-count: u32 = 0
+  loop {
+    let connection = connection/exchange(self, current, target).try
+    let head = connection.parser.head.!
+    let keeps-body = head.status == 307 or head.status == 308
+    let is-redirect = keeps-body or head.status >= 301 and head.status <= 303
+    let location = if self.config.max-redirects > 0 and is-redirect head.find-header("Location") else :none
+    require location is :some location else {
+      let _ = self.open-bodies.add(1, :relaxed)
+      return :ok .{ head, body = mem/new(.{ client = self, connection = :some connection, failure = :none, has-delivered = false }) }
+    }
+    connection.check-in(self)
+    if redirect-count == self.config.max-redirects return :err(:too-many-redirects)
+    redirect-count = redirect-count + 1
+
+    // Follow the redirect
+    require url/parse(location) is :ok reference else return :err(:invalid-request("bad redirect Location `$location`"))
+    let next-url = current.head.url.resolve(reference)
+    let next-target = target/from-url(next-url).try
+    if target.is-https and not next-target.is-https return :err(:insecure-redirect(location))
+    let is-cross-origin = next-target.origin != target.origin
+    let credential-fields: span[string] = ["Authorization", "Cookie", "Proxy-Authorization"]
+    let headers = list/empty[http/header-field]()
+    for h in current.head.headers {
+      let is-dropped =
+        is-cross-origin and credential-fields.exists(fn[h] name. h.name.equals-ignore-ascii-case(name))
+        or (not keeps-body) and h.name.starts-with-ignore-ascii-case("content-")
+      if not is-dropped { headers.push(h) }
+    }
+    let method = if keeps-body or current.head.method is :HEAD { current.head.method } else :GET
+    current = .{
+      head = current.head | .{ url = next-url, headers, method },
+      body = if keeps-body current.body else span/empty(),
+    }
+    target = next-target
+  }
+}
+
 type target = {
   is-https: bool,
   hostname: string,
@@ -118,39 +198,6 @@ ns for target {
       path-and-query = if url.query() is :some query "$path?$query" else path,
     }
   }
-}
-
-fn is-control-char(c: char): bool { c.as-u8() < 0x20 and c != '\t' or c.as-u8() == 0x7f }
-
-fn is-token-char(c: char): bool {
-  c.is-ascii-letter() or c.is-ascii-digit() or "!#$%&'*+-.^_`|~".contains(c)
-}
-
-fn validate-headers(headers: list[http/header-field]): result[empty, error] {
-  for h in headers {
-    if h.name.is-empty() or h.name.exists(fn c. not is-token-char(c)) {
-      return :err(:invalid-request("bad header name `${h.name}`"))
-    }
-    if h.value.exists(is-control-char) return :err(:invalid-request("control character in header `${h.name}`"))
-    if CLIENT-OWNED-FIELDS.exists(fn[h] owned. h.name.equals-ignore-ascii-case(owned)) {
-      return :err(:invalid-request("`${h.name}` is set by the HTTP client"))
-    }
-  }
-  :ok
-}
-
-fn format-request-head(request: http/request, target: target): string {
-  let method = request.head.method
-  let out = string-builder/with-capacity(512)
-  out.write("${string/wrap-c(http/llhttp/method_name(method).get())} ${target.path-and-query} HTTP/1.1\r\n")
-  out.write("Host: ${target.host-field}\r\n")
-  for h in request.head.headers { out.write("${h.name}: ${h.value}\r\n") }
-  if request.body.non-empty() or method is :POST or method is :PUT or method is :PATCH {
-    out.write("Content-Length: ${request.body.len()}\r\n")
-  }
-  if not request.head.keep-alive { out.write("Connection: close\r\n") }
-  out.write("\r\n")
-  out.build()
 }
 
 type connection = {
@@ -240,82 +287,29 @@ ns for connection {
     while self.parser.head.is-none() { self.read-more().try }
     :ok
   }
-}
 
-type client = {
-  config: config,
-  tls-config: *tls/config,
-  lock: sleep-poll-mutex,
-  idle: list[*connection],
-  open-bodies: atomic/cell[u32],
-}
-
-ns for client {
-  fn new(config: config): result[*client, error] {
-    let tls-config = tls/config/new(config.trust, "http/1.1").map-err(error/from-tls).try
-    :ok heap.new(.{ config, tls-config, lock = sleep-poll-mutex/new(), idle = list/empty(), open-bodies = .0 })
-  }
-
-  fn close(self: *client) {
-    let open = self.open-bodies.&.load(:acquire)
-    if open > 0 crash("http-client: close with $open response bodies neither read to the end nor stopped")
-    for self.idle { it.close() }
-    heap.free(self.idle.data-ptr(), self.idle.cap() * types/size[*connection], types/align[*connection])
-    self.tls-config.free()
-    heap.free-t(self)
-  }
-
-  fn fetch(self: *client, request: http/request): result[response, error] { self.stream(request).try.read-all() }
-
-  fn stream(self: *client, request: http/request): result[stream-response, error] {
-    validate-headers(request.head.headers).try
-    let current = request
-    let target = target/from-url(current.head.url).try
-    let redirect-count: u32 = 0
-    loop {
-      let connection = self.exchange(current, target).try
-      let head = connection.parser.head.!
-      let location = if self.config.max-redirects > 0 and is-redirect-status(head.status) head.find-header("Location") else :none
-      require location is :some location else {
-        let _ = self.open-bodies.&.add(1, :relaxed)
-        return :ok .{ head, body = mem/new(.{ client = self, connection = :some connection, failure = :none, has-delivered = false }) }
-      }
-      self.check-in(connection)
-      if redirect-count == self.config.max-redirects return :err(:too-many-redirects)
-      redirect-count = redirect-count + 1
-
-      // Follow the redirect
-      require url/parse(location) is :ok reference else return :err(:invalid-request("bad redirect Location `$location`"))
-      let next-url = current.head.url.resolve(reference)
-      let next-target = target/from-url(next-url).try
-      if target.is-https and not next-target.is-https return :err(:insecure-redirect(location))
-      let keeps-body = head.status == 307 or head.status == 308
-      let is-cross-origin = next-target.origin != target.origin
-      let headers = list/empty[http/header-field]()
-      for h in current.head.headers {
-        let is-dropped =
-          is-cross-origin and CREDENTIAL-FIELDS.exists(fn[h] name. h.name.equals-ignore-ascii-case(name))
-          or (not keeps-body) and h.name.starts-with-ignore-ascii-case("content-")
-        if not is-dropped { headers.push(h) }
-      }
-      let method = if keeps-body or current.head.method is :HEAD { current.head.method } else :GET
-      current = .{
-        head = current.head | .{ url = next-url, headers, method },
-        body = if keeps-body current.body else span/empty(),
-      }
-      target = next-target
+  fn exchange(client: *client, request: http/request, target: target): result[*connection, error] {
+    // Format the request head
+    let method = request.head.method
+    let out = string-builder/with-capacity(512)
+    out.write("${string/wrap-c(http/llhttp/method_name(method).get())} ${target.path-and-query} HTTP/1.1\r\n")
+    out.write("Host: ${target.host-field}\r\n")
+    for h in request.head.headers { out.write("${h.name}: ${h.value}\r\n") }
+    if request.body.non-empty() or method is :POST or method is :PUT or method is :PATCH {
+      out.write("Content-Length: ${request.body.len()}\r\n")
     }
-  }
+    if not request.head.keep-alive { out.write("Connection: close\r\n") }
+    out.write("\r\n")
+    let head-text = out.build()
 
-  fn exchange(self: *client, request: http/request, target: target): result[*connection, error] {
-    let head-text = format-request-head(request, target)
-    if self.take-idle(target.origin) is :some pooled {
+    if take-idle(client, target.origin) is :some pooled {
       require pooled.send-request(request, head-text) is :err(e) else return :ok pooled
-      let may-retry = is-safe-method(request.head.method) and (not pooled.has-received) and not (e is :timeout)
+      let is-safe-method = method is :GET or method is :HEAD or method is :OPTIONS or method is :TRACE
+      let may-retry = is-safe-method and (not pooled.has-received) and not (e is :timeout)
       pooled.close()
       if not may-retry return :err(e)
     }
-    let connection = connection/open(target, self).try
+    let connection = open(target, client).try
     if connection.send-request(request, head-text) is :err(e) {
       connection.close()
       return :err(e)
@@ -323,21 +317,22 @@ ns for client {
     :ok connection
   }
 
-  fn take-idle(self: *client, origin: string): ?*connection {
+  fn take-idle(client: *client, origin: string): ?*connection {
     loop {
       let expired = list/empty[*connection]()
       let found: ?*connection = :none
-      self.lock.lock()
-      self.move-expired(expired.&)
-      let i = self.idle.len()
+      client.lock.lock()
+      move-expired(client, expired.&)
+      let idle = client.idle.&
+      let i = idle.len()
       while i > 0 and found.is-none() {
         i = i - 1
-        if self.idle.[i].origin == origin {
-          found = :some self.idle.[i]
-          self.idle.remove(i)
+        if idle.[i].origin == origin {
+          found = :some idle.[i]
+          idle.remove(i)
         }
       }
-      self.lock.unlock()
+      client.lock.unlock()
       for expired { it.close() }
       require found is :some connection else return :none
       if not fd/poll-readable(connection.stream.file) return found
@@ -345,47 +340,41 @@ ns for client {
     }
   }
 
-  fn check-in(self: *client, connection: *connection) {
-    if not (connection.keeps-alive and connection.parser.is-reusable) {
-      connection.close()
+  fn check-in(self: *connection, client: *client) {
+    if not (self.keeps-alive and self.parser.is-reusable) {
+      self.close()
       return
     }
     let evicted = list/empty[*connection]()
-    self.lock.lock()
-    self.move-expired(evicted.&)
+    client.lock.lock()
+    move-expired(client, evicted.&)
+    let idle = client.idle.&
     let same-origin-count: u32 = 0
-    for self.idle { if it.origin == connection.origin { same-origin-count = same-origin-count + 1 } }
-    let has-room = same-origin-count < self.config.max-idle-per-origin and self.config.max-idle-total > 0
+    for idle { if it.origin == self.origin { same-origin-count = same-origin-count + 1 } }
+    let has-room = same-origin-count < client.config.max-idle-per-origin and idle.cap() > 0
     if has-room {
-      if self.idle.len() >= self.config.max-idle-total.widen[size] {
-        evicted.push(self.idle.[0])
-        self.idle.remove(0)
-      }
-      connection.idle-since = time/read-cpu-counter()
-      self.idle.push-in(heap, connection)
+      if idle.is-full() { evicted.push(idle.pop-front().!) }
+      self.idle-since = time/read-cpu-counter()
+      idle.push(self)
     }
-    self.lock.unlock()
-    if not has-room { connection.close() }
+    client.lock.unlock()
+    if not has-room { self.close() }
     for evicted { it.close() }
   }
 
-  fn move-expired(self: *client, expired: *list[*connection]) {
-    while self.idle.non-empty() and time/elapsed-ms(self.idle.[0].idle-since) >= self.config.idle-timeout-ms {
-      expired.push(self.idle.[0])
-      self.idle.remove(0)
+  fn move-expired(client: *client, expired: *list[*connection]) {
+    let idle = client.idle.&
+    while idle.non-empty() and time/elapsed-ms(idle.[0].idle-since) >= client.config.idle-timeout-ms {
+      expired.push(idle.pop-front().!)
     }
   }
 }
 
-fn is-redirect-status(status: u16): bool { status >= 301 and status <= 303 or status == 307 or status == 308 }
-
-fn is-safe-method(method: http/llhttp/method): bool {
-  method is :GET or method is :HEAD or method is :OPTIONS or method is :TRACE
 }
 
 type body-reader = {
   client: *client,
-  connection: ?*connection,
+  connection: ?*client/connection,
   failure: ?error,
   has-delivered: bool,
 }
@@ -416,8 +405,8 @@ impl source[t = u8] for body-reader {
   fn stop(self: *body-reader) {
     require self.connection is :some connection else return
     self.connection = :none
-    self.client.check-in(connection)
-    let _ = self.client.open-bodies.&.sub(1, :release)
+    connection.check-in(self.client)
+    let _ = self.client.open-bodies.sub(1, :release)
   }
 }
 

@@ -182,8 +182,8 @@ fn build-slider-table(steps: array[step, 4], factors: array[u64, 64]): slider-ta
 let ROOK_TABLE: slider-table = build-slider-table(ROOK_STEPS, ROOK_MAGICS)
 let BISHOP_TABLE: slider-table = build-slider-table(BISHOP_STEPS, BISHOP_MAGICS)
 
-fn(inline) rook-attacks(sq: square, occ: bitboard): bitboard { ROOK_TABLE.&.attacks-from(sq, occ) }
-fn(inline) bishop-attacks(sq: square, occ: bitboard): bitboard { BISHOP_TABLE.&.attacks-from(sq, occ) }
+fn(inline) rook-attacks(sq: square, occ: bitboard): bitboard { ROOK_TABLE.attacks-from(sq, occ) }
+fn(inline) bishop-attacks(sq: square, occ: bitboard): bitboard { BISHOP_TABLE.attacks-from(sq, occ) }
 
 fn square-pair-table(include-ends: bool): array[array[bitboard, 64], 64] {
   let out: array[array[bitboard, 64], 64] = .0

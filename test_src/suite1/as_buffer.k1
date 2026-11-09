@@ -43,13 +43,13 @@ fn check-position[t: equals](fill: t, a: t, b: t) {
   assert(buf.as-span().contains(b))
 
   let it = buf.iterator()
-  assert(it.&.seek(a) is :some 20)
-  assert(it.&.seek(b) is :some 14)
-  assert(it.&.next() == :some fill)
-  assert(it.&.seek(a) is :none)
-  assert(it.&.next() is :none)
-  it.&.advance-by(5)
-  assert(it.&.seek(fill) is :none)
+  assert(it.seek(a) is :some 20)
+  assert(it.seek(b) is :some 14)
+  assert(it.next() == :some fill)
+  assert(it.seek(a) is :none)
+  assert(it.next() is :none)
+  it.advance-by(5)
+  assert(it.seek(fill) is :none)
 }
 
 fn sum-via-buffer[c: as-buffer[t = i64]](x: c): i64 {
@@ -87,13 +87,13 @@ fn(test) containers-as-buffer-and-as-span() {
   let sl = spill-list/new[i64, 2]()
   sl.push(5)
   sl.push(6)
-  assert(not sl.&.is-spilled())
+  assert(not sl.is-spilled())
   sl.push(7)
-  assert(sl.&.is-spilled())
+  assert(sl.is-spilled())
   assert-equals(sum-via-buffer(sl.&), 18)
   assert-equals(sl.&.as-span().len(), 3)
   sl.clear()
-  assert-equals(sl.&.len(), 0)
+  assert-equals(sl.len(), 0)
   sl.push-n([1, 2, 3, 4].as-span())
   assert-equals(sum-via-buffer(sl.&), 10)
 }
@@ -129,8 +129,8 @@ fn(test) search-and-first-diff() {
   let wf = fixlist/uninit[i64, 4]()
   wf.push(10)
   wf.push(20)
-  assert(wf.&.first-diff(wide.as-span()) is :some 2)
-  assert(wf.&.position(20) is :some 1)
+  assert(wf.first-diff(wide.as-span()) is :some 2)
+  assert(wf.position(20) is :some 1)
 }
 
 fn(test) position-and-seek-per-type() {

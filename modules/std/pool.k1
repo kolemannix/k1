@@ -13,7 +13,7 @@ ns for pool {
 
   let RETIRED-GEN: u32 = 4294967294
 
-  fn with-capacity-in[t, a: allocator](alloc: a, capacity: size): pool[t] {
+  fn init-in[t, a: allocator](alloc: a, capacity: size): pool[t] {
     let slots = capacity + 1
     .{
       values       = buffer/allocate-in[t, a](alloc, slots),
@@ -26,8 +26,8 @@ ns for pool {
     }
   }
 
-  fn with-capacity[t](capacity: size): pool[t] {
-    with-capacity-in[t, *core/arena](mem/current-arena(), capacity)
+  fn init[t](capacity: size): pool[t] {
+    init-in[t, *core/arena](mem/current-arena(), capacity)
   }
 
   fn cap[t](self: *pool[t]): size { self.values.len - 1 }

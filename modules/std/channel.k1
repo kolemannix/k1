@@ -48,11 +48,10 @@ impl[t: mpsc-node] iterator[item = *t] for mpsc-batch[t] {
 // A bounded single-consumer queue whose receive side is a stream source:
 // callbacks push, the stream pulls, all on the consumer's thread. Items
 // handed out by a pull are owned by the puller; items still queued at
-// close-and-free are released through drop-fn. cap-weight bounds the queue
-// in weight-fn units (pass fn(_) 1 for a plain item count).
+// close-and-free are released through drop-fn. cap-count bounds the queue
+// in items, cap-weight in weight-fn units.
 type channel[t] = {
-  queue: list[t],
-  head: size,
+  queue: ring[t],
   queued-weight: size,
   cap-weight: size,
   weight-fn: *fn(t) -> size,
@@ -67,10 +66,9 @@ type channel[t] = {
 }
 
 ns for channel {
-  fn new[t](cap-weight: size, weight-fn: *fn(t) -> size, drop-fn: *fn(t)): *channel[t] {
+  fn new[t](cap-count: size, cap-weight: size, weight-fn: *fn(t) -> size, drop-fn: *fn(t)): *channel[t] {
     heap.new(.{
-      queue = list/empty[t](),
-      head = 0,
+      queue = ring/init-in[t, heap](heap, cap-count),
       queued-weight = 0,
       cap-weight,
       weight-fn,
@@ -90,13 +88,7 @@ ns for channel {
     if self.closed or self.failure.is-some() { return false }
     let w = (self.weight-fn)(value)
     if self.queued-weight + w > self.cap-weight { return false }
-    if self.head > 0 and self.head * 2 >= self.queue.len() {
-      let live = self.queue.len() - self.head
-      for i in 0.until(live) { self.queue.[i] = self.queue.[self.head + i] }
-      self.queue.len = live
-      self.head = 0
-    }
-    self.queue.push-in(heap, value)
+    if self.queue.try-push(value) is :err { return false }
     self.queued-weight = self.queued-weight + w
     self.pending-wake = true
     true
@@ -120,10 +112,8 @@ ns for channel {
   // can arrive.
   fn close-and-free[t](self: *channel[t]) {
     self.closed = true
-    for item in self.queue.as-span().slice(self.head, self.queue.len()) { (self.drop-fn)(item) }
-    if self.queue.cap() > 0 {
-      heap.free(self.queue.data-ptr(), self.queue.cap() * types/size[t], types/align[t])
-    }
+    for item in self.queue { (self.drop-fn)(item) }
+    self.queue.free-in(heap)
     heap.free-t(self)
   }
 }
@@ -132,9 +122,7 @@ impl[t] stream/source[t = t] for channel[t] {
   fn start(self: *channel[t], waker: stream/waker) { self.waker = :some waker }
   fn pull(self: *channel[t]): stream/pull[t] {
     if self.failure is :some message { return :fail message }
-    if self.head == self.queue.len() { return :pending }
-    let item = self.queue.[self.head]
-    self.head = self.head + 1
+    require self.queue.pop-front() is :some item else { return :pending }
     self.queued-weight = self.queued-weight - (self.weight-fn)(item)
     self.part = item
     self.seg = span/wrap-single(self.part.&)

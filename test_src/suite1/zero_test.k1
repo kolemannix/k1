@@ -1,31 +1,31 @@
 ns zero_test
 
-fn(test) bitcast() {
+fn(test) bitcasts() {
   let s: string = "foo"
-  let s-again: string = mem/bitcast(.{ inner = s })
+  let s-again: string = bitcast(.{ inner = s })
   assert-equals(s, s-again)
 
   let p2: { x: f32, y: f32 } = .{ x = 1.0, y = -1.0 }
-  let p3: { x: f32, y: f32 } = mem/bitcast(mem/bitcast[to = i64](p2))
+  let p3: { x: f32, y: f32 } = bitcast(bitcast[to = i64](p2))
   assert-equals(p2.y, p3.y)
 
   let ipoint: u32 = 0b0000_0000_0000_0001_0000_0000_0000_0010
-  let p: { x: i16, y: u16 } = mem/bitcast(ipoint)
+  let p: { x: i16, y: u16 } = bitcast(ipoint)
   assert-equals(p.y, 1)
   assert-equals(p.x, 2)
 
   let pair: { b: u32, c: u32 } = .{ b = 2, c = 3 }
-  let wide: { w: u64 } = mem/bitcast(pair)
-  let pair2: { b: u32, c: u32 } = mem/bitcast(wide)
+  let wide: { w: u64 } = bitcast(pair)
+  let pair2: { b: u32, c: u32 } = bitcast(wide)
   assert-equals(pair2.c, 3)
 
   let val: u64 = 42
   let r: *u64 = val.&
-  let rf: f64 = mem/bitcast(r)
-  let from-f: *u64 = mem/bitcast(rf)
+  let rf: f64 = bitcast(r)
+  let from-f: *u64 = bitcast(rf)
   assert(r == from-f)
 
-  assert(test-compile(mem/bitcast[u8, u16](4)).is-some())
+  assert(test-compile(bitcast[u8, u16](4)).is-some())
 }
 
 type zpoint = { x: u8, y: u8, z: i32 }

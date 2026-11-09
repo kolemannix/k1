@@ -91,7 +91,7 @@ pub struct BuildPlan {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct EditorSettings {
-    pub test_on_save: bool,
+    pub test_on_check: bool,
 }
 
 impl BuildPlan {
@@ -217,13 +217,19 @@ impl BuildPlan {
         tmp.reset_to(mark);
     }
 
-    pub fn setup_request(
+    pub fn setup_request<Tag>(
         &self,
         idents: &IdentPool,
+        tmp: &mut Mem<Tag>,
         m: &PlannedModule,
+        overlay: &fxhash::FxHashMap<String, String>,
         force: bool,
     ) -> Option<SetupRequest> {
         let setup = m.setup?;
+        let build_path = build_file_path(idents, tmp, self.module_dir(m), overlay)?;
+        if overlay.contains_key(idents.get_string(build_path)) {
+            return None;
+        }
         let mut outputs = SV8::new();
         for id in self.mem.getn(setup.outputs) {
             outputs.push(idents.intern(self.get(*id)));
@@ -295,7 +301,7 @@ impl BuildPlan {
             if m.is_dir && read_build_file_hash(idents, tmp, dir, overlay) != m.build_file_hash {
                 return false;
             }
-            if let Some(req) = self.setup_request(idents, m, false) {
+            if let Some(req) = self.setup_request(idents, tmp, m, overlay, false) {
                 let mark = tmp.mark();
                 let current = crate::compiler::setup_is_current(idents, &req, tmp);
                 tmp.reset_to(mark);

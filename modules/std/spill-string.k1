@@ -7,7 +7,7 @@ ns for spill-string {
 
   fn from-string[n](s: string): spill-string[n] {
     let out = new[n]()
-    out.&.write-string(s)
+    out.write-string(s)
     out
   }
 
@@ -15,14 +15,14 @@ ns for spill-string {
     string/wrap-bytes(self.bytes.&.as-span())
   }
 
-  fn is-spilled[n](self: *spill-string[n]): bool { self.bytes.&.is-spilled() }
+  fn is-spilled[n](self: *spill-string[n]): bool { self.bytes.is-spilled() }
 
-  fn clear[n](self: *spill-string[n]) { self.bytes.&.clear() }
+  fn clear[n](self: *spill-string[n]) { self.bytes.clear() }
 }
 
 impl[n: static size] writer for *spill-string[n] {
-  fn(inline) write-byte(self, value: u8) { self.bytes.&.push(value) }
-  fn(inline) write-bytes(self, bytes: span[u8]) { self.bytes.&.push-n(bytes) }
+  fn(inline) write-byte(self, value: u8) { self.bytes.push(value) }
+  fn(inline) write-bytes(self, bytes: span[u8]) { self.bytes.push-n(bytes) }
 }
 
 impl[n: static size] as-span[t = char] for *spill-string[n] {

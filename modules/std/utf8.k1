@@ -131,8 +131,8 @@ fn is-valid(bytes: span[u8]): bool {
     i = i + 16
   }
   let tail: array[u8, 16] = .0
-  mem/copy(tail.&.data-ptr(), base.add-bytes(i), len - i)
-  let cur = vector/load-unchecked[u8, 16](tail.&.data-ptr())
+  mem/copy(tail.data-ptr(), base.add-bytes(i), len - i)
+  let cur = vector/load-unchecked[u8, 16](tail.data-ptr())
   errors = errors.bit-or(get-block-errors(prev, cur))
   if len - i > 12 {
     errors = errors.bit-or(get-block-errors(cur, vector/splat[u8, 16](0)))

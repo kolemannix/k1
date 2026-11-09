@@ -77,8 +77,8 @@ impl[t, n: static size] as-span[t = t] for *spill-list[t, n] {
 impl[t, n: static size] print for spill-list[t, n] {
   fn print-to[w: writer](self, w) {
     let s = self
-    w.write(if s.&.is-spilled() "spilled " else "inline ")
-    s.&.len().print-to(w)
+    w.write(if s.is-spilled() "spilled " else "inline ")
+    s.len().print-to(w)
   }
 }
 

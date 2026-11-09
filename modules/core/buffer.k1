@@ -77,6 +77,10 @@ ns for buffer {
     allocate-in(mem/current-arena(), count)
   }
 
+  fn(inline) free-in[t, a: allocator](self: buffer[t], alloc: a) {
+    if self.len != 0 alloc.free(self.data, self.size-bytes(), types/align[t]())
+  }
+
   ////////////////////////
   // Modification
 
@@ -457,7 +461,7 @@ impl[t] iterator[item = t] for buffer-iterator[t] {
     let len = self.buf.len - self.pos
     let found: ?size = #if types/schema[t] is {
       :int :u8 or :int :i8 -> buffer/position-lanes[t, k1/simd-bytes](base, len, needle),
-      :char or :bool -> buffer/position-lanes[u8, k1/simd-bytes](base, len, mem/bitcast[t, u8](needle)),
+      :char or :bool -> buffer/position-lanes[u8, k1/simd-bytes](base, len, bitcast[t, u8](needle)),
       :int :u16 or :int :i16 -> buffer/position-lanes[t, vector/simd-lanes-16](base, len, needle),
       :int :u32 or :int :i32 -> buffer/position-lanes[t, vector/simd-lanes-32](base, len, needle),
       :int :u64 or :int :i64 -> buffer/position-lanes[t, vector/simd-lanes-64](base, len, needle),

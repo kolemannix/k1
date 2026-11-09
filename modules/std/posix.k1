@@ -409,7 +409,7 @@ ns posix {
           storage = .{ v4 = .{
             sin_len_family = sockaddr/pack-family(AF_INET, types/size[sockaddr_in]),
             sin_port = port,
-            sin_addr = mem/bitcast(ip.octets),
+            sin_addr = bitcast(ip.octets),
             sin_zero = .0,
           } },
           family = AF_INET,
@@ -433,7 +433,7 @@ ns posix {
       let family = address.ref[sockaddr].family()
       if family == AF_INET {
         let v4 = address.ref[sockaddr_in]
-        .{ ip = :v4 .{ octets = mem/bitcast(v4.sin_addr) }, port = v4.sin_port.swap-bytes() }
+        .{ ip = :v4 .{ octets = bitcast(v4.sin_addr) }, port = v4.sin_port.swap-bytes() }
       } else if family == AF_INET6() {
         let v6 = address.ref[sockaddr_in6]
         .{ ip = :v6 .{ octets = v6.sin6_addr, scope-id = v6.sin6_scope_id }, port = v6.sin6_port.swap-bytes() }

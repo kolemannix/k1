@@ -85,6 +85,8 @@ fn(test) dispatch-through-dyn() {
   assert-equals(d1.label(), "counter")
   assert-equals(d1.kind(), "counter-kind")
   assert-equals(drive(d1), 2)
+  assert-equals(d1.to-dyn().bump(), 3)
+  assert-equals(d1.to-dyn[counter[t = int]].bump(), 4)
 
   let tens: *by-tens = mem/new(.{ current = 0 })
   let d2: dyn[counter[t = int]] = tens.to-dyn()
@@ -99,7 +101,7 @@ fn(test) dispatch-through-dyn() {
   let counters: list[dyn[counter[t = int]]] = [ones.to-dyn(), tens.to-dyn(), erase-generic(tens)]
   let total = 0
   for c in counters { total = total + c.bump() }
-  assert-equals(total, 3 + 10 + 20)
+  assert-equals(total, 5 + 10 + 20)
 }
 
 fn(test) dispatch-through-dyn-at-compile-time() {

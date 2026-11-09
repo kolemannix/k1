@@ -37,10 +37,10 @@ fn(test) sha256-known-vectors() {
 fn(test) sha256-incremental-update() {
   let bytes = NIST56.span-bytes()
   let h = crypto/sha256/new()
-  h.&.update(bytes.take(3))
-  h.&.update(bytes.slice(3, 50))
-  h.&.update(bytes.drop(50))
-  let d = h.&.finish()
+  h.update(bytes.take(3))
+  h.update(bytes.slice(3, 50))
+  h.update(bytes.drop(50))
+  let d = h.finish()
   assert-equals(d.as-span().to-hex(), NIST56_HASH)
 }
 

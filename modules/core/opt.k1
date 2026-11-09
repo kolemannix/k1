@@ -43,11 +43,11 @@ impl[a] try[t = a, e = string] for opt[a] {
   fn(inline) value(t): opt[t] { opt:some t }
 
   fn(inline) is-ok(self: opt[t]): bool { self is :some _ }
-  fn get-error(self: opt[t]): string {
+  fn get-error(context locn: k1/source-location)(self: opt[t]): string {
     if self is {
       :none   -> #static "${types/name[opt[t]]} was :none",
       :some _ -> crash("get-error on :some")
     }
   }
-  fn(inline) get-value(self: opt[t]): t { self.get() }
+  fn(inline) get-value(context locn: k1/source-location)(self: opt[t]): t { self.get() }
 }

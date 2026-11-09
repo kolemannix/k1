@@ -44,7 +44,7 @@ fn(test) parse-components-and-errors() {
   assert-equals(segs.len(), 4)
   assert(segs.[0] == "a/b" and segs.[1] == "" and segs.[2] == "c d" and segs.[3] == "")
   let none = p("").path-segments()
-  assert(none.&.next() is :none)
+  assert(none.next() is :none)
 
   assert(pair/find(p("/?a=1&b=x+y%26&&c").query-pairs(), "b") == :some "x y&")
   assert(pair/find(p("/?a=1&c").query-pairs(), "c") == :some "")

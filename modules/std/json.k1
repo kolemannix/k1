@@ -180,7 +180,7 @@ fn parse-with[t: codec/decode, o: static codec/opts](input: string): result[t, c
   r.skip-ws()
   let value = codec/decode@(t)/decode[o = o](r.&).try
   r.skip-ws()
-  if not r.at-end() { return r.&.error(:trailing) }
+  if not r.at-end() { return r.error(:trailing) }
   :ok value
 }
 

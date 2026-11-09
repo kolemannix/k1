@@ -672,7 +672,7 @@ wasi has no fork; the tests that expect a crash are skipped:
 
 ```text
 $ k1 --optimize --no-cache --target wasm64-wasi test --skip-static test_src/suite1
-running suite1/zero_test/bitcast
+running suite1/zero_test/bitcasts
 running suite1/zero_test/zero-literals
 running suite1/zero_test/zero-unaligned-sizes
 suite1 test results: 254 passed, 0 failed, 7 skipped (117.5ms)

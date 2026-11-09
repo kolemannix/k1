@@ -198,7 +198,7 @@ state pointer means a dyn can't cross `#static` into a runtime constant.
     `req.default`, `req.options` (`-D name[=value]`), `req.host`, `req.editor`.
     `cpu`/`features` `""` = target default; `b.no-std = true` drops std.
   - `fn editor(req): k1/editor-settings`, primary, editor compiles
-    (`test-on-save`).
+    (`test-on-check`).
   - `fn module()` / `fn module(b: k1/build-config)` returns data (`k1/module` in
     builtin.k1): `.0 | .{ library = true, depend = ["sqlite", "./deps/dbx"],
     submodules = [.{ dir = "web", depend = ["store"] }], ignore = ["attic"],
@@ -206,8 +206,9 @@ state pointer means a dyn can't cross `#static` into a runtime constant.
     setup-outputs, configure }`.
   - `fn setup()` / `fn setup(ctx: k1/setup-ctx)` declares setup; runs on the
     host, cwd = module dir, when `setup-outputs` are missing or stale against
-    `setup-inputs`, `build.k1`, params and target; failure leaves no stamp. All
-    setups finish before program source is read.
+    `setup-inputs`, `build.k1`, params and target; failure leaves no stamp;
+    editor compiles skip it while that `build.k1` is unsaved. All setups finish
+    before program source is read.
 - `depend`: `/`, `./`, `../` is a folder relative to that `build.k1`; a bare name
   is the library the program chose by that name, else `$K1_HOME/modules/<name>`.
   A library is named for its folder; one name with two folders errors. A module

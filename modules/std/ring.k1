@@ -1,0 +1,75 @@
+type ring[t] = { slots: buffer[t], head: size, len: size }
+
+ns for ring {
+  fn init-from-buffer[t](slots: buffer[t]): ring[t] { .{ slots, head = 0, len = 0 } }
+
+  fn init-in[t, a: allocator](alloc: a, count: size): ring[t] {
+    init-from-buffer(buffer/allocate-in[t, a](alloc, count))
+  }
+
+  fn init[t](count: size): ring[t] { init-in[t, *core/arena](mem/current-arena(), count) }
+
+  fn free-in[t, a: allocator](self: *ring[t], alloc: a) { self.slots.free-in(alloc) }
+
+  fn(inline) cap[t](self: *ring[t]): size { self.slots.len }
+  fn(inline) len[t](self: *ring[t]): size { self.len }
+  fn(inline) is-empty[t](self: *ring[t]): bool { self.len == 0 }
+  fn(inline) non-empty[t](self: *ring[t]): bool { self.len != 0 }
+  fn(inline) is-full[t](self: *ring[t]): bool { self.len == self.slots.len }
+
+  fn(inline) _slot[t](self: *ring[t], index: size): *t {
+    let at = self.head + index
+    self.slots.index-unchecked(if at >= self.slots.len at - self.slots.len else at)
+  }
+
+  fn push[t](self: *ring[t], value: t) {
+    if self.try-push(value) is :err { crash("ring cannot fulfill push. ${self.len + 1} > ${self.cap()}") }
+  }
+
+  fn try-push[t](self: *ring[t], value: t): result[empty, empty] {
+    if self.is-full() return :err
+    self._slot(self.len).* = value
+    self.len = self.len + 1
+    :ok
+  }
+
+  fn pop-front[t](self: *ring[t]): ?t {
+    if self.len == 0 return :none
+    let value = self._slot(0).*
+    self.head = if self.head + 1 == self.slots.len 0 else self.head + 1
+    self.len = self.len - 1
+    :some value
+  }
+
+  fn remove[t](self: *ring[t], index: size) {
+    let i = core/checked-index(index, self.len)
+    while i + 1 < self.len {
+      self._slot(i).* = self._slot(i + 1).*
+      i = i + 1
+    }
+    self.len = self.len - 1
+  }
+
+  fn clear[t](self: *ring[t]) {
+    self.head = 0
+    self.len = 0
+  }
+}
+
+type ring-iterator[t] = { ring: *ring[t], index: size }
+
+impl[t] iterator[item = t] for ring-iterator[t] {
+  fn next(self: *self): ?item {
+    if self.index == self.ring.len return :none
+    self.index = self.index + 1
+    :some self.ring._slot(self.index - 1).*
+  }
+}
+
+impl[t] iterable[item = t, i = ring-iterator[t]] for *ring[t] {
+  fn iterator(self): i { .{ ring = self, index = 0 } }
+}
+
+impl[t] index[key = size, t = t] for *ring[t] {
+  fn(inline) index-ref(self, key: size): *t { self._slot(core/checked-index(key, self.len)) }
+}

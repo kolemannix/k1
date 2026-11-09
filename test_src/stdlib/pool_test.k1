@@ -3,7 +3,7 @@ ns pool_test
 use std/pool
 
 fn(test) acquire-release-and-generations() {
-  let p = pool/with-capacity[int](3)
+  let p = pool/init[int](3)
   let a = p.acquire(1)
   let b = p.acquire(2)
   let c = p.acquire(3)
@@ -14,7 +14,7 @@ fn(test) acquire-release-and-generations() {
   let a2 = p.acquire(5)
   assert(a2.index == a.index and a2 != a and p.acquire(6).index == c.index)
   let total = 0
-  for p.& { total = total + p.get(it).* }
+  for p { total = total + p.get(it).* }
   assert-equals(total, 13)
   p.gens.[b.index.as-size()] = pool/RETIRED-GEN - 1
   p.release(.{ index = b.index, gen = pool/RETIRED-GEN - 1 })

@@ -2068,6 +2068,12 @@ impl TypedProgram {
     pub const ABILITY_OBJECT_STATE_INDEX: usize = 1;
 
     pub fn add_lambda_object(&mut self, function_type_id: TypeId) -> TypeId {
+        let function_type = *self.types.get(function_type_id).as_function().unwrap();
+        let function_type_id = self.add_function_type(
+            self.mem.getn(function_type.logical_params()),
+            function_type.return_type,
+            true,
+        );
         let fn_ptr_type = self.add_function_pointer_type(function_type_id);
         let fields = [
             StructTypeField {

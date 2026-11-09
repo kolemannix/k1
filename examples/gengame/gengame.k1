@@ -821,7 +821,7 @@ fn wrap-sel(context g: *game)(row: *list[token], opener: token): bool {
   for i in s.b.until(n) { row.push-in(g.perm, keep.[i]) }
   if score-of() > cur-level().limit {
     row.clear()
-    for t in keep.& { row.push-in(g.perm, t) }
+    for t in keep { row.push-in(g.perm, t) }
     return false
   }
   drop-sel()
@@ -859,7 +859,7 @@ fn scale-row(context g: *game)(n: u8) {
   drop-sel()
   if score-of() > cur-level().limit {
     row.clear()
-    for t in before.& { row.push-in(g.perm, t) }
+    for t in before { row.push-in(g.perm, t) }
   }
 }
 
@@ -926,7 +926,7 @@ fn clear-mark(context g: *game)(row: *list[token]) {
   let keep: fixlist[token, MAX-ROW-TOKENS] = fixlist/uninit()
   strip-marks(row, keep.&)
   row.clear()
-  for t in keep.& { row.push-in(g.perm, t) }
+  for t in keep { row.push-in(g.perm, t) }
 }
 
 fn mark-at(row: *list[token]): ?size {
@@ -1038,7 +1038,7 @@ fn fold-row(context g: *game)() {
   let e1 = expand-row(g.active, full)
   if e0.syms.&.as-span() != e1.syms.&.as-span() {
     row.clear()
-    for t in before.& { row.push-in(g.perm, t) }
+    for t in before { row.push-in(g.perm, t) }
     return
   }
   start-collapse(shot.&, hits.&, p, :none)
@@ -1097,7 +1097,7 @@ fn extract-def(context g: *game)() {
   if e0.syms.&.as-span() != e1.syms.&.as-span() {
     def.clear()
     row.clear()
-    for t in base.& { row.push-in(g.perm, t) }
+    for t in base { row.push-in(g.perm, t) }
     return
   }
   start-collapse(base.&, hits.&, p, :some(:name(d)))
@@ -1385,7 +1385,7 @@ ns(reload) view {
     let buds = e.buds.&
     let shifts = e.shifts.&
     let sel = if show-sel { sel-of(row-of(g.active)) } else { :none }
-    for s in e.syms.& {
+    for s in e.syms {
       if it-index >= maxn { break }
       let w = cell-weight(e.gens.[it-index], gv)
       if sel is :some(sr) {
@@ -1482,7 +1482,7 @@ ns(reload) view {
       draw-strip(player.&, 360, cell, x0, maxn, gv, show-buds, true, g.active == 2)
       if g.active == 2 { draw-playhead(player.&, 360, cell, x0, gv) }
     }
-    if target.syms.&.first-diff(player.syms.&.as-span()) is :some(i) and player.syms.non-empty() {
+    if target.syms.first-diff(player.syms.&.as-span()) is :some(i) and player.syms.non-empty() {
       let mx = x0.as[f32] + (strip-cells(target.&, gv, i) + 0.5) * cell.as[f32]
       let my: i32 = 360 + cell + 10
       rl/draw-poly(.{ x = mx, y = my.as[f32] }, 3, 8.0, -90.0, C_BAD)
@@ -1708,19 +1708,19 @@ ns(reload) view {
   }
 
   fn draw-grid(e: *expansion, w: size, x0: i32, y0: i32, cell: i32, maxn: size, show-buds: bool, show-shifts: bool) {
-    for s in e.syms.& {
+    for s in e.syms {
       if it-index >= maxn { break }
       let cx = x0 + (it-index % w).trunc[i32] * cell
       let cy = y0 + (it-index / w).trunc[i32] * cell
       rl/draw-rectangle(cx + 1, cy + 1, cell - 2, cell - 2, SYM-COLORS.[s.as-size()])
     }
     if show-shifts {
-      for at in e.shifts.& {
+      for at in e.shifts {
         if at > maxn { continue }
         text-center(">", x0 + (at % w).trunc[i32] * cell, y0 + (at / w).trunc[i32] * cell + cell / 2 - 8, 16, C_WARN)
       }
     }
-    for b in e.buds.& {
+    for b in e.buds {
       if b.at > maxn { continue }
       let cx = x0 + (b.at % w).trunc[i32] * cell
       let cy = y0 + (b.at / w).trunc[i32] * cell + cell / 2
@@ -1764,7 +1764,7 @@ ns(reload) view {
     text("yours", x0, y2 - 20, 16, C_TEXT-DIM)
     draw-grid(player.&, w, x0, y2, cell, maxn, show-buds, true)
     rl/draw-rectangle-lines(x0, y2, gw, gh, C_BORDER)
-    if target.syms.&.first-diff(player.syms.&.as-span()) is :some(i) and player.syms.non-empty() and i < maxn {
+    if target.syms.first-diff(player.syms.&.as-span()) is :some(i) and player.syms.non-empty() and i < maxn {
       rl/draw-rectangle-lines(x0 + (i % w).trunc[i32] * cell, y2 + (i / w).trunc[i32] * cell, cell, cell, C_BAD)
     }
     if g.active != 2 {
@@ -2498,7 +2498,7 @@ fn main(): i32 {
       let e = expand-target(lv, lv.growth.as-size())
       let sum: size = 0
       let head = ""
-      for s in e.syms.& {
+      for s in e.syms {
         sum = sum + (s.as-size() + 1) * (it-index + 1)
         if it-index < 40 { head = "$head${s.as-size()}" }
       }
@@ -2527,7 +2527,7 @@ fn main(): i32 {
     if frames >= 10 and tap-env is :some(taps) {
       let ti = (frames - 10).signed()
       let tap-iter = taps.split-by-char-iter(';')
-      if tap-iter.&.nth(ti) is :some one {
+      if tap-iter.nth(ti) is :some one {
         require one.split-once(",") is .{ before = x, after = :some y } else crash("tap needs x,y")
         let tx = u64/from-string(x).!
         let ty = u64/from-string(y).!

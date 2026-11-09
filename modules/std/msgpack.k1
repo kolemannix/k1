@@ -82,7 +82,7 @@ impl[w: writer] codec/encoder for encoder[w] {
     else if u <= u32/max-value.widen[u64] self.write-be(tag/uint32, u, types/size[u32])
     else self.write-be(tag/uint64, u, types/size[u64])
   }
-  fn write-float(self, f: f64) { self.write-be(tag/float64, mem/bitcast[f64, u64](f), types/size[f64]) }
+  fn write-float(self, f: f64) { self.write-be(tag/float64, bitcast[f64, u64](f), types/size[f64]) }
   fn write-string(self, s: string) {
     self.write-header(s.len(), tag/fixstr, 32, tag/str8, 0)
     self.w.write(s)
@@ -114,7 +114,7 @@ fn parse[t: codec/decode](input: span[byte]): result[t, codec/error] { parse-wit
 fn parse-with[t: codec/decode, o: static codec/opts](input: span[byte]): result[t, codec/error] {
   let d: decoder = .{ input, pos = 0, counts = list/empty(), capacity-budget = input.len() }
   let value = codec/decode@(t)/decode[o = o](d.&).try
-  if d.pos != input.len() { return d.&.error(:trailing) }
+  if d.pos != input.len() { return d.error(:trailing) }
   :ok value
 }
 
@@ -211,8 +211,8 @@ impl codec/decoder for *decoder {
     if b >= tag/negative-fixint { return :ok :int b.signed().widen[i64] }
     if b < tag/float32 or b > tag/int64 { return self.error(:wrong-type "number") }
     let v = self.read-be((1: size) << (b & 3).widen[u32]).try
-    if b == tag/float32 return :ok :float mem/bitcast[u32, f32](v.trunc[u32]).widen[f64]
-    if b == tag/float64 return :ok :float mem/bitcast[u64, f64](v)
+    if b == tag/float32 return :ok :float bitcast[u32, f32](v.trunc[u32]).widen[f64]
+    if b == tag/float64 return :ok :float bitcast[u64, f64](v)
     if b <= tag/uint64 return if v > i64/max-value.unsigned() :ok :uint v else :ok :int v.signed()
     let unused-bits: u32 = 64 - (byte-bits << (b & 3).widen[u32])
     :ok :int((v << unused-bits).signed() >> unused-bits)

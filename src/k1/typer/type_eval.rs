@@ -369,19 +369,14 @@ impl TypedProgram {
                         return Ok(object_type);
                     }
                     let inner = self.eval_type_expr(inner_type_expr_id, scope_id)?;
-                    let Some(&inner_fn) = self.types.get(inner).as_function() else {
+                    if self.types.get(inner).as_function().is_none() {
                         kbail!(
                             self,
                             ty_app.span,
                             "Expected function type or ability signature for dyn"
                         );
-                    };
-                    let new_function_type = self.add_function_type(
-                        self.mem.getn(inner_fn.logical_params()),
-                        inner_fn.return_type,
-                        true,
-                    );
-                    Ok(self.add_lambda_object(new_function_type))
+                    }
+                    Ok(self.add_lambda_object(inner))
                 }
             }
             ParsedTypeExpr::Optional(opt) => {

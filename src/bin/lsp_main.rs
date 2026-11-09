@@ -48,7 +48,8 @@ const TOKEN_MODIFIERS: [SemanticTokenModifier; 6] = [
     SemanticTokenModifier::new("comptime"),
 ];
 
-fn span_to_range_in_ast(ast: &ParsedProgram, span: Span) -> Option<Range> {
+fn span_to_range(k1: &TypedProgram, span: Span) -> Option<Range> {
+    let ast = &k1.ast;
     let source = ast.sources.source_by_span(span);
     let (start_line, end_line) = source.get_lines_for_span(&ast.mem, span)?;
     Some(Range {
@@ -61,10 +62,6 @@ fn span_to_range_in_ast(ast: &ParsedProgram, span: Span) -> Option<Range> {
             character: source.local_from_global_offset(span.end()) - end_line.start_char,
         },
     })
-}
-
-fn span_to_range(k1: &TypedProgram, span: Span) -> Option<Range> {
-    span_to_range_in_ast(&k1.ast, span)
 }
 
 fn error_to_diagnostic(
@@ -207,23 +204,38 @@ fn candidate_to_item(candidate: k1::lsp_support::CompletionCandidate) -> Complet
 
 struct OpenSource {
     ast: ParsedProgram,
+    version: i32,
     dirty: bool,
 }
 
-struct Backend {
+struct CheckRequest {
+    url: Url,
+    force: bool,
+}
+
+struct Backend(Arc<State>);
+
+impl std::ops::Deref for Backend {
+    type Target = State;
+    fn deref(&self) -> &State {
+        &self.0
+    }
+}
+
+struct State {
     client: Client,
     module: k1::server::SharedProgram,
     /// Url of the megarepl http server, reported to the client on `initialized`
     server_url: Option<String>,
     open_sources: Mutex<HashMap<Url, OpenSource>>,
     /// Canonical src_path of the program we compile (a module dir or single
-    /// file), derived from the files the client opens and saves
+    /// file), derived from the files the client opens, edits and saves
     src_path: RwLock<Option<PathBuf>>,
     workspace_root: RwLock<Option<String>>,
     published_diagnostic_urls: Mutex<HashSet<Url>>,
-    compile_iteration: AtomicU32,
-    retarget_generation: AtomicU32,
-    retarget_lock: tokio::sync::Mutex<()>,
+    edit_generation: AtomicU32,
+    pending_check: Mutex<Option<CheckRequest>>,
+    check_wake: tokio::sync::Notify,
     completion_generation: AtomicU32,
     completion_compile_lock: tokio::sync::Mutex<()>,
     /// The client accepts `$/progress` (window.workDoneProgress)
@@ -232,6 +244,27 @@ struct Backend {
 }
 
 const PROGRESS_TICK: std::time::Duration = std::time::Duration::from_millis(100);
+const CHECK_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(50);
+
+async fn run_check_worker(state: Arc<State>) {
+    let mut iteration = 0;
+    loop {
+        state.check_wake.notified().await;
+        // Debounce: start once edits pause for CHECK_DEBOUNCE
+        loop {
+            let seen = state.edit_generation.load(Ordering::SeqCst);
+            tokio::time::sleep(CHECK_DEBOUNCE).await;
+            if state.edit_generation.load(Ordering::SeqCst) == seen {
+                break;
+            }
+        }
+        let request = state.pending_check.lock().unwrap().take();
+        if let Some(request) = request {
+            state.check(request, iteration).await;
+            iteration += 1;
+        }
+    }
+}
 
 async fn send_progress_task(
     client: Client,
@@ -324,10 +357,6 @@ fn collect_program_files_and_errors(
     map: &mut HashMap<Url, Vec<Diagnostic>>,
     spanless_errors: &mut Vec<String>,
 ) {
-    for source in k1.ast.sources.iter() {
-        let path = k1.ast.idents.get_string(source.1.file_path);
-        map.entry(source_to_uri(path)).or_default();
-    }
     for e in k1.ast.errors.iter() {
         let message = format!("Parse Error: {}", e.message());
         if let Some((url, diagnostic)) =
@@ -357,7 +386,7 @@ impl Backend {
     fn new(client: Client) -> Backend {
         let module: k1::server::SharedProgram = Arc::new(Mutex::new(None));
         let server_url = k1::server::start(module.clone());
-        Backend {
+        let state = Arc::new(State {
             client,
             module,
             server_url,
@@ -365,14 +394,27 @@ impl Backend {
             src_path: RwLock::new(None),
             workspace_root: RwLock::new(None),
             published_diagnostic_urls: Mutex::new(HashSet::new()),
-            compile_iteration: AtomicU32::new(0),
-            retarget_generation: AtomicU32::new(0),
-            retarget_lock: tokio::sync::Mutex::new(()),
+            edit_generation: AtomicU32::new(0),
+            pending_check: Mutex::new(None),
+            check_wake: tokio::sync::Notify::new(),
             completion_generation: AtomicU32::new(0),
             completion_compile_lock: tokio::sync::Mutex::new(()),
             progress_supported: AtomicBool::new(false),
             semantic_tokens_refresh_supported: AtomicBool::new(false),
+        });
+        tokio::spawn(run_check_worker(state.clone()));
+        Backend(state)
+    }
+}
+
+impl State {
+    fn request_check(&self, url: Url, force: bool) {
+        {
+            let mut pending = self.pending_check.lock().unwrap();
+            let force = force || pending.as_ref().is_some_and(|prev| prev.force);
+            *pending = Some(CheckRequest { url, force });
         }
+        self.check_wake.notify_one();
     }
 
     /// Insert the completion marker at the cursor, replacing whatever token is there, and run a check compile;
@@ -381,7 +423,7 @@ impl Backend {
         file_url: &Url,
         line: u32,
         col: u32,
-    ) -> Result<Option<TypedProgram>> {
+    ) -> Result<Option<Box<TypedProgram>>> {
         info!("compile_with_marker {}", file_url.path());
         let content_at_line = |ast: &ParsedProgram, source: &SourceFile| {
             source
@@ -420,30 +462,27 @@ impl Backend {
         let Some(root_path) = self.target_file_for_url(file_url, &source_overlay) else {
             return Ok(None);
         };
-        let host_inputs_hash = self.with_k1(|k1| get_host_program_inputs_hash(k1)).flatten();
         let lsp_options = LspCompileOptions {
             source_overlay,
             completion: true,
             progress_sink: None,
-            host_mode: HostProgramMode::Keep { inputs_hash: host_inputs_hash },
+            host_mode: self.make_host_program_mode(),
         };
         let my_generation = self.completion_generation.fetch_add(1, Ordering::SeqCst) + 1;
         let _compile_guard = self.completion_compile_lock.lock().await;
         if self.completion_generation.load(Ordering::SeqCst) != my_generation {
             return Err(Error::request_cancelled());
         }
-        let program =
-            tokio::task::spawn_blocking(move || match compile_check(root_path, lsp_options) {
-                Ok(program) => Some(program),
-                Err(CompileProgramError::TyperFailure(program)) => Some(*program),
-                Err(CompileProgramError::Build(message)) => {
-                    error!("{message}");
-                    None
-                }
-            })
+        let compiled = tokio::task::spawn_blocking(move || compile_check(root_path, lsp_options))
             .await
             .map_err(|_| Error::internal_error())?;
-        Ok(program)
+        match compiled {
+            Ok(program) => Ok(Some(program)),
+            Err(message) => {
+                error!("{message}");
+                Ok(None)
+            }
+        }
     }
 
     fn with_k1<T>(&self, f: impl FnOnce(&mut TypedProgram) -> T) -> Option<T> {
@@ -457,10 +496,6 @@ impl Backend {
     fn make_host_program_mode(&self) -> HostProgramMode {
         let inputs_hash = self.with_k1(|k1| get_host_program_inputs_hash(k1)).flatten();
         HostProgramMode::Keep { inputs_hash }
-    }
-
-    fn build_all_files_and_errors_map(&self) -> (HashMap<Url, Vec<Diagnostic>>, Vec<String>) {
-        self.with_k1(|k1| files_and_errors_map(k1)).unwrap_or_default()
     }
 
     fn construct_source_overlay(&self) -> fxhash::FxHashMap<String, String> {
@@ -499,60 +534,40 @@ impl Backend {
         Some(k1::compiler::find_check_target_for_file(&file_path, root.as_deref(), overlay))
     }
 
-    /// Point the program at `file_url`'s module if it isn't already covered,
-    /// then compile when the target changed, the file isn't in the program, or
-    /// `force_compile` (saves). Publishes diagnostics after compiling.
-    async fn ensure_target_and_compile(&self, file_url: &Url, force_compile: bool) {
-        let my_generation = self.retarget_generation.fetch_add(1, Ordering::SeqCst) + 1;
-        let _guard = self.retarget_lock.lock().await;
-        if self.retarget_generation.load(Ordering::SeqCst) != my_generation {
-            // A newer open/save superseded this one while we waited
-            return;
-        }
+    async fn check(&self, request: CheckRequest, iteration: u32) {
+        // Retarget: point the program at the request's module unless it already covers it
+        let edit_generation = self.edit_generation.load(Ordering::SeqCst);
         let source_overlay = self.construct_source_overlay();
-        let Some(target) = self.target_file_for_url(file_url, &source_overlay) else {
+        let mut versions: HashMap<Url, i32> = HashMap::new();
+        for (url, open) in self.open_sources.lock().unwrap().iter() {
+            versions.insert(url.clone(), open.version);
+        }
+        let Some(target) = self.target_file_for_url(&request.url, &source_overlay) else {
             return;
         };
         let changed = {
             let mut src_path = self.src_path.write().unwrap();
             let changed = src_path.as_deref() != Some(target.as_path());
-            *src_path = Some(target);
+            *src_path = Some(target.clone());
             changed
         };
         let in_program = self
-            .with_k1_for_url(file_url, |k1| uri_to_source(&k1.ast, file_url).is_some())
+            .with_k1_for_url(&request.url, |k1| uri_to_source(&k1.ast, &request.url).is_some())
             .unwrap_or(false);
-        if !changed && in_program && !force_compile {
+        if !changed && in_program && !request.force {
             return;
         }
-        self.compile(source_overlay).await;
-        self.send_diagnostics().await;
-        if self.semantic_tokens_refresh_supported.load(Ordering::Relaxed) {
-            let client = self.client.clone();
-            tokio::spawn(async move {
-                if let Err(e) = client.semantic_tokens_refresh().await {
-                    error!("semantic tokens refresh: {e}");
-                }
-            });
-        }
-    }
 
-    async fn compile(&self, source_overlay: fxhash::FxHashMap<String, String>) {
-        let iteration_number = self.compile_iteration.load(Ordering::Relaxed);
-        let src_path = self.src_path.read().unwrap().clone();
-        let Some(src_path) = src_path else {
-            info!("compile {}: no target yet", iteration_number);
-            return;
-        };
-        info!("compiling version {} target {}", iteration_number, src_path.display());
+        // Compile
+        info!("compiling version {} target {}", iteration, target.display());
         let compile_start = std::time::Instant::now();
         let progress_sink = if self.progress_supported.load(Ordering::Relaxed) {
             let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
             let title = format!(
                 "k1 check {}",
-                src_path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
+                target.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default()
             );
-            let token = NumberOrString::String(format!("k1-check-{iteration_number}"));
+            let token = NumberOrString::String(format!("k1-check-{iteration}"));
             tokio::spawn(send_progress_task(self.client.clone(), token, title, rx));
             Some(LiveProgressSink::Fn(Arc::new(move |line: &str, percent| {
                 let _ = tx.send((line.to_string(), percent));
@@ -568,35 +583,25 @@ impl Backend {
             host_mode: host_program_mode,
         };
         let compile_result =
-            match tokio::task::spawn_blocking(move || compile_check(src_path, lsp_options)).await {
+            match tokio::task::spawn_blocking(move || compile_check(target, lsp_options)).await {
                 Ok(result) => result,
-                Err(join_error) => Err(CompileProgramError::Build(format!(
-                    "k1 compiler panicked: {}",
-                    panic_message(join_error)
-                ))),
+                Err(join_error) => {
+                    Err(format!("k1 compiler panicked: {}", panic_message(join_error)))
+                }
             };
         let mut compiled_module = match compile_result {
-            Ok(module) => {
-                info!(
-                    "compile {} succeeded in {}ms",
-                    iteration_number,
-                    compile_start.elapsed().as_millis()
-                );
-                Box::new(module)
-            }
-            Err(CompileProgramError::TyperFailure(module)) => {
-                info!(
-                    "compile {} typing failed in {}ms",
-                    iteration_number,
-                    compile_start.elapsed().as_millis()
-                );
-                module
-            }
-            Err(CompileProgramError::Build(message)) => {
+            Ok(module) => module,
+            Err(message) => {
                 self.client.show_message(MessageType::ERROR, message).await;
                 return;
             }
         };
+        info!(
+            "compile {} finished with {} errors in {}ms",
+            iteration,
+            compiled_module.error_count(),
+            compile_start.elapsed().as_millis()
+        );
         compiled_module.trace.progress_sink = None;
 
         if let HostProgram::Current = compiled_module.host_program {
@@ -609,9 +614,11 @@ impl Backend {
                     std::mem::replace(&mut previous.host_program, HostProgram::Absent);
             }
         }
-        if compiled_module.plan.editor.test_on_save && compiled_module.error_count() == 0 {
-            let (errors_by_file, spanless_errors) = files_and_errors_map(&compiled_module);
-            self.publish_files_and_errors(errors_by_file, spanless_errors).await;
+        let is_superseded = || self.edit_generation.load(Ordering::SeqCst) != edit_generation;
+        if compiled_module.plan.editor.test_on_check
+            && compiled_module.error_count() == 0
+            && !is_superseded()
+        {
             let tested = tokio::task::spawn_blocking(move || {
                 match compiled_module.collect_selected_tests(&[]) {
                     Ok(tests) => compiled_module.run_static_tests(&tests),
@@ -631,21 +638,32 @@ impl Backend {
             };
         }
         *self.module.lock().unwrap() = Some(compiled_module);
-        self.compile_iteration.fetch_add(1, Ordering::Relaxed);
-    }
+        if is_superseded() {
+            info!("compile {} superseded by an edit", iteration);
+            return;
+        }
 
-    async fn send_diagnostics(&self) {
-        let (errors_by_file, spanless_errors) = self.build_all_files_and_errors_map();
-        self.publish_files_and_errors(errors_by_file, spanless_errors).await;
+        // Publish
+        let (errors_by_file, spanless_errors) =
+            self.with_k1(|k1| files_and_errors_map(k1)).unwrap_or_default();
+        self.publish_files_and_errors(errors_by_file, spanless_errors, &versions).await;
+        if self.semantic_tokens_refresh_supported.load(Ordering::Relaxed) {
+            let client = self.client.clone();
+            tokio::spawn(async move {
+                if let Err(e) = client.semantic_tokens_refresh().await {
+                    error!("semantic tokens refresh: {e}");
+                }
+            });
+        }
     }
 
     async fn publish_files_and_errors(
         &self,
         errors_by_file: HashMap<Url, Vec<Diagnostic>>,
         spanless_errors: Vec<String>,
+        versions: &HashMap<Url, i32>,
     ) {
-        let version = self.compile_iteration.load(Ordering::Relaxed);
-        // Clear diagnostics for files that left the program (target switch)
+        // Clear diagnostics for files that no longer have any
         let stale = {
             let mut published = self.published_diagnostic_urls.lock().unwrap();
             let mut stale = vec![];
@@ -659,13 +677,13 @@ impl Backend {
             stale
         };
         for url in stale {
-            self.client.publish_diagnostics(url, vec![], Some(version as i32)).await;
+            let version = versions.get(&url).copied();
+            self.client.publish_diagnostics(url, vec![], version).await;
         }
         for (file_url, errors) in errors_by_file.into_iter() {
-            if !errors.is_empty() {
-                info!("Sending {} diagnostics for {file_url} with version {version}", errors.len());
-            }
-            self.client.publish_diagnostics(file_url, errors, Some(version as i32)).await;
+            let version = versions.get(&file_url).copied();
+            info!("Sending {} diagnostics for {file_url} with version {version:?}", errors.len());
+            self.client.publish_diagnostics(file_url, errors, version).await;
         }
         // Errors with no source position (module resolution failures) can't
         // be diagnostics; show them so a dead compile is never silent
@@ -693,13 +711,6 @@ impl LanguageServer for Backend {
         res.capabilities.references_provider = Some(OneOf::Left(true));
         res.capabilities.workspace_symbol_provider = Some(OneOf::Left(true));
         res.capabilities.hover_provider = Some(HoverProviderCapability::Simple(true));
-        res.capabilities.diagnostic_provider =
-            Some(DiagnosticServerCapabilities::Options(DiagnosticOptions {
-                inter_file_dependencies: true,
-                identifier: None,
-                workspace_diagnostics: true,
-                work_done_progress_options: WorkDoneProgressOptions { work_done_progress: None },
-            }));
         res.capabilities.semantic_tokens_provider =
             Some(SemanticTokensServerCapabilities::SemanticTokensOptions(SemanticTokensOptions {
                 work_done_progress_options: WorkDoneProgressOptions { work_done_progress: None },
@@ -754,8 +765,6 @@ impl LanguageServer for Backend {
 
     async fn initialized(&self, _: InitializedParams) {
         info!("K1 LSP initialized");
-
-        self.send_diagnostics().await;
         let message = match &self.server_url {
             Some(url) => format!("K1 lsp initialized! megarepl at {url}"),
             None => "K1 lsp initialized!".to_string(),
@@ -780,62 +789,11 @@ impl LanguageServer for Backend {
             error!("expect full content");
             return;
         }
-        let new_content = change.text;
-        info!("textDocument/did_change: parsing file {}", &file_url);
-        let (ast, _) = parse::parse_standalone(file_url.path().to_string(), &new_content);
-        let mut parse_diagnostics = vec![];
-        info!(
-            "textDocument/did_change: parsed file {} with {} errors",
-            &file_url,
-            ast.errors.len()
-        );
-        for error in &ast.errors {
-            if let Some(range) = span_to_range_in_ast(&ast, error.span()) {
-                parse_diagnostics.push(Diagnostic {
-                    range,
-                    severity: Some(DiagnosticSeverity::ERROR),
-                    source: Some(ast.name_str().to_string()),
-                    message: error.message().to_string(),
-                    ..Diagnostic::default()
-                })
-            }
-        }
-
-        {
-            let mut open_sources = self.open_sources.lock().unwrap();
-            open_sources.insert(file_url.clone(), OpenSource { ast, dirty: true });
-        }
-        let version = self.compile_iteration.load(Ordering::Relaxed);
-
-        let mut all_file_diagnostics = self
-            .with_k1_for_url(&file_url, |k1| {
-                let mut diagnostics = vec![];
-                let Some(source) = uri_to_source(&k1.ast, &file_url) else {
-                    return diagnostics;
-                };
-                let file_id = source.file_id;
-                for m in k1.messages.borrow().iter() {
-                    if m.span.is_none() || k1.ast.sources.file_of(m.span.global_start) != file_id {
-                        continue;
-                    }
-                    let message = k1.ident_str(m.message).to_string();
-                    if let Some((_, diagnostic)) = error_to_diagnostic(k1, message, m.level, m.span)
-                    {
-                        diagnostics.push(diagnostic);
-                    }
-                }
-                for result in &k1.test_results {
-                    if k1.ast.sources.file_of(result.span.global_start) == file_id
-                        && let Some((_, diagnostic)) = test_failure_diagnostic(k1, result)
-                    {
-                        diagnostics.push(diagnostic);
-                    }
-                }
-                diagnostics
-            })
-            .unwrap_or_default();
-        all_file_diagnostics.extend(parse_diagnostics);
-        self.client.publish_diagnostics(file_url, all_file_diagnostics, Some(version as i32)).await;
+        let (ast, _) = parse::parse_standalone(file_url.path().to_string(), &change.text);
+        let open = OpenSource { ast, version: params.text_document.version, dirty: true };
+        self.open_sources.lock().unwrap().insert(file_url.clone(), open);
+        self.edit_generation.fetch_add(1, Ordering::SeqCst);
+        self.request_check(file_url, true);
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
@@ -864,31 +822,6 @@ impl LanguageServer for Backend {
             .flatten();
         info!("hover computed in {:.2?}", start.elapsed());
         Ok(hover)
-    }
-
-    async fn workspace_diagnostic(
-        &self,
-        _params: WorkspaceDiagnosticParams,
-    ) -> Result<WorkspaceDiagnosticReportResult> {
-        info!("Got a workspace/diagnostic request");
-        // Spanless errors are surfaced by send_diagnostics as show_message
-        let (errors_by_file, _) = self.build_all_files_and_errors_map();
-
-        let items = errors_by_file
-            .into_iter()
-            .map(|(file_url, diags)| {
-                WorkspaceDocumentDiagnosticReport::Full(WorkspaceFullDocumentDiagnosticReport {
-                    uri: file_url,
-                    version: None,
-                    full_document_diagnostic_report: FullDocumentDiagnosticReport {
-                        result_id: None,
-                        items: diags,
-                    },
-                })
-            })
-            .collect();
-
-        Ok(WorkspaceDiagnosticReportResult::Report(WorkspaceDiagnosticReport { items }))
     }
 
     async fn semantic_tokens_full(
@@ -920,35 +853,24 @@ impl LanguageServer for Backend {
         Ok(Some(SemanticTokensResult::Tokens(SemanticTokens { result_id: None, data: tokens })))
     }
 
-    async fn diagnostic(
-        &self,
-        _params: DocumentDiagnosticParams,
-    ) -> Result<DocumentDiagnosticReportResult> {
-        info!("textDocument/diagnostic: returning unchanged for unsaved single-file diagnostics");
-        Ok(DocumentDiagnosticReportResult::Report(DocumentDiagnosticReport::Unchanged(
-            RelatedUnchangedDocumentDiagnosticReport {
-                related_documents: None,
-                unchanged_document_diagnostic_report: UnchangedDocumentDiagnosticReport {
-                    result_id: "na".to_string(),
-                },
-            },
-        )))
-    }
-
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let file_url = params.text_document.uri;
         info!("handling did_open for document: {}", file_url.path());
         let (ast, _) =
             parse::parse_standalone(file_url.path().to_string(), &params.text_document.text);
         // didOpen content is what the client read from disk, so not dirty
-        let open = OpenSource { ast, dirty: false };
+        let open = OpenSource { ast, version: params.text_document.version, dirty: false };
         self.open_sources.lock().unwrap().insert(file_url.clone(), open);
-        self.ensure_target_and_compile(&file_url, false).await;
+        self.request_check(file_url, false);
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        let mut es = self.open_sources.lock().unwrap();
-        es.remove(&params.text_document.uri);
+        let uri = params.text_document.uri;
+        let closed = self.open_sources.lock().unwrap().remove(&uri);
+        if closed.is_some_and(|open| open.dirty) {
+            self.edit_generation.fetch_add(1, Ordering::SeqCst);
+            self.request_check(uri, true);
+        }
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
@@ -956,7 +878,7 @@ impl LanguageServer for Backend {
         if let Some(open) = self.open_sources.lock().unwrap().get_mut(&params.text_document.uri) {
             open.dirty = false;
         }
-        self.ensure_target_and_compile(&params.text_document.uri, true).await;
+        self.request_check(params.text_document.uri, true);
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -1212,13 +1134,16 @@ async fn main() {
 fn compile_check(
     file: PathBuf,
     lsp: LspCompileOptions,
-) -> std::result::Result<TypedProgram, CompileProgramError> {
-    let mut request = CompileRequest::new(file, Command::Check, None)
-        .map_err(|e| CompileProgramError::Build(e.to_string()))?;
+) -> std::result::Result<Box<TypedProgram>, String> {
+    let mut request = CompileRequest::new(file, Command::Check, None).map_err(|e| e.to_string())?;
     request.build.default.debug = true;
     request.build.editor = true;
     request.lsp = lsp;
-    compile_program(request)
+    match compile_program(request) {
+        Ok(program) => Ok(Box::new(program)),
+        Err(CompileProgramError::TyperFailure(program)) => Ok(program),
+        Err(CompileProgramError::Build(message)) => Err(message),
+    }
 }
 
 fn panic_message(join_error: tokio::task::JoinError) -> String {

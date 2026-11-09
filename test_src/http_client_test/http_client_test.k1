@@ -2,6 +2,7 @@ use std/fd
 use std/net
 use std/stream/collect-sink
 use std/stream/source
+use std/stream/run-to
 use std/thread
 use std/time
 use std/url
@@ -133,9 +134,9 @@ fn test-config(): config { config/default() | .{ read-timeout-ms = :some 3000, w
 
 fn make-client(): *client { client/new(test-config()).! }
 
-fn head-from(method: http/llhttp/method, url: string): http/request-head { http/request-head/new(method, url/parse(url).!) }
+fn request-to(method: http/llhttp/method, url: string): http/request { http/request/new(method, url/parse(url).!) }
 
-fn get(url: string): http/request { .{ head = head-from(:GET, url), body = [] } }
+fn get(url: string): http/request { request-to(:GET, url) }
 
 fn body-from(r: http-client/response): string { string/wrap-bytes(r.body) }
 
@@ -143,7 +144,7 @@ fn assert-fetches(replies: span[reply], method: http/llhttp/method, status: u16,
   let server = start-server(replies)
   let http = make-client()
   defer http.close()
-  let response = http.fetch(.{ head = head-from(method, server.base-url), body = [] }).!
+  let response = http.fetch(request-to(method, server.base-url)).!
   assert-equals(response.head.status, status)
   assert-equals(body-from(response), body)
   let _ = server.finish()
@@ -227,8 +228,9 @@ fn(test-runtime) connection-is-not-reused-when-it-should-close() {
   let http = make-client()
   defer http.close()
   let _ = http.fetch(get(server.base-url)).!
-  let closing = head-from(:GET, server.base-url) | .{ keep-alive = false }
-  let _ = http.fetch(.{ head = closing, body = [] }).!
+  let closing = get(server.base-url)
+  closing.head.keep-alive = false
+  let _ = http.fetch(closing).!
   let _ = http.fetch(get(server.base-url)).!
   assert-equals(http.fetch(get(server.base-url)).!.head.status, 101)
   let _ = http.fetch(get(server.base-url)).!
@@ -241,8 +243,8 @@ fn(test-runtime) stream-delivers-the-body-in-parts() {
   let server = start-server([answer("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nhe\r\n3\r\nllo\r\n0\r\n\r\n"), answer(OK-HELLO)])
   let http = make-client()
   defer http.close()
-  let collected: collect-sink[u8] = .{ items = list/empty() }
-  assert-equals(string/wrap-bytes(source/run-to(http.stream(get(server.base-url)).!.body.to-dyn(), collected.&)), "hello")
+  let collected = collect-sink/new[u8]()
+  assert-equals(string/wrap-bytes(run-to(http.stream(get(server.base-url)).!.body.to-dyn(), collected.&)), "hello")
   assert-equals(body-from(http.fetch(get(server.base-url)).!), "hello")
   assert-equals(server.finish().accept-count, 1)
 }
@@ -253,8 +255,7 @@ fn(test-runtime) stale-connection-found-at-checkout() {
   defer http.close()
   let _ = http.fetch(get(server.base-url)).!
   thread/sleep-ms(100)
-  let post = head-from(:POST, server.base-url)
-  assert-equals(http.fetch(.{ head = post, body = "x".span-bytes() }).!.head.status, 200)
+  assert-equals(http.fetch(request-to(:POST, server.base-url) | .{ body = "x".span-bytes() }).!.head.status, 200)
   let served = server.finish()
   assert-equals(served.accept-count, 2)
   assert-equals(served.requests.len(), 2)
@@ -270,8 +271,7 @@ fn(test-runtime) stale-connection-retries-only-safe-methods() {
 
   let resent = start-server([answer(OK-HELLO), answer-and-close("")])
   let _ = http.fetch(get(resent.base-url)).!
-  let post = head-from(:POST, resent.base-url)
-  assert(http.fetch(.{ head = post, body = "x".span-bytes() }) is :err(:truncated))
+  assert(http.fetch(request-to(:POST, resent.base-url) | .{ body = "x".span-bytes() }) is :err(:truncated))
   let served = resent.finish()
   assert-equals(served.accept-count, 1)
   assert-equals(served.requests.len(), 2)
@@ -287,11 +287,11 @@ fn redirect-to(status: u16, location: string): reply {
 }
 
 fn authorized-get(url: string): http/request {
-  let head = head-from(:GET, url)
-  head.headers.push(.{ name = "Authorization", value = "Bearer secret" })
-  head.headers.push(.{ name = "cookie", value = "who=bob" })
-  head.headers.push(.{ name = "X-Trace", value = "abc" })
-  .{ head, body = [] }
+  let request = get(url)
+  request.head.headers.push(.{ name = "Authorization", value = "Bearer secret" })
+  request.head.headers.push(.{ name = "cookie", value = "who=bob" })
+  request.head.headers.push(.{ name = "X-Trace", value = "abc" })
+  request
 }
 
 fn(test-runtime) redirect-keeps-credentials-on-the-same-origin() {
@@ -323,12 +323,11 @@ fn(test-runtime) redirect-methods() {
   let server = start-server([redirect-to(303, "/see"), answer(OK-HELLO), redirect-to(307, "/again"), answer(OK-HELLO), redirect-to(302, "/head"), answer(OK-HELLO)])
   let http = make-client()
   defer http.close()
-  let head = head-from(:POST, server.base-url)
-  head.headers.push(.{ name = "Content-Type", value = "application/x-www-form-urlencoded" })
-  let request: http/request = .{ head, body = form.span-bytes() }
+  let request = request-to(:POST, server.base-url) | .{ body = form.span-bytes() }
+  request.head.headers.push(.{ name = "Content-Type", value = "application/x-www-form-urlencoded" })
   let _ = http.fetch(request).!
   let _ = http.fetch(request).!
-  let _ = http.fetch(.{ head = head-from(:HEAD, server.base-url), body = [] }).!
+  let _ = http.fetch(request-to(:HEAD, server.base-url)).!
   let served = server.finish()
   assert(served.requests.[1].starts-with("GET /see HTTP/1.1\r\n"))
   assert(not served.requests.[1].contains-string("Content-"))
@@ -372,9 +371,9 @@ fn(test-runtime) rejects-header-injection() {
     .{ name = "Transfer-Encoding", value = "chunked" },
     .{ name = "Connection", value = "close" },
   ] {
-    let head = head-from(:GET, "http://127.0.0.1:1/")
-    head.headers.push(bad)
-    assert(http.fetch(.{ head, body = [] }) is :err(:invalid-request _))
+    let request = get("http://127.0.0.1:1/")
+    request.head.headers.push(bad)
+    assert(http.fetch(request) is :err(:invalid-request _))
   }
   for target in ["ftp://127.0.0.1/", "/no-host", "http://user:pass@127.0.0.1/"] {
     assert(http.fetch(get(target)) is :err(:invalid-request _))
@@ -383,7 +382,7 @@ fn(test-runtime) rejects-header-injection() {
 
 fn(test-runtime) host-field-and-origin() {
   let check = fn(text: string, host-field: string, hostname: string, port: u16, origin: string, target: string) {
-    let parsed = http-client/target/from-url(url/parse(text).!).!
+    let parsed = http-client/client/target/from-url(url/parse(text).!).!
     assert-equals(parsed.host-field, host-field)
     assert-equals(parsed.hostname, hostname)
     assert-equals(parsed.port, port)
@@ -410,10 +409,10 @@ fn(test-runtime) write-timeout-expires() {
   defer silent.close()
   let http = client/new(test-config() | .{ write-timeout-ms = :some 50, connect-timeout-ms = 20_000 }).!
   defer http.close()
-  let post = head-from(:POST, "http://127.0.0.1:${silent.local-address().!.port}/")
   let body-size: size = 64 * 1024 * 1024
+  let post = request-to(:POST, "http://127.0.0.1:${silent.local-address().!.port}/") | .{ body = span/wrap-raw(mem/alloc-layout(body-size, 1), body-size) }
   let start = time/read-cpu-counter()
-  assert(http.fetch(.{ head = post, body = span/wrap-raw(mem/alloc-layout(body-size, 1), body-size) }) is :err(:timeout))
+  assert(http.fetch(post) is :err(:timeout))
   assert(time/elapsed-ms(start) < 10_000)
 }
 

@@ -568,8 +568,8 @@ ability try[impl t, impl e] {
   fn value(t: t): self
 
   fn is-ok(self): bool
-  fn get-error(self): e
-  fn get-value(self): t
+  fn get-error(context locn: k1/source-location)(self): e
+  fn get-value(context locn: k1/source-location)(self): t
 
   fn result(self): result[t, e] {
     if self.is-ok() :ok(self.get-value()) else :err(self.get-error())
@@ -621,7 +621,7 @@ ability iterable[impl item, impl i: iterator[item = item]] {
 
   fn position(self, needle: item): ?size where item: equals {
     let iter = self.iterator()
-    iter.&.seek(needle)
+    iter.seek(needle)
   }
 
   fn contains(self, needle: item): bool where item: equals {
@@ -745,7 +745,7 @@ ability as-span[impl t] {
     span/wrap-buffer(self.as-span().inner-buffer().drop-right(count))
   }
   fn chunks(self, size: size): span[span[t]] {
-    mem/bitcast(self.as-span().inner-buffer().chunks(size))
+    bitcast(self.as-span().inner-buffer().chunks(size))
   }
   fn starts-with(self, other: span[t]): bool where t: equals {
     self.as-span().inner-buffer().starts-with(other.inner-buffer())
@@ -886,8 +886,6 @@ ns mem {
   )
   fn(builtin) equals-memcmp(p1: ptr, p2: ptr, size: int): bool
 
-  fn(builtin) bitcast[from, to](value: from): to
-
   fn(builtin) load-volatile[t](src: *t): t
   fn(builtin) store-volatile[t](dst: *t, value: t)
 
@@ -997,7 +995,7 @@ ns k1 {
     editor: bool,
   }
 
-  type editor-settings = { test-on-save: bool }
+  type editor-settings = { test-on-check: bool }
 
   type setup-ctx = { build: build-config }
 
@@ -1042,20 +1040,20 @@ ns k1 {
 // Core sizing intrinsics
 
 ns for ptr {
-  let null: ptr = mem/bitcast[u64, ptr](0)
+  let null: ptr = bitcast[u64, ptr](0)
 
   fn(inline) is-null(self: ptr): bool { self is null }
 
   fn(inline) ref[t](context locn: k1/source-location)(self: ptr): *t {
     if k1/debug or k1/is-static { if self is null crash("null ptr to reference") }
-    mem/bitcast[ptr, *t](self)
+    bitcast[ptr, *t](self)
   }
 
   fn(inline) opt[t](self: ptr): optref[t] { .{ inner = self } }
 
-  fn(inline) to-int(self: ptr): i64 { mem/bitcast[ptr, i64](self) }
-  fn(inline) to-uint(self: ptr): u64 { mem/bitcast[ptr, u64](self) }
-  fn(inline) to-size(self: ptr): size { mem/bitcast[ptr, size](self) }
+  fn(inline) to-int(self: ptr): i64 { bitcast[ptr, i64](self) }
+  fn(inline) to-uint(self: ptr): u64 { bitcast[ptr, u64](self) }
+  fn(inline) to-size(self: ptr): size { bitcast[ptr, size](self) }
 
   // This is an intrinsic so that we can codegen a getelementptr
   // instruction in LLVM rather than a pointer cast.
@@ -1093,8 +1091,8 @@ impl equals for ptr {
 }
 
 ns for bool {
-  fn(inline) as-u8(self: bool): u8 { mem/bitcast[bool, u8](self) }
-  fn(inline) as-i8(self: bool): i8 { mem/bitcast[bool, i8](self) }
+  fn(inline) as-u8(self: bool): u8 { bitcast[bool, u8](self) }
+  fn(inline) as-i8(self: bool): i8 { bitcast[bool, i8](self) }
 
   fn(inline) from-u8(value: u8): bool { value != 0u8 }
 }
@@ -1145,6 +1143,7 @@ impl equals for char {
 }
 
 fn(builtin) discard[t](_t: t): empty
+fn(builtin) bitcast[from, to](value: from): to
 fn(cold) enum-unknown-name[v: print](type-name: string, value: v): string { "${type-name}(${value})" }
 fn phony[t](): t { crash("phony") }
 

@@ -68,7 +68,7 @@ ns vector {
     load-unchecked[t, n](s.data-ptr().ref-at[t](start).as[ptr])
   }
 
-  fn(inline) to-u64[t, n: static size](v: vector[t, n]): u64 { mem/bitcast(v) }
+  fn(inline) to-u64[t, n: static size](v: vector[t, n]): u64 { bitcast(v) }
 
   fn(inline) eq-mask[t, n: static size](a: vector[t, n], b: vector[t, n]): u64 {
     a.eq-lanes(b).to-mask()

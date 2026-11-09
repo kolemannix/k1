@@ -13,6 +13,7 @@ use std/utf8
 use http/cookie
 use std/stream/rc-byte-stream
 use std/stream/source
+use std/stream/run-to
 use std/stream/collect-sink
 use std/stream/byte-source
 use http/chunked-encoder
@@ -92,14 +93,13 @@ fn(test) test-parsers() {
   assert-equals(http/date/to-string(1709251199), "Thu, 29 Feb 2024 23:59:59 GMT")
   assert-equals(http/date/to-string(951782400), "Tue, 29 Feb 2000 00:00:00 GMT")
 
-  let h = http/request-head/new(:POST, url/parse("/login?next=%2Fhome").!)
-  h.headers.push(.{ name = "content-type", value = "application/x-www-form-urlencoded; charset=utf-8" })
-  h.headers.push(.{ name = "Cookie", value = "who=bob" })
-  let req: http/request = .{ head = h, body = "who=alice".span-bytes() }
+  let req = http/request/new(:POST, url/parse("/login?next=%2Fhome").!) | .{ body = "who=alice".span-bytes() }
+  req.head.headers.push(.{ name = "content-type", value = "application/x-www-form-urlencoded; charset=utf-8" })
+  req.head.headers.push(.{ name = "Cookie", value = "who=bob" })
   assert(pair/find(req.head.url.query-pairs(), "next") == :some "/home")
   assert(pair/find(req.body-form-fields().!, "who") == :some "alice")
   assert(req.cookie("who") == :some "bob")
-  let plain: http/request = .{ head = http/request-head/new(:GET, url/parse("/").!), body = [] }
+  let plain = http/request/new(:GET, url/parse("/").!)
   assert(plain.body-form-fields() is :none)
   assert(plain.cookies().is-empty())
   assert(not plain.accepts-encoding("br"))
@@ -115,8 +115,8 @@ fn(test) test-parsers() {
 }
 
 fn drain(src: byte-source): string {
-  let sink: collect-sink[u8] = .{ items = list/empty() }
-  string/wrap-bytes(source/run-to(src, sink.&))
+  let sink = collect-sink/new[u8]()
+  string/wrap-bytes(run-to(src, sink.&))
 }
 
 fn sse(src: byte-source, event-name: string, data-prefix: string): string {
@@ -213,11 +213,11 @@ ns for client {
     let l = libuv/default_loop()
     uv/check(libuv/tcp_init(l, c.tcp.&.as())).!
     uv/check(libuv/timer_init(l, c.rest-timer.&.as())).!
-    c.tcp.&.set-data(c)
-    c.connect-req.&.set-data(c)
-    c.write-req.&.set-data(c)
-    c.rest-req.&.set-data(c)
-    c.rest-timer.&.set-data(c)
+    c.tcp.set-data(c)
+    c.connect-req.set-data(c)
+    c.write-req.set-data(c)
+    c.rest-req.set-data(c)
+    c.rest-timer.set-data(c)
     let addr: libuv/sockaddr_in = uninit
     uv/check(libuv/ip4_addr("127.0.0.1\0".data-ref-byte().as(), port.widen[i32], addr.&.as())).!
     uv/check(libuv/tcp_connect(c.connect-req.&.as(), c.tcp.&.as(), addr.&.as[ptr].narrow(), on-connect.&)).!
@@ -235,7 +235,7 @@ fn on-connect(req: optref[libuv/connect], status: i32) {
     let c = req.get().get-data[client]
     if c.hang-up { libuv/close(c.tcp.&.as-handle().as(), fn _h. .{}) }
     if c.rest.non-empty() {
-      c.rest-timer.&.start(fn t. {
+      c.rest-timer.start(fn t. {
         let c = t.get().get-data[client]
         libuv/close(t.get().as-handle().as(), fn _h. .{})
         c.buf = libuv/buf/wrap-span(c.rest.span-bytes())
@@ -385,7 +385,12 @@ fn(test-runtime) test-server() {
     handle-signals = false,
   }
   startup-state = "startup-lifetime".cloned()
-  let bus = uv/bus/create[span[u8]](libuv/default_loop().get(), 1048576, fn(payload: rc-bytes) payload.bytes().len())
+  let bus = uv/bus/create[span[u8]](
+    libuv/default_loop().get(),
+    subscriber-cap-count = 1024,
+    subscriber-cap-weight = 1048576,
+    weight-fn = fn(payload: rc-bytes) payload.bytes().len(),
+  )
   let pool = uv/worker-pool/start(target-free-count = 4, max-worker-count = 8, capacity = 64)
   let s = server/start(config, pool, (fn[bus, pool](req: http/request) handle(req, bus, pool)).to-dyn()).!
   srv = s.as[ptr]

@@ -94,12 +94,30 @@ impl TypedProgram {
             }
         };
         let function_type = self.get_callee_function_type(&callee);
-        let params = self.types.get(function_type).as_function().unwrap().logical_params();
-        if params.len() as usize != args.len() {
+        let params =
+            self.mem.getn(self.types.get(function_type).as_function().unwrap().logical_params());
+        let context_param_count = FnParamType::get_context_param_count(params);
+        if params.len() != context_param_count + args.len() {
             self.ice_span(span, "synthesized ability call has the wrong number of arguments")
         }
         let mut checked_args: SV4<TypedExprId> = smallvec![];
-        for (index, param) in self.mem.getn(params).iter().enumerate() {
+        for (index, param) in params[..context_param_count].iter().enumerate() {
+            let Some(MaybeTypedExpr::Typed(arg)) = self.resolve_context_arg(
+                param,
+                Some(ability_fn.function_id),
+                index,
+                param.type_id,
+                ctx,
+                span,
+                span,
+                false,
+            )?
+            else {
+                self.ice_span(span, "synthesized call's context argument is unresolved")
+            };
+            checked_args.push(arg);
+        }
+        for (index, param) in params[context_param_count..].iter().enumerate() {
             let arg = args[index];
             if self.exprs.get_type(arg) == NEVER_TYPE_ID {
                 return Ok(self.make_never_block(&args[..=index], ctx.scope_id, span));

@@ -224,7 +224,7 @@ fn bench-one(name: string, input: span[u8], r: run) {
   sb.write(", ")
   write-mbps(sb.&, "k1 decode", decode-times.&, round-bytes)
   sb.write(", ${input.len()} -> $k1-bytes bytes, $reps reps x $ROUNDS rounds")
-  println(sb.&.build())
+  println(sb.build())
 }
 
 fn main(argc: u32, argv: ptr): i32 {

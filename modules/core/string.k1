@@ -151,7 +151,7 @@ ns for string {
 
   fn chunks(self: string, size: size): span[string] {
     let char-spans: span[span[char]] = self.span.chunks(size)
-    mem/bitcast[span[span[char]], span[string]](char-spans)
+    bitcast[span[span[char]], span[string]](char-spans)
   }
 
   fn(inline) data-ptr(self: string): ptr { self.span.data-ptr() }

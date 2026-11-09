@@ -380,29 +380,29 @@ ns for builder {
     if s.is-empty() or (not s.[0].is-ascii-letter()) or s.exists(fn c. not is-scheme-char(c)) {
       crash("url/builder: invalid scheme `$s`")
     }
-    self.out.&.write(s)
-    self.out.&.write-char(':')
+    self.out.write(s)
+    self.out.write-char(':')
   }
 
   fn userinfo(self: *builder, text: string) {
     let _ = self._enter(2, "userinfo", repeatable = false)
     self.has-authority = true
-    self.out.&.write("//")
+    self.out.write("//")
     percent/write-normalized(self.out.&, text, :userinfo, lower = false)
-    self.out.&.write-char('@')
+    self.out.write-char('@')
   }
 
   fn host(self: *builder, text: string) {
-    if self._enter(3, "the host", repeatable = false) and not self.has-authority { self.out.&.write("//") }
+    if self._enter(3, "the host", repeatable = false) and not self.has-authority { self.out.write("//") }
     self.has-authority = true
-    if text.starts-with("[") self.out.&.write(text)
+    if text.starts-with("[") self.out.write(text)
     else percent/write-normalized(self.out.&, text, :host, lower = false)
   }
 
   fn port(self: *builder, p: u16) {
     if self.stage != 3 crash("url/builder: the port needs a host first")
     self.stage = 4
-    self.out.&.write-char(':')
+    self.out.write-char(':')
     p.print-to(self.out.&)
   }
 
@@ -415,27 +415,27 @@ ns for builder {
 
   fn segment[t: print](self: *builder, value: t) {
     self._enter-path()
-    self.out.&.write-char('/')
+    self.out.write-char('/')
     percent/write-encoded(self.out.&, value, :segment)
     self._check-path()
   }
 
   fn query(self: *builder, text: string) {
     let _ = self._enter(6, "the query", repeatable = false)
-    self.out.&.write-char('?')
+    self.out.write-char('?')
     percent/write-normalized(self.out.&, text, :query, lower = false)
   }
 
   fn query-pair[n: print, v: print](self: *builder, name: n, value: v) {
-    self.out.&.write-char(if self._enter(6, "a query pair", repeatable = true) '?' else '&')
+    self.out.write-char(if self._enter(6, "a query pair", repeatable = true) '?' else '&')
     percent/write-encoded(self.out.&, name, :form)
-    self.out.&.write-char('=')
+    self.out.write-char('=')
     percent/write-encoded(self.out.&, value, :form)
   }
 
   fn fragment(self: *builder, text: string) {
     let _ = self._enter(7, "the fragment", repeatable = false)
-    self.out.&.write-char('#')
+    self.out.write-char('#')
     percent/write-normalized(self.out.&, text, :query, lower = false)
   }
 
@@ -495,20 +495,20 @@ ns percent {
     let out = string-builder/with-capacity(s.len())
     let start: size = 0
     while i < s.len() {
-      out.&.write(s.slice(start, i))
+      out.write(s.slice(start, i))
       if s.[i] == '+' {
-        out.&.write-char(' ')
+        out.write-char(' ')
         start = i + 1
       } else if escape-at(s, i) is :some v {
-        out.&.write-byte(v)
+        out.write-byte(v)
         start = i + 3
       } else {
-        out.&.write-char('%')
+        out.write-char('%')
         start = i + 1
       }
       i = find-stop(s, start, '%', plus, plus, invisible = false)
     }
-    out.&.write(s.drop(start))
+    out.write(s.drop(start))
     out.take()
   }
 

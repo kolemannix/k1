@@ -101,13 +101,13 @@ fn start(
     woken = uninit,
     on-loop-event = uninit,
     awaited-events = 0,
-    connections = pool/with-capacity-in[t = connection](heap, config.max-connections),
+    connections = pool/init-in[t = connection](heap, config.max-connections),
     draining = false,
     conn-serial = 0,
   })
 
   uv/check(libuv/tcp_init(l, s.listener.&.as())).try
-  s.listener.&.set-data(s)
+  s.listener.set-data(s)
 
   let addr: libuv/sockaddr_in = uninit
   uv/check(libuv/ip4_addr(config.host.to-c().as(), config.port.widen[i32], addr.&.as())).try
@@ -121,14 +121,14 @@ fn start(
   }
 
   uv/check(libuv/async_init(l, s.on-loop-event.&.as(), run-loop-events.&)).!
-  s.on-loop-event.&.set-data(s)
+  s.on-loop-event.set-data(s)
   libuv/unref(s.on-loop-event.&.as-handle().as())
   let on-send = uv/async-waker(s.on-loop-event.&)
   s.handled = mpsc/new(on-send)
   s.woken = mpsc/new(on-send)
 
   uv/check(libuv/prepare_init(l, s.scratch-prepare.&.as())).!
-  s.scratch-prepare.&.set-data(s)
+  s.scratch-prepare.set-data(s)
   uv/check(libuv/prepare_start(s.scratch-prepare.&.as(), fn p. p.get().get-data[server].scratch.reset())).!
   libuv/unref(s.scratch-prepare.&.as-handle().as())
 
@@ -166,7 +166,7 @@ fn stop(*self) {
   }
   if self.connections.is-empty() return
 
-  for self.connections.& {
+  for self.connections {
     let conn = self.connections.get(it)
     if conn.phase is {
       :idle or :header or :body or :parked -> conn.close(),
@@ -174,12 +174,12 @@ fn stop(*self) {
     }
   }
   uv/check(libuv/timer_init(self.uv-loop.as(), self.drain-timer.&.as())).!
-  self.drain-timer.&.set-data(self)
-  self.drain-timer.&.start(fn t. {
+  self.drain-timer.set-data(self)
+  self.drain-timer.start(fn t. {
     let t = t.get()
     let s = t.get-data[server]
     tprintln("drain deadline passed; closing ${s.connections.len()} connections")
-    for s.connections.& { s.connections.get(it).close() }
+    for s.connections { s.connections.get(it).close() }
     libuv/close(t.as-handle().as(), fn _h. .{})
   }, self.config.drain-timeout-ms, 0)
 }
@@ -264,7 +264,7 @@ ns for connection {
     s.connections.release(self.slot)
     tprintln("conn${self.serial-no} released; active connections: ${s.connections.len()}")
     if s.draining and s.connections.is-empty() and libuv/is_active(s.drain-timer.&.as-handle().as()).as-bool() {
-      s.drain-timer.&.stop()
+      s.drain-timer.stop()
       libuv/close(s.drain-timer.&.as-handle().as(), fn _h. .{})
     }
   }
@@ -414,7 +414,7 @@ fn on-write-complete(req: optref[libuv/write], status: i32) {
 
 fn on-wake(state: ptr) {
   let connection = state.ref[connection]
-  if not atomic/xchg(connection.wake-queued.&, true, :acq-rel) { connection.server.woken.&.send(connection) }
+  if not atomic/xchg(connection.wake-queued.&, true, :acq-rel) { connection.server.woken.send(connection) }
 }
 
 fn on-timeout(t: optref[libuv/timer]) {
@@ -447,12 +447,12 @@ impl mpsc-node for connection {
 fn run-handler(work: *http-handler-work) {
   let s = work.connection.server
   work.http-response = :some mem/with-arena(work.connection.request-arena, (s.handler)(work.request))
-  s.handled.&.send(work)
+  s.handled.send(work)
 }
 
 fn run-loop-events(handle: optref[libuv/async]) {
   let s = handle.get().get-data[server]
-  for work in s.handled.&.take() {
+  for work in s.handled.take() {
     s.end-await()
     let connection = work.connection
     if connection.phase is :closing {
@@ -462,7 +462,7 @@ fn run-loop-events(handle: optref[libuv/async]) {
       connection.begin-response(work.http-response.!)
     }
   }
-  for connection in s.woken.&.take() {
+  for connection in s.woken.take() {
     let _ = atomic/xchg(connection.wake-queued.&, false, :acq-rel)
     if connection.phase is {
       :parked -> connection.pump(),

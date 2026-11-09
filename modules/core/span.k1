@@ -127,7 +127,7 @@ ns for span {
   fn to-hex(self: span[u8]): string {
     let sb = string-builder/with-capacity(self.len() * 2)
     self.write-hex(sb.&, upper = false)
-    sb.&.take()
+    sb.take()
   }
 
   fn from-hex(s: string): ?span[u8] {
