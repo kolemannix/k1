@@ -247,7 +247,7 @@ Out come:
   captures (`game-events({ id: u64 })`); the query struct is pasted as written,
   and `#meta` fns over the payload's schema decode both kinds of capture and
   write the query string
-- `route/parse(method, url)` and `route/parse-request(header)`: an allocation-free trie matcher that percent-decodes,
+- `route/parse(method, url)` and `route/parse-request(head)`: an allocation-free trie matcher that percent-decodes,
   answers `HEAD` for `GET` routes, parses captures through `from-string`, scans the
   query for its params without building a list, and returns `:bad-method` with
   the allowed list, `:missing-param`, or `:not-found`
@@ -313,13 +313,13 @@ Both directions come from the one row, and the test round-trips them:
   let g = route:grade-rate .{ who = "a b", plan-id = -3, item-id = 9, note = :some "x&y=1+z" }
   assert-equals(g.to-string(), "/cmd/grade-rate/a%20b?plan-id=-3&item-id=9&note=x%26y%3D1%2Bz")
   assert-equals((route:grade-rate .{ who = "a/b", plan-id = 1, item-id = 2, note = :some "x y" }).to-string(), "/cmd/grade-rate/a%2Fb?plan-id=1&item-id=2&note=x+y")
-  assert(route-of(:GET, g.to-string()) is :ok :grade-rate r and r.who == "a b" and r.plan-id == -3 and r.item-id == 9 and r.note is :some nt and nt == "x&y=1+z")
-  assert(route-of(:GET, "/cmd/grade-rate/x?zz=1&note=a+b&item-id=2&&plan-id=1") is :ok :grade-rate r2 and r2.note is :some nn and nn == "a b")
-  assert(route-of(:GET, "/cmd/grade-rate/x?item-id=2&plan-id=1") is :ok :grade-rate r3 and r3.note is :none)
+  assert(route-from(:GET, g.to-string()) is :ok :grade-rate r and r.who == "a b" and r.plan-id == -3 and r.item-id == 9 and r.note is :some nt and nt == "x&y=1+z")
+  assert(route-from(:GET, "/cmd/grade-rate/x?zz=1&note=a+b&item-id=2&&plan-id=1") is :ok :grade-rate r2 and r2.note is :some nn and nn == "a b")
+  assert(route-from(:GET, "/cmd/grade-rate/x?item-id=2&plan-id=1") is :ok :grade-rate r3 and r3.note is :none)
   assert-equals((route:grade-rate .{ who = "x", plan-id = 1, item-id = 2, note = :none }).to-string(), "/cmd/grade-rate/x?plan-id=1&item-id=2")
-  assert(route-of(:GET, "/cmd/grade-rate/x?plan-id=1") is :err :missing-param m and m.name == "item-id")
-  assert(route-of(:GET, "/cmd/grade-rate/x?plan-id=one&item-id=2") is :err :bad-param b and b.got == "one")
-  assert(route-of(:GET, "/cmd/grade-rate/x?plan-id=1&item-id=2&plan-id=1") is :err :bad-param b2 and b2.name == "plan-id")
+  assert(route-from(:GET, "/cmd/grade-rate/x?plan-id=1") is :err :missing-param m and m.name == "item-id")
+  assert(route-from(:GET, "/cmd/grade-rate/x?plan-id=one&item-id=2") is :err :bad-param b and b.got == "one")
+  assert(route-from(:GET, "/cmd/grade-rate/x?plan-id=1&item-id=2&plan-id=1") is :err :bad-param b2 and b2.name == "plan-id")
 ```
 
 ## Errors point at your source, not the expansion

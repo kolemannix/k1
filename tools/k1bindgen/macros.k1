@@ -133,7 +133,7 @@ fn transpile-literal(t: *macro-transpile, text: string): result[string, string] 
   if is-float-literal(text) return transpile-float-literal(t, text)
   let digits = strip-int-suffix(text)
   if digits.is-empty() or digits.len() > 18 return :err "unsupported literal $text"
-  if digits.starts-with("0x") or digits.starts-with("0X") {
+  if digits.starts-with-ignore-ascii-case("0x") {
     let hex = digits.drop(2)
     if hex.is-empty() or hex.len() > 16 return :err "unsupported hex literal $text"
     for c in hex { if not is-hex-digit(c) { return :err "unsupported hex literal $text" } }
@@ -155,7 +155,7 @@ fn transpile-literal(t: *macro-transpile, text: string): result[string, string] 
 }
 
 fn is-float-literal(text: string): bool {
-  if text.starts-with("0x") or text.starts-with("0X") return false
+  if text.starts-with-ignore-ascii-case("0x") return false
   let last = text.[text.len() - 1]
   if last == 'f' or last == 'F' return true
   text.contains-string(".")

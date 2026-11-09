@@ -1,0 +1,81 @@
+use std/url/pair
+use std/url/percent
+
+type cookie = {
+  name: string,
+  value: string,
+  domain: ?string,
+  path: ?string,
+  expires: ?u64,
+  max-age: ?u64,
+  http-only: bool,
+  secure: bool,
+  same-site: either { default, lax, strict, none },
+}
+
+ns for cookie {
+  fn new(name: string, value: string): cookie { .0 | .{ name, value } }
+
+  fn parse-pair(text: string): ?pair {
+    require text.split-once("=") is .{ before, after = :some after } else return :none
+    let name = before.trim-ascii-space().as-non-empty().try
+    :some .{ name, value = percent/decode(after.trim-ascii-space()) }
+  }
+
+  fn parse-header(header: string): span[pair] {
+    let out = list/empty[pair]()
+    for part in header.split-by-char-iter(';') { if parse-pair(part) is :some p out.push(p) }
+    out.as-span()
+  }
+
+  fn parse-set-cookie(header: string): ?cookie {
+    let attr-iter = header.split-by-char-iter(';')
+    require parse-pair(attr-iter.next() ? "") is :some first else { return :none }
+    let c = new(first.name, first.value)
+    for attr in attr-iter {
+      let kv = attr.split-once("=")
+      let value = (kv.after ? "").trim-ascii-space()
+      if kv.before.trim-ascii-space().to-ascii-lower() is {
+        "domain" -> if value.non-empty() {
+          let host = if value.starts-with(".") value.drop(1) else value
+          c.domain = :some host.to-ascii-lower()
+        },
+        "path" -> { c.path = if value.starts-with("/") :some value else :none },
+        "expires" -> if date/parse(value) is :some seconds { c.expires = :some seconds },
+        "max-age" -> if i64/from-string(value) is :ok seconds {
+          c.max-age = :some (if seconds < 0 0 else seconds.unsigned())
+        },
+        "secure" -> { c.secure = true },
+        "httponly" -> { c.http-only = true },
+        "samesite" -> {
+          c.same-site = if value.to-ascii-lower() is {
+            "lax"    -> :lax,
+            "strict" -> :strict,
+            "none"   -> :none,
+            _        -> :default
+          }
+        },
+        _ -> {},
+      }
+    }
+    :some c
+  }
+
+  fn to-set-cookie(self: cookie): string {
+    let out = string-builder/new()
+    out.write("Set-Cookie: ${self.name}=${percent/encode(self.value, :unreserved)}")
+    if self.domain is :some domain { out.write("; Domain=$domain") }
+    if self.path is :some path { out.write("; Path=$path") }
+    if self.expires is :some seconds { out.write("; Expires=${date/to-string(seconds)}") }
+    if self.max-age is :some n { out.write("; Max-Age=$n") }
+    if self.http-only { out.write("; HttpOnly") }
+    if self.secure { out.write("; Secure") }
+    out.write(if self.same-site is {
+      :default -> "",
+      :lax     -> "; SameSite=Lax",
+      :strict  -> "; SameSite=Strict",
+      :none    -> "; SameSite=None",
+    })
+    out.build()
+  }
+}

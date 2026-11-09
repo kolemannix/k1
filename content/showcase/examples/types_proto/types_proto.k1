@@ -22,8 +22,7 @@ fn read(file: string): string {
 
 fn statements(src: string, kind: string, name: string): list[string] {
   let head = "$kind $name {"
-  require src.index-of-string(head) is :some at else crash("proto: no `$head`")
-  let rest = src.drop(at + head.len())
+  require src.split-once(head).after is :some rest else crash("proto: no `$head`")
   let body = rest.slice(0, rest.position('}').!)
   let out: list[string] = []
   for s in body.split-by-char(';') {

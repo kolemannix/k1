@@ -75,18 +75,24 @@ ns for string {
 
   // Splits at every delimiter, keeping interior empty pieces but dropping a
   // trailing empty piece
-  fn split-by-char(self: string, delim: char): list[string] {
-    let pieces = list/empty[string]()
-    let start = 0: size
-    while start < self.len() {
-      require self.drop(start).position(delim) is :some idx else {
-        pieces.push(self.slice(start, self.len()))
-        return pieces
-      }
-      pieces.push(self.slice(start, start + idx))
-      start = start + idx + 1
+  fn split-by-char(self: string, delim: char): list[string] { self.split-by-char-iter(delim).to-list() }
+
+  fn split-by-char-iter(self: string, delim: char): split-iterator { .{ rest = self, delim } }
+
+  fn split-once(self: string, separator: string): { before: string, after: ?string } {
+    require self.index-of-string(separator) is :some i else return .{ before = self, after = :none }
+    .{ before = self.take(i), after = :some self.drop(i + separator.len()) }
+  }
+
+  type split-iterator = { rest: string, delim: char }
+
+  impl iterator[item = string] for split-iterator {
+    fn next(self: *self): ?item {
+      if self.rest.is-empty() return :none
+      let piece = self.rest.take(self.rest.position(self.delim) ? self.rest.len())
+      self.rest = self.rest.drop(piece.len() + 1)
+      :some piece
     }
-    pieces
   }
 
   fn trim-ascii-space(self: string): string {
@@ -107,6 +113,10 @@ ns for string {
     true
   }
 
+  fn starts-with-ignore-ascii-case(self: string, prefix: string): bool {
+    self.take(prefix.len()).equals-ignore-ascii-case(prefix)
+  }
+
   fn index-of-string(self: string, target: string): ?size {
     self.span.inner-buffer().index-of-buffer(target.span.inner-buffer())
   }
@@ -123,6 +133,13 @@ ns for string {
   fn(inline) drop(self: string, count: size): string { .{ span = self.span.drop(count) } }
   fn(inline) take-right(self: string, count: size): string { .{ span = self.span.take-right(count) } }
   fn(inline) drop-right(self: string, count: size): string { .{ span = self.span.drop-right(count) } }
+
+  fn take-while(self: string, pred: some fn char -> bool): string {
+    for c in self { if not pred(c) return self.take(it-index) }
+    self
+  }
+
+  fn drop-while(self: string, pred: some fn char -> bool): string { self.drop(self.take-while(pred).len()) }
   
   fn starts-with(self: string, other: string): bool {
     self.span.starts-with(other.span)

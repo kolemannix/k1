@@ -1,3 +1,4 @@
+// FIXME ai authored; largely unreviewed as of 11-08-2026
 ns routing {
 
 use core/meta/str-lit
@@ -34,9 +35,9 @@ fn parse-pattern(tok: code-token, pat: string): list[seg] {
     if rest.starts-with("{") {
       require rest.index-of('}') is :some close else tok.fail("Unclosed `{` in `$pat`")
       let inner = rest.slice(1, close)
-      require inner.index-of(':') is :some colon else tok.fail("Expected `{name: type}`, got `{${inner}}`")
-      let name = inner.take(colon).trim-ascii-space()
-      let ty = inner.drop(colon + 1).trim-ascii-space()
+      require inner.split-once(":") is .{ before, after = :some after } else tok.fail("Expected `{name: type}`, got `{${inner}}`")
+      let name = before.trim-ascii-space()
+      let ty = after.trim-ascii-space()
       check-ident(tok, name, "param name")
       if ty.is-empty() tok.fail("Param `$name` needs a type")
       let ty-code = code-builder/new()
@@ -45,7 +46,7 @@ fn parse-pattern(tok: code-token, pat: string): list[seg] {
       rest = rest.drop(close + 1)
       if rest.non-empty() and rest.[0] != '/' tok.fail("Expected `/` after `{${inner}}`")
     } else {
-      let piece = rest.take(rest.index-of('/') ? rest.len())
+      let piece = rest.split-once("/").before
       rest = rest.drop(piece.len())
       if piece.starts-with("*") {
         check-ident(tok, piece.drop(1), "param name")
@@ -208,7 +209,9 @@ fn payload-code(payload-id: types/type-id, n: size): code {
     for f in fields {
       if it-index >= n cb.line("let q$it-index: ?string = :none")
     }
-    cb.block("for kv in u.query-pairs()", fn[cb, fields, n]. {
+    cb.block(`for field in (u.query() ? "").split-by-char-iter('&')`, fn[cb, fields, n]. {
+      cb.line("if field.is-empty() continue")
+      cb.line("let kv = std/url/form/decode-field(field)")
       for f in fields {
         let k = it-index
         if k >= n {
@@ -378,7 +381,7 @@ fn emit-node(context cb: *code-builder)(entries: span[entry], group: list[size],
 }
 
 fn emit-parse-fn(context cb: *code-builder)(name: code, entries: span[entry]) {
-  cb.line("fn parse-request(header: http/header): result[$name, http/routing/route-error] { parse(header.method, header.url) }")
+  cb.line("fn parse-request(head: http/request-head): result[$name, http/routing/route-error] { parse(head.method, head.url) }")
   cb.block("fn parse(method: http/llhttp/method, u: std/url/url): result[$name, http/routing/route-error]", fn[cb, entries]. {
     cb.line(`let path = u.path()`)
     cb.line(`if not path.starts-with("/") { return :err :not-found }`)
@@ -462,12 +465,7 @@ type route-error = either {
 
 fn split-path(path: string): fixlist[string, 17] {
   let out = fixlist/uninit[string, 17]()
-  let rest = path.drop(1)
-  while rest.non-empty() {
-    let end = rest.index-of('/') ? rest.len()
-    if out.try-push(rest.take(end)) is :err break
-    rest = rest.drop(end + 1)
-  }
+  for segment in path.drop(1).split-by-char-iter('/') { if out.try-push(segment) is :err break }
   out
 }
 

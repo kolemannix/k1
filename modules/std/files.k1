@@ -26,24 +26,7 @@ ns files {
       :err(code) -> return :err(.{ code, path })
     }
     defer fd/close(file)
-
-    let file-size-bytes = if fd/file-size(file) is {
-      :some(n) -> n,
-      :none -> crash("cannot size `$path`")
-    }
-    let buf = buffer/allocate-in[t = char](alloc, file-size-bytes)
-
-    let total: size = 0
-    while total < buf.len() {
-      let n = if fd/read(file, buf.data-ptr().add-bytes(total), buf.len() - total).result() is {
-        :ok(n) -> n,
-        :err(code) -> return :err(.{ code, path })
-      }
-      if n == 0 break
-      total = total + n
-    }
-    buf.len = total
-    :ok(string/wrap-buffer(buf))
+    fd/read-all-in(alloc, file).map-err(fn[path](code: i32) .{ code, path })
   }
 
   fn write-entire-file(out-path: string, contents: string): result[empty, error] {

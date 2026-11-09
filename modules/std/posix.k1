@@ -28,11 +28,15 @@ ns posix {
   fn(extern) closedir(dir: ptr): c-int
   type pollfd = { fd: c-int, events: i16, revents: i16 }
   let POLLIN: i16 = 1
+  let POLLOUT: i16 = 4
   fn(extern) poll(fds: ptr, nfds: u64, timeout: c-int): c-int
 
   let SEEK_SET: c-int = 0
   let SEEK_END: c-int = 2
   fn(extern) lseek(fd: c-int, offset: i64, whence: c-int): i64
+  let S_IFMT: u16 = 0xF000
+  let S_IFREG: u16 = 0x8000
+  fn(extern) fstat(fd: c-int, status: ptr): c-int
 
   let MAP_FILE   : c-int = 0x0000
   let MAP_SHARED : c-int = 0x0001
@@ -117,6 +121,85 @@ ns posix {
     k1/select-os(macos = fn. _NSGetEnviron().ref[ptr].*, linux = fn. environ)
   }
 
+  // Sockets
+  let AF_INET: c-int = 2
+  fn AF_INET6(): c-int { k1/select-os(macos = fn. 30, linux = fn. 10) }
+  let SOCK_STREAM: c-int = 1
+  let IPPROTO_TCP: c-int = 6
+  let TCP_NODELAY: c-int = 1
+  let SHUT_RD: c-int = 0
+  let SHUT_WR: c-int = 1
+  let SHUT_RDWR: c-int = 2
+  fn SOL_SOCKET(): c-int { k1/select-os(macos = fn. 0xffff, linux = fn. 1) }
+  fn SO_REUSEADDR(): c-int { k1/select-os(macos = fn. 0x4, linux = fn. 2) }
+  fn SO_ERROR(): c-int { k1/select-os(macos = fn. 0x1007, linux = fn. 4) }
+  fn SO_SNDTIMEO(): c-int { k1/select-os(macos = fn. 0x1005, linux = fn. 21) }
+  fn SO_RCVTIMEO(): c-int { k1/select-os(macos = fn. 0x1006, linux = fn. 20) }
+  fn MSG_NOSIGNAL(): c-int { k1/select-os(macos = fn. 0x80000, linux = fn. 0x4000) }
+  let F_GETFL: c-int = 3
+  let F_SETFL: c-int = 4
+  fn O_NONBLOCK(): c-int { k1/select-os(macos = fn. 0x4, linux = fn. 0x800) }
+  fn EAI_AGAIN(): c-int { k1/select-os(macos = fn. 2, linux = fn. -3) }
+  fn EAI_NODATA(): c-int { k1/select-os(macos = fn. 7, linux = fn. -5) }
+  fn EAI_NONAME(): c-int { k1/select-os(macos = fn. 8, linux = fn. -2) }
+  fn EAI_SYSTEM(): c-int { k1/select-os(macos = fn. 11, linux = fn. -11) }
+
+  type(alias) socklen_t = u32
+  type timeval = { tv_sec: u64, tv_usec: u64 }
+  type sockaddr = { sa_len_family: u16, sa_data: array[u8, 14] }
+  type sockaddr_in = { sin_len_family: u16, sin_port: u16, sin_addr: u32, sin_zero: array[u8, 8] }
+  type sockaddr_in6 = {
+    sin6_len_family: u16,
+    sin6_port: u16,
+    sin6_flowinfo: u32,
+    sin6_addr: array[u8, 16],
+    sin6_scope_id: u32,
+  }
+  type addrinfo = {
+    ai_flags: c-int,
+    ai_family: c-int,
+    ai_socktype: c-int,
+    ai_protocol: c-int,
+    ai_addrlen: socklen_t,
+    addr-on-linux: ptr,
+    addr-on-macos: ptr,
+    ai_next: optref[addrinfo],
+  }
+
+  ns for sockaddr {
+    fn pack-family(family: c-int, len: size): u16 {
+      k1/select-os(
+        macos = fn[family, len]. family.trunc[u16] << 8 | len.trunc[u16],
+        linux = fn[family]. family.trunc[u16]
+      )
+    }
+    fn family(self: *sockaddr): c-int {
+      let packed = self.sa_len_family.widen[c-int]
+      k1/select-os(macos = fn[packed]. packed >> 8, linux = fn[packed]. packed)
+    }
+  }
+
+  ns for addrinfo {
+    fn ai_addr(self: *addrinfo): ptr {
+      k1/select-os(macos = fn[self]. self.addr-on-macos, linux = fn[self]. self.addr-on-linux)
+    }
+  }
+
+  fn(extern) socket(domain: c-int, kind: c-int, protocol: c-int): c-int
+  fn(extern) connect(fd: c-int, address: ptr, address-len: socklen_t): c-int
+  fn(extern) bind(fd: c-int, address: ptr, address-len: socklen_t): c-int
+  fn(extern) listen(fd: c-int, backlog: c-int): c-int
+  fn(extern) accept(fd: c-int, address: ptr, address-len: *socklen_t): c-int
+  fn(extern) send(fd: c-int, data: ptr, count: c-sizet, flags: c-int): i64
+  fn(extern) shutdown(fd: c-int, how: c-int): c-int
+  fn(extern) getsockopt(fd: c-int, level: c-int, option: c-int, value: ptr, value-len: *socklen_t): c-int
+  fn(extern) setsockopt(fd: c-int, level: c-int, option: c-int, value: ptr, value-len: socklen_t): c-int
+  fn(extern) getsockname(fd: c-int, address: ptr, address-len: *socklen_t): c-int
+  fn(extern) fcntl(fd: c-int, cmd: c-int, c-varargs): c-int
+  fn(extern) getaddrinfo(host: *u8, service: optref[u8], hints: *addrinfo, addresses: *optref[addrinfo]): c-int
+  fn(extern) freeaddrinfo(addresses: optref[addrinfo])
+  fn(extern) gai_strerror(code: c-int): *u8
+
   // The scalar convention over the bindings above -- bytes moved or -errno,
   // negative fd on failed open, retryable interruptions absorbed
   ns port {
@@ -125,20 +208,26 @@ ns posix {
     fn or-errno(rc: c-int): i32 { if rc < 0 { 0 - libc/errno() } else rc }
 
     fn read(file-no: i32, buffer: ptr, count: size): i64 {
-      let n = posix/read(file-no, buffer, count.unsigned())
+      let capped = count.min(i32/max-value.widen[i64]).unsigned()
+      let n = posix/read(file-no, buffer, capped)
       while n < 0 and libc/errno() == libc/EINTR {
-        n = posix/read(file-no, buffer, count.unsigned())
+        n = posix/read(file-no, buffer, capped)
       }
       if n < 0 { 0 - libc/errno().widen[i64] } else n
     }
-    fn poll-readable(file-no: i32): bool {
-      let p: pollfd = .{ fd = file-no, events = POLLIN, revents = 0 }
-      let n = poll(p.&.as[ptr], 1, 0)
-      while n < 0 and libc/errno() == libc/EINTR {
-        n = poll(p.&.as[ptr], 1, 0)
+    fn poll-one(fd: i32, events: i16, timeout-ms: u64): i32 {
+      let p: pollfd = .{ fd, events, revents = 0 }
+      let start = counter()
+      let remaining = timeout-ms
+      loop {
+        let n = poll(p.&.as[ptr], 1, remaining.min(i32/max-value.unsigned().widen[u64]).trunc[c-int])
+        if n >= 0 return n
+        if libc/errno() != libc/EINTR return 0 - libc/errno()
+        let elapsed-ms = counter-to-nanos(counter() - start) / 1_000_000
+        remaining = if elapsed-ms < timeout-ms timeout-ms - elapsed-ms else 0
       }
-      n > 0
     }
+    fn poll-readable(file-no: i32): bool { poll-one(file-no, POLLIN, 0) > 0 }
     fn open-to-read(path: string): i32 { or-errno(open(path.to-c-tmp(), O_RDONLY, .{})) }
     fn open-to-write(path: string): i32 {
       let create-mode-rw-all: c-int = 0x1B6
@@ -161,9 +250,11 @@ ns posix {
     }
     fn dir-close(dir: ptr) { let _ = closedir(dir) }
     fn file-size(fd: i32): i64 {
-      let end = lseek(fd, 0, SEEK_END)
-      lseek(fd, 0, SEEK_SET)
-      end
+      let status: array[u8, 144] = .0
+      if fstat(fd, status.data-ptr()) != 0 return -1
+      let mode = mem/read-unaligned[u16](status.data-ptr().add-bytes(k1/select-os(macos = fn. 4, linux = fn. 24)))
+      if mode & S_IFMT != S_IFREG return -1
+      mem/read-unaligned[i64](status.data-ptr().add-bytes(k1/select-os(macos = fn. 96, linux = fn. 48)))
     }
 
     fn env-get(name: string): ?string {
@@ -303,6 +394,162 @@ ns posix {
     }
 
     fn kill(pid: i32) { let _ = posix/kill(pid, SIGKILL) }
+
+    // Sockets
+    type raw-socket-address = {
+      storage: union { v4: sockaddr_in, v6: sockaddr_in6 },
+      family: c-int,
+      len: socklen_t,
+    }
+
+    fn make-raw-socket-address(address: net/socket-address): raw-socket-address {
+      let port = address.port.swap-bytes()
+      if address.ip is {
+        :v4 ip -> .{
+          storage = .{ v4 = .{
+            sin_len_family = sockaddr/pack-family(AF_INET, types/size[sockaddr_in]),
+            sin_port = port,
+            sin_addr = mem/bitcast(ip.octets),
+            sin_zero = .0,
+          } },
+          family = AF_INET,
+          len = types/size[sockaddr_in].trunc[socklen_t],
+        },
+        :v6 ip -> .{
+          storage = .{ v6 = .{
+            sin6_len_family = sockaddr/pack-family(AF_INET6(), types/size[sockaddr_in6]),
+            sin6_port = port,
+            sin6_flowinfo = 0,
+            sin6_addr = ip.octets,
+            sin6_scope_id = ip.scope-id,
+          } },
+          family = AF_INET6(),
+          len = types/size[sockaddr_in6].trunc[socklen_t],
+        },
+      }
+    }
+
+    fn read-socket-address(address: ptr): net/socket-address {
+      let family = address.ref[sockaddr].family()
+      if family == AF_INET {
+        let v4 = address.ref[sockaddr_in]
+        .{ ip = :v4 .{ octets = mem/bitcast(v4.sin_addr) }, port = v4.sin_port.swap-bytes() }
+      } else if family == AF_INET6() {
+        let v6 = address.ref[sockaddr_in6]
+        .{ ip = :v6 .{ octets = v6.sin6_addr, scope-id = v6.sin6_scope_id }, port = v6.sin6_port.swap-bytes() }
+      } else crash("unexpected socket address family $family")
+    }
+
+    fn set-flag-option(fd: i32, level: c-int, option: c-int, enabled: bool): i32 {
+      let value: c-int = if enabled 1 else 0
+      or-errno(setsockopt(fd, level, option, value.&.as[ptr], types/size[c-int].trunc[socklen_t]))
+    }
+
+    fn set-timeout(fd: i32, option: c-int, ms: ?u64): i32 {
+      let total = if ms is :some m m.max(1) else 0
+      let tv: timeval = .{ tv_sec = total / 1000, tv_usec = total % 1000 * 1000 }
+      or-errno(setsockopt(fd, SOL_SOCKET(), option, tv.&.as[ptr], types/size[timeval].trunc[socklen_t]))
+    }
+
+    fn set-nonblocking(fd: i32, enabled: bool): i32 {
+      let flags = fcntl(fd, F_GETFL, .{})
+      if flags < 0 return 0 - libc/errno()
+      let next = if enabled flags | O_NONBLOCK() else flags & O_NONBLOCK().bit-not()
+      or-errno(fcntl(fd, F_SETFL, .{ next }))
+    }
+
+    fn get-socket-error(fd: i32): i32 {
+      let code: c-int = 0
+      let len = types/size[c-int].trunc[socklen_t]
+      if getsockopt(fd, SOL_SOCKET(), SO_ERROR(), code.&.as[ptr], len.&) < 0 return 0 - libc/errno()
+      0 - code
+    }
+
+    fn connect(address: net/socket-address, timeout-ms: u64): i32 {
+      let raw = make-raw-socket-address(address)
+      let fd = or-errno(socket(raw.family, SOCK_STREAM, 0))
+      if fd < 0 return fd
+      defer rc. if rc < 0 close(fd)
+      let status = set-nonblocking(fd, true)
+      if status < 0 return status
+      if posix/connect(fd, raw.storage.&.as[ptr], raw.len) < 0 {
+        let code = libc/errno()
+        if code != libc/EINPROGRESS() and code != libc/EINTR return 0 - code
+        let ready = poll-one(fd, POLLOUT, timeout-ms)
+        if ready < 0 return ready
+        if ready == 0 return 0 - libc/ETIMEDOUT()
+        status = get-socket-error(fd)
+        if status < 0 return status
+      }
+      status = set-nonblocking(fd, false)
+      if status < 0 return status
+      fd
+    }
+
+    fn listen(address: net/socket-address, backlog: i32): i32 {
+      let raw = make-raw-socket-address(address)
+      let fd = or-errno(socket(raw.family, SOCK_STREAM, 0))
+      if fd < 0 return fd
+      defer rc. if rc < 0 close(fd)
+      let status = set-flag-option(fd, SOL_SOCKET(), SO_REUSEADDR(), true)
+      if status < 0 return status
+      status = or-errno(bind(fd, raw.storage.&.as[ptr], raw.len))
+      if status < 0 return status
+      status = or-errno(posix/listen(fd, backlog))
+      if status < 0 return status
+      fd
+    }
+
+    fn accept(fd: i32): result[net/accepted, i32] {
+      let storage: sockaddr_in6 = .0
+      let len = types/size[sockaddr_in6].trunc[socklen_t]
+      let client = posix/accept(fd, storage.&.as[ptr], len.&)
+      while client < 0 and libc/errno() == libc/EINTR {
+        client = posix/accept(fd, storage.&.as[ptr], len.&)
+      }
+      if client < 0 return :err libc/errno()
+      :ok .{ stream = .{ file = .{ raw = client } }, peer = read-socket-address(storage.&.as[ptr]) }
+    }
+
+    fn local-address(fd: i32): result[net/socket-address, i32] {
+      let storage: sockaddr_in6 = .0
+      let len = types/size[sockaddr_in6].trunc[socklen_t]
+      if getsockname(fd, storage.&.as[ptr], len.&) < 0 return :err libc/errno()
+      :ok read-socket-address(storage.&.as[ptr])
+    }
+
+    fn send(fd: i32, data: ptr, count: size): i64 {
+      let n = posix/send(fd, data, count.unsigned(), MSG_NOSIGNAL())
+      while n < 0 and libc/errno() == libc/EINTR {
+        n = posix/send(fd, data, count.unsigned(), MSG_NOSIGNAL())
+      }
+      if n < 0 { 0 - libc/errno().widen[i64] } else n
+    }
+
+    fn shutdown(fd: i32, how: c-int): i32 { or-errno(posix/shutdown(fd, how)) }
+
+    fn resolve(host: string, port: u16): result[list[net/socket-address], net/resolve-error] {
+      let hints: addrinfo = .0
+      hints.ai_socktype = SOCK_STREAM
+      let head: optref[addrinfo] = .0
+      let code = getaddrinfo(host.to-c-tmp(), .0, hints.&, head.&)
+      if code != 0 {
+        return :err .{ host, code, errno = if code == EAI_SYSTEM() libc/errno() else 0 }
+      }
+      defer freeaddrinfo(head)
+      let addresses = list/empty[net/socket-address]()
+      let node = head
+      while not node.is-null() {
+        addresses.push(read-socket-address(node.get().ai_addr()) | .{ port })
+        node = node.get().ai_next
+      }
+      :ok addresses
+    }
+
+    fn resolve-error-string(error: net/resolve-error): string {
+      if error.code == EAI_SYSTEM() libc/strerror-string(error.errno)
+      else string/wrap-c(gai_strerror(error.code))
+    }
   }
 
 }

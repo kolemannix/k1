@@ -282,7 +282,7 @@ state pointer means a dyn can't cross `#static` into a runtime constant.
 - `std/url`: `url/parse` borrows; accessors are zero-copy, still-encoded views;
   path/query/fragment accept any visible byte, `normalized()` is strict RFC 3986;
   `resolve`, `path-segments`, `query-pairs`, `url/builder`, `url/percent`,
-  `url/form`. `http/header.url` is parsed (400 if not).
+  `url/form`. `http/request-head.url` is parsed (400 if not).
 - SIMD (`core/vector.k1`): `eq-lanes lt-lanes gt-lanes to-mask shuffle-bytes`
   (16 lanes, pshufb), `vector/shuffle(a, b, mask)` (static lane indices into a
   then b), `vector/shift-bytes[k](prev, cur)`. Library byte scans

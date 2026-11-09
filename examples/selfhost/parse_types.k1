@@ -313,7 +313,11 @@ ns for parser {
   fn peek-starts-quiet-payload(self: *parser): bool {
     let one = self.peek()
     let two = self.peek-at(1)
-    if one.kind is :ident or one.kind is :numeric or one.kind is :char or one.kind is :open-bracket {
+    if one.kind is :ident {
+      let chars = self.tok-chars(one)
+      return chars != "return" and chars != "break" and chars != "continue"
+    }
+    if one.kind is :numeric or one.kind is :char or one.kind is :open-bracket {
       return true
     }
     if one.kind is :dot {

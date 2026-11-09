@@ -4,7 +4,7 @@ use std/crypto
 let NIST56: string = "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
 let NIST56_HASH: string = "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
 
-fn hex-of(data: string): string {
+fn sha256-hex(data: string): string {
   let d = crypto/sha256/hash(data.span-bytes())
   d.as-span().to-hex()
 }
@@ -25,11 +25,11 @@ fn repeated(b: u8, n: size): list[u8] {
 }
 
 fn(test) sha256-known-vectors() {
-  assert-equals(hex-of(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
-  assert-equals(hex-of("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
-  assert-equals(hex-of(NIST56), NIST56_HASH)
+  assert-equals(sha256-hex(""), "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+  assert-equals(sha256-hex("abc"), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+  assert-equals(sha256-hex(NIST56), NIST56_HASH)
   assert-equals(
-    hex-of("abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu"),
+    sha256-hex("abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu"),
     "cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1",
   )
 }

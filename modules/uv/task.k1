@@ -1,0 +1,87 @@
+use std/pool
+
+type task[t] = { pool: *worker-pool, job: pool/handle[job], output: *monitor[?t] }
+
+type task-work[t, params] = {
+  output: *monitor[?t],
+  params,
+  handler: *fn(params) -> t,
+}
+
+ns for task {
+  fn spawn[t, params](pool: *worker-pool, handler: *fn(params) -> t, params): ?task[t] {
+    let output: *monitor[?t] = heap.alloc-t()
+    output.init(:none)
+    let work: *task-work[t, params] = heap.new(.{ output, params, handler })
+    require pool.submit(work, task-work/run[t, params].&) is :some job else {
+      heap.free-t(work)
+      output.destroy()
+      heap.free-t(output)
+      return :none
+    }
+    :some .{ pool, job, output }
+  }
+
+  fn await[t](self: task[t]): t {
+    let _ = self.pool.try-run-inline(self.job)
+    let monitor = self.output
+    let output = worker-pool/block-in-place(fn[monitor]. {
+      let guard = monitor.lock()
+      while guard.value.* is :none { guard.wait() }
+      let output = guard.value.*.!
+      guard.unlock()
+      output
+    })
+    self.output.destroy()
+    heap.free-t(self.output)
+    output
+  }
+}
+
+ns for task-work {
+  fn run[t, params](work: *task-work[t, params]) {
+    let output = (work.handler)(work.params)
+    let guard = work.output.lock()
+    guard.value.* = :some output
+    guard.signal()
+    guard.unlock()
+    heap.free-t(work)
+  }
+}
+
+ns task-test {
+  fn add-one(x: i32): i32 { x + 1 }
+
+  fn await-on-own-pool(pool: *worker-pool): i32 {
+    task/spawn(pool, add-one.&, 41).!.await()
+  }
+
+  fn wait-for-flag(flag: *monitor[bool]) {
+    let guard = flag.lock()
+    while not guard.value.* { guard.wait() }
+    guard.unlock()
+  }
+
+  fn set-flag(flag: *monitor[bool]) {
+    let guard = flag.lock()
+    guard.value.* = true
+    guard.signal()
+    guard.unlock()
+  }
+
+  fn(test-runtime) test-pool() {
+    let inline-only = worker-pool/start(target-free-count = 1, max-worker-count = 1, capacity = 8)
+    assert-equals(task/spawn(inline-only, await-on-own-pool.&, inline-only).!.await(), 42)
+    inline-only.close()
+    inline-only.join()
+
+    let elastic = worker-pool/start(target-free-count = 1, max-worker-count = 2, capacity = 8)
+    let flag: monitor[bool] = uninit
+    flag.init(false)
+    let _ = elastic.submit-blocking(flag.&, wait-for-flag.&).!
+    let _ = elastic.submit(flag.&, set-flag.&).!
+    elastic.close()
+    elastic.join()
+    flag.destroy()
+  }
+}

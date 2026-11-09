@@ -2526,17 +2526,11 @@ fn main(): i32 {
     tick()
     if frames >= 10 and tap-env is :some(taps) {
       let ti = (frames - 10).signed()
-      let rest = taps
-      let skipped: size = 0
-      while skipped < ti and rest.position(';') is :some semi {
-        rest = rest.drop(semi + 1)
-        skipped = skipped + 1
-      }
-      if skipped == ti and rest.non-empty() {
-        let one = if rest.position(';') is :some semi rest.take(semi) else rest
-        require one.position(',') is :some comma else crash("tap needs x,y")
-        let tx = u64/from-string(one.take(comma)).!
-        let ty = u64/from-string(one.drop(comma + 1)).!
+      let tap-iter = taps.split-by-char-iter(';')
+      if tap-iter.&.nth(ti) is :some one {
+        require one.split-once(",") is .{ before = x, after = :some y } else crash("tap needs x,y")
+        let tx = u64/from-string(x).!
+        let ty = u64/from-string(y).!
         tap(tx.trunc[i32], ty.trunc[i32])
       }
     }

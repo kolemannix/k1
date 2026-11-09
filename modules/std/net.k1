@@ -1,0 +1,297 @@
+ns net
+
+use core/platform/io/file-handle
+use core/platform/io/io-result
+
+type ip4-address = { octets: array[u8, 4] }
+type ip6-address = { octets: array[u8, 16], scope-id: u32 }
+type ip-address = either { v4(ip4-address), v6(ip6-address) }
+type socket-address = { ip: ip-address, port: u16 }
+
+type tcp-stream = { file: file-handle }
+type tcp-listener = { file: file-handle }
+type accepted = { stream: tcp-stream, peer: socket-address }
+
+type resolve-error = { host: string, code: i32, errno: i32 }
+
+ns for ip4-address {
+  fn parse(text: string): ?ip4-address {
+    let octets: array[u8, 4] = .0
+    let rest = text
+    for slot in 0.until(4) {
+      let part = rest.split-once(".")
+      if part.before.len() > 1 and part.before.[0] == '0' return :none
+      require u64/from-string(part.before) is :ok(value) and value <= 255 else return :none
+      octets.[slot] = value.trunc[u8]
+      if (slot == 3) == part.after.is-some() return :none
+      rest = part.after ? ""
+    }
+    :some .{ octets }
+  }
+}
+
+impl print for ip4-address {
+  fn print-to[w: writer](self, w) {
+    let octets = self.octets
+    w.join(octets.&, ".")
+  }
+}
+
+ns for ip6-address {
+  fn parse(text: string): ?ip6-address {
+    let scoped = text.split-once("%")
+    let rest = scoped.before
+    let scope-id: u64 = 0
+    if scoped.after is :some id-text {
+      require u64/from-string(id-text) is :ok(id) and id <= u32/max-value.widen[u64] else return :none
+      scope-id = id
+    }
+    let parsed: array[u8, 16] = .0
+    let count: size = 0
+    let gap: ?size = :none
+    if rest.starts-with("::") {
+      gap = :some 0
+      rest = rest.drop(2)
+    }
+    while rest.non-empty() {
+      let digits: size = 0
+      let value: u32 = 0
+      while digits < rest.len() and digits < 4 and rest.[digits].to-ascii-hex-digit() is :some(d) {
+        value = value * 16 + d.widen[u32]
+        digits = digits + 1
+      }
+      if digits < rest.len() and rest.[digits] == '.' {
+        if count > 12 return :none
+        let tail = ip4-address/parse(rest).try
+        for i in 0.until(4: size) { parsed.[count + i] = tail.octets.[i] }
+        count = count + 4
+        break
+      }
+      if digits == 0 or count == 16 return :none
+      parsed.[count] = (value >> 8).trunc[u8]
+      parsed.[count + 1] = value.trunc[u8]
+      count = count + 2
+      rest = rest.drop(digits)
+      if rest.is-empty() break
+      if rest.[0] != ':' return :none
+      rest = rest.drop(1)
+      if rest.is-empty() return :none
+      if rest.[0] == ':' {
+        if gap.is-some() return :none
+        gap = :some count
+        rest = rest.drop(1)
+      }
+    }
+    if (count == 16) != gap.is-none() return :none
+    let octets: array[u8, 16] = .0
+    for i in 0.until(count) {
+      let slot = if gap is :some(g) and i >= g i + 16 - count else i
+      octets.[slot] = parsed.[i]
+    }
+    :some .{ octets, scope-id = scope-id.trunc[u32] }
+  }
+}
+
+impl print for ip6-address {
+  fn print-to[w: writer](self, w) {
+    let groups: array[u16, 8] = .0
+    let longest-start: size = 8
+    let longest-len: size = 0
+    let run-len: size = 0
+    for i in 0.until(8: size) {
+      groups.[i] = self.octets.[i * 2].widen[u16] << 8 | self.octets.[i * 2 + 1].widen[u16]
+      run-len = if groups.[i] == 0 run-len + 1 else 0
+      if run-len > longest-len and run-len > 1 {
+        longest-start = i + 1 - run-len
+        longest-len = run-len
+      }
+    }
+    if longest-start == 0 and longest-len == 5 and groups.[5] == 0xffff {
+      w.write("::ffff:")
+      let tail: ip4-address = .{ octets = [self.octets.[12], self.octets.[13], self.octets.[14], self.octets.[15]] }
+      tail.print-to(w)
+    } else {
+      let i: size = 0
+      while i < 8 {
+        if i == longest-start {
+          w.write("::")
+          i = i + longest-len
+        } else {
+          if i > 0 and i != longest-start + longest-len { w.write(":") }
+          core/format-uint(w, groups.[i].widen[u64], 16)
+          i = i + 1
+        }
+      }
+    }
+    if self.scope-id != 0 {
+      w.write("%")
+      self.scope-id.print-to(w)
+    }
+  }
+}
+
+ns for ip-address {
+  fn parse(text: string): ?ip-address {
+    if text.contains(':') :some(:v6 ip6-address/parse(text).try) else :some(:v4 ip4-address/parse(text).try)
+  }
+}
+
+impl print for ip-address {
+  fn print-to[w: writer](self, w) {
+    if self is {
+      :v4 ip -> ip.print-to(w),
+      :v6 ip -> ip.print-to(w),
+    }
+  }
+}
+
+ns for socket-address {
+  fn parse(text: string): ?socket-address {
+    let bracketed = text.starts-with("[")
+    require text.split-once(if bracketed "]:" else ":") is .{ before = host, after = :some port-text } else return :none
+    require u64/from-string(port-text) is :ok(port) and port <= 0xffff else return :none
+    let ip: ip-address =
+      if bracketed :v6 ip6-address/parse(host.drop(1)).try
+      else :v4 ip4-address/parse(host).try
+    :some .{ ip, port = port.trunc[u16] }
+  }
+}
+
+impl print for socket-address {
+  fn print-to[w: writer](self, w) {
+    if self.ip is {
+      :v4 ip -> ip.print-to(w),
+      :v6 ip -> {
+        w.write("[")
+        ip.print-to(w)
+        w.write("]")
+      },
+    }
+    w.write(":")
+    self.port.print-to(w)
+  }
+}
+
+ns for resolve-error {
+  fn not-found(self): bool { self.code == posix/EAI_NONAME() or self.code == posix/EAI_NODATA() }
+  fn temporary(self): bool { self.code == posix/EAI_AGAIN() }
+}
+
+impl print for resolve-error {
+  fn print-to[w: writer](self, w) {
+    let reason =
+      if k1/is-static posix/port/resolve-error-string(self)
+      else #if k1/platform is {
+        :posix-macos or :posix-linux -> posix/port/resolve-error-string(self),
+        :wasi or :bare -> crash("sockets are not supported on this platform")
+      }
+    w.write("`${self.host}`: $reason")
+  }
+}
+
+fn resolve(host: string, port: u16): result[list[socket-address], resolve-error] {
+  if k1/is-static posix/port/resolve(host, port)
+  else #if k1/platform is {
+    :posix-macos or :posix-linux -> posix/port/resolve(host, port),
+    :wasi or :bare -> crash("sockets are not supported on this platform")
+  }
+}
+
+fn connect(address: socket-address, timeout-ms: u64): result[tcp-stream, i32] {
+  let fd =
+    if k1/is-static posix/port/connect(address, timeout-ms)
+    else #if k1/platform is {
+      :posix-macos or :posix-linux -> posix/port/connect(address, timeout-ms),
+      :wasi or :bare -> crash("sockets are not supported on this platform")
+    }
+  if fd < 0 :err(0 - fd) else :ok(.{ file = .{ raw = fd } })
+}
+
+fn listen(address: socket-address, backlog: i32): result[tcp-listener, i32] {
+  let fd =
+    if k1/is-static posix/port/listen(address, backlog)
+    else #if k1/platform is {
+      :posix-macos or :posix-linux -> posix/port/listen(address, backlog),
+      :wasi or :bare -> crash("sockets are not supported on this platform")
+    }
+  if fd < 0 :err(0 - fd) else :ok(.{ file = .{ raw = fd } })
+}
+
+fn is-timeout(code: i32): bool { code == libc/EAGAIN() or code == libc/ETIMEDOUT() }
+
+ns for tcp-listener {
+  fn accept(self): result[accepted, i32] {
+    if k1/is-static posix/port/accept(self.file.raw)
+    else #if k1/platform is {
+      :posix-macos or :posix-linux -> posix/port/accept(self.file.raw),
+      :wasi or :bare -> crash("sockets are not supported on this platform")
+    }
+  }
+
+  fn local-address(self): result[socket-address, i32] {
+    if k1/is-static posix/port/local-address(self.file.raw)
+    else #if k1/platform is {
+      :posix-macos or :posix-linux -> posix/port/local-address(self.file.raw),
+      :wasi or :bare -> crash("sockets are not supported on this platform")
+    }
+  }
+
+  fn close(self) { fd/close(self.file) }
+}
+
+ns for tcp-stream {
+  fn write(self, data: ptr, count: size): io-result {
+    let n =
+      if k1/is-static posix/port/send(self.file.raw, data, count)
+      else #if k1/platform is {
+        :posix-macos or :posix-linux -> posix/port/send(self.file.raw, data, count),
+        :wasi or :bare -> crash("sockets are not supported on this platform")
+      }
+    .{ raw = n }
+  }
+
+  fn write-all(self, bytes: span[u8]): result[empty, i32] {
+    fd/write-all-with(bytes, fn[self](data: ptr, count: size) self.write(data, count))
+  }
+
+  fn shutdown(self, direction: either { read, write, both }): result[empty, i32] {
+    let how = if direction is {
+      :read -> posix/SHUT_RD,
+      :write -> posix/SHUT_WR,
+      :both -> posix/SHUT_RDWR,
+    }
+    let rc =
+      if k1/is-static posix/port/shutdown(self.file.raw, how)
+      else #if k1/platform is {
+        :posix-macos or :posix-linux -> posix/port/shutdown(self.file.raw, how),
+        :wasi or :bare -> crash("sockets are not supported on this platform")
+      }
+    if rc < 0 :err(0 - rc) else :ok
+  }
+
+  fn set-read-timeout(self, ms: ?u64): result[empty, i32] { self.set-timeout(posix/SO_RCVTIMEO(), ms) }
+
+  fn set-write-timeout(self, ms: ?u64): result[empty, i32] { self.set-timeout(posix/SO_SNDTIMEO(), ms) }
+
+  fn set-timeout(self, option: i32, ms: ?u64): result[empty, i32] {
+    let rc =
+      if k1/is-static posix/port/set-timeout(self.file.raw, option, ms)
+      else #if k1/platform is {
+        :posix-macos or :posix-linux -> posix/port/set-timeout(self.file.raw, option, ms),
+        :wasi or :bare -> crash("sockets are not supported on this platform")
+      }
+    if rc < 0 :err(0 - rc) else :ok
+  }
+
+  fn set-no-delay(self, enabled: bool): result[empty, i32] {
+    let rc =
+      if k1/is-static posix/port/set-flag-option(self.file.raw, posix/IPPROTO_TCP, posix/TCP_NODELAY, enabled)
+      else #if k1/platform is {
+        :posix-macos or :posix-linux -> posix/port/set-flag-option(self.file.raw, posix/IPPROTO_TCP, posix/TCP_NODELAY, enabled),
+        :wasi or :bare -> crash("sockets are not supported on this platform")
+      }
+    if rc < 0 :err(0 - rc) else :ok
+  }
+
+  fn close(self) { fd/close(self.file) }
+}

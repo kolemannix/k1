@@ -29,7 +29,7 @@ fn(test) passes-the-msgpack-test-suite() {
       let expected: ?json/json = :none
       for m in c.as-object().! {
         if m.key is {
-          "msgpack" -> { for m.value.as-array().! { encodings.push(string/join(it.as-str().!.split-by-char('-'), "")) } },
+          "msgpack" -> { for m.value.as-array().! { encodings.push(string/join(it.as-str().!.split-by-char-iter('-'), "")) } },
           "bignum" -> { expected = :some json/parse[json/json](m.value.as-str().!).! },
           "binary" or "timestamp" or "ext" -> {},
           _ -> { expected = :some m.value },

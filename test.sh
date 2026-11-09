@@ -39,6 +39,7 @@ unit() {
 
 test_src() {
     $k1 setup test_src/http_test
+    $k1 setup test_src/tls_test
     target/$profile/k1_test $k1_test_filter
     $k1 --optimize --no-cache test --skip-static test_src/suite1
     $k1 --debug --no-cache test --skip-static test_src/suite1
@@ -88,6 +89,7 @@ lane uv $k1 --no-cache test modules/uv
 lane http $k1 --no-cache test modules/http
 lane httpapp httpapp
 lane sqlite $k1 --no-cache test modules/sqlite
+lane tls $k1 --no-cache test modules/tls
 lane profiling $k1 --no-cache build perf/profiling
 lane logreport $k1 --no-cache run examples/logreport
 lane brotli $k1 --optimize --no-cache run examples/brotli_parity

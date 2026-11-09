@@ -1,0 +1,73 @@
+use std/process
+
+fn module(b: k1/build-config): k1/module {
+  let link-args: list[string] =
+    if (b.target is :arm64-macos) ["-framework", "Security", "-framework", "CoreFoundation"] else list/empty()
+  .0 | .{
+    link          = [
+      .{ name = "mbedtls", link-type = :static },
+      .{ name = "mbedx509", link-type = :static },
+      .{ name = "tfpsacrypto", link-type = :static },
+    ],
+    link-args,
+    setup-inputs  = ["vendor", "config"],
+    setup-outputs = ["libs/libmbedtls.a", "libs/libmbedx509.a", "libs/libtfpsacrypto.a", "mbedtls.k1"],
+  }
+}
+
+fn setup(ctx: k1/setup-ctx) {
+  let deploy-target = if (ctx.build.target is :arm64-macos) "-DCMAKE_OSX_DEPLOYMENT_TARGET=15.0.0" else ""
+  process/sh-verbose(`
+    mkdir -p libs
+    cmake -S vendor -B .k1-out/mbedtls-build ${deploy-target} \
+      -DENABLE_TESTING=OFF -DENABLE_PROGRAMS=OFF -DCMAKE_BUILD_TYPE=Release \
+      -DMBEDTLS_CONFIG_FILE=config/mbedtls_config.h \
+      -DTF_PSA_CRYPTO_CONFIG_FILE=config/tf_psa_crypto_config.h
+    cmake --build .k1-out/mbedtls-build -j 10
+    cp .k1-out/mbedtls-build/library/libmbedtls.a libs/libmbedtls.a
+    cp .k1-out/mbedtls-build/library/libmbedx509.a libs/libmbedx509.a
+    cp .k1-out/mbedtls-build/library/libtfpsacrypto.a libs/libtfpsacrypto.a
+    `).!
+
+  let bindgen-args: list[string] = [
+    "-in-path", "config/bindings.h",
+    "-out-path", "mbedtls.k1",
+    "-lib-name", "mbedtls",
+    "-ns-name", "mbedtls",
+    "+clangarg", "-I.",
+    "+clangarg", "-Ivendor/include",
+    "+clangarg", "-Ivendor/tf-psa-crypto/include",
+    "+clangarg", "-Ivendor/tf-psa-crypto/drivers/builtin/include",
+    "+clangarg", `-DMBEDTLS_CONFIG_FILE="config/mbedtls_config.h"`,
+    "+clangarg", `-DTF_PSA_CRYPTO_CONFIG_FILE="config/tf_psa_crypto_config.h"`,
+    "+strip-prefix", "mbedtls_",
+    "+strip-prefix", "MBEDTLS_",
+    "+strip-suffix", "_t",
+    "+opaque", "mbedtls_ssl_context",
+    "+opaque", "mbedtls_ssl_config",
+    "+opaque", "mbedtls_pk_context",
+    "+opaque", "mbedtls_x509_crl",
+  ]
+  for [
+    "psa_crypto_init", "psa_status_t", "mbedtls_strerror",
+    "mbedtls_ssl_init", "mbedtls_ssl_free", "mbedtls_ssl_setup", "mbedtls_ssl_set_bio", "mbedtls_ssl_set_hostname",
+    "mbedtls_ssl_set_verify", "mbedtls_ssl_handshake", "mbedtls_ssl_read", "mbedtls_ssl_write", "mbedtls_ssl_close_notify",
+    "mbedtls_ssl_get_verify_result", "mbedtls_ssl_get_alpn_protocol", "mbedtls_ssl_get_version",
+    "mbedtls_ssl_config_init", "mbedtls_ssl_config_free", "mbedtls_ssl_config_defaults", "mbedtls_ssl_conf_authmode", "mbedtls_ssl_conf_ca_chain",
+    "mbedtls_ssl_conf_alpn_protocols", "mbedtls_ssl_conf_own_cert",
+    "mbedtls_x509_crt_init", "mbedtls_x509_crt_free", "mbedtls_x509_crt_parse", "mbedtls_x509_crt_verify_info",
+    "mbedtls_pk_init", "mbedtls_pk_free", "mbedtls_pk_parse_key",
+    "mbedtls_ssl_context", "mbedtls_ssl_config", "mbedtls_ssl_send_t", "mbedtls_ssl_recv_t", "mbedtls_ssl_recv_timeout_t",
+    "mbedtls_x509_crt", "mbedtls_x509_buf", "mbedtls_x509_name", "mbedtls_x509_sequence", "mbedtls_x509_time", "mbedtls_x509_authority", "mbedtls_x509_crl",
+    "mbedtls_asn1_buf", "mbedtls_asn1_named_data", "mbedtls_asn1_sequence", "mbedtls_pk_context", "mbedtls_md_type_t", "MBEDTLS_MD_NONE", "mbedtls_pk_sigalg_t", "MBEDTLS_PK_SIGALG_NONE",
+    "MBEDTLS_SSL_IS_CLIENT", "MBEDTLS_SSL_IS_SERVER", "MBEDTLS_SSL_TRANSPORT_STREAM", "MBEDTLS_SSL_PRESET_DEFAULT", "MBEDTLS_SSL_VERIFY_REQUIRED",
+    "MBEDTLS_ERR_SSL_WANT_READ", "MBEDTLS_ERR_SSL_WANT_WRITE", "MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY", "MBEDTLS_ERR_SSL_CONN_EOF",
+    "MBEDTLS_ERR_NET_RECV_FAILED", "MBEDTLS_ERR_NET_SEND_FAILED", "MBEDTLS_ERR_X509_CERT_VERIFY_FAILED",
+    "MBEDTLS_X509_BADCERT_EXPIRED", "MBEDTLS_X509_BADCERT_FUTURE", "MBEDTLS_X509_BADCERT_REVOKED", "MBEDTLS_X509_BADCERT_CN_MISMATCH",
+    "MBEDTLS_X509_BADCERT_NOT_TRUSTED", "MBEDTLS_X509_BADCERT_OTHER",
+  ] {
+    bindgen-args.push("+include")
+    bindgen-args.push(it)
+  }
+  let _ = process/run-verbose("k1bindgen", bindgen-args.as-span()).!
+}

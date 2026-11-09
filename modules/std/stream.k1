@@ -180,9 +180,8 @@ impl[t: print] source[t = u8] for print-source[t] {
 // pull, or at stop.
 type rc-byte-stream = { inflight: list[rc-bytes] }
 
-fn rc-byte-stream(upstream: dyn[source[t = rc-bytes]]): byte-source {
-  let stage: rc-byte-stream = .{ inflight = list/empty() }
-  source/through(upstream, stage)
+ns for rc-byte-stream {
+  fn new(): rc-byte-stream { .0 }
 }
 
 impl pipe[t = rc-bytes, out = u8] for rc-byte-stream {

@@ -355,27 +355,26 @@ libclang's layout as an assertion, collected in one `fn(test)` at the end of
 the file that runs under `k1 test`, so drift from the C definition fails the
 tests without costing every build:
 
-```k1 path=modules/uv/net.k1
-type sockaddr_in = {
-  sin_len: u8,
-  sin_family: sa_family_t,
-  sin_port: in_port_t,
-  sin_addr: in_addr,
-  sin_zero: array[u8, 8],
+```k1 path=modules/stb/c.k1
+type _buf = {
+  data: optref[u8],
+  cursor: i32,
+  size: i32,
 }
 ```
 
-```k1 path=modules/uv/net.k1
+```k1 path=modules/stb/c.k1
 fn(test) c-layouts() {
-  assert-layout[in_addr_t](4, 4, [])
-  assert-layout[in_port_t](2, 2, [])
-  assert-layout[sa_family_t](1, 1, [])
-  assert-layout[sockaddr](16, 1, [0, 1, 2, ])
-  assert-layout[in_addr](4, 4, [0, ])
-  assert-layout[sockaddr_in](16, 4, [0, 1, 2, 4, 8, ])
-  assert-layout[in6_addr](16, 4, [0, ])
-  assert-layout[sockaddr_in6](28, 4, [0, 1, 2, 4, 8, 24, ])
-  assert-layout[addrinfo](48, 8, [0, 4, 8, 12, 16, 24, 32, 40, ])
+  assert-layout[_buf](16, 8, [0, 8, 12, ])
+  assert-layout[bakedchar](20, 4, [0, 2, 4, 6, 8, 12, 16, ])
+  assert-layout[aligned_quad](32, 4, [0, 4, 8, 12, 16, 20, 24, 28, ])
+  assert-layout[packedchar](28, 4, [0, 2, 4, 6, 8, 12, 16, 20, 24, ])
+  assert-layout[pack_range](40, 8, [0, 4, 8, 16, 24, 32, 33, ])
+  assert-layout[pack_context](64, 8, [0, 8, 16, 20, 24, 28, 32, 36, 40, 48, 56, ])
+  assert-layout[fontinfo](160, 8, [0, 8, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56, 60, 64, 80, 96, 112, 128, 144, ])
+  assert-layout[kerningentry](12, 4, [0, 4, 8, ])
+  assert-layout[vertex](14, 2, [0, 2, 4, 6, 8, 10, 12, 13, ])
+  assert-layout[_bitmap](24, 8, [0, 4, 8, 16, ])
 }
 ```
 
@@ -442,14 +441,14 @@ fn module(): k1/module {
 ```
 
 `modules/uv` builds libuv with cmake and then runs `k1bindgen` to
-regenerate two of its own source files:
+regenerate its own bindings:
 
 ```k1 path=modules/uv/build.k1
 fn module(): k1/module {
   .0 | .{
     link = [.{ name = "uv", link-type = :static }],
-    setup-inputs = ["net.c", "uv_bindgen_prelude.k1.txt"],
-    setup-outputs = ["libs/libuv.a", "libuv.k1", "net.k1"],
+    setup-inputs = ["uv_bindgen_prelude.k1.txt"],
+    setup-outputs = ["libs/libuv.a", "libuv.k1"],
   }
 }
 ```

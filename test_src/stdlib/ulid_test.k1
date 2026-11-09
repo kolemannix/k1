@@ -2,9 +2,9 @@ ns ulid_test
 use std/ulid
 
 fn(test) make-gives-distinct-valid-ids() {
-  let first = ulid/make()
+  let first = ulid/generate()
   assert-equals(first.len(), 26)
-  assert(first != ulid/make())
+  assert(first != ulid/generate())
   assert(ulid/is-valid(first))
 }
 

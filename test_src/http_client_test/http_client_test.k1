@@ -1,0 +1,520 @@
+use std/fd
+use std/net
+use std/stream/collect-sink
+use std/stream/source
+use std/thread
+use std/time
+use std/url
+use tls/mbedtls
+use http-client/client
+use http-client/config
+use http-client/error
+
+let OK-HELLO: string = "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello"
+let ACCEPT-WAIT-MS: u64 = 5000
+
+type reply = { bytes: string, then: either { keep-open, close, drop, hold } }
+type served = { accept-count: u32, requests: list[string] }
+
+fn answer(bytes: string): reply { .{ bytes, then = :keep-open } }
+fn answer-and-close(bytes: string): reply { .{ bytes, then = :close } }
+
+type peer = { stream: net/tcp-stream, session: optref[mbedtls/ssl_context] }
+
+ns for peer {
+  fn read(self: peer, buffer: ptr, count: size): i64 {
+    if self.session.as-opt() is :some session mbedtls/ssl_read(session.as(), buffer.narrow(), count.unsigned()).widen[i64]
+    else fd/read(self.stream.file, buffer, count).raw
+  }
+
+  fn write(self: peer, bytes: string) {
+    if bytes.is-empty() return
+    if self.session.as-opt() is :some session {
+      let _ = mbedtls/ssl_write(session.as(), bytes.data-ptr().narrow(), bytes.len().unsigned())
+    } else {
+      let _ = self.stream.write-all(bytes.span-bytes())
+    }
+  }
+
+  fn read-request(self: peer): ?string {
+    let request = list/empty[char]()
+    let buffer: array[u8, 4096] = .0
+    loop {
+      let text = string/wrap-list(request)
+      if text.split-once("\r\n\r\n") is .{ before = head, after = :some body } and body.len() >= find-content-length(head) return :some text
+      let n = self.read(buffer.data-ptr(), buffer.len())
+      if n <= 0 return :none
+      request.append-span(span/wrap-raw(buffer.data-ptr(), n))
+    }
+  }
+}
+
+fn find-content-length(head-text: string): size {
+  for line in head-text.split-by-char-iter('\n') {
+    let trimmed = line.trim-ascii-space()
+    if trimmed.starts-with("Content-Length: ") return u64/from-string(trimmed.drop(16)).!.signed()
+  }
+  0
+}
+
+fn serve(listener: net/tcp-listener, secure-config: optref[mbedtls/ssl_config], replies: span[reply]): served {
+  let accept-count: u32 = 0
+  let requests = list/empty[string]()
+  let next: size = 0
+  loop @accepting {
+    if next == replies.len() break
+    let start = time/read-cpu-counter()
+    while not fd/poll-readable(listener.file) {
+      if time/elapsed-ms(start) > ACCEPT-WAIT-MS break @accepting
+      thread/sleep-ms(1)
+    }
+    let accepted = listener.accept().!
+    let stream = accepted.stream
+    defer stream.close()
+    stream.set-read-timeout(:some ACCEPT-WAIT-MS).!
+    accept-count = accept-count + 1
+
+    let ssl-session: mbedtls/ssl_context = .0
+    let session: optref[mbedtls/ssl_context] = null()
+    if secure-config.as-opt() is :some ssl-config {
+      mbedtls/ssl_init(ssl-session.&.as())
+      assert-equals(mbedtls/ssl_setup(ssl-session.&.as(), ssl-config.as()), 0)
+      mbedtls/ssl_set_bio(ssl-session.&.as(), stream.&.as(), tls_test/server-send.&.as(), tls_test/server-receive.&.as(), null())
+      if mbedtls/ssl_handshake(ssl-session.&.as()) != 0 break
+      session = ssl-session.&.as()
+    }
+    let peer: peer = .{ stream, session }
+    while next < replies.len() {
+      require peer.read-request() is :some request else break
+      requests.push(request)
+      let reply = replies.[next]
+      next = next + 1
+      peer.write(reply.bytes)
+      if reply.then is :keep-open continue
+      if reply.then is :hold { let _ = peer.read-request() }
+      if reply.then is :close and not session.is-null() { let _ = mbedtls/ssl_close_notify(ssl-session.&.as()) }
+      break
+    }
+  }
+  .{ accept-count, requests }
+}
+
+type script-server = {
+  listener: net/tcp-listener,
+  base-url: string,
+  task: thread/task[served],
+}
+
+fn start-server(replies: span[reply]): script-server {
+  let listener = net/listen(net/socket-address/parse("127.0.0.1:0").!, 8).!
+  let port = listener.local-address().!.port
+  let task = thread/task/spawn(fn[listener, replies]() serve(listener, null(), replies))
+  .{ listener, base-url = "http://127.0.0.1:$port", task }
+}
+
+fn start-secure-server(certificate: string, replies: span[reply]): script-server {
+  let secure = tls_test/start-server(certificate)
+  let listener = secure.listener
+  let port = listener.local-address().!.port
+  let ssl-config: optref[mbedtls/ssl_config] = secure.ssl-config.&.as()
+  let task = thread/task/spawn(fn[listener, ssl-config, replies]() serve(listener, ssl-config, replies))
+  .{ listener, base-url = "https://localhost:$port", task }
+}
+
+ns for script-server {
+  fn finish(self: script-server): served {
+    let result = self.task.join()
+    self.listener.close()
+    result
+  }
+}
+
+fn test-config(): config { config/default() | .{ read-timeout-ms = :some 3000, write-timeout-ms = :some 3000, connect-timeout-ms = 3000 } }
+
+fn make-client(): *client { client/new(test-config()).! }
+
+fn head-from(method: http/llhttp/method, url: string): http/request-head { http/request-head/new(method, url/parse(url).!) }
+
+fn get(url: string): http/request { .{ head = head-from(:GET, url), body = [] } }
+
+fn body-from(r: http-client/response): string { string/wrap-bytes(r.body) }
+
+fn assert-fetches(replies: span[reply], method: http/llhttp/method, status: u16, body: string) {
+  let server = start-server(replies)
+  let http = make-client()
+  defer http.close()
+  let response = http.fetch(.{ head = head-from(method, server.base-url), body = [] }).!
+  assert-equals(response.head.status, status)
+  assert-equals(body-from(response), body)
+  let _ = server.finish()
+}
+
+fn assert-fetch-fails(replies: span[reply], check: some fn(error) -> bool) {
+  let server = start-server(replies)
+  let http = make-client()
+  defer http.close()
+  require http.fetch(get(server.base-url)) is :err(e) else crash("expected the fetch to fail")
+  if not check(e) crash("wrong error: $e")
+  let _ = server.finish()
+}
+
+fn(test-runtime) body-framing() {
+  assert-fetches([answer(OK-HELLO)], :GET, 200, "hello")
+  assert-fetches([answer("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nhe\r\n3\r\nllo\r\n0\r\n\r\n")], :GET, 200, "hello")
+  assert-fetches([answer-and-close("HTTP/1.1 200 OK\r\n\r\nhello")], :GET, 200, "hello")
+  assert-fetches([answer("HTTP/1.1 404 Not Found\r\nContent-Length: 2\r\n\r\nno")], :GET, 404, "no")
+}
+
+fn(test-runtime) responses-without-bodies() {
+  assert-fetches([answer("HTTP/1.1 200 OK\r\nContent-Length: 99999999999\r\n\r\n")], :HEAD, 200, "")
+  assert-fetches([answer("HTTP/1.1 204 No Content\r\n\r\n")], :GET, 204, "")
+  assert-fetches([answer("HTTP/1.1 304 Not Modified\r\nContent-Length: 5\r\n\r\n")], :GET, 304, "")
+  assert-fetches([answer("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 103 Early Hints\r\nLink: <a>\r\n\r\n$OK-HELLO")], :GET, 200, "hello")
+}
+
+fn(test-runtime) truncated-bodies-fail() {
+  let is-truncated = fn(e: error) e is :truncated
+  assert-fetch-fails([answer-and-close("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhel")], is-truncated)
+  assert-fetch-fails([answer-and-close("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhel")], is-truncated)
+  assert-fetch-fails([answer-and-close("")], is-truncated)
+}
+
+fn(test-runtime) malformed-responses-fail() {
+  let is-protocol = fn(e: error) e is :protocol _
+  assert-fetch-fails([answer("HTTP/1.1 200 OK\r\nContent-Length: 5\r\nTransfer-Encoding: chunked\r\n\r\n")], is-protocol)
+  assert-fetch-fails([answer("HTTP/1.1 200 OK\r\nContent-Length: 5\r\nContent-Length: 6\r\n\r\n")], is-protocol)
+}
+
+fn(test-runtime) size-limits() {
+  let long = "0123456789".concat("0123456789").concat("0123456789").concat("0123456789").concat("0123456789")
+  let longer = long.concat(long).concat(long)
+  let server = start-server([
+    answer("HTTP/1.1 200 OK\r\nX-Big: $longer\r\n\r\n"),
+    answer("HTTP/1.1 200 $longer\r\n\r\n"),
+    answer("HTTP/1.1 103 $long\r\n\r\nHTTP/1.1 103 $long\r\n\r\nHTTP/1.1 103 $long\r\n\r\n"),
+    answer("HTTP/1.1 200 OK\r\nContent-Length: 18446744073709551615\r\n\r\n"),
+    answer("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n96\r\n$longer\r\n0\r\n\r\n"),
+  ])
+  let http = client/new(test-config() | .{ max-header-size = 100, max-body-size = 100 }).!
+  defer http.close()
+  assert(http.fetch(get(server.base-url)) is :err(:header-too-large))
+  assert(http.fetch(get(server.base-url)) is :err(:header-too-large))
+  assert(http.fetch(get(server.base-url)) is :err(:header-too-large))
+  assert(http.fetch(get(server.base-url)) is :err(:body-too-large))
+  assert(http.fetch(get(server.base-url)) is :err(:body-too-large))
+  let _ = server.finish()
+}
+
+fn(test-runtime) unread-body-closes-the-connection() {
+  let server = start-server([answer("HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhe"), answer(OK-HELLO)])
+  let http = make-client()
+  defer http.close()
+  let opened = http.stream(get(server.base-url)).!
+  assert-equals(opened.head.find-header("content-length"), :some "5")
+  opened.body.stop()
+  assert-equals(body-from(http.fetch(get(server.base-url)).!), "hello")
+  assert-equals(server.finish().accept-count, 2)
+}
+
+fn(test-runtime) connection-is-not-reused-when-it-should-close() {
+  let server = start-server([
+    answer("HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 5\r\n\r\nhello"),
+    answer(OK-HELLO),
+    answer("${OK-HELLO}unasked"),
+    answer("HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: x\r\n\r\n"),
+    answer(OK-HELLO),
+  ])
+  let http = make-client()
+  defer http.close()
+  let _ = http.fetch(get(server.base-url)).!
+  let closing = head-from(:GET, server.base-url) | .{ keep-alive = false }
+  let _ = http.fetch(.{ head = closing, body = [] }).!
+  let _ = http.fetch(get(server.base-url)).!
+  assert-equals(http.fetch(get(server.base-url)).!.head.status, 101)
+  let _ = http.fetch(get(server.base-url)).!
+  let served = server.finish()
+  assert-equals(served.accept-count, 5)
+  assert(served.requests.[1].contains-string("Connection: close\r\n"))
+}
+
+fn(test-runtime) stream-delivers-the-body-in-parts() {
+  let server = start-server([answer("HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nhe\r\n3\r\nllo\r\n0\r\n\r\n"), answer(OK-HELLO)])
+  let http = make-client()
+  defer http.close()
+  let collected: collect-sink[u8] = .{ items = list/empty() }
+  assert-equals(string/wrap-bytes(source/run-to(http.stream(get(server.base-url)).!.body.to-dyn(), collected.&)), "hello")
+  assert-equals(body-from(http.fetch(get(server.base-url)).!), "hello")
+  assert-equals(server.finish().accept-count, 1)
+}
+
+fn(test-runtime) stale-connection-found-at-checkout() {
+  let server = start-server([answer-and-close(OK-HELLO), answer(OK-HELLO)])
+  let http = make-client()
+  defer http.close()
+  let _ = http.fetch(get(server.base-url)).!
+  thread/sleep-ms(100)
+  let post = head-from(:POST, server.base-url)
+  assert-equals(http.fetch(.{ head = post, body = "x".span-bytes() }).!.head.status, 200)
+  let served = server.finish()
+  assert-equals(served.accept-count, 2)
+  assert-equals(served.requests.len(), 2)
+}
+
+fn(test-runtime) stale-connection-retries-only-safe-methods() {
+  let retried = start-server([answer(OK-HELLO), answer-and-close(""), answer(OK-HELLO)])
+  let http = make-client()
+  defer http.close()
+  let _ = http.fetch(get(retried.base-url)).!
+  assert-equals(body-from(http.fetch(get(retried.base-url)).!), "hello")
+  assert-equals(retried.finish().accept-count, 2)
+
+  let resent = start-server([answer(OK-HELLO), answer-and-close("")])
+  let _ = http.fetch(get(resent.base-url)).!
+  let post = head-from(:POST, resent.base-url)
+  assert(http.fetch(.{ head = post, body = "x".span-bytes() }) is :err(:truncated))
+  let served = resent.finish()
+  assert-equals(served.accept-count, 1)
+  assert-equals(served.requests.len(), 2)
+
+  let answered = start-server([answer(OK-HELLO), answer-and-close("HTTP/1.1 200 OK\r\nContent-Le")])
+  let _ = http.fetch(get(answered.base-url)).!
+  assert(http.fetch(get(answered.base-url)) is :err(:truncated))
+  assert-equals(answered.finish().accept-count, 1)
+}
+
+fn redirect-to(status: u16, location: string): reply {
+  answer("HTTP/1.1 $status Moved\r\nLocation: $location\r\nContent-Length: 0\r\n\r\n")
+}
+
+fn authorized-get(url: string): http/request {
+  let head = head-from(:GET, url)
+  head.headers.push(.{ name = "Authorization", value = "Bearer secret" })
+  head.headers.push(.{ name = "cookie", value = "who=bob" })
+  head.headers.push(.{ name = "X-Trace", value = "abc" })
+  .{ head, body = [] }
+}
+
+fn(test-runtime) redirect-keeps-credentials-on-the-same-origin() {
+  let server = start-server([redirect-to(302, "/next?a=1"), answer(OK-HELLO)])
+  let http = make-client()
+  defer http.close()
+  assert-equals(body-from(http.fetch(authorized-get(server.base-url)).!), "hello")
+  let served = server.finish()
+  assert(served.requests.[1].starts-with("GET /next?a=1 HTTP/1.1\r\n"))
+  assert(served.requests.[1].contains-string("Authorization: Bearer secret\r\n"))
+  assert-equals(served.accept-count, 1)
+}
+
+fn(test-runtime) redirect-drops-credentials-across-origins() {
+  let other = start-server([answer(OK-HELLO)])
+  let server = start-server([redirect-to(302, other.base-url)])
+  let http = make-client()
+  defer http.close()
+  assert-equals(body-from(http.fetch(authorized-get(server.base-url)).!), "hello")
+  let _ = server.finish()
+  let request = other.finish().requests.[0]
+  assert(not request.contains-string("Authorization"))
+  assert(not request.contains-string("cookie"))
+  assert(request.contains-string("X-Trace: abc\r\n"))
+}
+
+fn(test-runtime) redirect-methods() {
+  let form = "a=1"
+  let server = start-server([redirect-to(303, "/see"), answer(OK-HELLO), redirect-to(307, "/again"), answer(OK-HELLO), redirect-to(302, "/head"), answer(OK-HELLO)])
+  let http = make-client()
+  defer http.close()
+  let head = head-from(:POST, server.base-url)
+  head.headers.push(.{ name = "Content-Type", value = "application/x-www-form-urlencoded" })
+  let request: http/request = .{ head, body = form.span-bytes() }
+  let _ = http.fetch(request).!
+  let _ = http.fetch(request).!
+  let _ = http.fetch(.{ head = head-from(:HEAD, server.base-url), body = [] }).!
+  let served = server.finish()
+  assert(served.requests.[1].starts-with("GET /see HTTP/1.1\r\n"))
+  assert(not served.requests.[1].contains-string("Content-"))
+  assert(served.requests.[3].starts-with("POST /again HTTP/1.1\r\n"))
+  assert(served.requests.[3].contains-string("Content-Type: application/x-www-form-urlencoded\r\nContent-Length: 3\r\n"))
+  assert(served.requests.[3].ends-with("\r\n\r\n$form"))
+  assert(served.requests.[5].starts-with("HEAD /head HTTP/1.1\r\n"))
+}
+
+fn(test-runtime) redirect-limits() {
+  let server = start-server([redirect-to(302, "/1"), redirect-to(302, "/2")])
+  let http = client/new(test-config() | .{ max-redirects = 1 }).!
+  defer http.close()
+  assert(http.fetch(get(server.base-url)) is :err(:too-many-redirects))
+  let _ = server.finish()
+
+  let plain = start-server([redirect-to(302, "/1")])
+  let unfollowed = client/new(test-config() | .{ max-redirects = 0 }).!
+  defer unfollowed.close()
+  let response = unfollowed.fetch(get(plain.base-url)).!
+  assert-equals(response.head.status, 302)
+  assert-equals(response.head.find-header("Location"), :some "/1")
+  let _ = plain.finish()
+
+  let spaced = start-server([redirect-to(302, "/a b")])
+  assert(http.fetch(get(spaced.base-url)) is :err(:invalid-request _))
+  let _ = spaced.finish()
+}
+
+fn(test-runtime) rejects-header-injection() {
+  let http = make-client()
+  defer http.close()
+  for bad in [
+    http/header-field.{ name = "X-A", value = "a\r\nInjected: 1" },
+    .{ name = "X-A", value = "a\0b" },
+    .{ name = "X A", value = "a" },
+    .{ name = "X-A\r\nB", value = "a" },
+    .{ name = "", value = "a" },
+    .{ name = "host", value = "other" },
+    .{ name = "Content-Length", value = "1" },
+    .{ name = "Transfer-Encoding", value = "chunked" },
+    .{ name = "Connection", value = "close" },
+  ] {
+    let head = head-from(:GET, "http://127.0.0.1:1/")
+    head.headers.push(bad)
+    assert(http.fetch(.{ head, body = [] }) is :err(:invalid-request _))
+  }
+  for target in ["ftp://127.0.0.1/", "/no-host", "http://user:pass@127.0.0.1/"] {
+    assert(http.fetch(get(target)) is :err(:invalid-request _))
+  }
+}
+
+fn(test-runtime) host-field-and-origin() {
+  let check = fn(text: string, host-field: string, hostname: string, port: u16, origin: string, target: string) {
+    let parsed = http-client/target/from-url(url/parse(text).!).!
+    assert-equals(parsed.host-field, host-field)
+    assert-equals(parsed.hostname, hostname)
+    assert-equals(parsed.port, port)
+    assert-equals(parsed.origin, origin)
+    assert-equals(parsed.path-and-query, target)
+  }
+  check("https://Example.com/a?b=1#f", "Example.com", "Example.com", 443, "https://example.com:443", "/a?b=1")
+  check("http://example.com", "example.com", "example.com", 80, "http://example.com:80", "/")
+  check("https://example.com:80/", "example.com:80", "example.com", 80, "https://example.com:80", "/")
+  check("http://[::1]:8080/x", "[::1]:8080", "::1", 8080, "http://[::1]:8080", "/x")
+  check("https://[::1]/", "[::1]", "::1", 443, "https://[::1]:443", "/")
+}
+
+fn(test-runtime) read-timeout-expires() {
+  let server = start-server([.{ bytes = "", then = :hold }])
+  let http = client/new(test-config() | .{ read-timeout-ms = :some 50, connect-timeout-ms = 20_000 }).!
+  defer http.close()
+  assert(http.fetch(get(server.base-url)) is :err(:timeout))
+  let _ = server.finish()
+}
+
+fn(test-runtime) write-timeout-expires() {
+  let silent = net/listen(net/socket-address/parse("127.0.0.1:0").!, 1).!
+  defer silent.close()
+  let http = client/new(test-config() | .{ write-timeout-ms = :some 50, connect-timeout-ms = 20_000 }).!
+  defer http.close()
+  let post = head-from(:POST, "http://127.0.0.1:${silent.local-address().!.port}/")
+  let body-size: size = 64 * 1024 * 1024
+  let start = time/read-cpu-counter()
+  assert(http.fetch(.{ head = post, body = span/wrap-raw(mem/alloc-layout(body-size, 1), body-size) }) is :err(:timeout))
+  assert(time/elapsed-ms(start) < 10_000)
+}
+
+fn(test-runtime) tls-handshake-timeout-expires() {
+  let silent = net/listen(net/socket-address/parse("127.0.0.1:0").!, 1).!
+  defer silent.close()
+  let http = client/new(test-config() | .{ trust = :ca-file("${tls_test/FIXTURES}/ca.pem"), connect-timeout-ms = 50 }).!
+  defer http.close()
+  assert(http.fetch(get("https://127.0.0.1:${silent.local-address().!.port}/")) is :err(:timeout))
+}
+
+fn(test-runtime) pool-limits() {
+  let assert-not-reused = fn(limited: config) {
+    let server = start-server([answer(OK-HELLO), answer(OK-HELLO)])
+    let http = client/new(limited).!
+    defer http.close()
+    let _ = http.fetch(get(server.base-url)).!
+    let _ = http.fetch(get(server.base-url)).!
+    assert-equals(server.finish().accept-count, 2)
+  }
+  assert-not-reused(test-config() | .{ idle-timeout-ms = 0 })
+  assert-not-reused(test-config() | .{ max-idle-per-origin = 0 })
+  assert-not-reused(test-config() | .{ max-idle-total = 0 })
+
+  let evicted = start-server([answer(OK-HELLO), answer(OK-HELLO)])
+  let kept = start-server([answer(OK-HELLO), answer(OK-HELLO)])
+  let http = client/new(test-config() | .{ max-idle-total = 1 }).!
+  defer http.close()
+  for server in [evicted, kept, evicted, kept] { let _ = http.fetch(get(server.base-url)).! }
+  assert-equals(evicted.finish().accept-count, 2)
+  assert-equals(kept.finish().accept-count, 2)
+}
+
+fn(test-runtime) connect-errors() {
+  let unused = net/listen(net/socket-address/parse("127.0.0.1:0").!, 1).!
+  let port = unused.local-address().!.port
+  unused.close()
+  let http = make-client()
+  defer http.close()
+  assert(http.fetch(get("http://127.0.0.1:$port/")) is :err(:connect _))
+}
+
+fn secure-client(ca: string): *client {
+  client/new(test-config() | .{ trust = :ca-file("${tls_test/FIXTURES}/$ca") }).!
+}
+
+fn(test-runtime) https-round-trip-and-reuse() {
+  let server = start-secure-server("server.pem", [answer(OK-HELLO), answer(OK-HELLO)])
+  let http = secure-client("ca.pem")
+  defer http.close()
+  assert-equals(body-from(http.fetch(get(server.base-url)).!), "hello")
+  assert-equals(body-from(http.fetch(get(server.base-url)).!), "hello")
+  assert-equals(server.finish().accept-count, 1)
+}
+
+fn(test-runtime) https-close-delimited-needs-close-notify() {
+  let clean = start-secure-server("server.pem", [answer-and-close("HTTP/1.1 200 OK\r\n\r\nhello")])
+  let http = secure-client("ca.pem")
+  defer http.close()
+  assert-equals(body-from(http.fetch(get(clean.base-url)).!), "hello")
+  let _ = clean.finish()
+
+  let dropped = start-secure-server("server.pem", [.{ bytes = "HTTP/1.1 200 OK\r\n\r\nhello", then = :drop }])
+  assert(http.fetch(get(dropped.base-url)) is :err(:truncated))
+  let _ = dropped.finish()
+}
+
+fn(test-runtime) https-rejects-an-untrusted-certificate() {
+  let server = start-secure-server("server.pem", [answer(OK-HELLO)])
+  let http = secure-client("other-ca.pem")
+  defer http.close()
+  assert(http.fetch(get(server.base-url)) is :err(:tls(:verification _)))
+  assert-equals(server.finish().requests.len(), 0)
+}
+
+fn(test-runtime) https-downgrade-is-refused() {
+  let server = start-secure-server("server.pem", [redirect-to(302, "http://localhost:1/")])
+  let http = secure-client("ca.pem")
+  defer http.close()
+  assert(http.fetch(authorized-get(server.base-url)) is :err(:insecure-redirect _))
+  let _ = server.finish()
+}
+
+fn(test-runtime) client-is-shared-across-threads() {
+  let THREADS: size = 8
+  let REQUESTS: size = 100
+  let secure = tls_test/start-server("server.pem")
+  let listener = secure.listener
+  let url = "https://localhost:${listener.local-address().!.port}"
+  let ssl-config: optref[mbedtls/ssl_config] = secure.ssl-config.&.as()
+  let replies = list/empty[reply]()
+  for 0.until(THREADS * REQUESTS) { replies.push(answer(OK-HELLO)) }
+  let http = secure-client("ca.pem")
+  defer http.close()
+  let tasks = list/empty[thread/task[bool]]()
+  for 0.until(THREADS) {
+    let _ = thread/task/spawn(fn[listener, ssl-config, replies]() serve(listener, ssl-config, replies.as-span()))
+    tasks.push(thread/task/spawn(fn[http, url, REQUESTS]() {
+      for 0.until(REQUESTS) { assert-equals(body-from(http.fetch(get(url)).!), "hello") }
+      true
+    }))
+  }
+  for tasks { let _ = it.join() }
+}

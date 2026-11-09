@@ -12,8 +12,8 @@ The parser is ordinary k1:
   fn table(schema: string): types/type-id {
     let fields: list[{ name: string, type: types/type-id }] = []
     for column in schema.split-by-char(',') {
-      let parts = column.split-by-char(':')
-      fields.push(.{ name = trim(parts.[0]), type = column-type(trim(parts.[1])) })
+      let parts = column.split-once(":")
+      fields.push(.{ name = trim(parts.before), type = column-type(trim(parts.after.!)) })
     }
     types/make-struct(:struct, fields.as-span())
   }

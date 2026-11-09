@@ -1,0 +1,153 @@
+use std/fd
+use std/files
+use std/net
+use std/thread
+use tls/mbedtls
+
+let FIXTURES: string = "${k1/module-dir()}/fixtures"
+let REQUEST: string = "ping"
+let REPLY: string = "pong"
+let CA: tls/trust = :ca-file("$FIXTURES/ca.pem")
+
+type server-outcome = either { close-cleanly, drop-connection }
+
+type test-server = {
+  ssl-config: mbedtls/ssl_config,
+  certificate: mbedtls/x509_crt,
+  key: mbedtls/pk_context,
+  alpn-list: array[optref[u8], 2],
+  listener: net/tcp-listener,
+}
+
+fn start-server(certificate-name: string): *test-server {
+  let server = heap.alloc-t[test-server]
+  assert-equals(mbedtls/psa_crypto_init(), 0)
+  mbedtls/ssl_config_init(server.ssl-config.&.as())
+  mbedtls/x509_crt_init(server.certificate.&.as())
+  mbedtls/pk_init(server.key.&.as())
+  let certificate = files/read-to-string("$FIXTURES/$certificate-name").!.to-c-ext()
+  assert-equals(mbedtls/x509_crt_parse(server.certificate.&.as(), certificate.ptr.narrow(), (certificate.len + 1).unsigned()), 0)
+  let key = files/read-to-string("$FIXTURES/server.key").!.to-c-ext()
+  assert-equals(mbedtls/pk_parse_key(server.key.&.as(), key.ptr.narrow(), (key.len + 1).unsigned(), null(), 0), 0)
+  assert-equals(mbedtls/ssl_config_defaults(
+    server.ssl-config.&.as(), mbedtls/SSL_IS_SERVER.trunc[i32], mbedtls/SSL_TRANSPORT_STREAM.trunc[i32], mbedtls/SSL_PRESET_DEFAULT.trunc[i32]
+  ), 0)
+  assert-equals(mbedtls/ssl_conf_own_cert(server.ssl-config.&.as(), server.certificate.&.as(), server.key.&.as()), 0)
+  server.alpn-list = ["http/1.1".to-c().as(), null()]
+  assert-equals(mbedtls/ssl_conf_alpn_protocols(server.ssl-config.&.as(), server.alpn-list.data-ptr().narrow()), 0)
+  server.listener = net/listen(net/socket-address/parse("127.0.0.1:0").!, 8).!
+  server
+}
+
+fn serve-one(server: *test-server, outcome: server-outcome) {
+  let accepted = server.listener.accept().!
+  defer accepted.stream.close()
+  let session: mbedtls/ssl_context = .0
+  mbedtls/ssl_init(session.&.as())
+  defer mbedtls/ssl_free(session.&.as())
+  assert-equals(mbedtls/ssl_setup(session.&.as(), server.ssl-config.&.as()), 0)
+  let stream = accepted.stream
+  mbedtls/ssl_set_bio(session.&.as(), stream.&.as(), server-send.&.as(), server-receive.&.as(), null())
+  if mbedtls/ssl_handshake(session.&.as()) != 0 return
+
+  let buffer: array[u8, 16] = .0
+  let n = mbedtls/ssl_read(session.&.as(), buffer.data-ptr().narrow(), buffer.len().unsigned())
+  assert-equals(n.widen[i64], REQUEST.len())
+  assert-equals(mbedtls/ssl_write(session.&.as(), REPLY.data-ptr().narrow(), REPLY.len().unsigned()).widen[i64], REPLY.len())
+  if outcome is :close-cleanly { assert-equals(mbedtls/ssl_close_notify(session.&.as()), 0) }
+}
+
+fn server-send(user-data: ptr, data: optref[u8], len: usize): i32 {
+  user-data.ref[net/tcp-stream].write(data.as(), len.signed()).raw.trunc[i32]
+}
+
+fn server-receive(user-data: ptr, data: optref[u8], len: usize): i32 {
+  fd/read(user-data.ref[net/tcp-stream].file, data.as(), len.signed()).raw.trunc[i32]
+}
+
+fn with-connection(
+  certificate-name: string, outcome: server-outcome, trust: tls/trust, hostname: string,
+  check-result: some fn(result[*tls/client, tls/error])
+) {
+  let server = start-server(certificate-name)
+  defer server.listener.close()
+  let address = server.listener.local-address().!
+  let serving = thread/task/spawn(fn[server, outcome]() { serve-one(server, outcome); true })
+  let stream = net/connect(address, 2000).!
+  defer stream.close()
+  stream.set-read-timeout(:some 2000).!
+  let config = tls/config/new(trust, "http/1.1").!
+  defer config.free()
+  check-result(tls/connect(config, stream, hostname))
+  let _ = serving.join()
+}
+
+fn assert-rejected(certificate: string, trust: tls/trust, hostname: string, flag: i64) {
+  with-connection(certificate, :close-cleanly, trust, hostname, fn[flag](connected: result[*tls/client, tls/error]) {
+    if connected is {
+      :err(:verification(flags)) -> assert(flags.widen[u64].signed() & flag != 0),
+      :err(other) -> crash("expected a verification failure, got $other"),
+      :ok(_) -> crash("expected a verification failure"),
+    }
+  })
+}
+
+fn exchange(client: *tls/client): string {
+  client.write-all(REQUEST.span-bytes()).!
+  let buffer: array[u8, 16] = .0
+  let n = client.read(buffer.data-ptr(), buffer.len()).!
+  string/wrap-raw(buffer.data-ptr(), n).cloned()
+}
+
+fn(test-runtime) handshake-and-close-notify() {
+  with-connection("server.pem", :close-cleanly, CA, "localhost", fn(connected: result[*tls/client, tls/error]) {
+    let client = connected.!
+    defer client.close()
+    assert-equals(string/wrap-c(mbedtls/ssl_get_alpn_protocol(client.ssl.&.as()).narrow()), "http/1.1")
+    assert-equals(exchange(client), REPLY)
+    let buffer: array[u8, 16] = .0
+    assert-equals(client.read(buffer.data-ptr(), buffer.len()).!, 0)
+  })
+}
+
+fn(test-runtime) truncation-is-distinct-from-close() {
+  with-connection("server.pem", :drop-connection, CA, "localhost", fn(connected: result[*tls/client, tls/error]) {
+    let client = connected.!
+    defer client.close()
+    assert-equals(exchange(client), REPLY)
+    let buffer: array[u8, 16] = .0
+    assert(client.read(buffer.data-ptr(), buffer.len()) is :err(:truncated))
+  })
+}
+
+fn(test-runtime) rejects-wrong-hostname() {
+  assert-rejected("server.pem", CA, "wrong.example", mbedtls/X509_BADCERT_CN_MISMATCH)
+}
+
+fn(test-runtime) rejects-untrusted-ca() {
+  assert-rejected("server.pem", :ca-file("$FIXTURES/other-ca.pem"), "localhost", mbedtls/X509_BADCERT_NOT_TRUSTED)
+}
+
+fn(test-runtime) system-trust-rejects-the-fixture-ca() {
+  assert-rejected("server.pem", :system, "localhost", mbedtls/X509_BADCERT_NOT_TRUSTED)
+}
+
+fn(test-runtime) rejects-expired-certificate() {
+  assert-rejected("expired.pem", CA, "localhost", mbedtls/X509_BADCERT_EXPIRED)
+}
+
+fn(test-runtime) rejects-leaf-macos-cannot-read() {
+  assert-rejected("spoofed-chain.pem", CA, "localhost", mbedtls/X509_BADCERT_OTHER | mbedtls/X509_BADCERT_NOT_TRUSTED)
+}
+
+fn(test-runtime) read-timeout-keeps-the-session() {
+  with-connection("server.pem", :close-cleanly, CA, "localhost", fn(connected: result[*tls/client, tls/error]) {
+    let client = connected.!
+    defer client.close()
+    client.stream.set-read-timeout(:some 50).!
+    let buffer: array[u8, 16] = .0
+    assert(client.read(buffer.data-ptr(), buffer.len()) is :err(:timeout))
+    client.stream.set-read-timeout(:some 2000).!
+    assert-equals(exchange(client), REPLY)
+  })
+}

@@ -24,6 +24,10 @@ fn(test) string-char-and-substring-search() {
   assert(reps.index-of-string("aQa") is :some 12)
   assert(reps.index-of-string("aBa") is :none)
   assert("hello".index-of-string("") is :some 0)
+  assert("a: b: c".split-once(": ") is .{ before = "a", after = :some "b: c" })
+  assert("a=b".split-once(":") is .{ before = "a=b", after = :none })
+  assert("  12ab".drop-while(fn c. c == ' ').take-while(fn c. c.is-ascii-digit()) == "12")
+  assert("  ".drop-while(fn c. c == ' ') == "" and "ab".take-while(fn c. c == 'a') == "a")
 }
 
 fn(test) hex-encode-and-decode() {

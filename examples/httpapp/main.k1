@@ -13,19 +13,7 @@ fn main(argc: u32, argv: ptr): i32 {
   let port: u16 = if args.port is :some p u64/from-string(p).!.trunc[u16] else 3000
   app/db-path = args.db ? "httpapp.sqlite"
 
-  let config: server/config = .{
-    host = "0.0.0.0",
-    port,
-    accept-queue-len = 128,
-    max-connections = 1024,
-    max-body-size = 16 * 1024 * 1024,
-    header-timeout-ms = 10000,
-    body-timeout-ms = 30000,
-    write-timeout-ms = 30000,
-    idle-timeout-ms = 60000,
-    drain-timeout-ms = 5000,
-    handle-signals = true,
-  }
+  let config = server/config/default() | .{ host = "0.0.0.0", port, max-body-size = 16 * 1024 * 1024 }
   let bus = uv/bus/create[span[u8]](
     libuv/default_loop().get(),
     subscriber-cap-weight = 1048576,

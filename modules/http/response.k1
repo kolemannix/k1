@@ -1,4 +1,3 @@
-use std/stream/source
 use std/stream/pipe
 use std/stream/byte-source
 
@@ -140,6 +139,9 @@ ns response {
   fn stream(content-type: string, source: byte-source): http-response {
     .{ content-type, extra-headers = [], body = :stream source, status = :ok }
   }
+  fn sse(events: byte-source): http-response {
+    .{ content-type = "text/event-stream", extra-headers = ["Cache-Control: no-cache"], body = :stream events, status = :ok }
+  }
   fn no-content(): http-response {
     .{ content-type = "", extra-headers = [], body = :complete span/empty(), status = :no-content }
   }
@@ -157,22 +159,21 @@ ns response {
 // terminal "0\r\n\r\n".
 type chunked-encoder = { prefix: list[u8] }
 
-fn chunked(upstream: byte-source): byte-source {
-  let stage: chunked-encoder = .{ prefix = list/empty() }
-  source/through(upstream, stage)
+ns for chunked-encoder {
+  fn new(): chunked-encoder { .0 }
 }
 
-let rn: span[u8] = "\r\n".span-bytes()
+let CRLF: span[u8] = "\r\n".span-bytes()
 impl pipe[t = u8, out = u8] for chunked-encoder {
   fn map(self: *chunked-encoder, group: span[span[u8]], out: *list[span[u8]]) {
     let total: size = 0
     for seg in group { total = total + seg.len() }
     if total == 0 { return }
     core/format-uint(self.prefix.&, total.unsigned(), 16)
-    self.prefix.append-span(rn)
+    self.prefix.append-span(CRLF)
     out.push(self.prefix.as-span())
     for seg in group { out.push(seg) }
-    out.push(rn)
+    out.push(CRLF)
   }
   fn finish(_self: *chunked-encoder, out: *list[span[u8]]) { out.push(#static "0\r\n\r\n".span-bytes()) }
   fn retire(self: *chunked-encoder) { self.prefix.clear() }

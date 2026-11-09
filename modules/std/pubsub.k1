@@ -43,7 +43,7 @@ ns pubsub {
     weight-fn: *fn(rc[t]) -> size,
   ): *bus[t] {
     heap.new(.{
-      ingress = mpsc/make[event[t]](on-event),
+      ingress = mpsc/new[event[t]](on-event),
       subscribers = list/empty[*subscription[t]](),
       subscriber-cap-weight,
       weight-fn,
@@ -63,7 +63,7 @@ ns pubsub {
     // Any thread: only allocates; the bus learns about the subscription when
     // the consumer start()s the stream on its own thread.
     fn subscribe[t](self: *bus[t], topic: string): dyn[stream/source[t = rc[t]]] {
-      let chan = channel/make[rc[t]](
+      let chan = channel/new[rc[t]](
         cap-weight = self.subscriber-cap-weight,
         weight-fn = self.weight-fn,
         drop-fn = fn(value: rc[t]) value.release(),

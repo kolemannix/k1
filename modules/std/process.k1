@@ -87,7 +87,7 @@ ns process {
     require sys/env("PATH") is :some path else {
       return :err :spawn .{ program = program, message = "PATH is unset" }
     }
-    for dir in path.split-by-char(':') {
+    for dir in path.split-by-char-iter(':') {
       let candidate = if dir.is-empty() "./$program" else "$dir/$program"
       if files/is-executable(candidate) return :ok candidate
     }
@@ -156,9 +156,7 @@ ns process {
     }
 
     let output = if pipe-read is :some r {
-      mem/push-arena(mem/tmp())
-      let read-result = fd/read-all(r)
-      mem/pop-arena()
+      let read-result = fd/read-all-in(mem/tmp(), r)
       fd/close(r)
       if read-result is {
         :ok s -> s,

@@ -71,7 +71,7 @@ BASICS = ["Functions and variables", "list, span, and buffer", "Structs", "eithe
 CARDS = [
   {"section": "05-macros", "title": "A macro that implements an http routing dsl",
    "blurb": "The macro is a plain function named `define` that receives a list of tokens, parses into endpoints, validates for uniqueness, generates a sum type representing each possible route, puts them in a trie, and generates a hand-written dispatcher",
-   "blocks": [("the routes", "$http/routing/define(route, \\{"), ("the macro", "macro define(name: code, rows: span[code-token]) {"), ("what comes out", "type route = either {", "text"), ("use", "  if route/parse-request(req.header) is {", "path=examples/httpapp/app.k1", "  }")]},
+   "blocks": [("the routes", "$http/routing/define(route, \\{"), ("the macro", "macro define(name: code, rows: span[code-token]) {"), ("what comes out", "type route = either {", "text"), ("use", "  if route/parse-request(req.head) is {", "path=examples/httpapp/app.k1", "  }")]},
   {"section": "04-reflection", "title": "JSON from reflection",
    "blurb": "json/to-string reads the type's schema at compile time and generates a writer for exactly these fields.",
    "blocks": [("the type", "type contact = either { email(string), phone(string), unreachable }"), ("to JSON", "  println(json/to-string(ada))"), ("output", "{\"name\":\"Ada Lovelace\"", "text")]},

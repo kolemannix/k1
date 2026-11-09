@@ -1,0 +1,85 @@
+use std/fd
+use std/net
+use std/posix
+
+fn(test) socket-layouts() {
+  use types/assert-layout
+  assert-layout[posix/sockaddr](16, 2, [0, 2])
+  assert-layout[posix/sockaddr_in](16, 4, [0, 2, 4, 8])
+  assert-layout[posix/sockaddr_in6](28, 4, [0, 2, 4, 8, 24])
+  assert-layout[posix/addrinfo](48, 8, [0, 4, 8, 12, 16, 24, 32, 40])
+  assert-layout[posix/timeval](16, 8, [0, 8])
+}
+
+fn(test) address-parse-and-print() {
+  for text in [
+    "0.0.0.0", "1.2.3.4", "255.255.255.255",
+    "::", "::1", "1::", "1:2:3:4:5:6:7:8", "2001:db8::1", "1:0:0:2::3", "1::2:0:0:3",
+    "fe80::1%4", "::ffff:1.2.3.4",
+  ] {
+    assert-equals("${net/ip-address/parse(text).!}", text)
+  }
+  assert-equals("${net/ip-address/parse("2001:DB8:0:0:0:0:0:1").!}", "2001:db8::1")
+  assert-equals("${net/ip-address/parse("64:ff9b::1.2.3.4").!}", "64:ff9b::102:304")
+  for text in [
+    "", "1.2.3", "1.2.3.4.5", "1.2.3.", ".1.2.3", "256.1.1.1", "01.2.3.4", "1.2.3.a",
+    ":", ":1", "1:", ":::", "1::2::3", "1:2:3:4:5:6:7", "1:2:3:4:5:6:7:8:9", "1:2:3:4:5:6:7::8",
+    "12345::", "::g", "::1%", "::1%x", "1:2:3:4:5:6:7:1.2.3.4",
+  ] {
+    assert(net/ip-address/parse(text).is-none())
+  }
+  for text in ["1.2.3.4:80", "[::1]:443", "[fe80::1%4]:65535"] {
+    assert-equals("${net/socket-address/parse(text).!}", text)
+  }
+  for text in ["1.2.3.4", "1.2.3.4:", "1.2.3.4:65536", "::1:80", "[::1]", "[::1]80", "[1.2.3.4]:80", "1.2.3.4]:80"] {
+    assert(net/socket-address/parse(text).is-none())
+  }
+}
+
+fn(test) loopback-echo() {
+  let listener = net/listen(net/socket-address/parse("127.0.0.1:0").!, 8).!
+  defer listener.close()
+  let server-address = listener.local-address().!
+  assert(server-address.port != 0)
+
+  let client = net/connect(server-address, 1000).!
+  defer client.close()
+  client.set-no-delay(true).!
+  let server = listener.accept().!
+  defer server.stream.close()
+  assert-equals("${server.peer.ip}", "127.0.0.1")
+
+  let message = "hello over tcp"
+  client.write-all(message.span-bytes()).!
+  let chunk = buffer/allocate[u8](64)
+  let n = fd/read(server.stream.file, chunk.data, chunk.len).result().!
+  assert-equals(string/wrap-bytes(chunk.as-span().take(n)), message)
+
+  server.stream.set-read-timeout(:some 10).!
+  assert(fd/read(server.stream.file, chunk.data, chunk.len).result() is :err(code) and net/is-timeout(code))
+  server.stream.set-read-timeout(:none).!
+
+  client.set-write-timeout(:some 1000).!
+  client.shutdown(:write).!
+  assert-equals(fd/read(server.stream.file, chunk.data, chunk.len).result().!, 0)
+  assert(client.write-all(message.span-bytes()) is :err(_))
+}
+
+fn(test) connect-failure() {
+  let listener = net/listen(net/socket-address/parse("127.0.0.1:0").!, 1).!
+  let address = listener.local-address().!
+  listener.close()
+  assert(net/connect(address, 1000) is :err(code) and not net/is-timeout(code))
+}
+
+fn(test) resolve-names() {
+  let addresses = net/resolve("localhost", 8080).!
+  assert(addresses.non-empty())
+  for addresses { assert-equals(it.port, 8080) }
+  assert(addresses.as-span().exists(fn(a: net/socket-address) "$a" == "127.0.0.1:8080" or "$a" == "[::1]:8080"))
+  assert-equals("${net/resolve("192.0.2.7", 80).!.as-span().first().!}", "192.0.2.7:80")
+  if net/resolve("no-such-host.invalid", 80) is :err(e) {
+    assert(e.not-found() or e.temporary())
+    assert("$e".starts-with("`no-such-host.invalid`: "))
+  } else crash("resolved a reserved invalid name")
+}

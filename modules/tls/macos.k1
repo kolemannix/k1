@@ -1,0 +1,79 @@
+ns macos
+
+let CF-STRING-ENCODING-UTF8: u32 = 0x08000100
+
+let ERR-SEC-HOST-NAME-MISMATCH: i64 = -67602
+let ERR-SEC-CERTIFICATE-EXPIRED: i64 = -67818
+let ERR-SEC-CERTIFICATE-NOT-VALID-YET: i64 = -67819
+let ERR-SEC-CERTIFICATE-REVOKED: i64 = -67820
+let ERR-SEC-NOT-TRUSTED: i64 = -67843
+let ERR-SEC-CREATE-CHAIN-FAILED: i64 = -25318
+
+let(extern) kCFTypeArrayCallBacks: array[ptr, 5]
+
+fn(extern) CFRelease(object: ptr)
+fn(extern) CFDataCreate(allocator: ptr, bytes: ptr, length: i64): ptr
+fn(extern) CFArrayCreateMutable(allocator: ptr, capacity: i64, callbacks: ptr): ptr
+fn(extern) CFArrayAppendValue(array: ptr, value: ptr)
+fn(extern) CFStringCreateWithCString(allocator: ptr, text: ptr, encoding: u32): ptr
+fn(extern) CFErrorGetCode(error: ptr): i64
+fn(extern) SecCertificateCreateWithData(allocator: ptr, data: ptr): ptr
+fn(extern) SecPolicyCreateSSL(is-server: u8, hostname: ptr): ptr
+fn(extern) SecTrustCreateWithCertificates(certificates: ptr, policies: ptr, trust: *ptr): i32
+fn(extern) SecTrustSetAnchorCertificates(trust: ptr, anchors: ptr): i32
+fn(extern) SecTrustSetAnchorCertificatesOnly(trust: ptr, is-anchors-only: u8): i32
+fn(extern) SecTrustEvaluateWithError(trust: ptr, error: *ptr): bool
+
+fn create-certificate-array(chain: optref[mbedtls/x509_crt]): ptr {
+  let certificates = CFArrayCreateMutable(ptr/null, 0, kCFTypeArrayCallBacks.&.as())
+  let current = chain
+  while not current.is-null() {
+    let certificate = current.get()
+    let data = CFDataCreate(ptr/null, certificate.raw.p.as(), certificate.raw.len.signed())
+    let created = SecCertificateCreateWithData(ptr/null, data)
+    CFRelease(data)
+    if created.is-null() {
+      CFRelease(certificates)
+      return ptr/null
+    }
+    CFArrayAppendValue(certificates, created)
+    CFRelease(created)
+    current = certificate.next
+  }
+  certificates
+}
+
+fn evaluate-trust(client: *client, chain: optref[mbedtls/x509_crt]): u32 {
+  let certificates = create-certificate-array(chain)
+  if certificates.is-null() return mbedtls/X509_BADCERT_OTHER.trunc[u32]
+  defer CFRelease(certificates)
+  let hostname = CFStringCreateWithCString(ptr/null, client.hostname.to-c-tmp().as(), CF-STRING-ENCODING-UTF8)
+  if hostname.is-null() return mbedtls/X509_BADCERT_CN_MISMATCH.trunc[u32]
+  defer CFRelease(hostname)
+  let policy = SecPolicyCreateSSL(1, hostname)
+  defer CFRelease(policy)
+  let trust = ptr/null
+  if SecTrustCreateWithCertificates(certificates, policy, trust.&) != 0 return mbedtls/X509_BADCERT_OTHER.trunc[u32]
+  defer CFRelease(trust)
+  if not client.config.anchors.is-null() {
+    if SecTrustSetAnchorCertificates(trust, client.config.anchors) != 0 return mbedtls/X509_BADCERT_OTHER.trunc[u32]
+    if SecTrustSetAnchorCertificatesOnly(trust, 1) != 0 return mbedtls/X509_BADCERT_OTHER.trunc[u32]
+  }
+  let failure = ptr/null
+  if SecTrustEvaluateWithError(trust, failure.&) return 0
+  defer CFRelease(failure)
+  let code = CFErrorGetCode(failure)
+  let flag =
+    if code == ERR-SEC-HOST-NAME-MISMATCH mbedtls/X509_BADCERT_CN_MISMATCH
+    else if code == ERR-SEC-CERTIFICATE-EXPIRED mbedtls/X509_BADCERT_EXPIRED
+    else if code == ERR-SEC-CERTIFICATE-NOT-VALID-YET mbedtls/X509_BADCERT_FUTURE
+    else if code == ERR-SEC-CERTIFICATE-REVOKED mbedtls/X509_BADCERT_REVOKED
+    else if code == ERR-SEC-NOT-TRUSTED or code == ERR-SEC-CREATE-CHAIN-FAILED mbedtls/X509_BADCERT_NOT_TRUSTED
+    else mbedtls/X509_BADCERT_OTHER
+  flag.trunc[u32]
+}
+
+fn verify(user-data: ptr, certificate: optref[mbedtls/x509_crt], depth: i32, flags: optref[u32]): i32 {
+  flags.get().* = if depth > 0 0 else evaluate-trust(user-data.ref[client], certificate)
+  0
+}

@@ -3,13 +3,13 @@ use std/process
 fn module(): k1/module {
   .0 | .{
     link = [.{ name = "uv", link-type = :static }],
-    setup-inputs = ["net.c", "uv_bindgen_prelude.k1.txt"],
-    setup-outputs = ["libs/libuv.a", "libuv.k1", "net.k1"],
+    setup-inputs = ["uv_bindgen_prelude.k1.txt"],
+    setup-outputs = ["libs/libuv.a", "libuv.k1"],
   }
 }
 
 // Builds the vendored libuv release (v1.52.1, from github.com/libuv/libuv;
-// vendor bumps replace vendor/ wholesale) and regenerates the uv/net bindings.
+// vendor bumps replace vendor/ wholesale) and regenerates the uv bindings.
 // Needs cmake and k1bindgen on PATH.
 fn setup(ctx: k1/setup-ctx) {
   process/run-command("mkdir", ["-p", "libs"], :inherit).!
@@ -19,27 +19,6 @@ fn setup(ctx: k1/setup-ctx) {
   process/run-command("cmake", cmake-args.as-span(), :inherit).!
   process/run-command("cmake", ["--build", ".k1-out/libuv-build", "-j", "8"], :inherit).!
   process/run-command("cp", [".k1-out/libuv-build/libuv.a", "libs/libuv.a"], :inherit).!
-
-  let net-args: list[string] = [
-    "-in-path", "net.c",
-    "-out-path", "net.k1",
-    "-lib-name", "net",
-    "-system", "true",
-    "+include", "sockaddr_in",
-    "+include", "sockaddr_in6",
-    "+include", "sa_family_t",
-    "+include", "sockaddr",
-    "+include", "socklen_t",
-    "+opaque", "socklen_t",
-    "+include", "addrinfo",
-    "+include", "in_port_t",
-    "+include", "in_addr",
-    "+include", "in6_addr",
-    "+include", "in_addr_t",
-    "+include", "FILE",
-    "+opaque", "FILE",
-  ]
-  process/run-command("k1bindgen", net-args.as-span(), :inherit).!
 
   let uv-args: list[string] = [
     "-in-path", "vendor/include/uv.h",

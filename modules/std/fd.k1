@@ -14,13 +14,20 @@ ns fd {
     .{ raw = n }
   }
 
-  fn read-all(file: file-handle): result[string, i32] {
-    let sb = string-builder/new()
-    let chunk = buffer/allocate[u8](4096)
+  fn read-all(file: file-handle): result[string, i32] { read-all-in(mem/current-arena(), file) }
+
+  fn read-all-in[a: allocator](alloc: a, file: file-handle): result[string, i32] {
+    let contents: list[char] = list/with-capacity-in(alloc, if file-size(file) is :some(n) and n > 0 n + 1 else 4096)
     loop {
-      let n = read(file, chunk.data, chunk.len).result().try
-      if n == 0 return :ok sb.build()
-      sb.write-bytes(span/wrap-buffer(chunk.slice(0, n)))
+      if contents.len == contents.cap() contents.reserve-in(alloc, contents.cap() * 2)
+      if read(file, contents.data-ptr().add-bytes(contents.len), contents.cap() - contents.len).result() is {
+        :ok(0) -> return :ok(string/wrap-list(contents)),
+        :ok(n) -> { contents.len = contents.len + n },
+        :err(code) -> {
+          alloc.free(contents.data-ptr(), contents.cap(), 1)
+          return :err(code)
+        },
+      }
     }
   }
 
@@ -64,13 +71,12 @@ ns fd {
     }
   }
 
-  // none when the size is unknowable (a pipe, an unseekable stream)
   fn file-size(file: file-handle): ?size {
     let n =
       if k1/is-static posix/port/file-size(file.raw)
       else #if k1/platform is {
         :posix-macos or :posix-linux -> posix/port/file-size(file.raw),
-        :wasi -> crash("file io is not supported on wasi"),
+        :wasi -> -1,
         :bare -> bare/file-size(file.raw)
       }
     if n < 0 :none else :some(n)
@@ -91,13 +97,13 @@ ns fd {
 
   // Loops until every byte is written
   fn write-all(file: file-handle, bytes: span[u8]): result[empty, i32] {
+    write-all-with(bytes, fn[file](data: ptr, count: size) core/platform/io/write(file, data, count))
+  }
+
+  fn write-all-with(bytes: span[u8], write-fn: some fn(ptr, size) -> io-result): result[empty, i32] {
     let written: size = 0
     while written < bytes.len() {
-      let n = core/platform/io/write(
-        file = file,
-        data = bytes.data-ptr().add-bytes(written),
-        count = bytes.len() - written
-      ).try
+      let n = write-fn(bytes.data-ptr().add-bytes(written), bytes.len() - written).try
       if n == 0 crash("write made no progress")
       written = written + n
     }

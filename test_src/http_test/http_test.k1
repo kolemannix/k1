@@ -7,20 +7,19 @@ use http/response
 use http/server
 use std/pubsub
 use std/rc-bytes
-use http/datastar
 use std/url
 use std/url/pair
+use std/utf8
 use http/cookie
 use std/stream/rc-byte-stream
 use std/stream/source
 use std/stream/collect-sink
 use std/stream/byte-source
-use http/chunked
-use http/sse-events
+use http/chunked-encoder
+use http/sse-encoder
 use std/stream/waker
 use std/stream/pull
 use uv/worker-pool
-use http/task
 
 $http/routing/define(route, \{
   get  events     "/events"
@@ -29,64 +28,82 @@ $http/routing/define(route, \{
   get  grade-rate "/cmd/grade-rate/{who: string}" ?{ plan-id: int, item-id: u64, note: ?string }
 })
 
-fn route-of(method: http/llhttp/method, target: string): result[route, http/routing/route-error] {
+fn route-from(method: http/llhttp/method, target: string): result[route, http/routing/route-error] {
   route/parse(method, url/parse(target).!)
 }
 
 fn(test) test-routing() {
-  assert(route/parse-request(http/header/get("/game/42/poke")) is :err :bad-method _)
+  assert(route/parse-request(http/request-head/new(:GET, url/parse("/game/42/poke").!)) is :err :bad-method _)
   assert((route:game-poke .{ id = 42 }).to-string() == "/game/42/poke")
   assert("${route:files .{ path = "a b/c" }}" == "/files/a%20b/c")
 
-  assert(route-of(:HEAD, "/events?foo=1") is :ok :events)
-  assert(route-of(:GET, "http://h/%65vents") is :ok :events)
-  assert(route-of(:GET, "/files/a%20b/c") is :ok :files f and f.path == "a b/c")
-  assert(route-of(:GET, "/files/1/2/3/4/5/6/7/8/9/10/11/12/13/14/15/16/17") is :ok :files deep and deep.path == "1/2/3/4/5/6/7/8/9/10/11/12/13/14/15/16/17")
-  assert(route-of(:POST, "/game/42/poke/") is :ok :game-poke p and p.id == 42)
-  assert(route-of(:GET, "/game/42/poke") is :err :bad-method _)
-  assert(route-of(:POST, "/game/18446744073709551617/poke") is :err :bad-param _)
-  assert(route-of(:GET, "/game/42/zzz") is :err :not-found)
-  assert(route-of(:POST, "/game/%zz/poke") is :err :bad-param _)
-  assert(route-of(:OPTIONS, "*") is :err :not-found)
+  assert(route-from(:HEAD, "/events?foo=1") is :ok :events)
+  assert(route-from(:GET, "http://h/%65vents") is :ok :events)
+  assert(route-from(:GET, "/files/a%20b/c") is :ok :files f and f.path == "a b/c")
+  assert(route-from(:GET, "/files/1/2/3/4/5/6/7/8/9/10/11/12/13/14/15/16/17") is :ok :files deep and deep.path == "1/2/3/4/5/6/7/8/9/10/11/12/13/14/15/16/17")
+  assert(route-from(:POST, "/game/42/poke/") is :ok :game-poke p and p.id == 42)
+  assert(route-from(:GET, "/game/42/poke") is :err :bad-method _)
+  assert(route-from(:POST, "/game/18446744073709551617/poke") is :err :bad-param _)
+  assert(route-from(:GET, "/game/42/zzz") is :err :not-found)
+  assert(route-from(:POST, "/game/%zz/poke") is :err :bad-param _)
+  assert(route-from(:OPTIONS, "*") is :err :not-found)
 
   let g = route:grade-rate .{ who = "a b", plan-id = -3, item-id = 9, note = :some "x&y=1+z" }
   assert-equals(g.to-string(), "/cmd/grade-rate/a%20b?plan-id=-3&item-id=9&note=x%26y%3D1%2Bz")
   assert-equals((route:grade-rate .{ who = "a/b", plan-id = 1, item-id = 2, note = :some "x y" }).to-string(), "/cmd/grade-rate/a%2Fb?plan-id=1&item-id=2&note=x+y")
-  assert(route-of(:GET, g.to-string()) is :ok :grade-rate r and r.who == "a b" and r.plan-id == -3 and r.item-id == 9 and r.note is :some nt and nt == "x&y=1+z")
-  assert(route-of(:GET, "/cmd/grade-rate/x?zz=1&note=a+b&item-id=2&&plan-id=1") is :ok :grade-rate r2 and r2.note is :some nn and nn == "a b")
-  assert(route-of(:GET, "/cmd/grade-rate/x?item-id=2&plan-id=1") is :ok :grade-rate r3 and r3.note is :none)
+  assert(route-from(:GET, g.to-string()) is :ok :grade-rate r and r.who == "a b" and r.plan-id == -3 and r.item-id == 9 and r.note is :some nt and nt == "x&y=1+z")
+  assert(route-from(:GET, "/cmd/grade-rate/x?zz=1&note=a+b&item-id=2&&plan-id=1") is :ok :grade-rate r2 and r2.note is :some nn and nn == "a b")
+  assert(route-from(:GET, "/cmd/grade-rate/x?item-id=2&plan-id=1") is :ok :grade-rate r3 and r3.note is :none)
   assert-equals((route:grade-rate .{ who = "x", plan-id = 1, item-id = 2, note = :none }).to-string(), "/cmd/grade-rate/x?plan-id=1&item-id=2")
-  assert(route-of(:GET, "/cmd/grade-rate/x?plan-id=1") is :err :missing-param m and m.name == "item-id")
-  assert(route-of(:GET, "/cmd/grade-rate/x?plan-id=one&item-id=2") is :err :bad-param b and b.got == "one")
-  assert(route-of(:GET, "/cmd/grade-rate/x?plan-id=1&item-id=2&plan-id=1") is :err :bad-param b2 and b2.name == "plan-id")
+  assert(route-from(:GET, "/cmd/grade-rate/x?plan-id=1") is :err :missing-param m and m.name == "item-id")
+  assert(route-from(:GET, "/cmd/grade-rate/x?plan-id=one&item-id=2") is :err :bad-param b and b.got == "one")
+  assert(route-from(:GET, "/cmd/grade-rate/x?plan-id=1&item-id=2&plan-id=1") is :err :bad-param b2 and b2.name == "plan-id")
 }
 
 fn(test) test-parsers() {
-  let c = cookie/parse("who=bob;junk ; x=a=b; enc=a%20b%3B; plus=a+b; empty=; raw=%zz")
+  let c = cookie/parse-header("who=bob;junk ; x=a=b; enc=a%20b%3B; plus=a+b; empty=; raw=%zz")
   assert-equals(c.len(), 6)
-  assert(pair/find(c.as-span(), "who") == :some "bob")
-  assert(pair/find(c.as-span(), "x") == :some "a=b")
-  assert(pair/find(c.as-span(), "enc") == :some "a b;")
-  assert(pair/find(c.as-span(), "plus") == :some "a+b")
-  assert(pair/find(c.as-span(), "empty") == :some "")
-  assert(pair/find(c.as-span(), "raw") == :some "%zz")
+  assert(pair/find(c, "who") == :some "bob")
+  assert(pair/find(c, "x") == :some "a=b")
+  assert(pair/find(c, "enc") == :some "a b;")
+  assert(pair/find(c, "plus") == :some "a+b")
+  assert(pair/find(c, "empty") == :some "")
+  assert(pair/find(c, "raw") == :some "%zz")
+  assert-equals(cookie/new("who", "bob smith;").to-set-cookie(), "Set-Cookie: who=bob%20smith%3B")
+  let set = "sid=a%20b; Domain=.Example.COM; path=/app; Expires=Sunday, 06-Nov-94 08:49:37 GMT; Max-Age=-5; secure; HttpOnly; SameSite=strict; Partitioned"
   assert-equals(
-    cookie/set-header("who", "bob smith;", cookie/attrs/default() | .{ max-age = :some 60, secure = true, same-site = :strict }),
-    "Set-Cookie: who=bob%20smith%3B; Path=/; Max-Age=60; HttpOnly; Secure; SameSite=Strict")
-  assert-equals(cookie/set-header("k", "v", cookie/attrs/default()), "Set-Cookie: k=v; Path=/; HttpOnly; SameSite=Lax")
+    cookie/parse-set-cookie(set).!.to-set-cookie(),
+    "Set-Cookie: sid=a%20b; Domain=example.com; Path=/app; Expires=Sun, 06 Nov 1994 08:49:37 GMT; Max-Age=0; HttpOnly; Secure; SameSite=Strict")
+  assert-equals(cookie/parse-set-cookie(" k = v ; Path=rel; SameSite=bogus; Expires=soon").!.to-set-cookie(), "Set-Cookie: k=v")
+  assert(cookie/parse-set-cookie("no-equals; Path=/") is :none)
+  let rh: http/response-head = .{
+    status = 200,
+    headers = [.{ name = "set-cookie", value = "a=1" }, .{ name = "Date", value = "x" }, .{ name = "Set-Cookie", value = "b=2; Secure" }],
+    content-length = :none,
+  }
+  assert-equals(rh.cookies().len(), 2)
+  assert(rh.cookie("b").!.secure)
 
-  let h = http/header/make(:POST, "/login?next=%2Fhome")
-  h.headers.push(.{ field = "content-type", value = "application/x-www-form-urlencoded; charset=utf-8" })
-  h.headers.push(.{ field = "Cookie", value = "who=bob" })
-  let req: http/request = .{ header = h, body = "who=alice".span-bytes() }
-  assert(pair/find(req.header.url.query-pairs(), "next") == :some "/home")
-  assert(pair/find(req.form().!, "who") == :some "alice")
-  assert(pair/find(req.cookies(), "who") == :some "bob")
-  let plain: http/request = .{ header = http/header/make(:GET, "/"), body = [] }
-  assert(plain.form() is :none)
+  assert(http/date/parse("Sun, 06 Nov 1994 08:49:37 GMT") == :some 784111777)
+  assert(http/date/parse("Sun Nov  6 08:49:37 1994") == :some 784111777)
+  assert(http/date/parse("Thu, 01 Jan 1960 00:00:00 GMT") == :some 0)
+  assert(http/date/parse("Sat, 29 Feb 2025 00:00:00 GMT") is :none)
+  assert(http/date/parse("Thu, 29 Feb 2024 24:00:00 GMT") is :none)
+  assert-equals(http/date/to-string(1709251199), "Thu, 29 Feb 2024 23:59:59 GMT")
+  assert-equals(http/date/to-string(951782400), "Tue, 29 Feb 2000 00:00:00 GMT")
+
+  let h = http/request-head/new(:POST, url/parse("/login?next=%2Fhome").!)
+  h.headers.push(.{ name = "content-type", value = "application/x-www-form-urlencoded; charset=utf-8" })
+  h.headers.push(.{ name = "Cookie", value = "who=bob" })
+  let req: http/request = .{ head = h, body = "who=alice".span-bytes() }
+  assert(pair/find(req.head.url.query-pairs(), "next") == :some "/home")
+  assert(pair/find(req.body-form-fields().!, "who") == :some "alice")
+  assert(req.cookie("who") == :some "bob")
+  let plain: http/request = .{ head = http/request-head/new(:GET, url/parse("/").!), body = [] }
+  assert(plain.body-form-fields() is :none)
   assert(plain.cookies().is-empty())
   assert(not plain.accepts-encoding("br"))
-  plain.header.headers.push(.{ field = "accept-encoding", value = "gzip, BR;q=0.5, zstd;q=0.0" })
+  plain.head.headers.push(.{ name = "accept-encoding", value = "gzip,, BR;q=0.5, zstd;q=0.0" })
   assert(plain.accepts-encoding("br"))
   assert(not plain.accepts-encoding("zstd"))
   assert(not plain.accepts-encoding("deflate"))
@@ -103,12 +120,12 @@ fn drain(src: byte-source): string {
 }
 
 fn sse(src: byte-source, event-name: string, data-prefix: string): string {
-  drain(src || sse-events(event-name, data-prefix))
+  drain(source/through(src, sse-encoder/new(event-name, data-prefix)))
 }
 
 fn(test) test-encoders() {
-  assert-equals(drain(source/from-printed(["0123456789abcdefg"]) || chunked), "11\r\n0123456789abcdefg\r\n0\r\n\r\n")
-  assert-equals(drain(source/once(["".span-bytes()]) || chunked), "0\r\n\r\n")
+  assert-equals(drain(source/through(source/from-printed(["0123456789abcdefg"]), chunked-encoder/new())), "11\r\n0123456789abcdefg\r\n0\r\n\r\n")
+  assert-equals(drain(source/through(source/once(["".span-bytes()]), chunked-encoder/new())), "0\r\n\r\n")
 
   assert-equals(
     sse(source/from-printed(["<div id=\"x\">\n  hi\n</div>"]), "datastar-patch-elements", "elements"),
@@ -149,13 +166,13 @@ impl source[t = u8] for worker-woken {
 }
 
 fn handle(req: http/request, bus: *pubsub/bus[span[u8]], pool: *worker-pool): http-response {
-  let url = req.header.url.text
+  let url = req.head.url.text
   if url == "/hello" response/text(:ok, "hi")
   else if url == "/slow" { libuv/sleep(300); response/text(:ok, "slow-done") }
   else if url == "/len" response/text(:ok, "len ${req.body.len()} ${string/wrap-bytes(req.body)}")
   else if url == "/stall" { libuv/sleep(2000); response/text(:ok, "stall-done") }
   else if url == "/outlast" { libuv/sleep(2600); response/text(:ok, "outlast-done") }
-  else if url == "/events" datastar/patch-signals(bus.subscribe("t") || rc-byte-stream)
+  else if url == "/events" response/sse(source/through(source/through(bus.subscribe("t"), rc-byte-stream/new()), sse-encoder/new("t", "")))
   else if url == "/worker-woken" {
     let src: *worker-woken = mem/new(.{ pool, waker = waker/noop(), state = uninit, sent = false })
     .{ status = :ok, content-type = "text/plain", extra-headers = [], body = :stream src.to-dyn[source[t = u8]] }
@@ -333,11 +350,39 @@ fn phase2() {
   }, 100, 0)
 }
 
+fn(test) test-sse-decoder() {
+  let bytes = list/empty[u8]()
+  bytes.append-span(utf8/BOM)
+  bytes.append-span("retry: 3000\r\n: note\r\n\r\nevent: delta\r\ndata: one\ndata:two\nid: 7\n\ndata\n\ndata: three\r\runfinished: x\n".span-bytes())
+  let events = source/through(source/from-span(bytes.as-span(), 1), http/sse-decoder/new())
+  let seen = list/empty[http/sse-event]()
+  loop {
+    if events.pull() is {
+      :chunk group -> for part in group {
+        for e in part {
+          seen.push(e | .{ event = e.event.cloned(), data = e.data.cloned(), id = if e.id is :some id :some id.cloned() else :none })
+        }
+      },
+      :done -> break,
+      :pending -> crash("in-memory source pended"),
+      :fail(message) -> crash(message),
+    }
+  }
+  assert-equals(seen.len(), 3)
+  assert-equals(seen.[0].event, "delta")
+  assert-equals(seen.[0].data, "one\ntwo")
+  assert-equals(seen.[0].id, :some "7")
+  assert-equals(seen.[0].retry-ms, :some 3000)
+  assert-equals(seen.[1].event, "message")
+  assert-equals(seen.[1].data, "")
+  assert(seen.[1].id is :none and seen.[1].retry-ms is :none)
+  assert-equals(seen.[2].data, "three")
+}
+
 fn(test-runtime) test-server() {
-  let config: server/config = .{
-    host = "127.0.0.1", port = 0, accept-queue-len = 128, max-connections = 4, max-body-size = 1024,
-    header-timeout-ms = 200, body-timeout-ms = 30000, write-timeout-ms = 30000,
-    idle-timeout-ms = 300, drain-timeout-ms = 500, handle-signals = false,
+  let config = server/config/default() | .{
+    max-connections = 4, max-body-size = 1024, header-timeout-ms = 200, idle-timeout-ms = 300, drain-timeout-ms = 500,
+    handle-signals = false,
   }
   startup-state = "startup-lifetime".cloned()
   let bus = uv/bus/create[span[u8]](libuv/default_loop().get(), 1048576, fn(payload: rc-bytes) payload.bytes().len())
@@ -374,39 +419,4 @@ fn(test-runtime) test-server() {
   assert(worker-woke-stream)
   assert(over-cap-rejected)
   assert(s.connections.is-empty())
-}
-
-fn add-one(x: i32): i32 { x + 1 }
-
-fn await-on-own-pool(pool: *worker-pool): i32 {
-  task/spawn(pool, add-one.&, 41).!.await()
-}
-
-fn wait-for-flag(flag: *uv/monitor[bool]) {
-  let guard = flag.lock()
-  while not guard.value.* { guard.wait() }
-  guard.unlock()
-}
-
-fn set-flag(flag: *uv/monitor[bool]) {
-  let guard = flag.lock()
-  guard.value.* = true
-  guard.signal()
-  guard.unlock()
-}
-
-fn(test-runtime) test-pool() {
-  let inline-only = worker-pool/start(target-free-count = 1, max-worker-count = 1, capacity = 8)
-  assert-equals(task/spawn(inline-only, await-on-own-pool.&, inline-only).!.await(), 42)
-  inline-only.close()
-  inline-only.join()
-
-  let elastic = worker-pool/start(target-free-count = 1, max-worker-count = 2, capacity = 8)
-  let flag: uv/monitor[bool] = uninit
-  flag.init(false)
-  let _ = elastic.submit-blocking(flag.&, wait-for-flag.&).!
-  let _ = elastic.submit(flag.&, set-flag.&).!
-  elastic.close()
-  elastic.join()
-  flag.destroy()
 }

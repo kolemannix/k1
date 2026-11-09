@@ -58,6 +58,8 @@ ns for list {
 
   // The possibly-uninitialized backing buffer of this list
   fn(inline) inner-buffer[t](self: list[t]): buffer[t] { self.buffer }
+  // The uninitialized capacity past len
+  fn(inline) spare-buffer[t](self: list[t]): buffer[t] { self.buffer.drop(self.len) }
 
   fn(inline) _grow[t, a: allocator](self: *list[t], alloc: a, new-cap: size) {
     let data = buffer/_grow-raw(alloc, self.buffer.data, self.buffer.len, types/stride[t], types/align[t](), new-cap)

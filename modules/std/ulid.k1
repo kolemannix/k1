@@ -2,7 +2,7 @@ ns ulid
 
 let crockford-digits: string = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 
-fn make(): string {
+fn generate(): string {
   let out = string-builder/with-capacity(26)
   write-crockford-base32(out.&, time/unix-nanos() / 1_000_000, 10)
   let random: array[u8, 10] = .0

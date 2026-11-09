@@ -1,0 +1,221 @@
+use core/platform/io/io-result
+use std/fd
+use std/files
+use std/net
+use std/sys
+
+let CA-BUNDLE-PATHS: span[string] = [
+  "/etc/ssl/certs/ca-certificates.crt",
+  "/etc/pki/tls/certs/ca-bundle.crt",
+  "/etc/ssl/ca-bundle.pem",
+  "/etc/pki/tls/cacert.pem",
+  "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+  "/etc/ssl/cert.pem",
+]
+
+type trust = either { system, ca-file(string) }
+
+type error = either {
+  timeout,
+  truncated,
+  transport(i32),
+  verification(u32),
+  protocol(i32),
+  trust(string),
+  invalid-hostname,
+}
+
+impl print for error {
+  fn print-to[w: writer](self, w) {
+    let message: array[u8, 512] = .0
+    let text: optref[u8] = message.data-ptr().narrow()
+    let capacity = message.len().unsigned()
+    if self is {
+      :timeout -> w.write("TLS timed out"),
+      :truncated -> w.write("TLS connection closed without close_notify"),
+      :transport(code) -> w.write("TLS transport failed: ${sys/error-string(code)}"),
+      :verification(flags) -> {
+        let _ = mbedtls/x509_crt_verify_info(text, capacity, "".to-c-tmp().as(), flags)
+        w.write("TLS certificate rejected: ${string/wrap-c(message.data-ref()).trim-ascii-space()}")
+      },
+      :protocol(code) -> {
+        mbedtls/strerror(code, text, capacity)
+        w.write("TLS failed: ${string/wrap-c(message.data-ref())}")
+      },
+      :trust(reason) -> w.write("TLS trust: $reason"),
+      :invalid-hostname -> w.write("TLS hostname is empty or contains NUL"),
+    }
+  }
+}
+
+fn check(code: i32): result[empty, error] {
+  if code != 0 :err(:protocol(code)) else :ok
+}
+
+fn parse-certificates(roots: *mbedtls/x509_crt, path: string): result[empty, error] {
+  let pem = if files/read-to-string-in(heap, path) is {
+    :ok(pem) -> pem,
+    :err(e) -> return :err(:trust("$e")),
+  }
+  let terminated = pem.concat-char-in(heap, '\0')
+  let code = mbedtls/x509_crt_parse(roots.as(), terminated.data-ptr().narrow(), terminated.len().unsigned())
+  heap.free(terminated.data-ptr(), terminated.len(), 1)
+  heap.free(pem.data-ptr(), pem.len(), 1)
+  if code < 0 :err(:protocol(code)) else :ok
+}
+
+fn load-linux-roots(roots: *mbedtls/x509_crt): result[empty, error] {
+  let paths: span[string] = if sys/env("SSL_CERT_FILE") is :some(path) [path] else CA-BUNDLE-PATHS
+  let is-loaded = paths.exists(fn[roots] path. parse-certificates(roots, path) is :ok)
+  if sys/env("SSL_CERT_DIR") is :some(directories) {
+    for directory in directories.split-by-char-iter(':') {
+      if files/list-dir(directory) is :ok(names) {
+        for name in names {
+          if parse-certificates(roots, "$directory/$name") is :ok { is-loaded = true }
+        }
+      }
+    }
+  }
+  if is-loaded :ok else :err(:trust("no CA certificates in SSL_CERT_FILE, SSL_CERT_DIR or the distribution bundles"))
+}
+
+type config = {
+  ssl: mbedtls/ssl_config,
+  roots: mbedtls/x509_crt,
+  anchors: ptr,
+  alpn-name: string,
+  alpn-list: array[optref[u8], 2],
+}
+
+ns for config {
+  fn new(trust: trust, alpn: string): result[*config, error] {
+    let self = heap.alloc-t[config]
+    mbedtls/ssl_config_init(self.ssl.&.as())
+    mbedtls/x509_crt_init(self.roots.&.as())
+    let is-ready = false
+    defer if not is-ready self.free()
+
+    check(mbedtls/psa_crypto_init()).try
+    check(mbedtls/ssl_config_defaults(
+      self.ssl.&.as(), mbedtls/SSL_IS_CLIENT.trunc[i32], mbedtls/SSL_TRANSPORT_STREAM.trunc[i32], mbedtls/SSL_PRESET_DEFAULT.trunc[i32]
+    )).try
+    mbedtls/ssl_conf_authmode(self.ssl.&.as(), mbedtls/SSL_VERIFY_REQUIRED.trunc[i32])
+
+    if trust is {
+      :ca-file(path) -> {
+        parse-certificates(self.roots.&, path).try
+        #if k1/platform-macos {
+          self.anchors = macos/create-certificate-array(self.roots.&.as())
+          if self.anchors.is-null() return :err(:trust("macOS cannot read a certificate in $path"))
+        }
+      },
+      :system -> #if k1/platform-linux { load-linux-roots(self.roots.&).try },
+    }
+    mbedtls/ssl_conf_ca_chain(self.ssl.&.as(), self.roots.&.as(), null())
+
+    self.alpn-name = alpn.concat-char-in(heap, '\0')
+    self.alpn-list = [self.alpn-name.data-ptr().narrow(), null()]
+    check(mbedtls/ssl_conf_alpn_protocols(self.ssl.&.as(), self.alpn-list.data-ptr().narrow())).try
+
+    is-ready = true
+    :ok(self)
+  }
+
+  fn free(self: *config) {
+    #if k1/platform-macos { if not self.anchors.is-null() macos/CFRelease(self.anchors) }
+    mbedtls/ssl_config_free(self.ssl.&.as())
+    mbedtls/x509_crt_free(self.roots.&.as())
+    heap.free(self.alpn-name.data-ptr(), self.alpn-name.len(), 1)
+    heap.free-t(self)
+  }
+}
+
+type client = {
+  ssl: mbedtls/ssl_context,
+  config: *config,
+  stream: net/tcp-stream,
+  hostname: string,
+  transport-error: i32,
+}
+
+fn record-transport-result(client: *client, result: io-result, would-block: i64, failed: i64): i32 {
+  if result.is-ok() return result.get-value().trunc[i32]
+  client.transport-error = result.get-error()
+  if net/is-timeout(client.transport-error) would-block.trunc[i32] else failed.trunc[i32]
+}
+
+fn send-to-stream(user-data: ptr, data: optref[u8], len: usize): i32 {
+  let client = user-data.ref[client]
+  record-transport-result(client, client.stream.write(data.as(), len.signed()), mbedtls/ERR_SSL_WANT_WRITE, mbedtls/ERR_NET_SEND_FAILED)
+}
+
+fn receive-from-stream(user-data: ptr, data: optref[u8], len: usize): i32 {
+  let client = user-data.ref[client]
+  record-transport-result(client, fd/read(client.stream.file, data.as(), len.signed()), mbedtls/ERR_SSL_WANT_READ, mbedtls/ERR_NET_RECV_FAILED)
+}
+
+fn connect(config: *config, stream: net/tcp-stream, hostname: string): result[*client, error] {
+  if hostname.is-empty() or hostname.index-of('\0').is-some() return :err(:invalid-hostname)
+  let self = heap.alloc-t[client]
+  self.config = config
+  self.stream = stream
+  self.hostname = hostname.concat-char-in(heap, '\0')
+  mbedtls/ssl_init(self.ssl.&.as())
+  let is-ready = false
+  defer if not is-ready {
+    mbedtls/ssl_free(self.ssl.&.as())
+    heap.free(self.hostname.data-ptr(), self.hostname.len(), 1)
+    heap.free-t(self)
+  }
+
+  check(mbedtls/ssl_setup(self.ssl.&.as(), config.ssl.&.as())).try
+  check(mbedtls/ssl_set_hostname(self.ssl.&.as(), self.hostname.to-c-tmp().as())).try
+  mbedtls/ssl_set_bio(self.ssl.&.as(), self.as(), send-to-stream.&.as(), receive-from-stream.&.as(), null())
+  #if k1/platform-macos { mbedtls/ssl_set_verify(self.ssl.&.as(), macos/verify.&, self.as()) }
+
+  let code = mbedtls/ssl_handshake(self.ssl.&.as())
+  if code != 0 return :err(self.error-for-code(code))
+  is-ready = true
+  :ok(self)
+}
+
+ns for client {
+  fn error-for-code(self: *client, code: i32): error {
+    let wide = code.widen[i64]
+    if wide == mbedtls/ERR_SSL_WANT_READ or wide == mbedtls/ERR_SSL_WANT_WRITE :timeout
+    else if wide == mbedtls/ERR_SSL_CONN_EOF :truncated
+    else if wide == mbedtls/ERR_NET_RECV_FAILED or wide == mbedtls/ERR_NET_SEND_FAILED :transport(self.transport-error)
+    else if wide == mbedtls/ERR_X509_CERT_VERIFY_FAILED :verification(mbedtls/ssl_get_verify_result(self.ssl.&.as()))
+    else :protocol(code)
+  }
+
+  fn read(self: *client, buffer: ptr, count: size): result[size, error] {
+    if count == 0 return :ok(0)
+    loop {
+      self.transport-error = 0
+      let n = mbedtls/ssl_read(self.ssl.&.as(), buffer.narrow(), count.unsigned())
+      if n > 0 return :ok(n.widen[i64])
+      if n == 0 return :err(:truncated)
+      let wide = n.widen[i64]
+      if wide == mbedtls/ERR_SSL_PEER_CLOSE_NOTIFY return :ok(0)
+      if wide != mbedtls/ERR_SSL_WANT_READ or self.transport-error != 0 return :err(self.error-for-code(n))
+    }
+  }
+
+  fn write-all(self: *client, bytes: span[u8]): result[empty, error] {
+    let written: size = 0
+    while written < bytes.len() {
+      let n = mbedtls/ssl_write(self.ssl.&.as(), bytes.data-ptr().add-bytes(written).narrow(), (bytes.len() - written).unsigned())
+      if n < 0 return :err(self.error-for-code(n))
+      written = written + n.widen[i64]
+    }
+    :ok
+  }
+
+  fn close(self: *client) {
+    let _ = mbedtls/ssl_close_notify(self.ssl.&.as())
+    mbedtls/ssl_free(self.ssl.&.as())
+    heap.free(self.hostname.data-ptr(), self.hostname.len(), 1)
+    heap.free-t(self)
+  }
+}

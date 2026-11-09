@@ -23,6 +23,9 @@ ns libc {
     k1/select-os(macos = fn. errno-location-macos(), linux = fn. errno-location-linux()).ref[c-int].*
   }
   let EINTR: c-int = 4
+  fn EAGAIN(): c-int { k1/select-os(macos = fn. 35, linux = fn. 11) }
+  fn EINPROGRESS(): c-int { k1/select-os(macos = fn. 36, linux = fn. 115) }
+  fn ETIMEDOUT(): c-int { k1/select-os(macos = fn. 60, linux = fn. 110) }
   fn(extern) strerror(errno: c-int): *u8
   fn(extern) perror(msg: optref[u8])
   fn strerror-string(code: c-int): string {
@@ -31,6 +34,8 @@ ns libc {
   fn errno-k1-string(): string {
     strerror-string(errno())
   }
+
+  type FILE = opaque[152, 8]
 
   ns files {
     let SEEK_END: i32 = 2

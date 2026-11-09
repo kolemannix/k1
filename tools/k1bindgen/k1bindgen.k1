@@ -33,7 +33,7 @@ fn dirname(path: string): string {
 
 // "clang version 21.1.7 (...)" -> "21"
 fn clang-major-version(version-string: string): ?string {
-  for tok in version-string.split-by-char(' ') {
+  for tok in version-string.split-by-char-iter(' ') {
     if tok.non-empty() and tok.[0].is-ascii-digit() {
       return :some tok.split-by-char('.').[0]
     }
@@ -125,9 +125,11 @@ fn start(args: span[string]): result[string, string] {
   let cursor: clang/CXCursor = clang/getTranslationUnitCursor(unit)
   let parsed-renames = map/with-capacity-in[k = string, v = string](mem/tmp(), args.rename.len())
   for s in args.rename {
-    let parts = s.split-by-char(':')
-    if parts.len() != 2 eprintln("Bad rename: $s")
-    parsed-renames.insert-in(mem/tmp(), parts.[0], parts.[1])
+    require s.split-once(":") is .{ before = from, after = :some to } and to.non-empty() and not to.contains(':') else {
+      eprintln("Bad rename: $s")
+      continue
+    }
+    parsed-renames.insert-in(mem/tmp(), from, to)
   }
   let state: bindgen-state = .{
     out-path = args.out-path,
@@ -164,11 +166,11 @@ fn start(args: span[string]): result[string, string] {
   }
   for state.defns {
     let raw-name = it.name
-    if it.error is :some e {
-      info("BINDGEN ERROR (todo location): $e")
-      out.writeln("// BINDGEN ERROR: $e")
-    }
     if state.should-include-name(raw-name) {
+      if it.error is :some e {
+        info("BINDGEN ERROR (todo location): $e")
+        out.writeln("// BINDGEN ERROR: $e")
+      }
       let name = state.name-config.transformed-name(raw-name)
       if name != it.name debug("mapped ${it.name} to $name")
       if it.kind is {
@@ -183,8 +185,7 @@ fn start(args: span[string]): result[string, string] {
             out.write("type${if typedef.alias "(alias) " else " "}$name = ")
             write-k1-type(typedef.type, indent = 0)
             out.write("\n")
-            let is-opaque = typedef.type is :opaque _
-            if (not is-opaque) and it.error is :none { write-layout-assertion(layout-asserts.&, name, typedef.type, it.layout) }
+            if it.error is :none { write-layout-assertion(layout-asserts.&, name, typedef.type, it.layout) }
           }
         },
         :constant constant -> {
@@ -618,13 +619,7 @@ fn visit-root(
       if clang/isCursorDefinition(current).as-bool() {
 
         if bg.is-opaque-name(name) {
-          let opaque = visit-opaque(bg, current)
-          bg.defns.push(.{
-            name,
-            error = :none,
-            kind = :typedef .{ type = opaque, alias = false },
-            layout = layout-for-cursor(current)
-          })
+          push-opaque(bg, name, visit-opaque(current))
           return :Continue
         }
 
@@ -659,13 +654,7 @@ fn visit-root(
       let name = clang/getCursorSpelling(current).to-string()
 
       if bg.is-opaque-name(name) {
-        let opaque = visit-opaque(bg, current)
-        bg.defns.push(.{
-          name,
-          error = :none,
-          kind = :typedef .{ type = opaque, alias = false },
-          layout = layout-for-cursor(current)
-        })
+        push-opaque(bg, name, visit-opaque(current))
         return :Continue
       }
 
@@ -676,7 +665,7 @@ fn visit-root(
         name,
         error = :none,
         kind = :typedef .{ type, alias = true },
-        layout = layout-for-cursor(current)
+        layout = if type is :fn-type _ :none else layout-for-cursor(current)
       })
       :Continue
     },
@@ -764,13 +753,7 @@ fn stub-undefined-record(bg: *bindgen-state, cx-type: clang/CXType) {
         if clang/Cursor_isNull(clang/getCursorDefinition(decl)) == 0 { return }
         let name = clang/getCursorSpelling(decl).to-string()
         if name.is-empty() { return }
-        for bg.defns { if it.name == name { return } }
-        bg.defns.push(.{
-          name,
-          error = :none,
-          kind = :typedef .{ type = :opaque .{ size = 0, align = 1 }, alias = false },
-          layout = :none,
-        })
+        push-opaque(bg, name, :opaque .{ size = 0, align = 1 })
         return
       },
       _ -> { return },
@@ -778,10 +761,20 @@ fn stub-undefined-record(bg: *bindgen-state, cx-type: clang/CXType) {
   }
 }
 
-fn visit-opaque(_bg: *bindgen-state, cursor: CXCursor): k1-type {
+fn visit-opaque(cursor: CXCursor): k1-type {
   let size = clang/Type_getSizeOf(clang/getCursorType(cursor))
   let align = clang/Type_getAlignOf(clang/getCursorType(cursor))
   :opaque .{ size, align }
+}
+
+fn push-opaque(bg: *bindgen-state, name: string, type: k1-type) {
+  for bg.defns { if it.name == name return }
+  bg.defns.push(.{
+    name,
+    error = :none,
+    kind = :typedef .{ type, alias = false },
+    layout = :none,
+  })
 }
 
 fn map-fn-decl(cursor: CXCursor): { fn-type: fn-type, error: ?string } {

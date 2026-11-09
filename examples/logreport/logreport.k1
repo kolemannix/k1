@@ -32,7 +32,7 @@ ns log {
 
   fn fields(line: string): list[string] {
     let out = list/empty[string]()
-    for piece in line.split-by-char(' ') {
+    for piece in line.split-by-char-iter(' ') {
       if piece.non-empty() { out.push(piece) }
     }
     out
@@ -61,7 +61,7 @@ ns log {
   fn parse-all(text: string): parsed {
     let entries = list/empty[entry]()
     let rejects = list/empty[string]()
-    for line in text.split-by-char('\n') {
+    for line in text.split-by-char-iter('\n') {
       if line.len() == 0 { continue }
       if parse-line(line) is {
         :ok e -> entries.push(e),

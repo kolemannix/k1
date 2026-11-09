@@ -1,12 +1,11 @@
 ns app
 
 use std/stream/source
+use std/stream/byte-source
 use http/http-response
 use http/response
 use http/routing
-use http/sse-response
-use http/sse-events
-use http/datastar
+use http/sse-encoder
 use std/stream/rc-byte-stream
 use std/owned
 use std/heap-bytes
@@ -90,7 +89,7 @@ fn handle(req: http/request, bus: *pubsub/bus[span[u8]]): http-response {
     worker-deps = heap.new(app/deps.{ db = db/open(db-path), bus }).as[ptr]
   }
   let deps = worker-deps.ref[deps]
-  if route/parse-request(req.header) is {
+  if route/parse-request(req.head) is {
     :err e -> error-response(e),
     :ok r -> if r is {
       :home -> home-page(),
@@ -108,18 +107,18 @@ fn handle(req: http/request, bus: *pubsub/bus[span[u8]]): http-response {
 }
 
 fn visits(deps: *deps, req: http/request, who: ?string): http-response {
-  let n = deps.db.record-visit(req.header.url.path())
-  let name = who ? (pair/find(req.cookies(), "who") ? "stranger")
+  let n = deps.db.record-visit(req.head.url.path())
+  let name = who ? (req.cookie("who") ? "stranger")
   response/text(:ok, "hello $name, visit number $n\n")
 }
 
 fn login(req: http/request): http-response {
-  if req.form() is {
+  if req.body-form-fields() is {
     :some fields -> if pair/find(fields, "who") is {
       :some who -> .{
         status = :ok,
         content-type = "text/plain",
-        extra-headers = span/single(cookie/set-header("who", who, cookie/attrs/default())),
+        extra-headers = span/single((cookie/new("who", who) | .{ path = :some "/", http-only = true, same-site = :lax }).to-set-cookie()),
         body = :complete span/single("logged in\n".span-bytes()),
       },
       :none -> response/text(:bad-request, "missing who\n"),
@@ -131,12 +130,18 @@ fn login(req: http/request): http-response {
 let global-topic: string = "global"
 fn game-topic(id: u64): string { "game.$id" }
 
+ns datastar {
+  fn patch-signals(signals: byte-source): http-response {
+    response/sse(source/through(signals, sse-encoder/new("datastar-patch-signals", "signals")))
+  }
+}
+
 fn global-events(deps: *deps): http-response {
-  datastar/patch-signals(deps.bus.subscribe(global-topic) || rc-byte-stream)
+  datastar/patch-signals(source/through(deps.bus.subscribe(global-topic), rc-byte-stream/new()))
 }
 
 fn game-events(deps: *deps, id: u64): http-response {
-  datastar/patch-signals(deps.bus.subscribe(game-topic(id)) || rc-byte-stream)
+  datastar/patch-signals(source/through(deps.bus.subscribe(game-topic(id)), rc-byte-stream/new()))
 }
 
 fn game-poke(deps: *deps, id: u64): http-response {
@@ -147,7 +152,7 @@ fn game-poke(deps: *deps, id: u64): http-response {
 // One SSE event per number, rendered into the ambient request arena
 fn counter-events(): http-response {
   let counts = 1.until(11).to-list()
-  sse-response(source/from-printed(counts.as-span()) || sse-events("counter", ""))
+  response/sse(source/through(source/from-printed(counts.as-span()), sse-encoder/new("counter", "")))
 }
 
 fn big-file(): http-response {

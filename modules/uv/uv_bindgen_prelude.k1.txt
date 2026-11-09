@@ -1,6 +1,5 @@
-use(expose) net/addrinfo
-use(expose) net/sockaddr
-use(expose) net/sockaddr_in
-use(expose) net/sockaddr_in6
-// not really net but we'll get there later
-use(expose) net/FILE
+use(expose) std/posix/addrinfo
+use(expose) std/posix/sockaddr
+use(expose) std/posix/sockaddr_in
+use(expose) std/posix/sockaddr_in6
+use(expose) std/libc/FILE

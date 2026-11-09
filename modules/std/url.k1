@@ -15,7 +15,7 @@ type url = {
 type pair = { name: string, value: string }
 
 ns for pair {
-  fn find[i: iterator[item = pair], c: iterable[item = pair, i = i]](pairs: c, name: string): ?string {
+  fn find[i: iterator[pair], c: iterable[pair, i]](pairs: c, name: string): ?string {
     for p in pairs { if p.name == name { return :some p.value } }
     :none
   }
@@ -103,9 +103,8 @@ fn parse(text: string): result[url, error] {
   let n = text.len()
   if n > 4294967295 return :err .{ pos = 0, kind = :too-long }
 
-  let i: size = 0
+  let i = text.take-while(is-scheme-char).len()
   let scheme-end: size = 0
-  while i < n and is-scheme-char(text.[i]) { i = i + 1 }
   if i < n and text.[i] == ':' {
     if i == 0 or not text.[0].is-ascii-letter() return :err .{ pos = i, kind = :invalid-scheme }
     scheme-end = i
@@ -165,8 +164,7 @@ fn parse(text: string): result[url, error] {
   i = scan-visible(text, i, '?', '#').try
   if authority-start == 0 and scheme-end == 0 and path-start < i and text.[path-start] != '/' {
     let first = text.slice(path-start, i)
-    let first-end = first.index-of('/') ? first.len()
-    if first.take(first-end).index-of(':') is :some c return :err .{ pos = path-start + c, kind = :invalid-scheme }
+    if first.split-once("/").before.index-of(':') is :some c return :err .{ pos = path-start + c, kind = :invalid-scheme }
   }
 
   let query-start = i
@@ -255,7 +253,7 @@ ns for url {
     if p.is-empty() { .{ rest = :none } } else .{ rest = :some(if p.starts-with("/") p.drop(1) else p) }
   }
 
-  fn query-pairs(self): form/pair-iterator { form/pairs(self.query() ? "") }
+  fn query-pairs(self): span[pair] { form/parse(self.query() ? "") }
 
   fn normalized(self): url {
     let out = string-builder/with-capacity(self.text.len() + 1)
@@ -347,14 +345,9 @@ type segment-iterator = { rest: ?string }
 
 impl iterator[item = string] for segment-iterator {
   fn next(self: *self): ?item {
-    require self.rest is :some r else return :none
-    if r.index-of('/') is :some i {
-      self.rest = :some r.drop(i + 1)
-      :some(percent/decode(r.take(i)))
-    } else {
-      self.rest = :none
-      :some(percent/decode(r))
-    }
+    let parts = self.rest.try.split-once("/")
+    self.rest = parts.after
+    :some(percent/decode(parts.before))
   }
 }
 
@@ -575,26 +568,13 @@ ns form {
   fn decode(s: string): string { percent/_decode(s, plus-is-space = true) }
 
   fn decode-field(field: string): pair {
-    if field.index-of('=') is :some i {
-      .{ name = decode(field.take(i)), value = decode(field.drop(i + 1)) }
-    } else {
-      .{ name = decode(field), value = "" }
-    }
+    let kv = field.split-once("=")
+    .{ name = decode(kv.before), value = decode(kv.after ? "") }
   }
 
-  fn pairs(s: string): pair-iterator { .{ rest = s } }
-
-  type pair-iterator = { rest: string }
-
-  impl iterator[item = pair] for pair-iterator {
-    fn next(self: *self): ?item {
-      while self.rest.non-empty() {
-        let s = self.rest
-        let amp = s.index-of('&') ? s.len()
-        self.rest = s.drop(amp + 1)
-        if amp > 0 return :some decode-field(s.take(amp))
-      }
-      :none
-    }
+  fn parse(s: string): span[pair] {
+    let fields = list/empty[pair]()
+    for field in s.split-by-char-iter('&') { if field.non-empty() fields.push(decode-field(field)) }
+    fields.as-span()
   }
 }

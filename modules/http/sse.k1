@@ -1,18 +1,18 @@
-use std/stream/source
 use std/stream/pipe
-use std/stream/byte-source
+use std/utf8
 
 type sse-encoder = {
   event-line: span[u8],
   line-prefix: span[u8],
 }
 
-fn sse-events(upstream: byte-source, event-name: string, data-prefix: string): byte-source {
-  let stage: sse-encoder = .{
-    event-line = "event: $event-name\n".span-bytes(),
-    line-prefix = (if data-prefix.is-empty() "data: " else "data: $data-prefix ").span-bytes(),
+ns for sse-encoder {
+  fn new(event-name: string, data-prefix: string): sse-encoder {
+    .{
+      event-line = "event: $event-name\n".span-bytes(),
+      line-prefix = (if data-prefix.is-empty() "data: " else "data: $data-prefix ").span-bytes(),
+    }
   }
-  source/through(upstream, stage)
 }
 
 impl pipe[t = u8, out = u8] for sse-encoder {
@@ -48,20 +48,85 @@ impl pipe[t = u8, out = u8] for sse-encoder {
   }
 }
 
-fn sse-response(events: byte-source): http-response {
-  .{
-    content-type = "text/event-stream",
-    extra-headers = ["Cache-Control: no-cache"],
-    body = :stream events,
-    status = :ok,
+type sse-event = { event: string, data: string, id: ?string, retry-ms: ?u64 }
+
+type sse-decoder = {
+  current-line: list[char],
+  is-after-cr: bool,
+  has-read-line: bool,
+  event-name: list[char],
+  data: list[char],
+  id: ?list[char],
+  retry-ms: ?u64,
+  events: list[sse-event],
+  text: list[char],
+}
+
+ns for sse-decoder {
+  fn new(): sse-decoder { .0 }
+
+  fn copy-text(self: *sse-decoder, text: span[char]): string {
+    let start = self.text.len()
+    self.text.append-span(text)
+    string/wrap-span(self.text.as-span().drop(start))
+  }
+
+  fn end-line(self: *sse-decoder) {
+    let line = string/wrap-list(self.current-line)
+    if not self.has-read-line {
+      self.has-read-line = true
+      if line.span-bytes().starts-with(utf8/BOM) { line = line.drop(utf8/BOM.len()) }
+    }
+    if line.is-empty() {
+      if self.data.non-empty() {
+        self.events.push(.{
+          event = if self.event-name.is-empty() "message" else self.copy-text(self.event-name.as-span()),
+          data = self.copy-text(self.data.as-span().take(self.data.len() - 1)),
+          id = if self.id is :some id :some self.copy-text(id.as-span()) else :none,
+          retry-ms = self.retry-ms,
+        })
+        self.id = :none
+        self.retry-ms = :none
+      }
+      self.data.clear()
+      self.event-name.clear()
+    } else {
+      let field = line.split-once(":")
+      let name = field.before
+      let value = field.after ? ""
+      if value.starts-with(" ") { value = value.drop(1) }
+      if name == "data" {
+        self.data.append-span(value.span)
+        self.data.push('\n')
+      } else if name == "event" {
+        self.event-name.clear()
+        self.event-name.append-span(value.span)
+      } else if name == "id" and not value.contains('\0') {
+        self.id = :some list/from-span(value.span)
+      } else if name == "retry" and u64/from-string(value) is :ok(ms) {
+        self.retry-ms = :some ms
+      }
+    }
+    self.current-line.clear()
   }
 }
 
-ns datastar {
-  fn patch-elements(elements: byte-source): http-response {
-    sse-response(elements || sse-events("datastar-patch-elements", "elements"))
+impl pipe[t = u8, out = sse-event] for sse-decoder {
+  fn map(self: *sse-decoder, group: span[span[u8]], out: *list[span[sse-event]]) {
+    for segment in group {
+      for b in segment {
+        let is-cr = b == '\r'.as-u8()
+        let is-lf = b == '\n'.as-u8()
+        if not (is-lf and self.is-after-cr) {
+          if is-cr or is-lf self.end-line() else self.current-line.push(mem/bitcast(b))
+        }
+        self.is-after-cr = is-cr
+      }
+    }
+    if self.events.non-empty() { out.push(self.events.as-span()) }
   }
-  fn patch-signals(signals: byte-source): http-response {
-    sse-response(signals || sse-events("datastar-patch-signals", "signals"))
+  fn retire(self: *sse-decoder) {
+    self.events.clear()
+    self.text.clear()
   }
 }

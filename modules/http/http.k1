@@ -1,260 +1,369 @@
 use core/arena
 use std/url
-use uv/libuv
-use uv/libuv/uv-loop
-use uv/req
-use uv/handle
-use uv/stream
+use std/url/pair
 
-type header = {
+type header-field = { name: string, value: string }
+
+ns for header-field {
+  fn find(fields: span[header-field], name: string): ?string {
+    for h in fields { if h.name.equals-ignore-ascii-case(name) { return :some h.value } }
+    :none
+  }
+}
+
+type request-head = {
   url: url/url,
-  headers: list[{ field: string, value: string }],
+  headers: list[header-field],
   method: llhttp/method,
   keep-alive: bool,
   content-length: ?size
 }
 
-ns for header {
-  fn get(target: string): header { make(:GET, target) }
-  fn post(target: string): header { make(:POST, target) }
-  fn make(method: llhttp/method, target: string): header {
+ns for request-head {
+  fn new(method: llhttp/method, url: url/url): request-head {
     .{
-      url = url/parse(target).!,
+      url,
       headers = list/empty(),
       method,
       keep-alive = true,
       content-length = :none,
     }
   }
-  fn find(self: header, name: string): ?string {
-    for h in self.headers { if h.field.equals-ignore-ascii-case(name) { return :some h.value } }
-    :none
-  }
-}
+  fn find-header(self: request-head, name: string): ?string { header-field/find(self.headers.as-span(), name) }
 
-type parse-state = {
-  user-data: ptr,
-  *arena,
-  on-header-complete: *fn(ptr, header),
-  on-body-complete: *fn(ptr, span[u8]),
-  max-body-size: size,
-  reject: ?status,
-  url: list[char],
-  current-header-field: list[char],
-  current-header-value: list[char],
-  headers: list[{ field: string, value: string }],
-  body: list[u8],
-  body-in-place: bool,
-}
-ns for parse-state {
-  fn empty[t](arena: *arena, user-data: *t, on-header-complete: *fn(ptr, header), on-body-complete: *fn(ptr, span[u8]), max-body-size: size): parse-state {
-    .{
-      user-data = user-data.as[ptr],
-      arena,
-      on-header-complete,
-      on-body-complete,
-      max-body-size,
-      reject = :none,
-      url = list/empty(),
-      current-header-field = list/empty(),
-      current-header-value = list/empty(),
-      headers = list/empty(),
-      body = list/empty(),
-      body-in-place = false,
+  fn accepts-encoding(self: request-head, coding: string): bool {
+    require self.find-header("Accept-Encoding") is :some value else return false
+    for value.split-by-char-iter(',') {
+      let params = it.split-by-char-iter(';')
+      if not (params.&.next() ? "").trim-ascii-space().equals-ignore-ascii-case(coding) continue
+      for p in params {
+        let param = p.trim-ascii-space()
+        if param.starts-with-ignore-ascii-case("q=") {
+          return param.drop(2).exists(fn c. c != '0' and c != '.')
+        }
+      }
+      return true
+    }
+    false
+  }
+
+  fn cookies(self: request-head): span[pair] {
+    if self.find-header("Cookie") is {
+      :some h -> cookie/parse-header(h),
+      :none -> span/empty(),
     }
   }
 
-  fn body-read-target(self: *parse-state): ?buffer[u8] {
-    if self.body.len == self.body.cap() or not self.body-in-place return :none
-    :some self.body.inner-buffer().drop(self.body.len)
-  }
-
-  fn reset(self: *parse-state) {
-    let user-data = self.user-data
-    let arena = self.arena
-    let on-header-complete = self.on-header-complete
-    let on-body-complete = self.on-body-complete
-    self.* = empty[empty](arena, user-data.ref[empty], on-header-complete, on-body-complete, self.max-body-size)
-  }
-
-
+  fn cookie(self: request-head, name: string): ?string { pair/find(self.cookies(), name) }
 }
 
-// Wraps a pointer to an llhttp_t with some stronger-ish typing
-// over our particular user-data, 'parse-state'
-type parser = { parser: llhttp/t }
-ns for parser {
-  fn data(self: *parser): *parse-state { self.parser.data.ref[parse-state] }
-  fn set-data(self: *parser, data: *parse-state) { self.parser.data = data.as[ptr] }
+type part-collector = {
+  *arena,
+  max-size: size,
+  collected-size: size,
+  current-name: list[char],
+  current-value: list[char],
+  headers: list[header-field],
+}
+ns for part-collector {
+  fn begin(self: *part-collector, *arena) {
+    self.arena = arena
+    self.collected-size = 0
+    self.current-name = list/empty()
+    self.current-value = list/empty()
+    self.headers = list/empty()
+  }
 
-  fn reset(self: *parser) {
-    self.data().reset()
+  fn(inline) reserve[t](self: *part-collector, items: *list[t], count: size) { items.reserve-in(self.arena, count) }
+  fn(inline) append[t](self: *part-collector, items: *list[t], more: span[t]) { items.append-span-in(self.arena, more) }
+  fn(inline) push[t](self: *part-collector, items: *list[t], item: t) { items.push-in(self.arena, item) }
 
-    // Reset an already initialized parser back to the start state, preserving the existing parser type, callback settings, user data, and lenient flags.
-    llhttp/reset(self.parser.&.as())
+  fn count-bytes(self: *part-collector, count: size): bool {
+    self.collected-size = self.collected-size + count
+    self.collected-size <= self.max-size
+  }
+
+  fn on-header-field(parser: optref[llhttp/t], data: optref[u8], count: usize): i32 {
+    let collector = parser.get().data.ref[part-collector]
+    if not collector.count-bytes(count.signed()) return llhttp/errno:HPE_USER.value.signed()
+    collector.append(collector.current-name.&, span/wrap-raw(data.as[ptr], count.signed()))
+    0
+  }
+  fn on-header-value(parser: optref[llhttp/t], data: optref[u8], count: usize): i32 {
+    let collector = parser.get().data.ref[part-collector]
+    if not collector.count-bytes(count.signed()) return llhttp/errno:HPE_USER.value.signed()
+    collector.append(collector.current-value.&, span/wrap-raw(data.as[ptr], count.signed()))
+    0
+  }
+  fn on-header-value-complete(parser: optref[llhttp/t]): i32 {
+    let collector = parser.get().data.ref[part-collector]
+    collector.reserve(collector.headers.&, 64)
+    collector.push(collector.headers.&, .{ name = string/wrap-list(collector.current-name), value = string/wrap-list(collector.current-value) })
+    collector.current-name = list/empty()
+    collector.current-value = list/empty()
+    0
   }
 }
 
 // a fully parsed request
 type request = {
-  header,
+  head: request-head,
   body: span[u8],
 }
 
-fn on-url-part(parser: optref[parser], data: optref[u8], count: usize): i32 {
-  let state = parser.get().data()
-  let bytes: span[char] = span/wrap-raw(data.as[ptr], count.signed())
-  let a = state.arena
-  if state.url.is-empty() { state.url.reserve-in(a, 1024) }
-  state.url.append-span-in(a, bytes)
-  if state.url.len() > 16384 {
-    return llhttp/errno:HPE_USER.value.signed()
+ns for request {
+  fn accepts-encoding(self: request, coding: string): bool { self.head.accepts-encoding(coding) }
+  fn cookies(self: request): span[pair] { self.head.cookies() }
+  fn cookie(self: request, name: string): ?string { self.head.cookie(name) }
+
+  fn body-form-fields(self: request): ?span[pair] {
+    require self.head.find-header("Content-Type") is :some ct
+    and ct.starts-with-ignore-ascii-case("application/x-www-form-urlencoded") else {
+      return :none
+    }
+    let body-string = string/wrap-bytes(self.body)
+    let form-pairs = url/form/parse(body-string)
+    :some form-pairs
   }
-  0
 }
 
-fn on-header-field(parser: optref[parser], data: optref[u8], count: usize): i32 {
-  let state = parser.get().data()
-  let a = state.arena
-  let bytes: span[char] = span/wrap-raw(data.as[ptr], count.signed())
-
-  if state.current-header-field.is-empty() { state.current-header-field.reserve-in(a, 256) }
-  state.current-header-field.append-span-in(a, bytes)
-  0
-}
-fn on-header-value(parser: optref[parser], data: optref[u8], count: usize): i32 {
-  let state = parser.get().data()
-  let a = state.arena
-  let bytes: span[char] = span/wrap-raw(data.as[ptr], count.signed())
-
-  if state.current-header-value.is-empty() { state.current-header-value.reserve-in(a, 256) }
-  state.current-header-value.append-span-in(a, bytes)
-  0
-}
-fn on-header-value-complete(parser: optref[parser]): i32 {
-  let state = parser.get().data()
-  let a = state.arena
-  let field-string = string/wrap-span(state.current-header-field.as-span().cloned-in(a))
-  let value-string = string/wrap-span(state.current-header-value.as-span().cloned-in(a))
-
-  state.headers.reserve-in(a, 64)
-  let header = .{
-    field = field-string,
-    value = value-string,
-  }
-  state.headers.push-in(a, header)
-  state.current-header-field.clear()
-  state.current-header-value.clear()
-
-  0
-}
-
-fn on-headers-complete(parser: optref[parser]): i32 {
-  let parser = parser.get()
-  let state = parser.data()
-  require url/parse(string/wrap-span(state.url.as-span())) is :ok url else {
-    state.reject = :some :bad-request
-    return llhttp/errno:HPE_PAUSED.value.signed()
-  }
-
-  let keep-alive = llhttp/should_keep_alive(parser.parser.&.as()).as-bool()
-  let content-length: ?size = if parser.parser.flags.widen[u32] & llhttp/flags:F_CONTENT_LENGTH.value != 0 {
-    :some parser.parser.content_length.signed()
-  } else :none
-  let header: header = .{
-    url,
-    headers = state.headers,
-    method = mem/bitcast(llhttp/get_method(parser.as()).widen[u32]),
-    keep-alive,
-    content-length,
-  }
-  (state.on-header-complete)(state.user-data, header)
-  if content-length is :some n and n > state.max-body-size {
-    state.reject = :some :content-too-large
-    return llhttp/errno:HPE_PAUSED.value.signed()
-  }
-  if content-length is :some n {
-    state.body.reserve-in(state.arena, n)
-    state.body-in-place = true
-  }
-  0
-}
-
-fn impl-on-body(parser: optref[parser], data: optref[u8], count: usize): i32 {
-  let state = parser.get().data()
-  let n = count.signed()
-  if state.body.len + n > state.max-body-size {
-    state.reject = :some :content-too-large
-    return llhttp/errno:HPE_PAUSED.value.signed()
-  }
-  // FIXME: streamed request bodies — hand chunks to the handler as they
-  // arrive instead of buffering the whole body
-  if state.body-in-place and data.as[ptr] == state.body.data-ptr().add-bytes(state.body.len) {
-    state.body.len = state.body.len + n
-  } else {
-    state.body.append-span-in(state.arena, span/wrap-raw(data.as[ptr], n))
-  }
-  0
-}
-fn impl-on-body-complete(parser: optref[parser]): i32 {
-  let state = parser.get().data()
-  (state.on-body-complete)(state.user-data, state.body.as-span())
-  // Pause at every message boundary: one request in flight per connection.
-  // finish-request resets the parser and restarts reads
-  llhttp/errno:HPE_PAUSED.value.signed()
-}
-
-fn parser-init[user-data](
-  state-arena: *arena,
-  request-arena: *arena,
-  *user-data,
-  on-header-complete: *fn(*user-data, header),
-  on-body-complete: *fn(*user-data, span[u8]),
+type request-parser = {
+  collector: part-collector,
+  parser: llhttp/t,
+  settings: llhttp/settings,
+  user-data: ptr,
+  on-head-complete: *fn(ptr, request-head),
+  on-body-complete: *fn(ptr, span[u8]),
+  max-url-size: size,
   max-body-size: size,
-): parser {
-  let settings: llhttp/settings = uninit
-  llhttp/settings_init(settings.&.as())
-  let settings = state-arena.push(settings | .{
-    on_url                   = on-url-part.&.as(),
-    on_header_field          = on-header-field.&.as(),
-    on_header_value          = on-header-value.&.as(),
-    on_header_value_complete = on-header-value-complete.&.as(),
-    on_headers_complete      = on-headers-complete.&.as(),
-    on_body                  = impl-on-body.&.as(),
-    on_message_complete      = impl-on-body-complete.&.as(),
-  })
-
-  let parser: parser = uninit
-  llhttp/init(parser.&.as(), :REQUEST, settings.as())
-  let parse-state: *parse-state = state-arena.push(
-    parse-state/empty(request-arena, user-data, on-header-complete.narrow(), on-body-complete.narrow(), max-body-size)
-  )
-  parser.set-data(parse-state)
-  parser
+  reject: ?status,
+  url: list[char],
+  body: list[u8],
+  is-body-sized: bool,
 }
 
-type tick-result = either { ok, paused(size), reject(status), fail(llhttp/errno) }
+ns for request-parser {
+  fn init[user-data](
+    self: *request-parser,
+    *arena,
+    *user-data,
+    on-head-complete: *fn(*user-data, request-head),
+    on-body-complete: *fn(*user-data, span[u8]),
+    max-header-size: size,
+    max-url-size: size,
+    max-body-size: size,
+  ) {
+    llhttp/settings_init(self.settings.&.as())
+    self.settings = self.settings | .{
+      on_url                   = on-url-part.&,
+      on_header_field          = part-collector/on-header-field.&,
+      on_header_value          = part-collector/on-header-value.&,
+      on_header_value_complete = part-collector/on-header-value-complete.&,
+      on_headers_complete      = on-headers-complete.&,
+      on_body                  = on-body.&,
+      on_message_complete      = on-message-complete.&,
+    }
+    llhttp/init(self.parser.&.as(), :REQUEST, self.settings.&.as())
+    self.parser.data = self.as[ptr]
+    self.collector.max-size = max-header-size
+    self.user-data = user-data.as[ptr]
+    self.on-head-complete = on-head-complete.narrow()
+    self.on-body-complete = on-body-complete.narrow()
+    self.max-url-size = max-url-size
+    self.max-body-size = max-body-size
+    self.reset(arena)
+  }
 
-// Feed bytes to the parser. :paused means llhttp stopped at a message
-// boundary; its payload counts the bytes left unparsed, nonzero only when a
-// client pipelines requests. :reject carries the status to answer with: `:bad-request`
-// for a request target that isn't a URL, `:content-too-large` when the body passed max-body-size
-fn tick(
-  *parser,
-  bytes: span[u8],
-): tick-result {
+  fn reset(self: *request-parser, *arena) {
+    llhttp/reset(self.parser.&.as())
+    self.collector.begin(arena)
+    self.reject = :none
+    self.url = list/empty()
+    self.body = list/empty()
+    self.is-body-sized = false
+  }
+
+  fn feed(self: *request-parser, bytes: span[u8]): execute-result { execute(self.parser.&, bytes) }
+
+  fn body-read-target(self: *request-parser): ?buffer[u8] {
+    if self.body.len == self.body.cap() or not self.is-body-sized return :none
+    :some self.body.spare-buffer()
+  }
+
+  fn on-url-part(parser: optref[llhttp/t], data: optref[u8], count: usize): i32 {
+    let state = parser.get().data.ref[request-parser]
+    state.collector.append(state.url.&, span/wrap-raw(data.as[ptr], count.signed()))
+    if state.url.len() > state.max-url-size return llhttp/errno:HPE_USER.value.signed()
+    0
+  }
+
+  fn on-headers-complete(parser: optref[llhttp/t]): i32 {
+    let state = parser.get().data.ref[request-parser]
+    require url/parse(string/wrap-span(state.url.as-span())) is :ok url else {
+      state.reject = :some :bad-request
+      return llhttp/errno:HPE_PAUSED.value.signed()
+    }
+    let content-length: ?size = if parser.get().flags.widen[u32] & llhttp/flags:F_CONTENT_LENGTH.value != 0 {
+      :some parser.get().content_length.signed()
+    } else :none
+    if content-length is :some n and n > state.max-body-size {
+      state.reject = :some :content-too-large
+      return llhttp/errno:HPE_PAUSED.value.signed()
+    }
+    let head: request-head = .{
+      url,
+      headers = state.collector.headers,
+      method = enum/enum-from-value-unchecked(llhttp/get_method(parser).widen[u32]),
+      keep-alive = llhttp/should_keep_alive(parser).as-bool(),
+      content-length,
+    }
+    (state.on-head-complete)(state.user-data, head)
+    if content-length is :some n {
+      state.collector.reserve(state.body.&, n)
+      state.is-body-sized = true
+    }
+    0
+  }
+
+  fn on-body(parser: optref[llhttp/t], data: optref[u8], count: usize): i32 {
+    let state = parser.get().data.ref[request-parser]
+    let n = count.signed()
+    if state.body.len + n > state.max-body-size {
+      state.reject = :some :content-too-large
+      return llhttp/errno:HPE_PAUSED.value.signed()
+    }
+    // TODO: streamed request bodies - hand chunks to the handler as they
+    // arrive instead of buffering the whole body
+    if state.is-body-sized and data.as[ptr] == state.body.data-ptr().add-bytes(state.body.len) {
+      state.body.len = state.body.len + n
+    } else {
+      state.collector.append(state.body.&, span/wrap-raw(data.as[ptr], n))
+    }
+    0
+  }
+
+  fn on-message-complete(parser: optref[llhttp/t]): i32 {
+    let state = parser.get().data.ref[request-parser]
+    (state.on-body-complete)(state.user-data, state.body.as-span())
+    // pause at message boundary
+    llhttp/errno:HPE_PAUSED.value.signed()
+  }
+}
+
+type execute-result = either { ok, paused(size), fail(llhttp/errno) }
+
+fn execute(parser: *llhttp/t, bytes: span[u8]): execute-result {
   let result = llhttp/execute(
-    parser = parser.parser.&.as(),
+    parser = parser.as(),
     data   = bytes.data-ptr().opt(),
     len    = bytes.len().unsigned()
   )
   if result is {
     :HPE_OK -> :ok,
     :HPE_PAUSED -> {
-      if parser.data().reject is :some status return :reject status
       let end = bytes.data-ptr().add-bytes(bytes.len())
-      :paused end.diff(llhttp/get_error_pos(parser.parser.&.as()).inner)
+      :paused end.diff(llhttp/get_error_pos(parser.as()).inner)
     },
     _ -> :fail result
+  }
+}
+
+type response-head = { status: u16, headers: list[header-field], content-length: ?u64 }
+
+ns for response-head {
+  fn find-header(self: response-head, name: string): ?string { header-field/find(self.headers.as-span(), name) }
+
+  fn cookies(self: response-head): span[cookie] {
+    let out = list/empty[cookie]()
+    for h in self.headers {
+      if h.name.equals-ignore-ascii-case("Set-Cookie") and cookie/parse-set-cookie(h.value) is :some c { out.push(c) }
+    }
+    out.as-span()
+  }
+
+  fn cookie(self: response-head, name: string): ?cookie {
+    let found: ?cookie = :none
+    for c in self.cookies() { if c.name == name { found = :some c } }
+    found
+  }
+}
+
+type response-parser = {
+  collector: part-collector,
+  parser: llhttp/t,
+  settings: llhttp/settings,
+  head: ?response-head,
+  is-head-request: bool,
+  body-parts: list[span[u8]],
+  is-complete: bool,
+  is-reusable: bool,
+}
+
+ns for response-parser {
+  fn init(self: *response-parser, max-header-size: size) {
+    llhttp/settings_init(self.settings.&.as())
+    self.settings = self.settings | .{
+      on_status                = on-status-part.&,
+      on_header_field          = part-collector/on-header-field.&,
+      on_header_value          = part-collector/on-header-value.&,
+      on_header_value_complete = part-collector/on-header-value-complete.&,
+      on_headers_complete      = on-headers-complete.&,
+      on_body                  = on-body.&,
+      on_message_complete      = on-message-complete.&,
+    }
+    llhttp/init(self.parser.&.as(), :RESPONSE, self.settings.&.as())
+    self.parser.data = self.as[ptr]
+    self.collector.max-size = max-header-size
+  }
+
+  fn begin(self: *response-parser, arena: *arena, is-head-request: bool) {
+    llhttp/reset(self.parser.&.as())
+    self.collector.begin(arena)
+    self.head = :none
+    self.is-head-request = is-head-request
+    self.body-parts = list/empty()
+    self.is-complete = false
+    self.is-reusable = false
+  }
+
+  fn feed(self: *response-parser, bytes: span[u8]): execute-result { execute(self.parser.&, bytes) }
+
+  fn finish(self: *response-parser) {
+    let _ = llhttp/finish(self.parser.&.as())
+  }
+
+  fn on-status-part(parser: optref[llhttp/t], _data: optref[u8], count: usize): i32 {
+    let collector = parser.get().data.ref[part-collector]
+    if collector.count-bytes(count.signed()) 0 else llhttp/errno:HPE_USER.value.signed()
+  }
+
+  fn on-headers-complete(parser: optref[llhttp/t]): i32 {
+    let state = parser.get().data.ref[response-parser]
+    let parser = parser.get()
+    let status = parser.status_code
+    if status < 200 and status != 101 return 0
+    state.head = :some .{
+      status,
+      headers = state.collector.headers,
+      content-length = if parser.flags.widen[u32] & llhttp/flags:F_CONTENT_LENGTH.value != 0 :some parser.content_length else :none,
+    }
+    if state.is-head-request 1 else 0
+  }
+
+  fn on-body(parser: optref[llhttp/t], data: optref[u8], count: usize): i32 {
+    let state = parser.get().data.ref[response-parser]
+    state.collector.push(state.body-parts.&, span/wrap-raw(data.as[ptr], count.signed()))
+    0
+  }
+
+  fn on-message-complete(parser: optref[llhttp/t]): i32 {
+    let state = parser.get().data.ref[response-parser]
+    require state.head is :some head else {
+      state.collector.headers.clear()
+      return 0
+    }
+    state.is-complete = true
+    state.is-reusable = head.status != 101 and llhttp/should_keep_alive(parser).as-bool()
+    llhttp/errno:HPE_PAUSED.value.signed()
   }
 }

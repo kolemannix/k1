@@ -1,3 +1,4 @@
+use std/fd
 use std/files
 fn(test) files-dir-lifecycle-and-errors() {
   let dir = "/tmp/k1-files-test-${std/time/unix-nanos()}"
@@ -8,6 +9,13 @@ fn(test) files-dir-lifecycle-and-errors() {
   files/write-entire-file("$dir/a.txt", "hello").!
   assert-equals(files/read-to-string("$dir/a.txt").!, "hello")
   assert(files/read-to-string("$dir/missing") is :err(e) and e.not-found())
+  assert(files/read-to-string(dir) is :err(_))
+
+  let pipe = fd/pipe().!
+  fd/write-all(pipe.write, "piped".span-bytes()).!
+  fd/close(pipe.write)
+  assert-equals(files/read-to-string("/dev/fd/${pipe.read.raw}").!, "piped")
+  fd/close(pipe.read)
   assert(files/list-dir("$dir/missing") is :err(e) and e.not-found())
 
   files/link("$dir/a.txt", "$dir/b.txt").!

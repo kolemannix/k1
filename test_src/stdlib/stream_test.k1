@@ -35,7 +35,7 @@ fn expect-one(p: pull[int]): int {
 }
 
 fn(test) channel-bounds-wakes-and-fails() {
-  let chan = channel/make[int](
+  let chan = channel/new[int](
     cap-weight = 3,
     weight-fn = fn(_x: int) 1,
     drop-fn = fn(_x: int) .{},
@@ -93,7 +93,7 @@ fn check-rc-retain-release() {
 
 fn check-rc-byte-stream() {
   let payloads: span[rc-bytes] = [heap-bytes/cloned("ab".span-bytes()).to-rc(), heap-bytes/cloned("cde".span-bytes()).to-rc()]
-  let src = source/from-span(payloads, chunk-size = 1) || rc-byte-stream
+  let src = source/through(source/from-span(payloads, chunk-size = 1), rc-byte-stream/new())
   src.start(waker/noop())
   if src.pull() is { :chunk g -> assert-equals(g.[0].len(), 2), _ -> crash("expected chunk") }
   if src.pull() is { :chunk g -> assert-equals(g.[0].len(), 3), _ -> crash("expected chunk") }
@@ -110,7 +110,7 @@ impl mpsc-node for mpsc-test-node {
 }
 
 fn(test) mpsc-takes-fifo-and-wakes-per-batch() {
-  let q = mpsc/make[mpsc-test-node](.{ state = ptr/null, wake-fn = count-wake.& })
+  let q = mpsc/new[mpsc-test-node](.{ state = ptr/null, wake-fn = count-wake.& })
   let a: mpsc-test-node = .{ value = 1, link = null() }
   let b: mpsc-test-node = .{ value = 2, link = null() }
   let c: mpsc-test-node = .{ value = 3, link = null() }

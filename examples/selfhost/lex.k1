@@ -197,7 +197,7 @@ fn char-escape(c: char): ?u8 {
   else :none
 }
 
-fn fmt-align-of(c: char): ?ast/fmt-align {
+fn fmt-align-from(c: char): ?ast/fmt-align {
   if c == '<' :some(:left)
   else if c == '>' :some(:right)
   else if c == '^' :some(:center)
@@ -207,12 +207,6 @@ fn fmt-align-of(c: char): ?ast/fmt-align {
 fn utf8-lead-len(c: char): size {
   let b = c.as-u8()
   if b < 0x80 1 else if b < 0xE0 2 else if b < 0xF0 3 else 4
-}
-
-fn digits-end(text: string, start: size): size {
-  let end = start
-  while end < text.len() and text.[end].is-ascii-digit() { end = end + 1 }
-  end
 }
 
 fn parse-u32(digits: string): ?u32 {
@@ -230,17 +224,17 @@ fn parse-fmt-spec(text: string): ?ast/fmt-spec {
   let fill = " "
   let align: ?ast/fmt-align = :none
   let i: size = 0
-  if first-len < text.len() and fmt-align-of(text.[first-len]) is :some a {
+  if first-len < text.len() and fmt-align-from(text.[first-len]) is :some a {
     fill = text.slice(0, first-len)
     align = :some(a)
     i = first-len + 1
-  } else if fmt-align-of(text.[0]) is :some a {
+  } else if fmt-align-from(text.[0]) is :some a {
     align = :some(a)
     i = 1
   }
   if fill == "{" return :none
-  let width-end = digits-end(text, i)
-  let width-text = text.slice(i, width-end)
+  let width-text = text.drop(i).take-while(fn c. c.is-ascii-digit())
+  let width-end = i + width-text.len()
   if width-text.len() > 1 and width-text.[0] == '0' {
     if align is :some _ return :none
     align = :some(:sign-zeros)
@@ -254,9 +248,9 @@ fn parse-fmt-spec(text: string): ?ast/fmt-spec {
   let precision: ?u32 = :none
   if rest < text.len() {
     if text.[rest] != '.' return :none
-    let precision-end = digits-end(text, rest + 1)
-    if precision-end == rest + 1 or precision-end != text.len() return :none
-    precision = :some(parse-u32(text.slice(rest + 1, precision-end)).try)
+    let precision-text = text.drop(rest + 1).take-while(fn c. c.is-ascii-digit())
+    if precision-text.is-empty() or rest + 1 + precision-text.len() != text.len() return :none
+    precision = :some(parse-u32(precision-text).try)
   }
   :some(.{ fill, align, width, group, precision })
 }
@@ -330,13 +324,10 @@ ns for lexer {
 
   fn fmt-spec-len(self: *lexer): ?u32 {
     let start = self.pos + 1
-    let end = start
-    while end < self.content.len() and self.content.[end] != '}' and self.content.[end] != '\n' {
-      end = end + 1
-    }
-    if end >= self.content.len() or self.content.[end] != '}' return :none
-    if parse-fmt-spec(self.content.slice(start, end)).is-none() return :none
-    :some((end - start).trunc[u32])
+    let spec = self.content.drop(start).take-while(fn c. c != '}' and c != '\n')
+    if not self.content.drop(start + spec.len()).starts-with("}") return :none
+    if parse-fmt-spec(spec).is-none() return :none
+    :some(spec.len().trunc[u32])
   }
 
   fn top-mode(self: *lexer): lex-mode {

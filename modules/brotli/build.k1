@@ -59,16 +59,13 @@ ns tablegen {
 
   fn strip-comments-and-braces(body: string): string {
     let sb = string-builder/new()
-    let i: size = 0
-    while i < body.len() {
-      let c = body.[i]
-      if c == '/' and i + 1 < body.len() and body.[i + 1] == '*' {
-        require body.drop(i + 2).index-of-string("*/") is :some rel else crash("unterminated comment")
-        i = i + 2 + rel + 2
-      } else {
-        if c != '{' and c != '}' sb.write-char(c)
-        i = i + 1
-      }
+    let rest = body
+    loop {
+      let code = rest.split-once("/*")
+      for c in code.before { if c != '{' and c != '}' sb.write-char(c) }
+      require code.after is :some comment else break
+      require comment.split-once("*/").after is :some tail else crash("unterminated comment")
+      rest = tail
     }
     sb.build()
   }
@@ -105,7 +102,7 @@ ns tablegen {
     }
     let body = strip-comments-and-braces(src.slice(init.at + 1, init.at + end-rel))
     let tokens: list[string] = list/empty()
-    for part in body.split-by-char(',') {
+    for part in body.split-by-char-iter(',') {
       let t = trim(part)
       if t.non-empty() tokens.push(t)
     }

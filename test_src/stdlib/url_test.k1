@@ -103,9 +103,9 @@ fn(test) build-and-percent-encode() {
   assert-equals(form/decode("a+b%2B"), "a b+")
 }
 
-fn(test) form-pairs-decode-fields() {
-  let fields = form/pairs("a=1&long=x%20y&b=2&&c").to-list()
+fn(test) form-parse-decodes-fields() {
+  let fields = form/parse("a=1&long=x%20y&b=2&&c")
   assert-equals(fields.len(), 4)
-  assert(pair/find(fields.as-span(), "long") == :some "x y")
-  assert(pair/find(fields.as-span(), "c") == :some "")
+  assert(pair/find(fields, "long") == :some "x y")
+  assert(pair/find(fields, "c") == :some "")
 }
