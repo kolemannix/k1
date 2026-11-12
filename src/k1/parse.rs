@@ -514,10 +514,8 @@ pub struct FieldAccess {
 
 #[derive(Clone, Copy)]
 pub enum StructValueFieldKind {
-    // .{ x = "hello" }
+    // .{ x = "hello" }, and .{ x } as x = x
     Expr(ParsedExprId),
-    // .{ x }
-    VarShorthand,
     // .{ x = uninit }
     Uninit,
 }
@@ -3408,18 +3406,18 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     fn expect_struct_field(&mut self) -> ParseResult<StructValueField> {
         let name = self.expect_kind(K::Ident)?;
         self.emit_semantic_token(name, SemanticTokenKind::Property);
-        let value = if self.maybe_consume(K::Equals).is_some() {
-            if let Some(_t) = self.maybe_consume_ident_chars("uninit") {
-                StructValueFieldKind::Uninit
-            } else {
-                let expr = self.expect_expression()?;
-                StructValueFieldKind::Expr(expr)
-            }
+        let span = self.tok_span(name);
+        let name = self.make_ident(name);
+        let value = if self.maybe_consume(K::Equals).is_none() {
+            let variable = ParsedExpr::Variable(ParsedVariable { name: QIdent::naked(name, span) });
+            StructValueFieldKind::Expr(self.add_expression(variable, span))
+        } else if let Some(_t) = self.maybe_consume_ident_chars("uninit") {
+            StructValueFieldKind::Uninit
         } else {
-            StructValueFieldKind::VarShorthand
+            StructValueFieldKind::Expr(self.expect_expression()?)
         };
 
-        Ok(StructValueField { name: self.make_ident(name), value, span: self.tok_span(name) })
+        Ok(StructValueField { name, value, span })
     }
 
     /// `.{ <name> [= <expr>], ... }`; the leading dot is already consumed
@@ -5804,7 +5802,6 @@ impl ParsedProgram {
                 for (is_last, f) in self.mem.iter_with_is_last(struc.fields) {
                     self.display_ident(w, f.name)?;
                     match f.value {
-                        StructValueFieldKind::VarShorthand => {}
                         StructValueFieldKind::Expr(expr) => {
                             w.write_str(" = ")?;
                             self.display_expr_id(w, expr)?;

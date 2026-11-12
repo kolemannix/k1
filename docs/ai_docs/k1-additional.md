@@ -29,7 +29,7 @@ let(context(impl writer)) out: *string-builder = sb.&  // ability-keyed
   itself, so ref-implemented writers need a ref binding. It also registers under
   its concrete type. Several abilities: most keys hit wins; ties are ambiguous.
 - A context param can't be `some fn`: its type comes from its own arg.
-- A context writer is a region's sink (html components, `html/render`, macro
+- A context writer is a region's sink (html components, `html/markup`, macro
   output, which reaches it as `core/get-context-writer()` instead of assuming the
   caller's name, the `code-builder` a generator's emit fns share as `context cb`);
   a writer a call writes to (`print-to`, `format-uint`, adapters) is a plain param.
@@ -114,14 +114,15 @@ ns pre { macro make-point(name: code) { "type $name = { x: i32, y: i32 }" } }
   `:expr { tokens, spec, source }`. `tok.fail(msg)` errors at the token.
   `token-cursor` (`expect`, `expect-ident`, `eat-until-close`) walks them.
 - Worked examples: `std/html` (`html/write(\{ <p class={c}>{t}</p> })` writes to
-  the context writer, `html/render(\{ ... })` binds one and returns the string;
+  the context writer, `html/markup(\{ ... })` binds one and returns a `dom/node`;
   tag structure checked at compile time; braced attr values: `bool` on boolean
   attrs emits bare/nothing, `opt` omits on `:none`), `std/flag-sum`, `std/string-enum`
   (`$std/string-enum/define(\{ status = either(u8) { new = "New", pending } })`
   emits the enum, `to-value`, `from-value`, `members`, `print`, `from-string`).
 - `std/html/dom`: `node` tree, one fn per tag taking `span[node]` (`:attr` entries
-  are attributes). Tag names collide with locals and the `div` ability: `use
-  std/html/dom as h`.
+  are attributes). A template's `{value}` goes in as markup when its type
+  implements `dom/to-node` (`node` does), escaped text otherwise. Tag names
+  collide with locals and the `div` ability: `use std/html/dom as h`.
 
 ## Reflection and type synthesis
 - `types/id[t]` -> `type-id`: `.name() .schema() .instance-info() .size() .stride()

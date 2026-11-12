@@ -36,6 +36,11 @@ fn(test) type-prefixed-literals() {
   assert-equals(nom-point.{ x = 3, y = 4 }.sum(), 7)
   let w = nom-wrap[int].{ inner = 4 }
   assert-equals(w.inner, 4)
+  let inner = 5: u8
+  let narrow: nom-wrap[u8] = nom-wrap.{ inner = 6 }
+  assert-equals(type-of(nom-wrap.{ inner }), type-of(narrow))
+  assert-equals(nom-wrap.{ inner = nom-wrap.{ inner = "s" } }.inner.inner, "s")
+  assert(test-compile(nom-wrap.{ inner = uninit }).is-some())
   let multi = nom-point.{
     x = 9,
     y = 10,

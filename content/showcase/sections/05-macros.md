@@ -138,12 +138,13 @@ fn todo-item[w: writer](context w)(t: todo) {
 
 Tags and text fold into constant writes at compile time. Holes like
 `{t.title}` are spliced back as `code`, typechecked in place, and HTML-escaped
-as they're written. `#for`, `#if` and `#{ ... }` drop into k1. `render` binds its builder as a
-`writer` context, so a component is just a function writing into that context:
+as they're written. `#for`, `#if` and `#{ ... }` drop into k1. `markup` binds its builder as a
+`writer` context, so a component is just a function writing into that context,
+and returns the result as a `dom/node`:
 
 ```k1
-fn page(user: string, todos: span[todo]): string {
-  html/render(\{
+fn page(user: string, todos: span[todo]): html/dom/node {
+  html/markup(\{
     <main id="todos">
       <h1>Hello, {user}! {todos.len()} things to do</h1>
       <ul>
@@ -170,8 +171,8 @@ fn page(user: string, todos: span[todo]): string {
 The macro checks structure as it expands:
 
 ```k1
-fn card(title: string): string {
-  html/render(\{
+fn card(title: string): html/dom/node {
+  html/markup(\{
     <section>
       <h2>{title}</h2>
       <p>Cards close their tags.</div>
@@ -184,7 +185,7 @@ fn card(title: string): string {
 ┌────────────────────────────────────────╴
 /Users/knix/dev/k1/content/showcase/examples/macro_html_wrong.k1:7:34: error
 ├─────
-│     html/render(\{
+│     html/markup(\{
 │       <section>
 │         <h2>{title}</h2>
 │ ->      <p>Cards close their tags.</div>

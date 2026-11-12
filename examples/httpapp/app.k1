@@ -172,7 +172,7 @@ fn error-response(e: routing/route-error): http-response {
 
 fn home-page(): http-response {
   let styles = std/files/read-to-string("web/styles.css").!
-  response/html(html/render(\{
+  response/html(html/markup(\{
     <!DOCTYPE html>
     <html lang="en">
       <head>
@@ -192,7 +192,7 @@ fn home-page(): http-response {
         <div id="grid"></div>
       </body>
     </html>
-  }))
+  }).to-string())
 }
 
 fn render-big-json(out: *string-builder, rows: size) {

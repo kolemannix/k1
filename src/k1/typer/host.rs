@@ -569,7 +569,7 @@ impl TypedProgram {
                     "configure must be a struct literal keyed by library name"
                 );
             };
-            let configured = self.get_struct_literal(parsed)?;
+            let configured = self.get_struct_literal(parsed, None)?;
             for field in self.ast.mem.getn(configured.fields) {
                 let StructValueFieldKind::Expr(value) = field.value else {
                     kbail!(self, field.span, "configure field '{}' needs a value", field.name);

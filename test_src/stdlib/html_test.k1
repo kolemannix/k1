@@ -3,6 +3,7 @@ use std/html
 use std/html/dom as h
 
 type item = { name: string, n: int }
+impl h/to-node for item { fn to-node(self): h/node { h/li([h/at("data-n", self.n), :text self.name]) } }
 
 fn row[w: writer](context w)(it: item) {
   html/write(\{ <li data-n={it.n}>{it.name}</li> })
@@ -10,51 +11,51 @@ fn row[w: writer](context w)(it: item) {
 
 fn(test) escaping() {
   let s = "<b> & \"q\" 'a'"
-  assert-equals(html/render(\{ <p title={s}>{s}</p> }), "<p title=\"&lt;b&gt; &amp; &quot;q&quot; &#39;a&#39;\">&lt;b&gt; &amp; &quot;q&quot; &#39;a&#39;</p>")
-  assert-equals(html/render(\{ <p>"a < b" & c</p> }), "<p>a &lt; b &amp; c</p>")
-  assert-equals(html/render(\{ <p>aren't 'quoted' rock'n'roll</p> }), "<p>aren&#39;t &#39;quoted&#39; rock&#39;n&#39;roll</p>")
-  assert-equals(html/render(\{ <p>#raw {s}</p> }), "<p><b> & \"q\" 'a'</p>")
-  assert-equals(html/render(\{ <style>{"a > b { }"}</style> }), "<style>a > b { }</style>")
+  assert-equals(html/markup(\{ <p title={s}>{s}</p> }).to-string(), "<p title=\"&lt;b&gt; &amp; &quot;q&quot; &#39;a&#39;\">&lt;b&gt; &amp; &quot;q&quot; &#39;a&#39;</p>")
+  assert-equals(html/markup(\{ <p>"a < b" & c</p> }).to-string(), "<p>a &lt; b &amp; c</p>")
+  assert-equals(html/markup(\{ <p>aren't 'quoted' rock'n'roll</p> }).to-string(), "<p>aren&#39;t &#39;quoted&#39; rock&#39;n&#39;roll</p>")
+  assert-equals(html/markup(\{ <p>#raw {s}</p> }).to-string(), "<p><b> & \"q\" 'a'</p>")
+  assert-equals(html/markup(\{ <style>{"a > b { }"}</style> }).to-string(), "<style>a > b { }</style>")
 }
 
 fn(test) whitespace() {
-  let got = html/render(\{
+  let got = html/markup(\{
     <div>
       Hello, world!
       <b>bold</b> and
       more text
     </div>
   })
-  assert-equals(got, "<div>Hello, world!<b>bold</b> and more text</div>")
+  assert-equals(got.to-string(), "<div>Hello, world!<b>bold</b> and more text</div>")
 }
 
 fn(test) attributes() {
   let x = 7
-  assert-equals(html/render(\{ <input type="text" disabled data-on:click="@get('/x')"/> }), "<input type=\"text\" disabled data-on:click=\"@get(&#39;/x&#39;)\">")
-  assert-equals(html/render(\{ <a href="/p/$x" class=big>go</a> }), "<a href=\"/p/7\" class=\"big\">go</a>")
-  assert-equals(html/render(\{ <p title="t\t$x">"<$x>\n${x:>3}"</p> }), "<p title=\"t\t7\">&lt;7&gt;\n  7</p>")
-  assert-equals(html/render(\{ <div id={x + 1}/> }), "<div id=\"8\"></div>")
+  assert-equals(html/markup(\{ <input type="text" disabled data-on:click="@get('/x')"/> }).to-string(), "<input type=\"text\" disabled data-on:click=\"@get(&#39;/x&#39;)\">")
+  assert-equals(html/markup(\{ <a href="/p/$x" class=big>go</a> }).to-string(), "<a href=\"/p/7\" class=\"big\">go</a>")
+  assert-equals(html/markup(\{ <p title="t\t$x">"<$x>\n${x:>3}"</p> }).to-string(), "<p title=\"t\t7\">&lt;7&gt;\n  7</p>")
+  assert-equals(html/markup(\{ <div id={x + 1}/> }).to-string(), "<div id=\"8\"></div>")
   let on = true
   let t: ?string = :some "a<b"
   let n: ?string = :none
-  assert-equals(html/render(\{ <input checked={on} disabled={not on} aria-invalid={on} title={t} alt={n}/> }), "<input checked aria-invalid=\"true\" title=\"a&lt;b\">")
+  assert-equals(html/markup(\{ <input checked={on} disabled={not on} aria-invalid={on} title={t} alt={n}/> }).to-string(), "<input checked aria-invalid=\"true\" title=\"a&lt;b\">")
 }
 
 fn(test) directives() {
   let items: span[item] = [.{ name = "a", n = 1 }, .{ name = "b&", n = 2 }]
-  let got = html/render(\{
+  let got = html/markup(\{
     <ul>
       #for it in items { #{ row(it) } }
     </ul>
     #if items.len() == 0 { <p>none</p> } else #if items.len() == 1 { <p>one</p> } else { <p>{items.len()} items</p> }
   })
-  assert-equals(got, "<ul><li data-n=\"1\">a</li><li data-n=\"2\">b&amp;</li></ul><p>2 items</p>")
-  assert-equals(html/render(\{ <!DOCTYPE html> <br/> }), "<!DOCTYPE html> <br>")
-  assert-equals(html/render(\{}), "")
+  assert-equals(got.to-string(), "<ul><li data-n=\"1\">a</li><li data-n=\"2\">b&amp;</li></ul><p>2 items</p>")
+  assert-equals(html/markup(\{ <!DOCTYPE html> <br/> }).to-string(), "<!DOCTYPE html> <br>")
+  assert-equals(html/markup(\{}).to-string(), "")
 }
 
 fn(test) mismatched-close-tag-error() {
-  let mismatched: ?string = test-compile(html/render(\{ <div><p>hi</div> }))
+  let mismatched: ?string = test-compile(html/markup(\{ <div><p>hi</div> }))
   assert(mismatched.!.starts-with("</div> does not close <p>"))
 }
 
@@ -64,11 +65,12 @@ fn(test) dom() {
   let n = h/div([h/class("card"), h/at("data-on:click", "@post('/x')"),
     h/ul([h/each(items, fn it. h/li([h/at("data-n", it.n), h/at("checked", it.n == 1), :text it.name]))]),
     h/input([h/at("disabled", true), h/at("title", t), h/at("aria-invalid", false)]),
-    :raw(html/render(\{ <b>raw</b> })),
+    html/markup(\{ <b>raw</b> }),
   ])
   let want = "<div class=\"card\" data-on:click=\"@post(&#39;/x&#39;)\"><ul><li data-n=\"1\" checked>a&lt;b</li><li data-n=\"2\">c</li></ul><input disabled aria-invalid=\"false\"><b>raw</b></div>"
   assert-equals(n.to-string(), want)
-  assert-equals(html/render(\{ <section>{n}</section> }), "<section>$want</section>")
+  assert-equals(html/markup(\{ <section>{n}</section> }).to-string(), "<section>$want</section>")
+  assert-equals(html/markup(\{ <ul>{items.[0]}</ul> }).to-string(), "<ul><li data-n=\"1\">a&lt;b</li></ul>")
   if n is :elem e {
     e.children.push(:text "late")
     e.attrs.push(.{ name = "id", value = :text "x" })

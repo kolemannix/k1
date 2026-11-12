@@ -214,8 +214,11 @@ ns reload {
       },
     }
 
+    let arena = mem/current-arena()
+    let wake-start = arena.mark()
     let last = artifact-hash(artifact)
     loop {
+      arena.pop-to-mark(wake-start)
       if w.wait() is {
         :ok _ -> .{},
         :err e -> {

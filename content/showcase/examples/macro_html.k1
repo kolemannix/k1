@@ -10,8 +10,8 @@ fn todo-item[w: writer](context w)(t: todo) {
   })
 }
 
-fn page(user: string, todos: span[todo]): string {
-  html/render(\{
+fn page(user: string, todos: span[todo]): html/dom/node {
+  html/markup(\{
     <main id="todos">
       <h1>Hello, {user}! {todos.len()} things to do</h1>
       <ul>
@@ -28,6 +28,6 @@ fn main(): i32 {
   ]
   let got = page("Ko", todos)
   println(got)
-  assert(got == "<main id=\"todos\"><h1>Hello, Ko! 2 things to do</h1><ul><li class=\"done\" data-on:click=\"@post(&#39;/toggle&#39;)\">Write a &lt;macro&gt; <small>(done)</small></li><li class=\"open\" data-on:click=\"@post(&#39;/toggle&#39;)\">Watch TV &amp; relax</li></ul></main>")
+  assert(got.to-string() == "<main id=\"todos\"><h1>Hello, Ko! 2 things to do</h1><ul><li class=\"done\" data-on:click=\"@post(&#39;/toggle&#39;)\">Write a &lt;macro&gt; <small>(done)</small></li><li class=\"open\" data-on:click=\"@post(&#39;/toggle&#39;)\">Watch TV &amp; relax</li></ul></main>")
   0
 }

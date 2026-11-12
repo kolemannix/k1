@@ -98,7 +98,7 @@ impl TypedProgram {
         result
     }
 
-    pub(crate) fn infer_generic_type_args(
+    pub(crate) fn infer_generic_instance(
         &mut self,
         generic_type: TypeId,
         expected: Option<TypeId>,
@@ -106,7 +106,7 @@ impl TypedProgram {
         stash: Option<(EvalExprContext, &mut SV8<(ParsedExprId, TypedExprId)>)>,
         span: Span,
         scope_id: ScopeId,
-    ) -> K1Result<TmpSlice<TypeId>> {
+    ) -> K1Result<TypeId> {
         let params = self.types.get(generic_type).expect_generic().params;
         let params_slice = self.mem.getn(params);
         let mut pairs: SV8<InferenceInputPair> = smallvec![];
@@ -129,7 +129,7 @@ impl TypedProgram {
         let solution_pairs: SV4<TypeSubstitutionPair> =
             self.zip_types_to_subst_pairs(params_slice, self.tmp.getn(solutions));
         self.check_type_args_constraints(&solution_pairs, span, scope_id)?;
-        Ok(solutions)
+        Ok(self.instantiate_generic_type(generic_type, self.tmp.getn(solutions)))
     }
 
     pub(crate) fn is_evaluating_for_inference(&self, ctx: EvalExprContext) -> bool {

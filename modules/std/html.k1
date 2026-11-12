@@ -32,8 +32,8 @@ impl[w: writer] writer for escaper[w] {
   }
 }
 
-fn write-escaped[w: writer, t: print](out: w, value: t) {
-  #if types/id[t] == types/id[dom/node] value.print-to(out)
+fn write-escaped[w: writer, t](out: w, value: t) {
+  #if types/id[t].impl-of[dom/to-node]() is :some _ dom/to-node/to-node(value).print-to(out)
   else value.print-to(escaping(out))
 }
 
@@ -61,6 +61,9 @@ ns dom {
   type attr = { name: string, value: either { text(string), present } }
   type element = { tag: string, attrs: list[attr], children: list[node] }
   type node = either { text(string), raw(string), attr(attr), elem(*element), frag(span[node]) }
+
+  ability to-node { fn to-node(self): node }
+  impl to-node for node { fn to-node(self): node { self } }
 
   fn el(tag: string, mods: span[node]): node {
     let e: element = .{ tag, attrs = list/empty(), children = list/empty() }
@@ -154,12 +157,12 @@ macro write(markup: span[code-token]) {
   emit(markup)
 }
 
-macro render(markup: span[code-token]) {
+macro markup(markup: span[code-token]) {
   let cb = code-builder/new()
-  cb.line("let html-render-sb = string-builder/new()")
-  cb.line("let(context(impl writer)) _html-render-out: *string-builder = html-render-sb.&")
+  cb.line("let html-markup-sb = string-builder/new()")
+  cb.line("let(context(impl writer)) _html-markup-out: *string-builder = html-markup-sb.&")
   cb.write-code(emit(markup))
-  cb.line("html-render-sb.build()")
+  cb.line("std/html/dom/node:raw html-markup-sb.build()")
   cb.build()
 }
 

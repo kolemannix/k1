@@ -5294,8 +5294,7 @@ impl TypedProgram {
             let scope = self.scopes.get_scope(scope_id);
             match scope.scope_type {
                 ScopeType::StaticBody
-                    if ctx.is_static()
-                        && self.get_value_from_value_type(v.type_id).is_none() =>
+                    if ctx.is_static() && self.get_value_from_value_type(v.type_id).is_none() =>
                 {
                     kbail!(
                         self,
@@ -5850,17 +5849,17 @@ impl TypedProgram {
             ParsedExpr::ListLiteral(list_expr) => {
                 self.eval_list_literal(expr_id, &list_expr.clone(), ctx)
             }
-            ParsedExpr::Struct(_ast_struct) => {
-                if let Some(expected_type) = ctx.expected_type_id {
-                    if let Type::Struct(_s) = self.types.get(expected_type) {
-                        self.eval_struct_expected(expr_id, None, ctx)
-                    } else {
-                        self.eval_struct_anonymous(expr_id, ctx)
+            ParsedExpr::Struct(_ast_struct) => match ctx.expected_type_id {
+                Some(expected_type) if self.types.get(expected_type).as_struct().is_some() => {
+                    match self.get_instance_info(expected_type) {
+                        Some(gi) if !self.is_type_free_of_holes(expected_type) => {
+                            self.eval_struct_generic(expr_id, gi.generic_parent, ctx)
+                        }
+                        _ => self.eval_struct_expected(expr_id, None, &[], ctx),
                     }
-                } else {
-                    self.eval_struct_anonymous(expr_id, ctx)
                 }
-            }
+                _ => self.eval_struct_anonymous(expr_id, ctx),
+            },
             ParsedExpr::If(if_expr) => self.eval_if_expr(&if_expr.clone(), span, ctx),
             ParsedExpr::While(while_expr) => self.eval_while_loop(&while_expr.clone(), span, ctx),
             ParsedExpr::Loop(loop_expr) => self.eval_loop_expr(&loop_expr.clone(), span, ctx),
@@ -6121,6 +6120,12 @@ impl TypedProgram {
             ParsedExpr::TypeHint(th) => {
                 let th = *th;
                 let type_id = self.eval_type_expr(th.ty, ctx.scope_id)?;
+                if let Type::Generic(g) = self.types.get(type_id)
+                    && self.types.get(g.inner).as_struct().is_some()
+                    && matches!(self.ast.exprs.get(th.inner), ParsedExpr::Struct(_))
+                {
+                    return self.eval_struct_generic(th.inner, type_id, ctx);
+                }
                 let inner = self.eval_expr(th.inner, ctx.with_expected_type(Some(type_id)))?;
                 let allow_addr_of = ctx.is_method_receiver();
                 self.check_and_coerce_expr(type_id, inner, ctx.scope_id, allow_addr_of).map_err(
@@ -6199,9 +6204,6 @@ impl TypedProgram {
     ) -> K1Result<Option<TypedExprId>> {
         let expr = match field.value {
             StructValueFieldKind::Uninit => return Ok(None),
-            StructValueFieldKind::VarShorthand => {
-                self.eval_variable_named(QIdent::naked(field.name, field.span), ctx, false)?.1
-            }
             StructValueFieldKind::Expr(parsed_expr) => self.eval_expr(parsed_expr, ctx)?,
         };
         Ok(Some(self.coerce_to_expected(expr, ctx, true)?))
@@ -6334,13 +6336,24 @@ impl TypedProgram {
         self.synth_container_literal(list_kind, element_type, elements.as_slice(), ctx, span)
     }
 
-    fn get_struct_literal(&self, expr_id: ParsedExprId) -> K1Result<parse::ParsedStruct> {
+    fn get_struct_literal(
+        &mut self,
+        expr_id: ParsedExprId,
+        struct_type: Option<TypeId>,
+    ) -> K1Result<parse::ParsedStruct> {
         let ParsedExpr::Struct(parsed_struct) = *self.ast.exprs.get(expr_id) else {
             self.ice_span(self.ast.exprs.get_span(expr_id), "expected struct")
         };
-        self.check_unique_field_names(self.ast.mem.getn(parsed_struct.fields), |f| {
-            (f.name, f.span)
-        })?;
+        let fields = self.ast.mem.getn(parsed_struct.fields);
+        self.check_unique_field_names(fields, |f| (f.name, f.span))?;
+        if let Some(type_id) = struct_type
+            && fields.iter().any(|f| self.string_is_completion_marker(f.name, true))
+        {
+            self.set_completion_site(CompletionSite::StructField {
+                type_id,
+                parsed_struct_id: expr_id,
+            });
+        }
         Ok(parsed_struct)
     }
 
@@ -6350,7 +6363,7 @@ impl TypedProgram {
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let struct_span = self.ast.exprs.get_span(expr_id);
-        let parsed_struct = self.get_struct_literal(expr_id)?;
+        let parsed_struct = self.get_struct_literal(expr_id, None)?;
         let mut field_values = self.mem.new_list(parsed_struct.fields.len());
         let mut field_defns = self.tmp.new_list(parsed_struct.fields.len());
         for ast_field in self.ast.mem.getn(parsed_struct.fields) {
@@ -6376,15 +6389,51 @@ impl TypedProgram {
         Ok(self.exprs.add(TypedExpr::Struct(typed_struct), struct_type_id, struct_span))
     }
 
+    fn eval_struct_generic(
+        &mut self,
+        expr_id: ParsedExprId,
+        generic: TypeId,
+        ctx: EvalExprContext,
+    ) -> K1Result<TypedExprId> {
+        let struct_span = self.ast.exprs.get_span(expr_id);
+        let generic_body = self.types.get(generic).expect_generic().inner;
+        let parsed_struct = self.get_struct_literal(expr_id, Some(generic_body))?;
+        let generic_fields = self.types.get(generic_body).expect_struct().fields;
+        let mut value_pairs = self.tmp.new_list(parsed_struct.fields.len());
+        for field in self.ast.mem.getn(parsed_struct.fields) {
+            let generic_field = self.mem.getn(generic_fields).iter().find(|f| f.name == field.name);
+            if let (Some(generic_field), StructValueFieldKind::Expr(parsed)) =
+                (generic_field, field.value)
+            {
+                value_pairs.push(InferenceInputPair {
+                    param_type: generic_field.type_id,
+                    arg: TypeOrParsedExpr::Parsed(parsed),
+                    allow_mismatch: false,
+                });
+            }
+        }
+        let mut stashed: SV8<(ParsedExprId, TypedExprId)> = smallvec![];
+        let instance = self.infer_generic_instance(
+            generic,
+            ctx.expected_type_id,
+            &value_pairs,
+            Some((ctx, &mut stashed)),
+            struct_span,
+            ctx.scope_id,
+        )?;
+        self.eval_struct_expected(expr_id, None, &stashed, ctx.with_expected_type(Some(instance)))
+    }
+
     fn eval_struct_expected(
         &mut self,
         expr_id: ParsedExprId,
         patch_base: Option<TypedExprId>,
+        stashed: &[(ParsedExprId, TypedExprId)],
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let struct_span = self.ast.exprs.get_span(expr_id);
-        let parsed_struct = self.get_struct_literal(expr_id)?;
         let expected_struct_id = ctx.expected_type_id.unwrap();
+        let parsed_struct = self.get_struct_literal(expr_id, Some(expected_struct_id))?;
         let Type::Struct(expected_struct) = self.types.get(expected_struct_id) else {
             self.ice_span(struct_span, "expected an expected struct type")
         };
@@ -6400,18 +6449,6 @@ impl TypedProgram {
             )
         }
 
-        if self
-            .ast
-            .mem
-            .getn(parsed_struct.fields)
-            .iter()
-            .any(|f| self.string_is_completion_marker(f.name, true))
-        {
-            self.set_completion_site(CompletionSite::StructField {
-                type_id: expected_struct_id,
-                parsed_struct_id: expr_id,
-            });
-        }
         let field_count = expected_struct.fields.len();
 
         let mut passed_fields_aligned: SV8<(Option<&parse::StructValueField>, Span)> = smallvec![];
@@ -6469,7 +6506,18 @@ impl TypedProgram {
             let passed_expr = match (passed_field, patch_base) {
                 (None, None) => None,
                 (None, Some(base)) => Some(self.synth_field_access(base, field_index, struct_span)),
-                (Some(passed_field), _) => self.eval_struct_field_value(passed_field, field_ctx)?,
+                (Some(passed_field), _) => {
+                    let stashed_value = match passed_field.value {
+                        StructValueFieldKind::Expr(parsed) => {
+                            stashed.iter().find(|(p, _)| *p == parsed).map(|(_, typed)| *typed)
+                        }
+                        _ => None,
+                    };
+                    match stashed_value {
+                        Some(value) => Some(value),
+                        None => self.eval_struct_field_value(passed_field, field_ctx)?,
+                    }
+                }
             };
             if let Some(expr) = passed_expr
                 && self.exprs.get_type(expr) == NEVER_TYPE_ID
@@ -6497,75 +6545,12 @@ impl TypedProgram {
                     span: expected_field.span,
                 });
             }
-            let solved_instance = match self.get_instance_info(expected_struct_id).copied() {
-                None => None,
-                Some(gi) => {
-                    debug!(
-                        "I need to set the right info for {} from expected [{}] and my literal values [{}]",
-                        self.type_id_to_string_ext(
-                            gi.generic_parent,
-                            dump::TypeDisplayMode::Expand
-                        ),
-                        self.pretty_print_types(self.get_type_slice(gi.type_args), ", "),
-                        self.pretty_print_types(
-                            &field_types.iter().map(|ft| ft.type_id).collect::<Vec<_>>(),
-                            ", "
-                        )
-                    );
-                    // We're effectively reverse-engineering what params were used to get to this type
-                    // So we start with: { a: int, b: bool } and definition Pair[A, B] = { a: A, b: B }
-                    // And we need to solve for A and B as int and bool.
-                    let generic_body = self.types.get(gi.generic_parent).expect_generic().inner;
-                    let generic_fields = self.types.get(generic_body).expect_struct().fields;
-                    let mut value_pairs = self.tmp.new_list(generic_fields.len());
-                    for (value, generic_field) in
-                        field_types.iter().zip(self.mem.getn(generic_fields).iter())
-                    {
-                        value_pairs.push(InferenceInputPair {
-                            param_type: generic_field.type_id,
-                            arg: TypeOrParsedExpr::Type(value.type_id),
-                            allow_mismatch: true,
-                        });
-                    }
-                    let solutions = self.infer_generic_type_args(
-                        gi.generic_parent,
-                        Some(expected_struct_id),
-                        &value_pairs,
-                        None,
-                        struct_span,
-                        ctx.scope_id,
-                    )?;
-                    debug!(
-                        "I reverse-engineered these: {}",
-                        self.pretty_print_types(self.tmp.getn(solutions), ", ")
-                    );
-                    let instance =
-                        self.instantiate_generic_type(gi.generic_parent, self.tmp.getn(solutions));
-                    let instance_fields = self.types.get(instance).expect_struct().fields;
-                    let mut fields_match = true;
-                    for (field, instance_field) in
-                        field_types.iter().zip(self.mem.getn(instance_fields))
-                    {
-                        if self
-                            .check_types(instance_field.type_id, field.type_id, ctx.scope_id)
-                            .is_err()
-                        {
-                            fields_match = false;
-                            break;
-                        }
-                    }
-                    if fields_match { Some(instance) } else { None }
-                }
-            };
-            match solved_instance {
-                Some(instance) => instance,
-                None => self.add_type_with_storage(|mem| {
-                    Type::Struct(StructType {
-                        fields: mem.pushn(field_types.as_slice()),
-                        record_kind: expected_struct.record_kind,
-                    })
-                }),
-            }
+            self.add_type_with_storage(|mem| {
+                Type::Struct(StructType {
+                    fields: mem.pushn(field_types.as_slice()),
+                    record_kind: expected_struct.record_kind,
+                })
+            })
         };
 
         let typed_struct = StructLiteral { fields: field_values };
@@ -8364,6 +8349,7 @@ impl TypedProgram {
         let patched = self.eval_struct_expected(
             binary_op.rhs,
             Some(base_ref),
+            &[],
             ctx.with_expected_type(Some(base_type_id)),
         )?;
         self.push_block_expr_id(&mut block, patched);
@@ -10218,21 +10204,18 @@ impl TypedProgram {
                             }
                         }
                     }
-                    Some((generic_variant_payload, payload)) => {
-                        let solutions = self.infer_generic_type_args(
-                            provided_type,
-                            ctx.expected_type_id,
-                            &[InferenceInputPair {
-                                arg: TypeOrParsedExpr::Parsed(payload),
-                                param_type: generic_variant_payload,
-                                allow_mismatch: false,
-                            }],
-                            Some((ctx, &mut stashed_payload)),
-                            span,
-                            ctx.scope_id,
-                        )?;
-                        self.instantiate_generic_type(provided_type, self.tmp.getn(solutions))
-                    }
+                    Some((generic_variant_payload, payload)) => self.infer_generic_instance(
+                        provided_type,
+                        ctx.expected_type_id,
+                        &[InferenceInputPair {
+                            arg: TypeOrParsedExpr::Parsed(payload),
+                            param_type: generic_variant_payload,
+                            allow_mismatch: false,
+                        }],
+                        Some((ctx, &mut stashed_payload)),
+                        span,
+                        ctx.scope_id,
+                    )?,
                 };
 
                 let sum_constr = self.eval_sum_constructor(
