@@ -93,6 +93,15 @@ ns dom {
 
   fn each[t](items: span[t], f: some fn t -> node): node { :frag items.map(f) }
 
+  impl to-string for node {
+    fn to-string(self): string {
+      if self is :raw s return s
+      let sb = string-builder/new()
+      self.print-to(sb.&)
+      sb.build()
+    }
+  }
+
   impl print for node {
     fn print-to[w: writer](self, w) {
       if self is {
@@ -203,7 +212,7 @@ ns for emitter {
   fn text(self: *emitter, s: string) { self.pending.write(s) }
 
   fn flush(self: *emitter) {
-    let s = self.pending.build()
+    let s = self.pending.peek()
     if s.len() == 0 return
     self.cb.write("core/get-context-writer().write(${meta/str-lit(s)})\n")
     self.pending.reset()

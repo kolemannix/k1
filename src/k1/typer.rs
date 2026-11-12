@@ -5849,17 +5849,35 @@ impl TypedProgram {
             ParsedExpr::ListLiteral(list_expr) => {
                 self.eval_list_literal(expr_id, &list_expr.clone(), ctx)
             }
-            ParsedExpr::Struct(_ast_struct) => match ctx.expected_type_id {
-                Some(expected_type) if self.types.get(expected_type).as_struct().is_some() => {
-                    match self.get_instance_info(expected_type) {
-                        Some(gi) if !self.is_type_free_of_holes(expected_type) => {
-                            self.eval_struct_generic(expr_id, gi.generic_parent, ctx)
-                        }
-                        _ => self.eval_struct_expected(expr_id, None, &[], ctx),
+            ParsedExpr::Struct(parsed_struct) => {
+                let nominated_type = match parsed_struct.ty {
+                    Some(ty) => Some(self.eval_type_expr(ty, ctx.scope_id)?),
+                    None => None,
+                };
+                match nominated_type.or(ctx.expected_type_id) {
+                    Some(t)
+                        if matches!(self.types.get(t), Type::Generic(g)
+                            if self.types.get(g.inner).as_struct().is_some()) =>
+                    {
+                        self.eval_struct_generic(expr_id, t, ctx)
                     }
+                    Some(t) if self.types.get(t).as_struct().is_some() => {
+                        match self.get_instance_info(t) {
+                            Some(gi) if !self.is_type_free_of_holes(t) => {
+                                self.eval_struct_generic(expr_id, gi.generic_parent, ctx)
+                            }
+                            _ => {
+                                let struct_ctx = ctx.with_expected_type(Some(t));
+                                self.eval_struct_expected(expr_id, None, &[], struct_ctx)
+                            }
+                        }
+                    }
+                    Some(t) if nominated_type.is_some() => {
+                        kbail!(self, span, "{} is not a struct type", t)
+                    }
+                    _ => self.eval_struct_anonymous(expr_id, ctx),
                 }
-                _ => self.eval_struct_anonymous(expr_id, ctx),
-            },
+            }
             ParsedExpr::If(if_expr) => self.eval_if_expr(&if_expr.clone(), span, ctx),
             ParsedExpr::While(while_expr) => self.eval_while_loop(&while_expr.clone(), span, ctx),
             ParsedExpr::Loop(loop_expr) => self.eval_loop_expr(&loop_expr.clone(), span, ctx),
@@ -6120,12 +6138,6 @@ impl TypedProgram {
             ParsedExpr::TypeHint(th) => {
                 let th = *th;
                 let type_id = self.eval_type_expr(th.ty, ctx.scope_id)?;
-                if let Type::Generic(g) = self.types.get(type_id)
-                    && self.types.get(g.inner).as_struct().is_some()
-                    && matches!(self.ast.exprs.get(th.inner), ParsedExpr::Struct(_))
-                {
-                    return self.eval_struct_generic(th.inner, type_id, ctx);
-                }
                 let inner = self.eval_expr(th.inner, ctx.with_expected_type(Some(type_id)))?;
                 let allow_addr_of = ctx.is_method_receiver();
                 self.check_and_coerce_expr(type_id, inner, ctx.scope_id, allow_addr_of).map_err(
@@ -8221,7 +8233,12 @@ impl TypedProgram {
         use BinaryOpKind as K;
         match binary_op.op_kind {
             K::Pipe => self.eval_pipe_expr(binary_op.lhs, binary_op.rhs, ctx, span),
-            K::BitOr if matches!(self.ast.exprs.get(binary_op.rhs), ParsedExpr::Struct(_)) => {
+            K::BitOr
+                if matches!(
+                    self.ast.exprs.get(binary_op.rhs),
+                    ParsedExpr::Struct(parse::ParsedStruct { ty: None, .. })
+                ) =>
+            {
                 self.eval_struct_patch(binary_op, span, ctx)
             }
             K::OptionalElse => self.eval_optional_else(binary_op.lhs, binary_op.rhs, ctx, span),

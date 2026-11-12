@@ -276,7 +276,7 @@ pub(crate) struct BuiltinFunctions {
     pub ScalarCmp_gt: QIdent,
     pub ScalarCmp_ge: QIdent,
     pub StringBuilder_new: QIdent,
-    pub StringBuilder_take: QIdent,
+    pub StringBuilder_build: QIdent,
     pub CodeBuilder_new: QIdent,
     pub CodeBuilder_build: QIdent,
     pub CodeBuilder_write_code: QIdent,
@@ -742,7 +742,7 @@ impl IdentPool {
 
         let path_stringbuilder = intern_path!(b.core, b.string_builder);
         let StringBuilder_new: QIdent = make_fn!(path_stringbuilder, intern!("new"));
-        let StringBuilder_take: QIdent = make_fn!(path_stringbuilder, intern!("take"));
+        let StringBuilder_build: QIdent = make_fn!(path_stringbuilder, intern!("build"));
 
         let path_codebuilder = intern_path!(b.core, b.code_builder);
         let CodeBuilder_new: QIdent = make_fn!(path_codebuilder, intern!("new"));
@@ -803,7 +803,7 @@ impl IdentPool {
             ScalarCmp_gt,
             ScalarCmp_ge,
             StringBuilder_new,
-            StringBuilder_take,
+            StringBuilder_build,
             CodeBuilder_new,
             CodeBuilder_build,
             CodeBuilder_write_code,

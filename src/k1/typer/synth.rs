@@ -1127,16 +1127,16 @@ impl TypedProgram {
             ctx,
         )?;
         self.push_block_expr_id(&mut block, format_block);
-        let take_call = self.synth_typed_call_typed_args(
-            self.ast.idents.f.StringBuilder_take.with_span(span),
+        let build_call = self.synth_typed_call_typed_args(
+            self.ast.idents.f.StringBuilder_build.with_span(span),
             &[],
             &[string_builder_expr],
             ctx_for_calls,
             false,
         )?;
-        self.push_block_expr_id(&mut block, take_call);
+        self.push_block_expr_id(&mut block, build_call);
 
-        let string_type = self.exprs.get_type(take_call);
+        let string_type = self.exprs.get_type(build_call);
         Ok(self.exprs.add_block(block, string_type))
     }
 

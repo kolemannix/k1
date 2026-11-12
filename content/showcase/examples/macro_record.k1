@@ -35,7 +35,7 @@ fn main(): i32 {
   let sb = string-builder/new()
   p.write-row(sb.&)
   println(point/describe())
-  println(sb.build())
+  println(sb.peek())
   assert-equals(point/describe(), "x: i64, label: string, note: opt[string]")
   assert-equals(sb.build(), "x=1 label=a note=-")
   0

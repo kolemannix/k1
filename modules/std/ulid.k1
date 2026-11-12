@@ -12,7 +12,7 @@ fn generate(): string {
     for 0.until(5) { bits = (bits << 8) | random.[half + it].widen[u64] }
     write-crockford-base32(out.&, bits, 8)
   }
-  out.take()
+  out.build()
 }
 
 fn is-valid(text: string): bool {

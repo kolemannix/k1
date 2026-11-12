@@ -281,7 +281,7 @@ ns for url {
     }
     let path-out = string-builder/with-capacity(self.path().len())
     percent/write-normalized(path-out.&, self.path(), :path, lower = false)
-    let path = path-out.take()
+    let path = path-out.build()
     if path.starts-with("/") { path = remove-dot-segments(path) }
     if path.is-empty() and self.authority-start != 0 { path = "/" }
     w.write(path)
@@ -293,7 +293,7 @@ ns for url {
       w.write-char('#')
       percent/write-normalized(w, f, :query, lower = false)
     }
-    parse(out.take()).!
+    parse(out.build()).!
   }
 
   fn resolve(self, reference: url): url {
@@ -333,7 +333,7 @@ ns for url {
       w.write-char('#')
       w.write(f)
     }
-    parse(out.take()).!
+    parse(out.build()).!
   }
 }
 
@@ -439,7 +439,7 @@ ns for builder {
     percent/write-normalized(self.out.&, text, :query, lower = false)
   }
 
-  fn build(self: *builder): url { parse(self.out.take()).! }
+  fn build(self: *builder): url { parse(self.out.build()).! }
 }
 
 ns percent {
@@ -509,7 +509,7 @@ ns percent {
       i = find-stop(s, start, '%', plus, plus, invisible = false)
     }
     out.write(s.drop(start))
-    out.take()
+    out.build()
   }
 
   fn decode(s: string): string { _decode(s, plus-is-space = false) }
@@ -543,7 +543,7 @@ ns percent {
   fn encode(s: string, allowed: encode-set): string {
     let out = string-builder/new()
     write-encoded(out.&, s, allowed)
-    out.take()
+    out.build()
   }
 
   fn write-normalized[w: writer](out: w, s: string, allowed: encode-set, lower: bool) {

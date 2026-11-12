@@ -562,7 +562,9 @@ impl TypedProgram {
             };
             let file_id = self.add_emitted_source(&content, self.tmp.getn(table), span);
             let parsed = self.with_parser(host, file_id, |p| p.expect_expression())?;
-            let ParsedExpr::Struct(_) = self.ast.exprs.get(parsed) else {
+            let ParsedExpr::Struct(parse::ParsedStruct { ty: None, .. }) =
+                self.ast.exprs.get(parsed)
+            else {
                 kbail!(
                     self,
                     self.ast.exprs.get_span(parsed),

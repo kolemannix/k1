@@ -348,7 +348,7 @@ ns for connection {
         source/through(upstream, chunked-encoder/new())
       },
     }
-    let head-text = out.take()
+    let head-text = out.build()
 
     self.active-stream = :some body
     body.start(.{ state = self.as[ptr], wake-fn = on-wake.& })

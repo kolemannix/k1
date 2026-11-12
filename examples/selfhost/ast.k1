@@ -157,9 +157,9 @@ type field-access = {
   span: src-span,
 }
 
-type struct-field-kind = either { expr-value(expr-id), shorthand, uninit-value }
+type struct-field-kind = either { expr-value(expr-id), uninit-value }
 type struct-field = { name: string-id, span: src-span, value: struct-field-kind }
-type struct-value = { fields: list[struct-field], span: src-span }
+type struct-value = { ty: ?type-expr-id, fields: list[struct-field], span: src-span }
 
 type list-literal = { elements: list[expr-id], span: src-span }
 

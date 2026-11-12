@@ -234,7 +234,7 @@ fn start(args: span[string]): result[string, string] {
   if layout-asserts.list.non-empty() {
     out.writeln("")
     out.writeln("fn(test) c-layouts() {")
-    out.write(layout-asserts.take())
+    out.write(layout-asserts.build())
     out.writeln("}")
   }
 

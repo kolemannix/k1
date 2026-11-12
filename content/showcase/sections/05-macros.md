@@ -758,7 +758,7 @@ $pre/define-record(point, \{ x: int, label: string, note: ?string })
   let sb = string-builder/new()
   p.write-row(sb.&)
   println(point/describe())
-  println(sb.build())
+  println(sb.peek())
 ```
 
 ```text

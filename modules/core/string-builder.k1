@@ -15,13 +15,9 @@ ns for string-builder {
   }
 
   fn build(self: *string-builder): string {
-    self.peek().cloned()
-  }
-
-  fn take(self: *string-builder): string {
-    let taken = self.peek()
+    let built = self.peek()
     self.list = list/empty()
-    taken
+    built
   }
 }
 

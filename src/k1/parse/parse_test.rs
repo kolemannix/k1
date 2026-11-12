@@ -136,9 +136,10 @@ fn zero_literal() -> Result<(), ParseError> {
 #[test]
 fn nominated_literal() -> Result<(), ParseError> {
     let (ast, result) = test_single_expr("point.{ x = 1 }")?;
-    let ParsedExpr::TypeHint(th) = result else { panic!("Expected a type hint") };
-    assert!(matches!(ast.exprs.get(th.inner), ParsedExpr::Struct(_)));
-    assert!(matches!(ast.type_exprs.get(th.ty), ParsedTypeExpr::TypeApplication(_)));
+    let ParsedExpr::Struct(ParsedStruct { ty: Some(ty), .. }) = result else {
+        panic!("Expected a nominated struct")
+    };
+    assert!(matches!(ast.type_exprs.get(ty), ParsedTypeExpr::TypeApplication(_)));
 
     let (ast, result) = test_single_expr("wrap[int].0")?;
     let ParsedExpr::TypeHint(th) = result else { panic!("Expected a type hint") };

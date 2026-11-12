@@ -400,12 +400,12 @@ fn emit-url-arm(context cb: *code-builder)(en: entry) {
     if s is {
       :text t -> lit.write(t),
       :capture f -> {
-        cb.line("w.write(${str-lit(lit.build())})")
+        cb.line("w.write(${str-lit(lit.peek())})")
         lit.reset()
         cb.line("std/url/percent/write-encoded(w, p.${f.name}, :segment)")
       },
       :rest n -> {
-        cb.line("w.write(${str-lit(lit.build())})")
+        cb.line("w.write(${str-lit(lit.peek())})")
         lit.reset()
         cb.line("std/url/percent/write-encoded(w, p.$n, :path)")
       },

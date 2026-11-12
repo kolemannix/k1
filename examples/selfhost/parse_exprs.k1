@@ -402,23 +402,25 @@ ns for parser {
   }
 
   fn expect-struct-field(self: *parser): result[ast/struct-field, perror] {
-    let name = self.expect-kind(:ident).try
-    let value: ast/struct-field-kind = if self.maybe-consume(:equals) is :some _ {
-      if self.maybe-consume-ident-chars("uninit") is :some _ {
-        :uninit-value
-      } else {
-        :expr-value(self.expect-expression().try)
-      }
-    } else :shorthand
-    :ok(.{ name = self.make-ident(name), value, span = name.span() })
+    let name-token = self.expect-kind(:ident).try
+    let span = name-token.span()
+    let name = self.make-ident(name-token)
+    let value: ast/struct-field-kind = if self.maybe-consume(:equals) is :none {
+      :expr-value(self.add-expr(:variable(.{ name = ast/qident/naked(name, span), span })))
+    } else if self.maybe-consume-ident-chars("uninit") is :some _ {
+      :uninit-value
+    } else {
+      :expr-value(self.expect-expression().try)
+    }
+    :ok(.{ name, value, span })
   }
 
-  fn expect-struct-value(self: *parser, dot-token: token): result[ast/struct-value, perror] {
+  fn expect-struct-value(self: *parser, first: token, ty: ?ast/type-expr-id): result[ast/struct-value, perror] {
     self.expect-kind(:open-brace).try
     let fields = list/empty[ast/struct-field]()
     self.eat-delimited("Struct", fields.&, :comma, :close-brace, fn(p: *parser) p.expect-struct-field()).try
-    let span = self.extend-tok-to-here(dot-token)
-    :ok(.{ fields, span })
+    let span = self.extend-tok-to-here(first)
+    :ok(.{ ty, fields, span })
   }
 
   fn parse-static-expr(self: *parser, hash-token: token, maybe-directive: token, condition: ?ast/expr-id): result[?ast/expr-id, perror] {
@@ -491,7 +493,7 @@ ns for parser {
         self.advance()
         :some(self.add-zero-literal(first.span().thru(next.span())))
       } else {
-        let sv = self.expect-struct-value(first).try
+        let sv = self.expect-struct-value(first, :none).try
         :some(self.add-expr(:struct-value(sv)))
       }
     } else if first.kind is :kw-if {
@@ -574,13 +576,12 @@ ns for parser {
     let sigil = self.next-tok()
     if sigil.kind is :colon { return self.parse-variant(first, sigil, :some(ty)) }
     let next = self.peek()
-    let inner = if self.is-zero-literal-tail(next) {
-      self.advance()
-      self.add-zero-literal(sigil.span().thru(next.span()))
-    } else {
-      let sv = self.expect-struct-value(sigil).try
-      self.add-expr(:struct-value(sv))
+    if not self.is-zero-literal-tail(next) {
+      let sv = self.expect-struct-value(first, :some(ty)).try
+      return :ok(self.add-expr(:struct-value(sv)))
     }
+    self.advance()
+    let inner = self.add-zero-literal(sigil.span().thru(next.span()))
     let span = self.extend-tok-to-here(first)
     :ok(self.add-expr(:type-hint(.{ inner, ty, span })))
   }

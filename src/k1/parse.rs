@@ -532,6 +532,7 @@ pub struct StructValueField {
 /// .{ foo = 1, bar = false }
 /// ^.......................^ fields
 pub struct ParsedStruct {
+    pub ty: Option<ParsedTypeExprId>,
     pub fields: AstSlice<StructValueField>,
 }
 impl_copy_if_small!(16, ParsedStruct);
@@ -2772,13 +2773,11 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             return self.parse_variant(first, sigil, Some(ty));
         }
         let next = self.peek();
-        let inner = if self.is_zero_literal_nonspaced(next) {
-            self.advance();
-            let span = self.extend_token_span(sigil, next);
-            self.add_zero_literal(span)
-        } else {
-            self.expect_struct_value(sigil)?
-        };
+        if !self.is_zero_literal_nonspaced(next) {
+            return self.expect_struct_value(first, Some(ty));
+        }
+        self.advance();
+        let inner = self.add_zero_literal(self.extend_token_span(sigil, next));
         let span = self.extend_tok_to_here(first);
         Ok(self.add_expression(ParsedExpr::TypeHint(ParsedTypeHint { inner, ty }), span))
     }
@@ -3420,8 +3419,12 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         Ok(StructValueField { name, value, span })
     }
 
-    /// `.{ <name> [= <expr>], ... }`; the leading dot is already consumed
-    fn expect_struct_value(&mut self, dot_token: Token) -> ParseResult<ParsedExprId> {
+    /// `[type].{ <name> [= <expr>], ... }`; the type and dot are already consumed
+    fn expect_struct_value(
+        &mut self,
+        first: Token,
+        ty: Option<ParsedTypeExprId>,
+    ) -> ParseResult<ParsedExprId> {
         self.expect_kind(K::OpenBrace)?;
         let mut fields = self.ast.mem.new_list(0);
         self.eat_delimited(
@@ -3431,8 +3434,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             K::CloseBrace,
             Parser::expect_struct_field,
         )?;
-        let span = self.extend_tok_to_here(dot_token);
-        let struct_value = ParsedStruct { fields: fields.to_slice_trim(&mut self.ast.mem) };
+        let span = self.extend_tok_to_here(first);
+        let struct_value = ParsedStruct { ty, fields: fields.to_slice_trim(&mut self.ast.mem) };
         Ok(self.add_expression(ParsedExpr::Struct(struct_value), span))
     }
 
@@ -3881,7 +3884,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     let span = self.extend_token_span(first, next);
                     Ok(Some(self.add_zero_literal(span)))
                 } else {
-                    Ok(Some(self.expect_struct_value(first)?))
+                    Ok(Some(self.expect_struct_value(first, None)?))
                 }
             }
             K::KeywordIf => {
@@ -5798,6 +5801,9 @@ impl ParsedProgram {
                 self.display_loop_label(w, c.label)
             }
             ParsedExpr::Struct(struc) => {
+                if let Some(ty) = struc.ty {
+                    self.display_type_expr_id(ty, w)?;
+                }
                 w.write_str(".{ ")?;
                 for (is_last, f) in self.mem.iter_with_is_last(struc.fields) {
                     self.display_ident(w, f.name)?;
