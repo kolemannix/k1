@@ -154,28 +154,28 @@ fn usage() -> String {
 
 Usage: k1 <command> [path] [options] [-- program args | test filters]
 
-  path is a file or a module dir (default: .)
+  path can be a standalone .k1 file, called a single-file module, or a directory that contains a build.k1 file
 
 Commands:
   check, c    Typecheck
-  build, b    Build the executable or library
-  run, r      Build and run; later arguments go to the program (after -- if they
-              start with -)
-  test, t     Run the module's fn(test)s in the VM, then in the test executable;
-              later arguments filter by name substring (after -- if they start
-              with -)
+  build, b    Build the executable or library native object
+  run, r      Build and run; pass program arguments after --
+  test, t     Run the tests, at compile-time then via native executable;
+              filters by name after --
   server      Serve the megarepl for the program
-  setup       Run the module's setup if its stamp is stale
-  clean       Delete the module's .k1-out
+  setup       Run the given module's setup program
+  clean       Delete the given module's .k1-out
   parse       Print one file's tokens as `<start> <len> <class>` lines for highlighting
 
-Build options (fn build sees these as req.default and req.options):
+Build options:
   --target <{targets}>
   --optimize
   --debug              Emit debug info
   --sanitize           Link AddressSanitizer and UndefinedBehaviorSanitizer
   --filc               Compile and link through Fil-C (intel64-linux, needs K1_FILC)
-  -D <name[=value]>    Option for the primary module's fn build
+  -D <[module.]name[=expr]>  Set a module param, overrides 'configure' params;
+                             if module is excluded, primary module is meant
+                             if expr is excluded, 'true' is passed
 
 Test options:
   --skip-static        Skip running the tests in the VM
@@ -184,7 +184,7 @@ Test options:
 Tool options:
   --no-cache           Skip the disk cache
   --emit-llvm          Write <out>/<program>.ll
-  --dump-module        Write the typed program as text
+  --dump-module        Write the full typed program's data structures as text
   --dump-ir            Write the IR codegen consumes
   --dump-idents        Write the identifier pool with stats
   --dump-trace         Write the compile trace as folded stacks
@@ -228,7 +228,7 @@ fn parse_cli() -> Result<Cli, lexopt::Error> {
     let mut target = None;
     let mut force = false;
     let (mut optimize, mut debug, mut sanitize, mut filc) = (false, false, false, false);
-    let mut options = Vec::new();
+    let mut params = Vec::new();
     let mut tools = ToolFlags::default();
     loop {
         if let Some(mut raw) = parser.try_raw_args()
@@ -253,7 +253,7 @@ fn parse_cli() -> Result<Cli, lexopt::Error> {
             Long("debug") => debug = true,
             Long("sanitize") => sanitize = true,
             Long("filc") => filc = true,
-            Short('D') => options.push(parser.value()?.string()?),
+            Short('D') => params.push(parser.value()?.string()?),
             Long("no-cache") => tools.cache = false,
             Long("emit-llvm") => tools.emit_llvm = true,
             Long("dump-module") => tools.dump_module = true,
@@ -324,7 +324,7 @@ fn parse_cli() -> Result<Cli, lexopt::Error> {
     build.debug = debug;
     build.sanitize = sanitize;
     build.filc = filc;
-    request.build.options = options;
+    request.build.params = params;
     request.tools = tools;
     Ok(Cli::Compile(request, program_args))
 }

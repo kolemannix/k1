@@ -30,7 +30,7 @@ ns time {
       :bare -> crash("no wall clock on this platform")
     }
   }
-  fn unix-seconds(): u64 {
-    unix-nanos() / 1_000_000_000
+  fn unix-seconds(): i64 {
+    (unix-nanos() / 1_000_000_000).signed()
   }
 }

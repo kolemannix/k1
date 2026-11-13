@@ -974,8 +974,6 @@ ns k1 {
 
   type command = either(u8) { check, build, run, test, server }
 
-  type option = { name: string, value: string }
-
   type build-config = {
     target: target,
     cpu: string,
@@ -990,7 +988,6 @@ ns k1 {
   type build-request = {
     default: build-config,
     command: command,
-    options: list[option],
     host: opt[target],
     editor: bool,
   }

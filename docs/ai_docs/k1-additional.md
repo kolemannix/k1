@@ -212,7 +212,7 @@ state pointer means a dyn can't cross `#static` into a runtime constant.
   `build.k1` compiles on the host against core+std only. All entry points are
   optional and take their parameter only when they use it:
   - `fn build(req: k1/build-request): k1/build-config`, primary only:
-    `req.default`, `req.options` (`-D name[=value]`), `req.host`, `req.editor`.
+    `req.default`, `req.host`, `req.editor`; reads the program's own params.
     `cpu`/`features` `""` = target default; `b.no-std = true` drops std.
   - `fn editor(req): k1/editor-settings`, primary, editor compiles
     (`test-on-check`).
@@ -237,12 +237,15 @@ state pointer means a dyn can't cross `#static` into a runtime constant.
   `build.k1`, no nesting, and `k1/module-dir()` is its own folder. `k1 test` runs
   the program's and its submodules' tests; the CLI given a submodule folder works
   on the owner.
-- Params: `let params: { f: t } = k1/module-params(defaults)` in a library's
+- Params: `let params: { f: t } = k1/module-params(defaults)` in a module's
   `build.k1`. The program's `configure` is a backtick literal keyed by library
   name (`.{ http = .{ tlog = ${b.optimize} } }`), each value merged over that
-  library's defaults; only the program configures. Final after all manifests
-  run (readable in `fn setup`, not `fn module`). Program code reads `params.f`
-  inside the module, `y/params.f` elsewhere.
+  library's defaults; only the program configures, and never itself. `-D f`,
+  `-D f=expr`, `-D http.tlog=false` merge last, as one more configure literal
+  (no module = the program, no `=expr` = `true`). The program's own are final
+  before its `fn build`; a library's after all manifests run (readable in
+  `fn setup`, not `fn module`). Program code reads `params.f` inside the
+  module, `y/params.f` elsewhere.
 - Plan cached in `.k1-out/cache/plan-*`. The editor compiles the nearest
   `build.k1` at or below the workspace root whose module holds the file, else the
   file alone.

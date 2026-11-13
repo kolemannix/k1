@@ -1,5 +1,0 @@
-fn module(): k1/module {
-  .0 | .{ depend = ["./deps/cfglib"] }
-}
-
-//errmsg: module params are read in fn setup

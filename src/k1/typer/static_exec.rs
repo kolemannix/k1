@@ -664,7 +664,7 @@ impl TypedProgram {
                 ModuleParamsPhase::HostDiscovery => kbail!(
                     self,
                     span,
-                    "module params are read in fn setup; fn module runs before the primary has configured them"
+                    "module params are not final while build.k1 compiles: read the program's from fn build on, a library's in fn setup"
                 ),
                 ModuleParamsPhase::HostSetup => {
                     self.ice_span(span, "module params global was not finalized")

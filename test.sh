@@ -41,6 +41,9 @@ test_src() {
     $k1 setup test_src/http_test
     $k1 setup test_src/tls_test
     target/$profile/k1_test $k1_test_filter
+    $k1 test test_src/module_test -D verbose -D cfglib.backlog=7 -- cli-params | grep -q '1 passed, 0 failed'
+    $k1 test test_src/module_test | grep -q '4 passed, 0 failed'
+    $k1 check test_src/module_test -D bogus 2>&1 | grep -q "unexpected field 'bogus'"
     $k1 --optimize --no-cache test --skip-static test_src/suite1
     $k1 --debug --no-cache test --skip-static test_src/suite1
     $k1_single_thread --optimize --no-cache test test_src/suite1

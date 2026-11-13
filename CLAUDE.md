@@ -59,8 +59,8 @@ They are agent notes: fix a wrong line on sight, never report it or ask.
 - `K1_HOME` locates `modules/`; only `target/debug` binaries default it to the cwd.
 - `--features single-thread`: no threads; `--optimize` is whole-module O3, not ThinLTO.
 - `k1 <check|build|run|test|...> [path] [flags] [-- args | test filters]`: path is a
-  file or module dir, flags go anywhere, `-D name[=value]` reaches the primary's
-  `fn build`. `k1 parse <file>` prints highlight tokens. Output: `<module>/.k1-out/`.
+  file or module dir, flags go anywhere, `-D [module.]name[=expr]` sets a module
+  param. `k1 parse <file>` prints highlight tokens. Output: `<module>/.k1-out/`.
 - `just ts1`: suite1 plain and `--optimize`, the fast check. `just a`:
   `sandbox/sandbox.k1`. `just slophost`: the selfhost parser over every repo `.k1`.
   Rust unit tests: `cargo test --lib --features=llvm-sys/prefer-dynamic,lsp`.

@@ -283,7 +283,7 @@ impl BuildConfig {
 pub struct BuildRequest {
     pub default: BuildConfig,
     pub command: Command,
-    pub options: Vec<String>,
+    pub params: Vec<String>,
     pub host: Option<Target>,
     pub editor: bool,
 }
@@ -306,8 +306,8 @@ impl BuildRequest {
                 &[self.editor as u8],
             ]),
         );
-        for option in &self.options {
-            hash = hash.add(&[option.as_bytes()]);
+        for param in &self.params {
+            hash = hash.add(&[param.as_bytes()]);
         }
         hash
     }
@@ -465,7 +465,7 @@ impl CompileRequest {
         Ok(CompileRequest {
             path,
             strings,
-            build: BuildRequest { default, command, options: Vec::new(), host, editor: false },
+            build: BuildRequest { default, command, params: Vec::new(), host, editor: false },
             tools: ToolFlags::default(),
             k1_home: None,
             lsp: LspCompileOptions::default(),
@@ -1279,6 +1279,9 @@ fn plan_program(
     let src_path = idents.get_string(config.src_path);
     let k1_home = idents.get_string(config.k1_home);
     let is_setup = matches!(config.command, Command::Setup { .. });
+    if !is_dir && !request.params.is_empty() {
+        return Err(CompileProgramError::Build(format!("{src_path} has no params to set with -D")));
+    }
     if !is_dir && !is_setup {
         let resolved = request
             .default

@@ -26,13 +26,20 @@ struct PlanEntry {
     submodule_owner: Option<usize>,
     deps: SV8<usize>,
     ignore: SV8<StringId>,
-    configure_span: Option<Span>,
+    configure_spans: [Option<Span>; 2],
+}
+
+struct ConfigureRequest {
+    module: StringId,
+    name_span: Span,
+    value_span: Span,
+    from_cli: bool,
 }
 
 struct Planner {
     plan: BuildPlan,
     entries: SV8<PlanEntry>,
-    configure_requests: SV8<(StringId, Span, Span)>,
+    configure_requests: SV8<ConfigureRequest>,
 }
 
 impl Planner {
@@ -129,40 +136,28 @@ impl TypedProgram {
             wave += 1;
         }
 
-        // Every manifest has run, so every library the primary configures is known:
-        // evaluate each module's deferred k1/module-params global against them
-        for (name, name_span, value_span) in std::mem::take(&mut planner.configure_requests) {
-            let name = self.ast.idents.get_string(name);
+        // Every manifest has run, so every library the program and -D configure is
+        // known: evaluate each library's deferred k1/module-params global against them
+        for request in std::mem::take(&mut planner.configure_requests) {
+            let name = self.ast.idents.get_string(request.module);
             let Some(index) =
                 planner.entries.iter().position(|e| planner.plan.get(e.module.name) == name)
             else {
                 kbail!(
                     self,
-                    name_span,
-                    "configure names '{}', which is not a library in this build",
+                    request.name_span,
+                    "{} param module name '{}' not found",
+                    if request.from_cli { "-D" } else { "configure" },
                     name
                 )
             };
-            planner.entries[index].configure_span = Some(value_span);
+            planner.entries[index].configure_spans[request.from_cli as usize] =
+                Some(request.value_span);
         }
         self.module_params_phase = ModuleParamsPhase::HostSetup;
-        for global_id in std::mem::take(&mut self.deferred_module_params) {
-            let global = self.globals.get(global_id);
-            let global_scope = self.variables.get(global.variable_id).owner_scope;
-            let Some(index) = planner.entries.iter().position(|e| {
-                e.host.is_some_and(|h| self.modules.get(h).namespace_scope_id == global_scope)
-            }) else {
-                kbail!(
-                    self,
-                    global.span,
-                    "k1/module-params must initialize a top-level global of build.k1"
-                )
-            };
-            let params = self.evaluate_module_params(&mut planner, index, global_id)?;
-            planner.entries[index].module.params = Some(params);
-        }
+        self.evaluate_deferred_module_params(&mut planner)?;
         for entry in &planner.entries {
-            if let Some(span) = entry.configure_span
+            if let Some(span) = entry.configure_spans.into_iter().flatten().next()
                 && entry.module.params.is_none()
             {
                 kbail!(
@@ -206,7 +201,7 @@ impl TypedProgram {
             submodule_owner: None,
             deps: SV8::new(),
             ignore: SV8::new(),
-            configure_span: None,
+            configure_spans: [None; 2],
         });
         let overlay = &self.lsp.source_overlay;
         let build_path = if is_dir {
@@ -251,7 +246,39 @@ impl TypedProgram {
         }
         let build_value = match *build_value {
             Some(value) => value,
-            None => *build_value.insert(self.configure(planner, request)?),
+            None => {
+                // -D args as one more configure literal
+                if !request.params.is_empty() {
+                    let primary = planner.entries[PRIMARY_MODULE_INDEX].module.name;
+                    let primary_name = planner.plan.get(primary);
+                    let host = planner.entries[PRIMARY_MODULE_INDEX].host.unwrap();
+                    let mut params: SV8<(&str, &str, &str)> = SV8::new();
+                    for arg in &request.params {
+                        let (key, value) = arg.split_once('=').unwrap_or((arg, "true"));
+                        let (module, param) = key.split_once('.').unwrap_or((primary_name, key));
+                        params.push((module, param, value));
+                    }
+                    let mut text = String::from(".{ ");
+                    for (i, (module, ..)) in params.iter().enumerate() {
+                        if params[..i].iter().any(|p| p.0 == *module) {
+                            continue;
+                        }
+                        write!(text, "{module} = .{{ ").unwrap();
+                        for (of_module, param, value) in &params {
+                            if of_module == module {
+                                write!(text, "{param} = {value}, ").unwrap();
+                            }
+                        }
+                        text.push_str("}, ");
+                    }
+                    text.push('}');
+                    let build_file = self.modules.get(host).files.as_slice(&self.mem)[0];
+                    let span = Span { global_start: self.ast.sources.get(build_file).base, len: 0 };
+                    self.push_configure_requests(planner, host, true, &text, &[], span)?;
+                }
+                self.evaluate_deferred_module_params(planner)?;
+                *build_value.insert(self.configure(planner, request)?)
+            }
         };
 
         let mut next: Pending = SV8::new();
@@ -486,7 +513,7 @@ impl TypedProgram {
                 submodule_owner: Some(entry_index),
                 deps: SV8::new(),
                 ignore: SV8::new(),
-                configure_span: None,
+                configure_spans: [None; 2],
             });
         }
         let siblings = first_submodule..first_submodule + submodules.len();
@@ -548,37 +575,7 @@ impl TypedProgram {
                     source: self.field_int(*code_span, "source"),
                 });
             }
-            let mut content = String::new();
-            self.write_meta_emission_header(
-                &mut content,
-                EmissionOrigin::Label("configure"),
-                span,
-                None,
-            );
-            let Some((content, table)) =
-                self.build_emitted_source(content, true, text, &code_spans)?
-            else {
-                self.ice_span(span, "configure text was empty")
-            };
-            let file_id = self.add_emitted_source(&content, self.tmp.getn(table), span);
-            let parsed = self.with_parser(host, file_id, |p| p.expect_expression())?;
-            let ParsedExpr::Struct(parse::ParsedStruct { ty: None, .. }) =
-                self.ast.exprs.get(parsed)
-            else {
-                kbail!(
-                    self,
-                    self.ast.exprs.get_span(parsed),
-                    "configure must be a struct literal keyed by library name"
-                );
-            };
-            let configured = self.get_struct_literal(parsed, None)?;
-            for field in self.ast.mem.getn(configured.fields) {
-                let StructValueFieldKind::Expr(value) = field.value else {
-                    kbail!(self, field.span, "configure field '{}' needs a value", field.name);
-                };
-                let value_span = self.ast.exprs.get_span(value);
-                planner.configure_requests.push((field.name, field.span, value_span));
-            }
+            self.push_configure_requests(planner, host, false, text, &code_spans, span)?;
         }
 
         let mut libs: SV8<PlannedLib> = SV8::new();
@@ -621,6 +618,75 @@ impl TypedProgram {
         entry.module.link_args = link_args;
         if has_setup {
             entry.module.setup = Some(PlannedSetup { outputs, inputs });
+        }
+        Ok(())
+    }
+
+    fn push_configure_requests(
+        &mut self,
+        planner: &mut Planner,
+        host: ModuleId,
+        from_cli: bool,
+        text: &str,
+        code_spans: &[K1CodeSpan],
+        span: Span,
+    ) -> K1Result<()> {
+        let label = if from_cli { "-D" } else { "configure" };
+        let mut content = String::new();
+        self.write_meta_emission_header(&mut content, EmissionOrigin::Label(label), span, None);
+        let Some((content, table)) = self.build_emitted_source(content, true, text, code_spans)?
+        else {
+            self.ice_span(span, "configure text was empty")
+        };
+        let file_id = self.add_emitted_source(&content, self.tmp.getn(table), span);
+        let parsed = self.with_parser(host, file_id, |p| p.expect_expression())?;
+        let ParsedExpr::Struct(parse::ParsedStruct { ty: None, .. }) = self.ast.exprs.get(parsed)
+        else {
+            kbail!(
+                self,
+                self.ast.exprs.get_span(parsed),
+                "{} must be a struct literal keyed by library name",
+                label
+            );
+        };
+        let configured = self.get_struct_literal(parsed, None)?;
+        let primary = planner.entries[PRIMARY_MODULE_INDEX].module.name;
+        for field in self.ast.mem.getn(configured.fields) {
+            let StructValueFieldKind::Expr(value) = field.value else {
+                kbail!(self, field.span, "{} field '{}' needs a value", label, field.name);
+            };
+            let value_span = self.ast.exprs.get_span(value);
+            if self.ast.idents.get_string(field.name) != planner.plan.get(primary) {
+                planner.configure_requests.push(ConfigureRequest {
+                    module: field.name,
+                    name_span: field.span,
+                    value_span,
+                    from_cli,
+                });
+            } else if from_cli {
+                planner.entries[PRIMARY_MODULE_INDEX].configure_spans[1] = Some(value_span);
+            } else {
+                kbail!(self, field.span, "configure names the program itself");
+            }
+        }
+        Ok(())
+    }
+
+    fn evaluate_deferred_module_params(&mut self, planner: &mut Planner) -> K1Result<()> {
+        for global_id in std::mem::take(&mut self.deferred_module_params) {
+            let global = self.globals.get(global_id);
+            let global_scope = self.variables.get(global.variable_id).owner_scope;
+            let Some(index) = planner.entries.iter().position(|e| {
+                e.host.is_some_and(|h| self.modules.get(h).namespace_scope_id == global_scope)
+            }) else {
+                kbail!(
+                    self,
+                    global.span,
+                    "k1/module-params must initialize a top-level global of build.k1"
+                )
+            };
+            let params = self.evaluate_module_params(planner, index, global_id)?;
+            planner.entries[index].module.params = Some(params);
         }
         Ok(())
     }
@@ -758,29 +824,14 @@ impl TypedProgram {
         let default = self.encode_build_config(plan, &request.default);
         let command_type = self.field_type(type_id, "command");
         let command = self.enum_named(command_type, request.command.request_name());
-        let options_type = self.field_type(type_id, "options");
-        let option_type = self.get_linear_container_element(options_type).unwrap();
-        let mut options: SV8<StaticValueId> = SV8::new();
-        for option in &request.options {
-            let (name, value) = option.split_once('=').unwrap_or((option, ""));
-            let fields = [("name", self.static_str(name)), ("value", self.static_str(value))];
-            options.push(self.encode_struct(option_type, &fields));
-        }
-        let options =
-            self.add_static_container_from_ids(StaticContainerKind::List, options_type, &options);
         let host_type = self.field_type(type_id, "host");
         let host_sum = *self.types.get(host_type).as_sum().unwrap();
         let target_type = self.mem.getn(host_sum.variants)[OPT_SOME_VARIANT_INDEX].payload.unwrap();
         let host_target = request.host.map(|host| self.enum_named(target_type, host.to_str()));
         let host = synth::synth_static_option(&mut self.static_values, host_type, host_target);
         let editor = StaticValuePool::get_bool_id(request.editor);
-        let fields = [
-            ("default", default),
-            ("command", command),
-            ("options", options),
-            ("host", host),
-            ("editor", editor),
-        ];
+        let fields =
+            [("default", default), ("command", command), ("host", host), ("editor", editor)];
         self.encode_struct(type_id, &fields)
     }
 
@@ -897,9 +948,9 @@ impl TypedProgram {
         let value_expr = global.parsed_expr.unwrap();
         let call_span = self.ast.exprs.get_span(value_expr);
         let args = self.ast.mem.getn(self.find_module_params_call_args(value_expr).unwrap());
-        let configure_span = planner.entries[index].configure_span;
+        let configure_spans = planner.entries[index].configure_spans;
         let defaults = match args {
-            [] if configure_span.is_none() => {
+            [] if configure_spans == [None; 2] => {
                 kbail!(self, call_span, "Module '{}' requires parameters", module_name)
             }
             [] => None,
@@ -912,7 +963,7 @@ impl TypedProgram {
         let mut expr = String::new();
         let mut expr_origins: SV8<TextOrigin> = SV8::new();
         let mut emitted_chunks: SV4<CodeChunkPos> = SV4::new();
-        for span in [defaults, configure_span].into_iter().flatten() {
+        for span in [defaults].into_iter().chain(configure_spans).flatten() {
             if !expr.is_empty() {
                 expr.push_str(" | ");
             }
