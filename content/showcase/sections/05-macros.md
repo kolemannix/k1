@@ -129,16 +129,16 @@ lines of k1:
 ```k1
 fn todo-item[w: writer](context w)(t: todo) {
   html/write(\{
-    <li class={if t.done "done" else "open"} data-on:click="@post('/toggle')">
-      {t.title} #if t.done { <small>"(done)"</small> }
+    <li class=${if t.done "done" else "open"} data-on:click="@post('/toggle')">
+      ${t.title} #if t.done { <small>"(done)"</small> }
     </li>
   })
 }
 ```
 
 Tags and text fold into constant writes at compile time. Holes like
-`{t.title}` are spliced back as `code`, typechecked in place, and HTML-escaped
-as they're written. `#for`, `#if` and `#{ ... }` drop into k1. `markup` binds its builder as a
+`${t.title}` are spliced back as `code`, typechecked in place, and HTML-escaped
+as they're written. `#for`, `#if` and `#do { ... }` drop into k1. `markup` binds a `markup-writer` as its
 `writer` context, so a component is just a function writing into that context,
 and returns the result as a `dom/node`:
 
@@ -146,9 +146,9 @@ and returns the result as a `dom/node`:
 fn page(user: string, todos: span[todo]): html/dom/node {
   html/markup(\{
     <main id="todos">
-      <h1>Hello, {user}! {todos.len()} things to do</h1>
+      <h1>Hello, ${user}! ${todos.len()} things to do</h1>
       <ul>
-        #for t in todos { #{ todo-item(t) } }
+        #for t in todos { #do { todo-item(t) } }
       </ul>
     </main>
   })
@@ -174,7 +174,7 @@ The macro checks structure as it expands:
 fn card(title: string): html/dom/node {
   html/markup(\{
     <section>
-      <h2>{title}</h2>
+      <h2>$title</h2>
       <p>Cards close their tags.</div>
     </section>
   })
@@ -187,7 +187,7 @@ fn card(title: string): html/dom/node {
 ├─────
 │     html/markup(\{
 │       <section>
-│         <h2>{title}</h2>
+│         <h2>$title</h2>
 │ ->      <p>Cards close their tags.</div>
 │                                     ^^^
 │       </section>
@@ -267,11 +267,7 @@ macro define(name: code, rows: span[code-token]) {
   cb.write-code("type $name = either { ")
   cb.join-with(entries, ", ", fn[cb] en. {
     cb.write-token(en.name)
-    if payload-type(en) is :some ty {
-      cb.write("(")
-      cb.write-code(ty)
-      cb.write(")")
-    }
+    if payload-type(en) is :some ty cb.write-code("($ty)")
   })
   cb.write(" }\n")
 
@@ -718,11 +714,7 @@ and writes a `write-row` that prints a missing optional as `-`:
 
 ```k1
   macro define-record(name: code, field-tokens: span[code-token]) {
-    let type-expr = code-builder/new()
-    type-expr.write("types/id[{ ")
-    type-expr.write-tokens(field-tokens)
-    type-expr.write(" }]")
-    let id = meta/eval[types/type-id](type-expr.build())
+    let id = meta/eval[types/type-id]("types/id[{ $field-tokens }]")
     let fields = id.schema().as-struct().!.fields
     let cb-storage = code-builder/new()
     let cb = cb-storage.&
@@ -734,7 +726,7 @@ and writes a `write-row` that prints a missing optional as `-`:
       cb.block("fn write-row[w: writer](self: $name, w)", fn[cb, fields]. {
         for f in fields {
           cb.line(`w.write(${meta/str-lit("${if it-index == 0 "" else " "}${f.name}=")})`)
-          if f.type-id.instance-of[opt] {
+          if f.type-id.is-instance-of[opt] {
             cb.line(`if self.${f.name} is :some v v.print-to(w) else w.write("-")`)
           } else {
             cb.line("self.${f.name}.print-to(w)")

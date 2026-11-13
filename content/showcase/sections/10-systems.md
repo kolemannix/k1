@@ -29,8 +29,8 @@ fn scan-all-simd(text: string): u64 {
 }
 ```
 
-`first-of` is a macro in `std/simd`, and its body is ordinary k1 writing k1
-source into a `code-builder`:
+`first-of` is a macro in `std/simd`, and its body is ordinary k1 filling in a
+block of k1 source:
 
 ```k1 path=modules/std/simd.k1
 macro first-of(name: code, needles: span[char]) {
@@ -39,38 +39,40 @@ macro first-of(name: code, needles: span[char]) {
 ```
 
 The heart of the generator: load a vector, compare against one splatted
-needle per delimiter, OR them, and only on a hit decode the masks.
+needle per delimiter, OR them, and only on a hit decode the masks. One loop
+spells the per-needle lines:
 
 ```k1 path=modules/std/simd.k1
-  code.writeln("    while i + $lanes <= len {")
-  code.writeln("      let chunk = vector/load-unchecked[u8, $lanes](base.ref-at[u8](i).as[ptr])")
   for needles {
-    code.writeln("      let e$it-index = chunk.eq-lanes(needle$it-index)")
-  }
-  code.write("      if e0")
-  for needles {
-    if it-index > 0 code.write(".bit-or(e$it-index)")
-  }
-  code.writeln(".any() {")
-  for needles {
-    code.writeln("        let m$it-index = e$it-index.to-mask()")
-  }
-  code.write("        let lane = m0")
-  for needles {
-    if it-index > 0 code.write(".bit-or(m$it-index)")
-  }
-  code.writeln(".trailing-zeros()")
-  for needles {
-    if it-index < last {
-      code.writeln("        if m$it-index.shift-right(lane.trunc[u32]).bit-and(1) == 1 {")
-      code.writeln("          return .{ index = i + lane.signed(), which = $it-index }")
-      code.writeln("        }")
+    let needle = it.as-u8()
+    splats.writeln("let needle$it-index = vector/splat[u8, $lanes]($needle)")
+    compares.writeln("let e$it-index = chunk.eq-lanes(needle$it-index)")
+    masks.writeln("let m$it-index = e$it-index.to-mask()")
+    if it-index > 0 {
+      any-compare.write(".bit-or(e$it-index)")
+      any-mask.write(".bit-or(m$it-index)")
     }
+    if it-index < last {
+      earlier-hits.writeln("if m$it-index.shift-right(lane.trunc[u32]).bit-and(1) == 1 return .{ index = i + lane.signed(), which = $it-index }")
+    }
+    scalar-hits.writeln("if b == $needle return .{ index = i, which = $it-index }")
   }
-  code.writeln("        return .{ index = i + lane.signed(), which = $last }")
-  code.writeln("      }")
-  code.writeln("      i = i + $lanes")
-  code.writeln("    }")
+```
+
+and the template places them:
+
+```k1 path=modules/std/simd.k1
+        while i + $lanes <= len {
+          let chunk = vector/load-unchecked[u8, $lanes](base.ref-at[u8](i).as[ptr])
+          ${compares.build()}
+          if ${any-compare.build()}.any() {
+            ${masks.build()}
+            let lane = ${any-mask.build()}.trailing-zeros()
+            ${earlier-hits.build()}
+            return .{ index = i + lane.signed(), which = $last }
+          }
+          i = i + $lanes
+        }
 ```
 
 `$lanes` is `k1/simd-bytes`, the target's natural vector width: 16 on

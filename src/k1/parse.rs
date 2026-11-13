@@ -2292,19 +2292,7 @@ impl<'toks, 'ast> Parser<'toks, 'ast> {
             K::Dollar => {
                 let dollar = first;
                 self.advance();
-                let call_first = self.peek();
-                if call_first.is_whitespace_preceded() {
-                    return Err(
-                        self.error_expected("a macro name immediately following '$'", call_first)
-                    );
-                }
-                let call_expr = self.parse_comptime(|p| {
-                    p.emit_semantic_token(dollar, SemanticTokenKind::Operator);
-                    p.expect_expression()
-                })?;
-                if !matches!(self.ast.exprs.get(call_expr), ParsedExpr::Call(_)) {
-                    return Err(self.error_expected("a macro call following '$'", call_first));
-                }
+                let call_expr = self.parse_comptime(|p| p.expect_macro_call(dollar))?;
                 let span = self.extend_tok_to_here(dollar);
                 let start_span = self.tok_span(dollar);
                 let expr_id = self.add_expression(
@@ -3914,6 +3902,10 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                     ),
                 ))
             }
+            K::Dollar => {
+                self.advance();
+                Ok(Some(self.expect_macro_call(first)?))
+            }
             K::BackSlash => {
                 self.advance();
                 let content = if self.peek_kind() == K::OpenBrace {
@@ -4765,6 +4757,36 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         let body = self.expect_expression()?;
         let span = self.extend_tok_to_here(while_token);
         Ok(self.add_expression(ParsedExpr::While(ParsedWhileExpr { label, cond, body }), span))
+    }
+
+    fn expect_macro_call(&mut self, dollar: Token) -> ParseResult<ParsedExprId> {
+        let name_token = self.peek();
+        if name_token.is_whitespace_preceded() || name_token.kind != K::Ident {
+            return Err(self.error_expected("a macro name immediately following '$'", name_token));
+        }
+        self.emit_semantic_token(dollar, SemanticTokenKind::Operator);
+        let name = self.expect_namespaced_ident()?;
+        self.emit_semantic_token_span(name.name_span, SemanticTokenKind::Function);
+        let type_args = if self.peek().is_whitespace_preceded() {
+            MSlice::empty()
+        } else {
+            self.parse_bracketed_type_args()?
+        };
+        let has_parens = self.peek_kind() == K::OpenParen && !self.peek().is_whitespace_preceded();
+        let mut args: List<ParsedCallArg, _> =
+            if has_parens { self.expect_fn_call_args()? } else { self.ast.mem.new_list(0) };
+        let group = self.peek();
+        if group.kind == K::OpenBrace && !group.is_newline_preceded() {
+            let content = self.expect_raw_token_group()?;
+            let code = self.add_expression(ParsedExpr::Code(ParsedCode { content }), content);
+            args.push_grow(&mut self.ast.mem, ParsedCallArg::unnamed(code));
+        } else if !has_parens {
+            return Err(self.error_expected("'(' or '{' after the macro name", group));
+        }
+        let span = self.extend_tok_to_here(dollar);
+        let args = args.to_slice_trim(&mut self.ast.mem);
+        let call = ParsedCall::make(&mut self.ast.mem, name, type_args, args, false);
+        Ok(self.add_expression(ParsedExpr::Call(call), span))
     }
 
     fn expect_raw_token_group(&mut self) -> ParseResult<Span> {

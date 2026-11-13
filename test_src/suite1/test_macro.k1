@@ -140,14 +140,24 @@ macro expr-sum(t: span[code-token]) {
 macro sum-list(t: span[code-token]) {
   let cb = code-builder/new()
   for tok in t {
-    if tok.kind is :punct and tok.text == "," cb.write(" + ") else cb.write-token(tok)
+    if tok.text == "," cb.write(" + ") else cb.write-token(tok)
+  }
+  cb.build()
+}
+
+macro repeat-sum(n: int, t: span[code-token]) {
+  let cb = code-builder/new()
+  cb.write("0")
+  for 0.until(n) {
+    cb.write(" + ")
+    cb.write-tokens(t)
   }
   cb.build()
 }
 
 macro numbers(t: span[code-token]) {
   for tok in t {
-    if not (tok.kind is :number) tok.fail("expected a number, got `${tok.text}`")
+    if not tok.is-number() tok.fail("expected a number, got `${tok.text}`")
   }
   "0"
 }
@@ -165,6 +175,11 @@ fn(test) token-params() {
   assert-equals(s, 7)
   let n: int = numbers(\{ 1 2 3 })
   assert-equals(n, 0)
+  let trailing: int = $sum-list { 1, 2, x }
+  assert-equals(trailing, 7)
+  assert-equals($token-summary { a }.len(), 13)
+  let scaled: int = $repeat-sum(3) { x }
+  assert-equals(scaled, 12)
   let fail: ?string = test-compile(numbers(\{ 1 2 three 4 }))
   assert(fail.!.starts-with("expected a number, got `three`"))
   assert-equals(string-parts(\{ "a\t${x + 1:>2} b $x" }), "[a\t]{3>2}[ b ]{1}")

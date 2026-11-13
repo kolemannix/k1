@@ -86,8 +86,6 @@ fn(inline) hc(bits: size, value: size): u32 { bits.trunc[u32] | (value.trunc[u32
 
 fn(inline) reverse-byte(key: size): size { k-reverse-bits.[key].as-size() }
 
-fn(inline) bit-length(x: size): size { (64u64 - x.unsigned().leading-zeros()).signed() }
-
 fn replicate-value(table: ptr, step: size, end: size, code: u32) {
   let e = end
   loop {
@@ -301,7 +299,7 @@ fn read-huffman-code(d: *decoder, alphabet-size: size, table: ptr): result[size,
   let prefix = br.read(2)
   if prefix == 1 {
     let num-symbols = br.read(2)
-    let max-bits = bit-length(alphabet-size - 1)
+    let max-bits = (alphabet-size - 1).unsigned().bit-length().signed()
     let symbols = array/zeroed[u16, 4]()
     for i in 0.until(num-symbols + 1) {
       let v = br.read(max-bits)

@@ -119,7 +119,10 @@ type http-response = {
 
 ns response {
   fn complete(status: status, content-type: string, body: string): http-response {
-    .{ content-type, extra-headers = .0, body = :complete span/single(body.span-bytes()), status }
+    complete-group(status, content-type, span/single(body.span-bytes()))
+  }
+  fn complete-group(status: status, content-type: string, body: span[span[u8]]): http-response {
+    .{ content-type, extra-headers = .0, body = :complete body, status }
   }
   fn(inline) html(body: string): http-response { complete(:ok, "text/html", body) }
   fn(inline) json(body: string): http-response { complete(:ok, "application/json", body) }

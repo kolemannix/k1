@@ -299,6 +299,26 @@ ns for parser {
     :ok(.{ name, value = expr, is-explicit-context })
   }
 
+  fn expect-macro-call(self: *parser, dollar: token): result[ast/expr-id, perror] {
+    let name-token = self.peek()
+    if name-token.is-ws-preceded() or not (name-token.kind is :ident) {
+      return :err(error-expected("a macro name immediately following '$'", name-token))
+    }
+    let name = self.expect-namespaced-ident().try
+    let type-args: list[ast/type-arg] = if self.peek().is-ws-preceded() list/empty() else self.parse-bracketed-type-args().try.args
+    let has-parens = self.peek().is-kind-nonspaced(:open-paren)
+    let args: list[ast/call-arg] = if has-parens self.expect-fn-call-args().try.args else list/empty()
+    let group = self.peek()
+    if group.kind is :open-brace and not group.is-newline-preceded() {
+      let content = self.expect-raw-token-group().try
+      args.push(.{ name = :none, value = self.add-expr(:code-expr(.{ content, span = content })), is-explicit-context = false })
+    } else if not has-parens {
+      return :err(error-expected("'(' or '{' after the macro name", group))
+    }
+    let span = self.extend-tok-to-here(dollar)
+    :ok(self.add-expr(:call(.{ name, type-args, args, span, is-method = false })))
+  }
+
   fn expect-fn-call-args(self: *parser): result[{ args: list[ast/call-arg], span: ast/src-span }, perror] {
     let first = self.peek()
     let second = self.peek-at(1)
@@ -504,6 +524,9 @@ ns for parser {
       self.eat-delimited("list elements", elements.&, :comma, :close-bracket, fn(p: *parser) p.expect-expression()).try
       let span = self.extend-tok-to-here(first)
       :some(self.add-expr(:list-literal(.{ elements, span })))
+    } else if first.kind is :dollar {
+      self.advance()
+      :some(self.expect-macro-call(first).try)
     } else if first.kind is :back-slash {
       self.advance()
       let content = if self.peek().kind is :open-brace {

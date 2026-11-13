@@ -1,0 +1,160 @@
+ns deftype_test
+
+$std/deftype/string-enum(flow) { income, expense }
+
+$std/deftype/string-enum(status(u8)) {
+  new = "New",
+  in-progress = "In Progress",
+  pending = "Pending ${"Payment"}",
+}
+
+let first-custom: u64 = 0x100
+$std/deftype/flags(option) { names, future, carry }
+$std/deftype/flags(init(u32)) {
+  none = 0,
+  audio = 0x10,
+  video = 0x20,
+  media = audio | video,
+  sound = audio,
+  events,
+  custom = first-custom << 4,
+}
+
+$std/deftype/bitfield(ship(u16)) { shielded, cloaked, damaged, sector-id = 5, foo = 8 }
+
+$std/deftype/flag-sum(shape(u8), [rounded, even]) {
+  circle({ radius: i32 }) = [rounded, even],
+  oval({ rx: i32, ry: i32 }) = [rounded],
+  square({ len: i32 }) = [even],
+  rect({ w: i32, h: i32 }) = [even],
+  line({ len: i32 }),
+  dot,
+}
+
+$std/deftype/flag-sum(tone, [bright, warm]) {
+  red = [warm],
+  orange = [bright, warm],
+  yellow = [bright],
+  navy,
+  sky = [bright],
+  black,
+}
+
+$std/deftype/flag-sum(packet, [small]) {
+  tiny(u8) = [small],
+  big({ a: i64, b: i64 }),
+}
+
+fn(test) string-enum-converts-and-lists-members() {
+  assert-equals[string](flow:income.to-value(), "income")
+  assert-equals[string]("${status:pending}", "Pending Payment")
+  assert-equals[string](status:pending.enum-name(), "pending")
+  assert(flow/from-value("expense") is :some :expense)
+  assert(status/from-value("new") is :none)
+  assert-equals(status/members, [:new, :in-progress, :pending])
+  assert-equals(types/size[status], 1)
+  let bad: result[status, string] = from-string@(status)/from-string("Done")
+  assert(bad is :err msg and msg == "`Done` is not a status; expected one of New, In Progress, Pending Payment")
+}
+
+fn(test) flags-assign-bits-and-combine() {
+  assert-equals(types/size[option], 1)
+  assert-equals(option/carry.bits, 4)
+  let on: option = option/names | option/carry
+  assert(on.has(:carry) and not on.has(:future))
+  assert-equals(on.with(:future, true).with(:names, false).bits, 6)
+  assert(on.has-all(option/names) and not on.has-all(option/names | option/future))
+  assert(on.has-any(option/names | option/future) and not on.has-any(option/future))
+
+  assert-equals(types/size[init], 4)
+  assert-equals(init/media.bits, 0x30)
+  assert-equals(init/events.bits, 0x40)
+  assert-equals(init/custom.bits, 0x1000)
+  assert-equals(init/flag/members.len(), 4)
+  assert-equals(init/flag:video.value, 5)
+  let unnamed = init/from-bits(1)
+  assert-equals[string]("${init/media | init/custom | unnamed}", "audio | video | custom | 1")
+  assert-equals[string]("${init/none}", "0")
+}
+
+fn(test) bitfield-packs-fields-without-clobbering() {
+  let packed: ship = .{ bits = 0b1111_0000_1000_1101 }
+  let built: ship = ship.0.with-foo(0b1111_0000).with-sector-id(17).with-damaged(true).with-shielded(true)
+  assert-equals(built.bits, packed.bits)
+  assert(packed.get-shielded() and not packed.get-cloaked())
+  assert-equals(packed.get-sector-id(), 17)
+  assert-equals(packed.with-sector-id(0).get-foo(), 0b1111_0000)
+  assert-equals(ship/sector-id-mask, 0b1111_1000)
+  assert-equals[string]("${ship.0.with-cloaked(true)}", "shielded=false,cloaked=true,damaged=false,sector-id=0,foo=0")
+}
+
+fn(test) shrunk-subtype-has-no-view() {
+  let t: packet = :tiny(9)
+  assert-equals(t.as-small().!.as-packet().tag, t.tag)
+  assert(types/size[packet-small] < types/size[packet])
+  assert(test-compile(t.view-small()).is-some())
+}
+
+fn(test) tags() {
+  assert-equals((shape:circle(.{ radius = 1 })).tag, 0b011)
+  assert-equals((shape:oval(.{ rx = 1, ry = 2 })).tag, 0b001)
+  assert-equals((shape:square(.{ len = 1 })).tag, 0b010)
+  assert-equals((shape:rect(.{ w = 1, h = 2 })).tag, 0b110)
+  assert-equals((shape:line(.{ len = 1 })).tag, 0b000)
+  assert-equals(shape:dot.tag, 0b100)
+
+  assert-equals(tone:red.value, 0b010)
+  assert-equals(tone:orange.value, 0b011)
+  assert-equals(tone:yellow.value, 0b001)
+  assert-equals(tone:navy.value, 0b000)
+  assert-equals(tone:sky.value, 0b101)
+  assert-equals(tone:black.value, 0b100)
+}
+
+fn(test) predicates() {
+  let c: shape = :circle(.{ radius = 3 })
+  let r: shape = :rect(.{ w = 2, h = 5 })
+  let l: shape = :line(.{ len = 9 })
+  assert(c.rounded() and c.even())
+  assert((not r.rounded()) and r.even())
+  assert((not l.rounded()) and (not l.even()))
+  assert(tone:orange.bright() and tone:orange.warm())
+  assert((not tone:navy.bright()) and (not tone:navy.warm()))
+}
+
+fn(test) narrow() {
+  let c: shape = :circle(.{ radius = 3 })
+  let r: shape = :rect(.{ w = 2, h = 5 })
+  let rounded: shape-rounded = c.as-rounded().!
+  assert(rounded is :circle(p) and p.radius == 3)
+  assert(rounded.even())
+  assert(r.as-rounded() is :none)
+  let even: shape-even = r.as-even().!
+  assert(even is :rect(p) and p.w == 2 and p.h == 5)
+  assert((not even.rounded()))
+  assert-equals(even.tag, r.tag)
+  assert(even.as-shape() is :rect(p) and p.h == 5)
+  assert-equals(even.as-shape().tag, 0b110)
+
+  let s: tone = :sky
+  let bright: tone-bright = s.as-bright().!
+  assert(bright is :sky)
+  assert((not bright.warm()))
+  assert(tone:black.as-bright() is :none)
+  assert(bright.as-tone() is :sky)
+  assert(tone:red.as-warm().!.as-tone() is :red)
+}
+
+fn(test) view() {
+  let r: shape = :rect(.{ w = 2, h = 5 })
+  let r-ref = r.&
+  let even: *shape-even = r-ref.view-even().!
+  assert(even.* is :rect(p) and p.w == 2)
+  assert(r-ref.view-rounded() is :none)
+  if even is :rect(p)* { p.w = 7 }
+  assert(r is :rect(p) and p.w == 7)
+
+  let s: tone = :orange
+  let warm: *tone-warm = s.view-warm().!
+  assert(warm.* is :orange)
+}

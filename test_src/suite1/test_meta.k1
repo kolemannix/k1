@@ -16,6 +16,7 @@ $pre/make-point-macro(my-macro-point)
 $pre/make-point-twice(my-nested-point)
 $pre/define-scaled(3)
 $pre/define-evaluated(evaluated-at-definition, 40 + 2)
+$pre/define-evaluated(evaluated-from-group) { 40 + 3 }
 #meta pre/emit-pi-use()
 #meta { let _ = emitted-pi; "" }
 
@@ -136,6 +137,7 @@ fn(test) meta-generated-code() {
   let _z: my-nested-point = .{ x = 3, y = 4 }
   assert-equals(scaled(5), 15)
   assert-equals(evaluated-at-definition, 42)
+  assert-equals(evaluated-from-group, 43)
   assert-equals(forward-command/name-of(), "forward-command")
   assert-equals(forward-command/tag-of(), 7)
   pre/pi

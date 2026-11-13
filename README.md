@@ -102,8 +102,8 @@ k1 run <(echo 'fn main(): i32 { println("hello k1!"); 0 }')
 
 Let's add a feature to `k1` using metaprogramming to support bitfields.
 [Video Version](https://youtu.be/bSxzW6lGWlc) (the video predates some syntax
-changes; the code below is the current implementation, live at
-`modules/std/bitfield.k1`)
+changes; the code below is the version the video builds, and today's is the
+`bitfield` macro in `modules/std/deftype.k1`)
 
 I'd like to be able to define a bitfield by providing a name, a 'base' integer type
 big enough to house all the fields I provide, and a series of fields as a collection of (name, bit width) pairs.

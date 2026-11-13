@@ -232,12 +232,12 @@ ns internal {
       :reference _ -> cb.line(`self.*.encode[o = o](e)`),
       :struct fields -> {
         let skips = false
-        if o.skip-none { for fields { if it.type-id.instance-of[opt] { skips = true } } }
+        if o.skip-none { for fields { if it.type-id.is-instance-of[opt] { skips = true } } }
         if skips {
           let len = string-builder/new()
           let fixed: size = 0
           for fields {
-            if it.type-id.instance-of[opt] len.write(" + (if self.${it.name} is :some _ 1 else 0)") else { fixed = fixed + 1 }
+            if it.type-id.is-instance-of[opt] len.write(" + (if self.${it.name} is :some _ 1 else 0)") else { fixed = fixed + 1 }
           }
           cb.line(`let n: size = 0`)
           cb.line(`e.begin-map($fixed${len.build()})`)
@@ -248,7 +248,7 @@ ns internal {
           let name = spell-name[e](:field, o.get-field-key(f.name))
           if not skips {
             cb.line(`e.write-field-name($it-index, $name); self.${f.name}.encode[o = o](e)`)
-          } else if f.type-id.instance-of[opt] {
+          } else if f.type-id.is-instance-of[opt] {
             cb.line(`if self.${f.name} is :some x { e.write-field-name(n, $name); x.encode[o = o](e); n = n + 1 }`)
           } else {
             cb.line(`e.write-field-name(n, $name); self.${f.name}.encode[o = o](e); n = n + 1`)
@@ -314,7 +314,7 @@ ns internal {
         } else {
           cb.line(`d.begin-map().try`)
           for f in fields {
-            if f.type-id.instance-of[opt] {
+            if f.type-id.is-instance-of[opt] {
               cb.line(`let v$it-index: ${f.type-id.spell()} = :none`)
             } else {
               cb.line(`let f$it-index: ?${f.type-id.spell()} = :none`)
@@ -326,14 +326,14 @@ ns internal {
           cb.line(`n = n + 1`)
           for f in fields {
             let key = meta/str-lit(o.get-field-key(f.name))
-            let assign = if f.type-id.instance-of[opt] `v$it-index = ${spell-decode(f.type-id)}`
+            let assign = if f.type-id.is-instance-of[opt] `v$it-index = ${spell-decode(f.type-id)}`
               else `f$it-index = :some (${spell-decode(f.type-id)})`
             cb.line(`${if it-index == 0 "if" else "else if"} key == $key { $assign }`)
           }
           cb.line(`${if fields.len() == 0 "" else "else "}{ d.skip-value().try }`)
           cb.line(`}`)
           for f in fields {
-            if not f.type-id.instance-of[opt] {
+            if not f.type-id.is-instance-of[opt] {
               cb.line(`require f$it-index is :some v$it-index else { return d.error(:missing-field ${meta/str-lit(o.get-field-key(f.name))}) }`)
             }
           }

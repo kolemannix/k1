@@ -6,16 +6,16 @@ type item = { name: string, n: int }
 impl h/to-node for item { fn to-node(self): h/node { h/li([h/at("data-n", self.n), :text self.name]) } }
 
 fn row[w: writer](context w)(it: item) {
-  html/write(\{ <li data-n={it.n}>{it.name}</li> })
+  html/write(\{ <li data-n=${it.n}>${it.name}</li> })
 }
 
 fn(test) escaping() {
   let s = "<b> & \"q\" 'a'"
-  assert-equals(html/markup(\{ <p title={s}>{s}</p> }).to-string(), "<p title=\"&lt;b&gt; &amp; &quot;q&quot; &#39;a&#39;\">&lt;b&gt; &amp; &quot;q&quot; &#39;a&#39;</p>")
+  assert-equals(html/markup(\{ <p title=$s>$s</p> }).to-string(), "<p title=\"&lt;b&gt; &amp; &quot;q&quot; &#39;a&#39;\">&lt;b&gt; &amp; &quot;q&quot; &#39;a&#39;</p>")
   assert-equals(html/markup(\{ <p>"a < b" & c</p> }).to-string(), "<p>a &lt; b &amp; c</p>")
   assert-equals(html/markup(\{ <p>aren't 'quoted' rock'n'roll</p> }).to-string(), "<p>aren&#39;t &#39;quoted&#39; rock&#39;n&#39;roll</p>")
   assert-equals(html/markup(\{ <p>#raw {s}</p> }).to-string(), "<p><b> & \"q\" 'a'</p>")
-  assert-equals(html/markup(\{ <style>{"a > b { }"}</style> }).to-string(), "<style>a > b { }</style>")
+  assert-equals(html/markup(\{ <style>${"a > b { }"}</style> }).to-string(), "<style>a > b { }</style>")
 }
 
 fn(test) whitespace() {
@@ -34,24 +34,25 @@ fn(test) attributes() {
   assert-equals(html/markup(\{ <input type="text" disabled data-on:click="@get('/x')"/> }).to-string(), "<input type=\"text\" disabled data-on:click=\"@get(&#39;/x&#39;)\">")
   assert-equals(html/markup(\{ <a href="/p/$x" class=big>go</a> }).to-string(), "<a href=\"/p/7\" class=\"big\">go</a>")
   assert-equals(html/markup(\{ <p title="t\t$x">"<$x>\n${x:>3}"</p> }).to-string(), "<p title=\"t\t7\">&lt;7&gt;\n  7</p>")
-  assert-equals(html/markup(\{ <div id={x + 1}/> }).to-string(), "<div id=\"8\"></div>")
+  assert-equals(html/markup(\{ <div id=${x + 1}/> }).to-string(), "<div id=\"8\"></div>")
   let on = true
   let t: ?string = :some "a<b"
   let n: ?string = :none
-  assert-equals(html/markup(\{ <input checked={on} disabled={not on} aria-invalid={on} title={t} alt={n}/> }).to-string(), "<input checked aria-invalid=\"true\" title=\"a&lt;b\">")
+  assert-equals(html/markup(\{ <input checked=$on disabled=${not on} aria-invalid=$on title=$t alt=$n/> }).to-string(), "<input checked aria-invalid=\"true\" title=\"a&lt;b\">")
 }
 
 fn(test) directives() {
   let items: span[item] = [.{ name = "a", n = 1 }, .{ name = "b&", n = 2 }]
   let got = html/markup(\{
     <ul>
-      #for it in items { #{ row(it) } }
+      #for it in items { #do { row(it) } }
     </ul>
-    #if items.len() == 0 { <p>none</p> } else #if items.len() == 1 { <p>one</p> } else { <p>{items.len()} items</p> }
+    #if items.len() == 0 { <p>none</p> } else #if items.len() == 1 { <p>one</p> } else { <p>${items.len()} items</p> }
   })
   assert-equals(got.to-string(), "<ul><li data-n=\"1\">a</li><li data-n=\"2\">b&amp;</li></ul><p>2 items</p>")
   assert-equals(html/markup(\{ <!DOCTYPE html> <br/> }).to-string(), "<!DOCTYPE html> <br>")
   assert-equals(html/markup(\{}).to-string(), "")
+  assert-equals(html/markup(\{ <p>a #if false {}</p><p>b#if false {} c</p> }).to-string(), "<p>a</p><p>b c</p>")
 }
 
 fn(test) mismatched-close-tag-error() {
@@ -69,8 +70,8 @@ fn(test) dom() {
   ])
   let want = "<div class=\"card\" data-on:click=\"@post(&#39;/x&#39;)\"><ul><li data-n=\"1\" checked>a&lt;b</li><li data-n=\"2\">c</li></ul><input disabled aria-invalid=\"false\"><b>raw</b></div>"
   assert-equals(n.to-string(), want)
-  assert-equals(html/markup(\{ <section>{n}</section> }).to-string(), "<section>$want</section>")
-  assert-equals(html/markup(\{ <ul>{items.[0]}</ul> }).to-string(), "<ul><li data-n=\"1\">a&lt;b</li></ul>")
+  assert-equals(html/markup(\{ <section>$n</section> }).to-string(), "<section>$want</section>")
+  assert-equals(html/markup(\{ <ul>${items.[0]}</ul> }).to-string(), "<ul><li data-n=\"1\">a&lt;b</li></ul>")
   if n is :elem e {
     e.children.push(:text "late")
     e.attrs.push(.{ name = "id", value = :text "x" })
@@ -79,4 +80,27 @@ fn(test) dom() {
   assert(n.to-string().starts-with("<div class=\"card\" data-on:click=\"@post(&#39;/x&#39;)\" id=\"x\">"))
   let baked: string = #static h/p([h/id("s"), :text "1 < 2"]).to-string()
   assert-equals(baked, "<p id=\"s\">1 &lt; 2</p>")
+}
+
+fn(test) markup-keeps-a-large-node-without-copying-it() {
+  let big = html/markup(\{ <ul>#for 0.until(100) { <li>"0123456789"</li> }</ul> })
+  let small = html/markup(\{ <i>hi</i> })
+  let page = html/markup(\{ <main>$small $big<b>end</b></main> })
+  let parts = page.to-string-parts()
+  assert-equals(parts.len(), 3)
+  assert(parts.[1].data-ptr() == big.to-string().span-bytes().data-ptr())
+  assert-equals(page.to-string(), "<main>$small $big<b>end</b></main>")
+}
+
+fn(test) an-optional-value-renders-only-when-present() {
+  let name: ?string = :some "a<b"
+  let badge: ?h/node = :none
+  assert-equals(html/markup(\{ <p>$name$badge</p> }).to-string(), "<p>a&lt;b</p>")
+  assert-equals(html/markup(\{ <p>${h/none}</p> }).to-string(), "<p></p>")
+}
+
+fn(test) an-element-takes-attrs-as-a-value() {
+  let absent: ?string = :none
+  let shared: span[?h/attr] = [h/make-attr("id", "a\"b"), h/make-attr("title", absent), h/make-attr("checked", true)]
+  assert-equals(html/markup(\{ <input type="text" $shared ${h/make-attr("hidden", false)}> }).to-string(), "<input type=\"text\" id=\"a&quot;b\" checked>")
 }

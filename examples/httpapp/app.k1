@@ -181,7 +181,7 @@ fn home-page(): http-response {
         <script type="module" src="../datastar.js"></script>
         <title>k1/d* stress test</title>
         <link id="live-css" rel="stylesheet"/>
-        <style>{styles}</style>
+        <style>$styles</style>
       </head>
       <body>
         <div data-json-signals></div>

@@ -527,6 +527,8 @@ ns for u64 {
     if self <= 1 self else (u64/max-value >> (self - 1).leading-zeros().trunc[u32]) + 1
   }
 
+  fn bit-length(self: u64): u64 { 64 - self.leading-zeros() }
+
   fn bitmask-low(n: size): u64 {
     assert(n <= 64)
     if n == 64 18446744073709551615: u64 else (1usize << n.trunc[u32]) - 1

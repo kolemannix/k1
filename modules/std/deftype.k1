@@ -1,0 +1,366 @@
+ns deftype
+
+macro string-enum(type-name: span[code-token], members: span[code-token]) {
+  let declared = internal/parse-declared-type(type-name)
+  let name = declared.name.text
+  let tag-type: code = if declared.backing is :some uint "($uint)" else ""
+  let members = internal/parse-members(members)
+
+  let values: list[string] = list/with-capacity(members.len())
+  let variants = code-builder/new()
+  let to-value-arms = string-builder/new()
+  let from-value-checks = string-builder/new()
+  for member in members {
+    let variant = member.name.text
+    let value: string = if member.value is :some tokens meta/eval("$tokens") else variant
+    for values {
+      if it == value member.name.fail("Member `$variant` repeats the value `$value` of `${members.[it-index].name.text}`")
+    }
+    values.push(value)
+    let value-lit = meta/str-lit(value)
+    variants.writeln("${member.name},")
+    to-value-arms.writeln(":$variant -> $value-lit,")
+    from-value-checks.writeln("if s == $value-lit return :some :$variant")
+  }
+  let listed = string-builder/new()
+  listed.join(values, ", ")
+  let listed-lit = meta/str-lit(listed.build())
+  let not-a-member = "\"`\$s` is not a $name; expected one of \${$listed-lit}\""
+
+  `
+    type ${declared.name} = either$tag-type {
+      ${variants.build()}
+    }
+    ns for $name {
+      fn to-value(self): string { if self is {
+        ${to-value-arms.build()}
+      } }
+      fn from-value(s: string): ?$name {
+        ${from-value-checks.build()}
+        :none
+      }
+      let members: span[$name] = types/enum@($name)/members()
+    }
+    impl print for $name { fn print-to[w: writer](self, w) { w.write(self.to-value()) } }
+    impl from-string[e = string] for $name {
+      fn from-string(s: string): result[$name, string] {
+        if $name/from-value(s) is :some v :ok v else :err $not-a-member
+      }
+    }
+  `
+}
+
+macro flags(type-name: span[code-token], members: span[code-token]) {
+  let declared = internal/parse-declared-type(type-name)
+  let name = declared.name.text
+  let members = internal/parse-members(members)
+
+  // Evaluate each member's mask; a value sees the members above it
+  let masks: list[u64] = list/with-capacity(members.len())
+  let used: u64 = 0
+  for member in members {
+    let mask: u64 = if member.value is :some tokens {
+      let earlier-masks = string-builder/new()
+      for earlier in members.as-span().take(it-index) {
+        if tokens.exists(fn[earlier] token. token.text == earlier.name.text) {
+          earlier-masks.writeln("let ${earlier.name.text}: u64 = ${masks.[it-index]}")
+        }
+      }
+      meta/eval(`
+        {
+          ${earlier-masks.build()}
+          $tokens
+        }
+      `)
+    } else {
+      let bit = used.bit-length()
+      if bit >= 64 member.name.fail("No bit is left for `${member.name.text}`")
+      (1: u64) << bit.trunc[u32]
+    }
+    masks.push(mask)
+    used = used | mask
+  }
+  let backing = internal/spell-backing-uint(declared.backing, used.bit-length())
+
+  let flag-variants = code-builder/new()
+  let constants = code-builder/new()
+  let flag-bits: u64 = 0
+  for member in members {
+    let mask = masks.[it-index]
+    if mask.count-ones() == 1 and (flag-bits & mask) == 0 {
+      flag-bits = flag-bits | mask
+      flag-variants.writeln("${member.name} = ${mask.trailing-zeros()},")
+    }
+    constants.writeln("let ${member.name}: $name = .{ bits = $mask }")
+  }
+  if flag-bits == 0 declared.name.fail("`$name` needs at least one single-bit member")
+
+  `
+    type ${declared.name} = { bits: $backing }
+    ns for $name {
+      type flag = either(u8) {
+        ${flag-variants.build()}
+      }
+      ns for flag { let members: span[flag] = types/enum@(flag)/members() }
+      ${constants.build()}
+      fn from-bits(bits: $backing): $name     { .{ bits } }
+      fn from-flag(flag): $name               { .{ bits = (1: $backing) << flag.value.widen[u32] } }
+      fn has(self, flag): bool                { (self.bits & from-flag(flag).bits) != 0 }
+      fn with(self, flag, is-on: bool): $name { if is-on self | from-flag(flag) else self & from-flag(flag).bit-not() }
+      fn has-any(self, other: $name): bool    { (self.bits & other.bits) != 0 }
+      fn has-all(self, other: $name): bool    { (self.bits & other.bits) == other.bits }
+    }
+    impl bitwise for $name {
+      fn bit-not(self): $name                 { .{ bits = self.bits.bit-not() } }
+      fn bit-and(self, other: $name): $name   { .{ bits = self.bits & other.bits } }
+      fn bit-or(self, other: $name): $name    { .{ bits = self.bits | other.bits } }
+      fn xor(self, other: $name): $name       { .{ bits = self.bits ^ other.bits } }
+      fn shift-left(self, count: u32): $name  { .{ bits = self.bits << count } }
+      fn shift-right(self, count: u32): $name { .{ bits = self.bits >> count } }
+    }
+    impl print for $name { fn print-to[w: writer](self, w) {
+      let rest = self.bits
+      for flag in $name/flag/members {
+        if self.has(flag) {
+          if rest != self.bits w.write(" | ")
+          w.write(flag.enum-name())
+          rest = rest & $name/from-flag(flag).bits.bit-not()
+        }
+      }
+      if rest != 0 or self.bits == 0 {
+        if rest != self.bits w.write(" | ")
+        w.write("\$rest")
+      }
+    } }
+  `
+}
+
+macro bitfield(type-name: span[code-token], members: span[code-token]) {
+  let declared = internal/parse-declared-type(type-name)
+  let name = declared.name.text
+  let members = internal/parse-members(members)
+
+  let widths: list[u64] = list/with-capacity(members.len())
+  let total: u64 = 0
+  for member in members {
+    let width: u64 = if member.value is :some tokens meta/eval("$tokens") else 1
+    if width < 1 or total + width > 64 {
+      member.name.fail("`${member.name.text}` is $width bits wide at bit $total; a bitfield holds 64")
+    }
+    widths.push(width)
+    total = total + width
+  }
+  let backing = internal/spell-backing-uint(declared.backing, total)
+
+  let accessors = string-builder/new()
+  let printed-fields = string-builder/new()
+  let offset: u64 = 0
+  for member in members {
+    let field = member.name.text
+    let width = widths.[it-index]
+    let low-mask = u64/bitmask-low(width.signed())
+    let mask = low-mask << offset.trunc[u32]
+    let field-type = if width == 1 "bool" else internal/spell-smallest-uint(width)
+    let narrowed = if width == 1 "field == 1" else if field-type == backing "field" else "field.trunc[$field-type]"
+    let widened = if width == 1 "value.as-u8()" else "value"
+    accessors.writeln(`
+      let ${field}-mask: $backing = $mask
+      fn get-$field(self): $field-type {
+        let field = (self.bits >> $offset) & $low-mask
+        $narrowed
+      }
+      fn with-$field(self, value: $field-type): $name {
+        let field: $backing = $widened
+        .{ bits = (self.bits & ${field}-mask.bit-not()) | ((field & $low-mask) << $offset) }
+      }
+    `)
+    let separator = if it-index == 0 "" else ","
+    printed-fields.write("$separator$field=\${self.get-$field()}")
+    offset = offset + width
+  }
+
+  `
+    type ${declared.name} = { bits: $backing }
+    ns for $name {
+      ${accessors.build()}
+    }
+    impl print for $name { fn print-to[w: writer](self, w) { w.write("${printed-fields.build()}") } }
+  `
+}
+
+macro flag-sum(type-name: span[code-token], flag-names: span[code-token], members: span[code-token]) {
+  let declared = internal/parse-declared-type(type-name)
+  let name = declared.name.text
+
+  let flags: list[internal/flag-sum/flag] = list/empty()
+  let flag-cursor = token-cursor/new(flag-names)
+  for internal/flag-sum/parse-names(flag-cursor.&) {
+    if it.text == name it.fail("Flag `${it.text}` is named like the type; `as-${it.text}` would be ambiguous")
+    flags.push(.{ name = it.text, bit = (1: u64) << it-index.trunc[u32] })
+  }
+  if not flag-cursor.is-at-end() flag-cursor.peek().fail("Unexpected `${flag-cursor.peek().text}` after the flag list")
+
+  let variants: list[internal/flag-sum/variant] = list/empty()
+  let is-enum = true
+  let max-tag: u64 = 0
+  let cursor = token-cursor/new(members)
+  if cursor.is-at-end() crash("Expected at least one variant")
+  while not cursor.is-at-end() {
+    let variant = cursor.expect-ident()
+    for variants { if it.name.text == variant.text variant.fail("Duplicate variant `${variant.text}`") }
+    if flags.exists(fn[variant] flag. flag.name == variant.text) {
+      variant.fail("Variant `${variant.text}` is named like a flag; `as-${variant.text}` would be ambiguous")
+    }
+    let payload-tokens: ?span[code-token] = if cursor.peek-text-eq("(") {
+      let open = cursor.eat()
+      is-enum = false
+      :some cursor.eat-until-close(open, ")")
+    } else :none
+    let mask: u64 = 0
+    if cursor.eat-if-text-eq("=") {
+      for flag-name in internal/flag-sum/parse-names(cursor.&) {
+        require flags.find(fn[flag-name] flag. flag.name == flag-name.text) is :some flag else {
+          flag-name.fail("Unknown flag `${flag-name.text}`")
+        }
+        mask = mask | flag.bit
+      }
+    }
+    if not cursor.is-at-end() cursor.expect(",")
+    let ordinal: u64 = 0
+    for variants { if it.mask == mask { ordinal = ordinal + 1 } }
+    let tag = (ordinal << flags.len().trunc[u32]) | mask
+    if tag > max-tag { max-tag = tag }
+    variants.push(.{ name = variant, payload-tokens, mask, tag })
+  }
+  let variants = variants.as-span()
+  let tag-type = internal/spell-backing-uint(declared.backing, max-tag.bit-length())
+
+  let tag-field = if is-enum "value" else "tag"
+  let reinterpreted = "core/types/enum/enum-from-value-unchecked(self.value)"
+  let subtypes = code-builder/new()
+  for flag in flags {
+    if not variants.exists(fn[flag] variant. (variant.mask & flag.bit) != 0) continue
+    let sub = "$name-${flag.name}"
+    let sub-variants = internal/flag-sum/spell-variants(variants, flag.bit)
+    let other-predicates = string-builder/new()
+    for other in flags {
+      if other.bit != flag.bit other-predicates.writeln(internal/flag-sum/spell-predicate(other, tag-field))
+    }
+    let widen-arms = internal/flag-sum/spell-arms(variants, flag.bit, "", "")
+    let narrow-arms = internal/flag-sum/spell-arms(variants, flag.bit, ":some(", ")")
+    let widened = if is-enum reinterpreted else "if self is {\n$widen-arms}"
+    let narrowed = if is-enum "if self.${flag.name}() :some($reinterpreted) else :none" else "if self is {\n${narrow-arms}_ -> :none,\n}"
+    subtypes.writeln(`
+      type $sub = either($tag-type) {
+        $sub-variants
+      }
+      ns for $sub {
+        ${other-predicates.build()}
+        fn as-$name(self): $name { $widened }
+      }
+      ns for $name {
+        fn as-${flag.name}(self): ?$sub { $narrowed }
+      }
+      #if types/size[$sub] == types/size[$name] and types/align[$sub] == types/align[$name] ns for $name {
+        fn view-${flag.name}(self: *$name): ?*$sub { if self.${flag.name}() :some(self.as[ptr].ref[$sub]) else :none }
+      }
+    `)
+  }
+  let all-variants = internal/flag-sum/spell-variants(variants, 0)
+  let predicates = string-builder/new()
+  for flag in flags { predicates.writeln(internal/flag-sum/spell-predicate(flag, tag-field)) }
+
+  `
+    type ${declared.name} = either($tag-type) {
+      $all-variants
+    }
+    ${subtypes.build()}
+    ns for $name {
+      ${predicates.build()}
+    }
+  `
+}
+
+ns internal {
+  ns flag-sum {
+    type flag = { name: string, bit: u64 }
+    type variant = { name: code-token, payload-tokens: ?span[code-token], mask: u64, tag: u64 }
+
+    fn parse-names(cursor: *token-cursor): list[code-token] {
+      cursor.expect("[")
+      let names: list[code-token] = list/empty()
+      while not cursor.eat-if-text-eq("]") {
+        let name = cursor.expect-ident()
+        for names { if it.text == name.text name.fail("`${name.text}` is listed twice") }
+        names.push(name)
+        if not cursor.peek-text-eq("]") cursor.expect(",")
+      }
+      names
+    }
+
+    fn spell-variants(variants: span[variant], bit: u64): code {
+      let cb = code-builder/new()
+      for variants {
+        if (it.mask & bit) != bit continue
+        let payload: code = if it.payload-tokens is :some tokens "($tokens)" else ""
+        cb.writeln("${it.name}$payload = ${it.tag},")
+      }
+      cb.build()
+    }
+
+    fn spell-arms(variants: span[variant], bit: u64, open: string, close: string): string {
+      let arms = string-builder/new()
+      for variants {
+        if (it.mask & bit) != bit continue
+        let pattern = if it.payload-tokens.is-some() ":${it.name.text}(p)" else ":${it.name.text}"
+        arms.writeln("$pattern -> $open$pattern$close,")
+      }
+      arms.build()
+    }
+
+    fn spell-predicate(flag, tag-field: string): string {
+      "fn ${flag.name}(self): bool { (self.$tag-field & ${flag.bit}) != 0 }"
+    }
+  }
+
+  type member-tokens = { name: code-token, value: ?span[code-token] }
+
+  fn parse-declared-type(tokens: span[code-token]): { name: code-token, backing: ?code-token } {
+    let cursor = token-cursor/new(tokens)
+    let name = cursor.expect-ident()
+    let backing: ?code-token = if cursor.eat-if-text-eq("(") {
+      let uint = cursor.expect-ident()
+      cursor.expect(")")
+      :some uint
+    } else :none
+    if not cursor.is-at-end() cursor.peek().fail("Expected `name` or `name(uint-type)`, got `${cursor.peek().text}` after it")
+    .{ name, backing }
+  }
+
+  fn parse-members(tokens: span[code-token]): list[member-tokens] {
+    if tokens.is-empty() crash("Expected at least one member")
+    let cursor = token-cursor/new(tokens)
+    let members: list[member-tokens] = list/empty()
+    while not cursor.is-at-end() {
+      let name = cursor.expect-ident()
+      for members { if it.name.text == name.text name.fail("Duplicate member `${name.text}`") }
+      let value: ?span[code-token] = if cursor.eat-if-text-eq("=") :some cursor.eat-until-unnested(",") else :none
+      members.push(.{ name, value })
+      if not cursor.is-at-end() cursor.expect(",")
+    }
+    members
+  }
+
+  fn spell-smallest-uint(bits: u64): string {
+    if bits <= 8 "u8" else if bits <= 16 "u16" else if bits <= 32 "u32" else "u64"
+  }
+
+  fn spell-backing-uint(declared: ?code-token, needed-bits: u64): string {
+    require declared is :some uint else return spell-smallest-uint(needed-bits)
+    let width: u64 = if uint.text == "u8" 8 else if uint.text == "u16" 16 else if uint.text == "u32" 32 else if uint.text == "u64" 64 else {
+      uint.fail("Expected an unsigned int type, got `${uint.text}`")
+    }
+    if width < needed-bits uint.fail("`${uint.text}` cannot hold $needed-bits bits")
+    uint.text
+  }
+}

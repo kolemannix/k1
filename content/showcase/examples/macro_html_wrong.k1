@@ -3,7 +3,7 @@ use std/html
 fn card(title: string): html/dom/node {
   html/markup(\{
     <section>
-      <h2>{title}</h2>
+      <h2>$title</h2>
       <p>Cards close their tags.</div>
     </section>
   })

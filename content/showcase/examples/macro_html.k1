@@ -4,8 +4,8 @@ type todo = { title: string, done: bool }
 
 fn todo-item[w: writer](context w)(t: todo) {
   html/write(\{
-    <li class={if t.done "done" else "open"} data-on:click="@post('/toggle')">
-      {t.title} #if t.done { <small>"(done)"</small> }
+    <li class=${if t.done "done" else "open"} data-on:click="@post('/toggle')">
+      ${t.title} #if t.done { <small>"(done)"</small> }
     </li>
   })
 }
@@ -13,9 +13,9 @@ fn todo-item[w: writer](context w)(t: todo) {
 fn page(user: string, todos: span[todo]): html/dom/node {
   html/markup(\{
     <main id="todos">
-      <h1>Hello, {user}! {todos.len()} things to do</h1>
+      <h1>Hello, ${user}! ${todos.len()} things to do</h1>
       <ul>
-        #for t in todos { #{ todo-item(t) } }
+        #for t in todos { #do { todo-item(t) } }
       </ul>
     </main>
   })

@@ -82,11 +82,11 @@ ns types {
       layout.size + ptr/get-align-offset(layout.size, layout.align)
     }
     fn align(self: type-id): size { self.info().layout.align }
-    fn(inline) is-instance-of(self: type-id, parent: type-id): bool {
+    fn(inline) is-instance-of-type-id(self: type-id, parent: type-id): bool {
       self.instance-info() is :some info and info.parent == parent
     }
-    fn(inline) instance-of[parent](self: type-id): bool {
-      self.is-instance-of(id[parent])
+    fn(inline) is-instance-of[parent](self: type-id): bool {
+      self.is-instance-of-type-id(id[parent])
     }
     fn(inline) elem-of[parent](self: type-id): ?type-id {
       require self.instance-info() is :some info and info.parent == id[parent] else return :none

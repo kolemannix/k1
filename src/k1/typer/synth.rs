@@ -623,11 +623,31 @@ impl TypedProgram {
         ctx: EvalExprContext,
     ) -> K1Result<TypedExprId> {
         let span = self.exprs.get_span(value);
-        if code_mode && self.expr_type_is_code(value) {
-            if spec.is_some() {
-                kbail!(self, span, "A format spec does not apply to a code value");
+        // Code, token and token-span holes splice with their spans
+        if code_mode {
+            let f = &self.ast.idents.f;
+            let hole_type = self.get_type_family_type(self.exprs.get_type(value));
+            let append_fn = if Some(hole_type) == self.builtin_types.code {
+                Some(f.CodeBuilder_write_code)
+            } else if hole_type == self.builtin_types.code_token() {
+                Some(f.CodeBuilder_write_token)
+            } else if hole_type == self.builtin_types.code_token_span() {
+                Some(f.CodeBuilder_write_tokens)
+            } else {
+                None
+            };
+            if let Some(append_fn) = append_fn {
+                if spec.is_some() {
+                    kbail!(self, span, "A format spec does not apply to a code value");
+                }
+                return self.synth_typed_call_typed_args(
+                    append_fn.with_span(span),
+                    &[],
+                    &[writer, value],
+                    ctx.with_no_expected_type(),
+                    false,
+                );
             }
-            return self.synth_code_append_call(value, writer, ctx);
         }
         let Some(spec) = spec else { return self.synth_print_call(value, writer, None, ctx) };
         let is_number =
@@ -688,22 +708,6 @@ impl TypedProgram {
         )?;
         self.push_block_expr_id(&mut block, align_call);
         Ok(self.exprs.add_block(block, EMPTY_TYPE_ID))
-    }
-
-    pub(super) fn synth_code_append_call(
-        &mut self,
-        code_expr: TypedExprId,
-        writer: TypedExprId,
-        ctx: EvalExprContext,
-    ) -> K1Result<TypedExprId> {
-        let span = self.exprs.get_span(code_expr);
-        self.synth_typed_call_typed_args(
-            self.ast.idents.f.CodeBuilder_write_code.with_span(span),
-            &[],
-            &[writer, code_expr],
-            ctx.with_no_expected_type(),
-            false,
-        )
     }
 
     pub(super) fn synth_string_literal(&mut self, string_id: StringId, span: Span) -> TypedExprId {
@@ -1138,11 +1142,6 @@ impl TypedProgram {
 
         let string_type = self.exprs.get_type(build_call);
         Ok(self.exprs.add_block(block, string_type))
-    }
-
-    fn expr_type_is_code(&self, expr: TypedExprId) -> bool {
-        let type_id = self.get_type_family_type(self.exprs.get_type(expr));
-        Some(type_id) == self.builtin_types.code
     }
 
     pub(super) fn expected_type_is_code(&self, expected: Option<TypeId>) -> bool {

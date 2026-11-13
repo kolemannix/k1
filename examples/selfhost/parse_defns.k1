@@ -635,14 +635,7 @@ ns for parser {
     }
     if first.kind is :dollar {
       self.advance()
-      let call-first = self.peek()
-      if call-first.is-ws-preceded() {
-        return :err(error-expected("a macro name immediately following '$'", call-first))
-      }
-      let call-expr = self.expect-expression().try
-      if not (self.program.get-expr(call-expr).* is :call _) {
-        return :err(error-expected("a macro call following '$'", call-first))
-      }
+      let call-expr = self.expect-macro-call(first).try
       let span = self.extend-tok-to-here(first)
       let expr-id = self.add-expr(:static-expr(.{
         base-expr = call-expr,

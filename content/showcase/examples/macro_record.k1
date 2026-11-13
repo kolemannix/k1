@@ -2,11 +2,7 @@ $pre/define-record(point, \{ x: int, label: string, note: ?string })
 
 ns pre {
   macro define-record(name: code, field-tokens: span[code-token]) {
-    let type-expr = code-builder/new()
-    type-expr.write("types/id[{ ")
-    type-expr.write-tokens(field-tokens)
-    type-expr.write(" }]")
-    let id = meta/eval[types/type-id](type-expr.build())
+    let id = meta/eval[types/type-id]("types/id[{ $field-tokens }]")
     let fields = id.schema().as-struct().!.fields
     let cb-storage = code-builder/new()
     let cb = cb-storage.&
@@ -18,7 +14,7 @@ ns pre {
       cb.block("fn write-row[w: writer](self: $name, w)", fn[cb, fields]. {
         for f in fields {
           cb.line(`w.write(${meta/str-lit("${if it-index == 0 "" else " "}${f.name}=")})`)
-          if f.type-id.instance-of[opt] {
+          if f.type-id.is-instance-of[opt] {
             cb.line(`if self.${f.name} is :some v v.print-to(w) else w.write("-")`)
           } else {
             cb.line("self.${f.name}.print-to(w)")

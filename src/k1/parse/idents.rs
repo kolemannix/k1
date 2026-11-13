@@ -280,6 +280,8 @@ pub(crate) struct BuiltinFunctions {
     pub CodeBuilder_new: QIdent,
     pub CodeBuilder_build: QIdent,
     pub CodeBuilder_write_code: QIdent,
+    pub CodeBuilder_write_token: QIdent,
+    pub CodeBuilder_write_tokens: QIdent,
     pub CodeBuilder_write_spanned: QIdent,
     pub bitwise_and: QIdent,
     pub bitwise_or: QIdent,
@@ -748,6 +750,8 @@ impl IdentPool {
         let CodeBuilder_new: QIdent = make_fn!(path_codebuilder, intern!("new"));
         let CodeBuilder_build: QIdent = make_fn!(path_codebuilder, intern!("build"));
         let CodeBuilder_write_code: QIdent = make_fn!(path_codebuilder, intern!("write-code"));
+        let CodeBuilder_write_token: QIdent = make_fn!(path_codebuilder, intern!("write-token"));
+        let CodeBuilder_write_tokens: QIdent = make_fn!(path_codebuilder, intern!("write-tokens"));
         let CodeBuilder_write_spanned: QIdent =
             make_fn!(path_codebuilder, intern!("write-spanned"));
 
@@ -807,6 +811,8 @@ impl IdentPool {
             CodeBuilder_new,
             CodeBuilder_build,
             CodeBuilder_write_code,
+            CodeBuilder_write_token,
+            CodeBuilder_write_tokens,
             CodeBuilder_write_spanned,
             bitwise_and,
             bitwise_or,

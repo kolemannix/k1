@@ -39,8 +39,8 @@ let(context(impl writer)) out: *string-builder = sb.&  // ability-keyed
   text without a span is sourceless. Errors in spanned bytes point at the original
   source; sourceless ones stay in the generated file with a note naming the call.
 - A string literal (either quote, holes or not) whose expected type is `code`
-  elaborates as `code`: literal parts keep spans, `code` holes splice with spans,
-  other holes print sourceless. `.fmt` works too. Ascribe when nothing expects it:
+  elaborates as `code`: literal parts keep spans, `code`, `code-token` and
+  `span[code-token]` holes splice with spans, other holes print sourceless. `.fmt` works too. Ascribe when nothing expects it:
   `` `1 + 2`: code ``. A string *value* is a type error in `code` position; wrap it
   with `code/from-string(s)` (no alloc). `code` has no `print`; `.text` is the escape.
 - Escapes resolve before emission: `\n` emits a newline; `\\n` emits an escape.
@@ -71,6 +71,8 @@ let(context(impl writer)) out: *string-builder = sb.&  // ability-keyed
 macro debug(e: code) { #if build-debug "log/debug($e)" else "" }   // returns code implicitly
 debug(expensive())                        // expression call site
 $pre/make-point(my-point)                 // definition-level macro call; `$` adjacent to name
+$routes(route) { get home "/" }           // a brace group on a `$` call's line is its last arg, quoted
+let page = $html/markup { <p>"hi"</p> }   // `$` works in expressions too; parens optional before a group
 ns pre { macro make-point(name: code) { "type $name = { x: i32, y: i32 }" } }
 ```
 - Macro params: `code` gets the argument's source and span; `span[code-token]`
@@ -113,14 +115,28 @@ ns pre { macro make-point(name: code) { "type $name = { x: i32, y: i32 }" } }
   token whose `parts` are `:text { value (cooked), source }` and
   `:expr { tokens, spec, source }`. `tok.fail(msg)` errors at the token.
   `token-cursor` (`expect`, `expect-ident`, `eat-until-close`) walks them.
-- Worked examples: `std/html` (`html/write(\{ <p class={c}>{t}</p> })` writes to
+- Worked examples: `std/html` (`html/write(\{ <p class=$c>$t</p> })` writes to
   the context writer, `html/markup(\{ ... })` binds one and returns a `dom/node`;
-  tag structure checked at compile time; braced attr values: `bool` on boolean
-  attrs emits bare/nothing, `opt` omits on `:none`), `std/flag-sum`, `std/string-enum`
-  (`$std/string-enum/define(\{ status = either(u8) { new = "New", pending } })`
-  emits the enum, `to-value`, `from-value`, `members`, `print`, `from-string`).
+  tag structure checked at compile time; `attr=${value}` values: `bool` on boolean
+  attrs emits bare/nothing, `opt` omits on `:none`), `std/deftype`.
+- `std/deftype` macros share one shape, `$std/deftype/kind(name) { members }`: the
+  head is `name` or `name(uint-type)` (smallest fit when unnamed), members are
+  `name` or `name = expr`, each value run by `meta/eval`.
+  - `string-enum(status(u8)) { new = "New", pending }`: the enum, `to-value`,
+    `from-value`, `members`, `print`, `from-string`.
+  - `flags(init(u32)) { audio = 0x10, video, media = audio | video }`: `{ bits: u32 }`,
+    a constant per member (a value is a mask and sees the members above it; a bare
+    one takes the next free bit), `bitwise`, `print`, and `init/flag`, the enum of
+    single-bit members tagged by bit index (`init/flag/members`), with `has(flag)`, `with(flag, is-on)`,
+    `has-any(mask)`, `has-all(mask)`, `from-flag`, `from-bits`. `x | .{ ... }` is
+    still struct update.
+  - `bitfield(ship(u16)) { shielded, sector-id = 5 }`: `{ bits: u16 }`, a value is a
+    bit width (bare is one bit, a `bool`), `get-x`, `with-x`, `x-mask`, `print`.
+  - `flag-sum(shape(u8), [rounded, even]) { circle({ r: i32 }) = [rounded], dot }`:
+    a sum whose tag packs the flags, a predicate per flag, and per flag the subtype
+    `shape-rounded` with `as-rounded`, `as-shape` and, when layouts match, `view-rounded`.
 - `std/html/dom`: `node` tree, one fn per tag taking `span[node]` (`:attr` entries
-  are attributes). A template's `{value}` goes in as markup when its type
+  are attributes). A template's `${value}` (or `$name`) goes in as markup when its type
   implements `dom/to-node` (`node` does), escaped text otherwise. Tag names
   collide with locals and the `div` ability: `use std/html/dom as h`.
 
@@ -136,7 +152,7 @@ ns pre { macro make-point(name: code) { "type $name = { x: i32, y: i32 }" } }
   names each impl param's type; a given impl param must match. Runs only in the
   VM: runtime code wraps it in `#static`.
 - A bare generic name is a type: `types/id[list]` is `list[t]`; instances report it
-  as parent (`types/instance-info[list[int]]`, `.instance-of[list]`; `.elem-of[list]` is
+  as parent (`types/instance-info[list[int]]`, `.is-instance-of[list]`; `.elem-of[list]` is
   `:some` its first arg).
 - Fn member types: a fn name in type position is its `type-of(do-it)`, displayed
   `fn do-it` (schema `:named-function .{ function-type-id, param-names }`):

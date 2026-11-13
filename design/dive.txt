@@ -33,6 +33,6 @@ What I don't have
 - Safety (hope to do escape analysis + some sort of type tagging like Ocaml modes)
 
 test_src/stdlib/metaprintf.k1
-test_src/stdlib/bitfield_test.k1
+test_src/stdlib/deftype_test.k1
 k1lib/core/builtin.k1:107
 

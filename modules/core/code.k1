@@ -16,6 +16,11 @@ type code-string-part = either {
 }
 
 ns for code-token {
+  fn(inline) is-ident(self): bool { self.kind is :ident }
+  fn(inline) is-string(self): bool { self.kind is :string }
+  fn(inline) is-number(self): bool { self.kind is :number }
+  fn(inline) is-joined(self): bool { self.spacing is :none }
+
   fn fail(self, msg: string): never {
     crash(context .{ filename = "", line = 0, span = self.source, function = "" })(msg)
   }
@@ -48,6 +53,14 @@ ns for token-cursor {
     if self.i + 1 < self.toks.len() :some .{ fst = self.toks.[self.i], snd = self.toks.[self.i + 1] } else :none
   }
 
+  fn peek-joined(self: *token-cursor, first: string): ?code-token {
+    if self.peek-2() is :some p and p.fst.text == first and p.snd.is-joined() :some p.snd else :none
+  }
+
+  fn peek-digraph(self: *token-cursor, first: string, second: string): bool {
+    self.peek-joined(first) is :some n and n.text == second
+  }
+
   fn(inline) eat(self: *token-cursor): code-token {
     let t = self.peek()
     self.i = self.i + 1
@@ -75,23 +88,28 @@ ns for token-cursor {
 
   fn expect-ident(self: *token-cursor): code-token {
     let t = self.eat()
-    if not (t.kind is :ident) t.fail("Expected a name, got `${t.text}`")
+    if not t.is-ident() t.fail("Expected a name, got `${t.text}`")
     t
   }
 
-  fn eat-until-close(self: *token-cursor, open: code-token, close: string): span[code-token] {
+  fn eat-until-unnested(self: *token-cursor, stop: string): span[code-token] {
     let start = self.i
-    let depth: size = 1
-    loop {
-      if self.is-at-end() open.fail("This `${open.text}` is never closed")
-      let t = self.eat()
-      if t.text == open.text { depth = depth + 1 }
-      else if t.text == close {
-        depth = depth - 1
-        if depth == 0 break
-      }
+    let depth: size = 0
+    while not self.is-at-end() {
+      let text = self.peek().text
+      if depth == 0 and text == stop break
+      if text == "(" or text == "[" or text == "{" { depth = depth + 1 }
+      else if text == ")" or text == "]" or text == "}" { depth = depth - 1 }
+      self.skip(1)
     }
-    self.toks.slice(start, self.i - 1)
+    self.toks.slice(start, self.i)
+  }
+
+  fn eat-until-close(self: *token-cursor, open: code-token, close: string): span[code-token] {
+    let inner = self.eat-until-unnested(close)
+    if self.is-at-end() open.fail("This `${open.text}` is never closed")
+    self.skip(1)
+    inner
   }
 }
 

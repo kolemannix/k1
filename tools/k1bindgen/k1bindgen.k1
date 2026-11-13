@@ -8,7 +8,7 @@ use std/set
 
 // TODO:
 // - [x] Extract fn param names by traversing the children, not just cheating by only looking at its 'cx-type' like we are now
-// - [ ] support bitfields (track bitfield start/end; if possible emit a std/bitfield call
+// - [ ] support bitfields (track bitfield start/end; if possible emit a std/deftype/bitfield call
 // - [x] Use derived cli arg parser
 // - [x] Embed sizeof / alignof / offsetof assertions
 // - [x] Support Unions

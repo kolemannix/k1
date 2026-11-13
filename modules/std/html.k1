@@ -4,7 +4,7 @@ type escaper[w] = { out: w }
 
 fn escaping[w: writer](out: w): escaper[w] { .{ out } }
 
-fn entity(b: u8): string {
+fn entity-from-byte(b: u8): string {
   if b == '&'.as-u8() "&amp;"
   else if b == '<'.as-u8() "&lt;"
   else if b == '>'.as-u8() "&gt;"
@@ -15,13 +15,13 @@ fn entity(b: u8): string {
 
 impl[w: writer] writer for escaper[w] {
   fn write-byte(self, value: u8) {
-    let e = entity(value)
+    let e = entity-from-byte(value)
     if e.len() == 0 self.out.write-byte(value) else self.out.write-string(e)
   }
   fn write-bytes(self, bytes: span[byte]) {
     let start: size = 0
     for b in bytes {
-      let e = entity(b)
+      let e = entity-from-byte(b)
       if e.non-empty() {
         self.out.write-bytes(bytes.slice(start, it-index))
         self.out.write-string(e)
@@ -33,8 +33,14 @@ impl[w: writer] writer for escaper[w] {
 }
 
 fn write-escaped[w: writer, t](out: w, value: t) {
-  #if types/id[t].impl-of[dom/to-node]() is :some _ dom/to-node/to-node(value).print-to(out)
-  else value.print-to(escaping(out))
+  #if types/id[t].is-instance-of[opt] {
+    if value is :some v write-escaped(out, v)
+  } else #if types/id[t].impl-of[dom/to-node] is :some _ {
+    let node = dom/to-node/to-node(value)
+    if out is { type[*dom/markup-writer](m) -> m.add-node(node), _ -> node.print-to(out) }
+  } else {
+    value.print-to(escaping(out))
+  }
 }
 
 fn escape(s: string): string {
@@ -44,12 +50,12 @@ fn escape(s: string): string {
 }
 
 fn is-void(name: string): bool {
-  let names: span[string] = ["br", "hr", "img", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"]
+  let names: span[string] = #static ["br", "hr", "img", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"]
   names.contains(name)
 }
 
 fn is-boolean-attr(name: string): bool {
-  let names: span[string] = [
+  let names: span[string] = #static [
     "allowfullscreen", "async", "autofocus", "autoplay", "checked", "controls", "default", "defer",
     "disabled", "formnovalidate", "hidden", "inert", "ismap", "itemscope", "loop", "multiple", "muted",
     "nomodule", "novalidate", "open", "playsinline", "readonly", "required", "reversed", "selected",
@@ -60,45 +66,117 @@ fn is-boolean-attr(name: string): bool {
 ns dom {
   type attr = { name: string, value: either { text(string), present } }
   type element = { tag: string, attrs: list[attr], children: list[node] }
-  type node = either { text(string), raw(string), attr(attr), elem(*element), frag(span[node]) }
+  type node = either { nodes(span[node]), text(string), raw(string), attr(attr), elem(*element) }
 
   ability to-node { fn to-node(self): node }
   impl to-node for node { fn to-node(self): node { self } }
 
+  let none: node = .0
+
   fn el(tag: string, mods: span[node]): node {
-    let e: element = .{ tag, attrs = list/empty(), children = list/empty() }
+    let e = element.{ tag, attrs = list/empty(), children = list/empty() }
     for m in mods {
       if m is :attr a e.attrs.push(a) else e.children.push(m)
     }
     :elem mem/new(e)
   }
 
-  fn at[t](name: string, value: t): node {
-    #if types/id[t].instance-of[opt] {
-      if value is :some v at(name, v) else :frag span/empty()
+  fn make-attr[t](name: string, value: t): ?attr {
+    #if types/id[t].is-instance-of[opt] {
+      if value is :some v make-attr(name, v) else :none
     } else if value is {
       type[bool](b) -> if is-boolean-attr(name) {
-        if b :attr .{ name, value = :present } else :frag span/empty()
+        if b :some .{ name, value = :present } else :none
       } else {
-        :attr .{ name, value = :text b.to-string() }
+        :some .{ name, value = :text b.to-string() }
       },
-      _ -> :attr .{ name, value = :text value.to-string() },
+      _ -> :some .{ name, value = :text value.to-string() },
     }
   }
 
-  fn class(value: string): node { at("class", value) }
-  fn id(value: string): node { at("id", value) }
-  fn href(value: string): node { at("href", value) }
-  fn src(value: string): node { at("src", value) }
+  fn at[t](name: string, value: t): node {
+    if make-attr(name, value) is :some a :attr a else none
+  }
 
-  fn each[t](items: span[t], f: some fn t -> node): node { :frag items.map(f) }
+  fn(inline) class(value: string): node { at("class", value) }
+  fn(inline) id(value: string): node { at("id", value) }
+  fn(inline) href(value: string): node { at("href", value) }
+  fn(inline) src(value: string): node { at("src", value) }
+
+  fn each[t](items: span[t], f: some fn t -> node): node { :nodes items.map(f) }
+
+  type markup-writer = { pending: list[u8], nodes: list[node] }
+
+  impl writer for *markup-writer {
+    fn write-byte(self, b: u8) { self.pending.push(b) }
+    fn write-bytes(self, b: span[u8]) { self.pending.append-span(b) }
+  }
+
+  ns for markup-writer {
+    let wrap-raw-min-len: size = 1024
+
+    fn add-node(self: *markup-writer, node) {
+      if node is {
+        :raw s -> if s.len() >= wrap-raw-min-len self.wrap-node(node) else self.write(s),
+        :nodes children -> if children.non-empty() and children.forall(fn child. child is :raw _ or child is :nodes _) {
+          self.wrap-node(node)
+        } else for children { self.add-node(it) },
+        _ -> node.print-to(self),
+      }
+    }
+
+    fn wrap-node(self: *markup-writer, node) {
+      self.flush()
+      self.nodes.push(node)
+    }
+
+    fn flush(self: *markup-writer) {
+      if self.pending.is-empty() return
+      self.nodes.push(:raw string/wrap-bytes(self.pending.as-span()))
+      self.pending = list/empty()
+    }
+
+    fn to-node(self: *markup-writer): node {
+      self.flush()
+      if self.nodes.len() == 1 self.nodes.[0] else :nodes self.nodes.as-span()
+    }
+  }
+
+  ns for node {
+    fn to-string-parts(self: node): span[span[u8]] {
+      let out: list[span[u8]] = list/empty()
+      self.push-string-parts(out.&)
+      out.as-span()
+    }
+
+    fn push-string-parts(self: node, out: *list[span[u8]]) {
+      if self is {
+        :raw s -> if s.non-empty() { out.push(s.span-bytes()) },
+        :nodes children -> for children { it.push-string-parts(out) },
+        _ -> {
+          let sb = string-builder/new()
+          self.print-to(sb.&)
+          out.push(sb.build().span-bytes())
+        },
+      }
+    }
+  }
 
   impl to-string for node {
     fn to-string(self): string {
       if self is :raw s return s
-      let sb = string-builder/new()
-      self.print-to(sb.&)
-      sb.build()
+      string/wrap-bytes(span/join(self.to-string-parts(), span/empty()))
+    }
+  }
+
+  impl print for attr {
+    fn print-to[w: writer](self, w) {
+      w.write(" ${self.name}")
+      if self.value is :text v {
+        w.write("=\"")
+        write-escaped(w, v)
+        w.write("\"")
+      }
     }
   }
 
@@ -108,17 +186,10 @@ ns dom {
         :text s -> write-escaped(w, s),
         :raw s -> w.write(s),
         :attr _ -> {},
-        :frag nodes -> for n in nodes { n.print-to(w) },
+        :nodes children -> for children { it.print-to(w) },
         :elem e -> {
           w.write("<${e.tag}")
-          for a in e.attrs {
-            w.write(" ${a.name}")
-            if a.value is :text v {
-              w.write("=\"")
-              write-escaped(w, v)
-              w.write("\"")
-            }
-          }
+          for e.attrs { it.print-to(w) }
           w.write(">")
           if is-void(e.tag) return
           for c in e.children { c.print-to(w) }
@@ -150,7 +221,7 @@ ns dom {
 }
 
 fn write-attr[w: writer, t](out: w, name: string, value: t, presence: bool) {
-  #if types/id[t].instance-of[opt] {
+  #if types/id[t].is-instance-of[opt] {
     if value is :some v write-attr(out, name, v, presence)
   } else if value is {
     type[bool](b) -> if presence { if b out.write(" $name") } else { out.write(" $name=\"$b\"") },
@@ -162,298 +233,319 @@ fn write-attr[w: writer, t](out: w, name: string, value: t, presence: bool) {
   }
 }
 
-macro write(markup: span[code-token]) {
-  emit(markup)
+fn write-attrs[w: writer, t](out: w, attrs: t) {
+  #if types/id[t].is-instance-of[opt] {
+    if attrs is :some a write-attrs(out, a)
+  } else #if types/id[t].is-instance-of[span] {
+    for attrs { write-attrs(out, it) }
+  } else {
+    let attr: dom/attr = attrs
+    attr.print-to(out)
+  }
 }
 
+macro write(markup: span[code-token]) {
+  internal/code-from-markup(markup)
+}
+
+// takes k1-interpolated html and produces a 'node' value
 macro markup(markup: span[code-token]) {
   let cb = code-builder/new()
-  cb.line("let html-markup-sb = string-builder/new()")
-  cb.line("let(context(impl writer)) _html-markup-out: *string-builder = html-markup-sb.&")
-  cb.write-code(emit(markup))
-  cb.line("std/html/dom/node:raw html-markup-sb.build()")
+  cb.line("let html-markup-w: std/html/dom/markup-writer = .0")
+  cb.line("let(context(impl writer)) _html-markup-out: *std/html/dom/markup-writer = html-markup-w.&")
+
+  let emit-markup-code = internal/code-from-markup(markup)
+  cb.write-code(emit-markup-code)
+
+  cb.line("html-markup-w.to-node()")
   cb.build()
 }
 
-fn emit(markup: span[code-token]): code {
-  let e: emitter = .{
-    cur = token-cursor/new(markup),
-    cb = code-builder/new(),
-    pending = string-builder/new(),
-    after-text = false,
-    lead = :as-written,
-  }
-  e.nodes(in-block = false, raw = false)
-  if not e.cur.is-at-end() e.cur.peek().fail("Unexpected `${e.cur.peek().text}`")
-  e.flush()
-  e.cb.build()
-}
-
-type emitter = {
-  cur: token-cursor,
-  cb: code-builder,
-  pending: string-builder,
-  after-text: bool,
-  lead: either(u8) { as-written, trim, space },
-}
-
-ns for emitter {
-  fn peek-digraph(self: *emitter, first: string, second: string): bool {
-    self.cur.peek-2() is :some p and p.fst.text == first and p.snd.text == second and p.snd.spacing is :none
+ns internal {
+  fn code-from-markup(markup: span[code-token]): code {
+    let e: emitter = .{
+      cur = token-cursor/new(markup),
+      cb = code-builder/new(),
+      pending = string-builder/new(),
+      after-text = false,
+      lead = :as-written,
+    }
+    e.eat-nodes(in-block = false, raw = false)
+    if not e.cur.is-at-end() e.cur.peek().fail("Unexpected `${e.cur.peek().text}`")
+    e.flush()
+    e.cb.build()
   }
 
-  fn peek-self-close(self: *emitter): bool { self.peek-digraph("/", ">") }
-
-  fn joined-continues(self: *emitter): bool {
-    if self.cur.is-at-end() or self.cur.peek-text-eq(">") or self.peek-self-close() return false
-    self.cur.peek().spacing is :none
+  type emitter = {
+    cur: token-cursor,
+    cb: code-builder,
+    pending: string-builder,
+    after-text: bool,
+    lead: either(u8) { as-written, trim, space },
   }
 
-  fn text(self: *emitter, s: string) { self.pending.write(s) }
+  ns for emitter {
+    fn peek-self-close(self: *emitter): bool { self.cur.peek-digraph("/", ">") }
 
-  fn flush(self: *emitter) {
-    let s = self.pending.peek()
-    if s.len() == 0 return
-    self.cb.write("core/get-context-writer().write(${meta/str-lit(s)})\n")
-    self.pending.reset()
-  }
+    fn peek-attr-part(self: *emitter): bool {
+      if self.cur.is-at-end() or self.cur.peek-text-eq(">") or self.peek-self-close() return false
+      self.cur.peek().is-joined()
+    }
 
-  fn dynamic(self: *emitter, value: span[code-token], raw: bool) {
-    self.flush()
-    self.cb.write(if raw "(" else "std/html/write-escaped(core/get-context-writer(), ")
-    self.cb.write-tokens(value)
-    self.cb.write(if raw ").print-to(core/get-context-writer())\n" else ")\n")
-  }
+    fn emit-text(self: *emitter, s: string) { self.pending.write(s) }
 
-  fn literal(self: *emitter, t: code-token, raw: bool) {
-    for t.parts {
-      if it is {
-        :text p -> self.text(if raw p.value else escape(p.value)),
-        :expr e -> {
-          if e.spec.is-empty() { self.dynamic(e.tokens, raw); continue }
-          self.flush()
-          self.cb.write(if raw "core/get-context-writer()" else "std/html/escaping(core/get-context-writer())")
-          self.cb.write(".write(\"\${")
-          self.cb.write-tokens(e.tokens)
-          self.cb.write(":${e.spec}}\")\n")
+    fn flush(self: *emitter) {
+      let s = self.pending.peek()
+      if s.len() == 0 return
+      self.cb.write("core/get-context-writer().write(${meta/str-lit(s)})\n")
+      self.pending.reset()
+    }
+
+    fn emit-value(self: *emitter, value: span[code-token], raw: bool) {
+      self.flush()
+      self.cb.write(if raw "(" else "std/html/write-escaped(core/get-context-writer(), ")
+      self.cb.write-tokens(value)
+      self.cb.write(if raw ").print-to(core/get-context-writer())\n" else ")\n")
+    }
+
+    fn emit-literal(self: *emitter, t: code-token, raw: bool) {
+      for t.parts {
+        if it is {
+          :text p -> self.emit-text(if raw p.value else escape(p.value)),
+          :expr e -> {
+            if e.spec.is-empty() { self.emit-value(e.tokens, raw); continue }
+            self.flush()
+            self.cb.write(if raw "core/get-context-writer()" else "std/html/escaping(core/get-context-writer())")
+            self.cb.write(".write(\"\${")
+            self.cb.write-tokens(e.tokens)
+            self.cb.write(":${e.spec}}\")\n")
+          },
+        }
+      }
+    }
+
+    fn eat-braced(self: *emitter): span[code-token] {
+      let open = self.cur.expect("{")
+      self.cur.eat-until-close(open, "}")
+    }
+
+    fn peek-value(self: *emitter): bool {
+      require self.cur.peek-joined("$") is :some n else return false
+      n.text == "{" or n.is-ident()
+    }
+
+    fn eat-value(self: *emitter): span[code-token] {
+      self.cur.skip(1)
+      if self.cur.peek-text-eq("{") return self.eat-braced()
+      self.cur.skip(1)
+      self.cur.toks.slice(self.cur.i - 1, self.cur.i)
+    }
+
+    fn eat-header-until-brace(self: *emitter, directive: code-token): span[code-token] {
+      let start = self.cur.i
+      while not self.cur.peek-text-eq("{") {
+        if self.cur.is-at-end() directive.fail("Expected `{` after #${directive.text}")
+        self.cur.skip(1)
+      }
+      self.cur.toks.slice(start, self.cur.i)
+    }
+
+    fn eat-block(self: *emitter, raw: bool, spaced: bool) {
+      self.cur.expect("{")
+      self.lead = if spaced :space else :trim
+      self.eat-nodes(in-block = true, raw)
+      self.flush()
+      self.cur.expect("}")
+      self.lead = :as-written
+      self.after-text = false
+    }
+
+    fn emit-space-before(self: *emitter, t: code-token, is-text: bool) {
+      if self.lead is {
+        :trim -> {},
+        :space -> self.emit-text(" "),
+        :as-written -> if t.spacing is :inline or (t.spacing is :newline and is-text and self.after-text) {
+          self.emit-text(" ")
         },
       }
+      self.lead = :as-written
+      self.after-text = is-text
     }
-  }
 
-  fn braced(self: *emitter): span[code-token] {
-    let open = self.cur.expect("{")
-    self.cur.eat-until-close(open, "}")
-  }
-
-  fn header-until-brace(self: *emitter, directive: code-token): span[code-token] {
-    let start = self.cur.i
-    while not self.cur.peek-text-eq("{") {
-      if self.cur.is-at-end() directive.fail("Expected `{` after #${directive.text}")
-      self.cur.skip(1)
-    }
-    self.cur.toks.slice(start, self.cur.i)
-  }
-
-  fn block(self: *emitter, raw: bool, spaced: bool) {
-    self.cur.expect("{")
-    self.lead = if spaced :space else :trim
-    self.nodes(in-block = true, raw)
-    self.flush()
-    self.cur.expect("}")
-    self.after-text = false
-  }
-
-  fn space-before(self: *emitter, t: code-token, is-text: bool) {
-    if self.lead is {
-      :trim -> {},
-      :space -> self.text(" "),
-      :as-written -> if t.spacing is :inline or (t.spacing is :newline and is-text and self.after-text) {
-        self.text(" ")
-      },
-    }
-    self.lead = :as-written
-    self.after-text = is-text
-  }
-
-  fn nodes(self: *emitter, in-block: bool, raw: bool) {
-    while not self.cur.is-at-end() {
-      let t = self.cur.peek()
-      if in-block and is-punct(t, "}") return
-      if is-punct(t, "<") {
-        if self.peek-digraph("<", "/") return
-        if (not raw) and self.peek-digraph("<", "!") {
-          self.space-before(t, false)
-          self.doctype()
+    fn eat-nodes(self: *emitter, in-block: bool, raw: bool) {
+      while not self.cur.is-at-end() {
+        let t = self.cur.peek()
+        if in-block and t.text == "}" return
+        if self.cur.peek-joined("<") is :some n {
+          if n.text == "/" return
+          if (not raw) and n.text == "!" {
+            self.emit-space-before(t, false)
+            self.eat-doctype()
+            continue
+          }
+          if (not raw) and n.is-ident() {
+            self.emit-space-before(t, false)
+            self.eat-element()
+            continue
+          }
+        }
+        if self.peek-value() {
+          self.emit-space-before(t, true)
+          self.emit-value(self.eat-value(), raw)
           continue
         }
-        if (not raw) and self.cur.peek-2() is :some p and p.snd.kind is :ident and p.snd.spacing is :none {
-          self.space-before(t, false)
-          self.element()
-          continue
+        if t.text == "{" t.fail("Expected `\${…}` for a value; a bare `{` only follows #for, #if, #do or #raw")
+        if self.cur.peek-joined("#") is :some n {
+          if n.text == "for" or n.text == "if" {
+            let spaced = self.lead is :space or (self.lead is :as-written and t.spacing is :inline)
+            self.flush()
+            self.cur.skip(1)
+            if n.text == "for" self.eat-directive-for(raw, spaced) else self.eat-directive-if(raw, spaced)
+            continue
+          }
+          if n.text == "raw" {
+            self.emit-space-before(t, true)
+            self.cur.skip(2)
+            let value = self.eat-braced()
+            self.emit-value(value, true)
+            continue
+          }
+          if n.text == "do" {
+            self.emit-space-before(t, false)
+            self.flush()
+            self.cur.skip(2)
+            self.cb.write-tokens(self.eat-braced())
+            self.cb.write("\n")
+            continue
+          }
         }
+        self.emit-text-token(self.cur.eat(), raw)
       }
-      if is-punct(t, "{") {
-        self.space-before(t, true)
-        let value = self.braced()
-        self.dynamic(value, raw)
-        continue
-      }
-      if is-punct(t, "#") and self.cur.peek-2() is :some p and p.snd.spacing is :none {
-        let n = p.snd
-        if n.text == "for" or n.text == "if" {
-          let spaced = self.lead is :space or (self.lead is :as-written and t.spacing is :inline)
-          self.lead = :as-written
-          self.after-text = false
-          self.flush()
-          self.cur.skip(1)
-          if n.text == "for" self.directive-for(raw, spaced) else self.directive-if(raw, spaced)
-          continue
-        }
-        if n.text == "raw" {
-          self.space-before(t, true)
-          self.cur.skip(2)
-          let value = self.braced()
-          self.dynamic(value, true)
-          continue
-        }
-        if n.text == "{" {
-          self.space-before(t, false)
-          self.flush()
-          self.cur.skip(1)
-          self.cb.write-tokens(self.braced())
-          self.cb.write("\n")
-          continue
-        }
-      }
-      self.text-token(self.cur.eat(), raw)
     }
-  }
 
-  fn text-token(self: *emitter, t: code-token, raw: bool) {
-    self.space-before(t, true)
-    if t.kind is :string { self.literal(t, raw) } else self.text(if raw t.text else escape(t.text))
-  }
-
-  fn doctype(self: *emitter) {
-    let open = self.cur.eat()
-    self.text("<")
-    loop {
-      if self.cur.is-at-end() open.fail("This `<!` is never closed")
-      let t = self.cur.eat()
-      if not (t.spacing is :none) self.text(" ")
-      self.text(t.text)
-      if t.text == ">" break
+    fn emit-text-token(self: *emitter, t: code-token, raw: bool) {
+      self.emit-space-before(t, true)
+      if t.is-string() { self.emit-literal(t, raw) } else self.emit-text(if raw t.text else escape(t.text))
     }
-  }
 
-  fn directive-for(self: *emitter, raw: bool, spaced: bool) {
-    let directive = self.cur.eat()
-    let header = self.header-until-brace(directive)
-    self.cb.write("for ")
-    self.cb.write-tokens(header)
-    self.cb.write(" {\n")
-    self.block(raw, spaced)
-    self.cb.write("}\n")
-  }
-
-  fn directive-if(self: *emitter, raw: bool, spaced: bool) {
-    let directive = self.cur.eat()
-    let cond = self.header-until-brace(directive)
-    self.cb.write("if ")
-    self.cb.write-tokens(cond)
-    self.cb.write(" {\n")
-    self.block(raw, spaced)
-    self.cb.write("}")
-    if self.cur.peek-text-eq("else") {
-      self.cur.skip(1)
-      self.cb.write(" else ")
-      if self.peek-digraph("#", "if") {
-        self.cur.skip(1)
-        self.directive-if(raw, spaced)
-        return
+    fn eat-doctype(self: *emitter) {
+      let open = self.cur.eat()
+      self.emit-text("<")
+      loop {
+        if self.cur.is-at-end() open.fail("This `<!` is never closed")
+        let t = self.cur.eat()
+        if not t.is-joined() self.emit-text(" ")
+        self.emit-text(t.text)
+        if t.text == ">" break
       }
-      self.cb.write("{\n")
-      self.block(raw, spaced)
+    }
+
+    fn eat-directive-for(self: *emitter, raw: bool, spaced: bool) {
+      let directive = self.cur.eat()
+      let header = self.eat-header-until-brace(directive)
+      self.cb.write("for ")
+      self.cb.write-tokens(header)
+      self.cb.write(" {\n")
+      self.eat-block(raw, spaced)
+      self.cb.write("}\n")
+    }
+
+    fn eat-directive-if(self: *emitter, raw: bool, spaced: bool) {
+      let directive = self.cur.eat()
+      let cond = self.eat-header-until-brace(directive)
+      self.cb.write("if ")
+      self.cb.write-tokens(cond)
+      self.cb.write(" {\n")
+      self.eat-block(raw, spaced)
       self.cb.write("}")
-    }
-    self.cb.write("\n")
-  }
-
-  fn element(self: *emitter) {
-    self.cur.skip(1)
-    let name-tok = self.cur.eat()
-    let name = name-tok.text
-    self.text("<$name")
-    loop {
-      if self.cur.is-at-end() name-tok.fail("<$name> has no closing `>`")
-      if self.cur.peek-text-eq(">") {
-        self.cur.skip(1)
-        break
+      if self.cur.eat-if-text-eq("else") {
+        self.cb.write(" else ")
+        if self.cur.peek-digraph("#", "if") {
+          self.cur.skip(1)
+          self.eat-directive-if(raw, spaced)
+          return
+        }
+        self.cb.write("{\n")
+        self.eat-block(raw, spaced)
+        self.cb.write("}")
       }
-      if self.peek-self-close() {
-        self.cur.skip(2)
-        self.text(if is-void(name) ">" else "></$name>")
-        self.after-text = false
+      self.cb.write("\n")
+    }
+
+    fn eat-element(self: *emitter) {
+      self.cur.skip(1)
+      let name-tok = self.cur.eat()
+      let name = name-tok.text
+      self.emit-text("<$name")
+      loop {
+        if self.cur.is-at-end() name-tok.fail("<$name> has no closing `>`")
+        if self.cur.eat-if-text-eq(">") break
+        if self.peek-self-close() {
+          self.cur.skip(2)
+          self.emit-text(if is-void(name) ">" else "></$name>")
+          return
+        }
+        self.eat-attr()
+      }
+      self.emit-text(">")
+      if is-void(name) return
+      let raw = name == "script" or name == "style"
+      self.eat-nodes(in-block = false, raw)
+      if self.cur.is-at-end() name-tok.fail("<$name> is never closed")
+      self.cur.skip(1)
+      let slash = self.cur.eat()
+      if self.cur.is-at-end() slash.fail("Expected </$name>")
+      let close-name = self.cur.eat()
+      if close-name.text != name close-name.fail("</${close-name.text}> does not close <$name>")
+      self.cur.expect(">")
+      self.emit-text("</$name>")
+      self.after-text = false
+    }
+
+    fn eat-attr(self: *emitter) {
+      if self.peek-value() {
+        let attrs = self.eat-value()
+        self.flush()
+        self.cb.write("std/html/write-attrs(core/get-context-writer(), ")
+        self.cb.write-tokens(attrs)
+        self.cb.write(")\n")
         return
       }
-      self.attr()
-    }
-    self.text(">")
-    self.after-text = false
-    if is-void(name) return
-    let raw = name == "script" or name == "style"
-    self.nodes(in-block = false, raw)
-    if self.cur.is-at-end() name-tok.fail("<$name> is never closed")
-    self.cur.skip(1)
-    let slash = self.cur.eat()
-    if self.cur.is-at-end() slash.fail("Expected </$name>")
-    let close-name = self.cur.eat()
-    if close-name.text != name close-name.fail("</${close-name.text}> does not close <$name>")
-    self.cur.expect(">")
-    self.text("</$name>")
-    self.after-text = false
-  }
-
-  fn attr(self: *emitter) {
-    let first = self.cur.eat()
-    if first.kind is :string or first.text == "=" or first.text == "{" {
-      first.fail("Expected an attribute name, got `${first.text}`")
-    }
-    let name-sb = string-builder/new()
-    name-sb.write(first.text)
-    while self.joined-continues() and not self.cur.peek-text-eq("=") {
-      name-sb.write(self.cur.eat().text)
-    }
-    let name = name-sb.build()
-    if not self.cur.peek-text-eq("=") {
-      self.text(" $name")
-      return
-    }
-    let eq = self.cur.eat()
-    if self.cur.is-at-end() or self.cur.peek-text-eq(">") or self.peek-self-close() eq.fail("Expected a value after `=`")
-    let v = self.cur.peek()
-    if v.text == "{" {
-      let value = self.braced()
-      self.flush()
-      self.cb.write("std/html/write-attr(core/get-context-writer(), ${meta/str-lit(name)}, ")
-      self.cb.write-tokens(value)
-      self.cb.write(", presence = ${is-boolean-attr(name)})\n")
-      return
-    }
-    self.text(" $name=\"")
-    if v.kind is :string {
-      self.cur.skip(1)
-      self.literal(v, false)
-    } else {
-      self.cur.skip(1)
-      self.text(escape(v.text))
-      while self.joined-continues() {
-        self.text(escape(self.cur.eat().text))
+      let first = self.cur.eat()
+      if first.is-string() or first.text == "=" or first.text == "{" {
+        first.fail("Expected an attribute name, got `${first.text}`")
       }
+      let name-sb = string-builder/new()
+      name-sb.write(first.text)
+      while self.peek-attr-part() and not self.cur.peek-text-eq("=") {
+        name-sb.write(self.cur.eat().text)
+      }
+      let name = name-sb.build()
+      if not self.cur.peek-text-eq("=") {
+        self.emit-text(" $name")
+        return
+      }
+      let eq = self.cur.eat()
+      if self.cur.is-at-end() or self.cur.peek-text-eq(">") or self.peek-self-close() eq.fail("Expected a value after `=`")
+      let v = self.cur.peek()
+      if v.text == "{" v.fail("Expected `\${…}` for a value")
+      if self.peek-value() {
+        let value = self.eat-value()
+        self.flush()
+        self.cb.write("std/html/write-attr(core/get-context-writer(), ${meta/str-lit(name)}, ")
+        self.cb.write-tokens(value)
+        self.cb.write(", presence = ${is-boolean-attr(name)})\n")
+        return
+      }
+      self.emit-text(" $name=\"")
+      self.cur.skip(1)
+      if v.is-string() self.emit-literal(v, false) else {
+        self.emit-text(escape(v.text))
+        while self.peek-attr-part() {
+          self.emit-text(escape(self.cur.eat().text))
+        }
+      }
+      self.emit-text("\"")
     }
-    self.text("\"")
   }
 }
-
-fn is-punct(t: code-token, text: string): bool { t.kind is :punct and t.text == text }

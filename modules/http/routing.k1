@@ -90,11 +90,7 @@ fn parse-rows(rows: span[code-token]): list[entry] {
       let open = rd.expect("{")
       let toks = rd.eat-until-close(open, "}")
       if toks.is-empty() open.fail("`?{}` declares no query params")
-      let ty = code-builder/new()
-      ty.write("{ ")
-      ty.write-tokens(toks)
-      ty.write(" }")
-      :some ty.build()
+      :some "{ $toks }"
     } else :none
     entries.push(.{ method = m.text, name, pattern, pattern-tok = pat, path, query })
   }
@@ -170,15 +166,7 @@ fn payload-type(e: entry): ?code {
   let has-path = params(e).non-empty()
   if e.query is {
     :none -> if has-path :some path-type(e) else :none,
-    :some q -> if has-path {
-      let cb = code-builder/new()
-      cb.write("#type types/combine-structs[")
-      cb.write-code(path-type(e))
-      cb.write(", ")
-      cb.write-code(q)
-      cb.write("]()")
-      :some cb.build()
-    } else :some q,
+    :some q -> if has-path :some "#type types/combine-structs[${path-type(e)}, $q]()" else :some q,
   }
 }
 
@@ -256,19 +244,15 @@ fn query-print-code(payload-id: types/type-id, n: size): code {
   for f in struct-fields(payload-id) {
     if it-index >= n {
       let lit = str-lit("${f.name}=")
-      if f.type-id.instance-of[opt] {
-        cb.block(`if v.${f.name} is :some x`, fn[cb, lit]. {
-          cb.line("w.write(sep)")
-          cb.line("w.write($lit)")
-          cb.line("std/url/percent/write-encoded(w, x, :form)")
-          cb.line(`sep = "&"`)
-        })
-      } else {
-        cb.line("w.write(sep)")
-        cb.line("w.write($lit)")
-        cb.line("std/url/percent/write-encoded(w, v.${f.name}, :form)")
-        cb.line(`sep = "&"`)
-      }
+      let is-opt = f.type-id.is-instance-of[opt]
+      let value = if is-opt "x" else "v.${f.name}"
+      let write-field: code = `
+        w.write(sep)
+        w.write($lit)
+        std/url/percent/write-encoded(w, $value, :form)
+        sep = "&"
+      `
+      if is-opt cb.block(`if v.${f.name} is :some x`, fn[cb, write-field]. cb.line(write-field)) else cb.line(write-field)
     }
   }
   cb.build()
@@ -286,11 +270,9 @@ fn emit-leaf-body(context cb: *code-builder)(en: entry, d: size) {
     })
   }
   if payload-type(en) is :some ty {
-    cb.pad()
-    cb.write("let payload = http/routing/parse-payload[")
-    cb.write-code(ty)
-    cb.write(`, ${srcs.len()}]([${string/join(srcs, ", ")}], u, ${str-lit(en.pattern)}).try`)
-    cb.write("\n")
+    let sources = string/join(srcs, ", ")
+    let pattern-lit = str-lit(en.pattern)
+    cb.line("let payload = http/routing/parse-payload[$ty, ${srcs.len()}]([$sources], u, $pattern-lit).try")
     cb.line("return :ok :${en.name.text} payload")
   } else {
     cb.line("return :ok :${en.name.text}")
@@ -442,11 +424,7 @@ macro define(name: code, rows: span[code-token]) {
   cb.write-code("type $name = either { ")
   cb.join-with(entries, ", ", fn[cb] en. {
     cb.write-token(en.name)
-    if payload-type(en) is :some ty {
-      cb.write("(")
-      cb.write-code(ty)
-      cb.write(")")
-    }
+    if payload-type(en) is :some ty cb.write-code("($ty)")
   })
   cb.write(" }\n")
 
