@@ -10,7 +10,6 @@
 //! the new frame's header; returns read it back. `code[0]` is `Halt`, so
 //! popping the top frame (return_pc 0) lands there and ends execution.
 
-
 use crate::arith::{
     self, Cmp3Op, FloatCmpPred, FloatOp, FloatUnop, IntCmpPred, IntOp, IntUnop, OverflowOp,
 };
@@ -19,8 +18,8 @@ use crate::lex::Span;
 use crate::typer::trace::TraceKind;
 use crate::typer::types::{PhysicalType, RecordKind, TypeId};
 use crate::typer::{
-    FunctionId, K1Message, K1Result, StaticSum, StaticValue, StaticValueId, TypedExprId, TypedGlobalId,
-    TypedProgram,
+    FunctionId, K1Message, K1Result, StaticSum, StaticValue, StaticValueId, TypedExprId,
+    TypedGlobalId, TypedProgram,
 };
 use crate::vm::{self, Value, Vm, load_value, store_value};
 use crate::{kbail, kerr};
@@ -1056,6 +1055,13 @@ fn exec_builtin(
                 impl_info_value_id,
                 vm.eval_span,
             )))
+        }
+        BackendBuiltin::TypeSpell => {
+            let type_id = vm::value_to_type_id(k1, args[0], vm.eval_span)?;
+            vm.text_buffer.clear();
+            k1.write_type_spelling(&mut vm.text_buffer, type_id);
+            let spelling = k1.ast.idents.intern(&vm.text_buffer);
+            Ok(BuiltinOutcome::Value(vm::string_id_to_value(k1, spelling)))
         }
         BackendBuiltin::Eval | BackendBuiltin::TryEval => {
             let Some((ctx, span)) = vm.meta_call_site else {

@@ -22,12 +22,12 @@ use std/stream/waker
 use std/stream/pull
 use uv/worker-pool
 
-$http/routing/define(route, \{
+$http/routing/define(route) {
   get  events     "/events"
   get  files      "/files/*path"
   post game-poke  "/game/{id: u64}/poke"
   get  grade-rate "/cmd/grade-rate/{who: string}" ?{ plan-id: int, item-id: u64, note: ?string }
-})
+}
 
 fn route-from(method: http/llhttp/method, target: string): result[route, http/routing/route-error] {
   route/parse(method, url/parse(target).!)

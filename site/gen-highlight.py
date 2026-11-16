@@ -32,22 +32,23 @@ def render(text, toks, off):
     out.append(html.escape(text[pos:].decode(), quote=False))
     return "".join(out)
 
-sections = repo / "content/showcase/sections"
 blocks = []
-for md in sorted(sections.glob("*.md")) + sorted((repo / "site/content").rglob("*.md")):
+for md in sorted((repo / "site/content").rglob("*.md")):
     for m in FENCE.finditer(md.read_bytes()):
         path = repo / m.group(1).decode() if m.group(1) else None
-        blocks.append((m.group(2).rstrip(b"\n"), path, md, md.is_relative_to(sections)))
+        blocks.append((m.group(2).rstrip(b"\n"), path, md))
 
-for card in json.loads((repo / "site/data/carousel.json").read_text()):
-    for block in card.get("blocks", []):
-        if block["kind"] == "k1":
-            blocks.append((block["code"].encode(), repo / block["path"] if "path" in block else None, "carousel.json", False))
+for data in ["basics.json", "carousel.json"]:
+    for card in json.loads((repo / "site/data" / data).read_text()):
+        for block in card.get("blocks", []):
+            for b in [block, block.get("alt", {})]:
+                if b.get("kind") == "k1":
+                    blocks.append((b["code"].encode(), repo / b["path"] if "path" in b else None, data))
 
 out = {}
 partial = 0
 with tempfile.TemporaryDirectory() as tmp:
-    for text, path, origin, strict in blocks:
+    for text, path, origin in blocks:
         key = hashlib.sha1(text).hexdigest()
         if key in out:
             continue
@@ -57,8 +58,6 @@ with tempfile.TemporaryDirectory() as tmp:
                     path = p
                     break
         if path is None:
-            if strict:
-                sys.exit(f"gen-highlight: {origin}: k1 block not found in any source:\n{text[:300].decode()}")
             path = pathlib.Path(tmp) / f"{key}.k1"
             path.write_bytes(text + b"\n")
             partial += 1

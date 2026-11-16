@@ -2613,12 +2613,19 @@ impl<'toks, 'module> Parser<'toks, 'module> {
         self.tokens.peek_kind_n(n)
     }
 
-    fn peek_is_sign(&self) -> bool {
+    fn peek_is_absolute_path(&self) -> bool {
+        self.peek_kind() == K::Slash && self.tokens.peek_n(1).is_kind_nonspaced(K::Ident)
+    }
+
+    fn peek_starts_spaced_operand(&self) -> bool {
         let tok = self.peek();
-        tok.kind == K::Minus
+        let is_sign = tok.kind == K::Minus
             && (tok.is_newline_preceded()
                 || (tok.is_whitespace_preceded()
-                    && !self.tokens.peek_n(1).is_whitespace_preceded()))
+                    && !self.tokens.peek_n(1).is_whitespace_preceded()));
+        is_sign
+            || (self.peek_is_absolute_path()
+                && (tok.is_newline_preceded() || tok.is_whitespace_preceded()))
     }
 
     #[inline]
@@ -3120,7 +3127,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn parse_base_type_expression(&mut self) -> ParseResult<Option<ParsedTypeExprId>> {
         let first = self.peek();
-        if first.kind == K::Ident {
+        if first.kind == K::Ident || self.peek_is_absolute_path() {
             let ident = self.make_ident(first);
             let b = &self.ast.idents.b;
             if ident == b.union || ident == b.packed {
@@ -3579,13 +3586,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     /// "Sometimes go right" parser for binary operators with precedence climbing.
-    /// This is a Pratt parser that recurses when the next operator binds tighter,
+    /// it that recurses when the next operator binds tighter,
     /// otherwise stays at the current level to build left-associative chains.
-    ///
-    /// A `-` that reads as a sign ends the expression instead of continuing it:
-    /// one at the start of a line, or one spaced before but not after (`a -1`).
-    /// Put the `-` at the end of the previous line, or space it on both sides,
-    /// to subtract
     fn parse_binary_op_rhs(
         &mut self,
         mut lhs: ParsedExprId,
@@ -3595,7 +3597,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             let Some(op_kind) = BinaryOpKind::from_tokenkind(self.peek_kind()) else {
                 break;
             };
-            if self.peek_is_sign() {
+            if self.peek_starts_spaced_operand() {
                 break;
             }
             let op_token = self.peek();
@@ -3617,7 +3619,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let Some(next_op_kind) = BinaryOpKind::from_tokenkind(self.peek_kind()) else {
                     break;
                 };
-                if self.peek_is_sign() {
+                if self.peek_starts_spaced_operand() {
                     break;
                 }
                 let next_precedence = next_op_kind.precedence();
@@ -3718,7 +3720,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn expect_namespaced_ident(&mut self) -> ParseResult<QIdent> {
         let first = self.peek();
-        if first.kind != K::Ident {
+        if first.kind != K::Ident && !self.peek_is_absolute_path() {
             return Err(self.error(format!("Expected {}", K::Ident), first));
         }
         let first_ident = self.make_ident(first);
@@ -3726,15 +3728,20 @@ impl<'toks, 'module> Parser<'toks, 'module> {
     }
 
     fn qident_from(&mut self, first: Token, first_ident: StringId) -> ParseResult<QIdent> {
-        if self.peek_kind_n(1) != K::Slash || self.tokens.peek_n(1).is_whitespace_preceded() {
-            self.advance();
-            let name_span = self.tok_span(first);
-            return Ok(QIdent::naked(first_ident, name_span));
-        }
         let mut namespaces: AstList<IdentSpanned> = self.ast.mem.new_list(0);
         let first_span = self.tok_span(first);
-        namespaces.push_grow(&mut self.ast.mem, IdentSpanned::make(first_ident, first_span));
-        self.advance_n(2);
+        if first.kind == K::Slash {
+            let marker = IdentSpanned::make(StringId::EMPTY, first_span);
+            namespaces.push_grow(&mut self.ast.mem, marker);
+            self.advance();
+        } else if self.peek_kind_n(1) != K::Slash || self.tokens.peek_n(1).is_whitespace_preceded()
+        {
+            self.advance();
+            return Ok(QIdent::naked(first_ident, first_span));
+        } else {
+            namespaces.push_grow(&mut self.ast.mem, IdentSpanned::make(first_ident, first_span));
+            self.advance_n(2);
+        }
         loop {
             let (a, b) = self.tokens.peek_two();
             if a.kind == K::Ident && b.kind == K::Slash && !b.is_whitespace_preceded() {
@@ -3839,7 +3846,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 let expr = self.expect_expression_with_postfix_ops()?;
                 let next = self.peek();
                 if let Some(op) = BinaryOpKind::from_tokenkind(next.kind) {
-                    if !self.peek_is_sign() {
+                    if !self.peek_starts_spaced_operand() {
                         return Err(self.error(
                             format!(
                                 "`not` followed by `{op}` is ambiguous; use parens to disambiguate"
@@ -3945,7 +3952,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
                 }
             }
             _ => {
-                if first.kind == K::Ident {
+                if first.kind == K::Ident || self.peek_is_absolute_path() {
                     let ident = self.make_ident(first);
                     let b = &self.ast.idents.b;
                     let is_control_flow =
@@ -4761,7 +4768,8 @@ impl<'toks, 'module> Parser<'toks, 'module> {
 
     fn expect_macro_call(&mut self, dollar: Token) -> ParseResult<ParsedExprId> {
         let name_token = self.peek();
-        if name_token.is_whitespace_preceded() || name_token.kind != K::Ident {
+        let is_name = name_token.kind == K::Ident || self.peek_is_absolute_path();
+        if name_token.is_whitespace_preceded() || !is_name {
             return Err(self.error_expected("a macro name immediately following '$'", name_token));
         }
         self.emit_semantic_token(dollar, SemanticTokenKind::Operator);

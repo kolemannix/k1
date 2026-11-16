@@ -313,7 +313,7 @@ pub enum CompletionSite {
     /// value.<cursor>
     Member { raw_base_type_id: TypeId, base_type_id: TypeId, scope_id: ScopeId },
     /// ns/path/<cursor>
-    Path { path_scope_id: ScopeId },
+    Path { path_scope_id: ScopeId, is_absolute: bool },
     /// bare <cursor>
     Scope { scope_id: ScopeId },
     /// type:<cursor> or :<cursor>, in expressions and patterns
@@ -2734,16 +2734,6 @@ impl TypedProgram {
         let root_namespace_id = namespaces.add(root_namespace);
         scopes
             .set_scope_owner_id(Scopes::ROOT_SCOPE_ID, ScopeOwnerId::Namespace(root_namespace_id));
-
-        // Add _root ns to the root scope as well so users can use it
-        if !scopes.add_namespace(
-            Scopes::ROOT_SCOPE_ID,
-            root_ident,
-            Scopes::ROOT_SCOPE_ID,
-            Provenance::Defined,
-        ) {
-            panic!("Root namespace was taken, hmmmm");
-        }
         let clock = clock::Clock::new();
 
         let mut vm_static_stack = vm::Stack::make();
@@ -2993,12 +2983,12 @@ impl TypedProgram {
                             let submodule_owner_name = self.ast.idents.intern(submodule_owner_name);
                             let parsed_submodule_owner =
                                 parse::init_module(submodule_owner_name, &mut self.ast);
-                            self.add_module_namespace(parsed_submodule_owner, ROOT_NAMESPACE_ID)
+                            self.add_module_namespace(parsed_submodule_owner, ROOT_NAMESPACE_ID)?
                         }
                     },
                 };
                 let parsed = parse::init_module(ns_name, &mut self.ast);
-                (parsed, self.add_module_namespace(parsed, parent))
+                (parsed, self.add_module_namespace(parsed, parent)?)
             }
         };
         self.modules.get_mut(module_id).parsed_namespace_id = parsed_namespace_id;
@@ -3016,15 +3006,15 @@ impl TypedProgram {
         if let Some(planned) = planned
             && !is_fixed
         {
-            for dep in self.plan.mem.getn(planned.deps) {
-                let dep_namespace = self.namespaces.get(self.modules.get(*dep).namespace_id);
-                let dep_name = dep_namespace.name;
-                if !self.scopes.add_namespace(
-                    scope_id,
-                    dep_name,
-                    dep_namespace.scope_id,
-                    Provenance::Use,
-                ) {
+            self.bind_module_alias(scope_id, typed_namespace_id)?;
+            let deps = self.plan.mem.getn(planned.deps);
+            for (index, dep) in deps.iter().enumerate() {
+                let dep_namespace_id = self.modules.get(*dep).namespace_id;
+                let dep_name = self.namespaces.get(dep_namespace_id).name;
+                let is_repeated = deps[..index].iter().any(|earlier| {
+                    self.namespaces.get(self.modules.get(*earlier).namespace_id).name == dep_name
+                });
+                if is_repeated {
                     kbail!(
                         self,
                         Span::NONE,
@@ -3033,13 +3023,33 @@ impl TypedProgram {
                         self.ident_str(dep_name)
                     );
                 }
+                self.bind_module_alias(scope_id, dep_namespace_id)?;
             }
-            let _ = self.scopes.add_namespace(scope_id, ns_name, scope_id, Provenance::Use);
         }
         self.typecheck_module(module_id, parsed_namespace_id)?;
         self.completed_module_count += 1;
         self.compile_all_pending_ir(Span::NONE)?;
         Ok(module_id)
+    }
+
+    fn bind_module_alias(&mut self, scope_id: ScopeId, namespace_id: NamespaceId) -> K1Result<()> {
+        let chain = self.get_namespace_chain(namespace_id);
+        let (name, parents) = chain[1..].split_last().unwrap();
+        let mut path: parse::AstList<parse::IdentSpanned> = self.ast.mem.new_list(0);
+        path.push_grow(&mut self.ast.mem, parse::IdentSpanned::make_anon(StringId::EMPTY));
+        for parent in parents {
+            path.push_grow(&mut self.ast.mem, parse::IdentSpanned::make_anon(*parent));
+        }
+        let path = path.to_slice_trim(&mut self.ast.mem);
+        let target = QIdent::make(&mut self.ast.mem, path, *name, Span::NONE);
+        let use_id = self.ast.uses.add(parse::ParsedUse {
+            target,
+            alias: None,
+            exposed: false,
+            span: Span::NONE,
+        });
+        self.bind_use(scope_id, use_id);
+        self.check_use(scope_id, use_id)
     }
 
     fn find_submodule_owner_namespace(&self, submodule_owner: ModuleId) -> Option<NamespaceId> {
@@ -3061,7 +3071,7 @@ impl TypedProgram {
         &mut self,
         parsed_namespace_id: ParsedNamespaceId,
         parent_id: NamespaceId,
-    ) -> NamespaceId {
+    ) -> K1Result<NamespaceId> {
         let name = self.ast.namespaces.get(parsed_namespace_id).name;
         let scope_id = self.scopes.add_child_scope(
             Scopes::ROOT_SCOPE_ID,
@@ -3079,9 +3089,13 @@ impl TypedProgram {
             reload: false,
         });
         self.scopes.set_scope_owner_id(scope_id, ScopeOwnerId::Namespace(namespace_id));
+        let parent_scope_id = self.namespaces.get(parent_id).scope_id;
+        if !self.scopes.add_module_scope(parent_scope_id, name, scope_id) {
+            kbail!(self, Span::NONE, "two modules are named '{}'", self.ident_str(name));
+        }
         self.ast.namespaces.get_mut(parsed_namespace_id).typer_state =
             ParsedNamespaceDeclareOutcome::Declared(namespace_id);
-        namespace_id
+        Ok(namespace_id)
     }
 
     pub fn optimize_ir(&self) -> bool {
@@ -4201,7 +4215,7 @@ impl TypedProgram {
         let subst_pairs =
             self.get_ability_impl_subst_pairs(impl_signature, implementor_self_type_id);
         for pair in &subst_pairs {
-            let _ = self.scopes.add_type_substitution(scope_id, pair.from, pair.to);
+            self.scopes.add_type_substitution(scope_id, pair.from, pair.to);
         }
 
         let mut impl_functions = self.mem.new_list(ability_functions.len());
@@ -5154,7 +5168,11 @@ impl TypedProgram {
             CompletionSite::Scope { scope_id }
         } else {
             match self.resolve_qident(scope_id, name) {
-                Ok(path_scope_id) => CompletionSite::Path { path_scope_id },
+                Ok(path_scope_id) => {
+                    let path = self.ast.mem.getn(name.path(&self.ast.mem));
+                    let is_absolute = path.first().is_some_and(|s| s.name == StringId::EMPTY);
+                    CompletionSite::Path { path_scope_id, is_absolute }
+                }
                 Err(_) => CompletionSite::Scope { scope_id },
             }
         };
@@ -5183,10 +5201,8 @@ impl TypedProgram {
 
         let mut variable_id = self.find_variable_namespaced(scope_id, &name)?;
         if variable_id.is_none() {
-            if let Some((parsed_id, defn_scope)) =
-                self.find_pending_global_namespaced(scope_id, &name)?
-            {
-                if self.declare_global(parsed_id, defn_scope)?.is_some() {
+            if let Some(pending) = self.find_pending_global_namespaced(scope_id, &name)? {
+                if self.declare_global(pending.value, pending.scope_id)?.is_some() {
                     variable_id = self.find_variable_namespaced(scope_id, &name)?;
                 }
             }
@@ -6805,6 +6821,9 @@ impl TypedProgram {
                 usage_count: 0,
                 defn_span: arg.span,
             });
+            if self.scopes.find_variable_local(lambda_scope_id, arg.binding).is_some() {
+                kbail!(self, arg.span, "Duplicate parameter name: {}", arg.binding);
+            }
             self.scopes.add_variable(lambda_scope_id, arg.binding, variable_id);
             param_variables.push(TypedFunctionParam { variable_id, span: arg.span })
         }
@@ -6875,6 +6894,9 @@ impl TypedProgram {
                 // The binding behaves exactly like a user-written `let <name> = env.<name>`
                 let source = capture_sources[field_index];
                 let is_context = !capture.by_ref && self.variables.get(source).is_context();
+                let is_nearest_of_type = is_context
+                    && self.scopes.find_context_variable_by_type(ctx.scope_id, field_type)
+                        == Some(source);
                 let variable_id = self.variables.add(Variable {
                     name: capture.name,
                     owner_scope: lambda_scope_id,
@@ -6890,21 +6912,23 @@ impl TypedProgram {
                     initializer: Some(field_access),
                     span: capture.span,
                 }));
-                if is_context {
+                if is_nearest_of_type {
                     self.scopes.add_context_variable(
                         lambda_scope_id,
                         capture.name,
                         variable_id,
                         field_type,
                     );
+                } else {
+                    self.scopes.add_variable(lambda_scope_id, capture.name, variable_id);
+                }
+                if is_context {
                     self.scopes.add_context_capture_abilities(
                         ctx.scope_id,
                         source,
                         lambda_scope_id,
                         variable_id,
                     );
-                } else {
-                    self.scopes.add_variable(lambda_scope_id, capture.name, variable_id);
                 }
                 self.emit_ls_entity(capture.span, LsEntityKind::Variable { variable_id });
                 prologue_stmts.push(defn_stmt);
@@ -11808,7 +11832,7 @@ impl TypedProgram {
                 continue;
             };
             let _ = self.scopes.add_type(scope_id, param_name, pair.to);
-            let _ = self.scopes.add_type_substitution(scope_id, pair.from, pair.to);
+            self.scopes.add_type_substitution(scope_id, pair.from, pair.to);
         }
     }
 
@@ -11955,17 +11979,12 @@ impl TypedProgram {
                 defn_span: generic_param.span,
             });
             if specialized_param_type.kind == FnParamKind::Context {
-                let added = self.scopes.add_context_variable(
+                self.scopes.add_context_variable(
                     spec_fn_scope,
                     name,
                     variable_id,
                     specialized_param_type.type_id,
                 );
-                if !added {
-                    // Substitution collapsed two context param types into one; the first
-                    // registration wins the type key, but the name must still bind
-                    self.scopes.add_variable(spec_fn_scope, name, variable_id);
-                }
                 // Ability keys derive from the *generic* param's constraints so generic
                 // and specialized bodies resolve identically
                 let generic_param_type = self.variables.get(generic_param.variable_id).type_id;
@@ -12971,6 +12990,9 @@ impl TypedProgram {
                         (Some("type-id"), "impl-of") => {
                             Some(Builtin::Backend(BackendBuiltin::ImplOf))
                         }
+                        (Some("type-id"), "spell") => {
+                            Some(Builtin::Backend(BackendBuiltin::TypeSpell))
+                        }
                         (None, "make-struct") => Some(Builtin::Backend(BackendBuiltin::MakeStruct)),
                         (None, "make-either") => Some(Builtin::Backend(BackendBuiltin::MakeEither)),
                         (None, "make-reference") => {
@@ -13412,7 +13434,7 @@ impl TypedProgram {
             .zip(self.mem.getn(ability_parameters).iter().filter(|p| p.is_ability_side_param()))
         {
             let _ = self.scopes.add_type(specialized_ability_scope, param.name, *arg_type);
-            let _ = self.scopes.add_type_substitution(
+            self.scopes.add_type_substitution(
                 specialized_ability_scope,
                 param.type_variable_id,
                 *arg_type,
@@ -14125,6 +14147,9 @@ impl TypedProgram {
                 kind: if is_context { FnParamKind::Context } else { FnParamKind::Plain },
             });
             params.push(TypedFunctionParam { variable_id, span: fn_param.span });
+            if self.scopes.find_variable_local(fn_scope_id, fn_param.name).is_some() {
+                kbail!(self, fn_param.span, "Duplicate parameter name: {}", fn_param.name);
+            }
             if is_context {
                 let inserted = self.scopes.add_context_variable(
                     fn_scope_id,
@@ -14142,9 +14167,7 @@ impl TypedProgram {
                 }
                 self.register_context_param_ability_keys(fn_scope_id, variable_id, type_id);
             } else {
-                if !self.scopes.add_variable(fn_scope_id, fn_param.name, variable_id) {
-                    kbail!(self, fn_param.span, "Duplicate parameter name: {}", fn_param.name);
-                }
+                self.scopes.add_variable(fn_scope_id, fn_param.name, variable_id);
             }
         }
 
@@ -14582,9 +14605,10 @@ impl TypedProgram {
             });
             param_types.push(FnParamType { type_id, kind });
             params.push(TypedFunctionParam { variable_id, span: fn_param.span });
-            if !self.scopes.add_variable(fn_scope_id, fn_param.name, variable_id) {
+            if self.scopes.find_variable_local(fn_scope_id, fn_param.name).is_some() {
                 kbail!(self, fn_param.span, "Duplicate parameter name: {}", fn_param.name);
             }
+            self.scopes.add_variable(fn_scope_id, fn_param.name, variable_id);
         }
 
         let function_type_id = self.add_function_type(param_types.as_slice(), code_type, false);
@@ -15109,7 +15133,7 @@ impl TypedProgram {
         let ns_scope_id = self.namespaces.get_scope(parent_id);
         // not just any scope hit will do; has to be Defined in the parent
         match self.scopes.find_namespace_entry(ns_scope_id, name) {
-            Some((id, Provenance::Defined)) => Some(id),
+            Some(found) if found.provenance == Provenance::Defined => Some(found.value),
             _ => None,
         }
     }
@@ -15193,23 +15217,13 @@ impl TypedProgram {
                 };
                 let namespace_id = self.namespaces.add(ability_namespace);
                 self.scopes.set_scope_owner_id(ns_scope_id, ScopeOwnerId::Namespace(namespace_id));
-                if !self.scopes.add_namespace(
-                    scope_id,
-                    parsed_ability.name,
-                    ns_scope_id,
-                    Provenance::Defined,
-                ) {
-                    let occupant =
-                        self.scopes.find_namespace_local(scope_id, parsed_ability.name).unwrap();
-                    if self.namespaces.get(occupant).parent_id == Some(parent_namespace_id) {
-                        kbail!(
-                            self,
-                            parsed_ability.span,
-                            "Namespace with name {} already exists",
-                            parsed_ability.name
-                        );
-                    }
-                    self.scopes.replace_namespace(scope_id, parsed_ability.name, ns_scope_id);
+                if !self.scopes.add_namespace(scope_id, parsed_ability.name, ns_scope_id) {
+                    kbail!(
+                        self,
+                        parsed_ability.span,
+                        "Namespace with name {} already exists",
+                        parsed_ability.name
+                    );
                 }
                 ns_scope_id
             }
@@ -15369,10 +15383,9 @@ impl TypedProgram {
         if let Some(ability_id) = self.find_ability_namespaced(scope_id, ability_name)? {
             return Ok(ability_id);
         }
-        if let Some((pending_ability, ability_scope)) =
-            self.find_pending_ability_namespaced(scope_id, ability_name)?
+        if let Some(pending) = self.find_pending_ability_namespaced(scope_id, ability_name)?
             && let Some(ability_id) =
-                self.compile_ability_definition(pending_ability, ability_scope)?
+                self.compile_ability_definition(pending.value, pending.scope_id)?
         {
             return Ok(ability_id);
         }
@@ -15921,13 +15934,16 @@ impl TypedProgram {
             ParsedId::Global(global_id) => {
                 let parsed = self.ast.get_global(global_id);
                 let name = parsed.name;
+                let span = parsed.span;
                 let condition = parsed.compile_condition;
                 if condition.is_some() != in_order
                     || !self.execute_static_condition(condition, namespace_scope_id)
                 {
                     return;
                 }
-                self.scopes.add_pending_global(namespace_scope_id, name, global_id);
+                if !self.scopes.add_pending_global(namespace_scope_id, name, global_id) {
+                    self.report(kerr!(self, span, "Global {} exists", name));
+                }
             }
             ParsedId::TypeDefn(type_defn_id) => {
                 let parsed_type_defn = self.ast.get_type_defn(type_defn_id).clone();
@@ -16338,17 +16354,13 @@ impl TypedProgram {
         let namespace_id = self.namespaces.add(namespace);
         self.scopes.set_scope_owner_id(ns_scope_id, ScopeOwnerId::Namespace(namespace_id));
 
-        if !self.scopes.add_namespace(parent_scope_id, name, ns_scope_id, Provenance::Defined) {
-            let occupant = self.scopes.find_namespace_local(parent_scope_id, name).unwrap();
-            if self.namespaces.get(occupant).parent_id == Some(parent_ns_id) {
-                kbail!(
-                    self,
-                    ast_namespace.span,
-                    "Namespace name {} is taken",
-                    self.ident_str(name).blue()
-                );
-            }
-            self.scopes.replace_namespace(parent_scope_id, name, ns_scope_id);
+        if !self.scopes.add_namespace(parent_scope_id, name, ns_scope_id) {
+            kbail!(
+                self,
+                ast_namespace.span,
+                "Namespace name {} is taken",
+                self.ident_str(name).blue()
+            );
         }
         if namespace_type == NamespaceKind::TypeCompanion
             && let Some(type_id) = self.scopes.find_type_local(parent_scope_id, name)
@@ -16393,9 +16405,6 @@ impl TypedProgram {
             .expect("namespace must be defined directly inside another namespace");
         self.fail_if_reload_ns(parent_ns, ast_namespace.span, "nested namespaces")?;
 
-        // Extension is a namespace-tree question, not a name-resolution one: the
-        // scope map also holds use-aliases, which a local declaration shadows via
-        // create_namespace instead
         let namespace_id = if let Some(existing) =
             self.find_ns_child_by_name(parent_ns, ast_namespace.name)
         {

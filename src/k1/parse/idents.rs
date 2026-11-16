@@ -8,6 +8,10 @@ use crate::{impl_copy_if_small, lex::Span};
 
 nz_u32_id!(StringId);
 
+impl StringId {
+    pub const EMPTY: StringId = StringId(std::num::NonZeroU32::new(1).unwrap());
+}
+
 impl Ord for StringId {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.as_u32().cmp(&other.as_u32())
@@ -501,6 +505,8 @@ impl IdentPool {
     #[allow(non_snake_case)]
     pub fn make(mem: &mut Mem<ParsedProgram>) -> Self {
         let mut pool = Interner::make();
+        let empty = pool.intern("");
+        debug_assert_eq!(empty, StringId::EMPTY);
 
         macro_rules! intern {
             ($name: expr) => {

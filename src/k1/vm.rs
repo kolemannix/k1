@@ -241,6 +241,7 @@ pub struct Vm {
     /// (fp, pc) at the point of a bc execution error, for bc stack traces
     pub(crate) bc_fault: Option<(u64, u32)>,
     pub(crate) meta_call_site: Option<(crate::typer::EvalExprContext, Span)>,
+    pub(crate) text_buffer: String,
 }
 
 impl Vm {
@@ -294,6 +295,7 @@ impl Vm {
             quiet_messages: false,
             bc_fault: None,
             meta_call_site: None,
+            text_buffer: String::new(),
         }
     }
 }

@@ -143,6 +143,47 @@ ns for span {
     :some wrap-buffer(buf)
   }
 
+  fn write-base64[w: writer](self: span[u8], w) {
+    let digits = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+    let i: size = 0
+    while i < self.len() {
+      let b0 = self.[i].as-size()
+      let b1 = if i + 1 < self.len() self.[i + 1].as-size() else 0
+      let b2 = if i + 2 < self.len() self.[i + 2].as-size() else 0
+      w.write-char(digits.[b0 >> 2])
+      w.write-char(digits.[((b0 & 3) << 4) + (b1 >> 4)])
+      w.write-char(if i + 1 < self.len() digits.[((b1 & 15) << 2) + (b2 >> 6)] else '=')
+      w.write-char(if i + 2 < self.len() digits.[b2 & 63] else '=')
+      i = i + 3
+    }
+  }
+
+  fn to-base64(self: span[u8]): string {
+    let sb = string-builder/with-capacity((self.len() + 2) / 3 * 4)
+    self.write-base64(sb.&)
+    sb.build()
+  }
+
+  fn from-base64(s: string): ?span[u8] {
+    if s.len() % 4 != 0 return :none
+    let padding: size = if s.ends-with("==") 2 else if s.ends-with("=") 1 else 0
+    let buf = buffer/allocate[u8](s.len() / 4 * 3 - padding)
+    let bits: size = 0
+    let bit-count: u32 = 0
+    let written: size = 0
+    for s.take(s.len() - padding) {
+      require it.to-base64-digit() is :some digit else return :none
+      bits = ((bits & 4095) << 6) + digit.as-size()
+      bit-count = bit-count + 6
+      if bit-count >= 8 {
+        bit-count = bit-count - 8
+        buf.[written] = ((bits >> bit-count) & 255).trunc[u8]
+        written = written + 1
+      }
+    }
+    :some wrap-buffer(buf)
+  }
+
   fn as-char-span(self: span[byte]): span[char] {
     .{ buffer = self.buffer.as-char-buffer() }
   }

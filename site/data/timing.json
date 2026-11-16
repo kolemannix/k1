@@ -1,102 +1,144 @@
 {
   "lines": 27730,
-  "typecheck": [
+  "compile": [
     {
-      "name": "k1",
-      "ms": 30,
-      "k1": true,
-      "pct": 1.17
+      "label": "typecheck",
+      "unit": "ms",
+      "rows": [
+        {
+          "name": "k1",
+          "value": 30,
+          "k1": true,
+          "pct": 1.17
+        },
+        {
+          "name": "C",
+          "value": 100,
+          "k1": false,
+          "pct": 3.91
+        },
+        {
+          "name": "Zig",
+          "value": 276,
+          "k1": false,
+          "pct": 10.8
+        },
+        {
+          "name": "OCaml",
+          "value": 442,
+          "k1": false,
+          "pct": 17.3
+        },
+        {
+          "name": "Rust",
+          "value": 611,
+          "k1": false,
+          "pct": 23.91
+        },
+        {
+          "name": "C++",
+          "value": 2555,
+          "k1": false,
+          "pct": 100.0
+        }
+      ]
     },
     {
-      "name": "C",
-      "ms": 100,
-      "k1": false,
-      "pct": 3.91
-    },
-    {
-      "name": "Zig",
-      "ms": 276,
-      "k1": false,
-      "pct": 10.8
-    },
-    {
-      "name": "OCaml",
-      "ms": 442,
-      "k1": false,
-      "pct": 17.3
-    },
-    {
-      "name": "Rust",
-      "ms": 611,
-      "k1": false,
-      "pct": 23.91
-    },
-    {
-      "name": "C++",
-      "ms": 2555,
-      "k1": false,
-      "pct": 100.0
-    }
-  ],
-  "build": [
-    {
-      "name": "k1",
-      "ms": 160,
-      "k1": true,
-      "pct": 1.33
-    },
-    {
-      "name": "Go",
-      "ms": 706,
-      "k1": false,
-      "pct": 5.89
-    },
-    {
-      "name": "C",
-      "ms": 708,
-      "k1": false,
-      "pct": 5.9
-    },
-    {
-      "name": "Rust",
-      "ms": 1329,
-      "k1": false,
-      "pct": 11.08
-    },
-    {
-      "name": "Java",
-      "ms": 1632,
-      "k1": false,
-      "pct": 13.61
-    },
-    {
-      "name": "OCaml",
-      "ms": 3225,
-      "k1": false,
-      "pct": 26.89
-    },
-    {
-      "name": "Zig",
-      "ms": 3248,
-      "k1": false,
-      "pct": 27.08
-    },
-    {
-      "name": "C++",
-      "ms": 6354,
-      "k1": false,
-      "pct": 52.99
-    },
-    {
-      "name": "Kotlin",
-      "ms": 11992,
-      "k1": false,
-      "pct": 100.0
+      "label": "debug build",
+      "unit": "ms",
+      "rows": [
+        {
+          "name": "k1",
+          "value": 160,
+          "k1": true,
+          "pct": 1.33
+        },
+        {
+          "name": "Go",
+          "value": 706,
+          "k1": false,
+          "pct": 5.89
+        },
+        {
+          "name": "C",
+          "value": 708,
+          "k1": false,
+          "pct": 5.9
+        },
+        {
+          "name": "Rust",
+          "value": 1329,
+          "k1": false,
+          "pct": 11.08
+        },
+        {
+          "name": "Java",
+          "value": 1632,
+          "k1": false,
+          "pct": 13.61
+        },
+        {
+          "name": "OCaml",
+          "value": 3225,
+          "k1": false,
+          "pct": 26.89
+        },
+        {
+          "name": "Zig",
+          "value": 3248,
+          "k1": false,
+          "pct": 27.08
+        },
+        {
+          "name": "C++",
+          "value": 6354,
+          "k1": false,
+          "pct": 52.99
+        },
+        {
+          "name": "Kotlin",
+          "value": 11992,
+          "k1": false,
+          "pct": 100.0
+        }
+      ]
     }
   ],
   "stress": {
-    "lines": 1009473,
-    "ms": 501,
-    "lines_per_s": 2012657
-  }
+    "lines": 1010641,
+    "ms": 486,
+    "lines_per_s": 2077065
+  },
+  "comptime": [
+    {
+      "label": "derive a JSON serializer from a type",
+      "unit": "\u00b5s",
+      "rows": [
+        {
+          "name": "k1",
+          "value": 24,
+          "k1": true,
+          "pct": 1.28
+        },
+        {
+          "name": "Zig",
+          "value": 156,
+          "k1": false,
+          "pct": 8.29
+        },
+        {
+          "name": "C++26 reflection",
+          "value": 1699,
+          "k1": false,
+          "pct": 90.32
+        },
+        {
+          "name": "Rust",
+          "value": 1881,
+          "k1": false,
+          "pct": 100.0
+        }
+      ]
+    }
+  ]
 }

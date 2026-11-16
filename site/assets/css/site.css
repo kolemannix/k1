@@ -66,7 +66,7 @@ pre code { font-size: inherit; color: inherit; background: none; padding: 0; bor
 .plate nav .gh svg { display: block; width: 1.05rem; height: 1.05rem; }
 
 .hero { padding: clamp(2.25rem, 6vw, 4.5rem) 0 clamp(1.5rem, 3vw, 2.25rem); border-bottom: 1px solid var(--l); }
-.hero h1 { font-family: var(--mono); font-weight: 600; font-size: clamp(1.5rem, 3.2vw, 2.25rem); letter-spacing: -.025em; line-height: 1.05; color: var(--b); }
+.hero h1 { font-family: var(--mono); font-weight: 600; font-size: clamp(1.25rem, 2.2vw, 1.5rem); letter-spacing: -.015em; line-height: 1.2; color: var(--b); }
 .hero h1 em { font-style: normal; color: var(--s); }
 .hero .sub { max-width: 58ch; color: var(--f); font-size: 1.0625rem; margin-top: 1.25rem; }
 .hero-grid { display: grid; grid-template-columns: minmax(0, 1fr) 28rem; gap: 2.5rem; align-items: center; }
@@ -86,7 +86,7 @@ pre code { font-size: inherit; color: inherit; background: none; padding: 0; bor
 .btn:hover { filter: brightness(1.08); }
 
 section.blk { padding: clamp(2rem, 4vw, 3rem) 0; border-bottom: 1px solid var(--l); }
-.blk h2 { font-family: var(--mono); font-size: clamp(1.25rem, 3vw, 1.75rem); letter-spacing: -.02em; color: var(--b); margin-bottom: .75rem; }
+.blk h2 { font-family: var(--mono); font-size: 1.125rem; letter-spacing: -.01em; color: var(--b); margin-bottom: .75rem; }
 .prose { max-width: 62ch; color: var(--prose); }
 .prose strong { color: var(--f); }
 .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(19rem, 1fr)); gap: clamp(1.5rem, 3.5vw, 2.75rem); }
@@ -148,11 +148,13 @@ section.blk { padding: clamp(2rem, 4vw, 3rem) 0; border-bottom: 1px solid var(--
 .panels { display: grid; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); gap: 2rem 3rem; margin-top: 1.25rem; }
 .bars { display: grid; gap: .45rem; align-content: start; font-family: var(--mono); font-size: .75rem; font-variant-numeric: tabular-nums; }
 .bars .label { margin-bottom: .35rem; }
+.panels + .prose { margin-top: 1.25rem; }
 .bars .row { display: grid; grid-template-columns: 10rem 1fr 5.5rem; gap: .75rem; align-items: center; color: var(--m); }
 .bars .row.k1 { color: var(--b); }
 .bars .tr { height: 12px; }
 .bars .bar { display: block; height: 100%; min-width: 3px; background: var(--l2); }
 .bars .row.k1 .bar { background: var(--s); }
+.bars .row.k1 .v { color: var(--s); }
 .tenet { list-style: none; padding: 0; margin: 0; border-top: 1px solid var(--l); }
 .tenet li { display: grid; grid-template-columns: 2.5rem 1fr; gap: .4rem 1rem; padding: 1rem 0; border-bottom: 1px solid var(--l); }
 .tenet .mn { font-family: var(--mono); font-size: .75rem; color: var(--s); padding-top: .35rem; }
@@ -163,19 +165,12 @@ section.blk { padding: clamp(2rem, 4vw, 3rem) 0; border-bottom: 1px solid var(--
 @media (prefers-reduced-motion: reduce) { .cursor { animation: none; } }
 
 .close { padding: clamp(2.5rem, 5vw, 4rem) 0; border-bottom: 1px solid var(--l); }
-.close h2 { font-family: var(--mono); font-size: clamp(1.4rem, 3.6vw, 2.25rem); letter-spacing: -.025em; color: var(--b); }
 
 .page { padding: clamp(2.5rem, 5vw, 4rem) 0; }
 .page h1 { font-family: var(--mono); font-size: clamp(1.25rem, 2.2vw, 1.6rem); letter-spacing: -.025em; line-height: 1.1; color: var(--b); margin-bottom: 1.5rem; }
 .page .body { max-width: 60rem; color: var(--prose); }
 .page .body img, .page .body svg { max-width: 100%; height: auto; }
 .chart { margin: 0 0 1.5rem; border: 1px solid var(--l); }
-.provenance { font-family: var(--mono); font-size: .75rem; color: var(--m); margin-top: 2rem; }
-.provenance a { color: var(--m); text-decoration: underline; text-underline-offset: 3px; }
-.intro { margin-bottom: 2.5rem; color: var(--f); }
-.suite { margin-bottom: 3rem; scroll-margin-top: 1.5rem; }
-.suite h2 { margin: 0 0 .75rem; }
-.suite .chart { margin-bottom: 1rem; }
 .chart svg { display: block; width: 100%; height: auto; }
 .page .body table { display: block; overflow-x: auto; border-collapse: collapse; margin: 1rem 0 1.25rem; font-family: var(--mono); font-size: .8125rem; line-height: 1.5; font-variant-numeric: tabular-nums; }
 .page .body th, .page .body td { padding: .4rem .9rem .4rem 0; border-bottom: 1px solid var(--l); text-align: left; vertical-align: top; white-space: nowrap; }

@@ -1,14 +1,12 @@
 [
   {
     "title": "Functions and variables",
-    "section": "00-basics",
-    "anchor": "functions-and-variables",
     "blurb": "",
     "blocks": [
       {
         "label": "program",
         "kind": "k1",
-        "code": "fn greeting(name: string, height-cm: int, formal: bool): string {\n  let title = if formal \"Dr. \" else \"\"\n  let inches = height-cm * 100 / 254\n  \"Hello, $title$name, you are ${inches / 12} ft ${inches % 12} in\"\n}\n\nfn main() {\n  let name = \"Dennis\"\n  println(greeting(name, height-cm = 180, formal = false))\n  println(greeting(\"Ada\", height-cm = 170, formal = true))\n}"
+        "code": "fn greeting(name: string, height-cm: int, formal: bool): string {\n  let title = if formal \"Dr. \" else \"\"\n  let inches = height-cm * 100 / 254\n  \"Hello, $title$name, you are ${inches / 12} ft ${inches % 12} in\"\n}\n\nfn main() {\n  let name = \"Dennis\"\n  let line = greeting(name, height-cm = 180, formal = false)\n  println(line)\n  println(greeting(\"Ada\", height-cm = 170, formal = true))\n}"
       },
       {
         "label": "output",
@@ -19,9 +17,7 @@
   },
   {
     "title": "list, span, and buffer",
-    "section": "00-basics",
-    "anchor": "list-span-and-buffer",
-    "blurb": "Name a better duo than `ptr` and `len`, I'll wait. `list` in `k1` is [the growable one](https://www.youtube.com/watch?v=95M6V3mZgrI), backed by a `buffer`.\n\n`buffer[t]` is the raw construct that means 'this is memory that generally holds `t`s'.\n\n`span[t]` is your read-only, typically borrowed view of a buffer often called a slice, but I don't like how that implies cutting or partiality.\n\nThose closures disappear at runtime, by the way",
+    "blurb": "Name a better duo than `ptr` and `len`, I'll wait. `list` in `k1` is the growable one (a dynamic array), backed by a `buffer`.\n\n`buffer[t]` is the raw construct that means 'this is memory that holds `t`s'. `span[t]` is your read-only, typically borrowed view of a buffer often called a slice, but I don't like how that implies cutting or partiality. Those closures disappear at runtime, by the way",
     "blocks": [
       {
         "label": "in core",
@@ -42,8 +38,6 @@
   },
   {
     "title": "Structs",
-    "section": "00-basics",
-    "anchor": "structs",
     "blurb": "Structs let us say 'and' at the type level. They're the basic building block of all data composition. `k1` has both named and anonymous structs, and understands their structure and lets you talk about it like typescript. More on that later",
     "blocks": [
       {
@@ -60,9 +54,7 @@
   },
   {
     "title": "either",
-    "section": "00-basics",
-    "anchor": "either",
-    "blurb": "While structs let us say 'and', eithers let us say 'or'. Together with structs, we can 'and' and 'or' our way to extremely powerful constructs. This combination is often called \"Algebraic Data Types\". `k1` will construct a bare integer enum at runtime, or a tagged union, depending on whether any of your variants have payloads. Core types like `result` and `opt` will be familiar to Rust users, and are defined as simply as this. `?u8` is shorthand for `opt[u8]` and is a 2 byte struct at runtime",
+    "blurb": "`either`s let us say 'or' at the typelevel. Together with structs, we can 'and' and 'or' our way to extremely powerful constructs. This combination is often called \"Algebraic Data Types\". `k1` will construct a bare integer enum at runtime, or a tagged union, depending on whether any of your variants have payloads. Core types like `result` and `opt` will be familiar to Rust users, and are defined as simply as this. `?u8` is shorthand for `opt[u8]` and is a 2 byte struct at runtime",
     "blocks": [
       {
         "label": "in core",
@@ -83,14 +75,12 @@
   },
   {
     "title": "Optionals and results",
-    "section": "00-basics",
-    "anchor": "optionals-and-results",
     "blurb": "",
     "blocks": [
       {
         "label": "program",
         "kind": "k1",
-        "code": "fn find-even(xs: list[int]): ?int {\n  for x in xs { if x % 2 == 0 { return :some x } }\n  :none\n}\n\nfn doubled-even(xs: list[int]): ?int {\n  let x = find-even(xs).try\n  :some(x * 2)\n}\n\nfn parse-age(s: string): result[int, string] {\n  require int/from-string(s) is :ok n else { return :err \"not a number: $s\" }\n  if n < 0 :err \"negative\" else :ok n\n}\n\nfn main() {\n  println(doubled-even([1, 3, 4]))\n  println(doubled-even([1, 3]) ? -1)\n  println(parse-age(\"21\"))\n  println(parse-age(\"abc\"))\n}"
+        "code": "fn find-even(xs: list[int]): ?int {\n  for x in xs { if x % 2 == 0 { return :some x } }\n  :none\n}\n\nfn doubled-even(xs: list[int]): ?int {\n  let x = find-even(xs).try\n  :some(x * 2)\n}\n\nfn parse-age(s: string): result[int, string] {\n  require i64/from-string(s) is :ok n else { return :err \"not a number: $s\" }\n  if n < 0 :err \"negative\" else :ok n\n}\n\nfn main() {\n  println(doubled-even([1, 3, 4]))\n  println(doubled-even([1, 3]) ? -1)\n  println(parse-age(\"21\"))\n  println(parse-age(\"abc\"))\n}"
       },
       {
         "label": "output",
@@ -101,8 +91,6 @@
   },
   {
     "title": "Control flow",
-    "section": "00-basics",
-    "anchor": "control-flow",
     "blurb": "loops with value-breaks, a `never` type that models divergence, user-accessible `.try` for error returns, and my favorite, a _binding and matching_ early return construct, which can be chained, called `require`",
     "blocks": [
       {
@@ -119,9 +107,7 @@
   },
   {
     "title": "First-class functions and lambdas",
-    "section": "00-basics",
-    "anchor": "first-class-functions-and-lambdas",
-    "blurb": "Lambdas compile to bare metal functions. `some fn int -> int`, shorthand for `some fn(int) -> int`, selects the physical representation for that function and specializes on it: a direct call for a named function or a lambda, an indirect call through a `*fn`, a dynamic call through a `dyn[fn]`.",
+    "blurb": "Lambdas compile to bare metal functions. `some fn int -> int`, shorthand for `some fn(int) -> int`, selects the physical representation for each argument: a direct call for a named function or a lambda, an indirect call through a `*fn`, a dynamic call through a `dyn[fn]`.",
     "blocks": [
       {
         "label": "program",
@@ -137,8 +123,6 @@
   },
   {
     "title": "Abilities",
-    "section": "00-basics",
-    "anchor": "abilities",
     "blurb": "k1 uses `ability` to model define and implement interfaces, and do all kinds of ad-hoc polymorphism, that leaves no runtime trace. `impl ours/greet for theirs/cat` is an independent 3rd party, neither the cat nor greet, teaching cat how to greet. This is an immensely powerful decoupling, contrast with inheritance-based implementation. An ability can have both ability-side and impl-side type parameters. `to[t]` is an ability-side parameter; a type can be `to` for as many `t`s as it can convert to; but `iterable[t]` is an impl-side parameter: a type can implement iterator _once_ and provide only one type that it iterates over. (similar to Rust traits' associated types)",
     "blocks": [
       {
@@ -160,8 +144,6 @@
   },
   {
     "title": "Generics",
-    "section": "00-basics",
-    "anchor": "generics",
     "blurb": "Types and functions can accept types as parameters; this is your standard parametric polymorphism ('inputs over shapes') that allows writing code we call 'generic'. This happens entirely at compile-time, and understands abilities as type-bounds.",
     "blocks": [
       {
@@ -178,8 +160,6 @@
   },
   {
     "title": "References",
-    "section": "00-basics",
-    "anchor": "references",
     "blurb": "These are really just pointers. They are nonnull, but it's not that hard to manufacture a null one; I'm not too interested in stopping you. The untyped one, your `void*`, is called `ptr`.",
     "blocks": [
       {
@@ -196,8 +176,6 @@
   },
   {
     "title": "Early execution",
-    "section": "00-basics",
-    "anchor": "early-execution",
     "blurb": "`k1` can run any code at compile-time. It's really useful, really powerful, really fast, and really fun. Many more examples in Beyond",
     "blocks": [
       {

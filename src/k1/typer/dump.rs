@@ -205,6 +205,41 @@ impl TypedProgram {
         s
     }
 
+    pub fn write_type_spelling(&self, w: &mut String, type_id: TypeId) {
+        if let Some(defn_info) = self.get_defn_info(type_id) {
+            let instance = self.get_instance_info(type_id).copied();
+            let named_type_id = match instance {
+                Some(instance) => instance.generic_parent,
+                None => type_id,
+            };
+            let chain = self.get_namespace_chain(defn_info.namespace_id);
+            let path = std::iter::once(StringId::EMPTY).chain(chain[1..].iter().copied());
+            let resolved = self
+                .scopes
+                .find_path_scope(Scopes::ROOT_SCOPE_ID, path, None, |_, _| {})
+                .ok()
+                .and_then(|scope_id| self.scopes.find_type_exposed(scope_id, defn_info.name));
+            if resolved == Some(named_type_id) {
+                for segment in chain[1..].iter().chain(std::iter::once(&defn_info.name)) {
+                    w.push('/');
+                    w.push_str(self.ident_str(*segment));
+                }
+                if let Some(instance) = instance {
+                    w.push('[');
+                    for (index, arg) in self.get_type_slice(instance.type_args).iter().enumerate() {
+                        if index > 0 {
+                            w.push_str(", ");
+                        }
+                        self.write_type_spelling(w, *arg);
+                    }
+                    w.push(']');
+                }
+                return;
+            }
+        }
+        write!(w, "(#type /core/types/type-id/make({}))", type_id.as_u32()).unwrap();
+    }
+
     fn display_defn_name<W: fmt::Write + ?Sized>(
         &self,
         w: &mut W,

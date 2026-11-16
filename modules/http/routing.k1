@@ -69,9 +69,9 @@ fn parse-pattern(tok: code-token, pat: string): list[seg] {
   segs
 }
 
-fn parse-rows(rows: span[code-token]): list[entry] {
-  if rows.is-empty() crash("routing: no routes given")
-  let rd = token-cursor/new(rows)
+fn parse-route-entries(body: span[code-token]): list[entry] {
+  if body.is-empty() crash("routing: no routes given")
+  let rd = token-cursor/new(body)
   let entries = list/empty[entry]()
   while not rd.is-at-end() {
     let m = rd.expect-ident()
@@ -112,7 +112,7 @@ fn shape-suffix(e: entry, from: size): string {
   b.build()
 }
 
-fn validate(entries: span[entry]) {
+fn validate-route-entries(entries: span[entry]) {
   for en in entries {
     let ps = params(en)
     for p in ps {
@@ -414,9 +414,9 @@ fn emit-print-impl(context cb: *code-builder)(name: code, entries: span[entry]) 
   })
 }
 
-macro define(name: code, rows: span[code-token]) {
-  let entries = parse-rows(rows).as-span()
-  validate(entries)
+macro define(name: code, body: span[code-token]) {
+  let entries = parse-route-entries(body).as-span()
+  validate-route-entries(entries)
 
   let cb-storage = code-builder/new()
   let(context) cb = cb-storage.&

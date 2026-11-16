@@ -19,10 +19,6 @@ disableKinds = ['taxonomy', 'term', 'rss']
   target = 'content'
 
 [[module.mounts]]
-  source = '../content/showcase/sections'
-  target = 'content/examples'
-
-[[module.mounts]]
   source = '../content/showcase/benchmarks'
   target = 'assets/benchmarks'
   files = ['**/*.svg']
@@ -51,16 +47,6 @@ disableKinds = ['taxonomy', 'term', 'rss']
 [params]
   description = 'k1 is an expressive language for systems and applications, designed around what you can do.'
   repo = 'https://github.com/kolemannix/k1'
-
-[[menu.main]]
-  name = 'examples'
-  url = '/examples/'
-  weight = 1
-
-[[menu.main]]
-  name = 'benchmarks'
-  url = '/benchmarks/'
-  weight = 2
 
 [[menu.main]]
   name = 'tenets'

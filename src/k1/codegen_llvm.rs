@@ -3145,7 +3145,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
                 | BackendBuiltin::Eval
                 | BackendBuiltin::TryEval
                 | BackendBuiltin::BakeStaticValue
-                | BackendBuiltin::ImplOf,
+                | BackendBuiltin::ImplOf
+                | BackendBuiltin::TypeSpell,
             ) => {
                 let name = self.k1.ident_str(self.k1.get_function(function_id).name);
                 cgbail!(span, "{name} is only available to compile-time code");
@@ -3652,7 +3653,8 @@ impl<'ctx, 'module> Cg<'ctx, 'module> {
             | BackendBuiltin::Eval
             | BackendBuiltin::TryEval
             | BackendBuiltin::BakeStaticValue
-            | BackendBuiltin::ImplOf => self.builder.build_unreachable().unwrap(),
+            | BackendBuiltin::ImplOf
+            | BackendBuiltin::TypeSpell => self.builder.build_unreachable().unwrap(),
             BackendBuiltin::CompilerMessage => self.builder.build_return(None).unwrap(),
             BackendBuiltin::ReplCheckbox => self.builder.build_return(None).unwrap(),
         };

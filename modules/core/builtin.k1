@@ -93,9 +93,7 @@ ns types {
       :some info.args.[0]
     }
     fn(inline) make(inner: u64): type-id { .{ inner } }
-    fn spell(self: type-id): string {
-      `(#type type-id/make(${self.inner}))`
-    }
+    fn(builtin) spell(self: type-id): string
   }
 
   // Magically implemented for all enums

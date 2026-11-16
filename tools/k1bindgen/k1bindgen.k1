@@ -674,7 +674,7 @@ fn visit-root(
       if clang/Cursor_isMacroFunctionLike(current).as-bool() return :Continue
       if clang/Cursor_isMacroBuiltin(current).as-bool() return :Continue
       let name = clang/getCursorSpelling(current).to-string()
-      if not bg.macro-names.add(name) return :Continue
+      if not bg.macro-names.add(bg.name-config.transformed-name(name)) return :Continue
       let body = macro-body-tokens(bg.unit, current)
       if transpile-macro-body(bg.name-config, bg.emitted-macros, body.as-span()) is {
         :ok value -> {

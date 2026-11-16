@@ -310,7 +310,7 @@ pub fn collect_completions(
                 });
             }
         }
-        CompletionSite::Path { path_scope_id } => {
+        CompletionSite::Path { path_scope_id, is_absolute } => {
             collect_completion_candidates_in_scope_immediate(
                 k1,
                 path_scope_id,
@@ -318,6 +318,17 @@ pub fn collect_completions(
                 &mut items,
                 true,
             );
+            if is_absolute {
+                for name in k1.scopes.iter_module_names(path_scope_id) {
+                    items.push(CompletionCandidate {
+                        label: k1.ident_str(name).to_string(),
+                        kind: NameKind::Namespace,
+                        detail: "module".to_string(),
+                        sort_group: 5,
+                        snippet: None,
+                    });
+                }
+            }
         }
         CompletionSite::Variant { type_id } => {
             let type_id = match k1.types.get(type_id) {
@@ -760,6 +771,15 @@ fn use-it(): int {
         // Path enumeration is local to the namespace: no keywords, no outer names
         assert!(!labels.contains(&"use-it".to_string()));
         assert!(!labels.contains(&"fn".to_string()));
+    }
+
+    #[test]
+    fn absolute_path_completion() {
+        let mut k1 = compile_with_cursor("absolute", "fn use-it(): int {\n  /@@\n  0\n}\n");
+        let labels = labels(&mut k1);
+        assert!(labels.contains(&"absolute".to_string()));
+        assert!(labels.contains(&"core".to_string()));
+        assert!(!labels.contains(&"use-it".to_string()));
     }
 
     #[test]

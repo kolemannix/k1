@@ -44,6 +44,23 @@ fn(test) hex-encode-and-decode() {
   assert(span/from-hex("0g") is :none)
 }
 
+fn(test) base64-encode-and-decode() {
+  assert-equals("".span-bytes().to-base64(), "")
+  assert-equals("f".span-bytes().to-base64(), "Zg==")
+  assert-equals("fo".span-bytes().to-base64(), "Zm8=")
+  assert-equals("foobar".span-bytes().to-base64(), "Zm9vYmFy")
+  let high-bytes: list[u8] = [251, 255, 190]
+  assert-equals(high-bytes.as-span().to-base64(), "+/++")
+  assert(span/from-base64("+/++").! == high-bytes.as-span())
+  assert(span/from-base64("Zg==").! == "f".span-bytes())
+  assert(span/from-base64("Zm8=").! == "fo".span-bytes())
+  assert(span/from-base64("Zm9vYmFy").! == "foobar".span-bytes())
+  assert(span/from-base64("").! == span/empty())
+  assert(span/from-base64("Zm9") is :none)
+  assert(span/from-base64("Zm9-") is :none)
+  assert(span/from-base64("Z=g=") is :none)
+}
+
 fn(test) string-split-by-char() {
   assert("".split-by-char('.') == [])
   assert("a...".split-by-char('.') == ["a", "", ""])

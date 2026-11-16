@@ -394,6 +394,7 @@ crate::tag_enum! {
     pub enum BackendBuiltin {
         TypeInfo,
         ImplOf,
+        TypeSpell,
         TestSuite,
         MakeStruct,
         MakeEither,
@@ -421,6 +422,7 @@ impl BackendBuiltin {
         match self {
             BackendBuiltin::TypeInfo => "type_info",
             BackendBuiltin::ImplOf => "impl_of",
+            BackendBuiltin::TypeSpell => "type_spell",
             BackendBuiltin::TestSuite => "test_suite",
             BackendBuiltin::MakeStruct => "make_struct",
             BackendBuiltin::MakeEither => "make_either",
@@ -901,7 +903,6 @@ pub enum Inst {
         rhs: Value,
         pred: FloatCmpPred,
     },
-
 }
 
 impl Inst {

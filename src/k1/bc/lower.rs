@@ -292,6 +292,19 @@ impl LowerCtx {
         value
     }
 
+    fn is_word_read_by(&self, mut value: ir::Value, word_owner: InstId) -> bool {
+        loop {
+            let ir::Value::Inst(id) = self.walk_to_frame_value(value) else { return false };
+            if id == word_owner {
+                return true;
+            }
+            match self.folded_struct_offsets.get(id) {
+                Some((base, _)) => value = base,
+                None => return false,
+            }
+        }
+    }
+
     fn bc_value_of(&self, inst_id: InstId) -> u32 {
         self.inst_to_frame_value
             .get(inst_id)
@@ -493,6 +506,59 @@ fn lower_unit_with_ctx(
 
     let LowerCtx { folded_struct_offsets, addr_use_counts, use_counts, .. } = &mut *ctx;
     folded_struct_offsets.retain(|id, _| addr_use_counts.get(id) == use_counts.get(id));
+
+    // Write a value straight into the word of the phi that is its only use
+    for i in 0..ctx.phis.len() {
+        let (phi_block, phi_id) = ctx.phis[i];
+        let Some(phi_word) = ctx.inst_to_frame_value.get(phi_id) else { continue };
+        let Inst::Phi { incomings, .. } = *u.inst(phi_id) else { unreachable!() };
+        for case in u.phi_cases(incomings) {
+            let ir::Value::Inst(value_id) = case.value else { continue };
+            if ctx.use_counts.get(value_id) != Some(1) {
+                continue;
+            }
+            let Some(last) = u.block(case.from).last else { continue };
+            if !matches!(*u.inst(last), Inst::Jump(target) if target == phi_block) {
+                continue;
+            }
+            let reads_operands_before_writing = matches!(
+                *u.inst(value_id),
+                Inst::Load { .. }
+                    | Inst::Select { .. }
+                    | Inst::IntBinop { .. }
+                    | Inst::FloatBinop { .. }
+                    | Inst::IntTrunc { .. }
+                    | Inst::IntExtS { .. }
+            );
+            if !reads_operands_before_writing {
+                continue;
+            }
+            let mut is_defined_here = false;
+            let mut is_phi_read_later = false;
+            for inst_id in u.block_insts(case.from) {
+                if is_defined_here {
+                    ir::visit_inst_values(&u, u.inst(inst_id), &mut |v| {
+                        is_phi_read_later |= ctx.is_word_read_by(v, phi_id)
+                    });
+                }
+                is_defined_here |= inst_id == value_id;
+            }
+            for &(other_block, other_phi) in &ctx.phis {
+                if other_block != phi_block {
+                    continue;
+                }
+                let Inst::Phi { incomings, .. } = *u.inst(other_phi) else { unreachable!() };
+                for other_case in u.phi_cases(incomings) {
+                    if other_case.from == case.from {
+                        is_phi_read_later |= ctx.is_word_read_by(other_case.value, phi_id);
+                    }
+                }
+            }
+            if is_defined_here && !is_phi_read_later {
+                ctx.inst_to_frame_value.insert(value_id, phi_word);
+            }
+        }
+    }
 
     ctx.scratch0 = next_word;
     ctx.scratch1 = next_word + 1;
@@ -1187,7 +1253,6 @@ fn emit_inst(
             };
             binop!(opcode, scalar_of(lhs).width_bits(), lhs, rhs)
         }
-
     }
     Ok(())
 }

@@ -1,165 +1,159 @@
 [
   {
-    "title": "A macro that implements an http routing dsl",
-    "section": "05-macros",
-    "blurb": "The macro is a plain function named `define` that receives a list of tokens, parses into endpoints, validates for uniqueness, generates a sum type representing each possible route, puts them in a trie, and generates a hand-written dispatcher",
+    "title": "typesafe, runtime-optimal http routing",
+    "blurb": "The macro is a plain function named `define` that receives a list of tokens, parses into endpoints, validates for uniqueness, generates a sum type representing each possible route, puts them in a trie, and generates a hand-written dispatcher; there's no runtime routing tree structure like in every other HTTP framework.",
     "blocks": [
       {
-        "label": "the routes",
+        "label": "route declaration",
         "kind": "k1",
-        "code": "$http/routing/define(route, \\{\n  get    home         \"/\"\n  get    events       \"/events\"\n  get    counter      \"/counter/events\"\n  get    big-file     \"/static/big-file.json\"\n  get    starry       \"/app/starry-night\"\n  get    visits       \"/visits\" ?{ who: ?string }\n  post   login        \"/login\"\n  get    game-events  \"/game/{id: u64}/events\"\n  post   game-poke    \"/game/{id: u64}/poke\"\n  delete delete-game  \"/game/{id: u64}\"\n})"
+        "code": "$http/routing/define(route) {\n  get    home         \"/\"\n  get    events       \"/events\"\n  get    counter      \"/counter/events\"\n  get    big-file     \"/static/big-file.json\"\n  get    starry       \"/app/starry-night\"\n  get    visits       \"/visits\" ?{ who: ?string }\n  post   login        \"/login\"\n  get    game-events  \"/game/{id: u64}/events\"\n  post   game-poke    \"/game/{id: u64}/poke\"\n  delete delete-game  \"/game/{id: u64}\"\n}"
       },
       {
-        "label": "the macro",
+        "label": "macro definition",
         "kind": "k1",
-        "code": "macro define(name: code, rows: span[code-token]) {\n  let entries = parse-rows(rows).as-span()\n  validate(entries)\n\n  let cb-storage = code-builder/new()\n  let(context) cb = cb-storage.&\n\n  cb.write-code(\"type $name = either { \")\n  cb.join-with(entries, \", \", fn[cb] en. {\n    cb.write-token(en.name)\n    if payload-type(en) is :some ty {\n      cb.write(\"(\")\n      cb.write-code(ty)\n      cb.write(\")\")\n    }\n  })\n  cb.write(\" }\\n\")\n\n  cb.block(\"ns for $name\", fn[cb, name, entries]. emit-parse-fn(name, entries))\n  emit-print-impl(name, entries)\n\n  cb.build()\n}"
+        "code": "macro define(name: code, body: span[code-token]) {\n  let entries = parse-route-entries(body).as-span()\n  validate-route-entries(entries)\n\n  let cb-storage = code-builder/new()\n  let(context) cb = cb-storage.&\n\n  cb.write-code(\"type $name = either { \")\n  cb.join-with(entries, \", \", fn[cb] en. {\n    cb.write-token(en.name)\n    if payload-type(en) is :some ty cb.write-code(\"($ty)\")\n  })\n  cb.write(\" }\\n\")\n\n  cb.block(\"ns for $name\", fn[cb, name, entries]. emit-parse-fn(name, entries))\n  emit-print-impl(name, entries)\n\n  cb.build()\n}"
       },
       {
-        "label": "what comes out",
-        "kind": "text",
-        "code": "type route = either {\n  home, events, counter, big-file, starry,\n  visits({ who: ?string }),\n  login,\n  game-events({ id: u64 }),\n  game-poke({ id: u64 }),\n  delete-game({ id: u64 }),\n}"
-      },
-      {
-        "label": "use",
+        "label": "usage; handling a request",
         "kind": "k1",
-        "code": "  if route/parse-request(req.header) is {\n    :err e -> error-response(e),\n    :ok r -> if r is {\n      :home -> home-page(),\n      :events -> global-events(deps),\n      :counter -> counter-events(),\n      :game-events .{ id } -> game-events(deps, id),\n      :game-poke .{ id } -> game-poke(deps, id),\n      :big-file -> big-file(),\n      :starry -> response/html(\"todo\"),\n      :visits p -> visits(deps, req, p.who),\n      :login -> login(req),\n      :delete-game p -> response/html(\"todo ${p.id}\"),\n    }\n  }",
+        "code": "  if route/parse-request(req.head) is {\n    :err e -> error-response(e),\n    :ok r -> if r is {\n      :home -> home-page(),\n      :events -> global-events(deps),\n      :counter -> counter-events(),\n      :game-events .{ id } -> game-events(deps, id),\n      :game-poke .{ id } -> game-poke(deps, id),\n      :big-file -> big-file(),\n      :starry -> response/html(\"todo\"),\n      :visits p -> visits(deps, req, p.who),\n      :login -> login(req),\n      :delete-game p -> response/html(\"todo ${p.id}\"),\n    }\n  }",
         "path": "examples/httpapp/app.k1"
       }
     ]
   },
   {
-    "title": "JSON from reflection",
-    "section": "04-reflection",
-    "blurb": "json/to-string reads the type's schema at compile time and generates a writer for exactly these fields.",
+    "title": "An embedded html+k1 language, implemented with code-token macros and `eval`",
+    "blurb": "`html/markup` is just a macro in std. Tags, attributes, k1 expressions, `#for`, and `#if` are parsed while compiling and become calls that directly build up the rendered html; skipping an intermediate AST/DOM tree.",
     "blocks": [
       {
-        "label": "the type",
+        "label": "usage",
         "kind": "k1",
-        "code": "type contact = either { email(string), phone(string), unreachable }\ntype person = { name: string, age: u32, nickname: ?string, contact: contact }"
+        "code": "fn render-sign-in-form(url: string, notice: ?string): wren/view {\n  .{ title = \"Sign in\", url, status = :ok, body = html/markup(\\{\n    <main>\n      <h1>Sign in</h1>\n      #if notice is :some text { <p>$text</p> }\n      <form method=\"post\" action=${tenant-route:send-sign-in-link.to-string()}>\n        <label>Email <input type=\"email\" name=\"email\" required autocomplete=\"email\"/></label>\n        <button>Email me a sign-in link</button>\n      </form>\n    </main>\n  }) }\n}",
+        "path": "content/showcase/helme2/sign_in.k1"
       },
       {
-        "label": "to JSON",
+        "label": "std/html: the macro",
         "kind": "k1",
-        "code": "  println(json/to-string(ada))"
-      },
-      {
-        "label": "output",
-        "kind": "text",
-        "code": "{\"name\":\"Ada Lovelace\",\"age\":36,\"nickname\":null,\"contact\":{\"email\":\"ada@example.com\"}}"
+        "code": "macro markup(markup: span[code-token]) {\n  let cb = code-builder/new()\n  cb.line(\"let html-markup-w: std/html/dom/markup-writer = .0\")\n  cb.line(\"let(context(impl writer)) _html-markup-out: *std/html/dom/markup-writer = html-markup-w.&\")\n\n  let emit-markup-code = internal/code-from-markup(markup)\n  cb.write-code(emit-markup-code)\n\n  cb.line(\"html-markup-w.to-node()\")\n  cb.build()\n}",
+        "path": "modules/std/html.k1"
       }
     ]
   },
   {
-    "title": "Abilities, not inheritance",
-    "section": "09-model",
+    "title": "compile-time sql queries and schema-driven codegen",
+    "blurb": "'dbx' is a k1 sqlite library that will read and execute your schema migrations at compile-time, generate a row type for each table, and insert/update queries; and typecheck your own queries",
+    "blocks": [
+      {
+        "label": "db schema, the actual sql migrations",
+        "kind": "k1",
+        "code": "let schema: dbx/schema = dbx/load-schema() | .{ column-types = [\n  .{ column = \"item.is_group\",                                 type-id = types/id[bool] },\n  .{ column = \"item.growth\",                                   type-id = types/id[growth-kind] },\n  .{ column = \"item.growth_per_year_cents\",                    type-id = types/id[span[i64]] },\n  .{ column = \"item.derivation\",                               type-id = types/id[derivation-kind] },\n  .{ column = \"item.derivation_share_ppm\",                     type-id = types/id[span[i64]] },\n  .{ column = \"item.derivation_enrollment_per_student_cents\",  type-id = types/id[span[i64]] },\n  .{ column = \"item.is_sensitive\",                             type-id = types/id[bool] },\n  .{ column = \"category.flow\",                                 type-id = types/id[flow] },\n  .{ column = \"budget_edit.is_undone\",                         type-id = types/id[bool] },\n  .{ column = \"budget_edit_change.is_inverse\",                 type-id = types/id[bool] },\n  .{ column = \"budget_edit_change.kind\",                       type-id = types/id[change-kind] },\n] }\n\n$dbx/define([wren/wren-schema, schema])",
+        "path": "content/showcase/helme2/db.k1"
+      },
+      {
+        "label": "your queries",
+        "kind": "k1",
+        "code": "fn read-org(*conn): result[org-row, wren-error] {\n  query[org-row](\"select ${org.all-columns(\"o\")} from org o\").unique(conn).lift-error()\n}\n\nfn set-next-item-id(*conn, next-item-id: i64): result[empty, wren-error] {\n  update(\"update org set next_item_id = $next-item-id\").run(conn).lift-error()\n}\n\nfn list-budgets(*conn): result[list[budget-row], wren-error] {\n  query[budget-row](\"select ${budget.all-columns(\"b\")} from budget b order by b.id\").list(conn).lift-error()\n}",
+        "path": "content/showcase/helme2/db.k1"
+      },
+      {
+        "label": "dbx: the macros",
+        "kind": "k1",
+        "code": "macro define(schemas: code) {\n  let image = if meta/eval[result[internal/schema-image, string]](\"dbx/internal/build-schema-image($schemas)\") is {\n    :ok image -> image,\n    :err message -> crash(\"dbx: the schema doesn't build: $message\"),\n  }\n  let tables = internal/emit/spell-tables(image.tables)\n  `\n  let dbx-schema-image: span[u8] = ${meta/baked-value-expr(image.bytes)}\n\n  $tables\n\n  fn migrate-db(*dbx/conn): result[empty, dbx/db-error] { conn.migrate-db($schemas) }`\n}\n\nmacro query[r](sql: span[code-token]) { internal/emit/build-statement(sql, :query, :some types/id[r]()) }\n\nmacro update(sql: span[code-token]) { internal/emit/build-statement(sql, :update, :none) }\n\nmacro update-returning[r](sql: span[code-token]) { internal/emit/build-statement(sql, :update-returning, :some types/id[r]()) }",
+        "path": "content/showcase/helme2/dbx.k1"
+      },
+      {
+        "label": "a caught error",
+        "kind": "text",
+        "code": "\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2574\n/Users/knix/dev/k1/content/showcase/examples/dbx_query_wrong/dbx_query_wrong.k1:19:27: error\n\u251c\u2500\u2500\u2500\u2500\u2500\n\u2502     let conn = dbx/open-memory().!\n\u2502     migrate-db(conn).!\n\u2502   \n\u2502 ->  println(query[plan-line](\"select id, name, is_main, note from plan order by id\").list(conn).!.len())\n\u2502                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n\u2502     0\n\u2502   }\n\u251c\u2500\u2500\u2500\u2500\u2500\n\u2502  dbx: column `note` (plan.note) can be null, and `plan-line.note` (string) can't hold null; make it an option\n\u2502    select id, name, is_main, note from plan order by id"
+      }
+    ]
+  },
+  {
+    "title": "One-line reflection",
+    "blurb": "`types/schema[t]` returns a plain value describing any type",
+    "blocks": [
+      {
+        "label": "std/cliarg: help text from a struct",
+        "kind": "k1",
+        "code": "fn gen-help-text[t](summary: string): string {\n  let s = if types/schema[t] is { :struct s -> s, _ -> crash(\"need a struct\") }\n  let sb = string-builder/new()\n  if summary.non-empty() sb.writeln(summary)\n  sb.writeln(`supported command line arguments`)\n  for s.fields {\n    if get-arg-kind(it.type-id) is {\n      :string -> sb.writeln(`  -${it.name} - required. (/-${it.name} to comment out)`),\n      :opt-string -> sb.writeln(`  -${it.name} - optional. (/-${it.name} to comment out)`),\n      :list-string -> sb.writeln(`  -${it.name} - list. (/-${it.name} to comment out)`),\n    }\n  }\n  sb.build()\n}",
+        "path": "modules/std/cliarg.k1"
+      },
+      {
+        "label": "match on a type's schema",
+        "kind": "k1",
+        "code": "  fn to[t](self: int-value): t {\n    #if types/schema[t] is {\n      :int :u8  -> self.as-u8().!,\n      :int :u16 -> self.as-u16().!,\n      :int :u32 -> self.as-u32().!,\n      :int :u64 -> self.as-u64().!,\n      :int :i8  -> self.as-i8().!,\n      :int :i16 -> self.as-i16().!,\n      :int :i32 -> self.as-i32().!,\n      :int :i64 -> self.as-i64().!,\n      _ -> crash(\"int-value.to: ${types/name[t]} is not an integer type\"),\n    }\n  }",
+        "path": "modules/core/types.k1"
+      },
+      {
+        "label": "std/json",
+        "kind": "k1",
+        "code": "fn to-string[t: codec/encode](value: t): string { to-string-with[o = codec/opts/default](value) }\n\nfn to-string-with[t: codec/encode, o: static codec/opts](value: t): string {\n  let sb = string-builder/new()\n  let e: text-encoder[*string-builder] = .{ w = sb.& }\n  value.encode[o = o](e)\n  sb.build()\n}",
+        "path": "modules/std/json.k1"
+      },
+      {
+        "label": "a json endpoint",
+        "kind": "k1",
+        "code": "fn respond-playground-tuition(): http-response {\n  let rows: list[list[i64]] = list/empty()\n  for grade in 0.until(playground-grade-count) {\n    let row: list[i64] = list/empty()\n    for year in 0.until(playground-year-count) { row.push(atomic/load(find-playground-tuition(grade, year).!, :relaxed)) }\n    rows.push(row)\n  }\n  response/complete(:ok, \"application/json\", json/to-string(rows))\n}",
+        "path": "content/showcase/helme2/tuition_json.k1"
+      }
+    ]
+  },
+  {
+    "title": "Abilities, for modular late-bound polymorphism",
     "blurb": "Typeclasses: implement one for a type you did not write, bound a generic on it, or implement it for every type that has another.",
     "blocks": [
       {
         "label": "the ability",
         "kind": "k1",
-        "code": "ability shape {\n  fn area(self: *self): f64\n  fn name(self: *self): string\n  fn sides(): int\n  fn describe(self: *self): string {\n    \"${self.name()} area=${self.area()} sides=${shape@(self)/sides()}\"\n  }\n}"
+        "code": "ability form-value {\n  fn parse(json/json): result[self, string]\n  fn to-form-json(self): json/json\n}",
+        "path": "content/showcase/helme2/forms.k1"
       },
       {
-        "label": "an impl",
+        "label": "a type we do not own",
         "kind": "k1",
-        "code": "impl shape for circle {\n  fn area(self: *circle): f64 { 3.14159 * self.radius * self.radius }\n  fn name(_self: *circle): string { \"circle\" }\n  fn sides(): int { 0 }\n}\n\nimpl shape for rect {\n  fn area(self: *rect): f64 { self.w * self.h }\n  fn name(_self: *rect): string { \"rect\" }\n  fn sides(): int { 4 }\n  fn describe(self: *rect): string { \"${self.w}x${self.h} rect\" }\n}"
+        "code": "impl form-value for string {\n  fn parse(json/json): result[string, string] { form/read-text(json) }\n  fn to-form-json(self): json/json { :str self }\n}",
+        "path": "content/showcase/helme2/forms.k1"
       },
       {
-        "label": "a bound and a blanket impl",
+        "label": "a name",
         "kind": "k1",
-        "code": "fn bigger[t: shape](a: *t, b: *t): *t {\n  if a.area() > b.area() a else b\n}\n\nability loud {\n  fn shout(self: *self): string\n}\n\nimpl[t: shape] loud for t {\n  fn shout(self: *t): string { \"${self.name()}!\" }\n}"
+        "code": "type name-text = { text: string }\nimpl wren/form-value for name-text {\n  fn parse(json/json): result[name-text, string] {\n    let name = wren/form/read-text(json).try.trim-ascii-space()\n    if name.is-empty() or utf8/count-code-points(name) > 200 :err \"A name is 1 to 200 characters.\" else :ok .{ text = name }\n  }\n  fn to-form-json(self): json/json { :str self.text }\n}",
+        "path": "content/showcase/helme2/forms.k1"
       },
       {
-        "label": "operators are abilities",
+        "label": "an amount of money",
         "kind": "k1",
-        "code": "type vec2 = { x: f64, y: f64 }\n\nimpl add for vec2 {\n  fn add(self: vec2, rhs: vec2): vec2 { .{ x = self.x + rhs.x, y = self.y + rhs.y } }\n}"
-      },
-      {
-        "label": "use",
-        "kind": "k1",
-        "code": "  let v = vec2.{ x = 1.0, y = 2.0 } + vec2.{ x = 0.5, y = 0.25 }\n  println(\"${v.x} ${v.y}\")"
-      },
-      {
-        "label": "output",
-        "kind": "text",
-        "code": "1.5 2.25"
+        "code": "type amount = { cents: i64 }\nimpl wren/form-value for amount {\n  fn parse(json/json): result[amount, string] {\n    if money/parse-dollars(wren/form/read-text(json).try) is :some cents :ok .{ cents } else :err amount-refusal\n  }\n  fn to-form-json(self): json/json { :str money/format-amount(self.cents) }\n}",
+        "path": "content/showcase/helme2/forms.k1"
       }
     ]
   },
   {
-    "title": "One require, five bindings",
-    "section": "09-model",
-    "blurb": "A struct pattern, a literal, a variant carrying a struct, an optional and two guards in one statement, and the names live on.",
+    "title": "Specialty types via macros",
+    "blurb": "`std/deftype/flags` turns a list of names into a bit-set type with its own flag enum, set operations and printing.",
     "blocks": [
       {
-        "label": "the request",
+        "label": "declaration; this is just a macro call",
         "kind": "k1",
-        "code": "type auth = either {\n  anonymous,\n  bearer(string),\n  basic({ user: string, pass: string }),\n}\ntype request = {\n  method: string,\n  path: string,\n  auth: auth,\n  body: ?string,\n}"
+        "code": "$std/deftype/flags(view-options) { \n  show-names, show-sensitive-items, show-future, show-all-years, is-next-year, carry-over, carry-down, show-all-rates,\n  default = show-future | carry-over | carry-down\n}",
+        "path": "content/showcase/helme2/view_options.k1"
       },
       {
-        "label": "the handler",
+        "label": "std/deftype: what the macro emits",
         "kind": "k1",
-        "code": "fn known(user: string, pass: string): bool {\n  user == \"ada\" and pass.len() >= 8\n}\n\nfn handle(r: request): string {\n  require r is .{\n      method = \"POST\",\n      path,\n      auth = :basic .{ user, pass },\n      body = :some body,\n    }\n    and path.starts-with(\"/api/\")\n    and known(user, pass)\n    else { return \"401 for ${r.method} ${r.path}\" }\n  \"${user} posted ${body.len()} bytes to $path\"\n}"
+        "code": "    type ${declared.name} = { bits: $backing }\n    ns for $name {\n      type flag = either(u8) {\n        ${flag-variants.build()}\n      }\n      ns for flag { let members: span[flag] = types/enum@(flag)/members() }\n      ${constants.build()}\n      fn from-bits(bits: $backing): $name     { .{ bits } }\n      fn from-flag(flag): $name               { .{ bits = (1: $backing) << flag.value.widen[u32] } }\n      fn has(self, flag): bool                { (self.bits & from-flag(flag).bits) != 0 }\n      fn with(self, flag, is-on: bool): $name { if is-on self | from-flag(flag) else self & from-flag(flag).bit-not() }\n      fn has-any(self, other: $name): bool    { (self.bits & other.bits) != 0 }\n      fn has-all(self, other: $name): bool    { (self.bits & other.bits) == other.bits }\n    }",
+        "path": "modules/std/deftype.k1"
       },
       {
-        "label": "output",
-        "kind": "text",
-        "code": "ada posted 5 bytes to /api/notes\n401 for GET /api/notes\n401 for POST /api/notes\n401 for POST /login"
-      }
-    ]
-  },
-  {
-    "title": "Types from a .proto file",
-    "section": "08-types",
-    "blurb": "A .proto file read and parsed at compile time becomes a real k1 struct and enum.",
-    "blocks": [
-      {
-        "label": "user.proto",
-        "kind": "proto",
-        "code": "syntax = \"proto3\";\n\nenum Status {\n  ACTIVE = 0;\n  SUSPENDED = 1;\n  DELETED = 2;\n}\n\nmessage User {\n  uint64 id = 1;\n  string name = 2;\n  double score = 3;\n  Status status = 4;\n}"
-      },
-      {
-        "label": "derive",
+        "label": "using the type",
         "kind": "k1",
-        "code": "type(alias) status = #type proto/enum(\"user.proto\", \"Status\")\ntype(alias) user = #type proto/message(\"user.proto\", \"User\")"
-      },
-      {
-        "label": "use",
-        "kind": "k1",
-        "code": "  let u: user = .{ id = 7, name = \"ada\", score = 99.5, status = :suspended }\n  println(\"${u.id} ${u.name} ${u.score} ${u.status.enum-name()}=${u.status.value} ${label(u.status)}\")\n  println(\"size ${types/size[user]} status ${types/size[status]}\")"
-      },
-      {
-        "label": "output",
-        "kind": "text",
-        "code": "7 ada 99.5 suspended=1 on hold\nsize 36 status 4"
-      }
-    ]
-  },
-  {
-    "title": "A regex engine that runs at compile time",
-    "section": "06-regex",
-    "blurb": "Parser, NFA, DFA and minimization are plain k1 that happens to run in the compiler.",
-    "blocks": [
-      {
-        "label": "define",
-        "kind": "k1",
-        "code": "$regex/define(number, \"[0-9]+([.][0-9]+)?\")"
-      },
-      {
-        "label": "match and find",
-        "kind": "k1",
-        "code": "  for s in [\"42\", \"3.14\", \"3.\", \".5\", \"1e5\"] { println(\"number(\\\"$s\\\") = ${number(s)}\") }\n  let rest = \"total: 12.5 units, 3 left\"\n  while number-find(rest) is :some m {\n    println(\"found ${rest.slice(m.start, m.end)}\")\n    rest = rest.drop(m.end)\n  }"
-      },
-      {
-        "label": "output",
-        "kind": "text",
-        "code": "number(\"42\") = true\nnumber(\"3.14\") = true\nnumber(\"3.\") = false\nnumber(\".5\") = false\nnumber(\"1e5\") = false\nfound 12.5\nfound 3"
+        "code": "fn make-reveal-toggles(view-options): h/node {\n  :nodes [\n    wren/ui/toggle.{ command = command/set-view-option(:show-names), is-on = view-options.has(:show-names), label = :text \"Names\" }.to-node(),\n    wren/ui/toggle.{ command = command/set-view-option(:show-sensitive-items), is-on = view-options.has(:show-sensitive-items), label = :text \"Sensitive items\" }.to-node(),\n  ]\n}",
+        "path": "content/showcase/helme2/view_options.k1"
       }
     ]
   },
   {
     "title": "A palette designed in OKLCH, shipped as bytes",
-    "section": "01-static",
     "blurb": "The colour math runs early, so every swatch is an sRGB triple baked into the binary.",
     "blocks": [
       {
@@ -185,78 +179,39 @@
     ]
   },
   {
-    "title": "Painless SIMD",
-    "section": "10-systems",
-    "blurb": "A macro generates a lane-wide scanner, and the same code runs under #static in the compile-time VM.",
+    "title": "SIMD in the standard library",
+    "blurb": "`vector[u8, k1/simd-bytes]` is the target's natural vector width, so std/json finds the next byte to escape a whole vector at a time, with a scalar loop for the tail.",
     "blocks": [
       {
-        "label": "generate the scanner",
+        "label": "std/json",
         "kind": "k1",
-        "code": "$std/simd/first-of(delims, [',', ':', '\"'])"
-      },
-      {
-        "label": "use it",
-        "kind": "k1",
-        "code": "fn scan-all-simd(text: string): u64 {\n  let found: u64 = 0\n  let from: size = 0\n  loop {\n    let hit = delims/scan(text.span-bytes(), from)\n    if hit.index < 0 break\n    found = found + 1\n    from = hit.index + 1\n  }\n  found\n}"
-      },
-      {
-        "label": "at compile time too",
-        "kind": "k1",
-        "code": "  let static-hits: 4u64 = #static scan-all-simd(\"{\\\"key\\\": [1, 2]}\")\n  println(\"compile-time scan found ${static-hits.from-static()} delimiters\")"
-      },
-      {
-        "label": "output",
-        "kind": "text",
-        "code": "compile-time scan found 4 delimiters\nsimd width: 16 bytes; buffer: 8 MB\nscalar scan: 145794 found, 208 MB/s\nfirst-of scan: 145794 found, 1342 MB/s\nscalar count ',': 137380 found, 465 MB/s\nvector count ',': 137380 found, 3902 MB/s"
+        "code": "  fn escape-position(s: string, from: size): size {\n    let len = s.len()\n    let base = s.data-ptr()\n    let lanes: size = k1/simd-bytes\n    let i = from\n    if i + lanes <= len {\n      let quote = vector/splat[u8, k1/simd-bytes]('\"'.as-u8())\n      let slash = vector/splat[u8, k1/simd-bytes]('\\\\'.as-u8())\n      let high = vector/splat[u8, k1/simd-bytes](0xE0)\n      let zero = vector/splat[u8, k1/simd-bytes](0)\n      while i + lanes <= len {\n        let chunk = vector/load-unchecked[u8, k1/simd-bytes](base.add-bytes(i))\n        let hit = chunk.eq-lanes(quote).bit-or(chunk.eq-lanes(slash)).bit-or(chunk.bit-and(high).eq-lanes(zero))\n        let mask = hit.to-mask()\n        if mask != 0 return i + mask.trailing-zeros().signed()\n        i = i + lanes\n      }\n    }\n    while i < len {\n      let c = s.[i]\n      if c == '\"' or c == '\\\\' or c < ' ' return i\n      i = i + 1\n    }\n    len\n  }",
+        "path": "modules/std/json.k1"
       }
     ]
   },
   {
-    "title": "Hot reload a namespace",
-    "section": "10-systems",
-    "blurb": "Mark a namespace ns(reload), watch it, and every edit swaps in under the running process with its globals intact.",
+    "title": "hot reload",
+    "blurb": "Put your request handler, or your game tick fn, in an `ns(reload)`, and a hot-reloadable library and API is generated. The reloadable code includes the transitive closure of everything it calls, so you only need your entrypoint(s) to be reloadable!",
     "blocks": [
       {
         "label": "the namespace",
         "kind": "k1",
-        "code": "ns(reload) handlers {\n  let(mutable) HITS: i64 = 0\n\n  fn handle-request(path: string): string {\n    HITS = HITS + 1\n    if (path == \"/\") \"200 <h1>hello</h1>\" else \"404 $path\"\n  }\n}"
+        "code": "ns(reload) live {\n  fn handle-call(wren/call, state: ?tab-state): wren/handle-result {\n    let state = state ? empty-tab-state\n    if call.tenant.id == admin-tenant-id return handle-admin-call(call, state)\n    if tenant-route/parse(call.method(), call.url) is :ok r return if r is {\n      :playground-tuition -> :response respond-playground-tuition(),\n      :send-sign-in-link or :redeem-sign-in-link or :sign-out -> :response handle-session-request(call, r, user-session-seconds,\n        fn[call](email) :ok(if db/find-user-id-by-email(call.reader, email).try is :some id { :some \"$id\" } else :none),\n        fn[call](user-id) :ok db/find-user(call.reader, user-id).try.is-some(),\n      ).try,\n      _ -> :page show-page(call, state, r).try,\n    }\n    if playground-command/parse(call).try is :some c return :response handle-playground-command(call, state, c).try\n    if command/parse(call).try is :some c {\n      require find-session-user(call.reader, call.session).try is :some viewer else return :error wren-error/make(:unauthorized, \"Sign in first\")\n      return :response editor.{ call, viewer, view-options = state.view-options }.handle-command(c).try\n    }\n    if call.method() is :GET { :page render-not-found(call) } else { :error wren-error/status(:not-found) }\n  }\n}",
+        "path": "content/showcase/helme2/live.k1"
       },
       {
-        "label": "watch and serve",
+        "label": "watch in dev",
         "kind": "k1",
-        "code": "fn main() {\n  handlers/watch().!\n  for path in [\"/\", \"/about\", \"/\"] {\n    println(\"${handlers/handle-request(path)}  hits=${handlers/HITS} v${handlers/loaded-version()}\")\n  }\n}"
+        "code": "fn serve(rt: *wren/runtime, config: http/server/config) {\n  if rt.is-dev { live/watch().! }\n  if rt.create-tenant(admin-tenant-id, fn(_conn: *dbx/conn) :ok) is :err message crash(\"create the admin tenant: $message\")\n  wren/serve(\n    rt,\n    config,\n    assets,\n    extra-head-nodes  = [],\n    route-request,\n    handle-call       = live/handle-call,\n    render-error-page = show-error-page,\n  )\n}",
+        "path": "content/showcase/helme2/live.k1"
       },
       {
-        "label": "output",
+        "label": "the log",
         "kind": "text",
-        "code": "reload: sys_reload/handlers swapped to v1 (2 syms)\n200 <h1>hello</h1>  hits=1 v1\n404 /about  hits=2 v1\n200 <h1>hello</h1>  hits=3 v1"
+        "code": "reload: my-app/live swapped to v1 (1 syms)\nlistening on 127.0.0.1:3000\nreload: my-app/live swapped to v2 (1 syms)\nreload: my-app/live swapped to v3 (1 syms)\nreload: my-app/live swapped to v4 (1 syms)\nreload: my-app/live swapped to v5 (1 syms)\nreload: my-app/live swapped to v6 (1 syms)",
+        "path": "content/showcase/helme2/reload.log"
       }
     ]
-  },
-  {
-    "title": "C at compile time",
-    "section": "03-comptime-ffi",
-    "blurb": "Declare a C function and the compile-time VM calls it through libffi.",
-    "blocks": [
-      {
-        "label": "declare",
-        "kind": "k1",
-        "code": "fn(extern(\"gethostname\")) gethostname(name: ptr, len: size): i32\nfn(extern(\"getpid\")) getpid(): i32\nfn(extern(\"time\")) c-time(tloc: ptr): i64\nfn(extern(\"localtime\")) localtime(t: *i64): ptr\nfn(extern(\"strftime\")) strftime(s: ptr, max: size, format: *u8, tm: ptr): size"
-      },
-      {
-        "label": "call them while compiling",
-        "kind": "k1",
-        "code": "let BUILD_HOST: string = hostname()\nlet BUILD_USER: string = env-or(\"USER\", \"nobody\")\nlet BUILD_TIME: string = local-time-string()\nlet BUILD_PID: i32 = getpid()\n\nfn main(): i32 {\n  println(\"built by $BUILD_USER@$BUILD_HOST at $BUILD_TIME\")\n  println(\"compiler pid $BUILD_PID, runtime pid ${getpid()}\")\n  0\n}"
-      },
-      {
-        "label": "output",
-        "kind": "text",
-        "code": "$ k1 run cffi_build_stamp.k1\nbuilt by knix@knix.local at 2026-09-17 17:04:16 EDT\ncompiler pid 3439, runtime pid 3446\n$ ./.k1-out/cffi_build_stamp\nbuilt by knix@knix.local at 2026-09-17 17:04:16 EDT\ncompiler pid 3439, runtime pid 3449\n$ ./.k1-out/cffi_build_stamp\nbuilt by knix@knix.local at 2026-09-17 17:04:16 EDT\ncompiler pid 3439, runtime pid 3450"
-      }
-    ]
-  },
-  {
-    "title": "dbx: SQLite in the k1 fold",
-    "placeholder": "Case study in progress. dbx pulls SQLite into the k1 fold at compile time: the dependency, the bindings and the schema, so tables become k1 types before the program runs."
   }
 ]

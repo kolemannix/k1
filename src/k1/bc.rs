@@ -292,8 +292,8 @@ impl Opcode {
             | Opcode::SIntToF32
             | Opcode::SIntToF64 => 2,
             Opcode::Select => 4,
-            Opcode::AtomicLoad => 2,      // A = width in bits, B = ordering; [dst][addr src]
-            Opcode::AtomicStore => 2,     // A = width in bits, B = ordering; [addr src][val src]
+            Opcode::AtomicLoad => 2, // A = width in bits, B = ordering; [dst][addr src]
+            Opcode::AtomicStore => 2, // A = width in bits, B = ordering; [addr src][val src]
             Opcode::AtomicRmw => 3, // A = width in bits, B = op << 8 | ordering; [dst][addr src][operand src]
             // A = width in bits, B = success | failure << 4 | weak << 8;
             // [result src][addr src][expected src][desired src][ok byte offset]

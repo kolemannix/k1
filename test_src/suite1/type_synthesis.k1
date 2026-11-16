@@ -160,4 +160,29 @@ ns type_synthesis {
 
     .{}
   }
+
+  type spelled = { x: i64 }
+  type box[t] = { v: t }
+  use /suite1/type_synthesis/box as absolute-box
+
+  #meta {
+    let spelling = types/id[spelled].spell()
+    `ns shadowing {
+      type spelled = { other: bool }
+      fn make(): $spelling { .{ x = 7 } }
+    }`
+  }
+
+  fn(test) spelled-type-ignores-the-scope-it-lands-in() {
+    assert-equals(shadowing/make().x, 7)
+  }
+
+  fn(test) spellings() {
+    let named: string = #static { types/id[absolute-box[?spelled]].spell() }
+    assert-equals(named, "/suite1/type_synthesis/box[/core/opt[/suite1/type_synthesis/spelled]]")
+    let scalar: string = #static { types/id[int].spell() }
+    assert-equals(scalar, "/core/i64")
+    let anonymous: string = #static { types/id[{ a: u8 }].spell() }
+    assert(anonymous.starts-with("(#type /core/types/type-id/make("))
+  }
 }

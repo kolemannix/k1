@@ -4,7 +4,7 @@ type state = either { on(empty), off(empty), zilch }
 type state-hard = either { on(?int), off(?int) }
 
 fn(test) qualified-variant-with-payload() {
-  let bc = _root/core/opt[bool]:some(true)
+  let bc = /core/opt[bool]:some(true)
   assert(bc is :some(true))
   let q4 = opt[i64]:some 42
   assert(q4 is :some 42)

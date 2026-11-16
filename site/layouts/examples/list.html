@@ -1,9 +1,0 @@
-{{ define "main" }}
-<main class="page"><div class="wrap">
-  <ul class="posts">
-    {{ range sort .Pages ".File.BaseFileName" }}
-    <li><time>{{ .File.BaseFileName }}</time><div><a href="{{ .RelPermalink }}">{{ partial "h1.html" . }}</a></div></li>
-    {{ end }}
-  </ul>
-</div></main>
-{{ end }}

@@ -17,7 +17,8 @@
 ## grab bag list mid2026
 - [ ] IR alloca lifetimes
 - [x] **Prevent modules using definitions from modules they dont depend on (implicit transitive dependency problem)**
-- [ ] new lib type: :runtime; this is the ideal dependency kind for libclang in k1bindgen
+- [ ] explicitly aligned globals
+- [ ] new link type: :runtime; this is the ideal dependency kind for libclang in k1bindgen
 - [ ] literal inference issue (a) `2 * d` vs `d * 2` differ — literal-lhs
       defaults i64 and widens the u32 rhs up, literal-rhs adopts u32 and wraps; (b) binary ops widen
       rhs into lhs type but have no least-upper-bound, so `u32 + i64` errors while `i64 + u32` works;

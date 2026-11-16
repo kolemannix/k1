@@ -1,13 +1,14 @@
 {{ define "main" }}
 {{ $t := hugo.Data.timing }}
+{{ $bench := printf "%s/blob/master/content/showcase/benchmarks" .Site.Params.repo }}
 <main>
 <section class="hero"><div class="wrap hero-grid">
   <div>
-    <h1>a <em>very good</em> programming language</h1>
-    <p class="sub">optimized for both the programmer and the computer</p>
+    <h1>a very good programming language</h1>
+    <p class="sub">designed for <em>both</em> the programmer and the computer</p>
     <p class="sub">semantically dense source code, compiled with haste into efficient native code</p>
     <p class="sub">I spent years building the language I wished existed, and I hope you like it.</p>
-    <p class="sub"><a href="/benchmarks/">high performance</a>, best-in-class <a href="/benchmarks/#compile-times">compile times</a>, <a href="/examples/08-types/#a-struct-and-an-enum-from-a-proto-file">unrivaled metaprogramming</a>, <a href="/examples/04-reflection/">one-line reflection</a>, <a href="#one-require-five-bindings">machine-optimal algebraic data types with pattern matching</a>, <a href="/examples/10-systems/#a-simd-scanner-generated-at-compile-time">automatic portable SIMD</a>, <a href="#abilities-not-inheritance">ad-hoc polymorphism</a>, <a href="#a-macro-that-implements-an-http-routing-dsl">extensible syntax</a>, <a href="/examples/08-types/#predicate-bounds">real generics</a>, <a href="/examples/10-systems/#build-steps-are-k1-running-inside-the-compiler">fully programmable builds</a>, powerful control flow (<a href="/examples/08-types/#never-and-zero-sized-types"><code>never</code> type</a>, <code>defer</code>), <a href="/examples/09-model/#arenas">precise and convenient memory management</a>, <a href="/examples/10-systems/#ffi-with-no-bindings-file">C in</a>, <a href="/examples/10-systems/#exporting-a-k1-library-to-c">C out</a>, and <a href="/examples/10-systems/#bare-metal">no runtime</a></p>
+    <p class="sub">high performance, best-in-class <a href="#compile-times">compile times</a>, <a href="#compile-time-sql-queries-and-schema-driven-codegen">unrivaled metaprogramming</a>, <a href="#one-line-reflection">one-line reflection</a>, <a href="#typesafe-runtime-optimal-http-routing">machine-optimal algebraic data types with pattern matching</a>, <a href="#simd-in-the-standard-library">automatic portable SIMD</a>, <a href="#abilities-for-modular-late-bound-polymorphism">ad-hoc polymorphism</a>, <a href="#an-embedded-html+k1-language-implemented-with-code-token-macros-and-eval">extensible syntax</a>, <a href="#generics">real generics</a>, fully programmable builds, <a href="#control-flow">powerful control flow</a> (<code>never</code> type, <code>defer</code>), precise and convenient memory management, <a href="#compile-time-sql-queries-and-schema-driven-codegen">C in</a>, C out, and no runtime</p>
     <div class="btns"><a class="btn" href="/install/">Get k1</a><a class="btn o" href="/tenets/">Read the tenets</a></div>
   </div>
   <div class="demo">
@@ -15,20 +16,19 @@
   </div>
 </div></section>
 
-<section class="blk"><div class="wrap">
+<section class="blk" id="compile-times"><div class="wrap">
   <h2>k1 typechecks {{ $t.stress.lines_per_s | lang.FormatNumber 0 }} lines per second.</h2>
   <p>how? data oriented design, first principles approaches, and care. I know every memory allocation in the 72,000 line compiler</p>
-  <div class="panels">
-    {{ range slice (dict "label" "typecheck" "rows" $t.typecheck) (dict "label" "debug build" "rows" $t.build) }}{{ $panel := . }}{{ with .rows }}
-    <div class="bars">
-      <p class="label">{{ $panel.label }}</p>
-      {{ range . }}
-      <div class="row{{ if .k1 }} k1{{ end }}"><span class="lb">{{ .name }}</span><span class="tr"><span class="bar" style="width:{{ .pct }}%"></span></span><span class="v">{{ .ms | lang.FormatNumber 0 }} ms</span></div>
-      {{ end }}
-    </div>
-    {{ end }}{{ end }}
-  </div>
-  <p class="prose"><a href="/benchmarks/#compile-times">the same</a> {{ $t.lines | lang.FormatNumber 0 }}-line program.</p>
+  {{ partial "bars.html" $t.compile }}
+  <p class="prose"><a href="{{ $bench }}/compile-times/results.md">the same</a> {{ $t.lines | lang.FormatNumber 0 }}-line program. (PRs welcome)</p>
+</div></section>
+
+<section class="blk"><div class="wrap">
+  <h2>compile-time execution costs microseconds</h2>
+  <p>not milliseconds, so you're never discouraged from leveraging its power.</p>
+  <p>how? we hand our own optimized IR to a standard bytecode VM</p>
+  {{ partial "bars.html" $t.comptime }}
+  <p class="prose"><a href="{{ $bench }}/comptime/results.md">measured</a> over 1,000 struct types (PRs welcome)</p>
 </div></section>
 
 {{ partial "carousel.html" (dict "title" "Basics" "cards" hugo.Data.basics) }}
@@ -36,7 +36,12 @@
 {{ partial "carousel.html" (dict "title" "Beyond the basics" "cards" hugo.Data.carousel) }}
 
 <section class="close"><div class="wrap">
-    <p><em>k1</em> still has a long way to go. Considering joining me in making it even better and building software with it.</p>
+    <p>Status</p>
+    <p>I'm building commercial web applications in k1, and have prototyped native games and desktop apps. It's highly usable, fast, and enjoyable.</p>
+    <p>Some of the std code, and the included `modules`, are more AI-assisted than I'd like. Its an incredibly useful scaffolding technique, but ultimately
+    in the long term, antithetical to the project. I'd love community support and help to build out the ecosystem by hand, with craft and care, and
+    tear down the scaffolds!</p>
+    <p>k1 still has a long way to go. Considering joining me in making it even better and building software with it.</p>
   <div class="btns"><a class="btn" href="/install/">Get k1</a><a class="btn o" href="/tenets/">Read the tenets</a></div>
 </div></section>
 </main>

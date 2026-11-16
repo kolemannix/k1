@@ -780,7 +780,9 @@ impl TypedProgram {
                         }
                     }
                 }
-                Some((pending_parsed_id, pending_scope_id)) => {
+                Some(ValueInScope {
+                    value: pending_parsed_id, scope_id: pending_scope_id, ..
+                }) => {
                     let stack_entry = self
                         .type_defn_context
                         .stack
@@ -1124,7 +1126,8 @@ impl TypedProgram {
         if parsed_args.is_empty() {
             return Ok(MSlice::empty());
         }
-        let mut placed_args: TmpList<Option<NamedTypeArg>> = self.tmp.new_list(type_params.len() as u32);
+        let mut placed_args: TmpList<Option<NamedTypeArg>> =
+            self.tmp.new_list(type_params.len() as u32);
         placed_args.fill_to_cap(None);
         self.place_args(
             placed_args.as_slice_mut(),
@@ -1215,12 +1218,10 @@ impl TypedProgram {
                 None => return Ok(None),
             },
             None => match self.find_pending_global_namespaced(scope_id, name)? {
-                Some((parsed_id, defn_scope)) => {
-                    match self.declare_global(parsed_id, defn_scope)? {
-                        None => return Ok(None),
-                        Some(global_id) => global_id,
-                    }
-                }
+                Some(pending) => match self.declare_global(pending.value, pending.scope_id)? {
+                    None => return Ok(None),
+                    Some(global_id) => global_id,
+                },
                 None => return Ok(None),
             },
         };
@@ -1782,11 +1783,7 @@ impl TypedProgram {
                 let fn_type = lam_obj.function_type;
                 let new_fn_type =
                     self.substitute_in_type_inner(fn_type, substitution_pairs, from_kinds);
-                if new_fn_type != fn_type {
-                    self.add_lambda_object(new_fn_type)
-                } else {
-                    type_id
-                }
+                if new_fn_type != fn_type { self.add_lambda_object(new_fn_type) } else { type_id }
             }
             Type::AbilityObject(ao) => {
                 let signature = ao.signature;

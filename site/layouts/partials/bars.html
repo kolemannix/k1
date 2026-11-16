@@ -1,0 +1,10 @@
+<div class="panels">
+  {{ range . }}{{ $unit := .unit }}
+  <div class="bars">
+    <p class="label">{{ .label }}</p>
+    {{ range .rows }}
+    <div class="row{{ if .k1 }} k1{{ end }}"><span class="lb">{{ .name }}</span><span class="tr"><span class="bar" style="width:{{ .pct }}%"></span></span><span class="v">{{ .value | lang.FormatNumber 0 }} {{ $unit }}</span></div>
+    {{ end }}
+  </div>
+  {{ end }}
+</div>

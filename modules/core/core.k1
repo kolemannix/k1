@@ -176,6 +176,16 @@ ns for char {
     else :none
   }
 
+  fn to-base64-digit(self: char): ?u8 {
+    let s = self.as-u8()
+    if s >= 'A'.as-u8() and s <= 'Z'.as-u8() :some(s - 'A'.as-u8())
+    else if s >= 'a'.as-u8() and s <= 'z'.as-u8() :some(s - 'a'.as-u8() + 26)
+    else if self.is-ascii-digit() :some(s - '0'.as-u8() + 52)
+    else if self == '+' :some 62
+    else if self == '/' :some 63
+    else :none
+  }
+
   fn is-ascii-lower(self: char): bool {
     let s = self.as-u8()
     s >= 'a'.as-u8() and s <= 'z'.as-u8()
