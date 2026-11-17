@@ -144,7 +144,7 @@ fn transpile-literal(t: *macro-transpile, text: string): result[string, string] 
     // k1 has no octal literals
     let value: i64 = 0
     for c in digits {
-      let d = if c.to-ascii-digit() is { :some d -> d.widen[i64], :none -> return :err "unsupported literal $text" }
+      let d = if c.to-ascii-digit() is { :some d -> d.as[i64], :none -> return :err "unsupported literal $text" }
       if d >= 8 return :err "unsupported literal $text"
       value = value * 8 + d
     }
@@ -222,7 +222,7 @@ fn is-hex-digit(c: char): bool {
 
 fn parse-char-literal(text: string): result[i64, string] {
   if text.len() == 3 and text.[0] == '\'' and text.[2] == '\'' {
-    return :ok text.[1].u8().widen[i64]
+    return :ok text.[1].u8().as[i64]
   }
   if text.len() == 4 and text.[0] == '\'' and text.[1] == '\\' and text.[3] == '\'' {
     let v: i64 = if text.[2] is {

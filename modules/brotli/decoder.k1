@@ -82,7 +82,7 @@ type decoder = {
   dist-offset: array[u32, 544],
 }
 
-fn(inline) hc(bits: size, value: size): u32 { bits.trunc[u32] | (value.trunc[u32] << 16) }
+fn(inline) hc(bits: size, value: size): u32 { bits.low[u32] | (value.low[u32] << 16) }
 
 fn(inline) reverse-byte(key: size): size { k-reverse-bits.[key].as-size() }
 
@@ -140,11 +140,11 @@ fn build-huffman-table(d: *decoder, root-table: ptr, root-bits: size): size {
   max-length = max-length + HUFFMAN-MAX-CODE-LENGTH + 1
   let table-off: size = 0
   let table-bits = root-bits
-  let table-size: size = 1 << table-bits.trunc[u32]
+  let table-size: size = 1 << table-bits
   let total-size = table-size
   if table-bits > max-length {
     table-bits = max-length
-    table-size = 1 << table-bits.trunc[u32]
+    table-size = 1 << table-bits
   }
   let key: size = 0
   let key-step = REVERSE-BITS-LOWEST
@@ -163,7 +163,7 @@ fn build-huffman-table(d: *decoder, root-table: ptr, root-bits: size): size {
     mem/copy(root-table.ref-at[u32](table-size).as[ptr], root-table, table-size * types/size[u32])
     table-size = table-size << 1
   }
-  key-step = REVERSE-BITS-LOWEST >> (root-bits - 1).trunc[u32]
+  key-step = REVERSE-BITS-LOWEST >> (root-bits - 1)
   let sub-key = REVERSE-BITS-LOWEST << 1
   let sub-key-step = REVERSE-BITS-LOWEST
   step = 2
@@ -172,7 +172,7 @@ fn build-huffman-table(d: *decoder, root-table: ptr, root-bits: size): size {
     while d.code-length-histo.[len] != 0 {
       if sub-key == REVERSE-BITS-LOWEST << 1 {
         table-off = table-off + table-size
-        let left: size = 1 << (len - root-bits).trunc[u32]
+        let left: size = 1 << (len - root-bits)
         table-bits = len
         while table-bits < HUFFMAN-MAX-CODE-LENGTH {
           left = left - d.code-length-histo.[table-bits].as-size()
@@ -181,7 +181,7 @@ fn build-huffman-table(d: *decoder, root-table: ptr, root-bits: size): size {
           left = left << 1
         }
         table-bits = table-bits - root-bits
-        table-size = 1 << table-bits.trunc[u32]
+        table-size = 1 << table-bits
         total-size = total-size + table-size
         sub-key = reverse-byte(key)
         key = key + key-step
@@ -201,7 +201,7 @@ fn build-huffman-table(d: *decoder, root-table: ptr, root-bits: size): size {
 }
 
 fn build-simple-huffman-table(table: ptr, v: array[u16, 4], num-symbols: size): size {
-  let goal-size: size = 1 << HUFFMAN-TABLE-BITS.trunc[u32]
+  let goal-size: size = 1 << HUFFMAN-TABLE-BITS
   let table-size: size = 1
   let v0 = v.[0].as-size()
   let v1 = v.[1].as-size()
@@ -255,7 +255,7 @@ fn read-var-len-u8(br: *bit-reader): size {
   if br.read(1) == 0 return 0
   let n = br.read(3)
   if n == 0 return 1
-  (1 << n.trunc[u32]) + br.read(n)
+  (1 << n) + br.read(n)
 }
 
 fn read-block-length(br: *bit-reader, table: ptr): size {
@@ -279,14 +279,14 @@ fn decode-meta-block-length(d: *decoder): result[empty, decode-error] {
     for i in 0.until(nbytes) {
       let bits = br.read(8)
       if i + 1 == nbytes and nbytes > 1 and bits == 0 return :err :exuberant-meta-nibble
-      d.meta-block-remaining-len = d.meta-block-remaining-len | (bits << (i * 8).trunc[u32])
+      d.meta-block-remaining-len = d.meta-block-remaining-len | (bits << (i * 8))
     }
   } else {
     let nibbles = nibbles-code + 4
     for i in 0.until(nibbles) {
       let bits = br.read(4)
       if i + 1 == nibbles and nibbles > 4 and bits == 0 return :err :exuberant-nibble
-      d.meta-block-remaining-len = d.meta-block-remaining-len | (bits << (i * 4).trunc[u32])
+      d.meta-block-remaining-len = d.meta-block-remaining-len | (bits << (i * 4))
     }
     if not d.is-last-metablock { d.is-uncompressed = br.read(1) == 1 }
   }
@@ -299,12 +299,12 @@ fn read-huffman-code(d: *decoder, alphabet-size: size, table: ptr): result[size,
   let prefix = br.read(2)
   if prefix == 1 {
     let num-symbols = br.read(2)
-    let max-bits = (alphabet-size - 1).unsigned().bit-length().signed()
+    let max-bits = (alphabet-size - 1).u().bit-length()
     let symbols = array/zeroed[u16, 4]()
     for i in 0.until(num-symbols + 1) {
       let v = br.read(max-bits)
       if v >= alphabet-size return :err :simple-huffman-alphabet
-      symbols.[i] = v.trunc[u16]
+      symbols.[i] = v.low[u16]
     }
     for i in 0.until(num-symbols) {
       for k in (i + 1).until(num-symbols + 1) {
@@ -322,12 +322,12 @@ fn read-huffman-code(d: *decoder, alphabet-size: size, table: ptr): result[size,
   for i in prefix.until(CODE_LENGTH_CODES) {
     let idx = k-code-length-code-order.[i].as-size()
     br.fill()
-    let ix = (br.val & 0xF).signed()
+    let ix = (br.val & 0xF).i()
     let v = k-code-length-prefix-value.[ix].as-size()
     br.drop(k-code-length-prefix-length.[ix].as-size())
-    d.code-length-code-lengths.[idx] = v.trunc[u8]
+    d.code-length-code-lengths.[idx] = v.low[u8]
     if v != 0 {
-      cl-space = cl-space - (32 >> v.trunc[u32])
+      cl-space = cl-space - (32 >> v)
       num-codes = num-codes + 1
       d.code-length-histo.[v] = d.code-length-histo.[v] + 1
       if cl-space <= 0 break
@@ -348,16 +348,16 @@ fn read-huffman-code(d: *decoder, alphabet-size: size, table: ptr): result[size,
   let space: size = 32768
   while symbol < alphabet-size and space > 0 {
     br.fill()
-    let p = d.cl-table.[(br.val & 31).signed()]
+    let p = d.cl-table.[(br.val & 31).i()]
     br.drop((p & 0xFF).as-size())
     let code-len = (p >> 16).as-size()
     if code-len < REPEAT_PREVIOUS_CODE_LENGTH {
       repeat = 0
       if code-len != 0 {
-        d.symbol-lists.[d.next-symbol.[code-len] + 16] = symbol.trunc[u16]
+        d.symbol-lists.[d.next-symbol.[code-len] + 16] = symbol.low[u16]
         d.next-symbol.[code-len] = symbol
         prev-code-len = code-len
-        space = space - (32768 >> code-len.trunc[u32])
+        space = space - (32768 >> code-len)
         d.code-length-histo.[code-len] = d.code-length-histo.[code-len] + 1
       }
       symbol = symbol + 1
@@ -368,14 +368,14 @@ fn read-huffman-code(d: *decoder, alphabet-size: size, table: ptr): result[size,
         new-len = prev-code-len
         extra-bits = 2
       }
-      let repeat-delta = br.peek(extra-bits).signed()
+      let repeat-delta = br.peek(extra-bits).i()
       br.drop(extra-bits)
       if repeat-code-len != new-len {
         repeat = 0
         repeat-code-len = new-len
       }
       let old-repeat = repeat
-      if repeat > 0 { repeat = (repeat - 2) << extra-bits.trunc[u32] }
+      if repeat > 0 { repeat = (repeat - 2) << extra-bits }
       repeat = repeat + repeat-delta + 3
       let delta = repeat - old-repeat
       if symbol + delta > alphabet-size {
@@ -385,14 +385,14 @@ fn read-huffman-code(d: *decoder, alphabet-size: size, table: ptr): result[size,
         let last = symbol + delta
         let next = d.next-symbol.[repeat-code-len]
         loop {
-          d.symbol-lists.[next + 16] = symbol.trunc[u16]
+          d.symbol-lists.[next + 16] = symbol.low[u16]
           next = symbol
           symbol = symbol + 1
           if symbol == last break
         }
         d.next-symbol.[repeat-code-len] = next
-        space = space - (delta << (HUFFMAN-MAX-CODE-LENGTH - repeat-code-len).trunc[u32])
-        d.code-length-histo.[repeat-code-len] = (d.code-length-histo.[repeat-code-len].as-size() + delta).trunc[u16]
+        space = space - (delta << (HUFFMAN-MAX-CODE-LENGTH - repeat-code-len))
+        d.code-length-histo.[repeat-code-len] = (d.code-length-histo.[repeat-code-len].as-size() + delta).low[u16]
       } else {
         symbol = symbol + delta
       }
@@ -434,7 +434,7 @@ fn decode-context-map(d: *decoder, context-map: buffer[u8]): result[size, decode
   let bits = br.val & 31
   let max-run-length-prefix: size = 0
   if (bits & 1) != 0 {
-    max-run-length-prefix = (bits >> 1).signed() + 1
+    max-run-length-prefix = (bits >> 1).i() + 1
     br.drop(5)
   } else {
     br.drop(1)
@@ -448,10 +448,10 @@ fn decode-context-map(d: *decoder, context-map: buffer[u8]): result[size, decode
       context-map.[i] = 0
       i = i + 1
     } else if code > max-run-length-prefix {
-      context-map.[i] = (code - max-run-length-prefix).trunc[u8]
+      context-map.[i] = (code - max-run-length-prefix).low[u8]
       i = i + 1
     } else {
-      let reps = br.read(code) + (1 << code.trunc[u32])
+      let reps = br.read(code) + (1 << code)
       if i + reps > size return :err :context-map-repeat
       mem/set(context-map.data-ptr().add-bytes(i), 0, reps)
       i = i + reps
@@ -459,7 +459,7 @@ fn decode-context-map(d: *decoder, context-map: buffer[u8]): result[size, decode
   }
   if br.read(1) != 0 {
     let mtf = array/zeroed[u8, 256]()
-    for k in 0.until(256) { mtf.[k] = k.trunc[u8] }
+    for k in 0.until(256) { mtf.[k] = k.low[u8] }
     for k in 0.until(size) {
       let index = context-map.[k].as-size()
       let value = mtf.[index]
@@ -496,8 +496,8 @@ fn decode-block-type-and-length(d: *decoder, tree-type: size): result[empty, dec
 
 fn prepare-literal-decoding(d: *decoder) {
   let block-type = d.block-type-rb.[1]
-  d.context-map-slice = d.context-map.data-ptr().add-bytes(block-type << LITERAL-CONTEXT-BITS.trunc[u32])
-  d.trivial-literal-context = ((d.trivial-literal-contexts.[block-type >> 5] >> (block-type & 31).trunc[u32]) & 1) == 1
+  d.context-map-slice = d.context-map.data-ptr().add-bytes(block-type << LITERAL-CONTEXT-BITS)
+  d.trivial-literal-context = ((d.trivial-literal-contexts.[block-type >> 5] >> (block-type & 31)) & 1) == 1
   d.literal-htree = d.literal-hgroup.htrees.[d.context-map-slice.ref[u8].*.as-size()]
   let mode: context-mode = enum/enum-from-value-unchecked(d.context-modes.[block-type] & 3)
   d.context-lookup = context-lut(mode)
@@ -517,7 +517,7 @@ fn decode-command-block-switch(d: *decoder): result[empty, decode-error] {
 
 fn decode-distance-block-switch(d: *decoder): result[empty, decode-error] {
   decode-block-type-and-length(d, 2).try
-  d.dist-context-map-slice = d.dist-context-map.data-ptr().add-bytes(d.block-type-rb.[5] << DISTANCE-CONTEXT-BITS.trunc[u32])
+  d.dist-context-map-slice = d.dist-context-map.data-ptr().add-bytes(d.block-type-rb.[5] << DISTANCE-CONTEXT-BITS)
   d.dist-htree-index = d.dist-context-map-slice.ref-at[u8](d.distance-context).*.as-size()
   :ok
 }
@@ -535,27 +535,27 @@ fn decode-compressed-header(d: *decoder): result[empty, decode-error] {
   }
   let bits = br.read(6)
   d.distance-postfix-bits = bits & 3
-  d.num-direct-distance-codes = (bits >> 2) << d.distance-postfix-bits.trunc[u32]
+  d.num-direct-distance-codes = (bits >> 2) << d.distance-postfix-bits
   let num-literal-block-types = d.num-block-types.[0]
   d.context-modes = buffer/allocate-in[t = u8](d.scratch, num-literal-block-types)
-  for i in 0.until(num-literal-block-types) { d.context-modes.[i] = br.read(2).trunc[u8] }
+  for i in 0.until(num-literal-block-types) { d.context-modes.[i] = br.read(2).low[u8] }
 
-  d.context-map = buffer/allocate-in[t = u8](d.scratch, num-literal-block-types << LITERAL-CONTEXT-BITS.trunc[u32])
+  d.context-map = buffer/allocate-in[t = u8](d.scratch, num-literal-block-types << LITERAL-CONTEXT-BITS)
   let num-literal-htrees = decode-context-map(d, d.context-map).try
   for i in 0.until(8) { d.trivial-literal-contexts.[i] = 0 }
   for i in 0.until(num-literal-block-types) {
-    let offset = i << LITERAL-CONTEXT-BITS.trunc[u32]
+    let offset = i << LITERAL-CONTEXT-BITS
     let sample = d.context-map.[offset]
     let error: u8 = 0
-    for j in 0.until(1 << LITERAL-CONTEXT-BITS.trunc[u32]) {
+    for j in 0.until(1 << LITERAL-CONTEXT-BITS) {
       error = error | (d.context-map.[offset + j] ^ sample)
     }
     if error == 0 {
-      d.trivial-literal-contexts.[i >> 5] = d.trivial-literal-contexts.[i >> 5] | (1u32 << (i & 31).trunc[u32])
+      d.trivial-literal-contexts.[i >> 5] = d.trivial-literal-contexts.[i >> 5] | (1u32 << (i & 31))
     }
   }
 
-  d.dist-context-map = buffer/allocate-in[t = u8](d.scratch, d.num-block-types.[2] << DISTANCE-CONTEXT-BITS.trunc[u32])
+  d.dist-context-map = buffer/allocate-in[t = u8](d.scratch, d.num-block-types.[2] << DISTANCE-CONTEXT-BITS)
   let num-dist-htrees = decode-context-map(d, d.dist-context-map).try
   let dist-alphabet-size = distance-alphabet-size(d.distance-postfix-bits, d.num-direct-distance-codes, MAX-DISTANCE-BITS)
   d.literal-hgroup = huffman-group/new(d.scratch, NUM-LITERAL-SYMBOLS, num-literal-htrees)
@@ -571,20 +571,20 @@ fn decode-compressed-header(d: *decoder): result[empty, decode-error] {
 
   let npostfix = d.distance-postfix-bits
   let ndirect = d.num-direct-distance-codes
-  let postfix: size = 1 << npostfix.trunc[u32]
+  let postfix: size = 1 << npostfix
   let dist-bits: size = 1
   let half: size = 0
   let i = NUM-DISTANCE-SHORT-CODES
   for j in 0.until(ndirect) {
     d.dist-extra-bits.[i] = 0
-    d.dist-offset.[i] = (j + 1).trunc[u32]
+    d.dist-offset.[i] = (j + 1).low[u32]
     i = i + 1
   }
   while i < dist-alphabet-size {
-    let base = ndirect + ((((2 + half) << dist-bits.trunc[u32]) - 4) << npostfix.trunc[u32]) + 1
+    let base = ndirect + ((((2 + half) << dist-bits) - 4) << npostfix) + 1
     for j in 0.until(postfix) {
-      d.dist-extra-bits.[i] = dist-bits.trunc[u8]
-      d.dist-offset.[i] = (base + j).trunc[u32]
+      d.dist-extra-bits.[i] = dist-bits.low[u8]
+      d.dist-offset.[i] = (base + j).low[u32]
       i = i + 1
     }
     dist-bits = dist-bits + half
@@ -617,11 +617,11 @@ fn read-distance(d: *decoder) {
   d.distance-context = 0
   if code >= NUM-DISTANCE-SHORT-CODES {
     let bits = br.read(d.dist-extra-bits.[code].as-size())
-    d.distance-code = d.dist-offset.[code].as-size() + (bits << d.distance-postfix-bits.trunc[u32])
+    d.distance-code = d.dist-offset.[code].as-size() + (bits << d.distance-postfix-bits)
     return
   }
   if code <= 3 {
-    d.distance-context = 1 >> code.trunc[u32]
+    d.distance-context = 1 >> code
     d.distance-code = d.dist-rb.[(d.dist-rb-idx - (code - 3)) & 3]
     d.dist-rb-idx = d.dist-rb-idx - d.distance-context
     return
@@ -633,7 +633,7 @@ fn read-distance(d: *decoder) {
   } else {
     index-delta = 2
   }
-  let delta = ((0x605142 >> (4 * base).trunc[u32]) & 0xF) - 3
+  let delta = ((0x605142 >> (4 * base)) & 0xF) - 3
   d.distance-code = d.dist-rb.[(d.dist-rb-idx + index-delta) & 3] + delta
   if d.distance-code <= 0 { d.distance-code = 0x7FFFFFFF }
 }
@@ -710,7 +710,7 @@ fn process-commands(d: *decoder): result[empty, decode-error] {
       if d.trivial-literal-context {
         let htree = d.literal-htree
         for 0.until(n) {
-          rb.ref-at[u8](pos).* = br.read-symbol(htree).trunc[u8]
+          rb.ref-at[u8](pos).* = br.read-symbol(htree).low[u8]
           pos = pos + 1
         }
       } else {
@@ -720,7 +720,7 @@ fn process-commands(d: *decoder): result[empty, decode-error] {
           let ctx = context-of(p1, p2, d.context-lookup)
           let htree = d.literal-hgroup.htrees.[d.context-map-slice.ref-at[u8](ctx.as-size()).*.as-size()]
           p2 = p1
-          p1 = br.read-symbol(htree).trunc[u8]
+          p1 = br.read-symbol(htree).low[u8]
           rb.ref-at[u8](pos).* = p1
           pos = pos + 1
         }
@@ -746,8 +746,8 @@ fn process-commands(d: *decoder): result[empty, decode-error] {
       let shift = k-dictionary-size-bits-by-length.[copy-length].as-size()
       if shift == 0 return :err :dictionary
       let address = d.distance-code - max-distance - 1
-      let word-idx = address & ((1 << shift.trunc[u32]) - 1)
-      let transform-idx = address >> shift.trunc[u32]
+      let word-idx = address & ((1 << shift) - 1)
+      let transform-idx = address >> shift
       d.dist-rb-idx = d.dist-rb-idx + d.distance-context
       if transform-idx >= NUM-TRANSFORMS return :err :transform
       let word = dictionary-word(copy-length, word-idx)
@@ -797,7 +797,7 @@ fn decode-stream[a: allocator](d: *decoder, alloc: a): result[buffer[u8], decode
       if m != 0 8 + m else 17
     }
   }
-  d.max-backward-distance = (1 << d.window-bits.trunc[u32]) - WINDOW-GAP
+  d.max-backward-distance = (1 << d.window-bits) - WINDOW-GAP
   let trees = buffer/allocate-in[t = u32](d.scratch, 3 * (HUFFMAN-MAX-SIZE-258 + HUFFMAN-MAX-SIZE-26))
   d.block-type-trees = trees.data-ptr()
   d.block-len-trees = trees.index-unchecked(3 * HUFFMAN-MAX-SIZE-258).as[ptr]

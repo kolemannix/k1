@@ -2,13 +2,13 @@
   use core/arena
 
   ns(lib("host")) host {
-    fn(extern) progress(nodes: u64, board: u32, from: square, to: square)
+    fn(extern) progress(nodes: i64, board: u32, from: square, to: square)
   }
 
-  let INTERVAL: u64 = 20000
+  let INTERVAL: i64 = 20000
   let(mutable) search-arena: opt[*arena] = :none
-  let(mutable) seen: u64 = 0
-  let(mutable) next-report: u64 = 0
+  let(mutable) seen: i64 = 0
+  let(mutable) next-report: i64 = 0
   let(mutable) snapshot: array[u8, 64] = .0
 
   fn report(pos: *position, m: move) {
@@ -16,20 +16,20 @@
       let k = pos.board.[sq]
       snapshot.[sq] = if (k is :none) 0 else k.value + 1 + (if pos.by-color.[0] & bit(sq) != 0 0 else 8)
     }
-    host/progress(seen, snapshot.&.as[ptr].to-size().trunc[u32], m.from(), m.to())
+    host/progress(seen, snapshot.&.as[ptr].to-size().low[u32], m.from(), m.to())
     next-report = seen + INTERVAL
   }
 
-  fn perft-watched(context ply: *arena)(pos: *position, depth: u32): u64 {
+  fn perft-watched(context ply: *arena)(pos: *position, depth: u32): i64 {
     if depth == 0 return 1
     let mark = ply.mark()
     defer ply.pop-to-mark(mark)
     let moves = gen-moves(pos, :all)
     if depth == 1 {
-      seen = seen + moves.len().unsigned()
-      return moves.len().unsigned()
+      seen = seen + moves.len()
+      return moves.len()
     }
-    let nodes: u64 = 0
+    let nodes = 0
     for m in moves {
       let child = pos.*
       child.make(m)
@@ -39,7 +39,7 @@
     nodes
   }
 
-  fn(export("k1_perft")) run-perft(depth: u32): u64 {
+  fn(export("k1_perft")) run-perft(depth: u32): i64 {
     let(context) ply: *arena = if search-arena is :some a a else {
       let a = arena/init(arena/mb)
       search-arena = :some(a)

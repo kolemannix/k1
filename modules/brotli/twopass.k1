@@ -35,14 +35,14 @@ ns for cmd-sink {
   }
 }
 
-fn(inline) hash-2p(p: ptr, shift: u32, min-match: size): size {
-  let h = (vector/load-word(p) << ((8 - min-match).trunc[u32] * 8)) * K-HASH-MUL32.widen[u64]
-  (h >> shift).signed()
+fn(inline) hash-2p(p: ptr, shift: size, min-match: size): size {
+  let h = (vector/load-word(p) << ((8 - min-match) * 8)) * K-HASH-MUL32.as[u64]
+  (h >> shift).i()
 }
 
-fn(inline) hash-2p-at-offset(v: u64, offset: u32, shift: u32, min-match: size): size {
-  let h = ((v >> (8 * offset)) << ((8 - min-match).trunc[u32] * 8)) * K-HASH-MUL32.widen[u64]
-  (h >> shift).signed()
+fn(inline) hash-2p-at-offset(v: u64, offset: size, shift: size, min-match: size): size {
+  let h = ((v >> (8 * offset)) << ((8 - min-match) * 8)) * K-HASH-MUL32.as[u64]
+  (h >> shift).i()
 }
 
 fn(inline) is-match-2p(p1: ptr, p2: ptr, min-match: size): bool {
@@ -55,118 +55,118 @@ fn(inline) is-match-2p(p1: ptr, p2: ptr, min-match: size): bool {
 
 fn(inline) emit-insert-len-2p(insertlen: size, sink: *cmd-sink) {
   if insertlen < 6 {
-    sink.push-cmd(insertlen.trunc[u32])
+    sink.push-cmd(insertlen.low[u32])
   } else if insertlen < 130 {
     let tail = insertlen - 2
-    let nbits = log2-floor-nonzero(tail.unsigned()) - 1
-    let prefix = tail >> nbits.trunc[u32]
+    let nbits = log2-floor-nonzero(tail) - 1
+    let prefix = tail >> nbits
     let inscode = (nbits << 1) + prefix + 2
-    let extra = tail - (prefix << nbits.trunc[u32])
-    sink.push-cmd((inscode | (extra << 8)).trunc[u32])
+    let extra = tail - (prefix << nbits)
+    sink.push-cmd((inscode | (extra << 8)).low[u32])
   } else if insertlen < 2114 {
     let tail = insertlen - 66
-    let nbits = log2-floor-nonzero(tail.unsigned())
+    let nbits = log2-floor-nonzero(tail)
     let code = nbits + 10
-    let extra = tail - (1 << nbits.trunc[u32])
-    sink.push-cmd((code | (extra << 8)).trunc[u32])
+    let extra = tail - (1 << nbits)
+    sink.push-cmd((code | (extra << 8)).low[u32])
   } else if insertlen < 6210 {
     let extra = insertlen - 2114
-    sink.push-cmd((21 | (extra << 8)).trunc[u32])
+    sink.push-cmd((21 | (extra << 8)).low[u32])
   } else if insertlen < 22594 {
     let extra = insertlen - 6210
-    sink.push-cmd((22 | (extra << 8)).trunc[u32])
+    sink.push-cmd((22 | (extra << 8)).low[u32])
   } else {
     let extra = insertlen - 22594
-    sink.push-cmd((23 | (extra << 8)).trunc[u32])
+    sink.push-cmd((23 | (extra << 8)).low[u32])
   }
 }
 
 fn(inline) emit-copy-len-2p(copylen: size, sink: *cmd-sink) {
   if copylen < 10 {
-    sink.push-cmd((copylen + 38).trunc[u32])
+    sink.push-cmd((copylen + 38).low[u32])
   } else if copylen < 134 {
     let tail = copylen - 6
-    let nbits = log2-floor-nonzero(tail.unsigned()) - 1
-    let prefix = tail >> nbits.trunc[u32]
+    let nbits = log2-floor-nonzero(tail) - 1
+    let prefix = tail >> nbits
     let code = (nbits << 1) + prefix + 44
-    let extra = tail - (prefix << nbits.trunc[u32])
-    sink.push-cmd((code | (extra << 8)).trunc[u32])
+    let extra = tail - (prefix << nbits)
+    sink.push-cmd((code | (extra << 8)).low[u32])
   } else if copylen < 2118 {
     let tail = copylen - 70
-    let nbits = log2-floor-nonzero(tail.unsigned())
+    let nbits = log2-floor-nonzero(tail)
     let code = nbits + 52
-    let extra = tail - (1 << nbits.trunc[u32])
-    sink.push-cmd((code | (extra << 8)).trunc[u32])
+    let extra = tail - (1 << nbits)
+    sink.push-cmd((code | (extra << 8)).low[u32])
   } else {
     let extra = copylen - 2118
-    sink.push-cmd((63 | (extra << 8)).trunc[u32])
+    sink.push-cmd((63 | (extra << 8)).low[u32])
   }
 }
 
 fn(inline) emit-copy-len-last-distance-2p(copylen: size, sink: *cmd-sink) {
   if copylen < 12 {
-    sink.push-cmd((copylen + 20).trunc[u32])
+    sink.push-cmd((copylen + 20).low[u32])
   } else if copylen < 72 {
     let tail = copylen - 8
-    let nbits = log2-floor-nonzero(tail.unsigned()) - 1
-    let prefix = tail >> nbits.trunc[u32]
+    let nbits = log2-floor-nonzero(tail) - 1
+    let prefix = tail >> nbits
     let code = (nbits << 1) + prefix + 28
-    let extra = tail - (prefix << nbits.trunc[u32])
-    sink.push-cmd((code | (extra << 8)).trunc[u32])
+    let extra = tail - (prefix << nbits)
+    sink.push-cmd((code | (extra << 8)).low[u32])
   } else if copylen < 136 {
     let tail = copylen - 8
     let code = (tail >> 5) + 54
     let extra = tail & 31
-    sink.push-cmd((code | (extra << 8)).trunc[u32])
+    sink.push-cmd((code | (extra << 8)).low[u32])
     sink.push-cmd(64)
   } else if copylen < 2120 {
     let tail = copylen - 72
-    let nbits = log2-floor-nonzero(tail.unsigned())
+    let nbits = log2-floor-nonzero(tail)
     let code = nbits + 52
-    let extra = tail - (1 << nbits.trunc[u32])
-    sink.push-cmd((code | (extra << 8)).trunc[u32])
+    let extra = tail - (1 << nbits)
+    sink.push-cmd((code | (extra << 8)).low[u32])
     sink.push-cmd(64)
   } else {
     let extra = copylen - 2120
-    sink.push-cmd((63 | (extra << 8)).trunc[u32])
+    sink.push-cmd((63 | (extra << 8)).low[u32])
     sink.push-cmd(64)
   }
 }
 
 fn(inline) emit-distance-2p(distance: size, sink: *cmd-sink) {
   let d = distance + 3
-  let nbits = log2-floor-nonzero(d.unsigned()) - 1
-  let prefix = (d >> nbits.trunc[u32]) & 1
-  let offset = (2 + prefix) << nbits.trunc[u32]
+  let nbits = log2-floor-nonzero(d) - 1
+  let prefix = (d >> nbits) & 1
+  let offset = (2 + prefix) << nbits
   let distcode = 2 * (nbits - 1) + prefix + 80
   let extra = d - offset
-  sink.push-cmd((distcode | (extra << 8)).trunc[u32])
+  sink.push-cmd((distcode | (extra << 8)).low[u32])
 }
 
 fn(inline) update-table-after-copy(
-  ip: ptr, base-ip: ptr, table: buffer[i32], shift: u32, min-match: size, third-offset: u32,
+  ip: ptr, base-ip: ptr, table: buffer[i32], shift: size, min-match: size, third-offset: size,
 ): ptr {
   let pos = ip.diff(base-ip)
   if min-match == 4 {
     let input-bytes = vector/load-word(ip.sub-bytes(3))
     let cur-hash = hash-2p-at-offset(input-bytes, 3, shift, min-match)
-    table.index-unchecked(hash-2p-at-offset(input-bytes, 0, shift, min-match)).* = (pos - 3).trunc[i32]
-    table.index-unchecked(hash-2p-at-offset(input-bytes, 1, shift, min-match)).* = (pos - 2).trunc[i32]
-    table.index-unchecked(hash-2p-at-offset(input-bytes, third-offset, shift, min-match)).* = (pos - 1).trunc[i32]
+    table.index-unchecked(hash-2p-at-offset(input-bytes, 0, shift, min-match)).* = (pos - 3).low[i32]
+    table.index-unchecked(hash-2p-at-offset(input-bytes, 1, shift, min-match)).* = (pos - 2).low[i32]
+    table.index-unchecked(hash-2p-at-offset(input-bytes, third-offset, shift, min-match)).* = (pos - 1).low[i32]
     let candidate = base-ip.add-bytes(table.index-unchecked(cur-hash).*.as-size())
-    table.index-unchecked(cur-hash).* = pos.trunc[i32]
+    table.index-unchecked(cur-hash).* = pos.low[i32]
     candidate
   } else {
     let input-bytes = vector/load-word(ip.sub-bytes(5))
-    table.index-unchecked(hash-2p-at-offset(input-bytes, 0, shift, min-match)).* = (pos - 5).trunc[i32]
-    table.index-unchecked(hash-2p-at-offset(input-bytes, 1, shift, min-match)).* = (pos - 4).trunc[i32]
-    table.index-unchecked(hash-2p-at-offset(input-bytes, 2, shift, min-match)).* = (pos - 3).trunc[i32]
+    table.index-unchecked(hash-2p-at-offset(input-bytes, 0, shift, min-match)).* = (pos - 5).low[i32]
+    table.index-unchecked(hash-2p-at-offset(input-bytes, 1, shift, min-match)).* = (pos - 4).low[i32]
+    table.index-unchecked(hash-2p-at-offset(input-bytes, 2, shift, min-match)).* = (pos - 3).low[i32]
     let input-bytes2 = vector/load-word(ip.sub-bytes(2))
     let cur-hash = hash-2p-at-offset(input-bytes2, 2, shift, min-match)
-    table.index-unchecked(hash-2p-at-offset(input-bytes2, 0, shift, min-match)).* = (pos - 2).trunc[i32]
-    table.index-unchecked(hash-2p-at-offset(input-bytes2, 1, shift, min-match)).* = (pos - 1).trunc[i32]
+    table.index-unchecked(hash-2p-at-offset(input-bytes2, 0, shift, min-match)).* = (pos - 2).low[i32]
+    table.index-unchecked(hash-2p-at-offset(input-bytes2, 1, shift, min-match)).* = (pos - 1).low[i32]
     let candidate = base-ip.add-bytes(table.index-unchecked(cur-hash).*.as-size())
-    table.index-unchecked(cur-hash).* = pos.trunc[i32]
+    table.index-unchecked(cur-hash).* = pos.low[i32]
     candidate
   }
 }
@@ -176,7 +176,7 @@ fn(inline) create-commands[min-match: static size](
   table: buffer[i32], table-bits: size, sink: *cmd-sink,
 ) {
   let ip = input
-  let shift = (64 - table-bits).trunc[u32]
+  let shift = 64 - table-bits
   let ip-end = input.add-bytes(block-size)
   let next-emit = input
   let last-distance: i64 = -1
@@ -203,11 +203,11 @@ fn(inline) create-commands[min-match: static size](
         let found = false
         candidate = ip.sub-bytes(last-distance)
         if is-match-2p(ip, candidate, min-match) and candidate < ip {
-          table.index-unchecked(h).* = ip.diff(base-ip).trunc[i32]
+          table.index-unchecked(h).* = ip.diff(base-ip).low[i32]
           found = true
         } else {
           candidate = base-ip.add-bytes(table.index-unchecked(h).*.as-size())
-          table.index-unchecked(h).* = ip.diff(base-ip).trunc[i32]
+          table.index-unchecked(h).* = ip.diff(base-ip).low[i32]
           found = is-match-2p(ip, candidate, min-match)
         }
         if found and ip.diff(candidate) <= MAX-DISTANCE {
@@ -353,15 +353,15 @@ fn store-commands(s: *two-pass-arena, sink: *cmd-sink, bw: bit-writer): bit-writ
   while i < sink.num-commands {
     let cmd = sink.commands.index-unchecked(i).*
     let code = (cmd & 0xFF).as-size()
-    let extra = (cmd >> 8).widen[u64]
-    bw = bw.write-bits(cmd-depth.index-unchecked(code).*.as-size(), cmd-bits.index-unchecked(code).*.widen[u64])
+    let extra = (cmd >> 8).as[u64]
+    bw = bw.write-bits(cmd-depth.index-unchecked(code).*.as-size(), cmd-bits.index-unchecked(code).*.as[u64])
     bw = bw.write-bits(k-num-extra-bits.[code].as-size(), extra)
     if code < 24 {
-      let insert = k-insert-offset.[code].as-size() + extra.signed()
+      let insert = k-insert-offset.[code].as-size() + extra.i()
       let j: size = 0
       while j < insert {
         let lit = sink.literals.index-unchecked(lit-pos).*.as-size()
-        bw = bw.write-bits(lit-depth.index-unchecked(lit).*.as-size(), lit-bits.index-unchecked(lit).*.widen[u64])
+        bw = bw.write-bits(lit-depth.index-unchecked(lit).*.as-size(), lit-bits.index-unchecked(lit).*.as[u64])
         lit-pos = lit-pos + 1
         j = j + 1
       }
@@ -374,12 +374,12 @@ fn store-commands(s: *two-pass-arena, sink: *cmd-sink, bw: bit-writer): bit-writ
 fn should-compress-2p(s: *two-pass-arena, input: ptr, input-size: size, num-literals: size): bool {
   let MIN-RATIO-2P = 0.98
   let SAMPLE-RATE: size = 43
-  let corpus-size = input-size.as[f64]
-  if num-literals.as[f64] < MIN-RATIO-2P * corpus-size {
+  let corpus-size = input-size.to-f64()
+  if num-literals.to-f64() < MIN-RATIO-2P * corpus-size {
     true
   } else {
     let lit-histo = s.lit-histo.&.as-buffer()
-    let max-total-bit-cost = corpus-size * 8.0 * MIN-RATIO-2P / SAMPLE-RATE.as[f64]
+    let max-total-bit-cost = corpus-size * 8.0 * MIN-RATIO-2P / SAMPLE-RATE.to-f64()
     lit-histo.memset(0)
     let i: size = 0
     while i < input-size {
@@ -398,7 +398,7 @@ fn compress-fragment-two-pass(
 ): bit-writer {
   let bw = bw
   let initial-pos = bw.pos
-  let table-bits = log2-floor-nonzero(table-size.unsigned())
+  let table-bits = log2-floor-nonzero(table-size)
   let base-ip = input-start
 
   let input = input-start

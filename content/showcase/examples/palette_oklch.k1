@@ -12,7 +12,7 @@ fn quantize(v: f32): u8 {
   let n: f32 = v * 255.0 + 0.5
   if n < 0.0 return 0
   if n > 255.0 return 255
-  n.as[u32].trunc[u8]
+  n.trunc[u32].low[u8]
 }
 
 fn linear-from-srgb-unit(c: f32): f32 {
@@ -24,7 +24,7 @@ fn srgb-unit-from-linear(v: f32): f32 {
   if c <= 0.0031308 { c * 12.92 } else { c.pow(INV-GAMMA) * 1.055 - 0.055 }
 }
 
-fn linear-from-srgb(v: u8): f32 { linear-from-srgb-unit(v.as[f32] / 255.0) }
+fn linear-from-srgb(v: u8): f32 { linear-from-srgb-unit(v.to-f32() / 255.0) }
 fn srgb-from-linear(v: f32): u8 { quantize(srgb-unit-from-linear(v)) }
 
 fn oklch(l: f32, c: f32, h: f32): srgb8 {
@@ -119,7 +119,7 @@ let CSS: string = {
 let RAMP: array[srgb8, 9] = {
   let ramp: array[srgb8, 9] = .0
   for i in 0.until(9) {
-    ramp.[i] = oklch(0.2 + 0.08 * i.as[f32], 0.02, UI-HUE)
+    ramp.[i] = oklch(0.2 + 0.08 * i.to-f32(), 0.02, UI-HUE)
   }
   ramp
 }

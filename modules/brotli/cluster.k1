@@ -7,7 +7,7 @@ fn(inline) histogram-pair-is-less(p1: *histogram-pair, p2: *histogram-pair): boo
 
 fn(inline) cluster-cost-diff(size-a: size, size-b: size): f64 {
   let size-c = size-a + size-b
-  size-a.as[f64] * fast-log2(size-a) + size-b.as[f64] * fast-log2(size-b) - size-c.as[f64] * fast-log2(size-c)
+  size-a.to-f64() * fast-log2(size-a) + size-b.to-f64() * fast-log2(size-b) - size-c.to-f64() * fast-log2(size-c)
 }
 
 fn compare-and-push-to-queue[n: static size](
@@ -219,14 +219,14 @@ fn cluster-histograms[n: static size](
   for i in 0.until(in-size) {
     out.index-unchecked(i).* = input.index-unchecked(i).*
     out.index-unchecked(i).bit-cost = input.index-unchecked(i).population-cost()
-    histogram-symbols.index-unchecked(i).* = i.trunc[u32]
+    histogram-symbols.index-unchecked(i).* = i.low[u32]
   }
 
   let batch: size = 0
   while batch < in-size {
     let num-to-combine = (in-size - batch).min(max-input-histograms)
     for j in 0.until(num-to-combine) {
-      clusters.index-unchecked(num-clusters + j).* = (batch + j).trunc[u32]
+      clusters.index-unchecked(num-clusters + j).* = (batch + j).low[u32]
     }
     let num-new-clusters = histogram-combine(
       out, tmp, cluster-size, histogram-symbols.slice(batch, in-size), clusters.slice(num-clusters, in-size),

@@ -20,12 +20,12 @@ type one-pass-arena = {
   tmp-bits: array[u16, 64],
 }
 
-fn(inline) hash-bytes(p: ptr, shift: u32): size {
-  (((vector/load-word(p) << 24) * K-HASH-MUL32.widen[u64]) >> shift).signed()
+fn(inline) hash-bytes(p: ptr, shift: size): size {
+  (((vector/load-word(p) << 24) * K-HASH-MUL32.as[u64]) >> shift).i()
 }
 
-fn(inline) hash-bytes-at-offset(v: u64, offset: u32, shift: u32): size {
-  ((((v >> (8 * offset)) << 24) * K-HASH-MUL32.widen[u64]) >> shift).signed()
+fn(inline) hash-bytes-at-offset(v: u64, offset: size, shift: size): size {
+  ((((v >> (8 * offset)) << 24) * K-HASH-MUL32.as[u64]) >> shift).i()
 }
 
 fn(inline) is-match(p1: ptr, p2: ptr): bool {
@@ -40,7 +40,7 @@ fn(inline) find-match-length(s1: ptr, s2: ptr, limit: size): size {
   while lim >= 8 {
     let x = vector/load-word(p2) ^ vector/load-word(p1)
     if x != 0 {
-      return p1.diff(s1) + (x.trailing-zeros() >> 3).signed()
+      return p1.diff(s1) + (x.trailing-zeros() >> 3)
     }
     p1 = p1.add-bytes(8)
     p2 = p2.add-bytes(8)
@@ -56,7 +56,7 @@ fn(inline) find-match-length(s1: ptr, s2: ptr, limit: size): size {
 
 fn(inline) emit-code(code: size, depth: buffer[u8], bits: buffer[u16], histo: buffer[u32], bw: bit-writer): bit-writer {
   histo.index-unchecked(code).* = histo.index-unchecked(code).* + 1
-  bw.write-bits(depth.index-unchecked(code).*.as-size(), bits.index-unchecked(code).*.widen[u64])
+  bw.write-bits(depth.index-unchecked(code).*.as-size(), bits.index-unchecked(code).*.as[u64])
 }
 
 fn(inline) emit-insert-len(insertlen: size, depth: buffer[u8], bits: buffer[u16], histo: buffer[u32], bw: bit-writer): bit-writer {
@@ -64,25 +64,25 @@ fn(inline) emit-insert-len(insertlen: size, depth: buffer[u8], bits: buffer[u16]
     emit-code(insertlen + 40, depth, bits, histo, bw)
   } else if insertlen < 130 {
     let tail = insertlen - 2
-    let nbits = log2-floor-nonzero(tail.unsigned()) - 1
-    let prefix = tail >> nbits.trunc[u32]
+    let nbits = log2-floor-nonzero(tail) - 1
+    let prefix = tail >> nbits
     emit-code((nbits << 1) + prefix + 42, depth, bits, histo, bw)
-      .write-bits(nbits, (tail - (prefix << nbits.trunc[u32])).unsigned())
+      .write-bits(nbits, (tail - (prefix << nbits)).u())
   } else if insertlen < 2114 {
     let tail = insertlen - 66
-    let nbits = log2-floor-nonzero(tail.unsigned())
+    let nbits = log2-floor-nonzero(tail)
     emit-code(nbits + 50, depth, bits, histo, bw)
-      .write-bits(nbits, (tail - (1 << nbits.trunc[u32])).unsigned())
+      .write-bits(nbits, (tail - (1 << nbits)).u())
   } else {
-    emit-code(61, depth, bits, histo, bw).write-bits(12, (insertlen - 2114).unsigned())
+    emit-code(61, depth, bits, histo, bw).write-bits(12, (insertlen - 2114).u())
   }
 }
 
 fn(inline) emit-long-insert-len(insertlen: size, depth: buffer[u8], bits: buffer[u16], histo: buffer[u32], bw: bit-writer): bit-writer {
   if insertlen < 22594 {
-    emit-code(62, depth, bits, histo, bw).write-bits(14, (insertlen - 6210).unsigned())
+    emit-code(62, depth, bits, histo, bw).write-bits(14, (insertlen - 6210).u())
   } else {
-    emit-code(63, depth, bits, histo, bw).write-bits(24, (insertlen - 22594).unsigned())
+    emit-code(63, depth, bits, histo, bw).write-bits(24, (insertlen - 22594).u())
   }
 }
 
@@ -91,17 +91,17 @@ fn(inline) emit-copy-len(copylen: size, depth: buffer[u8], bits: buffer[u16], hi
     emit-code(copylen + 14, depth, bits, histo, bw)
   } else if copylen < 134 {
     let tail = copylen - 6
-    let nbits = log2-floor-nonzero(tail.unsigned()) - 1
-    let prefix = tail >> nbits.trunc[u32]
+    let nbits = log2-floor-nonzero(tail) - 1
+    let prefix = tail >> nbits
     emit-code((nbits << 1) + prefix + 20, depth, bits, histo, bw)
-      .write-bits(nbits, (tail - (prefix << nbits.trunc[u32])).unsigned())
+      .write-bits(nbits, (tail - (prefix << nbits)).u())
   } else if copylen < 2118 {
     let tail = copylen - 70
-    let nbits = log2-floor-nonzero(tail.unsigned())
+    let nbits = log2-floor-nonzero(tail)
     emit-code(nbits + 28, depth, bits, histo, bw)
-      .write-bits(nbits, (tail - (1 << nbits.trunc[u32])).unsigned())
+      .write-bits(nbits, (tail - (1 << nbits)).u())
   } else {
-    emit-code(39, depth, bits, histo, bw).write-bits(24, (copylen - 2118).unsigned())
+    emit-code(39, depth, bits, histo, bw).write-bits(24, (copylen - 2118).u())
   }
 }
 
@@ -110,33 +110,33 @@ fn(inline) emit-copy-len-last-distance(copylen: size, depth: buffer[u8], bits: b
     emit-code(copylen - 4, depth, bits, histo, bw)
   } else if copylen < 72 {
     let tail = copylen - 8
-    let nbits = log2-floor-nonzero(tail.unsigned()) - 1
-    let prefix = tail >> nbits.trunc[u32]
+    let nbits = log2-floor-nonzero(tail) - 1
+    let prefix = tail >> nbits
     emit-code((nbits << 1) + prefix + 4, depth, bits, histo, bw)
-      .write-bits(nbits, (tail - (prefix << nbits.trunc[u32])).unsigned())
+      .write-bits(nbits, (tail - (prefix << nbits)).u())
   } else if copylen < 136 {
     let tail = copylen - 8
-    let bw = emit-code((tail >> 5) + 30, depth, bits, histo, bw).write-bits(5, (tail & 31).unsigned())
+    let bw = emit-code((tail >> 5) + 30, depth, bits, histo, bw).write-bits(5, (tail & 31).u())
     emit-code(64, depth, bits, histo, bw)
   } else if copylen < 2120 {
     let tail = copylen - 72
-    let nbits = log2-floor-nonzero(tail.unsigned())
+    let nbits = log2-floor-nonzero(tail)
     let bw = emit-code(nbits + 28, depth, bits, histo, bw)
-      .write-bits(nbits, (tail - (1 << nbits.trunc[u32])).unsigned())
+      .write-bits(nbits, (tail - (1 << nbits)).u())
     emit-code(64, depth, bits, histo, bw)
   } else {
-    let bw = emit-code(39, depth, bits, histo, bw).write-bits(24, (copylen - 2120).unsigned())
+    let bw = emit-code(39, depth, bits, histo, bw).write-bits(24, (copylen - 2120).u())
     emit-code(64, depth, bits, histo, bw)
   }
 }
 
 fn(inline) emit-distance(distance: size, depth: buffer[u8], bits: buffer[u16], histo: buffer[u32], bw: bit-writer): bit-writer {
   let d = distance + 3
-  let nbits = log2-floor-nonzero(d.unsigned()) - 1
-  let prefix = (d >> nbits.trunc[u32]) & 1
-  let offset = (2 + prefix) << nbits.trunc[u32]
+  let nbits = log2-floor-nonzero(d) - 1
+  let prefix = (d >> nbits) & 1
+  let offset = (2 + prefix) << nbits
   emit-code(2 * (nbits - 1) + prefix + 80, depth, bits, histo, bw)
-    .write-bits(nbits, (d - offset).unsigned())
+    .write-bits(nbits, (d - offset).u())
 }
 
 fn(inline) emit-literals(input: ptr, len: size, depth: buffer[u8], bits: buffer[u16], bw: bit-writer): bit-writer {
@@ -144,7 +144,7 @@ fn(inline) emit-literals(input: ptr, len: size, depth: buffer[u8], bits: buffer[
   let j: size = 0
   while j < len {
     let lit = input.add-bytes(j).ref[u8].*
-    bw = bw.write-bits(depth.index-unchecked(lit).*.as-size(), bits.index-unchecked(lit).*.widen[u64])
+    bw = bw.write-bits(depth.index-unchecked(lit).*.as-size(), bits.index-unchecked(lit).*.as[u64])
     j = j + 1
   }
   bw
@@ -153,8 +153,8 @@ fn(inline) emit-literals(input: ptr, len: size, depth: buffer[u8], bits: buffer[
 fn store-metablock-header(len: size, is-uncompressed: bool, bw: bit-writer): bit-writer {
   let nibbles: size = if len <= (1 << 16) 4 else if len <= (1 << 20) 5 else 6
   bw.write-bits(1, 0)
-    .write-bits(2, (nibbles - 4).unsigned())
-    .write-bits(nibbles * 4, (len - 1).unsigned())
+    .write-bits(2, (nibbles - 4).u())
+    .write-bits(nibbles * 4, (len - 1).u())
     .write-bits(1, if is-uncompressed 1 else 0)
 }
 
@@ -191,11 +191,11 @@ fn should-merge-block(s: *one-pass-arena, data: ptr, len: size, depths: buffer[u
     i = i + SAMPLE-RATE
   }
   let total = (len + SAMPLE-RATE - 1) / SAMPLE-RATE
-  let r = (fast-log2(total) + 0.5) * total.as[f64] + 200.0
+  let r = (fast-log2(total) + 0.5) * total.to-f64() + 200.0
   i = 0
   while i < 256 {
     let h = histo.index-unchecked(i).*.as-size()
-    r = r - h.as[f64] * (depths.index-unchecked(i).*.widen[i64].as[f64] + fast-log2(h))
+    r = r - h.to-f64() * (depths.index-unchecked(i).*.as[i64].to-f64() + fast-log2(h))
     i = i + 1
   }
   r >= 0.0
@@ -318,15 +318,15 @@ fn copy-u16(dst: buffer[u16], dst-off: size, src: buffer[u16], src-off: size, co
     count = count * 2)
 }
 
-fn(inline) update-table-after-copy-1p(ip: ptr, base-ip: ptr, table: buffer[i32], shift: u32): ptr {
+fn(inline) update-table-after-copy-1p(ip: ptr, base-ip: ptr, table: buffer[i32], shift: size): ptr {
   let input-bytes = vector/load-word(ip.sub-bytes(3))
   let pos = ip.diff(base-ip)
-  table.index-unchecked(hash-bytes-at-offset(input-bytes, 0, shift)).* = (pos - 3).trunc[i32]
-  table.index-unchecked(hash-bytes-at-offset(input-bytes, 1, shift)).* = (pos - 2).trunc[i32]
-  table.index-unchecked(hash-bytes-at-offset(input-bytes, 2, shift)).* = (pos - 1).trunc[i32]
+  table.index-unchecked(hash-bytes-at-offset(input-bytes, 0, shift)).* = (pos - 3).low[i32]
+  table.index-unchecked(hash-bytes-at-offset(input-bytes, 1, shift)).* = (pos - 2).low[i32]
+  table.index-unchecked(hash-bytes-at-offset(input-bytes, 2, shift)).* = (pos - 1).low[i32]
   let cur-hash = hash-bytes-at-offset(input-bytes, 3, shift)
   let candidate = base-ip.add-bytes(table.index-unchecked(cur-hash).*.as-size())
-  table.index-unchecked(cur-hash).* = pos.trunc[i32]
+  table.index-unchecked(cur-hash).* = pos.low[i32]
   candidate
 }
 
@@ -345,7 +345,7 @@ fn compress-fragment-impl(
   let input-size = fragment-size
   let base-ip = input-start
   let next-emit = input-start
-  let shift = (64 - table-bits).trunc[u32]
+  let shift = 64 - table-bits
 
   let metablock-start = input
   let block-size = input-size.min(FIRST-BLOCK-SIZE)
@@ -360,10 +360,10 @@ fn compress-fragment-impl(
 
   let ci: size = 0
   while ci + 7 < s.cmd-code-numbits {
-    bw = bw.write-bits(8, s.cmd-code.[ci >> 3].widen[u64])
+    bw = bw.write-bits(8, s.cmd-code.[ci >> 3].as[u64])
     ci = ci + 8
   }
-  bw = bw.write-bits(s.cmd-code-numbits & 7, s.cmd-code.[s.cmd-code-numbits >> 3].widen[u64])
+  bw = bw.write-bits(s.cmd-code-numbits & 7, s.cmd-code.[s.cmd-code-numbits >> 3].as[u64])
 
   loop {
     let hi: size = 0
@@ -399,11 +399,11 @@ fn compress-fragment-impl(
           let found = false
           candidate = ip.sub-bytes(last-distance)
           if is-match(ip, candidate) and candidate < ip {
-            table.index-unchecked(h).* = ip.diff(base-ip).trunc[i32]
+            table.index-unchecked(h).* = ip.diff(base-ip).low[i32]
             found = true
           } else {
             candidate = base-ip.add-bytes(table.index-unchecked(h).*.as-size())
-            table.index-unchecked(h).* = ip.diff(base-ip).trunc[i32]
+            table.index-unchecked(h).* = ip.diff(base-ip).low[i32]
             found = is-match(ip, candidate)
           }
           if found and ip.diff(candidate) <= MAX-DISTANCE {
@@ -473,7 +473,7 @@ fn compress-fragment-impl(
         total-block-size + block-size <= (1 << 20) and
         should-merge-block(s, input, block-size, lit-depth) {
         total-block-size = total-block-size + block-size
-        bw.update-bits(20, (total-block-size - 1).trunc[u32], mlen-storage-ix)
+        bw.update-bits(20, (total-block-size - 1).low[u32], mlen-storage-ix)
         continue
       }
 
@@ -516,7 +516,7 @@ fn compress-fragment-fast(
   table: buffer[i32], table-size: size, bw: bit-writer,
 ): bit-writer {
   let initial-pos = bw.pos
-  let table-bits = log2-floor-nonzero(table-size.unsigned())
+  let table-bits = log2-floor-nonzero(table-size)
 
   if input-size == 0 {
     assert(is-last)

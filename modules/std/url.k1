@@ -150,7 +150,7 @@ fn parse(text: string): result[url, error] {
       while k < end {
         require text.[k].to-ascii-digit() is :some d else return :err .{ pos = k, kind = :invalid-port }
         let tens = p.mul-overflow(10)
-        let next = tens.value.add-overflow(d.widen[u16])
+        let next = tens.value.add-overflow(d.as[u16])
         if tens.overflowed or next.overflowed return :err .{ pos = k, kind = :invalid-port }
         p = next.value
         k = k + 1
@@ -174,13 +174,13 @@ fn parse(text: string): result[url, error] {
 
   :ok .{
     text,
-    scheme-end = scheme-end.trunc[u32],
-    authority-start = authority-start.trunc[u32],
-    host-start = host-start.trunc[u32],
-    host-end = host-end.trunc[u32],
-    path-start = path-start.trunc[u32],
-    query-start = query-start.trunc[u32],
-    fragment-start = fragment-start.trunc[u32],
+    scheme-end = scheme-end.low[u32],
+    authority-start = authority-start.low[u32],
+    host-start = host-start.low[u32],
+    host-end = host-end.low[u32],
+    path-start = path-start.low[u32],
+    query-start = query-start.low[u32],
+    fragment-start = fragment-start.low[u32],
     port-number,
   }
 }
@@ -451,7 +451,7 @@ ns percent {
     let table: array[u8, 128] = .0
     let i: size = 0
     while i < 128 {
-      let c = i.trunc[u8].as-char()
+      let c = i.low[u8].as-char()
       let unreserved = c.is-ascii-letter() or c.is-ascii-digit() or c == '-' or c == '.' or c == '_' or c == '~'
       let sub-delim = "!$&'()*+,;=".contains(c)
       let bits: u8 = 0

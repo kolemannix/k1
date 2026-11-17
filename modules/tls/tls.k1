@@ -29,7 +29,7 @@ impl print for error {
   fn print-to[w: writer](self, w) {
     let message: array[u8, 512] = .0
     let text: optref[u8] = message.data-ptr().narrow()
-    let capacity = message.len().unsigned()
+    let capacity = message.len()
     if self is {
       :timeout -> w.write("TLS timed out"),
       :truncated -> w.write("TLS connection closed without close_notify"),
@@ -58,7 +58,7 @@ fn parse-certificates(roots: *mbedtls/x509_crt, path: string): result[empty, err
     :err(e) -> return :err(:trust("$e")),
   }
   let terminated = pem.concat-char-in(heap, '\0')
-  let code = mbedtls/x509_crt_parse(roots.as(), terminated.data-ptr().narrow(), terminated.len().unsigned())
+  let code = mbedtls/x509_crt_parse(roots.as(), terminated.data-ptr().narrow(), terminated.len())
   heap.free(terminated.data-ptr(), terminated.len(), 1)
   heap.free(pem.data-ptr(), pem.len(), 1)
   if code < 0 :err(:protocol(code)) else :ok
@@ -97,9 +97,9 @@ ns for config {
 
     check(mbedtls/psa_crypto_init()).try
     check(mbedtls/ssl_config_defaults(
-      self.ssl.&.as(), mbedtls/SSL_IS_CLIENT.trunc[i32], mbedtls/SSL_TRANSPORT_STREAM.trunc[i32], mbedtls/SSL_PRESET_DEFAULT.trunc[i32]
+      self.ssl.&.as(), mbedtls/SSL_IS_CLIENT.low[i32], mbedtls/SSL_TRANSPORT_STREAM.low[i32], mbedtls/SSL_PRESET_DEFAULT.low[i32]
     )).try
-    mbedtls/ssl_conf_authmode(self.ssl.&.as(), mbedtls/SSL_VERIFY_REQUIRED.trunc[i32])
+    mbedtls/ssl_conf_authmode(self.ssl.&.as(), mbedtls/SSL_VERIFY_REQUIRED.low[i32])
 
     if trust is {
       :ca-file(path) -> {
@@ -139,19 +139,19 @@ type client = {
 }
 
 fn record-transport-result(client: *client, result: io-result, would-block: i64, failed: i64): i32 {
-  if result.is-ok() return result.get-value().trunc[i32]
+  if result.is-ok() return result.get-value().low[i32]
   client.transport-error = result.get-error()
-  if net/is-timeout(client.transport-error) would-block.trunc[i32] else failed.trunc[i32]
+  if net/is-timeout(client.transport-error) would-block.low[i32] else failed.low[i32]
 }
 
-fn send-to-stream(user-data: ptr, data: optref[u8], len: usize): i32 {
+fn send-to-stream(user-data: ptr, data: optref[u8], len: size): i32 {
   let client = user-data.ref[client]
-  record-transport-result(client, client.stream.write(data.as(), len.signed()), mbedtls/ERR_SSL_WANT_WRITE, mbedtls/ERR_NET_SEND_FAILED)
+  record-transport-result(client, client.stream.write(data.as(), len), mbedtls/ERR_SSL_WANT_WRITE, mbedtls/ERR_NET_SEND_FAILED)
 }
 
-fn receive-from-stream(user-data: ptr, data: optref[u8], len: usize): i32 {
+fn receive-from-stream(user-data: ptr, data: optref[u8], len: size): i32 {
   let client = user-data.ref[client]
-  record-transport-result(client, fd/read(client.stream.file, data.as(), len.signed()), mbedtls/ERR_SSL_WANT_READ, mbedtls/ERR_NET_RECV_FAILED)
+  record-transport-result(client, fd/read(client.stream.file, data.as(), len), mbedtls/ERR_SSL_WANT_READ, mbedtls/ERR_NET_RECV_FAILED)
 }
 
 fn connect(config: *config, stream: net/tcp-stream, hostname: string): result[*client, error] {
@@ -181,7 +181,7 @@ fn connect(config: *config, stream: net/tcp-stream, hostname: string): result[*c
 
 ns for client {
   fn error-for-code(self: *client, code: i32): error {
-    let wide = code.widen[i64]
+    let wide = code.as[i64]
     if wide == mbedtls/ERR_SSL_WANT_READ or wide == mbedtls/ERR_SSL_WANT_WRITE :timeout
     else if wide == mbedtls/ERR_SSL_CONN_EOF :truncated
     else if wide == mbedtls/ERR_NET_RECV_FAILED or wide == mbedtls/ERR_NET_SEND_FAILED :transport(self.transport-error)
@@ -193,10 +193,10 @@ ns for client {
     if count == 0 return :ok(0)
     loop {
       self.transport-error = 0
-      let n = mbedtls/ssl_read(self.ssl.&.as(), buffer.narrow(), count.unsigned())
-      if n > 0 return :ok(n.widen[i64])
+      let n = mbedtls/ssl_read(self.ssl.&.as(), buffer.narrow(), count)
+      if n > 0 return :ok(n.as[i64])
       if n == 0 return :err(:truncated)
-      let wide = n.widen[i64]
+      let wide = n.as[i64]
       if wide == mbedtls/ERR_SSL_PEER_CLOSE_NOTIFY return :ok(0)
       if wide != mbedtls/ERR_SSL_WANT_READ or self.transport-error != 0 return :err(self.error-for-code(n))
     }
@@ -205,9 +205,9 @@ ns for client {
   fn write-all(self: *client, bytes: span[u8]): result[empty, error] {
     let written: size = 0
     while written < bytes.len() {
-      let n = mbedtls/ssl_write(self.ssl.&.as(), bytes.data-ptr().add-bytes(written).narrow(), (bytes.len() - written).unsigned())
+      let n = mbedtls/ssl_write(self.ssl.&.as(), bytes.data-ptr().add-bytes(written).narrow(), bytes.len() - written)
       if n < 0 return :err(self.error-for-code(n))
-      written = written + n.widen[i64]
+      written = written + n.as[i64]
     }
     :ok
   }

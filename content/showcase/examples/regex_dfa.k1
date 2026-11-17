@@ -205,7 +205,7 @@ fn compile(pat: string): dfa {
 }
 
 fn char-lit(b: size): string {
-  let c = b.trunc[u8].as-char()
+  let c = b.low[u8].as-char()
   if c is {
     '\'' -> "'\\''",
     '\\' -> "'\\\\'",

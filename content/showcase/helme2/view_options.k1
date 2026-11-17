@@ -1,0 +1,11 @@
+$std/deftype/flags(view-options) { 
+  show-names, show-sensitive-items, show-future, show-all-years, is-next-year, carry-over, carry-down, show-all-rates,
+  default = show-future | carry-over | carry-down
+}
+
+fn make-reveal-toggles(view-options): h/node {
+  :nodes [
+    wren/ui/toggle.{ command = command/set-view-option(:show-names), is-on = view-options.has(:show-names), label = :text "Names" }.to-node(),
+    wren/ui/toggle.{ command = command/set-view-option(:show-sensitive-items), is-on = view-options.has(:show-sensitive-items), label = :text "Sensitive items" }.to-node(),
+  ]
+}

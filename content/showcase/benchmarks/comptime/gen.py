@@ -17,7 +17,6 @@ GEN = ROOT / "gen"
 FIELD_TYPES = {
     "k1": ["i32", "u8", "bool", "string", "i64", "u16", "u32", "i8"],
     "zig": ["i32", "u8", "bool", "[]const u8", "i64", "u16", "u32", "i8"],
-    "cpp": ["int32_t", "uint8_t", "bool", "std::string_view", "int64_t", "uint16_t", "uint32_t", "int8_t"],
     "cpp26": ["int32_t", "uint8_t", "bool", "std::string_view", "int64_t", "uint16_t", "uint32_t", "int8_t"],
     "rust": ["i32", "u8", "bool", "&'static str", "i64", "u16", "u32", "i8"],
 }
@@ -57,7 +56,10 @@ def field(i, k):
 def expected_total(n):
     total = 0
     for i in range(n):
-        obj = {f"f{k}": field(i, k)[1] for k in range(8)}
+        schema = 2166136261
+        for b in "".join(f"f{k}:{field(i, k)[0]}," for k in range(8)).encode():
+            schema = ((schema ^ b) * 16777619) & 0xFFFFFFFF
+        obj = {"schema": schema, **{f"f{k}": field(i, k)[1] for k in range(8)}}
         total += len(json.dumps(obj, separators=(",", ":")))
     return total
 
@@ -85,16 +87,12 @@ def reflect_source(lang, n):
         elif lang == "zig":
             fields = ", ".join(f"f{k}: {t}" for k, t in enumerate(types))
             out.append(f"const T{i} = struct {{ {fields} }};")
-        elif lang in ("cpp", "cpp26"):
+        elif lang == "cpp26":
             fields = " ".join(f"{t} f{k};" for k, t in enumerate(types))
             out.append(f"struct T{i} {{ {fields} }};")
-            if lang == "cpp":
-                visits = " ".join(f'f("f{k}", v.f{k});' for k in range(8))
-                out.append(f"template <> struct members<T{i}> {{ template <class F> static void visit(const T{i}& v, F&& f) {{ {visits} }} }};")
         elif lang == "rust":
             fields = ", ".join(f"f{k}: {t}" for k, t in enumerate(types))
-            out.append("#[derive(Serialize)]")
-            out.append(f"struct T{i} {{ {fields} }}")
+            out.append(f"record!(T{i} {{ {fields} }});")
     out.append("")
     calls = []
     for i in range(n):
@@ -105,7 +103,7 @@ def reflect_source(lang, n):
         elif lang == "zig":
             init = ", ".join(f".f{k} = {v}" for k, v in enumerate(vals))
             calls.append(f"    try writeJson(w, T{i}{{ {init} }});")
-        elif lang in ("cpp", "cpp26"):
+        elif lang == "cpp26":
             calls.append(f"    total += json_len(T{i}{{{', '.join(vals)}}});")
         elif lang == "rust":
             init = ", ".join(f"f{k}: {v}" for k, v in enumerate(vals))
@@ -115,7 +113,7 @@ def reflect_source(lang, n):
         out.append(f"fn serialize-all(): int {{\n  let total = 0\n{body}\n  total\n}}")
     elif lang == "zig":
         out.append(f"fn serializeAll(w: anytype) !void {{\n{body or '    _ = w;'}\n}}")
-    elif lang in ("cpp", "cpp26"):
+    elif lang == "cpp26":
         out.append(f"size_t serialize_all() {{\n    size_t total = 0;\n{body}\n    return total;\n}}")
     elif lang == "rust":
         out.append(f"fn serialize_all() -> usize {{\n    let mut total = 0;\n{body}\n    total\n}}")

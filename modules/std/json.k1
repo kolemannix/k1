@@ -227,7 +227,7 @@ ns for text-decoder {
     let input = self.input
     let len = input.len()
     let base = input.data-ptr()
-    let spaces = ' '.as-u8().widen[u64] * 0x0101010101010101
+    let spaces = ' '.as-u8().as[u64] * 0x0101010101010101
     let pos = self.pos
     while pos < len {
       let c = input.[pos]
@@ -280,7 +280,7 @@ ns for text-decoder {
     let j: size = 0
     while j < 4 {
       require self.input.[at + j].to-ascii-hex-digit() is :some d else { return self.error(:bad-escape) }
-      v = (v << 4) + d.widen[u32]
+      v = (v << 4) + d.as[u32]
       j = j + 1
     }
     :ok v
@@ -680,7 +680,7 @@ ns internal {
         let chunk = vector/load-unchecked[u8, k1/simd-bytes](base.add-bytes(i))
         let hit = chunk.eq-lanes(quote).bit-or(chunk.eq-lanes(slash)).bit-or(chunk.bit-and(high).eq-lanes(zero))
         let mask = hit.to-mask()
-        if mask != 0 return i + mask.trailing-zeros().signed()
+        if mask != 0 return i + mask.trailing-zeros()
         i = i + lanes
       }
     }
@@ -706,7 +706,7 @@ ns internal {
       let digits = chunk.sub(vector/splat[u8, k1/simd-bytes]('0'.as-u8())).lt-lanes(vector/splat[u8, k1/simd-bytes](10))
       let all = u64/bitmask-low(lanes)
       let mask = digits.to-mask()
-      if mask != all { return i + mask.bit-not().bit-and(all).trailing-zeros().signed() }
+      if mask != all { return i + mask.bit-not().bit-and(all).trailing-zeros() }
       i = i + lanes
     }
     while i < len and s.[i].is-ascii-digit() { i = i + 1 }
@@ -729,7 +729,7 @@ ns internal {
         seen = seen.bit-or(chunk)
         let hit = chunk.eq-lanes(quote).bit-or(chunk.eq-lanes(slash)).bit-or(chunk.lt-lanes(space))
         if hit.reduce-or() != 0 {
-          return .{ stop = i + hit.to-mask().trailing-zeros().signed(), high = seen.reduce-or() >= 0x80 }
+          return .{ stop = i + hit.to-mask().trailing-zeros(), high = seen.reduce-or() >= 0x80 }
         }
         i = i + lanes
       }

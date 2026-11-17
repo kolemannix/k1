@@ -169,8 +169,8 @@ fn bake(font-path: string, pixel-height: f32): atlas {
   let glyphs = buffer/allocate[baked-char](NUM_CHARS)
   let rows-used = bake-font-bitmap(
     ttf.data-ptr(), 0, pixel-height,
-    pixels.data-ptr(), ATLAS_W.trunc[i32], ATLAS_H.trunc[i32],
-    FIRST_CHAR.trunc[i32], NUM_CHARS.trunc[i32], glyphs.data-ref())
+    pixels.data-ptr(), ATLAS_W.low[i32], ATLAS_H.low[i32],
+    FIRST_CHAR.low[i32], NUM_CHARS.low[i32], glyphs.data-ref())
   if rows-used <= 0 crash("font atlas does not fit: $rows-used")
   .{ pixels = pixels.as-span(), glyphs = glyphs.as-span() }
 }

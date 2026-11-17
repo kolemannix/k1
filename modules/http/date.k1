@@ -2,11 +2,11 @@ ns date {
   let MONTH-NAMES: span[string] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
   let WEEKDAY-NAMES: span[string] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 
-  fn parse(text: string): ?u64 {
-    let time: ?{ hour: u64, minute: u64, second: u64 } = :none
-    let day: ?u64 = :none
-    let month: ?u64 = :none
-    let year: ?u64 = :none
+  fn parse(text: string): ?i64 {
+    let time: ?{ hour: i64, minute: i64, second: i64 } = :none
+    let day: ?i64 = :none
+    let month: ?i64 = :none
+    let year: ?i64 = :none
     let rest = text
     while rest.non-empty() {
       rest = rest.drop-while(is-delimiter)
@@ -23,7 +23,7 @@ ns date {
         continue
       }
       if month is :none and MONTH-NAMES.find-index(fn[token] name. token.starts-with-ignore-ascii-case(name)) is :some i {
-        month = :some ((i + 1).unsigned())
+        month = :some (i + 1)
         continue
       }
       if year is :none and read-digits(token, 2, 4) is :some y { year = :some y.value }
@@ -33,7 +33,7 @@ ns date {
     }
     let y = if two-or-four < 70 two-or-four + 2000 else if two-or-four < 100 two-or-four + 1900 else two-or-four
     let is-leap = y % 4 == 0 and (y % 100 != 0 or y % 400 == 0)
-    let month-days: u64 = if m == 2 (if is-leap 29 else 28) else if m == 4 or m == 6 or m == 9 or m == 11 30 else 31
+    let month-days = if m == 2 (if is-leap 29 else 28) else if m == 4 or m == 6 or m == 9 or m == 11 30 else 31
     if d < 1 or d > month-days or y < 1601 or hms.hour > 23 or hms.minute > 59 or hms.second > 59 return :none
     if y < 1970 return :some 0
 
@@ -47,9 +47,10 @@ ns date {
     :some (days * 86400 + hms.hour * 3600 + hms.minute * 60 + hms.second)
   }
 
-  fn to-string(unix-seconds: u64): string {
-    let days = unix-seconds / 86400
-    let second-of-day = unix-seconds % 86400
+  fn to-string(unix-seconds: i64): string {
+    let seconds = unix-seconds.max(0)
+    let days = seconds / 86400
+    let second-of-day = seconds % 86400
 
     // civil date from days since 1970-01-01, with years starting in March
     let day-of-epoch = days + 719468
@@ -60,10 +61,10 @@ ns date {
     let march-month = (day-of-year * 5 + 2) / 153
     let day = day-of-year - (march-month * 153 + 2) / 5 + 1
     let month = if march-month < 10 march-month + 3 else march-month - 9
-    let year = year-of-era + era * 400 + (if month <= 2 1: u64 else 0)
+    let year = year-of-era + era * 400 + (if month <= 2 1 else 0)
 
-    let weekday = WEEKDAY-NAMES.[((days + 4) % 7).signed()]
-    let month-name = MONTH-NAMES.[(month - 1).signed()]
+    let weekday = WEEKDAY-NAMES.[(days + 4) % 7]
+    let month-name = MONTH-NAMES.[month - 1]
     let hour = second-of-day / 3600
     let minute = second-of-day / 60 % 60
     let second = second-of-day % 60
@@ -74,9 +75,9 @@ ns date {
     c == '\t' or (c >= ' ' and c <= '/') or (c >= ';' and c <= '@') or (c >= '[' and c <= '`') or (c >= '{' and c <= '~')
   }
 
-  fn read-digits(text: string, min: size, max: size): ?{ value: u64, rest: string } {
+  fn read-digits(text: string, min: size, max: size): ?{ value: i64, rest: string } {
     let digits = text.take-while(fn c. c.is-ascii-digit())
-    require digits.len() >= min and digits.len() <= max and u64/from-string(digits) is :ok value else { return :none }
+    require digits.len() >= min and digits.len() <= max and i64/from-string(digits) is :ok value else { return :none }
     :some .{ value, rest = text.drop(digits.len()) }
   }
 }

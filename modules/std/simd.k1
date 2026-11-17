@@ -149,7 +149,7 @@ fn first-of-impl(name: code, needles: span[char]): code {
       any-mask.write(".bit-or(m$it-index)")
     }
     if it-index < last {
-      earlier-hits.writeln("if m$it-index.shift-right(lane.trunc[u32]).bit-and(1) == 1 return .{ index = i + lane.signed(), which = $it-index }")
+      earlier-hits.writeln("if m$it-index.shift-right(lane).bit-and(1) == 1 return .{ index = i + lane, which = $it-index }")
     }
     scalar-hits.writeln("if b == $needle return .{ index = i, which = $it-index }")
   }
@@ -167,7 +167,7 @@ fn first-of-impl(name: code, needles: span[char]): code {
             ${masks.build()}
             let lane = ${any-mask.build()}.trailing-zeros()
             ${earlier-hits.build()}
-            return .{ index = i + lane.signed(), which = $last }
+            return .{ index = i + lane, which = $last }
           }
           i = i + $lanes
         }

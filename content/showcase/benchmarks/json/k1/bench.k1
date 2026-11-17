@@ -21,7 +21,7 @@ fn best-nanos(iters: size, prep: some fn(), f: some fn()): u64 {
 }
 
 fn report(corpus: string, phase: string, bytes: size, nanos: u64) {
-  println("k1    $corpus $phase: ${bytes.as[f64] / nanos.as[f64]} GB/s")
+  println("k1    $corpus $phase: ${bytes.to-f64() / nanos.to-f64()} GB/s")
 }
 
 fn main(argc: u32, argv: ptr): i32 {

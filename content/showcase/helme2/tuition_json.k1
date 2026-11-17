@@ -1,0 +1,9 @@
+fn respond-playground-tuition(): http-response {
+  let rows: list[list[i64]] = list/empty()
+  for grade in 0.until(playground-grade-count) {
+    let row: list[i64] = list/empty()
+    for year in 0.until(playground-year-count) { row.push(atomic/load(find-playground-tuition(grade, year).!, :relaxed)) }
+    rows.push(row)
+  }
+  response/complete(:ok, "application/json", json/to-string(rows))
+}

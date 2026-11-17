@@ -21,7 +21,7 @@ fn main(): i32 {
   let long-lived = make(mem/current-arena(), max-depth)
   let depth: i64 = 4
   while depth <= max-depth {
-    let iterations: i64 = 1 << (max-depth - depth + 4).trunc[u32]
+    let iterations: i64 = 1 << (max-depth - depth + 4)
     let total: i64 = 0
     for 0.until(iterations) {
       total = total + check(make(short-lived, depth))

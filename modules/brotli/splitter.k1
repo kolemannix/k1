@@ -101,7 +101,7 @@ fn find-blocks[n: static size, t: block-symbol](
   }
   insert-cost.slice(0, alphabet-size * num-histograms).memset(0)
   for i in 0.until(num-histograms) {
-    insert-cost.index-unchecked(i).* = fast-log2(histograms.index-unchecked(i).total-count.trunc[u32].as-size())
+    insert-cost.index-unchecked(i).* = fast-log2(histograms.index-unchecked(i).total-count.low[u32].as-size())
   }
   let i = alphabet-size
   while i != 0 {
@@ -124,17 +124,17 @@ fn find-blocks[n: static size, t: block-symbol](
       ck.* = ck.* + insert-cost.index-unchecked(insert-cost-ix + k).*
       if ck.* < min-cost {
         min-cost = ck.*
-        block-id.index-unchecked(byte-ix).* = k.trunc[u8]
+        block-id.index-unchecked(byte-ix).* = k.low[u8]
       }
     }
     if byte-ix < FIND-BLOCKS-PROLOGUE-LENGTH {
-      block-switch-cost = block-switch-cost * (0.77 + FIND-BLOCKS-MULTIPLIER * byte-ix.as[f64])
+      block-switch-cost = block-switch-cost * (0.77 + FIND-BLOCKS-MULTIPLIER * byte-ix.to-f64())
     }
     for k in 0.until(num-histograms) {
       let ck = cost.index-unchecked(k)
       ck.* = ck.* - min-cost
       if ck.* >= block-switch-cost {
-        let mask = (1u32 << (k & 7).trunc[u32]).trunc[u8]
+        let mask = (1u32 << (k & 7)).low[u8]
         ck.* = block-switch-cost
         let signal = switch-signal.index-unchecked(ix + (k >> 3))
         signal.* = signal.* | mask
@@ -145,7 +145,7 @@ fn find-blocks[n: static size, t: block-symbol](
   let ix = byte-ix * bitmap-len
   let cur-id = block-id.index-unchecked(byte-ix).*
   while byte-ix > 0 {
-    let mask = (1u32 << (cur-id & 7).widen[u32]).trunc[u8]
+    let mask = (1u32 << (cur-id & 7)).low[u8]
     byte-ix = byte-ix - 1
     ix = ix - bitmap-len
     if (switch-signal.index-unchecked(ix + (cur-id >> 3).as-size()).* & mask) != 0 {
@@ -172,7 +172,7 @@ fn remap-block-ids(block-ids: buffer[u8], new-id: buffer[u16], num-histograms: s
   }
   for i in 0.until(length) {
     let id = block-ids.index-unchecked(i)
-    id.* = new-id.index-unchecked(id.*.as-size()).*.trunc[u8]
+    id.* = new-id.index-unchecked(id.*.as-size()).*.low[u8]
   }
   next-id.as-size()
 }
@@ -227,8 +227,8 @@ fn cluster-blocks[n: static size, t: block-symbol](data: buffer[t], num-blocks: 
         pos = pos + 1
       }
       h.bit-cost = h.population-cost()
-      new-clusters.index-unchecked(j).* = j.trunc[u32]
-      symbols.index-unchecked(j).* = j.trunc[u32]
+      new-clusters.index-unchecked(j).* = j.low[u32]
+      symbols.index-unchecked(j).* = j.low[u32]
       sizes.index-unchecked(j).* = 1
     }
     let num-new-clusters = histogram-combine(
@@ -243,11 +243,11 @@ fn cluster-blocks[n: static size, t: block-symbol](data: buffer[t], num-blocks: 
       all-histograms.buffer.index-unchecked(all-histograms.len).* = histograms.index-unchecked(nc).*
       all-histograms.len = all-histograms.len + 1
       cluster-size.push(sizes.index-unchecked(nc).*)
-      remap.index-unchecked(nc).* = j.trunc[u32]
+      remap.index-unchecked(nc).* = j.low[u32]
     }
     for j in 0.until(num-to-combine) {
       histogram-symbols.index-unchecked(batch + j).* =
-        num-clusters.trunc[u32] + remap.index-unchecked(symbols.index-unchecked(j).*.as-size()).*
+        num-clusters.low[u32] + remap.index-unchecked(symbols.index-unchecked(j).*.as-size()).*
     }
     num-clusters = num-clusters + num-new-clusters
     batch = batch + HISTOGRAMS-PER-BATCH
@@ -258,7 +258,7 @@ fn cluster-blocks[n: static size, t: block-symbol](data: buffer[t], num-blocks: 
     pairs = buffer/allocate[histogram-pair](max-num-pairs + 1)
   }
   let clusters = buffer/allocate[u32](num-clusters)
-  for i in 0.until(num-clusters) { clusters.index-unchecked(i).* = i.trunc[u32] }
+  for i in 0.until(num-clusters) { clusters.index-unchecked(i).* = i.low[u32] }
   let num-final-clusters = histogram-combine(
     all-histograms.as-buffer(), tmp0, cluster-size.as-buffer(), histogram-symbols, clusters, pairs,
     num-clusters, num-blocks, MAX-NUMBER-OF-BLOCK-TYPES, max-num-pairs)
@@ -298,7 +298,7 @@ fn cluster-blocks[n: static size, t: block-symbol](data: buffer[t], num-blocks: 
   for i in 0.until(num-blocks) {
     cur-length = cur-length + block-lengths.index-unchecked(i).*
     if i + 1 == num-blocks or histogram-symbols.index-unchecked(i).* != histogram-symbols.index-unchecked(i + 1).* {
-      let id = new-index.index-unchecked(histogram-symbols.index-unchecked(i).*.as-size()).*.trunc[u8]
+      let id = new-index.index-unchecked(histogram-symbols.index-unchecked(i).*.as-size()).*.low[u8]
       split.types.push(id)
       split.lengths.push(cur-length)
       max-type = max-type.max(id)
@@ -326,7 +326,7 @@ fn split-byte-vector[n: static size, t: block-symbol](
   if length < MIN-LENGTH-FOR-BLOCK-SPLITTING {
     split.num-types = 1
     split.types.push(0)
-    split.lengths.push(length.trunc[u32])
+    split.lengths.push(length.low[u32])
     split.num-blocks = split.num-blocks + 1
     return
   }

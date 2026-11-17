@@ -6,8 +6,8 @@ type cookie = {
   value: string,
   domain: ?string,
   path: ?string,
-  expires: ?u64,
-  max-age: ?u64,
+  expires: ?i64,
+  max-age: ?i64,
   http-only: bool,
   secure: bool,
   same-site: either { default, lax, strict, none },
@@ -43,7 +43,7 @@ ns for cookie {
         "path" -> { c.path = if value.starts-with("/") :some value else :none },
         "expires" -> if date/parse(value) is :some seconds { c.expires = :some seconds },
         "max-age" -> if i64/from-string(value) is :ok seconds {
-          c.max-age = :some (if seconds < 0 0 else seconds.unsigned())
+          c.max-age = :some seconds.max(0)
         },
         "secure" -> { c.secure = true },
         "httponly" -> { c.http-only = true },

@@ -31,6 +31,6 @@ ns time {
     }
   }
   fn unix-seconds(): i64 {
-    (unix-nanos() / 1_000_000_000).signed()
+    (unix-nanos() / 1_000_000_000).i()
   }
 }

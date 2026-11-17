@@ -51,7 +51,7 @@ fn enum-of(src: string, name: string): types/type-id {
   for s in statements(src, "enum", name) {
     let parts = s.split-by-char(' ')
     let value = i64/from-string(parts.[2]).!
-    variants.push(.{ name = parts.[0].to-ascii-lower(), payload = :none, tag = :some(types/int-value:i32(value.trunc[i32])) })
+    variants.push(.{ name = parts.[0].to-ascii-lower(), payload = :none, tag = :some(types/int-value:i32(value.low[i32])) })
   }
   types/make-either(:some(types/id[i32]), variants.as-span())
 }

@@ -172,7 +172,7 @@ impl pipe[t = u8, out = u8] for chunked-encoder {
     let total: size = 0
     for seg in group { total = total + seg.len() }
     if total == 0 { return }
-    core/format-uint(self.prefix.&, total.unsigned(), 16)
+    core/format-int(self.prefix.&, total, 16)
     self.prefix.append-span(CRLF)
     out.push(self.prefix.as-span())
     for seg in group { out.push(seg) }

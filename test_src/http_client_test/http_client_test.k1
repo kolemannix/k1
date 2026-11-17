@@ -24,14 +24,14 @@ type peer = { stream: net/tcp-stream, session: optref[mbedtls/ssl_context] }
 
 ns for peer {
   fn read(self: peer, buffer: ptr, count: size): i64 {
-    if self.session.as-opt() is :some session mbedtls/ssl_read(session.as(), buffer.narrow(), count.unsigned()).widen[i64]
+    if self.session.as-opt() is :some session mbedtls/ssl_read(session.as(), buffer.narrow(), count).as[i64]
     else fd/read(self.stream.file, buffer, count).raw
   }
 
   fn write(self: peer, bytes: string) {
     if bytes.is-empty() return
     if self.session.as-opt() is :some session {
-      let _ = mbedtls/ssl_write(session.as(), bytes.data-ptr().narrow(), bytes.len().unsigned())
+      let _ = mbedtls/ssl_write(session.as(), bytes.data-ptr().narrow(), bytes.len())
     } else {
       let _ = self.stream.write-all(bytes.span-bytes())
     }
@@ -53,7 +53,7 @@ ns for peer {
 fn find-content-length(head-text: string): size {
   for line in head-text.split-by-char-iter('\n') {
     let trimmed = line.trim-ascii-space()
-    if trimmed.starts-with("Content-Length: ") return u64/from-string(trimmed.drop(16)).!.signed()
+    if trimmed.starts-with("Content-Length: ") return u64/from-string(trimmed.drop(16)).!.i()
   }
   0
 }

@@ -29,7 +29,7 @@ fn create-certificate-array(chain: optref[mbedtls/x509_crt]): ptr {
   let current = chain
   while not current.is-null() {
     let certificate = current.get()
-    let data = CFDataCreate(ptr/null, certificate.raw.p.as(), certificate.raw.len.signed())
+    let data = CFDataCreate(ptr/null, certificate.raw.p.as(), certificate.raw.len)
     let created = SecCertificateCreateWithData(ptr/null, data)
     CFRelease(data)
     if created.is-null() {
@@ -45,19 +45,19 @@ fn create-certificate-array(chain: optref[mbedtls/x509_crt]): ptr {
 
 fn evaluate-trust(client: *client, chain: optref[mbedtls/x509_crt]): u32 {
   let certificates = create-certificate-array(chain)
-  if certificates.is-null() return mbedtls/X509_BADCERT_OTHER.trunc[u32]
+  if certificates.is-null() return mbedtls/X509_BADCERT_OTHER.low[u32]
   defer CFRelease(certificates)
   let hostname = CFStringCreateWithCString(ptr/null, client.hostname.to-c-tmp().as(), CF-STRING-ENCODING-UTF8)
-  if hostname.is-null() return mbedtls/X509_BADCERT_CN_MISMATCH.trunc[u32]
+  if hostname.is-null() return mbedtls/X509_BADCERT_CN_MISMATCH.low[u32]
   defer CFRelease(hostname)
   let policy = SecPolicyCreateSSL(1, hostname)
   defer CFRelease(policy)
   let trust = ptr/null
-  if SecTrustCreateWithCertificates(certificates, policy, trust.&) != 0 return mbedtls/X509_BADCERT_OTHER.trunc[u32]
+  if SecTrustCreateWithCertificates(certificates, policy, trust.&) != 0 return mbedtls/X509_BADCERT_OTHER.low[u32]
   defer CFRelease(trust)
   if not client.config.anchors.is-null() {
-    if SecTrustSetAnchorCertificates(trust, client.config.anchors) != 0 return mbedtls/X509_BADCERT_OTHER.trunc[u32]
-    if SecTrustSetAnchorCertificatesOnly(trust, 1) != 0 return mbedtls/X509_BADCERT_OTHER.trunc[u32]
+    if SecTrustSetAnchorCertificates(trust, client.config.anchors) != 0 return mbedtls/X509_BADCERT_OTHER.low[u32]
+    if SecTrustSetAnchorCertificatesOnly(trust, 1) != 0 return mbedtls/X509_BADCERT_OTHER.low[u32]
   }
   let failure = ptr/null
   if SecTrustEvaluateWithError(trust, failure.&) return 0
@@ -70,7 +70,7 @@ fn evaluate-trust(client: *client, chain: optref[mbedtls/x509_crt]): u32 {
     else if code == ERR-SEC-CERTIFICATE-REVOKED mbedtls/X509_BADCERT_REVOKED
     else if code == ERR-SEC-NOT-TRUSTED or code == ERR-SEC-CREATE-CHAIN-FAILED mbedtls/X509_BADCERT_NOT_TRUSTED
     else mbedtls/X509_BADCERT_OTHER
-  flag.trunc[u32]
+  flag.low[u32]
 }
 
 fn verify(user-data: ptr, certificate: optref[mbedtls/x509_crt], depth: i32, flags: optref[u32]): i32 {

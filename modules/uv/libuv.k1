@@ -56,7 +56,7 @@ let UV_FS_SYMLINK_JUNCTION: i64 = 0x0002
 let UV_IF_NAMESIZE: i64 = (16 + 1)
 type buf = {
   base: optref[u8],
-  len: usize,
+  len: size,
 }
 type(alias) file = i32
 type(alias) os_sock = i32
@@ -252,15 +252,15 @@ type run_mode = either(u32, partial) {
 fn(extern("uv_version")) version(): u32
 fn(extern("uv_version_string")) version_string(): optref[u8]
 type(alias) malloc_func = *fn(
-  usize
+  size
 ) -> ptr
 type(alias) realloc_func = *fn(
   ptr,
-  usize
+  size
 ) -> ptr
 type(alias) calloc_func = *fn(
-  usize,
-  usize
+  size,
+  size
 ) -> ptr
 type(alias) free_func = *fn(
   ptr
@@ -283,7 +283,7 @@ fn(extern("uv_loop_new")) loop_new(): optref[uv-loop]
 fn(extern("uv_loop_delete")) loop_delete(
   p0: optref[uv-loop],
 )
-fn(extern("uv_loop_size")) loop_size(): usize
+fn(extern("uv_loop_size")) loop_size(): size
 fn(extern("uv_loop_alive")) loop_alive(
   loop_c: optref[uv-loop],
 ): i32
@@ -325,7 +325,7 @@ fn(extern("uv_backend_timeout")) backend_timeout(
 ): i32
 type(alias) alloc_cb = *fn(
   optref[handle],
-  usize,
+  size,
   optref[buf]
 )
 type(alias) read_cb = *fn(
@@ -406,7 +406,7 @@ type(alias) random_cb = *fn(
   optref[random],
   i32,
   ptr,
-  usize
+  size
 )
 type clock_id = either(u32, partial) {
   UV_CLOCK_MONOTONIC = 0,
@@ -475,7 +475,7 @@ fn(extern("uv_strerror")) strerror(
 fn(extern("uv_strerror_r")) strerror_r(
   err: i32,
   buf: optref[u8],
-  buflen: usize,
+  buflen: size,
 ): optref[u8]
 fn(extern("uv_err_name")) err_name(
   err: i32,
@@ -483,7 +483,7 @@ fn(extern("uv_err_name")) err_name(
 fn(extern("uv_err_name_r")) err_name_r(
   err: i32,
   buf: optref[u8],
-  buflen: usize,
+  buflen: size,
 ): optref[u8]
 fn(extern("uv_shutdown")) shutdown(
   req: optref[shutdown],
@@ -492,7 +492,7 @@ fn(extern("uv_shutdown")) shutdown(
 ): i32
 fn(extern("uv_handle_size")) handle_size(
   type: handle_type,
-): usize
+): size
 fn(extern("uv_handle_get_type")) handle_get_type(
   handle: optref[handle],
 ): handle_type
@@ -511,7 +511,7 @@ fn(extern("uv_handle_set_data")) handle_set_data(
 )
 fn(extern("uv_req_size")) req_size(
   type: req_type,
-): usize
+): size
 fn(extern("uv_req_get_data")) req_get_data(
   req: optref[req],
 ): ptr
@@ -575,7 +575,7 @@ fn(extern("uv_socketpair")) socketpair(
 ): i32
 fn(extern("uv_stream_get_write_queue_size")) stream_get_write_queue_size(
   stream: optref[stream],
-): usize
+): size
 fn(extern("uv_listen")) listen(
   stream: optref[stream],
   backlog: i32,
@@ -820,10 +820,10 @@ fn(extern("uv_udp_recv_stop")) udp_recv_stop(
 ): i32
 fn(extern("uv_udp_get_send_queue_size")) udp_get_send_queue_size(
   handle: optref[udp],
-): usize
+): size
 fn(extern("uv_udp_get_send_queue_count")) udp_get_send_queue_count(
   handle: optref[udp],
-): usize
+): size
 type tty_mode = either(u32, partial) {
   UV_TTY_MODE_NORMAL = 0,
   UV_TTY_MODE_RAW = 1,
@@ -875,7 +875,7 @@ fn(extern("uv_pipe_bind")) pipe_bind(
 fn(extern("uv_pipe_bind2")) pipe_bind2(
   handle: optref[pipe],
   name: optref[u8],
-  namelen: usize,
+  namelen: size,
   flags: u32,
 ): i32
 fn(extern("uv_pipe_connect")) pipe_connect(
@@ -888,19 +888,19 @@ fn(extern("uv_pipe_connect2")) pipe_connect2(
   req: optref[connect],
   handle: optref[pipe],
   name: optref[u8],
-  namelen: usize,
+  namelen: size,
   flags: u32,
   cb: connect_cb,
 ): i32
 fn(extern("uv_pipe_getsockname")) pipe_getsockname(
   handle: optref[pipe],
   buffer: optref[u8],
-  size: optref[usize],
+  size: optref[size],
 ): i32
 fn(extern("uv_pipe_getpeername")) pipe_getpeername(
   handle: optref[pipe],
   buffer: optref[u8],
-  size: optref[usize],
+  size: optref[size],
 ): i32
 fn(extern("uv_pipe_pending_instances")) pipe_pending_instances(
   handle: optref[pipe],
@@ -1164,13 +1164,13 @@ fn(extern("uv_setup_args")) setup_args(
 ): optref[optref[u8]]
 fn(extern("uv_get_process_title")) get_process_title(
   buffer: optref[u8],
-  size: usize,
+  size: size,
 ): i32
 fn(extern("uv_set_process_title")) set_process_title(
   title: optref[u8],
 ): i32
 fn(extern("uv_resident_set_memory")) resident_set_memory(
-  rss: optref[usize],
+  rss: optref[size],
 ): i32
 fn(extern("uv_uptime")) uptime(
   uptime: optref[f64],
@@ -1207,11 +1207,11 @@ fn(extern("uv_getrusage_thread")) getrusage_thread(
 ): i32
 fn(extern("uv_os_homedir")) os_homedir(
   buffer: optref[u8],
-  size: optref[usize],
+  size: optref[size],
 ): i32
 fn(extern("uv_os_tmpdir")) os_tmpdir(
   buffer: optref[u8],
-  size: optref[usize],
+  size: optref[size],
 ): i32
 fn(extern("uv_os_get_passwd")) os_get_passwd(
   pwd: optref[passwd],
@@ -1281,7 +1281,7 @@ fn(extern("uv_os_free_environ")) os_free_environ(
 fn(extern("uv_os_getenv")) os_getenv(
   name: optref[u8],
   buffer: optref[u8],
-  size: optref[usize],
+  size: optref[size],
 ): i32
 fn(extern("uv_os_setenv")) os_setenv(
   name: optref[u8],
@@ -1292,7 +1292,7 @@ fn(extern("uv_os_unsetenv")) os_unsetenv(
 ): i32
 fn(extern("uv_os_gethostname")) os_gethostname(
   buffer: optref[u8],
-  size: optref[usize],
+  size: optref[size],
 ): i32
 fn(extern("uv_os_uname")) os_uname(
   buffer: optref[utsname],
@@ -1515,7 +1515,7 @@ fn(extern("uv_fs_sendfile")) fs_sendfile(
   out_fd: file,
   in_fd: file,
   in_offset: i64,
-  length: usize,
+  length: size,
   cb: fs_cb,
 ): i32
 fn(extern("uv_fs_access")) fs_access(
@@ -1646,7 +1646,7 @@ fn(extern("uv_fs_poll_stop")) fs_poll_stop(
 fn(extern("uv_fs_poll_getpath")) fs_poll_getpath(
   handle: optref[fs_poll],
   buffer: optref[u8],
-  size: optref[usize],
+  size: optref[size],
 ): i32
 fn(extern("uv_signal_init")) signal_init(
   loop_c: optref[uv-loop],
@@ -1689,7 +1689,7 @@ fn(extern("uv_fs_event_stop")) fs_event_stop(
 fn(extern("uv_fs_event_getpath")) fs_event_getpath(
   handle: optref[fs_event],
   buffer: optref[u8],
-  size: optref[usize],
+  size: optref[size],
 ): i32
 fn(extern("uv_ip4_addr")) ip4_addr(
   ip: optref[u8],
@@ -1704,23 +1704,23 @@ fn(extern("uv_ip6_addr")) ip6_addr(
 fn(extern("uv_ip4_name")) ip4_name(
   src: optref[sockaddr_in],
   dst: optref[u8],
-  size: usize,
+  size: size,
 ): i32
 fn(extern("uv_ip6_name")) ip6_name(
   src: optref[sockaddr_in6],
   dst: optref[u8],
-  size: usize,
+  size: size,
 ): i32
 fn(extern("uv_ip_name")) ip_name(
   src: optref[sockaddr],
   dst: optref[u8],
-  size: usize,
+  size: size,
 ): i32
 fn(extern("uv_inet_ntop")) inet_ntop(
   af: i32,
   src: ptr,
   dst: optref[u8],
-  size: usize,
+  size: size,
 ): i32
 fn(extern("uv_inet_pton")) inet_pton(
   af: i32,
@@ -1731,27 +1731,27 @@ fn(extern("uv_random")) random(
   loop_c: optref[uv-loop],
   req: optref[random],
   buf: ptr,
-  buflen: usize,
+  buflen: size,
   flags: u32,
   cb: random_cb,
 ): i32
 fn(extern("uv_if_indextoname")) if_indextoname(
   ifindex: u32,
   buffer: optref[u8],
-  size: optref[usize],
+  size: optref[size],
 ): i32
 fn(extern("uv_if_indextoiid")) if_indextoiid(
   ifindex: u32,
   buffer: optref[u8],
-  size: optref[usize],
+  size: optref[size],
 ): i32
 fn(extern("uv_exepath")) exepath(
   buffer: optref[u8],
-  size: optref[usize],
+  size: optref[size],
 ): i32
 fn(extern("uv_cwd")) cwd(
   buffer: optref[u8],
-  size: optref[usize],
+  size: optref[size],
 ): i32
 fn(extern("uv_chdir")) chdir(
   dir: optref[u8],
@@ -1912,7 +1912,7 @@ type thread_create_flags = either(u32, partial) {
 }
 type thread_options_s = {
   flags: u32,
-  stack_size: usize,
+  stack_size: size,
 }
 type(alias) thread_options = thread_options_s
 fn(extern("uv_thread_create_ex")) thread_create_ex(
@@ -1925,12 +1925,12 @@ fn(extern("uv_thread_setaffinity")) thread_setaffinity(
   tid: optref[thread],
   cpumask: optref[u8],
   oldmask: optref[u8],
-  mask_size: usize,
+  mask_size: size,
 ): i32
 fn(extern("uv_thread_getaffinity")) thread_getaffinity(
   tid: optref[thread],
   cpumask: optref[u8],
-  mask_size: usize,
+  mask_size: size,
 ): i32
 fn(extern("uv_thread_getcpu")) thread_getcpu(): i32
 fn(extern("uv_thread_self")) thread_self(): thread
@@ -1947,7 +1947,7 @@ fn(extern("uv_thread_setname")) thread_setname(
 fn(extern("uv_thread_getname")) thread_getname(
   tid: optref[thread],
   name: optref[u8],
-  size: usize,
+  size: size,
 ): i32
 type any_handle = opaque[344, 8]
 type any_req = opaque[1320, 8]
@@ -1961,12 +1961,12 @@ fn(extern("uv_loop_set_data")) loop_set_data(
 fn(extern("uv_utf16_length_as_wtf8")) utf16_length_as_wtf8(
   utf16: optref[u16],
   utf16_len: size,
-): usize
+): size
 fn(extern("uv_utf16_to_wtf8")) utf16_to_wtf8(
   utf16: optref[u16],
   utf16_len: size,
   wtf8_ptr: optref[optref[u8]],
-  wtf8_len_ptr: optref[usize],
+  wtf8_len_ptr: optref[size],
 ): i32
 fn(extern("uv_wtf8_length_as_utf16")) wtf8_length_as_utf16(
   wtf8: optref[u8],
@@ -1974,7 +1974,7 @@ fn(extern("uv_wtf8_length_as_utf16")) wtf8_length_as_utf16(
 fn(extern("uv_wtf8_to_utf16")) wtf8_to_utf16(
   wtf8: optref[u8],
   utf16: optref[u16],
-  utf16_len: usize,
+  utf16_len: size,
 )
 
 fn(test) c-layouts() {

@@ -97,7 +97,7 @@ ns for client {
 
 fn new(config: config): result[*client, error] {
   let tls-config = tls/config/new(config.trust, "http/1.1").map-err(error/from-tls).try
-  let idle = ring/init-in[*connection, heap](heap, config.max-idle-total.widen[size])
+  let idle = ring/init-in[*connection, heap](heap, config.max-idle-total.as[size])
   :ok heap.new(.{ config, tls-config, lock = sleep-poll-mutex/new(), idle, open-bodies = .0 })
 }
 
@@ -419,12 +419,12 @@ ns for stream-response {
     let reader = self.body
     let max-size = reader.client.config.max-body-size
     let has-more-to-read = reader.connection is :some connection and not connection.parser.is-complete
-    let expected: u64 = if has-more-to-read { self.head.content-length ? 0 } else 0
-    if expected > max-size.unsigned() {
+    let expected = if has-more-to-read { self.head.content-length ? 0 } else 0
+    if expected > max-size {
       reader.stop()
       return :err(:body-too-large)
     }
-    let body = list/with-capacity[u8](expected.signed())
+    let body = list/with-capacity[u8](expected)
     loop {
       if reader.pull() is {
         :chunk group -> for part in group {

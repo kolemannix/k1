@@ -101,9 +101,9 @@ ns for engine {
     let name = string/join(args.slice(name-at + 1, value-at), " ")
     let value = string/join(args.drop(value-at + 1), " ")
     if name.to-ascii-upper() == "HASH" {
-      require u64/from-string(value) is :ok mb else return println("info string bad Hash value: $value")
+      require i64/from-string(value) is :ok mb else return println("info string bad Hash value: $value")
       self.tt.release()
-      self.tt = transposition-table/new(mb.signed().max(1).min(MAX_HASH_MB))
+      self.tt = transposition-table/new(mb.max(1).min(MAX_HASH_MB))
     } else {
       println("info string unknown option: $name")
     }
@@ -116,16 +116,16 @@ ns for engine {
     let moves-to-go: u64 = 0
     let timed = false
     for key in args {
-      let value: u64 = if args.index-opt(it-index + 1) is :some v and i64/from-string(v) is :ok n n.max(0).unsigned() else 0
+      let value: u64 = if args.index-opt(it-index + 1) is :some v and u64/from-string(v) is :ok n n else 0
       if key is {
         "perft" -> {
           let(context) ply: *arena = self.ply
           let t = std/time/read-cpu-counter()
-          let nodes = divide(self.root.&, value.trunc[u32])
+          let nodes = divide(self.root.&, value.low[u32])
           println("info string perft ${value} nodes $nodes time ${std/time/elapsed-ms(t)}ms")
           return
         },
-        "depth" -> { lim.depth = value.trunc[u32].max(1).min(MAX_PLY - 1) },
+        "depth" -> { lim.depth = value.low[i32].max(1).min(MAX_PLY - 1) },
         "nodes" -> { lim.nodes = value },
         "movetime" -> { lim.soft-ms = value; lim.hard-ms = value },
         "wtime" -> { clock.[0] = value; timed = true },

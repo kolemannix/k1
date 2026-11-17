@@ -6,16 +6,16 @@ let PHASE_TOTAL: i32 = 24
 type square-tables = { mg: array[i32, 384], eg: array[i32, 384] }
 
 fn center-distance(sq: square): i32 {
-  let f = file-of(sq).signed() * 2 - 7
-  let r = rank-of(sq).signed() * 2 - 7
+  let f = file-of(sq) * 2 - 7
+  let r = rank-of(sq) * 2 - 7
   (f.abs() + r.abs()) / 2
 }
 
 fn build-square-tables(): square-tables {
   let t: square-tables = .0
   for sq in 0u32.until(64) {
-    let rank = rank-of(sq).signed()
-    let file = file-of(sq).signed()
+    let rank = rank-of(sq)
+    let file = file-of(sq)
     let center = center-distance(sq)
     let central-file = file == 3 or file == 4
     let edge-file = file == 0 or file == 7

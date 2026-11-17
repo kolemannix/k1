@@ -6,13 +6,13 @@ fn to-base(value: u64, base: u64): string {
   w.build()
 }
 
-fn places(f: f64, places: i32): string {
+fn places(f: f64, places: i64): string {
   let w = string-builder/new()
   f64/format(f, w.&, places)
   w.build()
 }
 
-fn places32(f: f32, places: i32): string {
+fn places32(f: f32, places: i64): string {
   let w = string-builder/new()
   f32/format(f, w.&, places)
   w.build()
@@ -50,7 +50,7 @@ fn(test) float-shortest-and-places() {
   assert-equals("${5.0e-324}", "5.0e-324")
   assert-equals("${1.7976931348623157e308}", "1.7976931348623157e308")
   assert-equals("${f64/neg-inf}", "-inf")
-  assert-equals("${(0.1: f32).widen[f64]}", "0.10000000149011612")
+  assert-equals("${(0.1: f32).to-f64()}", "0.10000000149011612")
   assert-equals("${(1.0: f32) / 3.0}", "0.33333334")
   assert-equals("${3.0e38: f32}", "3.0e38")
   assert-equals("${1.0e-45: f32}", "1.0e-45")

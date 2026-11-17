@@ -1,0 +1,31 @@
+ability form-value {
+  fn parse(json/json): result[self, string]
+  fn to-form-json(self): json/json
+}
+
+impl form-value for string {
+  fn parse(json/json): result[string, string] { form/read-text(json) }
+  fn to-form-json(self): json/json { :str self }
+}
+
+impl form-value for bool {
+  fn parse(json/json): result[bool, string] { if json is :bool b :ok b else :err "Expected yes or no." }
+  fn to-form-json(self): json/json { :bool self }
+}
+
+type name-text = { text: string }
+impl wren/form-value for name-text {
+  fn parse(json/json): result[name-text, string] {
+    let name = wren/form/read-text(json).try.trim-ascii-space()
+    if name.is-empty() or utf8/count-code-points(name) > 200 :err "A name is 1 to 200 characters." else :ok .{ text = name }
+  }
+  fn to-form-json(self): json/json { :str self.text }
+}
+
+type amount = { cents: i64 }
+impl wren/form-value for amount {
+  fn parse(json/json): result[amount, string] {
+    if money/parse-dollars(wren/form/read-text(json).try) is :some cents :ok .{ cents } else :err amount-refusal
+  }
+  fn to-form-json(self): json/json { :str money/format-amount(self.cents) }
+}

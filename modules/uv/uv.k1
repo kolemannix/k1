@@ -33,7 +33,7 @@ ability stream {
   }
   fn read-stop(self: *self) { check(libuv/read_stop(self.as-stream().as())).! }
   fn write(self: *self, req: *libuv/write, bufs: span[span[u8]], cb: libuv/write_cb): result[empty, libuv/errno] {
-    check(libuv/write(req.as(), self.as-stream().as(), bufs.data-ptr().opt(), bufs.len().trunc[u32], cb))
+    check(libuv/write(req.as(), self.as-stream().as(), bufs.data-ptr().opt(), bufs.len().low[u32], cb))
   }
 }
 
@@ -43,11 +43,11 @@ impl stream for libuv/tcp { fn as-stream(self: *self): *libuv/stream { self.narr
 ns libuv {
   ns for buf {
     fn as-buffer(self: buf): buffer[u8] {
-      buffer/wrap-raw(self.base.inner, self.len.signed())
+      buffer/wrap-raw(self.base.inner, self.len)
     }
 
     fn wrap-buffer(buffer: buffer[u8]): buf {
-      buf_init(buffer.data.opt(), buffer.len.trunc[u32])
+      buf_init(buffer.data.opt(), buffer.len.low[u32])
     }
 
     fn wrap-span(span: span[u8]): buf {

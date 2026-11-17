@@ -1,14 +1,14 @@
 # Compile-time execution benchmarks
 
-Generated 2026-10-12 16:44 by `run.sh`. Load average at start 2.3, at end 1.8 (a busy machine inflates every number).
+Generated 2026-11-16 13:18 by `run.sh`. Load average at start 4.0, at end 4.0 (a busy machine inflates every number).
 
 ## Machine and toolchains
 
-- Apple M3 Max, 14 cores, 36 GB, macOS 27.0
+- Apple M3 Max, 14 cores, 36 GB, macOS 27.2
 - k1 0.1.0
 - zig 0.17.0
 - Apple clang version 21.0.0 (clang-2100.3.34.2)
-- clang version 21.0.0git (https://github.com/bloomberg/clang-p2996.git 0664c3f65dd5b198341412d7402b41f8e766b4b4)
+- g++-16 (Homebrew GCC 16.2.0) 16.2.0
 - rustc 1.98.1 (48a229cea 2026-09-01)
 - cargo 1.98.1 (797e8a9bc 2026-08-05)
 - hyperfine 1.19.0
@@ -29,16 +29,11 @@ Generated 2026-10-12 16:44 by `run.sh`. Load average at start 2.3, at end 1.8 (a
   C++ `clang++ -std=c++23 -O0 -fconstexpr-steps=2000000000`; Rust `rustc -C opt-level=0`
   (`#![allow(long_running_const_eval)]` in the source, `--cfg comptime` selects the comptime variant);
   Rust reflect `cargo build` with `CARGO_INCREMENTAL=0`, dependencies prebuilt and `src/main.rs` touched before every run;
-  C++26 the Bloomberg clang-p2996 fork (`$CXX_P2996`, a wrapper baking
-  in `-std=c++26 -freflection-latest -stdlib=libc++`) at `-O0`.
-- reflect-serialize front-end commands: k1 `k1 --no-cache --no-optimize-ir --dump-ir check <file>`
-  (`check` alone never instantiates the generic serializers, so their `#meta` never runs; `--dump-ir`
-  makes it compile every function reachable from `main`, which typechecks the specializations, runs
-  `#meta` and the VM and lowers to k1 IR, and then writes the IR dump, the one cost here that no
-  other toolchain pays; `--no-optimize-ir` skips k1's inliner and IR passes, the middle end the
-  other commands also stop before); Zig `zig build-exe -O Debug -fno-emit-bin` with the local cache
+  C++26 `g++-16 -std=c++26 -freflection -O0`.
+- reflect-serialize front-end commands: k1 `k1 --no-cache check <file>` (typechecks every
+  requested generic instance, which runs the serializers' `#meta` and the VM; no IR is built); Zig `zig build-exe -O Debug -fno-emit-bin` with the local cache
   dir deleted before every run (semantic analysis of everything reachable from `main`, including the
-  `inline for` expansions, no codegen); C++ and C++26 `-fsyntax-only` (parsing, semantic analysis and
+  `inline for` expansions, no codegen); C++26 `-fsyntax-only` (parsing, semantic analysis and
   template instantiation); Rust `cargo check` with `CARGO_INCREMENTAL=0`, dependencies prebuilt and
   `src/main.rs` touched before every run (macro expansion, type checking, MIR building and borrow
   checking, no codegen). Each cell's front-end command also ran once untimed to confirm it succeeds.
@@ -136,45 +131,40 @@ k1 compile-time VM, as reported by `k1 --chatty` for the comptime variant:
 
 ## reflect-serialize
 
-N generated struct types with 8 fields (a rotating mix of i32, u8, bool, string, i64, u16, u32, i8) and a JSON serializer derived per type: k1 `#meta` walking `types/schema` and emitting the writer code, Zig `@typeInfo` with `inline for`, C++ a generator-written `members<T>` specialization per struct whose `visit` calls a callback with each field name and value (clang 21 has no reflection, so this is the manual alternative; a class-template specialization rather than one `visit_members` overload per struct, which clang resolves against all N candidates at every call and so costs quadratic time: 96 s at N=4000 against 7 s), C++26 P2996 reflection (`nonstatic_data_members_of` + `template for`, no per-struct list) on the clang-p2996 fork, Rust `serde` derive through proc macros (cargo, dependencies prebuilt). Each program serializes one value per type and prints the total output length; the full build that produces it is not timed. Front end only (see Methodology): N=0 is the baseline; per type = (t(N) - t(0)) / N; the slope column is (t(N) - t(previous N)) / (N - previous N), so a slope that rises with N is a superlinear front end.
+N generated struct types with 8 fields (a rotating mix of i32, u8, bool, string, i64, u16, u32, i8) and a JSON serializer derived per type: k1 `#meta` walking `types/schema` and emitting the writer code, Zig `@typeInfo` with `inline for`, C++26 reflection (`nonstatic_data_members_of` + `template for`) on GCC 16, Rust `serde` derive through proc macros (cargo, dependencies prebuilt). Each derivation also computes a schema fingerprint at compile time, FNV-1a over every `name:kind,` of the type's fields, and the serializer writes it as a leading `"schema"` key (C++26 a `consteval` walk of the members, Rust a `macro_rules!` wrapper with a `const` item, since serde's derive has no hook). Each program serializes one value per type and prints the total output length; the full build that produces it is not timed. Front end only (see Methodology): N=0 is the baseline; per type = (t(N) - t(0)) / N; the slope column is (t(N) - t(previous N)) / (N - previous N), so a slope that rises with N is a superlinear front end.
 
 | N types | language | front end (s) | per type (ms) | slope from previous N (ms/type) | output |
 |---|---|---|---|---|---|
-| 0 | k1 | 0.021 ± 0.003 | - | - | `0` |
-| 0 | Zig | 0.196 ± 0.001 | - | - | `0` |
-| 0 | C++ | 0.111 ± 0.006 | - | - | `0` |
-| 0 | C++26 (P2996) | 0.306 ± 0.012 | - | - | `0` |
-| 0 | Rust | 0.076 ± 0.002 | - | - | `0` |
-| 100 | k1 | 0.028 ± 0.002 | 0.07 | 0.07 | `7126` |
-| 100 | Zig | 0.209 ± 0.006 | 0.12 | 0.12 | `7126` |
-| 100 | C++ | 0.249 ± 0.004 | 1.38 | 1.38 | `7126` |
-| 100 | C++26 (P2996) | 0.693 ± 0.037 | 3.87 | 3.87 | `7126` |
-| 100 | Rust | 0.222 ± 0.008 | 1.46 | 1.46 | `7126` |
-| 1000 | k1 | 0.105 ± 0.001 | 0.08 | 0.09 | `72270` |
-| 1000 | Zig | 0.296 ± 0.003 | 0.10 | 0.10 | `72270` |
-| 1000 | C++ | 1.466 ± 0.005 | 1.36 | 1.35 | `72270` |
-| 1000 | C++26 (P2996) | 3.962 ± 0.043 | 3.66 | 3.63 | `72270` |
-| 1000 | Rust | 1.404 ± 0.016 | 1.33 | 1.31 | `72270` |
-| 4000 | k1 | 0.336 ± 0.003 | 0.08 | 0.08 | `292418` |
-| 4000 | Zig | 0.592 ± 0.005 | 0.10 | 0.10 | `292418` |
-| 4000 | C++ | 5.604 ± 0.063 | 1.37 | 1.38 | `292418` |
-| 4000 | C++26 (P2996) | 14.883 ± 0.038 † | 3.64 | 3.64 | `292418` |
-| 4000 | Rust | 5.534 ± 0.033 | 1.36 | 1.38 | `292418` |
-| 10000 | k1 | 0.821 ± 0.010 | 0.08 | 0.08 | `732704` |
-| 10000 | Zig | 1.191 ± 0.014 | 0.10 | 0.10 | `732704` |
-| 10000 | C++ | 13.805 ± 0.147 † | 1.37 | 1.37 | `732704` |
-| 10000 | C++26 (P2996) | 36.122 ± 0.000 † | 3.58 | 3.54 | `732704` |
-| 10000 | Rust | 13.658 ± 0.049 † | 1.36 | 1.35 | `732704` |
+| 0 | k1 | 0.026 ± 0.004 | - | - | `0` |
+| 0 | Zig | 0.192 ± 0.011 | - | - | `0` |
+| 0 | C++26 reflection | 0.249 ± 0.005 | - | - | `0` |
+| 0 | Rust | 0.089 ± 0.006 | - | - | `0` |
+| 100 | k1 | 0.029 ± 0.003 | 0.03 | 0.03 | `9114` |
+| 100 | Zig | 0.207 ± 0.006 | 0.14 | 0.14 | `9114` |
+| 100 | C++26 reflection | 0.406 ± 0.009 | 1.58 | 1.58 | `9114` |
+| 100 | Rust | 0.284 ± 0.006 | 1.95 | 1.95 | `9114` |
+| 1000 | k1 | 0.050 ± 0.003 | 0.02 | 0.02 | `92145` |
+| 1000 | Zig | 0.348 ± 0.012 | 0.16 | 0.16 | `92145` |
+| 1000 | C++26 reflection | 1.948 ± 0.044 | 1.70 | 1.71 | `92145` |
+| 1000 | Rust | 1.970 ± 0.023 | 1.88 | 1.87 | `92145` |
+| 4000 | k1 | 0.127 ± 0.006 | 0.03 | 0.03 | `371918` |
+| 4000 | Zig | 0.808 ± 0.019 | 0.15 | 0.15 | `371918` |
+| 4000 | C++26 reflection | 7.732 ± 0.133 | 1.87 | 1.93 | `371918` |
+| 4000 | Rust | 8.223 ± 0.399 | 2.03 | 2.08 | `371918` |
+| 10000 | k1 | 0.293 ± 0.010 | 0.03 | 0.03 | `931454` |
+| 10000 | Zig | 1.723 ± 0.008 | 0.15 | 0.15 | `931454` |
+| 10000 | C++26 reflection | 20.948 ± 0.210 † | 2.07 | 2.20 | `931454` |
+| 10000 | Rust | 19.482 ± 0.235 † | 1.94 | 1.88 | `931454` |
 
 k1 `--chatty` rows for the timed front-end command (`meta` is the metaprogram expansion, `run` the VM time behind it, `lower` the lowering to k1 IR, `untracked` the time outside traced work, which is mostly writing the IR dump):
 
 | N types | meta (ms) | VM run (ms) | VM instructions | typecheck (ms) | lower (ms) | untracked (ms) | whole compile (ms) |
 |---|---|---|---|---|---|---|---|
-| 0 | 0.0 | 0.4 | 0.17 M | 3.0 | 0.7 | 1.8 | 11 |
-| 100 | 1.0 | 2.8 | 1.30 M | 3.1 | 1.4 | 4.5 | 18 |
-| 1000 | 9.5 | 24.7 | 11.00 M | 4.8 | 8.2 | 30.1 | 90 |
-| 4000 | 37.9 | 96.9 | 43.70 M | 9.4 | 29.9 | 115.7 | 324 |
-| 10000 | 95.3 | 244.9 | 109.00 M | 19.5 | 73.0 | 299.4 | 812 |
+| 0 | 0.0 | 0.3 | 0.09 M | 5.5 | 0.7 | 1.0 | 15 |
+| 100 | 0.4 | 2.0 | 0.73 M | 5.3 | 0.8 | 1.1 | 18 |
+| 1000 | 3.2 | 16.5 | 6.40 M | 6.5 | 1.0 | 0.9 | 40 |
+| 4000 | 13.2 | 66.7 | 25.50 M | 11.5 | 2.1 | 1.2 | 124 |
+| 10000 | 31.7 | 163.9 | 63.60 M | 19.1 | 3.6 | 2.0 | 278 |
 
 ## Output verification
 

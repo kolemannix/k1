@@ -32,7 +32,7 @@ fn main(): i32 {
   println("atomic total: ${s.atomic-total}")
   println("locked total: ${s.locked-total}")
   println("main's thread-local: $my-bumps")
-  assert-equals(s.atomic-total, N_THREADS.unsigned() * N_ITERS)
+  assert-equals(s.atomic-total, N_THREADS.u() * N_ITERS)
   assert-equals(s.locked-total, s.atomic-total)
   0
 }

@@ -1,4 +1,4 @@
-// FIXME ai authored; largely unreviewed as of 11-08-2026
+// aiauthored; largely unreviewed as of 11-08-2026; currently, the surface design is completely mine; the internals, completely not
 ns routing {
 
 use core/meta/str-lit

@@ -1,9 +1,8 @@
 #if k1/platform-posix ns c_varargs {
   use core/c-int
-  use core/c-sizet
   use core/c-varargs
 
-  fn(extern) snprintf(s: *u8, n: c-sizet, format: *u8, c-varargs): c-int
+  fn(extern) snprintf(s: *u8, n: size, format: *u8, c-varargs): c-int
   fn(extern) fcntl(fd: c-int, cmd: c-int, c-varargs): c-int
 
   fn format-mixed(): string {

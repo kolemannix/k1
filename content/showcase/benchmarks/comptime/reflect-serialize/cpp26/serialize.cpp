@@ -20,10 +20,29 @@ void write_json(std::string& out, T v) {
     else out += std::to_string(static_cast<unsigned long long>(v));
 }
 
+constexpr uint32_t mix(uint32_t h, std::string_view s) {
+    for (char c : s) h = (h ^ static_cast<unsigned char>(c)) * 16777619u;
+    return h;
+}
+
+template <class T>
+consteval uint32_t fingerprint() {
+    uint32_t h = 2166136261u;
+    for (auto m : std::meta::nonstatic_data_members_of(^^T, std::meta::access_context::unchecked())) {
+        auto t = std::meta::dealias(std::meta::type_of(m));
+        h = mix(mix(mix(mix(h, std::meta::identifier_of(m)), ":"), t == ^^bool ? "bool" : std::meta::is_integral_type(t) ? "int" : "str"), ",");
+    }
+    return h;
+}
+
 template <class T>
     requires std::is_class_v<T>
 void write_json(std::string& out, const T& v) {
     out += '{';
+    static constexpr uint32_t schema = fingerprint<T>();
+    out += "\"schema\":";
+    out += std::to_string(schema);
+    out += ',';
     bool first = true;
     template for (constexpr auto m : std::define_static_array(
                       std::meta::nonstatic_data_members_of(^^T, std::meta::access_context::unchecked()))) {

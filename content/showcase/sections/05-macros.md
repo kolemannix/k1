@@ -207,7 +207,7 @@ The biggest macro in the repo is `http/routing/define`. `httpapp`
 declares its routes once, as a token stream: method, name, path pattern.
 
 ```k1 path=examples/httpapp/app.k1
-$http/routing/define(route, \{
+$http/routing/define(route) {
   get    home         "/"
   get    events       "/events"
   get    counter      "/counter/events"
@@ -218,7 +218,7 @@ $http/routing/define(route, \{
   get    game-events  "/game/{id: u64}/events"
   post   game-poke    "/game/{id: u64}/poke"
   delete delete-game  "/game/{id: u64}"
-})
+}
 ```
 
 A row can also carry query params, written as the struct they parse into. A `?t`
@@ -257,9 +257,9 @@ Out come:
 The macro reads the rows with a token cursor, then emits:
 
 ```k1 path=modules/http/routing.k1
-macro define(name: code, rows: span[code-token]) {
-  let entries = parse-rows(rows).as-span()
-  validate(entries)
+macro define(name: code, body: span[code-token]) {
+  let entries = parse-route-entries(body).as-span()
+  validate-route-entries(entries)
 
   let cb-storage = code-builder/new()
   let(context) cb = cb-storage.&
@@ -548,22 +548,19 @@ Module macro_state_machine_wrong failed compiling with 1 errors
 
 ## Library megaprograms: bitfields and struct-of-arrays
 
-`std/bitfield` is the same trick as a library. One `$` line gives you a `u16`
-newtype, a mask per field, typed getters and setters, and `print`:
+`std/deftype/bitfield` is the same trick as a library. One `$` line gives you a
+`u16` newtype, a mask per field, typed getters and `with-` setters, and `print`:
 
 ```k1
-use std/bitfield/b1
-use std/bitfield/bn
-
-$std/bitfield/define[u16](ship, [b1(shielded), b1(cloaked), b1(damaged), .{ name = "sector", bits = 5 }, bn("hull", 8)])
+$std/deftype/bitfield(ship(u16)) { shielded, cloaked, damaged, sector = 5, hull = 8 }
 ```
 
 ```k1
 fn main(): i32 {
-  let s = ship/zero.set-shielded(true).set-sector(17).set-hull(200)
+  let s = ship.0.with-shielded(true).with-sector(17).with-hull(200)
   println("bits=${s.bits} $s")
   println("sector mask=${ship/sector-mask} hull mask=${ship/hull-mask}")
-  let t = s.set-shielded(false).set-damaged(true)
+  let t = s.with-shielded(false).with-damaged(true)
   println("$t")
   0
 }
@@ -572,59 +569,39 @@ fn main(): i32 {
 ```text
 bits=51337 shielded=true,cloaked=false,damaged=false,sector=17,hull=200
 sector mask=248 hull mask=65280
-shielded=false,cloaked=false,damaged=true,sector=17,hull=0
+shielded=false,cloaked=false,damaged=true,sector=17,hull=200
 ```
 
-`b1(shielded)` is itself a macro, turning a bare identifier into a record;
-`bn("hull", 8)` is a plain function. Either way the argument is a
-compile-time `span[{ name: string, bits: size }]`:
+The macro receives the name and the member list as tokens. A bare member is
+one bit; `= n` is evaluated on the spot with `meta/eval`, and a field that
+doesn't fit fails on its own name:
 
-```k1 path=modules/std/bitfield.k1
-macro define[int-type](type-name: code, members: span[{ name: string, bits: size}]) {
-  define-impl(types/id[int-type](), type-name, members)
-}
-macro b1(name: code) { `.{ name = "$name", bits = 1 }` }
-macro b8(name: code) { `bn("$name", 8)` }
-```
-
-`define-impl` learns the base width from `types/id[int-type]` and writes each
-field's accessors:
-
-```k1 path=modules/std/bitfield.k1
-  for members {
-    let info = member-info.[it-index]
-    let is-bool = it.bits == 1
-    let field-type = if is-bool "bool" else "u${info.type-width}"
-
-    // Getter
-    code.writeln("  fn get-${it.name}(self: $type-name): $field-type {")
-
-    code.writeln("    let bits: $base-name = self.bits;")
-    code.writeln("    let shifted: $base-name = bits >> ${info.offset};")
-    code.writeln("    let cleared: $base-name = shifted & ${info.raw-value};")
-    if is-bool {
-      code.writeln("    cleared == 1")
-    } else if field-type == base-name {
-      code.writeln("    cleared")
-    } else {
-      code.writeln("    cleared.trunc[$field-type]")
+```k1 path=modules/std/deftype.k1
+  for member in members {
+    let width: size = if member.value is :some tokens meta/eval("$tokens") else 1
+    if width < 1 or total + width > 64 {
+      member.name.fail("`${member.name.text}` is $width bits wide at bit $total; a bitfield holds 64")
     }
-
-    code.writeln("  }") // End Getter
-
-    // Setter
-    code.writeln("  fn set-${it.name}(self: $type-name, value: $field-type): $type-name {")
-    if is-bool {
-      code.writeln("    let masked-value: $base-name = value.as-u8();")
-    } else {
-      code.writeln("    let masked-value: $base-name = value & ${info.raw-value};")
-    }
-    let clear-mask = info.inv-mask
-    code.writeln("    let cleared-bits: $base-name = self.bits & $clear-mask;")
-    code.writeln("    let inserted-bits: $base-name = cleared-bits | (masked-value << ${info.offset});")
-    code.writeln("    .{ bits = inserted-bits }")
-    code.writeln("  }") // End setter
+    widths.push(width)
+    total = total + width
   }
+```
+
+Each field's accessors are one quoted template with the computed mask, offset
+and types spliced in:
+
+```k1 path=modules/std/deftype.k1
+    accessors.writeln(`
+      let ${field}-mask: $backing = $mask
+      fn get-$field(self): $field-type {
+        let field = (self.bits >> $offset) & $low-mask
+        $narrowed
+      }
+      fn with-$field(self, value: $field-type): $name {
+        let field: $backing = $widened
+        .{ bits = (self.bits & ${field}-mask.bit-not()) | ((field & $low-mask) << $offset) }
+      }
+    `)
 ```
 
 Masks and shifts come out as constants, and the five-bit `sector` gets the
@@ -633,26 +610,14 @@ smallest unsigned type that holds it:
 ```text
 type ship = { bits: u16 }
 ns for ship {
-  let shielded-mask: u16 = 1
-  let cloaked-mask: u16 = 2
-  let damaged-mask: u16 = 4
   let sector-mask: u16 = 248
-  let hull-mask: u16 = 65280
-  let zero: ship = .{ bits = 0 }
-```
-
-```text
-  fn get-sector(self: ship): u8 {
-    let bits: u16 = self.bits;
-    let shifted: u16 = bits >> 3;
-    let cleared: u16 = shifted & 31;
-    cleared.trunc[u8]
+  fn get-sector(self): u8 {
+    let field = (self.bits >> 3) & 31
+    field.low[u8]
   }
-  fn set-sector(self: ship, value: u8): ship {
-    let masked-value: u16 = value & 31;
-    let cleared-bits: u16 = self.bits & 7;
-    let inserted-bits: u16 = cleared-bits | (masked-value << 3);
-    .{ bits = inserted-bits }
+  fn with-sector(self, value: u8): ship {
+    let field: u16 = value
+    .{ bits = (self.bits & sector-mask.bit-not()) | ((field & 31) << 3) }
   }
 ```
 
@@ -683,19 +648,20 @@ row 1 = (3.0, 4.0) mass 1.5; total mass 4.0
 ```
 
 The column struct comes from `map-struct`, which swaps each field's type for a
-`list` of it. `type-id.spell()` writes a type as `#type` over its id, so emitted
-code means the same type in any scope:
+`list` of it. `type-id.spell()` writes a named type as its absolute path
+(`/core/string`) and an anonymous one, as here, as `#type` over its id, so emitted code
+means the same type in any scope:
 
 ```text
-type particles = (#type type-id/make(8741))
+type particles = (#type /core/types/type-id/make(8741))
 ns for particles {
-  fn row(self: particles, index: size): (#type type-id/make(8736)) { .{
+  fn row(self: particles, index: size): (#type /core/types/type-id/make(8736)) { .{
     x = self.x.[index],
     y = self.y.[index],
     mass = self.mass.[index],
   } }
   fn empty(): particles { .0 }
-  fn push(self: *particles, value: (#type type-id/make(8736))) {
+  fn push(self: *particles, value: (#type /core/types/type-id/make(8736))) {
     self.x.push(value.x)
     self.y.push(value.y)
     self.mass.push(value.mass)

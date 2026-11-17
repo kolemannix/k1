@@ -9,7 +9,7 @@ fn generate(): string {
   sys/fill-random(random.&.as-buffer())
   for half in [0, 5] {
     let bits: u64 = 0
-    for 0.until(5) { bits = (bits << 8) | random.[half + it].widen[u64] }
+    for 0.until(5) { bits = (bits << 8) | random.[half + it].as[u64] }
     write-crockford-base32(out.&, bits, 8)
   }
   out.build()
@@ -26,7 +26,7 @@ fn write-crockford-base32[w: writer](w, bits: u64, digit-count: size) {
   let i = digit-count
   while i > 0 {
     i = i - 1
-    digits.[i] = crockford-digits.span-bytes().[(rest & 31).signed()]
+    digits.[i] = crockford-digits.span-bytes().[(rest & 31).i()]
     rest = rest >> 5
   }
   w.write-bytes(digits.&.as-span().take(digit-count))

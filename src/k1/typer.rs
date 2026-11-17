@@ -33,7 +33,6 @@ pub use static_value::{
 };
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::fmt::Write;
@@ -1259,16 +1258,6 @@ pub enum IntegerCastDirection {
     SignExtend,
     ZeroExtend,
     Truncate,
-}
-
-impl IntegerCastDirection {
-    pub fn from_widen(from: IntegerType, to: IntegerType) -> Option<IntegerCastDirection> {
-        match (from.is_signed(), to.is_signed()) {
-            (true, false) => None,
-            (true, true) => Some(IntegerCastDirection::SignExtend),
-            (false, _) => Some(IntegerCastDirection::ZeroExtend),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -3535,26 +3524,20 @@ impl TypedProgram {
 
         if let Type::Integer(expected_int) = self.types.get(expected) {
             if let Type::Integer(actual_int) = self.types.get(actual_type_id) {
-                return {
-                    let needs_widen = expected_int.width() > actual_int.width();
-                    if needs_widen {
-                        match IntegerCastDirection::from_widen(*actual_int, *expected_int) {
-                            None => CheckExprTypeResult::Err("widen signed->unsigned".into()),
-                            Some(direction) => {
-                                let widened = self.synth_cast(
-                                    expr,
-                                    expected,
-                                    CastType::IntegerCast(direction),
-                                    None,
-                                );
-                                CheckExprTypeResult::Coerce(widened, "widen")
-                            }
-                        }
-                    } else {
-                        // We never truncate automatically, or change signedness without extension
-                        CheckExprTypeResult::Err(msg)
-                    }
+                // We never truncate automatically, or change signedness without extension
+                if expected_int.width() <= actual_int.width()
+                    || (actual_int.is_signed() && !expected_int.is_signed())
+                {
+                    return CheckExprTypeResult::Err(msg);
+                }
+                let direction = if actual_int.is_signed() {
+                    IntegerCastDirection::SignExtend
+                } else {
+                    IntegerCastDirection::ZeroExtend
                 };
+                let extended =
+                    self.synth_cast(expr, expected, CastType::IntegerCast(direction), None);
+                return CheckExprTypeResult::Coerce(extended, "int_extend");
             }
         }
 
@@ -7114,162 +7097,43 @@ impl TypedProgram {
             return Ok(base_expr);
         }
 
-        // float to int / int to float are the remaining non-noop casts handled by this syntax
-        let cast_type = match self.types.get(base_expr_type) {
-            Type::Integer(from_integer_type) => match self.types.get(target_type) {
-                Type::Integer(_) => Err(kerr!(
-                    self,
-                    span,
-                    "Cannot use .as to convert between integer types; use widen(), trunc(), signed(), or unsigned()",
-                )),
-                Type::Float(_to_float_type) => {
-                    if from_integer_type.is_signed() {
-                        Ok(CastType::IntegerSignedToFloat)
-                    } else {
-                        Ok(CastType::IntegerUnsignedToFloat)
-                    }
-                }
-                _ => Err(kerr!(
-                    self,
-                    span,
-                    "Cannot cast integer '{}' to '{}'",
-                    from_integer_type,
-                    self.type_id_to_string(target_type).blue()
-                )),
-            },
-            Type::Float(_from_float_type) => match self.types.get(target_type) {
-                Type::Integer(to_int_type) => {
-                    if to_int_type.is_signed() {
-                        Ok(CastType::FloatToSignedInteger)
-                    } else {
-                        Ok(CastType::FloatToUnsignedInteger)
-                    }
-                }
-                _ => Err(kerr!(
-                    self,
-                    span,
-                    "Cannot cast float to '{}'",
-                    self.type_id_to_string(target_type).blue()
-                )),
-            },
-            _ => {
-                if self.check_interpret_cast(base_expr_type, target_type, span, 0)? {
-                    Ok(CastType::Reinterpret)
-                } else {
-                    Err(kerr!(
-                        self,
-                        span,
-                        "Viewing {} as {} makes a claim. Use `.narrow` instead",
-                        base_expr_type,
-                        target_type
-                    ))
-                }
-            }
-        }?;
-        Ok(self.synth_cast(base_expr, target_type, cast_type, Some(span)))
-    }
-
-    fn eval_widen_trunc(
-        &mut self,
-        base_expr: ParsedExprId,
-        target_type: TypeId,
-        widen: bool,
-        span: Span,
-        ctx: EvalExprContext,
-    ) -> K1Result<TypedExprId> {
-        let base_expr = self.eval_expr(base_expr, ctx.with_no_expected_type())?;
-        let base_type = self.exprs.get_type(base_expr);
-        let op = if widen { "widen" } else { "trunc" };
-        if base_type == target_type {
+        if let (Type::Integer(_), Type::Integer(_)) =
+            (self.types.get(base_expr_type), self.types.get(target_type))
+        {
+            return self.check_and_coerce_expr(target_type, base_expr, ctx.scope_id, false);
+        }
+        if !self.check_interpret_cast(base_expr_type, target_type, span, 0)? {
             kbail!(
                 self,
                 span,
-                "{} to the same type ({}) does nothing",
-                op,
-                self.type_id_to_string(target_type)
+                "Viewing {} as {} makes a claim. Use `.narrow` instead",
+                base_expr_type,
+                target_type
             );
         }
-        enum Operand {
-            Int(IntegerType),
-            Float(NumericWidth),
-            Other,
-        }
-        fn classify(t: &Type) -> Operand {
-            match t {
-                Type::Integer(i) => Operand::Int(*i),
-                Type::Float(f) => Operand::Float(f.width()),
-                _ => Operand::Other,
-            }
-        }
-        let from = classify(self.types.get(base_type));
-        let to = classify(self.types.get(target_type));
-        let cast_type = match (from, to) {
-            (Operand::Int(from), Operand::Int(to)) => match to.width().cmp(&from.width()) {
-                Ordering::Greater => {
-                    if !widen {
-                        kbail!(self, span, "not a truncation",);
-                    }
-                    let Some(direction) = IntegerCastDirection::from_widen(from, to) else {
-                        kbail!(
-                            self,
-                            span,
-                            "widen from {} to {} would lose the sign; Use .unsigned().widen[{}] or .widen[{}].unsigned()",
-                            from,
-                            to,
-                            to,
-                            to.sign_flipped()
-                        );
-                    };
-                    CastType::IntegerCast(direction)
-                }
-                Ordering::Less => {
-                    if widen {
-                        kbail!(self, span, "not a widen",);
-                    }
-                    CastType::IntegerCast(IntegerCastDirection::Truncate)
-                }
-                Ordering::Equal => {
-                    let flip = if to.is_signed() { ".signed()" } else { ".unsigned()" };
+        Ok(self.synth_cast(base_expr, target_type, CastType::Reinterpret, Some(span)))
+    }
+
+    fn get_conversion_target(
+        &mut self,
+        call: &ParsedCall,
+        call_span: Span,
+        ctx: EvalExprContext,
+    ) -> K1Result<TypeId> {
+        match self.ast.mem.get_nth_opt(call.type_args(&self.ast.mem), 0) {
+            Some(type_arg) => self.eval_type_expr(type_arg.type_expr, ctx.scope_id),
+            None => match ctx.expected_type_id {
+                None => {
                     kbail!(
                         self,
-                        span,
-                        "{} and {} are the same width; sign reinterpretation: {}",
-                        from,
-                        to,
-                        flip
+                        call_span,
+                        "Cannot use {}() with no expected type",
+                        self.ast.idents.get_string(call.name.name)
                     );
                 }
+                Some(et) => Ok(et),
             },
-            (Operand::Float(from_width), Operand::Float(to_width)) => {
-                match to_width.cmp(&from_width) {
-                    Ordering::Greater => {
-                        if !widen {
-                            kbail!(self, span, "not a truncation");
-                        }
-                        CastType::FloatExtend
-                    }
-                    Ordering::Less => {
-                        if widen {
-                            kbail!(self, span, "not a widen");
-                        }
-                        CastType::FloatTruncate
-                    }
-                    Ordering::Equal => unreachable!("equal-width floats are the same type"),
-                }
-            }
-            _ => {
-                kbail!(
-                    self,
-                    span,
-                    "{} converts within integer types or within float types; cannot {} {} to {}",
-                    op,
-                    op,
-                    self.type_id_to_string(base_type),
-                    self.type_id_to_string(target_type)
-                );
-            }
-        };
-        Ok(self.synth_cast(base_expr, target_type, cast_type, Some(span)))
+        }
     }
 
     fn check_interpret_cast(
@@ -9268,33 +9132,13 @@ impl TypedProgram {
                     }
                     return Ok(CallResolution::OtherExpr(erased));
                 }
-            } else if fn_name == self.ast.idents.b.as_
-                || fn_name == self.ast.idents.b.widen
-                || fn_name == self.ast.idents.b.trunc
-                || fn_name == self.ast.idents.b.narrow
-            {
-                let dest_type = match self.ast.mem.get_nth_opt(call.type_args(&self.ast.mem), 0) {
-                    Some(type_arg) => self.eval_type_expr(type_arg.type_expr, ctx.scope_id)?,
-                    None => match ctx.expected_type_id {
-                        None => {
-                            kbail!(
-                                self,
-                                call_span,
-                                "Cannot use {}() with no expected type",
-                                self.ast.idents.get_string(fn_name)
-                            );
-                        }
-                        Some(et) => et,
-                    },
-                };
-                let result = if fn_name == self.ast.idents.b.as_ {
-                    self.eval_cast(base_arg.value, dest_type, call_span, ctx)?
-                } else if fn_name == self.ast.idents.b.narrow {
-                    self.eval_cast_narrow(base_arg.value, dest_type, call_span, ctx)?
-                } else {
-                    let widen = fn_name == self.ast.idents.b.widen;
-                    self.eval_widen_trunc(base_arg.value, dest_type, widen, call_span, ctx)?
-                };
+            } else if fn_name == self.ast.idents.b.as_ {
+                let dest_type = self.get_conversion_target(call, call_span, ctx)?;
+                let result = self.eval_cast(base_arg.value, dest_type, call_span, ctx)?;
+                return Ok(CallResolution::OtherExpr(result));
+            } else if fn_name == self.ast.idents.b.narrow {
+                let dest_type = self.get_conversion_target(call, call_span, ctx)?;
+                let result = self.eval_cast_narrow(base_arg.value, dest_type, call_span, ctx)?;
                 return Ok(CallResolution::OtherExpr(result));
             } else if fn_name == self.ast.idents.b.to_static {
                 if call.args.len() != 1 {
@@ -9340,6 +9184,60 @@ impl TypedProgram {
         let base_expr_type = self.exprs.get_type(base_expr);
         let base_for_method = self.get_type_id_dereferenced(base_expr_type);
         let is_reference = base_for_method != base_expr_type;
+
+        // Numeric conversions: low, trunc, to-f32, to-f64
+        let is_low = fn_name == self.ast.idents.b.low;
+        let is_trunc = fn_name == self.ast.idents.b.trunc;
+        let is_to_f32 = fn_name == self.ast.idents.b.to_f32;
+        let is_to_float = is_to_f32 || fn_name == self.ast.idents.b.to_f64;
+        if (is_low || is_trunc || is_to_float)
+            && matches!(self.types.get(base_expr_type), Type::Integer(_) | Type::Float(_))
+        {
+            let target_type = if is_to_f32 {
+                F32_TYPE_ID
+            } else if is_to_float {
+                F64_TYPE_ID
+            } else {
+                self.get_conversion_target(call, call_span, ctx)?
+            };
+            let cast_type = match (self.types.get(base_expr_type), self.types.get(target_type)) {
+                (Type::Integer(from), Type::Integer(to)) if is_low && to.width() < from.width() => {
+                    CastType::IntegerCast(IntegerCastDirection::Truncate)
+                }
+                (Type::Float(_), Type::Integer(to)) if is_trunc => {
+                    if to.is_signed() {
+                        CastType::FloatToSignedInteger
+                    } else {
+                        CastType::FloatToUnsignedInteger
+                    }
+                }
+                (Type::Integer(from), Type::Float(_)) if is_to_float => {
+                    if from.is_signed() {
+                        CastType::IntegerSignedToFloat
+                    } else {
+                        CastType::IntegerUnsignedToFloat
+                    }
+                }
+                (Type::Float(from), Type::Float(to)) if is_to_float && to.width() > from.width() => {
+                    CastType::FloatExtend
+                }
+                (Type::Float(from), Type::Float(to)) if is_to_float && to.width() < from.width() => {
+                    CastType::FloatTruncate
+                }
+                _ => {
+                    kbail!(
+                        self,
+                        call_span,
+                        "{} does not convert {} to {}",
+                        self.ast.idents.get_string(fn_name),
+                        base_expr_type,
+                        target_type
+                    );
+                }
+            };
+            let converted = self.synth_cast(base_expr, target_type, cast_type, Some(call_span));
+            return Ok(CallResolution::OtherExpr(converted));
+        }
 
         // Arrays and vectors: the builtin array len, then each kind's method scope
         if fn_name == self.ast.idents.b.len

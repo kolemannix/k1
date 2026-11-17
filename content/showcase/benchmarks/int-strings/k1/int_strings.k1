@@ -9,12 +9,12 @@ let BLOCK: u64 = 4096
 fn(noinline) from-int(slots: *array[string, 1024], arenas: array[*arena, 2], n: u64) {
   let i: u64 = 0
   while i < n {
-    let strings = arenas.[((i / BLOCK) & 1).signed()]
+    let strings = arenas.[((i / BLOCK) & 1).i()]
     strings.reset()
     let end = (i + BLOCK).min(n)
     mem/with-arena(strings, {
       while i < end {
-        slots.[(i & 1023).signed()] = i.to-string()
+        slots.[(i & 1023).i()] = i.to-string()
         i = i + 1
       }
     })
@@ -25,7 +25,7 @@ fn(noinline) from-int-spill(slots: *array[spill-string[22], 1024], n: u64) {
   for i in (0: u64).until(n) {
     let s = spill-string/new[22]()
     i.print-to(s.&)
-    slots.[(i & 1023).signed()] = s
+    slots.[(i & 1023).i()] = s
   }
 }
 
@@ -37,7 +37,7 @@ fn timed(run: some fn()): u64 {
 
 fn report(name: string, nanos: u64) {
   let sb = string-builder/new()
-  f64/format(N.as[f64] * 1000.0 / nanos.as[f64], sb.&, places = 1)
+  f64/format(N.to-f64() * 1000.0 / nanos.to-f64(), sb.&, places = 1)
   println("$name: ${sb.build()} million strings per second")
 }
 
@@ -48,7 +48,7 @@ fn main(): i32 {
   for 0.until(RUNS) {
     best = best.min(timed(fn[slots, arenas]. from-int(slots, arenas, N)))
   }
-  assert-equals(slots.[((N - 1) & 1023).signed()], (N - 1).to-string())
+  assert-equals(slots.[((N - 1) & 1023).i()], (N - 1).to-string())
   report("k1 string to-string()", best)
 
   let spill-slots = mem/alloc-t[array[spill-string[22], 1024]]
@@ -56,7 +56,7 @@ fn main(): i32 {
   for 0.until(RUNS) {
     best = best.min(timed(fn[spill-slots]. from-int-spill(spill-slots, N)))
   }
-  assert-equals(spill-slots.[((N - 1) & 1023).signed()].&.as-string(), (N - 1).to-string())
+  assert-equals(spill-slots.[((N - 1) & 1023).i()].&.as-string(), (N - 1).to-string())
   report("k1 spill-string[22] print-to", best)
   0
 }

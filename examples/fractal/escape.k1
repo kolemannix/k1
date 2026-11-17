@@ -65,7 +65,7 @@ fn escape-time[s: escape-set](set: s, point: complex, max-iter: i32): f64 {
   while i < max-iter {
     let m2 = current.z.norm2()
     if m2 > BAILOUT {
-      return i.as[f64] + 1.0 - log2(0.5 * log2(m2))
+      return i.to-f64() + 1.0 - log2(0.5 * log2(m2))
     }
     current = set.advance(current)
     i = i + 1
@@ -77,13 +77,13 @@ let LOG2_E_TIMES_2: f64 = 2.8853900817779268
 
 fn log2(x: f64): f64 {
   let bits = bitcast[f64, u64](x)
-  let exponent = bits.shift-right(52).bit-and(0x7FF).signed() - 1023
+  let exponent = bits.shift-right(52).bit-and(0x7FF).i() - 1023
   let mantissa = bitcast[u64, f64](
     bits.bit-and(0x000FFFFFFFFFFFFF).bit-or(0x3FF0000000000000)
   )
   let s = (mantissa - 1.0) / (mantissa + 1.0)
   let s2 = s * s
-  exponent.as[f64] + LOG2_E_TIMES_2 * s * (1.0 + s2 * (0.33333333333333333 + s2 * 0.2))
+  exponent.to-f64() + LOG2_E_TIMES_2 * s * (1.0 + s2 * (0.33333333333333333 + s2 * 0.2))
 }
 
 let PALETTE_LEN: int = 256
@@ -102,7 +102,7 @@ fn build-palette(): array[u32, 256] {
   ]
   let out = array/zeroed[u32, 256]()
   for i in 0.until(PALETTE_LEN) {
-    let at = i.as[f64] / PALETTE_LEN.as[f64]
+    let at = i.to-f64() / PALETTE_LEN.to-f64()
     let seg = 0
     while seg < 4 and anchors.[seg + 1].at < at { seg = seg + 1 }
     let low = anchors.[seg]
@@ -118,31 +118,31 @@ fn build-palette(): array[u32, 256] {
 }
 
 fn pack(red: f64, green: f64, blue: f64): u32 {
-  red.as[u32].shift-left(16).bit-or(green.as[u32].shift-left(8)).bit-or(blue.as[u32])
+  red.trunc[u32].shift-left(16).bit-or(green.trunc[u32].shift-left(8)).bit-or(blue.trunc[u32])
 }
 
 let CYCLE: f64 = 6.0
 
 fn shade(escape: f64): u32 {
   if escape < 0.0 return 0
-  PALETTE.[(escape * CYCLE).as[int] % PALETTE_LEN]
+  PALETTE.[(escape * CYCLE).trunc[int] % PALETTE_LEN]
 }
 
 type view = { width: i32, height: i32, center: complex, span: f64, max-iter: i32 }
 
 fn render[s: escape-set](set: s, pixels: buffer[u8], v: view) {
-  let step = v.span / v.height.as[f64]
-  let left = v.center.re - v.width.as[f64] * 0.5 * step
-  let top = v.center.im - v.height.as[f64] * 0.5 * step
+  let step = v.span / v.height.to-f64()
+  let left = v.center.re - v.width.to-f64() * 0.5 * step
+  let top = v.center.im - v.height.to-f64() * 0.5 * step
   for y in 0.until(v.height) {
-    let im = top + y.as[f64] * step
+    let im = top + y.to-f64() * step
     for x in 0.until(v.width) {
-      let point: complex = .{ re = left + x.as[f64] * step, im }
+      let point: complex = .{ re = left + x.to-f64() * step, im }
       let rgb = shade(escape-time(set, point, v.max-iter))
       let at = (y * v.width + x) * 4
-      pixels.[at] = rgb.shift-right(16).bit-and(0xFF).trunc[u8]
-      pixels.[at + 1] = rgb.shift-right(8).bit-and(0xFF).trunc[u8]
-      pixels.[at + 2] = rgb.bit-and(0xFF).trunc[u8]
+      pixels.[at] = rgb.shift-right(16).bit-and(0xFF).low[u8]
+      pixels.[at + 1] = rgb.shift-right(8).bit-and(0xFF).low[u8]
+      pixels.[at + 2] = rgb.bit-and(0xFF).low[u8]
       pixels.[at + 3] = 255u8
     }
   }

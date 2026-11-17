@@ -1,0 +1,12 @@
+fn render-sign-in-form(url: string, notice: ?string): wren/view {
+  .{ title = "Sign in", url, status = :ok, body = html/markup(\{
+    <main>
+      <h1>Sign in</h1>
+      #if notice is :some text { <p>$text</p> }
+      <form method="post" action=${tenant-route:send-sign-in-link.to-string()}>
+        <label>Email <input type="email" name="email" required autocomplete="email"/></label>
+        <button>Email me a sign-in link</button>
+      </form>
+    </main>
+  }) }
+}

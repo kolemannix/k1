@@ -599,7 +599,7 @@ impl TypedProgram {
         let (print_impl, self_adjust) =
             self.expect_ability_impl(to_print_type, ability_id, true, ctx.scope_id, span)?;
         let to_print = self.apply_self_adjust(to_print, self_adjust, span)?;
-        let precision_arg = precision.map(|p| self.synth_int(TypedIntValue::U32(p), span));
+        let precision_arg = precision.map(|p| self.synth_i64(p as i64, span));
         let args: &[TypedExprId] = match &precision_arg {
             None => &[to_print, writer],
             Some(precision_arg) => &[to_print, writer, *precision_arg],
@@ -690,7 +690,7 @@ impl TypedProgram {
             None if is_number => FmtAlign::Right,
             None => FmtAlign::Left,
         };
-        let width = self.synth_int(TypedIntValue::U32(spec.width), span);
+        let width = self.synth_i64(spec.width as i64, span);
         let fill = self.synth_string_literal_from_str(spec.fill.to_string(), span);
         let f = &self.ast.idents.f;
         let (align_fn, args): (QIdent, &[TypedExprId]) = match align {

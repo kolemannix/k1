@@ -9,10 +9,10 @@ let RANK_7: bitboard = 0x00FF000000000000
 let RANK_8: bitboard = 0xFF00000000000000
 
 fn(inline) bit(sq: square): bitboard { 1u64 << sq }
-fn(inline) lsb(b: bitboard): square { b.trailing-zeros().trunc[u32] }
+fn(inline) lsb(b: bitboard): square { b.trailing-zeros().low[u32] }
 fn(inline) more-than-one(b: bitboard): bool { b & (b - 1) != 0 }
-fn(inline) file-of(sq: square): u32 { sq & 7 }
-fn(inline) rank-of(sq: square): u32 { sq >> 3 }
+fn(inline) file-of(sq: square): i32 { (sq & 7).i() }
+fn(inline) rank-of(sq: square): i32 { (sq >> 3).i() }
 
 type square-iter = { rest: bitboard }
 
@@ -32,8 +32,8 @@ impl iterable[item = square, i = square-iter] for square-iter {
 }
 
 fn square-name(sq: square): string {
-  let file = ('a'.as-u8() + file-of(sq).trunc[u8]).as-char()
-  let rank = ('1'.as-u8() + rank-of(sq).trunc[u8]).as-char()
+  let file = ('a'.as-u8() + file-of(sq).low[u8]).as-char()
+  let rank = ('1'.as-u8() + rank-of(sq).low[u8]).as-char()
   "$file$rank"
 }
 
@@ -42,15 +42,15 @@ fn parse-square(s: string): ?square {
   let file = s.[0].as-u8()
   let rank = s.[1].as-u8()
   if file < 'a'.as-u8() or file > 'h'.as-u8() or rank < '1'.as-u8() or rank > '8'.as-u8() return :none
-  :some ((rank - '1'.as-u8()).widen[u32] * 8 + (file - 'a'.as-u8()).widen[u32])
+  :some ((rank - '1'.as-u8()).as[u32] * 8 + (file - 'a'.as-u8()).as[u32])
 }
 
 type step = { df: i32, dr: i32 }
 
 fn(inline) shifted(sq: square, s: step): ?square {
-  let f = file-of(sq).signed() + s.df
-  let r = rank-of(sq).signed() + s.dr
-  if f < 0 or f > 7 or r < 0 or r > 7 :none else :some((r * 8 + f).unsigned())
+  let f = file-of(sq) + s.df
+  let r = rank-of(sq) + s.dr
+  if f < 0 or f > 7 or r < 0 or r > 7 :none else :some((r * 8 + f).u())
 }
 
 fn leaper-table(steps: span[step]): array[bitboard, 64] {
@@ -113,7 +113,7 @@ type slider-table = { magics: array[magic, 64], attacks: buffer[bitboard] }
 ns for slider-table {
   fn(inline) attacks-from(self: *slider-table, sq: square, occ: bitboard): bitboard {
     let m = self.magics.[sq]
-    self.attacks.[m.offset + ((occ & m.mask) * m.factor >> m.shift).trunc[u32]]
+    self.attacks.[m.offset + ((occ & m.mask) * m.factor >> m.shift).low[u32]]
   }
 }
 
@@ -159,7 +159,7 @@ fn build-slider-table(steps: array[step, 4], factors: array[u64, 64]): slider-ta
   let table-len: u32 = 0
   for sq in 0u32.until(64) {
     let mask = relevant-mask(sq, steps)
-    let bits = mask.count-ones().trunc[u32]
+    let bits = mask.count-ones().low[u32]
     magics.[sq] = .{ mask, factor = factors.[sq], shift = 64 - bits, offset = table-len }
     table-len = table-len + (1u32 << bits)
   }
@@ -168,7 +168,7 @@ fn build-slider-table(steps: array[step, 4], factors: array[u64, 64]): slider-ta
     let m = magics.[sq]
     let subset: bitboard = 0
     loop {
-      let slot = m.offset + (subset * m.factor >> m.shift).trunc[u32]
+      let slot = m.offset + (subset * m.factor >> m.shift).low[u32]
       let reach = slide(sq, subset, steps)
       if attacks.[slot] != 0 and attacks.[slot] != reach crash("magic for ${square-name(sq)} collides")
       attacks.[slot] = reach

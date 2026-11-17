@@ -19,8 +19,8 @@ fn(test) integer-literal-forms() {
 }
 
 fn(test) widening-and-sign-casts() {
-  assert-equals(-3i8.widen[i64], -3)
-  assert-equals(-1i16.widen[i32].unsigned(), 0xFFFF_FFFF)
+  assert-equals(-3i8.as[i64], -3)
+  assert-equals(-1i16.as[i32].u(), 0xFFFF_FFFF)
   assert(test-compile(-1i16.as[u32]).is-some())
 }
 
@@ -90,7 +90,7 @@ fn(test) int-bits() {
   assert-equals(fold_test/opaque(0x81u8).rotate-left(9), 0x03)
   assert-equals(fold_test/opaque(-128i8).rotate-left(1), 1)
   assert-equals(fold_test/opaque(0x8001u16).rotate-right(1), 0xC000)
-  assert-equals(fold_test/opaque(0x1234_5678i32).rotate-right(fold_test/opaque(0u32)), 0x1234_5678)
+  assert-equals(fold_test/opaque(0x1234_5678i32).rotate-right(fold_test/opaque(0)), 0x1234_5678)
   assert-equals(fold_test/opaque(1u64).rotate-right(1), 1u64 << 63)
   assert-equals(0u16.trailing-zeros(), 16)
   assert-equals(1u32.leading-zeros(), 31)

@@ -24,7 +24,7 @@ ns reload {
     dylib-file-name: *u8,
     api-hash: u64,
     version: *u64,
-    entry-count: u64,
+    entry-count: size,
     entries: ptr,
   }
   type entry = { symbol: *u8, slot: *ptr }
@@ -108,7 +108,7 @@ ns reload {
     }
 
     // Resolve every fn before patching anything, so a load fully succeeds or does not occur
-    let entries = span/wrap-raw[entry](descriptor.entries, descriptor.entry-count.signed())
+    let entries = span/wrap-raw[entry](descriptor.entries, descriptor.entry-count)
     let addrs = list/with-capacity[ptr](entries.len())
     for e in entries {
       let addr = if dylib/sym(handle, string/wrap-c(e.symbol)) is {

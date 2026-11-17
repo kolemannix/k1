@@ -14,10 +14,10 @@ ns for move {
   let NONE: move = .{ bits = 0 }
 
   fn(inline) new(from: square, to: square, flag: u16): move {
-    .{ bits = (flag << 12) | (to.trunc[u16] << 6) | from.trunc[u16] }
+    .{ bits = (flag << 12) | (to.low[u16] << 6) | from.low[u16] }
   }
-  fn(inline) from(self): square { (self.bits & 63).widen[u32] }
-  fn(inline) to(self): square { ((self.bits >> 6) & 63).widen[u32] }
+  fn(inline) from(self): square { (self.bits & 63).as[u32] }
+  fn(inline) to(self): square { ((self.bits >> 6) & 63).as[u32] }
   fn(inline) flag(self): u16 { self.bits >> 12 }
   fn(inline) is-capture(self): bool { self.flag() & CAPTURE != 0 }
   fn(inline) is-promotion(self): bool { self.flag() & PROMOTION != 0 }

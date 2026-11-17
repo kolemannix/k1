@@ -110,12 +110,12 @@ fn start(
   s.listener.set-data(s)
 
   let addr: libuv/sockaddr_in = uninit
-  uv/check(libuv/ip4_addr(config.host.to-c().as(), config.port.widen[i32], addr.&.as())).try
+  uv/check(libuv/ip4_addr(config.host.to-c().as(), config.port.as[i32], addr.&.as())).try
   uv/check(libuv/tcp_bind(s.listener.&.as(), addr.&.as[ptr].narrow(), 0)).try
   uv/check(libuv/listen(s.listener.&.as-stream().as(), config.accept-queue-len, on-new-connection.&)).try
 
   let bound: libuv/sockaddr_in = uninit
-  let bound-len: i32 = types/size[libuv/sockaddr_in].trunc[i32]
+  let bound-len: i32 = types/size[libuv/sockaddr_in].low[i32]
   if libuv/tcp_getsockname(s.listener.&.as(), bound.&.as[ptr].narrow(), bound-len.&.as()) == 0 {
     s.port = bound.sin_port.swap-bytes()
   }
@@ -485,9 +485,9 @@ fn end-await(*self) {
   if self.awaited-events == 0 { libuv/unref(self.on-loop-event.&.as-handle().as()) }
 }
 
-fn alloc-read-buffer(handle: optref[libuv/handle], suggested-size: usize, buf: optref[libuv/buf]) {
+fn alloc-read-buffer(handle: optref[libuv/handle], suggested-size: size, buf: optref[libuv/buf]) {
   let connection = handle.get().get-data[connection]
-  let target = connection.request-parser.body-read-target() ? connection.request-arena.alloc-buffer[u8](suggested-size.signed())
+  let target = connection.request-parser.body-read-target() ? connection.request-arena.alloc-buffer[u8](suggested-size)
   buf.get().* = libuv/buf/wrap-buffer(target)
 }
 
@@ -495,7 +495,7 @@ fn on-client-read(client: optref[libuv/stream], nread: size, buf: optref[libuv/b
   if nread == 0 return
   let connection = client.get().get-data[connection]
   if nread < 0 {
-    tprintln("conn${connection.serial-no} read ended: ${libuv/errno/from-i32(nread.trunc[i32]).enum-name()}")
+    tprintln("conn${connection.serial-no} read ended: ${libuv/errno/from-i32(nread.low[i32]).enum-name()}")
     connection.close()
     return
   }
@@ -597,7 +597,7 @@ macro tprintln(arg: code) {
 fn tprintln-log[t: print](t) {
   let thread-self = libuv/thread_self()
   let thread-name-buf = array/zeroed[u8, 256]()
-  let _rc = libuv/thread_getname(thread-self.&.as(), thread-name-buf.data-ref(), thread-name-buf.len().unsigned())
+  let _rc = libuv/thread_getname(thread-self.&.as(), thread-name-buf.data-ref(), thread-name-buf.len())
   let thread-name = string/wrap-c(thread-name-buf.data-ref())
   eprintln("[$thread-name] $t")
 }

@@ -1,6 +1,6 @@
 use core/arena
 
-type perft-case = { fen: string, depth: u32, nodes: u64, shallow-nodes: u64 }
+type perft-case = { fen: string, depth: u32, nodes: i64, shallow-nodes: i64 }
 
 let SHALLOW_DEPTH: u32 = 2
 
@@ -30,7 +30,7 @@ let PERFT_SUITE: array[perft-case, 23] = [
   .{ fen = "8/Pk6/8/8/8/8/6Kp/8 w - - 0 1", depth = 6, nodes = 1030499, shallow-nodes = 97 },
 ]
 
-type search-case = { fen: string, depth: u32, best: string }
+type search-case = { fen: string, depth: i32, best: string }
 
 let SEARCH_SUITE: array[search-case, 4] = [
   .{ fen = "6k1/5ppp/8/8/8/8/5PPP/3R2K1 w - - 0 1", depth = 4, best = "d1d8" },

@@ -42,10 +42,10 @@ ns libc {
     let SEEK_SET: i32 = 0
     fn(extern) fopen(path: *u8, mode: *u8): ptr
     fn(extern) fseek(file-desc: ptr, offset: i64, whence: i32): i32
-    fn(extern) fread(buffer: ptr, size: size, num: size, stream: ptr): usize
+    fn(extern) fread(buffer: ptr, size: size, num: size, stream: ptr): size
     fn(extern) fclose(file-desc: ptr): c-int
     fn(extern) ftell(file-desc: ptr): c-long
-    fn(extern) fwrite(data-ptr: ptr, item-size: size, item-count: size, file-desc: ptr): usize
+    fn(extern) fwrite(data-ptr: ptr, item-size: size, item-count: size, file-desc: ptr): size
   }
 
   fn(extern) strtod(nptr: *u8, endptr: *ptr): f64

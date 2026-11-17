@@ -13,8 +13,8 @@ type run = { quality: size, lgwin: size }
 
 fn c-new-encoder(r: run): ptr {
   let st = cbrotli/encoder-create-instance(ptr/null, ptr/null, ptr/null)
-  cbrotli/encoder-set-parameter(st, :quality, r.quality.unsigned().trunc[u32])
-  cbrotli/encoder-set-parameter(st, :lgwin, r.lgwin.unsigned().trunc[u32])
+  cbrotli/encoder-set-parameter(st, :quality, r.quality.u().low[u32])
+  cbrotli/encoder-set-parameter(st, :lgwin, r.lgwin.u().low[u32])
   st
 }
 
@@ -130,7 +130,7 @@ fn make-corpora(text: span[u8]): list[{ name: string, data: span[u8] }] {
   let repeated = list/empty[u8]()
   let i: size = 0
   while i < 100000 {
-    repeated.push((i % 251).trunc[u8])
+    repeated.push((i % 251).low[u8])
     i = i + 1
   }
   corpora.push(.{ name = "cycle-251", data = repeated.as-span() })
@@ -145,7 +145,7 @@ fn make-corpora(text: span[u8]): list[{ name: string, data: span[u8] }] {
     state = state ^ (state << 13)
     state = state ^ (state >> 7)
     state = state ^ (state << 17)
-    rand.push((state & 0xFF).trunc[u8])
+    rand.push((state & 0xFF).low[u8])
     i = i + 1
   }
   corpora.push(.{ name = "random-300k", data = rand.as-span() })
@@ -156,7 +156,7 @@ fn make-corpora(text: span[u8]): list[{ name: string, data: span[u8] }] {
 }
 
 fn mbps(nanos: u64, bytes: size): f64 {
-  bytes.as[f64] / nanos.as[f64] * 1000.0
+  bytes.to-f64() / nanos.to-f64() * 1000.0
 }
 
 fn write-mbps(sb: *string-builder, label: string, nanos: *list[u64], bytes: size) {
@@ -182,7 +182,7 @@ fn bench-one(name: string, input: span[u8], r: run) {
   let c-bytes = c-compress-into(input, r, c-out)
   assert-equals(k1-bytes, c-bytes)
   let warm-nanos = time/elapsed-nanos(warm-start)
-  let reps = (ROUND-NANOS / warm-nanos.max(1)).max(1).signed()
+  let reps = (ROUND-NANOS / warm-nanos.max(1)).max(1).i()
 
   let k1-times: list[u64] = list/empty()
   let c-times: list[u64] = list/empty()
@@ -220,7 +220,7 @@ fn bench-one(name: string, input: span[u8], r: run) {
   sb.write(", ")
   write-mbps(sb.&, "c", c-times.&, round-bytes)
   sb.write(", ratio ")
-  (c-times.[c-times.len() / 2].as[f64] / k1-times.[k1-times.len() / 2].as[f64]).format(sb.&, 3)
+  (c-times.[c-times.len() / 2].to-f64() / k1-times.[k1-times.len() / 2].to-f64()).format(sb.&, 3)
   sb.write(", ")
   write-mbps(sb.&, "k1 decode", decode-times.&, round-bytes)
   sb.write(", ${input.len()} -> $k1-bytes bytes, $reps reps x $ROUNDS rounds")
@@ -235,9 +235,9 @@ fn main(argc: u32, argv: ptr): i32 {
   let lgwin: size = 18
   for i in 1.until(args.len()) {
     if args.[i].starts-with("lgwin=") {
-      lgwin = u64/from-string(args.[i].drop(6)).!.signed()
+      lgwin = u64/from-string(args.[i].drop(6)).!.i()
     } else if u64/from-string(args.[i]) is :ok q {
-      runs.push(.{ quality = q.signed(), lgwin })
+      runs.push(.{ quality = q.i(), lgwin })
     } else {
       rest.push(args.[i])
     }

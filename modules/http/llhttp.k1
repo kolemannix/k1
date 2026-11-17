@@ -264,7 +264,7 @@ type(alias) settings = settings_s
 type(alias) data_cb = *fn(
   optref[t],
   optref[u8],
-  usize
+  size
 ) -> i32
 type(alias) cb = *fn(
   optref[t]
@@ -334,7 +334,7 @@ fn(extern("llhttp_settings_init")) settings_init(
 fn(extern("llhttp_execute")) execute(
   parser: optref[t],
   data: optref[u8],
-  len: usize,
+  len: size,
 ): errno
 fn(extern("llhttp_finish")) finish(
   parser: optref[t],

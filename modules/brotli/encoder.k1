@@ -29,10 +29,10 @@ type encoder = {
 }
 
 fn wrap-position(position: size): u32 {
-  let result = position.trunc[u32]
+  let result = position.low[u32]
   let gb = position >> 30
   if gb > 2 {
-    result = (result & ((1u32 << 30) - 1)) | ((((gb - 1) & 1).trunc[u32] + 1) << 30)
+    result = (result & ((1u32 << 30) - 1)) | ((((gb - 1) & 1).low[u32] + 1) << 30)
   }
   result
 }
@@ -40,8 +40,8 @@ fn wrap-position(position: size): u32 {
 fn encode-window-bits(lgwin: size): { last-bytes: u16, last-bytes-bits: u8 } {
   if lgwin == 16 .{ last-bytes = 0, last-bytes-bits = 1 }
   else if lgwin == 17 .{ last-bytes = 1, last-bytes-bits = 7 }
-  else if lgwin > 17 .{ last-bytes = (((lgwin - 17) << 1) | 1).trunc[u16], last-bytes-bits = 4 }
-  else .{ last-bytes = (((lgwin - 8) << 4) | 1).trunc[u16], last-bytes-bits = 7 }
+  else if lgwin > 17 .{ last-bytes = (((lgwin - 17) << 1) | 1).low[u16], last-bytes-bits = 4 }
+  else .{ last-bytes = (((lgwin - 8) << 4) | 1).low[u16], last-bytes-bits = 7 }
 }
 
 fn estimate-entropy(population: buffer[u32], count: size): f64 {
@@ -50,9 +50,9 @@ fn estimate-entropy(population: buffer[u32], count: size): f64 {
   for i in 0.until(count) {
     let p = population.index-unchecked(i).*
     total = total + p.as-size()
-    result = result + p.as[f64] * fast-log2(p.as-size())
+    result = result + p.to-f64() * fast-log2(p.as-size())
   }
-  total.as[f64] * fast-log2(total) - result
+  total.to-f64() * fast-log2(total) - result
 }
 
 type literal-context-choice = { num-literal-contexts: size, literal-context-map: ?buffer[u32] }
@@ -72,7 +72,7 @@ fn choose-context-map(quality: size, bigram-histo: buffer[u32]): literal-context
     entropy3 = entropy3 + estimate-entropy(bigram-histo.slice(3 * i, 3 * i + 3), 3)
   }
   let total = monogram-histo.[0] + monogram-histo.[1] + monogram-histo.[2]
-  let entropy0 = 1.0 / total.as[f64]
+  let entropy0 = 1.0 / total.to-f64()
   entropy1 = entropy1 * entropy0
   entropy2 = entropy2 * entropy0
   entropy3 = entropy3 * entropy0
@@ -106,7 +106,7 @@ fn should-use-complex-static-context-map(
     let pos = pos0 + 2
     while pos < stride-end-pos {
       let literal = input.add-bytes(pos & mask).ref[u8].*
-      let ctx = k-static-context-map-complex-utf8.[context-of(prev1, prev2, utf8-lut).as-size()].trunc[u8]
+      let ctx = k-static-context-map-complex-utf8.[context-of(prev1, prev2, utf8-lut).as-size()].low[u8]
       total = total + 1
       let c = combined-histo.index-unchecked((literal >> 3).as-size())
       c.* = c.* + 1
@@ -123,7 +123,7 @@ fn should-use-complex-static-context-map(
   for i in 0.until(MAX-STATIC-CONTEXTS) {
     entropy2 = entropy2 + estimate-entropy(context-histo.slice(i << 5, (i << 5) + 32), 32)
   }
-  let entropy0 = 1.0 / total.as[f64]
+  let entropy0 = 1.0 / total.to-f64()
   entropy1 = entropy1 * entropy0
   entropy2 = entropy2 * entropy0
   if entropy2 > 3.0 or entropy1 - entropy2 < 0.2 {
@@ -165,11 +165,11 @@ fn decide-over-literal-context-modeling(
 fn should-compress(data: ptr, mask: size, last-flush-pos: size, bytes: size, num-literals: size, num-commands: size): bool {
   if bytes <= 2 return false
   if num-commands < (bytes >> 8) + 2 {
-    if num-literals.as[f64] > 0.99 * bytes.as[f64] {
+    if num-literals.to-f64() > 0.99 * bytes.to-f64() {
       let literal-histo = array/zeroed[u32, 256]()
-      let bit-cost-threshold = bytes.as[f64] * 7.92 * (1.0 / 13.0)
+      let bit-cost-threshold = bytes.to-f64() * 7.92 * (1.0 / 13.0)
       let t = (bytes + 13 - 1) / 13
-      let pos = last-flush-pos.trunc[u32]
+      let pos = last-flush-pos.low[u32]
       for 0.until(t) {
         let b = data.add-bytes(pos.as-size() & mask).ref[u8].*.as-size()
         literal-histo.[b] = literal-histo.[b] + 1
@@ -266,8 +266,8 @@ ns for encoder {
     let table-size = hash-table-size(len, quality)
     mem/set(dst = self.table.data-ptr(), value = 0, count = table-size * 4)
 
-    self.storage.index-unchecked(0).* = (self.last-bytes & 0xFF).trunc[u8]
-    self.storage.index-unchecked(1).* = (self.last-bytes >> 8).trunc[u8]
+    self.storage.index-unchecked(0).* = (self.last-bytes & 0xFF).low[u8]
+    self.storage.index-unchecked(1).* = (self.last-bytes >> 8).low[u8]
     let bw: bit-writer = .{
       storage = self.storage.data-ptr(),
       pos = self.last-bytes-bits,
@@ -287,8 +287,8 @@ ns for encoder {
   fn emit-storage(self: *encoder, bw: bit-writer, out: *list[u8]) {
     let out-bytes = bw.pos >> 3
     out.append-span(span/wrap-raw[u8](bw.storage, out-bytes))
-    self.last-bytes = bw.storage.add-bytes(out-bytes).ref[u8].*.widen[u16]
-    self.last-bytes-bits = (bw.pos & 7).trunc[u8]
+    self.last-bytes = bw.storage.add-bytes(out-bytes).ref[u8].*.as[u16]
+    self.last-bytes-bits = (bw.pos & 7).low[u8]
   }
 
   fn update-size-hint(self: *encoder, available-in: size) {
@@ -322,7 +322,7 @@ ns for encoder {
     let last-copy-len = (last-command.copy-len & 0x1FFFFFF).as-size()
     let last-processed-pos = self.last-processed-pos - last-copy-len
     let max-distance = last-processed-pos.min(max-backward-distance)
-    let cmd-dist: size = self.dist-cache.[0].widen[size]
+    let cmd-dist: size = self.dist-cache.[0].as[size]
     let distance-code = last-command.restore-distance-code(self.params.dist.&).as-size()
     if distance-code < NUM-DISTANCE-SHORT-CODES or distance-code - (NUM-DISTANCE-SHORT-CODES - 1) == cmd-dist {
       if cmd-dist <= max-distance {
@@ -336,7 +336,7 @@ ns for encoder {
       }
       last-command.cmd-prefix = get-length-code(
         last-command.insert-len.as-size(),
-        ((last-command.copy-len & 0x1FFFFFF).signed() + (last-command.copy-len >> 25).signed()).unsigned().as-size(),
+        ((last-command.copy-len & 0x1FFFFFF).i() + (last-command.copy-len >> 25).i()).u().as-size(),
         (last-command.dist-prefix & 0x3FF) == 0)
     }
   }
@@ -354,7 +354,7 @@ ns for encoder {
       self.restore-dist-cache()
       return store-uncompressed-meta-block(is-last, data, last-flush-pos, mask, bytes, bw)
     }
-    let last-bytes = bw.storage.ref[u8].*.widen[u16] | (bw.storage.add-bytes(1).ref[u8].*.widen[u16] << 8)
+    let last-bytes = bw.storage.ref[u8].*.as[u16] | (bw.storage.add-bytes(1).ref[u8].*.as[u16] << 8)
     let last-bytes-bits = bw.pos
     let out = if params.quality <= MAX-QUALITY-FOR-STATIC-ENTROPY-CODES {
       store-meta-block-fast(data, last-flush-pos, bytes, mask, is-last, params, commands, bw)
@@ -383,8 +383,8 @@ ns for encoder {
     }
     if bytes + 4 < (out.pos >> 3) {
       self.restore-dist-cache()
-      out.storage.ref[u8].* = last-bytes.trunc[u8]
-      out.storage.add-bytes(1).ref[u8].* = (last-bytes >> 8).trunc[u8]
+      out.storage.ref[u8].* = last-bytes.low[u8]
+      out.storage.add-bytes(1).ref[u8].* = (last-bytes >> 8).low[u8]
       let rewound = out | .{ pos = last-bytes-bits }
       return store-uncompressed-meta-block(is-last, data, last-flush-pos, mask, bytes, rewound)
     }
@@ -397,17 +397,17 @@ ns for encoder {
 
   fn encode-data(self: *encoder, is-last: bool, force-flush: bool, out: *list[u8]) {
     let delta = self.input-pos - self.last-processed-pos
-    let bytes = delta.trunc[u32]
+    let bytes = delta.low[u32]
     let wrapped-last-processed-pos = wrap-position(self.last-processed-pos)
     let data = self.ringbuffer.buffer
     let mask = self.ringbuffer.mask
     if delta == 0 {
       if data is null {
         if is-last {
-          self.last-bytes = self.last-bytes | (3u16 << self.last-bytes-bits.widen[u32])
+          self.last-bytes = self.last-bytes | (3u16 << self.last-bytes-bits)
           self.last-bytes-bits = self.last-bytes-bits + 2
-          out.push(self.last-bytes.trunc[u8])
-          if self.last-bytes-bits > 8 out.push((self.last-bytes >> 8).trunc[u8])
+          out.push(self.last-bytes.low[u8])
+          if self.last-bytes-bits > 8 out.push((self.last-bytes >> 8).low[u8])
           self.last-bytes = 0
           self.last-bytes-bits = 0
         }
@@ -476,8 +476,8 @@ ns for encoder {
     let metablock-size = self.input-pos - self.last-flush-pos
     let bw = mem/with-arena(self.scratch, {
       let storage = buffer/allocate[u8](2 * metablock-size + 503 + 8)
-      storage.index-unchecked(0).* = self.last-bytes.trunc[u8]
-      storage.index-unchecked(1).* = (self.last-bytes >> 8).trunc[u8]
+      storage.index-unchecked(0).* = self.last-bytes.low[u8]
+      storage.index-unchecked(1).* = (self.last-bytes >> 8).low[u8]
       let bw: bit-writer = .{ storage = storage.data-ptr(), pos = self.last-bytes-bits }
       self.write-meta-block-internal(data, mask, self.last-flush-pos, metablock-size, is-last, literal-context-mode, bw)
     })
@@ -486,10 +486,10 @@ ns for encoder {
     self.last-flush-pos = self.input-pos
     if self.update-last-processed-pos() { h.reset() }
     if self.last-flush-pos > 0 {
-      self.prev-byte = data.add-bytes((self.last-flush-pos.trunc[u32] - 1).as-size() & mask).ref[u8].*
+      self.prev-byte = data.add-bytes((self.last-flush-pos.low[u32] - 1).as-size() & mask).ref[u8].*
     }
     if self.last-flush-pos > 1 {
-      self.prev-byte2 = data.add-bytes((self.last-flush-pos.trunc[u32] - 2).as-size() & mask).ref[u8].*
+      self.prev-byte2 = data.add-bytes((self.last-flush-pos.low[u32] - 2).as-size() & mask).ref[u8].*
     }
     self.commands.clear()
     self.num-literals = 0
@@ -539,14 +539,14 @@ ns for encoder {
       self.encode-data(false, true, out)
     }
     if self.last-bytes-bits == 0 return
-    let seal = self.last-bytes.widen[u32] | (0x6u32 << self.last-bytes-bits.widen[u32])
+    let seal = self.last-bytes.as[u32] | (0x6u32 << self.last-bytes-bits)
     let seal-bits = self.last-bytes-bits + 6
     self.last-bytes = 0
     self.last-bytes-bits = 0
     let n = (seal-bits + 7) >> 3
     let i: size = 0
     while i < n {
-      out.push((seal >> (8 * i.trunc[u32])).trunc[u8])
+      out.push((seal >> (8 * i)).low[u8])
       i = i + 1
     }
   }

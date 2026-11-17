@@ -107,7 +107,7 @@ fn start(args: span[string]): result[string, string] {
     index,
     source_filename = args.in-path.to-c(),
     command_line_args = clang-args-c-strs.data-ptr(),
-    command_line_args_len = clang-args-c-strs.len().trunc[i32],
+    command_line_args_len = clang-args-c-strs.len().low[i32],
     null(), 0,
     clang/tu-flag/DetailedPreprocessingRecord.bit-or(clang/tu-flag/SkipFunctionBodies), unit.&
   )
@@ -117,7 +117,7 @@ fn start(args: span[string]): result[string, string] {
 
   let num-diagnostics = clang/getNumDiagnostics(unit)
   for 0.until(num-diagnostics) {
-    let d = clang/getDiagnostic(unit, it.trunc[u32])
+    let d = clang/getDiagnostic(unit, it.low[u32])
     let severity = clang/getDiagnosticSeverity(d)
     eprintln("diag: ${severity.enum-name()}")
   }
@@ -831,7 +831,7 @@ fn map-fn-type(cx-type: clang/CXType): fn-type {
   let arg-count = clang/getNumArgTypes(cx-type)
   let args = list/empty[fn-type.params.t]()
   for 0.until(arg-count) {
-    let arg-cx-type = clang/getArgType(cx-type, it.trunc[u32])
+    let arg-cx-type = clang/getArgType(cx-type, it.low[u32])
     let arg-type = map-type-ext(arg-cx-type, :fn-param)
     let name: ?string = :none
     args.push(.{ name, type = arg-type })
@@ -898,7 +898,7 @@ fn map-type-ext(cx-type: clang/CXType, c-context: either { default, fn-param }):
         "uintptr_t" -> :k1 "ptr",
         "intptr_t"  -> :k1 "ptr",
         "ptrdiff_t" -> :k1 "size",
-        "size_t"    -> :k1 "usize",
+        "size_t"    -> :k1 "size",
         "ssize_t"   -> :k1 "size",
         "wchar_t"   -> :k1 "i32",
         "va_list"   -> :k1 "ptr",

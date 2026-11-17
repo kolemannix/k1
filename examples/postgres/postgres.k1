@@ -85,13 +85,13 @@ ns for query-result {
   }
 
   fn column-name(self: query-result, column: size): string {
-    let c-name = pg/field-name(self.raw, column.trunc[core/c-int])
+    let c-name = pg/field-name(self.raw, column.low[core/c-int])
     c-string-or-default(c-name, "<unnamed>")
   }
 
   fn value(self: query-result, row: size, column: size): ?string {
-    let row-c = row.trunc[core/c-int]
-    let col-c = column.trunc[core/c-int]
+    let row-c = row.low[core/c-int]
+    let col-c = column.low[core/c-int]
     if pg/is-null(self.raw, row-c, col-c) != 0 {
       return :none
     }

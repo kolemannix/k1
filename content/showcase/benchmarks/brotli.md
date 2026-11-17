@@ -176,7 +176,7 @@ returns `{ bw, literal-ratio }`.
 ```k1 path=examples/brotli/bits.k1
   fn(inline) write-bits(self: bit-writer, n-bits: size, bits: u64): bit-writer {
     let p = self.storage.add-bytes(self.pos >> 3)
-    store64-le(p, p.ref[u8].*.widen[u64] | (bits << (self.pos & 7).trunc[u32]))
+    store64-le(p, p.ref[u8].*.as[u64] | (bits << (self.pos & 7)))
     self | .{ pos = self.pos + n-bits }
   }
 ```
@@ -187,7 +187,7 @@ fn(inline) emit-literals(input: ptr, len: size, depth: buffer[u8], bits: buffer[
   let j: size = 0
   while j < len {
     let lit = input.add-bytes(j).ref[u8].*
-    bw = bw.write-bits(depth.index-unchecked(lit).*.widen[size], bits.index-unchecked(lit).*.widen[u64])
+    bw = bw.write-bits(depth.index-unchecked(lit).*.as[size], bits.index-unchecked(lit).*.as[u64])
     j = j + 1
   }
   bw

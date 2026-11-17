@@ -28,7 +28,7 @@ type(alias) fnp-takes-u64 = *fn(u64) -> u64
 type(alias) fnp-takes-f64 = *fn(f64) -> u64
 
 fn takes-ptr(p: ptr): u64 { p.to-uint() }
-fn takes-u8ref(r: *u8): u64 { (r.*).widen[u64] }
+fn takes-u8ref(r: *u8): u64 { (r.*).as[u64] }
 fn takes-u64(x: u64): u64 { x }
 fn takes-wrapper(w: *wrapper): u32 { (w.*).base.tag }
 fn is-null-ref(o: optref[small]): bool { o.is-null() }

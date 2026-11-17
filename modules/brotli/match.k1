@@ -14,7 +14,7 @@ let k-dictionary-offsets-by-length: array[u32, 32] = [
   104704, 106752, 108928, 113536, 115968, 118528, 119872, 121280, 122016, 122784, 122784, 122784, 122784, 122784, 122784, 122784,
 ]
 
-fn(inline) hash32(p: ptr, bits: u32): size { ((load32-le(p) * K-HASH-MUL32) >> (32 - bits)).as-size() }
+fn(inline) hash32(p: ptr, bits: size): size { ((load32-le(p) * K-HASH-MUL32) >> (32 - bits)).as-size() }
 
 fn(inline) dictionary-word(len: size, word-idx: size): ptr {
   k-dictionary-data.&.as-buffer().data-ptr().add-bytes(k-dictionary-offsets-by-length.[len].as-size() + len * word-idx)
@@ -46,14 +46,14 @@ fn prepare-distance-cache(distance-cache: buffer[i32], num-distances: size) {
 }
 
 fn(inline) backward-reference-score(copy-length: size, backward-reference-offset: size): u32 {
-  SCORE-BASE + LITERAL-BYTE-SCORE * copy-length.trunc[u32] -
-    DISTANCE-BIT-PENALTY * log2-floor-nonzero(backward-reference-offset.unsigned()).trunc[u32]
+  SCORE-BASE + LITERAL-BYTE-SCORE * copy-length.low[u32] -
+    DISTANCE-BIT-PENALTY * log2-floor-nonzero(backward-reference-offset).low[u32]
 }
 
 fn(inline) backward-reference-score-using-last-distance(copy-length: size): u32 {
-  LITERAL-BYTE-SCORE * copy-length.trunc[u32] + SCORE-BASE + 15
+  LITERAL-BYTE-SCORE * copy-length.low[u32] + SCORE-BASE + 15
 }
 
 fn(inline) backward-reference-penalty-using-last-distance(distance-short-code: size): u32 {
-  39 + (((0x1CA10: u32) >> (distance-short-code & 0xE).trunc[u32]) & 0xE)
+  39 + (((0x1CA10: u32) >> (distance-short-code & 0xE)) & 0xE)
 }

@@ -26,7 +26,7 @@ SIZED = ["u32", "u64"]
 
 
 def widen(t: str) -> str:
-    return "" if t == "u64" else ".widen[u64]"
+    return "" if t == "u64" else ".as[u64]"
 
 
 def lib() -> str:
@@ -162,7 +162,7 @@ def unit(i: int) -> str:
   }}
 
   fn line-cost(line: item): u64 {{
-    let gross = line.unit-price * line.qty.widen[u64]
+    let gross = line.unit-price * line.qty.as[u64]
     let disc = line.discount ? 0
     let cut = if line.note is :some(_) 1: u64 else 0
     if disc + cut >= gross 0: u64 else gross - disc - cut
@@ -218,7 +218,7 @@ def unit(i: int) -> str:
     for k in (0: u64).until(count) {{
       lines.push(.{{
         sku = seed * 31 + k,
-        qty = (k + 1).trunc[u32],
+        qty = (k + 1).low[u32],
         unit-price = 100 + k * 7,
         discount = if k % 2 == 0 :some(k * 3) else :none,
         note = :none
@@ -241,7 +241,7 @@ def unit(i: int) -> str:
       id = seed,
       balance = due,
       held = 0,
-      tier = (seed % 4).trunc[u8],
+      tier = (seed % 4).low[u8],
       closed = false,
       last-event = :none
     }}
@@ -313,7 +313,7 @@ def unit(i: int) -> str:
     verdict + k
   }}
 
-  impl lib/sz for item {{ fn sz(self): u64 {{ self.sku % 1000 + self.qty.widen[u64] }} }}
+  impl lib/sz for item {{ fn sz(self): u64 {{ self.sku % 1000 + self.qty.as[u64] }} }}
   impl lib/sz for sample {{ fn sz(self): u64 {{ self.at + self.value }} }}
   impl lib/enc[o = u64] for item {{ fn enc(self): u64 {{ self.sku * 31 + self.unit-price }} }}
 

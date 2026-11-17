@@ -1,29 +1,46 @@
-fn write-json-of(code: *string-builder, name: string, type-id: types/type-id) {
+fn fnv1a(seed: u32, s: string): u32 {
+  let h = seed
+  for b in s.span-bytes() {
+    h = (h ^ b.as[u32]) * 16777619
+  }
+  h
+}
+
+fn write-json-template(code: *string-builder, scope: string, name: string, type-id: types/type-id) {
   if type-id == types/id[string] {
-    code.writeln(`w.write-char('"'); w.write($name); w.write-char('"');`)
+    code.write(`\\"\${$scope$name}\\"`)
     return
   }
   if type-id.schema() is {
     :struct s -> {
-      code.writeln("w.write-char('{');")
-      code.join-with(s.fields, "w.write(\",\");\n", fn[code, name] f. {
-        code.writeln(`w.write("\"${f.name}\":");`)
-        write-json-of(code, `$name.${f.name}`, f.type-id)
-      })
-      code.writeln("w.write-char('}');")
+      let h: u32 = 2166136261
+      for f in s.fields {
+        let kind = if f.type-id == types/id[string] ":str," else if f.type-id == types/id[bool] ":bool," else ":int,"
+        h = h || fnv1a(f.name) || fnv1a(kind)
+      }
+      code.write(`{\\"schema\\":$h`)
+      let fields = `$scope$name.`
+      for f in s.fields {
+        code.write(`,\\"${f.name}\\":`)
+        write-json-template(code, fields, f.name, f.type-id)
+      }
+      code.write-char('}')
     },
-    :bool -> code.writeln(`w.write(if $name "true": string else "false");`),
-    :int _ -> code.writeln(`$name.print-to(w);`),
+    :bool or :int _ -> code.write(`\${$scope$name}`),
     _ -> crash("unsupported type ${type-id.name()}")
   }
 }
 
+fn write-json-code(type-id: types/type-id): code {
+  let code = string-builder/new()
+  code.write("w.write(\"")
+  write-json-template(code.&, "", "t", type-id)
+  code.write("\")")
+  code/from-string(code.build())
+}
+
 fn write-json[t, w: writer](w: w, t: t) {
-  #meta {
-    let code = string-builder/new()
-    write-json-of(code.&, "t", types/id[t]())
-    code/from-string(code.build())
-  }
+  #meta write-json-code(types/id[t])
 }
 
 fn to-json[t](t: t): string {

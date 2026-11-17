@@ -72,10 +72,10 @@ fn end_profile_block(block: profile-block) {
 
 // Print timing results for a single anchor
 fn print_time_elapsed(total_tsc_elapsed: u64, anchor: *profile-anchor) {
-    let percent = 100.0: f64 * anchor.tsc_elapsed_exclusive.as[f64] / total_tsc_elapsed.as[f64]
+    let percent = 100.0: f64 * anchor.tsc_elapsed_exclusive.to-f64() / total_tsc_elapsed.to-f64()
     print("  ${anchor.label}[${anchor.hit_count}]: $percent% ")
     if anchor.tsc_elapsed_inclusive != anchor.tsc_elapsed_exclusive {
-      let percent_with_children = 100.0: f64 * anchor.tsc_elapsed_inclusive.as[f64] / total_tsc_elapsed.as[f64]
+      let percent_with_children = 100.0: f64 * anchor.tsc_elapsed_inclusive.to-f64() / total_tsc_elapsed.to-f64()
       print("($percent_with_children% w/children) ")
     }
     println("(${anchor.tsc_elapsed_exclusive} 'cycles')")

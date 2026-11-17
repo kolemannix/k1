@@ -6,16 +6,16 @@ fn compute-distance-code(distance: size, max-distance: size, dist-cache: buffer[
     let distance-plus-3 = distance + 3
     let cache0 = dist-cache.index-unchecked(0).*.as-size()
     let cache1 = dist-cache.index-unchecked(1).*.as-size()
-    let offset0 = (distance-plus-3 - cache0).unsigned()
-    let offset1 = (distance-plus-3 - cache1).unsigned()
+    let offset0 = distance-plus-3 - cache0
+    let offset1 = distance-plus-3 - cache1
     if distance == cache0 {
       return 0
     } else if distance == cache1 {
       return 1
-    } else if offset0 < 7 {
-      return (0x9750468 >> (offset0 * 4).trunc[u32]) & 0xF
-    } else if offset1 < 7 {
-      return (0xFDB1ACE >> (offset1 * 4).trunc[u32]) & 0xF
+    } else if offset0.lt-unsigned(7) {
+      return (0x9750468 >> (offset0 * 4)) & 0xF
+    } else if offset1.lt-unsigned(7) {
+      return (0xFDB1ACE >> (offset1 * 4)) & 0xF
     } else if distance == dist-cache.index-unchecked(2).*.as-size() {
       return 2
     } else if distance == dist-cache.index-unchecked(3).*.as-size() {
@@ -75,7 +75,7 @@ fn create-backward-references(num-bytes: size, position: size, ringbuffer: ptr, 
         dist-cache.index-unchecked(3).* = dist-cache.index-unchecked(2).*
         dist-cache.index-unchecked(2).* = dist-cache.index-unchecked(1).*
         dist-cache.index-unchecked(1).* = dist-cache.index-unchecked(0).*
-        dist-cache.index-unchecked(0).* = sr.distance.trunc[i32]
+        dist-cache.index-unchecked(0).* = sr.distance.low[i32]
         hasher.prepare-distance-cache(dist-cache)
       }
       commands.push(command/new(params.dist.&, insert-length, sr.len, sr.len-code-delta, distance-code))

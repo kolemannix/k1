@@ -12,7 +12,7 @@ ns for spill-string {
   }
 
   fn(inline) as-string[n](self: *spill-string[n]): string {
-    string/wrap-bytes(self.bytes.&.as-span())
+    string/wrap-bytes(self.bytes.as-span())
   }
 
   fn is-spilled[n](self: *spill-string[n]): bool { self.bytes.is-spilled() }
@@ -56,9 +56,8 @@ impl[n: static size] equals for spill-string[n] {
 }
 
 impl[n: static size] hash for spill-string[n] {
-  fn hash(self: spill-string[n]): u64 {
-    let s = self
-    s.&.as-string().hash()
+  fn hash[h: hasher](self: spill-string[n], *h) {
+    self.as-string().hash(h)
   }
 }
 

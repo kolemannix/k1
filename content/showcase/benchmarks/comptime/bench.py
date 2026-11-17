@@ -8,6 +8,7 @@ import os
 import pathlib
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import sys
@@ -22,8 +23,8 @@ TIMEOUT = 300
 BUDGET = 45
 STACK_KB = 65520
 CONSTEXPR_STEPS = "2000000000"
-CXX26 = os.environ.get("CXX_P2996", str(ROOT.parents[3] / "llvm" / "clang-p2996" / "cxx"))
-HAVE_CXX26 = os.access(CXX26, os.X_OK)
+CXX26 = ["g++-16", "-std=c++26", "-freflection"]
+HAVE_CXX26 = shutil.which(CXX26[0]) is not None
 
 SIZES = {
     "sieve": [10_000, 100_000, 1_000_000],
@@ -35,9 +36,9 @@ LANGS = {
     "sieve": ["k1", "zig", "cpp", "rust"],
     "crc32": ["k1", "zig", "cpp", "rust"],
     "strbuild": ["k1", "zig", "cpp", "rust"],
-    "reflect-serialize": ["k1", "zig", "cpp", *(["cpp26"] if HAVE_CXX26 else []), "rust"],
+    "reflect-serialize": ["k1", "zig", *(["cpp26"] if HAVE_CXX26 else []), "rust"],
 }
-LANG_NAME = {"k1": "k1", "zig": "Zig", "cpp": "C++", "cpp26": "C++26 (P2996)", "rust": "Rust"}
+LANG_NAME = {"k1": "k1", "zig": "Zig", "cpp": "C++", "cpp26": "C++26 reflection", "rust": "Rust"}
 IR_ROWS = ("optimize", "reuse", "delete", "deduce", "promote", "inline")
 
 
@@ -100,14 +101,11 @@ def make_cell(bench, lang, size, comptime):
         cell["prepare"] = f"rm -rf {d / 'zc'}"
         cell["exe"] = d / name
     elif lang == "cpp":
-        steps = [] if reflect else [f"-fconstexpr-steps={CONSTEXPR_STEPS}"]
-        cell["build"] = ["clang++", "-std=c++23", "-O0", *steps, str(f), "-o", str(d / name)]
-        if reflect:
-            cell["timed"] = ["clang++", "-std=c++23", "-fsyntax-only", str(f)]
+        cell["build"] = ["clang++", "-std=c++23", "-O0", f"-fconstexpr-steps={CONSTEXPR_STEPS}", str(f), "-o", str(d / name)]
         cell["exe"] = d / name
     elif lang == "cpp26":
-        cell["build"] = [CXX26, "-O0", str(f), "-o", str(d / name)]
-        cell["timed"] = [CXX26, "-fsyntax-only", str(f)]
+        cell["build"] = [*CXX26, "-O0", str(f), "-o", str(d / name)]
+        cell["timed"] = [*CXX26, "-fsyntax-only", str(f)]
         cell["exe"] = d / name
     elif lang == "rust" and reflect:
         target = GEN / "cargo-target"
@@ -298,7 +296,7 @@ def machine_info():
         "k1": tool_version(["k1", "--version"]),
         "zig": "zig " + tool_version(["zig", "version"]),
         "clang": tool_version(["clang++", "--version"]),
-        "clang26": tool_version([CXX26, "--version"]) if HAVE_CXX26 else "missing (set CXX_P2996 to a clang-p2996 wrapper)",
+        "gcc": tool_version([CXX26[0], "--version"]) if HAVE_CXX26 else "missing (g++-16)",
         "rustc": tool_version(["rustc", "--version"]),
         "cargo": tool_version(["cargo", "--version"]),
         "hyperfine": tool_version(["hyperfine", "--version"]),
@@ -349,7 +347,7 @@ def render(results, expectations, info, load):
                f"Load average at start {load[0]:.1f}, at end {load[1]:.1f} (a busy machine inflates every number).\n")
     out.append("## Machine and toolchains\n")
     out.append(f"- {info['cpu']}, {info['cores']} cores, {info['memory_gb']} GB, {info['os']}")
-    for k in ["k1", "zig", "clang", "clang26", "rustc", "cargo", "hyperfine"]:
+    for k in ["k1", "zig", "clang", "gcc", "rustc", "cargo", "hyperfine"]:
         out.append(f"- {info[k]}")
     out.append("")
     out.append("## Methodology\n")
@@ -367,12 +365,11 @@ def render(results, expectations, info, load):
   C++ `clang++ -std=c++23 -O0 -fconstexpr-steps={CONSTEXPR_STEPS}`; Rust `rustc -C opt-level=0`
   (`#![allow(long_running_const_eval)]` in the source, `--cfg comptime` selects the comptime variant);
   Rust reflect `cargo build` with `CARGO_INCREMENTAL=0`, dependencies prebuilt and `src/main.rs` touched before every run;
-  C++26 the Bloomberg clang-p2996 fork (`$CXX_P2996`, a wrapper baking
-  in `-std=c++26 -freflection-latest -stdlib=libc++`) at `-O0`.
+  C++26 `g++-16 -std=c++26 -freflection -O0`.
 - reflect-serialize front-end commands: k1 `k1 --no-cache check <file>` (typechecks every
   requested generic instance, which runs the serializers' `#meta` and the VM; no IR is built); Zig `zig build-exe -O Debug -fno-emit-bin` with the local cache
   dir deleted before every run (semantic analysis of everything reachable from `main`, including the
-  `inline for` expansions, no codegen); C++ and C++26 `-fsyntax-only` (parsing, semantic analysis and
+  `inline for` expansions, no codegen); C++26 `-fsyntax-only` (parsing, semantic analysis and
   template instantiation); Rust `cargo check` with `CARGO_INCREMENTAL=0`, dependencies prebuilt and
   `src/main.rs` touched before every run (macro expansion, type checking, MIR building and borrow
   checking, no codegen). Each cell's front-end command also ran once untimed to confirm it succeeds.
@@ -517,13 +514,13 @@ DESCRIPTIONS = {
                 "Work = numbers formatted.",
     "reflect-serialize": "N generated struct types with 8 fields (a rotating mix of i32, u8, bool, string, i64, u16, u32, "
                          "i8) and a JSON serializer derived per type: k1 `#meta` walking `types/schema` and emitting the "
-                         "writer code, Zig `@typeInfo` with `inline for`, C++ a generator-written `members<T>` "
-                         "specialization per struct whose `visit` calls a callback with each field name and value (clang 21 "
-                         "has no reflection, so this is the manual alternative; a class-template specialization rather than "
-                         "one `visit_members` overload per struct, which clang resolves against all N candidates at every "
-                         "call and so costs quadratic time: 96 s at N=4000 against 7 s), C++26 P2996 reflection "
-                         "(`nonstatic_data_members_of` + `template for`, no per-struct list) on the clang-p2996 fork, "
-                         "Rust `serde` derive through proc macros (cargo, dependencies prebuilt). Each program serializes "
+                         "writer code, Zig `@typeInfo` with `inline for`, C++26 reflection "
+                         "(`nonstatic_data_members_of` + `template for`) on GCC 16, "
+                         "Rust `serde` derive through proc macros (cargo, dependencies prebuilt). Each derivation also computes "
+                         "a schema fingerprint at compile time, FNV-1a over every `name:kind,` of the type's fields, and "
+                         "the serializer writes it as a leading `\"schema\"` key (C++26 "
+                         "a `consteval` walk of the members, Rust a `macro_rules!` wrapper with a `const` item, since serde's "
+                         "derive has no hook). Each program serializes "
                          "one value per type and prints the total output length; the full build that produces it is not "
                          "timed. Front end only (see Methodology): N=0 is the baseline; per type = (t(N) - t(0)) / N; the "
                          "slope column is (t(N) - t(previous N)) / (N - previous N), so a slope that rises with N is a "

@@ -1,20 +1,21 @@
-let schema: dbx/schema = .{ scripts = [`
+//errmsg: can be null
+use dbx/query
+
+let schema: dbx/schema = dbx/make-schema("dbx_query_wrong", [`
   create table plan (
     id      integer primary key,
     name    text not null,
     is_main integer not null,
     note    text
-  ) strict;`] }
-$dbx/define-sql-macros(schema)
+  ) strict;`]) | .{ column-types = [.{ column = "plan.is_main", type-id = types/id[bool] }] }
+$dbx/define([schema])
 
-type plan = { id: i64, name: string, is-main: bool, note: string }
+type plan-line = { id: i64, name: string, is-main: bool, note: string }
 
 fn main(): i32 {
-  let c: dbx/conn = .0
-  let conn = c.&
-  conn.open(":memory:", busy-timeout-ms = 0).!
-  for schema.scripts { conn.exec-script(it).! }
+  let conn = dbx/open-memory().!
+  migrate-db(conn).!
 
-  println(query[plan]("-- list-plans\nselect id, name, is_main, note from plan order by id").list(conn.as-reader()).!.len())
+  println(query[plan-line]("select id, name, is_main, note from plan order by id").list(conn).!.len())
   0
 }

@@ -85,7 +85,7 @@ ns vector {
   // Lane index of the first true (all-ones) lane of a lane-mask, or -1
   fn first-true-lane[t, n: static size](v: vector[t, n]): i64 {
     let mask = v.to-mask()
-    if mask == 0 { -1 } else { mask.trailing-zeros().signed() }
+    if mask == 0 { -1 } else { mask.trailing-zeros() }
   }
 }
 
@@ -98,8 +98,8 @@ impl[t: bitwise, n: static size] bitwise for vector[t, n] {
   fn(builtin) bit-and(self, other: self): self
   fn(builtin) bit-or(self, other: self): self
   fn(builtin) xor(self, other: self): self
-  fn(builtin) shift-left(self, count: u32): self
-  fn(builtin) shift-right(self, count: u32): self
+  fn(builtin) shift-left(self, count: i64): self
+  fn(builtin) shift-right(self, count: i64): self
 }
 
 impl[t, n: static size] equals for vector[t, n] {

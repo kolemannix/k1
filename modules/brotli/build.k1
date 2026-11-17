@@ -31,7 +31,7 @@ ns tablegen {
     else if decl == "BROTLI_ENC_STATIC_DICT_LUT_NUM_ITEMS" 31705
     else if decl == "BROTLI_CODE_LENGTH_CODES" 18
     else if decl == "1 << BROTLI_REVERSE_BITS_MAX" 256
-    else u64/from-string(decl).!.signed()
+    else u64/from-string(decl).!.i()
   }
 
   fn transform-type(name: string): u64 {
@@ -50,7 +50,7 @@ ns tablegen {
       transform-type(token.drop(17))
     } else if token.starts-with("0x") {
       let v: u64 = 0
-      for c in token.drop(2) { v = (v << 4) | c.to-ascii-hex-digit().!.widen[u64] }
+      for c in token.drop(2) { v = (v << 4) | c.to-ascii-hex-digit().!.as[u64] }
       v
     } else {
       u64/from-string(token).!
@@ -121,15 +121,15 @@ ns tablegen {
         let c = src.[i]
         i = i + 1
         if c != '\\' {
-          values.push(c.u8().widen[u64])
+          values.push(c.u8().as[u64])
         } else {
           let e = src.[i]
           i = i + 1
           if is-octal-digit(e) {
-            let v = (e.u8() - '0'.u8()).widen[u64]
+            let v = (e.u8() - '0'.u8()).as[u64]
             let digits: size = 1
             while digits < 3 and is-octal-digit(src.[i]) {
-              v = v * 8 + (src.[i].u8() - '0'.u8()).widen[u64]
+              v = v * 8 + (src.[i].u8() - '0'.u8()).as[u64]
               i = i + 1
               digits = digits + 1
             }
@@ -137,14 +137,14 @@ ns tablegen {
           } else if e == 'x' {
             let v: u64 = 0
             while src.[i].to-ascii-hex-digit() is :some d {
-              v = v * 16 + d.widen[u64]
+              v = v * 16 + d.as[u64]
               i = i + 1
             }
             values.push(v)
           } else {
             values.push(if e is {
               'n' -> 10, 't' -> 9, 'r' -> 13,
-              _ -> e.u8().widen[u64],
+              _ -> e.u8().as[u64],
             })
           }
         }
@@ -198,7 +198,7 @@ ns tablegen {
 
   fn emit-packed-table(
     w: *string-builder, src: string, c-name: string, k1-name: string, elem-type: string,
-    group: size, fields: span[{ index: size, shift: u32 }], per-line: size,
+    group: size, fields: span[{ index: size, shift: size }], per-line: size,
   ) {
     let values = int-values(src, c-name, group)
     let count = values.len() / group
@@ -220,7 +220,7 @@ ns tablegen {
     let values: list[f64] = list/empty()
     for t in parsed.tokens {
       let lit = if t.ends-with("f") t.drop-right(1) else t
-      values.push(f64/from-string(lit).!.trunc[f32].widen[f64])
+      values.push(f64/from-string(lit).!.to-f32().to-f64())
     }
     assert-equals(values.len(), parsed.declared)
 

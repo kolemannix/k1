@@ -11,7 +11,7 @@ fn ensure-frame(width: i32, height: i32) {
 
 fn(export("k1_frame")) frame-address(width: i32, height: i32): u32 {
   ensure-frame(width, height)
-  frame.data-ptr().to-size().trunc[u32]
+  frame.data-ptr().to-size().low[u32]
 }
 
 fn(export("k1_render")) render-into-frame(

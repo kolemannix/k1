@@ -4,19 +4,19 @@ let BOM: span[u8] = [0xEF, 0xBB, 0xBF]
 
 fn write-codepoint[w: writer](w: w, cp: u32) {
   if cp < 0x80 {
-    w.write-byte(cp.trunc[u8])
+    w.write-byte(cp.low[u8])
   } else if cp < 0x800 {
-    w.write-byte((0xC0 + (cp >> 6)).trunc[u8])
-    w.write-byte((0x80 + cp.bit-and(0x3F)).trunc[u8])
+    w.write-byte((0xC0 + (cp >> 6)).low[u8])
+    w.write-byte((0x80 + cp.bit-and(0x3F)).low[u8])
   } else if cp < 0x10000 {
-    w.write-byte((0xE0 + (cp >> 12)).trunc[u8])
-    w.write-byte((0x80 + (cp >> 6).bit-and(0x3F)).trunc[u8])
-    w.write-byte((0x80 + cp.bit-and(0x3F)).trunc[u8])
+    w.write-byte((0xE0 + (cp >> 12)).low[u8])
+    w.write-byte((0x80 + (cp >> 6).bit-and(0x3F)).low[u8])
+    w.write-byte((0x80 + cp.bit-and(0x3F)).low[u8])
   } else {
-    w.write-byte((0xF0 + (cp >> 18)).trunc[u8])
-    w.write-byte((0x80 + (cp >> 12).bit-and(0x3F)).trunc[u8])
-    w.write-byte((0x80 + (cp >> 6).bit-and(0x3F)).trunc[u8])
-    w.write-byte((0x80 + cp.bit-and(0x3F)).trunc[u8])
+    w.write-byte((0xF0 + (cp >> 18)).low[u8])
+    w.write-byte((0x80 + (cp >> 12).bit-and(0x3F)).low[u8])
+    w.write-byte((0x80 + (cp >> 6).bit-and(0x3F)).low[u8])
+    w.write-byte((0x80 + cp.bit-and(0x3F)).low[u8])
   }
 }
 
@@ -32,7 +32,7 @@ impl iterator[item = u32] for code-point-iterator {
     if self.pos >= n return :none
     let lead = self.bytes.[self.pos]
     self.pos = self.pos + 1
-    if lead < 0x80 return :some lead.widen[u32]
+    if lead < 0x80 return :some lead.as[u32]
     let need: u8 = 0
     let lo: u8 = 0x80
     let hi: u8 = 0xBF
@@ -44,12 +44,12 @@ impl iterator[item = u32] for code-point-iterator {
     else if lead >= 0xF1 and lead <= 0xF3 { need = 3 }
     else if lead == 0xF4 { need = 3; hi = 0x8F }
     else return :some 0xFFFD
-    let cp: u32 = lead.bit-and(0x3F >> need).widen[u32]
+    let cp: u32 = lead.bit-and(0x3F >> need).as[u32]
     for 0.until(need) {
       if self.pos >= n return :some 0xFFFD
       let b = self.bytes.[self.pos]
       if b < lo or b > hi return :some 0xFFFD
-      cp = (cp << 6) + b.bit-and(0x3F).widen[u32]
+      cp = (cp << 6) + b.bit-and(0x3F).as[u32]
       self.pos = self.pos + 1
       lo = 0x80
       hi = 0xBF

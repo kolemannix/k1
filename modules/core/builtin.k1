@@ -42,8 +42,6 @@ type string = { span: span[char] }
 type opt[t] = either { none, some(t) }
 
 
-type(alias) c-sizet  = u64
-type(alias) c-ssizet = i64
 type(alias) c-int    = i32
 type(alias) c-long   = i64
 type c-varargs = {}
@@ -330,7 +328,7 @@ ability print {
 }
 
 ability print-precise {
-  fn print-precise-to[w: writer](self, w, precision: u32)
+  fn print-precise-to[w: writer](self, w, precision: i64)
 }
 // where formatter is a concrete type that always writes into a string-builder?
 // or generic over w
@@ -347,17 +345,17 @@ ability bitwise {
   fn bit-or(self, other: self): self
   fn xor(self, other: self): self
 
-  fn shift-left(self, count: u32): self
-  fn shift-right(self, count: u32): self
+  fn shift-left(self, count: i64): self
+  fn shift-right(self, count: i64): self
 }
 
 ability int-bits {
-  fn trailing-zeros(self): self
-  fn leading-zeros(self): self
-  fn count-ones(self): self
+  fn trailing-zeros(self): i64
+  fn leading-zeros(self): i64
+  fn count-ones(self): i64
   fn swap-bytes(self): self
-  fn rotate-left(self, count: u32): self
-  fn rotate-right(self, count: u32): self
+  fn rotate-left(self, count: i64): self
+  fn rotate-right(self, count: i64): self
 }
 
 ability add { fn add(self, rhs: self): self }
@@ -849,7 +847,7 @@ impl print for string {
 }
 
 impl print-precise for string {
-  fn print-precise-to[w: writer](self: string, w, precision: u32) {
+  fn print-precise-to[w: writer](self: string, w, precision: i64) {
     w.write-bytes(fmt/chars-prefix(self.span-bytes(), precision))
   }
 }
@@ -1238,7 +1236,7 @@ fn crash(context locn: k1/source-location)(msg: string): never {
     eprint(" at ")
     eprint(locn.filename)
     eprint(":")
-    core/format-uint(core/io/stderr, locn.line.widen[u64], 10)
+    core/format-uint(core/io/stderr, locn.line.as[u64], 10)
     eprint("\n")
 
     platform/process/abort()
@@ -1250,7 +1248,7 @@ fn crash-bounds(context locn: k1/source-location)(size: size, index: size, msg: 
 }
 
 fn(inline) checked-index(context locn: k1/source-location)(index: size, len: size): size {
-  if index.unsigned() >= len.unsigned() crash-bounds(len, index, "Index out of bounds")
+  if index.ge-unsigned(len) crash-bounds(len, index, "Index out of bounds")
   index
 }
 

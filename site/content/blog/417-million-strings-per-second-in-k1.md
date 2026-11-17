@@ -30,7 +30,7 @@ let DECIMAL_PAIRS: array[u16, 100] = {
   let pairs: array[u16, 100] = uninit
   for i in (0: u8).until(100) {
     let two: array[u8, 2] = [u8/to-ascii-digit(i / 10).as-u8(), u8/to-ascii-digit(i % 10).as-u8()]
-    pairs.[i.widen[size]] = mem/read-unaligned[u16](two.&.as[ptr])
+    pairs.[i.as[size]] = mem/read-unaligned[u16](two.&.as[ptr])
   }
   pairs
 }
@@ -44,7 +44,7 @@ Each pair is one 16-bit load from the table and one 16-bit store into the digit 
 ```k1
 fn(inline) _write-decimal-pair(digits: *array[u8, 64], at: size, pair: u64) {
   let dst = checked-index(at, 63)
-  mem/write-unaligned(digits.as[ptr].add-bytes(dst), DECIMAL_PAIRS.[pair.signed()])
+  mem/write-unaligned(digits.as[ptr].add-bytes(dst), DECIMAL_PAIRS.[pair.i()])
 }
 ```
 

@@ -96,10 +96,10 @@ ns platform {
     type io-result = { raw: i64 }
 
     impl try[t = size, e = i32] for io-result {
-      fn error(e: i32): io-result { .{ raw = e.widen[i64].negated() } }
+      fn error(e: i32): io-result { .{ raw = e.as[i64].negated() } }
       fn value(t: size): io-result { .{ raw = t } }
       fn is-ok(self): bool { self.raw >= 0 }
-      fn get-error(context _locn: k1/source-location)(self): i32 { self.raw.negated().trunc[i32] }
+      fn get-error(context _locn: k1/source-location)(self): i32 { self.raw.negated().low[i32] }
       fn get-value(context _locn: k1/source-location)(self): size { self.raw }
     }
 
@@ -201,7 +201,7 @@ ns platform {
         fn(extern) realloc(ptr: ptr, size: size): ptr
         fn(extern) free(ptr: ptr)
 
-        fn(extern) write(file-no: c-int, data: ptr, count: c-sizet): i64
+        fn(extern) write(file-no: c-int, data: ptr, count: size): i64
         fn(extern) isatty(fd: c-int): c-int
 
         let EINTR: c-int = 4
@@ -254,11 +254,11 @@ ns platform {
       fn free(p: ptr) { c/free(p) }
 
       fn write(file-no: i32, data: ptr, count: size): i64 {
-        let n = c/write(file-no, data, count.unsigned())
+        let n = c/write(file-no, data, count)
         while n < 0 and errno-now() == c/EINTR {
-          n = c/write(file-no, data, count.unsigned())
+          n = c/write(file-no, data, count)
         }
-        if n < 0 { 0 - errno-now().widen[i64] } else n
+        if n < 0 { 0 - errno-now().as[i64] } else n
       }
       fn is-tty(file-no: i32): bool { c/isatty(file-no) == 1 }
       fn exit(code: i32): never { c/exit(code) }
@@ -278,7 +278,7 @@ ns platform {
       type iovec = { buf: u32, len: u32 }
 
       fn a32(ptr): u32 {
-        ptr.to-size().trunc[u32]
+        ptr.to-size().low[u32]
       }
 
       let PAGE-SIZE: size = 65536
@@ -333,13 +333,13 @@ ns platform {
       }
 
       fn write(file-no: i32, data: ptr, count: size): i64 {
-        let iov: iovec = .{ buf = a32(data), len = count.trunc[u32] }
+        let iov: iovec = .{ buf = a32(data), len = count.low[u32] }
         let nwritten: u32 = 0
         let err = fd-write(file-no, a32(iov.&.as[ptr]), 1, a32(nwritten.&.as[ptr]))
         while err == EINTR {
           err = fd-write(file-no, a32(iov.&.as[ptr]), 1, a32(nwritten.&.as[ptr]))
         }
-        if err != 0 { 0 - err.widen[i64] } else nwritten.widen[i64]
+        if err != 0 { 0 - err.as[i64] } else nwritten.as[i64]
       }
 
       fn is-tty(file-no: i32): bool {

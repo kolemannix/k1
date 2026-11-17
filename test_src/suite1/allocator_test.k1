@@ -35,7 +35,7 @@ fn(test) pop-to-mark-frees-extra-chunks() {
   let m = a.mark()
   a.alloc-buffer[u64](4).fill(3)
   for i in 0.until(100) {
-    a.push(i.unsigned() + 1)
+    a.push(i.u() + 1)
   }
   assert(not a.extra-chunks.is-null())
   a.pop-to-mark(m)
@@ -47,7 +47,7 @@ fn(test) pop-to-mark-frees-extra-chunks() {
   a.alloc-buffer[u64](8).fill(4)
   let chunk-m = a.mark()
   for i in 0.until(100) {
-    a.push(i.unsigned() + 1)
+    a.push(i.u() + 1)
   }
   let inner = a.mark()
   a.push(9: u64)
@@ -86,7 +86,7 @@ fn(test) reset-and-pop-zero-memory() {
   assert-all-zero(tail)
 
   for i in 0.until(100) {
-    a.push(i.unsigned() + 1)
+    a.push(i.u() + 1)
   }
   assert(not a.extra-chunks.is-null())
   a.reset()
@@ -100,12 +100,12 @@ fn(test) growth-chains-chunks() {
   let first = a.push(1: u64)
   let ptrs = list/with-capacity-in[t = *u64](mem/tmp(), 100)
   for i in 0.until(100) {
-    ptrs.push-in(mem/tmp(), a.push(i.unsigned()))
+    ptrs.push-in(mem/tmp(), a.push(i.u()))
   }
   // Every allocation survives across chunk boundaries
   assert-equals(first.*, 1)
   for i in 0.until(100) {
-    assert-equals(ptrs.[i].*, i.unsigned())
+    assert-equals(ptrs.[i].*, i.u())
   }
   assert(not a.extra-chunks.is-null())
   assert(not a.extra-chunks.ref[core/arena-chunk].next.is-null())

@@ -23,7 +23,7 @@ type(alias) psa_status = i32
 fn(extern("mbedtls_strerror")) strerror(
   errnum: i32,
   buffer: optref[u8],
-  buflen: usize,
+  buflen: size,
 )
 type md_type = either(u32, partial) {
   MD_NONE = 0,
@@ -42,13 +42,13 @@ fn(extern("mbedtls_pk_free")) pk_free(
 fn(extern("mbedtls_pk_parse_key")) pk_parse_key(
   ctx: optref[pk_context],
   key: optref[u8],
-  keylen: usize,
+  keylen: size,
   pwd: optref[u8],
-  pwdlen: usize,
+  pwdlen: size,
 ): i32
 type asn1_buf = {
   tag: i32,
-  len: usize,
+  len: size,
   p: optref[u8],
 }
 type asn1_sequence = {
@@ -111,7 +111,7 @@ type x509_crt = {
   private_sig_md: md_type,
   private_sig_pk: pk_sigalg,
   private_unused: union {
-    number: usize,
+    number: size,
     ptr: ptr,
   },
   next: optref[x509_crt],
@@ -119,11 +119,11 @@ type x509_crt = {
 fn(extern("mbedtls_x509_crt_parse")) x509_crt_parse(
   chain: optref[x509_crt],
   buf: optref[u8],
-  buflen: usize,
+  buflen: size,
 ): i32
 fn(extern("mbedtls_x509_crt_verify_info")) x509_crt_verify_info(
   buf: optref[u8],
-  size: usize,
+  size: size,
   prefix: optref[u8],
   flags: u32,
 ): i32
@@ -136,17 +136,17 @@ fn(extern("mbedtls_x509_crt_free")) x509_crt_free(
 type(alias) ssl_send = fn(
   ptr,
   optref[u8],
-  usize
+  size
 ) -> i32
 type(alias) ssl_recv = fn(
   ptr,
   optref[u8],
-  usize
+  size
 ) -> i32
 type(alias) ssl_recv_timeout = fn(
   ptr,
   optref[u8],
-  usize,
+  size,
   u32
 ) -> i32
 type ssl_context = opaque[424, 8]
@@ -212,12 +212,12 @@ fn(extern("mbedtls_ssl_handshake")) ssl_handshake(
 fn(extern("mbedtls_ssl_read")) ssl_read(
   ssl: optref[ssl_context],
   buf: optref[u8],
-  len: usize,
+  len: size,
 ): i32
 fn(extern("mbedtls_ssl_write")) ssl_write(
   ssl: optref[ssl_context],
   buf: optref[u8],
-  len: usize,
+  len: size,
 ): i32
 fn(extern("mbedtls_ssl_close_notify")) ssl_close_notify(
   ssl: optref[ssl_context],

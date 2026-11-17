@@ -5,7 +5,7 @@ $std/simd/first-of(delims, [',', ':', '"'])
 fn lane-sum(v: vector[u8, 16]): u64 {
   let sum: u64 = 0
   for lane in 0.until(16) {
-    sum = sum + v.get-lane(lane).widen[u64]
+    sum = sum + v.get-lane(lane).as[u64]
   }
   sum
 }
@@ -78,7 +78,7 @@ fn bench(label: string, bytes: size, run: some fn (size) -> u64): u64 {
     if rep == 0 { result = r } else { assert-equals(r, result) }
     if best == 0 or nanos < best { best = nanos }
   }
-  println("$label: $result found, ${bytes.unsigned() * 1000 / best} MB/s")
+  println("$label: $result found, ${bytes.u() * 1000 / best} MB/s")
   result
 }
 

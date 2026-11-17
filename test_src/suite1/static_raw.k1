@@ -3,7 +3,7 @@ ns static_raw
 let BYTES: span[u8] = {
   let l = list/with-capacity[u8](300)
   for i in 0.until(300) {
-    l.push(i.trunc[u8])
+    l.push(i.low[u8])
   }
   l.as-span()
 }
@@ -84,7 +84,7 @@ fn(test) collection-literals() {
 fn(test) static-for-over-baked-span() {
   let total = 0
   #for BYTES {
-    total = total + it.widen[int]
+    total = total + it.as[int]
   }
   #for ZEROS { total = total + it + 1 }
   assert-equals(total, 33589)

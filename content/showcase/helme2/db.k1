@@ -1,0 +1,31 @@
+$std/deftype/string-enum(flow) { income, expense }
+$std/deftype/string-enum(growth-kind) { inherit, rate, delta, per-year }
+$std/deftype/string-enum(derivation-kind) { tuition, enrollment, item }
+
+let schema: dbx/schema = dbx/load-schema() | .{ column-types = [
+  .{ column = "item.is_group",                                 type-id = types/id[bool] },
+  .{ column = "item.growth",                                   type-id = types/id[growth-kind] },
+  .{ column = "item.growth_per_year_cents",                    type-id = types/id[span[i64]] },
+  .{ column = "item.derivation",                               type-id = types/id[derivation-kind] },
+  .{ column = "item.derivation_share_ppm",                     type-id = types/id[span[i64]] },
+  .{ column = "item.derivation_enrollment_per_student_cents",  type-id = types/id[span[i64]] },
+  .{ column = "item.is_sensitive",                             type-id = types/id[bool] },
+  .{ column = "category.flow",                                 type-id = types/id[flow] },
+  .{ column = "budget_edit.is_undone",                         type-id = types/id[bool] },
+  .{ column = "budget_edit_change.is_inverse",                 type-id = types/id[bool] },
+  .{ column = "budget_edit_change.kind",                       type-id = types/id[change-kind] },
+] }
+
+$dbx/define([wren/wren-schema, schema])
+
+fn read-org(*conn): result[org-row, wren-error] {
+  query[org-row]("select ${org.all-columns("o")} from org o").unique(conn).lift-error()
+}
+
+fn set-next-item-id(*conn, next-item-id: i64): result[empty, wren-error] {
+  update("update org set next_item_id = $next-item-id").run(conn).lift-error()
+}
+
+fn list-budgets(*conn): result[list[budget-row], wren-error] {
+  query[budget-row]("select ${budget.all-columns("b")} from budget b order by b.id").list(conn).lift-error()
+}

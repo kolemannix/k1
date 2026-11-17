@@ -22,7 +22,7 @@ ns for ip4-address {
       let part = rest.split-once(".")
       if part.before.len() > 1 and part.before.[0] == '0' return :none
       require u64/from-string(part.before) is :ok(value) and value <= 255 else return :none
-      octets.[slot] = value.trunc[u8]
+      octets.[slot] = value.low[u8]
       if (slot == 3) == part.after.is-some() return :none
       rest = part.after ? ""
     }
@@ -43,7 +43,7 @@ ns for ip6-address {
     let rest = scoped.before
     let scope-id: u64 = 0
     if scoped.after is :some id-text {
-      require u64/from-string(id-text) is :ok(id) and id <= u32/max-value.widen[u64] else return :none
+      require u64/from-string(id-text) is :ok(id) and id <= u32/max-value.as[u64] else return :none
       scope-id = id
     }
     let parsed: array[u8, 16] = .0
@@ -57,7 +57,7 @@ ns for ip6-address {
       let digits: size = 0
       let value: u32 = 0
       while digits < rest.len() and digits < 4 and rest.[digits].to-ascii-hex-digit() is :some(d) {
-        value = value * 16 + d.widen[u32]
+        value = value * 16 + d.as[u32]
         digits = digits + 1
       }
       if digits < rest.len() and rest.[digits] == '.' {
@@ -68,8 +68,8 @@ ns for ip6-address {
         break
       }
       if digits == 0 or count == 16 return :none
-      parsed.[count] = (value >> 8).trunc[u8]
-      parsed.[count + 1] = value.trunc[u8]
+      parsed.[count] = (value >> 8).low[u8]
+      parsed.[count + 1] = value.low[u8]
       count = count + 2
       rest = rest.drop(digits)
       if rest.is-empty() break
@@ -88,7 +88,7 @@ ns for ip6-address {
       let slot = if gap is :some(g) and i >= g i + 16 - count else i
       octets.[slot] = parsed.[i]
     }
-    :some .{ octets, scope-id = scope-id.trunc[u32] }
+    :some .{ octets, scope-id = scope-id.low[u32] }
   }
 }
 
@@ -99,7 +99,7 @@ impl print for ip6-address {
     let longest-len: size = 0
     let run-len: size = 0
     for i in 0.until(8: size) {
-      groups.[i] = self.octets.[i * 2].widen[u16] << 8 | self.octets.[i * 2 + 1].widen[u16]
+      groups.[i] = self.octets.[i * 2].as[u16] << 8 | self.octets.[i * 2 + 1].as[u16]
       run-len = if groups.[i] == 0 run-len + 1 else 0
       if run-len > longest-len and run-len > 1 {
         longest-start = i + 1 - run-len
@@ -118,7 +118,7 @@ impl print for ip6-address {
           i = i + longest-len
         } else {
           if i > 0 and i != longest-start + longest-len { w.write(":") }
-          core/format-uint(w, groups.[i].widen[u64], 16)
+          core/format-uint(w, groups.[i].as[u64], 16)
           i = i + 1
         }
       }
@@ -153,7 +153,7 @@ ns for socket-address {
     let ip: ip-address =
       if bracketed :v6 ip6-address/parse(host.drop(1)).try
       else :v4 ip4-address/parse(host).try
-    :some .{ ip, port = port.trunc[u16] }
+    :some .{ ip, port = port.low[u16] }
   }
 }
 

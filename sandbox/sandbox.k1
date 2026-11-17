@@ -6,45 +6,16 @@
 //   sqlite3/close(foo.db)
 // }
 
-type post = { userId: int, id: int, title: string, body: string }
+use std/hash
 
-fn main(): i32 {
-  let config = http-client/config/default()
-  let client = http-client/client/new(config).!
-
-  let url = std/url/parse("https://jsonplaceholder.typicode.com/posts").!
-
-  let result = client.fetch(http/request/new(:GET, url))
-
-  let data = result.!
-  let bytes: span[u8] = data.body
-
-  let posts = std/json/parse[span[post]](string/wrap-bytes(bytes)).!
-  let titles = posts.map(fn p. p.title)
-  println(titles)
-  println(titles.len())
-
-  use std/stream
-  use std/stream/source
-  let streamed = client.stream(http/request/new(:GET, url)).!
-  let collected = stream/collect-sink/new[u8]
-  let streamed-bytes = stream/run-to(streamed.body.to-dyn(), collected.&)
-  let streamed-posts = std/json/parse[span[post]](string/wrap-bytes(streamed-bytes)).!
-
-  let counter = 0
-  let printer = stream/each-sink/new[post](fn[counter.&](p) {
-    counter.* = counter + 1
-    println("${p.id}: ${p.title} $counter")
-  })
-
-  stream/run-to(source/from-span(streamed-posts, 10), printer.&)
-
-  println("end")
-  0
+type foo = {
+  x: int
+  y: string
 }
 
-fn(test-runtime) asdf() {
-  main()
+fn main() {
+  // http-test()
+  let x = foo.{ x = 1, y = "hello" }
+  // x.hash()
 
-  {}
 }

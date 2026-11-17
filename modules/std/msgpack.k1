@@ -36,7 +36,7 @@ ns tag {
   let negative-fixint: u8 = 0xe0
 }
 
-let byte-bits: u32 = 8
+let byte-bits: size = 8
 let ext-type-size: size = types/size[i8]
 
 type encoder[w] = { w: w }
@@ -45,10 +45,10 @@ ns for encoder {
   fn write-be[w: writer](self: encoder[w], tag: u8, v: u64, bytes: size) {
     if bytes == 1 {
       self.w.write-byte(tag)
-      self.w.write-byte(v.trunc[u8])
+      self.w.write-byte(v.low[u8])
       return
     }
-    let unused-bits = (types/size[u64] - bytes).unsigned().trunc[u32] * byte-bits
+    let unused-bits = (types/size[u64] - bytes) * byte-bits
     let buf: array[u8, 9] = uninit
     buf.[0] = tag
     mem/write-unaligned(buf.data-ptr().add-bytes(1), (v << unused-bits).swap-bytes())
@@ -56,11 +56,11 @@ ns for encoder {
   }
 
   fn write-header[w: writer](self: encoder[w], len: size, fix: u8, fix-count: size, sized: u8, first-log2: u8) {
-    let n = len.unsigned()
-    if len < fix-count { self.w.write-byte(fix | n.trunc[u8]); return }
-    let need: u8 = if n <= u8/max-value.widen[u64] 0 else if n <= u16/max-value.widen[u64] 1 else if n <= u32/max-value.widen[u64] 2 else crash("msgpack: length $len does not fit in 32 bits")
+    let n = len.u()
+    if len < fix-count { self.w.write-byte(fix | n.low[u8]); return }
+    let need: u8 = if n <= u8/max-value.as[u64] 0 else if n <= u16/max-value.as[u64] 1 else if n <= u32/max-value.as[u64] 2 else crash("msgpack: length $len does not fit in 32 bits")
     let log2 = need.max(first-log2)
-    self.write-be(sized + log2 - first-log2, n, (1: size) << log2.widen[u32])
+    self.write-be(sized + log2 - first-log2, n, (1: size) << log2)
   }
 }
 
@@ -68,18 +68,18 @@ impl[w: writer] codec/encoder for encoder[w] {
   fn write-null(self) { self.w.write-byte(tag/nil) }
   fn write-bool(self, b: bool) { self.w.write-byte(if b tag/bool-true else tag/bool-false) }
   fn write-int(self, i: i64) {
-    if i >= 0 self.write-uint(i.unsigned())
-    else if i >= tag/negative-fixint.signed().widen[i64] self.w.write-byte(i.trunc[i8].unsigned())
-    else if i >= i8/min-value.widen[i64] self.write-be(tag/int8, i.unsigned(), types/size[i8])
-    else if i >= i16/min-value.widen[i64] self.write-be(tag/int16, i.unsigned(), types/size[i16])
-    else if i >= i32/min-value.widen[i64] self.write-be(tag/int32, i.unsigned(), types/size[i32])
-    else self.write-be(tag/int64, i.unsigned(), types/size[i64])
+    if i >= 0 self.write-uint(i.u())
+    else if i >= tag/negative-fixint.i().as[i64] self.w.write-byte(i.low[i8].u())
+    else if i >= i8/min-value.as[i64] self.write-be(tag/int8, i.u(), types/size[i8])
+    else if i >= i16/min-value.as[i64] self.write-be(tag/int16, i.u(), types/size[i16])
+    else if i >= i32/min-value.as[i64] self.write-be(tag/int32, i.u(), types/size[i32])
+    else self.write-be(tag/int64, i.u(), types/size[i64])
   }
   fn write-uint(self, u: u64) {
-    if u <= tag/positive-fixint-max.widen[u64] self.w.write-byte(u.trunc[u8])
-    else if u <= u8/max-value.widen[u64] self.write-be(tag/uint8, u, types/size[u8])
-    else if u <= u16/max-value.widen[u64] self.write-be(tag/uint16, u, types/size[u16])
-    else if u <= u32/max-value.widen[u64] self.write-be(tag/uint32, u, types/size[u32])
+    if u <= tag/positive-fixint-max.as[u64] self.w.write-byte(u.low[u8])
+    else if u <= u8/max-value.as[u64] self.write-be(tag/uint8, u, types/size[u8])
+    else if u <= u16/max-value.as[u64] self.write-be(tag/uint16, u, types/size[u16])
+    else if u <= u32/max-value.as[u64] self.write-be(tag/uint32, u, types/size[u32])
     else self.write-be(tag/uint64, u, types/size[u64])
   }
   fn write-float(self, f: f64) { self.write-be(tag/float64, bitcast[f64, u64](f), types/size[f64]) }
@@ -144,25 +144,25 @@ ns for decoder {
   fn read-be(*self, bytes: size): result[u64, codec/error] {
     let p = self.read-bytes(bytes).try.data-ptr()
     :ok(if bytes is {
-      1 -> mem/read-unaligned[u8](p).widen[u64],
-      2 -> mem/read-unaligned[u16](p).swap-bytes().widen[u64],
-      4 -> mem/read-unaligned[u32](p).swap-bytes().widen[u64],
+      1 -> mem/read-unaligned[u8](p).as[u64],
+      2 -> mem/read-unaligned[u16](p).swap-bytes().as[u64],
+      4 -> mem/read-unaligned[u32](p).swap-bytes().as[u64],
       _ -> mem/read-unaligned[u64](p).swap-bytes(),
     })
   }
 
-  fn read-len(*self, log2: u8): result[size, codec/error] { :ok self.read-be((1: size) << log2.widen[u32]).try.signed() }
+  fn read-len(*self, log2: u8): result[size, codec/error] { :ok self.read-be((1: size) << log2).try.i() }
 
   fn(inline) read-head(*self): result[head, codec/error] {
     let b = self.read-byte().try
     if b <= tag/positive-fixint-max or b >= tag/negative-fixint or b == tag/nil or b == tag/bool-false or b == tag/bool-true { return :ok :other 0 }
-    if b < tag/fixarray { return :ok :map((b - tag/fixmap).widen[u64].signed()) }
-    if b < tag/fixstr { return :ok :seq((b - tag/fixarray).widen[u64].signed()) }
-    if b < tag/nil { return :ok :str((b - tag/fixstr).widen[u64].signed()) }
-    if b >= tag/float32 and b <= tag/int64 { return :ok :other((1: size) << (b & 3).widen[u32]) }
+    if b < tag/fixarray { return :ok :map((b - tag/fixmap).as[i64]) }
+    if b < tag/fixstr { return :ok :seq((b - tag/fixarray).as[i64]) }
+    if b < tag/nil { return :ok :str((b - tag/fixstr).as[i64]) }
+    if b >= tag/float32 and b <= tag/int64 { return :ok :other((1: size) << (b & 3)) }
     if b >= tag/bin8 and b <= tag/bin32 { return :ok :other self.read-len(b - tag/bin8).try }
     if b >= tag/ext8 and b <= tag/ext32 { return :ok :other(ext-type-size + self.read-len(b - tag/ext8).try) }
-    if b >= tag/fixext1 and b <= tag/fixext16 { return :ok :other(ext-type-size + ((1: size) << (b - tag/fixext1).widen[u32])) }
+    if b >= tag/fixext1 and b <= tag/fixext16 { return :ok :other(ext-type-size + ((1: size) << (b - tag/fixext1))) }
     if b >= tag/str8 and b <= tag/str32 { return :ok :str self.read-len(b - tag/str8).try }
     if b >= tag/array16 and b <= tag/array32 { return :ok :seq self.read-len(b - tag/array16 + 1).try }
     if b >= tag/map16 and b <= tag/map32 { return :ok :map self.read-len(b - tag/map16 + 1).try }
@@ -207,15 +207,15 @@ impl codec/decoder for *decoder {
 
   fn read-number(self): result[codec/number, codec/error] {
     let b = self.read-byte().try
-    if b <= tag/positive-fixint-max { return :ok :int b.widen[u64].signed() }
-    if b >= tag/negative-fixint { return :ok :int b.signed().widen[i64] }
+    if b <= tag/positive-fixint-max { return :ok :int b.as[i64] }
+    if b >= tag/negative-fixint { return :ok :int b.i().as[i64] }
     if b < tag/float32 or b > tag/int64 { return self.error(:wrong-type "number") }
-    let v = self.read-be((1: size) << (b & 3).widen[u32]).try
-    if b == tag/float32 return :ok :float bitcast[u32, f32](v.trunc[u32]).widen[f64]
+    let v = self.read-be((1: size) << (b & 3)).try
+    if b == tag/float32 return :ok :float bitcast[u32, f32](v.low[u32]).to-f64()
     if b == tag/float64 return :ok :float bitcast[u64, f64](v)
-    if b <= tag/uint64 return if v > i64/max-value.unsigned() :ok :uint v else :ok :int v.signed()
-    let unused-bits: u32 = 64 - (byte-bits << (b & 3).widen[u32])
-    :ok :int((v << unused-bits).signed() >> unused-bits)
+    if b <= tag/uint64 return if v > i64/max-value.u() :ok :uint v else :ok :int v.i()
+    let unused-bits = 64 - (byte-bits << (b & 3))
+    :ok :int((v << unused-bits).i() >> unused-bits)
   }
 
   fn read-string(self): result[string, codec/error] {

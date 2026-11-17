@@ -1,0 +1,8 @@
+// can 'view' *self as 'out'. The 'view' is generally considered to be a borrowed, temporary, ephemeral thing
+// used by hashmap lookup currently, as of Nov 2026
+ability view[out] {
+  fn view(*self): out
+}
+
+impl[t] view[out = t] for t { fn(inline) view(self: *self): t { self.* } }
+

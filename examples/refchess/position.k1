@@ -39,7 +39,7 @@ fn make-zobrist(): zobrist {
 let ZOBRIST: zobrist = make-zobrist()
 
 fn(inline) piece-key(c: color, k: kind, sq: square): u64 {
-  ZOBRIST.pieces.[(c.value.widen[u32] * 6 + k.value.widen[u32]) * 64 + sq]
+  ZOBRIST.pieces.[(c.value.as[u32] * 6 + k.value.as[u32]) * 64 + sq]
 }
 
 fn castle-mask-table(): array[u8, 64] {
@@ -127,7 +127,7 @@ ns for position {
         rank = rank - 1
         file = 0
       } else if c >= '1' and c <= '8' {
-        file = file + (c.as-u8() - '0'.as-u8()).widen[u32]
+        file = file + (c.as-u8() - '0'.as-u8()).as[u32]
       } else {
         require kind-of-char(c) is :some k else return :err "bad FEN piece '$c'"
         if file > 7 return :err "bad FEN rank layout: ${fields.[0]}"
@@ -176,11 +176,11 @@ ns for position {
     }
     if fields.len() > 4 {
       require u64/from-string(fields.[4]) is :ok n else return :err "bad FEN halfmove: ${fields.[4]}"
-      p.halfmove = n.trunc[u32]
+      p.halfmove = n.low[u32]
     }
     if fields.len() > 5 {
       require u64/from-string(fields.[5]) is :ok n else return :err "bad FEN fullmove: ${fields.[5]}"
-      p.fullmove = n.trunc[u32]
+      p.fullmove = n.low[u32]
     }
     p.key = p.key ^ ZOBRIST.castling.[p.castling] ^ p.ep-key()
     if p.side is :black { p.key = p.key ^ ZOBRIST.side }

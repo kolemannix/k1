@@ -24,7 +24,7 @@ fn(test) immediates() {
   assert-equals(18446744071562067968u64, opaque(0u64) - opaque(2147483648u64))
   assert-equals(-2147483648, opaque(0) - opaque(2147483648))
   assert-equals(2147483648, opaque(1).shift-left(31))
-  assert-equals(4294967295u32.widen[u64], opaque(1u64).shift-left(32) - opaque(1u64))
+  assert-equals(4294967295u32.as[u64], opaque(1u64).shift-left(32) - opaque(1u64))
 }
 
 fn(test) division() {
@@ -50,7 +50,7 @@ fn(test) bitwise() {
 fn(test) compares() {
   assert-equals(1 != 2, opaque(1) != opaque(2))
   assert-equals(1 != 1, opaque(1) != opaque(1))
-  assert-equals(-1i8 != 255u8.signed(), opaque(-1i8) != opaque(255u8).signed())
+  assert-equals(-1i8 != 255u8.i(), opaque(-1i8) != opaque(255u8).i())
   assert-equals('x' != 'y', opaque('x') != opaque('y'))
   assert-equals(if opaque(3) != 4 1 else 0, 1)
   let nan: f64 = opaque(0.0) / 0.0
@@ -75,27 +75,27 @@ fn(test) floats() {
 
 fn(test) casts() {
   let n: u8 = 0u8.bit-not()
-  let wide: u64 = n.widen()
+  let wide: u64 = n.as()
   assert-equals(wide, 255u64)
   let on: u8 = opaque(0u8).bit-not()
-  let owide: u64 = on.widen()
+  let owide: u64 = on.as()
   assert-equals(owide, 255u64)
 
   let q: i8 = opaque(-1i8) / opaque(1i8)
-  let qu: u8 = q.unsigned()
-  let qw: u64 = qu.widen()
+  let qu: u8 = q.u()
+  let qw: u64 = qu.as()
   assert-equals(qw, 255u64)
 
   let s: i8 = -3i8
-  let sw: i64 = s.widen()
-  assert-equals(sw, opaque(-3i8).widen())
+  let sw: i64 = s.as()
+  assert-equals(sw, opaque(-3i8).as())
   let hb: u8 = opaque(200u8)
   let coerced: i32 = hb
   assert-equals(coerced, 200)
-  assert-equals(hb.widen[i32], 200)
-  assert-equals(200u8.widen[i32], 200)
-  let t: u8 = 300u16.trunc()
-  let ot: u8 = opaque(300u16).trunc()
+  assert-equals(hb.as[i32], 200)
+  assert-equals(200u8.as[i32], 200)
+  let t: u8 = 300u16.low()
+  let ot: u8 = opaque(300u16).low()
   assert-equals(t, ot)
 }
 

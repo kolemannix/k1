@@ -124,7 +124,7 @@ ability decoder {
   fn read-int(self, min: i64, max: i64): result[i64, error] {
     let i = if self.read-number().try is {
       :int i -> i,
-      :uint u -> { if u > i64/max-value.unsigned() { return self.error(:overflow) }; u.signed() },
+      :uint u -> { if u > i64/max-value.u() { return self.error(:overflow) }; u.i() },
       :float _ -> return self.error(:wrong-type "integer"),
     }
     if i < min or i > max self.error(:overflow) else :ok i
@@ -132,15 +132,15 @@ ability decoder {
   fn read-uint(self, max: u64): result[u64, error] {
     let u = if self.read-number().try is {
       :uint u -> u,
-      :int i -> { if i < 0 { return self.error(:overflow) }; i.unsigned() },
+      :int i -> { if i < 0 { return self.error(:overflow) }; i.u() },
       :float _ -> return self.error(:wrong-type "integer"),
     }
     if u > max self.error(:overflow) else :ok u
   }
   fn read-float(self): result[f64, error] {
     if self.read-number().try is {
-      :int i -> :ok i.as[f64](),
-      :uint u -> :ok u.as[f64](),
+      :int i -> :ok i.to-f64(),
+      :uint u -> :ok u.to-f64(),
       :float f -> :ok f,
     }
   }
@@ -226,7 +226,7 @@ ns internal {
       :char -> cb.line(`e.write-string(self.to-string())`),
       :string -> cb.line(`e.write-string(self)`),
       :int k -> cb.line(if k is { :u8 or :u16 or :u32 or :u64 -> `e.write-uint(self)`, _ -> `e.write-int(self)` }),
-      :float k -> cb.line(if k is { :f32 -> `e.write-float(self.widen[f64])`, _ -> `e.write-float(self)` }),
+      :float k -> cb.line(if k is { :f32 -> `e.write-float(self.to-f64())`, _ -> `e.write-float(self)` }),
       :opt _ -> cb.line(`if self is { :some x -> x.encode[o = o](e), :none -> e.write-null() }`),
       :seq _ -> cb.line(`e.begin-seq(self.len()); for self { e.begin-item(it-index); it.encode[o = o](e) }; e.end-seq()`),
       :reference _ -> cb.line(`self.*.encode[o = o](e)`),
@@ -289,11 +289,11 @@ ns internal {
         if k is {
           :u64 -> cb.line(`d.read-uint(u64/max-value)`),
           :i64 -> cb.line(`d.read-int(i64/min-value, i64/max-value)`),
-          :u8 or :u16 or :u32 -> cb.line(`:ok d.read-uint($t/max-value).try.trunc[$t]`),
-          _ -> cb.line(`:ok d.read-int($t/min-value, $t/max-value).try.trunc[$t]`),
+          :u8 or :u16 or :u32 -> cb.line(`:ok d.read-uint($t/max-value).try.low[$t]`),
+          _ -> cb.line(`:ok d.read-int($t/min-value, $t/max-value).try.low[$t]`),
         }
       },
-      :float k -> cb.line(if k is { :f32 -> `:ok d.read-float().try.trunc[f32]`, _ -> `d.read-float()` }),
+      :float k -> cb.line(if k is { :f32 -> `:ok d.read-float().try.to-f32()`, _ -> `d.read-float()` }),
       :opt inner -> cb.line(`if d.peek-kind().try is :null { d.read-null().try; :ok :none } else { :ok :some ${spell-decode(inner)} }`),
       :seq .{ elem, kind } -> {
         cb.line(`let items = list/with-capacity[${elem.spell()}](d.begin-seq().try)`)

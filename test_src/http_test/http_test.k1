@@ -219,7 +219,7 @@ ns for client {
     c.rest-req.set-data(c)
     c.rest-timer.set-data(c)
     let addr: libuv/sockaddr_in = uninit
-    uv/check(libuv/ip4_addr("127.0.0.1\0".data-ref-byte().as(), port.widen[i32], addr.&.as())).!
+    uv/check(libuv/ip4_addr("127.0.0.1\0".data-ref-byte().as(), port.as[i32], addr.&.as())).!
     uv/check(libuv/tcp_connect(c.connect-req.&.as(), c.tcp.&.as(), addr.&.as[ptr].narrow(), on-connect.&)).!
   }
 

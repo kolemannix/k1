@@ -1,22 +1,22 @@
 fn(test) float-casts-and-special-values() {
-  assert-equals(-10.1.as[i32], -10)
-  assert-equals((-100.0: f32).as[i8], -100)
-  assert-equals((300.0: f32).as[u8], 255)
-  assert-equals((-5.0: f32).as[u8], 0)
-  assert-equals((-300.0: f32).as[i8], -128)
-  assert-equals((70000.5: f64).as[u16], 65535)
-  assert-equals((10000000000.0: f32).as[u32], 4294967295)
-  assert-equals((10000000000.0: f32).as[i32], 2147483647)
+  assert-equals(-10.1.trunc[i32], -10)
+  assert-equals((-100.0: f32).trunc[i8], -100)
+  assert-equals((300.0: f32).trunc[u8], 255)
+  assert-equals((-5.0: f32).trunc[u8], 0)
+  assert-equals((-300.0: f32).trunc[i8], -128)
+  assert-equals((70000.5: f64).trunc[u16], 65535)
+  assert-equals((10000000000.0: f32).trunc[u32], 4294967295)
+  assert-equals((10000000000.0: f32).trunc[i32], 2147483647)
 
   let f32-zero: f32 = 0.0
-  assert-equals((f32-zero / f32-zero).as[u8], 0)
-  assert-equals((f32-zero / f32-zero).as[i32], 0)
-  assert-equals(((1.0: f32) / f32-zero).as[u8], 255)
-  assert-equals(((1.0: f32) / f32-zero).negated().as[i8], -128)
+  assert-equals((f32-zero / f32-zero).trunc[u8], 0)
+  assert-equals((f32-zero / f32-zero).trunc[i32], 0)
+  assert-equals(((1.0: f32) / f32-zero).trunc[u8], 255)
+  assert-equals(((1.0: f32) / f32-zero).negated().trunc[i8], -128)
 
-  let ct-over-u8: u8 = #static { (300.0: f32).as[u8] }
-  let ct-under-i8: i8 = #static { (-300.0: f32).as[i8] }
-  let ct-over-u32: u32 = #static { (10000000000.0: f32).as[u32] }
+  let ct-over-u8: u8 = #static { (300.0: f32).trunc[u8] }
+  let ct-under-i8: i8 = #static { (-300.0: f32).trunc[i8] }
+  let ct-over-u32: u32 = #static { (10000000000.0: f32).trunc[u32] }
   assert-equals(ct-over-u8, 255)
   assert-equals(ct-under-i8, -128)
   assert-equals(ct-over-u32, 4294967295)

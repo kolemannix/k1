@@ -350,7 +350,7 @@ type(alias) F26Dot6 = i64
 type(alias) Fixed = i64
 type(alias) Error = i32
 type(alias) Pointer = ptr
-type(alias) Offset = usize
+type(alias) Offset = size
 type(alias) PtrDist = size
 type UnitVector_ = {
   x: F2Dot14,

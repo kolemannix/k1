@@ -41,13 +41,13 @@ ns for histogram {
       }
     }
     if count == 1 return 12.0
-    if count == 2 return 20.0 + self.total-count.as[f64]
+    if count == 2 return 20.0 + self.total-count.to-f64()
     if count == 3 {
       let h0 = self.data.[s.[0]]
       let h1 = self.data.[s.[1]]
       let h2 = self.data.[s.[2]]
       let hmax = h0.max(h1.max(h2))
-      return 28.0 + (2 * (h0 + h1 + h2) - hmax).as[f64]
+      return 28.0 + (2 * (h0 + h1 + h2) - hmax).to-f64()
     }
     if count == 4 {
       let h: array[u32, 4] = [self.data.[s.[0]], self.data.[s.[1]], self.data.[s.[2]], self.data.[s.[3]]]
@@ -62,7 +62,7 @@ ns for histogram {
       }
       let h23 = h.[2] + h.[3]
       let hmax = h23.max(h.[0])
-      return 37.0 + (3 * h23 + 2 * (h.[0] + h.[1]) - hmax).as[f64]
+      return 37.0 + (3 * h23 + 2 * (h.[0] + h.[1]) - hmax).to-f64()
     }
     let bits = 0.0
     let max-depth: size = 1
@@ -73,8 +73,8 @@ ns for histogram {
       let c = self.data.[i]
       if c > 0 {
         let log2p = log2total - fast-log2(c.as-size())
-        let depth = (log2p + 0.5).as[size]
-        bits = bits + c.as[f64] * log2p
+        let depth = (log2p + 0.5).trunc[size]
+        bits = bits + c.to-f64() * log2p
         if depth > 15 { depth = 15 }
         if depth > max-depth { max-depth = depth }
         depth-histo.[depth] = depth-histo.[depth] + 1
@@ -100,7 +100,7 @@ ns for histogram {
         }
       }
     }
-    bits = bits + (18 + 2 * max-depth).as[f64]
+    bits = bits + (18 + 2 * max-depth).to-f64()
     bits + bits-entropy(depth-histo.&.as-buffer(), 18)
   }
 }
@@ -111,9 +111,9 @@ fn shannon-entropy(population: buffer[u32], count: size, total: *size): f64 {
   for i in 0.until(count) {
     let p = population.index-unchecked(i).*.as-size()
     sum = sum + p
-    retval = retval - p.as[f64] * fast-log2(p)
+    retval = retval - p.to-f64() * fast-log2(p)
   }
-  if sum != 0 { retval = retval + sum.as[f64] * fast-log2(sum) }
+  if sum != 0 { retval = retval + sum.to-f64() * fast-log2(sum) }
   total.* = sum
   retval
 }
@@ -121,7 +121,7 @@ fn shannon-entropy(population: buffer[u32], count: size, total: *size): f64 {
 fn bits-entropy(population: buffer[u32], count: size): f64 {
   let sum: size = 0
   let retval = shannon-entropy(population, count, sum.&)
-  if retval < sum.as[f64] { retval = sum.as[f64] }
+  if retval < sum.to-f64() { retval = sum.to-f64() }
   retval
 }
 
@@ -170,7 +170,7 @@ fn build-histograms-with-context(
       let ctx = literal-it.kind
       if context-modes is :some modes {
         let lut = context-lut(modes.index-unchecked(ctx).*)
-        ctx = (ctx << LITERAL-CONTEXT-BITS.trunc[u32]) + context-of(p1, p2, lut).as-size()
+        ctx = (ctx << LITERAL-CONTEXT-BITS) + context-of(p1, p2, lut).as-size()
       }
       let lit = ringbuffer.add-bytes(pos & mask).ref[u8].*
       literal-histograms.index-unchecked(ctx).add(lit.as-size())
@@ -185,7 +185,7 @@ fn build-histograms-with-context(
       p1 = ringbuffer.add-bytes((pos - 1) & mask).ref[u8].*
       if cmd.cmd-prefix >= 128 {
         dist-it.next()
-        let ctx = (dist-it.kind << DISTANCE-CONTEXT-BITS.trunc[u32]) + cmd.distance-context().as-size()
+        let ctx = (dist-it.kind << DISTANCE-CONTEXT-BITS) + cmd.distance-context().as-size()
         copy-dist-histograms.index-unchecked(ctx).add((cmd.dist-prefix & 0x3FF).as-size())
       }
     }

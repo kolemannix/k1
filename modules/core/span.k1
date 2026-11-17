@@ -21,7 +21,7 @@ ns for span {
     .{ buffer }
   }
 
-  fn(inline) wrap-raw[t](ptr: ptr, len: size): span[t] {
+  fn(inline) wrap-raw[t](ptr, len: size): span[t] {
     .{ buffer = buffer/wrap-raw(ptr, len) }
   }
 
@@ -52,8 +52,17 @@ ns for span {
     buf.[0] = t
     wrap-buffer(buf)
   }
+  
+  macro single-on-stack[t](value: code) {
+    let type-id = types/id[t]
+    `
+    let data: array[${type-id.spell()}, 1] = uninit
+    data.[0] = $value
+    data.as-span()
+    `
+  }
 
-  fn wrap-single[t](t: *t): span[t] {
+  fn wrap-single[t](*t): span[t] {
     wrap-raw(t.as[ptr], 1)
   }
 
@@ -61,8 +70,8 @@ ns for span {
     .{ buffer = self.buffer.cloned() }
   }
 
-  fn(inline) cloned-in[t, a: allocator](self: span[t], alloc: a): span[t] {
-    .{ buffer = self.buffer.cloned-in(alloc) }
+  fn(inline) cloned-in[t, a: allocator](self: span[t], a): span[t] {
+    .{ buffer = self.buffer.cloned-in(a) }
   }
 
   fn to-array[t, n: static size](self: span[t]): array[t, n] {
@@ -177,7 +186,7 @@ ns for span {
       bit-count = bit-count + 6
       if bit-count >= 8 {
         bit-count = bit-count - 8
-        buf.[written] = ((bits >> bit-count) & 255).trunc[u8]
+        buf.[written] = ((bits >> bit-count) & 255).low[u8]
         written = written + 1
       }
     }

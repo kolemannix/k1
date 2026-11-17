@@ -47,7 +47,7 @@
       return :err "watch/add open of $path failed: ${libc/errno-k1-string()}"
     }
     let change: kevent-t = .{
-      ident = file-fd.widen[i64].unsigned(),
+      ident = file-fd.as[i64].u(),
       filter = EVFILT_VNODE,
       flags = EV_ADD | EV_CLEAR,
       fflags = NOTE_WRITE | NOTE_EXTEND | NOTE_ATTRIB | NOTE_DELETE | NOTE_RENAME,
@@ -58,7 +58,7 @@
       posix/close(file-fd)
       return :err "watch/add kevent for $path failed: ${libc/errno-k1-string()}"
     }
-    w.entries.push(.{ path = path, id = file-fd.widen[i64] })
+    w.entries.push(.{ path = path, id = file-fd.as[i64] })
     :ok
   }
 
@@ -77,7 +77,7 @@
         else if ev.fflags.bit-and(NOTE_RENAME) != 0 :renamed
         else :modified
       for entry in w.entries.as-span() {
-        if entry.id == ev.ident.signed() {
+        if entry.id == ev.ident.i() {
           events.push(.{ path = entry.path, kind = kind })
         }
       }
@@ -88,7 +88,7 @@
   fn close(w: *watch/watcher) {
     // vnode fds are per-entry on kqueue
     for entry in w.entries.as-span() {
-      posix/close(entry.id.trunc[i32])
+      posix/close(entry.id.low[i32])
     }
     posix/close(w.fd)
     w.entries.clear()
@@ -129,16 +129,16 @@
     if wd < 0 {
       return :err "watch/add of $path failed: ${libc/errno-k1-string()}"
     }
-    w.entries.push(.{ path = path, id = wd.widen[i64] })
+    w.entries.push(.{ path = path, id = wd.as[i64] })
     :ok
   }
 
   fn wait(w: *watch/watcher): result[list[watch/event], string] {
     let events = list/empty[watch/event]()
     let buf = buffer/allocate[u8](4096)
-    let n = posix/read(w.fd, buf.data, buf.len.unsigned())
+    let n = posix/read(w.fd, buf.data, buf.len)
     while n < 0 and libc/errno() == libc/EINTR {
-      n = posix/read(w.fd, buf.data, buf.len.unsigned())
+      n = posix/read(w.fd, buf.data, buf.len)
     }
     if n <= 0 return :err "watch/wait read failed: ${libc/errno-k1-string()}"
     let offset: size = 0
@@ -150,7 +150,7 @@
         else if ev.mask.bit-and(IN_CREATE) != 0 :created
         else :modified
       for entry in w.entries.as-span() {
-        if entry.id == ev.wd.widen[i64] {
+        if entry.id == ev.wd.as[i64] {
           events.push(.{ path = entry.path, kind = kind })
         }
       }

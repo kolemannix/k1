@@ -43,7 +43,7 @@ ns for buffer {
   fn fill[t](self: buffer[t], value: t): empty {
     #if types/schema[t] is {
       :int :u8 -> self.memset(value),
-      :int :i8 -> self.memset(value.unsigned()),
+      :int :i8 -> self.memset(value.u()),
       :char -> self.memset(value.as-u8()),
       _ -> {
         let i = 0
@@ -134,7 +134,7 @@ ns for buffer {
   }
 
   fn(inline) _slice-raw(data: ptr, len: size, stride: size, start: size, end: size): { data: ptr, len: size } {
-    if start.unsigned() > len.unsigned() crash-bounds(len, start, "slice start out of bounds")
+    if start.gt-unsigned(len) crash-bounds(len, start, "slice start out of bounds")
     let end-clamp = end.min(len)
     if end-clamp <= start or len == 0 return .{ data = ptr/null, len = 0 }
     .{ data = data.add-bytes(stride * start), len = end-clamp - start }
@@ -218,7 +218,7 @@ ns for buffer {
       let block-last = vector/load-unchecked[u8, k1/simd-bytes](base.ref-at[u8](i + k - 1).as[ptr])
       let m = block-first.eq-lanes(first).bit-and(block-last.eq-lanes(last)).to-mask()
       while m != 0 {
-        let j = m.trailing-zeros().signed()
+        let j = m.trailing-zeros()
         if mem/equals(base.ref-at[u8](i + j).as[ptr], needle-base, k) return :some (i + j)
         m = m.bit-and(m - 1)
       }

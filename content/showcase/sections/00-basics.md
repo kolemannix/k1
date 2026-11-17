@@ -142,7 +142,7 @@ fn doubled-even(xs: list[int]): ?int {
 }
 
 fn parse-age(s: string): result[int, string] {
-  require int/from-string(s) is :ok n else { return :err "not a number: $s" }
+  require i64/from-string(s) is :ok n else { return :err "not a number: $s" }
   if n < 0 :err "negative" else :ok n
 }
 

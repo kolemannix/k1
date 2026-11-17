@@ -13,8 +13,8 @@ type ring-buffer = {
 
 ns for ring-buffer {
   fn setup(params: *encoder-params): ring-buffer {
-    let size = 1 << params.compute-rb-bits().trunc[u32]
-    let tail-size = 1 << params.lgblock.trunc[u32]
+    let size = 1 << params.compute-rb-bits()
+    let tail-size = 1 << params.lgblock
     .{ size, mask = size - 1, tail-size, total-size = size + tail-size, cur-size = 0, pos = 0, data = .0, buffer = ptr/null }
   }
 
@@ -35,7 +35,7 @@ ns for ring-buffer {
 
   fn write[a: allocator](self: *ring-buffer, alloc: a, bytes: ptr, n: size) {
     if self.pos == 0 and n < self.tail-size {
-      self.pos = n.trunc[u32]
+      self.pos = n.low[u32]
       self.init-buffer(alloc, n)
       mem/copy(self.buffer, bytes, n)
       return
@@ -60,7 +60,7 @@ ns for ring-buffer {
     let rb-pos-mask = (1u32 << 31) - 1
     self.buffer.sub-bytes(2).ref[u8].* = self.at(self.size - 2).ref[u8].*
     self.buffer.sub-bytes(1).ref[u8].* = self.at(self.size - 1).ref[u8].*
-    self.pos = (self.pos & rb-pos-mask) + (n.trunc[u32] & rb-pos-mask)
+    self.pos = (self.pos & rb-pos-mask) + (n.low[u32] & rb-pos-mask)
     if not-first-lap {
       self.pos = self.pos | (1u32 << 31)
     }

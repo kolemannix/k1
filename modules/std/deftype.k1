@@ -75,7 +75,7 @@ macro flags(type-name: span[code-token], members: span[code-token]) {
     } else {
       let bit = used.bit-length()
       if bit >= 64 member.name.fail("No bit is left for `${member.name.text}`")
-      (1: u64) << bit.trunc[u32]
+      (1: u64) << bit
     }
     masks.push(mask)
     used = used | mask
@@ -104,7 +104,7 @@ macro flags(type-name: span[code-token], members: span[code-token]) {
       ns for flag { let members: span[flag] = types/enum@(flag)/members() }
       ${constants.build()}
       fn from-bits(bits: $backing): $name     { .{ bits } }
-      fn from-flag(flag): $name               { .{ bits = (1: $backing) << flag.value.widen[u32] } }
+      fn from-flag(flag): $name               { .{ bits = (1: $backing) << flag.value } }
       fn has(self, flag): bool                { (self.bits & from-flag(flag).bits) != 0 }
       fn with(self, flag, is-on: bool): $name { if is-on self | from-flag(flag) else self & from-flag(flag).bit-not() }
       fn has-any(self, other: $name): bool    { (self.bits & other.bits) != 0 }
@@ -115,8 +115,8 @@ macro flags(type-name: span[code-token], members: span[code-token]) {
       fn bit-and(self, other: $name): $name   { .{ bits = self.bits & other.bits } }
       fn bit-or(self, other: $name): $name    { .{ bits = self.bits | other.bits } }
       fn xor(self, other: $name): $name       { .{ bits = self.bits ^ other.bits } }
-      fn shift-left(self, count: u32): $name  { .{ bits = self.bits << count } }
-      fn shift-right(self, count: u32): $name { .{ bits = self.bits >> count } }
+      fn shift-left(self, count: i64): $name  { .{ bits = self.bits << count } }
+      fn shift-right(self, count: i64): $name { .{ bits = self.bits >> count } }
     }
     impl print for $name { fn print-to[w: writer](self, w) {
       let rest = self.bits
@@ -140,10 +140,10 @@ macro bitfield(type-name: span[code-token], members: span[code-token]) {
   let name = declared.name.text
   let members = internal/parse-members(members)
 
-  let widths: list[u64] = list/with-capacity(members.len())
-  let total: u64 = 0
+  let widths: list[size] = list/with-capacity(members.len())
+  let total: size = 0
   for member in members {
-    let width: u64 = if member.value is :some tokens meta/eval("$tokens") else 1
+    let width: size = if member.value is :some tokens meta/eval("$tokens") else 1
     if width < 1 or total + width > 64 {
       member.name.fail("`${member.name.text}` is $width bits wide at bit $total; a bitfield holds 64")
     }
@@ -154,14 +154,14 @@ macro bitfield(type-name: span[code-token], members: span[code-token]) {
 
   let accessors = string-builder/new()
   let printed-fields = string-builder/new()
-  let offset: u64 = 0
+  let offset: size = 0
   for member in members {
     let field = member.name.text
     let width = widths.[it-index]
-    let low-mask = u64/bitmask-low(width.signed())
-    let mask = low-mask << offset.trunc[u32]
+    let low-mask = u64/bitmask-low(width)
+    let mask = low-mask << offset
     let field-type = if width == 1 "bool" else internal/spell-smallest-uint(width)
-    let narrowed = if width == 1 "field == 1" else if field-type == backing "field" else "field.trunc[$field-type]"
+    let narrowed = if width == 1 "field == 1" else if field-type == backing "field" else "field.low[$field-type]"
     let widened = if width == 1 "value.as-u8()" else "value"
     accessors.writeln(`
       let ${field}-mask: $backing = $mask
@@ -196,7 +196,7 @@ macro flag-sum(type-name: span[code-token], flag-names: span[code-token], member
   let flag-cursor = token-cursor/new(flag-names)
   for internal/flag-sum/parse-names(flag-cursor.&) {
     if it.text == name it.fail("Flag `${it.text}` is named like the type; `as-${it.text}` would be ambiguous")
-    flags.push(.{ name = it.text, bit = (1: u64) << it-index.trunc[u32] })
+    flags.push(.{ name = it.text, bit = (1: u64) << it-index })
   }
   if not flag-cursor.is-at-end() flag-cursor.peek().fail("Unexpected `${flag-cursor.peek().text}` after the flag list")
 
@@ -228,7 +228,7 @@ macro flag-sum(type-name: span[code-token], flag-names: span[code-token], member
     if not cursor.is-at-end() cursor.expect(",")
     let ordinal: u64 = 0
     for variants { if it.mask == mask { ordinal = ordinal + 1 } }
-    let tag = (ordinal << flags.len().trunc[u32]) | mask
+    let tag = (ordinal << flags.len()) | mask
     if tag > max-tag { max-tag = tag }
     variants.push(.{ name = variant, payload-tokens, mask, tag })
   }
@@ -351,13 +351,13 @@ ns internal {
     members
   }
 
-  fn spell-smallest-uint(bits: u64): string {
+  fn spell-smallest-uint(bits: size): string {
     if bits <= 8 "u8" else if bits <= 16 "u16" else if bits <= 32 "u32" else "u64"
   }
 
-  fn spell-backing-uint(declared: ?code-token, needed-bits: u64): string {
+  fn spell-backing-uint(declared: ?code-token, needed-bits: size): string {
     require declared is :some uint else return spell-smallest-uint(needed-bits)
-    let width: u64 = if uint.text == "u8" 8 else if uint.text == "u16" 16 else if uint.text == "u32" 32 else if uint.text == "u64" 64 else {
+    let width: size = if uint.text == "u8" 8 else if uint.text == "u16" 16 else if uint.text == "u32" 32 else if uint.text == "u64" 64 else {
       uint.fail("Expected an unsigned int type, got `${uint.text}`")
     }
     if width < needed-bits uint.fail("`${uint.text}` cannot hold $needed-bits bits")

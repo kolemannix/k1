@@ -1,4 +1,4 @@
-let H10-BUCKET-BITS: u32 = 17
+let H10-BUCKET-BITS: size = 17
 let H10-BUCKET-SIZE: size = 1 << 17
 let H10-MAX-TREE-SEARCH-DEPTH: size = 64
 let H10-MAX-TREE-COMP-LENGTH: size = 128
@@ -8,11 +8,11 @@ type backward-match = { distance: u32, length-and-code: u32 }
 
 ns for backward-match {
   fn(inline) new(dist: size, len: size): backward-match {
-    .{ distance = dist.trunc[u32], length-and-code = (len << 5).trunc[u32] }
+    .{ distance = dist.low[u32], length-and-code = (len << 5).low[u32] }
   }
 
   fn(inline) new-dictionary(dist: size, len: size, len-code: size): backward-match {
-    .{ distance = dist.trunc[u32], length-and-code = ((len << 5) | (if len == len-code 0 else len-code)).trunc[u32] }
+    .{ distance = dist.low[u32], length-and-code = ((len << 5) | (if len == len-code 0 else len-code)).low[u32] }
   }
 
   fn(inline) length(self: backward-match): size { (self.length-and-code >> 5).as-size() }
@@ -32,13 +32,13 @@ type hasher-h10 = {
 
 ns for hasher-h10 {
   fn new(params: *encoder-params, one-shot: bool, input-size: size): hasher-h10 {
-    let num-nodes = 1 << params.lgwin.trunc[u32]
+    let num-nodes = 1 << params.lgwin
     if one-shot and input-size < num-nodes { num-nodes = input-size }
-    let window-mask = (1 << params.lgwin.trunc[u32]) - 1
+    let window-mask = (1 << params.lgwin) - 1
     .{
       window-mask,
       buckets = buffer/allocate[u32](H10-BUCKET-SIZE),
-      invalid-pos = window-mask.trunc[u32].negated(),
+      invalid-pos = window-mask.low[u32].negated(),
       forest = buffer/allocate[u32](2 * num-nodes),
     }
   }
@@ -69,13 +69,13 @@ ns for hasher-h10 {
     let best-len-left: size = 0
     let best-len-right: size = 0
     if should-reroot-tree {
-      buckets.index-unchecked(key).* = cur-ix.trunc[u32]
+      buckets.index-unchecked(key).* = cur-ix.low[u32]
     }
     let depth-remaining = H10-MAX-TREE-SEARCH-DEPTH
     loop {
       let backward = cur-ix - prev-ix
       let prev-ix-masked = prev-ix & ring-buffer-mask
-      if backward == 0 or backward.unsigned() > max-backward.unsigned() or depth-remaining == 0 {
+      if backward == 0 or backward.gt-unsigned(max-backward) or depth-remaining == 0 {
         if should-reroot-tree {
           forest.index-unchecked(node-left).* = self.invalid-pos
           forest.index-unchecked(node-right).* = self.invalid-pos
@@ -99,14 +99,14 @@ ns for hasher-h10 {
       if byte-at(data, cur-ix-masked + len) > byte-at(data, prev-ix-masked + len) {
         best-len-left = len
         if should-reroot-tree {
-          forest.index-unchecked(node-left).* = prev-ix.trunc[u32]
+          forest.index-unchecked(node-left).* = prev-ix.low[u32]
         }
         node-left = self.right-child-index(prev-ix)
         prev-ix = forest.index-unchecked(node-left).*.as-size()
       } else {
         best-len-right = len
         if should-reroot-tree {
-          forest.index-unchecked(node-right).* = prev-ix.trunc[u32]
+          forest.index-unchecked(node-right).* = prev-ix.low[u32]
         }
         node-right = self.left-child-index(prev-ix)
         prev-ix = forest.index-unchecked(node-right).*.as-size()

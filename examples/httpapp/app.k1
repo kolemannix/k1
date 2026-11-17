@@ -50,16 +50,16 @@ ns for db {
   fn run(self: db, sql: string, text: string) {
     let stmt = self.prepare(sql)
     if text.non-empty() {
-      sqlite3/bind_text(stmt.as(), 1, text.data-ref-byte().as(), text.len().trunc[i32], fn(_p: ptr) .{})
+      sqlite3/bind_text(stmt.as(), 1, text.data-ref-byte().as(), text.len().low[i32], fn(_p: ptr) .{})
     }
     let step-status = sqlite3/step(stmt.as())
     sqlite3/finalize(stmt.as())
-    if step-status != sqlite3/DONE.trunc[i32] { self.fail("step") }
+    if step-status != sqlite3/DONE.low[i32] { self.fail("step") }
   }
 
   fn count(self: db, sql: string): i64 {
     let stmt = self.prepare(sql)
-    if sqlite3/step(stmt.as()) != sqlite3/ROW.trunc[i32] { self.fail("step") }
+    if sqlite3/step(stmt.as()) != sqlite3/ROW.low[i32] { self.fail("step") }
     let n = sqlite3/column_int64(stmt.as(), 0)
     sqlite3/finalize(stmt.as())
     n
@@ -71,7 +71,7 @@ ns for db {
   }
 }
 
-$http/routing/define(route, \{
+$http/routing/define(route) {
   get    home         "/"
   get    events       "/events"
   get    counter      "/counter/events"
@@ -82,7 +82,7 @@ $http/routing/define(route, \{
   get    game-events  "/game/{id: u64}/events"
   post   game-poke    "/game/{id: u64}/poke"
   delete delete-game  "/game/{id: u64}"
-})
+}
 
 fn handle(req: http/request, bus: *pubsub/bus[span[u8]]): http-response {
   if worker-deps.is-null() {

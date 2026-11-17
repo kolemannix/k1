@@ -1004,29 +1004,29 @@ type DUMMY_ENUM = either(u32, partial) {
   DUMMY_ENUM_VALUE = 0,
 }
 fn(extern("SDL_malloc")) malloc(
-  size: usize,
+  size: size,
 ): ptr
 fn(extern("SDL_calloc")) calloc(
-  nmemb: usize,
-  size: usize,
+  nmemb: size,
+  size: size,
 ): ptr
 fn(extern("SDL_realloc")) realloc(
   mem: ptr,
-  size: usize,
+  size: size,
 ): ptr
 fn(extern("SDL_free")) free(
   mem: ptr,
 )
 type(alias) malloc_func = *fn(
-  usize
+  size
 ) -> ptr
 type(alias) calloc_func = *fn(
-  usize,
-  usize
+  size,
+  size
 ) -> ptr
 type(alias) realloc_func = *fn(
   ptr,
-  usize
+  size
 ) -> ptr
 type(alias) free_func = *fn(
   ptr
@@ -1050,8 +1050,8 @@ fn(extern("SDL_SetMemoryFunctions")) SetMemoryFunctions(
   free_func: free_func,
 ): bool
 fn(extern("SDL_aligned_alloc")) aligned_alloc(
-  alignment: usize,
-  size: usize,
+  alignment: size,
+  size: size,
 ): ptr
 fn(extern("SDL_aligned_free")) aligned_free(
   mem: ptr,
@@ -1102,15 +1102,15 @@ type(alias) CompareCallback = *fn(
 ) -> i32
 fn(extern("SDL_qsort")) qsort(
   base: ptr,
-  nmemb: usize,
-  size: usize,
+  nmemb: size,
+  size: size,
   compare: CompareCallback,
 )
 fn(extern("SDL_bsearch")) bsearch(
   key: ptr,
   base: ptr,
-  nmemb: usize,
-  size: usize,
+  nmemb: size,
+  size: size,
   compare: CompareCallback,
 ): ptr
 type(alias) CompareCallback_r = *fn(
@@ -1120,16 +1120,16 @@ type(alias) CompareCallback_r = *fn(
 ) -> i32
 fn(extern("SDL_qsort_r")) qsort_r(
   base: ptr,
-  nmemb: usize,
-  size: usize,
+  nmemb: size,
+  size: size,
   compare: CompareCallback_r,
   userdata: ptr,
 )
 fn(extern("SDL_bsearch_r")) bsearch_r(
   key: ptr,
   base: ptr,
-  nmemb: usize,
-  size: usize,
+  nmemb: size,
+  size: size,
   compare: CompareCallback_r,
   userdata: ptr,
 ): ptr
@@ -1181,60 +1181,60 @@ fn(extern("SDL_tolower")) tolower(
 fn(extern("SDL_crc16")) crc16(
   crc: Uint16,
   data: ptr,
-  len: usize,
+  len: size,
 ): Uint16
 fn(extern("SDL_crc32")) crc32(
   crc: Uint32,
   data: ptr,
-  len: usize,
+  len: size,
 ): Uint32
 fn(extern("SDL_murmur3_32")) murmur3_32(
   data: ptr,
-  len: usize,
+  len: size,
   seed: Uint32,
 ): Uint32
 fn(extern("SDL_memcpy")) memcpy(
   dst: ptr,
   src: ptr,
-  len: usize,
+  len: size,
 ): ptr
 fn(extern("SDL_memmove")) memmove(
   dst: ptr,
   src: ptr,
-  len: usize,
+  len: size,
 ): ptr
 fn(extern("SDL_memset")) memset(
   dst: ptr,
   c: i32,
-  len: usize,
+  len: size,
 ): ptr
 fn(extern("SDL_memset4")) memset4(
   dst: ptr,
   val: Uint32,
-  dwords: usize,
+  dwords: size,
 ): ptr
 fn(extern("SDL_memcmp")) memcmp(
   s1: ptr,
   s2: ptr,
-  len: usize,
+  len: size,
 ): i32
 fn(extern("SDL_wcslen")) wcslen(
   wstr: optref[i32],
-): usize
+): size
 fn(extern("SDL_wcsnlen")) wcsnlen(
   wstr: optref[i32],
-  maxlen: usize,
-): usize
+  maxlen: size,
+): size
 fn(extern("SDL_wcslcpy")) wcslcpy(
   dst: optref[i32],
   src: optref[i32],
-  maxlen: usize,
-): usize
+  maxlen: size,
+): size
 fn(extern("SDL_wcslcat")) wcslcat(
   dst: optref[i32],
   src: optref[i32],
-  maxlen: usize,
-): usize
+  maxlen: size,
+): size
 fn(extern("SDL_wcsdup")) wcsdup(
   wstr: optref[i32],
 ): optref[i32]
@@ -1245,7 +1245,7 @@ fn(extern("SDL_wcsstr")) wcsstr(
 fn(extern("SDL_wcsnstr")) wcsnstr(
   haystack: optref[i32],
   needle: optref[i32],
-  maxlen: usize,
+  maxlen: size,
 ): optref[i32]
 fn(extern("SDL_wcscmp")) wcscmp(
   str1: optref[i32],
@@ -1254,7 +1254,7 @@ fn(extern("SDL_wcscmp")) wcscmp(
 fn(extern("SDL_wcsncmp")) wcsncmp(
   str1: optref[i32],
   str2: optref[i32],
-  maxlen: usize,
+  maxlen: size,
 ): i32
 fn(extern("SDL_wcscasecmp")) wcscasecmp(
   str1: optref[i32],
@@ -1263,7 +1263,7 @@ fn(extern("SDL_wcscasecmp")) wcscasecmp(
 fn(extern("SDL_wcsncasecmp")) wcsncasecmp(
   str1: optref[i32],
   str2: optref[i32],
-  maxlen: usize,
+  maxlen: size,
 ): i32
 fn(extern("SDL_wcstol")) wcstol(
   str: optref[i32],
@@ -1272,32 +1272,32 @@ fn(extern("SDL_wcstol")) wcstol(
 ): i64
 fn(extern("SDL_strlen")) strlen(
   str: optref[u8],
-): usize
+): size
 fn(extern("SDL_strnlen")) strnlen(
   str: optref[u8],
-  maxlen: usize,
-): usize
+  maxlen: size,
+): size
 fn(extern("SDL_strlcpy")) strlcpy(
   dst: optref[u8],
   src: optref[u8],
-  maxlen: usize,
-): usize
+  maxlen: size,
+): size
 fn(extern("SDL_utf8strlcpy")) utf8strlcpy(
   dst: optref[u8],
   src: optref[u8],
-  dst_bytes: usize,
-): usize
+  dst_bytes: size,
+): size
 fn(extern("SDL_strlcat")) strlcat(
   dst: optref[u8],
   src: optref[u8],
-  maxlen: usize,
-): usize
+  maxlen: size,
+): size
 fn(extern("SDL_strdup")) strdup(
   str: optref[u8],
 ): optref[u8]
 fn(extern("SDL_strndup")) strndup(
   str: optref[u8],
-  maxlen: usize,
+  maxlen: size,
 ): optref[u8]
 fn(extern("SDL_strrev")) strrev(
   str: optref[u8],
@@ -1323,7 +1323,7 @@ fn(extern("SDL_strstr")) strstr(
 fn(extern("SDL_strnstr")) strnstr(
   haystack: optref[u8],
   needle: optref[u8],
-  maxlen: usize,
+  maxlen: size,
 ): optref[u8]
 fn(extern("SDL_strcasestr")) strcasestr(
   haystack: optref[u8],
@@ -1336,11 +1336,11 @@ fn(extern("SDL_strtok_r")) strtok_r(
 ): optref[u8]
 fn(extern("SDL_utf8strlen")) utf8strlen(
   str: optref[u8],
-): usize
+): size
 fn(extern("SDL_utf8strnlen")) utf8strnlen(
   str: optref[u8],
-  bytes: usize,
-): usize
+  bytes: size,
+): size
 fn(extern("SDL_itoa")) itoa(
   value: i32,
   str: optref[u8],
@@ -1408,7 +1408,7 @@ fn(extern("SDL_strcmp")) strcmp(
 fn(extern("SDL_strncmp")) strncmp(
   str1: optref[u8],
   str2: optref[u8],
-  maxlen: usize,
+  maxlen: size,
 ): i32
 fn(extern("SDL_strcasecmp")) strcasecmp(
   str1: optref[u8],
@@ -1417,7 +1417,7 @@ fn(extern("SDL_strcasecmp")) strcasecmp(
 fn(extern("SDL_strncasecmp")) strncasecmp(
   str1: optref[u8],
   str2: optref[u8],
-  maxlen: usize,
+  maxlen: size,
 ): i32
 fn(extern("SDL_strpbrk")) strpbrk(
   str: optref[u8],
@@ -1425,7 +1425,7 @@ fn(extern("SDL_strpbrk")) strpbrk(
 ): optref[u8]
 fn(extern("SDL_StepUTF8")) StepUTF8(
   pstr: optref[optref[u8]],
-  pslen: optref[usize],
+  pslen: optref[size],
 ): Uint32
 fn(extern("SDL_StepBackUTF8")) StepBackUTF8(
   start: optref[u8],
@@ -1447,25 +1447,25 @@ fn(extern("SDL_vsscanf")) vsscanf(
 ): i32
 fn(extern("SDL_snprintf")) snprintf(
   text: optref[u8],
-  maxlen: usize,
+  maxlen: size,
   fmt: optref[u8],
   varargs: core/c-varargs,
 ): i32
 fn(extern("SDL_swprintf")) swprintf(
   text: optref[i32],
-  maxlen: usize,
+  maxlen: size,
   fmt: optref[i32],
   varargs: core/c-varargs,
 ): i32
 fn(extern("SDL_vsnprintf")) vsnprintf(
   text: optref[u8],
-  maxlen: usize,
+  maxlen: size,
   fmt: optref[u8],
   ap: ptr,
 ): i32
 fn(extern("SDL_vswprintf")) vswprintf(
   text: optref[i32],
-  maxlen: usize,
+  maxlen: size,
   fmt: optref[i32],
   ap: ptr,
 ): i32
@@ -1665,35 +1665,35 @@ fn(extern("SDL_iconv_close")) iconv_close(
 fn(extern("SDL_iconv")) iconv(
   cd: iconv_t,
   inbuf: optref[optref[u8]],
-  inbytesleft: optref[usize],
+  inbytesleft: optref[size],
   outbuf: optref[optref[u8]],
-  outbytesleft: optref[usize],
-): usize
+  outbytesleft: optref[size],
+): size
 fn(extern("SDL_iconv_string")) iconv_string(
   tocode: optref[u8],
   fromcode: optref[u8],
   inbuf: optref[u8],
-  inbytesleft: usize,
+  inbytesleft: size,
 ): optref[u8]
 fn(extern("SDL_size_mul_check_overflow")) size_mul_check_overflow(
-  a: usize,
-  b: usize,
-  ret: optref[usize],
+  a: size,
+  b: size,
+  ret: optref[size],
 ): bool
 fn(extern("SDL_size_mul_check_overflow_builtin")) size_mul_check_overflow_builtin(
-  a: usize,
-  b: usize,
-  ret: optref[usize],
+  a: size,
+  b: size,
+  ret: optref[size],
 ): bool
 fn(extern("SDL_size_add_check_overflow")) size_add_check_overflow(
-  a: usize,
-  b: usize,
-  ret: optref[usize],
+  a: size,
+  b: size,
+  ret: optref[size],
 ): bool
 fn(extern("SDL_size_add_check_overflow_builtin")) size_add_check_overflow_builtin(
-  a: usize,
-  b: usize,
-  ret: optref[usize],
+  a: size,
+  b: size,
+  ret: optref[size],
 ): bool
 type(alias) FunctionPointer = *fn(
 
@@ -2175,15 +2175,15 @@ type IOStreamInterface = {
   read: *fn(
     ptr,
     ptr,
-    usize,
+    size,
     optref[IOStatus]
-  ) -> usize,
+  ) -> size,
   write: *fn(
     ptr,
     ptr,
-    usize,
+    size,
     optref[IOStatus]
-  ) -> usize,
+  ) -> size,
   flush: *fn(
     ptr,
     optref[IOStatus]
@@ -2199,11 +2199,11 @@ fn(extern("SDL_IOFromFile")) IOFromFile(
 ): optref[IOStream]
 fn(extern("SDL_IOFromMem")) IOFromMem(
   mem: ptr,
-  size: usize,
+  size: size,
 ): optref[IOStream]
 fn(extern("SDL_IOFromConstMem")) IOFromConstMem(
   mem: ptr,
-  size: usize,
+  size: size,
 ): optref[IOStream]
 fn(extern("SDL_IOFromDynamicMem")) IOFromDynamicMem(): optref[IOStream]
 fn(extern("SDL_OpenIO")) OpenIO(
@@ -2233,45 +2233,45 @@ fn(extern("SDL_TellIO")) TellIO(
 fn(extern("SDL_ReadIO")) ReadIO(
   context_c: optref[IOStream],
   ptr: ptr,
-  size: usize,
-): usize
+  size: size,
+): size
 fn(extern("SDL_WriteIO")) WriteIO(
   context_c: optref[IOStream],
   ptr: ptr,
-  size: usize,
-): usize
+  size: size,
+): size
 fn(extern("SDL_IOprintf")) IOprintf(
   context_c: optref[IOStream],
   fmt: optref[u8],
   varargs: core/c-varargs,
-): usize
+): size
 fn(extern("SDL_IOvprintf")) IOvprintf(
   context_c: optref[IOStream],
   fmt: optref[u8],
   ap: ptr,
-): usize
+): size
 fn(extern("SDL_FlushIO")) FlushIO(
   context_c: optref[IOStream],
 ): bool
 fn(extern("SDL_LoadFile_IO")) LoadFile_IO(
   src: optref[IOStream],
-  datasize: optref[usize],
+  datasize: optref[size],
   closeio: bool,
 ): ptr
 fn(extern("SDL_LoadFile")) LoadFile(
   file: optref[u8],
-  datasize: optref[usize],
+  datasize: optref[size],
 ): ptr
 fn(extern("SDL_SaveFile_IO")) SaveFile_IO(
   src: optref[IOStream],
   data: ptr,
-  datasize: usize,
+  datasize: size,
   closeio: bool,
 ): bool
 fn(extern("SDL_SaveFile")) SaveFile(
   file: optref[u8],
   data: ptr,
-  datasize: usize,
+  datasize: size,
 ): bool
 fn(extern("SDL_ReadU8")) ReadU8(
   src: optref[IOStream],
@@ -3533,7 +3533,7 @@ fn(extern("SDL_HasPrimarySelectionText")) HasPrimarySelectionText(): bool
 type(alias) ClipboardDataCallback = *fn(
   ptr,
   optref[u8],
-  optref[usize]
+  optref[size]
 ) -> ptr
 type(alias) ClipboardCleanupCallback = *fn(
   ptr
@@ -3543,18 +3543,18 @@ fn(extern("SDL_SetClipboardData")) SetClipboardData(
   cleanup: ClipboardCleanupCallback,
   userdata: ptr,
   mime_types: optref[optref[u8]],
-  num_mime_types: usize,
+  num_mime_types: size,
 ): bool
 fn(extern("SDL_ClearClipboardData")) ClearClipboardData(): bool
 fn(extern("SDL_GetClipboardData")) GetClipboardData(
   mime_type: optref[u8],
-  size: optref[usize],
+  size: optref[size],
 ): ptr
 fn(extern("SDL_HasClipboardData")) HasClipboardData(
   mime_type: optref[u8],
 ): bool
 fn(extern("SDL_GetClipboardMimeTypes")) GetClipboardMimeTypes(
-  num_mime_types: optref[usize],
+  num_mime_types: optref[size],
 ): optref[optref[u8]]
 fn(extern("SDL_GetNumLogicalCPUCores")) GetNumLogicalCPUCores(): i32
 fn(extern("SDL_GetCPUCacheLineSize")) GetCPUCacheLineSize(): i32
@@ -3573,7 +3573,7 @@ fn(extern("SDL_HasNEON")) HasNEON(): bool
 fn(extern("SDL_HasLSX")) HasLSX(): bool
 fn(extern("SDL_HasLASX")) HasLASX(): bool
 fn(extern("SDL_GetSystemRAM")) GetSystemRAM(): i32
-fn(extern("SDL_GetSIMDAlignment")) GetSIMDAlignment(): usize
+fn(extern("SDL_GetSIMDAlignment")) GetSIMDAlignment(): size
 fn(extern("SDL_GetSystemPageSize")) GetSystemPageSize(): i32
 type(alias) DisplayID = Uint32
 type(alias) WindowID = Uint32
@@ -3740,7 +3740,7 @@ fn(extern("SDL_GetWindowFullscreenMode")) GetWindowFullscreenMode(
 ): optref[DisplayMode]
 fn(extern("SDL_GetWindowICCProfile")) GetWindowICCProfile(
   window: optref[Window],
-  size: optref[usize],
+  size: optref[size],
 ): ptr
 fn(extern("SDL_GetWindowPixelFormat")) GetWindowPixelFormat(
   window: optref[Window],
@@ -6443,7 +6443,7 @@ type GPUColorTargetBlendState = {
   padding2: Uint8,
 }
 type GPUShaderCreateInfo = {
-  code_size: usize,
+  code_size: size,
   code: optref[Uint8],
   entrypoint: optref[u8],
   format: GPUShaderFormat,
@@ -6533,7 +6533,7 @@ type GPUGraphicsPipelineCreateInfo = {
   props: PropertiesID,
 }
 type GPUComputePipelineCreateInfo = {
-  code_size: usize,
+  code_size: size,
   code: optref[Uint8],
   entrypoint: optref[u8],
   format: GPUShaderFormat,
@@ -7306,18 +7306,18 @@ fn(extern("SDL_hid_get_properties")) hid_get_properties(
 fn(extern("SDL_hid_write")) hid_write(
   dev: optref[hid_device],
   data: optref[u8],
-  length: usize,
+  length: size,
 ): i32
 fn(extern("SDL_hid_read_timeout")) hid_read_timeout(
   dev: optref[hid_device],
   data: optref[u8],
-  length: usize,
+  length: size,
   milliseconds: i32,
 ): i32
 fn(extern("SDL_hid_read")) hid_read(
   dev: optref[hid_device],
   data: optref[u8],
-  length: usize,
+  length: size,
 ): i32
 fn(extern("SDL_hid_set_nonblocking")) hid_set_nonblocking(
   dev: optref[hid_device],
@@ -7326,17 +7326,17 @@ fn(extern("SDL_hid_set_nonblocking")) hid_set_nonblocking(
 fn(extern("SDL_hid_send_feature_report")) hid_send_feature_report(
   dev: optref[hid_device],
   data: optref[u8],
-  length: usize,
+  length: size,
 ): i32
 fn(extern("SDL_hid_get_feature_report")) hid_get_feature_report(
   dev: optref[hid_device],
   data: optref[u8],
-  length: usize,
+  length: size,
 ): i32
 fn(extern("SDL_hid_get_input_report")) hid_get_input_report(
   dev: optref[hid_device],
   data: optref[u8],
-  length: usize,
+  length: size,
 ): i32
 fn(extern("SDL_hid_close")) hid_close(
   dev: optref[hid_device],
@@ -7344,23 +7344,23 @@ fn(extern("SDL_hid_close")) hid_close(
 fn(extern("SDL_hid_get_manufacturer_string")) hid_get_manufacturer_string(
   dev: optref[hid_device],
   string: optref[i32],
-  maxlen: usize,
+  maxlen: size,
 ): i32
 fn(extern("SDL_hid_get_product_string")) hid_get_product_string(
   dev: optref[hid_device],
   string: optref[i32],
-  maxlen: usize,
+  maxlen: size,
 ): i32
 fn(extern("SDL_hid_get_serial_number_string")) hid_get_serial_number_string(
   dev: optref[hid_device],
   string: optref[i32],
-  maxlen: usize,
+  maxlen: size,
 ): i32
 fn(extern("SDL_hid_get_indexed_string")) hid_get_indexed_string(
   dev: optref[hid_device],
   string_index: i32,
   string: optref[i32],
-  maxlen: usize,
+  maxlen: size,
 ): i32
 fn(extern("SDL_hid_get_device_info")) hid_get_device_info(
   dev: optref[hid_device],
@@ -7368,7 +7368,7 @@ fn(extern("SDL_hid_get_device_info")) hid_get_device_info(
 fn(extern("SDL_hid_get_report_descriptor")) hid_get_report_descriptor(
   dev: optref[hid_device],
   buf: optref[u8],
-  buf_size: usize,
+  buf_size: size,
 ): i32
 fn(extern("SDL_hid_ble_scan")) hid_ble_scan(
   active: bool,
@@ -7677,7 +7677,7 @@ fn(extern("SDL_GetProcessProperties")) GetProcessProperties(
 ): PropertiesID
 fn(extern("SDL_ReadProcess")) ReadProcess(
   process: optref[Process],
-  datasize: optref[usize],
+  datasize: optref[size],
   exitcode: optref[i32],
 ): ptr
 fn(extern("SDL_GetProcessInput")) GetProcessInput(

@@ -224,7 +224,7 @@ ns for arena {
     if start.add-bytes(bytes).diff(self.as[ptr]) > 4294967295 {
       crash("arena handle: memory is beyond 4GB from the arena header")
     }
-    start.diff(self.as[ptr]).trunc[u32]
+    start.diff(self.as[ptr]).low[u32]
   }
 
   fn _check-handle-bytes(self: *arena, offset: u32, bytes: size) {
@@ -245,7 +245,7 @@ ns for arena {
     if items.buffer.len == 0 return .0
     .{
       offset = self._offset-in-first-region(items.buffer.data, items.buffer.size-bytes()),
-      len = items.buffer.len.trunc[u32],
+      len = items.buffer.len.low[u32],
     }
   }
 

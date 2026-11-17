@@ -12,7 +12,7 @@ ns fmt {
       let continuation = vector/splat[u8, k1/simd-bytes](0x80)
       while i + lanes <= len {
         let chunk = vector/load-unchecked[u8, k1/simd-bytes](base.add-bytes(i))
-        count = count + lanes - chunk.bit-and(high-bits).eq-lanes(continuation).to-mask().count-ones().signed()
+        count = count + lanes - chunk.bit-and(high-bits).eq-lanes(continuation).to-mask().count-ones()
         i = i + lanes
       }
     }
@@ -22,8 +22,8 @@ ns fmt {
     count
   }
 
-  fn chars-prefix(bytes: span[u8], n: u32): span[u8] {
-    let count: u32 = 0
+  fn chars-prefix(bytes: span[u8], n: i64): span[u8] {
+    let count = 0
     let end: size = 0
     while end < bytes.len() {
       if is-char-start(bytes.[end]) {
@@ -70,31 +70,30 @@ ns fmt {
       }
     }
 
-    fn shortfall(self: *pad, width: u32): size {
+    fn shortfall(self: *pad, width: size): size {
       let len = char-count(self.text.as-span())
-      let width = width.as-size()
       if len >= width 0 else width - len
     }
 
-    fn align-left[w: writer](self: *pad, w, fill: string, width: u32) {
+    fn align-left[w: writer](self: *pad, w, fill: string, width: size) {
       let short = self.shortfall(width)
       w.write-bytes(self.text.as-span())
       w.repeat(fill, short)
     }
 
-    fn align-right[w: writer](self: *pad, w, fill: string, width: u32) {
+    fn align-right[w: writer](self: *pad, w, fill: string, width: size) {
       w.repeat(fill, self.shortfall(width))
       w.write-bytes(self.text.as-span())
     }
 
-    fn align-center[w: writer](self: *pad, w, fill: string, width: u32) {
+    fn align-center[w: writer](self: *pad, w, fill: string, width: size) {
       let short = self.shortfall(width)
       w.repeat(fill, short / 2)
       w.write-bytes(self.text.as-span())
       w.repeat(fill, short - short / 2)
     }
 
-    fn align-zeros[w: writer](self: *pad, w, width: u32) {
+    fn align-zeros[w: writer](self: *pad, w, width: size) {
       let text = self.text.as-span()
       let short = self.shortfall(width)
       let signed = text.non-empty() and (text.[0] == '-'.as-u8() or text.[0] == '+'.as-u8())

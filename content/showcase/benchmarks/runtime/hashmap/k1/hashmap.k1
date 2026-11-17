@@ -18,7 +18,7 @@ fn main(): i32 {
   let m = map/new[u64, u64]()
   let keys = rng.{ state = 0x9E3779B97F4A7C15 }
   for i in 0.until(n) {
-    m.insert(keys.next(), i.unsigned())
+    m.insert(keys.next(), i.u())
   }
   let hits = rng.{ state = 0x9E3779B97F4A7C15 }
   let misses = rng.{ state = 0x2545F4914F6CDD1D }

@@ -26,11 +26,11 @@ fn start-server(certificate-name: string): *test-server {
   mbedtls/x509_crt_init(server.certificate.&.as())
   mbedtls/pk_init(server.key.&.as())
   let certificate = files/read-to-string("$FIXTURES/$certificate-name").!.to-c-ext()
-  assert-equals(mbedtls/x509_crt_parse(server.certificate.&.as(), certificate.ptr.narrow(), (certificate.len + 1).unsigned()), 0)
+  assert-equals(mbedtls/x509_crt_parse(server.certificate.&.as(), certificate.ptr.narrow(), certificate.len + 1), 0)
   let key = files/read-to-string("$FIXTURES/server.key").!.to-c-ext()
-  assert-equals(mbedtls/pk_parse_key(server.key.&.as(), key.ptr.narrow(), (key.len + 1).unsigned(), null(), 0), 0)
+  assert-equals(mbedtls/pk_parse_key(server.key.&.as(), key.ptr.narrow(), key.len + 1, null(), 0), 0)
   assert-equals(mbedtls/ssl_config_defaults(
-    server.ssl-config.&.as(), mbedtls/SSL_IS_SERVER.trunc[i32], mbedtls/SSL_TRANSPORT_STREAM.trunc[i32], mbedtls/SSL_PRESET_DEFAULT.trunc[i32]
+    server.ssl-config.&.as(), mbedtls/SSL_IS_SERVER.low[i32], mbedtls/SSL_TRANSPORT_STREAM.low[i32], mbedtls/SSL_PRESET_DEFAULT.low[i32]
   ), 0)
   assert-equals(mbedtls/ssl_conf_own_cert(server.ssl-config.&.as(), server.certificate.&.as(), server.key.&.as()), 0)
   server.alpn-list = ["http/1.1".to-c().as(), null()]
@@ -51,18 +51,18 @@ fn serve-one(server: *test-server, outcome: server-outcome) {
   if mbedtls/ssl_handshake(session.&.as()) != 0 return
 
   let buffer: array[u8, 16] = .0
-  let n = mbedtls/ssl_read(session.&.as(), buffer.data-ptr().narrow(), buffer.len().unsigned())
-  assert-equals(n.widen[i64], REQUEST.len())
-  assert-equals(mbedtls/ssl_write(session.&.as(), REPLY.data-ptr().narrow(), REPLY.len().unsigned()).widen[i64], REPLY.len())
+  let n = mbedtls/ssl_read(session.&.as(), buffer.data-ptr().narrow(), buffer.len())
+  assert-equals(n.as[i64], REQUEST.len())
+  assert-equals(mbedtls/ssl_write(session.&.as(), REPLY.data-ptr().narrow(), REPLY.len()).as[i64], REPLY.len())
   if outcome is :close-cleanly { assert-equals(mbedtls/ssl_close_notify(session.&.as()), 0) }
 }
 
-fn server-send(user-data: ptr, data: optref[u8], len: usize): i32 {
-  user-data.ref[net/tcp-stream].write(data.as(), len.signed()).raw.trunc[i32]
+fn server-send(user-data: ptr, data: optref[u8], len: size): i32 {
+  user-data.ref[net/tcp-stream].write(data.as(), len).raw.low[i32]
 }
 
-fn server-receive(user-data: ptr, data: optref[u8], len: usize): i32 {
-  fd/read(user-data.ref[net/tcp-stream].file, data.as(), len.signed()).raw.trunc[i32]
+fn server-receive(user-data: ptr, data: optref[u8], len: size): i32 {
+  fd/read(user-data.ref[net/tcp-stream].file, data.as(), len).raw.low[i32]
 }
 
 fn with-connection(
@@ -85,7 +85,7 @@ fn with-connection(
 fn assert-rejected(certificate: string, trust: tls/trust, hostname: string, flag: i64) {
   with-connection(certificate, :close-cleanly, trust, hostname, fn[flag](connected: result[*tls/client, tls/error]) {
     if connected is {
-      :err(:verification(flags)) -> assert(flags.widen[u64].signed() & flag != 0),
+      :err(:verification(flags)) -> assert(flags.as[u64].i() & flag != 0),
       :err(other) -> crash("expected a verification failure, got $other"),
       :ok(_) -> crash("expected a verification failure"),
     }

@@ -34,7 +34,7 @@ LLM-maintained K1 notes; fix wrong lines on sight. Companion: `k1-additional.md`
   `< <= > >=`, `== !=`, `and`, `or`, `?`. Bitwise beats comparison:
   `a & b == c` is `(a & b) == c`. `and`/`or` short-circuit.
 - `==`/`!=` are the `equals` ability (`not-equals` defaults to `not equals`).
-- Ints: `+ - *` wrap, shift counts are `u32` taken mod width, `/ %` crash on 0
+- Ints: `+ - *` wrap, shift counts are `i64` taken mod width, `/ %` crash on 0
   and MIN/-1.
   Identical in the VM and native, every opt level; checked math is library code.
 - Literals: `0xff 0o755 0b1010 1_000 255u8 -3i8 10: u8 'c' '\n' "s" .{} .0`.
@@ -93,10 +93,13 @@ and `some t` need `name: t`.
 
 ## Scalars and conversions
 `bool char string int i8 i16 i32 i64 u8 u16 u32 u64 size f32 f64 ptr`.
-- `x.widen[i64]` lossless (implicit at arg/let/return coercions), `x.trunc[u8]`
-  modular, `.signed()`/`.unsigned()` same-width flip. zext:
-  `x.unsigned().widen[u64]`; sext: `x.widen[i64].unsigned()`.
-- `.as[t]`: int<->float, total views behind references (`*t` -> `ptr`,
+- Integers: `x.as[i64]` lossless extension (implicit at arg/let/return coercions),
+  `x.low[u8]` keeps the low bits, `.i()`/`.u()` same-width flip. zext:
+  `x.u().as[u64]`; sext: `x.as[i64].u()`.
+- Floats: `x.to-f32()`/`x.to-f64()` from any integer or the other float;
+  `f.trunc[i32]` drops the fraction.
+- `.as[t]` never changes the value: integer extension, total views behind
+  references (`*t` -> `ptr`,
   `*t` -> `optref[t]`, `*big` -> `*prefix-struct`), and same-size structs, sums and
   enums by value (nominal <-> structural, names ignored; struct fields pair by offset
   through nested structs, sum variants by tag). `optref[t]` views as a nullable `*t`,
@@ -212,7 +215,7 @@ fn[base, counter.&](x: int) { counter.* = counter.* + base + x }
 - Any callable expr calls: `(s.callback)(x)` (`s.callback(x)` is a method lookup),
   `(make-adder(2))(3)`. A named fn's value has the ZST `type-of(f)`.
 - `a.b[t]` is always a call; a call with only type args drops its parens:
-  `x.widen[i64]`, `id.is-instance-of[list]`.
+  `x.as[i64]`, `id.is-instance-of[list]`.
 - `xs || map(fn x. x + 1) || filter(fn x. x % 2 == 0)` pipes.
 
 ## Abilities

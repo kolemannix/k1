@@ -334,7 +334,7 @@ fn parse-digits(s: string): result[u64, parse-error] {
   let n: u64 = 0
   for c in s {
     require c.is-ascii-digit() else { return :err :bad-digit c }
-    n = n * 10 + (c.as-u8() - '0'.as-u8()).widen[u64]
+    n = n * 10 + (c.as-u8() - '0'.as-u8()).as[u64]
     require n < 100000 else { return :err :too-big }
   }
   :ok n

@@ -8,9 +8,9 @@ fn(inline) file-of(sq: square): u32 { sq & 7 }
 fn(inline) rank-of(sq: square): u32 { sq >> 3 }
 
 fn(inline) shifted(sq: square, s: step): ?square {
-  let f = file-of(sq).signed() + s.df
-  let r = rank-of(sq).signed() + s.dr
-  if f < 0 or f > 7 or r < 0 or r > 7 :none else :some((r * 8 + f).unsigned())
+  let f = file-of(sq).i() + s.df
+  let r = rank-of(sq).i() + s.dr
+  if f < 0 or f > 7 or r < 0 or r > 7 :none else :some((r * 8 + f).u())
 }
 
 let ROOK_STEPS: array[step, 4] = [.{ df = 1, dr = 0 }, .{ df = -1, dr = 0 }, .{ df = 0, dr = 1 }, .{ df = 0, dr = -1 }]
@@ -63,7 +63,7 @@ fn find-magics(steps: array[step, 4]): slider-table {
   let magics: array[magic, 64] = .0
   let table-len: size = 0
   for sq in 0u32.until(64) {
-    table-len = table-len + ((1: size) << relevant-mask(sq, steps).count-ones().trunc[u32])
+    table-len = table-len + ((1: size) << relevant-mask(sq, steps).count-ones())
   }
   let attacks = buffer/allocate[bitboard](table-len)
   let occupancies: array[bitboard, 4096] = .0
@@ -74,7 +74,7 @@ fn find-magics(steps: array[step, 4]): slider-table {
   for sq in 0u32.until(64) {
     let rng: xorshift = .{ state = MAGIC_SEEDS.[rank-of(sq)] }
     let mask = relevant-mask(sq, steps)
-    let bits = mask.count-ones().trunc[u32]
+    let bits = mask.count-ones().low[u32]
     let count: u32 = 0
     let subset: bitboard = 0
     loop {
@@ -90,7 +90,7 @@ fn find-magics(steps: array[step, 4]): slider-table {
       if (mask * factor >> 56).count-ones() < 6 continue
       trial = trial + 1
       for i in 0u32.until(count) {
-        let index = (occupancies.[i] * factor >> shift).trunc[u32]
+        let index = (occupancies.[i] * factor >> shift).low[u32]
         if stamps.[index] != trial {
           stamps.[index] = trial
           attacks.[offset + index] = references.[i]

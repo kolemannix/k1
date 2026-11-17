@@ -53,7 +53,7 @@ spells the per-needle lines:
       any-mask.write(".bit-or(m$it-index)")
     }
     if it-index < last {
-      earlier-hits.writeln("if m$it-index.shift-right(lane.trunc[u32]).bit-and(1) == 1 return .{ index = i + lane.signed(), which = $it-index }")
+      earlier-hits.writeln("if m$it-index.shift-right(lane).bit-and(1) == 1 return .{ index = i + lane, which = $it-index }")
     }
     scalar-hits.writeln("if b == $needle return .{ index = i, which = $it-index }")
   }
@@ -69,7 +69,7 @@ and the template places them:
             ${masks.build()}
             let lane = ${any-mask.build()}.trailing-zeros()
             ${earlier-hits.build()}
-            return .{ index = i + lane.signed(), which = $last }
+            return .{ index = i + lane, which = $last }
           }
           i = i + $lanes
         }
@@ -88,12 +88,12 @@ So are the bit ops every integer type gets, `trailing-zeros` among them:
 
 ```k1 path=modules/core/builtin.k1
 ability int-bits {
-  fn trailing-zeros(self): self
-  fn leading-zeros(self): self
-  fn count-ones(self): self
+  fn trailing-zeros(self): i64
+  fn leading-zeros(self): i64
+  fn count-ones(self): i64
   fn swap-bytes(self): self
-  fn rotate-left(self, count: u32): self
-  fn rotate-right(self, count: u32): self
+  fn rotate-left(self, count: i64): self
+  fn rotate-right(self, count: i64): self
 }
 ```
 
@@ -615,7 +615,7 @@ plain k1 in `std/reload`: `dlopen`, check the hash, resolve every symbol,
 and only then patch the slots:
 
 ```k1 path=modules/std/reload.k1
-    let entries = span/wrap-raw[entry](descriptor.entries, descriptor.entry-count.signed())
+    let entries = span/wrap-raw[entry](descriptor.entries, descriptor.entry-count)
     let addrs = list/with-capacity[ptr](entries.len())
     for e in entries {
       let addr = if dylib/sym(handle, string/wrap-c(e.symbol)) is {
@@ -687,7 +687,7 @@ and to a canvas in the browser. It exports to JavaScript with the same
 ```k1 path=examples/fractal/fractal.k1
 fn(export("k1_frame")) frame-address(width: i32, height: i32): u32 {
   ensure-frame(width, height)
-  frame.data-ptr().to-size().trunc[u32]
+  frame.data-ptr().to-size().low[u32]
 }
 ```
 

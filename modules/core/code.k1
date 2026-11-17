@@ -119,7 +119,7 @@ ns for code-builder {
   fn new(): code-builder { .0 }
 
   fn(inline) write-spanned(self: *code-builder, text: string, source: u64) {
-    self.spans.push(.{ start = self.text.len.trunc[u32], len = text.len().trunc[u32], source })
+    self.spans.push(.{ start = self.text.len.low[u32], len = text.len().low[u32], source })
     self.write(text)
   }
 
@@ -141,7 +141,7 @@ ns for code-builder {
   }
 
   fn write-code(self: *code-builder, c: code) {
-    let base = self.text.len.trunc[u32]
+    let base = self.text.len.low[u32]
     self.write(c.text)
     for s in c.spans {
       self.spans.push(.{ start = base + s.start, len = s.len, source = s.source })

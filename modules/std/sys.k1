@@ -87,7 +87,7 @@ fn parse-main-args(arg-count: u32, args: ptr): span[string] {
 
 fn read-line(max-length-bytes: size): result[string, string] {
   let buffer = buffer/allocate[byte](max-length-bytes)
-  let bytes-read: i64 = posix/read(0, buffer.data, buffer.len.unsigned())
+  let bytes-read: i64 = posix/read(0, buffer.data, buffer.len)
 
   if bytes-read < 0 {
     return :err "Failed to read line"

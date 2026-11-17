@@ -30,7 +30,7 @@ type Union1 = union {
 type foo = {
   _char: u8,
   _unsigned_char: u8,
-  _sizet: usize,
+  _sizet: size,
   _int: i32,
   _int_p: optref[i32],
   _bool: bool,

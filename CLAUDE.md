@@ -62,7 +62,7 @@ They are agent notes: fix a wrong line on sight, never report it or ask.
   file or module dir, flags go anywhere, `-D [module.]name[=expr]` sets a module
   param. `k1 parse <file>` prints highlight tokens. Output: `<module>/.k1-out/`.
 - `just ts1`: suite1 plain and `--optimize`, the fast check. `just a`:
-  `sandbox/sandbox.k1`. `just slophost`: the selfhost parser over every repo `.k1`.
+  `sandbox/sandbox.k1`.
   Rust unit tests: `cargo test --lib --features=llvm-sys/prefer-dynamic,lsp`.
 - `just test` (`./test.sh`): every lane in parallel (one per module, since
   same-module runs share `.k1-out`), then fails on any `nocommit`. Run it bare and
@@ -99,8 +99,7 @@ or codegen_llvm (binaries).
   at OS calls.
 - Tokens carry `is_whitespace_preceded`/`is_newline_preceded` and parse rules key on
   them (`is_kind_nonspaced`, adjacent call parens, quiet payloads, `peek_is_sign`):
-  read `parse.rs` before answering a parse question. `examples/selfhost` mirrors
-  these rules and changes in step.
+  read `parse.rs` before answering a parse question.
 - `typer.rs` (17k lines; grep it): `TypedProgram`, every pool, the passes. Generic
   calls evaluate each stashable arg once, stashed after unification, spliced after
   `respecialize_aligned_args`; "evaluated only to learn types" is

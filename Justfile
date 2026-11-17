@@ -30,13 +30,6 @@ ts1-wasm:
 map *paths:
   python3 tools/codemap.py {{paths}}
 
-# a simple one-shot ai-generated k1 parser
-slophost:
-  cargo build --features=llvm-sys/prefer-dynamic --bin k1
-  target/debug/k1 test examples/selfhost
-  target/debug/k1 build examples/selfhost
-  examples/selfhost/.k1-out/selfhost $(find {{justfile_directory()}}/modules {{justfile_directory()}}/test_src {{justfile_directory()}}/examples -name '*.k1' -not -path '*/.k1-out/*' -not -path '*vendor*' -not -path '*/selfhost/*' -not -name 'fn_lib_requires_extern_fail.k1')
-
 # The fractal demo: same program natively, under wasmtime, and on a canvas
 fractal:
   just run-frag run examples/fractal

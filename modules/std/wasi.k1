@@ -11,13 +11,13 @@ ns wasi {
   fn(extern("poll_oneoff"), lib("wasi_snapshot_preview1")) poll-oneoff(subs: u32, events: u32, nsubscriptions: u32, nevents: u32): i32
 
   fn read(file-no: i32, buffer: ptr, count: size): i64 {
-    let iov: iovec = .{ buf = a32(buffer), len = count.trunc[u32] }
+    let iov: iovec = .{ buf = a32(buffer), len = count.low[u32] }
     let nread: u32 = 0
     let err = fd-read(file-no, a32(iov.&.as[ptr]), 1, a32(nread.&.as[ptr]))
     while err == core/platform/impls/wasi/EINTR {
       err = fd-read(file-no, a32(iov.&.as[ptr]), 1, a32(nread.&.as[ptr]))
     }
-    if err != 0 { 0 - err.widen[i64] } else nread.widen[i64]
+    if err != 0 { 0 - err.as[i64] } else nread.as[i64]
   }
 
   type fd-read-subscription = {
@@ -33,7 +33,7 @@ ns wasi {
 
   fn poll-readable(file-no: i32): bool {
     let subs: array[fd-read-subscription, 2] = .0
-    subs.[0] = .{ userdata = 1, tag = EVENTTYPE_FD_READ.widen[u64], fd = file-no.unsigned(), pad0 = 0, pad1 = 0, pad2 = 0, pad3 = 0 }
+    subs.[0] = .{ userdata = 1, tag = EVENTTYPE_FD_READ.as[u64], fd = file-no.u(), pad0 = 0, pad1 = 0, pad2 = 0, pad3 = 0 }
     let clock: *clock-subscription = subs.[1].&.as[ptr].ref[clock-subscription]
     clock.* = .{ userdata = 0, tag = 0, id = 1, timeout = 0, precision = 0, flags = 0 }
     let events: array[poll-event, 2] = .0
@@ -60,7 +60,7 @@ ns wasi {
   }
 
   fn random-fill(dest: ptr, count: size) {
-    if random-get(a32(dest), count.trunc[u32]) != 0 crash("wasi random_get failed")
+    if random-get(a32(dest), count.low[u32]) != 0 crash("wasi random_get failed")
   }
 
   // The subscription tag is one byte at offset 8 padded to 16; carried as

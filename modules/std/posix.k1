@@ -1,7 +1,6 @@
 ns posix {
 
   use core/c-int
-  use core/c-sizet
   use core/c-varargs
 
   let stdin: i32  = 0
@@ -16,8 +15,8 @@ ns posix {
   fn O_SEARCH(): c-int { k1/select-os(macos = fn. 0x40100000, linux = fn. 0x200000) }
   fn O_EXEC(): c-int { k1/select-os(macos = fn. 0x40000000, linux = fn. 0x200000) }
   fn(extern) open(path: *u8, oflag: c-int, c-varargs): c-int
-  fn(extern) read(file-no: c-int, buffer: ptr, count: c-sizet): i64
-  fn(extern) write(file-no: c-int, data: ptr, count: c-sizet): i64
+  fn(extern) read(file-no: c-int, buffer: ptr, count: size): i64
+  fn(extern) write(file-no: c-int, data: ptr, count: size): i64
   fn(extern) isatty(fd: c-int): c-int
   fn(extern) mkdir(path: *u8, mode: c-int): c-int
   fn(extern) link(from: *u8, to: *u8): c-int
@@ -59,7 +58,7 @@ ns posix {
   fn(extern) munmap(addr: ptr, len: size): i32
 
   let MADV_SEQUENTIAL: i32 = 2
-  fn(extern("posix_madvise")) madvise(addr: ptr, len: c-sizet, advice: c-int): c-int
+  fn(extern("posix_madvise")) madvise(addr: ptr, len: size, advice: c-int): c-int
 
   fn(extern) backtrace(buffer: ptr, size: c-int)
 
@@ -107,9 +106,9 @@ ns posix {
   fn(extern) dlclose(handle: ptr): c-int
   fn(extern) dlerror(): optref[u8]
 
-  fn(extern) getentropy(buf: ptr, count: c-sizet): c-int
+  fn(extern) getentropy(buf: ptr, count: size): c-int
 
-  fn(extern) readlink(path: *u8, buf: ptr, bufsize: c-sizet): i64
+  fn(extern) readlink(path: *u8, buf: ptr, bufsize: size): i64
   fn(extern) unlink(path: *u8): c-int
   let F_OK: c-int = 0
   let X_OK: c-int = 1
@@ -169,12 +168,12 @@ ns posix {
   ns for sockaddr {
     fn pack-family(family: c-int, len: size): u16 {
       k1/select-os(
-        macos = fn[family, len]. family.trunc[u16] << 8 | len.trunc[u16],
-        linux = fn[family]. family.trunc[u16]
+        macos = fn[family, len]. family.low[u16] << 8 | len.low[u16],
+        linux = fn[family]. family.low[u16]
       )
     }
     fn family(self: *sockaddr): c-int {
-      let packed = self.sa_len_family.widen[c-int]
+      let packed = self.sa_len_family.as[c-int]
       k1/select-os(macos = fn[packed]. packed >> 8, linux = fn[packed]. packed)
     }
   }
@@ -190,7 +189,7 @@ ns posix {
   fn(extern) bind(fd: c-int, address: ptr, address-len: socklen_t): c-int
   fn(extern) listen(fd: c-int, backlog: c-int): c-int
   fn(extern) accept(fd: c-int, address: ptr, address-len: *socklen_t): c-int
-  fn(extern) send(fd: c-int, data: ptr, count: c-sizet, flags: c-int): i64
+  fn(extern) send(fd: c-int, data: ptr, count: size, flags: c-int): i64
   fn(extern) shutdown(fd: c-int, how: c-int): c-int
   fn(extern) getsockopt(fd: c-int, level: c-int, option: c-int, value: ptr, value-len: *socklen_t): c-int
   fn(extern) setsockopt(fd: c-int, level: c-int, option: c-int, value: ptr, value-len: socklen_t): c-int
@@ -208,19 +207,19 @@ ns posix {
     fn or-errno(rc: c-int): i32 { if rc < 0 { 0 - libc/errno() } else rc }
 
     fn read(file-no: i32, buffer: ptr, count: size): i64 {
-      let capped = count.min(i32/max-value.widen[i64]).unsigned()
+      let capped = count.min(i32/max-value.as[i64])
       let n = posix/read(file-no, buffer, capped)
       while n < 0 and libc/errno() == libc/EINTR {
         n = posix/read(file-no, buffer, capped)
       }
-      if n < 0 { 0 - libc/errno().widen[i64] } else n
+      if n < 0 { 0 - libc/errno().as[i64] } else n
     }
     fn poll-one(fd: i32, events: i16, timeout-ms: u64): i32 {
       let p: pollfd = .{ fd, events, revents = 0 }
       let start = counter()
       let remaining = timeout-ms
       loop {
-        let n = poll(p.&.as[ptr], 1, remaining.min(i32/max-value.unsigned().widen[u64]).trunc[c-int])
+        let n = poll(p.&.as[ptr], 1, remaining.min(i32/max-value.u().as[u64]).low[c-int])
         if n >= 0 return n
         if libc/errno() != libc/EINTR return 0 - libc/errno()
         let elapsed-ms = counter-to-nanos(counter() - start) / 1_000_000
@@ -274,7 +273,7 @@ ns posix {
       let done: size = 0
       while done < count {
         let n = if count - done > 256 256 else count - done
-        if getentropy(dest.add-bytes(done), n.unsigned()) != 0 crash("getentropy failed")
+        if getentropy(dest.add-bytes(done), n) != 0 crash("getentropy failed")
         done = done + n
       }
     }
@@ -283,7 +282,7 @@ ns posix {
 
     fn mach-counter-to-nanos(counter: u64): u64 {
       if timebase.denom == 0 { mach_timebase_info(timebase.&) }
-      counter * timebase.numer.widen[u64] / timebase.denom.widen[u64]
+      counter * timebase.numer.as[u64] / timebase.denom.as[u64]
     }
 
     fn get-time(clockid: clockid_t): u64 {
@@ -413,7 +412,7 @@ ns posix {
             sin_zero = .0,
           } },
           family = AF_INET,
-          len = types/size[sockaddr_in].trunc[socklen_t],
+          len = types/size[sockaddr_in].low[socklen_t],
         },
         :v6 ip -> .{
           storage = .{ v6 = .{
@@ -424,7 +423,7 @@ ns posix {
             sin6_scope_id = ip.scope-id,
           } },
           family = AF_INET6(),
-          len = types/size[sockaddr_in6].trunc[socklen_t],
+          len = types/size[sockaddr_in6].low[socklen_t],
         },
       }
     }
@@ -442,13 +441,13 @@ ns posix {
 
     fn set-flag-option(fd: i32, level: c-int, option: c-int, enabled: bool): i32 {
       let value: c-int = if enabled 1 else 0
-      or-errno(setsockopt(fd, level, option, value.&.as[ptr], types/size[c-int].trunc[socklen_t]))
+      or-errno(setsockopt(fd, level, option, value.&.as[ptr], types/size[c-int].low[socklen_t]))
     }
 
     fn set-timeout(fd: i32, option: c-int, ms: ?u64): i32 {
       let total = if ms is :some m m.max(1) else 0
       let tv: timeval = .{ tv_sec = total / 1000, tv_usec = total % 1000 * 1000 }
-      or-errno(setsockopt(fd, SOL_SOCKET(), option, tv.&.as[ptr], types/size[timeval].trunc[socklen_t]))
+      or-errno(setsockopt(fd, SOL_SOCKET(), option, tv.&.as[ptr], types/size[timeval].low[socklen_t]))
     }
 
     fn set-nonblocking(fd: i32, enabled: bool): i32 {
@@ -460,7 +459,7 @@ ns posix {
 
     fn get-socket-error(fd: i32): i32 {
       let code: c-int = 0
-      let len = types/size[c-int].trunc[socklen_t]
+      let len = types/size[c-int].low[socklen_t]
       if getsockopt(fd, SOL_SOCKET(), SO_ERROR(), code.&.as[ptr], len.&) < 0 return 0 - libc/errno()
       0 - code
     }
@@ -502,7 +501,7 @@ ns posix {
 
     fn accept(fd: i32): result[net/accepted, i32] {
       let storage: sockaddr_in6 = .0
-      let len = types/size[sockaddr_in6].trunc[socklen_t]
+      let len = types/size[sockaddr_in6].low[socklen_t]
       let client = posix/accept(fd, storage.&.as[ptr], len.&)
       while client < 0 and libc/errno() == libc/EINTR {
         client = posix/accept(fd, storage.&.as[ptr], len.&)
@@ -513,17 +512,17 @@ ns posix {
 
     fn local-address(fd: i32): result[net/socket-address, i32] {
       let storage: sockaddr_in6 = .0
-      let len = types/size[sockaddr_in6].trunc[socklen_t]
+      let len = types/size[sockaddr_in6].low[socklen_t]
       if getsockname(fd, storage.&.as[ptr], len.&) < 0 return :err libc/errno()
       :ok read-socket-address(storage.&.as[ptr])
     }
 
     fn send(fd: i32, data: ptr, count: size): i64 {
-      let n = posix/send(fd, data, count.unsigned(), MSG_NOSIGNAL())
+      let n = posix/send(fd, data, count, MSG_NOSIGNAL())
       while n < 0 and libc/errno() == libc/EINTR {
-        n = posix/send(fd, data, count.unsigned(), MSG_NOSIGNAL())
+        n = posix/send(fd, data, count, MSG_NOSIGNAL())
       }
-      if n < 0 { 0 - libc/errno().widen[i64] } else n
+      if n < 0 { 0 - libc/errno().as[i64] } else n
     }
 
     fn shutdown(fd: i32, how: c-int): i32 { or-errno(posix/shutdown(fd, how)) }

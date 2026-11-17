@@ -13,17 +13,17 @@ fn(test) is-valid-matches-decoder-on-random-bytes() {
   for 0.until(3000) {
     buf.clear()
     seed = seed * 6364136223846793005 + 1442695040888963407
-    let len = ((seed >> 33) % 40).signed()
+    let len = ((seed >> 33) % 40).i()
     for 0.until(len) {
       seed = seed * 6364136223846793005 + 1442695040888963407
-      let r = (seed >> 24).trunc[u8]
+      let r = (seed >> 24).low[u8]
       let b: u8 = if r < 96 (r % 128) else if r < 160 (0x80 + r % 64) else if r < 200 (0xC2 + r % 30) else if r < 230 (0xE0 + r % 16) else (0xF0 + r % 8)
       buf.push(b)
     }
     let bytes = buf.as-span()
     if utf8/is-valid(bytes) != decodes-losslessly(bytes) {
       let sb = string-builder/new()
-      for bytes { sb.write(" "); core/format-uint(sb.&, it.widen[u64], 16) }
+      for bytes { sb.write(" "); core/format-uint(sb.&, it.as[u64], 16) }
       crash("utf8 mismatch, simd=${utf8/is-valid(bytes)}:${sb.build()}")
     }
   }

@@ -4,7 +4,7 @@ let COMPTIME: bool = true
 fn crc-table(): list[u32] {
   let table: list[u32] = list/filled(256, 0)
   for i in 0.until(256) {
-    let c = i.trunc[u32]
+    let c = i.low[u32]
     for 0.until(8) {
       c = if (c & 1) == 1 (0xEDB88320 ^ (c >> 1)) else c >> 1
     }
@@ -20,7 +20,7 @@ fn random-bytes(n: int): list[u8] {
     x = x ^ (x << 13)
     x = x ^ (x >> 17)
     x = x ^ (x << 5)
-    bytes.[i] = x.trunc[u8]
+    bytes.[i] = x.low[u8]
   }
   bytes
 }
@@ -28,7 +28,7 @@ fn random-bytes(n: int): list[u8] {
 fn crc32(table: list[u32], bytes: list[u8]): u32 {
   let c: u32 = 0xFFFFFFFF
   for b in bytes {
-    c = table.[((c ^ b.widen[u32]) & 0xFF).widen[i64]] ^ (c >> 8)
+    c = table.[((c ^ b.as[u32]) & 0xFF).as[i64]] ^ (c >> 8)
   }
   c ^ 0xFFFFFFFF
 }

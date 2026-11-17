@@ -208,7 +208,7 @@ fn main(): i32 {
   let sb = string-builder/new()
   for r in rows {
     sb.write("${r.service}=0b")
-    core/format-uint(sb.&, r.bytes.unsigned(), 2)
+    core/format-int(sb.&, r.bytes, 2)
     sb.write(" ")
   }
   println("\n${sb.build()}")
@@ -218,7 +218,7 @@ fn main(): i32 {
   quiet.filter-in-place(fn r. r.errors == 0)
   assert(quiet.is-empty())
 
-  let avg = (rows.[0].bytes.as[f64]) / (rows.[0].count.as[f64])
+  let avg = (rows.[0].bytes.to-f64()) / (rows.[0].count.to-f64())
   println("db average payload: $avg bytes")
   0
 }

@@ -28,7 +28,7 @@ let ZOPFLIFICATION-QUALITY: size = 10
 let HQ-ZOPFLIFICATION-QUALITY: size = 11
 
 fn distance-alphabet-size(npostfix: size, ndirect: size, maxnbits: size): size {
-  NUM-DISTANCE-SHORT-CODES + ndirect + (maxnbits << (npostfix + 1).trunc[u32])
+  NUM-DISTANCE-SHORT-CODES + ndirect + (maxnbits << (npostfix + 1))
 }
 
 type distance-params = {
@@ -41,7 +41,7 @@ type distance-params = {
 
 fn init-distance-params(npostfix: size, ndirect: size): distance-params {
   let alphabet-size-max = distance-alphabet-size(npostfix, ndirect, MAX-DISTANCE-BITS)
-  let max-distance = ndirect + (1 << (MAX-DISTANCE-BITS + npostfix + 2).trunc[u32]) - (1 << (npostfix + 2).trunc[u32])
+  let max-distance = ndirect + (1 << (MAX-DISTANCE-BITS + npostfix + 2)) - (1 << (npostfix + 2))
   .{
     distance-postfix-bits = npostfix,
     num-direct-distance-codes = ndirect,
@@ -91,12 +91,12 @@ ns for encoder-params {
   fn(inline) compute-rb-bits(self: *encoder-params): size { 1 + self.lgwin.max(self.lgblock) }
 
   fn(inline) max-metablock-size(self: *encoder-params): size {
-    1 << self.compute-rb-bits().min(MAX-INPUT-BLOCK-BITS).trunc[u32]
+    1 << self.compute-rb-bits().min(MAX-INPUT-BLOCK-BITS)
   }
 
-  fn(inline) input-block-size(self: *encoder-params): size { 1 << self.lgblock.trunc[u32] }
+  fn(inline) input-block-size(self: *encoder-params): size { 1 << self.lgblock }
 
-  fn(inline) max-backward-limit(self: *encoder-params): size { (1 << self.lgwin.trunc[u32]) - WINDOW-GAP }
+  fn(inline) max-backward-limit(self: *encoder-params): size { (1 << self.lgwin) - WINDOW-GAP }
 
   fn(inline) literal-spree-length-for-sparse-search(self: *encoder-params): size {
     if self.quality < 9 64 else 512

@@ -264,7 +264,7 @@ let DECIMAL_PAIRS: array[u16, 100] = {
 
 fn(inline) _write-decimal-pair(digits: *array[u8, 64], at: size, pair: u64) {
   let dst = checked-index(at, 63)
-  mem/write-unaligned(digits.as[ptr].add-bytes(dst), DECIMAL_PAIRS.[pair.signed()])
+  mem/write-unaligned(digits.as[ptr].add-bytes(dst), DECIMAL_PAIRS.[pair.i()])
 }
 
 fn format-uint[w: writer](w, value: u64, base: u64) {
@@ -282,12 +282,12 @@ fn format-uint[w: writer](w, value: u64, base: u64) {
       _write-decimal-pair(digits.&, start, remaining)
     } else {
       start = start - 1
-      digits.[start] = remaining.trunc[u8] + '0'.as-u8()
+      digits.[start] = remaining.low[u8] + '0'.as-u8()
     }
   } else {
     loop {
       start = start - 1
-      digits.[start] = u8/to-ascii-digit((remaining % base).trunc[u8]).as-u8()
+      digits.[start] = u8/to-ascii-digit((remaining % base).low[u8]).as-u8()
       remaining = remaining / base
       if remaining == 0 break
     }
@@ -295,21 +295,26 @@ fn format-uint[w: writer](w, value: u64, base: u64) {
   w.write-bytes(digits.&.as-buffer().slice(start, 64).as-span())
 }
 
+fn format-int[w: writer](w, value: i64, base: u64) {
+  if value < 0 w.write-char('-')
+  format-uint(w, value.abs().u(), base)
+}
+
 impl print for u8 {
   fn print-to[w: writer](self: u8, w) {
-    (self.widen[u64]).print-to(w)
+    (self.as[u64]).print-to(w)
   }
 }
 
 impl print for u16 {
   fn print-to[w: writer](self: u16, w) {
-    (self.widen[u64]).print-to(w)
+    (self.as[u64]).print-to(w)
   }
 }
 
 impl print for u32 {
   fn print-to[w: writer](self: u32, w) {
-    (self.widen[u64]).print-to(w)
+    (self.as[u64]).print-to(w)
   }
 }
 
@@ -321,31 +326,25 @@ impl print for u64 {
 
 impl print for i8 {
   fn print-to[w: writer](self: i8, w) {
-    (self.widen[int]).print-to(w)
+    (self.as[int]).print-to(w)
   }
 }
 
 impl print for i16 {
   fn print-to[w: writer](self: i16, w) {
-    (self.widen[int]).print-to(w)
+    (self.as[int]).print-to(w)
   }
 }
 
 impl print for i32 {
   fn print-to[w: writer](self: i32, w) {
-    (self.widen[int]).print-to(w)
+    (self.as[int]).print-to(w)
   }
 }
 
 impl print for int {
   fn print-to[w: writer](self: int, w) {
-    let neg = self < 0
-    if neg {
-      w.write-char('-')
-    }
-
-    let pos = if neg self.negated() else self
-    format-uint(w, pos.unsigned(), 10)
+    format-int(w, self, base = 10)
   }
 }
 
@@ -389,8 +388,8 @@ impl[s, f] try[t = s, e = f] for result[s, f] {
 
 impl[t: scalar-cmp] comparable for t {
   fn(inline) compare(self: t, other: t): ordering {
-    let gt = self.gt(other).as-u8().signed()
-    let lt = self.lt(other).as-u8().signed()
+    let gt = self.gt(other).as-u8().i()
+    let lt = self.lt(other).as-u8().i()
     bitcast[i8, ordering](gt - lt)
   }
 }
@@ -416,8 +415,10 @@ ns for u8 {
   let max-value: u8 = 0xFF
 
   fn(inline) as-char(self: u8): char { bitcast[u8, char](self) }
-  fn(inline) signed(self: u8): i8 { bitcast[u8, i8](self) }
-  fn(inline) as-size(self: u8): size { self.widen[size] }
+  fn(inline) i(self: u8): i8 { bitcast[u8, i8](self) }
+  fn(inline) as-size(self: u8): size { self.as[size] }
+
+  fn(inline) to-bytes-ne(self): array[u8, 1] { bitcast(self) }
 
   fn write-hex[w: writer](self: u8, w, upper: bool) {
     let digits = if upper "0123456789ABCDEF" else "0123456789abcdef"
@@ -430,43 +431,53 @@ ns for i8 {
   let max-value: i8 = 0x7F
   let min-value: i8 = -0x80
 
-  fn(inline) unsigned(self: i8): u8 { bitcast[i8, u8](self) }
-  fn(inline) as-size(self: i8): size { self.widen[size] }
+  fn(inline) to-bytes-ne(self): array[u8, 1] { bitcast(self) }
+
+  fn(inline) u(self: i8): u8 { bitcast[i8, u8](self) }
+  fn(inline) as-size(self: i8): size { self.as[size] }
 }
 
 ns for u16 {
   let min-value: u16 = 0x0000
   let max-value: u16 = 0xFFFF
 
-  fn(inline) signed(self: u16): i16 { bitcast[u16, i16](self) }
-  fn(inline) as-size(self: u16): size { self.widen[size] }
+  fn(inline) to-bytes-ne(self): array[u8, 2] { bitcast(self) }
+
+  fn(inline) i(self: u16): i16 { bitcast[u16, i16](self) }
+  fn(inline) as-size(self: u16): size { self.as[size] }
 }
 
 ns for i16 {
   let max-value: i16 = 0x7FFF
   let min-value: i16 = -0x8000
 
-  fn(inline) unsigned(self: i16): u16 { bitcast[i16, u16](self) }
-  fn(inline) as-size(self: i16): size { self.widen[size] }
+  fn(inline) to-bytes-ne(self): array[u8, 2] { bitcast(self) }
+
+  fn(inline) u(self: i16): u16 { bitcast[i16, u16](self) }
+  fn(inline) as-size(self: i16): size { self.as[size] }
 }
 
 ns for u32 {
   let min-value: u32 = 0x00000000
   let max-value: u32 = 0xFFFFFFFF
 
-  fn(inline) as-bool(self: u32): bool { self != 0 }
-  fn(inline) signed(self: u32): i32 { bitcast(self) }
+  fn(inline) to-bytes-ne(self): array[u8, 4] { bitcast(self) }
 
-  fn(inline) as-size(self: u32): size { self.widen[u64].signed() }
+  fn(inline) as-bool(self: u32): bool { self != 0 }
+  fn(inline) i(self: u32): i32 { bitcast(self) }
+
+  fn(inline) as-size(self: u32): size { self.as[size] }
 }
 
 ns for i32 {
   let max-value: i32 = 0x7FFFFFFF
   let min-value: i32 = -0x80000000
 
+  fn(inline) to-bytes-ne(self): array[u8, 4] { bitcast(self) }
+
   fn(inline) as-bool(self: i32): bool { self != 0 }
-  fn(inline) unsigned(self: i32): u32 { bitcast(self) }
-  fn(inline) as-size(self: i32): size { self.widen[size] }
+  fn(inline) u(self: i32): u32 { bitcast(self) }
+  fn(inline) as-size(self: i32): size { self.as[size] }
 
   fn abs(self: i32): i32 {
     let mask = self >> 31
@@ -478,7 +489,13 @@ ns for i64 {
   let max-value: i64 = 0x7FFFFFFFFFFFFFFF
   let min-value: i64 = -0x8000000000000000
 
-  fn(inline) unsigned(self: i64): u64 { bitcast[i64, u64](self) }
+  fn(inline) to-bytes-ne(self): array[u8, 8] { bitcast(self) }
+
+  fn(inline) u(self: i64): u64 { bitcast[i64, u64](self) }
+  fn(inline) lt-unsigned(self: i64, other: i64): bool { self.u() < other.u() }
+  fn(inline) le-unsigned(self: i64, other: i64): bool { self.u() <= other.u() }
+  fn(inline) gt-unsigned(self: i64, other: i64): bool { self.u() > other.u() }
+  fn(inline) ge-unsigned(self: i64, other: i64): bool { self.u() >= other.u() }
   fn(builtin) mul-high(self: i64, rhs: i64): i64
   fn(inline) to-ptr(self: i64): ptr { bitcast[i64, ptr](self) }
 
@@ -491,19 +508,19 @@ ns for i64 {
   }
 
   fn from-magnitude(neg: bool, magnitude: u64): ?i64 {
-    if magnitude > (if neg i64/min-value else i64/max-value).unsigned() :none
-    else if neg :some magnitude.signed().negated()
-    else :some magnitude.signed()
+    if magnitude > (if neg i64/min-value else i64/max-value).u() :none
+    else if neg :some magnitude.i().negated()
+    else :some magnitude.i()
   }
   fn next-pow2(self: i64): i64 {
     if self < 0 crash("i64/next-pow2: value must be positive") else
     if self == 0 return 1
 
-    let next = (self.unsigned()).next-pow2()
-    if next > i64/max-value.unsigned() {
+    let next = (self.u()).next-pow2()
+    if next > i64/max-value.u() {
       crash("i64/next-pow2: value too large to fit in i64")
     }
-    next.signed()
+    next.i()
   }
 
   fn abs(self: i64): i64 {
@@ -516,7 +533,9 @@ ns for u64 {
   let min-value: u64 = 0
   let max-value: u64 = 0xFFFFFFFFFFFFFFFF
 
-  fn(inline) signed(self: u64): i64 { bitcast(self) }
+  fn(inline) to-bytes-ne(self): array[u8, 8] { bitcast(self) }
+
+  fn(inline) i(self: u64): i64 { bitcast(self) }
   fn(builtin) mul-high(self: u64, rhs: u64): u64
   fn(inline) to-ptr(self: u64): ptr { bitcast[u64, ptr](self) }
 
@@ -526,7 +545,7 @@ ns for u64 {
     for c in s {
       require c.to-ascii-digit() is :some d else { return :err "not a digit" }
       let tens = o.mul-overflow(10)
-      let next = tens.value.add-overflow(d.widen[u64])
+      let next = tens.value.add-overflow(d.as[u64])
       if tens.overflowed or next.overflowed return :err "u64 overflow"
       o = next.value
     }
@@ -534,31 +553,27 @@ ns for u64 {
   }
 
   fn next-pow2(self: u64): u64 {
-    if self <= 1 self else (u64/max-value >> (self - 1).leading-zeros().trunc[u32]) + 1
+    if self <= 1 self else (u64/max-value >> (self - 1).leading-zeros()) + 1
   }
 
-  fn bit-length(self: u64): u64 { 64 - self.leading-zeros() }
+  fn bit-length(self: u64): i64 { 64 - self.leading-zeros() }
 
   fn bitmask-low(n: size): u64 {
     assert(n <= 64)
-    if n == 64 18446744073709551615: u64 else (1usize << n.trunc[u32]) - 1
+    if n == 64 18446744073709551615: u64 else (1usize << n) - 1
   }
 }
 
 ns(lib("k1rt")) k1rt {
-  // TODO: Add ".c" dependency support; so we can go back to single compilation unit for k1rt:
-  // fn(extern("_k1_show_backtrace"), lib("k1rt.c")) _k1_show_backtrace()
-  // Allowing you to mix and match .c and .k1 files
-
   fn(extern) _k1_print_backtrace(frame_count: c-int)
 
-  fn(extern("_k1_snprintf_f32")) snprintf_f32(buf: ptr, size: c-sizet, float: f32, places: i32): i32
-  fn(extern("_k1_snprintf_f64")) snprintf_f64(buf: ptr, size: c-sizet, float: f64, places: i32): i32
+  fn(extern("_k1_snprintf_f32")) snprintf_f32(buf: ptr, size: size, float: f32, places: i32): i32
+  fn(extern("_k1_snprintf_f64")) snprintf_f64(buf: ptr, size: size, float: f64, places: i32): i32
 
 }
 
 ns float-impl {
-  fn write-output[w: writer](w, buf: span[u8], written-len: i32, places: i32) {
+  fn write-output[w: writer](w, buf: span[u8], written-len: i32, places: i64) {
     if written-len <= 0 crash("snprintf float returned $written-len")
     let len = written-len.as-size()
     if len >= buf.len() crash("float format: $places places needs $len bytes, cap is ${buf.len()}")
@@ -582,9 +597,9 @@ ns for f64 {
   fn(builtin) round-even(self: f64): f64
   fn(builtin) fma(self: f64, b: f64, c: f64): f64
 
-  fn format[w: writer](self: f64, w, places: i32) {
+  fn format[w: writer](self: f64, w, places: i64) {
     let buf: array[u8, 512] = uninit
-    float-impl/write-output(w, buf.as-span(), k1rt/snprintf_f64(buf.data-ptr(), 512, self, places), places)
+    float-impl/write-output(w, buf.as-span(), k1rt/snprintf_f64(buf.data-ptr(), 512, self, places.low[i32]), places)
   }
 
   fn from-string(s: string): result[f64, string] {
@@ -609,7 +624,7 @@ ns for f64 {
   // -NaN < -inf < ... < -0.0 < +0.0 < ... < +inf < +NaN
   fn total-order-key(self: f64): i64 {
     let bits = bitcast[f64, i64](self)
-    bits.xor(((bits >> 63).unsigned() >> 1).signed())
+    bits.xor(((bits >> 63).u() >> 1).i())
   }
 }
 
@@ -618,15 +633,15 @@ ns for f32 {
   let inf: f32 = builtin
   let neg-inf: f32 = builtin
 
-  fn format[w: writer](self: f32, w, places: i32) {
+  fn format[w: writer](self: f32, w, places: i64) {
     let buf: array[u8, 512] = uninit
-    float-impl/write-output(w, buf.as-span(), k1rt/snprintf_f32(buf.data-ptr(), 512, self, places), places)
+    float-impl/write-output(w, buf.as-span(), k1rt/snprintf_f32(buf.data-ptr(), 512, self, places.low[i32]), places)
   }
 
   // See f64/total-order-key
   fn total-order-key(self: f32): i32 {
     let bits = bitcast[f32, i32](self)
-    bits.xor(((bits >> 31).unsigned() >> 1).signed())
+    bits.xor(((bits >> 31).u() >> 1).i())
   }
 
   fn abs(self: f32): f32 {
@@ -745,14 +760,14 @@ impl print for f64 {
 }
 
 impl print-precise for f32 {
-  fn print-precise-to[w: writer](self: f32, w, precision: u32) {
-    f32/format(self, w, places = precision.signed())
+  fn print-precise-to[w: writer](self: f32, w, precision: i64) {
+    f32/format(self, w, places = precision)
   }
 }
 
 impl print-precise for f64 {
-  fn print-precise-to[w: writer](self: f64, w, precision: u32) {
-    f64/format(self, w, places = precision.signed())
+  fn print-precise-to[w: writer](self: f64, w, precision: i64) {
+    f64/format(self, w, places = precision)
   }
 }
 

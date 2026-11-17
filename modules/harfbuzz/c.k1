@@ -324,15 +324,15 @@ type glyph_extents_t = {
 }
 type font_t = opaque[0, 1]
 fn(extern("hb_malloc")) malloc(
-  size: usize,
+  size: size,
 ): ptr
 fn(extern("hb_calloc")) calloc(
-  nmemb: usize,
-  size: usize,
+  nmemb: size,
+  size: size,
 ): ptr
 fn(extern("hb_realloc")) realloc(
   ptr: ptr,
-  size: usize,
+  size: size,
 ): ptr
 fn(extern("hb_free")) free(
   ptr: ptr,

@@ -4,7 +4,7 @@ let INVALID-MATCH: u32 = 0xFFFFFFF
 fn(inline) char-at(p: ptr, i: size): char { p.ref-at[u8](i).*.as-char() }
 
 fn(inline) add-match(distance: size, len: size, len-code: size, matches: buffer[u32]) {
-  let m = ((distance << 5) + len-code).trunc[u32]
+  let m = ((distance << 5) + len-code).low[u32]
   let slot = matches.index-unchecked(len)
   slot.* = slot.*.min(m)
 }
@@ -44,7 +44,7 @@ fn find-all-static-dictionary-matches(data: ptr, min-length: size, max-length: s
       let w = k-dict-lut-words.[offset]
       offset = offset + 1
       let l = (w & 0x1F).as-size()
-      let n = 1 << k-dictionary-size-bits-by-length.[l].widen[u32]
+      let n = 1 << k-dictionary-size-bits-by-length.[l]
       let id = (w >> 16).as-size()
       let transform = ((w >> 8) & 0xFF).as-size()
       end = (w & 0x80) != 0
@@ -69,7 +69,7 @@ fn find-all-static-dictionary-matches(data: ptr, min-length: size, max-length: s
         let len = minlen
         while len <= maxlen {
           let cut = l - len
-          let transform-id = (cut << 2) + ((CUTOFF-TRANSFORMS >> (cut * 6).trunc[u32]) & 0x3F).signed()
+          let transform-id = (cut << 2) + ((CUTOFF-TRANSFORMS >> (cut * 6)) & 0x3F).i()
           add-match(id + transform-id * n, len, l, matches)
           has-found-match = true
           len = len + 1
@@ -273,7 +273,7 @@ fn find-all-static-dictionary-matches(data: ptr, min-length: size, max-length: s
       let w = k-dict-lut-words.[offset]
       offset = offset + 1
       let l = (w & 0x1F).as-size()
-      let n = 1 << k-dictionary-size-bits-by-length.[l].widen[u32]
+      let n = 1 << k-dictionary-size-bits-by-length.[l]
       let id = (w >> 16).as-size()
       let transform = ((w >> 8) & 0xFF).as-size()
       end = (w & 0x80) != 0
@@ -355,7 +355,7 @@ fn find-all-static-dictionary-matches(data: ptr, min-length: size, max-length: s
         let w = k-dict-lut-words.[offset]
         offset = offset + 1
         let l = (w & 0x1F).as-size()
-        let n = 1 << k-dictionary-size-bits-by-length.[l].widen[u32]
+        let n = 1 << k-dictionary-size-bits-by-length.[l]
         let id = (w >> 16).as-size()
         let transform = ((w >> 8) & 0xFF).as-size()
         end = (w & 0x80) != 0
@@ -383,7 +383,7 @@ fn find-all-static-dictionary-matches(data: ptr, min-length: size, max-length: s
         let w = k-dict-lut-words.[offset]
         offset = offset + 1
         let l = (w & 0x1F).as-size()
-        let n = 1 << k-dictionary-size-bits-by-length.[l].widen[u32]
+        let n = 1 << k-dictionary-size-bits-by-length.[l]
         let id = (w >> 16).as-size()
         let transform = ((w >> 8) & 0xFF).as-size()
         end = (w & 0x80) != 0

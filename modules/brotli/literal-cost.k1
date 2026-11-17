@@ -80,9 +80,9 @@ fn estimate-bit-costs-for-literals-utf8(pos: size, len: size, mask: size, data: 
         lit-cost = lit-cost + 0.5
       }
       if i < LITERAL-COST-PROLOGUE-LENGTH {
-        lit-cost = lit-cost + (0.35 + LITERAL-COST-MULTIPLIER * i.as[f64])
+        lit-cost = lit-cost + (0.35 + LITERAL-COST-MULTIPLIER * i.to-f64())
       }
-      cost.index-unchecked(i).* = lit-cost.trunc[f32]
+      cost.index-unchecked(i).* = lit-cost.to-f32()
     }
   }
 }
@@ -122,6 +122,6 @@ fn estimate-bit-costs-for-literals(pos: size, len: size, mask: size, data: ptr, 
       lit-cost = lit-cost * 0.5
       lit-cost = lit-cost + 0.5
     }
-    cost.index-unchecked(i).* = lit-cost.trunc[f32]
+    cost.index-unchecked(i).* = lit-cost.to-f32()
   }
 }

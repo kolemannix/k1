@@ -1,6 +1,6 @@
 ns crypto
 
-type sha256 = { state: array[u32, 8], block: fixlist[u8, 64], total-len: u64 }
+type sha256 = { state: array[u32, 8], block: fixlist[u8, 64], total-len: size }
 
 ns for sha256 {
   let INIT: array[u32, 8] = [
@@ -71,7 +71,7 @@ ns for sha256 {
   }
 
   fn update(self: *self, data: span[u8]) {
-    self.total-len = self.total-len + data.len().unsigned()
+    self.total-len = self.total-len + data.len()
     let rest = data
     if self.block.non-empty() {
       let take = rest.len().min(64 - self.block.len())

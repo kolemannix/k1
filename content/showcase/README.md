@@ -37,7 +37,7 @@ Every suite has an unattended `run.sh` that regenerates its `results.md`
 binary hash.
 
 `python3 content/showcase/benchmarks/chart.py` redraws each suite's `chart.svg`
-from those, in the site's theme; the site inlines them above each results page.
+from those, in the site's theme.
 
 - [Runtime classics](benchmarks/runtime/results.md): binary-trees, hashmap,
   byte-scan. Whole-process timings include JVM/CLR startup; the report has

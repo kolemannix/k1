@@ -130,7 +130,7 @@ The table is a global, so all 256 entries are computed by the compiler and land 
 fn crc32-table(): array[u32, 256] {
   let table: array[u32, 256] = .0
   for n in 0.until(256) {
-    let c = n.trunc[u32]
+    let c = n.low[u32]
     for 0.until(8) {
       c = if (c & 1) == 1 0xEDB88320 ^ (c >> 1) else c >> 1
     }
@@ -144,7 +144,7 @@ let CRC_TABLE: array[u32, 256] = crc32-table()
 fn crc32(bytes: span[u8]): u32 {
   let c = 0xFFFFFFFF: u32
   for b in bytes {
-    c = CRC_TABLE.[((c ^ b.widen[u32]) & 0xFF)] ^ (c >> 8)
+    c = CRC_TABLE.[((c ^ b.as[u32]) & 0xFF)] ^ (c >> 8)
   }
   c ^ 0xFFFFFFFF
 }
@@ -485,7 +485,7 @@ A lightness ramp, L from 0.2 to 0.84 in steps of 0.08:
 let RAMP: array[srgb8, 9] = {
   let ramp: array[srgb8, 9] = .0
   for i in 0.until(9) {
-    ramp.[i] = oklch(0.2 + 0.08 * i.as[f32], 0.02, UI-HUE)
+    ramp.[i] = oklch(0.2 + 0.08 * i.to-f32(), 0.02, UI-HUE)
   }
   ramp
 }

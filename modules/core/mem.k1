@@ -62,13 +62,13 @@ ns mem {
     if k1/is-static {
       set-memset(dst, value, count)
     } else if count <= 16 {
-      let word = value.widen[u64] * 0x0101010101010101
+      let word = value.as[u64] * 0x0101010101010101
       if count >= 8 {
         write-unaligned(dst, word)
         write-unaligned(dst.add-bytes(count - 8), word)
       } else if count >= 4 {
-        write-unaligned(dst, word.trunc[u32])
-        write-unaligned(dst.add-bytes(count - 4), word.trunc[u32])
+        write-unaligned(dst, word.low[u32])
+        write-unaligned(dst.add-bytes(count - 4), word.low[u32])
       } else if count > 0 {
         write-unaligned(dst, value)
         write-unaligned(dst.add-bytes(count / 2), value)

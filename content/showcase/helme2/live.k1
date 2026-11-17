@@ -1,0 +1,34 @@
+fn serve(rt: *wren/runtime, config: http/server/config) {
+  if rt.is-dev { live/watch().! }
+  if rt.create-tenant(admin-tenant-id, fn(_conn: *dbx/conn) :ok) is :err message crash("create the admin tenant: $message")
+  wren/serve(
+    rt,
+    config,
+    assets,
+    extra-head-nodes  = [],
+    route-request,
+    handle-call       = live/handle-call,
+    render-error-page = show-error-page,
+  )
+}
+
+ns(reload) live {
+  fn handle-call(wren/call, state: ?tab-state): wren/handle-result {
+    let state = state ? empty-tab-state
+    if call.tenant.id == admin-tenant-id return handle-admin-call(call, state)
+    if tenant-route/parse(call.method(), call.url) is :ok r return if r is {
+      :playground-tuition -> :response respond-playground-tuition(),
+      :send-sign-in-link or :redeem-sign-in-link or :sign-out -> :response handle-session-request(call, r, user-session-seconds,
+        fn[call](email) :ok(if db/find-user-id-by-email(call.reader, email).try is :some id { :some "$id" } else :none),
+        fn[call](user-id) :ok db/find-user(call.reader, user-id).try.is-some(),
+      ).try,
+      _ -> :page show-page(call, state, r).try,
+    }
+    if playground-command/parse(call).try is :some c return :response handle-playground-command(call, state, c).try
+    if command/parse(call).try is :some c {
+      require find-session-user(call.reader, call.session).try is :some viewer else return :error wren-error/make(:unauthorized, "Sign in first")
+      return :response editor.{ call, viewer, view-options = state.view-options }.handle-command(c).try
+    }
+    if call.method() is :GET { :page render-not-found(call) } else { :error wren-error/status(:not-found) }
+  }
+}

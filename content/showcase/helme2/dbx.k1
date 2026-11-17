@@ -1,0 +1,19 @@
+macro define(schemas: code) {
+  let image = if meta/eval[result[internal/schema-image, string]]("dbx/internal/build-schema-image($schemas)") is {
+    :ok image -> image,
+    :err message -> crash("dbx: the schema doesn't build: $message"),
+  }
+  let tables = internal/emit/spell-tables(image.tables)
+  `
+  let dbx-schema-image: span[u8] = ${meta/baked-value-expr(image.bytes)}
+
+  $tables
+
+  fn migrate-db(*dbx/conn): result[empty, dbx/db-error] { conn.migrate-db($schemas) }`
+}
+
+macro query[r](sql: span[code-token]) { internal/emit/build-statement(sql, :query, :some types/id[r]()) }
+
+macro update(sql: span[code-token]) { internal/emit/build-statement(sql, :update, :none) }
+
+macro update-returning[r](sql: span[code-token]) { internal/emit/build-statement(sql, :update-returning, :some types/id[r]()) }

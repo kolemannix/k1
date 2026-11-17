@@ -25,7 +25,7 @@ ns for fixlist {
     let len = self.len()
     if len < self.cap() {
       self.data.[len] = value
-      self.len = len.trunc[u32] + 1
+      self.len = len.low[u32] + 1
       :ok
     } else {
       :err
@@ -37,7 +37,7 @@ ns for fixlist {
     if needed <= self.cap() {
       let dst-slice = self.data.as-buffer().slice(start = self.len(), end = needed)
       buffer/copy(src = values.inner-buffer(), dst = dst-slice)
-      self.len = needed.trunc[u32]
+      self.len = needed.low[u32]
       :ok span/wrap-buffer(dst-slice)
     } else {
       :err

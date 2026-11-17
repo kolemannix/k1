@@ -17,7 +17,7 @@ fn main(): i32 {
     seed = seed.xor(seed.shift-left(13))
     seed = seed.xor(seed.shift-right(7))
     seed = seed.xor(seed.shift-left(17))
-    pieces.push(enum/enum-from-value-unchecked((seed % 6).trunc[u8]))
+    pieces.push(enum/enum-from-value-unchecked((seed % 6).low[u8]))
   }
   let start = time/read-cpu-counter()
   let sum = 0

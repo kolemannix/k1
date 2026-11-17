@@ -2086,7 +2086,7 @@ fn compile_expr(b: &mut Builder, dst: Option<Value>, expr: TypedExprId) -> K1Res
             };
             Ok(block_value)
         }
-        TypedExpr::ScalarOp(scalar_op) => compile_scalar_op(b, scalar_op, dst),
+        TypedExpr::ScalarOp(scalar_op) => compile_scalar_op(b, scalar_op, expr_type, dst),
         TypedExpr::Call { call_id } => {
             let call = b.k1.calls.get(call_id).clone();
 
@@ -3550,7 +3550,12 @@ fn compile_cast(
     }
 }
 
-fn compile_scalar_op(b: &mut Builder, scalar_op: ScalarOp, dst: Option<Value>) -> K1Result<Value> {
+fn compile_scalar_op(
+    b: &mut Builder,
+    scalar_op: ScalarOp,
+    result_type: TypeId,
+    dst: Option<Value>,
+) -> K1Result<Value> {
     let mut operands: SV4<Value> = smallvec::smallvec![];
     for index in 0..scalar_op.operands.len() as usize {
         let operand = *b.k1.mem.get_nth(scalar_op.operands, index);
@@ -3571,6 +3576,15 @@ fn compile_scalar_op(b: &mut Builder, scalar_op: ScalarOp, dst: Option<Value>) -
         ScalarOpKind::FloatFma => Inst::FloatFma { a: lhs, b: operands[1], c: operands[2], t },
     };
     let res = b.push_value(inst, IrComment::None);
+    //review this feels shoehorned in. we don't look at the op inside; assume IntExtU, and the
+    //shadowing of res together just make this feel thrown in.
+    let res = match scalar_op.kind {
+        ScalarOpKind::IntUnop(_) => {
+            let to = b.get_physical_type(result_type)?.expect_scalar();
+            if to == t { res } else { b.push_value(Inst::IntExtU { v: res, to }, IrComment::None) }
+        }
+        _ => res,
+    };
     Ok(store_scalar_if_dst(b, dst, res))
 }
 
