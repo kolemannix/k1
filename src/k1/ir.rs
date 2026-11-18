@@ -138,6 +138,7 @@ impl ProgramIr {
 
 #[derive(Clone, Copy)]
 pub enum IrComment {
+    AddressTakenParam,
     ArrayGetOffsetPlace,
     AssignmentStore,
     BitcastAggToAggCopy,
@@ -220,6 +221,7 @@ pub enum IrComment {
 impl IrComment {
     pub fn str(&self) -> &'static str {
         match self {
+            IrComment::AddressTakenParam => "address-taken param",
             IrComment::ArrayGetOffsetPlace => "array get offset place",
             IrComment::AssignmentStore => "assignment store",
             IrComment::BitcastAggToAggCopy => "bitcast agg to agg copy",
@@ -1249,9 +1251,14 @@ fn compile_function_body_into(
     let body_block = f.body_block;
     let phys_fn_type = b.get_unit_fn_type(f.type_id)?;
     b.fn_type = phys_fn_type;
+    if body_block.is_some() {
+        let entry_block = b.push_block(BlockSourceKind::Entry);
+        b.goto_block(entry_block);
+    }
     let mut non_empty_index = 0;
     for param in b.k1.mem.getn(fn_params).iter() {
         let v = b.k1.variables.get(param.variable_id);
+        let is_address_taken = v.is_address_taken();
         let t = b.get_physical_type(v.type_id)?;
 
         let value = if t.is_empty() {
@@ -1261,14 +1268,18 @@ fn compile_function_body_into(
             non_empty_index += 1;
             value
         };
-        let builder_variable =
-            BuilderVariable { id: param.variable_id, value, pt: t, indirect: false };
+        // An aggregate param's value already is its address; a scalar one needs a slot
+        let builder_variable = if is_address_taken && t.is_scalar() && body_block.is_some() {
+            let slot = b.push_alloca(t, IrComment::AddressTakenParam);
+            b.push_store(slot.as_value(), value, IrComment::AddressTakenParam);
+            BuilderVariable { id: param.variable_id, value: slot.as_value(), pt: t, indirect: true }
+        } else {
+            BuilderVariable { id: param.variable_id, value, pt: t, indirect: false }
+        };
         b.k1.ir.b_variables.insert(builder_variable.id, builder_variable);
     }
 
     if let Some(body_block) = body_block {
-        let entry_block = b.push_block(BlockSourceKind::Entry);
-        b.goto_block(entry_block);
         compile_block_stmts(&mut b, None, body_block)?;
     }
 

@@ -10,7 +10,6 @@ type u8          = builtin
 type u16         = builtin
 type u32         = builtin
 type u64         = builtin
-type(alias) usize = u64
 type(alias) uint  = u64
 type i8          = builtin
 type i16         = builtin
@@ -1067,6 +1066,12 @@ ns for ptr {
     self.to-size() - other.to-size()
   }
 
+  type _unaligned[t] = packed { value: t }
+
+  fn(inline) read-unaligned[t](self: ptr): t { bitcast[ptr, *_unaligned[t]](self).value }
+
+  fn(inline) write-unaligned[t](self: ptr, value: t) { bitcast[ptr, *_unaligned[t]](self).value = value }
+
   fn get-align-offset(size: size, alignment: size): size {
     (alignment - size) & (alignment - 1)
   }
@@ -1198,9 +1203,8 @@ impl[t, n: static size] as-span[t = t] for *array[t, n] {
 
 impl[t: print, n: static size] print for array[t, n] {
   fn print-to[w: writer](self: array[t, n], w): empty {
-    let a = self
     w.write-char('[')
-    w.join(a.&, ",")
+    w.join(self.&, ",")
     w.write-char(']')
   }
 }

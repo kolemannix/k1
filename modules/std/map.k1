@@ -352,9 +352,8 @@ impl[k: hash and equals, v] index[key = k, t = v] for *map[k, v] {
 
 impl[k: print, v: print] print for map[k, v] {
   fn print-to[w: writer](self, w): empty {
-    let m = self
     w.write-char('{')
-    w.join-with(m.&, ", ", fn[w] kv. {
+    w.join-with(self.&, ", ", fn[w] kv. {
       kv.key.print-to(w)
       w.write-string(": ")
       kv.value.print-to(w)
@@ -442,9 +441,8 @@ impl[t] iterable[item = t, i = set-iterator[t]] for *set[t] {
 
 impl[t: print] print for set[t] {
   fn print-to[w: writer](self, w): empty {
-    let s = self
     w.write-char('{')
-    w.join(s.&, ", ")
+    w.join(self.&, ", ")
     w.write-char('}')
   }
 }
@@ -602,8 +600,7 @@ impl[k: hash and equals, v, n: static size] index[key = k, t = v] for *fixmap[k,
 
 impl[k: print, v: print, n: static size] print for fixmap[k, v, n] {
   fn print-to[w: writer](self, w): empty {
-    let m = self
-    m._table().print-to(w)
+    self.&._table().print-to(w)
   }
 }
 
@@ -655,9 +652,8 @@ impl[t, n: static size] iterable[item = t, i = set-iterator[t]] for *fixset[t, n
 
 impl[t: print, n: static size] print for fixset[t, n] {
   fn print-to[w: writer](self, w): empty {
-    let s = self
     w.write-char('{')
-    w.join(s.&, ", ")
+    w.join(self.&, ", ")
     w.write-char('}')
   }
 }

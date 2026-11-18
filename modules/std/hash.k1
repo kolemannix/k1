@@ -5,7 +5,7 @@ ability hasher {
   fn hash-bytes(*self, span[u8])
   fn finish(*self): u64
 
-  fn hash-u8(*self, u8) { 
+  fn hash-u8(*self, u8) {
     let data = u8.to-bytes-ne()
     self.hash-bytes(data.as-span())
   }
@@ -25,32 +25,17 @@ ability hasher {
     self.hash-bytes(data.as-span())
   }
 
-  fn hash-i8(*self, i8) { 
-    let data = i8.to-bytes-ne()
-    self.hash-bytes(data.as-span())
-  }
-
-  fn hash-i16(*self, i16) {
-    let data = i16.to-bytes-ne()
-    self.hash-bytes(data.as-span())
-  }
-
-  fn hash-i32(*self, i32) {
-    let data = i32.to-bytes-ne()
-    self.hash-bytes(data.as-span())
-  }
-
-  fn hash-i64(*self, i64) {
-    let data = i64.to-bytes-ne()
-    self.hash-bytes(data.as-span())
-  }
-
-  fn hash-length-prefix(*self, size) {
-    self.hash-i64(size)
-  }
+  fn hash-length-prefix(*self, size) { self.hash-u64(size.u()) }
 }
+
 ability hash {
-  fn hash[h: hasher](self, *h)
+  fn hash-to[h: hasher](self, *h)
+
+  fn hash(self): u64 {
+    let h = wordhasher/new()
+    self.hash-to(h.&)
+    h.finish()
+  }
 }
 
 ns murmur3 {
@@ -62,40 +47,6 @@ ns murmur3 {
     h = h ^ (h >> 33)
     h = h * m2
     h ^ (h >> 33)
-  }
-}
-
-ns wordhash {
-  fn(inline) mix-word(h: u64, w: u64): u64 {
-    (h.rotate-left(5) ^ w) * 0x9E3779B97F4A7C15
-  }
-
-  fn hash-bytes(bytes: span[u8]): u64 {
-    let p = bytes.data-ptr()
-    let len = bytes.len()
-    let h: wordhasher = wordhasher/new()
-    // nocommit: this was an xor, but hash-length-prefix just incorporates it as a size.
-    h.hash-length-prefix(len)
-    let h: u64 = 0xcbf29ce484222325 ^ len.u()
-
-    if len >= 8 {
-      let i: size = 0
-      while i + 8 <= len {
-        h = mix-word(h, mem/read-unaligned[u64](p.ref-at[u8](i).as[ptr]))
-        i = i + 8
-      }
-      if i < len { h = mix-word(h, mem/read-unaligned[u64](p.ref-at[u8](len - 8).as[ptr])) }
-    } else if len >= 4 {
-      let head = mem/read-unaligned[u32](p).as[u64]
-      let tail = mem/read-unaligned[u32](p.ref-at[u8](len - 4).as[ptr]).as[u64]
-      h = mix-word(h, (head << 32) | tail)
-    } else if len > 0 {
-      let first = p.ref-at[u8](0).*.as[u64]
-      let middle = p.ref-at[u8](len >> 1).*.as[u64]
-      let last = p.ref-at[u8](len - 1).*.as[u64]
-      h = mix-word(h, (first << 16) | (middle << 8) | last)
-    }
-    murmur3/fmix64(h)
   }
 }
 
@@ -112,28 +63,59 @@ ns for wordhasher {
   let default-seed: u64 = 0xcbf29ce484222325
   fn new(): self { .{ state = default-seed } }
   fn from-seed(seed: u64): self { .{ state = seed } }
+
+  fn(inline) mix-word(*self, w: u64) {
+    self.state = (self.state.rotate-left(5) ^ w) * 0x9E3779B97F4A7C15
+  }
 }
 impl hasher for wordhasher {
-  fn hash-bytes(*self, span[u8]) {
-
-  }
-  fn hash-length-prefix(*self, len: size) {
+  fn hash-bytes(*self, bytes: span[u8]) {
+    let p = bytes.data-ptr()
+    let len = bytes.len()
     self.state = self.state ^ len.u()
+
+    if len >= 8 {
+      let i: size = 0
+      while i + 8 <= len {
+        let this-word = p.add-bytes(i).read-unaligned[u64]
+        self.mix-word(this-word)
+        i = i + 8
+      }
+      if i < len {
+        let this-word = p.add-bytes(len - 8).read-unaligned[u64]
+        self.mix-word(this-word)
+      }
+    } else if len >= 4 {
+      let head = p.read-unaligned[u32].as[u64]
+      let tail = p.add-bytes(len - 4).read-unaligned[u32]().as[u64]
+      self.mix-word((head << 32) | tail)
+    } else if len > 0 {
+      let first = bytes.[0].as[u64]
+      let middle = bytes.[len >> 1].as[u64]
+      let last = bytes.[len - 1].as[u64]
+      self.mix-word((first << 16) | (middle << 8) | last)
+    } else {
+      self.mix-word(0xFF)
+    }
   }
+  fn hash-u8(*self, u8) { self.mix-word(u8.as[u64]) }
+  fn hash-u16(*self, u16) { self.mix-word(u16.as[u64]) }
+  fn hash-u32(*self, u32) { self.mix-word(u32.as[u64]) }
+  fn hash-u64(*self, u64) { self.mix-word(u64) }
   fn finish(*self): u64 { murmur3/fmix64(self.state) }
 }
 
-impl hash for u8   { fn hash[h: hasher](self, *h) { h.hash-u8(self) } }
-impl hash for u16  { fn hash[h: hasher](self, *h) { h.hash-u16(self) } }
-impl hash for u32  { fn hash[h: hasher](self, *h) { h.hash-u32(self) } }
-impl hash for u64  { fn hash[h: hasher](self, *h) { h.hash-u64(self) } }
-impl hash for i8   { fn hash[h: hasher](self, *h) { h.hash-i8(self) } }
-impl hash for i16  { fn hash[h: hasher](self, *h) { h.hash-i16(self) } }
-impl hash for i32  { fn hash[h: hasher](self, *h) { h.hash-i32(self) } }
-impl hash for i64  { fn hash[h: hasher](self, *h) { h.hash-i64(self) } }
-impl hash for char { fn hash[h: hasher](self, *h) { h.hash-u8(self.as-u8()) } }
-impl hash for bool { fn hash[h: hasher](self, *h) { h.hash-u8(self.as-u8()) } }
+impl hash for u8   { fn hash-to[h: hasher](self, *h) { h.hash-u8(self) } }
+impl hash for u16  { fn hash-to[h: hasher](self, *h) { h.hash-u16(self) } }
+impl hash for u32  { fn hash-to[h: hasher](self, *h) { h.hash-u32(self) } }
+impl hash for u64  { fn hash-to[h: hasher](self, *h) { h.hash-u64(self) } }
+impl hash for i8   { fn hash-to[h: hasher](self, *h) { h.hash-u8(self.u()) } }
+impl hash for i16  { fn hash-to[h: hasher](self, *h) { h.hash-u16(self.u()) } }
+impl hash for i32  { fn hash-to[h: hasher](self, *h) { h.hash-u32(self.u()) } }
+impl hash for i64  { fn hash-to[h: hasher](self, *h) { h.hash-u64(self.u()) } }
+impl hash for char { fn hash-to[h: hasher](self, *h) { h.hash-u8(self.as-u8()) } }
+impl hash for bool { fn hash-to[h: hasher](self, *h) { h.hash-u8(self.as-u8()) } }
 
-impl hash for span[u8] { fn hash[h: hasher](self, *h) { h.hash-bytes(self) } }
-impl hash for string { fn hash[h: hasher](self, *h) {   h.hash-bytes(self.span-bytes()) } }
+impl hash for span[u8] { fn hash-to[h: hasher](self, *h) { h.hash-bytes(self) } }
+impl hash for string { fn hash-to[h: hasher](self, *h) { h.hash-bytes(self.span-bytes()) } }
 

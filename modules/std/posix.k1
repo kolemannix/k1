@@ -251,9 +251,9 @@ ns posix {
     fn file-size(fd: i32): i64 {
       let status: array[u8, 144] = .0
       if fstat(fd, status.data-ptr()) != 0 return -1
-      let mode = mem/read-unaligned[u16](status.data-ptr().add-bytes(k1/select-os(macos = fn. 4, linux = fn. 24)))
+      let mode = ptr/read-unaligned[u16](status.data-ptr().add-bytes(k1/select-os(macos = fn. 4, linux = fn. 24)))
       if mode & S_IFMT != S_IFREG return -1
-      mem/read-unaligned[i64](status.data-ptr().add-bytes(k1/select-os(macos = fn. 96, linux = fn. 48)))
+      ptr/read-unaligned[i64](status.data-ptr().add-bytes(k1/select-os(macos = fn. 96, linux = fn. 48)))
     }
 
     fn env-get(name: string): ?string {

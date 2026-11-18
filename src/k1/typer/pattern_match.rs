@@ -1397,7 +1397,7 @@ impl TypedProgram {
                     );
                     let final_field = if is_referencing {
                         // Infallible: when referencing, struct_base is a Deref
-                        self.synth_address_of(get_struct_field, Span::NONE, false).unwrap()
+                        self.synth_address_of(get_struct_field, Span::NONE, None).unwrap()
                     } else {
                         get_struct_field
                     };
@@ -1463,7 +1463,7 @@ impl TypedProgram {
                         self.synth_sum_get_payload(sum_base, variant_index, sum_pattern.span);
                     let final_payload_expr = if is_referencing {
                         // Infallible: when referencing, sum_base is a Deref
-                        self.synth_address_of(get_payload_expr, Span::NONE, false).unwrap()
+                        self.synth_address_of(get_payload_expr, Span::NONE, None).unwrap()
                     } else {
                         get_payload_expr
                     };

@@ -32,8 +32,7 @@ ns for ip4-address {
 
 impl print for ip4-address {
   fn print-to[w: writer](self, w) {
-    let octets = self.octets
-    w.join(octets.&, ".")
+    w.join(self.octets.&, ".")
   }
 }
 

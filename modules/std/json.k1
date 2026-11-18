@@ -233,7 +233,7 @@ ns for text-decoder {
       let c = input.[pos]
       if not (c == ' ' or c == '\n' or c == '\r' or c == '\t') { break }
       pos = pos + 1
-      while pos + 8 <= len and mem/read-unaligned[u64](base.add-bytes(pos)) == spaces {
+      while pos + 8 <= len and ptr/read-unaligned[u64](base.add-bytes(pos)) == spaces {
         pos = pos + 8
       }
     }

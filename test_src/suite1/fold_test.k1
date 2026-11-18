@@ -1,8 +1,7 @@
 ns fold_test
 
 fn opaque[t](x: t): t {
-  let v = x
-  mem/load-volatile(v.&)
+  mem/load-volatile(x.&)
 }
 
 fn(test) wrapping() {

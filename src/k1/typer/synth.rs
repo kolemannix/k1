@@ -46,7 +46,9 @@ impl TypedProgram {
         match self_adjust {
             SelfAdjust::None => Ok(expr),
             SelfAdjust::Deref => Ok(self.synth_dereference(expr)),
-            SelfAdjust::AddrOf => self.synth_address_of(expr, span, true),
+            SelfAdjust::AddrOf => {
+                self.synth_address_of(expr, span, Some(AllowedRootKind::Synthetic))
+            }
         }
     }
 
@@ -215,7 +217,8 @@ impl TypedProgram {
         );
         let dest_coll_ref = self.synth_variable_ref(dest_coll_variable.variable_id);
         let dest_coll_expr = if needs_address_of {
-            self.synth_address_of(dest_coll_ref, Span::NONE, true).unwrap()
+            self.synth_address_of(dest_coll_ref, Span::NONE, Some(AllowedRootKind::Synthetic))
+                .unwrap()
         } else {
             dest_coll_ref
         };
@@ -671,7 +674,7 @@ impl TypedProgram {
             self.synth_variable_defn_simple(self.ast.idents.b.fmt, new_pad, block.scope_id);
         self.push_block_stmt_id(&mut block, pad_var.defn_stmt);
         let pad_ref = self.synth_variable_ref(pad_var.variable_id);
-        let pad = self.synth_address_of(pad_ref, Span::NONE, true)?;
+        let pad = self.synth_address_of(pad_ref, Span::NONE, Some(AllowedRootKind::Synthetic))?;
         let print_call = self.synth_print_call(value, pad, spec.precision, block_ctx)?;
         self.push_block_expr_id(&mut block, print_call);
         if spec.group {
@@ -1119,8 +1122,9 @@ impl TypedProgram {
             None,
         );
         let string_builder_ref = self.synth_variable_ref(string_builder_var.variable_id);
-        let string_builder_expr =
-            self.synth_address_of(string_builder_ref, Span::NONE, true).unwrap();
+        let string_builder_expr = self
+            .synth_address_of(string_builder_ref, Span::NONE, Some(AllowedRootKind::Synthetic))
+            .unwrap();
         self.push_block_stmt_id(&mut block, string_builder_var.defn_stmt);
         let args_expr = args_expr.unwrap_or(self.synth_empty_value(span));
         let format_block = self.synth_format_calls(
@@ -1187,7 +1191,9 @@ impl TypedProgram {
             None,
         );
         let code_builder_ref = self.synth_variable_ref(code_builder_var.variable_id);
-        let code_builder_expr = self.synth_address_of(code_builder_ref, Span::NONE, true).unwrap();
+        let code_builder_expr = self
+            .synth_address_of(code_builder_ref, Span::NONE, Some(AllowedRootKind::Synthetic))
+            .unwrap();
         self.push_block_stmt_id(&mut block, code_builder_var.defn_stmt);
         let args_expr = args_expr.unwrap_or(self.synth_empty_value(span));
         let format_block =

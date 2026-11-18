@@ -114,8 +114,7 @@ ns io {
         }
         if value == 10 and (stdout-buffering-mode() is :line) flush-stdout()
       } else {
-        let value_spot = value
-        write-all(self.file-no, value_spot.&.as[ptr], 1)
+        write-all(self.file-no, value.&.as[ptr], 1)
       }
       .{}
     }
@@ -257,14 +256,14 @@ let DECIMAL_PAIRS: array[u16, 100] = {
   let pairs: array[u16, 100] = uninit
   for i in (0: u8).until(100) {
     let two: array[u8, 2] = [u8/to-ascii-digit(i / 10).as-u8(), u8/to-ascii-digit(i % 10).as-u8()]
-    pairs.[i.as-size()] = mem/read-unaligned[u16](two.&.as[ptr])
+    pairs.[i.as-size()] = ptr/read-unaligned[u16](two.&.as[ptr])
   }
   pairs
 }
 
 fn(inline) _write-decimal-pair(digits: *array[u8, 64], at: size, pair: u64) {
   let dst = checked-index(at, 63)
-  mem/write-unaligned(digits.as[ptr].add-bytes(dst), DECIMAL_PAIRS.[pair.i()])
+  ptr/write-unaligned(digits.as[ptr].add-bytes(dst), DECIMAL_PAIRS.[pair.i()])
 }
 
 fn format-uint[w: writer](w, value: u64, base: u64) {
@@ -560,7 +559,7 @@ ns for u64 {
 
   fn bitmask-low(n: size): u64 {
     assert(n <= 64)
-    if n == 64 18446744073709551615: u64 else (1usize << n) - 1
+    if n == 64 18446744073709551615: u64 else (1u64 << n) - 1
   }
 }
 

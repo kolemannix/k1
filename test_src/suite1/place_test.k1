@@ -42,3 +42,12 @@ fn(test) refs-to-nested-places() {
   let inner-ref = outer.inner.&
   assert(test-compile(inner/me(inner-ref.&)) is :some m and m.starts-with("Expected *inner but got **inner"))
 }
+
+fn(noinline) param-address(v: array[int, 8]): ptr { v.&.as[ptr] }
+fn(noinline) read-param(n: int): int { n.&.* }
+
+fn(test) param-addresses() {
+  let v: array[int, 8] = .0
+  assert(param-address(v) == v.&.as[ptr])
+  assert-equals(read-param(2), 2)
+}

@@ -35,29 +35,25 @@ impl[n: static size] from-string[e = never] for spill-string[n] {
 
 impl[n: static size] print for spill-string[n] {
   fn print-to[w: writer](self: spill-string[n], w) {
-    let s = self
-    w.write-string(s.&.as-string())
+    w.write-string(self.&.as-string())
   }
 }
 
 impl[n: static size] to-string for spill-string[n] {
   fn to-string(self: spill-string[n]): string {
-    let s = self
-    s.&.as-string().cloned()
+    self.&.as-string().cloned()
   }
 }
 
 impl[n: static size] equals for spill-string[n] {
   fn equals(self: spill-string[n], other: spill-string[n]): bool {
-    let a = self
-    let b = other
-    a.&.as-string() == b.&.as-string()
+    self.&.as-string() == other.&.as-string()
   }
 }
 
 impl[n: static size] hash for spill-string[n] {
-  fn hash[h: hasher](self: spill-string[n], *h) {
-    self.as-string().hash(h)
+  fn hash-to[h: hasher](self: spill-string[n], *h) {
+    self.&.as-string().hash-to(h)
   }
 }
 

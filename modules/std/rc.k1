@@ -79,7 +79,7 @@ impl owned[raw = string] for heap-string {
 }
 
 impl hash for heap-string {
-  fn hash[h: hasher](self, *h) { self.raw.hash(h) }
+  fn hash-to[h: hasher](self, *h) { self.raw.hash-to(h) }
 }
 
 impl view[out = string] for heap-string {

@@ -2672,7 +2672,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             "u8" => Some(IntegerType::U8),
             "u16" => Some(IntegerType::U16),
             "u32" => Some(IntegerType::U32),
-            "u64" | "uint" | "usize" => Some(IntegerType::U64),
+            "u64" | "uint" => Some(IntegerType::U64),
             "i8" => Some(IntegerType::I8),
             "i16" => Some(IntegerType::I16),
             "i32" => Some(IntegerType::I32),
@@ -2680,7 +2680,7 @@ impl<'toks, 'module> Parser<'toks, 'module> {
             _ => {
                 return Err(self.error(
                     format!(
-                        "Invalid integer suffix '{suffix_text}'; expected u8, u16, u32, u64, uint, usize, i8, i16, i32, i64, int, size"
+                        "Invalid integer suffix '{suffix_text}'; expected u8, u16, u32, u64, uint, i8, i16, i32, i64, int, size"
                     ),
                     number_token,
                 ));

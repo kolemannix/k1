@@ -23,7 +23,7 @@ ns for sha256 {
     let w: array[u32, 64] = uninit
     let i: size = 0
     while i < 16 {
-      w.[i] = mem/read-unaligned[u32](block.add-bytes(i * 4)).swap-bytes()
+      w.[i] = ptr/read-unaligned[u32](block.add-bytes(i * 4)).swap-bytes()
       i = i + 1
     }
     while i < 64 {
@@ -97,12 +97,12 @@ ns for sha256 {
       self.block.clear()
     }
     while self.block.len() < 64 { self.block.push(0) }
-    mem/write-unaligned(self.block.data.&.as[ptr].add-bytes(56), bit-len.swap-bytes())
+    ptr/write-unaligned(self.block.data.&.as[ptr].add-bytes(56), bit-len.swap-bytes())
     compress(self.state.&, self.block.data.&.as[ptr])
     let out: array[u8, 32] = uninit
     let i: size = 0
     while i < 8 {
-      mem/write-unaligned(out.&.as[ptr].add-bytes(i * 4), self.state.[i].swap-bytes())
+      ptr/write-unaligned(out.&.as[ptr].add-bytes(i * 4), self.state.[i].swap-bytes())
       i = i + 1
     }
     out

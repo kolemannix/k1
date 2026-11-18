@@ -186,6 +186,10 @@ state pointer means a dyn can't cross `#static` into a runtime constant.
 - Settled: by-value aggregate params are not copied and may alias caller-reachable
   storage (`f(p.*, bump(p))` sees the bump). Only the sret slot never aliases an
   argument.
+- A param is not a place: no assignment, no implicit address (`p.push(x)` and
+  passing `p` for a `*t` are errors). A written `p.&` is its address for the call,
+  for reading: it may be the caller's storage, a temporary or constant data, so a
+  write through it is undefined.
 
 ## Globals and fn modifiers
 - `let g = 1` immutable global; `let(mutable, tls, extern("sym")) ...`, at most one
@@ -271,8 +275,8 @@ state pointer means a dyn can't cross `#static` into a runtime constant.
 - `std/fd`: `read read-all write-all open-to-read open-to-write close file-size pipe
   poll-readable` and `reader` over `core/platform/io/file-handle`; single `write`
   stays in `core/platform/io`.
-- `std/hash`: `wordhash/hash-bytes` is fast, unseeded, unstable across versions;
-  `fnv1a/hash-bytes` is the stable one.
+- `std/hash`: a type implements `hash-to[h: hasher](self, *h)`, feeding its parts to
+  the hasher; `x.hash()` runs it through `wordhasher` (fast, fixed seed).
 - `std/time`: `unix-nanos()`, `unix-seconds()`; monotonic `read-cpu-counter()` +
   `elapsed-nanos`/`elapsed-ms`.
 - `std/sys`: `fill-random(bytes: buffer[u8])` is host entropy, `random(upper-bound)`

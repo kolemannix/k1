@@ -51,7 +51,7 @@ ns for encoder {
     let unused-bits = (types/size[u64] - bytes) * byte-bits
     let buf: array[u8, 9] = uninit
     buf.[0] = tag
-    mem/write-unaligned(buf.data-ptr().add-bytes(1), (v << unused-bits).swap-bytes())
+    ptr/write-unaligned(buf.data-ptr().add-bytes(1), (v << unused-bits).swap-bytes())
     self.w.write-bytes(span/wrap-raw(buf.data-ptr(), 1 + bytes))
   }
 
@@ -144,10 +144,10 @@ ns for decoder {
   fn read-be(*self, bytes: size): result[u64, codec/error] {
     let p = self.read-bytes(bytes).try.data-ptr()
     :ok(if bytes is {
-      1 -> mem/read-unaligned[u8](p).as[u64],
-      2 -> mem/read-unaligned[u16](p).swap-bytes().as[u64],
-      4 -> mem/read-unaligned[u32](p).swap-bytes().as[u64],
-      _ -> mem/read-unaligned[u64](p).swap-bytes(),
+      1 -> ptr/read-unaligned[u8](p).as[u64],
+      2 -> ptr/read-unaligned[u16](p).swap-bytes().as[u64],
+      4 -> ptr/read-unaligned[u32](p).swap-bytes().as[u64],
+      _ -> ptr/read-unaligned[u64](p).swap-bytes(),
     })
   }
 

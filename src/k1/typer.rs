@@ -1039,6 +1039,12 @@ pub struct DerefExpr {
     pub target: TypedExprId,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum AllowedRootKind {
+    Param,
+    Synthetic,
+}
+
 #[derive(Clone, Copy)]
 pub enum AddressOfKind {
     StackVariable(VariableId),
@@ -3421,7 +3427,7 @@ impl TypedProgram {
         span: Span,
     ) -> TypedStmtId {
         if let Ok(AddressOfKind::StackVariable(variable_id)) =
-            self.check_place_for_address_of(destination, true, span)
+            self.check_address_of(destination, Some(AllowedRootKind::Synthetic), span)
         {
             self.variables.get_mut(variable_id).flags.insert(VariableFlags::Reassigned);
         }
@@ -3515,7 +3521,7 @@ impl TypedProgram {
                     // If the expr is a place, we can inject an address_of; the place
                     // walk in synth_address_of decides
                     let span = self.exprs.get_span(expr);
-                    if let Ok(expr) = self.synth_address_of(expr, span, false) {
+                    if let Ok(expr) = self.synth_address_of(expr, span, None) {
                         return CheckExprTypeResult::Coerce(expr, "address_of");
                     }
                 }
@@ -5520,7 +5526,7 @@ impl TypedProgram {
             return Ok(self.function_id_reference_to_pointer(input, span, ctx.scope_id));
         }
         self.warn_packed_field_address_of(input, span);
-        self.synth_address_of(input, span, false)
+        self.synth_address_of(input, span, Some(AllowedRootKind::Param))
     }
 
     fn is_place_in_packed(&self, expr: TypedExprId) -> bool {
@@ -5550,9 +5556,9 @@ impl TypedProgram {
         &mut self,
         input: TypedExprId,
         span: Span,
-        allow_synthetic: bool,
+        allowed_root_kind: Option<AllowedRootKind>,
     ) -> K1Result<TypedExprId> {
-        let kind = self.check_place_for_address_of(input, allow_synthetic, span)?;
+        let kind = self.check_address_of(input, allowed_root_kind, span)?;
         if let AddressOfKind::StackVariable(variable_id) = kind {
             self.variables.get_mut(variable_id).flags.insert(VariableFlags::AddressTaken);
         }
@@ -5569,27 +5575,27 @@ impl TypedProgram {
     /// Walks a place (lvalue) chain, verifying `expr` denotes a place whose
     /// address may be taken, and classifying the root.
     /// Valid: a.b.c.y.&   Invalid: a.foo().y.&
-    /// `allow_synthetic` permits StackSynthetic variable roots, which user code
-    /// cannot name.
-    fn check_place_for_address_of(
+    /// `allowed_root_kind` says which variables the chain may start at besides the locals
+    /// and globals user code names.
+    fn check_address_of(
         &self,
         expr: TypedExprId,
-        allow_synthetic: bool,
+        allowed_root_kind: Option<AllowedRootKind>,
         span: Span,
     ) -> K1Result<AddressOfKind> {
         match self.exprs.get(expr) {
             TypedExpr::Variable(v) => {
                 let var = self.variables.get(v.variable_id);
                 match var.kind {
-                    // Params have no storage in ir (they are SSA values), so no address
-                    // exists to take, even through a chain like &param.field
-                    VariableKind::FnParam(_) => Err(kerr!(
-                        self,
-                        span,
-                        "Cannot take address of a function parameter; re-declare it or use a * type"
-                    )),
+                    VariableKind::FnParam(_) => {
+                        if allowed_root_kind == Some(AllowedRootKind::Param) {
+                            Ok(AddressOfKind::StackVariable(v.variable_id))
+                        } else {
+                            Err(kerr!(self, span, "A function parameter is not a place"))
+                        }
+                    }
                     VariableKind::StackSynthetic => {
-                        if allow_synthetic {
+                        if allowed_root_kind == Some(AllowedRootKind::Synthetic) {
                             Ok(AddressOfKind::StackVariable(v.variable_id))
                         } else {
                             Err(kerr!(
@@ -5604,14 +5610,14 @@ impl TypedProgram {
                 }
             }
             TypedExpr::StructFieldAccess(field_access) => {
-                self.check_place_for_address_of(field_access.base_struct, allow_synthetic, span)
+                self.check_address_of(field_access.base_struct, allowed_root_kind, span)
             }
             TypedExpr::ArrayGetElement(array_get) => {
                 // The index is evaluated as a value; only the base affects placeness
-                self.check_place_for_address_of(array_get.base_array, allow_synthetic, span)
+                self.check_address_of(array_get.base_array, allowed_root_kind, span)
             }
             TypedExpr::SumGetPayload(get_payload) => {
-                self.check_place_for_address_of(get_payload.sum_expr, allow_synthetic, span)
+                self.check_address_of(get_payload.sum_expr, allowed_root_kind, span)
             }
             // the address is the target reference's value, so no new
             // address is taken and there is nothing to register
@@ -5622,7 +5628,7 @@ impl TypedProgram {
                 if let Some(TypedStmt::Expr(trailing_expr, _)) =
                     last_stmt.map(|s| self.stmts.get(s))
                 {
-                    self.check_place_for_address_of(*trailing_expr, allow_synthetic, span)
+                    self.check_address_of(*trailing_expr, allowed_root_kind, span)
                 } else {
                     Err(kerr!(
                         self,
@@ -6460,7 +6466,7 @@ impl TypedProgram {
             )
         }
 
-        let field_count = expected_struct.fields.len();
+        let field_count_exp = expected_struct.fields.len();
 
         let mut passed_fields_aligned: SV8<(Option<&parse::StructValueField>, Span)> = smallvec![];
 
@@ -6504,10 +6510,14 @@ impl TypedProgram {
                 expected_struct.find_field(&self.mem, passed_field.name).is_none()
             })
         {
-            kbail!(self, struct_span, "Struct has an unexpected field '{}'", unknown_field.name);
+            if expected_struct.fields.is_empty() {
+                kbail!(self, struct_span, "Expected the empty type, got a struct with {} fields", parsed_struct.fields.len())
+            } else {
+                kbail!(self, struct_span, "Struct has an unexpected field '{}'", unknown_field.name);
+            }
         }
 
-        let mut field_values: List<StructLiteralField, _> = self.mem.new_list(field_count);
+        let mut field_values: List<StructLiteralField, _> = self.mem.new_list(field_count_exp);
         for (field_index, ((passed_field, passed_span), expected_field)) in passed_fields_aligned
             .iter()
             .zip(self.mem.getn(expected_struct.fields).iter())
@@ -6542,7 +6552,7 @@ impl TypedProgram {
         let output_struct_type_id = if self.is_type_free_of_holes(expected_struct_id) {
             expected_struct_id
         } else {
-            let mut field_types: List<StructTypeField, MemTmp> = self.tmp.new_list(field_count);
+            let mut field_types: List<StructTypeField, MemTmp> = self.tmp.new_list(field_count_exp);
             for (value, expected_field) in
                 self.mem.getn(field_values).iter().zip(self.mem.getn(expected_struct.fields))
             {
@@ -6746,7 +6756,7 @@ impl TypedProgram {
                 );
             }
             let field_expr = if capture.by_ref {
-                self.synth_address_of(variable_expr, capture.span, false)?
+                self.synth_address_of(variable_expr, capture.span, Some(AllowedRootKind::Param))?
             } else {
                 variable_expr
             };
@@ -7503,7 +7513,11 @@ impl TypedProgram {
                     );
                     iterable_defn_stmt = Some(iterable_variable.defn_stmt);
                     let iterable_ref = self.synth_variable_ref(iterable_variable.variable_id);
-                    self.synth_address_of(iterable_ref, Span::NONE, true)?
+                    self.synth_address_of(
+                        iterable_ref,
+                        Span::NONE,
+                        Some(AllowedRootKind::Synthetic),
+                    )?
                 }
             };
         let iterator_initializer = if target_is_iterator {
@@ -7539,7 +7553,8 @@ impl TypedProgram {
             .0
         };
         let iterator_ref = self.synth_variable_ref(iterator_variable.variable_id);
-        let iterator_expr = self.synth_address_of(iterator_ref, Span::NONE, true)?;
+        let iterator_expr =
+            self.synth_address_of(iterator_ref, Span::NONE, Some(AllowedRootKind::Synthetic))?;
         let mut loop_block =
             self.new_block_builder(outer_for_expr_scope, ScopeType::WhileLoopBody, body_span, 3);
         let loop_scope_id = loop_block.scope_id;
@@ -9500,7 +9515,7 @@ impl TypedProgram {
             };
             let payload_expr = self.synth_sum_get_payload(sum_expr, variant_index, call_span);
             let payload = if is_reference {
-                self.synth_address_of(payload_expr, Span::NONE, false).unwrap()
+                self.synth_address_of(payload_expr, Span::NONE, None).unwrap()
             } else {
                 payload_expr
             };
@@ -12299,15 +12314,14 @@ impl TypedProgram {
                     (lhs, Some(variable_id))
                 } else {
                     let lhs = self.eval_expr(assignment.lhs, ctx.with_no_expected_type())?;
-                    let kind = self.check_place_for_address_of(lhs, false, lhs_span).map_err(
-                        |mut e| {
+                    let kind =
+                        self.check_address_of(lhs, None, lhs_span).map_err(|mut e| {
                             e.message = self.ast.idents.intern(format!(
                                 "Assignment destination must be a place: {}",
                                 self.ident_str(e.message)
                             ));
                             e
-                        },
-                    )?;
+                        })?;
                     let root_variable = match kind {
                         AddressOfKind::StackVariable(v) | AddressOfKind::GlobalVariable(v) => {
                             Some(v)
@@ -16790,7 +16804,6 @@ impl TypedProgram {
             core!("int"),
             core!("uint"),
             core!("size"),
-            core!("usize"),
             core!("char"),
             core!("bool"),
             core!("never"),
