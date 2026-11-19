@@ -17,19 +17,6 @@ fn main(argc: u32, argv: ptr): i32 {
   if output is :err msg { eprintln("ERROR: $msg"); return 1 }
   0
 }
-type dl-info = { fname: *u8, fbase: ptr, sname: ptr, saddr: ptr }
-fn(extern) dlsym(handle: ptr, symbol: *u8): ptr
-fn(extern) dladdr(addr: ptr, info: *dl-info): c-int
-
-fn dirname(path: string): string {
-  let last: ?size = :none
-  let from: size = 0
-  while path.drop(from).position('/') is :some rel {
-    last = :some (from + rel)
-    from = from + rel + 1
-  }
-  if last is :some i and i > 0 path.take(i) else "/"
-}
 
 // "clang version 21.1.7 (...)" -> "21"
 fn clang-major-version(version-string: string): ?string {
@@ -41,22 +28,15 @@ fn clang-major-version(version-string: string): ?string {
   :none
 }
 
-// libclang is supposed to find its builtin headers (stdbool.h etc.) relative to
-// its own load path, but its dladdr-based lookup yields a relative resource dir
-// here, so nothing resolves. Locate the loaded libclang ourselves and pass
-// -resource-dir explicitly.
 fn clang-resource-dir(): ?string {
-  let rtld-default: i64 = if k1/platform-macos { -2 } else { 0 }
-  let sym = dlsym(rtld-default.to-ptr(), "clang_createIndex".to-c-tmp())
-  if sym.is-null() return :none
-  let info: dl-info = uninit
-  if dladdr(sym, info.&) == 0 return :none
-  let lib-dir = dirname(string/from-c(info.fname))
   let major = if clang-major-version(clang/getClangVersion().to-string()) is {
     :some m -> m,
     :none -> return :none
   }
-  :some "$lib-dir/clang/$major"
+  let installed = "${files/dir-of(files/dir-of(std/sys/exe-path()))}/lib/clang/$major"
+  if files/exists(installed) return :some installed
+  if std/sys/env("LLVM_SYS_231_PREFIX") is :some prefix return :some "$prefix/lib/clang/$major"
+  :none
 }
 
 fn default-sysroot(caller-args: list[string]): ?string {

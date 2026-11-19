@@ -19,6 +19,8 @@ As of `v0.1.0`, here is approximately what you get:
 │   ├── k1_test
 │   ├── k1bindgen
 │   └── k1lsp
+├── lib
+│   └── clang
 ├── modules
 │   ├── brotli
 │   ├── core

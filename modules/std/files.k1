@@ -39,6 +39,15 @@ ns files {
     if fd/write-all(file, contents.span-bytes()) is :err(code) :err(.{ code, path = out-path }) else :ok
   }
 
+  fn dir-of(path: string): string {
+    let i = path.len()
+    while i > 0 {
+      i = i - 1
+      if path.[i] == '/' return if i == 0 "/" else path.take(i)
+    }
+    "."
+  }
+
   fn exists(path: string): bool {
     if fd/open-to-read(path) is {
       :ok(file) -> { fd/close(file); true },

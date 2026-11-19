@@ -2,8 +2,6 @@
 # bundle built here runs on; `just bundle-linux` builds the image with llvm/ as context.
 FROM quay.io/pypa/manylinux_2_28_x86_64
 
-RUN dnf install -y lld && dnf clean all
-
 WORKDIR /llvm
 COPY get_llvm.sh slp-vectorizer-register-vf-limit.patch ./
 RUN CC=gcc CXX=g++ ./get_llvm.sh && rm -rf build-llvm llvm-project

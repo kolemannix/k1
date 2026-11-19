@@ -1,8 +1,15 @@
 use std/fd
 use std/files
+fn(test) files-dir-of() {
+  assert-equals(files/dir-of("/a/b/c"), "/a/b")
+  assert-equals(files/dir-of("/a"), "/")
+  assert-equals(files/dir-of("a"), ".")
+}
+
 fn(test) files-dir-lifecycle-and-errors() {
   let dir = "/tmp/k1-files-test-${std/time/unix-nanos()}"
   files/make-dir(dir).!
+  assert(files/exists(dir))
   assert(files/make-dir(dir) is :err(e) and e.already-exists())
   assert-equals(files/list-dir(dir).!.len, 0)
 

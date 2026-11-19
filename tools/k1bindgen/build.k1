@@ -1,10 +1,21 @@
-fn module(): k1/module {
+use std/files
+
+fn module(b: k1/build-config): k1/module {
   let llvm-prefix = std/sys/env("LLVM_SYS_231_PREFIX") ?
     crash("k1bindgen needs LLVM_SYS_231_PREFIX set to an LLVM install prefix")
-  let llvm-path = "$llvm-prefix/lib"
-  .0 | .{
-    link = [.{ name = "clang", link-type = :default }],
-    link-args = ["-L$llvm-path", "-Wl,-rpath,$llvm-path"],
-    ignore = ["test"],
+  let llvm-lib = "$llvm-prefix/lib"
+  if not files/exists("$llvm-lib/libclang.a") crash("$llvm-lib/libclang.a missing: rebuild LLVM with llvm/get_llvm.sh")
+  let is-macos = b.target is :arm64-macos
+  let link-args: list[string] = list/empty()
+  if not is-macos { link-args.push("-Wl,--start-group") }
+  for files/list-dir(llvm-lib).! {
+    if it.starts-with("lib") and it.ends-with(".a") { link-args.push("$llvm-lib/$it") }
   }
+  if is-macos {
+    link-args.push("-lc++")
+  } else {
+    link-args.push("-Wl,--end-group")
+    for ["-Wl,-Bstatic", "-lstdc++", "-Wl,-Bdynamic", "-lpthread", "-ldl"] { link-args.push(it) }
+  }
+  .0 | .{ link-args, ignore = ["test"] }
 }

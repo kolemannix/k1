@@ -31,6 +31,10 @@ cp $TT/k1 $DST/k1
 cp $LSP $DST/k1lsp
 cp $TT/k1_test $DST/k1_test
 cp tools/k1bindgen/.k1-out/k1bindgen $DST/k1bindgen
+for d in "$LLVM_SYS_231_PREFIX"/lib/clang/*; do
+  mkdir -p "$DST/lib/clang/$(basename "$d")"
+  cp -r "$d/include" "$DST/lib/clang/$(basename "$d")/"
+done
 
 rsync -a "${EXCLUDES[@]}" modules/ "$DST/modules/"
 rsync -a "${EXCLUDES[@]}" test_src/ "$DST/test_src/"

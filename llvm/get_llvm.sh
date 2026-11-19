@@ -41,9 +41,9 @@ cmake -G "${GENERATOR}" "${SRC_DIR}"/llvm \
   -DLLVM_ENABLE_PROJECTS="${LLVM_ENABLE_PROJECTS}" \
   -DLLVM_TARGETS_TO_BUILD="${LLVM_TARGETS}" \
   -DLLVM_INCLUDE_TESTS=OFF \
+  -DLIBCLANG_BUILD_STATIC=ON \
   -DLLVM_ENABLE_RUNTIMES=compiler-rt \
-  -DLLVM_PARALLEL_LINK_JOBS=2 \
-  -DLLVM_USE_LINKER=lld \
+  "$@"
 
 # === Build and Install ===
 cmake --build . -- -j$(getconf _NPROCESSORS_ONLN)
