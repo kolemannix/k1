@@ -44,15 +44,10 @@ fn oklch(l: f32, c: f32, h: f32): srgb8 {
   }
 }
 
-let HEX-DIGITS: string = "0123456789abcdef"
-
 fn hex(c: srgb8): string {
   let sb = string-builder/new()
   sb.write-char('#')
-  for [c.r, c.g, c.b] {
-    sb.write-char(HEX-DIGITS.[(it >> 4).as-size()])
-    sb.write-char(HEX-DIGITS.[(it & 15).as-size()])
-  }
+  for [c.r, c.g, c.b] { it.write-hex(sb.&, upper = false) }
   sb.build()
 }
 

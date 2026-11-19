@@ -1,0 +1,121 @@
+ns base64
+
+type alphabet = { digits: array[u8, 64], values: array[u8, 256] }
+
+let alpha-standard: alphabet = alphabet/new("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")
+let alpha-url: alphabet = alphabet/new("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
+
+ns for alphabet {
+  fn new(digits: string): alphabet {
+    if digits.len() != 64 crash("base64 alphabet needs 64 digits")
+    let alpha: alphabet = uninit
+    alpha.values.memset(255)
+    for d in digits.span-bytes() {
+      if d == '='.as-u8() or alpha.values.[d.as-size()] != 255 crash("base64 alphabet digits must be distinct and not '='")
+      alpha.digits.[it-index] = d
+      alpha.values.[d.as-size()] = it-index.low[u8]
+    }
+    alpha
+  }
+}
+
+fn encoded-len(byte-count: size, pad: bool): size {
+  if pad (byte-count + 2) / 3 * 4 else (byte-count * 4 + 2) / 3
+}
+
+fn decoded-len(s: string, pad: bool): ?size {
+  let n = s.len()
+  let digit-count = if pad {
+    if n % 4 != 0 return :none
+    if s.ends-with("==") n - 2 else if s.ends-with("=") n - 1 else n
+  } else n
+  if digit-count % 4 == 1 return :none
+  :some(digit-count * 3 / 4)
+}
+
+fn encode-into(src: span[u8], dst: buffer[u8], alpha: alphabet, pad: bool): size {
+  let n = src.len()
+  if dst.len() < encoded-len(n, pad) crash("base64/encode-into: dst is too small")
+  let p = src.data-ptr()
+  let d = dst.data-ptr()
+  let whole = n / 3 * 3
+  let i: size = 0
+  let o: size = 0
+  while i < whole {
+    let w = (_load-byte(p, i) << 16) | (_load-byte(p, i + 1) << 8) | _load-byte(p, i + 2)
+    let quad: array[u8, 4] = [alpha.digits.[w >> 18], alpha.digits.[(w >> 12) & 63], alpha.digits.[(w >> 6) & 63], alpha.digits.[w & 63]]
+    d.add-bytes(o).write-unaligned(quad)
+    i = i + 3
+    o = o + 4
+  }
+  let rem = n - whole
+  if rem != 0 {
+    let w = (_load-byte(p, i) << 16) | (if rem == 2 _load-byte(p, i + 1) << 8 else 0)
+    let pad-char = '='.as-u8()
+    let quad: array[u8, 4] = [alpha.digits.[w >> 18], alpha.digits.[(w >> 12) & 63], if rem == 2 alpha.digits.[(w >> 6) & 63] else pad-char, pad-char]
+    let len = if pad 4 else rem + 1
+    mem/copy(dst = d.add-bytes(o), src = quad.&.as[ptr], count = len)
+    o = o + len
+  }
+  o
+}
+
+fn decode-into(s: string, dst: buffer[u8], alpha: alphabet, pad: bool): ?size {
+  require decoded-len(s, pad) is :some out-len else return :none
+  if dst.len() < out-len crash("base64/decode-into: dst is too small")
+  let digit-count = encoded-len(out-len, pad = false)
+  let p = s.data-ptr()
+  let d = dst.data-ptr()
+  let whole = digit-count / 4 * 4
+  let i: size = 0
+  let o: size = 0
+  while i < whole {
+    let v0 = alpha.values.[_load-byte(p, i)].as-size()
+    let v1 = alpha.values.[_load-byte(p, i + 1)].as-size()
+    let v2 = alpha.values.[_load-byte(p, i + 2)].as-size()
+    let v3 = alpha.values.[_load-byte(p, i + 3)].as-size()
+    if (v0 | v1 | v2 | v3) > 63 return :none
+    let w = (v0 << 18) | (v1 << 12) | (v2 << 6) | v3
+    let triple: array[u8, 3] = [(w >> 16).low[u8], (w >> 8).low[u8], w.low[u8]]
+    d.add-bytes(o).write-unaligned(triple)
+    i = i + 4
+    o = o + 3
+  }
+  let rem = digit-count - whole
+  if rem != 0 {
+    let v0 = alpha.values.[_load-byte(p, i)].as-size()
+    let v1 = alpha.values.[_load-byte(p, i + 1)].as-size()
+    let v2 = if rem == 3 alpha.values.[_load-byte(p, i + 2)].as-size() else 0
+    if (v0 | v1 | v2) > 63 return :none
+    let w = (v0 << 18) | (v1 << 12) | (v2 << 6)
+    let spare-bits: size = if rem == 3 0xFF else 0xFFFF
+    if (w & spare-bits) != 0 return :none
+    d.add-bytes(o).write-unaligned((w >> 16).low[u8])
+    if rem == 3 { d.add-bytes(o + 1).write-unaligned((w >> 8).low[u8]) }
+  }
+  :some out-len
+}
+
+fn encode(src: span[u8], alpha: alphabet, pad: bool): string {
+  let buf = buffer/allocate[u8](encoded-len(src.len(), pad))
+  encode-into(src, buf, alpha, pad)
+  string/wrap-byte-buffer(buf)
+}
+
+fn decode(s: string, alpha: alphabet, pad: bool): ?span[u8] {
+  require decoded-len(s, pad) is :some out-len else return :none
+  let buf = buffer/allocate[u8](out-len)
+  if decode-into(s, buf, alpha, pad) is :none return :none
+  :some span/wrap-buffer(buf)
+}
+
+fn write[w: writer](src: span[u8], w, alpha: alphabet, pad: bool) {
+  let block: array[u8, 4096] = uninit
+  let chunk = block.len() / 4 * 3
+  let rest = src
+  while rest.non-empty() {
+    let len = encode-into(rest.take(chunk), block.as-buffer(), alpha, pad)
+    w.write-bytes(block.as-span().take(len))
+    rest = rest.drop(chunk)
+  }
+}

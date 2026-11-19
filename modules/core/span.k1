@@ -129,69 +129,17 @@ ns for span {
     wrap-buffer(buf)
   }
 
-  fn write-hex[w: writer](self: span[u8], w, upper: bool) {
-    for b in self { b.write-hex(w, upper) }
-  }
+  fn write-hex[w: writer](self: span[u8], w, upper: bool) { hex/write(self, w, upper) }
+  fn to-hex(self: span[u8]): string { hex/encode(self, upper = false) }
+  fn from-hex(s: string): ?span[u8] { hex/decode(s) }
 
-  fn to-hex(self: span[u8]): string {
-    let sb = string-builder/with-capacity(self.len() * 2)
-    self.write-hex(sb.&, upper = false)
-    sb.build()
-  }
+  fn write-base64[w: writer](self: span[u8], w) { base64/write(self, w, base64/alpha-standard, pad = true) }
+  fn to-base64(self: span[u8]): string { base64/encode(self, base64/alpha-standard, pad = true) }
+  fn from-base64(s: string): ?span[u8] { base64/decode(s, base64/alpha-standard, pad = true) }
 
-  fn from-hex(s: string): ?span[u8] {
-    if s.len() % 2 != 0 return :none
-    let buf = buffer/allocate[u8](s.len() / 2)
-    let i: size = 0
-    while i < s.len() {
-      require s.[i].to-ascii-hex-digit() is :some hi else return :none
-      require s.[i + 1].to-ascii-hex-digit() is :some lo else return :none
-      buf.[i / 2] = hi * 16 + lo
-      i = i + 2
-    }
-    :some wrap-buffer(buf)
-  }
-
-  fn write-base64[w: writer](self: span[u8], w) {
-    let digits = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-    let i: size = 0
-    while i < self.len() {
-      let b0 = self.[i].as-size()
-      let b1 = if i + 1 < self.len() self.[i + 1].as-size() else 0
-      let b2 = if i + 2 < self.len() self.[i + 2].as-size() else 0
-      w.write-char(digits.[b0 >> 2])
-      w.write-char(digits.[((b0 & 3) << 4) + (b1 >> 4)])
-      w.write-char(if i + 1 < self.len() digits.[((b1 & 15) << 2) + (b2 >> 6)] else '=')
-      w.write-char(if i + 2 < self.len() digits.[b2 & 63] else '=')
-      i = i + 3
-    }
-  }
-
-  fn to-base64(self: span[u8]): string {
-    let sb = string-builder/with-capacity((self.len() + 2) / 3 * 4)
-    self.write-base64(sb.&)
-    sb.build()
-  }
-
-  fn from-base64(s: string): ?span[u8] {
-    if s.len() % 4 != 0 return :none
-    let padding: size = if s.ends-with("==") 2 else if s.ends-with("=") 1 else 0
-    let buf = buffer/allocate[u8](s.len() / 4 * 3 - padding)
-    let bits: size = 0
-    let bit-count: u32 = 0
-    let written: size = 0
-    for s.take(s.len() - padding) {
-      require it.to-base64-digit() is :some digit else return :none
-      bits = ((bits & 4095) << 6) + digit.as-size()
-      bit-count = bit-count + 6
-      if bit-count >= 8 {
-        bit-count = bit-count - 8
-        buf.[written] = ((bits >> bit-count) & 255).low[u8]
-        written = written + 1
-      }
-    }
-    :some wrap-buffer(buf)
-  }
+  fn write-base64url[w: writer](self: span[u8], w) { base64/write(self, w, base64/alpha-url, pad = false) }
+  fn to-base64url(self: span[u8]): string { base64/encode(self, base64/alpha-url, pad = false) }
+  fn from-base64url(s: string): ?span[u8] { base64/decode(s, base64/alpha-url, pad = false) }
 
   fn as-char-span(self: span[byte]): span[char] {
     .{ buffer = self.buffer.as-char-buffer() }
@@ -207,7 +155,7 @@ ns for span {
 
 }
 
-impl[t] as-span[t = t] for span[t] {
+impl[t] as-span[t] for span[t] {
   fn(inline) as-span(self): span[t] { self }
 }
 
@@ -215,7 +163,7 @@ impl[t] index[key = size, t = t] for span[t] {
   fn(inline) index-ref(self, key: size): *t { self.buffer.data.ref-at[t](checked-index(key, self.buffer.len)) }
 }
 
-impl[t] iterable[item = t, i = buffer-iterator[t]] for span[t] {
+impl[t] iterable[t, buffer-iterator[t]] for span[t] {
   fn(inline) iterator(self): i { .{ buf = self.buffer, pos = 0 } }
 }
 

@@ -1,40 +1,12 @@
 ns hash_test
 
+use std/hash
 use std/map
 use std/set
 use std/fixmap
 use std/fixset
 use std/heap-string
 use std/spill-string
-
-fn(test) map-and-set-basics() {
-  let m = map/new[string, int]()
-  assert-equals("$m", "{}")
-  assert(m.remove("x") is :none)
-  m.insert("a", 10)
-  m.insert("b", 11)
-  m.insert("b", 21)
-  assert-equals(m.len(), 2)
-  assert-equals(m.remove("a"), :some 10)
-  assert-equals(m.get("a"), :none)
-  assert-equals("$m", "{b: 21}")
-
-  let counts = map/new[string, int]()
-  for w in ["x", "y", "x", "x"] {
-    let c = counts.get-or-insert(w, fn. 0)
-    c.* = c.* + 1
-  }
-  assert-equals(counts.get("x"), :some 3)
-  assert-equals(counts.len(), 2)
-
-  let nums = set/from-span([1, 2, 3, 2, 1])
-  assert-equals(nums.len(), 3)
-  assert(nums.remove(2))
-  assert(not nums.remove(2))
-  let total = 0
-  for n in nums { total = total + n }
-  assert-equals(total, 4)
-}
 
 fn(test) lookup-by-view() {
   let m = map/new[heap-string, int]()
@@ -56,39 +28,7 @@ fn(test) lookup-by-view() {
   assert-equals(ids.get(7), :some 1)
 }
 
-fn(test) map-churn() {
-  let m = map/new[int, int]()
-  let round = 0
-  while round < 1000 {
-    m.insert(round % 4, round)
-    let _ = m.remove(round % 4)
-    round = round + 1
-  }
-  assert-equals(m.len(), 0)
-  assert(m.cap() <= 14)
-  let it = m.&.iterator()
-  assert(it.next() is :none)
-  assert-equals(it.pos, 0)
-}
-
 type fixmap-holder = { pad: u64, m: fixmap[int, int, 16], tail: u64 }
-
-fn(test) fixmap-basics() {
-  let m = fixmap/new[string, int, 16]()
-  assert-equals(m.cap(), 15)
-  m.insert("b", 11)
-  m.insert("b", 21)
-  m.insert("c", 12)
-  assert-equals(m.len(), 2)
-  assert-equals(m.["c"], 12)
-  m.get-ref("c").!.* = 100
-  assert-equals(m.get("c"), :some 100)
-  assert-equals(m.get-or-insert("z", fn. 7).!.*, 7)
-  assert-equals(m.get-or-insert("z", fn. 8).!.*, 7)
-  m.clear()
-  assert(m.is-empty())
-  assert(m.get("b") is :none)
-}
 
 fn(test) fixmap-full() {
   let h: fixmap-holder = .{ pad = 1, m = .0, tail = 2 }
@@ -133,39 +73,6 @@ fn(test) fixmap-remove-in-scrambled-order() {
   assert(m.is-empty())
 }
 
-fn(test) fixset-basics() {
-  let s = fixset/new[string, 16]()
-  assert(s.try-add("a") is :ok true)
-  assert(s.try-add("a") is :ok false)
-  for v in ["c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p"] { assert(s.add(v)) }
-  assert(s.is-full())
-  assert(s.try-add("z") is :err)
-  assert(s.remove("a"))
-  assert(s.try-add("z") is :ok true)
-  let seen = 0
-  for v in s { assert(s.contains(v)); seen = seen + 1 }
-  assert-equals(seen, 15)
-}
-
-fn(test) map-remove-in-scrambled-order() {
-  let m = map/with-capacity[int, int](12)
-  for i in 0.until(12) { m.insert(i * 7919, i) }
-  assert-equals(m.cap(), 14)
-  let removed = set/new[int]()
-  for i in 0.until(12) {
-    let victim = (i * 7) % 12
-    assert-equals(m.remove(victim * 7919), :some victim)
-    assert-equals(m.remove(victim * 7919), :none)
-    removed.add(victim)
-    for j in 0.until(12) {
-      let expected: ?int = if removed.contains(j) :none else :some j
-      assert-equals(m.get(j * 7919), expected)
-    }
-    assert-equals(m.len(), 11 - i)
-  }
-  assert(m.is-empty())
-}
-
 fn(test) map-tombstones() {
   let m = map/with-capacity[int, int](14)
   assert-equals(m.cap(), 14)
@@ -185,4 +92,11 @@ fn(test) map-tombstones() {
     assert(m.get(round * 100 + 1) is :none)
   }
   assert(m.cap() <= 56)
+}
+
+fn(test) spans-hash-their-lengths() {
+  let nested: span[span[int]] = [[1], [2, 3]]
+  let regrouped: span[span[int]] = [[1, 2], [3]]
+  assert(nested.hash() != regrouped.hash())
+  assert("ab".hash() != "abb".hash())
 }

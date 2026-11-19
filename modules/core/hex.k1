@@ -1,0 +1,69 @@
+ns hex
+
+fn(inline) digits(upper: bool): string { if upper "0123456789ABCDEF" else "0123456789abcdef" }
+
+let values: array[u8, 256] = {
+  let values: array[u8, 256] = uninit
+  values.memset(255)
+  for upper in [false, true] {
+    for d in digits(upper).span-bytes() { values.[d.as-size()] = it-index.low[u8] }
+  }
+  values
+}
+
+fn _pairs(upper: bool): array[array[u8, 2], 256] {
+  let table = digits(upper)
+  let pairs: array[array[u8, 2], 256] = uninit
+  for b in (0: size).until(256) { pairs.[b] = [table.[b >> 4].as-u8(), table.[b & 15].as-u8()] }
+  pairs
+}
+
+let _pairs-lower: array[array[u8, 2], 256] = _pairs(false)
+let _pairs-upper: array[array[u8, 2], 256] = _pairs(true)
+
+fn encode-into(src: span[u8], dst: buffer[u8], upper: bool): size {
+  let n = src.len() * 2
+  if dst.len() < n crash("hex/encode-into: dst is too small")
+  let pairs = if upper _pairs-upper.& else _pairs-lower.&
+  let d = dst.data-ptr()
+  for b in src { d.add-bytes(it-index * 2).write-unaligned(pairs.[b.as-size()]) }
+  n
+}
+
+fn decode-into(s: string, dst: buffer[u8]): ?size {
+  if s.len() % 2 != 0 return :none
+  let n = s.len() / 2
+  if dst.len() < n crash("hex/decode-into: dst is too small")
+  let p = s.data-ptr()
+  let d = dst.data-ptr()
+  for o in (0: size).until(n) {
+    let hi = values.[_load-byte(p, o * 2)]
+    let lo = values.[_load-byte(p, o * 2 + 1)]
+    if (hi | lo) > 15 return :none
+    d.add-bytes(o).write-unaligned((hi << 4) | lo)
+  }
+  :some n
+}
+
+fn encode(src: span[u8], upper: bool): string {
+  let buf = buffer/allocate[u8](src.len() * 2)
+  encode-into(src, buf, upper)
+  string/wrap-byte-buffer(buf)
+}
+
+fn decode(s: string): ?span[u8] {
+  let buf = buffer/allocate[u8](s.len() / 2)
+  if decode-into(s, buf) is :none return :none
+  :some span/wrap-buffer(buf)
+}
+
+fn write[w: writer](src: span[u8], w, upper: bool) {
+  let block: array[u8, 4096] = uninit
+  let chunk = block.len() / 2
+  let rest = src
+  while rest.non-empty() {
+    let len = encode-into(rest.take(chunk), block.as-buffer(), upper)
+    w.write-bytes(block.as-span().take(len))
+    rest = rest.drop(chunk)
+  }
+}

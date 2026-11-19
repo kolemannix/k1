@@ -136,7 +136,7 @@ fn transpile-literal(t: *macro-transpile, text: string): result[string, string] 
   if digits.starts-with-ignore-ascii-case("0x") {
     let hex = digits.drop(2)
     if hex.is-empty() or hex.len() > 16 return :err "unsupported hex literal $text"
-    for c in hex { if not is-hex-digit(c) { return :err "unsupported hex literal $text" } }
+    for c in hex { if c.to-ascii-hex-digit() is :none { return :err "unsupported hex literal $text" } }
     if hex.len() == 16 and hex.[0].u8() > '7'.u8() { t.ty = "u64" }
     return :ok "0x$hex"
   }
@@ -213,11 +213,6 @@ fn strip-int-suffix(text: string): string {
     if c == 'u' or c == 'U' or c == 'l' or c == 'L' { end = end - 1 } else break
   }
   text.take(end)
-}
-
-fn is-hex-digit(c: char): bool {
-  let b = c.to-ascii-lower().u8()
-  c.is-ascii-digit() or (b >= 'a'.u8() and b <= 'f'.u8())
 }
 
 fn parse-char-literal(text: string): result[i64, string] {

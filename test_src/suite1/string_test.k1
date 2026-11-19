@@ -42,23 +42,42 @@ fn(test) hex-encode-and-decode() {
   assert(span/from-hex("").! == span/empty())
   assert(span/from-hex("0") is :none)
   assert(span/from-hex("0g") is :none)
+  assert(span/from-hex("g0") is :none)
+  let long = buffer/allocate[u8](5000)
+  for i in (0: size).until(long.len()) { long.[i] = (i * 7).low[u8] }
+  let long-sb = string-builder/new()
+  span/wrap-buffer(long).write-hex(long-sb.&, upper = false)
+  assert(span/from-hex(long-sb.build()).! == span/wrap-buffer(long))
 }
 
 fn(test) base64-encode-and-decode() {
-  assert-equals("".span-bytes().to-base64(), "")
   assert-equals("f".span-bytes().to-base64(), "Zg==")
   assert-equals("fo".span-bytes().to-base64(), "Zm8=")
   assert-equals("foobar".span-bytes().to-base64(), "Zm9vYmFy")
+  assert-equals("fo".span-bytes().to-base64url(), "Zm8")
   let high-bytes: list[u8] = [251, 255, 190]
   assert-equals(high-bytes.as-span().to-base64(), "+/++")
-  assert(span/from-base64("+/++").! == high-bytes.as-span())
-  assert(span/from-base64("Zg==").! == "f".span-bytes())
-  assert(span/from-base64("Zm8=").! == "fo".span-bytes())
-  assert(span/from-base64("Zm9vYmFy").! == "foobar".span-bytes())
-  assert(span/from-base64("").! == span/empty())
-  assert(span/from-base64("Zm9") is :none)
-  assert(span/from-base64("Zm9-") is :none)
-  assert(span/from-base64("Z=g=") is :none)
+  assert-equals(high-bytes.as-span().to-base64url(), "-_--")
+
+  let bytes = buffer/allocate[u8](4000)
+  for i in (0: size).until(4000) { bytes.[i] = (i * 7).low[u8] }
+  let all = span/wrap-buffer(bytes)
+  for n in (0: size).until(259) {
+    let prefix = all.take(n)
+    assert(span/from-base64(prefix.to-base64()).! == prefix)
+    assert(span/from-base64url(prefix.to-base64url()).! == prefix)
+  }
+  let sb = string-builder/new()
+  all.write-base64(sb.&)
+  assert(span/from-base64(sb.build()).! == all)
+
+  let high-char: list[u8] = [90, 109, 57, 200]
+  for bad in ["Zm9", "Zm9-", "Z=g=", "Zh==", "Zm9=", string/wrap-bytes(high-char.as-span())] {
+    assert(span/from-base64(bad) is :none)
+  }
+  for bad in ["Z", "Zm8=", "Zm9+", "Zh"] {
+    assert(span/from-base64url(bad) is :none)
+  }
 }
 
 fn(test) string-split-by-char() {

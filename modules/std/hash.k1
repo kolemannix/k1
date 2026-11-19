@@ -72,8 +72,6 @@ impl hasher for wordhasher {
   fn hash-bytes(*self, bytes: span[u8]) {
     let p = bytes.data-ptr()
     let len = bytes.len()
-    self.state = self.state ^ len.u()
-
     if len >= 8 {
       let i: size = 0
       while i + 8 <= len {
@@ -94,8 +92,6 @@ impl hasher for wordhasher {
       let middle = bytes.[len >> 1].as[u64]
       let last = bytes.[len - 1].as[u64]
       self.mix-word((first << 16) | (middle << 8) | last)
-    } else {
-      self.mix-word(0xFF)
     }
   }
   fn hash-u8(*self, u8) { self.mix-word(u8.as[u64]) }
@@ -116,6 +112,17 @@ impl hash for i64  { fn hash-to[h: hasher](self, *h) { h.hash-u64(self.u()) } }
 impl hash for char { fn hash-to[h: hasher](self, *h) { h.hash-u8(self.as-u8()) } }
 impl hash for bool { fn hash-to[h: hasher](self, *h) { h.hash-u8(self.as-u8()) } }
 
-impl hash for span[u8] { fn hash-to[h: hasher](self, *h) { h.hash-bytes(self) } }
-impl hash for string { fn hash-to[h: hasher](self, *h) { h.hash-bytes(self.span-bytes()) } }
+impl[t: hash] hash for span[t] {
+  fn hash-to[h: hasher](self, *h) {
+    h.hash-length-prefix(self.len())
+    for self { it.hash-to(h) }
+  }
+}
+impl hash for span[u8] {
+  fn hash-to[h: hasher](self, *h) {
+    h.hash-length-prefix(self.len())
+    h.hash-bytes(self)
+  }
+}
+impl hash for string { fn hash-to[h: hasher](self, *h) { self.span-bytes().hash-to(h) } }
 

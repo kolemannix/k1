@@ -168,21 +168,8 @@ ns for char {
   }
 
   fn to-ascii-hex-digit(self: char): ?u8 {
-    let s = self.as-u8()
-    if self.is-ascii-digit() :some(s - '0'.as-u8())
-    else if s >= 'a'.as-u8() and s <= 'f'.as-u8() :some(s - 'a'.as-u8() + 10)
-    else if s >= 'A'.as-u8() and s <= 'F'.as-u8() :some(s - 'A'.as-u8() + 10)
-    else :none
-  }
-
-  fn to-base64-digit(self: char): ?u8 {
-    let s = self.as-u8()
-    if s >= 'A'.as-u8() and s <= 'Z'.as-u8() :some(s - 'A'.as-u8())
-    else if s >= 'a'.as-u8() and s <= 'z'.as-u8() :some(s - 'a'.as-u8() + 26)
-    else if self.is-ascii-digit() :some(s - '0'.as-u8() + 52)
-    else if self == '+' :some 62
-    else if self == '/' :some 63
-    else :none
+    let value = hex/values.[self.as-u8().as-size()]
+    if value > 15 :none else :some value
   }
 
   fn is-ascii-lower(self: char): bool {
@@ -260,6 +247,8 @@ let DECIMAL_PAIRS: array[u16, 100] = {
   }
   pairs
 }
+
+fn(inline) _load-byte(p: ptr, i: size): size { p.ref-at[u8](i).*.as-size() }
 
 fn(inline) _write-decimal-pair(digits: *array[u8, 64], at: size, pair: u64) {
   let dst = checked-index(at, 63)
@@ -420,7 +409,7 @@ ns for u8 {
   fn(inline) to-bytes-ne(self): array[u8, 1] { bitcast(self) }
 
   fn write-hex[w: writer](self: u8, w, upper: bool) {
-    let digits = if upper "0123456789ABCDEF" else "0123456789abcdef"
+    let digits = hex/digits(upper)
     w.write-char(digits.[(self >> 4).as-size()])
     w.write-char(digits.[(self & 15).as-size()])
   }
