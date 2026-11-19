@@ -1,6 +1,7 @@
 os := os()
+linux-bundle := "k1-linux-x86"
 bundle-name := if os == "linux" {
-  "k1-linux-x86"
+  linux-bundle
 } else if os == "macos" {
   "k1-macos"
 } else {
@@ -132,12 +133,19 @@ valgrind-linux:
   valgrind --tool=callgrind --dump-instr=yes --collect-jumps=yes --callgrind-out-file=cg.out target/profiling/k1 c test_src/suite1
 
 bundle:
+  just bundle-{{os}}
+
+bundle-macos:
   just lsprelease
   just build-r
   cargo build --profile release --bin k1_test
-  make -C modules/core/libs build wasm nocrt
   K1_HOME={{justfile_directory()}} target/release/k1 --optimize build tools/k1bindgen
   ./builds/bundle.sh target/release target/lsp/lsp builds/{{bundle-name}}
+
+# glibc 2.28 container (builds/Dockerfile-linux) so the bundle runs on older distros
+bundle-linux:
+  podman build --platform linux/amd64 -t k1-linux-build --build-arg RUST_VERSION=$(rustc --version | cut -d' ' -f2) -f builds/Dockerfile-linux llvm
+  podman run --platform linux/amd64 --rm -v {{justfile_directory()}}:/k1 -v k1-cargo-registry:/root/.cargo/registry k1-linux-build /k1/builds/build_linux.sh builds/{{linux-bundle}}
 
 install: bundle
   tar -xzf builds/{{bundle-name}}.tar.gz -C builds

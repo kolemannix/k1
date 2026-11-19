@@ -1,0 +1,3 @@
+*
+!get_llvm.sh
+!slp-vectorizer-register-vf-limit.patch

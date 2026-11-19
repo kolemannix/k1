@@ -25,13 +25,9 @@ mkdir -p "${BUILD_DIR}"
 cd "${BUILD_DIR}"
 
 # === Configure ===
-# Note on -DLLVM_STATIC_LINK_CXX_STDLIB=OFF: we wish we could statically link libc++
-# But Rust's llvm-sys is hardcoded to demand libc++ anyway (https://docs.rs/crate/llvm-sys/221.0.0/source/build.rs#383)
-# So I'll request libc++ (clang) over libstdc++ (gnu), but will not statically link it yet
-# Until we move to pure rustc perhaps, or selfhost or something
 cmake -G "${GENERATOR}" "${SRC_DIR}"/llvm \
-  -DCMAKE_C_COMPILER=clang \
-  -DCMAKE_CXX_COMPILER=clang++ \
+  -DCMAKE_C_COMPILER="${CC:-clang}" \
+  -DCMAKE_CXX_COMPILER="${CXX:-clang++}" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX="${INSTALL_DIR}" \
   -DLLVM_BUILD_LLVM_DYLIB=OFF \
@@ -45,9 +41,9 @@ cmake -G "${GENERATOR}" "${SRC_DIR}"/llvm \
   -DLLVM_ENABLE_PROJECTS="${LLVM_ENABLE_PROJECTS}" \
   -DLLVM_TARGETS_TO_BUILD="${LLVM_TARGETS}" \
   -DLLVM_INCLUDE_TESTS=OFF \
-  -DLLVM_STATIC_LINK_CXX_STDLIB=OFF \
-  -DLLVM_ENABLE_LIBCXX=ON \
-  -DLLVM_ENABLE_RUNTIMES=compiler-rt
+  -DLLVM_ENABLE_RUNTIMES=compiler-rt \
+  -DLLVM_PARALLEL_LINK_JOBS=2 \
+  -DLLVM_USE_LINKER=lld \
 
 # === Build and Install ===
 cmake --build . -- -j$(getconf _NPROCESSORS_ONLN)

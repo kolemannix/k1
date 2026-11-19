@@ -1,0 +1,15 @@
+# Linux release toolchain. The base image's glibc (2.28, AlmaLinux 8) is the floor every
+# bundle built here runs on; `just bundle-linux` builds the image with llvm/ as context.
+FROM quay.io/pypa/manylinux_2_28_x86_64
+
+RUN dnf install -y lld && dnf clean all
+
+WORKDIR /llvm
+COPY get_llvm.sh slp-vectorizer-register-vf-limit.patch ./
+RUN CC=gcc CXX=g++ ./get_llvm.sh && rm -rf build-llvm llvm-project
+ENV LLVM_SYS_231_PREFIX=/llvm/install-llvm
+
+ARG RUST_VERSION
+RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain "${RUST_VERSION}"
+ENV PATH=/root/.cargo/bin:$PATH
+RUN git config --global --add safe.directory /k1
