@@ -118,8 +118,12 @@ for name in "${failed[@]}"; do
 done
 [ ${#failed[@]} -eq 0 ]
 
-if rg --type-add 'k1:*.k1' -c 'nocommit' -t rust -t c -t k1 .
-then
+status=0
+rg --type-add 'k1:*.k1' -c 'nocommit' -t rust -t c -t k1 . || status=$?
+if [ $status -eq 0 ]; then
     echo "Everything passed! But we're failing since there are nocommit messages"
+    exit 1
+elif [ $status -ne 1 ]; then
+    echo "nocommit check failed: rg exited $status"
     exit 1
 fi

@@ -40,13 +40,13 @@ k1 run examples/refchess
 
 ## From source (not recommended for users)
 
-You'll need Rust, `just`, and a C toolchain.
+You'll need Rust and `just`, plus podman on Linux, or cmake and clang on macOS.
 
 ```bash
 git clone https://github.com/kolemannix/k1.git
 cd k1
-llvm/get_llvm.sh
+(cd llvm && ./get_llvm.sh)   # macOS only
 just install
 ```
 
-`get_llvm.sh` fetches the pinned LLVM build the compiler links against. `just install` builds the release compiler and language server, bundles them with the module library, and installs everything under `~/.k1`. Put `~/.k1/bin` on your PATH.
+On macOS, `get_llvm.sh` builds the pinned, patched LLVM the compiler links against. On Linux, `just install` builds inside a glibc 2.34 container that makes its own LLVM build. `just install` builds the release compiler and language server, bundles them with the module library, and installs everything under `~/.k1`. Put `~/.k1/bin` on your PATH.

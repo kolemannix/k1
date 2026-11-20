@@ -7,7 +7,7 @@ bundle-name := if os == "linux" {
 } else {
   error("Unsupported OS: " + os)
 }
-export LLVM_SYS_231_PREFIX := env_var_or_default("LLVM_SYS_231_PREFIX", "./llvm/install-llvm")
+export LLVM_SYS_231_PREFIX := env_var_or_default("LLVM_SYS_231_PREFIX", justfile_directory() + "/llvm/install-llvm")
 
 run-frag +args:
   RUST_BACKTRACE=full RUST_LOG=info cargo run --features=llvm-sys/prefer-dynamic --bin k1 -- {{args}}
@@ -97,12 +97,6 @@ lsp:
 
   just install-modules
 
-lsprelease:
-  cargo build --profile lsp --features lsp --features=llvm-sys/force-static --bin lsp
-
-build-r:
-  cargo build --release --bin k1  --features=llvm-sys/force-static
-
 build-profile:
   cargo build --profile profiling --bin k1 --features=llvm-sys/force-static
 
@@ -136,16 +130,12 @@ bundle:
   just bundle-{{os}}
 
 bundle-macos:
-  just lsprelease
-  just build-r
-  cargo build --profile release --bin k1_test
-  K1_HOME={{justfile_directory()}} target/release/k1 --optimize build tools/k1bindgen
-  ./builds/bundle.sh target/release target/lsp/lsp builds/{{bundle-name}}
+  ./builds/bundle.sh builds/{{bundle-name}}
 
-# glibc 2.28 container (builds/Dockerfile-linux) so the bundle runs on older distros
+# glibc 2.34 container (builds/Dockerfile-linux) so the bundle runs on older distros
 bundle-linux:
   podman build --platform linux/amd64 -t k1-linux-build --build-arg RUST_VERSION=$(rustc --version | cut -d' ' -f2) -f builds/Dockerfile-linux llvm
-  podman run --platform linux/amd64 --rm -v {{justfile_directory()}}:/k1 -v k1-cargo-registry:/root/.cargo/registry k1-linux-build /k1/builds/build_linux.sh builds/{{linux-bundle}}
+  podman run --platform linux/amd64 --rm -v {{justfile_directory()}}:/k1:ro -v {{justfile_directory()}}/builds:/out -v k1-cargo-registry:/root/.cargo/registry -v k1-linux-target:/work/target k1-linux-build /k1/builds/build_linux.sh builds/{{linux-bundle}}
 
 install: bundle
   tar -xzf builds/{{bundle-name}}.tar.gz -C builds

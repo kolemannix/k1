@@ -2,34 +2,30 @@
 set -e
 set -x
 
-TT=$1
-LSP=$2
-DST=$3
+DST=$1
 
 EXCLUDES=(
-  --exclude '.k1-out'
   # Includes must precede the excludes for rsync to honor them
   --include 'libs/libk1rt.*'
   --include 'libs/libk1rt-freestanding.a'
   --include 'libs/libk1rt-wasm.a'
   --include 'libs/libk1rt-nocrt.a'
   --include 'libs/libfoo.*'
-  --exclude 'libs/*.a'
-  --exclude 'libs/*.so'
-  --exclude 'libs/*.dylib'
-  --exclude 'libs/*.o'
-  --exclude '*_module_dump.txt'
-  --exclude 'k1_lsp.log*'
+  --filter='.- .gitignore'
+  --filter=':- .gitignore'
 )
 
+cargo build --profile release --bin k1 --bin k1_test --features=llvm-sys/force-static
+cargo build --profile lsp --bin lsp --features=lsp,llvm-sys/force-static
 make -C modules/core/libs clean build wasm nocrt
 make -C test_src/ffi_abi_test/libs clean build
+K1_HOME=$PWD target/release/k1 --optimize build tools/k1bindgen
 
 rm -rf $DST
 mkdir -p $DST
-cp $TT/k1 $DST/k1
-cp $LSP $DST/k1lsp
-cp $TT/k1_test $DST/k1_test
+cp target/release/k1 $DST/k1
+cp target/lsp/lsp $DST/k1lsp
+cp target/release/k1_test $DST/k1_test
 cp tools/k1bindgen/.k1-out/k1bindgen $DST/k1bindgen
 for d in "$LLVM_SYS_231_PREFIX"/lib/clang/*; do
   mkdir -p "$DST/lib/clang/$(basename "$d")"

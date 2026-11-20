@@ -15,7 +15,7 @@ fn module(b: k1/build-config): k1/module {
     link-args.push("-lc++")
   } else {
     link-args.push("-Wl,--end-group")
-    for ["-Wl,-Bstatic", "-lstdc++", "-Wl,-Bdynamic", "-lpthread", "-ldl"] { link-args.push(it) }
+    for ["-Wl,-Bstatic", "-lstdc++", "-Wl,-Bdynamic"] { link-args.push(it) }
   }
   .0 | .{ link-args, ignore = ["test"] }
 }

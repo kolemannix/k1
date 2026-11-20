@@ -33,7 +33,7 @@ fn clang-resource-dir(): ?string {
     :some m -> m,
     :none -> return :none
   }
-  let installed = "${files/dir-of(files/dir-of(std/sys/exe-path()))}/lib/clang/$major"
+  let installed = "${std/sys/k1-home()}/lib/clang/$major"
   if files/exists(installed) return :some installed
   if std/sys/env("LLVM_SYS_231_PREFIX") is :some prefix return :some "$prefix/lib/clang/$major"
   :none

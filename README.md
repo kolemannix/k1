@@ -51,26 +51,15 @@ north star.
 
 ### Contributing setup
 
-To build from source, you'll want to install Rust, `just`, and LLVM 23. Rust may be installed via [`rustup`](https://rustup.rs). At the time of this
-writing, `rustc` 1.95 is the latest version and works great. You can install [`just`](https://github.com/casey/just#installation) via your package
-manager, pre-built binary, etc. LLVM may also be installed via your package manager. On Mac for example, `brew install llvm@23`. `llvm-sys` won't know
-where the install is at on its own though, so tell it via an environment variable in your shell config. Again on Mac for example:
+To build from source, you'll want Rust (via [`rustup`](https://rustup.rs)), [`just`](https://github.com/casey/just#installation), cmake, clang,
+and k1's own LLVM 23 build. It carries a compile-speed patch and provides the static `libclang.a` that `k1bindgen` links. Build it once with
+[llvm/get_llvm.sh](llvm/get_llvm.sh), which installs into `llvm/install-llvm`, where the Justfile looks by default:
 
 ```bash
-export LLVM_SYS_231_PREFIX="$(brew --prefix llvm@23)"
+(cd llvm && ./get_llvm.sh)
 ```
 
-If you're really serious about building binaries, there is a script located in the repo [llvm/get_llvm.sh](llvm/get_llvm.sh) that will help you cut an LLVM 23 build
-from source, with the flags k1 needs to enable fully static linking of llvm.
-
-With the dependencies installed, `k1` and the language server may be built via:
-
-```bash
-just build-r
-just lsprelease
-```
-
-The compiler lands in `./target/release` and the language server in `./target/lsp` (its own profile, so a compiler panic doesn't take the server down). You can install the binaries and the dependent `modules` to `~/.k1` via:
+`just ts1` builds the dev compiler and runs the fast test suite. To install the release compiler, language server and `modules` to `~/.k1`, run the command below. On Linux it builds the release bundle in a glibc 2.34 [podman](https://podman.io) container, with its own LLVM build inside the image, so the result runs on any distro since 2021:
 
 ```bash
 just install

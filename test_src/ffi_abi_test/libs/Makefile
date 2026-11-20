@@ -4,9 +4,9 @@ DYLIB_EXT := $(if $(filter Darwin, $(OS)),dylib,so)
 MINVER := $(if $(filter Darwin, $(OS)),-mmacosx-version-min=15.0.0,)
 
 build:
-	clang $(MINVER) -c foo.c -o foo.o
+	$(CC) $(MINVER) -c foo.c -o foo.o
 	ar rcs libfoo.a foo.o
-	clang $(MINVER) -fPIC -shared foo.c -o libfoo.$(DYLIB_EXT)
+	$(CC) $(MINVER) -fPIC -shared foo.c -o libfoo.$(DYLIB_EXT)
 
 clean:
 	rm -f foo.o libfoo.a libfoo.so libfoo.dylib foo-filc.o libfoo-filc.a
